@@ -49,11 +49,15 @@ func (h *AnsibleHandlers) GetCapabilitiesHandler(c *gin.Context) {
 
 func (h *AnsibleHandlers) GetRunsHandler(c *gin.Context) {
 	if h.manager == nil {
-		c.JSON(http.StatusOK, []interface{}{})
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "ansible run manager unavailable"})
 		return
 	}
 
-	runs := h.manager.ListRuns()
+	runs, err := h.manager.ListRuns()
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "ansible run history unavailable"})
+		return
+	}
 	out := make([]gin.H, 0, len(runs))
 	for _, run := range runs {
 		out = append(out, buildRunPayload(run))
@@ -74,7 +78,11 @@ func (h *AnsibleHandlers) GetRunHandler(c *gin.Context) {
 		return
 	}
 
-	run, ok := h.manager.GetRun(runID)
+	run, ok, err := h.manager.GetRun(runID)
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "ansible run history unavailable"})
+		return
+	}
 	if !ok {
 		c.JSON(http.StatusNotFound, gin.H{"error": "run not found", "run_id": runID})
 		return
@@ -310,7 +318,7 @@ func (h *AnsibleHandlers) AnsibleComputersDeleteHandler(c *gin.Context) {
 
 func (h *AnsibleHandlers) AnsibleComputersLogsHandler(c *gin.Context) {
 	if h.manager == nil {
-		c.JSON(http.StatusOK, []AnsibleRunRecord{})
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "ansible run manager unavailable"})
 		return
 	}
 
@@ -330,7 +338,11 @@ func (h *AnsibleHandlers) AnsibleComputersLogsHandler(c *gin.Context) {
 		limit = 1000
 	}
 
-	all := h.manager.ListRuns()
+	all, err := h.manager.ListRuns()
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "ansible run history unavailable"})
+		return
+	}
 	type logEntry struct {
 		RunID       string   `json:"run_id"`
 		Action      string   `json:"action"`

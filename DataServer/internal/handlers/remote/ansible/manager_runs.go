@@ -1,10 +1,10 @@
 package ansible
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 
 	"velox-server/internal/store"
 )
@@ -84,24 +84,19 @@ type AnsibleRunManager struct {
 
 // NewAnsibleRunManager creates a new run manager.
 //
-// PR-ANSIBLE-SOT: dbStore is REQUIRED. Passing nil returns a manager
-// whose readers return the zero value and whose writers return
-// (nil, ErrExecutorRemoved) so the test-mode contract is preserved.
-// The variadic + SetStore / loadRuns paths are gone — the manager's
-// state is now exclusively the SQLite store.
-func NewAnsibleRunManager(playbookDir, dataDir string, dbStore AnsibleRunStore) *AnsibleRunManager {
+// PR-ANSIBLE-SOT: dbStore is REQUIRED. A manager without a durable store
+// cannot safely expose run history, so construction fails instead of
+// creating a hidden no-op capability.
+func NewAnsibleRunManager(playbookDir, dataDir string, dbStore AnsibleRunStore) (*AnsibleRunManager, error) {
 	if dbStore == nil {
-		// Even without a backing store the manager must construct so callers
-		// can wire dependency graphs without nil-deref guards; every method
-		// checks `dbStore == nil` first.
-		log.Printf("[ANSIBLE] NewAnsibleRunManager: dbStore is nil; manager is a no-op")
+		return nil, ErrRunStoreNotConfigured
 	}
 	return &AnsibleRunManager{
 		playbookDir:   playbookDir,
 		dataDir:       dataDir,
 		dbStore:       dbStore,
 		listRunsLimit: 500,
-	}
+	}, nil
 }
 
 // SetComputerManager injects the shared computer manager for inventory lookups.
@@ -223,8 +218,11 @@ func (m *AnsibleRunManager) CreateRun(run AnsibleRunRecord) error {
 // full set (including any hosts persisted by parallel callers) before
 // applying its mutation.
 func (m *AnsibleRunManager) UpdateRun(runID string, mut func(*AnsibleRunRecord)) error {
-	if m.dbStore == nil {
-		return errors.New("run not found")
+	if m == nil || m.dbStore == nil {
+		return ErrRunStoreNotConfigured
+	}
+	if mut == nil {
+		return errors.New("ansible: nil run mutation")
 	}
 	row, err := m.dbStore.GetAnsibleRun(runID)
 	if err != nil || row == nil {
@@ -234,38 +232,42 @@ func (m *AnsibleRunManager) UpdateRun(runID string, mut func(*AnsibleRunRecord))
 		return err
 	}
 	run := ansibleRunRecordFromRow(*row)
-	if hosts, hostErr := m.dbStore.ListAnsibleRunHosts(runID); hostErr == nil {
-		run.Hosts = hosts
+	hosts, err := m.dbStore.ListAnsibleRunHosts(runID)
+	if err != nil {
+		return fmt.Errorf("ansible: list hosts for run %q: %w", runID, err)
 	}
+	run.Hosts = hosts
 	mut(&run)
 	return m.persistRunToSQLite(run)
 }
 
-// ListRuns returns runs ordered by most recent first.
+// ListRuns returns runs ordered by most recent first. Datastore failures are
+// returned to the caller; an empty slice is only a valid empty history.
 //
 // PR-ANSIBLE-SOT: ordering is now pushed down to the SQL layer
 // (`ORDER BY started_at DESC, run_id DESC LIMIT ?`). No map snapshot is
 // kept; every call hits SQLite. The limit caps the per-call cost so
 // the manager's surface stays bounded for handlers that need the full
 // audit.
-func (m *AnsibleRunManager) ListRuns() []AnsibleRunRecord {
-	if m.dbStore == nil {
-		return []AnsibleRunRecord{}
+func (m *AnsibleRunManager) ListRuns() ([]AnsibleRunRecord, error) {
+	if m == nil || m.dbStore == nil {
+		return nil, ErrRunStoreNotConfigured
 	}
 	rows, err := m.dbStore.ListAnsibleRuns(m.listRunsLimit)
 	if err != nil {
-		log.Printf("[ANSIBLE] ListAnsibleRuns: %v", err)
-		return []AnsibleRunRecord{}
+		return nil, fmt.Errorf("ansible: list runs: %w", err)
 	}
 	out := make([]AnsibleRunRecord, 0, len(rows))
 	for _, row := range rows {
 		run := ansibleRunRecordFromRow(row)
-		if hosts, hostErr := m.dbStore.ListAnsibleRunHosts(run.ID); hostErr == nil {
-			run.Hosts = hosts
+		hosts, hostErr := m.dbStore.ListAnsibleRunHosts(run.ID)
+		if hostErr != nil {
+			return nil, fmt.Errorf("ansible: list hosts for run %q: %w", run.ID, hostErr)
 		}
+		run.Hosts = hosts
 		out = append(out, run)
 	}
-	return out
+	return out, nil
 }
 
 // GetRunStatus returns the status for a run.
@@ -275,8 +277,8 @@ func (m *AnsibleRunManager) ListRuns() []AnsibleRunRecord {
 // callers (handlers, audit endpoint) can degrade gracefully instead of
 // mis-reporting stale data.
 func (m *AnsibleRunManager) GetRunStatus(runID string) (string, error) {
-	if m.dbStore == nil {
-		return "", errors.New("run not found")
+	if m == nil || m.dbStore == nil {
+		return "", ErrRunStoreNotConfigured
 	}
 	row, err := m.dbStore.GetAnsibleRun(runID)
 	if err != nil || row == nil {
@@ -294,24 +296,30 @@ func (m *AnsibleRunManager) GetRunStatus(runID string) (string, error) {
 	return row.Status, nil
 }
 
-// GetRun returns a stored run by ID.
+// GetRun returns a stored run by ID. The boolean is false only when the
+// requested run does not exist; datastore failures are returned as errors.
 //
 // PR-ANSIBLE-SOT: single SQL read + per-host listing, no in-RAM
 // mirror. With a nil store / missing row, returns
 // (zero, false) so callers retain the panic-free path.
-func (m *AnsibleRunManager) GetRun(runID string) (AnsibleRunRecord, bool) {
-	if m.dbStore == nil {
-		return AnsibleRunRecord{}, false
+func (m *AnsibleRunManager) GetRun(runID string) (AnsibleRunRecord, bool, error) {
+	if m == nil || m.dbStore == nil {
+		return AnsibleRunRecord{}, false, ErrRunStoreNotConfigured
 	}
 	row, err := m.dbStore.GetAnsibleRun(runID)
-	if err != nil || row == nil {
-		return AnsibleRunRecord{}, false
+	if errors.Is(err, sql.ErrNoRows) || (row == nil && err == nil) {
+		return AnsibleRunRecord{}, false, nil
+	}
+	if err != nil {
+		return AnsibleRunRecord{}, false, fmt.Errorf("ansible: get run %q: %w", runID, err)
 	}
 	run := ansibleRunRecordFromRow(*row)
-	if hosts, hostErr := m.dbStore.ListAnsibleRunHosts(runID); hostErr == nil {
-		run.Hosts = hosts
+	hosts, hostErr := m.dbStore.ListAnsibleRunHosts(runID)
+	if hostErr != nil {
+		return AnsibleRunRecord{}, false, fmt.Errorf("ansible: list hosts for run %q: %w", runID, hostErr)
 	}
-	return run, true
+	run.Hosts = hosts
+	return run, true, nil
 }
 
 // RunPlaybook is a retired compatibility seam. It never generates inventory,

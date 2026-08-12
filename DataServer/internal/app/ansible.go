@@ -50,9 +50,14 @@ func (m *AnsibleModule) RegisterRoutes(r *gin.Engine) {
 	// construction. SetStore + LoadComputers + loadRuns are gone;
 	// every read hits SQLite on-the-fly so the canonical query
 	// results are never shadowed by a stale in-RAM mirror.
-	ansibleManager := remoteansible.NewAnsibleRunManager(m.cfg.Ansible.PlaybookDir, m.dataDir, m.store)
+	ansibleManager, managerErr := remoteansible.NewAnsibleRunManager(m.cfg.Ansible.PlaybookDir, m.dataDir, m.store)
+	if managerErr != nil {
+		log.Printf("[ANSIBLE] run history capability unavailable: %v", managerErr)
+	}
 	computerMgr := remoteansible.NewAnsibleComputerManager(m.dataDir, m.store)
-	ansibleManager.SetComputerManager(computerMgr)
+	if ansibleManager != nil {
+		ansibleManager.SetComputerManager(computerMgr)
+	}
 
 	handlers := remoteansible.NewAnsibleHandlers(ansibleManager)
 	handlers.SetComputerManager(computerMgr, m.dataDir)
@@ -76,7 +81,7 @@ func (m *AnsibleModule) RegisterRoutes(r *gin.Engine) {
 	v1Admin.GET("/ansible/runs", m.handlers.GetRunsHandler)
 	v1Admin.GET("/ansible/runs/:id", m.handlers.GetRunHandler)
 
-	if ansibleManager.Ready() {
+	if ansibleManager != nil && ansibleManager.Ready() {
 		log.Printf("[ANSIBLE] Routes registered (playbooks: %s)", m.cfg.Ansible.PlaybookDir)
 	} else {
 		log.Printf("[ANSIBLE] Routes registered (ansible-playbook not found)")

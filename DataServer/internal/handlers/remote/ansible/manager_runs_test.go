@@ -9,6 +9,10 @@ import (
 
 type stubRunStore struct {
 	currentHosts []string
+	run          *store.AnsibleRun
+	runs         []store.AnsibleRun
+	getErr       error
+	runsErr      error
 	listErr      error
 	deleteErr    error
 	addErr       error
@@ -20,9 +24,11 @@ func (s *stubRunStore) UpsertAnsibleRun(string, string, string, string, int64, i
 	return nil
 }
 
-func (s *stubRunStore) GetAnsibleRun(string) (*store.AnsibleRun, error) { return nil, nil }
+func (s *stubRunStore) GetAnsibleRun(string) (*store.AnsibleRun, error) {
+	return s.run, s.getErr
+}
 
-func (s *stubRunStore) ListAnsibleRuns(int) ([]store.AnsibleRun, error) { return nil, nil }
+func (s *stubRunStore) ListAnsibleRuns(int) ([]store.AnsibleRun, error) { return s.runs, s.runsErr }
 
 func (s *stubRunStore) DeleteAnsibleRun(string) error { return nil }
 
@@ -40,9 +46,9 @@ func (s *stubRunStore) ListAnsibleRunHosts(string) ([]string, error) {
 var _ AnsibleRunStore = (*stubRunStore)(nil)
 
 func TestAnsibleRunManager_CreateRunFailsClosedWithoutStore(t *testing.T) {
-	manager := NewAnsibleRunManager("", "", nil)
-	if err := manager.CreateRun(AnsibleRunRecord{ID: "short"}); !errors.Is(err, ErrRunStoreNotConfigured) {
-		t.Fatalf("CreateRun error = %v, want ErrRunStoreNotConfigured", err)
+	manager, err := NewAnsibleRunManager("", "", nil)
+	if manager != nil || !errors.Is(err, ErrRunStoreNotConfigured) {
+		t.Fatalf("NewAnsibleRunManager() = (%v, %v), want nil and ErrRunStoreNotConfigured", manager, err)
 	}
 	if err := (*AnsibleRunManager)(nil).CreateRun(AnsibleRunRecord{ID: "short"}); !errors.Is(err, ErrRunStoreNotConfigured) {
 		t.Fatalf("nil manager CreateRun error = %v, want ErrRunStoreNotConfigured", err)
@@ -83,8 +89,11 @@ func TestAnsibleRunManager_CreateRunPropagatesHostDiffErrors(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			manager := NewAnsibleRunManager("", "", tt.store)
-			err := manager.CreateRun(tt.run)
+			manager, err := NewAnsibleRunManager("", "", tt.store)
+			if err != nil {
+				t.Fatalf("NewAnsibleRunManager() error = %v", err)
+			}
+			err = manager.CreateRun(tt.run)
 			if err == nil || !errors.Is(err, tt.wantErr) {
 				t.Fatalf("CreateRun error = %v, want wrapped %v", err, tt.wantErr)
 			}
@@ -92,5 +101,41 @@ func TestAnsibleRunManager_CreateRunPropagatesHostDiffErrors(t *testing.T) {
 				t.Fatalf("UpsertAnsibleRun calls = %d, want %d", tt.store.upsertCalls, tt.wantUpsert)
 			}
 		})
+	}
+}
+
+func TestAnsibleRunManager_ReadsFailClosedOnStoreErrors(t *testing.T) {
+	storeErr := errors.New("store unavailable")
+	manager, err := NewAnsibleRunManager("", "", &stubRunStore{
+		runsErr: storeErr,
+		getErr:  storeErr,
+	})
+	if err != nil {
+		t.Fatalf("NewAnsibleRunManager() error = %v", err)
+	}
+
+	if runs, err := manager.ListRuns(); err == nil || !errors.Is(err, storeErr) || runs != nil {
+		t.Fatalf("ListRuns() = (%v, %v), want nil and wrapped store error", runs, err)
+	}
+	if _, _, err := manager.GetRun("run-1"); err == nil || !errors.Is(err, storeErr) {
+		t.Fatalf("GetRun() error = %v, want wrapped store error", err)
+	}
+}
+
+func TestAnsibleRunManager_DoesNotIgnoreHostReadErrors(t *testing.T) {
+	storeErr := errors.New("hosts unavailable")
+	manager, err := NewAnsibleRunManager("", "", &stubRunStore{
+		run:     &store.AnsibleRun{RunID: "run-1"},
+		runs:    []store.AnsibleRun{{RunID: "run-1"}},
+		listErr: storeErr,
+	})
+	if err != nil {
+		t.Fatalf("NewAnsibleRunManager() error = %v", err)
+	}
+	if _, _, err := manager.GetRun("run-1"); err == nil || !errors.Is(err, storeErr) {
+		t.Fatalf("GetRun() error = %v, want wrapped host error", err)
+	}
+	if runs, err := manager.ListRuns(); err == nil || !errors.Is(err, storeErr) || runs != nil {
+		t.Fatalf("ListRuns() = (%v, %v), want nil and wrapped host error", runs, err)
 	}
 }
