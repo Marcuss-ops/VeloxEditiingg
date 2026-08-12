@@ -53,6 +53,36 @@ fs::path cacheAssetPath(const fs::path& cacheDir, const std::string& source) {
     return cacheDir / cacheFilename(source);
 }
 
+fs::path resolveLocalAssetPath(const std::string& source, const fs::path& cacheReference) {
+    // The worker resolver replaces verified velox-asset:// references with
+    // the immutable local path before the RenderPlan reaches this process.
+    // Check that path first; libavformat can open it directly and no staging
+    // copy is needed.
+    if (!source.empty() && fs::is_regular_file(source)) {
+        return fs::path(source);
+    }
+
+    if (cacheReference.empty()) {
+        return {};
+    }
+
+    // `cache_key` is also used by older callers as the actual verified local
+    // file path. Do not interpret that path as a directory and accidentally
+    // fall through to downloadAsset(), which would copy it into workdir.
+    if (fs::is_regular_file(cacheReference)) {
+        return cacheReference;
+    }
+
+    // Preserve compatibility with the legacy C++ cache-directory contract.
+    if (fs::is_directory(cacheReference)) {
+        const fs::path cached = cacheAssetPath(cacheReference, source);
+        if (fs::is_regular_file(cached)) {
+            return cached;
+        }
+    }
+    return {};
+}
+
 std::string shellQuote(const std::string& s) {
     std::string out = "'";
     for (char c : s) {

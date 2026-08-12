@@ -229,19 +229,14 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
         // source is staged into the workdir; the packet muxer opens the bound
         // immutable path itself and never performs cache -> temp copies.
         const auto bindOrStage = [&](const std::string& source,
-                                     const std::string& cache_dir,
+                                     const std::string& cache_reference,
                                      const fs::path& staged_path)
             -> std::pair<fs::path, bool> {
-            if (fs::is_regular_file(source)) {
-                return {fs::path(source), true};
+            if (const fs::path local = file::resolveLocalAssetPath(
+                    source, cache_reference); !local.empty()) {
+                return {local, true};
             }
-            if (!cache_dir.empty()) {
-                const fs::path cached = file::cacheAssetPath(cache_dir, source);
-                if (fs::is_regular_file(cached)) {
-                    return {cached, true};
-                }
-            }
-            if (file::downloadAsset(source, staged_path, cache_dir)) {
+            if (file::downloadAsset(source, staged_path, cache_reference)) {
                 return {staged_path, false};
             }
             return {};

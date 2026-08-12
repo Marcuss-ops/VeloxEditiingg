@@ -23,6 +23,14 @@ std::string readFile(const std::filesystem::path& path);
 bool writeFile(const std::filesystem::path& path, const std::string& content);
 std::string cacheFilename(const std::string& source);
 std::filesystem::path cacheAssetPath(const std::filesystem::path& cacheDir, const std::string& source);
+// Returns an existing immutable local asset path without materializing a
+// workdir copy. `cacheReference` may be either the verified cache file itself
+// (the worker's preferred contract) or a legacy cache directory used with
+// cacheAssetPath(). An empty path means the caller must use the remote
+// download/staging fallback.
+std::filesystem::path resolveLocalAssetPath(
+    const std::string& source,
+    const std::filesystem::path& cacheReference);
 std::string shellQuote(const std::string& s);
 bool runCommand(const std::string& cmd);
 // runCommandTimed behaves like runCommand but also measures wall-clock

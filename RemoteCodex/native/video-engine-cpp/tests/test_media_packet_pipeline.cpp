@@ -166,6 +166,22 @@ int main() {
     expect(makeAudio(audio), "audio fixture can be created");
     expect(makeMuxedVideo(video, audio, videoWithAudio),
            "video-with-audio fixture can be created");
+
+    // The worker's verified cache contract can arrive either as the source
+    // path (the normal resolver output) or as cache_key pointing directly at
+    // the immutable file. Both forms must be handed to libavformat as-is.
+    const fs::path cacheFile = root / "worker-cache" / "clip.mp4";
+    fs::create_directories(cacheFile.parent_path(), ec);
+    expect(!ec, "worker cache directory can be created");
+    fs::copy_file(video, cacheFile, fs::copy_options::overwrite_existing, ec);
+    expect(!ec, "worker cache fixture can be created");
+    const auto sourceBound = velox::file::resolveLocalAssetPath(cacheFile.string(), {});
+    expect(sourceBound == cacheFile,
+           "resolved local source path is bound without staging");
+    const auto cacheKeyBound = velox::file::resolveLocalAssetPath(
+        "velox-asset://clip-1", cacheFile);
+    expect(cacheKeyBound == cacheFile,
+           "direct cache_key path is bound without staging");
     if (failures != 0) return 1;
 
     const fs::path emptyBin = root / "empty-bin";
