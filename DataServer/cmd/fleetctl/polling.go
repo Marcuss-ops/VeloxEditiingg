@@ -115,10 +115,17 @@ func pollOperationLedgerWithInterval(ctx context.Context, client *fleetClient, o
 		if time.Now().After(endAt) {
 			return last, fmt.Errorf("deadline (%s) reached; last known status=%s", deadline, last.Status)
 		}
+		timer := time.NewTimer(interval)
 		select {
 		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
 			return last, ctx.Err()
-		case <-time.After(interval):
+		case <-timer.C:
 		}
 	}
 }
