@@ -110,6 +110,7 @@ func (e *renderBatchExecutor) Execute(ctx context.Context, execCtx executor.Exec
 		return obs.failure(started, "validation_failed", err), nil
 	}
 	obs.timelineSHA = plan.TimelineSHA256
+	obs.timelineRevision = plan.TimelineRevision
 	obs.finish(validation, telemetry.StatusOK, "", nil)
 
 	jobID, err := safeOutputJobID(spec.JobID)
@@ -128,9 +129,12 @@ func (e *renderBatchExecutor) Execute(ctx context.Context, execCtx executor.Exec
 		obs.finish(assetResolution, telemetry.StatusFailed, "ASSET_BINDINGS_INVALID", err)
 		return obs.failure(started, "ASSET_BINDINGS_INVALID", err), nil
 	}
-	if err := validateMediaFile(e.probe, ctx, bindings[plan.FinalAudio.AssetID].Path, "final audio", plan.DurationUS, false, true, &plan.FinalAudio); err != nil {
-		obs.finish(assetResolution, telemetry.StatusFailed, "FINAL_AUDIO_INVALID", err)
-		return obs.failure(started, "FINAL_AUDIO_INVALID", err), nil
+	audioResolveStarted := time.Now()
+	audioErr := validateMediaFile(e.probe, ctx, bindings[plan.FinalAudio.AssetID].Path, "final audio", plan.DurationUS, false, true, &plan.FinalAudio)
+	obs.metrics["final_audio_resolve_ms"] = time.Since(audioResolveStarted).Milliseconds()
+	if audioErr != nil {
+		obs.finish(assetResolution, telemetry.StatusFailed, "FINAL_AUDIO_INVALID", audioErr)
+		return obs.failure(started, "FINAL_AUDIO_INVALID", audioErr), nil
 	}
 	obs.finish(assetResolution, telemetry.StatusOK, "", nil)
 
@@ -182,7 +186,6 @@ func (e *renderBatchExecutor) Execute(ctx context.Context, execCtx executor.Exec
 	metrics["audio_mix_count"] = int64(0)
 	metrics["audio_encode_count"] = int64(0)
 	metrics["final_audio_copy"] = int64(1)
-	metrics["timeline_revision"] = plan.TimelineRevision
 	metrics["video_only_bytes"] = visualArtifact.SizeBytes
 	metrics["final_output_bytes"] = finalArtifact.SizeBytes
 	metrics["ffmpeg_visual_profile"] = visualProfile
@@ -398,11 +401,12 @@ type renderBatchPhase struct {
 }
 
 type renderBatchObservability struct {
-	logger      executor.Logger
-	recorder    *telemetry.EventRecorder
-	planSHA     string
-	timelineSHA string
-	metrics     map[string]interface{}
+	logger           executor.Logger
+	recorder         *telemetry.EventRecorder
+	planSHA          string
+	timelineSHA      string
+	timelineRevision int64
+	metrics          map[string]interface{}
 }
 
 func newRenderBatchObservability(execCtx executor.ExecutionContext, planSHA string) *renderBatchObservability {
@@ -430,6 +434,9 @@ func (o *renderBatchObservability) identityFields() map[string]interface{} {
 	if o.timelineSHA != "" {
 		fields["timeline_sha256"] = o.timelineSHA
 	}
+	if o.timelineRevision > 0 {
+		fields["timeline_revision"] = o.timelineRevision
+	}
 	return fields
 }
 
@@ -444,7 +451,7 @@ func (o *renderBatchObservability) info(event string, fields map[string]interfac
 	o.logger.Info(event, merged)
 }
 
-func (o *renderBatchObservability) logFailure(stage, code string, err error) {
+func (o *renderBatchObservability) logFailure(stage, code string, _ error) {
 	if o == nil {
 		return
 	}
@@ -538,14 +545,48 @@ func (o *renderBatchObservability) finish(phase *renderBatchPhase, status, code 
 }
 
 func (o *renderBatchObservability) failure(started time.Time, code string, err error) executor.ExecutionResult {
+	detail := safeRenderBatchErrorDetail(code, err)
 	if o == nil {
-		return executor.ExecutionResult{Status: "failed", ErrorCode: code, ErrorDetail: err.Error(), StartedAt: started, CompletedAt: time.Now().UTC()}
+		return executor.ExecutionResult{Status: "failed", ErrorCode: code, ErrorDetail: detail, StartedAt: started, CompletedAt: time.Now().UTC()}
 	}
 	o.logFailure("execution", code, err)
 	return executor.ExecutionResult{
-		Status: "failed", ErrorCode: code, ErrorDetail: err.Error(), Metrics: o.metrics,
+		Status: "failed", ErrorCode: code, ErrorDetail: detail, Metrics: o.metrics,
 		StartedAt: started, CompletedAt: time.Now().UTC(),
 	}
+}
+
+func safeRenderBatchErrorDetail(code string, err error) string {
+	if err == nil {
+		return code
+	}
+	parts := strings.Fields(err.Error())
+	for i, part := range parts {
+		if strings.ContainsAny(part, "/\\\\") || strings.Contains(part, ".mp4") || strings.Contains(part, ".asset") || isSHA256Token(part) {
+			parts[i] = "<redacted>"
+		}
+	}
+	if len(parts) == 0 {
+		return code
+	}
+	return code + ": " + strings.Join(parts, " ")
+}
+
+func isSHA256Token(value string) bool {
+	value = strings.Trim(value, "=:,;()[]{}\\\"")
+	if separator := strings.LastIndexAny(value, "=:"); separator >= 0 {
+		value = value[separator+1:]
+	}
+	value = strings.Trim(value, "=:,;()[]{}\\\"")
+	if len(value) != sha256.Size*2 {
+		return false
+	}
+	for _, r := range value {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')) {
+			return false
+		}
+	}
+	return true
 }
 
 // RegisterRenderBatchExecutor adds exactly one render_batch@1 entry to the

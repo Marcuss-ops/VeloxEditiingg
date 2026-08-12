@@ -340,13 +340,13 @@ func TestRenderBatch_EmitsPhaseMetricsAndStructuredIdentity(t *testing.T) {
 	if result.Status != "succeeded" {
 		t.Fatalf("result = %+v", result)
 	}
-	for _, key := range []string{"render_plan_validate_ms", "compiled_asset_resolve_ms", "visual_execute_ms", "final_mux_ms"} {
+	for _, key := range []string{"render_plan_validate_ms", "compiled_asset_resolve_ms", "final_audio_resolve_ms", "visual_execute_ms", "final_mux_ms"} {
 		value, ok := result.Metrics[key].(int64)
 		if !ok || value < 0 {
 			t.Errorf("metric %q = %#v, want non-negative int64", key, result.Metrics[key])
 		}
 	}
-	for _, forbidden := range []string{"plan_sha256", "timeline_sha256", "final_audio_asset_id"} {
+	for _, forbidden := range []string{"plan_sha256", "timeline_sha256", "timeline_revision", "final_audio_asset_id"} {
 		if _, ok := result.Metrics[forbidden]; ok {
 			t.Errorf("high-cardinality identity %q leaked into metrics: %#v", forbidden, result.Metrics[forbidden])
 		}
@@ -507,6 +507,9 @@ func TestRenderBatch_RejectsOnDiskTamper(t *testing.T) {
 	}
 	if result.Status != "failed" || result.ErrorCode != "ASSET_BINDINGS_INVALID" {
 		t.Fatalf("tamper result = %+v", result)
+	}
+	if strings.Contains(result.ErrorDetail, bindings["video-a"].Path) || strings.Contains(result.ErrorDetail, batchSHA([]byte("tampered!!"))) {
+		t.Errorf("tamper ErrorDetail leaks local path or full SHA: %q", result.ErrorDetail)
 	}
 }
 
