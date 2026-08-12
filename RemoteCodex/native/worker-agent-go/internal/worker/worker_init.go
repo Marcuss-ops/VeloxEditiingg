@@ -108,9 +108,10 @@ func WithBlobs(b *blob.BlobArtifacts) Option {
 // success/error/panic so the workercache.Cleanup loop never deletes an
 // asset inside an active render.
 //
-// Passing nil panics loudly; omit WithClipCache to disable the
-// lease surface entirely (legacy bootstrap profiles, headless
-// tests, and workers without a clip cache SQLite).
+// Passing nil panics loudly; omit WithClipCache only for legacy
+// bootstrap profiles, headless tests, and workers without a clip-cache
+// SQLite. CompiledRenderPlanV2 dispatch is fail-closed when this cache
+// is absent because its assets must be leased before execution.
 func WithClipCache(c *workercache.Cache) Option {
 	if c == nil {
 		panic("worker.WithClipCache: cache must not be nil — pass an explicit *workercache.Cache or omit WithClipCache")

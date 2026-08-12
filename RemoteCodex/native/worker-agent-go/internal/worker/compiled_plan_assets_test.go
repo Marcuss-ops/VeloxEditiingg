@@ -12,10 +12,12 @@ import (
 	"sync"
 	"testing"
 
+	"velox-shared/assetref"
 	"velox-shared/contract"
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/runtimeassets"
 	"velox-worker-agent/internal/taskrunner"
+	"velox-worker-agent/internal/workercache"
 	"velox-worker-agent/pkg/api"
 	"velox-worker-agent/pkg/config"
 	"velox-worker-agent/pkg/logger"
@@ -133,6 +135,25 @@ func TestDispatchTaskRunner_AttachesV2BindingsToExecutionContext(t *testing.T) {
 		activeTasks: make(map[string]*ActiveTaskExecution),
 		taskRunner:  taskrunner.NewTaskRunner(registry, log),
 	}
+	cache, err := workercache.Open(filepath.Join(t.TempDir(), "dispatch-cache.db"))
+	if err != nil {
+		t.Fatalf("open dispatch cache: %v", err)
+	}
+	t.Cleanup(func() { _ = cache.Close() })
+	for assetID, body := range assets {
+		path := filepath.Join(t.TempDir(), assetID+".asset")
+		if err := os.WriteFile(path, body, 0o640); err != nil {
+			t.Fatalf("write dispatch asset %s: %v", assetID, err)
+		}
+		if err := cache.Store(context.Background(), workercache.Entry{
+			AssetKey: assetref.AssetKey(assetID), ContentHash: assetref.ContentHash(assetSHA(body)),
+			LocalPath: path, SizeBytes: int64(len(body)), DownloadComplete: true,
+		}); err != nil {
+			t.Fatalf("store dispatch asset %s: %v", assetID, err)
+		}
+	}
+	w.clipCache = cache
+	w.canonicalAssetCache = workercache.NewCanonicalAssetStore(cache)
 	payload := compiledPlanAssetPayload(t, assets)
 	canonicalBefore := payload[contract.PayloadKeyCompiledRenderPlanJSON].(string)
 	shaBefore := payload[contract.PayloadKeyCompiledRenderPlanSHA].(string)

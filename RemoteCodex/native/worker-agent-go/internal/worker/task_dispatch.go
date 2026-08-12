@@ -163,7 +163,8 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 	// AssetRefV2 through the same verified resolver separately, then carry only
 	// local runtime bindings in context.Context. The canonical JSON and its
 	// SHA remain byte-identical across workers and retries.
-	if _, isCompiledPlan := spec.Payload[contract.PayloadKeyCompiledRenderPlanJSON]; isCompiledPlan {
+	_, isCompiledPlan := spec.Payload[contract.PayloadKeyCompiledRenderPlanJSON]
+	if isCompiledPlan {
 		bindings, err := w.resolveCompiledRenderPlanAssets(ctx, spec.Payload)
 		if err != nil {
 			return failBeforeRun("compiled_plan_asset_resolution_failed", err)
@@ -178,12 +179,15 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 	// any clip the resolver just fetched) and BEFORE taskRunner.Run
 	// (so the executor reads leased rows).
 	//
-	// A nil w.clipCache is the documented skip path (legacy
-	// bootstrap profiles, headless tests). A empty asset-key slice
-	// is also a skip path (jobs with no clip references — e.g.
-	// audio-only renderings — are legitimate input and must not
-	// panic the dispatch path).
+	// Legacy payloads may skip leases when no clip cache is wired. V2
+	// plans are fail-closed above because every resolved V2 asset,
+	// including final_audio, must be protected before execution. An
+	// empty asset-key slice remains a valid no-lease path for legacy
+	// jobs with no clip references.
 	var clipLease *ClipLease
+	if isCompiledPlan && w.clipCache == nil {
+		return failBeforeRun("clip_lease_failed", fmt.Errorf("compiled render plan v2 requires a configured clip cache for asset leases"))
+	}
 	if w.clipCache != nil {
 		assetKeys := extractAssetKeysFromJSON(spec.Payload)
 		if len(assetKeys) > 0 {
@@ -192,7 +196,14 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 				return failBeforeRun("clip_lease_failed", fmt.Errorf("acquire clip lease: %w", leaseErr))
 			}
 			clipLease = leased
-			defer clipLease.ReleaseAll(ctx)
+			// Detach cleanup from the job context: a timeout/cancel is exactly
+			// when the lease must still be released, and workercache.Release
+			// must not inherit the already-done execution context.
+			defer func() {
+				if releaseErr := clipLease.ReleaseAll(leaseCleanupContext(ctx)); releaseErr != nil && w.logger != nil {
+					w.logger.Warn("[LEASE] release failed for job=%s: %v", pte.JobID, releaseErr)
+				}
+			}()
 		}
 	}
 

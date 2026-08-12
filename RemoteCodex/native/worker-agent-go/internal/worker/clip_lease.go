@@ -32,9 +32,11 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"velox-shared/assetref"
 	"velox-shared/contract"
@@ -79,9 +81,18 @@ func (l *ClipLease) ReleaseAll(ctx context.Context) error {
 	if l == nil || l.cache == nil {
 		return nil
 	}
+	cleanupCtx := leaseCleanupContext(ctx)
 	var firstErr error
 	for _, id := range l.assetKeys {
-		if err := l.cache.Release(ctx, id, l.jobID); err != nil {
+		var err error
+		for attempt := 0; attempt < 3; attempt++ {
+			err = l.cache.Release(cleanupCtx, id, l.jobID)
+			if err == nil || errors.Is(err, workercache.ErrNotFound) || attempt == 2 {
+				break
+			}
+			time.Sleep(time.Duration(attempt+1) * 10 * time.Millisecond)
+		}
+		if err != nil {
 			if firstErr == nil {
 				firstErr = fmt.Errorf("worker.ClipLease.ReleaseAll(%s): %w", id, err)
 			}
@@ -136,8 +147,9 @@ func AcquireJobClips(ctx context.Context, cache *workercache.Cache, jobID string
 			// Reverse order keeps the latest acquire (whose context
 			// is freshest) at the back, which is the conventional
 			// release-stack idiom.
+			cleanupCtx := leaseCleanupContext(ctx)
 			for j := len(lease.assetKeys) - 1; j >= 0; j-- {
-				_ = lease.cache.Release(ctx, lease.assetKeys[j], jobID)
+				_ = lease.cache.Release(cleanupCtx, lease.assetKeys[j], jobID)
 			}
 			return nil, fmt.Errorf("worker.AcquireJobClips(%s) for %s: %w", id, jobID, err)
 		}
@@ -146,6 +158,17 @@ func AcquireJobClips(ctx context.Context, cache *workercache.Cache, jobID string
 		lease.assetKeys = append(lease.assetKeys, id)
 	}
 	return lease, nil
+}
+
+// leaseCleanupContext deliberately detaches lease cleanup from the task
+// lifetime. A timed-out/canceled render must still release its durable
+// protection rows; passing the canceled task context to SQLite would make
+// cleanup fail before the DELETE executes.
+func leaseCleanupContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return context.WithoutCancel(ctx)
 }
 
 // extractAssetKeysFromJSON re-marshals `payload` (a map-shaped decoded

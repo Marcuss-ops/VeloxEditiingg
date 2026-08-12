@@ -163,6 +163,39 @@ func TestAcquireJobClips_RollbackPreservesPreexistingLease(t *testing.T) {
 	}
 }
 
+func TestClipLease_ReleaseAllUsesDetachedContext(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	cache, err := workercache.Open(filepath.Join(dir, "cache.db"))
+	if err != nil {
+		t.Fatalf("open cache: %v", err)
+	}
+	t.Cleanup(func() { _ = cache.Close() })
+	path := filepath.Join(dir, "final-audio.asset")
+	if err := os.WriteFile(path, []byte("audio"), 0o644); err != nil {
+		t.Fatalf("write asset: %v", err)
+	}
+	if err := cache.Store(ctx, workercache.Entry{AssetKey: "final-audio", LocalPath: path, SizeBytes: 5, DownloadComplete: true}); err != nil {
+		t.Fatalf("store asset: %v", err)
+	}
+	lease, err := AcquireJobClips(ctx, cache, "JOB-CANCELED", []string{"final-audio"})
+	if err != nil {
+		t.Fatalf("acquire lease: %v", err)
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := lease.ReleaseAll(canceled); err != nil {
+		t.Fatalf("ReleaseAll(canceled context): %v", err)
+	}
+	entry, found, err := cache.Find(ctx, "final-audio")
+	if err != nil || !found {
+		t.Fatalf("find released asset: found=%v err=%v", found, err)
+	}
+	if entry.ActiveLeaseCount != 0 || entry.ActiveJobID != "" {
+		t.Fatalf("canceled-context cleanup retained lease: job=%q count=%d", entry.ActiveJobID, entry.ActiveLeaseCount)
+	}
+}
+
 func TestExtractAssetKeysFromJSON_PrefersAssetKeyForLeaseIdentity(t *testing.T) {
 	keys := extractAssetKeysFromJSON(map[string]interface{}{
 		contract.PayloadKeyCompiledRenderPlanJSON: `{"assets":[{"asset_id":"plan-video","asset_key":"cache-video"}],"final_audio":{"asset_id":"plan-audio","asset_key":"cache-audio"}}`,

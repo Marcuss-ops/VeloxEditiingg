@@ -336,9 +336,9 @@ type Worker struct {
 	// panic so workercache.Cleanup never deletes an asset inside an active
 	// render.
 	//
-	// nil is acceptable: a worker with no clip cache (legacy
-	// bootstrap profile, headless tests, etc.) skips the lease step
-	// without any other behaviour change.
+	// nil is acceptable for legacy/headless workers; legacy payloads skip
+	// the lease step. CompiledRenderPlanV2 dispatch fails closed when this
+	// cache is nil because every V2 input must be leased before execution.
 	clipCache *workercache.Cache
 	// canonicalAssetCache is the typed AssetRegistry → ContentAddressedCache
 	// facade used by the download adapter. clipCache remains for legacy lease
