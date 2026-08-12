@@ -2,6 +2,7 @@
 #include "json_utils.hpp"
 #include <array>
 #include <chrono>
+#include <cstdlib>
 #include <fstream>
 #include <sstream>
 #include <regex>
@@ -153,6 +154,15 @@ std::string resolveDriveFolderToFileUrl(const std::string& folderUrl) {
 bool copyFile(const fs::path& src, const fs::path& dst) {
     std::error_code ec;
     fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec);
+    const char* diskMetrics = std::getenv("VELOX_BENCH_DISK_COPY_METRICS");
+    if (diskMetrics != nullptr && std::string(diskMetrics) != "0" &&
+        std::string(diskMetrics) != "false") {
+        std::error_code sizeEc;
+        const auto bytes = fs::file_size(src, sizeEc);
+        std::cerr << "{\"metric\":\"disk.copy\",\"bytes\":"
+                  << ((!ec && !sizeEc) ? bytes : 0)
+                  << ",\"ok\":" << (!ec ? "true" : "false") << "}\n";
+    }
     return !ec;
 }
 
