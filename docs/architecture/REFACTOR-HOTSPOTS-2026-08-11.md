@@ -105,6 +105,13 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
   righe non leggibili non entrano più nei risultati come dati incompleti.
 - Ansible/Fleet read model: host, run, command JSON e associazioni host
   corrotti non vengono più saltati durante inventory e audit operations.
+- Ansible compatibility history/inventory: store obbligatorio, errori di
+  lookup/lista/associazione host e conteggi non diventano più liste vuote,
+  host mancanti o capability apparentemente sane; gli endpoint usano `503`
+  per indisponibilità del datastore e `404` solo per record assenti.
+- Drive token listing: errori di accesso alla directory token non diventano
+  più `200` con lista vuota; il servizio propaga l'errore e l'handler risponde
+  `503`.
 - Schema introspection: errori durante `PRAGMA table_info` non vengono più
   trattati come colonne assenti durante il bootstrap SQLite.
 - Worker status API: un errore del read model persistito risponde `503`
