@@ -1,4 +1,4 @@
-// tests/test_phase_recorder.cpp — block-1 telemetry phase recorder tests.
+// tests/test_emitter.cpp — block-1 telemetry emitter tests.
 //
 // Exercises PhaseRecorder (Begin/Complete/Abort/Emit, per-origin event
 // indexes, canonical enum coercion) and the ScopedPhase RAII helper
@@ -8,13 +8,13 @@
 // sub-test prints PASS/FAIL with a clear assertion line. Exit code 0
 // iff all tests pass.
 //
-// Run via the binary velox_phase_recorder_tests.
+// Run via the binary velox_emitter_tests.
 
 #include "velox/core/render_engine.hpp"
 #include "velox/services/file_utils.hpp"
 #include "velox/services/io_counters.hpp"
 #include "velox/services/media_utils.hpp"
-#include "velox/telemetry/phase_recorder.hpp"
+#include "velox/telemetry/emitter.hpp"
 
 #include <chrono>
 #include <cstdio>
@@ -669,7 +669,7 @@ void testCanonicalEnums() {
 } // namespace
 
 int main() {
-    std::cerr << "running phase_recorder tests\n";
+    std::cerr << "running emitter tests\n";
 
     testCatalogBinding();
     testBeginComplete();

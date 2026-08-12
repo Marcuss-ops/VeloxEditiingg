@@ -1,5 +1,5 @@
-// phase_recorder.cpp — C++ engine-side event recorder implementation.
-#include "velox/telemetry/phase_recorder.hpp"
+// emitter.cpp — C++ engine-side event recorder implementation.
+#include "velox/telemetry/emitter.hpp"
 
 #include <cctype>
 #include <chrono>

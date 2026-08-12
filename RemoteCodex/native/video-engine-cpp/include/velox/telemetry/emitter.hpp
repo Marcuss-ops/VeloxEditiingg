@@ -1,6 +1,6 @@
 #pragma once
 
-// phase_recorder.hpp — observability chain / block 1: C++ engine-side
+// emitter.hpp — observability chain / block 1: C++ engine-side
 // event recorder.
 //
 // Mirrors the worker-side Go recorder (worker-agent-go/internal/telemetry):

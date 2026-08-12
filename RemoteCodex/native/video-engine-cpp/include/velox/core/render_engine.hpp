@@ -2,7 +2,7 @@
 #include "velox/core/metrics.hpp"
 #include "velox/plan/render_plan.hpp"
 #include "velox/services/ffmpeg_progress_parser.hpp"
-#include "velox/telemetry/phase_recorder.hpp"
+#include "velox/telemetry/emitter.hpp"
 
 #include <atomic>
 #include <cstdint>

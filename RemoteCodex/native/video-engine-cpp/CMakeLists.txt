@@ -80,11 +80,11 @@ set(VELOX_TELEMETRY_GENERATED_HEADER
 add_custom_command(
     OUTPUT "${VELOX_TELEMETRY_GENERATED_HEADER}"
     COMMAND "${VELOX_GO_EXECUTABLE}" run ./telemetry/cmd/cataloggen
-            -input telemetry/catalog.json
+            -input telemetry/schema/catalog.json
             -output "${VELOX_TELEMETRY_GENERATED_HEADER}"
     WORKING_DIRECTORY "${VELOX_SHARED_DIR}"
     DEPENDS
-        "${VELOX_SHARED_DIR}/telemetry/catalog.json"
+        "${VELOX_SHARED_DIR}/telemetry/schema/catalog.json"
         "${VELOX_SHARED_DIR}/telemetry/catalog.go"
         "${VELOX_SHARED_DIR}/telemetry/catalog_source.go"
         "${VELOX_SHARED_DIR}/telemetry/descriptor.go"
@@ -113,7 +113,7 @@ add_executable(velox_video_engine
     src/services/ffmpeg_progress_parser.cpp
     src/core/render_engine.cpp
     src/core/render_engine_helpers.cpp
-    src/telemetry/phase_recorder.cpp
+    src/telemetry/emitter.cpp
 )
 
 target_include_directories(velox_video_engine PRIVATE include src include/velox)
@@ -188,7 +188,7 @@ add_executable(velox_audio_timeline_tests
     src/services/media_packet_pipeline.cpp
     src/services/media_utils.cpp
     src/services/ffmpeg_progress_parser.cpp
-    src/telemetry/phase_recorder.cpp
+    src/telemetry/emitter.cpp
 )
 
 target_include_directories(velox_audio_timeline_tests
@@ -205,11 +205,11 @@ add_test(NAME audio_timeline_tests
 # ─── Block-1 phase recorder tests ──────────────────────────────────────
 # Standalone test binary for the telemetry PhaseRecorder + ScopedPhase
 # RAII helper. No GoogleTest dependency — the in-repo expect() macros.
-add_executable(velox_phase_recorder_tests
-    tests/test_phase_recorder.cpp
+add_executable(velox_emitter_tests
+    tests/test_emitter.cpp
     src/audio/audio_plan.cpp
     src/audio/audio_benchmark.cpp
-    src/telemetry/phase_recorder.cpp
+    src/telemetry/emitter.cpp
     src/core/render_engine.cpp
     src/core/render_engine_helpers.cpp
     src/services/file_utils.cpp
@@ -220,16 +220,16 @@ add_executable(velox_phase_recorder_tests
     src/services/ffmpeg_progress_parser.cpp
 )
 
-target_include_directories(velox_phase_recorder_tests
+target_include_directories(velox_emitter_tests
     PRIVATE include src include/velox)
 
 if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(velox_phase_recorder_tests PRIVATE -O2)
+    target_compile_options(velox_emitter_tests PRIVATE -O2)
 endif()
-velox_link_ffmpeg(velox_phase_recorder_tests)
+velox_link_ffmpeg(velox_emitter_tests)
 
-add_test(NAME phase_recorder_tests
-         COMMAND velox_phase_recorder_tests)
+add_test(NAME emitter_tests
+         COMMAND velox_emitter_tests)
 
 # Integration smoke test for the mandatory looped-music contract. It uses
 # the system FFmpeg binary to render a short source with loop=true and an
@@ -248,7 +248,7 @@ add_executable(velox_looped_music_tests
     src/services/media_packet_pipeline.cpp
     src/services/media_utils.cpp
     src/services/ffmpeg_progress_parser.cpp
-    src/telemetry/phase_recorder.cpp
+    src/telemetry/emitter.cpp
 )
 
 target_include_directories(velox_looped_music_tests
@@ -355,7 +355,7 @@ if(VELOX_ENABLE_LIBAV)
         src/services/media_packet_pipeline.cpp
         src/services/media_utils.cpp
         src/services/ffmpeg_progress_parser.cpp
-        src/telemetry/phase_recorder.cpp
+        src/telemetry/emitter.cpp
     )
 
     target_include_directories(velox_render_copy_only_zero_intermediates_tests
@@ -386,7 +386,7 @@ if(VELOX_ENABLE_LIBAV)
         src/services/media_packet_pipeline.cpp
         src/services/media_utils.cpp
         src/services/ffmpeg_progress_parser.cpp
-        src/telemetry/phase_recorder.cpp
+        src/telemetry/emitter.cpp
     )
 
     target_include_directories(velox_render_plan_v2_tests
@@ -431,7 +431,7 @@ endif()
 foreach(velox_target
         velox_video_engine
         velox_audio_timeline_tests
-        velox_phase_recorder_tests
+        velox_emitter_tests
         velox_looped_music_tests)
     add_dependencies(${velox_target} velox_telemetry_catalog_codegen)
 endforeach()
