@@ -14,6 +14,16 @@
 #      canonical compatibility owner; new parallel phase timers are rejected.
 #   4. Render producers cannot write Prometheus or PerformanceReceipt sinks
 #      directly. They emit facts to the recorder/transport boundary.
+#   5. Receipt construction happens only inside pkg/performance.
+#   6. The receipt is a read-only projection: pkg/performance never creates,
+#      binds or mutates the recorder, and never reaches TaskRunner state.
+#   7. The allowed spine (producer → recorder → projection → sink) stays
+#      wired through the single AttemptTelemetrySession.Start()/Stop() point.
+#   8. Leaf producers (cache, downloader, prefetch, workercache) publish raw
+#      facts only — no direct Prometheus facade, no receipt reference.
+#
+# The scan reads the working tree (including untracked files); commit before
+# running `make verify` (see the dirty-tree guard at the top of verify.sh).
 #
 # Exit codes: 0 clean, 1 invariant violation.
 set -euo pipefail
@@ -107,6 +117,15 @@ formula_pattern = r"\b(?:accounted_ratio|read_amplification|write_amplification|
 formula_owner_files = {
     "RemoteCodex/native/worker-agent-go/pkg/performance/assembler.go",
     "RemoteCodex/native/worker-agent-go/pkg/performance/performance_receipt_v1.go",
+    # The single Deriver and its canonical projections/consumers: they own
+    # the formula vocabulary (derive.go defines it; derive_telemetry.go,
+    # classify.go and snapshot_assembler.go reference it; benchmark_fixtures.go
+    # reads the derived fields for threshold evaluation).
+    "RemoteCodex/native/worker-agent-go/pkg/performance/derive.go",
+    "RemoteCodex/native/worker-agent-go/pkg/performance/derive_telemetry.go",
+    "RemoteCodex/native/worker-agent-go/pkg/performance/classify.go",
+    "RemoteCodex/native/worker-agent-go/pkg/performance/snapshot_assembler.go",
+    "RemoteCodex/native/worker-agent-go/pkg/performance/benchmark_fixtures.go",
     "DataServer/internal/taskattempts/report.go",
     "DataServer/internal/taskattempts/report_ratios.go",
     "DataServer/internal/store/sqlite_task_attempt_repository.go",
@@ -190,17 +209,101 @@ for path, number, line in matching(
     violations.append(f"direct telemetry sink reference from renderer at {rel(path)}:{number}: {line}")
 
 # The receipt constructor is a single projection boundary. A new production
-# literal or constructor call outside the performance package is a bypass.
+# constructor call or literal outside the performance package is a bypass.
+# Patterns are narrowed to assignment/literal contexts so a function whose
+# RETURN TYPE is DerivedMetrics/PerformanceReceiptV1 is not a false positive;
+# only an actual `x := PerformanceReceiptV1{...}` or `NewPerformanceReceiptV1(`
+# outside the assembler boundary trips the gate.
 for path, number, line in matching(
     production_files({".go"}),
-    r"(?:PerformanceReceiptV1\s*\{|NewPerformanceReceiptV1\s*\(|DerivedMetrics\s*\{)",
+    r"(?:NewPerformanceReceiptV1\s*\(|(?:=|:)\s*PerformanceReceiptV1\s*\{|(?:=|:)\s*DerivedMetrics\s*\{)",
 ):
     path_name = rel(path)
     if path_name not in {
         "RemoteCodex/native/worker-agent-go/pkg/performance/assembler.go",
         "RemoteCodex/native/worker-agent-go/pkg/performance/performance_receipt_v1.go",
+        # Canonical projections built on the assembler boundary: the snapshot
+        # projection constructs the receipt via NewPerformanceReceiptV1, and
+        # the Deriver owns the DerivedMetrics envelope literal.
+        "RemoteCodex/native/worker-agent-go/pkg/performance/snapshot_assembler.go",
+        "RemoteCodex/native/worker-agent-go/pkg/performance/derive.go",
+        # Sanctioned standalone consumer tool: the benchmark runner builds a
+        # comparison receipt for BenchmarkRun output. It is tooling, not a
+        # producer, and never feeds facts back into the recorder.
+        "RemoteCodex/native/worker-agent-go/cmd/velox-benchmark/main.go",
     }:
         violations.append(f"receipt construction outside assembler boundary at {path_name}:{number}: {line}")
+
+# 6. The receipt is a read-only projection. pkg/performance may reference the
+# canonical snapshot/journal TYPES (AttemptSnapshot, RecordedPhase, raw
+# metrics) but must never create, bind or mutate the recorder / event
+# machine, and must never reach into TaskRunner state.
+receipt_root = root / "RemoteCodex" / "native" / "worker-agent-go" / "pkg" / "performance"
+receipt_files = [p for p in receipt_root.rglob("*.go") if p.is_file()]
+recorder_mutation = re.compile(
+    r"(?:NewEventRecorder|WithRecorder\s*\(|RecorderFromContext|ImportCXX|"
+    r"NewAttemptEventMachine|WithAttemptEventMachine|WithAttemptTelemetry|"
+    r"BindAttemptTelemetry|\.Emit\s*\(|\.Record\s*\(|AttemptStarted|AttemptCompleted)"
+)
+for path, number, line in matching(receipt_files, recorder_mutation.pattern):
+    violations.append(f"receipt mutating the recorder at {rel(path)}:{number}: {line}")
+for path, number, line in matching(receipt_files, r"velox-worker-agent/internal/taskrunner"):
+    violations.append(f"receipt reaching TaskRunner state at {rel(path)}:{number}: {line}")
+
+# 7. The allowed spine must stay wired end to end through the single
+# AttemptTelemetrySession.Start()/Stop() entry point.
+spine_pins = [
+    ("RemoteCodex/native/worker-agent-go/internal/telemetry/attempt_session.go",
+     r"pipeline\.StartBaseline\(\)",
+     "session Start must drive the pipeline baseline"),
+    ("RemoteCodex/native/worker-agent-go/internal/telemetry/attempt_session.go",
+     r"pipeline\.Run\s*\(ctx\)",
+     "session Stop must run the pipeline"),
+    ("RemoteCodex/native/worker-agent-go/internal/telemetry/attempt_pipeline.go",
+     r"p\.recorder\.Snapshot\(\)",
+     "recorder to projection edge"),
+    ("RemoteCodex/native/worker-agent-go/internal/telemetry/attempt_pipeline.go",
+     r"sinks\.Publish",
+     "projection to sink edge"),
+    ("RemoteCodex/native/worker-agent-go/internal/worker/telemetry_pipeline.go",
+     r"AddSink",
+     "worker must register sinks on the pipeline"),
+    ("RemoteCodex/native/worker-agent-go/pkg/performance/snapshot_assembler.go",
+     r"AssembleFromSnapshot",
+     "receipt projection"),
+    ("RemoteCodex/native/worker-agent-go/internal/taskrunner/executors",
+     r"rec\.Emit\s*\(\s*telemetry\.EventSpec",
+     "producer to recorder edge (executors emit canonical events)"),
+]
+for spine_rel, spine_pattern, label in spine_pins:
+    target = root / spine_rel
+    if target.is_file():
+        candidates = [target]
+    else:
+        candidates = [
+            p for p in target.rglob("*.go")
+            if p.is_file() and not p.name.endswith("_test.go")
+        ]
+    if not any(matching(candidates, spine_pattern)):
+        violations.append(f"telemetry spine broken: {label} ({spine_rel})")
+
+# 8. Leaf producers publish raw facts only: no direct Prometheus facade, no
+# receipt reference. (pkg/video and the executors are covered by rule 4.)
+leaf_producer_roots = (
+    root / "RemoteCodex" / "native" / "worker-agent-go" / "pkg" / "cache",
+    root / "RemoteCodex" / "native" / "worker-agent-go" / "internal" / "downloader",
+    root / "RemoteCodex" / "native" / "worker-agent-go" / "internal" / "prefetch",
+    root / "RemoteCodex" / "native" / "worker-agent-go" / "internal" / "workercache",
+)
+leaf_files = (
+    p for base in leaf_producer_roots if base.exists() for p in base.rglob("*.go")
+    if p.is_file() and not p.name.endswith("_test.go")
+)
+for path, number, line in matching(
+    leaf_files,
+    r"(?:GetPrometheusMetrics\s*\(|CacheMetricsProvider\s*\(|velox-worker-agent/pkg/performance)",
+):
+    violations.append(f"leaf producer referencing a sink at {rel(path)}:{number}: {line}")
 
 if violations:
     print("\n".join(f"  - {item}" for item in violations), file=sys.stderr)

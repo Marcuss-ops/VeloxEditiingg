@@ -1,0 +1,84 @@
+# =============================================================================
+# Telemetry Architecture — CI gate that locks the telemetry dependency spine:
+#
+#   allowed:   producer → recorder → projection → sink
+#   forbidden: producer → Prometheus, producer → receipt,
+#              receipt → recorder, receipt → TaskRunner state
+#
+# Why a dedicated file?
+# The CollectorRegistry/SinkRegistry work established the single
+# AttemptTelemetrySession.Start()/Stop() entry point and decoupled the
+# cache producer from Prometheus. This gate makes those invariants
+# durable against future drift, in two layers:
+#   - scripts/ci/check-telemetry-architecture.sh — static gate: forbids
+#     the four forbidden edges in tracked Go files (git grep) and pins
+#     that the allowed spine is still wired end to end.
+#   - worker module runtime pins — TestAttemptTelemetrySession_DrivesPipeline
+#     (single entry point), the pipeline round-trip, and the snapshot
+#     assembler consistency tests run inside the canonical go test suite.
+#
+# Runs on every push to main, every PR, and on-demand dispatch. Status
+# check name in the PR UI: "Telemetry Architecture". Concurrency group is
+# independent of the canonical ci workflow so this gate runs in parallel.
+#
+# Trigger: push to main / pull_request / workflow_dispatch.
+# Permissions: contents: read (least-privilege, mirrors ci.yml).
+# =============================================================================
+
+name: Telemetry Architecture
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: telemetry-architecture-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: Telemetry Architecture
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # fetch-depth: 1 is sufficient — this gate is full-tree, not
+          # diff-scoped, and does not use BASE_REF. Mirrors the shallow
+          # checkout policy from non-branch-diff workflows.
+          fetch-depth: 1
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # Track the worker module's own go.mod (single source of truth
+          # for the toolchain used by internal/telemetry and
+          # pkg/performance) rather than a hardcoded "1.x".
+          go-version-file: RemoteCodex/native/worker-agent-go/go.mod
+
+      - name: Cache Go build module cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-worker-${{ hashFiles('RemoteCodex/native/worker-agent-go/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-worker-
+
+      - name: Run telemetry dependency architecture gate
+        run: bash scripts/ci/check-telemetry-architecture.sh
+
+      - name: Run telemetry runtime contract pins
+        working-directory: RemoteCodex/native/worker-agent-go
+        # -count=1: disable Go test result caching so the gate ALWAYS
+        # physically runs the entry-point/round-trip/assembler pins.
+        run: go test -count=1 ./internal/telemetry/... ./pkg/performance/...
