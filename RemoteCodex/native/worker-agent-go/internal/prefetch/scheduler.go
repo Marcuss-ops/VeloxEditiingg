@@ -436,11 +436,12 @@ func (s *Scheduler) runWorkItem(item *workItem, resolver *downloader.CacheResolv
 		s.cfg.OnState("requested", job, asset, nil)
 	}
 	resolved, err := resolver.Resolve(item.ctx, request)
+	var protectionErr error
 	if err == nil {
 		// The canonical transferer commits the verified cache row before
 		// Resolve returns. Install a protection that was pending because
 		// the row did not exist when the plan arrived.
-		_ = s.installPendingProtection(asset.AssetKey)
+		protectionErr = s.installPendingProtection(asset.AssetKey)
 	}
 	if err == nil && !resolved.CacheHit {
 		s.mu.Lock()
@@ -464,7 +465,7 @@ func (s *Scheduler) runWorkItem(item *workItem, resolver *downloader.CacheResolv
 	}
 	s.releaseWork(asset.SizeBytes)
 	readyAt := s.cfg.Now()
-	if err == nil {
+	if err == nil && protectionErr == nil {
 		s.mu.Lock()
 		if s.readyAtByJob[job.JobID] == nil {
 			s.readyAtByJob[job.JobID] = make(map[string]readyRecord)
@@ -476,6 +477,8 @@ func (s *Scheduler) runWorkItem(item *workItem, resolver *downloader.CacheResolv
 		if s.cfg.OnState != nil {
 			if err != nil {
 				s.cfg.OnState("failed", job, asset, err)
+			} else if protectionErr != nil {
+				s.cfg.OnState("protection_failed", job, asset, protectionErr)
 			} else {
 				s.cfg.OnState("ready", job, asset, nil)
 			}
@@ -483,9 +486,15 @@ func (s *Scheduler) runWorkItem(item *workItem, resolver *downloader.CacheResolv
 		s.mu.Lock()
 		active, queueDepth := s.activePrefetch, s.queue.Len()
 		s.mu.Unlock()
-		event := Event{Name: "asset_ready", At: readyAt, PlanVersion: item.planVersion, JobID: job.JobID, TaskID: job.TaskID, AssetKey: asset.AssetKey, Distance: job.Distance, Generation: item.generation, QueuedAt: item.enqueuedAt, StartedAt: startedAt, ReadyAt: readyAt, QueueDepth: queueDepth, Active: active}
+		eventName := "asset_ready"
+		if protectionErr != nil && err == nil {
+			eventName = "asset_ready_unprotected"
+		}
+		event := Event{Name: eventName, At: readyAt, PlanVersion: item.planVersion, JobID: job.JobID, TaskID: job.TaskID, AssetKey: asset.AssetKey, Distance: job.Distance, Generation: item.generation, QueuedAt: item.enqueuedAt, StartedAt: startedAt, ReadyAt: readyAt, QueueDepth: queueDepth, Active: active}
 		if err != nil {
 			event.ErrorMessage = err.Error()
+		} else if protectionErr != nil {
+			event.ErrorMessage = protectionErr.Error()
 		}
 		s.emit(event)
 	}

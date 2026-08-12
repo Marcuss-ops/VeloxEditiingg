@@ -128,6 +128,8 @@ reversibile, testato prima/dopo, committato su `main` e pubblicato.
       e rilasciare le reservation durable, senza lasciare la pulizia al solo TTL.
 - [x] Propagare gli errori nel rilascio delle protection del piano precedente;
       la proiezione precedente resta intatta e può essere ritentata.
+- [x] Non dichiarare `ready` quando la cache è verificata ma l'installazione
+      della protection fallisce; l'evento viene esposto come `protection_failed`.
 - [ ] Aggiungere metriche senza label `job_id`, `asset_id` o SHA ad alta cardinalità.
 - [ ] Calcolare `ready_lead_ms` per asset prefetchable.
 - [ ] Certificare 20 run × 4 worker.

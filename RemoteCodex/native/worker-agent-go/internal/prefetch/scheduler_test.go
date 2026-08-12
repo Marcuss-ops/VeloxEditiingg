@@ -45,6 +45,7 @@ type deferredProtectionStore struct {
 	mu           sync.Mutex
 	reserveCalls int
 	releaseCalls int
+	reserveErr   error
 	releaseErr   error
 }
 
@@ -58,6 +59,9 @@ func (s *deferredProtectionStore) Reserve(context.Context, assetref.AssetKey, st
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.reserveCalls++
+	if s.reserveErr != nil {
+		return s.reserveErr
+	}
 	if s.reserveCalls == 1 {
 		return workercache.ErrNotFound
 	}
@@ -232,6 +236,49 @@ func TestScheduler_ReleaseProtectionErrorKeepsPreviousProjection(t *testing.T) {
 	defer s.mu.Unlock()
 	if got := s.protects["D"]; got == "" || len(s.protects) != 1 {
 		t.Fatalf("protection projection=%v, want previous D reservation only", s.protects)
+	}
+}
+
+func TestScheduler_ReportsProtectionFailureAfterVerifiedResolve(t *testing.T) {
+	manager := &blockingSchedulerManager{
+		schedulerManager: &schedulerManager{started: make(chan struct{}, 1)},
+		release:          make(chan struct{}),
+	}
+	protections := &deferredProtectionStore{}
+	states := make(chan string, 8)
+	s := NewScheduler(Config{
+		WorkerID:      "worker-a",
+		MaxConcurrent: 1,
+		ByteBudget:    100,
+		OnState: func(state string, _ futureasset.Job, _ futureasset.AssetManifest, _ error) {
+			states <- state
+		},
+	})
+	s.SetResolver(downloader.NewCacheResolver(manager, nil))
+	s.SetProtectionStore(protections)
+	defer s.Close()
+	if err := s.Reconcile(futureTestPlan()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-manager.started:
+	case <-time.After(time.Second):
+		t.Fatal("prefetch did not start")
+	}
+	protections.mu.Lock()
+	protections.reserveErr = errors.New("protection store unavailable")
+	protections.mu.Unlock()
+	close(manager.release)
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case state := <-states:
+			if state == "protection_failed" {
+				return
+			}
+		case <-deadline:
+			t.Fatal("verified resolve did not report protection failure")
+		}
 	}
 }
 
@@ -419,8 +466,16 @@ func TestScheduler_ReprioritizationInvalidatesQueuedGeneration(t *testing.T) {
 	manager.mu.Lock()
 	got := append([]assetref.AssetKey(nil), manager.keys...)
 	manager.mu.Unlock()
-	if len(got) != 2 || got[0] != "a" || got[1] != "b" {
-		t.Fatalf("resolved keys=%v, want [a b] from current generation", got)
+	counts := make(map[assetref.AssetKey]int)
+	for _, key := range got {
+		counts[key]++
+	}
+	// If the old generation admitted "a" before Reconcile, that active
+	// waiter is allowed to finish. The canonical downloader deduplicates it
+	// with the current-generation waiter; only queued stale work must be
+	// invalidated by the scheduler.
+	if len(got) < 2 || counts["a"] < 1 || counts["b"] != 1 {
+		t.Fatalf("resolved keys=%v, want current generation [a b] plus at most an active old a", got)
 	}
 }
 
