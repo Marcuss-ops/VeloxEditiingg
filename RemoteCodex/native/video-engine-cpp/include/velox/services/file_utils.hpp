@@ -42,6 +42,20 @@ bool isDriveFolderUrl(const std::string& url);
 std::string resolveDriveFolderToFileUrl(const std::string& folderUrl);
 bool copyFile(const std::filesystem::path& src, const std::filesystem::path& dst);
 std::filesystem::path makeTempDir(const std::filesystem::path& base, const std::string& prefix);
+// Returns a unique partial path in the target's parent directory. Keeping the
+// partial beside the target guarantees that publishAtomic can rename without
+// crossing filesystems.
+std::filesystem::path makePartialPath(const std::filesystem::path& target);
+// Publishes an already-complete partial: fsync(file), atomic rename, then
+// fsync(parent directory). The partial and target must share a directory.
+// Returns false only before the rename commit; after a successful rename the
+// target is published even if the post-commit directory fsync is unavailable.
+// `durable` is true only when the parent-directory fsync completed; false
+// explicitly represents the published-but-not-durable state.
+bool publishAtomic(const std::filesystem::path& partial,
+                   const std::filesystem::path& target,
+                   std::string* error = nullptr,
+                   bool* durable = nullptr);
 bool downloadAsset(const std::string& source, const std::filesystem::path& dest, const std::string& cacheDir = "");
 
 } // namespace velox::file

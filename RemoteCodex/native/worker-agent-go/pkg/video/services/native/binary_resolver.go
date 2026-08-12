@@ -93,6 +93,7 @@ func mapEngineSidecar(sc *engineSidecar, m *pipeline.RenderMetrics) {
 	m.SpeedX = sc.SpeedX
 	m.EncodePasses = sc.EncodePasses
 	m.TempBytes = sc.TempBytes
+	m.OutputDurable = sc.OutputDurable
 	m.DurationSec = sc.DurationSec
 	m.ConcatMode = sc.ConcatMode
 	m.TotalSize = sc.TotalSize

@@ -146,6 +146,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
     encode_passes_.store(0);
     temp_bytes_written_.store(0);
     duration_seconds_.store(0.0);
+    output_durable_.store(false);
     concat_mode_ = "reencode";
     last_progress_ = services::EngineProgress{};
     metrics_.reset();
@@ -201,7 +202,43 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
         }
     } cleanup{workDir};
 
+    struct PartialOutputGuard {
+        std::vector<fs::path> paths;
+        ~PartialOutputGuard() {
+            for (const auto& path : paths) {
+                if (!path.empty()) {
+                    std::error_code ec;
+                    fs::remove(path, ec);
+                }
+            }
+        }
+        void track(const fs::path& path) {
+            if (!path.empty()) {
+                paths.push_back(path);
+            }
+        }
+    } partialOutputs;
+
     fs::path outPath(plan.output_path);
+    const auto publishOutput = [&](const fs::path& partial) -> std::string {
+        std::string error;
+        bool durable = false;
+        {
+            ScopedTimer timer(metrics_, "publish_atomic_ms");
+            // Compatibility alias: downstream reports still expose
+            // engine.copy_final_ms, but this duration is now the atomic
+            // publication (fsync + rename), never a full-file copy.
+            ScopedTimer legacyTimer(metrics_, "copy_final_ms");
+            if (!file::publishAtomic(partial, outPath, &error, &durable)) {
+                return error;
+            }
+        }
+        output_durable_.store(durable);
+        if (!durable) {
+            std::cerr << "warning: output was atomically published but directory durability was not confirmed\n";
+        }
+        return {};
+    };
     std::error_code ec_parents;
     fs::create_directories(outPath.parent_path(), ec_parents);
 
@@ -356,6 +393,10 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             packetPhase.Abort("packet_mux_failed", muxResult.error);
             result.error = "copy-only packet mux failed: " + muxResult.error;
             return failRender("packet_mux_failed");
+        }
+        output_durable_.store(muxResult.output_durable);
+        if (!muxResult.output_durable) {
+            std::cerr << "warning: output was atomically published but directory durability was not confirmed\n";
         }
         // Packet counters are not decoded/encoded frame counters. Keep the
         // phase event truthful and leave frames_encoded/decoded at zero; the
@@ -583,7 +624,11 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                            frames_encoded_.load(), frames_decoded_.load(), frames_composited_.load(),
                            std::chrono::duration_cast<std::chrono::milliseconds>(
                                std::chrono::steady_clock::now() - renderStart).count());
-    fs::path videoOnly = workDir / "video_only.mp4";
+    // Keep the concat output beside the final target. The later mux or
+    // subtitle pass can consume this partial directly, and the final
+    // successful stage commits with rename instead of copying the whole file.
+    fs::path videoOnly = file::makePartialPath(outPath);
+    partialOutputs.track(videoOnly);
     {
         telemetry::ScopedPhase concatPhase(
             recorder_, telemetry::kOriginEngine, telemetry::kScopeAttempt,
@@ -621,7 +666,8 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                 return failRender("subtitle_download_failed");
             }
         }
-        fs::path subtitledVideo = workDir / "video_subtitled.mp4";
+        fs::path subtitledVideo = file::makePartialPath(outPath);
+        partialOutputs.track(subtitledVideo);
         if (!burnSubtitleTrack(videoOnly, localSubtitle, subtitledVideo)) {
             subtitlePhase.Abort("subtitle_burn_failed", "failed to burn subtitle track");
             result.error = "failed to burn subtitle track";
@@ -665,14 +711,11 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
         if (downloadedTracks.empty()) {
             std::cerr << "warning: no audio tracks downloaded, exporting video without audio\n";
             std::error_code ec;
-            {
-                ScopedTimer t(metrics_, "copy_final_ms");
-                fs::copy_file(videoForMux, outPath, fs::copy_options::overwrite_existing, ec);
-            }
-            if (ec) {
-                audioPhase.Abort("audio_copy_failed", "failed to copy final output (no audio)");
-                result.error = "failed to copy final output (no audio)";
-                return failRender("audio_copy_failed");
+            const std::string publishError = publishOutput(videoForMux);
+            if (!publishError.empty()) {
+                audioPhase.Abort("audio_publish_failed", publishError);
+                result.error = "failed to publish final output (no audio): " + publishError;
+                return failRender("audio_publish_failed");
             }
             result.success = true;
         } else if (downloadedTracks.size() == 1
@@ -680,7 +723,8 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             // A plain finite track can use the fast mux path. Looped or
             // filtered tracks must use the bounded filter graph below so
             // `-stream_loop -1` can never outrun the rendered video.
-            fs::path finalMuxed = workDir / "final_muxed.mp4";
+            fs::path finalMuxed = file::makePartialPath(outPath);
+            partialOutputs.track(finalMuxed);
             double vol = downloadedTracks[0].second->volume;
             double offset = downloadedTracks[0].second->start_time_offset;
             bool muxOk;
@@ -700,18 +744,13 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                 ",\"audio_metadata_verified\":" + (muxDecision.metadata.metadata_verified ? "true" : "false") +
                 ",\"decision_reason\":\"" + muxDecision.reason + "\"}");
             if (muxOk) {
-                std::error_code ec;
-                {
-                    ScopedTimer tCopy(metrics_, "copy_final_ms");
-                    fs::copy_file(finalMuxed, outPath, fs::copy_options::overwrite_existing, ec);
+                const std::string publishError = publishOutput(finalMuxed);
+                if (!publishError.empty()) {
+                    muxPhase.Abort("audio_publish_failed", publishError);
+                    audioPhase.Abort("audio_publish_failed", publishError);
+                    result.error = "failed to publish final output: " + publishError;
+                    return failRender("audio_publish_failed");
                 }
-                if (ec) {
-                    muxPhase.Abort("audio_copy_failed", "failed to copy final output");
-                    audioPhase.Abort("audio_copy_failed", "failed to copy final output");
-                    result.error = "failed to copy final output";
-                    return failRender("audio_copy_failed");
-                }
-                temp_bytes_written_.fetch_add(fileSize(finalMuxed));
                 result.success = true;
             } else {
                 muxPhase.Abort("audio_mux_failed", "failed to mux audio track");
@@ -852,7 +891,8 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                 audioEncodePhase.Abort("audio_mix_failed", "failed to mix audio tracks");
             }
             if (mixOk) {
-                fs::path finalMuxed = workDir / "final_muxed.mp4";
+                fs::path finalMuxed = file::makePartialPath(outPath);
+            partialOutputs.track(finalMuxed);
                 bool muxOk;
                 telemetry::ScopedPhase muxPhase(
                     recorder_, telemetry::kOriginEngine, telemetry::kScopeAudioTrack,
@@ -876,18 +916,13 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                     ",\"audio_start_time_seconds\":" + std::to_string(muxDecision.metadata.start_time_seconds) +
                     ",\"decision_reason\":\"" + muxDecision.reason + "\"}");
                 if (muxOk) {
-                    std::error_code ec;
-                    {
-                        ScopedTimer tCopy(metrics_, "copy_final_ms");
-                        fs::copy_file(finalMuxed, outPath, fs::copy_options::overwrite_existing, ec);
+                    const std::string publishError = publishOutput(finalMuxed);
+                    if (!publishError.empty()) {
+                        muxPhase.Abort("audio_publish_failed", publishError);
+                        audioPhase.Abort("audio_publish_failed", publishError);
+                        result.error = "failed to publish final output: " + publishError;
+                        return failRender("audio_publish_failed");
                     }
-                    if (ec) {
-                        muxPhase.Abort("audio_copy_failed", "failed to copy final output");
-                        audioPhase.Abort("audio_copy_failed", "failed to copy final output");
-                        result.error = "failed to copy final output";
-                        return failRender("audio_copy_failed");
-                    }
-                    temp_bytes_written_.fetch_add(fileSize(finalMuxed));
                     result.success = true;
                 } else {
                     muxPhase.Abort("audio_mux_failed", "failed to mux mixed audio");
@@ -897,29 +932,21 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                 }
                 muxPhase.Complete();
             } else {
-                std::cerr << "warning: audio mix failed, exporting video without audio\n";
-                std::error_code ec;
-                {
-                    ScopedTimer t(metrics_, "copy_final_ms");
-                    fs::copy_file(videoForMux, outPath, fs::copy_options::overwrite_existing, ec);
-                }                    if (ec) {
-                        audioPhase.Abort("audio_copy_failed", "failed to copy final output (mix failed)");
-                        result.error = "failed to copy final output (mix failed)";
-                        return failRender("audio_copy_failed");
+                std::cerr << "warning: audio mix failed, exporting video without audio\n";                    const std::string publishError = publishOutput(videoForMux);
+                    if (!publishError.empty()) {
+                        audioPhase.Abort("audio_publish_failed", publishError);
+                        result.error = "failed to publish final output (mix failed): " + publishError;
+                        return failRender("audio_publish_failed");
                     }
 
                 result.success = true;
             }
         }
     } else {
-        std::error_code ec;
-        {
-            ScopedTimer t(metrics_, "copy_final_ms");
-            fs::copy_file(videoForMux, outPath, fs::copy_options::overwrite_existing, ec);
-        }
-        if (ec) {
-            result.error = "failed to copy final output (no audio tracks)";
-            return failRender("audio_copy_failed");
+        const std::string publishError = publishOutput(videoForMux);
+        if (!publishError.empty()) {
+            result.error = "failed to publish final output (no audio tracks): " + publishError;
+            return failRender("audio_publish_failed");
         }
         result.success = true;
     }
@@ -1068,6 +1095,7 @@ std::string RenderEngine::sidecarJson(const std::string& output_path) const {
     s << ",\"drop_frames\":" << last.drop_frames;
     s << ",\"bitrate\":" << last.bitrate;
     s << ",\"duration_seconds\":" << duration_seconds_.load();
+    s << ",\"output_durable\":" << (output_durable_.load() ? "true" : "false");
     s << ",\"output_path\":\"" << escapeProgressJsonString(outPath.string()) << "\"";
 
     // ── Phase-level timings ────────────────────────────────────

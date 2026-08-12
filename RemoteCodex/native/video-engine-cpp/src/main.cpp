@@ -229,12 +229,27 @@ static int cmdConcatSegments(int argc, char** argv) {
         return 1;
     }
 
-    fs::path workDir = fs::path(out).parent_path();
+    const fs::path target(out);
+    const fs::path partial = file::makePartialPath(target);
+    fs::path workDir = target.parent_path();
     if (workDir.empty()) workDir = fs::current_path();
-    bool ok = media::concatSegments(segments, fs::path(out), workDir);
+    bool ok = media::concatSegments(segments, partial, workDir);
+    std::string publishError;
+    bool durable = false;
+    if (ok) {
+        ok = file::publishAtomic(partial, target, &publishError, &durable);
+    } else {
+        std::error_code cleanupEc;
+        fs::remove(partial, cleanupEc);
+    }
     std::cout << "{\"success\":"
               << (ok ? "true" : "false")
-              << ",\"out\":\"" << out << "\",\"segments\":" << segments.size() << "}" << std::endl;
+              << ",\"output_durable\":" << (durable ? "true" : "false")
+              << ",\"out\":\"" << out << "\",\"segments\":" << segments.size();
+    if (!ok && !publishError.empty()) {
+        std::cout << ",\"error\":\"" << publishError << "\"";
+    }
+    std::cout << "}" << std::endl;
     return ok ? 0 : 1;
 }
 
@@ -254,10 +269,25 @@ static int cmdMuxAudio(int argc, char** argv) {
     if (audio.empty()) { std::cerr << "errore: --audio richiesto\n"; return 1; }
     if (out.empty())   { std::cerr << "errore: --out richiesto\n";   return 1; }
 
-    bool ok = media::muxAudio(fs::path(video), fs::path(audio), fs::path(out));
+    const fs::path target(out);
+    const fs::path partial = file::makePartialPath(target);
+    bool ok = media::muxAudio(fs::path(video), fs::path(audio), partial);
+    std::string publishError;
+    bool durable = false;
+    if (ok) {
+        ok = file::publishAtomic(partial, target, &publishError, &durable);
+    } else {
+        std::error_code cleanupEc;
+        fs::remove(partial, cleanupEc);
+    }
     std::cout << "{\"success\":"
               << (ok ? "true" : "false")
-              << ",\"out\":\"" << out << "\"}" << std::endl;
+              << ",\"output_durable\":" << (durable ? "true" : "false")
+              << ",\"out\":\"" << out << "\"";
+    if (!ok && !publishError.empty()) {
+        std::cout << ",\"error\":\"" << publishError << "\"";
+    }
+    std::cout << "}" << std::endl;
     return ok ? 0 : 1;
 }
 

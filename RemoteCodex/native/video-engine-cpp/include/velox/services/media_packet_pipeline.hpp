@@ -28,6 +28,10 @@ struct CopyOnlyMuxRequest {
 
 struct CopyOnlyMuxResult {
     bool success{false};
+    // True only when the output rename committed and the parent directory
+    // fsync completed. A successful rename with unavailable directory fsync
+    // is published but explicitly not durable.
+    bool output_durable{false};
     std::string error;
     int64_t video_packets{0};
     int64_t audio_packets{0};

@@ -182,6 +182,22 @@ int main() {
         "velox-asset://clip-1", cacheFile);
     expect(cacheKeyBound == cacheFile,
            "direct cache_key path is bound without staging");
+
+    const fs::path atomicTarget = root / "atomic-target.mp4";
+    const fs::path atomicPartial = velox::file::makePartialPath(atomicTarget);
+    expect(velox::file::writeFile(atomicTarget, "old-output"),
+           "existing output can be created for atomic replacement");
+    expect(velox::file::writeFile(atomicPartial, "new-output"),
+           "unique output partial can be written");
+    std::string publishError;
+    bool durable = false;
+    expect(velox::file::publishAtomic(atomicPartial, atomicTarget, &publishError, &durable),
+           "partial output is fsynced and atomically renamed");
+    expect(durable, "atomic publication confirms parent-directory durability");
+    expect(velox::file::readFile(atomicTarget) == "new-output",
+           "atomic rename replaces the old output without a copy");
+    expect(!fs::exists(atomicPartial),
+           "successful atomic publication consumes the partial path");
     if (failures != 0) return 1;
 
     const fs::path emptyBin = root / "empty-bin";
@@ -220,6 +236,7 @@ int main() {
     expect(velox::media::muxCopyOnly(request, &muxResult),
            "packet pipeline concatenates video and muxes audio in-process");
     expect(muxResult.success, "successful packet mux reports success");
+    expect(muxResult.output_durable, "packet mux reports durable atomic publication");
     expect(muxResult.video_packets > 0, "packet mux writes video packets");
     expect(muxResult.audio_packets > 0, "packet mux writes audio packets");
     expect(fs::exists(output), "packet mux publishes the output atomically");

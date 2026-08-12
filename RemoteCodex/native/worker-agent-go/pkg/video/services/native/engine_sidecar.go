@@ -22,6 +22,7 @@ type engineSidecar struct {
 	SpeedX           float64            `json:"speed_x"`
 	EncodePasses     int64              `json:"encode_passes"`
 	TempBytes        int64              `json:"temp_bytes"`
+	OutputDurable    bool               `json:"output_durable"`
 	DurationSec      float64            `json:"duration_seconds"`
 	ConcatMode       string             `json:"concat_mode"`
 	TotalSize        int64              `json:"total_size"`

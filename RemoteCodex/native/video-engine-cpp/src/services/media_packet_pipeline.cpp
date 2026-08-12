@@ -1,4 +1,5 @@
 #include "velox/services/media_packet_pipeline.hpp"
+#include "velox/services/file_utils.hpp"
 #include "velox/services/media_probe.hpp"
 
 extern "C" {
@@ -365,27 +366,6 @@ bool readPackets(const fs::path& path,
     return true;
 }
 
-fs::path partialPath(const fs::path& output) {
-    const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
-    return fs::path(output.string() + ".partial." + std::to_string(::getpid()) +
-                    "." + std::to_string(nonce));
-}
-
-bool syncFile(const fs::path& path, std::string& error) {
-    const int fd = ::open(path.c_str(), O_RDONLY);
-    if (fd < 0) {
-        error = "open output for fsync failed: " + path.string();
-        return false;
-    }
-    const bool ok = ::fsync(fd) == 0;
-    const int saved_errno = errno;
-    ::close(fd);
-    if (!ok) {
-        error = "fsync failed: " + std::string(std::strerror(saved_errno));
-    }
-    return ok;
-}
-
 bool fail(CopyOnlyMuxResult* result, const std::string& error) {
     if (result != nullptr) {
         result->success = false;
@@ -431,7 +411,7 @@ bool muxCopyOnly(const CopyOnlyMuxRequest& request, CopyOnlyMuxResult* result) {
     if (ec) {
         return fail(result, "copy-only packet mux cannot create output directory: " + ec.message());
     }
-    const fs::path partial = partialPath(output_path);
+    const fs::path partial = file::makePartialPath(output_path);
     auto cleanupPartial = [&]() {
         std::error_code remove_error;
         fs::remove(partial, remove_error);
@@ -682,16 +662,13 @@ bool muxCopyOnly(const CopyOnlyMuxRequest& request, CopyOnlyMuxResult* result) {
         return fail(result, "copy-only packet mux output duration does not cover the requested timeline");
     }
 
-    if (!syncFile(partial, error)) {
+    bool durable = false;
+    if (!file::publishAtomic(partial, output_path, &error, &durable)) {
         cleanupPartial();
         return fail(result, error);
     }
-    fs::rename(partial, output_path, ec);
-    if (ec) {
-        cleanupPartial();
-        return fail(result, "atomic rename failed: " + ec.message());
-    }
 
+    result->output_durable = durable;
     result->success = true;
     result->error.clear();
     return true;

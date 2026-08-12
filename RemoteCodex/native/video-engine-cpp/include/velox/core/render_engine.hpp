@@ -95,6 +95,7 @@ private:
     std::atomic<int64_t> encode_passes_{0};
     std::atomic<int64_t> temp_bytes_written_{0};
     std::atomic<double> duration_seconds_{0.0};
+    std::atomic<bool> output_durable_{false};
     std::string concat_mode_{"reencode"};
     services::EngineProgress last_progress_{};
     EngineMetrics metrics_;

@@ -205,7 +205,8 @@ PY
   engine_ffmpeg_execs="$(grep -Ec 'execve\(".*/ffmpeg"' "$TRACE" || true)"
 
   # file_utils::copyFile emits one disk.copy JSON line for each cache/local
-  # asset staging copy. The final fs::copy_file is accounted separately below.
+  # asset staging copy. Final output publication is an atomic rename, not a
+  # full fs::copy_file; the compatibility fields below must remain zero.
   asset_copy_ops="$(grep -c '"metric":"disk.copy"' "$STDERR" 2>/dev/null || true)"
   asset_copy_bytes="$({ grep '"metric":"disk.copy"' "$STDERR" 2>/dev/null || true; } | \
     sed -n 's/.*"bytes":\([0-9][0-9]*\).*/\1/p' | \
@@ -218,13 +219,11 @@ PY
   frames_encoded="$(jq -r '.frames // 0' "$sidecar")"
   encode_passes="$(jq -r '.encode_passes // 0' "$sidecar")"
   concat_mode="$(jq -r '.concat_mode // ""' "$sidecar")"
-  # Packet-copy writes the final target directly through the atomic LibAV
-  # muxer. Legacy renders still perform the explicit final fs::copy_file.
-  estimated_final_copy_ops=1
-  if [[ "$concat_mode" == "packet_copy" ]]; then
-    estimated_final_copy_ops=0
-    estimated_final_copy_bytes=0
-  fi
+  # Both packet-copy and legacy paths now publish a same-directory partial
+  # with fsync + atomic rename. Keep the historical column names for report
+  # compatibility, but assert that no full final copy is performed.
+  estimated_final_copy_ops=0
+  estimated_final_copy_bytes=0
   total_ms="$(awk '{printf "%.3f", $1 * 1000}' "$TIMEFILE")"
 
   # One independent final ffprobe is deliberately retained as the quality

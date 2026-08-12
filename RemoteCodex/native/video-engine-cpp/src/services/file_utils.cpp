@@ -3,6 +3,8 @@
 #include <array>
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
+#include <fcntl.h>
 #include <fstream>
 #include <sstream>
 #include <regex>
@@ -227,6 +229,108 @@ fs::path makeTempDir(const fs::path& requestedBase, const std::string& prefix) {
         }
     }
     return {};
+}
+
+fs::path makePartialPath(const fs::path& target) {
+    if (target.empty()) {
+        return {};
+    }
+    fs::path parent = target.parent_path();
+    if (parent.empty()) {
+        parent = ".";
+    }
+    const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
+    const std::string extension = target.extension().string();
+    const std::string filename = target.filename().string();
+    const std::string stem = extension.empty()
+        ? filename
+        : filename.substr(0, filename.size() - extension.size());
+    return parent / (stem + ".partial." +
+                     std::to_string(static_cast<long long>(::getpid())) + "." +
+                     std::to_string(nonce) + extension);
+}
+
+bool publishAtomic(const fs::path& partial, const fs::path& target, std::string* error, bool* durable) {
+    if (durable != nullptr) {
+        *durable = false;
+    }
+    auto fail = [&](const std::string& message) {
+        if (error != nullptr) {
+            *error = message;
+        }
+        return false;
+    };
+    if (partial.empty() || target.empty()) {
+        return fail("partial and target paths are required");
+    }
+    auto failBeforeRename = [&](const std::string& message) {
+        std::error_code cleanup_error;
+        fs::remove(partial, cleanup_error);
+        return fail(message);
+    };
+    std::error_code absolute_error;
+    const fs::path partial_parent = fs::absolute(partial, absolute_error).parent_path().lexically_normal();
+    if (absolute_error) {
+        return failBeforeRename("cannot resolve partial parent directory: " + absolute_error.message());
+    }
+    absolute_error.clear();
+    const fs::path target_parent = fs::absolute(target, absolute_error).parent_path().lexically_normal();
+    if (absolute_error || partial_parent != target_parent) {
+        return failBeforeRename("partial and target must be in the same directory");
+    }
+    if (!fs::is_regular_file(partial)) {
+        return failBeforeRename("partial output is not a regular file: " + partial.string());
+    }
+
+    const int fd = ::open(partial.c_str(), O_RDONLY);
+    if (fd < 0) {
+        std::error_code ec;
+        fs::remove(partial, ec);
+        return fail("open partial for fsync failed: " + partial.string());
+    }
+    const bool synced = ::fsync(fd) == 0;
+    const int sync_errno = errno;
+    const bool closed = ::close(fd) == 0;
+    if (!synced || !closed) {
+        std::error_code ec;
+        fs::remove(partial, ec);
+        if (!synced) {
+            return fail("fsync partial failed: " + std::string(std::strerror(sync_errno)));
+        }
+        return fail("close partial failed: " + partial.string());
+    }
+
+    std::error_code rename_error;
+    fs::rename(partial, target, rename_error);
+    if (rename_error) {
+        std::error_code ec;
+        fs::remove(partial, ec);
+        return fail("atomic rename failed: " + rename_error.message());
+    }
+
+    fs::path parent = target.parent_path();
+    if (parent.empty()) {
+        parent = ".";
+    }
+    const int dir_fd = ::open(parent.c_str(), O_RDONLY | O_DIRECTORY);
+    if (dir_fd < 0) {
+        std::cerr << "warning: atomic output committed but output directory could not be opened for fsync: "
+                  << parent << "\n";
+        return true;
+    }
+    const bool dir_synced = ::fsync(dir_fd) == 0;
+    const int dir_errno = errno;
+    const bool dir_closed = ::close(dir_fd) == 0;
+    if (!dir_synced) {
+        std::cerr << "warning: atomic output committed but output directory fsync failed: "
+                  << std::strerror(dir_errno) << "\n";
+    } else if (!dir_closed) {
+        std::cerr << "warning: atomic output committed but output directory close failed: "
+                  << parent << "\n";
+    } else if (durable != nullptr) {
+        *durable = true;
+    }
+    return true;
 }
 
 bool downloadAsset(const std::string& source, const fs::path& dest, const std::string& cacheDir) {

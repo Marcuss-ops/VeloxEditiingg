@@ -150,8 +150,8 @@ The TSV columns are:
 | `final_validation_ffprobe` | always `1`: independent post-render quality probe |
 | `asset_copy_ops` | `file_utils::copyFile` staging-copy count when the benchmark env gate is enabled |
 | `asset_copy_bytes` | bytes copied by those asset staging operations |
-| `estimated_final_copy_ops` | explicit final `fs::copy_file`, currently `1` |
-| `estimated_final_copy_bytes` | output size used as a conservative estimate; final `fs::copy_file` is not syscall-instrumented |
+| `estimated_final_copy_ops` | compatibility field for explicit final `fs::copy_file`; current atomic-publish path must report `0` |
+| `estimated_final_copy_bytes` | compatibility field for full final-copy bytes; current atomic-publish path must report `0` |
 | `sidecar_temp_bytes` | C++ generated temporary segment/concat/mux bytes |
 | `frames_decoded` | C++ sidecar count |
 | `frames_encoded` | C++ sidecar video-frame count |
@@ -256,10 +256,10 @@ process overhead is part of the baseline and must not be silently excluded.
 
 `sidecar_temp_bytes` is not a copy-byte counter: it accounts for generated
 intermediates, while `asset_copy_bytes` measures the instrumented asset
-staging copies and `estimated_final_copy_bytes` uses the output size as an
-explicit final-copy estimate. The final `fs::copy_file` is not syscall-
-instrumented by this harness; the estimate is labelled deliberately so it
-cannot be mistaken for an exact kernel byte count.
+staging copies. The historical `estimated_final_copy_*` fields are retained
+for report compatibility and must remain zero: final output publication now
+uses a same-directory `.partial` plus `fsync` and atomic `rename`, not a full
+`fs::copy_file`.
 
 ## Reproducibility and acceptance
 

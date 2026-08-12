@@ -419,36 +419,56 @@ int cmdFullVideo(int argc, char** argv) {
         }
     }
 
-    // Concat segments
+    // Generate the final video directly beside its target. Every successful
+    // branch commits this unique partial with fsync + atomic rename; no full
+    // final-file copy is needed.
     emitProgress(85, 0, 0, "concatenating");
-    fs::path videoOnlyPath = workDir / "video_only.mp4";
+    fs::path finalOutput = outputPath;
+    bool outputDurable = false;
+    fs::path videoOnlyPath = file::makePartialPath(finalOutput);
     if (!media::concatSegments(segments, videoOnlyPath, workDir)) {
+        std::error_code cleanupEc;
+        fs::remove(videoOnlyPath, cleanupEc);
         std::cerr << "errore: failed to concat segments\n";
         return 1;
     }
 
     // Mux audio
     emitProgress(92, 0, 0, "muxing_audio");
-    fs::path finalOutput = outputPath;
     if (!voiceoverPaths.empty() && voiceoverDurationSeconds > 0.0) {
         fs::path audioPath = downloadedVoiceoverPath.empty() ? workDir / "voiceover_audio" : downloadedVoiceoverPath;
-        fs::path muxedOutput = workDir / "final_with_audio.mp4";
+        fs::path muxedOutput = file::makePartialPath(finalOutput);
         if (!media::muxAudio(videoOnlyPath, audioPath, muxedOutput)) {
+            std::error_code cleanupEc;
+            fs::remove(muxedOutput, cleanupEc);
+            fs::remove(videoOnlyPath, cleanupEc);
             std::cerr << "errore: failed to mux audio into final video\n";
             return 1;
         }
-        std::error_code ec;
-        fs::copy_file(muxedOutput, finalOutput, fs::copy_options::overwrite_existing, ec);
+        std::string publishError;
+        if (!file::publishAtomic(muxedOutput, finalOutput, &publishError, &outputDurable)) {
+            std::error_code cleanupEc;
+            fs::remove(videoOnlyPath, cleanupEc);
+            std::cerr << "errore: failed to publish final video: " << publishError << "\n";
+            return 1;
+        }
+        std::error_code cleanupEc;
+        fs::remove(videoOnlyPath, cleanupEc);
     } else {
         if (!voiceoverPaths.empty()) {
             std::cerr << "warning: voiceover audio missing or invalid, exporting video without audio\n";
         }
-        std::error_code ec;
-        fs::copy_file(videoOnlyPath, finalOutput, fs::copy_options::overwrite_existing, ec);
+        std::string publishError;
+        if (!file::publishAtomic(videoOnlyPath, finalOutput, &publishError, &outputDurable)) {
+            std::cerr << "errore: failed to publish final video: " << publishError << "\n";
+            return 1;
+        }
     }
 
     emitProgress(100, 0, 0, "completed");
-    std::cout << "{\"success\":true,\"job_id\":\"" << jobId
+    std::cout << "{\"success\":true,\"output_durable\":"
+              << (outputDurable ? "true" : "false")
+              << ",\"job_id\":\"" << jobId
               << "\",\"output_path\":\"" << finalOutput.string()
               << "\",\"video_name\":\"" << videoName
               << "\",\"audio_language_for_srt\":\"" << audioLanguage

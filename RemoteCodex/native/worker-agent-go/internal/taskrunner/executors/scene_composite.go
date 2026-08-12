@@ -180,6 +180,7 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 	metrics["engine.speed_x"] = runMetrics.RenderMetrics.SpeedX
 	metrics["engine.encode_passes"] = runMetrics.RenderMetrics.EncodePasses
 	metrics["engine.temp_bytes"] = runMetrics.RenderMetrics.TempBytes
+	metrics["engine.output_durable"] = runMetrics.RenderMetrics.OutputDurable
 	metrics["engine.duration_seconds"] = runMetrics.RenderMetrics.DurationSec
 	metrics["engine.concat_mode"] = runMetrics.RenderMetrics.ConcatMode
 	metrics["engine.bitrate"] = runMetrics.RenderMetrics.Bitrate

@@ -165,6 +165,7 @@ type RenderMetrics struct {
 	SpeedX           float64
 	EncodePasses     int64
 	TempBytes        int64
+	OutputDurable    bool
 	DurationSec      float64
 	ConcatMode       string
 	TotalSize        int64
