@@ -22,14 +22,17 @@ import (
 // Unlike the old video-only probe, it inspects every stream so the report can
 // prove that the delivered artifact really contains audio as well as video.
 type MediaProbe struct {
-	VideoCodec      string
-	AudioCodec      string
-	DurationSec     float64
-	Width           int
-	Height          int
-	HasVideo        bool
-	HasAudio        bool
-	AudioTrackCount int
+	VideoCodec        string
+	AudioCodec        string
+	DurationSec       float64
+	Width             int
+	Height            int
+	HasVideo          bool
+	HasAudio          bool
+	VideoTrackCount   int
+	AudioTrackCount   int
+	AudioSampleRateHz int
+	AudioChannels     int
 }
 
 type ffprobeDocument struct {
@@ -38,11 +41,13 @@ type ffprobeDocument struct {
 }
 
 type ffprobeStream struct {
-	CodecType string `json:"codec_type"`
-	CodecName string `json:"codec_name"`
-	Width     int    `json:"width"`
-	Height    int    `json:"height"`
-	Duration  string `json:"duration"`
+	CodecType  string `json:"codec_type"`
+	CodecName  string `json:"codec_name"`
+	Width      int    `json:"width"`
+	Height     int    `json:"height"`
+	Duration   string `json:"duration"`
+	SampleRate string `json:"sample_rate"`
+	Channels   int    `json:"channels"`
 }
 
 type ffprobeFormat struct {
@@ -98,6 +103,7 @@ func parseFfprobeDetails(b []byte) (MediaProbe, error) {
 		switch stream.CodecType {
 		case "video":
 			probe.HasVideo = true
+			probe.VideoTrackCount++
 			if probe.VideoCodec == "" {
 				probe.VideoCodec = stream.CodecName
 				probe.Width = stream.Width
@@ -108,6 +114,8 @@ func parseFfprobeDetails(b []byte) (MediaProbe, error) {
 			probe.AudioTrackCount++
 			if probe.AudioCodec == "" {
 				probe.AudioCodec = stream.CodecName
+				probe.AudioSampleRateHz, _ = strconv.Atoi(stream.SampleRate)
+				probe.AudioChannels = stream.Channels
 			}
 		}
 		if probe.DurationSec == 0 && stream.Duration != "" {

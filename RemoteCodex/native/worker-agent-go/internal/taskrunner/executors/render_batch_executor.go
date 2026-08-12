@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +19,7 @@ import (
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/publisher"
 	"velox-worker-agent/internal/runtimeassets"
+	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/video/ffmpegrunner"
 )
 
@@ -71,6 +73,9 @@ func (e *renderBatchExecutor) Descriptor() executor.Descriptor { return e.descri
 // Validate admits only a complete, strict, canonical V2 envelope. Legacy
 // render_plan/render_plan_json payloads remain owned by the V1 executors.
 func (e *renderBatchExecutor) Validate(spec executor.TaskSpec) error {
+	if spec.ExecutorID != RenderBatchID {
+		return fmt.Errorf("render_batch@1: executor_id must be %q, got %q", RenderBatchID, spec.ExecutorID)
+	}
 	if spec.Payload == nil {
 		return errors.New("render_batch@1: payload is required")
 	}
@@ -91,88 +96,103 @@ func (e *renderBatchExecutor) Validate(spec executor.TaskSpec) error {
 // the final audio stream: the mux command uses -c:v copy -c:a copy.
 func (e *renderBatchExecutor) Execute(ctx context.Context, execCtx executor.ExecutionContext, spec executor.TaskSpec) (executor.ExecutionResult, error) {
 	started := time.Now().UTC()
-	validationStarted := time.Now()
-	if err := e.Validate(spec); err != nil {
-		return batchFailure(started, "validation_failed", err), nil
-	}
+	obs := newRenderBatchObservability(execCtx, compiledPlanSHA(spec))
+	obs.info("render_batch.started", map[string]interface{}{"job_id_present": spec.JobID != ""})
 
+	validation := obs.begin("validation", "worker.plan", "validate")
+	if err := e.Validate(spec); err != nil {
+		obs.finish(validation, telemetry.StatusFailed, "validation_failed", err)
+		return obs.failure(started, "validation_failed", err), nil
+	}
 	plan, err := decodeRenderPlanV2(spec)
 	if err != nil {
-		return batchFailure(started, "validation_failed", err), nil
+		obs.finish(validation, telemetry.StatusFailed, "validation_failed", err)
+		return obs.failure(started, "validation_failed", err), nil
 	}
+	obs.timelineSHA = plan.TimelineSHA256
+	obs.finish(validation, telemetry.StatusOK, "", nil)
+
 	jobID, err := safeOutputJobID(spec.JobID)
 	if err != nil {
-		return batchFailure(started, "INVALID_JOB_ID", err), nil
+		obs.logFailure("job_id", "INVALID_JOB_ID", err)
+		return obs.failure(started, "INVALID_JOB_ID", err), nil
 	}
 	bindings, ok := runtimeassets.FromContext(ctx)
 	if !ok {
-		return batchFailure(started, "ASSET_BINDINGS_MISSING", ErrMissingRenderBatchBindings), nil
+		err := ErrMissingRenderBatchBindings
+		obs.logFailure("asset_resolution", "ASSET_BINDINGS_MISSING", err)
+		return obs.failure(started, "ASSET_BINDINGS_MISSING", err), nil
 	}
+
+	assetResolution := obs.begin("asset_resolution", "worker.plan", "resolve_assets")
 	if err := validateBindings(plan, bindings); err != nil {
-		return batchFailure(started, "ASSET_BINDINGS_INVALID", err), nil
+		obs.finish(assetResolution, telemetry.StatusFailed, "ASSET_BINDINGS_INVALID", err)
+		return obs.failure(started, "ASSET_BINDINGS_INVALID", err), nil
 	}
-	if err := validateMediaFile(e.probe, ctx, bindings[plan.FinalAudio.AssetID].Path, "final audio", plan.DurationUS, false, true); err != nil {
-		return batchFailure(started, "FINAL_AUDIO_INVALID", err), nil
+	if err := validateMediaFile(e.probe, ctx, bindings[plan.FinalAudio.AssetID].Path, "final audio", plan.DurationUS, false, true, &plan.FinalAudio); err != nil {
+		obs.finish(assetResolution, telemetry.StatusFailed, "FINAL_AUDIO_INVALID", err)
+		return obs.failure(started, "FINAL_AUDIO_INVALID", err), nil
 	}
-	validationMS := time.Since(validationStarted).Milliseconds()
+	obs.finish(assetResolution, telemetry.StatusOK, "", nil)
 
 	if err := os.MkdirAll(e.outputRoot, 0o750); err != nil {
-		return batchFailure(started, "output_directory", err), nil
+		obs.logFailure("output_directory", "output_directory", err)
+		return obs.failure(started, "output_directory", err), nil
 	}
 	videoOnlyPath := filepath.Join(e.outputRoot, jobID+".video-only.mp4")
 	finalPath := filepath.Join(e.outputRoot, jobID+".mp4")
 	defer os.Remove(videoOnlyPath)
 
-	visualStarted := time.Now()
+	visual := obs.begin("visual_render", "engine", "render")
 	visualArgs, err := buildVideoOnlyArgs(plan, bindings, videoOnlyPath)
 	if err != nil {
-		return batchFailure(started, "visual_plan_invalid", err), nil
+		obs.finish(visual, telemetry.StatusFailed, "visual_plan_invalid", err)
+		return obs.failure(started, "visual_plan_invalid", err), nil
 	}
 	visualArtifact, visualProfile, err := e.runCommand(ctx, execCtx, ffmpegrunner.OperationCompose, visualArgs, videoOnlyPath, "video-only")
 	if err != nil {
-		return batchFailure(started, "visual_execute_failed", err), nil
+		obs.finish(visual, telemetry.StatusFailed, "visual_execute_failed", err)
+		return obs.failure(started, "visual_execute_failed", err), nil
 	}
 	if visualArtifact.SizeBytes <= 0 {
-		return batchFailure(started, "visual_output_empty", errors.New("video-only output is empty")), nil
+		err := errors.New("video-only output is empty")
+		obs.finish(visual, telemetry.StatusFailed, "visual_output_empty", err)
+		return obs.failure(started, "visual_output_empty", err), nil
 	}
-	if err := validateMediaFile(e.probe, ctx, videoOnlyPath, "video-only output", plan.DurationUS, true, false); err != nil {
-		return batchFailure(started, "VISUAL_OUTPUT_INVALID", err), nil
+	if err := validateMediaFile(e.probe, ctx, videoOnlyPath, "video-only output", plan.DurationUS, true, false, nil); err != nil {
+		obs.finish(visual, telemetry.StatusFailed, "VISUAL_OUTPUT_INVALID", err)
+		return obs.failure(started, "VISUAL_OUTPUT_INVALID", err), nil
 	}
-	visualMS := time.Since(visualStarted).Milliseconds()
+	obs.finish(visual, telemetry.StatusOK, "", nil)
 
-	muxStarted := time.Now()
+	mux := obs.begin("final_mux", "engine.mux", "packet_write")
 	muxArgs := buildFinalAudioCopyArgs(videoOnlyPath, bindings[plan.FinalAudio.AssetID].Path, finalPath)
 	finalArtifact, muxProfile, err := e.runCommand(ctx, execCtx, ffmpegrunner.OperationEncode, muxArgs, finalPath, "final-mux")
 	if err != nil {
-		return batchFailure(started, "final_mux_failed", err), nil
+		obs.finish(mux, telemetry.StatusFailed, "final_mux_failed", err)
+		return obs.failure(started, "final_mux_failed", err), nil
 	}
-	if err := validateMediaFile(e.probe, ctx, finalPath, "final output", plan.DurationUS, true, true); err != nil {
-		return batchFailure(started, "FINAL_OUTPUT_INVALID", err), nil
+	if err := validateMediaFile(e.probe, ctx, finalPath, "final output", plan.DurationUS, true, true, &plan.FinalAudio); err != nil {
+		obs.finish(mux, telemetry.StatusFailed, "FINAL_OUTPUT_INVALID", err)
+		return obs.failure(started, "FINAL_OUTPUT_INVALID", err), nil
 	}
-	muxMS := time.Since(muxStarted).Milliseconds()
+	obs.finish(mux, telemetry.StatusOK, "", nil)
 
-	metrics := map[string]interface{}{
-		"render_plan_validate_ms": validationMS,
-		"visual_execute_ms":       visualMS,
-		"final_mux_ms":            muxMS,
-		"compiled_asset_count":    int64(len(plan.Assets)),
-		"audio_mix_count":         int64(0),
-		"audio_encode_count":      int64(0),
-		"final_audio_copy":        int64(1),
-		"timeline_revision":       plan.TimelineRevision,
-		"timeline_sha256":         plan.TimelineSHA256,
-		"final_audio_asset_id":    plan.FinalAudio.AssetID,
-		"video_only_bytes":        visualArtifact.SizeBytes,
-		"final_output_bytes":      finalArtifact.SizeBytes,
-		"ffmpeg_visual_profile":   visualProfile,
-		"ffmpeg_mux_profile":      muxProfile,
-	}
+	metrics := obs.metrics
+	metrics["compiled_asset_count"] = int64(len(plan.Assets))
+	metrics["audio_mix_count"] = int64(0)
+	metrics["audio_encode_count"] = int64(0)
+	metrics["final_audio_copy"] = int64(1)
+	metrics["timeline_revision"] = plan.TimelineRevision
+	metrics["video_only_bytes"] = visualArtifact.SizeBytes
+	metrics["final_output_bytes"] = finalArtifact.SizeBytes
+	metrics["ffmpeg_visual_profile"] = visualProfile
+	metrics["ffmpeg_mux_profile"] = muxProfile
+	obs.info("render_batch.succeeded", map[string]interface{}{"compiled_asset_count": int64(len(plan.Assets)), "final_audio_copy": int64(1)})
 
 	return executor.ExecutionResult{
-		Status:    "succeeded",
-		Outputs:   []executor.ArtifactRef{finalArtifact},
-		Metrics:   metrics,
-		StartedAt: started, CompletedAt: time.Now().UTC(),
+		Status: "succeeded", Outputs: []executor.ArtifactRef{finalArtifact},
+		Metrics: metrics, StartedAt: started, CompletedAt: time.Now().UTC(),
 	}, nil
 }
 
@@ -249,7 +269,7 @@ func validateBinding(assetID, wantSHA string, wantSize int64, bindings runtimeas
 
 const renderBatchDurationToleranceSec = 0.050
 
-func validateMediaFile(probe func(context.Context, string) (publisher.MediaProbe, error), ctx context.Context, path, label string, wantDurationUS int64, requireVideo, requireAudio bool) error {
+func validateMediaFile(probe func(context.Context, string) (publisher.MediaProbe, error), ctx context.Context, path, label string, wantDurationUS int64, requireVideo, requireAudio bool, expectedAudio *contract.FinalAudioV2) error {
 	if probe == nil {
 		return errors.New("media probe is not configured")
 	}
@@ -257,11 +277,16 @@ func validateMediaFile(probe func(context.Context, string) (publisher.MediaProbe
 	if err != nil {
 		return fmt.Errorf("%s probe: %w", label, err)
 	}
-	if requireVideo && !media.HasVideo {
-		return fmt.Errorf("%s has no video stream", label)
+	if requireVideo && (!media.HasVideo || media.VideoTrackCount != 1) {
+		return fmt.Errorf("%s must contain exactly one video stream", label)
 	}
-	if requireAudio && !media.HasAudio {
-		return fmt.Errorf("%s has no audio stream", label)
+	if requireAudio && (!media.HasAudio || media.AudioTrackCount != 1) {
+		return fmt.Errorf("%s must contain exactly one audio stream", label)
+	}
+	if expectedAudio != nil {
+		if media.AudioCodec != expectedAudio.Codec || media.AudioSampleRateHz != expectedAudio.SampleRateHz || media.AudioChannels != expectedAudio.Channels {
+			return fmt.Errorf("%s audio codec=%q sample_rate_hz=%d channels=%d want codec=%q sample_rate_hz=%d channels=%d", label, media.AudioCodec, media.AudioSampleRateHz, media.AudioChannels, expectedAudio.Codec, expectedAudio.SampleRateHz, expectedAudio.Channels)
+		}
 	}
 	want := float64(wantDurationUS) / 1_000_000
 	if media.DurationSec <= 0 || math.Abs(media.DurationSec-want) > renderBatchDurationToleranceSec {
@@ -306,6 +331,10 @@ func buildVideoOnlyArgs(plan *contract.CompiledRenderPlanV2, bindings runtimeass
 			start := float64(segment.TimelineStartFrame*int64(plan.Output.FPSDen)) / float64(plan.Output.FPSNum)
 			sourceIn := float64(segment.SourceInUS) / 1_000_000
 			sourceDuration := float64(segment.SourceDurationUS) / 1_000_000
+			frameDuration := float64(segment.FrameCount*int64(plan.Output.FPSDen)) / float64(plan.Output.FPSNum)
+			if math.Abs(frameDuration-sourceDuration) > 1.0/float64(plan.Output.FPSNum) {
+				return nil, fmt.Errorf("segment %q source_duration_us=%d does not match frame_count=%d at %d/%d fps", segment.SegmentID, segment.SourceDurationUS, segment.FrameCount, plan.Output.FPSNum, plan.Output.FPSDen)
+			}
 			segmentLabel := fmt.Sprintf("[batch_segment_%d]", segmentIndex)
 			filters = append(filters, fmt.Sprintf("[%d:v]trim=start=%.6f:duration=%.6f,setpts=PTS-STARTPTS+%.6f/TB,scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2:color=black%s", input, sourceIn, sourceDuration, start, plan.Output.Width, plan.Output.Height, plan.Output.Width, plan.Output.Height, segmentLabel))
 			overlayOutput := fmt.Sprintf("[batch_overlay_%d]", segmentIndex)
@@ -363,9 +392,150 @@ func (e *renderBatchExecutor) runCommand(ctx context.Context, execCtx executor.E
 	return artifact, profile, nil
 }
 
-func batchFailure(started time.Time, code string, err error) executor.ExecutionResult {
+type renderBatchPhase struct {
+	stage   string
+	started time.Time
+	handle  *telemetry.EventHandle
+}
+
+type renderBatchObservability struct {
+	logger      executor.Logger
+	recorder    *telemetry.EventRecorder
+	planSHA     string
+	timelineSHA string
+	metrics     map[string]interface{}
+}
+
+func newRenderBatchObservability(execCtx executor.ExecutionContext, planSHA string) *renderBatchObservability {
+	obs := &renderBatchObservability{
+		planSHA: planSHA,
+		metrics: make(map[string]interface{}),
+	}
+	if execCtx != nil {
+		obs.logger = execCtx.Logger()
+		obs.recorder = recorderFromExecutionContext(execCtx)
+	}
+	return obs
+}
+
+func compiledPlanSHA(spec executor.TaskSpec) string {
+	sha, _ := spec.Payload[contract.PayloadKeyCompiledRenderPlanSHA].(string)
+	return strings.TrimSpace(sha)
+}
+
+func (o *renderBatchObservability) identityFields() map[string]interface{} {
+	fields := make(map[string]interface{}, 2)
+	if o.planSHA != "" {
+		fields["plan_sha256"] = o.planSHA
+	}
+	if o.timelineSHA != "" {
+		fields["timeline_sha256"] = o.timelineSHA
+	}
+	return fields
+}
+
+func (o *renderBatchObservability) info(event string, fields map[string]interface{}) {
+	if o == nil || o.logger == nil {
+		return
+	}
+	merged := o.identityFields()
+	for key, value := range fields {
+		merged[key] = value
+	}
+	o.logger.Info(event, merged)
+}
+
+func (o *renderBatchObservability) logFailure(stage, code string, err error) {
+	if o == nil || o.logger == nil {
+		return
+	}
+	fields := o.identityFields()
+	fields["stage"] = stage
+	fields["error_code"] = code
+	// Do not pass err to the logger: asset errors can contain worker-local
+	// paths. The stable code and identity fields are the structured contract.
+	o.logger.Error("render_batch.failed", nil, fields)
+}
+
+func (o *renderBatchObservability) begin(stage, component, action string) *renderBatchPhase {
+	if o == nil {
+		return nil
+	}
+	o.info("render_batch."+stage+".started", map[string]interface{}{"stage": stage})
+	phase := &renderBatchPhase{stage: stage, started: time.Now()}
+	if o.recorder == nil {
+		return phase
+	}
+	spec, ok := telemetry.LookupCanonicalPhaseSpec(component, action)
+	if !ok {
+		o.info("render_batch.telemetry_unregistered", map[string]interface{}{"stage": stage})
+		return phase
+	}
+	metadata := o.identityFields()
+	encoded, err := json.Marshal(metadata)
+	if err != nil {
+		return phase
+	}
+	phase.handle = o.recorder.Start(telemetry.EventSpec{
+		Origin: spec.Origin, Scope: spec.Scope, Component: spec.Component,
+		Action: spec.Action, Phase: spec.Phase, EventType: spec.EventType,
+		SchemaVersion: telemetry.SchemaVersion, MetadataJSON: string(encoded),
+	})
+	return phase
+}
+
+func (o *renderBatchObservability) finish(phase *renderBatchPhase, status, code string, err error) {
+	if o == nil || phase == nil {
+		return
+	}
+	duration := time.Since(phase.started).Milliseconds()
+	fields := o.identityFields()
+	fields["stage"] = phase.stage
+	fields["duration_ms"] = duration
+	fields["status"] = status
+	if code != "" {
+		fields["error_code"] = code
+	}
+	if status == telemetry.StatusFailed {
+		o.logFailure(phase.stage, code, err)
+	} else {
+		o.info("render_batch."+phase.stage+".completed", fields)
+	}
+	switch phase.stage {
+	case "validation":
+		o.metrics["render_plan_validate_ms"] = duration
+	case "asset_resolution":
+		o.metrics["compiled_asset_resolve_ms"] = duration
+	case "visual_render":
+		o.metrics["visual_execute_ms"] = duration
+	case "final_mux":
+		o.metrics["final_mux_ms"] = duration
+	}
+	if phase.handle == nil {
+		return
+	}
+	metadata := o.identityFields()
+	for key, value := range fields {
+		metadata[key] = value
+	}
+	encoded, marshalErr := json.Marshal(metadata)
+	if marshalErr == nil {
+		phase.handle.SetMetadataJSON(string(encoded))
+	}
+	if status == telemetry.StatusFailed {
+		phase.handle.Abort(code, code)
+	} else {
+		phase.handle.CompleteWith(0, 0, 0, telemetry.StatusOK, "", "")
+	}
+}
+
+func (o *renderBatchObservability) failure(started time.Time, code string, err error) executor.ExecutionResult {
+	if o == nil {
+		return executor.ExecutionResult{Status: "failed", ErrorCode: code, ErrorDetail: err.Error(), StartedAt: started, CompletedAt: time.Now().UTC()}
+	}
+	o.logFailure("execution", code, err)
 	return executor.ExecutionResult{
-		Status: "failed", ErrorCode: code, ErrorDetail: err.Error(),
+		Status: "failed", ErrorCode: code, ErrorDetail: err.Error(), Metrics: o.metrics,
 		StartedAt: started, CompletedAt: time.Now().UTC(),
 	}
 }

@@ -286,7 +286,7 @@ func TestProbeMediaDetails_ParsesVideoAndAudio(t *testing.T) {
 	payload := []byte(`{
 		"streams": [
 			{"codec_type":"video","codec_name":"h264","width":1920,"height":1080},
-			{"codec_type":"audio","codec_name":"aac"}
+			{"codec_type":"audio","codec_name":"aac","sample_rate":"48000","channels":2}
 		],
 		"format": {"duration":"42.5"}
 	}`)
@@ -294,10 +294,10 @@ func TestProbeMediaDetails_ParsesVideoAndAudio(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseFfprobeDetails: %v", err)
 	}
-	if !probe.HasVideo || !probe.HasAudio || probe.AudioTrackCount != 1 {
-		t.Fatalf("stream presence = video:%v audio:%v tracks:%d", probe.HasVideo, probe.HasAudio, probe.AudioTrackCount)
+	if !probe.HasVideo || !probe.HasAudio || probe.VideoTrackCount != 1 || probe.AudioTrackCount != 1 {
+		t.Fatalf("stream presence = video:%v/%d audio:%v/%d", probe.HasVideo, probe.VideoTrackCount, probe.HasAudio, probe.AudioTrackCount)
 	}
-	if probe.VideoCodec != "h264" || probe.AudioCodec != "aac" || probe.Width != 1920 || probe.Height != 1080 || probe.DurationSec != 42.5 {
+	if probe.VideoCodec != "h264" || probe.AudioCodec != "aac" || probe.AudioSampleRateHz != 48000 || probe.AudioChannels != 2 || probe.Width != 1920 || probe.Height != 1080 || probe.DurationSec != 42.5 {
 		t.Fatalf("probe = %+v", probe)
 	}
 }

@@ -110,6 +110,17 @@ func (w *diskWatcher) start(ctx context.Context, cfg *config.WorkerConfig, watch
 // Version is set at build time via -ldflags.
 var Version = "dev"
 
+// registerCanonicalRenderExecutors is the composition-root registration
+// boundary for the render executor family. V1 remains registered first and
+// unchanged; V2 is additive and uses the same registry advertised by worker
+// capabilities and used by dispatch.
+func registerCanonicalRenderExecutors(reg *executor.Registry, outputRoot string) error {
+	if err := executors.RegisterRenderPlanExecutors(reg, outputRoot); err != nil {
+		return err
+	}
+	return executors.RegisterRenderBatchExecutor(reg, nil, outputRoot)
+}
+
 func main() {
 	// `doctor` is a subcommand, while the historical process flags remain
 	// shared with the normal worker boot path. Strip only that first token so
@@ -328,14 +339,14 @@ func main() {
 	} else {
 		logger.Info("[BOOT] Worker profile is 'creator'; scene.composite.v1 disabled")
 	}
-	// RenderPlan v1 is the sole timeline source for the deterministic
-	// subtitle/audio/video stages. Register these adapters in the same
-	// capability registry used by dispatch and worker hello.
-	if err := executors.RegisterRenderPlanExecutors(registry, cfg.OutputDir); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: failed to register RenderPlan executors: %v\n", err)
+	// Register V1 and V2 render executors in the single canonical registry.
+	// V2 is additive and never replaces the four legacy entries.
+	if err := registerCanonicalRenderExecutors(registry, cfg.OutputDir); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed to register render executors: %v\n", err)
 		os.Exit(1)
 	}
 	logger.Info("[BOOT] Registered RenderPlan executors: %s@1, %s@1, %s@1, %s@1", executors.SubtitleAlignID, executors.AudioMixID, executors.ComposeID, executors.EncodeID)
+	logger.Info("[BOOT] Registered V2 executor: %s@%d", executors.RenderBatchID, executors.RenderBatchVersion)
 	// RW-PROD-004 §3 A4: surface the live executor count on the read
 	// snapshot so /health/ready has a non-zero Executors reason.
 	// SetExecutorsCount accepts the entire roster size rather than +
