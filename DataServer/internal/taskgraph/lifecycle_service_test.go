@@ -55,6 +55,7 @@ type recordingJobsRepo struct {
 	failCalls  int
 	lastJobID  string
 	lastReason string
+	failErr    error
 }
 
 func (r *recordingJobsRepo) Get(_ context.Context, _ string) (*jobs.Job, error) {
@@ -72,7 +73,7 @@ func (r *recordingJobsRepo) Fail(_ context.Context, jobID string, reason string)
 	r.failCalls++
 	r.lastJobID = jobID
 	r.lastReason = reason
-	return nil
+	return r.failErr
 }
 
 // exhaustedExpireStubRepo is a minimal Repository stub that wires
@@ -288,6 +289,65 @@ func TestLifecycleService_ExpireTaskLease_CallsFailOnExhausted(t *testing.T) {
 	if !strings.Contains(jobsRepo.lastReason, taskID) {
 		t.Errorf("Fail reason = %q; want substring %q",
 			jobsRepo.lastReason, taskID)
+	}
+}
+
+func TestLifecycleService_ExpireTaskLease_PropagatesRetryBudgetReadError(t *testing.T) {
+	readErr := errors.New("jobs database unavailable")
+	taskRepo := &exhaustedExpireStubRepo{
+		getErr: readErr,
+		expireResult: ExpireResult{
+			TaskStatus:        StatusFailed,
+			AttemptsExhausted: true,
+		},
+	}
+	jobsRepo := &recordingJobsRepo{replyJob: &jobs.Job{ID: "job-budget", MaxRetries: 3, Status: jobs.StatusRunning}}
+	svc, err := NewLifecycleService(taskRepo)
+	if err != nil {
+		t.Fatalf("NewLifecycleService: %v", err)
+	}
+	svc.SetJobsRepo(jobsRepo)
+
+	_, err = svc.ExpireTaskLease(context.Background(), RequeueCandidate{
+		ID: "task-budget", LeaseID: "lease-budget", LeaseExpiresAt: "2026-06-22T12:00:00Z",
+	})
+	if !errors.Is(err, readErr) {
+		t.Fatalf("ExpireTaskLease error = %v, want wrapped retry-budget read error", err)
+	}
+	if taskRepo.expireCalls != 0 {
+		t.Fatalf("ExpireTaskLeaseAtomic calls = %d, want 0 when budget read fails", taskRepo.expireCalls)
+	}
+}
+
+func TestLifecycleService_ExpireTaskLease_PropagatesParentJobFailure(t *testing.T) {
+	failErr := errors.New("job write unavailable")
+	const taskID = "task-parent-fail"
+	const jobID = "job-parent-fail"
+	taskRepo := &exhaustedExpireStubRepo{
+		getReply:     &Task{ID: taskID, JobID: jobID},
+		expireResult: ExpireResult{TaskStatus: StatusFailed, AttemptsExhausted: true},
+	}
+	jobsRepo := &recordingJobsRepo{
+		replyJob: &jobs.Job{ID: jobID, MaxRetries: 3, Status: jobs.StatusRunning},
+		failErr:  failErr,
+	}
+	svc, err := NewLifecycleService(taskRepo)
+	if err != nil {
+		t.Fatalf("NewLifecycleService: %v", err)
+	}
+	svc.SetJobsRepo(jobsRepo)
+
+	res, err := svc.ExpireTaskLease(context.Background(), RequeueCandidate{
+		ID: taskID, LeaseID: "lease-parent-fail", LeaseExpiresAt: "2026-06-22T12:00:00Z",
+	})
+	if !errors.Is(err, failErr) {
+		t.Fatalf("ExpireTaskLease error = %v, want wrapped parent job failure", err)
+	}
+	if !res.AttemptsExhausted {
+		t.Fatalf("ExpireTaskLease result lost AttemptsExhausted=true: %+v", res)
+	}
+	if jobsRepo.failCalls != 1 {
+		t.Fatalf("parent job Fail calls = %d, want 1", jobsRepo.failCalls)
 	}
 }
 

@@ -156,14 +156,22 @@ func (l *LifecycleService) ExpireTaskLease(ctx context.Context, candidate Requeu
 		return ExpireResult{}, fmt.Errorf("taskgraph.ExpireTaskLease: candidate.LeaseID is empty for %s", candidate.ID)
 	}
 
-	// Retry budget derivation. Default to 3 so callers without
-	// jobsRepo wired (or with a missing job) get a sane baseline.
+	// Retry budget derivation. Default to 3 when the jobs-side dependency is
+	// intentionally not wired or the parent job is absent. Once the dependency
+	// is wired, lookup errors must surface: silently using an unverified budget
+	// can turn a recoverable task into a terminal failure (or vice versa).
 	maxRetries := 3
 	if l.jobsRepo != nil && candidate.ID != "" {
 		t, terr := l.repo.Get(ctx, candidate.ID)
-		if terr == nil && t != nil && t.JobID != "" {
+		if terr != nil {
+			return ExpireResult{}, fmt.Errorf("taskgraph.ExpireTaskLease: retry budget task lookup: %w", terr)
+		}
+		if t != nil && t.JobID != "" {
 			job, jerr := l.jobsRepo.Get(ctx, t.JobID)
-			if jerr == nil && job != nil && job.MaxRetries > 0 {
+			if jerr != nil {
+				return ExpireResult{}, fmt.Errorf("taskgraph.ExpireTaskLease: retry budget job lookup: %w", jerr)
+			}
+			if job != nil && job.MaxRetries > 0 {
 				maxRetries = job.MaxRetries
 			}
 		}
@@ -181,17 +189,30 @@ func (l *LifecycleService) ExpireTaskLease(ctx context.Context, candidate Requeu
 	}
 
 	// Post-commit Job aggregate update when retries are exhausted.
-	// Deliberately NOT failing the reap if the Job update itself fails:
-	// the Task reap committed already, lease is recovered regardless.
+	// The Task reap has already committed, so an error here is returned with
+	// the successful reap result. The reconciler can retry the parent aggregate
+	// update without re-running the lease transition.
 	if res.AttemptsExhausted && l.jobsRepo != nil && candidate.ID != "" {
 		t, terr := l.repo.Get(ctx, candidate.ID)
-		if terr == nil && t != nil && t.JobID != "" {
-			job, jerr := l.jobsRepo.Get(ctx, t.JobID)
-			if jerr == nil && job != nil && !job.Status.IsTerminal() {
-				_ = l.jobsRepo.Fail(
-					ctx, t.JobID,
-					fmt.Sprintf("LEASE_EXPIRED_RETRIES_EXHAUSTED: task %s tripped retry budget via master-side reap", candidate.ID),
-				)
+		if terr != nil {
+			return res, fmt.Errorf("taskgraph.ExpireTaskLease: post-reap task lookup: %w", terr)
+		}
+		if t == nil || t.JobID == "" {
+			return res, fmt.Errorf("taskgraph.ExpireTaskLease: post-reap task %s has no parent job", candidate.ID)
+		}
+		job, jerr := l.jobsRepo.Get(ctx, t.JobID)
+		if jerr != nil {
+			return res, fmt.Errorf("taskgraph.ExpireTaskLease: post-reap job lookup: %w", jerr)
+		}
+		if job == nil {
+			return res, fmt.Errorf("taskgraph.ExpireTaskLease: post-reap parent job %s not found", t.JobID)
+		}
+		if !job.Status.IsTerminal() {
+			if failErr := l.jobsRepo.Fail(
+				ctx, t.JobID,
+				fmt.Sprintf("LEASE_EXPIRED_RETRIES_EXHAUSTED: task %s tripped retry budget via master-side reap", candidate.ID),
+			); failErr != nil {
+				return res, fmt.Errorf("taskgraph.ExpireTaskLease: post-reap job fail: %w", failErr)
 			}
 		}
 	}
