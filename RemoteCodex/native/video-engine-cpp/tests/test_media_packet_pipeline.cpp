@@ -285,6 +285,8 @@ int main() {
            "incompatible stream parameters fail closed");
     expect(!failureResult.success && !failureResult.error.empty(),
            "incompatible stream failure includes an error");
+    expect(failureResult.error.find("media signature mismatch") != std::string::npos,
+           "incompatible stream failure comes from the canonical execution resolver");
     expect(!fs::exists(failedOutput), "failed packet mux does not publish output");
 
     const fs::path shortAudioOutput = root / "short-audio-output.mp4";

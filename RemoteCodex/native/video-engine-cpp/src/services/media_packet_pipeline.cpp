@@ -695,24 +695,31 @@ bool muxCopyOnly(const CopyOnlyMuxRequest& request, CopyOnlyMuxResult* result) {
             cleanupPartial();
             return fail(result, "copy-only video source is shorter than its requested segment");
         }
-        if (!session->sourceWindowStartsOnKeyframe(video_index, segment.source_in_us, error)) {
+        const bool keyframeSafe = session->sourceWindowStartsOnKeyframe(
+            video_index, segment.source_in_us, error);
+        if (!keyframeSafe) {
             cleanupPartial();
             return fail(result, error);
         }
+        const MediaSignature sourceVideoSignature = mediaSignature(input_video);
         if (streams.video == nullptr) {
             if (!initializeOutputStream(output.get(), input_video, streams.video, error)) {
                 cleanupPartial();
                 return fail(result, error);
             }
-        } else {
-            std::string compatibility_reason;
-            if (!mediaSignaturesCompatible(
-                    mediaSignature(input_video), mediaSignature(streams.video),
-                    &compatibility_reason)) {
-                cleanupPartial();
-                return fail(result, "copy-only video codec parameters differ at " +
-                    segment.path.string() + ": " + compatibility_reason);
-            }
+        }
+        SegmentExecutionRequest videoExecution;
+        videoExecution.source = sourceVideoSignature;
+        videoExecution.target = streams.video == nullptr
+            ? sourceVideoSignature
+            : mediaSignature(streams.video);
+        videoExecution.source_window_keyframe_safe = keyframeSafe;
+        const SegmentExecutionDecision videoDecision =
+            resolveSegmentExecution(videoExecution);
+        if (videoDecision.mode != SegmentExecutionMode::PacketCopy) {
+            cleanupPartial();
+            return fail(result, "copy-only video segment execution rejected at " +
+                segment.path.string() + ": " + videoDecision.reason);
         }
 
         int audio_index = -1;
@@ -729,20 +736,27 @@ bool muxCopyOnly(const CopyOnlyMuxRequest& request, CopyOnlyMuxResult* result) {
                 cleanupPartial();
                 return fail(result, "copy-only segment audio is shorter than its requested segment");
             }
+            const MediaSignature sourceAudioSignature = mediaSignature(input_audio);
             if (streams.audio == nullptr) {
                 if (!initializeOutputStream(output.get(), input_audio, streams.audio, error)) {
                     cleanupPartial();
                     return fail(result, error);
                 }
-            } else {
-                std::string compatibility_reason;
-                if (!mediaSignaturesCompatible(
-                        mediaSignature(input_audio), mediaSignature(streams.audio),
-                        &compatibility_reason)) {
-                    cleanupPartial();
-                    return fail(result, "copy-only segment audio codec parameters differ: " +
-                        compatibility_reason);
-                }
+            }
+            SegmentExecutionRequest audioExecution;
+            audioExecution.source = sourceAudioSignature;
+            audioExecution.target = streams.audio == nullptr
+                ? sourceAudioSignature
+                : mediaSignature(streams.audio);
+            // Audio has no video keyframe boundary; the source window has
+            // already passed the packet-duration checks above.
+            audioExecution.source_window_keyframe_safe = true;
+            const SegmentExecutionDecision audioDecision =
+                resolveSegmentExecution(audioExecution);
+            if (audioDecision.mode != SegmentExecutionMode::PacketCopy) {
+                cleanupPartial();
+                return fail(result, "copy-only audio segment execution rejected at " +
+                    segment.path.string() + ": " + audioDecision.reason);
             }
         }
         if (!packet::demuxAndRewrite(input, segment.path, AVMEDIA_TYPE_VIDEO, video_index, streams.video,
