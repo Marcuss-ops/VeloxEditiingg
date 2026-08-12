@@ -80,6 +80,8 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 - Attempt read model: timestamp `task_attempts` malformati e righe non
   scansionabili interrompono il percorso invece di diventare tempi zero o
   una lista parziale.
+- Benchmark read model: baseline e benchmark run con timestamp corrotti o
+  righe non leggibili non entrano più nei risultati come dati incompleti.
 - Worker status API: un errore del read model persistito risponde `503`
   invece di degradare a una cache in memoria potenzialmente obsoleta; il
   fallback resta limitato al solo DB vuoto durante il bootstrap.

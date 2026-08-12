@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -106,7 +107,7 @@ func (r *SQLitePerformanceRepository) ListByWorkloadKey(ctx context.Context, wor
 	for rows.Next() {
 		b, err := scanBaseline(rows)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("performance baseline list by workload row: %w", err)
 		}
 		results = append(results, *b)
 	}
@@ -140,7 +141,7 @@ func (r *SQLitePerformanceRepository) ListByGitSHA(ctx context.Context, gitSHA s
 	for rows.Next() {
 		b, err := scanBaseline(rows)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("performance baseline list by git sha row: %w", err)
 		}
 		results = append(results, *b)
 	}
@@ -216,15 +217,17 @@ func (r *SQLitePerformanceRepository) GetBenchmarkRun(ctx context.Context, runID
 		&run.FFmpegVersion, &run.ConfigHash, &run.DockerImageDigest, &run.Status, &run.RenderFactor,
 		&run.WallMS, &run.OutputDurationMS, &run.OutputSHA256, &createdAt,
 	); err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("scan performance benchmark run: %w", err)
 	}
 	if createdAt != "" {
-		if parsed, parseErr := time.Parse(time.RFC3339Nano, createdAt); parseErr == nil {
-			run.CreatedAt = parsed
+		parsed, parseErr := time.Parse(time.RFC3339Nano, createdAt)
+		if parseErr != nil {
+			return nil, fmt.Errorf("parse performance benchmark run created_at: %w", parseErr)
 		}
+		run.CreatedAt = parsed
 	}
 	return &run, nil
 }
@@ -244,9 +247,11 @@ func scanBaseline(row interface{ Scan(...interface{}) error }) (*performance.Bas
 		return nil, fmt.Errorf("scan performance baseline: %w", err)
 	}
 	if createdAt != "" {
-		if pt, e := time.Parse(time.RFC3339, createdAt); e == nil {
-			b.CreatedAt = pt
+		pt, parseErr := time.Parse(time.RFC3339Nano, createdAt)
+		if parseErr != nil {
+			return nil, fmt.Errorf("parse performance baseline created_at: %w", parseErr)
 		}
+		b.CreatedAt = pt
 	}
 	return &b, nil
 }
