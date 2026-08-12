@@ -191,10 +191,13 @@ func BuildComplexRenderPlanV1(spec ComplexCanonicalFixtureSpec, manifest Complex
 	}
 	for i, clip := range manifest.Clips {
 		path := filepath.Join(trackDir, clip.Name)
+		slowZoom := false
 		p.Timeline = append(p.Timeline, plan.TimelineItem{
 			Source:  plan.MediaSource{Type: "video", URL: path, CacheKey: path},
 			SceneID: fmt.Sprintf("complex_%03d", i+1), DurationSeconds: spec.ClipDurationSec(),
-			IncludeAudio: false, Transform: &plan.TransformSpec{ScaleMode: "cover"},
+			IncludeAudio: false, Transform: &plan.TransformSpec{
+				ScaleMode: "cover", SlowZoom: &slowZoom,
+			},
 		})
 	}
 	for i, audio := range manifest.AudioTracks {

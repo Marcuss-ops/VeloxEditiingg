@@ -222,6 +222,7 @@ add_executable(velox_audio_timeline_tests
     src/audio/audio_benchmark.cpp
     src/core/render_engine.cpp
     src/core/render_engine_helpers.cpp
+    src/services/frame_pipeline.cpp
     src/services/file_utils.cpp
     src/services/io_counters.cpp
     src/services/media_probe.cpp
@@ -253,6 +254,7 @@ add_executable(velox_emitter_tests
     src/telemetry/emitter.cpp
     src/core/render_engine.cpp
     src/core/render_engine_helpers.cpp
+    src/services/frame_pipeline.cpp
     src/services/file_utils.cpp
     src/services/io_counters.cpp
     src/services/media_probe.cpp
@@ -395,6 +397,7 @@ if(VELOX_ENABLE_LIBAV)
         src/audio/audio_benchmark.cpp
         src/core/render_engine.cpp
         src/core/render_engine_helpers.cpp
+        src/services/frame_pipeline.cpp
         src/services/file_utils.cpp
         src/services/io_counters.cpp
         src/services/media_probe.cpp
@@ -427,6 +430,7 @@ if(VELOX_ENABLE_LIBAV)
         src/audio/audio_benchmark.cpp
         src/core/render_engine.cpp
         src/core/render_engine_helpers.cpp
+        src/services/frame_pipeline.cpp
         src/services/file_utils.cpp
         src/services/io_counters.cpp
         src/services/media_probe.cpp

@@ -30,6 +30,12 @@ struct FramePipelineConfig {
     int fps_num{30};
     int fps_den{1};
 
+    // Optional source window. The native decoder may decode from an earlier
+    // keyframe, but only frames inside this exact presentation-time window
+    // are handed to the renderer. Zero duration means "until input EOF".
+    int64_t source_in_us{0};
+    int64_t source_duration_us{0};
+
     std::string codec{"libx264"};
     std::string preset{"medium"};
 

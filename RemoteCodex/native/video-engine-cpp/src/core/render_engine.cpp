@@ -6,6 +6,8 @@
 #include "velox/services/io_counters.hpp"
 #include "velox/services/media_packet_pipeline.hpp"
 #include "velox/services/media_utils.hpp"
+#include "velox/services/frame_pipeline.hpp"
+#include "velox/services/segment_execution.hpp"
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -570,6 +572,9 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             segStart - renderStart).count();
 
         std::string args_only;
+        bool useNativeTranscode = false;
+        fs::path nativeTranscodeInput;
+        media::SegmentExecutionDecision executionDecision;
         if (std::holds_alternative<plan::ImageSource>(item.source)) {
             seg.source_type = "image";
             auto src = std::get<plan::ImageSource>(item.source);
@@ -619,7 +624,27 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             }
             assetPhase.Complete();
             seg.source_bytes = fileSize(localVid);
-            args_only = media::buildVideoSegmentArgs(localVid, segmentOut, item.duration_seconds, params, item.include_audio);
+#ifdef VELOX_ENABLE_LIBAV
+            media::SegmentExecutionRequest executionRequest;
+            executionRequest.source.kind = media::MediaKind::Video;
+            executionRequest.target.kind = media::MediaKind::Video;
+            executionRequest.transform_required = true;
+            executionRequest.source_window_keyframe_safe = true;
+            executionRequest.legacy_required = item.include_audio ||
+                item.transform.slow_zoom || !plan.subtitle_tracks.empty();
+            executionDecision = media::resolveSegmentExecution(executionRequest);
+            if (executionDecision.mode == media::SegmentExecutionMode::NativeTranscode) {
+                useNativeTranscode = true;
+                nativeTranscodeInput = localVid;
+                args_only = "native_frame_pipeline";
+            } else {
+                args_only = media::buildVideoSegmentArgs(
+                    localVid, segmentOut, item.duration_seconds, params, item.include_audio);
+            }
+#else
+            args_only = media::buildVideoSegmentArgs(
+                localVid, segmentOut, item.duration_seconds, params, item.include_audio);
+#endif
         } else if (std::holds_alternative<plan::ColorSource>(item.source)) {
             seg.source_type = "color";
             auto color = std::get<plan::ColorSource>(item.source);
@@ -643,12 +668,49 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             if (!params.copy_only) {
                 encodePhase = std::make_unique<telemetry::ScopedPhase>(
                     recorder_, telemetry::kOriginEngine, telemetry::kScopeSegment,
-                    "ffmpeg", "encode_segment_" + std::to_string(i), "encode");
+                    useNativeTranscode ? "engine.frame_pipeline" : "ffmpeg",
+                    useNativeTranscode
+                        ? "native_encode_segment_" + std::to_string(i)
+                        : "encode_segment_" + std::to_string(i),
+                    "encode");
             }
             auto encStart = std::chrono::steady_clock::now();
             ScopedTimer t(metrics_, "segment_build_ms");
-            bool built = runFfmpegSegmentWithProgress(
+            bool built = false;
+#ifdef VELOX_ENABLE_LIBAV
+            if (useNativeTranscode) {
+                media::FramePipelineConfig nativeConfig;
+                nativeConfig.input_path = nativeTranscodeInput;
+                nativeConfig.output_path = segmentOut;
+                nativeConfig.width = plan.canvas.width;
+                nativeConfig.height = plan.canvas.height;
+                nativeConfig.fps_num = plan.canvas.fps_num > 0
+                    ? plan.canvas.fps_num
+                    : plan.canvas.fps;
+                nativeConfig.fps_den = plan.canvas.fps_den > 0
+                    ? plan.canvas.fps_den
+                    : 1;
+                nativeConfig.source_in_us = item.source_in_us;
+                nativeConfig.source_duration_us = expected_us;
+                nativeConfig.codec = "libx264";
+                nativeConfig.preset = "medium";
+                media::FramePipelineResult nativeResult;
+                built = media::renderFrames(nativeConfig, &nativeResult);
+                segmentFrames = nativeResult.frames_encoded;
+                segmentDecodedFrames = nativeResult.frames_decoded;
+                if (!built && nativeResult.error.empty()) {
+                    seg.error_message = "native frame pipeline failed";
+                } else if (!built) {
+                    seg.error_message = nativeResult.error;
+                }
+            } else {
+                built = runFfmpegSegmentWithProgress(
+                    composeSegmentCmd(args_only), segmentCallback, expected_us, segmentDecodedFrames);
+            }
+#else
+            built = runFfmpegSegmentWithProgress(
                 composeSegmentCmd(args_only), segmentCallback, expected_us, segmentDecodedFrames);
+#endif
             if (!built) {
                 seg.status = telemetry::kStatusFailed;
                 seg.error_code = "encode_failed";

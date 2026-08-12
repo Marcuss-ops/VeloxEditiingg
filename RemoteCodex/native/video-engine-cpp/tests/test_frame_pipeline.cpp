@@ -229,6 +229,23 @@ int main() {
         expect(hasVideoStream(passthrough), "passthrough output is probeable");
     }
 
+    // ── Source-window trim: decode may start at the beginning, but only the
+    // requested presentation-time window is emitted by the native pipeline.
+    const fs::path trimmed = root / "trimmed.mp4";
+    velox::media::FramePipelineConfig trimConfig = config;
+    trimConfig.output_path = trimmed;
+    trimConfig.source_in_us = 400'000;
+    trimConfig.source_duration_us = 400'000;
+    velox::media::FramePipelineResult trimResult;
+    expect(velox::media::renderFrames(trimConfig, &trimResult),
+           "source-window native transcode succeeds");
+    if (trimResult.success) {
+        expect(trimResult.frames_encoded >= 1 && trimResult.frames_encoded <= 3,
+               "source-window output contains only the requested frames, got " +
+                   std::to_string(trimResult.frames_encoded));
+        expect(hasVideoStream(trimmed), "source-window output is probeable");
+    }
+
     // ── Negative cases fail closed. ───────────────────────────────────────
     velox::media::FramePipelineConfig badPool = config;
     badPool.pool_capacity = 1;

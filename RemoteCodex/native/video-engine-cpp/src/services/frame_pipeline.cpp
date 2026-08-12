@@ -39,6 +39,7 @@ extern "C" {
 #include <condition_variable>
 #include <deque>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -406,6 +407,18 @@ bool renderFrames(const FramePipelineConfig& config, FramePipelineResult* result
     }
     const AVStream* input_stream = demuxer.stream(video_index);
 
+    if (config.source_in_us < 0 || config.source_duration_us < 0 ||
+        (config.source_in_us > 0 &&
+         config.source_duration_us > std::numeric_limits<int64_t>::max() -
+             config.source_in_us)) {
+        result->error = "frame pipeline source window is invalid";
+        return false;
+    }
+    const int64_t source_start_us = config.source_in_us;
+    const int64_t source_end_us = config.source_duration_us > 0
+        ? config.source_in_us + config.source_duration_us
+        : 0;
+
     const AVCodec* decoder = avcodec_find_decoder(input_stream->codecpar->codec_id);
     if (decoder == nullptr) {
         result->error = "frame pipeline has no decoder for the input codec";
@@ -530,6 +543,7 @@ bool renderFrames(const FramePipelineConfig& config, FramePipelineResult* result
     std::string stage_error;
     std::atomic<int64_t> decoded_frames{0};
     std::atomic<int64_t> encoded_packets{0};
+    std::atomic<bool> source_window_complete{false};
 
     const auto failStage = [&](const std::string& message) {
         std::lock_guard<std::mutex> lock(error_mutex);
@@ -559,6 +573,23 @@ bool renderFrames(const FramePipelineConfig& config, FramePipelineResult* result
                 failStage("avcodec_receive_frame failed: " + ffmpegErrorText(rc));
                 av_frame_unref(scratch.get());
                 return false;
+            }
+            if (source_start_us > 0 || source_end_us > 0) {
+                const int64_t frame_timestamp = scratch->best_effort_timestamp;
+                if (frame_timestamp != AV_NOPTS_VALUE) {
+                    const int64_t frame_us = av_rescale_q(
+                        frame_timestamp, input_stream->time_base,
+                        AVRational{1, 1'000'000});
+                    if (frame_us < source_start_us) {
+                        av_frame_unref(scratch.get());
+                        continue;
+                    }
+                    if (source_end_us > 0 && frame_us >= source_end_us) {
+                        source_window_complete.store(true);
+                        av_frame_unref(scratch.get());
+                        return true;
+                    }
+                }
             }
             const int index = pool.acquire();
             if (index < 0) {
@@ -611,6 +642,9 @@ bool renderFrames(const FramePipelineConfig& config, FramePipelineResult* result
                 }
             }
             if (!drainDecoded()) {
+                break;
+            }
+            if (source_window_complete.load()) {
                 break;
             }
             if (eof) {
