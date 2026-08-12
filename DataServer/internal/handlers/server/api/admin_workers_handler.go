@@ -233,15 +233,39 @@ func (h *AdminWorkersHandler) cardWithError(ctx context.Context, info *workersre
 			// code (DIGEST_MISMATCH, …) and the message are separate fields.
 			card.LastOperationErrorCode = state.LastOperationErrorCode
 			card.LastOperationError = state.LastOperationError
+			// LAST OPERATION — the read-model view of the current operation
+			// (id/status/error), the same source as the digest fields. The
+			// journal's operation_state below is history; this is current.
+			if state.LastOperationID != "" {
+				card.LastOperation = &WorkerLastOperation{
+					ID:        state.LastOperationID,
+					Kind:      state.LastOperationKind,
+					Status:    state.LastOperationStatus,
+					ErrorCode: state.LastOperationErrorCode,
+					Error:     state.LastOperationError,
+				}
+			}
 		}
 	}
+	// in_sync is computed from the read model (never persisted, never
+	// reconstructed from the journal): a FAILED rollout keeps DESIRED=B /
+	// RUNNING=A visible as in_sync=false — drift cannot be hidden. The same
+	// digest-part comparison drives image_state.digest_match so the two
+	// never disagree.
+	//
+	// Note: RunningDigest falls back to the registry heartbeat digest when
+	// the read model has no running observation yet (UNKNOWN), so in_sync
+	// reflects exactly the digest fields the card DISPLAYS — an empty
+	// desired digest (worker never targeted) always yields false, which
+	// means "not managed", not necessarily drift.
+	card.InSync = store.DigestRefsEqual(card.DesiredDigest, card.RunningDigest)
 	// IMAGE section — real-time state only: what is running vs what the
 	// fleet wants, and whether they match. No operation-history fields.
 	if card.RunningDigest != "" && card.TargetDigest != "" {
 		card.ImageState = &WorkerImageState{
 			RunningDigest: card.RunningDigest,
 			TargetDigest:  card.TargetDigest,
-			Match:         card.RunningDigest == card.TargetDigest,
+			Match:         store.DigestRefsEqual(card.RunningDigest, card.TargetDigest),
 		}
 	}
 

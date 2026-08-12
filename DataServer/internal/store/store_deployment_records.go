@@ -374,7 +374,7 @@ func (s *SQLiteStore) MarkVerifiedSucceeded(ctx context.Context, deploymentID, o
 	if err := ValidateDeploymentTransition(record.Status, DeployStatusSucceeded); err != nil {
 		return err
 	}
-	if !deploymentDigestEqual(observedDigest, record.TargetDigest) {
+	if !DigestRefsEqual(observedDigest, record.TargetDigest) {
 		return fmt.Errorf("%w: expected=%s observed=%s", ErrDeploymentDigestMismatch, record.TargetDigest, observedDigest)
 	}
 

@@ -183,12 +183,13 @@ ON CONFLICT(worker_id) DO UPDATE SET
 	return err
 }
 
-// deploymentDigestEqual compares two image references by their digest part
+// DigestRefsEqual compares two image references by their digest part
 // (everything after the last '@'), case-insensitively, ignoring surrounding
 // whitespace. The ledger stores the full pinned ref (ghcr.io/...@sha256:xx)
 // while the worker advertises the bare sha256:xx digest; only the digest
-// part is semantically meaningful for verification.
-func deploymentDigestEqual(a, b string) bool {
+// part is semantically meaningful for verification. Empty references never
+// compare equal (an unknown digest is not a matching digest).
+func DigestRefsEqual(a, b string) bool {
 	a = strings.ToLower(strings.TrimSpace(a))
 	b = strings.ToLower(strings.TrimSpace(b))
 	if at := strings.LastIndexByte(a, '@'); at >= 0 {

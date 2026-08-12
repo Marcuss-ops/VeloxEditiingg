@@ -69,51 +69,63 @@ import "time"
 // when the worker self-restarts due to a crash; the field's semantic
 // contract belongs to step §6 of the rollout.
 type WorkerCard struct {
-	WorkerID             string                `json:"worker_id"`
-	WorkerName           string                `json:"worker_name"`
-	Hostname             string                `json:"hostname"`
-	Host                 string                `json:"host"`
-	Status               string                `json:"status"`
-	ConnectionState      string                `json:"connection_state"`
-	SchedulingState      string                `json:"scheduling_state"`
-	DeploymentState      string                `json:"deployment_state,omitempty"`
-	HealthState          string                `json:"health_state"`
-	SessionActive        bool                  `json:"session_active"`
-	Executor             string                `json:"executor"`
-	ExecutorVersion      int32                 `json:"executor_version"`
-	ImageDigest          string                `json:"image_digest,omitempty"`
-	RunningDigest        string                `json:"running_digest,omitempty"`
-	DesiredDigest        string                `json:"desired_digest,omitempty"`
-	TargetDigest         string                `json:"target_digest,omitempty"`
-	PreviousDigest       string                `json:"previous_digest,omitempty"`
-	LastSuccessfulDigest string                `json:"last_successful_digest,omitempty"`
-	LastPhase            string                `json:"last_phase,omitempty"`
-	// LastOperationErrorCode and LastOperationError are the CURRENT failure of
-	// the last fleet operation, straight from the read model (migration 153):
-	// the stable machine-routable code (DIGEST_MISMATCH, DRAIN_TIMEOUT, …) and
-	// the human-readable message, kept separate so dashboards can route on the
-	// code. A new operation clears both; the history stays in the journal.
+	WorkerID             string `json:"worker_id"`
+	WorkerName           string `json:"worker_name"`
+	Hostname             string `json:"hostname"`
+	Host                 string `json:"host"`
+	Status               string `json:"status"`
+	ConnectionState      string `json:"connection_state"`
+	SchedulingState      string `json:"scheduling_state"`
+	DeploymentState      string `json:"deployment_state,omitempty"`
+	HealthState          string `json:"health_state"`
+	SessionActive        bool   `json:"session_active"`
+	Executor             string `json:"executor"`
+	ExecutorVersion      int32  `json:"executor_version"`
+	ImageDigest          string `json:"image_digest,omitempty"`
+	RunningDigest        string `json:"running_digest,omitempty"`
+	DesiredDigest        string `json:"desired_digest,omitempty"`
+	TargetDigest         string `json:"target_digest,omitempty"`
+	PreviousDigest       string `json:"previous_digest,omitempty"`
+	LastSuccessfulDigest string `json:"last_successful_digest,omitempty"`
+	LastPhase            string `json:"last_phase,omitempty"`
+	// InSync reports whether the worker is ACTUALLY running what the fleet
+	// WANTS (desired_digest == running_digest, compared by digest part). It is
+	// computed from the read model — never persisted and never reconstructed
+	// from the journal — so a FAILED rollout leaves DESIRED=B / RUNNING=A
+	// visible as in_sync=false (drift cannot be hidden). Empty desired or
+	// running digests (no state row / no heartbeat yet) yield false: an
+	// unknown digest is not a matching digest.
+	InSync bool `json:"in_sync"` // LastOperation is the CURRENT fleet operation, straight from the read
+	// model (worker_deployment_state.last_operation_*): the last operation the
+	// control plane actually recorded, its status and its failure. It is the
+	// operation view of the SAME read model that drives the digest fields —
+	// never a reconstruction from deployment_records history. Absent while no
+	// operation has been recorded for the worker. This nested object is the
+	// canonical current-operation view; the flat LastOperationErrorCode /
+	// LastOperationError fields below are retained for backward compatibility
+	// with the migration-153 contract.
+	LastOperation          *WorkerLastOperation  `json:"last_operation,omitempty"`
 	LastOperationErrorCode string                `json:"last_operation_error_code,omitempty"`
 	LastOperationError     string                `json:"last_operation_error,omitempty"`
 	ImageState             *WorkerImageState     `json:"image_state,omitempty"`
-	OperationState       *WorkerOperationState `json:"operation_state,omitempty"`
-	SoftwareVersion      string                `json:"software_version"`
-	DesiredVersion       string                `json:"desired_version,omitempty"`
-	LastHeartbeatAt      string                `json:"last_heartbeat_at,omitempty"`
-	ActiveJobs           int32                 `json:"active_jobs"`     // compatibility alias for active_slots
-	MaxActiveJobs        int32                 `json:"max_active_jobs"` // compatibility alias for max_slots
-	ActiveSlots          int32                 `json:"active_slots"`
-	MaxSlots             int32                 `json:"max_slots"`
-	AvailableSlots       int32                 `json:"available_slots"`
-	CPUUtilizationRatio  float64               `json:"cpu_utilization_ratio,omitempty"`
-	MemoryUsedBytes      int64                 `json:"memory_used_bytes,omitempty"`
-	DiskFreeBytes        int64                 `json:"disk_free_bytes,omitempty"`
-	Load1                float64               `json:"load1,omitempty"`
-	CurrentJob           string                `json:"current_job,omitempty"`
-	Health               string                `json:"health,omitempty"`
-	LastSmokeStatus      string                `json:"last_smoke_status,omitempty"`
-	LastSmokeAt          string                `json:"last_smoke_at,omitempty"`
-	LastRestartAt        string                `json:"last_restart_at,omitempty"`
+	OperationState         *WorkerOperationState `json:"operation_state,omitempty"`
+	SoftwareVersion        string                `json:"software_version"`
+	DesiredVersion         string                `json:"desired_version,omitempty"`
+	LastHeartbeatAt        string                `json:"last_heartbeat_at,omitempty"`
+	ActiveJobs             int32                 `json:"active_jobs"`     // compatibility alias for active_slots
+	MaxActiveJobs          int32                 `json:"max_active_jobs"` // compatibility alias for max_slots
+	ActiveSlots            int32                 `json:"active_slots"`
+	MaxSlots               int32                 `json:"max_slots"`
+	AvailableSlots         int32                 `json:"available_slots"`
+	CPUUtilizationRatio    float64               `json:"cpu_utilization_ratio,omitempty"`
+	MemoryUsedBytes        int64                 `json:"memory_used_bytes,omitempty"`
+	DiskFreeBytes          int64                 `json:"disk_free_bytes,omitempty"`
+	Load1                  float64               `json:"load1,omitempty"`
+	CurrentJob             string                `json:"current_job,omitempty"`
+	Health                 string                `json:"health,omitempty"`
+	LastSmokeStatus        string                `json:"last_smoke_status,omitempty"`
+	LastSmokeAt            string                `json:"last_smoke_at,omitempty"`
+	LastRestartAt          string                `json:"last_restart_at,omitempty"`
 	// Readiness and Runtime are worker-reported diagnostic snapshots. They
 	// are optional because older agents do not publish these dimensions yet;
 	// absence is explicit and must not be interpreted as PASS.
@@ -124,13 +136,28 @@ type WorkerCard struct {
 
 // WorkerImageState is the canonical real-time image state of a worker:
 // the digest actually running vs. the digest the fleet wants, and whether
-// they match. It deliberately contains NO operation-history fields — an
-// old FAILED rollout must not make a worker with a matching running
-// digest appear unhealthy.
+// they match (digest-part comparison — a pinned ref and a bare digest of
+// the same image compare equal). It deliberately contains NO
+// operation-history fields — an old FAILED rollout must not make a worker
+// with a matching running digest appear unhealthy.
 type WorkerImageState struct {
 	RunningDigest string `json:"running_digest"`
 	TargetDigest  string `json:"target_digest"`
 	Match         bool   `json:"digest_match"`
+}
+
+// WorkerLastOperation is the read-model view of the last fleet operation.
+// It is deliberately separate from WorkerOperationState (the journal
+// history view): this struct mirrors worker_deployment_state.last_operation_*
+// so the dashboard sees the CURRENT operation the read model knows about
+// — same source as desired/running/last_successful — with the stable error
+// code split from the human-readable message.
+type WorkerLastOperation struct {
+	ID        string `json:"id"`
+	Kind      string `json:"kind,omitempty"` // update | rollback
+	Status    string `json:"status"`
+	ErrorCode string `json:"error_code,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
 // WorkerOperationState preserves the last deployment ledger row as an

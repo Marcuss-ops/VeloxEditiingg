@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -314,17 +315,17 @@ func (s stateReaderStub) GetWorkerDeploymentState(context.Context, string) (*sto
 // read model exists to keep visible.
 func divergentReadModelFixture() *store.WorkerDeploymentState {
 	return &store.WorkerDeploymentState{
-		WorkerID:                "velox-worker-13197",
-		DesiredDigest:           "sha256:C",
-		RunningDigest:           "sha256:B",
-		LastSuccessfulDigest:    "sha256:B",
-		LastOperationID:         "deploy-read-model",
-		LastOperationKind:       "update",
-		LastOperationStatus:     store.DeployStatusFailed,
-		LastOperationErrorCode:  "DIGEST_MISMATCH",
-		LastOperationError:      "digest_mismatch: expected=sha256:C observed=sha256:B",
-		LastPhase:               "VERIFYING_DIGEST",
-		UpdatedAt:               time.Date(2026, time.August, 12, 9, 0, 0, 0, time.UTC),
+		WorkerID:               "velox-worker-13197",
+		DesiredDigest:          "sha256:C",
+		RunningDigest:          "sha256:B",
+		LastSuccessfulDigest:   "sha256:B",
+		LastOperationID:        "deploy-read-model",
+		LastOperationKind:      "update",
+		LastOperationStatus:    store.DeployStatusFailed,
+		LastOperationErrorCode: "DIGEST_MISMATCH",
+		LastOperationError:     "digest_mismatch: expected=sha256:C observed=sha256:B",
+		LastPhase:              "VERIFYING_DIGEST",
+		UpdatedAt:              time.Date(2026, time.August, 12, 9, 0, 0, 0, time.UTC),
 	}
 }
 
@@ -392,6 +393,29 @@ func TestAdminWorkersCard_ReadModelWinsOverReconstructedHistory(t *testing.T) {
 	// Drift MUST be visible: desired C vs running B.
 	if card.ImageState == nil || card.ImageState.Match || card.ImageState.TargetDigest != "sha256:C" || card.ImageState.RunningDigest != "sha256:B" {
 		t.Fatalf("ImageState = %#v, want running=B target=C digest_match=false (drift visible)", card.ImageState)
+	}
+	// in_sync is the read-model drift verdict: desired C != running B → false.
+	// The journal (target=A SUCCEEDED) must not be able to hide this.
+	if card.InSync {
+		t.Fatalf("InSync = true, want false (desired=C running=B drift must be visible)")
+	}
+	// LAST OPERATION is the read-model operation view (same source as the
+	// digest fields), NOT the journal reconstruction: id/status/error from
+	// worker_deployment_state, with the stable error code separate.
+	if card.LastOperation == nil {
+		t.Fatal("LastOperation = nil, want the read model's last operation")
+	}
+	if card.LastOperation.ID != "deploy-read-model" {
+		t.Fatalf("LastOperation.ID = %q, want deploy-read-model (read model, not journal deploy-history-a)", card.LastOperation.ID)
+	}
+	if card.LastOperation.Kind != "update" {
+		t.Fatalf("LastOperation.Kind = %q, want update", card.LastOperation.Kind)
+	}
+	if card.LastOperation.Status != store.DeployStatusFailed {
+		t.Fatalf("LastOperation.Status = %q, want FAILED", card.LastOperation.Status)
+	}
+	if card.LastOperation.ErrorCode != "DIGEST_MISMATCH" || card.LastOperation.Error != "digest_mismatch: expected=sha256:C observed=sha256:B" {
+		t.Fatalf("LastOperation error = %q/%q, want DIGEST_MISMATCH + read model message", card.LastOperation.ErrorCode, card.LastOperation.Error)
 	}
 	// The OPERATION section is the history view: it legitimately shows the
 	// journal row. Only the current-state digest fields are
@@ -545,5 +569,81 @@ func TestGetAdminWorker_ReadModelDrivesDigestFields(t *testing.T) {
 	}
 	if card.LastOperationError == "" {
 		t.Fatal("LastOperationError = empty, want the read model message on the wire")
+	}
+	// Drift is exposed on the wire: in_sync=false + last_operation from the
+	// read model. The dashboard cannot hide DESIRED C / ACTUAL B.
+	if card.InSync {
+		t.Fatal("InSync = true on the wire, want false (drift must be visible)")
+	}
+	if card.LastOperation == nil || card.LastOperation.ID != "deploy-read-model" || card.LastOperation.Status != store.DeployStatusFailed {
+		t.Fatalf("LastOperation on the wire = %#v, want read model deploy-read-model/FAILED", card.LastOperation)
+	}
+}
+
+// TestAdminWorkersCard_InSyncNormalizesPinnedRefVsBareDigest pins that
+// in_sync (and image_state.digest_match) compare by DIGEST PART: the read
+// model stores the desired pinned ref (ghcr.io/...@sha256:xx) while the
+// worker advertises the bare sha256:xx digest. Same image → in_sync=true;
+// a genuinely different digest → in_sync=false. A raw string comparison
+// would report false drift and hide nothing — it would invent it.
+func TestAdminWorkersCard_InSyncNormalizesPinnedRefVsBareDigest(t *testing.T) {
+	bare := "sha256:" + strings.Repeat("a", 64)
+	pinned := "ghcr.io/marcuss-ops/velox-worker@" + bare
+
+	info := makeCardInfo("velox-worker-13197", func(w *workersreg.Worker) {
+		w.ImageDigest = bare
+	})
+	h := NewAdminWorkersHandler(nil)
+	h.SetWorkerDeploymentStateReader(stateReaderStub{state: &store.WorkerDeploymentState{
+		WorkerID:      "velox-worker-13197",
+		DesiredDigest: pinned, // full pinned ref as stored by the ledger
+		RunningDigest: bare,   // bare digest as advertised by the heartbeat
+	}})
+
+	card := h.card(context.Background(), &info)
+	if !card.InSync {
+		t.Fatalf("InSync = false, want true (desired=%q running=%q are the SAME digest)", card.DesiredDigest, card.RunningDigest)
+	}
+	if card.ImageState == nil || !card.ImageState.Match {
+		t.Fatalf("ImageState = %#v, want digest_match=true (same digest, different representation)", card.ImageState)
+	}
+
+	// A genuinely different running digest flips in_sync to false — the
+	// drift signal is never hidden by normalization.
+	h2 := NewAdminWorkersHandler(nil)
+	drift := divergentReadModelFixture()
+	drift.DesiredDigest = pinned
+	drift.RunningDigest = "sha256:" + strings.Repeat("b", 64)
+	drift.LastOperationID = "" // not relevant here
+	h2.SetWorkerDeploymentStateReader(stateReaderStub{state: drift})
+	card2 := h2.card(context.Background(), &info)
+	if card2.InSync {
+		t.Fatal("InSync = true, want false (running digest B differs from desired pinned ref)")
+	}
+	if card2.ImageState == nil || card2.ImageState.Match {
+		t.Fatalf("ImageState = %#v, want digest_match=false (real digest drift)", card2.ImageState)
+	}
+}
+
+// TestAdminWorkersCard_LastOperationAbsentWithoutStateRow pins that
+// last_operation stays nil when the read model has no operation recorded
+// (and in_sync defaults to false — an unknown running digest is not a
+// matching digest), even when the journal has history.
+func TestAdminWorkersCard_LastOperationAbsentWithoutStateRow(t *testing.T) {
+	info := makeCardInfo("velox-worker-13197")
+	h := NewAdminWorkersHandler(nil)
+	h.SetWorkerDeploymentStateReader(stateReaderStub{state: &store.WorkerDeploymentState{
+		WorkerID:      "velox-worker-13197",
+		DesiredDigest: "sha256:new",
+		RunningDigest: "", // no heartbeat observation yet
+	}})
+	h.SetDeploymentReader(journalSuggestingDigestA())
+
+	card := h.card(context.Background(), &info)
+	if card.LastOperation != nil {
+		t.Fatalf("LastOperation = %#v, want nil (no last_operation_* in the read model)", card.LastOperation)
+	}
+	if card.InSync {
+		t.Fatalf("InSync = true, want false (running digest unknown → cannot be in sync)")
 	}
 }
