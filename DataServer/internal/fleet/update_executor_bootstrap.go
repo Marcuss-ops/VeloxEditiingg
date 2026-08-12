@@ -76,9 +76,21 @@ func (e *UpdateExecutor) bootstrapLedger(ctx context.Context, op *store.Operatio
 func normalizeDigest(ref string) string {
 	ref = strings.ToLower(strings.TrimSpace(ref))
 	if at := strings.LastIndexByte(ref, '@'); at >= 0 {
-		return ref[at+1:]
+		ref = ref[at+1:]
+	}
+	if len(ref) == 64 && isHexDigest(ref) {
+		return "sha256:" + ref
 	}
 	return ref
+}
+
+func isHexDigest(value string) bool {
+	for _, r := range value {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func workerConnected(info *workers.Worker) bool {
