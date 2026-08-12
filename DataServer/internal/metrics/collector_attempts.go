@@ -27,8 +27,9 @@ import (
 // GetStatus was added in spec §14 refactor: the compute-outcome
 // family classifies compute seconds by terminal attempt state, so
 // the reader must surface the attempt Status. Implementations that
-// can't (legacy stub) may return any value; the labeled scan falls back
-// to PENDING on error which makes RecordAttemptOutcome a safe no-op.
+// Optional cache/cost rows may be absent and are represented as nil; errors
+// reading any configured row are returned so the supervisor can retry the
+// attempt instead of stamping a partial metric record.
 type AttemptReader interface {
 	GetMetrics(ctx context.Context, attemptID string) (*taskattempts.AttemptMetrics, error)
 	GetCacheStats(ctx context.Context, attemptID string) (*taskattempts.AttemptCacheStats, error)
@@ -221,9 +222,8 @@ func (c *Collector) ScanAttemptWithLabels(
 	if cs != nil {
 		cache = *cs
 	}
-	// Status drives the compute-outcome family spec §14. If the
-	// reader can't surface a status, we fall back to
-	// PENDING so RecordAttemptOutcome is a no-op — safe-by-default.
+	// Status drives the compute-outcome family spec §14. A status read error is
+	// fatal to this scan; a genuinely empty status remains non-terminal.
 	status := taskattempts.AttemptStatusPending
 	s, sErr := mem.GetStatus(ctx, attemptID)
 	if sErr != nil {

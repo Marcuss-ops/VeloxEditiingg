@@ -43,6 +43,8 @@ reversibile, testato prima/dopo, committato su `main` e pubblicato.
       parte se la pulizia persistente non è verificabile.
 - [x] Metrics attempt reader: errori di cache stats, cost basis e status non
       vengono più trasformati in zero/PENDING; il record parziale viene rifiutato.
+- [x] Metrics supervisor: un attempt che fallisce la lettura primaria non viene
+      marcato come già processato; resta ritentabile al tick successivo.
 - [x] Ansible run history: store obbligatorio; errore DB distinto da run assente.
 - [x] Ansible inventory: conteggi/list/lookup non degradano a zero o lista vuota.
 - [x] Drive token listing: errore `ReadDir` distinto da directory vuota.

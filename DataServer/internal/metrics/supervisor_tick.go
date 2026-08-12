@@ -103,6 +103,13 @@ func (s *Supervisor) tickOnce(ctx context.Context, now time.Time) error {
 		if scanErr := s.collector.ScanAttemptWithLabels(ctx, s.attempts, id, execID, execVer, workerClass); scanErr != nil {
 			// Element-scoped: log once, skip aggregation.
 			log.Printf("[METRICS-SUPERVISOR] scan %s: %v", id, scanErr)
+			// Do not permanently consume an attempt whose primary read
+			// failed. The next tick must be able to retry it after a
+			// transient SQLite/reader outage.
+			s.seenMu.Lock()
+			delete(s.seenIDs, id)
+			s.seenMu.Unlock()
+			continue
 		}
 
 		// 2a-bis. Scorecard v2: stamp engine phase + segment

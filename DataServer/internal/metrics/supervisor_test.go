@@ -315,6 +315,28 @@ func TestSupervisor_TickOnce_DeltaDetection(t *testing.T) {
 	}
 }
 
+func TestSupervisor_TickOnce_ScanFailureIsRetried(t *testing.T) {
+	reg := NewRegistry()
+	c := NewCollector(reg)
+	stampAt := time.Now().UTC().Add(time.Second)
+	attempts := &fakeAttemptsDataSource{
+		attempts: map[string]*fakeAttemptRecord{
+			"a1": {status: taskattempts.AttemptStatusSucceeded, updatedAt: stampAt, execID: "transcode", execVer: "1", wClass: "cpu"},
+		},
+	}
+	s := NewSupervisor(c, attempts, &fakeOutboxGauge{}, DefaultCostFactors())
+	now := time.Now().UTC()
+	if err := s.tickOnce(context.Background(), now.Add(time.Second)); err != nil {
+		t.Fatalf("first tick returned error: %v", err)
+	}
+	s.seenMu.Lock()
+	_, seen := s.seenIDs["a1"]
+	s.seenMu.Unlock()
+	if seen {
+		t.Fatal("failed attempt scan was marked seen and will not be retried")
+	}
+}
+
 // TestSupervisor_TickOnce_NoAttempts_NoCrash: cold-start tick
 // with empty DB and stale since — recent returns []ids, master
 // health still refreshed, no panic.
