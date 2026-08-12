@@ -200,6 +200,16 @@ type RenderMetrics struct {
 	TotalBytesWritten   int64
 	StorageBytesRead    int64
 	StorageBytesWritten int64
+	// CPU/RSS counters over the engine process tree, sampled from
+	// /proc/<pid>/stat while the engine ran (engine + descendants):
+	// CPUUserMs/CPUSystemMs are the summed utime/stime clock ticks
+	// converted to milliseconds; PeakRSSBytes is the high-water mark of
+	// the tree's resident set; CurrentRSSBytes is the last observed tree
+	// RSS. Zero when no native render occurred.
+	CPUUserMs       int64
+	CPUSystemMs     int64
+	PeakRSSBytes    int64
+	CurrentRSSBytes int64
 	// Engine-side real I/O counters reported by the C++ engine in the
 	// sidecar io_counters block. Zero when the engine predates the block.
 	FileCopyCount    int64

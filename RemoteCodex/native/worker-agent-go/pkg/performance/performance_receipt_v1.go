@@ -195,6 +195,12 @@ type ProcessMetrics struct {
 // CPUWallRatio = cpu_total_ms / wall_ms: >1 means the workload is
 // CPU-parallel across cores, <<1 means the attempt is not CPU-bound.
 // A zero value means "not derived", never a measured zero.
+//
+// Provenance note: this section's CPUWallRatio is the /proc sampler's
+// view (user+system ticks of the engine tree). Derived.CPUWallRatio is
+// the SAME concept but consumes the authoritative cgroup v2 CPU fact
+// (attempt_telemetry) when the attempt session collected it — the two
+// may differ by sub-percent noise and must not be treated as a bug.
 type CPUMetrics struct {
 	WallMs       int64   `json:"wall_ms"`
 	CPUUserMs    int64   `json:"cpu_user_ms"`

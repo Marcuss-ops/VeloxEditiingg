@@ -198,6 +198,19 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 	metrics["io.file_copy_bytes"] = derivedIO.FileCopyBytes
 	metrics["io.input_open_count"] = derivedIO.InputOpenCount
 	metrics["io.input_reopen_count"] = derivedIO.InputReopenCount
+	// CPU counters share ONE derivation with the PerformanceReceiptV1
+	// (performance.DeriveCPU): cpu.wall_ms mirrors the pipeline wall
+	// clock, cpu.total_ms = user + system, and cpu.wall_ratio tells us
+	// whether the attempt was CPU-bound at all. The RSS counters come
+	// straight from the /proc sampler (memory.* is not a derivation).
+	derivedCPU := performance.DeriveCPU(runMetrics.RenderMetrics, runMetrics.TotalMs)
+	metrics["cpu.wall_ms"] = derivedCPU.WallMs
+	metrics["cpu.user_ms"] = derivedCPU.CPUUserMs
+	metrics["cpu.system_ms"] = derivedCPU.CPUSystemMs
+	metrics["cpu.total_ms"] = derivedCPU.CPUTotalMs
+	metrics["cpu.wall_ratio"] = derivedCPU.CPUWallRatio
+	metrics["memory.peak_rss_bytes"] = runMetrics.RenderMetrics.PeakRSSBytes
+	metrics["memory.current_rss_bytes"] = runMetrics.RenderMetrics.CurrentRSSBytes
 	metrics["engine.frames"] = runMetrics.RenderMetrics.Frames
 	metrics["engine.frames_decoded"] = runMetrics.RenderMetrics.FramesDecoded
 	metrics["engine.frames_composited"] = runMetrics.RenderMetrics.FramesComposited

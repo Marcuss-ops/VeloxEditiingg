@@ -52,12 +52,34 @@ type TreeIO struct {
 	StorageBytesWritten int64
 }
 
+// TreeCPU aggregates the engine process tree's CPU and memory counters
+// measured from /proc while the engine ran.
+//
+// UserMs/SystemMs are the summed utime/stime clock ticks of every
+// process in the tree (engine included — the engine does real media
+// work, so its CPU is part of the attempt's footprint), converted to
+// milliseconds. TotalMs = user + system.
+//
+// PeakRSSBytes is the high-water mark of the tree's resident set: per
+// sample the RSS of every live process is summed and the maximum over
+// samples is kept. CurrentRSSBytes is the tree RSS at the last sample
+// before the monitor stopped (the engine may have exited by then, so it
+// can sit below the peak).
+type TreeCPU struct {
+	UserMs          int64
+	SystemMs        int64
+	TotalMs         int64
+	PeakRSSBytes    int64
+	CurrentRSSBytes int64
+}
+
 // ProcessTelemetry bundles everything the sampler observes while the
-// engine runs: the external spawn counts by kind and the tree's byte
-// counters (engine + descendants).
+// engine runs: the external spawn counts by kind, the tree's byte
+// counters and the tree's CPU/RSS counters (engine + descendants).
 type ProcessTelemetry struct {
 	Counts ProcessCounts
 	IO     TreeIO
+	CPU    TreeCPU
 }
 
 // ProcessKind classifies an external process by its /proc comm name.
@@ -112,12 +134,22 @@ func (c *ProcessCounts) addComm(comm string) {
 	}
 }
 
-// sampleProcessGroup returns pid → comm for every live process in the
-// process group pgid. On non-Linux platforms, or when /proc is not
-// mounted, it returns an empty map — the counters degrade to zero
+// processSample is one live process observed in the engine's group: its
+// comm plus the CPU/RSS counters extracted from the same stat read
+// (utime/stime clock ticks and resident pages).
+type processSample struct {
+	comm      string
+	userTicks int64
+	sysTicks  int64
+	rssBytes  int64
+}
+
+// sampleProcessGroup returns pid → processSample for every live process
+// in the process group pgid. On non-Linux platforms, or when /proc is
+// not mounted, it returns an empty map — the counters degrade to zero
 // instead of failing the render.
-func sampleProcessGroup(pgid int) map[int]string {
-	found := map[int]string{}
+func sampleProcessGroup(pgid int) map[int]processSample {
+	found := map[int]processSample{}
 	if runtime.GOOS != "linux" {
 		return found
 	}
@@ -133,47 +165,64 @@ func sampleProcessGroup(pgid int) map[int]string {
 		if err != nil {
 			continue
 		}
-		pid, pgrp, comm := parseStatPGRP(stat)
+		pid, pgrp, comm, userTicks, sysTicks, rssBytes := parseProcStat(stat)
 		if pid <= 0 || pgrp != pgid {
 			continue
 		}
-		found[pid] = comm
+		found[pid] = processSample{comm: comm, userTicks: userTicks, sysTicks: sysTicks, rssBytes: rssBytes}
 	}
 	return found
 }
 
-// parseStatPGRP extracts pid, process group id and comm from one
-// /proc/<pid>/stat line. The comm field may contain spaces and
-// parentheses, so it is located between the first '(' and the last ')';
-// pgrp is the third whitespace-separated field after the closing ')'.
-func parseStatPGRP(stat []byte) (pid, pgrp int, comm string) {
+// parseProcStat extracts pid, process group id, comm and the CPU/RSS
+// counters from one /proc/<pid>/stat line. The comm field may contain
+// spaces and parentheses, so it is located between the first '(' and
+// the last ')'; the fields after it follow Linux stat(5) (rest[0] is
+// field 3 = state):
+//
+//	rest[11] = utime (field 14, clock ticks)
+//	rest[12] = stime (field 15, clock ticks)
+//	rest[21] = rss   (field 24, resident pages)
+//
+// rssBytes is pages × page size. Malformed lines return zero values
+// without panicking.
+func parseProcStat(stat []byte) (pid, pgrp int, comm string, userTicks, sysTicks, rssBytes int64) {
 	open := bytes.IndexByte(stat, '(')
 	close := bytes.LastIndexByte(stat, ')')
 	if open <= 0 || close <= open {
-		return 0, 0, ""
+		return 0, 0, "", 0, 0, 0
 	}
 	if _, err := fmt.Sscanf(string(stat[:open]), "%d", &pid); err != nil || pid <= 0 {
-		return 0, 0, ""
+		return 0, 0, "", 0, 0, 0
 	}
 	comm = string(stat[open+1 : close])
 	rest := bytes.Fields(stat[close+1:])
-	// rest[0]=state, rest[1]=ppid, rest[2]=pgrp, rest[3]=session …
 	if len(rest) < 3 {
-		return 0, 0, ""
+		return 0, 0, "", 0, 0, 0
 	}
 	if _, err := fmt.Sscanf(string(rest[2]), "%d", &pgrp); err != nil {
-		return 0, 0, ""
+		return 0, 0, "", 0, 0, 0
 	}
-	return pid, pgrp, comm
+	if len(rest) > 12 {
+		userTicks, _ = strconv.ParseInt(string(rest[11]), 10, 64)
+		sysTicks, _ = strconv.ParseInt(string(rest[12]), 10, 64)
+	}
+	if len(rest) > 21 {
+		if pages, err := strconv.ParseInt(string(rest[21]), 10, 64); err == nil && pages > 0 {
+			rssBytes = pages * int64(os.Getpagesize())
+		}
+	}
+	return pid, pgrp, comm, userTicks, sysTicks, rssBytes
 }
 
 // monitorProcessGroup polls every live process whose pgrp == pgid each
 // interval until stop is closed. It counts each distinct PID once by
 // its comm (the engine subprocess itself — excludePID — is never
 // counted: the worker already accounts for it via EngineSpawnCount) and
-// accumulates the tree's /proc/<pid>/io byte counters, INCLUDING the
-// engine's own bytes (the engine does real media work, so its I/O is
-// part of the render's footprint).
+// accumulates the tree's /proc/<pid>/io byte counters and the tree's
+// CPU/RSS counters, INCLUDING the engine's own process (the engine does
+// real media work, so its bytes and CPU are part of the render's
+// footprint).
 //
 // Callers MUST pass pgid == excludePID: the engine runs with Setpgid,
 // so its process group id equals its own PID. Sampling a non-leader PID
@@ -182,12 +231,16 @@ func monitorProcessGroup(pgid, excludePID int, interval time.Duration, stop <-ch
 	var telemetry ProcessTelemetry
 	seen := make(map[int]struct{})
 	ioPeak := make(map[int]TreeIO)
+	cpuPeak := make(map[int]cpuSample)
+	var rssPeak, rssCurrent int64
 	sample := func() {
-		for pid, comm := range sampleProcessGroup(pgid) {
+		live := sampleProcessGroup(pgid)
+		var treeRSS int64
+		for pid, s := range live {
 			if pid != excludePID {
 				if _, ok := seen[pid]; !ok {
 					seen[pid] = struct{}{}
-					telemetry.Counts.addComm(comm)
+					telemetry.Counts.addComm(s.comm)
 				}
 			}
 			// /proc/<pid>/io counters are cumulative per process lifetime;
@@ -202,6 +255,19 @@ func monitorProcessGroup(pgid, excludePID int, interval time.Duration, stop <-ch
 				peak.StorageBytesWritten = maxInt64(peak.StorageBytesWritten, io.StorageBytesWritten)
 				ioPeak[pid] = peak
 			}
+			// utime/stime are cumulative clock ticks; RSS is a per-instant
+			// snapshot. CPU keeps the per-PID maximum (the tree's total CPU
+			// over the run); RSS sums the live tree per sample and keeps the
+			// maximum over samples (the tree's peak resident set).
+			peak := cpuPeak[pid]
+			peak.userTicks = maxInt64(peak.userTicks, s.userTicks)
+			peak.sysTicks = maxInt64(peak.sysTicks, s.sysTicks)
+			cpuPeak[pid] = peak
+			treeRSS += s.rssBytes
+		}
+		rssCurrent = treeRSS
+		if treeRSS > rssPeak {
+			rssPeak = treeRSS
 		}
 	}
 	// Sample once immediately, then keep polling until told to stop.
@@ -211,6 +277,16 @@ func monitorProcessGroup(pgid, excludePID int, interval time.Duration, stop <-ch
 	for {
 		select {
 		case <-stop:
+			var userTicks, sysTicks int64
+			for _, peak := range cpuPeak {
+				userTicks += peak.userTicks
+				sysTicks += peak.sysTicks
+			}
+			telemetry.CPU.UserMs = userTicks * 1000 / clockTicksPerSecond
+			telemetry.CPU.SystemMs = sysTicks * 1000 / clockTicksPerSecond
+			telemetry.CPU.TotalMs = telemetry.CPU.UserMs + telemetry.CPU.SystemMs
+			telemetry.CPU.PeakRSSBytes = rssPeak
+			telemetry.CPU.CurrentRSSBytes = rssCurrent
 			for _, peak := range ioPeak {
 				telemetry.IO.BytesRead += peak.BytesRead
 				telemetry.IO.BytesWritten += peak.BytesWritten
@@ -223,6 +299,21 @@ func monitorProcessGroup(pgid, excludePID int, interval time.Duration, stop <-ch
 		}
 	}
 }
+
+// cpuSample is the per-PID accumulator for the utime/stime clock ticks
+// read from /proc/<pid>/stat.
+type cpuSample struct {
+	userTicks int64
+	sysTicks  int64
+}
+
+// clockTicksPerSecond is the kernel's USER_HZ — the unit of the
+// utime/stime fields in /proc/<pid>/stat. Linux defines USER_HZ as 100
+// on every architecture Velox targets (x86, ARM, RISC-V), so
+// sysconf(SC_CLK_TCK) returns exactly 100; keeping the constant avoids
+// a sysconf call per monitor stop and a dependency on x/sys (which does
+// not expose Sysconf on Linux).
+const clockTicksPerSecond = 100
 
 // sampleProcessIO reads /proc/<pid>/io and returns the four byte
 // counters. On non-Linux platforms, unreadable files, or malformed

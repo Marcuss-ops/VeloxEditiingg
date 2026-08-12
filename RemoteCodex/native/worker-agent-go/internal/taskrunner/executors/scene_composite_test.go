@@ -83,6 +83,10 @@ func (f *fakeRenderClient) RenderWithMetrics(_ context.Context, p *plan.RenderPl
 	}
 	return pipeline.RenderMetrics{
 		EngineSpawnCount: f.engineSpawnCount,
+		CPUUserMs:        1500,
+		CPUSystemMs:      300,
+		PeakRSSBytes:     320_000_000,
+		CurrentRSSBytes:  300_000_000,
 		PhaseMS:          map[string]float64{"render": 1},
 		Observability: map[string]interface{}{
 			"audio":    map[string]interface{}{"events": float64(2), "wall_ms": float64(12.5)},
@@ -238,6 +242,29 @@ func TestSceneComposite_Execute_Success(t *testing.T) {
 	}
 	if res.Metrics["audio.events"] != float64(2) || res.Metrics["subtitle.events"] != float64(1) || res.Metrics["io.bytes_in"] != float64(4096) || res.Metrics["quality.events"] != float64(3) || res.Metrics["retry.count"] != float64(2) || res.Metrics["waste.wasted_cpu_ms"] != float64(88) {
 		t.Fatalf("category observability not propagated: %#v", res.Metrics)
+	}
+	// CPU/RSS counters share the receipt's derivation: cpu.total_ms is
+	// user + system, the memory keys carry the sampler values verbatim.
+	if res.Metrics["cpu.user_ms"] != int64(1500) ||
+		res.Metrics["cpu.system_ms"] != int64(300) ||
+		res.Metrics["cpu.total_ms"] != int64(1800) ||
+		res.Metrics["memory.peak_rss_bytes"] != int64(320_000_000) ||
+		res.Metrics["memory.current_rss_bytes"] != int64(300_000_000) {
+		t.Fatalf("cpu/memory telemetry not propagated: %#v", res.Metrics)
+	}
+	wallMs, hasWall := res.Metrics["cpu.wall_ms"].(int64)
+	if !hasWall {
+		t.Fatalf("cpu.wall_ms must be an int64, got %#v", res.Metrics["cpu.wall_ms"])
+	}
+	ratio, ok := res.Metrics["cpu.wall_ratio"].(float64)
+	if !ok || ratio < 0 {
+		t.Fatalf("cpu.wall_ratio must be a non-negative float, got %#v", res.Metrics["cpu.wall_ratio"])
+	}
+	// The fake render is instantaneous, so the wall clock can round to
+	// zero and the ratio legitimately stays zero; whenever wall_ms > 0
+	// the ratio must be positive.
+	if wallMs > 0 && ratio <= 0 {
+		t.Fatalf("cpu.wall_ratio must be positive when wall_ms > 0, got %v (wall=%d)", ratio, wallMs)
 	}
 }
 

@@ -57,6 +57,10 @@ func sampleRun() pipeline.RunMetrics {
 			AssetBytesCopied:     4_194_304,
 			InputOpenCount:       5,
 			InputReopenCount:     2,
+			CPUUserMs:            1500,
+			CPUSystemMs:          300,
+			PeakRSSBytes:         320_000_000,
+			CurrentRSSBytes:      300_000_000,
 		},
 	}
 }
@@ -71,6 +75,42 @@ func TestAssembler_MapsPipelineTiming(t *testing.T) {
 	require.Equal(t, int64(210), receipt.Timing.CompileMs)
 	require.Equal(t, int64(18910), receipt.Timing.RenderMs)
 	require.Equal(t, int64(19310), receipt.Timing.PipelineTotalMs)
+}
+
+func TestAssembler_MapsCPU(t *testing.T) {
+	receipt := NewAssembler().Assemble(sampleRun(), AssemblyContext{})
+
+	cpu := receipt.CPU
+	// wall_ms mirrors the resolved wall clock (Timing.WallMs).
+	require.Equal(t, receipt.Timing.WallMs, cpu.WallMs)
+	require.Equal(t, int64(19310), cpu.WallMs)
+	require.Equal(t, int64(1500), cpu.CPUUserMs)
+	require.Equal(t, int64(300), cpu.CPUSystemMs)
+	require.Equal(t, int64(1800), cpu.CPUTotalMs)
+	require.InDelta(t, 1800.0/19310.0, cpu.CPUWallRatio, 1e-9)
+}
+
+func TestAssembler_CPURatioZeroWithoutWall(t *testing.T) {
+	run := sampleRun()
+	run.TotalMs = 0
+	receipt := NewAssembler().Assemble(run, AssemblyContext{})
+	require.Zero(t, receipt.CPU.CPUWallRatio)
+	require.Equal(t, int64(1800), receipt.CPU.CPUTotalMs, "total is still measured even without a wall clock")
+}
+
+func TestDeriveCPU_MatchesReceiptSection(t *testing.T) {
+	// The executor emits cpu.* attempt metrics from performance.DeriveCPU;
+	// it must never disagree with the receipt's CPU section built by the
+	// assembler. Both go through the same derivation.
+	run := sampleRun()
+	receiptCPU := NewAssembler().Assemble(run, AssemblyContext{}).CPU
+	require.Equal(t, receiptCPU, DeriveCPU(run.RenderMetrics, run.TotalMs))
+}
+
+func TestAssembler_MapsMemory(t *testing.T) {
+	receipt := NewAssembler().Assemble(sampleRun(), AssemblyContext{})
+	require.Equal(t, int64(320_000_000), receipt.Memory.PeakRSSBytes)
+	require.Equal(t, int64(300_000_000), receipt.Memory.CurrentRSSBytes)
 }
 
 func TestAssembler_MapsNativeSidecar(t *testing.T) {
@@ -316,6 +356,9 @@ func TestAssembler_ExecutorClocksStayZero(t *testing.T) {
 func TestAssembler_WallOverrideWins(t *testing.T) {
 	receipt := NewAssembler().Assemble(sampleRun(), AssemblyContext{WallMs: 19340})
 	require.Equal(t, int64(19340), receipt.Timing.WallMs)
+	// The CPU section shares the same resolved wall clock.
+	require.Equal(t, int64(19340), receipt.CPU.WallMs)
+	require.InDelta(t, 1800.0/19340.0, receipt.CPU.CPUWallRatio, 1e-9)
 }
 
 func TestAssembler_WorkloadAndIdentity(t *testing.T) {
@@ -409,4 +452,6 @@ func TestAssembler_ReceiptMarshals(t *testing.T) {
 	require.True(t, json.Valid(data))
 	require.Contains(t, string(data), `"render_ms":18910`)
 	require.Contains(t, string(data), `"engine_spawn_count":1`)
+	require.Contains(t, string(data), `"cpu_user_ms":1500`)
+	require.Contains(t, string(data), `"peak_rss_bytes":320000000`)
 }

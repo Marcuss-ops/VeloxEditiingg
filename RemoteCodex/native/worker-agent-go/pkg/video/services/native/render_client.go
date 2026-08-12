@@ -151,14 +151,15 @@ func (c *RenderClient) RenderWithMetrics(ctx context.Context, p *plan.RenderPlan
 	return metrics, nil
 }
 
-// applyProcessTelemetry records the subprocess lifecycle counters and
-// the engine tree's byte counters on the metrics struct. EngineSpawnCount
-// is mapped from the EXPLICIT engineStarted fact reported by
-// runEngineProcess (cmd.Start() success) — never inferred from a timing
-// value. It stays 1 on failed and cancelled renders, where the spawn
-// still happened and its cost is part of the attempt. The exec counts
-// and the I/O totals come from the /proc sampler that ran while the
-// engine process was alive.
+// applyProcessTelemetry records the subprocess lifecycle counters, the
+// engine tree's byte counters and the tree's CPU/RSS counters on the
+// metrics struct. EngineSpawnCount is mapped from the EXPLICIT
+// engineStarted fact reported by runEngineProcess (cmd.Start() success)
+// — never inferred from a timing value. It stays 1 on failed and
+// cancelled renders, where the spawn still happened and its cost is
+// part of the attempt. The exec counts, the I/O totals and the CPU/RSS
+// counters come from the /proc sampler that ran while the engine
+// process was alive.
 func applyProcessTelemetry(m *pipeline.RenderMetrics, engineStarted bool, processStartMs, processWaitMs int64, telemetry ProcessTelemetry) {
 	if m == nil {
 		return
@@ -177,4 +178,8 @@ func applyProcessTelemetry(m *pipeline.RenderMetrics, engineStarted bool, proces
 	m.TotalBytesWritten = telemetry.IO.BytesWritten
 	m.StorageBytesRead = telemetry.IO.StorageBytesRead
 	m.StorageBytesWritten = telemetry.IO.StorageBytesWritten
+	m.CPUUserMs = telemetry.CPU.UserMs
+	m.CPUSystemMs = telemetry.CPU.SystemMs
+	m.PeakRSSBytes = telemetry.CPU.PeakRSSBytes
+	m.CurrentRSSBytes = telemetry.CPU.CurrentRSSBytes
 }
