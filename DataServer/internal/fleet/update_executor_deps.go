@@ -231,12 +231,16 @@ func (g *RealRegistryUpdateGater) GetAuthenticatedRuntimeSnapshot(ctx context.Co
 //     status=ROLLED_BACK AND is_rollback=true in one UPDATE
 //     so the dashboard's transition row is never observed in
 //     a torn (status=RolledBack, flag=0) state.
+//   - MarkFailed / MarkDeploymentRolledBack carry errCode — the stable
+//     DeploymentErrorCode (DIGEST_MISMATCH, DRAIN_TIMEOUT, …) — separately
+//     from the human-readable errMsg. Both are persisted to the journal row
+//     and projected into the read model (migration 153).
 type BackendDeploymentRepo interface {
 	GetLatestDeploymentForWorker(ctx context.Context, workerID string) (*store.DeploymentRecord, error)
 	InsertDeploymentRecord(ctx context.Context, r store.DeploymentRecord) error
 	MarkVerifiedSucceeded(ctx context.Context, deploymentID, observedDigest string, finishedAt time.Time) error
-	MarkFailed(ctx context.Context, deploymentID string, finishedAt time.Time, errMsg string) error
-	MarkDeploymentRolledBack(ctx context.Context, deploymentID string, finishedAt time.Time, rollbackOK bool) error
+	MarkFailed(ctx context.Context, deploymentID string, finishedAt time.Time, errCode, errMsg string) error
+	MarkDeploymentRolledBack(ctx context.Context, deploymentID string, finishedAt time.Time, rollbackOK bool, errCode string) error
 }
 
 // BackendDeploymentPhaseRecorder is the optional seam for persisting the

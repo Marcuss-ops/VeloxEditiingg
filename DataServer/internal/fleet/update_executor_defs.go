@@ -3,6 +3,7 @@ package fleet
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -73,6 +74,78 @@ var (
 	// heartbeat value.
 	ErrDigestMismatch = errors.New("digest_mismatch")
 )
+
+// DeploymentErrorCode is the stable, closed vocabulary for a failed fleet
+// operation. Codes are persisted in deployment_records.error_code (journal,
+// migration 153) and projected into worker_deployment_state.
+// last_operation_error_code (read model) so operators, metrics and admin
+// filters can route on the code while the human-readable message stays free
+// form. A new operation clears the current code; the history keeps every
+// older code in its journal row.
+const (
+	DeploymentErrorCodeDrainTimeout        = "DRAIN_TIMEOUT"
+	DeploymentErrorCodeDeployCommandFailed = "DEPLOY_COMMAND_FAILED"
+	DeploymentErrorCodeRestartFailed       = "RESTART_FAILED"
+	DeploymentErrorCodeReadyTimeout        = "READY_TIMEOUT"
+	DeploymentErrorCodeDigestMismatch      = "DIGEST_MISMATCH"
+	DeploymentErrorCodeSSHFailed           = "SSH_FAILED"
+
+	// Step-specific extensions beyond the core vocabulary: smoke and Drive
+	// are downstream phases the operator must distinguish from the six core
+	// codes, and a failed rollback cascade has its own routing identity.
+	DeploymentErrorCodeSmokeFailed    = "SMOKE_FAILED"
+	DeploymentErrorCodeDriveFailed    = "DRIVE_DELIVERY_FAILED"
+	DeploymentErrorCodeRollbackFailed = "ROLLBACK_FAILED"
+)
+
+// classifyDeploymentError maps a forward/rollback pipeline error to its
+// stable DeploymentErrorCode. Sentinel errors win first (errors.Is — the
+// mapping survives re-wrapping), then the executor's own step wrap-prefixes
+// (cosign: / activate image: / container_running: / health_ready: /
+// waiting_ready: / drain wait:), and finally an SSH transport signature
+// (the production SSH client errors surface "ssh" in their text). Unknown
+// errors default to DEPLOY_COMMAND_FAILED rather than an empty code, so the
+// journal always carries a routable failure class.
+//
+// Reachability note: DRAIN_TIMEOUT is part of the closed vocabulary but a
+// drain-gate failure happens BEFORE the PENDING deployment row is inserted
+// (drain-first design: a failed drain inserts no row), so it is persisted as
+// a fleet_operations error_message only, never as a deployment error_code.
+// The branch is kept so the code survives if the pipeline is ever reordered
+// to insert the row before draining.
+func classifyDeploymentError(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case errors.Is(err, ErrDigestMismatch):
+		return DeploymentErrorCodeDigestMismatch
+	case errors.Is(err, ErrSmokeFailed):
+		return DeploymentErrorCodeSmokeFailed
+	case errors.Is(err, ErrDriveDeliveryMissing), errors.Is(err, ErrDriveDeliverySize):
+		return DeploymentErrorCodeDriveFailed
+	case errors.Is(err, ErrContainerUnhealthy):
+		return DeploymentErrorCodeRestartFailed
+	case strings.Contains(msg, "ssh"):
+		return DeploymentErrorCodeSSHFailed
+	case strings.Contains(msg, "waiting_ready:"):
+		return DeploymentErrorCodeReadyTimeout
+	case strings.Contains(msg, "drain wait:"):
+		return DeploymentErrorCodeDrainTimeout
+	case strings.Contains(msg, "health_ready:"), strings.Contains(msg, "container_running:"):
+		return DeploymentErrorCodeRestartFailed
+	// Rollback-cascade errors are checked BEFORE the generic activate-image
+	// prefix: a rollback step failure is a rollback failure even when it
+	// happens while re-activating the previous digest.
+	case strings.Contains(msg, "rollback"):
+		return DeploymentErrorCodeRollbackFailed
+	case strings.Contains(msg, "cosign:"), strings.Contains(msg, "activate image:"):
+		return DeploymentErrorCodeDeployCommandFailed
+	default:
+		return DeploymentErrorCodeDeployCommandFailed
+	}
+}
 
 // Per-step timeouts. Each step uses context.WithTimeout to
 // bound its own budget — a runaway step fails fast rather

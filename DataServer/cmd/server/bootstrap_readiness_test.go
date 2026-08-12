@@ -21,6 +21,7 @@ import (
 	"velox-server/internal/app"
 	"velox-server/internal/fleet"
 	"velox-server/internal/registry"
+	"velox-server/internal/store"
 	workersreg "velox-server/internal/workers"
 )
 
@@ -58,9 +59,11 @@ func fullyWiredUpdateExecutor(t *testing.T, p *persistenceDeps) *fleet.UpdateExe
 	}
 	ssh := fleet.NewSSHClientFromRegistry(workerNodeRegistry)
 	return fleet.NewUpdateExecutor(fleet.UpdateBackend{
-		SSHCmd:      ssh,
-		Docker:      &fleet.SSHWorkerDockerClient{SSH: ssh},
-		Deployments: p.SQLite,
+		SSHCmd: ssh,
+		Docker: &fleet.SSHWorkerDockerClient{SSH: ssh},
+		// Named adapter: p.SQLite's MarkFailed belongs to fleet_operations,
+		// not deployment_records (migration 153 split the signatures).
+		Deployments: store.NewDeploymentRecordRepository(p.SQLite),
 		Cosign:      newUpdateCosignVerifier(),
 		Image:       deployUpdateImageValidator{},
 		Registry:    &fleet.RealRegistryUpdateGater{Reg: workersreg.New(nil)},

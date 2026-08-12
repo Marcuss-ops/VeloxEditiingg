@@ -229,6 +229,10 @@ func (h *AdminWorkersHandler) cardWithError(ctx context.Context, info *workersre
 			}
 			card.LastSuccessfulDigest = state.LastSuccessfulDigest
 			card.LastPhase = state.LastPhase
+			// Current-error state comes from the read model too: the stable
+			// code (DIGEST_MISMATCH, …) and the message are separate fields.
+			card.LastOperationErrorCode = state.LastOperationErrorCode
+			card.LastOperationError = state.LastOperationError
 		}
 	}
 	// IMAGE section — real-time state only: what is running vs what the
@@ -260,7 +264,9 @@ func (h *AdminWorkersHandler) cardWithError(ctx context.Context, info *workersre
 	card.PreviousDigest = rec.PreviousDigest
 	// LAST UPDATE OPERATION section — the operation history, deliberately
 	// separate from ImageState: an old FAILED rollout must not make a
-	// worker with a matching digest look unhealthy.
+	// worker with a matching digest look unhealthy. ErrorCode comes from
+	// the journal row (deployment_records.error_code), keeping the history
+	// view code-routable like the read model's current error.
 	opType := "update"
 	if rec.IsRollback {
 		opType = "rollback"
@@ -269,16 +275,21 @@ func (h *AdminWorkersHandler) cardWithError(ctx context.Context, info *workersre
 		OperationID: rec.DeploymentID,
 		Type:        opType,
 		Status:      rec.Status,
+		ErrorCode:   rec.ErrorCode,
 		StartedAt:   rec.StartedAt.UTC().Format(time.RFC3339Nano),
 		FinishedAt:  rec.FinishedAt,
 	}
-	// Enrich with the failure reason from the fleet_operations audit
-	// ledger when available (optional seam — lightweight deployments
-	// simply omit Error). Only an update/rollback row that actually
-	// FAILED contributes an error: the ledger also carries smoke/drain/
-	// resume rows, and a smoke failure must never surface under
-	// "LAST UPDATE OPERATION" for a healthy image rollout.
-	if h.operations != nil && (rec.Status == store.DeployStatusFailed || rec.Status == store.DeployStatusRolledBack) {
+	// Error message: prefer the journal row's own message (SAME row as
+	// ErrorCode — migration 153 keeps code+message atomic per row). Fall
+	// back to the fleet_operations audit ledger when the journal message is
+	// empty (optional seam — lightweight deployments simply omit Error).
+	// Only an update/rollback row that actually FAILED contributes an error:
+	// the ledger also carries smoke/drain/resume rows, and a smoke failure
+	// must never surface under "LAST UPDATE OPERATION" for a healthy image
+	// rollout.
+	if rec.ErrorMessage != "" {
+		operation.Error = rec.ErrorMessage
+	} else if h.operations != nil && (rec.Status == store.DeployStatusFailed || rec.Status == store.DeployStatusRolledBack) {
 		ops, opErr := h.operations.ListOperations(ctx, info.WorkerID.String(), "", 10)
 		if opErr != nil {
 			return WorkerCard{}, opErr

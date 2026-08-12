@@ -216,7 +216,7 @@ func TestDeploymentStore_UpdatesFailClosedWhenRowIsMissing(t *testing.T) {
 	if err := s.UpdateDeploymentStatus(ctx, "missing", DeployStatusFailed, finished); !errors.Is(err, ErrDeploymentNotFound) {
 		t.Fatalf("UpdateDeploymentStatus error = %v, want ErrDeploymentNotFound", err)
 	}
-	if err := s.MarkDeploymentRolledBack(ctx, "missing", finished, true); !errors.Is(err, ErrDeploymentNotFound) {
+	if err := s.MarkDeploymentRolledBack(ctx, "missing", finished, true, ""); !errors.Is(err, ErrDeploymentNotFound) {
 		t.Fatalf("MarkDeploymentRolledBack error = %v, want ErrDeploymentNotFound", err)
 	}
 }
@@ -458,7 +458,7 @@ func TestDeploymentStore_FailedCannotResurrectToSucceeded(t *testing.T) {
 	}
 	// The rollback marker path is equally barred: a FAILED forward row must
 	// not be re-labelled ROLLED_BACK.
-	if err := s.MarkDeploymentRolledBack(ctx, rec.DeploymentID, base.Add(2*time.Minute), true); !errors.Is(err, ErrIllegalDeploymentTransition) {
+	if err := s.MarkDeploymentRolledBack(ctx, rec.DeploymentID, base.Add(2*time.Minute), true, ""); !errors.Is(err, ErrIllegalDeploymentTransition) {
 		t.Fatalf("FAILED -> ROLLED_BACK error = %v, want ErrIllegalDeploymentTransition", err)
 	}
 
@@ -492,7 +492,7 @@ func TestDeploymentStore_RolledBackIsTerminal(t *testing.T) {
 	if err := s.InsertDeploymentRecord(ctx, rec); err != nil {
 		t.Fatalf("insert rollback row: %v", err)
 	}
-	if err := s.MarkDeploymentRolledBack(ctx, rec.DeploymentID, base.Add(time.Minute), true); err != nil {
+	if err := s.MarkDeploymentRolledBack(ctx, rec.DeploymentID, base.Add(time.Minute), true, ""); err != nil {
 		t.Fatalf("PENDING -> ROLLED_BACK: %v", err)
 	}
 
@@ -532,7 +532,7 @@ func TestDeploymentStore_RollbackFailedIsTerminal(t *testing.T) {
 	if err := s.InsertDeploymentRecord(ctx, rec); err != nil {
 		t.Fatalf("insert rollback row: %v", err)
 	}
-	if err := s.MarkDeploymentRolledBack(ctx, rec.DeploymentID, base.Add(time.Minute), false); err != nil {
+	if err := s.MarkDeploymentRolledBack(ctx, rec.DeploymentID, base.Add(time.Minute), false, "ROLLBACK_FAILED"); err != nil {
 		t.Fatalf("MarkDeploymentRolledBack(false): %v", err)
 	}
 
@@ -550,7 +550,7 @@ func TestDeploymentStore_RollbackFailedIsTerminal(t *testing.T) {
 	if !errors.Is(err, ErrIllegalDeploymentTransition) {
 		t.Fatalf("FAILED -> SUCCEEDED error = %v, want ErrIllegalDeploymentTransition", err)
 	}
-	err = s.MarkDeploymentRolledBack(ctx, rec.DeploymentID, base.Add(2*time.Minute), true)
+	err = s.MarkDeploymentRolledBack(ctx, rec.DeploymentID, base.Add(2*time.Minute), true, "")
 	if !errors.Is(err, ErrIllegalDeploymentTransition) {
 		t.Fatalf("FAILED -> ROLLED_BACK error = %v, want ErrIllegalDeploymentTransition", err)
 	}
@@ -716,7 +716,7 @@ func TestWorkerDeploymentState_FailedRolloutPreservesLastSuccessfulDigest(t *tes
 	}); err != nil {
 		t.Fatalf("InsertDeploymentRecord: %v", err)
 	}
-	if err := s.updateDeploymentTerminal(ctx, "deploy-state-failed", DeployStatusFailed, base.Add(2*time.Minute), "cosign verify failed", false); err != nil {
+	if err := s.updateDeploymentTerminal(ctx, "deploy-state-failed", DeployStatusFailed, base.Add(2*time.Minute), "COSIGN_FAILED", "cosign verify failed", false); err != nil {
 		t.Fatalf("updateDeploymentTerminal(FAILED): %v", err)
 	}
 
@@ -984,7 +984,7 @@ func TestWorkerDeploymentState_PhaseRecordedAndPreserved(t *testing.T) {
 	}
 	// Terminal transition (FAILED) preserves the last phase: the operator can
 	// see WHERE the rollout stopped.
-	if err := s.updateDeploymentTerminal(ctx, "deploy-phase-1", DeployStatusFailed, base.Add(time.Minute), "digest_mismatch: expected=B observed=C", false); err != nil {
+	if err := s.updateDeploymentTerminal(ctx, "deploy-phase-1", DeployStatusFailed, base.Add(time.Minute), "DIGEST_MISMATCH", "digest_mismatch: expected=B observed=C", false); err != nil {
 		t.Fatalf("updateDeploymentTerminal(FAILED): %v", err)
 	}
 
@@ -1000,5 +1000,233 @@ func TestWorkerDeploymentState_PhaseRecordedAndPreserved(t *testing.T) {
 	}
 	if state.DesiredDigest != deploymentTestDigest('b') {
 		t.Errorf("DesiredDigest = %q, want %q (phase recording must not touch intent)", state.DesiredDigest, deploymentTestDigest('b'))
+	}
+}
+
+// ============================================================
+// error_code / error_message separation (migration 153)
+// ============================================================
+
+// TestWorkerDeploymentState_ErrorCodeAndMessagePersisted pins migration 153
+// end-to-end through the repository adapter (the path the fleet executor
+// uses): MarkFailed(code, msg) writes BOTH the stable code and the
+// human-readable message to the journal row AND projects them into the read
+// model's last_operation_error_code / last_operation_error.
+func TestWorkerDeploymentState_ErrorCodeAndMessagePersisted(t *testing.T) {
+	s := newDeploymentTestStore(t)
+	ctx := context.Background()
+	base := time.Now().UTC().Truncate(time.Second)
+
+	if err := s.InsertDeploymentRecord(ctx, DeploymentRecord{
+		DeploymentID:   "deploy-code-fail",
+		WorkerID:       "wicket",
+		PreviousDigest: deploymentTestDigest('a'),
+		TargetDigest:   deploymentTestDigest('b'),
+		StartedAt:      base,
+		Status:         DeployStatusPending,
+		AppliedBy:      "fleetctl",
+	}); err != nil {
+		t.Fatalf("InsertDeploymentRecord: %v", err)
+	}
+	repo := NewDeploymentRecordRepository(s)
+	if err := repo.MarkFailed(ctx, "deploy-code-fail", base.Add(time.Minute), "DIGEST_MISMATCH", "digest_mismatch: expected=sha256:b observed=sha256:c"); err != nil {
+		t.Fatalf("repo.MarkFailed: %v", err)
+	}
+
+	// Journal row carries both, in separate columns.
+	rec, err := s.GetLatestDeploymentForWorker(ctx, "wicket")
+	if err != nil {
+		t.Fatalf("GetLatestDeploymentForWorker: %v", err)
+	}
+	if rec.ErrorCode != "DIGEST_MISMATCH" {
+		t.Errorf("journal ErrorCode = %q, want DIGEST_MISMATCH", rec.ErrorCode)
+	}
+	if rec.ErrorMessage != "digest_mismatch: expected=sha256:b observed=sha256:c" {
+		t.Errorf("journal ErrorMessage = %q, want the full message", rec.ErrorMessage)
+	}
+
+	// Read model projects both, still separate.
+	state, err := s.GetWorkerDeploymentState(ctx, "wicket")
+	if err != nil {
+		t.Fatalf("GetWorkerDeploymentState: %v", err)
+	}
+	if state.LastOperationErrorCode != "DIGEST_MISMATCH" {
+		t.Errorf("read model LastOperationErrorCode = %q, want DIGEST_MISMATCH", state.LastOperationErrorCode)
+	}
+	if state.LastOperationError != "digest_mismatch: expected=sha256:b observed=sha256:c" {
+		t.Errorf("read model LastOperationError = %q, want the full message", state.LastOperationError)
+	}
+}
+
+// TestWorkerDeploymentState_NewOperationClearsErrorPreservesHistory pins the
+// "new operation clears the current error but preserves history" contract:
+// after op#1 FAILED with DIGEST_MISMATCH, inserting op#2 (PENDING) blanks
+// last_operation_error_code / last_operation_error in the read model, while
+// the journal row of op#1 keeps its code+message forever (audit history is
+// never rewritten).
+func TestWorkerDeploymentState_NewOperationClearsErrorPreservesHistory(t *testing.T) {
+	s := newDeploymentTestStore(t)
+	ctx := context.Background()
+	base := time.Now().UTC().Truncate(time.Second)
+	digestA := deploymentTestDigest('a')
+	digestB := deploymentTestDigest('b')
+	repo := NewDeploymentRecordRepository(s)
+
+	if err := s.InsertBaselineDeploymentRecord(ctx, DeploymentRecord{
+		DeploymentID: "deploy-clear-base",
+		WorkerID:     "wicket",
+		TargetDigest: digestA,
+		StartedAt:    base,
+		FinishedAt:   deploymentTimePtr(base),
+		Status:       DeployStatusSucceeded,
+		AppliedBy:    "bootstrap",
+	}); err != nil {
+		t.Fatalf("InsertBaselineDeploymentRecord: %v", err)
+	}
+	// op#1: FAILED with DIGEST_MISMATCH.
+	if err := s.InsertDeploymentRecord(ctx, DeploymentRecord{
+		DeploymentID:   "deploy-clear-op1",
+		WorkerID:       "wicket",
+		PreviousDigest: digestA,
+		TargetDigest:   digestB,
+		StartedAt:      base.Add(time.Minute),
+		Status:         DeployStatusPending,
+		AppliedBy:      "fleetctl",
+	}); err != nil {
+		t.Fatalf("insert op1: %v", err)
+	}
+	if err := repo.MarkFailed(ctx, "deploy-clear-op1", base.Add(2*time.Minute), "DIGEST_MISMATCH", "digest_mismatch: expected=sha256:b observed=sha256:c"); err != nil {
+		t.Fatalf("MarkFailed op1: %v", err)
+	}
+
+	state, err := s.GetWorkerDeploymentState(ctx, "wicket")
+	if err != nil {
+		t.Fatalf("GetWorkerDeploymentState: %v", err)
+	}
+	if state.LastOperationErrorCode != "DIGEST_MISMATCH" || state.LastOperationError == "" {
+		t.Fatalf("pre-condition: read model error = %q/%q, want DIGEST_MISMATCH/msg", state.LastOperationErrorCode, state.LastOperationError)
+	}
+
+	// op#2: a NEW operation starts (PENDING). The read model's current error
+	// must be cleared — the failure of op#1 is no longer the CURRENT error.
+	if err := s.InsertDeploymentRecord(ctx, DeploymentRecord{
+		DeploymentID:   "deploy-clear-op2",
+		WorkerID:       "wicket",
+		PreviousDigest: digestB,
+		TargetDigest:   deploymentTestDigest('c'),
+		StartedAt:      base.Add(3 * time.Minute),
+		Status:         DeployStatusPending,
+		AppliedBy:      "fleetctl",
+	}); err != nil {
+		t.Fatalf("insert op2: %v", err)
+	}
+
+	state, err = s.GetWorkerDeploymentState(ctx, "wicket")
+	if err != nil {
+		t.Fatalf("GetWorkerDeploymentState: %v", err)
+	}
+	if state.LastOperationErrorCode != "" {
+		t.Errorf("LastOperationErrorCode after new op = %q, want empty (current error cleared)", state.LastOperationErrorCode)
+	}
+	if state.LastOperationError != "" {
+		t.Errorf("LastOperationError after new op = %q, want empty (current error cleared)", state.LastOperationError)
+	}
+	if state.LastOperationID != "deploy-clear-op2" {
+		t.Errorf("LastOperationID = %q, want deploy-clear-op2", state.LastOperationID)
+	}
+
+	// History is preserved: op#1's journal row still carries code+message.
+	op1, err := s.getDeploymentRecord(ctx, "deploy-clear-op1")
+	if err != nil {
+		t.Fatalf("get op1 journal row: %v", err)
+	}
+	if op1.ErrorCode != "DIGEST_MISMATCH" || op1.ErrorMessage != "digest_mismatch: expected=sha256:b observed=sha256:c" {
+		t.Errorf("op1 history = code=%q msg=%q, want preserved DIGEST_MISMATCH/msg", op1.ErrorCode, op1.ErrorMessage)
+	}
+	if op1.Status != DeployStatusFailed {
+		t.Errorf("op1 history status = %q, want FAILED (history is immutable)", op1.Status)
+	}
+}
+
+// TestWorkerDeploymentState_VerifiedSuccessClearsErrorCode pins the
+// successful-terminal write: MarkVerifiedSucceeded clears both the code and
+// the message from the journal row AND the read model — a later rollout that
+// succeeds must not leave the previous DIGEST_MISMATCH visible as the
+// current error.
+func TestWorkerDeploymentState_VerifiedSuccessClearsErrorCode(t *testing.T) {
+	s := newDeploymentTestStore(t)
+	ctx := context.Background()
+	base := time.Now().UTC().Truncate(time.Second)
+	digestA := deploymentTestDigest('a')
+	digestB := deploymentTestDigest('b')
+	repo := NewDeploymentRecordRepository(s)
+
+	if err := s.InsertBaselineDeploymentRecord(ctx, DeploymentRecord{
+		DeploymentID: "deploy-clear-ok-base",
+		WorkerID:     "wicket",
+		TargetDigest: digestA,
+		StartedAt:    base,
+		FinishedAt:   deploymentTimePtr(base),
+		Status:       DeployStatusSucceeded,
+		AppliedBy:    "bootstrap",
+	}); err != nil {
+		t.Fatalf("InsertBaselineDeploymentRecord: %v", err)
+	}
+	// Failed op#1 leaves DIGEST_MISMATCH on the read model.
+	if err := s.InsertDeploymentRecord(ctx, DeploymentRecord{
+		DeploymentID:   "deploy-clear-ok-fail",
+		WorkerID:       "wicket",
+		PreviousDigest: digestA,
+		TargetDigest:   digestB,
+		StartedAt:      base.Add(time.Minute),
+		Status:         DeployStatusPending,
+		AppliedBy:      "fleetctl",
+	}); err != nil {
+		t.Fatalf("insert failed op: %v", err)
+	}
+	if err := repo.MarkFailed(ctx, "deploy-clear-ok-fail", base.Add(2*time.Minute), "DIGEST_MISMATCH", "digest_mismatch: expected=sha256:b observed=sha256:c"); err != nil {
+		t.Fatalf("MarkFailed: %v", err)
+	}
+	// Retry op#2 now verifies successfully.
+	if err := s.InsertDeploymentRecord(ctx, DeploymentRecord{
+		DeploymentID:   "deploy-clear-ok-success",
+		WorkerID:       "wicket",
+		PreviousDigest: digestB,
+		TargetDigest:   digestB,
+		StartedAt:      base.Add(3 * time.Minute),
+		Status:         DeployStatusPending,
+		AppliedBy:      "fleetctl",
+	}); err != nil {
+		t.Fatalf("insert success op: %v", err)
+	}
+	if err := s.MarkVerifiedSucceeded(ctx, "deploy-clear-ok-success", digestB, base.Add(4*time.Minute)); err != nil {
+		t.Fatalf("MarkVerifiedSucceeded: %v", err)
+	}
+
+	state, err := s.GetWorkerDeploymentState(ctx, "wicket")
+	if err != nil {
+		t.Fatalf("GetWorkerDeploymentState: %v", err)
+	}
+	if state.LastOperationErrorCode != "" || state.LastOperationError != "" {
+		t.Errorf("read model error after verified success = %q/%q, want cleared", state.LastOperationErrorCode, state.LastOperationError)
+	}
+	if state.LastOperationStatus != DeployStatusSucceeded {
+		t.Errorf("LastOperationStatus = %q, want SUCCEEDED", state.LastOperationStatus)
+	}
+	// The successful journal row carries no error; the FAILED op#1 row keeps
+	// its DIGEST_MISMATCH history.
+	succ, err := s.getDeploymentRecord(ctx, "deploy-clear-ok-success")
+	if err != nil {
+		t.Fatalf("get success row: %v", err)
+	}
+	if succ.ErrorCode != "" || succ.ErrorMessage != "" {
+		t.Errorf("success journal row error = %q/%q, want cleared", succ.ErrorCode, succ.ErrorMessage)
+	}
+	fail, err := s.getDeploymentRecord(ctx, "deploy-clear-ok-fail")
+	if err != nil {
+		t.Fatalf("get failed row: %v", err)
+	}
+	if fail.ErrorCode != "DIGEST_MISMATCH" {
+		t.Errorf("failed journal row ErrorCode = %q, want DIGEST_MISMATCH preserved in history", fail.ErrorCode)
 	}
 }

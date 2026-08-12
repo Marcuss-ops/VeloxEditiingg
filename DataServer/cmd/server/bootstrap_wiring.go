@@ -26,6 +26,7 @@ import (
 	"velox-server/internal/fleet"
 	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/ingest"
+	"velox-server/internal/store"
 )
 
 // productionAssetResolver adapts the canonical AssetService read model to
@@ -218,8 +219,10 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 		healthHandler := api.NewAdminWorkersHealthHandler(
 			m.Workers.Registry(),
 			api.HealthProbeDeps{
-				SSH:         sharedSSH,
-				Deployments: p.SQLite,
+				SSH: sharedSSH,
+				// The named adapter keeps the deployment_records surface
+				// distinct from SQLiteStore's fleet_operations methods.
+				Deployments: store.NewDeploymentRecordRepository(p.SQLite),
 				Registry:    &fleet.RealRegistryLevelCGater{Reg: m.Workers.Registry()},
 				Smoke:       fleet.NewSmokeRunHealthChecker(p.SQLite),
 			},

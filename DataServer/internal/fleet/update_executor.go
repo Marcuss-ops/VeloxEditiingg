@@ -320,8 +320,11 @@ func (e *UpdateExecutor) Execute(ctx context.Context, op *store.Operation) error
 	}
 	observedDigest, runErr := e.runForward(ctx, op, targetDigest, preRestartSessionID)
 	if runErr != nil {
-		// Mark forward row FAILED first; THEN run rollback.
-		if uerr := e.backend.Deployments.MarkFailed(ctx, deploymentID, e.backend.Now(), runErr.Error()); uerr != nil {
+		// Mark forward row FAILED first; THEN run rollback. The stable
+		// error code (DIGEST_MISMATCH, DRAIN_TIMEOUT, …) is written
+		// separately from the human-readable message so operators and
+		// metrics can route on the code (migration 153).
+		if uerr := e.backend.Deployments.MarkFailed(ctx, deploymentID, e.backend.Now(), classifyDeploymentError(runErr), runErr.Error()); uerr != nil {
 			log.Printf("[UPDATE] mark FAILED for %s: %v", deploymentID, uerr)
 		}
 		rollbackErr := e.runRollback(ctx, op, previousDigest, runErr)

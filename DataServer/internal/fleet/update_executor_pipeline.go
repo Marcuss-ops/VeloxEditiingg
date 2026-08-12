@@ -124,7 +124,13 @@ func (e *UpdateExecutor) runRollback(ctx context.Context, op *store.Operation, p
 
 	finishedAt := e.backend.Now()
 	rollbackOK := rbErr == nil
-	if err := e.backend.Deployments.MarkDeploymentRolledBack(ctx, deploymentID, finishedAt, rollbackOK); err != nil {
+	// A failed rollback cascade records its own stable error code
+	// (ROLLBACK_FAILED); a clean rollback clears both code and message.
+	rollbackErrCode := ""
+	if !rollbackOK {
+		rollbackErrCode = classifyDeploymentError(rbErr)
+	}
+	if err := e.backend.Deployments.MarkDeploymentRolledBack(ctx, deploymentID, finishedAt, rollbackOK, rollbackErrCode); err != nil {
 		log.Printf("[UPDATE] mark ROLLED_BACK for %s: %v (rollback err: %v)", deploymentID, err, rbErr)
 		// Even if the DB write fails, surface the rollback
 		// outcome to the caller so the audit row's

@@ -88,7 +88,14 @@ type WorkerCard struct {
 	PreviousDigest       string                `json:"previous_digest,omitempty"`
 	LastSuccessfulDigest string                `json:"last_successful_digest,omitempty"`
 	LastPhase            string                `json:"last_phase,omitempty"`
-	ImageState           *WorkerImageState     `json:"image_state,omitempty"`
+	// LastOperationErrorCode and LastOperationError are the CURRENT failure of
+	// the last fleet operation, straight from the read model (migration 153):
+	// the stable machine-routable code (DIGEST_MISMATCH, DRAIN_TIMEOUT, …) and
+	// the human-readable message, kept separate so dashboards can route on the
+	// code. A new operation clears both; the history stays in the journal.
+	LastOperationErrorCode string                `json:"last_operation_error_code,omitempty"`
+	LastOperationError     string                `json:"last_operation_error,omitempty"`
+	ImageState             *WorkerImageState     `json:"image_state,omitempty"`
 	OperationState       *WorkerOperationState `json:"operation_state,omitempty"`
 	SoftwareVersion      string                `json:"software_version"`
 	DesiredVersion       string                `json:"desired_version,omitempty"`
@@ -129,13 +136,14 @@ type WorkerImageState struct {
 // WorkerOperationState preserves the last deployment ledger row as an
 // operation-history view. It is deliberately separate from
 // WorkerImageState: status here describes the OPERATION (update/rollback
-// cascade), never the worker's current image health. Error carries the
-// failure reason (fleet_operations.error_message) when the operation
-// failed.
+// cascade), never the worker's current image health. ErrorCode comes from
+// the journal row (deployment_records.error_code, migration 153); Error
+// carries the failure reason when the operation failed.
 type WorkerOperationState struct {
 	OperationID string     `json:"operation_id"`
 	Type        string     `json:"type"` // update | rollback
 	Status      string     `json:"status"`
+	ErrorCode   string     `json:"error_code,omitempty"`
 	Error       string     `json:"error,omitempty"`
 	StartedAt   string     `json:"started_at"`
 	FinishedAt  *time.Time `json:"finished_at,omitempty"`

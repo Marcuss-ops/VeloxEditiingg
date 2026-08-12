@@ -91,7 +91,7 @@ func TestMigration151_LegacyBackfillPolicy(t *testing.T) {
 
 	var (
 		desired, lastSuccess, opID, opKind, opStatus, opError string
-		running                                             sql.NullString
+		running                                               sql.NullString
 	)
 	err := db.QueryRow(`
 SELECT desired_digest, running_digest, last_successful_digest,
@@ -222,7 +222,7 @@ func columnAllowsNull(t *testing.T, db *sql.DB, table, column string) bool {
 // ============================================================
 
 // TestMigration152_AddsLastPhaseColumn pins migration 152: the
-// worker_deployment_state table gains a NOT NULL DEFAULT '' last_phase
+// worker_deployment_state table gains a NOT NULL DEFAULT ” last_phase
 // observability column, and legacy backfilled state rows carry the empty
 // default (the migration must not invent a phase for historical data).
 func TestMigration152_AddsLastPhaseColumn(t *testing.T) {
@@ -256,3 +256,71 @@ func TestMigration152_AddsLastPhaseColumn(t *testing.T) {
 	}
 }
 
+// ============================================================
+// Migration 153: error_code / last_operation_error_code
+// ============================================================
+
+// TestMigration153_AddsErrorCodeColumns pins migration 153: the journal
+// gains deployment_records.error_code and the read model gains
+// worker_deployment_state.last_operation_error_code — both NOT NULL
+// DEFAULT ” so pre-existing rows (and direct inserts omitting them) carry
+// the empty code instead of NULL or an invented value. The migration must
+// not fabricate a code for legacy rows: an error message that predates the
+// separation stays message-only.
+func TestMigration153_AddsErrorCodeColumns(t *testing.T) {
+	db := openTestDB(t)
+	// Seed the legacy history BEFORE 151 so its backfill produces the state
+	// row that 153 then extends (same ordering as
+	// TestMigration152_AddsLastPhaseColumn above).
+	applyProductionMigrationsUpTo(t, db, 150)
+
+	seedLegacyWorker(t, db, "wicket")
+	// Legacy row predates error_code: only error_message existed (151).
+	seedLegacyDeploymentRecord(t, db, "deploy-legacy-code", "wicket", "", migrationTestDigest('a'),
+		"2026-08-01T00:00:00Z", "2026-08-01T00:01:00Z", "FAILED")
+	// 152 brings error_message (151) + last_phase (152); the journal row then
+	// carries a pre-153 message-only failure.
+	applyProductionMigrationsUpTo(t, db, 152)
+	if _, err := db.Exec(`UPDATE deployment_records SET error_message = 'digest_mismatch: expected=A observed=B' WHERE deployment_id = 'deploy-legacy-code'`); err != nil {
+		t.Fatalf("set legacy error_message: %v", err)
+	}
+
+	applyProductionMigrationsUpTo(t, db, 153)
+
+	// Journal: error_code exists, default '' — the legacy FAILED row keeps
+	// its message but gains NO invented code.
+	var journalCode, journalMsg string
+	if err := db.QueryRow(`SELECT error_code, error_message FROM deployment_records WHERE deployment_id = 'deploy-legacy-code'`).Scan(&journalCode, &journalMsg); err != nil {
+		t.Fatalf("query deployment_records.error_code: %v", err)
+	}
+	if journalCode != "" {
+		t.Errorf("journal error_code for legacy row = %q, want '' (no invented code)", journalCode)
+	}
+	if journalMsg != "digest_mismatch: expected=A observed=B" {
+		t.Errorf("journal error_message = %q, want the pre-153 message preserved", journalMsg)
+	}
+
+	// Read model: last_operation_error_code exists with '' default.
+	var stateCode string
+	if err := db.QueryRow(`SELECT last_operation_error_code FROM worker_deployment_state WHERE worker_id = 'wicket'`).Scan(&stateCode); err != nil {
+		t.Fatalf("query worker_deployment_state.last_operation_error_code: %v", err)
+	}
+	if stateCode != "" {
+		t.Errorf("last_operation_error_code after migration = %q, want ''", stateCode)
+	}
+
+	// Both columns are NOT NULL DEFAULT '' — direct inserts omitting them
+	// stay valid and land on the empty code.
+	if _, err := db.Exec(`INSERT INTO worker_deployment_state
+		(worker_id, desired_digest, running_digest, last_successful_digest,
+		 last_operation_id, last_operation_kind, last_operation_status,
+		 last_operation_error, last_phase, updated_at)
+		VALUES ('wicket-2', 'x', NULL, '', '', '', '', '', '', datetime('now'))`); err != nil {
+		t.Fatalf("read-model insert without last_operation_error_code must use the DEFAULT: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO deployment_records
+		(deployment_id, worker_id, previous_digest, target_digest, started_at, finished_at, status, error_message, applied_by, is_rollback)
+		VALUES ('deploy-direct', 'wicket', NULL, 'sha256:abc', '2026-08-01T00:00:00Z', NULL, 'PENDING', '', 'fleetctl', 0)`); err != nil {
+		t.Fatalf("journal insert without error_code must use the DEFAULT: %v", err)
+	}
+}

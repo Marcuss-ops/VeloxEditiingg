@@ -15,17 +15,23 @@ import (
 // never replaced by a newer failed operation, and last_phase records the
 // in-flight rollout phase of the last operation (written by the fleet
 // executor; terminal outcomes stay in last_operation_status).
+//
+// Error state is split (migration 153): LastOperationErrorCode is the stable
+// machine-routable code (DIGEST_MISMATCH, DRAIN_TIMEOUT, …) while
+// LastOperationError is the human-readable message. A new operation clears
+// both; the history lives in deployment_records.error_code / error_message.
 type WorkerDeploymentState struct {
-	WorkerID             string    `json:"worker_id"`
-	DesiredDigest        string    `json:"desired_digest"`
-	RunningDigest        string    `json:"running_digest"`
-	LastSuccessfulDigest string    `json:"last_successful_digest"`
-	LastOperationID      string    `json:"last_operation_id"`
-	LastOperationKind    string    `json:"last_operation_kind"`
-	LastOperationStatus  string    `json:"last_operation_status"`
-	LastOperationError   string    `json:"last_operation_error,omitempty"`
-	LastPhase            string    `json:"last_phase,omitempty"`
-	UpdatedAt            time.Time `json:"updated_at"`
+	WorkerID               string    `json:"worker_id"`
+	DesiredDigest          string    `json:"desired_digest"`
+	RunningDigest          string    `json:"running_digest"`
+	LastSuccessfulDigest   string    `json:"last_successful_digest"`
+	LastOperationID        string    `json:"last_operation_id"`
+	LastOperationKind      string    `json:"last_operation_kind"`
+	LastOperationStatus    string    `json:"last_operation_status"`
+	LastOperationErrorCode string    `json:"last_operation_error_code,omitempty"`
+	LastOperationError     string    `json:"last_operation_error,omitempty"`
+	LastPhase              string    `json:"last_phase,omitempty"`
+	UpdatedAt              time.Time `json:"updated_at"`
 }
 
 var ErrWorkerDeploymentStateNotFound = errors.New("worker deployment state not found")
@@ -56,12 +62,13 @@ CREATE TABLE IF NOT EXISTS worker_deployment_state (
     desired_digest          TEXT NOT NULL DEFAULT '',
     running_digest          TEXT,
     last_successful_digest  TEXT NOT NULL DEFAULT '',
-    last_operation_id       TEXT NOT NULL DEFAULT '',
-    last_operation_kind     TEXT NOT NULL DEFAULT '',
-    last_operation_status   TEXT NOT NULL DEFAULT '',
-    last_operation_error    TEXT NOT NULL DEFAULT '',
-    last_phase              TEXT NOT NULL DEFAULT '',
-    updated_at              TEXT NOT NULL
+    last_operation_id           TEXT NOT NULL DEFAULT '',
+    last_operation_kind         TEXT NOT NULL DEFAULT '',
+    last_operation_status       TEXT NOT NULL DEFAULT '',
+    last_operation_error_code   TEXT NOT NULL DEFAULT '',
+    last_operation_error        TEXT NOT NULL DEFAULT '',
+    last_phase                  TEXT NOT NULL DEFAULT '',
+    updated_at                  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_worker_deployment_state_status
     ON worker_deployment_state(last_operation_status, updated_at DESC);`)
@@ -80,13 +87,13 @@ func (s *SQLiteStore) GetWorkerDeploymentState(ctx context.Context, workerID str
 SELECT worker_id, desired_digest, COALESCE(running_digest, ''),
        last_successful_digest,
        last_operation_id, last_operation_kind, last_operation_status,
-       last_operation_error, last_phase, updated_at
+       last_operation_error_code, last_operation_error, last_phase, updated_at
   FROM worker_deployment_state
  WHERE worker_id = ?`, workerID).Scan(
 		&state.WorkerID, &state.DesiredDigest, &state.RunningDigest,
 		&state.LastSuccessfulDigest, &state.LastOperationID,
 		&state.LastOperationKind, &state.LastOperationStatus,
-		&state.LastOperationError, &state.LastPhase, &updatedAt)
+		&state.LastOperationErrorCode, &state.LastOperationError, &state.LastPhase, &updatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrWorkerDeploymentStateNotFound
 	}
@@ -127,9 +134,9 @@ func upsertDeploymentStateFromRecord(ctx context.Context, exec deploymentStateEx
 INSERT INTO worker_deployment_state (
     worker_id, desired_digest, running_digest, last_successful_digest,
     last_operation_id, last_operation_kind, last_operation_status,
-    last_operation_error, last_phase, updated_at
+    last_operation_error_code, last_operation_error, last_phase, updated_at
 )
-VALUES (?, ?, NULL, ?, ?, ?, ?, ?, '', ?)
+VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, '', ?)
 ON CONFLICT(worker_id) DO UPDATE SET
     desired_digest = excluded.desired_digest,
     last_successful_digest = CASE
@@ -139,6 +146,7 @@ ON CONFLICT(worker_id) DO UPDATE SET
     last_operation_id = excluded.last_operation_id,
     last_operation_kind = excluded.last_operation_kind,
     last_operation_status = excluded.last_operation_status,
+    last_operation_error_code = excluded.last_operation_error_code,
     last_operation_error = excluded.last_operation_error,
     last_phase = CASE
         WHEN excluded.last_phase <> '' THEN excluded.last_phase
@@ -146,7 +154,7 @@ ON CONFLICT(worker_id) DO UPDATE SET
     END,
     updated_at = excluded.updated_at`,
 		r.WorkerID, r.TargetDigest, lastSuccessful, r.DeploymentID,
-		deploymentStateKind(r.IsRollback), r.Status, r.ErrorMessage,
+		deploymentStateKind(r.IsRollback), r.Status, r.ErrorCode, r.ErrorMessage,
 		updatedAt.UTC().Format(time.RFC3339Nano))
 	return err
 }
@@ -165,9 +173,9 @@ func (s *SQLiteStore) RecordDeploymentPhase(ctx context.Context, workerID, phase
 INSERT INTO worker_deployment_state (
     worker_id, desired_digest, running_digest, last_successful_digest,
     last_operation_id, last_operation_kind, last_operation_status,
-    last_operation_error, last_phase, updated_at
+    last_operation_error_code, last_operation_error, last_phase, updated_at
 )
-VALUES (?, '', NULL, '', '', '', '', '', ?, ?)
+VALUES (?, '', NULL, '', '', '', '', '', '', ?, ?)
 ON CONFLICT(worker_id) DO UPDATE SET
     last_phase = excluded.last_phase,
     updated_at = excluded.updated_at`,
@@ -203,9 +211,9 @@ func upsertWorkerRunningDigest(ctx context.Context, exec deploymentStateExecer, 
 INSERT INTO worker_deployment_state (
     worker_id, desired_digest, running_digest, last_successful_digest,
     last_operation_id, last_operation_kind, last_operation_status,
-    last_operation_error, updated_at
+    last_operation_error_code, last_operation_error, updated_at
 )
-VALUES (?, '', ?, '', '', '', '', '', ?)
+VALUES (?, '', ?, '', '', '', '', '', '', ?)
 ON CONFLICT(worker_id) DO UPDATE SET
     running_digest = excluded.running_digest,
     updated_at = excluded.updated_at`,

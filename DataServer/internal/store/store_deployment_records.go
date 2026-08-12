@@ -99,6 +99,7 @@ type DeploymentRecord struct {
 	StartedAt      time.Time  `json:"started_at"`
 	FinishedAt     *time.Time `json:"finished_at,omitempty"`
 	Status         string     `json:"status"`
+	ErrorCode      string     `json:"error_code,omitempty"`
 	ErrorMessage   string     `json:"error_message,omitempty"`
 	AppliedBy      string     `json:"applied_by"`
 	IsRollback     bool       `json:"is_rollback"`
@@ -117,8 +118,9 @@ type DeploymentRecord struct {
 // schema_migrations).
 //
 // The DDL mirrors sqlite/103_deployment_records.sql as amended by
-// 151_worker_deployment_state.sql (the error_message column the
-// migration ALTERs in), modulo inline CHECK length > 0 on the
+// 151_worker_deployment_state.sql (error_message) and
+// 153_deployment_error_code.sql (error_code) — the columns those
+// migrations ALTER in — modulo inline CHECK length > 0 on the
 // digest columns which the migration file also carries — both
 // layers enforce the digest non-emptiness invariant,
 // defence-in-depth against raw-INSERT bugs that bypass the Go-side
@@ -133,6 +135,7 @@ CREATE TABLE IF NOT EXISTS deployment_records (
   started_at TEXT NOT NULL,
   finished_at TEXT,
   status TEXT NOT NULL CHECK (status IN ('PENDING', 'SUCCEEDED', 'FAILED', 'ROLLED_BACK')),
+  error_code TEXT NOT NULL DEFAULT '',
   error_message TEXT NOT NULL DEFAULT '',
   applied_by TEXT NOT NULL,
   is_rollback INTEGER NOT NULL DEFAULT 0
@@ -178,8 +181,8 @@ func (s *SQLiteStore) InsertDeploymentRecord(ctx context.Context, r DeploymentRe
 	defer tx.Rollback()
 	_, err = tx.ExecContext(ctx, `
 INSERT INTO deployment_records
-	  (deployment_id, worker_id, previous_digest, target_digest, started_at, finished_at, status, error_message, applied_by, is_rollback)
-VALUES (?, ?, ?, ?, ?, NULL, ?, '', ?, ?)`,
+	  (deployment_id, worker_id, previous_digest, target_digest, started_at, finished_at, status, error_code, error_message, applied_by, is_rollback)
+VALUES (?, ?, ?, ?, ?, NULL, ?, '', '', ?, ?)`,
 		r.DeploymentID, r.WorkerID, r.PreviousDigest, r.TargetDigest,
 		r.StartedAt.UTC().Format(time.RFC3339),
 		r.Status, r.AppliedBy, boolToIntSQLite(r.IsRollback),
@@ -229,8 +232,8 @@ func (s *SQLiteStore) InsertBaselineDeploymentRecord(ctx context.Context, r Depl
 	defer tx.Rollback()
 	_, err = tx.ExecContext(ctx, `
 INSERT INTO deployment_records
-	  (deployment_id, worker_id, previous_digest, target_digest, started_at, finished_at, status, error_message, applied_by, is_rollback)
-VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, 0)`,
+	  (deployment_id, worker_id, previous_digest, target_digest, started_at, finished_at, status, error_code, error_message, applied_by, is_rollback)
+VALUES (?, ?, ?, ?, ?, ?, ?, '', '', ?, 0)`,
 		r.DeploymentID, r.WorkerID, previous, r.TargetDigest,
 		r.StartedAt.UTC().Format(time.RFC3339), finishedAt.UTC().Format(time.RFC3339),
 		r.Status, r.AppliedBy,
@@ -256,7 +259,7 @@ func (s *SQLiteStore) UpdateDeploymentStatus(ctx context.Context, deploymentID, 
 	if !IsDeploymentStatusTerminal(status) {
 		return fmt.Errorf("UpdateDeploymentStatus: status must be terminal, got %q", status)
 	}
-	return s.updateDeploymentTerminal(ctx, deploymentID, status, finishedAt, "", false)
+	return s.updateDeploymentTerminal(ctx, deploymentID, status, finishedAt, "", "", false)
 }
 
 // updateDeploymentTerminal is the SINGLE write path for every terminal
@@ -272,11 +275,16 @@ func (s *SQLiteStore) UpdateDeploymentStatus(ctx context.Context, deploymentID, 
 //  4. project the NEW status into the worker_deployment_state read model
 //     in the same transaction.
 //
+// errCode is the stable machine-routable failure code (empty for successful
+// transitions); errMsg the human-readable message. Both are written to the
+// journal row AND projected into the read model's last_operation_error_code /
+// last_operation_error.
+//
 // The read-model upsert uses the in-memory post-transition record (status /
-// error_message / is_rollback applied to the pre-transition row), so the
-// projection always reflects exactly what the ledger just persisted — no
-// second read, no torn journal-vs-projection state.
-func (s *SQLiteStore) updateDeploymentTerminal(ctx context.Context, deploymentID, status string, finishedAt time.Time, errMsg string, rollback bool) error {
+// error / is_rollback applied to the pre-transition row), so the projection
+// always reflects exactly what the ledger just persisted — no second read, no
+// torn journal-vs-projection state.
+func (s *SQLiteStore) updateDeploymentTerminal(ctx context.Context, deploymentID, status string, finishedAt time.Time, errCode, errMsg string, rollback bool) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -293,8 +301,8 @@ func (s *SQLiteStore) updateDeploymentTerminal(ctx context.Context, deploymentID
 		return err
 	}
 
-	query := `UPDATE deployment_records SET status = ?, finished_at = ?, error_message = ?`
-	args := []any{status, finishedAt.UTC().Format(time.RFC3339), errMsg}
+	query := `UPDATE deployment_records SET status = ?, finished_at = ?, error_code = ?, error_message = ?`
+	args := []any{status, finishedAt.UTC().Format(time.RFC3339), errCode, errMsg}
 	if rollback {
 		query += `, is_rollback = 1`
 	}
@@ -317,6 +325,7 @@ func (s *SQLiteStore) updateDeploymentTerminal(ctx context.Context, deploymentID
 
 	record.Status = status
 	record.FinishedAt = &finishedAt
+	record.ErrorCode = errCode
 	record.ErrorMessage = errMsg
 	if rollback {
 		record.IsRollback = true
@@ -371,7 +380,7 @@ func (s *SQLiteStore) MarkVerifiedSucceeded(ctx context.Context, deploymentID, o
 
 	res, err := tx.ExecContext(ctx, `
 UPDATE deployment_records
-SET status = ?, finished_at = ?, error_message = ''
+SET status = ?, finished_at = ?, error_code = '', error_message = ''
 WHERE deployment_id = ? AND status = ?`,
 		DeployStatusSucceeded, finishedAt.UTC().Format(time.RFC3339), deploymentID, record.Status)
 	if err != nil {
@@ -387,6 +396,7 @@ WHERE deployment_id = ? AND status = ?`,
 
 	record.Status = DeployStatusSucceeded
 	record.FinishedAt = &finishedAt
+	record.ErrorCode = ""
 	record.ErrorMessage = ""
 	if err := upsertDeploymentStateFromRecord(ctx, tx, *record, finishedAt.UTC(), true); err != nil {
 		return err
@@ -412,12 +422,12 @@ WHERE deployment_id = ? AND status = ?`,
 // The atomic UPDATE prevents a torn state where status was
 // updated but is_rollback wasn't (or vice versa) which would
 // silently make the row invisible to dashboard rollback views.
-func (s *SQLiteStore) MarkDeploymentRolledBack(ctx context.Context, deploymentID string, finishedAt time.Time, rollbackOK bool) error {
+func (s *SQLiteStore) MarkDeploymentRolledBack(ctx context.Context, deploymentID string, finishedAt time.Time, rollbackOK bool, errCode string) error {
 	status := DeployStatusRolledBack
 	if !rollbackOK {
 		status = DeployStatusFailed
 	}
-	return s.updateDeploymentTerminal(ctx, deploymentID, status, finishedAt, "", true)
+	return s.updateDeploymentTerminal(ctx, deploymentID, status, finishedAt, errCode, "", true)
 }
 
 // GetLatestDeploymentForWorker returns the row with the highest
@@ -427,7 +437,7 @@ func (s *SQLiteStore) MarkDeploymentRolledBack(ctx context.Context, deploymentID
 func (s *SQLiteStore) GetLatestDeploymentForWorker(ctx context.Context, workerID string) (*DeploymentRecord, error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT deployment_id, worker_id, previous_digest, target_digest,
-       started_at, finished_at, status, error_message, applied_by, is_rollback
+       started_at, finished_at, status, error_code, error_message, applied_by, is_rollback
 FROM deployment_records
 WHERE worker_id = ?
 ORDER BY started_at DESC
@@ -453,7 +463,7 @@ LIMIT 1`, workerID)
 func (s *SQLiteStore) GetLatestSuccessfulDeploymentForWorker(ctx context.Context, workerID string) (*DeploymentRecord, error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT deployment_id, worker_id, previous_digest, target_digest,
-       started_at, finished_at, status, error_message, applied_by, is_rollback
+       started_at, finished_at, status, error_code, error_message, applied_by, is_rollback
 FROM deployment_records
 WHERE worker_id = ? AND status = ?
 ORDER BY started_at DESC
@@ -477,7 +487,7 @@ LIMIT 1`, workerID, DeployStatusSucceeded)
 func (s *SQLiteStore) ListDeploymentsForWorker(ctx context.Context, workerID string, limit int) ([]DeploymentRecord, error) {
 	q := `
 SELECT deployment_id, worker_id, previous_digest, target_digest,
-       started_at, finished_at, status, error_message, applied_by, is_rollback
+       started_at, finished_at, status, error_code, error_message, applied_by, is_rollback
 FROM deployment_records
 WHERE worker_id = ?
 ORDER BY started_at DESC`
@@ -514,17 +524,19 @@ func scanDeploymentRecord(rows *sql.Rows) (*DeploymentRecord, error) {
 		startedAt     string
 		finishedAt    sql.NullString
 		isRollbackInt int
+		errorCode     string
 		errorMessage  string
 		err           error
 	)
 	var previousDigest sql.NullString
 	if err := rows.Scan(
 		&r.DeploymentID, &r.WorkerID, &previousDigest, &r.TargetDigest,
-		&startedAt, &finishedAt, &r.Status, &errorMessage, &r.AppliedBy, &isRollbackInt,
+		&startedAt, &finishedAt, &r.Status, &errorCode, &errorMessage, &r.AppliedBy, &isRollbackInt,
 	); err != nil {
 		return nil, err
 	}
 	r.PreviousDigest = previousDigest.String
+	r.ErrorCode = errorCode
 	r.ErrorMessage = errorMessage
 	r.StartedAt, err = parsePersistedWorkerTimestamp(startedAt, "deployment_records.started_at")
 	if err != nil {
@@ -548,7 +560,7 @@ func (s *SQLiteStore) getDeploymentRecord(ctx context.Context, deploymentID stri
 func getDeploymentRecordFrom(ctx context.Context, queryer deploymentStateQuerier, deploymentID string) (*DeploymentRecord, error) {
 	rows, err := queryer.QueryContext(ctx, `
 SELECT deployment_id, worker_id, previous_digest, target_digest,
-       started_at, finished_at, status, error_message, applied_by, is_rollback
+       started_at, finished_at, status, error_code, error_message, applied_by, is_rollback
   FROM deployment_records WHERE deployment_id = ?`, deploymentID)
 	if err != nil {
 		return nil, err

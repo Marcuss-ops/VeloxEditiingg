@@ -381,10 +381,10 @@ func (healthHTTPDeployments) InsertDeploymentRecord(context.Context, store.Deplo
 func (healthHTTPDeployments) MarkVerifiedSucceeded(context.Context, string, string, time.Time) error {
 	return nil
 }
-func (healthHTTPDeployments) MarkFailed(context.Context, string, time.Time, string) error {
+func (healthHTTPDeployments) MarkFailed(context.Context, string, time.Time, string, string) error {
 	return nil
 }
-func (healthHTTPDeployments) MarkDeploymentRolledBack(context.Context, string, time.Time, bool) error {
+func (healthHTTPDeployments) MarkDeploymentRolledBack(context.Context, string, time.Time, bool, string) error {
 	return nil
 }
 

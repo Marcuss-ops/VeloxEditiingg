@@ -14,6 +14,7 @@ import (
 	"velox-server/internal/fleet"
 	"velox-server/internal/handlers/server/api"
 	integrationsDrive "velox-server/internal/integrations/drive"
+	"velox-server/internal/store"
 	"velox-server/internal/supervisor"
 	workersreg "velox-server/internal/workers"
 )
@@ -197,9 +198,12 @@ func buildFleet(p *persistenceDeps, workerRegistry *workersreg.Registry, sharedS
 	// no operator-side/document-only drain is required.
 	registryGater := &fleet.RealRegistryUpdateGater{Reg: workerRegistry, Store: p.SQLite}
 	updateBackend := fleet.UpdateBackend{
-		SSHCmd:      sharedSSH,
-		Docker:      &fleet.SSHWorkerDockerClient{SSH: sharedSSH},
-		Deployments: p.SQLite,
+		SSHCmd: sharedSSH,
+		Docker: &fleet.SSHWorkerDockerClient{SSH: sharedSSH},
+		// The named adapter keeps the deployment_records writer separate from
+		// the fleet_operations ledger methods on SQLiteStore: the raw store's
+		// MarkFailed belongs to fleet_operations, not deployment_records.
+		Deployments: store.NewDeploymentRecordRepository(p.SQLite),
 		Cosign:      newUpdateCosignVerifier(),
 		Image:       deployUpdateImageValidator{},
 		Registry:    registryGater,

@@ -85,10 +85,10 @@ func (s stubDeployments) InsertDeploymentRecord(_ context.Context, _ store.Deplo
 func (s stubDeployments) MarkVerifiedSucceeded(_ context.Context, _ string, _ string, _ time.Time) error {
 	return nil
 }
-func (s stubDeployments) MarkFailed(_ context.Context, _ string, _ time.Time, _ string) error {
+func (s stubDeployments) MarkFailed(_ context.Context, _ string, _ time.Time, _, _ string) error {
 	return nil
 }
-func (s stubDeployments) MarkDeploymentRolledBack(_ context.Context, _ string, _ time.Time, _ bool) error {
+func (s stubDeployments) MarkDeploymentRolledBack(_ context.Context, _ string, _ time.Time, _ bool, _ string) error {
 	return nil
 }
 

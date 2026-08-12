@@ -37,8 +37,8 @@ func (r *DeploymentRecordRepository) MarkVerifiedSucceeded(ctx context.Context, 
 	return r.store.MarkVerifiedSucceeded(ctx, deploymentID, observedDigest, finishedAt)
 }
 
-func (r *DeploymentRecordRepository) MarkFailed(ctx context.Context, deploymentID string, finishedAt time.Time, errMsg string) error {
-	return r.store.updateDeploymentTerminal(ctx, deploymentID, DeployStatusFailed, finishedAt, errMsg, false)
+func (r *DeploymentRecordRepository) MarkFailed(ctx context.Context, deploymentID string, finishedAt time.Time, errCode, errMsg string) error {
+	return r.store.updateDeploymentTerminal(ctx, deploymentID, DeployStatusFailed, finishedAt, errCode, errMsg, false)
 }
 
 // RecordDeploymentPhase persists the in-flight rollout phase into the
@@ -48,12 +48,12 @@ func (r *DeploymentRecordRepository) RecordDeploymentPhase(ctx context.Context, 
 	return r.store.RecordDeploymentPhase(ctx, workerID, phase)
 }
 
-func (r *DeploymentRecordRepository) MarkDeploymentRolledBack(ctx context.Context, deploymentID string, finishedAt time.Time, rollbackOK bool) error {
+func (r *DeploymentRecordRepository) MarkDeploymentRolledBack(ctx context.Context, deploymentID string, finishedAt time.Time, rollbackOK bool, errCode string) error {
 	status := DeployStatusRolledBack
 	if !rollbackOK {
 		status = DeployStatusFailed
 	}
-	return r.store.updateDeploymentTerminal(ctx, deploymentID, status, finishedAt, "", true)
+	return r.store.updateDeploymentTerminal(ctx, deploymentID, status, finishedAt, errCode, "", true)
 }
 
 func (r *DeploymentRecordRepository) InsertBaselineDeploymentRecord(ctx context.Context, record DeploymentRecord) error {

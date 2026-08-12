@@ -314,16 +314,17 @@ func (s stateReaderStub) GetWorkerDeploymentState(context.Context, string) (*sto
 // read model exists to keep visible.
 func divergentReadModelFixture() *store.WorkerDeploymentState {
 	return &store.WorkerDeploymentState{
-		WorkerID:             "velox-worker-13197",
-		DesiredDigest:        "sha256:C",
-		RunningDigest:        "sha256:B",
-		LastSuccessfulDigest: "sha256:B",
-		LastOperationID:      "deploy-read-model",
-		LastOperationKind:    "update",
-		LastOperationStatus:  store.DeployStatusFailed,
-		LastOperationError:   "digest_mismatch: expected=sha256:C observed=sha256:B",
-		LastPhase:            "VERIFYING_DIGEST",
-		UpdatedAt:            time.Date(2026, time.August, 12, 9, 0, 0, 0, time.UTC),
+		WorkerID:                "velox-worker-13197",
+		DesiredDigest:           "sha256:C",
+		RunningDigest:           "sha256:B",
+		LastSuccessfulDigest:    "sha256:B",
+		LastOperationID:         "deploy-read-model",
+		LastOperationKind:       "update",
+		LastOperationStatus:     store.DeployStatusFailed,
+		LastOperationErrorCode:  "DIGEST_MISMATCH",
+		LastOperationError:      "digest_mismatch: expected=sha256:C observed=sha256:B",
+		LastPhase:               "VERIFYING_DIGEST",
+		UpdatedAt:               time.Date(2026, time.August, 12, 9, 0, 0, 0, time.UTC),
 	}
 }
 
@@ -378,6 +379,15 @@ func TestAdminWorkersCard_ReadModelWinsOverReconstructedHistory(t *testing.T) {
 	// operation is observable as "stopped at VERIFYING_DIGEST".
 	if card.LastPhase != "VERIFYING_DIGEST" {
 		t.Fatalf("LastPhase = %q, want VERIFYING_DIGEST (observable phase from the read model)", card.LastPhase)
+	}
+	// The CURRENT error is split on the card exactly as in the read model:
+	// stable code (DIGEST_MISMATCH) separate from the human message — never
+	// reconstructed from journal history.
+	if card.LastOperationErrorCode != "DIGEST_MISMATCH" {
+		t.Fatalf("LastOperationErrorCode = %q, want DIGEST_MISMATCH (read model current error code)", card.LastOperationErrorCode)
+	}
+	if card.LastOperationError != "digest_mismatch: expected=sha256:C observed=sha256:B" {
+		t.Fatalf("LastOperationError = %q, want the read model message", card.LastOperationError)
 	}
 	// Drift MUST be visible: desired C vs running B.
 	if card.ImageState == nil || card.ImageState.Match || card.ImageState.TargetDigest != "sha256:C" || card.ImageState.RunningDigest != "sha256:B" {
@@ -454,6 +464,49 @@ func TestAdminWorkersCard_MissingReadModelLeavesDigestFieldsEmpty(t *testing.T) 
 	}
 }
 
+// TestAdminWorkersCard_OperationStateCarriesJournalErrorCode pins that the
+// OPERATION-HISTORY view exposes the journal row's stable error_code
+// (deployment_records.error_code, migration 153) separately from the
+// enriched message — the history twin of the read model's current error.
+func TestAdminWorkersCard_OperationStateCarriesJournalErrorCode(t *testing.T) {
+	info := makeCardInfo("velox-worker-13197", func(w *workersreg.Worker) {
+		w.ImageDigest = "sha256:old"
+	})
+	started := time.Date(2026, time.August, 11, 12, 0, 0, 0, time.UTC)
+	h := NewAdminWorkersHandler(nil)
+	h.SetWorkerDeploymentStateReader(stateReaderStub{state: &store.WorkerDeploymentState{
+		WorkerID:      "velox-worker-13197",
+		DesiredDigest: "sha256:new",
+		RunningDigest: "sha256:old",
+	}})
+	h.SetDeploymentReader(digestDeploymentReader{record: &store.DeploymentRecord{
+		DeploymentID: "deploy-failed-code",
+		WorkerID:     "velox-worker-13197",
+		TargetDigest: "sha256:new",
+		Status:       store.DeployStatusFailed,
+		ErrorCode:    "DIGEST_MISMATCH",
+		ErrorMessage: "digest_mismatch: expected=sha256:new observed=sha256:old",
+		StartedAt:    started,
+	}})
+
+	card := h.card(context.Background(), &info)
+	if card.OperationState == nil {
+		t.Fatal("OperationState = nil, want failed history")
+	}
+	if card.OperationState.ErrorCode != "DIGEST_MISMATCH" {
+		t.Fatalf("OperationState.ErrorCode = %q, want DIGEST_MISMATCH from the journal", card.OperationState.ErrorCode)
+	}
+	// Code and message come from the SAME journal row (migration 153): the
+	// journal message is preferred over any ledger enrichment.
+	if card.OperationState.Error != "digest_mismatch: expected=sha256:new observed=sha256:old" {
+		t.Fatalf("OperationState.Error = %q, want the journal row message (same row as ErrorCode)", card.OperationState.Error)
+	}
+	// The IMAGE view stays clean: running=old target=new → drift visible.
+	if card.ImageState == nil || card.ImageState.Match {
+		t.Fatalf("ImageState = %#v, want digest_match=false (drift visible)", card.ImageState)
+	}
+}
+
 // TestGetAdminWorker_ReadModelDrivesDigestFields is the HTTP-level
 // anti-reconstruction check: the wired endpoint must return the read model
 // values, not a journal-reconstructed guess.
@@ -484,5 +537,13 @@ func TestGetAdminWorker_ReadModelDrivesDigestFields(t *testing.T) {
 	}
 	if card.ImageState == nil || card.ImageState.Match {
 		t.Fatalf("ImageState = %#v, want digest_match=false (running B != desired C)", card.ImageState)
+	}
+	// The current error code travels on the wire as its own field, separate
+	// from the message (migration 153).
+	if card.LastOperationErrorCode != "DIGEST_MISMATCH" {
+		t.Fatalf("LastOperationErrorCode = %q, want DIGEST_MISMATCH on the wire", card.LastOperationErrorCode)
+	}
+	if card.LastOperationError == "" {
+		t.Fatal("LastOperationError = empty, want the read model message on the wire")
 	}
 }

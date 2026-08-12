@@ -51,6 +51,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -85,31 +86,33 @@ func TestMain_Registered(t *testing.T) {
 func stubBackends(t *testing.T) (UpdateBackend, *stubBackendsState) {
 	t.Helper()
 	st := &stubBackendsState{
-		registeredWorker:  true,
-		activeTasksZero:   true,
-		drain:             false,
-		drainCalls:        []bool{},
-		cosignErr:         nil,
-		pullErr:           nil,
-		composeErr:        nil,
-		containerRunning:  true,
-		containerErr:      nil,
-		healthErr:         nil,
-		sessionActive:     true,
-		lastHB:            time.Now().UTC().Format(time.RFC3339),
-		smokeArtifactID:   "smoke-artifact-id-1",
-		smokeErr:          nil,
-		driveErr:          nil,
-		prevDigest:        "sha256:previousdigest",
-		runtimeDigest:     "",
-		sessionID:         "grpc-session-1",
-		reconnectSessionID: "grpc-session-2",
-		connectionState:   workers.ConnectionConnected,
-		healthState:       workers.HealthHealthy,
-		insertedRows:      []store.DeploymentRecord{},
-		baselineRows:      []store.DeploymentRecord{},
-		markedStatuses:    map[string]string{},
-		rolledBack:        map[string]bool{},
+		registeredWorker:     true,
+		activeTasksZero:      true,
+		drain:                false,
+		drainCalls:           []bool{},
+		cosignErr:            nil,
+		pullErr:              nil,
+		composeErr:           nil,
+		containerRunning:     true,
+		containerErr:         nil,
+		healthErr:            nil,
+		sessionActive:        true,
+		lastHB:               time.Now().UTC().Format(time.RFC3339),
+		smokeArtifactID:      "smoke-artifact-id-1",
+		smokeErr:             nil,
+		driveErr:             nil,
+		prevDigest:           "sha256:previousdigest",
+		runtimeDigest:        "",
+		sessionID:            "grpc-session-1",
+		reconnectSessionID:   "grpc-session-2",
+		connectionState:      workers.ConnectionConnected,
+		healthState:          workers.HealthHealthy,
+		insertedRows:         []store.DeploymentRecord{},
+		baselineRows:         []store.DeploymentRecord{},
+		markedStatuses:       map[string]string{},
+		markedErrorCodes:     map[string]string{},
+		rolledBack:           map[string]bool{},
+		rolledBackErrorCodes: map[string]string{},
 	}
 	return UpdateBackend{
 		SSHCmd:      st,
@@ -137,9 +140,9 @@ type stubBackendsState struct {
 	// (SetDrainMode returns nil) without the registry read model ever
 	// reflecting drain=true — the bug class the DRAINING gate exists
 	// to close.
-	drainNotApplied bool
-	drainCalls      []bool
-	cosignErr       error
+	drainNotApplied  bool
+	drainCalls       []bool
+	cosignErr        error
 	pullErr          error
 	composeErr       error
 	containerRunning bool
@@ -168,10 +171,12 @@ type stubBackendsState struct {
 	// observedVerifiedDigest is the digest handed to MarkVerifiedSucceeded.
 	observedVerifiedDigest string
 
-	insertedRows   []store.DeploymentRecord
-	baselineRows   []store.DeploymentRecord
-	markedStatuses map[string]string // deployment_id -> status
-	rolledBack     map[string]bool   // deployment_id -> rollbackOK
+	insertedRows         []store.DeploymentRecord
+	baselineRows         []store.DeploymentRecord
+	markedStatuses       map[string]string // deployment_id -> status
+	markedErrorCodes     map[string]string // deployment_id -> DeploymentErrorCode
+	rolledBack           map[string]bool   // deployment_id -> rollbackOK
+	rolledBackErrorCodes map[string]string // deployment_id -> DeploymentErrorCode (rollback failed)
 }
 
 // ── BackendSSHClient ──────────────────────────────────────────────────
@@ -312,13 +317,17 @@ func (s *stubBackendsState) RecordDeploymentPhase(_ context.Context, _ string, p
 	return nil
 }
 
-func (s *stubBackendsState) MarkFailed(_ context.Context, id string, _ time.Time, errMsg string) error {
+func (s *stubBackendsState) MarkFailed(_ context.Context, id string, _ time.Time, errCode, errMsg string) error {
 	s.markedStatuses[id] = store.DeployStatusFailed
+	s.markedErrorCodes[id] = errCode
 	return nil
 }
 
-func (s *stubBackendsState) MarkDeploymentRolledBack(_ context.Context, id string, _ time.Time, rollbackOK bool) error {
+func (s *stubBackendsState) MarkDeploymentRolledBack(_ context.Context, id string, _ time.Time, rollbackOK bool, errCode string) error {
 	s.rolledBack[id] = rollbackOK
+	if !rollbackOK {
+		s.rolledBackErrorCodes[id] = errCode
+	}
 	return nil
 }
 
@@ -669,6 +678,11 @@ func TestUpdate_DigestMismatchFailsClosed(t *testing.T) {
 	if st.observedVerifiedDigest != "" {
 		t.Fatalf("MarkVerifiedSucceeded was reached on a mismatched digest: observed=%q", st.observedVerifiedDigest)
 	}
+	// The journal FAILED write carries the stable code separately from the
+	// human-readable message (migration 153).
+	if code := st.markedErrorCodes[forward.DeploymentID]; code != DeploymentErrorCodeDigestMismatch {
+		t.Fatalf("forward row error_code = %q, want DIGEST_MISMATCH", code)
+	}
 }
 
 // TestUpdate_StaleSessionCannotAdvance pins the WAITING_READY new-session
@@ -917,6 +931,21 @@ func TestUpdate_RollbackFailsAfterForwardFail(t *testing.T) {
 	if !st.drain {
 		t.Error("worker was undrained after failed rollback")
 	}
+	// The failed rollback cascade records its own stable error code on the
+	// rollback row (migration 153): forward FAILED + rollback FAILED are
+	// distinguishable in the audit.
+	var rollbackID string
+	for _, r := range st.insertedRows {
+		if r.IsRollback {
+			rollbackID = r.DeploymentID
+		}
+	}
+	if rollbackID == "" {
+		t.Fatal("no rollback row inserted")
+	}
+	if code := st.rolledBackErrorCodes[rollbackID]; code != DeploymentErrorCodeRollbackFailed {
+		t.Errorf("rollback row error_code = %q, want ROLLBACK_FAILED", code)
+	}
 }
 
 func TestUpdate_PayloadSuppliesPreviousDigest(t *testing.T) {
@@ -981,6 +1010,42 @@ func TestUpdate_parsePayload_EmptyJSONObject(t *testing.T) {
 	op := &store.Operation{Payload: []byte("{}")}
 	if _, _, err := e.parsePayload(op); err == nil || !strings.Contains(err.Error(), "payload empty") {
 		t.Errorf("{} payload: want payload-empty error, got %v", err)
+	}
+}
+
+// TestClassifyDeploymentError pins the error_code vocabulary (migration 153)
+// end-to-end: every forward/rollback failure mode maps to a stable, routable
+// code — the six core codes plus the smoke/drive/rollback extensions — so the
+// journal row and the read model carry a machine-usable failure class
+// separate from the free-form message.
+func TestClassifyDeploymentError(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"nil is no error", nil, ""},
+		{"digest mismatch sentinel", fmt.Errorf("%w: expected=X observed=Y", ErrDigestMismatch), DeploymentErrorCodeDigestMismatch},
+		{"digest mismatch re-wrapped", fmt.Errorf("verify_digest: %w", ErrDigestMismatch), DeploymentErrorCodeDigestMismatch},
+		{"drain wait prefix", errors.New("update: drain wait: worker busy"), DeploymentErrorCodeDrainTimeout},
+		{"waiting_ready prefix", errors.New("waiting_ready: worker did not reconnect on a NEW authenticated session within budget"), DeploymentErrorCodeReadyTimeout},
+		{"activate image prefix", errors.New("activate image: docker pull failed: network unreachable"), DeploymentErrorCodeDeployCommandFailed},
+		{"cosign prefix", errors.New("cosign: invalid signature"), DeploymentErrorCodeDeployCommandFailed},
+		{"container_running prefix", fmt.Errorf("container_running: %w", ErrContainerUnhealthy), DeploymentErrorCodeRestartFailed},
+		{"health_ready prefix", errors.New("health_ready: curl exit 7"), DeploymentErrorCodeRestartFailed},
+		{"ssh transport signature", errors.New("health_ready: ssh: connect to host port 22: connection refused"), DeploymentErrorCodeSSHFailed},
+		{"smoke sentinel", fmt.Errorf("%w: ffmpeg rc=1", ErrSmokeFailed), DeploymentErrorCodeSmokeFailed},
+		{"drive missing sentinel", ErrDriveDeliveryMissing, DeploymentErrorCodeDriveFailed},
+		{"drive size sentinel", ErrDriveDeliverySize, DeploymentErrorCodeDriveFailed},
+		{"rollback cascade prefix", errors.New("rollback activate previous_digest: network unreachable"), DeploymentErrorCodeRollbackFailed},
+		{"unknown defaults to deploy command", errors.New("mystery failure"), DeploymentErrorCodeDeployCommandFailed},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := classifyDeploymentError(tc.err); got != tc.want {
+				t.Errorf("classifyDeploymentError(%v) = %q, want %q", tc.err, got, tc.want)
+			}
+		})
 	}
 }
 
