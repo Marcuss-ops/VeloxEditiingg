@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -134,5 +135,84 @@ func TestInsertWorkerMetricsSnapshot_EmptyWorkerIDFails(t *testing.T) {
 	})
 	if err == nil {
 		t.Errorf("empty WorkerID must surface a defensive error")
+	}
+}
+
+// TestWorkerCurrentImageDigest_ReadsLastSuccessfulFromReadModel pins the
+// migration-152 contract for the fleet metrics aggregation: current_image_digest
+// comes from worker_deployment_state.last_successful_digest (the VERIFIED
+// digest), NEVER from a SUCCEEDED deployment_records journal scan.
+func TestWorkerCurrentImageDigest_ReadsLastSuccessfulFromReadModel(t *testing.T) {
+	s := newDeploymentTestStore(t)
+	ctx := context.Background()
+	digestX := "sha256:" + strings.Repeat("x", 64)
+	digestY := "sha256:" + strings.Repeat("y", 64)
+
+	// A SUCCEEDED journal baseline to X (also advances the read model).
+	base := time.Now().UTC().Truncate(time.Second)
+	if err := s.InsertBaselineDeploymentRecord(ctx, DeploymentRecord{
+		DeploymentID: "metrics-base",
+		WorkerID:     "wicket",
+		TargetDigest: digestX,
+		StartedAt:    base,
+		FinishedAt:   &base,
+		Status:       DeployStatusSucceeded,
+		AppliedBy:    "bootstrap",
+	}); err != nil {
+		t.Fatalf("InsertBaselineDeploymentRecord: %v", err)
+	}
+
+	// (a) Read model carries the verified digest → aggregation returns it.
+	got, err := workerCurrentImageDigest(ctx, s.db, "wicket")
+	if err != nil {
+		t.Fatalf("workerCurrentImageDigest: %v", err)
+	}
+	if !got.Valid || got.String != digestX {
+		t.Fatalf("digest = %v, want valid %q (last_successful_digest from read model)", got, digestX)
+	}
+
+	// (b) A NEWER FAILED journal row to Y must NOT move current_image_digest:
+	// the journal is history, the read model's last_successful stays X.
+	if err := s.InsertDeploymentRecord(ctx, DeploymentRecord{
+		DeploymentID:   "metrics-failed",
+		WorkerID:       "wicket",
+		PreviousDigest: digestX,
+		TargetDigest:   digestY,
+		StartedAt:      base.Add(time.Minute),
+		Status:         DeployStatusPending,
+		AppliedBy:      "fleetctl",
+	}); err != nil {
+		t.Fatalf("InsertDeploymentRecord: %v", err)
+	}
+	if err := s.UpdateDeploymentStatus(ctx, "metrics-failed", DeployStatusFailed, base.Add(2*time.Minute)); err != nil {
+		t.Fatalf("UpdateDeploymentStatus(FAILED): %v", err)
+	}
+	got, err = workerCurrentImageDigest(ctx, s.db, "wicket")
+	if err != nil {
+		t.Fatalf("workerCurrentImageDigest after FAILED: %v", err)
+	}
+	if !got.Valid || got.String != digestX {
+		t.Fatalf("digest after FAILED rollout = %v, want %q (read model last_successful, not journal history)", got, digestX)
+	}
+
+	// (c) Read model cleared → invalid (UNKNOWN is honest, no journal backfill).
+	if _, err := s.db.ExecContext(ctx, `UPDATE worker_deployment_state SET last_successful_digest='' WHERE worker_id='wicket'`); err != nil {
+		t.Fatalf("clear read model: %v", err)
+	}
+	got, err = workerCurrentImageDigest(ctx, s.db, "wicket")
+	if err != nil {
+		t.Fatalf("workerCurrentImageDigest after clear: %v", err)
+	}
+	if got.Valid {
+		t.Fatalf("digest after read-model clear = %q valid, want invalid (journal SUCCEEDED=X must not be backfilled)", got.String)
+	}
+
+	// (d) No state row at all → invalid, never an error.
+	got, err = workerCurrentImageDigest(ctx, s.db, "no-such-worker")
+	if err != nil {
+		t.Fatalf("workerCurrentImageDigest(missing): %v", err)
+	}
+	if got.Valid {
+		t.Fatalf("digest for missing worker = %q valid, want invalid", got.String)
 	}
 }

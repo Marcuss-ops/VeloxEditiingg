@@ -159,13 +159,27 @@ func workerRestartsAndRollback(ctx context.Context, db *sql.DB, workerID string)
 	return restarts, rollbacks, err
 }
 
+// workerCurrentImageDigest reads the worker's last VERIFIED image digest
+// from the worker_deployment_state read model — never reconstructed from
+// deployment_records journal history. last_successful_digest is written
+// ONLY by MarkVerifiedSucceeded (the digest-verified terminal path), so it
+// is the authoritative "current image" answer; scanning the SUCCEEDED
+// journal row would resurrect a digest the read model never verified and
+// would be wrong after a newer FAILED rollout.
 func workerCurrentImageDigest(ctx context.Context, db *sql.DB, workerID string) (sql.NullString, error) {
-	var digest sql.NullString
-	err := db.QueryRowContext(ctx, `SELECT target_digest FROM deployment_records WHERE worker_id = ? AND status='SUCCEEDED' ORDER BY finished_at DESC LIMIT 1`, workerID).Scan(&digest)
+	var digest string
+	err := db.QueryRowContext(ctx, `SELECT last_successful_digest FROM worker_deployment_state WHERE worker_id = ?`, workerID).Scan(&digest)
 	if err == sql.ErrNoRows {
 		return sql.NullString{}, nil
 	}
-	return digest, err
+	if err != nil {
+		return sql.NullString{}, err
+	}
+	if digest == "" {
+		// No digest verified yet (NULL-until-first-heartbeat policy).
+		return sql.NullString{}, nil
+	}
+	return sql.NullString{String: digest, Valid: true}, nil
 }
 
 func workerLastSmokeStatus(ctx context.Context, db *sql.DB, workerID string) (sql.NullString, error) {

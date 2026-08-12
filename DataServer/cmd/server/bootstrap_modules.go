@@ -164,12 +164,18 @@ func (a *workerRegistryAdapter) ListWorkers() ([]map[string]any, error) {
 	for i, info := range infos {
 		targetDigest := ""
 		if a.store != nil {
-			deployment, err := a.store.GetLatestDeploymentForWorker(context.Background(), info.WorkerID.String())
-			if err != nil && !errors.Is(err, store.ErrDeploymentNotFound) {
-				return nil, fmt.Errorf("load deployment for worker %s: %w", info.WorkerID, err)
+			// The read model's DesiredDigest is the control-plane intent
+			// ("what the fleet wants") — the ONLY source for target_digest.
+			// deployment_records is audit history: a newer FAILED rollout
+			// keeps the FAILED target as the latest journal row while the
+			// read model still shows the true desired digest as drift, so
+			// reconstructing from history would LIE about current state.
+			state, err := a.store.GetWorkerDeploymentState(context.Background(), info.WorkerID.String())
+			if err != nil && !errors.Is(err, store.ErrWorkerDeploymentStateNotFound) {
+				return nil, fmt.Errorf("load deployment state for worker %s: %w", info.WorkerID, err)
 			}
-			if deployment != nil {
-				targetDigest = deployment.TargetDigest
+			if state != nil {
+				targetDigest = state.DesiredDigest
 			}
 		}
 		out[i] = map[string]any{
@@ -206,12 +212,14 @@ func (a *workerRegistryAdapter) GetWorker(workerID string) (map[string]any, erro
 	}
 	targetDigest := ""
 	if a.store != nil {
-		deployment, err := a.store.GetLatestDeploymentForWorker(context.Background(), info.WorkerID.String())
-		if err != nil && !errors.Is(err, store.ErrDeploymentNotFound) {
-			return nil, fmt.Errorf("load deployment for worker %s: %w", info.WorkerID, err)
+		// Same read-model contract as ListWorkers: desired_digest (intent),
+		// never a reconstruction from the deployment_records journal.
+		state, err := a.store.GetWorkerDeploymentState(context.Background(), info.WorkerID.String())
+		if err != nil && !errors.Is(err, store.ErrWorkerDeploymentStateNotFound) {
+			return nil, fmt.Errorf("load deployment state for worker %s: %w", info.WorkerID, err)
 		}
-		if deployment != nil {
-			targetDigest = deployment.TargetDigest
+		if state != nil {
+			targetDigest = state.DesiredDigest
 		}
 	}
 	return map[string]any{
