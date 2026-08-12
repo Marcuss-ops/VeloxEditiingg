@@ -28,8 +28,20 @@ func normalizeSceneVideoPayloadContext(ctx context.Context, payloadMap map[strin
 	// Build the canonical typed envelope, then project to the downstream
 	// map. No `parameters` sub-map, no legacy alias keys. Single source
 	// of truth is the contract.JobPayloadV2 struct.
+	compiledV2Present := compiledRenderPlanV2Present(payloadMap)
+	if compiledV2Present {
+		// PipelineGen owns V2 compilation. At this boundary the master only
+		// admits the exact producer bytes: verify the supplied SHA first,
+		// then strict-decode and validate the plan. No manifest compiler or
+		// timeline reconstruction is allowed on this path.
+		if err := contract.ValidateCompiledRenderPlanV2Payload(payloadMap); err != nil {
+			return nil, deliveryplan.NewValidationErrorWrapped("compiled_render_plan_v2", "pass-through validation failed", err)
+		}
+	}
+
 	rawManifest, manifestPresent := payloadMap["render_manifest"]
 	strictManifest := manifestPresent
+	var strictManifestMap map[string]interface{}
 	if strictManifest {
 		if rawManifest == nil {
 			return nil, deliveryplan.NewValidationError("render_manifest", "must be an object")
@@ -38,6 +50,7 @@ func normalizeSceneVideoPayloadContext(ctx context.Context, payloadMap map[strin
 		if !ok {
 			return nil, deliveryplan.NewValidationError("render_manifest", "must be an object")
 		}
+		strictManifestMap = manifest
 		if len(manifest) == 0 {
 			return nil, deliveryplan.NewValidationError("render_manifest", "must not be empty")
 		}
@@ -46,7 +59,6 @@ func normalizeSceneVideoPayloadContext(ctx context.Context, payloadMap map[strin
 	if err != nil {
 		return nil, err
 	}
-
 	title := strings.TrimSpace(base.VideoName)
 	if title == "" {
 		return nil, deliveryplan.NewValidationError("video_name", "is required")
@@ -75,7 +87,7 @@ func normalizeSceneVideoPayloadContext(ctx context.Context, payloadMap map[strin
 	}
 	base.ScriptText = scriptText
 
-	if !strictManifest {
+	if !strictManifest && !compiledV2Present {
 		scenesValue, scenesJSON, err := normalizeScenesContext(ctx, payloadMap)
 		if err != nil {
 			return nil, err
@@ -141,20 +153,33 @@ func normalizeSceneVideoPayloadContext(ctx context.Context, payloadMap map[strin
 	// projection is intentionally skipped so raw scenes/layers cannot shadow
 	// the compiled immutable plan. Legacy payloads retain the old pass-through
 	// behavior.
-	if !strictManifest {
+	if !strictManifest && !compiledV2Present {
 		copyTimelinePayloadFields(out, payloadMap)
 	}
 
 	// Strict V2 manifests are compiled master-side before the task is
 	// created. Legacy payloads remain on their existing path because they
 	// do not necessarily carry verified asset size/hash metadata.
-	if strictManifest {
+	if strictManifest && !compiledV2Present {
 		plan, compileErr := rendercompiler.DefaultRegistry().Compile(ctx, base)
 		if compileErr != nil {
 			return nil, deliveryplan.NewValidationErrorWrapped("render_manifest", "compile failed", compileErr)
 		}
 		out["render_plan_json"] = string(plan.JSON())
 		out["render_plan_sha256"] = plan.SHA256()
+
+		// A manifest carrying the verified final_audio asset opts into the
+		// strict V2 receiver. Legacy strict manifests without final_audio
+		// remain on the existing scene-composite/V1 path until their audio
+		// compiler output is registered.
+		if renderManifestHasFinalAudio(strictManifestMap) {
+			compiledJSON, compiledSHA, v2Err := contract.CompileRenderPlanV2JSON(strictManifestMap)
+			if v2Err != nil {
+				return nil, deliveryplan.NewValidationErrorWrapped("render_manifest", "CompiledRenderPlanV2 compile failed", v2Err)
+			}
+			out[contract.PayloadKeyCompiledRenderPlanJSON] = string(compiledJSON)
+			out[contract.PayloadKeyCompiledRenderPlanSHA] = compiledSHA
+		}
 	}
 	return out, nil
 }
@@ -212,18 +237,56 @@ func copyTimelinePayloadFields(out, src map[string]interface{}) {
 		out[routing.KeyForwardingKey] = meta.ForwardingKey.String()
 	}
 }
+func compiledRenderPlanV2Present(payloadMap map[string]interface{}) bool {
+	if payloadMap == nil {
+		return false
+	}
+	_, hasJSON := payloadMap[contract.PayloadKeyCompiledRenderPlanJSON]
+	_, hasSHA := payloadMap[contract.PayloadKeyCompiledRenderPlanSHA]
+	return hasJSON || hasSHA
+}
+
 func resolveInternalExecutorID(payloadMap map[string]interface{}) string {
 	if payloadMap == nil {
 		return ""
 	}
 	meta := routing.FromPayload(payloadMap)
 	if meta.Executor.ID == "" {
+		if _, hasJSON := payloadMap[contract.PayloadKeyCompiledRenderPlanJSON]; hasJSON {
+			if _, hasSHA := payloadMap[contract.PayloadKeyCompiledRenderPlanSHA]; hasSHA {
+				return "render_batch@1"
+			}
+		}
 		return ""
 	}
 	if meta.Executor.Version > 0 && !strings.Contains(meta.Executor.ID, "@") {
 		return fmt.Sprintf("%s@%d", meta.Executor.ID, meta.Executor.Version)
 	}
 	return meta.Executor.ID
+}
+
+func renderManifestHasFinalAudio(raw map[string]interface{}) bool {
+	assets, ok := raw["assets"].([]interface{})
+	if !ok {
+		if typed, typedOK := raw["assets"].([]map[string]interface{}); typedOK {
+			for _, asset := range typed {
+				if kind, _ := asset["kind"].(string); kind == "final_audio" {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	for _, value := range assets {
+		asset, ok := value.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if kind, _ := asset["kind"].(string); kind == "final_audio" {
+			return true
+		}
+	}
+	return false
 }
 func resolveRequiredCapabilities(executorID string) []string {
 	if strings.HasPrefix(executorID, "scene.composite") {

@@ -8,7 +8,7 @@
 //
 // All values are CUMULATIVE — no delta math on the worker. Master F2
 // LastSeenResources does the per-beat math.
-package telemetry
+package collectors
 
 import (
 	"errors"

@@ -56,6 +56,7 @@ var CanonicalTopLevelKeys = []string{
 	"video_name", "script_text", "spec", "output",
 	"render_manifest", "assets", "manifest_ref", "manifest_sha256",
 	"render_plan_json", "render_plan_sha256",
+	"compiled_render_plan_json", "compiled_render_plan_sha256",
 	"scenes_json", "scenes",
 	"voiceover_paths",
 	"layers",

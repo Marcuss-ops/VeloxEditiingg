@@ -1,4 +1,4 @@
-package telemetry
+package collectors
 
 import (
 	"math"

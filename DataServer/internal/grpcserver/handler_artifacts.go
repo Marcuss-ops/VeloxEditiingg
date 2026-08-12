@@ -50,6 +50,18 @@ func (h *Handler) handleArtifactUploaded(workerID string, a *pb.ArtifactUploaded
 		return
 	}
 
+	attemptID := a.GetAttemptId()
+
+	// Pre-v1 workers do not carry attempt_id in the wire message.
+	// Resolve it from the canonical tasks row (stamped at claim time)
+	// so FinalizeVerified can stamp the authoritative artifact_sha256
+	// on the winning attempt row (migration 148).
+	if attemptID == "" && h.taskRepo != nil {
+		if task, taskErr := h.taskRepo.GetByJobID(context.Background(), jobID); taskErr == nil && task != nil {
+			attemptID = task.AttemptID
+		}
+	}
+
 	cmd := artifacts.FinalizeArtifactCommand{
 		UploadID:         uploadID,
 		JobID:            jobID,
@@ -57,6 +69,7 @@ func (h *Handler) handleArtifactUploaded(workerID string, a *pb.ArtifactUploaded
 		LeaseID:          a.GetLeaseId(),
 		AttemptNumber:    int(a.GetAttempt()),
 		ExpectedRevision: int(a.GetExpectedRevision()),
+		AttemptID:        attemptID,
 	}
 
 	log.Printf("[GRPC] Worker %s reporting artifact upload for job %s upload=%s artifactID=%s kind=%s",

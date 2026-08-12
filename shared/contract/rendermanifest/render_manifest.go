@@ -261,7 +261,7 @@ func (m Manifest) Validate() error {
 	return nil
 }
 
-var validAssetKinds = map[string]bool{"video": true, "audio": true, "subtitle": true, "image": true}
+var validAssetKinds = map[string]bool{"video": true, "audio": true, "final_audio": true, "subtitle": true, "image": true}
 var validTrackKinds = map[string]bool{"video": true, "voiceover": true, "music": true, "sfx": true, "captions": true}
 var validPixelFormats = map[string]bool{"yuv420p": true, "yuv422p": true, "yuv444p": true}
 
@@ -281,7 +281,7 @@ func (a Asset) validate(path string) (errs ValidationErrors) {
 	if a.SizeBytes <= 0 {
 		errs.add(path+".size_bytes", "out_of_range", "positive integer", fmt.Sprint(a.SizeBytes))
 	}
-	if (a.Kind == "video" || a.Kind == "audio") && a.DurationMS <= 0 {
+	if (a.Kind == "video" || a.Kind == "audio" || a.Kind == "final_audio") && a.DurationMS <= 0 {
 		errs.add(path+".duration_ms", "required", "positive milliseconds", fmt.Sprint(a.DurationMS))
 	}
 	if a.Kind == "subtitle" && a.Format != "ass" && a.Format != "srt" && a.Format != "vtt" {

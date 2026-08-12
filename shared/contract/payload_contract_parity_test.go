@@ -55,6 +55,7 @@ func mustPayloadV2Map(t *testing.T) map[string]any {
 		ManifestRef:    map[string]any{"uri": "velox-asset://manifest"},
 		ManifestSHA256: "manifest-sha",
 		RenderPlanJSON: "{}", RenderPlanSHA256: "plan-sha",
+		CompiledRenderPlanJSON: "{}", CompiledRenderPlanSHA256: "compiled-plan-sha",
 		ScenesJSON:     "[]",
 		Scenes:         []map[string]any{{"id": "scene-1"}},
 		Layers:         []map[string]any{{"id": "layer-1"}},

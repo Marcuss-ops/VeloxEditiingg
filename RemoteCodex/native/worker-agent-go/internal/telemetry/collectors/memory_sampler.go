@@ -14,7 +14,7 @@
 // kernels omit them) by setting the swapTotal/swapFree sentinels
 // to -1 — the facade uses that sentinel to skip SwapUsedBytes
 // population rather than reporting zero.
-package telemetry
+package collectors
 
 import (
 	"bufio"

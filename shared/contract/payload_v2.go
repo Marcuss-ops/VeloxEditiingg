@@ -72,23 +72,29 @@ type JobPayloadV2 struct {
 	ManifestSHA256   string           `json:"manifest_sha256,omitempty"`
 	RenderPlanJSON   string           `json:"render_plan_json,omitempty"`
 	RenderPlanSHA256 string           `json:"render_plan_sha256,omitempty"`
-	ScenesJSON       string           `json:"scenes_json,omitempty"`
-	Scenes           []map[string]any `json:"scenes,omitempty"`
-	Layers           []map[string]any `json:"layers,omitempty"`
-	Items            []map[string]any `json:"items,omitempty"`
-	AudioTracks      []map[string]any `json:"audio_tracks,omitempty"`
-	VoiceoverPaths   []string         `json:"voiceover_paths,omitempty"`
-	AudioLanguage    string           `json:"audio_language_for_srt,omitempty"`
-	VideoMode        string           `json:"video_mode,omitempty"`
-	Effect           string           `json:"effect,omitempty"`
-	Orientation      string           `json:"orientation,omitempty"`
-	OutputPath       string           `json:"output_path,omitempty"`
-	DriveOutput      string           `json:"drive_output_folder,omitempty"`
-	ChannelID        string           `json:"channel_id,omitempty"`
-	OutputVideoID    string           `json:"output_video_id,omitempty"`
-	SceneImagePaths  []string         `json:"scene_image_paths,omitempty"`
-	ImageSourceMap   string           `json:"image_source_map,omitempty"`
-	VideoMetadata    map[string]any   `json:"video_metadata,omitempty"`
+	// CompiledRenderPlanJSON/SHA carry a producer-owned V2 execution plan.
+	// They are deliberately separate fields from the legacy render-plan
+	// values so the enqueue normalizer can preserve the exact V2 bytes and
+	// hash without compiling or re-serializing them.
+	CompiledRenderPlanJSON   string           `json:"compiled_render_plan_json,omitempty"`
+	CompiledRenderPlanSHA256 string           `json:"compiled_render_plan_sha256,omitempty"`
+	ScenesJSON               string           `json:"scenes_json,omitempty"`
+	Scenes                   []map[string]any `json:"scenes,omitempty"`
+	Layers                   []map[string]any `json:"layers,omitempty"`
+	Items                    []map[string]any `json:"items,omitempty"`
+	AudioTracks              []map[string]any `json:"audio_tracks,omitempty"`
+	VoiceoverPaths           []string         `json:"voiceover_paths,omitempty"`
+	AudioLanguage            string           `json:"audio_language_for_srt,omitempty"`
+	VideoMode                string           `json:"video_mode,omitempty"`
+	Effect                   string           `json:"effect,omitempty"`
+	Orientation              string           `json:"orientation,omitempty"`
+	OutputPath               string           `json:"output_path,omitempty"`
+	DriveOutput              string           `json:"drive_output_folder,omitempty"`
+	ChannelID                string           `json:"channel_id,omitempty"`
+	OutputVideoID            string           `json:"output_video_id,omitempty"`
+	SceneImagePaths          []string         `json:"scene_image_paths,omitempty"`
+	ImageSourceMap           string           `json:"image_source_map,omitempty"`
+	VideoMetadata            map[string]any   `json:"video_metadata,omitempty"`
 
 	// Numeric metadata (sent as JSON numbers)
 	Priority          int     `json:"priority"`
@@ -189,6 +195,8 @@ func NewJobPayloadV2(raw map[string]any) *JobPayloadV2 {
 	p.ManifestSHA256 = payload.FirstString(raw, "manifest_sha256")
 	p.RenderPlanJSON = payload.FirstString(raw, "render_plan_json")
 	p.RenderPlanSHA256 = payload.FirstString(raw, "render_plan_sha256")
+	p.CompiledRenderPlanJSON = payload.FirstString(raw, PayloadKeyCompiledRenderPlanJSON)
+	p.CompiledRenderPlanSHA256 = payload.FirstString(raw, PayloadKeyCompiledRenderPlanSHA)
 	if scenesVal, ok := raw["scenes"]; ok {
 		switch s := scenesVal.(type) {
 		case []map[string]any:
@@ -327,6 +335,12 @@ func (p *JobPayloadV2) ToMap() (map[string]any, error) {
 	}
 	if p.RenderPlanSHA256 != "" {
 		out["render_plan_sha256"] = p.RenderPlanSHA256
+	}
+	if p.CompiledRenderPlanJSON != "" {
+		out[PayloadKeyCompiledRenderPlanJSON] = p.CompiledRenderPlanJSON
+	}
+	if p.CompiledRenderPlanSHA256 != "" {
+		out[PayloadKeyCompiledRenderPlanSHA] = p.CompiledRenderPlanSHA256
 	}
 	if len(p.Scenes) > 0 {
 		out["scenes"] = p.Scenes

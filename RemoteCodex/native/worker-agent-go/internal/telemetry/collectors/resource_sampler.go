@@ -45,7 +45,7 @@
 // in a small atomic-friendly struct guarded by sync.Mutex because CPU
 // jiffies uint64 reads are 8-byte atomic on amd64/arm64 but the struct
 // copy should be guarded for clarity on 32-bit).
-package telemetry
+package collectors
 
 import (
 	"context"

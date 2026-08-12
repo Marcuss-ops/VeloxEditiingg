@@ -13,7 +13,7 @@
 // over-count by including reserved blocks — a relevant concern on
 // production hosts where the OS reserves ~5% of disk for root-only
 // emergency usage.
-package telemetry
+package collectors
 
 import (
 	"fmt"

@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"velox-server/internal/placement"
@@ -180,16 +181,24 @@ func (h *Handler) sendClaimedTaskOffer(
 		return
 	}
 
-	// Fase D: compile the canonical render plan, stamp plan_version/
-	// plan_sha256 on the attempt, and DELIVER the compiled document in the
-	// offer so the worker's batch FFmpeg path consumes the master-compiled
-	// segments instead of re-deriving a timeline from raw scenes. The keys
-	// are additive: scene.composite tolerates unknown payload keys, and the
-	// render-plan executor family admits them (batch path). Best-effort by
-	// design: a compile or persist failure must never block the offer.
+	// Fase D: validate/stamp the canonical compiled plan and DELIVER it in
+	// the offer. V2 is already compiled at enqueue time and takes priority;
+	// the legacy V1 compiler remains an additive compatibility path.
 	if planJSON, planSHA := h.compileAndStampAttemptRenderPlan(ctx, tws, attempt); planJSON != "" {
 		workerPayload[contract.PayloadKeyCompiledRenderPlanJSON] = planJSON
 		workerPayload[contract.PayloadKeyCompiledRenderPlanSHA] = planSHA
+	}
+	// render_batch@1 has no safe legacy fallback: a missing or malformed V2
+	// envelope must release the claim instead of offering a task that the
+	// worker can only reject after lease acquisition.
+	if isRenderBatchExecutor(tws.ExecutorID) {
+		if err := contract.ValidateCompiledRenderPlanV2Payload(workerPayload); err != nil {
+			log.Printf("[PLACEMENT] refusing render_batch task=%s: invalid CompiledRenderPlanV2: %v", tws.ID, err)
+			if releaseErr := h.taskRepo.ReleaseLease(ctx, tws.ID, sess.workerID, leaseID); releaseErr != nil {
+				log.Printf("[PLACEMENT] failed to release render_batch claim task=%s: %v", tws.ID, releaseErr)
+			}
+			return
+		}
 	}
 
 	var taskSpecPB *structpb.Struct
@@ -269,12 +278,28 @@ func (h *Handler) compileAndStampAttemptRenderPlan(ctx context.Context, tws *tas
 		log.Printf("[RENDERPLAN] skipped task=%s attempt=%s reason=%s error=%v compile_ms=%d canonicalize_ms=%d hash_ms=%d persist_ms=%d total_ms=%d",
 			tws.ID, attempt.ID, reason, err, compileMS, canonicalizeMS, hashMS, persistMS, time.Since(startedAt).Milliseconds())
 	}
-	if h.renderPlanCompiler == nil {
-		logSkip("compiler_unavailable", nil)
-		return "", ""
-	}
 	if h.taskAttemptRepo == nil {
 		logSkip("persistence_unavailable", nil)
+		return "", ""
+	}
+
+	// V2 is compiled before the task is persisted. Re-validate the exact
+	// bytes delivered in the TaskSpec and stamp those bytes, rather than
+	// reconstructing a second plan from legacy float-based fields.
+	if rawJSON, rawSHA, present := compiledV2Payload(tws.SpecPayload); present {
+		if err := contract.ValidateCompiledRenderPlanV2Payload(tws.SpecPayload); err != nil {
+			logSkip("v2_validation_error", err)
+			return "", ""
+		}
+		if err := h.taskAttemptRepo.UpsertRenderPlan(ctx, attempt.ID, contract.CompiledPlanVersionV2, rawSHA, rawJSON); err != nil {
+			logSkip("v2_persist_error", err)
+			return "", ""
+		}
+		log.Printf("[RENDERPLAN] stamped V2 attempt=%s task=%s plan_version=%d plan_sha256=%s", attempt.ID, tws.ID, contract.CompiledPlanVersionV2, rawSHA[:16])
+		return rawJSON, rawSHA
+	}
+	if h.renderPlanCompiler == nil {
+		logSkip("compiler_unavailable", nil)
 		return "", ""
 	}
 
@@ -322,6 +347,22 @@ func (h *Handler) compileAndStampAttemptRenderPlan(ctx context.Context, tws *tas
 	log.Printf("[RENDERPLAN] stamped attempt=%s task=%s plan_version=%d plan_sha256=%s duration_ms=%d segments=%d compile_ms=%d canonicalize_ms=%d hash_ms=%d persist_ms=%d total_ms=%d",
 		attempt.ID, tws.ID, plan.PlanVersion, planSHA[:16], plan.DurationMS, len(plan.Segments), compileMS, canonicalizeMS, hashMS, persistMS, time.Since(startedAt).Milliseconds())
 	return string(canonical), planSHA
+}
+
+func compiledV2Payload(payload map[string]interface{}) (string, string, bool) {
+	if payload == nil {
+		return "", "", false
+	}
+	rawJSON, hasJSON := payload[contract.PayloadKeyCompiledRenderPlanJSON].(string)
+	rawSHA, hasSHA := payload[contract.PayloadKeyCompiledRenderPlanSHA].(string)
+	if !hasJSON && !hasSHA {
+		return "", "", false
+	}
+	return rawJSON, rawSHA, true
+}
+
+func isRenderBatchExecutor(executorID string) bool {
+	return executorID == "render_batch" || strings.HasPrefix(executorID, "render_batch@")
 }
 
 // recordPlacementRejections logs the rejection reasons produced by the

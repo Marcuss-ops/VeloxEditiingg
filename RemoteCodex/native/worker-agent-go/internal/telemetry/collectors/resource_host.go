@@ -6,7 +6,7 @@
 // (snake_case) so the existing F2 decodeWorkerResources helper on the
 // master side reads the keys directly via proto reflection.
 
-package telemetry
+package collectors
 
 import (
 	"time"

@@ -11,7 +11,7 @@
 // GPU detection is a two-step probe: cheap /dev/nvidia* + /dev/dri/*
 // file existence, then a /sys/class/drm walk to surface NVIDIA/AMD/
 // Intel vendor IDs.
-package telemetry
+package collectors
 
 import (
 	"os"

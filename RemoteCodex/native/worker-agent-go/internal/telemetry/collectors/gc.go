@@ -1,5 +1,5 @@
 // Package telemetry provides disk garbage collection and metrics for the worker agent.
-package telemetry
+package collectors
 
 import (
 	"context"

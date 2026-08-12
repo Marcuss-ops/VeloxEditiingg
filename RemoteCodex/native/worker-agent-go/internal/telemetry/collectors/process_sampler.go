@@ -9,7 +9,7 @@
 //
 // RSS is in pages of 4KiB on Linux. The facade converts pages to
 // bytes (rssPages * 1024 / 4096 = pages) for the wire envelope.
-package telemetry
+package collectors
 
 import (
 	"errors"

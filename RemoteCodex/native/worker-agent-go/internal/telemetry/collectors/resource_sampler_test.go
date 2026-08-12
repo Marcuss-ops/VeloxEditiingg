@@ -6,7 +6,7 @@
 // Tests are written so they don't need root or any privileged context
 // — every /proc file is a stub in a t.TempDir().
 
-package telemetry
+package collectors
 
 import (
 	"context"

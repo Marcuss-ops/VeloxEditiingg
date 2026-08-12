@@ -12,7 +12,7 @@
 // per-process — it makes the file cohesive. The run-queue size is
 // also CPU-pressure-derived (runnable+uninterruptible counts), so
 // keeping it here matches the domain.
-package telemetry
+package collectors
 
 import (
 	"errors"

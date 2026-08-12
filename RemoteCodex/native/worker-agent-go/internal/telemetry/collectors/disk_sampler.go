@@ -12,7 +12,7 @@
 // metric the sampler emits is DiskFreeBytes — it's tightly coupled
 // to the disk domain and pulling it into host_sampler.go would
 // split a related state (the workDir root) across two files.
-package telemetry
+package collectors
 
 import (
 	"errors"
