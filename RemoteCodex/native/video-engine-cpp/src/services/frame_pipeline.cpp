@@ -212,36 +212,45 @@ private:
     int64_t last_depth_{0};
 };
 
-// Bounded AVFrame pool. `capacity` slots are pre-allocated at the output
-// size/format; each slot also carries a lazily-sized decode buffer so the
-// decoder thread can av_frame_copy into it. A slot is owned by exactly one
-// stage at a time (decoder fills -> render scales -> encoder consumes ->
-// released), so per-slot access needs no extra synchronization.
+// Bounded AVFrame pool. A slot is owned by exactly one stage at a time
+// (decoder fills -> render scales/bypasses -> encoder consumes -> released),
+// so per-slot access needs no extra synchronization. Decoder buffers are
+// allocated by LibAV directly in the decoded slot; no full-frame handoff copy
+// is performed.
 class FramePool {
 public:
     bool init(int capacity, int in_width, int in_height,
-              int out_width, int out_height, std::string& error) {
+              int out_width, int out_height, bool allocate_scaled,
+              std::string& error) {
         if (capacity < 2) {
             error = "frame pool capacity must be >= 2";
             return false;
         }
         capacity_ = capacity;
+        scaled_enabled_ = allocate_scaled;
         decoded_.resize(static_cast<size_t>(capacity));
-        scaled_.resize(static_cast<size_t>(capacity));
+        if (scaled_enabled_) {
+            scaled_.resize(static_cast<size_t>(capacity));
+        }
         for (int i = 0; i < capacity; ++i) {
             decoded_[static_cast<size_t>(i)].reset(av_frame_alloc());
-            scaled_[static_cast<size_t>(i)].reset(av_frame_alloc());
-            if (!decoded_[static_cast<size_t>(i)] || !scaled_[static_cast<size_t>(i)]) {
+            if (scaled_enabled_) {
+                scaled_[static_cast<size_t>(i)].reset(av_frame_alloc());
+            }
+            if (!decoded_[static_cast<size_t>(i)] ||
+                (scaled_enabled_ && !scaled_[static_cast<size_t>(i)])) {
                 error = "av_frame_alloc failed";
                 return false;
             }
-            AVFrame* scaled = scaled_[static_cast<size_t>(i)].get();
-            scaled->format = AV_PIX_FMT_YUV420P;
-            scaled->width = out_width;
-            scaled->height = out_height;
-            if (av_frame_get_buffer(scaled, 32) < 0) {
-                error = "av_frame_get_buffer (scaled slot) failed";
-                return false;
+            if (scaled_enabled_) {
+                AVFrame* scaled = scaled_[static_cast<size_t>(i)].get();
+                scaled->format = AV_PIX_FMT_YUV420P;
+                scaled->width = out_width;
+                scaled->height = out_height;
+                if (av_frame_get_buffer(scaled, 32) < 0) {
+                    error = "av_frame_get_buffer (scaled slot) failed";
+                    return false;
+                }
             }
             free_.push_back(i);
         }
@@ -283,27 +292,9 @@ public:
     AVFrame* decoded(int index) { return decoded_[static_cast<size_t>(index)].get(); }
     AVFrame* scaled(int index) { return scaled_[static_cast<size_t>(index)].get(); }
 
-    // Lazily allocates (or reallocates) the slot's decode buffer to match
-    // the source geometry/format.
-    bool ensureDecodedBuffer(int index, int width, int height,
-                             AVPixelFormat format, std::string& error) {
-        AVFrame* frame = decoded_[static_cast<size_t>(index)].get();
-        if (frame->data[0] == nullptr || frame->width != width ||
-            frame->height != height || frame->format != format) {
-            av_frame_unref(frame);
-            frame->format = format;
-            frame->width = width;
-            frame->height = height;
-            if (av_frame_get_buffer(frame, 32) < 0) {
-                error = "av_frame_get_buffer (decode slot) failed";
-                return false;
-            }
-        }
-        return true;
-    }
-
 private:
     int capacity_{0};
+    bool scaled_enabled_{false};
     int in_width_{0};
     int in_height_{0};
     std::vector<UniqueFrame> decoded_;
@@ -454,19 +445,7 @@ bool renderFrames(const FramePipelineConfig& config, FramePipelineResult* result
 
     // ── Bounded pool + render scaler ───────────────────────────────────
     FramePool pool;
-    if (!pool.init(config.pool_capacity, src_width, src_height,
-                   out_width, out_height, error)) {
-        result->error = error;
-        return false;
-    }
-    UniqueSwsContext sws(sws_getContext(
-        src_width, src_height, dec_ctx->pix_fmt,
-        out_width, out_height, AV_PIX_FMT_YUV420P,
-        SWS_BILINEAR, nullptr, nullptr, nullptr));
-    if (!sws) {
-        result->error = "sws_getContext failed";
-        return false;
-    }
+    UniqueSwsContext sws;
 
     // ── Encoder: exactly one persistent AVCodecContext ─────────────────
     const AVCodec* encoder = avcodec_find_encoder_by_name(config.codec.c_str());
@@ -501,6 +480,29 @@ bool renderFrames(const FramePipelineConfig& config, FramePipelineResult* result
         return false;
     }
     result->encode_contexts_created = 1;
+
+    const bool transform_bypass = src_width == out_width &&
+        src_height == out_height && dec_ctx->pix_fmt == enc_ctx->pix_fmt;
+    result->transform_bypass_frames = 0;
+
+    // The pool owns scaled buffers only when a transform is actually needed.
+    // In bypass mode the decoder-owned AVFrame is handed directly to the
+    // encoder queue.
+    if (!pool.init(config.pool_capacity, src_width, src_height,
+                   out_width, out_height, !transform_bypass, error)) {
+        result->error = error;
+        return false;
+    }
+    if (!transform_bypass) {
+        sws.reset(sws_getContext(
+            src_width, src_height, dec_ctx->pix_fmt,
+            out_width, out_height, enc_ctx->pix_fmt,
+            SWS_BILINEAR, nullptr, nullptr, nullptr));
+        if (!sws) {
+            result->error = "sws_getContext failed";
+            return false;
+        }
+    }
 
     // ── Muxer (writes the partial beside the target) ───────────────────
     AVFormatContext* raw_mux = nullptr;
@@ -556,63 +558,49 @@ bool renderFrames(const FramePipelineConfig& config, FramePipelineResult* result
     };
 
     UniquePacket input_packet(av_packet_alloc());
-    UniqueFrame scratch(av_frame_alloc());
-    if (!input_packet || !scratch) {
+    if (!input_packet) {
         cleanupPartial();
-        result->error = "av_packet_alloc / av_frame_alloc failed";
+        result->error = "av_packet_alloc failed";
         return false;
     }
 
     const auto drainDecoded = [&]() -> bool {
         while (true) {
-            const int rc = avcodec_receive_frame(dec_ctx.get(), scratch.get());
+            const int index = pool.acquire();
+            if (index < 0) {
+                return false;
+            }
+            AVFrame* decoded = pool.decoded(index);
+            av_frame_unref(decoded);
+            const int rc = avcodec_receive_frame(dec_ctx.get(), decoded);
             if (rc == AVERROR(EAGAIN) || rc == AVERROR_EOF) {
+                pool.release(index);
                 return true;
             }
             if (rc < 0) {
                 failStage("avcodec_receive_frame failed: " + ffmpegErrorText(rc));
-                av_frame_unref(scratch.get());
+                pool.release(index);
                 return false;
             }
             if (source_start_us > 0 || source_end_us > 0) {
-                const int64_t frame_timestamp = scratch->best_effort_timestamp;
+                const int64_t frame_timestamp = decoded->best_effort_timestamp;
                 if (frame_timestamp != AV_NOPTS_VALUE) {
                     const int64_t frame_us = av_rescale_q(
                         frame_timestamp, input_stream->time_base,
                         AVRational{1, 1'000'000});
                     if (frame_us < source_start_us) {
-                        av_frame_unref(scratch.get());
+                        pool.release(index);
                         continue;
                     }
                     if (source_end_us > 0 && frame_us >= source_end_us) {
                         source_window_complete.store(true);
-                        av_frame_unref(scratch.get());
+                        pool.release(index);
                         return true;
                     }
                 }
             }
-            const int index = pool.acquire();
-            if (index < 0) {
-                av_frame_unref(scratch.get());
-                return false;
-            }
-            if (!pool.ensureDecodedBuffer(index, src_width, src_height,
-                                          dec_ctx->pix_fmt, error)) {
-                failStage(error);
-                pool.release(index);
-                av_frame_unref(scratch.get());
-                return false;
-            }
-            AVFrame* slot = pool.decoded(index);
-            if (av_frame_copy_props(slot, scratch.get()) < 0 ||
-                av_frame_copy(slot, scratch.get()) < 0) {
-                failStage("av_frame_copy failed");
-                pool.release(index);
-                av_frame_unref(scratch.get());
-                return false;
-            }
-            av_frame_unref(scratch.get());
             decoded_frames.fetch_add(1);
+            result->zero_copy_decoded_frames = decoded_frames.load();
             if (!render_queue.push(index)) {
                 pool.release(index);
                 return false;
@@ -678,16 +666,22 @@ bool renderFrames(const FramePipelineConfig& config, FramePipelineResult* result
                 break;
             }
             AVFrame* src = pool.decoded(index);
-            AVFrame* dst = pool.scaled(index);
-            const auto scale_start = std::chrono::steady_clock::now();
-            sws_scale(sws.get(), src->data, src->linesize, 0, src_height,
-                      dst->data, dst->linesize);
-            producer_busy_ns.fetch_add(
-                std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    std::chrono::steady_clock::now() - scale_start)
-                    .count());
-            dst->pts = frame_index++;
-            dst->pict_type = AV_PICTURE_TYPE_NONE;
+            AVFrame* rendered = src;
+            if (transform_bypass) {
+                ++result->transform_bypass_frames;
+            } else {
+                AVFrame* dst = pool.scaled(index);
+                const auto scale_start = std::chrono::steady_clock::now();
+                sws_scale(sws.get(), src->data, src->linesize, 0, src_height,
+                          dst->data, dst->linesize);
+                producer_busy_ns.fetch_add(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::steady_clock::now() - scale_start)
+                        .count());
+                rendered = dst;
+            }
+            rendered->pts = frame_index++;
+            rendered->pict_type = AV_PICTURE_TYPE_NONE;
             if (!encode_queue.push(index)) {
                 pool.release(index);
                 break;
@@ -729,7 +723,10 @@ bool renderFrames(const FramePipelineConfig& config, FramePipelineResult* result
             if (index < 0) {
                 break;
             }
-            if (avcodec_send_frame(enc_ctx.get(), pool.scaled(index)) < 0) {
+            AVFrame* frame = transform_bypass
+                ? pool.decoded(index)
+                : pool.scaled(index);
+            if (avcodec_send_frame(enc_ctx.get(), frame) < 0) {
                 failStage("avcodec_send_frame failed");
                 pool.release(index);
                 break;
@@ -789,6 +786,10 @@ bool renderFrames(const FramePipelineConfig& config, FramePipelineResult* result
     result->success = true;
     result->frames_decoded = decoded_frames.load();
     result->frames_encoded = encoded_packets.load();
+    // The decoder writes directly into the bounded slot that travels through
+    // the queues. Keep the count explicit so a future refactor cannot turn
+    // the handoff back into an opaque av_frame_copy.
+    result->zero_copy_decoded_frames = result->frames_decoded;
     result->peak_pool_usage = pool.peakUsage();
     result->peak_render_queue = render_queue.highWater();
     result->peak_encode_queue = encode_queue.highWater();
