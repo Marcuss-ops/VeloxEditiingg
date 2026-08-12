@@ -40,6 +40,7 @@ import (
 
 	"velox-shared/assetref"
 	"velox-shared/contract"
+	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/internal/workercache"
 )
 
@@ -86,7 +87,18 @@ func (l *ClipLease) ReleaseAll(ctx context.Context) error {
 	for _, id := range l.assetKeys {
 		var err error
 		for attempt := 0; attempt < 3; attempt++ {
+			if attempt > 0 {
+				telemetry.GetPrometheusMetrics().RecordLeaseRetry("release_all")
+			}
 			err = l.cache.Release(cleanupCtx, id, l.jobID)
+			switch {
+			case err == nil:
+				telemetry.GetPrometheusMetrics().RecordLeaseRelease("success")
+			case errors.Is(err, workercache.ErrNotFound):
+				telemetry.GetPrometheusMetrics().RecordLeaseRelease("not_found")
+			default:
+				telemetry.GetPrometheusMetrics().RecordLeaseRelease("failure")
+			}
 			if err == nil || errors.Is(err, workercache.ErrNotFound) || attempt == 2 {
 				break
 			}
@@ -94,7 +106,9 @@ func (l *ClipLease) ReleaseAll(ctx context.Context) error {
 		}
 		if err != nil {
 			if !errors.Is(err, workercache.ErrNotFound) {
+				telemetry.GetPrometheusMetrics().RecordLeaseCleanupFailure("release")
 				if enqueueErr := l.cache.EnqueueLeaseRelease(cleanupCtx, id, l.jobID, time.Now().UTC()); enqueueErr != nil {
+					telemetry.GetPrometheusMetrics().RecordLeaseCleanupFailure("enqueue")
 					err = errors.Join(err, fmt.Errorf("enqueue durable lease reconciliation: %w", enqueueErr))
 				}
 			}
@@ -148,12 +162,14 @@ func AcquireJobClips(ctx context.Context, cache *workercache.Cache, jobID string
 
 	for _, id := range assetKeys {
 		if err := cache.Acquire(ctx, id, jobID); err != nil {
+			telemetry.GetPrometheusMetrics().RecordLeaseAcquire("failure")
 			// Roll back through the same durable ReleaseAll path used by
 			// normal dispatch cleanup. If SQLite is transiently unavailable,
 			// each failed rollback release is persisted for reconciliation.
 			_ = lease.ReleaseAll(ctx)
 			return nil, fmt.Errorf("worker.AcquireJobClips(%s) for %s: %w", id, jobID, err)
 		}
+		telemetry.GetPrometheusMetrics().RecordLeaseAcquire("success")
 		// Track only successful acquisitions so rollback never attempts
 		// to release rows this call did not own.
 		lease.assetKeys = append(lease.assetKeys, id)

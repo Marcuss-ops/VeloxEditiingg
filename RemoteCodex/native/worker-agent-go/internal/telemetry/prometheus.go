@@ -38,6 +38,10 @@ type PrometheusMetrics struct {
 	assetCacheEntries                *GaugeVec
 	assetCacheDuplicateDownloads     *CounterVec
 	assetCacheDuplicateDownloadBytes *CounterVec
+	leaseAcquires                    *CounterVec
+	leaseReleases                    *CounterVec
+	leaseRetries                     *CounterVec
+	leaseCleanupFailures             *CounterVec
 	prefetchRequested                *CounterVec
 	prefetchDownloaded               *CounterVec
 	prefetchDownloadedBytes          *CounterVec
@@ -147,6 +151,22 @@ func NewPrometheusMetrics() *PrometheusMetrics {
 			Name: "velox_cache_duplicate_download_bytes_total", Help: "Expected bytes a duplicate request would have consumed when coalesced by AssetDownloadManager",
 			values: map[string]float64{"asset": 0},
 		},
+		leaseAcquires: &CounterVec{
+			Name: "velox_cache_lease_acquires_total", Help: "Cache lease acquisition attempts by result", Label: "result",
+			values: map[string]float64{"success": 0, "failure": 0},
+		},
+		leaseReleases: &CounterVec{
+			Name: "velox_cache_lease_releases_total", Help: "Cache lease release attempts by result", Label: "result",
+			values: map[string]float64{"success": 0, "failure": 0, "not_found": 0},
+		},
+		leaseRetries: &CounterVec{
+			Name: "velox_cache_lease_retries_total", Help: "Lease retry attempts by lifecycle source", Label: "source",
+			values: map[string]float64{"release_all": 0, "reconciler": 0, "other": 0},
+		},
+		leaseCleanupFailures: &CounterVec{
+			Name: "velox_cache_lease_cleanup_failures_total", Help: "Lease cleanup failures by lifecycle stage", Label: "stage",
+			values: map[string]float64{"release": 0, "enqueue": 0, "reconcile_list": 0, "reconcile_release": 0, "reconcile_retry_persist": 0, "reconcile_delete": 0, "other": 0},
+		},
 		prefetchRequested:        &CounterVec{Name: "velox_prefetch_assets_requested_total", Help: "Future assets requested by prefetch", values: map[string]float64{"asset": 0}},
 		prefetchDownloaded:       &CounterVec{Name: "velox_prefetch_assets_downloaded_total", Help: "Future assets downloaded by prefetch", values: map[string]float64{"asset": 0}},
 		prefetchDownloadedBytes:  &CounterVec{Name: "velox_prefetch_bytes_total", Help: "Bytes downloaded by prefetch", values: map[string]float64{"asset": 0}},
@@ -228,6 +248,10 @@ func (m *PrometheusMetrics) ExportPrometheus() string {
 	output += m.assetCacheEntries.export()
 	output += m.assetCacheDuplicateDownloads.export()
 	output += m.assetCacheDuplicateDownloadBytes.export()
+	output += m.leaseAcquires.export()
+	output += m.leaseReleases.export()
+	output += m.leaseRetries.export()
+	output += m.leaseCleanupFailures.export()
 	output += m.prefetchRequested.export()
 	output += m.prefetchDownloaded.export()
 	output += m.prefetchDownloadedBytes.export()

@@ -7,6 +7,7 @@ import (
 	"math"
 	"time"
 
+	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/internal/workercache"
 )
 
@@ -39,22 +40,40 @@ func (w *Worker) reconcileLeaseReleasesOnce(ctx context.Context) error {
 	}
 	entries, err := w.clipCache.ListDueLeaseReleases(ctx, time.Now().UTC(), leaseReconcileBatch)
 	if err != nil {
+		telemetry.GetPrometheusMetrics().RecordLeaseCleanupFailure("reconcile_list")
 		return err
 	}
 	for _, entry := range entries {
 		releaseErr := w.clipCache.Release(ctx, entry.AssetKey, entry.JobID)
+		switch {
+		case releaseErr == nil:
+			telemetry.GetPrometheusMetrics().RecordLeaseRelease("success")
+		case errors.Is(releaseErr, workercache.ErrNotFound):
+			telemetry.GetPrometheusMetrics().RecordLeaseRelease("not_found")
+		default:
+			telemetry.GetPrometheusMetrics().RecordLeaseRelease("failure")
+		}
 		if releaseErr == nil || errors.Is(releaseErr, workercache.ErrNotFound) {
-			if deleteErr := w.clipCache.DeleteLeaseRelease(leaseCleanupContext(ctx), entry.AssetKey, entry.JobID); deleteErr != nil && w.logger != nil {
-				w.logger.Warn("[LEASE-RECONCILE] delete completed item failed asset=%s job=%s: %v", entry.AssetKey, entry.JobID, deleteErr)
+			if deleteErr := w.clipCache.DeleteLeaseRelease(leaseCleanupContext(ctx), entry.AssetKey, entry.JobID); deleteErr != nil {
+				telemetry.GetPrometheusMetrics().RecordLeaseCleanupFailure("reconcile_delete")
+				if w.logger != nil {
+					w.logger.Warn("[LEASE-RECONCILE] delete completed item failed asset=%s job=%s: %v", entry.AssetKey, entry.JobID, deleteErr)
+				}
 			}
 			continue
 		}
 
+		telemetry.GetPrometheusMetrics().RecordLeaseCleanupFailure("reconcile_release")
 		nextAttempt := time.Now().UTC().Add(leaseReleaseRetryDelay(entry.AttemptCount + 1))
 		if retryErr := w.clipCache.MarkLeaseReleaseRetry(
 			leaseCleanupContext(ctx), entry.AssetKey, entry.JobID, releaseErr.Error(), entry.AttemptCount+1, nextAttempt, time.Now().UTC(),
-		); retryErr != nil && w.logger != nil {
-			w.logger.Warn("[LEASE-RECONCILE] persist retry failed asset=%s job=%s: %v (release=%v)", entry.AssetKey, entry.JobID, retryErr, releaseErr)
+		); retryErr != nil {
+			telemetry.GetPrometheusMetrics().RecordLeaseCleanupFailure("reconcile_retry_persist")
+			if w.logger != nil {
+				w.logger.Warn("[LEASE-RECONCILE] persist retry failed asset=%s job=%s: %v (release=%v)", entry.AssetKey, entry.JobID, retryErr, releaseErr)
+			}
+		} else {
+			telemetry.GetPrometheusMetrics().RecordLeaseRetry("reconciler")
 		}
 	}
 	return nil
