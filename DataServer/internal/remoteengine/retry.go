@@ -140,10 +140,16 @@ func (c *Client) withRetry(ctx context.Context, fn func(attempt int) error) erro
 
 		// Compute backoff.
 		backoff := RetrySchedule(attempt)
-		if re != nil && re.RetryAfter > 0 {
+		providerDelay := re != nil && re.RetryAfter > 0
+		if providerDelay {
+			// Retry-After is an authoritative provider deadline. Do not
+			// jitter it downwards: an early retry can extend rate limiting
+			// and violate the provider's contract. Jitter only locally
+			// computed backoffs to avoid synchronized polling.
 			backoff = re.RetryAfter
+		} else {
+			backoff = AddJitter(backoff, int64(attempt)+time.Now().UnixNano())
 		}
-		backoff = AddJitter(backoff, int64(attempt)+time.Now().UnixNano())
 
 		if attempt < policy.MaxAttempts-1 {
 			timer := time.NewTimer(backoff)

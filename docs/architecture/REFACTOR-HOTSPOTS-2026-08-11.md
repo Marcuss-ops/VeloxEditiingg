@@ -46,6 +46,8 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 - Social delivery: `429` conserva `Retry-After` negli errori tipizzati fino al
   `ProviderError`; il runner applica quella scadenza quando è valida e usa il
   backoff bounded locale solo in assenza di un header valido.
+- Remote engine retry: `Retry-After` non viene più alterato dal jitter locale;
+  il jitter resta limitato ai backoff calcolati dal client.
 - Worker command outbox: allocazione della sequenza per worker e INSERT sono
   nella stessa transazione; il caso concorrente è coperto da test.
 - Calendar/session read models: JSON persistito corrotto e timestamp sessione
