@@ -37,20 +37,14 @@ import (
 	workersreg "velox-server/internal/workers"
 )
 
-// DeploymentReader is the read-only ledger seam used to make the desired
-// image visible beside the worker-reported running image. Keeping this seam
-// small lets tests use an in-memory fake and keeps the handler independent of
-// the FleetController mutation path.
+// DeploymentReader is the read-only journal seam for the worker's deployment
+// operation history. It feeds the card's OPERATION-HISTORY section
+// (PreviousDigest + the last operation row) only — current-state digest
+// fields come exclusively from WorkerDeploymentStateReader. Keeping this
+// seam small lets tests use an in-memory fake and keeps the handler
+// independent of the FleetController mutation path.
 type DeploymentReader interface {
 	GetLatestDeploymentForWorker(context.Context, string) (*store.DeploymentRecord, error)
-}
-
-// SuccessfulDeploymentReader is an optional read seam for the last verified
-// runtime digest. It is separate from DeploymentReader because the latest
-// operation may be FAILED while the previous SUCCEEDED digest remains the
-// worker's last known-good provenance.
-type SuccessfulDeploymentReader interface {
-	GetLatestSuccessfulDeploymentForWorker(context.Context, string) (*store.DeploymentRecord, error)
 }
 
 // OperationLedgerReader is the read-only audit seam for the worker's last
@@ -214,13 +208,13 @@ func (h *AdminWorkersHandler) cardWithError(ctx context.Context, info *workersre
 	}
 
 	// CURRENT-STATE section — the durable worker_deployment_state read
-	// model is the single source of truth for what the worker is running,
-	// what the fleet wants, and the last verified digest. The API must
-	// NEVER reconstruct these fields from deployment_records history:
-	// the journal is audit history, not current truth (a newer FAILED
-	// rollout keeps DESIRED=B / RUNNING=A visible as drift instead of
-	// being hidden behind the last history row).
-	readModel := false
+	// model is the ONLY source of truth for what the worker is running,
+	// what the fleet wants, and the last verified digest. The API never
+	// reconstructs these fields from deployment_records history: the
+	// journal is audit history, not current truth (a newer FAILED rollout
+	// keeps DESIRED=B / RUNNING=A visible as drift). A worker without a
+	// state row (pre-migration 151) gets empty digest fields rather than
+	// an invented value — UNKNOWN is honest, reconstruction is not.
 	if h.state != nil {
 		state, err := h.state.GetWorkerDeploymentState(ctx, info.WorkerID.String())
 		if err != nil {
@@ -228,7 +222,6 @@ func (h *AdminWorkersHandler) cardWithError(ctx context.Context, info *workersre
 				return WorkerCard{}, err
 			}
 		} else if state != nil {
-			readModel = true
 			card.DesiredDigest = state.DesiredDigest
 			card.TargetDigest = state.DesiredDigest
 			if state.RunningDigest != "" {
@@ -237,11 +230,19 @@ func (h *AdminWorkersHandler) cardWithError(ctx context.Context, info *workersre
 			card.LastSuccessfulDigest = state.LastSuccessfulDigest
 		}
 	}
+	// IMAGE section — real-time state only: what is running vs what the
+	// fleet wants, and whether they match. No operation-history fields.
+	if card.RunningDigest != "" && card.TargetDigest != "" {
+		card.ImageState = &WorkerImageState{
+			RunningDigest: card.RunningDigest,
+			TargetDigest:  card.TargetDigest,
+			Match:         card.RunningDigest == card.TargetDigest,
+		}
+	}
 
-	// OPERATION-HISTORY section — the append-only journal. Digest fields
-	// the read model already provided are never overwritten here; the
-	// journal only supplies PreviousDigest + the operation view, plus the
-	// legacy reconstruction for workers without a state row (pre-151).
+	// OPERATION-HISTORY section — the append-only journal. This is a
+	// history view ONLY (PreviousDigest + the last operation row); it
+	// never feeds back into the current-state digest fields above.
 	if h.deployments == nil {
 		return card, nil
 	}
@@ -255,27 +256,7 @@ func (h *AdminWorkersHandler) cardWithError(ctx context.Context, info *workersre
 	if rec == nil {
 		return card, nil
 	}
-	if !readModel {
-		card.TargetDigest = rec.TargetDigest
-		card.DesiredDigest = rec.TargetDigest
-		if successfulReader, ok := h.deployments.(SuccessfulDeploymentReader); ok {
-			if successful, successfulErr := successfulReader.GetLatestSuccessfulDeploymentForWorker(ctx, info.WorkerID.String()); successfulErr != nil && !errors.Is(successfulErr, store.ErrDeploymentNotFound) {
-				return WorkerCard{}, successfulErr
-			} else if successful != nil {
-				card.LastSuccessfulDigest = successful.TargetDigest
-			}
-		}
-	}
 	card.PreviousDigest = rec.PreviousDigest
-	// IMAGE section — real-time state only: what is running vs what the
-	// fleet wants, and whether they match. No operation-history fields.
-	if card.RunningDigest != "" && card.TargetDigest != "" {
-		card.ImageState = &WorkerImageState{
-			RunningDigest: card.RunningDigest,
-			TargetDigest:  card.TargetDigest,
-			Match:         card.RunningDigest == card.TargetDigest,
-		}
-	}
 	// LAST UPDATE OPERATION section — the operation history, deliberately
 	// separate from ImageState: an old FAILED rollout must not make a
 	// worker with a matching digest look unhealthy.

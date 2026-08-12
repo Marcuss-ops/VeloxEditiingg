@@ -16,8 +16,7 @@ import (
 )
 
 type digestDeploymentReader struct {
-	record     *store.DeploymentRecord
-	successful *store.DeploymentRecord
+	record *store.DeploymentRecord
 }
 
 type failingDeploymentReader struct{}
@@ -30,31 +29,26 @@ func (r digestDeploymentReader) GetLatestDeploymentForWorker(context.Context, st
 	return r.record, nil
 }
 
-func (r digestDeploymentReader) GetLatestSuccessfulDeploymentForWorker(context.Context, string) (*store.DeploymentRecord, error) {
-	return r.successful, nil
-}
-
 func TestAdminWorkersCard_SeparatesDesiredRunningAndLastSuccessfulDigest(t *testing.T) {
 	info := makeCardInfo("velox-worker-13197", func(w *workersreg.Worker) {
 		w.ImageDigest = "sha256:old"
 	})
 	h := NewAdminWorkersHandler(nil)
-	h.SetDeploymentReader(digestDeploymentReader{
-		record: &store.DeploymentRecord{
-			DeploymentID: "deploy-failed-new",
-			WorkerID:     "velox-worker-13197",
-			TargetDigest: "sha256:new",
-			Status:       store.DeployStatusFailed,
-			StartedAt:    time.Date(2026, time.August, 11, 12, 1, 0, 0, time.UTC),
-		},
-		successful: &store.DeploymentRecord{
-			DeploymentID: "deploy-success-old",
-			WorkerID:     "velox-worker-13197",
-			TargetDigest: "sha256:old",
-			Status:       store.DeployStatusSucceeded,
-			StartedAt:    time.Date(2026, time.August, 11, 12, 0, 0, 0, time.UTC),
-		},
-	})
+	h.SetWorkerDeploymentStateReader(stateReaderStub{state: &store.WorkerDeploymentState{
+		WorkerID:             "velox-worker-13197",
+		DesiredDigest:        "sha256:new",
+		RunningDigest:        "sha256:old",
+		LastSuccessfulDigest: "sha256:old",
+	}})
+	// The journal only carries the operation-history view; the failed
+	// newer rollout row must not erase the read model's last-known-good.
+	h.SetDeploymentReader(digestDeploymentReader{record: &store.DeploymentRecord{
+		DeploymentID: "deploy-failed-new",
+		WorkerID:     "velox-worker-13197",
+		TargetDigest: "sha256:new",
+		Status:       store.DeployStatusFailed,
+		StartedAt:    time.Date(2026, time.August, 11, 12, 1, 0, 0, time.UTC),
+	}})
 
 	card := h.card(context.Background(), &info)
 	if card.RunningDigest != "sha256:old" || card.DesiredDigest != "sha256:new" || card.LastSuccessfulDigest != "sha256:old" {
@@ -78,6 +72,11 @@ func TestAdminWorkersCard_ImageStateUsesRuntimeMatch(t *testing.T) {
 		w.ImageDigest = "sha256:running"
 	})
 	h := NewAdminWorkersHandler(nil)
+	h.SetWorkerDeploymentStateReader(stateReaderStub{state: &store.WorkerDeploymentState{
+		WorkerID:      "velox-worker-13197",
+		DesiredDigest: "sha256:running",
+		RunningDigest: "sha256:running",
+	}})
 	h.SetDeploymentReader(digestDeploymentReader{record: &store.DeploymentRecord{
 		DeploymentID: "deploy-old-failed",
 		WorkerID:     "velox-worker-13197",
@@ -130,6 +129,10 @@ func TestAdminWorkersCard_ImageStateSeparatesMismatchFromOperation(t *testing.T)
 		w.ImageDigest = "sha256:old"
 	})
 	h := NewAdminWorkersHandler(nil)
+	h.SetWorkerDeploymentStateReader(stateReaderStub{state: &store.WorkerDeploymentState{
+		WorkerID:      "velox-worker-523925eb",
+		DesiredDigest: "sha256:new",
+	}})
 	h.SetDeploymentReader(digestDeploymentReader{record: &store.DeploymentRecord{
 		DeploymentID: "deploy-pending",
 		WorkerID:     "velox-worker-523925eb",
@@ -159,6 +162,11 @@ func TestAdminWorkersCard_OperationStateCarriesLedgerErrorReason(t *testing.T) {
 	})
 	started := time.Date(2026, time.August, 11, 12, 0, 0, 0, time.UTC)
 	h := NewAdminWorkersHandler(nil)
+	h.SetWorkerDeploymentStateReader(stateReaderStub{state: &store.WorkerDeploymentState{
+		WorkerID:      "velox-worker-13197",
+		DesiredDigest: "sha256:running",
+		RunningDigest: "sha256:running",
+	}})
 	h.SetDeploymentReader(digestDeploymentReader{record: &store.DeploymentRecord{
 		DeploymentID: "deploy-failed",
 		WorkerID:     "velox-worker-13197",
@@ -224,6 +232,11 @@ func TestAdminWorkersCard_SucceededDeploymentOmitsError(t *testing.T) {
 	})
 	started := time.Date(2026, time.August, 11, 12, 0, 0, 0, time.UTC)
 	h := NewAdminWorkersHandler(nil)
+	h.SetWorkerDeploymentStateReader(stateReaderStub{state: &store.WorkerDeploymentState{
+		WorkerID:      "velox-worker-13197",
+		DesiredDigest: "sha256:running",
+		RunningDigest: "sha256:running",
+	}})
 	h.SetDeploymentReader(digestDeploymentReader{record: &store.DeploymentRecord{
 		DeploymentID: "deploy-ok",
 		WorkerID:     "velox-worker-13197",
@@ -251,6 +264,11 @@ func TestAdminWorkersCard_NoLedgerOmitsErrorWithoutBreakingImage(t *testing.T) {
 		w.ImageDigest = "sha256:running"
 	})
 	h := NewAdminWorkersHandler(nil)
+	h.SetWorkerDeploymentStateReader(stateReaderStub{state: &store.WorkerDeploymentState{
+		WorkerID:      "velox-worker-13197",
+		DesiredDigest: "sha256:running",
+		RunningDigest: "sha256:running",
+	}})
 	h.SetDeploymentReader(digestDeploymentReader{record: &store.DeploymentRecord{
 		DeploymentID: "deploy-failed",
 		WorkerID:     "velox-worker-13197",
@@ -312,23 +330,14 @@ func divergentReadModelFixture() *store.WorkerDeploymentState {
 // (latest row target=A SUCCEEDED and no other journal evidence).
 func journalSuggestingDigestA() digestDeploymentReader {
 	started := time.Date(2026, time.August, 12, 8, 0, 0, 0, time.UTC)
-	return digestDeploymentReader{
-		record: &store.DeploymentRecord{
-			DeploymentID: "deploy-history-a",
-			WorkerID:     "velox-worker-13197",
-			TargetDigest: "sha256:A",
-			Status:       store.DeployStatusSucceeded,
-			StartedAt:    started,
-			FinishedAt:   &started,
-		},
-		successful: &store.DeploymentRecord{
-			DeploymentID: "deploy-history-a",
-			WorkerID:     "velox-worker-13197",
-			TargetDigest: "sha256:A",
-			Status:       store.DeployStatusSucceeded,
-			StartedAt:    started,
-		},
-	}
+	return digestDeploymentReader{record: &store.DeploymentRecord{
+		DeploymentID: "deploy-history-a",
+		WorkerID:     "velox-worker-13197",
+		TargetDigest: "sha256:A",
+		Status:       store.DeployStatusSucceeded,
+		StartedAt:    started,
+		FinishedAt:   &started,
+	}}
 }
 
 // TestAdminWorkersCard_ReadModelWinsOverReconstructedHistory is the
@@ -409,11 +418,12 @@ func TestAdminWorkersCard_EmptyReadModelIsNotReconstructed(t *testing.T) {
 	}
 }
 
-// TestAdminWorkersCard_MissingReadModelFallsBackToJournal pins the
-// intentional legacy path: a worker without a worker_deployment_state row
-// (pre-migration 151 or lightweight deployment) still gets its digest
-// fields from the journal.
-func TestAdminWorkersCard_MissingReadModelFallsBackToJournal(t *testing.T) {
+// TestAdminWorkersCard_MissingReadModelLeavesDigestFieldsEmpty pins the
+// journal-only contract: a worker without a worker_deployment_state row
+// (pre-migration 151 or lightweight deployment) gets EMPTY current-state
+// digest fields — the API never reconstructs desired/last_successful from
+// deployment_records. UNKNOWN is honest; reconstruction is not.
+func TestAdminWorkersCard_MissingReadModelLeavesDigestFieldsEmpty(t *testing.T) {
 	info := makeCardInfo("velox-worker-13197", func(w *workersreg.Worker) {
 		w.ImageDigest = "sha256:old"
 	})
@@ -422,11 +432,18 @@ func TestAdminWorkersCard_MissingReadModelFallsBackToJournal(t *testing.T) {
 	h.SetDeploymentReader(journalSuggestingDigestA())
 
 	card := h.card(context.Background(), &info)
-	if card.DesiredDigest != "sha256:A" || card.LastSuccessfulDigest != "sha256:A" {
-		t.Fatalf("fallback reconstruction failed: desired=%q last_successful=%q, want sha256:A", card.DesiredDigest, card.LastSuccessfulDigest)
+	if card.DesiredDigest != "" || card.LastSuccessfulDigest != "" {
+		t.Fatalf("digest fields reconstructed from journal despite missing read model: desired=%q last_successful=%q, want empty", card.DesiredDigest, card.LastSuccessfulDigest)
 	}
 	if card.RunningDigest != "sha256:old" {
-		t.Fatalf("RunningDigest = %q, want sha256:old (registry heartbeat; no read model row)", card.RunningDigest)
+		t.Fatalf("RunningDigest = %q, want sha256:old (registry heartbeat only)", card.RunningDigest)
+	}
+	if card.ImageState != nil {
+		t.Fatalf("ImageState = %#v, want nil (no target digest without a read model row)", card.ImageState)
+	}
+	// The journal still feeds the OPERATION-HISTORY section.
+	if card.OperationState == nil || card.OperationState.OperationID != "deploy-history-a" {
+		t.Fatalf("OperationState = %#v, want journal row deploy-history-a", card.OperationState)
 	}
 }
 

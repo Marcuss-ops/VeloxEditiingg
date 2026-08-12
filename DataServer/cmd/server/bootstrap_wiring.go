@@ -208,8 +208,13 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 	//   - Deployments (Level B image_digest_match) — SQLite ledger
 	//   - Smoke (Level D) — nil; the operator sees "smoke runner not wired"
 	if fleetDep != nil && m != nil && m.Workers != nil {
+		// Admin card read seams: the current-state digest fields
+		// (desired/running/last_successful) come from the durable
+		// worker_deployment_state read model; deployment_records remains
+		// the operation-history journal (PreviousDigest + last op row).
 		m.Workers.SetDeploymentReader(p.SQLite)
 		m.Workers.SetOperationLedgerReader(p.SQLite)
+		m.Workers.SetWorkerDeploymentStateReader(p.SQLite)
 		healthHandler := api.NewAdminWorkersHealthHandler(
 			m.Workers.Registry(),
 			api.HealthProbeDeps{
