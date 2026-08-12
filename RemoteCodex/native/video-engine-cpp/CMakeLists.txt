@@ -302,6 +302,30 @@ if(VELOX_ENABLE_LIBAV)
 
     add_test(NAME media_packet_pipeline_tests
              COMMAND velox_media_packet_pipeline_tests)
+
+    # Component-level unit tests for the named packet pipeline pieces
+    # (Demuxer, PacketTrimmer, TimestampRewriter): pure AVPacket harnesses
+    # for the rewrite pass plus a real-fixture Demuxer/demuxAndRewrite
+    # exercise. The rewrite unit tests never touch disk; the fixture is
+    # generated before the components themselves run.
+    add_executable(velox_packet_components_tests
+        tests/test_packet_components.cpp
+        src/services/file_utils.cpp
+        src/services/io_counters.cpp
+        src/services/media_probe.cpp
+        src/services/media_packet_pipeline.cpp
+    )
+
+    target_include_directories(velox_packet_components_tests
+        PRIVATE include src include/velox)
+
+    if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(velox_packet_components_tests PRIVATE -O2)
+    endif()
+    velox_link_ffmpeg(velox_packet_components_tests)
+
+    add_test(NAME packet_components_tests
+             COMMAND velox_packet_components_tests)
 endif()
 
 # Every target that can include PhaseRecorder must consume the freshly

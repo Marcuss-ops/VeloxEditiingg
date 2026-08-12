@@ -6,6 +6,11 @@
 #include <string>
 #include <vector>
 
+// This header is the value-types-only public surface (the OFF-build
+// fallback and RenderEngine include it). The LibAV-aware named components
+// behind the copy-only path — Demuxer, PacketTrimmer, TimestampRewriter —
+// live in media_packet_components.hpp (namespace velox::media::packet) and
+// are compiled exclusively when VELOX_ENABLE_LIBAV=ON.
 namespace velox::media {
 
 struct CopyOnlyVideoSegment {
