@@ -144,6 +144,28 @@ func TestScheduler_MissingProtectionRowDoesNotAbortPrefetch(t *testing.T) {
 	}
 }
 
+func TestScheduler_DoesNotAdmitAssetLargerThanByteBudget(t *testing.T) {
+	manager := &schedulerManager{started: make(chan struct{}, 1)}
+	s := NewScheduler(Config{WorkerID: "worker-a", MaxConcurrent: 1, ByteBudget: 10})
+	s.SetResolver(downloader.NewCacheResolver(manager, nil))
+	plan := futureTestPlan()
+	plan.PrefetchJobs[0].Assets[0].SizeBytes = 11
+
+	if err := s.Reconcile(plan); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-manager.started:
+		t.Fatal("oversized asset bypassed the prefetch byte budget")
+	case <-time.After(100 * time.Millisecond):
+	}
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if len(manager.keys) != 0 {
+		t.Fatalf("resolved keys=%v, want no resolution while asset exceeds budget", manager.keys)
+	}
+}
+
 func TestScheduler_CancelDetachesReferencesAndReportsWasted(t *testing.T) {
 	events := make(chan string, 8)
 	manager := &schedulerManager{started: make(chan struct{}, 1)}

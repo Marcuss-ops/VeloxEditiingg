@@ -113,7 +113,9 @@ reversibile, testato prima/dopo, committato su `main` e pubblicato.
 - [ ] Passare da resolve sequenziale a queue asset-level bounded e centralizzata.
 - [ ] Ordinare la queue con `distance`, `enqueued_at`, `asset_key`.
 - [ ] Conservare QoS `FOREGROUND > N+1 > N+2 > N+3`.
-- [ ] Applicare admission control per concurrency, byte budget e disk pressure.
+- [x] Applicare admission control per concurrency, byte budget e disk pressure;
+      corretto anche il caso di un singolo asset più grande del budget, che
+      deve restare pending invece di passare solo perché è il primo elemento.
 - [ ] Verificare cancellation del waiter senza cancellare transfer condivisi.
 - [ ] Aggiungere metriche senza label `job_id`, `asset_id` o SHA ad alta cardinalità.
 - [ ] Calcolare `ready_lead_ms` per asset prefetchable.

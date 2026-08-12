@@ -375,7 +375,10 @@ func (s *Scheduler) nextWorkItem() (*workItem, *downloader.CacheResolver) {
 			heap.Push(&s.queue, item)
 			return nil, nil
 		}
-		if item.asset.SizeBytes < 0 || (s.bytes > 0 && s.bytes+item.asset.SizeBytes > s.cfg.ByteBudget) {
+		// A single asset larger than the budget must remain pending too. The
+		// previous s.bytes > 0 guard admitted an oversized first item and made
+		// the byte budget depend on queue order.
+		if item.asset.SizeBytes < 0 || s.bytes+item.asset.SizeBytes > s.cfg.ByteBudget {
 			heap.Push(&s.queue, item)
 			continue
 		}
