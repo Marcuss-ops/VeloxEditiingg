@@ -28,7 +28,7 @@ func persistAttemptVersioning(ctx context.Context, tx *sql.Tx, cmd taskgraph.Ing
 		cmd.FFmpegVersion == "" && cmd.ConfigHash == "" && cmd.DockerImageDigest == "" {
 		return nil
 	}
-	_, err := tx.ExecContext(ctx,
+	result, err := tx.ExecContext(ctx,
 		`UPDATE task_attempts
 		 SET git_sha = ?, worker_version = ?, engine_version = ?,
 		     ffmpeg_version = ?, config_hash = ?, docker_image_digest = ?,
@@ -41,6 +41,9 @@ func persistAttemptVersioning(ctx context.Context, tx *sql.Tx, cmd taskgraph.Ing
 	)
 	if err != nil {
 		return fmt.Errorf("task ingest atomic versioning: %w", err)
+	}
+	if err := requireAttemptIdentityUpdate(result, "task ingest atomic versioning"); err != nil {
+		return err
 	}
 	return nil
 }
@@ -98,7 +101,7 @@ func persistAttemptRenderIdentity(ctx context.Context, tx *sql.Tx, cmd taskgraph
 		mismatch = 1
 	}
 
-	_, err := tx.ExecContext(ctx,
+	result, err := tx.ExecContext(ctx,
 		`UPDATE task_attempts
 		 SET renderer_version = ?,
 		     artifact_sha256 = CASE WHEN artifact_sha256 = '' THEN ? ELSE artifact_sha256 END,
@@ -112,6 +115,9 @@ func persistAttemptRenderIdentity(ctx context.Context, tx *sql.Tx, cmd taskgraph
 	if err != nil {
 		return stamp, fmt.Errorf("task ingest atomic render identity: %w", err)
 	}
+	if err := requireAttemptIdentityUpdate(result, "task ingest atomic render identity"); err != nil {
+		return stamp, err
+	}
 	return stamp, nil
 }
 
@@ -120,7 +126,7 @@ func persistAttemptTracing(ctx context.Context, tx *sql.Tx, cmd taskgraph.Ingest
 	if cmd.TraceID == "" && cmd.SpanID == "" {
 		return nil
 	}
-	_, err := tx.ExecContext(ctx,
+	result, err := tx.ExecContext(ctx,
 		`UPDATE task_attempts
 		 SET trace_id = ?, span_id = ?, updated_at = ?
 		 WHERE task_id = ? AND worker_id = ? AND lease_id = ?`,
@@ -130,6 +136,20 @@ func persistAttemptTracing(ctx context.Context, tx *sql.Tx, cmd taskgraph.Ingest
 	)
 	if err != nil {
 		return fmt.Errorf("task ingest atomic tracing: %w", err)
+	}
+	if err := requireAttemptIdentityUpdate(result, "task ingest atomic tracing"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func requireAttemptIdentityUpdate(result sql.Result, operation string) error {
+	affected, err := readRowsAffected(result, operation)
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return fmt.Errorf("%s: %w", operation, taskgraph.ErrTransitionConflict)
 	}
 	return nil
 }
