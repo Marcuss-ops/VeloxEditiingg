@@ -68,11 +68,9 @@ import (
 // A PlanResolver is mandatory: NewEnqueuer panics on nil so
 // misconfiguration surfaces at boot.
 //
-// SocialValidator is OPTIONAL: use WithSocialValidator if a `*socialclient.Client`
-// has been wired at the composition root. When nil, the per-entry
-// pre-flight loop in validateDeliveryPlanRequires is a no-op
-// (NOOP_DESTINATION_VALIDATOR) so existing callers (Drive-only, dev
-// mode without a Social API configured) keep working unchanged.
+// SocialValidator is optional only for Drive-only plans. If a payload
+// contains an external Social destination, the enqueue pre-flight fails
+// closed when this dependency is absent.
 type Enqueuer struct {
 	Creator         *store.AtomicJobTaskCreator
 	Jobs            jobs.Reader
@@ -82,9 +80,8 @@ type Enqueuer struct {
 }
 
 // NewEnqueuer constructs an Enqueuer with mandatory Creator + Jobs + PlanResolver.
-// The voiceover service is optional (nil-safe). The SocialValidator is
-// optional — wire it via WithSocialValidator at the composition root
-// if the social_repo boundary is available in this environment.
+// The voiceover service is optional (nil-safe). Wire the SocialValidator
+// at the composition root whenever Social destinations are supported.
 //
 // PlanResolver is mandatory: passing nil panics so misconfiguration
 // surfaces at construction time, not on the first enqueue.
@@ -99,8 +96,7 @@ func NewEnqueuer(creator *store.AtomicJobTaskCreator, jobsRepo jobs.Reader, voic
 // validator wired in for the per-entry pre-flight loop in
 // validateDeliveryPlanRequires. The typical wiring is
 // `enqueuer.WithSocialValidator(socialclient.New(socialclient.ConfigFromEnv()))`
-// at the composition root; nil disables the pre-flight (legacy /
-// drive-only / dev consumers).
+// at the composition root; nil is accepted only by Drive-only plans.
 func (e *Enqueuer) WithSocialValidator(v DestinationValidator) *Enqueuer {
 	if e == nil {
 		return e

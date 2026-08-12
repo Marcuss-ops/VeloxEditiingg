@@ -28,8 +28,7 @@ import (
 //  1. Call deliveryplan.Parse(payload) — shape rules + duplicate
 //     detection + per-entry constraints live there.
 //  2. For each resulting shared.Entry, run the social_repo
-//     pre-flight via the DestinationValidator interface (no-op by
-//     default for legacy/dev mode). The HARD/SOFT classification
+//     pre-flight via the DestinationValidator interface. The HARD/SOFT classification
 //     of socialclient sentinels (ErrPermanent/ErrAuth HARD,
 //     ErrTransient/ErrRateLimit SOFT, ErrNotConfigured HARD) stays
 //     here because the socialclient boundary is enqueue-only.
@@ -103,17 +102,6 @@ type DestinationValidator interface {
 	ValidateDestination(ctx context.Context, socialDestID string) error
 }
 
-// noopDestinationValidator is the default validator when no
-// *socialclient.Client has been wired in (legacy consumers, dev
-// mode without a Social API configured). It short-circuits the
-// per-entry pre-flight loop and skips any Social API call so the
-// existing happy-path unit tests still pass without DI plumbing.
-type noopDestinationValidator struct{}
-
-func (noopDestinationValidator) ValidateDestination(ctx context.Context, socialDestID string) error {
-	return nil
-}
-
 // =============================================================================
 // Public entry points
 // =============================================================================
@@ -125,10 +113,9 @@ func (noopDestinationValidator) ValidateDestination(ctx context.Context, socialD
 // The optional `validator` parameter performs a per-entry
 // pre-flight against the external Social API
 // (POST /internal/v1/destinations/:id/validate). Plug it in via
-// Enqueuer.WithSocialValidator at the composition root; pass
-// `nil` (or the bundled `noopDestinationValidator{}`) for the
-// legacy paths that bypass the social_repo boundary (Drive-only,
-// pre-rollout dev mode).
+// Enqueuer.WithSocialValidator at the composition root. A nil
+// validator remains valid for Drive-only plans, but a plan carrying
+// an external Social destination fails closed when the validator is absent.
 //
 // Sentinel handling on the per-entry pre-flight loop:
 //
@@ -168,10 +155,6 @@ func validateDeliveryPlanRequires(ctx context.Context, payloadMap map[string]int
 		return err
 	}
 
-	if validator == nil {
-		validator = noopDestinationValidator{}
-	}
-
 	for i, e := range entries {
 		socialDestID := strings.TrimSpace(e.ExternalDestinationID)
 		if socialDestID == "" {
@@ -185,6 +168,9 @@ func validateDeliveryPlanRequires(ctx context.Context, payloadMap map[string]int
 			// shapeFromMap, so the back-compat read is
 			// transparent here.
 			continue
+		}
+		if validator == nil {
+			return fmt.Errorf("%w: social destination validator is not configured", socialclient.ErrNotConfigured)
 		}
 		if perr := validator.ValidateDestination(ctx, socialDestID); perr != nil {
 			switch {
@@ -237,13 +223,11 @@ func validateDeliveryPlanRequires(ctx context.Context, payloadMap map[string]int
 }
 
 // validateDeliveryPlanShapeOnly is the pure payload-shape validator
-// preserved for the canonical-purity gate on paths where the
-// Social API boundary is intentionally NOT exercised (dev mode
-// without a configured social_repo, legacy consumers, fuzz
-// harnesses). It is the same loop validateDeliveryPlanRequires
-// runs minus the per-entry pre-flight. Callers that want both
-// shape + pre-flight must route through
-// validateDeliveryPlanRequires.
+// preserved for callers that intentionally do not exercise the Social
+// API boundary (for example parser tests and fuzz harnesses). It must
+// not be used as the enqueue precondition: normal enqueue calls route
+// through validateDeliveryPlanRequires so Social destinations cannot
+// bypass pre-flight validation.
 func deliveryIntentPresent(payload map[string]interface{}) bool {
 	if payload == nil {
 		return true
@@ -282,7 +266,11 @@ func deliveryIntentPresent(payload map[string]interface{}) bool {
 // validateDeliveryPlanShapeOnly validates only when the payload declares
 // delivery intent; render-only payloads remain valid without a target.
 func validateDeliveryPlanShapeOnly(payloadMap map[string]interface{}) error {
-	return validateDeliveryPlanRequires(context.Background(), payloadMap, nil)
+	if !deliveryIntentPresent(payloadMap) {
+		return nil
+	}
+	_, err := deliveryplan.Parse(payloadMap)
+	return err
 }
 
 // =============================================================================

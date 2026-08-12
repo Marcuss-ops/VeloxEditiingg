@@ -22,7 +22,7 @@
 //         provider-not-configured as terminal).
 //       * Unknown errors → FAIL CLOSED (propagated, no silent retry).
 //   3. Empty external_destination_id → loop skips pre-flight.
-//   4. nil validator → substitutes noopDestinationValidator.
+//   4. nil validator → rejects Social destinations fail-closed.
 //   5. Per-entry call count + argument pinning.
 
 package enqueue
@@ -526,11 +526,11 @@ func TestValidateDeliveryPlanRequires_Preflight(t *testing.T) {
 		}
 	})
 
-	t.Run("nil_validator_substitutes_noop", func(t *testing.T) {
+	t.Run("nil_validator_rejects_social_destination", func(t *testing.T) {
 		t.Parallel()
 		err := validateDeliveryPlanRequires(context.Background(), planWithSocial, nil)
-		if err != nil {
-			t.Errorf("nil validator should fall back to noop; got %v", err)
+		if !errors.Is(err, socialclient.ErrNotConfigured) {
+			t.Errorf("nil validator should fail closed with ErrNotConfigured; got %v", err)
 		}
 	})
 

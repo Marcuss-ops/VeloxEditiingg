@@ -97,6 +97,9 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 - Deployment/alert read models: timestamp corrotti non vengono più degradati
   a tempi zero; gli update di stato, rollback e touch alert verificano anche
   `RowsAffected` e restituiscono il not-found sentinel quando la riga manca.
+- Enqueue Social preflight: il validator non ha più un noop implicito in
+  produzione; i piani Drive-only restano compatibili, mentre una destinazione
+  Social senza dipendenza configurata viene rifiutata con `ErrNotConfigured`.
 - DB pool telemetry: `OpenConnections`, `InUse`, `Idle`, `WaitCount` e
   `WaitDuration` sono esposti senza label per distinguere lock da queueing.
 - Bootstrap worker: la lista ffmpeg/ffprobe è una dipendenza esplicita con
@@ -158,6 +161,8 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 - [x] Deployment ledger e fleet alerts: le transizioni terminali, il flag di
   rollback e il refresh di un alert ACTIVE non dichiarano più successo senza
   una riga autorevole aggiornata; i read model rifiutano timestamp corrotti.
+- [x] Rimuovere il fail-open del Social destination preflight: `nil` non
+  equivale più a validazione riuscita quando il piano richiede Social.
 - [x] Proteggere il caso stale-artifact in cui il commit è presente ma
   l'attempt è già fallito o appartiene a un'altra identità: nessuna
   promozione task/job viene più eseguita in quel caso.
