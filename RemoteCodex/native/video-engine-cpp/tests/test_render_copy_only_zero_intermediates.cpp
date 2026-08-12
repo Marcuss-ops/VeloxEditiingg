@@ -164,6 +164,48 @@ int main() {
         {nonAacAudio.string(), 1.0, 0.0, 2.0 * segmentDuration, "music", false},
     };
 
+    // ── Go-cache wire contract: the worker resolver rewrites velox-asset://
+    //    references into verified immutable cache paths before dispatch. The
+    //    canonical plan can therefore arrive as url = velox-asset://<id> with
+    //    cache_key = the verified local path. The packet path must bind that
+    //    path in place and open it directly via libavformat — never copy the
+    //    cache file into the C++ workdir. Set up a realistic worker-cache
+    //    layout (clips inside a cache directory) and reference them exactly
+    //    the way the Go resolver would.
+    const fs::path goCacheDir = root / "worker-cache";
+    fs::create_directory(goCacheDir, ec);
+    expect(!ec, "worker cache directory can be created");
+    const fs::path cachedClipA = goCacheDir / "clip-a.mp4";
+    const fs::path cachedClipB = goCacheDir / "clip-b.mp4";
+    const fs::path cachedAudio = goCacheDir / "audio.m4a";
+    fs::copy_file(clipA, cachedClipA, fs::copy_options::overwrite_existing, ec);
+    expect(!ec, "cache clip A can be materialized");
+    fs::copy_file(clipB, cachedClipB, fs::copy_options::overwrite_existing, ec);
+    expect(!ec, "cache clip B can be materialized");
+    fs::copy_file(audio, cachedAudio, fs::copy_options::overwrite_existing, ec);
+    expect(!ec, "cache audio can be materialized");
+
+    const fs::path cacheOutput = root / "cache-output.mp4";
+    velox::plan::RenderPlan cachePlan;
+    cachePlan.version = 1;
+    cachePlan.job_id = "zero-intermediates-cache-contract";
+    cachePlan.canvas = {64, 64, 5};
+    cachePlan.copy_only = true;
+    cachePlan.output_path = cacheOutput.string();
+    // The two cache-wire forms for timeline sources: url as the verified
+    // path AND url as the velox-asset:// reference with cache_key carrying
+    // the verified path. Audio tracks have no cache_key field in the V1
+    // contract; the worker resolver rewrites source_url to the verified
+    // local path before dispatch, so the audio uses the local-path form.
+    cachePlan.timeline = {
+        {velox::plan::VideoSource{cachedClipA.string(), ""}, segmentDuration, false},
+        {velox::plan::VideoSource{"velox-asset://cache-clip-b", cachedClipB.string()},
+         segmentDuration, false},
+    };
+    cachePlan.audio_tracks = {
+        {cachedAudio.string(), 1.0, 0.0, 2.0 * segmentDuration, "music", false},
+    };
+
     const char* previousPath = std::getenv("PATH");
     const bool hadPath = previousPath != nullptr;
     const std::string previousPathValue = hadPath ? previousPath : "";
@@ -173,12 +215,38 @@ int main() {
     const velox::core::RenderResult result = engine.render(renderPlan);
     velox::core::RenderEngine rejectedEngine;
     const velox::core::RenderResult rejected = rejectedEngine.render(rejectedPlan);
+    velox::core::RenderEngine cacheEngine;
+    const velox::core::RenderResult cacheResult = cacheEngine.render(cachePlan);
 
     if (hadPath) {
         setenv("PATH", previousPathValue.c_str(), 1);
     } else {
         unsetenv("PATH");
     }
+
+    // ── Go-cache binding proof: cache assets opened in place, zero copies. ─
+    expect(cacheResult.success, "copy-only render with Go-cache references succeeds");
+    if (!cacheResult.success) {
+        std::cerr << "cache render error: " << cacheResult.error << "\n";
+    }
+    expect(cacheEngine.concatMode() == "packet_copy",
+           "cache-contract render uses the packet mux, actual=\"" +
+               cacheEngine.concatMode() + "\"");
+    {
+        const auto& cacheIO = velox::services::ioCounters();
+        expect(cacheIO.file_copy_count.load() == 0,
+               "cache assets are bound in place (zero file copies), actual=" +
+                   std::to_string(cacheIO.file_copy_count.load()));
+        expect(cacheIO.asset_bytes_copied.load() == 0,
+               "zero cache -> tmp asset bytes copied, actual=" +
+                   std::to_string(cacheIO.asset_bytes_copied.load()));
+        expect(cacheIO.input_open_count.load() >= 3,
+               "cache assets opened directly by libavformat (video x2 + audio), actual=" +
+                   std::to_string(cacheIO.input_open_count.load()));
+    }
+    expect(fs::exists(cacheOutput), "cache-contract output is published");
+    expect(!fs::exists(ffmpegTouched), "cache-contract render never executed ffmpeg");
+    expect(!fs::exists(ffprobeTouched), "cache-contract render never executed ffprobe");
 
     // ── FINAL_AUDIO_COPY rejection proof. ────────────────────────────────
     expect(!rejected.success, "non-AAC final audio fails closed");
@@ -271,6 +339,24 @@ int main() {
 
     // ── Sidecar telemetry: the job is reported as a single packet mux,
     //    with no concat / segment / mux-audio phases. ─────────────────────
+    const std::string cacheSidecarPath = cacheOutput.string() + ".progress.json";
+    const std::string cacheSidecar = velox::file::readFile(cacheSidecarPath);
+    expect(!cacheSidecar.empty(), "cache-contract sidecar is written");
+    if (!cacheSidecar.empty()) {
+        expect(contains(cacheSidecar, "\"concat_mode\":\"packet_copy\""),
+               "cache-contract sidecar reports packet_copy");
+        expect(contains(cacheSidecar, "\"temp_bytes\":0"),
+               "cache-contract sidecar reports zero temp bytes");
+        expect(contains(cacheSidecar, "packet_mux_ms"),
+               "cache-contract sidecar reports the packet_mux phase timing");
+        expect(contains(cacheSidecar, "\"file_copy_count\":0"),
+               "cache-contract sidecar reports zero file copies");
+        expect(contains(cacheSidecar, "\"asset_bytes_copied\":0"),
+               "cache-contract sidecar reports zero asset bytes copied");
+        expect(contains(cacheSidecar, "\"final_mux_audio_mode\":\"COPY\""),
+               "cache-contract sidecar reports FINAL_AUDIO_COPY");
+    }
+
     const std::string sidecarPath = output.string() + ".progress.json";
     const std::string sidecar = velox::file::readFile(sidecarPath);
     expect(!sidecar.empty(), "progress sidecar is written");

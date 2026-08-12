@@ -268,9 +268,18 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
         request.video_segments.reserve(plan.timeline.size());
         double total_copy_duration = 0.0;
 
-        // Bind existing local/cache assets directly. Only a genuinely remote
-        // source is staged into the workdir; the packet muxer opens the bound
-        // immutable path itself and never performs cache -> temp copies.
+        // Bind existing local/cache assets in place for this copy-only
+        // packet path. The Go worker resolver rewrites velox-asset://
+        // references into verified immutable cache paths before this plan is
+        // dispatched, so the canonical wire form is either url = local path
+        // or url = velox-asset://<id> with cache_key = the verified path.
+        // resolveLocalAssetPath() returns both in place; libavformat opens
+        // the bound path directly and this packet path never performs
+        // cache -> temp copies (asset_bytes_copied stays 0). Only a genuinely
+        // remote source is staged into the workdir. Note the scoping: the
+        // legacy segment/mux paths below still stage assets via downloadAsset
+        // into the workdir — this in-place guarantee is specific to the
+        // copy-only packet pipeline.
         const auto bindOrStage = [&](const std::string& source,
                                      const std::string& cache_reference,
                                      const fs::path& staged_path)
