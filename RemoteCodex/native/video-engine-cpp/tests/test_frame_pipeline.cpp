@@ -56,6 +56,16 @@ bool makeVideo(const fs::path& output, const std::string& size, int fps,
     return velox::file::runCommand(command.str());
 }
 
+bool makeOffsetVideo(const fs::path& output) {
+    std::ostringstream command;
+    command << "ffmpeg -y -hide_banner -loglevel error"
+            << " -itsoffset 2 -f lavfi -i "
+            << velox::file::shellQuote("testsrc=size=64x64:rate=5:duration=1.2")
+            << " -an -c:v libx264 -preset ultrafast -pix_fmt yuv420p -vsync 0 "
+            << velox::file::shellQuote(output.string());
+    return velox::file::runCommand(command.str());
+}
+
 bool hasVideoStream(const fs::path& path) {
     const auto probe = velox::media::probeMediaInProcess(path);
     if (!probe.has_value()) {
@@ -88,7 +98,10 @@ int main() {
 
     // 10 frames at 5 fps (more than the 4-slot pool -> reuse must happen).
     const fs::path clip = root / "clip.mp4";
+    const fs::path offsetClip = root / "offset-clip.mp4";
     expect(makeVideo(clip, "64x64", 5, 2.0), "clip fixture can be created");
+    expect(makeOffsetVideo(offsetClip),
+           "non-zero-start clip fixture can be created");
 
     // ── Sentinel PATH: any ffmpeg/ffprobe spawn during renderFrames fails. ─
     const fs::path sentinelBin = root / "sentinel-bin";
@@ -252,6 +265,24 @@ int main() {
                "source-window output contains only the requested frames, got " +
                    std::to_string(trimResult.frames_encoded));
         expect(hasVideoStream(trimmed), "source-window output is probeable");
+    }
+
+    // V2 source_in_us is relative to media start, not absolute stream PTS.
+    // This fixture starts at t=2s and requests the same relative 400..800ms
+    // window as the zero-offset fixture above.
+    const fs::path offsetTrimmed = root / "offset-trimmed.mp4";
+    velox::media::FramePipelineConfig offsetConfig = trimConfig;
+    offsetConfig.input_path = offsetClip;
+    offsetConfig.output_path = offsetTrimmed;
+    velox::media::FramePipelineResult offsetResult;
+    expect(velox::media::renderFrames(offsetConfig, &offsetResult),
+           "source-window native transcode handles non-zero stream start time");
+    if (offsetResult.success) {
+        expect(offsetResult.frames_encoded >= 1 && offsetResult.frames_encoded <= 3,
+               "non-zero-start source window contains only requested relative frames, got " +
+                   std::to_string(offsetResult.frames_encoded));
+        expect(hasVideoStream(offsetTrimmed),
+               "non-zero-start source-window output is probeable");
     }
 
     // ── Negative cases fail closed. ───────────────────────────────────────

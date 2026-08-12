@@ -409,6 +409,15 @@ bool renderFrames(const FramePipelineConfig& config, FramePipelineResult* result
     const int64_t source_end_us = config.source_duration_us > 0
         ? config.source_in_us + config.source_duration_us
         : 0;
+    // Render-plan source windows are relative to the beginning of the media,
+    // while decoded frame timestamps are expressed in the stream time base.
+    // Some valid inputs carry a non-zero stream start_time, so normalize the
+    // decoded timestamp before applying the V2 source window.
+    const int64_t stream_start_us = input_stream != nullptr &&
+            input_stream->start_time != AV_NOPTS_VALUE
+        ? av_rescale_q(input_stream->start_time, input_stream->time_base,
+                       AVRational{1, 1'000'000})
+        : 0;
 
     const AVCodec* decoder = avcodec_find_decoder(input_stream->codecpar->codec_id);
     if (decoder == nullptr) {
@@ -587,7 +596,7 @@ bool renderFrames(const FramePipelineConfig& config, FramePipelineResult* result
                 if (frame_timestamp != AV_NOPTS_VALUE) {
                     const int64_t frame_us = av_rescale_q(
                         frame_timestamp, input_stream->time_base,
-                        AVRational{1, 1'000'000});
+                        AVRational{1, 1'000'000}) - stream_start_us;
                     if (frame_us < source_start_us) {
                         pool.release(index);
                         continue;
