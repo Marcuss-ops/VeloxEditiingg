@@ -35,6 +35,7 @@ if(VELOX_ENABLE_LIBAV)
         libavformat
         libavcodec
         libavutil
+        libswscale
     )
 endif()
 
@@ -106,6 +107,7 @@ add_executable(velox_video_engine
     src/services/media_probe.cpp
     src/services/media_packet_pipeline.cpp
     src/services/media_utils.cpp
+    src/services/frame_pipeline.cpp
     src/audio/audio_plan.cpp
     src/audio/audio_benchmark.cpp
     src/services/ffmpeg_progress_parser.cpp
@@ -397,6 +399,29 @@ if(VELOX_ENABLE_LIBAV)
 
     add_test(NAME render_plan_v2_tests
              COMMAND velox_render_plan_v2_tests)
+
+    # Phase-3 AVFrame producer-consumer pipeline: bounded pool, three
+    # decode/render/encode threads and exactly one persistent encoder
+    # AVCodecContext. Unit + end-to-end encode test (libav-only).
+    add_executable(velox_frame_pipeline_tests
+        tests/test_frame_pipeline.cpp
+        src/services/frame_pipeline.cpp
+        src/services/media_packet_pipeline.cpp
+        src/services/media_probe.cpp
+        src/services/file_utils.cpp
+        src/services/io_counters.cpp
+    )
+
+    target_include_directories(velox_frame_pipeline_tests
+        PRIVATE include src include/velox)
+
+    if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(velox_frame_pipeline_tests PRIVATE -O2)
+    endif()
+    velox_link_ffmpeg(velox_frame_pipeline_tests)
+
+    add_test(NAME frame_pipeline_tests
+             COMMAND velox_frame_pipeline_tests)
 endif()
 
 # Every target that can include PhaseRecorder must consume the freshly
