@@ -499,6 +499,11 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             static_cast<int64_t>(fileSize(outPath)),
             0,
             telemetry::kStatusOk);
+        // The zero-spawn packet path owns the published artifact, so it
+        // declares the final size in the sidecar total_size directly (the
+        // ffmpeg-based paths fill this field from their progress stream).
+        // The receipt's I/O amplification denominator reads this value.
+        last_progress_.total_size = static_cast<int64_t>(fileSize(outPath));
         last_progress_.progress_pct = 100.0;
         last_progress_.finished = true;
         reportProgress(100, "completed");

@@ -58,6 +58,35 @@ func NewRenderClient(log *logger.Logger) (*RenderClient, error) {
 	}, nil
 }
 
+// NewRenderClientWithBinary constructs a render client pinned to an
+// explicit engine binary path, skipping binary resolution. The path
+// must exist and be a regular file — failing fast here is what keeps
+// the benchmark renderer honest when the engine binary is missing.
+func NewRenderClientWithBinary(binaryPath string, log *logger.Logger) (*RenderClient, error) {
+	if strings.TrimSpace(binaryPath) == "" {
+		return nil, fmt.Errorf("native: engine binary path is empty")
+	}
+	info, err := os.Stat(binaryPath)
+	if err != nil {
+		return nil, fmt.Errorf("native: engine binary %s: %w", binaryPath, err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("native: engine binary %s is not a regular file", binaryPath)
+	}
+	return &RenderClient{
+		binaryPath: binaryPath,
+		logger:     log,
+	}, nil
+}
+
+// BinaryPath returns the resolved engine binary path.
+func (c *RenderClient) BinaryPath() string {
+	if c == nil {
+		return ""
+	}
+	return c.binaryPath
+}
+
 // SetProgressCallback retains the legacy callback API. Legacy callbacks
 // are delivered by the engine stream parser without replacing detailed
 // Attempt telemetry.
@@ -105,6 +134,53 @@ func (c *RenderClient) RenderWithMetrics(ctx context.Context, p *plan.RenderPlan
 		}
 	}
 
+	if err := c.executeEngine(ctx, planPath, p.OutputPath, start, &metrics); err != nil {
+		return metrics, err
+	}
+	return metrics, nil
+}
+
+// RenderCompiledPlanV2 executes a pre-built CompiledRenderPlanV2 JSON
+// document (plan_version 2 with the worker-injected bindings block)
+// through the C++ engine --render --plan. It reuses the SAME
+// safety-critical subprocess lifecycle and sidecar mapping as
+// RenderWithMetrics (the V2 document routes into the engine's
+// in-process zero-spawn packet pipeline; the V1 contract stays on the
+// legacy path). The caller owns planJSON — the marshal cost is theirs
+// (PlanMarshalMs stays 0); outputPath is the plan's output_path, where
+// the engine atomically publishes the artifact and writes the sidecar
+// at <outputPath>.progress.json.
+func (c *RenderClient) RenderCompiledPlanV2(ctx context.Context, planJSON []byte, outputPath string) (pipeline.RenderMetrics, error) {
+	metrics := pipeline.RenderMetrics{}
+	start := time.Now()
+
+	tempDir, err := os.MkdirTemp("", "velox_render_v2_*")
+	if err != nil {
+		return metrics, fmt.Errorf("create temp dir: %w", err)
+	}
+	// The temp dir only holds the plan document; the engine never writes
+	// render output here (the plan's output_path lives in the caller's
+	// run dir). Clean it up on every exit path.
+	defer os.RemoveAll(tempDir)
+	planPath := filepath.Join(tempDir, "render_plan.json")
+	writeStart := time.Now()
+	if err := os.WriteFile(planPath, planJSON, 0o644); err != nil {
+		return metrics, fmt.Errorf("write plan: %w", err)
+	}
+	metrics.PlanWriteMs = time.Since(writeStart).Milliseconds()
+
+	if err := c.executeEngine(ctx, planPath, outputPath, start, &metrics); err != nil {
+		return metrics, err
+	}
+	return metrics, nil
+}
+
+// executeEngine is the shared engine-execution core of
+// RenderWithMetrics and RenderCompiledPlanV2: launch the subprocess,
+// map the lifecycle + sidecar telemetry onto metrics, verify the
+// output exists and stamp TotalMs. The safety-critical subprocess
+// lifecycle itself lives in engine_process.go.
+func (c *RenderClient) executeEngine(ctx context.Context, planPath, outputPath string, start time.Time, metrics *pipeline.RenderMetrics) error {
 	c.logger.Info("[NATIVE] Launching: %s --render --plan %s", c.binaryPath, planPath)
 	// SAFETY-CRITICAL subprocess lifecycle lives in engine_process.go.
 	engineStarted, processStartMs, processWaitMs, stderrBuf, stdoutBuf, processTelemetry, err := runEngineProcess(ctx, c.binaryPath, planPath, c.onProgress, c.legacyProgress)
@@ -113,42 +189,42 @@ func (c *RenderClient) RenderWithMetrics(ctx context.Context, p *plan.RenderPlan
 			// Cancellation path — preserve any sidecar phases already
 			// flushed before the process stopped, while retaining the
 			// original cancellation error semantics.
-			applyProcessTelemetry(&metrics, engineStarted, processStartMs, processWaitMs, processTelemetry)
-			if sidecar, sidecarErr := readEngineSidecar(p.OutputPath); sidecarErr == nil {
-				mapEngineSidecar(&sidecar, &metrics)
+			applyProcessTelemetry(metrics, engineStarted, processStartMs, processWaitMs, processTelemetry)
+			if sidecar, sidecarErr := readEngineSidecar(outputPath); sidecarErr == nil {
+				mapEngineSidecar(&sidecar, metrics)
 			}
-			return metrics, err
+			return err
 		}
 		// Subprocess failed — preserve any partial sidecar telemetry before
 		// returning the process error. Failed renders can still contain
 		// completed phases and segment timing that are valuable for retry
 		// and waste analysis; reading them is strictly best-effort.
-		applyProcessTelemetry(&metrics, engineStarted, processStartMs, processWaitMs, processTelemetry)
-		if sidecar, sidecarErr := readEngineSidecar(p.OutputPath); sidecarErr == nil {
-			mapEngineSidecar(&sidecar, &metrics)
+		applyProcessTelemetry(metrics, engineStarted, processStartMs, processWaitMs, processTelemetry)
+		if sidecar, sidecarErr := readEngineSidecar(outputPath); sidecarErr == nil {
+			mapEngineSidecar(&sidecar, metrics)
 		}
-		return metrics, fmt.Errorf("engine failed: %w (stderr=%s stdout=%s)",
+		return fmt.Errorf("engine failed: %w (stderr=%s stdout=%s)",
 			err, strings.TrimSpace(stderrBuf.String()), strings.TrimSpace(stdoutBuf.String()))
 	}
-	applyProcessTelemetry(&metrics, engineStarted, processStartMs, processWaitMs, processTelemetry)
+	applyProcessTelemetry(metrics, engineStarted, processStartMs, processWaitMs, processTelemetry)
 
 	if stderr := strings.TrimSpace(stderrBuf.String()); stderr != "" {
 		c.logger.Info("[NATIVE] stderr: %s", stderr)
 	}
 
-	if err := verifyOutputExists(p.OutputPath); err != nil {
-		return metrics, err
+	if err := verifyOutputExists(outputPath); err != nil {
+		return err
 	}
 
-	sidecar, scErr := readEngineSidecar(p.OutputPath)
+	sidecar, scErr := readEngineSidecar(outputPath)
 	if scErr != nil {
 		c.logger.Warn("[NATIVE] sidecar read failed: %s", scErr.Error())
 	} else {
-		mapEngineSidecar(&sidecar, &metrics)
+		mapEngineSidecar(&sidecar, metrics)
 	}
 
 	metrics.TotalMs = time.Since(start).Milliseconds()
-	return metrics, nil
+	return nil
 }
 
 // applyProcessTelemetry records the subprocess lifecycle counters, the

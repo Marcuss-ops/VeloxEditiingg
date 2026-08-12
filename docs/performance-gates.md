@@ -56,16 +56,18 @@ fissiamo dopo aver misurato il nuovo baseline").
 ## Running the dedicated worker
 
 ```bash
-# On the self-hosted benchmark host (stub renderer, plumbing proof):
+# On the self-hosted benchmark host (stub renderer, plumbing proof only):
 VELOX_BENCH_EVIDENCE=/tmp/bw-evidence make benchmark-worker
 
-# Once the production RenderRunner exists:
+# Real zero-spawn benchmark (production renderer over the generated track):
 VELOX_BENCH_REAL=1 VELOX_BENCH_BASELINE=/data/baseline make benchmark-worker
 ```
 
 The worker pipeline: builds the performance cmds → generates the
 canonical fixture track with `velox-fixture-gen` and verifies the
-manifest against the pinned spec digest → runs `velox-benchmark` →
-evaluates tier 2 → compares against the stored baseline with
-`velox-benchmark-compare -fail-on-regression` and persists the new
-baseline.
+manifest against the pinned spec digest → runs `velox-benchmark`
+(`VELOX_BENCH_REAL=1` drives the production zero-spawn renderer: one
+engine process, in-process libavformat packet copy, no
+ffmpeg/ffprobe execs, atomic output) → evaluates tier 2 → compares
+against the stored baseline with `velox-benchmark-compare
+-fail-on-regression` and persists the new baseline.

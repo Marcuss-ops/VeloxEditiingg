@@ -1,0 +1,16 @@
+    38.66%  libavcodec.so.59.37.100   
+    36.08%  ld-linux-x86-64.so.2      
+    15.60%  [kernel.kallsyms]         
+     2.69%  libm.so.6                 
+     2.53%  libc.so.6                 
+     1.31%  libhwy.so.1.0.3           
+     1.22%  libavutil.so.57.28.100    
+     0.73%  libavformat.so.59.27.100  
+     0.21%  libavfilter.so.8.44.100   
+     0.19%  ffmpeg                    
+     0.16%  libstdc++.so.6.0.30       
+     0.07%  libtasn1.so.6.6.3         
+     0.02%  [vdso]                    
+     0.02%  libSvtAv1Enc.so.1.4.1     
+     0.02%  libX11.so.6.4.0           
+     0.02%  libaom.so.3.6.0           

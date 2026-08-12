@@ -4,16 +4,20 @@
 // worker_id, host fingerprint, cold/warm cache, concurrency, per-run
 // receipts and the deterministic artifact SHA.
 //
-// The render backend is injected: today the only built-in is -stub
-// (synthetic receipts, for exercising the runner/report pipeline); the
-// production RenderRunner drives pipeline.Runner →
-// Assembler.Assemble once the fixture assets are registered.
+// The render backend is injected: -stub uses synthetic receipts (for
+// exercising the runner/report pipeline); -track-dir uses the
+// PRODUCTION zero-spawn renderer (NativeRenderer): it verifies the
+// generated fixture track against the pinned spec, builds the
+// frame-exact CompiledRenderPlanV2 + bindings, runs the C++ engine's
+// in-process libavformat packet path once per render and assembles the
+// receipt from the engine sidecar (plan §23).
 //
 // Usage:
 //
-//	velox-benchmark -fixture COPY_5M_LOW -runs 5 -concurrency 2 \
+//	velox-benchmark -fixture COPY_ONLY_CANONICAL_5M_V1 -runs 5 -concurrency 2 \
 //	  -worker-id w1 -git-commit $(git rev-parse HEAD) -cache warm \
-//	  -stub [-out run.json]
+//	  -track-dir /data/track [-work-dir /tmp/bench] [-engine-bin /usr/local/bin/velox_video_engine] \
+//	  [-out run.json]
 //
 // Exit codes: 0 = report produced, 1 = runner error, 2 = usage.
 package main
@@ -38,6 +42,9 @@ func main() {
 	release := flag.String("release", "", "release tag of the build")
 	engineDigest := flag.String("engine-digest", "", "engine binary digest")
 	stub := flag.Bool("stub", false, "use the stub renderer (synthetic receipts; NOT a real benchmark)")
+	trackDir := flag.String("track-dir", "", "dir with the generated fixture track (clip_*.mp4 + final_audio.m4a + manifest.json) — enables the production zero-spawn renderer")
+	workDir := flag.String("work-dir", "", "dir for render outputs + evidence sweep (default: system temp)")
+	engineBin := flag.String("engine-bin", "", "velox_video_engine binary (default: standard resolution)")
 	outPath := flag.String("out", "", "write the JSON report to this file (default: stdout)")
 	flag.Parse()
 
@@ -60,10 +67,24 @@ func main() {
 	}
 
 	var renderer performance.RenderRunner
-	if *stub {
+	switch {
+	case *stub:
 		renderer = stubRenderer{}
-	} else {
-		fmt.Fprintln(os.Stderr, "no render backend configured: pass -stub (synthetic) until the production RenderRunner lands with registered fixture assets")
+	case *trackDir != "":
+		nativeRenderer, err := performance.NewNativeRenderer(performance.NativeRendererConfig{
+			TrackDir:   *trackDir,
+			WorkDir:    *workDir,
+			BinaryPath: *engineBin,
+			WorkerID:   *workerID,
+			GitCommit:  *gitCommit,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "production renderer: %v\n", err)
+			os.Exit(2)
+		}
+		renderer = nativeRenderer
+	default:
+		fmt.Fprintln(os.Stderr, "no render backend configured: pass -stub (synthetic) or -track-dir (production zero-spawn renderer)")
 		os.Exit(2)
 	}
 
