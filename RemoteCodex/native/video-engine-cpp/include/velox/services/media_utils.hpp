@@ -44,6 +44,23 @@ FinalAudioDecision resolveFinalAudioMode(
     double volume,
     double startOffset);
 
+// Packet-mode FINAL_AUDIO_COPY decision for the in-process copy-only mux
+// (muxCopyOnly). Unlike the legacy FFmpeg resolver above, the packet path
+// never re-encodes: audio packets are copied into the same MP4 mux as the
+// video packets, the muxer trims trailing audio to the video timeline and
+// neutralizes a non-zero source start_time during the rewrite, and a
+// positive start offset is a pure packet timestamp shift. The prepared
+// upstream audio therefore only needs to be a verified MP4-AAC track whose
+// duration COVERS the video timeline (longer is trimmed, shorter fails).
+//
+// Volume is intentionally not part of this signature: any volume != 1.0
+// would require a filter/re-encode and is rejected by the copy-only plan
+// validation before this resolver runs.
+FinalAudioDecision resolveFinalAudioModePacket(
+    const FinalAudioMetadata& metadata,
+    bool isFinalMix,
+    double expectedDurationSeconds);
+
 const char* finalAudioModeName(FinalAudioMode mode);
 
 struct SceneSegmentParams {

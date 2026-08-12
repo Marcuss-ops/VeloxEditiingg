@@ -73,6 +73,19 @@ bool makeAudio(const fs::path& output) {
     return velox::file::runCommand(command.str());
 }
 
+bool makeNonAacAudio(const fs::path& output) {
+    // PCM-in-WAV is NOT FINAL_AUDIO_COPY-compatible: the packet path cannot
+    // re-encode, so the render must fail closed instead of silently copying
+    // an audio stream that is not the upstream-prepared MP4-AAC final mix.
+    std::ostringstream command;
+    command << "ffmpeg -y -hide_banner -loglevel error"
+            << " -f lavfi -i "
+            << velox::file::shellQuote("sine=frequency=440:sample_rate=48000")
+            << " -t 2.0 -c:a pcm_s16le "
+            << velox::file::shellQuote(output.string());
+    return velox::file::runCommand(command.str());
+}
+
 } // namespace
 
 int main() {
@@ -96,10 +109,13 @@ int main() {
     const fs::path clipA = root / "clip-a.mp4";
     const fs::path clipB = root / "clip-b.mp4";
     const fs::path audio = root / "audio.m4a";
+    const fs::path nonAacAudio = root / "audio-pcm.wav";
     const fs::path output = root / "final-output.mp4";
+    const fs::path rejectedOutput = root / "rejected-output.mp4";
     expect(makeVideo(clipA, "64x64"), "clip A fixture can be created");
     expect(makeVideo(clipB, "64x64"), "clip B fixture can be created");
     expect(makeAudio(audio), "audio fixture can be created");
+    expect(makeNonAacAudio(nonAacAudio), "non-AAC audio fixture can be created");
 
     // ── Sentinel PATH: any ffmpeg/ffprobe spawn fails hard. ─────────────
     const fs::path sentinelBin = root / "sentinel-bin";
@@ -138,6 +154,16 @@ int main() {
         {audio.string(), 1.0, 0.0, 2.0 * segmentDuration, "music", false},
     };
 
+    // ── Negative plan: the same timeline but a non-AAC final audio track.
+    //    The packet path cannot re-encode, so FINAL_AUDIO_COPY must fail
+    //    closed before any packet work (and without spawning media tools).
+    velox::plan::RenderPlan rejectedPlan = renderPlan;
+    rejectedPlan.job_id = "zero-intermediates-rejected";
+    rejectedPlan.output_path = rejectedOutput.string();
+    rejectedPlan.audio_tracks = {
+        {nonAacAudio.string(), 1.0, 0.0, 2.0 * segmentDuration, "music", false},
+    };
+
     const char* previousPath = std::getenv("PATH");
     const bool hadPath = previousPath != nullptr;
     const std::string previousPathValue = hadPath ? previousPath : "";
@@ -145,12 +171,34 @@ int main() {
 
     velox::core::RenderEngine engine;
     const velox::core::RenderResult result = engine.render(renderPlan);
+    velox::core::RenderEngine rejectedEngine;
+    const velox::core::RenderResult rejected = rejectedEngine.render(rejectedPlan);
 
     if (hadPath) {
         setenv("PATH", previousPathValue.c_str(), 1);
     } else {
         unsetenv("PATH");
     }
+
+    // ── FINAL_AUDIO_COPY rejection proof. ────────────────────────────────
+    expect(!rejected.success, "non-AAC final audio fails closed");
+    if (!rejected.success) {
+        expect(rejected.error.find("copy_only final audio is not FINAL_AUDIO_COPY") != std::string::npos,
+               "rejection error names the FINAL_AUDIO_COPY gate, actual=\"" +
+                   rejected.error + "\"");
+        // The decision reason explains which guard rejected the track (e.g.
+        // audio_metadata_unverified for raw PCM). The important contract is
+        // the fail-closed mode: the packet path never re-encodes.
+        expect(rejected.error.find("audio_metadata_unverified") != std::string::npos ||
+                   rejected.error.find("audio_codec_not_aac") != std::string::npos ||
+                   rejected.error.find("audio_transport_unverified") != std::string::npos,
+               "rejection carries a FINAL_AUDIO_COPY decision reason, actual=\"" +
+                   rejected.error + "\"");
+    }
+    expect(!fs::exists(rejectedOutput),
+           "rejected plan publishes no output");
+    expect(!fs::exists(ffmpegTouched), "rejected plan never executed ffmpeg");
+    expect(!fs::exists(ffprobeTouched), "rejected plan never executed ffprobe");
 
     // ── Render lifecycle assertions. ─────────────────────────────────────
     expect(result.success, "copy-only render succeeds");
@@ -241,6 +289,14 @@ int main() {
                "sidecar has no final mux phase (one in-process mux)");
         expect(contains(sidecar, "\"file_copy_count\":0"),
                "sidecar io counters report zero file copies");
+        expect(contains(sidecar, "\"final_mux_audio_mode\":\"COPY\""),
+               "sidecar reports FINAL_AUDIO_COPY for the prepared final audio");
+        expect(contains(sidecar, "\"final_mux_audio_encode_passes\":0"),
+               "sidecar reports zero audio encode passes (single mux, no AAC re-encode)");
+        expect(contains(sidecar, "\"audio_codec\":\"aac\""),
+               "sidecar reports the copied AAC audio codec");
+        expect(contains(sidecar, "\"decision_reason\":\"verified_final_mix\""),
+               "sidecar reports the verified FINAL_AUDIO_COPY reason");
     }
 
     std::cerr << "summary: fail=" << failures << "\n";

@@ -349,6 +349,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             result.error = "copy_only supports at most one final audio track";
             return failRender("copy_only_audio_mix_unsupported");
         }
+        media::FinalAudioDecision finalAudioDecision;
         if (!plan.audio_tracks.empty()) {
             const auto& track = plan.audio_tracks.front();
             if (track.loop || track.volume != 1.0 || track.start_time_offset < 0.0) {
@@ -360,6 +361,22 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             if (boundAudio.first.empty() || !media::hasAudioStream(boundAudio.first)) {
                 result.error = "failed to resolve valid copy-only audio track";
                 return failRender("copy_only_audio_invalid");
+            }
+            // FINAL_AUDIO_COPY contract gate for the in-process packet path.
+            // The upstream-prepared final audio must be a verified MP4-AAC
+            // track covering the video timeline; the packet mux then copies
+            // its packets into the same MP4 as the video with zero decode,
+            // zero filter and zero AAC re-encode. Anything that would need a
+            // re-encode (non-AAC codec, raw ADTS container, unverified
+            // transport, duration shorter than the timeline) fails closed:
+            // the zero-spawn path cannot repair audio.
+            finalAudioDecision = media::resolveFinalAudioModePacket(
+                media::probeFinalAudioMetadata(boundAudio.first),
+                true, total_copy_duration);
+            if (finalAudioDecision.mode != media::FinalAudioMode::Copy) {
+                result.error = "copy_only final audio is not FINAL_AUDIO_COPY: " +
+                    finalAudioDecision.reason;
+                return failRender("copy_only_audio_not_final_copy");
             }
             {
                 telemetry::ScopedPhase assetPhase(
@@ -389,6 +406,36 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
         telemetry::ScopedPhase packetPhase(
             recorder_, telemetry::kOriginEngine, telemetry::kScopeAttempt,
             "engine", "packet_mux", "composite");
+        if (!plan.audio_tracks.empty()) {
+            // The packet mux performs the single final mux: video packets +
+            // the upstream-prepared final audio packets, no AAC encode pass.
+            // Mirror the legacy muxAudio decision telemetry so downstream
+            // consumers see the FINAL_AUDIO_COPY mode on this path too.
+            packetPhase.SetMetadataJSON(
+                std::string("{\"final_mux_audio_mode\":\"") +
+                media::finalAudioModeName(finalAudioDecision.mode) +
+                "\",\"final_mux_audio_encode_passes\":" +
+                (finalAudioDecision.mode == media::FinalAudioMode::Copy ? "0" : "1") +
+                ",\"audio_metadata_verified\":" +
+                (finalAudioDecision.metadata.metadata_verified ? "true" : "false") +
+                ",\"audio_codec\":\"" + escapeJsonString(finalAudioDecision.metadata.codec) +
+                "\",\"audio_sample_rate\":" + std::to_string(finalAudioDecision.metadata.sample_rate) +
+                ",\"audio_channels\":" + std::to_string(finalAudioDecision.metadata.channels) +
+                ",\"audio_channel_layout\":\"" +
+                escapeJsonString(finalAudioDecision.metadata.channel_layout) +
+                "\",\"audio_duration_seconds\":" +
+                std::to_string(finalAudioDecision.metadata.duration_seconds) +
+                ",\"audio_start_time_seconds\":" +
+                std::to_string(finalAudioDecision.metadata.start_time_seconds) +
+                ",\"audio_format_name\":\"" +
+                escapeJsonString(finalAudioDecision.metadata.format_name) +
+                "\",\"audio_extradata_verified\":" +
+                (finalAudioDecision.metadata.extradata_verified ? "true" : "false") +
+                ",\"audio_container_verified\":" +
+                (finalAudioDecision.metadata.container_verified ? "true" : "false") +
+                ",\"decision_reason\":\"" +
+                escapeJsonString(finalAudioDecision.reason) + "\"}");
+        }
         media::CopyOnlyMuxResult muxResult;
         bool muxOk;
         {

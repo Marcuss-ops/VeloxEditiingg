@@ -218,6 +218,49 @@ void testFinalAudioModeResolver() {
     EXPECT_EQ_STR(wrongCodec.reason, "audio_codec_not_aac");
 }
 
+void testFinalAudioModePacketResolver() {
+    SUBCASE("packet-mode FINAL_AUDIO_COPY requires a verified MP4-AAC final mix");
+    velox::media::FinalAudioMetadata verified{
+        true, "aac", 48000, 2, "stereo", 1.6, 0.0, true, true,
+        "mov,mp4,m4a", true, true};
+    auto copy = velox::media::resolveFinalAudioModePacket(verified, true, 1.6);
+    EXPECT_EQ_STR(velox::media::finalAudioModeName(copy.mode), "COPY");
+    EXPECT_EQ_STR(copy.reason, "verified_final_mix");
+
+    // The packet mux trims trailing audio to the video timeline, so a
+    // longer prepared track is still COPY (coverage, not exact equality).
+    auto longer = verified;
+    longer.duration_seconds = 2.0;
+    auto covering = velox::media::resolveFinalAudioModePacket(longer, true, 1.6);
+    EXPECT_EQ_STR(velox::media::finalAudioModeName(covering.mode), "COPY");
+
+    auto notFinal = velox::media::resolveFinalAudioModePacket(verified, false, 1.6);
+    EXPECT_EQ_STR(velox::media::finalAudioModeName(notFinal.mode), "ENCODE");
+    EXPECT_EQ_STR(notFinal.reason, "not_final_mix");
+
+    auto unverified = velox::media::resolveFinalAudioModePacket(
+        velox::media::FinalAudioMetadata{}, true, 1.6);
+    EXPECT_EQ_STR(velox::media::finalAudioModeName(unverified.mode), "ENCODE");
+    EXPECT_EQ_STR(unverified.reason, "audio_metadata_unverified");
+
+    verified.container_verified = false;
+    auto rawContainer = velox::media::resolveFinalAudioModePacket(verified, true, 1.6);
+    EXPECT_EQ_STR(velox::media::finalAudioModeName(rawContainer.mode), "ENCODE");
+    EXPECT_EQ_STR(rawContainer.reason, "audio_transport_unverified");
+
+    verified.container_verified = true;
+    verified.codec = "mp3";
+    auto wrongCodec = velox::media::resolveFinalAudioModePacket(verified, true, 1.6);
+    EXPECT_EQ_STR(velox::media::finalAudioModeName(wrongCodec.mode), "ENCODE");
+    EXPECT_EQ_STR(wrongCodec.reason, "audio_codec_not_aac");
+
+    verified.codec = "aac";
+    verified.duration_seconds = 1.2;
+    auto tooShort = velox::media::resolveFinalAudioModePacket(verified, true, 1.6);
+    EXPECT_EQ_STR(velox::media::finalAudioModeName(tooShort.mode), "ENCODE");
+    EXPECT_EQ_STR(tooShort.reason, "audio_duration_mismatch");
+}
+
 void testAppendJson() {
     SUBCASE("AppendJson emits a complete phases[] element");
     vt::PhaseRecorder r;
@@ -578,6 +621,7 @@ int main() {
     testScopedPhaseRaii();
     testScopedPhaseMove();
     testFinalAudioModeResolver();
+    testFinalAudioModePacketResolver();
     testAppendJson();
     testAppendJsonMetadataValidationAndDetailedFields();
     testAppendJsonEscapesStrings();

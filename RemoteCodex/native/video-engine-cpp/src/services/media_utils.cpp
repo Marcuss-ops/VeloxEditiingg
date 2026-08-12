@@ -430,6 +430,25 @@ FinalAudioMetadata probeFinalAudioMetadata(const fs::path& audioPath) {
 
 #endif // VELOX_ENABLE_LIBAV
 
+// Shared FINAL_AUDIO_COPY transport guards used by BOTH resolvers (the
+// legacy FFmpeg mux and the in-process packet mux). Keeping them in one
+// place prevents the two decisions from drifting: metadata verification,
+// MP4 container safety (no raw ADTS/LATM) and the AAC codec requirement
+// are the same contract on every path.
+static std::string finalAudioTransportReason(const FinalAudioMetadata& metadata) {
+    if (!metadata.metadata_verified || !metadata.duration_verified ||
+        !metadata.start_time_verified) {
+        return "audio_metadata_unverified";
+    }
+    if (!metadata.extradata_verified || !metadata.container_verified) {
+        return "audio_transport_unverified";
+    }
+    if (metadata.codec != "aac") {
+        return "audio_codec_not_aac";
+    }
+    return {};
+}
+
 FinalAudioDecision resolveFinalAudioMode(
     const FinalAudioMetadata& metadata,
     bool isFinalMix,
@@ -447,16 +466,9 @@ FinalAudioDecision resolveFinalAudioMode(
         decision.reason = "final_audio_filter_required";
         return decision;
     }
-    if (!metadata.metadata_verified || !metadata.duration_verified || !metadata.start_time_verified) {
-        decision.reason = "audio_metadata_unverified";
-        return decision;
-    }
-    if (!metadata.extradata_verified || !metadata.container_verified) {
-        decision.reason = "audio_transport_unverified";
-        return decision;
-    }
-    if (metadata.codec != "aac") {
-        decision.reason = "audio_codec_not_aac";
+    const std::string transportReason = finalAudioTransportReason(metadata);
+    if (!transportReason.empty()) {
+        decision.reason = transportReason;
         return decision;
     }
     if (expectedDurationSeconds <= 0.0 ||
@@ -466,6 +478,36 @@ FinalAudioDecision resolveFinalAudioMode(
     }
     if (std::abs(metadata.start_time_seconds) > 0.05) {
         decision.reason = "audio_start_time_mismatch";
+        return decision;
+    }
+
+    decision.mode = FinalAudioMode::Copy;
+    decision.reason = "verified_final_mix";
+    return decision;
+}
+
+FinalAudioDecision resolveFinalAudioModePacket(
+    const FinalAudioMetadata& metadata,
+    bool isFinalMix,
+    double expectedDurationSeconds) {
+    FinalAudioDecision decision;
+    decision.metadata = metadata;
+
+    if (!isFinalMix) {
+        decision.reason = "not_final_mix";
+        return decision;
+    }
+    const std::string transportReason = finalAudioTransportReason(metadata);
+    if (!transportReason.empty()) {
+        decision.reason = transportReason;
+        return decision;
+    }
+    // Coverage semantics: the packet mux trims trailing audio to the video
+    // timeline, so a longer prepared track is still COPY; a shorter one is
+    // rejected here (and again by the muxer's own duration guard).
+    if (expectedDurationSeconds <= 0.0 ||
+        metadata.duration_seconds + 0.05 < expectedDurationSeconds) {
+        decision.reason = "audio_duration_mismatch";
         return decision;
     }
 

@@ -18,6 +18,13 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # (subtitle burn is a full re-encode, image sources are encoded as
 # segments). OFF is intentionally the pre-LibAV contract, not the strict
 # packet contract.
+#
+# FINAL_AUDIO_COPY gate (ON only): the copy-only packet path now requires
+# the prepared final audio to be a verified MP4-AAC track covering the
+# video timeline and fails closed with copy_only_audio_not_final_copy
+# otherwise (e.g. MP3/PCM/WAV final audio). Upstream callers that feed
+# non-AAC final audio to copy_only plans must repair the audio upstream;
+# there is no in-process re-encode on this path.
 option(VELOX_ENABLE_LIBAV
     "Build with in-process libavformat/libavcodec/libavutil (MediaProbe + packet mux)"
     OFF)
