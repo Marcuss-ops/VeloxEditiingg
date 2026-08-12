@@ -139,6 +139,17 @@ reversibile, testato prima/dopo, committato su `main` e pubblicato.
 - [ ] Testare rollout fallito, restart interrotto, worker riconnesso,
       operation stale e retry del reconciler.
 
+## Fase E.1 — Legacy/dead seams audit
+
+- [x] Verificare che il launcher `scripts/fleetctl` deleghi esclusivamente al
+      client Go tipizzato; gate launcher e `check-no-legacy.sh` verdi.
+- [x] Verificare i simboli `fleetctl-legacy`/`post_mutation`: assenti dal tree
+      corrente; nessuna rimozione ulteriore autorizzata o necessaria.
+- [x] Verificare i candidati `NewResolverFromDeps` e bridge Ansible: entrambi
+      hanno caller/uso server-side reale e non sono dead code.
+- [ ] Ottenere evidenza di traffico production prima di rimuovere eventuali
+      route 410 o compatibilità HTTP residue.
+
 ### Writer audit completato finora
 
 - [x] Delivery reconciliation: `ApplyReconciledDelivery` controlla

@@ -313,6 +313,13 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 
 ### P2 — Legacy e documentazione
 
+- [x] Verificare il percorso `fleetctl`: `scripts/fleetctl` delega al client Go
+  tipizzato; non esistono nel tree `fleetctl-legacy`, `post_mutation` o gli
+  helper Bash di rollout già rimossi. `check-no-legacy.sh` e il launcher gate
+  sono verdi.
+- [x] Verificare i candidati dead seam prima della rimozione: `NewResolverFromDeps`
+  ha caller nel service creatorflow e il bridge Ansible è ancora un percorso
+  server-side documentato; entrambi restano codice attivo, non legacy morto.
 - [x] Aggiornare `docs/roadmap/README.md`: le directory `refactored/...` non
   esistono più e il documento descrive ancora fasi già completate.
 - [ ] Tenere le route 410 solo finché esiste evidenza di traffico e un owner;
