@@ -199,9 +199,10 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
   autorevole deve controllare `RowsAffected`, ownership e generazione. Restano
   soprattutto i writer del runtime volatile e le transizioni publication/
   session che non sono ancora state ricondotte a un unico helper CAS.
-- [ ] Chiudere l'audit mirato di `MarkDeliverySucceeded`,
-  `CompletePublicationAfterReconciliation` e `TaskResult`:
-  nessun ritorno `nil` dopo un commit non avvenuto.
+- [x] Audit mirato di `MarkDeliverySucceeded`,
+  `CompletePublicationAfterReconciliation` e `TaskResult`: i writer
+  verificano CAS/ownership, `RowsAffected` e commit; nessun percorso
+  dichiara successo dopo una transizione non avvenuta.
 - [x] `FinalizeVerified`: il percorso moderno usa CAS su `AttemptID`; il
   percorso legacy è recintato da worker/lease e, sullo schema canonico, da
   `task_attempts`, con replay terminale ammesso solo per la stessa identità.
