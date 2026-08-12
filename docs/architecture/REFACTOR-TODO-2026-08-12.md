@@ -231,6 +231,9 @@ reversibile, testato prima/dopo, committato su `main` e pubblicato.
 - [x] Blob store: rimossa la coda upload legacy che veniva drenata da un noop
       e poteva perdere lavoro; `BlobArtifacts` è ora solo persistenza locale,
       mentre la pubblicazione passa dal protocollo artifact canonico.
+- [x] TaskRunner phase markers: cache lookup e prefetch non dichiarano più
+      `ok` da callback vuota; sono `deferred` con owner esplicito e non entrano
+      nel calcolo dei millisecondi effettivamente misurati dal runner.
 - [ ] Verificare che ogni job produca automaticamente un breakdown completo
       o un motivo esplicito per ogni fase non disponibile.
 - [ ] Salvare fixture permanenti: 5m poche/semplice, 5m molte/complesso,

@@ -22,7 +22,7 @@
 //   - runner_logger.go   : workerExecLogger adapter + formatFields.
 //   - execution.go       : runExecute — the panic-contained Execute wrapper
 //     and the post-Execute ctx check (pre-existing).
-//   - upload_lifecycle.go: runUpload — the upload-phase stub (pre-existing).
+//   - upload_lifecycle.go: runUpload — the upload hand-off marker.
 //   - error_mapping.go   : isPanicErr, isPanicContained, mapCtxErr —
 //     the error-classification helpers (pre-existing).
 //   - report_metrics.go  : mergeStatsInto + the type-coercion helpers
@@ -214,7 +214,7 @@ func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskEx
 			fmt.Sprintf("spec validation: %v", err)), nil
 	}
 	validateSpan.End()
-	appendPhase(r.runPhase(rec, PhaseCacheLookup, func() error { return nil }, overallStart))
+	appendPhase(r.runDeferredPhase(rec, PhaseCacheLookup, "asset resolution is owned by the worker asset bridge"))
 
 	// Phase: resolve executor from the registry.
 	version := r.specVersion(spec)
@@ -257,7 +257,7 @@ func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskEx
 		return r.completeError(rec, report, appendPhase, CodeValidationFailed,
 			fmt.Sprintf("executor.Validate: %v", err)), nil
 	}
-	appendPhase(r.runPhase(rec, PhasePrefetch, func() error { return nil }, overallStart))
+	appendPhase(r.runDeferredPhase(rec, PhasePrefetch, "prefetch is owned by the worker prefetch scheduler"))
 
 	// Phase: Execute with panic containment + cancellation mapping.
 	// Scorecard v2 / Step 15: starts a "render" span for distributed tracing.
@@ -367,6 +367,26 @@ func (r *TaskRunner) runPhase(rec *telemetry.EventRecorder, name string, fn func
 		}, start, end, end.Sub(start).Milliseconds(), m.Status, "", m.Notes)
 	}
 	return m
+}
+
+// runDeferredPhase records a canonical phase boundary whose work is owned by
+// another lifecycle component. It deliberately does not use Status=ok: the
+// marker is evidence of hand-off, not evidence that this runner completed the
+// underlying operation.
+func (r *TaskRunner) runDeferredPhase(rec *telemetry.EventRecorder, name, notes string) PhaseMarker {
+	start := r.now()
+	end := r.now()
+	marker := PhaseMarker{Name: name, StartedAt: start, CompletedAt: end, Status: "deferred", Notes: notes}
+	if rec != nil {
+		rec.Record(telemetry.EventSpec{
+			Origin:    telemetry.OriginWorker,
+			Scope:     telemetry.ScopeAttempt,
+			Component: "runner",
+			Action:    name,
+			Phase:     name,
+		}, start, end, 0, marker.Status, "", marker.Notes)
+	}
+	return marker
 }
 
 func (r *TaskRunner) now() time.Time {

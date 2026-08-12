@@ -46,6 +46,9 @@ func attachWorkerIdentityAndTimings(w *Worker, report *taskrunner.TaskExecutionR
 		"report_ms": 0, "total_ms": float64(report.CompletedAt.Sub(report.StartedAt).Milliseconds()),
 	}
 	for _, marker := range report.PhaseMarkers {
+		if marker.Status == "deferred" {
+			continue
+		}
 		ms := float64(marker.CompletedAt.Sub(marker.StartedAt).Milliseconds())
 		switch marker.Name {
 		case taskrunner.PhaseCacheLookup:

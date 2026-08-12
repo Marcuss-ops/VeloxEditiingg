@@ -133,7 +133,16 @@ func TestRunner_Success(t *testing.T) {
 		t.Errorf("last phase = %q, want %q", last.Name, PhaseReport)
 	}
 	foundUpload := false
+	foundDeferred := 0
 	for _, phase := range rep.PhaseMarkers {
+		if phase.Status == "deferred" {
+			foundDeferred++
+		}
+		if phase.Name == PhaseCacheLookup || phase.Name == PhasePrefetch {
+			if phase.Status != "deferred" {
+				t.Errorf("phase %q = status=%q, want deferred hand-off", phase.Name, phase.Status)
+			}
+		}
 		if phase.Name != PhaseUpload {
 			continue
 		}
@@ -144,6 +153,9 @@ func TestRunner_Success(t *testing.T) {
 	}
 	if !foundUpload {
 		t.Fatal("successful output report has no upload hand-off phase")
+	}
+	if foundDeferred != 3 {
+		t.Fatalf("deferred phase count = %d, want cache/prefetch/upload hand-offs", foundDeferred)
 	}
 }
 
