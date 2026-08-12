@@ -33,7 +33,10 @@ func TestPrometheusSink_PublishesPerAttemptCacheDeltas(t *testing.T) {
 	beforeEvict := metrics.CacheEvictionCount("pressure")
 
 	sink := &PrometheusSink{Metrics: metrics}
-	snapshot := &AttemptSnapshot{Cache: CacheFacts{Hits: 3, Misses: 2, Evictions: 1, BytesUsed: 500, Entries: 4}}
+	snapshot := &AttemptSnapshot{
+		Resources: RawExecutionMetrics{AssetCacheHitCount: 3, AssetCacheMissCount: 2},
+		Cache:     CacheFacts{Hits: 3, Misses: 2, Evictions: 1, BytesUsed: 500, Entries: 4},
+	}
 	if err := sink.Publish(context.Background(), snapshot); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
@@ -53,6 +56,22 @@ func TestPrometheusSink_PublishesPerAttemptCacheDeltas(t *testing.T) {
 	}
 	if !strings.Contains(exported, `velox_cache_entries{label="total"} 4`) {
 		t.Fatalf("cache entries gauge missing:\n%s", exported)
+	}
+}
+
+func TestPrometheusSink_ProjectsRenderFromSnapshotJournal(t *testing.T) {
+	metrics := NewPrometheusMetrics()
+	sink := &PrometheusSink{Metrics: metrics}
+	snapshot := &AttemptSnapshot{Events: []RecordedPhase{{Component: "runner", Action: "execute", DurationMS: 123}}}
+	if err := sink.Publish(context.Background(), snapshot); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	exported := metrics.ExportPrometheus()
+	if !strings.Contains(exported, `velox_render_seconds_count{label="total"} 1`) {
+		t.Fatalf("render observation missing from snapshot projection:\n%s", exported)
+	}
+	if !strings.Contains(exported, `velox_render_seconds_sum{label="total"} 0.123`) {
+		t.Fatalf("render duration missing from snapshot projection:\n%s", exported)
 	}
 }
 

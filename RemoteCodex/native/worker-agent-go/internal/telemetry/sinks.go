@@ -96,23 +96,30 @@ type PrometheusSink struct {
 func (s *PrometheusSink) Name() string { return "prometheus" }
 
 func (s *PrometheusSink) Publish(_ context.Context, snapshot *AttemptSnapshot) error {
-	if s.Metrics == nil {
+	if s.Metrics == nil || snapshot == nil {
 		return nil
 	}
-	cache := snapshot.Cache
-	if cache.Hits > 0 {
-		s.Metrics.RecordCacheRequestN("hit", cache.Hits)
+	raw := snapshot.RawMetrics()
+	// Cache counters come from the raw typed envelope stamped by
+	// CacheCollector. The structured CacheFacts view remains available for
+	// point-in-time gauges and diagnostic compatibility, but it is not the
+	// counter source for this projection.
+	if raw.AssetCacheHitCount > 0 {
+		s.Metrics.RecordCacheRequestN("hit", raw.AssetCacheHitCount)
 	}
-	if cache.Misses > 0 {
-		s.Metrics.RecordCacheRequestN("miss", cache.Misses)
+	if raw.AssetCacheMissCount > 0 {
+		s.Metrics.RecordCacheRequestN("miss", raw.AssetCacheMissCount)
 	}
-	if cache.Evictions > 0 {
-		s.Metrics.RecordCacheEvictions("pressure", int(cache.Evictions))
+	if snapshot.Cache.Evictions > 0 {
+		s.Metrics.RecordCacheEvictions("pressure", int(snapshot.Cache.Evictions))
 	}
 	// Point-in-time gauges are idempotent: later attempts simply overwrite.
-	// Corruptions have no dedicated family yet and ride the receipt/diagnostic
-	// artifacts until their projection lands.
-	s.Metrics.SetCacheSize(int(cache.Entries), cache.BytesUsed)
+	// Corruptions have no dedicated family yet and remain typed snapshot
+	// facts for the receipt/diagnostic projections.
+	s.Metrics.SetCacheSize(int(snapshot.Cache.Entries), snapshot.Cache.BytesUsed)
+	if renderMS, ok := snapshot.RenderDurationMS(); ok {
+		s.Metrics.RecordRender(time.Duration(renderMS) * time.Millisecond)
+	}
 	return nil
 }
 
@@ -161,14 +168,14 @@ func (s *BenchmarkSink) Name() string { return "benchmark" }
 
 func (s *BenchmarkSink) Publish(_ context.Context, snapshot *AttemptSnapshot) error {
 	view := struct {
-		Identity    AttemptIdentity       `json:"identity"`
-		WallMs      int64                 `json:"wall_ms"`
-		StartedAt   string                `json:"started_at"`
-		CompletedAt string                `json:"completed_at"`
-		Resources   TypedExecutionMetrics `json:"resources"`
-		Process     ProcessFacts          `json:"process"`
-		Media       MediaFacts            `json:"media"`
-		Cache       CacheFacts            `json:"cache"`
+		Identity    AttemptIdentity     `json:"identity"`
+		WallMs      int64               `json:"wall_ms"`
+		StartedAt   string              `json:"started_at"`
+		CompletedAt string              `json:"completed_at"`
+		Resources   RawExecutionMetrics `json:"resources"`
+		Process     ProcessFacts        `json:"process"`
+		Media       MediaFacts          `json:"media"`
+		Cache       CacheFacts          `json:"cache"`
 	}{
 		Identity:    snapshot.Identity,
 		WallMs:      snapshot.WallMs,

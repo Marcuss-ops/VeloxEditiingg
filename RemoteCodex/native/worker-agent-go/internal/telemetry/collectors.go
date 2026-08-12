@@ -72,21 +72,49 @@ type CacheFactsSource interface {
 // ratios — those are produced by the single Deriver (pkg/performance).
 type AttemptSnapshot struct {
 	Identity AttemptIdentity `json:"identity"`
-	// Resources are the cgroup/proc resource facts observed by the
-	// AttemptTelemetrySession (Fact Owner: attempt_telemetry). The type is
-	// the compatibility name TypedExecutionMetrics: it is the canonical
-	// struct today and an alias of RawExecutionMetrics after the metrics
-	// rename migration lands, so this snapshot compiles on both.
-	Resources TypedExecutionMetrics `json:"resources"`
-	Process   ProcessFacts          `json:"process"`
-	Media     MediaFacts            `json:"media"`
-	Cache     CacheFacts            `json:"cache"`
+	// Resources is the raw typed fact envelope observed by the
+	// AttemptTelemetrySession (Fact Owner: attempt_telemetry). The JSON
+	// name remains "resources" for benchmark/diagnostic compatibility;
+	// RawMetrics() is the explicit projection API used by sinks.
+	Resources RawExecutionMetrics `json:"resources"`
+	Process   ProcessFacts        `json:"process"`
+	Media     MediaFacts          `json:"media"`
+	Cache     CacheFacts          `json:"cache"`
 	// Events is the attempt's canonical journal at Stop time (append-only
 	// snapshot; the recorder itself is never drained).
 	Events      []RecordedPhase `json:"events,omitempty"`
 	StartedAt   time.Time       `json:"started_at"`
 	CompletedAt time.Time       `json:"completed_at"`
 	WallMs      int64           `json:"wall_ms"`
+}
+
+// RawMetrics returns the snapshot's canonical raw execution envelope
+// portion (resources plus cache counters). Process and media facts remain
+// separate typed owner sections because their wire fields have different
+// provenance. It is a value copy: projections cannot mutate the journal
+// snapshot or producer-owned state.
+func (s *AttemptSnapshot) RawMetrics() RawExecutionMetrics {
+	if s == nil {
+		return RawExecutionMetrics{}
+	}
+	return s.Resources
+}
+
+// RenderDurationMS returns the observed runner execute span from the
+// append-only journal. Prometheus consumes this fact at the sink boundary;
+// no producer writes the render histogram directly.
+func (s *AttemptSnapshot) RenderDurationMS() (int64, bool) {
+	if s == nil {
+		return 0, false
+	}
+	for i := len(s.Events) - 1; i >= 0; i-- {
+		event := s.Events[i]
+		if event.Component != "runner" || event.Action != "execute" || event.DurationMS < 0 {
+			continue
+		}
+		return event.DurationMS, true
+	}
+	return 0, false
 }
 
 // Collector copies one owner's RAW facts into the AttemptSnapshot.
@@ -292,4 +320,10 @@ func (c *CacheCollector) Collect(_ context.Context, snapshot *AttemptSnapshot) {
 		BytesUsed: current.BytesUsed,
 		Entries:   current.Entries,
 	}
+	// The raw typed envelope is the sink input. Keep the structured Cache
+	// view for existing diagnostic JSON, but stamp the same owner facts into
+	// the canonical raw fields so every projection sees one value.
+	snapshot.Resources.CacheLookups = snapshot.Cache.Hits + snapshot.Cache.Misses
+	snapshot.Resources.AssetCacheHitCount = snapshot.Cache.Hits
+	snapshot.Resources.AssetCacheMissCount = snapshot.Cache.Misses
 }

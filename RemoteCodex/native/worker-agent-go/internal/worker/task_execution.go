@@ -130,7 +130,9 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 			duration = renderDuration
 		}
 	}
-	telemetry.GetPrometheusMetrics().RecordRender(duration)
+	// Prometheus render timing is projected from the canonical AttemptSnapshot
+	// by PrometheusSink at attempt Stop. This lifecycle path only keeps the
+	// duration for task outcome accounting.
 
 	if execErr == nil {
 		if uploadErr := w.uploadTaskOutputs(jobCtx, pte, report); uploadErr != nil {

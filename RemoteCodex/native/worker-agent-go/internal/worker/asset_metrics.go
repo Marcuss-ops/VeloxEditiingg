@@ -146,15 +146,9 @@ func (cacheResolutionSink) RecordResolution(ctx context.Context, resolution down
 	if tracker := assetOperationTrackerFromContext(ctx); tracker != nil {
 		tracker.recordResolution(resolution)
 	}
-	// Worker view: low-cardinality Prometheus counters.
-	prom := telemetry.GetPrometheusMetrics()
-	if resolution.CacheHit {
-		prom.RecordAssetCacheHit("asset")
-		prom.RecordCacheRequest("hit")
-	} else {
-		prom.RecordAssetCacheMiss("asset")
-		prom.RecordCacheRequest("miss")
-	}
+	// Worker view is projected from the canonical AttemptSnapshot at
+	// attempt Stop. This producer records only the typed cache fact and
+	// journal event; it never writes Prometheus directly.
 	// Structured attempt event, recorded once per resolution with the
 	// canonical outcome attached.
 	if rec := telemetry.RecorderFromContext(ctx); rec != nil {

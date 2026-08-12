@@ -37,24 +37,23 @@ func AssembleFromSnapshot(snapshot *attempttelemetry.AttemptSnapshot) *Performan
 		// deliberately not mapped into the receipt identity (it rides the
 		// attempt metadata on the master side).
 	}
+	raw := snapshot.RawMetrics()
 	wall := snapshot.WallMs
 	if wall <= 0 {
-		wall = int64(snapshot.Resources.WallClockSeconds * 1000)
+		wall = int64(raw.WallClockSeconds * 1000)
 	}
 	receipt.Timing.WallMs = wall
 	receipt.Process = ProcessMetrics{EngineSpawnCount: snapshot.Process.EngineSpawnCount}
 	receipt.CPU = CPUMetrics{
 		WallMs:     wall,
-		CPUTotalMs: snapshot.Resources.CpuTimeMs,
-	}
-	if wall > 0 {
-		receipt.CPU.CPUWallRatio = float64(snapshot.Resources.CpuTimeMs) / float64(wall)
+		CPUTotalMs: raw.CpuTimeMs,
 	}
 	receipt.IO = IOMetrics{
-		TotalBytesRead:    snapshot.Resources.DiskReadBytes,
-		TotalBytesWritten: snapshot.Resources.DiskWriteBytes,
+		TotalBytesRead:    raw.DiskReadBytes,
+		TotalBytesWritten: raw.DiskWriteBytes,
+		FinalBytesWritten: raw.OutputBytes,
 	}
-	receipt.Memory = MemoryMetrics{PeakRSSBytes: snapshot.Resources.PeakRssBytes}
+	receipt.Memory = MemoryMetrics{PeakRSSBytes: raw.PeakRssBytes}
 	// Media facts are projected from the canonical journal: output frames
 	// and bytes observed on media-producer events. Fine-grained decode/
 	// encode breakdowns are engine-sidecar-owned and not in the snapshot.
@@ -67,14 +66,18 @@ func AssembleFromSnapshot(snapshot *attempttelemetry.AttemptSnapshot) *Performan
 	// DerivedMetricsCalculator. Workload (clip count) and external process
 	// counts are render-plan/ProcessRunner-owned facts not yet carried by
 	// the snapshot; they stay zero until their collectors land.
-	receipt.Derived = Derive(RawMetrics{
+	derivedRaw := RawMetrics{
 		WallMs:            wall,
 		Phases:            receipt.Phases,
-		CPUWallMS:         snapshot.Resources.CpuTimeMs,
-		TotalBytesRead:    snapshot.Resources.DiskReadBytes,
-		TotalBytesWritten: snapshot.Resources.DiskWriteBytes,
-		OutputBytes:       snapshot.Media.BytesOut,
-	})
+		CPUWallMS:         raw.CpuTimeMs,
+		TotalBytesRead:    raw.DiskReadBytes,
+		TotalBytesWritten: raw.DiskWriteBytes,
+		OutputBytes:       raw.OutputBytes,
+	}
+	receipt.Derived = Derive(derivedRaw)
+	// CPUWallRatio uses the same Deriver output as the receipt's derived
+	// section; no second ratio formula is allowed in this projection.
+	receipt.CPU.CPUWallRatio = receipt.Derived.CPUWallRatio
 	return receipt
 }
 

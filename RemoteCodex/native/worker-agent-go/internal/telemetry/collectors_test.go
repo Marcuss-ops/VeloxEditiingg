@@ -113,6 +113,9 @@ func TestCacheCollector_DiffsAgainstStartBaseline(t *testing.T) {
 	if snapshot.Cache.BytesUsed != 150 || snapshot.Cache.Entries != 7 {
 		t.Fatalf("cache gauges = bytes:%d entries:%d, want bytes:150 entries:7", snapshot.Cache.BytesUsed, snapshot.Cache.Entries)
 	}
+	if raw := snapshot.RawMetrics(); raw.CacheLookups != 6 || raw.AssetCacheHitCount != 4 || raw.AssetCacheMissCount != 2 {
+		t.Fatalf("raw cache facts = %+v, want lookups:6 hits:4 misses:2", raw)
+	}
 }
 
 func TestCacheCollector_WithoutBaselineStillPublishesCurrent(t *testing.T) {
