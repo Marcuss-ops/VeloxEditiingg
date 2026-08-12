@@ -58,6 +58,12 @@ const (
 // call Start twice.
 var ErrAlreadyRunning = errors.New("fleet: controller already running")
 
+// ErrStoreNotConfigured means the fleet capability was requested without its
+// durable operation ledger. Running without the ledger would turn a queued
+// operation into an untracked external side effect, so the controller fails
+// closed before starting its ticker.
+var ErrStoreNotConfigured = errors.New("fleet: operation store is not configured")
+
 // ErrNotRunning only documents the inverse; Stop is silent on a
 // never-started controller (returns nil), so listing this
 // sentinel here is informational and keeps the "running" axis
@@ -180,6 +186,12 @@ func (c *FleetController) PublishOperation(ctx context.Context, op *store.Operat
 // directly when they need deterministic control over the
 // dispatch surface.
 func (c *FleetController) Run(ctx context.Context) error {
+	if c == nil {
+		return errors.New("fleet: nil controller")
+	}
+	if c.store == nil {
+		return ErrStoreNotConfigured
+	}
 	ticker := time.NewTicker(c.tickI)
 	defer ticker.Stop()
 

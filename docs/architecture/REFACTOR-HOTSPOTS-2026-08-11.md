@@ -260,7 +260,9 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 - [x] Limitare lo stato globale a registri read-only o inizializzazione; il
   lifecycle dei job riceve un collector metrics per istanza e non condivide
   più i contatori tramite il singleton globale.
-- [ ] Verificare che un errore di bootstrap non possa lasciare `READY=true`.
+- [x] Verificare che un errore di bootstrap non possa lasciare `READY=true`:
+  worker `Start` richiede `bootstrap.HardGate`, mentre FleetController e
+  DeliveryRunner rifiutano l'avvio senza store durevole.
 
 ### P2 — Legacy e documentazione
 

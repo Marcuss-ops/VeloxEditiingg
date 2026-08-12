@@ -371,6 +371,13 @@ func TestController_Run_BlocksUntilCtxDone(t *testing.T) {
 	}
 }
 
+func TestController_RunFailsClosedWithoutStore(t *testing.T) {
+	c := NewFleetController(nil, NewTestExecutorRegistry(), time.Second, time.Minute)
+	if err := c.Run(context.Background()); !errors.Is(err, ErrStoreNotConfigured) {
+		t.Fatalf("Run error = %v, want ErrStoreNotConfigured", err)
+	}
+}
+
 // TestController_Run_BlocksUntilStop is the Stop-channel path:
 // a never-cancelled Run must still exit when Stop() closes the
 // cancel channel. Ensures the production wiring (which uses
