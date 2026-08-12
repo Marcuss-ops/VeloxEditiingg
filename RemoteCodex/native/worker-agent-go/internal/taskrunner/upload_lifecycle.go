@@ -1,9 +1,10 @@
 // Package taskrunner / upload_lifecycle.go
 //
-// Upload phase — publishes executor outputs.
+// Upload phase — records the hand-off to the worker publication lifecycle.
 //
-// PR-3.3 minimum: identity publication of outputs into the report; real
-// upload arrives when PersistentLocalArtifactCache (PR-3.7) lands.
+// TaskRunner does not own the transport upload. The worker lifecycle invokes
+// uploadTaskOutputs after TaskRunner.Run returns, so this phase must never
+// claim that an artifact was uploaded here.
 //
 // Today the runner only records the phase marker; the executor's outputs
 // are already in the report (success path assigns result.Outputs
@@ -15,9 +16,8 @@ import (
 	"velox-worker-agent/internal/telemetry"
 )
 
-// runUpload publishes executor outputs. PR-3.3 minimum: identity
-// publication of outputs into the report; real upload arrives when
-// PersistentLocalArtifactCache (PR-3.7) lands.
+// runUpload records the publication hand-off. The actual upload result is
+// recorded by worker.uploadTaskOutputs, outside TaskRunner.Run.
 func (r *TaskRunner) runUpload(rc *runnerContext, result executor.ExecutionResult, appendPhase func(PhaseMarker), rec *telemetry.EventRecorder) error {
 	start := r.now()
 	recordUpload := func(status, notes string) {
@@ -34,11 +34,9 @@ func (r *TaskRunner) runUpload(rc *runnerContext, result executor.ExecutionResul
 		}
 	}
 	if len(result.Outputs) == 0 {
-		recordUpload("ok", "skipped: no outputs")
+		recordUpload("skipped", "no outputs to publish")
 		return nil
 	}
-	// PR-3.7 will publish each output through the ArtifactAccess backend.
-	// Today we only record the phase marker.
-	recordUpload("ok", "stub: PR-3.7 wires real upload")
+	recordUpload("deferred", "publication handled by worker artifact lifecycle")
 	return nil
 }

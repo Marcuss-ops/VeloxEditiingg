@@ -132,6 +132,19 @@ func TestRunner_Success(t *testing.T) {
 	if last.Name != PhaseReport {
 		t.Errorf("last phase = %q, want %q", last.Name, PhaseReport)
 	}
+	foundUpload := false
+	for _, phase := range rep.PhaseMarkers {
+		if phase.Name != PhaseUpload {
+			continue
+		}
+		foundUpload = true
+		if phase.Status != "deferred" || !strings.Contains(phase.Notes, "worker artifact lifecycle") {
+			t.Errorf("upload phase = status=%q notes=%q, want deferred hand-off", phase.Status, phase.Notes)
+		}
+	}
+	if !foundUpload {
+		t.Fatal("successful output report has no upload hand-off phase")
+	}
 }
 
 // TestRunner_SpecValidationFailed: bad Version triggers TaskSpec.Validate fail

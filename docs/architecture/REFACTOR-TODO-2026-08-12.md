@@ -225,6 +225,9 @@ reversibile, testato prima/dopo, committato su `main` e pubblicato.
       il retry del giorno fallito.
 - [x] Profiling attempt: una lettura incompleta delle timing tables lascia
       l'attempt ritentabile e non dichiara implicitamente completo il breakdown.
+- [x] TaskRunner upload marker: non dichiara più `ok` quando la pubblicazione
+      avviene nel lifecycle worker successivo; usa `deferred`/`skipped` e lascia
+      l'esito reale a `uploadTaskOutputs`.
 - [ ] Verificare che ogni job produca automaticamente un breakdown completo
       o un motivo esplicito per ogni fase non disponibile.
 - [ ] Salvare fixture permanenti: 5m poche/semplice, 5m molte/complesso,
