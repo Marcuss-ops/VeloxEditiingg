@@ -6,8 +6,6 @@ import (
 	"errors"
 	"testing"
 	"time"
-
-	_ "github.com/mattn/go-sqlite3"
 )
 
 // heartbeatWithDigest builds a canonical worker heartbeat snapshot carrying
