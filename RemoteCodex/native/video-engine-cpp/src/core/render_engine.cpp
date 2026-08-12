@@ -351,11 +351,15 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
 
             // Prefer the V2 integer microseconds; fall back to converting
             // the V1 floating seconds only when the int64 field is absent.
-            const int64_t duration_us = item.duration_us > 0
+            const int64_t duration_us = item.source_duration_us > 0
+                ? item.source_duration_us
+                : item.duration_us > 0
                 ? item.duration_us
                 : static_cast<int64_t>(
                       std::llround(item.duration_seconds * 1'000'000.0));
-            request.video_segments.push_back({localVideo, duration_us, item.include_audio});
+            const int64_t source_in_us = item.source_in_us;
+            request.video_segments.push_back({
+                localVideo, source_in_us, duration_us, item.include_audio});
             if (item.duration_us > 0) {
                 total_copy_duration_us += item.duration_us;
             } else {

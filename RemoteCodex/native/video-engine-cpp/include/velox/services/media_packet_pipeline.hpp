@@ -15,7 +15,8 @@ namespace velox::media {
 
 struct CopyOnlyVideoSegment {
     std::filesystem::path path;
-    int64_t duration_us{0};
+    int64_t source_in_us{0};
+    int64_t source_duration_us{0};
     bool include_audio{false};
 };
 

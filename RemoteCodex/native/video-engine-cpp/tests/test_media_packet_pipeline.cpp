@@ -39,6 +39,7 @@ bool makeVideo(const fs::path& output, const std::string& size) {
             << " -f lavfi -i " << velox::file::shellQuote(
                 "testsrc=size=" + size + ":rate=5:duration=1.2")
             << " -an -c:v libx264 -preset ultrafast -pix_fmt yuv420p -r 5 "
+            << " -g 2 -keyint_min 2 -sc_threshold 0 "
             << velox::file::shellQuote(output.string());
     return velox::file::runCommand(command.str());
 }
@@ -227,8 +228,8 @@ int main() {
 
     velox::media::CopyOnlyMuxRequest request;
     request.video_segments = {
-        {video, 800'000},
-        {video, 800'000},
+        {video, 0, 800'000},
+        {video, 0, 800'000},
     };
     request.audio = velox::media::CopyOnlyAudioTrack{audio, 0, 1'600'000};
     request.output_path = output;
@@ -265,8 +266,8 @@ int main() {
     const fs::path segmentAudioOutput = root / "segment-audio-output.mp4";
     velox::media::CopyOnlyMuxRequest segmentAudioRequest;
     segmentAudioRequest.video_segments = {
-        {videoWithAudio, 800'000, true},
-        {videoWithAudio, 800'000, true},
+        {videoWithAudio, 0, 800'000, true},
+        {videoWithAudio, 0, 800'000, true},
     };
     segmentAudioRequest.output_path = segmentAudioOutput;
     velox::media::CopyOnlyMuxResult segmentAudioResult;
@@ -277,7 +278,7 @@ int main() {
            "segment audio packet mapping produces video and audio streams");
 
     velox::media::CopyOnlyMuxRequest incompatibleRequest;
-    incompatibleRequest.video_segments = {{video, 800'000}, {incompatible, 800'000}};
+    incompatibleRequest.video_segments = {{video, 0, 800'000}, {incompatible, 0, 800'000}};
     incompatibleRequest.output_path = failedOutput;
     velox::media::CopyOnlyMuxResult failureResult;
     expect(!velox::media::muxCopyOnly(incompatibleRequest, &failureResult),
@@ -295,6 +296,30 @@ int main() {
            "audio shorter than the requested video timeline fails closed");
     expect(!fs::exists(shortAudioOutput),
            "short-audio failure does not publish a partial output");
+
+    const fs::path trimmedOutput = root / "non-zero-source-output.mp4";
+    velox::media::CopyOnlyMuxRequest trimmedRequest;
+    trimmedRequest.video_segments = {{video, 400'000, 400'000}};
+    trimmedRequest.output_path = trimmedOutput;
+    velox::media::CopyOnlyMuxResult trimmedResult;
+    expect(velox::media::muxCopyOnly(trimmedRequest, &trimmedResult),
+           "copy-only accepts an exact non-zero keyframe source window");
+    const auto trimmedProbe = velox::media::probeMediaInProcess(trimmedOutput);
+    expect(trimmedProbe.has_value() && trimmedProbe->duration_verified &&
+               trimmedProbe->duration_seconds > 0.25 && trimmedProbe->duration_seconds < 0.55,
+           "non-zero source window publishes only the requested duration");
+
+    const fs::path nonKeyframeOutput = root / "non-keyframe-source-output.mp4";
+    velox::media::CopyOnlyMuxRequest nonKeyframeRequest;
+    nonKeyframeRequest.video_segments = {{video, 200'000, 400'000}};
+    nonKeyframeRequest.output_path = nonKeyframeOutput;
+    velox::media::CopyOnlyMuxResult nonKeyframeResult;
+    expect(!velox::media::muxCopyOnly(nonKeyframeRequest, &nonKeyframeResult),
+           "copy-only rejects a source window that does not start on a keyframe");
+    expect(nonKeyframeResult.error.find("keyframe") != std::string::npos,
+           "non-keyframe rejection explains the correctness requirement");
+    expect(!fs::exists(nonKeyframeOutput),
+           "non-keyframe rejection does not publish an output");
 
     if (hadPath) {
         setenv("PATH", previousPathValue.c_str(), 1);

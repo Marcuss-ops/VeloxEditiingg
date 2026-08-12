@@ -59,6 +59,7 @@ bool makeVideo(const fs::path& output, const std::string& size) {
             << " -f lavfi -i " << velox::file::shellQuote(
                 "testsrc=size=" + size + ":rate=5:duration=1.2")
             << " -an -c:v libx264 -preset ultrafast -pix_fmt yuv420p -r 5 "
+            << " -g 2 -keyint_min 2 -sc_threshold 0 "
             << velox::file::shellQuote(output.string());
     return velox::file::runCommand(command.str());
 }
@@ -218,6 +219,23 @@ int main() {
     velox::core::RenderEngine cacheEngine;
     const velox::core::RenderResult cacheResult = cacheEngine.render(cachePlan);
 
+    // ── V2 non-zero source window proof. ───────────────────────────────
+    // The parser stores source_in_us/source_duration_us on TimelineItem and
+    // RenderEngine must carry them into CopyOnlyVideoSegment unchanged.
+    const fs::path v2TrimmedOutput = root / "v2-trimmed-output.mp4";
+    velox::plan::RenderPlan v2TrimmedPlan;
+    v2TrimmedPlan.version = velox::plan::kRenderPlanVersionV2;
+    v2TrimmedPlan.job_id = "v2-non-zero-source-window";
+    v2TrimmedPlan.canvas = {64, 64, 5};
+    v2TrimmedPlan.copy_only = true;
+    v2TrimmedPlan.output_path = v2TrimmedOutput.string();
+    v2TrimmedPlan.timeline = {{
+        velox::plan::VideoSource{clipA.string(), ""},
+        0.0, false, {}, "v2-trimmed-segment", 400'000, 400'000, 400'000, 0, 2,
+    }};
+    velox::core::RenderEngine v2TrimmedEngine;
+    const velox::core::RenderResult v2TrimmedResult = v2TrimmedEngine.render(v2TrimmedPlan);
+
     if (hadPath) {
         setenv("PATH", previousPathValue.c_str(), 1);
     } else {
@@ -267,6 +285,16 @@ int main() {
            "rejected plan publishes no output");
     expect(!fs::exists(ffmpegTouched), "rejected plan never executed ffmpeg");
     expect(!fs::exists(ffprobeTouched), "rejected plan never executed ffprobe");
+
+    expect(v2TrimmedResult.success,
+           "V2 render with a non-zero source window succeeds on an exact keyframe");
+    if (!v2TrimmedResult.success) {
+        std::cerr << "V2 trim error: " << v2TrimmedResult.error << "\n";
+    }
+    const auto v2TrimmedProbe = velox::media::probeMediaInProcess(v2TrimmedOutput);
+    expect(v2TrimmedProbe.has_value() && v2TrimmedProbe->duration_verified &&
+               v2TrimmedProbe->duration_seconds > 0.25 && v2TrimmedProbe->duration_seconds < 0.55,
+           "V2 non-zero source window produces the requested duration");
 
     // ── Render lifecycle assertions. ─────────────────────────────────────
     expect(result.success, "copy-only render succeeds");

@@ -86,7 +86,7 @@ void testRewriteSourceStartRemoval() {
     const int64_t duration = 10'000'000;
     expect(velox::media::packet::rewritePacket(
                pkt, h.input_stream, h.output_stream, h.input_stream->start_time,
-               offset, duration, state, sort),
+               0, offset, duration, state, sort),
            "packet inside the window is accepted");
     expect(pkt.pts == 6'000'000,
            "pts is (1.5s - 0.5s) + 5s = 6s in microseconds (actual " + std::to_string(pkt.pts) + ")");
@@ -107,7 +107,7 @@ void testRewriteBoundaryExclusion() {
     pkt.dts = 10'000;
     int64_t sort = AV_NOPTS_VALUE;
     expect(!velox::media::packet::rewritePacket(
-               pkt, h.input_stream, h.output_stream, 0, 0, 10'000'000, state, sort),
+               pkt, h.input_stream, h.output_stream, 0, 0, 0, 10'000'000, state, sort),
            "packet exactly at the trim boundary is rejected");
     expect(state.last_pts == AV_NOPTS_VALUE && state.last_dts == AV_NOPTS_VALUE,
            "rejected packet does not advance the monotonic state");
@@ -121,7 +121,7 @@ void testRewriteNegativePrefixClamp() {
     pkt.dts = -200;
     int64_t sort = AV_NOPTS_VALUE;
     expect(velox::media::packet::rewritePacket(
-               pkt, h.input_stream, h.output_stream, 0, 0, 10'000'000, state, sort),
+               pkt, h.input_stream, h.output_stream, 0, 0, 0, 10'000'000, state, sort),
            "negative-prefix packet inside the window is accepted");
     expect(pkt.pts == 0 && pkt.dts == 0,
            "negative timestamps are clamped to the timeline origin");
@@ -135,7 +135,7 @@ void testRewriteBFrameOrdering() {
     pkt.dts = 3500;
     int64_t sort = AV_NOPTS_VALUE;
     expect(velox::media::packet::rewritePacket(
-               pkt, h.input_stream, h.output_stream, 0, 0, 10'000'000, state, sort),
+               pkt, h.input_stream, h.output_stream, 0, 0, 0, 10'000'000, state, sort),
            "reordered packet inside the window is accepted");
     expect(pkt.pts == 3'500'000 && pkt.dts == 3'500'000,
            "pts below dts is clamped to dts (B-frame ordering preserved for the muxer)");
@@ -149,14 +149,14 @@ void testRewriteMonotonicDuplicates() {
     first.dts = 1000;
     int64_t firstSort = AV_NOPTS_VALUE;
     expect(velox::media::packet::rewritePacket(
-               first, h.input_stream, h.output_stream, 0, 0, 10'000'000, state, firstSort),
+               first, h.input_stream, h.output_stream, 0, 0, 0, 10'000'000, state, firstSort),
            "first packet is accepted");
     AVPacket duplicate{};
     duplicate.pts = 1000;  // same dts/pts as the accepted packet
     duplicate.dts = 1000;
     int64_t duplicateSort = AV_NOPTS_VALUE;
     expect(velox::media::packet::rewritePacket(
-               duplicate, h.input_stream, h.output_stream, 0, 0, 10'000'000, state, duplicateSort),
+               duplicate, h.input_stream, h.output_stream, 0, 0, 0, 10'000'000, state, duplicateSort),
            "duplicate-timestamp packet is accepted");
     expect(duplicate.pts == 1'000'001 && duplicate.dts == 1'000'001,
            "duplicate timestamps are bumped to keep the stream strictly monotonic");
@@ -171,7 +171,7 @@ void testRewriteDurationClampAtEnd() {
     pkt.duration = 200;  // 200 ms would cross the 10 s end
     int64_t sort = AV_NOPTS_VALUE;
     expect(velox::media::packet::rewritePacket(
-               pkt, h.input_stream, h.output_stream, 0, 0, 10'000'000, state, sort),
+               pkt, h.input_stream, h.output_stream, 0, 0, 0, 10'000'000, state, sort),
            "packet crossing the end is accepted with a clamped duration");
     expect(pkt.pts == 9'990'000 && pkt.duration == 10'000,
            "last packet duration is clamped to the segment end (actual duration " +
@@ -187,7 +187,7 @@ void testRewriteTimelineOffsetAccumulation() {
     int64_t sort = AV_NOPTS_VALUE;
     const int64_t secondOffset = 800'000;  // segments are 0.8 s each
     expect(velox::media::packet::rewritePacket(
-               segmentTwo, h.input_stream, h.output_stream, 0,
+               segmentTwo, h.input_stream, h.output_stream, 0, 0,
                secondOffset, 800'000, state, sort),
            "second-segment packet inside its window is accepted");
     expect(segmentTwo.pts == 1'000'000,
@@ -253,7 +253,7 @@ void testDemuxAndRewrite(const fs::path& fixture) {
     int64_t packetCount = 0;
     std::string error;
     expect(velox::media::packet::demuxAndRewrite(
-               fixture, AVMEDIA_TYPE_VIDEO, 0, outVideo, 0, 500'000, state,
+               fixture, AVMEDIA_TYPE_VIDEO, 0, outVideo, 0, 0, 500'000, state,
                packets, packetCount, error),
            "demuxAndRewrite reads the video stream in-process: " + error);
     expect(packetCount > 0, "demuxAndRewrite accepts video packets");
@@ -277,7 +277,7 @@ void testDemuxAndRewrite(const fs::path& fixture) {
     int64_t emptyCount = 0;
     std::string typeError;
     expect(!velox::media::packet::demuxAndRewrite(
-               fixture, AVMEDIA_TYPE_AUDIO, 0, outVideo, 0, 500'000, state,
+               fixture, AVMEDIA_TYPE_AUDIO, 0, outVideo, 0, 0, 500'000, state,
                emptyPackets, emptyCount, typeError) && !typeError.empty(),
            "demuxing the audio type from the video stream index fails closed");
 

@@ -90,8 +90,9 @@ private:
 };
 
 // PacketTrimmer + TimestampRewriter — one AVPacket -> AVPacket pass:
-// subtracts the source start, rescales to the microsecond timeline, trims
-// to the [timeline_offset, timeline_offset + segment_duration) window,
+// subtracts the stream start and requested source_in_us, rescales to the
+// microsecond timeline, trims to the [timeline_offset,
+// timeline_offset + segment_duration) window,
 // clamps negative prefixes, enforces per-stream monotonic ordering and
 // clamps the last accepted packet's duration to the segment end.
 //
@@ -104,6 +105,7 @@ bool rewritePacket(AVPacket& packet,
                    const AVStream* input_stream,
                    const AVStream* output_stream,
                    int64_t source_start,
+                   int64_t source_in_us,
                    int64_t timeline_offset,
                    int64_t segment_duration,
                    TimestampState& state,
@@ -118,10 +120,19 @@ bool demuxAndRewrite(const std::filesystem::path& path,
                      int input_stream_index,
                      AVStream* output_stream,
                      int64_t timeline_offset,
+                     int64_t source_in_us,
                      int64_t duration_us,
                      TimestampState& state,
                      std::vector<std::unique_ptr<PacketHolder>>& packets,
                      int64_t& packet_count,
                      std::string& error);
+
+// Returns true only when source_in_us identifies an exact video keyframe.
+// Packet-copy never guesses for a non-keyframe cut: callers must route that
+// segment to a decoder/transcoder or reject it.
+bool sourceWindowStartsOnKeyframe(const std::filesystem::path& path,
+                                  int input_stream_index,
+                                  int64_t source_in_us,
+                                  std::string& error);
 
 } // namespace velox::media::packet
