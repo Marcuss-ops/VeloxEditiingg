@@ -735,6 +735,106 @@ func TestUpdate_PhaseSequenceRecorded(t *testing.T) {
 	}
 }
 
+// ─── Recovery re-entry after Master restart (acceptance §29-30) ──
+
+// TestUpdate_RecoveryReentryAfterCrashDuringDeployingNeverAssumesSuccess pins
+// the §30 acceptance condition at the executor boundary: the Master crashed
+// mid-DEPLOYING; the drain the pre-restart executor owned survived in the
+// registry read model, and the worker came back advertising digest C while
+// the operation targets A. Re-invoking the executor for the same operation
+// after the restart must NOT duplicate the drain side effect (it can no
+// longer prove ownership — drainOwned=false), must NOT assume success:
+// VERIFYING_DIGEST compares running C vs target A, the forward row is marked
+// FAILED with error_code DIGEST_MISMATCH, and MarkVerifiedSucceeded is never
+// reached (no last-known-good advance on an unverified digest).
+func TestUpdate_RecoveryReentryAfterCrashDuringDeployingNeverAssumesSuccess(t *testing.T) {
+	backend, st := stubBackends(t)
+	// Pre-restart executor already drained the worker; the flag persisted
+	// through the crash. Re-entry must neither re-assert nor clear it.
+	st.drain = true
+	// The worker came back advertising C — neither the target nor the
+	// previous digest.
+	st.runtimeDigest = "sha256:" + strings.Repeat("c", 64)
+	// A fresh Hello IS observed (new session) — the refusal is purely the
+	// digest comparison, not the WAITING_READY session gate.
+	st.reconnectSessionID = "grpc-session-2"
+
+	e := NewUpdateExecutor(backend)
+	err := e.Execute(context.Background(), mkOp("wkr-1", validImageRef(), ""))
+	if err == nil {
+		t.Fatal("re-entry on a mismatched digest must fail the update")
+	}
+	if !errors.Is(err, ErrRollbackSucceeded) {
+		t.Fatalf("re-entry mismatch err = %v, want ErrRollbackSucceeded (rollback restores previous)", err)
+	}
+	// No duplicated destructive side effect: the pre-restart-owned drain is
+	// never re-asserted (no SetDrainMode(true)) and never released.
+	if len(st.drainCalls) != 0 {
+		t.Fatalf("re-entry re-touched the drain: calls=%v (pre-restart-owned drain must be left alone)", st.drainCalls)
+	}
+	if !st.drain {
+		t.Fatal("re-entry cleared a drain it does not own")
+	}
+	// Never SUCCEEDED unverified: the reconciler compared running vs target
+	// before deciding, and the verified terminal write was never reached.
+	if st.observedVerifiedDigest != "" {
+		t.Fatalf("MarkVerifiedSucceeded was reached on a mismatched digest: observed=%q", st.observedVerifiedDigest)
+	}
+	// The interrupted forward row is FAILED with the stable DIGEST_MISMATCH
+	// code; the rollback row restored the previous digest.
+	if len(st.insertedRows) < 2 {
+		t.Fatalf("rows = %d, want forward+rollback", len(st.insertedRows))
+	}
+	forward := st.insertedRows[0]
+	if st.markedStatuses[forward.DeploymentID] != store.DeployStatusFailed {
+		t.Fatalf("forward row status = %q, want FAILED (never SUCCEEDED unverified)", st.markedStatuses[forward.DeploymentID])
+	}
+	if code := st.markedErrorCodes[forward.DeploymentID]; code != DeploymentErrorCodeDigestMismatch {
+		t.Fatalf("forward row error_code = %q, want DIGEST_MISMATCH", code)
+	}
+}
+
+// TestUpdate_RecoveryReentryAfterCrashDuringDeployingResumesOnMatchingDigest
+// pins the positive resume: the crash was mid-DEPLOYING and the worker
+// reconnects on a NEW authenticated session advertising the TARGET digest.
+// Re-invoking the executor must run the full forward pipeline through to
+// MarkVerifiedSucceeded (the ONLY path that advances last-known-good) while
+// still NOT re-draining and NOT clobbering the pre-restart drain it can no
+// longer prove ownership of.
+func TestUpdate_RecoveryReentryAfterCrashDuringDeployingResumesOnMatchingDigest(t *testing.T) {
+	backend, st := stubBackends(t)
+	st.drain = true // the pre-restart executor's drain survived the crash
+	st.runtimeDigest = validImageRef()
+	st.reconnectSessionID = "grpc-session-2"
+
+	e := NewUpdateExecutor(backend)
+	if err := e.Execute(context.Background(), mkOp("wkr-1", validImageRef(), "")); err != nil {
+		t.Fatalf("re-entry resume returned err %v", err)
+	}
+	if len(st.drainCalls) != 0 {
+		t.Fatalf("re-entry re-touched the drain: calls=%v", st.drainCalls)
+	}
+	if !st.drain {
+		t.Fatal("re-entry cleared a drain it does not own (no-clobber contract)")
+	}
+	if len(st.insertedRows) != 1 {
+		t.Fatalf("forward rows = %d, want exactly 1 (no rollback on a clean resume)", len(st.insertedRows))
+	}
+	if st.markedStatuses[st.insertedRows[0].DeploymentID] != store.DeployStatusSucceeded {
+		t.Fatalf("forward row status = %q, want SUCCEEDED (verified)", st.markedStatuses[st.insertedRows[0].DeploymentID])
+	}
+	if st.observedVerifiedDigest != validImageRef() {
+		t.Fatalf("MarkVerifiedSucceeded observed = %q, want %q (only the verified digest advances last-known-good)", st.observedVerifiedDigest, validImageRef())
+	}
+	// The full phase trail is recorded after restart: the resume is a real
+	// rollout through every gate, not a shortcut to success.
+	want := []string{RolloutPhaseDraining, RolloutPhaseDeploying, RolloutPhaseRestarting,
+		RolloutPhaseWaitingReady, RolloutPhaseVerifyingDigest}
+	if !reflect.DeepEqual(st.phases, want) {
+		t.Fatalf("recorded phases = %v, want %v", st.phases, want)
+	}
+}
+
 // ─── Phase 6 forward failures (each triggers rollback) ────────────
 
 func TestUpdate_CosignFail_RollsBack(t *testing.T) {
