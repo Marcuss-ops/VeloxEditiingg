@@ -55,10 +55,16 @@ func (r *SQLiteTaskAttemptRepository) GetPhaseTimings(ctx context.Context, attem
 		var pt taskattempts.PhaseTiming
 		var wallStart, wallEnd string
 		if err := rows.Scan(&pt.AttemptID, &pt.Phase, &pt.DurationMS, &wallStart, &wallEnd); err != nil {
-			continue
+			return nil, fmt.Errorf("phase timings scan: %w", err)
 		}
-		pt.WallStart, _ = time.Parse(time.RFC3339, wallStart)
-		pt.WallEnd, _ = time.Parse(time.RFC3339, wallEnd)
+		pt.WallStart, err = time.Parse(time.RFC3339Nano, wallStart)
+		if err != nil {
+			return nil, fmt.Errorf("phase timings wall_start parse: %w", err)
+		}
+		pt.WallEnd, err = time.Parse(time.RFC3339Nano, wallEnd)
+		if err != nil {
+			return nil, fmt.Errorf("phase timings wall_end parse: %w", err)
+		}
 		results = append(results, pt)
 	}
 	return results, rows.Err()

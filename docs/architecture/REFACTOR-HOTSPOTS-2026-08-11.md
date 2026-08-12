@@ -67,6 +67,9 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 - Legacy job read models: tentativi, artifact, asset, DLQ ed eventi ora
   propagano gli errori di scansione; anche la serializzazione degli eventi
   non viene più ignorata.
+- Profiling read model: le fasi di un attempt rifiutano scan e timestamp
+  corrotti invece di trasformarli in tempi zero, preservando benchmark
+  veritieri.
 - Worker status API: un errore del read model persistito risponde `503`
   invece di degradare a una cache in memoria potenzialmente obsoleta; il
   fallback resta limitato al solo DB vuoto durante il bootstrap.
