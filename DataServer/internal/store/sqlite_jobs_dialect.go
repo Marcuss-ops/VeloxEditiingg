@@ -121,7 +121,7 @@ func (d sqliteDialect) ListByStatus(ctx context.Context, db *sql.DB, statuses []
 	for rows.Next() {
 		j, err := d.ScanJob(rows)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("list by status row: %w", err)
 		}
 		if j != nil {
 			out = append(out, *j)

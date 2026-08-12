@@ -74,6 +74,9 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
   scartata lasciando una registry SSH parziale; il bootstrap riceve l'errore.
 - Drive-link read model: JSON e scansioni corrotti risalgono ai resolver; la
   ricerca cartelle distingue finalmente “non trovato” da errore SQLite.
+- Job read model: JSON `request/result/slot` corrotti, scan parziali e conteggi
+  incompleti ora interrompono la lettura; anche il repository per status non
+  salta più righe non decodificabili.
 - Worker status API: un errore del read model persistito risponde `503`
   invece di degradare a una cache in memoria potenzialmente obsoleta; il
   fallback resta limitato al solo DB vuoto durante il bootstrap.

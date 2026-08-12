@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 )
 
 // jobColumns is the SELECT list for job queries returning authoritative columns + JSON blobs.
@@ -108,16 +109,22 @@ func scanJobRow(scanner interface {
 	setInt("revision", revision)
 
 	// JSON blob columns
-	setJSON := func(key string, ns sql.NullString) {
+	setJSON := func(key string, ns sql.NullString) error {
 		if ns.Valid && ns.String != "" {
 			var parsed map[string]any
-			if err := json.Unmarshal([]byte(ns.String), &parsed); err == nil {
-				m[key] = parsed
+			if err := json.Unmarshal([]byte(ns.String), &parsed); err != nil {
+				return fmt.Errorf("decode %s: %w", key, err)
 			}
+			m[key] = parsed
 		}
+		return nil
 	}
-	setJSON("request_json", requestJSON)
-	setJSON("result_json", resultJSON)
+	if err := setJSON("request_json", requestJSON); err != nil {
+		return nil, err
+	}
+	if err := setJSON("result_json", resultJSON); err != nil {
+		return nil, err
+	}
 
 	// Workspace scoping (InstaEdit BFF)
 	if workspaceID.Valid {
@@ -127,9 +134,10 @@ func scanJobRow(scanner interface {
 	// Slot data
 	if slotDataRaw.Valid && slotDataRaw.String != "" {
 		var slot map[string]any
-		if err := json.Unmarshal([]byte(slotDataRaw.String), &slot); err == nil {
-			m["slot_data"] = slot
+		if err := json.Unmarshal([]byte(slotDataRaw.String), &slot); err != nil {
+			return nil, fmt.Errorf("decode slot_data: %w", err)
 		}
+		m["slot_data"] = slot
 	}
 
 	return m, nil
@@ -154,9 +162,12 @@ func (s *SQLiteStore) ListJobs(ctx context.Context, limit int) ([]map[string]any
 		}
 		m, err := scanJobRow(rows)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("list jobs row: %w", err)
 		}
 		out = append(out, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list jobs iterate: %w", err)
 	}
 	return out, nil
 }
@@ -188,11 +199,14 @@ func (s *SQLiteStore) ListJobsByWorkspace(ctx context.Context, workspaceID int64
 		}
 		m, err := scanJobRow(rows)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("list jobs by workspace row: %w", err)
 		}
 		out = append(out, m)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list jobs by workspace iterate: %w", err)
+	}
+	return out, nil
 }
 
 // GetJobByWorkspace returns a job only if it belongs to the given
@@ -232,9 +246,12 @@ func (s *SQLiteStore) JobCounts(ctx context.Context) (map[string]int64, error) {
 		var sname string
 		var cnt int64
 		if err := rows.Scan(&sname, &cnt); err != nil {
-			continue
+			return nil, fmt.Errorf("job counts scan: %w", err)
 		}
 		out[sname] = cnt
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("job counts iterate: %w", err)
 	}
 	return out, nil
 }
