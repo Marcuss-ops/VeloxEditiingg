@@ -59,6 +59,64 @@ func TestPrometheusSink_PublishesPerAttemptCacheDeltas(t *testing.T) {
 	}
 }
 
+func TestPrometheusSink_ProjectsTypedAttemptMetrics(t *testing.T) {
+	metrics := NewPrometheusMetrics()
+	sink := &PrometheusSink{Metrics: metrics}
+	snapshot := &AttemptSnapshot{
+		Resources: RawExecutionMetrics{
+			CpuTimeMs:        1200,
+			PeakRssBytes:     8192,
+			DiskReadBytes:    1000,
+			DiskWriteBytes:   400,
+			NetworkRxBytes:   300,
+			NetworkTxBytes:   200,
+			FramesDecoded:    90,
+			FramesComposited: 80,
+			FramesEncoded:    70,
+		},
+		Media: MediaFacts{FramesIn: 60, FramesOut: 50},
+		Process: ProcessFacts{
+			EngineSpawnCount:         1,
+			EngineExternalSpawnCount: 2,
+			EngineFfmpegSpawnCount:   1,
+			EngineFfprobeSpawnCount:  1,
+			EngineShellSpawnCount:    0,
+			EngineCurlSpawnCount:     1,
+		},
+	}
+	if err := sink.Publish(context.Background(), snapshot); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	exported := metrics.ExportPrometheus()
+	for _, series := range []string{
+		`velox_attempt_cpu_time_ms_total{label="total"} 1200`,
+		`velox_attempt_peak_rss_bytes{label="total"} 8192`,
+		`velox_attempt_io_bytes_total{direction="disk_read"} 1000`,
+		`velox_attempt_io_bytes_total{direction="disk_write"} 400`,
+		`velox_attempt_io_bytes_total{direction="network_rx"} 300`,
+		`velox_attempt_io_bytes_total{direction="network_tx"} 200`,
+		`velox_attempt_frames_total{kind="decoded"} 90`,
+		`velox_attempt_frames_total{kind="composited"} 80`,
+		`velox_attempt_frames_total{kind="encoded"} 70`,
+		`velox_attempt_frames_total{kind="media_in"} 60`,
+		`velox_attempt_frames_total{kind="media_out"} 50`,
+		`velox_attempt_processes_total{kind="engine_spawn"} 1`,
+		`velox_attempt_processes_total{kind="engine_external_spawn"} 2`,
+		`velox_attempt_processes_total{kind="ffmpeg_spawn"} 1`,
+		`velox_attempt_processes_total{kind="ffprobe_spawn"} 1`,
+		`velox_attempt_processes_total{kind="curl_spawn"} 1`,
+	} {
+		if !strings.Contains(exported, series) {
+			t.Fatalf("typed attempt series missing %q:\n%s", series, exported)
+		}
+	}
+	for _, forbidden := range []string{"attempt-", "job-", "asset-", "pid="} {
+		if strings.Contains(exported, forbidden) {
+			t.Fatalf("typed attempt metrics contain high-cardinality value %q:\n%s", forbidden, exported)
+		}
+	}
+}
+
 func TestPrometheusSink_ProjectsLegacyCacheEventsFromSnapshotJournal(t *testing.T) {
 	metrics := NewPrometheusMetrics()
 	sink := &PrometheusSink{Metrics: metrics}

@@ -100,6 +100,10 @@ func (s *PrometheusSink) Publish(_ context.Context, snapshot *AttemptSnapshot) e
 		return nil
 	}
 	raw := snapshot.RawEnvelope()
+	// Typed per-attempt CPU/RSS/I/O/frame/process families all derive from
+	// this same envelope. The remaining calls below preserve existing cache
+	// and render projections.
+	s.Metrics.RecordAttemptRawMetrics(raw)
 	// Cache counters come from CacheFacts in the unified raw envelope. The
 	// resource fields carrying the same values are compatibility projections
 	// only and are never a second source for this sink.

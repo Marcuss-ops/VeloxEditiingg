@@ -74,6 +74,13 @@ type PrometheusMetrics struct {
 	taskResultAckSeconds             *HistogramVec
 	taskResultAcksTotal              *CounterVec
 	telemetryInvalidEvents           *CounterVec
+	// Typed per-attempt raw projections. Labels are fixed semantic kinds;
+	// attempt/job/asset identifiers are deliberately excluded.
+	attemptCPUTimeMs    *CounterVec
+	attemptPeakRSSBytes *GaugeVec
+	attemptIOBytes      *CounterVec
+	attemptFrames       *CounterVec
+	attemptProcesses    *CounterVec
 }
 
 // NewPrometheusMetrics creates a new Prometheus metrics collector.
@@ -218,6 +225,26 @@ func NewPrometheusMetrics() *PrometheusMetrics {
 		taskResultAckSeconds:    &HistogramVec{Name: "velox_task_result_ack_seconds", Help: "TaskResult acknowledgement wait duration", Buckets: []float64{.001, .01, .1, 1, 5, 30, 120}, values: make(map[string]*histogramData)},
 		taskResultAcksTotal:     &CounterVec{Name: "velox_task_result_acks_total", Help: "TaskResult acknowledgements received", values: make(map[string]float64)},
 		telemetryInvalidEvents:  &CounterVec{Name: "velox_telemetry_invalid_events_total", Help: "Telemetry events rejected by the worker catalog and forwarded for master quarantine", Label: "reason", values: make(map[string]float64)},
+		attemptCPUTimeMs: &CounterVec{
+			Name: "velox_attempt_cpu_time_ms_total", Help: "Accumulated CPU time observed across completed attempts (ms)",
+			values: map[string]float64{"total": 0},
+		},
+		attemptPeakRSSBytes: &GaugeVec{
+			Name: "velox_attempt_peak_rss_bytes", Help: "Peak resident set size observed for the latest completed attempt (bytes)",
+			values: map[string]float64{"total": 0},
+		},
+		attemptIOBytes: &CounterVec{
+			Name: "velox_attempt_io_bytes_total", Help: "Observed attempt I/O bytes by direction", Label: "direction",
+			values: map[string]float64{"disk_read": 0, "disk_write": 0, "network_rx": 0, "network_tx": 0},
+		},
+		attemptFrames: &CounterVec{
+			Name: "velox_attempt_frames_total", Help: "Observed media frames by fact kind across completed attempts", Label: "kind",
+			values: map[string]float64{"decoded": 0, "composited": 0, "encoded": 0, "media_in": 0, "media_out": 0},
+		},
+		attemptProcesses: &CounterVec{
+			Name: "velox_attempt_processes_total", Help: "Observed process lifecycle counts by kind across completed attempts", Label: "kind",
+			values: map[string]float64{"engine_spawn": 0, "engine_external_spawn": 0, "ffmpeg_spawn": 0, "ffprobe_spawn": 0, "shell_spawn": 0, "curl_spawn": 0},
+		},
 	}
 }
 
@@ -289,6 +316,11 @@ func (m *PrometheusMetrics) ExportPrometheus() string {
 	output += m.taskResultAckSeconds.export()
 	output += m.taskResultAcksTotal.export()
 	output += m.telemetryInvalidEvents.export()
+	output += m.attemptCPUTimeMs.export()
+	output += m.attemptPeakRSSBytes.export()
+	output += m.attemptIOBytes.export()
+	output += m.attemptFrames.export()
+	output += m.attemptProcesses.export()
 	return output
 }
 
