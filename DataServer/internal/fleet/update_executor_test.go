@@ -379,6 +379,19 @@ func TestUpdate_NilBackend(t *testing.T) {
 	}
 }
 
+func TestUpdate_ExecuteRejectsPartialBackendBeforeMutation(t *testing.T) {
+	backend, state := stubBackends(t)
+	backend.Docker = nil
+
+	err := NewUpdateExecutor(backend).Execute(context.Background(), mkOp("wkr-1", validImageRef(), ""))
+	if err == nil || !strings.Contains(err.Error(), "missing dependencies: docker") {
+		t.Fatalf("partial backend error = %v, want fail-closed docker diagnostic", err)
+	}
+	if len(state.drainCalls) != 0 {
+		t.Fatalf("partial backend triggered worker mutation: drain calls=%v", state.drainCalls)
+	}
+}
+
 // ─── Phase 2/3: registry + snapshot ──────────────────────────────────
 
 func TestUpdate_UnregisteredWorker(t *testing.T) {

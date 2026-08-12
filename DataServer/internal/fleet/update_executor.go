@@ -91,6 +91,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"velox-server/internal/store"
@@ -181,6 +182,14 @@ func (e *UpdateExecutor) Execute(ctx context.Context, op *store.Operation) error
 	}
 	if err := e.backend.Image.Validate(targetDigest); err != nil {
 		return fmt.Errorf("update: target_digest validation: %w", err)
+	}
+	// Bootstrap normally rejects a partially wired executor before it is
+	// registered. Keep the execution boundary fail-closed as well: tests,
+	// recovery paths, or a future caller must not reach a nil backend after
+	// validation and turn a configuration error into a panic.
+	if capability := e.Capability(); !capability.Ready {
+		return fmt.Errorf("update: capability misconfigured: missing dependencies: %s",
+			strings.Join(capability.Missing, ", "))
 	}
 
 	// ── Phase 2: worker lookup ──────────────────────────────────────

@@ -161,6 +161,9 @@ reversibile, testato prima/dopo, committato su `main` e pubblicato.
 - [x] FleetController: la persistenza terminale usa un contesto breve e
       indipendente dal deadline dell'executor; un timeout non lascia più la
       riga `RUNNING` solo perché il contesto di esecuzione è già scaduto.
+- [x] UpdateExecutor: il confine `Execute` ricontrolla il wiring fail-closed
+      prima di qualsiasi drain o mutazione esterna; una dipendenza mancante
+      produce diagnostica `MISCONFIGURED` invece di panic o side effect.
 - [ ] Separare persistentemente `desired_digest`, `running_digest`,
       `last_successful_digest` e stato operation.
 - [ ] Formalizzare la state machine `REQUESTED → DRAINING → DEPLOYING →
