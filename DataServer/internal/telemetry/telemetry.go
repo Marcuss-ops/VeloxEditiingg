@@ -23,6 +23,7 @@ package telemetry
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"sync"
 
@@ -74,6 +75,7 @@ type Telemetry struct {
 
 	providerMu sync.Mutex
 	provider   *sdktrace.TracerProvider
+	initErr    error
 }
 
 // NewTelemetry creates an isolated telemetry instance. Configure the instance
@@ -91,6 +93,9 @@ func newTelemetry(cfg config.TelemetryConfig, installGlobal bool) *Telemetry {
 // facade. It must run before the first global Tracer call and may run only
 // once. Use NewTelemetry for isolated configurations in tests.
 func Configure(cfg config.TelemetryConfig) error {
+	if err := validateConfig(cfg); err != nil {
+		return err
+	}
 	globalTelemetryState.Lock()
 	defer globalTelemetryState.Unlock()
 	if globalTelemetryState.tracerRequested {
@@ -102,6 +107,20 @@ func Configure(cfg config.TelemetryConfig) error {
 	globalTelemetryState.instance = newTelemetry(cfg, true)
 	globalTelemetryState.configured = true
 	return nil
+}
+
+func validateConfig(cfg config.TelemetryConfig) error {
+	switch cfg.Exporter {
+	case "", "stdout":
+		return nil
+	case "otlp":
+		if cfg.Endpoint == "" {
+			return errors.New("telemetry: OTLP exporter requires VELOX_OTEL_ENDPOINT")
+		}
+		return nil
+	default:
+		return fmt.Errorf("telemetry: unsupported exporter %q", cfg.Exporter)
+	}
 }
 
 // Tracer returns the process-wide Velox tracer. The facade records the first
@@ -138,6 +157,26 @@ func (t *Telemetry) Config() config.TelemetryConfig {
 		return config.TelemetryConfig{}
 	}
 	return t.config
+}
+
+// ReadinessError returns the initialization failure for a requested exporter.
+// An empty exporter is an intentional DISABLED state and is ready by design.
+func (t *Telemetry) ReadinessError() error {
+	if t == nil {
+		return errors.New("telemetry: instance is nil")
+	}
+	t.providerMu.Lock()
+	defer t.providerMu.Unlock()
+	return t.initErr
+}
+
+// GlobalReadinessError reports whether the configured process-wide exporter is
+// usable. It is consumed by the server readiness gate.
+func GlobalReadinessError() error {
+	globalTelemetryState.RLock()
+	instance := globalTelemetryState.instance
+	globalTelemetryState.RUnlock()
+	return instance.ReadinessError()
 }
 
 // Tracer returns this instance's tracer. The first call initializes the
@@ -179,6 +218,12 @@ func (t *Telemetry) setProvider(provider *sdktrace.TracerProvider) {
 	t.providerMu.Unlock()
 }
 
+func (t *Telemetry) setInitError(err error) {
+	t.providerMu.Lock()
+	t.initErr = err
+	t.providerMu.Unlock()
+}
+
 // initTracer reads the immutable instance configuration. Default is no-op
 // (zero overhead when tracing is disabled).
 func (t *Telemetry) initTracer() trace.Tracer {
@@ -217,7 +262,8 @@ func (t *Telemetry) buildResource() *resource.Resource {
 func (t *Telemetry) initStdoutTracer() trace.Tracer {
 	exp, err := stdouttrace.New(stdouttrace.WithPrettyPrint())
 	if err != nil {
-		log.Printf("[TELEMETRY] stdout exporter init failed: %v — falling back to no-op", err)
+		t.setInitError(fmt.Errorf("telemetry: stdout exporter init: %w", err))
+		log.Printf("[TELEMETRY] stdout exporter init failed: %v — readiness will remain MISCONFIGURED", err)
 		return noop.NewTracerProvider().Tracer("velox-server")
 	}
 
@@ -244,7 +290,8 @@ func (t *Telemetry) initStdoutTracer() trace.Tracer {
 func (t *Telemetry) initOTLPTracer() trace.Tracer {
 	endpoint := t.config.Endpoint
 	if endpoint == "" {
-		log.Printf("[TELEMETRY] OTLP exporter requested but VELOX_OTEL_ENDPOINT is empty — falling back to no-op")
+		t.setInitError(errors.New("telemetry: OTLP exporter endpoint is empty"))
+		log.Printf("[TELEMETRY] OTLP exporter requested but endpoint is empty — readiness will remain MISCONFIGURED")
 		return noop.NewTracerProvider().Tracer("velox-server")
 	}
 
@@ -256,7 +303,8 @@ func (t *Telemetry) initOTLPTracer() trace.Tracer {
 	}
 	exp, err := otlptracegrpc.New(context.Background(), options...)
 	if err != nil {
-		log.Printf("[TELEMETRY] OTLP gRPC exporter init failed: %v — falling back to no-op", err)
+		t.setInitError(fmt.Errorf("telemetry: OTLP exporter init: %w", err))
+		log.Printf("[TELEMETRY] OTLP gRPC exporter init failed: %v — readiness will remain MISCONFIGURED", err)
 		return noop.NewTracerProvider().Tracer("velox-server")
 	}
 

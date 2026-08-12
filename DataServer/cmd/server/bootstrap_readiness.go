@@ -17,6 +17,7 @@ import (
 	"velox-server/internal/fleet"
 	"velox-server/internal/fleet/opsalerts"
 	"velox-server/internal/registry"
+	"velox-server/internal/telemetry"
 )
 
 // registerReadinessChecks populates the canonical CapabilityRegistry
@@ -114,6 +115,9 @@ func registerReadinessChecks(c *appComponents, t *transportBundle) {
 			return fmt.Errorf("outbox store is nil")
 		}
 		return nil
+	})
+	c.modules.Health.AddReadinessCheck("telemetry-capability", func() error {
+		return telemetry.GlobalReadinessError()
 	})
 	// Verdetto P0 #5 (Blocco 2): expose the canonical
 	// CapabilityRegistry.Readyz() aggregation to the /ready HTTP
