@@ -87,6 +87,19 @@ func TestReadEngineSidecar_FullSchemaMapsAllTelemetry(t *testing.T) {
 			"input_open_count": 5,
 			"input_reopen_count": 2
 		},
+		"process_counters": {
+			"external_spawn_count": 2,
+			"ffmpeg_spawn_count": 1,
+			"ffprobe_spawn_count": 1,
+			"shell_spawn_count": 0,
+			"curl_spawn_count": 0,
+			"cpu_user_ms": 1420,
+			"cpu_system_ms": 310,
+			"voluntary_context_switches": 841,
+			"involuntary_context_switches": 23,
+			"minor_page_faults": 4021,
+			"major_page_faults": 0
+		},
 		"phases": [{
 			"origin": "engine",
 			"scope": "segment",
@@ -139,6 +152,19 @@ func TestReadEngineSidecar_FullSchemaMapsAllTelemetry(t *testing.T) {
 		sc.IOCounters.InputReopenCount != 2 {
 		t.Fatalf("io_counters = %+v", sc.IOCounters)
 	}
+	if sc.ProcessCounters == nil {
+		t.Fatalf("process_counters not parsed")
+	}
+	pc := sc.ProcessCounters
+	if pc.ExternalSpawnCount != 2 || pc.FfmpegSpawnCount != 1 || pc.FfprobeSpawnCount != 1 ||
+		pc.ShellSpawnCount != 0 || pc.CurlSpawnCount != 0 {
+		t.Fatalf("process_counters spawn ledger = %+v", pc)
+	}
+	if pc.CPUUserMs != 1420 || pc.CPUSystemMs != 310 ||
+		pc.VoluntaryContextSwitches != 841 || pc.InvoluntaryContextSwitches != 23 ||
+		pc.MinorPageFaults != 4021 || pc.MajorPageFaults != 0 {
+		t.Fatalf("process_counters usage = %+v", pc)
+	}
 	if len(sc.Phases) != 1 {
 		t.Fatalf("phases = %d, want 1", len(sc.Phases))
 	}
@@ -154,6 +180,31 @@ func TestReadEngineSidecar_FullSchemaMapsAllTelemetry(t *testing.T) {
 	}
 	if phase.CPUMS != 42.5 || phase.QueueWaitMS != 1.75 || phase.FramesIn != 31 || phase.FramesOut != 30 {
 		t.Fatalf("phase resource/parallel fields = %+v", phase)
+	}
+}
+
+func TestMapEngineSidecar_MapsProcessCounters(t *testing.T) {
+	sc := engineSidecar{
+		ProcessCounters: &engineProcessCounters{
+			ExternalSpawnCount:         2,
+			FfmpegSpawnCount:           1,
+			FfprobeSpawnCount:          1,
+			CPUUserMs:                  1420,
+			CPUSystemMs:                310,
+			VoluntaryContextSwitches:   841,
+			InvoluntaryContextSwitches: 23,
+			MinorPageFaults:            4021,
+		},
+	}
+	mapped := pipeline.RenderMetrics{}
+	mapEngineSidecar(&sc, &mapped)
+	if mapped.EngineExternalSpawnCount != 2 || mapped.EngineFfmpegSpawnCount != 1 || mapped.EngineFfprobeSpawnCount != 1 {
+		t.Fatalf("mapped engine spawn ledger = %+v", mapped)
+	}
+	if mapped.EngineCPUUserMs != 1420 || mapped.EngineCPUSystemMs != 310 ||
+		mapped.EngineVoluntaryContextSwitches != 841 || mapped.EngineInvoluntaryContextSwitches != 23 ||
+		mapped.EngineMinorPageFaults != 4021 || mapped.EngineMajorPageFaults != 0 {
+		t.Fatalf("mapped engine usage = %+v", mapped)
 	}
 }
 

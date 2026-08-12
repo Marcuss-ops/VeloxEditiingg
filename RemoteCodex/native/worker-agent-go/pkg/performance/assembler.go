@@ -87,7 +87,7 @@ func (a *Assembler) Assemble(run pipeline.RunMetrics, ctx AssemblyContext) *Perf
 	receipt.IO = DeriveIO(run.RenderMetrics)
 	receipt.Media = assembleMedia(run.RenderMetrics)
 	receipt.Memory = assembleMemory(run.RenderMetrics)
-	// SchedulingMetrics stays zero until a deep-profile collector lands.
+	receipt.Scheduling = assembleScheduling(run.RenderMetrics)
 	receipt.Phases = assemblePhases(run.RenderMetrics)
 	receipt.Segments = assembleSegments(run.RenderMetrics)
 	// Derived KPIs: one call, one definition (the single
@@ -184,7 +184,27 @@ func assembleProcess(rm pipeline.RenderMetrics) ProcessMetrics {
 		FfprobeExecCount:     rm.FfprobeExecCount,
 		ShellExecCount:       rm.ShellExecCount,
 		CurlExecCount:        rm.CurlExecCount,
-		ChildWaitMs:          rm.ChildWaitMs,
+		// Engine-declared spawn ledger (sidecar process_counters block):
+		// disjoint from the /proc sampler counts above.
+		EngineExternalSpawnCount: rm.EngineExternalSpawnCount,
+		EngineFfmpegSpawnCount:   rm.EngineFfmpegSpawnCount,
+		EngineFfprobeSpawnCount:  rm.EngineFfprobeSpawnCount,
+		EngineShellSpawnCount:    rm.EngineShellSpawnCount,
+		EngineCurlSpawnCount:     rm.EngineCurlSpawnCount,
+		ChildWaitMs:              rm.ChildWaitMs,
+	}
+}
+
+// assembleScheduling maps the engine-declared scheduling/VM facts (the
+// sidecar process_counters block: the engine process's own context
+// switches and page faults) into the receipt. The QueueWaitMS/OffCPUMs
+// fields stay zero until a deep-profile collector lands.
+func assembleScheduling(rm pipeline.RenderMetrics) SchedulingMetrics {
+	return SchedulingMetrics{
+		VoluntaryContextSwitches:   rm.EngineVoluntaryContextSwitches,
+		InvoluntaryContextSwitches: rm.EngineInvoluntaryContextSwitches,
+		MinorPageFaults:            rm.EngineMinorPageFaults,
+		MajorPageFaults:            rm.EngineMajorPageFaults,
 	}
 }
 
@@ -203,6 +223,10 @@ func assembleCPU(rm pipeline.RenderMetrics, wallMs int64) CPUMetrics {
 		CPUSystemMs:  rm.CPUSystemMs,
 		CPUTotalMs:   total,
 		CPUWallRatio: ratio,
+		// Engine-declared subset (sidecar process_counters block): the
+		// engine process's own getrusage CPU.
+		EngineCPUUserMs:   rm.EngineCPUUserMs,
+		EngineCPUSystemMs: rm.EngineCPUSystemMs,
 	}
 }
 

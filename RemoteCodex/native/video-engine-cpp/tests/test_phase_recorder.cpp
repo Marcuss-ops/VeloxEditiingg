@@ -465,6 +465,64 @@ void testIOCountersEmission() {
     velox::services::resetIOCounters();
 }
 
+void testProcessCounters() {
+    SUBCASE("recordExternalSpawn classifies by leading token");
+    velox::services::resetIOCounters();
+    velox::services::recordExternalSpawn("ffmpeg -y -i in.mp4 out.mp4");
+    velox::services::recordExternalSpawn("ffprobe -v error -show_format in.mp4");
+    velox::services::recordExternalSpawn("curl -s https://example.com/a.bin");
+    velox::services::recordExternalSpawn("cp /a /b");
+    velox::services::recordExternalSpawn("sh -c 'echo hi'");
+    const auto& io = velox::services::ioCounters();
+    EXPECT_EQ_INT(static_cast<int>(io.external_spawn_count.load()), 5);
+    EXPECT_EQ_INT(static_cast<int>(io.ffmpeg_spawn_count.load()), 1);
+    EXPECT_EQ_INT(static_cast<int>(io.ffprobe_spawn_count.load()), 1);
+    EXPECT_EQ_INT(static_cast<int>(io.curl_spawn_count.load()), 1);
+    EXPECT_EQ_INT(static_cast<int>(io.shell_spawn_count.load()), 2);
+
+    SUBCASE("sidecar emits the engine-declared process_counters block");
+    velox::core::RenderEngine engine;
+    const std::string json = engine.sidecarJson("/tmp/render-output.mp4");
+    EXPECT(std::strstr(json.c_str(), "\"process_counters\":{") != nullptr,
+           "process_counters block emitted");
+    EXPECT(std::strstr(json.c_str(), "\"external_spawn_count\":5") != nullptr,
+           "external spawn total emitted");
+    EXPECT(std::strstr(json.c_str(), "\"ffmpeg_spawn_count\":1") != nullptr,
+           "ffmpeg spawn count emitted");
+    EXPECT(std::strstr(json.c_str(), "\"ffprobe_spawn_count\":1") != nullptr,
+           "ffprobe spawn count emitted");
+    EXPECT(std::strstr(json.c_str(), "\"shell_spawn_count\":2") != nullptr,
+           "shell spawn count emitted");
+    EXPECT(std::strstr(json.c_str(), "\"curl_spawn_count\":1") != nullptr,
+           "curl spawn count emitted");
+    // getrusage facts are keyed and numeric (values are process-dependent
+    // and can legitimately be 0 in a tiny test binary, so only presence
+    // and shape are asserted).
+    EXPECT(std::strstr(json.c_str(), "\"cpu_user_ms\":") != nullptr,
+           "engine cpu_user_ms key emitted");
+    EXPECT(std::strstr(json.c_str(), "\"cpu_system_ms\":") != nullptr,
+           "engine cpu_system_ms key emitted");
+    EXPECT(std::strstr(json.c_str(), "\"voluntary_context_switches\":") != nullptr,
+           "voluntary context switches key emitted");
+    EXPECT(std::strstr(json.c_str(), "\"involuntary_context_switches\":") != nullptr,
+           "involuntary context switches key emitted");
+    EXPECT(std::strstr(json.c_str(), "\"minor_page_faults\":") != nullptr,
+           "minor page faults key emitted");
+    EXPECT(std::strstr(json.c_str(), "\"major_page_faults\":") != nullptr,
+           "major page faults key emitted");
+    // The zero-spawn invariant: after reset with no spawns the block is
+    // all-zero, which is exactly what a copy-only render must report.
+    velox::services::resetIOCounters();
+    const std::string zeroJson = engine.sidecarJson("/tmp/render-output.mp4");
+    EXPECT(std::strstr(zeroJson.c_str(), "\"external_spawn_count\":0") != nullptr,
+           "zero-spawn invariant: external_spawn_count resets to 0");
+    EXPECT(std::strstr(zeroJson.c_str(), "\"ffmpeg_spawn_count\":0") != nullptr,
+           "zero-spawn invariant: ffmpeg_spawn_count resets to 0");
+    EXPECT(std::strstr(zeroJson.c_str(), "\"ffprobe_spawn_count\":0") != nullptr,
+           "zero-spawn invariant: ffprobe_spawn_count resets to 0");
+    velox::services::resetIOCounters();
+}
+
 void testRenderEngineIntegration() {
     SUBCASE("RenderEngine records real phases and writes a compatible sidecar");
     namespace fs = std::filesystem;
@@ -627,6 +685,7 @@ int main() {
     testAppendJsonEscapesStrings();
     testCompleteSidecarSchema();
     testIOCountersEmission();
+    testProcessCounters();
     testRenderEngineIntegration();
     testCopyOnlyTelemetryDoesNotClaimVideoEncoding();
     testReset();

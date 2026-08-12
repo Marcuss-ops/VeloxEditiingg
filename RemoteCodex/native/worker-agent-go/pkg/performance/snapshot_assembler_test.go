@@ -113,3 +113,93 @@ func TestAssembleFromSnapshot_JSONRoundTrips(t *testing.T) {
 		t.Fatalf("derived section missing: %s", data)
 	}
 }
+
+// TestSnapshotAssembler_ExclusivePhasesAccountWall pins the
+// unaccounted_ms < 5% target for a realistic per-job journal: the C++
+// engine.render span (catalog exclusive), the runner's compile/finalize
+// spans (phase-taxonomy exclusive) sum to >= 95% of the attempt wall,
+// while span children (engine.video.decode) and unclassified rows are
+// never summed. This is the mechanism that makes the copy-only receipt
+// explain the wall clock instead of reporting unaccounted == wall.
+func TestSnapshotAssembler_ExclusivePhasesAccountWall(t *testing.T) {
+	snapshot := &attempttelemetry.AttemptSnapshot{
+		Identity: attempttelemetry.AttemptIdentity{JobID: "job-1", AttemptID: "attempt-1"},
+		WallMs:   2000,
+		Events: []attempttelemetry.RecordedPhase{
+			// engine.render — attempt-scoped catalog event, exclusive:
+			// the whole native render span.
+			{Origin: attempttelemetry.OriginEngine, Scope: attempttelemetry.ScopeAttempt,
+				Component: "engine", Action: "render", Phase: "render", DurationMS: 1800,
+				Status: attempttelemetry.StatusOK},
+			// runner.compile — phase-taxonomy exclusive (attempt scope).
+			{Origin: attempttelemetry.OriginWorker, Scope: attempttelemetry.ScopeAttempt,
+				Component: "runner", Action: "compile", Phase: "compile", DurationMS: 120,
+				Status: attempttelemetry.StatusOK},
+			// runner.finalize — phase-taxonomy exclusive (attempt scope).
+			{Origin: attempttelemetry.OriginWorker, Scope: attempttelemetry.ScopeAttempt,
+				Component: "runner", Action: "finalize", Phase: "finalize", DurationMS: 30,
+				Status: attempttelemetry.StatusOK},
+			// engine.video.decode — span child, MUST NOT be summed
+			// (parallel instances would double-count against the wall).
+			{Origin: attempttelemetry.OriginEngine, Scope: attempttelemetry.ScopeSegment,
+				Component: "engine.video", Action: "decode", Phase: "decode", DurationMS: 700,
+				Status: attempttelemetry.StatusOK},
+			// Unclassified row (phase "validate" is not in the taxonomy
+			// and runner.validate is not a catalog event) — quarantined
+			// from accounted_ratio by design.
+			{Origin: attempttelemetry.OriginWorker, Scope: attempttelemetry.ScopeAttempt,
+				Component: "runner", Action: "validate", Phase: "validate", DurationMS: 50,
+				Status: attempttelemetry.StatusOK},
+		},
+	}
+
+	receipt := AssembleFromSnapshot(snapshot)
+	if len(receipt.Phases) != 5 {
+		t.Fatalf("phases = %d, want 5", len(receipt.Phases))
+	}
+	// The exclusive sum is 1800+120+30 = 1950 of a 2000 ms wall.
+	if receipt.Derived.AccountedRatio <= 0.95 {
+		t.Fatalf("accounted_ratio = %v, want > 0.95 (unaccounted_ms=%d)",
+			receipt.Derived.AccountedRatio, receipt.Derived.UnaccountedMS)
+	}
+	if receipt.Derived.UnaccountedMS > 100 { // 5%% of 2000
+		t.Fatalf("unaccounted_ms = %d, want <= 100 (< 5%% of wall)", receipt.Derived.UnaccountedMS)
+	}
+}
+
+// TestSnapshotAssembler_ProjectsEngineUsageFacts pins the engine-declared
+// process facts (sidecar process_counters -> worker.engine.usage ->
+// ProcessCollector) into the receipt's process / cpu / scheduling
+// sections, keeping the copy-only zero-spawn invariant visible per job.
+func TestSnapshotAssembler_ProjectsEngineUsageFacts(t *testing.T) {
+	snapshot := &attempttelemetry.AttemptSnapshot{
+		WallMs: 5000,
+		Process: attempttelemetry.ProcessFacts{
+			EngineSpawnCount:                 1,
+			EngineExternalSpawnCount:         2,
+			EngineFfmpegSpawnCount:           1,
+			EngineFfprobeSpawnCount:          1,
+			EngineCPUUserMs:                  1420,
+			EngineCPUSystemMs:                310,
+			EngineVoluntaryContextSwitches:   841,
+			EngineInvoluntaryContextSwitches: 23,
+			EngineMinorPageFaults:            4021,
+			EngineMajorPageFaults:            0,
+		},
+	}
+
+	receipt := AssembleFromSnapshot(snapshot)
+	if receipt.Process.EngineSpawnCount != 1 || receipt.Process.EngineExternalSpawnCount != 2 ||
+		receipt.Process.EngineFfmpegSpawnCount != 1 || receipt.Process.EngineFfprobeSpawnCount != 1 {
+		t.Fatalf("process section = %+v", receipt.Process)
+	}
+	if receipt.CPU.EngineCPUUserMs != 1420 || receipt.CPU.EngineCPUSystemMs != 310 {
+		t.Fatalf("cpu engine facts = %+v", receipt.CPU)
+	}
+	if receipt.Scheduling.VoluntaryContextSwitches != 841 ||
+		receipt.Scheduling.InvoluntaryContextSwitches != 23 ||
+		receipt.Scheduling.MinorPageFaults != 4021 ||
+		receipt.Scheduling.MajorPageFaults != 0 {
+		t.Fatalf("scheduling section = %+v", receipt.Scheduling)
+	}
+}

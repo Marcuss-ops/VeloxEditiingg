@@ -265,6 +265,37 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 		rec.Emit(telemetry.EventSpec{Origin: telemetry.OriginWorker, Scope: telemetry.ScopeAttempt, Component: "worker.engine", Action: "spawn"}, telemetry.StatusOK, "", "")
 	}
 
+	// The engine-declared process facts (C++ sidecar process_counters
+	// block: the engine's own external spawn ledger, its getrusage CPU,
+	// context switches and page faults) ride one canonical
+	// worker.engine.usage event, projected into the receipt's process /
+	// cpu / scheduling sections by the ProcessCollector. Skipped when
+	// the engine predates the block (all-zero facts — the single
+	// all-zero check lives in EngineUsageMetadataJSON, so adding a
+	// counter later cannot drift this gate).
+	usage := telemetry.EngineUsageFacts{
+		ExternalSpawnCount:         runMetrics.RenderMetrics.EngineExternalSpawnCount,
+		FfmpegSpawnCount:           runMetrics.RenderMetrics.EngineFfmpegSpawnCount,
+		FfprobeSpawnCount:          runMetrics.RenderMetrics.EngineFfprobeSpawnCount,
+		ShellSpawnCount:            runMetrics.RenderMetrics.EngineShellSpawnCount,
+		CurlSpawnCount:             runMetrics.RenderMetrics.EngineCurlSpawnCount,
+		CPUUserMs:                  runMetrics.RenderMetrics.EngineCPUUserMs,
+		CPUSystemMs:                runMetrics.RenderMetrics.EngineCPUSystemMs,
+		VoluntaryContextSwitches:   runMetrics.RenderMetrics.EngineVoluntaryContextSwitches,
+		InvoluntaryContextSwitches: runMetrics.RenderMetrics.EngineInvoluntaryContextSwitches,
+		MinorPageFaults:            runMetrics.RenderMetrics.EngineMinorPageFaults,
+		MajorPageFaults:            runMetrics.RenderMetrics.EngineMajorPageFaults,
+	}
+	if rec != nil && telemetry.EngineUsageMetadataJSON(usage) != "" {
+		rec.Emit(telemetry.EventSpec{
+			Origin:       telemetry.OriginWorker,
+			Scope:        telemetry.ScopeAttempt,
+			Component:    "worker.engine",
+			Action:       "usage",
+			MetadataJSON: telemetry.EngineUsageMetadataJSON(usage),
+		}, telemetry.StatusOK, "", "")
+	}
+
 	segments := make([]executor.SegmentTiming, 0, len(runMetrics.RenderMetrics.Segments))
 	for _, seg := range runMetrics.RenderMetrics.Segments {
 		segments = append(segments, executor.SegmentTiming{

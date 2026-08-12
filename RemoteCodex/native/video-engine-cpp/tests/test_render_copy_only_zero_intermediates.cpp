@@ -375,6 +375,12 @@ int main() {
                "sidecar has no final mux phase (one in-process mux)");
         expect(contains(sidecar, "\"file_copy_count\":0"),
                "sidecar io counters report zero file copies");
+        expect(contains(sidecar, "\"external_spawn_count\":0"),
+               "engine-declared process counters report zero external spawns (zero-spawn invariant)");
+        expect(contains(sidecar, "\"ffmpeg_spawn_count\":0"),
+               "engine-declared ffmpeg spawn count is zero on the packet-copy path");
+        expect(contains(sidecar, "\"ffprobe_spawn_count\":0"),
+               "engine-declared ffprobe spawn count is zero on the packet-copy path");
         expect(contains(sidecar, "\"final_mux_audio_mode\":\"COPY\""),
                "sidecar reports FINAL_AUDIO_COPY for the prepared final audio");
         expect(contains(sidecar, "\"final_mux_audio_encode_passes\":0"),

@@ -109,6 +109,19 @@ func mapEngineSidecar(sc *engineSidecar, m *pipeline.RenderMetrics) {
 		m.InputOpenCount = sc.IOCounters.InputOpenCount
 		m.InputReopenCount = sc.IOCounters.InputReopenCount
 	}
+	if sc.ProcessCounters != nil {
+		m.EngineExternalSpawnCount = sc.ProcessCounters.ExternalSpawnCount
+		m.EngineFfmpegSpawnCount = sc.ProcessCounters.FfmpegSpawnCount
+		m.EngineFfprobeSpawnCount = sc.ProcessCounters.FfprobeSpawnCount
+		m.EngineShellSpawnCount = sc.ProcessCounters.ShellSpawnCount
+		m.EngineCurlSpawnCount = sc.ProcessCounters.CurlSpawnCount
+		m.EngineCPUUserMs = sc.ProcessCounters.CPUUserMs
+		m.EngineCPUSystemMs = sc.ProcessCounters.CPUSystemMs
+		m.EngineVoluntaryContextSwitches = sc.ProcessCounters.VoluntaryContextSwitches
+		m.EngineInvoluntaryContextSwitches = sc.ProcessCounters.InvoluntaryContextSwitches
+		m.EngineMinorPageFaults = sc.ProcessCounters.MinorPageFaults
+		m.EngineMajorPageFaults = sc.ProcessCounters.MajorPageFaults
+	}
 	if sc.Observability != nil {
 		m.Observability = make(map[string]interface{}, len(sc.Observability))
 		for key, value := range sc.Observability {

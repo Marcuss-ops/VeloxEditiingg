@@ -217,6 +217,26 @@ type RenderMetrics struct {
 	AssetBytesCopied int64
 	InputOpenCount   int64
 	InputReopenCount int64
+	// Engine-declared process counters reported by the C++ engine in the
+	// sidecar process_counters block. They are DISJOINT facts from the
+	// /proc sampler above: the engine counts the external tool processes
+	// IT spawned (external/ffmpeg/ffprobe/shell/curl), the sampler counts
+	// what it observed. EngineCPUUserMs/EngineCPUSystemMs are the engine
+	// process's own getrusage; the context-switch and page-fault fields
+	// are the engine's own scheduling/VM facts. Zero when the engine
+	// predates the block. The Phase-1 copy-only invariant is
+	// EngineExternalSpawnCount == 0.
+	EngineExternalSpawnCount         int64
+	EngineFfmpegSpawnCount           int64
+	EngineFfprobeSpawnCount          int64
+	EngineShellSpawnCount            int64
+	EngineCurlSpawnCount             int64
+	EngineCPUUserMs                  int64
+	EngineCPUSystemMs                int64
+	EngineVoluntaryContextSwitches   int64
+	EngineInvoluntaryContextSwitches int64
+	EngineMinorPageFaults            int64
+	EngineMajorPageFaults            int64
 	// PhaseMS carries the per-phase engine timings from the C++ sidecar
 	// (engine.asset_download, engine.segment_build, engine.concat, …).
 	// Nil when no sidecar was read.

@@ -1216,6 +1216,31 @@ std::string RenderEngine::sidecarJson(const std::string& output_path) const {
         s << "}";
     }
 
+    // ── Engine-declared process counters ────────────────────────
+    // The engine's OWN ledger of external tool spawns (disjoint from the
+    // Go-side /proc sampler: the engine counts what it launched) and its
+    // own getrusage usage (CPU user/system ms, voluntary/involuntary
+    // context switches, minor/major page faults). The Phase-1 copy-only
+    // invariant external_spawn_count == 0 is readable straight from this
+    // block.
+    {
+        const auto& io = services::ioCounters();
+        const services::ProcessUsage usage = services::processUsage();
+        s << ",\"process_counters\":{";
+        s << "\"external_spawn_count\":" << io.external_spawn_count.load();
+        s << ",\"ffmpeg_spawn_count\":" << io.ffmpeg_spawn_count.load();
+        s << ",\"ffprobe_spawn_count\":" << io.ffprobe_spawn_count.load();
+        s << ",\"shell_spawn_count\":" << io.shell_spawn_count.load();
+        s << ",\"curl_spawn_count\":" << io.curl_spawn_count.load();
+        s << ",\"cpu_user_ms\":" << usage.cpu_user_ms;
+        s << ",\"cpu_system_ms\":" << usage.cpu_system_ms;
+        s << ",\"voluntary_context_switches\":" << usage.voluntary_context_switches;
+        s << ",\"involuntary_context_switches\":" << usage.involuntary_context_switches;
+        s << ",\"minor_page_faults\":" << usage.minor_page_faults;
+        s << ",\"major_page_faults\":" << usage.major_page_faults;
+        s << "}";
+    }
+
     // ── Phase-level timings ────────────────────────────────────
     s << ",\"phase_ms\":{";
     {

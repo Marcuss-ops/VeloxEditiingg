@@ -184,6 +184,19 @@ type ProcessMetrics struct {
 	ShellExecCount   int64 `json:"shell_exec_count"`
 	CurlExecCount    int64 `json:"curl_exec_count"`
 
+	// Engine-declared spawn ledger (sidecar process_counters block): the
+	// external tool processes the C++ engine ITSELF spawned, broken down
+	// by kind. These are DISJOINT from ExternalProcessCount / *_exec_count
+	// above (the Go-side /proc sampler's view) and must never be summed
+	// with them. The Phase-1 copy-only invariant
+	// engine_external_spawn_count == 0 is readable straight from this
+	// field.
+	EngineExternalSpawnCount int64 `json:"engine_external_spawn_count"`
+	EngineFfmpegSpawnCount   int64 `json:"engine_ffmpeg_spawn_count"`
+	EngineFfprobeSpawnCount  int64 `json:"engine_ffprobe_spawn_count"`
+	EngineShellSpawnCount    int64 `json:"engine_shell_spawn_count"`
+	EngineCurlSpawnCount     int64 `json:"engine_curl_spawn_count"`
+
 	ChildWaitMs int64 `json:"child_wait_ms"`
 }
 
@@ -209,6 +222,13 @@ type CPUMetrics struct {
 	CPUSystemMs  int64   `json:"cpu_system_ms"`
 	CPUTotalMs   int64   `json:"cpu_total_ms"`
 	CPUWallRatio float64 `json:"cpu_wall_ratio"`
+
+	// EngineCPUUserMs/EngineCPUSystemMs are the engine process's OWN
+	// getrusage facts (sidecar process_counters block) — the
+	// engine-declared subset of the tree counters above. Zero on engines
+	// that predate the block.
+	EngineCPUUserMs   int64 `json:"engine_cpu_user_ms"`
+	EngineCPUSystemMs int64 `json:"engine_cpu_system_ms"`
 }
 
 // IOMetrics counts real bytes moved by the attempt. TotalBytesRead and
@@ -307,6 +327,15 @@ type SchedulingMetrics struct {
 	QueueWaitMS  int64        `json:"queue_wait_ms"`
 	OffCPUMs     int64        `json:"off_cpu_ms"`
 	OffCPUReason OffCPUReason `json:"off_cpu_reason,omitempty"`
+
+	// Engine-declared scheduling/VM facts (sidecar process_counters
+	// block): the engine process's own voluntary/involuntary context
+	// switches and minor/major page faults via getrusage. Zero on engines
+	// that predate the block or when no native render occurred.
+	VoluntaryContextSwitches   int64 `json:"voluntary_context_switches"`
+	InvoluntaryContextSwitches int64 `json:"involuntary_context_switches"`
+	MinorPageFaults            int64 `json:"minor_page_faults"`
+	MajorPageFaults            int64 `json:"major_page_faults"`
 }
 
 // PhaseTiming is one timed phase observation of the attempt. The assembler

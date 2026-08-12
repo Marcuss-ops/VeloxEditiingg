@@ -100,11 +100,16 @@ std::string shellQuote(const std::string& s) {
 }
 
 bool runCommand(const std::string& cmd) {
+    services::recordExternalSpawn(cmd);
     int rc = std::system(cmd.c_str());
     return rc == 0;
 }
 
 CommandResult runCommandTimed(const std::string& cmd) {
+    // Count this spawn before launching: the sidecar process_counters
+    // block is the engine-declared external-spawn ledger (the Phase-1
+    // copy-only invariant is external_spawn_count == 0).
+    services::recordExternalSpawn(cmd);
     CommandResult res;
     struct rusage before{};
     struct rusage after{};
@@ -130,6 +135,7 @@ CommandResult runCommandTimed(const std::string& cmd) {
 }
 
 std::string captureCommandOutput(const std::string& cmd) {
+    services::recordExternalSpawn(cmd);
     std::array<char, 4096> buffer{};
     std::string output;
     FILE* pipe = popen(cmd.c_str(), "r");

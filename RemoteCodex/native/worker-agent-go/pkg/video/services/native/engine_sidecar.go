@@ -49,6 +49,10 @@ type engineSidecar struct {
 	// asset materialization bytes, avformat input opens) emitted by newer
 	// engines. Legacy sidecars leave it nil.
 	IOCounters *engineIOCounters `json:"io_counters,omitempty"`
+	// ProcessCounters carries the engine-declared spawn ledger and the
+	// engine process's getrusage usage (context switches, page faults,
+	// engine CPU). Legacy sidecars leave it nil.
+	ProcessCounters *engineProcessCounters `json:"process_counters,omitempty"`
 }
 
 // engineIOCounters mirrors the sidecar io_counters block written by
@@ -60,6 +64,29 @@ type engineIOCounters struct {
 	AssetBytesCopied int64 `json:"asset_bytes_copied"`
 	InputOpenCount   int64 `json:"input_open_count"`
 	InputReopenCount int64 `json:"input_reopen_count"`
+}
+
+// engineProcessCounters mirrors the sidecar process_counters block
+// written by RenderEngine::sidecarJson: the engine's OWN ledger of
+// external tool spawns (disjoint from the Go-side /proc sampler — the
+// engine counts what it launched) and the engine process's getrusage
+// usage (CPU user/system ms, voluntary/involuntary context switches,
+// minor/major page faults). All values are zero on engines that predate
+// the block. The Phase-1 copy-only invariant external_spawn_count == 0
+// is readable straight from this block.
+type engineProcessCounters struct {
+	ExternalSpawnCount int64 `json:"external_spawn_count"`
+	FfmpegSpawnCount   int64 `json:"ffmpeg_spawn_count"`
+	FfprobeSpawnCount  int64 `json:"ffprobe_spawn_count"`
+	ShellSpawnCount    int64 `json:"shell_spawn_count"`
+	CurlSpawnCount     int64 `json:"curl_spawn_count"`
+
+	CPUUserMs                  int64 `json:"cpu_user_ms"`
+	CPUSystemMs                int64 `json:"cpu_system_ms"`
+	VoluntaryContextSwitches   int64 `json:"voluntary_context_switches"`
+	InvoluntaryContextSwitches int64 `json:"involuntary_context_switches"`
+	MinorPageFaults            int64 `json:"minor_page_faults"`
+	MajorPageFaults            int64 `json:"major_page_faults"`
 }
 
 // segmentTiming mirrors the C++ SegmentTiming struct emitted inside
