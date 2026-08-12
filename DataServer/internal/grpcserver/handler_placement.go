@@ -181,12 +181,22 @@ func (h *Handler) sendClaimedTaskOffer(
 		return
 	}
 
-	// Fase D: validate/stamp the canonical compiled plan and DELIVER it in
-	// the offer. V2 is already compiled at enqueue time and takes priority;
-	// the legacy V1 compiler remains an additive compatibility path.
-	if planJSON, planSHA := h.compileAndStampAttemptRenderPlan(ctx, tws, attempt); planJSON != "" {
-		workerPayload[contract.PayloadKeyCompiledRenderPlanJSON] = planJSON
-		workerPayload[contract.PayloadKeyCompiledRenderPlanSHA] = planSHA
+	// Fase D: validate/stamp the canonical compiled plan. Only a V2 plan that
+	// was already present in the TaskSpec may be delivered through the V2 wire
+	// keys. The compatibility compiler still persists its V1 plan on the
+	// attempt for evidence, but must not place that V1 document in the V2
+	// envelope: the worker's V2 resolver would (correctly) reject fields such
+	// as job_id and attempt_id. Legacy tasks continue through their existing
+	// payload path until they explicitly opt into CompiledRenderPlanV2.
+	if _, _, v2Present := compiledV2Payload(tws.SpecPayload); v2Present {
+		if planJSON, planSHA := h.compileAndStampAttemptRenderPlan(ctx, tws, attempt); planJSON != "" {
+			workerPayload[contract.PayloadKeyCompiledRenderPlanJSON] = planJSON
+			workerPayload[contract.PayloadKeyCompiledRenderPlanSHA] = planSHA
+		}
+	} else {
+		// Keep the historical V1 compile/persist behavior without projecting
+		// the incompatible document into the worker payload.
+		h.compileAndStampAttemptRenderPlan(ctx, tws, attempt)
 	}
 	// render_batch@1 has no safe legacy fallback: a missing or malformed V2
 	// envelope must release the claim instead of offering a task that the

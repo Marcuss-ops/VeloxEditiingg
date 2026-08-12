@@ -1,12 +1,13 @@
 package grpcserver
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
 
-	"velox-server/internal/renderplan"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
 	"velox-shared/contract"
@@ -129,12 +130,40 @@ func TestSendClaimedTaskOffer_UsesWorkerSpecificPayloadContract(t *testing.T) {
 
 func TestSendClaimedTaskOffer_DeliversCompiledRenderPlan(t *testing.T) {
 	h := NewHandler(nil, nil, nil, nil, nil, nil, nil, &HandlerConfig{PushMode: true})
-	h.SetRenderPlanCompiler(&fakePlanCompiler{})
 	h.taskAttemptRepo = &spoofStubAttemptRepo{}
+	const videoSHA = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	const audioSHA = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	plan := &contract.CompiledRenderPlanV2{
+		PlanVersion: 2, TimelineRevision: 1,
+		TimelineSHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		DurationUS:     1_000_000,
+		Output:         contract.OutputContractV2{Container: "mp4", VideoCodec: "h264", Width: 640, Height: 360, FPSNum: 30, FPSDen: 1, PixelFormat: "yuv420p"},
+		FinalAudio: contract.FinalAudioV2{
+			Mode: contract.AudioModeFinalAudioCopy, AssetID: "audio", SHA256: audioSHA, SizeBytes: 10,
+			Codec: "aac", SampleRateHz: 48_000, Channels: 2, DurationUS: 1_000_000,
+			TimelineRevision: 1, TimelineSHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		},
+		VideoTracks: []contract.VideoTrackV2{{TrackID: "main", Segments: []contract.VideoSegmentV2{{
+			SegmentID: "seg", AssetID: "video", SHA256: videoSHA, TimelineStartFrame: 0,
+			FrameCount: 30, SourceInUS: 0, SourceDurationUS: 1_000_000,
+		}}}},
+		Assets: []contract.AssetRefV2{
+			{AssetID: "audio", SHA256: audioSHA, SizeBytes: 10, Kind: "final_audio", DurationUS: 1_000_000},
+			{AssetID: "video", SHA256: videoSHA, SizeBytes: 10, Kind: "video", DurationUS: 1_000_000},
+		},
+	}
+	canonicalPlanJSON, err := plan.CanonicalJSON()
+	if err != nil {
+		t.Fatalf("canonical V2 plan: %v", err)
+	}
+	digest := sha256.Sum256(canonicalPlanJSON)
+	planSHA := hex.EncodeToString(digest[:])
 
 	payload := map[string]interface{}{
-		"payload_contract_version": contract.PayloadContractVersionCanonical,
-		"video_name":               "Compiled delivery",
+		"payload_contract_version":                contract.PayloadContractVersionCanonical,
+		"video_name":                              "Compiled delivery",
+		contract.PayloadKeyCompiledRenderPlanJSON: string(canonicalPlanJSON),
+		contract.PayloadKeyCompiledRenderPlanSHA:  planSHA,
 		"scenes": []interface{}{
 			map[string]interface{}{
 				"clip": map[string]interface{}{
@@ -146,6 +175,7 @@ func TestSendClaimedTaskOffer_DeliversCompiledRenderPlan(t *testing.T) {
 			},
 		},
 	}
+	original := payloadJSONForTest(payload)
 	sess := &workerSession{workerID: "worker-1", sendCh: make(chan *outboundMessage, 1)}
 	tws := &taskgraph.TaskWithSpec{Task: taskgraph.Task{
 		ID: "task-1", JobID: "job-plan", ExecutorID: "scene.composite.v1", ExecutorVersion: 2,
@@ -159,29 +189,32 @@ func TestSendClaimedTaskOffer_DeliversCompiledRenderPlan(t *testing.T) {
 	}
 	wire := out.Envelope.GetTaskOffer().GetTaskSpec().AsMap()
 
-	planJSON, ok := wire[contract.PayloadKeyCompiledRenderPlanJSON].(string)
-	if !ok || strings.TrimSpace(planJSON) == "" {
+	deliveredPlanJSON, ok := wire[contract.PayloadKeyCompiledRenderPlanJSON].(string)
+	if !ok || strings.TrimSpace(deliveredPlanJSON) == "" {
 		t.Fatalf("TaskOffer must carry %q (got %#v)", contract.PayloadKeyCompiledRenderPlanJSON, wire[contract.PayloadKeyCompiledRenderPlanJSON])
 	}
-	planSHA, ok := wire[contract.PayloadKeyCompiledRenderPlanSHA].(string)
-	if !ok || planSHA == "" {
+	deliveredPlanSHA, ok := wire[contract.PayloadKeyCompiledRenderPlanSHA].(string)
+	if !ok || deliveredPlanSHA == "" {
 		t.Fatalf("TaskOffer must carry %q (got %#v)", contract.PayloadKeyCompiledRenderPlanSHA, wire[contract.PayloadKeyCompiledRenderPlanSHA])
 	}
-	if planSHA != renderplan.HashCanonical([]byte(planJSON)) {
-		t.Fatalf("delivered plan_sha256 = %q, want SHA256(canonical JSON) %q", planSHA, renderplan.HashCanonical([]byte(planJSON)))
+	if deliveredPlanSHA != hex.EncodeToString(digest[:]) {
+		t.Fatalf("delivered plan_sha256 = %q, want SHA256(canonical JSON) %q", deliveredPlanSHA, hex.EncodeToString(digest[:]))
 	}
-	// The delivered document must be a valid CompiledRenderPlan (job/attempt
-	// identity + media contract + segments) — the batch path consumes this.
-	plan, err := renderplan.Decode([]byte(planJSON))
+	if deliveredPlanJSON != string(canonicalPlanJSON) {
+		t.Fatalf("delivered plan JSON differs from canonical V2 bytes")
+	}
+	// The delivered document must remain the exact canonical V2 plan. Identity
+	// belongs to TaskSpec; it must not be injected into the V2 JSON.
+	decoded, err := contract.DecodeCompiledRenderPlanV2([]byte(deliveredPlanJSON))
 	if err != nil {
 		t.Fatalf("delivered compiled plan does not decode: %v", err)
 	}
-	if plan.JobID != "job-plan" || plan.AttemptID != "attempt-plan" || len(plan.Segments) == 0 {
-		t.Fatalf("delivered plan identity/segments wrong: %+v", plan)
+	if decoded.PlanVersion != 2 || len(decoded.VideoTracks) != 1 || len(decoded.VideoTracks[0].Segments) == 0 {
+		t.Fatalf("delivered V2 plan version/tracks wrong: %+v", decoded)
 	}
 	// The source canonical payload must remain unmutated.
-	if _, ok := payload[contract.PayloadKeyCompiledRenderPlanJSON]; ok {
-		t.Fatal("compiled plan leaked into the canonical payload")
+	if got := payloadJSONForTest(payload); got != original {
+		t.Fatalf("canonical payload mutated by TaskOffer projection:\nbefore=%s\nafter=%s", original, got)
 	}
 	assertNoForbiddenWorkerKeys(t, wire)
 }
