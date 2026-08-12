@@ -182,6 +182,21 @@ endif()
 add_test(NAME segment_execution_tests
          COMMAND velox_segment_execution_tests)
 
+add_executable(velox_segment_scheduler_tests
+    tests/test_segment_scheduler.cpp
+    src/services/segment_scheduler.cpp
+)
+
+target_include_directories(velox_segment_scheduler_tests
+    PRIVATE include src include/velox)
+
+if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(velox_segment_scheduler_tests PRIVATE -O2)
+endif()
+
+add_test(NAME segment_scheduler_tests
+         COMMAND velox_segment_scheduler_tests)
+
 # Focused tests for the private render-engine command/parsing helpers.
 add_executable(velox_render_engine_helpers_tests
     tests/test_render_engine_helpers.cpp
