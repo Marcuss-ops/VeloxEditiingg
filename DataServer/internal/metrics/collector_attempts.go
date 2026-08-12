@@ -15,6 +15,7 @@ package metrics
 
 import (
 	"context"
+	"fmt"
 
 	"velox-server/internal/taskattempts"
 )
@@ -202,16 +203,19 @@ func (c *Collector) ScanAttemptWithLabels(
 		workerClass = "default"
 	}
 	am, err := mem.GetMetrics(ctx, attemptID)
-	if err != nil || am == nil {
+	if err != nil {
 		return err
+	}
+	if am == nil {
+		return fmt.Errorf("metrics: attempt %q returned nil metrics", attemptID)
 	}
 	cs, err := mem.GetCacheStats(ctx, attemptID)
 	if err != nil {
-		cs = nil
+		return fmt.Errorf("metrics: attempt %q cache stats: %w", attemptID, err)
 	}
 	cb, err := mem.GetCostBasis(ctx, attemptID)
 	if err != nil {
-		cb = nil
+		return fmt.Errorf("metrics: attempt %q cost basis: %w", attemptID, err)
 	}
 	cache := taskattempts.AttemptCacheStats{}
 	if cs != nil {
@@ -221,7 +225,11 @@ func (c *Collector) ScanAttemptWithLabels(
 	// reader can't surface a status, we fall back to
 	// PENDING so RecordAttemptOutcome is a no-op — safe-by-default.
 	status := taskattempts.AttemptStatusPending
-	if s, sErr := mem.GetStatus(ctx, attemptID); sErr == nil && s != "" {
+	s, sErr := mem.GetStatus(ctx, attemptID)
+	if sErr != nil {
+		return fmt.Errorf("metrics: attempt %q status: %w", attemptID, sErr)
+	}
+	if s != "" {
 		status = s
 	}
 	c.RecordAttempt(*am, cache, cb, execID, execVer, workerClass)
