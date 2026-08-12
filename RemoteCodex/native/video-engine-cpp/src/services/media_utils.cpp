@@ -664,7 +664,9 @@ std::string buildVideoSegmentArgs(
         ffmpegThreadCount(),
         "");
     if (includeAudio) {
-        cmd << " -map 0:v:0 -map 0:a? -c:a aac -ar 48000 -ac 2 -shortest";
+        // -t already bounds the segment to the exact scene duration;
+        // -shortest would be redundant and is banned.
+        cmd << " -map 0:v:0 -map 0:a? -c:a aac -ar 48000 -ac 2";
     } else {
         cmd << " -an";
     }
@@ -766,7 +768,9 @@ bool muxAudio(const fs::path& videoPath, const fs::path& audioPath, const fs::pa
         hasFilter = true;
     }
     if (startOffset > 0.0) {
-        int delayMs = static_cast<int>(startOffset * 1000);
+        // adelay accepts integer milliseconds; round to the nearest ms
+        // instead of truncating (offset*1000 truncation is banned).
+        const int delayMs = static_cast<int>(std::llround(startOffset * 1000.0));
         if (hasFilter) af << ",";
         af << "adelay=" << delayMs << "|" << delayMs;
         hasFilter = true;
@@ -775,12 +779,19 @@ bool muxAudio(const fs::path& videoPath, const fs::path& audioPath, const fs::pa
         cmd << " -af " << file::shellQuote(af.str());
     }
 
-    // FINAL_AUDIO_COPY has already validated that the AAC track covers the
-    // final video timeline and has neutral timestamps. Do not let -shortest
-    // truncate copied packets at an arbitrary muxer boundary. The encode
-    // fallback retains the legacy -shortest behavior.
-    if (decision.mode != FinalAudioMode::Copy) {
-        cmd << " -shortest";
+    // The plan duration is the only source of truth for the final mux.
+    // -shortest would let FFmpeg truncate at an arbitrary muxer boundary
+    // (and could also extend beyond the video when the audio is longer), so
+    // it is banned: both the FINAL_AUDIO_COPY path and the encode fallback
+    // receive an explicit -t bound at the declared render duration. Legacy
+    // callers (cmd_full_video, --mux-audio) do not pass the render duration;
+    // derive it from the video input so the output can never extend past the
+    // video with an audio-only tail.
+    if (expectedDurationSeconds <= 0.0) {
+        expectedDurationSeconds = probeMediaDurationSeconds(videoPath);
+    }
+    if (expectedDurationSeconds > 0.0) {
+        cmd << " -t " << expectedDurationSeconds;
     }
     cmd << " -movflags +faststart "
         << file::shellQuote(outputPath.string());

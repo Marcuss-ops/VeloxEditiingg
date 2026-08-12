@@ -366,6 +366,37 @@ if(VELOX_ENABLE_LIBAV)
 
     add_test(NAME render_copy_only_zero_intermediates_tests
              COMMAND velox_render_copy_only_zero_intermediates_tests)
+
+    # CompiledRenderPlanV2 receiver: parser unit tests (int64 frames/us,
+    # float rejection, contiguity, frame-exactness, bindings) plus a
+    # render-level zero-spawn proof of the V2 envelope through
+    # RenderEngine::render() under a sentinel PATH.
+    add_executable(velox_render_plan_v2_tests
+        tests/test_render_plan_v2.cpp
+        src/plan/render_plan_parser.cpp
+        src/audio/audio_plan.cpp
+        src/audio/audio_benchmark.cpp
+        src/core/render_engine.cpp
+        src/core/render_engine_helpers.cpp
+        src/services/file_utils.cpp
+        src/services/io_counters.cpp
+        src/services/media_probe.cpp
+        src/services/media_packet_pipeline.cpp
+        src/services/media_utils.cpp
+        src/services/ffmpeg_progress_parser.cpp
+        src/telemetry/phase_recorder.cpp
+    )
+
+    target_include_directories(velox_render_plan_v2_tests
+        PRIVATE include src include/velox)
+
+    if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(velox_render_plan_v2_tests PRIVATE -O2)
+    endif()
+    velox_link_ffmpeg(velox_render_plan_v2_tests)
+
+    add_test(NAME render_plan_v2_tests
+             COMMAND velox_render_plan_v2_tests)
 endif()
 
 # Every target that can include PhaseRecorder must consume the freshly
@@ -387,4 +418,7 @@ if(TARGET velox_media_packet_pipeline_tests)
 endif()
 if(TARGET velox_render_copy_only_zero_intermediates_tests)
     add_dependencies(velox_render_copy_only_zero_intermediates_tests velox_telemetry_catalog_codegen)
+endif()
+if(TARGET velox_render_plan_v2_tests)
+    add_dependencies(velox_render_plan_v2_tests velox_telemetry_catalog_codegen)
 endif()

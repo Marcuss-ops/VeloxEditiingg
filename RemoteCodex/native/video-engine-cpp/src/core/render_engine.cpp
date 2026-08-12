@@ -266,7 +266,12 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
         media::CopyOnlyMuxRequest request;
         request.output_path = outPath;
         request.video_segments.reserve(plan.timeline.size());
+        // CompiledRenderPlanV2 carries the timeline in exact integer
+        // microseconds; the legacy V1 fallback sums floating seconds. The
+        // packet mux always receives int64 duration_us — no float is ever
+        // used as the source of truth for the trim.
         double total_copy_duration = 0.0;
+        int64_t total_copy_duration_us = 0;
 
         // Bind existing local/cache assets in place for this copy-only
         // packet path. The Go worker resolver rewrites velox-asset://
@@ -301,7 +306,12 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                     std::to_string(i) + ")";
                 return failRender("copy_only_source_unsupported");
             }
-            if (item.duration_seconds <= 0.0 || !std::isfinite(item.duration_seconds)) {
+            // CompiledRenderPlanV2 carries the duration as integer
+            // microseconds; the legacy V1 plan as floating seconds. Either
+            // source of truth must be positive and finite.
+            const bool hasDuration = item.duration_us > 0 ||
+                (item.duration_seconds > 0.0 && std::isfinite(item.duration_seconds));
+            if (!hasDuration) {
                 result.error = "copy_only requires positive finite duration for segment " +
                     std::to_string(i);
                 return failRender("copy_only_duration_invalid");
@@ -339,10 +349,18 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             segment.status = telemetry::kStatusOk;
             metrics_.addSegment(segment);
 
-            const int64_t duration_us = static_cast<int64_t>(
-                std::llround(item.duration_seconds * 1'000'000.0));
+            // Prefer the V2 integer microseconds; fall back to converting
+            // the V1 floating seconds only when the int64 field is absent.
+            const int64_t duration_us = item.duration_us > 0
+                ? item.duration_us
+                : static_cast<int64_t>(
+                      std::llround(item.duration_seconds * 1'000'000.0));
             request.video_segments.push_back({localVideo, duration_us, item.include_audio});
-            total_copy_duration += item.duration_seconds;
+            if (item.duration_us > 0) {
+                total_copy_duration_us += item.duration_us;
+            } else {
+                total_copy_duration += item.duration_seconds;
+            }
             const int progress = 10 + static_cast<int>(
                 (static_cast<double>(i + 1) / plan.timeline.size()) * 55.0);
             reportProgress(progress, "staging_copy_inputs");
@@ -352,6 +370,13 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                 "staging_copy_inputs", 0, 0, 0,
                 std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now() - renderStart).count(), true);
+        }
+
+        if (total_copy_duration_us > 0) {
+            // Display/validation only: the FINAL_AUDIO_COPY resolver takes a
+            // tolerance of tens of milliseconds, so the double derived from
+            // the exact int64 total is safe; the mux trim stays int64.
+            total_copy_duration = static_cast<double>(total_copy_duration_us) / 1'000'000.0;
         }
 
         if (plan.audio_tracks.size() > 1) {
@@ -394,12 +419,18 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                     boundAudio.second ? "resolve" : "download");
                 assetPhase.Complete();
             }
-            const int64_t declared_audio_duration = track.duration_seconds > 0.0
-                ? static_cast<int64_t>(std::llround(track.duration_seconds * 1'000'000.0))
-                : 0;
+            const int64_t declared_audio_duration = track.duration_us > 0
+                ? track.duration_us
+                : (track.duration_seconds > 0.0
+                       ? static_cast<int64_t>(
+                             std::llround(track.duration_seconds * 1'000'000.0))
+                       : 0);
             request.audio = media::CopyOnlyAudioTrack{
                 boundAudio.first,
-                static_cast<int64_t>(std::llround(track.start_time_offset * 1'000'000.0)),
+                track.start_offset_us > 0
+                    ? track.start_offset_us
+                    : static_cast<int64_t>(
+                          std::llround(track.start_time_offset * 1'000'000.0)),
                 declared_audio_duration};
         }
 
@@ -878,7 +909,10 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                 }
                 audioFilter << "volume=" << vol;
                 if (offset > 0.0) {
-                    int delayMs = static_cast<int>(offset * 1000);
+                    // adelay accepts integer milliseconds; round to the
+                    // nearest ms instead of truncating (offset*1000 truncation
+                    // would silently shorten the offset and is banned).
+                    const int delayMs = static_cast<int>(std::llround(offset * 1000.0));
                     audioFilter << ",adelay=" << delayMs << "|" << delayMs;
                 }
                 audioFilter << "[a" << t << "]";
