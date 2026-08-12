@@ -2,6 +2,7 @@ package workers
 
 import (
 	"context"
+	"fmt"
 
 	"velox-server/internal/logging"
 	"velox-shared/identity"
@@ -15,38 +16,43 @@ func (r *Registry) IsRevoked(workerID string) bool {
 	return r.revoked[identity.ParseWorkerID(workerID)]
 }
 
-// RevokeWorker marks a worker as revoked and removes it from the active set
-func (r *Registry) RevokeWorker(ctx context.Context, workerID string) {
+// RevokeWorker durably marks a worker as revoked and removes it from the
+// active set. The in-memory projection advances only after persistence
+// succeeds, so a storage failure cannot create a false revocation state.
+func (r *Registry) RevokeWorker(ctx context.Context, workerID string) error {
 	workerID = identity.NormalizeWorkerID(workerID)
 	id := identity.ParseWorkerID(workerID)
 	r.mu.Lock()
-	r.revoked[id] = true
-	delete(r.inMem, id)
-
+	defer r.mu.Unlock()
 	if r.dbStore != nil {
 		if err := r.dbStore.SetWorkerRevoked(workerID, true); err != nil {
 			registryLog.ErrorWithMsg(logging.CodeRegistryPersistRevokeFail,
 				"Failed to persist worker revoke",
 				map[string]interface{}{"worker_id": workerID, "err": err.Error()})
+			return fmt.Errorf("persist worker revoke: %w", err)
 		}
 	}
-	r.mu.Unlock()
+	r.revoked[id] = true
+	delete(r.inMem, id)
+	return nil
 }
 
-// UnrevokeWorker removes a worker from the revoked list
-func (r *Registry) UnrevokeWorker(workerID string) {
+// UnrevokeWorker durably removes a worker from the revoked list. The
+// in-memory projection advances only after persistence succeeds.
+func (r *Registry) UnrevokeWorker(workerID string) error {
 	workerID = identity.NormalizeWorkerID(workerID)
 	r.mu.Lock()
-	delete(r.revoked, identity.ParseWorkerID(workerID))
-
+	defer r.mu.Unlock()
 	if r.dbStore != nil {
 		if err := r.dbStore.SetWorkerRevoked(workerID, false); err != nil {
 			registryLog.ErrorWithMsg(logging.CodeRegistryPersistUnrevokeFail,
 				"Failed to persist worker unrevoke",
 				map[string]interface{}{"worker_id": workerID, "err": err.Error()})
+			return fmt.Errorf("persist worker unrevoke: %w", err)
 		}
 	}
-	r.mu.Unlock()
+	delete(r.revoked, identity.ParseWorkerID(workerID))
+	return nil
 }
 
 // LoadRevoked loads a set of revoked worker IDs into the in-memory revoked set.

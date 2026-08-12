@@ -57,13 +57,20 @@ func (r *SQLiteTaskAttemptRepository) GetPhaseTimings(ctx context.Context, attem
 		if err := rows.Scan(&pt.AttemptID, &pt.Phase, &pt.DurationMS, &wallStart, &wallEnd); err != nil {
 			return nil, fmt.Errorf("phase timings scan: %w", err)
 		}
-		pt.WallStart, err = time.Parse(time.RFC3339Nano, wallStart)
-		if err != nil {
-			return nil, fmt.Errorf("phase timings wall_start parse: %w", err)
+		// Compact/legacy phase summaries carry duration only. Preserve those
+		// useful measurements and leave the optional wall-clock fields zero;
+		// detailed timing readers remain strict when timestamps are required.
+		if wallStart != "" {
+			pt.WallStart, err = time.Parse(time.RFC3339Nano, wallStart)
+			if err != nil {
+				return nil, fmt.Errorf("phase timings wall_start parse: %w", err)
+			}
 		}
-		pt.WallEnd, err = time.Parse(time.RFC3339Nano, wallEnd)
-		if err != nil {
-			return nil, fmt.Errorf("phase timings wall_end parse: %w", err)
+		if wallEnd != "" {
+			pt.WallEnd, err = time.Parse(time.RFC3339Nano, wallEnd)
+			if err != nil {
+				return nil, fmt.Errorf("phase timings wall_end parse: %w", err)
+			}
 		}
 		results = append(results, pt)
 	}

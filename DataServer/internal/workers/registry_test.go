@@ -93,6 +93,56 @@ func TestRegistryRevokeAndPersist(t *testing.T) {
 	}
 }
 
+func TestRegistryRevokeFailsClosedWhenPersistenceFails(t *testing.T) {
+	s, err := store.NewSQLiteStore(t.TempDir() + "/test_workers.db")
+	if err != nil {
+		t.Fatalf("failed to create test SQLite store: %v", err)
+	}
+	reg := New(s)
+	ctx := context.Background()
+	if err := reg.RegisterWorker(ctx, "w-revoke-fail", "worker-revoke-fail", "10.0.0.1", nil); err != nil {
+		t.Fatalf("register worker: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	if err := reg.RevokeWorker(ctx, "w-revoke-fail"); err == nil {
+		t.Fatal("RevokeWorker should fail when persistence is unavailable")
+	}
+	if reg.IsRevoked("w-revoke-fail") {
+		t.Fatal("failed revoke must not advance the in-memory revoked projection")
+	}
+	if reg.GetWorker(ctx, "w-revoke-fail") == nil {
+		t.Fatal("failed revoke must keep the in-memory worker projection intact")
+	}
+}
+
+func TestRegistryUnrevokeFailsClosedWhenPersistenceFails(t *testing.T) {
+	s, err := store.NewSQLiteStore(t.TempDir() + "/test_workers.db")
+	if err != nil {
+		t.Fatalf("failed to create test SQLite store: %v", err)
+	}
+	reg := New(s)
+	ctx := context.Background()
+	if err := reg.RegisterWorker(ctx, "w-unrevoke-fail", "worker-unrevoke-fail", "10.0.0.1", nil); err != nil {
+		t.Fatalf("register worker: %v", err)
+	}
+	if err := reg.RevokeWorker(ctx, "w-unrevoke-fail"); err != nil {
+		t.Fatalf("revoke worker: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	if err := reg.UnrevokeWorker("w-unrevoke-fail"); err == nil {
+		t.Fatal("UnrevokeWorker should fail when persistence is unavailable")
+	}
+	if !reg.IsRevoked("w-unrevoke-fail") {
+		t.Fatal("failed unrevoke must keep the in-memory revoked projection")
+	}
+}
+
 func TestRegistryUnrevoke(t *testing.T) {
 	s, err := store.NewSQLiteStore(t.TempDir() + "/test_workers.db")
 	if err != nil {

@@ -306,6 +306,12 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 - [x] Rendere fail-closed `worker/rename` e `worker/set_group`: gli errori del
   writer heartbeat non vengono più ignorati e non producono più 200 senza
   persistenza.
+- [x] Rendere durable-first revoke/unrevoke worker e revoca sessioni: le mappe
+  in memoria avanzano solo dopo SQLite, gli errori vengono propagati e il
+  control handler non risponde 200 su revoche parziali.
+- [x] Preservare la compatibilità dei phase summary legacy: il reader mantiene
+  `duration_ms` quando `wall_start/wall_end` sono assenti e riserva il parsing
+  stretto ai timing dettagliati che richiedono timestamp.
 
 ### P1 — Worker layering e stato globale
 

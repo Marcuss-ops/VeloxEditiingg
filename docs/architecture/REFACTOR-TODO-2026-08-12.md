@@ -158,6 +158,11 @@ reversibile, testato prima/dopo, committato su `main` e pubblicato.
       dei reader configurati, evitando dashboard parziali o zeri ambigui.
 - [x] Management worker: `rename` e `set_group` propagano il fallimento del
       heartbeat/persistenza e mantengono `worker_id` immutabile.
+- [x] Worker lifecycle: revoke/unrevoke e revoke sessioni sono fail-closed e
+      durable-first; nessuna proiezione in memoria viene anticipata al DB.
+- [x] Phase timings: i record legacy compatti con sola durata non vengono più
+      persi; i timestamp mancanti restano zero senza indebolire il reader
+      dettagliato.
 - [ ] Continuare l’audit degli altri writer/proiezioni prima di chiudere la
       fase di ownership e CAS.
 

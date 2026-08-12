@@ -79,7 +79,9 @@ func TestTokenManagerRevokeWorkerTokens(t *testing.T) {
 	tm := NewTokenManager(nil)
 
 	tm.GenerateToken("w1")
-	tm.RevokeWorkerTokens("w1")
+	if err := tm.RevokeWorkerTokens("w1"); err == nil {
+		t.Fatal("expected missing token store to fail closed")
+	}
 }
 
 func TestWorkerCommandToJSON(t *testing.T) {

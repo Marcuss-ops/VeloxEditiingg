@@ -285,11 +285,14 @@ func (tm *TokenManager) RevokeToken(token string) {
 	}
 }
 
-// RevokeWorkerTokens revokes all tokens for a worker.
-func (tm *TokenManager) RevokeWorkerTokens(workerID string) {
-	if tm.store != nil {
-		_ = tm.store.RevokeWorkerSessions(workerID)
+// RevokeWorkerTokens revokes all tokens for a worker. A configured store is
+// authoritative: callers must not report a completed revoke when the session
+// rows could not be updated.
+func (tm *TokenManager) RevokeWorkerTokens(workerID string) error {
+	if tm == nil || tm.store == nil {
+		return fmt.Errorf("token manager store is not configured")
 	}
+	return tm.store.RevokeWorkerSessions(workerID)
 }
 
 // generateRandomToken generates a cryptographically secure random token

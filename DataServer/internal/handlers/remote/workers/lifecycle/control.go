@@ -51,8 +51,17 @@ func (h *Handler) RevokeWorkerHandler() gin.HandlerFunc {
 
 		ctx := c.Request.Context()
 
-		h.reg.RevokeWorker(ctx, workerID)
-		h.tokenMgr.RevokeWorkerTokens(workerID)
+		// Revoke credentials first. If this fails, do not remove the worker
+		// from the registry yet: the operation must never return success while
+		// its existing sessions remain usable.
+		if err := h.tokenMgr.RevokeWorkerTokens(workerID); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "failed to revoke worker sessions", "details": err.Error()})
+			return
+		}
+		if err := h.reg.RevokeWorker(ctx, workerID); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "failed to persist worker revoke", "details": err.Error()})
+			return
+		}
 
 		log.Printf("Worker revoked: %s", workerID[:min(16, len(workerID))]+"...")
 
@@ -71,7 +80,10 @@ func (h *Handler) UnrevokeWorkerHandler() gin.HandlerFunc {
 			return
 		}
 
-		h.reg.UnrevokeWorker(workerID)
+		if err := h.reg.UnrevokeWorker(workerID); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "failed to persist worker unrevoke", "details": err.Error()})
+			return
+		}
 
 		log.Printf("Worker unrevoked: %s", workerID[:min(16, len(workerID))]+"...")
 
