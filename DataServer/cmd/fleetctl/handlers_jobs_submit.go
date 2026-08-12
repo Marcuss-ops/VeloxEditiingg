@@ -311,10 +311,8 @@ func waitForJob(ctx context.Context, m2m *fleetClient, jobID string) error {
 		if time.Now().After(deadline) {
 			return fmt.Errorf("timed out waiting for job=%s (last status=%s)", jobID, current)
 		}
-		select {
-		case <-ctx.Done():
+		if !waitPollingInterval(ctx, poll) {
 			return fmt.Errorf("timed out waiting for job=%s", jobID)
-		case <-time.After(poll):
 		}
 	}
 }

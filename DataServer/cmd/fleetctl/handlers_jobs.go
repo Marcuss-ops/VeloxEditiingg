@@ -301,11 +301,9 @@ func runJobWatchWithInterval(client *fleetClient, jobID string, timeout, interva
 			fmt.Fprintln(os.Stderr, fmtExit(ExitUnexpected, "job %s returned input-assembly status COMPLETED, not a terminal JobStatus", jobID))
 			return ExitUnexpected
 		}
-		select {
-		case <-ctx.Done():
+		if !waitPollingInterval(ctx, interval) {
 			fmt.Fprintln(os.Stderr, fmtExit(ExitUnexpected, "timed out waiting for job %s", jobID))
 			return ExitUnexpected
-		case <-time.After(interval):
 		}
 	}
 }

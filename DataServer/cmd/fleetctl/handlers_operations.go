@@ -235,11 +235,9 @@ func runWaitReadyWithInterval(client *fleetClient, workerID, expected string, ti
 			fmt.Fprintf(os.Stderr, "fleetctl: worker=%s READY\n", workerID)
 			return ExitOK
 		}
-		select {
-		case <-ctx.Done():
+		if !waitPollingInterval(ctx, interval) {
 			fmt.Fprintf(os.Stderr, "fleetctl: worker=%s did not become READY (connection=%s health=%s readiness=%s digest=%s expected=%s)\n", workerID, connection, health, ready, displayValue(actualDigest), displayValue(expectedDigest))
 			return ExitUnexpected
-		case <-time.After(interval):
 		}
 	}
 }

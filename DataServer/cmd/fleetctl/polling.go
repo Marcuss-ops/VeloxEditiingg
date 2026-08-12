@@ -43,6 +43,21 @@ var defaultWaitBudget = map[string]time.Duration{
 	"rollback":   30 * time.Minute,
 }
 
+// waitPollingInterval sleeps until the next poll or until the caller's
+// context is cancelled. A timer is used instead of time.After so an
+// interrupted poll does not retain an uncancellable timer until the interval
+// expires.
+func waitPollingInterval(ctx context.Context, interval time.Duration) bool {
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
 // pollInterval is the steady-state poll period for the Master operation
 // ledger. FleetController is the sole production mutation owner.
 const pollInterval = 5 * time.Second
