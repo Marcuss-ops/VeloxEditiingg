@@ -203,10 +203,16 @@ func (r *SQLiteLabelResolver) GetPhaseTimingsDetailed(ctx context.Context, attem
 			&pt.BytesIn, &pt.BytesOut, &pt.Frames, &pt.MetadataJSON,
 			&pt.JobID, &pt.TaskID, &pt.WorkerID, &pt.WorkerSnapshotID,
 			&pt.ExecutorID, &pt.ExecutorVersion); err != nil {
-			continue
+			return nil, fmt.Errorf("supervisor: scan phase timing: %w", err)
 		}
-		pt.StartedAt, _ = time.Parse(time.RFC3339, wallStart)
-		pt.CompletedAt, _ = time.Parse(time.RFC3339, wallEnd)
+		pt.StartedAt, err = time.Parse(time.RFC3339, wallStart)
+		if err != nil {
+			return nil, fmt.Errorf("supervisor: parse phase timing start: %w", err)
+		}
+		pt.CompletedAt, err = time.Parse(time.RFC3339, wallEnd)
+		if err != nil {
+			return nil, fmt.Errorf("supervisor: parse phase timing end: %w", err)
+		}
 		results = append(results, pt)
 	}
 	return results, rows.Err()
@@ -251,7 +257,7 @@ func (r *SQLiteLabelResolver) GetSegmentTimings(ctx context.Context, attemptID s
 			&seg.SourceURLHash, &seg.CacheKey,
 			&seg.InputDurationMS, &seg.OutputDurationMS,
 			&seg.MetadataJSON); err != nil {
-			continue
+			return nil, fmt.Errorf("supervisor: scan segment timing: %w", err)
 		}
 		results = append(results, seg)
 	}
