@@ -70,28 +70,50 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 # The language-neutral catalog is the only telemetry taxonomy source. Build
-# into the binary tree so CMake never mutates the source checkout, while the
-# checked-in header remains available to non-CMake consumers and CI parity.
-find_program(VELOX_GO_EXECUTABLE go REQUIRED)
-set(VELOX_SHARED_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../shared")
+# into the binary tree so CMake never mutates the source checkout. Full source
+# checkouts regenerate the binding with Go; minimal release builders may use
+# the checked-in generated header, whose freshness is enforced by
+# scripts/ci/check-telemetry-catalog.sh.
+find_program(VELOX_GO_EXECUTABLE go)
 set(VELOX_TELEMETRY_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 set(VELOX_TELEMETRY_GENERATED_HEADER
     "${VELOX_TELEMETRY_GENERATED_DIR}/velox/telemetry/catalog_generated.hpp")
-add_custom_command(
-    OUTPUT "${VELOX_TELEMETRY_GENERATED_HEADER}"
-    COMMAND "${VELOX_GO_EXECUTABLE}" run ./telemetry/cmd/cataloggen
-            -input telemetry/schema/catalog.json
-            -output "${VELOX_TELEMETRY_GENERATED_HEADER}"
-    WORKING_DIRECTORY "${VELOX_SHARED_DIR}"
-    DEPENDS
-        "${VELOX_SHARED_DIR}/telemetry/schema/catalog.json"
-        "${VELOX_SHARED_DIR}/telemetry/catalog.go"
-        "${VELOX_SHARED_DIR}/telemetry/catalog_source.go"
-        "${VELOX_SHARED_DIR}/telemetry/descriptor.go"
-        "${VELOX_SHARED_DIR}/telemetry/fact_owner.go"
-        "${VELOX_SHARED_DIR}/telemetry/cmd/cataloggen/main.go"
-    COMMENT "Generating C++ telemetry catalog binding"
-    VERBATIM)
+if(VELOX_GO_EXECUTABLE)
+    set(VELOX_SHARED_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../shared")
+    add_custom_command(
+        OUTPUT "${VELOX_TELEMETRY_GENERATED_HEADER}"
+        COMMAND "${VELOX_GO_EXECUTABLE}" run ./telemetry/cmd/cataloggen
+                -input telemetry/schema/catalog.json
+                -output "${VELOX_TELEMETRY_GENERATED_HEADER}"
+        WORKING_DIRECTORY "${VELOX_SHARED_DIR}"
+        DEPENDS
+            "${VELOX_SHARED_DIR}/telemetry/schema/catalog.json"
+            "${VELOX_SHARED_DIR}/telemetry/catalog.go"
+            "${VELOX_SHARED_DIR}/telemetry/catalog_source.go"
+            "${VELOX_SHARED_DIR}/telemetry/descriptor.go"
+            "${VELOX_SHARED_DIR}/telemetry/fact_owner.go"
+            "${VELOX_SHARED_DIR}/telemetry/cmd/cataloggen/main.go"
+        COMMENT "Generating C++ telemetry catalog binding"
+        VERBATIM)
+else()
+    set(VELOX_CHECKED_IN_TELEMETRY_HEADER
+        "${CMAKE_CURRENT_SOURCE_DIR}/include/velox/telemetry/catalog_generated.hpp")
+    if(NOT EXISTS "${VELOX_CHECKED_IN_TELEMETRY_HEADER}")
+        message(FATAL_ERROR
+            "Go is unavailable and the checked-in telemetry catalog binding is missing: "
+            "${VELOX_CHECKED_IN_TELEMETRY_HEADER}")
+    endif()
+    add_custom_command(
+        OUTPUT "${VELOX_TELEMETRY_GENERATED_HEADER}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory
+                "${VELOX_TELEMETRY_GENERATED_DIR}/velox/telemetry"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                "${VELOX_CHECKED_IN_TELEMETRY_HEADER}"
+                "${VELOX_TELEMETRY_GENERATED_HEADER}"
+        DEPENDS "${VELOX_CHECKED_IN_TELEMETRY_HEADER}"
+        COMMENT "Copying checked-in C++ telemetry catalog binding"
+        VERBATIM)
+endif()
 add_custom_target(velox_telemetry_catalog_codegen
     DEPENDS "${VELOX_TELEMETRY_GENERATED_HEADER}")
 include_directories(BEFORE "${VELOX_TELEMETRY_GENERATED_DIR}")
