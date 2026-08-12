@@ -304,11 +304,13 @@ add_executable(velox_looped_music_tests
     src/audio/audio_benchmark.cpp
     src/core/render_engine.cpp
     src/core/render_engine_helpers.cpp
+    src/services/frame_pipeline.cpp
     src/services/file_utils.cpp
     src/services/io_counters.cpp
     src/services/media_probe.cpp
     src/services/media_packet_pipeline.cpp
     src/services/segment_execution.cpp
+    src/services/segment_scheduler.cpp
     src/services/media_utils.cpp
     src/services/ffmpeg_progress_parser.cpp
     src/telemetry/emitter.cpp
