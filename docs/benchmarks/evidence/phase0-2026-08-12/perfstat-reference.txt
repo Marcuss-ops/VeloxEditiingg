@@ -1,0 +1,29 @@
+# started on Wed Aug 12 09:10:42 2026
+
+ Performance counter stats for '/usr/local/bin/velox_video_engine --render --plan /var/lib/velox/perf/refjob/plan.json':
+
+          17258.86 msec task-clock                       #    1.003 CPUs utilized
+             25981      context-switches                 #    1.505 K/sec
+                17      cpu-migrations                   #    0.985 /sec
+            428911      page-faults                      #   24.852 K/sec
+   <not supported>      cycles
+   <not supported>      instructions
+   <not supported>      branches
+   <not supported>      branch-misses
+   <not supported>      L1-dcache-loads
+   <not supported>      L1-dcache-load-misses
+   <not supported>      LLC-loads
+   <not supported>      LLC-load-misses
+   <not supported>      L1-icache-loads
+   <not supported>      L1-icache-load-misses
+   <not supported>      dTLB-loads
+   <not supported>      dTLB-load-misses
+   <not supported>      iTLB-loads
+   <not supported>      iTLB-load-misses
+   <not supported>      L1-dcache-prefetches
+   <not supported>      L1-dcache-prefetch-misses
+
+      17.212058883 seconds time elapsed
+
+      14.737262000 seconds user
+       2.848006000 seconds sys

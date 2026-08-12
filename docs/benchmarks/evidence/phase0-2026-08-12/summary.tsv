@@ -1,0 +1,4 @@
+mode	wall_ms	rc	trace	output_ok
+strace	25004	0	/var/lib/velox/perf/strace-20260812-091017-280.txt	1
+perfstat	17304	0	/var/lib/velox/perf/velox-perfstat-20260812-091042-533.txt	1
+perf	17812	0	/var/lib/velox/perf/velox-20260812-091059-784.data	1
