@@ -29,33 +29,34 @@ func (s *Service) ListWorkers(ctx context.Context) ([]WorkerPerformance, error) 
 	workerFailures := make(map[string]int)
 
 	recentTasks, tErr := s.tasks.List(ctx, taskgraph.Filter{Limit: 500})
-	if tErr == nil {
-		for _, task := range recentTasks {
-			attempts, aErr := s.attempts.ListByTaskID(ctx, task.ID)
-			if aErr != nil {
+	if tErr != nil {
+		return nil, fmt.Errorf("observability: list recent tasks: %w", tErr)
+	}
+	for _, task := range recentTasks {
+		attempts, aErr := s.attempts.ListByTaskID(ctx, task.ID)
+		if aErr != nil {
+			return nil, fmt.Errorf("observability: list attempts for task %s: %w", task.ID, aErr)
+		}
+		for _, a := range attempts {
+			if a.WorkerID == "" {
 				continue
 			}
-			for _, a := range attempts {
-				if a.WorkerID == "" {
-					continue
-				}
-				workerJobs[a.WorkerID]++
-				if a.Status == taskattempts.AttemptStatusSucceeded {
-					workerSuccesses[a.WorkerID]++
-				} else if a.Status == taskattempts.AttemptStatusFailed {
-					workerFailures[a.WorkerID]++
-				}
-				timings, ptErr := s.attempts.GetPhaseTimings(ctx, a.ID)
-				if ptErr != nil {
-					continue
-				}
-				var totalDur int64
-				for _, pt := range timings {
-					totalDur += pt.DurationMS
-				}
-				if totalDur > 0 {
-					workerDurations[a.WorkerID] = append(workerDurations[a.WorkerID], totalDur)
-				}
+			workerJobs[a.WorkerID]++
+			if a.Status == taskattempts.AttemptStatusSucceeded {
+				workerSuccesses[a.WorkerID]++
+			} else if a.Status == taskattempts.AttemptStatusFailed {
+				workerFailures[a.WorkerID]++
+			}
+			timings, ptErr := s.attempts.GetPhaseTimings(ctx, a.ID)
+			if ptErr != nil {
+				return nil, fmt.Errorf("observability: phase timings for attempt %s: %w", a.ID, ptErr)
+			}
+			var totalDur int64
+			for _, pt := range timings {
+				totalDur += pt.DurationMS
+			}
+			if totalDur > 0 {
+				workerDurations[a.WorkerID] = append(workerDurations[a.WorkerID], totalDur)
 			}
 		}
 	}

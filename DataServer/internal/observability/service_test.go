@@ -287,12 +287,55 @@ func TestService_Overview_ListTasksError(t *testing.T) {
 	svc, tasks, _, _, _ := newTestService()
 	tasks.listErr = errors.New("db down")
 
-	result, err := svc.Overview(context.Background())
-	if err != nil {
-		t.Fatalf("Overview() should tolerate List error: %v", err)
+	_, err := svc.Overview(context.Background())
+	if err == nil || !errors.Is(err, tasks.listErr) {
+		t.Fatalf("Overview() error = %v, want wrapped task-list error", err)
 	}
-	if result == nil {
-		t.Fatal("result should not be nil")
+}
+
+func TestService_Overview_ReadErrorsFailClosed(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*Service, *stubTaskReader, *stubAttemptReader, *stubJobReader, *stubWorkerReader) error
+	}{
+		{
+			name: "job counts",
+			setup: func(_ *Service, _ *stubTaskReader, _ *stubAttemptReader, jobs *stubJobReader, _ *stubWorkerReader) error {
+				jobs.err = errors.New("counts unavailable")
+				return jobs.err
+			},
+		},
+		{
+			name: "workers",
+			setup: func(_ *Service, _ *stubTaskReader, _ *stubAttemptReader, _ *stubJobReader, workers *stubWorkerReader) error {
+				workers.err = errors.New("workers unavailable")
+				return workers.err
+			},
+		},
+		{
+			name: "attempts",
+			setup: func(_ *Service, _ *stubTaskReader, attempts *stubAttemptReader, _ *stubJobReader, _ *stubWorkerReader) error {
+				attempts.listErr = errors.New("attempts unavailable")
+				return attempts.listErr
+			},
+		},
+		{
+			name: "phase timings",
+			setup: func(_ *Service, _ *stubTaskReader, attempts *stubAttemptReader, _ *stubJobReader, _ *stubWorkerReader) error {
+				attempts.phaseErr = errors.New("timings unavailable")
+				return attempts.phaseErr
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, tasks, attempts, jobs, workers := newTestService()
+			want := tt.setup(svc, tasks, attempts, jobs, workers)
+			_, err := svc.Overview(context.Background())
+			if err == nil || !errors.Is(err, want) {
+				t.Fatalf("Overview() error = %v, want wrapped %v", err, want)
+			}
+		})
 	}
 }
 
@@ -337,6 +380,45 @@ func TestService_ListWorkers_NilWorkerReader(t *testing.T) {
 	_, err := svc.ListWorkers(context.Background())
 	if err == nil {
 		t.Error("ListWorkers() with nil worker reader should return error")
+	}
+}
+
+func TestService_ListWorkers_ReadErrorsFailClosed(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*stubTaskReader, *stubAttemptReader, *stubWorkerReader) error
+	}{
+		{
+			name: "tasks",
+			setup: func(tasks *stubTaskReader, _ *stubAttemptReader, _ *stubWorkerReader) error {
+				tasks.listErr = errors.New("tasks unavailable")
+				return tasks.listErr
+			},
+		},
+		{
+			name: "attempts",
+			setup: func(_ *stubTaskReader, attempts *stubAttemptReader, _ *stubWorkerReader) error {
+				attempts.listErr = errors.New("attempts unavailable")
+				return attempts.listErr
+			},
+		},
+		{
+			name: "phase timings",
+			setup: func(_ *stubTaskReader, attempts *stubAttemptReader, _ *stubWorkerReader) error {
+				attempts.phaseErr = errors.New("timings unavailable")
+				return attempts.phaseErr
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, tasks, attempts, _, workers := newTestService()
+			want := tt.setup(tasks, attempts, workers)
+			_, err := svc.ListWorkers(context.Background())
+			if err == nil || !errors.Is(err, want) {
+				t.Fatalf("ListWorkers() error = %v, want wrapped %v", err, want)
+			}
+		})
 	}
 }
 

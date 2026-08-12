@@ -154,6 +154,8 @@ reversibile, testato prima/dopo, committato su `main` e pubblicato.
 
 - [x] Delivery reconciliation: `ApplyReconciledDelivery` controlla
       `RowsAffected()` e rifiuta gli ID mancanti con `ErrDeliveryNoRow`.
+- [x] Read model observability: `Overview` e `ListWorkers` propagano gli errori
+      dei reader configurati, evitando dashboard parziali o zeri ambigui.
 - [ ] Continuare l’audit degli altri writer/proiezioni prima di chiudere la
       fase di ownership e CAS.
 

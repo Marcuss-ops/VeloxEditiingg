@@ -5,6 +5,7 @@ package observability
 
 import (
 	"context"
+	"fmt"
 	"sort"
 
 	"velox-server/internal/jobs"
@@ -20,13 +21,14 @@ func (s *Service) Overview(ctx context.Context) (*OverviewResult, error) {
 	// Job counts.
 	if s.jobs != nil {
 		counts, err := s.jobs.Counts(ctx)
-		if err == nil {
-			result.JobsCompleted24h = counts[jobs.StatusAwaitingArtifact] + counts[jobs.StatusSucceeded]
-			result.JobsFailed24h = counts[jobs.StatusFailed] + counts[jobs.StatusCancelled]
-			total := result.JobsCompleted24h + result.JobsFailed24h
-			if total > 0 {
-				result.ErrorRate = float64(result.JobsFailed24h) / float64(total) * 100
-			}
+		if err != nil {
+			return nil, fmt.Errorf("observability: read job counts: %w", err)
+		}
+		result.JobsCompleted24h = counts[jobs.StatusAwaitingArtifact] + counts[jobs.StatusSucceeded]
+		result.JobsFailed24h = counts[jobs.StatusFailed] + counts[jobs.StatusCancelled]
+		total := result.JobsCompleted24h + result.JobsFailed24h
+		if total > 0 {
+			result.ErrorRate = float64(result.JobsFailed24h) / float64(total) * 100
 		}
 
 		// Queue depth = pending + running jobs.
@@ -36,16 +38,10 @@ func (s *Service) Overview(ctx context.Context) (*OverviewResult, error) {
 	// Worker count.
 	if s.workers != nil {
 		workers, err := s.workers.ListWorkers()
-		if err == nil {
-			result.ActiveWorkers = len(workers)
-			// Build worker stats from worker registry data.
-			for _, w := range workers {
-				status, _ := w["status"].(string)
-				if status == "online" || status == "idle" || status == "busy" {
-					continue
-				}
-			}
+		if err != nil {
+			return nil, fmt.Errorf("observability: list workers: %w", err)
 		}
+		result.ActiveWorkers = len(workers)
 	}
 
 	// Phase stats: scan recent attempts for timing data.
@@ -55,31 +51,32 @@ func (s *Service) Overview(ctx context.Context) (*OverviewResult, error) {
 	errorCounts := make(map[string]int)
 
 	recentTasks, err := s.tasks.List(ctx, taskgraph.Filter{Limit: 200})
-	if err == nil {
-		for _, task := range recentTasks {
-			attempts, aErr := s.attempts.ListByTaskID(ctx, task.ID)
-			if aErr != nil {
-				continue
+	if err != nil {
+		return nil, fmt.Errorf("observability: list recent tasks: %w", err)
+	}
+	for _, task := range recentTasks {
+		attempts, aErr := s.attempts.ListByTaskID(ctx, task.ID)
+		if aErr != nil {
+			return nil, fmt.Errorf("observability: list attempts for task %s: %w", task.ID, aErr)
+		}
+		for _, a := range attempts {
+			if a.WorkerID != "" {
+				workerJobCounts[a.WorkerID]++
 			}
-			for _, a := range attempts {
-				if a.WorkerID != "" {
-					workerJobCounts[a.WorkerID]++
-				}
-				if a.Status == taskattempts.AttemptStatusFailed && a.ErrorCode != "" {
-					errorCounts[a.ErrorCode]++
-				}
-				timings, tErr := s.attempts.GetPhaseTimings(ctx, a.ID)
-				if tErr != nil {
-					continue
-				}
-				var totalDur int64
-				for _, pt := range timings {
-					phaseDurations[pt.Phase] = append(phaseDurations[pt.Phase], pt.DurationMS)
-					totalDur += pt.DurationMS
-				}
-				if totalDur > 0 && a.WorkerID != "" {
-					workerDurations[a.WorkerID] = append(workerDurations[a.WorkerID], totalDur)
-				}
+			if a.Status == taskattempts.AttemptStatusFailed && a.ErrorCode != "" {
+				errorCounts[a.ErrorCode]++
+			}
+			timings, tErr := s.attempts.GetPhaseTimings(ctx, a.ID)
+			if tErr != nil {
+				return nil, fmt.Errorf("observability: phase timings for attempt %s: %w", a.ID, tErr)
+			}
+			var totalDur int64
+			for _, pt := range timings {
+				phaseDurations[pt.Phase] = append(phaseDurations[pt.Phase], pt.DurationMS)
+				totalDur += pt.DurationMS
+			}
+			if totalDur > 0 && a.WorkerID != "" {
+				workerDurations[a.WorkerID] = append(workerDurations[a.WorkerID], totalDur)
 			}
 		}
 	}

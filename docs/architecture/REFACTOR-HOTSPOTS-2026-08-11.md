@@ -299,6 +299,10 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
   reconciler che non aggiorna alcuna riga ora restituisce `ErrDeliveryNoRow`
   invece di dichiarare successo; il comportamento sui delivery terminali
   esistenti resta idempotente.
+- [x] Rendere fail-closed i read model di observability: errori in conteggi,
+  elenco worker/task, tentativi o phase timings ora interrompono `Overview` e
+  `ListWorkers` invece di produrre dashboard parziali con zeri plausibili;
+  rimosso anche un loop worker senza effetto.
 
 ### P1 — Worker layering e stato globale
 
