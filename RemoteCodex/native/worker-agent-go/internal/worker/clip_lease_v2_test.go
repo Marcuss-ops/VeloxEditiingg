@@ -163,6 +163,16 @@ func TestAcquireJobClips_RollbackPreservesPreexistingLease(t *testing.T) {
 	}
 }
 
+func TestExtractAssetKeysFromJSON_PrefersAssetKeyForLeaseIdentity(t *testing.T) {
+	keys := extractAssetKeysFromJSON(map[string]interface{}{
+		contract.PayloadKeyCompiledRenderPlanJSON: `{"assets":[{"asset_id":"plan-video","asset_key":"cache-video"}],"final_audio":{"asset_id":"plan-audio","asset_key":"cache-audio"}}`,
+	})
+	want := []string{"cache-audio", "cache-video"}
+	if !reflect.DeepEqual(keys, want) {
+		t.Fatalf("extracted keyed lease identities = %v, want %v", keys, want)
+	}
+}
+
 func TestExtractAssetKeysFromJSON_InvalidCompiledPlanDoesNotBreakLegacyLeaseExtraction(t *testing.T) {
 	keys := extractAssetKeysFromJSON(map[string]interface{}{
 		"scenes": []interface{}{map[string]interface{}{

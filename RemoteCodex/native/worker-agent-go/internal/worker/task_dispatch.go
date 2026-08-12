@@ -54,7 +54,9 @@ import (
 	"fmt"
 	"time"
 
+	"velox-shared/contract"
 	"velox-worker-agent/internal/artifactgraph"
+	"velox-worker-agent/internal/runtimeassets"
 	"velox-worker-agent/internal/taskrunner"
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/video/pipeline"
@@ -155,6 +157,18 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 			return failBeforeRun("asset_resolution_failed", err)
 		}
 		spec.Payload = resolvedPayload
+	}
+	// V2 carries the canonical plan as an opaque JSON string, so the legacy
+	// payload resolver intentionally leaves it untouched. Resolve every typed
+	// AssetRefV2 through the same verified resolver separately, then carry only
+	// local runtime bindings in context.Context. The canonical JSON and its
+	// SHA remain byte-identical across workers and retries.
+	if _, isCompiledPlan := spec.Payload[contract.PayloadKeyCompiledRenderPlanJSON]; isCompiledPlan {
+		bindings, err := w.resolveCompiledRenderPlanAssets(ctx, spec.Payload)
+		if err != nil {
+			return failBeforeRun("compiled_plan_asset_resolution_failed", err)
+		}
+		ctx = runtimeassets.WithBindings(ctx, bindings)
 	}
 
 	// Pass 9 — Wrap the render in a per-job clip lease so the

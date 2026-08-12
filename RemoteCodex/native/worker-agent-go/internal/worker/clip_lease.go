@@ -201,18 +201,25 @@ func extractAssetKeysFromJSON(payload map[string]interface{}) []string {
 func collectCompiledPlanAssetIDs(value interface{}, ids map[string]struct{}) {
 	switch typed := value.(type) {
 	case map[string]interface{}:
-		for key, child := range typed {
-			if key == "asset_id" {
-				if rawID, ok := child.(string); ok {
-					id := strings.TrimSpace(rawID)
-					if wireID, isWire := assetref.WireAssetID(id); isWire {
-						id = wireID
-					}
-					if id != "" {
-						ids[id] = struct{}{}
-					}
-				}
+		// AssetKey is the canonical cache/lease identity when present. The
+		// surrounding plan may still refer to the asset by AssetID, but the
+		// cache row and the resolver use one identity and must not diverge.
+		identity := ""
+		if rawKey, ok := typed["asset_key"].(string); ok {
+			identity = strings.TrimSpace(rawKey)
+		}
+		if identity == "" {
+			if rawID, ok := typed["asset_id"].(string); ok {
+				identity = strings.TrimSpace(rawID)
 			}
+		}
+		if wireID, isWire := assetref.WireAssetID(identity); isWire {
+			identity = wireID
+		}
+		if identity != "" {
+			ids[identity] = struct{}{}
+		}
+		for _, child := range typed {
 			collectCompiledPlanAssetIDs(child, ids)
 		}
 	case []interface{}:
