@@ -1,7 +1,6 @@
 package ansible
 
 import (
-	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -203,7 +202,7 @@ func (m *AnsibleComputerManager) GetComputer(id string) (AnsibleComputer, bool, 
 		return AnsibleComputer{}, false, ErrComputerStoreNotConfigured
 	}
 	h, err := m.store.GetAnsibleHost(id)
-	if errors.Is(err, sql.ErrNoRows) || (h == nil && err == nil) {
+	if errors.Is(err, store.ErrAnsibleHostNotFound) || (h == nil && err == nil) {
 		return AnsibleComputer{}, false, nil
 	}
 	if err != nil {
@@ -276,7 +275,7 @@ func (m *AnsibleComputerManager) GetSecretRef(host string) (string, error) {
 		return "", ErrComputerStoreNotConfigured
 	}
 	if _, err := m.store.GetAnsibleHost(host); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+		if errors.Is(err, store.ErrAnsibleHostNotFound) {
 			return "", nil
 		}
 		return "", fmt.Errorf("ansible: get computer %q: %w", host, err)

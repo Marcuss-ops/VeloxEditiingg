@@ -1,9 +1,16 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
+)
+
+var (
+	ErrAnsibleHostNotFound = errors.New("ansible host not found")
+	ErrAnsibleRunNotFound  = errors.New("ansible run not found")
 )
 
 // ============================================================
@@ -128,10 +135,17 @@ func (s *SQLiteStore) GetAnsibleHost(host string) (*AnsibleHostFields, error) {
 		&h.CreatedAt, &h.UpdatedAt,
 	)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrAnsibleHostNotFound
+		}
 		return nil, err
 	}
 	h.Enabled = enabled == 1
-	json.Unmarshal([]byte(tagsJSON), &h.Tags)
+	if tagsJSON != "" {
+		if err := json.Unmarshal([]byte(tagsJSON), &h.Tags); err != nil {
+			return nil, fmt.Errorf("decode ansible host tags: %w", err)
+		}
+	}
 	return &h, nil
 }
 
@@ -221,6 +235,9 @@ func (s *SQLiteStore) GetAnsibleRun(runID string) (*AnsibleRun, error) {
 	var r AnsibleRun
 	var commandsJSON string
 	if err := row.Scan(&r.RunID, &r.Action, &r.Playbook, &r.Status, &r.StartedAt, &r.EndedAt, &r.ReturnCode, &commandsJSON, &r.Output, &r.Preamble, &r.MasterURL, &r.MasterURLSource); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrAnsibleRunNotFound
+		}
 		return nil, err
 	}
 	if commandsJSON != "" {

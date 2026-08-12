@@ -1,7 +1,6 @@
 package ansible
 
 import (
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -307,7 +306,7 @@ func (m *AnsibleRunManager) GetRun(runID string) (AnsibleRunRecord, bool, error)
 		return AnsibleRunRecord{}, false, ErrRunStoreNotConfigured
 	}
 	row, err := m.dbStore.GetAnsibleRun(runID)
-	if errors.Is(err, sql.ErrNoRows) || (row == nil && err == nil) {
+	if errors.Is(err, store.ErrAnsibleRunNotFound) || (row == nil && err == nil) {
 		return AnsibleRunRecord{}, false, nil
 	}
 	if err != nil {
