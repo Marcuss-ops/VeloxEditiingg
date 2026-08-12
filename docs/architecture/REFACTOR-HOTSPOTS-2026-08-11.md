@@ -205,8 +205,9 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 
 ### P1 — Worker layering e stato globale
 
-- [ ] Rimuovere la dipendenza dei package pubblici worker da package `internal`
-  (`pkg/cache` → telemetry/trace interno; pipeline pubbliche → trace interno).
+- [x] Rimuovere la dipendenza diretta dei package pubblici worker da package
+  `internal`: `pkg/cache` e le pipeline pubbliche passano dalla facciata
+  stretta `pkg/observability`, senza duplicare telemetria o tracing.
 - [x] Rendere la lista binari ffmpeg una dipendenza di bootstrap immutabile o
   un’opzione esplicita, non una slice globale esportata e mutabile.
 - [ ] Limitare lo stato globale a registri read-only o inizializzazione; ogni

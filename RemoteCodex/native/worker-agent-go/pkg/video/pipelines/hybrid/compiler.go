@@ -15,7 +15,7 @@ import (
 	"context"
 	"fmt"
 
-	"velox-worker-agent/internal/oteltrace"
+	"velox-worker-agent/pkg/observability"
 	"velox-worker-agent/pkg/video/plan"
 	"velox-worker-agent/pkg/video/services/audio"
 )
@@ -106,7 +106,7 @@ func Validate(input map[string]interface{}) error {
 //
 // Scorecard v2 / Step 15: starts a "compile" span for distributed tracing.
 func Compile(ctx context.Context, jobID string, input map[string]interface{}, outputPath string, probe audio.Probe) (*plan.RenderPlan, error) {
-	ctx, span := oteltrace.StartSpan(ctx, "compile", oteltrace.AttrJobID(jobID))
+	ctx, span := observability.StartSpan(ctx, "compile", observability.AttrJobID(jobID))
 	defer span.End()
 
 	if err := Validate(input); err != nil {

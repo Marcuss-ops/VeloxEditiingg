@@ -34,8 +34,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"velox-worker-agent/internal/oteltrace"
-	"velox-worker-agent/internal/telemetry"
+	"velox-worker-agent/pkg/observability"
 )
 
 // ErrCacheCorruption is returned by Get when the on-disk content's
@@ -141,7 +140,7 @@ func (c *PersistedLocalCache) Stats() CacheStats {
 //
 // Scorecard v2 / Step 15: starts a "cache_lookup" span for distributed tracing.
 func (c *PersistedLocalCache) Get(ctx context.Context, hash string) ([]byte, bool, error) {
-	ctx, span := oteltrace.StartSpan(ctx, "cache_lookup")
+	ctx, span := observability.StartSpan(ctx, "cache_lookup")
 	defer span.End()
 
 	if !isValidHash(hash) {
@@ -166,11 +165,11 @@ func (c *PersistedLocalCache) Get(ctx context.Context, hash string) ([]byte, boo
 				c.mu.Unlock()
 			}
 			c.misses.Add(1)
-			telemetry.GetPrometheusMetrics().RecordCacheRequest("miss")
+			observability.CacheMetricsProvider().RecordCacheRequest("miss")
 			return nil, false, nil
 		}
 		c.misses.Add(1)
-		telemetry.GetPrometheusMetrics().RecordCacheRequest("miss")
+		observability.CacheMetricsProvider().RecordCacheRequest("miss")
 		return nil, false, fmt.Errorf("cache: read %s: %w", hash, err)
 	}
 
@@ -189,7 +188,7 @@ func (c *PersistedLocalCache) Get(ctx context.Context, hash string) ([]byte, boo
 	}
 
 	c.hits.Add(1)
-	telemetry.GetPrometheusMetrics().RecordCacheRequest("hit")
+	observability.CacheMetricsProvider().RecordCacheRequest("hit")
 
 	if !hasIndex {
 		// Survived-restart on-disk entry; lazily index.
@@ -358,7 +357,7 @@ func (c *PersistedLocalCache) evictIfOver() {
 		c.evictions.Add(1)
 	}
 	if len(evictedPaths) > 0 {
-		telemetry.GetPrometheusMetrics().RecordCacheEvictions("pressure", len(evictedPaths))
+		observability.CacheMetricsProvider().RecordCacheEvictions("pressure", len(evictedPaths))
 	}
 	c.mu.Unlock()
 
