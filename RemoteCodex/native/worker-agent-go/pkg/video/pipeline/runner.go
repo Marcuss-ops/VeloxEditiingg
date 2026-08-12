@@ -178,6 +178,20 @@ type RenderMetrics struct {
 	ProcessStartMs   int64
 	ProcessWaitMs    int64
 	TotalMs          int64
+	// Process lifecycle counters. EngineSpawnCount is 1 when the worker
+	// actually launched the C++ engine subprocess (ProcessStartMs > 0).
+	// The exec counts cover the external tool processes the engine
+	// spawned in its own process group, sampled from /proc by the native
+	// client while the engine ran. They are zero when no native render
+	// occurred.
+	EngineSpawnCount     int64
+	EngineSpawnMs        int64
+	ExternalProcessCount int64
+	FfmpegExecCount      int64
+	FfprobeExecCount     int64
+	ShellExecCount       int64
+	CurlExecCount        int64
+	ChildWaitMs          int64
 	// PhaseMS carries the per-phase engine timings from the C++ sidecar
 	// (engine.asset_download, engine.segment_build, engine.concat, …).
 	// Nil when no sidecar was read.

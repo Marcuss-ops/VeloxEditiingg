@@ -21,26 +21,34 @@ func sampleRun() pipeline.RunMetrics {
 		TimelineItems: 25,
 		AudioTracks:   1,
 		RenderMetrics: pipeline.RenderMetrics{
-			Frames:           5000,
-			FramesDecoded:    12,
-			FramesComposited: 5000,
-			Fps:              30,
-			SpeedX:           42.5,
-			EncodePasses:     1,
-			TempBytes:        900_000_000,
-			OutputDurable:    true,
-			DurationSec:      300,
-			ConcatMode:       "segment_concat",
-			TotalSize:        300_000_000,
-			OutTimeMs:        300_000,
-			Bitrate:          8_000_000,
-			DupFrames:        3,
-			DropFrames:       1,
-			PlanMarshalMs:    55,
-			PlanWriteMs:      12,
-			ProcessStartMs:   85,
-			ProcessWaitMs:    18700,
-			TotalMs:          18800,
+			Frames:               5000,
+			FramesDecoded:        12,
+			FramesComposited:     5000,
+			Fps:                  30,
+			SpeedX:               42.5,
+			EncodePasses:         1,
+			TempBytes:            900_000_000,
+			OutputDurable:        true,
+			DurationSec:          300,
+			ConcatMode:           "segment_concat",
+			TotalSize:            300_000_000,
+			OutTimeMs:            300_000,
+			Bitrate:              8_000_000,
+			DupFrames:            3,
+			DropFrames:           1,
+			PlanMarshalMs:        55,
+			PlanWriteMs:          12,
+			ProcessStartMs:       85,
+			ProcessWaitMs:        18700,
+			TotalMs:              18800,
+			EngineSpawnCount:     1,
+			EngineSpawnMs:        85,
+			ExternalProcessCount: 64,
+			FfmpegExecCount:      32,
+			FfprobeExecCount:     25,
+			ShellExecCount:       6,
+			CurlExecCount:        1,
+			ChildWaitMs:          18700,
 		},
 	}
 }
@@ -67,10 +75,15 @@ func TestAssembler_MapsNativeSidecar(t *testing.T) {
 	require.Equal(t, int64(18700), receipt.Timing.ProcessWaitMs)
 	require.Equal(t, int64(18800), receipt.Timing.NativeTotalMs)
 
-	// Engine-spawn proof: one spawn happened because ProcessStartMs > 0.
+	// Process lifecycle counters collected by the native client.
 	require.Equal(t, int64(1), receipt.Process.EngineSpawnCount)
 	require.Equal(t, int64(85), receipt.Process.EngineSpawnMs)
 	require.Equal(t, int64(18700), receipt.Process.ChildWaitMs)
+	require.Equal(t, int64(64), receipt.Process.ExternalProcessCount)
+	require.Equal(t, int64(32), receipt.Process.FfmpegExecCount)
+	require.Equal(t, int64(25), receipt.Process.FfprobeExecCount)
+	require.Equal(t, int64(6), receipt.Process.ShellExecCount)
+	require.Equal(t, int64(1), receipt.Process.CurlExecCount)
 
 	// Sidecar media counters.
 	media := receipt.Media
@@ -93,6 +106,9 @@ func TestAssembler_NoEngineSpawnWhenProcessNeverStarted(t *testing.T) {
 	run := sampleRun()
 	run.RenderMetrics.ProcessStartMs = 0
 	run.RenderMetrics.ProcessWaitMs = 0
+	run.RenderMetrics.EngineSpawnCount = 0
+	run.RenderMetrics.EngineSpawnMs = 0
+	run.RenderMetrics.ChildWaitMs = 0
 
 	receipt := NewAssembler().Assemble(run, AssemblyContext{})
 	require.Zero(t, receipt.Process.EngineSpawnCount)

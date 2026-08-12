@@ -19,7 +19,7 @@ import (
 // never emits a sidecar.
 
 // runEngineProcess launches velox_video_engine --render --plan and
-// returns (processStartMs, processWaitMs, stderr, stdout, err).
+// returns (processStartMs, processWaitMs, stderr, stdout, counts, err).
 //
 // err semantics:
 //   - ctx.Err() (context.Canceled or DeadlineExceeded) when the caller
@@ -29,10 +29,15 @@ import (
 //     failed — ProcessStartMs AND ProcessWaitMs are populated; the
 //     caller is responsible for wrapping the error with stderr/stdout
 //
+// counts reports the external processes the engine spawned in its own
+// process group, sampled from /proc while it ran. It is populated on
+// every exit path once the engine was started (the monitor is stopped
+// by the deferred cleanup below before this function returns).
+//
 // SAFETY-CRITICAL: Setpgid + Pdeathsig + 10s SIGTERM grace + SIGKILL
 // hard-kill + <-done reaping are preserved verbatim from the original
 // render_client.go. Do not modify these.
-func runEngineProcess(ctx context.Context, binaryPath, planPath string, onProgress DetailedProgressFunc, legacyProgress ProgressFunc) (processStartMs int64, processWaitMs int64, stderrBuf strings.Builder, stdoutBuf strings.Builder, err error) {
+func runEngineProcess(ctx context.Context, binaryPath, planPath string, onProgress DetailedProgressFunc, legacyProgress ProgressFunc) (processStartMs int64, processWaitMs int64, stderrBuf strings.Builder, stdoutBuf strings.Builder, counts ProcessCounts, err error) {
 	args := []string{"--render", "--plan", planPath}
 	if chrononBackendEnabled() {
 		args = []string{"render-plan", "--input", planPath}
@@ -54,18 +59,41 @@ func runEngineProcess(ctx context.Context, binaryPath, planPath string, onProgre
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
-		return 0, 0, stderrBuf, stdoutBuf, fmt.Errorf("stdout pipe: %w", err)
+		return 0, 0, stderrBuf, stdoutBuf, counts, fmt.Errorf("stdout pipe: %w", err)
 	}
 	stderrPipe, err := cmd.StderrPipe()
 	if err != nil {
-		return 0, 0, stderrBuf, stdoutBuf, fmt.Errorf("stderr pipe: %w", err)
+		return 0, 0, stderrBuf, stdoutBuf, counts, fmt.Errorf("stderr pipe: %w", err)
 	}
 
 	processStart := time.Now()
 	if err := cmd.Start(); err != nil {
-		return 0, 0, stderrBuf, stdoutBuf, fmt.Errorf("start engine: %w", err)
+		return 0, 0, stderrBuf, stdoutBuf, counts, fmt.Errorf("start engine: %w", err)
 	}
 	processStartMs = time.Since(processStart).Milliseconds()
+
+	// Start the external-process sampler as soon as the engine PID is
+	// known. The engine owns its process group (Setpgid below), so the
+	// /proc group scan sees the whole ffmpeg/ffprobe/shell/curl tree it
+	// spawns. The deferred cleanup stops the monitor on EVERY exit path
+	// (success, cancellation, subprocess failure) and collects the final
+	// counts into the named return value before this function returns.
+	var monitorStop chan struct{}
+	var monitorDone chan struct{}
+	if cmd.Process != nil {
+		monitorStop = make(chan struct{})
+		monitorDone = make(chan struct{})
+		go func() {
+			defer close(monitorDone)
+			// With Setpgid the engine's pgrp equals its PID, so the same
+			// value is both the group to sample and the PID to exclude.
+			counts = monitorProcessGroup(cmd.Process.Pid, cmd.Process.Pid, externalProcessSampleInterval, monitorStop)
+		}()
+		defer func() {
+			close(monitorStop)
+			<-monitorDone
+		}()
+	}
 
 	progressDone := streamEngineOutput(stdoutPipe, stderrPipe, ctx, onProgress, legacyProgress, &stderrBuf, &stdoutBuf)
 
@@ -92,10 +120,10 @@ func runEngineProcess(ctx context.Context, binaryPath, planPath string, onProgre
 			}
 		}
 		<-progressDone
-		return processStartMs, 0, stderrBuf, stdoutBuf, ctx.Err()
+		return processStartMs, 0, stderrBuf, stdoutBuf, counts, ctx.Err()
 	case execErr := <-done:
 		<-progressDone
 		processWaitMs = time.Since(waitStart).Milliseconds()
-		return processStartMs, processWaitMs, stderrBuf, stdoutBuf, execErr
+		return processStartMs, processWaitMs, stderrBuf, stdoutBuf, counts, execErr
 	}
 }

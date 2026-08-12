@@ -173,6 +173,14 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 	metrics["native.total_ms"] = runMetrics.RenderMetrics.TotalMs
 	metrics["native.plan_write_ms"] = runMetrics.RenderMetrics.PlanWriteMs
 	metrics["native.process_wait_ms"] = runMetrics.RenderMetrics.ProcessWaitMs
+	metrics["process.engine_spawn_count"] = runMetrics.RenderMetrics.EngineSpawnCount
+	metrics["process.engine_spawn_ms"] = runMetrics.RenderMetrics.EngineSpawnMs
+	metrics["process.external_count"] = runMetrics.RenderMetrics.ExternalProcessCount
+	metrics["process.ffmpeg_exec_count"] = runMetrics.RenderMetrics.FfmpegExecCount
+	metrics["process.ffprobe_exec_count"] = runMetrics.RenderMetrics.FfprobeExecCount
+	metrics["process.shell_exec_count"] = runMetrics.RenderMetrics.ShellExecCount
+	metrics["process.curl_exec_count"] = runMetrics.RenderMetrics.CurlExecCount
+	metrics["process.child_wait_ms"] = runMetrics.RenderMetrics.ChildWaitMs
 	metrics["engine.frames"] = runMetrics.RenderMetrics.Frames
 	metrics["engine.frames_decoded"] = runMetrics.RenderMetrics.FramesDecoded
 	metrics["engine.frames_composited"] = runMetrics.RenderMetrics.FramesComposited

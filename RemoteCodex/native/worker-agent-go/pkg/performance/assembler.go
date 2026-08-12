@@ -102,21 +102,21 @@ func assembleTiming(run pipeline.RunMetrics, wallOverride int64) TimingMetrics {
 	return t
 }
 
-// assembleProcess maps what the run proves about the process lifecycle.
-// The worker spawns exactly one C++ engine subprocess per render
-// (exec.Command inside RenderWithMetrics); a non-zero ProcessStartMs is
-// the proof that the spawn happened, even on failed/cancelled runs.
+// assembleProcess maps the process lifecycle counters collected by the
+// native client: the engine spawn (counted by the render client) and the
+// external tool processes it spawned in its own process group (sampled
+// from /proc while the engine ran).
 func assembleProcess(rm pipeline.RenderMetrics) ProcessMetrics {
-	p := ProcessMetrics{
-		EngineSpawnMs: rm.ProcessStartMs,
-		ChildWaitMs:   rm.ProcessWaitMs,
+	return ProcessMetrics{
+		EngineSpawnCount:     rm.EngineSpawnCount,
+		EngineSpawnMs:        rm.EngineSpawnMs,
+		ExternalProcessCount: rm.ExternalProcessCount,
+		FfmpegExecCount:      rm.FfmpegExecCount,
+		FfprobeExecCount:     rm.FfprobeExecCount,
+		ShellExecCount:       rm.ShellExecCount,
+		CurlExecCount:        rm.CurlExecCount,
+		ChildWaitMs:          rm.ChildWaitMs,
 	}
-	if rm.ProcessStartMs > 0 {
-		p.EngineSpawnCount = 1
-	}
-	// ExternalProcessCount / ffmpeg / ffprobe / shell / curl exec counts
-	// are not collected yet; they arrive with the process counters step.
-	return p
 }
 
 // assembleMedia mirrors the C++ engine sidecar counters already mapped
