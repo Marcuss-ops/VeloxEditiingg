@@ -218,6 +218,11 @@ int main() {
     const velox::core::RenderResult rejected = rejectedEngine.render(rejectedPlan);
     velox::core::RenderEngine cacheEngine;
     const velox::core::RenderResult cacheResult = cacheEngine.render(cachePlan);
+    // Capture cache-render counters before the following V2 render resets the
+    // process-scoped telemetry. The assertion below is specifically about
+    // the cache contract, not about whichever render happened last.
+    const int64_t cacheInputOpenCount =
+        velox::services::ioCounters().input_open_count.load();
 
     // ── V2 non-zero source window proof. ───────────────────────────────
     // The parser stores source_in_us/source_duration_us on TimelineItem and
@@ -258,9 +263,9 @@ int main() {
         expect(cacheIO.asset_bytes_copied.load() == 0,
                "zero cache -> tmp asset bytes copied, actual=" +
                    std::to_string(cacheIO.asset_bytes_copied.load()));
-        expect(cacheIO.input_open_count.load() >= 3,
+        expect(cacheInputOpenCount >= 3,
                "cache assets opened directly by libavformat (video x2 + audio), actual=" +
-                   std::to_string(cacheIO.input_open_count.load()));
+                   std::to_string(cacheInputOpenCount));
     }
     expect(fs::exists(cacheOutput), "cache-contract output is published");
     expect(!fs::exists(ffmpegTouched), "cache-contract render never executed ffmpeg");

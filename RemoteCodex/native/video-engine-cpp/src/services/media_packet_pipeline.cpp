@@ -121,6 +121,36 @@ const AVFormatContext* Demuxer::raw() const {
     return context_;
 }
 
+bool Demuxer::seekToTimestampUs(int stream_index, int64_t timestamp_us, std::string& error) {
+    if (context_ == nullptr) {
+        error = "demuxer is not open";
+        return false;
+    }
+    if (timestamp_us < 0) {
+        error = "demuxer seek timestamp must be non-negative";
+        return false;
+    }
+    const AVStream* input_stream = stream(stream_index);
+    if (input_stream == nullptr) {
+        error = "demuxer seek stream index is invalid";
+        return false;
+    }
+    const int64_t source_start = validTimestamp(input_stream->start_time)
+        ? input_stream->start_time : 0;
+    const int64_t target = av_rescale_q_rnd(
+        timestamp_us, kMicrosecondTimeBase, input_stream->time_base,
+        static_cast<AVRounding>(AV_ROUND_DOWN | AV_ROUND_PASS_MINMAX)) + source_start;
+    const int seekResult = avformat_seek_file(
+        context_, stream_index, std::numeric_limits<int64_t>::min(), target,
+        std::numeric_limits<int64_t>::max(), AVSEEK_FLAG_BACKWARD);
+    if (seekResult < 0) {
+        error = "avformat_seek_file: " + ffmpegError(seekResult);
+        return false;
+    }
+    avformat_flush(context_);
+    return true;
+}
+
 bool Demuxer::readFrame(AVPacket& packet, bool& eof, std::string& error) {
     eof = false;
     if (context_ == nullptr) {
@@ -144,6 +174,117 @@ void Demuxer::close() {
         avformat_close_input(&context_);
         context_ = nullptr;
     }
+}
+
+static int64_t relativeTimestamp(int64_t timestamp,
+                                 int64_t source_start,
+                                 AVRational input_time_base);
+
+bool InputSession::open(const fs::path& path, std::string& error) {
+    if (demuxer_.isOpen()) {
+        if (path_ == path) {
+            return true;
+        }
+        demuxer_.close();
+        keyframe_decisions_.clear();
+    }
+    if (!demuxer_.open(path, error)) {
+        return false;
+    }
+    path_ = path;
+    return true;
+}
+
+bool InputSession::seekToTimestampUs(int stream_index, int64_t timestamp_us, std::string& error) {
+    return demuxer_.seekToTimestampUs(stream_index, timestamp_us, error);
+}
+
+bool InputSession::sourceWindowStartsOnKeyframe(int input_stream_index,
+                                                int64_t source_in_us,
+                                                std::string& error) {
+    if (source_in_us < 0) {
+        error = "copy-only source_in_us must be non-negative";
+        return false;
+    }
+    const auto cacheKey = std::make_pair(input_stream_index, source_in_us);
+    const auto cached = keyframe_decisions_.find(cacheKey);
+    if (cached != keyframe_decisions_.end()) {
+        if (!cached->second) {
+            error = "copy-only source window must start on an exact video keyframe: " +
+                path_.string() + " source_in_us=" + std::to_string(source_in_us);
+        }
+        return cached->second;
+    }
+    if (!demuxer_.isOpen()) {
+        error = "input session is not open";
+        return false;
+    }
+    if (input_stream_index < 0 ||
+        static_cast<unsigned int>(input_stream_index) >= demuxer_.raw()->nb_streams) {
+        error = "stream index is invalid for " + path_.string();
+        return false;
+    }
+    const AVStream* input_stream = demuxer_.stream(input_stream_index);
+    if (input_stream == nullptr || input_stream->codecpar == nullptr ||
+        input_stream->codecpar->codec_type != AVMEDIA_TYPE_VIDEO) {
+        error = "requested keyframe stream is missing from " + path_.string();
+        return false;
+    }
+    if (!demuxer_.seekToTimestampUs(input_stream_index, source_in_us, error)) {
+        return false;
+    }
+    const int64_t source_start = validTimestamp(input_stream->start_time)
+        ? input_stream->start_time : 0;
+    AVPacket* packet = av_packet_alloc();
+    if (packet == nullptr) {
+        error = "av_packet_alloc failed while checking keyframe alignment";
+        return false;
+    }
+    bool found = false;
+    bool eof = false;
+    while (!eof) {
+        std::string readError;
+        if (!demuxer_.readFrame(*packet, eof, readError)) {
+            error = "av_read_frame(" + path_.string() + ") while checking keyframe alignment: " + readError;
+            av_packet_free(&packet);
+            return false;
+        }
+        if (eof) break;
+        if (packet->stream_index == input_stream_index &&
+            (packet->flags & AV_PKT_FLAG_KEY) != 0) {
+            const int64_t packet_us = relativeTimestamp(
+                packet->pts != AV_NOPTS_VALUE ? packet->pts : packet->dts,
+                source_start, input_stream->time_base);
+            if (packet_us == source_in_us) {
+                found = true;
+                av_packet_unref(packet);
+                break;
+            }
+        }
+        av_packet_unref(packet);
+    }
+    av_packet_free(&packet);
+    keyframe_decisions_[cacheKey] = found;
+    if (!found) {
+        error = "copy-only source window must start on an exact video keyframe: " +
+            path_.string() + " source_in_us=" + std::to_string(source_in_us);
+    }
+    return found;
+}
+
+InputSession* InputSessionRegistry::resolve(const fs::path& path, std::string& error) {
+    const std::string key = path.lexically_normal().string();
+    auto existing = sessions_.find(key);
+    if (existing != sessions_.end()) {
+        return existing->second.get();
+    }
+    auto session = std::make_unique<InputSession>();
+    if (!session->open(path, error)) {
+        return nullptr;
+    }
+    InputSession* result = session.get();
+    sessions_.emplace(key, std::move(session));
+    return result;
 }
 
 // Same-TU helpers only (no header declarations): keep them internal so the
@@ -262,6 +403,27 @@ bool demuxAndRewrite(const fs::path& path,
     if (!input.open(path, error)) {
         return false;
     }
+
+    return demuxAndRewrite(input, path, type, input_stream_index, output_stream,
+                           timeline_offset, source_in_us, duration_us, state,
+                           packets, packet_count, error);
+}
+
+bool demuxAndRewrite(Demuxer& input,
+                     const fs::path& path,
+                     AVMediaType type,
+                     int input_stream_index,
+                     AVStream* output_stream,
+                     int64_t timeline_offset,
+                     int64_t source_in_us,
+                     int64_t duration_us,
+                     TimestampState& state,
+                     std::vector<std::unique_ptr<PacketHolder>>& packets,
+                     int64_t& packet_count,
+                     std::string& error) {
+    if (!input.seekToTimestampUs(input_stream_index, source_in_us, error)) {
+        return false;
+    }
     if (input_stream_index < 0 ||
         static_cast<unsigned int>(input_stream_index) >= input.raw()->nb_streams) {
         error = "stream index is invalid for " + path.string();
@@ -316,61 +478,11 @@ bool sourceWindowStartsOnKeyframe(const fs::path& path,
                                   int input_stream_index,
                                   int64_t source_in_us,
                                   std::string& error) {
-    if (source_in_us < 0) {
-        error = "copy-only source_in_us must be non-negative";
+    InputSession session;
+    if (!session.open(path, error)) {
         return false;
     }
-    Demuxer input;
-    if (!input.open(path, error)) {
-        return false;
-    }
-    if (input_stream_index < 0 ||
-        static_cast<unsigned int>(input_stream_index) >= input.raw()->nb_streams) {
-        error = "stream index is invalid for " + path.string();
-        return false;
-    }
-    const AVStream* input_stream = input.stream(input_stream_index);
-    if (input_stream == nullptr || input_stream->codecpar == nullptr ||
-        input_stream->codecpar->codec_type != AVMEDIA_TYPE_VIDEO) {
-        error = "requested keyframe stream is missing from " + path.string();
-        return false;
-    }
-    const int64_t source_start = validTimestamp(input_stream->start_time)
-        ? input_stream->start_time : 0;
-    AVPacket* packet = av_packet_alloc();
-    if (packet == nullptr) {
-        error = "av_packet_alloc failed while checking keyframe alignment";
-        return false;
-    }
-    bool found = false;
-    bool eof = false;
-    while (!eof) {
-        std::string readError;
-        if (!input.readFrame(*packet, eof, readError)) {
-            error = "av_read_frame(" + path.string() + ") while checking keyframe alignment: " + readError;
-            av_packet_free(&packet);
-            return false;
-        }
-        if (eof) break;
-        if (packet->stream_index == input_stream_index &&
-            (packet->flags & AV_PKT_FLAG_KEY) != 0) {
-            const int64_t packet_us = relativeTimestamp(
-                packet->pts != AV_NOPTS_VALUE ? packet->pts : packet->dts,
-                source_start, input_stream->time_base);
-            if (packet_us == source_in_us) {
-                found = true;
-                av_packet_unref(packet);
-                break;
-            }
-        }
-        av_packet_unref(packet);
-    }
-    av_packet_free(&packet);
-    if (!found) {
-        error = "copy-only source window must start on an exact video keyframe: " +
-            path.string() + " source_in_us=" + std::to_string(source_in_us);
-    }
-    return found;
+    return session.sourceWindowStartsOnKeyframe(input_stream_index, source_in_us, error);
 }
 
 } // namespace velox::media::packet
@@ -551,6 +663,7 @@ bool muxCopyOnly(const CopyOnlyMuxRequest& request, CopyOnlyMuxResult* result) {
     packets.reserve(request.video_segments.size() * 16);
     packet::TimestampState video_state;
     packet::TimestampState segment_audio_state;
+    packet::InputSessionRegistry input_sessions;
     int64_t timeline_offset = 0;
     std::string error;
 
@@ -564,11 +677,12 @@ bool muxCopyOnly(const CopyOnlyMuxRequest& request, CopyOnlyMuxResult* result) {
             cleanupPartial();
             return fail(result, "copy-only source video window overflows int64");
         }
-        packet::Demuxer input;
-        if (!input.open(segment.path, error)) {
+        packet::InputSession* session = input_sessions.resolve(segment.path, error);
+        if (session == nullptr) {
             cleanupPartial();
             return fail(result, error);
         }
+        packet::Demuxer& input = session->demuxer();
         const int video_index = input.firstStream(AVMEDIA_TYPE_VIDEO);
         if (video_index < 0) {
             cleanupPartial();
@@ -581,8 +695,7 @@ bool muxCopyOnly(const CopyOnlyMuxRequest& request, CopyOnlyMuxResult* result) {
             cleanupPartial();
             return fail(result, "copy-only video source is shorter than its requested segment");
         }
-        if (!packet::sourceWindowStartsOnKeyframe(
-                segment.path, video_index, segment.source_in_us, error)) {
+        if (!session->sourceWindowStartsOnKeyframe(video_index, segment.source_in_us, error)) {
             cleanupPartial();
             return fail(result, error);
         }
@@ -632,9 +745,7 @@ bool muxCopyOnly(const CopyOnlyMuxRequest& request, CopyOnlyMuxResult* result) {
                 }
             }
         }
-        input.close();
-
-        if (!packet::demuxAndRewrite(segment.path, AVMEDIA_TYPE_VIDEO, video_index, streams.video,
+        if (!packet::demuxAndRewrite(input, segment.path, AVMEDIA_TYPE_VIDEO, video_index, streams.video,
                                      timeline_offset, segment.source_in_us, segment.source_duration_us,
                                      video_state, packets,
                                      result->video_packets, error)) {
@@ -642,7 +753,7 @@ bool muxCopyOnly(const CopyOnlyMuxRequest& request, CopyOnlyMuxResult* result) {
             return fail(result, error);
         }
         if (segment.include_audio && !packet::demuxAndRewrite(
-                segment.path, AVMEDIA_TYPE_AUDIO, audio_index, streams.audio,
+                input, segment.path, AVMEDIA_TYPE_AUDIO, audio_index, streams.audio,
                 timeline_offset, segment.source_in_us, segment.source_duration_us,
                 segment_audio_state, packets,
                 result->audio_packets, error)) {
@@ -655,11 +766,12 @@ bool muxCopyOnly(const CopyOnlyMuxRequest& request, CopyOnlyMuxResult* result) {
 
     if (request.audio.has_value()) {
         const auto& audio_request = *request.audio;
-        packet::Demuxer input;
-        if (!input.open(audio_request.path, error)) {
+        packet::InputSession* session = input_sessions.resolve(audio_request.path, error);
+        if (session == nullptr) {
             cleanupPartial();
             return fail(result, error);
         }
+        packet::Demuxer& input = session->demuxer();
         const int audio_index = input.firstStream(AVMEDIA_TYPE_AUDIO);
         if (audio_index < 0) {
             cleanupPartial();
@@ -698,9 +810,8 @@ bool muxCopyOnly(const CopyOnlyMuxRequest& request, CopyOnlyMuxResult* result) {
             cleanupPartial();
             return fail(result, "copy-only audio has no duration inside the video timeline");
         }
-        input.close();
         packet::TimestampState audio_state_local;
-        if (!packet::demuxAndRewrite(audio_request.path, AVMEDIA_TYPE_AUDIO, audio_index, streams.audio,
+        if (!packet::demuxAndRewrite(input, audio_request.path, AVMEDIA_TYPE_AUDIO, audio_index, streams.audio,
                                      0, audio_request.start_offset_us, audio_duration, audio_state_local,
                                      packets, result->audio_packets, error)) {
             cleanupPartial();

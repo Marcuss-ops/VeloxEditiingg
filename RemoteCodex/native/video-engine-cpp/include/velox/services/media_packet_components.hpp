@@ -29,6 +29,7 @@ extern "C" {
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -76,6 +77,11 @@ public:
     const AVStream* stream(int index) const;
     const AVFormatContext* raw() const;
 
+    // Repositions an already-open demuxer to the keyframe at or before the
+    // requested source time. Reuse is safe because avformat_flush resets the
+    // demuxer's packet state after the seek.
+    bool seekToTimestampUs(int stream_index, int64_t timestamp_us, std::string& error);
+
     // Reads the next raw packet. Returns true on success; at end of input
     // returns true with *eof set; on a hard error returns false with
     // *eof=false and `error` set to the ffmpeg error text.
@@ -87,6 +93,39 @@ public:
 
 private:
     AVFormatContext* context_{nullptr};
+};
+
+// InputSession owns one reusable AVFormatContext for one local asset. The
+// session caches keyframe decisions made during copy-only validation and
+// exposes the same demuxer to subsequent source-window reads. This keeps
+// metadata validation, keyframe checks and packet extraction on one opened
+// input without changing packet ordering or timestamp semantics.
+class InputSession {
+public:
+    bool open(const std::filesystem::path& path, std::string& error);
+    bool seekToTimestampUs(int stream_index, int64_t timestamp_us, std::string& error);
+    bool sourceWindowStartsOnKeyframe(int input_stream_index,
+                                      int64_t source_in_us,
+                                      std::string& error);
+
+    Demuxer& demuxer() { return demuxer_; }
+    const std::filesystem::path& path() const { return path_; }
+
+private:
+    std::filesystem::path path_;
+    Demuxer demuxer_;
+    std::map<std::pair<int, int64_t>, bool> keyframe_decisions_;
+};
+
+// Bounded by the number of distinct source paths used by one mux attempt.
+// Sessions are closed at registry destruction, after all packet extraction is
+// complete; the registry is intentionally attempt-scoped, not process-global.
+class InputSessionRegistry {
+public:
+    InputSession* resolve(const std::filesystem::path& path, std::string& error);
+
+private:
+    std::map<std::string, std::unique_ptr<InputSession>> sessions_;
 };
 
 // PacketTrimmer + TimestampRewriter — one AVPacket -> AVPacket pass:
@@ -116,6 +155,19 @@ bool rewritePacket(AVPacket& packet,
 // `packet_count`. This is the per-segment zero-spawn reader the ConcatMuxer
 // drives: one avformat open, one packet pass, no child process.
 bool demuxAndRewrite(const std::filesystem::path& path,
+                     AVMediaType type,
+                     int input_stream_index,
+                     AVStream* output_stream,
+                     int64_t timeline_offset,
+                     int64_t source_in_us,
+                     int64_t duration_us,
+                     TimestampState& state,
+                     std::vector<std::unique_ptr<PacketHolder>>& packets,
+                     int64_t& packet_count,
+                     std::string& error);
+
+bool demuxAndRewrite(Demuxer& input,
+                     const std::filesystem::path& path,
                      AVMediaType type,
                      int input_stream_index,
                      AVStream* output_stream,
