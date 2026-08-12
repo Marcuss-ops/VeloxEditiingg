@@ -176,6 +176,9 @@ reversibile, testato prima/dopo, committato su `main` e pubblicato.
 - [x] Master: compile/canonicalize/hash/persist/total.
 - [x] Worker: asset resolution, download, timeline, prepare, mix, mux,
       finalize, SHA e artifact total secondo semantica exclusive/nested.
+- [x] Read model metrics: il daily rollup rifiuta valori corrotti invece di
+      produrre aggregazioni parziali; il supervisor mantiene il watermark per
+      il retry del giorno fallito.
 - [ ] Verificare che ogni job produca automaticamente un breakdown completo
       o un motivo esplicito per ogni fase non disponibile.
 - [ ] Salvare fixture permanenti: 5m poche/semplice, 5m molte/complesso,

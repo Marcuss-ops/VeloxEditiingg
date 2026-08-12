@@ -119,7 +119,7 @@ func (r *SQLiteLabelResolver) rollupOneMetric(ctx context.Context, day, catalogN
 		var execID, workerID string
 		var val float64
 		if err := rows.Scan(&execID, &workerID, &val); err != nil {
-			continue
+			return fmt.Errorf("scan %s: %w", column, err)
 		}
 		if execID != "" {
 			byExecutor[execID] = append(byExecutor[execID], val)

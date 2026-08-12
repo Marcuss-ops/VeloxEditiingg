@@ -290,6 +290,9 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
   tentativo iniziale senza retry.
 - [x] Misurare `sql.DB.Stats()` del Master: `WaitCount` e `WaitDuration`, oltre
   ai contatori di pool, senza label ad alta cardinalità.
+- [x] Rendere fail-closed il daily metrics rollup: gli errori di conversione
+  in `rows.Scan()` non vengono più esclusi dall’aggregazione; il rollup
+  fallisce e il watermark resta riprocessabile.
 - [ ] Mantenere un solo writer per ogni aggregate e CAS esplicito per le
   transizioni concorrenti.
 - [x] Rendere `ApplyReconciledDelivery` fail-closed: una proiezione del
