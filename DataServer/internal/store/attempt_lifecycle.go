@@ -65,24 +65,30 @@ func scanAttempt(row interface{ Scan(...interface{}) error }) (*taskattempts.Tas
 		return nil, err
 	}
 	if createdAt != "" {
-		if pt, e := time.Parse(time.RFC3339, createdAt); e == nil {
-			a.CreatedAt = pt
+		a.CreatedAt, err = parsePersistedWorkerTimestamp(createdAt, "task_attempts.created_at")
+		if err != nil {
+			return nil, err
 		}
 	}
 	if updatedAt != "" {
-		if pt, e := time.Parse(time.RFC3339, updatedAt); e == nil {
-			a.UpdatedAt = pt
+		a.UpdatedAt, err = parsePersistedWorkerTimestamp(updatedAt, "task_attempts.updated_at")
+		if err != nil {
+			return nil, err
 		}
 	}
 	if startedAt.Valid && startedAt.String != "" {
-		if pt, e := time.Parse(time.RFC3339, startedAt.String); e == nil {
-			a.StartedAt = &pt
+		pt, parseErr := parsePersistedWorkerTimestamp(startedAt.String, "task_attempts.started_at")
+		if parseErr != nil {
+			return nil, parseErr
 		}
+		a.StartedAt = &pt
 	}
 	if completedAt.Valid && completedAt.String != "" {
-		if pt, e := time.Parse(time.RFC3339, completedAt.String); e == nil {
-			a.CompletedAt = &pt
+		pt, parseErr := parsePersistedWorkerTimestamp(completedAt.String, "task_attempts.completed_at")
+		if parseErr != nil {
+			return nil, parseErr
 		}
+		a.CompletedAt = &pt
 	}
 	return &a, nil
 }
@@ -182,7 +188,7 @@ func (r *SQLiteTaskAttemptRepository) ListByTaskID(ctx context.Context, taskID s
 	for rows.Next() {
 		a, err := scanAttempt(rows)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("task attempt list row: %w", err)
 		}
 		results = append(results, *a)
 	}

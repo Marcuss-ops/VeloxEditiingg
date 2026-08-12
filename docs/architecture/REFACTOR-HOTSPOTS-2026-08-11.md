@@ -77,6 +77,9 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 - Job read model: JSON `request/result/slot` corrotti, scan parziali e conteggi
   incompleti ora interrompono la lettura; anche il repository per status non
   salta più righe non decodificabili.
+- Attempt read model: timestamp `task_attempts` malformati e righe non
+  scansionabili interrompono il percorso invece di diventare tempi zero o
+  una lista parziale.
 - Worker status API: un errore del read model persistito risponde `503`
   invece di degradare a una cache in memoria potenzialmente obsoleta; il
   fallback resta limitato al solo DB vuoto durante il bootstrap.
