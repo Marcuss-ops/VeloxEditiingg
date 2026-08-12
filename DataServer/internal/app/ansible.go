@@ -54,7 +54,10 @@ func (m *AnsibleModule) RegisterRoutes(r *gin.Engine) {
 	if managerErr != nil {
 		log.Printf("[ANSIBLE] run history capability unavailable: %v", managerErr)
 	}
-	computerMgr := remoteansible.NewAnsibleComputerManager(m.dataDir, m.store)
+	computerMgr, computerErr := remoteansible.NewAnsibleComputerManager(m.dataDir, m.store)
+	if computerErr != nil {
+		log.Printf("[ANSIBLE] computer inventory capability unavailable: %v", computerErr)
+	}
 	if ansibleManager != nil {
 		ansibleManager.SetComputerManager(computerMgr)
 	}

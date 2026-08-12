@@ -11,36 +11,36 @@ import (
 )
 
 func (h *AnsibleHandlers) AnsibleComputersSummaryHandler(c *gin.Context) {
-	if h.computers != nil {
-		total := h.computers.Count()
-		enabled := h.computers.CountEnabled()
-		c.JSON(http.StatusOK, gin.H{
-			"total":     total,
-			"available": enabled,
-			"busy":      total - enabled,
-		})
+	if h.computers == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "computer manager unavailable"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"total":     0,
-		"available": 0,
-		"busy":      0,
-	})
+	total, err := h.computers.Count()
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "computer inventory unavailable"})
+		return
+	}
+	enabled, err := h.computers.CountEnabled()
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "computer inventory unavailable"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"total": total, "available": enabled, "busy": total - enabled})
 }
 
 func (h *AnsibleHandlers) AnsibleComputersListHandler(c *gin.Context) {
-	if h.computers != nil {
-		computers := h.computers.ListComputers()
-		c.JSON(http.StatusOK, gin.H{
-			"computers": computers,
-		})
+	if h.computers == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "computer manager unavailable"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"computers": []interface{}{},
-	})
+	computers, err := h.computers.ListComputers()
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "computer inventory unavailable"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"computers": computers})
 }
 
 func (h *AnsibleHandlers) GetCapabilitiesHandler(c *gin.Context) {
@@ -147,7 +147,11 @@ func (h *AnsibleHandlers) RunActionHandler(c *gin.Context) {
 	if len(targets) == 0 {
 		targets = body.Hosts
 	}
-	targets = h.resolveComputerIDs(targets)
+	targets, err := h.resolveComputerIDs(targets)
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "computer inventory unavailable"})
+		return
+	}
 	if len(targets) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "computer_ids required"})
 		return
@@ -228,13 +232,17 @@ func (h *AnsibleHandlers) TestSSHHandler(c *gin.Context) {
 	if len(targets) == 0 && body.ComputerID != "" {
 		targets = []string{body.ComputerID}
 	}
-	targets = h.resolveComputerIDs(targets)
+	targets, err := h.resolveComputerIDs(targets)
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "computer inventory unavailable"})
+		return
+	}
 	if len(targets) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "computer_id required"})
 		return
 	}
 
-	_, err := h.runActionForTargets("test_ssh", targets)
+	_, err = h.runActionForTargets("test_ssh", targets)
 	if err != nil {
 		if errors.Is(err, ErrExecutorRemoved) {
 			c.JSON(http.StatusNotImplemented, gin.H{
@@ -303,7 +311,10 @@ func (h *AnsibleHandlers) AnsibleComputersDeleteHandler(c *gin.Context) {
 		return
 	}
 
-	if _, ok := h.computers.GetComputer(id); !ok {
+	if _, ok, err := h.computers.GetComputer(id); err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "computer inventory unavailable"})
+		return
+	} else if !ok {
 		c.JSON(http.StatusNotFound, gin.H{"error": "computer not found", "id": id})
 		return
 	}

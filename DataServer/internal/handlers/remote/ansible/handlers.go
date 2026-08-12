@@ -54,9 +54,9 @@ func (h *AnsibleHandlers) capabilitiesPayload() gin.H {
 	}
 }
 
-func (h *AnsibleHandlers) resolveComputerIDs(ids []string) []string {
+func (h *AnsibleHandlers) resolveComputerIDs(ids []string) ([]string, error) {
 	if len(ids) == 0 || h.computers == nil {
-		return ids
+		return ids, nil
 	}
 
 	out := make([]string, 0, len(ids))
@@ -65,13 +65,15 @@ func (h *AnsibleHandlers) resolveComputerIDs(ids []string) []string {
 		if id == "" {
 			continue
 		}
-		if c, ok := h.computers.GetComputer(id); ok {
+		if c, ok, err := h.computers.GetComputer(id); err != nil {
+			return nil, err
+		} else if ok {
 			out = append(out, c.Host)
 			continue
 		}
 		out = append(out, id)
 	}
-	return out
+	return out, nil
 }
 
 // runDeployWorkers is the retired canary/batch deploy seam. It fails closed;

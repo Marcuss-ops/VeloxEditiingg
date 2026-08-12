@@ -115,7 +115,10 @@ func newTestManager(t *testing.T) (*AnsibleComputerManager, string) {
 	// passed to NewAnsibleComputerManager is irrelevant for these
 	// tests because we never call UpsertAnsibleHost with an SSHPassword
 	// (the migration path that uses dataDir).
-	m := NewAnsibleComputerManager(t.TempDir(), store)
+	m, err := NewAnsibleComputerManager(t.TempDir(), store)
+	if err != nil {
+		t.Fatalf("NewAnsibleComputerManager: %v", err)
+	}
 	// NewAnsibleComputerManager creates its own secretsDir under
 	// dataDir; we don't use it because we resolve directly via the
 	// store's SecretRef. Replace the secretResolver with one pointed

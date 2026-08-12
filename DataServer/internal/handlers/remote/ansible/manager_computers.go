@@ -1,6 +1,8 @@
 package ansible
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"path/filepath"
@@ -83,22 +85,18 @@ type AnsibleComputerManager struct {
 
 // NewAnsibleComputerManager creates a new computer manager.
 //
-// store is required: passing nil returns a no-op manager whose reads
-// return the zero-value / empty result so the test-mode contract is
-// preserved (test fixtures without a backing store still construct
-// without panic and report "no computers" / zero counts).
-//
-// PR-ANSIBLE-SOT: the previous `(dataDir string)` only signature is
-// replaced because `SetStore`-then-`loadFromSQLite` was eliminated —
-// the store is wired once at construction. Callers in app/ansible.go
-// pass `m.store` directly.
-func NewAnsibleComputerManager(dataDir string, store AnsibleComputerStore) *AnsibleComputerManager {
+// The store is mandatory: inventory reads and mutations must never turn a
+// missing datastore into an empty successful inventory.
+func NewAnsibleComputerManager(dataDir string, store AnsibleComputerStore) (*AnsibleComputerManager, error) {
+	if store == nil {
+		return nil, ErrComputerStoreNotConfigured
+	}
 	secretsDir := filepath.Join(dataDir, "secrets", "ansible")
 	return &AnsibleComputerManager{
 		dataDir:        dataDir,
 		store:          store,
 		secretResolver: NewSecretResolver(secretsDir),
-	}
+	}, nil
 }
 
 // ansibleHostFieldsToComputer converts structured fields to AnsibleComputer.
@@ -180,48 +178,38 @@ func computerToAnsibleHostFields(c AnsibleComputer, resolver *SecretResolver) st
 	}
 }
 
-// ListComputers returns the full inventory as a fresh SQLite read.
-//
-// PR-ANSIBLE-SOT: every read goes through the `ListAnsibleHosts()` SQL
-// query — no in-RAM mirror, no SetStore+loadFromSQLite bootstrap. With
-// a nil store the method still produces an empty map so callers
-// iterating `for _, c := range m.ListComputers()` stay panic-free.
-func (m *AnsibleComputerManager) ListComputers() map[string]AnsibleComputer {
-	result := map[string]AnsibleComputer{}
-	if m.store == nil {
-		return result
+// ListComputers returns the full inventory as a fresh SQLite read. Datastore
+// failures are returned; an empty map is only a valid empty inventory.
+func (m *AnsibleComputerManager) ListComputers() (map[string]AnsibleComputer, error) {
+	if m == nil || m.store == nil {
+		return nil, ErrComputerStoreNotConfigured
 	}
 	hosts, err := m.store.ListAnsibleHosts()
 	if err != nil {
-		log.Printf("[ANSIBLE] ListComputers: ListAnsibleHosts: %v", err)
-		return result
+		return nil, fmt.Errorf("ansible: list computers: %w", err)
 	}
+	result := make(map[string]AnsibleComputer, len(hosts))
 	for _, h := range hosts {
 		result[h.Host] = ansibleHostFieldsToComputer(h)
 	}
-	return result
+	return result, nil
 }
 
 // GetComputer returns a specific computer by host name from SQLite.
-//
-// PR-ANSIBLE-SOT: a single `GetAnsibleHost` query replaces the in-RAM
-// map lookup. With a nil store the method returns the zero AnsibleComputer
-// and `false` so callers retain their pre-existing panic-free path.
-func (m *AnsibleComputerManager) GetComputer(id string) (AnsibleComputer, bool) {
-	if m.store == nil {
-		return AnsibleComputer{}, false
+// The boolean is false only when the host does not exist; datastore failures
+// are returned separately.
+func (m *AnsibleComputerManager) GetComputer(id string) (AnsibleComputer, bool, error) {
+	if m == nil || m.store == nil {
+		return AnsibleComputer{}, false, ErrComputerStoreNotConfigured
 	}
 	h, err := m.store.GetAnsibleHost(id)
+	if errors.Is(err, sql.ErrNoRows) || (h == nil && err == nil) {
+		return AnsibleComputer{}, false, nil
+	}
 	if err != nil {
-		// sql.ErrNoRows → ok=false, zero value; other errors logged but
-		// also surface ok=false so the audit endpoint degrades gracefully
-		// rather than mis-reporting stale data.
-		return AnsibleComputer{}, false
+		return AnsibleComputer{}, false, fmt.Errorf("ansible: get computer %q: %w", id, err)
 	}
-	if h == nil {
-		return AnsibleComputer{}, false
-	}
-	return ansibleHostFieldsToComputer(*h), true
+	return ansibleHostFieldsToComputer(*h), true, nil
 }
 
 // SaveComputer upserts a computer in SQLite.
@@ -250,19 +238,15 @@ func (m *AnsibleComputerManager) DeleteComputer(id string) error {
 }
 
 // Count returns the total number of computers via a SQL `COUNT(*)` query.
-//
-// PR-ANSIBLE-SOT: replaces the O(N) in-RAM `len(m.computers)` with a
-// constant-cost aggregate. With a nil store the manager reports 0.
-func (m *AnsibleComputerManager) Count() int {
-	if m.store == nil {
-		return 0
+func (m *AnsibleComputerManager) Count() (int, error) {
+	if m == nil || m.store == nil {
+		return 0, ErrComputerStoreNotConfigured
 	}
 	n, err := m.store.CountAnsibleHosts()
 	if err != nil {
-		log.Printf("[ANSIBLE] CountAnsibleHosts: %v", err)
-		return 0
+		return 0, fmt.Errorf("ansible: count computers: %w", err)
 	}
-	return n
+	return n, nil
 }
 
 // CountEnabled returns the number of enabled computers via a SQL
@@ -270,16 +254,15 @@ func (m *AnsibleComputerManager) Count() int {
 //
 // PR-ANSIBLE-SOT: replaces the O(N) in-RAM `if c.Enabled { count++ }` with
 // a constant-cost aggregate. With a nil store the manager reports 0.
-func (m *AnsibleComputerManager) CountEnabled() int {
-	if m.store == nil {
-		return 0
+func (m *AnsibleComputerManager) CountEnabled() (int, error) {
+	if m == nil || m.store == nil {
+		return 0, ErrComputerStoreNotConfigured
 	}
 	n, err := m.store.CountAnsibleHostsEnabled()
 	if err != nil {
-		log.Printf("[ANSIBLE] CountAnsibleHostsEnabled: %v", err)
-		return 0
+		return 0, fmt.Errorf("ansible: count enabled computers: %w", err)
 	}
-	return n
+	return n, nil
 }
 
 // GetSecretRef returns the secret_ref for a host (for inventory generation).
@@ -288,14 +271,17 @@ func (m *AnsibleComputerManager) CountEnabled() int {
 // PR-ANSIBLE-SOT: the in-RAM `m.computers[host]` existence check is
 // replaced by a single `GetAnsibleHost` query — host existence is
 // validated against SQLite before the secret_ref is constructed.
-func (m *AnsibleComputerManager) GetSecretRef(host string) string {
-	if m.store == nil {
-		return ""
+func (m *AnsibleComputerManager) GetSecretRef(host string) (string, error) {
+	if m == nil || m.store == nil {
+		return "", ErrComputerStoreNotConfigured
 	}
 	if _, err := m.store.GetAnsibleHost(host); err != nil {
-		return ""
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return "", fmt.Errorf("ansible: get computer %q: %w", host, err)
 	}
-	return m.secretResolver.BuildSecretRef(host)
+	return m.secretResolver.BuildSecretRef(host), nil
 }
 
 // ResolveSecret resolves a secret_ref to the actual secret value.
@@ -348,7 +334,7 @@ type GenerateInventoryOptions struct {
 // for writing to a temp file consumed by the playbook runner.
 func (m *AnsibleComputerManager) GenerateInventory(opts GenerateInventoryOptions) (string, error) {
 	if m.store == nil {
-		return "", fmt.Errorf("ansible store not configured")
+		return "", ErrComputerStoreNotConfigured
 	}
 	hosts, err := m.store.ListAnsibleHosts()
 	if err != nil {
