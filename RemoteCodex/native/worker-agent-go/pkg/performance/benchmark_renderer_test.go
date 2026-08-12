@@ -124,6 +124,16 @@ printf 'leftover-segment' > "${OUT%/out.mp4}/seg_001.ts"`, 1)
 }
 
 func TestNativeRenderer_FailsClosed(t *testing.T) {
+	t.Run("complex manifest accepted", func(t *testing.T) {
+		trackDir := t.TempDir()
+		require.NoError(t, os.WriteFile(
+			filepath.Join(trackDir, ComplexFixtureManifestName),
+			[]byte(`{"fixture_id":"COMPLEX_CANONICAL_5M_V1"}`), 0o644))
+		_, err := NewNativeRenderer(NativeRendererConfig{
+			TrackDir: trackDir, BinaryPath: writeFakeEngine(t),
+		})
+		require.NoError(t, err)
+	})
 	t.Run("missing track manifest", func(t *testing.T) {
 		_, err := NewNativeRenderer(NativeRendererConfig{TrackDir: t.TempDir(), BinaryPath: writeFakeEngine(t)})
 		require.Error(t, err)

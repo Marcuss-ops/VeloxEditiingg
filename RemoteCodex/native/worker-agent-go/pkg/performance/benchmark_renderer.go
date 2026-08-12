@@ -37,9 +37,10 @@ import (
 
 // NativeRendererConfig configures the production benchmark renderer.
 type NativeRendererConfig struct {
-	// TrackDir holds the generated fixture track: clip_*.mp4 +
-	// final_audio.m4a + manifest.json (velox-fixture-gen output). It is
-	// verified against the pinned fixture spec before EVERY render.
+	// TrackDir holds the generated fixture track. The copy-only fixture uses
+	// manifest.json; the complex fixture uses complex-manifest.json. The
+	// selected manifest is verified against its pinned spec before every
+	// render.
 	TrackDir string
 	// WorkDir holds per-render output subdirectories; the evidence sweep
 	// (unexpected temp files) runs inside each render's own subdirectory
@@ -67,15 +68,19 @@ type NativeRenderer struct {
 	gitCommit    string
 }
 
-// NewNativeRenderer builds the production renderer. It fails fast when
-// the track directory has no manifest or the engine binary is missing —
+// NewNativeRenderer builds the production renderer. It fails fast when the
+// track directory has neither supported manifest or the engine binary is missing —
 // a benchmark must never silently degrade to a stub.
 func NewNativeRenderer(cfg NativeRendererConfig) (*NativeRenderer, error) {
 	if strings.TrimSpace(cfg.TrackDir) == "" {
 		return nil, errors.New("native renderer: TrackDir is required")
 	}
-	if _, err := os.Stat(filepath.Join(cfg.TrackDir, "manifest.json")); err != nil {
-		return nil, fmt.Errorf("native renderer: track manifest: %w", err)
+	manifestPath := filepath.Join(cfg.TrackDir, "manifest.json")
+	if _, err := os.Stat(manifestPath); err != nil {
+		complexManifestPath := filepath.Join(cfg.TrackDir, ComplexFixtureManifestName)
+		if _, complexErr := os.Stat(complexManifestPath); complexErr != nil {
+			return nil, fmt.Errorf("native renderer: track manifest: %w", err)
+		}
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = logger.New(logger.WarnLevel, os.Stderr)
