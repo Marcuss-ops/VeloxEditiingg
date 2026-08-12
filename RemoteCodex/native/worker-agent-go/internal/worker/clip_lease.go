@@ -34,8 +34,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 
 	"velox-shared/assetref"
+	"velox-shared/contract"
 	"velox-worker-agent/internal/workercache"
 )
 
@@ -124,9 +126,8 @@ func AcquireJobClips(ctx context.Context, cache *workercache.Cache, jobID string
 	}
 
 	lease := &ClipLease{
-		cache:     cache,
-		jobID:     jobID,
-		assetKeys: append([]string(nil), assetKeys...),
+		cache: cache,
+		jobID: jobID,
 	}
 
 	for _, id := range assetKeys {
@@ -140,21 +141,23 @@ func AcquireJobClips(ctx context.Context, cache *workercache.Cache, jobID string
 			}
 			return nil, fmt.Errorf("worker.AcquireJobClips(%s) for %s: %w", id, jobID, err)
 		}
+		// Track only successful acquisitions so rollback never attempts
+		// to release rows this call did not own.
+		lease.assetKeys = append(lease.assetKeys, id)
 	}
 	return lease, nil
 }
 
 // extractAssetKeysFromJSON re-marshals `payload` (a map-shaped decoded
-// TaskSpec) into JSON and runs Pass 4's canonical assetref extractor
-// on it. The extracted keys are returned in sorted-deterministic order
-// so the lease rollback path is stable across retry attempts.
+// TaskSpec) into JSON and runs the canonical assetref extractor on it. It
+// also inspects the stringified compiled_render_plan_json envelope: V2 asset
+// identities are bare asset_id fields, so they are not visible to the legacy
+// URL/velox-reference walker. The two sets are unioned before sorting.
 //
 // Re-marshaling cost is O(|payload|) per dispatch; for typical job
-// payloads (≤ a few kB) this is negligible relative to the
-// render-time work. The clean alternative — adding a RawPayload
-// json.RawMessage field to executor.TaskSpec — would leak a
-// Velox-specific field into the generic executor package and is
-// rejected for Pass 9.
+// payloads (≤ a few kB) this is negligible relative to render-time work.
+// The lease path deliberately reads the canonical plan but never mutates it
+// or adds local paths to it.
 //
 // Returns nil when the payload has no resolvable asset keys (a job
 // with no clip references is a legitimate input; the caller MUST
@@ -168,6 +171,18 @@ func extractAssetKeysFromJSON(payload map[string]interface{}) []string {
 		return nil
 	}
 	idSet := assetref.ExtractAssetKeys(raw)
+
+	// V2 is transported as a canonical JSON string inside the task payload.
+	// Walk only that document and collect exact asset_id fields; this covers
+	// assets[], final_audio.asset_id and every video segment without coupling
+	// the lease layer to a particular track nesting shape.
+	if compiledRaw, ok := payload[contract.PayloadKeyCompiledRenderPlanJSON].(string); ok {
+		var compiledPlan interface{}
+		if json.Unmarshal([]byte(compiledRaw), &compiledPlan) == nil {
+			collectCompiledPlanAssetIDs(compiledPlan, idSet)
+		}
+	}
+
 	if len(idSet) == 0 {
 		return nil
 	}
@@ -177,4 +192,32 @@ func extractAssetKeysFromJSON(payload map[string]interface{}) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// collectCompiledPlanAssetIDs adds V2's canonical asset identities to the
+// lease set. A wire URI is normalized to its cache identity when encountered
+// defensively; V2 normally carries bare asset IDs. Invalid/empty values are
+// ignored here and rejected by the V2 validator before dispatch.
+func collectCompiledPlanAssetIDs(value interface{}, ids map[string]struct{}) {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		for key, child := range typed {
+			if key == "asset_id" {
+				if rawID, ok := child.(string); ok {
+					id := strings.TrimSpace(rawID)
+					if wireID, isWire := assetref.WireAssetID(id); isWire {
+						id = wireID
+					}
+					if id != "" {
+						ids[id] = struct{}{}
+					}
+				}
+			}
+			collectCompiledPlanAssetIDs(child, ids)
+		}
+	case []interface{}:
+		for _, child := range typed {
+			collectCompiledPlanAssetIDs(child, ids)
+		}
+	}
 }
