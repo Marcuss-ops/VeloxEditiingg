@@ -95,12 +95,11 @@ func (s *Supervisor) tickOnce(ctx context.Context, now time.Time) error {
 			execID, execVer, workerClass = "unknown", "0", "default"
 		}
 
-		// 2a. Stamp per-attempt metrics + compute-outcome counter
-		// via ScanAttemptWithLabels. This is the same path ingest
-		// service uses — supervisor and ingest service produce
-		// identical per-attempt counter behaviour for the same
-		// input.
-		if scanErr := s.collector.ScanAttemptWithLabels(ctx, s.attempts, id, execID, execVer, workerClass); scanErr != nil {
+		// 2a. Read the primary snapshot without side effects. Nothing is
+		// recorded until the detailed timing reads below also succeed; this
+		// keeps a retry from double-counting counters after a partial read.
+		snapshot, scanErr := readAttemptSnapshot(ctx, s.attempts, id)
+		if scanErr != nil {
 			// Element-scoped: log once, skip aggregation.
 			log.Printf("[METRICS-SUPERVISOR] scan %s: %v", id, scanErr)
 			// Do not permanently consume an attempt whose primary read
@@ -128,10 +127,12 @@ func (s *Supervisor) tickOnce(ctx context.Context, now time.Time) error {
 		// single worker_id="unknown" label and making per-worker
 		// PromQL comparisons impossible.
 		var segs []taskattempts.SegmentTiming
-		if fetched, err := s.attempts.GetSegmentTimings(ctx, id); err == nil {
-			segs = fetched
-		} else {
+		if fetched, err := s.attempts.GetSegmentTimings(ctx, id); err != nil {
 			log.Printf("[METRICS-SUPERVISOR] segment timings %s: %v", id, err)
+			s.forgetSeenID(id)
+			continue
+		} else {
+			segs = fetched
 		}
 		attemptWorkerID := "unknown"
 		for _, seg := range segs {
@@ -142,8 +143,35 @@ func (s *Supervisor) tickOnce(ctx context.Context, now time.Time) error {
 		}
 
 		hasDetailed := false
-		if pts, ptErr := s.attempts.GetPhaseTimingsDetailed(ctx, id); ptErr == nil && len(pts) > 0 {
+		var pts []taskattempts.PhaseTimingDetailed
+		if fetched, ptErr := s.attempts.GetPhaseTimingsDetailed(ctx, id); ptErr != nil {
+			log.Printf("[METRICS-SUPERVISOR] phase timings %s: %v", id, ptErr)
+			s.forgetSeenID(id)
+			continue
+		} else {
+			pts = fetched
+		}
+		if len(pts) > 0 {
 			hasDetailed = true
+		}
+		// Fall back to aggregate columns only when no detailed rows
+		// exist. The aggregate columns don't carry worker_id, so use
+		// attemptWorkerID derived from segment timings above instead
+		// of the old hardcoded "unknown".
+		// 2a-ter. Parallelism telemetry (migration 098). Read the
+		// computed task_attempt_parallelism row and stamp gauges.
+		// worker_id comes from the segment timing rows (via
+		// attemptWorkerID derived above) — NOT a hardcoded "unknown".
+		par, parErr := s.attempts.GetParallelism(ctx, id)
+		if parErr != nil {
+			log.Printf("[METRICS-SUPERVISOR] parallelism %s: %v", id, parErr)
+			s.forgetSeenID(id)
+			continue
+		}
+		// The complete read set is now available. Stamp the primary
+		// snapshot only after all detailed reads have succeeded.
+		s.collector.recordAttemptSnapshot(snapshot, execID, execVer, workerClass)
+		if hasDetailed {
 			for _, pt := range pts {
 				wid := pt.WorkerID
 				if wid == "" {
@@ -151,17 +179,8 @@ func (s *Supervisor) tickOnce(ctx context.Context, now time.Time) error {
 				}
 				s.collector.RecordEnginePhase(pt, execID, wid)
 			}
-		} else if ptErr != nil {
-			log.Printf("[METRICS-SUPERVISOR] phase timings %s: %v", id, ptErr)
-		}
-		// Fall back to aggregate columns only when no detailed rows
-		// exist. The aggregate columns don't carry worker_id, so use
-		// attemptWorkerID derived from segment timings above instead
-		// of the old hardcoded "unknown".
-		if !hasDetailed {
-			if am, amErr := s.attempts.GetMetrics(ctx, id); amErr == nil && am != nil {
-				s.collector.RecordEngineAggregate(am, execID, attemptWorkerID)
-			}
+		} else {
+			s.collector.RecordEngineAggregate(snapshot.metrics, execID, attemptWorkerID)
 		}
 		for _, seg := range segs {
 			wid := seg.WorkerID
@@ -170,21 +189,14 @@ func (s *Supervisor) tickOnce(ctx context.Context, now time.Time) error {
 			}
 			s.collector.RecordEngineSegment(seg, execID, wid)
 		}
-
-		// 2a-ter. Parallelism telemetry (migration 098). Read the
-		// computed task_attempt_parallelism row and stamp gauges.
-		// worker_id comes from the segment timing rows (via
-		// attemptWorkerID derived above) — NOT a hardcoded "unknown".
-		if par, parErr := s.attempts.GetParallelism(ctx, id); parErr == nil && par != nil {
+		if par != nil {
 			s.collector.RecordParallelism(*par, execID, attemptWorkerID)
-		} else if parErr != nil {
-			log.Printf("[METRICS-SUPERVISOR] parallelism %s: %v", id, parErr)
 		}
 
 		// 2b. Cost aggregation: read AttemptCostBasis and roll
 		// into per-class totals.
-		cb, cbErr := s.attempts.GetCostBasis(ctx, id)
-		if cbErr != nil || cb == nil {
+		cb := snapshot.cost
+		if cb == nil {
 			continue
 		}
 		a := aggByClass[workerClass]
@@ -222,6 +234,12 @@ func (s *Supervisor) tickOnce(ctx context.Context, now time.Time) error {
 	// 6. Daily rollups: if we've crossed midnight since the last rollup,
 	//    compute and persist yesterday's rollup.
 	return s.tryDailyRollup(ctx, now)
+}
+
+func (s *Supervisor) forgetSeenID(id string) {
+	s.seenMu.Lock()
+	delete(s.seenIDs, id)
+	s.seenMu.Unlock()
 }
 
 // refreshMasterHealth refreshes the heartbeat-age + master-health

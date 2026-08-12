@@ -27,7 +27,7 @@ import (
 // GetStatus was added in spec §14 refactor: the compute-outcome
 // family classifies compute seconds by terminal attempt state, so
 // the reader must surface the attempt Status. Implementations that
-// Optional cache/cost rows may be absent and are represented as nil; errors
+// expose optional cache/cost rows may return nil when absent; errors
 // reading any configured row are returned so the supervisor can retry the
 // attempt instead of stamping a partial metric record.
 type AttemptReader interface {
@@ -35,6 +35,76 @@ type AttemptReader interface {
 	GetCacheStats(ctx context.Context, attemptID string) (*taskattempts.AttemptCacheStats, error)
 	GetCostBasis(ctx context.Context, attemptID string) (*taskattempts.AttemptCostBasis, error)
 	GetStatus(ctx context.Context, attemptID string) (taskattempts.AttemptStatus, error)
+}
+
+// attemptSnapshot is the side-effect-free read set used by the metrics
+// supervisor. Keeping the reads separate from recording is important: a
+// transient failure in a detailed timing table must not leave the primary
+// counters stamped while the timing gauges are missing, nor cause a retry to
+// double-count those counters.
+type attemptSnapshot struct {
+	metrics *taskattempts.AttemptMetrics
+	cache   taskattempts.AttemptCacheStats
+	cost    *taskattempts.AttemptCostBasis
+	status  taskattempts.AttemptStatus
+}
+
+func readAttemptSnapshot(ctx context.Context, mem AttemptReader, attemptID string) (*attemptSnapshot, error) {
+	if mem == nil || attemptID == "" {
+		return nil, nil
+	}
+	am, err := mem.GetMetrics(ctx, attemptID)
+	if err != nil {
+		return nil, err
+	}
+	if am == nil {
+		return nil, fmt.Errorf("metrics: attempt %q returned nil metrics", attemptID)
+	}
+	cs, err := mem.GetCacheStats(ctx, attemptID)
+	if err != nil {
+		return nil, fmt.Errorf("metrics: attempt %q cache stats: %w", attemptID, err)
+	}
+	cb, err := mem.GetCostBasis(ctx, attemptID)
+	if err != nil {
+		return nil, fmt.Errorf("metrics: attempt %q cost basis: %w", attemptID, err)
+	}
+	status := taskattempts.AttemptStatusPending
+	s, err := mem.GetStatus(ctx, attemptID)
+	if err != nil {
+		return nil, fmt.Errorf("metrics: attempt %q status: %w", attemptID, err)
+	}
+	if s != "" {
+		status = s
+	}
+	var cache taskattempts.AttemptCacheStats
+	if cs != nil {
+		cache = *cs
+	}
+	return &attemptSnapshot{metrics: am, cache: cache, cost: cb, status: status}, nil
+}
+
+func (c *Collector) recordAttemptSnapshot(snapshot *attemptSnapshot, execID, execVer, workerClass string) {
+	if snapshot == nil || snapshot.metrics == nil {
+		return
+	}
+	am := snapshot.metrics
+	c.RecordAttempt(*am, snapshot.cache, snapshot.cost, execID, execVer, workerClass)
+	c.RecordAttemptOutcome(snapshot.status, "", am.CPUTimeMS)
+	if snapshot.status == taskattempts.AttemptStatusFailed && am.ErrorComponent != "" {
+		c.RecordErrorClassification("", am.ErrorComponent, am.ErrorPhase)
+	}
+	if am.RetryCount > 0 {
+		c.RecordWaste("retry_count", uint64(am.RetryCount))
+	}
+	if am.WastedCPUMS > 0 {
+		c.RecordWaste("wasted_cpu_ms", uint64(am.WastedCPUMS))
+	}
+	if am.WastedDownloadBytes > 0 {
+		c.RecordWaste("wasted_download_bytes", uint64(am.WastedDownloadBytes))
+	}
+	if am.WastedCostEstimate > 0 {
+		c.RecordWaste("wasted_cost_estimate", uint64(am.WastedCostEstimate*1_000_000))
+	}
 }
 
 // RecordAttempt ingests one AttemptMetrics + CacheStats + CostBasis row
@@ -203,57 +273,11 @@ func (c *Collector) ScanAttemptWithLabels(
 	if workerClass == "" {
 		workerClass = "default"
 	}
-	am, err := mem.GetMetrics(ctx, attemptID)
+	snapshot, err := readAttemptSnapshot(ctx, mem, attemptID)
 	if err != nil {
 		return err
 	}
-	if am == nil {
-		return fmt.Errorf("metrics: attempt %q returned nil metrics", attemptID)
-	}
-	cs, err := mem.GetCacheStats(ctx, attemptID)
-	if err != nil {
-		return fmt.Errorf("metrics: attempt %q cache stats: %w", attemptID, err)
-	}
-	cb, err := mem.GetCostBasis(ctx, attemptID)
-	if err != nil {
-		return fmt.Errorf("metrics: attempt %q cost basis: %w", attemptID, err)
-	}
-	cache := taskattempts.AttemptCacheStats{}
-	if cs != nil {
-		cache = *cs
-	}
-	// Status drives the compute-outcome family spec §14. A status read error is
-	// fatal to this scan; a genuinely empty status remains non-terminal.
-	status := taskattempts.AttemptStatusPending
-	s, sErr := mem.GetStatus(ctx, attemptID)
-	if sErr != nil {
-		return fmt.Errorf("metrics: attempt %q status: %w", attemptID, sErr)
-	}
-	if s != "" {
-		status = s
-	}
-	c.RecordAttempt(*am, cache, cb, execID, execVer, workerClass)
-	c.RecordAttemptOutcome(status, "", am.CPUTimeMS)
-	// Scorecard v2 / Step 13: classify errors when the attempt
-	// failed and the worker populated error classification fields.
-	if status == taskattempts.AttemptStatusFailed && am.ErrorComponent != "" {
-		c.RecordErrorClassification("", am.ErrorComponent, am.ErrorPhase)
-	}
-	// Scorecard v2 / Step 17: accumulate waste counters when the
-	// worker reported waste fields. Only emit non-zero values to
-	// avoid spamming the counter with zero-increment noise.
-	if am.RetryCount > 0 {
-		c.RecordWaste("retry_count", uint64(am.RetryCount))
-	}
-	if am.WastedCPUMS > 0 {
-		c.RecordWaste("wasted_cpu_ms", uint64(am.WastedCPUMS))
-	}
-	if am.WastedDownloadBytes > 0 {
-		c.RecordWaste("wasted_download_bytes", uint64(am.WastedDownloadBytes))
-	}
-	if am.WastedCostEstimate > 0 {
-		c.RecordWaste("wasted_cost_estimate", uint64(am.WastedCostEstimate*1_000_000))
-	}
+	c.recordAttemptSnapshot(snapshot, execID, execVer, workerClass)
 	// Scorecard v2: engine-aggregate phase columns are stamped by
 	// the supervisor tick (tickOnce) which prefers detailed phase
 	// rows and falls back to the aggregate columns only when no

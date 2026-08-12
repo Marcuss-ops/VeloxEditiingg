@@ -45,6 +45,10 @@ reversibile, testato prima/dopo, committato su `main` e pubblicato.
       vengono più trasformati in zero/PENDING; il record parziale viene rifiutato.
 - [x] Metrics supervisor: un attempt che fallisce la lettura primaria non viene
       marcato come già processato; resta ritentabile al tick successivo.
+- [x] Metrics supervisor: primary metrics e timing dettagliati vengono letti
+      come snapshot prima della registrazione; un errore di fase/segmento/
+      parallelismo non produce più un report parziale né contatori duplicati
+      al retry.
 - [x] Ansible run history: store obbligatorio; errore DB distinto da run assente.
 - [x] Ansible inventory: conteggi/list/lookup non degradano a zero o lista vuota.
 - [x] Drive token listing: errore `ReadDir` distinto da directory vuota.
@@ -219,6 +223,8 @@ reversibile, testato prima/dopo, committato su `main` e pubblicato.
 - [x] Read model metrics: il daily rollup rifiuta valori corrotti invece di
       produrre aggregazioni parziali; il supervisor mantiene il watermark per
       il retry del giorno fallito.
+- [x] Profiling attempt: una lettura incompleta delle timing tables lascia
+      l'attempt ritentabile e non dichiara implicitamente completo il breakdown.
 - [ ] Verificare che ogni job produca automaticamente un breakdown completo
       o un motivo esplicito per ogni fase non disponibile.
 - [ ] Salvare fixture permanenti: 5m poche/semplice, 5m molte/complesso,

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -24,11 +25,14 @@ type fakeAttemptsDataSource struct {
 	sinceAt   time.Time // last RecentAttemptIDs input
 
 	// optional injection points
-	labelsMap  map[string]fakeLabels
-	metricsMap map[string]*taskattempts.AttemptMetrics
-	cacheStats map[string]*taskattempts.AttemptCacheStats
-	costMap    map[string]*taskattempts.AttemptCostBasis
-	statusMap  map[string]taskattempts.AttemptStatus
+	labelsMap   map[string]fakeLabels
+	metricsMap  map[string]*taskattempts.AttemptMetrics
+	cacheStats  map[string]*taskattempts.AttemptCacheStats
+	costMap     map[string]*taskattempts.AttemptCostBasis
+	statusMap   map[string]taskattempts.AttemptStatus
+	phaseErr    error
+	segmentErr  error
+	parallelErr error
 
 	// queries (mostly for debugging)
 	recentCalls int
@@ -135,14 +139,23 @@ func (f *fakeAttemptsDataSource) GetCostBasis(ctx context.Context, attemptID str
 }
 
 func (f *fakeAttemptsDataSource) GetPhaseTimingsDetailed(ctx context.Context, attemptID string) ([]taskattempts.PhaseTimingDetailed, error) {
+	if f.phaseErr != nil {
+		return nil, f.phaseErr
+	}
 	return nil, nil
 }
 
 func (f *fakeAttemptsDataSource) GetSegmentTimings(ctx context.Context, attemptID string) ([]taskattempts.SegmentTiming, error) {
+	if f.segmentErr != nil {
+		return nil, f.segmentErr
+	}
 	return nil, nil
 }
 
 func (f *fakeAttemptsDataSource) GetParallelism(ctx context.Context, attemptID string) (*taskattempts.AttemptParallelism, error) {
+	if f.parallelErr != nil {
+		return nil, f.parallelErr
+	}
 	return nil, nil
 }
 
@@ -334,6 +347,34 @@ func TestSupervisor_TickOnce_ScanFailureIsRetried(t *testing.T) {
 	s.seenMu.Unlock()
 	if seen {
 		t.Fatal("failed attempt scan was marked seen and will not be retried")
+	}
+}
+
+func TestSupervisor_TickOnce_DetailedTimingFailureIsRetriedWithoutPartialStamp(t *testing.T) {
+	reg := NewRegistry()
+	c := NewCollector(reg)
+	stampAt := time.Now().UTC().Add(time.Second)
+	attempts := &fakeAttemptsDataSource{
+		attempts: map[string]*fakeAttemptRecord{
+			"a1": {status: taskattempts.AttemptStatusSucceeded, updatedAt: stampAt, execID: "transcode", execVer: "1", wClass: "cpu"},
+		},
+		metricsMap: map[string]*taskattempts.AttemptMetrics{
+			"a1": {AttemptID: "a1", CPUTimeMS: 1200, PipelineTotalMs: 25},
+		},
+		phaseErr: fmt.Errorf("temporary timing store failure"),
+	}
+	s := NewSupervisor(c, attempts, &fakeOutboxGauge{}, DefaultCostFactors())
+	if err := s.tickOnce(context.Background(), time.Now().UTC().Add(time.Second)); err != nil {
+		t.Fatalf("tick returned error: %v", err)
+	}
+	s.seenMu.Lock()
+	_, seen := s.seenIDs["a1"]
+	s.seenMu.Unlock()
+	if seen {
+		t.Fatal("attempt with incomplete detailed timing was marked seen")
+	}
+	if got := dumpFamily(t, reg, "velox_compute_seconds_total"); strings.Contains(got, "velox_compute_seconds_total{") {
+		t.Fatalf("partial attempt was stamped before timing read completed: %s", got)
 	}
 }
 
