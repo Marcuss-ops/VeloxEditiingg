@@ -25,11 +25,13 @@ struct MediaProbeStream {
     bool duration_verified{false};
     double start_time_seconds{0.0};
     bool start_time_verified{false};
+    bool extradata_present{false};
 };
 
 struct MediaProbeResult {
     double duration_seconds{0.0};
     bool duration_verified{false};
+    std::string format_name;
     std::vector<MediaProbeStream> streams;
 };
 

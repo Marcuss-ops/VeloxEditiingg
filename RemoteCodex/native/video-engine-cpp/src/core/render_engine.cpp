@@ -735,13 +735,19 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             media::FinalAudioDecision muxDecision;
             {
                 ScopedTimer t(metrics_, "mux_audio_ms");
-                muxOk = media::muxAudio(videoForMux, downloadedTracks[0].first, finalMuxed, vol, offset, &muxProfile, false, duration_seconds_.load(), &muxDecision);
+                // This is the final audio track. Let the resolver select FINAL_AUDIO_COPY
+                // when the verified AAC metadata and neutral timing match the
+                // rendered video; incompatible inputs still fall back to AAC.
+                muxOk = media::muxAudio(videoForMux, downloadedTracks[0].first, finalMuxed, vol, offset, &muxProfile, true, duration_seconds_.load(), &muxDecision);
             }
             muxPhase.SetMetadataJSON(
                 std::string("{\"final_mux_audio_mode\":\"") + media::finalAudioModeName(muxDecision.mode) +
                 "\",\"final_mux_audio_encode_passes\":" +
                 (muxDecision.mode == media::FinalAudioMode::Copy ? "0" : "1") +
                 ",\"audio_metadata_verified\":" + (muxDecision.metadata.metadata_verified ? "true" : "false") +
+                ",\"audio_format_name\":\"" + muxDecision.metadata.format_name +
+                "\",\"audio_extradata_verified\":" + (muxDecision.metadata.extradata_verified ? "true" : "false") +
+                ",\"audio_container_verified\":" + (muxDecision.metadata.container_verified ? "true" : "false") +
                 ",\"decision_reason\":\"" + muxDecision.reason + "\"}");
             if (muxOk) {
                 const std::string publishError = publishOutput(finalMuxed);
@@ -914,6 +920,9 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                     ",\"audio_channel_layout\":\"" + muxDecision.metadata.channel_layout +
                     "\",\"audio_duration_seconds\":" + std::to_string(muxDecision.metadata.duration_seconds) +
                     ",\"audio_start_time_seconds\":" + std::to_string(muxDecision.metadata.start_time_seconds) +
+                    ",\"audio_format_name\":\"" + muxDecision.metadata.format_name +
+                    "\",\"audio_extradata_verified\":" + (muxDecision.metadata.extradata_verified ? "true" : "false") +
+                    ",\"audio_container_verified\":" + (muxDecision.metadata.container_verified ? "true" : "false") +
                     ",\"decision_reason\":\"" + muxDecision.reason + "\"}");
                 if (muxOk) {
                     const std::string publishError = publishOutput(finalMuxed);

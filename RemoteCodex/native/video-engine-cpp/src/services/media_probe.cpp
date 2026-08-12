@@ -86,6 +86,9 @@ std::optional<MediaProbeResult> probeOpenContext(const fs::path& mediaPath) {
     }
 
     MediaProbeResult result;
+    if (context->iformat != nullptr && context->iformat->name != nullptr) {
+        result.format_name = context->iformat->name;
+    }
     if (validTimestamp(context->duration)) {
         const double seconds = static_cast<double>(context->duration) / AV_TIME_BASE;
         if (std::isfinite(seconds) && seconds > 0.0) {
@@ -129,6 +132,8 @@ std::optional<MediaProbeResult> probeOpenContext(const fs::path& mediaPath) {
         output.duration_verified = output.duration_seconds > 0.0;
         output.start_time_seconds = streamStartTimeSeconds(stream);
         output.start_time_verified = validTimestamp(stream->start_time);
+        output.extradata_present = parameters->extradata_size > 0 &&
+            parameters->extradata != nullptr;
         result.streams.push_back(std::move(output));
 
         if (!result.duration_verified && output.duration_verified) {

@@ -9,6 +9,7 @@ extern "C" {
 #include <libavutil/pixfmt.h>
 }
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <sstream>
@@ -210,6 +211,17 @@ bool hasAudioStream(const fs::path& mediaPath) {
         [](const MediaProbeStream& stream) { return stream.is_audio; });
 }
 
+static bool rawAacContainer(const std::string& formatName) {
+    std::string normalized;
+    normalized.reserve(formatName.size());
+    for (const char value : formatName) {
+        normalized.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(value))));
+    }
+    return normalized == "aac" || normalized.find("adts") != std::string::npos ||
+           normalized.find("latm") != std::string::npos ||
+           normalized.find("loas") != std::string::npos;
+}
+
 FinalAudioMetadata probeFinalAudioMetadata(const fs::path& audioPath) {
     FinalAudioMetadata metadata;
     const auto probe = probeMediaInProcess(audioPath);
@@ -232,6 +244,9 @@ FinalAudioMetadata probeFinalAudioMetadata(const fs::path& audioPath) {
     metadata.duration_verified = audio->duration_verified;
     metadata.start_time_seconds = audio->start_time_seconds;
     metadata.start_time_verified = audio->start_time_verified;
+    metadata.format_name = probe->format_name;
+    metadata.extradata_verified = audio->extradata_present;
+    metadata.container_verified = !rawAacContainer(metadata.format_name);
     metadata.metadata_verified =
         !metadata.codec.empty() &&
         metadata.sample_rate > 0 &&
@@ -255,12 +270,16 @@ FinalAudioDecision resolveFinalAudioMode(
         decision.reason = "not_final_mix";
         return decision;
     }
-    if (volume != 1.0 || startOffset > 0.0) {
+    if (volume != 1.0 || startOffset != 0.0) {
         decision.reason = "final_audio_filter_required";
         return decision;
     }
     if (!metadata.metadata_verified || !metadata.duration_verified || !metadata.start_time_verified) {
         decision.reason = "audio_metadata_unverified";
+        return decision;
+    }
+    if (!metadata.extradata_verified || !metadata.container_verified) {
+        decision.reason = "audio_transport_unverified";
         return decision;
     }
     if (metadata.codec != "aac") {
@@ -541,7 +560,14 @@ bool muxAudio(const fs::path& videoPath, const fs::path& audioPath, const fs::pa
         cmd << " -af " << file::shellQuote(af.str());
     }
 
-    cmd << " -shortest -movflags +faststart "
+    // FINAL_AUDIO_COPY has already validated that the AAC track covers the
+    // final video timeline and has neutral timestamps. Do not let -shortest
+    // truncate copied packets at an arbitrary muxer boundary. The encode
+    // fallback retains the legacy -shortest behavior.
+    if (decision.mode != FinalAudioMode::Copy) {
+        cmd << " -shortest";
+    }
+    cmd << " -movflags +faststart "
         << file::shellQuote(outputPath.string());
     const std::string command = cmd.str();
     file::CommandResult r = file::runCommandTimed(command);
@@ -576,6 +602,11 @@ bool muxAudio(const fs::path& videoPath, const fs::path& audioPath, const fs::pa
               << ",\"audio_channel_layout\":\"" << decision.metadata.channel_layout << "\""
               << ",\"audio_duration_seconds\":" << decision.metadata.duration_seconds
               << ",\"audio_start_time_seconds\":" << decision.metadata.start_time_seconds
+              << ",\"audio_format_name\":\"" << decision.metadata.format_name << "\""
+              << ",\"audio_extradata_verified\":"
+              << (decision.metadata.extradata_verified ? "true" : "false")
+              << ",\"audio_container_verified\":"
+              << (decision.metadata.container_verified ? "true" : "false")
               << ",\"decision_reason\":\"" << decision.reason << "\""
               << ",\"command\":\"" << escapeJsonString(command) << "\"}"
               << std::endl;

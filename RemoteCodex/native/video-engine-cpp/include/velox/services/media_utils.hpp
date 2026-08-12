@@ -22,6 +22,11 @@ struct FinalAudioMetadata {
     double start_time_seconds{0.0};
     bool duration_verified{false};
     bool start_time_verified{false};
+    // FINAL_AUDIO_COPY transport guards. Raw AAC/ADTS/LATM without MP4
+    // AudioSpecificConfig must fall back to AAC encoding.
+    std::string format_name;
+    bool extradata_verified{false};
+    bool container_verified{false};
 };
 
 struct FinalAudioDecision {

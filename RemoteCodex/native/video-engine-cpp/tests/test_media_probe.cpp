@@ -125,8 +125,41 @@ int main() {
     expect(audioMetadata.sample_rate == 48000, "audio sample rate is 48 kHz");
     expect(audioMetadata.channels == 2, "audio channel count is stereo");
     expect(!audioMetadata.channel_layout.empty(), "audio channel layout is present");
+    expect(audioMetadata.extradata_verified, "AAC AudioSpecificConfig extradata is present");
+    expect(audioMetadata.container_verified, "AAC container is safe for MP4 stream copy");
     expect(audioMetadata.duration_verified && audioMetadata.duration_seconds > 1.0,
            "audio duration is verified in-process");
+
+    // FINAL_AUDIO_COPY integration: a verified AAC/M4A track with neutral
+    // timing must reach the muxer as -c:a copy, not an AAC encode fallback.
+    if (hadPath) {
+        setenv("PATH", previousPathValue.c_str(), 1);
+    } else {
+        unsetenv("PATH");
+    }
+    const fs::path copiedAudioOutput = root / "final-audio-copy.mp4";
+    velox::file::CommandResult copyProfile;
+    velox::media::FinalAudioDecision copyDecision;
+    expect(velox::media::muxAudio(
+               video, audio, copiedAudioOutput, 1.0, 0.0, &copyProfile,
+               true, 1.2, &copyDecision),
+           "compatible final AAC audio can be muxed successfully");
+    expect(copyDecision.mode == velox::media::FinalAudioMode::Copy,
+           "compatible final AAC audio selects FINAL_AUDIO_COPY");
+    expect(copyDecision.reason == "verified_final_mix",
+           "FINAL_AUDIO_COPY records the verified decision reason");
+    const auto copiedAudioProbe = velox::media::probeMediaInProcess(copiedAudioOutput);
+    expect(copiedAudioProbe.has_value(), "FINAL_AUDIO_COPY output can be probed");
+    if (copiedAudioProbe.has_value()) {
+        expect(copiedAudioProbe->streams.size() == 2,
+               "FINAL_AUDIO_COPY output contains video and audio streams");
+        const auto copiedAudio = std::find_if(
+            copiedAudioProbe->streams.begin(), copiedAudioProbe->streams.end(),
+            [](const velox::media::MediaProbeStream& stream) { return stream.is_audio; });
+        expect(copiedAudio != copiedAudioProbe->streams.end() &&
+                   copiedAudio->codec_id == static_cast<int>(AV_CODEC_ID_AAC),
+               "FINAL_AUDIO_COPY preserves AAC without changing codec");
+    }
 
     velox::media::SceneSegmentParams copyParams;
     copyParams.width = 64;
