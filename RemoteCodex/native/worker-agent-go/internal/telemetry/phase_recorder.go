@@ -3,9 +3,12 @@ package telemetry
 
 import (
 	"encoding/json"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	sharedtelemetry "velox-shared/telemetry"
 )
 
 const (
@@ -13,7 +16,7 @@ const (
 	StatusFailed = "failed"
 )
 
-// RecordedPhase is one immutable execution event drained from an EventRecorder.
+// RecordedPhase is one immutable execution event stored in an EventRecorder.
 type RecordedPhase struct {
 	Origin           string
 	Scope            string
@@ -71,20 +74,29 @@ type EventSpec struct {
 	FramesOut        int64
 }
 
-// EventRecorder accumulates events for one attempt. Event indexes are
-// monotonic for the complete attempt and are not reset by Flush.
+type eventIdentity struct {
+	origin string
+	index  int64
+}
+
+// EventRecorder is the canonical append-only observation journal for one
+// Attempt. Events are never removed by snapshots; the recorder is scoped to
+// the attempt and becomes unreachable when that attempt completes. Event
+// indexes remain monotonic per origin and imported C++ indexes are preserved.
 type EventRecorder struct {
 	mu               sync.Mutex
 	startedAt        time.Time
 	events           []RecordedPhase
 	indexes          map[string]int64
+	eventRecords     map[eventIdentity]RecordedPhase
 	attemptTelemetry *AttemptTelemetrySession
 }
 
 func NewEventRecorder() *EventRecorder {
 	return &EventRecorder{
-		startedAt: time.Now(),
-		indexes:   make(map[string]int64),
+		startedAt:    time.Now(),
+		indexes:      make(map[string]int64),
+		eventRecords: make(map[eventIdentity]RecordedPhase),
 	}
 }
 
@@ -172,14 +184,16 @@ func (r *EventRecorder) Record(spec EventSpec, startedAt, completedAt time.Time,
 	})
 }
 
+// Flush is a compatibility name for a non-destructive snapshot. The
+// canonical Attempt journal is never drained by a projection.
 func (r *EventRecorder) Flush() []RecordedPhase {
-	return r.DrainFrom(0)
+	return r.Snapshot()
 }
 
-// DrainFrom returns events recorded after offset and clears the recorder
-// buffer. It lets the outer attempt boundary append upload/commit events
-// without duplicating the events already snapshotted by TaskRunner.Run.
-func (r *EventRecorder) DrainFrom(offset int) []RecordedPhase {
+// SnapshotFrom returns an independent copy of events recorded at or after
+// offset. It is the official incremental projection API: callers retain the
+// offset and the journal remains intact for later projections/retries.
+func (r *EventRecorder) SnapshotFrom(offset int) []RecordedPhase {
 	if r == nil {
 		return nil
 	}
@@ -193,31 +207,97 @@ func (r *EventRecorder) DrainFrom(offset int) []RecordedPhase {
 	}
 	out := make([]RecordedPhase, len(r.events)-offset)
 	copy(out, r.events[offset:])
-	r.events = r.events[:0]
 	return out
 }
 
+// DrainFrom is retained as a source-compatible alias for older callers. It
+// is deliberately non-destructive; new code must use SnapshotFrom to make
+// the append-only contract explicit.
+func (r *EventRecorder) DrainFrom(offset int) []RecordedPhase {
+	return r.SnapshotFrom(offset)
+}
+
 // Snapshot returns an independent, non-destructive copy of all events
-// recorded so far. Recording remains append-only until an explicit
-// DrainFrom/Flush operation; mutating the returned slice or its elements
-// cannot mutate recorder state.
+// recorded so far. Recording remains append-only; mutating the returned
+// slice or its elements cannot mutate recorder state.
 func (r *EventRecorder) Snapshot() []RecordedPhase {
-	if r == nil {
+	return r.SnapshotFrom(0)
+}
+
+// ImportCXX is the official C++ sidecar import boundary. It preserves the
+// engine's origin/event_index, fills only catalog-authoritative defaults, and
+// advances the local per-origin sequence before later Go events are recorded.
+// Re-importing the same (origin,event_index) is idempotent; invalid events are
+// retained for master quarantine and returned as an error instead of vanishing.
+func (r *EventRecorder) ImportCXX(events []RecordedPhase) error {
+	if r == nil || len(events) == 0 {
 		return nil
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	out := make([]RecordedPhase, len(r.events))
-	copy(out, r.events)
-	return out
+	if r.indexes == nil {
+		r.indexes = make(map[string]int64)
+	}
+	if r.eventRecords == nil {
+		r.eventRecords = make(map[eventIdentity]RecordedPhase)
+	}
+	var firstErr error
+	for _, event := range events {
+		normalized, err := normalizeImportedPhase(event)
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+		identity := eventIdentity{origin: normalized.Origin, index: normalized.EventIndex}
+		if existing, exists := r.eventRecords[identity]; exists {
+			if existing != normalized && firstErr == nil {
+				firstErr = fmt.Errorf("telemetry C++ import: conflicting duplicate %s/%d", identity.origin, identity.index)
+			}
+			continue
+		}
+		r.events = append(r.events, normalized)
+		r.eventRecords[identity] = normalized
+		if normalized.EventIndex >= r.indexes[normalized.Origin] {
+			r.indexes[normalized.Origin] = normalized.EventIndex + 1
+		}
+	}
+	return firstErr
+}
+
+func normalizeImportedPhase(event RecordedPhase) (RecordedPhase, error) {
+	spec, ok := sharedtelemetry.Catalog.Lookup(event.Component, event.Action)
+	if !ok {
+		return event, fmt.Errorf("telemetry C++ import: unregistered event %q.%q", event.Component, event.Action)
+	}
+	if event.Origin != spec.Origin || event.Scope != spec.Scope {
+		return event, fmt.Errorf("telemetry C++ import: origin/scope mismatch for %q: got %q/%q, want %q/%q", event.Component+"."+event.Action, event.Origin, event.Scope, spec.Origin, spec.Scope)
+	}
+	if event.SchemaVersion != 0 && event.SchemaVersion != SchemaVersion {
+		return event, fmt.Errorf("telemetry C++ import: unsupported schema version %d", event.SchemaVersion)
+	}
+	if event.Phase != "" && event.Phase != spec.Phase {
+		return event, fmt.Errorf("telemetry C++ import: phase mismatch for %q: got %q, want %q", event.Component+"."+event.Action, event.Phase, spec.Phase)
+	}
+	event.SchemaVersion = SchemaVersion
+	event.Phase = spec.Phase
+	if event.EventType == "" {
+		event.EventType = eventTypeFor("", event.Status)
+	}
+	return event, nil
 }
 
 func (r *EventRecorder) record(event RecordedPhase) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.indexes == nil {
+		r.indexes = make(map[string]int64)
+	}
+	if r.eventRecords == nil {
+		r.eventRecords = make(map[eventIdentity]RecordedPhase)
+	}
 	event.EventIndex = r.indexes[event.Origin]
 	r.indexes[event.Origin]++
 	r.events = append(r.events, event)
+	r.eventRecords[eventIdentity{origin: event.Origin, index: event.EventIndex}] = event
 }
 
 func (r *EventRecorder) offsetMS(stamp time.Time) float64 {

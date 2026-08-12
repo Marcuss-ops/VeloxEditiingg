@@ -1,15 +1,15 @@
 // Package taskrunner / runner_report.go
 //
 // Report finalization for TaskRunner: completeError (failure paths) and
-// the detailed-phase drain helpers (attachDetailedPhases /
-// AppendDetailedPhases). The Run orchestrator itself stays in
-// runner.go.
+// the detailed-phase snapshot/import helpers. The Run orchestrator itself
+// stays in runner.go.
 package taskrunner
 
 import (
 	"strconv"
 	"strings"
 
+	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/telemetry"
 )
 
@@ -49,8 +49,8 @@ func (r *TaskRunner) completeError(rec *telemetry.EventRecorder, report *TaskExe
 	return *report
 }
 
-// attachDetailedPhases drains the recorder onto the report as the
-// ordered DetailedPhases list, numbering events 1..N across the whole
+// attachDetailedPhases snapshots the canonical recorder onto the report as
+// the ordered DetailedPhases list, numbering events 1..N across the whole
 // attempt. Identity fields come from the report's canonical executor
 // tuple; lease/snapshot identity is stamped at the submit boundary and
 // overridden by the master at ingest.
@@ -72,24 +72,21 @@ func (r *TaskRunner) attachDetailedPhases(rec *telemetry.EventRecorder, report *
 	if len(phases) == 0 {
 		return
 	}
-	// Preserve detailed native phases already attached from the executor;
-	// worker lifecycle events are appended in recorder order. Both sources
-	// retain their canonical per-origin event_index values.
 	start := len(report.DetailedPhases) + 1
 	for i, p := range phases {
 		report.DetailedPhases = append(report.DetailedPhases, fromRecordedPhase(p, start+i, execID, execVersion, ""))
 	}
 }
 
-// AppendDetailedPhases drains events recorded after TaskRunner.Run returned
-// (for example the worker's output upload and commit lifecycle) onto the
-// existing report. Run uses Snapshot so the attempt recorder remains alive
-// until the outer worker boundary has completed the entire attempt.
+// AppendDetailedPhases snapshots events recorded after TaskRunner.Run
+// returned (for example the worker's output upload and commit lifecycle)
+// onto the existing report. The recorder remains intact for every later
+// projection until the attempt ends.
 func AppendDetailedPhases(report *TaskExecutionReport, rec *telemetry.EventRecorder) {
 	if report == nil || rec == nil {
 		return
 	}
-	phases := rec.DrainFrom(report.AttemptRecorderOffset)
+	phases := rec.SnapshotFrom(report.AttemptRecorderOffset)
 	if len(phases) == 0 {
 		return
 	}
@@ -107,4 +104,50 @@ func AppendDetailedPhases(report *TaskExecutionReport, rec *telemetry.EventRecor
 	for i, p := range phases {
 		report.DetailedPhases = append(report.DetailedPhases, fromRecordedPhase(p, start+i, execID, execVersion, ""))
 	}
+}
+
+// importExecutorDetailedPhases is the sole C++ → Attempt journal adapter.
+// Native sidecar JSON is parsed into executor.DetailedPhaseTiming by the
+// native client; at this boundary it becomes RecordedPhase and enters the
+// canonical EventRecorder before any report/receipt/heartbeat projection.
+func importExecutorDetailedPhases(rec *telemetry.EventRecorder, phases []executor.DetailedPhaseTiming) error {
+	if rec == nil || len(phases) == 0 {
+		return nil
+	}
+	imported := make([]telemetry.RecordedPhase, 0, len(phases))
+	for _, phase := range phases {
+		imported = append(imported, telemetry.RecordedPhase{
+			Origin:    phase.Origin,
+			Scope:     phase.Scope,
+			Component: phase.Component,
+			Action:    phase.Action,
+			Phase:     phase.Phase,
+			EventType: phase.EventType,
+			EventName: phase.EventName,
+			// The parser-neutral executor shape predates the schema field;
+			// ImportCXX fills the current catalog version after validation.
+			SchemaVersion:    0,
+			EventIndex:       phase.EventIndex,
+			StartedAt:        phase.StartedAt,
+			CompletedAt:      phase.CompletedAt,
+			DurationMS:       phase.DurationMS,
+			Status:           phase.Status,
+			ErrorCode:        phase.ErrorCode,
+			ErrorMessage:     phase.ErrorMessage,
+			BytesIn:          phase.BytesIn,
+			BytesOut:         phase.BytesOut,
+			Frames:           phase.Frames,
+			MetadataJSON:     phase.MetadataJSON,
+			SegmentIndex:     phase.SegmentIndex,
+			TrackKind:        phase.TrackKind,
+			TrackIndex:       phase.TrackIndex,
+			StartedOffsetMS:  phase.StartedOffsetMS,
+			FinishedOffsetMS: phase.FinishedOffsetMS,
+			CPUMS:            phase.CPUMS,
+			QueueWaitMS:      phase.QueueWaitMS,
+			FramesIn:         phase.FramesIn,
+			FramesOut:        phase.FramesOut,
+		})
+	}
+	return rec.ImportCXX(imported)
 }

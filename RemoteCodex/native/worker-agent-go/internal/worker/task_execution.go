@@ -141,9 +141,9 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 		report.AttemptEvents.AttemptCompleted(status)
 	}
 
-	// Upload/commit runs outside TaskRunner.Run. Drain those late events
-	// only after the complete attempt lifecycle, preserving the runner
-	// events already snapshotted in report.DetailedPhases.
+	// Upload/commit runs outside TaskRunner.Run. Snapshot those late events
+	// only after the complete attempt lifecycle, preserving the canonical
+	// append-only journal for every later projection.
 	taskrunner.AppendDetailedPhases(report, reportRecorder(report))
 	result := attemptTelemetry.Stop(context.Background())
 	if report != nil {

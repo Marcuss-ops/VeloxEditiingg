@@ -487,8 +487,17 @@ func TestRunner_Failure_DetailedPhases(t *testing.T) {
 	if len(rep.Segments) != 1 || rep.Segments[0].SegmentIndex != 3 || rep.Segments[0].FinishedOffsetMS != 7.25 {
 		t.Fatalf("partial segment timings = %#v", rep.Segments)
 	}
-	if len(rep.DetailedPhases) < 1 || rep.DetailedPhases[0].EventIndex != 11 || rep.DetailedPhases[0].ErrorCode != "encoder_crashed" {
-		t.Fatalf("executor detailed phases were not preserved: %#v", rep.DetailedPhases)
+	foundImported := false
+	for _, phase := range rep.DetailedPhases {
+		if phase.Component == "engine.encode" && phase.Action == "flush" {
+			foundImported = true
+			if phase.EventIndex != 11 || phase.ErrorCode != "encoder_crashed" {
+				t.Fatalf("imported executor phase changed: %+v", phase)
+			}
+		}
+	}
+	if !foundImported {
+		t.Fatalf("executor detailed phase was not imported into canonical recorder: %#v", rep.DetailedPhases)
 	}
 	if len(rep.DetailedPhases) == 0 {
 		t.Fatal("expected a detailed phase stream on the failure path")

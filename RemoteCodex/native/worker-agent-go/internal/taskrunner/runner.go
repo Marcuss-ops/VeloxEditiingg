@@ -174,9 +174,9 @@ func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskEx
 	}
 	// The per-attempt phase recorder accumulates the detailed event
 	// stream that TaskResult.phase_timings (proto field 20) carries to
-	// the master. attachDetailedPhases drains it onto the report before
+	// the master. attachDetailedPhases snapshots it onto the report before
 	// every return path, so success AND failure reports both carry the
-	// full phase history.
+	// full phase history without consuming the journal.
 	rec := telemetry.RecorderFromContext(parent)
 	if rec == nil {
 		rec = telemetry.NewEventRecorder()
@@ -268,12 +268,19 @@ func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskEx
 	result, execErr := r.runExecute(rc, exec, spec, appendPhase, rec)
 	renderSpan.End()
 
-	// Preserve executor telemetry before classifying the outcome. Executors
-	// may return completed native phases, segments, and metrics together
-	// with a failure or cancellation; completeError must not discard them.
+	// Preserve executor telemetry before classifying the outcome. Native
+	// phases enter the canonical Attempt journal here before any report,
+	// receipt, heartbeat, or TaskResult projection. Executors may return
+	// completed phases, segments, and metrics together with a failure or
+	// cancellation; completeError must not discard them.
 	report.Metrics = result.Metrics
 	report.Segments = result.Segments
-	report.DetailedPhases = append(report.DetailedPhases, detailedPhasesFromExecutor(result.DetailedPhases)...)
+	if importErr := importExecutorDetailedPhases(rec, result.DetailedPhases); importErr != nil {
+		if report.Metrics == nil {
+			report.Metrics = make(map[string]interface{})
+		}
+		report.Metrics["telemetry.cpp_import_error"] = importErr.Error()
+	}
 
 	// Map internal err into a stable Code for the report.
 	switch {

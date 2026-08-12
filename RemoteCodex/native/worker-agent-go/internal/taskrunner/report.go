@@ -48,7 +48,7 @@ type TaskExecutionReport struct {
 	CompletedAt  time.Time                        `json:"completed_at"`
 	PhaseMarkers []PhaseMarker                    `json:"phase_markers,omitempty"`
 	// DetailedPhases is the full, ordered, event-taxonomy phase list for
-	// the attempt, drained from the phase recorder at Run completion.
+	// the attempt, snapshotted from the append-only recorder at Run completion.
 	// Serialized to TaskResult.phase_timings (proto field 20); the
 	// master ingests the rows into task_execution_events and derives
 	// task_phase_timings PARTIAL/FAILED summaries from them. Legacy
@@ -118,51 +118,6 @@ type DetailedPhaseTiming struct {
 	QueueWaitMS      float64
 	FramesIn         int64
 	FramesOut        int64
-}
-
-// fromRecordedPhase converts a drained telemetry event onto the report
-// type, stamping the identity fields the recorder does not carry. phaseOrder
-// is the 1-based position within the attempt's phase sequence.
-func detailedPhasesFromExecutor(phases []executor.DetailedPhaseTiming) []DetailedPhaseTiming {
-	if len(phases) == 0 {
-		return nil
-	}
-	out := make([]DetailedPhaseTiming, 0, len(phases))
-	for i, p := range phases {
-		out = append(out, DetailedPhaseTiming{
-			PhaseOrder:             i + 1,
-			Component:              p.Component,
-			Action:                 p.Action,
-			StartedAt:              p.StartedAt,
-			CompletedAt:            p.CompletedAt,
-			DurationMS:             p.DurationMS,
-			Status:                 p.Status,
-			ErrorCode:              p.ErrorCode,
-			ErrorMessage:           p.ErrorMessage,
-			BytesIn:                p.BytesIn,
-			BytesOut:               p.BytesOut,
-			Frames:                 p.Frames,
-			MetadataJSON:           p.MetadataJSON,
-			Origin:                 p.Origin,
-			Scope:                  p.Scope,
-			TelemetrySchemaVersion: telemetry.SchemaVersion,
-			SchemaVersion:          telemetry.SchemaVersion,
-			EventType:              p.EventType,
-			EventName:              p.EventName,
-			EventIndex:             p.EventIndex,
-			Phase:                  p.Phase,
-			SegmentIndex:           p.SegmentIndex,
-			TrackKind:              p.TrackKind,
-			TrackIndex:             p.TrackIndex,
-			StartedOffsetMS:        p.StartedOffsetMS,
-			FinishedOffsetMS:       p.FinishedOffsetMS,
-			CPUMS:                  p.CPUMS,
-			QueueWaitMS:            p.QueueWaitMS,
-			FramesIn:               p.FramesIn,
-			FramesOut:              p.FramesOut,
-		})
-	}
-	return out
 }
 
 func fromRecordedPhase(p telemetry.RecordedPhase, phaseOrder int, executorID string, executorVersion int32, leaseID string) DetailedPhaseTiming {

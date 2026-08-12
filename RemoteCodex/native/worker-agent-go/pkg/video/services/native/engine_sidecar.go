@@ -11,6 +11,12 @@ import (
 // schema emitted at <outputPath>.progress.json by the C++ engine.
 // Fields are a subset of the emitted JSON needed for operator-visible
 // telemetry; unrecognised keys are silently ignored by json.Decode.
+//
+// Official Attempt journal path for phases[]:
+// readEngineSidecar -> mapEngineSidecar -> pipeline.RenderMetrics.DetailedPhases
+// -> TaskRunner's importExecutorDetailedPhases -> EventRecorder.ImportCXX.
+// No receipt, heartbeat, Prometheus, or TaskResult sink imports C++ events
+// directly; they all project the recorder after that boundary.
 
 // engineSidecar mirrors the C++ <output>.progress.json sidecar written
 // by RenderEngine::emitSidecar.

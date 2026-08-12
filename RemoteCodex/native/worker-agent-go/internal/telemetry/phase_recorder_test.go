@@ -162,22 +162,73 @@ func TestEventRecorder_RecordExplicitStamps(t *testing.T) {
 	}
 }
 
-// TestEventRecorder_FlushClears verifies that Flush drains only the buffered
-// events while event indexes remain monotonic for the complete attempt.
-func TestEventRecorder_FlushClears(t *testing.T) {
+// TestEventRecorderSnapshotsAreAppendOnly verifies that Flush is a
+// non-destructive compatibility snapshot and incremental projections use an
+// offset without deleting the Attempt journal.
+func TestEventRecorderSnapshotsAreAppendOnly(t *testing.T) {
 	r := NewEventRecorder()
 	r.Emit(EventSpec{Origin: OriginWorker, Scope: ScopeAttempt, Component: "runner", Action: "cache_lookup"}, "ok", "", "")
 	first := r.Flush()
 	if len(first) != 1 || first[0].EventIndex != 0 {
-		t.Fatalf("first flush = %+v, want one event at index 0", first)
+		t.Fatalf("first snapshot = %+v, want one event at index 0", first)
 	}
 	r.Emit(EventSpec{Origin: OriginWorker, Scope: ScopeAttempt, Component: "runner", Action: "cache_lookup"}, "ok", "", "")
 	second := r.Flush()
-	if len(second) != 1 {
-		t.Fatalf("expected 1 event on second flush, got %d", len(second))
+	if len(second) != 2 {
+		t.Fatalf("expected 2 events in non-destructive snapshot, got %d", len(second))
 	}
-	if second[0].EventIndex != 1 {
-		t.Errorf("expected monotonic index 1 after flush, got %d", second[0].EventIndex)
+	if second[1].EventIndex != 1 {
+		t.Errorf("expected monotonic index 1 after append, got %d", second[1].EventIndex)
+	}
+	incremental := r.SnapshotFrom(1)
+	if len(incremental) != 1 || incremental[0].EventIndex != 1 {
+		t.Fatalf("incremental snapshot = %+v, want only post-offset event", incremental)
+	}
+	if got := len(r.Snapshot()); got != 2 {
+		t.Fatalf("append-only journal length = %d after projection, want 2", got)
+	}
+}
+
+// TestEventRecorderImportCXXPreservesIndexes verifies the official native
+// import boundary: catalog defaults are filled, engine indexes are retained,
+// later Go events continue after the imported sequence, and re-import is
+// idempotent.
+func TestEventRecorderImportCXXPreservesIndexes(t *testing.T) {
+	r := NewEventRecorder()
+	external := RecordedPhase{
+		Origin: OriginEngine, Scope: ScopeSegment,
+		Component: "engine.video", Action: "decode", EventIndex: 7,
+		Status: StatusOK, DurationMS: 12,
+	}
+	if err := r.ImportCXX([]RecordedPhase{external}); err != nil {
+		t.Fatalf("ImportCXX: %v", err)
+	}
+	got := r.Snapshot()
+	if len(got) != 1 || got[0].EventIndex != 7 || got[0].SchemaVersion != SchemaVersion || got[0].Phase != PhaseDecode {
+		t.Fatalf("imported event = %+v, want preserved index and catalog defaults", got)
+	}
+	if err := r.ImportCXX([]RecordedPhase{external}); err != nil {
+		t.Fatalf("idempotent ImportCXX: %v", err)
+	}
+	if len(r.Snapshot()) != 1 {
+		t.Fatalf("idempotent import duplicated journal event: %+v", r.Snapshot())
+	}
+	r.Emit(EventSpec{Origin: OriginEngine, Scope: ScopeSegment, Component: "engine.video", Action: "decode"}, StatusOK, "", "")
+	got = r.Snapshot()
+	if len(got) != 2 || got[1].EventIndex != 8 {
+		t.Fatalf("post-import engine index = %+v, want 8", got)
+	}
+}
+
+func TestEventRecorderImportCXXRetainsInvalidForQuarantine(t *testing.T) {
+	r := NewEventRecorder()
+	event := RecordedPhase{Origin: OriginEngine, Scope: ScopeSegment, Component: "engine", Action: "invented", EventIndex: 0}
+	if err := r.ImportCXX([]RecordedPhase{event}); err == nil {
+		t.Fatal("unknown C++ event unexpectedly imported without validation error")
+	}
+	got := r.Snapshot()
+	if len(got) != 1 || got[0].Action != "invented" {
+		t.Fatalf("invalid C++ event was not retained for quarantine: %+v", got)
 	}
 }
 

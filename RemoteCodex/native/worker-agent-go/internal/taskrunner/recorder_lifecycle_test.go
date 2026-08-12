@@ -3,10 +3,26 @@ package taskrunner
 import (
 	"testing"
 
+	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/telemetry"
 )
 
-func TestAppendDetailedPhasesDrainsOnlyPostRunEvents(t *testing.T) {
+func TestImportExecutorDetailedPhasesUsesCanonicalRecorder(t *testing.T) {
+	rec := telemetry.NewEventRecorder()
+	err := importExecutorDetailedPhases(rec, []executor.DetailedPhaseTiming{{
+		Origin: "engine", Scope: "segment", Component: "engine.video", Action: "decode",
+		EventIndex: 4, Status: telemetry.StatusOK, DurationMS: 3,
+	}})
+	if err != nil {
+		t.Fatalf("importExecutorDetailedPhases: %v", err)
+	}
+	events := rec.Snapshot()
+	if len(events) != 1 || events[0].Component != "engine.video" || events[0].EventIndex != 4 {
+		t.Fatalf("canonical recorder events = %+v, want imported engine event at index 4", events)
+	}
+}
+
+func TestAppendDetailedPhasesSnapshotsOnlyPostRunEvents(t *testing.T) {
 	rec := telemetry.NewEventRecorder()
 	rec.Emit(telemetry.EventSpec{
 		Origin: telemetry.OriginWorker, Scope: telemetry.ScopeAttempt,
@@ -39,7 +55,7 @@ func TestAppendDetailedPhasesDrainsOnlyPostRunEvents(t *testing.T) {
 	if report.DetailedPhases[1].PhaseOrder != 2 {
 		t.Fatalf("post-run phase order = %d, want 2", report.DetailedPhases[1].PhaseOrder)
 	}
-	if remaining := rec.Snapshot(); len(remaining) != 0 {
-		t.Fatalf("recorder retained %d events after final drain", len(remaining))
+	if remaining := rec.Snapshot(); len(remaining) != 2 {
+		t.Fatalf("append-only recorder retained %d events, want 2", len(remaining))
 	}
 }
