@@ -72,7 +72,11 @@ func NewClient(baseURL string, opts ...ClientOption) *Client {
 
 // WithTimeout sets the HTTP client timeout.
 func WithTimeout(timeout time.Duration) ClientOption {
-	return func(c *Client) { c.httpClient.Timeout = timeout }
+	return func(c *Client) {
+		if timeout > 0 {
+			c.httpClient.Timeout = timeout
+		}
+	}
 }
 
 // WithHeader sets a default header for all requests.
@@ -87,7 +91,15 @@ func WithWorkerID(workerID string) ClientOption {
 
 // WithRetry enables retry on transient failures.
 func WithRetry(count int, interval time.Duration) ClientOption {
-	return func(c *Client) { c.retryCount = count; c.retryInterval = interval }
+	return func(c *Client) {
+		if count < 0 {
+			count = 0
+		}
+		c.retryCount = count
+		if interval > 0 {
+			c.retryInterval = interval
+		}
+	}
 }
 
 // WithCircuitBreaker configures the circuit breaker.
@@ -150,6 +162,12 @@ func isRetryableError(err error) bool {
 	if err == nil {
 		return false
 	}
+	// Caller cancellation and deadline exhaustion are terminal for this
+	// request. Check them before net.Error because context deadline errors
+	// also implement net.Error and would otherwise be retried accidentally.
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
 	var netErr net.Error
 	if errors.As(err, &netErr) {
 		return true
@@ -160,9 +178,6 @@ func isRetryableError(err error) bool {
 		case syscall.ECONNREFUSED, syscall.ECONNRESET, syscall.ETIMEDOUT, syscall.EHOSTUNREACH:
 			return true
 		}
-	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return false
 	}
 	errStr := err.Error()
 	if strings.Contains(errStr, "status 5") || strings.Contains(errStr, "status 429") {

@@ -35,10 +35,26 @@ func TestNewClient(t *testing.T) {
 	}
 }
 
+func TestClientOptionsRejectUnsafeZeroValues(t *testing.T) {
+	client := NewClient("http://localhost:8000", WithTimeout(0), WithRetry(-1, 0))
+	if client.httpClient.Timeout != 30*time.Second {
+		t.Fatalf("zero timeout disabled the safe default: %s", client.httpClient.Timeout)
+	}
+	if client.retryCount != 0 {
+		t.Fatalf("negative retry count = %d, want 0", client.retryCount)
+	}
+	if client.retryInterval != 5*time.Second {
+		t.Fatalf("zero retry interval = %s, want default", client.retryInterval)
+	}
+}
+
 // TestIsRetryableError tests retryable error detection.
 func TestIsRetryableError(t *testing.T) {
-	if !isRetryableError(context.DeadlineExceeded) {
-		t.Error("Expected DeadlineExceeded to be retryable")
+	if isRetryableError(context.DeadlineExceeded) {
+		t.Error("Expected DeadlineExceeded to not be retryable")
+	}
+	if isRetryableError(context.Canceled) {
+		t.Error("Expected Canceled to not be retryable")
 	}
 
 	if isRetryableError(nil) {
