@@ -157,6 +157,14 @@ type WorkerConfig struct {
 	// threshold gate enforces that rule. Binds from VELOX_TMPFS_DIR.
 	TmpfsDir string `json:"tmpfs_dir,omitempty"`
 
+	// TelemetryJSONDir is the OPT-IN directory for the per-attempt
+	// telemetry JSON artifacts (performance receipt, benchmark raw facts,
+	// full diagnostic dump). Empty disables the JSON sinks entirely: the
+	// Prometheus projection always runs, but no per-attempt files are
+	// written unless an operator opts in (Binds from
+	// VELOX_TELEMETRY_JSON_DIR).
+	TelemetryJSONDir string `json:"telemetry_json_dir,omitempty"`
+
 	// TmpfsThresholdBytes is the size gate (in bytes) below which an
 	// ATTEMPT_TEMP file may be placed on TmpfsDir. Default 64 MiB
 	// (DefaultTmpfsThresholdBytes). Files at/above the threshold — and

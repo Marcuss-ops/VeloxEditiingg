@@ -31,6 +31,17 @@ func (m *PrometheusMetrics) RecordCacheRequest(result string) {
 	m.assetCacheRequests.inc(normalizeCacheResult(result))
 }
 
+// RecordCacheRequestN increments the low-cardinality cache-request counter
+// by n. It is the batch projection used by the PrometheusSink (per-attempt
+// cache deltas published at attempt Stop); single-count producers keep
+// using RecordCacheRequest during the migration window.
+func (m *PrometheusMetrics) RecordCacheRequestN(result string, n int64) {
+	if n <= 0 {
+		return
+	}
+	m.assetCacheRequests.add(normalizeCacheResult(result), float64(n))
+}
+
 // CacheRequestCount returns the current low-cardinality cache-request count.
 // It is intended for diagnostics and deterministic tests, not labels.
 func (m *PrometheusMetrics) CacheRequestCount(result string) float64 {

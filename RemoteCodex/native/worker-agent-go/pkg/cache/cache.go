@@ -165,11 +165,9 @@ func (c *PersistedLocalCache) Get(ctx context.Context, hash string) ([]byte, boo
 				c.mu.Unlock()
 			}
 			c.misses.Add(1)
-			observability.CacheMetricsProvider().RecordCacheRequest("miss")
 			return nil, false, nil
 		}
 		c.misses.Add(1)
-		observability.CacheMetricsProvider().RecordCacheRequest("miss")
 		return nil, false, fmt.Errorf("cache: read %s: %w", hash, err)
 	}
 
@@ -188,7 +186,6 @@ func (c *PersistedLocalCache) Get(ctx context.Context, hash string) ([]byte, boo
 	}
 
 	c.hits.Add(1)
-	observability.CacheMetricsProvider().RecordCacheRequest("hit")
 
 	if !hasIndex {
 		// Survived-restart on-disk entry; lazily index.
@@ -356,9 +353,10 @@ func (c *PersistedLocalCache) evictIfOver() {
 		bytes -= k.size
 		c.evictions.Add(1)
 	}
-	if len(evictedPaths) > 0 {
-		observability.CacheMetricsProvider().RecordCacheEvictions("pressure", len(evictedPaths))
-	}
+	// The cache no longer publishes to Prometheus directly: producers emit
+	// RAW facts only (Stats() counters), and the telemetry pipeline's
+	// CacheCollector + PrometheusSink project the per-attempt delta at
+	// attempt Stop. Keeps the dependency direction producer→recorder.
 	c.mu.Unlock()
 
 	// Sync deletion (post-mutex): correctness > latency under

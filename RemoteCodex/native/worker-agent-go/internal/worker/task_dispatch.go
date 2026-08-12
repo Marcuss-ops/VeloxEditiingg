@@ -112,7 +112,14 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 	// cache/download events in the same ordered report as runner/engine
 	// events; it is never global across attempts.
 	rec := telemetry.NewEventRecorder()
-	rec.BindAttemptTelemetry(telemetry.AttemptTelemetryFromContext(ctx))
+	session := telemetry.AttemptTelemetryFromContext(ctx)
+	rec.BindAttemptTelemetry(session)
+	// The pipeline (driven by the session) snapshots the journal at Stop:
+	// bind the recorder now so Process/Media collectors can project their
+	// facts from the canonical events.
+	if session != nil {
+		session.BindRecorder(rec)
+	}
 	attemptEvents := telemetry.NewAttemptEventMachine(rec, pte.AttemptID)
 	// Fase E2: one AttemptArtifactGraph per attempt, bound to the active
 	// task and threaded through the dispatch context so executors can

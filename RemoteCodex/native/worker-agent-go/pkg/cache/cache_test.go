@@ -12,8 +12,6 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
-
-	"velox-worker-agent/internal/telemetry"
 )
 
 // testHash returns the canonical SHA-256 hex of data.
@@ -160,20 +158,22 @@ func TestCache_LRUEvictionPicksLeastRecentlyUsed(t *testing.T) {
 	}
 }
 
-func TestCache_PressureEvictionExportsMetric(t *testing.T) {
+// TestCache_PressureEvictionRecordsRawFact pins the decoupling contract:
+// the cache producer records RAW facts only (Stats().Evictions) and never
+// publishes to Prometheus directly — the telemetry pipeline's
+// CacheCollector + PrometheusSink project the per-attempt delta (pinned in
+// internal/telemetry/sinks_test.go).
+func TestCache_PressureEvictionRecordsRawFact(t *testing.T) {
 	c := makeCache(t, 4)
 	ctx := context.Background()
-	beforePressure := telemetry.GetPrometheusMetrics().CacheEvictionCount("pressure")
+	before := c.Stats().Evictions
 	data := []byte("12345")
 	hash := testHash(t, data)
 	if err := c.Put(ctx, hash, data); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
-	if c.Stats().Evictions == 0 {
-		t.Fatal("expected byte-budget pressure eviction")
-	}
-	if got := telemetry.GetPrometheusMetrics().CacheEvictionCount("pressure") - beforePressure; got < 1 {
-		t.Fatalf("pressure eviction metric count=%v, want at least 1", got)
+	if got := c.Stats().Evictions - before; got < 1 {
+		t.Fatalf("evictions delta=%d, want at least 1 (byte-budget pressure eviction)", got)
 	}
 }
 

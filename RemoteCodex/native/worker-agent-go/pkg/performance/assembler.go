@@ -391,15 +391,7 @@ func assemblePhases(rm pipeline.RenderMetrics) []PhaseTiming {
 //     accounted_ratio (fail-closed: an unclassifiable event is never
 //     treated as exclusive).
 func classifyPhaseTiming(p pipeline.DetailedPhaseTiming) telemetry.TimingMode {
-	if spec, ok := telemetry.Catalog.Lookup(p.Component, p.Action); ok {
-		return spec.TimingMode
-	}
-	if p.Scope == telemetry.ScopeAttempt && p.Phase != "" {
-		if role, ok := telemetry.PhaseRoleOf(p.Phase); ok {
-			return role
-		}
-	}
-	return ""
+	return classifyTimingRole(p.Component, p.Action, p.Scope, p.Phase)
 }
 
 // assembleSegments maps the per-segment C++ sidecar rows into the
@@ -442,17 +434,5 @@ func assembleSegments(rm pipeline.RenderMetrics) []SegmentTiming {
 // the phase label, else the event type. Rows with no identifiable name
 // are labeled "unknown" so accounting never sees an empty name.
 func phaseName(p pipeline.DetailedPhaseTiming) string {
-	if strings.TrimSpace(p.EventName) != "" {
-		return p.EventName
-	}
-	if p.Component != "" && p.Action != "" {
-		return p.Component + "." + p.Action
-	}
-	if p.Phase != "" {
-		return p.Phase
-	}
-	if p.EventType != "" {
-		return p.EventType
-	}
-	return "unknown"
+	return descriptiveName(p.EventName, p.Component, p.Action, p.Phase, p.EventType)
 }

@@ -59,6 +59,10 @@ const (
 	// EnvWorkerProfile selects the runtime profile for this worker.
 	// "creator" disables the C++ video pipeline and scene.composite.v1.
 	EnvWorkerProfile = "VELOX_WORKER_PROFILE"
+	// EnvTelemetryJSONDir opts into per-attempt telemetry JSON artifacts
+	// (receipt, benchmark, diagnostic dump). Empty disables the JSON sinks.
+	EnvTelemetryJSONDir = "VELOX_TELEMETRY_JSON_DIR"
+
 	// EnvPrometheusPort controls the worker Prometheus scrape endpoint.
 	// Set to 0 to disable the endpoint explicitly.
 	EnvPrometheusPort = "VELOX_PROMETHEUS_PORT"
@@ -104,6 +108,7 @@ var EnvBindings = []string{
 	EnvRolloutGroup,
 	EnvStateDir,
 	EnvWorkerProfile,
+	EnvTelemetryJSONDir,
 	EnvPrometheusPort,
 	EnvAssetDownloadConcurrency,
 	EnvPrefetchHorizonJobs, EnvPrefetchProtectionLookaheadJobs,
@@ -221,6 +226,9 @@ func applyEnvOverrides(cfg *WorkerConfig) error {
 	}
 	if v := strings.TrimSpace(os.Getenv(EnvWorkerProfile)); v != "" {
 		cfg.WorkerProfile = v
+	}
+	if v := strings.TrimSpace(os.Getenv(EnvTelemetryJSONDir)); v != "" {
+		cfg.TelemetryJSONDir = v
 	}
 	if v := strings.TrimSpace(os.Getenv(EnvPrometheusPort)); v != "" {
 		if port, perr := strconv.Atoi(v); perr == nil && port >= 0 && port <= 65535 {

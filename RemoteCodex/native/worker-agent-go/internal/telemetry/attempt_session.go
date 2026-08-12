@@ -8,6 +8,7 @@ package telemetry
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -215,7 +216,9 @@ func (s *AttemptTelemetrySession) Stop(ctx context.Context) AttemptTelemetry {
 	// Sink failures never fail the attempt: they are logged by the caller
 	// (the result envelope is already complete).
 	if s.pipeline != nil {
-		_ = s.pipeline.Run(ctx)
+		if err := s.pipeline.Run(ctx); err != nil {
+			log.Printf("[TELEMETRY] attempt sink publish failed: %v", err)
+		}
 	}
 	return *s.result
 }
