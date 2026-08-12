@@ -1,0 +1,35 @@
+#!/bin/sh
+#
+# velox_video_engine_perfstat — perf stat wrapper for the native render engine.
+#
+# Installed (host) and bind-mounted into the worker container by
+# scripts/ops/install-worker-perf-wrappers.sh. When the worker agent execs
+# this wrapper as its VELOX_VIDEO_ENGINE_CPP_BIN, ONE engine invocation is
+# measured with perf stat -d -d -d (task-clock, cycles, IPC, cache misses,
+# context switches, page faults...).
+#
+#   - resolves the real engine: VELOX_VIDEO_ENGINE_REAL, else
+#     /usr/local/bin/velox_video_engine (in-container), else
+#     /opt/velox/bin/velox_video_engine (host)
+#   - writes OUT_DIR/velox-perfstat-<stamp>.txt (default OUT_DIR=/var/lib/velox/perf)
+#   - execs `perf stat` so engine AND its children are counted
+set -eu
+
+REAL="${VELOX_VIDEO_ENGINE_REAL:-}"
+if [ -z "$REAL" ]; then
+  if [ -x /usr/local/bin/velox_video_engine ]; then
+    REAL=/usr/local/bin/velox_video_engine
+  elif [ -x /opt/velox/bin/velox_video_engine ]; then
+    REAL=/opt/velox/bin/velox_video_engine
+  else
+    echo "velox_video_engine_perfstat: cannot locate the real engine (set VELOX_VIDEO_ENGINE_REAL)" >&2
+    exit 127
+  fi
+fi
+
+OUT_DIR="${VELOX_PERF_OUT_DIR:-/var/lib/velox/perf}"
+mkdir -p "$OUT_DIR" 2>/dev/null || true
+STAMP="$(date +%Y%m%d-%H%M%S)-$$"
+OUT="$OUT_DIR/velox-perfstat-${STAMP}.txt"
+
+exec perf stat -d -d -d -o "$OUT" -- "$REAL" "$@"
