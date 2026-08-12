@@ -1,0 +1,122 @@
+#include "velox/services/segment_execution.hpp"
+
+#include <sstream>
+
+namespace velox::media {
+namespace {
+
+void mismatch(std::string* reason, const char* field) {
+    if (reason != nullptr) {
+        *reason = std::string("media signature mismatch: ") + field;
+    }
+}
+
+} // namespace
+
+bool mediaSignaturesCompatible(const MediaSignature& source,
+                               const MediaSignature& target,
+                               std::string* reason) {
+    if (source.kind != target.kind) {
+        mismatch(reason, "kind");
+        return false;
+    }
+    if (source.codec_id != target.codec_id) {
+        mismatch(reason, "codec_id");
+        return false;
+    }
+    if (source.profile != target.profile) {
+        mismatch(reason, "profile");
+        return false;
+    }
+    if (source.level != target.level) {
+        mismatch(reason, "level");
+        return false;
+    }
+    if (source.extradata != target.extradata) {
+        mismatch(reason, "extradata");
+        return false;
+    }
+    if (source.kind == MediaKind::Video) {
+        if (source.width != target.width) {
+            mismatch(reason, "width");
+            return false;
+        }
+        if (source.height != target.height) {
+            mismatch(reason, "height");
+            return false;
+        }
+        if (source.pixel_format != target.pixel_format) {
+            mismatch(reason, "pixel_format");
+            return false;
+        }
+        if (source.frame_rate_num != target.frame_rate_num ||
+            source.frame_rate_den != target.frame_rate_den) {
+            mismatch(reason, "frame_rate");
+            return false;
+        }
+    } else {
+        if (source.pixel_format != target.pixel_format) {
+            mismatch(reason, "sample_format");
+            return false;
+        }
+        if (source.sample_rate != target.sample_rate) {
+            mismatch(reason, "sample_rate");
+            return false;
+        }
+        if (source.channels != target.channels) {
+            mismatch(reason, "channels");
+            return false;
+        }
+        if (source.channel_layout != target.channel_layout) {
+            mismatch(reason, "channel_layout");
+            return false;
+        }
+    }
+    return true;
+}
+
+const char* segmentExecutionModeName(SegmentExecutionMode mode) {
+    switch (mode) {
+    case SegmentExecutionMode::PacketCopy:
+        return "packet_copy";
+    case SegmentExecutionMode::NativeTranscode:
+        return "native_transcode";
+    case SegmentExecutionMode::LegacyFallback:
+        return "legacy_fallback";
+    }
+    return "legacy_fallback";
+}
+
+SegmentExecutionDecision resolveSegmentExecution(const SegmentExecutionRequest& request) {
+    SegmentExecutionDecision decision;
+    decision.keyframe_safe = request.source_window_keyframe_safe;
+
+    if (request.legacy_required) {
+        decision.mode = SegmentExecutionMode::LegacyFallback;
+        decision.reason = "feature requires legacy renderer";
+        return decision;
+    }
+    if (request.transform_required) {
+        decision.mode = SegmentExecutionMode::NativeTranscode;
+        decision.reason = "segment requires a media transform";
+        return decision;
+    }
+    if (!request.source_window_keyframe_safe) {
+        decision.mode = SegmentExecutionMode::NativeTranscode;
+        decision.reason = "source window is not keyframe-safe for packet copy";
+        return decision;
+    }
+
+    std::string compatibility_reason;
+    if (!mediaSignaturesCompatible(request.source, request.target, &compatibility_reason)) {
+        decision.mode = SegmentExecutionMode::NativeTranscode;
+        decision.reason = compatibility_reason;
+        return decision;
+    }
+
+    decision.mode = SegmentExecutionMode::PacketCopy;
+    decision.reason = "source matches canonical output profile";
+    return decision;
+}
+
+} // namespace velox::media

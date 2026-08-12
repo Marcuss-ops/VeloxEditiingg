@@ -128,6 +128,7 @@ add_executable(velox_video_engine
     src/services/io_counters.cpp
     src/services/media_probe.cpp
     src/services/media_packet_pipeline.cpp
+    src/services/segment_execution.cpp
     src/services/media_utils.cpp
     src/services/frame_pipeline.cpp
     src/audio/audio_plan.cpp
@@ -163,6 +164,23 @@ endif()
 
 add_test(NAME ffmpeg_progress_parser_tests
          COMMAND velox_ffmpeg_progress_parser_tests)
+
+# Canonical segment execution resolver. This value-only test verifies the
+# PacketCopy/NativeTranscode/LegacyFallback contract without a media fixture.
+add_executable(velox_segment_execution_tests
+    tests/test_segment_execution.cpp
+    src/services/segment_execution.cpp
+)
+
+target_include_directories(velox_segment_execution_tests
+    PRIVATE include src include/velox)
+
+if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(velox_segment_execution_tests PRIVATE -O2)
+endif()
+
+add_test(NAME segment_execution_tests
+         COMMAND velox_segment_execution_tests)
 
 # Focused tests for the private render-engine command/parsing helpers.
 add_executable(velox_render_engine_helpers_tests
@@ -208,6 +226,7 @@ add_executable(velox_audio_timeline_tests
     src/services/io_counters.cpp
     src/services/media_probe.cpp
     src/services/media_packet_pipeline.cpp
+    src/services/segment_execution.cpp
     src/services/media_utils.cpp
     src/services/ffmpeg_progress_parser.cpp
     src/telemetry/emitter.cpp
@@ -238,6 +257,7 @@ add_executable(velox_emitter_tests
     src/services/io_counters.cpp
     src/services/media_probe.cpp
     src/services/media_packet_pipeline.cpp
+    src/services/segment_execution.cpp
     src/services/media_utils.cpp
     src/services/ffmpeg_progress_parser.cpp
 )
@@ -268,6 +288,7 @@ add_executable(velox_looped_music_tests
     src/services/io_counters.cpp
     src/services/media_probe.cpp
     src/services/media_packet_pipeline.cpp
+    src/services/segment_execution.cpp
     src/services/media_utils.cpp
     src/services/ffmpeg_progress_parser.cpp
     src/telemetry/emitter.cpp
@@ -297,6 +318,7 @@ if(VELOX_ENABLE_LIBAV)
         src/services/io_counters.cpp
         src/services/media_probe.cpp
         src/services/media_packet_pipeline.cpp
+        src/services/segment_execution.cpp
         src/services/media_utils.cpp
     )
 
@@ -321,6 +343,7 @@ if(VELOX_ENABLE_LIBAV)
         src/services/io_counters.cpp
         src/services/media_probe.cpp
         src/services/media_packet_pipeline.cpp
+        src/services/segment_execution.cpp
     )
 
     target_include_directories(velox_media_packet_pipeline_tests
@@ -345,6 +368,7 @@ if(VELOX_ENABLE_LIBAV)
         src/services/io_counters.cpp
         src/services/media_probe.cpp
         src/services/media_packet_pipeline.cpp
+        src/services/segment_execution.cpp
     )
 
     target_include_directories(velox_packet_components_tests
@@ -375,6 +399,7 @@ if(VELOX_ENABLE_LIBAV)
         src/services/io_counters.cpp
         src/services/media_probe.cpp
         src/services/media_packet_pipeline.cpp
+        src/services/segment_execution.cpp
         src/services/media_utils.cpp
         src/services/ffmpeg_progress_parser.cpp
         src/telemetry/emitter.cpp
@@ -406,6 +431,7 @@ if(VELOX_ENABLE_LIBAV)
         src/services/io_counters.cpp
         src/services/media_probe.cpp
         src/services/media_packet_pipeline.cpp
+        src/services/segment_execution.cpp
         src/services/media_utils.cpp
         src/services/ffmpeg_progress_parser.cpp
         src/telemetry/emitter.cpp
@@ -429,6 +455,7 @@ if(VELOX_ENABLE_LIBAV)
         tests/test_frame_pipeline.cpp
         src/services/frame_pipeline.cpp
         src/services/media_packet_pipeline.cpp
+        src/services/segment_execution.cpp
         src/services/media_probe.cpp
         src/services/file_utils.cpp
         src/services/io_counters.cpp

@@ -2,6 +2,7 @@
 #include "velox/services/file_utils.hpp"
 #include "velox/services/io_counters.hpp"
 #include "velox/services/media_probe.hpp"
+#include "velox/services/segment_execution.hpp"
 
 // The in-process packet copy pipeline is built only when VELOX_ENABLE_LIBAV
 // is ON. Without the flag a fail-closed stub is compiled instead: the
@@ -391,43 +392,46 @@ struct OutputStreams {
     AVStream* audio{nullptr};
 };
 
-bool compatibleCodecParameters(const AVCodecParameters* left,
-                               const AVCodecParameters* right,
-                               AVMediaType type) {
-    if (left == nullptr || right == nullptr || left->codec_type != type ||
-        right->codec_type != type || left->codec_id != right->codec_id ||
-        left->profile != right->profile || left->level != right->level ||
-        left->extradata_size != right->extradata_size) {
-        return false;
+MediaSignature mediaSignature(const AVStream* stream) {
+    MediaSignature signature;
+    if (stream == nullptr || stream->codecpar == nullptr) {
+        return signature;
     }
-    if (type == AVMEDIA_TYPE_VIDEO &&
-        (left->width != right->width || left->height != right->height ||
-         left->format != right->format)) {
-        return false;
+
+    const AVCodecParameters* parameters = stream->codecpar;
+    signature.kind = parameters->codec_type == AVMEDIA_TYPE_AUDIO
+        ? MediaKind::Audio
+        : MediaKind::Video;
+    signature.codec_id = parameters->codec_id;
+    signature.profile = parameters->profile;
+    signature.level = parameters->level;
+    if (parameters->extradata != nullptr && parameters->extradata_size > 0) {
+        signature.extradata.assign(
+            parameters->extradata,
+            parameters->extradata + parameters->extradata_size);
     }
-    if (type == AVMEDIA_TYPE_AUDIO &&
-        (left->sample_rate != right->sample_rate ||
-         left->format != right->format)) {
-        return false;
-    }
+
+    if (signature.kind == MediaKind::Video) {
+        signature.width = parameters->width;
+        signature.height = parameters->height;
+        signature.pixel_format = parameters->format;
+        signature.frame_rate_num = stream->avg_frame_rate.num;
+        signature.frame_rate_den = stream->avg_frame_rate.den;
+    } else {
+        signature.sample_rate = parameters->sample_rate;
+        signature.pixel_format = parameters->format;
 #if LIBAVUTIL_VERSION_MAJOR >= 57
-    if (type == AVMEDIA_TYPE_AUDIO &&
-        av_channel_layout_compare(&left->ch_layout, &right->ch_layout) != 0) {
-        return false;
-    }
+        signature.channels = parameters->ch_layout.nb_channels;
+        char layout[256]{};
+        if (av_channel_layout_describe(&parameters->ch_layout, layout, sizeof(layout)) >= 0) {
+            signature.channel_layout = layout;
+        }
 #else
-    if (type == AVMEDIA_TYPE_AUDIO &&
-        (left->channels != right->channels ||
-         left->channel_layout != right->channel_layout)) {
-        return false;
-    }
+        signature.channels = parameters->channels;
+        signature.channel_layout = std::to_string(parameters->channel_layout);
 #endif
-    if (left->extradata_size > 0 &&
-        std::memcmp(left->extradata, right->extradata,
-                    static_cast<size_t>(left->extradata_size)) != 0) {
-        return false;
     }
-    return true;
+    return signature;
 }
 
 bool initializeOutputStream(AVFormatContext* output,
@@ -587,11 +591,15 @@ bool muxCopyOnly(const CopyOnlyMuxRequest& request, CopyOnlyMuxResult* result) {
                 cleanupPartial();
                 return fail(result, error);
             }
-        } else if (!compatibleCodecParameters(streams.video->codecpar,
-                                              input_video->codecpar,
-                                              AVMEDIA_TYPE_VIDEO)) {
-            cleanupPartial();
-            return fail(result, "copy-only video codec parameters differ at " + segment.path.string());
+        } else {
+            std::string compatibility_reason;
+            if (!mediaSignaturesCompatible(
+                    mediaSignature(input_video), mediaSignature(streams.video),
+                    &compatibility_reason)) {
+                cleanupPartial();
+                return fail(result, "copy-only video codec parameters differ at " +
+                    segment.path.string() + ": " + compatibility_reason);
+            }
         }
 
         int audio_index = -1;
@@ -613,11 +621,15 @@ bool muxCopyOnly(const CopyOnlyMuxRequest& request, CopyOnlyMuxResult* result) {
                     cleanupPartial();
                     return fail(result, error);
                 }
-            } else if (!compatibleCodecParameters(streams.audio->codecpar,
-                                                  input_audio->codecpar,
-                                                  AVMEDIA_TYPE_AUDIO)) {
-                cleanupPartial();
-                return fail(result, "copy-only segment audio codec parameters differ");
+            } else {
+                std::string compatibility_reason;
+                if (!mediaSignaturesCompatible(
+                        mediaSignature(input_audio), mediaSignature(streams.audio),
+                        &compatibility_reason)) {
+                    cleanupPartial();
+                    return fail(result, "copy-only segment audio codec parameters differ: " +
+                        compatibility_reason);
+                }
             }
         }
         input.close();
@@ -659,11 +671,15 @@ bool muxCopyOnly(const CopyOnlyMuxRequest& request, CopyOnlyMuxResult* result) {
                 cleanupPartial();
                 return fail(result, error);
             }
-        } else if (!compatibleCodecParameters(streams.audio->codecpar,
-                                              input_audio->codecpar,
-                                              AVMEDIA_TYPE_AUDIO)) {
-            cleanupPartial();
-            return fail(result, "copy-only audio codec parameters are incompatible");
+        } else {
+            std::string compatibility_reason;
+            if (!mediaSignaturesCompatible(
+                    mediaSignature(input_audio), mediaSignature(streams.audio),
+                    &compatibility_reason)) {
+                cleanupPartial();
+                return fail(result, "copy-only audio codec parameters are incompatible: " +
+                    compatibility_reason);
+            }
         }
         const int64_t available_duration = std::max<int64_t>(
             0, result->duration_us - audio_request.start_offset_us);
