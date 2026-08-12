@@ -84,6 +84,8 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
   righe non leggibili non entrano più nei risultati come dati incompleti.
 - Ansible/Fleet read model: host, run, command JSON e associazioni host
   corrotti non vengono più saltati durante inventory e audit operations.
+- Schema introspection: errori durante `PRAGMA table_info` non vengono più
+  trattati come colonne assenti durante il bootstrap SQLite.
 - Worker status API: un errore del read model persistito risponde `503`
   invece di degradare a una cache in memoria potenzialmente obsoleta; il
   fallback resta limitato al solo DB vuoto durante il bootstrap.

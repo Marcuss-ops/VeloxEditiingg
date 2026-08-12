@@ -358,11 +358,14 @@ func (s *SQLiteStore) columnExists(table, column string) (bool, error) {
 	)
 	for rows.Next() {
 		if err := rows.Scan(&cid, &name, &dataType, &notnull, &dfltValue, &pk); err != nil {
-			continue
+			return false, fmt.Errorf("scan table info for %s: %w", table, err)
 		}
 		if name == column {
 			return true, nil
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("iterate table info for %s: %w", table, err)
 	}
 	return false, nil
 }
