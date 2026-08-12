@@ -167,7 +167,7 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 	}
 	result, drainErr := p.Outbox.DrainLegacyEvents(context.Background(), legacyTypes)
 	if drainErr != nil {
-		log.Printf("[BOOTSTRAP] WARNING: DrainLegacyEvents failed (non-fatal): %v", drainErr)
+		return nil, fmt.Errorf("bootstrap: drain legacy outbox events: %w", drainErr)
 	} else if result.TotalDiscarded > 0 {
 		log.Printf("[BOOTSTRAP] DrainLegacyEvents: discarded %d residual legacy outbox events %v",
 			result.TotalDiscarded, result.ByEventType)

@@ -39,6 +39,8 @@ reversibile, testato prima/dopo, committato su `main` e pubblicato.
 
 - [x] Snapshot worker, command outbox, revocation, task/attempt/artifact e
       profiling: scan, timestamp, JSON e `rows.Err()` fail-closed.
+- [x] Legacy outbox drain: `rows.Err()` viene propagato e il bootstrap non
+      parte se la pulizia persistente non è verificabile.
 - [x] Ansible run history: store obbligatorio; errore DB distinto da run assente.
 - [x] Ansible inventory: conteggi/list/lookup non degradano a zero o lista vuota.
 - [x] Drive token listing: errore `ReadDir` distinto da directory vuota.

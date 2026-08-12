@@ -420,6 +420,10 @@ func (s *Store) DrainLegacyEvents(ctx context.Context, legacyTypes []string) (Dr
 		res.ByEventType[et] = n
 		res.TotalDiscarded += n
 	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return res, fmt.Errorf("outbox drain count rows: %w", err)
+	}
 	rows.Close()
 
 	if res.TotalDiscarded == 0 {
