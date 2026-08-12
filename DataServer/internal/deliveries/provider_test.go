@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"velox-server/internal/store"
@@ -230,6 +231,14 @@ func TestDeliveryRunner_Stop(t *testing.T) {
 	go r.Run(ctx)
 	r.Stop()
 	// Should not block or panic
+}
+
+func TestDeliveryRunner_RunFailsClosedWithoutStore(t *testing.T) {
+	r := NewDeliveryRunner(nil, nil, nil, "missing-store-runner")
+	err := r.Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "store is not configured") {
+		t.Fatalf("Run error = %v, want missing-store failure", err)
+	}
 }
 
 // stubProvider is a minimal Provider for tests.

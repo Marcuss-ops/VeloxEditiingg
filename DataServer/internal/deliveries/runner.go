@@ -152,6 +152,9 @@ func (r *DeliveryRunner) Run(ctx context.Context) error {
 		return errors.New("deliveries: nil runner")
 	}
 	defer close(r.stoppedCh)
+	if r.dbStore == nil {
+		return errors.New("deliveries: runner store is not configured")
+	}
 
 	ticker := time.NewTicker(r.cfg.PollInterval)
 	defer ticker.Stop()
