@@ -3,6 +3,7 @@ package ansible
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 
 	"velox-server/internal/store"
@@ -50,6 +51,11 @@ type AnsibleRunStore interface {
 var ErrExecutorRemoved = errors.New(
 	"ansible executor removed: no RunPlaybook path available; install a real executor under internal/ansible/executor (operator action required)",
 )
+
+// ErrRunStoreNotConfigured identifies an Ansible run manager that cannot
+// access its durable history store. A missing store is configuration failure,
+// not an empty run history and never a successful write.
+var ErrRunStoreNotConfigured = errors.New("ansible: run store not configured")
 
 // AnsibleRunManager owns the playbook run history.
 //
@@ -156,10 +162,13 @@ func ansibleRunRecordFromRow(row store.AnsibleRun) AnsibleRunRecord {
 // INSERT per added host); SQLite's single-connection write lock keeps
 // the diff atomic at the connection level.
 func (m *AnsibleRunManager) persistRunToSQLite(run AnsibleRunRecord) error {
-	if m.dbStore == nil {
-		return nil
+	if m == nil || m.dbStore == nil {
+		return ErrRunStoreNotConfigured
 	}
-	commandsJSON, _ := json.Marshal(run.Commands)
+	commandsJSON, err := json.Marshal(run.Commands)
+	if err != nil {
+		return fmt.Errorf("ansible: marshal run commands: %w", err)
+	}
 	if err := m.dbStore.UpsertAnsibleRun(
 		run.ID, run.Action, run.Playbook, run.Status,
 		run.StartedAt, run.EndedAt, run.ReturnCode,
@@ -170,10 +179,9 @@ func (m *AnsibleRunManager) persistRunToSQLite(run AnsibleRunRecord) error {
 	}
 
 	// Hosts diff: reconcile run.Hosts against the canonical DB set.
-	currentHosts, listErr := m.dbStore.ListAnsibleRunHosts(run.ID)
-	if listErr != nil {
-		log.Printf("[WARN] persistRunToSQLite: list hosts %s: %v", run.ID[:8], listErr)
-		currentHosts = nil
+	currentHosts, err := m.dbStore.ListAnsibleRunHosts(run.ID)
+	if err != nil {
+		return fmt.Errorf("ansible: list hosts for run %q: %w", run.ID, err)
 	}
 	want := make(map[string]bool, len(run.Hosts))
 	for _, h := range run.Hosts {
@@ -182,16 +190,13 @@ func (m *AnsibleRunManager) persistRunToSQLite(run AnsibleRunRecord) error {
 	for _, existing := range currentHosts {
 		if !want[existing] {
 			if err := m.dbStore.DeleteAnsibleRunHost(run.ID, existing); err != nil {
-				log.Printf("[WARN] persistRunToSQLite: drop orphan host %s from run %s: %v", existing, run.ID[:8], err)
+				return fmt.Errorf("ansible: delete stale host %q from run %q: %w", existing, run.ID, err)
 			}
 		}
 	}
 	for _, host := range run.Hosts {
 		if err := m.dbStore.AddAnsibleRunHost(run.ID, host); err != nil {
-			// Linear: don't abort the whole persist on one host; surface the
-			// anomaly and keep going. This matches the pre-refactor
-			// log-and-continue semantic for `persistRunToSQLite`.
-			log.Printf("[WARN] persistRunToSQLite: link host %s to run %s: %v", host, run.ID[:8], err)
+			return fmt.Errorf("ansible: add host %q to run %q: %w", host, run.ID, err)
 		}
 	}
 	return nil
