@@ -539,10 +539,12 @@ func insertQueuedOp(t *testing.T, s *SQLiteStore, id, opKind string) {
 // the canonical operation machine at the store boundary: a RUNNING row that
 // reached a terminal status can never be moved to the other terminal — a
 // late MarkFailed must not flip a SUCCEEDED audit row (and vice versa).
+// The rejected transition must write NOTHING: status, timestamps and
+// error_message all stay exactly as the winning terminal call left them.
 func TestFleetStore_NoOperationResurrection(t *testing.T) {
 	s := newFleetTestStore(t)
 	ctx := context.Background()
-	now := time.Now().UTC()
+	now := time.Now().UTC().Truncate(time.Second)
 
 	insertQueuedOp(t, s, "op-nores-1", "drain")
 	if _, err := s.MarkRunning(ctx, "op-nores-1", now); err != nil {
@@ -551,7 +553,7 @@ func TestFleetStore_NoOperationResurrection(t *testing.T) {
 	if err := s.MarkSucceeded(ctx, "op-nores-1", now); err != nil {
 		t.Fatalf("mark succeeded: %v", err)
 	}
-	if err := s.MarkFailed(ctx, "op-nores-1", now, "late failure"); !errors.Is(err, ErrIllegalOperationTransition) {
+	if err := s.MarkFailed(ctx, "op-nores-1", now.Add(time.Minute), "late failure"); !errors.Is(err, ErrIllegalOperationTransition) {
 		t.Fatalf("SUCCEEDED -> FAILED error = %v, want ErrIllegalOperationTransition", err)
 	}
 	got, err := s.GetOperation(ctx, "op-nores-1")
@@ -561,6 +563,15 @@ func TestFleetStore_NoOperationResurrection(t *testing.T) {
 	if got.Status != OperationStatusSucceeded {
 		t.Errorf("Status = %q, want SUCCEEDED (terminal row must stay put)", got.Status)
 	}
+	// "Writes nothing": the rejected MarkFailed carried a late failure text
+	// and a later finished_at — neither may leak onto the winning SUCCEEDED
+	// row. The canonical validation rejects the transition BEFORE any write.
+	if got.ErrorMessage != "" {
+		t.Errorf("ErrorMessage = %q, want empty (rejected MarkFailed must not write its error text)", got.ErrorMessage)
+	}
+	if got.FinishedAt == nil || !got.FinishedAt.Equal(now) {
+		t.Errorf("FinishedAt = %v, want %v (rejected attempt must not restamp the winning timestamp)", got.FinishedAt, now)
+	}
 
 	insertQueuedOp(t, s, "op-nores-2", "update")
 	if _, err := s.MarkRunning(ctx, "op-nores-2", now); err != nil {
@@ -569,8 +580,23 @@ func TestFleetStore_NoOperationResurrection(t *testing.T) {
 	if err := s.MarkFailed(ctx, "op-nores-2", now, "cosign verify failed"); err != nil {
 		t.Fatalf("mark failed: %v", err)
 	}
-	if err := s.MarkSucceeded(ctx, "op-nores-2", now); !errors.Is(err, ErrIllegalOperationTransition) {
+	if err := s.MarkSucceeded(ctx, "op-nores-2", now.Add(time.Minute)); !errors.Is(err, ErrIllegalOperationTransition) {
 		t.Fatalf("FAILED -> SUCCEEDED error = %v, want ErrIllegalOperationTransition", err)
+	}
+	got, err = s.GetOperation(ctx, "op-nores-2")
+	if err != nil {
+		t.Fatalf("get op-nores-2: %v", err)
+	}
+	// Mirror case: the rejected MarkSucceeded must not erase the FAILED row's
+	// error text nor move its finished_at.
+	if got.Status != OperationStatusFailed {
+		t.Errorf("Status = %q, want FAILED (terminal row must stay put)", got.Status)
+	}
+	if got.ErrorMessage != "cosign verify failed" {
+		t.Errorf("ErrorMessage = %q, want %q (rejected MarkSucceeded must not clear the failure text)", got.ErrorMessage, "cosign verify failed")
+	}
+	if got.FinishedAt == nil || !got.FinishedAt.Equal(now) {
+		t.Errorf("FinishedAt = %v, want %v (rejected attempt must not restamp the winning timestamp)", got.FinishedAt, now)
 	}
 }
 

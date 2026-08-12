@@ -418,6 +418,17 @@ func TestDeploymentStore_TerminalStatusIsImmutable(t *testing.T) {
 	if got.Status != DeployStatusSucceeded {
 		t.Errorf("Status after rejected transition = %q, want SUCCEEDED (row must stay terminal)", got.Status)
 	}
+	// "Writes nothing": the rejected FAILED attempt must not restamp
+	// finished_at, must not leak an error onto the SUCCEEDED row, and the
+	// read-model projection must stay byte-identical to the pre-attempt
+	// state. The transition API validates BEFORE it writes, so a rejected
+	// transition is a complete no-op.
+	if got.FinishedAt == nil || !got.FinishedAt.Equal(base.Add(time.Minute)) {
+		t.Errorf("FinishedAt after rejected transition = %v, want %v (rejected attempt must not restamp)", got.FinishedAt, base.Add(time.Minute))
+	}
+	if got.ErrorCode != "" || got.ErrorMessage != "" {
+		t.Errorf("journal error after rejected transition = code=%q msg=%q, want empty (rejected attempt must not write error)", got.ErrorCode, got.ErrorMessage)
+	}
 
 	state, err := s.GetWorkerDeploymentState(ctx, rec.WorkerID)
 	if err != nil {
@@ -425,6 +436,66 @@ func TestDeploymentStore_TerminalStatusIsImmutable(t *testing.T) {
 	}
 	if state.LastOperationStatus != DeployStatusSucceeded {
 		t.Errorf("LastOperationStatus after rejected transition = %q, want SUCCEEDED (projection must stay in sync)", state.LastOperationStatus)
+	}
+	if state.LastOperationErrorCode != "" || state.LastOperationError != "" {
+		t.Errorf("projection error after rejected transition = code=%q msg=%q, want empty (rejected attempt must not write error)", state.LastOperationErrorCode, state.LastOperationError)
+	}
+}
+
+// TestDeploymentStore_TransitionUpdatesRecordAndProjectionAtomically is the
+// POSITIVE twin of TestDeploymentStore_ProjectionFailureRollsBackTransition:
+// one store call (PENDING → SUCCEEDED) must leave BOTH the journal row and
+// the worker_deployment_state read model updated — the read model is a
+// projection written inside the same transaction, not something the API
+// reconstructs from history afterwards.
+func TestDeploymentStore_TransitionUpdatesRecordAndProjectionAtomically(t *testing.T) {
+	s := newDeploymentTestStore(t)
+	ctx := context.Background()
+	base := time.Now().UTC().Truncate(time.Second)
+
+	rec := DeploymentRecord{
+		DeploymentID:   "deploy-atomic-pos",
+		WorkerID:       "wicket",
+		PreviousDigest: deploymentTestDigest('a'),
+		TargetDigest:   deploymentTestDigest('b'),
+		StartedAt:      base,
+		Status:         DeployStatusPending,
+		AppliedBy:      "fleetctl",
+	}
+	if err := s.InsertDeploymentRecord(ctx, rec); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	finished := base.Add(time.Minute)
+	if err := s.UpdateDeploymentStatus(ctx, rec.DeploymentID, DeployStatusSucceeded, finished); err != nil {
+		t.Fatalf("UpdateDeploymentStatus(SUCCEEDED): %v", err)
+	}
+
+	// Journal: the single call updated the record.
+	got, err := s.GetLatestDeploymentForWorker(ctx, rec.WorkerID)
+	if err != nil {
+		t.Fatalf("GetLatestDeploymentForWorker: %v", err)
+	}
+	if got.Status != DeployStatusSucceeded {
+		t.Errorf("journal Status = %q, want SUCCEEDED", got.Status)
+	}
+	if got.FinishedAt == nil || !got.FinishedAt.Equal(finished) {
+		t.Errorf("journal FinishedAt = %v, want %v", got.FinishedAt, finished)
+	}
+
+	// Read model: the SAME call projected it, with no reconstruction needed.
+	state, err := s.GetWorkerDeploymentState(ctx, rec.WorkerID)
+	if err != nil {
+		t.Fatalf("GetWorkerDeploymentState: %v", err)
+	}
+	if state.LastOperationID != rec.DeploymentID {
+		t.Errorf("projection LastOperationID = %q, want %q", state.LastOperationID, rec.DeploymentID)
+	}
+	if state.LastOperationStatus != DeployStatusSucceeded {
+		t.Errorf("projection LastOperationStatus = %q, want SUCCEEDED", state.LastOperationStatus)
+	}
+	if state.LastOperationErrorCode != "" || state.LastOperationError != "" {
+		t.Errorf("projection error = code=%q msg=%q, want empty on a clean success", state.LastOperationErrorCode, state.LastOperationError)
 	}
 }
 
