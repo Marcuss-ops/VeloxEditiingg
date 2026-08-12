@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -12,6 +13,12 @@ import (
 type digestDeploymentReader struct {
 	record     *store.DeploymentRecord
 	successful *store.DeploymentRecord
+}
+
+type failingDeploymentReader struct{}
+
+func (failingDeploymentReader) GetLatestDeploymentForWorker(context.Context, string) (*store.DeploymentRecord, error) {
+	return nil, errors.New("sqlite unavailable")
 }
 
 func (r digestDeploymentReader) GetLatestDeploymentForWorker(context.Context, string) (*store.DeploymentRecord, error) {
@@ -47,6 +54,16 @@ func TestAdminWorkersCard_SeparatesDesiredRunningAndLastSuccessfulDigest(t *test
 	card := h.card(context.Background(), &info)
 	if card.RunningDigest != "sha256:old" || card.DesiredDigest != "sha256:new" || card.LastSuccessfulDigest != "sha256:old" {
 		t.Fatalf("digest state = running=%q desired=%q last_successful=%q", card.RunningDigest, card.DesiredDigest, card.LastSuccessfulDigest)
+	}
+}
+
+func TestAdminWorkersCard_DeploymentProjectionErrorFailsClosed(t *testing.T) {
+	info := makeCardInfo("velox-worker-13197")
+	h := NewAdminWorkersHandler(nil)
+	h.SetDeploymentReader(failingDeploymentReader{})
+
+	if _, err := h.cardWithError(context.Background(), &info); err == nil {
+		t.Fatal("deployment projection error was swallowed")
 	}
 }
 

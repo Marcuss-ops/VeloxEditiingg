@@ -25,6 +25,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"sort"
 	"strings"
@@ -122,7 +123,12 @@ func (h *AdminWorkersHandler) ListAdminWorkers() gin.HandlerFunc {
 		list := h.reg.List(c.Request.Context())
 		cards := make([]WorkerCard, 0, len(list))
 		for i := range list {
-			cards = append(cards, h.card(c.Request.Context(), &list[i]))
+			card, err := h.cardWithError(c.Request.Context(), &list[i])
+			if err != nil {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "worker deployment projection unavailable"})
+				return
+			}
+			cards = append(cards, card)
 		}
 		sort.Slice(cards, func(i, j int) bool {
 			return cards[i].WorkerID < cards[j].WorkerID
@@ -164,25 +170,43 @@ func (h *AdminWorkersHandler) GetAdminWorker() gin.HandlerFunc {
 			c.JSON(http.StatusNotFound, gin.H{"error": "worker not found"})
 			return
 		}
-		c.JSON(http.StatusOK, h.card(c.Request.Context(), info))
+		card, err := h.cardWithError(c.Request.Context(), info)
+		if err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "worker deployment projection unavailable"})
+			return
+		}
+		c.JSON(http.StatusOK, card)
 	}
 }
 
 func (h *AdminWorkersHandler) card(ctx context.Context, info *workersreg.Worker) WorkerCard {
+	card, _ := h.cardWithError(ctx, info)
+	return card
+}
+
+func (h *AdminWorkersHandler) cardWithError(ctx context.Context, info *workersreg.Worker) (WorkerCard, error) {
 	card := buildWorkerCard(info)
 	card.RunningDigest = card.ImageDigest
 	if h == nil || h.deployments == nil || info == nil {
-		return card
+		return card, nil
 	}
 	rec, err := h.deployments.GetLatestDeploymentForWorker(ctx, info.WorkerID.String())
-	if err != nil || rec == nil {
-		return card
+	if err != nil {
+		if errors.Is(err, store.ErrDeploymentNotFound) {
+			return card, nil
+		}
+		return WorkerCard{}, err
+	}
+	if rec == nil {
+		return card, nil
 	}
 	card.TargetDigest = rec.TargetDigest
 	card.DesiredDigest = rec.TargetDigest
 	card.PreviousDigest = rec.PreviousDigest
 	if successfulReader, ok := h.deployments.(SuccessfulDeploymentReader); ok {
-		if successful, successfulErr := successfulReader.GetLatestSuccessfulDeploymentForWorker(ctx, info.WorkerID.String()); successfulErr == nil && successful != nil {
+		if successful, successfulErr := successfulReader.GetLatestSuccessfulDeploymentForWorker(ctx, info.WorkerID.String()); successfulErr != nil && !errors.Is(successfulErr, store.ErrDeploymentNotFound) {
+			return WorkerCard{}, successfulErr
+		} else if successful != nil {
 			card.LastSuccessfulDigest = successful.TargetDigest
 		}
 	}
@@ -216,21 +240,23 @@ func (h *AdminWorkersHandler) card(ctx context.Context, info *workersreg.Worker)
 	// resume rows, and a smoke failure must never surface under
 	// "LAST UPDATE OPERATION" for a healthy image rollout.
 	if h.operations != nil && (rec.Status == store.DeployStatusFailed || rec.Status == store.DeployStatusRolledBack) {
-		if ops, opErr := h.operations.ListOperations(ctx, info.WorkerID.String(), "", 10); opErr == nil {
-			for i := range ops {
-				candidate := ops[i]
-				if candidate.Op != "update" && candidate.Op != "rollback" {
-					continue
-				}
-				if candidate.Status == store.OperationStatusFailed && candidate.ErrorMessage != "" {
-					operation.Error = candidate.ErrorMessage
-					break
-				}
+		ops, opErr := h.operations.ListOperations(ctx, info.WorkerID.String(), "", 10)
+		if opErr != nil {
+			return WorkerCard{}, opErr
+		}
+		for i := range ops {
+			candidate := ops[i]
+			if candidate.Op != "update" && candidate.Op != "rollback" {
+				continue
+			}
+			if candidate.Status == store.OperationStatusFailed && candidate.ErrorMessage != "" {
+				operation.Error = candidate.ErrorMessage
+				break
 			}
 		}
 	}
 	card.OperationState = operation
-	return card
+	return card, nil
 }
 
 // buildWorkerCard translates the registry read model into the

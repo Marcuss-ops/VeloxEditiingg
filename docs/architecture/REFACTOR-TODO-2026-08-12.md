@@ -63,6 +63,9 @@ reversibile, testato prima/dopo, committato su `main` e pubblicato.
 - [x] Observability worker adapter: gli errori del deployment ledger non
       degradano più a `target_digest` vuoto; solo `ErrDeploymentNotFound` è
       trattato come assenza valida.
+- [x] Admin worker read model: errori del deployment/operation ledger non
+      producono più `200` con card parziali; la proiezione risponde `503`,
+      mentre `ErrDeploymentNotFound` resta assenza valida.
 - [x] Worker API retry policy: cancellation/deadline non vengono più ritentate
       per una collisione con `net.Error`; retry negativi e timeout/intervalli
       non positivi mantengono i default sicuri.
