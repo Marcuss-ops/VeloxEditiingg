@@ -3,6 +3,7 @@
 package drive
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,13 +11,16 @@ import (
 
 // ListDriveTokens lists token files
 func (s *Service) ListDriveTokens() ([]TokenFile, error) {
+	if s == nil {
+		return nil, fmt.Errorf("drive: service not configured")
+	}
 	if s.tokensDir == "" {
-		return []TokenFile{}, nil
+		return nil, fmt.Errorf("drive: tokens directory not configured")
 	}
 
 	entries, err := os.ReadDir(s.tokensDir)
 	if err != nil {
-		return []TokenFile{}, nil
+		return nil, fmt.Errorf("drive: list tokens directory: %w", err)
 	}
 
 	var files []TokenFile

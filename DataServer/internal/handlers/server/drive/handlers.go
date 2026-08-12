@@ -11,9 +11,13 @@ import (
 
 // ListDriveTokensHandler lists all Drive token files
 func (h *DriveHandlers) ListDriveTokensHandler(c *gin.Context) {
+	if h == nil || h.svc == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "drive service unavailable"})
+		return
+	}
 	files, err := h.svc.ListDriveTokens()
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"files": []driveSvc.TokenFile{}})
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "drive token directory unavailable"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"files": files})
