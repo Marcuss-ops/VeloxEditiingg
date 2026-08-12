@@ -328,7 +328,7 @@ func TestRenderBatch_EmitsPhaseMetricsAndStructuredIdentity(t *testing.T) {
 		if strings.Contains(path, "audio-master-001") {
 			return publisher.MediaProbe{HasAudio: true, AudioTrackCount: 1, AudioCodec: "aac", AudioSampleRateHz: 48_000, AudioChannels: 2, DurationSec: 2}, nil
 		}
-		return publisher.MediaProbe{HasVideo: true, VideoTrackCount: 1, DurationSec: 2}, nil
+		return publisher.MediaProbe{HasVideo: true, VideoTrackCount: 1, HasAudio: true, AudioTrackCount: 1, AudioCodec: "aac", AudioSampleRateHz: 48_000, AudioChannels: 2, DurationSec: 2}, nil
 	}
 	logger := &batchRecordingLogger{}
 	recorder := telemetry.NewEventRecorder()
@@ -405,9 +405,9 @@ func TestRenderBatch_ValidationFailureStillRecordsIdentityWithoutPaths(t *testin
 	recorder := telemetry.NewEventRecorder()
 	exec := NewRenderBatch(&batchFakeFFmpegRunner{}, t.TempDir())
 	spec := batchTaskSpec(t, "job-invalid-observability")
-	planSHA := compiledPlanSHA(spec)
 	// Make the transport hash invalid while keeping the payload free of paths.
 	spec.Payload[contract.PayloadKeyCompiledRenderPlanSHA] = strings.Repeat("f", 64)
+	planSHA := compiledPlanSHA(spec)
 	result, err := exec.Execute(context.Background(), &batchObservabilityContext{logger: logger, recorder: recorder}, spec)
 	if err != nil {
 		t.Fatalf("Execute returned error: %v", err)
