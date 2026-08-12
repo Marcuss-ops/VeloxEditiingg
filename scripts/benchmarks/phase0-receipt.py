@@ -16,6 +16,15 @@ total is attributed to a phase; unaccounted_ms = total - sum(explained) and
 must be < 5% of total. The engine phase_ms summary map is NOT additive (its
 segment_build_ms undercounts); the segments[] timeline is authoritative.
 
+KPI DEFINITION NOTE: the accounted/unaccounted semantics below mirror the
+CANONICAL Go definition — performance.Derive(RawMetrics) in
+RemoteCodex/native/worker-agent-go/pkg/performance/derive.go — where
+accounted_ratio sums ONLY exclusive top-level phase durations (catalog
+accounted_ratio_rule: never span_parent/span_child). This script recomputes
+the same KPI from raw evidence because the Phase-0 reference run predates
+receipt production; future benchmark tooling MUST read the receipt's
+"derived" section instead of recomputing ratios.
+
 Usage:
   python3 scripts/benchmarks/phase0-receipt.py [--evidence-dir DIR] [--tag TAG]
 """
@@ -134,6 +143,11 @@ def main() -> None:
     finalize_ms = copy_final_ms + workdir_ms
     temp_bytes = int(sidecar.get("temp_bytes", 0))
 
+    # accounted budget = sum of the EXCLUSIVE top-level phases only
+    # (catalog accounted_ratio_rule; mirrors Derive(RawMetrics)). The
+    # per-segment asset_download is inside segments_ms and must not be
+    # added again; render is a parent span of the segments and is also
+    # excluded to avoid double counting.
     explained = (segments_ms + concat_ms + audio_download_ms + audio_mux_ms
                  + finalize_ms)
     unaccounted_ms = total_ms - explained

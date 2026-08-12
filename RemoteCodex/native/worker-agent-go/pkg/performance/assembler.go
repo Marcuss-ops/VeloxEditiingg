@@ -43,6 +43,17 @@ type AssemblyContext struct {
 	// more authoritative clock than pipeline.RunMetrics.TotalMs (e.g.
 	// the executor's total). Zero falls back to run.TotalMs.
 	WallMs int64
+
+	// CPUWallMS is the RAW accumulated-CPU fact observed by the attempt
+	// telemetry session (cgroup v2, engine + children; Fact Owner:
+	// attempt_telemetry). It feeds CPUWallRatio through the single
+	// Deriver — the assembler never infers CPU from a wall clock. Zero
+	// means the fact was not collected: the ratio stays zero.
+	CPUWallMS int64
+
+	// UsefulPipelineMS is the caller-known useful pipeline work time
+	// (RAW input to UsefulWorkRatio). Zero means not measured.
+	UsefulPipelineMS int64
 }
 
 // Assemble aggregates the given pipeline run into a canonical
@@ -52,23 +63,55 @@ type AssemblyContext struct {
 // whose counters are not collected yet (external process exec breakdown,
 // real read/write I/O counters, memory, scheduling) stay zero so the
 // receipt remains structurally valid — they land with their own
-// collectors in later steps. Derived KPIs are computed by a later
-// stage, not here.
+// collectors in later steps.
+//
+// The Derived section is populated by the SINGLE DerivedMetricsCalculator
+// (Derive): the assembler never computes a ratio itself. It only gathers
+// the raw facts (wall clock, exclusive phases, IO totals, process/workload
+// counts, caller-supplied CPU/useful-work) and hands them to Derive.
 func (a *Assembler) Assemble(run pipeline.RunMetrics, ctx AssemblyContext) *PerformanceReceiptV1 {
 	receipt := NewPerformanceReceiptV1()
 	receipt.Identity = ctx.Identity
 	// The caller supplies the authoritative workload (built from the
 	// CompiledRenderPlanV2); the assembler never reconstructs it.
-	receipt.Workload = ctx.Workload
-	receipt.Timing = assembleTiming(run, ctx.WallMs)
+	receipt.Workload = ctx.Workload // The wall clock is resolved once and shared by Timing and the CPU
+	// section so the two can never disagree about wall_ms.
+	wall := ctx.WallMs
+	if wall <= 0 {
+		wall = run.TotalMs
+	}
+	receipt.Timing = assembleTiming(run, wall)
 	receipt.Process = assembleProcess(run.RenderMetrics)
+	receipt.CPU = assembleCPU(run.RenderMetrics, wall)
 	receipt.IO = DeriveIO(run.RenderMetrics)
 	receipt.Media = assembleMedia(run.RenderMetrics)
-	// MemoryMetrics and SchedulingMetrics stay zero until the
-	// corresponding collectors are added.
+	receipt.Memory = assembleMemory(run.RenderMetrics)
+	// SchedulingMetrics stays zero until a deep-profile collector lands.
 	receipt.Phases = assemblePhases(run.RenderMetrics)
 	receipt.Segments = assembleSegments(run.RenderMetrics)
+	// Derived KPIs: one call, one definition (the single
+	// DerivedMetricsCalculator). The assembler only gathers the RAW facts
+	// and hands them to Derive — it never computes a ratio itself.
+	receipt.Derived = Derive(rawMetricsFrom(ctx, receipt))
 	return receipt
+}
+
+// rawMetricsFrom gathers the RAW observed facts that Assemble hands to the
+// single Deriver. It is the ONLY place that maps a receipt + caller context
+// onto RawMetrics, and it is shared with the consistency test so the wiring
+// pin can never drift from the production path.
+func rawMetricsFrom(ctx AssemblyContext, receipt *PerformanceReceiptV1) RawMetrics {
+	return RawMetrics{
+		WallMs:               receipt.Timing.WallMs,
+		ExclusivePhases:      receipt.Phases,
+		CPUWallMS:            ctx.CPUWallMS,
+		TotalBytesRead:       receipt.IO.TotalBytesRead,
+		TotalBytesWritten:    receipt.IO.TotalBytesWritten,
+		OutputBytes:          receipt.IO.FinalBytesWritten,
+		ExternalProcessCount: receipt.Process.ExternalProcessCount,
+		ClipCount:            receipt.Workload.ClipCount,
+		UsefulPipelineMS:     ctx.UsefulPipelineMS,
+	}
 }
 
 // WorkloadFromCompiledRenderPlan builds the authoritative workload profile
@@ -141,6 +184,44 @@ func assembleProcess(rm pipeline.RenderMetrics) ProcessMetrics {
 		ShellExecCount:       rm.ShellExecCount,
 		CurlExecCount:        rm.CurlExecCount,
 		ChildWaitMs:          rm.ChildWaitMs,
+	}
+}
+
+// assembleCPU maps the engine tree's CPU counters into the receipt.
+// WallMs mirrors the effective wall clock (the same value Timing.WallMs
+// resolves to) so the CPUWallRatio is self-contained.
+func assembleCPU(rm pipeline.RenderMetrics, wallMs int64) CPUMetrics {
+	total := rm.CPUUserMs + rm.CPUSystemMs
+	ratio := 0.0
+	if wallMs > 0 {
+		ratio = float64(total) / float64(wallMs)
+	}
+	return CPUMetrics{
+		WallMs:       wallMs,
+		CPUUserMs:    rm.CPUUserMs,
+		CPUSystemMs:  rm.CPUSystemMs,
+		CPUTotalMs:   total,
+		CPUWallRatio: ratio,
+	}
+}
+
+// DeriveCPU maps the engine tree's CPU counters into CPUMetrics. It is
+// exported so the executor can emit the SAME projection as cpu.* attempt
+// metrics without duplicating the derivation — the receipt and the
+// worker telemetry must never disagree about what cpu.user_ms means.
+// wallMs is the same wall clock the receipt resolves for its Timing
+// section.
+func DeriveCPU(rm pipeline.RenderMetrics, wallMs int64) CPUMetrics {
+	return assembleCPU(rm, wallMs)
+}
+
+// assembleMemory maps the engine tree's RSS counters (sampled from
+// /proc while the engine ran) into the receipt: the peak resident set
+// over the run and the RSS at the last sample.
+func assembleMemory(rm pipeline.RenderMetrics) MemoryMetrics {
+	return MemoryMetrics{
+		PeakRSSBytes:    rm.PeakRSSBytes,
+		CurrentRSSBytes: rm.CurrentRSSBytes,
 	}
 }
 
@@ -254,6 +335,14 @@ func assembleMedia(rm pipeline.RenderMetrics) MediaMetrics {
 // The sidecar phases[] stream (DetailedPhases) is the preferred source;
 // legacy sidecars fall back to the flat PhaseMS map, sorted for
 // deterministic output.
+//
+// Follow-up anchor: the sidecar stream is still a mix of exclusive
+// top-level phases and span children, and the catalog accounted_ratio_rule
+// ("sum only timing_mode=exclusive; never span_parent or span_child")
+// requires a timing-mode filter BEFORE this list feeds Derive. Until that
+// filter lands, accounted_ratio computed from this list is a directional
+// value, not a verified exclusive sum — the exclusive-filter action lands
+// exactly here.
 func assemblePhases(rm pipeline.RenderMetrics) []PhaseTiming {
 	if len(rm.DetailedPhases) > 0 {
 		phases := make([]PhaseTiming, 0, len(rm.DetailedPhases))

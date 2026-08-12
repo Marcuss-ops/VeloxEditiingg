@@ -47,6 +47,7 @@ type PerformanceReceiptV1 struct {
 
 	Timing     TimingMetrics     `json:"timing"`
 	Process    ProcessMetrics    `json:"process"`
+	CPU        CPUMetrics        `json:"cpu"`
 	IO         IOMetrics         `json:"io"`
 	Media      MediaMetrics      `json:"media"`
 	Memory     MemoryMetrics     `json:"memory"`
@@ -184,6 +185,24 @@ type ProcessMetrics struct {
 	ChildWaitMs int64 `json:"child_wait_ms"`
 }
 
+// CPUMetrics separates the attempt's CPU consumption from its wall
+// clock. WallMs mirrors Timing.WallMs (the master accounting clock) so
+// the section is self-contained; CPUUserMs/CPUSystemMs are measured
+// from the utime/stime clock ticks of every process in the engine tree
+// (sampled from /proc while the engine ran, engine included), converted
+// to milliseconds. CPUTotalMs = user + system.
+//
+// CPUWallRatio = cpu_total_ms / wall_ms: >1 means the workload is
+// CPU-parallel across cores, <<1 means the attempt is not CPU-bound.
+// A zero value means "not derived", never a measured zero.
+type CPUMetrics struct {
+	WallMs       int64   `json:"wall_ms"`
+	CPUUserMs    int64   `json:"cpu_user_ms"`
+	CPUSystemMs  int64   `json:"cpu_system_ms"`
+	CPUTotalMs   int64   `json:"cpu_total_ms"`
+	CPUWallRatio float64 `json:"cpu_wall_ratio"`
+}
+
 // IOMetrics counts real bytes moved by the attempt. TotalBytesRead and
 // TotalBytesWritten are measured from /proc/<pid>/io over the whole
 // engine process tree (logical rchar/wchar bytes) and are the
@@ -246,8 +265,12 @@ type MediaMetrics struct {
 	DropFrames       int64   `json:"drop_frames"`
 }
 
-// MemoryMetrics summarizes process RSS at attempt end. PeakRSSBytes is
-// the high-water mark; CurrentRSSBytes is the value at receipt time.
+// MemoryMetrics summarizes the engine process tree's RSS, sampled from
+// /proc/<pid>/stat while the engine ran (engine + descendants).
+// PeakRSSBytes is the high-water mark of the tree's resident set;
+// CurrentRSSBytes is the tree RSS at the last sample before the monitor
+// stopped (the engine may have exited by then, so it can sit below the
+// peak). Zero when no native render occurred.
 type MemoryMetrics struct {
 	PeakRSSBytes    int64 `json:"peak_rss_bytes"`
 	CurrentRSSBytes int64 `json:"current_rss_bytes"`
@@ -281,6 +304,12 @@ type SchedulingMetrics struct {
 // PhaseTiming is one canonical exclusive-measurement phase of the
 // attempt. The assembler fills it from the sidecar phase timing; the sum
 // of DurationMS is what feeds the accounted_ratio KPI.
+//
+// Caveat (follow-up anchor): the sidecar stream still mixes exclusive
+// top-level phases with span children; the timing-mode filter mandated by
+// the catalog accounted_ratio_rule lands with the exclusive-filter
+// follow-up (see assemblePhases). Until then the list is passed to Derive
+// as-is and accounted_ratio is a directional value.
 type PhaseTiming struct {
 	Name        string `json:"name"`
 	DurationMS  int64  `json:"duration_ms"`
@@ -322,31 +351,40 @@ type SegmentTiming struct {
 }
 
 // DerivedMetrics carries the computed KPIs that make the receipt a
-// benchmark instead of a log dump. The PerformanceReceiptAssembler
-// computes these after the raw sections are populated; a zero value
-// means "not yet derived", never a measured zero.
+// benchmark instead of a log dump. Every field is computed by the SINGLE
+// DerivedMetricsCalculator — Derive(RawMetrics) in derive.go — from raw
+// observed facts; nobody hand-assembles this section and no other package
+// recomputes these ratios (RAW and DERIVED are strictly separated). A zero
+// value means "not derived / fact not measured", never a measured zero.
+//
+// All ratios are safe against missing denominators: a zero denominator
+// yields 0, never +Inf or NaN.
 type DerivedMetrics struct {
 	// UnaccountedMS is wall_ms minus the sum of the exclusive measured
-	// phases. Target: accounted_ratio > 0.95 before hunting for
-	// single-digit-second wins.
+	// phases (catalog accounted_ratio_rule: only timing_mode=exclusive
+	// durations are summed, never span children). Target:
+	// accounted_ratio > 0.95 before hunting for single-digit-second wins.
 	UnaccountedMS  int64   `json:"unaccounted_ms"`
 	AccountedRatio float64 `json:"accounted_ratio"`
 
 	// ReadAmplification / WriteAmplification = total bytes read/written
-	// divided by the final output bytes. copy-only Phase 1 targets
-	// write_amplification close to 1.x.
+	// (process-tree /proc/<pid>/io) divided by the final output bytes.
+	// copy-only Phase 1 targets write_amplification close to 1.x.
 	ReadAmplification  float64 `json:"read_amplification"`
 	WriteAmplification float64 `json:"write_amplification"`
 
-	// ProcessesPerClip = external process count / clip count. Phase 1
-	// target for copy-only: 0.
+	// ProcessesPerClip = external process count (process_runner) / clip
+	// count (render_plan). Phase 1 target for copy-only: 0.
 	ProcessesPerClip float64 `json:"processes_per_clip"`
 
 	// UsefulWorkRatio = useful pipeline time / wall clock time. It is a
-	// directional observation, not a mathematically exact split.
+	// directional observation, not a mathematically exact split; the
+	// useful-work raw input is caller-known (AssemblyContext).
 	UsefulWorkRatio float64 `json:"useful_work_ratio"`
 
 	// CPUWallRatio = cpu_total_ms / wall_ms. >1 means the workload is
 	// CPU-parallel across cores; <<1 means the attempt is not CPU-bound.
+	// cpu_total_ms is the raw attempt-telemetry CPU fact — never inferred
+	// from a wall clock.
 	CPUWallRatio float64 `json:"cpu_wall_ratio"`
 }
