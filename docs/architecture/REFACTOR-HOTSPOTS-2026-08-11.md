@@ -50,9 +50,9 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 - Worker retry loops: il bootstrap del protected-assets poller e il retry loop
   del client API usano timer stoppabili invece di creare `time.After` a ogni
   iterazione; i timeout one-shot di processo/stream restano distinti.
-- Fleetctl operation polling: il timer tra i poll del ledger è cancellabile
-  tramite context, quindi un’operazione interrotta non lascia timer pendenti
-  fino alla scadenza dell’intervallo.
+- Fleetctl polling: i timer tra i poll del ledger operation, job watch, job
+  submit e wait-ready sono cancellabili tramite context, quindi un comando
+  interrotto non lascia timer pendenti fino alla scadenza dell’intervallo.
 - Social delivery: `429` conserva `Retry-After` negli errori tipizzati fino al
   `ProviderError`; il runner applica quella scadenza quando è valida e usa il
   backoff bounded locale solo in assenza di un header valido.
@@ -183,7 +183,7 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
   destinazioni; i job normali senza delivery plan continuano a fallire chiusi.
 - Gate architetturali e gate full-module verdi dopo i fix (`833cf79e`,
   `e4c7154b`, `f64dbae3`, `e1014598`); il polling fleetctl è coperto dal
-  test/vet del package `cmd/fleetctl` (`6b2ae939`).
+  test/vet del package `cmd/fleetctl` (`6b2ae939`, `5b1e2fc3`).
 
 ## Hotspot da risolvere in ordine
 
