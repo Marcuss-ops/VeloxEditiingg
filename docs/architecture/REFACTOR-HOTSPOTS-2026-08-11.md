@@ -315,6 +315,9 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 - [x] Rendere fail-closed lo store livestream: store nil, schema init, upsert,
   list/get/delete e righe nil non simulano più successo; il handler distingue
   `sql.ErrNoRows` da errori DB.
+- [x] Rendere fail-closed `lookupPipelineRun`: il fallback request-id/legacy
+  scatta solo su `ErrPipelineRunNoRow`; errori DB o di ownership non vengono
+  più trasformati in una lookup alternativa o in un falso 404.
 
 ### P1 — Worker layering e stato globale
 

@@ -28,7 +28,8 @@ func (h *Handlers) lookupPipelineRun(ctx context.Context, idParam, externalClien
 	// 1. pipeline_runs by PK. M2M callers use an ownership-scoped
 	// repository query; admin callers retain the legacy lookup.
 	if clientID != "" {
-		if pr, err := h.store.GetPipelineRunForClient(ctx, idParam, clientID); err == nil && pr != nil {
+		pr, err := h.store.GetPipelineRunForClient(ctx, idParam, clientID)
+		if err == nil && pr != nil {
 			forwarding, fErr := h.store.GetCreatorForwardingByIDForClient(ctx, pr.ForwardingID, clientID)
 			if fErr != nil {
 				// A forwarding-join miss (e.g. an orphaned run row whose
@@ -41,12 +42,22 @@ func (h *Handlers) lookupPipelineRun(ctx context.Context, idParam, externalClien
 			}
 			return pr, forwarding, nil
 		}
-	} else if pr, err := h.store.GetPipelineRun(ctx, idParam); err == nil && pr != nil {
-		return pr, nil, nil
+		if err != nil && !errors.Is(err, store.ErrPipelineRunNoRow) {
+			return nil, nil, err
+		}
+	} else {
+		pr, err := h.store.GetPipelineRun(ctx, idParam)
+		if err == nil && pr != nil {
+			return pr, nil, nil
+		}
+		if err != nil && !errors.Is(err, store.ErrPipelineRunNoRow) {
+			return nil, nil, err
+		}
 	}
 	// 2. pipeline_runs by request_id
 	if clientID != "" {
-		if pr, err := h.store.GetPipelineRunByRequestIDForClient(ctx, idParam, clientID); err == nil && pr != nil {
+		pr, err := h.store.GetPipelineRunByRequestIDForClient(ctx, idParam, clientID)
+		if err == nil && pr != nil {
 			forwarding, fErr := h.store.GetCreatorForwardingByIDForClient(ctx, pr.ForwardingID, clientID)
 			if fErr != nil {
 				if errors.Is(fErr, store.ErrCreatorForwardingNoRow) {
@@ -56,8 +67,17 @@ func (h *Handlers) lookupPipelineRun(ctx context.Context, idParam, externalClien
 			}
 			return pr, forwarding, nil
 		}
-	} else if pr, err := h.store.GetPipelineRunByRequestID(ctx, idParam); err == nil && pr != nil {
-		return pr, nil, nil
+		if err != nil && !errors.Is(err, store.ErrPipelineRunNoRow) {
+			return nil, nil, err
+		}
+	} else {
+		pr, err := h.store.GetPipelineRunByRequestID(ctx, idParam)
+		if err == nil && pr != nil {
+			return pr, nil, nil
+		}
+		if err != nil && !errors.Is(err, store.ErrPipelineRunNoRow) {
+			return nil, nil, err
+		}
 	}
 	// 3-4. Legacy: creator_forwardings. The M2M path uses only the
 	// ownership-scoped repository methods; admin callers retain the

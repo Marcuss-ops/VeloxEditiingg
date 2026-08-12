@@ -166,6 +166,9 @@ reversibile, testato prima/dopo, committato su `main` e pubblicato.
 - [x] Livestream store/API: rimosso il successo implicito con store nil o
       schema non inizializzabile; lookup DB falliti non vengono più esposti
       come 404.
+- [x] Pipeline lookup: i fallback tra PK, request id e forwarding legacy sono
+      ammessi solo su miss tipizzati; gli errori infrastrutturali vengono
+      propagati.
 - [ ] Continuare l’audit degli altri writer/proiezioni prima di chiudere la
       fase di ownership e CAS.
 
