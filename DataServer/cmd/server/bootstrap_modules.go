@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -163,7 +164,11 @@ func (a *workerRegistryAdapter) ListWorkers() ([]map[string]any, error) {
 	for i, info := range infos {
 		targetDigest := ""
 		if a.store != nil {
-			if deployment, err := a.store.GetLatestDeploymentForWorker(context.Background(), info.WorkerID.String()); err == nil && deployment != nil {
+			deployment, err := a.store.GetLatestDeploymentForWorker(context.Background(), info.WorkerID.String())
+			if err != nil && !errors.Is(err, store.ErrDeploymentNotFound) {
+				return nil, fmt.Errorf("load deployment for worker %s: %w", info.WorkerID, err)
+			}
+			if deployment != nil {
 				targetDigest = deployment.TargetDigest
 			}
 		}
@@ -201,7 +206,11 @@ func (a *workerRegistryAdapter) GetWorker(workerID string) (map[string]any, erro
 	}
 	targetDigest := ""
 	if a.store != nil {
-		if deployment, err := a.store.GetLatestDeploymentForWorker(context.Background(), info.WorkerID.String()); err == nil && deployment != nil {
+		deployment, err := a.store.GetLatestDeploymentForWorker(context.Background(), info.WorkerID.String())
+		if err != nil && !errors.Is(err, store.ErrDeploymentNotFound) {
+			return nil, fmt.Errorf("load deployment for worker %s: %w", info.WorkerID, err)
+		}
+		if deployment != nil {
 			targetDigest = deployment.TargetDigest
 		}
 	}

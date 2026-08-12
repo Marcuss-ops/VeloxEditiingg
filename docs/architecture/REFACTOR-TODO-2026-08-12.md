@@ -60,6 +60,9 @@ reversibile, testato prima/dopo, committato su `main` e pubblicato.
 - [x] Fleet bootstrap: un errore nella lettura dell'inventory persistente non
       viene più convertito in una registry SSH vuota; l'assenza di righe resta
       invece una configurazione valida.
+- [x] Observability worker adapter: gli errori del deployment ledger non
+      degradano più a `target_digest` vuoto; solo `ErrDeploymentNotFound` è
+      trattato come assenza valida.
 - [ ] Rendere uniforme il mapping HTTP: `404` solo per risorsa assente,
       `409` per conflitto, `503` per dipendenza non disponibile, `500` per bug
       interno non classificato.
