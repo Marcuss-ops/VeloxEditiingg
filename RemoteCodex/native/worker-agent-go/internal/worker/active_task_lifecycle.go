@@ -77,6 +77,7 @@ func (w *Worker) recordTaskStart(pte *PendingTaskExecution) {
 // in branch 2, which is the canonical "failed" surface for upload
 // rejection.
 func (w *Worker) recordTaskOutcome(pte *PendingTaskExecution, execErr error, duration time.Duration) {
+	metrics := w.workerMetrics()
 	if execErr != nil {
 		if errors.Is(execErr, context.Canceled) {
 			logger.LogJobCancelled(w.config.WorkerID, pte.JobID, duration)
@@ -84,16 +85,27 @@ func (w *Worker) recordTaskOutcome(pte *PendingTaskExecution, execErr error, dur
 			logger.LogJobFailedWithType(w.config.WorkerID, pte.JobID, pte.ExecutorID, execErr, duration)
 			w.setStatus(StatusError)
 			w.tasksFailed.Add(1)
-			telemetry.RecordJobFailure(duration.Milliseconds())
+			metrics.RecordJobFailure(duration.Milliseconds())
 			telemetry.GetPrometheusMetrics().RecordWorkerError()
 		}
 		telemetry.GetPrometheusMetrics().RecordJobRuntime(pte.ExecutorID, float64(duration.Milliseconds()))
 	} else {
 		logger.LogJobSuccess(w.config.WorkerID, pte.JobID, pte.ExecutorID, duration)
 		w.tasksCompleted.Add(1)
-		telemetry.RecordJobSuccess(duration.Milliseconds())
+		metrics.RecordJobSuccess(duration.Milliseconds())
 		telemetry.GetPrometheusMetrics().RecordJobRuntime(pte.ExecutorID, float64(duration.Milliseconds()))
 	}
+}
+
+// workerMetrics returns the per-worker collector used by production
+// lifecycle paths. The compatibility fallback keeps hand-built legacy test
+// Workers safe while callers migrate to New, but no production constructor
+// leaves this field nil.
+func (w *Worker) workerMetrics() *telemetry.WorkerMetrics {
+	if w != nil && w.metrics != nil {
+		return w.metrics
+	}
+	return telemetry.GetMetrics()
 }
 
 // recordTaskFinish restores idle-side telemetry AFTER the outcome

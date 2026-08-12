@@ -106,6 +106,9 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
   `WaitDuration` sono esposti senza label per distinguere lock da queueing.
 - Bootstrap worker: la lista ffmpeg/ffprobe è una dipendenza esplicita con
   copia difensiva, non più una slice globale esportata e mutabile.
+- Worker job lifecycle: i contatori di successo/fallimento usano un
+  collector per istanza creato dal costruttore; il global metrics facade resta
+  solo compatibilità per fixture legacy costruite manualmente nei test.
 - Artifact GC, credential revoke e command delivery verificano ownership e
   righe aggiornate prima di dichiarare completata l'operazione.
 - Sessioni worker: `ValidateSession` e `UpdateSessionLastSeen` richiedono una
@@ -230,8 +233,9 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
   stretta `pkg/observability`, senza duplicare telemetria o tracing.
 - [x] Rendere la lista binari ffmpeg una dipendenza di bootstrap immutabile o
   un’opzione esplicita, non una slice globale esportata e mutabile.
-- [ ] Limitare lo stato globale a registri read-only o inizializzazione; ogni
-  contatore/observer che deve essere isolabile nei test riceve un’istanza.
+- [x] Limitare lo stato globale a registri read-only o inizializzazione; il
+  lifecycle dei job riceve un collector metrics per istanza e non condivide
+  più i contatori tramite il singleton globale.
 - [ ] Verificare che un errore di bootstrap non possa lasciare `READY=true`.
 
 ### P2 — Legacy e documentazione

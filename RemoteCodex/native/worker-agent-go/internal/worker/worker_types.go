@@ -160,6 +160,11 @@ type Worker struct {
 	transport        controltransport.ControlTransport        // Current session's transport (recreated per connect)
 	transportFactory func() controltransport.ControlTransport // Factory for new transport instances
 	logger           *logger.Logger
+	// metrics is worker-instance state. Production workers never share job
+	// counters through telemetry's process-global compatibility facade.
+	// Nil is tolerated only for legacy test fixtures that construct Worker
+	// literals instead of going through New.
+	metrics *telemetry.WorkerMetrics
 
 	// assetManager is the canonical asset download orchestrator (dedup,
 	// transfer states, bounded pool, shared progress). Constructed lazily on

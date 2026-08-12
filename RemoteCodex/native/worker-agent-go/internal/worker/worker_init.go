@@ -332,6 +332,7 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		transportFactory: transportFactory,
 		transport:        initialTransport,
 		logger:           log,
+		metrics:          telemetry.NewWorkerMetrics(),
 		status:           StatusIdle,
 		stopChan:         make(chan struct{}),
 		heartbeatWake:    make(chan struct{}, 1),
