@@ -2,9 +2,8 @@ package assets
 
 import (
 	"fmt"
-	"mime"
+	"io"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -17,7 +16,9 @@ import (
 	workersreg "velox-server/internal/workers"
 )
 
-// Handler serves master-staged media assets to remote workers.
+// Handler serves registered assets to remote workers. A local final blob is an
+// optional fast path; otherwise the saved external source (for example Drive)
+// is resolved and streamed at execution time.
 //
 // Uses the canonical AssetService (DB as source of truth) + BlobStore
 // for all asset resolution and serving.
@@ -43,7 +44,7 @@ func NewHandler(cfg *config.Config, tokenMgr *workersreg.TokenManager, assetSvc 
 
 // ServeAsset serves canonical assets addressed by asset ID.
 //
-// assetSvc.Get(ctx, assetID) → blobStore.ReadFinal(storageKey)
+// assetSvc.Get(ctx, assetID) → local final blob or asset_sources resolver
 func (h *Handler) ServeAsset() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if !h.authorizeWorker(c) {
@@ -65,7 +66,7 @@ func (h *Handler) ServeAsset() gin.HandlerFunc {
 		if err != nil {
 			asset = nil
 		}
-		if asset != nil && asset.StorageKey != "" {
+		if asset != nil && h.blobStore != nil && asset.StorageKey != "" {
 			file, openErr := h.blobStore.ReadFinal(asset.StorageKey)
 			if openErr == nil {
 				defer file.Close()
@@ -85,40 +86,26 @@ func (h *Handler) ServeAsset() gin.HandlerFunc {
 			}
 		}
 
-		if h.driveSvc == nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "asset not found"})
+		source, resolveErr := h.assetSvc.ResolveExternalSource(c.Request.Context(), assetID)
+		if resolveErr != nil || source == nil || source.Reader == nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "asset source unavailable"})
 			return
 		}
-		tmp, tempErr := os.CreateTemp("", "velox-drive-asset-*")
-		if tempErr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "asset staging unavailable"})
-			return
+		defer source.Reader.Close()
+		contentType := "application/octet-stream"
+		if source.MIMEType != "" {
+			contentType = source.MIMEType
+		} else if asset != nil && asset.MimeType != "" {
+			contentType = asset.MimeType
 		}
-		tmpPath := tmp.Name()
-		_ = tmp.Close()
-		defer os.Remove(tmpPath)
-		if downloadErr := h.driveSvc.DownloadFile(c.Request.Context(), assetID, tmpPath); downloadErr != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "drive asset not found"})
-			return
-		}
-		file, openErr := os.Open(tmpPath)
-		if openErr != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "drive asset unavailable"})
-			return
-		}
-		defer file.Close()
-		info, statErr := file.Stat()
-		if statErr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "drive asset stat error"})
-			return
-		}
-		contentType := mime.TypeByExtension(filepath.Ext(assetID))
 		if contentType == "" {
 			contentType = "application/octet-stream"
 		}
 		c.Header("Content-Type", contentType)
-		c.Header("Content-Length", fmt.Sprintf("%d", info.Size()))
-		http.ServeContent(c.Writer, c.Request, assetID, info.ModTime(), file)
+		if source.ExpectedSize > 0 {
+			c.Header("Content-Length", fmt.Sprintf("%d", source.ExpectedSize))
+		}
+		_, _ = io.Copy(c.Writer, source.Reader)
 	}
 }
 

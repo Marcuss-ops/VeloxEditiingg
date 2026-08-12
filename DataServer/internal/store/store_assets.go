@@ -427,6 +427,39 @@ func (r *SQLiteAssetRepository) InsertSource(ctx context.Context, s AssetSourceR
 	return nil
 }
 
+// ListSources returns the newest registered source first. Asset IDs are
+// content-addressed, so callers must use SourceReference for external
+// acquisition rather than treating the asset ID as a Drive file ID.
+func (r *SQLiteAssetRepository) ListSources(ctx context.Context, assetID string) ([]AssetSourceRecord, error) {
+	if r.store == nil || r.store.db == nil {
+		return nil, fmt.Errorf("asset repository: store not initialized")
+	}
+	rows, err := r.store.db.QueryContext(ctx, `
+		SELECT source_id, asset_id, source_type, source_reference,
+		       COALESCE(source_account_id,''), COALESCE(metadata_json,''), created_at
+		  FROM asset_sources
+		 WHERE asset_id = ?
+		 ORDER BY created_at DESC, source_id DESC`, assetID)
+	if err != nil {
+		return nil, fmt.Errorf("list asset sources: %w", err)
+	}
+	defer rows.Close()
+	var sources []AssetSourceRecord
+	for rows.Next() {
+		var source AssetSourceRecord
+		if err := rows.Scan(&source.SourceID, &source.AssetID, &source.SourceType,
+			&source.SourceReference, &source.SourceAccountID, &source.MetadataJSON,
+			&source.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan asset source: %w", err)
+		}
+		sources = append(sources, source)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate asset sources: %w", err)
+	}
+	return sources, nil
+}
+
 func (r *SQLiteAssetRepository) LinkToJob(ctx context.Context, jobID, assetID, role string, ordinal int, required bool) error {
 	if r.store == nil || r.store.db == nil {
 		return fmt.Errorf("asset repository: store not initialized")

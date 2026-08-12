@@ -314,7 +314,7 @@ func (s *AssetService) upsertMediaMetadataRecord(ctx context.Context, assetID st
 // Job-time consumers MUST use this accessor (or GetMediaMetadata) instead of
 // spawning their own ffprobe.
 func (s *AssetService) EnsureMediaMetadata(ctx context.Context, assetID string) (*MediaMetadata, error) {
-	if s == nil || s.repo == nil || s.mediaMetadata == nil || s.blobStore == nil {
+	if s == nil || s.repo == nil || s.mediaMetadata == nil {
 		return nil, fmt.Errorf("asset service unavailable")
 	}
 	assetID = strings.TrimSpace(assetID)
@@ -337,6 +337,9 @@ func (s *AssetService) EnsureMediaMetadata(ctx context.Context, assetID string) 
 	}
 	if rec != nil && rec.Verified() {
 		return rec.ToDomain(), nil
+	}
+	if s.blobStore == nil {
+		return nil, fmt.Errorf("asset service unavailable: final blob store is not configured")
 	}
 
 	// No verified row: probe ONCE via the canonical component and persist.

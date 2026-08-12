@@ -129,6 +129,21 @@ func (r *ResolverRegistry) ResolveByInference(ctx context.Context, reference str
 	return resolver.Open(ctx, trimmed)
 }
 
+// SupportsReference reports whether the registry has a resolver for the
+// reference format without opening or downloading it. Job preflight uses this
+// to accept external sources while keeping acquisition at execution time.
+func (r *ResolverRegistry) SupportsReference(reference string) bool {
+	if r == nil {
+		return false
+	}
+	trimmed := strings.TrimSpace(reference)
+	if trimmed == "" {
+		return false
+	}
+	_, ok := r.resolvers[inferScheme(trimmed)]
+	return ok
+}
+
 // Schemes returns the list of registered schemes.
 func (r *ResolverRegistry) Schemes() []string {
 	if r == nil {

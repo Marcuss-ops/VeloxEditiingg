@@ -13,7 +13,11 @@ package assets
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
+	"strings"
 
 	"velox-server/internal/inputsecurity"
 	"velox-server/internal/platform/clock"
@@ -76,6 +80,14 @@ type AssetService struct {
 	security             *inputsecurity.Fetcher
 	mediaMetadata        *MediaMetadataResolver
 	mediaMetadataMetrics *MediaMetadataMetrics
+}
+
+// assetSourceReader is intentionally optional so lightweight test and
+// migration repositories do not need to implement source lookup. The
+// production SQLite repository implements it and makes asset_sources the
+// authoritative fallback when a local final blob is not present.
+type assetSourceReader interface {
+	ListSources(ctx context.Context, assetID string) ([]AssetSourceRecord, error)
 }
 
 // NewAssetService creates a new generic asset service.
@@ -161,6 +173,109 @@ func (s *AssetService) Get(ctx context.Context, assetID string) (*Asset, error) 
 		return nil, nil
 	}
 	return s.recordToAsset(rec), nil
+}
+
+// ResolveExternalSource opens the newest registered source for an asset that
+// is not available as a local final blob. The returned reader owns any
+// temporary download and MUST be closed by the caller. Resolution happens at
+// execution time; preflight only checks that a resolver exists for the
+// registered reference.
+func (s *AssetService) ResolveExternalSource(ctx context.Context, assetID string) (*Source, error) {
+	if s == nil || s.repo == nil || s.registry == nil {
+		return nil, fmt.Errorf("asset external source resolution unavailable")
+	}
+	assetID = strings.TrimSpace(assetID)
+	asset, err := s.Get(ctx, assetID)
+	if err != nil {
+		return nil, err
+	}
+	if asset == nil {
+		return nil, fmt.Errorf("asset %s not found", assetID)
+	}
+	if asset.Status != AssetStatusReady {
+		return nil, fmt.Errorf("asset %s is not READY", assetID)
+	}
+	reader, ok := s.repo.(assetSourceReader)
+	if !ok {
+		return nil, fmt.Errorf("asset source registry unavailable")
+	}
+	sources, err := reader.ListSources(ctx, asset.AssetID)
+	if err != nil {
+		return nil, err
+	}
+	var lastErr error
+	for _, source := range sources {
+		reference := strings.TrimSpace(source.SourceReference)
+		if reference == "" || !s.registry.SupportsReference(reference) {
+			continue
+		}
+		resolved, resolveErr := s.registry.ResolveByInference(ctx, reference)
+		if resolveErr == nil && resolved != nil && resolved.Reader != nil {
+			if verifyErr := verifyExternalSource(resolved, asset); verifyErr != nil {
+				_ = resolved.Reader.Close()
+				lastErr = verifyErr
+				continue
+			}
+			return resolved, nil
+		}
+		lastErr = resolveErr
+	}
+	if lastErr != nil {
+		return nil, fmt.Errorf("asset %s external source unavailable: %w", assetID, lastErr)
+	}
+	return nil, fmt.Errorf("asset %s has no resolvable external source", assetID)
+}
+
+// verifyExternalSource validates the downloaded bytes against the canonical
+// registry facts before they are streamed to a worker. Resolver downloads are
+// staged in seekable temporary files, so the verification pass can rewind the
+// reader without retaining the asset in memory.
+func verifyExternalSource(source *Source, asset *Asset) error {
+	if source == nil || source.Reader == nil || asset == nil {
+		return fmt.Errorf("external source verification unavailable")
+	}
+	seeker, ok := source.Reader.(io.Seeker)
+	if !ok {
+		return fmt.Errorf("external source is not replayable")
+	}
+	hash := sha256.New()
+	actualSize, err := io.Copy(hash, source.Reader)
+	if err != nil {
+		return fmt.Errorf("read external source: %w", err)
+	}
+	if asset.SizeBytes <= 0 || actualSize != asset.SizeBytes {
+		return fmt.Errorf("external source size mismatch: got %d want %d", actualSize, asset.SizeBytes)
+	}
+	actualSHA := hex.EncodeToString(hash.Sum(nil))
+	if !strings.EqualFold(actualSHA, strings.TrimSpace(asset.SHA256)) {
+		return fmt.Errorf("external source sha256 mismatch")
+	}
+	if _, err := seeker.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("rewind external source: %w", err)
+	}
+	return nil
+}
+
+// HasResolvableExternalSource checks source metadata without opening a
+// network connection or downloading bytes.
+func (s *AssetService) HasResolvableExternalSource(ctx context.Context, assetID string) bool {
+	if s == nil || s.repo == nil || s.registry == nil {
+		return false
+	}
+	reader, ok := s.repo.(assetSourceReader)
+	if !ok {
+		return false
+	}
+	sources, err := reader.ListSources(ctx, strings.TrimSpace(assetID))
+	if err != nil {
+		return false
+	}
+	for _, source := range sources {
+		if s.registry.SupportsReference(source.SourceReference) {
+			return true
+		}
+	}
+	return false
 }
 
 // LinkToJob binds an asset to a job with a role.

@@ -5,12 +5,35 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"velox-server/internal/platform/clock"
 )
+
+type externalSourceRepository struct {
+	*metadataProbeRepo
+	sources map[string][]AssetSourceRecord
+}
+
+func (r *externalSourceRepository) ListSources(_ context.Context, assetID string) ([]AssetSourceRecord, error) {
+	return append([]AssetSourceRecord(nil), r.sources[assetID]...), nil
+}
+
+type staticResolver struct{}
+
+type staticReadCloser struct{ *strings.Reader }
+
+func (staticReadCloser) Close() error { return nil }
+
+func (staticResolver) Scheme() string   { return "drive" }
+func (staticResolver) ServerOnly() bool { return false }
+func (staticResolver) Open(context.Context, string) (*Source, error) {
+	return &Source{Reader: staticReadCloser{strings.NewReader("drive-bytes")}, SourceType: "drive"}, nil
+}
 
 type preflightBlobStore struct {
 	root string
@@ -50,6 +73,65 @@ func TestAssetServicePreflightVerifiesMetadataAndFinalBlob(t *testing.T) {
 	}
 	if report.Items[0].Issue != "" {
 		t.Fatalf("item issue = %q, want empty", report.Items[0].Issue)
+	}
+}
+
+func TestAssetServicePreflightAcceptsRegisteredExternalSourceWithoutLocalBlob(t *testing.T) {
+	digest := fmt.Sprintf("%x", sha256.Sum256([]byte("drive-bytes")))
+	repo := &externalSourceRepository{
+		metadataProbeRepo: newMetadataProbeRepo(map[string]*AssetRecord{
+			"drive-asset": {
+				AssetID: "drive-asset", Status: AssetStatusReady, MimeType: "video/mp4",
+				SHA256: digest, SizeBytes: 11,
+			},
+		}),
+		sources: map[string][]AssetSourceRecord{
+			"drive-asset": {{
+				AssetID: "drive-asset", SourceType: "drive_public",
+				SourceReference: "https://drive.google.com/file/d/drive-file-123/view",
+			}}},
+	}
+	service := &AssetService{
+		repo: repo, blobStore: nil,
+		registry:      NewResolverRegistry(staticResolver{}),
+		mediaMetadata: newMediaMetadataResolverForTest(&recordingVideoRunner{}),
+	}
+	// A verified registry row is required for media assets, but no local file
+	// is required when the source reference is resolvable at execution time.
+	repo.metadata = map[string]MediaMetadataRecord{
+		"drive-asset": {AssetID: "drive-asset", Container: "mp4", VideoCodec: "h264", MetadataVerifiedAt: "2026-08-12T00:00:00Z", MetadataSchemaVersion: MediaMetadataSchemaVersion},
+	}
+	report, err := service.Preflight(context.Background(), []AssetPreflightRequirement{{AssetID: "drive-asset"}})
+	if err != nil {
+		t.Fatalf("Preflight: %v", err)
+	}
+	item := report.Items[0]
+	if !item.Metadata || !item.MediaMetadata || !item.BlobResolvable || item.Issue != "" {
+		t.Fatalf("item = %+v, want external source accepted without local blob", item)
+	}
+}
+
+func TestAssetServiceResolveExternalSourceUsesRegisteredReference(t *testing.T) {
+	repo := &externalSourceRepository{
+		metadataProbeRepo: newMetadataProbeRepo(map[string]*AssetRecord{
+			"drive-asset": {
+				AssetID: "drive-asset", Status: AssetStatusReady,
+				SHA256: fmt.Sprintf("%x", sha256.Sum256([]byte("drive-bytes"))), SizeBytes: 11,
+			},
+		}),
+		sources: map[string][]AssetSourceRecord{
+			"drive-asset": {{AssetID: "drive-asset", SourceReference: "https://drive.google.com/file/d/drive-file-123/view"}},
+		},
+	}
+	service := &AssetService{repo: repo, registry: NewResolverRegistry(staticResolver{})}
+	source, err := service.ResolveExternalSource(context.Background(), "drive-asset")
+	if err != nil {
+		t.Fatalf("ResolveExternalSource: %v", err)
+	}
+	defer source.Reader.Close()
+	body, err := io.ReadAll(source.Reader)
+	if err != nil || string(body) != "drive-bytes" {
+		t.Fatalf("resolved body = %q, err=%v", body, err)
 	}
 }
 

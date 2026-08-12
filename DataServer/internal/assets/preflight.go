@@ -8,9 +8,11 @@ import (
 	"strings"
 )
 
-// AssetPreflightRequirement identifies one local asset needed by a job before
-// it is accepted. SHA256 and SizeBytes are optional request-side constraints;
-// the registry metadata remains authoritative when they are omitted.
+// AssetPreflightRequirement identifies one registered asset needed by a job
+// before it is accepted. The asset may be backed by a local final blob or by
+// an external source such as Drive; SHA256 and SizeBytes are optional
+// request-side constraints and registry metadata remains authoritative when
+// they are omitted.
 type AssetPreflightRequirement struct {
 	AssetID   string
 	SHA256    string
@@ -26,7 +28,10 @@ type AssetPreflightItem struct {
 	// asset that cannot be verified is false (Fase C2 fail-closed gate).
 	// Assets with unknown/empty MIME are treated as non-media (N/A) —
 	// they cannot be classified as media, so the gate does not apply.
-	MediaMetadata  bool   `json:"media_metadata"`
+	MediaMetadata bool `json:"media_metadata"`
+	// BlobResolvable means bytes are available either from the promoted final
+	// blob or from a registered source that can be resolved at execution time.
+	// It deliberately does not download external sources during preflight.
 	BlobResolvable bool   `json:"blob_resolvable"`
 	SHA256Valid    bool   `json:"sha256_valid"`
 	SizeValid      bool   `json:"size_valid"`
@@ -52,11 +57,12 @@ type finalBlobReader interface {
 	ReadFinal(storageKey string) (*os.File, error)
 }
 
-// Preflight checks registry metadata and already-promoted final blobs for the
-// supplied assets, then enforces the Fase C2 fail-closed media gate: a local
-// media asset (video/audio MIME) MUST carry verified registry metadata
-// before the job is admitted. The final blob is read only to verify its
-// digest; no worker-side cache or Drive path is touched. For media assets,
+// Preflight checks registry metadata and either already-promoted final blobs
+// or registered external sources for the supplied assets, then enforces the
+// Fase C2 fail-closed media gate: a media asset (video/audio MIME) MUST carry
+// verified registry metadata before the job is admitted. The final blob is
+// read only to verify its digest; external sources are not downloaded here.
+// For media assets,
 // the canonical EnsureMediaMetadata runs (registry hit → no probe; missing →
 // probe ONCE via the single MediaMetadataResolver + persist; unverifiable →
 // item flagged media_metadata_unavailable, fail closed).
@@ -64,10 +70,7 @@ func (s *AssetService) Preflight(ctx context.Context, requirements []AssetPrefli
 	if s == nil || s.repo == nil {
 		return nil, fmt.Errorf("asset preflight unavailable: asset registry is not configured")
 	}
-	reader, ok := s.blobStore.(finalBlobReader)
-	if !ok || reader == nil {
-		return nil, fmt.Errorf("asset preflight unavailable: final blob reader is not configured")
-	}
+	reader, _ := s.blobStore.(finalBlobReader)
 	report := &AssetPreflightReport{
 		Requested: len(requirements),
 		Items:     make([]AssetPreflightItem, 0, len(requirements)),
@@ -85,7 +88,7 @@ func (s *AssetService) Preflight(ctx context.Context, requirements []AssetPrefli
 			report.Items = append(report.Items, item)
 			continue
 		}
-		if asset == nil || asset.Status != AssetStatusReady || strings.TrimSpace(asset.StorageKey) == "" {
+		if asset == nil || asset.Status != AssetStatusReady {
 			item.Issue = "metadata_unavailable"
 			report.Items = append(report.Items, item)
 			continue
@@ -104,34 +107,38 @@ func (s *AssetService) Preflight(ctx context.Context, requirements []AssetPrefli
 			report.SizeValid++
 		}
 
-		file, err := reader.ReadFinal(asset.StorageKey)
-		if err != nil {
-			item.Issue = "blob_unresolvable"
+		localVerified := false
+		localIssue := "blob_unresolvable"
+		if reader != nil && strings.TrimSpace(asset.StorageKey) != "" {
+			file, readErr := reader.ReadFinal(asset.StorageKey)
+			if readErr == nil {
+				info, statErr := file.Stat()
+				if statErr != nil || !info.Mode().IsRegular() {
+					localIssue = "blob_read_failed"
+				} else if info.Size() != asset.SizeBytes {
+					localIssue = "blob_size_mismatch"
+				} else {
+					if _, seekErr := file.Seek(0, io.SeekStart); seekErr == nil {
+						actualSHA, hashErr := ComputeSHA256(file)
+						localVerified = hashErr == nil && actualSHA == metadataSHA
+						if !localVerified {
+							localIssue = "blob_sha256_mismatch"
+						}
+					} else {
+						localIssue = "blob_read_failed"
+					}
+				}
+				_ = file.Close()
+			}
+		}
+		if localVerified || s.HasResolvableExternalSource(ctx, item.AssetID) {
+			item.BlobResolvable = true
+			report.BlobResolvable++
+		} else {
+			item.Issue = localIssue
 			report.Items = append(report.Items, item)
 			continue
 		}
-		info, statErr := file.Stat()
-		if statErr != nil || !info.Mode().IsRegular() || info.Size() != asset.SizeBytes {
-			_ = file.Close()
-			item.Issue = "blob_size_mismatch"
-			report.Items = append(report.Items, item)
-			continue
-		}
-		if _, err := file.Seek(0, io.SeekStart); err != nil {
-			_ = file.Close()
-			item.Issue = "blob_read_failed"
-			report.Items = append(report.Items, item)
-			continue
-		}
-		actualSHA, hashErr := ComputeSHA256(file)
-		_ = file.Close()
-		if hashErr != nil || actualSHA != metadataSHA {
-			item.Issue = "blob_sha256_mismatch"
-			report.Items = append(report.Items, item)
-			continue
-		}
-		item.BlobResolvable = true
-		report.BlobResolvable++
 
 		// Fase C2 fail-closed media gate: a local media asset (video/audio
 		// MIME) MUST carry verified registry metadata before the job is

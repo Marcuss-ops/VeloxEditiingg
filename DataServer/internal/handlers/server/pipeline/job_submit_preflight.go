@@ -44,12 +44,13 @@ func writeIdempotencyKeyError(c *gin.Context, vErr *IdempotencyKeyError) {
 	})
 }
 
-// checkAssetPreflight validates local velox-asset references against the
-// Master registry and final blob store before enqueue, and enforces the
-// Fase C2 fail-closed media gate: a local media asset MUST carry verified
-// registry metadata (ensured through the canonical one-time probe, which
-// may persist the metadata row) before the job is admitted. Deferred
-// velox-drive references are not materialized here.
+// checkAssetPreflight validates canonical velox-asset references against the
+// Master registry and either a final blob or a registered external source
+// before enqueue. It enforces the Fase C2 fail-closed media gate: a media
+// asset MUST carry verified registry metadata (ensured through the canonical
+// one-time probe, which may persist the metadata row) before the job is
+// admitted. External sources such as Drive are not downloaded here; the agent
+// asset route resolves the saved source reference at execution time.
 func checkAssetPreflight(c *gin.Context, h *Handlers, req SubmitJobRequest) bool {
 	payload, err := projectWorkerPayload(&req)
 	if err != nil {
@@ -98,7 +99,7 @@ func checkAssetPreflight(c *gin.Context, h *Handlers, req SubmitJobRequest) bool
 	c.JSON(http.StatusUnprocessableEntity, gin.H{
 		"ok":      false,
 		"error":   "asset_preflight_failed",
-		"message": "one or more local assets are unavailable or failed integrity validation",
+		"message": "one or more assets are unavailable or failed integrity validation",
 		"summary": report,
 		"details": details,
 	})
