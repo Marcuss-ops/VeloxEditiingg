@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 )
 
@@ -164,10 +165,14 @@ func (s *SQLiteStore) ListAnsibleHosts() ([]AnsibleHostFields, error) {
 			&h.LastLogLevel, &h.LastLogMessage, &h.LastLogSource,
 			&h.CreatedAt, &h.UpdatedAt,
 		); err != nil {
-			continue
+			return nil, fmt.Errorf("list ansible hosts scan: %w", err)
 		}
 		h.Enabled = enabled == 1
-		json.Unmarshal([]byte(tagsJSON), &h.Tags)
+		if tagsJSON != "" {
+			if err := json.Unmarshal([]byte(tagsJSON), &h.Tags); err != nil {
+				return nil, fmt.Errorf("list ansible hosts tags decode: %w", err)
+			}
+		}
 		result = append(result, h)
 	}
 	return result, rows.Err()
@@ -218,7 +223,11 @@ func (s *SQLiteStore) GetAnsibleRun(runID string) (*AnsibleRun, error) {
 	if err := row.Scan(&r.RunID, &r.Action, &r.Playbook, &r.Status, &r.StartedAt, &r.EndedAt, &r.ReturnCode, &commandsJSON, &r.Output, &r.Preamble, &r.MasterURL, &r.MasterURLSource); err != nil {
 		return nil, err
 	}
-	json.Unmarshal([]byte(commandsJSON), &r.Commands)
+	if commandsJSON != "" {
+		if err := json.Unmarshal([]byte(commandsJSON), &r.Commands); err != nil {
+			return nil, fmt.Errorf("decode ansible run commands: %w", err)
+		}
+	}
 	return &r, nil
 }
 
@@ -242,9 +251,13 @@ func (s *SQLiteStore) ListAnsibleRuns(limit int) ([]AnsibleRun, error) {
 		var r AnsibleRun
 		var commandsJSON string
 		if err := rows.Scan(&r.RunID, &r.Action, &r.Playbook, &r.Status, &r.StartedAt, &r.EndedAt, &r.ReturnCode, &commandsJSON, &r.Output, &r.Preamble, &r.MasterURL, &r.MasterURLSource); err != nil {
-			continue
+			return nil, fmt.Errorf("list ansible runs scan: %w", err)
 		}
-		json.Unmarshal([]byte(commandsJSON), &r.Commands)
+		if commandsJSON != "" {
+			if err := json.Unmarshal([]byte(commandsJSON), &r.Commands); err != nil {
+				return nil, fmt.Errorf("list ansible runs commands decode: %w", err)
+			}
+		}
 		result = append(result, r)
 	}
 	return result, rows.Err()
@@ -324,9 +337,12 @@ func (s *SQLiteStore) ListAnsibleRunHosts(runID string) ([]string, error) {
 	for rows.Next() {
 		var host string
 		if err := rows.Scan(&host); err != nil {
-			continue
+			return nil, fmt.Errorf("list ansible run hosts scan: %w", err)
 		}
 		hosts = append(hosts, host)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list ansible run hosts iterate: %w", err)
 	}
 	return hosts, nil
 }
