@@ -10,6 +10,8 @@ reversibile, testato prima/dopo, committato su `main` e pubblicato.
 - [x] Lavorare su un solo hotspot alla volta.
 - [x] Preservare il WIP preesistente in `handler_artifacts.go` e `DataServer/fleetctl`.
 - [x] Non introdurre fallback produttivi `nil`, noop o stub nascosti.
+- [x] Telemetry richiesta ma non inizializzabile porta `/ready` in
+      `MISCONFIGURED`; exporter vuoto resta `DISABLED` intenzionale.
 - [x] Mantenere `worker_id` immutabile e usare `worker_name` per la vista operativa.
 - [x] Per ogni rimozione esportata eseguire `scripts/ci/pre-removal-verify.sh`.
 - [ ] Per ogni blocco nuovo aggiungere almeno un test di errore, un test di

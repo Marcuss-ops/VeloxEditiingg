@@ -134,6 +134,10 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
   Social senza dipendenza configurata viene rifiutata con `ErrNotConfigured`.
 - DB pool telemetry: `OpenConnections`, `InUse`, `Idle`, `WaitCount` e
   `WaitDuration` sono esposti senza label per distinguere lock da queueing.
+- OpenTelemetry bootstrap: exporter sconosciuto o OTLP senza endpoint viene
+  rifiutato al bootstrap; un errore di inizializzazione resta `MISCONFIGURED`
+  e porta `/ready` in rosso invece di diventare un noop apparentemente sano
+  (`2550eaa7`).
 - Bootstrap worker: la lista ffmpeg/ffprobe è una dipendenza esplicita con
   copia difensiva, non più una slice globale esportata e mutabile.
 - Worker job lifecycle: i contatori di successo/fallimento usano un
