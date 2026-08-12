@@ -84,10 +84,14 @@ not reference:
 - benchmark/SQL/dashboard sinks.
 
 `PerformanceReceiptAssembler` is the single receipt construction boundary.
-Prometheus and Master metric registries are projections. Existing worker
-lifecycle operational calls are a compatibility surface outside renderer
-code; their eventual migration is tracked separately rather than hidden by
-this gate.
+Prometheus and Master metric registries are projections. Asset cache
+verification, invalid-entry eviction, and completed download facts are
+recorded in the attempt journal and projected by `PrometheusSink`; the gate
+rejects their legacy producer-side Prometheus calls. Worker-lifetime
+operational calls (lease lifecycle, download-manager gauges, prefetch
+counters, and result transport timing) remain an explicit compatibility
+surface outside the attempt cache projection and are not silently mixed into
+attempt snapshots.
 
 ## Gate and migration policy
 

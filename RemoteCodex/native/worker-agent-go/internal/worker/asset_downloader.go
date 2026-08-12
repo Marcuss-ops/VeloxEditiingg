@@ -345,7 +345,7 @@ func (t *masterAssetTransferer) Check(ctx context.Context, reportCtx context.Con
 		}
 	}
 	if probeSHA != "" && probeSize > 0 {
-		if existing, _, err := cachedAssetPathTimed(w.assetCacheDir(), req.AssetID, probeSHA, probeSize); err == nil && existing != "" {
+		if existing, _, err := cachedAssetPathTimedWithContext(reportCtx, w.assetCacheDir(), req.AssetID, probeSHA, probeSize); err == nil && existing != "" {
 			return downloader.CacheCheckResult{CacheHit: true, LocalPath: existing, SHA256: assetref.ContentHash(probeSHA), Outcome: downloader.CacheOutcomeHitValid}, nil
 		}
 	}
@@ -372,8 +372,6 @@ func (t *masterAssetTransferer) Transfer(ctx context.Context, reportCtx context.
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		return downloader.TransferResult{}, err
 	}
-
-	transferStarted := time.Now()
 
 	// NOTE: cache miss accounting is intentionally NOT emitted here. The
 	// canonical CacheResolver boundary records the classified miss exactly
@@ -506,7 +504,7 @@ func (t *masterAssetTransferer) Transfer(ctx context.Context, reportCtx context.
 		localPath, downloadedBytes, actualSHA, verifyDuration, err := writeVeloxAssetToCacheAtOffset(cacheDir, assetID, string(req.SHA256), req.SizeBytes, resp, resumeOffset)
 		resp.Body.Close()
 		if err != nil {
-			telemetry.GetPrometheusMetrics().RecordCacheVerify(verifyDuration)
+			recordCacheProjectionEvent(reportCtx, "hash_verify", verifyDuration, telemetry.StatusFailed, "", 0)
 			if transferHandle != nil {
 				transferHandle.Abort("asset_transfer", err.Error())
 			}
@@ -516,8 +514,7 @@ func (t *masterAssetTransferer) Transfer(ctx context.Context, reportCtx context.
 			}
 			continue
 		}
-		telemetry.GetPrometheusMetrics().RecordCacheVerify(verifyDuration)
-		telemetry.GetPrometheusMetrics().RecordCacheDownload(downloadedBytes, time.Since(transferStarted))
+		recordCacheProjectionEvent(reportCtx, "hash_verify", verifyDuration, telemetry.StatusOK, "", 0)
 		if transferHandle != nil {
 			transferHandle.CompleteWith(downloadedBytes, downloadedBytes, 0, telemetry.StatusOK, "", "")
 		}

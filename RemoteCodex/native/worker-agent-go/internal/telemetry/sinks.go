@@ -113,6 +113,24 @@ func (s *PrometheusSink) Publish(_ context.Context, snapshot *AttemptSnapshot) e
 	if snapshot.Cache.Evictions > 0 {
 		s.Metrics.RecordCacheEvictions("pressure", int(snapshot.Cache.Evictions))
 	}
+	// Legacy cache producers now emit raw journal events. Project those
+	// observations here so verification, invalid-entry eviction, and
+	// completed downloads retain their existing Prometheus families without
+	// reintroducing producer-to-sink edges.
+	for _, event := range snapshot.Events {
+		switch {
+		case event.Component == "worker.cache" && event.Action == "hash_verify":
+			if event.DurationMS >= 0 {
+				s.Metrics.RecordCacheVerify(time.Duration(event.DurationMS) * time.Millisecond)
+			}
+		case event.Component == "worker.cache" && event.Action == "eviction":
+			s.Metrics.RecordCacheEviction(cacheEventReason(event))
+		case event.Component == "worker.asset" && event.Action == "transfer" && event.Status == StatusOK:
+			if event.BytesIn > 0 {
+				s.Metrics.RecordCacheDownload(event.BytesIn, time.Duration(maxNonNegative(event.DurationMS))*time.Millisecond)
+			}
+		}
+	}
 	// Point-in-time gauges are idempotent: later attempts simply overwrite.
 	// Corruptions have no dedicated family yet and remain typed snapshot
 	// facts for the receipt/diagnostic projections.
@@ -121,6 +139,23 @@ func (s *PrometheusSink) Publish(_ context.Context, snapshot *AttemptSnapshot) e
 		s.Metrics.RecordRender(time.Duration(renderMS) * time.Millisecond)
 	}
 	return nil
+}
+
+func cacheEventReason(event RecordedPhase) string {
+	var metadata struct {
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal([]byte(event.MetadataJSON), &metadata); err != nil || metadata.Reason == "" {
+		return "other"
+	}
+	return metadata.Reason
+}
+
+func maxNonNegative(value int64) int64 {
+	if value < 0 {
+		return 0
+	}
+	return value
 }
 
 // ── ReceiptSink ───────────────────────────────────────────────────────

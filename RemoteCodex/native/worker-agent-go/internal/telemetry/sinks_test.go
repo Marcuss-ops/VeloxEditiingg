@@ -59,6 +59,29 @@ func TestPrometheusSink_PublishesPerAttemptCacheDeltas(t *testing.T) {
 	}
 }
 
+func TestPrometheusSink_ProjectsLegacyCacheEventsFromSnapshotJournal(t *testing.T) {
+	metrics := NewPrometheusMetrics()
+	sink := &PrometheusSink{Metrics: metrics}
+	snapshot := &AttemptSnapshot{Events: []RecordedPhase{
+		{Component: "worker.cache", Action: "hash_verify", DurationMS: 17, Status: StatusOK},
+		{Component: "worker.cache", Action: "eviction", MetadataJSON: `{"reason":"invalid"}`, Status: StatusOK},
+		{Component: "worker.asset", Action: "transfer", DurationMS: 23, BytesIn: 42, Status: StatusOK},
+	}}
+	if err := sink.Publish(context.Background(), snapshot); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	exported := metrics.ExportPrometheus()
+	if !strings.Contains(exported, `velox_cache_sha_verify_duration_seconds_count{label="asset"} 1`) {
+		t.Fatalf("hash verification observation missing from snapshot projection:\n%s", exported)
+	}
+	if !strings.Contains(exported, `velox_cache_evictions_total{reason="invalid"} 1`) {
+		t.Fatalf("invalid eviction missing from snapshot projection:\n%s", exported)
+	}
+	if !strings.Contains(exported, `velox_cache_downloads_total{label="asset"} 1`) || !strings.Contains(exported, `velox_cache_download_bytes_total{label="asset"} 42`) {
+		t.Fatalf("download observation missing from snapshot projection:\n%s", exported)
+	}
+}
+
 func TestPrometheusSink_ProjectsRenderFromSnapshotJournal(t *testing.T) {
 	metrics := NewPrometheusMetrics()
 	sink := &PrometheusSink{Metrics: metrics}

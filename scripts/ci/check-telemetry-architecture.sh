@@ -126,6 +126,10 @@ formula_owner_files = {
     "RemoteCodex/native/worker-agent-go/pkg/performance/classify.go",
     "RemoteCodex/native/worker-agent-go/pkg/performance/snapshot_assembler.go",
     "RemoteCodex/native/worker-agent-go/pkg/performance/benchmark_fixtures.go",
+    # Benchmark gate/report consumers read canonical DerivedMetrics and
+    # aggregate them; they do not define or write a second formula.
+    "RemoteCodex/native/worker-agent-go/pkg/performance/gate_tiers.go",
+    "RemoteCodex/native/worker-agent-go/pkg/performance/compare_runs.go",
     "DataServer/internal/taskattempts/report.go",
     "DataServer/internal/taskattempts/report_ratios.go",
     "DataServer/internal/store/sqlite_task_attempt_repository.go",
@@ -304,6 +308,25 @@ for path, number, line in matching(
     r"(?:GetPrometheusMetrics\s*\(|CacheMetricsProvider\s*\(|velox-worker-agent/pkg/performance)",
 ):
     violations.append(f"leaf producer referencing a sink at {rel(path)}:{number}: {line}")
+
+# Cache verification/download/invalid-entry eviction are per-attempt facts.
+# Their legacy Prometheus calls must not return to the asset producers; the
+# recorder journal plus PrometheusSink is the only allowed projection path.
+cache_attempt_producer_files = {
+    "RemoteCodex/native/worker-agent-go/internal/worker/asset_cache.go",
+    "RemoteCodex/native/worker-agent-go/internal/worker/asset_downloader.go",
+}
+cache_attempt_writer = re.compile(
+    r"(?:RecordCacheVerify\s*\(|RecordCacheDownload\s*\(|RecordCacheEviction\s*\(|"
+    r"RecordCacheEvictions\s*\(|RecordAssetCacheHit\s*\(|RecordAssetCacheMiss\s*\()"
+)
+for path, number, line in matching(
+    (p for p in production_files({".go"}) if rel(p) in cache_attempt_producer_files),
+    cache_attempt_writer.pattern,
+):
+    violations.append(
+        f"direct per-attempt cache Prometheus write at {rel(path)}:{number}: {line}"
+    )
 
 if violations:
     print("\n".join(f"  - {item}" for item in violations), file=sys.stderr)

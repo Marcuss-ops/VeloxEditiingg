@@ -2,6 +2,7 @@ package worker
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -80,11 +81,19 @@ func cacheKeyPrefix(assetID string, sha256Prefix string) string {
 // Any invalid entry is removed individually and reported as a miss so the
 // caller re-downloads it from the Master.
 func cachedAssetPath(cacheDir, assetID string, expectedSHA256 string, expectedSizeBytes int64) (string, error) {
-	path, _, err := cachedAssetPathTimed(cacheDir, assetID, expectedSHA256, expectedSizeBytes)
+	path, _, err := cachedAssetPathTimedWithContext(context.Background(), cacheDir, assetID, expectedSHA256, expectedSizeBytes)
 	return path, err
 }
 
+// cachedAssetPathTimed is the compatibility wrapper used by legacy callers
+// that do not carry an attempt context. Production resolution uses
+// cachedAssetPathTimedWithContext so cache verification/eviction facts enter
+// the attempt journal rather than a Prometheus sink.
 func cachedAssetPathTimed(cacheDir, assetID string, expectedSHA256 string, expectedSizeBytes int64) (string, time.Duration, error) {
+	return cachedAssetPathTimedWithContext(context.Background(), cacheDir, assetID, expectedSHA256, expectedSizeBytes)
+}
+
+func cachedAssetPathTimedWithContext(ctx context.Context, cacheDir, assetID string, expectedSHA256 string, expectedSizeBytes int64) (string, time.Duration, error) {
 	// Folder-backed assets may have no expected hash/size in the job payload.
 	// In that mode reuse the asset-ID cache entry after a basic regular-file
 	// check; the downloader computed the SHA while creating the file.
@@ -124,13 +133,13 @@ func cachedAssetPathTimed(cacheDir, assetID string, expectedSHA256 string, expec
 	if err != nil || !info.Mode().IsRegular() {
 		// Remove only this invalid entry; the rest of the cache remains
 		// untouched and the caller re-downloads the asset.
-		telemetry.GetPrometheusMetrics().RecordCacheEviction("invalid")
+		recordCacheProjectionEvent(ctx, "eviction", 0, telemetry.StatusOK, "invalid", 0)
 		_ = os.Remove(cachedPath)
 		return "", 0, nil
 	}
 	verifyDuration := time.Duration(0)
 	if expectedSizeBytes > 0 && info.Size() != expectedSizeBytes {
-		telemetry.GetPrometheusMetrics().RecordCacheEviction("invalid")
+		recordCacheProjectionEvent(ctx, "eviction", 0, telemetry.StatusOK, "invalid", 0)
 		_ = os.Remove(cachedPath)
 		return "", 0, nil // size mismatch → re-download
 	}
@@ -138,12 +147,16 @@ func cachedAssetPathTimed(cacheDir, assetID string, expectedSHA256 string, expec
 		verifyStarted := time.Now()
 		actual, err := sha256File(cachedPath)
 		verifyDuration = time.Since(verifyStarted)
-		telemetry.GetPrometheusMetrics().RecordCacheVerify(verifyDuration)
+		verifyStatus := telemetry.StatusOK
+		if err != nil || actual != expectedSHA256 {
+			verifyStatus = telemetry.StatusFailed
+		}
+		recordCacheProjectionEvent(ctx, "hash_verify", verifyDuration, verifyStatus, "", 0)
 		if err != nil || actual != expectedSHA256 {
 			// A cache hit is valid only after the digest matches. Remove
 			// this corrupt entry atomically from the cache namespace before
 			// reacquiring it; never clear the entire cache.
-			telemetry.GetPrometheusMetrics().RecordCacheEviction("invalid")
+			recordCacheProjectionEvent(ctx, "eviction", 0, telemetry.StatusOK, "invalid", 0)
 			_ = os.Remove(cachedPath)
 			return "", verifyDuration, nil // hash mismatch → re-download
 		}
