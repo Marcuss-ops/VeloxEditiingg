@@ -135,6 +135,13 @@ reversibile, testato prima/dopo, committato su `main` e pubblicato.
 - [ ] Testare rollout fallito, restart interrotto, worker riconnesso,
       operation stale e retry del reconciler.
 
+### Writer audit completato finora
+
+- [x] Delivery reconciliation: `ApplyReconciledDelivery` controlla
+      `RowsAffected()` e rifiuta gli ID mancanti con `ErrDeliveryNoRow`.
+- [ ] Continuare l’audit degli altri writer/proiezioni prima di chiudere la
+      fase di ownership e CAS.
+
 ## Fase F — scaling controllato
 
 - [ ] Congelare workload, fixture, configurazione e versione worker.

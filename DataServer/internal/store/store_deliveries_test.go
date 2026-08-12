@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -263,6 +264,15 @@ func TestApplyReconciledDeliveryDoesNotRegressSucceeded(t *testing.T) {
 	}
 	if row.Status != "SUCCEEDED" {
 		t.Fatalf("reconciliation regressed terminal delivery to %q", row.Status)
+	}
+}
+
+func TestApplyReconciledDeliveryMissingRowFailsClosed(t *testing.T) {
+	db := setupDeliveryTestDB(t)
+
+	err := db.ApplyReconciledDelivery(context.Background(), "missing-delivery", "SUCCEEDED", "remote-id", "", "", "")
+	if !errors.Is(err, ErrDeliveryNoRow) {
+		t.Fatalf("ApplyReconciledDelivery missing row error = %v, want ErrDeliveryNoRow", err)
 	}
 }
 

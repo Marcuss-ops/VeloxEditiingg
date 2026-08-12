@@ -172,7 +172,7 @@ func (s *SQLiteStore) ListDeliveryReconciliationCandidates(ctx context.Context, 
 
 func (s *SQLiteStore) ApplyReconciledDelivery(ctx context.Context, deliveryID, status, remoteID, remoteURL, errorCode, errorMessage string) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err := s.db.ExecContext(ctx, `
+	result, err := s.db.ExecContext(ctx, `
 		UPDATE job_deliveries
 		SET status = CASE
 		              WHEN status IN ('SUCCEEDED', 'FAILED', 'BLOCKED_AUTH', 'CANCELLED') THEN status
@@ -187,6 +187,13 @@ func (s *SQLiteStore) ApplyReconciledDelivery(ctx context.Context, deliveryID, s
 		errorCode, errorCode, errorMessage, errorMessage, now, deliveryID)
 	if err != nil {
 		return wrapDBInfrastructure("ApplyReconciledDelivery exec", err)
+	}
+	affected, err := readRowsAffected(result, "ApplyReconciledDelivery")
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return ErrDeliveryNoRow
 	}
 	return nil
 }

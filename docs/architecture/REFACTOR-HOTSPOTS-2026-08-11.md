@@ -287,6 +287,10 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
   ai contatori di pool, senza label ad alta cardinalità.
 - [ ] Mantenere un solo writer per ogni aggregate e CAS esplicito per le
   transizioni concorrenti.
+- [x] Rendere `ApplyReconciledDelivery` fail-closed: una proiezione del
+  reconciler che non aggiorna alcuna riga ora restituisce `ErrDeliveryNoRow`
+  invece di dichiarare successo; il comportamento sui delivery terminali
+  esistenti resta idempotente.
 
 ### P1 — Worker layering e stato globale
 
