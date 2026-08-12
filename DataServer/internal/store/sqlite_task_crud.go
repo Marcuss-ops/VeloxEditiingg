@@ -262,12 +262,19 @@ func (r *SQLiteTaskRepository) IncrementAttempt(ctx context.Context, id string) 
 		return fmt.Errorf("task repository: empty id")
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := r.store.db.ExecContext(ctx,
+	res, err := r.store.db.ExecContext(ctx,
 		`UPDATE tasks SET attempt_count = attempt_count + 1, updated_at = ? WHERE task_id = ?`,
 		now, id,
 	)
 	if err != nil {
 		return wrapDBInfrastructure("task increment attempt", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return wrapDBInfrastructure("task increment attempt rows", err)
+	}
+	if n != 1 {
+		return fmt.Errorf("task increment attempt %s: %w", id, taskgraph.ErrTransitionConflict)
 	}
 	return nil
 }

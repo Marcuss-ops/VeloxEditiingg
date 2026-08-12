@@ -3,11 +3,14 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+
+	"velox-server/internal/taskgraph"
 )
 
 // =====================================================================
@@ -26,6 +29,7 @@ CREATE TABLE tasks (
 	job_id           TEXT,
 	status           TEXT,
 	revision         INTEGER NOT NULL DEFAULT 0,
+	attempt_count    INTEGER NOT NULL DEFAULT 0,
 	worker_id        TEXT,
 	lease_id         TEXT,
 	lease_expires_at TEXT,
@@ -218,5 +222,28 @@ func TestRenewLease_RejectsEmptyIdentity(t *testing.T) {
 		if err := c.fn(); err == nil {
 			t.Errorf("%s: expected error, got nil", c.name)
 		}
+	}
+}
+
+func TestIncrementAttemptRequiresExistingTask(t *testing.T) {
+	s := openTaskRenewTestDB(t)
+	repo := NewSQLiteTaskRepository(s)
+
+	if err := repo.IncrementAttempt(context.Background(), "missing-task"); err == nil {
+		t.Fatal("IncrementAttempt on missing task returned nil")
+	} else if !errors.Is(err, taskgraph.ErrTransitionConflict) {
+		t.Fatalf("IncrementAttempt error = %v, want ErrTransitionConflict", err)
+	}
+
+	seedRenewTask(t, s.db, "T-increment", "READY", "", "", 0, "")
+	if err := repo.IncrementAttempt(context.Background(), "T-increment"); err != nil {
+		t.Fatalf("IncrementAttempt existing task: %v", err)
+	}
+	var count int
+	if err := s.db.QueryRow(`SELECT attempt_count FROM tasks WHERE task_id=?`, "T-increment").Scan(&count); err != nil {
+		t.Fatalf("read attempt_count: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("attempt_count = %d, want 1", count)
 	}
 }
