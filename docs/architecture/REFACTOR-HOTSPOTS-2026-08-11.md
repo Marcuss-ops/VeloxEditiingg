@@ -178,8 +178,11 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
   soprattutto i writer del runtime volatile e le transizioni publication/
   session che non sono ancora state ricondotte a un unico helper CAS.
 - [ ] Chiudere l'audit mirato di `MarkDeliverySucceeded`,
-  `FinalizeVerified`, `CompletePublicationAfterReconciliation` e `TaskResult`:
+  `CompletePublicationAfterReconciliation` e `TaskResult`:
   nessun ritorno `nil` dopo un commit non avvenuto.
+- [x] `FinalizeVerified`: il percorso moderno usa CAS su `AttemptID`; il
+  percorso legacy è recintato da worker/lease e, sullo schema canonico, da
+  `task_attempts`, con replay terminale ammesso solo per la stessa identità.
 - [x] Media-probe completion/failure: artifact, parent job, quarantine e
   delivery-plan read ora sono verificati con `RowsAffected`/`rows.Err()` nella
   stessa transazione della lease.

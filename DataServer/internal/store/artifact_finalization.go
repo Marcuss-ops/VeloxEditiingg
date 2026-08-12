@@ -128,7 +128,8 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 	nowStr := now.UTC().Format(time.RFC3339)
 	var res sql.Result
 
-	if p.AttemptID != "" {
+	attemptID := strings.TrimSpace(p.AttemptID)
+	if attemptID != "" {
 		res, err = tx.ExecContext(ctx, `
 			UPDATE tasks
 			SET status = ?, completed_at = ?, updated_at = ?,
@@ -137,8 +138,8 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 			WHERE job_id = ? AND attempt_id = ?
 			  AND worker_id = ? AND lease_id = ?
 			  AND status IN ('RUNNING', 'LEASED', 'PENDING')`,
-			"SUCCEEDED", nowStr, nowStr, p.AttemptID, nowStr,
-			p.JobID, p.AttemptID, p.WorkerID, p.LeaseID)
+			"SUCCEEDED", nowStr, nowStr, attemptID, nowStr,
+			p.JobID, attemptID, p.WorkerID, p.LeaseID)
 		if err != nil {
 			return nil, fmt.Errorf("store: FinalizeVerified task winner CAS: %w", err)
 		}
@@ -147,7 +148,7 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 			return nil, rowsErr
 		}
 		if n != 1 {
-			return nil, fmt.Errorf("%w: task winner affected=%d attempt=%s", ErrTransitionConflict, n, p.AttemptID)
+			return nil, fmt.Errorf("%w: task winner affected=%d attempt=%s", ErrTransitionConflict, n, attemptID)
 		}
 		// Determinism chain (migration 148): stamp the master-computed
 		// authoritative artifact SHA on the winning attempt. The worker
@@ -164,12 +165,13 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 			    -- authoritative value (potential ARTIFACT_TRANSFER_CORRUPTED).
 			    worker_sha256 = CASE WHEN worker_sha256 = '' THEN artifact_sha256 ELSE worker_sha256 END,
 			    artifact_sha256_mismatch = CASE
-			        WHEN artifact_sha256 != '' AND artifact_sha256 != ? THEN 1
-			        ELSE artifact_sha256_mismatch END
+				    WHEN artifact_sha256 != '' AND artifact_sha256 != ? THEN 1
+				    ELSE artifact_sha256_mismatch END
 			WHERE id = ? AND task_id = (SELECT task_id FROM tasks WHERE job_id = ? AND attempt_id = ?)
 			  AND worker_id = ? AND lease_id = ?
-			  AND status NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT')`,
-			"SUCCEEDED", nowStr, nowStr, p.SHA256, p.SHA256, p.AttemptID, p.JobID, p.AttemptID, p.WorkerID, p.LeaseID)
+			  AND (status NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT')
+			       OR (status = 'SUCCEEDED' AND (artifact_sha256 = '' OR artifact_sha256 = ?)))`,
+			"SUCCEEDED", nowStr, nowStr, p.SHA256, p.SHA256, attemptID, p.JobID, attemptID, p.WorkerID, p.LeaseID, p.SHA256)
 		if err != nil {
 			return nil, fmt.Errorf("store: FinalizeVerified attempt winner CAS: %w", err)
 		}
@@ -178,14 +180,103 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 			return nil, rowsErr
 		}
 		if n != 1 {
-			return nil, fmt.Errorf("%w: attempt winner affected=%d attempt=%s", ErrTransitionConflict, n, p.AttemptID)
+			return nil, fmt.Errorf("%w: attempt winner affected=%d attempt=%s", ErrTransitionConflict, n, attemptID)
 		}
 	} else {
-		if _, err := tx.ExecContext(ctx, `
+		// Legacy finalize messages omit AttemptID. Keep compatibility with
+		// pre-typed callers, but fence the fallback by the authenticated
+		// worker/lease tuple and require exactly one task row. On the
+		// canonical schema the tuple lives on task_attempts; older/minimal
+		// fixtures keep it directly on tasks. The old job-only sweep could
+		// let a stale lease terminalize the wrong task.
+		res, err = tx.ExecContext(ctx, `
 			UPDATE tasks SET status = ?, completed_at = ?, updated_at = ?
-			WHERE job_id = ? AND status IN ('RUNNING', 'LEASED', 'PENDING')`,
-			"SUCCEEDED", nowStr, nowStr, p.JobID); err != nil {
-			return nil, fmt.Errorf("store: FinalizeVerified tasks sweep: %w", err)
+			WHERE job_id = ? AND worker_id = ? AND lease_id = ?
+			  AND status IN ('RUNNING', 'LEASED', 'PENDING')`,
+			"SUCCEEDED", nowStr, nowStr, p.JobID, p.WorkerID, p.LeaseID)
+		if err != nil {
+			return nil, fmt.Errorf("store: FinalizeVerified legacy task fence: %w", err)
+		}
+		n, rowsErr := readRowsAffected(res, "FinalizeVerified legacy task fence")
+		if rowsErr != nil {
+			return nil, rowsErr
+		}
+		var hasAttemptsTable int
+		if n == 0 {
+			if err := tx.QueryRowContext(ctx, `
+				SELECT EXISTS(
+					SELECT 1 FROM sqlite_master
+					WHERE type = 'table' AND name = 'task_attempts'
+				)`).Scan(&hasAttemptsTable); err != nil {
+				return nil, fmt.Errorf("store: FinalizeVerified legacy attempt schema lookup: %w", err)
+			}
+			if hasAttemptsTable == 1 {
+				// Since migration 048 the task row is deliberately not the
+				// ownership authority. Resolve the legacy wire message through
+				// the canonical attempt identity instead of weakening the fence.
+				res, err = tx.ExecContext(ctx, `
+					UPDATE tasks SET status = ?, completed_at = ?, updated_at = ?
+					WHERE tasks.job_id = ?
+					  AND tasks.status IN ('RUNNING', 'LEASED', 'PENDING')
+					  AND EXISTS (
+						  SELECT 1 FROM task_attempts
+						  WHERE task_attempts.task_id = tasks.task_id
+							AND task_attempts.attempt_number = ?
+							AND task_attempts.worker_id = ?
+							AND task_attempts.lease_id = ?
+					  )`,
+					"SUCCEEDED", nowStr, nowStr, p.JobID, p.AttemptNumber, p.WorkerID, p.LeaseID)
+				if err != nil {
+					return nil, fmt.Errorf("store: FinalizeVerified legacy attempt fence: %w", err)
+				}
+				n, rowsErr = readRowsAffected(res, "FinalizeVerified legacy attempt fence")
+				if rowsErr != nil {
+					return nil, rowsErr
+				}
+			}
+		}
+		if n != 1 {
+			// Render-only/legacy fixtures may have no task row at all. An
+			// already terminal task is also an idempotent replay, but only
+			// when its persisted owner or canonical attempt still matches
+			// this upload lease.
+			var taskCount int
+			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM tasks WHERE job_id = ?`, p.JobID).Scan(&taskCount); err != nil {
+				return nil, fmt.Errorf("store: FinalizeVerified legacy task fence lookup: %w", err)
+			}
+			if taskCount > 0 {
+				var currentStatus, currentWorker, currentLease string
+				var hasMatchingAttempt int
+				if err := tx.QueryRowContext(ctx, `SELECT status, COALESCE(worker_id, ''), COALESCE(lease_id, '') FROM tasks WHERE job_id = ?`, p.JobID).Scan(&currentStatus, &currentWorker, &currentLease); err != nil {
+					return nil, fmt.Errorf("store: FinalizeVerified legacy task fence state: %w", err)
+				}
+				ownerMatches := currentWorker == p.WorkerID && currentLease == p.LeaseID
+				if !ownerMatches {
+					if err := tx.QueryRowContext(ctx, `
+						SELECT EXISTS(
+							SELECT 1 FROM sqlite_master
+							WHERE type = 'table' AND name = 'task_attempts'
+						)`).Scan(&hasAttemptsTable); err != nil {
+						return nil, fmt.Errorf("store: FinalizeVerified legacy idempotency schema lookup: %w", err)
+					}
+					if hasAttemptsTable == 1 {
+						if err := tx.QueryRowContext(ctx, `
+							SELECT EXISTS(
+								SELECT 1 FROM task_attempts
+								WHERE task_id = (SELECT task_id FROM tasks WHERE job_id = ?)
+								  AND attempt_number = ?
+								  AND worker_id = ?
+								  AND lease_id = ?
+							)`, p.JobID, p.AttemptNumber, p.WorkerID, p.LeaseID).Scan(&hasMatchingAttempt); err != nil {
+							return nil, fmt.Errorf("store: FinalizeVerified legacy attempt idempotency lookup: %w", err)
+						}
+						ownerMatches = hasMatchingAttempt == 1
+					}
+				}
+				if currentStatus != "SUCCEEDED" || !ownerMatches {
+					return nil, fmt.Errorf("%w: legacy task fence affected=%d upload=%s", ErrTransitionConflict, n, p.UploadID)
+				}
+			}
 		}
 	}
 
