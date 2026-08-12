@@ -190,15 +190,29 @@ ON CONFLICT(worker_id) DO UPDATE SET
 // part is semantically meaningful for verification. Empty references never
 // compare equal (an unknown digest is not a matching digest).
 func DigestRefsEqual(a, b string) bool {
-	a = strings.ToLower(strings.TrimSpace(a))
-	b = strings.ToLower(strings.TrimSpace(b))
-	if at := strings.LastIndexByte(a, '@'); at >= 0 {
-		a = a[at+1:]
-	}
-	if at := strings.LastIndexByte(b, '@'); at >= 0 {
-		b = b[at+1:]
-	}
+	a = normalizeDigestRef(a)
+	b = normalizeDigestRef(b)
 	return a != "" && a == b
+}
+
+func normalizeDigestRef(ref string) string {
+	ref = strings.ToLower(strings.TrimSpace(ref))
+	if at := strings.LastIndexByte(ref, '@'); at >= 0 {
+		ref = ref[at+1:]
+	}
+	if len(ref) == 64 && isHexDigest(ref) {
+		return "sha256:" + ref
+	}
+	return ref
+}
+
+func isHexDigest(value string) bool {
+	for _, r := range value {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // upsertWorkerRunningDigest records only an authenticated heartbeat value.
