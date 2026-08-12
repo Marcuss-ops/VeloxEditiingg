@@ -79,16 +79,152 @@ func (r *SQLiteAssetRepository) Insert(ctx context.Context, a AssetRecord) error
 	}
 	_, err := r.store.db.ExecContext(ctx,
 		`INSERT INTO assets (asset_id, kind, status, sha256, mime_type, size_bytes,
-		                     storage_provider, storage_key, metadata_json, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		                     storage_provider, storage_key, metadata_json, created_at, verified_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		a.AssetID, a.Kind, a.Status, a.SHA256, a.MimeType, a.SizeBytes,
-		a.StorageProvider, a.StorageKey, nullIfEmpty(a.MetadataJSON), a.CreatedAt,
+		a.StorageProvider, a.StorageKey, nullIfEmpty(a.MetadataJSON), a.CreatedAt, nullIfEmpty(a.VerifiedAt),
 	)
 	if err != nil {
 		if isUniqueConstraintError(err) {
 			return fmt.Errorf("asset %s: %w", a.AssetID, ErrAssetAlreadyExists)
 		}
 		return fmt.Errorf("insert asset: %w", err)
+	}
+	return nil
+}
+
+// InsertWithMediaMetadata atomically writes a verified asset row and its
+// registry-authoritative media metadata. It is the fail-closed insertion
+// surface for final_audio; a metadata constraint/persistence failure rolls
+// back the asset INSERT so no READY row can exist without its proof.
+func (r *SQLiteAssetRepository) InsertWithMediaMetadata(ctx context.Context, a AssetRecord, m MediaMetadataRecord) error {
+	if r.store == nil || r.store.db == nil {
+		return fmt.Errorf("asset repository: store not initialized")
+	}
+	if strings.TrimSpace(a.AssetID) == "" {
+		return fmt.Errorf("asset repository: empty asset_id")
+	}
+	if strings.TrimSpace(m.AssetID) == "" {
+		m.AssetID = a.AssetID
+	}
+	if m.AssetID != a.AssetID {
+		return fmt.Errorf("asset repository: media metadata asset_id mismatch")
+	}
+	if !m.Verified() {
+		return fmt.Errorf("asset repository: media metadata is not verified")
+	}
+
+	tx, err := r.store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin verified asset insert: %w", err)
+	}
+	defer tx.Rollback()
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	if a.CreatedAt == "" {
+		a.CreatedAt = now
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO assets (asset_id, kind, status, sha256, mime_type, size_bytes,
+		                     storage_provider, storage_key, metadata_json, created_at, verified_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		a.AssetID, a.Kind, a.Status, a.SHA256, a.MimeType, a.SizeBytes,
+		a.StorageProvider, a.StorageKey, nullIfEmpty(a.MetadataJSON), a.CreatedAt, nullIfEmpty(a.VerifiedAt),
+	); err != nil {
+		if isUniqueConstraintError(err) {
+			return fmt.Errorf("asset %s: %w", a.AssetID, ErrAssetAlreadyExists)
+		}
+		return fmt.Errorf("insert verified asset: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO asset_media_metadata
+			(asset_id, container, duration_ms, video_codec, pix_fmt, width, height,
+			 fps_num, fps_den, time_base_num, time_base_den, audio_codec,
+			 audio_sample_rate, audio_channels, metadata_verified_at, metadata_schema_version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		m.AssetID, m.Container, m.DurationMs, m.VideoCodec, m.PixelFormat, m.Width, m.Height,
+		m.FPSNum, m.FPSDen, m.TimeBaseNum, m.TimeBaseDen, m.AudioCodec,
+		m.AudioSampleRate, m.AudioChannels, nullIfEmpty(m.MetadataVerifiedAt), m.MetadataSchemaVersion,
+	); err != nil {
+		return fmt.Errorf("insert verified asset metadata: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit verified asset insert: %w", err)
+	}
+	return nil
+}
+
+// InsertWithMediaMetadataAndSource atomically writes a verified asset, its
+// registry-authoritative media metadata, and its source provenance. This is
+// the complete final_audio commit boundary: any failure rolls back all rows.
+func (r *SQLiteAssetRepository) InsertWithMediaMetadataAndSource(ctx context.Context, a AssetRecord, m MediaMetadataRecord, source AssetSourceRecord) error {
+	if r.store == nil || r.store.db == nil {
+		return fmt.Errorf("asset repository: store not initialized")
+	}
+	if strings.TrimSpace(a.AssetID) == "" || strings.TrimSpace(source.AssetID) != a.AssetID {
+		return fmt.Errorf("asset repository: source must identify inserted asset")
+	}
+	if strings.TrimSpace(m.AssetID) == "" {
+		m.AssetID = a.AssetID
+	}
+	if m.AssetID != a.AssetID {
+		return fmt.Errorf("asset repository: media metadata asset_id mismatch")
+	}
+	if !m.Verified() {
+		return fmt.Errorf("asset repository: media metadata is not verified")
+	}
+	if strings.TrimSpace(source.SourceID) == "" {
+		return fmt.Errorf("asset repository: source_id is required")
+	}
+
+	tx, err := r.store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin verified asset/source insert: %w", err)
+	}
+	defer tx.Rollback()
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	if a.CreatedAt == "" {
+		a.CreatedAt = now
+	}
+	if source.CreatedAt == "" {
+		source.CreatedAt = a.CreatedAt
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO assets (asset_id, kind, status, sha256, mime_type, size_bytes,
+		                     storage_provider, storage_key, metadata_json, created_at, verified_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		a.AssetID, a.Kind, a.Status, a.SHA256, a.MimeType, a.SizeBytes,
+		a.StorageProvider, a.StorageKey, nullIfEmpty(a.MetadataJSON), a.CreatedAt, nullIfEmpty(a.VerifiedAt),
+	); err != nil {
+		if isUniqueConstraintError(err) {
+			return fmt.Errorf("asset %s: %w", a.AssetID, ErrAssetAlreadyExists)
+		}
+		return fmt.Errorf("insert verified asset/source: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO asset_media_metadata
+			(asset_id, container, duration_ms, video_codec, pix_fmt, width, height,
+			 fps_num, fps_den, time_base_num, time_base_den, audio_codec,
+			 audio_sample_rate, audio_channels, metadata_verified_at, metadata_schema_version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		m.AssetID, m.Container, m.DurationMs, m.VideoCodec, m.PixelFormat, m.Width, m.Height,
+		m.FPSNum, m.FPSDen, m.TimeBaseNum, m.TimeBaseDen, m.AudioCodec,
+		m.AudioSampleRate, m.AudioChannels, nullIfEmpty(m.MetadataVerifiedAt), m.MetadataSchemaVersion,
+	); err != nil {
+		return fmt.Errorf("insert verified asset metadata/source: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO asset_sources (source_id, asset_id, source_type, source_reference,
+		                           source_account_id, metadata_json, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		source.SourceID, source.AssetID, source.SourceType, source.SourceReference,
+		nullIfEmpty(source.SourceAccountID), nullIfEmpty(source.MetadataJSON), source.CreatedAt,
+	); err != nil {
+		return fmt.Errorf("insert verified asset source: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit verified asset/source insert: %w", err)
 	}
 	return nil
 }
@@ -344,6 +480,7 @@ func (r *SQLiteAssetRepository) ListByJob(ctx context.Context, jobID string) ([]
 
 var _ AssetRepository = (*SQLiteAssetRepository)(nil)
 var _ assets.AssetRepository = (*SQLiteAssetRepository)(nil)
+var _ assets.VerifiedAssetRepository = (*SQLiteAssetRepository)(nil)
 
 // Compile-time guard: every store.BlobStore implementation satisfies assets.BlobStore.
 // This ensures the subset interface in assets doesn't drift from the canonical definition in store.

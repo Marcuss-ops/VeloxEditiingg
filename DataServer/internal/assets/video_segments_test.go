@@ -73,6 +73,7 @@ func (b *segmentTestBlobStore) PromoteToFinal(stagingPath, finalPath string) (st
 	return finalPath, nil
 }
 func (b *segmentTestBlobStore) RemoveStaging(path string) error { return os.Remove(path) }
+func (b *segmentTestBlobStore) RemoveFinal(path string) error   { return os.Remove(path) }
 func (b *segmentTestBlobStore) FinalPath(_, artifactID, extension string) string {
 	return filepath.Join(b.root, "final", artifactID+extension)
 }

@@ -1,6 +1,7 @@
 package assets
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -18,6 +19,10 @@ const (
 
 // AssetRoles are the canonical roles a job can bind to an asset.
 const (
+	// KindFinalAudio identifies an already-mixed AAC master that must be
+	// muxed with FINAL_AUDIO_COPY by the render_batch executor.
+	KindFinalAudio = "final_audio"
+
 	RoleVoiceover   = "voiceover"
 	RoleSceneImage  = "scene_image"
 	RoleStockClip   = "stock_clip"
@@ -73,6 +78,12 @@ type ResolveAssetCommand struct {
 	Reference    string // original source reference (URL, path, velox-asset://)
 	SourceType   string // override source type classification
 	MetadataJSON string // optional extra metadata
+
+	// PreRegistrationValidation runs against the staged, security-validated
+	// file before it can be deduplicated or inserted. It is intentionally an
+	// internal callback seam for contracts such as final_audio that require
+	// media metadata validation before a READY registry row is created.
+	PreRegistrationValidation func(ctx context.Context, path, mimeType string, sizeBytes int64) (*MediaMetadata, error)
 }
 
 // Reference returns the canonical velox-asset:// URI for this asset.

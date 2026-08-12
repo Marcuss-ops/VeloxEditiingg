@@ -111,6 +111,24 @@ func (b *FilesystemBlobStore) RemoveStaging(path string) error {
 	return nil
 }
 
+// RemoveFinal removes a promoted final blob after the database transaction
+// that should reference it fails. Callers use this only for compensating
+// cleanup of an otherwise unreferenced blob.
+func (b *FilesystemBlobStore) RemoveFinal(storageKey string) error {
+	cleaned := filepath.Clean(storageKey)
+	if !filepath.IsAbs(cleaned) {
+		cleaned = filepath.Join(b.finalDir, cleaned)
+		rel, err := filepath.Rel(filepath.Clean(b.finalDir), cleaned)
+		if err != nil || strings.HasPrefix(filepath.ToSlash(rel), "../") || rel == ".." {
+			return fmt.Errorf("blobstore: reject traversal in final storage_key %q", storageKey)
+		}
+	}
+	if err := os.Remove(cleaned); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("blobstore: remove final %s: %w", storageKey, err)
+	}
+	return nil
+}
+
 // ReadFinal opens the final file for reading. If storageKey is a relative
 // path it is resolved against finalDir; if it is already absolute (legacy
 // behaviour from PromoteToFinal returning absolute paths) it is used as-is.
@@ -171,6 +189,13 @@ func (n *NopBlobStore) PromoteToFinal(staging, _ string) (string, error) {
 
 func (n *NopBlobStore) RemoveStaging(path string) error {
 	return os.Remove(path)
+}
+
+func (n *NopBlobStore) RemoveFinal(path string) error {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 func (n *NopBlobStore) ReadFinal(path string) (*os.File, error) {

@@ -36,6 +36,15 @@ type AssetRepository interface {
 	GetMediaMetadata(ctx context.Context, assetID string) (*MediaMetadataRecord, error)
 }
 
+// VerifiedAssetRepository is the optional atomic write surface used by
+// contracts that cannot tolerate a READY asset without its verified media
+// metadata. Generic asset ingestion continues to use AssetRepository's
+// best-effort metadata path; final_audio requires this stronger capability.
+type VerifiedAssetRepository interface {
+	AssetRepository
+	InsertWithMediaMetadataAndSource(ctx context.Context, asset AssetRecord, metadata MediaMetadataRecord, source AssetSourceRecord) error
+}
+
 // BlobStore is the storage abstraction for asset blobs.
 // This is a subset of store.BlobStore; any store.BlobStore implementation
 // satisfies this interface automatically (verified at compile time in store/store_assets.go).
@@ -48,6 +57,13 @@ type BlobStore interface {
 	// StorageKey into a filesystem path for the canonical metadata probe
 	// (Fase C2 EnsureMediaMetadata).
 	FinalDir() string
+}
+
+// FinalBlobRemover is an optional cleanup capability. Registration uses it
+// after an atomic metadata transaction fails so a promoted but unreferenced
+// final blob is not left behind by a rejected final_audio operation.
+type FinalBlobRemover interface {
+	RemoveFinal(storageKey string) error
 }
 
 // AssetService is the generic asset registry service.

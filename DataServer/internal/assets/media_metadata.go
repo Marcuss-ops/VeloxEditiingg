@@ -252,17 +252,18 @@ func (s *AssetService) persistMediaMetadata(ctx context.Context, assetID, finalP
 	s.observeMetadataOutcome(MetadataOutcomeVerified)
 }
 
-// upsertMediaMetadataRecord stamps the canonical schema version + verified-at
-// timestamp and persists the row (idempotent upsert). Shared by the
-// registration-time best-effort path (persistMediaMetadata) and the
-// job-time fail-closed path (EnsureMediaMetadata) so both produce the SAME
-// canonical record shape.
-func (s *AssetService) upsertMediaMetadataRecord(ctx context.Context, assetID string, meta *MediaMetadata) error {
+// mediaMetadataRecord stamps the canonical schema version + verified-at
+// timestamp without persisting it. Registration uses this value to perform
+// an atomic asset+metadata insert; the generic path passes it to Upsert.
+func (s *AssetService) mediaMetadataRecord(assetID string, meta *MediaMetadata) (MediaMetadataRecord, error) {
 	if meta == nil {
-		return fmt.Errorf("media metadata record requires a probe result")
+		return MediaMetadataRecord{}, fmt.Errorf("media metadata record requires a probe result")
+	}
+	if s == nil || s.clock == nil {
+		return MediaMetadataRecord{}, fmt.Errorf("media metadata clock unavailable")
 	}
 	now := s.clock.Now().UTC().Format(time.RFC3339)
-	record := MediaMetadataRecord{
+	return MediaMetadataRecord{
 		AssetID:               assetID,
 		Container:             meta.Container,
 		DurationMs:            meta.DurationMs,
@@ -279,6 +280,18 @@ func (s *AssetService) upsertMediaMetadataRecord(ctx context.Context, assetID st
 		AudioChannels:         meta.AudioChannels,
 		MetadataVerifiedAt:    now,
 		MetadataSchemaVersion: MediaMetadataSchemaVersion,
+	}, nil
+}
+
+// upsertMediaMetadataRecord stamps the canonical schema version + verified-at
+// timestamp and persists the row (idempotent upsert). Shared by the
+// registration-time best-effort path (persistMediaMetadata) and the
+// job-time fail-closed path (EnsureMediaMetadata) so both produce the SAME
+// canonical record shape.
+func (s *AssetService) upsertMediaMetadataRecord(ctx context.Context, assetID string, meta *MediaMetadata) error {
+	record, err := s.mediaMetadataRecord(assetID, meta)
+	if err != nil {
+		return err
 	}
 	if err := s.repo.UpsertMediaMetadata(ctx, assetID, record); err != nil {
 		log.Printf("[ASSETS] media metadata persist failed asset=%s: %v", assetID, err)
@@ -337,12 +350,13 @@ func (s *AssetService) EnsureMediaMetadata(ctx context.Context, assetID string) 
 		return nil, fmt.Errorf("asset %s has no verified media metadata: %w", assetID, probeErr)
 	}
 	if persistErr := s.upsertMediaMetadataRecord(ctx, assetID, meta); persistErr != nil {
-		// The probe produced valid metadata even though the persist failed;
-		// surface it but keep the registry unverified (next consumer re-probes).
+		// A successful probe is not enough for this fail-closed accessor: the
+		// registry must be able to serve the same verified metadata to the next
+		// consumer. Keep the row unverified and refuse the current operation.
 		s.observeMetadataOutcome(MetadataOutcomePersistFailed)
-	} else {
-		s.observeMetadataOutcome(MetadataOutcomeVerified)
+		return nil, fmt.Errorf("asset %s verified media metadata could not be persisted: %w", assetID, persistErr)
 	}
+	s.observeMetadataOutcome(MetadataOutcomeVerified)
 	return meta, nil
 }
 
