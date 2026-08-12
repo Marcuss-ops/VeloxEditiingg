@@ -1,12 +1,20 @@
 package store
 
 import (
+	"database/sql"
 	"fmt"
 	"time"
 )
 
+// ErrLivestreamNotFound distinguishes an empty lookup from a storage failure
+// so HTTP handlers can return 404 only for the former.
+var ErrLivestreamNotFound = sql.ErrNoRows
+
 // CreateLivestreamTable creates the livestreams table if it doesn't exist.
 func (s *SQLiteStore) CreateLivestreamTable() error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("store: livestream store is not configured")
+	}
 	_, err := s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS livestreams (
 			id               TEXT PRIMARY KEY,
@@ -64,10 +72,12 @@ type LivestreamRow struct {
 
 // UpsertLivestream inserts or replaces a livestream record.
 func (s *SQLiteStore) UpsertLivestream(row *LivestreamRow) error {
-	if s == nil || s.db == nil {
-		return nil
+	if err := s.CreateLivestreamTable(); err != nil {
+		return err
 	}
-	_ = s.CreateLivestreamTable()
+	if row == nil {
+		return fmt.Errorf("store: livestream row is nil")
+	}
 	isForKids := 0
 	if row.IsForKids {
 		isForKids = 1
@@ -98,10 +108,9 @@ func (s *SQLiteStore) UpsertLivestream(row *LivestreamRow) error {
 
 // ListLivestreams returns all livestream records, most recent first.
 func (s *SQLiteStore) ListLivestreams() ([]*LivestreamRow, error) {
-	if s == nil || s.db == nil {
-		return nil, nil
+	if err := s.CreateLivestreamTable(); err != nil {
+		return nil, err
 	}
-	_ = s.CreateLivestreamTable()
 	rows, err := s.db.Query(`
 		SELECT id, name, platform, stream_key, stream_url, description, is_for_kids,
 		       video_bitrate, audio_bitrate, status, video_order, protocol,
@@ -138,10 +147,9 @@ func (s *SQLiteStore) ListLivestreams() ([]*LivestreamRow, error) {
 
 // GetLivestream returns a single livestream by ID.
 func (s *SQLiteStore) GetLivestream(id string) (*LivestreamRow, error) {
-	if s == nil || s.db == nil {
-		return nil, nil
+	if err := s.CreateLivestreamTable(); err != nil {
+		return nil, err
 	}
-	_ = s.CreateLivestreamTable()
 	var r LivestreamRow
 	var isForKids, autoStart, autoStop int
 	err := s.db.QueryRow(`
@@ -158,6 +166,9 @@ func (s *SQLiteStore) GetLivestream(id string) (*LivestreamRow, error) {
 		&r.MaxViewers, &r.LatencyPref, &r.ChannelID, &r.BroadcastID,
 	)
 	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, ErrLivestreamNotFound
+		}
 		return nil, err
 	}
 	r.IsForKids = isForKids == 1
@@ -168,8 +179,8 @@ func (s *SQLiteStore) GetLivestream(id string) (*LivestreamRow, error) {
 
 // DeleteLivestream removes a livestream by ID.
 func (s *SQLiteStore) DeleteLivestream(id string) error {
-	if s == nil || s.db == nil {
-		return nil
+	if err := s.CreateLivestreamTable(); err != nil {
+		return err
 	}
 	_, err := s.db.Exec(`DELETE FROM livestreams WHERE id = ?`, id)
 	return err

@@ -163,6 +163,9 @@ reversibile, testato prima/dopo, committato su `main` e pubblicato.
 - [x] Phase timings: i record legacy compatti con sola durata non vengono più
       persi; i timestamp mancanti restano zero senza indebolire il reader
       dettagliato.
+- [x] Livestream store/API: rimosso il successo implicito con store nil o
+      schema non inizializzabile; lookup DB falliti non vengono più esposti
+      come 404.
 - [ ] Continuare l’audit degli altri writer/proiezioni prima di chiudere la
       fase di ownership e CAS.
 

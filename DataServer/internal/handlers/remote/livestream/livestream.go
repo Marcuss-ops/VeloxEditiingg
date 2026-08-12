@@ -2,6 +2,7 @@
 package livestream
 
 import (
+	"errors"
 	"net/http"
 	"time"
 
@@ -98,6 +99,10 @@ func (h *LivestreamHandlers) GetStream(c *gin.Context) {
 	id := c.Param("id")
 	row, err := h.dbStore.GetLivestream(id)
 	if err != nil {
+		if !errors.Is(err, store.ErrLivestreamNotFound) {
+			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "livestream lookup failed"})
+			return
+		}
 		c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "Stream not found"})
 		return
 	}
