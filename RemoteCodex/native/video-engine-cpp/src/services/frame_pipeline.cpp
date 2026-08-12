@@ -92,39 +92,52 @@ std::string ffmpegErrorText(int error) {
 
 // Thread-safe bounded FIFO used for both hand-off queues. push/pop block for
 // backpressure; after shutdown() a drained queue reports empty (pop false).
+//
+// The queue also keeps producer-consumer health accounting (§25): how long
+// producers waited on a FULL queue (backpressure, full_wait_ns_) and
+// consumers waited on an EMPTY queue (starvation, empty_wait_ns_), plus a
+// time-weighted average depth so the receipt can show how far the pipeline
+// ran from empty (starvation risk) or full (backpressure risk).
 class BoundedQueue {
 public:
     explicit BoundedQueue(int capacity) : capacity_(capacity) {}
 
     bool push(int value) {
         std::unique_lock<std::mutex> lock(mutex_);
+        const auto wait_start = Clock::now();
         not_full_.wait(lock, [&] {
             return done_ || static_cast<int>(items_.size()) < capacity_;
         });
+        full_wait_ns_ += elapsedNs(wait_start);
         if (done_) {
             return false;
         }
         items_.push_back(value);
         high_water_ = std::max<int64_t>(high_water_,
                                         static_cast<int64_t>(items_.size()));
+        sampleDepth();
         not_empty_.notify_one();
         return true;
     }
 
     bool pop(int& value) {
         std::unique_lock<std::mutex> lock(mutex_);
+        const auto wait_start = Clock::now();
         not_empty_.wait(lock, [&] { return done_ || !items_.empty(); });
+        empty_wait_ns_ += elapsedNs(wait_start);
         if (items_.empty()) {
             return false;
         }
         value = items_.front();
         items_.pop_front();
+        sampleDepth();
         not_full_.notify_one();
         return true;
     }
 
     void shutdown() {
         std::lock_guard<std::mutex> lock(mutex_);
+        sampleDepth();
         done_ = true;
         not_full_.notify_all();
         not_empty_.notify_all();
@@ -132,7 +145,55 @@ public:
 
     int64_t highWater() const { return high_water_; }
 
+    // Producer wait on a full queue (backpressure), rounded to ms.
+    int64_t fullWaitMs() const { return nsToMs(full_wait_ns_); }
+
+    // Consumer wait on an empty queue (starvation), rounded to ms.
+    int64_t emptyWaitMs() const { return nsToMs(empty_wait_ns_); }
+
+    // Raw nanosecond waits. The ratios are derived from these BEFORE the
+    // ms rounding so a sub-ms render cannot collapse a truthful fraction
+    // into an artificial 1.0/0.0.
+    int64_t fullWaitNs() const { return full_wait_ns_; }
+    int64_t emptyWaitNs() const { return empty_wait_ns_; }
+
+    // Time-weighted average depth (0 when the queue never carried items
+    // for a measurable window). Rounded to the nearest integer depth.
+    int64_t averageDepth() const {
+        if (window_ns_ <= 0) {
+            return 0;
+        }
+        const double avg = static_cast<double>(depth_ns_) /
+                           static_cast<double>(window_ns_);
+        return static_cast<int64_t>(avg + 0.5);
+    }
+
 private:
+    using Clock = std::chrono::steady_clock;
+
+    static int64_t elapsedNs(const Clock::time_point& start) {
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(
+                   Clock::now() - start)
+            .count();
+    }
+
+    static int64_t nsToMs(int64_t ns) {
+        return (ns + 500'000) / 1'000'000;
+    }
+
+    // Accumulates (depth × elapsed) so the average is time-weighted. Must
+    // be called with mutex_ held (push/pop/shutdown already hold it).
+    void sampleDepth() {
+        const auto now = Clock::now();
+        const int64_t dt = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                               now - last_sample_)
+                               .count();
+        depth_ns_ += static_cast<int64_t>(last_depth_) * dt;
+        window_ns_ += dt;
+        last_sample_ = now;
+        last_depth_ = static_cast<int64_t>(items_.size());
+    }
+
     int capacity_;
     std::deque<int> items_;
     mutable std::mutex mutex_;
@@ -140,6 +201,14 @@ private:
     std::condition_variable not_empty_;
     bool done_{false};
     int64_t high_water_{0};
+
+    // Health accounting (ns).
+    int64_t full_wait_ns_{0};
+    int64_t empty_wait_ns_{0};
+    int64_t depth_ns_{0};
+    int64_t window_ns_{0};
+    Clock::time_point last_sample_{Clock::now()};
+    int64_t last_depth_{0};
 };
 
 // Bounded AVFrame pool. `capacity` slots are pre-allocated at the output
@@ -557,7 +626,16 @@ bool renderFrames(const FramePipelineConfig& config, FramePipelineResult* result
         }
     });
 
+    // §25 producer-consumer health accounting. The render thread is the
+    // Render Producer (scales + pushes the encoder queue); the encode
+    // thread is the Encoder Consumer. busy/wait are wall-clock ms; the
+    // ratios below are derived once at the end.
+    std::atomic<int64_t> producer_busy_ns{0};
+    std::atomic<int64_t> producer_elapsed_ns{0};
+    std::atomic<int64_t> consumer_elapsed_ns{0};
+
     std::thread render_thread([&]() {
+        const auto thread_start = std::chrono::steady_clock::now();
         int64_t frame_index = 0;
         int index = 0;
         while (!failed.load() && render_queue.pop(index)) {
@@ -567,8 +645,13 @@ bool renderFrames(const FramePipelineConfig& config, FramePipelineResult* result
             }
             AVFrame* src = pool.decoded(index);
             AVFrame* dst = pool.scaled(index);
+            const auto scale_start = std::chrono::steady_clock::now();
             sws_scale(sws.get(), src->data, src->linesize, 0, src_height,
                       dst->data, dst->linesize);
+            producer_busy_ns.fetch_add(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - scale_start)
+                    .count());
             dst->pts = frame_index++;
             dst->pict_type = AV_PICTURE_TYPE_NONE;
             if (!encode_queue.push(index)) {
@@ -576,6 +659,10 @@ bool renderFrames(const FramePipelineConfig& config, FramePipelineResult* result
                 break;
             }
         }
+        producer_elapsed_ns.store(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - thread_start)
+                .count());
     });
 
     UniquePacket out_packet(av_packet_alloc());
@@ -602,6 +689,7 @@ bool renderFrames(const FramePipelineConfig& config, FramePipelineResult* result
     };
 
     std::thread encode_thread([&]() {
+        const auto thread_start = std::chrono::steady_clock::now();
         int index = 0;
         while (!failed.load() && encode_queue.pop(index)) {
             if (index < 0) {
@@ -618,6 +706,10 @@ bool renderFrames(const FramePipelineConfig& config, FramePipelineResult* result
             }
             pool.release(index);
         }
+        consumer_elapsed_ns.store(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - thread_start)
+                .count());
     });
 
     decode_thread.join();
@@ -666,6 +758,61 @@ bool renderFrames(const FramePipelineConfig& config, FramePipelineResult* result
     result->peak_pool_usage = pool.peakUsage();
     result->peak_render_queue = render_queue.highWater();
     result->peak_encode_queue = encode_queue.highWater();
+
+    // ── §25 producer-consumer health metrics ─────────────────────────
+    // The render thread is the producer, the encode thread the consumer;
+    // the encode queue is the single bounded hand-off queue between them.
+    // Producer wait = blocked on an empty render queue (decoder behind)
+    // OR on a full encode queue (backpressure). Consumer wait = blocked
+    // on an empty encode queue (encoder starvation). The ratios are
+    // derived from the RAW nanosecond waits BEFORE ms rounding so a
+    // sub-ms render cannot collapse a truthful fraction into an
+    // artificial 1.0/0.0.
+    const int64_t producer_busy_ns_ = producer_busy_ns.load();
+    const int64_t producer_wait_ns =
+        render_queue.emptyWaitNs() + encode_queue.fullWaitNs();
+    const int64_t consumer_wait_ns = encode_queue.emptyWaitNs();
+    const int64_t consumer_elapsed_ns_ = consumer_elapsed_ns.load();
+    int64_t consumer_busy_ns = consumer_elapsed_ns_ - consumer_wait_ns;
+    if (consumer_busy_ns < 0) {
+        consumer_busy_ns = 0;
+    }
+
+    auto safeRatio = [](int64_t numerator, int64_t denominator) -> double {
+        if (denominator <= 0) {
+            return 0.0;
+        }
+        const double value = static_cast<double>(numerator) /
+                             static_cast<double>(denominator);
+        return value > 1.0 ? 1.0 : value;
+    };
+    const int64_t producer_total_ns = producer_busy_ns_ + producer_wait_ns;
+    const int64_t consumer_total_ns = consumer_busy_ns + consumer_wait_ns;
+    const int64_t producer_busy_ms =
+        (producer_busy_ns_ + 500'000) / 1'000'000;
+    const int64_t producer_wait_ms =
+        render_queue.emptyWaitMs() + encode_queue.fullWaitMs();
+    const int64_t consumer_wait_ms = encode_queue.emptyWaitMs();
+    const int64_t consumer_elapsed_ms =
+        (consumer_elapsed_ns_ + 500'000) / 1'000'000;
+    int64_t consumer_busy_ms = consumer_elapsed_ms - consumer_wait_ms;
+    if (consumer_busy_ms < 0) {
+        consumer_busy_ms = 0;
+    }
+
+    result->pipeline_metrics = FramePipelineMetrics{
+        producer_busy_ms,
+        producer_wait_ms,
+        consumer_busy_ms,
+        consumer_wait_ms,
+        encode_queue.averageDepth(),
+        encode_queue.highWater(),
+        encode_queue.emptyWaitMs(),
+        encode_queue.fullWaitMs(),
+        safeRatio(producer_wait_ns, producer_total_ns),
+        safeRatio(consumer_wait_ns, consumer_total_ns),
+        safeRatio(encode_queue.fullWaitNs(), producer_total_ns),
+    };
     return true;
 }
 

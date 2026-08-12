@@ -251,6 +251,35 @@ type RenderMetrics struct {
 	// I/O, quality, retry, and wasted work) from newer sidecars. Legacy
 	// sidecars leave it nil and remain fully compatible.
 	Observability map[string]interface{}
+	// FramePipeline carries the §25 producer-consumer health metrics of
+	// the in-process encode pipeline (--render-frames sidecar block).
+	// Zero when no encode-path job ran or the engine predates the block.
+	FramePipeline FramePipelineMetrics
+}
+
+// FramePipelineMetrics is the §25 producer-consumer health report of the
+// in-process encode pipeline (Decoder → FramePool → Render Producer →
+// BoundedQueue → Encoder Consumer → Muxer), projected from the sidecar
+// frame_pipeline block emitted by --render-frames.
+//
+// ProducerWaitMS = producer blocked on an empty render queue (decoder
+// behind) plus a full encoder queue (backpressure); ConsumerWaitMS = the
+// consumer blocked on an EMPTY encoder queue (encoder starvation).
+// QueueEmptyMS/QueueFullMS are the same waits projected onto the queue;
+// QueueDepthAvg is the time-weighted average depth. The ratios are
+// dimensionless floats in [0, 1]; a zero value means not measured.
+type FramePipelineMetrics struct {
+	ProducerBusyMS         int64
+	ProducerWaitMS         int64
+	ConsumerBusyMS         int64
+	ConsumerWaitMS         int64
+	QueueDepthAvg          int64
+	QueueDepthMax          int64
+	QueueEmptyMS           int64
+	QueueFullMS            int64
+	ProducerStallRatio     float64
+	EncoderStarvationRatio float64
+	BackpressureRatio      float64
 }
 
 // RenderClient exposes the underlying render client so callers outside

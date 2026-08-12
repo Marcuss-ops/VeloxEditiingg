@@ -113,7 +113,7 @@ func TestAssembledReceiptHasStableFieldOrder(t *testing.T) {
 	// field with the same name and let a reordered receipt pass.
 	// encoding/json preserves struct field order, which is part of the
 	// deterministic benchmark artifact contract.
-	wantOrder := []string{"version", "identity", "workload", "timing", "process", "cpu", "io", "media", "memory", "scheduling", "derived"}
+	wantOrder := []string{"version", "identity", "workload", "timing", "process", "cpu", "io", "media", "memory", "scheduling", "frame_pipeline", "derived"}
 	gotOrder, err := topLevelJSONKeys(a)
 	if err != nil {
 		t.Fatalf("decode receipt top-level keys: %v", err)

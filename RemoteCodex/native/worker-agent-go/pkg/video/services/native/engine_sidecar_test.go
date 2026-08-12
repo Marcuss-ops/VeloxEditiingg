@@ -100,6 +100,19 @@ func TestReadEngineSidecar_FullSchemaMapsAllTelemetry(t *testing.T) {
 			"minor_page_faults": 4021,
 			"major_page_faults": 0
 		},
+		"frame_pipeline": {
+			"producer_busy_ms": 2500,
+			"producer_wait_ms": 700,
+			"consumer_busy_ms": 2800,
+			"consumer_wait_ms": 400,
+			"queue_depth_avg": 3,
+			"queue_depth_max": 7,
+			"queue_empty_ms": 400,
+			"queue_full_ms": 150,
+			"producer_stall_ratio": 0.22,
+			"encoder_starvation_ratio": 0.125,
+			"backpressure_ratio": 0.05
+		},
 		"phases": [{
 			"origin": "engine",
 			"scope": "segment",
@@ -151,6 +164,21 @@ func TestReadEngineSidecar_FullSchemaMapsAllTelemetry(t *testing.T) {
 		sc.IOCounters.AssetBytesCopied != 4194304 || sc.IOCounters.InputOpenCount != 5 ||
 		sc.IOCounters.InputReopenCount != 2 {
 		t.Fatalf("io_counters = %+v", sc.IOCounters)
+	}
+	if sc.FramePipeline == nil {
+		t.Fatalf("frame_pipeline not parsed")
+	}
+	fp := sc.FramePipeline
+	if fp.ProducerBusyMS != 2500 || fp.ProducerWaitMS != 700 ||
+		fp.ConsumerBusyMS != 2800 || fp.ConsumerWaitMS != 400 {
+		t.Fatalf("frame_pipeline busy/wait = %+v", fp)
+	}
+	if fp.QueueDepthAvg != 3 || fp.QueueDepthMax != 7 ||
+		fp.QueueEmptyMS != 400 || fp.QueueFullMS != 150 {
+		t.Fatalf("frame_pipeline queue = %+v", fp)
+	}
+	if fp.ProducerStallRatio != 0.22 || fp.EncoderStarvationRatio != 0.125 || fp.BackpressureRatio != 0.05 {
+		t.Fatalf("frame_pipeline ratios = %+v", fp)
 	}
 	if sc.ProcessCounters == nil {
 		t.Fatalf("process_counters not parsed")
@@ -232,6 +260,47 @@ func TestMapEngineSidecar_PreservesSegmentsAndMapsPhases(t *testing.T) {
 	}
 	if mapped.Observability["quality"].(map[string]interface{})["events"] != float64(3) {
 		t.Fatalf("mapped category observability = %#v", mapped.Observability)
+	}
+}
+
+func TestMapEngineSidecar_MapsFramePipeline(t *testing.T) {
+	sc := engineSidecar{
+		FramePipeline: &engineFramePipeline{
+			ProducerBusyMS:         2500,
+			ProducerWaitMS:         700,
+			ConsumerBusyMS:         2800,
+			ConsumerWaitMS:         400,
+			QueueDepthAvg:          3,
+			QueueDepthMax:          7,
+			QueueEmptyMS:           400,
+			QueueFullMS:            150,
+			ProducerStallRatio:     0.22,
+			EncoderStarvationRatio: 0.125,
+			BackpressureRatio:      0.05,
+		},
+	}
+	mapped := pipeline.RenderMetrics{}
+	mapEngineSidecar(&sc, &mapped)
+	if mapped.FramePipeline.ProducerBusyMS != 2500 || mapped.FramePipeline.ProducerWaitMS != 700 ||
+		mapped.FramePipeline.ConsumerBusyMS != 2800 || mapped.FramePipeline.ConsumerWaitMS != 400 {
+		t.Fatalf("mapped frame pipeline busy/wait = %+v", mapped.FramePipeline)
+	}
+	if mapped.FramePipeline.QueueDepthAvg != 3 || mapped.FramePipeline.QueueDepthMax != 7 ||
+		mapped.FramePipeline.QueueEmptyMS != 400 || mapped.FramePipeline.QueueFullMS != 150 {
+		t.Fatalf("mapped frame pipeline queue = %+v", mapped.FramePipeline)
+	}
+	if mapped.FramePipeline.ProducerStallRatio != 0.22 ||
+		mapped.FramePipeline.EncoderStarvationRatio != 0.125 ||
+		mapped.FramePipeline.BackpressureRatio != 0.05 {
+		t.Fatalf("mapped frame pipeline ratios = %+v", mapped.FramePipeline)
+	}
+
+	// Nil block must leave the metrics zero (legacy engines / non-encode
+	// paths).
+	legacy := pipeline.RenderMetrics{}
+	mapEngineSidecar(&engineSidecar{}, &legacy)
+	if legacy.FramePipeline.ProducerBusyMS != 0 || legacy.FramePipeline.QueueDepthMax != 0 {
+		t.Fatalf("legacy sidecar must not populate frame pipeline metrics: %+v", legacy.FramePipeline)
 	}
 }
 

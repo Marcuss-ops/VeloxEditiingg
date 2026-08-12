@@ -53,6 +53,36 @@ type engineSidecar struct {
 	// engine process's getrusage usage (context switches, page faults,
 	// engine CPU). Legacy sidecars leave it nil.
 	ProcessCounters *engineProcessCounters `json:"process_counters,omitempty"`
+	// FramePipeline carries the §25 producer-consumer health metrics of
+	// the in-process encode pipeline (--render-frames). Only emitted by
+	// engines with the frame_pipeline sidecar block; legacy sidecars
+	// leave it nil.
+	FramePipeline *engineFramePipeline `json:"frame_pipeline,omitempty"`
+}
+
+// engineFramePipeline mirrors the sidecar frame_pipeline block written by
+// cmdRenderFrames for the Phase-3 in-process AVFrame encode pipeline:
+//
+//	Decoder → FramePool → Render Producer → BoundedQueue → Encoder
+//	Consumer → Muxer
+//
+// producer_busy_ms/wait_ms and consumer_busy_ms/wait_ms are wall-clock
+// milliseconds; queue_depth_avg is the time-weighted average depth of the
+// encoder hand-off queue and queue_depth_max its high-water mark;
+// queue_empty_ms/full_ms are the encoder-starvation and backpressure wait
+// totals. The ratios are dimensionless floats in [0, 1].
+type engineFramePipeline struct {
+	ProducerBusyMS         int64   `json:"producer_busy_ms"`
+	ProducerWaitMS         int64   `json:"producer_wait_ms"`
+	ConsumerBusyMS         int64   `json:"consumer_busy_ms"`
+	ConsumerWaitMS         int64   `json:"consumer_wait_ms"`
+	QueueDepthAvg          int64   `json:"queue_depth_avg"`
+	QueueDepthMax          int64   `json:"queue_depth_max"`
+	QueueEmptyMS           int64   `json:"queue_empty_ms"`
+	QueueFullMS            int64   `json:"queue_full_ms"`
+	ProducerStallRatio     float64 `json:"producer_stall_ratio"`
+	EncoderStarvationRatio float64 `json:"encoder_starvation_ratio"`
+	BackpressureRatio      float64 `json:"backpressure_ratio"`
 }
 
 // engineIOCounters mirrors the sidecar io_counters block written by

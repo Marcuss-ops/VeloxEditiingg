@@ -40,6 +40,42 @@ struct FramePipelineConfig {
     int pool_capacity{8};
 };
 
+// FramePipelineMetrics is the producer-consumer health report of the
+// Phase-3 encode pipeline:
+//
+//   Decoder → FramePool → Render Producer → BoundedQueue → Encoder
+//   Consumer → Muxer
+//
+//   producer_busy_ms  — render producer actively scaling frames (sws)
+//   producer_wait_ms  — producer blocked on a hand-off queue: waiting for
+//                       input from the decoder (render queue empty) or for
+//                       the encoder queue to drain (backpressure)
+//   consumer_busy_ms  — encoder consumer sending frames + writing packets
+//   consumer_wait_ms  — consumer blocked on an EMPTY encoder queue
+//                       (encoder starvation)
+//   queue_depth_avg   — time-weighted average depth of the encoder queue
+//   queue_depth_max   — high-water mark of the encoder queue (<= pool
+//                       capacity by construction)
+//   queue_empty_ms    — encoder queue empty while the consumer waited
+//   queue_full_ms     — encoder queue full while the producer waited
+//
+//   producer_stall_ratio     = producer_wait / (busy + wait)
+//   encoder_starvation_ratio = consumer_wait / (busy + wait)
+//   backpressure_ratio       = queue_full / (busy + wait)  [producer]
+struct FramePipelineMetrics {
+    int64_t producer_busy_ms{0};
+    int64_t producer_wait_ms{0};
+    int64_t consumer_busy_ms{0};
+    int64_t consumer_wait_ms{0};
+    int64_t queue_depth_avg{0};
+    int64_t queue_depth_max{0};
+    int64_t queue_empty_ms{0};
+    int64_t queue_full_ms{0};
+    double producer_stall_ratio{0.0};
+    double encoder_starvation_ratio{0.0};
+    double backpressure_ratio{0.0};
+};
+
 struct FramePipelineResult {
     bool success{false};
     // True only when the output rename committed and the parent directory
@@ -60,6 +96,15 @@ struct FramePipelineResult {
     int64_t peak_pool_usage{0};
     int64_t peak_render_queue{0};
     int64_t peak_encode_queue{0};
+
+    // Phase-3 producer-consumer health metrics (§25): how the decode/render
+    // producer and the encoder consumer spent their time, how deep the
+    // bounded hand-off queue ran, and how much of the producer's wall time
+    // was backpressure (queue full) versus the consumer's starvation
+    // (queue empty). All wait/busy values are wall-clock milliseconds; the
+    // ratios are dimensionless floats in [0, 1]. Zero means the stage never
+    // ran (or the metrics were not collected on a legacy build).
+    FramePipelineMetrics pipeline_metrics;
 };
 
 // Decodes `input_path`, renders each frame (scale/pad to the output size),

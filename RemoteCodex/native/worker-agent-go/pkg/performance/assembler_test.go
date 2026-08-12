@@ -107,6 +107,45 @@ func TestDeriveCPU_MatchesReceiptSection(t *testing.T) {
 	require.Equal(t, receiptCPU, DeriveCPU(run.RenderMetrics, run.TotalMs))
 }
 
+func TestAssembler_MapsFramePipeline(t *testing.T) {
+	run := sampleRun()
+	run.RenderMetrics.FramePipeline = pipeline.FramePipelineMetrics{
+		ProducerBusyMS:         2500,
+		ProducerWaitMS:         700,
+		ConsumerBusyMS:         2800,
+		ConsumerWaitMS:         400,
+		QueueDepthAvg:          3,
+		QueueDepthMax:          7,
+		QueueEmptyMS:           400,
+		QueueFullMS:            150,
+		ProducerStallRatio:     0.22,
+		EncoderStarvationRatio: 0.125,
+		BackpressureRatio:      0.05,
+	}
+
+	fp := NewAssembler().Assemble(run, AssemblyContext{}).FramePipeline
+	require.Equal(t, int64(2500), fp.ProducerBusyMS)
+	require.Equal(t, int64(700), fp.ProducerWaitMS)
+	require.Equal(t, int64(2800), fp.ConsumerBusyMS)
+	require.Equal(t, int64(400), fp.ConsumerWaitMS)
+	require.Equal(t, int64(3), fp.QueueDepthAvg)
+	require.Equal(t, int64(7), fp.QueueDepthMax)
+	require.Equal(t, int64(400), fp.QueueEmptyMS)
+	require.Equal(t, int64(150), fp.QueueFullMS)
+	require.InDelta(t, 0.22, fp.ProducerStallRatio, 1e-9)
+	require.InDelta(t, 0.125, fp.EncoderStarvationRatio, 1e-9)
+	require.InDelta(t, 0.05, fp.BackpressureRatio, 1e-9)
+}
+
+func TestAssembler_FramePipelineAbsentStaysZero(t *testing.T) {
+	// Jobs that do not route through the encode pipeline (copy-only,
+	// legacy) leave the section zero; the assembler must not invent values.
+	receipt := NewAssembler().Assemble(sampleRun(), AssemblyContext{})
+	require.Zero(t, receipt.FramePipeline.ProducerBusyMS)
+	require.Zero(t, receipt.FramePipeline.QueueDepthMax)
+	require.Zero(t, receipt.FramePipeline.EncoderStarvationRatio)
+}
+
 func TestAssembler_MapsMemory(t *testing.T) {
 	receipt := NewAssembler().Assemble(sampleRun(), AssemblyContext{})
 	require.Equal(t, int64(320_000_000), receipt.Memory.PeakRSSBytes)

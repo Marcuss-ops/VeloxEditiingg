@@ -157,6 +157,51 @@ int main() {
     expect(result.peak_pool_usage >= 2 && result.peak_pool_usage <= 4,
            "bounded pool stayed within capacity and reused slots, got " +
                std::to_string(result.peak_pool_usage));
+
+    // ── §25 producer-consumer health metrics ────────────────────────
+    const auto& pm = result.pipeline_metrics;
+    expect(pm.producer_busy_ms >= 0 && pm.producer_wait_ms >= 0,
+           "producer busy/wait are non-negative");
+    expect(pm.consumer_busy_ms >= 0 && pm.consumer_wait_ms >= 0,
+           "consumer busy/wait are non-negative");
+    // Time assertions stay lenient: the ms-rounded totals can both round
+    // to 0 on a sub-ms producer lifetime on a very fast host. The real
+    // "the producer ran" evidence is queue_depth_max >= 1 below (frames
+    // flowed through the bounded hand-off queue).
+    expect(pm.consumer_busy_ms + pm.consumer_wait_ms > 0,
+           "encoder consumer spent measurable time, got busy=" +
+               std::to_string(pm.consumer_busy_ms) + " wait=" +
+               std::to_string(pm.consumer_wait_ms));
+    // The bounded encoder queue: average depth inside the 4-slot pool and
+    // the high-water mark bounded by capacity with at least one hand-off.
+    expect(pm.queue_depth_avg >= 0 && pm.queue_depth_avg <= 4,
+           "average queue depth within the 4-slot pool, got " +
+               std::to_string(pm.queue_depth_avg));
+    expect(pm.queue_depth_max >= 1 && pm.queue_depth_max <= 4,
+           "peak queue depth bounded by the 4-slot pool, got " +
+               std::to_string(pm.queue_depth_max));
+    expect(pm.queue_empty_ms >= 0 && pm.queue_full_ms >= 0,
+           "queue empty/full waits are non-negative");
+    // queue_full_ms is a subset of producer_wait_ms by construction, and
+    // queue_empty_ms mirrors the consumer's empty-queue wait exactly.
+    expect(pm.queue_full_ms <= pm.producer_wait_ms,
+           "backpressure wait is a subset of producer wait, got full=" +
+               std::to_string(pm.queue_full_ms) + " producer_wait=" +
+               std::to_string(pm.producer_wait_ms));
+    expect(pm.queue_empty_ms == pm.consumer_wait_ms,
+           "queue_empty_ms mirrors consumer wait, got empty=" +
+               std::to_string(pm.queue_empty_ms) + " consumer_wait=" +
+               std::to_string(pm.consumer_wait_ms));
+    expect(pm.producer_stall_ratio >= 0.0 && pm.producer_stall_ratio <= 1.0,
+           "producer stall ratio is a fraction in [0,1], got " +
+               std::to_string(pm.producer_stall_ratio));
+    expect(pm.encoder_starvation_ratio >= 0.0 &&
+               pm.encoder_starvation_ratio <= 1.0,
+           "encoder starvation ratio is a fraction in [0,1], got " +
+               std::to_string(pm.encoder_starvation_ratio));
+    expect(pm.backpressure_ratio >= 0.0 && pm.backpressure_ratio <= 1.0,
+           "backpressure ratio is a fraction in [0,1], got " +
+               std::to_string(pm.backpressure_ratio));
     expect(result.output_durable, "output published with directory durability");
     expect(fs::exists(output), "output is published");
     expect(hasVideoStream(output), "output is probeable with a video stream");
@@ -178,6 +223,9 @@ int main() {
         expect(passResult.peak_pool_usage <= 8,
                "default pool bound respected, got " +
                    std::to_string(passResult.peak_pool_usage));
+        expect(passResult.pipeline_metrics.queue_depth_max <= 8,
+               "default 8-slot queue bound respected, got " +
+                   std::to_string(passResult.pipeline_metrics.queue_depth_max));
         expect(hasVideoStream(passthrough), "passthrough output is probeable");
     }
 

@@ -1,9 +1,13 @@
 #include "velox/plan/render_plan_parser.hpp"
 #include "velox/core/render_engine.hpp"
+#include "velox/services/ffmpeg_progress_parser.hpp"
 #include "velox/services/file_utils.hpp"
 #include "velox/services/frame_pipeline.hpp"
+#include "velox/services/media_probe.hpp"
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
+#include <sstream>
 #include <string>
 
 int cmdRenderPlan(int argc, char** argv) {
@@ -54,6 +58,57 @@ int cmdRenderPlan(int argc, char** argv) {
 // --render-frames: the explicit in-process AVFrame producer-consumer encode
 // path. Only jobs that genuinely need encoding invoke this; copy-only jobs
 // stay on the zero-spawn packet path and never reach this command.
+namespace {
+
+// Emits the <output>.progress.json sidecar for the frame pipeline path so
+// the Go worker's sidecar reader (engineSidecar) can project the §25
+// producer-consumer health metrics exactly like the render-engine sidecar.
+// The block name mirrors the C++ emitter: `frame_pipeline`.
+void emitFramePipelineSidecar(const velox::media::FramePipelineConfig& config,
+                               const velox::media::FramePipelineResult& pipeline,
+                               bool output_durable) {
+    std::error_code ec;
+    const auto outputBytes = std::filesystem::file_size(config.output_path, ec);
+    const int64_t totalSize = ec ? 0 : static_cast<int64_t>(outputBytes);
+    double durationSeconds = 0.0;
+    if (const auto probe = velox::media::probeMediaInProcess(config.input_path);
+        probe.has_value()) {
+        durationSeconds = probe->duration_seconds;
+    }
+    const auto& m = pipeline.pipeline_metrics;
+    std::ostringstream s;
+    s << "{";
+    s << "\"frames\":" << pipeline.frames_encoded;
+    s << ",\"frames_decoded\":" << pipeline.frames_decoded;
+    s << ",\"frames_composited\":" << pipeline.frames_encoded;
+    s << ",\"encode_passes\":1";
+    s << ",\"concat_mode\":\"frame_pipeline\"";
+    s << ",\"temp_bytes\":0";
+    s << ",\"total_size\":" << totalSize;
+    s << ",\"duration_seconds\":" << durationSeconds;
+    s << ",\"output_durable\":" << (output_durable ? "true" : "false");
+    s << ",\"frame_pipeline\":{";
+    s << "\"producer_busy_ms\":" << m.producer_busy_ms;
+    s << ",\"producer_wait_ms\":" << m.producer_wait_ms;
+    s << ",\"consumer_busy_ms\":" << m.consumer_busy_ms;
+    s << ",\"consumer_wait_ms\":" << m.consumer_wait_ms;
+    s << ",\"queue_depth_avg\":" << m.queue_depth_avg;
+    s << ",\"queue_depth_max\":" << m.queue_depth_max;
+    s << ",\"queue_empty_ms\":" << m.queue_empty_ms;
+    s << ",\"queue_full_ms\":" << m.queue_full_ms;
+    s << ",\"producer_stall_ratio\":" << m.producer_stall_ratio;
+    s << ",\"encoder_starvation_ratio\":" << m.encoder_starvation_ratio;
+    s << ",\"backpressure_ratio\":" << m.backpressure_ratio;
+    s << "}}";
+    std::filesystem::path sidecar(config.output_path.string() + ".progress.json");
+    if (!velox::services::SidecarWriter::writeAtomic(sidecar, s.str())) {
+        std::cerr << "warning: failed to write frame pipeline sidecar at "
+                  << sidecar << "\n";
+    }
+}
+
+} // namespace
+
 int cmdRenderFrames(int argc, char** argv) {
     velox::media::FramePipelineConfig config;
     for (int i = 2; i < argc; ++i) {
@@ -87,6 +142,8 @@ int cmdRenderFrames(int argc, char** argv) {
         std::cout << "{\"success\":false,\"error\":\"" << pipeline.error << "\"}" << std::endl;
         return 1;
     }
+    emitFramePipelineSidecar(config, pipeline, pipeline.output_durable);
+    const auto& m = pipeline.pipeline_metrics;
     std::cout << "{\"success\":true,\"output_path\":\""
               << config.output_path.string()
               << "\",\"frames_decoded\":" << pipeline.frames_decoded
@@ -94,6 +151,19 @@ int cmdRenderFrames(int argc, char** argv) {
               << ",\"encode_contexts\":" << pipeline.encode_contexts_created
               << ",\"peak_pool_usage\":" << pipeline.peak_pool_usage
               << ",\"output_durable\":"
-              << (pipeline.output_durable ? "true" : "false") << "}" << std::endl;
+              << (pipeline.output_durable ? "true" : "false")
+              << ",\"pipeline_metrics\":{"
+              << "\"producer_busy_ms\":" << m.producer_busy_ms
+              << ",\"producer_wait_ms\":" << m.producer_wait_ms
+              << ",\"consumer_busy_ms\":" << m.consumer_busy_ms
+              << ",\"consumer_wait_ms\":" << m.consumer_wait_ms
+              << ",\"queue_depth_avg\":" << m.queue_depth_avg
+              << ",\"queue_depth_max\":" << m.queue_depth_max
+              << ",\"queue_empty_ms\":" << m.queue_empty_ms
+              << ",\"queue_full_ms\":" << m.queue_full_ms
+              << ",\"producer_stall_ratio\":" << m.producer_stall_ratio
+              << ",\"encoder_starvation_ratio\":" << m.encoder_starvation_ratio
+              << ",\"backpressure_ratio\":" << m.backpressure_ratio
+              << "}}" << std::endl;
     return 0;
 }

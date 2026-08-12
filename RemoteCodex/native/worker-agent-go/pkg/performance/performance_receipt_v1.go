@@ -55,6 +55,14 @@ type PerformanceReceiptV1 struct {
 	Memory     MemoryMetrics     `json:"memory"`
 	Scheduling SchedulingMetrics `json:"scheduling"`
 
+	// FramePipeline carries the §25 producer-consumer health metrics of
+	// the in-process encode pipeline (Decoder → FramePool → Render
+	// Producer → BoundedQueue → Encoder Consumer → Muxer). Only jobs that
+	// genuinely encode (zoom/resize/text/compositing) route through it;
+	// copy-only and legacy paths leave the section all-zero (the zero
+	// value reads as "not measured", never a measured zero).
+	FramePipeline FramePipelineMetrics `json:"frame_pipeline,omitempty"`
+
 	// Phases carries the canonical exclusive-measurement phase list.
 	// The assembler derives it from the existing sidecar phase timing;
 	// legacy sidecars that predate detailed events leave it nil.
@@ -336,6 +344,45 @@ type SchedulingMetrics struct {
 	InvoluntaryContextSwitches int64 `json:"involuntary_context_switches"`
 	MinorPageFaults            int64 `json:"minor_page_faults"`
 	MajorPageFaults            int64 `json:"major_page_faults"`
+}
+
+// FramePipelineMetrics (§25) reports how the producer-consumer encode
+// pipeline spent its time when the job went through the in-process
+// --render-frames path:
+//
+//	Decoder → FramePool → Render Producer → BoundedQueue → Encoder
+//	Consumer → Muxer
+//
+// ProducerBusyMS is the render producer actively scaling frames;
+// ProducerWaitMS is the producer blocked on a hand-off queue (waiting for
+// the decoder on an empty render queue, or for the encoder queue to drain
+// — backpressure). ConsumerBusyMS is the encoder consumer sending frames
+// and writing packets; ConsumerWaitMS is the consumer blocked on an EMPTY
+// encoder queue (encoder starvation). QueueDepthAvg is the time-weighted
+// average depth of the encoder hand-off queue, QueueDepthMax its
+// high-water mark (<= pool capacity by construction), QueueEmptyMS the
+// consumer's empty-queue wait and QueueFullMS the producer's full-queue
+// wait. The ratios are dimensionless floats in [0, 1] derived by the
+// engine:
+//
+//	producer_stall_ratio     = producer_wait / (busy + wait)
+//	encoder_starvation_ratio = consumer_wait / (busy + wait)
+//	backpressure_ratio       = queue_full / (producer busy + wait)
+//
+// A zero value means the stage never ran / was not measured, never a
+// measured zero.
+type FramePipelineMetrics struct {
+	ProducerBusyMS         int64   `json:"producer_busy_ms"`
+	ProducerWaitMS         int64   `json:"producer_wait_ms"`
+	ConsumerBusyMS         int64   `json:"consumer_busy_ms"`
+	ConsumerWaitMS         int64   `json:"consumer_wait_ms"`
+	QueueDepthAvg          int64   `json:"queue_depth_avg"`
+	QueueDepthMax          int64   `json:"queue_depth_max"`
+	QueueEmptyMS           int64   `json:"queue_empty_ms"`
+	QueueFullMS            int64   `json:"queue_full_ms"`
+	ProducerStallRatio     float64 `json:"producer_stall_ratio"`
+	EncoderStarvationRatio float64 `json:"encoder_starvation_ratio"`
+	BackpressureRatio      float64 `json:"backpressure_ratio"`
 }
 
 // PhaseTiming is one timed phase observation of the attempt. The assembler

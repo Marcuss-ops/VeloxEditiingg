@@ -128,6 +128,21 @@ func mapEngineSidecar(sc *engineSidecar, m *pipeline.RenderMetrics) {
 			m.Observability[key] = value
 		}
 	}
+	if sc.FramePipeline != nil {
+		m.FramePipeline = pipeline.FramePipelineMetrics{
+			ProducerBusyMS:         sc.FramePipeline.ProducerBusyMS,
+			ProducerWaitMS:         sc.FramePipeline.ProducerWaitMS,
+			ConsumerBusyMS:         sc.FramePipeline.ConsumerBusyMS,
+			ConsumerWaitMS:         sc.FramePipeline.ConsumerWaitMS,
+			QueueDepthAvg:          sc.FramePipeline.QueueDepthAvg,
+			QueueDepthMax:          sc.FramePipeline.QueueDepthMax,
+			QueueEmptyMS:           sc.FramePipeline.QueueEmptyMS,
+			QueueFullMS:            sc.FramePipeline.QueueFullMS,
+			ProducerStallRatio:     sc.FramePipeline.ProducerStallRatio,
+			EncoderStarvationRatio: sc.FramePipeline.EncoderStarvationRatio,
+			BackpressureRatio:      sc.FramePipeline.BackpressureRatio,
+		}
+	}
 	m.Segments = make([]pipeline.SegmentTiming, 0, len(sc.Segments))
 	for _, seg := range sc.Segments {
 		m.Segments = append(m.Segments, pipeline.SegmentTiming{

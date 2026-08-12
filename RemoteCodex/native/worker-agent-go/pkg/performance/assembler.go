@@ -88,6 +88,7 @@ func (a *Assembler) Assemble(run pipeline.RunMetrics, ctx AssemblyContext) *Perf
 	receipt.Media = assembleMedia(run.RenderMetrics)
 	receipt.Memory = assembleMemory(run.RenderMetrics)
 	receipt.Scheduling = assembleScheduling(run.RenderMetrics)
+	receipt.FramePipeline = assembleFramePipeline(run.RenderMetrics)
 	receipt.Phases = assemblePhases(run.RenderMetrics)
 	receipt.Segments = assembleSegments(run.RenderMetrics)
 	// Derived KPIs: one call, one definition (the single
@@ -238,6 +239,27 @@ func assembleCPU(rm pipeline.RenderMetrics, wallMs int64) CPUMetrics {
 // section.
 func DeriveCPU(rm pipeline.RenderMetrics, wallMs int64) CPUMetrics {
 	return assembleCPU(rm, wallMs)
+}
+
+// assembleFramePipeline maps the §25 producer-consumer health metrics of
+// the in-process encode pipeline (sidecar frame_pipeline block) into the
+// receipt. Zero when the job did not route through the encode pipeline or
+// the engine predates the block — the section is then omitted by
+// omitempty, never emitted as a fake all-zero report.
+func assembleFramePipeline(rm pipeline.RenderMetrics) FramePipelineMetrics {
+	return FramePipelineMetrics{
+		ProducerBusyMS:         rm.FramePipeline.ProducerBusyMS,
+		ProducerWaitMS:         rm.FramePipeline.ProducerWaitMS,
+		ConsumerBusyMS:         rm.FramePipeline.ConsumerBusyMS,
+		ConsumerWaitMS:         rm.FramePipeline.ConsumerWaitMS,
+		QueueDepthAvg:          rm.FramePipeline.QueueDepthAvg,
+		QueueDepthMax:          rm.FramePipeline.QueueDepthMax,
+		QueueEmptyMS:           rm.FramePipeline.QueueEmptyMS,
+		QueueFullMS:            rm.FramePipeline.QueueFullMS,
+		ProducerStallRatio:     rm.FramePipeline.ProducerStallRatio,
+		EncoderStarvationRatio: rm.FramePipeline.EncoderStarvationRatio,
+		BackpressureRatio:      rm.FramePipeline.BackpressureRatio,
+	}
 }
 
 // assembleMemory maps the engine tree's RSS counters (sampled from
