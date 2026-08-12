@@ -12,6 +12,16 @@ package performance
 // CheckFixtureGate): no ffmpeg/ffprobe/shell execs, no cache-to-tmp
 // materialization, no temp segment files — the engine opens the clip
 // files in place and writes exactly one artifact.
+//
+// KNOWN LIMITATION (honesty note): on sub-second renders the /proc
+// process-tree sampler can miss the engine's I/O window, leaving
+// TotalBytesRead/TotalBytesWritten (and therefore the amplification
+// KPIs) at 0 = "not measured" — the receipt contract treats a zero
+// amplification as not-measured, never as a measured 1.0x, and the
+// tier-2 gate skips unmeasured KPIs. The engine-declared sidecar
+// counters (mux bytes, total_size, asset bytes) stay authoritative;
+// closing the sampler gap for very fast renders is a sampler-layer
+// follow-up, not a receipt-schema change.
 
 import (
 	"context"
@@ -112,6 +122,13 @@ func (r *NativeRenderer) Render(ctx context.Context, fixture BenchmarkFixture) (
 	var result BenchmarkRenderResult
 	if r == nil || r.client == nil {
 		return result, errors.New("native renderer: not configured")
+	}
+	// The production renderer drives the CANONICAL track only: the track
+	// dir + manifest are defined by CanonicalFixtureSpecV1, so any other
+	// fixture would fail with a confusing manifest mismatch. Fail fast
+	// with the honest message instead.
+	if fixture.ID != FixtureCopyOnlyCanonical5MV1 {
+		return result, fmt.Errorf("native renderer: only the canonical fixture %s can be rendered over a track dir, got %s", FixtureCopyOnlyCanonical5MV1, fixture.ID)
 	}
 
 	// 1. The track must match the pinned fixture (Formula 1 contract): a

@@ -137,6 +137,15 @@ func TestNativeRenderer_FailsClosed(t *testing.T) {
 		_, err := NewNativeRenderer(NativeRendererConfig{})
 		require.Error(t, err)
 	})
+	t.Run("non-canonical fixture rejected fast", func(t *testing.T) {
+		trackDir := writeTestTrack(t, testManifest())
+		renderer, err := NewNativeRenderer(NativeRendererConfig{TrackDir: trackDir, BinaryPath: writeFakeEngine(t)})
+		require.NoError(t, err)
+		other, _ := NewBenchmarkFixtureRegistry().Fixture(FixtureCopy5MLow)
+		_, err = renderer.Render(context.Background(), other)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "only the canonical fixture")
+	})
 	t.Run("manifest spec mismatch", func(t *testing.T) {
 		manifest := testManifest()
 		manifest.SpecSHA256 = strings.Repeat("ff", 32) // not the pinned digest

@@ -66,6 +66,9 @@ func NewRenderClientWithBinary(binaryPath string, log *logger.Logger) (*RenderCl
 	if strings.TrimSpace(binaryPath) == "" {
 		return nil, fmt.Errorf("native: engine binary path is empty")
 	}
+	if log == nil {
+		log = logger.New(logger.WarnLevel, os.Stderr)
+	}
 	info, err := os.Stat(binaryPath)
 	if err != nil {
 		return nil, fmt.Errorf("native: engine binary %s: %w", binaryPath, err)

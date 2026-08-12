@@ -66,6 +66,10 @@ func main() {
 		os.Exit(2)
 	}
 
+	if *stub && *trackDir != "" {
+		fmt.Fprintln(os.Stderr, "-stub and -track-dir are mutually exclusive: refusing to silently degrade a real benchmark to synthetic receipts")
+		os.Exit(2)
+	}
 	var renderer performance.RenderRunner
 	switch {
 	case *stub:
