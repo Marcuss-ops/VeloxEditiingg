@@ -5,6 +5,17 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
+    libavformat
+    libavcodec
+    libavutil
+)
+
+function(velox_link_ffmpeg target)
+    target_link_libraries(${target} PRIVATE PkgConfig::FFMPEG)
+endfunction()
+
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
@@ -32,6 +43,7 @@ add_executable(velox_video_engine
     src/plan/render_plan_parser.cpp
     src/app/commands.cpp
     src/services/file_utils.cpp
+    src/services/media_probe.cpp
     src/services/media_utils.cpp
     src/audio/audio_plan.cpp
     src/audio/audio_benchmark.cpp
@@ -42,6 +54,7 @@ add_executable(velox_video_engine
 )
 
 target_include_directories(velox_video_engine PRIVATE include src include/velox)
+velox_link_ffmpeg(velox_video_engine)
 
 # ─── F5 unit tests ──────────────────────────────────────────────────────
 # Standalone test binary for the FFmpeg progress parser + sidecar
@@ -106,6 +119,7 @@ add_executable(velox_audio_timeline_tests
     src/core/render_engine.cpp
     src/core/render_engine_helpers.cpp
     src/services/file_utils.cpp
+    src/services/media_probe.cpp
     src/services/media_utils.cpp
     src/services/ffmpeg_progress_parser.cpp
     src/telemetry/phase_recorder.cpp
@@ -117,6 +131,7 @@ target_include_directories(velox_audio_timeline_tests
 if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(velox_audio_timeline_tests PRIVATE -O2)
 endif()
+velox_link_ffmpeg(velox_audio_timeline_tests)
 
 add_test(NAME audio_timeline_tests
          COMMAND velox_audio_timeline_tests)
@@ -132,6 +147,7 @@ add_executable(velox_phase_recorder_tests
     src/core/render_engine.cpp
     src/core/render_engine_helpers.cpp
     src/services/file_utils.cpp
+    src/services/media_probe.cpp
     src/services/media_utils.cpp
     src/services/ffmpeg_progress_parser.cpp
 )
@@ -142,6 +158,7 @@ target_include_directories(velox_phase_recorder_tests
 if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(velox_phase_recorder_tests PRIVATE -O2)
 endif()
+velox_link_ffmpeg(velox_phase_recorder_tests)
 
 add_test(NAME phase_recorder_tests
          COMMAND velox_phase_recorder_tests)
@@ -158,6 +175,7 @@ add_executable(velox_looped_music_tests
     src/core/render_engine.cpp
     src/core/render_engine_helpers.cpp
     src/services/file_utils.cpp
+    src/services/media_probe.cpp
     src/services/media_utils.cpp
     src/services/ffmpeg_progress_parser.cpp
     src/telemetry/phase_recorder.cpp
@@ -169,8 +187,30 @@ target_include_directories(velox_looped_music_tests
 if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(velox_looped_music_tests PRIVATE -O2)
 endif()
+velox_link_ffmpeg(velox_looped_music_tests)
 
 add_test(NAME looped_music_tests
          COMMAND velox_looped_music_tests)
 set_tests_properties(looped_music_tests PROPERTIES
     ENVIRONMENT "VELOX_LOOPED_MUSIC_TEST=1")
+
+# In-process LibAV probe tests. The test hides ffprobe from PATH after
+# generating fixtures, proving metadata validation no longer depends on a
+# child process.
+add_executable(velox_media_probe_tests
+    tests/test_media_probe.cpp
+    src/services/file_utils.cpp
+    src/services/media_probe.cpp
+    src/services/media_utils.cpp
+)
+
+target_include_directories(velox_media_probe_tests
+    PRIVATE include src include/velox)
+
+if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(velox_media_probe_tests PRIVATE -O2)
+endif()
+velox_link_ffmpeg(velox_media_probe_tests)
+
+add_test(NAME media_probe_tests
+         COMMAND velox_media_probe_tests)

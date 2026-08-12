@@ -44,10 +44,20 @@ video-engine-cpp/
 
 ## Build
 
+The engine links `libavformat`, `libavcodec`, and `libavutil` for in-process
+metadata probing. Install the FFmpeg development packages and `pkg-config`
+before configuring CMake:
+
+```bash
+# Debian/Ubuntu
+sudo apt-get install cmake pkg-config libavformat-dev libavcodec-dev libavutil-dev ffmpeg
+```
+
 ```bash
 mkdir -p build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
 cmake --build . -j$(nproc)
+ctest --output-on-failure
 ```
 
 ## RenderPlan V1 (`--render`)

@@ -1,6 +1,14 @@
 #include "velox/services/media_utils.hpp"
 #include "velox/services/file_utils.hpp"
+#include "velox/services/media_probe.hpp"
 #include "json_utils.hpp"
+
+extern "C" {
+#include <libavcodec/codec_id.h>
+#include <libavcodec/avcodec.h>
+#include <libavutil/pixfmt.h>
+}
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <sstream>
@@ -147,41 +155,11 @@ static std::string scaleFilterString(const std::string& scale_mode,
 }
 
 double probeMediaDurationSeconds(const fs::path& mediaPath) {
-    if (mediaPath.empty() || !fs::exists(mediaPath)) {
+    const auto probe = probeMediaInProcess(mediaPath);
+    if (!probe.has_value() || !probe->duration_verified) {
         return 0.0;
     }
-    std::ostringstream cmd;
-    cmd << "ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "
-        << file::shellQuote(mediaPath.string());
-    const std::string output = json::trim(file::captureCommandOutput(cmd.str()));
-    if (output.empty() || output == "N/A") {
-        return 0.0;
-    }
-    try {
-        const double duration = std::stod(output);
-        return duration > 0.0 ? duration : 0.0;
-    } catch (...) {
-        return 0.0;
-    }
-}
-
-static bool parseFrameRate(const std::string& value, double& out) {
-    const auto slash = value.find('/');
-    try {
-        if (slash == std::string::npos) {
-            out = std::stod(value);
-        } else {
-            const double numerator = std::stod(value.substr(0, slash));
-            const double denominator = std::stod(value.substr(slash + 1));
-            if (denominator == 0.0) {
-                return false;
-            }
-            out = numerator / denominator;
-        }
-    } catch (...) {
-        return false;
-    }
-    return out > 0.0;
+    return probe->duration_seconds;
 }
 
 static bool nativeVideoStreamCopyCompatible(
@@ -194,105 +172,66 @@ static bool nativeVideoStreamCopyCompatible(
         return false;
     }
 
-    std::ostringstream probe;
-    probe << "ffprobe -v error -select_streams v:0 "
-          << "-show_entries stream=codec_name,width,height,avg_frame_rate,pix_fmt "
-          << "-of csv=p=0 " << file::shellQuote(clipPath.string());
-    const std::string output = json::trim(file::captureCommandOutput(probe.str()));
-    if (output.empty()) {
+    const auto probe = probeMediaInProcess(clipPath);
+    if (!probe.has_value()) {
         return false;
     }
 
-    std::istringstream fields(output);
-    std::string codec;
-    std::string widthText;
-    std::string heightText;
-    std::string pixelFormat;
-    std::string frameRateText;
-    if (!std::getline(fields, codec, ',') ||
-        !std::getline(fields, widthText, ',') ||
-        !std::getline(fields, heightText, ',') ||
-        !std::getline(fields, pixelFormat, ',') ||
-        !std::getline(fields, frameRateText, ',')) {
-        return false;
-    }
-
-    double sourceFPS = 0.0;
-    int sourceWidth = 0;
-    int sourceHeight = 0;
-    try {
-        sourceWidth = std::stoi(widthText);
-        sourceHeight = std::stoi(heightText);
-    } catch (...) {
-        return false;
-    }
-    if (!parseFrameRate(frameRateText, sourceFPS)) {
+    const auto video = std::find_if(
+        probe->streams.begin(), probe->streams.end(),
+        [](const MediaProbeStream& stream) { return stream.is_video; });
+    if (video == probe->streams.end()) {
         return false;
     }
 
     // The canonical clip corpus is H.264, yuv420p, 1920x1080 at 24 fps.
     // Keep this guard conservative: copy-only callers must reject incompatible
     // media instead of producing a mixed concat stream.
-    if (json::trim(codec) != "h264" || json::trim(pixelFormat) != "yuv420p" ||
-        sourceWidth != width || sourceHeight != height ||
-        std::abs(sourceFPS - static_cast<double>(fps)) > 0.001) {
+    if (video->codec_id != static_cast<int>(AV_CODEC_ID_H264) ||
+        video->pixel_format != static_cast<int>(AV_PIX_FMT_YUV420P) ||
+        video->width != width || video->height != height ||
+        std::abs(video->average_frame_rate - static_cast<double>(fps)) > 0.001) {
         return false;
     }
 
-    const double sourceDuration = probeMediaDurationSeconds(clipPath);
+    const double sourceDuration = probe->duration_verified
+        ? probe->duration_seconds
+        : video->duration_seconds;
     return sourceDuration > 0.0 && requestedDuration <= sourceDuration + 0.05;
 }
 
 bool hasAudioStream(const fs::path& mediaPath) {
-    if (mediaPath.empty() || !fs::exists(mediaPath)) {
+    const auto probe = probeMediaInProcess(mediaPath);
+    if (!probe.has_value()) {
         return false;
     }
-    std::ostringstream cmd;
-    cmd << "ffprobe -v error -select_streams a:0"
-        << " -show_entries stream=index -of csv=p=0 "
-        << file::shellQuote(mediaPath.string());
-    return !json::trim(file::captureCommandOutput(cmd.str())).empty();
+    return std::any_of(
+        probe->streams.begin(), probe->streams.end(),
+        [](const MediaProbeStream& stream) { return stream.is_audio; });
 }
 
 FinalAudioMetadata probeFinalAudioMetadata(const fs::path& audioPath) {
     FinalAudioMetadata metadata;
-    if (audioPath.empty() || !fs::exists(audioPath)) {
+    const auto probe = probeMediaInProcess(audioPath);
+    if (!probe.has_value()) {
         return metadata;
     }
 
-    std::ostringstream cmd;
-    cmd << "ffprobe -v error -select_streams a:0"
-        << " -show_entries stream=codec_name,sample_rate,channels,channel_layout,duration,start_time"
-        << " -of default=noprint_wrappers=1 "
-        << file::shellQuote(audioPath.string());
-    const std::string output = file::captureCommandOutput(cmd.str());
-    std::istringstream lines(output);
-    std::string line;
-    while (std::getline(lines, line)) {
-        line = json::trim(line);
-        const auto separator = line.find('=');
-        if (separator == std::string::npos) {
-            continue;
-        }
-        const std::string key = line.substr(0, separator);
-        const std::string value = json::trim(line.substr(separator + 1));
-        try {
-            if (key == "codec_name") metadata.codec = value;
-            else if (key == "sample_rate") metadata.sample_rate = std::stoi(value);
-            else if (key == "channels") metadata.channels = std::stoi(value);
-            else if (key == "channel_layout") metadata.channel_layout = value;
-            else if (key == "duration" && value != "N/A") {
-                metadata.duration_seconds = std::stod(value);
-                metadata.duration_verified = true;
-            } else if (key == "start_time" && value != "N/A") {
-                metadata.start_time_seconds = std::stod(value);
-                metadata.start_time_verified = true;
-            }
-        } catch (...) {
-            return FinalAudioMetadata{};
-        }
+    const auto audio = std::find_if(
+        probe->streams.begin(), probe->streams.end(),
+        [](const MediaProbeStream& stream) { return stream.is_audio; });
+    if (audio == probe->streams.end()) {
+        return metadata;
     }
 
+    metadata.codec = avcodec_get_name(static_cast<AVCodecID>(audio->codec_id));
+    metadata.sample_rate = audio->sample_rate;
+    metadata.channels = audio->channels;
+    metadata.channel_layout = audio->channel_layout;
+    metadata.duration_seconds = audio->duration_seconds;
+    metadata.duration_verified = audio->duration_verified;
+    metadata.start_time_seconds = audio->start_time_seconds;
+    metadata.start_time_verified = audio->start_time_verified;
     metadata.metadata_verified =
         !metadata.codec.empty() &&
         metadata.sample_rate > 0 &&

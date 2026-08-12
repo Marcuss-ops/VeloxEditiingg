@@ -177,6 +177,26 @@ The benchmark enables `VELOX_BENCH_DISK_COPY_METRICS=1` only for its
 child engine. Production runs do not emit the copy metrics unless that env
 variable is explicitly set to a truthy value.
 
+A post-change run with the LibAV backend used the same four-segment workload
+and produced:
+
+| Metric | LibAV result |
+|---|---:|
+| C++ render wall time | 1,010 ms in the captured run |
+| Direct engine execs | 1 |
+| Process forks/clones | 10 |
+| C++ `ffprobe` execs | **0** |
+| C++ `ffmpeg` execs | 6 |
+| Asset staging copies | 5; 78,207 bytes |
+| Estimated final copy | 75,789 bytes |
+| Frames decoded/encoded | 0 / 0 |
+
+The independent final quality `ffprobe` remains `1` and is intentionally
+outside the C++ trace. The C++ copy-only path now opens each local asset once
+with LibAV and performs no `ffprobe` child execution. The wall-time result is
+one local run, not an SLA; repeat the benchmark with multiple runs and real
+worker fixtures before comparing capacity.
+
 The benchmark is intentionally explicit about two different notions of
 spawn:
 

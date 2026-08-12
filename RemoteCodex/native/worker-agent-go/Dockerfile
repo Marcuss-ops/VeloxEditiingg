@@ -80,6 +80,9 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
         pkg-config=${PKG_CONFIG_VERSION} \
         ca-certificates=${CA_CERTIFICATES_VERSION} \
         ffmpeg=${FFMPEG_VERSION} \
+        libavformat-dev=${FFMPEG_VERSION} \
+        libavcodec-dev=${FFMPEG_VERSION} \
+        libavutil-dev=${FFMPEG_VERSION} \
         procps=${PROCPS_VERSION} \
         libc-bin=${LIBC_BIN_VERSION} \
     && rm -rf /var/lib/apt/lists/*

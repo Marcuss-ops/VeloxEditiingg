@@ -80,7 +80,8 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cmake ffmpeg
+          sudo apt-get install -y --no-install-recommends \
+            cmake ffmpeg pkg-config libavformat-dev libavcodec-dev libavutil-dev
           cmake --version
           ffmpeg -version | head -1
           ffprobe -version | head -1
