@@ -264,6 +264,31 @@ void testMalformedValuesTolerated() {
     EXPECT(p.finished == true, "progress=end still parsed");
 }
 
+void testCapturingProgressDrainsLargeStdout() {
+    SUBCASE("capturing progress drains verbose stdout without deadlock");
+
+    // The command writes substantially more than a Linux pipe buffer before
+    // the terminating progress block. The parent must consume stdout while
+    // the child is running; waiting for the child first deadlocks forever.
+    int exit_code = -1;
+    std::string stderr_out;
+    size_t callbacks = 0;
+    const bool ok = sv::runFfmpegCapturingProgress(
+        "timeout 5s sh -c 'yes x | head -n 100000; echo progress=end'",
+        fs::current_path(),
+        [&](const sv::EngineProgress& progress) {
+            ++callbacks;
+            EXPECT(progress.finished, "large stdout command reaches progress=end");
+        },
+        0,
+        stderr_out,
+        exit_code);
+
+    EXPECT(ok, "large stdout command succeeds");
+    EXPECT_EQ_INT(exit_code, 0);
+    EXPECT_EQ_INT(callbacks, 1);
+}
+
 void testSidecarWriterAtomic() {
     SUBCASE("SidecarWriter::writeAtomic creates and replaces file atomically");
     fs::path tmpDir = fs::temp_directory_path() / "velox_video_engine_tests" / "sidecar";
@@ -315,6 +340,7 @@ int main() {
     testChunkedFeedSmallChunks();
     testExpectedDurationZeroPct();
     testMalformedValuesTolerated();
+    testCapturingProgressDrainsLargeStdout();
     testSidecarWriterAtomic();
     testEscapeProgressJsonString();
 

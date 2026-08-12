@@ -283,9 +283,11 @@ static std::string runFfmpegInternal(
     FILE*& out_fp,
     int& out_fd_stderr,
     std::thread& out_stderr_thread,
+    pid_t& out_pid,
     int& out_exit_code,
     std::string& out_stderr_text
 ) {
+    out_pid = -1;
     // Build a stderr pipe.
     int pipefd[2] = {-1, -1};
     if (::pipe(pipefd) != 0) {
@@ -334,6 +336,7 @@ static std::string runFfmpegInternal(
         ::waitpid(pid, &out_exit_code, 0);
         return std::string("fdopen(stdout) failed: ") + std::strerror(errno);
     }
+    out_pid = pid;
     out_fd_stderr = pipefd[0];
 
     auto captureStderr = [&]() {
@@ -348,13 +351,10 @@ static std::string runFfmpegInternal(
                     size_t space = kMaxStderrBufferBytes - out_stderr_text.size();
                     size_t take = std::min(static_cast<size_t>(n), space);
                     out_stderr_text.append(buf, take);
-                    if (take < static_cast<size_t>(n)) {
-                        // Truncated; discard remainder.
-                        break;
-                    }
-                } else {
-                    break;
                 }
+                // Once the diagnostic buffer is full, continue draining and
+                // discard additional bytes. Stopping here would fill the
+                // child's stderr pipe and deadlock the encoder.
             } else if (n == 0) {
                 break;
             } else if (errno == EINTR) {
@@ -366,15 +366,9 @@ static std::string runFfmpegInternal(
     };
     out_stderr_thread = std::thread(captureStderr);
 
-    int raw_status = 0;
-    ::waitpid(pid, &raw_status, 0);
-    if (WIFEXITED(raw_status)) {
-        out_exit_code = WEXITSTATUS(raw_status);
-    } else if (WIFSIGNALED(raw_status)) {
-        out_exit_code = 128 + WTERMSIG(raw_status);
-    } else {
-        out_exit_code = 1;
-    }
+    // The caller must drain stdout before waiting. Waiting here first allows
+    // a verbose ffmpeg process to fill `-progress pipe:1` and deadlock while
+    // the parent is blocked in waitpid().
     return {};
 }
 
@@ -389,11 +383,13 @@ bool runFfmpegCapturingProgress(
     FILE* fp = nullptr;
     int stderr_fd = -1;
     std::thread stderr_thread;
+    pid_t child_pid = -1;
     std::string stderr_buf;
     std::string err;
 
     try {
-        err = runFfmpegInternal(cmd, cwd, fp, stderr_fd, stderr_thread, exit_code, stderr_buf);
+        err = runFfmpegInternal(
+            cmd, cwd, fp, stderr_fd, stderr_thread, child_pid, exit_code, stderr_buf);
     } catch (...) {
         err = "runFfmpegInternal threw";
     }
@@ -405,6 +401,10 @@ bool runFfmpegCapturingProgress(
         if (fp != nullptr) ::fclose(fp);
         if (stderr_fd >= 0) ::close(stderr_fd);
         if (stderr_thread.joinable()) stderr_thread.join();
+        if (child_pid > 0) {
+            int ignored_status = 0;
+            ::waitpid(child_pid, &ignored_status, 0);
+        }
         return false;
     }
 
@@ -425,6 +425,17 @@ bool runFfmpegCapturingProgress(
     // Drain stderr thread.
     if (stderr_thread.joinable()) stderr_thread.join();
     if (stderr_fd >= 0) ::close(stderr_fd);
+
+    int raw_status = 0;
+    if (child_pid <= 0 || ::waitpid(child_pid, &raw_status, 0) < 0) {
+        exit_code = 1;
+    } else if (WIFEXITED(raw_status)) {
+        exit_code = WEXITSTATUS(raw_status);
+    } else if (WIFSIGNALED(raw_status)) {
+        exit_code = 128 + WTERMSIG(raw_status);
+    } else {
+        exit_code = 1;
+    }
 
     stderr_out = std::move(stderr_buf);
     return (exit_code == 0);

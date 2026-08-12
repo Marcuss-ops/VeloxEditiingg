@@ -125,9 +125,9 @@ private:
     EngineProgress cur_{};
 };
 
-// runFfmpegCapturingProgress spawns `cmd` shell-style (via popen +
-// sh -c) and streams its stdout through a line-based ProgressParser,
-// invoking `cb` for every parsed block.
+// runFfmpegCapturingProgress spawns `cmd` shell-style (via sh -c) and
+// streams its stdout through a line-based ProgressParser while the child is
+// running, invoking `cb` for every parsed block.
 //
 // Returns:
 //   - true  if exit_code == 0
