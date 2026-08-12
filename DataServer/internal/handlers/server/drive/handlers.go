@@ -25,7 +25,11 @@ func (h *DriveHandlers) ListDriveTokensHandler(c *gin.Context) {
 
 // GetDriveLinksHandler returns all drive links
 func (h *DriveHandlers) GetDriveLinksHandler(c *gin.Context) {
-	folders := h.svc.GetDriveLinks()
+	folders, err := h.svc.GetDriveLinks()
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": "drive links unavailable"})
+		return
+	}
 	c.JSON(http.StatusOK, DriveFoldersResponse{
 		Success: true,
 		Folders: folders,
@@ -36,7 +40,11 @@ func (h *DriveHandlers) GetDriveLinksHandler(c *gin.Context) {
 // GetDriveLinksByGroupHandler returns drive links for a specific group
 func (h *DriveHandlers) GetDriveLinksByGroupHandler(c *gin.Context) {
 	groupName := c.Param("group_name")
-	folders := h.svc.GetDriveLinksByGroup(groupName)
+	folders, err := h.svc.GetDriveLinksByGroup(groupName)
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": "drive links unavailable"})
+		return
+	}
 	c.JSON(http.StatusOK, DriveFoldersResponse{
 		Success: true,
 		Folders: folders,
@@ -48,7 +56,7 @@ func (h *DriveHandlers) GetDriveLinksByGroupHandler(c *gin.Context) {
 func (h *DriveHandlers) GetMasterFoldersHandler(c *gin.Context) {
 	masters, err := h.svc.GetMasterFolders()
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"masters": gin.H{}}})
+		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "error": "master folders unavailable"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"masters": masters}})

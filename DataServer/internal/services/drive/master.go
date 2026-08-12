@@ -7,17 +7,19 @@ import "fmt"
 // GetMasterFolders returns master folders
 func (s *Service) GetMasterFolders() (map[string]interface{}, error) {
 	masters := make(map[string]interface{})
-	if s.store != nil {
-		dbMasters, err := s.store.ListMasterFolders()
-		if err == nil && len(dbMasters) > 0 {
-			for _, m := range dbMasters {
-				language, _ := m["language"].(string)
-				if language == "" {
-					continue
-				}
-				masters[language] = m
-			}
+	if s == nil || s.store == nil {
+		return nil, fmt.Errorf("drive store not configured")
+	}
+	dbMasters, err := s.store.ListMasterFolders()
+	if err != nil {
+		return nil, fmt.Errorf("list master folders: %w", err)
+	}
+	for _, m := range dbMasters {
+		language, _ := m["language"].(string)
+		if language == "" {
+			continue
 		}
+		masters[language] = m
 	}
 	return masters, nil
 }

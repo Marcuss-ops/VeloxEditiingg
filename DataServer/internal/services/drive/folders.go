@@ -21,49 +21,53 @@ type linksCache struct {
 }
 
 // getLinks returns folders from cache with 30s TTL.
-func (s *Service) getLinks() []DriveFolder {
+func (s *Service) getLinks() ([]DriveFolder, error) {
+	if s == nil || s.store == nil {
+		return nil, fmt.Errorf("drive: store not configured")
+	}
 	s.cache.mu.RLock()
-	if time.Since(s.cache.lastLoad) < 30*time.Second && len(s.cache.folders) > 0 {
+	if !s.cache.lastLoad.IsZero() && time.Since(s.cache.lastLoad) < 30*time.Second {
 		folders := make([]DriveFolder, len(s.cache.folders))
 		copy(folders, s.cache.folders)
 		s.cache.mu.RUnlock()
-		return folders
+		return folders, nil
 	}
 	s.cache.mu.RUnlock()
 
 	s.cache.mu.Lock()
 	defer s.cache.mu.Unlock()
 
-	_ = s.loadFromDisk()
-	return s.cache.folders
+	if err := s.loadFromDisk(); err != nil {
+		return nil, err
+	}
+	return append([]DriveFolder(nil), s.cache.folders...), nil
 }
 
 // loadFromDisk loads folders from SQLite.
 func (s *Service) loadFromDisk() error {
-	if s.store != nil {
-		dbFolders, err := s.store.ListDriveLinks()
-		if err == nil && len(dbFolders) > 0 {
-			folders := make([]DriveFolder, len(dbFolders))
-			for i, f := range dbFolders {
-				folders[i] = DriveFolder{
-					ID:              getStringField(f, "id"),
-					Name:            getStringField(f, "name"),
-					Link:            getStringField(f, "link"),
-					ParentID:        getStringField(f, "parent_id"),
-					Language:        getStringField(f, "language"),
-					CreatedAt:       getInt64Field(f, "created_at"),
-					UpdatedAt:       getInt64Field(f, "updated_at"),
-					IsMaster:        getBoolField(f, "is_master"),
-					SubfoldersCount: getIntIntField(f, "subfolders_count"),
-				}
-			}
-			s.cache.folders = folders
-			s.cache.lastLoad = time.Now()
-			return nil
-		}
-		s.cache.folders = nil
-		s.cache.lastLoad = time.Now()
+	if s == nil || s.store == nil {
+		return fmt.Errorf("drive: store not configured")
 	}
+	dbFolders, err := s.store.ListDriveLinks()
+	if err != nil {
+		return fmt.Errorf("drive: list links: %w", err)
+	}
+	folders := make([]DriveFolder, len(dbFolders))
+	for i, f := range dbFolders {
+		folders[i] = DriveFolder{
+			ID:              getStringField(f, "id"),
+			Name:            getStringField(f, "name"),
+			Link:            getStringField(f, "link"),
+			ParentID:        getStringField(f, "parent_id"),
+			Language:        getStringField(f, "language"),
+			CreatedAt:       getInt64Field(f, "created_at"),
+			UpdatedAt:       getInt64Field(f, "updated_at"),
+			IsMaster:        getBoolField(f, "is_master"),
+			SubfoldersCount: getIntIntField(f, "subfolders_count"),
+		}
+	}
+	s.cache.folders = folders
+	s.cache.lastLoad = time.Now()
 	return nil
 }
 
@@ -87,13 +91,16 @@ func (s *Service) updateCache(folders []DriveFolder) {
 }
 
 // GetDriveLinks returns all links
-func (s *Service) GetDriveLinks() []DriveFolder {
+func (s *Service) GetDriveLinks() ([]DriveFolder, error) {
 	return s.getLinks()
 }
 
 // GetDriveLinksByGroup returns links filtered by group name
-func (s *Service) GetDriveLinksByGroup(groupName string) []DriveFolder {
-	folders := s.getLinks()
+func (s *Service) GetDriveLinksByGroup(groupName string) ([]DriveFolder, error) {
+	folders, err := s.getLinks()
+	if err != nil {
+		return nil, err
+	}
 	var filtered []DriveFolder
 	groupLower := strings.ToLower(groupName)
 	for _, f := range folders {
@@ -103,7 +110,7 @@ func (s *Service) GetDriveLinksByGroup(groupName string) []DriveFolder {
 			filtered = append(filtered, f)
 		}
 	}
-	return filtered
+	return filtered, nil
 }
 
 // SaveDriveLinks replaces all drive links
@@ -117,7 +124,10 @@ func (s *Service) SaveDriveLinks(folders []DriveFolder) error {
 
 // AddDriveFolder adds or updates a folder
 func (s *Service) AddDriveFolder(req AddDriveFolderRequest) (string, error) {
-	folders := s.getLinks()
+	folders, err := s.getLinks()
+	if err != nil {
+		return "", err
+	}
 
 	if req.ID == "" && req.Link != "" {
 		parts := strings.Split(req.Link, "/")
@@ -161,7 +171,10 @@ func (s *Service) AddDriveFolder(req AddDriveFolderRequest) (string, error) {
 
 // UpdateDriveFolder updates a single folder
 func (s *Service) UpdateDriveFolder(folderID string, req UpdateDriveFolderRequest) error {
-	folders := s.getLinks()
+	folders, err := s.getLinks()
+	if err != nil {
+		return err
+	}
 	for i, f := range folders {
 		if f.ID == folderID {
 			if req.Name != "" {
@@ -190,7 +203,10 @@ func (s *Service) UpdateDriveFolder(folderID string, req UpdateDriveFolderReques
 
 // DeleteDriveFolder deletes a folder and its children
 func (s *Service) DeleteDriveFolder(folderID string) (int, error) {
-	folders := s.getLinks()
+	folders, err := s.getLinks()
+	if err != nil {
+		return 0, err
+	}
 	var remaining []DriveFolder
 	for _, f := range folders {
 		if f.ID != folderID && f.ParentID != folderID {
@@ -212,7 +228,10 @@ func (s *Service) DeleteDriveFolder(folderID string) (int, error) {
 
 // GetDriveFolders lists child folders
 func (s *Service) GetDriveFolders(parentID string) ([]DriveFolder, error) {
-	folders := s.getLinks()
+	folders, err := s.getLinks()
+	if err != nil {
+		return nil, err
+	}
 	if parentID == "" || parentID == "root" {
 		var masters []DriveFolder
 		for _, f := range folders {
@@ -239,7 +258,10 @@ func (s *Service) DriveFiles(parentID string) ([]DriveFolder, error) {
 		return nil, fmt.Errorf("%w", ErrParentIDRequired)
 	}
 
-	folders := s.getLinks()
+	folders, err := s.getLinks()
+	if err != nil {
+		return nil, err
+	}
 	resolvedID := resolveDriveFolderID(folders, parentID)
 
 	var children []DriveFolder

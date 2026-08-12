@@ -28,7 +28,10 @@ var stockFolderAliases = map[string]string{
 
 // GetDriveGroups builds group structures
 func (s *Service) GetDriveGroups() (map[string]interface{}, error) {
-	folders := s.getLinks()
+	folders, err := s.getLinks()
+	if err != nil {
+		return nil, err
+	}
 	groups := make(map[string]interface{})
 
 	for group, clipName := range groupToClipFolder {
@@ -49,7 +52,10 @@ func (s *Service) GetDriveGroups() (map[string]interface{}, error) {
 
 // GroupFolders resolves group folder mappings
 func (s *Service) GroupFolders(groupName string) (map[string]interface{}, error) {
-	folders := s.getLinks()
+	folders, err := s.getLinks()
+	if err != nil {
+		return nil, err
+	}
 	result := make(map[string]interface{})
 
 	if clipName, ok := groupToClipFolder[groupName]; ok {
@@ -66,7 +72,10 @@ func (s *Service) GroupFolders(groupName string) (map[string]interface{}, error)
 
 // ClipFolderID finds folder ID by name or group
 func (s *Service) ClipFolderID(folderName, group string) (map[string]interface{}, error) {
-	folders := s.getLinks()
+	folders, err := s.getLinks()
+	if err != nil {
+		return nil, err
+	}
 
 	if folderName != "" {
 		for _, f := range folders {
