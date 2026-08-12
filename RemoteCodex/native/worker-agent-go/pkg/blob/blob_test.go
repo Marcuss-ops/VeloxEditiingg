@@ -1,5 +1,5 @@
-// PR-3.7 — tests for BlobArtifacts. Cover hash-mismatch rejection,
-// not-found sentinel, roundtrip, and Close() lifecycle.
+// Tests for BlobArtifacts. Cover hash-mismatch rejection, not-found
+// sentinel, roundtrip, and Close() lifecycle.
 package blob
 
 import (
@@ -16,12 +16,9 @@ func testHash(t *testing.T, data []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func makeBlobs(t *testing.T, qSize int) *BlobArtifacts {
+func makeBlobs(t *testing.T) *BlobArtifacts {
 	t.Helper()
-	b, err := NewBlobArtifacts(BlobOptions{
-		Root:            t.TempDir(),
-		UploadQueueSize: qSize,
-	})
+	b, err := NewBlobArtifacts(BlobOptions{Root: t.TempDir()})
 	if err != nil {
 		t.Fatalf("NewBlobArtifacts: %v", err)
 	}
@@ -30,7 +27,7 @@ func makeBlobs(t *testing.T, qSize int) *BlobArtifacts {
 }
 
 func TestBlob_PutGetRoundtrip(t *testing.T) {
-	b := makeBlobs(t, 0)
+	b := makeBlobs(t)
 	ctx := context.Background()
 	data := []byte("blob-payload")
 	hash := testHash(t, data)
@@ -52,7 +49,7 @@ func TestBlob_PutGetRoundtrip(t *testing.T) {
 }
 
 func TestBlob_PutRejectsHashMismatch(t *testing.T) {
-	b := makeBlobs(t, 0)
+	b := makeBlobs(t)
 	ctx := context.Background()
 
 	data := []byte("real")
@@ -71,7 +68,7 @@ func TestBlob_PutRejectsHashMismatch(t *testing.T) {
 }
 
 func TestBlob_GetReturnsNotFound(t *testing.T) {
-	b := makeBlobs(t, 0)
+	b := makeBlobs(t)
 	ctx := context.Background()
 	missing := testHash(t, []byte("never-put"))
 	_, err := b.Get(ctx, missing)
@@ -85,8 +82,7 @@ func TestBlob_GetReturnsNotFound(t *testing.T) {
 
 func TestBlob_CloseStopsProcessorAndRejectsPuts(t *testing.T) {
 	b, err := NewBlobArtifacts(BlobOptions{
-		Root:            t.TempDir(),
-		UploadQueueSize: 4,
+		Root: t.TempDir(),
 	})
 	if err != nil {
 		t.Fatalf("NewBlobArtifacts: %v", err)
@@ -102,13 +98,10 @@ func TestBlob_CloseStopsProcessorAndRejectsPuts(t *testing.T) {
 	}
 }
 
-func TestBlob_FullQueueDropsPending(t *testing.T) {
-	// Successful writes always bump Publish. Queue overflow is a secondary
-	// publication failure after the blob is already persisted, so
-	// PublishFailed is not mutually exclusive with Publish. The invariant
-	// here is narrower: all writes succeed, queue capacity stays fixed,
-	// and overflow is observable via PublishFailed > 0 under flood load.
-	b := makeBlobs(t, 1)
+func TestBlob_PutHasNoDetachedPublicationQueue(t *testing.T) {
+	// BlobArtifacts is local persistence only. A successful Put must not
+	// create a second, unowned publication path that can silently drop work.
+	b := makeBlobs(t)
 	ctx := context.Background()
 	const flood = 5000
 	for i := 0; i < flood; i++ {
@@ -118,16 +111,12 @@ func TestBlob_FullQueueDropsPending(t *testing.T) {
 			t.Fatalf("Put[%d]: %v", i, err)
 		}
 	}
-	// Channel capacity matches the option (no special defaulting).
-	if cap(b.uploadCh) != 1 {
-		t.Fatalf("uploadCh capacity = %d, want 1", cap(b.uploadCh))
-	}
 	s := b.Stats()
 	if s.Publish != int64(flood) {
 		t.Fatalf("Publish = %d, want %d successful persisted blobs", s.Publish, flood)
 	}
-	if s.PublishFailed == 0 {
-		t.Fatalf("expected queue overflow to increment PublishFailed under flood load, got %+v", s)
+	if s.PublishFailed != 0 {
+		t.Fatalf("local blob writes should not report detached publication failures: %+v", s)
 	}
 	if s.Entries != flood {
 		t.Fatalf("Entries = %d, want %d persisted blobs", s.Entries, flood)

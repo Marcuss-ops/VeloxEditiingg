@@ -373,7 +373,7 @@ func main() {
 	telemetry.MarkBlobReady(true)
 	defer func() { _ = blobs.Close() }()
 	logger.Info("[CACHE] PersistedLocalCache at %s (256 MiB default budget)", cacheDir)
-	logger.Info("[BLOB] BlobArtifacts at %s (upload queue size 1024)", blobDir)
+	logger.Info("[BLOB] BlobArtifacts at %s (local content-addressed storage)", blobDir)
 
 	w, workerErr := worker.New(cfg, resolvedVersion,
 		worker.WithRegistry(registry),

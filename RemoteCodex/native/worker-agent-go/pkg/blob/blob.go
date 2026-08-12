@@ -1,6 +1,6 @@
-// Package blob provides content-addressed blob storage with publish-time
-// hash verification and an in-memory upload queue for master-side
-// publication (consumed via the master transport).
+// Package blob provides content-addressed blob storage with hash verification.
+// Master publication is owned by the worker artifact lifecycle, not by this
+// local storage adapter.
 //
 // Invariants:
 //   - Put verifies hash matches data; returns ErrHashMismatch on mismatch
@@ -8,10 +8,7 @@
 //   - Get hashverifies on read; corruption bumps the corruption counter and
 //     detaches the file (async).
 //   - Get returns ErrBlobNotFound on physical miss — recoverable.
-//   - Upload queue is bounded; full queue drops pending uploads and bumps
-//     publish_failed so operators see backpressure.
-//   - Close() drains the upload queue and stops the processor goroutine.
-//     Wire to worker shutdown so the stub processor does not leak.
+//   - Close() prevents new reads and writes after worker shutdown.
 package blob
 
 import (
@@ -22,9 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 	"sync/atomic"
-	"time"
 )
 
 // ErrHashMismatch is returned by Put when data's hash disagrees with the
@@ -51,31 +46,18 @@ type BlobStats struct {
 	FetchCorruption int64 `json:"fetch_corruption"`
 	Bytes           int64 `json:"bytes"`
 	Entries         int   `json:"entries"`
-	QueueDepth      int   `json:"queue_depth"`
-} // UploadJob is one pending master-upload job. The transport
-// implementation will pull these off the channel.
-type UploadJob struct {
-	Hash       string    `json:"hash"`
-	SizeBytes  int64     `json:"size_bytes"`
-	EnqueuedAt time.Time `json:"enqueued_at"`
 }
 
 // BlobOptions configures BlobArtifacts.
 type BlobOptions struct {
 	// Root is the on-disk directory. Required.
 	Root string
-	// UploadQueueSize bounds the in-memory upload channel. Default 1024.
-	UploadQueueSize int
 }
 
-// BlobArtifacts is a thread-safe, content-addressed blob store with an
-// upload queue wired for master-side publication.
+// BlobArtifacts is a thread-safe, content-addressed blob store.
 type BlobArtifacts struct {
-	root     string
-	uploadCh chan UploadJob
-	closed   atomic.Bool
-	stopOnce sync.Once
-	uploadWG sync.WaitGroup
+	root   string
+	closed atomic.Bool
 
 	blobs atomic.Int64
 	bytes atomic.Int64
@@ -87,25 +69,15 @@ type BlobArtifacts struct {
 	fetchCorruption atomic.Int64
 }
 
-// NewBlobArtifacts constructs the store and starts one background
-// processor goroutine that drains uploadCh. It will replace the
-// noop processor body with a master-transport publish call.
+// NewBlobArtifacts constructs the local content-addressed store.
 func NewBlobArtifacts(opts BlobOptions) (*BlobArtifacts, error) {
 	if opts.Root == "" {
 		return nil, errors.New("blob: Root is required")
 	}
-	if opts.UploadQueueSize <= 0 {
-		opts.UploadQueueSize = 1024
-	}
 	if err := os.MkdirAll(opts.Root, 0o755); err != nil {
 		return nil, fmt.Errorf("blob: create root: %w", err)
 	}
-	b := &BlobArtifacts{
-		root:     opts.Root,
-		uploadCh: make(chan UploadJob, opts.UploadQueueSize),
-	}
-	b.uploadWG.Add(1)
-	go b.processUploads()
+	b := &BlobArtifacts{root: opts.Root}
 	return b, nil
 }
 
@@ -119,7 +91,6 @@ func (b *BlobArtifacts) Stats() BlobStats {
 		FetchCorruption: b.fetchCorruption.Load(),
 		Bytes:           b.bytes.Load(),
 		Entries:         int(b.blobs.Load()),
-		QueueDepth:      len(b.uploadCh),
 	}
 }
 
@@ -127,8 +98,8 @@ func (b *BlobArtifacts) Stats() BlobStats {
 // ErrHashMismatch WITHOUT persisting (hash-mismatch bumps publish_failed
 // exactly once). On filesystem-error paths the deferred single-bump
 // keeps publish_failed in sync with attempts (no double-counting on
-// compound failures). On successful write the upload-queue drop
-// path bumps publish_failed at most once.
+// compound failures). A successful write only persists the local blob;
+// publication is a separate lifecycle owned by the worker artifact protocol.
 func (b *BlobArtifacts) Put(_ context.Context, hash string, data []byte) (err error) {
 	if b.closed.Load() {
 		return ErrClosed
@@ -145,9 +116,7 @@ func (b *BlobArtifacts) Put(_ context.Context, hash string, data []byte) (err er
 
 	path := b.entryPath(hash)
 	// Filesystem-error paths share a single publish_failed bump
-	// via deferred increment. Hash-mismatch and queue-full take
-	// their own paths (hash-mismatch already incremented; queue-full
-	// increments below).
+	// via deferred increment. Hash-mismatch is handled before this defer.
 	defer func() {
 		if err != nil {
 			b.publishFailed.Add(1)
@@ -170,18 +139,6 @@ func (b *BlobArtifacts) Put(_ context.Context, hash string, data []byte) (err er
 	b.blobs.Add(1)
 	b.bytes.Add(int64(len(data)))
 
-	job := UploadJob{
-		Hash:       hash,
-		SizeBytes:  int64(len(data)),
-		EnqueuedAt: time.Now(),
-	}
-	select {
-	case b.uploadCh <- job:
-	default:
-		// Queue full → drop. Operators see backpressure via
-		// Stats().QueueDepth and PublishFailed.
-		b.publishFailed.Add(1)
-	}
 	return nil
 }
 
@@ -215,22 +172,10 @@ func (b *BlobArtifacts) Get(_ context.Context, hash string) ([]byte, error) {
 	return data, nil
 }
 
-// Close drains the upload queue and stops the processor goroutine.
-// Idempotent. Wire to worker shutdown.
+// Close prevents future reads and writes. Idempotent. Wire to worker shutdown.
 func (b *BlobArtifacts) Close() error {
-	b.stopOnce.Do(func() {
-		b.closed.Store(true)
-		close(b.uploadCh)
-	})
-	b.uploadWG.Wait()
+	b.closed.Store(true)
 	return nil
-} // processUploads drains uploadCh. It will replace the noop sink
-// with a master-transport publish call (see UploadJob).
-func (b *BlobArtifacts) processUploads() {
-	defer b.uploadWG.Done()
-	for range b.uploadCh {
-		// Stub: count received, do nothing.
-	}
 }
 
 func (b *BlobArtifacts) entryPath(hash string) string {

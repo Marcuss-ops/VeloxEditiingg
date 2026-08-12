@@ -228,6 +228,9 @@ reversibile, testato prima/dopo, committato su `main` e pubblicato.
 - [x] TaskRunner upload marker: non dichiara più `ok` quando la pubblicazione
       avviene nel lifecycle worker successivo; usa `deferred`/`skipped` e lascia
       l'esito reale a `uploadTaskOutputs`.
+- [x] Blob store: rimossa la coda upload legacy che veniva drenata da un noop
+      e poteva perdere lavoro; `BlobArtifacts` è ora solo persistenza locale,
+      mentre la pubblicazione passa dal protocollo artifact canonico.
 - [ ] Verificare che ogni job produca automaticamente un breakdown completo
       o un motivo esplicito per ogni fase non disponibile.
 - [ ] Salvare fixture permanenti: 5m poche/semplice, 5m molte/complesso,

@@ -85,12 +85,13 @@ func WithCache(c *cache.PersistedLocalCache) Option {
 	return func(o *workerOptions) {
 		o.cache = c
 	}
-} // WithBlobs wires a content-addressed blob store into the
-// worker. Same instance is exposed via Worker.blobs and threaded
-// into the TaskRunner built by New(); the upload queue is consumed
-// by master-side transport.
+}
+
+// WithBlobs wires a content-addressed blob store into the worker. The same
+// instance is exposed via Worker.blobs and threaded into the TaskRunner built
+// by New(); master publication remains owned by the artifact lifecycle.
 //
-// Passing nil panics loudly; omit WithBlobs to fall back to noop.
+// Passing nil panics loudly; omit WithBlobs only for test/headless profiles.
 func WithBlobs(b *blob.BlobArtifacts) Option {
 	if b == nil {
 		panic("worker.WithBlobs: blobs must not be nil — pass an explicit *blob.BlobArtifacts or omit WithBlobs")
