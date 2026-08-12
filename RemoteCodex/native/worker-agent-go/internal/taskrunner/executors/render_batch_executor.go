@@ -117,14 +117,13 @@ func (e *renderBatchExecutor) Execute(ctx context.Context, execCtx executor.Exec
 		obs.logFailure("job_id", "INVALID_JOB_ID", err)
 		return obs.failure(started, "INVALID_JOB_ID", err), nil
 	}
+	assetResolution := obs.begin("asset_resolution", "worker.plan", "resolve_assets")
 	bindings, ok := runtimeassets.FromContext(ctx)
 	if !ok {
 		err := ErrMissingRenderBatchBindings
-		obs.logFailure("asset_resolution", "ASSET_BINDINGS_MISSING", err)
+		obs.finish(assetResolution, telemetry.StatusFailed, "ASSET_BINDINGS_MISSING", err)
 		return obs.failure(started, "ASSET_BINDINGS_MISSING", err), nil
 	}
-
-	assetResolution := obs.begin("asset_resolution", "worker.plan", "resolve_assets")
 	if err := validateBindings(plan, bindings); err != nil {
 		obs.finish(assetResolution, telemetry.StatusFailed, "ASSET_BINDINGS_INVALID", err)
 		return obs.failure(started, "ASSET_BINDINGS_INVALID", err), nil
@@ -446,15 +445,24 @@ func (o *renderBatchObservability) info(event string, fields map[string]interfac
 }
 
 func (o *renderBatchObservability) logFailure(stage, code string, err error) {
+	if o == nil {
+		return
+	}
+	fields := map[string]interface{}{"stage": stage, "error_code": code}
+	// Do not pass err to the logger: asset errors can contain worker-local
+	// paths. The stable code and identity fields are the structured contract.
+	o.error("render_batch.failed", fields)
+}
+
+func (o *renderBatchObservability) error(event string, fields map[string]interface{}) {
 	if o == nil || o.logger == nil {
 		return
 	}
-	fields := o.identityFields()
-	fields["stage"] = stage
-	fields["error_code"] = code
-	// Do not pass err to the logger: asset errors can contain worker-local
-	// paths. The stable code and identity fields are the structured contract.
-	o.logger.Error("render_batch.failed", nil, fields)
+	merged := o.identityFields()
+	for key, value := range fields {
+		merged[key] = value
+	}
+	o.logger.Error(event, nil, merged)
 }
 
 func (o *renderBatchObservability) begin(stage, component, action string) *renderBatchPhase {
@@ -497,7 +505,7 @@ func (o *renderBatchObservability) finish(phase *renderBatchPhase, status, code 
 		fields["error_code"] = code
 	}
 	if status == telemetry.StatusFailed {
-		o.logFailure(phase.stage, code, err)
+		o.error("render_batch."+phase.stage+".failed", fields)
 	} else {
 		o.info("render_batch."+phase.stage+".completed", fields)
 	}
