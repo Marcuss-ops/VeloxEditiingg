@@ -207,7 +207,7 @@ PY
   # file_utils::copyFile emits one disk.copy JSON line for each cache/local
   # asset staging copy. The final fs::copy_file is accounted separately below.
   asset_copy_ops="$(grep -c '"metric":"disk.copy"' "$STDERR" 2>/dev/null || true)"
-  asset_copy_bytes="$(grep '"metric":"disk.copy"' "$STDERR" 2>/dev/null | \
+  asset_copy_bytes="$({ grep '"metric":"disk.copy"' "$STDERR" 2>/dev/null || true; } | \
     sed -n 's/.*"bytes":\([0-9][0-9]*\).*/\1/p' | \
     awk '{sum += $1} END {print sum + 0}')"
 
@@ -218,6 +218,13 @@ PY
   frames_encoded="$(jq -r '.frames // 0' "$sidecar")"
   encode_passes="$(jq -r '.encode_passes // 0' "$sidecar")"
   concat_mode="$(jq -r '.concat_mode // ""' "$sidecar")"
+  # Packet-copy writes the final target directly through the atomic LibAV
+  # muxer. Legacy renders still perform the explicit final fs::copy_file.
+  estimated_final_copy_ops=1
+  if [[ "$concat_mode" == "packet_copy" ]]; then
+    estimated_final_copy_ops=0
+    estimated_final_copy_bytes=0
+  fi
   total_ms="$(awk '{printf "%.3f", $1 * 1000}' "$TIMEFILE")"
 
   # One independent final ffprobe is deliberately retained as the quality
@@ -226,7 +233,7 @@ PY
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$run" "$total_ms" "$engine_execs" "$process_forks" \
     "$engine_ffprobe_execs" "$engine_ffmpeg_execs" "1" "$asset_copy_ops" \
-    "$asset_copy_bytes" "1" "$estimated_final_copy_bytes" "$sidecar_temp_bytes" \
+    "$asset_copy_bytes" "$estimated_final_copy_ops" "$estimated_final_copy_bytes" "$sidecar_temp_bytes" \
     "$(stat -c '%s' "$OUTPUT")" "$frames_decoded" "$frames_encoded" \
     "$encode_passes" "$concat_mode" >>"$REPORT"
 

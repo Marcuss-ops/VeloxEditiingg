@@ -13,7 +13,10 @@ It measures the current implementation; it does **not** claim to represent the
 latency of a production worker until the same workload is repeated on each
 worker class with real cached assets.
 
-## Real execution path
+## Historical V1 execution path
+
+The flow below is retained as the before-migration reference measured by this
+benchmark. It remains the fallback for non-copy-only renders.
 
 ```text
 TaskRunner / pipeline.Runner
@@ -47,6 +50,27 @@ TaskRunner / pipeline.Runner
 TaskRunner quality boundary
   ├─ SHA-256 final artifact
   └─ independent ffprobe final artifact validation
+```
+
+## Current packet copy-only execution path
+
+For `RenderPlan.copy_only=true`, the engine now takes a separate strict path:
+
+```text
+RenderEngine::render
+  ├─ bind local source or existing cache path directly
+  ├─ remote-only fallback: download one immutable local input
+  ├─ LibAV avformat_open_input / av_read_frame per source
+  ├─ trim packet ranges + rewrite PTS/DTS to a microsecond timeline
+  ├─ one avformat_alloc_output_context2("mp4")
+  ├─ one av_interleaved_write_frame loop
+  ├─ av_write_trailer + fsync
+  └─ atomic rename(output.mp4.partial.<pid>.<nonce>, output.mp4)
+
+No segment_N.mp4, segments.txt, video_only.mp4, final_muxed.mp4,
+FFmpeg child, ffprobe child, or final full-file copy is created by this branch.
+The independent Go quality `ffprobe` remains intentionally outside the engine
+trace.
 ```
 
 ### Important interpretation
@@ -177,25 +201,29 @@ The benchmark enables `VELOX_BENCH_DISK_COPY_METRICS=1` only for its
 child engine. Production runs do not emit the copy metrics unless that env
 variable is explicitly set to a truthy value.
 
-A post-change run with the LibAV backend used the same four-segment workload
-and produced:
+A post-change run with the LibAV packet backend used the same four-segment
+workload and produced:
 
-| Metric | LibAV result |
+| Metric | Packet backend result |
 |---|---:|
-| C++ render wall time | 1,010 ms in the captured run |
-| Direct engine execs | 1 |
-| Process forks/clones | 10 |
+| C++ render wall time | 100–130 ms in the captured two-run sample |
+| Direct engine execs | 1 per render |
+| Process forks/clones | **0** |
 | C++ `ffprobe` execs | **0** |
-| C++ `ffmpeg` execs | 6 |
-| Asset staging copies | 5; 78,207 bytes |
-| Estimated final copy | 75,789 bytes |
+| C++ `ffmpeg` execs | **0** |
+| Asset staging copies | **0** |
+| Estimated final copy | **0** |
+| Generated temp bytes | **0** |
 | Frames decoded/encoded | 0 / 0 |
+| Concat mode | `packet_copy` |
 
 The independent final quality `ffprobe` remains `1` and is intentionally
-outside the C++ trace. The C++ copy-only path now opens each local asset once
-with LibAV and performs no `ffprobe` child execution. The wall-time result is
-one local run, not an SLA; repeat the benchmark with multiple runs and real
-worker fixtures before comparing capacity.
+outside the C++ trace. Evidence was captured under
+`/tmp/velox-packet-baseline-direct` after the direct asset-binding change;
+the earlier parallel benchmark was discarded because it raced the rebuild.
+The wall-time result is one local synthetic sample, not an SLA; repeat the
+benchmark with multiple runs and real worker fixtures before comparing
+capacity.
 
 The benchmark is intentionally explicit about two different notions of
 spawn:
@@ -206,10 +234,10 @@ spawn:
    RenderClient execution and should be collected from the task metrics on a
    real worker. A direct C++ benchmark cannot manufacture those Go timings.
 
-## Expected current shape
+## Historical V1 process shape
 
 For `N` local copy-only video timeline items with one finite audio track, the
-current code path is expected to show approximately:
+pre-packet V1 fallback was expected to show approximately:
 
 ```text
 asset staging copies       N video copies + 1 audio copy
@@ -245,18 +273,22 @@ Record at minimum:
 - cold or warm asset-cache state;
 - the complete `summary.json` and evidence directory.
 
-The first LibAV packet-backend comparison should preserve the same plan and
-acceptance gates, then target:
+The LibAV packet-backend acceptance result now targets and meets:
 
 ```text
 engine_ffmpeg_execs      = 0
 engine_ffprobe_execs     = 0
-asset staging copies     = 0
+asset staging copies     = 0  (local/cache inputs)
 intermediate segments    = 0
 intermediate video_only  = 0
-final mux passes         = 1
+final mux passes         = 1  (in-process MP4 muxer)
+final full-file copies   = 0
 frames decoded/encoded   = 0  (copy-only case)
 ```
+
+Remote assets that are not already materialized still require one download to
+an immutable local input; the zero-copy staging result applies to local paths
+and existing cache entries.
 
 The independent final `ffprobe` remains enabled until the new backend has
 passed the media-contract, duration, stream, hash, and artifact-quality

@@ -44,6 +44,7 @@ add_executable(velox_video_engine
     src/app/commands.cpp
     src/services/file_utils.cpp
     src/services/media_probe.cpp
+    src/services/media_packet_pipeline.cpp
     src/services/media_utils.cpp
     src/audio/audio_plan.cpp
     src/audio/audio_benchmark.cpp
@@ -120,6 +121,7 @@ add_executable(velox_audio_timeline_tests
     src/core/render_engine_helpers.cpp
     src/services/file_utils.cpp
     src/services/media_probe.cpp
+    src/services/media_packet_pipeline.cpp
     src/services/media_utils.cpp
     src/services/ffmpeg_progress_parser.cpp
     src/telemetry/phase_recorder.cpp
@@ -148,6 +150,7 @@ add_executable(velox_phase_recorder_tests
     src/core/render_engine_helpers.cpp
     src/services/file_utils.cpp
     src/services/media_probe.cpp
+    src/services/media_packet_pipeline.cpp
     src/services/media_utils.cpp
     src/services/ffmpeg_progress_parser.cpp
 )
@@ -176,6 +179,7 @@ add_executable(velox_looped_music_tests
     src/core/render_engine_helpers.cpp
     src/services/file_utils.cpp
     src/services/media_probe.cpp
+    src/services/media_packet_pipeline.cpp
     src/services/media_utils.cpp
     src/services/ffmpeg_progress_parser.cpp
     src/telemetry/phase_recorder.cpp
@@ -201,6 +205,7 @@ add_executable(velox_media_probe_tests
     tests/test_media_probe.cpp
     src/services/file_utils.cpp
     src/services/media_probe.cpp
+    src/services/media_packet_pipeline.cpp
     src/services/media_utils.cpp
 )
 
@@ -214,3 +219,24 @@ velox_link_ffmpeg(velox_media_probe_tests)
 
 add_test(NAME media_probe_tests
          COMMAND velox_media_probe_tests)
+
+# In-process packet copy pipeline tests. Fixtures are generated before the
+# test hides ffmpeg/ffprobe from PATH; the mux itself must execute no child
+# media process and must publish one timestamp-rewritten MP4 atomically.
+add_executable(velox_media_packet_pipeline_tests
+    tests/test_media_packet_pipeline.cpp
+    src/services/file_utils.cpp
+    src/services/media_probe.cpp
+    src/services/media_packet_pipeline.cpp
+)
+
+target_include_directories(velox_media_packet_pipeline_tests
+    PRIVATE include src include/velox)
+
+if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(velox_media_packet_pipeline_tests PRIVATE -O2)
+endif()
+velox_link_ffmpeg(velox_media_packet_pipeline_tests)
+
+add_test(NAME media_packet_pipeline_tests
+         COMMAND velox_media_packet_pipeline_tests)

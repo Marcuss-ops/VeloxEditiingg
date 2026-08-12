@@ -3,9 +3,11 @@
 #include "velox/audio/audio_plan.hpp"
 #include "render_engine_helpers.hpp"
 #include "velox/services/file_utils.hpp"
+#include "velox/services/media_packet_pipeline.hpp"
 #include "velox/services/media_utils.hpp"
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <iostream>
 #include <memory>
@@ -202,6 +204,178 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
     fs::path outPath(plan.output_path);
     std::error_code ec_parents;
     fs::create_directories(outPath.parent_path(), ec_parents);
+
+    // Copy-only is a strict packet contract. It never creates per-segment
+    // MP4s, never invokes FFmpeg for segment/concat/mux work, and publishes
+    // the final MP4 directly through the in-process LibAV muxer. Keep this
+    // branch before the legacy segment loop so non-copy renders retain their
+    // existing frame/filter/audio behavior unchanged.
+    if (plan.copy_only) {
+        if (plan.timeline.empty()) {
+            result.error = "copy_only requires at least one timeline video";
+            return failRender("copy_only_empty_timeline");
+        }
+        if (!plan.subtitle_tracks.empty()) {
+            result.error = "copy_only does not support subtitle burn-in";
+            return failRender("copy_only_subtitles_unsupported");
+        }
+
+        media::CopyOnlyMuxRequest request;
+        request.output_path = outPath;
+        request.video_segments.reserve(plan.timeline.size());
+        double total_copy_duration = 0.0;
+
+        // Bind existing local/cache assets directly. Only a genuinely remote
+        // source is staged into the workdir; the packet muxer opens the bound
+        // immutable path itself and never performs cache -> temp copies.
+        const auto bindOrStage = [&](const std::string& source,
+                                     const std::string& cache_dir,
+                                     const fs::path& staged_path)
+            -> std::pair<fs::path, bool> {
+            if (fs::is_regular_file(source)) {
+                return {fs::path(source), true};
+            }
+            if (!cache_dir.empty()) {
+                const fs::path cached = file::cacheAssetPath(cache_dir, source);
+                if (fs::is_regular_file(cached)) {
+                    return {cached, true};
+                }
+            }
+            if (file::downloadAsset(source, staged_path, cache_dir)) {
+                return {staged_path, false};
+            }
+            return {};
+        };
+
+        for (size_t i = 0; i < plan.timeline.size(); ++i) {
+            const auto& item = plan.timeline[i];
+            if (!std::holds_alternative<plan::VideoSource>(item.source)) {
+                result.error = "copy_only requires video sources only (segment " +
+                    std::to_string(i) + ")";
+                return failRender("copy_only_source_unsupported");
+            }
+            if (item.duration_seconds <= 0.0 || !std::isfinite(item.duration_seconds)) {
+                result.error = "copy_only requires positive finite duration for segment " +
+                    std::to_string(i);
+                return failRender("copy_only_duration_invalid");
+            }
+            const auto& source = std::get<plan::VideoSource>(item.source);
+            const auto boundVideo = bindOrStage(
+                source.url, source.cache_key,
+                workDir / ("copy_input_" + std::to_string(i) + ".mp4"));
+            if (boundVideo.first.empty()) {
+                result.error = "failed to resolve copy-only video source for segment " +
+                    std::to_string(i);
+                return failRender("asset_download_failed");
+            }
+            const fs::path& localVideo = boundVideo.first;
+            SegmentTiming segment;
+            segment.index = i;
+            segment.worker_index = 0;
+            segment.scene_id = item.scene_id;
+            segment.source_type = "video";
+            const auto segmentStart = std::chrono::steady_clock::now();
+            {
+                telemetry::ScopedPhase assetPhase(
+                    recorder_, telemetry::kOriginWorker, telemetry::kScopeTask,
+                    "worker.asset", boundVideo.second ? "bind" : "transfer",
+                    boundVideo.second ? "resolve" : "download");
+                assetPhase.Complete();
+            }
+            segment.source_bytes = fileSize(localVideo);
+            segment.total_ms = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - segmentStart).count();
+            metrics_.addMs(boundVideo.second ? "asset_bind_ms" : "asset_download_ms",
+                           segment.total_ms);
+            segment.finished_offset_ms = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - renderStart).count();
+            segment.status = telemetry::kStatusOk;
+            metrics_.addSegment(segment);
+
+            const int64_t duration_us = static_cast<int64_t>(
+                std::llround(item.duration_seconds * 1'000'000.0));
+            request.video_segments.push_back({localVideo, duration_us, item.include_audio});
+            total_copy_duration += item.duration_seconds;
+            const int progress = 10 + static_cast<int>(
+                (static_cast<double>(i + 1) / plan.timeline.size()) * 55.0);
+            reportProgress(progress, "staging_copy_inputs");
+            reportDetailedProgress(
+                last_progress_, static_cast<int>(i + 1), static_cast<int>(plan.timeline.size()),
+                static_cast<int>(i + 1), static_cast<int>(plan.timeline.size()),
+                "staging_copy_inputs", 0, 0, 0,
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - renderStart).count(), true);
+        }
+
+        if (plan.audio_tracks.size() > 1) {
+            result.error = "copy_only supports at most one final audio track";
+            return failRender("copy_only_audio_mix_unsupported");
+        }
+        if (!plan.audio_tracks.empty()) {
+            const auto& track = plan.audio_tracks.front();
+            if (track.loop || track.volume != 1.0 || track.start_time_offset < 0.0) {
+                result.error = "copy_only final audio requires finite, neutral-volume audio";
+                return failRender("copy_only_audio_transform_unsupported");
+            }
+            const auto boundAudio = bindOrStage(
+                track.source_url, "", workDir / "copy_input_audio.m4a");
+            if (boundAudio.first.empty() || !media::hasAudioStream(boundAudio.first)) {
+                result.error = "failed to resolve valid copy-only audio track";
+                return failRender("copy_only_audio_invalid");
+            }
+            {
+                telemetry::ScopedPhase assetPhase(
+                    recorder_, telemetry::kOriginWorker, telemetry::kScopeTask,
+                    "worker.asset", boundAudio.second ? "bind" : "transfer",
+                    boundAudio.second ? "resolve" : "download");
+                assetPhase.Complete();
+            }
+            const int64_t declared_audio_duration = track.duration_seconds > 0.0
+                ? static_cast<int64_t>(std::llround(track.duration_seconds * 1'000'000.0))
+                : 0;
+            request.audio = media::CopyOnlyAudioTrack{
+                boundAudio.first,
+                static_cast<int64_t>(std::llround(track.start_time_offset * 1'000'000.0)),
+                declared_audio_duration};
+        }
+
+        duration_seconds_.store(total_copy_duration);
+        concat_mode_ = "packet_copy";
+        reportProgress(75, "packet_mux");
+        reportDetailedProgress(
+            last_progress_, static_cast<int>(plan.timeline.size()),
+            static_cast<int>(plan.timeline.size()), static_cast<int>(plan.timeline.size()),
+            static_cast<int>(plan.timeline.size()), "packet_mux", 0, 0, 0,
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - renderStart).count());
+        telemetry::ScopedPhase packetPhase(
+            recorder_, telemetry::kOriginEngine, telemetry::kScopeAttempt,
+            "engine", "packet_mux", "composite");
+        media::CopyOnlyMuxResult muxResult;
+        bool muxOk;
+        {
+            ScopedTimer timer(metrics_, "packet_mux_ms");
+            muxOk = media::muxCopyOnly(request, &muxResult);
+        }
+        if (!muxOk) {
+            packetPhase.Abort("packet_mux_failed", muxResult.error);
+            result.error = "copy-only packet mux failed: " + muxResult.error;
+            return failRender("packet_mux_failed");
+        }
+        // Packet counters are not decoded/encoded frame counters. Keep the
+        // phase event truthful and leave frames_encoded/decoded at zero; the
+        // sidecar's packet work is represented by the packet_mux phase itself.
+        packetPhase.Complete(
+            0,
+            static_cast<int64_t>(fileSize(outPath)),
+            0,
+            telemetry::kStatusOk);
+        last_progress_.progress_pct = 100.0;
+        last_progress_.finished = true;
+        reportProgress(100, "completed");
+        result.success = true;
+        return result;
+    }
 
     // 1. Build timeline segments
     reportProgress(10, "resolving_assets");
