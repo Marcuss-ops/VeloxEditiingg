@@ -198,12 +198,33 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 			clipLease = leased
 			// Detach cleanup from the job context: a timeout/cancel is exactly
 			// when the lease must still be released, and workercache.Release
-			// must not inherit the already-done execution context.
+			// must not inherit the already-done execution context. Register
+			// this defer first so the renewal stop/join defer below runs first
+			// under Go's LIFO defer ordering.
 			defer func() {
 				if releaseErr := clipLease.ReleaseAll(leaseCleanupContext(ctx)); releaseErr != nil && w.logger != nil {
 					w.logger.Warn("[LEASE] release failed for job=%s: %v", pte.JobID, releaseErr)
 				}
 			}()
+			// Long V2 renders need a periodic cache-lease heartbeat. Stop and
+			// join the renewal goroutine before final cleanup so a tick cannot
+			// race ReleaseAll after the executor returns or times out.
+			if isCompiledPlan {
+				renewCtx, stopRenew := context.WithCancel(ctx)
+				renewDone := make(chan struct{})
+				go func() {
+					defer close(renewDone)
+					clipLease.runRenewalLoop(renewCtx, compiledPlanLeaseRenewalInterval, func(renewErr error) {
+						if w.logger != nil {
+							w.logger.Warn("[LEASE] renewal failed for job=%s: %v", pte.JobID, renewErr)
+						}
+					})
+				}()
+				defer func() {
+					stopRenew()
+					<-renewDone
+				}()
+			}
 		}
 	}
 

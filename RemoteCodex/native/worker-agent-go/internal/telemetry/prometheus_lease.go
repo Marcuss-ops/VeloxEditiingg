@@ -48,6 +48,11 @@ func (m *PrometheusMetrics) RecordLeaseRelease(result string) {
 	m.leaseReleases.inc(normalizeLeaseReleaseResult(result))
 }
 
+// RecordLeaseRenew records one periodic lease renewal attempt.
+func (m *PrometheusMetrics) RecordLeaseRenew(result string) {
+	m.leaseRenewals.inc(normalizeLeaseReleaseResult(result))
+}
+
 // RecordLeaseRetry records a retry attempt from the in-memory ReleaseAll path
 // or the durable reconciler.
 func (m *PrometheusMetrics) RecordLeaseRetry(source string) {

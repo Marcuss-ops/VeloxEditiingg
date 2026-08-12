@@ -40,6 +40,7 @@ type PrometheusMetrics struct {
 	assetCacheDuplicateDownloadBytes *CounterVec
 	leaseAcquires                    *CounterVec
 	leaseReleases                    *CounterVec
+	leaseRenewals                    *CounterVec
 	leaseRetries                     *CounterVec
 	leaseCleanupFailures             *CounterVec
 	prefetchRequested                *CounterVec
@@ -159,6 +160,10 @@ func NewPrometheusMetrics() *PrometheusMetrics {
 			Name: "velox_cache_lease_releases_total", Help: "Cache lease release attempts by result", Label: "result",
 			values: map[string]float64{"success": 0, "failure": 0, "not_found": 0},
 		},
+		leaseRenewals: &CounterVec{
+			Name: "velox_cache_lease_renewals_total", Help: "Cache lease renewal attempts by result", Label: "result",
+			values: map[string]float64{"success": 0, "failure": 0, "not_found": 0},
+		},
 		leaseRetries: &CounterVec{
 			Name: "velox_cache_lease_retries_total", Help: "Lease retry attempts by lifecycle source", Label: "source",
 			values: map[string]float64{"release_all": 0, "reconciler": 0, "other": 0},
@@ -250,6 +255,7 @@ func (m *PrometheusMetrics) ExportPrometheus() string {
 	output += m.assetCacheDuplicateDownloadBytes.export()
 	output += m.leaseAcquires.export()
 	output += m.leaseReleases.export()
+	output += m.leaseRenewals.export()
 	output += m.leaseRetries.export()
 	output += m.leaseCleanupFailures.export()
 	output += m.prefetchRequested.export()

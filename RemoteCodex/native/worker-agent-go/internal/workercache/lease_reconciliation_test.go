@@ -2,6 +2,8 @@ package workercache
 
 import (
 	"context"
+	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -65,6 +67,51 @@ func TestLeaseReleaseReconciliation_PersistsAndIsIdempotent(t *testing.T) {
 	count, err = second.PendingLeaseReleaseCount(ctx)
 	if err != nil || count != 0 {
 		t.Fatalf("pending count after delete = %d err=%v, want 0", count, err)
+	}
+}
+
+func TestCacheRenewLease_IsFencedToOwningJob(t *testing.T) {
+	ctx := context.Background()
+	cache, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("open cache: %v", err)
+	}
+	defer cache.Close()
+	assetPath := filepath.Join(t.TempDir(), "renew.asset")
+	if err := os.WriteFile(assetPath, []byte("renew"), 0o640); err != nil {
+		t.Fatalf("write asset: %v", err)
+	}
+	if err := cache.Store(ctx, Entry{AssetKey: "renew-asset", LocalPath: assetPath, SizeBytes: 5, DownloadComplete: true}); err != nil {
+		t.Fatalf("store asset: %v", err)
+	}
+	if err := cache.Acquire(ctx, "renew-asset", "job-owner"); err != nil {
+		t.Fatalf("acquire lease: %v", err)
+	}
+	before, found, err := cache.Find(ctx, "renew-asset")
+	if err != nil || !found {
+		t.Fatalf("find before renew: found=%v err=%v", found, err)
+	}
+	if err := cache.RenewLease(ctx, "renew-asset", "job-owner"); err != nil {
+		t.Fatalf("renew owned lease: %v", err)
+	}
+	after, found, err := cache.Find(ctx, "renew-asset")
+	if err != nil || !found {
+		t.Fatalf("find after renew: found=%v err=%v", found, err)
+	}
+	if !after.LastUsedAt.After(before.LastUsedAt) {
+		t.Fatalf("LastUsedAt = %s, want after %s", after.LastUsedAt, before.LastUsedAt)
+	}
+	if err := cache.RenewLease(ctx, "renew-asset", "other-job"); !errors.Is(err, ErrLeaseNotFound) {
+		t.Fatalf("renew non-owner error = %v, want ErrLeaseNotFound", err)
+	}
+	if err := cache.Release(ctx, "renew-asset", "job-owner"); err != nil {
+		t.Fatalf("release lease: %v", err)
+	}
+	if err := cache.RenewLease(ctx, "renew-asset", "job-owner"); !errors.Is(err, ErrLeaseNotFound) {
+		t.Fatalf("renew released lease error = %v, want ErrLeaseNotFound", err)
+	}
+	if err := cache.RenewLease(ctx, "missing-asset", "job-owner"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("renew missing asset error = %v, want ErrNotFound", err)
 	}
 }
 

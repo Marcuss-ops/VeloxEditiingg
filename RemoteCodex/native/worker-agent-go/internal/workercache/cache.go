@@ -83,6 +83,7 @@ var (
 	ErrDuplicate          = errors.New("workercache: cached asset already exists")
 	ErrEmptyID            = errors.New("workercache: asset_key is required")
 	ErrInvalidContentHash = errors.New("workercache: content_hash must be a SHA-256 digest")
+	ErrLeaseNotFound      = errors.New("workercache: lease not found")
 )
 
 // Cache is the SQLite-backed index over cached worker assets.
@@ -318,6 +319,47 @@ func (c *Cache) Acquire(ctx context.Context, assetKey, jobID string) error {
 		}
 	}
 	return nil
+}
+
+// RenewLease is a cache-protection heartbeat, not a TTL extension: the
+// authoritative cached_asset_leases relation has no expiry column and keeps
+// the asset protected while present. It bumps last_used_at only when the
+// (asset, job) lease relation still exists. Unlike MarkUsed, this fenced update cannot refresh an
+// unleased asset, so a lost lease is visible to the caller and the render's
+// renewal loop can report it instead of silently claiming success.
+// Returns ErrNotFound when the asset row is missing and ErrLeaseNotFound when
+// the asset exists but this job no longer owns a lease for it.
+func (c *Cache) RenewLease(ctx context.Context, assetKey, jobID string) error {
+	if assetKey == "" {
+		return ErrEmptyID
+	}
+	if jobID == "" {
+		return fmt.Errorf("workercache.RenewLease: jobID is required")
+	}
+	res, err := c.db.ExecContext(ctx, `
+UPDATE cached_assets
+   SET last_used_at = ?
+ WHERE asset_key = ?
+   AND EXISTS (
+       SELECT 1 FROM cached_asset_leases
+        WHERE asset_key = ? AND job_id = ?
+   )`, time.Now().UTC().Format(time.RFC3339Nano), assetKey, assetKey, jobID)
+	if err != nil {
+		return fmt.Errorf("workercache.RenewLease(%q, %q): %w", assetKey, jobID, err)
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return fmt.Errorf("workercache.RenewLease(%q, %q): rows affected: %w", assetKey, jobID, err)
+	} else if n == 1 {
+		return nil
+	}
+	var assetExists int
+	if err := c.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM cached_assets WHERE asset_key = ?`, assetKey).Scan(&assetExists); err != nil {
+		return fmt.Errorf("workercache.RenewLease(%q, %q): probe: %w", assetKey, jobID, err)
+	}
+	if assetExists == 0 {
+		return fmt.Errorf("%w: asset_key=%s", ErrNotFound, assetKey)
+	}
+	return fmt.Errorf("%w: asset_key=%s job_id=%s", ErrLeaseNotFound, assetKey, jobID)
 }
 
 // Release removes only the (asset, job) lease relation and bumps

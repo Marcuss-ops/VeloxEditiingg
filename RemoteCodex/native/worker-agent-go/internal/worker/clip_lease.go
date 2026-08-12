@@ -122,6 +122,59 @@ func (l *ClipLease) ReleaseAll(ctx context.Context) error {
 	return firstErr
 }
 
+const compiledPlanLeaseRenewalInterval = time.Minute
+
+// RenewAll refreshes every currently acquired V2 asset lease. It continues
+// after an individual failure so one missing asset cannot prevent the final
+// audio or remaining video assets from being renewed. The first error is
+// returned for logging/diagnostics; the render itself remains owned by the
+// caller's renewal loop and is not canceled here.
+func (l *ClipLease) RenewAll(ctx context.Context) error {
+	if l == nil || l.cache == nil {
+		return nil
+	}
+	var firstErr error
+	for _, id := range l.assetKeys {
+		err := l.cache.RenewLease(ctx, id, l.jobID)
+		switch {
+		case err == nil:
+			telemetry.GetPrometheusMetrics().RecordLeaseRenew("success")
+		case errors.Is(err, workercache.ErrNotFound), errors.Is(err, workercache.ErrLeaseNotFound):
+			telemetry.GetPrometheusMetrics().RecordLeaseRenew("not_found")
+		default:
+			telemetry.GetPrometheusMetrics().RecordLeaseRenew("failure")
+		}
+		if err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("worker.ClipLease.RenewAll(%s): %w", id, err)
+		}
+	}
+	return firstErr
+}
+
+// runRenewalLoop periodically refreshes the leases for a long-running V2
+// render. The caller owns cancellation and must wait for this function to
+// return before ReleaseAll, preventing a renewal from racing final cleanup.
+func (l *ClipLease) runRenewalLoop(ctx context.Context, interval time.Duration, onFailure func(error)) {
+	if l == nil || l.cache == nil {
+		return
+	}
+	if interval <= 0 {
+		interval = compiledPlanLeaseRenewalInterval
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := l.RenewAll(ctx); err != nil && onFailure != nil {
+				onFailure(err)
+			}
+		}
+	}
+}
+
 // AcquireJobClips takes a workercache.Cache, a jobID, and a list of
 // canonical asset keys, and acquires the lease on each in order.
 // On any mid-loop failure, all rows acquired SO FAR are released

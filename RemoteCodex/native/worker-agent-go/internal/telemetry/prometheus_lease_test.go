@@ -14,6 +14,9 @@ func TestPrometheusLeaseMetricsExportLowCardinalityLifecycle(t *testing.T) {
 		`velox_cache_lease_releases_total{result="success"} 0`,
 		`velox_cache_lease_releases_total{result="failure"} 0`,
 		`velox_cache_lease_releases_total{result="not_found"} 0`,
+		`velox_cache_lease_renewals_total{result="success"} 0`,
+		`velox_cache_lease_renewals_total{result="failure"} 0`,
+		`velox_cache_lease_renewals_total{result="not_found"} 0`,
 		`velox_cache_lease_retries_total{source="release_all"} 0`,
 		`velox_cache_lease_retries_total{source="reconciler"} 0`,
 		`velox_cache_lease_cleanup_failures_total{stage="release"} 0`,
@@ -29,6 +32,9 @@ func TestPrometheusLeaseMetricsExportLowCardinalityLifecycle(t *testing.T) {
 	metrics.RecordLeaseRelease("success")
 	metrics.RecordLeaseRelease("failure")
 	metrics.RecordLeaseRelease("not_found")
+	metrics.RecordLeaseRenew("success")
+	metrics.RecordLeaseRenew("failure")
+	metrics.RecordLeaseRenew("not_found")
 	metrics.RecordLeaseRetry("release_all")
 	metrics.RecordLeaseRetry("reconciler")
 	metrics.RecordLeaseRetry("unexpected-source")
@@ -47,6 +53,9 @@ func TestPrometheusLeaseMetricsExportLowCardinalityLifecycle(t *testing.T) {
 		`velox_cache_lease_releases_total{result="success"} 1`,
 		`velox_cache_lease_releases_total{result="failure"} 1`,
 		`velox_cache_lease_releases_total{result="not_found"} 1`,
+		`velox_cache_lease_renewals_total{result="success"} 1`,
+		`velox_cache_lease_renewals_total{result="failure"} 1`,
+		`velox_cache_lease_renewals_total{result="not_found"} 1`,
 		`velox_cache_lease_retries_total{source="release_all"} 1`,
 		`velox_cache_lease_retries_total{source="reconciler"} 1`,
 		`velox_cache_lease_retries_total{source="other"} 1`,

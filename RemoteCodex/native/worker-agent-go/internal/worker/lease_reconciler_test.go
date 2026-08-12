@@ -114,6 +114,118 @@ func TestAcquireJobClipsRecordsLeaseAcquireAndReleaseMetrics(t *testing.T) {
 	}
 }
 
+func TestClipLeaseRenewAll_ContinuesAfterIndividualFailure(t *testing.T) {
+	ctx := context.Background()
+	cache, err := workercache.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open cache: %v", err)
+	}
+	defer cache.Close()
+	for _, key := range []string{"renew-bad", "renew-good"} {
+		assetPath := filepath.Join(t.TempDir(), key)
+		if err := os.WriteFile(assetPath, []byte(key), 0o640); err != nil {
+			t.Fatalf("write %s: %v", key, err)
+		}
+		if err := cache.Store(ctx, workercache.Entry{AssetKey: workercache.AssetKey(key), LocalPath: assetPath, SizeBytes: int64(len(key)), DownloadComplete: true}); err != nil {
+			t.Fatalf("store %s: %v", key, err)
+		}
+		if err := cache.Acquire(ctx, key, "renew-job"); err != nil {
+			t.Fatalf("acquire %s: %v", key, err)
+		}
+	}
+	old := time.Now().UTC().Add(-10 * time.Minute).Format(time.RFC3339Nano)
+	if _, err := cache.DB().Exec(`UPDATE cached_assets SET last_used_at = ?`, old); err != nil {
+		t.Fatalf("age assets: %v", err)
+	}
+	beforeGood, found, err := cache.Find(ctx, "renew-good")
+	if err != nil || !found {
+		t.Fatalf("find good asset before renew: found=%v err=%v", found, err)
+	}
+	renewSuccessBefore := leaseMetricValue(t, "velox_cache_lease_renewals_total", "result", "success")
+	renewFailureBefore := leaseMetricValue(t, "velox_cache_lease_renewals_total", "result", "failure")
+	if _, err := cache.DB().Exec(`
+CREATE TRIGGER fail_one_renew
+BEFORE UPDATE ON cached_assets
+WHEN NEW.asset_key = 'renew-bad'
+BEGIN
+  SELECT RAISE(ABORT, 'forced renewal failure');
+END;`); err != nil {
+		t.Fatalf("create renewal failure trigger: %v", err)
+	}
+	lease := &ClipLease{cache: cache, jobID: "renew-job", assetKeys: []string{"renew-bad", "renew-good"}}
+	if err := lease.RenewAll(ctx); err == nil {
+		t.Fatal("RenewAll returned nil, want individual renewal failure")
+	}
+	good, found, err := cache.Find(ctx, "renew-good")
+	if err != nil || !found {
+		t.Fatalf("find renewed good asset: found=%v err=%v", found, err)
+	}
+	if !good.LastUsedAt.After(beforeGood.LastUsedAt) {
+		t.Fatalf("successful renewal LastUsedAt = %s, want after %s", good.LastUsedAt, beforeGood.LastUsedAt)
+	}
+	if got := leaseMetricValue(t, "velox_cache_lease_renewals_total", "result", "success"); got < renewSuccessBefore+1 {
+		t.Fatalf("renewal success metric = %v, want at least %v", got, renewSuccessBefore+1)
+	}
+	if got := leaseMetricValue(t, "velox_cache_lease_renewals_total", "result", "failure"); got < renewFailureBefore+1 {
+		t.Fatalf("renewal failure metric = %v, want at least %v", got, renewFailureBefore+1)
+	}
+}
+
+func TestClipLeaseRenewalLoop_StopsOnCancellation(t *testing.T) {
+	ctx := context.Background()
+	cache, err := workercache.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open cache: %v", err)
+	}
+	defer cache.Close()
+	assetPath := filepath.Join(t.TempDir(), "renew-loop.asset")
+	if err := os.WriteFile(assetPath, []byte("loop"), 0o640); err != nil {
+		t.Fatalf("write asset: %v", err)
+	}
+	if err := cache.Store(ctx, workercache.Entry{AssetKey: "renew-loop", LocalPath: assetPath, SizeBytes: 4, DownloadComplete: true}); err != nil {
+		t.Fatalf("store asset: %v", err)
+	}
+	if err := cache.Acquire(ctx, "renew-loop", "renew-loop-job"); err != nil {
+		t.Fatalf("acquire lease: %v", err)
+	}
+	old := time.Now().UTC().Add(-10 * time.Minute).Format(time.RFC3339Nano)
+	if _, err := cache.DB().Exec(`UPDATE cached_assets SET last_used_at = ? WHERE asset_key = 'renew-loop'`, old); err != nil {
+		t.Fatalf("age asset: %v", err)
+	}
+	before, _, err := cache.Find(ctx, "renew-loop")
+	if err != nil {
+		t.Fatalf("find before loop: %v", err)
+	}
+	lease := &ClipLease{cache: cache, jobID: "renew-loop-job", assetKeys: []string{"renew-loop"}}
+	loopCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		lease.runRenewalLoop(loopCtx, 5*time.Millisecond, nil)
+		close(done)
+	}()
+	deadline := time.Now().Add(time.Second)
+	var after workercache.Entry
+	for {
+		after, _, err = cache.Find(ctx, "renew-loop")
+		if err != nil {
+			t.Fatalf("find during loop: %v", err)
+		}
+		if after.LastUsedAt.After(before.LastUsedAt) || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("lease renewal loop did not stop after cancellation")
+	}
+	if !after.LastUsedAt.After(before.LastUsedAt) {
+		t.Fatalf("LastUsedAt = %s, want after %s", after.LastUsedAt, before.LastUsedAt)
+	}
+}
+
 func TestClipLease_ReleaseAllEnqueuesAfterRetryExhaustion(t *testing.T) {
 	ctx := context.Background()
 	cache, err := workercache.Open(":memory:")
