@@ -205,7 +205,10 @@ func TestWorkerRegistryIsDerivedFromSharedCatalog(t *testing.T) {
 		}
 		if ws.Origin != sharedSpec.Origin || ws.Scope != sharedSpec.Scope ||
 			ws.Component != sharedSpec.Component || ws.Action != sharedSpec.Action ||
-			ws.Phase != sharedSpec.Phase || ws.EventType != sharedSpec.EventType {
+			ws.Phase != sharedSpec.Phase || ws.EventType != sharedSpec.EventType ||
+			ws.Kind != sharedSpec.Kind || ws.TimingMode != sharedSpec.TimingMode ||
+			ws.Aggregation != sharedSpec.Aggregation || ws.Cardinality != sharedSpec.Cardinality ||
+			ws.Owner != sharedSpec.Owner {
 			t.Fatalf("worker projection of %s differs from shared: worker=%+v shared=%+v", key, ws, sharedSpec)
 		}
 

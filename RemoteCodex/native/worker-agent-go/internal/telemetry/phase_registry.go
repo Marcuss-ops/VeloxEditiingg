@@ -1,12 +1,12 @@
 // phase_registry.go — closed canonical observability taxonomy.
 //
 // This file is the worker-side VIEW of the single canonical event taxonomy.
-// The taxonomy itself lives in shared/telemetry (canonicalEventDescriptors —
-// ONE literal list carrying Component, Action, Origin, Scope, Phase and
-// EventType). The worker does NOT maintain a second registry: adding an event
-// means editing shared/telemetry/catalog.go, and every worker lookup derives
-// from that shared catalog. This removes the dual-registry drift that forced
-// fixes in both phase_registry.go and shared/telemetry/catalog.go.
+// The taxonomy itself lives in shared/telemetry/catalog.json (the language-
+// neutral source loaded by shared/telemetry and compiled to the C++ binding
+// by cataloggen). The worker does NOT maintain a second registry: adding an
+// event means editing shared/telemetry/catalog.json, and every worker lookup
+// derives from that shared catalog. This removes the dual-registry drift that
+// forced fixes in both phase_registry.go and shared/telemetry/catalog.go.
 //
 // Origins, scopes, phases and event types mirror the SQL CHECK constraints in
 // migration 110. Component/action pairs are deliberately closed: producers
@@ -107,7 +107,8 @@ func IsCanonicalScope(s string) bool {
 // PhaseSpec is the worker-side projection of one canonical catalog entry.
 // Component may contain dotted namespaces (for example "engine.audio");
 // Action is the final stable operation name used in SQL and Prometheus-safe
-// projections. Phase and EventType come from the shared catalog — the worker
+// projections. Phase, EventType and the semantic attributes (Kind, TimingMode,
+// Aggregation, Cardinality, Owner) come from the shared catalog — the worker
 // never declares them locally.
 type PhaseSpec struct {
 	Origin    string
@@ -116,6 +117,15 @@ type PhaseSpec struct {
 	Action    string
 	Phase     string
 	EventType string
+
+	// Semantic attributes resolved from the single shared catalog. Owner is
+	// the Fact Owner: the single authoritative producer of the fact — no
+	// projection may reconstruct a fact owned by another component.
+	Kind        sharedtelemetry.EventKind
+	TimingMode  sharedtelemetry.TimingMode
+	Aggregation sharedtelemetry.AggregationMode
+	Cardinality sharedtelemetry.CardinalityPolicy
+	Owner       sharedtelemetry.ComponentOwner
 }
 
 // Key returns the stable registry key "component.action".
@@ -152,6 +162,9 @@ func LookupPhaseSpec(component, action string) (PhaseSpec, bool) {
 		Origin: spec.Origin, Scope: spec.Scope,
 		Component: spec.Component, Action: spec.Action,
 		Phase: spec.Phase, EventType: spec.EventType,
+		Kind: spec.Kind, TimingMode: spec.TimingMode,
+		Aggregation: spec.Aggregation, Cardinality: spec.Cardinality,
+		Owner: spec.Owner,
 	}, true
 }
 
@@ -170,6 +183,9 @@ func RegisteredPhaseSpecs() map[string]PhaseSpec {
 			Origin: spec.Origin, Scope: spec.Scope,
 			Component: spec.Component, Action: spec.Action,
 			Phase: spec.Phase, EventType: spec.EventType,
+			Kind: spec.Kind, TimingMode: spec.TimingMode,
+			Aggregation: spec.Aggregation, Cardinality: spec.Cardinality,
+			Owner: spec.Owner,
 		}
 	}
 	return out
