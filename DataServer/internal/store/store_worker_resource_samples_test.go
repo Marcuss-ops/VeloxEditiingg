@@ -14,6 +14,28 @@ func TestWorkerResourceSamples_SessionTimestampAndWorkerIsolation(t *testing.T) 
 	}
 	defer s.Close()
 	s.SetResourceRetention(0, 0)
+	seedSession := func(sessionID, workerID string) {
+		t.Helper()
+		if _, err := s.DB().Exec(`INSERT INTO workers(worker_id, worker_name, node_role, raw_json, migrated_at)
+			VALUES (?, ?, 'worker', '{}', ?)`, workerID, workerID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			// The worker may already exist when this helper is used to model a
+			// reconnect to a new session.
+			var count int
+			if scanErr := s.DB().QueryRow(`SELECT COUNT(*) FROM workers WHERE worker_id=?`, workerID).Scan(&count); scanErr != nil || count != 1 {
+				t.Fatalf("seed worker %s: insert=%v query=%v count=%d", workerID, err, scanErr, count)
+			}
+		}
+		if err := s.InsertSession(&PersistedSession{
+			SessionID: sessionID,
+			WorkerID:  workerID,
+			TokenHash: workerID + "-token",
+			ExpiresAt: time.Now().UTC().Add(time.Hour),
+		}); err != nil {
+			t.Fatalf("seed session %s/%s: %v", sessionID, workerID, err)
+		}
+	}
+	seedSession("session-a", "worker-resource-a")
+	seedSession("session-a-worker-b", "worker-resource-b")
 
 	sampledAt := time.Date(2026, 7, 31, 10, 11, 12, 123456000, time.UTC)
 	heartbeat := func(workerID, sessionID string) []byte {
@@ -53,8 +75,20 @@ func TestWorkerResourceSamples_SessionTimestampAndWorkerIsolation(t *testing.T) 
 	}{
 		{"worker-resource-a", "session-a"},
 		{"worker-resource-a", "session-a"},
+	} {
+		if err := s.PersistWorkerHeartbeat(context.Background(), heartbeat(input.workerID, input.session), input.session); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A new session replaces the prior active session for the same worker;
+	// the other worker keeps its independent session-a active.
+	seedSession("session-b", "worker-resource-a")
+	for _, input := range []struct {
+		workerID string
+		session  string
+	}{
 		{"worker-resource-a", "session-b"},
-		{"worker-resource-b", "session-a"},
+		{"worker-resource-b", "session-a-worker-b"},
 	} {
 		if err := s.PersistWorkerHeartbeat(context.Background(), heartbeat(input.workerID, input.session), input.session); err != nil {
 			t.Fatal(err)
@@ -121,7 +155,7 @@ func TestWorkerResourceSamples_HeartbeatWithoutResourcesDoesNotInsert(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.PersistWorkerHeartbeat(context.Background(), payload, "empty-session"); err != nil {
+	if err := s.PersistWorkerHeartbeat(context.Background(), payload, ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -157,7 +191,7 @@ func TestWorkerResourceSamples_RollupAndRetention(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.PersistWorkerHeartbeat(context.Background(), payload, "retention-session"); err != nil {
+	if err := s.PersistWorkerHeartbeat(context.Background(), payload, ""); err != nil {
 		t.Fatal(err)
 	}
 	// Retention is intentionally based on the trusted master-side clock,
@@ -197,7 +231,7 @@ func TestWorkerResourceSamples_RollupAndRetention(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.PersistWorkerHeartbeat(context.Background(), currentPayload, "retention-session"); err != nil {
+	if err := s.PersistWorkerHeartbeat(context.Background(), currentPayload, ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.MaintainWorkerResourceSamples(context.Background(), now); err != nil {

@@ -131,7 +131,7 @@ func TestPartitionDetectionEmitsTaskRuntimeDisappeared(t *testing.T) {
 		"schedulable":    true,
 		"metrics":        map[string]any{"active_jobs": []any{}},
 	})
-	if err := s.PersistWorkerHeartbeat(context.Background(), staleRaw, "session-stale"); err != nil {
+	if err := s.PersistWorkerHeartbeat(context.Background(), staleRaw, ""); err != nil {
 		t.Fatalf("stale heartbeat: %v", err)
 	}
 
@@ -191,7 +191,7 @@ func TestPartitionDetectionEmitsTaskRuntimeDisappeared(t *testing.T) {
 	// age does NOT re-emit events (the runtime_status filter excludes
 	// already-partitioned rows from both the SELECT and the UPDATE in
 	// bulkEmitTaskRuntimeDisappearedOnPartition).
-	if err := s.PersistWorkerHeartbeat(context.Background(), staleRaw, "session-stale"); err != nil {
+	if err := s.PersistWorkerHeartbeat(context.Background(), staleRaw, ""); err != nil {
 		t.Fatalf("second stale heartbeat: %v", err)
 	}
 	var partitionEmittedAfterRepeat int
@@ -214,7 +214,7 @@ func TestPartitionDetectionEmitsTaskRuntimeDisappeared(t *testing.T) {
 		"schedulable":    true,
 		"metrics":        map[string]any{"active_jobs": []any{}},
 	})
-	if err := s.PersistWorkerHeartbeat(context.Background(), freshRaw, "session-fresh"); err != nil {
+	if err := s.PersistWorkerHeartbeat(context.Background(), freshRaw, ""); err != nil {
 		t.Fatalf("fresh heartbeat: %v", err)
 	}
 	if err := s.DB().QueryRow(`SELECT connection_state FROM workers WHERE worker_id=?`, workerID).Scan(&connState); err != nil {

@@ -75,10 +75,18 @@ func (s *SQLiteStore) PersistWorkerHeartbeat(ctx context.Context, raw []byte, se
 		return fmt.Errorf("persist worker snapshot: %w", err)
 	}
 	if sessionID != "" {
-		if _, err := tx.ExecContext(ctx, `UPDATE worker_sessions
+		result, err := tx.ExecContext(ctx, `UPDATE worker_sessions
 			SET last_seen=?, last_seen_at=?, status='ACTIVE', revoked=0
-			WHERE session_id=?`, nowRFC3339Nano, nowRFC3339Nano, sessionID); err != nil {
+			WHERE session_id=? AND worker_id=? AND revoked=0`, nowRFC3339Nano, nowRFC3339Nano, sessionID, workerID)
+		if err != nil {
 			return fmt.Errorf("touch worker session: %w", err)
+		}
+		affected, err := readRowsAffected(result, "touch worker session")
+		if err != nil {
+			return err
+		}
+		if affected != 1 {
+			return fmt.Errorf("touch worker session %q for worker %q: %w", sessionID, workerID, ErrTransitionConflict)
 		}
 	}
 

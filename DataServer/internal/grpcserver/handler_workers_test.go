@@ -28,6 +28,18 @@ func TestHandleHeartbeat_ResourcesPersistThroughRegistryToSQLite(t *testing.T) {
 	}
 	defer s.Close()
 	s.SetResourceRetention(0, 0)
+	if _, err := s.DB().Exec(`INSERT INTO workers(worker_id, worker_name, node_role, raw_json, migrated_at)
+		VALUES (?, ?, 'worker', '{}', ?)`, "worker-e2e", "worker-e2e", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.InsertSession(&store.PersistedSession{
+		SessionID: "session-e2e",
+		WorkerID:  "worker-e2e",
+		TokenHash: "worker-e2e-token",
+		ExpiresAt: time.Now().UTC().Add(time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	registry := workersreg.New(s)
 	h := NewHandler(registry, nil, nil, nil, nil, nil, nil, &HandlerConfig{PushMode: true})
