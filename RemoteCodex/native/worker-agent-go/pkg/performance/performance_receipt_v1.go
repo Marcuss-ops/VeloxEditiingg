@@ -57,6 +57,12 @@ type PerformanceReceiptV1 struct {
 	// legacy sidecars that predate detailed events leave it nil.
 	Phases []PhaseTiming `json:"phases,omitempty"`
 
+	// Segments carries the per-timeline-segment C++ sidecar timings,
+	// including the started/finished offsets and parallelism fields.
+	// The assembler maps them from RenderMetrics.Segments; legacy
+	// sidecars leave the slice nil.
+	Segments []SegmentTiming `json:"segments,omitempty"`
+
 	Derived DerivedMetrics `json:"derived"`
 }
 
@@ -257,6 +263,35 @@ type PhaseTiming struct {
 	BytesOut    int64  `json:"bytes_out,omitempty"`
 	FramesIn    int64  `json:"frames_in,omitempty"`
 	FramesOut   int64  `json:"frames_out,omitempty"`
+}
+
+// SegmentTiming mirrors one row of the C++ sidecar segments[] array. It
+// is the per-segment counterpart of the exclusive PhaseTiming list:
+// phase rows explain the wall clock, segment rows explain what each
+// timeline segment did (and how parallel it ran).
+type SegmentTiming struct {
+	SegmentIndex     int     `json:"segment_index"`
+	SceneID          string  `json:"scene_id,omitempty"`
+	SourceType       string  `json:"source_type,omitempty"`
+	DurationMS       float64 `json:"duration_ms"`
+	AssetDownloadMS  float64 `json:"asset_download_ms,omitempty"`
+	FfmpegEncodeMS   float64 `json:"ffmpeg_encode_ms,omitempty"`
+	SourceBytes      int64   `json:"source_bytes,omitempty"`
+	OutputBytes      int64   `json:"output_bytes,omitempty"`
+	FramesEncoded    int64   `json:"frames_encoded,omitempty"`
+	FramesDecoded    int64   `json:"frames_decoded,omitempty"`
+	FramesComposited int64   `json:"frames_composited,omitempty"`
+	FfmpegSpeedX     float64 `json:"ffmpeg_speed_x,omitempty"`
+	Codec            string  `json:"codec,omitempty"`
+	Status           string  `json:"status,omitempty"`
+	ErrorCode        string  `json:"error_code,omitempty"`
+
+	// Parallelism telemetry (migration 098).
+	StartedOffsetMS  float64 `json:"started_offset_ms,omitempty"`
+	FinishedOffsetMS float64 `json:"finished_offset_ms,omitempty"`
+	WorkerSlot       int     `json:"worker_slot,omitempty"`
+	CPUThreads       int     `json:"cpu_threads,omitempty"`
+	ParallelGroup    string  `json:"parallel_group,omitempty"`
 }
 
 // DerivedMetrics carries the computed KPIs that make the receipt a

@@ -106,6 +106,10 @@ func fullReceipt() *PerformanceReceiptV1 {
 			{Name: "media.open", DurationMS: 400, CPUMs: 150, BytesIn: 1_800_000_000, BytesOut: 0},
 			{Name: "mux.trailer", DurationMS: 30, CPUMs: 25, BytesIn: 0, BytesOut: 300_000_000},
 		},
+		Segments: []SegmentTiming{
+			{SegmentIndex: 0, SceneID: "scene_1", DurationMS: 12000, SourceBytes: 60_000_000, OutputBytes: 60_000_000, Status: "ok"},
+			{SegmentIndex: 1, SceneID: "scene_2", DurationMS: 10000, SourceBytes: 60_000_000, OutputBytes: 60_000_000, Status: "ok"},
+		},
 		Derived: DerivedMetrics{
 			UnaccountedMS:      430,
 			AccountedRatio:     0.978,
@@ -204,6 +208,12 @@ func TestPerformanceReceiptV1_JSONKeys(t *testing.T) {
 	require.Len(t, phases, 2, "phases must marshal as the canonical phase objects")
 	require.Equal(t, "media.open", phases[0].Name)
 	require.Equal(t, int64(400), phases[0].DurationMS)
+
+	var segments []SegmentTiming
+	require.NoError(t, json.Unmarshal(doc["segments"], &segments))
+	require.Len(t, segments, 2, "segments must marshal as the canonical segment objects")
+	require.Equal(t, "scene_1", segments[0].SceneID)
+	require.Equal(t, 12000.0, segments[0].DurationMS)
 }
 
 func TestPerformanceReceiptV1_ZeroValueMarshals(t *testing.T) {
