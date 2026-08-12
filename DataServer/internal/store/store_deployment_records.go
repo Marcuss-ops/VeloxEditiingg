@@ -53,6 +53,14 @@ const (
 // "known worker with no deploys yet" — the messaging differs.
 var ErrDeploymentNotFound = errors.New("no deployment records for worker")
 
+// ErrDeploymentConcurrentTransition is returned by
+// updateDeploymentTerminal when the fenced UPDATE matches zero rows even
+// though the row was found a moment earlier in the same transaction — a
+// concurrent writer moved the row between our read and our write. The row
+// EXISTS (so this is NOT ErrDeploymentNotFound); the transition is refused
+// rather than clobbering the other writer's terminal outcome.
+var ErrDeploymentConcurrentTransition = errors.New("deployment state machine: concurrent transition")
+
 // DeploymentRecord mirrors a single row in deployment_records.
 // All time fields are RFC3339 strings in the SQL row to keep
 // the schema dialect-agnostic; Go-side conversion is at the
@@ -232,28 +240,61 @@ VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, 0)`,
 // (SUCCEEDED, FAILED, ROLLED_BACK). `finishedAt` is required — the
 // in-flight vs completed dashboard rendering relies on the row
 // having a finished_at once status != PENDING.
+//
+// The target-status check delegates to the canonical state machine
+// (IsDeploymentStatusTerminal); the from-status enforcement lives in
+// updateDeploymentTerminal via ValidateDeploymentTransition.
 func (s *SQLiteStore) UpdateDeploymentStatus(ctx context.Context, deploymentID, status string, finishedAt time.Time) error {
-	switch status {
-	case DeployStatusSucceeded, DeployStatusFailed, DeployStatusRolledBack:
-	default:
+	if !IsDeploymentStatusTerminal(status) {
 		return fmt.Errorf("UpdateDeploymentStatus: status must be terminal, got %q", status)
 	}
 	return s.updateDeploymentTerminal(ctx, deploymentID, status, finishedAt, "", false)
 }
 
+// updateDeploymentTerminal is the SINGLE write path for every terminal
+// deployment_records transition. It enforces the canonical deployment
+// state machine (store_state_machine.go):
+//
+//  1. read the current row inside the transaction,
+//  2. validate `current → status` via ValidateDeploymentTransition — a
+//     terminal row (SUCCEEDED / FAILED / ROLLED_BACK) can never be
+//     resurrected, even into a different terminal status,
+//  3. fence the UPDATE with the observed from-state so a concurrent
+//     transition between our read and our write cannot be clobbered,
+//  4. project the NEW status into the worker_deployment_state read model
+//     in the same transaction.
+//
+// The read-model upsert uses the in-memory post-transition record (status /
+// error_message / is_rollback applied to the pre-transition row), so the
+// projection always reflects exactly what the ledger just persisted — no
+// second read, no torn journal-vs-projection state.
 func (s *SQLiteStore) updateDeploymentTerminal(ctx context.Context, deploymentID, status string, finishedAt time.Time, errMsg string, rollback bool) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+
+	// Read-first: the canonical machine needs the CURRENT status. Missing
+	// rows surface ErrDeploymentNotFound before any write is attempted.
+	record, err := getDeploymentRecordFrom(ctx, tx, deploymentID)
+	if err != nil {
+		return err
+	}
+	if err := ValidateDeploymentTransition(record.Status, status); err != nil {
+		return err
+	}
+
 	query := `UPDATE deployment_records SET status = ?, finished_at = ?, error_message = ?`
 	args := []any{status, finishedAt.UTC().Format(time.RFC3339), errMsg}
 	if rollback {
 		query += `, is_rollback = 1`
 	}
-	query += ` WHERE deployment_id = ?`
-	args = append(args, deploymentID)
+	// Fencing: re-check the from-state in the WHERE clause. RowsAffected==0
+	// here means the row moved between the read and the write (concurrent
+	// writer) — fail closed instead of overwriting a terminal outcome.
+	query += ` WHERE deployment_id = ? AND status = ?`
+	args = append(args, deploymentID, record.Status)
 	res, err := tx.ExecContext(ctx, query, args...)
 	if err != nil {
 		return err
@@ -263,11 +304,14 @@ func (s *SQLiteStore) updateDeploymentTerminal(ctx context.Context, deploymentID
 		return err
 	}
 	if n == 0 {
-		return ErrDeploymentNotFound
+		return fmt.Errorf("%w: deployment %s moved concurrently during terminal transition", ErrDeploymentConcurrentTransition, deploymentID)
 	}
-	record, err := getDeploymentRecordFrom(ctx, tx, deploymentID)
-	if err != nil {
-		return err
+
+	record.Status = status
+	record.FinishedAt = &finishedAt
+	record.ErrorMessage = errMsg
+	if rollback {
+		record.IsRollback = true
 	}
 	if err := upsertDeploymentStateFromRecord(ctx, tx, *record, finishedAt.UTC()); err != nil {
 		return err

@@ -415,6 +415,191 @@ func TestDeploymentStore_BootstrapIdempotent(t *testing.T) {
 	}
 }
 
+// TestDeploymentStore_TerminalStatusIsImmutable pins the canonical machine's
+// no-resurrection rule at the store boundary: once a row is SUCCEEDED it can
+// never be moved to a different terminal status (SUCCEEDED → FAILED is the
+// classic clobber). The rejected transition must not touch the ledger row NOR
+// the worker_deployment_state projection.
+func TestDeploymentStore_TerminalStatusIsImmutable(t *testing.T) {
+	s := newDeploymentTestStore(t)
+	ctx := context.Background()
+	base := time.Now().UTC().Truncate(time.Second)
+
+	rec := DeploymentRecord{
+		DeploymentID:   "deploy-immutable",
+		WorkerID:       "wicket",
+		PreviousDigest: deploymentTestDigest('a'),
+		TargetDigest:   deploymentTestDigest('b'),
+		StartedAt:      base,
+		Status:         DeployStatusPending,
+		AppliedBy:      "fleetctl",
+	}
+	if err := s.InsertDeploymentRecord(ctx, rec); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := s.UpdateDeploymentStatus(ctx, rec.DeploymentID, DeployStatusSucceeded, base.Add(time.Minute)); err != nil {
+		t.Fatalf("PENDING -> SUCCEEDED: %v", err)
+	}
+
+	// Resurrection attempt: SUCCEEDED -> FAILED must be rejected.
+	err := s.UpdateDeploymentStatus(ctx, rec.DeploymentID, DeployStatusFailed, base.Add(2*time.Minute))
+	if !errors.Is(err, ErrIllegalDeploymentTransition) {
+		t.Fatalf("SUCCEEDED -> FAILED error = %v, want ErrIllegalDeploymentTransition", err)
+	}
+
+	got, err := s.GetLatestDeploymentForWorker(ctx, rec.WorkerID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Status != DeployStatusSucceeded {
+		t.Errorf("Status after rejected transition = %q, want SUCCEEDED (row must stay terminal)", got.Status)
+	}
+
+	state, err := s.GetWorkerDeploymentState(ctx, rec.WorkerID)
+	if err != nil {
+		t.Fatalf("GetWorkerDeploymentState: %v", err)
+	}
+	if state.LastOperationStatus != DeployStatusSucceeded {
+		t.Errorf("LastOperationStatus after rejected transition = %q, want SUCCEEDED (projection must stay in sync)", state.LastOperationStatus)
+	}
+}
+
+// TestDeploymentStore_FailedCannotResurrectToSucceeded pins the mirror case:
+// a FAILED rollout is terminal and cannot be flipped to SUCCEEDED by a late
+// or duplicate completion report.
+func TestDeploymentStore_FailedCannotResurrectToSucceeded(t *testing.T) {
+	s := newDeploymentTestStore(t)
+	ctx := context.Background()
+	base := time.Now().UTC().Truncate(time.Second)
+
+	rec := DeploymentRecord{
+		DeploymentID:   "deploy-failed-term",
+		WorkerID:       "wicket",
+		PreviousDigest: deploymentTestDigest('a'),
+		TargetDigest:   deploymentTestDigest('b'),
+		StartedAt:      base,
+		Status:         DeployStatusPending,
+		AppliedBy:      "fleetctl",
+	}
+	if err := s.InsertDeploymentRecord(ctx, rec); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := s.UpdateDeploymentStatus(ctx, rec.DeploymentID, DeployStatusFailed, base.Add(time.Minute)); err != nil {
+		t.Fatalf("PENDING -> FAILED: %v", err)
+	}
+
+	err := s.UpdateDeploymentStatus(ctx, rec.DeploymentID, DeployStatusSucceeded, base.Add(2*time.Minute))
+	if !errors.Is(err, ErrIllegalDeploymentTransition) {
+		t.Fatalf("FAILED -> SUCCEEDED error = %v, want ErrIllegalDeploymentTransition", err)
+	}
+	// The rollback marker path is equally barred: a FAILED forward row must
+	// not be re-labelled ROLLED_BACK.
+	if err := s.MarkDeploymentRolledBack(ctx, rec.DeploymentID, base.Add(2*time.Minute), true); !errors.Is(err, ErrIllegalDeploymentTransition) {
+		t.Fatalf("FAILED -> ROLLED_BACK error = %v, want ErrIllegalDeploymentTransition", err)
+	}
+
+	got, err := s.GetLatestDeploymentForWorker(ctx, rec.WorkerID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Status != DeployStatusFailed {
+		t.Errorf("Status after rejected resurrections = %q, want FAILED", got.Status)
+	}
+}
+
+// TestDeploymentStore_RolledBackIsTerminal pins the third terminal state:
+// ROLLED_BACK rows are immutable like SUCCEEDED/FAILED — a rollback cascade
+// that completed can never be flipped back to SUCCEEDED.
+func TestDeploymentStore_RolledBackIsTerminal(t *testing.T) {
+	s := newDeploymentTestStore(t)
+	ctx := context.Background()
+	base := time.Now().UTC().Truncate(time.Second)
+
+	rec := DeploymentRecord{
+		DeploymentID:   "deploy-rollback-term",
+		WorkerID:       "wicket",
+		PreviousDigest: deploymentTestDigest('a'),
+		TargetDigest:   deploymentTestDigest('a'), // rollback restores previous
+		StartedAt:      base,
+		Status:         DeployStatusPending,
+		AppliedBy:      "fleetctl",
+		IsRollback:     true,
+	}
+	if err := s.InsertDeploymentRecord(ctx, rec); err != nil {
+		t.Fatalf("insert rollback row: %v", err)
+	}
+	if err := s.MarkDeploymentRolledBack(ctx, rec.DeploymentID, base.Add(time.Minute), true); err != nil {
+		t.Fatalf("PENDING -> ROLLED_BACK: %v", err)
+	}
+
+	err := s.UpdateDeploymentStatus(ctx, rec.DeploymentID, DeployStatusSucceeded, base.Add(2*time.Minute))
+	if !errors.Is(err, ErrIllegalDeploymentTransition) {
+		t.Fatalf("ROLLED_BACK -> SUCCEEDED error = %v, want ErrIllegalDeploymentTransition", err)
+	}
+
+	got, err := s.GetLatestDeploymentForWorker(ctx, rec.WorkerID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Status != DeployStatusRolledBack || !got.IsRollback {
+		t.Errorf("row after rejected transition = %s/is_rollback=%v, want ROLLED_BACK/is_rollback=true", got.Status, got.IsRollback)
+	}
+}
+
+// TestDeploymentStore_RollbackFailedIsTerminal pins the rollback-also-
+// failed terminal: MarkDeploymentRolledBack(rollbackOK=false) lands on
+// PENDING → FAILED with is_rollback=1, and that row is then immutable like
+// every other terminal row.
+func TestDeploymentStore_RollbackFailedIsTerminal(t *testing.T) {
+	s := newDeploymentTestStore(t)
+	ctx := context.Background()
+	base := time.Now().UTC().Truncate(time.Second)
+
+	rec := DeploymentRecord{
+		DeploymentID:   "deploy-rollback-failed",
+		WorkerID:       "wicket",
+		PreviousDigest: deploymentTestDigest('a'),
+		TargetDigest:   deploymentTestDigest('a'), // rollback restores previous
+		StartedAt:      base,
+		Status:         DeployStatusPending,
+		AppliedBy:      "fleetctl",
+		IsRollback:     true,
+	}
+	if err := s.InsertDeploymentRecord(ctx, rec); err != nil {
+		t.Fatalf("insert rollback row: %v", err)
+	}
+	if err := s.MarkDeploymentRolledBack(ctx, rec.DeploymentID, base.Add(time.Minute), false); err != nil {
+		t.Fatalf("MarkDeploymentRolledBack(false): %v", err)
+	}
+
+	got, err := s.GetLatestDeploymentForWorker(ctx, rec.WorkerID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Status != DeployStatusFailed || !got.IsRollback {
+		t.Errorf("row = %s/is_rollback=%v, want FAILED/is_rollback=true (rollback also failed)", got.Status, got.IsRollback)
+	}
+
+	// The rollback-failed row is terminal: it can be neither revived to
+	// SUCCEEDED nor re-labelled ROLLED_BACK.
+	err = s.UpdateDeploymentStatus(ctx, rec.DeploymentID, DeployStatusSucceeded, base.Add(2*time.Minute))
+	if !errors.Is(err, ErrIllegalDeploymentTransition) {
+		t.Fatalf("FAILED -> SUCCEEDED error = %v, want ErrIllegalDeploymentTransition", err)
+	}
+	err = s.MarkDeploymentRolledBack(ctx, rec.DeploymentID, base.Add(2*time.Minute), true)
+	if !errors.Is(err, ErrIllegalDeploymentTransition) {
+		t.Fatalf("FAILED -> ROLLED_BACK error = %v, want ErrIllegalDeploymentTransition", err)
+	}
+
+	state, err := s.GetWorkerDeploymentState(ctx, rec.WorkerID)
+	if err != nil {
+		t.Fatalf("GetWorkerDeploymentState: %v", err)
+	}
+	if state.LastOperationStatus != DeployStatusFailed {
+		t.Errorf("LastOperationStatus = %q, want FAILED (projection stays with the terminal row)", state.LastOperationStatus)
+	}
+}
+
 // ============================================================
 // worker_deployment_state read model (migration 151)
 // ============================================================
