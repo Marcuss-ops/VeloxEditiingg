@@ -3,7 +3,6 @@ package executors
 import (
 	"encoding/json"
 	"strings"
-	"time"
 
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/telemetry"
@@ -61,23 +60,35 @@ func appendObservabilitySummaryPhases(phases *[]executor.DetailedPhaseTiming, va
 // today; emitting a made-up AAC-only duration would make the profile less
 // truthful. The dotted keys are carried through TaskExecutionReport metrics
 // and are suitable for before/after benchmark aggregation.
-func projectRenderProfile(dst map[string]interface{}, run pipeline.RunMetrics, artifactStarted time.Time, artifactSHAms int64) {
+//
+// The artifact timings are passed in by the executor because manifest
+// construction is the only place that can distinguish streaming SHA work,
+// ffprobe enrichment, and the final progress-receipt manifest. All values are
+// exclusive within their own operation; artifact_total_ms is the wall time
+// from render completion until both manifests are ready.
+func projectRenderProfile(dst map[string]interface{}, run pipeline.RunMetrics, manifestSHAms, manifestProbeMS, artifactFinalizeMS, artifactTotalMS int64) {
 	if dst == nil {
 		return
 	}
 	dst["render_profile.compile_plan_ms"] = run.CompileMs
 	dst["render_profile.render_ms"] = run.RenderMs
 	dst["render_profile.native_total_ms"] = run.RenderMetrics.TotalMs
-	dst["render_profile.artifact_sha_ms"] = artifactSHAms
-	dst["render_profile.artifact_total_ms"] = time.Since(artifactStarted).Milliseconds()
+	dst["render_profile.artifact_sha_ms"] = manifestSHAms
+	dst["render_profile.artifact_probe_ms"] = manifestProbeMS
+	dst["render_profile.artifact_finalize_ms"] = artifactFinalizeMS
+	dst["render_profile.artifact_total_ms"] = artifactTotalMS
 
 	for _, field := range []struct {
 		name string
 		key  string
 	}{
+		{name: "asset_resolution_ms", key: "asset_resolution_ms"},
 		{name: "asset_download_ms", key: "asset_download_ms"},
 		{name: "audio_download_ms", key: "audio_download_ms"},
+		{name: "audio_timeline_compile_ms", key: "audio_timeline_compile_ms"},
 		{name: "audio_prepare_ms", key: "audio_prepare_ms"},
+		{name: "audio_mix_ms", key: "audio_mix_ms"},
+		{name: "aac_encode_ms", key: "aac_encode_ms"},
 		{name: "audio_mix_encode_ms", key: "mix_audio_ms"},
 		{name: "mux_ms", key: "mux_audio_ms"},
 	} {

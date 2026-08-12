@@ -14,8 +14,13 @@ func TestAttachWorkerIdentityAndTimingsSplitsAudioWithoutFabrication(t *testing.
 		StartedAt:   start,
 		CompletedAt: start.Add(2 * time.Second),
 		Metrics: map[string]interface{}{
-			"engine.audio_download_ms": float64(120),
-			"engine.audio_prepare_ms":  float64(180),
+			"engine.audio_download_ms":                 float64(120),
+			"engine.audio_prepare_ms":                  float64(180),
+			"render_profile.compile_plan_ms":           int64(2400),
+			"render_profile.audio_timeline_compile_ms": int64(300),
+			"render_profile.artifact_sha_ms":           int64(800),
+			"render_profile.artifact_finalize_ms":      int64(120),
+			"render_profile.artifact_total_ms":         int64(920),
 		},
 		DetailedPhases: []taskrunner.DetailedPhaseTiming{
 			{Component: "engine.audio", Action: "mix", Phase: "audio", DurationMS: 1500},
@@ -47,5 +52,11 @@ func TestAttachWorkerIdentityAndTimingsSplitsAudioWithoutFabrication(t *testing.
 	}
 	if timings["audio_encode_ms"] != 0 {
 		t.Fatalf("audio_encode_ms = %v, want zero because mix+AAC is one measured command", timings["audio_encode_ms"])
+	}
+	if timings["compile_plan_ms"] != 2400 || timings["audio_timeline_compile_ms"] != 300 {
+		t.Fatalf("render plan timings = %v/%v, want 2400/300", timings["compile_plan_ms"], timings["audio_timeline_compile_ms"])
+	}
+	if timings["artifact_sha_ms"] != 800 || timings["artifact_finalize_ms"] != 120 || timings["artifact_total_ms"] != 920 {
+		t.Fatalf("artifact timings = %v/%v/%v, want 800/120/920", timings["artifact_sha_ms"], timings["artifact_finalize_ms"], timings["artifact_total_ms"])
 	}
 }

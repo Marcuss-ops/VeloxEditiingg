@@ -156,7 +156,6 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 	// counters (frames, speed_x, encode_passes, temp_bytes,
 	// duration_seconds) merged into the final task-scoped metrics map.
 	pipelineID := resolvePipelineID(spec.Payload)
-	artifactStarted := time.Now()
 	pipelineStart := time.Now()
 	runMetrics, err := s.pipelineRunner.RunWithMetrics(ctx, pipelineID, spec.JobID, spec.Payload, outputPath)
 
@@ -291,7 +290,9 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 			CompletedAt:    time.Now().UTC(),
 		}, nil
 	}
-	// Compute output file hash and size for artifact metadata.
+	// Compute output file hash and size for artifact metadata. The artifact
+	// clock starts only after rendering has completed: it must not include
+	// compile/render time, otherwise artifact_total_ms is mislabeled.
 	// A successful renderer invocation is not sufficient: both the
 	// primary output and its progress receipt must exist and have a
 	// real manifest before this executor can report success. This is
@@ -299,13 +300,11 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 	// from producing a misleading succeeded task.
 	var outputHash string
 	var outputSize int64
-	hashStart := time.Now()
+	artifactStarted := time.Now()
 	if rec != nil {
 		rec.Emit(telemetry.EventSpec{Origin: telemetry.OriginValidation, Scope: telemetry.ScopeAttempt, Component: "quality", Action: "sha256"}, telemetry.StatusOK, "", "")
 	}
 	outputManifest, manifestErr := publisher.ComputeLocalManifest(ctx, outputPath)
-	hashMS := time.Since(hashStart).Milliseconds()
-	metrics["output.hash_ms"] = hashMS
 	if manifestErr != nil {
 		planHandle.Abort("quality_manifest", manifestErr.Error())
 		metrics["output.manifest_error"] = manifestErr.Error()
@@ -320,7 +319,9 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 	}
 	outputHash = outputManifest.SHA256Hex
 	outputSize = outputManifest.SizeBytes
-	projectRenderProfile(metrics, runMetrics, artifactStarted, hashMS)
+	// Keep the historical output.hash_ms key, but make it mean exactly the
+	// streaming SHA phase rather than the complete manifest operation.
+	metrics["output.hash_ms"] = outputManifest.Timings.SHA256MS
 	if outputSize <= 0 {
 		planHandle.Abort("quality_empty", "render output manifest has zero bytes")
 		metrics["output.manifest_error"] = "render output is empty"
@@ -366,6 +367,7 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 		})
 		metrics["sidecar.present"] = true
 		metrics["sidecar.bytes"] = sidecarManifest.SizeBytes
+		projectRenderProfile(metrics, runMetrics, outputManifest.Timings.SHA256MS, outputManifest.Timings.FfprobeMS, sidecarManifest.Timings.TotalMS, time.Since(artifactStarted).Milliseconds())
 	} else {
 		// The sidecar is the renderer's progress receipt and is part of
 		// the artifact contract. Do not silently report success without
@@ -384,7 +386,6 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 			CompletedAt: time.Now().UTC(),
 		}, nil
 	}
-	metrics["render_profile.artifact_total_ms"] = time.Since(artifactStarted).Milliseconds()
 
 	planHandle.CompleteWith(0, outputSize, runMetrics.RenderMetrics.Frames, telemetry.StatusOK, "", "")
 	planCompleted = true

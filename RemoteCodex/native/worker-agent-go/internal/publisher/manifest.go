@@ -33,6 +33,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // OutputManifest is the worker-side representation of an encoder
@@ -75,6 +76,21 @@ type OutputManifest struct {
 	FfprobeOK       bool
 	FfprobeValid    bool
 	FfprobeErr      string
+	// Timings describes the work performed while constructing this
+	// manifest. It is transport-local observability data; callers must not
+	// interpret TotalMS as only SHA time because it also includes metadata
+	// sniffing and optional ffprobe enrichment.
+	Timings ManifestTimings `json:"-"`
+}
+
+// ManifestTimings is the exclusive timing breakdown for one
+// ComputeLocalManifest call. The fields are wall-clock milliseconds and may
+// be zero on a path that failed before that phase started.
+type ManifestTimings struct {
+	TotalMS    int64
+	SHA256MS   int64
+	MetadataMS int64
+	FfprobeMS  int64
 }
 
 // Sentinel errors.
@@ -105,10 +121,14 @@ func ComputeLocalManifest(ctx context.Context, path string) (*OutputManifest, er
 		return nil, fmt.Errorf("publisher.ComputeLocalManifest: stat: %w", err)
 	}
 	m := &OutputManifest{LocalPath: path, SizeBytes: st.Size()}
+	manifestStarted := time.Now()
+	defer func() { m.Timings.TotalMS = time.Since(manifestStarted).Milliseconds() }()
 
+	shaStarted := time.Now()
 	if err := streamSHAAndSize(path, m); err != nil {
 		return nil, err
 	}
+	m.Timings.SHA256MS = time.Since(shaStarted).Milliseconds()
 
 	// mimeSniffLen is the head-buffer size http.DetectContentType needs
 	// for a confident guess. Go's stdlib does not expose this constant;
@@ -119,6 +139,7 @@ func ComputeLocalManifest(ctx context.Context, path string) (*OutputManifest, er
 	// window). We reread a small head segment to keep this function
 	// the single entry point; the heavy byte-budget above stays
 	// single-pass.
+	metadataStarted := time.Now()
 	head, err := readHead(path, mimeSniffLen)
 	if err != nil {
 		return nil, fmt.Errorf("publisher.ComputeLocalManifest: readHead: %w", err)
@@ -136,10 +157,13 @@ func ComputeLocalManifest(ctx context.Context, path string) (*OutputManifest, er
 	if looksLikeMP4(head) {
 		m.Format = "mp4"
 	}
+	m.Timings.MetadataMS = time.Since(metadataStarted).Milliseconds()
 
 	// ffprobe enrichment is best-effort; missing binary must not
 	// fail the manifest computation.
+	probeStarted := time.Now()
 	probe, perr := ProbeMediaDetails(ctx, path)
+	m.Timings.FfprobeMS = time.Since(probeStarted).Milliseconds()
 	if perr != nil {
 		m.FfprobeErr = perr.Error()
 	} else {

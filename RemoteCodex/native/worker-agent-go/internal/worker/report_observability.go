@@ -36,9 +36,12 @@ func attachWorkerIdentityAndTimings(w *Worker, report *taskrunner.TaskExecutionR
 		"asset_resolution_ms": 0, "cache_lookup_ms": 0, "asset_download_ms": 0,
 		"probe_ms": 0, "compile_ms": 0, "render_ms": 0, "segment_encode_ms": 0,
 		"concat_ms": 0, "audio_download_ms": 0, "audio_mix_ms": 0,
+		"compile_plan_ms": 0, "audio_timeline_compile_ms": 0,
 		"audio_prepare_ms":    0,
 		"audio_mix_encode_ms": 0, "audio_mux_ms": 0, "final_mux_ms": 0,
-		"final_copy_ms": 0, "audio_total_ms": 0,
+		"aac_encode_ms": 0, "artifact_finalize_ms": 0, "artifact_sha_ms": 0,
+		"total_artifact_ms": 0,
+		"final_copy_ms":     0, "audio_total_ms": 0,
 		"verification_ms": 0, "artifact_upload_ms": 0,
 		"report_ms": 0, "total_ms": float64(report.CompletedAt.Sub(report.StartedAt).Milliseconds()),
 	}
@@ -110,6 +113,18 @@ func attachWorkerIdentityAndTimings(w *Worker, report *taskrunner.TaskExecutionR
 	}
 	if value, ok := report.Metrics["engine.copy_final_ms"]; ok {
 		timings["final_copy_ms"] = metricFloat(value)
+	}
+	// render_profile is the executor's canonical low-cardinality timing
+	// surface. Copy only fields that are actually present: zero remains a
+	// truthful "not measured", not a fabricated phase duration.
+	for _, name := range []string{
+		"compile_plan_ms", "asset_resolution_ms", "audio_timeline_compile_ms",
+		"audio_prepare_ms", "audio_mix_ms", "aac_encode_ms", "mux_ms",
+		"artifact_finalize_ms", "artifact_sha_ms", "artifact_total_ms",
+	} {
+		if value, ok := report.Metrics["render_profile."+name]; ok {
+			timings[name] = metricFloat(value)
+		}
 	}
 	if records, ok := report.Metrics["asset_operations"].([]AssetOperationRecord); ok {
 		for _, record := range records {

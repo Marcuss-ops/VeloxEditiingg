@@ -137,6 +137,17 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
   `compile_ms`, `canonicalize_ms`, `hash_ms`, `persist_ms` e `total_ms`, e
   registra il motivo dei fallback (`compile_error`, identità, canonicalization
   o persist error) senza creare un compiler parallelo.
+- Worker render profiling: il profilo espone ora `compile_plan_ms`, le fasi
+  native disponibili (`asset_resolution_ms`, `asset_download_ms`,
+  `audio_timeline_compile_ms`, `audio_prepare_ms`, `audio_mix_ms`,
+  `mux_ms`) e il blocco artifact con `artifact_sha_ms`,
+  `artifact_probe_ms`, `artifact_finalize_ms` e `artifact_total_ms`.
+  I tempi SHA/probe provengono dal manifest reale; il tempo AAC resta assente
+  quando FFmpeg lo misura insieme al mix, invece di essere stimato.
+- Worker timing semantics: i tempi delle singole fasi sono esclusivi rispetto
+  alla propria operazione. `artifact_total_ms` parte dopo la fine del render e
+  termina quando output e progress receipt hanno manifest pronti; non include
+  compile/render e non viene sommato ai tempi nested del motore.
 - Atomic ingest/reconciler: un mismatch SHA non viene più registrato in modo
   silenziosamente incompleto; se l'evento audit non persiste, l'ingest viene
   rollbackato. Il reconciler di artifact può promuovere un task solo quando
@@ -195,11 +206,12 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 - [x] Separare metriche Master `compile`, `canonicalize`, `hash`, `persist`.
 - [x] Esporre il tempo nativo `audio_prepare_ms` (compilazione del piano,
   costruzione del filter graph e comando) nel profilo worker.
-- [ ] Completare le metriche worker `asset resolution`, `timeline`, `mix`,
-  `AAC`, `mux`, `finalize`, `SHA`; il mix/AAC resta un unico bucket finché
-  il processo FFmpeg non espone una separazione veritiera.
-- [ ] Assicurare che la somma dei tempi sia documentata come nested o
-  exclusive, evitando breakdown matematicamente incoerenti.
+- [x] Completare le metriche worker disponibili per `asset resolution`,
+  `timeline`, `audio preparation`, `mix`, `mux`, `finalize` e `SHA`. Il tempo
+  AAC resta deliberatamente non valorizzato quando il processo FFmpeg espone
+  solo il comando combinato mix+encode.
+- [x] Documentare la semantica nested/exclusive: il profilo non somma fasi
+  sovrapposte; `artifact_total_ms` è un intervallo post-render indipendente.
 
 ### P1 — Retry, deadline e idempotenza
 
