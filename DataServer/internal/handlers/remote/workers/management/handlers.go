@@ -35,7 +35,10 @@ func RenameWorker(reg *workersreg.Registry) gin.HandlerFunc {
 		}
 
 		oldName := workerInfo.WorkerName
-		_ = reg.Heartbeat(c.Request.Context(), body.WorkerID, body.NewName, workerInfo.CurrentJob, nil)
+		if err := reg.Heartbeat(c.Request.Context(), body.WorkerID, body.NewName, workerInfo.CurrentJob, nil); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "worker rename persistence failed"})
+			return
+		}
 
 		c.JSON(http.StatusOK, gin.H{
 			"status":    "ok",
@@ -71,7 +74,10 @@ func SetWorkerGroup(reg *workersreg.Registry) gin.HandlerFunc {
 		extra := map[string]interface{}{
 			"worker_group": body.WorkerGroup,
 		}
-		_ = reg.Heartbeat(c.Request.Context(), body.WorkerID, workerInfo.WorkerName, workerInfo.CurrentJob, extra)
+		if err := reg.Heartbeat(c.Request.Context(), body.WorkerID, workerInfo.WorkerName, workerInfo.CurrentJob, extra); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "worker group persistence failed"})
+			return
+		}
 
 		c.JSON(http.StatusOK, gin.H{
 			"status":       "ok",

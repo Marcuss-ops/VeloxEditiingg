@@ -303,6 +303,9 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
   elenco worker/task, tentativi o phase timings ora interrompono `Overview` e
   `ListWorkers` invece di produrre dashboard parziali con zeri plausibili;
   rimosso anche un loop worker senza effetto.
+- [x] Rendere fail-closed `worker/rename` e `worker/set_group`: gli errori del
+  writer heartbeat non vengono più ignorati e non producono più 200 senza
+  persistenza.
 
 ### P1 — Worker layering e stato globale
 
