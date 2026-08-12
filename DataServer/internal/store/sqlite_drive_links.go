@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -53,12 +55,16 @@ func (s *SQLiteStore) ListDriveLinks() ([]map[string]any, error) {
 	for rows.Next() {
 		var raw string
 		if err := rows.Scan(&raw); err != nil {
-			continue
+			return nil, fmt.Errorf("list drive links scan: %w", err)
 		}
 		var m map[string]any
-		if err := json.Unmarshal([]byte(raw), &m); err == nil {
-			out = append(out, m)
+		if err := json.Unmarshal([]byte(raw), &m); err != nil {
+			return nil, fmt.Errorf("list drive links decode: %w", err)
 		}
+		out = append(out, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list drive links iterate: %w", err)
 	}
 	return out, nil
 }
@@ -240,7 +246,7 @@ func (s *SQLiteStore) ListMasterFolders() ([]map[string]any, error) {
 		var id, name, url, language, createdAt, updatedAt, metadataJSON string
 		var subfoldersCount int
 		if err := rows.Scan(&id, &name, &url, &subfoldersCount, &language, &createdAt, &updatedAt, &metadataJSON); err != nil {
-			continue
+			return nil, fmt.Errorf("list master folders scan: %w", err)
 		}
 		result = append(result, map[string]any{
 			"id": id, "name": name, "url": url,
@@ -270,7 +276,7 @@ func (s *SQLiteStore) ListMasterFoldersDetailed() ([]map[string]any, error) {
 		var id, name, url, language, metadataJSON, createdAt, updatedAt string
 		var subfoldersCount int
 		if err := rows.Scan(&id, &name, &url, &subfoldersCount, &language, &metadataJSON, &createdAt, &updatedAt); err != nil {
-			continue
+			return nil, fmt.Errorf("list master folders detailed scan: %w", err)
 		}
 		m := map[string]any{
 			"id": id, "name": name, "url": url,
@@ -279,11 +285,12 @@ func (s *SQLiteStore) ListMasterFoldersDetailed() ([]map[string]any, error) {
 		}
 		if metadataJSON != "" {
 			var meta map[string]any
-			if err := json.Unmarshal([]byte(metadataJSON), &meta); err == nil {
-				m["metadata"] = meta
-				if t, ok := meta["type"].(string); ok {
-					m["type"] = t
-				}
+			if err := json.Unmarshal([]byte(metadataJSON), &meta); err != nil {
+				return nil, fmt.Errorf("list master folders detailed metadata decode: %w", err)
+			}
+			m["metadata"] = meta
+			if t, ok := meta["type"].(string); ok {
+				m["type"] = t
 			}
 		}
 		result = append(result, m)
@@ -300,7 +307,10 @@ func (s *SQLiteStore) FindMasterFolderByLanguage(language string) (map[string]an
 	var id, name, url, lang, metadataJSON, createdAt, updatedAt string
 	var subfoldersCount int
 	if err := row.Scan(&id, &name, &url, &subfoldersCount, &lang, &metadataJSON, &createdAt, &updatedAt); err != nil {
-		return nil, nil
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("find master folder by language: %w", err)
 	}
 	m := map[string]any{
 		"id": id, "name": name, "url": url,
@@ -309,11 +319,12 @@ func (s *SQLiteStore) FindMasterFolderByLanguage(language string) (map[string]an
 	}
 	if metadataJSON != "" {
 		var meta map[string]any
-		if err := json.Unmarshal([]byte(metadataJSON), &meta); err == nil {
-			m["metadata"] = meta
-			if t, ok := meta["type"].(string); ok {
-				m["type"] = t
-			}
+		if err := json.Unmarshal([]byte(metadataJSON), &meta); err != nil {
+			return nil, fmt.Errorf("find master folder metadata decode: %w", err)
+		}
+		m["metadata"] = meta
+		if t, ok := meta["type"].(string); ok {
+			m["type"] = t
 		}
 	}
 	return m, nil
