@@ -1,7 +1,7 @@
 # Velox Telemetry Authority Map
 
-> **Status:** repository map, not a new runtime contract  
-> **Mapped:** 2026-08-12  
+> **Status:** repository map, not a new runtime contract
+> **Mapped:** 2026-08-12
 > **Scope:** worker-agent Go, native video-engine C++, Master ingestion, SQL read models, Prometheus, and performance receipts
 
 This document records where telemetry facts are currently produced, recorded,
@@ -132,8 +132,9 @@ C++ engine operation
 
 The C++ recorder is thread-safe and monotonic-clock based. It also carries
 segment, track, byte, frame, CPU, queue-wait, offset, and metadata fields.
-Its sidecar is a transport artifact: it becomes authoritative only after the
-worker maps it into the report and the Master persists it through the atomic
+Its sidecar is a transport artifact: the native engine remains the
+authoritative producer of the observed engine facts; worker mapping and Master
+persistence establish the durable accepted projection through the atomic
 ingest path.
 
 ## 4. Fact-owner matrix
