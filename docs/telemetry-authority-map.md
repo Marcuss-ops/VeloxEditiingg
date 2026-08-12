@@ -15,15 +15,18 @@ row explicitly says so.
 Velox already has a strong event-taxonomy SSOT, but not yet one universal
 telemetry SSOT for every metric:
 
-- `shared/telemetry/catalog.json` is the canonical **language-neutral event
-  taxonomy** for the shared Go/C++ wire contract. Go loads it through
-  `catalog_source.go`; the C++ header is generated from the same source.
+- `shared/telemetry/schema/catalog.json` is the canonical **language-neutral
+  event taxonomy** for the shared Go/C++ wire contract. Go loads it through
+  `catalog_source.go`; the generated Go binding lives in
+  `shared/telemetry/generated/catalog_gen.go` and the C++ header is
+  generated from the same source.
 - `RemoteCodex/native/worker-agent-go/internal/telemetry/phase_recorder.go`
   is the worker's append-only per-attempt event journal.
 - The native engine has a parallel recorder implementation in
-  `RemoteCodex/native/video-engine-cpp/include/velox/telemetry/phase_recorder.hpp`
-  and `src/telemetry/phase_recorder.cpp`. It emits the same sidecar event
-  shape, but currently repeats origin/scope constants in C++.
+  `RemoteCodex/native/video-engine-cpp/include/velox/telemetry/emitter.hpp`
+  and `src/telemetry/emitter.cpp` (renamed from `phase_recorder` in the
+  target-structure pass; it is a transport-side emitter, not a second
+  taxonomy).
 - `AttemptTelemetrySession` is the authoritative worker collector for host,
   cgroup, process-tree, and I/O resource observations. Its
   `ApplyToMap` method is a compatibility adapter into the legacy report map.
@@ -69,10 +72,10 @@ some of the same execution lifecycle facts outside this single journal.
 | --- | --- | --- | --- |
 | Task execution lifecycle | `TaskRunner` / worker execution boundary | `RemoteCodex/native/worker-agent-go/internal/worker/task_execution.go` | Starts/stops the attempt resource session, runs the executor, uploads outputs, drains late recorder events, and submits the result. |
 | Canonical worker event journal | `EventRecorder` | `RemoteCodex/native/worker-agent-go/internal/telemetry/phase_recorder.go` | Thread-safe append-only `RecordedPhase` sequence for one attempt; validates/canonicalizes event taxonomy before recording. |
-| Native engine event journal | `PhaseRecorder` | `RemoteCodex/native/video-engine-cpp/include/velox/telemetry/phase_recorder.hpp`, `src/telemetry/phase_recorder.cpp` | Records engine-side events and serializes the `phases[]` sidecar. It is a transport-side producer, not a Master sink. |
+| Native engine event journal | `PhaseRecorder` (emitter) | `RemoteCodex/native/video-engine-cpp/include/velox/telemetry/emitter.hpp`, `src/telemetry/emitter.cpp` | Records engine-side events and serializes the `phases[]` sidecar. It is a transport-side producer, not a Master sink. |
 | Sidecar-to-worker bridge | Native binary resolver | `RemoteCodex/native/worker-agent-go/pkg/video/services/native/binary_resolver.go` | Maps sidecar phases and segments into `pipeline.RenderMetrics`. |
 | Worker report assembly | `TaskRunner` report finalization | `RemoteCodex/native/worker-agent-go/internal/taskrunner/runner_report.go` | Merges executor detailed phases with worker lifecycle events and preserves ordering. |
-| Resource collection | `AttemptTelemetrySession` | `RemoteCodex/native/worker-agent-go/internal/telemetry/attempt_session.go` | Samples host/cgroup/process/I/O resources over the attempt; produces typed `AttemptTelemetry`. |
+| Resource collection | `AttemptTelemetrySession` + sampler family | `RemoteCodex/native/worker-agent-go/internal/telemetry/attempt_session.go` (session facade), sampler implementation in `internal/telemetry/collectors/` | Samples host/cgroup/process/I/O resources over the attempt; produces typed `AttemptTelemetry`. |
 | Wire report construction | `submitTaskResult` | `RemoteCodex/native/worker-agent-go/internal/worker/task_result_builder.go` | The single builder for `pb.TaskResult`, including typed metrics, phase timings, segment timings, artifacts, report hash, and schema versions. |
 | Master wire boundary | `handleTaskResult` | `DataServer/internal/grpcserver/handler_result.go` | Validates identity, translates protobuf payloads, and delegates to the ingestion service. |
 | Master terminal transaction | `IngestTaskResultAtomic` | `DataServer/internal/ingest/service.go`, `DataServer/internal/store/sqlite_task_atomic_ingest.go` | Single legal terminal persistence boundary for task/attempt state plus metrics, cache, cost, artifacts, phases, events, and raw report. |
@@ -84,7 +87,7 @@ some of the same execution lifecycle facts outside this single journal.
 
 | Surface | Current status | Notes |
 | --- | --- | --- |
-| `shared/telemetry/catalog.json` | **Authoritative for shared event descriptors** | The language-neutral source owns component, action, origin, scope, phase, event type, unit, kind, timing mode, aggregation, cardinality, and owner. |
+| `shared/telemetry/schema/catalog.json` | **Authoritative for shared event descriptors** | The language-neutral source owns component, action, origin, scope, phase, event type, unit, kind, timing mode, aggregation, cardinality, and owner. |
 | `RemoteCodex/native/worker-agent-go/internal/telemetry/phase_registry.go` | Derived worker view | `LookupPhaseSpec`, `RegisteredPhaseSpecs`, and `CanonicalizeEventSpec` read from `velox-shared/telemetry`; it does not declare a second component/action list. |
 | `shared/telemetry/catalog_source.go` | Go loader/validator | Embeds and validates `catalog.json`, then projects it into the existing Go catalog API. |
 | `RemoteCodex/native/video-engine-cpp/include/velox/telemetry/catalog_generated.hpp` | Generated C++ binding | Produced by `telemetry/cmd/cataloggen`; C++ consumers do not maintain a second event or vocabulary list. |
@@ -214,9 +217,10 @@ outside this execution path have been exhaustively enumerated.
 
 ### D1 — Generated C++ binding must stay synchronized
 
-- Language-neutral authority: `shared/telemetry/catalog.json`.
+- Language-neutral authority: `shared/telemetry/schema/catalog.json`.
 - C++ binding: `catalog_generated.hpp`, produced by
-  `shared/telemetry/cmd/cataloggen`.
+  `shared/telemetry/cmd/cataloggen`; the Go binding is generated into
+  `shared/telemetry/generated/catalog_gen.go`.
 - Guard: `scripts/ci/check-telemetry-catalog.sh` runs the Go tests and generator
   in `-check` mode, so a changed JSON source with a stale C++ header fails
   closed. The PhaseRecorder aliases its origin/scope vocabulary to the
@@ -380,16 +384,18 @@ worker-side graph is not yet a single recorder-only pipeline.
 The map was built from the following implementation evidence:
 
 - shared taxonomy, Go loader, and worker-derived view:
-  `shared/telemetry/catalog.json`, `shared/telemetry/catalog_source.go`,
-  `shared/telemetry/catalog.go`, and
+  `shared/telemetry/schema/catalog.json`, `shared/telemetry/catalog_source.go`,
+  `shared/telemetry/catalog.go`,
+  `shared/telemetry/generated/catalog_gen.go`, and
   `RemoteCodex/native/worker-agent-go/internal/telemetry/phase_registry.go`;
-- worker journal and resource session:
+- worker journal, sampler family, and resource session:
   `internal/telemetry/phase_recorder.go`,
-  `internal/telemetry/attempt_session.go`,
+  `internal/telemetry/collectors/` (cpu/memory/disk/network/process/host
+  samplers, cpucapacity, gc), `internal/telemetry/attempt_session.go`,
   `internal/taskrunner/runner_report.go`;
 - native transport:
-  `RemoteCodex/native/video-engine-cpp/include/velox/telemetry/phase_recorder.hpp`,
-  `src/telemetry/phase_recorder.cpp`, and
+  `RemoteCodex/native/video-engine-cpp/include/velox/telemetry/emitter.hpp`,
+  `src/telemetry/emitter.cpp`, and
   `pkg/video/services/native/binary_resolver.go`;
 - wire and Master boundary:
   `internal/worker/task_result_builder.go`,
