@@ -163,6 +163,34 @@ func TestCompile_ClipStockUsesStrictCopyOnlyPlan(t *testing.T) {
 	}
 }
 
+func TestCompile_ClipStockWithMultipleAudioTracksUsesNativeMix(t *testing.T) {
+	input := map[string]interface{}{
+		"video_mode": "clip_stock",
+		"items": []interface{}{
+			map[string]interface{}{
+				"type":     "video",
+				"url":      "worker-local/canonical-clip.mp4",
+				"duration": 6.0,
+			},
+		},
+		"audio_tracks": []interface{}{
+			map[string]interface{}{"source_url": "worker-local/voice-1.mp3", "duration_seconds": 3.0},
+			map[string]interface{}{"source_url": "worker-local/voice-2.mp3", "duration_seconds": 3.0, "start_time_offset": 3.0},
+		},
+	}
+
+	compiled, err := Compile(context.Background(), "job-native-audio-mix", input, "/tmp/out.mp4", nil)
+	if err != nil {
+		t.Fatalf("Compile(clip_stock with multiple audio tracks): %v", err)
+	}
+	if compiled.CopyOnly {
+		t.Fatal("multiple audio tracks must disable copy-only and use the native mixer")
+	}
+	if got := len(compiled.AudioTracks); got != 2 {
+		t.Fatalf("audio tracks = %d, want 2", got)
+	}
+}
+
 func TestCompile_VideoItemCanPreserveOriginalAudio(t *testing.T) {
 	input := map[string]interface{}{
 		"items": []interface{}{

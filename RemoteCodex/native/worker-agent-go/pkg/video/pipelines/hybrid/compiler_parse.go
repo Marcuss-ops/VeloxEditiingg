@@ -19,12 +19,13 @@ func parseRequest(input map[string]interface{}) *Request {
 	// an alias for parity with payloads emitted by enqueue_clips.go
 	// (which uses "voiceover_url" for the shared voiceover track).
 	// audio_url wins when both are set.
+	copyOnly := toBoolDefault(input["copy_only"], false) || strings.EqualFold(toString(input["video_mode"]), "clip_stock")
 	req := &Request{
 		AudioURL:  toStringDefault(input["audio_url"], toString(input["voiceover_url"])),
 		Fit:       toStringDefault(input["fit"], "contain"),
 		Layers:    parseLayers(input["layers"]),
 		Subtitles: parseSceneSubtitleTracks(input),
-		CopyOnly:  toBoolDefault(input["copy_only"], false) || strings.EqualFold(toString(input["video_mode"]), "clip_stock"),
+		CopyOnly:  copyOnly,
 	}
 
 	if rawTracks, ok := input["audio_tracks"].([]interface{}); ok {
@@ -55,6 +56,13 @@ func parseRequest(input map[string]interface{}) *Request {
 			}
 			req.AudioTracks = append(req.AudioTracks, track)
 		}
+	}
+	// Packet-copy can carry at most one already-final audio stream. Narrated
+	// historical jobs legitimately contain one voiceover/clip track per
+	// segment, so let the native renderer mix those tracks in-process instead
+	// of failing the whole job or invoking an external ffmpeg process.
+	if req.CopyOnly && len(req.AudioTracks) > 1 {
+		req.CopyOnly = false
 	}
 
 	// Try explicit items array first. When present, this is the
