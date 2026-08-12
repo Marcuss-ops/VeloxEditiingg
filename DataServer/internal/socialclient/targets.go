@@ -22,10 +22,6 @@ type PublishingCatalogRequest struct {
 	} `json:"target"`
 }
 
-// PublishingTargetCatalogRequest is a compatibility alias for the internal
-// InstaEdit resolver request. It is not a Velox-owned catalog contract.
-type PublishingTargetCatalogRequest = PublishingCatalogRequest
-
 // PublishingGroupMember is an upstream InstaEdit membership snapshot used
 // transiently during submit validation. Velox never persists or mirrors it.
 type PublishingGroupMember struct {
@@ -110,7 +106,7 @@ func (c *Client) ListPublishingCatalog(ctx context.Context, workspaceID int64, p
 		return nil, fmt.Errorf("%w: workspace_id and platform are required", ErrPermanent)
 	}
 
-	payload := PublishingTargetCatalogRequest{WorkspaceID: workspaceID, Platform: platform}
+	payload := PublishingCatalogRequest{WorkspaceID: workspaceID, Platform: platform}
 	payload.Target.Type = "catalog"
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -147,11 +143,4 @@ func (c *Client) ListPublishingCatalog(ctx context.Context, workspaceID int64, p
 		out.ResolvedTargets = []PublishingTarget{}
 	}
 	return &out, nil
-}
-
-// ListPublishingTargets is the backward-compatible channel catalog method.
-// The upstream response may now carry groups, but this method preserves the
-// historical API for callers that only consume ResolvedTargets.
-func (c *Client) ListPublishingTargets(ctx context.Context, workspaceID int64, platform string) (*PublishingTargetCatalogResponse, error) {
-	return c.ListPublishingCatalog(ctx, workspaceID, platform)
 }

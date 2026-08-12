@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestListPublishingTargets(t *testing.T) {
+func TestListPublishingCatalog(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/internal/v1/destinations/resolve-target" {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
@@ -15,7 +15,7 @@ func TestListPublishingTargets(t *testing.T) {
 		if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
 			t.Fatalf("authorization = %q", got)
 		}
-		var body PublishingTargetCatalogRequest
+		var body PublishingCatalogRequest
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
@@ -46,18 +46,18 @@ func TestListPublishingTargets(t *testing.T) {
 	defer server.Close()
 
 	client := New(Config{BaseURL: server.URL, APIKey: "test-token"})
-	catalog, err := client.ListPublishingTargets(t.Context(), 12, "youtube")
+	catalog, err := client.ListPublishingCatalog(t.Context(), 12, "youtube")
 	if err != nil {
-		t.Fatalf("ListPublishingTargets returned error: %v", err)
+		t.Fatalf("ListPublishingCatalog returned error: %v", err)
 	}
 	if len(catalog.ResolvedTargets) != 1 || catalog.ResolvedTargets[0].ExternalDestinationID != "extdst_ready" {
 		t.Fatalf("catalog = %#v", catalog)
 	}
 }
 
-func TestListPublishingTargetsRequiresConfiguration(t *testing.T) {
+func TestListPublishingCatalogRequiresConfiguration(t *testing.T) {
 	client := New(Config{})
-	if _, err := client.ListPublishingTargets(t.Context(), 12, "youtube"); err == nil {
+	if _, err := client.ListPublishingCatalog(t.Context(), 12, "youtube"); err == nil {
 		t.Fatal("expected not-configured error")
 	}
 }
