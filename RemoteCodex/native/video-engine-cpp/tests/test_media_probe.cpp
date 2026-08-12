@@ -2,6 +2,7 @@
 #include "velox/services/media_probe.hpp"
 #include "velox/services/media_utils.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
