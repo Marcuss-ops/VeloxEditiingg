@@ -49,6 +49,11 @@ type AnsibleComputerStore interface {
 	CountAnsibleHostsEnabled() (int, error)
 }
 
+// ErrComputerStoreNotConfigured identifies an inventory manager that cannot
+// persist the canonical ansible_hosts state. A missing store must never look
+// like a successful no-op mutation.
+var ErrComputerStoreNotConfigured = fmt.Errorf("ansible: computer store not configured")
+
 // AnsibleComputerManager owns the Ansible computers inventory.
 //
 // ── DB-as-source-of-truth inventory (P0.5) ───────────────────────
@@ -226,8 +231,8 @@ func (m *AnsibleComputerManager) GetComputer(id string) (AnsibleComputer, bool) 
 // migrated to a secret file by `persistToAnsibleHosts` so plaintext
 // passwords never reach the database.
 func (m *AnsibleComputerManager) SaveComputer(computer AnsibleComputer) error {
-	if m.store == nil {
-		return nil
+	if m == nil || m.store == nil {
+		return ErrComputerStoreNotConfigured
 	}
 	computer.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	return m.store.UpsertAnsibleHost(computerToAnsibleHostFields(computer, m.secretResolver))
@@ -238,8 +243,8 @@ func (m *AnsibleComputerManager) SaveComputer(computer AnsibleComputer) error {
 // PR-ANSIBLE-SOT: the in-RAM `delete(m.computers, id)` is replaced by a
 // single `DeleteAnsibleHost` call.
 func (m *AnsibleComputerManager) DeleteComputer(id string) error {
-	if m.store == nil {
-		return nil
+	if m == nil || m.store == nil {
+		return ErrComputerStoreNotConfigured
 	}
 	return m.store.DeleteAnsibleHost(id)
 }
