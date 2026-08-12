@@ -406,22 +406,29 @@ func scanOperation(rows *sql.Rows) (*Operation, error) {
 	); err != nil {
 		return nil, err
 	}
-	if queuedAt != "" {
-		if t, e := time.Parse(time.RFC3339, queuedAt); e == nil {
-			op.QueuedAt = t
-		}
+	var err error
+	op.QueuedAt, err = parsePersistedWorkerTimestamp(queuedAt, "fleet_operations.queued_at")
+	if err != nil {
+		return nil, err
 	}
 	if startedAt.Valid && startedAt.String != "" {
-		if t, e := time.Parse(time.RFC3339, startedAt.String); e == nil {
-			op.StartedAt = &t
+		parsed, err := parsePersistedWorkerTimestamp(startedAt.String, "fleet_operations.started_at")
+		if err != nil {
+			return nil, err
 		}
+		op.StartedAt = &parsed
 	}
 	if finishedAt.Valid && finishedAt.String != "" {
-		if t, e := time.Parse(time.RFC3339, finishedAt.String); e == nil {
-			op.FinishedAt = &t
+		parsed, err := parsePersistedWorkerTimestamp(finishedAt.String, "fleet_operations.finished_at")
+		if err != nil {
+			return nil, err
 		}
+		op.FinishedAt = &parsed
 	}
 	if payload != "" {
+		if !json.Valid([]byte(payload)) {
+			return nil, fmt.Errorf("fleet_operations.payload is invalid JSON")
+		}
 		op.Payload = json.RawMessage(payload)
 	}
 	if errMsg.Valid {

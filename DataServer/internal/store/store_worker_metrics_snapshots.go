@@ -226,9 +226,11 @@ func scanWorkerMetricsSnapshot(rows *sql.Rows) (WorkerMetricsSnapshot, error) {
 	); err != nil {
 		return snap, fmt.Errorf("scan worker metrics snapshot: %w", err)
 	}
-	if t, err := time.Parse(time.RFC3339, snapshottedAt); err == nil {
-		snap.SnapshottedAt = t
+	parsed, err := parsePersistedWorkerTimestamp(snapshottedAt, "worker_metrics_snapshots.snapshotted_at")
+	if err != nil {
+		return snap, err
 	}
+	snap.SnapshottedAt = parsed
 	return snap, nil
 }
 

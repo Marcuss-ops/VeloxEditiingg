@@ -72,6 +72,9 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 - Audit/DLQ read models: timestamp corrotti e metadata JSON invalidi non
   vengono più trasformati in `zero time`, `now` o `{}`; l’endpoint risale con
   errore invece di mostrare una storia operatore alterata.
+- Smoke, fleet-operation e worker-metrics read models: timestamp obbligatori
+  e payload JSON corrotti interrompono la lettura invece di produrre record
+  apparentemente validi.
 - Profiling read model: le fasi di un attempt rifiutano scan e timestamp
   corrotti invece di trasformarli in tempi zero, preservando benchmark
   veritieri.

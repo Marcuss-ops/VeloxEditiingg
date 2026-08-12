@@ -63,3 +63,41 @@ func TestDeadLetterReadModelsRejectCorruptTimestamps(t *testing.T) {
 		t.Fatal("ListDeadLetters returned nil error for corrupt timestamp")
 	}
 }
+
+func TestOperatorReadModelsRejectCorruption(t *testing.T) {
+	s, err := NewSQLiteStore(filepath.Join(t.TempDir(), "operator-read-corruption.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+	defer s.Close()
+
+	if _, err := s.db.ExecContext(context.Background(), `
+		INSERT INTO smoke_runs
+		(run_id, worker_id, started_at, finished_at, duration_ms, asset_id, status, requested_by)
+		VALUES ('smoke-corrupt', 'worker-corrupt', 'not-a-time', 'not-a-time', 0, 'asset', 'PENDING', 'test')`); err != nil {
+		t.Fatalf("insert corrupt smoke row: %v", err)
+	}
+	if _, err := s.ListRecentSmokesForWorker(context.Background(), "worker-corrupt", 10); err == nil {
+		t.Fatal("ListRecentSmokesForWorker returned nil error for corrupt timestamp")
+	}
+
+	if _, err := s.db.ExecContext(context.Background(), `
+		INSERT INTO worker_metrics_snapshots
+		(worker_id, snapshotted_at)
+		VALUES ('worker-corrupt', 'not-a-time')`); err != nil {
+		t.Fatalf("insert corrupt metrics row: %v", err)
+	}
+	if _, err := s.GetLatestWorkerMetricsForWorker(context.Background(), "worker-corrupt"); err == nil {
+		t.Fatal("GetLatestWorkerMetricsForWorker returned nil error for corrupt timestamp")
+	}
+
+	if _, err := s.db.ExecContext(context.Background(), `
+		INSERT INTO fleet_operations
+		(operation_id, worker_id, op, requested_by, reason, status, queued_at, payload)
+		VALUES ('operation-corrupt', 'worker-corrupt', 'drain', 'test', 'corruption test', 'QUEUED', 'not-a-time', '{not-json}')`); err != nil {
+		t.Fatalf("insert corrupt operation row: %v", err)
+	}
+	if _, err := s.GetOperation(context.Background(), "operation-corrupt"); err == nil {
+		t.Fatal("GetOperation returned nil error for corrupt operation row")
+	}
+}

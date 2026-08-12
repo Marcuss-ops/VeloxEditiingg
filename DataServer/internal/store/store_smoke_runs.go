@@ -268,12 +268,16 @@ func scanSmokeRun(rows *sql.Rows) (*SmokeRun, error) {
 	); err != nil {
 		return nil, err
 	}
-	if t, err := time.Parse(time.RFC3339, startedAt); err == nil {
-		r.StartedAt = t
+	parsedStarted, err := parsePersistedWorkerTimestamp(startedAt, "smoke_runs.started_at")
+	if err != nil {
+		return nil, err
 	}
-	if t, err := time.Parse(time.RFC3339, finishedAt); err == nil {
-		r.FinishedAt = t
+	r.StartedAt = parsedStarted
+	parsedFinished, err := parsePersistedWorkerTimestamp(finishedAt, "smoke_runs.finished_at")
+	if err != nil {
+		return nil, err
 	}
+	r.FinishedAt = parsedFinished
 	if artifactDriveID.Valid {
 		r.ArtifactDriveID = artifactDriveID.String
 	}
