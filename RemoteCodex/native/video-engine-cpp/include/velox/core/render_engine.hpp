@@ -2,6 +2,7 @@
 #include "velox/core/metrics.hpp"
 #include "velox/plan/render_plan.hpp"
 #include "velox/services/ffmpeg_progress_parser.hpp"
+#include "velox/services/frame_pipeline.hpp"
 #include "velox/telemetry/emitter.hpp"
 
 #include <atomic>
@@ -73,6 +74,7 @@ public:
 
 private:
     void emitSidecar(const std::string& output_path) const;
+    void recordFramePipeline(const media::FramePipelineResult& result);
 
     class SidecarGuard {
     public:
@@ -100,6 +102,8 @@ private:
     services::EngineProgress last_progress_{};
     EngineMetrics metrics_;
     telemetry::PhaseRecorder recorder_;
+    media::FramePipelineMetrics frame_pipeline_metrics_{};
+    int64_t frame_pipeline_runs_{0};
 };
 
 } // namespace velox::core

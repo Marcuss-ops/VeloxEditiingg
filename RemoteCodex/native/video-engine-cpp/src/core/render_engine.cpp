@@ -8,6 +8,7 @@
 #include "velox/services/media_utils.hpp"
 #include "velox/services/frame_pipeline.hpp"
 #include "velox/services/segment_execution.hpp"
+#include "velox/services/segment_scheduler.hpp"
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -141,6 +142,33 @@ RenderEngine::SidecarGuard::~SidecarGuard() {
     }
 }
 
+void RenderEngine::recordFramePipeline(const media::FramePipelineResult& result) {
+    const auto& metrics = result.pipeline_metrics;
+    frame_pipeline_metrics_.producer_busy_ms += metrics.producer_busy_ms;
+    frame_pipeline_metrics_.producer_wait_ms += metrics.producer_wait_ms;
+    frame_pipeline_metrics_.consumer_busy_ms += metrics.consumer_busy_ms;
+    frame_pipeline_metrics_.consumer_wait_ms += metrics.consumer_wait_ms;
+    frame_pipeline_metrics_.queue_depth_avg += metrics.queue_depth_avg;
+    frame_pipeline_metrics_.queue_depth_max = std::max(
+        frame_pipeline_metrics_.queue_depth_max, metrics.queue_depth_max);
+    frame_pipeline_metrics_.queue_empty_ms += metrics.queue_empty_ms;
+    frame_pipeline_metrics_.queue_full_ms += metrics.queue_full_ms;
+    ++frame_pipeline_runs_;
+    const auto producer_total = frame_pipeline_metrics_.producer_busy_ms +
+        frame_pipeline_metrics_.producer_wait_ms;
+    const auto consumer_total = frame_pipeline_metrics_.consumer_busy_ms +
+        frame_pipeline_metrics_.consumer_wait_ms;
+    frame_pipeline_metrics_.producer_stall_ratio = producer_total > 0
+        ? static_cast<double>(frame_pipeline_metrics_.producer_wait_ms) / producer_total
+        : 0.0;
+    frame_pipeline_metrics_.encoder_starvation_ratio = consumer_total > 0
+        ? static_cast<double>(frame_pipeline_metrics_.consumer_wait_ms) / consumer_total
+        : 0.0;
+    frame_pipeline_metrics_.backpressure_ratio = producer_total > 0
+        ? static_cast<double>(frame_pipeline_metrics_.queue_full_ms) / producer_total
+        : 0.0;
+}
+
 RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
     // Reset accumulators on every fresh render() call.
     frames_encoded_.store(0);
@@ -154,6 +182,8 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
     last_progress_ = services::EngineProgress{};
     metrics_.reset();
     recorder_.Reset();
+    frame_pipeline_metrics_ = media::FramePipelineMetrics{};
+    frame_pipeline_runs_ = 0;
     // The engine CLI runs one render per process, so the process-scoped
     // I/O counters are reset here to keep sequential in-process renders
     // independent.
@@ -529,6 +559,176 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
 
     double total_duration_seconds = 0.0;
 
+    bool nativeBatchCompleted = false;
+#ifdef VELOX_ENABLE_LIBAV
+    bool nativeBatchEligible = plan.version == plan::kRenderPlanVersionV1 &&
+        plan.subtitle_tracks.empty() && !plan.timeline.empty();
+    for (const auto& item : plan.timeline) {
+        if (!std::holds_alternative<plan::VideoSource>(item.source) ||
+            item.include_audio || item.transform.slow_zoom) {
+            nativeBatchEligible = false;
+            break;
+        }
+    }
+    if (nativeBatchEligible) {
+        struct NativeSegmentJob {
+            std::size_t index{0};
+            fs::path input_path;
+            fs::path output_path;
+            std::string scene_id;
+            int64_t duration_us{0};
+            int64_t source_in_us{0};
+        };
+        struct NativeSegmentOutcome {
+            media::FramePipelineResult pipeline;
+            double started_offset_ms{0.0};
+            double finished_offset_ms{0.0};
+            double wall_ms{0.0};
+        };
+
+        std::vector<NativeSegmentJob> jobs;
+        jobs.reserve(plan.timeline.size());
+        for (std::size_t i = 0; i < plan.timeline.size(); ++i) {
+            const auto& item = plan.timeline[i];
+            const auto& source = std::get<plan::VideoSource>(item.source);
+            const int64_t duration_us = item.source_duration_us > 0
+                ? item.source_duration_us
+                : item.duration_us > 0
+                ? item.duration_us
+                : static_cast<int64_t>(std::llround(item.duration_seconds * 1'000'000.0));
+            if (duration_us <= 0) {
+                result.error = "native segment requires positive duration for segment " +
+                    std::to_string(i);
+                return failRender("native_segment_duration_invalid");
+            }
+            const fs::path local_video = workDir / ("native_video_" + std::to_string(i) + ".mp4");
+            telemetry::ScopedPhase assetPhase(
+                recorder_, telemetry::kOriginWorker, telemetry::kScopeTask,
+                "worker.asset", "transfer", "download");
+            const auto download_start = std::chrono::steady_clock::now();
+            if (!file::downloadAsset(source.url, local_video, source.cache_key)) {
+                assetPhase.Abort("asset_download_failed", "failed to download native video source");
+                result.error = "failed to download video source for segment " + std::to_string(i);
+                return failRender("asset_download_failed");
+            }
+            assetPhase.Complete();
+            metrics_.addMs("asset_download_ms", std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - download_start).count());
+            total_duration_seconds += static_cast<double>(duration_us) / 1'000'000.0;
+            jobs.push_back(NativeSegmentJob{
+                i,
+                local_video,
+                workDir / ("segment_" + std::to_string(i) + ".mp4"),
+                item.scene_id,
+                duration_us,
+                item.source_in_us,
+            });
+        }
+
+        std::size_t parallelism = 1;
+        if (const char* configured = std::getenv("VELOX_NATIVE_SEGMENT_WORKERS")) {
+            try {
+                const auto parsed = std::stoull(configured);
+                if (parsed > 0) {
+                    parallelism = std::min<std::size_t>(parsed, 8);
+                }
+            } catch (...) {
+                parallelism = 1;
+            }
+        }
+        media::SegmentScheduler scheduler({parallelism});
+        std::vector<NativeSegmentOutcome> outcomes(jobs.size());
+        const auto scheduled = scheduler.run(jobs.size(), [&](std::size_t index) {
+            const auto& job = jobs[index];
+            auto& outcome = outcomes[index];
+            const auto start = std::chrono::steady_clock::now();
+            outcome.started_offset_ms = std::chrono::duration<double, std::milli>(
+                start - renderStart).count();
+            telemetry::ScopedPhase encodePhase(
+                recorder_, telemetry::kOriginEngine, telemetry::kScopeSegment,
+                "engine.frame_pipeline", "native_encode_segment_" + std::to_string(job.index),
+                "encode");
+            media::FramePipelineConfig config;
+            config.input_path = job.input_path;
+            config.output_path = job.output_path;
+            config.width = plan.canvas.width;
+            config.height = plan.canvas.height;
+            config.fps_num = plan.canvas.fps_num > 0 ? plan.canvas.fps_num : plan.canvas.fps;
+            config.fps_den = plan.canvas.fps_den > 0 ? plan.canvas.fps_den : 1;
+            config.source_in_us = job.source_in_us;
+            config.source_duration_us = job.duration_us;
+            config.codec = "libx264";
+            config.preset = "medium";
+            const bool success = media::renderFrames(config, &outcome.pipeline);
+            outcome.wall_ms = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - start).count();
+            outcome.finished_offset_ms = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - renderStart).count();
+            if (!success) {
+                encodePhase.Abort("native_encode_failed", outcome.pipeline.error);
+                return media::SegmentTaskResult{
+                    false, outcome.pipeline.error.empty()
+                        ? "native frame pipeline failed"
+                        : outcome.pipeline.error};
+            }
+            encodePhase.SetDetailedMetrics(
+                static_cast<int32_t>(job.index), "video", -1,
+                outcome.started_offset_ms, outcome.finished_offset_ms,
+                0.0, 0.0, 0, outcome.pipeline.frames_encoded);
+            encodePhase.Complete(0, fileSize(job.output_path),
+                                 outcome.pipeline.frames_encoded, telemetry::kStatusOk);
+            return media::SegmentTaskResult{true, {}};
+        });
+
+        segmentPaths.reserve(jobs.size());
+        for (std::size_t i = 0; i < jobs.size(); ++i) {
+            if (!scheduled[i].success || !outcomes[i].pipeline.success) {
+                result.error = "native segment " + std::to_string(i) + " failed: " +
+                    (!scheduled[i].error.empty() ? scheduled[i].error : outcomes[i].pipeline.error);
+                return failRender("native_segment_failed");
+            }
+            const auto& job = jobs[i];
+            const auto& outcome = outcomes[i];
+            recordFramePipeline(outcome.pipeline);
+            const int64_t output_bytes = fileSize(job.output_path);
+            SegmentTiming segment;
+            segment.index = job.index;
+            segment.worker_index = 0;
+            segment.scene_id = job.scene_id;
+            segment.source_type = "video";
+            segment.total_ms = outcome.wall_ms;
+            segment.ffmpeg_encode_ms = outcome.wall_ms;
+            segment.source_bytes = fileSize(job.input_path);
+            segment.output_bytes = output_bytes;
+            segment.frames_encoded = outcome.pipeline.frames_encoded;
+            segment.frames_decoded = outcome.pipeline.frames_decoded;
+            segment.frames_composited = outcome.pipeline.frames_encoded;
+            segment.status = telemetry::kStatusOk;
+            segment.started_offset_ms = outcome.started_offset_ms;
+            segment.finished_offset_ms = outcome.finished_offset_ms;
+            metrics_.addMs("segment_build_ms", outcome.wall_ms);
+            metrics_.addMs("native_encode_ms", outcome.wall_ms);
+            metrics_.addSegment(segment);
+            frames_encoded_.fetch_add(outcome.pipeline.frames_encoded);
+            frames_decoded_.fetch_add(outcome.pipeline.frames_decoded);
+            frames_composited_.fetch_add(outcome.pipeline.frames_encoded);
+            encode_passes_.fetch_add(1);
+            temp_bytes_written_.fetch_add(output_bytes);
+            segmentPaths.push_back(job.output_path);
+        }
+        nativeBatchCompleted = true;
+        reportProgress(70, "building_native_segments");
+        reportDetailedProgress(last_progress_, static_cast<int>(jobs.size()),
+                               static_cast<int>(jobs.size()), static_cast<int>(jobs.size()),
+                               static_cast<int>(jobs.size()), "building_native_segments",
+                               frames_encoded_.load(), frames_decoded_.load(),
+                               frames_composited_.load(),
+                               std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   std::chrono::steady_clock::now() - renderStart).count(), true);
+    }
+#endif
+
+    if (!nativeBatchCompleted) {
     for (size_t i = 0; i < plan.timeline.size(); ++i) {
         const auto& item = plan.timeline[i];
         fs::path segmentOut = workDir / ("segment_" + std::to_string(i) + ".mp4");
@@ -696,6 +896,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                 nativeConfig.preset = "medium";
                 media::FramePipelineResult nativeResult;
                 built = media::renderFrames(nativeConfig, &nativeResult);
+                recordFramePipeline(nativeResult);
                 segmentFrames = nativeResult.frames_encoded;
                 segmentDecodedFrames = nativeResult.frames_decoded;
                 if (!built && nativeResult.error.empty()) {
@@ -775,6 +976,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                                std::chrono::duration_cast<std::chrono::milliseconds>(
                                    std::chrono::steady_clock::now() - renderStart).count(),
                                true);
+    }
     }
 
     if (total_duration_seconds > 0.0) {
@@ -1324,6 +1526,24 @@ std::string RenderEngine::sidecarJson(const std::string& output_path) const {
         }
     }
     s << "}";
+
+    if (frame_pipeline_runs_ > 0) {
+        const auto& pipeline = frame_pipeline_metrics_;
+        s << ",\"frame_pipeline\":{";
+        s << "\"producer_busy_ms\":" << pipeline.producer_busy_ms;
+        s << ",\"producer_wait_ms\":" << pipeline.producer_wait_ms;
+        s << ",\"consumer_busy_ms\":" << pipeline.consumer_busy_ms;
+        s << ",\"consumer_wait_ms\":" << pipeline.consumer_wait_ms;
+        s << ",\"queue_depth_avg\":" <<
+            (pipeline.queue_depth_avg / frame_pipeline_runs_);
+        s << ",\"queue_depth_max\":" << pipeline.queue_depth_max;
+        s << ",\"queue_empty_ms\":" << pipeline.queue_empty_ms;
+        s << ",\"queue_full_ms\":" << pipeline.queue_full_ms;
+        s << ",\"producer_stall_ratio\":" << pipeline.producer_stall_ratio;
+        s << ",\"encoder_starvation_ratio\":" << pipeline.encoder_starvation_ratio;
+        s << ",\"backpressure_ratio\":" << pipeline.backpressure_ratio;
+        s << "}";
+    }
 
     // ── Per-segment timing records ──────────────────────────────
     s << ",\"segments\":[";

@@ -129,6 +129,7 @@ add_executable(velox_video_engine
     src/services/media_probe.cpp
     src/services/media_packet_pipeline.cpp
     src/services/segment_execution.cpp
+    src/services/segment_scheduler.cpp
     src/services/media_utils.cpp
     src/services/frame_pipeline.cpp
     src/audio/audio_plan.cpp
@@ -243,6 +244,7 @@ add_executable(velox_audio_timeline_tests
     src/services/media_probe.cpp
     src/services/media_packet_pipeline.cpp
     src/services/segment_execution.cpp
+    src/services/segment_scheduler.cpp
     src/services/media_utils.cpp
     src/services/ffmpeg_progress_parser.cpp
     src/telemetry/emitter.cpp
@@ -275,6 +277,7 @@ add_executable(velox_emitter_tests
     src/services/media_probe.cpp
     src/services/media_packet_pipeline.cpp
     src/services/segment_execution.cpp
+    src/services/segment_scheduler.cpp
     src/services/media_utils.cpp
     src/services/ffmpeg_progress_parser.cpp
 )
@@ -336,6 +339,7 @@ if(VELOX_ENABLE_LIBAV)
         src/services/media_probe.cpp
         src/services/media_packet_pipeline.cpp
         src/services/segment_execution.cpp
+        src/services/segment_scheduler.cpp
         src/services/media_utils.cpp
     )
 
@@ -418,6 +422,7 @@ if(VELOX_ENABLE_LIBAV)
         src/services/media_probe.cpp
         src/services/media_packet_pipeline.cpp
         src/services/segment_execution.cpp
+        src/services/segment_scheduler.cpp
         src/services/media_utils.cpp
         src/services/ffmpeg_progress_parser.cpp
         src/telemetry/emitter.cpp
@@ -451,6 +456,7 @@ if(VELOX_ENABLE_LIBAV)
         src/services/media_probe.cpp
         src/services/media_packet_pipeline.cpp
         src/services/segment_execution.cpp
+        src/services/segment_scheduler.cpp
         src/services/media_utils.cpp
         src/services/ffmpeg_progress_parser.cpp
         src/telemetry/emitter.cpp
