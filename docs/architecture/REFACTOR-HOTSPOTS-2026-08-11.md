@@ -149,6 +149,9 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 - [ ] Chiudere l'audit mirato di `MarkDeliverySucceeded`,
   `FinalizeVerified`, `CompletePublicationAfterReconciliation` e `TaskResult`:
   nessun ritorno `nil` dopo un commit non avvenuto.
+- [x] Media-probe completion/failure: artifact, parent job, quarantine e
+  delivery-plan read ora sono verificati con `RowsAffected`/`rows.Err()` nella
+  stessa transazione della lease.
 - [x] Proteggere il caso stale-artifact in cui il commit è presente ma
   l'attempt è già fallito o appartiene a un'altra identità: nessuna
   promozione task/job viene più eseguita in quel caso.

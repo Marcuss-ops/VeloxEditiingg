@@ -173,19 +173,43 @@ func (r *MediaProbeRepository) CompleteMediaProbe(ctx context.Context, job Media
 	}
 
 	if job.ExpectedAudioStreams > 0 && actualAudioStreams != job.ExpectedAudioStreams {
-		if _, err := tx.ExecContext(ctx, `UPDATE media_probe_jobs SET last_error=? WHERE id=?`, "audio stream count mismatch", job.ID); err != nil {
+		res, err := tx.ExecContext(ctx, `UPDATE media_probe_jobs SET last_error=? WHERE id=? AND status='FAILED'`, "audio stream count mismatch", job.ID)
+		if err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE artifacts SET status='QUARANTINED', duration_ms=?, duration_seconds=? WHERE id=? AND status='VERIFYING'`, durationMs, float64(durationMs)/1000, job.ArtifactID); err != nil {
+		n, err := readRowsAffected(res, "media probe mismatch error")
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return ErrMediaProbeLeaseConflict
+		}
+		res, err = tx.ExecContext(ctx, `UPDATE artifacts SET status='QUARANTINED', duration_ms=?, duration_seconds=? WHERE id=? AND status='VERIFYING'`, durationMs, float64(durationMs)/1000, job.ArtifactID)
+		if err != nil {
 			return fmt.Errorf("store: quarantine artifact: %w", err)
+		}
+		n, err = readRowsAffected(res, "quarantine media probe artifact")
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return ErrMediaProbeLeaseConflict
 		}
 		jobID, err := queryArtifactJobID(ctx, tx, job.ArtifactID)
 		if err != nil {
 			return err
 		}
 		const jobFailed = "FAILED"
-		if _, err := tx.ExecContext(ctx, `UPDATE jobs SET status=?, completed_at=?, updated_at=? WHERE job_id=? AND status='AWAITING_ARTIFACT'`, jobFailed, nowStr, nowStr, jobID); err != nil {
+		res, err = tx.ExecContext(ctx, `UPDATE jobs SET status=?, completed_at=?, updated_at=? WHERE job_id=? AND status='AWAITING_ARTIFACT'`, jobFailed, nowStr, nowStr, jobID)
+		if err != nil {
 			return fmt.Errorf("store: fail media probe parent: %w", err)
+		}
+		n, err = readRowsAffected(res, "fail media probe parent")
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return ErrMediaProbeLeaseConflict
 		}
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("store: complete media probe quarantine commit: %w", err)
@@ -238,6 +262,10 @@ func (r *MediaProbeRepository) CompleteMediaProbe(ctx context.Context, job Media
 		}
 		destinations = append(destinations, d)
 	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("store: media probe plans iterate: %w", err)
+	}
 	if err := rows.Close(); err != nil {
 		return err
 	}
@@ -250,8 +278,16 @@ func (r *MediaProbeRepository) CompleteMediaProbe(ctx context.Context, job Media
 			return fmt.Errorf("store: media probe: missing explicit delivery plan for job %s", jobID)
 		}
 	} else {
-		if _, err := tx.ExecContext(ctx, `UPDATE jobs SET status='DELIVERING', updated_at=?, revision=revision+1 WHERE job_id=? AND status='AWAITING_ARTIFACT'`, nowStr, jobID); err != nil {
+		res, err := tx.ExecContext(ctx, `UPDATE jobs SET status='DELIVERING', updated_at=?, revision=revision+1 WHERE job_id=? AND status='AWAITING_ARTIFACT'`, nowStr, jobID)
+		if err != nil {
 			return err
+		}
+		n, err := readRowsAffected(res, "media probe parent delivering")
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return ErrMediaProbeLeaseConflict
 		}
 		for _, d := range destinations {
 			id, err := identity.NewHex128()
@@ -265,8 +301,16 @@ func (r *MediaProbeRepository) CompleteMediaProbe(ctx context.Context, job Media
 	}
 	if len(destinations) == 0 {
 		const jobSucceeded = "SUCCEEDED"
-		if _, err := tx.ExecContext(ctx, `UPDATE jobs SET status=?, completed_at=?, updated_at=?, revision=revision+1 WHERE job_id=? AND status='AWAITING_ARTIFACT'`, jobSucceeded, nowStr, nowStr, jobID); err != nil {
+		res, err := tx.ExecContext(ctx, `UPDATE jobs SET status=?, completed_at=?, updated_at=?, revision=revision+1 WHERE job_id=? AND status='AWAITING_ARTIFACT'`, jobSucceeded, nowStr, nowStr, jobID)
+		if err != nil {
 			return err
+		}
+		n, err := readRowsAffected(res, "media probe render-only parent succeeded")
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return ErrMediaProbeLeaseConflict
 		}
 	}
 	if err := tx.Commit(); err != nil {
@@ -320,16 +364,32 @@ func (r *MediaProbeRepository) FailMediaProbe(ctx context.Context, job MediaProb
 		return ErrMediaProbeLeaseConflict
 	}
 	if terminal {
-		if _, err := tx.ExecContext(ctx, `UPDATE artifacts SET status='QUARANTINED' WHERE id=? AND status='VERIFYING'`, job.ArtifactID); err != nil {
+		res, err := tx.ExecContext(ctx, `UPDATE artifacts SET status='QUARANTINED' WHERE id=? AND status='VERIFYING'`, job.ArtifactID)
+		if err != nil {
 			return err
+		}
+		n, err := readRowsAffected(res, "quarantine terminal media probe artifact")
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return ErrMediaProbeLeaseConflict
 		}
 		jobID, err := queryArtifactJobID(ctx, tx, job.ArtifactID)
 		if err != nil {
 			return err
 		}
 		const jobFailed = "FAILED"
-		if _, err := tx.ExecContext(ctx, `UPDATE jobs SET status=?, completed_at=?, updated_at=? WHERE job_id=? AND status='AWAITING_ARTIFACT'`, jobFailed, nowStr, nowStr, jobID); err != nil {
+		res, err = tx.ExecContext(ctx, `UPDATE jobs SET status=?, completed_at=?, updated_at=? WHERE job_id=? AND status='AWAITING_ARTIFACT'`, jobFailed, nowStr, nowStr, jobID)
+		if err != nil {
 			return err
+		}
+		n, err = readRowsAffected(res, "fail terminal media probe parent")
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return ErrMediaProbeLeaseConflict
 		}
 	}
 	if err := tx.Commit(); err != nil {
