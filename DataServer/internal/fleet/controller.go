@@ -50,6 +50,12 @@ import (
 const (
 	DefaultTickInterval = 1 * time.Second
 	DefaultOpTimeout    = 10 * time.Minute
+
+	// terminalPersistTimeout is independent from the executor budget. An
+	// executor that reaches its deadline must still be able to persist the
+	// terminal operation state; reusing the expired executor context would
+	// leave the durable row RUNNING until stale reconciliation.
+	terminalPersistTimeout = 5 * time.Second
 )
 
 // ErrAlreadyRunning is returned by Start when the controller is
@@ -328,14 +334,14 @@ func (c *FleetController) processOne(ctx context.Context, op *store.Operation) {
 		// Lookup failure: no concrete executor registered. Persist the
 		// stable EXECUTOR_NOT_CONFIGURED marker so a misconfigured boot
 		// can never become a false SUCCEEDED operation.
-		c.persistFailed(ctx, op.OperationID, err.Error())
+		c.persistFailed(op.OperationID, err.Error())
 		return
 	}
 	if err := exec.Execute(ctx, op); err != nil {
-		c.persistFailed(ctx, op.OperationID, err.Error())
+		c.persistFailed(op.OperationID, err.Error())
 		return
 	}
-	c.persistSucceeded(ctx, op.OperationID)
+	c.persistSucceeded(op.OperationID)
 }
 
 const terminalPersistAttempts = 3
@@ -343,7 +349,10 @@ const terminalPersistAttempts = 3
 // persistSucceeded retries only the durable terminal transition. It never
 // re-runs the executor, so an external side effect is performed once even
 // when the ledger connection is temporarily unavailable.
-func (c *FleetController) persistSucceeded(ctx context.Context, operationID string) {
+
+func (c *FleetController) persistSucceeded(operationID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), terminalPersistTimeout)
+	defer cancel()
 	var err error
 	for attempt := 0; attempt < terminalPersistAttempts; attempt++ {
 		err = c.store.MarkSucceeded(ctx, operationID, time.Now().UTC())
@@ -357,7 +366,9 @@ func (c *FleetController) persistSucceeded(ctx context.Context, operationID stri
 	log.Printf("[FLEET] terminal success persistence unresolved %s: %v", operationID, err)
 }
 
-func (c *FleetController) persistFailed(ctx context.Context, operationID, reason string) {
+func (c *FleetController) persistFailed(operationID, reason string) {
+	ctx, cancel := context.WithTimeout(context.Background(), terminalPersistTimeout)
+	defer cancel()
 	var err error
 	for attempt := 0; attempt < terminalPersistAttempts; attempt++ {
 		err = c.store.MarkFailed(ctx, operationID, time.Now().UTC(), reason)
@@ -398,7 +409,7 @@ func (c *FleetController) reconcileStaleRunning(ctx context.Context) {
 		if op.StartedAt == nil || op.StartedAt.After(cutoff) {
 			continue
 		}
-		c.persistFailed(ctx, op.OperationID, "stale RUNNING operation; executor outcome unknown")
+		c.persistFailed(op.OperationID, "stale RUNNING operation; executor outcome unknown")
 	}
 }
 

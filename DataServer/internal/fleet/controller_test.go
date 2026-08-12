@@ -54,6 +54,7 @@ type stubStore struct {
 	markSucceeded       bool
 	markFailedErr       error
 	markFailedMsg       string
+	markFailedCtxErr    error
 }
 
 func (s *stubStore) InsertOperation(_ context.Context, op *store.Operation) error {
@@ -86,8 +87,9 @@ func (s *stubStore) MarkSucceeded(_ context.Context, _ string, _ time.Time) erro
 	s.markSucceeded = true
 	return nil
 }
-func (s *stubStore) MarkFailed(_ context.Context, _ string, _ time.Time, msg string) error {
+func (s *stubStore) MarkFailed(ctx context.Context, _ string, _ time.Time, msg string) error {
 	s.markFailedMsg = msg
+	s.markFailedCtxErr = ctx.Err()
 	return s.markFailedErr
 }
 
@@ -241,6 +243,34 @@ func TestController_Tick_FailedExecutorCapturesErrorMsg(t *testing.T) {
 	}
 	if hook.calls != 1 {
 		t.Errorf("hook.calls = %d, want 1", hook.calls)
+	}
+}
+
+func TestController_Tick_TimeoutPersistsFailureWithFreshContext(t *testing.T) {
+	st := &stubStore{
+		queuedList: []store.Operation{{
+			OperationID: "op-timeout",
+			WorkerID:    "wicket",
+			Op:          OperationKindDrain,
+			Status:      store.OperationStatusQueued,
+		}},
+	}
+	reg := NewTestExecutorRegistry()
+	hook := &failExecutor{sleep: 100 * time.Millisecond}
+	if err := reg.Register(OperationKindDrain, hook); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	c := NewFleetController(st, reg, time.Second, 10*time.Millisecond)
+	c.Tick(context.Background())
+
+	if hook.calls != 1 {
+		t.Fatalf("hook.calls = %d, want 1", hook.calls)
+	}
+	if st.markFailedCtxErr != nil {
+		t.Fatalf("terminal failure persisted with cancelled context: %v", st.markFailedCtxErr)
+	}
+	if !strings.Contains(st.markFailedMsg, context.DeadlineExceeded.Error()) {
+		t.Fatalf("MarkFailed msg = %q, want timeout error", st.markFailedMsg)
 	}
 }
 
