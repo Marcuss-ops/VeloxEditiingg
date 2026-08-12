@@ -93,6 +93,17 @@ func (s *stubStore) MarkFailed(ctx context.Context, _ string, _ time.Time, msg s
 	return s.markFailedErr
 }
 
+// Deployment read-model methods are not exercised by the generic controller
+// lifecycle tests below. Keep the stub fail-closed so an accidental stale
+// update cannot be treated as verified success in a test double.
+func (s *stubStore) GetWorkerDeploymentState(_ context.Context, _ string) (*store.WorkerDeploymentState, error) {
+	return nil, store.ErrWorkerDeploymentStateNotFound
+}
+
+func (s *stubStore) MarkVerifiedSucceeded(_ context.Context, _, _ string, _ time.Time) error {
+	return errors.New("stub store: verified deployment close not configured")
+}
+
 // failExecutor is a hook for tests to control Execute behaviour
 // per kind. Returned error is persisted via MarkFailed.
 type failExecutor struct {

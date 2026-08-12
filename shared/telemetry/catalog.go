@@ -3,10 +3,10 @@
 // this catalog instead of maintaining local origin/scope lists.
 //
 // Single-source rule: the canonical taxonomy is EXACTLY ONE language-neutral
-// source — catalog.json. Go loads it into canonicalEventDescriptors; the C++
+// source — schema/catalog.json. Go loads it into canonicalEventDescriptors; the C++
 // binding generator emits its header from the same source. Every consumer
 // (master validation, worker phase registry, SQL CHECK projections) derives
-// from that catalog; adding an event means editing catalog.json, never a
+// from that catalog; adding an event means editing schema/catalog.json, never a
 // parallel registry.
 package telemetry
 
@@ -199,6 +199,6 @@ const (
 )
 
 // canonicalEventDescriptors is loaded from the language-neutral JSON source.
-// Go and C++ consume the same shared/telemetry/catalog.json; the C++ binding is
+// Go and C++ consume the same shared/telemetry/schema/catalog.json; the C++ binding is
 // generated from that file by telemetry/cmd/cataloggen.
 var canonicalEventDescriptors = loadCanonicalEventDescriptors()

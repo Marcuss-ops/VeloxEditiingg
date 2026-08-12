@@ -25,6 +25,8 @@ package telemetry
 
 import (
 	"time"
+
+	sharedtelemetry "velox-shared/telemetry"
 )
 
 // Canonical 12 phase names. Lower-case, snake_case, with stable
@@ -51,20 +53,7 @@ const (
 // phases. Exposed so tests, dashboards, and rollups can rely on a
 // deterministic iteration order without resorting to map-print
 // randomness.
-var CanonicalPhaseOrder = []string{
-	PhaseQueue,
-	PhaseAssetWait,
-	PhaseCacheLookup,
-	PhaseDownload,
-	PhaseDecode,
-	PhaseCompile,
-	PhaseSimulate,
-	PhaseRender,
-	PhaseComposite,
-	PhaseEncode,
-	PhaseUpload,
-	PhaseFinalize,
-}
+var CanonicalPhaseOrder = sharedtelemetry.CanonicalPhaseOrder()
 
 // IsCanonical reports whether name is one of the 12 canonical phases.
 // Implemented with a tiny internal set so the PhaseTimer hot path

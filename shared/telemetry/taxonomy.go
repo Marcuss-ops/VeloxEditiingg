@@ -1,7 +1,7 @@
 package telemetry
 
 // taxonomy.go binds the canonical 12-phase model declared in the
-// language-neutral catalog.json (schema.phase_taxonomy).
+// language-neutral schema/catalog.json (schema.phase_taxonomy).
 //
 // The taxonomy is the phase-level view of the accounted_ratio rule:
 //
@@ -14,7 +14,7 @@ package telemetry
 //
 // Roles reuse the closed TimingMode vocabulary; the taxonomy adds the
 // parent/child nesting that the flat event vocabulary cannot express. Both
-// levels derive from the same single catalog.json source.
+// levels derive from the same single schema/catalog.json source.
 
 import "sort"
 
@@ -31,6 +31,17 @@ type PhaseTaxon struct {
 // canonicalPhaseTaxonomy is loaded once from the language-neutral JSON
 // source (validated by validatePhaseTaxonomy at parse time).
 var canonicalPhaseTaxonomy = loadCanonicalPhaseTaxonomy()
+
+// canonicalPhaseOrder is the stable order declared by the shared schema.
+// Worker and Master callers must project this value rather than maintaining
+// independent phase lists.
+var canonicalPhaseOrder = loadCanonicalPhaseOrder()
+
+// CanonicalPhaseOrder returns the catalog-defined order of canonical phases.
+// The returned slice is independent and may be mutated by the caller.
+func CanonicalPhaseOrder() []string {
+	return append([]string(nil), canonicalPhaseOrder...)
+}
 
 // Taxonomy returns a defensive copy of the canonical phase taxonomy keyed
 // by phase name.
@@ -82,4 +93,9 @@ func loadCanonicalPhaseTaxonomy() map[string]PhaseTaxon {
 		out[phase] = PhaseTaxon{Name: phase, Role: TimingMode(taxon.Role), Parent: taxon.Parent}
 	}
 	return out
+}
+
+func loadCanonicalPhaseOrder() []string {
+	doc := mustLanguageNeutralCatalog()
+	return append([]string(nil), doc.Schema.PhaseOrder...)
 }

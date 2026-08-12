@@ -7,33 +7,14 @@ package taskattempts
 import (
 	"fmt"
 	"time"
-)
 
-// Canonical phase names for production rendering pipeline.
-// Workers must use these exact strings; free-form identifiers are rejected.
-var canonicalPhases = []string{
-	"queue",
-	"asset_wait",
-	"cache_lookup",
-	"download",
-	"decode",
-	"compile",
-	"simulate",
-	"render",
-	"composite",
-	"encode",
-	"upload",
-	"finalize",
-}
+	sharedtelemetry "velox-shared/telemetry"
+)
 
 // IsCanonicalPhase reports whether the given phase name is a valid canonical phase.
 func IsCanonicalPhase(phase string) bool {
-	for _, p := range canonicalPhases {
-		if p == phase {
-			return true
-		}
-	}
-	return false
+	_, ok := sharedtelemetry.PhaseRoleOf(phase)
+	return ok
 }
 
 // PhaseTiming records the duration of a single canonical phase for one attempt.

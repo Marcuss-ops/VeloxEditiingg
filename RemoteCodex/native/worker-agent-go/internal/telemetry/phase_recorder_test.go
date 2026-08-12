@@ -189,6 +189,26 @@ func TestEventRecorderSnapshotsAreAppendOnly(t *testing.T) {
 	}
 }
 
+func TestEventRecorderIsBoundedAndReportsDroppedEvents(t *testing.T) {
+	r := NewEventRecorder()
+	for i := 0; i < MaxAttemptEvents+17; i++ {
+		r.Emit(EventSpec{
+			Origin: OriginFFmpeg, Scope: ScopeSegment,
+			Component: "ffmpeg", Action: "progress",
+		}, StatusOK, "", "")
+	}
+	if got := len(r.Snapshot()); got != MaxAttemptEvents {
+		t.Fatalf("accepted events=%d, want bounded at %d", got, MaxAttemptEvents)
+	}
+	if got := r.DroppedEventCount(); got != 17 {
+		t.Fatalf("dropped events=%d, want 17", got)
+	}
+	// Snapshot is non-destructive and the dropped count is stable.
+	if got := len(r.Snapshot()); got != MaxAttemptEvents || r.DroppedEventCount() != 17 {
+		t.Fatal("snapshot changed the bounded journal")
+	}
+}
+
 // TestEventRecorderImportCXXPreservesIndexes verifies the official native
 // import boundary: catalog defaults are filled, engine indexes are retained,
 // later Go events continue after the imported sequence, and re-import is

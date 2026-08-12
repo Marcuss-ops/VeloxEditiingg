@@ -9,7 +9,7 @@ package telemetry
 // or double-owned fact is a taxonomy violation, not a benchmark.
 //
 // The same owner vocabulary (ComponentOwner) is stamped on every canonical
-// event descriptor in catalog.json; this file covers the facts that are not
+// event descriptor in schema/catalog.json; this file covers the facts that are not
 // single events (aggregate/derived observations such as "downloaded bytes"
 // or "task status").
 
@@ -45,7 +45,7 @@ const (
 	FactWorkerStatus = "worker_status"
 )
 
-// canonicalFactOwners is loaded from the language-neutral catalog.json.
+// canonicalFactOwners is loaded from the language-neutral schema/catalog.json.
 // Every fact appears exactly once with exactly one authoritative producer.
 var canonicalFactOwners = loadCanonicalFactOwners()
 

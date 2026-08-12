@@ -14,6 +14,12 @@ import (
 const (
 	StatusOK     = "ok"
 	StatusFailed = "failed"
+
+	// MaxAttemptEvents bounds the in-memory attempt journal. Once full,
+	// new observations are dropped and counted on the final snapshot. This
+	// explicit best-effort policy prevents pathological attempts from growing
+	// memory without limit.
+	MaxAttemptEvents = 4096
 )
 
 // RecordedPhase is one immutable execution event stored in an EventRecorder.
@@ -90,6 +96,7 @@ type EventRecorder struct {
 	indexes          map[string]int64
 	eventRecords     map[eventIdentity]RecordedPhase
 	attemptTelemetry *AttemptTelemetrySession
+	droppedEvents    int64
 }
 
 func NewEventRecorder() *EventRecorder {
@@ -224,6 +231,17 @@ func (r *EventRecorder) Snapshot() []RecordedPhase {
 	return r.SnapshotFrom(0)
 }
 
+// DroppedEventCount reports observations rejected after the bounded journal
+// filled. It is monotonic for the lifetime of the attempt.
+func (r *EventRecorder) DroppedEventCount() int64 {
+	if r == nil {
+		return 0
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.droppedEvents
+}
+
 // ImportCXX is the official C++ sidecar import boundary. It preserves the
 // engine's origin/event_index, fills only catalog-authoritative defaults, and
 // advances the local per-origin sequence before later Go events are recorded.
@@ -251,6 +269,15 @@ func (r *EventRecorder) ImportCXX(events []RecordedPhase) error {
 		if existing, exists := r.eventRecords[identity]; exists {
 			if existing != normalized && firstErr == nil {
 				firstErr = fmt.Errorf("telemetry C++ import: conflicting duplicate %s/%d", identity.origin, identity.index)
+			}
+			continue
+		}
+		if len(r.events) >= MaxAttemptEvents {
+			r.droppedEvents++
+			// Preserve imported identity monotonicity even when the bounded
+			// journal cannot retain this row.
+			if normalized.EventIndex >= r.indexes[normalized.Origin] {
+				r.indexes[normalized.Origin] = normalized.EventIndex + 1
 			}
 			continue
 		}
@@ -288,6 +315,10 @@ func normalizeImportedPhase(event RecordedPhase) (RecordedPhase, error) {
 func (r *EventRecorder) record(event RecordedPhase) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if len(r.events) >= MaxAttemptEvents {
+		r.droppedEvents++
+		return
+	}
 	if r.indexes == nil {
 		r.indexes = make(map[string]int64)
 	}

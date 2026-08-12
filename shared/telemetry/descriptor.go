@@ -8,7 +8,7 @@ package telemetry
 // Owner rule).
 //
 // Single-source rule: these are closed vocabularies, declared once here and
-// represented by name in catalog.json. Consumers must never invent a
+// represented by name in schema/catalog.json. Consumers must never invent a
 // Kind/Owner/unit at runtime; adding a member means editing the language-
 // neutral source and regenerating the bindings.
 

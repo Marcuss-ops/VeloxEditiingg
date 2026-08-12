@@ -6,6 +6,26 @@ import (
 	"testing"
 )
 
+func TestCanonicalPhaseOrderProjectsSharedSchema(t *testing.T) {
+	got := CanonicalPhaseOrder()
+	if len(got) != len(Taxonomy()) {
+		t.Fatalf("canonical phase order=%d, taxonomy=%d; phase projection drifted", len(got), len(Taxonomy()))
+	}
+	seen := make(map[string]bool, len(got))
+	for _, phase := range got {
+		if seen[phase] {
+			t.Fatalf("canonical phase order contains duplicate %q", phase)
+		}
+		seen[phase] = true
+		if _, ok := PhaseRoleOf(phase); !ok {
+			t.Fatalf("canonical phase order contains unknown phase %q", phase)
+		}
+	}
+	if got[0] != "queue" || got[len(got)-1] != "finalize" {
+		t.Fatalf("canonical phase order=%v, want catalog-defined queue→finalize order", got)
+	}
+}
+
 // TestPhaseTaxonomyModelsAllTwelvePhases pins the canonical 12-phase model:
 // every phase in the flat vocabulary is modeled exactly once, and the roles
 // match the accounted_ratio rule (exclusive = top-level and summed;

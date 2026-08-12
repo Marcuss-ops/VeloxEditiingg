@@ -7,7 +7,7 @@
 # fail closed until they are routed through the canonical owner.
 #
 # Invariants:
-#   1. shared/telemetry/catalog.json is the only shared event catalog source.
+#   1. shared/telemetry/schema/catalog.json is the only shared event catalog source.
 #   2. Derived KPI formula vocabulary is owned by the existing canonical
 #      performance/metrics projection files, not arbitrary producers.
 #   3. PhaseTimer has one definition and no production caller outside its
@@ -79,12 +79,31 @@ source_catalogs = sorted(
     p for p in telemetry_root.iterdir()
     if p.is_file() and p.suffix.lower() in {".json", ".yaml", ".yml", ".toml"}
 )
-expected_catalog = telemetry_root / "catalog.json"
-if source_catalogs != [expected_catalog]:
+expected_catalog = telemetry_root / "schema" / "catalog.json"
+catalog_sources = sorted(
+    p for p in (telemetry_root / "schema").iterdir()
+    if p.is_file() and p.suffix.lower() in {".json", ".yaml", ".yml", ".toml"}
+) if (telemetry_root / "schema").exists() else []
+if source_catalogs or catalog_sources != [expected_catalog]:
     violations.append(
-        "shared/telemetry must contain exactly catalog.json as its event catalog source; "
-        f"found {[rel(p) for p in source_catalogs]}"
+        "shared/telemetry/schema must contain exactly catalog.json as its event catalog source; "
+        f"found {[rel(p) for p in source_catalogs + catalog_sources]}"
     )
+
+# Canonical phases are also a projection of the shared schema. Keep the
+# compatibility constants/mapping, but reject a second literal phase list in
+# worker or Master code and pin both projections to the shared accessor.
+phase_list_pattern = r"\b(?:canonicalPhases|CanonicalPhaseOrder)\s*=\s*\[\s*"
+for path, number, line in matching(production_files({".go"}), phase_list_pattern):
+    violations.append(f"manual canonical phase list at {rel(path)}:{number}: {line}")
+phase_projection_pins = {
+    "RemoteCodex/native/worker-agent-go/internal/telemetry/canonical_phases.go": r"sharedtelemetry\.CanonicalPhaseOrder\(\)",
+    "DataServer/internal/taskattempts/report.go": r"sharedtelemetry\.(?:CanonicalPhaseOrder|PhaseRoleOf)\(",
+}
+for path_name, pattern in phase_projection_pins.items():
+    target = root / path_name
+    if not target.is_file() or not re.search(pattern, target.read_text(errors="ignore")):
+        violations.append(f"canonical phase projection missing shared catalog accessor in {path_name}")
 
 # These names were the old shape of parallel taxonomy registries. The loaded
 # canonicalEventDescriptors variable is intentionally allowed; a second list
