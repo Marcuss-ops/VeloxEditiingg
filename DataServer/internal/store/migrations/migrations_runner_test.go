@@ -2,6 +2,7 @@ package migrations
 
 import (
 	"database/sql"
+	"embed"
 	"fmt"
 	"testing"
 
@@ -449,9 +450,20 @@ func applyAllMigrations(t *testing.T, db *sql.DB) {
 // per-migration apply) so a test can inspect an intermediate schema state.
 // Historical migration tests use this to pin what a specific migration
 // actually did before later migrations (e.g. the Dark Editor drop) run.
+// Delegates to the shared applyMigrationsUpToFS helper with the curated
+// testdata FS (testMigrationsFS).
 func applyMigrationsUpTo(t *testing.T, db *sql.DB, maxVersion int) {
 	t.Helper()
-	migs, err := discoverMigrations(testMigrationsFS, "testdata")
+	applyMigrationsUpToFS(t, db, testMigrationsFS, "testdata", maxVersion)
+}
+
+// applyMigrationsUpToFS is the shared apply-up-to-N loop used by both the
+// testdata-based applyMigrationsUpTo and the production-FS variant in
+// worker_deployment_state_migration_test.go. Keeping one loop avoids the two
+// helpers drifting on pre-flight gate handling.
+func applyMigrationsUpToFS(t *testing.T, db *sql.DB, migrationsFS embed.FS, dir string, maxVersion int) {
+	t.Helper()
+	migs, err := discoverMigrations(migrationsFS, dir)
 	if err != nil {
 		t.Fatalf("discover migrations: %v", err)
 	}

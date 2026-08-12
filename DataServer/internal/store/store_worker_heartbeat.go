@@ -74,6 +74,19 @@ func (s *SQLiteStore) PersistWorkerHeartbeat(ctx context.Context, raw []byte, se
 	if err := s.upsertWorkerExec(tx, m, raw, nowRFC3339Nano); err != nil {
 		return fmt.Errorf("persist worker snapshot: %w", err)
 	}
+	// Running digest is authoritative only when it arrives through the
+	// authenticated heartbeat transaction AND carries the worker's current
+	// stream session. A heartbeat without a session (legacy callers, the
+	// sessionless registry wrapper) can never claim what the worker is
+	// actually running; a stale session from a previous connection is
+	// rejected by the worker_sessions revoked-gate below, which rolls the
+	// whole transaction back including this write. Never derive it from
+	// desired deployment history or operator input.
+	if sessionID != "" {
+		if err := upsertWorkerRunningDigest(ctx, tx, workerID, asString(m["image_digest"]), now); err != nil {
+			return fmt.Errorf("persist worker running digest: %w", err)
+		}
+	}
 	if sessionID != "" {
 		result, err := tx.ExecContext(ctx, `UPDATE worker_sessions
 			SET last_seen=?, last_seen_at=?, status='ACTIVE', revoked=0
