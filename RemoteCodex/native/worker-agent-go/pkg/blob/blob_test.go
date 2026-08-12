@@ -5,6 +5,7 @@ package blob
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"testing"
@@ -45,6 +46,22 @@ func TestBlob_PutGetRoundtrip(t *testing.T) {
 	s := b.Stats()
 	if s.Publish != 1 || s.Fetch != 1 || s.Bytes != int64(len(data)) || s.Entries != 1 {
 		t.Fatalf("stats after roundtrip: %+v want publish=1 fetch=1 bytes=%d entries=1", s, len(data))
+	}
+}
+
+func TestBlob_PutIsIdempotentForExistingContent(t *testing.T) {
+	b := makeBlobs(t)
+	ctx := context.Background()
+	data := []byte("same-content")
+	hash := testHash(t, data)
+	if err := b.Put(ctx, hash, data); err != nil {
+		t.Fatalf("first Put: %v", err)
+	}
+	if err := b.Put(ctx, hash, data); err != nil {
+		t.Fatalf("second Put: %v", err)
+	}
+	if got := b.Stats(); got.Entries != 1 || got.Bytes != int64(len(data)) {
+		t.Fatalf("duplicate Put inflated unique storage stats: %+v", got)
 	}
 }
 
@@ -105,7 +122,8 @@ func TestBlob_PutHasNoDetachedPublicationQueue(t *testing.T) {
 	ctx := context.Background()
 	const flood = 5000
 	for i := 0; i < flood; i++ {
-		data := []byte{byte(i + 1), byte(i + 2), byte(i + 3)}
+		data := make([]byte, 8)
+		binary.LittleEndian.PutUint64(data, uint64(i))
 		hash := testHash(t, data)
 		if err := b.Put(ctx, hash, data); err != nil {
 			t.Fatalf("Put[%d]: %v", i, err)

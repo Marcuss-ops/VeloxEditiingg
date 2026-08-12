@@ -66,6 +66,9 @@ reversibile, testato prima/dopo, committato su `main` e pubblicato.
 - [x] Worker API retry policy: cancellation/deadline non vengono più ritentate
       per una collisione con `net.Error`; retry negativi e timeout/intervalli
       non positivi mantengono i default sicuri.
+- [x] Blob store: `Put` è idempotente per contenuto già verificato e serializza
+      il lifecycle filesystem, evitando `.tmp` condivisi e contatori `Entries`/
+      `Bytes` gonfiati da scritture duplicate concorrenti.
 - [ ] Rendere uniforme il mapping HTTP: `404` solo per risorsa assente,
       `409` per conflitto, `503` per dipendenza non disponibile, `500` per bug
       interno non classificato.

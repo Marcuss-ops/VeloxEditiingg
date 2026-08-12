@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 )
 
@@ -58,6 +59,7 @@ type BlobOptions struct {
 type BlobArtifacts struct {
 	root   string
 	closed atomic.Bool
+	mu     sync.RWMutex
 
 	blobs atomic.Int64
 	bytes atomic.Int64
@@ -101,6 +103,8 @@ func (b *BlobArtifacts) Stats() BlobStats {
 // compound failures). A successful write only persists the local blob;
 // publication is a separate lifecycle owned by the worker artifact protocol.
 func (b *BlobArtifacts) Put(_ context.Context, hash string, data []byte) (err error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	if b.closed.Load() {
 		return ErrClosed
 	}
@@ -122,6 +126,19 @@ func (b *BlobArtifacts) Put(_ context.Context, hash string, data []byte) (err er
 			b.publishFailed.Add(1)
 		}
 	}()
+	existingSize := int64(-1)
+	if existing, readErr := os.ReadFile(path); readErr == nil {
+		existingSum := sha256.Sum256(existing)
+		if hex.EncodeToString(existingSum[:]) == hash {
+			// Content-addressed Put is idempotent. Avoid rewriting the same
+			// bytes and do not inflate the unique-entry/byte gauges.
+			return nil
+		}
+		// A corrupt object is replaced by the already-verified input below.
+		existingSize = int64(len(existing))
+	} else if !errors.Is(readErr, os.ErrNotExist) {
+		return fmt.Errorf("blob: inspect existing entry: %w", readErr)
+	}
 
 	if err = os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("blob: mkdir prefix: %w", err)
@@ -136,14 +153,20 @@ func (b *BlobArtifacts) Put(_ context.Context, hash string, data []byte) (err er
 	}
 
 	b.publish.Add(1)
-	b.blobs.Add(1)
-	b.bytes.Add(int64(len(data)))
+	if existingSize < 0 {
+		b.blobs.Add(1)
+		b.bytes.Add(int64(len(data)))
+	} else {
+		b.bytes.Add(int64(len(data)) - existingSize)
+	}
 
 	return nil
 }
 
 // Get returns the bytes stored under hash, hash-verifying on read.
 func (b *BlobArtifacts) Get(_ context.Context, hash string) ([]byte, error) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
 	if b.closed.Load() {
 		return nil, ErrClosed
 	}
@@ -174,6 +197,8 @@ func (b *BlobArtifacts) Get(_ context.Context, hash string) ([]byte, error) {
 
 // Close prevents future reads and writes. Idempotent. Wire to worker shutdown.
 func (b *BlobArtifacts) Close() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.closed.Store(true)
 	return nil
 }
