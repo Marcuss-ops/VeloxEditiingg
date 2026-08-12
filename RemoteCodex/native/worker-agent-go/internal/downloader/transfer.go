@@ -134,6 +134,12 @@ func (t *Transfer) promote(priority int) {
 	t.mu.Unlock()
 }
 
+func (t *Transfer) requestSnapshot() DownloadRequest {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.req
+}
+
 // doneCh returns the completion channel, closed once when the transfer
 // reaches a terminal state.
 func (t *Transfer) doneCh() <-chan struct{} { return t.done }

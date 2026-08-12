@@ -246,14 +246,29 @@ func (s *Scheduler) Reconcile(plan futureasset.Plan) error {
 	}
 	s.mu.Lock()
 	if plan.Expired(s.cfg.Now()) {
+		store := s.protect
+		oldProtects := s.protects
 		for id, runtime := range s.jobs {
 			runtime.cancel()
 			delete(s.jobs, id)
 			s.detachJobLocked(runtime.job)
 		}
+		s.protects = make(map[string]string)
+		s.pendingProtects = make(map[string]struct{})
+		s.protectExpiries = make(map[string]time.Time)
+		s.hints = make(map[string]futureasset.ProtectedAsset)
+		s.readyAtByJob = make(map[string]map[string]readyRecord)
 		s.mu.Unlock()
 		s.signalWork()
-		return nil
+		var releaseErr error
+		if store != nil {
+			for key, reservationID := range oldProtects {
+				if err := store.ReleaseReservation(context.Background(), assetref.AssetKey(key), reservationID); err != nil && releaseErr == nil {
+					releaseErr = fmt.Errorf("prefetch: release expired protection %s: %w", key, err)
+				}
+			}
+		}
+		return releaseErr
 	}
 	for id, runtime := range s.jobs {
 		if _, ok := findScheduledJob(plan.PrefetchJobs, id); !ok {

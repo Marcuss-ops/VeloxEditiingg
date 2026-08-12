@@ -43,6 +43,7 @@ func (m *blockingSchedulerManager) Resolve(ctx context.Context, req downloader.D
 type deferredProtectionStore struct {
 	mu           sync.Mutex
 	reserveCalls int
+	releaseCalls int
 }
 
 func (s *deferredProtectionStore) Acquire(context.Context, assetref.AssetKey, string) error {
@@ -61,12 +62,21 @@ func (s *deferredProtectionStore) Reserve(context.Context, assetref.AssetKey, st
 	return nil
 }
 func (s *deferredProtectionStore) ReleaseReservation(context.Context, assetref.AssetKey, string) error {
+	s.mu.Lock()
+	s.releaseCalls++
+	s.mu.Unlock()
 	return nil
 }
 func (s *deferredProtectionStore) calls() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.reserveCalls
+}
+
+func (s *deferredProtectionStore) released() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.releaseCalls
 }
 
 func (m *schedulerManager) Resolve(_ context.Context, req downloader.DownloadRequest) (downloader.DownloadedAsset, error) {
@@ -163,6 +173,34 @@ func TestScheduler_DoesNotAdmitAssetLargerThanByteBudget(t *testing.T) {
 	defer manager.mu.Unlock()
 	if len(manager.keys) != 0 {
 		t.Fatalf("resolved keys=%v, want no resolution while asset exceeds budget", manager.keys)
+	}
+}
+
+func TestScheduler_ExpiredPlanCleansRuntimeAndProtectionProjection(t *testing.T) {
+	manager := &schedulerManager{started: make(chan struct{}, 1)}
+	protections := &deferredProtectionStore{}
+	s := NewScheduler(Config{WorkerID: "worker-a", MaxConcurrent: 1, ByteBudget: 100})
+	s.SetResolver(downloader.NewCacheResolver(manager, nil))
+	s.SetProtectionStore(protections)
+
+	plan := futureTestPlan()
+	if err := s.Reconcile(plan); err != nil {
+		t.Fatal(err)
+	}
+	expired := plan
+	expired.Version = 2
+	expired.GeneratedAt = time.Now().UTC().Add(-2 * time.Minute)
+	expired.ExpiresAt = time.Now().UTC().Add(-time.Minute)
+	if err := s.Reconcile(expired); err != nil {
+		t.Fatal(err)
+	}
+	if got := protections.released(); got != 1 {
+		t.Fatalf("released protections=%d, want 1", got)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.jobs) != 0 || len(s.protects) != 0 || len(s.pendingProtects) != 0 || len(s.protectExpiries) != 0 || len(s.hints) != 0 || len(s.readyAtByJob) != 0 {
+		t.Fatalf("expired scheduler projection not empty: jobs=%d protects=%d pending=%d expiries=%d hints=%d ready=%d", len(s.jobs), len(s.protects), len(s.pendingProtects), len(s.protectExpiries), len(s.hints), len(s.readyAtByJob))
 	}
 }
 

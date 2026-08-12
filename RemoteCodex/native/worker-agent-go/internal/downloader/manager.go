@@ -404,7 +404,8 @@ func (m *Manager) JobSnapshot(jobID string) JobDownloadSnapshot {
 func (t *Transfer) run(m *Manager) {
 	t.setState(DownloadCacheCheck)
 
-	hit, err := m.transferer.Check(t.transferContext(), t.reportContext(), t.req)
+	request := t.requestSnapshot()
+	hit, err := m.transferer.Check(t.transferContext(), t.reportContext(), request)
 	if err != nil {
 		if t.transferContext().Err() != nil {
 			t.finishCancelled()
@@ -432,7 +433,8 @@ func (t *Transfer) run(m *Manager) {
 
 	// Miss: the byte transfer goes through the bounded, stable queue.
 	t.setQueuePos(m.qseq.Add(1))
-	if !m.sched.Enqueue(t.Key, t.req.Priority, t.queuedAtLocked(), func() { t.scheduled(m) }) {
+	request = t.requestSnapshot()
+	if !m.sched.Enqueue(t.Key, request.Priority, t.queuedAtLocked(), func() { t.scheduled(m) }) {
 		// The pool closed between the cache probe and the enqueue: settle the
 		// transfer as cancelled so no waiter hangs on a never-run transfer.
 		t.finishCancelled()
@@ -447,7 +449,8 @@ func (t *Transfer) scheduled(m *Manager) {
 		return
 	}
 	t.setDownloading()
-	result, err := m.transferer.Transfer(t.transferContext(), t.reportContext(), t.req, t.reportProgress)
+	request := t.requestSnapshot()
+	result, err := m.transferer.Transfer(t.transferContext(), t.reportContext(), request, t.reportProgress)
 	if err != nil {
 		if t.transferContext().Err() != nil {
 			t.finishCancelled()

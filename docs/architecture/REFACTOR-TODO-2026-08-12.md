@@ -117,6 +117,11 @@ reversibile, testato prima/dopo, committato su `main` e pubblicato.
       corretto anche il caso di un singolo asset più grande del budget, che
       deve restare pending invece di passare solo perché è il primo elemento.
 - [ ] Verificare cancellation del waiter senza cancellare transfer condivisi.
+- [x] Verificare la promozione foreground sotto `-race`: lo snapshot della
+      richiesta del transfer è sincronizzato mentre il downloader aggiorna la
+      priorità condivisa.
+- [x] Alla scadenza del piano cancellare anche la proiezione runtime/protection
+      e rilasciare le reservation durable, senza lasciare la pulizia al solo TTL.
 - [ ] Aggiungere metriche senza label `job_id`, `asset_id` o SHA ad alta cardinalità.
 - [ ] Calcolare `ready_lead_ms` per asset prefetchable.
 - [ ] Certificare 20 run × 4 worker.
