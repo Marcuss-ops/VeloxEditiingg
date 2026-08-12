@@ -5,11 +5,29 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
 	"velox-server/internal/store"
 )
+
+// recordPhase persists + logs the current rollout phase on the worker's
+// deployment read model (worker_deployment_state.last_phase via the optional
+// BackendDeploymentPhaseRecorder seam). Phase recording is best-effort
+// observability: a failed persist never fails the rollout — the phase is not
+// part of the transition state machine.
+func (e *UpdateExecutor) recordPhase(ctx context.Context, workerID, phase string) {
+	log.Printf("[UPDATE] worker=%s phase=%s", workerID, phase)
+	if e.backend.Deployments == nil {
+		return
+	}
+	if recorder, ok := e.backend.Deployments.(BackendDeploymentPhaseRecorder); ok {
+		if err := recorder.RecordDeploymentPhase(ctx, workerID, phase); err != nil {
+			log.Printf("[UPDATE] worker=%s record phase %s: %v", workerID, phase, err)
+		}
+	}
+}
 
 func (e *UpdateExecutor) releaseOwnedDrain(ctx context.Context, workerID string, owned bool) error {
 	if !owned {

@@ -29,6 +29,7 @@ func TestUpdateAcceptance_AtoB_PreservesWorkerIDAndUsesPinnedDigests(t *testing.
 
 	const workerID = "worker-e2e-a"
 	const imageB = "ghcr.io/marcuss-ops/velox-worker@sha256:" + "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	state.runtimeDigest = imageB // the worker reconnects advertising image B
 	if err := e.Execute(context.Background(), mkOp(workerID, imageB, "")); err != nil {
 		t.Fatalf("A→B update returned error: %v", err)
 	}
@@ -75,6 +76,9 @@ func TestUpdateAcceptance_BadImageAutomaticallyRollsBackToPreviousDigest(t *test
 
 	const workerID = "worker-e2e-a"
 	const imageBad = "ghcr.io/marcuss-ops/velox-worker@sha256:" + "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	// The image starts and the digest verifies — the Level-D smoke is the
+	// certifier that rejects IMAGE_BAD.
+	state.runtimeDigest = imageBad
 	err := e.Execute(context.Background(), mkOp(workerID, imageBad, ""))
 	if err == nil || !errors.Is(err, ErrRollbackSucceeded) {
 		t.Fatalf("IMAGE_BAD update error=%v, want ErrRollbackSucceeded", err)

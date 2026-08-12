@@ -222,6 +222,11 @@ func (g *RealRegistryUpdateGater) GetAuthenticatedRuntimeSnapshot(ctx context.Co
 //     rather than a 3-tuple (insert + status change + flag
 //     change), so partial failure mid-cascade can be reasoned
 //     about row-by-row.
+//   - MarkVerifiedSucceeded is the ONLY forward-success writer and the
+//     ONLY path that advances last_successful_digest: the store re-verifies
+//     observedDigest against the row's target digest inside the transition
+//     transaction (VERIFYING_DIGEST enforcement), so an unverified success
+//     can never become the last-known-good digest.
 //   - MarkDeploymentRolledBack atomically sets
 //     status=ROLLED_BACK AND is_rollback=true in one UPDATE
 //     so the dashboard's transition row is never observed in
@@ -229,9 +234,19 @@ func (g *RealRegistryUpdateGater) GetAuthenticatedRuntimeSnapshot(ctx context.Co
 type BackendDeploymentRepo interface {
 	GetLatestDeploymentForWorker(ctx context.Context, workerID string) (*store.DeploymentRecord, error)
 	InsertDeploymentRecord(ctx context.Context, r store.DeploymentRecord) error
-	MarkSucceeded(ctx context.Context, deploymentID string, finishedAt time.Time) error
+	MarkVerifiedSucceeded(ctx context.Context, deploymentID, observedDigest string, finishedAt time.Time) error
 	MarkFailed(ctx context.Context, deploymentID string, finishedAt time.Time, errMsg string) error
 	MarkDeploymentRolledBack(ctx context.Context, deploymentID string, finishedAt time.Time, rollbackOK bool) error
+}
+
+// BackendDeploymentPhaseRecorder is the optional seam for persisting the
+// in-flight rollout phase (DRAINING → DEPLOYING → RESTARTING →
+// WAITING_READY → VERIFYING_DIGEST) into worker_deployment_state.last_phase
+// (migration 152) so operators can observe WHERE a rollout is — or where it
+// stopped. Recording is best-effort observability: a failed phase write
+// never fails the rollout.
+type BackendDeploymentPhaseRecorder interface {
+	RecordDeploymentPhase(ctx context.Context, workerID, phase string) error
 }
 
 // BackendDeploymentBaselineRepo is the narrow extension used only for a

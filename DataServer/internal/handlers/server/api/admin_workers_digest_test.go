@@ -321,6 +321,8 @@ func divergentReadModelFixture() *store.WorkerDeploymentState {
 		LastOperationID:      "deploy-read-model",
 		LastOperationKind:    "update",
 		LastOperationStatus:  store.DeployStatusFailed,
+		LastOperationError:   "digest_mismatch: expected=sha256:C observed=sha256:B",
+		LastPhase:            "VERIFYING_DIGEST",
 		UpdatedAt:            time.Date(2026, time.August, 12, 9, 0, 0, 0, time.UTC),
 	}
 }
@@ -371,6 +373,11 @@ func TestAdminWorkersCard_ReadModelWinsOverReconstructedHistory(t *testing.T) {
 	}
 	if card.LastSuccessfulDigest != "sha256:B" {
 		t.Fatalf("LastSuccessfulDigest = %q, want sha256:B (journal SUCCEEDED=A must not win over the read model)", card.LastSuccessfulDigest)
+	}
+	// The phase is part of the read model too: the FAILED digest_mismatch
+	// operation is observable as "stopped at VERIFYING_DIGEST".
+	if card.LastPhase != "VERIFYING_DIGEST" {
+		t.Fatalf("LastPhase = %q, want VERIFYING_DIGEST (observable phase from the read model)", card.LastPhase)
 	}
 	// Drift MUST be visible: desired C vs running B.
 	if card.ImageState == nil || card.ImageState.Match || card.ImageState.TargetDigest != "sha256:C" || card.ImageState.RunningDigest != "sha256:B" {

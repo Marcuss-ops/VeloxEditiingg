@@ -85,29 +85,31 @@ func TestMain_Registered(t *testing.T) {
 func stubBackends(t *testing.T) (UpdateBackend, *stubBackendsState) {
 	t.Helper()
 	st := &stubBackendsState{
-		registeredWorker: true,
-		activeTasksZero:  true,
-		drain:            false,
-		drainCalls:       []bool{},
-		cosignErr:        nil,
-		pullErr:          nil,
-		composeErr:       nil,
-		containerRunning: true,
-		containerErr:     nil,
-		healthErr:        nil,
-		sessionActive:    true,
-		lastHB:           time.Now().UTC().Format(time.RFC3339),
-		smokeArtifactID:  "smoke-artifact-id-1",
-		smokeErr:         nil,
-		driveErr:         nil,
-		prevDigest:       "sha256:previousdigest",
-		runtimeDigest:    "",
-		connectionState:  workers.ConnectionConnected,
-		healthState:      workers.HealthHealthy,
-		insertedRows:     []store.DeploymentRecord{},
-		baselineRows:     []store.DeploymentRecord{},
-		markedStatuses:   map[string]string{},
-		rolledBack:       map[string]bool{},
+		registeredWorker:  true,
+		activeTasksZero:   true,
+		drain:             false,
+		drainCalls:        []bool{},
+		cosignErr:         nil,
+		pullErr:           nil,
+		composeErr:        nil,
+		containerRunning:  true,
+		containerErr:      nil,
+		healthErr:         nil,
+		sessionActive:     true,
+		lastHB:            time.Now().UTC().Format(time.RFC3339),
+		smokeArtifactID:   "smoke-artifact-id-1",
+		smokeErr:          nil,
+		driveErr:          nil,
+		prevDigest:        "sha256:previousdigest",
+		runtimeDigest:     "",
+		sessionID:         "grpc-session-1",
+		reconnectSessionID: "grpc-session-2",
+		connectionState:   workers.ConnectionConnected,
+		healthState:       workers.HealthHealthy,
+		insertedRows:      []store.DeploymentRecord{},
+		baselineRows:      []store.DeploymentRecord{},
+		markedStatuses:    map[string]string{},
+		rolledBack:        map[string]bool{},
 	}
 	return UpdateBackend{
 		SSHCmd:      st,
@@ -116,6 +118,7 @@ func stubBackends(t *testing.T) (UpdateBackend, *stubBackendsState) {
 		Smoke:       st,
 		Drive:       st,
 		Registry:    st,
+		Runtime:     st, // production always wires the authenticated runtime reader
 		Deployments: st,
 		Image:       stubImageValidator{},
 		Now:         func() time.Time { return time.Date(2026, 7, 28, 17, 0, 0, 0, time.UTC) },
@@ -153,6 +156,18 @@ type stubBackendsState struct {
 	connectionState  workers.ConnectionState
 	healthState      workers.HealthState
 
+	// sessionID is the authenticated control session returned in the runtime
+	// snapshot; reconnectSessionID, when non-empty, is what the worker flips
+	// to after a successful ActivateImage (fresh Hello on reconnect). The
+	// WAITING_READY new-session gate requires SessionID != pre-restart ID.
+	sessionID          string
+	reconnectSessionID string
+
+	// phases records every RecordDeploymentPhase call in order.
+	phases []string
+	// observedVerifiedDigest is the digest handed to MarkVerifiedSucceeded.
+	observedVerifiedDigest string
+
 	insertedRows   []store.DeploymentRecord
 	baselineRows   []store.DeploymentRecord
 	markedStatuses map[string]string // deployment_id -> status
@@ -177,6 +192,11 @@ func (s *stubBackendsState) ActivateImage(_ context.Context, _ string, _ string)
 	}
 	if s.composeErr != nil {
 		return "", s.composeErr
+	}
+	// A successful activation restarts the worker; model the fresh Hello by
+	// advancing to the reconnect session (when the test models one).
+	if s.reconnectSessionID != "" {
+		s.sessionID = s.reconnectSessionID
 	}
 	return "activated digest OK", nil
 }
@@ -233,10 +253,7 @@ func (s *stubBackendsState) GetAuthenticatedRuntimeSnapshot(_ context.Context, _
 	if s.runtimeErr != nil {
 		return nil, s.runtimeErr
 	}
-	if s.runtimeDigest == "" {
-		return &store.WorkerRuntimeSnapshot{}, nil
-	}
-	return &store.WorkerRuntimeSnapshot{DockerImageDigest: s.runtimeDigest}, nil
+	return &store.WorkerRuntimeSnapshot{SessionID: s.sessionID, DockerImageDigest: s.runtimeDigest}, nil
 }
 
 func (s *stubBackendsState) IsActiveJobsZero(_ context.Context, _ string) bool {
@@ -284,8 +301,14 @@ func (s *stubBackendsState) InsertBaselineDeploymentRecord(_ context.Context, r 
 	return nil
 }
 
-func (s *stubBackendsState) MarkSucceeded(_ context.Context, id string, _ time.Time) error {
+func (s *stubBackendsState) MarkVerifiedSucceeded(_ context.Context, id, observedDigest string, _ time.Time) error {
 	s.markedStatuses[id] = store.DeployStatusSucceeded
+	s.observedVerifiedDigest = observedDigest
+	return nil
+}
+
+func (s *stubBackendsState) RecordDeploymentPhase(_ context.Context, _ string, phase string) error {
+	s.phases = append(s.phases, phase)
 	return nil
 }
 
@@ -426,6 +449,9 @@ func TestUpdate_UnregisteredWorker(t *testing.T) {
 func TestUpdate_EmptyRegistry(t *testing.T) {
 	backend, st := stubBackends(t)
 	st.prevDigest = "" // signals ErrDeploymentNotFound
+	// The ErrEmptyRegistry path is the partially composed legacy surface: no
+	// authenticated runtime reader available to bootstrap a baseline.
+	backend.Runtime = nil
 	e := NewUpdateExecutor(backend)
 	op := mkOp("wkr-1", validImageRef(), "")
 	err := e.Execute(context.Background(), op)
@@ -524,8 +550,8 @@ func TestUpdate_NormalRolloutStillUsesLedgerPreviousDigest(t *testing.T) {
 	backend.Runtime = st
 	previous := "ghcr.io/marcuss-ops/velox-worker@sha256:" + strings.Repeat("b", 64)
 	st.prevDigest = previous
-	st.runtimeDigest = previous
 	target := validImageRef()
+	st.runtimeDigest = target // post-restart authenticated digest matches the target
 
 	if err := NewUpdateExecutor(backend).Execute(context.Background(), mkOp("wkr-1", target, "")); err != nil {
 		t.Fatalf("normal rollout returned err %v", err)
@@ -539,6 +565,7 @@ func TestUpdate_NormalRolloutStillUsesLedgerPreviousDigest(t *testing.T) {
 
 func TestUpdate_DrainsAndReleasesOnSuccess(t *testing.T) {
 	backend, st := stubBackends(t)
+	st.runtimeDigest = validImageRef() // authenticated digest matches target
 	e := NewUpdateExecutor(backend)
 	if err := e.Execute(context.Background(), mkOp("wkr-1", validImageRef(), "")); err != nil {
 		t.Fatalf("happy path Execute returned err %v", err)
@@ -554,6 +581,7 @@ func TestUpdate_DrainsAndReleasesOnSuccess(t *testing.T) {
 func TestUpdate_PreservesExistingDrain(t *testing.T) {
 	backend, st := stubBackends(t)
 	st.drain = true
+	st.runtimeDigest = validImageRef()
 	e := NewUpdateExecutor(backend)
 	if err := e.Execute(context.Background(), mkOp("wkr-1", validImageRef(), "")); err != nil {
 		t.Fatalf("pre-drained worker update returned err %v", err)
@@ -606,6 +634,90 @@ func TestUpdate_DrainNotReflectedFailsClosed(t *testing.T) {
 	}
 	if st.drain {
 		t.Fatal("worker remained drained after pre-forward DRAINING gate failure")
+	}
+}
+
+// ─── Phase VERIFYING_DIGEST ────────────────────────────────────────
+
+// TestUpdate_DigestMismatchFailsClosed pins the VERIFYING_DIGEST mismatch
+// contract: the authenticated running digest (C) differs from the target
+// (B), so the forward row is marked FAILED with error_code `digest_mismatch`
+// (expected/observed in the message) and the rollback cascade restores the
+// previous digest. MarkVerifiedSucceeded must NOT be reached: an unverified
+// digest can never advance last-known-good.
+func TestUpdate_DigestMismatchFailsClosed(t *testing.T) {
+	backend, st := stubBackends(t)
+	st.runtimeDigest = "sha256:" + strings.Repeat("c", 64) // worker runs C, target is A
+	e := NewUpdateExecutor(backend)
+	err := e.Execute(context.Background(), mkOp("wkr-1", validImageRef(), ""))
+	if err == nil {
+		t.Fatal("digest mismatch must fail the update")
+	}
+	if !errors.Is(err, ErrRollbackSucceeded) {
+		t.Fatalf("digest mismatch err = %v, want ErrRollbackSucceeded (rollback restores previous)", err)
+	}
+	if !strings.Contains(err.Error(), "digest_mismatch") || !strings.Contains(err.Error(), "expected=") || !strings.Contains(err.Error(), "observed=") {
+		t.Errorf("digest mismatch err must carry error_code digest_mismatch with expected/observed; got %v", err)
+	}
+	if len(st.insertedRows) < 2 {
+		t.Fatalf("rows = %d, want forward+rollback", len(st.insertedRows))
+	}
+	forward := st.insertedRows[0]
+	if st.markedStatuses[forward.DeploymentID] != store.DeployStatusFailed {
+		t.Fatalf("forward row status = %q, want FAILED (never SUCCEEDED unverified)", st.markedStatuses[forward.DeploymentID])
+	}
+	if st.observedVerifiedDigest != "" {
+		t.Fatalf("MarkVerifiedSucceeded was reached on a mismatched digest: observed=%q", st.observedVerifiedDigest)
+	}
+}
+
+// TestUpdate_StaleSessionCannotAdvance pins the WAITING_READY new-session
+// gate: after the restart the worker must reconnect on a NEW authenticated
+// session. A worker that stays on the pre-restart session (no fresh Hello)
+// never satisfies WAITING_READY, so the rollout fails closed and rolls back
+// even though the container/health checks passed.
+func TestUpdate_StaleSessionCannotAdvance(t *testing.T) {
+	backend, st := stubBackends(t)
+	st.runtimeDigest = validImageRef()
+	st.reconnectSessionID = "" // activate restarts the worker but it never reconnects
+	e := NewUpdateExecutor(backend)
+	e.waitReadyTimeout = 10 * time.Millisecond
+	err := e.Execute(context.Background(), mkOp("wkr-1", validImageRef(), ""))
+	if err == nil {
+		t.Fatal("stale-session rollout must fail")
+	}
+	if !strings.Contains(err.Error(), "NEW authenticated session") {
+		t.Errorf("err must cite the new-session gate; got %v", err)
+	}
+	if !errors.Is(err, ErrRollbackSucceeded) {
+		t.Fatalf("stale-session err = %v, want ErrRollbackSucceeded", err)
+	}
+	if len(st.insertedRows) < 2 {
+		t.Fatalf("rows = %d, want forward+rollback", len(st.insertedRows))
+	}
+	if st.markedStatuses[st.insertedRows[0].DeploymentID] != store.DeployStatusFailed {
+		t.Fatalf("forward row status = %q, want FAILED", st.markedStatuses[st.insertedRows[0].DeploymentID])
+	}
+}
+
+// TestUpdate_PhaseSequenceRecorded pins that the rollout phases are persisted
+// in order on the read model (worker_deployment_state.last_phase): DRAINING →
+// DEPLOYING → RESTARTING → WAITING_READY → VERIFYING_DIGEST, and that the
+// observed digest handed to MarkVerifiedSucceeded is the verified one.
+func TestUpdate_PhaseSequenceRecorded(t *testing.T) {
+	backend, st := stubBackends(t)
+	st.runtimeDigest = validImageRef()
+	e := NewUpdateExecutor(backend)
+	if err := e.Execute(context.Background(), mkOp("wkr-1", validImageRef(), "")); err != nil {
+		t.Fatalf("happy path Execute returned err %v", err)
+	}
+	want := []string{RolloutPhaseDraining, RolloutPhaseDeploying, RolloutPhaseRestarting,
+		RolloutPhaseWaitingReady, RolloutPhaseVerifyingDigest}
+	if !reflect.DeepEqual(st.phases, want) {
+		t.Fatalf("recorded phases = %v, want %v", st.phases, want)
+	}
+	if st.observedVerifiedDigest != validImageRef() {
+		t.Fatalf("MarkVerifiedSucceeded observed digest = %q, want %q", st.observedVerifiedDigest, validImageRef())
 	}
 }
 
@@ -695,8 +807,9 @@ func TestUpdate_HealthReadyFail_RollsBack(t *testing.T) {
 
 func TestUpdate_MasterDisconnected_RollsBack(t *testing.T) {
 	backend, st := stubBackends(t)
-	st.sessionActive = false
+	st.sessionActive = false // the worker never reconnects on a new session
 	e := NewUpdateExecutor(backend)
+	e.waitReadyTimeout = 10 * time.Millisecond
 	err := e.Execute(context.Background(), mkOp("wkr-1", validImageRef(), ""))
 	if err == nil || !errors.Is(err, ErrRollbackSucceeded) {
 		t.Errorf("master disconnected: want ErrRollbackSucceeded wrap, got %v", err)
@@ -705,6 +818,7 @@ func TestUpdate_MasterDisconnected_RollsBack(t *testing.T) {
 
 func TestUpdate_SmokeFail_RollsBack(t *testing.T) {
 	backend, st := stubBackends(t)
+	st.runtimeDigest = validImageRef() // digest verifies; the smoke is the rejecting gate
 	st.smokeErr = errors.New("ffmpeg rc=1")
 	e := NewUpdateExecutor(backend)
 	err := e.Execute(context.Background(), mkOp("wkr-1", validImageRef(), ""))
@@ -718,6 +832,7 @@ func TestUpdate_SmokeFail_RollsBack(t *testing.T) {
 
 func TestUpdate_DriveDeliveryMissing_RollsBack(t *testing.T) {
 	backend, st := stubBackends(t)
+	st.runtimeDigest = validImageRef() // digest verifies; the Drive check is the rejecting gate
 	st.driveErr = ErrDriveDeliveryMissing
 	e := NewUpdateExecutor(backend)
 	err := e.Execute(context.Background(), mkOp("wkr-1", validImageRef(), ""))
@@ -809,6 +924,7 @@ func TestUpdate_PayloadSuppliesPreviousDigest(t *testing.T) {
 	// Make DB snapshot empty so any caller-supplied previous_digest
 	// would otherwise trigger ErrEmptyRegistry.
 	st.prevDigest = ""
+	st.runtimeDigest = validImageRef() // authenticated digest matches target
 	e := NewUpdateExecutor(backend)
 	op := mkOp("wkr-1", validImageRef(), "sha256:caller-supplied")
 	err := e.Execute(context.Background(), op)
@@ -821,6 +937,7 @@ func TestUpdate_PayloadSuppliesPreviousDigest(t *testing.T) {
 
 func TestUpdate_ForwardRowTransitions_SUCCEEDED(t *testing.T) {
 	backend, st := stubBackends(t)
+	st.runtimeDigest = validImageRef()
 	e := NewUpdateExecutor(backend)
 	err := e.Execute(context.Background(), mkOp("wkr-1", validImageRef(), ""))
 	if err != nil {

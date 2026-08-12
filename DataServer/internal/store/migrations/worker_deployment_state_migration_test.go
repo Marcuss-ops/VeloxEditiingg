@@ -216,3 +216,43 @@ func columnAllowsNull(t *testing.T, db *sql.DB, table, column string) bool {
 	}
 	return false
 }
+
+// ============================================================
+// Migration 152: worker_deployment_state.last_phase
+// ============================================================
+
+// TestMigration152_AddsLastPhaseColumn pins migration 152: the
+// worker_deployment_state table gains a NOT NULL DEFAULT '' last_phase
+// observability column, and legacy backfilled state rows carry the empty
+// default (the migration must not invent a phase for historical data).
+func TestMigration152_AddsLastPhaseColumn(t *testing.T) {
+	db := openTestDB(t)
+	// Seed the legacy history BEFORE 151 so its backfill produces the state
+	// row that 152 then extends with last_phase (same ordering as
+	// TestMigration151_LegacyBackfillPolicy above).
+	applyProductionMigrationsUpTo(t, db, 150)
+
+	seedLegacyWorker(t, db, "wicket")
+	seedLegacyDeploymentRecord(t, db, "deploy-legacy-a", "wicket", "", migrationTestDigest('a'),
+		"2026-08-01T00:00:00Z", "2026-08-01T00:01:00Z", "SUCCEEDED")
+
+	applyProductionMigrationsUpTo(t, db, 152)
+
+	var lastPhase string
+	if err := db.QueryRow(
+		`SELECT last_phase FROM worker_deployment_state WHERE worker_id = 'wicket'`).Scan(&lastPhase); err != nil {
+		t.Fatalf("query worker_deployment_state.last_phase: %v", err)
+	}
+	if lastPhase != "" {
+		t.Errorf("last_phase after migration = %q, want '' (no invented phase for legacy rows)", lastPhase)
+	}
+	// The column is NOT NULL DEFAULT '' — a direct insert without it stays valid.
+	if _, err := db.Exec(`INSERT INTO worker_deployment_state
+		(worker_id, desired_digest, running_digest, last_successful_digest,
+		 last_operation_id, last_operation_kind, last_operation_status,
+		 last_operation_error, updated_at)
+		VALUES ('wicket-2', 'x', NULL, '', '', '', '', '', datetime('now'))`); err != nil {
+		t.Fatalf("insert without last_phase must use the DEFAULT: %v", err)
+	}
+}
+

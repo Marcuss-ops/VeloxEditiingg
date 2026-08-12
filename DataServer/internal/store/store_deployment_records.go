@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -60,6 +61,13 @@ var ErrDeploymentNotFound = errors.New("no deployment records for worker")
 // EXISTS (so this is NOT ErrDeploymentNotFound); the transition is refused
 // rather than clobbering the other writer's terminal outcome.
 var ErrDeploymentConcurrentTransition = errors.New("deployment state machine: concurrent transition")
+
+// ErrDeploymentDigestMismatch is returned by MarkVerifiedSucceeded when the
+// authenticated observed digest does not match the record's target digest.
+// The transition is NOT applied: an unverified success must never advance
+// last_successful_digest. The caller (UpdateExecutor) marks the row FAILED
+// with error_code `digest_mismatch` and runs the rollback cascade.
+var ErrDeploymentDigestMismatch = errors.New("deployment digest mismatch")
 
 // DeploymentRecord mirrors a single row in deployment_records.
 // All time fields are RFC3339 strings in the SQL row to keep
@@ -179,7 +187,7 @@ VALUES (?, ?, ?, ?, ?, NULL, ?, '', ?, ?)`,
 	if err != nil {
 		return err
 	}
-	if err := upsertDeploymentStateFromRecord(ctx, tx, r, r.StartedAt); err != nil {
+	if err := upsertDeploymentStateFromRecord(ctx, tx, r, r.StartedAt, false); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -230,7 +238,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, 0)`,
 	if err != nil {
 		return err
 	}
-	if err := upsertDeploymentStateFromRecord(ctx, tx, r, finishedAt.UTC()); err != nil {
+	if err := upsertDeploymentStateFromRecord(ctx, tx, r, finishedAt.UTC(), true); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -313,32 +321,77 @@ func (s *SQLiteStore) updateDeploymentTerminal(ctx context.Context, deploymentID
 	if rollback {
 		record.IsRollback = true
 	}
-	if err := upsertDeploymentStateFromRecord(ctx, tx, *record, finishedAt.UTC()); err != nil {
+	// ROLLED_BACK restores a previously verified digest, so it advances
+	// last_successful_digest; generic SUCCEEDED and FAILED do not.
+	if err := upsertDeploymentStateFromRecord(ctx, tx, *record, finishedAt.UTC(), status == DeployStatusRolledBack); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-// UpdateDeploymentRollbackFlag flips is_rollback on an existing
-// row, used by Step 6's rollback path when it writes a new row
-// that documents a rollback to previous_digest. Atomic with the
-// deploy status transition if wrapped in a tx by the caller.
-func (s *SQLiteStore) UpdateDeploymentRollbackFlag(ctx context.Context, deploymentID string, isRollback bool) error {
-	res, err := s.db.ExecContext(ctx, `
-UPDATE deployment_records SET is_rollback = ? WHERE deployment_id = ?`,
-		boolToIntSQLite(isRollback), deploymentID,
-	)
+// MarkVerifiedSucceeded is the ONLY path that advances last_successful_digest
+// for a forward rollout. It is the store-side enforcement of the
+// VERIFYING_DIGEST phase:
+//
+//  1. reads the row inside a transaction (PENDING required by the canonical
+//     deployment machine),
+//  2. verifies the authenticated observed digest equals the record's target
+//     digest — on mismatch returns ErrDeploymentDigestMismatch and applies NO
+//     transition,
+//  3. fences the PENDING → SUCCEEDED UPDATE with the observed from-state,
+//  4. projects the terminal SUCCEEDED state into worker_deployment_state WITH
+//     last_successful_digest advanced to the verified target.
+//
+// The generic UpdateDeploymentStatus(SUCCEEDED) path no longer advances
+// last_successful_digest: an unverified success must never become the
+// last-known-good digest. running_digest is never touched here — it is
+// written only by authenticated heartbeats.
+func (s *SQLiteStore) MarkVerifiedSucceeded(ctx context.Context, deploymentID, observedDigest string, finishedAt time.Time) error {
+	if strings.TrimSpace(observedDigest) == "" {
+		return errors.New("MarkVerifiedSucceeded: observed digest empty (cannot verify)")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	n, err := readRowsAffected(res, "update deployment rollback flag")
+	defer tx.Rollback()
+
+	// Read-first: the canonical machine needs the CURRENT status, and the
+	// digest check needs the row's target.
+	record, err := getDeploymentRecordFrom(ctx, tx, deploymentID)
+	if err != nil {
+		return err
+	}
+	if err := ValidateDeploymentTransition(record.Status, DeployStatusSucceeded); err != nil {
+		return err
+	}
+	if !deploymentDigestEqual(observedDigest, record.TargetDigest) {
+		return fmt.Errorf("%w: expected=%s observed=%s", ErrDeploymentDigestMismatch, record.TargetDigest, observedDigest)
+	}
+
+	res, err := tx.ExecContext(ctx, `
+UPDATE deployment_records
+SET status = ?, finished_at = ?, error_message = ''
+WHERE deployment_id = ? AND status = ?`,
+		DeployStatusSucceeded, finishedAt.UTC().Format(time.RFC3339), deploymentID, record.Status)
+	if err != nil {
+		return err
+	}
+	n, err := readRowsAffected(res, "mark verified deployment succeeded")
 	if err != nil {
 		return err
 	}
 	if n == 0 {
-		return ErrDeploymentNotFound
+		return fmt.Errorf("%w: deployment %s moved concurrently during verified transition", ErrDeploymentConcurrentTransition, deploymentID)
 	}
-	return nil
+
+	record.Status = DeployStatusSucceeded
+	record.FinishedAt = &finishedAt
+	record.ErrorMessage = ""
+	if err := upsertDeploymentStateFromRecord(ctx, tx, *record, finishedAt.UTC(), true); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // MarkDeploymentRolledBack atomically transitions a row to the

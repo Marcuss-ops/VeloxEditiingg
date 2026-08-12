@@ -107,6 +107,9 @@ func TestOfflineRollout_CompleteSequenceUsesExpectedDigestAndReconnects(t *testi
 
 	const workerID = "offline-rollout-worker"
 	targetDigest := "ghcr.io/marcuss-ops/velox-worker@sha256:" + strings.Repeat("d", 64)
+	// The fresh Hello after the restart advertises the target digest (the
+	// reconnect also flips the session to a NEW one, satisfying WAITING_READY).
+	state.runtimeDigest = targetDigest
 	e := NewUpdateExecutor(backend)
 	if err := e.Execute(context.Background(), mkOp(workerID, targetDigest, "")); err != nil {
 		t.Fatalf("offline rollout returned error: %v", err)

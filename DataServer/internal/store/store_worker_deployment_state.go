@@ -5,13 +5,16 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
 // WorkerDeploymentState is the durable operator read model. The fields are
 // intentionally independent: desired_digest describes intent, running_digest
-// comes only from an authenticated heartbeat, and last_successful_digest is
-// never replaced by a newer failed operation.
+// comes only from an authenticated heartbeat, last_successful_digest is
+// never replaced by a newer failed operation, and last_phase records the
+// in-flight rollout phase of the last operation (written by the fleet
+// executor; terminal outcomes stay in last_operation_status).
 type WorkerDeploymentState struct {
 	WorkerID             string    `json:"worker_id"`
 	DesiredDigest        string    `json:"desired_digest"`
@@ -21,6 +24,7 @@ type WorkerDeploymentState struct {
 	LastOperationKind    string    `json:"last_operation_kind"`
 	LastOperationStatus  string    `json:"last_operation_status"`
 	LastOperationError   string    `json:"last_operation_error,omitempty"`
+	LastPhase            string    `json:"last_phase,omitempty"`
 	UpdatedAt            time.Time `json:"updated_at"`
 }
 
@@ -56,6 +60,7 @@ CREATE TABLE IF NOT EXISTS worker_deployment_state (
     last_operation_kind     TEXT NOT NULL DEFAULT '',
     last_operation_status   TEXT NOT NULL DEFAULT '',
     last_operation_error    TEXT NOT NULL DEFAULT '',
+    last_phase              TEXT NOT NULL DEFAULT '',
     updated_at              TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_worker_deployment_state_status
@@ -75,13 +80,13 @@ func (s *SQLiteStore) GetWorkerDeploymentState(ctx context.Context, workerID str
 SELECT worker_id, desired_digest, COALESCE(running_digest, ''),
        last_successful_digest,
        last_operation_id, last_operation_kind, last_operation_status,
-       last_operation_error, updated_at
+       last_operation_error, last_phase, updated_at
   FROM worker_deployment_state
  WHERE worker_id = ?`, workerID).Scan(
 		&state.WorkerID, &state.DesiredDigest, &state.RunningDigest,
 		&state.LastSuccessfulDigest, &state.LastOperationID,
 		&state.LastOperationKind, &state.LastOperationStatus,
-		&state.LastOperationError, &updatedAt)
+		&state.LastOperationError, &state.LastPhase, &updatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrWorkerDeploymentStateNotFound
 	}
@@ -102,27 +107,29 @@ func deploymentStateKind(isRollback bool) string {
 	return "update"
 }
 
-func deploymentStateSuccessful(status string) bool {
-	return status == DeployStatusSucceeded || status == DeployStatusRolledBack
-}
-
 // upsertDeploymentStateFromRecord updates intent and operation history while
-// preserving last_successful_digest on PENDING/FAILED transitions.
-func upsertDeploymentStateFromRecord(ctx context.Context, exec deploymentStateExecer, r DeploymentRecord, updatedAt time.Time) error {
+// preserving last_successful_digest on non-verified transitions and always
+// preserving the last recorded rollout phase (migration 152).
+//
+// advanceLastSuccessful gates the last-known-good write: it is true ONLY for
+// transitions that carry verified-digest semantics — a rollback restoring a
+// previously verified digest, a verified baseline, or MarkVerifiedSucceeded.
+// The generic SUCCEEDED path never advances it.
+func upsertDeploymentStateFromRecord(ctx context.Context, exec deploymentStateExecer, r DeploymentRecord, updatedAt time.Time, advanceLastSuccessful bool) error {
 	if r.WorkerID == "" || r.TargetDigest == "" {
 		return fmt.Errorf("worker deployment state: incomplete deployment record")
 	}
 	lastSuccessful := ""
-	if deploymentStateSuccessful(r.Status) {
+	if advanceLastSuccessful {
 		lastSuccessful = r.TargetDigest
 	}
 	_, err := exec.ExecContext(ctx, `
 INSERT INTO worker_deployment_state (
     worker_id, desired_digest, running_digest, last_successful_digest,
     last_operation_id, last_operation_kind, last_operation_status,
-    last_operation_error, updated_at
+    last_operation_error, last_phase, updated_at
 )
-VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, NULL, ?, ?, ?, ?, ?, '', ?)
 ON CONFLICT(worker_id) DO UPDATE SET
     desired_digest = excluded.desired_digest,
     last_successful_digest = CASE
@@ -133,11 +140,56 @@ ON CONFLICT(worker_id) DO UPDATE SET
     last_operation_kind = excluded.last_operation_kind,
     last_operation_status = excluded.last_operation_status,
     last_operation_error = excluded.last_operation_error,
+    last_phase = CASE
+        WHEN excluded.last_phase <> '' THEN excluded.last_phase
+        ELSE worker_deployment_state.last_phase
+    END,
     updated_at = excluded.updated_at`,
 		r.WorkerID, r.TargetDigest, lastSuccessful, r.DeploymentID,
 		deploymentStateKind(r.IsRollback), r.Status, r.ErrorMessage,
 		updatedAt.UTC().Format(time.RFC3339Nano))
 	return err
+}
+
+// RecordDeploymentPhase persists the in-flight rollout phase of the last
+// operation (DRAINING / DEPLOYING / RESTARTING / WAITING_READY /
+// VERIFYING_DIGEST) into the read model. It is written by the fleet executor
+// and is strictly orthogonal to digest state: the upsert never touches
+// desired / running / last_successful digests, and it preserves the last
+// recorded phase across later heartbeat or record-transition writes.
+func (s *SQLiteStore) RecordDeploymentPhase(ctx context.Context, workerID, phase string) error {
+	if workerID == "" || phase == "" {
+		return fmt.Errorf("worker deployment state: record phase requires worker_id and phase")
+	}
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO worker_deployment_state (
+    worker_id, desired_digest, running_digest, last_successful_digest,
+    last_operation_id, last_operation_kind, last_operation_status,
+    last_operation_error, last_phase, updated_at
+)
+VALUES (?, '', NULL, '', '', '', '', '', ?, ?)
+ON CONFLICT(worker_id) DO UPDATE SET
+    last_phase = excluded.last_phase,
+    updated_at = excluded.updated_at`,
+		workerID, phase, time.Now().UTC().Format(time.RFC3339Nano))
+	return err
+}
+
+// deploymentDigestEqual compares two image references by their digest part
+// (everything after the last '@'), case-insensitively, ignoring surrounding
+// whitespace. The ledger stores the full pinned ref (ghcr.io/...@sha256:xx)
+// while the worker advertises the bare sha256:xx digest; only the digest
+// part is semantically meaningful for verification.
+func deploymentDigestEqual(a, b string) bool {
+	a = strings.ToLower(strings.TrimSpace(a))
+	b = strings.ToLower(strings.TrimSpace(b))
+	if at := strings.LastIndexByte(a, '@'); at >= 0 {
+		a = a[at+1:]
+	}
+	if at := strings.LastIndexByte(b, '@'); at >= 0 {
+		b = b[at+1:]
+	}
+	return a != "" && a == b
 }
 
 // upsertWorkerRunningDigest records only an authenticated heartbeat value.

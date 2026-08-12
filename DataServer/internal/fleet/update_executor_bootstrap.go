@@ -10,11 +10,20 @@ import (
 	"velox-server/internal/workers"
 )
 
-func (e *UpdateExecutor) authenticatedRunningDigest(ctx context.Context, workerID string) (string, error) {
+// authenticatedRuntimeSnapshot returns the runtime snapshot bound to the
+// worker's currently active authenticated control session. Nil-safe when the
+// Runtime backend is not wired (returns nil, nil) so callers can share one
+// session/digest source across bootstrap, the no-op fast path, the
+// WAITING_READY new-session gate, and VERIFYING_DIGEST.
+func (e *UpdateExecutor) authenticatedRuntimeSnapshot(ctx context.Context, workerID string) (*store.WorkerRuntimeSnapshot, error) {
 	if e.backend.Runtime == nil {
-		return "", nil
+		return nil, nil
 	}
-	snapshot, err := e.backend.Runtime.GetAuthenticatedRuntimeSnapshot(ctx, workerID)
+	return e.backend.Runtime.GetAuthenticatedRuntimeSnapshot(ctx, workerID)
+}
+
+func (e *UpdateExecutor) authenticatedRunningDigest(ctx context.Context, workerID string) (string, error) {
+	snapshot, err := e.authenticatedRuntimeSnapshot(ctx, workerID)
 	if err != nil {
 		return "", fmt.Errorf("update: authenticated runtime snapshot: %w", err)
 	}

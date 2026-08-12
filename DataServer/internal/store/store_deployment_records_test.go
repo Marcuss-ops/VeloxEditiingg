@@ -216,9 +216,6 @@ func TestDeploymentStore_UpdatesFailClosedWhenRowIsMissing(t *testing.T) {
 	if err := s.UpdateDeploymentStatus(ctx, "missing", DeployStatusFailed, finished); !errors.Is(err, ErrDeploymentNotFound) {
 		t.Fatalf("UpdateDeploymentStatus error = %v, want ErrDeploymentNotFound", err)
 	}
-	if err := s.UpdateDeploymentRollbackFlag(ctx, "missing", true); !errors.Is(err, ErrDeploymentNotFound) {
-		t.Fatalf("UpdateDeploymentRollbackFlag error = %v, want ErrDeploymentNotFound", err)
-	}
 	if err := s.MarkDeploymentRolledBack(ctx, "missing", finished, true); !errors.Is(err, ErrDeploymentNotFound) {
 		t.Fatalf("MarkDeploymentRolledBack error = %v, want ErrDeploymentNotFound", err)
 	}
@@ -358,39 +355,6 @@ func TestDeploymentStore_BaselineAllowsMissingRollbackProvenance(t *testing.T) {
 	}
 	if got.FinishedAt == nil {
 		t.Fatal("FinishedAt = nil, want terminal baseline timestamp")
-	}
-}
-
-// TestDeploymentStore_RollbackFlagToggle asserts
-// UpdateDeploymentRollbackFlag flips is_rollback on an existing
-// row and the next read reflects the change.
-func TestDeploymentStore_RollbackFlagToggle(t *testing.T) {
-	s := newDeploymentTestStore(t)
-	ctx := context.Background()
-
-	rec := DeploymentRecord{
-		DeploymentID:   "deploy-rollback-1",
-		WorkerID:       "wicket",
-		PreviousDigest: deploymentTestDigest('a'),
-		TargetDigest:   deploymentTestDigest('b'),
-		StartedAt:      time.Now().UTC().Truncate(time.Second),
-		Status:         DeployStatusPending,
-		AppliedBy:      "fleetctl",
-	}
-	if err := s.InsertDeploymentRecord(ctx, rec); err != nil {
-		t.Fatalf("insert: %v", err)
-	}
-
-	if err := s.UpdateDeploymentRollbackFlag(ctx, rec.DeploymentID, true); err != nil {
-		t.Fatalf("rollback flag toggle: %v", err)
-	}
-
-	got, err := s.GetLatestDeploymentForWorker(ctx, rec.WorkerID)
-	if err != nil {
-		t.Fatalf("get: %v", err)
-	}
-	if !got.IsRollback {
-		t.Errorf("IsRollback = false, want true after toggle")
 	}
 }
 
@@ -600,6 +564,65 @@ func TestDeploymentStore_RollbackFailedIsTerminal(t *testing.T) {
 	}
 }
 
+// TestDeploymentStore_ProjectionFailureRollsBackTransition pins the atomic
+// journal + read-model contract: if the worker_deployment_state projection
+// write fails inside the transition transaction, the deployment_records
+// UPDATE must roll back too — never a torn (ledger=SUCCEEDED,
+// projection=stale) state. The failure is forced with a SQLite trigger that
+// aborts any write to the read model.
+func TestDeploymentStore_ProjectionFailureRollsBackTransition(t *testing.T) {
+	s := newDeploymentTestStore(t)
+	ctx := context.Background()
+	base := time.Now().UTC().Truncate(time.Second)
+
+	rec := DeploymentRecord{
+		DeploymentID:   "deploy-atomic-tx",
+		WorkerID:       "wicket",
+		PreviousDigest: deploymentTestDigest('a'),
+		TargetDigest:   deploymentTestDigest('b'),
+		StartedAt:      base,
+		Status:         DeployStatusPending,
+		AppliedBy:      "fleetctl",
+	}
+	if err := s.InsertDeploymentRecord(ctx, rec); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	// Force the projection write to fail AFTER the journal UPDATE: the
+	// BEFORE INSERT trigger fires for the upsert's candidate row (including
+	// the ON CONFLICT DO UPDATE path) and aborts the whole statement.
+	if _, err := s.db.ExecContext(ctx, `
+CREATE TRIGGER fail_projection
+BEFORE INSERT ON worker_deployment_state
+BEGIN
+  SELECT RAISE(ABORT, 'forced projection failure');
+END;`); err != nil {
+		t.Fatalf("create projection-failure trigger: %v", err)
+	}
+
+	err := s.UpdateDeploymentStatus(ctx, rec.DeploymentID, DeployStatusSucceeded, base.Add(time.Minute))
+	if err == nil {
+		t.Fatal("UpdateDeploymentStatus = nil, want projection failure to abort the transition")
+	}
+
+	got, err := s.GetLatestDeploymentForWorker(ctx, rec.WorkerID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Status != DeployStatusPending {
+		t.Errorf("Status = %q, want PENDING (journal UPDATE must roll back with the failed projection)", got.Status)
+	}
+
+	// The read model must be untouched by the rolled-back transition.
+	state, err := s.GetWorkerDeploymentState(ctx, rec.WorkerID)
+	if err != nil {
+		t.Fatalf("GetWorkerDeploymentState: %v", err)
+	}
+	if state.LastOperationStatus != DeployStatusPending {
+		t.Errorf("LastOperationStatus = %q, want PENDING (projection must stay with the pre-transition row)", state.LastOperationStatus)
+	}
+}
+
 // ============================================================
 // worker_deployment_state read model (migration 151)
 // ============================================================
@@ -772,8 +795,9 @@ func TestWorkerDeploymentState_TerminalTransitionPreservesRunningDigest(t *testi
 		t.Fatalf("upsertWorkerRunningDigest: %v", err)
 	}
 
-	// A rollout to digest 'c' then SUCCEEDED — the terminal transition must
-	// not rewrite running_digest (still 'b' until the next heartbeat).
+	// A rollout to digest 'c' verified through MarkVerifiedSucceeded — the
+	// VERIFYING_DIGEST path: it must NOT rewrite running_digest (still 'b'
+	// until the next heartbeat) but MUST advance last_successful_digest.
 	if err := s.InsertDeploymentRecord(ctx, DeploymentRecord{
 		DeploymentID:   "deploy-state-c",
 		WorkerID:       "wicket",
@@ -785,8 +809,8 @@ func TestWorkerDeploymentState_TerminalTransitionPreservesRunningDigest(t *testi
 	}); err != nil {
 		t.Fatalf("InsertDeploymentRecord: %v", err)
 	}
-	if err := s.updateDeploymentTerminal(ctx, "deploy-state-c", DeployStatusSucceeded, base.Add(2*time.Minute), "", false); err != nil {
-		t.Fatalf("updateDeploymentTerminal(SUCCEEDED): %v", err)
+	if err := s.MarkVerifiedSucceeded(ctx, "deploy-state-c", deploymentTestDigest('c'), base.Add(2*time.Minute)); err != nil {
+		t.Fatalf("MarkVerifiedSucceeded: %v", err)
 	}
 
 	state, err := s.GetWorkerDeploymentState(ctx, "wicket")
@@ -801,5 +825,180 @@ func TestWorkerDeploymentState_TerminalTransitionPreservesRunningDigest(t *testi
 	}
 	if state.LastOperationStatus != DeployStatusSucceeded {
 		t.Errorf("LastOperationStatus = %q, want SUCCEEDED", state.LastOperationStatus)
+	}
+}
+
+// TestWorkerDeploymentState_GenericSucceededDoesNotAdvance pins the
+// VERIFYING_DIGEST enforcement: the generic UpdateDeploymentStatus(SUCCEEDED)
+// path — which carries NO digest verification — must NOT advance
+// last_successful_digest. Only MarkVerifiedSucceeded (after an authenticated
+// digest match) can make a new digest the last-known-good one.
+func TestWorkerDeploymentState_GenericSucceededDoesNotAdvance(t *testing.T) {
+	s := newDeploymentTestStore(t)
+	ctx := context.Background()
+	base := time.Now().UTC().Truncate(time.Second)
+	digestA := deploymentTestDigest('a')
+
+	// Baseline verified success to A establishes last-known-good.
+	if err := s.InsertBaselineDeploymentRecord(ctx, DeploymentRecord{
+		DeploymentID: "deploy-generic-base",
+		WorkerID:     "wicket",
+		TargetDigest: digestA,
+		StartedAt:    base,
+		FinishedAt:   deploymentTimePtr(base),
+		Status:       DeployStatusSucceeded,
+		AppliedBy:    "bootstrap",
+	}); err != nil {
+		t.Fatalf("InsertBaselineDeploymentRecord: %v", err)
+	}
+
+	// Unverified generic SUCCEEDED to B must leave last-known-good at A.
+	if err := s.InsertDeploymentRecord(ctx, DeploymentRecord{
+		DeploymentID:   "deploy-generic-b",
+		WorkerID:       "wicket",
+		PreviousDigest: digestA,
+		TargetDigest:   deploymentTestDigest('b'),
+		StartedAt:      base.Add(time.Minute),
+		Status:         DeployStatusPending,
+		AppliedBy:      "fleetctl",
+	}); err != nil {
+		t.Fatalf("InsertDeploymentRecord: %v", err)
+	}
+	if err := s.UpdateDeploymentStatus(ctx, "deploy-generic-b", DeployStatusSucceeded, base.Add(2*time.Minute)); err != nil {
+		t.Fatalf("UpdateDeploymentStatus(SUCCEEDED): %v", err)
+	}
+
+	state, err := s.GetWorkerDeploymentState(ctx, "wicket")
+	if err != nil {
+		t.Fatalf("GetWorkerDeploymentState: %v", err)
+	}
+	if state.LastSuccessfulDigest != digestA {
+		t.Errorf("LastSuccessfulDigest = %q, want %q (unverified SUCCEEDED must not advance last-known-good)", state.LastSuccessfulDigest, digestA)
+	}
+	if state.LastOperationStatus != DeployStatusSucceeded {
+		t.Errorf("LastOperationStatus = %q, want SUCCEEDED (the row IS succeeded, only last-known-good is gated)", state.LastOperationStatus)
+	}
+}
+
+// TestWorkerDeploymentState_VerifiedMismatchRejected pins the digest gate in
+// MarkVerifiedSucceeded: an observed digest != target is rejected with
+// ErrDeploymentDigestMismatch, the row stays PENDING, last_successful_digest
+// is untouched, and running_digest is untouched (the mismatch must not be
+// "fixed" by copying observed into the read model).
+func TestWorkerDeploymentState_VerifiedMismatchRejected(t *testing.T) {
+	s := newDeploymentTestStore(t)
+	ctx := context.Background()
+	base := time.Now().UTC().Truncate(time.Second)
+	digestA := deploymentTestDigest('a')
+	digestB := deploymentTestDigest('b')
+
+	if err := s.InsertBaselineDeploymentRecord(ctx, DeploymentRecord{
+		DeploymentID: "deploy-mismatch-base",
+		WorkerID:     "wicket",
+		TargetDigest: digestA,
+		StartedAt:    base,
+		FinishedAt:   deploymentTimePtr(base),
+		Status:       DeployStatusSucceeded,
+		AppliedBy:    "bootstrap",
+	}); err != nil {
+		t.Fatalf("InsertBaselineDeploymentRecord: %v", err)
+	}
+	if err := s.InsertDeploymentRecord(ctx, DeploymentRecord{
+		DeploymentID:   "deploy-mismatch-b",
+		WorkerID:       "wicket",
+		PreviousDigest: digestA,
+		TargetDigest:   digestB,
+		StartedAt:      base.Add(time.Minute),
+		Status:         DeployStatusPending,
+		AppliedBy:      "fleetctl",
+	}); err != nil {
+		t.Fatalf("InsertDeploymentRecord: %v", err)
+	}
+	// Heartbeat observed the worker actually running C (drift).
+	if err := upsertWorkerRunningDigest(ctx, s.db, "wicket", deploymentTestDigest('c'), base.Add(90*time.Second)); err != nil {
+		t.Fatalf("upsertWorkerRunningDigest: %v", err)
+	}
+
+	err := s.MarkVerifiedSucceeded(ctx, "deploy-mismatch-b", deploymentTestDigest('c'), base.Add(2*time.Minute))
+	if !errors.Is(err, ErrDeploymentDigestMismatch) {
+		t.Fatalf("MarkVerifiedSucceeded(C) err = %v, want ErrDeploymentDigestMismatch", err)
+	}
+	if !strings.Contains(err.Error(), "expected=") || !strings.Contains(err.Error(), "observed=") {
+		t.Errorf("mismatch error must carry expected/observed; got %v", err)
+	}
+
+	rec, err := s.GetLatestDeploymentForWorker(ctx, "wicket")
+	if err != nil {
+		t.Fatalf("GetLatestDeploymentForWorker: %v", err)
+	}
+	if rec.Status != DeployStatusPending {
+		t.Fatalf("row status = %q, want PENDING (mismatch applies no transition)", rec.Status)
+	}
+	state, err := s.GetWorkerDeploymentState(ctx, "wicket")
+	if err != nil {
+		t.Fatalf("GetWorkerDeploymentState: %v", err)
+	}
+	if state.LastSuccessfulDigest != digestA {
+		t.Errorf("LastSuccessfulDigest = %q, want %q (mismatch must not advance last-known-good)", state.LastSuccessfulDigest, digestA)
+	}
+	if state.RunningDigest != deploymentTestDigest('c') {
+		t.Errorf("RunningDigest = %q, want %q (the observation stays exactly as the heartbeat wrote it)", state.RunningDigest, deploymentTestDigest('c'))
+	}
+}
+
+// TestWorkerDeploymentState_PhaseRecordedAndPreserved pins migration 152:
+// RecordDeploymentPhase writes the in-flight phase into the read model, the
+// phase survives subsequent record transitions (never blanked), and it is
+// orthogonal to digest state.
+func TestWorkerDeploymentState_PhaseRecordedAndPreserved(t *testing.T) {
+	s := newDeploymentTestStore(t)
+	ctx := context.Background()
+	base := time.Now().UTC().Truncate(time.Second)
+
+	if err := s.RecordDeploymentPhase(ctx, "wicket", "DRAINING"); err != nil {
+		t.Fatalf("RecordDeploymentPhase(DRAINING): %v", err)
+	}
+	state, err := s.GetWorkerDeploymentState(ctx, "wicket")
+	if err != nil {
+		t.Fatalf("GetWorkerDeploymentState: %v", err)
+	}
+	if state.LastPhase != "DRAINING" {
+		t.Fatalf("LastPhase = %q, want DRAINING", state.LastPhase)
+	}
+
+	// A PENDING insert (control-plane intent) must preserve the recorded
+	// phase and fill desired without touching it.
+	if err := s.InsertDeploymentRecord(ctx, DeploymentRecord{
+		DeploymentID:   "deploy-phase-1",
+		WorkerID:       "wicket",
+		PreviousDigest: deploymentTestDigest('a'),
+		TargetDigest:   deploymentTestDigest('b'),
+		StartedAt:      base,
+		Status:         DeployStatusPending,
+		AppliedBy:      "fleetctl",
+	}); err != nil {
+		t.Fatalf("InsertDeploymentRecord: %v", err)
+	}
+	if err := s.RecordDeploymentPhase(ctx, "wicket", "VERIFYING_DIGEST"); err != nil {
+		t.Fatalf("RecordDeploymentPhase(VERIFYING_DIGEST): %v", err)
+	}
+	// Terminal transition (FAILED) preserves the last phase: the operator can
+	// see WHERE the rollout stopped.
+	if err := s.updateDeploymentTerminal(ctx, "deploy-phase-1", DeployStatusFailed, base.Add(time.Minute), "digest_mismatch: expected=B observed=C", false); err != nil {
+		t.Fatalf("updateDeploymentTerminal(FAILED): %v", err)
+	}
+
+	state, err = s.GetWorkerDeploymentState(ctx, "wicket")
+	if err != nil {
+		t.Fatalf("GetWorkerDeploymentState: %v", err)
+	}
+	if state.LastPhase != "VERIFYING_DIGEST" {
+		t.Errorf("LastPhase after FAILED transition = %q, want VERIFYING_DIGEST (where the rollout stopped)", state.LastPhase)
+	}
+	if state.LastOperationStatus != DeployStatusFailed || state.LastOperationError != "digest_mismatch: expected=B observed=C" {
+		t.Errorf("last operation = %s/%q, want FAILED/digest_mismatch...", state.LastOperationStatus, state.LastOperationError)
+	}
+	if state.DesiredDigest != deploymentTestDigest('b') {
+		t.Errorf("DesiredDigest = %q, want %q (phase recording must not touch intent)", state.DesiredDigest, deploymentTestDigest('b'))
 	}
 }

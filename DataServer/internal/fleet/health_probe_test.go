@@ -82,7 +82,9 @@ func (s stubDeployments) GetLatestDeploymentForWorker(_ context.Context, _ strin
 func (s stubDeployments) InsertDeploymentRecord(_ context.Context, _ store.DeploymentRecord) error {
 	return nil
 }
-func (s stubDeployments) MarkSucceeded(_ context.Context, _ string, _ time.Time) error { return nil }
+func (s stubDeployments) MarkVerifiedSucceeded(_ context.Context, _ string, _ string, _ time.Time) error {
+	return nil
+}
 func (s stubDeployments) MarkFailed(_ context.Context, _ string, _ time.Time, _ string) error {
 	return nil
 }

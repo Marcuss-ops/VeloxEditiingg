@@ -17,6 +17,11 @@ import (
 //   - updateDeploymentTerminal reads the current row, validates the
 //     transition through ValidateDeploymentTransition, and fences the
 //     UPDATE with the observed from-state (see store_deployment_records.go).
+//   - MarkVerifiedSucceeded is the ONLY terminal-SUCCEEDED writer for
+//     forward rollouts: it verifies the authenticated observed digest
+//     against the row's target INSIDE the transition transaction and is the
+//     only path that advances last_successful_digest (VERIFYING_DIGEST
+//     enforcement).
 //   - the fleet_operations MarkRunning / MarkSucceeded / MarkFailed
 //     methods enforce the operation machine at the DB layer with
 //     status-guarded UPDATEs (WHERE status = '<expected from>') — the
@@ -35,11 +40,12 @@ import (
 // Scope: this module formalizes the PERSISTED ledger vocabularies (the
 // 4-state deployment machine and the 4-state operation machine). The
 // phase-level rollout sequence (DRAINING → DEPLOYING → RESTARTING →
-// WAITING_READY → VERIFYING_DIGEST) is the UpdateExecutor's internal
-// pipeline, not a persisted vocabulary; it will be added here only if the
-// schema gains columns for it. The no-resurrection guarantee rests on
-// terminality: any re-request is a NEW row, never a transition out of a
-// terminal state.
+// WAITING_READY → VERIFYING_DIGEST) remains the UpdateExecutor's pipeline;
+// migration 152 persists the CURRENT phase as an observability column
+// (worker_deployment_state.last_phase) whose writer contract lives in
+// store_worker_deployment_state.go — the phase is NOT a transition source,
+// only a read model. The no-resurrection guarantee rests on terminality:
+// any re-request is a NEW row, never a transition out of a terminal state.
 
 // ErrIllegalDeploymentTransition is returned by the store when a
 // deployment_records transition violates the canonical deployment machine

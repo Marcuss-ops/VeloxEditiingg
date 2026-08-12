@@ -28,12 +28,22 @@
 //     c. ContainerRunning poll on the fixed `velox-worker`
 //     container (canonical project/service/container name).
 //     d. /health/ready poll via ssh curl on the worker.
-//     e. master-connection check via Registry.SessionActive
-//     + heartbeat recency.
-//     f. RunLevelD smoke (returns smoke artifact_id).
-//     g. Drive verifier confirms the smoke artifact landed.
-//     h. release an executor-owned drain and verify it is released.
-//     i. MarkSucceeded on the PENDING row → Health HEALTHY.
+//     e. WAITING_READY — gated on the NEW authenticated session:
+//     the authenticated runtime snapshot must be bound to a session
+//     DIFFERENT from the pre-restart one (fresh Hello) AND the
+//     registry session active + heartbeat fresh. A stale READY from
+//     the pre-restart session never advances the rollout.
+//     f. VERIFYING_DIGEST — authenticated running digest must equal
+//     the target. Mismatch fails forward with error_code
+//     `digest_mismatch`; running_digest is never touched by the
+//     control plane.
+//     g. RunLevelD smoke (returns smoke artifact_id).
+//     h. Drive verifier confirms the smoke artifact landed.
+//     i. release an executor-owned drain and verify it is released.
+//     j. MarkVerifiedSucceeded on the PENDING row → Health HEALTHY.
+//     This is the ONLY path that advances last_successful_digest:
+//     the store re-verifies the observed digest against the target
+//     inside the transition transaction.
 //  7. on any forward failure (cosign fail / pull fail /
 //     container unhealthy / health non-200 / master offline
 //     / smoke fail / Drive fail), UPDATES the PENDING row to
@@ -109,8 +119,9 @@ import (
 // at buildFleet can supply a single dependency object. Tests
 // construct UpdateBackend manually with stub implementations.
 type UpdateExecutor struct {
-	backend      UpdateBackend
-	drainTimeout time.Duration
+	backend          UpdateBackend
+	drainTimeout     time.Duration
+	waitReadyTimeout time.Duration
 }
 
 // UpdateBackend is the bundled dependency surface for
@@ -141,7 +152,11 @@ func NewUpdateExecutor(b UpdateBackend) *UpdateExecutor {
 	if b.Now == nil {
 		b.Now = func() time.Time { return time.Now().UTC() }
 	}
-	return &UpdateExecutor{backend: b, drainTimeout: timeoutActiveJobsIdle}
+	return &UpdateExecutor{
+		backend:          b,
+		drainTimeout:     timeoutActiveJobsIdle,
+		waitReadyTimeout: timeoutWaitReady,
+	}
 }
 
 // AttachRuntimeBackends completes the production composition after the
@@ -253,6 +268,7 @@ func (e *UpdateExecutor) Execute(ctx context.Context, op *store.Operation) error
 	// Preserve an operator-owned drain. Only undo the transition that
 	// this executor made; callers must serialize worker mutations while
 	// an update operation is active.
+	e.recordPhase(ctx, op.WorkerID, RolloutPhaseDraining)
 	drainOwned := !info.Drain
 	if drainOwned {
 		if err := e.backend.Registry.SetDrainMode(ctx, op.WorkerID, true); err != nil {
@@ -284,9 +300,26 @@ func (e *UpdateExecutor) Execute(ctx context.Context, op *store.Operation) error
 		}
 		return fmt.Errorf("update: insert PENDING: %w", err)
 	}
+	e.recordPhase(ctx, op.WorkerID, RolloutPhaseDeploying)
 
 	// ── Phase 6: forward pipeline ───────────────────────────────────
-	if runErr := e.runForward(ctx, op, targetDigest); runErr != nil {
+	// Snapshot the authenticated session bound to the worker BEFORE the
+	// restart. WAITING_READY will only accept a DIFFERENT (new) session
+	// proving the worker came back up through a fresh Hello — a cached
+	// READY from the pre-restart session can never advance the rollout.
+	// Fail closed: if the authenticated session cannot be read, the
+	// new-session gate has no baseline to compare against.
+	preRestartSessionID := ""
+	if snap, snapErr := e.authenticatedRuntimeSnapshot(ctx, op.WorkerID); snapErr != nil {
+		if releaseErr := e.releaseOwnedDrain(ctx, op.WorkerID, drainOwned); releaseErr != nil {
+			return fmt.Errorf("update: pre-restart session snapshot: %w (release drain: %v)", snapErr, releaseErr)
+		}
+		return fmt.Errorf("update: pre-restart session snapshot: %w", snapErr)
+	} else if snap != nil {
+		preRestartSessionID = snap.SessionID
+	}
+	observedDigest, runErr := e.runForward(ctx, op, targetDigest, preRestartSessionID)
+	if runErr != nil {
 		// Mark forward row FAILED first; THEN run rollback.
 		if uerr := e.backend.Deployments.MarkFailed(ctx, deploymentID, e.backend.Now(), runErr.Error()); uerr != nil {
 			log.Printf("[UPDATE] mark FAILED for %s: %v", deploymentID, uerr)
@@ -300,18 +333,20 @@ func (e *UpdateExecutor) Execute(ctx context.Context, op *store.Operation) error
 		return rollbackErr
 	}
 
-	// ── Phase 7: release drain, then mark terminal ──────────────────
+	// ── Phase 7: release drain, then mark verified terminal ──────────
 	// A successful deployment must never be published while the worker
 	// remains DRAINING. The drain is part of the success invariant, not
 	// cleanup after success; otherwise the fleet ledger and live routing
-	// state can disagree.
+	// state can disagree. The terminal SUCCEEDED write is MarkVerifiedSucceeded
+	// — the ONLY path that advances last_successful_digest — and it re-verifies
+	// the observed digest against the target inside the transition transaction.
 	if err := e.releaseOwnedDrain(ctx, op.WorkerID, drainOwned); err != nil {
 		return fmt.Errorf("update: release drain before success: %w", err)
 	}
-	if err := e.backend.Deployments.MarkSucceeded(ctx, deploymentID, e.backend.Now()); err != nil {
-		return fmt.Errorf("update: mark SUCCEEDED for %s: %w", deploymentID, err)
+	if err := e.backend.Deployments.MarkVerifiedSucceeded(ctx, deploymentID, observedDigest, e.backend.Now()); err != nil {
+		return fmt.Errorf("update: mark verified SUCCEEDED for %s: %w", deploymentID, err)
 	}
-	log.Printf("[UPDATE] worker=%s target=%s SUCCEEDED", op.WorkerID, targetDigest)
+	log.Printf("[UPDATE] worker=%s target=%s SUCCEEDED (digest verified)", op.WorkerID, targetDigest)
 	return nil
 }
 

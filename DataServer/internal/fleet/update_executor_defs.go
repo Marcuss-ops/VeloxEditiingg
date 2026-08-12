@@ -63,6 +63,15 @@ var (
 	// ErrSmokeFailed is returned by BackendSmokeRunner on
 	// Level D smoke test failure.
 	ErrSmokeFailed = errors.New("smoke_failed")
+
+	// ErrDigestMismatch is returned by the VERIFYING_DIGEST phase when the
+	// authenticated running digest does not match the operation target. The
+	// caller marks the forward row FAILED with error_code `digest_mismatch`
+	// (message: "digest_mismatch: expected=<target> observed=<running>") and
+	// runs the rollback cascade to restore the previous digest. running_digest
+	// itself is never written by the control plane — it stays the observed
+	// heartbeat value.
+	ErrDigestMismatch = errors.New("digest_mismatch")
 )
 
 // Per-step timeouts. Each step uses context.WithTimeout to
@@ -78,6 +87,7 @@ const (
 	timeoutSnapshot       = 10 * time.Second
 	timeoutDrainVerify    = 5 * time.Second
 	timeoutActiveJobsIdle = 5 * time.Minute
+	timeoutWaitReady      = 5 * time.Minute
 	timeoutCosign         = 30 * time.Second
 	timeoutDockerPull     = 10 * time.Minute
 	timeoutComposeRestart = 2 * time.Minute
@@ -86,6 +96,18 @@ const (
 	timeoutMasterCheck    = 30 * time.Second
 	timeoutSmokeRun       = 5 * time.Minute
 	timeoutDriveVerify    = 60 * time.Second
+)
+
+// Rollout phase vocabulary persisted into worker_deployment_state.last_phase
+// (migration 152) via the BackendDeploymentPhaseRecorder seam. The sequence
+// is the UpdateExecutor's internal pipeline; terminal outcomes stay
+// expressed by last_operation_status (SUCCEEDED/FAILED).
+const (
+	RolloutPhaseDraining        = "DRAINING"
+	RolloutPhaseDeploying       = "DEPLOYING"
+	RolloutPhaseRestarting      = "RESTARTING"
+	RolloutPhaseWaitingReady    = "WAITING_READY"
+	RolloutPhaseVerifyingDigest = "VERIFYING_DIGEST"
 )
 
 // BackendCosignVerifierIfc is the local alias for

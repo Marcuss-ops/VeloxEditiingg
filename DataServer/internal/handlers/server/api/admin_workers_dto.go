@@ -87,6 +87,7 @@ type WorkerCard struct {
 	TargetDigest         string                `json:"target_digest,omitempty"`
 	PreviousDigest       string                `json:"previous_digest,omitempty"`
 	LastSuccessfulDigest string                `json:"last_successful_digest,omitempty"`
+	LastPhase            string                `json:"last_phase,omitempty"`
 	ImageState           *WorkerImageState     `json:"image_state,omitempty"`
 	OperationState       *WorkerOperationState `json:"operation_state,omitempty"`
 	SoftwareVersion      string                `json:"software_version"`

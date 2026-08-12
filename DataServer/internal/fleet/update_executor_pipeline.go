@@ -17,51 +17,68 @@ import (
 
 // runForward executes the forward-only pipeline: cosign,
 // docker pull, compose restart, container running, health
-// check, master-connection check, smoke, Drive verify.
-// Returns nil only on full forward success.
+// check, WAITING_READY (new-session gate), VERIFYING_DIGEST,
+// smoke, Drive verify.
 //
-// If any step fails, the function returns the wrapped error;
-// the caller (Execute) handles the rollback cascade.
-func (e *UpdateExecutor) runForward(ctx context.Context, op *store.Operation, targetDigest string) error {
+// It returns the authenticated observed digest (the value VERIFYING_DIGEST
+// validated against the target) so Phase 7 can hand it to
+// MarkVerifiedSucceeded — the ONLY path that advances last_successful_digest.
+// If any step fails, the function returns the wrapped error; the caller
+// (Execute) marks the forward row FAILED and runs the rollback cascade.
+func (e *UpdateExecutor) runForward(ctx context.Context, op *store.Operation, targetDigest, preRestartSessionID string) (string, error) {
 	// (a) Cosign verify the target_digest.
 	if err := e.stepCosignVerify(ctx, targetDigest); err != nil {
-		return fmt.Errorf("cosign: %w", err)
+		return "", fmt.Errorf("cosign: %w", err)
 	}
 
 	// (b) atomically activate the pinned image on the canonical worker
-	// runtime. The helper validates, updates worker.env and restarts the
-	// single velox-worker.service owner.
+	// runtime (RESTARTING). The helper validates, updates worker.env and
+	// restarts the single velox-worker.service owner.
+	e.recordPhase(ctx, op.WorkerID, RolloutPhaseRestarting)
 	if _, err := e.stepActivateImage(ctx, op.WorkerID, targetDigest); err != nil {
-		return fmt.Errorf("activate image: %w", err)
+		return "", fmt.Errorf("activate image: %w", err)
 	}
 
 	// (d) ContainerRunning poll.
 	if err := e.stepContainerRunning(ctx, op.WorkerID); err != nil {
-		return fmt.Errorf("container_running: %w", err)
+		return "", fmt.Errorf("container_running: %w", err)
 	}
 
 	// (e) /health/ready poll on the worker.
 	if err := e.stepHealthReady(ctx, op.WorkerID); err != nil {
-		return fmt.Errorf("health_ready: %w", err)
+		return "", fmt.Errorf("health_ready: %w", err)
 	}
 
-	// (f) Master-connection check (no SSH — pure registry).
-	if err := e.stepMasterConnected(ctx, op.WorkerID); err != nil {
-		return fmt.Errorf("master_connection: %w", err)
+	// (f) WAITING_READY — gated on the NEW authenticated session: the
+	// worker must reconnect through a fresh Hello (session differs from the
+	// pre-restart one) with an active registry session and fresh heartbeat.
+	// A cached READY from the pre-restart session can never satisfy this.
+	e.recordPhase(ctx, op.WorkerID, RolloutPhaseWaitingReady)
+	if err := e.stepWaitNewSession(ctx, op.WorkerID, preRestartSessionID); err != nil {
+		return "", fmt.Errorf("waiting_ready: %w", err)
 	}
 
-	// (g) Level D smoke on the worker.
+	// (g) VERIFYING_DIGEST — the authenticated running digest must match the
+	// target. A mismatch fails forward with ErrDigestMismatch (the caller
+	// marks the row FAILED with error_code `digest_mismatch` and rolls back).
+	e.recordPhase(ctx, op.WorkerID, RolloutPhaseVerifyingDigest)
+	observedDigest, err := e.stepVerifyDigest(ctx, op.WorkerID, targetDigest)
+	if err != nil {
+		return "", err
+	}
+
+	// (h) Level D smoke on the worker.
 	smokeArtifactID, err := e.stepSmoke(ctx, op.WorkerID)
 	if err != nil {
-		return err
+		return "", err
 	}
 
-	// (h) Drive verifier on the smoke artifact.
+	// (i) Drive verifier on the smoke artifact.
 	if err := e.stepDriveVerify(ctx, smokeArtifactID); err != nil {
-		return err
+		return "", err
 	}
 
-	return nil
+	return observedDigest, nil
 }
 
 // runRollback executes the recovery cascade when forward

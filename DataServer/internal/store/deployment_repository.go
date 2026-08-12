@@ -29,12 +29,23 @@ func (r *DeploymentRecordRepository) InsertDeploymentRecord(ctx context.Context,
 	return r.store.InsertDeploymentRecord(ctx, record)
 }
 
-func (r *DeploymentRecordRepository) MarkSucceeded(ctx context.Context, deploymentID string, finishedAt time.Time) error {
-	return r.store.updateDeploymentTerminal(ctx, deploymentID, DeployStatusSucceeded, finishedAt, "", false)
+// MarkVerifiedSucceeded is the forward-success writer: the store re-verifies
+// observedDigest against the row's target digest inside the transition
+// transaction, so last_successful_digest can only advance after a verified
+// digest match (VERIFYING_DIGEST phase enforcement).
+func (r *DeploymentRecordRepository) MarkVerifiedSucceeded(ctx context.Context, deploymentID, observedDigest string, finishedAt time.Time) error {
+	return r.store.MarkVerifiedSucceeded(ctx, deploymentID, observedDigest, finishedAt)
 }
 
 func (r *DeploymentRecordRepository) MarkFailed(ctx context.Context, deploymentID string, finishedAt time.Time, errMsg string) error {
 	return r.store.updateDeploymentTerminal(ctx, deploymentID, DeployStatusFailed, finishedAt, errMsg, false)
+}
+
+// RecordDeploymentPhase persists the in-flight rollout phase into the
+// worker_deployment_state read model (migration 152) so the admin card can
+// show WHERE a rollout is — or where it stopped.
+func (r *DeploymentRecordRepository) RecordDeploymentPhase(ctx context.Context, workerID, phase string) error {
+	return r.store.RecordDeploymentPhase(ctx, workerID, phase)
 }
 
 func (r *DeploymentRecordRepository) MarkDeploymentRolledBack(ctx context.Context, deploymentID string, finishedAt time.Time, rollbackOK bool) error {

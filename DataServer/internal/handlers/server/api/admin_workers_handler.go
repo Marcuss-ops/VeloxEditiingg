@@ -228,6 +228,7 @@ func (h *AdminWorkersHandler) cardWithError(ctx context.Context, info *workersre
 				card.RunningDigest = state.RunningDigest
 			}
 			card.LastSuccessfulDigest = state.LastSuccessfulDigest
+			card.LastPhase = state.LastPhase
 		}
 	}
 	// IMAGE section — real-time state only: what is running vs what the

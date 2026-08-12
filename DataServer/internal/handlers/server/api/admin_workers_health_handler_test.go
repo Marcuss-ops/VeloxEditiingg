@@ -378,7 +378,9 @@ func (d healthHTTPDeployments) GetLatestDeploymentForWorker(context.Context, str
 func (healthHTTPDeployments) InsertDeploymentRecord(context.Context, store.DeploymentRecord) error {
 	return nil
 }
-func (healthHTTPDeployments) MarkSucceeded(context.Context, string, time.Time) error { return nil }
+func (healthHTTPDeployments) MarkVerifiedSucceeded(context.Context, string, string, time.Time) error {
+	return nil
+}
 func (healthHTTPDeployments) MarkFailed(context.Context, string, time.Time, string) error {
 	return nil
 }

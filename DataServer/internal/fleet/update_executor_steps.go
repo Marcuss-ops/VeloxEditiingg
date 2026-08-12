@@ -13,6 +13,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 )
 
 func (e *UpdateExecutor) stepCosignVerify(parent context.Context, ref string) error {
@@ -90,6 +92,72 @@ func (e *UpdateExecutor) stepMasterConnected(parent context.Context, workerID st
 		return errors.New("no heartbeat yet (master connection not established)")
 	}
 	return nil
+}
+
+// stepWaitNewSession implements the WAITING_READY phase gated on the NEW
+// authenticated session. After the restart the rollout must NOT advance on a
+// readiness signal from the pre-restart session: the authenticated runtime
+// snapshot must be bound to a session DIFFERENT from the one observed before
+// the restart (a fresh Hello proves the worker came back up), AND the
+// registry must report the session active with a fresh heartbeat. A stale S1
+// READY — cached or delayed — can never satisfy this gate.
+func (e *UpdateExecutor) stepWaitNewSession(parent context.Context, workerID, preRestartSessionID string) error {
+	if e.backend.Registry == nil {
+		return errors.New("registry gater not wired (cannot verify new session)")
+	}
+	if e.backend.Runtime == nil {
+		return errors.New("authenticated runtime reader not wired (cannot verify new session)")
+	}
+	budget := e.waitReadyTimeout
+	if budget <= 0 {
+		budget = timeoutWaitReady
+	}
+	deadline := time.Now().Add(budget)
+	pollTicker := time.NewTicker(time.Second)
+	defer pollTicker.Stop()
+	for {
+		if e.stepMasterConnected(parent, workerID) == nil {
+			if snap, snapErr := e.backend.Runtime.GetAuthenticatedRuntimeSnapshot(parent, workerID); snapErr == nil &&
+				snap != nil && snap.SessionID != "" && snap.SessionID != preRestartSessionID {
+				return nil
+			}
+		}
+		if time.Now().After(deadline) {
+			return errors.New("worker did not reconnect on a NEW authenticated session within budget")
+		}
+		select {
+		case <-parent.Done():
+			return fmt.Errorf("wait_for_new_session: ctx cancelled: %w", parent.Err())
+		case <-pollTicker.C:
+		}
+	}
+}
+
+// stepVerifyDigest implements the VERIFYING_DIGEST phase: the digest the
+// worker advertises through its authenticated session (the SAME snapshot the
+// new-session gate just validated) must match the operation target. A
+// mismatch fails the forward pipeline with ErrDigestMismatch — the caller
+// marks the row FAILED with error_code `digest_mismatch` and runs the
+// rollback cascade. running_digest is never written here: the control plane
+// does not fabricate observed state.
+func (e *UpdateExecutor) stepVerifyDigest(parent context.Context, workerID, targetDigest string) (string, error) {
+	if e.backend.Runtime == nil {
+		return "", errors.New("verify_digest: authenticated runtime reader not wired")
+	}
+	ctx, cancel := context.WithTimeout(parent, timeoutDrainVerify)
+	defer cancel()
+	snapshot, err := e.backend.Runtime.GetAuthenticatedRuntimeSnapshot(ctx, workerID)
+	if err != nil {
+		return "", fmt.Errorf("verify_digest: authenticated snapshot: %w", err)
+	}
+	if snapshot == nil || strings.TrimSpace(snapshot.DockerImageDigest) == "" {
+		return "", errors.New("verify_digest: no authenticated running digest observed")
+	}
+	observed := normalizeDigest(snapshot.DockerImageDigest)
+	if observed != normalizeDigest(targetDigest) {
+		return "", fmt.Errorf("%w: expected=%s observed=%s", ErrDigestMismatch, targetDigest, snapshot.DockerImageDigest)
+	}
+	return snapshot.DockerImageDigest, nil
 }
 
 func (e *UpdateExecutor) stepSmoke(parent context.Context, workerID string) (string, error) {
