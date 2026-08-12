@@ -326,6 +326,39 @@ if(VELOX_ENABLE_LIBAV)
 
     add_test(NAME packet_components_tests
              COMMAND velox_packet_components_tests)
+
+    # Render-level integration proof of the Zero-Spawn Copy Pipeline: a
+    # copy_only RenderPlan is rendered through the public RenderEngine
+    # entry point with a sentinel PATH whose ffmpeg/ffprobe fail hard.
+    # Asserts zero temp bytes (no segment_N.mp4 / video_only.mp4 /
+    # segments.txt), zero file copies (no cache -> tmp asset copies),
+    # zero child media processes, concat_mode=packet_copy and a single
+    # in-process packet mux phase in the sidecar telemetry.
+    add_executable(velox_render_copy_only_zero_intermediates_tests
+        tests/test_render_copy_only_zero_intermediates.cpp
+        src/audio/audio_plan.cpp
+        src/audio/audio_benchmark.cpp
+        src/core/render_engine.cpp
+        src/core/render_engine_helpers.cpp
+        src/services/file_utils.cpp
+        src/services/io_counters.cpp
+        src/services/media_probe.cpp
+        src/services/media_packet_pipeline.cpp
+        src/services/media_utils.cpp
+        src/services/ffmpeg_progress_parser.cpp
+        src/telemetry/phase_recorder.cpp
+    )
+
+    target_include_directories(velox_render_copy_only_zero_intermediates_tests
+        PRIVATE include src include/velox)
+
+    if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(velox_render_copy_only_zero_intermediates_tests PRIVATE -O2)
+    endif()
+    velox_link_ffmpeg(velox_render_copy_only_zero_intermediates_tests)
+
+    add_test(NAME render_copy_only_zero_intermediates_tests
+             COMMAND velox_render_copy_only_zero_intermediates_tests)
 endif()
 
 # Every target that can include PhaseRecorder must consume the freshly
@@ -344,4 +377,7 @@ if(TARGET velox_media_probe_tests)
 endif()
 if(TARGET velox_media_packet_pipeline_tests)
     add_dependencies(velox_media_packet_pipeline_tests velox_telemetry_catalog_codegen)
+endif()
+if(TARGET velox_render_copy_only_zero_intermediates_tests)
+    add_dependencies(velox_render_copy_only_zero_intermediates_tests velox_telemetry_catalog_codegen)
 endif()
