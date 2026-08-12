@@ -69,6 +69,7 @@ func TestBenchmarkFixtureRegistry_CopyOnlyInvariants(t *testing.T) {
 		"ffmpeg_exec":         f.Budget.Architecture.FfmpegExecMax,
 		"ffprobe_exec":        f.Budget.Architecture.FfprobeExecMax,
 		"temp_segment_files":  f.Budget.Architecture.TempSegmentFilesMax,
+		"external_exec":       f.Budget.Architecture.ExternalExecMax,
 	} {
 		require.Truef(t, b.Set, "%s must be an enforced budget on the canonical fixture", name)
 		require.Zerof(t, b.Value, "%s must be a zero invariant on the canonical fixture", name)
@@ -153,10 +154,11 @@ func TestEvaluateFixture_CopyOnlyViolations(t *testing.T) {
 	receipt.Media.EncodePasses = 1
 	receipt.Process.FfmpegExecCount = 2
 	receipt.Process.FfprobeExecCount = 1
+	receipt.Process.ExternalProcessCount = 3
 	receipt.Derived.WriteAmplification = 2.0
 
 	v := EvaluateFixture(f, receipt)
-	require.Len(t, v, 6)
+	require.Len(t, v, 7)
 	got := map[string]BudgetViolation{}
 	for _, bv := range v {
 		got[bv.KPI] = bv
@@ -167,6 +169,7 @@ func TestEvaluateFixture_CopyOnlyViolations(t *testing.T) {
 	require.Equal(t, float64(1), got["correctness.audio_encode_passes"].Value)
 	require.Equal(t, float64(2), got["architecture.ffmpeg_exec"].Value)
 	require.Equal(t, float64(1), got["architecture.ffprobe_exec"].Value)
+	require.Equal(t, float64(3), got["architecture.execve"].Value)
 	require.InDelta(t, 2.0, got["io.write_amplification"].Value, 1e-9)
 	require.InDelta(t, 1.5, got["io.write_amplification"].Target, 1e-9)
 }

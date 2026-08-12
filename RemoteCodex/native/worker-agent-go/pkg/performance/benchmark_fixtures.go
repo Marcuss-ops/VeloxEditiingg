@@ -95,6 +95,10 @@ type ArchitectureBudget struct {
 	FfmpegExecMax       BudgetMax `json:"ffmpeg_exec_max"`
 	FfprobeExecMax      BudgetMax `json:"ffprobe_exec_max"`
 	TempSegmentFilesMax BudgetMax `json:"temp_segment_files_max"`
+	// ExternalExecMax caps the total external execve the engine spawned
+	// (process-tree external process count — the C++ engine spawn itself
+	// is the backend, not an external execve). Phase-1 copy-only: 0.
+	ExternalExecMax BudgetMax `json:"external_exec_max"`
 }
 
 // PerformanceBudget pins wall-clock ceilings. P50 is a many-run
@@ -181,6 +185,7 @@ func NewBenchmarkFixtureRegistry() *BenchmarkFixtureRegistry {
 			FfmpegExecMax:       MaxInt64(0),
 			FfprobeExecMax:      MaxInt64(0),
 			TempSegmentFilesMax: MaxInt64(0),
+			ExternalExecMax:     MaxInt64(0),
 		},
 		Performance: PerformanceBudget{P50WallMSMax: UnsetMax(), P95WallMSMax: UnsetMax()},
 		IO:          IOBudget{WriteAmplificationMax: MaxFloat(1.5), ReadAmplificationMax: UnsetMax()},
@@ -221,8 +226,9 @@ func NewBenchmarkFixtureRegistry() *BenchmarkFixtureRegistry {
 	// Composite fixtures: decode → compose → encode is LEGITIMATE work,
 	// so no zero invariants apply; every budget stays TBD until the
 	// Phase-1 copy-only baseline is measured and a composite baseline
-	// can be pinned.
-	compositeTBD := FixtureBudget{}
+	// can be pinned. ArtifactSHARequired is explicitly false so the
+	// serialized fixture is self-documenting.
+	compositeTBD := FixtureBudget{Correctness: CorrectnessBudget{ArtifactSHARequired: false}}
 	r.register(BenchmarkFixture{
 		ID: FixtureComposite5MLow, Kind: FixtureKindComposite, CacheMode: CacheModeWarm,
 		DurationSec: 300, ClipCount: 5,
@@ -307,6 +313,7 @@ func EvaluateFixture(fixture BenchmarkFixture, receipt *PerformanceReceiptV1) []
 	v = evalThreshold(v, "correctness.audio_encode_passes", float64(receipt.Media.EncodePasses), b.Correctness.AudioEncodePassesMax, "final-audio invariant: no audio re-encode")
 	v = evalThreshold(v, "architecture.ffmpeg_exec", float64(receipt.Process.FfmpegExecCount), b.Architecture.FfmpegExecMax, "copy-only invariant: no external ffmpeg processes")
 	v = evalThreshold(v, "architecture.ffprobe_exec", float64(receipt.Process.FfprobeExecCount), b.Architecture.FfprobeExecMax, "copy-only invariant: no external ffprobe processes")
+	v = evalThreshold(v, "architecture.execve", float64(receipt.Process.ExternalProcessCount), b.Architecture.ExternalExecMax, "copy-only invariant: no external execve")
 	v = evalThreshold(v, "performance.wall_ms", float64(receipt.Timing.WallMs), b.Performance.P95WallMSMax, "per-run wall-clock upper bound (p95 budget)")
 	v = evalThreshold(v, "io.read_amplification", receipt.Derived.ReadAmplification, b.IO.ReadAmplificationMax, "bytes read per output byte")
 	v = evalThreshold(v, "io.write_amplification", receipt.Derived.WriteAmplification, b.IO.WriteAmplificationMax, "bytes written per output byte")
@@ -316,11 +323,19 @@ func EvaluateFixture(fixture BenchmarkFixture, receipt *PerformanceReceiptV1) []
 // evalThreshold appends a violation when the threshold is enforced and
 // the observed value exceeds it.
 func evalThreshold(v []BudgetViolation, kpi string, actual float64, max BudgetMax, msg string) []BudgetViolation {
-	if !max.Set {
-		return v
-	}
-	if actual > max.Value {
+	if exceeded, enforced := enforcedExceeded(max, actual); enforced && exceeded {
 		return append(v, BudgetViolation{KPI: kpi, Value: actual, Target: max.Value, Message: msg})
 	}
 	return v
+}
+
+// enforcedExceeded is the ONE place that owns the BudgetMax Set
+// semantics, shared by the budget tier (evalThreshold) and the CI gate
+// (fixture_gate.go): an unset threshold is never enforced, a set one is
+// exceeded when actual > Value.
+func enforcedExceeded(max BudgetMax, actual float64) (exceeded, enforced bool) {
+	if !max.Set {
+		return false, false
+	}
+	return actual > max.Value, true
 }
