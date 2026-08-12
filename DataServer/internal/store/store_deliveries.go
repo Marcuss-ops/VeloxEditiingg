@@ -95,8 +95,7 @@ type DeliveryLease struct {
 	// internal/completion.coordinator.insertJobDeliveriesIdempotent).
 	// The DeliveryRunner reads this at claim time and overrides
 	// its runner-wide MaxAttempts on a per-delivery basis. 0 =
-	// "use runner default" (back-compat with rows stamped before
-	// Phase 5.5).
+	// explicit no-retry budget.
 	MaxAttempts   int
 	Provider      string
 	ConfigJSON    string

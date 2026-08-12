@@ -66,6 +66,9 @@ reversibile, testato prima/dopo, committato su `main` e pubblicato.
 - [x] Verificare e correggere la semantica di `Retries=0`: un solo tentativo;
       i valori negativi sono normalizzati a zero e il default produttivo resta
       assegnato dalla configurazione (`3`), non nascosto nel retry loop.
+- [x] Verificare e correggere la propagazione di `retry_budget=0`: il valore
+      esplicito non viene più convertito a `5` dal resolver/finalizer e il
+      runner lo tratta come budget senza retry.
 - [ ] Separare contatori e log per `lease_lost`, `provider_error`,
       `db_error`, `context_canceled` e `permanent_error`.
 

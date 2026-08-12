@@ -91,14 +91,9 @@ func (r *SQLiteDeliveryPlanResolver) ResolveDestinations(ctx context.Context, jo
 	out := make([]deliverycontract.DeliveryDestination, 0, len(plan.Destinations))
 	for _, pc := range plan.Destinations {
 		budget := pc.RetryBudget
-		if budget <= 0 {
-			// Defensive default: pre-069 plans carry no retry_budget
-			// column, so the SQLite read yields the table DEFAULT (5)
-			// and a < 0 never appears. The < 0 branch covers future
-			// negative-budget entries that operators might author by
-			// mistake; safer than letting max_attempts=0 reach
-			// job_deliveries and the runner's >= branch terminate
-			// delivery on attempt 1.
+		if budget < 0 {
+			// Negative budgets are rejected at intake. Keep the adapter
+			// fail-closed if corrupt legacy data bypasses that boundary.
 			budget = 5
 		}
 		out = append(out, deliverycontract.DeliveryDestination{

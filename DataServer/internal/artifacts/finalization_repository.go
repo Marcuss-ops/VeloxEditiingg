@@ -95,9 +95,9 @@ type FinalizeVerifiedCommand struct {
 // and is surfaced here so durable max_attempts survives across worker
 // restarts and runner crashes.
 //
-// MaxAttempts == 0 is allowed in the projection but the writer
-// applies schema DEFAULT 5 when materializing legacy plan rows that
-// omit retry_budget.
+// MaxAttempts == 0 is an explicit no-retry budget. Legacy plan rows that
+// omitted retry_budget are read with the schema default (5) before they
+// reach this projection.
 type DeliveryDestination = deliverycontract.DeliveryDestination
 
 // DeliveryPlanResolver returns the per-destination set the finalize

@@ -218,8 +218,8 @@ func (s *SQLiteStore) ClaimDeliveries(ctx context.Context, runnerID string, leas
 			// job_deliveries.max_attempts (set from
 			// job_delivery_plans.retry_budget at INSERT time).
 			// The DeliveryRunner overrides its runner-wide
-			// MaxAttempts on a per-delivery basis. 0 falls
-			// back to the runner default.
+			// MaxAttempts on a per-delivery basis. 0 is an
+			// explicit no-retry budget.
 			MaxAttempts:   c.maxAttempts,
 			Provider:      provider,
 			ConfigJSON:    configJSON,

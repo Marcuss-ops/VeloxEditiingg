@@ -429,7 +429,7 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 
 	for _, dest := range destinations {
 		maxAttempts := dest.MaxAttempts
-		if maxAttempts <= 0 {
+		if maxAttempts < 0 {
 			maxAttempts = 5
 		}
 		if err := insertPendingDelivery(ctx, tx, p.ArtifactID, dest.DestinationID, maxAttempts, nowStr); err != nil {

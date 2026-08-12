@@ -62,11 +62,11 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 
 	// Phase 5.5: per-delivery retry_budget override. The lease
 	// carries MaxAttempts from job_deliveries.max_attempts (set
-	// from job_delivery_plans.retry_budget at INSERT time). A 0
-	// falls back to the runner-wide default for back-compat with
-	// rows stamped before Phase 5.5.
+	// from job_delivery_plans.retry_budget at INSERT time). Zero is
+	// an explicit no-retry budget; migrated rows use the schema default
+	// rather than zero.
 	maxAttempts := r.cfg.MaxAttempts
-	if lease.MaxAttempts > 0 {
+	if lease.MaxAttempts >= 0 {
 		maxAttempts = lease.MaxAttempts
 	}
 	provider, err := r.registry.Resolve(providerName)

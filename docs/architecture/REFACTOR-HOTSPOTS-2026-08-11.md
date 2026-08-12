@@ -285,6 +285,9 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
   `check-db-access.sh`; ogni eccezione deve avere motivazione e owner.
 - [x] Rendere esplicita la semantica del retry remoto: `Retries=0` esegue
   un solo tentativo; i valori negativi non ottengono retry impliciti.
+- [x] Preservare `retry_budget=0` lungo tutta la catena delivery plan →
+  `job_deliveries.max_attempts` → lease → runner; zero ora significa un
+  tentativo iniziale senza retry.
 - [x] Misurare `sql.DB.Stats()` del Master: `WaitCount` e `WaitDuration`, oltre
   ai contatori di pool, senza label ad alta cardinalità.
 - [ ] Mantenere un solo writer per ogni aggregate e CAS esplicito per le

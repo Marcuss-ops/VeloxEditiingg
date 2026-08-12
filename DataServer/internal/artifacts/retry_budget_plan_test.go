@@ -22,7 +22,7 @@ func TestFinalizeVerified_StampsRetryBudgetFromPlan(t *testing.T) {
 		{"single destination retry_budget=3", []phase5Plan{{"primary", 1, 3, true}}, map[string]int{"primary": 3}},
 		{"two destinations retry_budget=2 and 5", []phase5Plan{{"primary", 1, 2, true}, {"secondary", 2, 5, true}}, map[string]int{"primary": 2, "secondary": 5}},
 		{"retry_budget=1", []phase5Plan{{"primary", 1, 1, true}}, map[string]int{"primary": 1}},
-		{"retry_budget=0 uses schema default", []phase5Plan{{"primary", 1, 0, true}}, map[string]int{"primary": 5}},
+		{"retry_budget=0 is preserved", []phase5Plan{{"primary", 1, 0, true}}, map[string]int{"primary": 0}},
 		{"retry_budget=10", []phase5Plan{{"primary", 1, 10, true}}, map[string]int{"primary": 10}},
 	}
 	for _, c := range cases {
@@ -106,7 +106,7 @@ func TestFinalizeVerified_SingleDestinationDefaultsToFive(t *testing.T) {
 	}
 }
 
-func TestFinalizeVerified_ZeroMaxAttemptsRevertsToDefault(t *testing.T) {
+func TestFinalizeVerified_ZeroMaxAttemptsIsExplicitNoRetry(t *testing.T) {
 	db := openPropagationDB(t)
 	seedPhase5Fixture(t, db, phase5Fixture{JobID: "J-zero", WorkerID: "w", LeaseID: "l", Revision: 1, AttemptNumber: 1, ArtifactID: "art-zero", UploadID: "up-zero"})
 	resolver := &zeroBudgetResolver{dests: []artifacts.DeliveryDestination{{DestinationID: "primary", MaxAttempts: 0}}}
@@ -115,7 +115,7 @@ func TestFinalizeVerified_ZeroMaxAttemptsRevertsToDefault(t *testing.T) {
 	if err := db.QueryRow(`SELECT max_attempts FROM job_deliveries WHERE artifact_id=? AND destination_id='primary'`, "art-zero").Scan(&got); err != nil {
 		t.Fatal(err)
 	}
-	if got != 5 {
-		t.Errorf("max_attempts=%d want 5", got)
+	if got != 0 {
+		t.Errorf("max_attempts=%d want 0", got)
 	}
 }

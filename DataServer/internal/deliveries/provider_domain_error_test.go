@@ -36,7 +36,7 @@ func (p domainErrorProvider) Deliver(context.Context, *store.Artifact, *Destinat
 	return nil, fmt.Errorf("provider delivery: %w", p.err)
 }
 
-func seedDomainErrorDelivery(t *testing.T, db *store.SQLiteStore, suffix string) store.DeliveryLease {
+func seedDomainErrorDelivery(t *testing.T, db *store.SQLiteStore, suffix string, maxAttempts ...int) store.DeliveryLease {
 	t.Helper()
 	const providerName = "domain-error-test"
 	destinationID := "domain-error-destination-" + suffix
@@ -67,17 +67,26 @@ func seedDomainErrorDelivery(t *testing.T, db *store.SQLiteStore, suffix string)
 	}); err != nil {
 		t.Fatalf("InsertArtifact: %v", err)
 	}
+	budget := 3
+	if len(maxAttempts) > 0 {
+		budget = maxAttempts[0]
+	}
 	if err := db.InsertJobDelivery(&store.JobDelivery{
 		DeliveryID:     deliveryID,
 		ArtifactID:     artifactID,
 		DestinationID:  destinationID,
 		Status:         "PENDING",
 		IdempotencyKey: deliveryID,
-		MaxAttempts:    3,
+		MaxAttempts:    budget,
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}); err != nil {
 		t.Fatalf("InsertJobDelivery: %v", err)
+	}
+	if budget == 0 {
+		if _, err := db.DB().Exec(`UPDATE job_deliveries SET max_attempts = 0 WHERE delivery_id = ?`, deliveryID); err != nil {
+			t.Fatalf("set explicit zero retry budget: %v", err)
+		}
 	}
 
 	leases, err := db.ClaimDeliveries(context.Background(), "domain-error-runner-"+suffix, 5*time.Minute, 1)
@@ -88,6 +97,46 @@ func seedDomainErrorDelivery(t *testing.T, db *store.SQLiteStore, suffix string)
 		t.Fatalf("ClaimDeliveries returned %d leases, want 1", len(leases))
 	}
 	return leases[0]
+}
+
+func TestDeliveryRunnerZeroRetryBudgetFailsAfterInitialAttempt(t *testing.T) {
+	db, err := store.NewSQLiteStore(filepath.Join(t.TempDir(), "zero-budget.sqlite"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+	defer db.Close()
+
+	lease := seedDomainErrorDelivery(t, db, "zero-budget", 0)
+	registry := NewRegistry()
+	registry.Register(domainErrorProvider{err: &domain.DomainError{
+		Code:        domain.CodeDeliveryDestinationRejected,
+		Issue:       "provider_unavailable",
+		Retryable:   true,
+		PublicText:  "provider temporarily unavailable",
+		FailureCode: domain.FailureDestinationUnavailable,
+		MetricCode:  domain.MetricDestinationUnavailable,
+		Component:   domain.ComponentDelivery,
+		Phase:       "provider",
+	}})
+	runner := NewDeliveryRunner(&RunnerConfig{
+		LeaseDuration:   time.Minute,
+		MaxAttempts:     3,
+		BackoffSchedule: []time.Duration{time.Millisecond},
+	}, registry, db, "domain-error-runner-zero-budget")
+
+	if runErr := runner.processLease(context.Background(), lease); runErr == nil {
+		t.Fatal("processLease returned nil for exhausted zero retry budget")
+	}
+	row, err := db.GetJobDelivery(context.Background(), lease.DeliveryID)
+	if err != nil {
+		t.Fatalf("GetJobDelivery: %v", err)
+	}
+	if row.Status != "FAILED" {
+		t.Fatalf("status=%q, want FAILED", row.Status)
+	}
+	if row.NextAttemptAt != "" {
+		t.Fatalf("next_attempt_at=%q, want empty", row.NextAttemptAt)
+	}
 }
 
 func TestDomainErrorPropagatesThroughDeliveryRunner(t *testing.T) {
