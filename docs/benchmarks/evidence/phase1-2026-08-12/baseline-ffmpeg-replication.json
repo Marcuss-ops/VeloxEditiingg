@@ -1,0 +1,202 @@
+{
+  "benchmark_run_id": "baseline-ffmpeg-replication-2026-08-12",
+  "fixture_id": "COPY_ONLY_CANONICAL_5M_V1",
+  "git_commit": "pre-change-ffmpeg-backend",
+  "release": "pre-change",
+  "worker_id": "benchmark-host",
+  "host_fingerprint": "same-host-as-candidate",
+  "cache_mode": "warm",
+  "concurrency": 1,
+  "runs": 3,
+  "receipts": [
+    {
+      "run_index": 0,
+      "wall_ms": 5320,
+      "artifact_sha": "1cfbfefe060a2fef707eb7eb62d587881d027e5fd1d0e61e862e158d236425a6",
+      "receipt": {
+        "version": 1,
+        "identity": {
+          "job_id": "baseline-ffmpeg-0",
+          "worker_id": "benchmark-host",
+          "benchmark_fixture_id": "COPY_ONLY_CANONICAL_5M_V1"
+        },
+        "workload": {
+          "job_type": "copy_only",
+          "duration_us": 300000000,
+          "clip_count": 24,
+          "asset_count": 25,
+          "copy_only": true,
+          "final_audio_copy": true,
+          "video_codec": "h264",
+          "audio_codec": "aac",
+          "width": 1920,
+          "height": 1080,
+          "fps": 30
+        },
+        "timing": {
+          "wall_ms": 5320
+        },
+        "process": {
+          "engine_spawn_count": 0,
+          "external_process_count": 74,
+          "ffmpeg_exec_count": 26,
+          "ffprobe_exec_count": 48,
+          "shell_exec_count": 0,
+          "curl_exec_count": 0
+        },
+        "media": {
+          "frames": 0,
+          "frames_decoded": 0,
+          "frames_composited": 0,
+          "encode_passes": 0,
+          "temp_bytes": 0,
+          "output_bytes": 5792851,
+          "duration_sec": 300,
+          "concat_mode": "ffmpeg_cli"
+        },
+        "io": {
+          "total_bytes_read": 51176467,
+          "total_bytes_written": 7639994,
+          "final_bytes_written": 5792851
+        },
+        "derived": {
+          "read_amplification": 8.8344,
+          "write_amplification": 1.3189,
+          "processes_per_clip": 3.083,
+          "accounted_ratio": 0
+        }
+      },
+      "gate_violations": []
+    },
+    {
+      "run_index": 1,
+      "wall_ms": 5470,
+      "artifact_sha": "1cfbfefe060a2fef707eb7eb62d587881d027e5fd1d0e61e862e158d236425a6",
+      "receipt": {
+        "version": 1,
+        "identity": {
+          "job_id": "baseline-ffmpeg-1",
+          "worker_id": "benchmark-host",
+          "benchmark_fixture_id": "COPY_ONLY_CANONICAL_5M_V1"
+        },
+        "workload": {
+          "job_type": "copy_only",
+          "duration_us": 300000000,
+          "clip_count": 24,
+          "asset_count": 25,
+          "copy_only": true,
+          "final_audio_copy": true,
+          "video_codec": "h264",
+          "audio_codec": "aac",
+          "width": 1920,
+          "height": 1080,
+          "fps": 30
+        },
+        "timing": {
+          "wall_ms": 5470
+        },
+        "process": {
+          "engine_spawn_count": 0,
+          "external_process_count": 74,
+          "ffmpeg_exec_count": 26,
+          "ffprobe_exec_count": 48,
+          "shell_exec_count": 0,
+          "curl_exec_count": 0
+        },
+        "media": {
+          "frames": 0,
+          "frames_decoded": 0,
+          "frames_composited": 0,
+          "encode_passes": 0,
+          "temp_bytes": 0,
+          "output_bytes": 5792851,
+          "duration_sec": 300,
+          "concat_mode": "ffmpeg_cli"
+        },
+        "io": {
+          "total_bytes_read": 56361079,
+          "total_bytes_written": 13607392,
+          "final_bytes_written": 5792851
+        },
+        "derived": {
+          "read_amplification": 9.7294,
+          "write_amplification": 2.349,
+          "processes_per_clip": 3.083,
+          "accounted_ratio": 0
+        }
+      },
+      "gate_violations": []
+    },
+    {
+      "run_index": 2,
+      "wall_ms": 5251,
+      "artifact_sha": "1cfbfefe060a2fef707eb7eb62d587881d027e5fd1d0e61e862e158d236425a6",
+      "receipt": {
+        "version": 1,
+        "identity": {
+          "job_id": "baseline-ffmpeg-2",
+          "worker_id": "benchmark-host",
+          "benchmark_fixture_id": "COPY_ONLY_CANONICAL_5M_V1"
+        },
+        "workload": {
+          "job_type": "copy_only",
+          "duration_us": 300000000,
+          "clip_count": 24,
+          "asset_count": 25,
+          "copy_only": true,
+          "final_audio_copy": true,
+          "video_codec": "h264",
+          "audio_codec": "aac",
+          "width": 1920,
+          "height": 1080,
+          "fps": 30
+        },
+        "timing": {
+          "wall_ms": 5251
+        },
+        "process": {
+          "engine_spawn_count": 0,
+          "external_process_count": 74,
+          "ffmpeg_exec_count": 26,
+          "ffprobe_exec_count": 48,
+          "shell_exec_count": 0,
+          "curl_exec_count": 0
+        },
+        "media": {
+          "frames": 0,
+          "frames_decoded": 0,
+          "frames_composited": 0,
+          "encode_passes": 0,
+          "temp_bytes": 0,
+          "output_bytes": 5792851,
+          "duration_sec": 300,
+          "concat_mode": "ffmpeg_cli"
+        },
+        "io": {
+          "total_bytes_read": 50943692,
+          "total_bytes_written": 7677534,
+          "final_bytes_written": 5792851
+        },
+        "derived": {
+          "read_amplification": 8.7942,
+          "write_amplification": 1.3253,
+          "processes_per_clip": 3.083,
+          "accounted_ratio": 0
+        }
+      },
+      "gate_violations": []
+    }
+  ],
+  "artifact_sha256": "1cfbfefe060a2fef707eb7eb62d587881d027e5fd1d0e61e862e158d236425a6",
+  "summary": {
+    "wall_ms_p50": 5320,
+    "wall_ms_p95": 5470,
+    "accounted_ratio_p50": 0,
+    "write_amplification_p50": 1.3253463622661794,
+    "processes_per_clip_p50": 3.083,
+    "gate_failures": 0,
+    "failed_runs": 0
+  },
+  "created_at": "2026-08-12T00:00:00Z",
+  "provenance": "measured ffmpeg/ffprobe replication of the pre-change copy-only backend; 3 runs through the process-group /proc sampler; temp_files=26 per run; deterministic artifact SHA 1cfbfefe\u2026"
+}
