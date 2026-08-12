@@ -218,6 +218,16 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 		flattenObservabilityMetric(metrics, key, value)
 	}
 
+	// The ProcessRunner records the canonical spawn fact (PROCESS_STARTED)
+	// when the engine subprocess actually launched — failed and cancelled
+	// renders included, because the spawn cost is part of the attempt.
+	// EngineSpawnCount is the explicit observed fact (cmd.Start() success),
+	// never a derivation from ProcessStartMs; the worker.engine.spawn event
+	// is owned by process_runner in the telemetry catalog.
+	if rec != nil && runMetrics.RenderMetrics.EngineSpawnCount > 0 {
+		rec.Emit(telemetry.EventSpec{Origin: telemetry.OriginWorker, Scope: telemetry.ScopeAttempt, Component: "worker.engine", Action: "spawn"}, telemetry.StatusOK, "", "")
+	}
+
 	segments := make([]executor.SegmentTiming, 0, len(runMetrics.RenderMetrics.Segments))
 	for _, seg := range runMetrics.RenderMetrics.Segments {
 		segments = append(segments, executor.SegmentTiming{

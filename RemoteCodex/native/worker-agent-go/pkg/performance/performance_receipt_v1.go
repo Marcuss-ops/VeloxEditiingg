@@ -109,6 +109,12 @@ type PerformanceIdentity struct {
 // WorkloadProfile describes what the attempt actually ran. Two receipts
 // with different workloads must never be compared as if they were the
 // same benchmark (5 min / 10 clips vs 10 min / 80 clips).
+//
+// The profile is built from the CompiledRenderPlanV2 via
+// performance.WorkloadFromCompiledRenderPlan — the render plan is the
+// single owner of clip count and expected duration (Fact Owner:
+// render_plan). It is NEVER reconstructed from telemetry (no timeline
+// items fallback).
 type WorkloadProfile struct {
 	JobType string `json:"job_type,omitempty"`
 
@@ -159,6 +165,11 @@ type TimingMetrics struct {
 //
 // which makes ProcessMetrics an architectural invariant, not just a
 // counter.
+//
+// EngineSpawnCount is the OBSERVED spawn fact (cmd.Start() success,
+// reported by the process runner and mirrored by the canonical
+// worker.engine.spawn event) — it is never derived from a timing value
+// like ProcessStartMs.
 type ProcessMetrics struct {
 	EngineSpawnCount int64 `json:"engine_spawn_count"`
 	EngineSpawnMs    int64 `json:"engine_spawn_ms"`

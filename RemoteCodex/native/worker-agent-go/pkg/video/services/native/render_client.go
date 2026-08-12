@@ -107,13 +107,13 @@ func (c *RenderClient) RenderWithMetrics(ctx context.Context, p *plan.RenderPlan
 
 	c.logger.Info("[NATIVE] Launching: %s --render --plan %s", c.binaryPath, planPath)
 	// SAFETY-CRITICAL subprocess lifecycle lives in engine_process.go.
-	processStartMs, processWaitMs, stderrBuf, stdoutBuf, processTelemetry, err := runEngineProcess(ctx, c.binaryPath, planPath, c.onProgress, c.legacyProgress)
+	engineStarted, processStartMs, processWaitMs, stderrBuf, stdoutBuf, processTelemetry, err := runEngineProcess(ctx, c.binaryPath, planPath, c.onProgress, c.legacyProgress)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			// Cancellation path — preserve any sidecar phases already
 			// flushed before the process stopped, while retaining the
 			// original cancellation error semantics.
-			applyProcessTelemetry(&metrics, processStartMs, processWaitMs, processTelemetry)
+			applyProcessTelemetry(&metrics, engineStarted, processStartMs, processWaitMs, processTelemetry)
 			if sidecar, sidecarErr := readEngineSidecar(p.OutputPath); sidecarErr == nil {
 				mapEngineSidecar(&sidecar, &metrics)
 			}
@@ -123,14 +123,14 @@ func (c *RenderClient) RenderWithMetrics(ctx context.Context, p *plan.RenderPlan
 		// returning the process error. Failed renders can still contain
 		// completed phases and segment timing that are valuable for retry
 		// and waste analysis; reading them is strictly best-effort.
-		applyProcessTelemetry(&metrics, processStartMs, processWaitMs, processTelemetry)
+		applyProcessTelemetry(&metrics, engineStarted, processStartMs, processWaitMs, processTelemetry)
 		if sidecar, sidecarErr := readEngineSidecar(p.OutputPath); sidecarErr == nil {
 			mapEngineSidecar(&sidecar, &metrics)
 		}
 		return metrics, fmt.Errorf("engine failed: %w (stderr=%s stdout=%s)",
 			err, strings.TrimSpace(stderrBuf.String()), strings.TrimSpace(stdoutBuf.String()))
 	}
-	applyProcessTelemetry(&metrics, processStartMs, processWaitMs, processTelemetry)
+	applyProcessTelemetry(&metrics, engineStarted, processStartMs, processWaitMs, processTelemetry)
 
 	if stderr := strings.TrimSpace(stderrBuf.String()); stderr != "" {
 		c.logger.Info("[NATIVE] stderr: %s", stderr)
@@ -153,18 +153,19 @@ func (c *RenderClient) RenderWithMetrics(ctx context.Context, p *plan.RenderPlan
 
 // applyProcessTelemetry records the subprocess lifecycle counters and
 // the engine tree's byte counters on the metrics struct. EngineSpawnCount
-// is 1 exactly when the engine process started (ProcessStartMs > 0) —
-// including failed and cancelled renders, where the spawn still happened
-// and its cost is part of the attempt. The exec counts and the I/O
-// totals come from the /proc sampler that ran while the engine process
-// was alive.
-func applyProcessTelemetry(m *pipeline.RenderMetrics, processStartMs, processWaitMs int64, telemetry ProcessTelemetry) {
+// is mapped from the EXPLICIT engineStarted fact reported by
+// runEngineProcess (cmd.Start() success) — never inferred from a timing
+// value. It stays 1 on failed and cancelled renders, where the spawn
+// still happened and its cost is part of the attempt. The exec counts
+// and the I/O totals come from the /proc sampler that ran while the
+// engine process was alive.
+func applyProcessTelemetry(m *pipeline.RenderMetrics, engineStarted bool, processStartMs, processWaitMs int64, telemetry ProcessTelemetry) {
 	if m == nil {
 		return
 	}
 	m.EngineSpawnMs = processStartMs
 	m.ChildWaitMs = processWaitMs
-	if processStartMs > 0 {
+	if engineStarted {
 		m.EngineSpawnCount = 1
 	}
 	m.ExternalProcessCount = telemetry.Counts.ExternalProcessCount

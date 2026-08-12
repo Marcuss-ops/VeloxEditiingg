@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"velox-worker-agent/internal/executor"
+	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/logger"
 	"velox-worker-agent/pkg/video/pipeline"
 	"velox-worker-agent/pkg/video/plan"
@@ -53,10 +54,11 @@ func (f *fakeCompiler) Compile(_ context.Context, jobID string, input map[string
 
 // fakeRenderClient implements pipeline.RenderClient with hard-coded behavior.
 type fakeRenderClient struct {
-	renderErr      error
-	partialMetrics pipeline.RenderMetrics
-	called         bool
-	lastPlan       *plan.RenderPlan
+	renderErr        error
+	partialMetrics   pipeline.RenderMetrics
+	engineSpawnCount int64
+	called           bool
+	lastPlan         *plan.RenderPlan
 }
 
 func (f *fakeRenderClient) Render(_ context.Context, p *plan.RenderPlan) error {
@@ -80,7 +82,8 @@ func (f *fakeRenderClient) RenderWithMetrics(_ context.Context, p *plan.RenderPl
 		return pipeline.RenderMetrics{}, err
 	}
 	return pipeline.RenderMetrics{
-		PhaseMS: map[string]float64{"render": 1},
+		EngineSpawnCount: f.engineSpawnCount,
+		PhaseMS:          map[string]float64{"render": 1},
 		Observability: map[string]interface{}{
 			"audio":    map[string]interface{}{"events": float64(2), "wall_ms": float64(12.5)},
 			"subtitle": map[string]interface{}{"events": float64(1)},
@@ -382,4 +385,98 @@ func TestNewSceneComposite_NilRunnerPanics(t *testing.T) {
 		}
 	}()
 	_ = NewSceneComposite(nil, "")
+}
+
+// ── PROCESS_STARTED (worker.engine.spawn) emission ───────────────────────────
+
+// recorderExecutionContext exposes the attempt recorder to the executor, the
+// same way the real runner does through executor.ExecutionContext. The
+// remaining interface methods are promoted from the package's existing
+// sinkExecutionContext stub.
+type recorderExecutionContext struct {
+	*sinkExecutionContext
+	rec *telemetry.EventRecorder
+}
+
+func (c *recorderExecutionContext) Recorder() *telemetry.EventRecorder { return c.rec }
+
+func countSpawnEvents(t *testing.T, rec *telemetry.EventRecorder) int {
+	t.Helper()
+	count := 0
+	for _, event := range rec.Flush() {
+		if event.Component == "worker.engine" && event.Action == "spawn" {
+			count++
+		}
+	}
+	return count
+}
+
+// TestSceneComposite_EmitsProcessStartedEventOnSpawn pins the canonical
+// PROCESS_STARTED fact: when the native client reports the explicit spawn
+// fact (EngineSpawnCount=1), the ProcessRunner boundary emits exactly one
+// worker.engine.spawn event — the event is the authoritative spawn counter,
+// never a ProcessStartMs-derived inference.
+func TestSceneComposite_EmitsProcessStartedEventOnSpawn(t *testing.T) {
+	exec, rclient := newTestSceneComposite(t, nil)
+	rclient.engineSpawnCount = 1
+	rec := telemetry.NewEventRecorder()
+
+	res, err := exec.Execute(context.Background(), &recorderExecutionContext{rec: rec}, executor.TaskSpec{
+		Version: 1, JobID: "j-spawn", ExecutorID: SceneCompositeID,
+		Payload: goodPayload("j-spawn"),
+	})
+	if err != nil {
+		t.Fatalf("Execute err = %v", err)
+	}
+	if res.Status != "succeeded" {
+		t.Fatalf("res.Status = %q, want succeeded", res.Status)
+	}
+	if got := countSpawnEvents(t, rec); got != 1 {
+		t.Fatalf("worker.engine.spawn events = %d, want exactly 1", got)
+	}
+}
+
+// TestSceneComposite_NoSpawnEventWhenEngineNeverStarted pins the inverse: a
+// run where the engine never started must NOT fabricate a PROCESS_STARTED
+// event.
+func TestSceneComposite_NoSpawnEventWhenEngineNeverStarted(t *testing.T) {
+	exec, _ := newTestSceneComposite(t, nil) // engineSpawnCount stays 0
+	rec := telemetry.NewEventRecorder()
+
+	res, err := exec.Execute(context.Background(), &recorderExecutionContext{rec: rec}, executor.TaskSpec{
+		Version: 1, JobID: "j-nospawn", ExecutorID: SceneCompositeID,
+		Payload: goodPayload("j-nospawn"),
+	})
+	if err != nil {
+		t.Fatalf("Execute err = %v", err)
+	}
+	if res.Status != "succeeded" {
+		t.Fatalf("res.Status = %q, want succeeded", res.Status)
+	}
+	if got := countSpawnEvents(t, rec); got != 0 {
+		t.Fatalf("worker.engine.spawn events = %d, want 0 (no spawn happened)", got)
+	}
+}
+
+// TestSceneComposite_SpawnEventOnFailedRender pins that a failed render still
+// records the spawn: the spawn cost is part of the attempt even when the
+// engine exits non-zero.
+func TestSceneComposite_SpawnEventOnFailedRender(t *testing.T) {
+	exec, rclient := newTestSceneComposite(t, errors.New("engine crashed"))
+	rclient.partialMetrics = pipeline.RenderMetrics{EngineSpawnCount: 1}
+	rec := telemetry.NewEventRecorder()
+
+	res, err := exec.Execute(context.Background(), &recorderExecutionContext{rec: rec}, executor.TaskSpec{
+		Version: 1, JobID: "j-spawnfail", ExecutorID: SceneCompositeID,
+		Payload: goodPayload("j-spawnfail"),
+	})
+	if err != nil {
+		t.Fatalf("Execute err = %v", err)
+	}
+	if res.Status != "failed" {
+		t.Fatalf("res.Status = %q, want failed", res.Status)
+	}
+	if got := countSpawnEvents(t, rec); got != 1 {
+		t.Fatalf("worker.engine.spawn events on failed render = %d, want exactly 1", got)
+	}
 }

@@ -19,8 +19,13 @@ import (
 // never emits a sidecar.
 
 // runEngineProcess launches velox_video_engine --render --plan and
-// returns (processStartMs, processWaitMs, stderr, stdout, telemetry,
-// err).
+// returns (engineStarted, processStartMs, processWaitMs, stderr, stdout,
+// telemetry, err).
+//
+// engineStarted is the EXPLICIT spawn fact: true exactly when cmd.Start()
+// succeeded, observed at the process-runner boundary. It is never derived
+// from a timing value (ProcessStartMs > 0) — the caller maps this fact onto
+// EngineSpawnCount and emits the canonical worker.engine.spawn event.
 //
 // err semantics:
 //   - ctx.Err() (context.Canceled or DeadlineExceeded) when the caller
@@ -39,7 +44,7 @@ import (
 // SAFETY-CRITICAL: Setpgid + Pdeathsig + 10s SIGTERM grace + SIGKILL
 // hard-kill + <-done reaping are preserved verbatim from the original
 // render_client.go. Do not modify these.
-func runEngineProcess(ctx context.Context, binaryPath, planPath string, onProgress DetailedProgressFunc, legacyProgress ProgressFunc) (processStartMs int64, processWaitMs int64, stderrBuf strings.Builder, stdoutBuf strings.Builder, telemetry ProcessTelemetry, err error) {
+func runEngineProcess(ctx context.Context, binaryPath, planPath string, onProgress DetailedProgressFunc, legacyProgress ProgressFunc) (engineStarted bool, processStartMs int64, processWaitMs int64, stderrBuf strings.Builder, stdoutBuf strings.Builder, telemetry ProcessTelemetry, err error) {
 	args := []string{"--render", "--plan", planPath}
 	if chrononBackendEnabled() {
 		args = []string{"render-plan", "--input", planPath}
@@ -61,17 +66,19 @@ func runEngineProcess(ctx context.Context, binaryPath, planPath string, onProgre
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
-		return 0, 0, stderrBuf, stdoutBuf, telemetry, fmt.Errorf("stdout pipe: %w", err)
+		return false, 0, 0, stderrBuf, stdoutBuf, telemetry, fmt.Errorf("stdout pipe: %w", err)
 	}
 	stderrPipe, err := cmd.StderrPipe()
 	if err != nil {
-		return 0, 0, stderrBuf, stdoutBuf, telemetry, fmt.Errorf("stderr pipe: %w", err)
+		return false, 0, 0, stderrBuf, stdoutBuf, telemetry, fmt.Errorf("stderr pipe: %w", err)
 	}
 
 	processStart := time.Now()
 	if err := cmd.Start(); err != nil {
-		return 0, 0, stderrBuf, stdoutBuf, telemetry, fmt.Errorf("start engine: %w", err)
+		return false, 0, 0, stderrBuf, stdoutBuf, telemetry, fmt.Errorf("start engine: %w", err)
 	}
+	// The spawn is now an observed fact — record it before any timing.
+	engineStarted = true
 	processStartMs = time.Since(processStart).Milliseconds()
 
 	// Start the external-process sampler as soon as the engine PID is
@@ -122,10 +129,10 @@ func runEngineProcess(ctx context.Context, binaryPath, planPath string, onProgre
 			}
 		}
 		<-progressDone
-		return processStartMs, 0, stderrBuf, stdoutBuf, telemetry, ctx.Err()
+		return engineStarted, processStartMs, 0, stderrBuf, stdoutBuf, telemetry, ctx.Err()
 	case execErr := <-done:
 		<-progressDone
 		processWaitMs = time.Since(waitStart).Milliseconds()
-		return processStartMs, processWaitMs, stderrBuf, stdoutBuf, telemetry, execErr
+		return engineStarted, processStartMs, processWaitMs, stderrBuf, stdoutBuf, telemetry, execErr
 	}
 }
