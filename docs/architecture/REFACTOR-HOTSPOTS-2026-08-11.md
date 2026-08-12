@@ -70,6 +70,8 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 - Profiling read model: le fasi di un attempt rifiutano scan e timestamp
   corrotti invece di trasformarli in tempi zero, preservando benchmark
   veritieri.
+- Fleet inventory read model: una riga `ansible_hosts` corrotta non viene
+  scartata lasciando una registry SSH parziale; il bootstrap riceve l'errore.
 - Worker status API: un errore del read model persistito risponde `503`
   invece di degradare a una cache in memoria potenzialmente obsoleta; il
   fallback resta limitato al solo DB vuoto durante il bootstrap.

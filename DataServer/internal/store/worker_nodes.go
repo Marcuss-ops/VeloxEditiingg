@@ -1,5 +1,7 @@
 package store
 
+import "fmt"
+
 // ============================================================
 // WorkerNodeRegistry — canonical persistent fleet inventory (Phase 9)
 // ============================================================
@@ -56,7 +58,7 @@ func (s *SQLiteStore) ListWorkerNodes() ([]WorkerNode, error) {
 		var n WorkerNode
 		var enabled int
 		if err := rows.Scan(&n.SSHHost, &n.SSHUser, &n.SecretRef, &n.Environment, &n.WorkerID, &enabled); err != nil {
-			continue
+			return nil, fmt.Errorf("scan worker node: %w", err)
 		}
 		n.Enabled = enabled == 1
 		nodes = append(nodes, n)
@@ -84,7 +86,7 @@ func (s *SQLiteStore) ListWorkerNodesWithDisabled() ([]WorkerNode, error) {
 		var n WorkerNode
 		var enabled int
 		if err := rows.Scan(&n.SSHHost, &n.SSHUser, &n.SecretRef, &n.Environment, &n.WorkerID, &enabled); err != nil {
-			continue
+			return nil, fmt.Errorf("scan worker node: %w", err)
 		}
 		n.Enabled = enabled == 1
 		nodes = append(nodes, n)
