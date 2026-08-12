@@ -37,29 +37,44 @@ func AssembleFromSnapshot(snapshot *attempttelemetry.AttemptSnapshot) *Performan
 		// deliberately not mapped into the receipt identity (it rides the
 		// attempt metadata on the master side).
 	}
-	raw := snapshot.RawMetrics()
+	raw := snapshot.RawEnvelope()
 	wall := snapshot.WallMs
 	if wall <= 0 {
-		wall = int64(raw.WallClockSeconds * 1000)
+		wall = int64(raw.Resources.WallClockSeconds * 1000)
 	}
 	receipt.Timing.WallMs = wall
-	receipt.Process = ProcessMetrics{EngineSpawnCount: snapshot.Process.EngineSpawnCount}
+	receipt.Process = ProcessMetrics{
+		EngineSpawnCount:         raw.Process.EngineSpawnCount,
+		EngineExternalSpawnCount: raw.Process.EngineExternalSpawnCount,
+		EngineFfmpegSpawnCount:   raw.Process.EngineFfmpegSpawnCount,
+		EngineFfprobeSpawnCount:  raw.Process.EngineFfprobeSpawnCount,
+		EngineShellSpawnCount:    raw.Process.EngineShellSpawnCount,
+		EngineCurlSpawnCount:     raw.Process.EngineCurlSpawnCount,
+	}
 	receipt.CPU = CPUMetrics{
-		WallMs:     wall,
-		CPUTotalMs: raw.CpuTimeMs,
+		WallMs:            wall,
+		CPUTotalMs:        raw.Resources.CpuTimeMs,
+		EngineCPUUserMs:   raw.Process.EngineCPUUserMs,
+		EngineCPUSystemMs: raw.Process.EngineCPUSystemMs,
+	}
+	receipt.Scheduling = SchedulingMetrics{
+		VoluntaryContextSwitches:   raw.Process.EngineVoluntaryContextSwitches,
+		InvoluntaryContextSwitches: raw.Process.EngineInvoluntaryContextSwitches,
+		MinorPageFaults:            raw.Process.EngineMinorPageFaults,
+		MajorPageFaults:            raw.Process.EngineMajorPageFaults,
 	}
 	receipt.IO = IOMetrics{
-		TotalBytesRead:    raw.DiskReadBytes,
-		TotalBytesWritten: raw.DiskWriteBytes,
-		FinalBytesWritten: raw.OutputBytes,
+		TotalBytesRead:    raw.Resources.DiskReadBytes,
+		TotalBytesWritten: raw.Resources.DiskWriteBytes,
+		FinalBytesWritten: raw.Resources.OutputBytes,
 	}
-	receipt.Memory = MemoryMetrics{PeakRSSBytes: raw.PeakRssBytes}
+	receipt.Memory = MemoryMetrics{PeakRSSBytes: raw.Resources.PeakRssBytes}
 	// Media facts are projected from the canonical journal: output frames
 	// and bytes observed on media-producer events. Fine-grained decode/
 	// encode breakdowns are engine-sidecar-owned and not in the snapshot.
 	receipt.Media = MediaMetrics{
-		Frames:      snapshot.Media.FramesOut,
-		OutputBytes: snapshot.Media.BytesOut,
+		Frames:      raw.Media.FramesOut,
+		OutputBytes: raw.Media.BytesOut,
 	}
 	receipt.Phases = phasesFromSnapshot(snapshot.Events)
 	// Derived KPIs: one call, one definition — the single
@@ -69,10 +84,10 @@ func AssembleFromSnapshot(snapshot *attempttelemetry.AttemptSnapshot) *Performan
 	derivedRaw := RawMetrics{
 		WallMs:            wall,
 		Phases:            receipt.Phases,
-		CPUWallMS:         raw.CpuTimeMs,
-		TotalBytesRead:    raw.DiskReadBytes,
-		TotalBytesWritten: raw.DiskWriteBytes,
-		OutputBytes:       raw.OutputBytes,
+		CPUWallMS:         raw.Resources.CpuTimeMs,
+		TotalBytesRead:    raw.Resources.DiskReadBytes,
+		TotalBytesWritten: raw.Resources.DiskWriteBytes,
+		OutputBytes:       raw.Resources.OutputBytes,
 	}
 	receipt.Derived = Derive(derivedRaw)
 	// CPUWallRatio uses the same Deriver output as the receipt's derived

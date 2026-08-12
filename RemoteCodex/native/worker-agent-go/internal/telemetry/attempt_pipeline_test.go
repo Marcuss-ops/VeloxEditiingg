@@ -46,14 +46,15 @@ func TestAttemptPipeline_CollectAndPublishRoundTrip(t *testing.T) {
 	if snapshot.Identity.AttemptID != "attempt-1" {
 		t.Fatalf("identity = %+v", snapshot.Identity)
 	}
-	if snapshot.Process.EngineSpawnCount != 2 {
-		t.Fatalf("process = %+v, want 2 spawns", snapshot.Process)
+	raw := snapshot.RawMetrics()
+	if raw.Process.EngineSpawnCount != 2 {
+		t.Fatalf("process = %+v, want 2 spawns", raw.Process)
 	}
-	if snapshot.Media.FramesIn != 10 || snapshot.Media.FramesOut != 9 {
-		t.Fatalf("media = %+v, want frames in:10 out:9", snapshot.Media)
+	if raw.Media.FramesIn != 10 || raw.Media.FramesOut != 9 {
+		t.Fatalf("media = %+v, want frames in:10 out:9", raw.Media)
 	}
-	if snapshot.Cache.Hits != 3 || snapshot.Cache.Misses != 1 || snapshot.Cache.Evictions != 1 {
-		t.Fatalf("cache = %+v, want hits:3 misses:1 evictions:1 (baseline diff)", snapshot.Cache)
+	if raw.Cache.Hits != 3 || raw.Cache.Misses != 1 || raw.Cache.Evictions != 1 {
+		t.Fatalf("cache = %+v, want hits:3 misses:1 evictions:1 (baseline diff)", raw.Cache)
 	}
 	if len(snapshot.Events) != 3 {
 		t.Fatalf("events=%d, want 3 (journal snapshot is non-destructive)", len(snapshot.Events))
@@ -61,6 +62,23 @@ func TestAttemptPipeline_CollectAndPublishRoundTrip(t *testing.T) {
 	// The journal must remain intact: the recorder still owns all events.
 	if got := len(rec.Snapshot()); got != 3 {
 		t.Fatalf("recorder events after run = %d, want 3", got)
+	}
+}
+
+func TestAttemptPipelineProjectsDroppedEventCount(t *testing.T) {
+	pipeline := NewAttemptPipeline()
+	rec := NewEventRecorder()
+	for i := 0; i < MaxAttemptEvents+1; i++ {
+		rec.Emit(EventSpec{Origin: OriginFFmpeg, Scope: ScopeSegment, Component: "ffmpeg", Action: "progress"}, StatusOK, "", "")
+	}
+	pipeline.BindRecorder(rec)
+	capture := &captureSink{}
+	pipeline.AddSink(capture)
+	if err := pipeline.Run(context.Background()); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if capture.snapshot.DroppedEvents != 1 {
+		t.Fatalf("snapshot dropped_events=%d, want 1", capture.snapshot.DroppedEvents)
 	}
 }
 
@@ -112,8 +130,8 @@ func TestAttemptTelemetrySession_DrivesPipeline(t *testing.T) {
 	if capture.snapshot.Resources.CpuTimeMs != result.Metrics.CpuTimeMs {
 		t.Fatalf("snapshot resources %+v != session result %+v", capture.snapshot.Resources, result.Metrics)
 	}
-	if capture.snapshot.Process.EngineSpawnCount != 1 {
-		t.Fatalf("process spawns=%d, want 1", capture.snapshot.Process.EngineSpawnCount)
+	if raw := capture.snapshot.RawMetrics(); raw.Process.EngineSpawnCount != 1 {
+		t.Fatalf("process spawns=%d, want 1", raw.Process.EngineSpawnCount)
 	}
 	// The resource collector stamped the attempt window from the session.
 	if capture.snapshot.StartedAt.IsZero() || capture.snapshot.CompletedAt.IsZero() {

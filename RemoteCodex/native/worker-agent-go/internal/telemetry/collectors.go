@@ -13,6 +13,7 @@ package telemetry
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"sync"
 	"time"
@@ -34,6 +35,45 @@ type ProcessFacts struct {
 	// EngineSpawnCount is the number of canonical worker.engine.spawn
 	// events recorded during the attempt.
 	EngineSpawnCount int64 `json:"engine_spawn_count"`
+
+	// Engine-declared process facts projected from the canonical
+	// worker.engine.usage event (recorded by the executor from the C++
+	// sidecar process_counters block): the engine's own external spawn
+	// ledger, its getrusage CPU, context switches and page faults. These
+	// are DISJOINT from the /proc sampler's process-tree view. Zero when
+	// the engine predates the block or no native render occurred.
+	EngineExternalSpawnCount int64 `json:"engine_external_spawn_count"`
+	EngineFfmpegSpawnCount   int64 `json:"engine_ffmpeg_spawn_count"`
+	EngineFfprobeSpawnCount  int64 `json:"engine_ffprobe_spawn_count"`
+	EngineShellSpawnCount    int64 `json:"engine_shell_spawn_count"`
+	EngineCurlSpawnCount     int64 `json:"engine_curl_spawn_count"`
+
+	EngineCPUUserMs                  int64 `json:"engine_cpu_user_ms"`
+	EngineCPUSystemMs                int64 `json:"engine_cpu_system_ms"`
+	EngineVoluntaryContextSwitches   int64 `json:"engine_voluntary_context_switches"`
+	EngineInvoluntaryContextSwitches int64 `json:"engine_involuntary_context_switches"`
+	EngineMinorPageFaults            int64 `json:"engine_minor_page_faults"`
+	EngineMajorPageFaults            int64 `json:"engine_major_page_faults"`
+}
+
+// EngineUsageFacts is the metadata payload of the canonical
+// worker.engine.usage journal event: the engine-declared process facts
+// (C++ sidecar process_counters block) carried from the executor to the
+// ProcessCollector. It is the single typed shape shared by the producer
+// (executor marshal) and the consumer (collector unmarshal) so the
+// wire contract can never drift.
+type EngineUsageFacts struct {
+	ExternalSpawnCount         int64 `json:"external_spawn_count"`
+	FfmpegSpawnCount           int64 `json:"ffmpeg_spawn_count"`
+	FfprobeSpawnCount          int64 `json:"ffprobe_spawn_count"`
+	ShellSpawnCount            int64 `json:"shell_spawn_count"`
+	CurlSpawnCount             int64 `json:"curl_spawn_count"`
+	CPUUserMs                  int64 `json:"cpu_user_ms"`
+	CPUSystemMs                int64 `json:"cpu_system_ms"`
+	VoluntaryContextSwitches   int64 `json:"voluntary_context_switches"`
+	InvoluntaryContextSwitches int64 `json:"involuntary_context_switches"`
+	MinorPageFaults            int64 `json:"minor_page_faults"`
+	MajorPageFaults            int64 `json:"major_page_faults"`
 }
 
 // MediaFacts are the observed media-backend byte/frame totals projected
@@ -65,6 +105,22 @@ type CacheFactsSource interface {
 	CacheFacts() CacheFacts
 }
 
+// CompleteRawEnvelope is the complete typed RAW fact envelope for one
+// attempt. It deliberately groups all fact owners that used to be exposed
+// as separate snapshot sections: resource/process/media/cache. Consumers
+// must read this envelope rather than joining producer-specific fields
+// themselves. Derived ratios are not part of the envelope.
+//
+// The JSON shape intentionally mirrors the historical AttemptSnapshot
+// sections. This makes the envelope safe for benchmark/diagnostic adapters
+// while allowing the in-memory consumer API to converge on one raw input.
+type CompleteRawEnvelope struct {
+	Resources RawExecutionMetrics `json:"resources"`
+	Process   ProcessFacts        `json:"process"`
+	Media     MediaFacts          `json:"media"`
+	Cache     CacheFacts          `json:"cache"`
+}
+
 // AttemptSnapshot is the canonical per-attempt bundle of RAW observed
 // facts. It is the single input of every sink: Prometheus, receipt,
 // benchmark and diagnostic projections all derive from this snapshot and
@@ -75,29 +131,79 @@ type AttemptSnapshot struct {
 	// Resources is the raw typed fact envelope observed by the
 	// AttemptTelemetrySession (Fact Owner: attempt_telemetry). The JSON
 	// name remains "resources" for benchmark/diagnostic compatibility;
-	// RawMetrics() is the explicit projection API used by sinks.
+	// RawMetrics() is the explicit complete-envelope projection API used by
+	// sinks.
 	Resources RawExecutionMetrics `json:"resources"`
 	Process   ProcessFacts        `json:"process"`
 	Media     MediaFacts          `json:"media"`
 	Cache     CacheFacts          `json:"cache"`
 	// Events is the attempt's canonical journal at Stop time (append-only
 	// snapshot; the recorder itself is never drained).
-	Events      []RecordedPhase `json:"events,omitempty"`
-	StartedAt   time.Time       `json:"started_at"`
-	CompletedAt time.Time       `json:"completed_at"`
-	WallMs      int64           `json:"wall_ms"`
+	Events        []RecordedPhase `json:"events,omitempty"`
+	DroppedEvents int64           `json:"dropped_events,omitempty"`
+	StartedAt     time.Time       `json:"started_at"`
+	CompletedAt   time.Time       `json:"completed_at"`
+	WallMs        int64           `json:"wall_ms"`
+
+	// raw is the canonical in-memory envelope. The exported top-level
+	// sections above remain compatibility projections for existing JSON/wire
+	// consumers and legacy fixtures; producers and projections use raw via
+	// RawEnvelope/applyRawEnvelope.
+	raw      CompleteRawEnvelope
+	rawValid bool
 }
 
-// RawMetrics returns the snapshot's canonical raw execution envelope
-// portion (resources plus cache counters). Process and media facts remain
-// separate typed owner sections because their wire fields have different
-// provenance. It is a value copy: projections cannot mutate the journal
-// snapshot or producer-owned state.
-func (s *AttemptSnapshot) RawMetrics() RawExecutionMetrics {
+// RawEnvelope returns the complete typed raw fact envelope. It is a value
+// copy: projections cannot mutate the journal snapshot or producer-owned
+// state. The legacy snapshot fields remain the wire/JSON compatibility view
+// and are populated from the same envelope by collectors.
+func (s *AttemptSnapshot) RawEnvelope() CompleteRawEnvelope {
 	if s == nil {
-		return RawExecutionMetrics{}
+		return CompleteRawEnvelope{}
 	}
-	return s.Resources
+	if s.rawValid {
+		return s.raw
+	}
+	// Seed the canonical envelope from the historical fields for callers
+	// that construct snapshots from the pre-envelope JSON/wire shape.
+	return CompleteRawEnvelope{
+		Resources: s.Resources,
+		Process:   s.Process,
+		Media:     s.Media,
+		Cache:     s.Cache,
+	}
+}
+
+// applyRawEnvelope updates the historical snapshot sections from the single
+// typed envelope. Keeping this adapter local to telemetry preserves the
+// existing JSON/wire shape without maintaining a second producer-owned
+// representation.
+func (s *AttemptSnapshot) applyRawEnvelope(raw CompleteRawEnvelope) {
+	if s == nil {
+		return
+	}
+	s.raw = raw
+	s.rawValid = true
+	s.Resources = raw.Resources
+	s.Process = raw.Process
+	s.Media = raw.Media
+	s.Cache = raw.Cache
+}
+
+// RawMetrics returns the complete typed raw envelope. The method name is
+// retained because it is the established snapshot projection API; callers
+// that need only the historical resource section should use
+// RawResourceMetrics instead.
+func (s *AttemptSnapshot) RawMetrics() CompleteRawEnvelope {
+	return s.RawEnvelope()
+}
+
+// RawResourceMetrics is the compatibility adapter for callers that only
+// understand the pre-envelope resource-only projection.
+//
+// Deprecated: use RawMetrics or RawEnvelope.
+func (s *AttemptSnapshot) RawResourceMetrics() RawExecutionMetrics {
+	return s.RawEnvelope().Resources
 }
 
 // RenderDurationMS returns the observed runner execute span from the
@@ -212,7 +318,9 @@ func (c *AttemptResourceCollector) Collect(_ context.Context, snapshot *AttemptS
 		return
 	}
 	result := c.Session.Result()
-	snapshot.Resources = result.Metrics
+	raw := snapshot.RawEnvelope()
+	raw.Resources = result.Metrics
+	snapshot.applyRawEnvelope(raw)
 	if snapshot.StartedAt.IsZero() {
 		snapshot.StartedAt = result.StartedAt
 	}
@@ -241,11 +349,63 @@ type ProcessCollector struct{}
 func (c *ProcessCollector) Name() string { return "process" }
 
 func (c *ProcessCollector) Collect(_ context.Context, snapshot *AttemptSnapshot) {
+	raw := snapshot.RawEnvelope()
+	// ProcessCollector owns this section; repeated collection is a fresh
+	// projection, not an accumulation of the previous projection.
+	raw.Process = ProcessFacts{}
 	for _, event := range snapshot.Events {
 		if event.Component == "worker.engine" && event.Action == "spawn" {
-			snapshot.Process.EngineSpawnCount++
+			raw.Process.EngineSpawnCount++
+		}
+		if event.Component == "worker.engine" && event.Action == "usage" {
+			projectEngineUsage(event.MetadataJSON, &raw.Process)
 		}
 	}
+	snapshot.applyRawEnvelope(raw)
+}
+
+// EngineUsageMetadataJSON marshals EngineUsageFacts into the canonical
+// worker.engine.usage metadata payload. It lives here (next to the
+// consumer) so the executor producer never hand-builds the wire JSON.
+func EngineUsageMetadataJSON(usage EngineUsageFacts) string {
+	if usage.ExternalSpawnCount == 0 && usage.FfmpegSpawnCount == 0 &&
+		usage.FfprobeSpawnCount == 0 && usage.ShellSpawnCount == 0 &&
+		usage.CurlSpawnCount == 0 && usage.CPUUserMs == 0 &&
+		usage.CPUSystemMs == 0 && usage.VoluntaryContextSwitches == 0 &&
+		usage.InvoluntaryContextSwitches == 0 && usage.MinorPageFaults == 0 &&
+		usage.MajorPageFaults == 0 {
+		return ""
+	}
+	b, err := json.Marshal(usage)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// projectEngineUsage parses the canonical worker.engine.usage metadata
+// payload into ProcessFacts. A malformed payload is skipped (fail-open:
+// the journal still carries the raw event; the receipt keeps zero facts)
+// so one bad producer can never corrupt an attempt's process facts.
+func projectEngineUsage(metadataJSON string, facts *ProcessFacts) {
+	if facts == nil || metadataJSON == "" {
+		return
+	}
+	var usage EngineUsageFacts
+	if err := json.Unmarshal([]byte(metadataJSON), &usage); err != nil {
+		return
+	}
+	facts.EngineExternalSpawnCount = usage.ExternalSpawnCount
+	facts.EngineFfmpegSpawnCount = usage.FfmpegSpawnCount
+	facts.EngineFfprobeSpawnCount = usage.FfprobeSpawnCount
+	facts.EngineShellSpawnCount = usage.ShellSpawnCount
+	facts.EngineCurlSpawnCount = usage.CurlSpawnCount
+	facts.EngineCPUUserMs = usage.CPUUserMs
+	facts.EngineCPUSystemMs = usage.CPUSystemMs
+	facts.EngineVoluntaryContextSwitches = usage.VoluntaryContextSwitches
+	facts.EngineInvoluntaryContextSwitches = usage.InvoluntaryContextSwitches
+	facts.EngineMinorPageFaults = usage.MinorPageFaults
+	facts.EngineMajorPageFaults = usage.MajorPageFaults
 }
 
 // ── MediaCollector ────────────────────────────────────────────────────
@@ -257,15 +417,19 @@ type MediaCollector struct{}
 func (c *MediaCollector) Name() string { return "media" }
 
 func (c *MediaCollector) Collect(_ context.Context, snapshot *AttemptSnapshot) {
+	raw := snapshot.RawEnvelope()
+	// MediaCollector owns this section; repeated collection is idempotent.
+	raw.Media = MediaFacts{}
 	for _, event := range snapshot.Events {
 		if !isMediaProducer(event) {
 			continue
 		}
-		snapshot.Media.BytesIn += event.BytesIn
-		snapshot.Media.BytesOut += event.BytesOut
-		snapshot.Media.FramesIn += event.FramesIn
-		snapshot.Media.FramesOut += event.FramesOut
+		raw.Media.BytesIn += event.BytesIn
+		raw.Media.BytesOut += event.BytesOut
+		raw.Media.FramesIn += event.FramesIn
+		raw.Media.FramesOut += event.FramesOut
 	}
+	snapshot.applyRawEnvelope(raw)
 }
 
 // isMediaProducer classifies an event as media-backend-owned. The engine
@@ -304,11 +468,12 @@ func (c *CacheCollector) Collect(_ context.Context, snapshot *AttemptSnapshot) {
 	if c.Source == nil {
 		return
 	}
+	raw := snapshot.RawEnvelope()
 	current := c.Source.CacheFacts()
 	if !c.hasBaseline {
 		c.baseline = CacheFacts{}
 	}
-	snapshot.Cache = CacheFacts{
+	raw.Cache = CacheFacts{
 		Hits:        positiveDelta(current.Hits - c.baseline.Hits),
 		Misses:      positiveDelta(current.Misses - c.baseline.Misses),
 		Evictions:   positiveDelta(current.Evictions - c.baseline.Evictions),
@@ -320,10 +485,11 @@ func (c *CacheCollector) Collect(_ context.Context, snapshot *AttemptSnapshot) {
 		BytesUsed: current.BytesUsed,
 		Entries:   current.Entries,
 	}
-	// The raw typed envelope is the sink input. Keep the structured Cache
-	// view for existing diagnostic JSON, but stamp the same owner facts into
-	// the canonical raw fields so every projection sees one value.
-	snapshot.Resources.CacheLookups = snapshot.Cache.Hits + snapshot.Cache.Misses
-	snapshot.Resources.AssetCacheHitCount = snapshot.Cache.Hits
-	snapshot.Resources.AssetCacheMissCount = snapshot.Cache.Misses
+	// Cache counters also remain in the resource compatibility view because
+	// that is part of the historical JSON/wire contract. The envelope is the
+	// owner-facing source; this is only a compatibility projection.
+	raw.Resources.CacheLookups = raw.Cache.Hits + raw.Cache.Misses
+	raw.Resources.AssetCacheHitCount = raw.Cache.Hits
+	raw.Resources.AssetCacheMissCount = raw.Cache.Misses
+	snapshot.applyRawEnvelope(raw)
 }

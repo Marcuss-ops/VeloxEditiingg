@@ -99,19 +99,18 @@ func (s *PrometheusSink) Publish(_ context.Context, snapshot *AttemptSnapshot) e
 	if s.Metrics == nil || snapshot == nil {
 		return nil
 	}
-	raw := snapshot.RawMetrics()
-	// Cache counters come from the raw typed envelope stamped by
-	// CacheCollector. The structured CacheFacts view remains available for
-	// point-in-time gauges and diagnostic compatibility, but it is not the
-	// counter source for this projection.
-	if raw.AssetCacheHitCount > 0 {
-		s.Metrics.RecordCacheRequestN("hit", raw.AssetCacheHitCount)
+	raw := snapshot.RawEnvelope()
+	// Cache counters come from CacheFacts in the unified raw envelope. The
+	// resource fields carrying the same values are compatibility projections
+	// only and are never a second source for this sink.
+	if raw.Cache.Hits > 0 {
+		s.Metrics.RecordCacheRequestN("hit", raw.Cache.Hits)
 	}
-	if raw.AssetCacheMissCount > 0 {
-		s.Metrics.RecordCacheRequestN("miss", raw.AssetCacheMissCount)
+	if raw.Cache.Misses > 0 {
+		s.Metrics.RecordCacheRequestN("miss", raw.Cache.Misses)
 	}
-	if snapshot.Cache.Evictions > 0 {
-		s.Metrics.RecordCacheEvictions("pressure", int(snapshot.Cache.Evictions))
+	if raw.Cache.Evictions > 0 {
+		s.Metrics.RecordCacheEvictions("pressure", int(raw.Cache.Evictions))
 	}
 	// Legacy cache producers now emit raw journal events. Project those
 	// observations here so verification, invalid-entry eviction, and
@@ -134,7 +133,7 @@ func (s *PrometheusSink) Publish(_ context.Context, snapshot *AttemptSnapshot) e
 	// Point-in-time gauges are idempotent: later attempts simply overwrite.
 	// Corruptions have no dedicated family yet and remain typed snapshot
 	// facts for the receipt/diagnostic projections.
-	s.Metrics.SetCacheSize(int(snapshot.Cache.Entries), snapshot.Cache.BytesUsed)
+	s.Metrics.SetCacheSize(int(raw.Cache.Entries), raw.Cache.BytesUsed)
 	if renderMS, ok := snapshot.RenderDurationMS(); ok {
 		s.Metrics.RecordRender(time.Duration(renderMS) * time.Millisecond)
 	}
@@ -176,7 +175,7 @@ type ReceiptSink struct {
 func (s *ReceiptSink) Name() string { return "receipt" }
 
 func (s *ReceiptSink) Publish(_ context.Context, snapshot *AttemptSnapshot) error {
-	if s.Build == nil {
+	if s.Build == nil || snapshot == nil {
 		return nil
 	}
 	data, err := s.Build(snapshot)
@@ -202,6 +201,10 @@ type BenchmarkSink struct {
 func (s *BenchmarkSink) Name() string { return "benchmark" }
 
 func (s *BenchmarkSink) Publish(_ context.Context, snapshot *AttemptSnapshot) error {
+	if snapshot == nil {
+		return nil
+	}
+	raw := snapshot.RawEnvelope()
 	view := struct {
 		Identity    AttemptIdentity     `json:"identity"`
 		WallMs      int64               `json:"wall_ms"`
@@ -216,10 +219,10 @@ func (s *BenchmarkSink) Publish(_ context.Context, snapshot *AttemptSnapshot) er
 		WallMs:      snapshot.WallMs,
 		StartedAt:   snapshot.StartedAt.UTC().Format(time.RFC3339),
 		CompletedAt: snapshot.CompletedAt.UTC().Format(time.RFC3339),
-		Resources:   snapshot.Resources,
-		Process:     snapshot.Process,
-		Media:       snapshot.Media,
-		Cache:       snapshot.Cache,
+		Resources:   raw.Resources,
+		Process:     raw.Process,
+		Media:       raw.Media,
+		Cache:       raw.Cache,
 	}
 	data, err := json.MarshalIndent(view, "", "  ")
 	if err != nil {
@@ -244,6 +247,9 @@ type DiagnosticJSONSink struct {
 func (s *DiagnosticJSONSink) Name() string { return "diagnostic_json" }
 
 func (s *DiagnosticJSONSink) Publish(_ context.Context, snapshot *AttemptSnapshot) error {
+	if snapshot == nil {
+		return nil
+	}
 	data, err := json.MarshalIndent(snapshot, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal diagnostic: %w", err)

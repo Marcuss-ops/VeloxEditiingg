@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 )
@@ -62,6 +63,47 @@ func TestAttemptResourceCollector_CopiesSessionResult(t *testing.T) {
 	}
 }
 
+func TestCompleteRawEnvelope_PreservesJSONSectionsAndTypedOwners(t *testing.T) {
+	snapshot := &AttemptSnapshot{
+		Resources: RawExecutionMetrics{CpuTimeMs: 12},
+		Process:   ProcessFacts{EngineSpawnCount: 1},
+		Media:     MediaFacts{FramesOut: 24},
+		Cache:     CacheFacts{Hits: 3},
+	}
+	envelope := snapshot.RawMetrics()
+	if envelope.Resources.CpuTimeMs != 12 || envelope.Process.EngineSpawnCount != 1 ||
+		envelope.Media.FramesOut != 24 || envelope.Cache.Hits != 3 {
+		t.Fatalf("complete raw envelope = %+v", envelope)
+	}
+	data, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatalf("marshal complete raw envelope: %v", err)
+	}
+	for _, key := range []string{`"resources"`, `"process"`, `"media"`, `"cache"`} {
+		if !containsJSONKey(data, key) {
+			t.Fatalf("complete raw envelope missing %s: %s", key, data)
+		}
+	}
+	// The historical snapshot JSON remains unchanged: the four sections are
+	// still top-level wire fields, not a new nested "raw" field.
+	snapshotJSON, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatalf("marshal snapshot: %v", err)
+	}
+	if containsJSONKey(snapshotJSON, `"raw"`) {
+		t.Fatalf("snapshot acquired an incompatible raw wire field: %s", snapshotJSON)
+	}
+}
+
+func containsJSONKey(data []byte, key string) bool {
+	for i := 0; i+len(key) <= len(data); i++ {
+		if string(data[i:i+len(key)]) == key {
+			return true
+		}
+	}
+	return false
+}
+
 func TestProcessCollector_CountsSpawnEventsOnly(t *testing.T) {
 	collector := &ProcessCollector{}
 	snapshot := &AttemptSnapshot{Events: []RecordedPhase{
@@ -73,8 +115,46 @@ func TestProcessCollector_CountsSpawnEventsOnly(t *testing.T) {
 		{Component: "downloader", Action: "fetch"},
 	}}
 	collector.Collect(context.Background(), snapshot)
+	collector.Collect(context.Background(), snapshot)
 	if snapshot.Process.EngineSpawnCount != 2 {
-		t.Fatalf("engine_spawn_count=%d, want 2", snapshot.Process.EngineSpawnCount)
+		t.Fatalf("engine_spawn_count=%d, want 2 after repeated collection", snapshot.Process.EngineSpawnCount)
+	}
+	// The usage event's absent metadata must not disturb the process facts.
+	if snapshot.Process.EngineExternalSpawnCount != 0 {
+		t.Fatalf("engine_external_spawn_count=%d, want 0", snapshot.Process.EngineExternalSpawnCount)
+	}
+}
+
+func TestProcessCollector_ProjectsEngineUsageEvent(t *testing.T) {
+	collector := &ProcessCollector{}
+	snapshot := &AttemptSnapshot{Events: []RecordedPhase{
+		{Component: "worker.engine", Action: "usage", MetadataJSON: EngineUsageMetadataJSON(EngineUsageFacts{
+			ExternalSpawnCount:         2,
+			FfmpegSpawnCount:           1,
+			FfprobeSpawnCount:          1,
+			CPUUserMs:                  1420,
+			CPUSystemMs:                310,
+			VoluntaryContextSwitches:   841,
+			InvoluntaryContextSwitches: 23,
+			MinorPageFaults:            4021,
+			MajorPageFaults:            0,
+		})},
+		// A malformed usage payload is skipped without corrupting facts.
+		{Component: "worker.engine", Action: "usage", MetadataJSON: "{not json"},
+	}}
+	collector.Collect(context.Background(), snapshot)
+	p := snapshot.Process
+	if p.EngineExternalSpawnCount != 2 || p.EngineFfmpegSpawnCount != 1 || p.EngineFfprobeSpawnCount != 1 {
+		t.Fatalf("engine spawn ledger = %+v", p)
+	}
+	if p.EngineCPUUserMs != 1420 || p.EngineCPUSystemMs != 310 ||
+		p.EngineVoluntaryContextSwitches != 841 || p.EngineInvoluntaryContextSwitches != 23 ||
+		p.EngineMinorPageFaults != 4021 || p.EngineMajorPageFaults != 0 {
+		t.Fatalf("engine usage facts = %+v", p)
+	}
+	// All-zero usage facts produce no metadata payload at all.
+	if got := EngineUsageMetadataJSON(EngineUsageFacts{}); got != "" {
+		t.Fatalf("all-zero usage marshaled to %q, want empty", got)
 	}
 }
 
@@ -86,6 +166,7 @@ func TestMediaCollector_SumsMediaProducerEvents(t *testing.T) {
 		// Non-media producers must not leak into media facts.
 		{Component: "downloader", Action: "fetch", BytesIn: 999, BytesOut: 999, FramesOut: 999},
 	}}
+	collector.Collect(context.Background(), snapshot)
 	collector.Collect(context.Background(), snapshot)
 	if snapshot.Media.BytesIn != 15 || snapshot.Media.BytesOut != 20 {
 		t.Fatalf("media bytes = in:%d out:%d, want in:15 out:20", snapshot.Media.BytesIn, snapshot.Media.BytesOut)
@@ -113,8 +194,12 @@ func TestCacheCollector_DiffsAgainstStartBaseline(t *testing.T) {
 	if snapshot.Cache.BytesUsed != 150 || snapshot.Cache.Entries != 7 {
 		t.Fatalf("cache gauges = bytes:%d entries:%d, want bytes:150 entries:7", snapshot.Cache.BytesUsed, snapshot.Cache.Entries)
 	}
-	if raw := snapshot.RawMetrics(); raw.CacheLookups != 6 || raw.AssetCacheHitCount != 4 || raw.AssetCacheMissCount != 2 {
+	raw := snapshot.RawMetrics()
+	if raw.Resources.CacheLookups != 6 || raw.Resources.AssetCacheHitCount != 4 || raw.Resources.AssetCacheMissCount != 2 {
 		t.Fatalf("raw cache facts = %+v, want lookups:6 hits:4 misses:2", raw)
+	}
+	if raw.Cache.Hits != 4 || raw.Cache.Misses != 2 || raw.Cache.Evictions != 1 {
+		t.Fatalf("complete raw cache envelope = %+v", raw.Cache)
 	}
 }
 
