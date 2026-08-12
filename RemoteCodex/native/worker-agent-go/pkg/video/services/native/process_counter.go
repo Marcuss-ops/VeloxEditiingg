@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -34,6 +35,29 @@ type ProcessCounts struct {
 	ShellExecCount       int64
 	CurlExecCount        int64
 	OtherExecCount       int64
+}
+
+// TreeIO aggregates the engine process tree's byte counters as read
+// from /proc/<pid>/io. BytesRead/BytesWritten are the logical rchar/
+// wchar counters (every byte moved through read()/write(), including
+// page-cache hits) — the right basis for I/O amplification math.
+// StorageBytesRead/StorageBytesWritten are the block-layer read_bytes/
+// write_bytes counters (actual storage I/O after the page cache). Both
+// are cumulative over each process's lifetime; the sampler keeps the
+// per-PID maximum and sums across the tree.
+type TreeIO struct {
+	BytesRead           int64
+	BytesWritten        int64
+	StorageBytesRead    int64
+	StorageBytesWritten int64
+}
+
+// ProcessTelemetry bundles everything the sampler observes while the
+// engine runs: the external spawn counts by kind and the tree's byte
+// counters (engine + descendants).
+type ProcessTelemetry struct {
+	Counts ProcessCounts
+	IO     TreeIO
 }
 
 // ProcessKind classifies an external process by its /proc comm name.
@@ -144,26 +168,40 @@ func parseStatPGRP(stat []byte) (pid, pgrp int, comm string) {
 }
 
 // monitorProcessGroup polls every live process whose pgrp == pgid each
-// interval until stop is closed, counting each distinct PID once by its
-// comm. excludePID — the engine subprocess itself — is never counted:
-// the worker already accounts for it via EngineSpawnCount.
+// interval until stop is closed. It counts each distinct PID once by
+// its comm (the engine subprocess itself — excludePID — is never
+// counted: the worker already accounts for it via EngineSpawnCount) and
+// accumulates the tree's /proc/<pid>/io byte counters, INCLUDING the
+// engine's own bytes (the engine does real media work, so its I/O is
+// part of the render's footprint).
 //
 // Callers MUST pass pgid == excludePID: the engine runs with Setpgid,
 // so its process group id equals its own PID. Sampling a non-leader PID
 // as pgid would match nothing and silently yield zero counts.
-func monitorProcessGroup(pgid, excludePID int, interval time.Duration, stop <-chan struct{}) ProcessCounts {
-	var counts ProcessCounts
+func monitorProcessGroup(pgid, excludePID int, interval time.Duration, stop <-chan struct{}) ProcessTelemetry {
+	var telemetry ProcessTelemetry
 	seen := make(map[int]struct{})
+	ioPeak := make(map[int]TreeIO)
 	sample := func() {
 		for pid, comm := range sampleProcessGroup(pgid) {
-			if pid == excludePID {
-				continue
+			if pid != excludePID {
+				if _, ok := seen[pid]; !ok {
+					seen[pid] = struct{}{}
+					telemetry.Counts.addComm(comm)
+				}
 			}
-			if _, ok := seen[pid]; ok {
-				continue
+			// /proc/<pid>/io counters are cumulative per process lifetime;
+			// keeping the per-PID maximum and summing over all PIDs seen
+			// yields the tree total even for processes that exited between
+			// samples.
+			if io := sampleProcessIO(pid); io != (TreeIO{}) {
+				peak := ioPeak[pid]
+				peak.BytesRead = maxInt64(peak.BytesRead, io.BytesRead)
+				peak.BytesWritten = maxInt64(peak.BytesWritten, io.BytesWritten)
+				peak.StorageBytesRead = maxInt64(peak.StorageBytesRead, io.StorageBytesRead)
+				peak.StorageBytesWritten = maxInt64(peak.StorageBytesWritten, io.StorageBytesWritten)
+				ioPeak[pid] = peak
 			}
-			seen[pid] = struct{}{}
-			counts.addComm(comm)
 		}
 	}
 	// Sample once immediately, then keep polling until told to stop.
@@ -173,11 +211,59 @@ func monitorProcessGroup(pgid, excludePID int, interval time.Duration, stop <-ch
 	for {
 		select {
 		case <-stop:
-			return counts
+			for _, peak := range ioPeak {
+				telemetry.IO.BytesRead += peak.BytesRead
+				telemetry.IO.BytesWritten += peak.BytesWritten
+				telemetry.IO.StorageBytesRead += peak.StorageBytesRead
+				telemetry.IO.StorageBytesWritten += peak.StorageBytesWritten
+			}
+			return telemetry
 		case <-ticker.C:
 			sample()
 		}
 	}
+}
+
+// sampleProcessIO reads /proc/<pid>/io and returns the four byte
+// counters. On non-Linux platforms, unreadable files, or malformed
+// content it returns a zero TreeIO so the sampler degrades gracefully.
+func sampleProcessIO(pid int) TreeIO {
+	var io TreeIO
+	if runtime.GOOS != "linux" || pid <= 0 {
+		return io
+	}
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/io", pid))
+	if err != nil {
+		return io
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		key, value, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		n, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+		if err != nil {
+			continue
+		}
+		switch strings.TrimSpace(key) {
+		case "rchar":
+			io.BytesRead = n
+		case "wchar":
+			io.BytesWritten = n
+		case "read_bytes":
+			io.StorageBytesRead = n
+		case "write_bytes":
+			io.StorageBytesWritten = n
+		}
+	}
+	return io
+}
+
+func maxInt64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func isNumeric(s string) bool {

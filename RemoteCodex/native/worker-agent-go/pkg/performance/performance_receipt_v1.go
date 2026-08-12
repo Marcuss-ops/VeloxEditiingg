@@ -173,24 +173,34 @@ type ProcessMetrics struct {
 	ChildWaitMs int64 `json:"child_wait_ms"`
 }
 
-// IOMetrics counts real bytes moved by the attempt. The amplification
-// KPIs in DerivedMetrics are computed from the total fields, so the
-// assembler must keep TotalBytesRead/TotalBytesWritten in sync with the
-// per-kind counters.
+// IOMetrics counts real bytes moved by the attempt. TotalBytesRead and
+// TotalBytesWritten are measured from /proc/<pid>/io over the whole
+// engine process tree (logical rchar/wchar bytes) and are the
+// amplification denominators. The per-kind counters come from the
+// engine's own accounting (segment source sizes, temp bytes, mux phase
+// bytes, final artifact size) or are zero until engine-side
+// instrumentation exists — see the assembler for the exact provenance
+// of each field.
 type IOMetrics struct {
 	TotalBytesRead    int64 `json:"total_bytes_read"`
 	TotalBytesWritten int64 `json:"total_bytes_written"`
 
-	AssetBytesRead    int64 `json:"asset_bytes_read"`
+	AssetBytesRead int64 `json:"asset_bytes_read"`
+	// AssetBytesCopied is 0 until engine-side instrumentation lands; the
+	// Phase-1 copy-only target is exactly 0, so zero is the honest value.
 	AssetBytesCopied  int64 `json:"asset_bytes_copied"`
 	TempBytesWritten  int64 `json:"temp_bytes_written"`
 	MuxBytesRead      int64 `json:"mux_bytes_read"`
 	MuxBytesWritten   int64 `json:"mux_bytes_written"`
 	FinalBytesWritten int64 `json:"final_bytes_written"`
 
+	// FileCopyCount/FileCopyBytes are 0 until engine-side instrumentation
+	// lands; the Phase-1 copy-only target is 0 copies.
 	FileCopyCount int64 `json:"file_copy_count"`
 	FileCopyBytes int64 `json:"file_copy_bytes"`
 
+	// InputOpenCount/InputReopenCount are 0 until engine-side
+	// instrumentation lands.
 	InputOpenCount   int64 `json:"input_open_count"`
 	InputReopenCount int64 `json:"input_reopen_count"`
 }
@@ -198,11 +208,10 @@ type IOMetrics struct {
 // MediaMetrics mirrors the C++ engine sidecar counters already mapped by
 // the worker (frames, encode passes, temp bytes, concat mode, …).
 //
-// MediaMetrics.TempBytes is the sidecar-reported temp accounting; it is
-// NOT the same counter as IOMetrics.TempBytesWritten, which is the
-// worker-side bytes-written-to-temp-files counter. The assembler must
-// keep them separate: the sidecar value describes what the engine did,
-// the IO value describes what the process did.
+// MediaMetrics.TempBytes and IOMetrics.TempBytesWritten both project the
+// engine's sidecar temp_bytes accounting: Media keeps the sidecar
+// mirror, IO exposes the same value as the projection consumed by the
+// amplification KPIs.
 type MediaMetrics struct {
 	Frames           int64   `json:"frames"`
 	FramesDecoded    int64   `json:"frames_decoded"`

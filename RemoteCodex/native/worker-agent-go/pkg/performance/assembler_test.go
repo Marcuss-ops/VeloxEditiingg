@@ -49,6 +49,8 @@ func sampleRun() pipeline.RunMetrics {
 			ShellExecCount:       6,
 			CurlExecCount:        1,
 			ChildWaitMs:          18700,
+			TotalBytesRead:       1_800_000_000,
+			TotalBytesWritten:    1_200_000_000,
 		},
 	}
 }
@@ -100,6 +102,54 @@ func TestAssembler_MapsNativeSidecar(t *testing.T) {
 	require.Equal(t, 8_000_000.0, media.Bitrate)
 	require.Equal(t, int64(3), media.DupFrames)
 	require.Equal(t, int64(1), media.DropFrames)
+}
+
+func TestAssembler_MapsIO(t *testing.T) {
+	run := sampleRun()
+	run.RenderMetrics.TotalBytesRead = 1_800_000_000
+	run.RenderMetrics.TotalBytesWritten = 1_200_000_000
+	run.RenderMetrics.Segments = []pipeline.SegmentTiming{
+		{SegmentIndex: 0, SourceBytes: 60_000_000},
+		{SegmentIndex: 1, SourceBytes: 40_000_000},
+	}
+	run.RenderMetrics.DetailedPhases = []pipeline.DetailedPhaseTiming{
+		{Component: "engine", Action: "packet_mux", BytesIn: 100_000_000, BytesOut: 300_000_000},
+		{Component: "engine.mux", Action: "audio", BytesIn: 0, BytesOut: 2_000_000},
+		{Component: "media", Action: "open", BytesIn: 50_000_000, BytesOut: 0}, // not a mux
+	}
+
+	io := NewAssembler().Assemble(run, AssemblyContext{}).IO
+	require.Equal(t, int64(1_800_000_000), io.TotalBytesRead)
+	require.Equal(t, int64(1_200_000_000), io.TotalBytesWritten)
+	// asset_bytes_read = sum of segment source_bytes.
+	require.Equal(t, int64(100_000_000), io.AssetBytesRead)
+	// temp_bytes_written mirrors the sidecar temp accounting.
+	require.Equal(t, int64(900_000_000), io.TempBytesWritten)
+	// mux bytes summed only from mux/packet_mux phase events.
+	require.Equal(t, int64(100_000_000), io.MuxBytesRead)
+	require.Equal(t, int64(302_000_000), io.MuxBytesWritten)
+	// final_bytes_written mirrors the engine-declared total size.
+	require.Equal(t, int64(300_000_000), io.FinalBytesWritten)
+	// Engine-instrumented counters stay zero (Phase-1 target is 0 anyway).
+	require.Zero(t, io.AssetBytesCopied)
+	require.Zero(t, io.FileCopyCount)
+	require.Zero(t, io.FileCopyBytes)
+	require.Zero(t, io.InputOpenCount)
+	require.Zero(t, io.InputReopenCount)
+}
+
+func TestDeriveIO_MatchesReceiptSection(t *testing.T) {
+	// The executor emits io.* attempt metrics from performance.DeriveIO;
+	// it must never disagree with the receipt's IO section built by the
+	// assembler. Both go through the same derivation.
+	run := sampleRun()
+	run.RenderMetrics.Segments = []pipeline.SegmentTiming{{SourceBytes: 60_000_000}}
+	run.RenderMetrics.DetailedPhases = []pipeline.DetailedPhaseTiming{
+		{Component: "engine", Action: "packet_mux", BytesOut: 300_000_000},
+	}
+
+	receiptIO := NewAssembler().Assemble(run, AssemblyContext{}).IO
+	require.Equal(t, receiptIO, DeriveIO(run.RenderMetrics))
 }
 
 func TestAssembler_NoEngineSpawnWhenProcessNeverStarted(t *testing.T) {

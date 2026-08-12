@@ -20,6 +20,7 @@ import (
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/publisher"
 	"velox-worker-agent/internal/telemetry"
+	"velox-worker-agent/pkg/performance"
 	"velox-worker-agent/pkg/video/pipeline"
 )
 
@@ -181,6 +182,22 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 	metrics["process.shell_exec_count"] = runMetrics.RenderMetrics.ShellExecCount
 	metrics["process.curl_exec_count"] = runMetrics.RenderMetrics.CurlExecCount
 	metrics["process.child_wait_ms"] = runMetrics.RenderMetrics.ChildWaitMs
+	// I/O counters share ONE derivation with the PerformanceReceiptV1
+	// (performance.DeriveIO): the executor telemetry and the receipt can
+	// never disagree about what each io.* value means.
+	derivedIO := performance.DeriveIO(runMetrics.RenderMetrics)
+	metrics["io.total_bytes_read"] = derivedIO.TotalBytesRead
+	metrics["io.total_bytes_written"] = derivedIO.TotalBytesWritten
+	metrics["io.asset_bytes_read"] = derivedIO.AssetBytesRead
+	metrics["io.asset_bytes_copied"] = derivedIO.AssetBytesCopied
+	metrics["io.temp_bytes_written"] = derivedIO.TempBytesWritten
+	metrics["io.mux_bytes_read"] = derivedIO.MuxBytesRead
+	metrics["io.mux_bytes_written"] = derivedIO.MuxBytesWritten
+	metrics["io.final_bytes_written"] = derivedIO.FinalBytesWritten
+	metrics["io.file_copy_count"] = derivedIO.FileCopyCount
+	metrics["io.file_copy_bytes"] = derivedIO.FileCopyBytes
+	metrics["io.input_open_count"] = derivedIO.InputOpenCount
+	metrics["io.input_reopen_count"] = derivedIO.InputReopenCount
 	metrics["engine.frames"] = runMetrics.RenderMetrics.Frames
 	metrics["engine.frames_decoded"] = runMetrics.RenderMetrics.FramesDecoded
 	metrics["engine.frames_composited"] = runMetrics.RenderMetrics.FramesComposited

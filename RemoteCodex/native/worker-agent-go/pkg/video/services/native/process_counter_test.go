@@ -1,6 +1,7 @@
 package native
 
 import (
+	"os"
 	"os/exec"
 	"runtime"
 	"syscall"
@@ -70,15 +71,15 @@ func TestMonitorProcessGroup_CountsRealTree(t *testing.T) {
 	}()
 
 	stop := make(chan struct{})
-	countsCh := make(chan ProcessCounts, 1)
+	telCh := make(chan ProcessTelemetry, 1)
 	go func() {
-		countsCh <- monitorProcessGroup(cmd.Process.Pid, cmd.Process.Pid, 10*time.Millisecond, stop)
+		telCh <- monitorProcessGroup(cmd.Process.Pid, cmd.Process.Pid, 10*time.Millisecond, stop)
 	}()
 	// The tree spawns within milliseconds and the sleeps live for 2s,
 	// so the sampler has plenty of windows to observe them.
 	time.Sleep(300 * time.Millisecond)
 	close(stop)
-	counts := <-countsCh
+	counts := (<-telCh).Counts
 
 	require.GreaterOrEqual(t, counts.ShellExecCount, int64(1), "inner background shell must be counted")
 	require.GreaterOrEqual(t, counts.OtherExecCount, int64(1), "sleep must be counted as other")
@@ -102,13 +103,13 @@ func TestMonitorProcessGroup_ExcludesRoot(t *testing.T) {
 	}()
 
 	stop := make(chan struct{})
-	countsCh := make(chan ProcessCounts, 1)
+	telCh := make(chan ProcessTelemetry, 1)
 	go func() {
-		countsCh <- monitorProcessGroup(cmd.Process.Pid, cmd.Process.Pid, 10*time.Millisecond, stop)
+		telCh <- monitorProcessGroup(cmd.Process.Pid, cmd.Process.Pid, 10*time.Millisecond, stop)
 	}()
 	time.Sleep(300 * time.Millisecond)
 	close(stop)
-	counts := <-countsCh
+	counts := (<-telCh).Counts
 
 	require.Zero(t, counts.ShellExecCount, "root sh must be excluded")
 	require.Equal(t, int64(2), counts.OtherExecCount, "the two sleeps are the only external processes")
@@ -121,6 +122,58 @@ func TestMonitorProcessGroup_NoProcDegradesToZero(t *testing.T) {
 	// non-Linux / missing /proc by returning an empty sample).
 	stop := make(chan struct{})
 	close(stop)
-	counts := monitorProcessGroup(99999999, 99999999, time.Millisecond, stop)
-	require.Zero(t, counts.ExternalProcessCount)
+	tel := monitorProcessGroup(99999999, 99999999, time.Millisecond, stop)
+	require.Zero(t, tel.Counts.ExternalProcessCount)
+	require.Zero(t, tel.IO.BytesRead)
+	require.Zero(t, tel.IO.BytesWritten)
+}
+
+func TestSampleProcessIO(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("process IO counters require /proc (Linux)")
+	}
+	// Our own process is guaranteed to have /proc/<pid>/io with at least
+	// some bytes read/written during test bootstrap.
+	io := sampleProcessIO(os.Getpid())
+	require.GreaterOrEqual(t, io.BytesRead, int64(0))
+	require.GreaterOrEqual(t, io.BytesWritten, int64(0))
+	// rchar/wchar must never be negative.
+	require.GreaterOrEqual(t, io.StorageBytesRead, int64(0))
+
+	require.Zero(t, sampleProcessIO(99999999), "unreachable pid must yield zero IO")
+	require.Zero(t, sampleProcessIO(0))
+}
+
+// TestMonitorProcessGroup_CollectsTreeIO is a Linux integration test:
+// a child process that streams bytes through read()/write() must be
+// reflected in the tree totals, including for the excluded engine root
+// (the root does real media work, so its bytes count toward the tree).
+func TestMonitorProcessGroup_CollectsTreeIO(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("process group sampling requires /proc (Linux)")
+	}
+	// dd streams 1 GiB from /dev/zero to /dev/null so the process stays
+	// alive for the whole sample window; rchar/wchar count every byte
+	// through read()/write() regardless of the device.
+	cmd := exec.Command("sh", "-c", `exec dd if=/dev/zero of=/dev/null bs=1M count=1024 2>/dev/null`)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	require.NoError(t, cmd.Start())
+	defer func() {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_ = cmd.Wait()
+	}()
+
+	stop := make(chan struct{})
+	telCh := make(chan ProcessTelemetry, 1)
+	go func() {
+		telCh <- monitorProcessGroup(cmd.Process.Pid, cmd.Process.Pid, 10*time.Millisecond, stop)
+	}()
+	time.Sleep(300 * time.Millisecond)
+	close(stop)
+	io := (<-telCh).IO
+
+	// The dd child has read and written at least 64 KiB by any sample
+	// window (1 MiB blocks stream at GB/s through page cache).
+	require.GreaterOrEqual(t, io.BytesRead, int64(65536), "tree rchar must observe the child's reads")
+	require.GreaterOrEqual(t, io.BytesWritten, int64(65536), "tree wchar must observe the child's writes")
 }

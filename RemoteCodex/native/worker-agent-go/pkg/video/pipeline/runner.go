@@ -192,6 +192,15 @@ type RenderMetrics struct {
 	ShellExecCount       int64
 	CurlExecCount        int64
 	ChildWaitMs          int64
+	// Tree I/O totals measured from /proc/<pid>/io over the engine
+	// process tree (engine + descendants): logical bytes read/written
+	// through read()/write() including page-cache hits, and the
+	// block-layer storage bytes after the page cache. Zero when no
+	// native render occurred.
+	TotalBytesRead      int64
+	TotalBytesWritten   int64
+	StorageBytesRead    int64
+	StorageBytesWritten int64
 	// PhaseMS carries the per-phase engine timings from the C++ sidecar
 	// (engine.asset_download, engine.segment_build, engine.concat, …).
 	// Nil when no sidecar was read.

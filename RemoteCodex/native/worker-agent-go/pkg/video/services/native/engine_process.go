@@ -19,7 +19,8 @@ import (
 // never emits a sidecar.
 
 // runEngineProcess launches velox_video_engine --render --plan and
-// returns (processStartMs, processWaitMs, stderr, stdout, counts, err).
+// returns (processStartMs, processWaitMs, stderr, stdout, telemetry,
+// err).
 //
 // err semantics:
 //   - ctx.Err() (context.Canceled or DeadlineExceeded) when the caller
@@ -29,15 +30,16 @@ import (
 //     failed — ProcessStartMs AND ProcessWaitMs are populated; the
 //     caller is responsible for wrapping the error with stderr/stdout
 //
-// counts reports the external processes the engine spawned in its own
-// process group, sampled from /proc while it ran. It is populated on
-// every exit path once the engine was started (the monitor is stopped
-// by the deferred cleanup below before this function returns).
+// telemetry reports the external processes the engine spawned in its
+// own process group and the tree's byte counters, sampled from /proc
+// while it ran. It is populated on every exit path once the engine was
+// started (the monitor is stopped by the deferred cleanup below before
+// this function returns).
 //
 // SAFETY-CRITICAL: Setpgid + Pdeathsig + 10s SIGTERM grace + SIGKILL
 // hard-kill + <-done reaping are preserved verbatim from the original
 // render_client.go. Do not modify these.
-func runEngineProcess(ctx context.Context, binaryPath, planPath string, onProgress DetailedProgressFunc, legacyProgress ProgressFunc) (processStartMs int64, processWaitMs int64, stderrBuf strings.Builder, stdoutBuf strings.Builder, counts ProcessCounts, err error) {
+func runEngineProcess(ctx context.Context, binaryPath, planPath string, onProgress DetailedProgressFunc, legacyProgress ProgressFunc) (processStartMs int64, processWaitMs int64, stderrBuf strings.Builder, stdoutBuf strings.Builder, telemetry ProcessTelemetry, err error) {
 	args := []string{"--render", "--plan", planPath}
 	if chrononBackendEnabled() {
 		args = []string{"render-plan", "--input", planPath}
@@ -59,16 +61,16 @@ func runEngineProcess(ctx context.Context, binaryPath, planPath string, onProgre
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
-		return 0, 0, stderrBuf, stdoutBuf, counts, fmt.Errorf("stdout pipe: %w", err)
+		return 0, 0, stderrBuf, stdoutBuf, telemetry, fmt.Errorf("stdout pipe: %w", err)
 	}
 	stderrPipe, err := cmd.StderrPipe()
 	if err != nil {
-		return 0, 0, stderrBuf, stdoutBuf, counts, fmt.Errorf("stderr pipe: %w", err)
+		return 0, 0, stderrBuf, stdoutBuf, telemetry, fmt.Errorf("stderr pipe: %w", err)
 	}
 
 	processStart := time.Now()
 	if err := cmd.Start(); err != nil {
-		return 0, 0, stderrBuf, stdoutBuf, counts, fmt.Errorf("start engine: %w", err)
+		return 0, 0, stderrBuf, stdoutBuf, telemetry, fmt.Errorf("start engine: %w", err)
 	}
 	processStartMs = time.Since(processStart).Milliseconds()
 
@@ -87,7 +89,7 @@ func runEngineProcess(ctx context.Context, binaryPath, planPath string, onProgre
 			defer close(monitorDone)
 			// With Setpgid the engine's pgrp equals its PID, so the same
 			// value is both the group to sample and the PID to exclude.
-			counts = monitorProcessGroup(cmd.Process.Pid, cmd.Process.Pid, externalProcessSampleInterval, monitorStop)
+			telemetry = monitorProcessGroup(cmd.Process.Pid, cmd.Process.Pid, externalProcessSampleInterval, monitorStop)
 		}()
 		defer func() {
 			close(monitorStop)
@@ -120,10 +122,10 @@ func runEngineProcess(ctx context.Context, binaryPath, planPath string, onProgre
 			}
 		}
 		<-progressDone
-		return processStartMs, 0, stderrBuf, stdoutBuf, counts, ctx.Err()
+		return processStartMs, 0, stderrBuf, stdoutBuf, telemetry, ctx.Err()
 	case execErr := <-done:
 		<-progressDone
 		processWaitMs = time.Since(waitStart).Milliseconds()
-		return processStartMs, processWaitMs, stderrBuf, stdoutBuf, counts, execErr
+		return processStartMs, processWaitMs, stderrBuf, stdoutBuf, telemetry, execErr
 	}
 }

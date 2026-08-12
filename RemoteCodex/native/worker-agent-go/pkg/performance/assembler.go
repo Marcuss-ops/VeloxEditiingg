@@ -57,8 +57,7 @@ func (a *Assembler) Assemble(run pipeline.RunMetrics, ctx AssemblyContext) *Perf
 	receipt.Workload = assembleWorkload(run, ctx.Workload)
 	receipt.Timing = assembleTiming(run, ctx.WallMs)
 	receipt.Process = assembleProcess(run.RenderMetrics)
-	// IOMetrics stays zero until the real read/write/copy counters land;
-	// only sidecar-derived media accounting is mapped today.
+	receipt.IO = DeriveIO(run.RenderMetrics)
 	receipt.Media = assembleMedia(run.RenderMetrics)
 	// MemoryMetrics and SchedulingMetrics stay zero until the
 	// corresponding collectors are added.
@@ -117,6 +116,86 @@ func assembleProcess(rm pipeline.RenderMetrics) ProcessMetrics {
 		CurlExecCount:        rm.CurlExecCount,
 		ChildWaitMs:          rm.ChildWaitMs,
 	}
+}
+
+// DeriveIO maps the real I/O telemetry into IOMetrics. It is exported
+// so the executor can emit the SAME per-kind projection as io.* attempt
+// metrics without duplicating the derivation — the receipt and the
+// worker telemetry must never disagree about what asset_bytes_read
+// means. See assembleIO for the per-field provenance.
+func DeriveIO(rm pipeline.RenderMetrics) IOMetrics {
+	return assembleIO(rm)
+}
+
+// assembleIO maps the real I/O telemetry into the receipt:
+//
+//   - TotalBytesRead/TotalBytesWritten — measured from /proc/<pid>/io
+//     over the whole engine process tree (engine + ffmpeg/ffprobe/shell
+//     descendants) while it rendered. These are the amplification
+//     denominators.
+//   - AssetBytesRead — the engine-declared size of every asset it bound
+//     or staged (sum of segments[].source_bytes). It is a file-size
+//     proxy for bytes touched from assets, not a syscall counter.
+//   - TempBytesWritten — the engine's own temp accounting (sidecar
+//     temp_bytes). MediaMetrics.TempBytes mirrors the same value.
+//   - MuxBytesRead/MuxBytesWritten — summed from the sidecar phases[]
+//     events whose component/action is a mux or packet_mux operation
+//     (e.g. the copy-only packet mux pass).
+//   - FinalBytesWritten — the engine-declared final artifact size
+//     (sidecar total_size), which the executor later re-verifies with
+//     the artifact manifest.
+//
+// asset_bytes_copied, file_copy_count/bytes and input_open/reopen_count
+// are left zero: they need engine-side instrumentation that does not
+// exist yet. The Phase-1 copy-only target for copies/opens is exactly 0,
+// so the zero values are the honest state of the world today.
+func assembleIO(rm pipeline.RenderMetrics) IOMetrics {
+	muxRead, muxWritten := sumMuxPhaseBytes(rm.DetailedPhases)
+	return IOMetrics{
+		TotalBytesRead:    rm.TotalBytesRead,
+		TotalBytesWritten: rm.TotalBytesWritten,
+		AssetBytesRead:    sumSegmentSourceBytes(rm.Segments),
+		TempBytesWritten:  rm.TempBytes,
+		MuxBytesRead:      muxRead,
+		MuxBytesWritten:   muxWritten,
+		FinalBytesWritten: rm.TotalSize,
+	}
+}
+
+// sumSegmentSourceBytes totals the engine-declared source asset sizes
+// across all timeline segments.
+func sumSegmentSourceBytes(segments []pipeline.SegmentTiming) int64 {
+	var total int64
+	for _, seg := range segments {
+		total += seg.SourceBytes
+	}
+	return total
+}
+
+// sumMuxPhaseBytes totals the bytes_in/bytes_out of the sidecar phases[]
+// events that describe a mux or packet_mux operation (copy-only uses a
+// single packet mux pass). The predicate matches exact mux identities
+// so that future "demux"/"remux" events are never misclassified as mux
+// output.
+func sumMuxPhaseBytes(phases []pipeline.DetailedPhaseTiming) (bytesIn, bytesOut int64) {
+	for _, p := range phases {
+		if !isMuxEvent(p) {
+			continue
+		}
+		bytesIn += p.BytesIn
+		bytesOut += p.BytesOut
+	}
+	return bytesIn, bytesOut
+}
+
+func isMuxEvent(p pipeline.DetailedPhaseTiming) bool {
+	name := strings.ToLower(phaseName(p))
+	return p.Component == "engine.mux" ||
+		p.Action == "packet_mux" ||
+		p.Action == "mux" ||
+		name == "mux" ||
+		strings.HasPrefix(name, "mux.") ||
+		strings.HasSuffix(name, ".mux")
 }
 
 // assembleMedia mirrors the C++ engine sidecar counters already mapped
