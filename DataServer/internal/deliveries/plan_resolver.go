@@ -126,7 +126,7 @@ func (r *SQLiteDeliveryPlanResolver) ResolveDestinations(ctx context.Context, jo
 // on job_deliveries.attempt_count.
 func (r *SQLiteDeliveryPlanResolver) ResolvePlan(ctx context.Context, jobID, artifactID string) (*Plan, error) {
 	if r == nil || r.db == nil {
-		return nil, nil
+		return nil, deliverycontract.ErrResolverNotConfigured
 	}
 	_ = artifactID // available for future per-artifact routing
 

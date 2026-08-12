@@ -2,12 +2,25 @@ package deliveries
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
+	"velox-server/internal/deliverycontract"
 	"velox-server/internal/store"
 	"velox-server/internal/telemetry"
 )
+
+func TestResolvePlanFailsClosedWithoutDatabase(t *testing.T) {
+	resolver := NewSQLiteDeliveryPlanResolver(nil)
+
+	if _, err := resolver.ResolvePlan(context.Background(), "job-without-store", ""); !errors.Is(err, deliverycontract.ErrResolverNotConfigured) {
+		t.Fatalf("ResolvePlan error = %v, want ErrResolverNotConfigured", err)
+	}
+	if _, err := resolver.ResolveDestinations(context.Background(), "job-without-store", ""); !errors.Is(err, deliverycontract.ErrResolverNotConfigured) {
+		t.Fatalf("ResolveDestinations error = %v, want ErrResolverNotConfigured", err)
+	}
+}
 
 func TestResolvePlanRecordsExplicitPlanQueriesAndRejectsMissingPlan(t *testing.T) {
 	db, err := store.NewSQLiteStore(t.TempDir() + "/resolver-metrics.sqlite")
