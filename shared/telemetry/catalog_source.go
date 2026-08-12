@@ -13,6 +13,8 @@ import (
 //go:embed catalog.json
 var catalogJSON []byte
 
+//go:generate go run ./cmd/cataloggen -input catalog.json -output ../../RemoteCodex/native/video-engine-cpp/include/velox/telemetry/catalog_generated.hpp -go-output catalog_generated.go
+
 // CatalogJSON returns a defensive copy of the language-neutral source. The
 // C++ generator uses it to fail closed when its input path is not the exact
 // catalog embedded by the Go package.
