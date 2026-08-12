@@ -2,8 +2,12 @@ package executors
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -12,6 +16,7 @@ import (
 
 	"velox-shared/contract"
 	"velox-worker-agent/internal/executor"
+	"velox-worker-agent/internal/publisher"
 	"velox-worker-agent/internal/runtimeassets"
 	"velox-worker-agent/pkg/video/ffmpegrunner"
 )
@@ -33,6 +38,7 @@ type renderBatchExecutor struct {
 	descriptor executor.Descriptor
 	runner     ffmpegrunner.FFmpegRunner
 	outputRoot string
+	probe      func(context.Context, string) (publisher.MediaProbe, error)
 }
 
 // NewRenderBatch constructs the canonical render_batch@1 executor.
@@ -56,6 +62,7 @@ func NewRenderBatch(runner ffmpegrunner.FFmpegRunner, outputRoot string) executo
 		},
 		runner:     runner,
 		outputRoot: outputRoot,
+		probe:      publisher.ProbeMediaDetails,
 	}
 }
 
@@ -93,6 +100,10 @@ func (e *renderBatchExecutor) Execute(ctx context.Context, execCtx executor.Exec
 	if err != nil {
 		return batchFailure(started, "validation_failed", err), nil
 	}
+	jobID, err := safeOutputJobID(spec.JobID)
+	if err != nil {
+		return batchFailure(started, "INVALID_JOB_ID", err), nil
+	}
 	bindings, ok := runtimeassets.FromContext(ctx)
 	if !ok {
 		return batchFailure(started, "ASSET_BINDINGS_MISSING", ErrMissingRenderBatchBindings), nil
@@ -100,13 +111,16 @@ func (e *renderBatchExecutor) Execute(ctx context.Context, execCtx executor.Exec
 	if err := validateBindings(plan, bindings); err != nil {
 		return batchFailure(started, "ASSET_BINDINGS_INVALID", err), nil
 	}
+	if err := validateMediaFile(e.probe, ctx, bindings[plan.FinalAudio.AssetID].Path, "final audio", plan.DurationUS, false, true); err != nil {
+		return batchFailure(started, "FINAL_AUDIO_INVALID", err), nil
+	}
 	validationMS := time.Since(validationStarted).Milliseconds()
 
 	if err := os.MkdirAll(e.outputRoot, 0o750); err != nil {
 		return batchFailure(started, "output_directory", err), nil
 	}
-	videoOnlyPath := filepath.Join(e.outputRoot, spec.JobID+".video-only.mp4")
-	finalPath := filepath.Join(e.outputRoot, spec.JobID+".mp4")
+	videoOnlyPath := filepath.Join(e.outputRoot, jobID+".video-only.mp4")
+	finalPath := filepath.Join(e.outputRoot, jobID+".mp4")
 	defer os.Remove(videoOnlyPath)
 
 	visualStarted := time.Now()
@@ -121,6 +135,9 @@ func (e *renderBatchExecutor) Execute(ctx context.Context, execCtx executor.Exec
 	if visualArtifact.SizeBytes <= 0 {
 		return batchFailure(started, "visual_output_empty", errors.New("video-only output is empty")), nil
 	}
+	if err := validateMediaFile(e.probe, ctx, videoOnlyPath, "video-only output", plan.DurationUS, true, false); err != nil {
+		return batchFailure(started, "VISUAL_OUTPUT_INVALID", err), nil
+	}
 	visualMS := time.Since(visualStarted).Milliseconds()
 
 	muxStarted := time.Now()
@@ -128,6 +145,9 @@ func (e *renderBatchExecutor) Execute(ctx context.Context, execCtx executor.Exec
 	finalArtifact, muxProfile, err := e.runCommand(ctx, execCtx, ffmpegrunner.OperationEncode, muxArgs, finalPath, "final-mux")
 	if err != nil {
 		return batchFailure(started, "final_mux_failed", err), nil
+	}
+	if err := validateMediaFile(e.probe, ctx, finalPath, "final output", plan.DurationUS, true, true); err != nil {
+		return batchFailure(started, "FINAL_OUTPUT_INVALID", err), nil
 	}
 	muxMS := time.Since(muxStarted).Milliseconds()
 
@@ -172,17 +192,20 @@ func validateBindings(plan *contract.CompiledRenderPlanV2, bindings runtimeasset
 	if plan == nil || bindings == nil {
 		return ErrMissingRenderBatchBindings
 	}
+	assetByID := make(map[string]contract.AssetRefV2, len(plan.Assets))
 	for _, asset := range plan.Assets {
+		assetByID[asset.AssetID] = asset
 		if err := validateBinding(asset.AssetID, asset.SHA256, asset.SizeBytes, bindings); err != nil {
 			return err
 		}
 	}
-	if err := validateBinding(plan.FinalAudio.AssetID, plan.FinalAudio.SHA256, plan.FinalAudio.SizeBytes, bindings); err != nil {
-		return err
-	}
 	for _, track := range plan.VideoTracks {
 		for _, segment := range track.Segments {
-			if err := validateBinding(segment.AssetID, segment.SHA256, 0, bindings); err != nil {
+			asset, ok := assetByID[segment.AssetID]
+			if !ok {
+				return fmt.Errorf("%w: segment asset_id=%q is not declared", ErrRenderBatchAssetIntegrity, segment.AssetID)
+			}
+			if err := validateBinding(segment.AssetID, asset.SHA256, asset.SizeBytes, bindings); err != nil {
 				return err
 			}
 		}
@@ -195,19 +218,63 @@ func validateBinding(assetID, wantSHA string, wantSize int64, bindings runtimeas
 	if !ok || strings.TrimSpace(binding.Path) == "" {
 		return fmt.Errorf("%w: asset_id=%q", ErrMissingRenderBatchBindings, assetID)
 	}
-	if binding.SHA256 != "" && binding.SHA256 != wantSHA {
-		return fmt.Errorf("%w: asset_id=%q", ErrRenderBatchAssetIntegrity, assetID)
+	if strings.TrimSpace(binding.SHA256) == "" || binding.SHA256 != wantSHA || wantSize <= 0 || binding.Size != wantSize {
+		return fmt.Errorf("%w: asset_id=%q declared metadata does not match plan", ErrRenderBatchAssetIntegrity, assetID)
 	}
-	if binding.Size > 0 && wantSize > 0 && binding.Size != wantSize {
-		return fmt.Errorf("%w: asset_id=%q size=%d want=%d", ErrRenderBatchAssetIntegrity, assetID, binding.Size, wantSize)
-	}
-	if info, err := os.Stat(binding.Path); err != nil || !info.Mode().IsRegular() || info.Size() <= 0 {
+	info, err := os.Stat(binding.Path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 {
 		if err == nil {
 			err = errors.New("file is empty or not regular")
 		}
-		return fmt.Errorf("%w: asset_id=%q path: %v", ErrMissingRenderBatchBindings, assetID, err)
+		return fmt.Errorf("%w: asset_id=%q path: %v", ErrRenderBatchAssetIntegrity, assetID, err)
+	}
+	if info.Size() != wantSize {
+		return fmt.Errorf("%w: asset_id=%q actual size=%d want=%d", ErrRenderBatchAssetIntegrity, assetID, info.Size(), wantSize)
+	}
+	file, err := os.Open(binding.Path)
+	if err != nil {
+		return fmt.Errorf("%w: asset_id=%q open: %v", ErrRenderBatchAssetIntegrity, assetID, err)
+	}
+	defer file.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return fmt.Errorf("%w: asset_id=%q hash: %v", ErrRenderBatchAssetIntegrity, assetID, err)
+	}
+	actualSHA := hex.EncodeToString(hash.Sum(nil))
+	if actualSHA != wantSHA || actualSHA != binding.SHA256 {
+		return fmt.Errorf("%w: asset_id=%q actual sha256=%s want=%s", ErrRenderBatchAssetIntegrity, assetID, actualSHA, wantSHA)
 	}
 	return nil
+}
+
+const renderBatchDurationToleranceSec = 0.050
+
+func validateMediaFile(probe func(context.Context, string) (publisher.MediaProbe, error), ctx context.Context, path, label string, wantDurationUS int64, requireVideo, requireAudio bool) error {
+	if probe == nil {
+		return errors.New("media probe is not configured")
+	}
+	media, err := probe(ctx, path)
+	if err != nil {
+		return fmt.Errorf("%s probe: %w", label, err)
+	}
+	if requireVideo && !media.HasVideo {
+		return fmt.Errorf("%s has no video stream", label)
+	}
+	if requireAudio && !media.HasAudio {
+		return fmt.Errorf("%s has no audio stream", label)
+	}
+	want := float64(wantDurationUS) / 1_000_000
+	if media.DurationSec <= 0 || math.Abs(media.DurationSec-want) > renderBatchDurationToleranceSec {
+		return fmt.Errorf("%s duration=%0.6fs want=%0.6fs tolerance=%0.3fs", label, media.DurationSec, want, renderBatchDurationToleranceSec)
+	}
+	return nil
+}
+
+func safeOutputJobID(jobID string) (string, error) {
+	if strings.TrimSpace(jobID) == "" || jobID == "." || jobID == ".." || filepath.IsAbs(jobID) || strings.ContainsAny(jobID, "/\\\\\x00") || filepath.Base(jobID) != jobID {
+		return "", errors.New("job_id must be a non-empty path-free identifier")
+	}
+	return jobID, nil
 }
 
 func buildVideoOnlyArgs(plan *contract.CompiledRenderPlanV2, bindings runtimeassets.Bindings, outputPath string) ([]string, error) {

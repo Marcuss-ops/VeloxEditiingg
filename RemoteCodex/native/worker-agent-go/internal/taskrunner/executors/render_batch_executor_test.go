@@ -14,6 +14,7 @@ import (
 	"velox-shared/contract"
 	"velox-shared/controltransport"
 	"velox-worker-agent/internal/executor"
+	"velox-worker-agent/internal/publisher"
 	"velox-worker-agent/internal/runtimeassets"
 	"velox-worker-agent/pkg/video/ffmpegrunner"
 )
@@ -45,6 +46,8 @@ func (f *batchFakeFFmpegRunner) Run(_ context.Context, req ffmpegrunner.FFmpegRe
 
 func batchTestPlan() *contract.CompiledRenderPlanV2 {
 	const timelineSHA = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	videoSHA := batchSHA([]byte("video-data"))
+	audioSHA := batchSHA([]byte("audio-data"))
 	return &contract.CompiledRenderPlanV2{
 		PlanVersion:      contract.CompiledPlanVersionV2,
 		TimelineRevision: 7,
@@ -56,22 +59,27 @@ func batchTestPlan() *contract.CompiledRenderPlanV2 {
 		},
 		FinalAudio: contract.FinalAudioV2{
 			Mode: contract.AudioModeFinalAudioCopy, AssetID: "audio-master-001",
-			SHA256: strings.Repeat("b", 64), SizeBytes: 10, Codec: "aac",
+			SHA256: audioSHA, SizeBytes: 10, Codec: "aac",
 			SampleRateHz: 48_000, Channels: 2, DurationUS: 2_000_000,
 			TimelineRevision: 7, TimelineSHA256: timelineSHA,
 		},
 		VideoTracks: []contract.VideoTrackV2{{
 			TrackID: "main",
 			Segments: []contract.VideoSegmentV2{{
-				SegmentID: "segment-a", AssetID: "video-a", SHA256: strings.Repeat("a", 64),
+				SegmentID: "segment-a", AssetID: "video-a", SHA256: videoSHA,
 				TimelineStartFrame: 0, FrameCount: 60, SourceInUS: 0, SourceDurationUS: 2_000_000,
 			}},
 		}},
 		Assets: []contract.AssetRefV2{
-			{AssetID: "video-a", SHA256: strings.Repeat("a", 64), SizeBytes: 10, Kind: "video", DurationUS: 2_000_000, Width: 640, Height: 360},
-			{AssetID: "audio-master-001", SHA256: strings.Repeat("b", 64), SizeBytes: 10, Kind: "final_audio", DurationUS: 2_000_000},
+			{AssetID: "video-a", SHA256: videoSHA, SizeBytes: 10, Kind: "video", DurationUS: 2_000_000, Width: 640, Height: 360},
+			{AssetID: "audio-master-001", SHA256: audioSHA, SizeBytes: 10, Kind: "final_audio", DurationUS: 2_000_000},
 		},
 	}
+}
+
+func batchSHA(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }
 
 func batchTaskSpec(t *testing.T, jobID string) executor.TaskSpec {
@@ -97,17 +105,16 @@ func batchBindings(t *testing.T) runtimeassets.Bindings {
 	bindings := runtimeassets.Bindings{}
 	for _, item := range []struct {
 		id   string
-		sha  string
-		kind string
+		data []byte
 	}{
-		{"video-a", strings.Repeat("a", 64), "video"},
-		{"audio-master-001", strings.Repeat("b", 64), "audio"},
+		{"video-a", []byte("video-data")},
+		{"audio-master-001", []byte("audio-data")},
 	} {
 		path := filepath.Join(dir, item.id+".asset")
-		if err := os.WriteFile(path, []byte("0123456789"), 0o640); err != nil {
+		if err := os.WriteFile(path, item.data, 0o640); err != nil {
 			t.Fatalf("write binding %s: %v", item.id, err)
 		}
-		bindings[item.id] = runtimeassets.Binding{AssetID: item.id, Path: path, SHA256: item.sha, Size: 10}
+		bindings[item.id] = runtimeassets.Binding{AssetID: item.id, Path: path, SHA256: batchSHA(item.data), Size: int64(len(item.data))}
 	}
 	return bindings
 }
@@ -211,6 +218,12 @@ func TestRenderBatch_VideoOnlyThenFinalAudioCopyMux(t *testing.T) {
 	outputRoot := t.TempDir()
 	exec := NewRenderBatch(runner, outputRoot)
 	spec := batchTaskSpec(t, "job-batch-001")
+	exec.(*renderBatchExecutor).probe = func(_ context.Context, path string) (publisher.MediaProbe, error) {
+		if strings.Contains(path, "audio-master-001") {
+			return publisher.MediaProbe{HasAudio: true, DurationSec: 2}, nil
+		}
+		return publisher.MediaProbe{HasVideo: true, HasAudio: true, DurationSec: 2}, nil
+	}
 	ctx := runtimeassets.WithBindings(context.Background(), batchBindings(t))
 
 	result, err := exec.Execute(ctx, nil, spec)
@@ -304,6 +317,33 @@ func TestRenderBatch_RejectsBindingIntegrityMismatch(t *testing.T) {
 	}
 	if result.Status != "failed" || result.ErrorCode != "ASSET_BINDINGS_INVALID" {
 		t.Fatalf("integrity result = %+v", result)
+	}
+}
+
+func TestRenderBatch_RejectsOnDiskTamper(t *testing.T) {
+	exec := NewRenderBatch(&batchFakeFFmpegRunner{}, t.TempDir())
+	bindings := batchBindings(t)
+	if err := os.WriteFile(bindings["video-a"].Path, []byte("tampered!!"), 0o640); err != nil {
+		t.Fatalf("tamper asset: %v", err)
+	}
+	result, err := exec.Execute(runtimeassets.WithBindings(context.Background(), bindings), nil, batchTaskSpec(t, "job-tampered"))
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if result.Status != "failed" || result.ErrorCode != "ASSET_BINDINGS_INVALID" {
+		t.Fatalf("tamper result = %+v", result)
+	}
+}
+
+func TestRenderBatch_RejectsPathTraversalJobID(t *testing.T) {
+	exec := NewRenderBatch(&batchFakeFFmpegRunner{}, t.TempDir())
+	bindings := batchBindings(t)
+	result, err := exec.Execute(runtimeassets.WithBindings(context.Background(), bindings), nil, batchTaskSpec(t, "../escape"))
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if result.Status != "failed" || result.ErrorCode != "INVALID_JOB_ID" {
+		t.Fatalf("path traversal result = %+v", result)
 	}
 }
 
