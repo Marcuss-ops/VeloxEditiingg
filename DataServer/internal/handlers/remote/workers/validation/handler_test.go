@@ -579,7 +579,26 @@ CREATE TABLE jobs (
   status     TEXT,
   created_at TEXT,
   updated_at TEXT
-)
+);
+-- This fixture records migrations through 136 as applied below, so it must
+-- also provide the pre-151 deployment_records table that migration 151
+-- extends (ALTER TABLE ADD COLUMN error_message + backfill into
+-- worker_deployment_state). The production chain creates this table in 103
+-- and makes previous_digest nullable in 134 (baselines without rollback
+-- provenance); the fixture mirrors that shape so 151 applies exactly as it
+-- would on a real upgraded database.
+CREATE TABLE deployment_records (
+  deployment_id TEXT PRIMARY KEY,
+  worker_id TEXT NOT NULL,
+  previous_digest TEXT CHECK (previous_digest IS NULL OR length(previous_digest) > 0),
+  target_digest TEXT NOT NULL CHECK (length(target_digest) > 0),
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  status TEXT NOT NULL CHECK (status IN ('PENDING', 'SUCCEEDED', 'FAILED', 'ROLLED_BACK')),
+  applied_by TEXT NOT NULL,
+  is_rollback INTEGER NOT NULL DEFAULT 0,
+  FOREIGN KEY(worker_id) REFERENCES workers(worker_id)
+);
 `)
 	require.NoError(t, err)
 	seedMigrationHistory(t, legacy, 136)
@@ -612,6 +631,14 @@ CREATE TABLE jobs (
 	err = migrated.DB().QueryRow(`SELECT version FROM schema_migrations WHERE version = 145`).Scan(&migrationVersion)
 	require.NoError(t, err)
 	require.Equal(t, 145, migrationVersion)
+
+	// Migration 151 (worker deployment read model) must apply on the
+	// legacy-upgrade path too — this pins the ALTER TABLE deployment_records
+	// + worker_deployment_state backfill against the fixture-provided
+	// pre-151 deployment_records shape.
+	err = migrated.DB().QueryRow(`SELECT version FROM schema_migrations WHERE version = 151`).Scan(&migrationVersion)
+	require.NoError(t, err)
+	require.Equal(t, 151, migrationVersion)
 }
 
 func TestValidationStoreHandlesConcurrentUpserts(t *testing.T) {

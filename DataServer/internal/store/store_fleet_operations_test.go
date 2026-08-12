@@ -516,6 +516,203 @@ func TestFleetStore_QueuedListOrdered(t *testing.T) {
 	}
 }
 
+// ============================================================
+// Single transactional transition API (transitionOperation)
+// ============================================================
+
+func insertQueuedOp(t *testing.T, s *SQLiteStore, id, opKind string) {
+	t.Helper()
+	if err := s.InsertOperation(context.Background(), &Operation{
+		OperationID: id,
+		WorkerID:    "wicket",
+		Op:          opKind,
+		RequestedBy: "ops",
+		Reason:      "transition API test",
+		Status:      OperationStatusQueued,
+		QueuedAt:    time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("InsertOperation(%s): %v", id, err)
+	}
+}
+
+// TestFleetStore_NoOperationResurrection pins the no-resurrection rule of
+// the canonical operation machine at the store boundary: a RUNNING row that
+// reached a terminal status can never be moved to the other terminal — a
+// late MarkFailed must not flip a SUCCEEDED audit row (and vice versa).
+func TestFleetStore_NoOperationResurrection(t *testing.T) {
+	s := newFleetTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	insertQueuedOp(t, s, "op-nores-1", "drain")
+	if _, err := s.MarkRunning(ctx, "op-nores-1", now); err != nil {
+		t.Fatalf("mark running: %v", err)
+	}
+	if err := s.MarkSucceeded(ctx, "op-nores-1", now); err != nil {
+		t.Fatalf("mark succeeded: %v", err)
+	}
+	if err := s.MarkFailed(ctx, "op-nores-1", now, "late failure"); !errors.Is(err, ErrIllegalOperationTransition) {
+		t.Fatalf("SUCCEEDED -> FAILED error = %v, want ErrIllegalOperationTransition", err)
+	}
+	got, err := s.GetOperation(ctx, "op-nores-1")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Status != OperationStatusSucceeded {
+		t.Errorf("Status = %q, want SUCCEEDED (terminal row must stay put)", got.Status)
+	}
+
+	insertQueuedOp(t, s, "op-nores-2", "update")
+	if _, err := s.MarkRunning(ctx, "op-nores-2", now); err != nil {
+		t.Fatalf("mark running: %v", err)
+	}
+	if err := s.MarkFailed(ctx, "op-nores-2", now, "cosign verify failed"); err != nil {
+		t.Fatalf("mark failed: %v", err)
+	}
+	if err := s.MarkSucceeded(ctx, "op-nores-2", now); !errors.Is(err, ErrIllegalOperationTransition) {
+		t.Fatalf("FAILED -> SUCCEEDED error = %v, want ErrIllegalOperationTransition", err)
+	}
+}
+
+// TestFleetStore_CannotJumpStraightToTerminal pins the claim contract: a
+// QUEUED row can only be claimed (→ RUNNING); jumping straight to a
+// terminal status is rejected by the canonical machine.
+func TestFleetStore_CannotJumpStraightToTerminal(t *testing.T) {
+	s := newFleetTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	insertQueuedOp(t, s, "op-jump-1", "restart")
+	if err := s.MarkSucceeded(ctx, "op-jump-1", now); !errors.Is(err, ErrIllegalOperationTransition) {
+		t.Fatalf("QUEUED -> SUCCEEDED error = %v, want ErrIllegalOperationTransition", err)
+	}
+	insertQueuedOp(t, s, "op-jump-2", "smoke")
+	if err := s.MarkFailed(ctx, "op-jump-2", now, "premature"); !errors.Is(err, ErrIllegalOperationTransition) {
+		t.Fatalf("QUEUED -> FAILED error = %v, want ErrIllegalOperationTransition", err)
+	}
+
+	for _, id := range []string{"op-jump-1", "op-jump-2"} {
+		got, err := s.GetOperation(ctx, id)
+		if err != nil {
+			t.Fatalf("get %s: %v", id, err)
+		}
+		if got.Status != OperationStatusQueued {
+			t.Errorf("Status(%s) = %q, want QUEUED (rejected transition must not move the row)", id, got.Status)
+		}
+	}
+}
+
+// TestFleetStore_TerminalMarkIsIdempotent pins the double-call safety the
+// controller's terminal-persist retry loop depends on: marking a row that
+// is ALREADY in the requested terminal state is a nil no-op, never an
+// error.
+func TestFleetStore_TerminalMarkIsIdempotent(t *testing.T) {
+	s := newFleetTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	insertQueuedOp(t, s, "op-idem-1", "drain")
+	if _, err := s.MarkRunning(ctx, "op-idem-1", now); err != nil {
+		t.Fatalf("mark running: %v", err)
+	}
+	first := now.Add(time.Second).Truncate(time.Second)
+	if err := s.MarkSucceeded(ctx, "op-idem-1", first); err != nil {
+		t.Fatalf("mark succeeded: %v", err)
+	}
+	// Second call: already SUCCEEDED → idempotent no-op.
+	if err := s.MarkSucceeded(ctx, "op-idem-1", now.Add(2*time.Second)); err != nil {
+		t.Fatalf("second MarkSucceeded error = %v, want idempotent nil", err)
+	}
+	got, err := s.GetOperation(ctx, "op-idem-1")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Status != OperationStatusSucceeded {
+		t.Errorf("Status = %q, want SUCCEEDED", got.Status)
+	}
+	if got.FinishedAt == nil || !got.FinishedAt.Equal(first) {
+		t.Errorf("FinishedAt = %v, want %v (idempotent no-op must not restamp)", got.FinishedAt, first)
+	}
+}
+
+// TestFleetStore_TerminalMarkOnMissingFailsClosed pins that a terminal
+// transition against a row that does not exist surfaces ErrOperationNotFound
+// instead of a silent no-op — the old WHERE-guard behaviour that swallowed
+// missing rows.
+func TestFleetStore_TerminalMarkOnMissingFailsClosed(t *testing.T) {
+	s := newFleetTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	if err := s.MarkSucceeded(ctx, "op-ghost-term", now); !errors.Is(err, ErrOperationNotFound) {
+		t.Fatalf("MarkSucceeded(missing) error = %v, want ErrOperationNotFound", err)
+	}
+	if err := s.MarkFailed(ctx, "op-ghost-term", now, "x"); !errors.Is(err, ErrOperationNotFound) {
+		t.Fatalf("MarkFailed(missing) error = %v, want ErrOperationNotFound", err)
+	}
+}
+
+// TestFleetStore_MarkRunningGuardedNoopOnTerminal pins the claim contract:
+// a claim attempt against an already-terminal row is a guarded (false, nil)
+// no-op — never a replay of the external executor and never an error.
+func TestFleetStore_MarkRunningGuardedNoopOnTerminal(t *testing.T) {
+	s := newFleetTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	insertQueuedOp(t, s, "op-claim-term", "restart")
+	if _, err := s.MarkRunning(ctx, "op-claim-term", now); err != nil {
+		t.Fatalf("mark running: %v", err)
+	}
+	if err := s.MarkSucceeded(ctx, "op-claim-term", now); err != nil {
+		t.Fatalf("mark succeeded: %v", err)
+	}
+
+	claimed, err := s.MarkRunning(ctx, "op-claim-term", now)
+	if err != nil {
+		t.Fatalf("MarkRunning(terminal) error = %v, want guarded no-op nil", err)
+	}
+	if claimed {
+		t.Errorf("MarkRunning(terminal) claimed = true, want false (never replay the executor)")
+	}
+	got, err := s.GetOperation(ctx, "op-claim-term")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Status != OperationStatusSucceeded {
+		t.Errorf("Status = %q, want SUCCEEDED (no-op claim must not move the row)", got.Status)
+	}
+}
+
+// TestFleetStore_MarkRunningIdempotent pins the duplicate-claim case: a
+// second claim on an already-RUNNING row is (false, nil) and must not
+// restamp started_at.
+func TestFleetStore_MarkRunningIdempotent(t *testing.T) {
+	s := newFleetTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	insertQueuedOp(t, s, "op-claim-dup", "drain")
+	now = now.Truncate(time.Second)
+	if _, err := s.MarkRunning(ctx, "op-claim-dup", now); err != nil {
+		t.Fatalf("first claim: %v", err)
+	}
+	claimed, err := s.MarkRunning(ctx, "op-claim-dup", now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("second claim error = %v, want idempotent nil", err)
+	}
+	if claimed {
+		t.Errorf("second claim = true, want false")
+	}
+	got, err := s.GetOperation(ctx, "op-claim-dup")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.StartedAt == nil || !got.StartedAt.Equal(now) {
+		t.Errorf("StartedAt = %v, want %v (idempotent claim must not restamp)", got.StartedAt, now)
+	}
+}
+
 // TestFleetStore_ListLimit caps the audit-endpoint enumeration
 // at the configured limit. `limit <= 0` must mean "no cap" —
 // tested by the no-arg call above; this test pins the cap.

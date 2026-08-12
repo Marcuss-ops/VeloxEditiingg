@@ -62,6 +62,14 @@ var ErrOperationNotFound = errors.New("fleet_operations: operation not found")
 // re-issuing". Future steps gate retry buttons on this sentinel.
 var ErrOperationInFlight = errors.New("fleet_operations: operation for (worker_id, op) is already in-flight (QUEUED or RUNNING)")
 
+// ErrOperationConcurrentTransition is returned by the fleet_operations
+// transition API when the fenced UPDATE matches zero rows even though the
+// row was found a moment earlier in the same transaction — a concurrent
+// writer moved the row between our read and our write. The row EXISTS (so
+// this is NOT ErrOperationNotFound); the transition is refused rather than
+// clobbering the other writer's terminal outcome.
+var ErrOperationConcurrentTransition = errors.New("fleet operation state machine: concurrent transition")
+
 // Operation is one row of the fleet_operations ledger. Payload
 // is op-dependent JSON (empty object "{}" when none was given),
 // so the executor receives a stable contract regardless of op
@@ -223,76 +231,126 @@ func isInflightUniqueConflict(err error) bool {
 	return false
 }
 
-// MarkRunning transitions QUEUED → RUNNING, atomically. The
-// WHERE status='QUEUED' guard matches at most once per row, so
-// a duplicate tick-call (e.g. after a controller restart) is a
-// guarded no-op rather than a destructive overwrite — the row
-// stays in its current state and the false return tells the
-// controller not to replay the external executor.
+// MarkRunning transitions QUEUED → RUNNING, atomically. Routes through the
+// single transactional transition API (transitionOperation) so the claim
+// is validated against the canonical operation machine and fenced with
+// RowsAffected.
 //
 // The bool reports whether this call actually claimed the row. A false
-// result is a guarded no-op and the caller MUST NOT execute the side effect.
+// result is a guarded no-op — the row was already RUNNING (idempotent
+// duplicate tick-call, e.g. after a controller restart) or already
+// terminal — and the caller MUST NOT execute the external executor. A
+// MISSING row is not a no-op: it surfaces ErrOperationNotFound (fail-loud,
+// the old WHERE-guard silently swallowed it).
 func (s *SQLiteStore) MarkRunning(ctx context.Context, operationID string, startedAt time.Time) (bool, error) {
-	result, err := s.db.ExecContext(ctx, `
-UPDATE fleet_operations
-SET status = ?, started_at = ?
-WHERE operation_id = ? AND status = ?`,
-		OperationStatusRunning,
-		startedAt.UTC().Format(time.RFC3339),
-		operationID,
-		OperationStatusQueued,
-	)
-	if err != nil {
-		return false, err
+	changed, err := s.transitionOperation(ctx, operationID, OperationStatusRunning, &startedAt, nil, "")
+	if err != nil && errors.Is(err, ErrIllegalOperationTransition) {
+		// The canonical machine only lets a QUEUED row claim RUNNING. An
+		// already-RUNNING row is the idempotent case (handled inside
+		// transitionOperation as a no-op); an already-terminal row is the
+		// documented guarded no-op — another dispatcher owns the outcome,
+		// never replay the external executor.
+		return false, nil
 	}
-	rows, err := readRowsAffected(result, "mark fleet operation running")
-	return rows == 1, err
+	return changed, err
 }
 
-// MarkSucceeded transitions RUNNING → SUCCEEDED, capturing
-// finished_at. Idempotent under double-call (guard on
-// status='RUNNING'); if the row is already terminal the call is
-// a no-op.
+// MarkSucceeded transitions RUNNING → SUCCEEDED, capturing finished_at and
+// clearing error_message. Idempotent under double-call: a row already in
+// SUCCEEDED is a no-op. A terminal row in any OTHER state (FAILED) is
+// rejected with ErrIllegalOperationTransition — no resurrection.
 func (s *SQLiteStore) MarkSucceeded(ctx context.Context, operationID string, finishedAt time.Time) error {
-	result, err := s.db.ExecContext(ctx, `
-UPDATE fleet_operations
-SET status = ?, finished_at = ?
-WHERE operation_id = ? AND status = ?`,
-		OperationStatusSucceeded,
-		finishedAt.UTC().Format(time.RFC3339),
-		operationID,
-		OperationStatusRunning,
-	)
-	if err != nil {
-		return err
-	}
-	_, err = readRowsAffected(result, "mark fleet operation succeeded")
+	_, err := s.transitionOperation(ctx, operationID, OperationStatusSucceeded, nil, &finishedAt, "")
 	return err
 }
 
-// MarkFailed transitions RUNNING → FAILED, capturing
-// finished_at + error_message. errMsg MUST be non-empty
-// (otherwise the audit dashboard cannot tell a failed-with-no-
-// log from a successful-completion).
+// MarkFailed transitions RUNNING → FAILED, capturing finished_at +
+// error_message. errMsg MUST be non-empty (otherwise the audit dashboard
+// cannot tell a failed-with-no-log from a successful-completion); the
+// fallback string is synthesised when the caller passes "". Idempotent
+// under double-call; a terminal row in any OTHER state (SUCCEEDED) is
+// rejected with ErrIllegalOperationTransition — no resurrection.
 func (s *SQLiteStore) MarkFailed(ctx context.Context, operationID string, finishedAt time.Time, errMsg string) error {
 	if errMsg == "" {
 		errMsg = "executor returned an error (no detail provided)"
 	}
-	result, err := s.db.ExecContext(ctx, `
-UPDATE fleet_operations
-SET status = ?, finished_at = ?, error_message = ?
-WHERE operation_id = ? AND status = ?`,
-		OperationStatusFailed,
-		finishedAt.UTC().Format(time.RFC3339),
-		errMsg,
-		operationID,
-		OperationStatusRunning,
-	)
-	if err != nil {
-		return err
-	}
-	_, err = readRowsAffected(result, "mark fleet operation failed")
+	_, err := s.transitionOperation(ctx, operationID, OperationStatusFailed, nil, &finishedAt, errMsg)
 	return err
+}
+
+// transitionOperation is the SINGLE transactional transition API for
+// fleet_operations rows. Every Mark* method routes through it. It:
+//
+//  1. reads the current row inside a transaction,
+//  2. treats an already-in-target-state row as an idempotent no-op
+//     (double-call safety for the controller's terminal-persist retries),
+//  3. validates `current → to` via the canonical operation machine
+//     (store_state_machine.go) — a terminal row can never be resurrected
+//     and a QUEUED row can never jump straight to a terminal status,
+//  4. fences the UPDATE with the observed from-state and checks
+//     RowsAffected so a concurrent transition cannot be clobbered,
+//  5. commits only when every step succeeded.
+//
+// `changed` reports whether the row actually moved. Errors: missing row →
+// ErrOperationNotFound; illegal transition → ErrIllegalOperationTransition;
+// fence miss → ErrOperationConcurrentTransition.
+func (s *SQLiteStore) transitionOperation(ctx context.Context, operationID, to string, startedAt, finishedAt *time.Time, errMsg string) (bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+
+	// Read-first: the canonical machine needs the CURRENT status. Missing
+	// rows surface ErrOperationNotFound before any write is attempted.
+	op, err := getOperationFrom(ctx, tx, operationID)
+	if err != nil {
+		return false, err
+	}
+	if op.Status == to {
+		// Idempotent: the row is already in the requested state.
+		return false, nil
+	}
+	if err := ValidateOperationTransition(op.Status, to); err != nil {
+		return false, err
+	}
+
+	query := `UPDATE fleet_operations SET status = ?`
+	args := []any{to}
+	if startedAt != nil {
+		query += `, started_at = ?`
+		args = append(args, startedAt.UTC().Format(time.RFC3339))
+	}
+	if finishedAt != nil {
+		query += `, finished_at = ?`
+		args = append(args, finishedAt.UTC().Format(time.RFC3339))
+	}
+	if errMsg == "" {
+		query += `, error_message = NULL`
+	} else {
+		query += `, error_message = ?`
+		args = append(args, errMsg)
+	}
+	// Fencing: re-check the from-state in the WHERE clause. RowsAffected==0
+	// here means the row moved between the read and the write (concurrent
+	// writer) — fail closed instead of overwriting a terminal outcome.
+	query += ` WHERE operation_id = ? AND status = ?`
+	args = append(args, operationID, op.Status)
+	res, err := tx.ExecContext(ctx, query, args...)
+	if err != nil {
+		return false, err
+	}
+	n, err := readRowsAffected(res, "transition fleet operation")
+	if err != nil {
+		return false, err
+	}
+	if n == 0 {
+		return false, fmt.Errorf("%w: operation %s moved concurrently during transition", ErrOperationConcurrentTransition, operationID)
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // ListQueuedOperations returns up to `limit` rows with status=QUEUED,
@@ -368,7 +426,20 @@ func (s *SQLiteStore) ListOperations(ctx context.Context, workerID, statusFilter
 // GetOperation fetches one row by operation_id. Returns
 // ErrOperationNotFound on miss.
 func (s *SQLiteStore) GetOperation(ctx context.Context, operationID string) (*Operation, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	return getOperationFrom(ctx, s.db, operationID)
+}
+
+// operationStateQuerier is the read seam shared by getOperationFrom and the
+// transactional transition path (a *sql.Tx satisfies it).
+type operationStateQuerier interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+// getOperationFrom reads one operation row through an arbitrary querier
+// (store DB handle or an open transaction), so the transition API can read
+// the current status inside the same tx that persists the change.
+func getOperationFrom(ctx context.Context, queryer operationStateQuerier, operationID string) (*Operation, error) {
+	rows, err := queryer.QueryContext(ctx, `
 SELECT operation_id, worker_id, op, requested_by, reason, status,
        queued_at, started_at, finished_at, payload, error_message
 FROM fleet_operations
