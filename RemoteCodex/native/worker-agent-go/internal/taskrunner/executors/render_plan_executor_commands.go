@@ -98,18 +98,27 @@ func runCommandExecutor(ctx context.Context, e *renderPlanExecutor, spec executo
 		}
 	}
 	profile := ffmpegProfileMetadata(result)
+	rawMetrics := rawMetricsFromFFmpegResult(result)
 	commandHandle.SetMetadata("executor_id", cp.ExecutorID)
 	commandHandle.SetMetadata("command_fingerprint", result.CommandFingerprint)
 	commandHandle.SetMetadata("ffmpeg_profile", profile)
 	if runErr != nil {
 		commandHandle.Abort("command_failed", runErr.Error())
 		detail := fmt.Errorf("%w (exit_code=%d signal=%v)", runErr, result.ExitCode, result.TerminatedBySignal)
-		return failedResult(started, "command_failed", detail), nil
+		return executor.ExecutionResult{
+			Status: "failed", ErrorCode: "command_failed", ErrorDetail: detail.Error(),
+			RawMetrics: rawMetrics, Metrics: map[string]interface{}{"ffmpeg_profile": profile},
+			StartedAt: started, CompletedAt: time.Now().UTC(),
+		}, nil
 	}
 	commandHandle.CompleteWith(0, 0, 0, telemetry.StatusOK, "", "")
 	artifact, err := artifactFromFile(outputType, cp.OutputPath)
 	if err != nil {
-		return failedResult(started, "artifact_invalid", err), nil
+		return executor.ExecutionResult{
+			Status: "failed", ErrorCode: "artifact_invalid", ErrorDetail: err.Error(),
+			RawMetrics: rawMetrics, Metrics: map[string]interface{}{"ffmpeg_profile": profile},
+			StartedAt: started, CompletedAt: time.Now().UTC(),
+		}, nil
 	}
 	metrics := map[string]interface{}{
 		"command_plan":       cp.Canonical(),
@@ -126,7 +135,7 @@ func runCommandExecutor(ctx context.Context, e *renderPlanExecutor, spec executo
 	}
 	return executor.ExecutionResult{
 		Status: "succeeded", Outputs: []executor.ArtifactRef{artifact},
-		Metrics:   metrics,
+		RawMetrics: rawMetrics, Metrics: metrics,
 		StartedAt: started, CompletedAt: time.Now().UTC(),
 	}, nil
 }

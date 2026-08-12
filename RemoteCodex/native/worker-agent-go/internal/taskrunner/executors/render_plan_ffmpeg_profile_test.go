@@ -143,6 +143,8 @@ func TestEncodeExecutor_ConsumesCanonicalRunnerAndPublishesProfile(t *testing.T)
 			Operation:      ffmpegrunner.OperationEncode,
 			ProcessSpawnMS: 12, FirstOutputMS: 45, ProcessingMS: 285,
 			ExitWaitMS: 3, ProcessWallMS: 340, ExitCode: 0,
+			UserCPUMs: 7, SystemCPUMs: 3, PeakRSSBytes: 100,
+			ReadBytes: 200, WriteBytes: 300,
 			CommandFingerprint: "fp-encode", Parameters: ffmpegrunner.SanitizedParameters{Codecs: []string{"aac", "libx264"}, InputCount: 2},
 		},
 	}
@@ -187,6 +189,9 @@ func TestEncodeExecutor_ConsumesCanonicalRunnerAndPublishesProfile(t *testing.T)
 	if profile["first_output_ms"] != int64(45) || profile["processing_ms"] != int64(285) || profile["exit_wait_ms"] != int64(3) {
 		t.Errorf("ffmpeg_profile phase trio = first %v / proc %v / exit %v, want 45/285/3",
 			profile["first_output_ms"], profile["processing_ms"], profile["exit_wait_ms"])
+	}
+	if result.RawMetrics == nil || result.RawMetrics.CpuTimeMs != 10 || result.RawMetrics.PeakRssBytes != 100 || result.RawMetrics.DiskReadBytes != 200 || result.RawMetrics.DiskWriteBytes != 300 || result.RawMetrics.WallClockSeconds != 0.34 {
+		t.Fatalf("typed FFmpeg raw metrics = %+v", result.RawMetrics)
 	}
 	if _, ok := profile["parameters"]; !ok {
 		t.Error("ffmpeg_profile.parameters missing")
@@ -307,6 +312,8 @@ func TestEncodeExecutor_RunnerFailureSurfacesExitCode(t *testing.T) {
 		err: errors.New("ffmpeg run: exit status 2"),
 		result: ffmpegrunner.FFmpegResult{
 			ExitCode: 2, TerminatedBySignal: false,
+			ProcessWallMS: 17, UserCPUMs: 4, SystemCPUMs: 1,
+			PeakRSSBytes: 55, ReadBytes: 66, WriteBytes: 77,
 			CommandFingerprint: "fp-fail",
 		},
 	}
@@ -332,5 +339,8 @@ func TestEncodeExecutor_RunnerFailureSurfacesExitCode(t *testing.T) {
 	}
 	if !strings.Contains(result.ErrorDetail, "exit_code=2") {
 		t.Errorf("ErrorDetail = %q, want exit_code=2", result.ErrorDetail)
+	}
+	if result.RawMetrics == nil || result.RawMetrics.CpuTimeMs != 5 || result.RawMetrics.PeakRssBytes != 55 || result.RawMetrics.DiskReadBytes != 66 || result.RawMetrics.DiskWriteBytes != 77 || result.RawMetrics.WallClockSeconds != 0.017 {
+		t.Fatalf("failed FFmpeg raw metrics = %+v", result.RawMetrics)
 	}
 }

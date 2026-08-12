@@ -152,7 +152,8 @@ func (e *renderBatchExecutor) Execute(ctx context.Context, execCtx executor.Exec
 		obs.finish(visual, telemetry.StatusFailed, "visual_plan_invalid", err)
 		return obs.failure(started, "visual_plan_invalid", err), nil
 	}
-	visualArtifact, visualProfile, err := e.runCommand(ctx, execCtx, ffmpegrunner.OperationCompose, visualArgs, videoOnlyPath, "video-only")
+	visualArtifact, visualProfile, visualRaw, err := e.runCommand(ctx, execCtx, ffmpegrunner.OperationCompose, visualArgs, videoOnlyPath, "video-only")
+	obs.mergeRawMetrics(visualRaw)
 	if err != nil {
 		obs.finish(visual, telemetry.StatusFailed, "visual_execute_failed", err)
 		return obs.failure(started, "visual_execute_failed", err), nil
@@ -170,7 +171,8 @@ func (e *renderBatchExecutor) Execute(ctx context.Context, execCtx executor.Exec
 
 	mux := obs.begin("final_mux", "engine.mux", "packet_write")
 	muxArgs := buildFinalAudioCopyArgs(videoOnlyPath, bindings[plan.FinalAudio.AssetID].Path, finalPath)
-	finalArtifact, muxProfile, err := e.runCommand(ctx, execCtx, ffmpegrunner.OperationEncode, muxArgs, finalPath, "final-mux")
+	finalArtifact, muxProfile, muxRaw, err := e.runCommand(ctx, execCtx, ffmpegrunner.OperationEncode, muxArgs, finalPath, "final-mux")
+	obs.mergeRawMetrics(muxRaw)
 	if err != nil {
 		obs.finish(mux, telemetry.StatusFailed, "final_mux_failed", err)
 		return obs.failure(started, "final_mux_failed", err), nil
@@ -192,9 +194,17 @@ func (e *renderBatchExecutor) Execute(ctx context.Context, execCtx executor.Exec
 	metrics["ffmpeg_mux_profile"] = muxProfile
 	obs.info("render_batch.succeeded", map[string]interface{}{"compiled_asset_count": int64(len(plan.Assets)), "final_audio_copy": int64(1)})
 
+	obs.ensureRawMetrics()
+	obs.rawMetrics.OutputBytes = finalArtifact.SizeBytes
+	obs.rawMetrics.OutputFileSize = finalArtifact.SizeBytes
+	obs.rawMetrics.OutputSha256 = finalArtifact.Hash
+	obs.rawMetrics.MediaDurationSeconds = float64(plan.DurationUS) / 1_000_000
+	obs.rawMetrics.WallClockSeconds = time.Since(started).Seconds()
+	obs.rawMetrics.FinalConcatStreamCopy = true
+	obs.rawMetrics.ConcatMode = "stream_copy"
 	return executor.ExecutionResult{
 		Status: "succeeded", Outputs: []executor.ArtifactRef{finalArtifact},
-		Metrics: metrics, StartedAt: started, CompletedAt: time.Now().UTC(),
+		RawMetrics: obs.rawMetrics, Metrics: metrics, StartedAt: started, CompletedAt: time.Now().UTC(),
 	}, nil
 }
 
@@ -376,7 +386,7 @@ func buildFinalAudioCopyArgs(videoOnlyPath, audioPath, outputPath string) []stri
 	}
 }
 
-func (e *renderBatchExecutor) runCommand(ctx context.Context, execCtx executor.ExecutionContext, operation ffmpegrunner.OperationType, args []string, outputPath, outputType string) (executor.ArtifactRef, map[string]interface{}, error) {
+func (e *renderBatchExecutor) runCommand(ctx context.Context, execCtx executor.ExecutionContext, operation ffmpegrunner.OperationType, args []string, outputPath, outputType string) (executor.ArtifactRef, map[string]interface{}, *telemetry.RawExecutionMetrics, error) {
 	profileResult, runErr := e.runner.Run(ctx, ffmpegrunner.FFmpegRequest{Operation: operation, Args: args})
 	if sink, ok := execCtx.(interface {
 		FFmpegProfiles() *ffmpegrunner.Aggregator
@@ -384,14 +394,15 @@ func (e *renderBatchExecutor) runCommand(ctx context.Context, execCtx executor.E
 		sink.FFmpegProfiles().Add(profileResult)
 	}
 	profile := ffmpegProfileMetadata(profileResult)
+	rawMetrics := rawMetricsFromFFmpegResult(profileResult)
 	if runErr != nil {
-		return executor.ArtifactRef{}, profile, fmt.Errorf("render_batch@1 %s: %w (exit_code=%d)", outputType, runErr, profileResult.ExitCode)
+		return executor.ArtifactRef{}, profile, rawMetrics, fmt.Errorf("render_batch@1 %s: %w (exit_code=%d)", outputType, runErr, profileResult.ExitCode)
 	}
 	artifact, err := artifactFromFile("video/mp4", outputPath)
 	if err != nil {
-		return executor.ArtifactRef{}, profile, fmt.Errorf("render_batch@1 %s artifact: %w", outputType, err)
+		return executor.ArtifactRef{}, profile, rawMetrics, fmt.Errorf("render_batch@1 %s artifact: %w", outputType, err)
 	}
-	return artifact, profile, nil
+	return artifact, profile, rawMetrics, nil
 }
 
 type renderBatchPhase struct {
@@ -407,6 +418,7 @@ type renderBatchObservability struct {
 	timelineSHA      string
 	timelineRevision int64
 	metrics          map[string]interface{}
+	rawMetrics       *telemetry.RawExecutionMetrics
 }
 
 func newRenderBatchObservability(execCtx executor.ExecutionContext, planSHA string) *renderBatchObservability {
@@ -424,6 +436,23 @@ func newRenderBatchObservability(execCtx executor.ExecutionContext, planSHA stri
 func compiledPlanSHA(spec executor.TaskSpec) string {
 	sha, _ := spec.Payload[contract.PayloadKeyCompiledRenderPlanSHA].(string)
 	return strings.TrimSpace(sha)
+}
+
+func (o *renderBatchObservability) ensureRawMetrics() {
+	if o == nil {
+		return
+	}
+	if o.rawMetrics == nil {
+		o.rawMetrics = &telemetry.RawExecutionMetrics{}
+	}
+}
+
+func (o *renderBatchObservability) mergeRawMetrics(raw *telemetry.RawExecutionMetrics) {
+	if o == nil || raw == nil {
+		return
+	}
+	o.ensureRawMetrics()
+	mergeRawFFmpegMetrics(o.rawMetrics, raw)
 }
 
 func (o *renderBatchObservability) identityFields() map[string]interface{} {
@@ -550,8 +579,12 @@ func (o *renderBatchObservability) failure(started time.Time, code string, err e
 		return executor.ExecutionResult{Status: "failed", ErrorCode: code, ErrorDetail: detail, StartedAt: started, CompletedAt: time.Now().UTC()}
 	}
 	o.logFailure("execution", code, err)
+	if o.rawMetrics != nil {
+		o.rawMetrics.WallClockSeconds = time.Since(started).Seconds()
+	}
 	return executor.ExecutionResult{
-		Status: "failed", ErrorCode: code, ErrorDetail: detail, Metrics: o.metrics,
+		Status: "failed", ErrorCode: code, ErrorDetail: detail,
+		RawMetrics: o.rawMetrics, Metrics: o.metrics,
 		StartedAt: started, CompletedAt: time.Now().UTC(),
 	}
 }

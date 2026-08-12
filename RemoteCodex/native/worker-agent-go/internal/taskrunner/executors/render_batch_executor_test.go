@@ -85,6 +85,11 @@ func (f *batchFakeFFmpegRunner) Run(_ context.Context, req ffmpegrunner.FFmpegRe
 		Operation:          req.Operation,
 		ExitCode:           0,
 		ProcessWallMS:      10,
+		UserCPUMs:          3,
+		SystemCPUMs:        2,
+		PeakRSSBytes:       100,
+		ReadBytes:          1000,
+		WriteBytes:         2000,
 		CommandFingerprint: ffmpegrunner.Fingerprint(req),
 		Parameters:         ffmpegrunner.Sanitize(req),
 	}, nil
@@ -312,6 +317,12 @@ func TestRenderBatch_VideoOnlyThenFinalAudioCopyMux(t *testing.T) {
 	}
 	if got := result.Metrics["final_audio_copy"]; got != int64(1) {
 		t.Errorf("final_audio_copy = %v, want 1", got)
+	}
+	if result.RawMetrics == nil {
+		t.Fatal("render_batch omitted typed raw metrics")
+	}
+	if result.RawMetrics.CpuTimeMs != 10 || result.RawMetrics.PeakRssBytes != 100 || result.RawMetrics.DiskReadBytes != 2000 || result.RawMetrics.DiskWriteBytes != 4000 || result.RawMetrics.OutputFileSize <= 0 || result.RawMetrics.OutputSha256 == "" || !result.RawMetrics.FinalConcatStreamCopy || result.RawMetrics.ConcatMode != "stream_copy" {
+		t.Fatalf("render_batch raw metrics = %+v", *result.RawMetrics)
 	}
 	if len(result.Outputs) != 1 || result.Outputs[0].Type != "video/mp4" || result.Outputs[0].Hash == "" {
 		t.Fatalf("final output = %+v", result.Outputs)
