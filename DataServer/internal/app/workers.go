@@ -124,6 +124,16 @@ func (m *WorkersModule) SetOperationLedgerReader(reader api.OperationLedgerReade
 	}
 }
 
+// SetWorkerDeploymentStateReader wires the durable worker_deployment_state
+// read model into the admin worker cards: the current-state digest fields
+// (desired/running/last_successful) come from this projection, never from
+// deployment_records history reconstruction.
+func (m *WorkersModule) SetWorkerDeploymentStateReader(reader api.WorkerDeploymentStateReader) {
+	if m != nil && m.adminWorkersHandler != nil {
+		m.adminWorkersHandler.SetWorkerDeploymentStateReader(reader)
+	}
+}
+
 // SetMutationsHandler wires the Step 6/15 admin mutations handler
 // (POST drain/resume/quarantine). Idempotent — safe to call before
 // RegisterRoutes; passing nil disables the POST routes so a

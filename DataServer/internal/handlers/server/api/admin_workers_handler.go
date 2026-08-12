@@ -63,6 +63,17 @@ type OperationLedgerReader interface {
 	ListOperations(context.Context, string, string, int) ([]store.Operation, error)
 }
 
+// WorkerDeploymentStateReader is the read-only seam for the durable
+// worker_deployment_state projection. When wired, the admin card derives
+// its CURRENT-STATE digest fields (desired/running/last_successful) from
+// this read model and NEVER from deployment_records history — the journal
+// is audit history, not current truth. Optional: when not wired
+// (lightweight/unit deployments) or when a worker has no state row
+// (pre-migration 151), the journal reconstruction remains as fallback.
+type WorkerDeploymentStateReader interface {
+	GetWorkerDeploymentState(context.Context, string) (*store.WorkerDeploymentState, error)
+}
+
 // AdminWorkersHandler holds the registry dependency for the operator-
 // facing GET /api/v1/admin/workers endpoints.
 //
@@ -74,6 +85,7 @@ type AdminWorkersHandler struct {
 	reg         *workersreg.Registry
 	deployments DeploymentReader
 	operations  OperationLedgerReader
+	state       WorkerDeploymentStateReader
 }
 
 // NewAdminWorkersHandler wires an AdminWorkersHandler to the worker
@@ -97,6 +109,16 @@ func (h *AdminWorkersHandler) SetDeploymentReader(reader DeploymentReader) {
 func (h *AdminWorkersHandler) SetOperationLedgerReader(reader OperationLedgerReader) {
 	if h != nil {
 		h.operations = reader
+	}
+}
+
+// SetWorkerDeploymentStateReader wires the durable read model used for the
+// card's current-state digest fields. When a state row exists it is
+// authoritative; the deployment_records journal is never used to rebuild
+// desired/running/last_successful.
+func (h *AdminWorkersHandler) SetWorkerDeploymentStateReader(reader WorkerDeploymentStateReader) {
+	if h != nil {
+		h.state = reader
 	}
 }
 
@@ -187,7 +209,40 @@ func (h *AdminWorkersHandler) card(ctx context.Context, info *workersreg.Worker)
 func (h *AdminWorkersHandler) cardWithError(ctx context.Context, info *workersreg.Worker) (WorkerCard, error) {
 	card := buildWorkerCard(info)
 	card.RunningDigest = card.ImageDigest
-	if h == nil || h.deployments == nil || info == nil {
+	if h == nil || info == nil {
+		return card, nil
+	}
+
+	// CURRENT-STATE section — the durable worker_deployment_state read
+	// model is the single source of truth for what the worker is running,
+	// what the fleet wants, and the last verified digest. The API must
+	// NEVER reconstruct these fields from deployment_records history:
+	// the journal is audit history, not current truth (a newer FAILED
+	// rollout keeps DESIRED=B / RUNNING=A visible as drift instead of
+	// being hidden behind the last history row).
+	readModel := false
+	if h.state != nil {
+		state, err := h.state.GetWorkerDeploymentState(ctx, info.WorkerID.String())
+		if err != nil {
+			if !errors.Is(err, store.ErrWorkerDeploymentStateNotFound) {
+				return WorkerCard{}, err
+			}
+		} else if state != nil {
+			readModel = true
+			card.DesiredDigest = state.DesiredDigest
+			card.TargetDigest = state.DesiredDigest
+			if state.RunningDigest != "" {
+				card.RunningDigest = state.RunningDigest
+			}
+			card.LastSuccessfulDigest = state.LastSuccessfulDigest
+		}
+	}
+
+	// OPERATION-HISTORY section — the append-only journal. Digest fields
+	// the read model already provided are never overwritten here; the
+	// journal only supplies PreviousDigest + the operation view, plus the
+	// legacy reconstruction for workers without a state row (pre-151).
+	if h.deployments == nil {
 		return card, nil
 	}
 	rec, err := h.deployments.GetLatestDeploymentForWorker(ctx, info.WorkerID.String())
@@ -200,16 +255,18 @@ func (h *AdminWorkersHandler) cardWithError(ctx context.Context, info *workersre
 	if rec == nil {
 		return card, nil
 	}
-	card.TargetDigest = rec.TargetDigest
-	card.DesiredDigest = rec.TargetDigest
-	card.PreviousDigest = rec.PreviousDigest
-	if successfulReader, ok := h.deployments.(SuccessfulDeploymentReader); ok {
-		if successful, successfulErr := successfulReader.GetLatestSuccessfulDeploymentForWorker(ctx, info.WorkerID.String()); successfulErr != nil && !errors.Is(successfulErr, store.ErrDeploymentNotFound) {
-			return WorkerCard{}, successfulErr
-		} else if successful != nil {
-			card.LastSuccessfulDigest = successful.TargetDigest
+	if !readModel {
+		card.TargetDigest = rec.TargetDigest
+		card.DesiredDigest = rec.TargetDigest
+		if successfulReader, ok := h.deployments.(SuccessfulDeploymentReader); ok {
+			if successful, successfulErr := successfulReader.GetLatestSuccessfulDeploymentForWorker(ctx, info.WorkerID.String()); successfulErr != nil && !errors.Is(successfulErr, store.ErrDeploymentNotFound) {
+				return WorkerCard{}, successfulErr
+			} else if successful != nil {
+				card.LastSuccessfulDigest = successful.TargetDigest
+			}
 		}
 	}
+	card.PreviousDigest = rec.PreviousDigest
 	// IMAGE section — real-time state only: what is running vs what the
 	// fleet wants, and whether they match. No operation-history fields.
 	if card.RunningDigest != "" && card.TargetDigest != "" {
