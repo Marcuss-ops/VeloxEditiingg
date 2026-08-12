@@ -209,13 +209,23 @@ func (s *SQLiteStore) UpdateDeploymentStatus(ctx context.Context, deploymentID, 
 	default:
 		return fmt.Errorf("UpdateDeploymentStatus: status must be terminal, got %q", status)
 	}
-	_, err := s.db.ExecContext(ctx, `
+	res, err := s.db.ExecContext(ctx, `
 UPDATE deployment_records
 SET status = ?, finished_at = ?
 WHERE deployment_id = ?`,
 		status, finishedAt.UTC().Format(time.RFC3339), deploymentID,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	n, err := readRowsAffected(res, "update deployment status")
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrDeploymentNotFound
+	}
+	return nil
 }
 
 // UpdateDeploymentRollbackFlag flips is_rollback on an existing
@@ -223,11 +233,21 @@ WHERE deployment_id = ?`,
 // that documents a rollback to previous_digest. Atomic with the
 // deploy status transition if wrapped in a tx by the caller.
 func (s *SQLiteStore) UpdateDeploymentRollbackFlag(ctx context.Context, deploymentID string, isRollback bool) error {
-	_, err := s.db.ExecContext(ctx, `
+	res, err := s.db.ExecContext(ctx, `
 UPDATE deployment_records SET is_rollback = ? WHERE deployment_id = ?`,
 		boolToIntSQLite(isRollback), deploymentID,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	n, err := readRowsAffected(res, "update deployment rollback flag")
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrDeploymentNotFound
+	}
+	return nil
 }
 
 // MarkDeploymentRolledBack atomically transitions a row to the
@@ -253,13 +273,23 @@ func (s *SQLiteStore) MarkDeploymentRolledBack(ctx context.Context, deploymentID
 	if !rollbackOK {
 		status = DeployStatusFailed
 	}
-	_, err := s.db.ExecContext(ctx, `
+	res, err := s.db.ExecContext(ctx, `
 UPDATE deployment_records
 SET status = ?, finished_at = ?, is_rollback = 1
 WHERE deployment_id = ?`,
 		status, finishedAt.UTC().Format(time.RFC3339), deploymentID,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	n, err := readRowsAffected(res, "mark deployment rolled back")
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrDeploymentNotFound
+	}
+	return nil
 }
 
 // GetLatestDeploymentForWorker returns the row with the highest
@@ -356,6 +386,7 @@ func scanDeploymentRecord(rows *sql.Rows) (*DeploymentRecord, error) {
 		startedAt     string
 		finishedAt    sql.NullString
 		isRollbackInt int
+		err           error
 	)
 	var previousDigest sql.NullString
 	if err := rows.Scan(
@@ -365,15 +396,16 @@ func scanDeploymentRecord(rows *sql.Rows) (*DeploymentRecord, error) {
 		return nil, err
 	}
 	r.PreviousDigest = previousDigest.String
-	if startedAt != "" {
-		if t, err := time.Parse(time.RFC3339, startedAt); err == nil {
-			r.StartedAt = t
-		}
+	r.StartedAt, err = parsePersistedWorkerTimestamp(startedAt, "deployment_records.started_at")
+	if err != nil {
+		return nil, err
 	}
 	if finishedAt.Valid && finishedAt.String != "" {
-		if t, err := time.Parse(time.RFC3339, finishedAt.String); err == nil {
-			r.FinishedAt = &t
+		parsed, err := parsePersistedWorkerTimestamp(finishedAt.String, "deployment_records.finished_at")
+		if err != nil {
+			return nil, err
 		}
+		r.FinishedAt = &parsed
 	}
 	r.IsRollback = isRollbackInt != 0
 	return &r, nil

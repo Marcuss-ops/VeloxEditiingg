@@ -231,14 +231,24 @@ func (s *SQLiteStore) TouchActiveAlertEvent(ctx context.Context, workerID, ruleI
 	if workerID == "" || ruleID == "" {
 		return errors.New("TouchActiveAlertEvent: WorkerID or RuleID empty")
 	}
-	_, err := s.db.ExecContext(ctx, `
+	res, err := s.db.ExecContext(ctx, `
 UPDATE alert_events
 SET last_observed_at = ?, current_value = ?, message = ?
 WHERE worker_id = ? AND rule_id = ? AND severity = ? AND state = 'ACTIVE'`,
 		observedAt.UTC().Format(time.RFC3339), nullableString(sql.NullString{String: currentValue, Valid: currentValue != ""}),
 		message, workerID, ruleID, severity,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	n, err := readRowsAffected(res, "store: touch active alert event")
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrAlertEventNotFound
+	}
+	return nil
 }
 
 // GetActiveAlertEventForWorkerRule returns the ACTIVE row for
@@ -373,6 +383,7 @@ func scanAlertEvent(rows *sql.Rows) (*AlertEvent, error) {
 		resolvedAt   sql.NullString
 		lastObserved string
 		currentValue sql.NullString
+		err          error
 	)
 	if err := rows.Scan(
 		&ev.EventID, &ev.WorkerID, &ev.RuleID, &ev.Severity, &ev.State,
@@ -380,16 +391,20 @@ func scanAlertEvent(rows *sql.Rows) (*AlertEvent, error) {
 	); err != nil {
 		return nil, err
 	}
-	if t, err := time.Parse(time.RFC3339, firedAt); err == nil {
-		ev.FiredAt = t
+	ev.FiredAt, err = parsePersistedWorkerTimestamp(firedAt, "alert_events.fired_at")
+	if err != nil {
+		return nil, err
 	}
 	if resolvedAt.Valid {
-		if t, err := time.Parse(time.RFC3339, resolvedAt.String); err == nil {
-			ev.ResolvedAt = sql.NullTime{Time: t, Valid: true}
+		parsed, err := parsePersistedWorkerTimestamp(resolvedAt.String, "alert_events.resolved_at")
+		if err != nil {
+			return nil, err
 		}
+		ev.ResolvedAt = sql.NullTime{Time: parsed, Valid: true}
 	}
-	if t, err := time.Parse(time.RFC3339, lastObserved); err == nil {
-		ev.LastObservedAt = t
+	ev.LastObservedAt, err = parsePersistedWorkerTimestamp(lastObserved, "alert_events.last_observed_at")
+	if err != nil {
+		return nil, err
 	}
 	if currentValue.Valid {
 		ev.CurrentValue = currentValue

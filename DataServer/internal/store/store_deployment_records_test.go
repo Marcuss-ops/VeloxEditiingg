@@ -208,6 +208,45 @@ func TestDeploymentStore_UpdateRejectsNonTerminal(t *testing.T) {
 	}
 }
 
+func TestDeploymentStore_UpdatesFailClosedWhenRowIsMissing(t *testing.T) {
+	s := newDeploymentTestStore(t)
+	ctx := context.Background()
+	finished := time.Now().UTC()
+
+	if err := s.UpdateDeploymentStatus(ctx, "missing", DeployStatusFailed, finished); !errors.Is(err, ErrDeploymentNotFound) {
+		t.Fatalf("UpdateDeploymentStatus error = %v, want ErrDeploymentNotFound", err)
+	}
+	if err := s.UpdateDeploymentRollbackFlag(ctx, "missing", true); !errors.Is(err, ErrDeploymentNotFound) {
+		t.Fatalf("UpdateDeploymentRollbackFlag error = %v, want ErrDeploymentNotFound", err)
+	}
+	if err := s.MarkDeploymentRolledBack(ctx, "missing", finished, true); !errors.Is(err, ErrDeploymentNotFound) {
+		t.Fatalf("MarkDeploymentRolledBack error = %v, want ErrDeploymentNotFound", err)
+	}
+}
+
+func TestDeploymentStore_RejectsCorruptTimestamps(t *testing.T) {
+	s := newDeploymentTestStore(t)
+	ctx := context.Background()
+	rec := DeploymentRecord{
+		DeploymentID:   "deploy-corrupt-time",
+		WorkerID:       "wicket",
+		PreviousDigest: deploymentTestDigest('a'),
+		TargetDigest:   deploymentTestDigest('b'),
+		StartedAt:      time.Now().UTC(),
+		Status:         DeployStatusPending,
+		AppliedBy:      "test",
+	}
+	if err := s.InsertDeploymentRecord(ctx, rec); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE deployment_records SET started_at = 'not-a-timestamp' WHERE deployment_id = ?`, rec.DeploymentID); err != nil {
+		t.Fatalf("corrupt row: %v", err)
+	}
+	if _, err := s.GetLatestDeploymentForWorker(ctx, rec.WorkerID); err == nil {
+		t.Fatal("GetLatestDeploymentForWorker returned nil error for corrupt timestamp")
+	}
+}
+
 // TestDeploymentStore_ListOrderAndLimit inserts three rows with
 // monotonically increasing started_at and verifies the list
 // ordering (DESC) and the limit parameter.
