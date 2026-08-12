@@ -11,10 +11,10 @@ import (
 // binding generator. Keep the source in JSON so both consumers can use it
 // without an additional YAML/protobuf parser dependency.
 //
-//go:embed catalog.json
+//go:embed schema/catalog.json
 var catalogJSON []byte
 
-//go:generate go run ./cmd/cataloggen -input catalog.json -output ../../RemoteCodex/native/video-engine-cpp/include/velox/telemetry/catalog_generated.hpp -go-output catalog_generated.go
+//go:generate go run ./cmd/cataloggen -input schema/catalog.json -output ../../RemoteCodex/native/video-engine-cpp/include/velox/telemetry/catalog_generated.hpp -go-output generated/catalog_gen.go
 
 // CatalogJSON returns a defensive copy of the language-neutral source. The
 // C++ generator uses it to fail closed when its input path is not the exact
@@ -34,6 +34,7 @@ type languageNeutralSchema struct {
 	Origins             []string `json:"origins"`
 	Scopes              []string `json:"scopes"`
 	Phases              []string `json:"phases"`
+	PhaseOrder          []string `json:"phase_order"`
 	// PhaseTaxonomy models the 12 canonical lifecycle phases as a tree:
 	// each phase declares its accounted role (exclusive | span_parent |
 	// span_child) and, when nested, its parent phase. Only phases with
@@ -201,6 +202,9 @@ func validateSchemaVocabularies(schema languageNeutralSchema) error {
 	}
 	if len(schema.Phases) == 0 {
 		return fmt.Errorf("telemetry catalog schema vocabulary phases must not be empty")
+	}
+	if !sameStringSet(schema.PhaseOrder, schema.Phases) {
+		return fmt.Errorf("telemetry catalog phase_order must contain each canonical phase exactly once: got=%v want=%v", schema.PhaseOrder, schema.Phases)
 	}
 	return nil
 }

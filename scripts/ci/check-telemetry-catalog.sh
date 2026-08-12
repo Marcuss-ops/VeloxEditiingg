@@ -7,9 +7,9 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT/shared"
 go test ./telemetry
 go run ./telemetry/cmd/cataloggen \
-  -input telemetry/catalog.json \
+  -input telemetry/schema/catalog.json \
   -output ../RemoteCodex/native/video-engine-cpp/include/velox/telemetry/catalog_generated.hpp \
-  -go-output telemetry/catalog_generated.go \
+  -go-output telemetry/generated/catalog_gen.go \
   -check
 
 # Compile a tiny consumer of the generated C++ binding. This keeps the

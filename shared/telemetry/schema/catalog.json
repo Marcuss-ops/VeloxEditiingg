@@ -105,6 +105,20 @@
       "simulate",
       "upload"
     ],
+    "phase_order": [
+      "queue",
+      "asset_wait",
+      "cache_lookup",
+      "download",
+      "decode",
+      "compile",
+      "simulate",
+      "render",
+      "composite",
+      "encode",
+      "upload",
+      "finalize"
+    ],
     "phase_taxonomy": {
       "queue":        { "role": "exclusive" },
       "asset_wait":   { "role": "exclusive" },
@@ -2155,6 +2169,21 @@
       "kind": "duration",
       "unit": "milliseconds",
       "timing_mode": "exclusive",
+      "aggregation": "sum",
+      "cardinality": "per_attempt",
+      "owner": "process_runner"
+    },
+    {
+      "key": "worker.engine.usage",
+      "component": "worker.engine",
+      "action": "usage",
+      "origin": "worker",
+      "scope": "attempt",
+      "phase": "render",
+      "event_type": "",
+      "kind": "counter",
+      "unit": "count",
+      "timing_mode": "none",
       "aggregation": "sum",
       "cardinality": "per_attempt",
       "owner": "process_runner"
