@@ -19,7 +19,11 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 - Delivery: gli errori nelle transizioni di fase, retry e finalizzazione non
   vengono più ignorati; risalgono come errori infrastrutturali.
 - Worker heartbeat/session: una scrittura SQLite fallita non produce più un
-  successo apparente e non aggiorna il read model in memoria.
+  successo apparente e non aggiorna il read model in memoria; quando è
+  presente un `session_id`, il writer verifica anche la coppia
+  `session_id`/`worker_id`, `revoked=0` e `RowsAffected()==1`, così una
+  sessione sconosciuta, revocata o appartenente a un altro worker non può
+  sembrare valida.
 - Worker auth/commands: token e `command_id` non vengono più restituiti come
   validi quando la relativa sessione o il comando non sono stati persistiti.
 - Render plan: se il piano compilato è presente, il worker verifica che
@@ -171,7 +175,7 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 - Render-only: il contatore audio riconosce il contratto esplicito a zero
   destinazioni; i job normali senza delivery plan continuano a fallire chiusi.
 - Gate architetturali e gate full-module verdi dopo i fix (`833cf79e`,
-  `e4c7154b`).
+  `e4c7154b`, `f64dbae3`).
 
 ## Hotspot da risolvere in ordine
 
