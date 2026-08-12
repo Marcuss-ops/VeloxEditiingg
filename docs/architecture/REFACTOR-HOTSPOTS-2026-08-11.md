@@ -91,6 +91,10 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 - Profiling read model: le fasi di un attempt rifiutano scan e timestamp
   corrotti invece di trasformarli in tempi zero, preservando benchmark
   veritieri.
+- Metrics phase/segment read model: una riga non scansionabile non viene più
+  saltata e `wall_start`/`wall_end` corrotti interrompono la lettura; i
+  breakdown di profiling non possono quindi apparire parziali o con tempi
+  zero (`0f0be847`).
 - Fleet inventory read model: una riga `ansible_hosts` corrotta non viene
   scartata lasciando una registry SSH parziale; il bootstrap riceve l'errore.
 - Drive-link read model: JSON e scansioni corrotti risalgono ai resolver; la
