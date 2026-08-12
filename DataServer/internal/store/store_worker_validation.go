@@ -66,7 +66,7 @@ func (s *SQLiteStore) GetWorkerValidation(workerID string) (*WorkerValidationSta
 		workerID,
 	)
 	var status WorkerValidationStatus
-	var validatedAtStr string
+	var validatedAtStr sql.NullString
 	err := row.Scan(
 		&status.WorkerID, &status.ValidationCode, &status.CanonicalUnit,
 		&status.ExecStart, &validatedAtStr, &status.FailureReason,
@@ -77,8 +77,11 @@ func (s *SQLiteStore) GetWorkerValidation(workerID string) (*WorkerValidationSta
 	if err != nil {
 		return nil, err
 	}
-	if validatedAtStr != "" {
-		status.ValidatedAt, _ = time.Parse(time.RFC3339, validatedAtStr)
+	if validatedAtStr.Valid && validatedAtStr.String != "" {
+		status.ValidatedAt, err = parsePersistedWorkerTimestamp(validatedAtStr.String, "worker_validations.validated_at")
+		if err != nil {
+			return nil, err
+		}
 	}
 	return &status, nil
 }

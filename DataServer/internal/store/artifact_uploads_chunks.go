@@ -57,9 +57,11 @@ func (r *SQLiteUploadRepository) ListChunks(ctx context.Context, uploadID string
 			&c.SHA256, &c.StorageKey, &receivedAt); err != nil {
 			return nil, fmt.Errorf("store: ListChunks scan: %w", err)
 		}
-		if t, perr := time.Parse(time.RFC3339, receivedAt); perr == nil {
-			c.ReceivedAt = t
+		parsed, err := parsePersistedWorkerTimestamp(receivedAt, "artifact_upload_chunks.received_at")
+		if err != nil {
+			return nil, err
 		}
+		c.ReceivedAt = parsed
 		out = append(out, c)
 	}
 	if err := rows.Err(); err != nil {

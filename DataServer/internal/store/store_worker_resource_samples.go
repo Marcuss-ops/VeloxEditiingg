@@ -176,8 +176,14 @@ func scanWorkerResourceSample(scanner interface{ Scan(...any) error }) (WorkerRe
 	if err != nil {
 		return row, fmt.Errorf("scan worker resource sample: %w", err)
 	}
-	row.SampledAt, _ = time.Parse(time.RFC3339Nano, sampledAt)
-	row.IngestedAt, _ = time.Parse(time.RFC3339Nano, ingestedAt)
+	row.SampledAt, err = parsePersistedWorkerTimestamp(sampledAt, "worker_resource_samples.sampled_at")
+	if err != nil {
+		return row, err
+	}
+	row.IngestedAt, err = parsePersistedWorkerTimestamp(ingestedAt, "worker_resource_samples.ingested_at")
+	if err != nil {
+		return row, err
+	}
 	return row, nil
 }
 

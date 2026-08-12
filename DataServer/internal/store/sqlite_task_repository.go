@@ -2,7 +2,6 @@ package store
 
 import (
 	"database/sql"
-	"time"
 
 	"velox-server/internal/taskgraph"
 )
@@ -58,33 +57,39 @@ func scanTask(row interface{ Scan(...interface{}) error }) (*taskgraph.Task, err
 		return nil, err
 	}
 	if readyAt.Valid && readyAt.String != "" {
-		if pt, e := time.Parse(time.RFC3339, readyAt.String); e == nil {
-			t.ReadyAt = &pt
+		pt, e := parsePersistedWorkerTimestamp(readyAt.String, "tasks.ready_at")
+		if e != nil {
+			return nil, e
 		}
+		t.ReadyAt = &pt
 	}
 	if startedAt.Valid && startedAt.String != "" {
-		if pt, e := time.Parse(time.RFC3339, startedAt.String); e == nil {
-			t.StartedAt = &pt
+		pt, e := parsePersistedWorkerTimestamp(startedAt.String, "tasks.started_at")
+		if e != nil {
+			return nil, e
 		}
+		t.StartedAt = &pt
 	}
 	if completedAt.Valid && completedAt.String != "" {
-		if pt, e := time.Parse(time.RFC3339, completedAt.String); e == nil {
-			t.CompletedAt = &pt
+		pt, e := parsePersistedWorkerTimestamp(completedAt.String, "tasks.completed_at")
+		if e != nil {
+			return nil, e
 		}
+		t.CompletedAt = &pt
 	}
 	// createdAt and updatedAt are non-nullable TIMESTAMP columns stored as
 	// RFC3339 strings — must be parsed explicitly (sql.Scan cannot convert
 	// a TEXT column into time.Time).
-	if createdAt != "" {
-		if pt, e := time.Parse(time.RFC3339, createdAt); e == nil {
-			t.CreatedAt = pt
-		}
+	pt, e := parsePersistedWorkerTimestamp(createdAt, "tasks.created_at")
+	if e != nil {
+		return nil, e
 	}
-	if updatedAt != "" {
-		if pt, e := time.Parse(time.RFC3339, updatedAt); e == nil {
-			t.UpdatedAt = pt
-		}
+	t.CreatedAt = pt
+	pt, e = parsePersistedWorkerTimestamp(updatedAt, "tasks.updated_at")
+	if e != nil {
+		return nil, e
 	}
+	t.UpdatedAt = pt
 	return &t, nil
 }
 

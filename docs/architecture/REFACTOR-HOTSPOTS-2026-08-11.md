@@ -75,6 +75,9 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 - Smoke, fleet-operation e worker-metrics read models: timestamp obbligatori
   e payload JSON corrotti interrompono la lettura invece di produrre record
   apparentemente validi.
+- Task, resource-sample, validation, upload-chunk e current-task read models:
+  gli stessi timestamp persistiti vengono validati al confine store; i campi
+  opzionali NULL restano assenza semantica, non errore artificiale.
 - Profiling read model: le fasi di un attempt rifiutano scan e timestamp
   corrotti invece di trasformarli in tempi zero, preservando benchmark
   veritieri.

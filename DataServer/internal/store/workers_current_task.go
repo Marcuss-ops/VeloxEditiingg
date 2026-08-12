@@ -64,11 +64,11 @@ func LoadCurrentTaskRow(db *sql.DB, ctx context.Context, workerID string) (*Curr
 		return nil, fmt.Errorf("LoadCurrentTaskRow scan: %w", err)
 	}
 	if startedRaw.Valid && startedRaw.String != "" {
-		if t, perr := time.Parse(time.RFC3339Nano, startedRaw.String); perr == nil {
-			ts.StartedAt = t.UTC().Format(time.RFC3339)
-		} else {
-			ts.StartedAt = startedRaw.String
+		startedAt, perr := parsePersistedWorkerTimestamp(startedRaw.String, "task_attempts.started_at")
+		if perr != nil {
+			return nil, perr
 		}
+		ts.StartedAt = startedAt.UTC().Format(time.RFC3339)
 	}
 	if executor.Valid {
 		execStr := executor.String
