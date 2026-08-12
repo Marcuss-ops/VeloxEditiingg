@@ -285,6 +285,8 @@ func attachAssetOperations(report *taskrunner.TaskExecutionReport, tracker *asse
 		return
 	}
 	records := tracker.snapshot()
+	cache := tracker.cacheSnapshot()
+	projectAttemptCacheFacts(report, cache, records)
 	if report.Metrics == nil {
 		report.Metrics = make(map[string]interface{})
 	}
@@ -294,7 +296,6 @@ func attachAssetOperations(report *taskrunner.TaskExecutionReport, tracker *asse
 	// NEVER re-derived from the record list here: the records are per-asset
 	// detail only. Counters intentionally remain zero when no lookup
 	// occurred — zero is not a fabricated hit or miss.
-	cache := tracker.cacheSnapshot()
 	uniqueAssets := make(map[string]struct{}, len(records))
 	for _, record := range records {
 		if assetID := strings.TrimSpace(record.AssetID); assetID != "" {
@@ -310,8 +311,52 @@ func attachAssetOperations(report *taskrunner.TaskExecutionReport, tracker *asse
 	report.Metrics["asset.cache.download.count"] = cache.CacheDownloadCount
 	report.Metrics["asset.cache.download.bytes"] = cache.CacheDownloadBytes
 	if len(records) > 0 {
+		// Detailed per-asset records remain a legacy compatibility detail:
+		// RawExecutionMetrics carries the canonical aggregate counters, while
+		// the existing TaskResult/phase-note path carries this richer record
+		// until a typed repeated wire field is introduced.
 		report.Metrics["asset_operations"] = records
 	}
+}
+
+// projectAttemptCacheFacts writes the resolver-owned, attempt-scoped cache
+// facts directly into the canonical raw envelope. A tracker with no resolver
+// observations carries no cache fact: preserving an existing value is safer
+// than manufacturing zeroes from an idle attempt. Once at least one lookup is
+// observed, every cache counter is authoritative, including explicit zeroes
+// for misses and downloads on a warm attempt.
+func projectAttemptCacheFacts(report *taskrunner.TaskExecutionReport, cache AttemptCacheMetrics, records []AssetOperationRecord) {
+	if report == nil {
+		return
+	}
+	if cache.CacheLookups == 0 && len(records) == 0 {
+		return
+	}
+	if report.RawMetrics == nil {
+		if report.TypedMetrics != nil {
+			report.RawMetrics = report.TypedMetrics
+		} else {
+			report.RawMetrics = &telemetry.RawExecutionMetrics{}
+		}
+	}
+	raw := report.RawMetrics
+	if cache.CacheLookups > 0 {
+		raw.CacheLookups = cache.CacheLookups
+		raw.AssetCacheHitCount = cache.CacheHits
+		raw.AssetCacheMissCount = cache.CacheMisses
+		raw.CacheDownloadCount = cache.CacheDownloadCount
+		raw.CacheDownloadBytes = cache.CacheDownloadBytes
+	}
+	if len(records) > 0 {
+		uniqueAssets := make(map[string]struct{}, len(records))
+		for _, record := range records {
+			if assetID := strings.TrimSpace(record.AssetID); assetID != "" {
+				uniqueAssets[assetID] = struct{}{}
+			}
+		}
+		raw.UniqueAssetsRequested = int64(len(uniqueAssets))
+	}
+	report.TypedMetrics = report.RawMetrics
 }
 
 // attachAssetOperationsToPhaseMarkers preserves the existing TaskResult wire

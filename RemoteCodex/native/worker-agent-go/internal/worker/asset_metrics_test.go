@@ -21,6 +21,7 @@ import (
 	pb "velox-shared/controltransport/pb"
 	"velox-worker-agent/internal/downloader"
 	"velox-worker-agent/internal/taskrunner"
+	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/api"
 	"velox-worker-agent/pkg/config"
 	"velox-worker-agent/pkg/logger"
@@ -380,7 +381,14 @@ func TestAttachAssetOperationsProjectsResolverCacheCounters(t *testing.T) {
 	// The counters are fed exclusively by the canonical resolver sink.
 	tracker.recordResolution(downloader.CacheResolution{AssetID: "hit", CacheHit: true, Outcome: downloader.CacheOutcomeHitValid, Source: downloader.CacheSourceLocalDisk})
 	tracker.recordResolution(downloader.CacheResolution{AssetID: "miss", CacheHit: false, Outcome: downloader.CacheOutcomeMissNotFound, Downloaded: true, DownloadBytes: 4096, Source: downloader.CacheSourceMaster})
-	report := taskrunner.TaskExecutionReport{}
+	tracker.add(AssetOperationRecord{AssetID: "hit", CacheStatus: "hit"})
+	tracker.add(AssetOperationRecord{AssetID: "miss", CacheStatus: "miss"})
+	report := taskrunner.TaskExecutionReport{
+		RawMetrics: &telemetry.RawExecutionMetrics{
+			AssetCacheMissCount: 77,
+			CacheDownloadCount:  9,
+		},
+	}
 	attachAssetOperations(&report, tracker)
 	if report.Metrics["cache.enabled"] != true || report.Metrics["asset.cache.lookups"] != int64(2) || report.Metrics["cache.lookups"] != int64(2) {
 		t.Fatalf("cache summary = %#v", report.Metrics)
@@ -390,6 +398,38 @@ func TestAttachAssetOperationsProjectsResolverCacheCounters(t *testing.T) {
 	}
 	if report.Metrics["asset.cache.download.count"] != int64(1) || report.Metrics["asset.cache.download.bytes"] != int64(4096) {
 		t.Fatalf("cache download counters = %#v", report.Metrics)
+	}
+	if report.RawMetrics == nil {
+		t.Fatal("raw metrics are nil after resolver projection")
+	}
+	if report.RawMetrics.CacheLookups != 2 || report.RawMetrics.AssetCacheHitCount != 1 || report.RawMetrics.AssetCacheMissCount != 1 || report.RawMetrics.CacheDownloadCount != 1 || report.RawMetrics.CacheDownloadBytes != 4096 || report.RawMetrics.UniqueAssetsRequested != 2 {
+		t.Fatalf("raw cache counters = %+v", *report.RawMetrics)
+	}
+	if report.TypedMetrics != report.RawMetrics {
+		t.Fatal("typed metrics must alias the canonical raw envelope")
+	}
+}
+
+func TestAttachAssetOperationsPreservesAbsentCacheFacts(t *testing.T) {
+	report := taskrunner.TaskExecutionReport{
+		RawMetrics: &telemetry.RawExecutionMetrics{
+			CacheLookups:          12,
+			AssetCacheHitCount:    12,
+			AssetCacheMissCount:   0,
+			CacheDownloadCount:    2,
+			CacheDownloadBytes:    1024,
+			UniqueAssetsRequested: 4,
+		},
+	}
+	tracker := &assetOperationTracker{cacheEnabled: true}
+
+	attachAssetOperations(&report, tracker)
+
+	// An idle resolver emitted no fact. Do not turn the absent observation into
+	// zeroes or erase facts already supplied by the canonical raw producer.
+	got := report.RawMetrics
+	if got == nil || got.CacheLookups != 12 || got.AssetCacheHitCount != 12 || got.CacheDownloadCount != 2 || got.CacheDownloadBytes != 1024 || got.UniqueAssetsRequested != 4 {
+		t.Fatalf("absent resolver facts changed raw metrics: %+v", got)
 	}
 }
 
