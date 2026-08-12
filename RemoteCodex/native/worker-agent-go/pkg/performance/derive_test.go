@@ -6,24 +6,33 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	sharedtelemetry "velox-shared/telemetry"
 	"velox-worker-agent/pkg/video/pipeline"
 )
 
-// TestDerive_AccountedRatioSumsOnlyExclusivePhases pins the catalog
-// accounted_ratio_rule: Derive sums EXACTLY the exclusive top-level phase
-// durations it is given and nothing else. It never double-counts parent
-// spans and never invents phases — the caller pre-filters span children at
-// the phase collection boundary.
-func TestDerive_AccountedRatioSumsOnlyExclusivePhases(t *testing.T) {
+// TestDerive_AccountedRatioSumsOnlyExclusiveTopLevelPhases pins the
+// catalog accounted_ratio_rule in the Deriver itself: ONLY rows stamped
+// TimingExclusive are summed. Span children (parallel work that would
+// double-count against the wall clock), span parents and unclassified rows
+// are carried for diagnostics but NEVER enter the accounted sum — the rule
+// is enforced here, not trusted to the caller.
+func TestDerive_AccountedRatioSumsOnlyExclusiveTopLevelPhases(t *testing.T) {
 	d := Derive(RawMetrics{
 		WallMs: 1000,
-		ExclusivePhases: []PhaseTiming{
-			{Name: "engine.render", DurationMS: 400},
+		Phases: []PhaseTiming{
+			{Name: "engine.render", DurationMS: 400, TimingMode: sharedtelemetry.TimingExclusive},
+			// Parallel segment spans: summed naively they would triple the
+			// accounted budget against a 1000ms wall clock.
+			{Name: "engine.video.decode", DurationMS: 300, TimingMode: sharedtelemetry.TimingSpanChild},
+			{Name: "engine.composite", DurationMS: 200, TimingMode: sharedtelemetry.TimingSpanChild},
+			// A span parent overlaps its children — also never summed.
+			{Name: "engine.render.tree", DurationMS: 100, TimingMode: sharedtelemetry.TimingSpanParent},
+			// Unclassified (no catalog key): quarantined, never exclusive.
 			{Name: "engine.concat", DurationMS: 30},
 		},
 	})
-	require.Equal(t, int64(570), d.UnaccountedMS)
-	require.InDelta(t, 0.43, d.AccountedRatio, 1e-9)
+	require.Equal(t, int64(600), d.UnaccountedMS)
+	require.InDelta(t, 0.4, d.AccountedRatio, 1e-9)
 }
 
 // TestDerive_Amplification pins read/write amplification over the final
@@ -73,14 +82,17 @@ func TestDerive_ZeroGuards(t *testing.T) {
 	require.Zero(t, d.ProcessesPerClip, "zero clip count must not divide")
 }
 
-// TestDerive_MatchesReceiptAssembly pins the wiring: Assemble must produce
-// exactly the same DerivedMetrics as a direct Derive over the same raw
-// facts — the assembler never recomputes a ratio itself.
+// TestDerive_MatchesReceiptAssembly pins the wiring end to end: Assemble
+// classifies the sidecar phase events through the shared catalog and Derive
+// sums only the exclusive rows. A span_child row present in the stream must
+// never inflate accounted_ratio, and the assembler never recomputes a ratio
+// itself (rawMetricsFrom is the shared construction).
 func TestDerive_MatchesReceiptAssembly(t *testing.T) {
 	run := sampleRun()
 	run.RenderMetrics.DetailedPhases = []pipeline.DetailedPhaseTiming{
-		{EventName: "engine.render", DurationMS: 400},
-		{EventName: "engine.concat", DurationMS: 30},
+		{Component: "engine", Action: "render", DurationMS: 400},                  // exclusive → summed
+		{Component: "engine", Action: "composite", DurationMS: 200},               // span_child → never summed
+		{Component: "engine", Action: "concat", DurationMS: 30, Scope: "attempt"}, // unclassified → quarantined
 	}
 	ctx := AssemblyContext{
 		WallMs:           1000,
@@ -91,14 +103,20 @@ func TestDerive_MatchesReceiptAssembly(t *testing.T) {
 
 	receipt := NewAssembler().Assemble(run, ctx)
 
+	require.Len(t, receipt.Phases, 3)
+	require.Equal(t, sharedtelemetry.TimingExclusive, receipt.Phases[0].TimingMode)
+	require.Equal(t, sharedtelemetry.TimingSpanChild, receipt.Phases[1].TimingMode)
+	require.Empty(t, receipt.Phases[2].TimingMode, "unknown sidecar events stay unclassified (quarantined)")
+
 	// The pin runs the SAME RawMetrics construction the production path
-	// uses (rawMetricsFrom), so the wiring can never drift: if Assemble
-	// stops handing Derive a raw fact, this test fails.
+	// uses (rawMetricsFrom), so the wiring can never drift.
 	require.Equal(t, Derive(rawMetricsFrom(ctx, receipt)), receipt.Derived)
 
-	// Sanity on the numbers: sampleRun carries the full raw set, so every
-	// ratio that has a denominator here is derived.
-	require.InDelta(t, 0.43, receipt.Derived.AccountedRatio, 1e-9)
+	// Sanity on the numbers: only engine.render (400ms) is accounted out
+	// of a 1000ms wall clock; the composite span and the unknown concat
+	// row never enter the sum.
+	require.InDelta(t, 0.4, receipt.Derived.AccountedRatio, 1e-9)
+	require.Equal(t, int64(600), receipt.Derived.UnaccountedMS)
 	require.InDelta(t, 0.5, receipt.Derived.CPUWallRatio, 1e-9)
 	require.InDelta(t, 0.35, receipt.Derived.UsefulWorkRatio, 1e-9)
 	require.InDelta(t, 2.56, receipt.Derived.ProcessesPerClip, 1e-9)

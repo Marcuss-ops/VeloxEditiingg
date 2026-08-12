@@ -205,3 +205,25 @@ var generatedFactOwners = [...]GeneratedFactOwner{
 func GeneratedFactOwners() []GeneratedFactOwner {
 	return append([]GeneratedFactOwner(nil), generatedFactOwners[:]...)
 }
+
+type GeneratedPhaseTaxon struct{ Name, Role, Parent string }
+
+var generatedPhaseTaxa = [...]GeneratedPhaseTaxon{
+	{Name: "asset_wait", Role: "exclusive", Parent: ""},
+	{Name: "cache_lookup", Role: "exclusive", Parent: ""},
+	{Name: "compile", Role: "exclusive", Parent: ""},
+	{Name: "composite", Role: "span_parent", Parent: "render"},
+	{Name: "decode", Role: "span_parent", Parent: "render"},
+	{Name: "download", Role: "exclusive", Parent: ""},
+	{Name: "encode", Role: "span_parent", Parent: "render"},
+	{Name: "finalize", Role: "exclusive", Parent: ""},
+	{Name: "queue", Role: "exclusive", Parent: ""},
+	{Name: "render", Role: "exclusive", Parent: ""},
+	{Name: "simulate", Role: "exclusive", Parent: ""},
+	{Name: "upload", Role: "exclusive", Parent: ""},
+}
+
+// GeneratedPhaseTaxa returns a defensive copy of the generated taxonomy.
+func GeneratedPhaseTaxa() []GeneratedPhaseTaxon {
+	return append([]GeneratedPhaseTaxon(nil), generatedPhaseTaxa[:]...)
+}

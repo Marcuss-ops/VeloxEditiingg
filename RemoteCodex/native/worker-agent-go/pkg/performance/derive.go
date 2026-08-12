@@ -1,5 +1,7 @@
 package performance
 
+import "velox-shared/telemetry"
+
 // derive.go owns the SINGLE DerivedMetricsCalculator for the receipt.
 //
 // Separation of RAW and DERIVED (the only rule here):
@@ -29,17 +31,18 @@ type RawMetrics struct {
 	// accounting clock; typically TimingMetrics.WallMs).
 	WallMs int64
 
-	// ExclusivePhases carries ONLY exclusive top-level phase durations.
-	// This is the catalog's accounted_ratio_rule in one place:
+	// Phases carries the timed phase observations of the attempt (the
+	// receipt's Phases section, each row stamped with its catalog timing
+	// role). Derive implements the catalog accounted_ratio_rule in one
+	// place:
 	//
 	//	"sum only duration events with timing_mode=exclusive; never sum
 	//	 span_parent or span_child"
 	//
-	// Derive sums exactly these rows. A caller that passes span children
-	// (or parent + children) breaks the rule and over-accounts — the
-	// filtering to exclusive per-attempt durations happens BEFORE this
-	// call, at the phase collection boundary.
-	ExclusivePhases []PhaseTiming
+	// It sums ONLY the rows whose TimingMode is TimingExclusive — span
+	// parents, span children and unclassified rows are never summed, so
+	// parallel work can never double-count against the wall clock.
+	Phases []PhaseTiming
 
 	// CPUWallMS is the accumulated CPU time across all cores observed
 	// for the attempt (cgroup v2 / process-tree CPU, owner
@@ -78,10 +81,15 @@ func Derive(raw RawMetrics) DerivedMetrics {
 	d := DerivedMetrics{}
 
 	// accounted_ratio (catalog accounted_ratio_rule): the sum of the
-	// exclusive top-level phase durations is the "explained" budget;
-	// wall − explained is the unaccounted remainder.
+	// EXCLUSIVE top-level phase durations is the "explained" budget;
+	// wall − explained is the unaccounted remainder. Span parents, span
+	// children and unclassified rows are never summed — the rule is
+	// enforced here, not trusted to the caller.
 	var accountedMS int64
-	for _, phase := range raw.ExclusivePhases {
+	for _, phase := range raw.Phases {
+		if phase.TimingMode != telemetry.TimingExclusive {
+			continue
+		}
 		accountedMS += phase.DurationMS
 	}
 	d.UnaccountedMS = raw.WallMs - accountedMS

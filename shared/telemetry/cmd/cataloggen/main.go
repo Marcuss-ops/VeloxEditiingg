@@ -140,6 +140,23 @@ func renderHeader() string {
 	}
 	b.WriteString("}};\n\n")
 
+	phases := telemetry.AllPhaseTaxa()
+	b.WriteString("struct PhaseTaxon {\n")
+	b.WriteString("    std::string_view name;\n")
+	b.WriteString("    std::string_view role;\n")
+	b.WriteString("    std::string_view parent;\n")
+	b.WriteString("};\n\n")
+	fmt.Fprintf(&b, "inline constexpr std::array<PhaseTaxon, %d> kPhases = {{\n", len(phases))
+	for _, taxon := range phases {
+		fmt.Fprintf(&b, "    { %s, %s, %s },\n", cppString(taxon.Name), cppString(string(taxon.Role)), cppString(taxon.Parent))
+	}
+	b.WriteString("}};\n\n")
+	b.WriteString("constexpr bool IsAccountedTopLevelPhase(std::string_view phase) {\n")
+	b.WriteString("    for (const auto& taxon : kPhases) {\n")
+	b.WriteString("        if (taxon.name == phase) return taxon.role == \"exclusive\";\n")
+	b.WriteString("    }\n")
+	b.WriteString("    return false;\n")
+	b.WriteString("}\n\n")
 	b.WriteString("constexpr bool IsCanonicalOrigin(std::string_view value) {\n")
 	b.WriteString("    return value == kOriginMaster || value == kOriginWorker || value == kOriginEngine ||\n")
 	b.WriteString("           value == kOriginFFmpeg || value == kOriginUpload || value == kOriginValidation;\n")
@@ -219,6 +236,18 @@ func renderGo() string {
 	b.WriteString("// GeneratedFactOwners returns a defensive copy of generated fact ownership.\n")
 	b.WriteString("func GeneratedFactOwners() []GeneratedFactOwner {\n")
 	b.WriteString("    return append([]GeneratedFactOwner(nil), generatedFactOwners[:]...)\n")
+	b.WriteString("}\n\n")
+
+	phases := telemetry.AllPhaseTaxa()
+	b.WriteString("type GeneratedPhaseTaxon struct { Name, Role, Parent string }\n\n")
+	fmt.Fprintf(&b, "var generatedPhaseTaxa = [...]GeneratedPhaseTaxon{\n")
+	for _, taxon := range phases {
+		fmt.Fprintf(&b, "    {Name: %s, Role: %s, Parent: %s},\n", goString(taxon.Name), goString(string(taxon.Role)), goString(taxon.Parent))
+	}
+	b.WriteString("}\n\n")
+	b.WriteString("// GeneratedPhaseTaxa returns a defensive copy of the generated taxonomy.\n")
+	b.WriteString("func GeneratedPhaseTaxa() []GeneratedPhaseTaxon {\n")
+	b.WriteString("    return append([]GeneratedPhaseTaxon(nil), generatedPhaseTaxa[:]...)\n")
 	b.WriteString("}\n")
 	formatted, err := format.Source([]byte(b.String()))
 	if err != nil {

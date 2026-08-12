@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"sort"
 )
 
 // catalogJSON is the language-neutral source consumed by Go and the C++
@@ -33,13 +34,31 @@ type languageNeutralSchema struct {
 	Origins             []string `json:"origins"`
 	Scopes              []string `json:"scopes"`
 	Phases              []string `json:"phases"`
-	Units               []string `json:"units"`
-	Kinds               []string `json:"kinds"`
-	TimingModes         []string `json:"timing_modes"`
-	Aggregations        []string `json:"aggregations"`
-	CardinalityPolicies []string `json:"cardinality_policies"`
-	Owners              []string `json:"owners"`
-	AccountedRatioRule  string   `json:"accounted_ratio_rule"`
+	// PhaseTaxonomy models the 12 canonical lifecycle phases as a tree:
+	// each phase declares its accounted role (exclusive | span_parent |
+	// span_child) and, when nested, its parent phase. Only phases with
+	// role=exclusive are summed into accounted_ratio — span parents and
+	// children overlap by construction and would double-count against the
+	// wall clock.
+	PhaseTaxonomy       map[string]languageNeutralPhaseTaxon `json:"phase_taxonomy"`
+	Units               []string                             `json:"units"`
+	Kinds               []string                             `json:"kinds"`
+	TimingModes         []string                             `json:"timing_modes"`
+	Aggregations        []string                             `json:"aggregations"`
+	CardinalityPolicies []string                             `json:"cardinality_policies"`
+	Owners              []string                             `json:"owners"`
+	AccountedRatioRule  string                               `json:"accounted_ratio_rule"`
+}
+
+type languageNeutralPhaseTaxon struct {
+	// Role is the phase's accounted role in the canonical taxonomy.
+	// Values reuse the closed timing_mode vocabulary: exclusive
+	// (top-level, summed into accounted_ratio), span_parent / span_child
+	// (nested, NEVER summed).
+	Role string `json:"role"`
+	// Parent is the containing phase; empty for top-level phases. A phase
+	// with a span role MUST declare a parent; an exclusive phase MUST NOT.
+	Parent string `json:"parent,omitempty"`
 }
 
 type languageNeutralFact struct {
@@ -93,6 +112,9 @@ func validateLanguageNeutralCatalog(doc languageNeutralCatalog) error {
 		return fmt.Errorf("telemetry catalog accounted_ratio_rule is required")
 	}
 	if err := validateSchemaVocabularies(doc.Schema); err != nil {
+		return err
+	}
+	if err := validatePhaseTaxonomy(doc.Schema, doc.Events); err != nil {
 		return err
 	}
 	if len(doc.Events) == 0 {
@@ -181,6 +203,88 @@ func validateSchemaVocabularies(schema languageNeutralSchema) error {
 		return fmt.Errorf("telemetry catalog schema vocabulary phases must not be empty")
 	}
 	return nil
+}
+
+// validatePhaseTaxonomy enforces the canonical 12-phase model declared in
+// catalog.json:
+//
+//   - the taxonomy keys are EXACTLY the schema.phases vocabulary (every
+//     canonical phase is modeled, no phase is invented);
+//   - each phase role is a member of the closed timing vocabulary
+//     (exclusive | span_parent | span_child — never none);
+//   - span roles declare a parent (a known phase), exclusive roles never
+//     do, and the parent chain is acyclic;
+//   - event-level consistency: a timing_mode=exclusive event can only live
+//     under an exclusive-role phase (the accounted_ratio denominator is
+//     always a top-level phase).
+//
+// A taxonomy violation is a startup failure: accounted_ratio semantics must
+// never depend on a half-modeled phase list.
+func validatePhaseTaxonomy(schema languageNeutralSchema, events []languageNeutralEvent) error {
+	if len(schema.PhaseTaxonomy) == 0 {
+		return fmt.Errorf("telemetry catalog phase_taxonomy is required")
+	}
+	if !sameStringSet(keysOf(schema.PhaseTaxonomy), schema.Phases) {
+		return fmt.Errorf("telemetry catalog phase_taxonomy keys diverge from the phases vocabulary: got=%v want=%v", keysOf(schema.PhaseTaxonomy), schema.Phases)
+	}
+	phaseSet := make(map[string]struct{}, len(schema.Phases))
+	for _, phase := range schema.Phases {
+		phaseSet[phase] = struct{}{}
+	}
+	for phase, taxon := range schema.PhaseTaxonomy {
+		switch TimingMode(taxon.Role) {
+		case TimingExclusive:
+			if taxon.Parent != "" {
+				return fmt.Errorf("telemetry catalog phase %q: exclusive role must not declare a parent, got %q", phase, taxon.Parent)
+			}
+		case TimingSpanParent, TimingSpanChild:
+			if taxon.Parent == "" {
+				return fmt.Errorf("telemetry catalog phase %q: span role %q must declare a parent", phase, taxon.Role)
+			}
+			if taxon.Parent == phase {
+				return fmt.Errorf("telemetry catalog phase %q: parent must not be the phase itself", phase)
+			}
+			if _, ok := phaseSet[taxon.Parent]; !ok {
+				return fmt.Errorf("telemetry catalog phase %q: unknown parent %q", phase, taxon.Parent)
+			}
+			// Single-level check is enough for the canonical model, but keep
+			// a generic cycle guard so a deeper edit cannot deadlock the
+			// taxonomy walk.
+			for cursor := taxon.Parent; cursor != ""; cursor = schema.PhaseTaxonomy[cursor].Parent {
+				if cursor == phase {
+					return fmt.Errorf("telemetry catalog phase taxonomy cycle involving %q", phase)
+				}
+			}
+		default:
+			return fmt.Errorf("telemetry catalog phase %q has invalid role %q (exclusive|span_parent|span_child)", phase, taxon.Role)
+		}
+	}
+	// Event-level cross-check: an exclusive (per_attempt) event is the
+	// top-level fact OF an exclusive-role phase. A catalog that stamps
+	// exclusive events inside span phases would double-count against the
+	// wall clock and break accounted_ratio.
+	for _, event := range events {
+		if event.TimingMode != string(TimingExclusive) || event.Phase == "" {
+			continue
+		}
+		taxon, ok := schema.PhaseTaxonomy[event.Phase]
+		if !ok {
+			return fmt.Errorf("telemetry catalog event %q: exclusive timing under unknown phase %q", event.Key, event.Phase)
+		}
+		if taxon.Role != string(TimingExclusive) {
+			return fmt.Errorf("telemetry catalog event %q: exclusive timing under non-exclusive phase %q (role=%s)", event.Key, event.Phase, taxon.Role)
+		}
+	}
+	return nil
+}
+
+func keysOf[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for key := range m {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func containsString(values []string, want string) bool {

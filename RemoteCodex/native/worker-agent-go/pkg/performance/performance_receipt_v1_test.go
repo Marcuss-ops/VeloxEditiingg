@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	sharedtelemetry "velox-shared/telemetry"
 )
 
 // fullReceipt returns a receipt with every section populated, used as
@@ -103,8 +105,8 @@ func fullReceipt() *PerformanceReceiptV1 {
 			OffCPUReason: OffCPUReasonProcessWait,
 		},
 		Phases: []PhaseTiming{
-			{Name: "media.open", DurationMS: 400, CPUMs: 150, BytesIn: 1_800_000_000, BytesOut: 0},
-			{Name: "mux.trailer", DurationMS: 30, CPUMs: 25, BytesIn: 0, BytesOut: 300_000_000},
+			{Name: "media.open", DurationMS: 400, CPUMs: 150, BytesIn: 1_800_000_000, BytesOut: 0, TimingMode: sharedtelemetry.TimingExclusive},
+			{Name: "mux.trailer", DurationMS: 30, CPUMs: 25, BytesIn: 0, BytesOut: 300_000_000, TimingMode: sharedtelemetry.TimingSpanChild},
 		},
 		Segments: []SegmentTiming{
 			{SegmentIndex: 0, SceneID: "scene_1", DurationMS: 12000, SourceBytes: 60_000_000, OutputBytes: 60_000_000, Status: "ok"},

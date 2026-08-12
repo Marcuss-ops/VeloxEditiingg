@@ -104,7 +104,21 @@
       "render",
       "simulate",
       "upload"
-    ]
+    ],
+    "phase_taxonomy": {
+      "queue":        { "role": "exclusive" },
+      "asset_wait":   { "role": "exclusive" },
+      "cache_lookup": { "role": "exclusive" },
+      "download":     { "role": "exclusive" },
+      "compile":      { "role": "exclusive" },
+      "simulate":     { "role": "exclusive" },
+      "render":       { "role": "exclusive" },
+      "decode":       { "role": "span_parent", "parent": "render" },
+      "composite":    { "role": "span_parent", "parent": "render" },
+      "encode":       { "role": "span_parent", "parent": "render" },
+      "upload":       { "role": "exclusive" },
+      "finalize":     { "role": "exclusive" }
+    }
   },
   "facts": [
     {

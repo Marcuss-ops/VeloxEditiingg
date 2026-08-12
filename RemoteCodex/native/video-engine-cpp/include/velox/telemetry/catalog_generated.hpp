@@ -214,6 +214,34 @@ inline constexpr std::array<FactOwner, 14> kFacts = {{
     { "worker_status", "worker_state" },
 }};
 
+struct PhaseTaxon {
+    std::string_view name;
+    std::string_view role;
+    std::string_view parent;
+};
+
+inline constexpr std::array<PhaseTaxon, 12> kPhases = {{
+    { "asset_wait", "exclusive", "" },
+    { "cache_lookup", "exclusive", "" },
+    { "compile", "exclusive", "" },
+    { "composite", "span_parent", "render" },
+    { "decode", "span_parent", "render" },
+    { "download", "exclusive", "" },
+    { "encode", "span_parent", "render" },
+    { "finalize", "exclusive", "" },
+    { "queue", "exclusive", "" },
+    { "render", "exclusive", "" },
+    { "simulate", "exclusive", "" },
+    { "upload", "exclusive", "" },
+}};
+
+constexpr bool IsAccountedTopLevelPhase(std::string_view phase) {
+    for (const auto& taxon : kPhases) {
+        if (taxon.name == phase) return taxon.role == "exclusive";
+    }
+    return false;
+}
+
 constexpr bool IsCanonicalOrigin(std::string_view value) {
     return value == kOriginMaster || value == kOriginWorker || value == kOriginEngine ||
            value == kOriginFFmpeg || value == kOriginUpload || value == kOriginValidation;

@@ -27,11 +27,17 @@ cat >"$tmpdir/catalog_check.cpp" <<'CPP'
 
 int main() {
     using velox::telemetry::catalog::FindEvent;
+    using velox::telemetry::catalog::IsAccountedTopLevelPhase;
     using velox::telemetry::catalog::IsCatalogEvent;
     if (!IsCatalogEvent("engine.encode", "setup")) return 1;
     if (IsCatalogEvent("engine.encode", "invented")) return 2;
     const auto* event = FindEvent("engine.encode", "setup");
     if (event == nullptr || event->owner != "encoder") return 3;
+    // Phase taxonomy accounted_ratio guard: only exclusive top-level
+    // phases are accounted — a stale kPhases regeneration must fail the
+    // gate instead of silently shipping a broken accounted_ratio.
+    if (!IsAccountedTopLevelPhase("render")) return 4;
+    if (IsAccountedTopLevelPhase("decode")) return 5;
     return 0;
 }
 CPP

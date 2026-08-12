@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"velox-shared/contract"
+	"velox-shared/telemetry"
 	"velox-worker-agent/pkg/video/pipeline"
 )
 
@@ -103,7 +104,7 @@ func (a *Assembler) Assemble(run pipeline.RunMetrics, ctx AssemblyContext) *Perf
 func rawMetricsFrom(ctx AssemblyContext, receipt *PerformanceReceiptV1) RawMetrics {
 	return RawMetrics{
 		WallMs:               receipt.Timing.WallMs,
-		ExclusivePhases:      receipt.Phases,
+		Phases:               receipt.Phases,
 		CPUWallMS:            ctx.CPUWallMS,
 		TotalBytesRead:       receipt.IO.TotalBytesRead,
 		TotalBytesWritten:    receipt.IO.TotalBytesWritten,
@@ -331,18 +332,15 @@ func assembleMedia(rm pipeline.RenderMetrics) MediaMetrics {
 	}
 }
 
-// assemblePhases derives the canonical exclusive-measurement phase list.
-// The sidecar phases[] stream (DetailedPhases) is the preferred source;
-// legacy sidecars fall back to the flat PhaseMS map, sorted for
-// deterministic output.
+// assemblePhases derives the timed phase list of the attempt. The sidecar
+// phases[] stream (DetailedPhases) is the preferred source; legacy sidecars
+// fall back to the flat PhaseMS map, sorted for deterministic output.
 //
-// Follow-up anchor: the sidecar stream is still a mix of exclusive
-// top-level phases and span children, and the catalog accounted_ratio_rule
-// ("sum only timing_mode=exclusive; never span_parent or span_child")
-// requires a timing-mode filter BEFORE this list feeds Derive. Until that
-// filter lands, accounted_ratio computed from this list is a directional
-// value, not a verified exclusive sum — the exclusive-filter action lands
-// exactly here.
+// Every row is stamped with its canonical catalog timing role
+// (classifyPhaseTiming). Derive then sums ONLY the TimingExclusive rows
+// into accounted_ratio — span parents and span children (and unclassified
+// rows) are carried for diagnostics but never summed, so parallel work can
+// never double-count against the wall clock.
 func assemblePhases(rm pipeline.RenderMetrics) []PhaseTiming {
 	if len(rm.DetailedPhases) > 0 {
 		phases := make([]PhaseTiming, 0, len(rm.DetailedPhases))
@@ -356,11 +354,17 @@ func assemblePhases(rm pipeline.RenderMetrics) []PhaseTiming {
 				BytesOut:    p.BytesOut,
 				FramesIn:    p.FramesIn,
 				FramesOut:   p.FramesOut,
+				TimingMode:  classifyPhaseTiming(p),
 			})
 		}
 		return phases
 	}
 	if len(rm.PhaseMS) > 0 {
+		// Legacy flat-map path: the keys are engine-side labels with no
+		// catalog identity, so every row is unclassified (empty TimingMode)
+		// and therefore QUARANTINED from accounted_ratio. A legacy-only
+		// sidecar yields accounted_ratio=0 by design — fail-closed rather
+		// than trusting an unverifiable label as exclusive.
 		keys := make([]string, 0, len(rm.PhaseMS))
 		for key := range rm.PhaseMS {
 			keys = append(keys, key)
@@ -373,6 +377,29 @@ func assemblePhases(rm pipeline.RenderMetrics) []PhaseTiming {
 		return phases
 	}
 	return nil
+}
+
+// classifyPhaseTiming resolves the canonical catalog timing role of one
+// sidecar phase event (the accounted_ratio classification):
+//
+//  1. shared-catalog event lookup by component.action — authoritative
+//     (e.g. engine.render → exclusive; engine.video.decode → span_child);
+//  2. phase-taxonomy fallback for attempt-scoped events that predate a
+//     catalog key: an event stamped with the attempt scope and a canonical
+//     phase inherits that phase's accounted role from the taxonomy;
+//  3. anything else returns "" — the row is quarantined from
+//     accounted_ratio (fail-closed: an unclassifiable event is never
+//     treated as exclusive).
+func classifyPhaseTiming(p pipeline.DetailedPhaseTiming) telemetry.TimingMode {
+	if spec, ok := telemetry.Catalog.Lookup(p.Component, p.Action); ok {
+		return spec.TimingMode
+	}
+	if p.Scope == telemetry.ScopeAttempt && p.Phase != "" {
+		if role, ok := telemetry.PhaseRoleOf(p.Phase); ok {
+			return role
+		}
+	}
+	return ""
 }
 
 // assembleSegments maps the per-segment C++ sidecar rows into the

@@ -22,6 +22,8 @@ package performance
 import (
 	"encoding/json"
 	"errors"
+
+	"velox-shared/telemetry"
 )
 
 // PerformanceReceiptVersionV1 is the version stamped on every V1
@@ -307,15 +309,18 @@ type SchedulingMetrics struct {
 	OffCPUReason OffCPUReason `json:"off_cpu_reason,omitempty"`
 }
 
-// PhaseTiming is one canonical exclusive-measurement phase of the
-// attempt. The assembler fills it from the sidecar phase timing; the sum
-// of DurationMS is what feeds the accounted_ratio KPI.
+// PhaseTiming is one timed phase observation of the attempt. The assembler
+// fills it from the sidecar phase timing; Derive sums ONLY the rows
+// stamped TimingExclusive into accounted_ratio (catalog
+// accounted_ratio_rule: never span parents or span children, whose
+// parallel instances would double-count against the wall clock).
 //
-// Caveat (follow-up anchor): the sidecar stream still mixes exclusive
-// top-level phases with span children; the timing-mode filter mandated by
-// the catalog accounted_ratio_rule lands with the exclusive-filter
-// follow-up (see assemblePhases). Until then the list is passed to Derive
-// as-is and accounted_ratio is a directional value.
+// TimingMode is the canonical catalog timing role of the phase event,
+// stamped by the assembler from the shared catalog (event lookup, with a
+// phase-taxonomy fallback for attempt-scoped events that predate a
+// catalog key). Rows the catalog cannot classify carry an empty mode and
+// are quarantined from accounted_ratio — an unclassified phase is never
+// treated as exclusive.
 type PhaseTiming struct {
 	Name        string `json:"name"`
 	DurationMS  int64  `json:"duration_ms"`
@@ -325,6 +330,12 @@ type PhaseTiming struct {
 	BytesOut    int64  `json:"bytes_out,omitempty"`
 	FramesIn    int64  `json:"frames_in,omitempty"`
 	FramesOut   int64  `json:"frames_out,omitempty"`
+
+	// TimingMode is the canonical catalog timing role (exclusive |
+	// span_parent | span_child); omitted when the event cannot be
+	// classified by the shared catalog. ONLY TimingExclusive rows feed
+	// accounted_ratio.
+	TimingMode telemetry.TimingMode `json:"timing_mode,omitempty"`
 }
 
 // SegmentTiming mirrors one row of the C++ sidecar segments[] array. It
