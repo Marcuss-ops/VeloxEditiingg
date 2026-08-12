@@ -17,16 +17,18 @@ func attachWorkerIdentityAndTimings(w *Worker, report *taskrunner.TaskExecutionR
 	if w == nil || report == nil {
 		return
 	}
-	if report.Metrics == nil {
-		report.Metrics = make(map[string]interface{})
-	}
+	// Worker identity and the compact timing ledger are still emitted for
+	// compatibility with existing dashboards. Keep this entire surface at
+	// the explicit legacy projection boundary; RawMetrics remains canonical
+	// for raw facts.
+	legacy := report.LegacyMetrics()
 	hostname, _ := os.Hostname()
 	display := workerDisplayName(hostname)
 	workerIP := "unknown-ip"
 	if parts := strings.Split(display, "_"); len(parts) >= 3 {
 		workerIP = strings.Join(parts[2:], "_")
 	}
-	report.Metrics["worker_identity"] = map[string]interface{}{
+	legacy["worker_identity"] = map[string]interface{}{
 		"worker_id": w.config.WorkerID, "worker_name": display,
 		"hostname": hostname, "ip": workerIP,
 	}
@@ -97,24 +99,24 @@ func attachWorkerIdentityAndTimings(w *Worker, report *taskrunner.TaskExecutionR
 	// actual ffmpeg/file operations. The detailed phase stream carries the
 	// same boundaries to the Master; these values make the worker report's
 	// compact timing ledger useful to local diagnostics as well.
-	if value, ok := report.Metrics["engine.audio_download_ms"]; ok {
+	if value, ok := legacy["engine.audio_download_ms"]; ok {
 		timings["audio_download_ms"] = metricFloat(value)
 	}
-	if value, ok := report.Metrics["engine.audio_prepare_ms"]; ok {
+	if value, ok := legacy["engine.audio_prepare_ms"]; ok {
 		timings["audio_prepare_ms"] = metricFloat(value)
 	}
-	if value, ok := report.Metrics["engine.mix_audio_ms"]; ok {
+	if value, ok := legacy["engine.mix_audio_ms"]; ok {
 		timings["audio_mix_ms"] = metricFloat(value)
 		// The multi-track command performs filtering and AAC encoding in one
 		// ffmpeg invocation, so expose the combined cost honestly instead of
 		// fabricating an independent encode duration.
 		timings["audio_mix_encode_ms"] = metricFloat(value)
 	}
-	if value, ok := report.Metrics["engine.mux_audio_ms"]; ok {
+	if value, ok := legacy["engine.mux_audio_ms"]; ok {
 		timings["audio_mux_ms"] = metricFloat(value)
 		timings["final_mux_ms"] = metricFloat(value)
 	}
-	if value, ok := report.Metrics["engine.copy_final_ms"]; ok {
+	if value, ok := legacy["engine.copy_final_ms"]; ok {
 		timings["final_copy_ms"] = metricFloat(value)
 	}
 	// render_profile is the executor's canonical low-cardinality timing
@@ -125,16 +127,16 @@ func attachWorkerIdentityAndTimings(w *Worker, report *taskrunner.TaskExecutionR
 		"audio_prepare_ms", "audio_mix_ms", "aac_encode_ms", "mux_ms",
 		"artifact_finalize_ms", "artifact_sha_ms", "artifact_total_ms",
 	} {
-		if value, ok := report.Metrics["render_profile."+name]; ok {
+		if value, ok := legacy["render_profile."+name]; ok {
 			timings[name] = metricFloat(value)
 		}
 	}
-	if records, ok := report.Metrics["asset_operations"].([]AssetOperationRecord); ok {
+	if records, ok := legacy["asset_operations"].([]AssetOperationRecord); ok {
 		for _, record := range records {
 			timings["asset_download_ms"] += float64(record.DownloadMS)
 		}
 	}
-	report.Metrics["timings_ms"] = timings
+	legacy["timings_ms"] = timings
 	if encoded, err := json.Marshal(map[string]interface{}{"worker": display, "timings_ms": timings}); err == nil {
 		for i := range report.PhaseMarkers {
 			if report.PhaseMarkers[i].Name == taskrunner.PhaseReport {

@@ -96,8 +96,8 @@ func (w *Worker) submitTaskResult(ctx context.Context, pte *PendingTaskExecution
 		// Build typed execution_metrics from the canonical raw envelope.
 		// Legacy reports are adapted only as a compatibility fallback at
 		// this transport boundary.
-		if report.RawMetrics == nil && report.TypedMetrics == nil && len(report.Metrics) > 0 {
-			report.RawMetrics = (taskrunner.LegacyMetricsAdapter{}).FromMap(report.Metrics)
+		if report.RawMetrics == nil && report.TypedMetrics == nil && report.HasLegacyMetrics() {
+			report.RawMetrics = (taskrunner.LegacyMetricsAdapter{}).FromMap(report.LegacyMetrics())
 			report.TypedMetrics = report.RawMetrics
 		}
 		metrics := report.RawMetrics

@@ -277,13 +277,14 @@ func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskEx
 	if report.RawMetrics != nil {
 		report.TypedMetrics = report.RawMetrics
 	}
-	report.Metrics = result.Metrics
+	// Keep the executor's legacy map as a compatibility projection only;
+	// migrated executors provide RawMetrics above. The report exposes the
+	// map through LegacyMetrics so remaining compatibility consumers are
+	// visible and auditable.
+	report.AdoptLegacyMetrics(result.Metrics)
 	report.Segments = result.Segments
 	if importErr := importExecutorDetailedPhases(rec, result.DetailedPhases); importErr != nil {
-		if report.Metrics == nil {
-			report.Metrics = make(map[string]interface{})
-		}
-		report.Metrics["telemetry.cpp_import_error"] = importErr.Error()
+		report.SetLegacyMetric("telemetry.cpp_import_error", importErr.Error())
 	}
 
 	// Map internal err into a stable Code for the report.
@@ -332,10 +333,7 @@ func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskEx
 	// Project both legacy dotted metrics and the typed wire mirror on every
 	// outcome. This must not depend on cache/blob providers because native
 	// engine metrics are executor-provided.
-	if report.Metrics == nil {
-		report.Metrics = make(map[string]interface{})
-	}
-	r.mergeStatsInto(report, report.Metrics)
+	r.mergeStatsInto(report, report.LegacyMetrics())
 	r.attachDetailedPhases(rec, report)
 	return *report, nil
 }

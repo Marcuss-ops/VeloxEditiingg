@@ -123,10 +123,11 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 
 	duration := time.Since(startTime)
 	if report != nil {
-		if renderMS, ok := report.Metrics["pipeline.render_ms"].(int64); ok && renderMS >= 0 {
-			duration = time.Duration(renderMS) * time.Millisecond
-		} else if renderMS, ok := report.Metrics["pipeline.render_ms"].(float64); ok && renderMS >= 0 {
-			duration = time.Duration(renderMS) * time.Millisecond
+		// The execute phase marker is the canonical lifecycle timing. Do not
+		// read pipeline.render_ms from the deprecated report map: that map is
+		// only a compatibility projection for unmigrated consumers.
+		if renderDuration, ok := report.RenderDuration(); ok {
+			duration = renderDuration
 		}
 	}
 	telemetry.GetPrometheusMetrics().RecordRender(duration)
@@ -167,11 +168,9 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 		// Compatibility only: legacy report consumers receive a dotted
 		// projection from the typed facts. No producer writes this map as
 		// its authoritative metric store.
-		if report.Metrics == nil {
-			report.Metrics = make(map[string]interface{})
-		}
+		legacy := report.LegacyMetrics()
 		for key, value := range (taskrunner.LegacyMetricsAdapter{}).ProjectAttempt(result) {
-			report.Metrics[key] = value
+			legacy[key] = value
 		}
 	}
 

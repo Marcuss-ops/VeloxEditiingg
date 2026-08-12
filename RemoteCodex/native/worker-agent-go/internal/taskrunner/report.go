@@ -26,20 +26,20 @@ type SegmentTiming = executor.SegmentTiming
 //     (PhaseCacheLookup, PhasePrefetch, PhaseExecute, PhaseUpload,
 //     PhaseReport), in that order. Empty phases are not emitted.
 type TaskExecutionReport struct {
-	JobID       string                   `json:"job_id"`
-	ExecutorID  string                   `json:"executor_id"`
-	ExecutorKey string                   `json:"executor_key"` // canonical "id@version"
-	Status      string                   `json:"status"`
-	ErrorCode   string                   `json:"error_code,omitempty"`
-	ErrorDetail string                   `json:"error_detail,omitempty"`
-	Outputs     []executor.ArtifactRef   `json:"outputs,omitempty"`
+	JobID       string                 `json:"job_id"`
+	ExecutorID  string                 `json:"executor_id"`
+	ExecutorKey string                 `json:"executor_key"` // canonical "id@version"
+	Status      string                 `json:"status"`
+	ErrorCode   string                 `json:"error_code,omitempty"`
+	ErrorDetail string                 `json:"error_detail,omitempty"`
+	Outputs     []executor.ArtifactRef `json:"outputs,omitempty"`
 	// Metrics is the deprecated legacy compatibility projection. It remains
 	// populated only because unmigrated executors and old consumers still
 	// require dotted keys; migrated producers must use RawMetrics. The
 	// migration is intentionally incremental, with LegacyMetricsAdapter as
 	// the only typed↔map compatibility boundary.
-	Metrics     map[string]interface{}   `json:"metrics,omitempty"`
-	Segments    []executor.SegmentTiming `json:"segments,omitempty"`
+	Metrics  map[string]interface{}   `json:"metrics,omitempty"`
+	Segments []executor.SegmentTiming `json:"segments,omitempty"`
 	// RawMetrics is the canonical typed raw metric envelope. Migrated
 	// producers write this value directly; no map round-trip is involved.
 	RawMetrics *telemetry.RawExecutionMetrics `json:"-"`
@@ -172,6 +172,67 @@ type PhaseMarker struct {
 	CompletedAt time.Time `json:"completed_at"`
 	Status      string    `json:"status"`
 	Notes       string    `json:"notes,omitempty"`
+}
+
+// LegacyMetrics returns the report's deprecated map through the single
+// compatibility boundary. New consumers must use RawMetrics; callers that
+// still need dotted keys must make that choice explicit at this method.
+func (r *TaskExecutionReport) LegacyMetrics() map[string]interface{} {
+	if r == nil {
+		return nil
+	}
+	if r.Metrics == nil {
+		r.Metrics = make(map[string]interface{})
+	}
+	return r.Metrics
+}
+
+// AdoptLegacyMetrics attaches an executor-produced legacy projection to the
+// report. This is the only report-level hand-off for unmigrated executors;
+// callers must not treat the supplied map as canonical raw telemetry.
+func (r *TaskExecutionReport) AdoptLegacyMetrics(metrics map[string]interface{}) {
+	if r == nil {
+		return
+	}
+	r.Metrics = metrics
+}
+
+// HasLegacyMetrics reports whether the deprecated compatibility projection
+// contains any entries without allocating the map.
+func (r TaskExecutionReport) HasLegacyMetrics() bool { return len(r.Metrics) > 0 }
+
+// LegacyMetric reads one dotted-key value at the compatibility boundary.
+func (r TaskExecutionReport) LegacyMetric(key string) (interface{}, bool) {
+	value, ok := r.Metrics[key]
+	return value, ok
+}
+
+// SetLegacyMetric writes one dotted-key value at the compatibility boundary.
+// This is intentionally named so new code cannot mistake the map for the
+// canonical typed metric envelope.
+func (r *TaskExecutionReport) SetLegacyMetric(key string, value interface{}) {
+	if r == nil {
+		return
+	}
+	r.LegacyMetrics()[key] = value
+}
+
+// RenderDuration returns the canonical execution-phase duration. It is a
+// report lifecycle fact, not a legacy metric-map lookup. The boolean is false
+// when no execute marker was recorded, allowing callers to preserve their
+// wall-clock fallback for validation/early-failure paths.
+func (r TaskExecutionReport) RenderDuration() (time.Duration, bool) {
+	for i := len(r.PhaseMarkers) - 1; i >= 0; i-- {
+		marker := r.PhaseMarkers[i]
+		if marker.Name != PhaseExecute || marker.Status == "deferred" {
+			continue
+		}
+		if marker.CompletedAt.Before(marker.StartedAt) {
+			return 0, false
+		}
+		return marker.CompletedAt.Sub(marker.StartedAt), true
+	}
+	return 0, false
 }
 
 // Succeeded returns true when the report reflects an executed-succeeded

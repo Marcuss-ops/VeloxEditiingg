@@ -287,9 +287,7 @@ func attachAssetOperations(report *taskrunner.TaskExecutionReport, tracker *asse
 	records := tracker.snapshot()
 	cache := tracker.cacheSnapshot()
 	projectAttemptCacheFacts(report, cache, records)
-	if report.Metrics == nil {
-		report.Metrics = make(map[string]interface{})
-	}
+	legacy := report.LegacyMetrics()
 
 	// The per-attempt counters are accumulated by the canonical resolver
 	// sink (single emission point inside CacheResolver.Resolve). They are
@@ -302,20 +300,20 @@ func attachAssetOperations(report *taskrunner.TaskExecutionReport, tracker *asse
 			uniqueAssets[assetID] = struct{}{}
 		}
 	}
-	report.Metrics["cache.enabled"] = tracker.cacheEnabled || len(records) > 0
-	report.Metrics["asset.cache.lookups"] = cache.CacheLookups
-	report.Metrics["cache.lookups"] = cache.CacheLookups
-	report.Metrics["unique.assets.requested"] = int64(len(uniqueAssets))
-	report.Metrics["asset.cache.hit.count"] = cache.CacheHits
-	report.Metrics["asset.cache.miss.count"] = cache.CacheMisses
-	report.Metrics["asset.cache.download.count"] = cache.CacheDownloadCount
-	report.Metrics["asset.cache.download.bytes"] = cache.CacheDownloadBytes
+	legacy["cache.enabled"] = tracker.cacheEnabled || len(records) > 0
+	legacy["asset.cache.lookups"] = cache.CacheLookups
+	legacy["cache.lookups"] = cache.CacheLookups
+	legacy["unique.assets.requested"] = int64(len(uniqueAssets))
+	legacy["asset.cache.hit.count"] = cache.CacheHits
+	legacy["asset.cache.miss.count"] = cache.CacheMisses
+	legacy["asset.cache.download.count"] = cache.CacheDownloadCount
+	legacy["asset.cache.download.bytes"] = cache.CacheDownloadBytes
 	if len(records) > 0 {
 		// Detailed per-asset records remain a legacy compatibility detail:
 		// RawExecutionMetrics carries the canonical aggregate counters, while
 		// the existing TaskResult/phase-note path carries this richer record
 		// until a typed repeated wire field is introduced.
-		report.Metrics["asset_operations"] = records
+		legacy["asset_operations"] = records
 	}
 }
 
@@ -364,16 +362,17 @@ func projectAttemptCacheFacts(report *taskrunner.TaskExecutionReport, cache Atte
 // Master. PhaseMarker.Notes is already persisted with the report; the JSON is
 // self-describing for operators and downstream parsers.
 func attachAssetOperationsToPhaseMarkers(report *taskrunner.TaskExecutionReport) {
-	if report == nil || report.Metrics == nil {
+	if report == nil || !report.HasLegacyMetrics() {
 		return
 	}
-	records, ok := report.Metrics["asset_operations"].([]AssetOperationRecord)
-	cacheEnabled, hasCacheEnabled := report.Metrics["cache.enabled"]
-	cacheLookups, hasCacheLookups := report.Metrics["asset.cache.lookups"]
-	cacheHits, hasCacheHits := report.Metrics["asset.cache.hit.count"]
-	cacheMisses, hasCacheMisses := report.Metrics["asset.cache.miss.count"]
-	cacheDownloadCount, hasDownloadCount := report.Metrics["asset.cache.download.count"]
-	cacheDownloadBytes, hasDownloadBytes := report.Metrics["asset.cache.download.bytes"]
+	legacy := report.LegacyMetrics()
+	records, ok := legacy["asset_operations"].([]AssetOperationRecord)
+	cacheEnabled, hasCacheEnabled := legacy["cache.enabled"]
+	cacheLookups, hasCacheLookups := legacy["asset.cache.lookups"]
+	cacheHits, hasCacheHits := legacy["asset.cache.hit.count"]
+	cacheMisses, hasCacheMisses := legacy["asset.cache.miss.count"]
+	cacheDownloadCount, hasDownloadCount := legacy["asset.cache.download.count"]
+	cacheDownloadBytes, hasDownloadBytes := legacy["asset.cache.download.bytes"]
 	if (!ok || len(records) == 0) && !hasCacheEnabled && !hasCacheLookups && !hasCacheHits && !hasCacheMisses && !hasDownloadCount && !hasDownloadBytes {
 		return
 	}
