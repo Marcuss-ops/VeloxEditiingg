@@ -167,6 +167,10 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
   interpretata come “piano assente”; restituisce un errore di configurazione
   distinto da `ErrNoExplicitPlan`, mantenendo separati misconfiguration e
   contratto render-only.
+- Attempt ingest projections: versioning, render identity e tracing verificano
+  ora `RowsAffected()==1` dopo il CAS principale; un tentativo non più
+  raggiungibile non può quindi completare l’ingest lasciando metadati
+  parziali senza errore.
 - Lease reconciler: quando il jobs repository è configurato, gli errori nella
   lettura del budget o nella finalizzazione del job padre vengono propagati;
   il risultato del reap già committato resta disponibile per il retry.
@@ -175,7 +179,7 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
 - Render-only: il contatore audio riconosce il contratto esplicito a zero
   destinazioni; i job normali senza delivery plan continuano a fallire chiusi.
 - Gate architetturali e gate full-module verdi dopo i fix (`833cf79e`,
-  `e4c7154b`, `f64dbae3`).
+  `e4c7154b`, `f64dbae3`, `e1014598`).
 
 ## Hotspot da risolvere in ordine
 
