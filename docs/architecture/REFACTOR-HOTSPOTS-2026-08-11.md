@@ -164,7 +164,7 @@ restano volutamente alla fine, dopo la chiusura dei difetti strutturali.
   v1/compiled; fino ad allora il comportamento additive è intenzionale.
 - [x] Registrare nel log per ogni attempt il motivo per cui il compiled plan manca:
   compiler assente, compile error, canonicalization error o persist error.
-- [ ] Separare metriche Master `compile`, `canonicalize`, `hash`, `persist`.
+- [x] Separare metriche Master `compile`, `canonicalize`, `hash`, `persist`.
 - [x] Esporre il tempo nativo `audio_prepare_ms` (compilazione del piano,
   costruzione del filter graph e comando) nel profilo worker.
 - [ ] Completare le metriche worker `asset resolution`, `timeline`, `mix`,
