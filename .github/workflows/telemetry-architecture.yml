@@ -77,8 +77,17 @@ jobs:
       - name: Run telemetry dependency architecture gate
         run: bash scripts/ci/check-telemetry-architecture.sh
 
+      - name: Run complete performance invariant suite
+        working-directory: RemoteCodex/native/worker-agent-go
+        # invariants_test.go is part of the complete package suite. Keep a
+        # presence assertion beside the glob so deleting/renaming the file
+        # cannot silently turn this gate into a weaker suite.
+        run: |
+          test -f pkg/performance/invariants_test.go
+          go test -race -count=1 ./pkg/performance/...
+
       - name: Run telemetry runtime contract pins
         working-directory: RemoteCodex/native/worker-agent-go
         # -count=1: disable Go test result caching so the gate ALWAYS
-        # physically runs the entry-point/round-trip/assembler pins.
-        run: go test -count=1 ./internal/telemetry/... ./pkg/performance/...
+        # physically runs the entry-point/round-trip pins.
+        run: go test -count=1 ./internal/telemetry/...

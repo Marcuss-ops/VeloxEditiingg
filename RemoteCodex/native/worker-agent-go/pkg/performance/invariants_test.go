@@ -2,6 +2,9 @@ package performance
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
 	"testing"
 
 	attempttelemetry "velox-worker-agent/internal/telemetry"
@@ -105,27 +108,70 @@ func TestAssembledReceiptHasStableFieldOrder(t *testing.T) {
 		t.Fatal("field order changed between identical assemblies")
 	}
 
-	// Key order sanity: the top-level keys must appear in the documented
-	// order (identity, workload, timing, ..., derived) so receipts diff
-	// cleanly across attempts. Ordering is pinned by the struct field order,
-	// which encoding/json preserves.
-	//
-	// NOTE: phases and segments are intentionally absent from wantOrder:
-	// both are omitempty slices and this snapshot carries none, so the keys
-	// are correctly OMITTED from the JSON. Do not add them here unless the
-	// fixture starts populating Events/Segments.
+	// Key order sanity: decode only the top-level object keys instead of
+	// searching raw bytes. A byte search can accidentally find a nested
+	// field with the same name and let a reordered receipt pass.
+	// encoding/json preserves struct field order, which is part of the
+	// deterministic benchmark artifact contract.
 	wantOrder := []string{"version", "identity", "workload", "timing", "process", "cpu", "io", "media", "memory", "scheduling", "derived"}
-	prev := -1
-	for _, key := range wantOrder {
-		idx := bytes.Index(a, []byte(`"`+key+`"`))
-		if idx < 0 {
-			t.Fatalf("receipt JSON missing top-level key %q", key)
-		}
-		if idx < prev {
-			t.Fatalf("top-level key %q out of canonical order", key)
-		}
-		prev = idx
+	gotOrder, err := topLevelJSONKeys(a)
+	if err != nil {
+		t.Fatalf("decode receipt top-level keys: %v", err)
 	}
+	if len(gotOrder) != len(wantOrder) {
+		t.Fatalf("top-level key count = %d, want %d (%v)", len(gotOrder), len(wantOrder), gotOrder)
+	}
+	for i, key := range wantOrder {
+		if gotOrder[i] != key {
+			t.Fatalf("top-level key %d = %q, want %q (all keys: %v)", i, gotOrder[i], key, gotOrder)
+		}
+	}
+}
+
+// topLevelJSONKeys returns object keys in encoded order. It deliberately
+// consumes each value as RawMessage so nested keys cannot affect the
+// ordering assertion while malformed/truncated receipts still fail loudly.
+func topLevelJSONKeys(data []byte) ([]string, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	token, err := decoder.Token()
+	if err != nil {
+		return nil, err
+	}
+	start, ok := token.(json.Delim)
+	if !ok || start != '{' {
+		return nil, fmt.Errorf("receipt root is %T %v, want object", token, token)
+	}
+	keys := make([]string, 0, 12)
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return nil, err
+		}
+		key, ok := keyToken.(string)
+		if !ok {
+			return nil, fmt.Errorf("receipt object key is %T %v, want string", keyToken, keyToken)
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return nil, err
+		}
+		keys = append(keys, key)
+	}
+	end, err := decoder.Token()
+	if err != nil {
+		return nil, err
+	}
+	if delim, ok := end.(json.Delim); !ok || delim != '}' {
+		return nil, fmt.Errorf("receipt root did not close with object delimiter: %v", end)
+	}
+	var trailing interface{}
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("receipt contains trailing JSON after root object")
+		}
+		return nil, fmt.Errorf("receipt has trailing data: %w", err)
+	}
+	return keys, nil
 }
 
 // TestDeriveIsDeterministicAndPure pins that Derive is a pure function of
