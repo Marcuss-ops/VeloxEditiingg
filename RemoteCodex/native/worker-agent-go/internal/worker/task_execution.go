@@ -99,6 +99,10 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 
 	startTime := time.Now()
 	attemptTelemetry := telemetry.NewAttemptTelemetrySession(w.sampler)
+	// Start/Stop is the single telemetry entry point: the session drives
+	// the collector+sink pipeline (collectors gather the RAW facts at
+	// Stop, sinks project them). Producers never call the pipeline.
+	attemptTelemetry.BindPipeline(w.newAttemptPipeline(pte, attemptID, attemptTelemetry))
 	attemptTelemetry.Start(jobCtx)
 	jobCtx = telemetry.WithAttemptTelemetry(jobCtx, attemptTelemetry)
 
@@ -147,11 +151,28 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 	taskrunner.AppendDetailedPhases(report, reportRecorder(report))
 	result := attemptTelemetry.Stop(context.Background())
 	if report != nil {
+		// Raw typed metrics are the canonical accumulator. Merge only the
+		// fields owned by AttemptTelemetrySession so executor/media/cache
+		// facts already present on the report are not overwritten.
+		var raw telemetry.RawExecutionMetrics
+		if report.RawMetrics != nil {
+			raw = *report.RawMetrics
+		} else if report.TypedMetrics != nil {
+			raw = *report.TypedMetrics
+		}
+		telemetry.MergeAttemptResourceFactsInto(&raw, result.Metrics)
+		report.RawMetrics = &raw
+		report.TypedMetrics = report.RawMetrics
+
+		// Compatibility only: legacy report consumers receive a dotted
+		// projection from the typed facts. No producer writes this map as
+		// its authoritative metric store.
 		if report.Metrics == nil {
 			report.Metrics = make(map[string]interface{})
 		}
-		attemptTelemetry.ApplyToMap(report.Metrics, result)
-		report.TypedMetrics = taskrunner.TypedMetricsFromMap(report.Metrics)
+		for key, value := range (taskrunner.LegacyMetricsAdapter{}).ProjectAttempt(result) {
+			report.Metrics[key] = value
+		}
 	}
 
 	w.recordTaskOutcome(pte, execErr, duration)

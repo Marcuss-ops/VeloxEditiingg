@@ -1,9 +1,8 @@
 // Package taskrunner / report_metrics.go
 //
-// Report metrics — mergeStatsInto folds the cache + blob stats provider
-// snapshots into the dotted-key report.Metrics map AND projects the same
-// data into the typed telemetry.TypedExecutionMetrics envelope used by
-// the Scorecard v1 / F3 forward path.
+// Report metrics — mergeStatsInto keeps the legacy dotted map as a
+// compatibility projection while making the typed raw envelope the internal
+// source consumed by the transport path.
 //
 // Also hosts the small type-coercion helpers (positiveIntegerToInt64,
 // stringFromMap, floatFromMap, boolFromMap) used to read dotted-key
@@ -16,11 +15,10 @@ import (
 	"velox-worker-agent/internal/telemetry"
 )
 
-// mergeStatsInto writes the cache + blob counters into m using
-// dotted-key names (legacy PR-3.7 shape) AND populates the typed
-// mirror on report.TypedMetrics (Scorecard v1 F3 shape). Both shapes
-// are produced until downstream consumers finish adopting the typed
-// envelope.
+// mergeStatsInto is the bounded legacy compatibility path for the
+// remaining unmigrated cache/blob/FFmpeg producers. It keeps the dotted
+// projection available while overlaying the same facts onto RawMetrics;
+// migrated producers never use the map as their source of truth.
 //
 // The TypedMetrics fields populated today are limited to what the
 // worker's cache + blob stats providers actually expose:
@@ -39,18 +37,11 @@ import (
 //
 // Safe under zero-valued providers (noop fallbacks keep the merge
 // safe and idempotent for tests).
-// TypedMetricsFromMap converts legacy dotted metrics into the typed wire
-// mirror. It is also used at the transport boundary for reports assembled
-// outside TaskRunner (for example failed/cancelled reports in tests or
-// pre-run asset failures).
-func TypedMetricsFromMap(m map[string]interface{}) *telemetry.TypedExecutionMetrics {
-	copyMap := make(map[string]interface{}, len(m))
-	for key, value := range m {
-		copyMap[key] = value
-	}
-	report := &TaskExecutionReport{}
-	(&TaskRunner{}).mergeStatsInto(report, copyMap)
-	return report.TypedMetrics
+// TypedMetricsFromMap is the legacy compatibility adapter for reports
+// produced by unmigrated executors. New producers must set RawMetrics
+// directly; this function exists only at compatibility boundaries.
+func TypedMetricsFromMap(m map[string]interface{}) *telemetry.RawExecutionMetrics {
+	return (LegacyMetricsAdapter{}).FromMap(m)
 }
 
 func (r *TaskRunner) mergeStatsInto(report *TaskExecutionReport, m map[string]interface{}) {
@@ -248,8 +239,80 @@ func (r *TaskRunner) mergeStatsInto(report *TaskExecutionReport, m map[string]in
 	} else {
 		typed.FinalConcatStreamCopy = strings.EqualFold(typed.ConcatMode, "stream_copy")
 	}
-	report.TypedMetrics = &typed
-	// ── End typed mirror ─────────────────────────────────────────────
+	if report.RawMetrics == nil {
+		report.RawMetrics = &typed
+	} else {
+		// A migrated producer may already have supplied facts that do not
+		// have a legacy dotted-key representation. Overlay only keys that
+		// actually exist in the compatibility map; never replace the raw
+		// envelope with zero values manufactured by the adapter.
+		overlayLegacyRawMetrics(report.RawMetrics, typed, m)
+	}
+	report.TypedMetrics = report.RawMetrics
+	// ── End typed raw projection ─────────────────────────────────────
+}
+
+func overlayLegacyRawMetrics(dst *telemetry.RawExecutionMetrics, typed telemetry.RawExecutionMetrics, m map[string]interface{}) {
+	if dst == nil {
+		return
+	}
+	overlay := func(key string, assign func()) {
+		if _, ok := m[key]; ok {
+			assign()
+		}
+	}
+	overlay("input.bytes", func() { dst.InputBytes = typed.InputBytes })
+	overlay("output.bytes", func() { dst.OutputBytes = typed.OutputBytes })
+	overlay("drive.bytes", func() { dst.BytesFromDrive = typed.BytesFromDrive })
+	overlay("blobstore.bytes", func() { dst.BytesFromBlobstore = typed.BytesFromBlobstore })
+	overlay("cache.bytes", func() { dst.BytesFromLocalCache = typed.BytesFromLocalCache })
+	overlay("cpu.ms", func() { dst.CpuTimeMs = typed.CpuTimeMs })
+	overlay("rss.peak.bytes", func() { dst.PeakRssBytes = typed.PeakRssBytes })
+	overlay("frames.decoded", func() { dst.FramesDecoded = typed.FramesDecoded })
+	overlay("frames.composited", func() { dst.FramesComposited = typed.FramesComposited })
+	overlay("frames.encoded", func() { dst.FramesEncoded = typed.FramesEncoded })
+	overlay("ffmpeg.speed_ratio", func() { dst.FfmpegSpeedRatio = typed.FfmpegSpeedRatio })
+	overlay("encode.passes", func() { dst.EncodePasses = typed.EncodePasses })
+	overlay("concat.mode", func() { dst.ConcatMode = typed.ConcatMode })
+	overlay("gpu.time.ms", func() { dst.GpuTimeMs = typed.GpuTimeMs })
+	overlay("vram.peak.bytes", func() { dst.PeakVramBytes = typed.PeakVramBytes })
+	overlay("temp.bytes.written", func() { dst.TempBytesWritten = typed.TempBytesWritten })
+	overlay("duplicate.download.bytes", func() { dst.DuplicateDownloadBytes = typed.DuplicateDownloadBytes })
+	overlay("media.duration.seconds", func() { dst.MediaDurationSeconds = typed.MediaDurationSeconds })
+	overlay("wall.clock.seconds", func() { dst.WallClockSeconds = typed.WallClockSeconds })
+	overlay("ffprobe.valid", func() { dst.FfprobeValid = typed.FfprobeValid })
+	overlay("duration.diff.sec", func() { dst.DurationDiffSec = typed.DurationDiffSec })
+	overlay("has.video.stream", func() { dst.HasVideoStream = typed.HasVideoStream })
+	overlay("has.audio.stream", func() { dst.HasAudioStream = typed.HasAudioStream })
+	overlay("audio.track.count", func() { dst.AudioTrackCount = typed.AudioTrackCount })
+	overlay("output.file.size", func() { dst.OutputFileSize = typed.OutputFileSize })
+	overlay("black.frame.ratio", func() { dst.BlackFrameRatio = typed.BlackFrameRatio })
+	overlay("audio.sync.offset.ms", func() { dst.AudioSyncOffsetMs = typed.AudioSyncOffsetMs })
+	overlay("output.sha256", func() { dst.OutputSha256 = typed.OutputSha256 })
+	overlay("cpu.percent.peak", func() { dst.CpuPercentPeak = typed.CpuPercentPeak })
+	overlay("disk.read.bytes", func() { dst.DiskReadBytes = typed.DiskReadBytes })
+	overlay("disk.write.bytes", func() { dst.DiskWriteBytes = typed.DiskWriteBytes })
+	overlay("network.rx.bytes", func() { dst.NetworkRxBytes = typed.NetworkRxBytes })
+	overlay("network.tx.bytes", func() { dst.NetworkTxBytes = typed.NetworkTxBytes })
+	overlay("iowait.ms", func() { dst.IowaitMs = typed.IowaitMs })
+	overlay("open.fds.peak", func() { dst.OpenFdsPeak = typed.OpenFdsPeak })
+	overlay("asset.cache.hit.count", func() { dst.AssetCacheHitCount = typed.AssetCacheHitCount })
+	overlay("asset.cache.miss.count", func() { dst.AssetCacheMissCount = typed.AssetCacheMissCount })
+	overlay("blob.fetch", func() { dst.BlobCacheHitCount = typed.BlobCacheHitCount })
+	overlay("blob.fetch_miss", func() { dst.BlobCacheMissCount = typed.BlobCacheMissCount })
+	overlay("render.cache.hit.count", func() { dst.RenderCacheHitCount = typed.RenderCacheHitCount })
+	overlay("wasted.cpu.ms", func() { dst.WastedCpuMs = typed.WastedCpuMs })
+	overlay("wasted.download.bytes", func() { dst.WastedDownloadBytes = typed.WastedDownloadBytes })
+	overlay("completed.segments", func() { dst.CompletedSegments = typed.CompletedSegments })
+	overlay("error.component", func() { dst.ErrorComponent = typed.ErrorComponent })
+	overlay("error.phase", func() { dst.ErrorPhase = typed.ErrorPhase })
+	overlay("telemetry.coverage.json", func() { dst.TelemetryCoverageJSON = typed.TelemetryCoverageJSON })
+	overlay("telemetry.complete", func() { dst.TelemetryComplete = typed.TelemetryComplete })
+	overlay("telemetry.cpu.source", func() { dst.TelemetryCPUSource = typed.TelemetryCPUSource })
+	overlay("cache.lookups", func() { dst.CacheLookups = typed.CacheLookups })
+	overlay("unique.assets.requested", func() { dst.UniqueAssetsRequested = typed.UniqueAssetsRequested })
+	overlay("asset.cache.download.count", func() { dst.CacheDownloadCount = typed.CacheDownloadCount })
+	overlay("asset.cache.download.bytes", func() { dst.CacheDownloadBytes = typed.CacheDownloadBytes })
 }
 
 // positiveIntegerToInt64 reads dotted-key counters (int64 / int32 /

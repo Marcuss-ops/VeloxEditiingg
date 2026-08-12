@@ -270,9 +270,13 @@ func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskEx
 
 	// Preserve executor telemetry before classifying the outcome. Native
 	// phases enter the canonical Attempt journal here before any report,
-	// receipt, heartbeat, or TaskResult projection. Executors may return
-	// completed phases, segments, and metrics together with a failure or
-	// cancellation; completeError must not discard them.
+	// receipt, heartbeat, or TaskResult projection. Migrated executors
+	// provide RawMetrics directly; legacy executors still provide Metrics
+	// and are adapted below without making the map canonical.
+	report.RawMetrics = result.RawMetrics
+	if report.RawMetrics != nil {
+		report.TypedMetrics = report.RawMetrics
+	}
 	report.Metrics = result.Metrics
 	report.Segments = result.Segments
 	if importErr := importExecutorDetailedPhases(rec, result.DetailedPhases); importErr != nil {

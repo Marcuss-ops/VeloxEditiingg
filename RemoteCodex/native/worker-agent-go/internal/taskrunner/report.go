@@ -33,15 +33,19 @@ type TaskExecutionReport struct {
 	ErrorCode   string                   `json:"error_code,omitempty"`
 	ErrorDetail string                   `json:"error_detail,omitempty"`
 	Outputs     []executor.ArtifactRef   `json:"outputs,omitempty"`
+	// Metrics is the deprecated legacy compatibility projection. It remains
+	// populated only because unmigrated executors and old consumers still
+	// require dotted keys; migrated producers must use RawMetrics. The
+	// migration is intentionally incremental, with LegacyMetricsAdapter as
+	// the only typed↔map compatibility boundary.
 	Metrics     map[string]interface{}   `json:"metrics,omitempty"`
 	Segments    []executor.SegmentTiming `json:"segments,omitempty"`
-	// TypedMetrics is the proto-shaped 17-field mirror of the legacy
-	// `Metrics` dotted-key map. PR-3.6 (Scorecard v1) populates it
-	// alongside the map so the wire envelope carries both shapes
-	// (typed + dotted-key) during the F3 transition window. Once
-	// downstream consumers adopt the typed shape exclusively, the
-	// legacy map will be retired. Nil-safe: workers that produce no
-	// ingest / egress traffic leave this pointer at nil.
+	// RawMetrics is the canonical typed raw metric envelope. Migrated
+	// producers write this value directly; no map round-trip is involved.
+	RawMetrics *telemetry.RawExecutionMetrics `json:"-"`
+	// TypedMetrics is the source-compatible wire alias retained during the
+	// migration window. It points at the same raw envelope and is used by
+	// the protobuf builder. New code must prefer RawMetrics.
 	TypedMetrics *telemetry.TypedExecutionMetrics `json:"typed_metrics,omitempty"`
 	Attempts     int                              `json:"attempts"`
 	StartedAt    time.Time                        `json:"started_at"`

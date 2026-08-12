@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"velox-shared/taskcontract"
+	"velox-worker-agent/internal/telemetry"
 )
 
 // ── Task description (worker-side import of shared TaskSpec) ────────────
@@ -264,7 +265,12 @@ type ExecutionResult struct {
 	Status string `json:"status"`
 	// Outputs lists the canonical artifact references produced by this task.
 	Outputs []ArtifactRef `json:"outputs,omitempty"`
-	// Metrics holds executor-defined measurements.
+	// RawMetrics is the canonical typed raw metric envelope for migrated
+	// producers. It is never derived from a map.
+	RawMetrics *telemetry.RawExecutionMetrics `json:"raw_metrics,omitempty"`
+	// Metrics is the deprecated legacy compatibility surface. It remains
+	// only for executors that have not migrated; TaskRunner adapts it at
+	// the report boundary.
 	Metrics map[string]interface{} `json:"metrics,omitempty"`
 	// Segments holds per-segment C++ sidecar timings.
 	Segments []SegmentTiming `json:"segments,omitempty"`

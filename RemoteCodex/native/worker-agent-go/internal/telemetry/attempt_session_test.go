@@ -2,7 +2,6 @@ package telemetry
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -28,24 +27,17 @@ func TestReadCgroupUsageV2(t *testing.T) {
 	}
 }
 
-func TestAttemptTelemetryApplyIncludesCoverage(t *testing.T) {
-	session := &AttemptTelemetrySession{}
-	metrics := map[string]interface{}{}
+func TestAttemptTelemetryStopKeepsRawFactsTyped(t *testing.T) {
 	result := AttemptTelemetry{
-		Metrics:  TypedExecutionMetrics{CpuTimeMs: 1200, PeakRssBytes: 4096, TelemetryCPUSource: "cgroup_v2"},
+		Metrics:  RawExecutionMetrics{CpuTimeMs: 1200, PeakRssBytes: 4096, TelemetryCPUSource: "cgroup_v2"},
 		Coverage: map[string]bool{"cpu": true, "memory": true, "disk": true, "network": true, "gpu": false},
 		Complete: true,
 	}
-	session.ApplyToMap(metrics, result)
-	if metrics["cpu.ms"] != int64(1200) || metrics["rss.peak.bytes"] != int64(4096) || metrics["telemetry.complete"] != true {
-		t.Fatalf("attempt metrics not projected: %#v", metrics)
+	if result.Metrics.CpuTimeMs != 1200 || result.Metrics.PeakRssBytes != 4096 || !result.Complete {
+		t.Fatalf("raw attempt metrics not retained: %+v", result)
 	}
-	var coverage map[string]bool
-	if err := json.Unmarshal([]byte(metrics["telemetry.coverage.json"].(string)), &coverage); err != nil {
-		t.Fatal(err)
-	}
-	if !coverage["cpu"] || coverage["gpu"] {
-		t.Fatalf("unexpected coverage: %#v", coverage)
+	if !result.Coverage["cpu"] || result.Coverage["gpu"] {
+		t.Fatalf("unexpected coverage: %#v", result.Coverage)
 	}
 }
 

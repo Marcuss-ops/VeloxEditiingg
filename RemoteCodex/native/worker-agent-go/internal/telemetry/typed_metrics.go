@@ -36,18 +36,21 @@ import (
 	pb "velox-shared/controltransport/pb"
 )
 
-// TypedExecutionMetrics is the worker-side mirror of
-// proto.TaskExecutionMetrics. Field-by-field correspondence with the
-// proto is enforced by ToProto() — adding a field on one side without
-// the other will silently zero-out in F3.x and break Scorecard graphs.
+// RawExecutionMetrics is the canonical typed, raw per-attempt metric
+// envelope. It contains observed facts only: counters, byte totals,
+// resource samples, quality observations, and producer-declared values.
+// Derived ratios are calculated by the performance package, never by
+// producers writing a metric map.
 //
+// Field-by-field correspondence with proto.TaskExecutionMetrics is kept
+// deliberately stable so the transport projection remains lossless.
 // Naming follows the proto (snake_case in proto → PascalCase here) and
-// unit suffixes are kept explicit (Ms for milliseconds, Ratio for
-// float64 ratio, Bytes for raw bytes, PerSecond / PerGb for prices).
-// Number types mirror the proto3 wire schema (int64 / int32 for
-// counters, double for ratios and prices). Worker sources never emit
-// negative counters; negative values are a worker bug.
-type TypedExecutionMetrics struct {
+// unit suffixes are explicit (Ms for milliseconds, Ratio for float64
+// ratios, Bytes for raw bytes, PerSecond / PerGb for prices).
+// Number types mirror the proto3 wire schema (int64 / int32 for counters,
+// double for ratios and prices). Worker sources never emit negative
+// counters; negative values are a producer bug.
+type RawExecutionMetrics struct {
 	// ── Byte accounting (raw bytes, not GiB) proto3 int64 ───────────────
 	InputBytes          int64 `json:"input_bytes"`
 	OutputBytes         int64 `json:"output_bytes"`
@@ -135,9 +138,14 @@ type TypedExecutionMetrics struct {
 	CacheDownloadBytes int64 `json:"cache_download_bytes"`
 }
 
-// ToProto serializes a TypedExecutionMetrics onto the typed wire
-// envelope. All protobuf field setters are infallible in Go; this
-// function returns a *pb.TaskExecutionMetrics and never panics.
+// TypedExecutionMetrics is retained as a source-compatible name for
+// callers that adopted the pre-migration type. New producers must use
+// RawExecutionMetrics; both names describe the same canonical typed facts.
+type TypedExecutionMetrics = RawExecutionMetrics
+
+// ToProto serializes raw typed metrics onto the typed wire envelope. All
+// protobuf field setters are infallible in Go; this function returns a
+// *pb.TaskExecutionMetrics and never panics.
 //
 // Callers typically:
 //  1. Build the TypedExecutionMetrics inside TaskRunner.Run /
@@ -145,7 +153,7 @@ type TypedExecutionMetrics struct {
 //  2. In worker.job_executor.submitTaskResult, set
 //     resultPayload["execution_metrics"] = tm.ToProto() before the
 //     transport.Send dispatch.
-func (t TypedExecutionMetrics) ToProto() *pb.TaskExecutionMetrics {
+func (t RawExecutionMetrics) ToProto() *pb.TaskExecutionMetrics {
 	return &pb.TaskExecutionMetrics{
 		InputBytes:            t.InputBytes,
 		OutputBytes:           t.OutputBytes,
@@ -221,11 +229,11 @@ func (t TypedExecutionMetrics) ToProto() *pb.TaskExecutionMetrics {
 // Useful for tests, replay tools, and the master-side reverse path
 // where a master observer wants the typed view of a wire report.
 // Tolerates nil receivers by returning the zero value.
-func FromProto(p *pb.TaskExecutionMetrics) TypedExecutionMetrics {
+func FromProto(p *pb.TaskExecutionMetrics) RawExecutionMetrics {
 	if p == nil {
-		return TypedExecutionMetrics{}
+		return RawExecutionMetrics{}
 	}
-	return TypedExecutionMetrics{
+	return RawExecutionMetrics{
 		InputBytes:            p.GetInputBytes(),
 		OutputBytes:           p.GetOutputBytes(),
 		BytesFromDrive:        p.GetBytesFromDrive(),
@@ -297,7 +305,7 @@ func FromProto(p *pb.TaskExecutionMetrics) TypedExecutionMetrics {
 
 // CoverageMap decodes the optional report coverage block. Invalid or empty
 // JSON is intentionally reported as absent rather than as all-false data.
-func (t TypedExecutionMetrics) CoverageMap() map[string]bool {
+func (t RawExecutionMetrics) CoverageMap() map[string]bool {
 	if t.TelemetryCoverageJSON == "" {
 		return nil
 	}

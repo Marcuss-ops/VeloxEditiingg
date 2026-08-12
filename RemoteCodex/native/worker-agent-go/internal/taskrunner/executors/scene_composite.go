@@ -123,6 +123,9 @@ func (s *SceneComposite) Validate(spec executor.TaskSpec) error {
 // property to the master scheduler.
 func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.ExecutionContext, spec executor.TaskSpec) (executor.ExecutionResult, error) {
 	startedAt := time.Now().UTC()
+	// Legacy compatibility projection for pre-typed report consumers. The
+	// canonical producer output is rawMetrics below; this map is retired
+	// incrementally as downstream consumers adopt RawMetrics.
 	metrics := map[string]interface{}{}
 	rec := recorderFromExecutionContext(execCtx)
 	planHandle := rec.Begin(telemetry.EventSpec{Origin: telemetry.OriginWorker, Scope: telemetry.ScopeTask, Component: "worker.plan", Action: "compile"})
@@ -330,6 +333,7 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 		})
 	}
 	appendObservabilitySummaryPhases(&detailedPhases, runMetrics.RenderMetrics.Observability)
+	rawMetrics := rawMetricsFromPipeline(runMetrics, derivedIO, derivedCPU)
 
 	if err != nil {
 		// A cancelled render is not a renderer failure. The native client
@@ -339,9 +343,9 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 		_ = os.Remove(outputPath + ".progress.json")
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return executor.ExecutionResult{
-				Status:         "failed",
-				ErrorCode:      "cancelled",
-				ErrorDetail:    err.Error(),
+				Status:    "failed",
+				ErrorCode: "cancelled", ErrorDetail: err.Error(),
+				RawMetrics:     rawMetrics,
 				Metrics:        metrics,
 				Segments:       segments,
 				DetailedPhases: detailedPhases,
@@ -353,6 +357,7 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 			Status:         "failed",
 			ErrorCode:      renderErrorCode(err),
 			ErrorDetail:    fmt.Sprintf("pipeline.Runner.RunWithMetrics(%s): %v", pipelineID, err),
+			RawMetrics:     rawMetrics,
 			Metrics:        metrics,
 			Segments:       segments,
 			DetailedPhases: detailedPhases,
@@ -382,6 +387,7 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 			Status:      "failed",
 			ErrorCode:   "output_manifest_missing",
 			ErrorDetail: fmt.Sprintf("render output manifest: %v", manifestErr),
+			RawMetrics:  rawMetrics,
 			Metrics:     metrics,
 			StartedAt:   startedAt,
 			CompletedAt: time.Now().UTC(),
@@ -399,12 +405,20 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 			Status:      "failed",
 			ErrorCode:   "output_manifest_empty",
 			ErrorDetail: "render output manifest has zero bytes",
+			RawMetrics:  rawMetrics,
 			Metrics:     metrics,
 			StartedAt:   startedAt,
 			CompletedAt: time.Now().UTC(),
 		}, nil
 	}
 	metrics["output.bytes"] = outputSize
+	rawMetrics.OutputBytes = outputSize
+	rawMetrics.OutputFileSize = outputSize
+	rawMetrics.OutputSha256 = outputHash
+	rawMetrics.FfprobeValid = int32(boolToInt(outputManifest.FfprobeValid))
+	rawMetrics.HasVideoStream = outputManifest.HasVideoStream
+	rawMetrics.HasAudioStream = outputManifest.HasAudioStream
+	rawMetrics.AudioTrackCount = int32(outputManifest.AudioTrackCount)
 	// Re-project amplification with the VERIFIED artifact size (the
 	// manifest is the publisher's authoritative byte count). The other
 	// derived KPIs do not depend on the output size and are already
@@ -458,6 +472,7 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 			Status:      "failed",
 			ErrorCode:   "progress_sidecar_missing",
 			ErrorDetail: fmt.Sprintf("render progress sidecar manifest: %v", sidecarErr),
+			RawMetrics:  rawMetrics,
 			Metrics:     metrics,
 			StartedAt:   startedAt,
 			CompletedAt: time.Now().UTC(),
@@ -476,12 +491,35 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 	return executor.ExecutionResult{
 		Status:         "succeeded",
 		Outputs:        outputs,
+		RawMetrics:     rawMetrics,
 		Metrics:        metrics,
 		Segments:       segments,
 		DetailedPhases: detailedPhases,
 		StartedAt:      startedAt,
 		CompletedAt:    time.Now().UTC(),
 	}, nil
+}
+
+func rawMetricsFromPipeline(run pipeline.RunMetrics, io performance.IOMetrics, cpu performance.CPUMetrics) *telemetry.RawExecutionMetrics {
+	rm := run.RenderMetrics
+	return &telemetry.RawExecutionMetrics{
+		InputBytes:           io.AssetBytesRead,
+		OutputBytes:          io.FinalBytesWritten,
+		CpuTimeMs:            cpu.CPUTotalMs,
+		PeakRssBytes:         rm.PeakRSSBytes,
+		FramesDecoded:        rm.FramesDecoded,
+		FramesComposited:     rm.FramesComposited,
+		FramesEncoded:        rm.Frames,
+		FfmpegSpeedRatio:     rm.SpeedX,
+		EncodePasses:         int32(rm.EncodePasses),
+		ConcatMode:           rm.ConcatMode,
+		TempBytesWritten:     io.TempBytesWritten,
+		MediaDurationSeconds: rm.DurationSec,
+		WallClockSeconds:     float64(run.TotalMs) / 1000,
+		OutputFileSize:       io.FinalBytesWritten,
+		DiskReadBytes:        io.TotalBytesRead,
+		DiskWriteBytes:       io.TotalBytesWritten,
+	}
 }
 
 func renderErrorCode(err error) string {

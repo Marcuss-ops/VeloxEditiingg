@@ -67,14 +67,19 @@ type AttemptTelemetrySession struct {
 	done           chan struct{}
 	wg             sync.WaitGroup
 	result         *AttemptTelemetry
+	// pipeline is the optional collector+sink orchestration driven by
+	// Start/Stop (the single entry point). When unset, the session keeps
+	// its legacy behavior: resource accounting only, no sink projection.
+	pipeline *AttemptPipeline
 }
 
 type AttemptTelemetry struct {
-	Metrics     TypedExecutionMetrics
-	Coverage    map[string]bool
-	Complete    bool
-	StartedAt   time.Time
-	CompletedAt time.Time
+	Metrics          RawExecutionMetrics
+	Coverage         map[string]bool
+	Complete         bool
+	WallClockSeconds float64
+	StartedAt        time.Time
+	CompletedAt      time.Time
 }
 
 type PhaseResourceSnapshot struct {
@@ -101,6 +106,9 @@ func NewAttemptTelemetrySession(host *Sampler) *AttemptTelemetrySession {
 func (s *AttemptTelemetrySession) Start(ctx context.Context) {
 	if s == nil {
 		return
+	}
+	if s.pipeline != nil {
+		s.pipeline.StartBaseline()
 	}
 	s.startedAt = time.Now().UTC()
 	s.startResources, _ = s.sampleResources(ctx)
@@ -200,33 +208,64 @@ func (s *AttemptTelemetrySession) Stop(ctx context.Context) AttemptTelemetry {
 	coverageJSON, _ := json.Marshal(coverage)
 	metrics.TelemetryCoverageJSON = string(coverageJSON)
 	metrics.TelemetryComplete = coverage["cpu"] && coverage["memory"] && coverage["disk"] && coverage["network"]
-	s.result = &AttemptTelemetry{Metrics: metrics, Coverage: coverage, Complete: coverage["cpu"] && coverage["memory"] && coverage["disk"] && coverage["network"], StartedAt: s.startedAt, CompletedAt: end}
+	s.result = &AttemptTelemetry{Metrics: metrics, Coverage: coverage, Complete: coverage["cpu"] && coverage["memory"] && coverage["disk"] && coverage["network"], WallClockSeconds: wall, StartedAt: s.startedAt, CompletedAt: end}
+	// Single entry point: after the resource facts are finalized, collect
+	// every RAW fact (resources, process/media events, cache deltas) into
+	// the canonical AttemptSnapshot and publish every registered sink.
+	// Sink failures never fail the attempt: they are logged by the caller
+	// (the result envelope is already complete).
+	if s.pipeline != nil {
+		_ = s.pipeline.Run(ctx)
+	}
 	return *s.result
 }
 
-// ApplyToMap is the single worker→report bridge. It writes canonical dotted
-// keys and explicit coverage; consumers must not interpret absent metrics as 0.
-func (s *AttemptTelemetrySession) ApplyToMap(m map[string]interface{}, result AttemptTelemetry) {
-	if m == nil {
+// BindPipeline attaches the attempt's collector+sink pipeline. With a
+// pipeline bound, Start/Stop become the single telemetry entry point:
+// Start captures collector baselines, Stop collects the RAW facts and
+// publishes every sink. Producers never call the pipeline directly.
+func (s *AttemptTelemetrySession) BindPipeline(p *AttemptPipeline) {
+	if s == nil {
 		return
 	}
-	t := result.Metrics
-	m["cpu.ms"] = t.CpuTimeMs
-	m["rss.peak.bytes"] = t.PeakRssBytes
-	m["cpu.percent.peak"] = t.CpuPercentPeak
-	m["disk.read.bytes"] = t.DiskReadBytes
-	m["disk.write.bytes"] = t.DiskWriteBytes
-	m["network.rx.bytes"] = t.NetworkRxBytes
-	m["network.tx.bytes"] = t.NetworkTxBytes
-	m["temp.bytes.written"] = t.TempBytesWritten
-	m["iowait.ms"] = t.IowaitMs
-	m["open.fds.peak"] = t.OpenFdsPeak
-	m["wall.clock.seconds"] = t.WallClockSeconds
-	m["telemetry.schema.version"] = AttemptTelemetrySchemaVersion
-	coverage, _ := json.Marshal(result.Coverage)
-	m["telemetry.coverage.json"] = string(coverage)
-	m["telemetry.complete"] = result.Complete
-	m["telemetry.cpu.source"] = t.TelemetryCPUSource
+	s.pipeline = p
+}
+
+// BindRecorder attaches the attempt's canonical journal to the pipeline.
+// The recorder is created by the dispatch path after Start, so this
+// binding is deferred (snapshotted at Stop).
+func (s *AttemptTelemetrySession) BindRecorder(rec *EventRecorder) {
+	if s == nil || s.pipeline == nil {
+		return
+	}
+	s.pipeline.BindRecorder(rec)
+}
+
+// BindCacheFactsSource attaches the producer-owned cache fact surface
+// (the worker's cache adapter) to the pipeline.
+func (s *AttemptTelemetrySession) BindCacheFactsSource(src CacheFactsSource) {
+	if s == nil || s.pipeline == nil {
+		return
+	}
+	s.pipeline.BindCacheFactsSource(src)
+}
+
+// SetAttemptIdentity stamps the snapshot identity (worker-known context
+// the producers cannot carry).
+func (s *AttemptTelemetrySession) SetAttemptIdentity(identity AttemptIdentity) {
+	if s == nil || s.pipeline == nil {
+		return
+	}
+	s.pipeline.SetIdentity(identity)
+}
+
+// Result returns the finalized attempt telemetry. It returns a zero
+// value before Stop and is nil-safe for legacy callers.
+func (s *AttemptTelemetrySession) Result() AttemptTelemetry {
+	if s == nil || s.result == nil {
+		return AttemptTelemetry{}
+	}
+	return *s.result
 }
 
 func (s *AttemptTelemetrySession) StartPhase() PhaseResourceSnapshot {
