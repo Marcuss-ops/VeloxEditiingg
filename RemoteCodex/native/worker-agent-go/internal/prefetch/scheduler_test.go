@@ -2,6 +2,7 @@ package prefetch
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -44,6 +45,7 @@ type deferredProtectionStore struct {
 	mu           sync.Mutex
 	reserveCalls int
 	releaseCalls int
+	releaseErr   error
 }
 
 func (s *deferredProtectionStore) Acquire(context.Context, assetref.AssetKey, string) error {
@@ -63,9 +65,9 @@ func (s *deferredProtectionStore) Reserve(context.Context, assetref.AssetKey, st
 }
 func (s *deferredProtectionStore) ReleaseReservation(context.Context, assetref.AssetKey, string) error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.releaseCalls++
-	s.mu.Unlock()
-	return nil
+	return s.releaseErr
 }
 func (s *deferredProtectionStore) calls() int {
 	s.mu.Lock()
@@ -201,6 +203,35 @@ func TestScheduler_ExpiredPlanCleansRuntimeAndProtectionProjection(t *testing.T)
 	defer s.mu.Unlock()
 	if len(s.jobs) != 0 || len(s.protects) != 0 || len(s.pendingProtects) != 0 || len(s.protectExpiries) != 0 || len(s.hints) != 0 || len(s.readyAtByJob) != 0 {
 		t.Fatalf("expired scheduler projection not empty: jobs=%d protects=%d pending=%d expiries=%d hints=%d ready=%d", len(s.jobs), len(s.protects), len(s.pendingProtects), len(s.protectExpiries), len(s.hints), len(s.readyAtByJob))
+	}
+}
+
+func TestScheduler_ReleaseProtectionErrorKeepsPreviousProjection(t *testing.T) {
+	manager := &schedulerManager{started: make(chan struct{}, 1)}
+	protections := &deferredProtectionStore{}
+	s := NewScheduler(Config{WorkerID: "worker-a", MaxConcurrent: 1, ByteBudget: 100})
+	s.SetResolver(downloader.NewCacheResolver(manager, nil))
+	s.SetProtectionStore(protections)
+	plan := futureTestPlan()
+	if err := s.Reconcile(plan); err != nil {
+		t.Fatal(err)
+	}
+	protections.mu.Lock()
+	protections.releaseErr = errors.New("release unavailable")
+	protections.mu.Unlock()
+	next := plan
+	next.Version = 2
+	next.PrefetchJobs[0].Assets[0].AssetKey = "E"
+	next.PrefetchJobs[0].Assets[0].AssetID = "E"
+	next.PrefetchJobs[0].Assets[0].SHA256 = "sha-E"
+	next.Protect[0].AssetKey = "E"
+	if err := s.Reconcile(next); err == nil {
+		t.Fatal("Reconcile returned nil after protection release failure")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if got := s.protects["D"]; got == "" || len(s.protects) != 1 {
+		t.Fatalf("protection projection=%v, want previous D reservation only", s.protects)
 	}
 }
 

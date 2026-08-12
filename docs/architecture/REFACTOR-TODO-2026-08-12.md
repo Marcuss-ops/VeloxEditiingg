@@ -126,6 +126,8 @@ reversibile, testato prima/dopo, committato su `main` e pubblicato.
       priorità condivisa.
 - [x] Alla scadenza del piano cancellare anche la proiezione runtime/protection
       e rilasciare le reservation durable, senza lasciare la pulizia al solo TTL.
+- [x] Propagare gli errori nel rilascio delle protection del piano precedente;
+      la proiezione precedente resta intatta e può essere ritentata.
 - [ ] Aggiungere metriche senza label `job_id`, `asset_id` o SHA ad alta cardinalità.
 - [ ] Calcolare `ready_lead_ms` per asset prefetchable.
 - [ ] Certificare 20 run × 4 worker.

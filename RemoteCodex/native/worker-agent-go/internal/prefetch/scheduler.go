@@ -306,10 +306,17 @@ func (s *Scheduler) Reconcile(plan futureasset.Plan) error {
 		}
 	}
 	if store != nil {
+		var releaseErr error
 		for key, reservationID := range oldProtects {
 			if _, keep := newProtects[key]; !keep {
-				_ = store.ReleaseReservation(context.Background(), assetref.AssetKey(key), reservationID)
+				if err := store.ReleaseReservation(context.Background(), assetref.AssetKey(key), reservationID); err != nil && releaseErr == nil {
+					releaseErr = fmt.Errorf("prefetch: release protection %s: %w", key, err)
+				}
 			}
+		}
+		if releaseErr != nil {
+			s.mu.Unlock()
+			return releaseErr
 		}
 	}
 	s.protects = newProtects
