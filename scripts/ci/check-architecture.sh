@@ -246,5 +246,32 @@ rm -f "$ANSIBLE_LOG"
 bash "${BASH_SOURCE[0]%/*}/ratchet-sql.sh" >/dev/null \
   || fail "SQL ratchet violation detected -- see ratchet-sql.sh output"
 
+# 12. Cross-module dependency direction (no import cycles across the
+# go.work workspace). velox-shared is the leaf: velox-server and
+# velox-worker-agent consume it but must never import each other, and
+# shared must never import either consumer. Go's compiler forbids cycles
+# WITHIN a module but not BETWEEN modules in a workspace, so this is the
+# one cycle class that can regress without a build failure.
+check_module_imports() {
+  local importer_dir="$1" importer="$2" imported="$3"
+  local hits
+  hits="$(
+    (cd "$REPO_ROOT/$importer_dir" \
+      && go list -f '{{range .Imports}}{{println .}}{{end}}' ./... 2>/dev/null) \
+      | grep -E "^${imported}/" \
+      | sort -u \
+      || true
+  )"
+  if [[ -n "$hits" ]]; then
+    printf '  %s imports %s (forbidden cross-module dependency):\n%s\n' \
+      "$importer" "$imported" "$hits" >&2
+    fail "cross-module dependency cycle risk: $importer -> $imported"
+  fi
+}
+check_module_imports shared velox-shared velox-server
+check_module_imports shared velox-shared velox-worker-agent
+check_module_imports DataServer velox-server velox-worker-agent
+check_module_imports RemoteCodex/native/worker-agent-go velox-worker-agent velox-server
+
 
 echo "check-architecture: OK"
