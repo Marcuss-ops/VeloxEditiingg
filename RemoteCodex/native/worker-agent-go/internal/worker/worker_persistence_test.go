@@ -13,6 +13,33 @@ import (
 	"velox-worker-agent/pkg/logger"
 )
 
+// TestWriteFileDurable_AtomicRoundtrip pins the atomic-write helper used by
+// saveLocalState + snapshotRecoveryState: the bytes must land at the target
+// path and no .tmp residue may remain after a successful write (the rename
+// path removes it).
+func TestWriteFileDurable_AtomicRoundtrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	payload := []byte(`{"seen_commands":{"cmd-1":"2026-08-13T00:00:00Z"}}`)
+
+	if err := writeFileDurable(path, payload, 0600); err != nil {
+		t.Fatalf("writeFileDurable: %v", err)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if string(got) != string(payload) {
+		t.Fatalf("content mismatch: got %s, want %s", got, payload)
+	}
+
+	// No tmp residue must remain after a successful write.
+	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
+		t.Fatalf(".tmp residue must not remain after success (err=%v)", err)
+	}
+}
+
 // newMinimalWorker constructs a *Worker with just the fields
 // needed by the master-restart recovery path. We avoid the full
 // worker.New() because that wires telemetry transports, executor

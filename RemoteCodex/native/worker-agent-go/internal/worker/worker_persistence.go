@@ -153,7 +153,6 @@ func (w *Worker) saveLocalState() error {
 	w.commandMu.Unlock()
 
 	path := stateFilePath(stateDir)
-	tmpPath := path + ".tmp"
 
 	data, err := json.Marshal(state)
 	if err != nil {
@@ -161,18 +160,53 @@ func (w *Worker) saveLocalState() error {
 		return err
 	}
 
-	// Atomic write: tmp → rename. os.WriteFile already fsyncs the
-	// data on most platforms via the underlying *os.File.Write,
-	// so the explicit second Sync pass is unnecessary.
-	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
-		w.logger.Warn("[PERSIST] Failed to write tmp file %s: %v", tmpPath, err)
-		return err
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		w.logger.Warn("[PERSIST] Failed to rename tmp → state file %s: %v", path, err)
+	// Atomic durable write: tmp → fsync → close → rename → directory fsync.
+	// The previous os.WriteFile did NOT fsync the bytes (it only writes and
+	// closes) nor the directory entry after rename, so a crash could lose the
+	// just-saved dedup state and make a replayed command look unseen.
+	if err := writeFileDurable(path, data, 0600); err != nil {
+		w.logger.Warn("[PERSIST] Failed to write state file %s: %v", path, err)
 		return err
 	}
 	w.logger.Debug("[PERSIST] State saved to %s (%d seen commands)", path, len(state.SeenCommands))
+	return nil
+}
+
+// writeFileDurable persists data to path with atomic-write durability
+// guarantees: write to <path>.tmp → fsync → close → rename onto path →
+// best-effort fsync of the parent directory. A plain os.WriteFile+rename
+// leaves both the bytes and the new directory entry unflushed, so a crash
+// between "state saved" and the OS writeback loses the just-persisted state.
+func writeFileDurable(path string, data []byte, perm os.FileMode) error {
+	tmpPath := path + ".tmp"
+	f, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	if err != nil {
+		return err
+	}
+	cleanup := func() { _ = os.Remove(tmpPath) }
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		cleanup()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		cleanup()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		cleanup()
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		cleanup()
+		return err
+	}
+	// fsync the parent directory so the new name survives a crash.
+	if dir, derr := os.Open(filepath.Dir(path)); derr == nil {
+		_ = dir.Sync()
+		_ = dir.Close()
+	}
 	return nil
 }
 

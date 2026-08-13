@@ -30,16 +30,15 @@ func (w *Worker) snapshotRecoveryState() error {
 	w.captureRecoverySnapshot(&snap)
 
 	path := recoveryFilePath(stateDir)
-	tmpPath := path + ".tmp"
 
 	data, err := json.Marshal(snap)
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
+	// Durable atomic write (see writeFileDurable): fsync the bytes and the
+	// directory entry so the recovery snapshot survives a crash, matching the
+	// seen-commands state file.
+	if err := writeFileDurable(path, data, 0600); err != nil {
 		return err
 	}
 	return nil
