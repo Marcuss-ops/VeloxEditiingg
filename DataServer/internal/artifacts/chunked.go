@@ -21,7 +21,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -59,8 +58,10 @@ type ChunkState struct {
 // The per-session + per-chunk CRUD repository is
 // store.UploadRepository; the chunk service depends on it for
 // chunktable + resumable state. Raw SQL stays only on the
-// writer-finalize path inside the artifacts package (the chunk file
-// IO + assembly IO).
+// writer-finalize path inside the artifacts package, while the chunk
+// file IO + assembly IO is routed through store.BlobStore
+// (OpenStagedWrite / OpenStagedRead / RemoveStaging) so the service
+// never touches the filesystem driver directly.
 type ChunkedUploadService struct {
 	artifactSvc *Service
 	repo        store.UploadRepository
@@ -121,11 +122,7 @@ func (s *ChunkedUploadService) UploadChunk(ctx context.Context, cmd ChunkedUploa
 
 	// Write chunk to a unique staging path.
 	chunkKey := chunkStagingKey(s.blobStore, cmd.UploadID, cmd.ChunkIndex)
-	if err := os.MkdirAll(filepath.Dir(chunkKey), 0o755); err != nil {
-		return fmt.Errorf("%w: mkdir chunk staging: %v", ErrBlobWriteFailed, err)
-	}
-
-	dst, err := os.OpenFile(filepath.Clean(chunkKey), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	dst, err := s.blobStore.OpenStagedWrite(chunkKey)
 	if err != nil {
 		return fmt.Errorf("%w: create chunk file: %v", ErrBlobWriteFailed, err)
 	}
@@ -146,21 +143,21 @@ func (s *ChunkedUploadService) UploadChunk(ctx context.Context, cmd ChunkedUploa
 	written, err := io.Copy(io.MultiWriter(dst, hasher), cmd.Reader)
 	if err != nil {
 		_ = dst.Close()
-		_ = os.Remove(chunkKey)
+		_ = s.blobStore.RemoveStaging(chunkKey)
 		return fmt.Errorf("%w: write chunk: %v", ErrBlobWriteFailed, err)
 	}
 	if err := dst.Sync(); err != nil {
 		_ = dst.Close()
-		_ = os.Remove(chunkKey)
+		_ = s.blobStore.RemoveStaging(chunkKey)
 		return fmt.Errorf("%w: sync chunk: %v", ErrBlobWriteFailed, err)
 	}
 	if err := dst.Close(); err != nil {
-		_ = os.Remove(chunkKey)
+		_ = s.blobStore.RemoveStaging(chunkKey)
 		return fmt.Errorf("%w: close chunk: %v", ErrBlobWriteFailed, err)
 	}
 
 	if written <= 0 {
-		_ = os.Remove(chunkKey)
+		_ = s.blobStore.RemoveStaging(chunkKey)
 		return fmt.Errorf("%w: chunk %d", ErrEmptyChunk, cmd.ChunkIndex)
 	}
 
@@ -175,7 +172,7 @@ func (s *ChunkedUploadService) UploadChunk(ctx context.Context, cmd ChunkedUploa
 		StorageKey: chunkKey,
 		ReceivedAt: time.Now().UTC(),
 	}); err != nil {
-		_ = os.Remove(chunkKey)
+		_ = s.blobStore.RemoveStaging(chunkKey)
 		return translateStoreErr(err)
 	}
 
@@ -266,15 +263,12 @@ func (s *ChunkedUploadService) ReceiveChunked(ctx context.Context, uploadID stri
 	// truncate the input before io.Copy reads it, producing a zero-byte
 	// artifact and a SHA-256 of the empty string.
 	assemblyPath := session.TemporaryStorageKey + ".assembled"
-	if err := os.MkdirAll(filepath.Dir(assemblyPath), 0o755); err != nil {
-		return nil, fmt.Errorf("%w: mkdir assembly: %v", ErrBlobWriteFailed, err)
-	}
-	defer os.Remove(assemblyPath)
-	out, err := os.OpenFile(filepath.Clean(assemblyPath), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	defer s.blobStore.RemoveStaging(assemblyPath)
+	out, err := s.blobStore.OpenStagedWrite(assemblyPath)
 	if err != nil {
 		return nil, fmt.Errorf("%w: create assembly: %v", ErrBlobWriteFailed, err)
 	}
-	if asmErr := assembleChunksVerified(out, chunks); asmErr != nil {
+	if asmErr := s.assembleChunksVerified(out, chunks); asmErr != nil {
 		_ = out.Close()
 		return nil, fmt.Errorf("artifacts: ReceiveChunked: %w", asmErr)
 	}
@@ -285,7 +279,7 @@ func (s *ChunkedUploadService) ReceiveChunked(ctx context.Context, uploadID stri
 	if err := out.Close(); err != nil {
 		return nil, fmt.Errorf("%w: close assembly: %v", ErrBlobWriteFailed, err)
 	}
-	assembled, err := os.Open(filepath.Clean(assemblyPath))
+	assembled, err := s.blobStore.OpenStagedRead(assemblyPath)
 	if err != nil {
 		return nil, fmt.Errorf("artifacts: ReceiveChunked: open assembled: %w", err)
 	}
@@ -333,32 +327,29 @@ func (s *ChunkedUploadService) CompleteChunked(ctx context.Context, cmd ChunkedC
 	// truncate the input before io.Copy reads it, producing a zero-byte
 	// artifact and a SHA-256 of the empty string.
 	assemblyPath := session.TemporaryStorageKey + ".assembled"
-	if err := os.MkdirAll(filepath.Dir(assemblyPath), 0o755); err != nil {
-		return nil, fmt.Errorf("%w: mkdir assembly: %v", ErrBlobWriteFailed, err)
-	}
-	defer os.Remove(assemblyPath)
+	defer s.blobStore.RemoveStaging(assemblyPath)
 
-	out, err := os.OpenFile(filepath.Clean(assemblyPath), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	out, err := s.blobStore.OpenStagedWrite(assemblyPath)
 	if err != nil {
 		return nil, fmt.Errorf("%w: create assembly file: %v", ErrBlobWriteFailed, err)
 	}
 
-	if asmErr := assembleChunksVerified(out, chunks); asmErr != nil {
+	if asmErr := s.assembleChunksVerified(out, chunks); asmErr != nil {
 		_ = out.Close()
-		_ = os.Remove(assemblyPath)
+		_ = s.blobStore.RemoveStaging(assemblyPath)
 		return nil, fmt.Errorf("artifacts: CompleteChunked: %w", asmErr)
 	}
 	if err := out.Sync(); err != nil {
 		_ = out.Close()
-		_ = os.Remove(assemblyPath)
+		_ = s.blobStore.RemoveStaging(assemblyPath)
 		return nil, fmt.Errorf("%w: sync assembly: %v", ErrBlobWriteFailed, err)
 	}
 	_ = out.Close()
 
 	// Open the assembled file as reader for Receive.
-	assembledFile, err := os.Open(filepath.Clean(assemblyPath))
+	assembledFile, err := s.blobStore.OpenStagedRead(assemblyPath)
 	if err != nil {
-		_ = os.Remove(assemblyPath)
+		_ = s.blobStore.RemoveStaging(assemblyPath)
 		return nil, fmt.Errorf("artifacts: CompleteChunked: open assembled: %w", err)
 	}
 	defer assembledFile.Close()
@@ -399,9 +390,9 @@ func (s *ChunkedUploadService) CompleteChunked(ctx context.Context, cmd ChunkedC
 // A chunk record with an empty SHA256 (legacy rows) is copied without
 // verification: the final Receive pass against expected_sha256 remains
 // authoritative for those.
-func assembleChunksVerified(dst io.Writer, chunks []store.ChunkRecord) error {
+func (s *ChunkedUploadService) assembleChunksVerified(dst io.Writer, chunks []store.ChunkRecord) error {
 	for _, c := range chunks {
-		in, openErr := os.Open(filepath.Clean(c.StorageKey))
+		in, openErr := s.blobStore.OpenStagedRead(c.StorageKey)
 		if openErr != nil {
 			return fmt.Errorf("open chunk %d: %w", c.ChunkIndex, openErr)
 		}
@@ -430,7 +421,7 @@ func (s *ChunkedUploadService) cleanupChunks(ctx context.Context, uploadID strin
 	}
 	for _, c := range chunks {
 		if c.StorageKey != "" {
-			_ = os.Remove(filepath.Clean(c.StorageKey))
+			_ = s.blobStore.RemoveStaging(c.StorageKey)
 		}
 	}
 	return translateStoreErr(s.repo.DeleteChunks(ctx, uploadID))

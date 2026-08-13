@@ -53,6 +53,14 @@ type BlobStore interface {
 	// tolerated as an idempotent success. Returns finalPath.
 	PromoteDurable(stagingPath, finalPath string) (string, error)
 
+	// OpenStagedWrite creates (or truncates) a staged file at path for
+	// writing, creating parent directories first. The caller streams
+	// bytes and is responsible for Sync/Close and failure cleanup.
+	OpenStagedWrite(path string) (*os.File, error)
+
+	// OpenStagedRead opens a staged file for reading (chunk assembly).
+	OpenStagedRead(path string) (*os.File, error)
+
 	// RemoveStaging cleanup a staged file on failure.
 	RemoveStaging(path string) error
 
@@ -194,6 +202,28 @@ func (b *FilesystemBlobStore) PromoteDurable(stagingPath, finalPath string) (str
 	return finalPath, nil
 }
 
+// OpenStagedWrite creates (or truncates) a staged file for writing,
+// creating parent directories first.
+func (b *FilesystemBlobStore) OpenStagedWrite(path string) (*os.File, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, fmt.Errorf("blobstore: mkdir staged: %w", err)
+	}
+	f, err := os.OpenFile(filepath.Clean(path), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("blobstore: open staged write: %w", err)
+	}
+	return f, nil
+}
+
+// OpenStagedRead opens a staged file for reading.
+func (b *FilesystemBlobStore) OpenStagedRead(path string) (*os.File, error) {
+	f, err := os.Open(filepath.Clean(path))
+	if err != nil {
+		return nil, fmt.Errorf("blobstore: open staged read: %w", err)
+	}
+	return f, nil
+}
+
 // RemoveStaging removes the staged file (called on verification failure).
 func (b *FilesystemBlobStore) RemoveStaging(path string) error {
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
@@ -280,6 +310,17 @@ func (n *NopBlobStore) PromoteToFinal(staging, _ string) (string, error) {
 
 func (n *NopBlobStore) PromoteDurable(_ string, finalPath string) (string, error) {
 	return finalPath, nil // no-op: already final
+}
+
+func (n *NopBlobStore) OpenStagedWrite(path string) (*os.File, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, err
+	}
+	return os.OpenFile(filepath.Clean(path), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+}
+
+func (n *NopBlobStore) OpenStagedRead(path string) (*os.File, error) {
+	return os.Open(filepath.Clean(path))
 }
 
 func (n *NopBlobStore) RemoveStaging(path string) error {
