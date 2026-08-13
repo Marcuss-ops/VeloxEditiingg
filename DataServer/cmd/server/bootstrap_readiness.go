@@ -12,7 +12,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"strings"
 
 	"velox-server/internal/fleet"
 	"velox-server/internal/fleet/opsalerts"
@@ -191,23 +190,24 @@ func registerReadinessChecks(c *appComponents, t *transportBundle) {
 	// AZIONE 2 — fail-closed update capability probe. The master must
 	// NEVER report itself ready while the update path is half-wired
 	// ("docker client not wired" discovered only 30s after a POST).
-	// The probe reads the live UpdateExecutor verdict: any missing
-	// critical backend (SSH / Docker / Cosign / Registry / Deployments
-	// / Image / Smoke / Drive) flips /ready red with a probe-named
-	// failure. Skip when fleet wiring is absent (test/partial boots).
-	if c.fleet != nil && c.fleet.Update != nil {
-		if c.fleet.SSHMaterialCheck != nil {
-			c.modules.Health.AddReadinessCheck("fleet-ssh-credentials", func() error {
-				if err := c.fleet.SSHMaterialCheck(); err != nil {
-					return fmt.Errorf("fleet SSH credentials NOT READY: %w", err)
-				}
-				return nil
-			})
+	// Exposed as a canonical capability (DISABLED/READY/MISCONFIGURED)
+	// and gated fail-closed: any missing critical backend (SSH / Docker /
+	// Cosign / Registry / Deployments / Image / Smoke / Drive) flips
+	// /ready red with a probe-named failure. A nil / absent fleet wiring
+	// is DISABLED (operator opted out) and does not fail readiness.
+	c.modules.Health.AddReadinessCapability("update", func() string {
+		return string(updateCapabilityStatus(c).State)
+	})
+	c.modules.Health.AddReadinessCheck("update-capability", func() error {
+		if err := updateCapabilityStatus(c).ReadinessError(); err != nil {
+			return fmt.Errorf("update capability NOT READY: %w", err)
 		}
-		c.modules.Health.AddReadinessCheck("update-capability", func() error {
-			capability := c.fleet.Update.Capability()
-			if !capability.Ready {
-				return fmt.Errorf("update capability NOT READY: missing %s", strings.Join(capability.Missing, ", "))
+		return nil
+	})
+	if c.fleet != nil && c.fleet.SSHMaterialCheck != nil {
+		c.modules.Health.AddReadinessCheck("fleet-ssh-credentials", func() error {
+			if err := c.fleet.SSHMaterialCheck(); err != nil {
+				return fmt.Errorf("fleet SSH credentials NOT READY: %w", err)
 			}
 			return nil
 		})
@@ -229,4 +229,14 @@ func registerReadinessChecks(c *appComponents, t *transportBundle) {
 			return nil
 		})
 	}
+}
+
+// updateCapabilityStatus derives the canonical update-path capability
+// verdict from the composed fleet wiring. An absent fleet dependency is
+// explicit DISABLED (operator opted out), never an unknown/healthy state.
+func updateCapabilityStatus(c *appComponents) fleet.UpdateCapabilityStatus {
+	if c.fleet == nil || c.fleet.Update == nil {
+		return fleet.DisabledUpdateCapability("update executor is not wired")
+	}
+	return c.fleet.Update.CapabilityStatus()
 }

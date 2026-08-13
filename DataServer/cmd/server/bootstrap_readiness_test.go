@@ -167,9 +167,10 @@ func TestReadiness_CapabilityExposuresHaveFailClosedGates(t *testing.T) {
 	}
 }
 
-func TestReadiness_NoUpdateCapabilityProbeWithoutFleetDep(t *testing.T) {
-	// A boot without fleet wiring (test / partial composition) must
-	// not register the probe and must not crash registerReadinessChecks.
+func TestReadiness_UpdateCapabilityDisabledWithoutFleetDep(t *testing.T) {
+	// A boot without fleet wiring (test / partial composition) exposes the
+	// update capability as explicit DISABLED and must not register a failing
+	// probe nor crash registerReadinessChecks.
 	components := readinessTestComponents(t, nil)
 	components.fleet = nil // simulate absence of the fleet dependency bundle
 
@@ -179,7 +180,7 @@ func TestReadiness_NoUpdateCapabilityProbeWithoutFleetDep(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("/ready = %d, want 200 without fleet dep: %s", w.Code, w.Body.String())
 	}
-	if strings.Contains(w.Body.String(), "update-capability") {
-		t.Errorf("/ready unexpectedly named update-capability probe: %s", w.Body.String())
+	if !strings.Contains(w.Body.String(), `"update":"DISABLED"`) {
+		t.Errorf("/ready capabilities must expose update=DISABLED without fleet dep: %s", w.Body.String())
 	}
 }
