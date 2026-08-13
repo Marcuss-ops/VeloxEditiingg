@@ -98,14 +98,14 @@ func (w *Worker) recordTaskOutcome(pte *PendingTaskExecution, execErr error, dur
 }
 
 // workerMetrics returns the per-worker collector used by production
-// lifecycle paths. The compatibility fallback keeps hand-built legacy test
-// Workers safe while callers migrate to New, but no production constructor
-// leaves this field nil.
+// lifecycle paths. Production constructors always inject a collector; the
+// fallback only serves hand-built legacy test Workers by returning a fresh
+// instance so callers never observe a nil metrics view.
 func (w *Worker) workerMetrics() *telemetry.WorkerMetrics {
 	if w != nil && w.metrics != nil {
 		return w.metrics
 	}
-	return telemetry.GetMetrics()
+	return telemetry.NewWorkerMetrics()
 }
 
 // recordTaskFinish restores idle-side telemetry AFTER the outcome

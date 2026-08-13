@@ -43,9 +43,6 @@ type WorkerMetrics struct {
 	output io.Writer
 }
 
-// Global metrics instance.
-var globalMetrics = NewWorkerMetrics()
-
 // NewWorkerMetrics creates a new metrics collector.
 func NewWorkerMetrics() *WorkerMetrics {
 	return &WorkerMetrics{
@@ -258,41 +255,4 @@ func (s WorkerMetricsSnapshot) String() string {
 		s.DiskChecks, s.DiskWarnings, s.DiskCriticals,
 		s.GCCleanupRuns, s.GCFilesPurged,
 	)
-}
-
-// Global functions for convenience.
-
-// GetMetrics returns the global metrics instance.
-func GetMetrics() *WorkerMetrics {
-	return globalMetrics
-}
-
-// RecordJobReceived records a job received on the global metrics.
-func RecordJobReceived() {
-	globalMetrics.RecordJobReceived()
-}
-
-// RecordJobSuccess records a successful job on the global metrics.
-func RecordJobSuccess(durationMs int64) {
-	globalMetrics.RecordJobSuccess(durationMs)
-}
-
-// RecordJobFailure records a failed job on the global metrics.
-func RecordJobFailure(durationMs int64) {
-	globalMetrics.RecordJobFailure(durationMs)
-}
-
-// RecordHeartbeat records a heartbeat on the global metrics.
-func RecordHeartbeat() {
-	globalMetrics.RecordHeartbeat()
-}
-
-// RecordHeartbeatFailure records a failed heartbeat on the global metrics.
-func RecordHeartbeatFailure() {
-	globalMetrics.RecordHeartbeatFailure()
-}
-
-// GetMetricsSnapshot returns a snapshot of the global metrics.
-func GetMetricsSnapshot() WorkerMetricsSnapshot {
-	return globalMetrics.Snapshot()
 }
