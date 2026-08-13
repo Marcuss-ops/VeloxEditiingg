@@ -109,17 +109,6 @@ func TestDeriveHealthState(t *testing.T) {
 	}
 }
 
-func TestIsHeartbeatOfflineRejectsFutureHeartbeat(t *testing.T) {
-	now := canonicalNow()
-	future := now.Add(time.Minute).Format(time.RFC3339)
-	if !IsHeartbeatOffline(future, now) {
-		t.Fatal("future heartbeat must be treated as offline for eligibility")
-	}
-	if IsHeartbeatOffline(freshHB(now, 30*time.Second), now) {
-		t.Fatal("fresh heartbeat must remain eligible")
-	}
-}
-
 func TestWireStatusProjection(t *testing.T) {
 	cases := []struct {
 		cs   ConnectionState

@@ -102,10 +102,6 @@ type Worker struct {
 	Resuming          bool   `json:"resuming"`
 	ResumeOperationID string `json:"resume_operation_id,omitempty"`
 
-	// Deprecated: consume the typed state dimensions above. This field is
-	// retained for clients that still expect the operator 9-state string.
-	// It is written only by the compatibility projection.
-
 	Readiness    map[string]interface{} `json:"readiness,omitempty"`
 	RecentLogs   []string               `json:"recent_logs,omitempty"`
 	RecentErrors []string               `json:"recent_errors,omitempty"`

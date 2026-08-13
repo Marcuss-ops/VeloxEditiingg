@@ -258,12 +258,3 @@ func IsHeartbeatStale(lastHB string, now time.Time) bool {
 	}
 	return now.Sub(t.UTC()) >= ConnectionStaleThreshold
 }
-
-// IsHeartbeatOffline is retained as a source-compatible alias for callers
-// that used the older name. Eligibility semantics are stale-at-admission;
-// callers should prefer IsHeartbeatStale for new code.
-//
-// Deprecated: use IsHeartbeatStale.
-func IsHeartbeatOffline(lastHB string, now time.Time) bool {
-	return IsHeartbeatStale(lastHB, now)
-}

@@ -215,14 +215,6 @@ func (s *AttemptSnapshot) RawMetrics() CompleteRawEnvelope {
 	return s.RawEnvelope()
 }
 
-// RawResourceMetrics is the compatibility adapter for callers that only
-// understand the pre-envelope resource-only projection.
-//
-// Deprecated: use RawMetrics or RawEnvelope.
-func (s *AttemptSnapshot) RawResourceMetrics() RawExecutionMetrics {
-	return s.RawEnvelope().Resources
-}
-
 // RenderDurationMS returns the observed runner execute span from the
 // append-only journal. Prometheus consumes this fact at the sink boundary;
 // no producer writes the render histogram directly.

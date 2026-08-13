@@ -26,13 +26,6 @@ import (
 // can refer to the worker shape consistently across build, vet, and tests.
 type Worker = workersreg.Worker
 
-// WorkerInfo remains an API-package compatibility alias for consumers that
-// have not yet migrated their terminology. It is the same canonical Worker
-// type, not a second model.
-//
-// Deprecated: use Worker.
-type WorkerInfo = workersreg.Worker
-
 // Re-export ConnectionStaleThreshold so the canonical reason is
 // computed against the same threshold the registry uses for STALE.
 // Drift would create a window where the API reports reason=heartbeat_stale
