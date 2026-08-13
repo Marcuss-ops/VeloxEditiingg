@@ -18,10 +18,13 @@ type testBlobStore struct {
 func (t *testBlobStore) StagingPath(_, _, _ string) (string, error) { return "", nil }
 func (t *testBlobStore) FinalPath(_, _, _ string) string            { return "" }
 func (t *testBlobStore) PromoteToFinal(_, _ string) (string, error) { return "", nil }
-func (t *testBlobStore) RemoveStaging(_ string) error               { return nil }
-func (t *testBlobStore) ReadFinal(_ string) (*os.File, error)       { return nil, nil }
-func (t *testBlobStore) StagingDir() string                         { return t.finalDir }
-func (t *testBlobStore) FinalDir() string                           { return t.finalDir }
+func (t *testBlobStore) PromoteDurable(_, finalPath string) (string, error) {
+	return finalPath, nil // no-op: not exercised by duplicate-blob tests
+}
+func (t *testBlobStore) RemoveStaging(_ string) error         { return nil }
+func (t *testBlobStore) ReadFinal(_ string) (*os.File, error) { return nil, nil }
+func (t *testBlobStore) StagingDir() string                   { return t.finalDir }
+func (t *testBlobStore) FinalDir() string                     { return t.finalDir }
 
 // TestIsArtifactStorageKeyConflict_NilAndSubstring verifies the
 // substring-based classifier for the (storage_provider, storage_key)

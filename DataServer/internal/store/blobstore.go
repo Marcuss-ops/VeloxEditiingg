@@ -14,6 +14,7 @@ package store
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -21,6 +22,13 @@ import (
 	"strings"
 	"time"
 )
+
+// ErrPromoteDurableFailed marks the atomic rename / staging-removal
+// steps of PromoteDurable (the "promotion" half of the operation, as
+// opposed to the copy/fsync preparation steps). Callers map it onto
+// their own promotion-failed sentinel for log classification without
+// importing artifacts' sentinels into the store layer.
+var ErrPromoteDurableFailed = errors.New("blobstore: durable promotion failed")
 
 // BlobStore is the storage abstraction for artifact blobs.
 type BlobStore interface {
@@ -36,6 +44,14 @@ type BlobStore interface {
 	// PromoteToFinal moves a staged file to its final canonical location.
 	// Returns the storage_key (relative path) on success.
 	PromoteToFinal(stagingPath, finalPath string) (string, error)
+
+	// PromoteDurable atomically promotes a staged file to finalPath with
+	// the durability guarantees the artifact spec requires (flush →
+	// fsync → close → atomic rename → best-effort directory fsync) and
+	// removes the staging file on success. A concurrently-promoted
+	// identical blob (staging already gone, final already present) is
+	// tolerated as an idempotent success. Returns finalPath.
+	PromoteDurable(stagingPath, finalPath string) (string, error)
 
 	// RemoveStaging cleanup a staged file on failure.
 	RemoveStaging(path string) error
@@ -100,6 +116,81 @@ func (b *FilesystemBlobStore) PromoteToFinal(stagingPath, finalPath string) (str
 	if err := os.Rename(stagingPath, finalPath); err != nil {
 		return "", fmt.Errorf("blobstore: rename %s → %s: %w", stagingPath, finalPath, err)
 	}
+	return finalPath, nil
+}
+
+// PromoteDurable streams a staged blob to finalPath with the durability
+// guarantees the artifact spec requires, then removes the staging file.
+// Steps: MkdirAll parent → open staging (tolerating an already-promoted
+// identical blob) → CreateTemp in the SAME directory → io.Copy → fsync →
+// close → atomic rename → remove staging → best-effort directory fsync.
+func (b *FilesystemBlobStore) PromoteDurable(stagingPath, finalPath string) (string, error) {
+	if err := os.MkdirAll(filepath.Dir(finalPath), 0o755); err != nil {
+		return "", fmt.Errorf("blobstore: promote mkdir: %w", err)
+	}
+
+	src, err := os.Open(filepath.Clean(stagingPath))
+	if err != nil {
+		// Concurrent-finalize tolerance: a peer finalizer may have already
+		// promoted the SAME content-addressed key and removed the shared
+		// staging file before this caller opened it. The final path is
+		// deterministic from (sha256, ext) — if it already exists, the
+		// promotion happened and this call is an idempotent no-op.
+		if os.IsNotExist(err) {
+			if _, statErr := os.Stat(finalPath); statErr == nil {
+				return finalPath, nil
+			}
+		}
+		return "", fmt.Errorf("blobstore: promote open staging: %w", err)
+	}
+	defer src.Close()
+
+	// Temp file in the SAME directory as final target so rename(2) is
+	// atomic (POSIX). CreateTemp supplies a unique name: concurrent
+	// finalizers for the same content must never share a staging file.
+	dst, err := os.CreateTemp(filepath.Dir(finalPath), filepath.Base(finalPath)+".tmp.*")
+	if err != nil {
+		return "", fmt.Errorf("blobstore: promote create temp: %w", err)
+	}
+	tempPath := dst.Name()
+
+	cleanupTemp := func() { _ = os.Remove(tempPath) }
+
+	if _, err := io.Copy(dst, src); err != nil {
+		_ = dst.Close()
+		cleanupTemp()
+		return "", fmt.Errorf("blobstore: promote copy: %w", err)
+	}
+
+	if err := dst.Sync(); err != nil {
+		_ = dst.Close()
+		cleanupTemp()
+		return "", fmt.Errorf("blobstore: promote fsync: %w", err)
+	}
+	if err := dst.Close(); err != nil {
+		cleanupTemp()
+		return "", fmt.Errorf("blobstore: promote close: %w", err)
+	}
+
+	if err := os.Rename(tempPath, finalPath); err != nil {
+		cleanupTemp()
+		return "", fmt.Errorf("%w: rename %s → %s: %v", ErrPromoteDurableFailed, tempPath, finalPath, err)
+	}
+
+	// The canonical copy is durable now; remove the upload staging file so
+	// successful finalization cannot leave a second, non-addressable copy
+	// of the artifact behind. If cleanup fails, surface it rather than
+	// silently claiming the staging area is clean.
+	if err := os.Remove(filepath.Clean(stagingPath)); err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("%w: remove staging %s: %v", ErrPromoteDurableFailed, stagingPath, err)
+	}
+
+	// fsync the directory entry (POSIX best-effort).
+	if dir, derr := os.Open(filepath.Dir(finalPath)); derr == nil {
+		_ = dir.Sync()
+		_ = dir.Close()
+	}
+
 	return finalPath, nil
 }
 
@@ -185,6 +276,10 @@ func (n *NopBlobStore) FinalPath(_, _, ext string) string {
 
 func (n *NopBlobStore) PromoteToFinal(staging, _ string) (string, error) {
 	return staging, nil // no-op: already final
+}
+
+func (n *NopBlobStore) PromoteDurable(_ string, finalPath string) (string, error) {
+	return finalPath, nil // no-op: already final
 }
 
 func (n *NopBlobStore) RemoveStaging(path string) error {

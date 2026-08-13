@@ -1,9 +1,8 @@
 package artifacts
 
 import (
+	"errors"
 	"fmt"
-	"io"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -59,21 +58,14 @@ func FinalStorageKey(blobStore store.BlobStore, sha256Hex, extension string) (re
 	return relKey, absPath, nil
 }
 
-// PromoteToCanonical streams the staged blob to its final content-
+// PromoteToCanonical promotes the staged blob to its final content-
 // addressable location with the durability guarantees the spec requires
-// (Fase 3, "Per FilesystemBlobStore: flush; fsync; close; rename atomico
-// dalla staging alla destinazione; fsync directory, quando supportato.").
+// (Fase 3: flush; fsync; close; rename atomico dalla staging alla
+// destinazione; fsync directory, quando supportato).
 //
-// Steps:
-//  1. compute the canonical storage_key from sha + extension
-//  2. ensure the parent directory exists (MkdirAll)
-//  3. open the staging file for reading
-//  4. create a temp file IN THE SAME DIRECTORY as finalPath so the
-//     rename(2) is atomic on POSIX (same filesystem)
-//  5. copy bytes from staging to temp via io.Copy
-//  6. flush -> fsync -> close the temp handle
-//  7. rename the temp file to the final canonical path
-//  8. fsync the parent directory (best-effort; Windows may no-op)
+// The durable filesystem I/O is delegated to store.BlobStore.PromoteDurable
+// so this package's business logic (content-addressable key derivation +
+// finalization semantics) never touches the filesystem driver directly.
 //
 // Returns the relative canonical storage_key. On any failure, the
 // temp file is best-effort cleaned up before the error is returned so
@@ -99,78 +91,11 @@ func PromoteToCanonical(blobStore store.BlobStore, stagingPath, sha256Hex, exten
 		return "", err
 	}
 
-	if err := os.MkdirAll(filepath.Dir(finalPath), 0o755); err != nil {
-		return "", fmt.Errorf("artifacts: PromoteToCanonical mkdir: %w", err)
-	}
-
-	src, err := os.Open(filepath.Clean(stagingPath))
-	if err != nil {
-		// Concurrent-finalize tolerance: a peer finalizer may have already
-		// promoted the SAME content-addressed key and removed the shared
-		// staging file before this caller opened it. The final path is
-		// deterministic from (sha256, ext) — if it already exists, the
-		// promotion happened and this call is an idempotent no-op that
-		// returns the same key (the CAS gate downstream still rejects the
-		// loser with ErrTransitionConflict). Any other failure is real.
-		if os.IsNotExist(err) {
-			if _, statErr := os.Stat(finalPath); statErr == nil {
-				return relKey, nil
-			}
+	if _, err := blobStore.PromoteDurable(stagingPath, finalPath); err != nil {
+		if errors.Is(err, store.ErrPromoteDurableFailed) {
+			return "", fmt.Errorf("%w: %v", ErrBlobPromoteFailed, err)
 		}
-		return "", fmt.Errorf("artifacts: PromoteToCanonical open staging: %w", err)
-	}
-	defer src.Close()
-
-	// Temp file in the SAME directory as final target so rename(2) is
-	// atomic (POSIX). CreateTemp supplies a unique name: concurrent
-	// finalizers for the same content must never share a staging file.
-	dst, err := os.CreateTemp(filepath.Dir(finalPath), filepath.Base(finalPath)+".tmp.*")
-	if err != nil {
-		return "", fmt.Errorf("artifacts: PromoteToCanonical create temp: %w", err)
-	}
-	tempPath := dst.Name()
-
-	cleanupTemp := func() { _ = os.Remove(tempPath) }
-
-	if _, err := io.Copy(dst, src); err != nil {
-		_ = dst.Close()
-		cleanupTemp()
-		return "", fmt.Errorf("artifacts: PromoteToCanonical copy: %w", err)
-	}
-
-	// 6. flush + fsync + close the temp handle.
-	if err := dst.Sync(); err != nil {
-		_ = dst.Close()
-		cleanupTemp()
-		return "", fmt.Errorf("artifacts: PromoteToCanonical fsync: %w", err)
-	}
-	if err := dst.Close(); err != nil {
-		cleanupTemp()
-		return "", fmt.Errorf("artifacts: PromoteToCanonical close: %w", err)
-	}
-
-	// 7. rename atomically. On POSIX, rename is atomic when source and
-	//    target are on the same filesystem; OS-specific semantics
-	//    apply on Windows (MoveFileEx with REPLACE_EXISTING).
-	if err := os.Rename(tempPath, finalPath); err != nil {
-		cleanupTemp()
-		return "", fmt.Errorf("%w: rename %s -> %s: %v",
-			ErrBlobPromoteFailed, tempPath, finalPath, err)
-	}
-
-	// The canonical copy is durable now; remove the upload staging file so
-	// successful finalization cannot leave a second, non-addressable copy of
-	// the artifact behind. If cleanup fails, surface it rather than silently
-	// claiming the staging area is clean; the already-promoted final blob is
-	// intentionally left for the reconciler to classify as an orphan.
-	if err := os.Remove(filepath.Clean(stagingPath)); err != nil && !os.IsNotExist(err) {
-		return "", fmt.Errorf("%w: remove staging %s: %v", ErrBlobPromoteFailed, stagingPath, err)
-	}
-
-	// 8. fsync the directory entry (POSIX best-effort).
-	if dir, derr := os.Open(filepath.Dir(finalPath)); derr == nil {
-		_ = dir.Sync()
-		_ = dir.Close()
+		return "", fmt.Errorf("artifacts: PromoteToCanonical: %w", err)
 	}
 
 	return relKey, nil
