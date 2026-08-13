@@ -76,19 +76,34 @@ func (s *Service) UploadFile(ctx context.Context, filePath string, folderID stri
 		}
 	}
 
-	metaJSON, _ := json.Marshal(meta)
+	metaJSON, err := json.Marshal(meta)
+	if err != nil {
+		return nil, fmt.Errorf("marshal upload metadata: %w", err)
+	}
 	h := make(textproto.MIMEHeader)
 	h.Set("Content-Type", "application/json; charset=UTF-8")
-	part, _ := writer.CreatePart(h)
-	part.Write(metaJSON)
+	part, err := writer.CreatePart(h)
+	if err != nil {
+		return nil, fmt.Errorf("create metadata part: %w", err)
+	}
+	if _, err := part.Write(metaJSON); err != nil {
+		return nil, fmt.Errorf("write metadata part: %w", err)
+	}
 
 	// Write file content part
 	h = make(textproto.MIMEHeader)
 	h.Set("Content-Type", "application/octet-stream")
-	part, _ = writer.CreatePart(h)
-	io.Copy(part, file)
+	part, err = writer.CreatePart(h)
+	if err != nil {
+		return nil, fmt.Errorf("create content part: %w", err)
+	}
+	if _, err := io.Copy(part, file); err != nil {
+		return nil, fmt.Errorf("copy file into upload body: %w", err)
+	}
 
-	writer.Close()
+	if err := writer.Close(); err != nil {
+		return nil, fmt.Errorf("close multipart body: %w", err)
+	}
 
 	// Create upload request
 	uploadURL := "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink"
