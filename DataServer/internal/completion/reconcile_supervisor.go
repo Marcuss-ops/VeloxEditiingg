@@ -77,6 +77,17 @@ func NewReconcileSupervisor(completionStore repository.CompletionStore, coord Co
 	return &ReconcileSupervisor{Store: completionStore, Coord: coord, Metrics: metrics, Tick: 15 * time.Second, Limit: 500, seenIDs: make(map[string]time.Time), seenCap: 10000, lastTick: time.Now().UTC(), logger: logging.NewLogger("completion.reconcile")}
 }
 
+// WithLogger wires a structured logger for the supervisor's
+// operator-facing events. Defaults to logging.NewLogger("completion.reconcile")
+// at construction; tests inject a custom (or nil) logger to silence or
+// redirect output.
+func (s *ReconcileSupervisor) WithLogger(l *logging.Logger) *ReconcileSupervisor {
+	if s != nil {
+		s.logger = l
+	}
+	return s
+}
+
 func (s *ReconcileSupervisor) logInfo(ctx context.Context, code string, fields map[string]interface{}) {
 	if s != nil && s.logger != nil {
 		s.logger.InfoContext(ctx, code, fields)

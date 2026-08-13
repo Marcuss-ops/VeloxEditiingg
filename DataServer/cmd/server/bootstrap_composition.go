@@ -204,9 +204,14 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 	}
 	if m != nil && m.DeliveryRunner != nil {
 		m.DeliveryRunner.WithTelemetry(metricsCollector.OperationalTelemetry())
+		// Logger is wired at the composition root (not left to the
+		// constructor default) so the composition root stays the single
+		// owner of every runner dependency, mirroring WithTelemetry.
+		m.DeliveryRunner.WithLogger(logging.NewLogger("deliveries.runner"))
 	}
 	if m != nil && m.ForwardingRunner != nil {
 		m.ForwardingRunner.WithTelemetry(metricsCollector.ForwardingTelemetry())
+		m.ForwardingRunner.WithLogger(logging.NewLogger("forwarding.runner"))
 	}
 	if m != nil && m.AssetService != nil {
 		for _, family := range velmetrics.NewInputSecurityFamilies(m.AssetService.SecurityMetrics()) {
