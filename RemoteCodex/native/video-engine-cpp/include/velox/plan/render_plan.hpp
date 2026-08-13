@@ -85,6 +85,12 @@ struct RenderPlan {
     std::string job_id;
     CanvasSpec canvas;
     bool copy_only{false};
+    // Mixed renderer: resolve each video segment independently against the
+    // canonical output profile (PACKET_COPY for already-compatible sources,
+    // NATIVE_TRANSCODE for the rest) and assemble them through the single
+    // in-process packet mux. Distinct from copy_only, which requires every
+    // segment to be packet-copy compatible and performs zero encoding.
+    bool mixed{false};
     std::vector<TimelineItem> timeline;
     std::vector<AudioTrack> audio_tracks;
     std::vector<SubtitleTrack> subtitle_tracks;

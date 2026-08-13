@@ -73,5 +73,20 @@ int main() {
     expect(decision.mode == SegmentExecutionMode::NativeTranscode,
            "off-profile source resolves to native transcode against the canonical target");
 
+    // A real on-profile source carries its own stream extradata (SPS/PPS).
+    // The canonical target does not pin extradata, so a matching source must
+    // still resolve to PACKET_COPY — otherwise the mixed renderer could never
+    // stream-copy a segment.
+    auto real_source = signature;
+    real_source.extradata = {0x01, 0x64, 0x00, 0x1f};
+    expect(velox::media::mediaSignaturesCompatible(real_source, signature),
+           "canonical target is extradata-agnostic for matching sources");
+
+    request.source = real_source;
+    request.target = signature;
+    decision = velox::media::resolveSegmentExecution(request);
+    expect(decision.mode == SegmentExecutionMode::PacketCopy,
+           "on-profile source with its own extradata still resolves to packet copy");
+
     return failures == 0 ? 0 : 1;
 }
