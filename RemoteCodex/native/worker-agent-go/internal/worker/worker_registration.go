@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"velox-shared/controltransport"
+	"velox-shared/identity"
 	"velox-worker-agent/internal/executor"
 )
 
@@ -69,9 +70,13 @@ func (w *Worker) buildHello() controltransport.WorkerHello {
 // workerName returns the operator-configured display name when present.
 // WorkerID remains the immutable routing identity; the derived physical-host
 // name is only a compatibility fallback for older configurations.
+//
+// The configured value is parsed through identity.ParseWorkerName so the
+// trim + shape validation stay the single identity SSOT rather than an ad-hoc
+// strings.TrimSpace at each call site.
 func (w *Worker) workerName(hostname string) string {
-	if name := strings.TrimSpace(w.config.WorkerName); name != "" {
-		return name
+	if name := identity.ParseWorkerName(w.config.WorkerName); !name.IsEmpty() {
+		return name.String()
 	}
 	return workerDisplayName(hostname)
 }

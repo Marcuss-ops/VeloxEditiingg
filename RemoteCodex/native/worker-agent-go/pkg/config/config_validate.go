@@ -69,6 +69,16 @@ func (c *WorkerConfig) Validate() error {
 		errs = append(errs, fmt.Sprintf("invalid worker_id shape: %q (RW-PROD-001 A4 enforces ^[a-z][a-z0-9-]{2,62}$)", c.WorkerID))
 	}
 
+	// worker_name is optional (empty falls back to the host-derived display
+	// name at registration), but when present it must satisfy the single
+	// WorkerName validation SSOT: no control characters (log/HTML injection)
+	// and a bounded length.
+	if name := identity.ParseWorkerName(c.WorkerName); !name.IsEmpty() {
+		if err := name.Validate(); err != nil {
+			errs = append(errs, fmt.Sprintf("invalid worker_name: %v", err))
+		}
+	}
+
 	if c.WorkDir == "" {
 		errs = append(errs, "work_dir is required")
 	}
