@@ -43,7 +43,7 @@ func (r *CreatorForwardingRunner) tick(ctx context.Context) error {
 		return nil
 	}
 
-	r.metrics.Claimed.Add(int64(len(leases)))
+	r.recordClaimed(int64(len(leases)))
 	log.Printf("[FORWARDING] claimed %d forwardings", len(leases))
 
 	var (

@@ -36,7 +36,7 @@ func (r *CreatorForwardingRunner) handleEnqueueRetry(ctx context.Context, lease 
 		}
 		log.Printf("[FORWARDING] max enqueue attempts exhausted forwarding=%s source_job=%s attempts=%d",
 			lease.ForwardingID, lease.SourceJobID, lease.AttemptCount)
-		r.metrics.Failed.Add(1)
+		r.recordFailed()
 		return nil
 	}
 
@@ -60,10 +60,10 @@ func (r *CreatorForwardingRunner) handleEnqueueRetry(ctx context.Context, lease 
 		); ferr != nil {
 			return forwardingStateError("mark failed (CAS fallback)", errors.Join(ferr, err))
 		}
-		r.metrics.Failed.Add(1)
+		r.recordFailed()
 		return nil
 	}
-	r.metrics.Retried.Add(1)
+	r.recordRetried()
 	return nil
 }
 
@@ -91,7 +91,7 @@ func (r *CreatorForwardingRunner) handleRetry(ctx context.Context, lease store.C
 		}
 		log.Printf("[FORWARDING] max attempts exhausted forwarding=%s source_job=%s attempts=%d",
 			lease.ForwardingID, lease.SourceJobID, lease.AttemptCount)
-		r.metrics.Failed.Add(1)
+		r.recordFailed()
 		return nil
 	}
 
@@ -103,6 +103,6 @@ func (r *CreatorForwardingRunner) handleRetry(ctx context.Context, lease store.C
 	); err != nil {
 		return forwardingStateError("mark retry", err)
 	}
-	r.metrics.Retried.Add(1)
+	r.recordRetried()
 	return nil
 }

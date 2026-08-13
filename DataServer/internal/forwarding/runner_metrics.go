@@ -51,4 +51,7 @@ func (r *CreatorForwardingRunner) refreshMetrics(ctx context.Context) {
 	}
 	r.metrics.QueueDepth.Store(m.QueueDepth)
 	r.metrics.OldestPending.Store(int64(m.OldestPendingAge.Seconds()))
+	if r.telemetry != nil {
+		r.telemetry.ObserveQueue(m.QueueDepth, int64(m.OldestPendingAge.Seconds()))
+	}
 }

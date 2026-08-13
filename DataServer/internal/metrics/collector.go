@@ -61,6 +61,7 @@ import (
 type Collector struct {
 	reg         *Registry
 	operational *OperationalTelemetry
+	forwarding  *ForwardingTelemetry
 
 	// Per-project.
 	renderSpeed *Family // velox_project_render_speed_ratio (gauge)
@@ -231,6 +232,7 @@ type Collector struct {
 func NewCollector(reg *Registry) *Collector {
 	c := &Collector{reg: reg}
 	c.operational = NewOperationalTelemetry(reg)
+	c.forwarding = NewForwardingTelemetry(reg)
 
 	c.initRenderFamilies()
 	c.initFFmpegFamilies()
@@ -260,6 +262,15 @@ func (c *Collector) OperationalTelemetry() *OperationalTelemetry {
 		return nil
 	}
 	return c.operational
+}
+
+// ForwardingTelemetry returns the forwarding-runner sink registered on the
+// same registry (velox_forwarding_* families).
+func (c *Collector) ForwardingTelemetry() *ForwardingTelemetry {
+	if c == nil {
+		return nil
+	}
+	return c.forwarding
 }
 
 // allFamilies returns the curated list to register. Adding a new family

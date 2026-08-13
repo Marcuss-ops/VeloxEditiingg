@@ -54,7 +54,7 @@ func (r *CreatorForwardingRunner) atomicEnqueueAndForward(ctx context.Context, l
 			return forwardingStateError("mark blocked", err)
 		}
 		log.Printf("[FORWARDING] payload marshal failed forwarding=%s; marked BLOCKED", lease.ForwardingID)
-		r.metrics.Failed.Add(1)
+		r.recordFailed()
 		return nil
 	}
 
@@ -112,6 +112,6 @@ func (r *CreatorForwardingRunner) atomicEnqueueAndForward(ctx context.Context, l
 	}
 	log.Printf("[FORWARDING] forwarded forwarding=%s → job=%s source=%s (via Resolver)",
 		lease.ForwardingID, out.JobID, lease.SourceProvider)
-	r.metrics.Forwarded.Add(1)
+	r.recordForwarded()
 	return nil
 }

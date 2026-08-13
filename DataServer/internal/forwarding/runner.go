@@ -44,6 +44,7 @@ type CreatorForwardingRunner struct {
 	enqueuer     *enqueue.Enqueuer
 	identity     string
 	metrics      *RunnerMetrics
+	telemetry    Telemetry             // optional Prometheus sink; nil-safe
 	resolver     *creatorflow.Resolver // canonical forward-completed entry point
 	resolverOnce sync.Once             // guards lazyResolver against concurrent first-call race
 
@@ -129,6 +130,47 @@ func (r *CreatorForwardingRunner) lazyResolver() *creatorflow.Resolver {
 // Metrics returns the runner's metrics for external consumption.
 func (r *CreatorForwardingRunner) Metrics() *RunnerMetrics {
 	return r.metrics
+}
+
+// WithTelemetry wires the forwarding measurement sink (e.g.
+// metrics.ForwardingTelemetry registered on the Prometheus Registry). Without
+// it the runner still maintains its atomic RunnerMetrics for tests and
+// probing, but nothing is exported to /metrics.
+func (r *CreatorForwardingRunner) WithTelemetry(t Telemetry) *CreatorForwardingRunner {
+	if r != nil {
+		r.telemetry = t
+	}
+	return r
+}
+
+// recordClaimed/recordForwarded/recordFailed/recordRetried keep the atomic
+// RunnerMetrics and the Prometheus sink in lockstep at each observation point.
+func (r *CreatorForwardingRunner) recordClaimed(n int64) {
+	r.metrics.Claimed.Add(n)
+	if r.telemetry != nil {
+		r.telemetry.RecordClaimed(n)
+	}
+}
+
+func (r *CreatorForwardingRunner) recordForwarded() {
+	r.metrics.Forwarded.Add(1)
+	if r.telemetry != nil {
+		r.telemetry.RecordForwarded()
+	}
+}
+
+func (r *CreatorForwardingRunner) recordFailed() {
+	r.metrics.Failed.Add(1)
+	if r.telemetry != nil {
+		r.telemetry.RecordFailed()
+	}
+}
+
+func (r *CreatorForwardingRunner) recordRetried() {
+	r.metrics.Retried.Add(1)
+	if r.telemetry != nil {
+		r.telemetry.RecordRetried()
+	}
 }
 
 // Stop signals the runner to exit after the in-flight tick completes.

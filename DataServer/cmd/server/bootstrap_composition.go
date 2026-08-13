@@ -204,6 +204,9 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 	if m != nil && m.DeliveryRunner != nil {
 		m.DeliveryRunner.WithTelemetry(metricsCollector.OperationalTelemetry())
 	}
+	if m != nil && m.ForwardingRunner != nil {
+		m.ForwardingRunner.WithTelemetry(metricsCollector.ForwardingTelemetry())
+	}
 	if m != nil && m.AssetService != nil {
 		for _, family := range velmetrics.NewInputSecurityFamilies(m.AssetService.SecurityMetrics()) {
 			if family != nil {

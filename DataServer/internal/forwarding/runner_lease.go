@@ -169,7 +169,7 @@ func (r *CreatorForwardingRunner) processLease(ctx context.Context, lease store.
 				return forwardingStateError("mark blocked", err)
 			}
 			log.Printf("[FORWARDING] payload marshal failed forwarding=%s; marked BLOCKED", lease.ForwardingID)
-			r.metrics.Failed.Add(1)
+			r.recordFailed()
 			return nil
 		}
 		if err := r.dbStore.MarkCreatorForwardingReadyToForward(procCtx,
@@ -193,7 +193,7 @@ func (r *CreatorForwardingRunner) processLease(ctx context.Context, lease store.
 		}
 		log.Printf("[FORWARDING] ready-to-forward forwarding=%s source_job=%s source_provider=%s",
 			lease.ForwardingID, lease.SourceJobID, lease.SourceProvider)
-		r.metrics.Forwarded.Add(1)
+		r.recordForwarded()
 		return nil
 
 	case isTerminalFailure(resp.Status):
@@ -215,7 +215,7 @@ func (r *CreatorForwardingRunner) processLease(ctx context.Context, lease store.
 		}
 		log.Printf("[FORWARDING] failed forwarding=%s source_job=%s status=%s",
 			lease.ForwardingID, lease.SourceJobID, resp.Status)
-		r.metrics.Failed.Add(1)
+		r.recordFailed()
 		return nil
 
 	default:
@@ -233,7 +233,7 @@ func (r *CreatorForwardingRunner) processLease(ctx context.Context, lease store.
 			}
 			return forwardingStateError("mark retry (still-running)", err)
 		}
-		r.metrics.Retried.Add(1)
+		r.recordRetried()
 		return nil
 	}
 }
