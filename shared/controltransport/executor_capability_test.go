@@ -53,6 +53,56 @@ func TestExecutorRegistryJSONRoundTrip(t *testing.T) {
 	}
 }
 
+// TestExecutorRegistryHasBinarySearch pins the binary-search lookups against
+// a multi-version registry so the (ID, Version)-sorted ordering invariant
+// stays correct across both Has and HasID.
+func TestExecutorRegistryHasBinarySearch(t *testing.T) {
+	registry, err := NewExecutorRegistry(
+		ExecutorCapability{ID: "scene.composite.v1", Version: 3},
+		ExecutorCapability{ID: "scene.composite.v1", Version: 1},
+		ExecutorCapability{ID: "audio.mix.v1", Version: 2},
+		ExecutorCapability{ID: "scene.composite.v1", Version: 2},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		id      string
+		version int
+		want    bool
+	}{
+		{"scene.composite.v1", 1, true},
+		{"scene.composite.v1", 2, true},
+		{"scene.composite.v1", 3, true},
+		{"scene.composite.v1", 4, false},
+		{"scene.composite.v1", 0, false},
+		{"audio.mix.v1", 2, true},
+		{"audio.mix.v1", 1, false},
+		{"missing.v1", 1, false},
+		{"", 0, false},
+	} {
+		if got := registry.Has(tc.id, tc.version); got != tc.want {
+			t.Errorf("Has(%q, %d) = %v, want %v", tc.id, tc.version, got, tc.want)
+		}
+	}
+
+	for _, tc := range []struct {
+		id   string
+		want bool
+	}{
+		{"scene.composite.v1", true},
+		{"audio.mix.v1", true},
+		{"missing.v1", false},
+		{"", false},
+		{"scene", false},
+	} {
+		if got := registry.HasID(tc.id); got != tc.want {
+			t.Errorf("HasID(%q) = %v, want %v", tc.id, got, tc.want)
+		}
+	}
+}
+
 func TestExecutorRegistryCopiesOutputTypes(t *testing.T) {
 	registry, err := NewExecutorRegistry(ExecutorCapability{
 		ID: "copy.test", Version: 1, OutputTypes: []string{"video/mp4"},

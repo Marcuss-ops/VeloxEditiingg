@@ -96,22 +96,28 @@ func (r ExecutorRegistry) Len() int { return len(r.executors) }
 
 func (r ExecutorRegistry) IsEmpty() bool { return len(r.executors) == 0 }
 
+// Has reports whether the registry advertises the exact (id, version)
+// identity. The executor slice is maintained in (ID asc, Version asc) order
+// by NewExecutorRegistry, so the lookup is a binary search (O(log n)) rather
+// than a linear scan.
 func (r ExecutorRegistry) Has(id string, version int) bool {
-	for _, capability := range r.executors {
-		if capability.ID == id && capability.Version == version {
-			return true
+	i := sort.Search(len(r.executors), func(i int) bool {
+		e := r.executors[i]
+		if e.ID != id {
+			return e.ID > id
 		}
-	}
-	return false
+		return e.Version >= version
+	})
+	return i < len(r.executors) && r.executors[i].ID == id && r.executors[i].Version == version
 }
 
+// HasID reports whether the registry advertises any version of id. Binary
+// search over the (ID, Version)-sorted slice, O(log n).
 func (r ExecutorRegistry) HasID(id string) bool {
-	for _, capability := range r.executors {
-		if capability.ID == id {
-			return true
-		}
-	}
-	return false
+	i := sort.Search(len(r.executors), func(i int) bool {
+		return r.executors[i].ID >= id
+	})
+	return i < len(r.executors) && r.executors[i].ID == id
 }
 
 // Without returns a copy of the registry without one executor identity.

@@ -3,6 +3,7 @@ package video
 import (
 	"encoding/json"
 	"math"
+	"sort"
 )
 
 // extractMaxDuration finds the maximum timestamp in transcription segments.
@@ -48,16 +49,13 @@ func deduplicateMatches(matches []MatchResult) []MatchResult {
 		return matches
 	}
 
-	// Sort by score descending (keep best match)
+	// Sort by score descending (keep best match). Stable so equal scores
+	// retain their input order instead of the previous O(n^2) selection sort.
 	sorted := make([]MatchResult, len(matches))
 	copy(sorted, matches)
-	for i := 0; i < len(sorted)-1; i++ {
-		for j := i + 1; j < len(sorted); j++ {
-			if sorted[j].Score > sorted[i].Score {
-				sorted[i], sorted[j] = sorted[j], sorted[i]
-			}
-		}
-	}
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return sorted[i].Score > sorted[j].Score
+	})
 
 	// Keep only non-overlapping matches (5-second window)
 	const dedupWindow = 5.0
@@ -76,14 +74,10 @@ func deduplicateMatches(matches []MatchResult) []MatchResult {
 		}
 	}
 
-	// Sort result by timestamp for chronological order
-	for i := 0; i < len(result)-1; i++ {
-		for j := i + 1; j < len(result); j++ {
-			if result[j].TimestampStart < result[i].TimestampStart {
-				result[i], result[j] = result[j], result[i]
-			}
-		}
-	}
+	// Sort result by timestamp for chronological order.
+	sort.SliceStable(result, func(i, j int) bool {
+		return result[i].TimestampStart < result[j].TimestampStart
+	})
 	return result
 }
 
