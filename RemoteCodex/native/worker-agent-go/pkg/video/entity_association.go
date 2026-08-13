@@ -57,136 +57,52 @@ func PerformFullAssociation(ctx context.Context,
 
 	// --- Nomi_Con_Testo (threshold 80, was 75) ---
 	statusCallback("Matching Nomi_Con_Testo...", false)
-	nomiConTesto := make(map[string][]MatchResult)
-	for name := range entitaMap {
-		select {
-		case <-ctx.Done():
-			return nil, fmt.Errorf("entity association cancelled: %w", ctx.Err())
-		default:
-		}
-		matches := matchEntityToSegments(name, normSegments, 80.0, "partial_fuzzy")
-		if len(matches) == 0 {
-			matches = matchEntityByKeywords(name, normSegments)
-		}
-		if len(matches) > 0 {
-			nomiConTesto[name] = deduplicateMatches(matches)
-		}
+	nomiConTesto, err := matchEntityCategory(ctx, stringMapKeys(entitaMap), normSegments, 80.0)
+	if err != nil {
+		return nil, err
 	}
 
 	// --- Nomi_Speciali (threshold 50, was 35) ---
 	statusCallback("Matching Nomi_Speciali...", false)
-	nomiSpecialiResult := make(map[string][]MatchResult)
-	for _, name := range nomiSpeciali {
-		select {
-		case <-ctx.Done():
-			return nil, fmt.Errorf("entity association cancelled: %w", ctx.Err())
-		default:
-		}
-		matches := matchEntityToSegments(name, normSegments, 50.0, "partial_fuzzy")
-		if len(matches) == 0 {
-			matches = matchEntityByKeywords(name, normSegments)
-		}
-		if len(matches) > 0 {
-			nomiSpecialiResult[name] = deduplicateMatches(matches)
-		}
+	nomiSpecialiResult, err := matchEntityCategory(ctx, nomiSpeciali, normSegments, 50.0)
+	if err != nil {
+		return nil, err
 	}
 
 	// --- Frasi_Importanti (threshold 45, was 30) ---
 	statusCallback("Matching Frasi_Importanti...", false)
-	frasiResult := make(map[string][]MatchResult)
-	for _, phrase := range frasiImportanti {
-		select {
-		case <-ctx.Done():
-			return nil, fmt.Errorf("entity association cancelled: %w", ctx.Err())
-		default:
-		}
-		matches := matchEntityToSegments(phrase, normSegments, 45.0, "partial_fuzzy")
-		if len(matches) == 0 {
-			matches = matchEntityByKeywords(phrase, normSegments)
-		}
-		if len(matches) > 0 {
-			frasiResult[phrase] = deduplicateMatches(matches)
-		}
+	frasiResult, err := matchEntityCategory(ctx, frasiImportanti, normSegments, 45.0)
+	if err != nil {
+		return nil, err
 	}
 
 	// --- Parole_Importanti (threshold 40, was 25) ---
 	statusCallback("Matching Parole_Importanti...", false)
-	paroleResult := make(map[string][]MatchResult)
-	for _, word := range paroleImportanti {
-		select {
-		case <-ctx.Done():
-			return nil, fmt.Errorf("entity association cancelled: %w", ctx.Err())
-		default:
-		}
-		matches := matchEntityToSegments(word, normSegments, 40.0, "partial_fuzzy")
-		if len(matches) == 0 {
-			matches = matchEntityByKeywords(word, normSegments)
-		}
-		if len(matches) > 0 {
-			paroleResult[word] = deduplicateMatches(matches)
-		}
+	paroleResult, err := matchEntityCategory(ctx, paroleImportanti, normSegments, 40.0)
+	if err != nil {
+		return nil, err
 	}
 
 	// --- Entita_Senza_Testo (threshold 70, multi-strategy) ---
 	statusCallback("Matching Entita_Senza_Testo...", false)
 	entitaSenzaTestoResult := make(map[string]EntitaResult)
 	for name, val := range entitaSenzaTestoMap {
-		// Check context cancellation periodically
-		select {
-		case <-ctx.Done():
-			return nil, fmt.Errorf("entity association cancelled: %w", ctx.Err())
-		default:
+		// Check context cancellation periodically.
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("entity association cancelled: %w", err)
 		}
 
-		// Extract URL from the value
-		var urls []string
-		if urlStr, ok := val.(string); ok && urlStr != "" {
-			urls = []string{urlStr}
-		} else if urlSlice, ok := val.([]interface{}); ok {
-			for _, u := range urlSlice {
-				if s, ok := u.(string); ok {
-					urls = append(urls, s)
-				}
-			}
-		}
-
-		// Try direct fuzzy match
+		urls := extractEntityURLs(val)
+		// Direct fuzzy match, then keyword match, then partial-word fallback.
+		// FIX #7: only include the entity when it has timestamps AND a URL; a
+		// URL with no timestamps cannot be rendered.
 		matches := matchEntityToSegments(name, normSegments, 70.0, "fuzzy")
-		// Try keyword match (with word boundary)
 		if len(matches) == 0 {
 			matches = matchEntityByKeywords(name, normSegments)
 		}
-		// Partial word match fallback (with word boundary check)
 		if len(matches) == 0 {
-			normName := normalizeForMatch(name)
-			nameWords := strings.Fields(normName)
-			for _, seg := range normSegments {
-				// seg.words is pre-split in normalizeSegments so the
-				// per-(entity × segment) loop does not re-allocate the
-				// haystack token slice here.
-				hayWords := seg.words
-				for _, w := range nameWords {
-					if len(w) < 4 {
-						continue
-					}
-					// Word boundary check: must match a full token
-					for _, hw := range hayWords {
-						if w == hw {
-							matches = append(matches, MatchResult{
-								TimestampStart: seg.start,
-								TimestampEnd:   seg.end,
-								Score:          50.0,
-								Method:         "partial_word",
-								Text:           seg.raw,
-							})
-							break
-						}
-					}
-				}
-			}
+			matches = matchPartialWords(name, normSegments)
 		}
-		// FIX #7: Only include entity if it has actual timestamp matches.
-		// Having just an URL with no timestamps means the renderer won't know when to show it.
 		if len(matches) > 0 && len(urls) > 0 {
 			entitaSenzaTestoResult[name] = EntitaResult{
 				LinkImmagine: urls,
@@ -241,47 +157,24 @@ func ResolveEntities(
 ) (map[string]interface{}, map[string]interface{}, error) {
 
 	// Priority 1: Use pre-associated entities from API
-	if len(preAssociatedEntities) > 0 {
-		hasContent := false
-		for _, v := range preAssociatedEntities {
-			if m, ok := v.(map[string]interface{}); ok && len(m) > 0 {
-				hasContent = true
-				break
-			}
-		}
-		if hasContent {
-			statusCallback("Using pre-associated entities from API", false)
-			// FIX #4: Validate timestamps against audio duration from segments
-			maxDuration := extractMaxDuration(segmentsForSRTGeneration)
-			validated := validatePreAssociatedEntities(preAssociatedEntities, maxDuration)
-			return validated, formattedImgEntities, nil
-		}
+	if hasNonEmptyContent(preAssociatedEntities) {
+		statusCallback("Using pre-associated entities from API", false)
+		// FIX #4: Validate timestamps against audio duration from segments
+		maxDuration := extractMaxDuration(segmentsForSRTGeneration)
+		validated := validatePreAssociatedEntities(preAssociatedEntities, maxDuration)
+		return validated, formattedImgEntities, nil
 	}
 
 	// Priority 2: Use already-computed associations if available
-	if len(associazioniFinaliConTimestamp) > 0 {
-		hasContent := false
-		for _, v := range associazioniFinaliConTimestamp {
-			if m, ok := v.(map[string]interface{}); ok && len(m) > 0 {
-				hasContent = true
-				break
-			}
-		}
-		if hasContent {
-			statusCallback("Using pre-computed entity association", false)
-			// FIX #4: Validate timestamps against audio duration from segments
-			maxDuration := extractMaxDuration(segmentsForSRTGeneration)
-			validated := validatePreAssociatedEntities(associazioniFinaliConTimestamp, maxDuration)
-			return validated, formattedImgEntities, nil
-		}
+	if hasNonEmptyContent(associazioniFinaliConTimestamp) {
+		statusCallback("Using pre-computed entity association", false)
+		// FIX #4: Validate timestamps against audio duration from segments
+		maxDuration := extractMaxDuration(segmentsForSRTGeneration)
+		validated := validatePreAssociatedEntities(associazioniFinaliConTimestamp, maxDuration)
+		return validated, formattedImgEntities, nil
 	}
 
 	// Check if all entity inputs are "None" or empty
-	isNoneOrEmpty := func(s string) bool {
-		trimmed := strings.TrimSpace(s)
-		return trimmed == "" || strings.ToLower(trimmed) == "none" || strings.ToLower(trimmed) == `"none"` || strings.ToLower(trimmed) == `null`
-	}
-
 	allNone := isNoneOrEmpty(entitaInputStr) &&
 		isNoneOrEmpty(nomiSpecialiInputStr) &&
 		isNoneOrEmpty(entitaSenzaTestoInputStr) &&
@@ -311,4 +204,102 @@ func ResolveEntities(
 		return nil, nil, fmt.Errorf("entity association failed: %w", err)
 	}
 	return associations, formattedImgEntities, nil
+}
+
+// matchEntityCategory fuzzy-matches a list of entity names against the
+// pre-normalized segments, falling back to keyword matching when the partial
+// fuzzy pass finds nothing. It centralizes the per-category loop (context
+// cancellation, fallback, dedup) that was previously repeated four times.
+func matchEntityCategory(ctx context.Context, names []string, normSegments []normalizedSegment, threshold float64) (map[string][]MatchResult, error) {
+	result := make(map[string][]MatchResult)
+	for _, name := range names {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("entity association cancelled: %w", err)
+		}
+		matches := matchEntityToSegments(name, normSegments, threshold, "partial_fuzzy")
+		if len(matches) == 0 {
+			matches = matchEntityByKeywords(name, normSegments)
+		}
+		if len(matches) > 0 {
+			result[name] = deduplicateMatches(matches)
+		}
+	}
+	return result, nil
+}
+
+// stringMapKeys returns the keys of a map as a slice, so callers can feed a
+// map-keyed category (Nomi_Con_Testo) through the same slice-based matching
+// helper as the slice-keyed categories.
+func stringMapKeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+// extractEntityURLs normalizes the Entita_Senza_Testo value (either a single
+// URL string or a []interface{} of strings) into a []string of image URLs.
+func extractEntityURLs(val interface{}) []string {
+	if urlStr, ok := val.(string); ok && urlStr != "" {
+		return []string{urlStr}
+	}
+	urlSlice, ok := val.([]interface{})
+	if !ok {
+		return nil
+	}
+	urls := make([]string, 0, len(urlSlice))
+	for _, u := range urlSlice {
+		if s, ok := u.(string); ok {
+			urls = append(urls, s)
+		}
+	}
+	return urls
+}
+
+// matchPartialWords is the last-resort Entita_Senza_Testo strategy: it matches
+// any entity word of >=4 chars against the segment's pre-split tokens as a
+// full-token (word boundary) equality check.
+func matchPartialWords(name string, normSegments []normalizedSegment) []MatchResult {
+	nameWords := strings.Fields(normalizeForMatch(name))
+	var matches []MatchResult
+	for _, seg := range normSegments {
+		for _, w := range nameWords {
+			if len(w) < 4 {
+				continue
+			}
+			for _, hw := range seg.words {
+				if w == hw {
+					matches = append(matches, MatchResult{
+						TimestampStart: seg.start,
+						TimestampEnd:   seg.end,
+						Score:          50.0,
+						Method:         "partial_word",
+						Text:           seg.raw,
+					})
+					break
+				}
+			}
+		}
+	}
+	return matches
+}
+
+// hasNonEmptyContent reports whether an association map carries at least one
+// non-empty category. Used by ResolveEntities to decide whether a
+// pre-associated / pre-computed result is usable.
+func hasNonEmptyContent(m map[string]interface{}) bool {
+	for _, v := range m {
+		if vm, ok := v.(map[string]interface{}); ok && len(vm) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// isNoneOrEmpty reports whether an entity input string is blank or an explicit
+// "none"/"null" sentinel.
+func isNoneOrEmpty(s string) bool {
+	trimmed := strings.TrimSpace(s)
+	return trimmed == "" || strings.EqualFold(trimmed, "none") || strings.EqualFold(trimmed, `"none"`) || strings.EqualFold(trimmed, "null")
 }

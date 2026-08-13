@@ -253,6 +253,13 @@ func validateRenderPlan(p *plan.RenderPlan, taskJobID string) error {
 			return fmt.Errorf("render-plan executor: timeline[%d] has invalid source or duration", i)
 		}
 	}
+	if err := validateRenderAudioTracks(p); err != nil {
+		return err
+	}
+	return validateRenderSubtitleTracks(p, totalDuration(p))
+}
+
+func validateRenderAudioTracks(p *plan.RenderPlan) error {
 	for i, track := range p.AudioTracks {
 		if strings.TrimSpace(track.SourceURL) == "" {
 			return fmt.Errorf("render-plan executor: audio_tracks[%d].source_url is required", i)
@@ -264,30 +271,40 @@ func validateRenderPlan(p *plan.RenderPlan, taskJobID string) error {
 			return fmt.Errorf("render-plan executor: audio_tracks[%d].duration_seconds must be non-negative", i)
 		}
 	}
-	endOfTimeline := totalDuration(p)
+	return nil
+}
+
+func validateRenderSubtitleTracks(p *plan.RenderPlan, endOfTimeline float64) error {
 	for i, subtitle := range p.Subtitles {
 		if len(subtitle.Events) == 0 {
 			return fmt.Errorf("render-plan executor: subtitle_tracks[%d] requires aligned events", i)
 		}
-		var previousEnd float64
-		for j, event := range subtitle.Events {
-			if event.EndSeconds <= event.StartSeconds || event.StartSeconds < 0 || strings.TrimSpace(event.Text) == "" {
-				return fmt.Errorf("render-plan executor: subtitle_tracks[%d].events[%d] is invalid", i, j)
-			}
-			if event.EndSeconds-event.StartSeconds < 0.5 {
-				return fmt.Errorf("render-plan executor: subtitle_tracks[%d].events[%d] is shorter than 500ms", i, j)
-			}
-			if event.StartSeconds < previousEnd {
-				return fmt.Errorf("render-plan executor: subtitle_tracks[%d].events[%d] overlaps previous event", i, j)
-			}
-			if event.EndSeconds > endOfTimeline {
-				return fmt.Errorf("render-plan executor: subtitle_tracks[%d].events[%d] exceeds timeline", i, j)
-			}
-			if strings.Count(event.Text, "\\n") > 1 {
-				return fmt.Errorf("render-plan executor: subtitle_tracks[%d].events[%d] exceeds two lines", i, j)
-			}
-			previousEnd = event.EndSeconds
+		if err := validateSubtitleEvents(subtitle.Events, i, endOfTimeline); err != nil {
+			return err
 		}
+	}
+	return nil
+}
+
+func validateSubtitleEvents(events []plan.SubtitleEvent, trackIndex int, endOfTimeline float64) error {
+	var previousEnd float64
+	for j, event := range events {
+		if event.EndSeconds <= event.StartSeconds || event.StartSeconds < 0 || strings.TrimSpace(event.Text) == "" {
+			return fmt.Errorf("render-plan executor: subtitle_tracks[%d].events[%d] is invalid", trackIndex, j)
+		}
+		if event.EndSeconds-event.StartSeconds < 0.5 {
+			return fmt.Errorf("render-plan executor: subtitle_tracks[%d].events[%d] is shorter than 500ms", trackIndex, j)
+		}
+		if event.StartSeconds < previousEnd {
+			return fmt.Errorf("render-plan executor: subtitle_tracks[%d].events[%d] overlaps previous event", trackIndex, j)
+		}
+		if event.EndSeconds > endOfTimeline {
+			return fmt.Errorf("render-plan executor: subtitle_tracks[%d].events[%d] exceeds timeline", trackIndex, j)
+		}
+		if strings.Count(event.Text, "\\n") > 1 {
+			return fmt.Errorf("render-plan executor: subtitle_tracks[%d].events[%d] exceeds two lines", trackIndex, j)
+		}
+		previousEnd = event.EndSeconds
 	}
 	return nil
 }

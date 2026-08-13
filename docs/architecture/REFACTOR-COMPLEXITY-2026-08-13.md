@@ -56,10 +56,20 @@ Soglia di attenzione: complessità **≥ 30**. Convenzione: una funzione sopra
 | 38 | `attachWorkerIdentityAndTimings` | internal/worker/report_observability.go | builder di attributi |
 | 37 | `Run` | internal/cacheevict/evict.go | policy LRU + scan separati |
 | 36 | `(*Worker).dispatchTaskRunner` | internal/task_dispatch.go | registry executor per tipo task |
-| 34 | `PerformFullAssociation` | pkg/video/entity_association.go | match per categoria in helper |
+| ~~34~~ 12 | `PerformFullAssociation` | pkg/video/entity_association.go | ~~match per categoria in helper~~ **FATTO**: estratto `matchEntityCategory` (4 categorie) + `matchPartialWords` + `extractEntityURLs` |
 | 34 | `(*Worker).submitTaskResult` | internal/worker/task_result_builder.go | builder risultato per outcome |
 | 31 | `chrononPlanJSON` | pkg/video/services/native/chronon_adapter.go | mapping JSON in funzione per nodo |
 | 31 | `migrateLegacySchemaWithHook` | internal/workercache/cache_helpers.go | migrazione per versione |
+
+**Progresso 2026-08-13 (entity-association / render / prefetch reconcile):**
+
+| Prima | Dopo | Funzione | Estratto |
+|---|---|---|---|
+| 34 | 12 | `PerformFullAssociation` | `matchEntityCategory` / `matchPartialWords` / `extractEntityURLs` / `stringMapKeys` |
+| 20 | < 10 | `ResolveEntities` | `hasNonEmptyContent` / `isNoneOrEmpty` |
+| 27 | 13 | `validateRenderPlan` | `validateRenderAudioTracks` / `validateRenderSubtitleTracks` / `validateSubtitleEvents` |
+| 29 | 11 + 14 | `validateCopyOnlyPlan` | `validateCopyOnlyProfile` + `validateCopyOnlySegment` |
+| 26 | 13 | `(*Scheduler).Reconcile` | `resetForExpiredLocked` / `reserveProtectionsLocked` / `releaseProtections` |
 
 ## 3. Complessità C++ — engine
 

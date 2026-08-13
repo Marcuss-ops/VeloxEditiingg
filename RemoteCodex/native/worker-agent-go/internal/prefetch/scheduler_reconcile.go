@@ -23,29 +23,10 @@ func (s *Scheduler) Reconcile(plan futureasset.Plan) error {
 	}
 	s.mu.Lock()
 	if plan.Expired(s.cfg.Now()) {
-		store := s.protect
-		oldProtects := s.protects
-		for id, runtime := range s.jobs {
-			runtime.cancel()
-			delete(s.jobs, id)
-			s.detachJobLocked(runtime.job)
-		}
-		s.protects = make(map[string]string)
-		s.pendingProtects = make(map[string]struct{})
-		s.protectExpiries = make(map[string]time.Time)
-		s.hints = make(map[string]futureasset.ProtectedAsset)
-		s.readyAtByJob = make(map[string]map[string]readyRecord)
+		store, oldProtects := s.resetForExpiredLocked()
 		s.mu.Unlock()
 		s.signalWork()
-		var releaseErr error
-		if store != nil {
-			for key, reservationID := range oldProtects {
-				if err := store.ReleaseReservation(context.Background(), assetref.AssetKey(key), reservationID); err != nil && releaseErr == nil {
-					releaseErr = fmt.Errorf("prefetch: release expired protection %s: %w", key, err)
-				}
-			}
-		}
-		return releaseErr
+		return releaseProtections(store, oldProtects, nil)
 	}
 	// Index the incoming plan's jobs once so the removal sweep below is O(1)
 	// per active job instead of a linear scan of plan.PrefetchJobs per job
@@ -67,41 +48,13 @@ func (s *Scheduler) Reconcile(plan futureasset.Plan) error {
 	pendingProtects := make(map[string]struct{})
 	protectExpiries := make(map[string]time.Time, len(plan.Protect))
 	s.hints = make(map[string]futureasset.ProtectedAsset, len(plan.Protect))
-	for _, asset := range plan.Protect {
-		s.hints[asset.AssetKey] = asset
-		reservationID := fmt.Sprintf("future:%s:%s", s.cfg.WorkerID, asset.AssetKey)
-		newProtects[asset.AssetKey] = reservationID
-		protectExpiries[asset.AssetKey] = plan.ExpiresAt
-		if store != nil {
-			// Reserve before releasing the prior snapshot's reservation.
-			if err := store.Reserve(context.Background(), assetref.AssetKey(asset.AssetKey), reservationID, plan.ExpiresAt); err != nil {
-				// A future asset is allowed to be absent until its prefetch
-				// resolver creates the verified canonical-cache row. Protection
-				// is an eviction barrier, not a prerequisite for downloading.
-				// Keep the desired reservation pending and install it after the
-				// resolver returns READY. Other store failures remain fail-closed.
-				if errors.Is(err, workercache.ErrNotFound) {
-					pendingProtects[asset.AssetKey] = struct{}{}
-				} else {
-					s.mu.Unlock()
-					return fmt.Errorf("prefetch: protect %s: %w", asset.AssetKey, err)
-				}
-			}
-		}
+	if err := s.reserveProtectionsLocked(store, plan, newProtects, pendingProtects, protectExpiries); err != nil {
+		s.mu.Unlock()
+		return err
 	}
-	if store != nil {
-		var releaseErr error
-		for key, reservationID := range oldProtects {
-			if _, keep := newProtects[key]; !keep {
-				if err := store.ReleaseReservation(context.Background(), assetref.AssetKey(key), reservationID); err != nil && releaseErr == nil {
-					releaseErr = fmt.Errorf("prefetch: release protection %s: %w", key, err)
-				}
-			}
-		}
-		if releaseErr != nil {
-			s.mu.Unlock()
-			return releaseErr
-		}
+	if err := releaseProtections(store, oldProtects, newProtects); err != nil {
+		s.mu.Unlock()
+		return err
 	}
 	s.protects = newProtects
 	s.pendingProtects = pendingProtects
@@ -128,6 +81,71 @@ func (s *Scheduler) Reconcile(plan futureasset.Plan) error {
 	}
 	s.signalWork()
 	return nil
+}
+
+// resetForExpiredLocked cancels and detaches every active job and resets all
+// protection/plan state for an expired snapshot. It returns the protection
+// store and the prior protects map so the caller can release them outside the
+// lock. Caller holds s.mu.
+func (s *Scheduler) resetForExpiredLocked() (store workercache.LeaseReservationStore, oldProtects map[string]string) {
+	store = s.protect
+	oldProtects = s.protects
+	for id, runtime := range s.jobs {
+		runtime.cancel()
+		delete(s.jobs, id)
+		s.detachJobLocked(runtime.job)
+	}
+	s.protects = make(map[string]string)
+	s.pendingProtects = make(map[string]struct{})
+	s.protectExpiries = make(map[string]time.Time)
+	s.hints = make(map[string]futureasset.ProtectedAsset)
+	s.readyAtByJob = make(map[string]map[string]readyRecord)
+	return store, oldProtects
+}
+
+// reserveProtectionsLocked installs the incoming snapshot's protection
+// barriers, reserving each in the store before the prior snapshot's
+// reservation is released so eviction never sees a protection gap. A future
+// asset is allowed to be absent until its prefetch resolver creates the
+// verified canonical-cache row (protection is an eviction barrier, not a
+// download prerequisite): those reservations are kept pending. Other store
+// failures remain fail-closed. Caller holds s.mu and releases it on error.
+func (s *Scheduler) reserveProtectionsLocked(store workercache.LeaseReservationStore, plan futureasset.Plan, newProtects map[string]string, pendingProtects map[string]struct{}, protectExpiries map[string]time.Time) error {
+	for _, asset := range plan.Protect {
+		s.hints[asset.AssetKey] = asset
+		reservationID := fmt.Sprintf("future:%s:%s", s.cfg.WorkerID, asset.AssetKey)
+		newProtects[asset.AssetKey] = reservationID
+		protectExpiries[asset.AssetKey] = plan.ExpiresAt
+		if store == nil {
+			continue
+		}
+		if err := store.Reserve(context.Background(), assetref.AssetKey(asset.AssetKey), reservationID, plan.ExpiresAt); err != nil {
+			if errors.Is(err, workercache.ErrNotFound) {
+				pendingProtects[asset.AssetKey] = struct{}{}
+				continue
+			}
+			return fmt.Errorf("prefetch: protect %s: %w", asset.AssetKey, err)
+		}
+	}
+	return nil
+}
+
+// releaseProtections releases every prior reservation that is not kept by the
+// new protects map (a nil newProtects releases all). It returns the first
+// error so the caller can fail closed without aborting the remaining releases.
+func releaseProtections(store workercache.LeaseReservationStore, oldProtects, newProtects map[string]string) error {
+	if store == nil {
+		return nil
+	}
+	var releaseErr error
+	for key, reservationID := range oldProtects {
+		if _, keep := newProtects[key]; !keep {
+			if err := store.ReleaseReservation(context.Background(), assetref.AssetKey(key), reservationID); err != nil && releaseErr == nil {
+				releaseErr = fmt.Errorf("prefetch: release protection %s: %w", key, err)
+			}
+		}
+	}
+	return releaseErr
 }
 
 // Cancel removes only the prefetch job's waiters. The downloader remains the

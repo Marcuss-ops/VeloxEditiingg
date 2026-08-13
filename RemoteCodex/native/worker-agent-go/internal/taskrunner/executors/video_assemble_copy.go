@@ -151,18 +151,9 @@ func validateCopyOnlyPlan(plan *contract.CompiledRenderPlanV2) error {
 	if plan == nil {
 		return errors.New("video.assemble.copy.v1: plan is nil")
 	}
-	if plan.Output.ProfileID == "" {
-		return fmt.Errorf("%w: output.profile_id is required", ErrCopyOnlyProfileMismatch)
-	}
-	profile, err := contract.KnownCanonicalVideoProfileV1(plan.Output.ProfileID)
+	profile, err := validateCopyOnlyProfile(plan)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrCopyOnlyProfileMismatch, err)
-	}
-	if err := profile.MatchesOutput(plan.Output); err != nil {
-		return fmt.Errorf("%w: %v", ErrCopyOnlyProfileMismatch, err)
-	}
-	if plan.Output.CodecProfile != profile.CodecProfile || plan.Output.CodecLevel != profile.CodecLevel || plan.Output.GOPSize != profile.GOPSize || plan.Output.BFrames != profile.BFrames || plan.Output.TimeBaseNum != profile.TimeBaseNum || plan.Output.TimeBaseDen != profile.TimeBaseDen || !plan.Output.ClosedGOP {
-		return fmt.Errorf("%w: output encoder/time-base fields do not match profile %q", ErrCopyOnlyProfileMismatch, profile.ProfileID)
+		return err
 	}
 	if len(plan.VideoTracks) != 1 || len(plan.VideoTracks[0].Segments) == 0 {
 		return errors.New("video.assemble.copy.v1: exactly one non-empty video track is required")
@@ -172,13 +163,43 @@ func validateCopyOnlyPlan(plan *contract.CompiledRenderPlanV2) error {
 		assets[asset.AssetID] = asset
 	}
 	for _, segment := range plan.VideoTracks[0].Segments {
-		asset, ok := assets[segment.AssetID]
-		if !ok || (asset.Kind != "video" && asset.Kind != "prepared_video_fragment") {
-			return fmt.Errorf("%w: segment %q does not reference a prepared video asset", ErrCopyOnlyCertification, segment.SegmentID)
+		if err := validateCopyOnlySegment(plan, profile, assets, segment); err != nil {
+			return err
 		}
-		if asset.SHA256 != segment.SHA256 || asset.ProfileID != profile.ProfileID || asset.FrameCount != segment.FrameCount || asset.TimelineRevision != plan.TimelineRevision || asset.TimelineSHA256 != plan.TimelineSHA256 || asset.TimelineStartFrame != segment.TimelineStartFrame || asset.DurationUS != segment.SourceDurationUS || !asset.FirstFrameKeyframe || !asset.ClosedGOP || segment.SourceInUS != 0 {
-			return fmt.Errorf("%w: segment %q manifest binding is not exact", ErrCopyOnlyCertification, segment.SegmentID)
-		}
+	}
+	return nil
+}
+
+// validateCopyOnlyProfile resolves the output's canonical profile and checks
+// every stream-identity field against it. The packet-copy path can only accept
+// streams produced under an admitted profile.
+func validateCopyOnlyProfile(plan *contract.CompiledRenderPlanV2) (contract.CanonicalVideoProfileV1, error) {
+	if plan.Output.ProfileID == "" {
+		return contract.CanonicalVideoProfileV1{}, fmt.Errorf("%w: output.profile_id is required", ErrCopyOnlyProfileMismatch)
+	}
+	profile, err := contract.KnownCanonicalVideoProfileV1(plan.Output.ProfileID)
+	if err != nil {
+		return contract.CanonicalVideoProfileV1{}, fmt.Errorf("%w: %v", ErrCopyOnlyProfileMismatch, err)
+	}
+	if err := profile.MatchesOutput(plan.Output); err != nil {
+		return contract.CanonicalVideoProfileV1{}, fmt.Errorf("%w: %v", ErrCopyOnlyProfileMismatch, err)
+	}
+	if plan.Output.CodecProfile != profile.CodecProfile || plan.Output.CodecLevel != profile.CodecLevel || plan.Output.GOPSize != profile.GOPSize || plan.Output.BFrames != profile.BFrames || plan.Output.TimeBaseNum != profile.TimeBaseNum || plan.Output.TimeBaseDen != profile.TimeBaseDen || !plan.Output.ClosedGOP {
+		return contract.CanonicalVideoProfileV1{}, fmt.Errorf("%w: output encoder/time-base fields do not match profile %q", ErrCopyOnlyProfileMismatch, profile.ProfileID)
+	}
+	return profile, nil
+}
+
+// validateCopyOnlySegment certifies one prepared video fragment against its
+// declared asset manifest: the reference must exist, be a prepared-video kind,
+// and match the plan's timeline identity and frame bounds exactly.
+func validateCopyOnlySegment(plan *contract.CompiledRenderPlanV2, profile contract.CanonicalVideoProfileV1, assets map[string]contract.AssetRefV2, segment contract.VideoSegmentV2) error {
+	asset, ok := assets[segment.AssetID]
+	if !ok || (asset.Kind != "video" && asset.Kind != "prepared_video_fragment") {
+		return fmt.Errorf("%w: segment %q does not reference a prepared video asset", ErrCopyOnlyCertification, segment.SegmentID)
+	}
+	if asset.SHA256 != segment.SHA256 || asset.ProfileID != profile.ProfileID || asset.FrameCount != segment.FrameCount || asset.TimelineRevision != plan.TimelineRevision || asset.TimelineSHA256 != plan.TimelineSHA256 || asset.TimelineStartFrame != segment.TimelineStartFrame || asset.DurationUS != segment.SourceDurationUS || !asset.FirstFrameKeyframe || !asset.ClosedGOP || segment.SourceInUS != 0 {
+		return fmt.Errorf("%w: segment %q manifest binding is not exact", ErrCopyOnlyCertification, segment.SegmentID)
 	}
 	return nil
 }
