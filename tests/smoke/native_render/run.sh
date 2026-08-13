@@ -59,7 +59,9 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "${BUILD_DIR}"
-cmake -S "${ENGINE_SOURCE}" -B "${BUILD_DIR}" -DCMAKE_BUILD_TYPE=Release \
+cmake -S "${ENGINE_SOURCE}" -B "${BUILD_DIR}" \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DVELOX_ENABLE_LIBAV=ON \
   >"${JOB_DIR}/cmake-configure.log" 2>&1 || {
     cat "${JOB_DIR}/cmake-configure.log" >&2
     fail "CMake configure failed"
