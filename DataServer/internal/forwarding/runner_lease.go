@@ -86,7 +86,7 @@ func (r *CreatorForwardingRunner) processLease(ctx context.Context, lease store.
 				return leaseErr
 			}
 			if errors.Is(recordErr, store.ErrLeaseLost) {
-				r.logWarn(logging.CodeForwardingLeaseLost, logging.F("forwarding", lease.ForwardingID, "runner", lease.RunnerID, "lease", lease.LeaseID))
+				r.logWarn(ctx, logging.CodeForwardingLeaseLost, logging.F("forwarding", lease.ForwardingID, "runner", lease.RunnerID, "lease", lease.LeaseID))
 				procCancel()
 				return supervisor.ErrLeaseLost
 			}
@@ -95,10 +95,10 @@ func (r *CreatorForwardingRunner) processLease(ctx context.Context, lease store.
 	}
 
 	if err != nil {
-		r.logWarn(logging.CodeForwardingPollFailed, logging.F("forwarding", lease.ForwardingID, "source_job", lease.SourceJobID, "attempt", lease.AttemptCount, "err", err))
+		r.logWarn(ctx, logging.CodeForwardingPollFailed, logging.F("forwarding", lease.ForwardingID, "source_job", lease.SourceJobID, "attempt", lease.AttemptCount, "err", err))
 		// Check if we lost the lease (procCtx was cancelled by renewal loop).
 		if leaseErr := leaseLostError(procCtx, &leaseWasLost); leaseErr != nil {
-			r.logWarn(logging.CodeForwardingLeaseLost, logging.F("forwarding", lease.ForwardingID))
+			r.logWarn(ctx, logging.CodeForwardingLeaseLost, logging.F("forwarding", lease.ForwardingID))
 			return errors.Join(leaseErr, err)
 		}
 		// Poll error: the per-row retry path is run via handleRetry,
@@ -130,7 +130,7 @@ func (r *CreatorForwardingRunner) processLease(ctx context.Context, lease store.
 	// empty body) can produce (nil, nil). Treat as a transient poll
 	// error rather than panicking on resp.Status.
 	if resp == nil {
-		r.logWarn(logging.CodeForwardingNilResponse, logging.F("forwarding", lease.ForwardingID, "source_job", lease.SourceJobID))
+		r.logWarn(ctx, logging.CodeForwardingNilResponse, logging.F("forwarding", lease.ForwardingID, "source_job", lease.SourceJobID))
 		if retryErr := r.handleRetry(procCtx, lease, "NIL_RESPONSE",
 			"GetPipelineStatus returned nil response without error", ""); retryErr != nil {
 			if leaseErr := leaseLostError(procCtx, &leaseWasLost); leaseErr != nil {
@@ -174,7 +174,7 @@ func (r *CreatorForwardingRunner) processLease(ctx context.Context, lease store.
 				}
 				return forwardingStateError("mark blocked", err)
 			}
-			r.logError(logging.CodeForwardingPayloadMarshalFail, logging.F("forwarding", lease.ForwardingID))
+			r.logError(ctx, logging.CodeForwardingPayloadMarshalFail, logging.F("forwarding", lease.ForwardingID))
 			r.recordFailed()
 			return nil
 		}
@@ -185,7 +185,7 @@ func (r *CreatorForwardingRunner) processLease(ctx context.Context, lease store.
 			// CAS failure: persist the retry on the row (if possible)
 			// and report the element-scoped error so the tracker
 			// does not count it.
-			r.logWarn(logging.CodeForwardingMarkReadyFail, logging.F("forwarding", lease.ForwardingID, "err", err))
+			r.logWarn(ctx, logging.CodeForwardingMarkReadyFail, logging.F("forwarding", lease.ForwardingID, "err", err))
 			if errors.Is(err, store.ErrTransitionConflict) {
 				return supervisor.ErrLeaseLost
 			}
@@ -197,7 +197,7 @@ func (r *CreatorForwardingRunner) processLease(ctx context.Context, lease store.
 			}
 			return nil
 		}
-		r.logInfo(logging.CodeForwardingReadyToForward, logging.F("forwarding", lease.ForwardingID, "source_job", lease.SourceJobID, "source_provider", lease.SourceProvider))
+		r.logInfo(ctx, logging.CodeForwardingReadyToForward, logging.F("forwarding", lease.ForwardingID, "source_job", lease.SourceJobID, "source_provider", lease.SourceProvider))
 		r.recordForwarded()
 		return nil
 
@@ -218,7 +218,7 @@ func (r *CreatorForwardingRunner) processLease(ctx context.Context, lease store.
 			}
 			return forwardingStateError("mark failed", err)
 		}
-		r.logInfo(logging.CodeForwardingFailed, logging.F("forwarding", lease.ForwardingID, "source_job", lease.SourceJobID, "status", resp.Status))
+		r.logInfo(ctx, logging.CodeForwardingFailed, logging.F("forwarding", lease.ForwardingID, "source_job", lease.SourceJobID, "status", resp.Status))
 		r.recordFailed()
 		return nil
 
@@ -281,7 +281,7 @@ func (r *CreatorForwardingRunner) renewLeaseLoop(ctx context.Context, procCancel
 				ctx, // bound to procCtx; cancelled on lease loss
 				lease.ForwardingID, lease.RunnerID, lease.LeaseID, newExpiry,
 			); err != nil {
-				r.logWarn(logging.CodeForwardingRenewLeaseFailed, logging.F("forwarding", lease.ForwardingID, "err", err))
+				r.logWarn(ctx, logging.CodeForwardingRenewLeaseFailed, logging.F("forwarding", lease.ForwardingID, "err", err))
 				// Only a CAS conflict proves that another runner owns the
 				// row. Parent cancellation and infrastructure failures must
 				// not be mislabeled as takeover.

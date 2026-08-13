@@ -118,22 +118,23 @@ func (r *DeliveryRunner) WithLogger(l *logging.Logger) *DeliveryRunner {
 }
 
 // logInfo/logWarn/logError are nil-safe structured emit helpers so a nil
-// injected logger (tests) never panics.
-func (r *DeliveryRunner) logInfo(code string, fields map[string]interface{}) {
+// injected logger (tests) never panics. They thread ctx so the logger can
+// inject trace_id/span_id when an active span is present (GAP 4).
+func (r *DeliveryRunner) logInfo(ctx context.Context, code string, fields map[string]interface{}) {
 	if r != nil && r.logger != nil {
-		r.logger.Info(code, fields)
+		r.logger.InfoContext(ctx, code, fields)
 	}
 }
 
-func (r *DeliveryRunner) logWarn(code string, fields map[string]interface{}) {
+func (r *DeliveryRunner) logWarn(ctx context.Context, code string, fields map[string]interface{}) {
 	if r != nil && r.logger != nil {
-		r.logger.Warn(code, fields)
+		r.logger.WarnContext(ctx, code, fields)
 	}
 }
 
-func (r *DeliveryRunner) logError(code string, fields map[string]interface{}) {
+func (r *DeliveryRunner) logError(ctx context.Context, code string, fields map[string]interface{}) {
 	if r != nil && r.logger != nil {
-		r.logger.Error(code, fields)
+		r.logger.ErrorContext(ctx, code, fields)
 	}
 }
 
@@ -234,7 +235,7 @@ func (r *DeliveryRunner) Stop() {
 // no row sits idle in memory with a ticking lease and no heartbeat.
 func (r *DeliveryRunner) tick(ctx context.Context) error {
 	if err := r.reconcileRecent(ctx); err != nil {
-		r.logWarn(logging.CodeDeliveryReconcileSweepFail, logging.F("err", err))
+		r.logWarn(ctx, logging.CodeDeliveryReconcileSweepFail, logging.F("err", err))
 	}
 	batch := r.cfg.ClaimBatch
 	if r.cfg.Concurrency > 0 && batch > r.cfg.Concurrency {
@@ -258,13 +259,13 @@ func (r *DeliveryRunner) tick(ctx context.Context) error {
 			select {
 			case r.sem <- struct{}{}:
 			case <-ctx.Done():
-				r.logWarn(logging.CodeDeliveryLeaseAbandoned, logging.F("delivery", l.DeliveryID))
+				r.logWarn(ctx, logging.CodeDeliveryLeaseAbandoned, logging.F("delivery", l.DeliveryID))
 				return
 			}
 			defer func() { <-r.sem }()
 
 			if err := r.processLease(ctx, l); err != nil {
-				r.logError(logging.CodeDeliveryProcessFailed, logging.F("delivery", l.DeliveryID, "err", err))
+				r.logError(ctx, logging.CodeDeliveryProcessFailed, logging.F("delivery", l.DeliveryID, "err", err))
 				if errors.Is(err, errDeliveryStatePersistence) {
 					stateErrors <- err
 				}

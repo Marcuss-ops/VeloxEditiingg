@@ -22,6 +22,7 @@
 package forwarding
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -157,22 +158,23 @@ func (r *CreatorForwardingRunner) WithLogger(l *logging.Logger) *CreatorForwardi
 }
 
 // logInfo/logWarn/logError are nil-safe structured emit helpers so a nil
-// injected logger (tests) never panics.
-func (r *CreatorForwardingRunner) logInfo(code string, fields map[string]interface{}) {
+// injected logger (tests) never panics. They thread ctx so the logger can
+// inject trace_id/span_id when an active span is present (GAP 4).
+func (r *CreatorForwardingRunner) logInfo(ctx context.Context, code string, fields map[string]interface{}) {
 	if r != nil && r.logger != nil {
-		r.logger.Info(code, fields)
+		r.logger.InfoContext(ctx, code, fields)
 	}
 }
 
-func (r *CreatorForwardingRunner) logWarn(code string, fields map[string]interface{}) {
+func (r *CreatorForwardingRunner) logWarn(ctx context.Context, code string, fields map[string]interface{}) {
 	if r != nil && r.logger != nil {
-		r.logger.Warn(code, fields)
+		r.logger.WarnContext(ctx, code, fields)
 	}
 }
 
-func (r *CreatorForwardingRunner) logError(code string, fields map[string]interface{}) {
+func (r *CreatorForwardingRunner) logError(ctx context.Context, code string, fields map[string]interface{}) {
 	if r != nil && r.logger != nil {
-		r.logger.Error(code, fields)
+		r.logger.ErrorContext(ctx, code, fields)
 	}
 }
 

@@ -28,7 +28,7 @@ func (s *ReconcileSupervisor) dispatch(ctx context.Context, c ReconcileCandidate
 			s.Metrics.IncReconcile(string(c.Case), string(ActionNoop))
 			return
 		}
-		s.logWarn(logging.CodeCompletionReconcileDispatchFail, logging.F("commit_id", c.CommitID, "case", c.Case, "err", err))
+		s.logWarn(ctx, logging.CodeCompletionReconcileDispatchFail, logging.F("commit_id", c.CommitID, "case", c.Case, "err", err))
 		s.Metrics.IncReconcile(string(c.Case), string(ActionEscalate))
 		return
 	}

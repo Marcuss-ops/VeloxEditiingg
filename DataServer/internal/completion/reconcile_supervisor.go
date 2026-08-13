@@ -77,21 +77,21 @@ func NewReconcileSupervisor(completionStore repository.CompletionStore, coord Co
 	return &ReconcileSupervisor{Store: completionStore, Coord: coord, Metrics: metrics, Tick: 15 * time.Second, Limit: 500, seenIDs: make(map[string]time.Time), seenCap: 10000, lastTick: time.Now().UTC(), logger: logging.NewLogger("completion.reconcile")}
 }
 
-func (s *ReconcileSupervisor) logInfo(code string, fields map[string]interface{}) {
+func (s *ReconcileSupervisor) logInfo(ctx context.Context, code string, fields map[string]interface{}) {
 	if s != nil && s.logger != nil {
-		s.logger.Info(code, fields)
+		s.logger.InfoContext(ctx, code, fields)
 	}
 }
 
-func (s *ReconcileSupervisor) logWarn(code string, fields map[string]interface{}) {
+func (s *ReconcileSupervisor) logWarn(ctx context.Context, code string, fields map[string]interface{}) {
 	if s != nil && s.logger != nil {
-		s.logger.Warn(code, fields)
+		s.logger.WarnContext(ctx, code, fields)
 	}
 }
 func (s *ReconcileSupervisor) Run(ctx context.Context) error {
 	t := time.NewTicker(s.Tick)
 	defer t.Stop()
-	s.logInfo(logging.CodeCompletionReconcileStarted, logging.F("tick", s.Tick, "limit", s.Limit))
+	s.logInfo(ctx, logging.CodeCompletionReconcileStarted, logging.F("tick", s.Tick, "limit", s.Limit))
 	for {
 		select {
 		case <-ctx.Done():
@@ -104,7 +104,7 @@ func (s *ReconcileSupervisor) Run(ctx context.Context) error {
 func (s *ReconcileSupervisor) TickOnce(ctx context.Context, now time.Time) {
 	candidates, deadline, err := s.scanCandidates(ctx)
 	if err != nil {
-		s.logWarn(logging.CodeCompletionReconcileScanFail, logging.F("err", err))
+		s.logWarn(ctx, logging.CodeCompletionReconcileScanFail, logging.F("err", err))
 		return
 	}
 	for i := int64(0); i < deadline; i++ {
@@ -113,7 +113,7 @@ func (s *ReconcileSupervisor) TickOnce(ctx context.Context, now time.Time) {
 	if len(candidates) == 0 {
 		return
 	}
-	s.logInfo(logging.CodeCompletionReconcileTick, logging.F("tick", now.Format(time.RFC3339), "candidates", len(candidates)))
+	s.logInfo(ctx, logging.CodeCompletionReconcileTick, logging.F("tick", now.Format(time.RFC3339), "candidates", len(candidates)))
 	for _, candidate := range candidates {
 		s.dispatch(ctx, candidate)
 	}

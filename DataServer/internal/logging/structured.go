@@ -1,11 +1,14 @@
 package logging
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"sync/atomic"
 	"time"
+
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Event represents a structured log event
@@ -92,32 +95,63 @@ func SetJSONOutput(json bool) {
 
 // Info logs an info-level event
 func (l *Logger) Info(code string, fields map[string]interface{}) {
-	l.log(LevelInfo, code, "", fields)
+	l.log(nil, LevelInfo, code, "", fields)
+}
+
+// InfoContext logs an info-level event, correlating it with the active span
+// in ctx (trace_id/span_id injected into Fields when present).
+func (l *Logger) InfoContext(ctx context.Context, code string, fields map[string]interface{}) {
+	l.log(ctx, LevelInfo, code, "", fields)
 }
 
 // InfoWithMsg logs an info-level event with a custom message
 func (l *Logger) InfoWithMsg(code, message string, fields map[string]interface{}) {
-	l.log(LevelInfo, code, message, fields)
+	l.log(nil, LevelInfo, code, message, fields)
+}
+
+// InfoWithMsgContext logs an info-level event with a custom message and trace correlation.
+func (l *Logger) InfoWithMsgContext(ctx context.Context, code, message string, fields map[string]interface{}) {
+	l.log(ctx, LevelInfo, code, message, fields)
 }
 
 // Warn logs a warning-level event
 func (l *Logger) Warn(code string, fields map[string]interface{}) {
-	l.log(LevelWarn, code, "", fields)
+	l.log(nil, LevelWarn, code, "", fields)
+}
+
+// WarnContext logs a warning-level event, correlating it with the active span in ctx.
+func (l *Logger) WarnContext(ctx context.Context, code string, fields map[string]interface{}) {
+	l.log(ctx, LevelWarn, code, "", fields)
 }
 
 // WarnWithMsg logs a warning-level event with a custom message
 func (l *Logger) WarnWithMsg(code, message string, fields map[string]interface{}) {
-	l.log(LevelWarn, code, message, fields)
+	l.log(nil, LevelWarn, code, message, fields)
+}
+
+// WarnWithMsgContext logs a warning-level event with a custom message and trace correlation.
+func (l *Logger) WarnWithMsgContext(ctx context.Context, code, message string, fields map[string]interface{}) {
+	l.log(ctx, LevelWarn, code, message, fields)
 }
 
 // Error logs an error-level event
 func (l *Logger) Error(code string, fields map[string]interface{}) {
-	l.log(LevelError, code, "", fields)
+	l.log(nil, LevelError, code, "", fields)
+}
+
+// ErrorContext logs an error-level event, correlating it with the active span in ctx.
+func (l *Logger) ErrorContext(ctx context.Context, code string, fields map[string]interface{}) {
+	l.log(ctx, LevelError, code, "", fields)
 }
 
 // ErrorWithMsg logs an error-level event with a custom message
 func (l *Logger) ErrorWithMsg(code, message string, fields map[string]interface{}) {
-	l.log(LevelError, code, message, fields)
+	l.log(nil, LevelError, code, message, fields)
+}
+
+// ErrorWithMsgContext logs an error-level event with a custom message and trace correlation.
+func (l *Logger) ErrorWithMsgContext(ctx context.Context, code, message string, fields map[string]interface{}) {
+	l.log(ctx, LevelError, code, message, fields)
 }
 
 // Debug logs a debug-level event when debug mode has been enabled by the
@@ -130,7 +164,19 @@ func (l *Logger) Debug(code string, fields map[string]interface{}) {
 	if !debug {
 		return
 	}
-	l.log(LevelDebug, code, "", fields)
+	l.log(nil, LevelDebug, code, "", fields)
+}
+
+// DebugContext logs a debug-level event with trace correlation when debug mode is enabled.
+func (l *Logger) DebugContext(ctx context.Context, code string, fields map[string]interface{}) {
+	debug := l.debug
+	if l.processCfg != nil {
+		debug = l.processCfg.Load().debug
+	}
+	if !debug {
+		return
+	}
+	l.log(ctx, LevelDebug, code, "", fields)
 }
 
 // WarnThrottled logs a warning with throttling (dedup by code+key fields)
@@ -140,7 +186,7 @@ func (l *Logger) WarnThrottled(code string, key string, fields map[string]interf
 	if !l.throttler.Allow(throttleKey) {
 		return false
 	}
-	l.log(LevelWarn, code, "", fields)
+	l.log(nil, LevelWarn, code, "", fields)
 	return true
 }
 
@@ -150,12 +196,12 @@ func (l *Logger) InfoThrottled(code string, key string, fields map[string]interf
 	if !l.throttler.Allow(throttleKey) {
 		return false
 	}
-	l.log(LevelInfo, code, "", fields)
+	l.log(nil, LevelInfo, code, "", fields)
 	return true
 }
 
 // log is the internal logging function
-func (l *Logger) log(level, code, message string, fields map[string]interface{}) {
+func (l *Logger) log(ctx context.Context, level, code, message string, fields map[string]interface{}) {
 	quiet, jsonOutput := l.quiet, l.jsonOutput
 	if l.processCfg != nil {
 		cfg := l.processCfg.Load()
@@ -164,6 +210,21 @@ func (l *Logger) log(level, code, message string, fields map[string]interface{})
 	// In quiet mode, only log errors
 	if quiet && level != LevelError {
 		return
+	}
+
+	// Correlate the event with the active span when one is present (GAP 4).
+	// The caller's fields map is never mutated: injection copies into a
+	// fresh map so a shared/immutable map stays intact.
+	if ctx != nil {
+		if sc := trace.SpanFromContext(ctx).SpanContext(); sc.IsValid() {
+			merged := make(map[string]interface{}, len(fields)+2)
+			for k, v := range fields {
+				merged[k] = v
+			}
+			merged["trace_id"] = sc.TraceID().String()
+			merged["span_id"] = sc.SpanID().String()
+			fields = merged
+		}
 	}
 
 	event := Event{
@@ -253,6 +314,26 @@ func Debug(code string, fields map[string]interface{}) {
 // WarnThrottled logs throttled warning using default logger
 func WarnThrottled(code, key string, fields map[string]interface{}) bool {
 	return defaultLogger.WarnThrottled(code, key, fields)
+}
+
+// InfoContext logs info using the default logger with trace correlation.
+func InfoContext(ctx context.Context, code string, fields map[string]interface{}) {
+	defaultLogger.InfoContext(ctx, code, fields)
+}
+
+// WarnContext logs warning using the default logger with trace correlation.
+func WarnContext(ctx context.Context, code string, fields map[string]interface{}) {
+	defaultLogger.WarnContext(ctx, code, fields)
+}
+
+// ErrorContext logs error using the default logger with trace correlation.
+func ErrorContext(ctx context.Context, code string, fields map[string]interface{}) {
+	defaultLogger.ErrorContext(ctx, code, fields)
+}
+
+// DebugContext logs debug using the default logger with trace correlation.
+func DebugContext(ctx context.Context, code string, fields map[string]interface{}) {
+	defaultLogger.DebugContext(ctx, code, fields)
 }
 
 // F is a helper to create fields map

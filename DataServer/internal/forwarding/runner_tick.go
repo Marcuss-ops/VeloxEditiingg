@@ -48,7 +48,7 @@ func (r *CreatorForwardingRunner) tick(ctx context.Context) error {
 	}
 
 	r.recordClaimed(int64(len(leases)))
-	r.logInfo(logging.CodeForwardingClaimed, logging.F("claimed", len(leases)))
+	r.logInfo(ctx, logging.CodeForwardingClaimed, logging.F("claimed", len(leases)))
 
 	var (
 		wg         sync.WaitGroup

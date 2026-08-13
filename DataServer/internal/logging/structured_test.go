@@ -2,10 +2,13 @@ package logging
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log"
 	"strings"
 	"testing"
+
+	"go.opentelemetry.io/otel/trace"
 )
 
 // captureLog swaps the global log writer/flags with a buffer for the lifetime
@@ -115,5 +118,71 @@ func TestJSONModeEmitsValidJSON(t *testing.T) {
 	}
 	if ev.Timestamp.IsZero() {
 		t.Errorf("expected non-zero timestamp, got: %v", ev.Timestamp)
+	}
+}
+
+// TestContextInjectsTraceCorrelation verifies that the *Context log variants
+// inject trace_id/span_id from the active span while preserving the caller's
+// fields and without mutating the caller's map (GAP 4: trace ↔ log).
+func TestContextInjectsTraceCorrelation(t *testing.T) {
+	restoreLoggingState(t)
+	SetQuiet(false)
+	SetJSONOutput(true)
+
+	tid := trace.TraceID{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10}
+	sid := trace.SpanID{0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18}
+	sc := trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID:    tid,
+		SpanID:     sid,
+		TraceFlags: trace.FlagsSampled,
+	})
+	ctx := trace.ContextWithSpanContext(context.Background(), sc)
+
+	l := NewLogger("test.trace")
+	fields := map[string]interface{}{"k": "v"}
+	out := captureLog(t, func() {
+		l.InfoContext(ctx, "test.event.info", fields)
+	})
+
+	var ev Event
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &ev); err != nil {
+		t.Fatalf("expected valid JSON, got: %v\noutput: %s", err, out)
+	}
+	if got := ev.Fields["trace_id"]; got != tid.String() {
+		t.Errorf("want trace_id=%q, got %v", tid.String(), got)
+	}
+	if got := ev.Fields["span_id"]; got != sid.String() {
+		t.Errorf("want span_id=%q, got %v", sid.String(), got)
+	}
+	if got := ev.Fields["k"]; got != "v" {
+		t.Errorf("want original field k=v preserved, got %v", got)
+	}
+	// The caller's map must not be mutated by injection.
+	if _, injected := fields["trace_id"]; injected {
+		t.Errorf("caller's fields map was mutated: %v", fields)
+	}
+}
+
+// TestContextWithoutSpanDoesNotInject verifies that a context without an
+// active span leaves the event untouched (no trace_id/span_id fields).
+func TestContextWithoutSpanDoesNotInject(t *testing.T) {
+	restoreLoggingState(t)
+	SetQuiet(false)
+	SetJSONOutput(true)
+
+	l := NewLogger("test.trace")
+	out := captureLog(t, func() {
+		l.InfoContext(context.Background(), "test.event.info", map[string]interface{}{"k": "v"})
+	})
+
+	var ev Event
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &ev); err != nil {
+		t.Fatalf("expected valid JSON, got: %v\noutput: %s", err, out)
+	}
+	if _, ok := ev.Fields["trace_id"]; ok {
+		t.Errorf("expected no trace_id without an active span, got %v", ev.Fields)
+	}
+	if _, ok := ev.Fields["span_id"]; ok {
+		t.Errorf("expected no span_id without an active span, got %v", ev.Fields)
 	}
 }

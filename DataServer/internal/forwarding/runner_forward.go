@@ -53,7 +53,7 @@ func (r *CreatorForwardingRunner) atomicEnqueueAndForward(ctx context.Context, l
 		); err != nil {
 			return forwardingStateError("mark blocked", err)
 		}
-		r.logError(logging.CodeForwardingPayloadMarshalFail, logging.F("forwarding", lease.ForwardingID))
+		r.logError(ctx, logging.CodeForwardingPayloadMarshalFail, logging.F("forwarding", lease.ForwardingID))
 		r.recordFailed()
 		return nil
 	}
@@ -64,7 +64,7 @@ func (r *CreatorForwardingRunner) atomicEnqueueAndForward(ctx context.Context, l
 		lease.ForwardingID, lease.RunnerID, lease.LeaseID,
 		payloadJSON, payloadSHA256,
 	); err != nil {
-		r.logWarn(logging.CodeForwardingMarkReadyFail, logging.F("forwarding", lease.ForwardingID, "err", err))
+		r.logWarn(ctx, logging.CodeForwardingMarkReadyFail, logging.F("forwarding", lease.ForwardingID, "err", err))
 		if retryErr := r.handleRetry(ctx, lease, "MARK_READY_ERROR", err.Error(), ""); retryErr != nil {
 			return retryErr
 		}
@@ -78,7 +78,7 @@ func (r *CreatorForwardingRunner) atomicEnqueueAndForward(ctx context.Context, l
 		// No enqueuer wired (forwarder-only runner); skip the
 		// atomic step. The forwarding row is already READY_TO_FORWARD;
 		// a separate forwarder can pick it up via ListReadyToForward.
-		r.logWarn(logging.CodeForwardingResolverUnavailable, logging.F("forwarding", lease.ForwardingID))
+		r.logWarn(ctx, logging.CodeForwardingResolverUnavailable, logging.F("forwarding", lease.ForwardingID))
 		return nil
 	}
 	out, err := rs.Resolve(ctx, creatorflow.ResolveRequest{
@@ -97,7 +97,7 @@ func (r *CreatorForwardingRunner) atomicEnqueueAndForward(ctx context.Context, l
 			// next tick to re-run the resolve.
 			return errors.Join(supervisor.ErrElementScoped, err)
 		}
-		r.logError(logging.CodeForwardingResolveFailed, logging.F("forwarding", lease.ForwardingID, "err", err))
+		r.logError(ctx, logging.CodeForwardingResolveFailed, logging.F("forwarding", lease.ForwardingID, "err", err))
 		if retryErr := r.handleEnqueueRetry(ctx, lease, "ENQUEUE_FAILED", err.Error(), ""); retryErr != nil {
 			return retryErr
 		}
@@ -110,7 +110,7 @@ func (r *CreatorForwardingRunner) atomicEnqueueAndForward(ctx context.Context, l
 		// next tick re-runs the resolve.
 		return nil
 	}
-	r.logInfo(logging.CodeForwardingForwarded, logging.F("forwarding", lease.ForwardingID, "job", out.JobID, "source", lease.SourceProvider))
+	r.logInfo(ctx, logging.CodeForwardingForwarded, logging.F("forwarding", lease.ForwardingID, "job", out.JobID, "source", lease.SourceProvider))
 	r.recordForwarded()
 	return nil
 }

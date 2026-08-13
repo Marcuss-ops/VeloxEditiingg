@@ -47,7 +47,7 @@ func (r *CreatorForwardingRunner) refreshMetrics(ctx context.Context) {
 	}
 	m, err := r.dbStore.GetForwardingQueueMetrics(ctx)
 	if err != nil {
-		r.logWarn(logging.CodeForwardingMetricsRefreshFail, logging.F("err", err))
+		r.logWarn(ctx, logging.CodeForwardingMetricsRefreshFail, logging.F("err", err))
 		return
 	}
 	r.metrics.QueueDepth.Store(m.QueueDepth)
