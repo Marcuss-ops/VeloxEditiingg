@@ -387,15 +387,46 @@ func buildComposePlan(spec executor.TaskSpec, p *plan.RenderPlan, output string)
 	if len(inputs) == 0 {
 		return CommandPlan{}, errors.New("compose: timeline is empty")
 	}
-	labels := make([]string, len(inputs))
-	filters := make([]string, len(inputs))
+	// The filter graph is written in a single pass into one builder. Segment
+	// labels are deterministic ([v%d]) so the concat input list is re-emitted
+	// from the index instead of being materialized in a labels slice.
+	var filter strings.Builder
+	filter.Grow(len(p.Timeline)*112 + 64)
+
+	canvas := p.Canvas
 	for i := range p.Timeline {
-		labels[i] = fmt.Sprintf("[v%d]", i)
-		filters[i] = fmt.Sprintf("[%d:v]setpts=PTS-STARTPTS,fps=%d,scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2[v%d]", i, p.Canvas.Fps, p.Canvas.Width, p.Canvas.Height, p.Canvas.Width, p.Canvas.Height, i)
+		if i > 0 {
+			filter.WriteByte(';')
+		}
+		filter.WriteByte('[')
+		writeInt(&filter, i)
+		filter.WriteString(":v]setpts=PTS-STARTPTS,fps=")
+		writeInt(&filter, canvas.Fps)
+		filter.WriteString(",scale=")
+		writeInt(&filter, canvas.Width)
+		filter.WriteByte(':')
+		writeInt(&filter, canvas.Height)
+		filter.WriteString(":force_original_aspect_ratio=decrease,pad=")
+		writeInt(&filter, canvas.Width)
+		filter.WriteByte(':')
+		writeInt(&filter, canvas.Height)
+		filter.WriteString(":(ow-iw)/2:(oh-ih)/2[v")
+		writeInt(&filter, i)
+		filter.WriteByte(']')
 	}
-	filters = append(filters, strings.Join(labels, "")+fmt.Sprintf("concat=n=%d:v=1:a=0[vout]", len(labels)))
-	filterGraph := strings.Join(filters, ";")
-	args := append(inputArgs(inputs), "-filter_complex", filterGraph, "-map", "[vout]", "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", fmt.Sprintf("%d", p.Canvas.Fps), "-y", output)
+
+	filter.WriteByte(';')
+	for i := range p.Timeline {
+		filter.WriteString("[v")
+		writeInt(&filter, i)
+		filter.WriteByte(']')
+	}
+	filter.WriteString("concat=n=")
+	writeInt(&filter, len(p.Timeline))
+	filter.WriteString(":v=1:a=0[vout]")
+
+	filterGraph := filter.String()
+	args := append(inputArgs(inputs), "-filter_complex", filterGraph, "-map", "[vout]", "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", strconv.Itoa(canvas.Fps), "-y", output)
 	return CommandPlan{ExecutorID: ComposeID, Inputs: sortedInputs(inputs), FilterComplex: filterGraph, Args: args, OutputPath: output, PlanSHA256: planDigest(p)}, nil
 }
 
