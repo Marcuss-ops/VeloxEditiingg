@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -243,33 +244,22 @@ func buildAudioMixPlan(spec executor.TaskSpec, p *plan.RenderPlan, output string
 		return CommandPlan{}, errors.New("audio_mix: render_plan.audio_tracks is empty")
 	}
 	inputs := make([]string, 0, len(p.AudioTracks))
-	filters := make([]string, 0, len(p.AudioTracks)+2)
 	labels := make([]string, len(p.AudioTracks))
+	// The filter graph is written in a single pass into one builder: no
+	// per-track `chain +=` intermediates and no `filters` slice + strings.Join.
+	// Grow to the approximate graph size so the buffer never reallocates while
+	// the chains, ducking split and final amix terminator are appended.
+	var filter strings.Builder
+	filter.Grow(len(p.AudioTracks)*96 + 128)
+
 	for i, track := range p.AudioTracks {
 		inputs = append(inputs, track.SourceURL)
-		label := fmt.Sprintf("a%d", i)
-		labels[i] = "[" + label + "]"
-		volume := track.Volume
-		if volume == 0 {
-			volume = 1
+		if i > 0 {
+			filter.WriteByte(';')
 		}
-		chain := fmt.Sprintf("[%d:a]volume=%.6f", i, volume)
-		if track.StartTimeOffset > 0 {
-			ms := int(track.StartTimeOffset*1000 + 0.5)
-			chain += fmt.Sprintf(",adelay=%d|%d", ms, ms)
-		}
-		if track.DurationSeconds > 0 {
-			chain += fmt.Sprintf(",atrim=duration=%.6f", track.DurationSeconds)
-		}
-		if track.FadeInSeconds > 0 {
-			chain += fmt.Sprintf(",afade=t=in:st=0:d=%.6f", track.FadeInSeconds)
-		}
-		if track.FadeOutSeconds > 0 && track.DurationSeconds > track.FadeOutSeconds {
-			start := track.DurationSeconds - track.FadeOutSeconds
-			chain += fmt.Sprintf(",afade=t=out:st=%.6f:d=%.6f", start, track.FadeOutSeconds)
-		}
-		filters = append(filters, chain+labels[i])
+		labels[i] = writeAudioMixTrack(&filter, i, track)
 	}
+
 	voice := -1
 	for i, track := range p.AudioTracks {
 		if strings.EqualFold(track.Role, "voiceover") {
@@ -286,18 +276,80 @@ func buildAudioMixPlan(spec executor.TaskSpec, p *plan.RenderPlan, output string
 		}
 		// Split the processed voiceover label so the sidechain and final mix
 		// both consume the same declared gain/trim/delay pipeline.
-		voiceMix := fmt.Sprintf("[a%d_mix]", voice)
-		voiceSide := fmt.Sprintf("[a%d_side]", voice)
-		filters = append(filters, labels[voice]+"asplit=2"+voiceMix+voiceSide)
+		voiceMix := "[a" + strconv.Itoa(voice) + "_mix]"
+		voiceSide := "[a" + strconv.Itoa(voice) + "_side]"
+		duckLabel := "[duck" + strconv.Itoa(i) + "]"
+		filter.WriteByte(';')
+		filter.WriteString(labels[voice])
+		filter.WriteString("asplit=2")
+		filter.WriteString(voiceMix)
+		filter.WriteString(voiceSide)
 		labels[voice] = voiceMix
-		filters = append(filters, labels[i]+voiceSide+fmt.Sprintf("sidechaincompress=threshold=0.05:ratio=8:attack=20:release=300[duck%d]", i))
-		labels[i] = fmt.Sprintf("[duck%d]", i)
+		filter.WriteByte(';')
+		filter.WriteString(labels[i])
+		filter.WriteString(voiceSide)
+		filter.WriteString("sidechaincompress=threshold=0.05:ratio=8:attack=20:release=300")
+		filter.WriteString(duckLabel)
+		labels[i] = duckLabel
 	}
-	mix := strings.Join(labels, "") + fmt.Sprintf("amix=inputs=%d:duration=longest:dropout_transition=0[aout]", len(labels))
-	filters = append(filters, mix)
-	filterGraph := strings.Join(filters, ";")
+
+	filter.WriteByte(';')
+	for _, label := range labels {
+		filter.WriteString(label)
+	}
+	filter.WriteString("amix=inputs=")
+	writeInt(&filter, len(labels))
+	filter.WriteString(":duration=longest:dropout_transition=0[aout]")
+
+	filterGraph := filter.String()
 	args := append(inputArgs(inputs), "-filter_complex", filterGraph, "-map", "[aout]", "-ar", "48000", "-ac", "2", "-c:a", "pcm_s16le", "-y", output)
 	return CommandPlan{ExecutorID: AudioMixID, Inputs: sortedInputs(inputs), FilterComplex: filterGraph, Args: args, OutputPath: output, PlanSHA256: planDigest(p)}, nil
+}
+
+// writeAudioMixTrack writes one audio track's filter chain ([%d:a]volume=…,
+// optional adelay/atrim/afade) terminated by its output label [a%d], and
+// returns that label for the later amix/ducking stages.
+func writeAudioMixTrack(b *strings.Builder, i int, track plan.AudioTrack) string {
+	b.WriteByte('[')
+	writeInt(b, i)
+	b.WriteString(":a]volume=")
+	volume := track.Volume
+	if volume == 0 {
+		volume = 1
+	}
+	writeFloat6(b, volume)
+	if track.StartTimeOffset > 0 {
+		ms := int(track.StartTimeOffset*1000 + 0.5)
+		b.WriteString(",adelay=")
+		writeInt(b, ms)
+		b.WriteByte('|')
+		writeInt(b, ms)
+	}
+	if track.DurationSeconds > 0 {
+		b.WriteString(",atrim=duration=")
+		writeFloat6(b, track.DurationSeconds)
+	}
+	if track.FadeInSeconds > 0 {
+		b.WriteString(",afade=t=in:st=0:d=")
+		writeFloat6(b, track.FadeInSeconds)
+	}
+	if track.FadeOutSeconds > 0 && track.DurationSeconds > track.FadeOutSeconds {
+		b.WriteString(",afade=t=out:st=")
+		writeFloat6(b, track.DurationSeconds-track.FadeOutSeconds)
+		b.WriteString(":d=")
+		writeFloat6(b, track.FadeOutSeconds)
+	}
+	label := "[a" + strconv.Itoa(i) + "]"
+	b.WriteString(label)
+	return label
+}
+
+// writeFloat6 writes v with exactly 6 fractional digits directly into b using
+// a stack scratch buffer, avoiding the temporary string that strconv.FormatFloat
+// (and fmt.Sprintf) would allocate.
+func writeFloat6(b *strings.Builder, v float64) {
+	var buf [64]byte
+	_, _ = b.Write(strconv.AppendFloat(buf[:0], v, 'f', 6, 64))
 }
 
 // NewCompose creates the deterministic video compositor. It consumes
