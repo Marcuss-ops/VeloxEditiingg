@@ -21,6 +21,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"velox-server/internal/repository"
 )
 
 // ErrPromoteDurableFailed marks the atomic rename / staging-removal
@@ -30,49 +32,10 @@ import (
 // importing artifacts' sentinels into the store layer.
 var ErrPromoteDurableFailed = errors.New("blobstore: durable promotion failed")
 
-// BlobStore is the storage abstraction for artifact blobs.
-type BlobStore interface {
-	// StagingPath returns a unique path in the staging area. The caller
-	// writes the upload bytes to this path, then calls PromoteToFinal.
-	StagingPath(jobID, artifactID, extension string) (string, error)
-
-	// FinalPath returns the canonical storage_key for a verified artifact.
-	// The key is deterministic from the artifact's identity so retries
-	// produce the same path (idempotent move).
-	FinalPath(jobID, artifactID, extension string) string
-
-	// PromoteToFinal moves a staged file to its final canonical location.
-	// Returns the storage_key (relative path) on success.
-	PromoteToFinal(stagingPath, finalPath string) (string, error)
-
-	// PromoteDurable atomically promotes a staged file to finalPath with
-	// the durability guarantees the artifact spec requires (flush →
-	// fsync → close → atomic rename → best-effort directory fsync) and
-	// removes the staging file on success. A concurrently-promoted
-	// identical blob (staging already gone, final already present) is
-	// tolerated as an idempotent success. Returns finalPath.
-	PromoteDurable(stagingPath, finalPath string) (string, error)
-
-	// OpenStagedWrite creates (or truncates) a staged file at path for
-	// writing, creating parent directories first. The caller streams
-	// bytes and is responsible for Sync/Close and failure cleanup.
-	OpenStagedWrite(path string) (*os.File, error)
-
-	// OpenStagedRead opens a staged file for reading (chunk assembly).
-	OpenStagedRead(path string) (*os.File, error)
-
-	// RemoveStaging cleanup a staged file on failure.
-	RemoveStaging(path string) error
-
-	// ReadFinal opens the final file for reading (providers use this).
-	ReadFinal(storageKey string) (*os.File, error)
-
-	// StagingDir returns the staging root path (for reconciliation).
-	StagingDir() string
-
-	// FinalDir returns the final storage root path (for reconciliation).
-	FinalDir() string
-}
+// BlobStore is re-exported from the repository leaf package; the canonical
+// declaration lives in internal/repository so consumers do not inherit the
+// store dependency graph.
+type BlobStore = repository.BlobStore
 
 // FilesystemBlobStore implements BlobStore on the local filesystem.
 type FilesystemBlobStore struct {

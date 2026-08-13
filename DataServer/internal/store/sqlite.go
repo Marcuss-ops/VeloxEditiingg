@@ -18,6 +18,7 @@ import (
 
 	"velox-server/internal/outbox"
 	"velox-server/internal/platform/database"
+	"velox-server/internal/repository"
 	"velox-server/internal/store/migrations"
 )
 
@@ -35,24 +36,10 @@ type SQLiteStore struct {
 	partitionKnobs partitionThresholds
 }
 
-// OutboxEmitter is the minimal interface SQLiteStore uses to write
-// outbox events (ARTIFACT_READY from FinalizeArtifactVerified and
-// JOB_SUCCEEDED / JOB_FAILED from PR 3 transactional methods).
-// Bootstrap wires an *outbox.Store; nil is a safe no-op (log + skip)
-// so callers that have not yet completed the cutover still work.
-//
-// The `txn` parameter lets the producer enqueue the outbox row in the
-// same transaction as its state-change writes — this guarantees the
-// "atomic write-then-enqueue" guarantee of the transactional outbox
-// pattern. Pass nil for auto-commit (the helper uses s.db).
-//
-// The interface lives in store/sqlite.go (rather than being a method
-// on *outbox.Store) so test fakes in the store package only need a
-// one-method stub and so callers in the store package don't pull the
-// full outbox surface area — they only need the producer side.
-type OutboxEmitter interface {
-	Insert(ctx context.Context, txn outbox.Executor, params outbox.InsertParams) (string, error)
-}
+// OutboxEmitter is re-exported from the repository leaf package. The
+// canonical declaration lives in internal/repository so callers do not pull
+// the full outbox surface area — they only need the producer side.
+type OutboxEmitter = repository.OutboxEmitter
 
 // SetOutbox wires (or unwires, when o is nil) the outbox emitter. Idempotent.
 func (s *SQLiteStore) SetOutbox(o OutboxEmitter) { s.outbox = o }

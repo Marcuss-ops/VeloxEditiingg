@@ -1,13 +1,9 @@
 package store
 
-// DBTelemetry is the narrow persistence-observability seam. The store owns
-// when measurements are taken; the metrics package owns how they are exposed.
-type DBTelemetry interface {
-	ObserveDBTransaction(waitMS, transactionMS float64, busy, busyTimeout, retried bool, writeOps, readOps uint64)
-	ObserveDBStats(openConnections, inUse, idle, waitCount int64, waitDurationMS float64)
-	RecordDBOperation(write bool)
-	RecordDBRetry()
-}
+import "velox-server/internal/repository"
+
+// DBTelemetry is re-exported from the repository leaf package.
+type DBTelemetry = repository.DBTelemetry
 
 func (s *SQLiteStore) SetDBTelemetry(t DBTelemetry) {
 	if s != nil {

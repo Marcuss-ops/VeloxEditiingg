@@ -8,17 +8,10 @@ import (
 	"time"
 
 	"velox-server/internal/identity"
+	"velox-server/internal/repository"
 )
 
-type MediaProbeEnqueueParams struct {
-	ArtifactID           string
-	SHA256               string
-	StorageKey           string
-	ExpectedAudioStreams int
-	DestinationID        string
-	MaxAttempts          int
-	Now                  time.Time
-}
+type MediaProbeEnqueueParams = repository.MediaProbeEnqueueParams
 
 type MediaProbeJob struct {
 	ID                   int64
@@ -33,9 +26,7 @@ type MediaProbeJob struct {
 	LeaseUntil           time.Time
 }
 
-type MediaProbeEnqueuer interface {
-	EnqueueMediaProbe(context.Context, MediaProbeEnqueueParams) error
-}
+type MediaProbeEnqueuer = repository.MediaProbeEnqueuer
 
 type MediaProbeRepository struct{ db *sql.DB }
 

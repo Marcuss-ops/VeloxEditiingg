@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"velox-server/internal/repository"
 )
 
 // --- Job Attempts ---
@@ -82,24 +84,8 @@ func (s *SQLiteStore) GetLatestJobAttempt(jobID string) (*JobAttempt, error) {
 // --- Artifacts ---
 
 // Artifact represents a produced output (video, audio, etc.) with storage abstraction.
-type Artifact struct {
-	ID              string  `json:"id"`
-	JobID           string  `json:"job_id"`
-	AttemptID       int     `json:"attempt_id,omitempty"`
-	Type            string  `json:"type"`
-	StorageProvider string  `json:"storage_provider"`
-	StorageKey      string  `json:"storage_key,omitempty"`
-	StorageURL      string  `json:"storage_url,omitempty"`
-	LocalPath       string  `json:"local_path,omitempty"`
-	SHA256          string  `json:"sha256,omitempty"`
-	SizeBytes       int64   `json:"size_bytes"`
-	DurationSeconds float64 `json:"duration_seconds,omitempty"`
-	DurationMs      int64   `json:"duration_ms,omitempty"`
-	Status          string  `json:"status"`
-	VerifiedAt      string  `json:"verified_at,omitempty"`
-	MimeType        string  `json:"mime_type,omitempty"`
-	CreatedAt       string  `json:"created_at"`
-}
+// Artifact is re-exported from the repository leaf package.
+type Artifact = repository.Artifact
 
 func (s *SQLiteStore) InsertArtifact(artifact *Artifact) error {
 	now := time.Now().UTC().Format(time.RFC3339)
