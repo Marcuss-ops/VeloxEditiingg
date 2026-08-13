@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"velox-server/internal/store"
+	"velox-server/internal/repository"
 )
 
 func (c *coordinator) CommitAttempt(ctx context.Context, commitID string) (*CommitResult, error) {
@@ -13,7 +13,7 @@ func (c *coordinator) CommitAttempt(ctx context.Context, commitID string) (*Comm
 		return nil, fmt.Errorf("completion.CommitAttempt: commitID empty")
 	}
 	var result *CommitResult
-	err := c.store.Run(ctx, func(tx store.CompletionTx) error {
+	err := c.store.Run(ctx, func(tx repository.CompletionTx) error {
 		row, err := tx.FindCompletionAttempt(ctx, commitID)
 		if err != nil {
 			return mapStoreCompletionError(err)

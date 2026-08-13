@@ -5,12 +5,12 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"velox-server/internal/store"
+	"velox-server/internal/repository"
 	workersreg "velox-server/internal/workers"
 )
 
 // WorkersList response shape for GET /workers
-func WorkersList(reg *workersreg.Registry, workersRepo store.WorkersRepository, updateHandler ...*WorkerUpdateHandler) gin.HandlerFunc {
+func WorkersList(reg *workersreg.Registry, workersRepo repository.WorkersRepository, updateHandler ...*WorkerUpdateHandler) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		master := workerStatusMetadata(firstUpdateHandler(updateHandler))
 		if workersRepo != nil {

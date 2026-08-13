@@ -14,7 +14,7 @@ import (
 	validationhandlers "velox-server/internal/handlers/remote/workers/validation"
 	"velox-server/internal/handlers/server/api"
 	driveintegration "velox-server/internal/integrations/drive"
-	"velox-server/internal/store"
+	"velox-server/internal/repository"
 	workersreg "velox-server/internal/workers"
 )
 
@@ -55,7 +55,7 @@ type WorkersModule struct {
 }
 
 // NewWorkersModule creates a new workers module.
-func NewWorkersModule(cfg *config.Config, reg *workersreg.Registry, lifecycle *lifecycle.Handler, updateHandler *workersapi.WorkerUpdateHandler, adminAuth gin.HandlerFunc, assetSvc *voiceoverassets.AssetService, blobStore store.BlobStore, driveSvcs ...*driveintegration.Service) *WorkersModule {
+func NewWorkersModule(cfg *config.Config, reg *workersreg.Registry, lifecycle *lifecycle.Handler, updateHandler *workersapi.WorkerUpdateHandler, adminAuth gin.HandlerFunc, assetSvc *voiceoverassets.AssetService, blobStore repository.BlobStore, driveSvcs ...*driveintegration.Service) *WorkersModule {
 	var tokenMgr *workersreg.TokenManager
 	if lifecycle != nil {
 		tokenMgr = lifecycle.GetTokenManager()

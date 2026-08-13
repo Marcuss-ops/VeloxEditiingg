@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"velox-server/internal/store"
+	"velox-server/internal/repository"
 )
 
 const commitGraceDefault = 2 * time.Minute
@@ -28,7 +28,7 @@ func (c *coordinator) DeclareOutputs(ctx context.Context, cmd DeclareOutputsComm
 	}
 	now := time.Now().UTC()
 	var plan *UploadPlan
-	err = c.store.Run(ctx, func(tx store.CompletionTx) error {
+	err = c.store.Run(ctx, func(tx repository.CompletionTx) error {
 		state, err := tx.ReadCompletionFence(ctx, completionFence(cmd.Fence), true)
 		if err != nil {
 			return mapStoreCompletionError(err)
@@ -42,7 +42,7 @@ func (c *coordinator) DeclareOutputs(ctx context.Context, cmd DeclareOutputsComm
 			return fmt.Errorf("completion.DeclareOutputs: derive commit_token: %w", err)
 		}
 		if state == nil {
-			canonical, err := tx.InsertCompletionAttempt(ctx, store.CompletionDeclareParams{
+			canonical, err := tx.InsertCompletionAttempt(ctx, repository.CompletionDeclareParams{
 				CommitID: commitID, TaskID: cmd.Fence.TaskID, AttemptID: cmd.Fence.AttemptID,
 				JobID: cmd.JobID, WorkerID: cmd.Fence.WorkerID.String(), LeaseID: cmd.Fence.LeaseID,
 				Revision: cmd.Fence.Revision, RequiredOutputCount: len(cmd.OutputManifests),
@@ -68,7 +68,7 @@ func (c *coordinator) DeclareOutputs(ctx context.Context, cmd DeclareOutputsComm
 			if err != nil {
 				return fmt.Errorf("completion.DeclareOutputs: mint declaration_id: %w", err)
 			}
-			if err := tx.InsertCompletionDeclaration(ctx, store.CompletionDeclarationParams{
+			if err := tx.InsertCompletionDeclaration(ctx, repository.CompletionDeclarationParams{
 				DeclarationID: declarationID, CommitID: commitID, TaskID: cmd.Fence.TaskID,
 				AttemptID: cmd.Fence.AttemptID, OutputKind: manifest.OutputKind, LogicalName: manifest.LogicalName,
 				MimeType: manifest.MimeType, SizeBytes: manifest.SizeBytes, SHA256: manifest.SHA256,
@@ -99,7 +99,7 @@ func (c *coordinator) RecordUploadProgress(ctx context.Context, cmd RecordUpload
 		return fmt.Errorf("completion.RecordUploadProgress: UploadID empty (task_id=%s attempt_id=%s)", cmd.Fence.TaskID, cmd.Fence.AttemptID)
 	}
 	now := time.Now().UTC()
-	return c.store.Run(ctx, func(tx store.CompletionTx) error {
+	return c.store.Run(ctx, func(tx repository.CompletionTx) error {
 		state, err := tx.ReadCompletionFence(ctx, completionFence(cmd.Fence), false)
 		if err != nil {
 			return mapStoreCompletionError(err)
@@ -121,8 +121,8 @@ func (c *coordinator) RecordUploadProgress(ctx context.Context, cmd RecordUpload
 	})
 }
 
-func completionFence(f FenceTuple) store.CompletionFence {
-	return store.CompletionFence{TaskID: f.TaskID, AttemptID: f.AttemptID, WorkerID: f.WorkerID.String(), LeaseID: f.LeaseID, Revision: f.Revision}
+func completionFence(f FenceTuple) repository.CompletionFence {
+	return repository.CompletionFence{TaskID: f.TaskID, AttemptID: f.AttemptID, WorkerID: f.WorkerID.String(), LeaseID: f.LeaseID, Revision: f.Revision}
 }
 
 func newUUIDLowerHex() (string, error) {

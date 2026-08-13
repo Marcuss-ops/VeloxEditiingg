@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"velox-server/internal/store"
+	"velox-server/internal/repository"
 )
 
 type ReconcileCase string
@@ -47,7 +47,7 @@ type ReconcileMetrics interface {
 }
 
 type ReconcileSupervisor struct {
-	Store    store.CompletionStore
+	Store    repository.CompletionStore
 	Coord    Coordinator
 	Metrics  ReconcileMetrics
 	Tick     time.Duration
@@ -68,7 +68,7 @@ type noopReconcileMetrics struct{}
 func (noopReconcileMetrics) IncReconcile(string, string) {}
 func (noopReconcileMetrics) IncCommitDeadlineExceeded()  {}
 
-func NewReconcileSupervisor(completionStore store.CompletionStore, coord Coordinator, metrics ReconcileMetrics) *ReconcileSupervisor {
+func NewReconcileSupervisor(completionStore repository.CompletionStore, coord Coordinator, metrics ReconcileMetrics) *ReconcileSupervisor {
 	if completionStore == nil {
 		panic("completion.NewReconcileSupervisor: store is nil")
 	}

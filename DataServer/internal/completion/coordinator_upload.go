@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"velox-server/internal/artifacts"
-	"velox-server/internal/store"
+	"velox-server/internal/repository"
 	"velox-shared/contract/domain"
 )
 
@@ -24,7 +24,7 @@ func (c *coordinator) CompleteUpload(ctx context.Context, cmd CompleteUploadComm
 		return fmt.Errorf("completion.CompleteUpload: UploadID empty (task_id=%s attempt_id=%s)", cmd.Fence.TaskID, cmd.Fence.AttemptID)
 	}
 	now := time.Now().UTC()
-	return c.store.Run(ctx, func(tx store.CompletionTx) error {
+	return c.store.Run(ctx, func(tx repository.CompletionTx) error {
 		state, err := tx.ReadCompletionFence(ctx, completionFence(cmd.Fence), false)
 		if err != nil {
 			return mapStoreCompletionError(err)
@@ -47,15 +47,15 @@ func (c *coordinator) CompleteUpload(ctx context.Context, cmd CompleteUploadComm
 		if cmd.ServerSHA256 != "" && expected != "" && cmd.ServerSHA256 != expected {
 			return fmt.Errorf("%w: %w: upload=%s server_sha=%s master_declared=%s", ErrStaleReport, domain.NewStaleReport(nil), cmd.UploadID, cmd.ServerSHA256, expected)
 		}
-		verdict := store.CompletionKeepVerifying
+		verdict := repository.CompletionKeepVerifying
 		if cmd.ServerSHA256 != "" && (expected == "" || cmd.ServerSHA256 == expected) {
-			verdict = store.CompletionReady
+			verdict = repository.CompletionReady
 		}
 		nowStr := now.Format(time.RFC3339Nano)
 		if err := tx.CompleteCompletionUpload(ctx, verdict, cmd.UploadID, cmd.ServerSHA256, nowStr); err != nil {
 			return fmt.Errorf("completion.CompleteUpload: artifact CAS: %w", err)
 		}
-		if verdict == store.CompletionReady && c.blobStore != nil && upload.TemporaryStorageKey != "" {
+		if verdict == repository.CompletionReady && c.blobStore != nil && upload.TemporaryStorageKey != "" {
 			ext := ".bin"
 			if exts, e := mime.ExtensionsByType(upload.MimeType); e == nil && len(exts) > 0 {
 				ext = exts[0]
@@ -65,7 +65,7 @@ func (c *coordinator) CompleteUpload(ctx context.Context, cmd CompleteUploadComm
 				return fmt.Errorf("completion.CompleteUpload: promote artifact: %w", e)
 			}
 			if e = tx.StampCompletionArtifact(ctx, upload.ArtifactID, storageKey, cmd.ServerSHA256, upload.SizeBytes); e != nil {
-				if !errors.Is(e, store.ErrCompletionCanonicalConflict) {
+				if !errors.Is(e, repository.ErrCompletionCanonicalConflict) {
 					return fmt.Errorf("completion.CompleteUpload: stamp canonical artifact: %w", e)
 				}
 				altKey := duplicateCanonicalKey(storageKey, upload.ArtifactID)

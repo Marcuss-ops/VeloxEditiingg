@@ -1,21 +1,22 @@
 // Package completion owns the orchestration and domain decisions for the
-// Artifact Commit Protocol. Persistence, SQL, transaction lifecycle, and row
-// projections live in internal/store.
+// Artifact Commit Protocol. Persistence contracts live in internal/repository;
+// the SQLite implementation, SQL, transaction lifecycle, and row projections
+// live in internal/store.
 package completion
 
 import (
 	"errors"
 	"fmt"
 
-	"velox-server/internal/store"
+	"velox-server/internal/repository"
 )
 
 const commitTokenByteLen = 32
 
 type CoordinatorConfig struct {
-	Store     store.CompletionStore
+	Store     repository.CompletionStore
 	HMACKey   []byte
-	BlobStore store.BlobStore
+	BlobStore repository.BlobStore
 }
 
 func NewCoordinator(cfg CoordinatorConfig) (Coordinator, error) {
@@ -40,9 +41,9 @@ func (c *coordinator) SetConflictBudgetSink(sink ConflictBudgetSink) {
 }
 
 type coordinator struct {
-	store     store.CompletionStore
+	store     repository.CompletionStore
 	hmacKey   []byte
-	blobStore store.BlobStore
+	blobStore repository.BlobStore
 	budget    *ConflictBudget
 }
 
@@ -71,14 +72,14 @@ func mapStoreCompletionError(err error) error {
 }
 
 func errorsIsStoreTransition(err error) bool {
-	return err != nil && errors.Is(err, store.ErrCompletionTransitionConflict)
+	return err != nil && errors.Is(err, repository.ErrCompletionTransitionConflict)
 }
 
 func errorsIsStoreNotFound(err error) bool {
-	return err != nil && errors.Is(err, store.ErrCompletionAttemptNotFound)
+	return err != nil && errors.Is(err, repository.ErrCompletionAttemptNotFound)
 }
 
-func completionResultFromStore(in *store.CompletionCommitResult) *CommitResult {
+func completionResultFromStore(in *repository.CompletionCommitResult) *CommitResult {
 	if in == nil {
 		return nil
 	}
