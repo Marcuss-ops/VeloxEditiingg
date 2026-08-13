@@ -259,6 +259,7 @@ const (
 const (
 	CodeServerBootstrap       = "SERVER_BOOTSTRAP"
 	CodeServerBootstrapWarn   = "SERVER_BOOTSTRAP_WARN"
+	CodeServerBootstrapError  = "SERVER_BOOTSTRAP_ERROR"
 	CodeServerLifecycle       = "SERVER_LIFECYCLE"
 	CodeServerLifecycleError  = "SERVER_LIFECYCLE_ERROR"
 	CodeServerSupervisor      = "SERVER_SUPERVISOR"
@@ -267,6 +268,7 @@ const (
 	CodeServerCapability      = "SERVER_CAPABILITY"
 	CodeServerCapabilityWarn  = "SERVER_CAPABILITY_WARN"
 	CodeServerRoutes          = "SERVER_ROUTES"
+	CodeServerRoutesError     = "SERVER_ROUTES_ERROR"
 	CodeServerMetrics         = "SERVER_METRICS"
 	CodeServerMetricsWarn     = "SERVER_METRICS_WARN"
 	CodeServerAudit           = "SERVER_AUDIT"
@@ -502,6 +504,7 @@ var codeDescriptions = map[string]string{
 	// cmd/server bootstrap + lifecycle.
 	CodeServerBootstrap:       "Server bootstrap event",
 	CodeServerBootstrapWarn:   "Server bootstrap warning",
+	CodeServerBootstrapError:  "Server bootstrap error",
 	CodeServerLifecycle:       "Server lifecycle event",
 	CodeServerLifecycleError:  "Server lifecycle error",
 	CodeServerSupervisor:      "Supervisor/runner started",
@@ -510,6 +513,7 @@ var codeDescriptions = map[string]string{
 	CodeServerCapability:      "Capability wiring event",
 	CodeServerCapabilityWarn:  "Capability wiring warning",
 	CodeServerRoutes:          "Route wiring event",
+	CodeServerRoutesError:     "Route wiring error",
 	CodeServerMetrics:         "Metrics snapshot event",
 	CodeServerMetricsWarn:     "Metrics snapshot warning",
 	CodeServerAudit:           "Data layer audit event",

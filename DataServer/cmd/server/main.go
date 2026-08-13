@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 
 	"velox-server/internal/config"
@@ -56,7 +55,8 @@ func main() {
 
 	cfg, err := config.LoadFromRaw(raw)
 	if err != nil {
-		log.Fatalf("config load failed: %v", err)
+		logServerf(context.Background(), logging.LevelError, logging.CodeServerBootstrapError, "config load failed: %v", err)
+		os.Exit(1)
 	}
 	if cfg.Compatibility.Mode == "strict" {
 		compatibility.SetMode(compatibility.ModeStrict)
@@ -65,7 +65,8 @@ func main() {
 	}
 	logging.Configure(cfg.Runtime.Logging.Quiet, cfg.Runtime.Logging.JSONOutput, cfg.Runtime.Logging.Debug)
 	if err := telemetry.Configure(cfg.Runtime.Telemetry); err != nil {
-		log.Fatalf("telemetry configuration failed: %v", err)
+		logServerf(context.Background(), logging.LevelError, logging.CodeServerBootstrapError, "telemetry configuration failed: %v", err)
+		os.Exit(1)
 	}
 	if snapshot, snapshotErr := cfg.SnapshotJSON(); snapshotErr != nil {
 		logServerf(context.Background(), logging.LevelWarn, logging.CodeServerBootstrapWarn, "[BOOTSTRAP] WARNING: config snapshot unavailable: %v", snapshotErr)
@@ -78,11 +79,13 @@ func main() {
 	case len(args) == 0:
 		// Default: serve.
 		if err := runServer(cfg); err != nil {
-			log.Fatalf("server exit: %v", err)
+			logServerf(context.Background(), logging.LevelError, logging.CodeServerLifecycleError, "server exit: %v", err)
+			os.Exit(1)
 		}
 	case args[0] == "serve":
 		if err := runServer(cfg); err != nil {
-			log.Fatalf("server exit: %v", err)
+			logServerf(context.Background(), logging.LevelError, logging.CodeServerLifecycleError, "server exit: %v", err)
+			os.Exit(1)
 		}
 	case args[0] == "--help" || args[0] == "-h" || args[0] == "help":
 		fmt.Print(usageText)

@@ -3,8 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -94,7 +94,8 @@ func registerPipelineRoutes(r *gin.Engine, auth, m2mAuth gin.HandlerFunc, deps P
 		return
 	}
 	if deps.Resolver == nil {
-		log.Fatalf("[ROUTES] pipeline routes require a wired Resolver (PipelineRouteDeps.Resolver is nil); refusing to start (composition-root bug)")
+		logServerf(context.Background(), logging.LevelError, logging.CodeServerRoutesError, "[ROUTES] pipeline routes require a wired Resolver (PipelineRouteDeps.Resolver is nil); refusing to start (composition-root bug)")
+		os.Exit(1)
 	}
 	pipeline.NewHandlersWithResolver(
 		deps.Cfg,
@@ -208,7 +209,8 @@ func registerM2MAdminRoutes(r *gin.Engine, auth gin.HandlerFunc, st *store.SQLit
 		return
 	}
 	if auth == nil {
-		log.Fatalf("[ROUTES] M2M admin routes require adminAuth (auth=nil); refusing to start")
+		logServerf(context.Background(), logging.LevelError, logging.CodeServerRoutesError, "[ROUTES] M2M admin routes require adminAuth (auth=nil); refusing to start")
+		os.Exit(1)
 	}
 	admin := r.Group("/api/v1/admin/m2m", auth)
 	admin.POST("/keys", api.IssueM2MKey(st))
@@ -235,7 +237,8 @@ func registerFleetOperationsRoutes(r *gin.Engine, auth gin.HandlerFunc, deps Fle
 		return
 	}
 	if auth == nil {
-		log.Fatalf("[ROUTES] fleet operations audit routes require adminAuth (auth=nil); refusing to start")
+		logServerf(context.Background(), logging.LevelError, logging.CodeServerRoutesError, "[ROUTES] fleet operations audit routes require adminAuth (auth=nil); refusing to start")
+		os.Exit(1)
 	}
 	adminOps := r.Group("/api/v1/admin/operations", auth)
 	adminOps.GET("", deps.Handler.ListAdminOperations())
