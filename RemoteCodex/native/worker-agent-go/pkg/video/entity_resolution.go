@@ -2,7 +2,6 @@ package video
 
 import (
 	"encoding/json"
-	"fmt"
 	"math"
 )
 
@@ -183,7 +182,7 @@ func matchEntityByKeywords(entity string, segments []TranscriptionSegment) []Mat
 				TimestampStart: seg.Start,
 				TimestampEnd:   seg.End,
 				Score:          math.Round(score*100) / 100,
-				Method:         fmt.Sprintf("keyword:%s", word),
+				Method:         "keyword:" + word,
 				Text:           seg.Text,
 			})
 		}

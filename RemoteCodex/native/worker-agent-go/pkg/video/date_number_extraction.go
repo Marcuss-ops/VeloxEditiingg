@@ -6,17 +6,20 @@ import (
 	"strings"
 )
 
+// italianMonths is the closed set of Italian month names matched by
+// extractDates. Immutable after init; hoisted to package scope so the map is
+// allocated once at init instead of on every extractDates call.
+var italianMonths = map[string]bool{
+	"gennaio": true, "febbraio": true, "marzo": true, "aprile": true,
+	"maggio": true, "giugno": true, "luglio": true, "agosto": true,
+	"settembre": true, "ottobre": true, "novembre": true, "dicembre": true,
+}
+
 // extractDates finds date-like patterns in transcription segments.
 // FIX #3: Returns the set of date strings found, so extractNumbers can skip them.
 // FIX #9: looksLikeDate now validates semantic ranges (day 1-31, month 1-12).
 func extractDates(segments []TranscriptionSegment) map[string][]MatchResult {
 	result := make(map[string][]MatchResult)
-
-	months := map[string]bool{
-		"gennaio": true, "febbraio": true, "marzo": true, "aprile": true,
-		"maggio": true, "giugno": true, "luglio": true, "agosto": true,
-		"settembre": true, "ottobre": true, "novembre": true, "dicembre": true,
-	}
 
 	for _, seg := range segments {
 		lower := strings.ToLower(seg.Text)
@@ -24,7 +27,7 @@ func extractDates(segments []TranscriptionSegment) map[string][]MatchResult {
 
 		// Check for Italian month names with adjacent numeric day/year
 		for i, w := range words {
-			if months[w] && i > 0 && i < len(words)-1 {
+			if italianMonths[w] && i > 0 && i < len(words)-1 {
 				prevIsNum := isNumeric(words[i-1])
 				nextIsNum := isNumeric(words[i+1])
 				if prevIsNum && nextIsNum {
@@ -116,19 +119,36 @@ func parseIntSafe(s string) int {
 	return n
 }
 
-// parseNumericDate parses a string like "dd/mm/yyyy" or "dd-mm-yyyy" and validates ranges.
-// Returns day, month, year, ok.
+// parseNumericDate parses a string like "dd/mm/yyyy" or "dd-mm-yyyy" and
+// validates ranges. Returns day, month, year, ok.
 func parseNumericDate(s string) (day, month, year int, ok bool) {
-	for _, sep := range []string{"/", "-"} {
-		parts := strings.Split(s, sep)
-		if len(parts) == 3 && isNumeric(parts[0]) && isNumeric(parts[1]) && isNumeric(parts[2]) {
-			if len(parts[0]) <= 2 && len(parts[1]) <= 2 && len(parts[2]) == 4 {
-				d, m, y := parseIntSafe(parts[0]), parseIntSafe(parts[1]), parseIntSafe(parts[2])
-				return d, m, y, true
-			}
-		}
+	if d, m, y, ok := parseNumericDateSep(s, "/"); ok {
+		return d, m, y, true
 	}
-	return 0, 0, 0, false
+	return parseNumericDateSep(s, "-")
+}
+
+// parseNumericDateSep splits s on a single separator using strings.Cut so the
+// hot word loop does not allocate a []string (strings.Split) per candidate.
+func parseNumericDateSep(s, sep string) (day, month, year int, ok bool) {
+	first, rest, found := strings.Cut(s, sep)
+	if !found {
+		return 0, 0, 0, false
+	}
+	second, third, found := strings.Cut(rest, sep)
+	if !found || strings.Contains(third, sep) {
+		return 0, 0, 0, false
+	}
+	if len(first) == 0 || len(second) == 0 || len(third) == 0 {
+		return 0, 0, 0, false
+	}
+	if !isNumeric(first) || !isNumeric(second) || !isNumeric(third) {
+		return 0, 0, 0, false
+	}
+	if len(first) > 2 || len(second) > 2 || len(third) != 4 {
+		return 0, 0, 0, false
+	}
+	return parseIntSafe(first), parseIntSafe(second), parseIntSafe(third), true
 }
 
 // collectDateTimestamps builds a set of timestamp start values from date matches.

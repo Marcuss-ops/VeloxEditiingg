@@ -7,6 +7,14 @@ import (
 
 // levenshtein computes the Levenshtein edit distance between two strings.
 func levenshtein(a, b string) int {
+	return levenshteinBuf(a, b, make([]int, len(b)+1), make([]int, len(b)+1))
+}
+
+// levenshteinBuf is the buffer-reusing core of levenshtein. prev and curr
+// must each have length >= len(b)+1; the caller owns them so a hot loop
+// (partialFuzzyRatio's sliding window) can allocate them once and reuse them
+// across every window instead of paying two slice allocations per distance.
+func levenshteinBuf(a, b string, prev, curr []int) int {
 	la := len(a)
 	lb := len(b)
 	if la == 0 {
@@ -16,9 +24,9 @@ func levenshtein(a, b string) int {
 		return la
 	}
 
-	// Use two rows instead of full matrix for memory efficiency
-	prev := make([]int, lb+1)
-	curr := make([]int, lb+1)
+	// Use two rows instead of full matrix for memory efficiency. Reusing
+	// the buffers across calls is safe: prev is re-seeded each call and curr
+	// is fully overwritten left-to-right before each read.
 	for j := 0; j <= lb; j++ {
 		prev[j] = j
 	}
@@ -55,13 +63,20 @@ func min3(a, b, c int) int {
 func fuzzyRatio(a, b string) float64 {
 	a = normalizeForMatch(a)
 	b = normalizeForMatch(b)
+	return ratioFromDistance(a, b, levenshtein(a, b))
+}
+
+// ratioFromDistance converts a Levenshtein distance into the 0-100 similarity
+// ratio fuzzyRatio reports. It is the single home of the empty-string and
+// maxLen normalization rules so the buffer-reusing hot path and the
+// convenience wrapper cannot drift.
+func ratioFromDistance(a, b string, dist int) float64 {
 	if len(a) == 0 && len(b) == 0 {
 		return 100.0
 	}
 	if len(a) == 0 || len(b) == 0 {
 		return 0.0
 	}
-	dist := levenshtein(a, b)
 	maxLen := len(a)
 	if len(b) > maxLen {
 		maxLen = len(b)
@@ -70,7 +85,10 @@ func fuzzyRatio(a, b string) float64 {
 }
 
 // partialFuzzyRatio finds the best partial match of needle in haystack.
-// Optimized: limits sliding window to exact-length needle windows only.
+// Optimized: limits the sliding window to exact-length needle windows, hoists
+// the invariant needle normalization out of the loop, and reuses the
+// Levenshtein scratch rows across every window so the O(n) windows no longer
+// re-normalize needle nor re-allocate the two distance buffers.
 func partialFuzzyRatio(needle, haystack string) float64 {
 	needle = normalizeForMatch(needle)
 	haystack = normalizeForMatch(haystack)
@@ -84,10 +102,17 @@ func partialFuzzyRatio(needle, haystack string) float64 {
 		return fuzzyRatio(needle, haystack)
 	}
 
+	prev := make([]int, len(needle)+1)
+	curr := make([]int, len(needle)+1)
 	bestScore := 0.0
 	for i := 0; i <= len(haystack)-len(needle); i++ {
-		substr := haystack[i : i+len(needle)]
-		score := fuzzyRatio(needle, substr)
+		// The window is a slice of the already-normalized haystack
+		// (lowercase, alphanumeric + whitespace only), so the only remaining
+		// normalization is the leading/trailing whitespace trim.
+		// strings.TrimSpace returns a sub-slice and does not copy bytes.
+		substr := strings.TrimSpace(haystack[i : i+len(needle)])
+		dist := levenshteinBuf(needle, substr, prev, curr)
+		score := ratioFromDistance(needle, substr, dist)
 		if score > bestScore {
 			bestScore = score
 		}
