@@ -61,7 +61,6 @@ import (
 	"velox-server/internal/costmodel"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/routing"
-	"velox-server/internal/store"
 	"velox-shared/contract/deliveryplan"
 	"velox-shared/contract/domain"
 )
@@ -85,6 +84,17 @@ type Resolver struct {
 	driveResolver enqueue.DriveFolderResolver
 }
 
+// ResolverStore is the narrow persistence surface the Resolver needs at the
+// composition boundary: the creator-forwarding repository plus the Drive
+// master-folder resolver. store.SQLiteStore implements both ports; the
+// concrete *store.SQLiteStore is no longer part of the resolver's
+// constructor contract, so tests and alternate adapters inject only these
+// two ports.
+type ResolverStore interface {
+	ForwardingRepository
+	enqueue.DriveFolderResolver
+}
+
 // NewResolver is the canonical constructor for the handler-side Resolver.
 // It pulls dataDir/videosDir/masterURL from the supplied config so the
 // URL rewriting step (BuildSceneImagePayloadForMaster) uses per-process
@@ -93,7 +103,7 @@ type Resolver struct {
 // Returns nil if cfg, enqueuer, or dbStore is missing — callers must
 // nil-check before calling Resolve (Resolve itself also returns a
 // typed error for missing dependencies).
-func NewResolver(cfg *config.Config, enqueuer *enqueue.Enqueuer, dbStore *store.SQLiteStore) *Resolver {
+func NewResolver(cfg *config.Config, enqueuer *enqueue.Enqueuer, dbStore ResolverStore) *Resolver {
 	if cfg == nil || enqueuer == nil || dbStore == nil {
 		return nil
 	}
@@ -115,7 +125,7 @@ func NewResolver(cfg *config.Config, enqueuer *enqueue.Enqueuer, dbStore *store.
 //
 // Any dataDir/videosDir/masterURL fields remain empty, which causes
 // Resolve to skip BuildSceneImagePayloadForMaster.
-func NewResolverMinimal(enqueuer *enqueue.Enqueuer, dbStore *store.SQLiteStore) *Resolver {
+func NewResolverMinimal(enqueuer *enqueue.Enqueuer, dbStore ResolverStore) *Resolver {
 	if enqueuer == nil || dbStore == nil {
 		return nil
 	}
@@ -128,7 +138,7 @@ func NewResolverMinimal(enqueuer *enqueue.Enqueuer, dbStore *store.SQLiteStore) 
 // fields directly. The dataDir, videosDir, masterURL triple drives
 // BuildSceneImagePayloadForMaster, so callers that want URL rewriting
 // must supply non-empty dataDir + masterURL.
-func NewResolverFromDeps(enqueuer *enqueue.Enqueuer, dbStore *store.SQLiteStore, dataDir, videosDir, masterURL string) *Resolver {
+func NewResolverFromDeps(enqueuer *enqueue.Enqueuer, dbStore ResolverStore, dataDir, videosDir, masterURL string) *Resolver {
 	if enqueuer == nil || dbStore == nil {
 		return nil
 	}
