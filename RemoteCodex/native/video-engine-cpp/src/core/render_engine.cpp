@@ -208,6 +208,274 @@ void RenderEngine::recordFramePipeline(const media::FramePipelineResult& result)
 }
 
 #ifdef VELOX_ENABLE_LIBAV
+RenderResult RenderEngine::renderCopyOnly(
+    const plan::RenderPlan& plan,
+    const std::filesystem::path& workDir,
+    const std::filesystem::path& outPath,
+    RenderResult& result,
+    const std::function<RenderResult(const std::string&)>& failRender,
+    const std::chrono::steady_clock::time_point& renderStart) {
+    if (plan.timeline.empty()) {
+        result.error = "copy_only requires at least one timeline video";
+        return failRender("copy_only_empty_timeline");
+    }
+    if (!plan.subtitle_tracks.empty()) {
+        result.error = "copy_only does not support subtitle burn-in";
+        return failRender("copy_only_subtitles_unsupported");
+    }
+
+    media::CopyOnlyMuxRequest request;
+    request.output_path = outPath;
+    request.video_segments.reserve(plan.timeline.size());
+    // CompiledRenderPlanV2 carries the timeline in exact integer
+    // microseconds; the legacy V1 fallback sums floating seconds. The
+    // packet mux always receives int64 duration_us — no float is ever
+    // used as the source of truth for the trim.
+    double total_copy_duration = 0.0;
+    int64_t total_copy_duration_us = 0;
+
+    // Bind existing local/cache assets in place for this copy-only
+    // packet path. The Go worker resolver rewrites velox-asset://
+    // references into verified immutable cache paths before this plan is
+    // dispatched, so the canonical wire form is either url = local path
+    // or url = velox-asset://<id> with cache_key = the verified path.
+    // resolveLocalAssetPath() returns both in place; libavformat opens
+    // the bound path directly and this packet path never performs
+    // cache -> temp copies (asset_bytes_copied stays 0). Only a genuinely
+    // remote source is staged into the workdir. Note the scoping: the
+    // legacy segment/mux paths below still stage assets via downloadAsset
+    // into the workdir — this in-place guarantee is specific to the
+    // copy-only packet pipeline.
+    const auto bindOrStage = [&](const std::string& source,
+                                 const std::string& cache_reference,
+                                 const fs::path& staged_path)
+        -> std::pair<fs::path, bool> {
+        if (const fs::path local = file::resolveLocalAssetPath(
+                source, cache_reference); !local.empty()) {
+            return {local, true};
+        }
+        if (file::downloadAsset(source, staged_path, cache_reference)) {
+            return {staged_path, false};
+        }
+        return {};
+    };
+
+    for (size_t i = 0; i < plan.timeline.size(); ++i) {
+        const auto& item = plan.timeline[i];
+        if (!std::holds_alternative<plan::VideoSource>(item.source)) {
+            result.error = "copy_only requires video sources only (segment " +
+                std::to_string(i) + ")";
+            return failRender("copy_only_source_unsupported");
+        }
+        // CompiledRenderPlanV2 carries the duration as integer
+        // microseconds; the legacy V1 plan as floating seconds. Either
+        // source of truth must be positive and finite.
+        const bool hasDuration = item.duration_us > 0 ||
+            (item.duration_seconds > 0.0 && std::isfinite(item.duration_seconds));
+        if (!hasDuration) {
+            result.error = "copy_only requires positive finite duration for segment " +
+                std::to_string(i);
+            return failRender("copy_only_duration_invalid");
+        }
+        const auto& source = std::get<plan::VideoSource>(item.source);
+        const auto boundVideo = bindOrStage(
+            source.url, source.cache_key,
+            workDir / ("copy_input_" + std::to_string(i) + ".mp4"));
+        if (boundVideo.first.empty()) {
+            result.error = "failed to resolve copy-only video source for segment " +
+                std::to_string(i);
+            return failRender("asset_download_failed");
+        }
+        const fs::path& localVideo = boundVideo.first;
+        SegmentTiming segment;
+        segment.index = i;
+        segment.worker_index = 0;
+        segment.scene_id = item.scene_id;
+        segment.source_type = "video";
+        const auto segmentStart = std::chrono::steady_clock::now();
+        {
+            telemetry::ScopedPhase assetPhase(
+                recorder_, telemetry::kOriginWorker, telemetry::kScopeTask,
+                "worker.asset", boundVideo.second ? "bind" : "transfer",
+                boundVideo.second ? "resolve" : "download");
+            assetPhase.Complete();
+        }
+        segment.source_bytes = fileSize(localVideo);
+        segment.total_ms = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - segmentStart).count();
+        metrics_.addMs(boundVideo.second ? "asset_bind_ms" : "asset_download_ms",
+                       segment.total_ms);
+        segment.finished_offset_ms = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - renderStart).count();
+        segment.status = telemetry::kStatusOk;
+        metrics_.addSegment(segment);
+
+        // Prefer the V2 integer microseconds; fall back to converting
+        // the V1 floating seconds only when the int64 field is absent.
+        const int64_t duration_us = item.source_duration_us > 0
+            ? item.source_duration_us
+            : item.duration_us > 0
+            ? item.duration_us
+            : static_cast<int64_t>(
+                  std::llround(item.duration_seconds * 1'000'000.0));
+        const int64_t source_in_us = item.source_in_us;
+        request.video_segments.push_back({
+            localVideo, source_in_us, duration_us, item.include_audio});
+        if (item.duration_us > 0) {
+            total_copy_duration_us += item.duration_us;
+        } else {
+            total_copy_duration += item.duration_seconds;
+        }
+        const int progress = 10 + static_cast<int>(
+            (static_cast<double>(i + 1) / plan.timeline.size()) * 55.0);
+        reportProgress(progress, "staging_copy_inputs");
+        reportDetailedProgress(
+            last_progress_, static_cast<int>(i + 1), static_cast<int>(plan.timeline.size()),
+            static_cast<int>(i + 1), static_cast<int>(plan.timeline.size()),
+            "staging_copy_inputs", 0, 0, 0,
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - renderStart).count(), true);
+    }
+
+    if (total_copy_duration_us > 0) {
+        // Display/validation only: the FINAL_AUDIO_COPY resolver takes a
+        // tolerance of tens of milliseconds, so the double derived from
+        // the exact int64 total is safe; the mux trim stays int64.
+        total_copy_duration = static_cast<double>(total_copy_duration_us) / 1'000'000.0;
+    }
+
+    if (plan.audio_tracks.size() > 1) {
+        result.error = "copy_only supports at most one final audio track";
+        return failRender("copy_only_audio_mix_unsupported");
+    }
+    media::FinalAudioDecision finalAudioDecision;
+    if (!plan.audio_tracks.empty()) {
+        const auto& track = plan.audio_tracks.front();
+        if (track.loop || track.volume != 1.0 || track.start_time_offset < 0.0) {
+            result.error = "copy_only final audio requires finite, neutral-volume audio";
+            return failRender("copy_only_audio_transform_unsupported");
+        }
+        const auto boundAudio = bindOrStage(
+            track.source_url, "", workDir / "copy_input_audio.m4a");
+        if (boundAudio.first.empty() || !media::hasAudioStream(boundAudio.first)) {
+            result.error = "failed to resolve valid copy-only audio track";
+            return failRender("copy_only_audio_invalid");
+        }
+        // FINAL_AUDIO_COPY contract gate for the in-process packet path.
+        // The upstream-prepared final audio must be a verified MP4-AAC
+        // track covering the video timeline; the packet mux then copies
+        // its packets into the same MP4 as the video with zero decode,
+        // zero filter and zero AAC re-encode. Anything that would need a
+        // re-encode (non-AAC codec, raw ADTS container, unverified
+        // transport, duration shorter than the timeline) fails closed:
+        // the zero-spawn path cannot repair audio.
+        finalAudioDecision = media::resolveFinalAudioModePacket(
+            media::probeFinalAudioMetadata(boundAudio.first),
+            true, total_copy_duration);
+        if (finalAudioDecision.mode != media::FinalAudioMode::Copy) {
+            result.error = "copy_only final audio is not FINAL_AUDIO_COPY: " +
+                finalAudioDecision.reason;
+            return failRender("copy_only_audio_not_final_copy");
+        }
+        {
+            telemetry::ScopedPhase assetPhase(
+                recorder_, telemetry::kOriginWorker, telemetry::kScopeTask,
+                "worker.asset", boundAudio.second ? "bind" : "transfer",
+                boundAudio.second ? "resolve" : "download");
+            assetPhase.Complete();
+        }
+        const int64_t declared_audio_duration = track.duration_us > 0
+            ? track.duration_us
+            : (track.duration_seconds > 0.0
+                   ? static_cast<int64_t>(
+                         std::llround(track.duration_seconds * 1'000'000.0))
+                   : 0);
+        request.audio = media::CopyOnlyAudioTrack{
+            boundAudio.first,
+            track.start_offset_us > 0
+                ? track.start_offset_us
+                : static_cast<int64_t>(
+                      std::llround(track.start_time_offset * 1'000'000.0)),
+            declared_audio_duration};
+    }
+
+    duration_seconds_.store(total_copy_duration);
+    concat_mode_ = "packet_copy";
+    reportProgress(75, "packet_mux");
+    reportDetailedProgress(
+        last_progress_, static_cast<int>(plan.timeline.size()),
+        static_cast<int>(plan.timeline.size()), static_cast<int>(plan.timeline.size()),
+        static_cast<int>(plan.timeline.size()), "packet_mux", 0, 0, 0,
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - renderStart).count());
+    telemetry::ScopedPhase packetPhase(
+        recorder_, telemetry::kOriginEngine, telemetry::kScopeAttempt,
+        "engine", "packet_mux", "composite");
+    if (!plan.audio_tracks.empty()) {
+        // The packet mux performs the single final mux: video packets +
+        // the upstream-prepared final audio packets, no AAC encode pass.
+        // Mirror the legacy muxAudio decision telemetry so downstream
+        // consumers see the FINAL_AUDIO_COPY mode on this path too.
+        packetPhase.SetMetadataJSON(
+            std::string("{\"final_mux_audio_mode\":\"") +
+            media::finalAudioModeName(finalAudioDecision.mode) +
+            "\",\"final_mux_audio_encode_passes\":" +
+            (finalAudioDecision.mode == media::FinalAudioMode::Copy ? "0" : "1") +
+            ",\"audio_metadata_verified\":" +
+            (finalAudioDecision.metadata.metadata_verified ? "true" : "false") +
+            ",\"audio_codec\":\"" + escapeJsonString(finalAudioDecision.metadata.codec) +
+            "\",\"audio_sample_rate\":" + std::to_string(finalAudioDecision.metadata.sample_rate) +
+            ",\"audio_channels\":" + std::to_string(finalAudioDecision.metadata.channels) +
+            ",\"audio_channel_layout\":\"" +
+            escapeJsonString(finalAudioDecision.metadata.channel_layout) +
+            "\",\"audio_duration_seconds\":" +
+            std::to_string(finalAudioDecision.metadata.duration_seconds) +
+            ",\"audio_start_time_seconds\":" +
+            std::to_string(finalAudioDecision.metadata.start_time_seconds) +
+            ",\"audio_format_name\":\"" +
+            escapeJsonString(finalAudioDecision.metadata.format_name) +
+            "\",\"audio_extradata_verified\":" +
+            (finalAudioDecision.metadata.extradata_verified ? "true" : "false") +
+            ",\"audio_container_verified\":" +
+            (finalAudioDecision.metadata.container_verified ? "true" : "false") +
+            ",\"decision_reason\":\"" +
+            escapeJsonString(finalAudioDecision.reason) + "\"}");
+    }
+    media::CopyOnlyMuxResult muxResult;
+    bool muxOk;
+    {
+        ScopedTimer timer(metrics_, "packet_mux_ms");
+        muxOk = media::muxCopyOnly(request, &muxResult);
+    }
+    if (!muxOk) {
+        packetPhase.Abort("packet_mux_failed", muxResult.error);
+        result.error = "copy-only packet mux failed: " + muxResult.error;
+        return failRender("packet_mux_failed");
+    }
+    output_durable_.store(muxResult.output_durable);
+    if (!muxResult.output_durable) {
+        std::cerr << "warning: output was atomically published but directory durability was not confirmed\n";
+    }
+    // Packet counters are not decoded/encoded frame counters. Keep the
+    // phase event truthful and leave frames_encoded/decoded at zero; the
+    // sidecar's packet work is represented by the packet_mux phase itself.
+    packetPhase.Complete(
+        0,
+        static_cast<int64_t>(fileSize(outPath)),
+        0,
+        telemetry::kStatusOk);
+    // The zero-spawn packet path owns the published artifact, so it
+    // declares the final size in the sidecar total_size directly (the
+    // ffmpeg-based paths fill this field from their progress stream).
+    // The receipt's I/O amplification denominator reads this value.
+    last_progress_.total_size = static_cast<int64_t>(fileSize(outPath));
+    last_progress_.progress_pct = 100.0;
+    last_progress_.finished = true;
+    reportProgress(100, "completed");
+    result.success = true;
+    return result;
+}
+
 std::optional<RenderResult> RenderEngine::renderMixed(
     const plan::RenderPlan& plan,
     const std::filesystem::path& workDir,
@@ -530,267 +798,10 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
     // MP4s, never invokes FFmpeg for segment/concat/mux work, and publishes
     // the final MP4 directly through the in-process LibAV muxer. Keep this
     // branch before the legacy segment loop so non-copy renders retain their
-    // existing frame/filter/audio behavior unchanged.
+    // existing frame/filter/audio behavior unchanged. Delegated to
+    // renderCopyOnly() to keep render() linear.
     if (plan.copy_only) {
-        if (plan.timeline.empty()) {
-            result.error = "copy_only requires at least one timeline video";
-            return failRender("copy_only_empty_timeline");
-        }
-        if (!plan.subtitle_tracks.empty()) {
-            result.error = "copy_only does not support subtitle burn-in";
-            return failRender("copy_only_subtitles_unsupported");
-        }
-
-        media::CopyOnlyMuxRequest request;
-        request.output_path = outPath;
-        request.video_segments.reserve(plan.timeline.size());
-        // CompiledRenderPlanV2 carries the timeline in exact integer
-        // microseconds; the legacy V1 fallback sums floating seconds. The
-        // packet mux always receives int64 duration_us — no float is ever
-        // used as the source of truth for the trim.
-        double total_copy_duration = 0.0;
-        int64_t total_copy_duration_us = 0;
-
-        // Bind existing local/cache assets in place for this copy-only
-        // packet path. The Go worker resolver rewrites velox-asset://
-        // references into verified immutable cache paths before this plan is
-        // dispatched, so the canonical wire form is either url = local path
-        // or url = velox-asset://<id> with cache_key = the verified path.
-        // resolveLocalAssetPath() returns both in place; libavformat opens
-        // the bound path directly and this packet path never performs
-        // cache -> temp copies (asset_bytes_copied stays 0). Only a genuinely
-        // remote source is staged into the workdir. Note the scoping: the
-        // legacy segment/mux paths below still stage assets via downloadAsset
-        // into the workdir — this in-place guarantee is specific to the
-        // copy-only packet pipeline.
-        const auto bindOrStage = [&](const std::string& source,
-                                     const std::string& cache_reference,
-                                     const fs::path& staged_path)
-            -> std::pair<fs::path, bool> {
-            if (const fs::path local = file::resolveLocalAssetPath(
-                    source, cache_reference); !local.empty()) {
-                return {local, true};
-            }
-            if (file::downloadAsset(source, staged_path, cache_reference)) {
-                return {staged_path, false};
-            }
-            return {};
-        };
-
-        for (size_t i = 0; i < plan.timeline.size(); ++i) {
-            const auto& item = plan.timeline[i];
-            if (!std::holds_alternative<plan::VideoSource>(item.source)) {
-                result.error = "copy_only requires video sources only (segment " +
-                    std::to_string(i) + ")";
-                return failRender("copy_only_source_unsupported");
-            }
-            // CompiledRenderPlanV2 carries the duration as integer
-            // microseconds; the legacy V1 plan as floating seconds. Either
-            // source of truth must be positive and finite.
-            const bool hasDuration = item.duration_us > 0 ||
-                (item.duration_seconds > 0.0 && std::isfinite(item.duration_seconds));
-            if (!hasDuration) {
-                result.error = "copy_only requires positive finite duration for segment " +
-                    std::to_string(i);
-                return failRender("copy_only_duration_invalid");
-            }
-            const auto& source = std::get<plan::VideoSource>(item.source);
-            const auto boundVideo = bindOrStage(
-                source.url, source.cache_key,
-                workDir / ("copy_input_" + std::to_string(i) + ".mp4"));
-            if (boundVideo.first.empty()) {
-                result.error = "failed to resolve copy-only video source for segment " +
-                    std::to_string(i);
-                return failRender("asset_download_failed");
-            }
-            const fs::path& localVideo = boundVideo.first;
-            SegmentTiming segment;
-            segment.index = i;
-            segment.worker_index = 0;
-            segment.scene_id = item.scene_id;
-            segment.source_type = "video";
-            const auto segmentStart = std::chrono::steady_clock::now();
-            {
-                telemetry::ScopedPhase assetPhase(
-                    recorder_, telemetry::kOriginWorker, telemetry::kScopeTask,
-                    "worker.asset", boundVideo.second ? "bind" : "transfer",
-                    boundVideo.second ? "resolve" : "download");
-                assetPhase.Complete();
-            }
-            segment.source_bytes = fileSize(localVideo);
-            segment.total_ms = std::chrono::duration<double, std::milli>(
-                std::chrono::steady_clock::now() - segmentStart).count();
-            metrics_.addMs(boundVideo.second ? "asset_bind_ms" : "asset_download_ms",
-                           segment.total_ms);
-            segment.finished_offset_ms = std::chrono::duration<double, std::milli>(
-                std::chrono::steady_clock::now() - renderStart).count();
-            segment.status = telemetry::kStatusOk;
-            metrics_.addSegment(segment);
-
-            // Prefer the V2 integer microseconds; fall back to converting
-            // the V1 floating seconds only when the int64 field is absent.
-            const int64_t duration_us = item.source_duration_us > 0
-                ? item.source_duration_us
-                : item.duration_us > 0
-                ? item.duration_us
-                : static_cast<int64_t>(
-                      std::llround(item.duration_seconds * 1'000'000.0));
-            const int64_t source_in_us = item.source_in_us;
-            request.video_segments.push_back({
-                localVideo, source_in_us, duration_us, item.include_audio});
-            if (item.duration_us > 0) {
-                total_copy_duration_us += item.duration_us;
-            } else {
-                total_copy_duration += item.duration_seconds;
-            }
-            const int progress = 10 + static_cast<int>(
-                (static_cast<double>(i + 1) / plan.timeline.size()) * 55.0);
-            reportProgress(progress, "staging_copy_inputs");
-            reportDetailedProgress(
-                last_progress_, static_cast<int>(i + 1), static_cast<int>(plan.timeline.size()),
-                static_cast<int>(i + 1), static_cast<int>(plan.timeline.size()),
-                "staging_copy_inputs", 0, 0, 0,
-                std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now() - renderStart).count(), true);
-        }
-
-        if (total_copy_duration_us > 0) {
-            // Display/validation only: the FINAL_AUDIO_COPY resolver takes a
-            // tolerance of tens of milliseconds, so the double derived from
-            // the exact int64 total is safe; the mux trim stays int64.
-            total_copy_duration = static_cast<double>(total_copy_duration_us) / 1'000'000.0;
-        }
-
-        if (plan.audio_tracks.size() > 1) {
-            result.error = "copy_only supports at most one final audio track";
-            return failRender("copy_only_audio_mix_unsupported");
-        }
-        media::FinalAudioDecision finalAudioDecision;
-        if (!plan.audio_tracks.empty()) {
-            const auto& track = plan.audio_tracks.front();
-            if (track.loop || track.volume != 1.0 || track.start_time_offset < 0.0) {
-                result.error = "copy_only final audio requires finite, neutral-volume audio";
-                return failRender("copy_only_audio_transform_unsupported");
-            }
-            const auto boundAudio = bindOrStage(
-                track.source_url, "", workDir / "copy_input_audio.m4a");
-            if (boundAudio.first.empty() || !media::hasAudioStream(boundAudio.first)) {
-                result.error = "failed to resolve valid copy-only audio track";
-                return failRender("copy_only_audio_invalid");
-            }
-            // FINAL_AUDIO_COPY contract gate for the in-process packet path.
-            // The upstream-prepared final audio must be a verified MP4-AAC
-            // track covering the video timeline; the packet mux then copies
-            // its packets into the same MP4 as the video with zero decode,
-            // zero filter and zero AAC re-encode. Anything that would need a
-            // re-encode (non-AAC codec, raw ADTS container, unverified
-            // transport, duration shorter than the timeline) fails closed:
-            // the zero-spawn path cannot repair audio.
-            finalAudioDecision = media::resolveFinalAudioModePacket(
-                media::probeFinalAudioMetadata(boundAudio.first),
-                true, total_copy_duration);
-            if (finalAudioDecision.mode != media::FinalAudioMode::Copy) {
-                result.error = "copy_only final audio is not FINAL_AUDIO_COPY: " +
-                    finalAudioDecision.reason;
-                return failRender("copy_only_audio_not_final_copy");
-            }
-            {
-                telemetry::ScopedPhase assetPhase(
-                    recorder_, telemetry::kOriginWorker, telemetry::kScopeTask,
-                    "worker.asset", boundAudio.second ? "bind" : "transfer",
-                    boundAudio.second ? "resolve" : "download");
-                assetPhase.Complete();
-            }
-            const int64_t declared_audio_duration = track.duration_us > 0
-                ? track.duration_us
-                : (track.duration_seconds > 0.0
-                       ? static_cast<int64_t>(
-                             std::llround(track.duration_seconds * 1'000'000.0))
-                       : 0);
-            request.audio = media::CopyOnlyAudioTrack{
-                boundAudio.first,
-                track.start_offset_us > 0
-                    ? track.start_offset_us
-                    : static_cast<int64_t>(
-                          std::llround(track.start_time_offset * 1'000'000.0)),
-                declared_audio_duration};
-        }
-
-        duration_seconds_.store(total_copy_duration);
-        concat_mode_ = "packet_copy";
-        reportProgress(75, "packet_mux");
-        reportDetailedProgress(
-            last_progress_, static_cast<int>(plan.timeline.size()),
-            static_cast<int>(plan.timeline.size()), static_cast<int>(plan.timeline.size()),
-            static_cast<int>(plan.timeline.size()), "packet_mux", 0, 0, 0,
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - renderStart).count());
-        telemetry::ScopedPhase packetPhase(
-            recorder_, telemetry::kOriginEngine, telemetry::kScopeAttempt,
-            "engine", "packet_mux", "composite");
-        if (!plan.audio_tracks.empty()) {
-            // The packet mux performs the single final mux: video packets +
-            // the upstream-prepared final audio packets, no AAC encode pass.
-            // Mirror the legacy muxAudio decision telemetry so downstream
-            // consumers see the FINAL_AUDIO_COPY mode on this path too.
-            packetPhase.SetMetadataJSON(
-                std::string("{\"final_mux_audio_mode\":\"") +
-                media::finalAudioModeName(finalAudioDecision.mode) +
-                "\",\"final_mux_audio_encode_passes\":" +
-                (finalAudioDecision.mode == media::FinalAudioMode::Copy ? "0" : "1") +
-                ",\"audio_metadata_verified\":" +
-                (finalAudioDecision.metadata.metadata_verified ? "true" : "false") +
-                ",\"audio_codec\":\"" + escapeJsonString(finalAudioDecision.metadata.codec) +
-                "\",\"audio_sample_rate\":" + std::to_string(finalAudioDecision.metadata.sample_rate) +
-                ",\"audio_channels\":" + std::to_string(finalAudioDecision.metadata.channels) +
-                ",\"audio_channel_layout\":\"" +
-                escapeJsonString(finalAudioDecision.metadata.channel_layout) +
-                "\",\"audio_duration_seconds\":" +
-                std::to_string(finalAudioDecision.metadata.duration_seconds) +
-                ",\"audio_start_time_seconds\":" +
-                std::to_string(finalAudioDecision.metadata.start_time_seconds) +
-                ",\"audio_format_name\":\"" +
-                escapeJsonString(finalAudioDecision.metadata.format_name) +
-                "\",\"audio_extradata_verified\":" +
-                (finalAudioDecision.metadata.extradata_verified ? "true" : "false") +
-                ",\"audio_container_verified\":" +
-                (finalAudioDecision.metadata.container_verified ? "true" : "false") +
-                ",\"decision_reason\":\"" +
-                escapeJsonString(finalAudioDecision.reason) + "\"}");
-        }
-        media::CopyOnlyMuxResult muxResult;
-        bool muxOk;
-        {
-            ScopedTimer timer(metrics_, "packet_mux_ms");
-            muxOk = media::muxCopyOnly(request, &muxResult);
-        }
-        if (!muxOk) {
-            packetPhase.Abort("packet_mux_failed", muxResult.error);
-            result.error = "copy-only packet mux failed: " + muxResult.error;
-            return failRender("packet_mux_failed");
-        }
-        output_durable_.store(muxResult.output_durable);
-        if (!muxResult.output_durable) {
-            std::cerr << "warning: output was atomically published but directory durability was not confirmed\n";
-        }
-        // Packet counters are not decoded/encoded frame counters. Keep the
-        // phase event truthful and leave frames_encoded/decoded at zero; the
-        // sidecar's packet work is represented by the packet_mux phase itself.
-        packetPhase.Complete(
-            0,
-            static_cast<int64_t>(fileSize(outPath)),
-            0,
-            telemetry::kStatusOk);
-        // The zero-spawn packet path owns the published artifact, so it
-        // declares the final size in the sidecar total_size directly (the
-        // ffmpeg-based paths fill this field from their progress stream).
-        // The receipt's I/O amplification denominator reads this value.
-        last_progress_.total_size = static_cast<int64_t>(fileSize(outPath));
-        last_progress_.progress_pct = 100.0;
-        last_progress_.finished = true;
-        reportProgress(100, "completed");
-        result.success = true;
-        return result;
+        return renderCopyOnly(plan, workDir, outPath, result, failRender, renderStart);
     }
 #endif // VELOX_ENABLE_LIBAV
 

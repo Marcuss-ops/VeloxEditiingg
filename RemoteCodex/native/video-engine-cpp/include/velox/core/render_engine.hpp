@@ -6,6 +6,7 @@
 #include "velox/telemetry/emitter.hpp"
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -78,6 +79,18 @@ public:
 private:
     void emitSidecar(const std::string& output_path) const;
     void recordFramePipeline(const media::FramePipelineResult& result);
+
+    // Copy-only packet path: a strict zero-spawn contract. It stages video
+    // sources in place, resolves a single FINAL_AUDIO_COPY track, and muxes
+    // the final MP4 directly through the in-process LibAV muxer with no
+    // per-segment MP4s and no FFmpeg segment/concat/mux work.
+    RenderResult renderCopyOnly(
+        const plan::RenderPlan& plan,
+        const std::filesystem::path& workDir,
+        const std::filesystem::path& outPath,
+        RenderResult& result,
+        const std::function<RenderResult(const std::string&)>& failRender,
+        const std::chrono::steady_clock::time_point& renderStart);
 
     // Mixed renderer: resolve each video segment independently against the
     // canonical output profile (PACKET_COPY for compatible sources,
