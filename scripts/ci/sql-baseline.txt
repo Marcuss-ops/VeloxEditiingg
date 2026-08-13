@@ -1,6 +1,10 @@
 1 DataServer/internal/completion/conflict_budget.go
+5 DataServer/internal/completionstore/completion_repository_bindings.go
+13 DataServer/internal/completionstore/completion_repository_finalize.go
+1 DataServer/internal/completionstore/completion_repository_reconcile.go
+17 DataServer/internal/completionstore/completion_repository_tx_lifecycle.go
+7 DataServer/internal/completionstore/completionstore.go
 6 DataServer/internal/deliveries/plan_resolver.go
-1 DataServer/internal/fleet/opsalerts/engine.go
 1 DataServer/internal/handlers/server/api/admin_m2m_keys.go
 4 DataServer/internal/handlers/server/api/workers_handler_current_task.go
 2 DataServer/internal/handlers/server/api/workers_metrics_handler.go
@@ -10,6 +14,8 @@
 1 DataServer/internal/handlers/server/pipeline/pipeline_run_status.go
 1 DataServer/internal/handlers/server/script/handler.go
 18 DataServer/internal/invariants/audit.go
+15 DataServer/internal/m2mkeys/m2mkeys.go
+6 DataServer/internal/m2mkeys/m2mkeys_audit.go
 1 DataServer/internal/metrics/render_performance_rollup.go
 5 DataServer/internal/metrics/supervisor_sqlite.go
 1 DataServer/internal/metrics/supervisor_sqlite_metrics.go
@@ -17,4 +23,13 @@
 4 DataServer/internal/platform/database/database.go
 4 DataServer/internal/platform/database/executor.go
 1 DataServer/internal/registry/capability.go
+2 DataServer/internal/renderfingerprintstore/renderfingerprintstore.go
+1 DataServer/internal/repository/completion.go
+6 DataServer/internal/repository/dialect.go
+14 DataServer/internal/smokerunstore/smokerunstore.go
+3 DataServer/internal/stalereconcile/stalereconcile.go
+25 DataServer/internal/stalereconcile/stalereconcile_apply.go
+3 DataServer/internal/stalereconcile/stalereconcile_audit.go
+6 DataServer/internal/stalereconcile/stalereconcile_scanners.go
+2 DataServer/internal/storecore/storecore.go
 1 DataServer/internal/supervisor/policy.go
