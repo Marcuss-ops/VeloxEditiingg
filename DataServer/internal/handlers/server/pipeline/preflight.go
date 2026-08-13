@@ -104,9 +104,15 @@ func validatePublicationCapabilities(req SubmitJobRequest) error {
 	registry := publicationcap.DefaultRegistry()
 	for _, pub := range req.Publications {
 		for _, destination := range pub.Destinations {
-			provider := "youtube"
-			if value, ok := destination.ProviderOptions["provider"].(string); ok && value != "" {
-				provider = value
+			provider := ""
+			if value, ok := destination.ProviderOptions["provider"].(string); ok {
+				provider = strings.TrimSpace(value)
+			}
+			// Provider is opaque and provider-neutral: Velox no longer assumes
+			// a platform. A destination without an explicit provider fails
+			// closed instead of defaulting to a hardcoded value.
+			if provider == "" {
+				return fmt.Errorf("PROVIDER_REQUIRED: publication %s destination %s", pub.PublicationID, destination.DestinationID)
 			}
 			hasLocalizations := len(pub.Localizations) > 0
 			if err := registry.Validate(provider, publicationcap.Metadata{Title: pub.Metadata.Title, Description: pub.Metadata.Description, Tags: pub.Metadata.Tags, HasSchedule: pub.Metadata.PublishAt != "", HasLocalizations: hasLocalizations, HasThumbnail: false, HasCaptions: false}); err != nil {
