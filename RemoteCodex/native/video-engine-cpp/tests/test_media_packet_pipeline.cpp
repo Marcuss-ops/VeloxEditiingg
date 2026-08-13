@@ -158,12 +158,14 @@ int main() {
 
     const fs::path video = root / "video.mp4";
     const fs::path incompatible = root / "incompatible.mp4";
+    const fs::path normalized = root / "normalized.mp4";
     const fs::path audio = root / "audio.m4a";
     const fs::path videoWithAudio = root / "video-with-audio.mp4";
     const fs::path output = root / "packet-output.mp4";
     const fs::path failedOutput = root / "failed-output.mp4";
     expect(makeVideo(video, "64x64"), "video fixture can be created");
     expect(makeVideo(incompatible, "32x32"), "incompatible video fixture can be created");
+    expect(makeVideo(normalized, "64x64"), "normalized fixture can be created");
     expect(makeAudio(audio), "audio fixture can be created");
     expect(makeMuxedVideo(video, audio, videoWithAudio),
            "video-with-audio fixture can be created");
@@ -288,6 +290,63 @@ int main() {
     expect(failureResult.error.find("media signature mismatch") != std::string::npos,
            "incompatible stream failure comes from the canonical execution resolver");
     expect(!fs::exists(failedOutput), "failed packet mux does not publish output");
+
+    // Mixed copy + normalized assembly: the packet mux is the final
+    // assembler for a mixed render. A raw copy range and an independent
+    // already-normalized transcode output (same canonical profile) are
+    // concatenated through one mux, then a trailing raw copy range closes
+    // the timeline.
+    const fs::path mixedOutput = root / "mixed-output.mp4";
+    velox::media::CopyOnlyMuxRequest mixedRequest;
+    mixedRequest.video_segments = {
+        {video, 0, 800'000, false, false},      // raw copy range
+        {normalized, 0, 800'000, false, true},  // normalized transcode output
+        {video, 0, 400'000, false, false},      // trailing raw copy range
+    };
+    mixedRequest.output_path = mixedOutput;
+    velox::media::CopyOnlyMuxResult mixedResult;
+    expect(velox::media::muxCopyOnly(mixedRequest, &mixedResult),
+           "mixed packet mux concatenates raw copy and normalized segments");
+    expect(mixedResult.success, "mixed packet mux reports success");
+    const auto mixedProbe = velox::media::probeMediaInProcess(mixedOutput);
+    expect(mixedProbe.has_value() && mixedProbe->duration_verified &&
+               mixedProbe->duration_seconds > 1.8 && mixedProbe->duration_seconds < 2.2,
+           "mixed mux output covers the copy + normalized + copy timeline (actual=" +
+               (mixedProbe.has_value() ? std::to_string(mixedProbe->duration_seconds)
+                                       : std::string("none")) +
+               ")");
+
+    // Fail-closed: a normalized segment whose profile does not match the
+    // canonical stream must not be concatenated.
+    const fs::path mixedFailOutput = root / "mixed-fail-output.mp4";
+    velox::media::CopyOnlyMuxRequest mixedFailRequest;
+    mixedFailRequest.video_segments = {
+        {video, 0, 800'000, false, false},
+        {incompatible, 0, 800'000, false, true},  // normalized but incompatible
+    };
+    mixedFailRequest.output_path = mixedFailOutput;
+    velox::media::CopyOnlyMuxResult mixedFailResult;
+    expect(!velox::media::muxCopyOnly(mixedFailRequest, &mixedFailResult),
+           "incompatible normalized segment fails closed in a mixed mux");
+    expect(mixedFailResult.error.find("media signature mismatch") != std::string::npos,
+           "mixed normalized incompatibility comes from the canonical resolver");
+    expect(!fs::exists(mixedFailOutput),
+           "mixed incompatible normalized segment does not publish output");
+
+    // A normalized segment starts at its own frame zero; a non-zero source_in
+    // would silently trim the encoded segment and must be rejected.
+    const fs::path normalizedOffsetOutput = root / "normalized-offset-output.mp4";
+    velox::media::CopyOnlyMuxRequest normalizedOffsetRequest;
+    normalizedOffsetRequest.video_segments = {
+        {normalized, 100'000, 400'000, false, true}};
+    normalizedOffsetRequest.output_path = normalizedOffsetOutput;
+    velox::media::CopyOnlyMuxResult normalizedOffsetResult;
+    expect(!velox::media::muxCopyOnly(normalizedOffsetRequest, &normalizedOffsetResult),
+           "normalized segment with non-zero source_in fails closed");
+    expect(normalizedOffsetResult.error.find("source_in_us 0") != std::string::npos,
+           "normalized offset rejection explains the source_in_us 0 contract");
+    expect(!fs::exists(normalizedOffsetOutput),
+           "normalized offset rejection does not publish output");
 
     const fs::path shortAudioOutput = root / "short-audio-output.mp4";
     auto shortAudioRequest = request;

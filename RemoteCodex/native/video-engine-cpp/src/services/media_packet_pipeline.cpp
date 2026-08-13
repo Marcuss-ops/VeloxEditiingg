@@ -14,14 +14,13 @@
 // LibAV-aware component API (Demuxer, PacketTrimmer, TimestampRewriter).
 // Included inside the guard: the header errors out without VELOX_ENABLE_LIBAV.
 #include "velox/services/media_packet_components.hpp"
+#include "velox/services/segment_execution_libav.hpp"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/avutil.h>
-#include <libavutil/channel_layout.h>
 #include <libavutil/mathematics.h>
-#include <libavutil/version.h>
 }
 
 #include <algorithm>
@@ -504,48 +503,6 @@ struct OutputStreams {
     AVStream* audio{nullptr};
 };
 
-MediaSignature mediaSignature(const AVStream* stream) {
-    MediaSignature signature;
-    if (stream == nullptr || stream->codecpar == nullptr) {
-        return signature;
-    }
-
-    const AVCodecParameters* parameters = stream->codecpar;
-    signature.kind = parameters->codec_type == AVMEDIA_TYPE_AUDIO
-        ? MediaKind::Audio
-        : MediaKind::Video;
-    signature.codec_id = parameters->codec_id;
-    signature.profile = parameters->profile;
-    signature.level = parameters->level;
-    if (parameters->extradata != nullptr && parameters->extradata_size > 0) {
-        signature.extradata.assign(
-            parameters->extradata,
-            parameters->extradata + parameters->extradata_size);
-    }
-
-    if (signature.kind == MediaKind::Video) {
-        signature.width = parameters->width;
-        signature.height = parameters->height;
-        signature.pixel_format = parameters->format;
-        signature.frame_rate_num = stream->avg_frame_rate.num;
-        signature.frame_rate_den = stream->avg_frame_rate.den;
-    } else {
-        signature.sample_rate = parameters->sample_rate;
-        signature.pixel_format = parameters->format;
-#if LIBAVUTIL_VERSION_MAJOR >= 57
-        signature.channels = parameters->ch_layout.nb_channels;
-        char layout[256]{};
-        if (av_channel_layout_describe(&parameters->ch_layout, layout, sizeof(layout)) >= 0) {
-            signature.channel_layout = layout;
-        }
-#else
-        signature.channels = parameters->channels;
-        signature.channel_layout = std::to_string(parameters->channel_layout);
-#endif
-    }
-    return signature;
-}
-
 bool initializeOutputStream(AVFormatContext* output,
                             const AVStream* input,
                             AVStream*& destination,
@@ -677,6 +634,13 @@ bool muxCopyOnly(const CopyOnlyMuxRequest& request, CopyOnlyMuxResult* result) {
             cleanupPartial();
             return fail(result, "copy-only source video window overflows int64");
         }
+        // A normalized transcode output already lives in the canonical
+        // profile and starts at its own frame zero; a non-zero source_in
+        // would silently trim the encoded segment and must be rejected.
+        if (segment.normalized && segment.source_in_us != 0) {
+            cleanupPartial();
+            return fail(result, "copy-only normalized segment must start at source_in_us 0");
+        }
         packet::InputSession* session = input_sessions.resolve(segment.path, error);
         if (session == nullptr) {
             cleanupPartial();
@@ -689,19 +653,31 @@ bool muxCopyOnly(const CopyOnlyMuxRequest& request, CopyOnlyMuxResult* result) {
             return fail(result, "video stream missing from " + segment.path.string());
         }
         const AVStream* input_video = input.stream(video_index);
+        // A normalized segment is its own complete segment (source_in_us == 0),
+        // so the raw-source "shorter than requested" heuristic does not apply;
+        // the final output-duration validation below still bounds the whole
+        // assembled timeline. Raw copy ranges keep the heuristic so a source
+        // clip that cannot cover its requested trim fails before any write.
         const int64_t source_video_duration = streamDurationUs(input.raw(), input_video);
-        if (source_video_duration > 0 &&
+        if (!segment.normalized &&
+            source_video_duration > 0 &&
             source_video_duration + 50'000 < segment.source_in_us + segment.source_duration_us) {
             cleanupPartial();
             return fail(result, "copy-only video source is shorter than its requested segment");
         }
-        const bool keyframeSafe = session->sourceWindowStartsOnKeyframe(
-            video_index, segment.source_in_us, error);
-        if (!keyframeSafe) {
-            cleanupPartial();
-            return fail(result, error);
+        // A normalized segment starts on a keyframe by construction (a fresh
+        // encode's first frame); only raw source ranges need the keyframe
+        // probe, which never guesses for a non-keyframe cut.
+        bool keyframeSafe = true;
+        if (!segment.normalized) {
+            keyframeSafe = session->sourceWindowStartsOnKeyframe(
+                video_index, segment.source_in_us, error);
+            if (!keyframeSafe) {
+                cleanupPartial();
+                return fail(result, error);
+            }
         }
-        const MediaSignature sourceVideoSignature = mediaSignature(input_video);
+        const MediaSignature sourceVideoSignature = mediaSignatureFromStream(input_video);
         if (streams.video == nullptr) {
             if (!initializeOutputStream(output.get(), input_video, streams.video, error)) {
                 cleanupPartial();
@@ -712,7 +688,7 @@ bool muxCopyOnly(const CopyOnlyMuxRequest& request, CopyOnlyMuxResult* result) {
         videoExecution.source = sourceVideoSignature;
         videoExecution.target = streams.video == nullptr
             ? sourceVideoSignature
-            : mediaSignature(streams.video);
+            : mediaSignatureFromStream(streams.video);
         videoExecution.source_window_keyframe_safe = keyframeSafe;
         const SegmentExecutionDecision videoDecision =
             resolveSegmentExecution(videoExecution);
@@ -736,7 +712,7 @@ bool muxCopyOnly(const CopyOnlyMuxRequest& request, CopyOnlyMuxResult* result) {
                 cleanupPartial();
                 return fail(result, "copy-only segment audio is shorter than its requested segment");
             }
-            const MediaSignature sourceAudioSignature = mediaSignature(input_audio);
+            const MediaSignature sourceAudioSignature = mediaSignatureFromStream(input_audio);
             if (streams.audio == nullptr) {
                 if (!initializeOutputStream(output.get(), input_audio, streams.audio, error)) {
                     cleanupPartial();
@@ -747,7 +723,7 @@ bool muxCopyOnly(const CopyOnlyMuxRequest& request, CopyOnlyMuxResult* result) {
             audioExecution.source = sourceAudioSignature;
             audioExecution.target = streams.audio == nullptr
                 ? sourceAudioSignature
-                : mediaSignature(streams.audio);
+                : mediaSignatureFromStream(streams.audio);
             // Audio has no video keyframe boundary; the source window has
             // already passed the packet-duration checks above.
             audioExecution.source_window_keyframe_safe = true;
@@ -800,7 +776,7 @@ bool muxCopyOnly(const CopyOnlyMuxRequest& request, CopyOnlyMuxResult* result) {
         } else {
             std::string compatibility_reason;
             if (!mediaSignaturesCompatible(
-                    mediaSignature(input_audio), mediaSignature(streams.audio),
+                    mediaSignatureFromStream(input_audio), mediaSignatureFromStream(streams.audio),
                     &compatibility_reason)) {
                 cleanupPartial();
                 return fail(result, "copy-only audio codec parameters are incompatible: " +

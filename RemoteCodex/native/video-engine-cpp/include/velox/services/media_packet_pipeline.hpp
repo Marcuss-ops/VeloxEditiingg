@@ -18,6 +18,14 @@ struct CopyOnlyVideoSegment {
     int64_t source_in_us{0};
     int64_t source_duration_us{0};
     bool include_audio{false};
+    // True when `path` is an already-normalized transcode output produced by
+    // the native FramePipeline in the canonical profile. A normalized segment
+    // starts at its own frame zero (source_in_us must be 0), so the mux
+    // skips the raw-source keyframe and source-duration heuristics and only
+    // enforces the fail-closed canonical-profile compatibility check. This
+    // lets the packet mux act as the final assembler for a mixed render
+    // (PACKET_COPY ranges + NATIVE_TRANSCODE outputs).
+    bool normalized{false};
 };
 
 struct CopyOnlyAudioTrack {
@@ -50,6 +58,12 @@ struct CopyOnlyMuxResult {
 // microsecond timeline, and written through one MP4 muxer. The output is
 // published atomically only after the trailer has been written and the
 // temporary file has been synced.
+//
+// Mixed assembly: a video segment marked `normalized` is an already-encoded
+// native transcode output (source_in_us == 0); such segments skip the
+// raw-source keyframe/duration heuristics but still pass the fail-closed
+// canonical-profile compatibility check, so copy ranges and normalized
+// transcode outputs are concatenated by the same single mux.
 bool muxCopyOnly(const CopyOnlyMuxRequest& request, CopyOnlyMuxResult* result = nullptr);
 
 } // namespace velox::media

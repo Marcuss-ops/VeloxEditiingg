@@ -128,16 +128,20 @@ add_executable(velox_video_engine
     src/services/io_counters.cpp
     src/services/media_probe.cpp
     src/services/media_packet_pipeline.cpp
+    src/services/segment_execution_libav.cpp
     src/services/segment_execution.cpp
     src/services/segment_scheduler.cpp
     src/services/media_utils.cpp
     src/services/frame_pipeline.cpp
+    src/render/frame_graph.cpp
+    src/render/kernel_registry.cpp
     src/audio/audio_plan.cpp
     src/audio/audio_benchmark.cpp
     src/services/ffmpeg_progress_parser.cpp
     src/core/render_engine.cpp
     src/core/render_engine_helpers.cpp
     src/core/execution_plan.cpp
+    src/core/canonical_video_profile.cpp
     src/telemetry/emitter.cpp
 )
 
@@ -217,6 +221,24 @@ endif()
 add_test(NAME execution_plan_tests
          COMMAND velox_execution_plan_tests)
 
+# CanonicalVideoProfileV1: the canonical mixed-renderer output identity and
+# its MediaSignature bridge. Value-only test; no LibAV or media fixture.
+add_executable(velox_canonical_video_profile_tests
+    tests/test_canonical_video_profile.cpp
+    src/core/canonical_video_profile.cpp
+    src/services/segment_execution.cpp
+)
+
+target_include_directories(velox_canonical_video_profile_tests
+    PRIVATE include src include/velox)
+
+if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(velox_canonical_video_profile_tests PRIVATE -O2)
+endif()
+
+add_test(NAME canonical_video_profile_tests
+         COMMAND velox_canonical_video_profile_tests)
+
 # Focused tests for the private render-engine command/parsing helpers.
 add_executable(velox_render_engine_helpers_tests
     tests/test_render_engine_helpers.cpp
@@ -258,10 +280,13 @@ add_executable(velox_audio_timeline_tests
     src/core/render_engine.cpp
     src/core/render_engine_helpers.cpp
     src/services/frame_pipeline.cpp
+    src/render/frame_graph.cpp
+    src/render/kernel_registry.cpp
     src/services/file_utils.cpp
     src/services/io_counters.cpp
     src/services/media_probe.cpp
     src/services/media_packet_pipeline.cpp
+    src/services/segment_execution_libav.cpp
     src/services/segment_execution.cpp
     src/services/segment_scheduler.cpp
     src/services/media_utils.cpp
@@ -291,10 +316,13 @@ add_executable(velox_emitter_tests
     src/core/render_engine.cpp
     src/core/render_engine_helpers.cpp
     src/services/frame_pipeline.cpp
+    src/render/frame_graph.cpp
+    src/render/kernel_registry.cpp
     src/services/file_utils.cpp
     src/services/io_counters.cpp
     src/services/media_probe.cpp
     src/services/media_packet_pipeline.cpp
+    src/services/segment_execution_libav.cpp
     src/services/segment_execution.cpp
     src/services/segment_scheduler.cpp
     src/services/media_utils.cpp
@@ -324,10 +352,13 @@ add_executable(velox_looped_music_tests
     src/core/render_engine.cpp
     src/core/render_engine_helpers.cpp
     src/services/frame_pipeline.cpp
+    src/render/frame_graph.cpp
+    src/render/kernel_registry.cpp
     src/services/file_utils.cpp
     src/services/io_counters.cpp
     src/services/media_probe.cpp
     src/services/media_packet_pipeline.cpp
+    src/services/segment_execution_libav.cpp
     src/services/segment_execution.cpp
     src/services/segment_scheduler.cpp
     src/services/media_utils.cpp
@@ -359,6 +390,7 @@ if(VELOX_ENABLE_LIBAV)
         src/services/io_counters.cpp
         src/services/media_probe.cpp
         src/services/media_packet_pipeline.cpp
+        src/services/segment_execution_libav.cpp
         src/services/segment_execution.cpp
         src/services/segment_scheduler.cpp
         src/services/media_utils.cpp
@@ -385,6 +417,7 @@ if(VELOX_ENABLE_LIBAV)
         src/services/io_counters.cpp
         src/services/media_probe.cpp
         src/services/media_packet_pipeline.cpp
+        src/services/segment_execution_libav.cpp
         src/services/segment_execution.cpp
     )
 
@@ -410,6 +443,7 @@ if(VELOX_ENABLE_LIBAV)
         src/services/io_counters.cpp
         src/services/media_probe.cpp
         src/services/media_packet_pipeline.cpp
+        src/services/segment_execution_libav.cpp
         src/services/segment_execution.cpp
     )
 
@@ -438,10 +472,15 @@ if(VELOX_ENABLE_LIBAV)
         src/core/render_engine.cpp
         src/core/render_engine_helpers.cpp
         src/services/frame_pipeline.cpp
+        src/render/frame_graph.cpp
+        src/render/kernel_registry.cpp
+    src/render/frame_graph.cpp
+    src/render/kernel_registry.cpp
         src/services/file_utils.cpp
         src/services/io_counters.cpp
         src/services/media_probe.cpp
         src/services/media_packet_pipeline.cpp
+        src/services/segment_execution_libav.cpp
         src/services/segment_execution.cpp
         src/services/segment_scheduler.cpp
         src/services/media_utils.cpp
@@ -472,10 +511,15 @@ if(VELOX_ENABLE_LIBAV)
         src/core/render_engine.cpp
         src/core/render_engine_helpers.cpp
         src/services/frame_pipeline.cpp
+        src/render/frame_graph.cpp
+        src/render/kernel_registry.cpp
+    src/render/frame_graph.cpp
+    src/render/kernel_registry.cpp
         src/services/file_utils.cpp
         src/services/io_counters.cpp
         src/services/media_probe.cpp
         src/services/media_packet_pipeline.cpp
+        src/services/segment_execution_libav.cpp
         src/services/segment_execution.cpp
         src/services/segment_scheduler.cpp
         src/services/media_utils.cpp
@@ -500,7 +544,12 @@ if(VELOX_ENABLE_LIBAV)
     add_executable(velox_frame_pipeline_tests
         tests/test_frame_pipeline.cpp
         src/services/frame_pipeline.cpp
+        src/render/frame_graph.cpp
+        src/render/kernel_registry.cpp
+    src/render/frame_graph.cpp
+    src/render/kernel_registry.cpp
         src/services/media_packet_pipeline.cpp
+        src/services/segment_execution_libav.cpp
         src/services/segment_execution.cpp
         src/services/media_probe.cpp
         src/services/file_utils.cpp
