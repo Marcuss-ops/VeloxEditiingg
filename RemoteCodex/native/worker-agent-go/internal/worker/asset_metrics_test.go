@@ -541,7 +541,7 @@ func TestSubmitTaskResultCarriesAttachedAssetOperations(t *testing.T) {
 	attachAssetOperationsToPhaseMarkers(report)
 	pte := &PendingTaskExecution{JobID: "job-report-test", ExecutorID: "scene.composite.v1", LeaseID: "lease-report-test"}
 
-	w.submitTaskResult(context.Background(), pte, "task-report-test", "attempt-report-test", report, nil)
+	wireTestReporter(w, nil).Submit(context.Background(), pte, "task-report-test", "attempt-report-test", report, nil)
 
 	message, ok := transport.last()
 	if !ok || message.Type != controltransport.MsgTaskResult {
@@ -611,7 +611,7 @@ func TestSubmitTaskResult_PhaseTimings(t *testing.T) {
 	}
 	pte := &PendingTaskExecution{JobID: "job-phases-test", ExecutorID: "scene.composite.v1", LeaseID: "lease-phases-test"}
 
-	w.submitTaskResult(context.Background(), pte, "task-phases-test", "attempt-phases-test", report, nil)
+	wireTestReporter(w, nil).Submit(context.Background(), pte, "task-phases-test", "attempt-phases-test", report, nil)
 
 	message, ok := transport.last()
 	if !ok || message.Type != controltransport.MsgTaskResult {
@@ -695,7 +695,7 @@ func TestSubmitTaskResult_PreservesTenDistinctEngineEncodeEventsOnSuccessAndFail
 			}
 			pte := &PendingTaskExecution{JobID: "job-encode-events", ExecutorID: "scene.composite.v1", ExecutorVersion: 1, LeaseID: "lease-encode-events"}
 
-			w.submitTaskResult(context.Background(), pte, "task-encode-events", "attempt-encode-events", report, tc.err)
+			wireTestReporter(w, nil).Submit(context.Background(), pte, "task-encode-events", "attempt-encode-events", report, tc.err)
 
 			message, ok := transport.last()
 			if !ok {
@@ -787,7 +787,7 @@ func TestSubmitTaskResult_FailedRenderPreservesDetailedPhases(t *testing.T) {
 		JobID: "job-failed-phases", ExecutorID: "scene.composite.v1", LeaseID: "lease-failed-phases",
 	}
 
-	w.submitTaskResult(context.Background(), pte, "task-failed-phases", "attempt-failed-phases", report, errors.New("encoder crashed"))
+	wireTestReporter(w, nil).Submit(context.Background(), pte, "task-failed-phases", "attempt-failed-phases", report, errors.New("encoder crashed"))
 
 	message, ok := transport.last()
 	if !ok || message.Type != controltransport.MsgTaskResult {
@@ -856,7 +856,7 @@ func TestSubmitTaskResult_ObservabilitySummaryPhasesReachWire(t *testing.T) {
 	}
 	pte := &PendingTaskExecution{JobID: "job-summary-wire", ExecutorID: "scene.composite.v1", LeaseID: "lease-summary-wire"}
 
-	w.submitTaskResult(context.Background(), pte, "task-summary-wire", "attempt-summary-wire", report, nil)
+	wireTestReporter(w, nil).Submit(context.Background(), pte, "task-summary-wire", "attempt-summary-wire", report, nil)
 
 	message, ok := transport.last()
 	if !ok {
@@ -905,7 +905,7 @@ func TestSubmitTaskResult_FailedReportWithoutExecutionErrorPreservesFailure(t *t
 	}
 	pte := &PendingTaskExecution{JobID: "job-failed-report", ExecutorID: "scene.composite.v1", LeaseID: "lease-failed-report"}
 
-	w.submitTaskResult(context.Background(), pte, "task-failed-report", "attempt-failed-report", report, nil)
+	wireTestReporter(w, nil).Submit(context.Background(), pte, "task-failed-report", "attempt-failed-report", report, nil)
 
 	message, ok := transport.last()
 	if !ok {

@@ -10,8 +10,8 @@ package main
 // structs.
 
 import (
+	"context"
 	"fmt"
-	"log"
 	"strings"
 
 	"velox-server/internal/app"
@@ -20,6 +20,7 @@ import (
 	"velox-server/internal/fleet"
 	"velox-server/internal/fleet/opsalerts"
 	"velox-server/internal/instaeditauth"
+	"velox-server/internal/logging"
 	velmetrics "velox-server/internal/metrics"
 	"velox-server/internal/registry"
 	"velox-server/internal/supervisor"
@@ -95,7 +96,7 @@ func (c *appComponents) close() error {
 		return nil
 	}
 	if err := c.persistence.SQLite.Close(); err != nil {
-		log.Printf("[SERVER] Store close failed: %v", err)
+		logServerf(context.Background(), logging.LevelError, logging.CodeServerLifecycleError, "[SERVER] Store close failed: %v", err)
 		return err
 	}
 	return nil
@@ -158,7 +159,7 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 		return nil, err
 	}
 
-	log.Printf(
+	logServerf(context.Background(), logging.LevelInfo, logging.CodeServerRoutes,
 		"[ROUTES] script dependency state: enqueuer=%t store=%t remote_engine=%t",
 		m != nil && m.Enqueuer != nil,
 		p != nil && p.SQLite != nil,
@@ -184,7 +185,7 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 	}
 	if m != nil && m.ForwardingRunner != nil && resolver != nil {
 		m.ForwardingRunner.SetResolver(resolver)
-		log.Printf("[BOOTSTRAP] CreatorForwardingRunner wired to canonical Resolver (Blocco 5)")
+		logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] CreatorForwardingRunner wired to canonical Resolver (Blocco 5)")
 	}
 
 	// Construct the canonical capability registry here so the
@@ -238,7 +239,7 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 			return nil, fmt.Errorf("bootstrap: instaedit auth verifier: %w", err)
 		}
 		instaeditVerifier = v
-		log.Printf("[BOOTSTRAP] InstaEdit control JWT verifier configured")
+		logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] InstaEdit control JWT verifier configured")
 	}
 
 	var opsAlertsCapability opsalerts.CapabilityStatus
@@ -284,7 +285,7 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 			_ = p.SQLite.Close()
 			return nil, fmt.Errorf("bootstrap: fleet executor registry: %w", err)
 		}
-		log.Printf("[BOOTSTRAP] Fleet executor registry validated: %s", strings.Join(fleetDep.Registry.Kinds(), ", "))
+		logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] Fleet executor registry validated: %s", strings.Join(fleetDep.Registry.Kinds(), ", "))
 	}
 	if fleetDep != nil {
 		if err := registerFleetRunner(supervisor, fleetDep); err != nil {
@@ -292,7 +293,7 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 			return nil, fmt.Errorf("bootstrap: fleet supervisor: %w", err)
 		}
 		fleetDep.tickWiredAtBoot = true
-		log.Printf("[BOOTSTRAP] FleetController wired and supervised (operation ledger tick enabled)")
+		logServerf(context.Background(), logging.LevelInfo, logging.CodeServerSupervisor, "[BOOTSTRAP] FleetController wired and supervised (operation ledger tick enabled)")
 	}
 
 	return &appComponents{

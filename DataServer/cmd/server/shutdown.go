@@ -2,9 +2,10 @@ package main
 
 import (
 	"context"
-	"log"
 	"net/http"
 	"time"
+
+	"velox-server/internal/logging"
 )
 
 // shutdownHTTPServer gracefully shuts down the HTTP server with a
@@ -18,9 +19,9 @@ func shutdownHTTPServer(srv *http.Server, timeout time.Duration) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
-		log.Printf("[SERVER] Graceful shutdown failed: %v", err)
+		logServerf(ctx, logging.LevelError, logging.CodeServerLifecycleError, "[SERVER] Graceful shutdown failed: %v", err)
 	} else {
-		log.Println("[SERVER] HTTP server stopped cleanly")
+		logServerf(ctx, logging.LevelInfo, logging.CodeServerLifecycle, "[SERVER] HTTP server stopped cleanly")
 	}
 }
 
@@ -33,5 +34,5 @@ func shutdownGRPCServer(srv grpcServer) {
 		return
 	}
 	srv.Stop()
-	log.Println("[SERVER] gRPC server stopped")
+	logServerf(context.Background(), logging.LevelInfo, logging.CodeServerLifecycle, "[SERVER] gRPC server stopped")
 }

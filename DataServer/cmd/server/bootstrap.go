@@ -25,7 +25,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -33,6 +32,7 @@ import (
 	"time"
 
 	"velox-server/internal/config"
+	"velox-server/internal/logging"
 	"velox-server/internal/telemetry"
 )
 
@@ -64,7 +64,7 @@ func runServer(cfg *config.Config) error {
 	defer components.close()
 	defer func() {
 		if err := telemetry.Shutdown(context.Background()); err != nil {
-			log.Printf("[SERVER] Telemetry shutdown failed: %v", err)
+			logServerf(context.Background(), logging.LevelError, logging.CodeServerLifecycleError, "[SERVER] Telemetry shutdown failed: %v", err)
 		}
 	}()
 
@@ -75,7 +75,7 @@ func runServer(cfg *config.Config) error {
 
 	registerReadinessChecks(components, transport)
 
-	log.Printf("[BOOTSTRAP] Bootstrap complete — %d modules, %d background runners",
+	logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] Bootstrap complete — %d modules, %d background runners",
 		components.modules.Registry.Len(), components.supervisor.Len())
 	if components.health != nil {
 		components.health.MarkReady()
@@ -111,7 +111,7 @@ func runUntilShutdown(c *appComponents, t *transportBundle) error {
 	go func() {
 		defer close(supervisorDone)
 		if supErr := c.supervisor.Run(bgCtx); supErr != nil {
-			log.Printf("[SERVER] supervisor returned critical error: %v", supErr)
+			logServerf(bgCtx, logging.LevelError, logging.CodeServerSupervisorError, "[SERVER] supervisor returned critical error: %v", supErr)
 			// Buffered chan, capacity 1; non-blocking send so a
 			// double-failure scenario does not deadlock the
 			// supervisor goroutine on shutdown.
@@ -153,21 +153,21 @@ func runUntilShutdown(c *appComponents, t *transportBundle) error {
 		// an error so k8s/systemd restarts the pod.
 		return errors.New("background supervisor exited unexpectedly")
 	case <-quit:
-		log.Println("[SERVER] Shutdown signal received, shutting down gracefully...")
+		logServerf(bgCtx, logging.LevelInfo, logging.CodeServerLifecycle, "[SERVER] Shutdown signal received, shutting down gracefully...")
 	}
 
 	// ── Graceful teardown ───────────────────────────────────────────
 	bgCancel()
-	log.Println("[SERVER] Background goroutines cancelling — waiting for them to exit...")
+	logServerf(bgCtx, logging.LevelInfo, logging.CodeServerLifecycle, "[SERVER] Background goroutines cancelling — waiting for them to exit...")
 
 	select {
 	case <-supervisorDone:
-		log.Println("[SERVER] Background goroutines stopped cleanly")
+		logServerf(bgCtx, logging.LevelInfo, logging.CodeServerLifecycle, "[SERVER] Background goroutines stopped cleanly")
 	case <-time.After(15 * time.Second):
-		log.Printf("[SERVER] background shutdown timed out after 15s — proceeding with teardown anyway")
+		logServerf(bgCtx, logging.LevelWarn, logging.CodeServerLifecycle, "[SERVER] background shutdown timed out after 15s — proceeding with teardown anyway")
 	}
 
 	t.shutdown()
-	log.Println("[SERVER] Server stopped")
+	logServerf(bgCtx, logging.LevelInfo, logging.CodeServerLifecycle, "[SERVER] Server stopped")
 	return nil
 }

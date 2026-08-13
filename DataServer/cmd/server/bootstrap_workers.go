@@ -1,12 +1,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
-	"log"
 
 	"velox-server/internal/config"
 	workerhandlers "velox-server/internal/handlers/remote/workers"
 	"velox-server/internal/handlers/remote/workers/lifecycle"
+	"velox-server/internal/logging"
 	"velox-server/internal/store"
 	workersreg "velox-server/internal/workers"
 )
@@ -44,7 +45,7 @@ func buildWorkers(cfg *config.Config, p *persistenceDeps) (*workerDeps, error) {
 	}
 	revokedCount := len(reg.ListRevoked())
 	if revokedCount > 0 {
-		log.Printf("[BOOTSTRAP] Loaded %d revoked workers from DB", revokedCount)
+		logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] Loaded %d revoked workers from DB", revokedCount)
 	}
 
 	workersRepo := store.NewSQLiteWorkersRepository(p.SQLite)

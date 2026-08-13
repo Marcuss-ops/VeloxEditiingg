@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"velox-shared/controltransport"
-	pb "velox-shared/controltransport/pb"
 	"velox-shared/futureasset"
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/prefetch"
@@ -259,8 +258,6 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		// by MsgTaskLeaseGranted handler (separate PR) so leaseRenewLoop
 		// can fire MsgTaskLeaseRenewal.
 		activeTaskLeases:          make(map[string]*ActiveTaskLease),
-		pendingTaskResultAcks:     make(map[string]chan *pb.TaskResultAck),
-		pendingTaskResultAckCache: make(map[string]taskResultAckCacheEntry),
 		connState:                 ConnDisconnected,
 		concurrencyLimiter:        concurrency.NewConcurrencyLimiter(detectedConcurrency),
 		stageExecutor:             stageExecutor,
@@ -288,6 +285,31 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		storageResolver: storageResolver,
 		exitFunc:        os.Exit,
 	}
+
+	// Compose the reporting subsystem behind its small interface. The
+	// reporter owns the durable TaskResult outbox, the ACK waiter registry,
+	// and the replay loop; the Worker only holds the seam and delegates.
+	// transport is a per-session value (recreated on every reconnect), so the
+	// reporter reads it through an accessor that takes transportMu — never a
+	// captured snapshot.
+	w.reporter = newTaskResultReporter(taskResultReporterConfig{
+		spool: outputSpool,
+		transport: func() controltransport.ControlTransport {
+			w.transportMu.RLock()
+			defer w.transportMu.RUnlock()
+			return w.transport
+		},
+		workerID:  cfg.WorkerID,
+		protocol:  cfg.ProtocolVersion,
+		outputDir: cfg.OutputDir,
+		logger:    log,
+		onTerminal: w.signalTaskTerminal,
+		logArtifact: func(event string, pte *PendingTaskExecution, startedAt time.Time, commitID, artifactID, uploadID string, fields map[string]interface{}) {
+			w.logArtifactProtocol(event, pte, startedAt, commitID, artifactID, uploadID, fields)
+		},
+		wg:       &w.wg,
+		stopChan: w.stopChan,
+	})
 
 	// Load persisted state from previous run (command dedup, job recovery info).
 	w.loadLocalState()

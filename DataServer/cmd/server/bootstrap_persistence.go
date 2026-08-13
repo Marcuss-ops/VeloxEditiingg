@@ -3,11 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
 	"velox-server/internal/config"
+	"velox-server/internal/logging"
 	"velox-server/internal/outbox"
 	"velox-server/internal/platform/database"
 	"velox-server/internal/store"
@@ -64,7 +64,7 @@ func buildPersistence(cfg *config.Config) (*persistenceDeps, error) {
 			_ = handle.DB.Close()
 			return nil, fmt.Errorf("bootstrap: build SQLite store: %w", err)
 		}
-		log.Printf("[BOOTSTRAP] sqlite path=%s schema_mode=%s (driver=%s, migrate_on_start=%t)",
+		logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] sqlite path=%s schema_mode=%s (driver=%s, migrate_on_start=%t)",
 			cfg.Database.DBPath, schemaModeLabel(cfg.Database.MigrateOnStart),
 			database.Driver(strings.ToLower(strings.TrimSpace(cfg.Database.Driver))),
 			cfg.Database.MigrateOnStart)
@@ -90,7 +90,7 @@ func buildPersistence(cfg *config.Config) (*persistenceDeps, error) {
 		// here with AllowNopBlobStoreDev=true, the env is already
 		// confirmed non-production.
 		if cfg.Runtime.AllowNopBlobStoreDev {
-			log.Printf("[BOOTSTRAP] WARNING: VELOX_ALLOW_NOP_BLOBSTORE_DEV=true — using NopBlobStore (DEVELOPMENT ONLY, not safe for production)")
+			logServerf(context.Background(), logging.LevelWarn, logging.CodeServerBootstrapWarn, "[BOOTSTRAP] WARNING: VELOX_ALLOW_NOP_BLOBSTORE_DEV=true — using NopBlobStore (DEVELOPMENT ONLY, not safe for production)")
 			blobStore = store.NewNopBlobStore(cfg.Runtime.DataDir)
 		} else {
 			_ = handle.DB.Close()
@@ -98,7 +98,7 @@ func buildPersistence(cfg *config.Config) (*persistenceDeps, error) {
 				bsErr, cfg.Runtime.StagingDir, cfg.Runtime.StorageDir)
 		}
 	}
-	log.Printf("[BOOTSTRAP] BlobStore ready: staging=%s storage=%s", blobStore.StagingDir(), blobStore.FinalDir())
+	logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] BlobStore ready: staging=%s storage=%s", blobStore.StagingDir(), blobStore.FinalDir())
 
 	// outbox.ProductionRegistry() is the canonical wiring point for
 	// every outbox handler. Built ONCE here so every consumer

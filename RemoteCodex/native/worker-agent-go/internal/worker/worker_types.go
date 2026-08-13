@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"velox-shared/controltransport"
-	pb "velox-shared/controltransport/pb"
 	"velox-worker-agent/internal/artifactgraph"
 	"velox-worker-agent/internal/downloader"
 	"velox-worker-agent/internal/executor"
@@ -277,11 +276,13 @@ type Worker struct {
 	pendingArtifactAcks   map[string]chan controltransport.ControlMessage
 	pendingArtifactAcksMu sync.RWMutex
 
-	// TaskResultAck waiters are separate from artifact protocol replies:
-	// a result may be replayed after the original executeTask returned.
-	pendingTaskResultAcks     map[string]chan *pb.TaskResultAck
-	pendingTaskResultAckCache map[string]taskResultAckCacheEntry
-	pendingTaskResultAcksMu   sync.RWMutex
+	// reporter is the reporting subsystem (durable TaskResult outbox, ACK
+	// waiter registry, replay loop, terminal-output cleanup) composed behind
+	// a small interface. The Worker no longer owns the ACK maps/mutex or the
+	// outbox methods directly; it delegates post-execution reporting to this
+	// seam. Non-nil for every Worker returned by New(); nil only in
+	// hand-built legacy test fixtures that never submit a result.
+	reporter TaskResultReporter
 
 	// Task completion stats for heartbeat reporting.
 	// Wire keys (jobs_completed / jobs_failed) kept for master compatibility.

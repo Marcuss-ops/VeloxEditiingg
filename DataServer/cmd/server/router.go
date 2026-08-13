@@ -1,7 +1,7 @@
 package main
 
 import (
-	"log"
+	"context"
 	"net"
 	"net/http"
 	"strings"
@@ -19,6 +19,7 @@ import (
 	"velox-server/internal/instaeditauth"
 	"velox-server/internal/jobs"
 	"velox-server/internal/jobs/enqueue"
+	"velox-server/internal/logging"
 	velmetrics "velox-server/internal/metrics"
 	"velox-server/internal/performance"
 	"velox-server/internal/store"
@@ -319,6 +320,6 @@ func logRegisteredRoutesAtBoot(r *gin.Engine, cfg *config.Config) {
 		return
 	}
 	for _, route := range r.Routes() {
-		log.Printf("[ROUTE] %s %s", route.Method, route.Path)
+		logServerf(context.Background(), logging.LevelInfo, logging.CodeServerRoutes, "[ROUTE] %s %s", route.Method, route.Path)
 	}
 }

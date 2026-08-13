@@ -12,10 +12,11 @@ package main
 // of silently carrying stale IPs.
 
 import (
+	"context"
 	"fmt"
-	"log"
 
 	"velox-server/internal/fleet"
+	"velox-server/internal/logging"
 	"velox-shared/identity"
 )
 
@@ -44,16 +45,16 @@ func buildWorkerRegistryFromStore(p *persistenceDeps) (*fleet.WorkerRegistry, er
 			entry.WorkerName, _ = worker["worker_name"].(string)
 		}
 		if entry.Host == "" || entry.SSHUser == "" {
-			log.Printf("[BOOTSTRAP] WorkerNodeRegistry: skipping worker %s (missing host or ssh_user)", n.WorkerID)
+			logServerf(context.Background(), logging.LevelWarn, logging.CodeServerBootstrapWarn, "[BOOTSTRAP] WorkerNodeRegistry: skipping worker %s (missing host or ssh_user)", n.WorkerID)
 			continue
 		}
 		if err := reg.AddWorker(entry); err != nil {
-			log.Printf("[BOOTSTRAP] WorkerNodeRegistry: skipping worker %s: %v", n.WorkerID, err)
+			logServerf(context.Background(), logging.LevelWarn, logging.CodeServerBootstrapWarn, "[BOOTSTRAP] WorkerNodeRegistry: skipping worker %s: %v", n.WorkerID, err)
 			continue
 		}
 		added++
 	}
-	log.Printf("[BOOTSTRAP] WorkerNodeRegistry: loaded %d worker nodes from persistent inventory (enabled + mapped)", added)
+	logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] WorkerNodeRegistry: loaded %d worker nodes from persistent inventory (enabled + mapped)", added)
 	return reg, nil
 }
 

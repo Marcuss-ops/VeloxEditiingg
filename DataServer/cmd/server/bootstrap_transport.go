@@ -10,8 +10,8 @@ package main
 // Blocco 4 step #2: extracted from bootstrap.go.
 
 import (
+	"context"
 	"fmt"
-	"log"
 	"net/http"
 	"time"
 
@@ -19,6 +19,7 @@ import (
 
 	"velox-server/internal/config"
 	"velox-server/internal/grpcserver"
+	"velox-server/internal/logging"
 )
 
 // transportBundle owns the running listeners and the single error
@@ -72,18 +73,18 @@ func startTransports(cfg *config.Config, c *appComponents) (*transportBundle, er
 		Handler:           bundle.router,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	log.Printf("[SERVER] Velox master listening on %s", bundle.httpServer.Addr)
+	logServerf(context.Background(), logging.LevelInfo, logging.CodeServerLifecycle, "[SERVER] Velox master listening on %s", bundle.httpServer.Addr)
 
 	go func() {
 		var err error
 		if cfg.Server.TLSCertFile != "" && cfg.Server.TLSKeyFile != "" {
-			log.Printf("[SERVER] TLS enabled (cert: %s, key: %s)", cfg.Server.TLSCertFile, cfg.Server.TLSKeyFile)
+			logServerf(context.Background(), logging.LevelInfo, logging.CodeServerLifecycle, "[SERVER] TLS enabled (cert: %s, key: %s)", cfg.Server.TLSCertFile, cfg.Server.TLSKeyFile)
 			err = bundle.httpServer.ListenAndServeTLS(cfg.Server.TLSCertFile, cfg.Server.TLSKeyFile)
 		} else {
 			err = bundle.httpServer.ListenAndServe()
 		}
 		if err != nil && err != http.ErrServerClosed {
-			log.Printf("[SERVER] Listen error: %v", err)
+			logServerf(context.Background(), logging.LevelError, logging.CodeServerLifecycleError, "[SERVER] Listen error: %v", err)
 		}
 		bundle.errChan <- err
 	}()
@@ -124,7 +125,7 @@ func startTransports(cfg *config.Config, c *appComponents) (*transportBundle, er
 			// register + Job roll-up).
 			if c.tasks.IngestionSvc != nil {
 				grpcHandler.SetIngestionSvc(c.tasks.IngestionSvc)
-				log.Printf("[BOOTSTRAP] installed TaskReportIngestionService on gRPC handler (feat/task-report-ingestion)")
+				logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] installed TaskReportIngestionService on gRPC handler (feat/task-report-ingestion)")
 			}
 			// Fase D: stamp plan_version/plan_sha256 on attempts at claim
 			// time via the canonical master-side RenderPlanCompiler.
@@ -136,21 +137,21 @@ func startTransports(cfg *config.Config, c *appComponents) (*transportBundle, er
 			if c.metricsCollector != nil {
 				grpcHandler.SetResourceSink(c.metricsCollector)
 				grpcHandler.SetPlacementRejectionSink(c.metricsCollector)
-				log.Printf("[BOOTSTRAP] wired metrics collector sinks on gRPC handler (placement + worker resources)")
+				logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] wired metrics collector sinks on gRPC handler (placement + worker resources)")
 			}
 			// VELOX_PLACEMENT_PIN_WORKER_ID operator override: when set,
 			// the matcher emits RejectPlacementPinExcluded for every
 			// non-pinned worker. Powers tests/worker-cert/smoke_one.sh.
 			if cfg.Workers.PlacementPinWorkerID != "" {
 				grpcHandler.SetPlacementPin(cfg.Workers.PlacementPinWorkerID)
-				log.Printf("[BOOTSTRAP] placement pin active: worker_id=%q (VELOX_PLACEMENT_PIN_WORKER_ID)", cfg.Workers.PlacementPinWorkerID)
+				logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] placement pin active: worker_id=%q (VELOX_PLACEMENT_PIN_WORKER_ID)", cfg.Workers.PlacementPinWorkerID)
 			}
 			// Blocco 1 final-wire: wire the canonical capability
 			// registry so the on-the-wire "artifact.commit.v1"
 			// dispatch path can fail-closed via codes.PermissionDenied
 			// before handleArtifactUploaded delegates to artifactSvc.
 			grpcHandler.SetCapabilityRegistry(c.capabilityRegistry)
-			log.Printf("[BOOTSTRAP] wired capability registry (artifact.commit.v1 gate) on gRPC handler")
+			logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] wired capability registry (artifact.commit.v1 gate) on gRPC handler")
 			gs, lis, gerr := grpcserver.StartGRPCServer(
 				cfg.Server.GRPCPort, grpcHandler,
 				cfg.Server.GRPCTLSCertFile, cfg.Server.GRPCTLSKeyFile, cfg.Server.GRPCTLSCAFile,

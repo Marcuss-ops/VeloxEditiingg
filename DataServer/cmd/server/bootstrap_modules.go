@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"time"
 
 	"velox-server/internal/app"
@@ -18,6 +17,7 @@ import (
 	validationhandlers "velox-server/internal/handlers/remote/workers/validation"
 	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/jobs/enqueue"
+	"velox-server/internal/logging"
 	"velox-server/internal/observability"
 	"velox-server/internal/platform/clock"
 	"velox-server/internal/remoteengine"
@@ -355,7 +355,7 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 	// them a clear rename hint at every master boot so the rename
 	// surfaces BEFORE a silent delivery failure.
 	for _, alias := range cfg.Compatibility.RetiredSocialAliases {
-		log.Printf("[BOOTSTRAP][SOCIALCLIENT] WARN legacy alias env detected: %s is RETIRED (PR-15.10) and NOT honored — rename to %s.", alias.Env, alias.Canonical)
+		logServerf(context.Background(), logging.LevelWarn, logging.CodeServerBootstrapWarn, "[BOOTSTRAP][SOCIALCLIENT] WARN legacy alias env detected: %s is RETIRED (PR-15.10) and NOT honored — rename to %s.", alias.Env, alias.Canonical)
 	}
 
 	// Compute the socialclient.Config ONCE here so the Enqueuer validator
@@ -363,7 +363,7 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 	// configuration source (no risk of two reads disagreeing on the env).
 	socialClientCfg := socialclient.ConfigFromRuntime(cfg.Runtime.Social)
 	if err := socialClientCfg.Validate(); err != nil {
-		log.Printf("[BOOTSTRAP] socialclient config invalid: %v — provider will refuse deliveries until fixed", err)
+		logServerf(context.Background(), logging.LevelWarn, logging.CodeServerBootstrapWarn, "[BOOTSTRAP] socialclient config invalid: %v — provider will refuse deliveries until fixed", err)
 	}
 
 	// Wire the Social API boundary as the per-entry destination validator.
@@ -378,7 +378,7 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 	// through to the runner's retry_budget.
 	socialClient := socialclient.New(socialClientCfg)
 	enqueuer.WithSocialValidator(socialClient)
-	log.Printf("[BOOTSTRAP] Enqueuer wired with social destination validator (%s)", socialClientCfg)
+	logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] Enqueuer wired with social destination validator (%s)", socialClientCfg)
 
 	// ── Register modules ────────────────────────────────────────────
 	healthMod := app.NewHealthModule()
@@ -386,13 +386,13 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 	workersModule := app.NewWorkersModule(cfg, w.Registry, w.Lifecycle, w.UpdateHandler, auth, assetSvc, p.BlobStore, driveMod.Service())
 	if p.SQLite != nil {
 		workersModule.SetValidationHandler(validationhandlers.NewHandler(validationhandlers.NewValidationStore(p.SQLite)))
-		log.Printf("[BOOTSTRAP] Worker validation repository and canonical routes wired")
+		logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] Worker validation repository and canonical routes wired")
 		reader := api.NewSQLDBReader(p.SQLite.DB())
 		if reader != nil {
 			workersModule.SetMetricsHandler(api.NewMetricsHandler(reader.Metrics))
 			workersModule.SetSessionsHandler(api.NewSessionsHandler(reader.Sessions))
 			workersModule.SetEventsHandler(api.NewEventsHandler(reader.Events))
-			log.Printf("[BOOTSTRAP] Worker metrics/sessions/events read endpoints registered")
+			logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] Worker metrics/sessions/events read endpoints registered")
 		}
 	}
 	registry.Register(workersModule)
@@ -408,7 +408,7 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 			WithJobInspection(&sqliteJobInspectionAdapter{store: p.SQLite}).
 			WithLiveAttempts(&sqliteLiveAttemptAdapter{store: p.SQLite})
 		registry.Register(observability.NewModule(obsSvc, api.AdminAuthMiddleware(cfg)))
-		log.Printf("[BOOTSTRAP] Observability REST API registered")
+		logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] Observability REST API registered")
 	}
 
 	// ── Delivery runner ─────────────────────────────────────────────
@@ -416,7 +416,7 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 	if driveMod != nil {
 		driveProvider := deliveryProviders.NewDriveProvider(driveMod.Service(), p.BlobStore)
 		deliveryReg.Register(driveProvider)
-		log.Printf("[BOOTSTRAP] Delivery provider registered: drive")
+		logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] Delivery provider registered: drive")
 	}
 
 	// The social_gateway provider is platform-agnostic — it talks to the
@@ -432,14 +432,14 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 	socialGatewayProvider := deliveryProviders.NewSocialGatewayProvider(socialClientCfg)
 	deliveryReg.Register(socialGatewayProvider)
 	deliveryReg.RegisterLegacyPhaseProvider(socialGatewayProvider)
-	log.Printf("[BOOTSTRAP] Delivery provider registered: %s (%s)", socialGatewayProvider.Name(), socialClientCfg)
+	logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] Delivery provider registered: %s (%s)", socialGatewayProvider.Name(), socialClientCfg)
 	if err := deliveryReg.ValidateCredentialContracts(); err != nil {
 		return nil, fmt.Errorf("delivery provider credential contract: %w", err)
 	}
 
 	var deliveryRunner *deliveries.DeliveryRunner
 	if cfg.Runtime.DeliveryDisabled {
-		log.Printf("[BOOTSTRAP] DeliveryRunner disabled by VELOX_DELIVERY_DISABLED")
+		logServerf(context.Background(), logging.LevelWarn, logging.CodeServerBootstrapWarn, "[BOOTSTRAP] DeliveryRunner disabled by VELOX_DELIVERY_DISABLED")
 	} else {
 		deliveryConfig := deliveries.DefaultRunnerConfig()
 		if cfg.Runtime.DeliveryConcurrency > 0 {
@@ -457,10 +457,10 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 		if keys, keyErr := credentials.LoadKeyring(cfg.Runtime.Credentials); keyErr == nil {
 			if vault, vaultErr := credentials.NewVault(p.SQLite, keys); vaultErr == nil {
 				deliveryRunner.WithCredentialVault(vault)
-				log.Printf("[BOOTSTRAP] Delivery credential vault enabled")
+				logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] Delivery credential vault enabled")
 			}
 		} else {
-			log.Printf("[BOOTSTRAP] Delivery credential vault unavailable: %v", keyErr)
+			logServerf(context.Background(), logging.LevelWarn, logging.CodeServerBootstrapWarn, "[BOOTSTRAP] Delivery credential vault unavailable: %v", keyErr)
 		}
 	}
 
@@ -480,7 +480,7 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 			enqueuer,
 			fmt.Sprintf("cf-runner-%d", time.Now().UnixNano()),
 		)
-		log.Printf("[BOOTSTRAP] CreatorForwardingRunner initialized (remote_engine=%s)", cfg.Render.RemoteEngineURL)
+		logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] CreatorForwardingRunner initialized (remote_engine=%s)", cfg.Render.RemoteEngineURL)
 	}
 
 	return &moduleDeps{

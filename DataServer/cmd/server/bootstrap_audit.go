@@ -1,11 +1,12 @@
 package main
 
 import (
-	"log"
+	"context"
 	"path/filepath"
 
 	"velox-server/internal/audit"
 	"velox-server/internal/config"
+	"velox-server/internal/logging"
 )
 
 func runDataLayerAudit(cfg *config.Config) error {
@@ -17,19 +18,19 @@ func runDataLayerAudit(cfg *config.Config) error {
 	auditor := audit.NewDataLayerAuditor(dataDir, secretsDir, cfg.Database.DBPath)
 	result := auditor.Audit()
 	if !result.Passed {
-		log.Printf("[AUDIT] Data layer audit FAILED with %d errors", len(result.Errors))
+		logServerf(context.Background(), logging.LevelError, logging.CodeServerAuditError, "[AUDIT] Data layer audit FAILED with %d errors", len(result.Errors))
 		for _, e := range result.Errors {
-			log.Printf("[AUDIT] ERROR: %s", e)
+			logServerf(context.Background(), logging.LevelError, logging.CodeServerAuditError, "[AUDIT] ERROR: %s", e)
 		}
 		return result.FailOnError()
 	}
 	if len(result.Warnings) > 0 {
-		log.Printf("[AUDIT] Data layer audit passed with %d warnings", len(result.Warnings))
+		logServerf(context.Background(), logging.LevelWarn, logging.CodeServerAuditWarn, "[AUDIT] Data layer audit passed with %d warnings", len(result.Warnings))
 		for _, w := range result.Warnings {
-			log.Printf("[AUDIT] WARNING: %s", w)
+			logServerf(context.Background(), logging.LevelWarn, logging.CodeServerAuditWarn, "[AUDIT] WARNING: %s", w)
 		}
 	} else {
-		log.Printf("[AUDIT] Data layer audit PASSED")
+		logServerf(context.Background(), logging.LevelInfo, logging.CodeServerAudit, "[AUDIT] Data layer audit PASSED")
 	}
 	return nil
 }

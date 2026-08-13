@@ -48,12 +48,11 @@ func TestExecuteTask_SignalsCleanupOnlyAfterTaskResultAck(t *testing.T) {
 
 	w, _ := newDispatchTestWorker(t)
 	w.outputSpool = store
-	w.pendingTaskResultAcks = make(map[string]chan *pb.TaskResultAck)
-	w.pendingTaskResultAckCache = make(map[string]taskResultAckCacheEntry)
 	ackTransport := &terminalAckTransport{}
 	ackTransport.worker = w
 	w.transport = ackTransport
 	w.jobDone = make(chan struct{}, 1)
+	wireTestReporter(w, store)
 
 	pte := &PendingTaskExecution{
 		TaskID:          "task-terminal-ack",
@@ -92,7 +91,7 @@ func TestSubmitTaskResult_WithoutSpoolDoesNotSignalCleanup(t *testing.T) {
 		AttemptID: "attempt-legacy-send",
 		LeaseID:   "lease-legacy-send",
 	}
-	w.submitTaskResult(context.Background(), pte, pte.TaskID, pte.AttemptID, nil, nil)
+	w.reporter.Submit(context.Background(), pte, pte.TaskID, pte.AttemptID, nil, nil)
 	if _, ok := transport.last(); !ok {
 		t.Fatal("legacy direct TaskResult was not sent")
 	}
@@ -110,12 +109,11 @@ func TestHandleTaskResultAck_LateAckSignalsCleanup(t *testing.T) {
 	}
 	defer store.Close()
 	w := &Worker{
-		logger:                    logger.New(logger.InfoLevel, io.Discard),
-		outputSpool:               store,
-		jobDone:                   make(chan struct{}, 1),
-		pendingTaskResultAcks:     make(map[string]chan *pb.TaskResultAck),
-		pendingTaskResultAckCache: make(map[string]taskResultAckCacheEntry),
+		logger:      logger.New(logger.InfoLevel, io.Discard),
+		outputSpool: store,
+		jobDone:     make(chan struct{}, 1),
 	}
+	rep := wireTestReporter(w, store)
 	payload, err := proto.Marshal(&pb.TaskResult{TaskId: "task-late", JobId: "job-late", AttemptId: "attempt-late", ReportHash: "hash-late"})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -123,7 +121,7 @@ func TestHandleTaskResultAck_LateAckSignalsCleanup(t *testing.T) {
 	if err := store.UpsertTaskResult(context.Background(), "task-late", "attempt-late", "hash-late", payload); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
-	w.handleTaskResultAck(&pb.TaskResultAck{TaskId: "task-late", JobId: "job-late", AttemptId: "attempt-late"})
+	rep.HandleAck(&pb.TaskResultAck{TaskId: "task-late", JobId: "job-late", AttemptId: "attempt-late"})
 	select {
 	case <-w.JobDone():
 	case <-time.After(time.Second):
@@ -184,10 +182,9 @@ func TestHandleTaskResultAck_CleansCommittedRenderOutputAfterTerminalAck(t *test
 	w := &Worker{
 		config: &config.WorkerConfig{WorkerID: "worker-output-cleanup", OutputDir: outputDir},
 		logger: logger.New(logger.InfoLevel, io.Discard), outputSpool: store,
-		pendingTaskResultAcks:     make(map[string]chan *pb.TaskResultAck),
-		pendingTaskResultAckCache: make(map[string]taskResultAckCacheEntry),
 	}
-	w.handleTaskResultAck(&pb.TaskResultAck{
+	rep := wireTestReporter(w, store)
+	rep.HandleAck(&pb.TaskResultAck{
 		TaskId: "task-output-cleanup", JobId: "job-output-cleanup",
 		AttemptId: "attempt-output-cleanup",
 	})
@@ -227,7 +224,7 @@ func (t *terminalAckTransport) Send(_ context.Context, msg controltransport.Cont
 	if !ok || result == nil {
 		return nil
 	}
-	t.worker.handleTaskResultAck(&pb.TaskResultAck{
+	t.worker.reporter.HandleAck(&pb.TaskResultAck{
 		TaskId:    result.GetTaskId(),
 		JobId:     result.GetJobId(),
 		AttemptId: result.GetAttemptId(),

@@ -162,7 +162,7 @@ func TestSubmitTaskResult_LogsTerminalBoundary(t *testing.T) {
 		LeaseID:   "lease-result-log-test",
 	}
 
-	w.submitTaskResult(context.Background(), pte, pte.TaskID, pte.AttemptID, nil, nil)
+	wireTestReporter(w, nil).Submit(context.Background(), pte, pte.TaskID, pte.AttemptID, nil, nil)
 
 	event := decodeProtocolEvent(t, output.String())
 	if event["event"] != "TASK_RESULT_SENT" {

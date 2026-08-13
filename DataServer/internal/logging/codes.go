@@ -255,6 +255,28 @@ const (
 	CodeGRPCMetricsDerivation      = "GRPC_METRICS_DERIVATION"
 )
 
+// cmd/server bootstrap + lifecycle (replaces log.Printf in cmd/server)
+const (
+	CodeServerBootstrap       = "SERVER_BOOTSTRAP"
+	CodeServerBootstrapWarn   = "SERVER_BOOTSTRAP_WARN"
+	CodeServerLifecycle       = "SERVER_LIFECYCLE"
+	CodeServerLifecycleError  = "SERVER_LIFECYCLE_ERROR"
+	CodeServerSupervisor      = "SERVER_SUPERVISOR"
+	CodeServerSupervisorWarn  = "SERVER_SUPERVISOR_WARN"
+	CodeServerSupervisorError = "SERVER_SUPERVISOR_ERROR"
+	CodeServerCapability      = "SERVER_CAPABILITY"
+	CodeServerCapabilityWarn  = "SERVER_CAPABILITY_WARN"
+	CodeServerRoutes          = "SERVER_ROUTES"
+	CodeServerMetrics         = "SERVER_METRICS"
+	CodeServerMetricsWarn     = "SERVER_METRICS_WARN"
+	CodeServerAudit           = "SERVER_AUDIT"
+	CodeServerAuditWarn       = "SERVER_AUDIT_WARN"
+	CodeServerAuditError      = "SERVER_AUDIT_ERROR"
+	CodeServerHTTP            = "SERVER_HTTP"
+	CodeServerSmoke           = "SERVER_SMOKE"
+	CodeServerTaskgraph       = "SERVER_TASKGRAPH"
+)
+
 // Level constants
 const (
 	LevelInfo  = "INFO"
@@ -476,6 +498,26 @@ var codeDescriptions = map[string]string{
 	CodeGRPCArtifactProtocolLog:    "Artifact protocol log",
 	CodeGRPCRegistryBridge:         "Worker registry bridge event",
 	CodeGRPCMetricsDerivation:      "Worker metrics derivation fallback",
+
+	// cmd/server bootstrap + lifecycle.
+	CodeServerBootstrap:       "Server bootstrap event",
+	CodeServerBootstrapWarn:   "Server bootstrap warning",
+	CodeServerLifecycle:       "Server lifecycle event",
+	CodeServerLifecycleError:  "Server lifecycle error",
+	CodeServerSupervisor:      "Supervisor/runner started",
+	CodeServerSupervisorWarn:  "Supervisor warning",
+	CodeServerSupervisorError: "Supervisor error",
+	CodeServerCapability:      "Capability wiring event",
+	CodeServerCapabilityWarn:  "Capability wiring warning",
+	CodeServerRoutes:          "Route wiring event",
+	CodeServerMetrics:         "Metrics snapshot event",
+	CodeServerMetricsWarn:     "Metrics snapshot warning",
+	CodeServerAudit:           "Data layer audit event",
+	CodeServerAuditWarn:       "Data layer audit warning",
+	CodeServerAuditError:      "Data layer audit error",
+	CodeServerHTTP:            "HTTP request log",
+	CodeServerSmoke:           "Smoke test event",
+	CodeServerTaskgraph:       "Taskgraph tick event",
 }
 
 // GetDescription returns the human-readable description for a code

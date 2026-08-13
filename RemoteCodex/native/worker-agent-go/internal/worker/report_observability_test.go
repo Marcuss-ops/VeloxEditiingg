@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"velox-worker-agent/internal/taskrunner"
-	"velox-worker-agent/pkg/config"
 )
 
 func TestAttachWorkerIdentityAndTimingsSplitsAudioWithoutFabrication(t *testing.T) {
@@ -28,9 +27,7 @@ func TestAttachWorkerIdentityAndTimingsSplitsAudioWithoutFabrication(t *testing.
 			{Component: "engine.mux", Action: "audio", Phase: "encode", DurationMS: 300},
 		},
 	}
-	w := &Worker{config: &config.WorkerConfig{WorkerID: "worker-01"}}
-
-	attachWorkerIdentityAndTimings(w, report)
+	attachWorkerIdentityAndTimings("worker-01", report)
 	timings, ok := report.Metrics["timings_ms"].(map[string]float64)
 	if !ok {
 		t.Fatalf("timings_ms = %#v, want canonical timing map", report.Metrics["timings_ms"])

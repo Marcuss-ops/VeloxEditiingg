@@ -357,7 +357,7 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 					w.logger.Warn("[RECEIVE] TaskResultAck without typed payload")
 					continue
 				}
-				w.handleTaskResultAck(ack)
+				w.reporter.HandleAck(ack)
 
 			case controltransport.MsgArtifactUploadPlan, controltransport.MsgTaskCommitAck:
 				// Artifact Commit Protocol v1 (Fase 3.4 / 3.6) —

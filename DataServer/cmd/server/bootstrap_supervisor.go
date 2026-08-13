@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"time"
 
 	"velox-server/internal/alertengine"
@@ -15,6 +14,7 @@ import (
 	"velox-server/internal/fleet"
 	"velox-server/internal/fleet/opsalerts"
 	"velox-server/internal/handlers/server/api"
+	"velox-server/internal/logging"
 	velmetrics "velox-server/internal/metrics"
 	"velox-server/internal/protectedasset"
 	"velox-server/internal/reconcile"
@@ -30,7 +30,7 @@ import (
 func registerOpsAlertsSupervisor(sup *supervisor.Supervisor, store opsalerts.AlertStore, source opsalerts.WorkerAlertsDataSource, policy supervisor.RestartPolicy, metricsSink opsalerts.WorkerEvaluationErrorSink, runtimeMetrics ...runtimealerts.ErrorMetrics) (opsalerts.CapabilityStatus, error) {
 	if !opsalerts.DataSourceConfigured(source) {
 		status := opsalerts.DisabledStatus("worker datasource is not wired")
-		log.Printf("[FLEET-ALERTS] capability=%s: %s; alerts-supervisor and alert routes are disabled", status.State, status.Reason)
+		logServerf(context.Background(), logging.LevelInfo, logging.CodeServerCapability, "[FLEET-ALERTS] capability=%s: %s; alerts-supervisor and alert routes are disabled", status.State, status.Reason)
 		return status, nil
 	}
 	engine, err := opsalerts.NewEngine(store, source)
@@ -85,10 +85,10 @@ func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDep
 		RestartOnPanic: true,
 	}
 	if criticalMaxRetries > 0 {
-		log.Printf("[SUPERVISOR] critical retry budget: max_retries=%d (fail-loud after that many consecutive failures); fail_after=%d (log-WARN threshold)",
+		logServerf(context.Background(), logging.LevelInfo, logging.CodeServerSupervisor, "[SUPERVISOR] critical retry budget: max_retries=%d (fail-loud after that many consecutive failures); fail_after=%d (log-WARN threshold)",
 			criticalMaxRetries, criticalFailAfter)
 	} else {
-		log.Printf("[SUPERVISOR] critical retry budget: infinite (legacy 0=infinite); fail_after=%d (log-WARN threshold)",
+		logServerf(context.Background(), logging.LevelInfo, logging.CodeServerSupervisor, "[SUPERVISOR] critical retry budget: infinite (legacy 0=infinite); fail_after=%d (log-WARN threshold)",
 			criticalFailAfter)
 	}
 	restartablePolicy := supervisor.RestartPolicy{
@@ -107,12 +107,12 @@ func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDep
 		svc := protectedasset.NewService(protectedasset.RepoFunc(func(ctx context.Context, limit int) ([]dispatchable.Job, error) {
 			return dispatchable.ListNextDispatchableJobs(ctx, p.SQLite.DB(), limit)
 		}), env.ProtectedAssetLookaheadJobs).SetVersionSeed(uint64(time.Now().UnixNano())).WithErrorHandler(func(err error) {
-			log.Printf("[CACHE-SNAPSHOT] refresh failed: %v", err)
+			logServerf(context.Background(), logging.LevelError, logging.CodeServerSupervisorError, "[CACHE-SNAPSHOT] refresh failed: %v", err)
 		})
 		if err := svc.Refresh(context.Background()); err != nil {
-			log.Printf("[CACHE-SNAPSHOT] initial refresh unavailable; worker cleanup remains fail-safe: %v", err)
+			logServerf(context.Background(), logging.LevelWarn, logging.CodeServerSupervisorWarn, "[CACHE-SNAPSHOT] initial refresh unavailable; worker cleanup remains fail-safe: %v", err)
 		} else {
-			log.Printf("[CACHE-SNAPSHOT] initial snapshot ready: version=%d protected=%d lookahead=%d", svc.Snapshot().Version, len(svc.Snapshot().ProtectedAssetKeys), env.ProtectedAssetLookaheadJobs)
+			logServerf(context.Background(), logging.LevelInfo, logging.CodeServerSupervisor, "[CACHE-SNAPSHOT] initial snapshot ready: version=%d protected=%d lookahead=%d", svc.Snapshot().Version, len(svc.Snapshot().ProtectedAssetKeys), env.ProtectedAssetLookaheadJobs)
 		}
 		m.Workers.SetProtectedAssetsHandler(api.NewProtectedAssetsHandler(svc))
 		if err := sup.Register(supervisor.Runner{
@@ -134,7 +134,7 @@ func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDep
 			Class:  supervisor.ClassCritical,
 			Policy: criticalPolicy,
 			Run: func(ctx context.Context) error {
-				log.Printf("[BOOTSTRAP] Outbox dispatcher started — polling outbox_events")
+				logServerf(ctx, logging.LevelInfo, logging.CodeServerSupervisor, "[BOOTSTRAP] Outbox dispatcher started — polling outbox_events")
 				return a.OutboxDispatcher.Run(ctx)
 			},
 		}); err != nil {
@@ -147,7 +147,7 @@ func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDep
 			Class:  supervisor.ClassCritical,
 			Policy: criticalPolicy,
 			Run: func(ctx context.Context) error {
-				log.Printf("[BOOTSTRAP] DeliveryRunner started — polling PENDING job_deliveries")
+				logServerf(ctx, logging.LevelInfo, logging.CodeServerSupervisor, "[BOOTSTRAP] DeliveryRunner started — polling PENDING job_deliveries")
 				return m.DeliveryRunner.Run(ctx)
 			},
 		}); err != nil {
@@ -160,7 +160,7 @@ func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDep
 			Class:  supervisor.ClassCritical,
 			Policy: criticalPolicy,
 			Run: func(ctx context.Context) error {
-				log.Printf("[BOOTSTRAP] CreatorForwardingRunner started — polling creator_forwardings")
+				logServerf(ctx, logging.LevelInfo, logging.CodeServerSupervisor, "[BOOTSTRAP] CreatorForwardingRunner started — polling creator_forwardings")
 				return m.ForwardingRunner.Run(ctx)
 			},
 		}); err != nil {
@@ -187,7 +187,7 @@ func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDep
 			Class:  supervisor.ClassRestartable,
 			Policy: restartablePolicy,
 			Run: func(ctx context.Context) error {
-				log.Printf("[BOOTSTRAP] media probe worker started (dedicated pool)")
+				logServerf(ctx, logging.LevelInfo, logging.CodeServerSupervisor, "[BOOTSTRAP] media probe worker started (dedicated pool)")
 				return a.MediaProbeWorker.Run(ctx)
 			},
 		}); err != nil {
@@ -200,7 +200,7 @@ func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDep
 			Class:  supervisor.ClassRestartable,
 			Policy: restartablePolicy,
 			Run: func(ctx context.Context) error {
-				log.Printf("[BOOTSTRAP] artifacts.Reconciler started (4 rules; tick=%s)", cfg.Runtime.Scheduler.ArtifactReconcileInterval)
+				logServerf(ctx, logging.LevelInfo, logging.CodeServerSupervisor, "[BOOTSTRAP] artifacts.Reconciler started (4 rules; tick=%s)", cfg.Runtime.Scheduler.ArtifactReconcileInterval)
 				a.Reconciler.Run(ctx, cfg.Runtime.Scheduler.ArtifactReconcileInterval)
 				return nil
 			},
@@ -223,11 +223,11 @@ func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDep
 					case <-ticker.C:
 						n, err := t.TaskLifecycle.TickReadiness(ctx, 100)
 						if err != nil {
-							log.Printf("[TASKGRAPH] TickReadiness error: %v", err)
+							logServerf(ctx, logging.LevelError, logging.CodeServerTaskgraph, "[TASKGRAPH] TickReadiness error: %v", err)
 							return err
 						}
 						if n > 0 {
-							log.Printf("[TASKGRAPH] TickReadiness: %d PENDING→READY", n)
+							logServerf(ctx, logging.LevelInfo, logging.CodeServerTaskgraph, "[TASKGRAPH] TickReadiness: %d PENDING→READY", n)
 						}
 					}
 				}
@@ -258,7 +258,7 @@ func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDep
 		if err != nil {
 			return nil, fmt.Errorf("reconciliation-supervisor: %w", err)
 		}
-		log.Printf("[BOOTSTRAP] reconciliation-supervisor started (entries=%v; tick=%s; stale_limit=%d)", registry.Names(), cfg.Runtime.Scheduler.ReconciliationTick, cfg.Runtime.Scheduler.StaleExecutionLimit)
+		logServerf(context.Background(), logging.LevelInfo, logging.CodeServerSupervisor, "[BOOTSTRAP] reconciliation-supervisor started (entries=%v; tick=%s; stale_limit=%d)", registry.Names(), cfg.Runtime.Scheduler.ReconciliationTick, cfg.Runtime.Scheduler.StaleExecutionLimit)
 		if err := sup.Register(supervisor.Runner{
 			Name:   "reconciliation-supervisor",
 			Class:  supervisor.ClassRestartable,
@@ -376,17 +376,17 @@ func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDep
 			Run: func(ctx context.Context) error {
 				ticker := time.NewTicker(cfg.Runtime.Scheduler.MetricsSnapshotInterval)
 				defer ticker.Stop()
-				log.Printf("[FLEET-METRICS] metrics-snapshot-supervisor started (5min tick; computes 13-metric rollup per worker from worker_metric_samples + fleet_operations + smoke_runs + deployment_records)")
+				logServerf(ctx, logging.LevelInfo, logging.CodeServerMetrics, "[FLEET-METRICS] metrics-snapshot-supervisor started (5min tick; computes 13-metric rollup per worker from worker_metric_samples + fleet_operations + smoke_runs + deployment_records)")
 				persist := func() {
 					tickCtx, cancel := context.WithTimeout(ctx, fleet.WorkerMetricsSnapshotTickBudget)
 					defer cancel()
 					ds := fleet.WorkerMetricsAggregatorDataSource{Store: p.SQLite}
 					n, err := fleet.ComputeAndPersistSnapshot(tickCtx, ds, time.Now().UTC())
 					if err != nil {
-						log.Printf("[FLEET-METRICS] snapshot tick partial/failed: persisted=%d err=%v", n, err)
+						logServerf(ctx, logging.LevelWarn, logging.CodeServerMetricsWarn, "[FLEET-METRICS] snapshot tick partial/failed: persisted=%d err=%v", n, err)
 						return
 					}
-					log.Printf("[FETCH-METRICS] ticked: persisted %d worker snapshots", n)
+					logServerf(ctx, logging.LevelInfo, logging.CodeServerMetrics, "[FETCH-METRICS] ticked: persisted %d worker snapshots", n)
 				}
 				persist()
 				for {
@@ -415,7 +415,7 @@ func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDep
 		if opsAlertsCapability != nil {
 			*opsAlertsCapability = status
 		}
-		log.Printf("[BOOTSTRAP] opsalerts capability=%s", status.State)
+		logServerf(context.Background(), logging.LevelInfo, logging.CodeServerCapability, "[BOOTSTRAP] opsalerts capability=%s", status.State)
 	}
 
 	// ── ClassOneShot ─────────────────────────────────────────────────
@@ -429,7 +429,7 @@ func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDep
 			Class: supervisor.ClassOneShot,
 			Run: func(_ context.Context) error {
 				if err := w.UpdateHandler.GenerateManifestV2(); err != nil {
-					log.Printf("[BOOTSTRAP] Manifest auto-generation skipped: %v", err)
+					logServerf(context.Background(), logging.LevelWarn, logging.CodeServerSupervisorWarn, "[BOOTSTRAP] Manifest auto-generation skipped: %v", err)
 				}
 				// Always returns nil — manifest failure is never fatal.
 				return nil

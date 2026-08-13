@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	instaedithandler "velox-server/internal/handlers/server/instaedit"
 	"velox-server/internal/handlers/server/pipeline"
 	scripthandlers "velox-server/internal/handlers/server/script"
+	"velox-server/internal/logging"
 	velmetrics "velox-server/internal/metrics"
 	"velox-server/internal/store"
 )
@@ -41,7 +43,7 @@ func registerInstaEditRoutes(r *gin.Engine, deps InstaEditRouteDeps) error {
 		}).RegisterInternalCallbackRoute(r)
 	}
 	if deps.Verifier == nil {
-		log.Printf("[ROUTES] InstaEdit BFF routes skipped: verifier=nil (INSTAEDIT_CONTROL_JWT_SECRET not configured)")
+		logServerf(context.Background(), logging.LevelInfo, logging.CodeServerRoutes, "[ROUTES] InstaEdit BFF routes skipped: verifier=nil (INSTAEDIT_CONTROL_JWT_SECRET not configured)")
 		return nil
 	}
 	if deps.Service == nil {
@@ -59,7 +61,7 @@ func registerInstaEditRoutes(r *gin.Engine, deps InstaEditRouteDeps) error {
 // it returns silently when its bundle is empty.
 func registerScriptRoutes(r *gin.Engine, deps ScriptRouteDeps) {
 	if deps.Enqueuer == nil {
-		log.Printf("[ROUTES] script routes skipped: enqueuer=false store=%t", deps.SQLiteStore != nil)
+		logServerf(context.Background(), logging.LevelInfo, logging.CodeServerRoutes, "[ROUTES] script routes skipped: enqueuer=false store=%t", deps.SQLiteStore != nil)
 		return
 	}
 
@@ -202,7 +204,7 @@ func registerMetricsRoutes(r *gin.Engine, deps MetricsRouteDeps) {
 // what happened).
 func registerM2MAdminRoutes(r *gin.Engine, auth gin.HandlerFunc, st *store.SQLiteStore) {
 	if st == nil {
-		log.Printf("[ROUTES] M2M admin routes skipped: store=nil")
+		logServerf(context.Background(), logging.LevelInfo, logging.CodeServerRoutes, "[ROUTES] M2M admin routes skipped: store=nil")
 		return
 	}
 	if auth == nil {
@@ -214,7 +216,7 @@ func registerM2MAdminRoutes(r *gin.Engine, auth gin.HandlerFunc, st *store.SQLit
 	admin.GET("/keys/:client_id", api.GetM2MKey(st))
 	admin.DELETE("/keys/:client_id", api.DisableM2MKey(st))
 	admin.GET("/audit", api.ListM2MAudit(st))
-	log.Printf("[ROUTES] M2M admin routes mounted under /api/v1/admin/m2m")
+	logServerf(context.Background(), logging.LevelInfo, logging.CodeServerRoutes, "[ROUTES] M2M admin routes mounted under /api/v1/admin/m2m")
 }
 
 // registerFleetOperationsRoutes mounts the fleet-operator audit
@@ -229,7 +231,7 @@ func registerM2MAdminRoutes(r *gin.Engine, auth gin.HandlerFunc, st *store.SQLit
 // operator's VELOX_ADMIN_TOKEN).
 func registerFleetOperationsRoutes(r *gin.Engine, auth gin.HandlerFunc, deps FleetRouteDeps) {
 	if deps.Handler == nil {
-		log.Printf("[ROUTES] fleet operations audit routes skipped: handler=nil (FleetController not wired at this boot)")
+		logServerf(context.Background(), logging.LevelInfo, logging.CodeServerRoutes, "[ROUTES] fleet operations audit routes skipped: handler=nil (FleetController not wired at this boot)")
 		return
 	}
 	if auth == nil {
@@ -238,5 +240,5 @@ func registerFleetOperationsRoutes(r *gin.Engine, auth gin.HandlerFunc, deps Fle
 	adminOps := r.Group("/api/v1/admin/operations", auth)
 	adminOps.GET("", deps.Handler.ListAdminOperations())
 	adminOps.GET("/:operation_id", deps.Handler.GetAdminOperation())
-	log.Printf("[ROUTES] Fleet operations audit routes mounted under /api/v1/admin/operations")
+	logServerf(context.Background(), logging.LevelInfo, logging.CodeServerRoutes, "[ROUTES] Fleet operations audit routes mounted under /api/v1/admin/operations")
 }

@@ -1,18 +1,19 @@
 package main
 
 import (
+	"context"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
+	"velox-server/internal/logging"
 	velmetrics "velox-server/internal/metrics"
 )
 
 func configureTrustedProxies(r *gin.Engine) {
 	if err := r.SetTrustedProxies([]string{"127.0.0.1", "::1"}); err != nil {
-		log.Printf("bootstrap: SetTrustedProxies failed: %v", err)
+		logServerf(context.Background(), logging.LevelWarn, logging.CodeServerBootstrapWarn, "bootstrap: SetTrustedProxies failed: %v", err)
 	}
 }
 
@@ -29,7 +30,7 @@ func accessLogMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
 		c.Next()
-		log.Printf("%s %s %d %s", c.Request.Method, c.Request.URL.Path, c.Writer.Status(), time.Since(start))
+		logServerf(c.Request.Context(), logging.LevelInfo, logging.CodeServerHTTP, "%s %s %d %s", c.Request.Method, c.Request.URL.Path, c.Writer.Status(), time.Since(start))
 	}
 }
 

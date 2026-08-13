@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -36,7 +37,7 @@ func main() {
 	// Emit the build identity early so operators see it in
 	// `docker logs` / `journalctl` regardless of where the binary
 	// actually listens. Cheap; no side effects.
-	log.Printf("velox-server %s (built %s)", Version, BuildTime)
+	logServerf(context.Background(), logging.LevelInfo, logging.CodeServerLifecycle, "velox-server %s (built %s)", Version, BuildTime)
 
 	// Capture the optional .env file and process environment exactly once.
 	// The raw snapshot carries source provenance into the typed Config, while
@@ -46,7 +47,7 @@ func main() {
 		var rawErr error
 		raw, rawErr = config.RawConfigFromEnvFile(envPath)
 		if rawErr != nil {
-			log.Printf("[BOOTSTRAP] WARNING: failed to load env file %s: %v", envPath, rawErr)
+			logServerf(context.Background(), logging.LevelWarn, logging.CodeServerBootstrapWarn, "[BOOTSTRAP] WARNING: failed to load env file %s: %v", envPath, rawErr)
 			raw = config.RawConfigFromEnv()
 		}
 	} else {
@@ -67,9 +68,9 @@ func main() {
 		log.Fatalf("telemetry configuration failed: %v", err)
 	}
 	if snapshot, snapshotErr := cfg.SnapshotJSON(); snapshotErr != nil {
-		log.Printf("[BOOTSTRAP] WARNING: config snapshot unavailable: %v", snapshotErr)
+		logServerf(context.Background(), logging.LevelWarn, logging.CodeServerBootstrapWarn, "[BOOTSTRAP] WARNING: config snapshot unavailable: %v", snapshotErr)
 	} else {
-		log.Printf("[BOOTSTRAP] config snapshot: %s", snapshot)
+		logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] config snapshot: %s", snapshot)
 	}
 	args := os.Args[1:]
 

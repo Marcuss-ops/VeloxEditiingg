@@ -10,10 +10,10 @@ package main
 
 import (
 	"context"
-	"log"
 
 	voiceoverassets "velox-server/internal/assets"
 	"velox-server/internal/grpcserver"
+	"velox-server/internal/logging"
 	"velox-server/internal/renderplan"
 )
 
@@ -62,5 +62,5 @@ func wireRenderPlanCompiler(grpcHandler *grpcserver.Handler, c *appComponents) {
 	grpcHandler.SetRenderPlanCompiler(renderplan.NewCompiler(renderplan.Options{
 		MetadataResolver: &assetMetadataResolver{svc: c.modules.AssetService},
 	}))
-	log.Printf("[BOOTSTRAP] wired RenderPlanCompiler (Fase D) on gRPC handler (plan_sha256 stamped at claim)")
+	logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] wired RenderPlanCompiler (Fase D) on gRPC handler (plan_sha256 stamped at claim)")
 }

@@ -177,6 +177,10 @@ func newDispatchTestWorker(t *testing.T) (*Worker, *recordingTransport) {
 		concurrencyLimiter: concurrency.NewConcurrencyLimiter(1),
 		version:            "test",
 	}
+	// executeTask submits through the reporter; wire the legacy direct-send
+	// reporter (nil spool) so end-to-end dispatch tests keep the historical
+	// TaskResult-on-recording-transport behaviour.
+	wireTestReporter(w, nil)
 	return w, rt
 }
 
@@ -507,6 +511,7 @@ func TestExecuteTask_UploadsOutputBeforeSubmittingTaskResult(t *testing.T) {
 		concurrencyLimiter: concurrency.NewConcurrencyLimiter(1),
 		version:            "test",
 	}
+	wireTestReporter(w, nil)
 
 	pte := &PendingTaskExecution{
 		TaskID:          "task-upload-001",
@@ -586,6 +591,7 @@ func TestExecuteTask_FailsTaskWhenUploadFails(t *testing.T) {
 		concurrencyLimiter: concurrency.NewConcurrencyLimiter(1),
 		version:            "test",
 	}
+	wireTestReporter(w, nil)
 
 	pte := &PendingTaskExecution{
 		TaskID:          "task-upload-fail-001",

@@ -190,7 +190,7 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 
 	ackStartTime := time.Now()
 
-	w.submitTaskResult(submitCtx, pte, taskID, attemptID, report, execErr)
+	w.reporter.Submit(submitCtx, pte, taskID, attemptID, report, execErr)
 
 	telemetry.GetPrometheusMetrics().RecordJobCompleteAck(pte.ExecutorID, float64(time.Since(ackStartTime).Milliseconds()))
 

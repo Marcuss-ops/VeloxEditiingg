@@ -5,7 +5,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
@@ -14,6 +13,7 @@ import (
 	"velox-server/internal/fleet"
 	"velox-server/internal/handlers/server/api"
 	integrationsDrive "velox-server/internal/integrations/drive"
+	"velox-server/internal/logging"
 	"velox-server/internal/store"
 	"velox-server/internal/supervisor"
 	workersreg "velox-server/internal/workers"
@@ -108,7 +108,7 @@ func (a *driveUploaderAdapter) UploadArtifact(ctx context.Context, runID, srcPat
 	if expectedBytes > 0 && metadata.Size != expectedBytes {
 		return "", fmt.Errorf("%w: post-upload size=%d want=%d", fleet.ErrDriveUploadFail, metadata.Size, expectedBytes)
 	}
-	log.Printf("[SMOKE-DRIVE] uploaded %s → Drive file_id=%s (bytes=%d sha256=%s verified)", runID, result.FileID, expectedBytes, expectedSHA256)
+	logServerf(ctx, logging.LevelInfo, logging.CodeServerSmoke, "[SMOKE-DRIVE] uploaded %s → Drive file_id=%s (bytes=%d sha256=%s verified)", runID, result.FileID, expectedBytes, expectedSHA256)
 	return result.FileID, nil
 }
 
@@ -179,11 +179,11 @@ func buildFleet(p *persistenceDeps, workerRegistry *workersreg.Registry, sharedS
 			return nil, fmt.Errorf("register %s executor: %w", binding.kind, err)
 		}
 	}
-	log.Printf("[BOOTSTRAP] WorkerStateExecutors registered for kinds=%s,%s", fleet.OperationKindDrain, fleet.OperationKindQuarantine)
+	logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] WorkerStateExecutors registered for kinds=%s,%s", fleet.OperationKindDrain, fleet.OperationKindQuarantine)
 	if err := registry.Register(fleet.OperationKindRestart, fleet.NewWorkerConfigExecutor(sharedSSH)); err != nil {
 		return nil, fmt.Errorf("register %s executor: %w", fleet.OperationKindRestart, err)
 	}
-	log.Printf("[BOOTSTRAP] WorkerConfigExecutor registered for kind=%s", fleet.OperationKindRestart)
+	logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] WorkerConfigExecutor registered for kind=%s", fleet.OperationKindRestart)
 
 	controller := fleet.NewFleetController(
 		p.SQLite,
@@ -213,7 +213,7 @@ func buildFleet(p *persistenceDeps, workerRegistry *workersreg.Registry, sharedS
 	if err := registry.Register(fleet.OperationKindUpdate, updateExecutor); err != nil {
 		return nil, fmt.Errorf("register update executor: %w", err)
 	}
-	log.Printf("[BOOTSTRAP] UpdateExecutor registered for kind=%s (SSH/Docker activation wired; fresh Smoke/Drive attach pending)", fleet.OperationKindUpdate)
+	logServerf(context.Background(), logging.LevelInfo, logging.CodeServerCapability, "[BOOTSTRAP] UpdateExecutor registered for kind=%s (SSH/Docker activation wired; fresh Smoke/Drive attach pending)", fleet.OperationKindUpdate)
 
 	return &FleetDep{
 		Controller: controller,
@@ -246,7 +246,7 @@ func registerFleetRunner(sup *supervisor.Supervisor, dep *FleetDep) error {
 			RestartOnPanic: true,
 		},
 		Run: func(ctx context.Context) error {
-			log.Printf("[BOOTSTRAP] FleetController runner started")
+			logServerf(ctx, logging.LevelInfo, logging.CodeServerSupervisor, "[BOOTSTRAP] FleetController runner started")
 			return dep.Controller.Run(ctx)
 		},
 	})

@@ -15,7 +15,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/url"
 	"strings"
 
@@ -26,6 +25,7 @@ import (
 	"velox-server/internal/fleet"
 	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/ingest"
+	"velox-server/internal/logging"
 	"velox-server/internal/store"
 	"velox-server/internal/taskgraph"
 )
@@ -202,7 +202,7 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 			})
 		}
 		m.Workers.SetMutationsHandler(mutationsHandler)
-		log.Printf("[BOOTSTRAP] Admin workers mutations handler wired (drain/resume/quarantine; update gated on UpdateExecutor capability; tick goroutine drives the audit lifecycle)")
+		logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] Admin workers mutations handler wired (drain/resume/quarantine; update gated on UpdateExecutor capability; tick goroutine drives the audit lifecycle)")
 	}
 
 	// Shared SSH client for health probes (Level A + B) and smoke (Level D).
@@ -225,7 +225,7 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 			ResolveWorkerName: workerNameResolverFromStore(p),
 		})
 		m.Workers.SetSSHCheckHandler(sshCheckHandler)
-		log.Printf("[BOOTSTRAP] Admin workers ssh-check handler wired (GET /api/v1/admin/workers/ssh-check; key=%s known_hosts=%s)", fleet.DefaultSSHKeyPath, fleet.DefaultKnownHostsPath)
+		logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] Admin workers ssh-check handler wired (GET /api/v1/admin/workers/ssh-check; key=%s known_hosts=%s)", fleet.DefaultSSHKeyPath, fleet.DefaultKnownHostsPath)
 	}
 
 	// Step 10/15 fleet-operator: wire the 4-level health probe handler
@@ -257,7 +257,7 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 			},
 		)
 		m.Workers.SetHealthHandler(healthHandler)
-		log.Printf("[BOOTSTRAP] Admin workers health handler wired (SSH=%d targets from WorkerNodeRegistry + Registry + Deployments; level=D smoke pending)", workerNodeRegistry.Len())
+		logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] Admin workers health handler wired (SSH=%d targets from WorkerNodeRegistry + Registry + Deployments; level=D smoke pending)", workerNodeRegistry.Len())
 	}
 
 	// Step 12/15 fleet-operator: register the concrete LevelDSmokeExecutor
@@ -305,19 +305,19 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 			smokeBackend.Worker = fleet.NewLocalShellWorker()
 			smokeBackend.Drive = fleet.NewLocalFileDriveUploader()
 			smokeBackend.Asset = fleet.NewStubAssetResolver("asset://e2e/smoke/canary.mp4", 0)
-			log.Printf("[BOOTSTRAP] LevelDSmokeExecutor: DEV MODE (VELOX_SMOKE_MODE=development) — LocalShellWorker + LocalFileDriveUploader + StubAssetResolver")
+			logServerf(context.Background(), logging.LevelInfo, logging.CodeServerSmoke, "[BOOTSTRAP] LevelDSmokeExecutor: DEV MODE (VELOX_SMOKE_MODE=development) — LocalShellWorker + LocalFileDriveUploader + StubAssetResolver")
 		} else {
 			// Production mode: real SSH worker + real Drive adapter.
 			smokeBackend.Worker = fleet.NewSSHWorkerExec(sharedSSH)
 			if m.Drive != nil {
 				if svc := m.Drive.Service(); svc != nil {
 					smokeBackend.Drive = &driveUploaderAdapter{svc: svc, folderID: cfg.Fleet.SmokeDriveFolderID}
-					log.Printf("[BOOTSTRAP] LevelDSmokeExecutor: production Drive adapter wired (integrations/drive.Service)")
+					logServerf(context.Background(), logging.LevelInfo, logging.CodeServerSmoke, "[BOOTSTRAP] LevelDSmokeExecutor: production Drive adapter wired (integrations/drive.Service)")
 				} else {
-					log.Printf("[BOOTSTRAP] LevelDSmokeExecutor: Drive module present but Service() is nil — smoke remains not wired")
+					logServerf(context.Background(), logging.LevelWarn, logging.CodeServerSmoke, "[BOOTSTRAP] LevelDSmokeExecutor: Drive module present but Service() is nil — smoke remains not wired")
 				}
 			} else {
-				log.Printf("[BOOTSTRAP] LevelDSmokeExecutor: Drive module unavailable — smoke remains not wired")
+				logServerf(context.Background(), logging.LevelWarn, logging.CodeServerSmoke, "[BOOTSTRAP] LevelDSmokeExecutor: Drive module unavailable — smoke remains not wired")
 			}
 			// Resolve smoke assets through the existing worker-authenticated
 			// asset route. Use a real registered worker as the session
@@ -332,13 +332,13 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 					token,
 				)
 				if resolverErr != nil {
-					log.Printf("[BOOTSTRAP] LevelDSmokeExecutor: production asset resolver unavailable: %v", resolverErr)
+					logServerf(context.Background(), logging.LevelWarn, logging.CodeServerSmoke, "[BOOTSTRAP] LevelDSmokeExecutor: production asset resolver unavailable: %v", resolverErr)
 				} else {
 					smokeBackend.Asset = resolver
-					log.Printf("[BOOTSTRAP] LevelDSmokeExecutor: canonical AssetService resolver wired through /api/v1/agent/assets")
+					logServerf(context.Background(), logging.LevelInfo, logging.CodeServerSmoke, "[BOOTSTRAP] LevelDSmokeExecutor: canonical AssetService resolver wired through /api/v1/agent/assets")
 				}
 			} else {
-				log.Printf("[BOOTSTRAP] LevelDSmokeExecutor: canonical asset resolver dependencies unavailable (asset service, worker registry, or token manager)")
+				logServerf(context.Background(), logging.LevelWarn, logging.CodeServerSmoke, "[BOOTSTRAP] LevelDSmokeExecutor: canonical asset resolver dependencies unavailable (asset service, worker registry, or token manager)")
 			}
 		}
 
@@ -351,7 +351,7 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 			*smokeCapability = status
 		}
 		if status.State == fleet.SmokeCapabilityReady {
-			log.Printf("[BOOTSTRAP] LevelDSmokeExecutor capability=READY (Worker=SSHWorkerExec[%d targets], Drive and asset resolver configured)", workerNodeRegistry.Len())
+			logServerf(context.Background(), logging.LevelInfo, logging.CodeServerSmoke, "[BOOTSTRAP] LevelDSmokeExecutor capability=READY (Worker=SSHWorkerExec[%d targets], Drive and asset resolver configured)", workerNodeRegistry.Len())
 			m.Workers.SetSmokeHandler(api.NewAdminWorkersSmokeHandler(m.Workers.Registry(), fleetDep.Controller))
 			if err := fleetDep.Registry.Register(fleet.OperationKindResume, fleet.NewResumeExecutor(fleet.ResumeBackend{
 				Registry:      m.Workers.Registry(),
@@ -360,9 +360,9 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 			})); err != nil {
 				return fmt.Errorf("register ResumeExecutor: %w", err)
 			}
-			log.Printf("[BOOTSTRAP] ResumeExecutor registered for kind=%s", fleet.OperationKindResume)
+			logServerf(context.Background(), logging.LevelInfo, logging.CodeServerCapability, "[BOOTSTRAP] ResumeExecutor registered for kind=%s", fleet.OperationKindResume)
 		} else {
-			log.Printf("[BOOTSTRAP] LevelDSmokeExecutor capability=%s: %s; smoke and resume are not registered", status.State, status.Reason)
+			logServerf(context.Background(), logging.LevelWarn, logging.CodeServerSmoke, "[BOOTSTRAP] LevelDSmokeExecutor capability=%s: %s; smoke and resume are not registered", status.State, status.Reason)
 		}
 		if fleetDep.Update != nil && status.State == fleet.SmokeCapabilityReady && smokeBackend.Drive != nil {
 			freshSmoke := fleet.NewFreshSmokeRunnerWithAsset(levelDSmokeExecutor, p.SQLite, cfg.Fleet.SmokeAssetID)
@@ -378,15 +378,15 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 				// AttachRuntimeBackends is atomic (both-or-nothing): with the
 				// Drive service missing neither smoke nor drive is attached,
 				// so the capability verdict lists both — NOT READY by design.
-				log.Printf("[BOOTSTRAP] WARN: update runtime backends NOT attached (Drive service missing) — capability stays NOT READY (smoke, drive missing; POST /update refuses 503; /ready update-capability probe red)")
+				logServerf(context.Background(), logging.LevelWarn, logging.CodeServerCapabilityWarn, "[BOOTSTRAP] WARN: update runtime backends NOT attached (Drive service missing) — capability stays NOT READY (smoke, drive missing; POST /update refuses 503; /ready update-capability probe red)")
 			} else if err := fleetDep.Update.AttachRuntimeBackends(freshSmoke, driveVerifier); err != nil {
 				return fmt.Errorf("update runtime backends: %w", err)
 			} else {
-				log.Printf("[BOOTSTRAP] UpdateExecutor fresh Level-D smoke + Drive verifier wired")
+				logServerf(context.Background(), logging.LevelInfo, logging.CodeServerCapability, "[BOOTSTRAP] UpdateExecutor fresh Level-D smoke + Drive verifier wired")
 			}
 		}
 		if status.State == fleet.SmokeCapabilityReady {
-			log.Printf("[BOOTSTRAP] Admin workers smoke handler wired (POST /api/v1/admin/workers/{id}/smoke; tick goroutine drives LevelDSmokeExecutor)")
+			logServerf(context.Background(), logging.LevelInfo, logging.CodeServerSmoke, "[BOOTSTRAP] Admin workers smoke handler wired (POST /api/v1/admin/workers/{id}/smoke; tick goroutine drives LevelDSmokeExecutor)")
 		}
 	}
 
@@ -411,7 +411,7 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 	if fleetDep != nil && m != nil && m.Workers != nil && p != nil && p.SQLite != nil {
 		metricsHandler := api.NewAdminWorkersMetricsAggregatorHandler(p.SQLite, 5*time.Minute)
 		m.Workers.SetMetricsAggregatorHandler(metricsHandler)
-		log.Printf("[BOOTSTRAP] Admin workers metrics aggregator handler wired (GET /api/v1/admin/workers/{id}/metrics; fleet aggregate at GET /api/v1/fleet/metrics; metrics-snapshot-supervisor ticks every 5min via buildSupervisor)")
+		logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] Admin workers metrics aggregator handler wired (GET /api/v1/admin/workers/{id}/metrics; fleet aggregate at GET /api/v1/fleet/metrics; metrics-snapshot-supervisor ticks every 5min via buildSupervisor)")
 	}
 	// Fleet structured alerting is intentionally DISABLED until a real
 	// WorkerAlertsDataSource is composed. Do not mount the persisted-alert
@@ -428,9 +428,9 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 	if fleetDep != nil && fleetDep.Update != nil {
 		capability := fleetDep.Update.Capability()
 		if capability.Ready {
-			log.Printf("[BOOTSTRAP] Update capability READY: ssh docker deployments cosign image registry smoke drive all wired")
+			logServerf(context.Background(), logging.LevelInfo, logging.CodeServerCapability, "[BOOTSTRAP] Update capability READY: ssh docker deployments cosign image registry smoke drive all wired")
 		} else {
-			log.Printf("[BOOTSTRAP] Update capability NOT READY: missing %s — POST /api/v1/admin/workers/{id}/update refuses with 503 and the /ready update-capability probe is red (fail-closed at boot instead of surfacing mid-update)", strings.Join(capability.Missing, ", "))
+			logServerf(context.Background(), logging.LevelWarn, logging.CodeServerCapabilityWarn, "[BOOTSTRAP] Update capability NOT READY: missing %s — POST /api/v1/admin/workers/{id}/update refuses with 503 and the /ready update-capability probe is red (fail-closed at boot instead of surfacing mid-update)", strings.Join(capability.Missing, ", "))
 		}
 	}
 	return nil

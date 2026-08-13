@@ -13,8 +13,8 @@ import (
 // complete timing ledger to the report metrics. PhaseMarkers and native
 // DetailedPhases remain the authoritative event stream; this summary makes
 // the common dashboard queries cheap and keeps every operation visible.
-func attachWorkerIdentityAndTimings(w *Worker, report *taskrunner.TaskExecutionReport) {
-	if w == nil || report == nil {
+func attachWorkerIdentityAndTimings(workerID string, report *taskrunner.TaskExecutionReport) {
+	if report == nil {
 		return
 	}
 	// Worker identity and the compact timing ledger are still emitted for
@@ -29,7 +29,7 @@ func attachWorkerIdentityAndTimings(w *Worker, report *taskrunner.TaskExecutionR
 		workerIP = strings.Join(parts[2:], "_")
 	}
 	legacy["worker_identity"] = map[string]interface{}{
-		"worker_id": w.config.WorkerID, "worker_name": display,
+		"worker_id": workerID, "worker_name": display,
 		"hostname": hostname, "ip": workerIP,
 	}
 

@@ -11,10 +11,10 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 
 	"velox-server/internal/fleet"
 	"velox-server/internal/fleet/opsalerts"
+	"velox-server/internal/logging"
 	"velox-server/internal/registry"
 	"velox-server/internal/telemetry"
 )
@@ -85,10 +85,10 @@ func registerReadinessChecks(c *appComponents, t *transportBundle) {
 		// registered partial state, leaving /ready in an
 		// undefined state.
 		if regErr := c.capabilityRegistry.Register(probe); regErr != nil {
-			log.Printf("[BOOTSTRAP] capability registry: register probe %q failed: %v", probe.Name, regErr)
+			logServerf(context.Background(), logging.LevelError, logging.CodeServerCapability, "[BOOTSTRAP] capability registry: register probe %q failed: %v", probe.Name, regErr)
 		}
 	}
-	log.Printf("[BOOTSTRAP] capabilities: registered probes=%v", c.capabilityRegistry.Names())
+	logServerf(context.Background(), logging.LevelInfo, logging.CodeServerCapability, "[BOOTSTRAP] capabilities: registered probes=%v", c.capabilityRegistry.Names())
 
 	if c.modules == nil || c.modules.Health == nil {
 		return

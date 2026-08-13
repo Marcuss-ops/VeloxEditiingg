@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"log"
 	"time"
 
 	"velox-server/internal/artifacts"
 	"velox-server/internal/completion"
 	"velox-server/internal/config"
 	"velox-server/internal/deliveries"
+	"velox-server/internal/logging"
 	"velox-server/internal/outbox"
 	"velox-server/internal/store"
 )
@@ -79,7 +79,7 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 		nil, // clock.System default (production)
 		deliveryCounter,
 	).WithFFProbeMode(cfg.Runtime.FFProbeVerifyMode).WithMediaProbeQueue(probeRepo)
-	log.Printf("[BOOTSTRAP] artifacts.Service ready (single-tx SUCCEEDED gate via FinalizationWriter + DeliveryPlanResolver)")
+	logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] artifacts.Service ready (single-tx SUCCEEDED gate via FinalizationWriter + DeliveryPlanResolver)")
 
 	// ── Chunked upload service ───────────────────────────────────────
 	chunkedSvc := artifacts.NewChunkedUploadService(
@@ -87,7 +87,7 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 		uploadRepo,
 		p.BlobStore,
 	)
-	log.Printf("[BOOTSTRAP] ChunkedUploadService ready (persistent chunked upload via artifact pipeline)")
+	logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] ChunkedUploadService ready (persistent chunked upload via artifact pipeline)")
 
 	var completionCoord completion.Coordinator
 	var completionStore completion.UploadProtocolStore
@@ -109,9 +109,9 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 		} else {
 			return nil, fmt.Errorf("bootstrap: completion coordinator lacks upload protocol store")
 		}
-		log.Printf("[BOOTSTRAP] completion coordinator ready (typed artifact commit protocol)")
+		logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] completion coordinator ready (typed artifact commit protocol)")
 	} else {
-		log.Printf("[BOOTSTRAP] completion coordinator disabled: VELOX_COMMIT_HMAC_KEY is empty")
+		logServerf(context.Background(), logging.LevelWarn, logging.CodeServerBootstrapWarn, "[BOOTSTRAP] completion coordinator disabled: VELOX_COMMIT_HMAC_KEY is empty")
 	}
 
 	// ── Reconciler (mandatory — fail-fast if init fails) ──────────
@@ -125,7 +125,7 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 	if recErr != nil {
 		return nil, fmt.Errorf("bootstrap: Reconciler init failed: %w — Reconciler is mandatory when artifacts are enabled", recErr)
 	}
-	log.Printf("[BOOTSTRAP] artifacts.Reconciler ready (mandatory — 4 rules)")
+	logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] artifacts.Reconciler ready (mandatory — 4 rules)")
 
 	// ── Outbox dispatcher ──────────────────────────────────────────
 	// outbox.ProductionRegistry() is called EXACTLY ONCE at bootstrap
@@ -169,10 +169,10 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 	if drainErr != nil {
 		return nil, fmt.Errorf("bootstrap: drain legacy outbox events: %w", drainErr)
 	} else if result.TotalDiscarded > 0 {
-		log.Printf("[BOOTSTRAP] DrainLegacyEvents: discarded %d residual legacy outbox events %v",
+		logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] DrainLegacyEvents: discarded %d residual legacy outbox events %v",
 			result.TotalDiscarded, result.ByEventType)
 	} else {
-		log.Printf("[BOOTSTRAP] DrainLegacyEvents: no residual legacy outbox events to drain")
+		logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] DrainLegacyEvents: no residual legacy outbox events to drain")
 	}
 
 	return &assetDeps{
