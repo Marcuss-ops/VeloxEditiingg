@@ -116,11 +116,21 @@ func rewriteTransitionSoundEffects(ctx context.Context, s *AssetService, payload
 		return nil
 	}
 
-	rewritten, declarations, errIndex, err := rewriteTransitionSourcesConcurrently(ctx, s, sources)
+	// Resolve the pool through the shared bounded worker pool so there is a
+	// single limiter, error contract and concurrency level for remote
+	// reference downloads. The metadata lookup that follows stays sequential:
+	// after resolution the references are canonical and s.Get is a local read
+	// of already-registered assets, not another remote download.
+	rewritten, errIndex, err := rewriteReferencesConcurrently(ctx, s, sources, inputsecurity.KindAudio)
 	if err != nil {
 		return fmt.Errorf("transition_sound_effects.sources[%d]: %w", errIndex, err)
 	}
 	config["sources"] = rewritten
+
+	declarations, errIndex, err := collectSFXDeclarations(ctx, s, rewritten)
+	if err != nil {
+		return fmt.Errorf("transition_sound_effects.sources[%d]: %w", errIndex, err)
+	}
 	if len(declarations) == 0 {
 		return nil
 	}
@@ -140,59 +150,35 @@ func rewriteTransitionSoundEffects(ctx context.Context, s *AssetService, payload
 	return nil
 }
 
-// rewriteTransitionSourcesConcurrently resolves the SFX pool in parallel
-// (bounded by remoteRewriteConcurrency) and returns the canonical references
-// index-aligned with the input sources plus the declarations to publish.
-// Sources that are not velox-asset wires contribute no declaration. Like
-// rewriteReferencesConcurrently, the lowest failing index wins so error
-// reporting stays deterministic even though resolution is concurrent.
-func rewriteTransitionSourcesConcurrently(ctx context.Context, s *AssetService, sources []string) (rewritten []string, declarations map[string]map[string]interface{}, errIndex int, err error) {
-	rewritten = make([]string, len(sources))
-	declarations = make(map[string]map[string]interface{})
-	errs := make([]error, len(sources))
-	sem := make(chan struct{}, remoteRewriteConcurrency)
-	var wg sync.WaitGroup
-	for i, source := range sources {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(i int, source string) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			canonical, rerr := rewriteReference(ctx, s, source, inputsecurity.KindAudio)
-			if rerr != nil {
-				errs[i] = rerr
-				return
-			}
-			rewritten[i] = canonical
-			assetID := strings.TrimPrefix(canonical, VeloxAssetScheme+"://")
-			if assetID == canonical || assetID == "" {
-				return
-			}
-			asset, gerr := s.Get(ctx, assetID)
-			if gerr != nil {
-				errs[i] = gerr
-				return
-			}
-			if asset == nil || asset.SHA256 == "" || asset.SizeBytes <= 0 {
-				errs[i] = fmt.Errorf("asset %q has incomplete integrity metadata", assetID)
-				return
-			}
-			declarations[assetID] = map[string]interface{}{
-				"id":         asset.AssetID,
-				"uri":        canonical,
-				"kind":       "sfx",
-				"sha256":     asset.SHA256,
-				"size_bytes": asset.SizeBytes,
-			}
-		}(i, source)
-	}
-	wg.Wait()
-	for i, e := range errs {
-		if e != nil {
-			return nil, nil, i, e
+// collectSFXDeclarations gathers the integrity metadata for already-resolved
+// SFX references. It is deliberately sequential: the references are canonical
+// at this point and s.Get is a local metadata read, so parallelizing it would
+// add a second worker pool for no measurable win. Non-velox-asset wires
+// (e.g. deferred velox-drive://) contribute no declaration. The lowest failing
+// index is returned so error reporting stays deterministic.
+func collectSFXDeclarations(ctx context.Context, s *AssetService, rewritten []string) (map[string]map[string]interface{}, int, error) {
+	declarations := make(map[string]map[string]interface{})
+	for i, canonical := range rewritten {
+		assetID := strings.TrimPrefix(canonical, VeloxAssetScheme+"://")
+		if assetID == canonical || assetID == "" {
+			continue
+		}
+		asset, err := s.Get(ctx, assetID)
+		if err != nil {
+			return nil, i, err
+		}
+		if asset == nil || asset.SHA256 == "" || asset.SizeBytes <= 0 {
+			return nil, i, fmt.Errorf("asset %q has incomplete integrity metadata", assetID)
+		}
+		declarations[assetID] = map[string]interface{}{
+			"id":         asset.AssetID,
+			"uri":        canonical,
+			"kind":       "sfx",
+			"sha256":     asset.SHA256,
+			"size_bytes": asset.SizeBytes,
 		}
 	}
-	return rewritten, declarations, -1, nil
+	return declarations, -1, nil
 }
 
 func rewriteRemoteInputValue(ctx context.Context, s *AssetService, value interface{}) error {
