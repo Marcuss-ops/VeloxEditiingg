@@ -1,4 +1,9 @@
-package store
+// Package stalereconcile owns the stale-execution reconciler extracted from
+// the internal/store god-package. It scans for, and optionally repairs,
+// execution-state drift (expired leases, orphan tasks/attempts, committed
+// artifact job drift, unconfirmed spools, offline workers). It depends on
+// database/sql plus the jobs/taskgraph/audittrail leaves — never internal/store.
+package stalereconcile
 
 import "time"
 

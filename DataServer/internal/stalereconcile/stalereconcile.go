@@ -1,4 +1,4 @@
-package store
+package stalereconcile
 
 import (
 	"context"
@@ -6,26 +6,41 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"velox-server/internal/audittrail"
+	"velox-server/internal/jobs"
+	"velox-server/internal/taskgraph"
 )
 
+// JobGetter is the slice of the job repository the reconciler needs: the
+// retry budget read for expired-lease recovery. The concrete SQLite job
+// repository satisfies it.
+type JobGetter interface {
+	Get(ctx context.Context, id string) (*jobs.Job, error)
+}
+
+// TaskLeaseExpirer is the slice of the task repository the reconciler needs:
+// the canonical, audit-bound lease reap. The concrete SQLite task repository
+// satisfies it.
+type TaskLeaseExpirer interface {
+	ExpireTaskLeaseAtomicAudited(ctx context.Context, taskID, leaseID, leaseExpiresAtObserved string, maxRetries int, event audittrail.Event) (taskgraph.ExpireResult, error)
+}
+
 // StaleExecutionReconciler is the typed application maintenance surface.
-// SQL is intentionally confined to this store package; the admin command
-// only handles flags, serialization, and process I/O.
 type StaleExecutionReconciler struct {
 	db                 *sql.DB
-	tasks              *SQLiteTaskRepository
-	jobs               *SQLiteJobRepository
+	tasks              TaskLeaseExpirer
+	jobs               JobGetter
 	workerOfflineAfter time.Duration
 }
 
-func NewStaleExecutionReconciler(s *SQLiteStore) (*StaleExecutionReconciler, error) {
-	if s == nil || s.db == nil {
-		return nil, fmt.Errorf("stale execution reconciler: store is not initialized")
-	}
+// New builds a StaleExecutionReconciler over the supplied SQL handle and the
+// two repository seams it needs for apply-mode recovery.
+func New(db *sql.DB, tasks TaskLeaseExpirer, jobs JobGetter) *StaleExecutionReconciler {
 	return &StaleExecutionReconciler{
-		db: s.db, tasks: NewSQLiteTaskRepository(s), jobs: NewSQLiteJobRepository(s),
+		db: db, tasks: tasks, jobs: jobs,
 		workerOfflineAfter: 10 * time.Minute,
-	}, nil
+	}
 }
 
 // Scan is SELECT-only and deterministic. It never writes state or audit rows.

@@ -1,5 +1,12 @@
 package store
 
+// reconciliation_audit.go — shared append-only audit helpers for the
+// reconciliation reconcilers (stale-execution, awaiting-artifact,
+// delivery-pending). The stale-execution reconciler was extracted into the
+// internal/stalereconcile leaf, which carries its own private copy of these
+// helpers; this store copy remains for the reconcilers that still live in the
+// god-package.
+
 import (
 	"context"
 	"crypto/sha256"
@@ -11,12 +18,8 @@ import (
 	"velox-server/internal/audittrail"
 )
 
-func (r *StaleExecutionReconciler) auditEventForFinding(f StaleExecutionFinding, actor string, now time.Time) audittrail.Event {
-	metadata, _ := json.Marshal(map[string]any{"category": f.Category, "reason": f.Reason, "old_status": f.OldStatus, "proposed_status": f.ProposedStatus, "observed_at": f.ObservedAt.UTC().Format(time.RFC3339Nano)})
-	h := sha256.Sum256([]byte(string(f.Category) + ":" + f.ResourceType + ":" + f.ResourceID + ":" + f.OldStatus))
-	return audittrail.Event{ID: "reconcile-" + hex.EncodeToString(h[:]), OccurredAt: now, ActorType: "operator", ActorID: actor, Action: "STALE_EXECUTION_RECONCILED", ResourceType: f.ResourceType, ResourceID: f.ResourceID, BeforeHash: hashText(f.OldStatus), AfterHash: hashText(f.ProposedStatus), MetadataJSON: string(metadata)}
-}
-
+// appendReconcileAuditTx appends the deterministic append-only audit row for a
+// finding inside an open transaction.
 func appendReconcileAuditTx(ctx context.Context, tx *sql.Tx, f StaleExecutionFinding, actor string, now time.Time) error {
 	metadata, err := json.Marshal(map[string]any{"category": f.Category, "reason": f.Reason, "old_status": f.OldStatus, "proposed_status": f.ProposedStatus, "observed_at": f.ObservedAt.UTC().Format(time.RFC3339Nano)})
 	if err != nil {

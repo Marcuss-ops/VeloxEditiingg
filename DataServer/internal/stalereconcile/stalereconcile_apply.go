@@ -1,4 +1,4 @@
-package store
+package stalereconcile
 
 import (
 	"context"
@@ -289,10 +289,10 @@ func (r *StaleExecutionReconciler) applyOrphanAttempt(ctx context.Context, f Sta
 		   AND (NOT EXISTS (SELECT 1 FROM tasks WHERE task_id=task_attempts.task_id)
 		        OR EXISTS (SELECT 1 FROM tasks WHERE task_id=task_attempts.task_id
 		                   AND status IN ('SUCCEEDED','FAILED','CANCELLED','TIMED_OUT'))			        OR EXISTS (SELECT 1 FROM tasks t
-			                   WHERE t.task_id=task_attempts.task_id
-			                     AND (NOT EXISTS (SELECT 1 FROM jobs j WHERE j.job_id=t.job_id)
-			                          OR EXISTS (SELECT 1 FROM jobs j WHERE j.job_id=t.job_id
-			                                     AND j.status IN ('SUCCEEDED','FAILED','CANCELLED','TIMED_OUT')))))`,
+		                   WHERE t.task_id=task_attempts.task_id
+		                     AND (NOT EXISTS (SELECT 1 FROM jobs j WHERE j.job_id=t.job_id)
+		                          OR EXISTS (SELECT 1 FROM jobs j WHERE j.job_id=t.job_id
+		                                     AND j.status IN ('SUCCEEDED','FAILED','CANCELLED','TIMED_OUT')))))`,
 		nowStr, nowStr, f.AttemptID)
 	if err != nil {
 		return false, err
@@ -425,4 +425,24 @@ func (r *StaleExecutionReconciler) applyOfflineWorker(ctx context.Context, f Sta
 		return false, err
 	}
 	return true, nil
+}
+
+// readRowsAffected is the leaf boundary for driver-specific RowsAffected
+// failures. A transition must never treat an unreadable row count as zero or
+// as a successful CAS decision.
+func readRowsAffected(result sql.Result, operation string) (int64, error) {
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("%s rows affected: %w", operation, err)
+	}
+	return affected, nil
+}
+
+// maxAttemptOrdinal returns the larger of the stored attempt_count and the
+// current attempt_number (both are maintained independently on some paths).
+func maxAttemptOrdinal(a, b int) int {
+	if b > a {
+		return b
+	}
+	return a
 }
