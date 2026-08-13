@@ -4,7 +4,7 @@
 //
 // The Enqueuer is a Compiler: it normalizes, validates, resolves
 // voiceover/scene-image assets, compiles a TaskSpec, and delegates to
-// store.AtomicJobTaskCreator for atomic Job+Task creation. All producers
+// the AtomicJobTaskCreator contract for atomic Job+Task creation. All producers
 // (HTTP, creator result, calendar) route through the single atomic
 // creation path.
 //
@@ -52,7 +52,6 @@ import (
 	"velox-server/internal/costmodel"
 	"velox-server/internal/jobs"
 	"velox-server/internal/routing"
-	"velox-server/internal/store"
 	"velox-server/internal/taskgraph"
 	"velox-server/internal/telemetry"
 	"velox-shared/contract/deliveryplan"
@@ -60,6 +59,16 @@ import (
 	"github.com/google/uuid"
 	"github.com/mattn/go-sqlite3"
 )
+
+// AtomicJobTaskCreator is the narrow atomic Job+Task creation contract the
+// Enqueuer needs at persist time. store.AtomicJobTaskCreator implements it;
+// defining the contract here (consumer-side) removes enqueue's import edge
+// on the concrete store package, which breaks the store → jobs directory
+// cycle (store persists jobs.Job while jobs/enqueue previously imported the
+// concrete store for this single method).
+type AtomicJobTaskCreator interface {
+	CreateJobWithTask(ctx context.Context, job *jobs.Job, spec *taskgraph.TaskSpec, priority int) error
+}
 
 // Enqueuer bundles the atomic creator + jobs reader + the asset service
 // that rewrites voiceover and scene-image payload references. Construct via
@@ -72,7 +81,7 @@ import (
 // contains an external Social destination, the enqueue pre-flight fails
 // closed when this dependency is absent.
 type Enqueuer struct {
-	Creator         *store.AtomicJobTaskCreator
+	Creator         AtomicJobTaskCreator
 	Jobs            jobs.Reader
 	Voiceover       *assetbridge.AssetService
 	PlanResolver    PlanResolver
@@ -85,7 +94,7 @@ type Enqueuer struct {
 //
 // PlanResolver is mandatory: passing nil panics so misconfiguration
 // surfaces at construction time, not on the first enqueue.
-func NewEnqueuer(creator *store.AtomicJobTaskCreator, jobsRepo jobs.Reader, voiceover *assetbridge.AssetService, planResolver PlanResolver) *Enqueuer {
+func NewEnqueuer(creator AtomicJobTaskCreator, jobsRepo jobs.Reader, voiceover *assetbridge.AssetService, planResolver PlanResolver) *Enqueuer {
 	if planResolver == nil {
 		panic("enqueue.NewEnqueuer: planResolver is required (delivery plan precondition must be enforced at enqueue time)")
 	}
