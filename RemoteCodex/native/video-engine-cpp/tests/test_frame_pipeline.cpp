@@ -250,6 +250,30 @@ int main() {
                "same-size compatible path bypasses sws_scale for every frame");
     }
 
+    // ── Explicit decoder/encoder thread budgets. ──────────────────────────
+    // A positive budget must be applied before avcodec_open2() and still
+    // produce a valid, probeable output. This exercises the per-segment
+    // thread coordination the scheduler uses to keep segment parallelism ×
+    // encoder threads from oversubscribing the host.
+    const fs::path threaded = root / "threaded.mp4";
+    velox::media::FramePipelineConfig threadedConfig = config;
+    threadedConfig.output_path = threaded;
+    threadedConfig.decoder_threads = 1;
+    threadedConfig.encoder_threads = 1;
+    velox::media::FramePipelineResult threadedResult;
+    expect(velox::media::renderFrames(threadedConfig, &threadedResult),
+           "explicit decoder/encoder thread budget encode succeeds");
+    if (threadedResult.success) {
+        expect(threadedResult.encode_contexts_created == 1,
+               "explicit-thread-budget encode uses a single encoder context");
+        expect(threadedResult.decoder_contexts_created == 1,
+               "explicit-thread-budget encode uses a single decoder context");
+        expect(hasVideoStream(threaded),
+               "explicit-thread-budget output is probeable");
+        expect(!fs::exists(ffmpegTouched) && !fs::exists(ffprobeTouched),
+               "explicit-thread-budget encode never spawns media processes");
+    }
+
     // ── Source-window trim: decode may start at the beginning, but only the
     // requested presentation-time window is emitted by the native pipeline.
     const fs::path trimmed = root / "trimmed.mp4";
