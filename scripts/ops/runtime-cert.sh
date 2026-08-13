@@ -98,8 +98,11 @@ baseline_content="$(cat "$baseline_file" 2>/dev/null | awk '{print $1}')"
 engine_sha="$(sha256sum /usr/local/bin/velox_video_engine 2>/dev/null | awk '{print $1}')"
 
 jl="$(sudo -n journalctl -u "$unit" --no-pager 2>/dev/null || journalctl -u "$unit" --no-pager 2>/dev/null || true)"
-boot_verdict="$(printf '%s' "$jl" | grep -oE '"verdict": ?"(OK|READY|FAIL)"' | tail -1 | grep -oE '(OK|READY|FAIL)')"
-boot_fail="$(printf '%s' "$jl" | grep -oE 'bootstrap gate failed[^"]*' | tail -1)"
+# Evaluate only the latest process-start block. A historical failed boot must
+# not keep a worker in FAIL after a later restart reaches READY.
+latest_boot="$(printf '%s' "$jl" | awk '/Starting worker agent/ { block=""; seen=1 } seen { block=block $0 ORS } END { printf "%s", block }')"
+boot_verdict="$(printf '%s' "$latest_boot" | grep -oE '"verdict": ?"(OK|READY|FAIL)"' | tail -1 | grep -oE '(OK|READY|FAIL)' || true)"
+boot_fail="$(printf '%s' "$latest_boot" | grep -oE 'bootstrap gate failed[^"]*' | tail -1 || true)"
 
 bin_ver="$(sudo -n docker exec "$cid" sh -c 'cat /app/VERSION.txt 2>/dev/null' 2>/dev/null)"
 container_bundle="$(sudo -n docker exec "$cid" sh -c 'cat /app/RemoteCodex/BUNDLE_HASH.txt 2>/dev/null' 2>/dev/null | tr -d '[:space:]')"
