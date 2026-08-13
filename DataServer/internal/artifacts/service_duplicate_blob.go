@@ -94,6 +94,12 @@ func (s *Service) materializeDuplicateFinalBlob(sourceStorageKey, targetStorageK
 		return nil
 	}
 	if err := os.Link(sourcePath, targetPath); err == nil {
+		// The hardlink shares the already-durable source inode, but the NEW
+		// directory entry is metadata that must survive a crash too: the DB
+		// row will reference targetStorageKey. fsync the parent dir before
+		// declaring success so "finalized" never points at a name lost on
+		// power-loss.
+		syncDirectory(filepath.Dir(targetPath))
 		return nil
 	}
 	src, err := os.Open(sourcePath)
@@ -105,14 +111,31 @@ func (s *Service) materializeDuplicateFinalBlob(sourceStorageKey, targetStorageK
 	if err != nil {
 		return err
 	}
-	defer dst.Close()
 	if _, err := io.Copy(dst, src); err != nil {
+		_ = dst.Close()
 		_ = os.Remove(targetPath)
 		return err
 	}
 	if err := dst.Sync(); err != nil {
+		_ = dst.Close()
 		_ = os.Remove(targetPath)
 		return err
 	}
+	if err := dst.Close(); err != nil {
+		_ = os.Remove(targetPath)
+		return err
+	}
+	// fsync the directory entry for the copy fallback as well.
+	syncDirectory(filepath.Dir(targetPath))
 	return nil
+}
+
+// syncDirectory best-effort fsyncs a directory so a rename/link/copy that
+// precedes a DB commit survives a crash (POSIX; no-op on platforms where
+// directory fsync is unsupported).
+func syncDirectory(path string) {
+	if dir, err := os.Open(path); err == nil {
+		_ = dir.Sync()
+		_ = dir.Close()
+	}
 }

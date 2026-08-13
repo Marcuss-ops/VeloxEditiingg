@@ -113,6 +113,11 @@ func materializeCanonicalDuplicate(blobStore interface{ FinalDir() string }, sou
 		return nil
 	}
 	if err := os.Link(source, target); err == nil {
+		// The hardlink shares the already-durable source inode, but the NEW
+		// directory entry is metadata that must survive a crash too: the
+		// completion row will reference targetKey. fsync the parent dir
+		// before declaring success.
+		syncDirectory(filepath.Dir(target))
 		return nil
 	}
 	in, err := os.Open(source)
@@ -138,5 +143,20 @@ func materializeCanonicalDuplicate(blobStore interface{ FinalDir() string }, sou
 		_ = os.Remove(target)
 		return err
 	}
-	return out.Close()
+	if err := out.Close(); err != nil {
+		_ = os.Remove(target)
+		return err
+	}
+	// fsync the directory entry for the copy fallback as well.
+	syncDirectory(filepath.Dir(target))
+	return nil
+}
+
+// syncDirectory best-effort fsyncs a directory so a link/copy that precedes
+// a DB commit survives a crash (POSIX; no-op elsewhere).
+func syncDirectory(path string) {
+	if dir, err := os.Open(path); err == nil {
+		_ = dir.Sync()
+		_ = dir.Close()
+	}
 }
