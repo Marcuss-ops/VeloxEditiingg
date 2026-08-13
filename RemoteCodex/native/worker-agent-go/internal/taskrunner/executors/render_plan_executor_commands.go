@@ -213,7 +213,7 @@ func (e *audioMixExecutor) Execute(ctx context.Context, execCtx executor.Executi
 	if result.Metrics == nil {
 		result.Metrics = map[string]interface{}{}
 	}
-	sfxOffsets := make([]float64, 0)
+	sfxOffsets := make([]float64, 0, len(p.AudioTracks))
 	for _, track := range p.AudioTracks {
 		if strings.EqualFold(track.Role, "sfx") || strings.EqualFold(track.Role, "whoosh") {
 			sfxOffsets = append(sfxOffsets, track.StartTimeOffset)

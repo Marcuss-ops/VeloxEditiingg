@@ -39,6 +39,11 @@ func PerformFullAssociation(ctx context.Context,
 	}
 	statusCallback(fmt.Sprintf("Parsed %d transcription segments", len(segments)), false)
 
+	// Normalize every segment's text ONCE up front. Each entity below loops
+	// over all segments, so without this the same segment text would be
+	// re-lowercased/re-filtered for every entity (O(N×S) allocations).
+	normSegments := normalizeSegments(segments)
+
 	// Parse entity inputs
 	entitaMap := parseJSONStringMap(entitaInputStr)
 	nomiSpeciali := parseJSONStringSlice(nomiSpecialiInputStr)
@@ -59,9 +64,9 @@ func PerformFullAssociation(ctx context.Context,
 			return nil, fmt.Errorf("entity association cancelled: %w", ctx.Err())
 		default:
 		}
-		matches := matchEntityToSegments(name, segments, 80.0, "partial_fuzzy")
+		matches := matchEntityToSegments(name, normSegments, 80.0, "partial_fuzzy")
 		if len(matches) == 0 {
-			matches = matchEntityByKeywords(name, segments)
+			matches = matchEntityByKeywords(name, normSegments)
 		}
 		if len(matches) > 0 {
 			nomiConTesto[name] = deduplicateMatches(matches)
@@ -77,9 +82,9 @@ func PerformFullAssociation(ctx context.Context,
 			return nil, fmt.Errorf("entity association cancelled: %w", ctx.Err())
 		default:
 		}
-		matches := matchEntityToSegments(name, segments, 50.0, "partial_fuzzy")
+		matches := matchEntityToSegments(name, normSegments, 50.0, "partial_fuzzy")
 		if len(matches) == 0 {
-			matches = matchEntityByKeywords(name, segments)
+			matches = matchEntityByKeywords(name, normSegments)
 		}
 		if len(matches) > 0 {
 			nomiSpecialiResult[name] = deduplicateMatches(matches)
@@ -95,9 +100,9 @@ func PerformFullAssociation(ctx context.Context,
 			return nil, fmt.Errorf("entity association cancelled: %w", ctx.Err())
 		default:
 		}
-		matches := matchEntityToSegments(phrase, segments, 45.0, "partial_fuzzy")
+		matches := matchEntityToSegments(phrase, normSegments, 45.0, "partial_fuzzy")
 		if len(matches) == 0 {
-			matches = matchEntityByKeywords(phrase, segments)
+			matches = matchEntityByKeywords(phrase, normSegments)
 		}
 		if len(matches) > 0 {
 			frasiResult[phrase] = deduplicateMatches(matches)
@@ -113,9 +118,9 @@ func PerformFullAssociation(ctx context.Context,
 			return nil, fmt.Errorf("entity association cancelled: %w", ctx.Err())
 		default:
 		}
-		matches := matchEntityToSegments(word, segments, 40.0, "partial_fuzzy")
+		matches := matchEntityToSegments(word, normSegments, 40.0, "partial_fuzzy")
 		if len(matches) == 0 {
-			matches = matchEntityByKeywords(word, segments)
+			matches = matchEntityByKeywords(word, normSegments)
 		}
 		if len(matches) > 0 {
 			paroleResult[word] = deduplicateMatches(matches)
@@ -146,17 +151,17 @@ func PerformFullAssociation(ctx context.Context,
 		}
 
 		// Try direct fuzzy match
-		matches := matchEntityToSegments(name, segments, 70.0, "fuzzy")
+		matches := matchEntityToSegments(name, normSegments, 70.0, "fuzzy")
 		// Try keyword match (with word boundary)
 		if len(matches) == 0 {
-			matches = matchEntityByKeywords(name, segments)
+			matches = matchEntityByKeywords(name, normSegments)
 		}
 		// Partial word match fallback (with word boundary check)
 		if len(matches) == 0 {
 			normName := normalizeForMatch(name)
 			nameWords := strings.Fields(normName)
-			for _, seg := range segments {
-				hayWords := strings.Fields(normalizeForMatch(seg.Text))
+			for _, seg := range normSegments {
+				hayWords := strings.Fields(seg.text)
 				for _, w := range nameWords {
 					if len(w) < 4 {
 						continue
@@ -165,11 +170,11 @@ func PerformFullAssociation(ctx context.Context,
 					for _, hw := range hayWords {
 						if w == hw {
 							matches = append(matches, MatchResult{
-								TimestampStart: seg.Start,
-								TimestampEnd:   seg.End,
+								TimestampStart: seg.start,
+								TimestampEnd:   seg.end,
 								Score:          50.0,
 								Method:         "partial_word",
-								Text:           seg.Text,
+								Text:           seg.raw,
 							})
 							break
 						}

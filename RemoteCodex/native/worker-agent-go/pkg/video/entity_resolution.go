@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"math"
 	"sort"
+	"strings"
 )
 
 // extractMaxDuration finds the maximum timestamp in transcription segments.
@@ -57,9 +58,10 @@ func deduplicateMatches(matches []MatchResult) []MatchResult {
 		return sorted[i].Score > sorted[j].Score
 	})
 
-	// Keep only non-overlapping matches (5-second window)
+	// Keep only non-overlapping matches (5-second window). Preallocate to the
+	// input size so the filter loop never re-grows the backing array.
 	const dedupWindow = 5.0
-	var result []MatchResult
+	result := make([]MatchResult, 0, len(sorted))
 	for _, m := range sorted {
 		overlaps := false
 		for _, kept := range result {
@@ -145,19 +147,50 @@ func emptyAssociationResult() map[string]interface{} {
 	}
 }
 
+// normalizedSegment is a transcription segment whose Text has been
+// lowercased/filtered exactly once. Raw keeps the original text for result
+// payloads. It exists so a hot loop that matches N entities against S
+// segments normalizes each segment text once (O(S)) instead of re-normalizing
+// it for every entity (O(N×S)).
+type normalizedSegment struct {
+	text  string
+	raw   string
+	start float64
+	end   float64
+}
+
+// normalizeSegments pre-normalizes every segment's text once. Callers that
+// loop entities × segments pass the normalized slice to the match helpers so
+// the per-entity loops never re-normalize nor re-allocate the segment text.
+func normalizeSegments(segments []TranscriptionSegment) []normalizedSegment {
+	norm := make([]normalizedSegment, len(segments))
+	for i, seg := range segments {
+		norm[i] = normalizedSegment{
+			text:  normalizeForMatch(seg.Text),
+			raw:   seg.Text,
+			start: seg.Start,
+			end:   seg.End,
+		}
+	}
+	return norm
+}
+
 // matchEntityToSegments fuzzy-matches an entity string against transcription segments.
-// Returns matches above the given threshold.
-func matchEntityToSegments(entity string, segments []TranscriptionSegment, threshold float64, method string) []MatchResult {
-	var results []MatchResult
+// Returns matches above the given threshold. The entity is normalized once and
+// reused across every segment (the needle is invariant), and the results slice
+// is preallocated to the segment count.
+func matchEntityToSegments(entity string, segments []normalizedSegment, threshold float64, method string) []MatchResult {
+	needle := normalizeForMatch(entity)
+	results := make([]MatchResult, 0, len(segments))
 	for _, seg := range segments {
-		score := partialFuzzyRatio(entity, seg.Text)
+		score := partialFuzzyRatioNormalized(needle, seg.text)
 		if score >= threshold {
 			results = append(results, MatchResult{
-				TimestampStart: seg.Start,
-				TimestampEnd:   seg.End,
+				TimestampStart: seg.start,
+				TimestampEnd:   seg.end,
 				Score:          math.Round(score*100) / 100,
 				Method:         method,
-				Text:           seg.Text,
+				Text:           seg.raw,
 			})
 		}
 	}
@@ -166,18 +199,21 @@ func matchEntityToSegments(entity string, segments []TranscriptionSegment, thres
 
 // matchEntityByKeywords matches an entity using keyword presence in segments.
 // Score is differentiated: longer word matches and higher coverage get higher scores (50-80).
-func matchEntityByKeywords(entity string, segments []TranscriptionSegment) []MatchResult {
-	var results []MatchResult
+// The needle is normalized and split into words once (invariant across segments).
+func matchEntityByKeywords(entity string, segments []normalizedSegment) []MatchResult {
+	normEntity := normalizeForMatch(entity)
+	entityWords := strings.Fields(normEntity)
+	results := make([]MatchResult, 0, len(segments))
 	for _, seg := range segments {
-		if matched, word, coverage := keywordMatch(entity, seg.Text); matched {
+		if matched, word, coverage := keywordMatchFields(normEntity, entityWords, strings.Fields(seg.text)); matched {
 			// Score based on coverage: 50 (single short word) to 80 (full phrase match)
 			score := 50.0 + math.Min(coverage, 30.0)
 			results = append(results, MatchResult{
-				TimestampStart: seg.Start,
-				TimestampEnd:   seg.End,
+				TimestampStart: seg.start,
+				TimestampEnd:   seg.end,
 				Score:          math.Round(score*100) / 100,
 				Method:         "keyword:" + word,
-				Text:           seg.Text,
+				Text:           seg.raw,
 			})
 		}
 	}

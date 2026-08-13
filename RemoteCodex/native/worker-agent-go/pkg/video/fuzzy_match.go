@@ -61,8 +61,13 @@ func min3(a, b, c int) int {
 
 // fuzzyRatio computes a similarity ratio (0-100) between two strings.
 func fuzzyRatio(a, b string) float64 {
-	a = normalizeForMatch(a)
-	b = normalizeForMatch(b)
+	return fuzzyRatioNormalized(normalizeForMatch(a), normalizeForMatch(b))
+}
+
+// fuzzyRatioNormalized is fuzzyRatio for two already-normalized strings.
+// Hoisting normalization to the caller lets a hot loop skip a second
+// normalization pass over strings normalized once upstream.
+func fuzzyRatioNormalized(a, b string) float64 {
 	return ratioFromDistance(a, b, levenshtein(a, b))
 }
 
@@ -85,13 +90,17 @@ func ratioFromDistance(a, b string, dist int) float64 {
 }
 
 // partialFuzzyRatio finds the best partial match of needle in haystack.
-// Optimized: limits the sliding window to exact-length needle windows, hoists
-// the invariant needle normalization out of the loop, and reuses the
-// Levenshtein scratch rows across every window so the O(n) windows no longer
-// re-normalize needle nor re-allocate the two distance buffers.
 func partialFuzzyRatio(needle, haystack string) float64 {
-	needle = normalizeForMatch(needle)
-	haystack = normalizeForMatch(haystack)
+	return partialFuzzyRatioNormalized(normalizeForMatch(needle), normalizeForMatch(haystack))
+}
+
+// partialFuzzyRatioNormalized is the buffer-reusing core of partialFuzzyRatio
+// for two already-normalized strings. Hoisting normalization to the caller
+// lets matchEntityToSegments normalize an entity ONCE and reuse it across
+// every transcription segment instead of re-normalizing the same needle per
+// segment. It limits the sliding window to exact-length needle windows and
+// reuses the two Levenshtein scratch rows across every window.
+func partialFuzzyRatioNormalized(needle, haystack string) float64 {
 	if len(needle) == 0 {
 		return 100.0
 	}
@@ -99,7 +108,7 @@ func partialFuzzyRatio(needle, haystack string) float64 {
 		return 0.0
 	}
 	if len(needle) > len(haystack) {
-		return fuzzyRatio(needle, haystack)
+		return fuzzyRatioNormalized(needle, haystack)
 	}
 
 	prev := make([]int, len(needle)+1)
@@ -136,12 +145,21 @@ func normalizeForMatch(s string) string {
 // Returns the best matching word and its coverage ratio (0-100).
 // Word boundary: the word must be surrounded by non-letter/non-digit chars or string edges.
 func keywordMatch(needle, haystack string) (bool, string, float64) {
-	normNeedle := normalizeForMatch(needle)
-	normHaystack := normalizeForMatch(haystack)
-	words := strings.Fields(normNeedle)
-	hayWords := strings.Fields(normHaystack)
+	return keywordMatchNormalized(normalizeForMatch(needle), normalizeForMatch(haystack))
+}
 
-	for _, w := range words {
+// keywordMatchNormalized is keywordMatch for two already-normalized strings.
+func keywordMatchNormalized(normNeedle, normHaystack string) (bool, string, float64) {
+	return keywordMatchFields(normNeedle, strings.Fields(normNeedle), strings.Fields(normHaystack))
+}
+
+// keywordMatchFields matches pre-normalized needle words against pre-split
+// haystack words. matchEntityByKeywords precomputes the needle words ONCE
+// (the needle is invariant across segments) and splits each haystack once per
+// segment, so the per-segment loop no longer re-normalizes nor re-splits the
+// needle.
+func keywordMatchFields(normNeedle string, needleWords, hayWords []string) (bool, string, float64) {
+	for _, w := range needleWords {
 		if len(w) < 3 {
 			continue
 		}
