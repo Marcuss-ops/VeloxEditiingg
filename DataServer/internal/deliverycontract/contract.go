@@ -27,3 +27,37 @@ type DeliveryDestination struct {
 type DeliveryPlanResolver interface {
 	ResolveDestinations(context.Context, string, string) ([]DeliveryDestination, error)
 }
+
+// DeliveryStatus is the canonical lifecycle of one delivery attempt. It is
+// deliberately separate from JobStatus, ArtifactState, and PublicationStatus:
+// a delivery can fail after its artifact is READY without invalidating the
+// artifact. It lives in this leaf package (not deliveries) so both the delivery
+// runner and the store layer can name the type without the import cycle that
+// store → deliveries would introduce.
+type DeliveryStatus string
+
+const (
+	DeliveryPending     DeliveryStatus = "PENDING"
+	DeliveryRunning     DeliveryStatus = "RUNNING"
+	DeliveryRetryWait   DeliveryStatus = "RETRY_WAIT"
+	DeliverySucceeded   DeliveryStatus = "SUCCEEDED"
+	DeliveryFailed      DeliveryStatus = "FAILED"
+	DeliveryBlockedAuth DeliveryStatus = "BLOCKED_AUTH"
+	DeliveryCancelled   DeliveryStatus = "CANCELLED"
+)
+
+// Valid reports whether s is a known persisted delivery status.
+func (s DeliveryStatus) Valid() bool {
+	switch s {
+	case DeliveryPending, DeliveryRunning, DeliveryRetryWait, DeliverySucceeded, DeliveryFailed, DeliveryBlockedAuth, DeliveryCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsTerminal reports whether s is a terminal delivery status (no further
+// retries or state transitions).
+func (s DeliveryStatus) IsTerminal() bool {
+	return s == DeliverySucceeded || s == DeliveryFailed || s == DeliveryBlockedAuth || s == DeliveryCancelled
+}

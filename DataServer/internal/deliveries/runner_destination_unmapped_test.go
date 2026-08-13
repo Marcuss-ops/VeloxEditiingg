@@ -231,7 +231,7 @@ func TestRunnerHydrateDestination_UnmappedRouting_FailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetJobDelivery: %v", err)
 	}
-	if got, want := jd.Status, "FAILED"; got != want {
+	if got, want := jd.Status, DeliveryFailed; got != want {
 		t.Errorf("status = %q, want %q (opaque-mode fail-closed)", got, want)
 	}
 	if got, want := jd.LastError, "DESTINATION_UNMAPPED"; got != want {

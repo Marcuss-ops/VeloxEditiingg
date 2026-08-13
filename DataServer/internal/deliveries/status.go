@@ -1,53 +1,44 @@
 package deliveries
 
-// DeliveryStatus is the canonical lifecycle of one delivery attempt.
-// It is deliberately separate from JobStatus, ArtifactState, and
-// PublicationStatus: a delivery can fail after its artifact is READY,
-// without invalidating the artifact.
-type DeliveryStatus string
+import "velox-server/internal/deliverycontract"
+
+// The delivery lifecycle status now lives in the leaf deliverycontract
+// package so both the delivery runner and the store layer can name the type
+// without the import cycle that store → deliveries would introduce. The
+// aliases below preserve the deliveries.* source surface for existing
+// callers (including statusboundary) while the canonical definition lives in
+// deliverycontract.
+
+type DeliveryStatus = deliverycontract.DeliveryStatus
 
 // DeliveryAttemptState is retained as a source-compatible alias.
-type DeliveryAttemptState = DeliveryStatus
+type DeliveryAttemptState = deliverycontract.DeliveryStatus
 
 const (
-	DeliveryPending     DeliveryAttemptState = "PENDING"
-	DeliveryRunning     DeliveryAttemptState = "RUNNING"
-	DeliveryRetryWait   DeliveryAttemptState = "RETRY_WAIT"
-	DeliverySucceeded   DeliveryAttemptState = "SUCCEEDED"
-	DeliveryFailed      DeliveryAttemptState = "FAILED"
-	DeliveryBlockedAuth DeliveryAttemptState = "BLOCKED_AUTH"
-	DeliveryCancelled   DeliveryAttemptState = "CANCELLED"
+	DeliveryPending     = deliverycontract.DeliveryPending
+	DeliveryRunning     = deliverycontract.DeliveryRunning
+	DeliveryRetryWait   = deliverycontract.DeliveryRetryWait
+	DeliverySucceeded   = deliverycontract.DeliverySucceeded
+	DeliveryFailed      = deliverycontract.DeliveryFailed
+	DeliveryBlockedAuth = deliverycontract.DeliveryBlockedAuth
+	DeliveryCancelled   = deliverycontract.DeliveryCancelled
 )
-
-// Valid reports whether s is a known persisted delivery status.
-func (s DeliveryStatus) Valid() bool {
-	switch s {
-	case DeliveryPending, DeliveryRunning, DeliveryRetryWait, DeliverySucceeded, DeliveryFailed, DeliveryBlockedAuth, DeliveryCancelled:
-		return true
-	default:
-		return false
-	}
-}
-
-func (s DeliveryStatus) IsTerminal() bool {
-	return s == DeliverySucceeded || s == DeliveryFailed || s == DeliveryBlockedAuth || s == DeliveryCancelled
-}
 
 // DeliveryState is the canonical lifecycle of a delivery aggregate.
 // Delivery attempts use the same persisted values but remain conceptually
 // separate from the artifact they deliver.
-type DeliveryState = DeliveryStatus
+type DeliveryState = deliverycontract.DeliveryStatus
 
 // Status is retained as a source-compatible alias for existing store-facing
 // callers. New delivery code should use DeliveryState.
-type Status = DeliveryState
+type Status = deliverycontract.DeliveryStatus
 
 const (
-	StatusPending     = DeliveryPending
-	StatusRunning     = DeliveryRunning
-	StatusRetryWait   = DeliveryRetryWait
-	StatusSucceeded   = DeliverySucceeded
-	StatusFailed      = DeliveryFailed
-	StatusBlockedAuth = DeliveryBlockedAuth
-	StatusCancelled   = DeliveryCancelled
+	StatusPending     = deliverycontract.DeliveryPending
+	StatusRunning     = deliverycontract.DeliveryRunning
+	StatusRetryWait   = deliverycontract.DeliveryRetryWait
+	StatusSucceeded   = deliverycontract.DeliverySucceeded
+	StatusFailed      = deliverycontract.DeliveryFailed
+	StatusBlockedAuth = deliverycontract.DeliveryBlockedAuth
+	StatusCancelled   = deliverycontract.DeliveryCancelled
 )

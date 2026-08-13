@@ -25,6 +25,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"velox-server/internal/deliverycontract"
 )
 
 // DeliveryDestination is the typed view of a delivery_destinations row.
@@ -61,7 +63,7 @@ type JobDelivery struct {
 	DeliveryID       string `json:"delivery_id"`
 	ArtifactID       string `json:"artifact_id"`
 	DestinationID    string `json:"destination_id"`
-	Status           string `json:"status"`
+	Status           deliverycontract.DeliveryStatus `json:"status"`
 	IdempotencyKey   string `json:"idempotency_key,omitempty"`
 	RemoteID         string `json:"remote_id,omitempty"`
 	RemoteURL        string `json:"remote_url,omitempty"`

@@ -68,13 +68,13 @@ func (s *Service) loadDeliveries(ctx context.Context, jobID string) ([]deliveryR
 		out = append(out, deliveryResponse{
 			ExternalDestinationID: externalID,
 			SocialDeliveryID:      row.DeliveryID,
-			Status:                row.Status,
-			Phase:                 row.Status,
+			Status:                string(row.Status),
+			Phase:                 string(row.Status),
 			Attempt:               row.AttemptCount,
 			NextRetryAt:           row.NextAttemptAt,
 			LastErrorCode:         row.LastError,
 			LastErrorMessage:      row.LastErrorMessage,
-			RetryFrom:             row.Status,
+			RetryFrom:             string(row.Status),
 			PlatformMediaID:       row.RemoteID,
 			PlatformURL:           row.RemoteURL,
 		})

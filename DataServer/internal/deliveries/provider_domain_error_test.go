@@ -143,7 +143,7 @@ func TestDomainErrorPropagatesThroughDeliveryRunner(t *testing.T) {
 	tests := []struct {
 		name          string
 		err           *domain.DomainError
-		wantStatus    string
+		wantStatus    DeliveryStatus
 		wantCode      string
 		wantMessage   string
 		wantRunnerErr bool
@@ -161,7 +161,7 @@ func TestDomainErrorPropagatesThroughDeliveryRunner(t *testing.T) {
 				Component:   domain.ComponentDelivery,
 				Phase:       "provider",
 			},
-			wantStatus:  "RETRY_WAIT",
+			wantStatus:  DeliveryRetryWait,
 			wantCode:    domain.FailureDestinationUnavailable,
 			wantMessage: "provider delivery: provider temporarily unavailable",
 			wantRetry:   true,
@@ -169,7 +169,7 @@ func TestDomainErrorPropagatesThroughDeliveryRunner(t *testing.T) {
 		{
 			name:          "terminal domain error fails delivery",
 			err:           domain.NewInvalidPayload("delivery_plan.0.priority", "out_of_range", "priority must be non-negative"),
-			wantStatus:    "FAILED",
+			wantStatus:    DeliveryFailed,
 			wantCode:      domain.FailureInvalidPayload,
 			wantMessage:   "provider delivery: priority must be non-negative",
 			wantRunnerErr: true,

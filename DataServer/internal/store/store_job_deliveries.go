@@ -9,6 +9,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+
+	"velox-server/internal/deliverycontract"
 )
 
 // ── Job Delivery CRUD ────────────────────────────────────────────────────────
@@ -27,7 +29,7 @@ func (s *SQLiteStore) InsertJobDelivery(jobD *JobDelivery) error {
 		jobD.UpdatedAt = now
 	}
 	if jobD.Status == "" {
-		jobD.Status = "PENDING"
+		jobD.Status = deliverycontract.DeliveryPending
 	}
 	if jobD.MaxAttempts == 0 {
 		jobD.MaxAttempts = 5

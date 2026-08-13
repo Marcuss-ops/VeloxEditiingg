@@ -136,7 +136,7 @@ func (a *sqliteJobInspectionAdapter) ListDeliveries(_ context.Context, jobID str
 	for _, row := range rows {
 		out = append(out, observability.DeliverySnapshot{
 			DeliveryID: row.DeliveryID, ArtifactID: row.ArtifactID,
-			DestinationID: row.DestinationID, Status: row.Status,
+			DestinationID: row.DestinationID, Status: string(row.Status),
 			RemoteID: row.RemoteID, RemoteURL: row.RemoteURL,
 			AttemptCount: row.AttemptCount, RetryCount: deliveryRetryCount(row.AttemptCount), MaxAttempts: row.MaxAttempts,
 			LastError: row.LastError, LastErrorMessage: row.LastErrorMessage,
