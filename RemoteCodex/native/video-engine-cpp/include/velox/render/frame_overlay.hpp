@@ -59,6 +59,23 @@ bool blendYuvOverlayScalar(PixelFrame& dst, const PreparedOverlay& overlay,
                            const Rect& placement, float opacity,
                            std::string* error = nullptr);
 
+// AVX2 kernel for the Y plane (chroma stays scalar). Compiled per-function
+// with target("avx2") — never -march=native — so the binary stays portable
+// and reproducible. Bit-exact with blendYuvOverlayScalar; only the Y plane
+// (3/4 of the pixels) is vectorized. On non-GNU/Clang toolchains this symbol
+// delegates to the scalar reference.
+bool blendYuvOverlayAVX2(PixelFrame& dst, const PreparedOverlay& overlay,
+                         const Rect& placement, float opacity,
+                         std::string* error = nullptr);
+
+// Runtime dispatch: AVX2 when the host CPU supports it, else the scalar
+// reference. Production callers (the kernel, the frame pipeline) go through
+// this entry point so the optimization is selected by capability, never by
+// compile-time flags.
+bool blendYuvOverlay(PixelFrame& dst, const PreparedOverlay& overlay,
+                     const Rect& placement, float opacity,
+                     std::string* error = nullptr);
+
 // A PixelKernel that blends one prepared overlay into every frame. The
 // overlay is prepared once by the caller; apply() performs only the ROI
 // blend using the op's ROI as placement and op.opacity as the global
