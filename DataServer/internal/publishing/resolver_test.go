@@ -41,7 +41,7 @@ func healthyTarget(externalID string, accountID int64) socialclient.PublishingTa
 	return socialclient.PublishingTarget{
 		WorkspaceID:           42,
 		PlatformAccountID:     accountID,
-		Platform:              PlatformYouTube,
+		Platform:              "youtube",
 		ChannelID:             "UC-" + externalID,
 		ChannelName:           "Channel " + externalID,
 		ExternalDestinationID: externalID,
@@ -107,25 +107,25 @@ func TestNormalizeCatalogRejectsWorkspacePlatformAndAccountConflicts(t *testing.
 	}{
 		{
 			name:     "workspace",
-			request:  CatalogRequest{WorkspaceID: 0, Platform: PlatformYouTube},
+			request:  CatalogRequest{WorkspaceID: 0, Platform: "youtube"},
 			response: &socialclient.PublishingTargetCatalogResponse{},
 			want:     ErrInvalidRequest,
 		},
 		{
 			name:     "platform",
-			request:  CatalogRequest{WorkspaceID: 42, Platform: "tiktok"},
+			request:  CatalogRequest{WorkspaceID: 42, Platform: "  "},
 			response: &socialclient.PublishingTargetCatalogResponse{},
 			want:     ErrInvalidRequest,
 		},
 		{
 			name:     "channel workspace",
-			request:  CatalogRequest{WorkspaceID: 42, Platform: PlatformYouTube},
-			response: &socialclient.PublishingTargetCatalogResponse{ResolvedTargets: []socialclient.PublishingTarget{{WorkspaceID: 99, PlatformAccountID: 1, Platform: PlatformYouTube, ChannelID: "UC", ChannelName: "Wrong", ExternalDestinationID: "ext", Status: "active"}}},
+			request:  CatalogRequest{WorkspaceID: 42, Platform: "youtube"},
+			response: &socialclient.PublishingTargetCatalogResponse{ResolvedTargets: []socialclient.PublishingTarget{{WorkspaceID: 99, PlatformAccountID: 1, Platform: "youtube", ChannelID: "UC", ChannelName: "Wrong", ExternalDestinationID: "ext", Status: "active"}}},
 			want:     ErrCatalogInvalid,
 		},
 		{
 			name:     "account duplicate",
-			request:  CatalogRequest{WorkspaceID: 42, Platform: PlatformYouTube},
+			request:  CatalogRequest{WorkspaceID: 42, Platform: "youtube"},
 			response: &socialclient.PublishingTargetCatalogResponse{ResolvedTargets: []socialclient.PublishingTarget{healthyTarget("ext-a", 101), healthyTarget("ext-b", 101)}},
 			want:     ErrConflictingDuplicate,
 		},
@@ -140,11 +140,26 @@ func TestNormalizeCatalogRejectsWorkspacePlatformAndAccountConflicts(t *testing.
 	}
 }
 
+func TestNormalizeCatalogAcceptsAnyNonEmptyPlatform(t *testing.T) {
+	target := healthyTarget("ext-tiktok", 301)
+	target.Platform = "tiktok"
+	catalog, err := NormalizeCatalog(CatalogRequest{WorkspaceID: 42, Platform: "tiktok"}, &socialclient.PublishingTargetCatalogResponse{
+		Valid:           true,
+		ResolvedTargets: []socialclient.PublishingTarget{target},
+	})
+	if err != nil {
+		t.Fatalf("NormalizeCatalog tiktok: %v", err)
+	}
+	if catalog.Platform != "tiktok" || len(catalog.Channels) != 1 || catalog.Channels[0].ExternalDestinationID != "ext-tiktok" {
+		t.Fatalf("tiktok catalog = %+v", catalog)
+	}
+}
+
 func TestNormalizeCatalogRejectsExplicitlyInactiveAccountOrBinding(t *testing.T) {
 	inactive := healthyTarget("ext-inactive", 103)
 	accountActive := false
 	inactive.AccountActive = &accountActive
-	catalog, err := NormalizeCatalog(CatalogRequest{WorkspaceID: 42, Platform: PlatformYouTube}, &socialclient.PublishingTargetCatalogResponse{
+	catalog, err := NormalizeCatalog(CatalogRequest{WorkspaceID: 42, Platform: "youtube"}, &socialclient.PublishingTargetCatalogResponse{
 		ResolvedTargets: []socialclient.PublishingTarget{inactive},
 	})
 	if err != nil {
@@ -157,7 +172,7 @@ func TestNormalizeCatalogRejectsExplicitlyInactiveAccountOrBinding(t *testing.T)
 	group := healthyGroup(9)
 	bindingEnabled := false
 	group.Members[0].WorkspaceBindingEnabled = &bindingEnabled
-	catalog, err = NormalizeCatalog(CatalogRequest{WorkspaceID: 42, Platform: PlatformYouTube}, &socialclient.PublishingTargetCatalogResponse{
+	catalog, err = NormalizeCatalog(CatalogRequest{WorkspaceID: 42, Platform: "youtube"}, &socialclient.PublishingTargetCatalogResponse{
 		ResolvedGroups: []socialclient.PublishingGroup{group},
 	})
 	if err != nil {
@@ -175,7 +190,7 @@ func TestNormalizeCatalogMarksBlockedTargetsAndGroupsIneligible(t *testing.T) {
 	partial := healthyGroup(8)
 	partial.PublishableMemberCount = 2
 
-	catalog, err := NormalizeCatalog(CatalogRequest{WorkspaceID: 42, Platform: PlatformYouTube}, &socialclient.PublishingTargetCatalogResponse{
+	catalog, err := NormalizeCatalog(CatalogRequest{WorkspaceID: 42, Platform: "youtube"}, &socialclient.PublishingTargetCatalogResponse{
 		ResolvedTargets: []socialclient.PublishingTarget{blocked},
 		ResolvedGroups:  []socialclient.PublishingGroup{partial},
 	})
@@ -189,7 +204,7 @@ func TestNormalizeCatalogMarksBlockedTargetsAndGroupsIneligible(t *testing.T) {
 
 func TestResolveSelectionValidatesLocalDestinationAndDeduplicates(t *testing.T) {
 	channel := healthyTarget("ext-a", 101)
-	catalog, err := NormalizeCatalog(CatalogRequest{WorkspaceID: 42, Platform: PlatformYouTube}, &socialclient.PublishingTargetCatalogResponse{ResolvedTargets: []socialclient.PublishingTarget{channel}})
+	catalog, err := NormalizeCatalog(CatalogRequest{WorkspaceID: 42, Platform: "youtube"}, &socialclient.PublishingTargetCatalogResponse{ResolvedTargets: []socialclient.PublishingTarget{channel}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +220,7 @@ func TestResolveSelectionValidatesLocalDestinationAndDeduplicates(t *testing.T) 
 	}
 	resolver := NewTargetResolver(nil, reader)
 	selection, err := resolver.ResolveSelection(context.Background(), SelectionRequest{
-		CatalogRequest: CatalogRequest{WorkspaceID: 42, Platform: PlatformYouTube},
+		CatalogRequest: CatalogRequest{WorkspaceID: 42, Platform: "youtube"},
 		Catalog:        catalog,
 		DestinationIDs: []string{"  " + DestinationIDForExternal("ext-a") + "  ", DestinationIDForExternal("ext-a")},
 	})
@@ -220,7 +235,7 @@ func TestResolveSelectionValidatesLocalDestinationAndDeduplicates(t *testing.T) 
 func TestResolveSelectionRejectsDestinationAndGroupFailures(t *testing.T) {
 	channel := healthyTarget("ext-a", 101)
 	group := healthyGroup(7)
-	catalog, err := NormalizeCatalog(CatalogRequest{WorkspaceID: 42, Platform: PlatformYouTube}, &socialclient.PublishingTargetCatalogResponse{
+	catalog, err := NormalizeCatalog(CatalogRequest{WorkspaceID: 42, Platform: "youtube"}, &socialclient.PublishingTargetCatalogResponse{
 		ResolvedTargets: []socialclient.PublishingTarget{channel},
 		ResolvedGroups:  []socialclient.PublishingGroup{group},
 	})
@@ -232,7 +247,7 @@ func TestResolveSelectionRejectsDestinationAndGroupFailures(t *testing.T) {
 		rows:     map[string]*store.DeliveryDestination{},
 	})
 	_, err = resolver.ResolveSelection(context.Background(), SelectionRequest{
-		CatalogRequest: CatalogRequest{WorkspaceID: 42, Platform: PlatformYouTube},
+		CatalogRequest: CatalogRequest{WorkspaceID: 42, Platform: "youtube"},
 		Catalog:        catalog,
 		DestinationIDs: []string{DestinationIDForExternal("ext-a")},
 	})
@@ -241,7 +256,7 @@ func TestResolveSelectionRejectsDestinationAndGroupFailures(t *testing.T) {
 	}
 
 	_, err = resolver.ResolveSelection(context.Background(), SelectionRequest{
-		CatalogRequest: CatalogRequest{WorkspaceID: 42, Platform: PlatformYouTube},
+		CatalogRequest: CatalogRequest{WorkspaceID: 42, Platform: "youtube"},
 		Catalog:        catalog,
 		GroupIDs:       []int64{999},
 	})
@@ -252,7 +267,7 @@ func TestResolveSelectionRejectsDestinationAndGroupFailures(t *testing.T) {
 
 func TestResolveSelectionRejectsGroupWhenAnyMemberIsMissingLocally(t *testing.T) {
 	group := healthyGroup(7)
-	catalog, err := NormalizeCatalog(CatalogRequest{WorkspaceID: 42, Platform: PlatformYouTube}, &socialclient.PublishingTargetCatalogResponse{
+	catalog, err := NormalizeCatalog(CatalogRequest{WorkspaceID: 42, Platform: "youtube"}, &socialclient.PublishingTargetCatalogResponse{
 		ResolvedGroups: []socialclient.PublishingGroup{group},
 	})
 	if err != nil {
@@ -276,7 +291,7 @@ func TestResolveSelectionRejectsGroupWhenAnyMemberIsMissingLocally(t *testing.T)
 		},
 	}
 	_, err = NewTargetResolver(nil, reader).ResolveSelection(context.Background(), SelectionRequest{
-		CatalogRequest: CatalogRequest{WorkspaceID: 42, Platform: PlatformYouTube},
+		CatalogRequest: CatalogRequest{WorkspaceID: 42, Platform: "youtube"},
 		Catalog:        catalog,
 		GroupIDs:       []int64{7},
 	})
@@ -287,7 +302,7 @@ func TestResolveSelectionRejectsGroupWhenAnyMemberIsMissingLocally(t *testing.T)
 
 func TestResolveSelectionAcceptsGroupWhenAllMembersAreLocallyEnabled(t *testing.T) {
 	group := healthyGroup(7)
-	catalog, err := NormalizeCatalog(CatalogRequest{WorkspaceID: 42, Platform: PlatformYouTube}, &socialclient.PublishingTargetCatalogResponse{
+	catalog, err := NormalizeCatalog(CatalogRequest{WorkspaceID: 42, Platform: "youtube"}, &socialclient.PublishingTargetCatalogResponse{
 		ResolvedGroups: []socialclient.PublishingGroup{group},
 	})
 	if err != nil {
@@ -307,7 +322,7 @@ func TestResolveSelectionAcceptsGroupWhenAllMembersAreLocallyEnabled(t *testing.
 		}
 	}
 	selection, err := NewTargetResolver(nil, fakeDestinationReader{statuses: statuses, rows: rows}).ResolveSelection(context.Background(), SelectionRequest{
-		CatalogRequest: CatalogRequest{WorkspaceID: 42, Platform: PlatformYouTube},
+		CatalogRequest: CatalogRequest{WorkspaceID: 42, Platform: "youtube"},
 		Catalog:        catalog,
 		GroupIDs:       []int64{7, 7},
 	})

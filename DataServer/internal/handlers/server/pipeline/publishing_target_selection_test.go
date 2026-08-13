@@ -91,7 +91,7 @@ func TestSubmitPublishingTargetStrictJSONRoundTrip(t *testing.T) {
 func TestResolveSelectionExpandsGroupToConcreteDeliveryPlanDeterministically(t *testing.T) {
 	catalog := &targetpublishing.Catalog{
 		WorkspaceID: 42,
-		Platform:    targetpublishing.PlatformYouTube,
+		Platform:    "youtube",
 		Groups: []targetpublishing.Group{{
 			GroupID:                7,
 			WorkspaceID:            42,
@@ -121,7 +121,7 @@ func TestResolveSelectionExpandsGroupToConcreteDeliveryPlanDeterministically(t *
 	}
 	resolver := targetpublishing.NewTargetResolver(nil, reader)
 	selection, err := resolver.ResolveSelection(context.Background(), targetpublishing.SelectionRequest{
-		CatalogRequest: targetpublishing.CatalogRequest{WorkspaceID: 42, Platform: targetpublishing.PlatformYouTube},
+		CatalogRequest: targetpublishing.CatalogRequest{WorkspaceID: 42, Platform: "youtube"},
 		Catalog:        catalog,
 		GroupIDs:       []int64{7},
 	})

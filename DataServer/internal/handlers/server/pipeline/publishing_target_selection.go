@@ -28,9 +28,12 @@ func (h *Handlers) resolvePublishingTarget(ctx context.Context, req SubmitJobReq
 	}
 
 	target := req.PublishingTarget
+	// The resolver treats platform as opaque/provider-neutral. The adapter
+	// still pins the legacy value until the platform is derived from the
+	// destination registry (provider-neutral selection follow-up).
 	catalog, err := h.targetResolver.ResolveCatalog(ctx, targetpublishing.CatalogRequest{
 		WorkspaceID: target.WorkspaceID,
-		Platform:    targetpublishing.PlatformYouTube,
+		Platform:    "youtube",
 	})
 	if err != nil {
 		return req, err
@@ -39,7 +42,7 @@ func (h *Handlers) resolvePublishingTarget(ctx context.Context, req SubmitJobReq
 	selectionRequest := targetpublishing.SelectionRequest{
 		CatalogRequest: targetpublishing.CatalogRequest{
 			WorkspaceID: target.WorkspaceID,
-			Platform:    targetpublishing.PlatformYouTube,
+			Platform:    "youtube",
 		},
 		Catalog: catalog,
 	}

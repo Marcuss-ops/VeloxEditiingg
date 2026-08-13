@@ -29,7 +29,6 @@ import (
 
 const (
 	ProviderSocialGateway = "social_gateway"
-	PlatformYouTube       = "youtube"
 )
 
 var (
@@ -179,8 +178,12 @@ func validateScope(workspaceID int64, platform string) error {
 	if workspaceID <= 0 {
 		return fmt.Errorf("%w: workspace_id must be positive", ErrInvalidRequest)
 	}
-	if normalizePlatform(platform) != PlatformYouTube {
-		return fmt.Errorf("%w: platform must be youtube", ErrInvalidRequest)
+	// Platform is opaque and provider-neutral: Velox forwards it verbatim to
+	// the upstream catalog and only requires that it is present so a catalog
+	// query can be scoped. Any non-empty value (youtube, tiktok, facebook,
+	// ...) is valid.
+	if normalizePlatform(platform) == "" {
+		return fmt.Errorf("%w: platform is required", ErrInvalidRequest)
 	}
 	return nil
 }
