@@ -148,25 +148,30 @@ func emptyAssociationResult() map[string]interface{} {
 }
 
 // normalizedSegment is a transcription segment whose Text has been
-// lowercased/filtered exactly once. Raw keeps the original text for result
-// payloads. It exists so a hot loop that matches N entities against S
-// segments normalizes each segment text once (O(S)) instead of re-normalizing
-// it for every entity (O(N×S)).
+// lowercased/filtered exactly once and whose words have been pre-split once.
+// Raw keeps the original text for result payloads. It exists so a hot loop
+// that matches N entities against S segments normalizes each segment text
+// once (O(S)) and splits its words once (O(S)) instead of re-normalizing and
+// re-splitting for every entity (O(N×S)).
 type normalizedSegment struct {
 	text  string
+	words []string
 	raw   string
 	start float64
 	end   float64
 }
 
-// normalizeSegments pre-normalizes every segment's text once. Callers that
-// loop entities × segments pass the normalized slice to the match helpers so
-// the per-entity loops never re-normalize nor re-allocate the segment text.
+// normalizeSegments pre-normalizes every segment's text and pre-splits its
+// words once. Callers that loop entities × segments pass the normalized slice
+// to the match helpers so the per-entity loops never re-normalize, re-allocate
+// nor re-split the segment text.
 func normalizeSegments(segments []TranscriptionSegment) []normalizedSegment {
 	norm := make([]normalizedSegment, len(segments))
 	for i, seg := range segments {
+		text := normalizeForMatch(seg.Text)
 		norm[i] = normalizedSegment{
-			text:  normalizeForMatch(seg.Text),
+			text:  text,
+			words: strings.Fields(text),
 			raw:   seg.Text,
 			start: seg.Start,
 			end:   seg.End,
@@ -181,9 +186,14 @@ func normalizeSegments(segments []TranscriptionSegment) []normalizedSegment {
 // is preallocated to the segment count.
 func matchEntityToSegments(entity string, segments []normalizedSegment, threshold float64, method string) []MatchResult {
 	needle := normalizeForMatch(entity)
+	// The needle length is invariant across segments, so the two Levenshtein
+	// scratch rows are allocated once per entity and reused for every segment
+	// instead of being re-allocated per (entity × segment).
+	prev := make([]int, len(needle)+1)
+	curr := make([]int, len(needle)+1)
 	results := make([]MatchResult, 0, len(segments))
 	for _, seg := range segments {
-		score := partialFuzzyRatioNormalized(needle, seg.text)
+		score := partialFuzzyRatioNormalizedBuf(needle, seg.text, prev, curr)
 		if score >= threshold {
 			results = append(results, MatchResult{
 				TimestampStart: seg.start,
@@ -205,7 +215,7 @@ func matchEntityByKeywords(entity string, segments []normalizedSegment) []MatchR
 	entityWords := strings.Fields(normEntity)
 	results := make([]MatchResult, 0, len(segments))
 	for _, seg := range segments {
-		if matched, word, coverage := keywordMatchFields(normEntity, entityWords, strings.Fields(seg.text)); matched {
+		if matched, word, coverage := keywordMatchFields(normEntity, entityWords, seg.words); matched {
 			// Score based on coverage: 50 (single short word) to 80 (full phrase match)
 			score := 50.0 + math.Min(coverage, 30.0)
 			results = append(results, MatchResult{

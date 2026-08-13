@@ -84,13 +84,25 @@ func ratioFromDistance(a, b string, dist int) float64 {
 	return (1.0 - float64(dist)/float64(maxLen)) * 100.0
 }
 
-// partialFuzzyRatioNormalized is the buffer-reusing core of the partial ratio
-// for two already-normalized strings. Hoisting normalization to the caller
-// lets matchEntityToSegments normalize an entity ONCE and reuse it across
-// every transcription segment instead of re-normalizing the same needle per
-// segment. It limits the sliding window to exact-length needle windows and
-// reuses the two Levenshtein scratch rows across every window.
+// partialFuzzyRatioNormalized is the convenience wrapper of the partial ratio
+// for two already-normalized strings. It allocates the two Levenshtein scratch
+// rows and delegates to partialFuzzyRatioNormalizedBuf. Hot loops that match a
+// fixed-length needle against many haystacks (matchEntityToSegments) call the
+// Buf variant directly so the rows are allocated once per needle instead of
+// once per segment.
 func partialFuzzyRatioNormalized(needle, haystack string) float64 {
+	return partialFuzzyRatioNormalizedBuf(needle, haystack,
+		make([]int, len(needle)+1), make([]int, len(needle)+1))
+}
+
+// partialFuzzyRatioNormalizedBuf is the buffer-reusing core of the partial
+// ratio. prev and curr must each have length >= len(needle)+1 and are owned by
+// the caller, which reuses them across every haystack of the same needle.
+// Hoisting normalization to the caller lets matchEntityToSegments normalize an
+// entity ONCE and reuse it across every transcription segment. It limits the
+// sliding window to exact-length needle windows and reuses the scratch rows
+// across every window AND every segment.
+func partialFuzzyRatioNormalizedBuf(needle, haystack string, prev, curr []int) float64 {
 	if len(needle) == 0 {
 		return 100.0
 	}
@@ -101,8 +113,6 @@ func partialFuzzyRatioNormalized(needle, haystack string) float64 {
 		return fuzzyRatioNormalized(needle, haystack)
 	}
 
-	prev := make([]int, len(needle)+1)
-	curr := make([]int, len(needle)+1)
 	bestScore := 0.0
 	for i := 0; i <= len(haystack)-len(needle); i++ {
 		// The window is a slice of the already-normalized haystack

@@ -161,7 +161,10 @@ func PerformFullAssociation(ctx context.Context,
 			normName := normalizeForMatch(name)
 			nameWords := strings.Fields(normName)
 			for _, seg := range normSegments {
-				hayWords := strings.Fields(seg.text)
+				// seg.words is pre-split in normalizeSegments so the
+				// per-(entity × segment) loop does not re-allocate the
+				// haystack token slice here.
+				hayWords := seg.words
 				for _, w := range nameWords {
 					if len(w) < 4 {
 						continue
