@@ -30,6 +30,16 @@ struct MediaSignature {
     std::vector<std::uint8_t> extradata;
 };
 
+// The single packet-copy compatibility predicate. Callers MUST NOT invent a
+// second, private comparison: every "can this stream be stream-copied into
+// the target" question goes through here.
+//
+// profile/level (and extradata) are pin-optional on the TARGET: a field left
+// at its default means the target does not constrain that field ("don't
+// care"), so only fields the target actually pins are compared. The canonical
+// output profile pins profile/level explicitly, so its strictness is
+// unchanged; a target that only wants to pin codec/pix_fmt/dims/fps leaves
+// profile/level at their defaults.
 bool mediaSignaturesCompatible(const MediaSignature& source,
                                const MediaSignature& target,
                                std::string* reason = nullptr);

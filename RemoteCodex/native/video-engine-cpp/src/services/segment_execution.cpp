@@ -24,11 +24,15 @@ bool mediaSignaturesCompatible(const MediaSignature& source,
         mismatch(reason, "codec_id");
         return false;
     }
-    if (source.profile != target.profile) {
+    // profile/level are pin-optional on the TARGET: a target that leaves a
+    // field at its default (< 0) means "any source profile/level is
+    // acceptable". The canonical profile pins both explicitly, so its
+    // strictness is unchanged. (Same don't-care pattern as extradata below.)
+    if (target.profile >= 0 && source.profile != target.profile) {
         mismatch(reason, "profile");
         return false;
     }
-    if (source.level != target.level) {
+    if (target.level >= 0 && source.level != target.level) {
         mismatch(reason, "level");
         return false;
     }

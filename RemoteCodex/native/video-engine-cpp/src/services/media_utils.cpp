@@ -4,6 +4,8 @@
 
 #ifdef VELOX_ENABLE_LIBAV
 #include "velox/services/media_probe.hpp"
+#include "velox/services/segment_execution.hpp"
+#include "velox/services/segment_execution_libav.hpp"
 
 extern "C" {
 #include <libavcodec/codec_id.h>
@@ -178,6 +180,10 @@ static bool nativeVideoStreamCopyCompatible(
         return false;
     }
 
+    // Duration + video-stream presence come from the in-process metadata
+    // probe below; copy compatibility is decided by the single AVStream ->
+    // MediaSignature bridge + the shared predicate, never a local
+    // codec/pix_fmt/dims/fps field comparison.
     const auto probe = probeMediaInProcess(clipPath);
     if (!probe.has_value()) {
         return false;
@@ -191,12 +197,25 @@ static bool nativeVideoStreamCopyCompatible(
     }
 
     // The canonical clip corpus is H.264, yuv420p, 1920x1080 at 24 fps.
-    // Keep this guard conservative: copy-only callers must reject incompatible
-    // media instead of producing a mixed concat stream.
-    if (video->codec_id != static_cast<int>(AV_CODEC_ID_H264) ||
-        video->pixel_format != static_cast<int>(AV_PIX_FMT_YUV420P) ||
-        video->width != width || video->height != height ||
-        std::abs(video->average_frame_rate - static_cast<double>(fps)) > 0.001) {
+    // Keep this guard conservative: copy-only callers must reject
+    // incompatible media instead of producing a mixed concat stream.
+    // profile/level are left un-pinned on the target ("don't care") to
+    // preserve the guard's codec/pix_fmt/dims/fps-only contract; the shared
+    // predicate honours that contract via its pin-optional rule.
+    SegmentProbe segment_probe;
+    if (!probeSegmentForExecution(clipPath, 0, MediaKind::Video, &segment_probe, nullptr)) {
+        return false;
+    }
+    MediaSignature target;
+    target.kind = MediaKind::Video;
+    target.codec_id = static_cast<int>(AV_CODEC_ID_H264);
+    target.pixel_format = static_cast<int>(AV_PIX_FMT_YUV420P);
+    target.width = width;
+    target.height = height;
+    target.frame_rate_num = fps;
+    target.frame_rate_den = 1;
+    std::string compatibility_reason;
+    if (!mediaSignaturesCompatible(segment_probe.signature, target, &compatibility_reason)) {
         return false;
     }
 

@@ -93,5 +93,26 @@ int main() {
     expect(!velox::media::mediaSignaturesCompatible(audio_source, audio_target),
            "audio sample format is part of the canonical signature");
 
+    // profile/level are pin-optional on the target: a target that leaves them
+    // at their defaults accepts any source profile/level, so the legacy
+    // copy-only guard can pin only codec/pix_fmt/dims/fps.
+    auto unprofiled_target = videoSignature();
+    unprofiled_target.profile = -1;
+    unprofiled_target.level = -1;
+    auto high_profile_source = videoSignature();
+    high_profile_source.profile = 100;
+    high_profile_source.level = 40;
+    expect(velox::media::mediaSignaturesCompatible(high_profile_source, unprofiled_target),
+           "unprofiled target accepts any source profile (pin-optional)");
+
+    // A target that pins profile/level stays strict.
+    auto pinned_target = videoSignature();
+    pinned_target.profile = 100;
+    pinned_target.level = 40;
+    auto baseline_source = videoSignature();
+    baseline_source.profile = 66; // FF_PROFILE_H264_BASELINE
+    expect(!velox::media::mediaSignaturesCompatible(baseline_source, pinned_target),
+           "pinned target rejects a mismatched source profile");
+
     return failures == 0 ? 0 : 1;
 }
