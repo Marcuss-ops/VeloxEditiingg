@@ -1,22 +1,20 @@
 package deliveries
 
-// runner_process.go: per-lease processing + lease renewal loop for the
-// DeliveryRunner. Split out of runner.go; the lifecycle lives in
-// runner.go, config in runner_config.go, helpers in runner_helpers.go.
+// runner_process.go: per-lease processing for the DeliveryRunner.
+// Split out of runner.go; the lifecycle lives in runner.go, config in
+// runner_config.go, pure helpers in runner_helpers.go, credential
+// resolution + lease issuance in runner_process_credentials.go, and the
+// lease-renewal loop + timeout classification in runner_process_lease.go.
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
-	"net"
 	"time"
 
-	"velox-server/internal/credentials"
 	"velox-server/internal/publicationstate"
 	"velox-server/internal/store"
-	"velox-shared/contract/domain"
 )
 
 // processLease resolves the provider for a claimed delivery and runs
@@ -361,124 +359,5 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 			r.telemetry.RecordDeliveryRetry(providerName)
 		}
 		return nil
-	}
-}
-
-func isDeliveryTimeout(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-		return true
-	}
-	var timeoutErr net.Error
-	return errors.As(err, &timeoutErr) && timeoutErr.Timeout()
-}
-
-// resolveCredentialReference keeps credential material out of the job
-// payload. The BFF carries only the opaque external destination ID; the
-// destination catalog is therefore the authoritative fallback when a
-// delivery plan has no per-publication credential_ref override. An explicit
-// metadata value still wins, and an invalid explicit value remains a hard
-// error rather than silently falling back to a different credential.
-func resolveCredentialReference(metadataJSON, configurationJSON string) (string, error) {
-	ref, err := credentials.ReferenceFromJSON(metadataJSON)
-	if err != nil || ref != "" {
-		return ref, err
-	}
-	return credentials.ReferenceFromJSON(configurationJSON)
-}
-
-func (r *DeliveryRunner) issueCredentialLease(ctx context.Context, provider Provider, destination *Destination, lease store.DeliveryLease) (*credentials.AccessLease, error) {
-	credentialProvider, needsCredential := provider.(CredentialLeaseProvider)
-	if !needsCredential {
-		return nil, nil
-	}
-	if destination == nil || destination.CredentialRef == "" {
-		return nil, fmt.Errorf("%w: %w", ErrProviderAuth, ErrCredentialRefRequired)
-	}
-	if r.vault == nil {
-		return nil, fmt.Errorf("%w: %w", ErrProviderAuth, ErrCredentialVaultUnavailable)
-	}
-	scopes := []string{"publish"}
-	if scoped, ok := credentialProvider.(CredentialScopeProvider); ok {
-		scopes = scoped.RequiredCredentialScopes()
-	}
-	publicationID := lease.DeliveryID
-	var metadata map[string]any
-	if err := json.Unmarshal([]byte(destination.DeliveryMetadataJSON), &metadata); err == nil {
-		if value, ok := metadata["publication_id"].(string); ok && value != "" {
-			publicationID = value
-		}
-	}
-	accessLease, err := r.vault.IssueAccessLease(ctx, destination.CredentialRef, r.identity, publicationID, scopes)
-	if err != nil {
-		// %w keeps the vault's typed sentinel (ErrRevoked / ErrExpired /
-		// ErrScope / ErrNotFound / ErrKeyUnavailable) reachable through
-		// errors.Is so classification never parses Error() text.
-		return nil, fmt.Errorf("%w: issue credential lease: %w", ErrProviderAuth, err)
-	}
-	return accessLease, nil
-}
-
-// credentialErrorCode derives the machine-readable BLOCKED_AUTH code from
-// the typed error chain only: the credentials vault sentinels and the
-// deliveries credential sentinels. No Error() text is inspected; unclassified
-// auth failures fall back to the generic CREDENTIAL_AUTH code.
-func credentialErrorCode(err error) string {
-	if err == nil {
-		return "CREDENTIAL_AUTH"
-	}
-	if code := domain.FailureCodeOf(err); code != "" {
-		return code
-	}
-	switch {
-	case errors.Is(err, credentials.ErrRevoked):
-		return "CREDENTIAL_REVOKED"
-	case errors.Is(err, credentials.ErrExpired):
-		return "CREDENTIAL_EXPIRED"
-	case errors.Is(err, credentials.ErrScope):
-		return "CREDENTIAL_SCOPE_DENIED"
-	case errors.Is(err, credentials.ErrNotFound):
-		return "CREDENTIAL_NOT_FOUND"
-	case errors.Is(err, credentials.ErrKeyUnavailable),
-		errors.Is(err, ErrCredentialVaultUnavailable):
-		return "CREDENTIAL_VAULT_UNAVAILABLE"
-	case errors.Is(err, ErrCredentialRefRequired):
-		return "CREDENTIAL_REF_REQUIRED"
-	default:
-		return "CREDENTIAL_AUTH"
-	}
-}
-
-// renewDeliveryLeaseLoop extends the lease periodically (every
-// leaseDuration/3) while provider.Deliver is running. When the deliver
-// context is cancelled, the goroutine exits. When a renewal fails (e.g.
-// CAS conflict from another runner reclaiming the lease), the onFailure
-// callback is invoked so the upload can be interrupted.
-func (r *DeliveryRunner) renewDeliveryLeaseLoop(ctx context.Context, done chan<- struct{}, lease store.DeliveryLease, onFailure func(error)) {
-	defer close(done)
-
-	interval := r.cfg.LeaseDuration / 3
-	if interval <= 0 {
-		interval = 30 * time.Second
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			newExpiry := time.Now().UTC().Add(r.cfg.LeaseDuration)
-			if err := r.dbStore.RenewDeliveryLease(
-				context.Background(), // intentionally detached from request ctx
-				lease.DeliveryID, lease.RunnerID, lease.LeaseID, newExpiry,
-			); err != nil {
-				onFailure(err)
-				return
-			}
-		}
 	}
 }
