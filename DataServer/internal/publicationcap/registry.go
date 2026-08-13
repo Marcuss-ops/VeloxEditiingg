@@ -87,11 +87,11 @@ func (r *Registry) Validate(provider string, metadata Metadata) error {
 
 func DefaultRegistry() *Registry {
 	r := NewRegistry()
-	common := Capability{SupportsScheduledPublish: true, SupportsLocalizations: true, SupportsCustomThumbnail: true, SupportsPlaylists: true, SupportsChapters: true, SupportsCaptions: true, MaxTitleBytes: 100, MaxDescriptionBytes: 5000, MaxTags: 500, MaxTagBytes: 500}
-	r.Register("youtube", common)
+	// Velox owns only its own storage providers. Social platform capabilities
+	// (youtube/facebook/tiktok/...) are owned by the Social API and must not
+	// be re-declared here: the preflight validates only providers Velox owns,
+	// and any other provider fails closed via provider_capability_unknown.
 	r.Register("google_drive", Capability{MaxTitleBytes: 255, MaxDescriptionBytes: 100000})
 	r.Register("drive", Capability{MaxTitleBytes: 255, MaxDescriptionBytes: 100000})
-	r.Register("facebook", Capability{SupportsCustomThumbnail: true, SupportsCaptions: true, MaxTitleBytes: 255, MaxDescriptionBytes: 63206, MaxTags: 50, MaxTagBytes: 100})
-	r.Register("tiktok", Capability{SupportsCaptions: true, MaxTitleBytes: 150, MaxDescriptionBytes: 2200, MaxTags: 100, MaxTagBytes: 100})
 	return r
 }
