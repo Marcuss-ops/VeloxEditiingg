@@ -1,4 +1,4 @@
-package worker
+package protectedassets
 
 import (
 	"context"
@@ -18,7 +18,7 @@ import (
 // cleanup permission.
 func (p *ProtectedAssetsPoller) WaitReady(ctx context.Context) error {
 	if p == nil {
-		return errors.New("worker.ProtectedAssetsPoller.WaitReady: nil poller")
+		return errors.New("protectedassets.ProtectedAssetsPoller.WaitReady: nil poller")
 	}
 	for {
 		p.mu.RLock()
@@ -35,7 +35,7 @@ func (p *ProtectedAssetsPoller) WaitReady(ctx context.Context) error {
 		ch := p.readyCh
 		p.readyMu.Unlock()
 		if ch == nil {
-			return errors.New("worker.ProtectedAssetsPoller.WaitReady: barrier is not initialized")
+			return errors.New("protectedassets.ProtectedAssetsPoller.WaitReady: barrier is not initialized")
 		}
 		select {
 		case <-ch:

@@ -1,4 +1,4 @@
-// Package worker — protected-asset snapshot poller (Pass 7).
+// Package protectedassets — protected-asset snapshot poller (Pass 7).
 //
 // The worker periodically fetches GET
 // /api/v1/agent/cache/protected-assets (the canonical Phase 6
@@ -45,7 +45,7 @@
 // The initial tick keeps the worker from spending the first
 // Interval idle when the master is reachable at boot.
 
-package worker
+package protectedassets
 
 import (
 	"errors"
@@ -62,11 +62,11 @@ import (
 // logs-and-defaults rather than panicking, but the helper that
 // surfaces the error during bootstrap is exported for callers that
 // prefer hard-fail semantics.
-var ErrPollerInvalidInterval = errors.New("worker.ProtectedAssetsPoller: interval must be > 0; defaulting to 30s")
-var ErrProtectedSnapshotNil = errors.New("worker.ProtectedAssetsPoller: successful response contained no snapshot")
-var ErrProtectedSnapshotInvalid = errors.New("worker.ProtectedAssetsPoller: snapshot generated_at is invalid")
-var ErrProtectedSnapshotStale = errors.New("worker.ProtectedAssetsPoller: snapshot generated_at is older than the last valid snapshot")
-var ErrProtectedSnapshotSessionUnavailable = errors.New("worker.ProtectedAssetsPoller: worker session is not registered")
+var ErrPollerInvalidInterval = errors.New("protectedassets.ProtectedAssetsPoller: interval must be > 0; defaulting to 30s")
+var ErrProtectedSnapshotNil = errors.New("protectedassets.ProtectedAssetsPoller: successful response contained no snapshot")
+var ErrProtectedSnapshotInvalid = errors.New("protectedassets.ProtectedAssetsPoller: snapshot generated_at is invalid")
+var ErrProtectedSnapshotStale = errors.New("protectedassets.ProtectedAssetsPoller: snapshot generated_at is older than the last valid snapshot")
+var ErrProtectedSnapshotSessionUnavailable = errors.New("protectedassets.ProtectedAssetsPoller: worker session is not registered")
 
 var _ workercache.ProtectionBarrier = (*ProtectedAssetsPoller)(nil)
 
@@ -107,8 +107,8 @@ type ProtectedAssetsPoller struct {
 	//   - TickOnce passes the underlying client error
 	//     verbatim (network / 5xx / 4xx / JSON decode).
 	//   - Run's automatic ticks wrap with a label prefix
-	//     ("worker.ProtectedAssetsPoller: initial tick" /
-	//     "worker.ProtectedAssetsPoller: tick") so on-call
+	//     ("protectedassets.ProtectedAssetsPoller: initial tick" /
+	//     "protectedassets.ProtectedAssetsPoller: tick") so on-call
 	//     operators can grep boot-time vs periodic failures.
 	// Run never double-wraps — TestPoller_500_KeepsLastGood
 	// asserts the 1-on-1 mapping in the TickOnce path,

@@ -28,6 +28,7 @@ import (
 
 	boot "velox-worker-agent/internal/bootstrap"
 	"velox-worker-agent/internal/executor"
+	"velox-worker-agent/internal/protectedassets"
 	"velox-worker-agent/internal/taskrunner/executors"
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/internal/worker"
@@ -450,7 +451,7 @@ func main() {
 			pollInterval = parsed
 		}
 	}
-	protectedPoller := worker.NewProtectedAssetsPoller(w.APIClient(), pollInterval)
+	protectedPoller := protectedassets.NewProtectedAssetsPoller(w.APIClient(), pollInterval)
 	cleanupPolicy := workercache.LoadCleanupPolicy()
 	protectedPoller.SnapshotMaxAge = cleanupPolicy.SnapshotMaxAge
 	telemetry.MarkCacheProtectionReady(false)

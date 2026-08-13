@@ -1,4 +1,4 @@
-// Package worker — protected-asset snapshot poller tests (Pass 7).
+// Package protectedassets — protected-asset snapshot poller tests (Pass 7).
 //
 // The tests use httptest.NewServer as a stand-in for the master
 // protected-asset endpoint. Each test sets a server that responds
@@ -20,7 +20,7 @@
 // never fires inside the test window — TickOnce drives the
 // state transitions deterministically.
 
-package worker
+package protectedassets
 
 import (
 	"context"

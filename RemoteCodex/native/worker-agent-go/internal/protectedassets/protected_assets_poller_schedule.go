@@ -1,4 +1,4 @@
-package worker
+package protectedassets
 
 import (
 	"context"
@@ -23,10 +23,10 @@ import (
 // errors caught at boot, NOT poll failures.
 func (p *ProtectedAssetsPoller) Run(ctx context.Context) error {
 	if p.Client == nil {
-		return errors.New("worker.ProtectedAssetsPoller.Run: nil Client")
+		return errors.New("protectedassets.ProtectedAssetsPoller.Run: nil Client")
 	}
 	if p.Interval <= 0 {
-		return errors.New("worker.ProtectedAssetsPoller.Run: zero Interval (call NewProtectedAssetsPoller instead of zeroing after construction)")
+		return errors.New("protectedassets.ProtectedAssetsPoller.Run: zero Interval (call NewProtectedAssetsPoller instead of zeroing after construction)")
 	}
 	p.mu.Lock()
 	p.sessionGated = true
@@ -45,7 +45,7 @@ func (p *ProtectedAssetsPoller) Run(ctx context.Context) error {
 	// and authentication gate opens, a normal bootstrap must not expose a
 	// transient 401 as the first observed poll result.
 	for {
-		if err := p.runTickOnce(ctx, "worker.ProtectedAssetsPoller: initial tick"); err == nil {
+		if err := p.runTickOnce(ctx, "protectedassets.ProtectedAssetsPoller: initial tick"); err == nil {
 			break
 		}
 		if err := waitContextTimer(ctx, 100*time.Millisecond); err != nil {
@@ -68,7 +68,7 @@ func (p *ProtectedAssetsPoller) Run(ctx context.Context) error {
 			}
 			// Discard the returned error: runTickOnce already fired OnError
 			// if it was set. The Run loop never stops on a poll failure.
-			p.runTickOnce(ctx, "worker.ProtectedAssetsPoller: tick")
+			p.runTickOnce(ctx, "protectedassets.ProtectedAssetsPoller: tick")
 		}
 	}
 }
