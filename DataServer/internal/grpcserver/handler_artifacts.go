@@ -12,9 +12,9 @@ package grpcserver
 
 import (
 	"context"
-	"log"
 
 	"velox-server/internal/artifacts"
+	"velox-server/internal/logging"
 	pb "velox-shared/controltransport/pb"
 )
 
@@ -32,7 +32,7 @@ import (
 // non-retryable without retrying against an unhealthy master.
 func (h *Handler) handleArtifactUploaded(workerID string, a *pb.ArtifactUploaded) {
 	if h.artifactSvc == nil {
-		log.Printf("[GRPC] ArtifactUploaded from worker %s but artifactSvc (artifacts.Service) is not wired — dropping", workerID)
+		logGRPCf(context.Background(), logging.LevelWarn, logging.CodeGRPCArtifactUploadRejected, "[GRPC] ArtifactUploaded from worker %s but artifactSvc (artifacts.Service) is not wired — dropping", workerID)
 		return
 	}
 
@@ -41,12 +41,11 @@ func (h *Handler) handleArtifactUploaded(workerID string, a *pb.ArtifactUploaded
 	artifactID := a.GetArtifactId()
 
 	if jobID == "" {
-		log.Printf("[GRPC] ArtifactUploaded from worker %s missing job_id — skipping", workerID)
+		logGRPCf(context.Background(), logging.LevelWarn, logging.CodeGRPCArtifactUploadRejected, "[GRPC] ArtifactUploaded from worker %s missing job_id — skipping", workerID)
 		return
 	}
 	if uploadID == "" {
-		log.Printf("[GRPC] ArtifactUploaded from worker %s job=%s artifactID=%s has empty upload_id — skipping",
-			workerID, jobID, artifactID)
+		logGRPCf(context.Background(), logging.LevelWarn, logging.CodeGRPCArtifactUploadRejected, "[GRPC] ArtifactUploaded from worker %s job=%s artifactID=%s has empty upload_id — skipping", workerID, jobID, artifactID)
 		return
 	}
 
@@ -72,8 +71,7 @@ func (h *Handler) handleArtifactUploaded(workerID string, a *pb.ArtifactUploaded
 		AttemptID:        attemptID,
 	}
 
-	log.Printf("[GRPC] Worker %s reporting artifact upload for job %s upload=%s artifactID=%s kind=%s",
-		workerID, jobID, uploadID, artifactID, a.GetArtifactType())
+	logGRPCf(context.Background(), logging.LevelInfo, logging.CodeGRPCArtifactUpload, "[GRPC] Worker %s reporting artifact upload for job %s upload=%s artifactID=%s kind=%s", workerID, jobID, uploadID, artifactID, a.GetArtifactType())
 
 	art, err := h.artifactSvc.Finalize(context.Background(), cmd)
 	if err != nil {
@@ -84,11 +82,9 @@ func (h *Handler) handleArtifactUploaded(workerID string, a *pb.ArtifactUploaded
 		// shows up alongside the wrapped message — otherwise the worker
 		// only sees the %v string and can't group failures by class.
 		class := classifyFinalizeError(err)
-		log.Printf("[GRPC] Artifact finalize FAILED class=%s job=%s upload=%s worker=%s: %v",
-			class, jobID, uploadID, workerID, err)
+		logGRPCf(context.Background(), logging.LevelError, logging.CodeGRPCArtifactUploadFailed, "[GRPC] Artifact finalize FAILED class=%s job=%s upload=%s worker=%s: %v", class, jobID, uploadID, workerID, err)
 		return
 	}
 
-	log.Printf("[GRPC] Artifact %s registered and job %s completed via upload %s (kind=%s sha256=%s)",
-		art.ID, jobID, uploadID, art.Type, art.SHA256)
+	logGRPCf(context.Background(), logging.LevelInfo, logging.CodeGRPCArtifactUpload, "[GRPC] Artifact %s registered and job %s completed via upload %s (kind=%s sha256=%s)", art.ID, jobID, uploadID, art.Type, art.SHA256)
 }

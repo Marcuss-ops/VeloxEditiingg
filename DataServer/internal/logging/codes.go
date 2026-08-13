@@ -203,6 +203,58 @@ const (
 	CodeCompletionReconcileDispatchFail = "COMPLETION_RECONCILE_DISPATCH_FAILED"
 )
 
+// gRPC server (replaces log.Printf in internal/grpcserver)
+const (
+	CodeGRPCWorkerConnected        = "GRPC_WORKER_CONNECTED"
+	CodeGRPCWorkerDisconnected     = "GRPC_WORKER_DISCONNECTED"
+	CodeGRPCWorkerReconnecting     = "GRPC_WORKER_RECONNECTING"
+	CodeGRPCStreamAuthenticated    = "GRPC_STREAM_AUTHENTICATED"
+	CodeGRPCStreamRejected         = "GRPC_STREAM_REJECTED"
+	CodeGRPCStreamHelloCollision   = "GRPC_STREAM_HELLO_COLLISION"
+	CodeGRPCStreamWriterFailure    = "GRPC_STREAM_WRITER_FAILURE"
+	CodeGRPCStreamReplay           = "GRPC_STREAM_REPLAY"
+	CodeGRPCStreamUnknownMessage   = "GRPC_STREAM_UNKNOWN_MESSAGE"
+	CodeGRPCSessionCleanupFailed   = "GRPC_SESSION_CLEANUP_FAILED"
+	CodeGRPCTaskAccepted           = "GRPC_TASK_ACCEPTED"
+	CodeGRPCTaskAcceptRefused      = "GRPC_TASK_ACCEPT_REFUSED"
+	CodeGRPCTaskAcceptFailed       = "GRPC_TASK_ACCEPT_FAILED"
+	CodeGRPCTaskRejected           = "GRPC_TASK_REJECTED"
+	CodeGRPCTaskRejectRefused      = "GRPC_TASK_REJECT_REFUSED"
+	CodeGRPCTaskRejectFailed       = "GRPC_TASK_REJECT_FAILED"
+	CodeGRPCTaskResult             = "GRPC_TASK_RESULT"
+	CodeGRPCTaskResultRejected     = "GRPC_TASK_RESULT_REJECTED"
+	CodeGRPCTaskResultFailed       = "GRPC_TASK_RESULT_FAILED"
+	CodeGRPCLeaseRenewal           = "GRPC_LEASE_RENEWAL"
+	CodeGRPCLeaseRenewalRefused    = "GRPC_LEASE_RENEWAL_REFUSED"
+	CodeGRPCLeaseRenewalFailed     = "GRPC_LEASE_RENEWAL_FAILED"
+	CodeGRPCCompletion             = "GRPC_COMPLETION"
+	CodeGRPCCompletionRejected     = "GRPC_COMPLETION_REJECTED"
+	CodeGRPCCompletionFailed       = "GRPC_COMPLETION_FAILED"
+	CodeGRPCArtifactUpload         = "GRPC_ARTIFACT_UPLOAD"
+	CodeGRPCArtifactUploadRejected = "GRPC_ARTIFACT_UPLOAD_REJECTED"
+	CodeGRPCArtifactUploadFailed   = "GRPC_ARTIFACT_UPLOAD_FAILED"
+	CodeGRPCPlacement              = "GRPC_PLACEMENT"
+	CodeGRPCPlacementFailed        = "GRPC_PLACEMENT_FAILED"
+	CodeGRPCRenderPlan             = "GRPC_RENDERPLAN"
+	CodeGRPCPrefetch               = "GRPC_PREFETCH"
+	CodeGRPCPrefetchFailed         = "GRPC_PREFETCH_FAILED"
+	CodeGRPCHeartbeatFailed        = "GRPC_HEARTBEAT_FAILED"
+	CodeGRPCSessionInvalid         = "GRPC_SESSION_INVALID"
+	CodeGRPCCommandDispatch        = "GRPC_COMMAND_DISPATCH"
+	CodeGRPCCommandFailed          = "GRPC_COMMAND_FAILED"
+	CodeGRPCTelemetryRejected      = "GRPC_TELEMETRY_REJECTED"
+	CodeGRPCAssetProgressRejected  = "GRPC_ASSET_PROGRESS_REJECTED"
+	CodeGRPCAssetProgressFailed    = "GRPC_ASSET_PROGRESS_FAILED"
+	CodeGRPCSecurity               = "GRPC_SECURITY"
+	CodeGRPCSecurityFailed         = "GRPC_SECURITY_FAILED"
+	CodeGRPCAuthz                  = "GRPC_AUTHZ"
+	CodeGRPCServerLifecycle        = "GRPC_SERVER_LIFECYCLE"
+	CodeGRPCServerFailed           = "GRPC_SERVER_FAILED"
+	CodeGRPCArtifactProtocolLog    = "GRPC_ARTIFACT_PROTOCOL_LOG"
+	CodeGRPCRegistryBridge         = "GRPC_REGISTRY_BRIDGE"
+	CodeGRPCMetricsDerivation      = "GRPC_METRICS_DERIVATION"
+)
+
 // Level constants
 const (
 	LevelInfo  = "INFO"
@@ -374,6 +426,56 @@ var codeDescriptions = map[string]string{
 	CodeCompletionReconcileScanFail:     "Reconcile scan failed",
 	CodeCompletionReconcileTick:         "Reconcile tick candidates",
 	CodeCompletionReconcileDispatchFail: "Reconcile dispatch failed",
+
+	// gRPC server.
+	CodeGRPCWorkerConnected:        "Worker connected",
+	CodeGRPCWorkerDisconnected:     "Worker disconnected",
+	CodeGRPCWorkerReconnecting:     "Worker reconnecting",
+	CodeGRPCStreamAuthenticated:    "Worker authenticated via mTLS",
+	CodeGRPCStreamRejected:         "Stream admission rejected",
+	CodeGRPCStreamHelloCollision:   "Worker hello collision",
+	CodeGRPCStreamWriterFailure:    "Session writer failure",
+	CodeGRPCStreamReplay:           "Duplicate or replayed message",
+	CodeGRPCStreamUnknownMessage:   "Unknown message type",
+	CodeGRPCSessionCleanupFailed:   "Session cleanup failed",
+	CodeGRPCTaskAccepted:           "Task accepted",
+	CodeGRPCTaskAcceptRefused:      "Task accept refused",
+	CodeGRPCTaskAcceptFailed:       "Task accept failed",
+	CodeGRPCTaskRejected:           "Task rejected by worker",
+	CodeGRPCTaskRejectRefused:      "Task reject refused",
+	CodeGRPCTaskRejectFailed:       "Task reject release failed",
+	CodeGRPCTaskResult:             "Task result reported",
+	CodeGRPCTaskResultRejected:     "Task result rejected",
+	CodeGRPCTaskResultFailed:       "Task result ingest failed",
+	CodeGRPCLeaseRenewal:           "Task lease renewal",
+	CodeGRPCLeaseRenewalRefused:    "Task lease renewal refused",
+	CodeGRPCLeaseRenewalFailed:     "Task lease renewal failed",
+	CodeGRPCCompletion:             "Completion protocol event",
+	CodeGRPCCompletionRejected:     "Completion protocol rejected",
+	CodeGRPCCompletionFailed:       "Completion protocol failed",
+	CodeGRPCArtifactUpload:         "Artifact upload reported",
+	CodeGRPCArtifactUploadRejected: "Artifact upload rejected",
+	CodeGRPCArtifactUploadFailed:   "Artifact upload failed",
+	CodeGRPCPlacement:              "Placement event",
+	CodeGRPCPlacementFailed:        "Placement failed",
+	CodeGRPCRenderPlan:             "Render plan compiled",
+	CodeGRPCPrefetch:               "Prefetch event",
+	CodeGRPCPrefetchFailed:         "Prefetch failed",
+	CodeGRPCHeartbeatFailed:        "Worker heartbeat failed",
+	CodeGRPCSessionInvalid:         "Worker session invalid",
+	CodeGRPCCommandDispatch:        "Command dispatched",
+	CodeGRPCCommandFailed:          "Command delivery failed",
+	CodeGRPCTelemetryRejected:      "Telemetry snapshot rejected",
+	CodeGRPCAssetProgressRejected:  "Asset download progress rejected",
+	CodeGRPCAssetProgressFailed:    "Asset download progress ingest failed",
+	CodeGRPCSecurity:               "Worker credential event",
+	CodeGRPCSecurityFailed:         "Worker credential lookup failed",
+	CodeGRPCAuthz:                  "Worker allowlist decision",
+	CodeGRPCServerLifecycle:        "gRPC server lifecycle",
+	CodeGRPCServerFailed:           "gRPC server error",
+	CodeGRPCArtifactProtocolLog:    "Artifact protocol log",
+	CodeGRPCRegistryBridge:         "Worker registry bridge event",
+	CodeGRPCMetricsDerivation:      "Worker metrics derivation fallback",
 }
 
 // GetDescription returns the human-readable description for a code

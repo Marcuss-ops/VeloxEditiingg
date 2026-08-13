@@ -8,10 +8,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"time"
 
 	"velox-server/internal/ingest"
+	"velox-server/internal/logging"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/telemetry"
 	"velox-shared/controltransport"
@@ -49,13 +49,11 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *wor
 	revision := tr.GetRevision()
 
 	if taskID == "" || jobID == "" || attemptID == "" || leaseID == "" || attemptNumber <= 0 {
-		log.Printf("[GRPC] TaskResult from worker %s refused — incomplete identity (task=%q job=%q attempt=%q lease=%q attempt_num=%d rev=%d)",
-			workerID, taskID, jobID, attemptID, leaseID, attemptNumber, revision)
+		logGRPCf(ctxForTaskSession(sess), logging.LevelWarn, logging.CodeGRPCTaskResultRejected, "[GRPC] TaskResult from worker %s refused — incomplete identity (task=%q job=%q attempt=%q lease=%q attempt_num=%d rev=%d)", workerID, taskID, jobID, attemptID, leaseID, attemptNumber, revision)
 		return
 	}
 
-	log.Printf("[GRPC] Worker %s reported task %s (attempt %s): status=%s code=%q detail=%q, %d output artifacts",
-		workerID, taskID, attemptID, tr.GetStatus(), tr.GetErrorCode(), tr.GetErrorDetail(), len(tr.GetOutputArtifacts()))
+	logGRPCf(ctxForTaskSession(sess), logging.LevelInfo, logging.CodeGRPCTaskResult, "[GRPC] Worker %s reported task %s (attempt %s): status=%s code=%q detail=%q, %d output artifacts", workerID, taskID, attemptID, tr.GetStatus(), tr.GetErrorCode(), tr.GetErrorDetail(), len(tr.GetOutputArtifacts()))
 	logArtifactProtocol("TASK_RESULT_RECEIVED", protocolStartedAt, map[string]interface{}{
 		"worker_id": workerID, "job_id": jobID, "task_id": taskID, "attempt_id": attemptID,
 		"lease_id": leaseID, "status": tr.GetStatus(), "report_hash": tr.GetReportHash(),
@@ -63,7 +61,7 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *wor
 	})
 
 	if h.ingestionSvc == nil {
-		log.Printf("[GRPC] TaskResult from worker %s REJECTED — ingestionSvc not wired (boot misconfig)", workerID)
+		logGRPCf(ctxForTaskSession(sess), logging.LevelWarn, logging.CodeGRPCTaskResultRejected, "[GRPC] TaskResult from worker %s REJECTED — ingestionSvc not wired (boot misconfig)", workerID)
 		return
 	}
 
@@ -191,7 +189,7 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *wor
 	// report: the raw payload is a required part of the audit trail.
 	rawJSON, mErr := protojson.Marshal(tr)
 	if mErr != nil {
-		log.Printf("[GRPC] Failed to marshal TaskResult to JSON for task=%s attempt=%s: %v", taskID, attemptID, mErr)
+		logGRPCf(ctx, logging.LevelError, logging.CodeGRPCTaskResultFailed, "[GRPC] Failed to marshal TaskResult to JSON for task=%s attempt=%s: %v", taskID, attemptID, mErr)
 		return
 	}
 	rawReportJSON := string(rawJSON)
@@ -238,14 +236,13 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *wor
 	if err != nil {
 		if errors.Is(err, taskattempts.ErrReportConflict) {
 			ackError = "report_conflict"
-			log.Printf("[GRPC] TaskResult conflict for task=%s attempt=%s: %v", taskID, attemptID, err)
+			logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCTaskResultRejected, "[GRPC] TaskResult conflict for task=%s attempt=%s: %v", taskID, attemptID, err)
 		} else {
-			log.Printf("[GRPC] TaskResult ingest for task=%s attempt=%s FAILED: %v", taskID, attemptID, err)
+			logGRPCf(ctx, logging.LevelError, logging.CodeGRPCTaskResultFailed, "[GRPC] TaskResult ingest for task=%s attempt=%s FAILED: %v", taskID, attemptID, err)
 			return
 		}
 	} else {
-		log.Printf("[GRPC] TaskResult ingest for task=%s done: closed=%v artNew=%d artSkip=%d jobXn=%v jobStatus=%q",
-			taskID, res.AttemptClosed, res.ArtifactsNew, res.ArtifactsSkips, res.JobTransitioned, res.JobNewStatus)
+		logGRPCf(ctx, logging.LevelInfo, logging.CodeGRPCTaskResult, "[GRPC] TaskResult ingest for task=%s done: closed=%v artNew=%d artSkip=%d jobXn=%v jobStatus=%q", taskID, res.AttemptClosed, res.ArtifactsNew, res.ArtifactsSkips, res.JobTransitioned, res.JobNewStatus)
 		logArtifactProtocol("TASK_RESULT_INGESTED", protocolStartedAt, map[string]interface{}{
 			"worker_id": workerID, "job_id": jobID, "task_id": taskID, "attempt_id": attemptID,
 			"lease_id": leaseID, "status": tr.GetStatus(), "report_hash": tr.GetReportHash(),
@@ -257,7 +254,7 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *wor
 		// also prevents a final heartbeat race from leaving a stale runtime.
 		if h.dbStore != nil {
 			if err := h.dbStore.DeleteWorkerTaskRuntime(taskID, attemptID); err != nil {
-				log.Printf("[GRPC] failed to remove worker runtime task=%s attempt=%s: %v", taskID, attemptID, err)
+				logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCTaskResultFailed, "[GRPC] failed to remove worker runtime task=%s attempt=%s: %v", taskID, attemptID, err)
 			}
 		}
 	}
@@ -278,7 +275,7 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *wor
 			},
 		}
 		if !safeSend(sess.sendCh, &outboundMessage{Envelope: ackEnv}) {
-			log.Printf("[GRPC] sendCh full/closed for TaskResultAck to worker %s", workerID)
+			logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCTaskResultFailed, "[GRPC] sendCh full/closed for TaskResultAck to worker %s", workerID)
 			logArtifactProtocol("TASK_RESULT_ACK_SEND_FAILED", protocolStartedAt, map[string]interface{}{
 				"worker_id": workerID, "job_id": jobID, "task_id": taskID, "attempt_id": attemptID,
 				"lease_id": leaseID, "error": "send channel unavailable",

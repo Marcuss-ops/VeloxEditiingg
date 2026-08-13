@@ -1,9 +1,11 @@
 package grpcserver
 
 import (
+	"context"
 	"encoding/json"
-	"log"
 	"time"
+
+	"velox-server/internal/logging"
 )
 
 func logArtifactProtocol(event string, startedAt time.Time, fields map[string]interface{}) {
@@ -20,8 +22,8 @@ func logArtifactProtocol(event string, startedAt time.Time, fields map[string]in
 	entry["elapsed_ms"] = time.Since(startedAt).Milliseconds()
 	payload, err := json.Marshal(entry)
 	if err != nil {
-		log.Printf("ARTIFACT_PROTOCOL event=%s log_marshal_error=%v", event, err)
+		logGRPCf(context.Background(), logging.LevelWarn, logging.CodeGRPCArtifactProtocolLog, "ARTIFACT_PROTOCOL event=%s log_marshal_error=%v", event, err)
 		return
 	}
-	log.Printf("ARTIFACT_PROTOCOL %s", payload)
+	logGRPCf(context.Background(), logging.LevelInfo, logging.CodeGRPCArtifactProtocolLog, "ARTIFACT_PROTOCOL %s", payload)
 }

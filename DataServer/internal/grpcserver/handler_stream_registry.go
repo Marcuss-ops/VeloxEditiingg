@@ -13,8 +13,8 @@ package grpcserver
 
 import (
 	"context"
-	"log"
 
+	"velox-server/internal/logging"
 	pb "velox-shared/controltransport/pb"
 )
 
@@ -42,6 +42,6 @@ func (h *Handler) registerHelloCapabilitiesInRegistry(
 		"engine_version":   hello.GetEngineVersion(),
 	}
 	if err := h.registry.RegisterWorker(ctx, workerID, workerName, peerIP, extra); err != nil {
-		log.Printf("[GRPC] Worker %s registry registration from hello failed: %v", workerID, err)
+		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCRegistryBridge, "[GRPC] Worker %s registry registration from hello failed: %v", workerID, err)
 	}
 }

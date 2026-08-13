@@ -28,10 +28,11 @@
 package grpcserver
 
 import (
-	"log"
+	"context"
 	"sync"
 	"time"
 
+	"velox-server/internal/logging"
 	velmetrics "velox-server/internal/metrics"
 	"velox-server/internal/taskattempts"
 
@@ -274,7 +275,8 @@ func deriveCacheStats(attemptID string, am taskattempts.AttemptMetrics, em *pb.T
 		// fallback path during the PR-3 rollout", not "this attempt
 		// hit a cache miss 1800 times".
 		cacheStatsDerivationWarn.Do(func() {
-			log.Printf(
+			logGRPCf(context.Background(),
+				logging.LevelWarn, logging.CodeGRPCMetricsDerivation,
 				"[GRPC-METRICS] AttemptCacheStats:CannotDeriveHitsMissesEvictions "+
 					"bytes_from_drive=%d bytes_from_blobstore=%d — leaving counters 0; "+
 					"PR-3 worker-side resource sampler will surface typed counters",

@@ -15,9 +15,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"time"
 
+	"velox-server/internal/logging"
 	"velox-server/internal/store"
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
@@ -51,7 +51,7 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 		if certWorkerID != declaredWorkerID {
 			return fmt.Errorf("stream: worker_id mismatch: cert=%s, declared=%s", certWorkerID, declaredWorkerID)
 		}
-		log.Printf("[GRPC] Worker authenticated via mTLS: %s", certWorkerID)
+		logGRPCf(stream.Context(), logging.LevelInfo, logging.CodeGRPCStreamAuthenticated, "[GRPC] Worker authenticated via mTLS: %s", certWorkerID)
 	} else if !h.config.AllowInsecure {
 		return fmt.Errorf("stream: insecure connections not allowed (set VELOX_GRPC_ALLOW_INSECURE_DEV=true for dev)")
 	}
@@ -80,8 +80,7 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 	// Reject unsupported protocol versions before creating any durable
 	// runtime identity row. A refused Hello must leave no snapshot behind.
 	if !controltransport.IsSupportedProtocol(env.ProtocolVersion) {
-		log.Printf("[GRPC] worker %s protocol version %q rejected — supported: %v",
-			declaredWorkerID, env.ProtocolVersion, controltransport.SupportedProtocolVersions)
+		logGRPCf(stream.Context(), logging.LevelWarn, logging.CodeGRPCStreamRejected, "[GRPC] worker %s protocol version %q rejected — supported: %v", declaredWorkerID, env.ProtocolVersion, controltransport.SupportedProtocolVersions)
 		return status.Errorf(codes.FailedPrecondition,
 			"worker %s protocol_version %q is not supported (supported: %v)",
 			declaredWorkerID, env.ProtocolVersion, controltransport.SupportedProtocolVersions)
@@ -101,7 +100,7 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 		return fmt.Errorf("stream: invalid executor capabilities: %w", err)
 	}
 	if supported, ok := caps[controltransport.CapabilityCanonicalPayloadV2].(bool); !ok || !supported {
-		log.Printf("[GRPC] worker %s rejected: canonical payload capability %q missing or false", declaredWorkerID, controltransport.CapabilityCanonicalPayloadV2)
+		logGRPCf(stream.Context(), logging.LevelWarn, logging.CodeGRPCStreamRejected, "[GRPC] worker %s rejected: canonical payload capability %q missing or false", declaredWorkerID, controltransport.CapabilityCanonicalPayloadV2)
 		return status.Errorf(codes.FailedPrecondition,
 			"worker %s does not support canonical payload contract %s", declaredWorkerID, controltransport.CapabilityCanonicalPayloadV2)
 	}
@@ -161,20 +160,20 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 		})
 		if errors.Is(insertErr, store.ErrWorkerIDCollision) {
 			if cleanupErr := h.dbStore.DeleteWorkerRuntimeSnapshotBySession(workerID, sessionID); cleanupErr != nil {
-				log.Printf("[GRPC] Worker %s snapshot cleanup after collision failed: %v", workerID, cleanupErr)
+				logGRPCf(stream.Context(), logging.LevelWarn, logging.CodeGRPCSessionCleanupFailed, "[GRPC] Worker %s snapshot cleanup after collision failed: %v", workerID, cleanupErr)
 			}
-			log.Printf("[GRPC] Worker %s hello COLLISION: rejecting incoming hello peer_ip=%s", workerID, peerIP)
+			logGRPCf(stream.Context(), logging.LevelWarn, logging.CodeGRPCStreamHelloCollision, "[GRPC] Worker %s hello COLLISION: rejecting incoming hello peer_ip=%s", workerID, peerIP)
 			return status.Errorf(codes.AlreadyExists,
 				"worker_id %q already connected on a different credential", workerID)
 		}
 		if insertErr != nil {
 			if cleanupErr := h.dbStore.DeleteWorkerRuntimeSnapshotBySession(workerID, sessionID); cleanupErr != nil {
-				log.Printf("[GRPC] Worker %s snapshot cleanup after session admission failure failed: %v", workerID, cleanupErr)
+				logGRPCf(stream.Context(), logging.LevelWarn, logging.CodeGRPCSessionCleanupFailed, "[GRPC] Worker %s snapshot cleanup after session admission failure failed: %v", workerID, cleanupErr)
 			}
 			return fmt.Errorf("stream: persist worker session: %w", insertErr)
 		}
 		if existingTokenHash, probeErr := h.dbStore.CheckActiveSessionCollision(workerID, "control"); probeErr == nil && existingTokenHash == newTokenHash {
-			log.Printf("[GRPC] Worker %s hello admitted/reconnected (session: %s)", workerID, sessionID)
+			logGRPCf(stream.Context(), logging.LevelInfo, logging.CodeGRPCWorkerConnected, "[GRPC] Worker %s hello admitted/reconnected (session: %s)", workerID, sessionID)
 		}
 	}
 
@@ -205,7 +204,7 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 	h.workerSessions[workerID] = sessionID
 	h.mu.Unlock()
 
-	log.Printf("[GRPC] Worker %s connected (session: %s, name: %s)", workerID, sessionID, hello.GetWorkerName())
+	logGRPCf(stream.Context(), logging.LevelInfo, logging.CodeGRPCWorkerConnected, "[GRPC] Worker %s connected (session: %s, name: %s)", workerID, sessionID, hello.GetWorkerName())
 
 	// Placement uses only the validated typed executor registry and the
 	// canonical host capacity/cache projections. Legacy job-type flags
@@ -244,7 +243,7 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 		sess.claimMu.Lock()
 		if sess.pendingTaskOffer != nil {
 			if releaseErr := h.taskRepo.ReleaseLease(context.Background(), sess.pendingTaskOffer.ID, sess.workerID, sess.pendingTaskOffer.LeaseID); releaseErr != nil {
-				log.Printf("[GRPC] Failed to release pendingTaskOffer for task %s on session teardown: %v", sess.pendingTaskOffer.ID, releaseErr)
+				logGRPCf(stream.Context(), logging.LevelWarn, logging.CodeGRPCSessionCleanupFailed, "[GRPC] Failed to release pendingTaskOffer for task %s on session teardown: %v", sess.pendingTaskOffer.ID, releaseErr)
 			}
 			sess.pendingTaskOffer = nil
 		}
@@ -267,7 +266,7 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 		sess.doneOnce.Do(func() {
 			close(sess.done)
 		})
-		log.Printf("[GRPC] Worker %s disconnected (session: %s)", workerID, sessionID)
+		logGRPCf(stream.Context(), logging.LevelInfo, logging.CodeGRPCWorkerDisconnected, "[GRPC] Worker %s disconnected (session: %s)", workerID, sessionID)
 	}()
 
 	// Send typed HelloAck via sendCh (sessionWriter handles the actual Send).
@@ -353,8 +352,7 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 			// P0 teardown: stream.Write failed inside sessionWriter. Cancel
 			// the session context and revoke the SQLite session so the worker
 			// reconnects promptly and we don't leak the orphaned job.
-			log.Printf("[GRPC] sessionWriter failure for worker %s (session %s): %v — tearing down",
-				workerID, sessionID, err)
+			logGRPCf(stream.Context(), logging.LevelError, logging.CodeGRPCStreamWriterFailure, "[GRPC] sessionWriter failure for worker %s (session %s): %v — tearing down", workerID, sessionID, err)
 			sess.cancel()
 			if h.dbStore != nil {
 				_ = h.dbStore.RevokeSession(sessionID)
@@ -363,7 +361,7 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 			sess.claimMu.Lock()
 			if sess.pendingTaskOffer != nil {
 				if releaseErr := h.taskRepo.ReleaseLease(context.Background(), sess.pendingTaskOffer.ID, sess.workerID, sess.pendingTaskOffer.LeaseID); releaseErr != nil {
-					log.Printf("[GRPC] Failed to release pendingTaskOffer for task %s on writer failure: %v", sess.pendingTaskOffer.ID, releaseErr)
+					logGRPCf(stream.Context(), logging.LevelWarn, logging.CodeGRPCSessionCleanupFailed, "[GRPC] Failed to release pendingTaskOffer for task %s on writer failure: %v", sess.pendingTaskOffer.ID, releaseErr)
 				}
 				sess.pendingTaskOffer = nil
 			}
@@ -385,8 +383,7 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 			// Issue 7 fix: sequence number check for replay protection.
 			if env.SequenceNumber > 0 {
 				if env.SequenceNumber <= sess.lastRecvSeq {
-					log.Printf("[GRPC] Duplicate or replayed message from worker %s: seq=%d, last=%d",
-						workerID, env.SequenceNumber, sess.lastRecvSeq)
+					logGRPCf(stream.Context(), logging.LevelWarn, logging.CodeGRPCStreamReplay, "[GRPC] Duplicate or replayed message from worker %s: seq=%d, last=%d", workerID, env.SequenceNumber, sess.lastRecvSeq)
 					continue
 				}
 				sess.lastRecvSeq = env.SequenceNumber

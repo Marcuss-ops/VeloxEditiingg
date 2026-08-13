@@ -14,8 +14,8 @@ package grpcserver
 import (
 	"context"
 	"fmt"
-	"log"
 
+	"velox-server/internal/logging"
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
 )
@@ -104,7 +104,7 @@ func (h *Handler) handleHeartbeat(workerID, sessionID string, hb *pb.Heartbeat) 
 	// safe with no registry; production code always supplies one).
 	if h.registry != nil {
 		if err := h.registry.HeartbeatWithSession(context.Background(), sessionID, workerID, hb.GetWorkerName(), hb.GetCurrentJob(), extra); err != nil {
-			log.Printf("[GRPC] Heartbeat failed for worker %s: %v", workerID, err)
+			logGRPCf(ctxForTaskSession(sess), logging.LevelError, logging.CodeGRPCHeartbeatFailed, "[GRPC] Heartbeat failed for worker %s: %v", workerID, err)
 			if activeSess := h.getSession(workerID); activeSess != nil && activeSess.sessionID == sessionID {
 				select {
 				case activeSess.writerErr <- fmt.Errorf("heartbeat persistence failed: %w", err):
@@ -179,8 +179,7 @@ func (h *Handler) handleHeartbeat(workerID, sessionID string, hb *pb.Heartbeat) 
 	// or revoked or expired, we MUST tear the active session down.
 	if h.dbStore != nil && sessionID != "" {
 		if dbSess, err := h.dbStore.ValidateSessionByID(sessionID); err != nil || dbSess == nil || dbSess.Revoked {
-			log.Printf("[GRPC] Session %s for worker %s is invalid — tearing down (revoked=%v, err=%v)",
-				sessionID, workerID, dbSess != nil && dbSess.Revoked, err)
+			logGRPCf(ctxForTaskSession(sess), logging.LevelWarn, logging.CodeGRPCSessionInvalid, "[GRPC] Session %s for worker %s is invalid — tearing down (revoked=%v, err=%v)", sessionID, workerID, dbSess != nil && dbSess.Revoked, err)
 			if activeSess := h.getSession(workerID); activeSess != nil && activeSess.sessionID == sessionID {
 				select {
 				case activeSess.writerErr <- fmt.Errorf("session revoked or expired"):
@@ -191,7 +190,7 @@ func (h *Handler) handleHeartbeat(workerID, sessionID string, hb *pb.Heartbeat) 
 			return
 		}
 		if err := h.dbStore.UpdateSessionLastSeen(sessionID); err != nil {
-			log.Printf("[GRPC] Session %s last_seen persistence failed for worker %s: %v", sessionID, workerID, err)
+			logGRPCf(ctxForTaskSession(sess), logging.LevelError, logging.CodeGRPCHeartbeatFailed, "[GRPC] Session %s last_seen persistence failed for worker %s: %v", sessionID, workerID, err)
 			if activeSess := h.getSession(workerID); activeSess != nil && activeSess.sessionID == sessionID {
 				select {
 				case activeSess.writerErr <- fmt.Errorf("session last_seen persistence failed: %w", err):
@@ -214,7 +213,7 @@ func readinessStatusOK(readiness map[string]interface{}) bool {
 func (h *Handler) handleCommandAck(workerID string, ca *pb.CommandAck) {
 	if ca.GetCommandId() != "" {
 		if err := h.cmdMgr.AckCommandByID(workerID, ca.GetCommandId()); err != nil {
-			log.Printf("[GRPC] Command ACK failed for %s (worker %s): %v", ca.GetCommandId(), workerID, err)
+			logGRPCf(context.Background(), logging.LevelWarn, logging.CodeGRPCCommandFailed, "[GRPC] Command ACK failed for %s (worker %s): %v", ca.GetCommandId(), workerID, err)
 		}
 	}
 }

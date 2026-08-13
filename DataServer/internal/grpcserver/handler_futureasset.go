@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"sort"
 	"time"
 
+	"velox-server/internal/logging"
 	"velox-server/internal/placement"
 	"velox-server/internal/taskgraph"
 	"velox-shared/contract"
@@ -22,7 +22,7 @@ func (h *Handler) refreshFutureAssetPlan(ctx context.Context, workerID, currentJ
 	refreshStartedAt := time.Now().UTC()
 	var candidatesLoadedAt, reservationsLoadedAt, reservationsReconciledAt, planBuiltAt, planSentAt time.Time
 	defer func() {
-		log.Printf("[PREFETCH_TIMING] worker=%s current_job=%s refresh_started_at=%s candidates_loaded_at=%s reservations_loaded_at=%s reservations_reconciled_at=%s plan_built_at=%s plan_sent_at=%s candidate_query_ms=%d reservation_query_ms=%d reservation_reconcile_ms=%d plan_build_ms=%d plan_send_ms=%d",
+		logGRPCf(ctx, logging.LevelInfo, logging.CodeGRPCPrefetch, "[PREFETCH_TIMING] worker=%s current_job=%s refresh_started_at=%s candidates_loaded_at=%s reservations_loaded_at=%s reservations_reconciled_at=%s plan_built_at=%s plan_sent_at=%s candidate_query_ms=%d reservation_query_ms=%d reservation_reconcile_ms=%d plan_build_ms=%d plan_send_ms=%d",
 			workerID, currentJobID,
 			refreshStartedAt.Format(time.RFC3339Nano), formatTimingTimestamp(candidatesLoadedAt), formatTimingTimestamp(reservationsLoadedAt), formatTimingTimestamp(reservationsReconciledAt), formatTimingTimestamp(planBuiltAt), formatTimingTimestamp(planSentAt),
 			durationBetween(refreshStartedAt, candidatesLoadedAt), durationBetween(candidatesLoadedAt, reservationsLoadedAt), durationBetween(reservationsLoadedAt, reservationsReconciledAt), durationBetween(reservationsReconciledAt, planBuiltAt), durationBetween(planBuiltAt, planSentAt))
@@ -33,13 +33,13 @@ func (h *Handler) refreshFutureAssetPlan(ctx context.Context, workerID, currentJ
 	}
 	candidates, err := h.taskRepo.ListReadyCandidates(ctx, 256)
 	if err != nil {
-		log.Printf("[PREFETCH] future candidates worker=%s: %v", workerID, err)
+		logGRPCf(ctx, logging.LevelError, logging.CodeGRPCPrefetchFailed, "[PREFETCH] future candidates worker=%s: %v", workerID, err)
 		return
 	}
 	candidatesLoadedAt = time.Now().UTC()
 	all, err := store.ListFutureReservations(ctx, "")
 	if err != nil {
-		log.Printf("[PREFETCH] future reservations worker=%s: %v", workerID, err)
+		logGRPCf(ctx, logging.LevelError, logging.CodeGRPCPrefetchFailed, "[PREFETCH] future reservations worker=%s: %v", workerID, err)
 		return
 	}
 	reservationsLoadedAt = time.Now().UTC()
@@ -90,13 +90,13 @@ func (h *Handler) refreshFutureAssetPlan(ctx context.Context, workerID, currentJ
 		if len(jobs) < prefetchLimit {
 			acquired, err := store.TryReserveFutureTask(ctx, reservation)
 			if err != nil {
-				log.Printf("[PREFETCH] reserve worker=%s task=%s: %v", workerID, candidate.TaskID, err)
+				logGRPCf(ctx, logging.LevelError, logging.CodeGRPCPrefetchFailed, "[PREFETCH] reserve worker=%s task=%s: %v", workerID, candidate.TaskID, err)
 				continue
 			}
 			if !acquired {
 				continue
 			}
-			log.Printf("[PREFETCH_TIMING] event=reservation_created worker=%s task=%s at=%s", workerID, candidate.TaskID, time.Now().UTC().Format(time.RFC3339Nano))
+			logGRPCf(ctx, logging.LevelInfo, logging.CodeGRPCPrefetch, "[PREFETCH_TIMING] event=reservation_created worker=%s task=%s at=%s", workerID, candidate.TaskID, time.Now().UTC().Format(time.RFC3339Nano))
 		} else {
 			// N+4..N+10 are retention forecasts only. They must be
 			// represented in the worker snapshot, but must not acquire a
@@ -113,21 +113,21 @@ func (h *Handler) refreshFutureAssetPlan(ctx context.Context, workerID, currentJ
 		jobs = append(jobs, futureasset.Job{JobID: candidate.JobID, TaskID: candidate.TaskID, ReservationID: reservation.ReservationID, TaskRevision: candidate.Revision, Assets: futureAssetManifests(payload)})
 	}
 	if err := store.ReconcileFutureReservations(ctx, workerID, desired); err != nil {
-		log.Printf("[PREFETCH] reconcile worker=%s: %v", workerID, err)
+		logGRPCf(ctx, logging.LevelError, logging.CodeGRPCPrefetchFailed, "[PREFETCH] reconcile worker=%s: %v", workerID, err)
 		return
 	}
 	reservationsReconciledAt = time.Now().UTC()
 	limits := futureasset.Limits{PrefetchHorizon: h.config.FutureAssetPrefetchHorizon, ProtectionLookahead: h.config.FutureAssetProtectionLookahead}
 	plan, err := h.futureAssetPlanner.Build(workerID, currentJobID, fmt.Sprintf("future:%s", workerID), jobs, h.futureAssetPlanTTL())
 	if err != nil {
-		log.Printf("[PREFETCH] build worker=%s: %v", workerID, err)
+		logGRPCf(ctx, logging.LevelError, logging.CodeGRPCPrefetchFailed, "[PREFETCH] build worker=%s: %v", workerID, err)
 		return
 	}
 	planBuiltAt = time.Now().UTC()
 	plan.Limits = limits
-	log.Printf("[PREFETCH] plan worker=%s version=%d current_job=%s hard_reservations=%d protection_jobs=%d protected_assets=%d", workerID, plan.Version, currentJobID, len(desired), len(jobs), len(plan.Protect))
+	logGRPCf(ctx, logging.LevelInfo, logging.CodeGRPCPrefetch, "[PREFETCH] plan worker=%s version=%d current_job=%s hard_reservations=%d protection_jobs=%d protected_assets=%d", workerID, plan.Version, currentJobID, len(desired), len(jobs), len(plan.Protect))
 	if err := h.SendFutureAssetPlan(ctx, plan); err != nil {
-		log.Printf("[PREFETCH] send worker=%s: %v", workerID, err)
+		logGRPCf(ctx, logging.LevelError, logging.CodeGRPCPrefetchFailed, "[PREFETCH] send worker=%s: %v", workerID, err)
 	} else {
 		planSentAt = time.Now().UTC()
 	}

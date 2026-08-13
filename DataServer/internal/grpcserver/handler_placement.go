@@ -11,10 +11,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
+	"velox-server/internal/logging"
 	"velox-server/internal/placement"
 	"velox-server/internal/renderplan"
 	"velox-server/internal/taskattempts"
@@ -71,16 +71,16 @@ func (h *Handler) sendPushTaskOffer(ctx context.Context, workerID string) {
 
 	snapshot := sess.placementSnapshot(workerID)
 	if h.dbStore == nil {
-		log.Printf("[PLACEMENT] authoritative lease store unavailable worker=%s", workerID)
+		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCPlacementFailed, "[PLACEMENT] authoritative lease store unavailable worker=%s", workerID)
 		return
 	}
 	if snapshot.MaxParallelJobs <= 0 {
-		log.Printf("[PLACEMENT] worker has no declared max slots worker=%s", workerID)
+		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCPlacementFailed, "[PLACEMENT] worker has no declared max slots worker=%s", workerID)
 		return
 	}
 	capacity, err := h.dbStore.GetWorkerCapacity(ctx, workerID, time.Now().UTC().Format(time.RFC3339))
 	if err != nil {
-		log.Printf("[PLACEMENT] authoritative lease capacity query failed worker=%s: %v", workerID, err)
+		logGRPCf(ctx, logging.LevelError, logging.CodeGRPCPlacementFailed, "[PLACEMENT] authoritative lease capacity query failed worker=%s: %v", workerID, err)
 		return
 	}
 	// Lease store is the sole occupancy source. The session only owns
@@ -89,7 +89,7 @@ func (h *Handler) sendPushTaskOffer(ctx context.Context, workerID string) {
 
 	candidates, err := h.taskRepo.ListReadyCandidates(ctx, 64)
 	if err != nil {
-		log.Printf("[PLACEMENT] ListReadyCandidates failed worker=%s: %v", workerID, err)
+		logGRPCf(ctx, logging.LevelError, logging.CodeGRPCPlacementFailed, "[PLACEMENT] ListReadyCandidates failed worker=%s: %v", workerID, err)
 		return
 	}
 
@@ -131,7 +131,7 @@ func (h *Handler) sendPushTaskOffer(ctx context.Context, workerID string) {
 			// the next tick.
 			return
 		}
-		log.Printf("[PLACEMENT] ClaimTaskForWorkerAtomic failed worker=%s task=%s: %v", workerID, candidate.TaskID, err)
+		logGRPCf(ctx, logging.LevelError, logging.CodeGRPCPlacementFailed, "[PLACEMENT] ClaimTaskForWorkerAtomic failed worker=%s task=%s: %v", workerID, candidate.TaskID, err)
 		return
 	}
 	if tws == nil || tws.ID == "" || attempt == nil {
@@ -149,7 +149,7 @@ func (h *Handler) sendPushTaskOffer(ctx context.Context, workerID string) {
 		current.capabilityRevision.Load() != snapshot.CapabilityRevision {
 
 		if releaseErr := h.taskRepo.ReleaseLease(ctx, tws.ID, workerID, leaseID); releaseErr != nil {
-			log.Printf("[PLACEMENT] ReleaseLease after fencing failure worker=%s task=%s: %v", workerID, tws.ID, releaseErr)
+			logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCPlacementFailed, "[PLACEMENT] ReleaseLease after fencing failure worker=%s task=%s: %v", workerID, tws.ID, releaseErr)
 		}
 		return
 	}
@@ -174,9 +174,9 @@ func (h *Handler) sendClaimedTaskOffer(
 ) {
 	workerPayload, projectionErr := projectPayloadForWorker(tws.SpecPayload, tws.ExecutorVersion)
 	if projectionErr != nil {
-		log.Printf("[PLACEMENT] Failed to project payload for worker %s task %s: %v", sess.workerID, tws.ID, projectionErr)
+		logGRPCf(ctx, logging.LevelError, logging.CodeGRPCPlacementFailed, "[PLACEMENT] Failed to project payload for worker %s task %s: %v", sess.workerID, tws.ID, projectionErr)
 		if releaseErr := h.taskRepo.ReleaseLease(ctx, tws.ID, sess.workerID, leaseID); releaseErr != nil {
-			log.Printf("[PLACEMENT] Failed to release claim for task %s after payload projection failure: %v", tws.ID, releaseErr)
+			logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCPlacementFailed, "[PLACEMENT] Failed to release claim for task %s after payload projection failure: %v", tws.ID, releaseErr)
 		}
 		return
 	}
@@ -203,9 +203,9 @@ func (h *Handler) sendClaimedTaskOffer(
 	// worker can only reject after lease acquisition.
 	if isRenderBatchExecutor(tws.ExecutorID) {
 		if err := contract.ValidateCompiledRenderPlanV2Payload(workerPayload); err != nil {
-			log.Printf("[PLACEMENT] refusing render_batch task=%s: invalid CompiledRenderPlanV2: %v", tws.ID, err)
+			logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCPlacementFailed, "[PLACEMENT] refusing render_batch task=%s: invalid CompiledRenderPlanV2: %v", tws.ID, err)
 			if releaseErr := h.taskRepo.ReleaseLease(ctx, tws.ID, sess.workerID, leaseID); releaseErr != nil {
-				log.Printf("[PLACEMENT] failed to release render_batch claim task=%s: %v", tws.ID, releaseErr)
+				logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCPlacementFailed, "[PLACEMENT] failed to release render_batch claim task=%s: %v", tws.ID, releaseErr)
 			}
 			return
 		}
@@ -216,9 +216,9 @@ func (h *Handler) sendClaimedTaskOffer(
 		var err error
 		taskSpecPB, err = structpb.NewStruct(workerPayload)
 		if err != nil {
-			log.Printf("[PLACEMENT] Failed to encode TaskOffer payload for worker %s task %s: %v", sess.workerID, tws.ID, err)
+			logGRPCf(ctx, logging.LevelError, logging.CodeGRPCPlacementFailed, "[PLACEMENT] Failed to encode TaskOffer payload for worker %s task %s: %v", sess.workerID, tws.ID, err)
 			if releaseErr := h.taskRepo.ReleaseLease(ctx, tws.ID, sess.workerID, leaseID); releaseErr != nil {
-				log.Printf("[PLACEMENT] Failed to release claim for task %s after TaskOffer payload encoding failure: %v", tws.ID, releaseErr)
+				logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCPlacementFailed, "[PLACEMENT] Failed to release claim for task %s after TaskOffer payload encoding failure: %v", tws.ID, releaseErr)
 			}
 			return
 		}
@@ -229,7 +229,7 @@ func (h *Handler) sendClaimedTaskOffer(
 	if h.jobsRepo != nil {
 		job, err := h.jobsRepo.Get(ctx, tws.JobID)
 		if err != nil {
-			log.Printf("[PLACEMENT] Failed to load job revision for task %s job %s: %v", tws.ID, tws.JobID, err)
+			logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCPlacementFailed, "[PLACEMENT] Failed to load job revision for task %s job %s: %v", tws.ID, tws.JobID, err)
 		} else if job != nil {
 			jobRevision = int32(job.Revision)
 		}
@@ -258,16 +258,15 @@ func (h *Handler) sendClaimedTaskOffer(
 	}
 
 	if !safeSend(sess.sendCh, &outboundMessage{Envelope: env}) {
-		log.Printf("[PLACEMENT] sendCh full/closed for TaskOffer to worker %s — releasing claim for task %s", sess.workerID, tws.ID)
+		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCPlacementFailed, "[PLACEMENT] sendCh full/closed for TaskOffer to worker %s — releasing claim for task %s", sess.workerID, tws.ID)
 		if releaseErr := h.taskRepo.ReleaseLease(ctx, tws.ID, sess.workerID, leaseID); releaseErr != nil {
-			log.Printf("[PLACEMENT] Failed to release claim for task %s after send failure: %v", tws.ID, releaseErr)
+			logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCPlacementFailed, "[PLACEMENT] Failed to release claim for task %s after send failure: %v", tws.ID, releaseErr)
 		}
 		return
 	}
 
 	sess.pendingTaskOffer = tws
-	log.Printf("[PLACEMENT] TaskOffer queued for worker %s: task=%s job=%s attempt=%s lease=%s executor=%s@%d rev=%d",
-		sess.workerID, tws.ID, tws.JobID, attempt.ID, leaseID, tws.ExecutorID, tws.ExecutorVersion, tws.Revision)
+	logGRPCf(ctx, logging.LevelInfo, logging.CodeGRPCPlacement, "[PLACEMENT] TaskOffer queued for worker %s: task=%s job=%s attempt=%s lease=%s executor=%s@%d rev=%d", sess.workerID, tws.ID, tws.JobID, attempt.ID, leaseID, tws.ExecutorID, tws.ExecutorVersion, tws.Revision)
 }
 
 // compileAndStampAttemptRenderPlan compiles the canonical render plan for
@@ -285,8 +284,7 @@ func (h *Handler) compileAndStampAttemptRenderPlan(ctx context.Context, tws *tas
 	startedAt := time.Now()
 	compileMS, canonicalizeMS, hashMS, persistMS := int64(0), int64(0), int64(0), int64(0)
 	logSkip := func(reason string, err error) {
-		log.Printf("[RENDERPLAN] skipped task=%s attempt=%s reason=%s error=%v compile_ms=%d canonicalize_ms=%d hash_ms=%d persist_ms=%d total_ms=%d",
-			tws.ID, attempt.ID, reason, err, compileMS, canonicalizeMS, hashMS, persistMS, time.Since(startedAt).Milliseconds())
+		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCRenderPlan, "[RENDERPLAN] skipped task=%s attempt=%s reason=%s error=%v compile_ms=%d canonicalize_ms=%d hash_ms=%d persist_ms=%d total_ms=%d", tws.ID, attempt.ID, reason, err, compileMS, canonicalizeMS, hashMS, persistMS, time.Since(startedAt).Milliseconds())
 	}
 	if h.taskAttemptRepo == nil {
 		logSkip("persistence_unavailable", nil)
@@ -305,7 +303,7 @@ func (h *Handler) compileAndStampAttemptRenderPlan(ctx context.Context, tws *tas
 			logSkip("v2_persist_error", err)
 			return "", ""
 		}
-		log.Printf("[RENDERPLAN] stamped V2 attempt=%s task=%s plan_version=%d plan_sha256=%s", attempt.ID, tws.ID, contract.CompiledPlanVersionV2, rawSHA[:16])
+		logGRPCf(ctx, logging.LevelInfo, logging.CodeGRPCRenderPlan, "[RENDERPLAN] stamped V2 attempt=%s task=%s plan_version=%d plan_sha256=%s", attempt.ID, tws.ID, contract.CompiledPlanVersionV2, rawSHA[:16])
 		return rawJSON, rawSHA
 	}
 	if h.renderPlanCompiler == nil {
@@ -354,8 +352,7 @@ func (h *Handler) compileAndStampAttemptRenderPlan(ctx context.Context, tws *tas
 		return "", ""
 	}
 	persistMS = time.Since(persistStartedAt).Milliseconds()
-	log.Printf("[RENDERPLAN] stamped attempt=%s task=%s plan_version=%d plan_sha256=%s duration_ms=%d segments=%d compile_ms=%d canonicalize_ms=%d hash_ms=%d persist_ms=%d total_ms=%d",
-		attempt.ID, tws.ID, plan.PlanVersion, planSHA[:16], plan.DurationMS, len(plan.Segments), compileMS, canonicalizeMS, hashMS, persistMS, time.Since(startedAt).Milliseconds())
+	logGRPCf(ctx, logging.LevelInfo, logging.CodeGRPCRenderPlan, "[RENDERPLAN] stamped attempt=%s task=%s plan_version=%d plan_sha256=%s duration_ms=%d segments=%d compile_ms=%d canonicalize_ms=%d hash_ms=%d persist_ms=%d total_ms=%d", attempt.ID, tws.ID, plan.PlanVersion, planSHA[:16], plan.DurationMS, len(plan.Segments), compileMS, canonicalizeMS, hashMS, persistMS, time.Since(startedAt).Milliseconds())
 	return string(canonical), planSHA
 }
 
@@ -380,8 +377,7 @@ func isRenderBatchExecutor(executorID string) bool {
 // via the PlacementRejectionSink (when wired).
 func (h *Handler) recordPlacementRejections(snapshot placement.WorkerSnapshot, rejections []placement.Rejection) {
 	for _, r := range rejections {
-		log.Printf("[PLACEMENT] Rejection worker=%s task=%s code=%s detail=%s",
-			snapshot.WorkerID, r.TaskID, r.Code, r.Detail)
+		logGRPCf(context.Background(), logging.LevelInfo, logging.CodeGRPCPlacement, "[PLACEMENT] Rejection worker=%s task=%s code=%s detail=%s", snapshot.WorkerID, r.TaskID, r.Code, r.Detail)
 		if h.placementRejectionSink != nil {
 			h.placementRejectionSink.RecordPlacementRejection(string(r.Code))
 		}

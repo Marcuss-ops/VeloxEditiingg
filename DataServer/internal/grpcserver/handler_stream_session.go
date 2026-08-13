@@ -7,8 +7,8 @@ package grpcserver
 
 import (
 	"context"
-	"log"
 
+	"velox-server/internal/logging"
 	pb "velox-shared/controltransport/pb"
 )
 
@@ -21,7 +21,7 @@ func (h *Handler) closeOldSessionLocked(workerID string) {
 	}
 	oldSess, exists := h.sessions[oldSID]
 	if exists {
-		log.Printf("[GRPC] Worker %s reconnecting — removing old session %s", workerID, oldSID)
+		logGRPCf(context.Background(), logging.LevelInfo, logging.CodeGRPCWorkerReconnecting, "[GRPC] Worker %s reconnecting — removing old session %s", workerID, oldSID)
 		// P0 #6: close the done channel to stop the old notifier goroutine.
 		// Messages from the old session's main loop are dropped by isCurrentSession().
 		oldSess.doneOnce.Do(func() {
@@ -36,7 +36,7 @@ func (h *Handler) closeOldSessionLocked(workerID string) {
 		oldSess.claimMu.Lock()
 		if oldSess.pendingTaskOffer != nil {
 			if releaseErr := h.taskRepo.ReleaseLease(context.Background(), oldSess.pendingTaskOffer.ID, oldSess.workerID, oldSess.pendingTaskOffer.LeaseID); releaseErr != nil {
-				log.Printf("[GRPC] Failed to release old pendingTaskOffer for task %s during reconnect: %v", oldSess.pendingTaskOffer.ID, releaseErr)
+				logGRPCf(context.Background(), logging.LevelWarn, logging.CodeGRPCSessionCleanupFailed, "[GRPC] Failed to release old pendingTaskOffer for task %s during reconnect: %v", oldSess.pendingTaskOffer.ID, releaseErr)
 			}
 			oldSess.pendingTaskOffer = nil
 		}
@@ -103,8 +103,7 @@ func (h *Handler) getSession(workerID string) *workerSession {
 func (h *Handler) sessionWriter(sess *workerSession) {
 	for out := range sess.sendCh {
 		if err := sess.stream.Send(out.Envelope); err != nil {
-			log.Printf("[GRPC] sessionWriter send error for worker %s (session %s): %v",
-				sess.workerID, sess.sessionID, err)
+			logGRPCf(sess.ctx, logging.LevelError, logging.CodeGRPCStreamWriterFailure, "[GRPC] sessionWriter send error for worker %s (session %s): %v", sess.workerID, sess.sessionID, err)
 			// Best-effort publish (cap 1, non-blocking).
 			select {
 			case sess.writerErr <- err:
@@ -122,17 +121,11 @@ func (h *Handler) sessionWriter(sess *workerSession) {
 		switch msg := out.Envelope.Msg.(type) {
 		case *pb.MasterToWorkerEnvelope_TaskOffer:
 			if msg.TaskOffer != nil {
-				log.Printf("[GRPC] TaskOffer sent to worker %s (session %s): task=%s job=%s attempt=%s lease=%s",
-					sess.workerID, sess.sessionID,
-					msg.TaskOffer.GetTaskId(), msg.TaskOffer.GetJobId(),
-					msg.TaskOffer.GetAttemptId(), msg.TaskOffer.GetLeaseId())
+				logGRPCf(sess.ctx, logging.LevelInfo, logging.CodeGRPCPlacement, "[GRPC] TaskOffer sent to worker %s (session %s): task=%s job=%s attempt=%s lease=%s", sess.workerID, sess.sessionID, msg.TaskOffer.GetTaskId(), msg.TaskOffer.GetJobId(), msg.TaskOffer.GetAttemptId(), msg.TaskOffer.GetLeaseId())
 			}
 		case *pb.MasterToWorkerEnvelope_TaskLeaseGranted:
 			if msg.TaskLeaseGranted != nil {
-				log.Printf("[GRPC] TaskLeaseGranted sent to worker %s (session %s): task=%s job=%s attempt=%s lease=%s",
-					sess.workerID, sess.sessionID,
-					msg.TaskLeaseGranted.GetTaskId(), msg.TaskLeaseGranted.GetJobId(),
-					msg.TaskLeaseGranted.GetAttemptId(), msg.TaskLeaseGranted.GetLeaseId())
+				logGRPCf(sess.ctx, logging.LevelInfo, logging.CodeGRPCTaskAccepted, "[GRPC] TaskLeaseGranted sent to worker %s (session %s): task=%s job=%s attempt=%s lease=%s", sess.workerID, sess.sessionID, msg.TaskLeaseGranted.GetTaskId(), msg.TaskLeaseGranted.GetJobId(), msg.TaskLeaseGranted.GetAttemptId(), msg.TaskLeaseGranted.GetLeaseId())
 			}
 		}
 		// Call OnSent callback after successful send (gap #1 fix).
@@ -140,7 +133,7 @@ func (h *Handler) sessionWriter(sess *workerSession) {
 			out.OnSent()
 		}
 	}
-	log.Printf("[GRPC] sessionWriter exiting for worker %s (session %s)", sess.workerID, sess.sessionID)
+	logGRPCf(sess.ctx, logging.LevelInfo, logging.CodeGRPCWorkerDisconnected, "[GRPC] sessionWriter exiting for worker %s (session %s)", sess.workerID, sess.sessionID)
 }
 
 // safeSend attempts to send an outboundMessage on the channel, returning true on success.

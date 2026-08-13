@@ -20,10 +20,12 @@
 package grpcserver
 
 import (
+	"context"
 	"fmt"
-	"log"
 	"net"
 	"strings"
+
+	"velox-server/internal/logging"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -43,7 +45,7 @@ func (h *Handler) validateCredentialHash(workerID string, declaredHash string) e
 	// Check if this worker has a stored credential
 	hasCred, err := h.dbStore.HasWorkerCredential(workerID)
 	if err != nil {
-		log.Printf("[GRPC] Credential lookup failed for worker %s: %v", workerID, err)
+		logGRPCf(context.Background(), logging.LevelWarn, logging.CodeGRPCSecurityFailed, "[GRPC] Credential lookup failed for worker %s: %v", workerID, err)
 		if h.config.AllowInsecure {
 			return nil
 		}
@@ -56,11 +58,11 @@ func (h *Handler) validateCredentialHash(workerID string, declaredHash string) e
 			if err := h.dbStore.SetWorkerCredential(workerID, declaredHash); err != nil {
 				return fmt.Errorf("store initial credential: %w", err)
 			}
-			log.Printf("[GRPC] Worker %s: initial credential stored", workerID)
+			logGRPCf(context.Background(), logging.LevelInfo, logging.CodeGRPCSecurity, "[GRPC] Worker %s: initial credential stored", workerID)
 			return nil
 		}
 		if h.config.AllowInsecure {
-			log.Printf("[GRPC] Worker %s: no credential — allowing in insecure dev mode", workerID)
+			logGRPCf(context.Background(), logging.LevelInfo, logging.CodeGRPCSecurity, "[GRPC] Worker %s: no credential — allowing in insecure dev mode", workerID)
 			return nil
 		}
 		return fmt.Errorf("worker %s: credential required", workerID)

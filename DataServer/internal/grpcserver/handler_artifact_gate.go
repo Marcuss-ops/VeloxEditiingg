@@ -7,8 +7,10 @@
 package grpcserver
 
 import (
+	"context"
 	"fmt"
-	"log"
+
+	"velox-server/internal/logging"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -70,7 +72,7 @@ func (h *Handler) checkArtifactCommitGate(workerID string) error {
 		return nil // Backward-compat — see godoc.
 	}
 	if err := h.capabilityRegistry.Readyz(); err != nil {
-		log.Printf("[GRPC] artifact.commit.v1 from worker %s refused: %v", workerID, err)
+		logGRPCf(context.Background(), logging.LevelWarn, logging.CodeGRPCArtifactUploadRejected, "[GRPC] artifact.commit.v1 from worker %s refused: %v", workerID, err)
 		return &artCommitGateError{
 			inner: err,
 		}

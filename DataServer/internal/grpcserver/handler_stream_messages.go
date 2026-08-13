@@ -7,8 +7,8 @@ package grpcserver
 
 import (
 	"errors"
-	"log"
 
+	"velox-server/internal/logging"
 	pb "velox-shared/controltransport/pb"
 )
 
@@ -76,7 +76,7 @@ func (h *Handler) dispatchMessage(workerID, sessionID string, env *pb.WorkerToMa
 		return errStreamGoodbye
 
 	default:
-		log.Printf("[GRPC] Unknown message type from worker %s: %T", workerID, env.Msg)
+		logGRPCf(ctxForTaskSession(sess), logging.LevelWarn, logging.CodeGRPCStreamUnknownMessage, "[GRPC] Unknown message type from worker %s: %T", workerID, env.Msg)
 	}
 	return nil
 }

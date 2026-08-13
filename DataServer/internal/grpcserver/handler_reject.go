@@ -6,8 +6,8 @@ package grpcserver
 
 import (
 	"context"
-	"log"
 
+	"velox-server/internal/logging"
 	"velox-server/internal/placement"
 	"velox-server/internal/taskgraph"
 	pb "velox-shared/controltransport/pb"
@@ -34,39 +34,38 @@ func (h *Handler) handleTaskRejected(workerID string, tr *pb.TaskRejected, sess 
 	ctx := context.Background()
 	t, err := h.taskRepo.Get(ctx, taskID)
 	if err != nil || t == nil {
-		log.Printf("[GRPC] TaskRejected from worker %s for task %s — task not found (reason=%q)", workerID, taskID, reason)
+		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCTaskRejectRefused, "[GRPC] TaskRejected from worker %s for task %s — task not found (reason=%q)", workerID, taskID, reason)
 		return
 	}
 	masterIdentity := taskIdentityFromTask(t)
 	if t.Status != taskgraph.StatusLeased {
-		log.Printf("[GRPC] TaskRejected from worker %s refused — task %s is not LEASED (status=%s)", workerID, taskID, t.Status)
+		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCTaskRejectRefused, "[GRPC] TaskRejected from worker %s refused — task %s is not LEASED (status=%s)", workerID, taskID, t.Status)
 		return
 	}
 	if sess == nil || sess.workerID != workerID {
-		log.Printf("[GRPC] TaskRejected from worker %s refused — stale or missing session for task %s", workerID, taskID)
+		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCTaskRejectRefused, "[GRPC] TaskRejected from worker %s refused — stale or missing session for task %s", workerID, taskID)
 		return
 	}
 	sess.claimMu.Lock()
 	offer := sess.pendingTaskOffer
 	sess.claimMu.Unlock()
 	if offer == nil || offer.ID != taskID {
-		log.Printf("[GRPC] TaskRejected from worker %s refused — no matching pending offer for task %s", workerID, taskID)
+		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCTaskRejectRefused, "[GRPC] TaskRejected from worker %s refused — no matching pending offer for task %s", workerID, taskID)
 		return
 	}
 	wireIdentity := taskIdentityFromWire(taskID, jobID, attemptID, leaseID, int(attemptNumber), int(revision), workerID)
 	if err := validateTaskIdentity(wireIdentity, masterIdentity); err != nil {
 		// Do not clear the pending offer on an invalid message: clearing is a
 		// mutation and would let a replay/takeover message alter live state.
-		log.Printf("[GRPC] TaskRejected from worker %s refused — identity validation failed for task %s: %v (reason=%q)", workerID, taskID, err, reason)
+		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCTaskRejectRefused, "[GRPC] TaskRejected from worker %s refused — identity validation failed for task %s: %v (reason=%q)", workerID, taskID, err, reason)
 		return
 	}
 	if err := validateTaskIdentity(taskIdentityFromTask(&offer.Task), masterIdentity); err != nil {
-		log.Printf("[GRPC] TaskRejected from worker %s refused — pending offer for task %s is stale: %v", workerID, taskID, err)
+		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCTaskRejectRefused, "[GRPC] TaskRejected from worker %s refused — pending offer for task %s is stale: %v", workerID, taskID, err)
 		return
 	}
 
-	log.Printf("[GRPC] Worker %s rejected task %s (attempt=%s lease=%s): %s",
-		workerID, taskID, attemptID, leaseID, reason)
+	logGRPCf(ctx, logging.LevelInfo, logging.CodeGRPCTaskRejected, "[GRPC] Worker %s rejected task %s (attempt=%s lease=%s): %s", workerID, taskID, attemptID, leaseID, reason)
 
 	// Hold the session registry read lock across the durable CAS and all
 	// in-memory cleanup. A reconnect cannot replace this session between
@@ -74,7 +73,7 @@ func (h *Handler) handleTaskRejected(workerID string, tr *pb.TaskRejected, sess 
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	if !h.isCurrentSessionLocked(workerID, sess) {
-		log.Printf("[GRPC] TaskRejected from worker %s refused — session was replaced before release for task %s", workerID, taskID)
+		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCTaskRejectRefused, "[GRPC] TaskRejected from worker %s refused — session was replaced before release for task %s", workerID, taskID)
 		return
 	}
 
@@ -93,7 +92,7 @@ func (h *Handler) handleTaskRejected(workerID string, tr *pb.TaskRejected, sess 
 	if err := h.taskRepo.ReleaseLease(ctx, taskID, workerID, leaseID); err != nil {
 		// A failed CAS means ownership was not proven. Do not mutate the
 		// session offer; the current owner/session must reconcile it.
-		log.Printf("[GRPC] Failed to release rejected task %s: %v", taskID, err)
+		logGRPCf(ctx, logging.LevelError, logging.CodeGRPCTaskRejectFailed, "[GRPC] Failed to release rejected task %s: %v", taskID, err)
 		return
 	}
 
@@ -120,8 +119,7 @@ func (h *Handler) handleUnsupportedExecutorRejection(
 ) bool {
 	executorKey := placement.NormalizeExecutorKey(t.ExecutorID, t.ExecutorVersion)
 
-	log.Printf("[PLACEMENT] Worker %s rejected task %s as unsupported_executor (executor=%s@%d) — capability inconsistency, invalidating for session",
-		workerID, t.ID, t.ExecutorID, t.ExecutorVersion)
+	logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCPlacement, "[PLACEMENT] Worker %s rejected task %s as unsupported_executor (executor=%s@%d) — capability inconsistency, invalidating for session", workerID, t.ID, t.ExecutorID, t.ExecutorVersion)
 
 	// Release the lease first. ReleaseLease sets the task back to READY
 	// and removes the PENDING attempt. The attempt_count is NOT
@@ -129,7 +127,7 @@ func (h *Handler) handleUnsupportedExecutorRejection(
 	// toward the retry budget. A failed CAS proves ownership was lost,
 	// so no session capability state may be changed.
 	if err := h.taskRepo.ReleaseLease(ctx, t.ID, workerID, t.LeaseID); err != nil {
-		log.Printf("[PLACEMENT] ReleaseLease for unsupported_executor task %s failed: %v", t.ID, err)
+		logGRPCf(ctx, logging.LevelError, logging.CodeGRPCPlacementFailed, "[PLACEMENT] ReleaseLease for unsupported_executor task %s failed: %v", t.ID, err)
 		return false
 	}
 

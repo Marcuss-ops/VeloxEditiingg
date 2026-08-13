@@ -2,9 +2,9 @@ package grpcserver
 
 import (
 	"context"
-	"log"
 	"time"
 
+	"velox-server/internal/logging"
 	"velox-server/internal/store"
 	pb "velox-shared/controltransport/pb"
 )
@@ -19,15 +19,15 @@ type AssetDownloadProgressSink interface {
 // atomic latest-state + job-reference projection to the configured sink.
 func (h *Handler) handleAssetDownloadProgress(workerID string, p *pb.AssetDownloadProgress) {
 	if p == nil || p.GetAssetKey() == "" {
-		log.Printf("[GRPC] asset download progress from worker %s rejected: missing asset_key", workerID)
+		logGRPCf(context.Background(), logging.LevelWarn, logging.CodeGRPCAssetProgressRejected, "[GRPC] asset download progress from worker %s rejected: missing asset_key", workerID)
 		return
 	}
 	if declared := p.GetWorkerId(); declared != "" && declared != workerID {
-		log.Printf("[GRPC] asset download progress from worker %s rejected: worker_id=%s mismatch", workerID, declared)
+		logGRPCf(context.Background(), logging.LevelWarn, logging.CodeGRPCAssetProgressRejected, "[GRPC] asset download progress from worker %s rejected: worker_id=%s mismatch", workerID, declared)
 		return
 	}
 	if h.assetDownloadProgressSink == nil && h.dbStore == nil {
-		log.Printf("[GRPC] asset download progress from worker %s dropped: no persistence sink", workerID)
+		logGRPCf(context.Background(), logging.LevelWarn, logging.CodeGRPCAssetProgressRejected, "[GRPC] asset download progress from worker %s dropped: no persistence sink", workerID)
 		return
 	}
 	sink := h.assetDownloadProgressSink
@@ -65,7 +65,7 @@ func (h *Handler) handleAssetDownloadProgress(workerID string, p *pb.AssetDownlo
 		ReceivedAt:         time.Now().UTC(),
 	}
 	if err := sink.IngestAssetDownloadProgress(context.Background(), record); err != nil {
-		log.Printf("[GRPC] asset download progress ingest failed worker=%s asset=%s: %v", workerID, p.GetAssetKey(), err)
+		logGRPCf(context.Background(), logging.LevelError, logging.CodeGRPCAssetProgressFailed, "[GRPC] asset download progress ingest failed worker=%s asset=%s: %v", workerID, p.GetAssetKey(), err)
 	}
 }
 

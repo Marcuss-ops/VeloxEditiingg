@@ -16,8 +16,9 @@ package grpcserver
 
 import (
 	"fmt"
-	"log"
 	"time"
+
+	"velox-server/internal/logging"
 
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -42,7 +43,7 @@ func (h *Handler) dispatchCommands(workerID string, sess *workerSession) {
 		return
 	}
 
-	log.Printf("[GRPC] Dispatching %d pending commands to worker %s", len(cmds), workerID)
+	logGRPCf(ctxForTaskSession(sess), logging.LevelInfo, logging.CodeGRPCCommandDispatch, "[GRPC] Dispatching %d pending commands to worker %s", len(cmds), workerID)
 
 	for _, cmd := range cmds {
 		var params *structpb.Struct
@@ -81,13 +82,13 @@ func (h *Handler) dispatchCommands(workerID string, sess *workerSession) {
 			OnSent: func() {
 				if cmdID != "" {
 					if err := h.cmdMgr.MarkCommandDelivered(cmdID); err != nil {
-						log.Printf("[GRPC] Failed to mark command %s delivered: %v", cmdID, err)
+						logGRPCf(ctxForTaskSession(sess), logging.LevelWarn, logging.CodeGRPCCommandFailed, "[GRPC] Failed to mark command %s delivered: %v", cmdID, err)
 					}
 				}
 			},
 		}
 		if !safeSend(sess.sendCh, out) {
-			log.Printf("[GRPC] sendCh full/closed — dropping command %s for worker %s (will retry)", cmd.CommandID, workerID)
+			logGRPCf(ctxForTaskSession(sess), logging.LevelWarn, logging.CodeGRPCCommandFailed, "[GRPC] sendCh full/closed — dropping command %s for worker %s (will retry)", cmd.CommandID, workerID)
 			continue
 		}
 	}

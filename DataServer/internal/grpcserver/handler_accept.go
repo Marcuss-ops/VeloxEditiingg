@@ -8,8 +8,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 
+	"velox-server/internal/logging"
 	"velox-server/internal/store"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
@@ -49,7 +49,7 @@ func (h *Handler) handleTaskAccepted(workerID string, ta *pb.TaskAccepted, sess 
 
 	masterTask, err := h.taskRepo.Get(context.Background(), taskID)
 	if err != nil || masterTask == nil {
-		log.Printf("[GRPC] TaskAccepted from worker %s refused — task %s not found", workerID, taskID)
+		logGRPCf(ctxForTaskSession(sess), logging.LevelWarn, logging.CodeGRPCTaskAcceptRefused, "[GRPC] TaskAccepted from worker %s refused — task %s not found", workerID, taskID)
 		return
 	}
 	wireIdentity := taskIdentityFromWire(taskID, jobID, attemptID, leaseID, int(attemptNumber), int(revision), workerID)
@@ -75,23 +75,22 @@ func (h *Handler) handleTaskAccepted(workerID string, ta *pb.TaskAccepted, sess 
 		return
 	}
 	if masterTask.Status != taskgraph.StatusLeased {
-		log.Printf("[GRPC] TaskAccepted from worker %s refused — task %s is not LEASED (status=%s)", workerID, taskID, masterTask.Status)
+		logGRPCf(ctxForTaskSession(sess), logging.LevelWarn, logging.CodeGRPCTaskAcceptRefused, "[GRPC] TaskAccepted from worker %s refused — task %s is not LEASED (status=%s)", workerID, taskID, masterTask.Status)
 		return
 	}
 	if offer == nil || offer.ID != taskID {
-		log.Printf("[GRPC] Worker %s accepted task %s but no matching pending offer", workerID, taskID)
+		logGRPCf(ctxForTaskSession(sess), logging.LevelWarn, logging.CodeGRPCTaskAcceptRefused, "[GRPC] Worker %s accepted task %s but no matching pending offer", workerID, taskID)
 		return
 	}
 	if err := validateTaskIdentity(wireIdentity, masterIdentity); err != nil {
-		log.Printf("[GRPC] TaskAccepted from worker %s refused — identity validation failed for task %s: %v", workerID, taskID, err)
+		logGRPCf(ctxForTaskSession(sess), logging.LevelWarn, logging.CodeGRPCTaskAcceptRefused, "[GRPC] TaskAccepted from worker %s refused — identity validation failed for task %s: %v", workerID, taskID, err)
 		return
 	}
 	if err := validateTaskIdentity(taskIdentityFromTask(&offer.Task), masterIdentity); err != nil {
-		log.Printf("[GRPC] TaskAccepted from worker %s refused — pending offer for task %s is stale: %v", workerID, taskID, err)
+		logGRPCf(ctxForTaskSession(sess), logging.LevelWarn, logging.CodeGRPCTaskAcceptRefused, "[GRPC] TaskAccepted from worker %s refused — pending offer for task %s is stale: %v", workerID, taskID, err)
 		return
 	}
-	log.Printf("[GRPC] TaskAccepted received from worker %s: task=%s job=%s attempt=%s lease=%s offer_attempt=%s offer_lease=%s rev=%d",
-		workerID, taskID, jobID, attemptID, leaseID, offer.AttemptID, offer.LeaseID, revision)
+	logGRPCf(ctxForTaskSession(sess), logging.LevelInfo, logging.CodeGRPCTaskAccepted, "[GRPC] TaskAccepted received from worker %s: task=%s job=%s attempt=%s lease=%s offer_attempt=%s offer_lease=%s rev=%d", workerID, taskID, jobID, attemptID, leaseID, offer.AttemptID, offer.LeaseID, revision)
 
 	// PR-2 (canonical-attempt-identity): the canonical attempt_id was
 	// minted at Claim time (in ClaimNextWithAttemptAtomic inside the
@@ -137,25 +136,24 @@ func (h *Handler) handleTaskAccepted(workerID string, ta *pb.TaskAccepted, sess 
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	if !h.isCurrentSessionLocked(workerID, sess) {
-		log.Printf("[GRPC] Worker %s accepted task %s refused — session was replaced before CAS", workerID, taskID)
+		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCTaskAcceptRefused, "[GRPC] Worker %s accepted task %s refused — session was replaced before CAS", workerID, taskID)
 		return
 	}
 	sess.claimMu.Lock()
 	offer = sess.pendingTaskOffer
 	sess.claimMu.Unlock()
 	if offer == nil || offer.ID != taskID {
-		log.Printf("[GRPC] Worker %s accepted task %s refused — pending offer disappeared before CAS", workerID, taskID)
+		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCTaskAcceptRefused, "[GRPC] Worker %s accepted task %s refused — pending offer disappeared before CAS", workerID, taskID)
 		return
 	}
 	if err := validateTaskIdentity(taskIdentityFromTask(&offer.Task), masterIdentity); err != nil {
-		log.Printf("[GRPC] Worker %s accepted task %s refused — pending offer changed before CAS: %v", workerID, taskID, err)
+		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCTaskAcceptRefused, "[GRPC] Worker %s accepted task %s refused — pending offer changed before CAS: %v", workerID, taskID, err)
 		return
 	}
 
 	if err := h.taskRepo.AcceptTaskAtomic(ctx, attempt, int(revision)); err != nil {
 		if errors.Is(err, store.ErrTransitionConflict) {
-			log.Printf("[GRPC] Worker %s accepted task %s but lease is stale or canonical attempt drift (offer.attempt_id=%s offer.attempt_number=%d attempt_id=%s attempt_number=%d) rev=%d — dropping TaskAccepted",
-				workerID, taskID, offer.AttemptID, offer.AttemptNumber, attempt.ID, attemptNumber, offer.Revision)
+			logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCTaskAcceptRefused, "[GRPC] Worker %s accepted task %s but lease is stale or canonical attempt drift (offer.attempt_id=%s offer.attempt_number=%d attempt_id=%s attempt_number=%d) rev=%d — dropping TaskAccepted", workerID, taskID, offer.AttemptID, offer.AttemptNumber, attempt.ID, attemptNumber, offer.Revision)
 			// Stale lease: clear the pending offer so the next
 			// ClaimNextReadyTask can re-offer this task.
 			sess.claimMu.Lock()
@@ -164,8 +162,7 @@ func (h *Handler) handleTaskAccepted(workerID string, ta *pb.TaskAccepted, sess 
 			}
 			sess.claimMu.Unlock()
 		} else {
-			log.Printf("[GRPC] AcceptTaskAtomic (LEASED→RUNNING + Attempt PENDING→RUNNING) failed for %s (worker %s): %v — keeping pending offer for retry",
-				taskID, workerID, err)
+			logGRPCf(ctx, logging.LevelError, logging.CodeGRPCTaskAcceptFailed, "[GRPC] AcceptTaskAtomic (LEASED→RUNNING + Attempt PENDING→RUNNING) failed for %s (worker %s): %v — keeping pending offer for retry", taskID, workerID, err)
 			// Non-stale error: keep pendingTaskOffer so the next
 			// TaskAccepted from the worker can retry the same offer
 			// without a fresh ClaimNextReadyTask roundtrip.
@@ -181,10 +178,9 @@ func (h *Handler) handleTaskAccepted(workerID string, ta *pb.TaskAccepted, sess 
 	grantTask.AttemptID = attemptID
 	grantTask.AttemptNumber = int(attemptNumber)
 	if !h.sendTaskLeaseGranted(ctx, sess, &grantTask, jobID) {
-		log.Printf("[GRPC] sendCh full/closed for TaskLeaseGranted to worker %s — releasing claim for task %s",
-			workerID, taskID)
+		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCTaskAcceptFailed, "[GRPC] sendCh full/closed for TaskLeaseGranted to worker %s — releasing claim for task %s", workerID, taskID)
 		if releaseErr := h.taskRepo.ReleaseLease(ctx, taskID, workerID, offer.LeaseID); releaseErr != nil {
-			log.Printf("[GRPC] Failed to release claim for task %s after grant send failure: %v", taskID, releaseErr)
+			logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCTaskAcceptFailed, "[GRPC] Failed to release claim for task %s after grant send failure: %v", taskID, releaseErr)
 		}
 		sess.claimMu.Lock()
 		if sess.pendingTaskOffer != nil && sess.pendingTaskOffer.ID == taskID {
@@ -220,7 +216,7 @@ func (h *Handler) sendTaskLeaseGranted(ctx context.Context, sess *workerSession,
 	if h.jobsRepo != nil {
 		job, err := h.jobsRepo.Get(ctx, jobID)
 		if err != nil {
-			log.Printf("[GRPC] Failed to load job revision for TaskLeaseGranted task=%s job=%s: %v", task.ID, jobID, err)
+			logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCTaskAcceptFailed, "[GRPC] Failed to load job revision for TaskLeaseGranted task=%s job=%s: %v", task.ID, jobID, err)
 		} else if job != nil {
 			jobRevision = int32(job.Revision)
 		}

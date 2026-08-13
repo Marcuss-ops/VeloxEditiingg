@@ -7,10 +7,12 @@
 package grpcserver
 
 import (
+	"context"
 	"fmt"
-	"log"
 	"strings"
 	"sync/atomic"
+
+	"velox-server/internal/logging"
 )
 
 // WorkerAuthorizer decides whether a worker is allowed to connect.
@@ -70,14 +72,14 @@ func (a *allowlistAuthorizer) IsAllowed(workerID string) bool {
 	// Empty allowlist in dev: warn once, then allow.
 	if a.insecure {
 		if !a.loggedWarn.Swap(true) {
-			log.Printf("[GRPC][AUTHZ] VELOX_ALLOWED_WORKERS is empty — allowing all workers because VELOX_GRPC_ALLOW_INSECURE_DEV=true (NEVER do this in production)")
+			logGRPCf(context.Background(), logging.LevelWarn, logging.CodeGRPCAuthz, "[GRPC][AUTHZ] VELOX_ALLOWED_WORKERS is empty — allowing all workers because VELOX_GRPC_ALLOW_INSECURE_DEV=true (NEVER do this in production)")
 		}
 		return true
 	}
 
 	// Empty allowlist in production: deny. Bootstrap should have caught this
 	// before the gRPC server started, but this is defense in depth.
-	log.Printf("[GRPC][AUTHZ] VELOX_ALLOWED_WORKERS is empty in production mode — denying worker %q", workerID)
+	logGRPCf(context.Background(), logging.LevelWarn, logging.CodeGRPCAuthz, "[GRPC][AUTHZ] VELOX_ALLOWED_WORKERS is empty in production mode — denying worker %q", workerID)
 	return false
 }
 

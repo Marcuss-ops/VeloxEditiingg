@@ -5,14 +5,15 @@
 package grpcserver
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
-	"log"
 	"net"
 	"os"
 	"time"
 
+	"velox-server/internal/logging"
 	pb "velox-shared/controltransport/pb"
 
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -57,7 +58,7 @@ func StartGRPCServer(port int, handler *Handler, certFile, keyFile, caFile strin
 			}
 			tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
 			tlsConfig.ClientCAs = certPool
-			log.Printf("[GRPC] mTLS enabled — requiring client certificates signed by CA")
+			logGRPCf(context.Background(), logging.LevelInfo, logging.CodeGRPCServerLifecycle, "[GRPC] mTLS enabled — requiring client certificates signed by CA")
 		}
 
 		grpcOpts = append(grpcOpts, grpc.Creds(credentials.NewTLS(tlsConfig)))
@@ -66,7 +67,7 @@ func StartGRPCServer(port int, handler *Handler, certFile, keyFile, caFile strin
 			return nil, nil, fmt.Errorf("grpc: TLS cert/key required in production (set VELOX_GRPC_ALLOW_INSECURE_DEV=true for dev)")
 		}
 		handler.config.AllowInsecure = true
-		log.Printf("[GRPC] WARNING: insecure gRPC server — dev mode only")
+		logGRPCf(context.Background(), logging.LevelWarn, logging.CodeGRPCServerLifecycle, "[GRPC] WARNING: insecure gRPC server — dev mode only")
 		grpcOpts = append(grpcOpts, grpc.Creds(insecure.NewCredentials()))
 	}
 
@@ -91,9 +92,9 @@ func StartGRPCServer(port int, handler *Handler, certFile, keyFile, caFile strin
 		// close(serveStarted) and srv.Serve entering its accept loop; the TCP
 		// dial below (belt-and-suspenders) catches that gap.
 		close(serveStarted)
-		log.Printf("[GRPC] Velox master gRPC server listening on :%d", port)
+		logGRPCf(context.Background(), logging.LevelInfo, logging.CodeGRPCServerLifecycle, "[GRPC] Velox master gRPC server listening on :%d", port)
 		if err := srv.Serve(lis); err != nil {
-			log.Printf("[GRPC] Server error: %v", err)
+			logGRPCf(context.Background(), logging.LevelError, logging.CodeGRPCServerFailed, "[GRPC] Server error: %v", err)
 		}
 	}()
 	// Wait for the goroutine to close serveStarted — this gates the goroutine

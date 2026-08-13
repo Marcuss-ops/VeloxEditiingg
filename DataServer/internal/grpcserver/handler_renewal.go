@@ -6,10 +6,10 @@ package grpcserver
 
 import (
 	"context"
-	"log"
 	"time"
 
 	"velox-server/internal/jobs"
+	"velox-server/internal/logging"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
 	pb "velox-shared/controltransport/pb"
@@ -33,7 +33,7 @@ func (h *Handler) handleTaskRenewal(workerID string, tr *pb.TaskLeaseRenewal, se
 
 	t, err := h.taskRepo.Get(ctx, taskID)
 	if err != nil || t == nil {
-		log.Printf("[GRPC] TaskLeaseRenewal task %s not found: %v", taskID, err)
+		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCLeaseRenewalRefused, "[GRPC] TaskLeaseRenewal task %s not found: %v", taskID, err)
 		return
 	}
 	// A cancelled parent is a terminal fence for its active task.  Do this
@@ -44,7 +44,7 @@ func (h *Handler) handleTaskRenewal(workerID string, tr *pb.TaskLeaseRenewal, se
 	if h.jobsRepo != nil {
 		job, jobErr := h.jobsRepo.Get(ctx, t.JobID)
 		if jobErr != nil {
-			log.Printf("[GRPC] TaskLeaseRenewal parent lookup failed for task %s: %v", taskID, jobErr)
+			logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCLeaseRenewalFailed, "[GRPC] TaskLeaseRenewal parent lookup failed for task %s: %v", taskID, jobErr)
 			return
 		}
 		if job != nil && job.Status == jobs.StatusCancelled {
@@ -58,20 +58,20 @@ func (h *Handler) handleTaskRenewal(workerID string, tr *pb.TaskLeaseRenewal, se
 				"TASK_CANCELLED",
 				"parent job was cancelled",
 			); err != nil {
-				log.Printf("[GRPC] TaskLeaseRenewal cancellation convergence failed for task %s: %v", taskID, err)
+				logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCLeaseRenewalFailed, "[GRPC] TaskLeaseRenewal cancellation convergence failed for task %s: %v", taskID, err)
 			} else {
-				log.Printf("[GRPC] TaskLeaseRenewal revoked cancelled parent task %s for worker %s", taskID, workerID)
+				logGRPCf(ctx, logging.LevelInfo, logging.CodeGRPCLeaseRenewal, "[GRPC] TaskLeaseRenewal revoked cancelled parent task %s for worker %s", taskID, workerID)
 			}
 			return
 		}
 	}
 	if t.Status != taskgraph.StatusLeased && t.Status != taskgraph.StatusRunning {
-		log.Printf("[GRPC] TaskLeaseRenewal from worker %s refused — task %s is not leasable (status=%s)", workerID, taskID, t.Status)
+		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCLeaseRenewalRefused, "[GRPC] TaskLeaseRenewal from worker %s refused — task %s is not leasable (status=%s)", workerID, taskID, t.Status)
 		return
 	}
 	wireIdentity := taskIdentityFromWire(taskID, jobID, attemptID, leaseID, int(attemptNumber), int(renewalRevision), workerID)
 	if err := validateTaskIdentity(wireIdentity, taskIdentityFromTask(t)); err != nil {
-		log.Printf("[GRPC] TaskLeaseRenewal from worker %s refused — identity validation failed for task %s: %v", workerID, taskID, err)
+		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCLeaseRenewalRefused, "[GRPC] TaskLeaseRenewal from worker %s refused — identity validation failed for task %s: %v", workerID, taskID, err)
 		return
 	}
 
@@ -81,7 +81,7 @@ func (h *Handler) handleTaskRenewal(workerID string, tr *pb.TaskLeaseRenewal, se
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	if !h.isCurrentSessionLocked(workerID, sess) {
-		log.Printf("[GRPC] TaskLeaseRenewal from worker %s refused — session was replaced before CAS for task %s", workerID, taskID)
+		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCLeaseRenewalRefused, "[GRPC] TaskLeaseRenewal from worker %s refused — session was replaced before CAS for task %s", workerID, taskID)
 		return
 	}
 
@@ -91,9 +91,8 @@ func (h *Handler) handleTaskRenewal(workerID string, tr *pb.TaskLeaseRenewal, se
 	}
 
 	if err := h.taskRepo.RenewLease(ctx, taskID, workerID, leaseID, expiry, int(renewalRevision)); err != nil {
-		log.Printf("[GRPC] TaskLeaseRenewal failed for %s (worker %s lease %s): %v",
-			taskID, workerID, leaseID, err)
+		logGRPCf(ctx, logging.LevelError, logging.CodeGRPCLeaseRenewalFailed, "[GRPC] TaskLeaseRenewal failed for %s (worker %s lease %s): %v", taskID, workerID, leaseID, err)
 		return
 	}
-	log.Printf("[GRPC] TaskLeaseRenewal extended task %s for worker %s lease=%s", taskID, workerID, leaseID)
+	logGRPCf(ctx, logging.LevelInfo, logging.CodeGRPCLeaseRenewal, "[GRPC] TaskLeaseRenewal extended task %s for worker %s lease=%s", taskID, workerID, leaseID)
 }

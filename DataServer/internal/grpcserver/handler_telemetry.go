@@ -16,9 +16,9 @@
 package grpcserver
 
 import (
-	"log"
 	"time"
 
+	"velox-server/internal/logging"
 	velmetrics "velox-server/internal/metrics"
 	"velox-shared/controltransport"
 )
@@ -54,7 +54,7 @@ func ingestTelemetrySnapshot(workerID string, sess *workerSession, extra map[str
 	// state (the gate re-checks these defensively, but Validate() gives the
 	// reject reason precedence and keeps the gate contract tight).
 	if err := snap.Validate(); err != nil {
-		log.Printf("[GRPC] telemetry snapshot from worker %s invalid: %v", workerID, err)
+		logGRPCf(ctxForTaskSession(sess), logging.LevelWarn, logging.CodeGRPCTelemetryRejected, "[GRPC] telemetry snapshot from worker %s invalid: %v", workerID, err)
 		return nil
 	}
 
@@ -66,8 +66,7 @@ func ingestTelemetrySnapshot(workerID string, sess *workerSession, extra map[str
 		reason = g.Accept(snap, time.Now().UTC())
 	}
 	if reason != controltransport.TelemetryRejectNone {
-		log.Printf("[GRPC] telemetry snapshot from worker %s rejected (%s): seq=%d captured_at=%v schema=%d worker=%q",
-			workerID, reason, snap.Sequence, snap.CapturedAt, snap.SchemaVersion, snap.WorkerID)
+		logGRPCf(ctxForTaskSession(sess), logging.LevelWarn, logging.CodeGRPCTelemetryRejected, "[GRPC] telemetry snapshot from worker %s rejected (%s): seq=%d captured_at=%v schema=%d worker=%q", workerID, reason, snap.Sequence, snap.CapturedAt, snap.SchemaVersion, snap.WorkerID)
 		return nil
 	}
 	return &snap
