@@ -143,6 +143,19 @@ var AllCapabilities = []string{
 	CapabilityFutureAssetPrefetchV1,
 }
 
+// knownCapabilitySet is the O(1) membership view of AllCapabilities.
+// Derived once at init so IsKnownCapability never scans the slice; the
+// slice itself is retained because callers rely on its deterministic
+// iteration order for logs and snapshot diffing (mirrors the telemetry
+// originSet/scopeSet idiom).
+var knownCapabilitySet = func() map[string]struct{} {
+	m := make(map[string]struct{}, len(AllCapabilities))
+	for _, c := range AllCapabilities {
+		m[c] = struct{}{}
+	}
+	return m
+}()
+
 // IsKnownCapability reports whether the given string is one of the
 // recognised capabilities (above). Unknown strings return false: this
 // is the forward-only capability negotiation contract — new workers
@@ -152,10 +165,6 @@ var AllCapabilities = []string{
 // handshake handler at session start); IsKnownCapability itself is a
 // pure predicate.
 func IsKnownCapability(s string) bool {
-	for _, c := range AllCapabilities {
-		if c == s {
-			return true
-		}
-	}
-	return false
+	_, ok := knownCapabilitySet[s]
+	return ok
 }
