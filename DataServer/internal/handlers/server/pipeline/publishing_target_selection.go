@@ -28,12 +28,15 @@ func (h *Handlers) resolvePublishingTarget(ctx context.Context, req SubmitJobReq
 	}
 
 	target := req.PublishingTarget
-	// The resolver treats platform as opaque/provider-neutral. The adapter
-	// still pins the legacy value until the platform is derived from the
-	// destination registry (provider-neutral selection follow-up).
+	targetType := strings.TrimSpace(target.Type)
+	platform, err := h.publishingPlatform(ctx, target, targetType)
+	if err != nil {
+		return req, err
+	}
+
 	catalog, err := h.targetResolver.ResolveCatalog(ctx, targetpublishing.CatalogRequest{
 		WorkspaceID: target.WorkspaceID,
-		Platform:    "youtube",
+		Platform:    platform,
 	})
 	if err != nil {
 		return req, err
@@ -42,18 +45,18 @@ func (h *Handlers) resolvePublishingTarget(ctx context.Context, req SubmitJobReq
 	selectionRequest := targetpublishing.SelectionRequest{
 		CatalogRequest: targetpublishing.CatalogRequest{
 			WorkspaceID: target.WorkspaceID,
-			Platform:    "youtube",
+			Platform:    platform,
 		},
 		Catalog: catalog,
 	}
-	switch strings.TrimSpace(target.Type) {
+	switch targetType {
 	case "channel":
 		selectionRequest.DestinationIDs = []string{strings.TrimSpace(target.DestinationID)}
 	case "group":
 		selectionRequest.GroupIDs = []int64{target.GroupID}
 	default:
-		// Shape validation normally catches this. Keep the helper defensive
-		// for internal callers that bypass the HTTP validator.
+		// publishingPlatform rejects unknown types; kept defensive for
+		// internal callers that bypass the HTTP validator.
 		return req, fmt.Errorf("%w: unsupported target type %q", targetpublishing.ErrInvalidRequest, target.Type)
 	}
 
@@ -77,6 +80,25 @@ func (h *Handlers) resolvePublishingTarget(ctx context.Context, req SubmitJobReq
 	// canonical request accurately describe the concrete route selected.
 	req.PublishingTarget = nil
 	return req, nil
+}
+
+// publishingPlatform resolves the opaque platform that scopes the upstream
+// catalog query. Channel selection derives it from the destination registry;
+// group selection requires it explicitly because Velox has no local
+// destination to read it from before the catalog is fetched.
+func (h *Handlers) publishingPlatform(ctx context.Context, target *SubmitPublishingTarget, targetType string) (string, error) {
+	switch targetType {
+	case "channel":
+		return h.targetResolver.PlatformForDestination(ctx, strings.TrimSpace(target.DestinationID))
+	case "group":
+		platform := strings.TrimSpace(target.Platform)
+		if platform == "" {
+			return "", fmt.Errorf("%w: platform is required for group selection", targetpublishing.ErrInvalidRequest)
+		}
+		return platform, nil
+	default:
+		return "", fmt.Errorf("%w: unsupported target type %q", targetpublishing.ErrInvalidRequest, target.Type)
+	}
 }
 
 func writePublishingTargetError(c *gin.Context, err error) {

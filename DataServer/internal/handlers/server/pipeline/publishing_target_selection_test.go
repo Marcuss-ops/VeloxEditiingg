@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -248,6 +249,26 @@ func TestSubmitJobHTTPResolvesPublishingTargetIntoConcreteDeliveryPlan(t *testin
 	}
 }
 
+func TestResolvePublishingTargetRejectsGroupWithoutPlatform(t *testing.T) {
+	h := &Handlers{
+		targetResolver: targetpublishing.NewTargetResolver(nil, nil),
+		socialClient:   socialclient.New(socialclient.Config{BaseURL: "http://catalog.test"}),
+		store:          &store.SQLiteStore{},
+	}
+	_, err := h.resolvePublishingTarget(context.Background(), SubmitJobRequest{
+		IdempotencyKey: "group-no-platform-001",
+		PublishingTarget: &SubmitPublishingTarget{
+			WorkspaceID: 42, Type: "group", GroupID: 77,
+		},
+	})
+	if err == nil {
+		t.Fatal("group selection without platform must be rejected")
+	}
+	if !errors.Is(err, targetpublishing.ErrInvalidRequest) {
+		t.Fatalf("error = %v, want errors.Is(ErrInvalidRequest)", err)
+	}
+}
+
 func TestSubmitJobHTTPResolvesGroupIntoDeterministicConcretePlans(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	h, db := newSubmitJobE2EStack(t)
@@ -288,7 +309,7 @@ func TestSubmitJobHTTPResolvesGroupIntoDeterministicConcretePlans(t *testing.T) 
 	h.RegisterRoutes(r, adminAuthFake, m2mJobsAuthFake)
 	body := validSubmitJobBody("http-group-001")
 	body.DeliveryPlan = nil
-	body.PublishingTarget = &SubmitPublishingTarget{WorkspaceID: 42, Type: "group", GroupID: 77}
+	body.PublishingTarget = &SubmitPublishingTarget{WorkspaceID: 42, Type: "group", GroupID: 77, Platform: "youtube"}
 	w := postSubmitJob(t, r, body)
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("group submit: status=%d body=%s", w.Code, w.Body.String())
@@ -373,7 +394,7 @@ func TestSubmitJobHTTPRejectsGroupAtomicallyWhenMemberDisabled(t *testing.T) {
 	h.RegisterRoutes(r, adminAuthFake, m2mJobsAuthFake)
 	body := validSubmitJobBody("http-group-disabled-001")
 	body.DeliveryPlan = nil
-	body.PublishingTarget = &SubmitPublishingTarget{WorkspaceID: 42, Type: "group", GroupID: 88}
+	body.PublishingTarget = &SubmitPublishingTarget{WorkspaceID: 42, Type: "group", GroupID: 88, Platform: "youtube"}
 	w := postSubmitJob(t, r, body)
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("disabled group submit: status=%d body=%s", w.Code, w.Body.String())

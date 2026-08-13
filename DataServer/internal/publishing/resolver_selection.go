@@ -194,16 +194,9 @@ func validateLocalDestinationSnapshot(workspaceID int64, platform string, channe
 	if row.Provider != ProviderSocialGateway || row.ExternalDestinationID != channel.ExternalDestinationID {
 		return fmt.Errorf("%w: destination_id=%q provider or external id mismatch", ErrTargetDestinationInvalid, channel.DestinationID)
 	}
-	var metadata struct {
-		WorkspaceID       int64  `json:"workspace_id"`
-		Platform          string `json:"platform"`
-		PlatformAccountID int64  `json:"platform_account_id"`
-		ChannelID         string `json:"channel_id"`
-	}
-	if strings.TrimSpace(row.ConfigurationJSON) != "" {
-		if err := json.Unmarshal([]byte(row.ConfigurationJSON), &metadata); err != nil {
-			return fmt.Errorf("%w: destination_id=%q configuration: %v", ErrTargetDestinationInvalid, channel.DestinationID, err)
-		}
+	metadata, err := parseDestinationConfig(row.ConfigurationJSON)
+	if err != nil {
+		return fmt.Errorf("%w: destination_id=%q configuration: %v", ErrTargetDestinationInvalid, channel.DestinationID, err)
 	}
 	if metadata.WorkspaceID != 0 && metadata.WorkspaceID != workspaceID {
 		return fmt.Errorf("%w: destination_id=%q workspace mismatch", ErrTargetDestinationInvalid, channel.DestinationID)
@@ -220,4 +213,57 @@ func validateLocalDestinationSnapshot(workspaceID int64, platform string, channe
 		return fmt.Errorf("%w: destination_id=%q channel mismatch", ErrTargetDestinationInvalid, channel.DestinationID)
 	}
 	return nil
+}
+
+// destinationConfigMetadata is the provider-neutral subset of a destination's
+// configuration_json that Velox reads. platform is opaque; workspace/account/
+// channel are cross-check fields only.
+type destinationConfigMetadata struct {
+	WorkspaceID       int64  `json:"workspace_id"`
+	Platform          string `json:"platform"`
+	PlatformAccountID int64  `json:"platform_account_id"`
+	ChannelID         string `json:"channel_id"`
+}
+
+// parseDestinationConfig decodes the provider-neutral configuration_json
+// subset. An empty string is treated as an absent config (no error).
+func parseDestinationConfig(configJSON string) (destinationConfigMetadata, error) {
+	var meta destinationConfigMetadata
+	if strings.TrimSpace(configJSON) == "" {
+		return meta, nil
+	}
+	if err := json.Unmarshal([]byte(configJSON), &meta); err != nil {
+		return meta, err
+	}
+	return meta, nil
+}
+
+// PlatformForDestination resolves the opaque platform of a local destination
+// from its configuration_json. It is the submit adapter's provider-neutral
+// replacement for a hardcoded platform: channel selection reads the platform
+// from the destination registry instead of Velox inventing one.
+func (r *TargetResolver) PlatformForDestination(ctx context.Context, destinationID string) (string, error) {
+	destinationID = strings.TrimSpace(destinationID)
+	if destinationID == "" {
+		return "", fmt.Errorf("%w: destination_id is empty", ErrTargetDestinationInvalid)
+	}
+	if r == nil || r.destinations == nil {
+		return "", fmt.Errorf("%w: destination store is not configured", ErrInvalidRequest)
+	}
+	rows, err := r.destinations.BatchDeliveryDestinations(ctx, []string{destinationID})
+	if err != nil {
+		return "", fmt.Errorf("%w: platform lookup: %v", ErrTargetDestinationInvalid, err)
+	}
+	row := rows[destinationID]
+	if row == nil {
+		return "", fmt.Errorf("%w: destination_id=%q", ErrDestinationNotFound, destinationID)
+	}
+	meta, err := parseDestinationConfig(row.ConfigurationJSON)
+	if err != nil {
+		return "", fmt.Errorf("%w: destination_id=%q configuration: %v", ErrTargetDestinationInvalid, destinationID, err)
+	}
+	if meta.Platform == "" {
+		return "", fmt.Errorf("%w: destination_id=%q configuration has no platform", ErrTargetDestinationInvalid, destinationID)
+	}
+	return normalizePlatform(meta.Platform), nil
 }

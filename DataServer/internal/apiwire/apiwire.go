@@ -98,6 +98,7 @@ type SubmitPublishingTarget struct {
 	Type          string `json:"type" validate:"required,oneof=channel group"`
 	DestinationID string `json:"destination_id,omitempty" validate:"omitempty,min=1"`
 	GroupID       int64  `json:"group_id,omitempty" validate:"omitempty,gte=1"`
+	Platform      string `json:"platform,omitempty" validate:"omitempty,min=1"`
 }
 
 // SubmitJobBatchRequest is the wire shape for POST /api/v1/jobs/batch.

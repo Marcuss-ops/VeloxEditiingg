@@ -275,11 +275,17 @@ type SubmitAudioTrack struct {
 // publishing catalog; group selection uses the upstream group_id. The
 // workspace_id is explicit so the server can fail closed against a catalog
 // from another workspace.
+//
+// Platform is opaque and provider-neutral. It is optional for channel
+// selection (derived from the destination registry) but required for group
+// selection, because Velox has no local destination to read it from before
+// the upstream catalog query is scoped.
 type SubmitPublishingTarget struct {
 	WorkspaceID   int64  `json:"workspace_id"`
 	Type          string `json:"type"`
 	DestinationID string `json:"destination_id,omitempty"`
 	GroupID       int64  `json:"group_id,omitempty"`
+	Platform      string `json:"platform,omitempty"`
 }
 
 // SubmitDeliveryPlanEntry is a single destination in the delivery plan.

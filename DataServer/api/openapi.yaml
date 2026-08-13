@@ -1009,6 +1009,9 @@ components:
                 group_id:
                     minimum: 1
                     type: integer
+                platform:
+                    minLength: 1
+                    type: string
                 type:
                     enum:
                         - channel
