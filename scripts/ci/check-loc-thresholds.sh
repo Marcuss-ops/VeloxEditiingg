@@ -135,6 +135,13 @@ KNOWN_VIOLATIONS_ROUND3=(
   "tests/e2e/workload/run.sh|Round-5 shell carry-over (705 LOC); e2e workload orchestration (video-counter / artifact-gate E2E) — refactor split tracked in loc-baseline.md §10c"
 )
 
+# KNOWN_VIOLATIONS_ROUND4 — deployment-state test carry-over (snapshot
+# 2026-08-13). Split by domain after the concurrent store error-leaf
+# extraction lands; keep the gate visible until that refactor is complete.
+KNOWN_VIOLATIONS_ROUND4=(
+  "DataServer/internal/store/store_deployment_records_test.go|Round-6 test carry-over (1551 LOC); split deployment-record and worker-deployment-state/recovery scenarios by domain — tracked in loc-baseline.md §10c"
+)
+
 # STRUCTURAL_LONG_FILES — files whose LOC naturally exceeds the
 # threshold by design (cumulative / spec-driven). Exempt from the hard
 # gate above, but re-emitted as `::warning` annotations on every run by
@@ -194,7 +201,7 @@ BUILD_NOISE_EXCLUDES=(
   -not -path '*/.pb-cache/*'
 )
 
-KNOWN_VIOLATIONS=("${KNOWN_VIOLATIONS_BASELINE[@]}" "${KNOWN_VIOLATIONS_ROUND1[@]}" "${KNOWN_VIOLATIONS_ROUND2[@]}" "${KNOWN_VIOLATIONS_ROUND3[@]}")
+KNOWN_VIOLATIONS=("${KNOWN_VIOLATIONS_BASELINE[@]}" "${KNOWN_VIOLATIONS_ROUND1[@]}" "${KNOWN_VIOLATIONS_ROUND2[@]}" "${KNOWN_VIOLATIONS_ROUND3[@]}" "${KNOWN_VIOLATIONS_ROUND4[@]}")
 
 VIOLATIONS=0
 KNOWN_HITS=0

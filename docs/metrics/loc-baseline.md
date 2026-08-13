@@ -413,6 +413,17 @@ semaphore fast-fail, artifact gate promotion). It is a single-purpose
 operator E2E orchestrator; the refactor split is tracked above and in
 `KNOWN_VIOLATIONS_ROUND3` of `scripts/ci/check-loc-thresholds.sh`.
 
+### Round-6 carry-over (snapshot 2026-08-13)
+
+| File | LOC | Category | Refactor target | Status |
+| --- | ---: | --- | --- | --- |
+| `DataServer/internal/store/store_deployment_records_test.go` | 1 551 | test Go | Split deployment-record, worker-state, and restart-recovery scenarios by domain | real refactor target, tracked |
+
+The deployment-record test grew with the canonical deployment state machine,
+verified digest transitions, and restart-recovery invariants. It remains a
+real refactor target; remove this entry when the scenarios are split into
+focused test files.
+
 ### Round-4 carry-over (snapshot 2026-07-28)
 
 The following three files currently exceed the per-category LOC
