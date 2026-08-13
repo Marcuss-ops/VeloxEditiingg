@@ -91,6 +91,28 @@ func TestStatus_IsValid_ClosedVocabulary(t *testing.T) {
 	}
 }
 
+// TestStatusSetMatchesAllStatuses pins the O(1) membership conversion:
+// the init-derived statusSet must hold EXACTLY the closed vocabulary (same
+// cardinality, same members). It guards against a future edit that adds a
+// status to AllStatuses but not the set, and documents that IsValid() is
+// backed by the set rather than a linear scan.
+func TestStatusSetMatchesAllStatuses(t *testing.T) {
+	if len(statusSet) != len(AllStatuses) {
+		t.Fatalf("statusSet size = %d, AllStatuses size = %d; the set and slice must agree",
+			len(statusSet), len(AllStatuses))
+	}
+	for _, s := range AllStatuses {
+		if _, ok := statusSet[s]; !ok {
+			t.Errorf("status %q is in AllStatuses but missing from statusSet", s)
+		}
+	}
+	for s := range statusSet {
+		if !s.IsValid() {
+			t.Errorf("status %q is in statusSet but IsValid() is false", s)
+		}
+	}
+}
+
 func TestOpen_And_Close_Roundtrip(t *testing.T) {
 	// File-backed round-trip ensures schemaDDL is replayable on a
 	// real path (not just :memory:).

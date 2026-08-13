@@ -22,6 +22,29 @@ func TestStatusValid(t *testing.T) {
 	}
 }
 
+// TestStatusSetMatchesAllStatuses pins the O(1) membership conversion:
+// the init-derived statusSet must hold EXACTLY the canonical allStatuses
+// vocabulary (same cardinality, same members). It guards against a future
+// edit that adds a status to one list but not the other, and documents that
+// Valid() is backed by the set, not a linear scan.
+func TestStatusSetMatchesAllStatuses(t *testing.T) {
+	if len(statusSet) != len(allStatuses) {
+		t.Fatalf("statusSet size = %d, allStatuses size = %d; the set and slice must agree",
+			len(statusSet), len(allStatuses))
+	}
+	for _, s := range allStatuses {
+		if _, ok := statusSet[s]; !ok {
+			t.Errorf("status %q is in allStatuses but missing from statusSet", s)
+		}
+	}
+	// Membership through the set must agree with the public predicate.
+	for s := range statusSet {
+		if !s.Valid() {
+			t.Errorf("status %q is in statusSet but Valid() is false", s)
+		}
+	}
+}
+
 func TestStatusTerminal(t *testing.T) {
 	terminal := []Status{StatusCompleted, StatusFailed, StatusCancelled}
 	for _, s := range terminal {

@@ -89,14 +89,21 @@ var AllStatuses = []Status{
 	StatusCleaned,
 }
 
+// statusSet is the O(1) membership view of AllStatuses. It is derived once
+// at init so the per-row IsValid() gate never scans the lifecycle-ordered
+// slice (mirrors the telemetry originSet/scopeSet idiom).
+var statusSet = func() map[Status]struct{} {
+	m := make(map[Status]struct{}, len(AllStatuses))
+	for _, v := range AllStatuses {
+		m[v] = struct{}{}
+	}
+	return m
+}()
+
 // IsValid reports whether s is in the closed vocabulary.
 func (s Status) IsValid() bool {
-	for _, v := range AllStatuses {
-		if v == s {
-			return true
-		}
-	}
-	return false
+	_, ok := statusSet[s]
+	return ok
 }
 
 // Sentinel errors so callers can branch on syscall-equivalent

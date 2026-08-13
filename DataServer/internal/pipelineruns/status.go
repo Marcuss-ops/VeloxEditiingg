@@ -48,14 +48,21 @@ func AllStatuses() []Status {
 	return out
 }
 
+// statusSet is the O(1) membership view of allStatuses. Derived once at init
+// so Valid() on the placement/costmodel/status-boundary hot paths never
+// scans the 17-status slice (mirrors the telemetry originSet/scopeSet idiom).
+var statusSet = func() map[Status]struct{} {
+	m := make(map[Status]struct{}, len(allStatuses))
+	for _, v := range allStatuses {
+		m[v] = struct{}{}
+	}
+	return m
+}()
+
 // Valid returns true when s is one of the known aggregated statuses.
 func (s Status) Valid() bool {
-	for _, v := range allStatuses {
-		if s == v {
-			return true
-		}
-	}
-	return false
+	_, ok := statusSet[s]
+	return ok
 }
 
 // ── Stage grouping ───────────────────────────────────────────────────
