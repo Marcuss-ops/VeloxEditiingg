@@ -39,6 +39,14 @@ struct FramePipelineConfig {
     std::string codec{"libx264"};
     std::string preset{"medium"};
 
+    // Explicit decoder/encoder thread budgets. 0 keeps LibAV's automatic
+    // selection. Setting these coordinates per-segment encoder threads with
+    // segment parallelism so a multi-segment render cannot oversubscribe the
+    // host (e.g. 6 vCPU should be 2 parallel segments × 2 encoder threads,
+    // not 4 segments × 6 x264 threads). Applied before avcodec_open2().
+    int decoder_threads{0};
+    int encoder_threads{0};
+
     // Bounded AVFrame pool capacity: the maximum number of frames in flight
     // between the decode, render and encode stages. Backpressure is
     // structural — the producer blocks when the pool is exhausted, so a

@@ -433,6 +433,9 @@ bool renderFrames(const FramePipelineConfig& config, FramePipelineResult* result
         result->error = "avcodec_parameters_to_context (decoder) failed";
         return false;
     }
+    if (config.decoder_threads > 0) {
+        dec_ctx->thread_count = config.decoder_threads;
+    }
     if (avcodec_open2(dec_ctx.get(), decoder, nullptr) < 0) {
         result->error = "avcodec_open2 (decoder) failed";
         return false;
@@ -483,6 +486,9 @@ bool renderFrames(const FramePipelineConfig& config, FramePipelineResult* result
             av_opt_set(enc_ctx->priv_data, "preset", config.preset.c_str(), 0);
         }
         av_opt_set_int(enc_ctx->priv_data, "crf", 23, 0);
+    }
+    if (config.encoder_threads > 0) {
+        enc_ctx->thread_count = config.encoder_threads;
     }
     if (avcodec_open2(enc_ctx.get(), encoder, nullptr) < 0) {
         result->error = "avcodec_open2 (encoder) failed for " + config.codec;

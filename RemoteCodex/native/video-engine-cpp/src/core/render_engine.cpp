@@ -130,6 +130,38 @@ namespace {
         filter << "concat=n=" << compiled.primary_indices.size() << ":v=0:a=1[aout]";
         return filter.str();
     }
+
+    // Decoder/encoder thread budgets for the native FramePipeline. 0 keeps
+    // LibAV's automatic selection; operators coordinate these with segment
+    // parallelism (VELOX_NATIVE_SEGMENT_WORKERS) so the host is never
+    // oversubscribed by parallel x264 encoders.
+    struct NativeThreadConfig {
+        int decoder_threads{0};
+        int encoder_threads{0};
+    };
+
+    NativeThreadConfig nativeThreadConfig() {
+        NativeThreadConfig config;
+        if (const char* value = std::getenv("VELOX_NATIVE_DECODER_THREADS")) {
+            try {
+                const int parsed = std::stoi(value);
+                if (parsed > 0) {
+                    config.decoder_threads = parsed;
+                }
+            } catch (...) {
+            }
+        }
+        if (const char* value = std::getenv("VELOX_NATIVE_ENCODER_THREADS")) {
+            try {
+                const int parsed = std::stoi(value);
+                if (parsed > 0) {
+                    config.encoder_threads = parsed;
+                }
+            } catch (...) {
+            }
+        }
+        return config;
+    }
 }
 
 void RenderEngine::setProgressCallback(services::ProgressCallback cb) {
@@ -636,7 +668,10 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                 parallelism = 1;
             }
         }
-        media::SegmentScheduler scheduler({parallelism});
+        const NativeThreadConfig thread_config = nativeThreadConfig();
+        media::SegmentScheduler scheduler(media::SegmentSchedulerConfig{
+            media::ExecutionBudget{/*cpu_tokens*/0, /*memory_bytes*/0,
+                                   parallelism, thread_config.encoder_threads}});
         std::vector<NativeSegmentOutcome> outcomes(jobs.size());
         const auto scheduled = scheduler.run(jobs.size(), [&](std::size_t index) {
             const auto& job = jobs[index];
@@ -659,6 +694,8 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             config.source_duration_us = job.duration_us;
             config.codec = "libx264";
             config.preset = "medium";
+            config.decoder_threads = thread_config.decoder_threads;
+            config.encoder_threads = thread_config.encoder_threads;
             const bool success = media::renderFrames(config, &outcome.pipeline);
             outcome.wall_ms = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - start).count();
@@ -894,6 +931,9 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                 nativeConfig.source_duration_us = expected_us;
                 nativeConfig.codec = "libx264";
                 nativeConfig.preset = "medium";
+                const NativeThreadConfig fallback_threads = nativeThreadConfig();
+                nativeConfig.decoder_threads = fallback_threads.decoder_threads;
+                nativeConfig.encoder_threads = fallback_threads.encoder_threads;
                 media::FramePipelineResult nativeResult;
                 built = media::renderFrames(nativeConfig, &nativeResult);
                 recordFramePipeline(nativeResult);
