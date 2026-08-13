@@ -163,7 +163,7 @@ func (s *Service) Refresh(ctx context.Context) error {
 		return fmt.Errorf("protectedasset.Refresh: repo: %w", err)
 	}
 
-	protected := make(map[string]struct{}, len(jobs))
+	protected := make(map[assetref.AssetKey]struct{}, len(jobs))
 	for _, j := range jobs {
 		for id := range assetref.ExtractAssetKeys(j.Payload) {
 			protected[id] = struct{}{}
@@ -172,7 +172,7 @@ func (s *Service) Refresh(ctx context.Context) error {
 
 	ids := make([]string, 0, len(protected))
 	for id := range protected {
-		ids = append(ids, id)
+		ids = append(ids, id.String())
 	}
 	sort.Strings(ids)
 

@@ -37,11 +37,14 @@ import (
 //   - non-Drive URL in any field → silently skipped.
 //   - URL whose Drive ID cannot be extracted → silently skipped.
 //
-// The set is returned as map[string]struct{} for cheap O(1) dedup
+// The set is returned as map[AssetKey]struct{} for cheap O(1) dedup
 // and zero-payload iteration. Caller does NOT need to free or
-// iterate in any particular order.
-func ExtractAssetKeys(payload json.RawMessage) map[string]struct{} {
-	out := make(map[string]struct{})
+// iterate in any particular order. Keys are typed AssetKey (the
+// canonical cache identity) rather than bare strings so a Drive file
+// ID, a velox-asset ID, and a content hash cannot be confused at the
+// call site.
+func ExtractAssetKeys(payload json.RawMessage) map[AssetKey]struct{} {
+	out := make(map[AssetKey]struct{})
 	if len(payload) == 0 || bytes.Equal(payload, []byte("null")) {
 		return out
 	}
@@ -71,10 +74,10 @@ func ExtractAssetKeys(payload json.RawMessage) map[string]struct{} {
 					// deferred velox-drive://) both yield their asset ID for the
 					// worker cache key set.
 					if id, ok := WireAssetID(trimmed); ok {
-						out[id] = struct{}{}
+						out[AssetKey(id)] = struct{}{}
 					} else if _, isClip := clipStringKeys[key]; isClip {
 						if id, err := ParseDriveFileID(trimmed); err == nil && !id.Empty() {
-							out[id.String()] = struct{}{}
+							out[AssetKey(id.String())] = struct{}{}
 						}
 					}
 				case []interface{}:
@@ -86,7 +89,7 @@ func ExtractAssetKeys(payload json.RawMessage) map[string]struct{} {
 						for _, item := range s {
 							if link, ok := item.(string); ok {
 								if id, err := ParseDriveFileID(strings.TrimSpace(link)); err == nil && !id.Empty() {
-									out[id.String()] = struct{}{}
+									out[AssetKey(id.String())] = struct{}{}
 								}
 							}
 						}

@@ -341,7 +341,7 @@ func extractAssetKeysFromJSON(payload map[string]interface{}) []string {
 	}
 	out := make([]string, 0, len(idSet))
 	for id := range idSet {
-		out = append(out, id)
+		out = append(out, id.String())
 	}
 	sort.Strings(out)
 	return out
@@ -351,7 +351,7 @@ func extractAssetKeysFromJSON(payload map[string]interface{}) []string {
 // lease set. A wire URI is normalized to its cache identity when encountered
 // defensively; V2 normally carries bare asset IDs. Invalid/empty values are
 // ignored here and rejected by the V2 validator before dispatch.
-func collectCompiledPlanAssetIDs(value interface{}, ids map[string]struct{}) {
+func collectCompiledPlanAssetIDs(value interface{}, ids map[assetref.AssetKey]struct{}) {
 	switch typed := value.(type) {
 	case map[string]interface{}:
 		// AssetKey is the canonical cache/lease identity when present. The
@@ -370,7 +370,7 @@ func collectCompiledPlanAssetIDs(value interface{}, ids map[string]struct{}) {
 			identity = wireID
 		}
 		if identity != "" {
-			ids[identity] = struct{}{}
+			ids[assetref.AssetKey(identity)] = struct{}{}
 		}
 		for _, child := range typed {
 			collectCompiledPlanAssetIDs(child, ids)

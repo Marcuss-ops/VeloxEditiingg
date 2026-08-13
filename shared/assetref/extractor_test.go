@@ -112,9 +112,9 @@ func TestExtractAssetKeys_LegacyClipSlots(t *testing.T) {
 
 			// Build wantSet as a NON-NIL map so reflect.DeepEqual matches
 			// the extractor's always-non-nil return contract.
-			wantSet := make(map[string]struct{}, len(tc.want))
+			wantSet := make(map[AssetKey]struct{}, len(tc.want))
 			for _, id := range tc.want {
-				wantSet[id] = struct{}{}
+				wantSet[AssetKey(id)] = struct{}{}
 			}
 			if !reflect.DeepEqual(gotSet, wantSet) {
 				t.Errorf("ExtractAssetKeys set mismatch:\n got  = %v\n want = %v", gotSet, wantSet)
@@ -144,7 +144,7 @@ func TestExtractAssetKeys_CanonicalClipStockVoiceover(t *testing.T) {
 	payload := []byte(`{"scenes":[{"clip":{"asset_id":"clip-01","url":"velox-asset://clip-01"},"stock":[{"asset_id":"stock-01","url":"velox-asset://stock-01"}],"voiceover":{"asset_id":"voice-01","url":"velox-asset://voice-01"}}]}`)
 	got := ExtractAssetKeys(payload)
 	for _, key := range []string{"clip-01", "stock-01", "voice-01"} {
-		if _, ok := got[key]; !ok {
+		if _, ok := got[AssetKey(key)]; !ok {
 			t.Errorf("missing canonical asset key %q in %v", key, got)
 		}
 	}
@@ -153,7 +153,7 @@ func TestExtractAssetKeys_CanonicalClipStockVoiceover(t *testing.T) {
 func TestExtractAssetKeys_DeferredDriveWireScheme(t *testing.T) {
 	payload := []byte(`{"scenes":[{"clip":{"asset_id":"drive-file-123456","url":"velox-drive://drive-file-123456"}}]}`)
 	got := ExtractAssetKeys(payload)
-	if _, ok := got["drive-file-123456"]; !ok {
+	if _, ok := got[AssetKey("drive-file-123456")]; !ok {
 		t.Errorf("missing deferred drive key %q in %v", "drive-file-123456", got)
 	}
 }

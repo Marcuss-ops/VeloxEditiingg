@@ -133,7 +133,7 @@ func sortedAssetKeys(payload []byte) []string {
 	keys := assetref.ExtractAssetKeys(payload)
 	out := make([]string, 0, len(keys))
 	for key := range keys {
-		out = append(out, key)
+		out = append(out, key.String())
 	}
 	sort.Strings(out)
 	return out

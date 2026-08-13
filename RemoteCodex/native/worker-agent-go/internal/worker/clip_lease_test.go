@@ -77,7 +77,7 @@ func TestClipLease_ReusedAndNewClip(t *testing.T) {
 	}
 	driveIDs := make([]string, 0, len(idSet))
 	for id := range idSet {
-		driveIDs = append(driveIDs, id)
+		driveIDs = append(driveIDs, id.String())
 	}
 	sort.Strings(driveIDs) // deterministic order for assertions
 

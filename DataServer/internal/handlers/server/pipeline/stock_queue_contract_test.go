@@ -62,7 +62,7 @@ func TestClipStockProjectionKeepsCanonicalStockPoolInQueue(t *testing.T) {
 	}
 	protected := assetref.ExtractAssetKeys(payload)
 	for _, id := range []string{"stock-1", "stock-2"} {
-		if _, ok := protected[id]; !ok {
+		if _, ok := protected[assetref.AssetKey(id)]; !ok {
 			t.Fatalf("queued stock asset %q is absent from the protected-cache key set: %v", id, protected)
 		}
 	}
