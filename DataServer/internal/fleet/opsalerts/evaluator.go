@@ -181,12 +181,7 @@ func evaluateSnapshot(ctx CallCtx, snap *WorkerSnapshot) []Alert {
 func evaluateOne(ctx CallCtx, snap *WorkerSnapshot, r AlertRule) (Alert, bool) {
 	switch r.ID {
 	case RuleHeartbeatStale:
-		if snap.HeartbeatAgeSeconds == nil {
-			break
-		}
-		if r.Above && *snap.HeartbeatAgeSeconds >= r.Threshold {
-			return makeHit(snap.WorkerID, r, fmt.Sprintf("heartbeat_age=%.0fs", *snap.HeartbeatAgeSeconds)), true
-		}
+		return numericAboveHit(snap.WorkerID, r, snap.HeartbeatAgeSeconds, "heartbeat_age", "s")
 	case RuleContainerUnhealthy:
 		if snap.ContainerHealthy == nil {
 			break
@@ -195,33 +190,13 @@ func evaluateOne(ctx CallCtx, snap *WorkerSnapshot, r AlertRule) (Alert, bool) {
 			return makeHit(snap.WorkerID, r, "container_healthy=false"), true
 		}
 	case RuleRestartLoop:
-		if snap.RestartsPerHour == nil {
-			break
-		}
-		if r.Above && *snap.RestartsPerHour >= r.Threshold {
-			return makeHit(snap.WorkerID, r, fmt.Sprintf("restarts_per_hour=%.0f", *snap.RestartsPerHour)), true
-		}
+		return numericAboveHit(snap.WorkerID, r, snap.RestartsPerHour, "restarts_per_hour", "")
 	case RuleDiskPressure:
-		if snap.DiskUsedPercent == nil {
-			break
-		}
-		if r.Above && *snap.DiskUsedPercent >= r.Threshold {
-			return makeHit(snap.WorkerID, r, fmt.Sprintf("disk_used=%.0f%%", *snap.DiskUsedPercent)), true
-		}
+		return numericAboveHit(snap.WorkerID, r, snap.DiskUsedPercent, "disk_used", "%")
 	case RuleRAMPressure:
-		if snap.RAMUsedPercent == nil {
-			break
-		}
-		if r.Above && *snap.RAMUsedPercent >= r.Threshold {
-			return makeHit(snap.WorkerID, r, fmt.Sprintf("ram_used=%.0f%%", *snap.RAMUsedPercent)), true
-		}
+		return numericAboveHit(snap.WorkerID, r, snap.RAMUsedPercent, "ram_used", "%")
 	case RuleConsecutiveJobFailures:
-		if snap.ConsecutiveJobFailures == nil {
-			break
-		}
-		if r.Above && *snap.ConsecutiveJobFailures >= r.Threshold {
-			return makeHit(snap.WorkerID, r, fmt.Sprintf("consecutive_failures=%.0f", *snap.ConsecutiveJobFailures)), true
-		}
+		return numericAboveHit(snap.WorkerID, r, snap.ConsecutiveJobFailures, "consecutive_failures", "")
 	case RuleSmokeFailed:
 		if snap.LatestSmokeStatus == nil {
 			break
@@ -284,19 +259,9 @@ func evaluateOne(ctx CallCtx, snap *WorkerSnapshot, r AlertRule) (Alert, bool) {
 			return makeHit(snap.WorkerID, r, fmt.Sprintf("connection_status=%s", *snap.ConnectionStatus)), true
 		}
 	case RuleJobStuckRunning:
-		if snap.LongestRunningJobMinutes == nil {
-			break
-		}
-		if r.Above && *snap.LongestRunningJobMinutes >= r.Threshold {
-			return makeHit(snap.WorkerID, r, fmt.Sprintf("longest_running_job=%.0fmin", *snap.LongestRunningJobMinutes)), true
-		}
+		return numericAboveHit(snap.WorkerID, r, snap.LongestRunningJobMinutes, "longest_running_job", "min")
 	case RuleStaleLease:
-		if snap.OldestLeaseAgeSeconds == nil {
-			break
-		}
-		if r.Above && *snap.OldestLeaseAgeSeconds >= r.Threshold {
-			return makeHit(snap.WorkerID, r, fmt.Sprintf("oldest_lease_age=%.0fs", *snap.OldestLeaseAgeSeconds)), true
-		}
+		return numericAboveHit(snap.WorkerID, r, snap.OldestLeaseAgeSeconds, "oldest_lease_age", "s")
 	case RuleWorkdirPermissionChange:
 		if snap.WorkdirPermissionOK == nil {
 			break
@@ -318,6 +283,18 @@ type Alert struct {
 	CurrentValueText string
 	Message          string
 	FiredAt          time.Time
+}
+
+// numericAboveHit scores the seven monotonic "field >= threshold" rules
+// (heartbeat age, restart loop, disk/RAM pressure, consecutive failures,
+// stuck job, stale lease) that share one firing shape: fire when r.Above is
+// set and the nullable field is >= r.Threshold. label/suffix render the
+// operator-facing observation (e.g. "disk_used=92%", "oldest_lease_age=30s").
+func numericAboveHit(workerID string, r AlertRule, field *float64, label, suffix string) (Alert, bool) {
+	if field == nil || !r.Above || *field < r.Threshold {
+		return Alert{}, false
+	}
+	return makeHit(workerID, r, fmt.Sprintf("%s=%.0f%s", label, *field, suffix)), true
 }
 
 // makeHit builds an AlertEventHit from a rule + observation.
