@@ -72,18 +72,18 @@ bool probeSegmentForExecution(const fs::path& path,
         return false;
     }
     *out = SegmentProbe{};
+    std::string local_error;
+    std::string& err = error != nullptr ? *error : local_error;
 
     packet::InputSession session;
-    if (!session.open(path, error)) {
+    if (!session.open(path, err)) {
         return false;
     }
     packet::Demuxer& demuxer = session.demuxer();
     const int stream_index = demuxer.firstStream(
         kind == MediaKind::Audio ? AVMEDIA_TYPE_AUDIO : AVMEDIA_TYPE_VIDEO);
     if (stream_index < 0) {
-        if (error != nullptr) {
-            *error = "media stream missing from " + path.string();
-        }
+        err = "media stream missing from " + path.string();
         return false;
     }
     const AVStream* stream = demuxer.stream(stream_index);
