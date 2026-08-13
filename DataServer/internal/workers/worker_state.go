@@ -258,3 +258,17 @@ func IsHeartbeatStale(lastHB string, now time.Time) bool {
 	}
 	return now.Sub(t.UTC()) >= ConnectionStaleThreshold
 }
+
+// HeartbeatAgeSeconds returns the number of whole seconds since lastHB,
+// clamped to 0 for empty, unparseable, or future heartbeats. It is the
+// display-oriented projection of the heartbeat-age computation this package
+// already owns (heartbeatAge). Operator surfaces consume it instead of
+// re-parsing Worker.LastHB themselves, so the RFC3339 parsing and clamping
+// rules live in exactly one place.
+func HeartbeatAgeSeconds(lastHB string, now time.Time) int64 {
+	age := heartbeatAge(lastHB, now)
+	if age < 0 {
+		return 0
+	}
+	return int64(age.Seconds())
+}

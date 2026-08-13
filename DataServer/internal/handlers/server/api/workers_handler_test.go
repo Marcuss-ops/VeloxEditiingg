@@ -17,14 +17,14 @@ func TestHeartbeatAgeSeconds(t *testing.T) {
 	now := time.Now().UTC()
 	recent := now.Add(-10 * time.Second).Format(time.RFC3339)
 
-	if got := heartbeatAgeSeconds(recent); got < 9 || got > 11 {
-		t.Errorf("heartbeatAgeSeconds(recent 10s) = %d, want ~10", got)
+	if got := workersreg.HeartbeatAgeSeconds(recent, now); got < 9 || got > 11 {
+		t.Errorf("HeartbeatAgeSeconds(recent 10s) = %d, want ~10", got)
 	}
-	if got := heartbeatAgeSeconds(""); got != 0 {
-		t.Errorf("heartbeatAgeSeconds(empty) = %d, want 0", got)
+	if got := workersreg.HeartbeatAgeSeconds("", now); got != 0 {
+		t.Errorf("HeartbeatAgeSeconds(empty) = %d, want 0", got)
 	}
-	if got := heartbeatAgeSeconds("bogus"); got != 0 {
-		t.Errorf("heartbeatAgeSeconds(bogus) = %d, want 0", got)
+	if got := workersreg.HeartbeatAgeSeconds("bogus", now); got != 0 {
+		t.Errorf("HeartbeatAgeSeconds(bogus) = %d, want 0", got)
 	}
 }
 

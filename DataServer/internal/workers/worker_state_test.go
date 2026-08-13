@@ -109,6 +109,28 @@ func TestDeriveHealthState(t *testing.T) {
 	}
 }
 
+func TestHeartbeatAgeSeconds(t *testing.T) {
+	now := canonicalNow()
+	cases := []struct {
+		name   string
+		lastHB string
+		want   int64
+	}{
+		{"empty", "", 0},
+		{"unparseable", "bogus", 0},
+		{"future clamped to zero", now.Add(time.Minute).Format(time.RFC3339), 0},
+		{"ten seconds ago", freshHB(now, 10*time.Second), 10},
+		{"two minutes ago", freshHB(now, 2*time.Minute), 120},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := HeartbeatAgeSeconds(tc.lastHB, now); got != tc.want {
+				t.Errorf("HeartbeatAgeSeconds(%q) = %d, want %d", tc.lastHB, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestWireStatusProjection(t *testing.T) {
 	cases := []struct {
 		cs   ConnectionState

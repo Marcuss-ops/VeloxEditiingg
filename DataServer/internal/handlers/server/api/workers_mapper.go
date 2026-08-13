@@ -9,8 +9,7 @@
 //     JSON-decoded metrics blob.
 //   - workers_executors.go — executor extraction from capabilities.
 //   - workers_filters.go   — GET param parsing and in-memory filter applier.
-//   - workers_mapper.go    — top-level sanitizeWorker / heartbeatAgeSeconds
-//     orchestration.
+//   - workers_mapper.go    — top-level sanitizeWorker orchestration.
 package api
 
 import (
@@ -18,23 +17,6 @@ import (
 
 	workersreg "velox-server/internal/workers"
 )
-
-// heartbeatAgeSeconds returns the number of seconds since last heartbeat,
-// or 0 if the timestamp is unparseable.
-func heartbeatAgeSeconds(lastHB string) int64 {
-	if lastHB == "" {
-		return 0
-	}
-	t, err := time.Parse(time.RFC3339, lastHB)
-	if err != nil {
-		return 0
-	}
-	age := time.Since(t).Seconds()
-	if age < 0 {
-		return 0
-	}
-	return int64(age)
-}
 
 // sanitizeWorker converts a raw workers.Worker into the operator-facing
 // WorkerResponse, stripping all sensitive fields.
@@ -60,7 +42,7 @@ func sanitizeWorker(w workersreg.Worker) WorkerResponse {
 		BundleVersion:       w.BundleVersion,
 		ConnectedAt:         w.FirstSeen,
 		LastHeartbeatAt:     w.LastHB,
-		HeartbeatAgeSeconds: heartbeatAgeSeconds(w.LastHB),
+		HeartbeatAgeSeconds: workersreg.HeartbeatAgeSeconds(w.LastHB, time.Now().UTC()),
 		CurrentTaskID:       w.CurrentJob,
 		Executors:           extractExecutors(w.ExecutorRegistrySnapshot()),
 	}
