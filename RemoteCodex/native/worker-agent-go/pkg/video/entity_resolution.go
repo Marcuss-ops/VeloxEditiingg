@@ -213,16 +213,23 @@ func matchEntityToSegments(entity string, segments []normalizedSegment, threshol
 func matchEntityByKeywords(entity string, segments []normalizedSegment) []MatchResult {
 	normEntity := normalizeForMatch(entity)
 	entityWords := strings.Fields(normEntity)
+	// Precompute the "keyword:<word>" method label for every needle word once;
+	// the per-segment loop indexes into this slice instead of re-concatenating
+	// the method string for every matched segment.
+	methodForWord := make([]string, len(entityWords))
+	for i, w := range entityWords {
+		methodForWord[i] = "keyword:" + w
+	}
 	results := make([]MatchResult, 0, len(segments))
 	for _, seg := range segments {
-		if matched, word, coverage := keywordMatchFields(normEntity, entityWords, seg.words); matched {
+		if idx, coverage := keywordMatchFields(normEntity, entityWords, seg.words); idx >= 0 {
 			// Score based on coverage: 50 (single short word) to 80 (full phrase match)
 			score := 50.0 + math.Min(coverage, 30.0)
 			results = append(results, MatchResult{
 				TimestampStart: seg.start,
 				TimestampEnd:   seg.end,
 				Score:          math.Round(score*100) / 100,
-				Method:         "keyword:" + word,
+				Method:         methodForWord[idx],
 				Text:           seg.raw,
 			})
 		}

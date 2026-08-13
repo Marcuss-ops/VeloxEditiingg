@@ -142,12 +142,13 @@ func normalizeForMatch(s string) string {
 }
 
 // keywordMatchFields matches pre-normalized needle words against pre-split
-// haystack words. matchEntityByKeywords precomputes the needle words ONCE
-// (the needle is invariant across segments) and splits each haystack once per
-// segment, so the per-segment loop no longer re-normalizes nor re-splits the
-// needle.
-func keywordMatchFields(normNeedle string, needleWords, hayWords []string) (bool, string, float64) {
-	for _, w := range needleWords {
+// haystack words and returns the index of the first matching needle word plus
+// its coverage. A -1 index means no match. Returning the index (instead of the
+// word string) lets matchEntityByKeywords precompute the full
+// "keyword:<word>" method label once per entity and index into it per match,
+// avoiding a per-match string-concatenation allocation in the segment loop.
+func keywordMatchFields(normNeedle string, needleWords, hayWords []string) (int, float64) {
+	for idx, w := range needleWords {
 		if len(w) < 3 {
 			continue
 		}
@@ -156,9 +157,9 @@ func keywordMatchFields(normNeedle string, needleWords, hayWords []string) (bool
 			if w == hw {
 				// Exact word match: score based on word length relative to needle
 				coverage := float64(len(w)) / float64(len(normNeedle)) * 100.0
-				return true, w, coverage
+				return idx, coverage
 			}
 		}
 	}
-	return false, "", 0.0
+	return -1, 0.0
 }
