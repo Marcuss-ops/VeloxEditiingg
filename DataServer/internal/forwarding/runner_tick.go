@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"velox-server/internal/store"
+	"velox-server/internal/telemetry"
 )
 
 // tick performs one poll: claim up to ClaimBatch claimable forwardings,
@@ -20,6 +21,9 @@ import (
 // does not poison the consecutive-error counter); lease-lost cancels
 // the in-flight context; infrastructure errors propagate.
 func (r *CreatorForwardingRunner) tick(ctx context.Context) error {
+	ctx, span := telemetry.StartSpan(ctx, "forward_tick")
+	defer span.End()
+
 	if r.client == nil || !r.client.IsConfigured() {
 		return nil // remote creator not configured; no work to do
 	}

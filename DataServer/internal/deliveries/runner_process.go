@@ -15,6 +15,9 @@ import (
 
 	"velox-server/internal/publicationstate"
 	"velox-server/internal/store"
+	"velox-server/internal/telemetry"
+
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // processLease resolves the provider for a claimed delivery and runs
@@ -32,11 +35,17 @@ import (
 // MaxAttempts falls back to r.cfg.MaxAttempts (the historical
 // behavior).
 func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryLease) error {
+	providerName := canonicalProviderName(lease.Provider)
+	ctx, span := telemetry.StartSpan(ctx, "deliver_lease",
+		attribute.String("velox.provider", providerName),
+		attribute.String("velox.delivery_id", lease.DeliveryID),
+	)
+	defer span.End()
+
 	processStarted := time.Now()
 	providerStarted := processStarted
 	providerRan := false
 	var artifactBytes int64
-	providerName := canonicalProviderName(lease.Provider)
 	status := "failed"
 	defer func() {
 		if r.telemetry == nil {

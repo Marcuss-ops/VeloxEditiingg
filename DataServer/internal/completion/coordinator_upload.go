@@ -13,10 +13,19 @@ import (
 
 	"velox-server/internal/artifacts"
 	"velox-server/internal/repository"
+	"velox-server/internal/telemetry"
 	"velox-shared/contract/domain"
+
+	"go.opentelemetry.io/otel/attribute"
 )
 
 func (c *coordinator) CompleteUpload(ctx context.Context, cmd CompleteUploadCommand) error {
+	ctx, span := telemetry.StartSpan(ctx, "complete_upload",
+		attribute.String("velox.upload_id", cmd.UploadID),
+		attribute.String("velox.task_id", cmd.Fence.TaskID),
+	)
+	defer span.End()
+
 	if err := cmd.Fence.Validate(); err != nil {
 		return fmt.Errorf("%w: %v", ErrFenceMismatch, err)
 	}

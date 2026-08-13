@@ -12,6 +12,9 @@ import (
 	"velox-server/internal/remoteengine"
 	"velox-server/internal/store"
 	"velox-server/internal/supervisor"
+	"velox-server/internal/telemetry"
+
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // processLease handles a single claimed forwarding: polls the remote
@@ -42,6 +45,12 @@ import (
 // context error. The runner then exits without touching the row — the
 // new lease holder owns it.
 func (r *CreatorForwardingRunner) processLease(ctx context.Context, lease store.CreatorForwardingLease) error {
+	ctx, span := telemetry.StartSpan(ctx, "forward_lease",
+		attribute.String("velox.source_provider", lease.SourceProvider),
+		attribute.String("velox.forwarding_id", lease.ForwardingID),
+	)
+	defer span.End()
+
 	// Create a processing context that the renewal loop can cancel
 	// if the lease is lost.
 	procCtx, procCancel := context.WithCancel(ctx)

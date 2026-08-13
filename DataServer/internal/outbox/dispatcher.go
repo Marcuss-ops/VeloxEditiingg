@@ -27,6 +27,9 @@ import (
 	"time"
 
 	"velox-server/internal/supervisor"
+	"velox-server/internal/telemetry"
+
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // Config holds dispatcher behaviour knobs.
@@ -201,6 +204,12 @@ func (d *Dispatcher) Poll(ctx context.Context) error {
 // with stale locked_by/locked_until forever. We mark FAILED inside the defer
 // so the operator sees the broken handler and the dispatch loop survives.
 func (d *Dispatcher) dispatchEvent(ctx context.Context, e Event, lockUntil time.Time) {
+	ctx, span := telemetry.StartSpan(ctx, "outbox_dispatch",
+		attribute.String("velox.event_type", e.EventType),
+		attribute.String("velox.event_id", e.EventID),
+	)
+	defer span.End()
+
 	var panicked bool
 	var panicVal any
 	defer func() {

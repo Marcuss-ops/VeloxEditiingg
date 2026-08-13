@@ -61,8 +61,11 @@ import (
 	"velox-server/internal/costmodel"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/routing"
+	"velox-server/internal/telemetry"
 	"velox-shared/contract/deliveryplan"
 	"velox-shared/contract/domain"
+
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // Resolver bundles the canonical dependencies for Resolve. Holding them on
@@ -233,6 +236,12 @@ func (r *Resolver) HasDBAccess() bool {
 // master-URL rewriting. The Resolver applies that step exactly once
 // for every caller.
 func (r *Resolver) Resolve(ctx context.Context, req ResolveRequest) (*ResolveOutput, error) {
+	ctx, span := telemetry.StartSpan(ctx, "resolve_forwarding",
+		attribute.String("velox.source_provider", req.SourceProvider),
+		attribute.String("velox.forwarding_id", req.ForwardingID),
+	)
+	defer span.End()
+
 	if r == nil || r.enqueuer == nil || r.jobLookup == nil || r.forwardRepo == nil {
 		return nil, domain.NewInvalidPayload("resolver", "unavailable", "resolver dependencies missing")
 	}
