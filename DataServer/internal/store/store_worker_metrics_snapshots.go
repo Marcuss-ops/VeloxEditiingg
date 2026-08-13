@@ -269,3 +269,14 @@ func nullableString(n sql.NullString) any {
 	}
 	return nil
 }
+
+// nullableStringOrNil maps a plain string to its SQL binding value:
+// the empty string is written as SQL NULL, mirroring the previous
+// sql.NullString{Valid: s != ""} contract. Callers that never need to
+// distinguish "" from NULL can bind the string directly.
+func nullableStringOrNil(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}

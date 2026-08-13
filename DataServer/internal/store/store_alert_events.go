@@ -52,9 +52,11 @@ var ErrAlertEventConflict = errors.New("alert event EventID already exists with 
 // AlertEvent mirrors a single row in alert_events. All time fields
 // are RFC3339 in SQL; Go-side conversion at the repository boundary.
 //
-// Nullable fields (ResolvedAt, CurrentValue) use sql.Null* so the
-// dashboard can distinguish "still active" (NULL) from "resolved
-// with a value" (timestamp + value).
+// Nullable fields are represented at the Go boundary without leaking
+// driver types into callers: ResolvedAt uses sql.NullTime (a store-internal
+// concern) and CurrentValue is a plain string where the empty value maps to
+// SQL NULL (see nullableStringOrNil), so the opsalerts engine never imports
+// database/sql just to build an alert row.
 type AlertEvent struct {
 	EventID        string
 	WorkerID       string
@@ -64,7 +66,7 @@ type AlertEvent struct {
 	FiredAt        time.Time
 	ResolvedAt     sql.NullTime
 	LastObservedAt time.Time
-	CurrentValue   sql.NullString
+	CurrentValue   string
 	Message        string
 }
 
@@ -145,7 +147,7 @@ ON CONFLICT(event_id) DO NOTHING`,
 		ev.FiredAt.UTC().Format(time.RFC3339),
 		nullableTime(ev.ResolvedAt),
 		ev.LastObservedAt.UTC().Format(time.RFC3339),
-		nullableString(ev.CurrentValue),
+		nullableStringOrNil(ev.CurrentValue),
 		ev.Message,
 	)
 	if err != nil {
@@ -191,7 +193,7 @@ func sameAlertEvent(existing, incoming AlertEvent) bool {
 	if existing.ResolvedAt.Valid != incoming.ResolvedAt.Valid || (existing.ResolvedAt.Valid && !existing.ResolvedAt.Time.Equal(incoming.ResolvedAt.Time)) {
 		return false
 	}
-	return existing.CurrentValue.Valid == incoming.CurrentValue.Valid && (!existing.CurrentValue.Valid || existing.CurrentValue.String == incoming.CurrentValue.String)
+	return existing.CurrentValue == incoming.CurrentValue
 }
 
 // ResolveAlertEvent stamps resolved_at + flips state to RESOLVED
@@ -235,7 +237,7 @@ func (s *SQLiteStore) TouchActiveAlertEvent(ctx context.Context, workerID, ruleI
 UPDATE alert_events
 SET last_observed_at = ?, current_value = ?, message = ?
 WHERE worker_id = ? AND rule_id = ? AND severity = ? AND state = 'ACTIVE'`,
-		observedAt.UTC().Format(time.RFC3339), nullableString(sql.NullString{String: currentValue, Valid: currentValue != ""}),
+		observedAt.UTC().Format(time.RFC3339), nullableStringOrNil(currentValue),
 		message, workerID, ruleID, severity,
 	)
 	if err != nil {
@@ -406,9 +408,7 @@ func scanAlertEvent(rows *sql.Rows) (*AlertEvent, error) {
 	if err != nil {
 		return nil, err
 	}
-	if currentValue.Valid {
-		ev.CurrentValue = currentValue
-	}
+	ev.CurrentValue = currentValue.String
 	return &ev, nil
 }
 

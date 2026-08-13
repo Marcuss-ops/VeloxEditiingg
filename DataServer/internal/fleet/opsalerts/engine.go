@@ -2,7 +2,6 @@ package opsalerts
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"reflect"
@@ -244,7 +243,7 @@ func (s fleetPersistenceSink) Process(ctx context.Context, event runtimealerts.A
 		State:          store.AlertStateActive,
 		FiredAt:        event.FiredAt,
 		LastObservedAt: event.FiredAt,
-		CurrentValue:   sql.NullString{String: currentValue, Valid: currentValue != ""},
+		CurrentValue:   currentValue,
 		Message:        event.Description,
 	}); err != nil {
 		return runtimealerts.SinkError{Stage: "persistence", Err: err}

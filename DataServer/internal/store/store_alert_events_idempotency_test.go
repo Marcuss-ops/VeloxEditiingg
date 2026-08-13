@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"testing"
 	"time"
@@ -26,7 +25,7 @@ func TestInsertAlertEventIsIdempotentByEventID(t *testing.T) {
 		State:          AlertStateActive,
 		FiredAt:        time.Unix(100, 0).UTC(),
 		LastObservedAt: time.Unix(100, 0).UTC(),
-		CurrentValue:   sql.NullString{String: "disk=92%", Valid: true},
+		CurrentValue:   "disk=92%",
 		Message:        "disk pressure",
 	}
 	if err := s.InsertAlertEvent(context.Background(), event); err != nil {
