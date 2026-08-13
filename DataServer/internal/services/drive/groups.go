@@ -32,12 +32,13 @@ func (s *Service) GetDriveGroups() (map[string]interface{}, error) {
 	if err != nil {
 		return nil, err
 	}
+	masterByNormName := indexMasterFoldersByNormalizedName(folders)
 	groups := make(map[string]interface{})
 
 	for group, clipName := range groupToClipFolder {
-		clipID := findMasterIDByName(folders, []string{clipName, group})
-		voiceoverID := findMasterIDByName(folders, []string{groupToVoiceoverFolder[group], group + " Voice"})
-		stockID := findMasterIDByName(folders, []string{stockFolderAliases[group], group + " Stock"})
+		clipID := findMasterIDInIndex(masterByNormName, clipName, group)
+		voiceoverID := findMasterIDInIndex(masterByNormName, groupToVoiceoverFolder[group], group+" Voice")
+		stockID := findMasterIDInIndex(masterByNormName, stockFolderAliases[group], group+" Stock")
 
 		if clipID != "" || voiceoverID != "" || stockID != "" {
 			groups[group] = map[string]interface{}{
@@ -56,16 +57,17 @@ func (s *Service) GroupFolders(groupName string) (map[string]interface{}, error)
 	if err != nil {
 		return nil, err
 	}
+	masterByNormName := indexMasterFoldersByNormalizedName(folders)
 	result := make(map[string]interface{})
 
 	if clipName, ok := groupToClipFolder[groupName]; ok {
-		result["clip"] = findMasterIDByName(folders, []string{clipName, groupName})
+		result["clip"] = findMasterIDInIndex(masterByNormName, clipName, groupName)
 	}
 	if stockName, ok := stockFolderAliases[groupName]; ok {
-		result["stock"] = findMasterIDByName(folders, []string{stockName, groupName + " Stock"})
+		result["stock"] = findMasterIDInIndex(masterByNormName, stockName, groupName+" Stock")
 	}
 	if voiceoverName, ok := groupToVoiceoverFolder[groupName]; ok {
-		result["voiceover"] = findMasterIDByName(folders, []string{voiceoverName, groupName + " Voice"})
+		result["voiceover"] = findMasterIDInIndex(masterByNormName, voiceoverName, groupName+" Voice")
 	}
 	return result, nil
 }
@@ -104,6 +106,10 @@ func (s *Service) ClipFolderID(folderName, group string) (map[string]interface{}
 }
 
 // Helpers
+
+// findMasterIDByName keeps the original alias-order linear scan for the
+// single-lookup callers (ClipFolderID) where building an index would cost
+// more than the one scan it saves.
 func findMasterIDByName(folders []DriveFolder, names []string) string {
 	for _, name := range names {
 		normName := normalizeName(name)
@@ -111,6 +117,40 @@ func findMasterIDByName(folders []DriveFolder, names []string) string {
 			if f.ParentID == "" && normalizeName(f.Name) == normName {
 				return f.ID
 			}
+		}
+	}
+	return ""
+}
+
+// indexMasterFoldersByNormalizedName precomputes a normalized-name → ID
+// lookup over the root (parent-less) folders so multi-alias group resolution
+// performs O(1) map lookups instead of re-scanning and re-normalizing the
+// whole folder list for every alias (the old findMasterIDByName loop was
+// O(names × folders) per call). The first folder in slice order wins, which
+// preserves findMasterIDByName's first-match semantics exactly.
+func indexMasterFoldersByNormalizedName(folders []DriveFolder) map[string]string {
+	index := make(map[string]string, len(folders))
+	for _, f := range folders {
+		if f.ParentID != "" {
+			continue
+		}
+		// An empty normalized key is deliberately indexed so a name that
+		// normalizes to "" keeps the exact first-match behavior of
+		// findMasterIDByName (both strip down to the same empty key).
+		key := normalizeName(f.Name)
+		if _, exists := index[key]; !exists {
+			index[key] = f.ID
+		}
+	}
+	return index
+}
+
+// findMasterIDInIndex resolves the first alias that hits the precomputed
+// index, mirroring findMasterIDByName's alias-order + first-match behavior.
+func findMasterIDInIndex(index map[string]string, names ...string) string {
+	for _, name := range names {
+		if id := index[normalizeName(name)]; id != "" {
+			return id
 		}
 	}
 	return ""
