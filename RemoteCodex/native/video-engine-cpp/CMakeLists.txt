@@ -137,6 +137,7 @@ add_executable(velox_video_engine
     src/services/ffmpeg_progress_parser.cpp
     src/core/render_engine.cpp
     src/core/render_engine_helpers.cpp
+    src/core/execution_plan.cpp
     src/telemetry/emitter.cpp
 )
 
@@ -197,6 +198,24 @@ endif()
 
 add_test(NAME segment_scheduler_tests
          COMMAND velox_segment_scheduler_tests)
+
+# RuntimeExecutionPlanCompiler: one execution decision per segment becomes
+# the runtime SSOT. Value-only test; no LibAV or media fixture required.
+add_executable(velox_execution_plan_tests
+    tests/test_execution_plan.cpp
+    src/core/execution_plan.cpp
+    src/services/segment_execution.cpp
+)
+
+target_include_directories(velox_execution_plan_tests
+    PRIVATE include src include/velox)
+
+if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(velox_execution_plan_tests PRIVATE -O2)
+endif()
+
+add_test(NAME execution_plan_tests
+         COMMAND velox_execution_plan_tests)
 
 # Focused tests for the private render-engine command/parsing helpers.
 add_executable(velox_render_engine_helpers_tests
