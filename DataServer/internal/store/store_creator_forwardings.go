@@ -160,7 +160,7 @@ func (s *SQLiteStore) InsertCreatorForwarding(ctx context.Context, cf *CreatorFo
 	if cf.ForwardingID == "" || cf.SourceProvider == "" || cf.SourceJobID == "" || cf.TargetExecutorID == "" {
 		return nil, fmt.Errorf("store: InsertCreatorForwarding: missing required fields (forwarding_id, source_provider, source_job_id, target_executor_id)")
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	if cf.CreatedAt == "" {
 		cf.CreatedAt = now
 	}
@@ -438,7 +438,7 @@ func (s *SQLiteStore) UpsertCreatorForwardingPayload(ctx context.Context, forwar
 	if forwardingID == "" {
 		return fmt.Errorf("store: UpsertCreatorForwardingPayload: empty forwarding_id")
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	result, err := s.db.ExecContext(ctx,
 		`UPDATE creator_forwardings
 		 SET payload_json = ?, payload_sha256 = ?, source_status = 'completed',

@@ -158,7 +158,7 @@ func (r *SQLiteTaskRepository) SetStatus(ctx context.Context, id string, from, t
 	if id == "" {
 		return fmt.Errorf("task repository: empty id")
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	res, err := r.store.db.ExecContext(ctx,
 		`UPDATE tasks
 		 SET status = ?, revision = revision + 1, updated_at = ?
@@ -183,7 +183,7 @@ func (r *SQLiteTaskRepository) Lease(ctx context.Context, id, workerID, leaseID 
 	if id == "" {
 		return fmt.Errorf("task repository: empty id")
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	res, err := r.store.db.ExecContext(ctx,
 		`UPDATE tasks
 		 SET status = 'LEASED', worker_id = ?, lease_id = ?,
@@ -209,7 +209,7 @@ func (r *SQLiteTaskRepository) Start(ctx context.Context, id, workerID, leaseID 
 	if id == "" {
 		return fmt.Errorf("task repository: empty id")
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	res, err := r.store.db.ExecContext(ctx,
 		`UPDATE tasks
 		 SET status = 'RUNNING', started_at = ?, revision = revision + 1,
@@ -236,7 +236,7 @@ func (r *SQLiteTaskRepository) Fail(ctx context.Context, id, reason string, revi
 	if id == "" {
 		return fmt.Errorf("task repository: empty id")
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	res, err := r.store.db.ExecContext(ctx,
 		`UPDATE tasks
 		 SET status = 'FAILED', completed_at = ?, revision = revision + 1, updated_at = ?
@@ -261,7 +261,7 @@ func (r *SQLiteTaskRepository) IncrementAttempt(ctx context.Context, id string) 
 	if id == "" {
 		return fmt.Errorf("task repository: empty id")
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	res, err := r.store.db.ExecContext(ctx,
 		`UPDATE tasks SET attempt_count = attempt_count + 1, updated_at = ? WHERE task_id = ?`,
 		now, id,

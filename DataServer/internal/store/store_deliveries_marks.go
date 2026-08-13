@@ -33,7 +33,7 @@ func (s *SQLiteStore) MarkDeliverySucceeded(ctx context.Context, deliveryID, run
 	}
 
 	return wrapDBInfrastructure("MarkDeliverySucceeded transaction", NewTxManager(s).RunInTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
-		now := time.Now().UTC().Format(time.RFC3339)
+		now := nowRFC3339()
 		result, err := tx.ExecContext(ctx,
 			`UPDATE job_deliveries
 			 SET status = 'SUCCEEDED',
@@ -81,7 +81,7 @@ func (s *SQLiteStore) MarkDeliveryRetry(ctx context.Context, deliveryID, runnerI
 	}
 
 	return wrapDBInfrastructure("MarkDeliveryRetry transaction", NewTxManager(s).RunInTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
-		now := time.Now().UTC().Format(time.RFC3339)
+		now := nowRFC3339()
 		nextISO := nextAttemptAt.UTC().Format(time.RFC3339)
 		result, err := tx.ExecContext(ctx,
 			`UPDATE job_deliveries
@@ -132,7 +132,7 @@ func (s *SQLiteStore) MarkDeliveryFailed(ctx context.Context, deliveryID, runner
 	}
 
 	return wrapDBInfrastructure("MarkDeliveryFailed transaction", NewTxManager(s).RunInTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
-		now := time.Now().UTC().Format(time.RFC3339)
+		now := nowRFC3339()
 		result, err := tx.ExecContext(ctx,
 			`UPDATE job_deliveries
 			 SET status = 'FAILED',
@@ -223,7 +223,7 @@ func (s *SQLiteStore) MarkDeliveryBlockedAuth(ctx context.Context, deliveryID, r
 	}
 
 	return wrapDBInfrastructure("MarkDeliveryBlockedAuth transaction", NewTxManager(s).RunInTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
-		now := time.Now().UTC().Format(time.RFC3339)
+		now := nowRFC3339()
 		result, err := tx.ExecContext(ctx,
 			`UPDATE job_deliveries
 			 SET status = 'BLOCKED_AUTH',

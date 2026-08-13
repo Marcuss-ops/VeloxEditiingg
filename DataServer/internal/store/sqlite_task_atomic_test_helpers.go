@@ -179,7 +179,7 @@ func seedLeasedTask(t *testing.T, db *sql.DB,
 ) int {
 	t.Helper()
 	ctx := context.Background()
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	if _, err := db.ExecContext(ctx,
 		`INSERT INTO tasks
 		 (task_id, job_id, status, priority, revision, worker_id, lease_id,
@@ -227,7 +227,7 @@ func seedRunningTask(t *testing.T, db *sql.DB,
 ) {
 	t.Helper()
 	ctx := context.Background()
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	if _, err := db.ExecContext(ctx,
 		`INSERT INTO tasks
 		 (task_id, job_id, status, priority, revision, attempt_count, worker_id, lease_id,
@@ -247,7 +247,7 @@ func seedReadyTask(t *testing.T, db *sql.DB,
 ) int {
 	t.Helper()
 	ctx := context.Background()
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	if _, err := db.ExecContext(ctx,
 		`INSERT INTO tasks
 		 (task_id, job_id, project_id, render_plan_id, executor_id, executor_version,
@@ -268,7 +268,7 @@ func seedReadyTaskWithExecutor(t *testing.T, db *sql.DB,
 ) {
 	t.Helper()
 	ctx := context.Background()
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	if _, err := db.ExecContext(ctx,
 		`INSERT INTO tasks
 		 (task_id, job_id, project_id, render_plan_id, executor_id, executor_version,

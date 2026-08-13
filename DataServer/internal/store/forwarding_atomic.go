@@ -49,7 +49,7 @@ func (s *SQLiteStore) AtomicForwardAndEnqueue(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 
 	// 1. CAS: READY_TO_FORWARD → FORWARDING
 	claimResult, err := tx.ExecContext(ctx,
@@ -128,7 +128,7 @@ func (s *SQLiteStore) MarkCreatorForwardingReadySync(ctx context.Context, forwar
 	if forwardingID == "" {
 		return fmt.Errorf("store: MarkCreatorForwardingReadySync: empty forwarding_id")
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	result, err := s.db.ExecContext(ctx,
 		`UPDATE creator_forwardings
 		 SET status = 'READY_TO_FORWARD',
@@ -166,7 +166,7 @@ func (s *SQLiteStore) MarkCreatorForwardingEnqueueRetry(ctx context.Context, for
 		return fmt.Errorf("store: MarkCreatorForwardingEnqueueRetry: missing forwarding_id, runner_id or lease_id")
 	}
 
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	nextISO := nextAttemptAt.UTC().Format(time.RFC3339)
 	result, err := s.db.ExecContext(ctx,
 		`UPDATE creator_forwardings

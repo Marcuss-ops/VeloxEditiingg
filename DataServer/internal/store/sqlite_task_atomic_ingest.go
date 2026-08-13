@@ -63,7 +63,7 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 	}
 	ingestStartedAt := time.Now().UTC()
 
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 
 	if err := ingestTaskCAS(ctx, tx, cmd, now); err != nil {
 		return err

@@ -23,7 +23,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"time"
 
 	"velox-server/internal/statemachine"
 )
@@ -98,7 +97,7 @@ func (s *SQLiteStore) FinalizeArtifactVerified(ctx context.Context, artifactID, 
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	if err := statemachine.DefaultRegistry().Validate(statemachine.DomainArtifact, "VERIFYING", "READY", ""); err != nil {
 		return nil, fmt.Errorf("artifact: FinalizeArtifactVerified: %w", err)
 	}

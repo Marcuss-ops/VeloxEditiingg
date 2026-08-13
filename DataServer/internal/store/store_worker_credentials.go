@@ -7,14 +7,13 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
-	"time"
 )
 
 // ---------- worker_credentials (persistent identity) ----------
 
 // SetWorkerCredential stores or updates a worker's credential hash.
 func (s *SQLiteStore) SetWorkerCredential(workerID, credentialHash string) error {
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	_, err := s.db.Exec(
 		`INSERT INTO worker_credentials (worker_id, credential_hash, created_at, rotated_at)
 		 VALUES (?, ?, ?, NULL)

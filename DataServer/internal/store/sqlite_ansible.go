@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"time"
 )
 
 var (
@@ -48,7 +47,7 @@ type AnsibleHostFields struct {
 // UpsertAnsibleHost inserts or updates a structured ansible host.
 // SecretRef replaces SSHPassword — passwords should not be stored in plaintext.
 func (s *SQLiteStore) UpsertAnsibleHost(fields AnsibleHostFields) error {
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	if fields.CreatedAt == "" {
 		fields.CreatedAt = now
 	}
@@ -214,7 +213,7 @@ type AnsibleRun struct {
 
 // UpsertAnsibleRun inserts or updates a run record.
 func (s *SQLiteStore) UpsertAnsibleRun(runID, action, playbook, status string, startedAt, endedAt int64, returnCode int, commands, output, preamble, masterURL, masterURLSource string) error {
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	_, err := s.db.Exec(
 		`INSERT INTO ansible_runs (run_id, action, playbook, status, started_at, ended_at, return_code, commands_json, output, preamble, master_url, master_url_source, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)

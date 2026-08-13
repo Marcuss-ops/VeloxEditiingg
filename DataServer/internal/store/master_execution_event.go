@@ -116,7 +116,7 @@ func persistMasterExecutionEventTx(ctx context.Context, tx *sql.Tx, event master
 		event.WorkerSessionID, event.SnapshotID, event.LeaseID,
 		event.ExecutorID, event.ExecutorVersion, eventIndex, sharedtelemetry.OriginMaster, event.Scope,
 		event.Action, event.Component, event.Action, event.Phase, event.Status,
-		started, completed, duration, event.MetadataJSON, time.Now().UTC().Format(time.RFC3339Nano),
+		started, completed, duration, event.MetadataJSON, nowRFC3339Nano(),
 		event.TelemetrySchemaVersion,
 	)
 	if err != nil {
@@ -154,7 +154,7 @@ func quarantineMasterTelemetryEvent(ctx context.Context, tx *sql.Tx, event maste
 		ON CONFLICT(attempt_id, event_id) DO NOTHING`,
 		event.AttemptID, eventID, sharedtelemetry.OriginMaster, event.Scope,
 		event.Component, event.Action, event.TelemetrySchemaVersion, reason.Error(),
-		string(eventJSON), time.Now().UTC().Format(time.RFC3339Nano),
+		string(eventJSON), nowRFC3339Nano(),
 	)
 	if err != nil {
 		log.Printf("[TELEMETRY_QUARANTINE] master event attempt=%s component=%s action=%s reason=%v write=%v", event.AttemptID, event.Component, event.Action, reason, err)

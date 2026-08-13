@@ -58,7 +58,7 @@ func (r *SQLiteTaskRepository) AcceptTaskAtomic(ctx context.Context, attempt *ta
 		}
 	}()
 
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 
 	// 1. Task CAS: LEASED → RUNNING with worker_id + lease_id + revision.
 	// PR-2 also asserts (attempt_id, attempt_number) match the canonical

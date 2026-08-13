@@ -14,7 +14,6 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -105,7 +104,7 @@ func (r *SQLiteTaskAttemptRepository) Create(ctx context.Context, attempt *taska
 		attempt.Status = taskattempts.AttemptStatusPending
 	}
 
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	tx, err := r.store.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("task attempt create begin: %w", err)
@@ -251,7 +250,7 @@ func (r *SQLiteTaskAttemptRepository) SetStatus(ctx context.Context, id string, 
 	if id == "" {
 		return fmt.Errorf("task attempt repository: empty id")
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	res, err := r.store.db.ExecContext(ctx,
 		`UPDATE task_attempts
 		 SET status = ?, report_version = report_version + 1, updated_at = ?
@@ -277,7 +276,7 @@ func (r *SQLiteTaskAttemptRepository) CompleteFinal(ctx context.Context, id, wor
 	if id == "" {
 		return fmt.Errorf("task attempt repository: empty id")
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	res, err := r.store.db.ExecContext(ctx,
 		`UPDATE task_attempts
 		 SET status = ?, completed_at = ?, error_code = ?, error_message = ?,

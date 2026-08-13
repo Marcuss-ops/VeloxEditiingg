@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
-	"time"
 
 	"velox-server/internal/assets"
 	"velox-server/internal/repository"
@@ -53,7 +52,7 @@ func (r *SQLiteAssetRepository) Insert(ctx context.Context, a AssetRecord) error
 	if a.AssetID == "" {
 		return fmt.Errorf("asset repository: empty asset_id")
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	if a.CreatedAt == "" {
 		a.CreatedAt = now
 	}
@@ -100,7 +99,7 @@ func (r *SQLiteAssetRepository) InsertWithMediaMetadata(ctx context.Context, a A
 	}
 	defer tx.Rollback()
 
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	if a.CreatedAt == "" {
 		a.CreatedAt = now
 	}
@@ -163,7 +162,7 @@ func (r *SQLiteAssetRepository) InsertWithMediaMetadataAndSource(ctx context.Con
 	}
 	defer tx.Rollback()
 
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	if a.CreatedAt == "" {
 		a.CreatedAt = now
 	}
@@ -284,7 +283,7 @@ func (r *SQLiteAssetRepository) UpdateStatus(ctx context.Context, assetID, from,
 	if r.store == nil || r.store.db == nil {
 		return fmt.Errorf("asset repository: store not initialized")
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	var setClauses string
 	if to == "READY" {
 		setClauses = fmt.Sprintf("status = ?, verified_at = '%s'", now)
@@ -390,7 +389,7 @@ func (r *SQLiteAssetRepository) InsertSource(ctx context.Context, s AssetSourceR
 	if s.SourceID == "" {
 		return fmt.Errorf("asset source repository: empty source_id")
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	if s.CreatedAt == "" {
 		s.CreatedAt = now
 	}
@@ -444,7 +443,7 @@ func (r *SQLiteAssetRepository) LinkToJob(ctx context.Context, jobID, assetID, r
 	if r.store == nil || r.store.db == nil {
 		return fmt.Errorf("asset repository: store not initialized")
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	reqInt := 0
 	if required {
 		reqInt = 1

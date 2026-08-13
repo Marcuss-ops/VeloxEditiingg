@@ -55,7 +55,7 @@ func (s *SQLiteStore) ApplyInstaEditDeliveryEvent(ctx context.Context, event Ins
 		(event_id, delivery_id, sequence, status, payload_json, occurred_at, received_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		event.EventID, event.DeliveryID, event.Sequence, event.Status,
-		string(payload), event.OccurredAt.UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano))
+		string(payload), event.OccurredAt.UTC().Format(time.RFC3339Nano), nowRFC3339Nano())
 	if err != nil {
 		return false, fmt.Errorf("store: insert callback event: %w", err)
 	}
@@ -86,7 +86,7 @@ func (s *SQLiteStore) ApplyInstaEditDeliveryEvent(ctx context.Context, event Ins
 	}
 
 	status := callbackDeliveryStatus(event.Status)
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := nowRFC3339Nano()
 	_, err = tx.ExecContext(ctx, `
 		UPDATE job_deliveries
 		SET status = ?,

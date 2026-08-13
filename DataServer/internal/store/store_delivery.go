@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"fmt"
-	"time"
 )
 
 // ── CAS Job Transition ──
@@ -12,7 +11,7 @@ import (
 // using optimistic locking via the revision column.
 // Returns (newRevision, error). Error is non-nil if the transition fails.
 func (s *SQLiteStore) TransitionJobStatus(ctx context.Context, jobID string, expectedStatus, newStatus string, revision int) (int, error) {
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	newRevision := revision + 1
 
 	result, err := s.db.Exec(

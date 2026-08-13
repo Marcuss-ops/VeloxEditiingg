@@ -248,7 +248,7 @@ func (s *SQLiteStore) RenewDeliveryLease(ctx context.Context, deliveryID, runner
 		return fmt.Errorf("store: RenewDeliveryLease: missing required fields")
 	}
 	iso := newExpiry.UTC().Format(time.RFC3339)
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	result, err := s.db.ExecContext(ctx,
 		`UPDATE job_deliveries
 		 SET lease_expires_at = ?, updated_at = ?

@@ -82,7 +82,7 @@ func (r *SQLiteTaskRepository) expireTaskLeaseAtomic(
 		}
 	}()
 
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 
 	// 1. Read task to obtain attempt_count + status + worker_id + lease_id
 	// + lease_expires_at for the CAS gate.

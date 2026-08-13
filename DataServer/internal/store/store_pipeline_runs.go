@@ -210,7 +210,7 @@ func (s *SQLiteStore) UpdatePipelineRunRemoteJob(ctx context.Context, id, remote
 	if id == "" {
 		return fmt.Errorf("store: UpdatePipelineRunRemoteJob: empty id")
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	result, err := s.db.ExecContext(ctx,
 		`UPDATE pipeline_runs
 		 SET remote_provider = ?, remote_job_id = ?, updated_at = ?
@@ -237,7 +237,7 @@ func (s *SQLiteStore) UpdatePipelineRunForwarding(ctx context.Context, id, forwa
 	if id == "" {
 		return fmt.Errorf("store: UpdatePipelineRunForwarding: empty id")
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	result, err := s.db.ExecContext(ctx,
 		`UPDATE pipeline_runs
 		 SET forwarding_id = ?, status = ?, updated_at = ?
@@ -265,7 +265,7 @@ func (s *SQLiteStore) UpdatePipelineRunStatus(ctx context.Context, id string, st
 	if id == "" {
 		return fmt.Errorf("store: UpdatePipelineRunStatus: empty id")
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	var stmt string
 	var args []interface{}
 	if stage != "" {
@@ -305,7 +305,7 @@ func (s *SQLiteStore) UpdatePipelineRunVeloxJob(ctx context.Context, id, veloxJo
 	if id == "" {
 		return fmt.Errorf("store: UpdatePipelineRunVeloxJob: empty id")
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	result, err := s.db.ExecContext(ctx,
 		`UPDATE pipeline_runs
 		 SET velox_job_id = ?, status = ?, updated_at = ?
@@ -333,7 +333,7 @@ func (s *SQLiteStore) UpdatePipelineRunResult(ctx context.Context, id, resultJSO
 	if id == "" {
 		return fmt.Errorf("store: UpdatePipelineRunResult: empty id")
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	result, err := s.db.ExecContext(ctx,
 		`UPDATE pipeline_runs
 		 SET result_json = ?, updated_at = ?
@@ -360,7 +360,7 @@ func (s *SQLiteStore) ClearPipelineRunError(ctx context.Context, id string) erro
 	if id == "" {
 		return fmt.Errorf("store: ClearPipelineRunError: empty id")
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	result, err := s.db.ExecContext(ctx,
 		`UPDATE pipeline_runs
 		 SET error_code = '', error_message = '', failed_stage = '',
@@ -388,7 +388,7 @@ func (s *SQLiteStore) UpdatePipelineRunError(ctx context.Context, id, code, mess
 	if id == "" {
 		return fmt.Errorf("store: UpdatePipelineRunError: empty id")
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	result, err := s.db.ExecContext(ctx,
 		`UPDATE pipeline_runs
 		 SET status = ?, error_code = ?, error_message = ?, failed_stage = ?,

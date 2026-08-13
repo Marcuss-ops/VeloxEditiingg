@@ -9,7 +9,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"time"
 )
 
 // ── Job Delivery CRUD ────────────────────────────────────────────────────────
@@ -20,7 +19,7 @@ func (s *SQLiteStore) InsertJobDelivery(jobD *JobDelivery) error {
 	if jobD.DeliveryID == "" || jobD.ArtifactID == "" || jobD.DestinationID == "" {
 		return fmt.Errorf("store: InsertJobDelivery: missing required fields")
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	if jobD.CreatedAt == "" {
 		jobD.CreatedAt = now
 	}
@@ -171,7 +170,7 @@ func (s *SQLiteStore) ListDeliveryReconciliationCandidates(ctx context.Context, 
 }
 
 func (s *SQLiteStore) ApplyReconciledDelivery(ctx context.Context, deliveryID, status, remoteID, remoteURL, errorCode, errorMessage string) error {
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := nowRFC3339Nano()
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE job_deliveries
 		SET status = CASE

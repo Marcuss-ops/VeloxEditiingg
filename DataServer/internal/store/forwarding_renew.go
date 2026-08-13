@@ -29,7 +29,7 @@ func (s *SQLiteStore) RenewCreatorForwardingLease(ctx context.Context, forwardin
 		return fmt.Errorf("store: RenewCreatorForwardingLease: missing required fields")
 	}
 	iso := newExpiry.UTC().Format(time.RFC3339)
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	result, err := s.db.ExecContext(ctx,
 		`UPDATE creator_forwardings
 		 SET lease_expires_at = ?, updated_at = ?

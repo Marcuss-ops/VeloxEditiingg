@@ -9,7 +9,6 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
-	"time"
 )
 
 // ── Destination CRUD ─────────────────────────────────────────────────────────
@@ -21,7 +20,7 @@ func (s *SQLiteStore) InsertDeliveryDestination(dest *DeliveryDestination) error
 	if dest.DestinationID == "" || dest.Provider == "" {
 		return fmt.Errorf("store: InsertDeliveryDestination: missing required fields")
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	if dest.CreatedAt == "" {
 		dest.CreatedAt = now
 	}

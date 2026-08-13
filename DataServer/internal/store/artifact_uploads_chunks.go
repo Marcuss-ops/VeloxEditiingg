@@ -18,7 +18,7 @@ func (r *SQLiteUploadRepository) InsertChunk(ctx context.Context, c ChunkRecord)
 	}
 	now := c.ReceivedAt.UTC().Format(time.RFC3339)
 	if c.ReceivedAt.IsZero() {
-		now = time.Now().UTC().Format(time.RFC3339)
+		now = nowRFC3339()
 	}
 	_, err := r.db.ExecContext(ctx, `
 		INSERT OR IGNORE INTO artifact_upload_chunks

@@ -42,7 +42,7 @@ func (r *SQLiteTaskRepository) RenewLease(ctx context.Context, id, workerID, lea
 		return fmt.Errorf("task repository: RenewLease requires a non-zero expiry")
 	}
 
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	res, err := r.store.db.ExecContext(ctx,
 		`UPDATE tasks
 		 SET lease_expires_at = ?, updated_at = ?

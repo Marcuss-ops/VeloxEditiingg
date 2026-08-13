@@ -173,7 +173,7 @@ func (c *AtomicJobTaskCreator) CreateJobWithTaskTx(
 		)
 	}
 
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 
 	// 1. Insert Job.
 	jobPayload := "{}"

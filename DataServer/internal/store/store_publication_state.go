@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"velox-server/internal/audittrail"
 	"velox-server/internal/publicationstate"
@@ -44,7 +43,7 @@ func (s *SQLiteStore) CreatePublicationState(ctx context.Context, publicationID 
 	if _, err := publicationstate.NewSnapshot(publicationID); err != nil {
 		return err
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	_, err := s.db.ExecContext(ctx, `
 		INSERT OR IGNORE INTO publication_states
 		(publication_id, state, revision, created_at, updated_at)
@@ -149,7 +148,7 @@ func (s *SQLiteStore) CompletePublicationAfterReconciliation(ctx context.Context
 	if err := tx.QueryRowContext(ctx, `SELECT status FROM publication_phase_effects WHERE publication_id=? AND phase='VERIFYING' AND operation=?`, publicationID, verificationOperation).Scan(&effectStatus); err != nil || effectStatus != "SUCCEEDED" {
 		return nil, fmt.Errorf("%w: exact VERIFYING reconciliation effect is not SUCCEEDED", ErrPublicationPhaseConflict)
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	result, err := tx.ExecContext(ctx, `UPDATE publication_states SET state='PUBLISHED', retry_from=NULL, revision=revision+1, last_error_code=NULL, updated_at=? WHERE publication_id=? AND state='VERIFYING' AND revision=?`, now, publicationID, current.Revision)
 	if err != nil {
 		return nil, wrapDBInfrastructure("CompletePublicationAfterReconciliation exec", err)
@@ -220,7 +219,7 @@ func (s *SQLiteStore) transitionPublicationState(ctx context.Context, publicatio
 		}
 		return current, nil
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	result, err := tx.ExecContext(ctx, `
 		UPDATE publication_states
 		SET state = ?, retry_from = NULLIF(?, ''), revision = ?,
@@ -265,7 +264,7 @@ func (s *SQLiteStore) BeginPublicationPhaseEffect(ctx context.Context, publicati
 		return "", false, wrapDBInfrastructure("BeginPublicationPhaseEffect begin", err)
 	}
 	defer tx.Rollback()
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	result, err := tx.ExecContext(ctx, `
 		INSERT OR IGNORE INTO publication_phase_effects
 		(publication_id, phase, operation, idempotency_key, status, created_at, updated_at)
@@ -327,7 +326,7 @@ func (s *SQLiteStore) CompletePublicationReconciliationEffect(ctx context.Contex
 	if affected != 1 {
 		return ErrPublicationPhaseConflict
 	}
-	result, err = tx.ExecContext(ctx, `UPDATE publication_phase_effects SET status='SUCCEEDED', error_code=NULL, updated_at=? WHERE publication_id=? AND phase='VERIFYING' AND operation=? AND status='RUNNING'`, time.Now().UTC().Format(time.RFC3339), publicationID, operation)
+	result, err = tx.ExecContext(ctx, `UPDATE publication_phase_effects SET status='SUCCEEDED', error_code=NULL, updated_at=? WHERE publication_id=? AND phase='VERIFYING' AND operation=? AND status='RUNNING'`, nowRFC3339(), publicationID, operation)
 	if err != nil {
 		return wrapDBInfrastructure("CompletePublicationReconciliationEffect effect", err)
 	}
@@ -353,7 +352,7 @@ func (s *SQLiteStore) CompletePublicationPhaseEffect(ctx context.Context, public
 		UPDATE publication_phase_effects
 		SET status = ?, error_code = NULLIF(?, ''), updated_at = ?
 		WHERE publication_id = ? AND phase = ? AND operation = ?`,
-		status, strings.TrimSpace(errorCode), time.Now().UTC().Format(time.RFC3339),
+		status, strings.TrimSpace(errorCode), nowRFC3339(),
 		strings.TrimSpace(publicationID), phase, strings.TrimSpace(operation))
 	if err != nil {
 		return wrapDBInfrastructure("CompletePublicationPhaseEffect exec", err)
@@ -373,7 +372,7 @@ func (s *SQLiteStore) RetryPublicationPhaseEffect(ctx context.Context, publicati
 		UPDATE publication_phase_effects
 		SET status = 'RUNNING', error_code = NULL, updated_at = ?
 		WHERE publication_id = ? AND phase = ? AND operation = ? AND status = 'FAILED'`,
-		time.Now().UTC().Format(time.RFC3339), strings.TrimSpace(publicationID), phase, strings.TrimSpace(operation))
+		nowRFC3339(), strings.TrimSpace(publicationID), phase, strings.TrimSpace(operation))
 	if err != nil {
 		return wrapDBInfrastructure("RetryPublicationPhaseEffect exec", err)
 	}
@@ -437,7 +436,7 @@ func (s *SQLiteStore) RecordPublicationRemoteResult(ctx context.Context, publica
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE publication_states SET remote_id = ?, remote_url = COALESCE(NULLIF(?, ''), remote_url), revision = revision + 1, updated_at = ?
 		WHERE publication_id = ? AND state = 'VERIFYING' AND revision = ? AND remote_id = ?`,
-		remoteID, strings.TrimSpace(remoteURL), time.Now().UTC().Format(time.RFC3339Nano), publicationID, expectedRevision, expectedRemoteID)
+		remoteID, strings.TrimSpace(remoteURL), nowRFC3339Nano(), publicationID, expectedRevision, expectedRemoteID)
 	if err != nil {
 		return wrapDBInfrastructure("RecordPublicationRemoteResult exec", err)
 	}
@@ -478,7 +477,7 @@ func (s *SQLiteStore) PersistPublicationVideoCreated(ctx context.Context, public
 	if current.State != publicationstate.Uploading && current.State != publicationstate.VideoCreated {
 		return nil, fmt.Errorf("%w: video checkpoint from %s", ErrPublicationPhaseConflict, current.State)
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	nextRevision := current.Revision
 	nextState := current.State
 	if current.State == publicationstate.Uploading {
@@ -552,7 +551,7 @@ func appendPublicationTransitionAuditTx(ctx context.Context, tx *sql.Tx, state *
 		if err != nil {
 			return err
 		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO audit_events (id, occurred_at, actor_type, actor_id, action, resource_type, resource_id, request_id, trace_id, before_hash, after_hash, metadata_json) VALUES (?, ?, 'service', 'delivery_runner', ?, 'publication', ?, '', '', '', '', ?)`, uuid.NewString(), time.Now().UTC().Format(time.RFC3339Nano), record.action, state.PublicationID, audittrail.RedactMetadata(string(metadata)))
+		_, err = tx.ExecContext(ctx, `INSERT INTO audit_events (id, occurred_at, actor_type, actor_id, action, resource_type, resource_id, request_id, trace_id, before_hash, after_hash, metadata_json) VALUES (?, ?, 'service', 'delivery_runner', ?, 'publication', ?, '', '', '', '', ?)`, uuid.NewString(), nowRFC3339Nano(), record.action, state.PublicationID, audittrail.RedactMetadata(string(metadata)))
 		if err != nil {
 			return wrapDBInfrastructure("appendPublicationTransitionAuditTx exec", err)
 		}

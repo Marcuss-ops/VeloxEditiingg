@@ -3,7 +3,6 @@ package store
 import (
 	"encoding/json"
 	"fmt"
-	"time"
 )
 
 // store_worker_flags.go owns the worker_flags row: the revoked bit and
@@ -29,7 +28,7 @@ func (s *SQLiteStore) SetWorkerRevoked(workerID string, revoked bool) error {
 	if revoked {
 		revInt = 1
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	raw, err := json.Marshal(map[string]any{
 		"worker_id":  workerID,
 		"revoked":    revoked,

@@ -73,7 +73,7 @@ func (s *SQLiteStore) MarkCreatorForwardingReadyToForward(ctx context.Context, f
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	result, err := tx.ExecContext(ctx,
 		`UPDATE creator_forwardings
 		 SET status = 'READY_TO_FORWARD',
@@ -113,7 +113,7 @@ func (s *SQLiteStore) MarkCreatorForwardingForwarding(ctx context.Context, forwa
 	if forwardingID == "" {
 		return fmt.Errorf("store: MarkCreatorForwardingForwarding: empty forwarding_id")
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	result, err := s.db.ExecContext(ctx,
 		`UPDATE creator_forwardings
 		 SET status = 'FORWARDING', updated_at = ?
@@ -141,7 +141,7 @@ func (s *SQLiteStore) MarkCreatorForwardingForwarded(ctx context.Context, forwar
 	if forwardingID == "" || targetJobID == "" {
 		return fmt.Errorf("store: MarkCreatorForwardingForwarded: missing required fields")
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	result, err := s.db.ExecContext(ctx,
 		`UPDATE creator_forwardings
 		 SET status = 'FORWARDED', target_job_id = ?,
@@ -178,7 +178,7 @@ func (s *SQLiteStore) MarkCreatorForwardingRetry(ctx context.Context, forwarding
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	nextISO := nextAttemptAt.UTC().Format(time.RFC3339)
 	result, err := tx.ExecContext(ctx,
 		`UPDATE creator_forwardings
@@ -235,7 +235,7 @@ func (s *SQLiteStore) MarkCreatorForwardingFailed(ctx context.Context, forwardin
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	result, err := tx.ExecContext(ctx,
 		`UPDATE creator_forwardings
 		 SET status = 'FAILED',
@@ -284,7 +284,7 @@ func (s *SQLiteStore) MarkCreatorForwardingCancelled(ctx context.Context, forwar
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	result, err := tx.ExecContext(ctx,
 		`UPDATE creator_forwardings
 		 SET status = 'CANCELLED',
@@ -334,7 +334,7 @@ func (s *SQLiteStore) MarkCreatorForwardingBlocked(ctx context.Context, forwardi
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	result, err := tx.ExecContext(ctx,
 		`UPDATE creator_forwardings
 		 SET status = 'BLOCKED',
@@ -390,7 +390,7 @@ func (s *SQLiteStore) EnsureForwarded(ctx context.Context, forwardingID, jobID s
 		return fmt.Errorf("store: EnsureForwarded: missing required fields")
 	}
 
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 
 	// First, check if already FORWARDED with the same job.
 	var existingJobID string

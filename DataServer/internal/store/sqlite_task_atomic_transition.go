@@ -7,7 +7,6 @@ package store
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
@@ -63,7 +62,7 @@ func (r *SQLiteTaskRepository) TransitionTaskToTerminalAtomic(
 		}
 	}()
 
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 
 	// 1. Task CAS: any non-terminal → taskStatus (gated on worker + lease).
 	taskRes, err := tx.ExecContext(ctx,

@@ -3,7 +3,6 @@ package store
 import (
 	"encoding/json"
 	"fmt"
-	"time"
 )
 
 // store_worker_snapshot.go owns the worker_snapshot row lifecycle:
@@ -25,7 +24,7 @@ func (s *SQLiteStore) UpsertWorker(raw []byte) error {
 		return fmt.Errorf("upsert worker: missing worker_id")
 	}
 
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 
 	return s.upsertWorkerExec(s.db, m, raw, now)
 }
@@ -39,7 +38,7 @@ func (s *SQLiteStore) EnsureWorkerRecord(workerID string) error {
 	if workerID == "" {
 		return fmt.Errorf("ensure worker: missing worker_id")
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	_, err := s.db.Exec(`INSERT INTO workers
 		(worker_id,worker_name,status,schedulable,drain,raw_json,migrated_at,node_id,node_role)
 		VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(worker_id) DO NOTHING`,

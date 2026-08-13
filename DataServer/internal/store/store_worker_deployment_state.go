@@ -179,7 +179,7 @@ VALUES (?, '', NULL, '', '', '', '', '', '', ?, ?)
 ON CONFLICT(worker_id) DO UPDATE SET
     last_phase = excluded.last_phase,
     updated_at = excluded.updated_at`,
-		workerID, phase, time.Now().UTC().Format(time.RFC3339Nano))
+		workerID, phase, nowRFC3339Nano())
 	return err
 }
 

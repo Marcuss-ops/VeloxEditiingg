@@ -40,7 +40,7 @@ func (r *SQLiteArtifactRepository) Insert(ctx context.Context, artifact *Artifac
 		artifact.StorageProvider = "local"
 	}
 	if artifact.CreatedAt == "" {
-		artifact.CreatedAt = time.Now().UTC().Format(time.RFC3339)
+		artifact.CreatedAt = nowRFC3339()
 	}
 	_, err := r.store.db.ExecContext(ctx,
 		`INSERT INTO artifacts (id, job_id, attempt_id, type, storage_provider, storage_key,

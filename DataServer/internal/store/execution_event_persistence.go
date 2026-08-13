@@ -54,7 +54,7 @@ func persistPhaseTimingsAndExecutionEvents(ctx context.Context, tx *sql.Tx, cmd 
 		`INSERT INTO task_execution_event_replacement_authorizations
 			(attempt_id, authorization, created_at)
 		 VALUES (?, 'atomic_ingest', ?)`,
-		cmd.AttemptID, time.Now().UTC().Format(time.RFC3339Nano),
+		cmd.AttemptID, nowRFC3339Nano(),
 	); err != nil {
 		return fmt.Errorf("task ingest atomic worker execution event authorization: %w", err)
 	}
@@ -284,7 +284,7 @@ func persistPhaseSummary(ctx context.Context, tx *sql.Tx, attemptID string, iden
 
 func persistExecutionEvents(ctx context.Context, tx *sql.Tx, cmd taskgraph.IngestResultCommand, identity phaseTimingIdentity, timings []taskattempts.PhaseTimingDetailed) error {
 	attemptID := cmd.AttemptID
-	createdAt := time.Now().UTC().Format(time.RFC3339Nano)
+	createdAt := nowRFC3339Nano()
 	for _, timing := range timings {
 		if phaseTimingIsLegacy(timing) {
 			continue
@@ -391,7 +391,7 @@ func quarantineTelemetryEvent(ctx context.Context, tx *sql.Tx, cmd taskgraph.Ing
 		ON CONFLICT(attempt_id, event_id) DO NOTHING`,
 		cmd.AttemptID, eventID, timing.Origin, timing.Scope, timing.Component,
 		timing.Action, timing.TelemetrySchemaVersion, reason.Error(), eventJSON,
-		time.Now().UTC().Format(time.RFC3339Nano),
+		nowRFC3339Nano(),
 	)
 	if err != nil {
 		// Quarantine is strictly best-effort. In particular, a legacy test

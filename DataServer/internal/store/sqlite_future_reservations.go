@@ -95,7 +95,7 @@ func (r *SQLiteTaskRepository) ReconcileFutureReservations(ctx context.Context, 
 			return fmt.Errorf("future reservation: invalid desired item %s", item.TaskID)
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO future_task_reservations(task_id,job_id,worker_id,reservation_id,task_revision,distance,expires_at,created_at,updated_at)
-VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET job_id=excluded.job_id,worker_id=excluded.worker_id,reservation_id=excluded.reservation_id,task_revision=excluded.task_revision,distance=excluded.distance,expires_at=excluded.expires_at,updated_at=excluded.updated_at`, item.TaskID, item.JobID, item.WorkerID, item.ReservationID, item.TaskRevision, item.Distance, item.ExpiresAt.UTC().Format(time.RFC3339), time.Now().UTC().Format(time.RFC3339), time.Now().UTC().Format(time.RFC3339)); err != nil {
+VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET job_id=excluded.job_id,worker_id=excluded.worker_id,reservation_id=excluded.reservation_id,task_revision=excluded.task_revision,distance=excluded.distance,expires_at=excluded.expires_at,updated_at=excluded.updated_at`, item.TaskID, item.JobID, item.WorkerID, item.ReservationID, item.TaskRevision, item.Distance, item.ExpiresAt.UTC().Format(time.RFC3339), nowRFC3339(), nowRFC3339()); err != nil {
 			return err
 		}
 	}
@@ -108,7 +108,7 @@ func (r *SQLiteTaskRepository) ListFutureReservations(ctx context.Context, worke
 	}
 	query := `SELECT r.task_id,r.job_id,r.worker_id,r.reservation_id,r.task_revision,r.distance,r.expires_at,COALESCE(s.payload_json,'')
 FROM future_task_reservations r LEFT JOIN task_specs s ON s.task_id=r.task_id WHERE r.expires_at > ?`
-	args := []interface{}{time.Now().UTC().Format(time.RFC3339)}
+	args := []interface{}{nowRFC3339()}
 	if workerID != "" {
 		query += ` AND r.worker_id = ?`
 		args = append(args, workerID)

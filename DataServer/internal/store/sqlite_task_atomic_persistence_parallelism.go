@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"math"
 	"sort"
-	"time"
 
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
@@ -34,7 +33,7 @@ func persistParallelism(_ context.Context, _ *sql.Tx, _ taskgraph.IngestResultCo
 // and attempt metrics. Pure function — no DB access.
 func computeParallelism(segments []taskattempts.SegmentTiming, metrics taskattempts.AttemptMetrics) taskattempts.AttemptParallelism {
 	p := taskattempts.AttemptParallelism{
-		CalculatedAt: time.Now().UTC().Format(time.RFC3339),
+		CalculatedAt: nowRFC3339(),
 	}
 
 	if len(segments) == 0 {
@@ -258,7 +257,7 @@ func insertSegmentTimingsAndParallelism(ctx context.Context, tx *sql.Tx, attempt
 	if _, err := tx.ExecContext(ctx, `DELETE FROM task_attempt_segment_timings WHERE attempt_id = ?`, attemptID); err != nil {
 		return fmt.Errorf("shared segment timings delete: %w", err)
 	}
-	nowSeg := time.Now().UTC().Format(time.RFC3339)
+	nowSeg := nowRFC3339()
 	for _, seg := range segments {
 		_, err := tx.ExecContext(ctx,
 			`INSERT INTO task_attempt_segment_timings (

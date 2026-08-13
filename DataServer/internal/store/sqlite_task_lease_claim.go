@@ -153,7 +153,7 @@ func (r *SQLiteTaskRepository) ReleaseLease(ctx context.Context, taskID, workerI
 		}
 	}()
 
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	res, err := tx.ExecContext(ctx,
 		`UPDATE tasks
 		 SET status = 'READY', worker_id = '', lease_id = '',

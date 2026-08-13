@@ -96,7 +96,7 @@ func (s *SQLiteStore) InsertSession(sess *PersistedSession) error {
 	if sess.SessionID == "" || sess.WorkerID == "" || sess.TokenHash == "" {
 		return fmt.Errorf("insert session: missing required fields")
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	sessionType := sess.SessionType
 	if sessionType == "" {
 		sessionType = "control"
@@ -220,7 +220,7 @@ func (s *SQLiteStore) ValidateSession(tokenHash string) (*PersistedSession, erro
 
 // ValidateSessionByID looks up a session by ID and returns it if valid (not expired, not revoked).
 func (s *SQLiteStore) ValidateSessionByID(sessionID string) (*PersistedSession, error) {
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	row := s.db.QueryRow(
 		`SELECT session_id, worker_id, token_hash, ip_address, created_at, expires_at, last_seen, revoked
 		 FROM worker_sessions
@@ -263,7 +263,7 @@ func parseWorkerSessionTime(value, field string) (time.Time, error) {
 // UpdateSessionLastSeen bumps the last_seen timestamp for a session.
 func (s *SQLiteStore) UpdateSessionLastSeen(sessionID string) error {
 	result, err := s.db.Exec(`UPDATE worker_sessions SET last_seen = ? WHERE session_id = ?`,
-		time.Now().UTC().Format(time.RFC3339), sessionID)
+		nowRFC3339(), sessionID)
 	if err != nil {
 		return fmt.Errorf("update session last_seen: %w", err)
 	}
@@ -295,7 +295,7 @@ func (s *SQLiteStore) RevokeWorkerSessions(workerID string) error {
 // historical attempt queries distinguish a connected runtime from one that
 // had already disconnected.
 func (s *SQLiteStore) RevokeSession(sessionID string) error {
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := nowRFC3339Nano()
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("revoke session begin: %w", err)
@@ -379,7 +379,7 @@ func (s *SQLiteStore) CleanupExpiredSessions() (int64, error) {
 	cutoff := time.Now().UTC().Add(-24 * time.Hour).Format(time.RFC3339)
 	result, err := s.db.Exec(
 		`DELETE FROM worker_sessions WHERE expires_at < ? OR (revoked = 1 AND last_seen < ?)`,
-		time.Now().UTC().Format(time.RFC3339), cutoff,
+		nowRFC3339(), cutoff,
 	)
 	if err != nil {
 		return 0, err
@@ -401,7 +401,7 @@ const WorkerSessionFreshnessWindow = 5 * time.Minute
 // (PR: CONNECTED/STALE/DISCONNECTED semantics). Returns false on DB error
 // to keep the conservative (DISCONNECTED) verdict.
 func (s *SQLiteStore) IsSessionActive(workerID string) (bool, error) {
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	freshSince := time.Now().UTC().Add(-WorkerSessionFreshnessWindow).Format(time.RFC3339)
 	var count int
 	err := s.db.QueryRow(
@@ -429,7 +429,7 @@ func (s *SQLiteStore) GetActiveSessionsByWorkerIDs(workerIDs []string) (map[stri
 	// Bind order MUST be: now, freshSince, worker_ids... matching the SQL
 	// placeholders `expires_at > ? AND last_seen > ? AND worker_id IN (?,?,…)`.
 	args := make([]interface{}, 0, len(workerIDs)+2)
-	nowStr := time.Now().UTC().Format(time.RFC3339)
+	nowStr := nowRFC3339()
 	freshSinceStr := time.Now().UTC().Add(-WorkerSessionFreshnessWindow).Format(time.RFC3339)
 	args = append(args, nowStr, freshSinceStr)
 	for i, id := range workerIDs {

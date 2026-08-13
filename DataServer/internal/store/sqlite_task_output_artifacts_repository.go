@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"velox-server/internal/taskoutput_artifacts"
 )
@@ -48,7 +47,7 @@ func (r *SQLiteTaskOutputArtifactsRepository) Register(ctx context.Context, a ta
 		return fmt.Errorf("taskoutput_artifacts.Register: empty ArtifactID for task %s", a.TaskID)
 	}
 
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	metadata := a.MetadataJSON
 	if metadata == "" {
 		metadata = "{}"

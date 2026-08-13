@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
 	"velox-server/internal/costmodel"
 	"velox-server/internal/jobs"
@@ -151,7 +150,7 @@ func (d sqliteDialect) GetCounts(ctx context.Context, db *sql.DB) (jobs.Counts, 
 // ── Audit hooks ──────────────────────────────────────────────────────────
 
 func (d sqliteDialect) InsertHistoryTx(ctx context.Context, tx *sql.Tx, jobID, status, workerID, message string) error {
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	raw, _ := json.Marshal(map[string]interface{}{
 		"status":    status,
 		"timestamp": now,
@@ -176,7 +175,7 @@ func (d sqliteDialect) InsertEventTx(ctx context.Context, tx *sql.Tx, jobID, eve
 	raw, err := json.Marshal(map[string]interface{}{
 		"event":     eventType,
 		"job_id":    jobID,
-		"timestamp": time.Now().UTC().Format(time.RFC3339),
+		"timestamp": nowRFC3339(),
 		"payload":   payload,
 	})
 	if err != nil {
@@ -184,7 +183,7 @@ func (d sqliteDialect) InsertEventTx(ctx context.Context, tx *sql.Tx, jobID, eve
 	}
 	_, err = tx.ExecContext(ctx,
 		`INSERT INTO job_events (timestamp, job_id, event, raw_json) VALUES (?, ?, ?, ?)`,
-		time.Now().UTC().Format(time.RFC3339), jobID, eventType, string(raw),
+		nowRFC3339(), jobID, eventType, string(raw),
 	)
 	return err
 }

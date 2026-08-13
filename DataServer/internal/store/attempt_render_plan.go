@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 )
 
 // UpsertRenderPlan stamps the compiled render plan identity on an attempt.
@@ -31,7 +30,7 @@ func (r *SQLiteTaskAttemptRepository) UpsertRenderPlan(ctx context.Context, atte
 	if strings.TrimSpace(planSHA256) == "" {
 		return fmt.Errorf("attempt repository: plan_sha256 is required")
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	result, err := r.store.db.ExecContext(ctx,
 		`UPDATE task_attempts SET plan_version = ?, plan_sha256 = ?, render_plan_json = ?, updated_at = ? WHERE id = ?`,
 		planVersion, planSHA256, planJSON, now, attemptID,

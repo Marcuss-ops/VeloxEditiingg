@@ -44,7 +44,7 @@ func (s *SQLiteStore) InsertCommand(cmd *PersistedCommand) (int64, error) {
 		payloadJSON = string(b)
 	}
 
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	var expiresAt sql.NullString
 	if cmd.ExpiresAt != nil {
 		expiresAt = sql.NullString{String: cmd.ExpiresAt.UTC().Format(time.RFC3339), Valid: true}
@@ -106,7 +106,7 @@ func (s *SQLiteStore) GetPendingCommands(workerID string) ([]*PersistedCommand, 
 
 // AckCommandByID marks a specific command as acknowledged by its command_id AND worker_id.
 func (s *SQLiteStore) AckCommandByID(workerID, commandID string) error {
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	result, err := s.db.Exec(
 		`UPDATE worker_commands SET status = 'acked', acked_at = ? WHERE command_id = ? AND worker_id = ? AND status IN ('pending', 'delivered')`,
 		now, commandID, workerID,
@@ -126,7 +126,7 @@ func (s *SQLiteStore) AckCommandByID(workerID, commandID string) error {
 
 // MarkCommandDelivered marks a command as delivered.
 func (s *SQLiteStore) MarkCommandDelivered(commandID string) error {
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	result, err := s.db.Exec(
 		`UPDATE worker_commands SET status = 'delivered', delivered_at = ?,
 		        attempt_count = attempt_count + 1
@@ -148,7 +148,7 @@ func (s *SQLiteStore) MarkCommandDelivered(commandID string) error {
 
 // ExpireCommands marks commands past their expiry as failed.
 func (s *SQLiteStore) ExpireCommands() (int64, error) {
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	result, err := s.db.Exec(
 		`UPDATE worker_commands SET status = 'expired'
 		 WHERE status IN ('pending', 'delivered') AND expires_at IS NOT NULL AND expires_at < ?`,

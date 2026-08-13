@@ -5,7 +5,7 @@ import "time"
 // nowStrISO is the canonical UTC now-string for INSERT/UPDATE timestamps.
 // Always UTC, RFC3339, shared across all job repository backends.
 func nowStrISO() string {
-	return time.Now().UTC().Format(time.RFC3339)
+	return nowRFC3339()
 }
 
 // parseTimeOrZero converts an RFC3339 string to time.Time, returning a

@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 )
 
 func (s *SQLiteStore) ReplaceDriveLinks(rawList []byte) error {
@@ -24,7 +23,7 @@ func (s *SQLiteStore) ReplaceDriveLinks(rawList []byte) error {
 	if _, err := tx.Exec("DELETE FROM drive_links"); err != nil {
 		return err
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	for _, f := range list {
 		id := asString(f["id"])
 		if id == "" {
@@ -164,7 +163,7 @@ func driveFolderMatches(rawRef, normRef, id, name, url, language, metadataJSON s
 
 // UpsertMasterFolder creates or updates a master folder.
 func (s *SQLiteStore) UpsertMasterFolder(id, name, url, language string, subfoldersCount int, metadataJSON ...string) error {
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	meta := ""
 	if len(metadataJSON) > 0 {
 		meta = metadataJSON[0]

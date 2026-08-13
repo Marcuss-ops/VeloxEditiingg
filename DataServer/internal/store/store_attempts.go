@@ -88,7 +88,7 @@ func (s *SQLiteStore) GetLatestJobAttempt(jobID string) (*JobAttempt, error) {
 type Artifact = repository.Artifact
 
 func (s *SQLiteStore) InsertArtifact(artifact *Artifact) error {
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	if artifact.CreatedAt == "" {
 		artifact.CreatedAt = now
 	}
@@ -206,7 +206,7 @@ func (s *SQLiteStore) GetArtifactsByJob(jobID string, limit int) ([]Artifact, er
 
 // LogJobEvent inserts a structured event into job_events with automatic raw_json.
 func (s *SQLiteStore) LogJobEvent(jobID, eventType string, extra map[string]interface{}) error {
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	payload := map[string]interface{}{
 		"event":     eventType,
 		"job_id":    jobID,

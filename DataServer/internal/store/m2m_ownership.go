@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
 	"velox-server/internal/pipelineruns"
 )
@@ -89,28 +88,28 @@ func (s *SQLiteStore) updatePipelineRunForClient(ctx context.Context, id, client
 }
 
 func (s *SQLiteStore) UpdatePipelineRunRemoteJobForClient(ctx context.Context, id, clientID, provider, remoteJobID string) error {
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	return s.updatePipelineRunForClient(ctx, id, clientID,
 		`UPDATE pipeline_runs SET remote_provider = ?, remote_job_id = ?, updated_at = ? WHERE pipeline_runs.id = ?`,
 		provider, remoteJobID, now)
 }
 
 func (s *SQLiteStore) UpdatePipelineRunForwardingForClient(ctx context.Context, id, clientID, forwardingID string, status pipelineruns.Status) error {
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	return s.updatePipelineRunForClient(ctx, id, clientID,
 		`UPDATE pipeline_runs SET forwarding_id = ?, status = ?, updated_at = ? WHERE pipeline_runs.id = ?`,
 		forwardingID, string(status), now)
 }
 
 func (s *SQLiteStore) UpdatePipelineRunResultForClient(ctx context.Context, id, clientID, resultJSON string) error {
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	return s.updatePipelineRunForClient(ctx, id, clientID,
 		`UPDATE pipeline_runs SET result_json = ?, updated_at = ? WHERE pipeline_runs.id = ?`,
 		resultJSON, now)
 }
 
 func (s *SQLiteStore) ClearPipelineRunErrorForClient(ctx context.Context, id, clientID string) error {
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	return s.updatePipelineRunForClient(ctx, id, clientID,
 		`UPDATE pipeline_runs
 		 SET error_code = '', error_message = '', failed_stage = '', completed_at = '', updated_at = ?
@@ -121,7 +120,7 @@ func (s *SQLiteStore) UpdatePipelineRunStatusForClient(ctx context.Context, id, 
 	if id == "" || requireM2MClient(clientID) != nil {
 		return ErrPipelineRunNoRow
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	set := `status = ?, updated_at = ?`
 	args := []any{string(status), now}
 	if stage != "" {
@@ -137,7 +136,7 @@ func (s *SQLiteStore) UpdatePipelineRunStatusForClient(ctx context.Context, id, 
 }
 
 func (s *SQLiteStore) UpdatePipelineRunErrorForClient(ctx context.Context, id, clientID, code, message, failedStage string) error {
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	return s.updatePipelineRunForClient(ctx, id, clientID,
 		`UPDATE pipeline_runs
 		 SET status = ?, error_code = ?, error_message = ?, failed_stage = ?,
@@ -150,7 +149,7 @@ func (s *SQLiteStore) MarkCreatorForwardingCancelledForClient(ctx context.Contex
 	if forwardingID == "" || requireM2MClient(clientID) != nil {
 		return ErrCreatorForwardingNoRow
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := nowRFC3339()
 	result, err := s.db.ExecContext(ctx,
 		`UPDATE creator_forwardings
 		 SET status = 'CANCELLED', locked_by = '', lease_id = '', lease_expires_at = '',
