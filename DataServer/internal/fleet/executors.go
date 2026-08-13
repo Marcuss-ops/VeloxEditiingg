@@ -220,15 +220,23 @@ func (r *ExecutorRegistry) Kinds() []string {
 	return out
 }
 
+// operationKindSet is the O(1) membership view of allOperationKinds.
+// Derived once at init so IsKnownKind never scans the slice (mirrors the
+// telemetry originSet/scopeSet idiom); the slice remains the source of
+// truth for AllOperationKinds / ProductionRequiredOperationKinds.
+var operationKindSet = func() map[string]struct{} {
+	m := make(map[string]struct{}, len(allOperationKinds))
+	for _, k := range allOperationKinds {
+		m[k] = struct{}{}
+	}
+	return m
+}()
+
 // IsKnownKind is true when `kind` is in the canonical
 // allOperationKinds set. Pure helper; no locks.
 func IsKnownKind(kind string) bool {
-	for _, k := range allOperationKinds {
-		if k == kind {
-			return true
-		}
-	}
-	return false
+	_, ok := operationKindSet[kind]
+	return ok
 }
 
 type noopExecutorMarker interface {

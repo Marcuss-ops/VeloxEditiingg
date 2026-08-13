@@ -41,6 +41,16 @@ func (s CapabilitySet) Has(want string) bool {
 	return false
 }
 
+// Set returns an O(1) membership view of the capability set. Placement
+// builds it once per selection instead of paying a linear scan per Has().
+func (s CapabilitySet) Set() map[string]struct{} {
+	m := make(map[string]struct{}, len(s))
+	for _, v := range s {
+		m[v] = struct{}{}
+	}
+	return m
+}
+
 func (s CapabilitySet) All() []string {
 	out := append([]string(nil), s...)
 	return out

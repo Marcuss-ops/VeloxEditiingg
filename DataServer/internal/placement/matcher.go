@@ -148,6 +148,10 @@ func (m *Matcher) Select(
 		return ordered[i].CreatedAt.Before(ordered[j].CreatedAt)
 	})
 
+	// Built lazily on the first candidate that declares required
+	// capabilities; avoids an allocation when every task is capability-free.
+	var capSet map[string]struct{}
+
 	for i := range ordered {
 		candidate := ordered[i]
 
@@ -194,7 +198,10 @@ func (m *Matcher) Select(
 
 		missing := ""
 		for _, capability := range candidate.RequiredCapabilities {
-			if !worker.Capabilities.Has(capability) {
+			if capSet == nil {
+				capSet = worker.Capabilities.Set()
+			}
+			if _, ok := capSet[capability]; !ok {
 				missing = capability
 				break
 			}
