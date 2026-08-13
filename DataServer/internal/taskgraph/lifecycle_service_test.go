@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"velox-server/internal/jobs"
 	"velox-server/internal/placement"
 	"velox-server/internal/taskattempts"
 )
@@ -48,7 +47,7 @@ import (
 // the lock-free stubRepo pattern already in this file.
 type recordingJobsRepo struct {
 	// Seeding controls for Get.
-	replyJob *jobs.Job
+	replyJob *JobRetryView
 	replyErr error
 
 	// Fail recording.
@@ -58,7 +57,7 @@ type recordingJobsRepo struct {
 	failErr    error
 }
 
-func (r *recordingJobsRepo) Get(_ context.Context, _ string) (*jobs.Job, error) {
+func (r *recordingJobsRepo) Get(_ context.Context, _ string) (*JobRetryView, error) {
 	if r.replyErr != nil {
 		return nil, r.replyErr
 	}
@@ -221,11 +220,9 @@ func TestLifecycleService_ExpireTaskLease_CallsFailOnExhausted(t *testing.T) {
 		getReply: &Task{ID: taskID, JobID: jobID},
 	}
 	jobsRepo := &recordingJobsRepo{
-		replyJob: &jobs.Job{
-			ID:         jobID,
+		replyJob: &JobRetryView{
 			MaxRetries: 3,
-			Status:     jobs.StatusRunning, // non-terminal
-			Revision:   42,
+			Terminal:   false, // non-terminal
 		},
 	}
 	svc, err := NewLifecycleService(taskRepo)
@@ -301,7 +298,7 @@ func TestLifecycleService_ExpireTaskLease_PropagatesRetryBudgetReadError(t *test
 			AttemptsExhausted: true,
 		},
 	}
-	jobsRepo := &recordingJobsRepo{replyJob: &jobs.Job{ID: "job-budget", MaxRetries: 3, Status: jobs.StatusRunning}}
+	jobsRepo := &recordingJobsRepo{replyJob: &JobRetryView{MaxRetries: 3, Terminal: false}}
 	svc, err := NewLifecycleService(taskRepo)
 	if err != nil {
 		t.Fatalf("NewLifecycleService: %v", err)
@@ -328,7 +325,7 @@ func TestLifecycleService_ExpireTaskLease_PropagatesParentJobFailure(t *testing.
 		expireResult: ExpireResult{TaskStatus: StatusFailed, AttemptsExhausted: true},
 	}
 	jobsRepo := &recordingJobsRepo{
-		replyJob: &jobs.Job{ID: jobID, MaxRetries: 3, Status: jobs.StatusRunning},
+		replyJob: &JobRetryView{MaxRetries: 3, Terminal: false},
 		failErr:  failErr,
 	}
 	svc, err := NewLifecycleService(taskRepo)
@@ -372,7 +369,7 @@ func TestLifecycleService_ExpireTaskLease_NoFailOnNonExhausted(t *testing.T) {
 		getReply: &Task{ID: taskID, JobID: jobID},
 	}
 	jobsRepo := &recordingJobsRepo{
-		replyJob: &jobs.Job{ID: jobID, Status: jobs.StatusRunning, Revision: 7, MaxRetries: 3},
+		replyJob: &JobRetryView{MaxRetries: 3, Terminal: false},
 	}
 	svc, _ := NewLifecycleService(taskRepo)
 	svc.SetJobsRepo(jobsRepo)
@@ -415,10 +412,8 @@ func TestLifecycleService_ExpireTaskLease_NoFailOnTerminalJob(t *testing.T) {
 		getReply: &Task{ID: taskID, JobID: jobID},
 	}
 	jobsRepo := &recordingJobsRepo{
-		replyJob: &jobs.Job{
-			ID:       jobID,
-			Status:   jobs.StatusFailed, // already terminal
-			Revision: 99,
+		replyJob: &JobRetryView{
+			Terminal: true, // already terminal
 		},
 	}
 	svc, _ := NewLifecycleService(taskRepo)

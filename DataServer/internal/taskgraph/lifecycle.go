@@ -9,8 +9,6 @@ import (
 	"context"
 	"fmt"
 	"time"
-
-	"velox-server/internal/jobs"
 )
 
 // LifecycleService manages transactional task state transitions.
@@ -25,12 +23,27 @@ type LifecycleService struct {
 	now func() time.Time
 }
 
+// JobRetryView is the narrow projection of a parent Job that the lease
+// reaper needs: the retry budget and whether the Job is already terminal.
+// It is defined in taskgraph (not imported from jobs) so the taskgraph
+// package has no hard dependency on the jobs package — jobs/enqueue
+// imports taskgraph, so importing jobs back would recreate the
+// jobs↔taskgraph directory cycle. The composition root adapts the
+// concrete jobs repository onto this view.
+type JobRetryView struct {
+	// MaxRetries is the configured retry budget (0 means default 3).
+	MaxRetries int
+	// Terminal is true when the Job is already FAILED/SUCCEEDED/CANCELLED.
+	Terminal bool
+}
+
 // JobsRetryQuerier is the narrow jobs-side surface ExpireTaskLease uses.
 // Defined as an interface so LifecycleService has no hard dependency on
 // the jobs.Repository surface and tests can substitute a stub.
 type JobsRetryQuerier interface {
-	// Get returns the canonical Job by ID, or (nil, nil) on missing.
-	Get(ctx context.Context, id string) (*jobs.Job, error)
+	// Get returns the retry-budget view of the Job by ID, or (nil, nil)
+	// on missing.
+	Get(ctx context.Context, id string) (*JobRetryView, error)
 	// Fail marks the job FAILED with the given reason.
 	Fail(ctx context.Context, id string, reason string) error
 }
@@ -207,7 +220,7 @@ func (l *LifecycleService) ExpireTaskLease(ctx context.Context, candidate Requeu
 		if job == nil {
 			return res, fmt.Errorf("taskgraph.ExpireTaskLease: post-reap parent job %s not found", t.JobID)
 		}
-		if !job.Status.IsTerminal() {
+		if !job.Terminal {
 			if failErr := l.jobsRepo.Fail(
 				ctx, t.JobID,
 				fmt.Sprintf("LEASE_EXPIRED_RETRIES_EXHAUSTED: task %s tripped retry budget via master-side reap", candidate.ID),

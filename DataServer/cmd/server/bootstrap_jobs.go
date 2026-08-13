@@ -15,11 +15,10 @@ type jobsDeps struct {
 	// Repository is the canonical jobs.Repository (backed by SQLiteJobRepository).
 	Repository jobs.Repository
 	// SQLiteRepo is the concrete *SQLiteJobRepository that still carries
-	// FailWithRetry as a concrete method (removed from jobs.Repository).
-	// Used by wirePostBuild to pass to taskgraph.LifecycleService.SetJobsRepo
-	// which needs the narrower taskgraph.JobsRetryQuerier (Get + FailWithRetry).
-	// Go structural typing: *SQLiteJobRepository satisfies JobsRetryQuerier
-	// because it embeds baseJobRepository which has both Get and FailWithRetry.
+	// Get + Fail as concrete methods. Used by wirePostBuild to adapt onto
+	// taskgraph.LifecycleService.SetJobsRepo via taskgraphJobsRetryQuerier,
+	// which projects the narrow taskgraph.JobRetryView (MaxRetries +
+	// terminal state) so taskgraph never imports the jobs package.
 	SQLiteRepo *store.SQLiteJobRepository
 }
 

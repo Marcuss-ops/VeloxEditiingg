@@ -27,6 +27,7 @@ import (
 	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/ingest"
 	"velox-server/internal/store"
+	"velox-server/internal/taskgraph"
 )
 
 // productionAssetResolver adapts the canonical AssetService read model to
@@ -82,18 +83,46 @@ func (r *productionAssetResolver) ResolveAsset(ctx context.Context, assetID stri
 	return pickup.String(), asset.SizeBytes, nil
 }
 
+// taskgraphJobsRetryQuerier adapts the concrete *store.SQLiteJobRepository
+// onto the narrow taskgraph.JobsRetryQuerier contract. taskgraph must not
+// import the jobs package (jobs/enqueue imports taskgraph, so importing jobs
+// back would recreate the jobs↔taskgraph directory cycle); this adapter
+// lives at the composition root — where both domains are already in scope —
+// and projects only the retry-budget fields the lease reaper needs.
+type taskgraphJobsRetryQuerier struct {
+	jobs *store.SQLiteJobRepository
+}
+
+func (a *taskgraphJobsRetryQuerier) Get(ctx context.Context, id string) (*taskgraph.JobRetryView, error) {
+	job, err := a.jobs.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if job == nil {
+		return nil, nil
+	}
+	return &taskgraph.JobRetryView{
+		MaxRetries: job.MaxRetries,
+		Terminal:   job.Status.IsTerminal(),
+	}, nil
+}
+
+func (a *taskgraphJobsRetryQuerier) Fail(ctx context.Context, id, reason string) error {
+	return a.jobs.Fail(ctx, id, reason)
+}
+
 // wirePostBuild connects dependencies that cross build-layer
 // boundaries (jobs↔tasks). Called by both buildTestDeps (tests)
 // and buildAppComponents (production) so the wiring stays canonical
 // in exactly one place.
 func wirePostBuild(j *jobsDeps, t *taskDeps) error {
 	// fix/remove-job-lease-ops: j.SQLiteRepo (concrete
-	// *SQLiteJobRepository) satisfies taskgraph.JobsRetryQuerier
-	// via structural typing (Get + FailWithRetry). j.Repository
-	// returns jobs.Repository which no longer has FailWithRetry
-	// on the canonical interface.
+	// *SQLiteJobRepository) is adapted onto taskgraph.JobsRetryQuerier
+	// through taskgraphJobsRetryQuerier, which projects the narrow
+	// retry-budget view (MaxRetries + terminal state) without pulling
+	// the jobs package into taskgraph.
 	if j != nil && j.SQLiteRepo != nil && t != nil && t.TaskLifecycle != nil {
-		t.TaskLifecycle.SetJobsRepo(j.SQLiteRepo)
+		t.TaskLifecycle.SetJobsRepo(&taskgraphJobsRetryQuerier{jobs: j.SQLiteRepo})
 	}
 
 	// feat/task-report-ingestion: build the canonical
