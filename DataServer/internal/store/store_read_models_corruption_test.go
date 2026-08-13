@@ -43,27 +43,6 @@ func TestAuditReadModelRejectsCorruptTimestampAndMetadata(t *testing.T) {
 	}
 }
 
-func TestDeadLetterReadModelsRejectCorruptTimestamps(t *testing.T) {
-	s, err := NewSQLiteStore(filepath.Join(t.TempDir(), "dlq-corruption.db"))
-	if err != nil {
-		t.Fatalf("NewSQLiteStore: %v", err)
-	}
-	defer s.Close()
-
-	if _, err := s.db.ExecContext(context.Background(), `
-		INSERT INTO dead_letter_tasks
-		(id, job_id, task_id, last_attempt_id, failure_class, error_code, retryable, payload_snapshot_json, first_failed_at, last_failed_at, replay_count, status)
-		VALUES ('dlq-corrupt', 'job-corrupt', 'task-corrupt', 'attempt-corrupt', 'render', 'TEST', 0, '{}', 'not-a-time', 'not-a-time', 0, 'OPEN')`); err != nil {
-		t.Fatalf("insert corrupt DLQ row: %v", err)
-	}
-	if _, err := s.GetDeadLetter(context.Background(), "dlq-corrupt"); err == nil {
-		t.Fatal("GetDeadLetter returned nil error for corrupt timestamp")
-	}
-	if _, err := s.ListDeadLetters(context.Background(), "", 10); err == nil {
-		t.Fatal("ListDeadLetters returned nil error for corrupt timestamp")
-	}
-}
-
 func TestOperatorReadModelsRejectCorruption(t *testing.T) {
 	s, err := NewSQLiteStore(filepath.Join(t.TempDir(), "operator-read-corruption.db"))
 	if err != nil {

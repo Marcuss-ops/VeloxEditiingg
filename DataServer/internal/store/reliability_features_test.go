@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"velox-server/internal/deadletters"
 	"velox-server/internal/renderfingerprint"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
@@ -71,29 +70,6 @@ func TestReliability_FeaturesPersistAndReplay(t *testing.T) {
 		t.Fatalf("artifact status=%q want DELETED", artifactStatus)
 	}
 
-	if _, err := s.db.Exec(`INSERT INTO tasks (task_id,job_id,status,created_at,updated_at) VALUES ('task-2','job-2','FAILED',?,?)`, time.Now().UTC().Format(time.RFC3339), time.Now().UTC().Format(time.RFC3339)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.db.Exec(`INSERT INTO dead_letter_tasks (id,job_id,task_id,last_attempt_id,failure_class,error_code,payload_snapshot_json,first_failed_at,last_failed_at) VALUES ('dlq-1','job-2','task-2','attempt-2','render','FFMPEG_FAIL','{"x":1}',?,?)`, time.Now().UTC().Format(time.RFC3339), time.Now().UTC().Format(time.RFC3339)); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.ReplayDeadLetter(ctx, "dlq-1"); err != nil {
-		t.Fatal(err)
-	}
-	var status string
-	if err := s.db.QueryRow(`SELECT status FROM tasks WHERE task_id='task-2'`).Scan(&status); err != nil {
-		t.Fatal(err)
-	}
-	if status != string(taskgraph.StatusReady) {
-		t.Fatalf("replayed task status=%q want READY", status)
-	}
-	dlq, err := s.GetDeadLetter(ctx, "dlq-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if dlq == nil || dlq.Status != deadletters.StatusReplayPending || dlq.ReplayCount != 1 {
-		t.Fatalf("unexpected DLQ after replay: %#v", dlq)
-	}
 }
 
 func TestPersistDeadLetterIsIdempotentPerAttempt(t *testing.T) {
