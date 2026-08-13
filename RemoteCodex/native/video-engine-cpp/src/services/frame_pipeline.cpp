@@ -21,6 +21,8 @@
 
 #include "velox/services/frame_pipeline.hpp"
 
+#include "velox/render/frame_graph.hpp"
+
 #include "velox/services/file_utils.hpp"
 #include "velox/services/media_packet_components.hpp"
 #include "velox/services/media_probe.hpp"
@@ -694,6 +696,25 @@ bool renderFrames(const FramePipelineConfig& config, FramePipelineResult* result
                         std::chrono::steady_clock::now() - scale_start)
                         .count());
                 rendered = dst;
+            }
+            // Compositor hook: apply the FrameGraph's active ops to this
+            // rendered frame. The pipeline has no overlay/logo/text branch —
+            // one apply() call per frame, fail-closed on a missing kernel.
+            if (config.frame_graph != nullptr && !config.frame_graph->empty()) {
+                velox::render::PixelFrame pixel_frame;
+                pixel_frame.width = rendered->width;
+                pixel_frame.height = rendered->height;
+                pixel_frame.pixel_format = rendered->format;
+                for (int plane = 0; plane < 4; ++plane) {
+                    pixel_frame.planes[plane].data = rendered->data[plane];
+                    pixel_frame.planes[plane].stride = rendered->linesize[plane];
+                }
+                std::string graph_error;
+                if (!config.frame_graph->apply(pixel_frame, frame_index, &graph_error)) {
+                    failStage("frame graph apply failed: " + graph_error);
+                    pool.release(index);
+                    break;
+                }
             }
             rendered->pts = frame_index++;
             rendered->pict_type = AV_PICTURE_TYPE_NONE;

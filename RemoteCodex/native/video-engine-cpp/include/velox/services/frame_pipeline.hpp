@@ -4,6 +4,10 @@
 #include <filesystem>
 #include <string>
 
+namespace velox::render {
+class FrameGraph;
+}
+
 // This header is the value-types-only public surface (the OFF-build fallback
 // and RenderEngine include it). The LibAV-aware producer-consumer pipeline
 // behind renderFrames() lives in frame_pipeline.cpp and is compiled
@@ -52,6 +56,14 @@ struct FramePipelineConfig {
     // structural — the producer blocks when the pool is exhausted, so a
     // long source never grows memory beyond this bound.
     int pool_capacity{8};
+
+    // Optional compositor hook. When non-null, the render stage adapts each
+    // rendered frame into a planar PixelFrame and applies the graph's active
+    // ops (FrameGraph::apply) between decode/render and encode. The pipeline
+    // never branches per overlay/logo/text feature: it only calls the single
+    // apply() hook. The caller owns the graph (and its kernel registry) for
+    // the duration of renderFrames().
+    const velox::render::FrameGraph* frame_graph{nullptr};
 };
 
 // FramePipelineMetrics is the producer-consumer health report of the

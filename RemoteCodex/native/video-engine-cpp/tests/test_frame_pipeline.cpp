@@ -18,11 +18,15 @@
 #include "velox/services/frame_pipeline.hpp"
 #include "velox/services/file_utils.hpp"
 #include "velox/services/media_probe.hpp"
+#include "velox/render/frame_graph.hpp"
+#include "velox/render/kernel_registry.hpp"
 
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <memory>
 #include <sstream>
 #include <string>
 
@@ -78,6 +82,36 @@ bool hasVideoStream(const fs::path& path) {
     }
     return false;
 }
+
+// A test-only PixelKernel that records how many frames passed through the
+// FrameGraph hook and what geometry/pixel format the pipeline adapted into
+// the PixelFrame. It never mutates pixels: it only proves the single apply()
+// hook is wired and called once per output frame.
+class CountingKernel : public velox::render::PixelKernel {
+public:
+    CountingKernel(std::atomic<int>& calls, int& width, int& height,
+                   int& pixel_format)
+        : calls_(calls), width_(width), height_(height),
+          pixel_format_(pixel_format) {}
+
+    bool apply(velox::render::PixelFrame& frame,
+               const velox::render::FrameOp& op,
+               std::string* error) override {
+        (void)op;
+        (void)error;
+        width_ = frame.width;
+        height_ = frame.height;
+        pixel_format_ = frame.pixel_format;
+        calls_.fetch_add(1);
+        return true;
+    }
+
+private:
+    std::atomic<int>& calls_;
+    int& width_;
+    int& height_;
+    int& pixel_format_;
+};
 
 } // namespace
 
@@ -273,6 +307,73 @@ int main() {
         expect(!fs::exists(ffmpegTouched) && !fs::exists(ffprobeTouched),
                "explicit-thread-budget encode never spawns media processes");
     }
+
+    // ── FrameGraph compositor hook. ────────────────────────────────────────
+    // The pipeline applies the graph's active ops through one apply() call
+    // per rendered frame (no overlay/logo/text branching inside the
+    // pipeline). A registered counting kernel proves the hook fires for
+    // every output frame and that the AVFrame was adapted into a planar
+    // PixelFrame carrying the output geometry and pixel format.
+    std::atomic<int> compositor_calls{0};
+    int observed_width = 0;
+    int observed_height = 0;
+    int observed_format = -1;
+    velox::render::PixelKernelRegistry registry;
+    expect(registry.registerKernel(
+               velox::render::FrameOpType::ImageOverlay,
+               std::make_unique<CountingKernel>(compositor_calls,
+                                                observed_width, observed_height,
+                                                observed_format)),
+           "counting overlay kernel can be registered");
+    velox::render::FrameGraph graph(&registry);
+    velox::render::FrameOp op;
+    op.type = velox::render::FrameOpType::ImageOverlay;
+    op.start_frame = 0;
+    op.end_frame = -1;
+    expect(graph.add(op), "frame graph accepts an always-active overlay op");
+
+    const fs::path composited = root / "composited.mp4";
+    velox::media::FramePipelineConfig compositedConfig = config;
+    compositedConfig.output_path = composited;
+    compositedConfig.frame_graph = &graph;
+    velox::media::FramePipelineResult compositedResult;
+    expect(velox::media::renderFrames(compositedConfig, &compositedResult),
+           "frame graph compositor hook encode succeeds");
+    if (compositedResult.success) {
+        expect(compositor_calls.load() == compositedResult.frames_encoded,
+               "frame graph apply() runs once per encoded frame, got calls=" +
+                   std::to_string(compositor_calls.load()) + " encoded=" +
+                   std::to_string(compositedResult.frames_encoded));
+        expect(observed_width == 32 && observed_height == 32,
+               "pixel frame carries the output geometry, got " +
+                   std::to_string(observed_width) + "x" +
+                   std::to_string(observed_height));
+        expect(observed_format == 0,
+               "pixel frame carries the yuv420p pixel format, got " +
+                   std::to_string(observed_format));
+    }
+
+    // Fail-closed: an op whose type has no registered kernel must abort the
+    // render instead of being silently skipped.
+    velox::render::FrameGraph missingGraph(&registry);
+    velox::render::FrameOp missingOp;
+    missingOp.type = velox::render::FrameOpType::TextOverlay;
+    missingOp.start_frame = 0;
+    missingOp.end_frame = -1;
+    expect(missingGraph.add(missingOp),
+           "frame graph accepts a text overlay op");
+    const fs::path missingKernelOutput = root / "missing-kernel.mp4";
+    velox::media::FramePipelineConfig missingKernelConfig = config;
+    missingKernelConfig.output_path = missingKernelOutput;
+    missingKernelConfig.frame_graph = &missingGraph;
+    velox::media::FramePipelineResult missingKernelResult;
+    expect(!velox::media::renderFrames(missingKernelConfig, &missingKernelResult),
+           "frame graph with a missing kernel fails closed");
+    expect(missingKernelResult.error.find("no pixel kernel registered") !=
+               std::string::npos,
+           "missing kernel failure explains the unregistered op");
+    expect(!fs::exists(missingKernelOutput),
+           "missing kernel failure does not publish an output");
 
     // ── Source-window trim: decode may start at the beginning, but only the
     // requested presentation-time window is emitted by the native pipeline.

@@ -474,8 +474,6 @@ if(VELOX_ENABLE_LIBAV)
         src/services/frame_pipeline.cpp
         src/render/frame_graph.cpp
         src/render/kernel_registry.cpp
-    src/render/frame_graph.cpp
-    src/render/kernel_registry.cpp
         src/services/file_utils.cpp
         src/services/io_counters.cpp
         src/services/media_probe.cpp
@@ -513,8 +511,6 @@ if(VELOX_ENABLE_LIBAV)
         src/services/frame_pipeline.cpp
         src/render/frame_graph.cpp
         src/render/kernel_registry.cpp
-    src/render/frame_graph.cpp
-    src/render/kernel_registry.cpp
         src/services/file_utils.cpp
         src/services/io_counters.cpp
         src/services/media_probe.cpp
@@ -546,8 +542,6 @@ if(VELOX_ENABLE_LIBAV)
         src/services/frame_pipeline.cpp
         src/render/frame_graph.cpp
         src/render/kernel_registry.cpp
-    src/render/frame_graph.cpp
-    src/render/kernel_registry.cpp
         src/services/media_packet_pipeline.cpp
         src/services/segment_execution_libav.cpp
         src/services/segment_execution.cpp
