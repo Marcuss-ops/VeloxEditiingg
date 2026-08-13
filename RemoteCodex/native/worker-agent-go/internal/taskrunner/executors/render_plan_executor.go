@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -350,7 +351,13 @@ func (e *subtitleAlignExecutor) Execute(_ context.Context, _ executor.ExecutionC
 	b.WriteString("[Script Info]\nScriptType: v4.00+\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, BackColour, Bold, Italic, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Arial,42,&H00FFFFFF,&H80000000,0,0,1,2,0,2,40,40,40,1\n\n[Events]\nFormat: Layer, Start, End, Style, Text\n")
 	for _, track := range p.Subtitles {
 		for _, event := range track.Events {
-			b.WriteString(fmt.Sprintf("Dialogue: 0,%s,%s,Default,%s\n", assTime(event.StartSeconds), assTime(event.EndSeconds), strings.ReplaceAll(event.Text, "\n", "\\N")))
+			b.WriteString("Dialogue: 0,")
+				writeASSTime(&b, event.StartSeconds)
+				b.WriteByte(',')
+				writeASSTime(&b, event.EndSeconds)
+				b.WriteString(",Default,")
+				writeASSText(&b, event.Text)
+				b.WriteByte('\n')
 		}
 	}
 	path := e.outputPath(spec, ".subtitles.ass")
@@ -367,15 +374,42 @@ func (e *subtitleAlignExecutor) Execute(_ context.Context, _ executor.ExecutionC
 	return executor.ExecutionResult{Status: "succeeded", Outputs: []executor.ArtifactRef{artifact}, Metrics: map[string]interface{}{"caption_count": strings.Count(b.String(), "Dialogue: "), "render_plan_sha256": planDigest(p)}, StartedAt: started, CompletedAt: time.Now().UTC()}, nil
 }
 
-func assTime(seconds float64) string {
+// writeASSTime writes an h:mm:ss.cc ASS timestamp directly into b, avoiding
+// the format allocation incurred per subtitle event by a fmt.Sprintf call.
+func writeASSTime(b *strings.Builder, seconds float64) {
 	if seconds < 0 {
 		seconds = 0
 	}
-	h := int(seconds / 3600)
-	m := int(seconds/60) % 60
-	s := int(seconds) % 60
-	cs := int(seconds*100+0.5) % 100
-	return fmt.Sprintf("%d:%02d:%02d.%02d", h, m, s, cs)
+	writeInt(b, int(seconds/3600))
+	b.WriteByte(':')
+	writeFixed2(b, int(seconds/60)%60)
+	b.WriteByte(':')
+	writeFixed2(b, int(seconds)%60)
+	b.WriteByte('.')
+	writeFixed2(b, int(seconds*100+0.5)%100)
+}
+
+// writeFixed2 writes a two-digit zero-padded number (values >=100 are written
+// verbatim, since ASS tolerates hours > 99).
+func writeFixed2(b *strings.Builder, v int) {
+	if v < 10 {
+		b.WriteByte('0')
+	}
+	writeInt(b, v)
+}
+
+func writeInt(b *strings.Builder, v int) {
+	b.WriteString(strconv.Itoa(v))
+}
+
+// writeASSText writes the subtitle text with newlines escaped to \N. The
+// replacement is guarded on Contains so text without newlines skips both the
+// scan and the extra allocation of ReplaceAll.
+func writeASSText(b *strings.Builder, text string) {
+	if strings.Contains(text, "\n") {
+		text = strings.ReplaceAll(text, "\n", "\\N")
+	}
+	b.WriteString(text)
 }
 
 func recorderFromExecutionContext(execCtx executor.ExecutionContext) *telemetry.EventRecorder {
