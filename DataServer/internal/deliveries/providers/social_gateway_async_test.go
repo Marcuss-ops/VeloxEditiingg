@@ -26,7 +26,7 @@ func TestSocialGatewayProvider_acceptedSubmissionRequiresPublishedReconcile(t *t
 				_, _ = w.Write([]byte(`{"delivery_id":"` + socialDeliveryID + `","publish_status":"processing","thumbnail_status":"pending"}`))
 				return
 			}
-			_, _ = w.Write([]byte(`{"delivery_id":"` + socialDeliveryID + `","publish_status":"PUBLISHED","thumbnail_status":"APPLIED","youtube_video_id":"youtube-final-1"}`))
+			_, _ = w.Write([]byte(`{"delivery_id":"` + socialDeliveryID + `","publish_status":"PUBLISHED","thumbnail_status":"APPLIED","remote_media_id":"remote-final-1"}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -57,7 +57,7 @@ func TestSocialGatewayProvider_acceptedSubmissionRequiresPublishedReconcile(t *t
 	if err != nil {
 		t.Fatalf("published Reconcile: %v", err)
 	}
-	if !published.Success || published.Status != deliveries.ResultStatusPublished || published.RemoteID != "youtube-final-1" {
+	if !published.Success || published.Status != deliveries.ResultStatusPublished || published.RemoteID != "remote-final-1" {
 		t.Fatalf("published reconciliation result = %+v", published)
 	}
 }

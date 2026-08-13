@@ -14,7 +14,7 @@ func TestClient_GetDelivery_CanonicalResponse(t *testing.T) {
 			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"delivery_id":"delivery-1","publish_status":"published","thumbnail_status":"applied","youtube_video_id":"yt-1","last_error_code":"","last_error_message":""}`))
+		_, _ = w.Write([]byte(`{"delivery_id":"delivery-1","publish_status":"published","thumbnail_status":"applied","remote_media_id":"yt-1","last_error_code":"","last_error_message":""}`))
 	}))
 	defer server.Close()
 
@@ -22,14 +22,14 @@ func TestClient_GetDelivery_CanonicalResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetDelivery: %v", err)
 	}
-	if got.DeliveryID != "delivery-1" || got.PublishStatus != "published" || got.ThumbnailStatus != "applied" || got.YouTubeVideoID != "yt-1" {
+	if got.DeliveryID != "delivery-1" || got.PublishStatus != "published" || got.ThumbnailStatus != "applied" || got.RemoteMediaID != "yt-1" {
 		t.Fatalf("canonical response = %+v", got)
 	}
 }
 
 func TestClient_GetDelivery_RejectsMissingCanonicalDeliveryID(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"publish_status":"published","thumbnail_status":"applied","youtube_video_id":"yt-1"}`))
+		_, _ = w.Write([]byte(`{"publish_status":"published","thumbnail_status":"applied","remote_media_id":"yt-1"}`))
 	}))
 	defer server.Close()
 
@@ -43,7 +43,7 @@ func TestDeliveryStatusResponse_DoesNotDecodeV0Aliases(t *testing.T) {
 	if err := json.Unmarshal([]byte(`{"id":"old-id","status":"published","platform_media_id":"old-media","platform_url":"https://old.example"}`), &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if got.DeliveryID != "" || got.PublishStatus != "" || got.ThumbnailStatus != "" || got.YouTubeVideoID != "" {
+	if got.DeliveryID != "" || got.PublishStatus != "" || got.ThumbnailStatus != "" || got.RemoteMediaID != "" {
 		t.Fatalf("v0 aliases populated canonical response: %+v", got)
 	}
 }

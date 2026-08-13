@@ -26,13 +26,13 @@ type Client struct {
 
 // DeliveryStatusResponse is the canonical reconciliation view returned by
 // GET /internal/v1/deliveries/{id}. It deliberately has no v0 aliases:
-// delivery_id, publish_status, thumbnail_status and youtube_video_id
+// delivery_id, publish_status, thumbnail_status and remote_media_id
 // are the only delivery identity/state/media fields consumed by Velox.
 type DeliveryStatusResponse struct {
 	DeliveryID       string `json:"delivery_id"`
 	PublishStatus    string `json:"publish_status"`
 	ThumbnailStatus  string `json:"thumbnail_status"`
-	YouTubeVideoID   string `json:"youtube_video_id"`
+	RemoteMediaID    string `json:"remote_media_id"`
 	LastErrorCode    string `json:"last_error_code"`
 	LastErrorMessage string `json:"last_error_message"`
 }

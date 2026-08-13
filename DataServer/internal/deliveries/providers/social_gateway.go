@@ -92,7 +92,7 @@ func (s *SocialGatewayProvider) Reconcile(ctx context.Context, deliveryID, remot
 	publishStatus := strings.ToLower(strings.TrimSpace(status.PublishStatus))
 	thumbnailStatus := strings.ToLower(strings.TrimSpace(status.ThumbnailStatus))
 	thumbnailReady := thumbnailStatus == "applied" || thumbnailStatus == "skipped"
-	finalMediaID := strings.TrimSpace(status.YouTubeVideoID)
+	finalMediaID := strings.TrimSpace(status.RemoteMediaID)
 	// The upstream status is intentionally mapped into Velox's canonical
 	// contract. A remote operation ID is not a published media ID: only
 	// positive reconciliation with thumbnail evidence and final media ID

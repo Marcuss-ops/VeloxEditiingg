@@ -16,7 +16,7 @@ func TestSocialGatewayProvider_ReconcileCanonicalResponse(t *testing.T) {
 		if r.URL.Path != "/internal/v1/deliveries/social-1" {
 			t.Fatalf("path = %q", r.URL.Path)
 		}
-		_, _ = w.Write([]byte(`{"delivery_id":"social-1","publish_status":"published","thumbnail_status":"applied","youtube_video_id":"yt-1"}`))
+		_, _ = w.Write([]byte(`{"delivery_id":"social-1","publish_status":"published","thumbnail_status":"applied","remote_media_id":"yt-1"}`))
 	}))
 	defer server.Close()
 
@@ -45,7 +45,7 @@ func TestSocialGatewayProvider_ReconcilePublishedWithoutMediaIDIsNotComplete(t *
 		t.Fatalf("Reconcile: %v", err)
 	}
 	if result.Success {
-		t.Fatalf("published response without youtube_video_id must not be terminal: %+v", result)
+		t.Fatalf("published response without remote_media_id must not be terminal: %+v", result)
 	}
 	if result.Status != deliveries.ResultStatusReconciliation || result.RemoteID != "" {
 		t.Fatalf("result = %+v", result)
@@ -54,7 +54,7 @@ func TestSocialGatewayProvider_ReconcilePublishedWithoutMediaIDIsNotComplete(t *
 
 func TestSocialGatewayProvider_ReconcileDoesNotTreatSubmissionIDAsPublishedMedia(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"delivery_id":"social-1","publish_status":"published","thumbnail_status":"applied","youtube_video_id":"social-1"}`))
+		_, _ = w.Write([]byte(`{"delivery_id":"social-1","publish_status":"published","thumbnail_status":"applied","remote_media_id":"social-1"}`))
 	}))
 	defer server.Close()
 
@@ -70,7 +70,7 @@ func TestSocialGatewayProvider_ReconcileDoesNotTreatSubmissionIDAsPublishedMedia
 
 func TestSocialGatewayProvider_ReconcileRejectsMismatchedDeliveryID(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"delivery_id":"other","publish_status":"published","thumbnail_status":"applied","youtube_video_id":"yt-1"}`))
+		_, _ = w.Write([]byte(`{"delivery_id":"other","publish_status":"published","thumbnail_status":"applied","remote_media_id":"yt-1"}`))
 	}))
 	defer server.Close()
 
