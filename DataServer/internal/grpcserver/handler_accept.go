@@ -57,13 +57,13 @@ func (h *Handler) handleTaskAccepted(workerID string, ta *pb.TaskAccepted, sess 
 	if masterTask.Status == taskgraph.StatusRunning &&
 		validateTaskIdentityShape(wireIdentity, "wire") == nil &&
 		validateTaskIdentityShape(masterIdentity, "master task") == nil &&
-		wireIdentity.taskID == masterIdentity.taskID &&
-		wireIdentity.jobID == masterIdentity.jobID &&
-		wireIdentity.attemptID == masterIdentity.attemptID &&
-		wireIdentity.leaseID == masterIdentity.leaseID &&
-		wireIdentity.attemptNumber == masterIdentity.attemptNumber &&
-		wireIdentity.workerID == masterIdentity.workerID &&
-		wireIdentity.revision+1 == masterIdentity.revision {
+		wireIdentity.TaskID == masterIdentity.TaskID &&
+		wireIdentity.JobID == masterIdentity.JobID &&
+		wireIdentity.AttemptID == masterIdentity.AttemptID &&
+		wireIdentity.LeaseID == masterIdentity.LeaseID &&
+		wireIdentity.AttemptNumber == masterIdentity.AttemptNumber &&
+		wireIdentity.WorkerID == masterIdentity.WorkerID &&
+		wireIdentity.Revision+1 == masterIdentity.Revision {
 		// Idempotent replay after AcceptTaskAtomic committed but the
 		// original grant was lost. This path sends only an ACK-like grant;
 		// it never mutates the task, attempt, lease, or pending offer.

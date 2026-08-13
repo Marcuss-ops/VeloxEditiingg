@@ -18,7 +18,7 @@ func TestSecurity_ValidateTaskIdentityRejectsForgedWorkerID(t *testing.T) {
 		Revision:      4,
 	}
 	wire := taskIdentityFromTask(&masterTask)
-	wire.workerID = "worker-forged"
+	wire.WorkerID = "worker-forged"
 
 	err := validateTaskIdentity(wire, taskIdentityFromTask(&masterTask))
 	if err == nil || !strings.Contains(err.Error(), "worker_id mismatch") {
@@ -37,7 +37,7 @@ func TestSecurity_ValidateTaskIdentityRejectsLeaseOwnershipMismatch(t *testing.T
 		Revision:      9,
 	}
 	wire := taskIdentityFromTask(&masterTask)
-	wire.leaseID = "security-lease-attacker"
+	wire.LeaseID = "security-lease-attacker"
 
 	err := validateTaskIdentity(wire, taskIdentityFromTask(&masterTask))
 	if err == nil || !strings.Contains(err.Error(), "lease_id mismatch") {

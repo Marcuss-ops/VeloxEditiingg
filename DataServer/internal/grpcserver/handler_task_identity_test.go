@@ -49,7 +49,7 @@ func TestValidateTaskIdentityRejectsEveryWireFieldMismatch(t *testing.T) {
 		name   string
 		mutate func(*taskIdentity)
 		field  string
-	}{{"task_id", func(v *taskIdentity) { v.taskID = "other-task" }, "task_id"}, {"job_id", func(v *taskIdentity) { v.jobID = "other-job" }, "job_id"}, {"attempt_id", func(v *taskIdentity) { v.attemptID = "other-attempt" }, "attempt_id"}, {"lease_id", func(v *taskIdentity) { v.leaseID = "other-lease" }, "lease_id"}, {"attempt_number", func(v *taskIdentity) { v.attemptNumber++ }, "attempt_number"}, {"revision", func(v *taskIdentity) { v.revision++ }, "revision"}, {"worker_id", func(v *taskIdentity) { v.workerID = "other-worker" }, "worker_id"}}
+	}{{"task_id", func(v *taskIdentity) { v.TaskID = "other-task" }, "task_id"}, {"job_id", func(v *taskIdentity) { v.JobID = "other-job" }, "job_id"}, {"attempt_id", func(v *taskIdentity) { v.AttemptID = "other-attempt" }, "attempt_id"}, {"lease_id", func(v *taskIdentity) { v.LeaseID = "other-lease" }, "lease_id"}, {"attempt_number", func(v *taskIdentity) { v.AttemptNumber++ }, "attempt_number"}, {"revision", func(v *taskIdentity) { v.Revision++ }, "revision"}, {"worker_id", func(v *taskIdentity) { v.WorkerID = "other-worker" }, "worker_id"}}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			wire := master
