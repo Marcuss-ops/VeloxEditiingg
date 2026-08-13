@@ -1,0 +1,44 @@
+{
+  "source": {"type": "clips"},
+  "skip_creator": true,
+  "video_name": "Velox post-deploy canary",
+  "language": "en",
+  "render_video": true,
+  "save_to_db": true,
+  "fit": "contain",
+  "script_text": "Post-deploy certification canary.",
+  "scenes": [
+    {
+      "id": "canary-scene-0",
+      "index": 0,
+      "kind": "clip",
+      "text": "Post-deploy certification canary.",
+      "duration_seconds": 4,
+      "clip": {
+        "asset_id": "4bed94dde8728261b708781c5ae7b31886ab30f48bf8a0a0f4981fc7a0e78ed6",
+        "url": "velox-asset://4bed94dde8728261b708781c5ae7b31886ab30f48bf8a0a0f4981fc7a0e78ed6",
+        "sha256": "4bed94dde8728261b708781c5ae7b31886ab30f48bf8a0a0f4981fc7a0e78ed6",
+        "duration_ms": 4000
+      },
+      "stock": [
+        {
+          "asset_id": "4bed94dde8728261b708781c5ae7b31886ab30f48bf8a0a0f4981fc7a0e78ed6",
+          "url": "velox-asset://4bed94dde8728261b708781c5ae7b31886ab30f48bf8a0a0f4981fc7a0e78ed6",
+          "sha256": "4bed94dde8728261b708781c5ae7b31886ab30f48bf8a0a0f4981fc7a0e78ed6",
+          "duration_ms": 4000
+        }
+      ],
+      "voiceover": {
+        "asset_id": "deeab1d1fc005ff02901f0eb0ef6ff5ccdb0297394e208ba126065180d2abe34",
+        "url": "velox-asset://deeab1d1fc005ff02901f0eb0ef6ff5ccdb0297394e208ba126065180d2abe34",
+        "sha256": "deeab1d1fc005ff02901f0eb0ef6ff5ccdb0297394e208ba126065180d2abe34",
+        "duration_ms": 4000,
+        "language": "en"
+      },
+      "stock_fallback": false
+    }
+  ],
+  "delivery_plan": [
+    {"destination_id": "drive-smoke", "retry_budget": 3, "priority": 0}
+  ]
+}

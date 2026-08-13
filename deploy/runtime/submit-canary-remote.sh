@@ -59,7 +59,7 @@ done
 MASTER_URL="${VELOX_MASTER_URL%/}"
 ADMIN_HEADER="Authorization: Bearer ${VELOX_ADMIN_TOKEN}"
 
-PAYLOAD_FILE="${VELOX_CANARY_PAYLOAD_FILE:-ops/jobs/jackie_chan_doc_voiceover.generate.json}"
+PAYLOAD_FILE="${VELOX_CANARY_PAYLOAD_FILE:-ops/jobs/post-deploy-canary.generate.json}"
 POLL_TIMEOUT="${VELOX_CANARY_TIMEOUT:-600}"
 POLL_INTERVAL="${VELOX_CANARY_INTERVAL:-10}"
 SUBMIT_TIMEOUT="${VELOX_CANARY_SUBMIT_TIMEOUT:-30}"
@@ -155,7 +155,13 @@ done
     || { emit_fail "poll timeout (${POLL_TIMEOUT}s); last status: ${LAST_STATUS:-<none>}"; exit 1; }
 
 # ── 7. Surface success metadata ─────────────────────────────────────────────
-OUTPUT_PATH="$(jq -r '.output_path // empty' <<<"$JOB_RESP")"
+OUTPUT_PATH="$(jq -r '
+    if (.output_path // "") != "" then .output_path
+    elif (.job.result.output_path // "") != "" then .job.result.output_path
+    elif (.job.result_json.output_path // "") != "" then .job.result_json.output_path
+    elif (.job.request_json.output_path // "") != "" then .job.request_json.output_path
+    else empty end
+  ' <<<"$JOB_RESP")"
 COMPLETED_AT="$(jq -r '.completed_at // empty' <<<"$JOB_RESP")"
 RESULT_KIND="$(jq -r '.job.result.kind // .result.kind // empty' <<<"$JOB_RESP")"
 
