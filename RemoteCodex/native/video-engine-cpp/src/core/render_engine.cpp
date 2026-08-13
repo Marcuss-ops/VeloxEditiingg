@@ -516,6 +516,8 @@ std::optional<RenderResult> RenderEngine::renderMixed(
     request.video_segments.reserve(plan.timeline.size());
 
     int64_t total_duration_us = 0;
+    int64_t copy_segments = 0;
+    int64_t transcode_segments = 0;
     bool fell_back = false;
     for (std::size_t i = 0; i < plan.timeline.size() && !fell_back; ++i) {
         const auto& item = plan.timeline[i];
@@ -523,6 +525,12 @@ std::optional<RenderResult> RenderEngine::renderMixed(
             fell_back = true;
             break;
         }
+        SegmentTiming segment;
+        segment.index = i;
+        segment.worker_index = 0;
+        segment.scene_id = item.scene_id;
+        segment.source_type = "video";
+        const auto segmentStart = std::chrono::steady_clock::now();
         const auto& source = std::get<plan::VideoSource>(item.source);
         const int64_t duration_us = item.source_duration_us > 0
             ? item.source_duration_us
@@ -536,6 +544,7 @@ std::optional<RenderResult> RenderEngine::renderMixed(
         }
 
         const fs::path local_video = numberedWorkPath(workDir, "mixed_video_", ".mp4", i);
+        const auto downloadStart = std::chrono::steady_clock::now();
         telemetry::ScopedPhase assetPhase(
             recorder_, telemetry::kOriginWorker, telemetry::kScopeTask,
             "worker.asset", "transfer", "download");
@@ -545,13 +554,19 @@ std::optional<RenderResult> RenderEngine::renderMixed(
             return failRender("asset_download_failed");
         }
         assetPhase.Complete();
+        segment.asset_download_ms = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - downloadStart).count();
+        segment.source_bytes = fileSize(local_video);
 
         media::SegmentProbe probe;
         std::string probe_error;
-        if (!media::probeSegmentForExecution(local_video, item.source_in_us,
-                                             media::MediaKind::Video, &probe, &probe_error)) {
-            result.error = "failed to probe segment " + std::to_string(i) + ": " + probe_error;
-            return failRender("mixed_probe_failed");
+        {
+            ScopedTimer timer(metrics_, "mixed_probe_ms");
+            if (!media::probeSegmentForExecution(local_video, item.source_in_us,
+                                                 media::MediaKind::Video, &probe, &probe_error)) {
+                result.error = "failed to probe segment " + std::to_string(i) + ": " + probe_error;
+                return failRender("mixed_probe_failed");
+            }
         }
 
         media::SegmentExecutionRequest execution_request;
@@ -568,9 +583,14 @@ std::optional<RenderResult> RenderEngine::renderMixed(
             break;
         }
         if (decision.mode == media::SegmentExecutionMode::PacketCopy) {
+            segment.codec = "packet_copy";
+            ++copy_segments;
             request.video_segments.push_back({
                 local_video, item.source_in_us, duration_us, false, false});
         } else {
+            segment.codec = "libx264";
+            segment.preset = "medium";
+            ++transcode_segments;
             const fs::path normalized =
                 numberedWorkPath(workDir, "mixed_segment_", ".mp4", i);
             media::FramePipelineConfig nativeConfig;
@@ -588,11 +608,22 @@ std::optional<RenderResult> RenderEngine::renderMixed(
             nativeConfig.decoder_threads = threads.decoder_threads;
             nativeConfig.encoder_threads = threads.encoder_threads;
             media::FramePipelineResult nativeResult;
-            if (!media::renderFrames(nativeConfig, &nativeResult)) {
+            const auto transcodeStart = std::chrono::steady_clock::now();
+            bool transcodeOk = false;
+            {
+                ScopedTimer timer(metrics_, "mixed_transcode_ms");
+                transcodeOk = media::renderFrames(nativeConfig, &nativeResult);
+            }
+            if (!transcodeOk) {
                 result.error = "mixed transcode failed for segment " + std::to_string(i) +
                     (nativeResult.error.empty() ? std::string() : ": " + nativeResult.error);
                 return failRender("mixed_transcode_failed");
             }
+            segment.ffmpeg_encode_ms = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - transcodeStart).count();
+            segment.frames_encoded = nativeResult.frames_encoded;
+            segment.frames_decoded = nativeResult.frames_decoded;
+            segment.frames_composited = nativeResult.frames_encoded;
             recordFramePipeline(nativeResult);
             frames_encoded_.fetch_add(nativeResult.frames_encoded);
             frames_decoded_.fetch_add(nativeResult.frames_decoded);
@@ -623,6 +654,10 @@ std::optional<RenderResult> RenderEngine::renderMixed(
             request.video_segments.push_back({
                 normalized, 0, duration_us, false, true});
         }
+        segment.total_ms = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - segmentStart).count();
+        segment.status = telemetry::kStatusOk;
+        metrics_.addSegment(segment);
         total_duration_us += duration_us;
     }
 
@@ -671,6 +706,11 @@ std::optional<RenderResult> RenderEngine::renderMixed(
         telemetry::ScopedPhase mixedPhase(
             recorder_, telemetry::kOriginEngine, telemetry::kScopeAttempt,
             "engine", "mixed_packet_mux", "composite");
+        mixedPhase.SetMetadataJSON(
+            std::string("{\"copy_segments\":") + std::to_string(copy_segments) +
+            ",\"transcode_segments\":" + std::to_string(transcode_segments) +
+            ",\"total_segments\":" + std::to_string(plan.timeline.size()) +
+            ",\"total_duration_seconds\":" + std::to_string(total_duration) + "}");
         media::CopyOnlyMuxResult muxResult;
         bool muxOk;
         {
