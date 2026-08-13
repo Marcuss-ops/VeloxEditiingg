@@ -91,10 +91,6 @@ type TransitionParams struct {
 	Revision       int
 }
 
-// ── Shared error sentinels ────────────────────────────────────────────────
-
-// ErrTransitionConflict is returned when the CAS predicate does not match
-// (ExpectedStatus wrong OR Revision stale).
-var ErrTransitionConflict error = leaseConflictError("store: job transition conflict (status or revision mismatch)")
-
 // fix/remove-job-lease-ops: ErrNoClaimableJob is REMOVED.
+// ErrTransitionConflict (the shared CAS sentinel) is re-exported from
+// internal/storecore via db_errors.go.

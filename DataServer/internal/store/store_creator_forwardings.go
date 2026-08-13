@@ -23,7 +23,6 @@ package store
 
 import (
 	"database/sql"
-	"errors"
 	"time"
 )
 
@@ -98,12 +97,9 @@ type CreatorForwardingLease struct {
 	PayloadSHA256    string
 }
 
-// ErrCreatorForwardingNoRow is returned when a lookup misses.
-var ErrCreatorForwardingNoRow = errors.New("store: creator forwarding row not found")
-
-// ErrCreatorForwardingOwnershipConflict prevents a caller from reusing an
-// idempotency tuple that is already owned by another M2M client.
-var ErrCreatorForwardingOwnershipConflict = errors.New("store: creator forwarding ownership conflict")
+// ErrCreatorForwardingNoRow / ErrCreatorForwardingOwnershipConflict (the
+// shared forwarding sentinels) are re-exported from internal/storecore via
+// db_errors.go.
 
 type creatorForwardingRowScanner interface {
 	Scan(dest ...any) error

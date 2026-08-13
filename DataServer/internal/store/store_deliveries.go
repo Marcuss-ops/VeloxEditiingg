@@ -133,5 +133,5 @@ func (s *SQLiteStore) GetDeliveryPlanMetadata(ctx context.Context, artifactID, d
 	return metadata, nil
 }
 
-// ErrDeliveryNoRow is returned when the lookup misses.
-var ErrDeliveryNoRow = errors.New("store: delivery row not found")
+// ErrDeliveryNoRow (the shared delivery sentinel) is re-exported from
+// internal/storecore via db_errors.go.

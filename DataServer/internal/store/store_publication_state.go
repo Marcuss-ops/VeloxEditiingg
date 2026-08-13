@@ -1,23 +1,18 @@
 package store
 
 import (
-	"errors"
-
 	"velox-server/internal/publicationstate"
 )
 
 // store_publication_state.go owns the publication_states domain model and
-// the shared helpers: the sentinel errors, the PublicationState row shape,
-// the scanPublicationState projection and the phase-name mapping. Lifecycle
+// the shared helpers: the PublicationState row shape, the
+// scanPublicationState projection and the phase-name mapping. Lifecycle
 // bootstrap lives in store_publication_lifecycle.go, formal state-machine
 // transitions in store_publication_transition.go, the side-effect ledger in
 // store_publication_effect.go, and the remote-result checkpoints in
-// store_publication_remote.go.
-
-var (
-	ErrPublicationStateNotFound = errors.New("store: publication state not found")
-	ErrPublicationPhaseConflict = errors.New("store: publication phase effect conflict")
-)
+// store_publication_remote.go. The sentinel errors
+// (ErrPublicationStateNotFound / ErrPublicationPhaseConflict) are re-exported
+// from internal/storecore via db_errors.go.
 
 type PublicationState struct {
 	PublicationID          string
