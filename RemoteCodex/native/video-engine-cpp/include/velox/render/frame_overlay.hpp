@@ -60,7 +60,7 @@ bool blendYuvOverlayScalar(PixelFrame& dst, const PreparedOverlay& overlay,
                            std::string* error = nullptr);
 
 // AVX2 kernel for the Y plane (chroma stays scalar). Compiled per-function
-// with target("avx2") — avoid host-specific tuning — so the binary stays portable
+// with target("avx2") — never -march=native — so the binary stays portable
 // and reproducible. Bit-exact with blendYuvOverlayScalar; only the Y plane
 // (3/4 of the pixels) is vectorized. On non-GNU/Clang toolchains this symbol
 // delegates to the scalar reference.
