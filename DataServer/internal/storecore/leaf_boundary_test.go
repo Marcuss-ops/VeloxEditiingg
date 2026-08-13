@@ -18,6 +18,7 @@ import (
 var leafPackages = []string{
 	"completionstore",
 	"renderfingerprintstore",
+	"smokerunstore",
 }
 
 // TestLeafRepositoriesDoNotImportStore enforces the dependency direction

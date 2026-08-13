@@ -118,8 +118,9 @@ var allowedWriters = map[string]bool{
 	// This is the analytics/observability surface for the per-worker
 	// duration p-baseline (p95 / p99 / moving-avg); it is NOT a
 	// verified-finalization writer and does not need to go through
-	// FinalizeVerified.
-	filepath.Join("internal", "store", "store_smoke_runs.go"): true,
+	// FinalizeVerified. The writer moved into the smokerunstore leaf
+	// package during the store god-package decoupling.
+	filepath.Join("internal", "smokerunstore", "smokerunstore.go"): true,
 	// SEPARATE lifecycle: UPDATE publication_phase_effects SET
 	// status='SUCCEEDED' is the publication reconciliation/verification
 	// effect writer (NOT jobs). It flips the VERIFYING phase effect to
