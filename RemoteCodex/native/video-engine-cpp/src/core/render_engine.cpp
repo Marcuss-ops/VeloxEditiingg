@@ -16,6 +16,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <filesystem>
 #include <functional>
 #include <iostream>
@@ -54,6 +55,18 @@ namespace {
             }
         }
         return out;
+    }
+
+    // Build a workdir path for a numbered segment/asset without the chained
+    // std::string temporaries that `"prefix_" + std::to_string(i) + ".ext"`
+    // would allocate once per loop iteration. The name is formatted into a
+    // fixed stack buffer (no heap allocation); only the final fs::path join
+    // allocates. Indices are non-negative, so size_t is safe.
+    fs::path numberedWorkPath(const fs::path& workDir, const char* prefix,
+                              const char* suffix, std::size_t index) {
+        char name[64];
+        std::snprintf(name, sizeof(name), "%s%zu%s", prefix, index, suffix);
+        return workDir / name;
     }
 
     std::string audioPlanMetadata(const audio::CompiledAudioPlan& plan,
@@ -280,7 +293,7 @@ RenderResult RenderEngine::renderCopyOnly(
         const auto& source = std::get<plan::VideoSource>(item.source);
         const auto boundVideo = bindOrStage(
             source.url, source.cache_key,
-            workDir / ("copy_input_" + std::to_string(i) + ".mp4"));
+            numberedWorkPath(workDir, "copy_input_", ".mp4", i));
         if (boundVideo.first.empty()) {
             result.error = "failed to resolve copy-only video source for segment " +
                 std::to_string(i);
@@ -522,7 +535,7 @@ std::optional<RenderResult> RenderEngine::renderMixed(
             return failRender("mixed_duration_invalid");
         }
 
-        const fs::path local_video = workDir / ("mixed_video_" + std::to_string(i) + ".mp4");
+        const fs::path local_video = numberedWorkPath(workDir, "mixed_video_", ".mp4", i);
         telemetry::ScopedPhase assetPhase(
             recorder_, telemetry::kOriginWorker, telemetry::kScopeTask,
             "worker.asset", "transfer", "download");
@@ -559,7 +572,7 @@ std::optional<RenderResult> RenderEngine::renderMixed(
                 local_video, item.source_in_us, duration_us, false, false});
         } else {
             const fs::path normalized =
-                workDir / ("mixed_segment_" + std::to_string(i) + ".mp4");
+                numberedWorkPath(workDir, "mixed_segment_", ".mp4", i);
             media::FramePipelineConfig nativeConfig;
             nativeConfig.input_path = local_video;
             nativeConfig.output_path = normalized;
@@ -874,7 +887,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                     std::to_string(i);
                 return failRender("native_segment_duration_invalid");
             }
-            const fs::path local_video = workDir / ("native_video_" + std::to_string(i) + ".mp4");
+            const fs::path local_video = numberedWorkPath(workDir, "native_video_", ".mp4", i);
             telemetry::ScopedPhase assetPhase(
                 recorder_, telemetry::kOriginWorker, telemetry::kScopeTask,
                 "worker.asset", "transfer", "download");
@@ -891,7 +904,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             jobs.push_back(NativeSegmentJob{
                 i,
                 local_video,
-                workDir / ("segment_" + std::to_string(i) + ".mp4"),
+                numberedWorkPath(workDir, "segment_", ".mp4", i),
                 item.scene_id,
                 duration_us,
                 item.source_in_us,
@@ -1009,7 +1022,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
     if (!nativeBatchCompleted) {
     for (size_t i = 0; i < plan.timeline.size(); ++i) {
         const auto& item = plan.timeline[i];
-        fs::path segmentOut = workDir / ("segment_" + std::to_string(i) + ".mp4");
+        fs::path segmentOut = numberedWorkPath(workDir, "segment_", ".mp4", i);
         auto params = makeParams(plan.canvas, item.transform, extractColorHex(item.source));
         params.copy_only = plan.copy_only;
 
@@ -1056,7 +1069,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
         if (std::holds_alternative<plan::ImageSource>(item.source)) {
             seg.source_type = "image";
             auto src = std::get<plan::ImageSource>(item.source);
-            fs::path localImg = workDir / ("image_" + std::to_string(i) + ".jpg");
+            fs::path localImg = numberedWorkPath(workDir, "image_", ".jpg", i);
             bool gotImage;
 			telemetry::ScopedPhase assetPhase(
 				recorder_, telemetry::kOriginWorker, telemetry::kScopeTask,
@@ -1083,7 +1096,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
         } else if (std::holds_alternative<plan::VideoSource>(item.source)) {
             seg.source_type = "video";
             auto src = std::get<plan::VideoSource>(item.source);
-            fs::path localVid = workDir / ("video_" + std::to_string(i) + ".mp4");
+            fs::path localVid = numberedWorkPath(workDir, "video_", ".mp4", i);
             bool gotVid;
 			telemetry::ScopedPhase assetPhase(
 				recorder_, telemetry::kOriginWorker, telemetry::kScopeTask,
@@ -1342,7 +1355,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             ScopedTimer t(metrics_, "audio_download_ms");
             for (size_t t = 0; t < plan.audio_tracks.size(); ++t) {
                 const auto& track = plan.audio_tracks[t];
-                fs::path localAudio = workDir / ("audio_track_" + std::to_string(t) + ".m4a");
+                fs::path localAudio = numberedWorkPath(workDir, "audio_track_", ".m4a", t);
                 if (file::downloadAsset(track.source_url, localAudio)) {
                     if (media::hasAudioStream(localAudio)) {
                         downloadedTracks.emplace_back(localAudio, &track);
