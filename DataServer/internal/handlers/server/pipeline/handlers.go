@@ -33,6 +33,7 @@ type Handlers struct {
 	assetService    *voiceoverassets.AssetService
 	inputPolicy     *inputsecurity.Policy
 	credentialVault *credentials.Vault
+	pipelineRuns    PipelineRunService
 }
 
 // JobsDeps bundles the optional jobs-layer dependencies used by
@@ -93,6 +94,7 @@ func HandlersFactory(
 		submission:   creatorflow.NewJobSubmissionService(resolver),
 		socialClient: socialclient.New(socialclient.ConfigFromRuntime(cfg.Runtime.Social)),
 		jobs:         JobsDeps{Reader: jobsReader, Writer: jobsWriter, CmdMgr: cmdMgr},
+		pipelineRuns: newPipelineRunService(nil, client, resolver),
 	}
 	h.targetResolver = targetpublishing.NewTargetResolver(h.socialClient, h.store)
 	return h
@@ -118,6 +120,9 @@ func (h *Handlers) WithStore(db *store.SQLiteStore) *Handlers {
 		}
 	}
 	h.targetResolver = targetpublishing.NewTargetResolver(h.socialClient, h.store)
+	// The pipeline-run service needs the store, wired later than the other
+	// service dependencies (client + resolver), so rebuild it here.
+	h.pipelineRuns = newPipelineRunService(db, h.client, h.resolver)
 	return h
 }
 
