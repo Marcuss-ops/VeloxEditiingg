@@ -149,47 +149,40 @@ func normalizeMIME(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
 }
 
-func sniffMIME(data []byte, path string) string {
-	if len(data) >= 12 && bytes.Equal(data[:8], []byte("\x89PNG\r\n\x1a\n")) {
-		return "image/png"
-	}
-	if len(data) >= 3 && bytes.Equal(data[:3], []byte{0xff, 0xd8, 0xff}) {
-		return "image/jpeg"
-	}
-	if len(data) >= 6 && (bytes.Equal(data[:6], []byte("GIF87a")) || bytes.Equal(data[:6], []byte("GIF89a"))) {
-		return "image/gif"
-	}
-	if len(data) >= 12 && bytes.Equal(data[:4], []byte("RIFF")) && bytes.Equal(data[8:12], []byte("WEBP")) {
-		return "image/webp"
-	}
-	if len(data) >= 12 && bytes.Equal(data[4:8], []byte("ftyp")) {
-		return "video/mp4"
-	}
-	if len(data) >= 3 && bytes.Equal(data[:3], []byte("ID3")) {
-		return "audio/mpeg"
-	}
+// mimeSniffer matches a leading byte sequence (magic number) to a MIME type.
+// sniffMIME walks the table in order, so a sniffer must be listed before any
+// broader sniffer whose byte prefix it shares.
+type mimeSniffer struct {
+	minLen int
+	mime   string
+	match  func(b []byte) bool
+}
+
+var mimeSniffers = []mimeSniffer{
+	{minLen: 12, mime: "image/png", match: func(b []byte) bool { return bytes.Equal(b[:8], []byte("\x89PNG\r\n\x1a\n")) }},
+	{minLen: 3, mime: "image/jpeg", match: func(b []byte) bool { return bytes.Equal(b[:3], []byte{0xff, 0xd8, 0xff}) }},
+	{minLen: 6, mime: "image/gif", match: func(b []byte) bool { return bytes.Equal(b[:6], []byte("GIF87a")) || bytes.Equal(b[:6], []byte("GIF89a")) }},
+	{minLen: 12, mime: "image/webp", match: func(b []byte) bool { return bytes.Equal(b[:4], []byte("RIFF")) && bytes.Equal(b[8:12], []byte("WEBP")) }},
+	{minLen: 12, mime: "video/mp4", match: func(b []byte) bool { return bytes.Equal(b[4:8], []byte("ftyp")) }},
+	{minLen: 3, mime: "audio/mpeg", match: func(b []byte) bool { return bytes.Equal(b[:3], []byte("ID3")) }},
 	// Valid MPEG audio is not required to carry an ID3 tag. Google Drive
 	// and other object stores commonly return bare MP3 frame streams whose
 	// first bytes are the MPEG sync word (0xffe) followed by a valid layer
 	// header. Treat those streams as audio/mpeg so the role-specific
 	// voiceover/audio validator does not reject an otherwise valid asset.
-	if len(data) >= 2 && data[0] == 0xff && (data[1]&0xe0) == 0xe0 {
-		return "audio/mpeg"
-	}
-	if len(data) >= 12 && bytes.Equal(data[:4], []byte("RIFF")) && bytes.Equal(data[8:12], []byte("WAVE")) {
-		return "audio/wav"
-	}
-	if len(data) >= 4 && bytes.Equal(data[:4], []byte("OggS")) {
-		return "audio/ogg"
-	}
-	if len(data) >= 4 && bytes.Equal(data[:4], []byte("fLaC")) {
-		return "audio/flac"
-	}
-	if len(data) >= 4 && (bytes.Equal(data[:4], []byte("wOFF")) || bytes.Equal(data[:4], []byte("wOF2"))) {
-		return "font/woff"
-	}
-	if len(data) >= 4 && (bytes.Equal(data[:4], []byte("OTTO")) || bytes.Equal(data[:4], []byte{0, 1, 0, 0})) {
-		return "font/ttf"
+	{minLen: 2, mime: "audio/mpeg", match: func(b []byte) bool { return b[0] == 0xff && (b[1]&0xe0) == 0xe0 }},
+	{minLen: 12, mime: "audio/wav", match: func(b []byte) bool { return bytes.Equal(b[:4], []byte("RIFF")) && bytes.Equal(b[8:12], []byte("WAVE")) }},
+	{minLen: 4, mime: "audio/ogg", match: func(b []byte) bool { return bytes.Equal(b[:4], []byte("OggS")) }},
+	{minLen: 4, mime: "audio/flac", match: func(b []byte) bool { return bytes.Equal(b[:4], []byte("fLaC")) }},
+	{minLen: 4, mime: "font/woff", match: func(b []byte) bool { return bytes.Equal(b[:4], []byte("wOFF")) || bytes.Equal(b[:4], []byte("wOF2")) }},
+	{minLen: 4, mime: "font/ttf", match: func(b []byte) bool { return bytes.Equal(b[:4], []byte("OTTO")) || bytes.Equal(b[:4], []byte{0, 1, 0, 0}) }},
+}
+
+func sniffMIME(data []byte, path string) string {
+	for _, s := range mimeSniffers {
+		if len(data) >= s.minLen && s.match(data) {
+			return s.mime
+		}
 	}
 	if json.Valid(bytes.TrimSpace(data)) {
 		return "application/json"
