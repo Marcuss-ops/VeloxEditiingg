@@ -7,6 +7,18 @@ import (
 	"testing"
 )
 
+// errInjectedClose is the sentinel returned by closeFailingWriter.Close().
+var errInjectedClose = errors.New("injected close failure")
+
+// closeFailingWriter is a durableWriteCloser double whose Close() returns
+// errInjectedClose after accepting a full write + sync. It lets the copy
+// fallback test exercise the dst.Close() guard without a real filesystem fault.
+type closeFailingWriter struct{}
+
+func (w *closeFailingWriter) Write(p []byte) (int, error) { return len(p), nil }
+func (w *closeFailingWriter) Sync() error                 { return nil }
+func (w *closeFailingWriter) Close() error                { return errInjectedClose }
+
 // testBlobStore is a minimal store.BlobStore implementation for testing
 // materializeDuplicateFinalBlob without pulling in the store package
 // (which depends on CGO via go-sqlite3). Only FinalDir() is exercised
@@ -62,6 +74,41 @@ func TestIsArtifactStorageKeyConflict_NilAndSubstring(t *testing.T) {
 	diffTable := errors.New("UNIQUE constraint failed: jobs.job_id")
 	if isArtifactStorageKeyConflict(diffTable) {
 		t.Error("UNIQUE-constraint on different table/columns must classify as non-conflict")
+	}
+}
+
+// TestCopyDuplicateFinalBlob_CloseFailure_Errors pins the dst.Close() guard
+// added to the copy fallback: a destination whose Close() fails must not be
+// reported as successfully materialized, even though copy + fsync succeeded.
+// Without the guard, materializeDuplicateFinalBlob would return nil and the
+// DB row would reference a blob whose durability is unknown.
+func TestCopyDuplicateFinalBlob_CloseFailure_Errors(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	bs := &testBlobStore{finalDir: tempDir}
+	s := &Service{blobStore: bs}
+
+	sourceKey := "job-x/art-1/sha256-abc.bin"
+	sourcePath := filepath.Join(bs.FinalDir(), filepath.FromSlash(sourceKey))
+	if err := os.MkdirAll(filepath.Dir(sourcePath), 0o755); err != nil {
+		t.Fatalf("mkdir source: %v", err)
+	}
+	if err := os.WriteFile(sourcePath, []byte("durable bytes"), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+
+	targetPath := filepath.Join(bs.FinalDir(), "art-1.dup-art-1.bin")
+
+	failing := &closeFailingWriter{}
+	err := s.copyDuplicateFinalBlob(sourcePath, targetPath, func(string) (durableWriteCloser, error) {
+		return failing, nil
+	})
+	if err == nil {
+		t.Fatal("copyDuplicateFinalBlob with failing Close must error, got nil")
+	}
+	if !errors.Is(err, errInjectedClose) {
+		t.Errorf("copyDuplicateFinalBlob error = %v, want injected close failure", err)
 	}
 }
 

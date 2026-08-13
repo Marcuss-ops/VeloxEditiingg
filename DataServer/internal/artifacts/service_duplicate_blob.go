@@ -102,12 +102,36 @@ func (s *Service) materializeDuplicateFinalBlob(sourceStorageKey, targetStorageK
 		syncDirectory(filepath.Dir(targetPath))
 		return nil
 	}
+	return s.copyDuplicateFinalBlob(sourcePath, targetPath, osCreateDupDst)
+}
+
+// durableWriteCloser is the minimal destination contract the duplicate-blob
+// copy fallback needs: stream bytes, flush to stable storage, then close.
+// *os.File satisfies it; tests substitute a double whose Close fails to pin
+// the success-without-close guard.
+type durableWriteCloser interface {
+	io.Writer
+	Sync() error
+	Close() error
+}
+
+// osCreateDupDst adapts os.Create to the durableWriteCloser contract for the
+// production copy fallback.
+func osCreateDupDst(path string) (durableWriteCloser, error) {
+	return os.Create(path)
+}
+
+// copyDuplicateFinalBlob streams sourcePath to targetPath with the copy
+// fallback's durability guarantees: copy → fsync → close (all error-checked)
+// → directory fsync. createDst is the injectable destination opener
+// (os.Create in production) so the failing-Close path is unit-testable.
+func (s *Service) copyDuplicateFinalBlob(sourcePath, targetPath string, createDst func(string) (durableWriteCloser, error)) error {
 	src, err := os.Open(sourcePath)
 	if err != nil {
 		return err
 	}
 	defer src.Close()
-	dst, err := os.Create(targetPath)
+	dst, err := createDst(targetPath)
 	if err != nil {
 		return err
 	}
