@@ -685,6 +685,10 @@ bool renderFrames(const FramePipelineConfig& config, FramePipelineResult* result
         const auto thread_start = std::chrono::steady_clock::now();
         int64_t frame_index = 0;
         int index = 0;
+        // Hoisted out of the per-frame loop: the FrameGraph error string is
+        // reused across frames instead of being default-constructed (and
+        // potentially heap-allocated on the error path) once per frame.
+        std::string graph_error;
         while (!failed.load() && render_queue.pop(index)) {
             if (index < 0) {
                 encode_queue.push(-1);
@@ -717,7 +721,6 @@ bool renderFrames(const FramePipelineConfig& config, FramePipelineResult* result
                     pixel_frame.planes[plane].data = rendered->data[plane];
                     pixel_frame.planes[plane].stride = rendered->linesize[plane];
                 }
-                std::string graph_error;
                 if (!config.frame_graph->apply(pixel_frame, frame_index, &graph_error)) {
                     failStage("frame graph apply failed: " + graph_error);
                     pool.release(index);

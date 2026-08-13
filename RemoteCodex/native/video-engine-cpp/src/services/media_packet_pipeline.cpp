@@ -241,8 +241,11 @@ bool InputSession::sourceWindowStartsOnKeyframe(int input_stream_index,
     }
     bool found = false;
     bool eof = false;
+    // Hoisted out of the per-packet loop for the same reason as the
+    // demuxAndRewrite read loop: readError is reused across packets and
+    // only assigned on failure (which returns immediately).
+    std::string readError;
     while (!eof) {
-        std::string readError;
         if (!demuxer_.readFrame(*packet, eof, readError)) {
             error = "av_read_frame(" + path_.string() + ") while checking keyframe alignment: " + readError;
             av_packet_free(&packet);
@@ -444,8 +447,12 @@ bool demuxAndRewrite(Demuxer& input,
     }
 
     bool eof = false;
+    // Hoisted out of the per-packet loop: readError is reused across
+    // packets instead of being default-constructed once per packet. The
+    // demuxer only assigns it on failure (which returns immediately), so
+    // reuse across the success path is safe.
+    std::string readError;
     while (!eof) {
-        std::string readError;
         if (!input.readFrame(*packet, eof, readError)) {
             error = "av_read_frame(" + path.string() + "): " + readError;
             av_packet_free(&packet);
