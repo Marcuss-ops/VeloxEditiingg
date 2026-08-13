@@ -11,7 +11,6 @@ package providers
 
 import (
 	"context"
-	"io"
 	"os"
 	"path/filepath"
 
@@ -47,17 +46,7 @@ func (l *LocalExportProvider) Deliver(_ context.Context, artifact *store.Artifac
 		return nil, err
 	}
 	target := filepath.Join(l.outputRoot, filepath.Base(artifact.LocalPath))
-	src, err := os.Open(artifact.LocalPath)
-	if err != nil {
-		return nil, err
-	}
-	defer src.Close()
-	dst, err := os.Create(target)
-	if err != nil {
-		return nil, err
-	}
-	defer dst.Close()
-	if _, err := io.Copy(dst, src); err != nil {
+	if err := store.CopyFile(target, artifact.LocalPath); err != nil {
 		return nil, err
 	}
 	return &deliveries.Result{
