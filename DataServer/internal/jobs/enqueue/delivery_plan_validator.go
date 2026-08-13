@@ -33,21 +33,9 @@ import (
 //     ErrTransient/ErrRateLimit SOFT, ErrNotConfigured HARD) stays
 //     here because the socialclient boundary is enqueue-only.
 //
-// Canonical rename note (YouTube → Delivery, PR-15.8):
-//
-//	YouTubeGroup       → DestinationGroupID   (was: youtube_group_id)
-//	YouTubeChannelID   → ExternalDestinationID (was: youtube_channel)
-//	YouTubeVideoID     → RemoteMediaID        (was: youtube_video_id)
-//	YouTubeURL         → RemoteURL            (was: youtube_published_url)
-//	YouTubeStatus      → DeliveryStatus       (was: youtube_publish_status)
-//
-// The five YouTube-prefixed fields are absent from active Go
-// runtime code at this revision. Velox does NOT SELECT
-// youtube_channels, youtube_oauth_tokens, or youtube_groups
-// anywhere (those tables are dropped); destination validation is
-// delegated to the external Social API at
-// POST /internal/v1/destinations/:id/validate (see the optional
-// pre-flight loop below).
+// Canonical rename note: YouTube-prefixed delivery field names are
+// retired; destination validation is delegated to the external
+// Social API. Do NOT reintroduce YouTube-prefixed fields.
 
 // =============================================================================
 // Typed validation errors — TYPE ALIAS to the shared package.

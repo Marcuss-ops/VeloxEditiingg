@@ -58,19 +58,6 @@
 #     main; reserved for the integration suite landing under
 #     DataServer/internal/integration_test/).
 #
-# Two-file carve-out (with explanatory comment):
-#   * DataServer/internal/jobs/enqueue/delivery_plan_validator.go
-#   * DataServer/internal/store/delivery_plan_payload.go
-#     Both files carry a NOTE block documenting the canonical rename
-#     intent (PR-15.8: "YouTubeGroup → DestinationGroupID, ... "). The
-#     literal `youtube_oauth_tokens` is cited as a DROPPED legacy table
-#     ("Velox no longer SELECTs youtube_channels, youtube_oauth_tokens,
-#     or youtube_groups"). The carve-out is intentional — the NOTE is a
-#     documentation block for future contributors who would otherwise
-#     try to reintroduce a YouTube-prefixed field. When (and only when)
-#     a future contributor removes those NOTE blocks, they MUST also
-#     delete the corresponding carve-out exclusions inline below.
-#
 # Triggers:
 #   * push to main                                 — immediate fail-fast
 #   * pull_request to main                         — pre-merge gating
@@ -136,8 +123,6 @@ jobs:
               ':!MILESTONE_PR_YOUTUBE_SOCIAL_SEPARATION.md' \
               ':!**/socialcontract/**' \
               ':!**/social_contract/**' \
-              ':!DataServer/internal/jobs/enqueue/delivery_plan_validator.go' \
-              ':!DataServer/internal/store/delivery_plan_payload.go' \
             || true
           )
 

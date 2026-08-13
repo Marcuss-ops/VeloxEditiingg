@@ -12,25 +12,11 @@
 // existing creatorflow.WriteResolverError and store test rig keep
 // working through the type alias.
 //
-// Canonical rename note (YouTube → Delivery, PR-15.8):
-//
-//	YouTubeGroup       → DestinationGroupID   (was: youtube_group_id)
-//	YouTubeChannelID   → ExternalDestinationID (was: youtube_channel; column on delivery_destinations)
-//	YouTubeVideoID     → RemoteMediaID        (was: youtube_video_id; persisted on job_deliveries.remote_id)
-//	YouTubeURL         → RemoteURL            (was: youtube_published_url)
-//	YouTubeStatus      → DeliveryStatus       (was: youtube_publish_status)
-//
-// All five YouTube-prefixed field names are absent from active Go
-// runtime code at this revision: the per-row model owns
-// `destination_id` + `metadata_json` and the durable delivery row
-// owns `remote_id` + `last_remote_status`. Velox no longer SELECTs
-// `youtube_channels`, `youtube_oauth_tokens`, or `youtube_groups`
-// (those tables are dropped in migration 090; the social_repo is the
-// authoritative owner of platform metadata). Future contributors
-// reintroducing a YouTube-prefixed field into this struct must
-// replace it with the canonical Destination-prefixed equivalent
-// above AND open a new migration; do NOT add it as an additional
-// name.
+// Canonical rename note: YouTube-prefixed delivery field names are
+// retired. The durable delivery row owns the provider-neutral
+// `remote_id` + `last_remote_status`, and platform metadata is owned
+// by the social_repo. Do NOT reintroduce YouTube-prefixed fields
+// into this struct.
 package store
 
 import (
