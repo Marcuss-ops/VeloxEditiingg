@@ -5,10 +5,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 
 	"velox-server/internal/inputsecurity"
 	"velox-shared/assetref"
 )
+
+// remoteRewriteConcurrency bounds how many remote references a single payload
+// rewrite downloads in parallel. The inputs are independent, but unbounded
+// fan-out would spike the SSRF fetcher and the staging blob store for a job
+// with hundreds of media URLs.
+const remoteRewriteConcurrency = 8
 
 // RewriteRemoteInputPayload is the single acquisition boundary for remote
 // media references that are already present in the worker payload. The
@@ -323,27 +330,67 @@ func rewriteStringListField(ctx context.Context, s *AssetService, item map[strin
 	}
 	switch values := item[key].(type) {
 	case []string:
-		for index, value := range values {
-			rewritten, err := rewriteReference(ctx, s, value, kind)
-			if err != nil {
-				return fmt.Errorf("%s[%d]: %w", key, index, err)
-			}
-			values[index] = rewritten
+		rewritten, errIndex, err := rewriteReferencesConcurrently(ctx, s, values, kind)
+		if err != nil {
+			return fmt.Errorf("%s[%d]: %w", key, errIndex, err)
+		}
+		for i := range values {
+			values[i] = rewritten[i]
 		}
 	case []interface{}:
-		for index, raw := range values {
-			value, ok := raw.(string)
-			if !ok || strings.TrimSpace(value) == "" {
-				continue
+		refs := make([]string, len(values))
+		for i, raw := range values {
+			if value, ok := raw.(string); ok {
+				refs[i] = value
 			}
-			rewritten, err := rewriteReference(ctx, s, value, kind)
-			if err != nil {
-				return fmt.Errorf("%s[%d]: %w", key, index, err)
+		}
+		rewritten, errIndex, err := rewriteReferencesConcurrently(ctx, s, refs, kind)
+		if err != nil {
+			return fmt.Errorf("%s[%d]: %w", key, errIndex, err)
+		}
+		for i := range values {
+			if _, ok := values[i].(string); ok {
+				values[i] = rewritten[i]
 			}
-			values[index] = rewritten
 		}
 	}
 	return nil
+}
+
+// rewriteReferencesConcurrently resolves refs in parallel (bounded by
+// remoteRewriteConcurrency) and returns the rewritten references index-aligned.
+// Empty references pass through untouched. The lowest failing index wins so
+// error reporting stays deterministic even though resolution is concurrent.
+func rewriteReferencesConcurrently(ctx context.Context, s *AssetService, refs []string, kind inputsecurity.Kind) ([]string, int, error) {
+	out := make([]string, len(refs))
+	errs := make([]error, len(refs))
+	sem := make(chan struct{}, remoteRewriteConcurrency)
+	var wg sync.WaitGroup
+	for i, ref := range refs {
+		ref = strings.TrimSpace(ref)
+		if ref == "" {
+			out[i] = ref
+			continue
+		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int, ref string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if rewritten, err := rewriteReference(ctx, s, ref, kind); err != nil {
+				errs[i] = err
+			} else {
+				out[i] = rewritten
+			}
+		}(i, ref)
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			return nil, i, err
+		}
+	}
+	return out, -1, nil
 }
 
 func rewriteReference(ctx context.Context, s *AssetService, reference string, kind inputsecurity.Kind) (string, error) {
