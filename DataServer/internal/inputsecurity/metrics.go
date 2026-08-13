@@ -1,7 +1,6 @@
 package inputsecurity
 
 import (
-	"sort"
 	"sync"
 )
 
@@ -93,14 +92,4 @@ func (m *Metrics) Snapshot() MetricsSnapshot {
 		return out
 	}
 	return MetricsSnapshot{Rejections: copyMap(m.rejections), Bytes: copyMap(m.bytes), Quarantines: copyMap(m.quarantines)}
-}
-
-// MetricKeys returns sorted keys for deterministic diagnostics and tests.
-func MetricKeys(values map[string]uint64) []string {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
 }

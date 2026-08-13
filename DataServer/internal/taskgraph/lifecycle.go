@@ -76,14 +76,6 @@ func (l *LifecycleService) SetClock(now func() time.Time) {
 // Repo exposes the canonical taskgraph.Repository.
 func (l *LifecycleService) Repo() Repository { return l.repo }
 
-// CreateTask creates a new task in PENDING state.
-func (l *LifecycleService) CreateTask(ctx context.Context, task *Task) error {
-	if task == nil {
-		return fmt.Errorf("taskgraph: nil task")
-	}
-	return l.repo.Create(ctx, task)
-}
-
 // Transition validates and executes a status transition.
 func (l *LifecycleService) Transition(ctx context.Context, id string, from, to Status, revision int) error {
 	if !CanTransition(from, to) {

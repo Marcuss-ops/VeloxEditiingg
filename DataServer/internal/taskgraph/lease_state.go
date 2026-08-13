@@ -16,22 +16,3 @@ const (
 func (s LeaseState) IsTerminal() bool {
 	return s == LeaseReleased || s == LeaseExpired || s == LeaseRevoked
 }
-
-// LeaseStateFromTaskStatus projects the persisted task row onto its lease
-// dimension at compatibility boundaries. Empty worker/lease identity means
-// there is no active lease; task status alone never invents lease identity.
-func LeaseStateFromTaskStatus(status Status, workerID, leaseID string) LeaseState {
-	if workerID == "" || leaseID == "" {
-		return LeaseReleased
-	}
-	switch status {
-	case StatusLeased, StatusRunning:
-		return LeaseActive
-	case StatusTimedOut:
-		return LeaseExpired
-	case StatusCancelled:
-		return LeaseRevoked
-	default:
-		return LeaseReleased
-	}
-}

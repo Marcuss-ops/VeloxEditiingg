@@ -229,13 +229,6 @@ func NewTaskReportIngestionService(
 	}, nil
 }
 
-// SetLogger overrides the default logger (test-friendly).
-func (s *TaskReportIngestionService) SetLogger(l *log.Logger) {
-	if l != nil {
-		s.logger = l
-	}
-}
-
 // IngestTaskResult executes the audit-mandated sequence for a single TaskResult:
 //
 //  1. Validate wire identity tuple (TaskID + AttemptID + LeaseID + WorkerID

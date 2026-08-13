@@ -25,17 +25,6 @@ type ResolvedAsset struct {
 	Reference      string `json:"reference"`
 }
 
-// VeloxReference returns the canonical velox-asset URI.
-func (a *ResolvedAsset) VeloxReference() string {
-	if a == nil {
-		return ""
-	}
-	if strings.TrimSpace(a.AssetID) == "" {
-		return ""
-	}
-	return VeloxAssetScheme + "://" + strings.TrimSpace(a.AssetID)
-}
-
 // Store manages the canonical local asset directory.
 type Store struct {
 	dataDir               string

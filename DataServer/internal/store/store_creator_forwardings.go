@@ -58,10 +58,6 @@ func (s CreatorForwardingStatus) IsTerminal() bool {
 }
 
 // IsLeasable returns true for statuses a runner can claim.
-func (s CreatorForwardingStatus) IsLeasable() bool {
-	return s == CFStatusPending || s == CFStatusRetryWait || s == CFStatusPolling
-}
-
 // CreatorForwarding is the typed view of a creator_forwardings row.
 type CreatorForwarding struct {
 	ForwardingID     string `json:"forwarding_id"`

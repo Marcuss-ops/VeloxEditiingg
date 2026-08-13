@@ -134,11 +134,6 @@ func NewService(
 }
 
 // WithUploadTTL adjusts the upload session expiry window (tests).
-func (s *Service) WithUploadTTL(d time.Duration) *Service {
-	s.uploadTTL = d
-	return s
-}
-
 // WithMediaProbeQueue wires the persistent asynchronous media probe queue.
 // Production bootstrap always supplies this dependency; leaving it nil keeps
 // the legacy synchronous gate available to older tests/adapters during the

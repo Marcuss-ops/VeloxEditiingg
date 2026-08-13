@@ -345,15 +345,6 @@ func (n *NopBlobStore) FinalDir() string   { return n.baseDir }
 var _ BlobStore = (*FilesystemBlobStore)(nil)
 var _ BlobStore = (*NopBlobStore)(nil)
 
-// Extension returns the file extension from a filename string.
-func Extension(filename string) string {
-	ext := filepath.Ext(filename)
-	if ext == "" {
-		return ".bin"
-	}
-	return ext
-}
-
 // CopyFile copies a file from src to dst (for provider read operations).
 func CopyFile(dst, src string) error {
 	in, err := os.Open(filepath.Clean(src))
