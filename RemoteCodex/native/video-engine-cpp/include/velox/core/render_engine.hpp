@@ -82,6 +82,22 @@ private:
     void emitSidecar(const std::string& output_path) const;
     void recordFramePipeline(const media::FramePipelineResult& result);
 
+    // Subtitle burn stage: download the first subtitle track and burn it into
+    // the concatenated video. When the plan carries no subtitle track,
+    // videoForMux is left as the untouched input. Returns false after setting
+    // result.error and invoking failRender; the caller must return result.
+    // On success videoForMux points to the file the mux stage should consume.
+    bool burnSubtitles(
+        const plan::RenderPlan& plan,
+        const std::filesystem::path& workDir,
+        const std::filesystem::path& outPath,
+        const std::filesystem::path& videoOnly,
+        const std::chrono::steady_clock::time_point& renderStart,
+        RenderResult& result,
+        const std::function<RenderResult(const std::string&)>& failRender,
+        const std::function<void(const std::filesystem::path&)>& trackPartial,
+        std::filesystem::path& videoForMux);
+
     // Copy-only packet path: a strict zero-spawn contract. It stages video
     // sources in place, resolves a single FINAL_AUDIO_COPY track, and muxes
     // the final MP4 directly through the in-process LibAV muxer with no
