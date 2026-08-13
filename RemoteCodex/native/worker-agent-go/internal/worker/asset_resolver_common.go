@@ -172,8 +172,12 @@ func (w *Worker) resolveVerifiedAssetReference(ctx context.Context, reference st
 		// and verifies the bytes in downloadVeloxAssetWithMetadata.
 		metadata.SHA256 = strings.TrimSpace(metadata.SHA256)
 	}
-	if metadata.SHA256 != "" && !validSHA256(metadata.SHA256) {
-		return "", fmt.Errorf("common asset resolver: %s: invalid SHA-256 for %s", field, reference)
+	if metadata.SHA256 != "" {
+		canonical, err := assetref.ParseContentHash(metadata.SHA256)
+		if err != nil {
+			return "", fmt.Errorf("common asset resolver: %s: invalid SHA-256 for %s", field, reference)
+		}
+		metadata.SHA256 = canonical.String()
 	}
 	if metadata.SizeBytes < 0 {
 		return "", fmt.Errorf("common asset resolver: %s: invalid size_bytes for %s", field, reference)

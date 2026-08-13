@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -137,14 +136,6 @@ func cachedAssetPathTimedWithContext(ctx context.Context, cacheDir, assetID stri
 		}
 	}
 	return cachedPath, verifyDuration, nil
-}
-
-func validSHA256(value string) bool {
-	if len(value) != sha256.Size*2 {
-		return false
-	}
-	_, err := hex.DecodeString(value)
-	return err == nil
 }
 
 // sha256File computes the lowercase hex SHA-256 of a file.
