@@ -41,13 +41,6 @@ func (t *Transfer) removeWaiter(id uint64) bool {
 	return len(t.waiters) == 0
 }
 
-// waiterCount returns the number of registered waiters.
-func (t *Transfer) waiterCount() int {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return len(t.waiters)
-}
-
 // hasJobReference reports whether this transfer belongs to jobID's aggregate.
 // Unlike the active waiter set, it remains true after Resolve returns so the
 // job read model can report the completed asset.

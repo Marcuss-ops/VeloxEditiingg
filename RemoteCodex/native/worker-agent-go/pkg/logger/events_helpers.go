@@ -14,22 +14,6 @@ import (
 	obs "velox-shared/obs"
 )
 
-// withEvent constructs an event with the supplied code and attaches every
-// supplied key/value pair via obs.Event.WithField. Returning the *Event
-// (rather than just the JSON string) lets callers tweak it further if
-// needed before emission.
-func withEvent(code EventCode, kvs ...interface{}) *obs.Event {
-	e := obs.NewEvent(code)
-	for i := 0; i+1 < len(kvs); i += 2 {
-		key, _ := kvs[i].(string)
-		if key == "" {
-			continue
-		}
-		e.WithField(key, kvs[i+1])
-	}
-	return e
-}
-
 // LogStartup logs a STARTUP event.
 func LogStartup(workerID, version, masterURL string) {
 	e := obs.NewEvent(EventStartup).

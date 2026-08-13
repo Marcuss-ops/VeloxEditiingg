@@ -80,7 +80,6 @@ type scheduler struct {
 	items  map[assetref.AssetKey]*schedItem
 	cond   *sync.Cond
 	closed bool
-	seq    int64
 
 	wg sync.WaitGroup
 }

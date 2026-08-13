@@ -175,21 +175,3 @@ func parseJSONStringSlice(s string) []string {
 	}
 	return arr
 }
-
-// getRawEntityString safely extracts a JSON string from the rawEntities map.
-// Returns empty string if not found or invalid.
-func getRawEntityString(rawEntities map[string]interface{}, key string) string {
-	if rawEntities == nil {
-		return ""
-	}
-	if v, ok := rawEntities[key]; ok {
-		switch val := v.(type) {
-		case string:
-			return val
-		default:
-			data, _ := json.Marshal(val)
-			return string(data)
-		}
-	}
-	return ""
-}

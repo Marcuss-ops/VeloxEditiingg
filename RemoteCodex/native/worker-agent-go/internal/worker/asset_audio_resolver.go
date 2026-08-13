@@ -62,9 +62,3 @@ func (w *Worker) resolveVoiceoverAudioPath(ctx context.Context, ref string, para
 	}
 	return path, nil
 }
-
-// resolveAudioPayload is retained as a compatibility wrapper; all audio
-// domains now use the common verified resolver.
-func (w *Worker) resolveAudioPayload(ctx context.Context, payload map[string]interface{}) (map[string]interface{}, error) {
-	return w.resolveCommonAssetPayload(ctx, payload)
-}

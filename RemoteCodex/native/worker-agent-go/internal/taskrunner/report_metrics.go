@@ -396,13 +396,6 @@ func maxInt64(a, b int64) int64 {
 	return b
 }
 
-func firstPositive(primary, fallback any) int64 {
-	if value := positiveIntegerToInt64(primary); value > 0 {
-		return value
-	}
-	return positiveIntegerToInt64(fallback)
-}
-
 // firstPresent returns the first numerically valid value whose key exists.
 // Unlike firstPositive, zero is meaningful here: a producer that reports an
 // attempt-scoped counter has authority over the fallback provider even when

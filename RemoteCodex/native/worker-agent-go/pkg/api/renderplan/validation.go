@@ -14,8 +14,6 @@ import (
 	"velox-worker-agent/pkg/validation"
 )
 
-var requiredFields = []string{"job_id", "job_type", "created_at"}
-
 var ValidJobTypes = map[string]bool{
 	"render":        true,
 	"process_video": true,

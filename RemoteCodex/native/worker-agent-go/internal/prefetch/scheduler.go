@@ -658,13 +658,6 @@ func (s *Scheduler) detachJobLocked(job futureasset.Job) {
 	}
 }
 
-func (s *Scheduler) allowed(distance int, _ int64) bool {
-	s.mu.Lock()
-	state := s.diskStateLocked()
-	s.mu.Unlock()
-	return state == diskNormal || (state == diskRestricted && distance == 1)
-}
-
 func (s *Scheduler) diskStateLocked() diskPressureState {
 	if s.cfg.DiskUsagePercent == nil {
 		return diskNormal
@@ -691,15 +684,6 @@ func (s *Scheduler) diskStateLocked() diskPressureState {
 	return s.state
 }
 
-func (s *Scheduler) reserveBytes(n int64) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if n < 0 || s.bytes+n > s.cfg.ByteBudget {
-		return false
-	}
-	s.bytes += n
-	return true
-}
 func (s *Scheduler) releaseWork(n int64) {
 	s.mu.Lock()
 	s.bytes -= n

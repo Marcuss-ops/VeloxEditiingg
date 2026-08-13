@@ -44,12 +44,3 @@ func (w *Worker) getHeartbeatInterval() time.Duration {
 		return heartbeatIntervalIdle
 	}
 }
-
-// calculateBackoff returns the next backoff interval capped at heartbeatMaxBackoff.
-func (w *Worker) calculateBackoff(current time.Duration) time.Duration {
-	next := time.Duration(float64(current) * heartbeatBackoffMultiplier)
-	if next > heartbeatMaxBackoff {
-		return heartbeatMaxBackoff
-	}
-	return next
-}

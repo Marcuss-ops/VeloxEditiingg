@@ -185,11 +185,6 @@ type wallClock struct{}
 
 func (wallClock) Now() time.Time { return time.Now().UTC() }
 
-// fixedClock is a deterministic clock for tests.
-type fixedClock struct{ T time.Time }
-
-func (f fixedClock) Now() time.Time { return f.T }
-
 // noopTelemetry discards spans. Executors must check the returned error
 // if they record; today PR-3.2 returns nil from every call.
 type noopTelemetry struct{}

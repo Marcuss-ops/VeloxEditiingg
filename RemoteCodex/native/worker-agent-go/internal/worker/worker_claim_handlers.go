@@ -41,19 +41,6 @@ func msgToCommand(msg controltransport.ControlMessage) api.WorkerCommand {
 	return wc
 }
 
-// getIntParam extracts an int value from a parameters map, returning 0 if missing.
-func getIntParam(params map[string]interface{}, key string) int {
-	switch v := params[key].(type) {
-	case float64:
-		return int(v)
-	case int:
-		return v
-	case int64:
-		return int(v)
-	}
-	return 0
-}
-
 /* PR-protobuf-refactor: sendAccept + sendReject removed — legacy
    JobAccepted/JobRejected messages no longer have transport encoding.
    Task-native sendTaskAccepted + sendTaskReject are the canonical path. */

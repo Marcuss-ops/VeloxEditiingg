@@ -36,23 +36,6 @@ func (w *Worker) assetCacheDir() string {
 	return filepath.Join(os.TempDir(), "velox-worker", "assets", "audio")
 }
 
-// assetImageCacheDir returns the directory where downloaded image assets are
-// cached. Returns the canonical assets/image subdirectory.
-func (w *Worker) assetImageCacheDir() string {
-	if w != nil && w.config != nil {
-		if trimmed := strings.TrimSpace(w.config.AssetCacheDir); trimmed != "" {
-			return filepath.Join(trimmed, "assets", "image")
-		}
-		if trimmed := strings.TrimSpace(w.config.StateDir); trimmed != "" {
-			return filepath.Join(trimmed, "asset-cache", "assets", "image")
-		}
-		if trimmed := strings.TrimSpace(w.config.WorkDir); trimmed != "" {
-			return filepath.Join(trimmed, "asset-cache", "assets", "image")
-		}
-	}
-	return filepath.Join(os.TempDir(), "velox-worker", "assets", "image")
-}
-
 // cacheKeyPrefix builds the filesystem-safe cache key from assetID and an
 // optional SHA-256 prefix. When sha256Prefix is non-empty, the first 12
 // characters are embedded in the filename so different versions of the same
@@ -83,14 +66,6 @@ func cacheKeyPrefix(assetID string, sha256Prefix string) string {
 func cachedAssetPath(cacheDir, assetID string, expectedSHA256 string, expectedSizeBytes int64) (string, error) {
 	path, _, err := cachedAssetPathTimedWithContext(context.Background(), cacheDir, assetID, expectedSHA256, expectedSizeBytes)
 	return path, err
-}
-
-// cachedAssetPathTimed is the compatibility wrapper used by legacy callers
-// that do not carry an attempt context. Production resolution uses
-// cachedAssetPathTimedWithContext so cache verification/eviction facts enter
-// the attempt journal rather than a Prometheus sink.
-func cachedAssetPathTimed(cacheDir, assetID string, expectedSHA256 string, expectedSizeBytes int64) (string, time.Duration, error) {
-	return cachedAssetPathTimedWithContext(context.Background(), cacheDir, assetID, expectedSHA256, expectedSizeBytes)
 }
 
 func cachedAssetPathTimedWithContext(ctx context.Context, cacheDir, assetID string, expectedSHA256 string, expectedSizeBytes int64) (string, time.Duration, error) {
@@ -276,20 +251,6 @@ func syncAssetDirectory(path string) error {
 // syncAssetDirectoryFn is injectable only for deterministic atomic-promotion
 // failure tests. Production always uses syncAssetDirectory.
 var syncAssetDirectoryFn = syncAssetDirectory
-
-// writeVeloxAssetToCache streams a successful response body to a stable
-// inside the cache directory, then atomically renames to the final path.
-// Sniffs for HTML on both the Content-Type header and the first 512 bytes
-// of the payload to refuse HTML responses from misconfigured upstreams.
-// When expectedSHA256 is non-empty, the cached filename embeds the SHA-256
-// prefix so different asset versions don't collide.
-//
-// The computed SHA-256 of the stored bytes is returned (empty on error) so
-// callers can remember the digest for later integrity-verified reuse even
-// when the payload supplied no expected hash.
-func writeVeloxAssetToCache(cacheDir, assetID string, expectedSHA256 string, expectedSizeBytes int64, resp *http.Response) (string, int64, string, time.Duration, error) {
-	return writeVeloxAssetToCacheAtOffset(cacheDir, assetID, expectedSHA256, expectedSizeBytes, resp, 0)
-}
 
 // writeVeloxAssetToCacheAtOffset appends a 206 response to an existing
 // partial, or truncates/restarts the partial when offset is zero. It never

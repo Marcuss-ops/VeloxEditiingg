@@ -483,20 +483,6 @@ func (t *Transfer) outcome() (cacheHit bool, completedAt time.Time) {
 	return t.cacheHit, t.completedAt
 }
 
-// hasWaiter reports whether the transfer currently has a waiter for jobID.
-func (t *Transfer) hasWaiter(jobID string) bool {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	// Active waiter identity is intentionally opaque; job membership is
-	// represented by the durable jobRefs map below.
-	for _, ref := range t.jobRefs {
-		if ref.JobID == jobID {
-			return true
-		}
-	}
-	return false
-}
-
 // queuedAtLocked returns the queued timestamp (for the stable queue ordering).
 func (t *Transfer) queuedAtLocked() time.Time {
 	t.mu.Lock()

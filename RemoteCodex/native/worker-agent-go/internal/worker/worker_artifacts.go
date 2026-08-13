@@ -51,17 +51,6 @@ func (w *Worker) registerPendingArtifactAck(taskID string) chan controltransport
 	return ch
 }
 
-// waitForArtifactAck blocks until a message for taskID arrives on
-// the dispatcher channel OR the deadline elapses. Returns the
-// typed reply on success; nil + a timeout error on deadline. The
-// caller MUST call unregisterPendingArtifactAck in a defer to keep
-// the map tidy.
-func (w *Worker) waitForArtifactAck(ctx context.Context, taskID string, deadline time.Time) (controltransport.ControlMessage, error) {
-	ch := w.registerPendingArtifactAck(taskID)
-	defer w.unregisterPendingArtifactAck(taskID)
-	return w.waitForRegisteredArtifactAck(ctx, ch, deadline)
-}
-
 // waitForRegisteredArtifactAck waits on a dispatcher channel that the caller
 // registered before sending the request. That ordering is required because a
 // fast master may reply immediately after TaskOutputDeclared is sent.

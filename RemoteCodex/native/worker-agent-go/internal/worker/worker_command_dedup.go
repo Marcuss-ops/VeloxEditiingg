@@ -69,18 +69,3 @@ func (w *Worker) markCommandSeen(cmd api.WorkerCommand) bool {
 	w.seenCommands[key] = now
 	return false
 }
-
-// cleanupSeenCommands performs a full cleanup of expired command entries.
-// Call this periodically (e.g., every 10 minutes) to bound map growth.
-func (w *Worker) cleanupSeenCommands() {
-	now := time.Now().UTC()
-
-	w.commandMu.Lock()
-	defer w.commandMu.Unlock()
-
-	for k, t := range w.seenCommands {
-		if now.Sub(t) > seenCommandTTL {
-			delete(w.seenCommands, k)
-		}
-	}
-}

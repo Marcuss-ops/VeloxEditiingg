@@ -43,7 +43,6 @@ type RenderClient struct {
 	logger         *logger.Logger
 	onProgress     DetailedProgressFunc
 	legacyProgress ProgressFunc
-	tempFiles      []string
 }
 
 // NewRenderClient creates a new native render client.

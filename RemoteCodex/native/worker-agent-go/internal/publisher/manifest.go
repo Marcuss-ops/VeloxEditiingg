@@ -27,7 +27,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"hash"
 	"io"
 	"net/http"
 	"os"
@@ -242,10 +241,6 @@ func Sha256OfBytes(b []byte) string {
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:])
 }
-
-// resetHash is an internal helper so tests can plug in a custom hash
-// factory; kept unexported so the public surface stays minimal.
-func resetHash() hash.Hash { return sha256.New() }
 
 // ────────────────────────────────────────────────────────────────────────
 // MIME + MP4 detection.

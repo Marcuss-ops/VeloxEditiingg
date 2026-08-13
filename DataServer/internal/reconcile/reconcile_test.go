@@ -10,7 +10,6 @@ import (
 )
 
 type fakeReconciler struct {
-	name string
 	// calls counts Reconcile invocations.
 	calls *atomic.Int32
 	// err returned by Reconcile; nil when not set.
