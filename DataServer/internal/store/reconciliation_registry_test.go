@@ -1,17 +1,14 @@
-package main
+package store
 
 import (
 	"context"
 	"path/filepath"
 	"testing"
 	"time"
-
-	"velox-server/internal/reconcile"
-	"velox-server/internal/store"
 )
 
-func TestStaleExecutionRegistryEntryAppliesAndConverges(t *testing.T) {
-	dbStore, err := store.NewSQLiteStore(filepath.Join(t.TempDir(), "stale-reconcile.db"))
+func TestBuildReconciliationRegistryStaleExecutionConverges(t *testing.T) {
+	dbStore, err := NewSQLiteStore(filepath.Join(t.TempDir(), "stale-reconcile.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,16 +24,8 @@ func TestStaleExecutionRegistryEntryAppliesAndConverges(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	stale, err := store.NewStaleExecutionReconciler(dbStore)
+	registry, err := BuildReconciliationRegistry(dbStore, 0, 0, 10, "test-reconciliation")
 	if err != nil {
-		t.Fatal(err)
-	}
-	registry := reconcile.NewRegistry()
-	if err := registry.Register(reconcile.NameStaleExecution, staleExecutionRegistryEntry{
-		reconciler: stale,
-		limit:      10,
-		actor:      "test-reconciliation",
-	}); err != nil {
 		t.Fatal(err)
 	}
 

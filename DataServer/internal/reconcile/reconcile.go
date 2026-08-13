@@ -30,6 +30,7 @@ package reconcile
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 )
@@ -160,4 +161,32 @@ func (r Report) Err() error {
 		}
 	}
 	return nil
+}
+
+// RunPeriodically runs the registry once immediately, then on every tick,
+// until ctx is cancelled. One failing entry never stops the remaining
+// entries, and per-entry failures are logged so a failing reconciler retries
+// on the next tick without masking the other passes.
+func RunPeriodically(ctx context.Context, r *Registry, tick time.Duration) error {
+	runOnce := func() {
+		report := r.Reconcile(ctx, time.Now().UTC())
+		for _, entry := range report.Entries {
+			if entry.Err != nil {
+				log.Printf("[RECONCILIATION] entry %s failed after %s: %v", entry.Name, entry.Duration, entry.Err)
+			}
+		}
+	}
+	// Immediate first pass so a job stuck in AWAITING_ARTIFACT / DELIVERING
+	// does not wait a full tick after a master restart.
+	runOnce()
+	ticker := time.NewTicker(tick)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			runOnce()
+		}
+	}
 }
