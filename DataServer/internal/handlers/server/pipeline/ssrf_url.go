@@ -48,6 +48,7 @@ import (
 	"net"
 	"net/url"
 	"strings"
+	"sync"
 
 	"velox-server/internal/config"
 )
@@ -355,6 +356,12 @@ func hostnameAllowed(host string, allowDomains []string) bool {
 // allowDomains / allowLoopbackHTTP are shorthand for the matching
 // cfg values; the function is a pure validator with no global state
 // so unit tests can pin in a deterministic config snippet.
+//
+// Each URL check is independent and, in the default blocklist-only mode,
+// performs a blocking DNS resolution (the slowest part of the validator).
+// The checks are therefore fanned out over a bounded worker pool instead of
+// being serialized one scene after another, which would multiply the DNS
+// latency by the number of asset URLs on the submit request path.
 func ValidateAllExternalURLs(req SubmitJobRequest, cfg *config.Config) []SSRFValidationError {
 	if cfg == nil {
 		// Defensive: nil cfg means callers passed a bad argument.
@@ -364,38 +371,57 @@ func ValidateAllExternalURLs(req SubmitJobRequest, cfg *config.Config) []SSRFVal
 	domains := cfg.AllowedExternalDomains
 	allowLoopbackHTTP := cfg.Runtime.AllowLoopbackAdminAuthDev
 
-	var errs []SSRFValidationError
+	// Flatten the scene asset URLs into an ordered work list so results can
+	// be re-collected in scene order regardless of which lookup finishes
+	// first (the returned error slice stays deterministic).
+	type candidate struct {
+		path string
+		url  string
+	}
+	var candidates []candidate
 	for i, s := range req.Scenes {
 		base := fmt.Sprintf("scenes.%d", i)
 		if s.Clip != nil {
-			if err := ValidateExternalURL(s.Clip.URL, domains, allowLoopbackHTTP); err != nil {
-				if se, ok := err.(*SSRFValidationError); ok {
-					if se.Path == "" {
-						se.Path = base + ".clip.url"
-					}
-					errs = append(errs, *se)
-				}
-			}
+			candidates = append(candidates, candidate{path: base + ".clip.url", url: s.Clip.URL})
 		}
 		if s.Voiceover != nil {
-			if err := ValidateExternalURL(s.Voiceover.URL, domains, allowLoopbackHTTP); err != nil {
-				if se, ok := err.(*SSRFValidationError); ok {
-					if se.Path == "" {
-						se.Path = base + ".voiceover.url"
-					}
-					errs = append(errs, *se)
-				}
-			}
+			candidates = append(candidates, candidate{path: base + ".voiceover.url", url: s.Voiceover.URL})
 		}
 		if s.Subtitles != nil {
-			if err := ValidateExternalURL(s.Subtitles.URL, domains, allowLoopbackHTTP); err != nil {
+			candidates = append(candidates, candidate{path: base + ".subtitles.url", url: s.Subtitles.URL})
+		}
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	// Bounded fan-out: at most maxConcurrentLookups DNS resolutions in
+	// flight, so a MaxScenes-sized request cannot spawn thousands of
+	// unbounded goroutines against the resolver.
+	const maxConcurrentLookups = 16
+	sem := make(chan struct{}, maxConcurrentLookups)
+	results := make([]*SSRFValidationError, len(candidates))
+	var wg sync.WaitGroup
+	for i, c := range candidates {
+		wg.Add(1)
+		sem <- struct{}{} // blocks the collector loop when the pool is full
+		go func(i int, c candidate) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if err := ValidateExternalURL(c.url, domains, allowLoopbackHTTP); err != nil {
 				if se, ok := err.(*SSRFValidationError); ok {
-					if se.Path == "" {
-						se.Path = base + ".subtitles.url"
-					}
-					errs = append(errs, *se)
+					se.Path = c.path
+					results[i] = se
 				}
 			}
+		}(i, c)
+	}
+	wg.Wait()
+
+	var errs []SSRFValidationError
+	for _, r := range results {
+		if r != nil {
+			errs = append(errs, *r)
 		}
 	}
 	return errs
