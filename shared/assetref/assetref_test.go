@@ -68,12 +68,12 @@ func TestDriveFileID_FileLinkForm(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := DriveFileID(tc.in)
+			got, err := ParseDriveFileID(tc.in)
 			if err != nil {
-				t.Fatalf("DriveFileID(%q) unexpected error: %v", tc.in, err)
+				t.Fatalf("ParseDriveFileID(%q) unexpected error: %v", tc.in, err)
 			}
-			if got != tc.want {
-				t.Fatalf("DriveFileID(%q) = %q, want %q", tc.in, got, tc.want)
+			if got.String() != tc.want {
+				t.Fatalf("ParseDriveFileID(%q) = %q, want %q", tc.in, got.String(), tc.want)
 			}
 		})
 	}
@@ -125,12 +125,12 @@ func TestDriveFileID_QueryForm(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := DriveFileID(tc.in)
+			got, err := ParseDriveFileID(tc.in)
 			if err != nil {
-				t.Fatalf("DriveFileID(%q) unexpected error: %v", tc.in, err)
+				t.Fatalf("ParseDriveFileID(%q) unexpected error: %v", tc.in, err)
 			}
-			if got != tc.want {
-				t.Fatalf("DriveFileID(%q) = %q, want %q", tc.in, got, tc.want)
+			if got.String() != tc.want {
+				t.Fatalf("ParseDriveFileID(%q) = %q, want %q", tc.in, got.String(), tc.want)
 			}
 		})
 	}
@@ -152,13 +152,13 @@ func TestDriveFileID_FoldersRejected(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := DriveFileID(tc.in)
+			_, err := ParseDriveFileID(tc.in)
 			if err == nil {
-				t.Fatalf("DriveFileID(%q) expected error, got nil", tc.in)
+				t.Fatalf("ParseDriveFileID(%q) expected error, got nil", tc.in)
 			}
 			var fe *FolderError
 			if !errors.As(err, &fe) {
-				t.Fatalf("DriveFileID(%q) expected *FolderError, got %T: %v", tc.in, err, err)
+				t.Fatalf("ParseDriveFileID(%q) expected *FolderError, got %T: %v", tc.in, err, err)
 			}
 		})
 	}
@@ -183,9 +183,9 @@ func TestDriveFileID_Invalid(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := DriveFileID(tc.in)
+			_, err := ParseDriveFileID(tc.in)
 			if err == nil {
-				t.Fatalf("DriveFileID(%q) expected error, got nil", tc.in)
+				t.Fatalf("ParseDriveFileID(%q) expected error, got nil", tc.in)
 			}
 		})
 	}
@@ -218,12 +218,12 @@ func TestDriveFileID_PercentEncodedPins(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := DriveFileID(tc.in)
+			got, err := ParseDriveFileID(tc.in)
 			if err != nil {
-				t.Fatalf("DriveFileID(%q) unexpected error: %v", tc.in, err)
+				t.Fatalf("ParseDriveFileID(%q) unexpected error: %v", tc.in, err)
 			}
-			if got != tc.want {
-				t.Fatalf("DriveFileID(%q) = %q, want %q", tc.in, got, tc.want)
+			if got.String() != tc.want {
+				t.Fatalf("ParseDriveFileID(%q) = %q, want %q", tc.in, got.String(), tc.want)
 			}
 		})
 	}
@@ -231,7 +231,7 @@ func TestDriveFileID_PercentEncodedPins(t *testing.T) {
 
 func TestDriveFileID_EmptyUsesSentinel(t *testing.T) {
 	t.Parallel()
-	_, err := DriveFileID("   ")
+	_, err := ParseDriveFileID("   ")
 	if !errors.Is(err, ErrEmpty) {
 		t.Fatalf("expected ErrEmpty for whitespace input, got %v", err)
 	}

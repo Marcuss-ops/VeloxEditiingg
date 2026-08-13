@@ -3,9 +3,9 @@
 // Google Drive exposes the same file through several URL shapes
 // (drive.google.com/file/d/<ID>/view, drive.google.com/uc?id=<ID>,
 // drive.google.com/open?id=<ID>, etc.). Comparing raw links across worker
-// and master would treat the same file as different assets. DriveFileID
-// reduces any supported URL to the stable file identifier so callers can
-// key caches, snapshots and jobs by a single canonical value.
+// and master would treat the same file as different assets. ParseDriveFileID
+// reduces any supported URL to the stable DriveFileID identifier so callers
+// can key caches, snapshots and jobs by a single canonical value.
 package assetref
 
 import (
@@ -78,9 +78,23 @@ func (e *NoIDError) Error() string {
 	return fmt.Sprintf("assetref: Drive file ID not found in URL: %q", e.URL)
 }
 
-// DriveFileID extracts the canonical Google Drive file ID from supported URL
-// forms, preserving the case of the opaque provider ID.
-func DriveFileID(rawURL string) (string, error) {
+// DriveFileID is the canonical Google Drive file identifier extracted from a
+// supported Drive URL. It is an opaque provider ID and must not be used
+// interchangeably with AssetKey or ContentHash: only ParseDriveFileID (the
+// single validation boundary) may construct one from a URL. Representing the
+// ID as a distinct type (rather than a bare string) prevents a Drive file ID
+// from being confused with a local asset ID or a content hash at call sites.
+type DriveFileID string
+
+// String returns the canonical string representation.
+func (id DriveFileID) String() string { return string(id) }
+
+// Empty reports whether the ID has no usable value.
+func (id DriveFileID) Empty() bool { return strings.TrimSpace(string(id)) == "" }
+
+// ParseDriveFileID extracts the canonical Google Drive file ID from a
+// supported URL form, preserving the case of the opaque provider ID.
+func ParseDriveFileID(rawURL string) (DriveFileID, error) {
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {
 		return "", ErrEmpty
@@ -107,13 +121,13 @@ func DriveFileID(rawURL string) (string, error) {
 		if strings.EqualFold(parts[i], "file") && strings.EqualFold(parts[i+1], "d") {
 			id := strings.TrimSpace(parts[i+2])
 			if id != "" {
-				return id, nil
+				return DriveFileID(id), nil
 			}
 		}
 	}
 
 	if id := strings.TrimSpace(u.Query().Get("id")); id != "" {
-		return id, nil
+		return DriveFileID(id), nil
 	}
 
 	return "", &NoIDError{URL: rawURL}

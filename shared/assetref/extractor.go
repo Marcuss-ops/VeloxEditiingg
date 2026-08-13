@@ -73,8 +73,8 @@ func ExtractAssetKeys(payload json.RawMessage) map[string]struct{} {
 					if id, ok := WireAssetID(trimmed); ok {
 						out[id] = struct{}{}
 					} else if _, isClip := clipStringKeys[key]; isClip {
-						if id, err := DriveFileID(trimmed); err == nil && id != "" {
-							out[id] = struct{}{}
+						if id, err := ParseDriveFileID(trimmed); err == nil && !id.Empty() {
+							out[id.String()] = struct{}{}
 						}
 					}
 				case []interface{}:
@@ -85,8 +85,8 @@ func ExtractAssetKeys(payload json.RawMessage) map[string]struct{} {
 					if _, isClip := clipStringKeys[key]; isClip {
 						for _, item := range s {
 							if link, ok := item.(string); ok {
-								if id, err := DriveFileID(strings.TrimSpace(link)); err == nil && id != "" {
-									out[id] = struct{}{}
+								if id, err := ParseDriveFileID(strings.TrimSpace(link)); err == nil && !id.Empty() {
+									out[id.String()] = struct{}{}
 								}
 							}
 						}

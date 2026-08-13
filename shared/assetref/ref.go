@@ -106,8 +106,8 @@ func Parse(raw string) (AssetRef, error) {
 	if strings.HasPrefix(lower, SchemeVeloxAsset+"://") {
 		return NewLocal(raw)
 	}
-	if id, err := DriveFileID(raw); err == nil {
-		return NewDeferredDrive(id)
+	if id, err := ParseDriveFileID(raw); err == nil {
+		return NewDeferredDrive(id.String())
 	}
 	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
 		return NewRemote(raw)
