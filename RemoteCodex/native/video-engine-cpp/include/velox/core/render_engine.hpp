@@ -7,6 +7,9 @@
 
 #include <atomic>
 #include <cstdint>
+#include <filesystem>
+#include <functional>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -75,6 +78,18 @@ public:
 private:
     void emitSidecar(const std::string& output_path) const;
     void recordFramePipeline(const media::FramePipelineResult& result);
+
+    // Mixed renderer: resolve each video segment independently against the
+    // canonical output profile (PACKET_COPY for compatible sources,
+    // NATIVE_TRANSCODE for the rest) and assemble them through the single
+    // packet mux. Returns std::nullopt when the path falls back to the
+    // legacy loop; otherwise the final result (success or failure).
+    std::optional<RenderResult> renderMixed(
+        const plan::RenderPlan& plan,
+        const std::filesystem::path& workDir,
+        const std::filesystem::path& outPath,
+        RenderResult& result,
+        const std::function<RenderResult(const std::string&)>& failRender);
 
     class SidecarGuard {
     public:

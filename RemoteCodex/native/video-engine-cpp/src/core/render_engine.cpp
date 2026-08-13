@@ -17,8 +17,10 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <functional>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -204,6 +206,214 @@ void RenderEngine::recordFramePipeline(const media::FramePipelineResult& result)
         ? static_cast<double>(frame_pipeline_metrics_.queue_full_ms) / producer_total
         : 0.0;
 }
+
+#ifdef VELOX_ENABLE_LIBAV
+std::optional<RenderResult> RenderEngine::renderMixed(
+    const plan::RenderPlan& plan,
+    const std::filesystem::path& workDir,
+    const std::filesystem::path& outPath,
+    RenderResult& result,
+    const std::function<RenderResult(const std::string&)>& failRender) {
+    if (plan.timeline.empty()) {
+        result.error = "mixed render requires at least one timeline video";
+        return failRender("mixed_empty_timeline");
+    }
+    if (!plan.subtitle_tracks.empty()) {
+        result.error = "mixed render does not support subtitle burn-in";
+        return failRender("mixed_subtitles_unsupported");
+    }
+    if (plan.audio_tracks.size() > 1) {
+        result.error = "mixed render supports at most one final audio track";
+        return failRender("mixed_audio_mix_unsupported");
+    }
+
+    const media::MediaSignature canonical =
+        mediaSignatureFromCanonicalProfile(canonicalVideoProfileV1());
+
+    media::CopyOnlyMuxRequest request;
+    request.output_path = outPath;
+    request.video_segments.reserve(plan.timeline.size());
+
+    int64_t total_duration_us = 0;
+    bool fell_back = false;
+    for (std::size_t i = 0; i < plan.timeline.size() && !fell_back; ++i) {
+        const auto& item = plan.timeline[i];
+        if (!std::holds_alternative<plan::VideoSource>(item.source)) {
+            fell_back = true;
+            break;
+        }
+        const auto& source = std::get<plan::VideoSource>(item.source);
+        const int64_t duration_us = item.source_duration_us > 0
+            ? item.source_duration_us
+            : item.duration_us > 0
+            ? item.duration_us
+            : static_cast<int64_t>(std::llround(item.duration_seconds * 1'000'000.0));
+        if (duration_us <= 0) {
+            result.error = "mixed render requires positive duration for segment " +
+                std::to_string(i);
+            return failRender("mixed_duration_invalid");
+        }
+
+        const fs::path local_video = workDir / ("mixed_video_" + std::to_string(i) + ".mp4");
+        telemetry::ScopedPhase assetPhase(
+            recorder_, telemetry::kOriginWorker, telemetry::kScopeTask,
+            "worker.asset", "transfer", "download");
+        if (!file::downloadAsset(source.url, local_video, source.cache_key)) {
+            assetPhase.Abort("asset_download_failed", "failed to download mixed video source");
+            result.error = "failed to download video source for segment " + std::to_string(i);
+            return failRender("asset_download_failed");
+        }
+        assetPhase.Complete();
+
+        media::SegmentProbe probe;
+        std::string probe_error;
+        if (!media::probeSegmentForExecution(local_video, item.source_in_us,
+                                             media::MediaKind::Video, &probe, &probe_error)) {
+            result.error = "failed to probe segment " + std::to_string(i) + ": " + probe_error;
+            return failRender("mixed_probe_failed");
+        }
+
+        media::SegmentExecutionRequest execution_request;
+        execution_request.source = probe.signature;
+        execution_request.target = canonical;
+        execution_request.transform_required = item.transform.slow_zoom;
+        execution_request.source_window_keyframe_safe = probe.source_window_keyframe_safe;
+        execution_request.legacy_required = item.include_audio;
+        const media::SegmentExecutionDecision decision =
+            media::resolveSegmentExecution(execution_request);
+
+        if (decision.mode == media::SegmentExecutionMode::LegacyFallback) {
+            fell_back = true;
+            break;
+        }
+        if (decision.mode == media::SegmentExecutionMode::PacketCopy) {
+            request.video_segments.push_back({
+                local_video, item.source_in_us, duration_us, false, false});
+        } else {
+            const fs::path normalized =
+                workDir / ("mixed_segment_" + std::to_string(i) + ".mp4");
+            media::FramePipelineConfig nativeConfig;
+            nativeConfig.input_path = local_video;
+            nativeConfig.output_path = normalized;
+            nativeConfig.width = plan.canvas.width;
+            nativeConfig.height = plan.canvas.height;
+            nativeConfig.fps_num = plan.canvas.fps_num > 0 ? plan.canvas.fps_num : plan.canvas.fps;
+            nativeConfig.fps_den = plan.canvas.fps_den > 0 ? plan.canvas.fps_den : 1;
+            nativeConfig.source_in_us = item.source_in_us;
+            nativeConfig.source_duration_us = duration_us;
+            nativeConfig.codec = "libx264";
+            nativeConfig.preset = "medium";
+            const NativeThreadConfig threads = nativeThreadConfig();
+            nativeConfig.decoder_threads = threads.decoder_threads;
+            nativeConfig.encoder_threads = threads.encoder_threads;
+            media::FramePipelineResult nativeResult;
+            if (!media::renderFrames(nativeConfig, &nativeResult)) {
+                result.error = "mixed transcode failed for segment " + std::to_string(i) +
+                    (nativeResult.error.empty() ? std::string() : ": " + nativeResult.error);
+                return failRender("mixed_transcode_failed");
+            }
+            recordFramePipeline(nativeResult);
+            frames_encoded_.fetch_add(nativeResult.frames_encoded);
+            frames_decoded_.fetch_add(nativeResult.frames_decoded);
+            frames_composited_.fetch_add(nativeResult.frames_encoded);
+            encode_passes_.fetch_add(1);
+            // Fail-closed canonical-profile gate: a produced (transcoded)
+            // segment must be compatible with the canonical output
+            // profile before the packet mux concatenates it with
+            // packet-copied ranges. The mux's own pairwise check is a
+            // backstop; this is the explicit
+            // mediaSignaturesCompatible(produced, canonical) gate.
+            media::SegmentProbe produced_probe;
+            std::string produced_error;
+            if (!media::probeSegmentForExecution(
+                    normalized, 0, media::MediaKind::Video,
+                    &produced_probe, &produced_error)) {
+                result.error = "failed to probe produced segment " +
+                    std::to_string(i) + ": " + produced_error;
+                return failRender("mixed_produced_probe_failed");
+            }
+            std::string profile_reason;
+            if (!media::mediaSignaturesCompatible(
+                    produced_probe.signature, canonical, &profile_reason)) {
+                result.error = "produced segment " + std::to_string(i) +
+                    " is not canonical-profile compatible: " + profile_reason;
+                return failRender("mixed_produced_profile_mismatch");
+            }
+            request.video_segments.push_back({
+                normalized, 0, duration_us, false, true});
+        }
+        total_duration_us += duration_us;
+    }
+
+    if (!fell_back) {
+        const double total_duration = static_cast<double>(total_duration_us) / 1'000'000.0;
+        if (!plan.audio_tracks.empty()) {
+            const auto& track = plan.audio_tracks.front();
+            if (track.loop || track.volume != 1.0 || track.start_time_offset < 0.0) {
+                result.error = "mixed render final audio requires finite, neutral-volume audio";
+                return failRender("mixed_audio_transform_unsupported");
+            }
+            const fs::path local_audio = workDir / "mixed_final_audio.m4a";
+            if (!file::downloadAsset(track.source_url, local_audio)) {
+                result.error = "failed to resolve mixed audio track";
+                return failRender("mixed_audio_download_failed");
+            }
+            if (!media::hasAudioStream(local_audio)) {
+                result.error = "failed to resolve valid mixed audio track";
+                return failRender("mixed_audio_invalid");
+            }
+            const media::FinalAudioDecision audio_decision = media::resolveFinalAudioModePacket(
+                media::probeFinalAudioMetadata(local_audio), true, total_duration);
+            if (audio_decision.mode != media::FinalAudioMode::Copy) {
+                result.error = "mixed render final audio is not FINAL_AUDIO_COPY: " +
+                    audio_decision.reason;
+                return failRender("mixed_audio_not_final_copy");
+            }
+            const int64_t declared_audio_duration = track.duration_us > 0
+                ? track.duration_us
+                : (track.duration_seconds > 0.0
+                       ? static_cast<int64_t>(
+                             std::llround(track.duration_seconds * 1'000'000.0))
+                       : 0);
+            request.audio = media::CopyOnlyAudioTrack{
+                local_audio,
+                track.start_offset_us > 0
+                    ? track.start_offset_us
+                    : static_cast<int64_t>(
+                          std::llround(track.start_time_offset * 1'000'000.0)),
+                declared_audio_duration};
+        }
+
+        duration_seconds_.store(total_duration);
+        concat_mode_ = "mixed_packet";
+        reportProgress(90, "mixed_packet_mux");
+        telemetry::ScopedPhase mixedPhase(
+            recorder_, telemetry::kOriginEngine, telemetry::kScopeAttempt,
+            "engine", "mixed_packet_mux", "composite");
+        media::CopyOnlyMuxResult muxResult;
+        bool muxOk;
+        {
+            ScopedTimer timer(metrics_, "packet_mux_ms");
+            muxOk = media::muxCopyOnly(request, &muxResult);
+        }
+        if (!muxOk) {
+            mixedPhase.Abort("mixed_packet_mux_failed", muxResult.error);
+            result.error = "mixed packet mux failed: " + muxResult.error;
+            return failRender("mixed_packet_mux_failed");
+        }
+        output_durable_.store(muxResult.output_durable);
+        mixedPhase.Complete(0, static_cast<int64_t>(fileSize(outPath)), 0,
+                            telemetry::kStatusOk);
+        last_progress_.total_size = static_cast<int64_t>(fileSize(outPath));
+        last_progress_.progress_pct = 100.0;
+        last_progress_.finished = true;
+        reportProgress(100, "completed");
+        result.success = true;
+        return result;
+    }
+    return std::nullopt;
+}
+#endif
 
 RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
     // Reset accumulators on every fresh render() call.
@@ -586,211 +796,15 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
 
     // ── Mixed renderer: per-segment PACKET_COPY / NATIVE_TRANSCODE
     //    resolution assembled through the single packet mux ─────────────
-    // Each video segment is probed and resolved against the canonical output
-    // profile. Already-compatible, keyframe-safe segments are stream-copied;
-    // everything else is normalized through the native FramePipeline and
-    // handed to the mux as a `normalized` segment (source_in_us == 0). The
-    // mux stays the final assembler and enforces the fail-closed canonical
-    // compatibility check. A segment the resolver cannot handle falls back
-    // to the legacy loop below.
+    // Delegated to renderMixed() to keep render() linear. renderMixed()
+    // returns std::nullopt when the resolver cannot handle a segment and
+    // the legacy loop below must take over.
 #ifdef VELOX_ENABLE_LIBAV
     if (plan.mixed && !plan.copy_only) {
-        if (plan.timeline.empty()) {
-            result.error = "mixed render requires at least one timeline video";
-            return failRender("mixed_empty_timeline");
-        }
-        if (!plan.subtitle_tracks.empty()) {
-            result.error = "mixed render does not support subtitle burn-in";
-            return failRender("mixed_subtitles_unsupported");
-        }
-        if (plan.audio_tracks.size() > 1) {
-            result.error = "mixed render supports at most one final audio track";
-            return failRender("mixed_audio_mix_unsupported");
-        }
-
-        const media::MediaSignature canonical =
-            mediaSignatureFromCanonicalProfile(canonicalVideoProfileV1());
-
-        media::CopyOnlyMuxRequest request;
-        request.output_path = outPath;
-        request.video_segments.reserve(plan.timeline.size());
-
-        int64_t total_duration_us = 0;
-        bool fell_back = false;
-        for (std::size_t i = 0; i < plan.timeline.size() && !fell_back; ++i) {
-            const auto& item = plan.timeline[i];
-            if (!std::holds_alternative<plan::VideoSource>(item.source)) {
-                fell_back = true;
-                break;
-            }
-            const auto& source = std::get<plan::VideoSource>(item.source);
-            const int64_t duration_us = item.source_duration_us > 0
-                ? item.source_duration_us
-                : item.duration_us > 0
-                ? item.duration_us
-                : static_cast<int64_t>(std::llround(item.duration_seconds * 1'000'000.0));
-            if (duration_us <= 0) {
-                result.error = "mixed render requires positive duration for segment " +
-                    std::to_string(i);
-                return failRender("mixed_duration_invalid");
-            }
-
-            const fs::path local_video = workDir / ("mixed_video_" + std::to_string(i) + ".mp4");
-            telemetry::ScopedPhase assetPhase(
-                recorder_, telemetry::kOriginWorker, telemetry::kScopeTask,
-                "worker.asset", "transfer", "download");
-            if (!file::downloadAsset(source.url, local_video, source.cache_key)) {
-                assetPhase.Abort("asset_download_failed", "failed to download mixed video source");
-                result.error = "failed to download video source for segment " + std::to_string(i);
-                return failRender("asset_download_failed");
-            }
-            assetPhase.Complete();
-
-            media::SegmentProbe probe;
-            std::string probe_error;
-            if (!media::probeSegmentForExecution(local_video, item.source_in_us,
-                                                 media::MediaKind::Video, &probe, &probe_error)) {
-                result.error = "failed to probe segment " + std::to_string(i) + ": " + probe_error;
-                return failRender("mixed_probe_failed");
-            }
-
-            media::SegmentExecutionRequest execution_request;
-            execution_request.source = probe.signature;
-            execution_request.target = canonical;
-            execution_request.transform_required = item.transform.slow_zoom;
-            execution_request.source_window_keyframe_safe = probe.source_window_keyframe_safe;
-            execution_request.legacy_required = item.include_audio;
-            const media::SegmentExecutionDecision decision =
-                media::resolveSegmentExecution(execution_request);
-
-            if (decision.mode == media::SegmentExecutionMode::LegacyFallback) {
-                fell_back = true;
-                break;
-            }
-            if (decision.mode == media::SegmentExecutionMode::PacketCopy) {
-                request.video_segments.push_back({
-                    local_video, item.source_in_us, duration_us, false, false});
-            } else {
-                const fs::path normalized =
-                    workDir / ("mixed_segment_" + std::to_string(i) + ".mp4");
-                media::FramePipelineConfig nativeConfig;
-                nativeConfig.input_path = local_video;
-                nativeConfig.output_path = normalized;
-                nativeConfig.width = plan.canvas.width;
-                nativeConfig.height = plan.canvas.height;
-                nativeConfig.fps_num = plan.canvas.fps_num > 0 ? plan.canvas.fps_num : plan.canvas.fps;
-                nativeConfig.fps_den = plan.canvas.fps_den > 0 ? plan.canvas.fps_den : 1;
-                nativeConfig.source_in_us = item.source_in_us;
-                nativeConfig.source_duration_us = duration_us;
-                nativeConfig.codec = "libx264";
-                nativeConfig.preset = "medium";
-                const NativeThreadConfig threads = nativeThreadConfig();
-                nativeConfig.decoder_threads = threads.decoder_threads;
-                nativeConfig.encoder_threads = threads.encoder_threads;
-                media::FramePipelineResult nativeResult;
-                if (!media::renderFrames(nativeConfig, &nativeResult)) {
-                    result.error = "mixed transcode failed for segment " + std::to_string(i) +
-                        (nativeResult.error.empty() ? std::string() : ": " + nativeResult.error);
-                    return failRender("mixed_transcode_failed");
-                }
-                recordFramePipeline(nativeResult);
-                frames_encoded_.fetch_add(nativeResult.frames_encoded);
-                frames_decoded_.fetch_add(nativeResult.frames_decoded);
-                frames_composited_.fetch_add(nativeResult.frames_encoded);
-                encode_passes_.fetch_add(1);
-                // Fail-closed canonical-profile gate: a produced (transcoded)
-                // segment must be compatible with the canonical output
-                // profile before the packet mux concatenates it with
-                // packet-copied ranges. The mux's own pairwise check is a
-                // backstop; this is the explicit
-                // mediaSignaturesCompatible(produced, canonical) gate.
-                media::SegmentProbe produced_probe;
-                std::string produced_error;
-                if (!media::probeSegmentForExecution(
-                        normalized, 0, media::MediaKind::Video,
-                        &produced_probe, &produced_error)) {
-                    result.error = "failed to probe produced segment " +
-                        std::to_string(i) + ": " + produced_error;
-                    return failRender("mixed_produced_probe_failed");
-                }
-                std::string profile_reason;
-                if (!media::mediaSignaturesCompatible(
-                        produced_probe.signature, canonical, &profile_reason)) {
-                    result.error = "produced segment " + std::to_string(i) +
-                        " is not canonical-profile compatible: " + profile_reason;
-                    return failRender("mixed_produced_profile_mismatch");
-                }
-                request.video_segments.push_back({
-                    normalized, 0, duration_us, false, true});
-            }
-            total_duration_us += duration_us;
-        }
-
-        if (!fell_back) {
-            const double total_duration = static_cast<double>(total_duration_us) / 1'000'000.0;
-            if (!plan.audio_tracks.empty()) {
-                const auto& track = plan.audio_tracks.front();
-                if (track.loop || track.volume != 1.0 || track.start_time_offset < 0.0) {
-                    result.error = "mixed render final audio requires finite, neutral-volume audio";
-                    return failRender("mixed_audio_transform_unsupported");
-                }
-                const fs::path local_audio = workDir / "mixed_final_audio.m4a";
-                if (!file::downloadAsset(track.source_url, local_audio)) {
-                    result.error = "failed to resolve mixed audio track";
-                    return failRender("mixed_audio_download_failed");
-                }
-                if (!media::hasAudioStream(local_audio)) {
-                    result.error = "failed to resolve valid mixed audio track";
-                    return failRender("mixed_audio_invalid");
-                }
-                const media::FinalAudioDecision audio_decision = media::resolveFinalAudioModePacket(
-                    media::probeFinalAudioMetadata(local_audio), true, total_duration);
-                if (audio_decision.mode != media::FinalAudioMode::Copy) {
-                    result.error = "mixed render final audio is not FINAL_AUDIO_COPY: " +
-                        audio_decision.reason;
-                    return failRender("mixed_audio_not_final_copy");
-                }
-                const int64_t declared_audio_duration = track.duration_us > 0
-                    ? track.duration_us
-                    : (track.duration_seconds > 0.0
-                           ? static_cast<int64_t>(
-                                 std::llround(track.duration_seconds * 1'000'000.0))
-                           : 0);
-                request.audio = media::CopyOnlyAudioTrack{
-                    local_audio,
-                    track.start_offset_us > 0
-                        ? track.start_offset_us
-                        : static_cast<int64_t>(
-                              std::llround(track.start_time_offset * 1'000'000.0)),
-                    declared_audio_duration};
-            }
-
-            duration_seconds_.store(total_duration);
-            concat_mode_ = "mixed_packet";
-            reportProgress(90, "mixed_packet_mux");
-            telemetry::ScopedPhase mixedPhase(
-                recorder_, telemetry::kOriginEngine, telemetry::kScopeAttempt,
-                "engine", "mixed_packet_mux", "composite");
-            media::CopyOnlyMuxResult muxResult;
-            bool muxOk;
-            {
-                ScopedTimer timer(metrics_, "packet_mux_ms");
-                muxOk = media::muxCopyOnly(request, &muxResult);
-            }
-            if (!muxOk) {
-                mixedPhase.Abort("mixed_packet_mux_failed", muxResult.error);
-                result.error = "mixed packet mux failed: " + muxResult.error;
-                return failRender("mixed_packet_mux_failed");
-            }
-            output_durable_.store(muxResult.output_durable);
-            mixedPhase.Complete(0, static_cast<int64_t>(fileSize(outPath)), 0,
-                                telemetry::kStatusOk);
-            last_progress_.total_size = static_cast<int64_t>(fileSize(outPath));
-            last_progress_.progress_pct = 100.0;
-            last_progress_.finished = true;
-            reportProgress(100, "completed");
-            result.success = true;
-            return result;
+        const std::optional<RenderResult> mixed =
+            renderMixed(plan, workDir, outPath, result, failRender);
+        if (mixed.has_value()) {
+            return *mixed;
         }
         // fell_back: fall through to the legacy segment loop below.
     }
