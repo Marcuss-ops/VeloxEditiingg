@@ -39,11 +39,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
 	"velox-server/internal/credentials"
+	"velox-server/internal/logging"
 	"velox-server/internal/store"
 	"velox-server/internal/supervisor"
 )
@@ -87,6 +87,7 @@ type DeliveryRunner struct {
 	// so concurrent runners do not race on the same row.
 	identity  string
 	telemetry Telemetry
+	logger    *logging.Logger // structured logger; nil-safe via logInfo/logWarn/logError
 }
 
 // WithTelemetry wires the bounded delivery measurement sink.
@@ -104,6 +105,36 @@ func (r *DeliveryRunner) WithCredentialVault(vault *credentials.Vault) *Delivery
 		r.vault = vault
 	}
 	return r
+}
+
+// WithLogger wires a structured logger for the runner's operator-facing
+// events. Defaults to logging.NewLogger("deliveries.runner") at construction;
+// tests inject a custom (or nil) logger to silence or redirect output.
+func (r *DeliveryRunner) WithLogger(l *logging.Logger) *DeliveryRunner {
+	if r != nil {
+		r.logger = l
+	}
+	return r
+}
+
+// logInfo/logWarn/logError are nil-safe structured emit helpers so a nil
+// injected logger (tests) never panics.
+func (r *DeliveryRunner) logInfo(code string, fields map[string]interface{}) {
+	if r != nil && r.logger != nil {
+		r.logger.Info(code, fields)
+	}
+}
+
+func (r *DeliveryRunner) logWarn(code string, fields map[string]interface{}) {
+	if r != nil && r.logger != nil {
+		r.logger.Warn(code, fields)
+	}
+}
+
+func (r *DeliveryRunner) logError(code string, fields map[string]interface{}) {
+	if r != nil && r.logger != nil {
+		r.logger.Error(code, fields)
+	}
 }
 
 // NewDeliveryRunner wires a runner. dbStore is the durable anchor;
@@ -126,6 +157,7 @@ func NewDeliveryRunner(cfg *RunnerConfig, registry *Registry, dbStore *store.SQL
 		registry:  registry,
 		dbStore:   dbStore,
 		identity:  identity,
+		logger:    logging.NewLogger("deliveries.runner"),
 		sem:       make(chan struct{}, cfg.Concurrency),
 		stopCh:    make(chan struct{}),
 		stoppedCh: make(chan struct{}),
@@ -202,7 +234,7 @@ func (r *DeliveryRunner) Stop() {
 // no row sits idle in memory with a ticking lease and no heartbeat.
 func (r *DeliveryRunner) tick(ctx context.Context) error {
 	if err := r.reconcileRecent(ctx); err != nil {
-		log.Printf("[DELIVERY] reconciliation sweep: %v", err)
+		r.logWarn(logging.CodeDeliveryReconcileSweepFail, logging.F("err", err))
 	}
 	batch := r.cfg.ClaimBatch
 	if r.cfg.Concurrency > 0 && batch > r.cfg.Concurrency {
@@ -226,13 +258,13 @@ func (r *DeliveryRunner) tick(ctx context.Context) error {
 			select {
 			case r.sem <- struct{}{}:
 			case <-ctx.Done():
-				log.Printf("[DELIVERY] abandoning claimed lease %s: runner shutting down", l.DeliveryID)
+				r.logWarn(logging.CodeDeliveryLeaseAbandoned, logging.F("delivery", l.DeliveryID))
 				return
 			}
 			defer func() { <-r.sem }()
 
 			if err := r.processLease(ctx, l); err != nil {
-				log.Printf("[DELIVERY] delivery %s: %v", l.DeliveryID, err)
+				r.logError(logging.CodeDeliveryProcessFailed, logging.F("delivery", l.DeliveryID, "err", err))
 				if errors.Is(err, errDeliveryStatePersistence) {
 					stateErrors <- err
 				}

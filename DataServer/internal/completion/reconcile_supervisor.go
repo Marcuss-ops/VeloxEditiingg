@@ -2,10 +2,10 @@ package completion
 
 import (
 	"context"
-	"log"
 	"sync"
 	"time"
 
+	"velox-server/internal/logging"
 	"velox-server/internal/repository"
 )
 
@@ -56,12 +56,8 @@ type ReconcileSupervisor struct {
 	seenIDs  map[string]time.Time
 	seenCap  int
 	seenMu   sync.Mutex
-	Log      LogFunc
+	logger   *logging.Logger
 }
-
-type LogFunc func(format string, args ...any)
-
-func noopLog(format string, args ...any) {}
 
 type noopReconcileMetrics struct{}
 
@@ -78,18 +74,24 @@ func NewReconcileSupervisor(completionStore repository.CompletionStore, coord Co
 	if metrics == nil {
 		metrics = noopReconcileMetrics{}
 	}
-	return &ReconcileSupervisor{Store: completionStore, Coord: coord, Metrics: metrics, Tick: 15 * time.Second, Limit: 500, seenIDs: make(map[string]time.Time), seenCap: 10000, lastTick: time.Now().UTC(), Log: log.Printf}
+	return &ReconcileSupervisor{Store: completionStore, Coord: coord, Metrics: metrics, Tick: 15 * time.Second, Limit: 500, seenIDs: make(map[string]time.Time), seenCap: 10000, lastTick: time.Now().UTC(), logger: logging.NewLogger("completion.reconcile")}
 }
 
-func (s *ReconcileSupervisor) logf(format string, args ...any) {
-	if s.Log != nil {
-		s.Log(format, args...)
+func (s *ReconcileSupervisor) logInfo(code string, fields map[string]interface{}) {
+	if s != nil && s.logger != nil {
+		s.logger.Info(code, fields)
+	}
+}
+
+func (s *ReconcileSupervisor) logWarn(code string, fields map[string]interface{}) {
+	if s != nil && s.logger != nil {
+		s.logger.Warn(code, fields)
 	}
 }
 func (s *ReconcileSupervisor) Run(ctx context.Context) error {
 	t := time.NewTicker(s.Tick)
 	defer t.Stop()
-	s.logf("[RECONCILE-SUPERVISOR] starting — tick=%s limit=%d", s.Tick, s.Limit)
+	s.logInfo(logging.CodeCompletionReconcileStarted, logging.F("tick", s.Tick, "limit", s.Limit))
 	for {
 		select {
 		case <-ctx.Done():
@@ -102,7 +104,7 @@ func (s *ReconcileSupervisor) Run(ctx context.Context) error {
 func (s *ReconcileSupervisor) TickOnce(ctx context.Context, now time.Time) {
 	candidates, deadline, err := s.scanCandidates(ctx)
 	if err != nil {
-		s.logf("[RECONCILE-SUPERVISOR] scan: %v", err)
+		s.logWarn(logging.CodeCompletionReconcileScanFail, logging.F("err", err))
 		return
 	}
 	for i := int64(0); i < deadline; i++ {
@@ -111,7 +113,7 @@ func (s *ReconcileSupervisor) TickOnce(ctx context.Context, now time.Time) {
 	if len(candidates) == 0 {
 		return
 	}
-	s.logf("[RECONCILE-SUPERVISOR] tick=%s — %d candidates", now.Format(time.RFC3339), len(candidates))
+	s.logInfo(logging.CodeCompletionReconcileTick, logging.F("tick", now.Format(time.RFC3339), "candidates", len(candidates)))
 	for _, candidate := range candidates {
 		s.dispatch(ctx, candidate)
 	}

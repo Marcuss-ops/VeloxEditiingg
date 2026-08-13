@@ -584,7 +584,7 @@ func TestReconcile_DispatchError_IncrementsEscalate(t *testing.T) {
 	// check. The metric counters (which are the test-facing
 	// observability surface) are still emitted; only the
 	// human-readable log is suppressed.
-	sup.Log = func(format string, args ...any) {}
+	sup.logger = nil
 	seedReconcileAttempt(t, db, "c-esc", "t-esc", "a-esc", "DECLARED", -1*time.Minute)
 	seedReconcileTask(t, db, "t-esc", "a-esc", "RUNNING", "lease-1", 5*time.Minute)
 	seedReconcileWorker(t, db, "worker-1")
@@ -646,7 +646,7 @@ func TestReconcile_BadDBDoesNotPanic(t *testing.T) {
 	// check. The metric counters (which are the test-facing
 	// observability surface) are still emitted; only the
 	// human-readable log is suppressed.
-	sup.Log = noopLog
+	sup.logger = nil
 	// Should NOT panic; logs the error and returns.
 	sup.TickOnce(context.Background(), time.Now().UTC())
 	// The supervisor should have no reconcile calls because the

@@ -5,9 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"time"
 
+	"velox-server/internal/logging"
 	"velox-server/internal/store"
 )
 
@@ -34,8 +34,7 @@ func (r *CreatorForwardingRunner) handleEnqueueRetry(ctx context.Context, lease 
 		); err != nil {
 			return forwardingStateError("mark failed (max enqueue attempts)", err)
 		}
-		log.Printf("[FORWARDING] max enqueue attempts exhausted forwarding=%s source_job=%s attempts=%d",
-			lease.ForwardingID, lease.SourceJobID, lease.AttemptCount)
+		r.logWarn(logging.CodeForwardingMaxAttempts, logging.F("forwarding", lease.ForwardingID, "source_job", lease.SourceJobID, "attempts", lease.AttemptCount))
 		r.recordFailed()
 		return nil
 	}
@@ -51,7 +50,7 @@ func (r *CreatorForwardingRunner) handleEnqueueRetry(ctx context.Context, lease 
 		// With full lease-authority CAS, this is a best-effort safety
 		// net: if another runner already claimed the row, the CAS will
 		// also fail (which is correct — the new lease holder owns it).
-		log.Printf("[FORWARDING] enqueue retry CAS failed forwarding=%s: %v; best-effort FAILED (may no-op if preempted)", lease.ForwardingID, err)
+		r.logWarn(logging.CodeForwardingRetryCASFail, logging.F("forwarding", lease.ForwardingID, "err", err))
 		if ferr := r.dbStore.MarkCreatorForwardingFailed(ctx,
 			lease.ForwardingID, lease.RunnerID, lease.LeaseID,
 			"ENQUEUE_RETRY_CAS_FAILED",
@@ -89,8 +88,7 @@ func (r *CreatorForwardingRunner) handleRetry(ctx context.Context, lease store.C
 		); err != nil {
 			return forwardingStateError("mark failed (max attempts)", err)
 		}
-		log.Printf("[FORWARDING] max attempts exhausted forwarding=%s source_job=%s attempts=%d",
-			lease.ForwardingID, lease.SourceJobID, lease.AttemptCount)
+		r.logWarn(logging.CodeForwardingMaxAttempts, logging.F("forwarding", lease.ForwardingID, "source_job", lease.SourceJobID, "attempts", lease.AttemptCount))
 		r.recordFailed()
 		return nil
 	}

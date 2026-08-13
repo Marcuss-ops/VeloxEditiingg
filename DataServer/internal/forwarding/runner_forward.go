@@ -4,9 +4,9 @@ package forwarding
 import (
 	"context"
 	"errors"
-	"log"
 
 	"velox-server/internal/creatorflow"
+	"velox-server/internal/logging"
 	"velox-server/internal/store"
 	"velox-server/internal/supervisor"
 	"velox-shared/contract/deliveryplan"
@@ -53,7 +53,7 @@ func (r *CreatorForwardingRunner) atomicEnqueueAndForward(ctx context.Context, l
 		); err != nil {
 			return forwardingStateError("mark blocked", err)
 		}
-		log.Printf("[FORWARDING] payload marshal failed forwarding=%s; marked BLOCKED", lease.ForwardingID)
+		r.logError(logging.CodeForwardingPayloadMarshalFail, logging.F("forwarding", lease.ForwardingID))
 		r.recordFailed()
 		return nil
 	}
@@ -64,7 +64,7 @@ func (r *CreatorForwardingRunner) atomicEnqueueAndForward(ctx context.Context, l
 		lease.ForwardingID, lease.RunnerID, lease.LeaseID,
 		payloadJSON, payloadSHA256,
 	); err != nil {
-		log.Printf("[FORWARDING] mark ready-to-forward failed forwarding=%s: %v", lease.ForwardingID, err)
+		r.logWarn(logging.CodeForwardingMarkReadyFail, logging.F("forwarding", lease.ForwardingID, "err", err))
 		if retryErr := r.handleRetry(ctx, lease, "MARK_READY_ERROR", err.Error(), ""); retryErr != nil {
 			return retryErr
 		}
@@ -78,7 +78,7 @@ func (r *CreatorForwardingRunner) atomicEnqueueAndForward(ctx context.Context, l
 		// No enqueuer wired (forwarder-only runner); skip the
 		// atomic step. The forwarding row is already READY_TO_FORWARD;
 		// a separate forwarder can pick it up via ListReadyToForward.
-		log.Printf("[FORWARDING] resolver unavailable for forwarding=%s; row left at READY_TO_FORWARD", lease.ForwardingID)
+		r.logWarn(logging.CodeForwardingResolverUnavailable, logging.F("forwarding", lease.ForwardingID))
 		return nil
 	}
 	out, err := rs.Resolve(ctx, creatorflow.ResolveRequest{
@@ -97,7 +97,7 @@ func (r *CreatorForwardingRunner) atomicEnqueueAndForward(ctx context.Context, l
 			// next tick to re-run the resolve.
 			return errors.Join(supervisor.ErrElementScoped, err)
 		}
-		log.Printf("[FORWARDING] resolver.Resolve failed forwarding=%s: %v", lease.ForwardingID, err)
+		r.logError(logging.CodeForwardingResolveFailed, logging.F("forwarding", lease.ForwardingID, "err", err))
 		if retryErr := r.handleEnqueueRetry(ctx, lease, "ENQUEUE_FAILED", err.Error(), ""); retryErr != nil {
 			return retryErr
 		}
@@ -110,8 +110,7 @@ func (r *CreatorForwardingRunner) atomicEnqueueAndForward(ctx context.Context, l
 		// next tick re-runs the resolve.
 		return nil
 	}
-	log.Printf("[FORWARDING] forwarded forwarding=%s → job=%s source=%s (via Resolver)",
-		lease.ForwardingID, out.JobID, lease.SourceProvider)
+	r.logInfo(logging.CodeForwardingForwarded, logging.F("forwarding", lease.ForwardingID, "job", out.JobID, "source", lease.SourceProvider))
 	r.recordForwarded()
 	return nil
 }

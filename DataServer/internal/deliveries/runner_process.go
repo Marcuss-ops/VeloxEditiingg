@@ -10,9 +10,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"time"
 
+	"velox-server/internal/logging"
 	"velox-server/internal/publicationstate"
 	"velox-server/internal/store"
 	"velox-server/internal/telemetry"
@@ -80,7 +80,7 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 	if err != nil {
 		// Provider not configured → permanent failure.
 		if markErr := r.dbStore.MarkDeliveryFailed(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, "PROVIDER_NOT_CONFIGURED", err.Error()); markErr != nil {
-			log.Printf("[DELIVERY] mark failed for %s: %v", lease.DeliveryID, markErr)
+			r.logError(logging.CodeDeliveryMarkFailed, logging.F("delivery", lease.DeliveryID, "err", markErr))
 			return joinDeliveryErrors(err, deliveryStatePersistenceError("mark provider-not-configured failure", markErr))
 		}
 		return err
@@ -93,7 +93,7 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 		if _, registered := r.registry.ResolvePhaseExecutor(providerName); !registered {
 			err := fmt.Errorf("%w: provider %q implements DeliveryReconciler but has no phase executor", ErrProviderPermanent, providerName)
 			if markErr := r.dbStore.MarkDeliveryFailed(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, "RECONCILIATION_REQUIRED", err.Error()); markErr != nil {
-				log.Printf("[DELIVERY] mark reconciliation failure for %s: %v", lease.DeliveryID, markErr)
+				r.logError(logging.CodeDeliveryMarkReconcileFail, logging.F("delivery", lease.DeliveryID, "err", markErr))
 				return joinDeliveryErrors(err, deliveryStatePersistenceError("mark reconciliation-required failure", markErr))
 			}
 			return err
@@ -110,7 +110,7 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 			code = "DESTINATION_UNMAPPED"
 		}
 		if mErr := r.dbStore.MarkDeliveryFailed(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, code, err.Error()); mErr != nil {
-			log.Printf("[DELIVERY] mark failed for %s: %v", lease.DeliveryID, mErr)
+			r.logError(logging.CodeDeliveryMarkFailed, logging.F("delivery", lease.DeliveryID, "err", mErr))
 			return joinDeliveryErrors(fmt.Errorf("hydrate destination: %w", err), deliveryStatePersistenceError("mark destination hydration failure", mErr))
 		}
 		return fmt.Errorf("hydrate destination: %w", err)
@@ -155,7 +155,7 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 	credentialRef, refErr := resolveCredentialReference(dest.DeliveryMetadataJSON, dest.ConfigurationJSON)
 	if refErr != nil {
 		if markErr := r.dbStore.MarkDeliveryFailed(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, "CREDENTIAL_REF_INVALID", refErr.Error()); markErr != nil {
-			log.Printf("[DELIVERY] mark credential reference failure for %s: %v", lease.DeliveryID, markErr)
+			r.logError(logging.CodeDeliveryCredentialRefFail, logging.F("delivery", lease.DeliveryID, "err", markErr))
 			return joinDeliveryErrors(fmt.Errorf("credential reference: %w", refErr), deliveryStatePersistenceError("mark credential-reference failure", markErr))
 		}
 		return fmt.Errorf("credential reference: %w", refErr)
@@ -164,7 +164,7 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 	artifact, err := r.hydrateArtifact(ctx, lease.ArtifactID)
 	if err != nil {
 		if markErr := r.dbStore.MarkDeliveryFailed(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, "ARTIFACT_NOT_FOUND", err.Error()); markErr != nil {
-			log.Printf("[DELIVERY] mark failed for %s: %v", lease.DeliveryID, markErr)
+			r.logError(logging.CodeDeliveryMarkFailed, logging.F("delivery", lease.DeliveryID, "err", markErr))
 			return joinDeliveryErrors(fmt.Errorf("hydrate artifact: %w", err), deliveryStatePersistenceError("mark artifact hydration failure", markErr))
 		}
 		return fmt.Errorf("hydrate artifact: %w", err)
@@ -173,7 +173,7 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 	credentialLease, credentialErr := r.issueCredentialLease(ctx, provider, dest, lease)
 	if credentialErr != nil {
 		if markErr := r.dbStore.MarkDeliveryBlockedAuth(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, credentialErrorCode(credentialErr), credentialErr.Error()); markErr != nil {
-			log.Printf("[DELIVERY] mark credential auth failure for %s: %v", lease.DeliveryID, markErr)
+			r.logError(logging.CodeDeliveryCredentialAuthFail, logging.F("delivery", lease.DeliveryID, "err", markErr))
 			return joinDeliveryErrors(credentialErr, deliveryStatePersistenceError("mark credential authentication failure", markErr))
 		}
 		return credentialErr
@@ -220,7 +220,7 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 				}
 			}
 			if auditErr := r.vault.RecordLeaseResult(ctx, credentialLease, success, code); auditErr != nil {
-				log.Printf("[DELIVERY] credential usage audit failed for %s: %v", lease.DeliveryID, auditErr)
+				r.logWarn(logging.CodeDeliveryCredentialAuditFail, logging.F("delivery", lease.DeliveryID, "err", auditErr))
 			}
 		}
 		if phaseErr == nil && !retryScheduled {
@@ -239,7 +239,7 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 	heartbeatDone := make(chan struct{})
 	go r.renewDeliveryLeaseLoop(deliverCtx, heartbeatDone, lease,
 		func(err error) {
-			log.Printf("[DELIVERY] lease renewal failed for %s: %v; interrupting upload", lease.DeliveryID, err)
+			r.logWarn(logging.CodeDeliveryLeaseRenewalFail, logging.F("delivery", lease.DeliveryID, "err", err))
 			cancelDeliver()
 		})
 
@@ -263,7 +263,7 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 			errorCode = classifyErrorCode(runErr)
 		}
 		if auditErr := r.vault.RecordLeaseResult(ctx, credentialLease, success, errorCode); auditErr != nil {
-			log.Printf("[DELIVERY] credential usage audit failed for %s: %v", lease.DeliveryID, auditErr)
+			r.logWarn(logging.CodeDeliveryCredentialAuditFail, logging.F("delivery", lease.DeliveryID, "err", auditErr))
 		}
 	}
 
@@ -285,9 +285,9 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 		// A Success:true without a remote ID or URL is a programming
 		// error in the provider adapter — treat as permanent failure.
 		if err := validateProviderResult(res); err != nil {
-			log.Printf("[DELIVERY] provider result validation failed for %s: %v", lease.DeliveryID, err)
+			r.logError(logging.CodeDeliveryResultValidationFail, logging.F("delivery", lease.DeliveryID, "err", err))
 			if merr := r.dbStore.MarkDeliveryFailed(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, "INVALID_RESULT", err.Error()); merr != nil {
-				log.Printf("[DELIVERY] mark failed for %s: %v", lease.DeliveryID, merr)
+				r.logError(logging.CodeDeliveryMarkFailed, logging.F("delivery", lease.DeliveryID, "err", merr))
 			}
 			return err
 		}
@@ -315,14 +315,14 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 	switch errClass {
 	case ErrorClassPermanent:
 		if err := r.dbStore.MarkDeliveryFailed(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, errCode, errMsg); err != nil {
-			log.Printf("[DELIVERY] mark failed for %s: %v", lease.DeliveryID, err)
+			r.logError(logging.CodeDeliveryMarkFailed, logging.F("delivery", lease.DeliveryID, "err", err))
 			return joinDeliveryErrors(runErr, deliveryStatePersistenceError("mark permanent provider failure", err))
 		}
 		return runErr
 
 	case ErrorClassAuth:
 		if err := r.dbStore.MarkDeliveryBlockedAuth(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, errCode, errMsg); err != nil {
-			log.Printf("[DELIVERY] mark blocked_auth for %s: %v", lease.DeliveryID, err)
+			r.logError(logging.CodeDeliveryMarkBlockedAuth, logging.F("delivery", lease.DeliveryID, "err", err))
 			return joinDeliveryErrors(runErr, deliveryStatePersistenceError("mark provider authentication failure", err))
 		}
 		return runErr
@@ -331,7 +331,7 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 		retryAfter := r.resolveRetryAfter(runErr)
 		if lease.AttemptNumber >= maxAttempts {
 			if err := r.dbStore.MarkDeliveryFailed(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, errCode, "max attempts reached: "+errMsg); err != nil {
-				log.Printf("[DELIVERY] mark failed for %s: %v", lease.DeliveryID, err)
+				r.logError(logging.CodeDeliveryMarkFailed, logging.F("delivery", lease.DeliveryID, "err", err))
 				return joinDeliveryErrors(fmt.Errorf("max attempts reached: %w", runErr), deliveryStatePersistenceError("mark rate-limit exhaustion", err))
 			}
 			return fmt.Errorf("max attempts reached: %w", runErr)
@@ -342,7 +342,7 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 		}
 		nextAttempt := time.Now().UTC().Add(backoff)
 		if err := r.dbStore.MarkDeliveryRetry(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, errCode, errMsg, nextAttempt); err != nil {
-			log.Printf("[DELIVERY] mark retry for %s: %v", lease.DeliveryID, err)
+			r.logError(logging.CodeDeliveryMarkRetry, logging.F("delivery", lease.DeliveryID, "err", err))
 			return deliveryStatePersistenceError("mark rate-limit retry", err)
 		}
 		if r.telemetry != nil {
@@ -353,7 +353,7 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 	default: // ErrorClassTransient
 		if lease.AttemptNumber >= maxAttempts {
 			if err := r.dbStore.MarkDeliveryFailed(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, errCode, "max attempts reached: "+errMsg); err != nil {
-				log.Printf("[DELIVERY] mark failed for %s: %v", lease.DeliveryID, err)
+				r.logError(logging.CodeDeliveryMarkFailed, logging.F("delivery", lease.DeliveryID, "err", err))
 				return joinDeliveryErrors(fmt.Errorf("max attempts reached: %w", runErr), deliveryStatePersistenceError("mark transient exhaustion", err))
 			}
 			return fmt.Errorf("max attempts reached: %w", runErr)
@@ -361,7 +361,7 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 		backoff := r.cfg.backoffForAttempt(lease.AttemptNumber)
 		nextAttempt := time.Now().UTC().Add(backoff)
 		if err := r.dbStore.MarkDeliveryRetry(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, errCode, errMsg, nextAttempt); err != nil {
-			log.Printf("[DELIVERY] mark retry for %s: %v", lease.DeliveryID, err)
+			r.logError(logging.CodeDeliveryMarkRetry, logging.F("delivery", lease.DeliveryID, "err", err))
 			return deliveryStatePersistenceError("mark transient retry", err)
 		}
 		if r.telemetry != nil {

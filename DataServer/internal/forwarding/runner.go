@@ -28,6 +28,7 @@ import (
 
 	"velox-server/internal/creatorflow"
 	"velox-server/internal/jobs/enqueue"
+	"velox-server/internal/logging"
 	"velox-server/internal/remoteengine"
 	"velox-server/internal/store"
 )
@@ -45,6 +46,7 @@ type CreatorForwardingRunner struct {
 	identity     string
 	metrics      *RunnerMetrics
 	telemetry    Telemetry             // optional Prometheus sink; nil-safe
+	logger       *logging.Logger       // structured logger; nil-safe via logf helpers
 	resolver     *creatorflow.Resolver // canonical forward-completed entry point
 	resolverOnce sync.Once             // guards lazyResolver against concurrent first-call race
 
@@ -80,6 +82,7 @@ func NewCreatorForwardingRunner(cfg *RunnerConfig, dbStore *store.SQLiteStore, c
 		enqueuer:  enqueuer,
 		identity:  identity,
 		metrics:   &RunnerMetrics{},
+		logger:    logging.NewLogger("forwarding.runner"),
 		sem:       make(chan struct{}, cfg.Concurrency),
 		stopCh:    make(chan struct{}),
 		stoppedCh: make(chan struct{}),
@@ -141,6 +144,36 @@ func (r *CreatorForwardingRunner) WithTelemetry(t Telemetry) *CreatorForwardingR
 		r.telemetry = t
 	}
 	return r
+}
+
+// WithLogger wires a structured logger for the runner's operator-facing
+// events. Defaults to logging.NewLogger("forwarding.runner") at construction;
+// tests inject a custom (or nil) logger to silence or redirect output.
+func (r *CreatorForwardingRunner) WithLogger(l *logging.Logger) *CreatorForwardingRunner {
+	if r != nil {
+		r.logger = l
+	}
+	return r
+}
+
+// logInfo/logWarn/logError are nil-safe structured emit helpers so a nil
+// injected logger (tests) never panics.
+func (r *CreatorForwardingRunner) logInfo(code string, fields map[string]interface{}) {
+	if r != nil && r.logger != nil {
+		r.logger.Info(code, fields)
+	}
+}
+
+func (r *CreatorForwardingRunner) logWarn(code string, fields map[string]interface{}) {
+	if r != nil && r.logger != nil {
+		r.logger.Warn(code, fields)
+	}
+}
+
+func (r *CreatorForwardingRunner) logError(code string, fields map[string]interface{}) {
+	if r != nil && r.logger != nil {
+		r.logger.Error(code, fields)
+	}
 }
 
 // recordClaimed/recordForwarded/recordFailed/recordRetried keep the atomic

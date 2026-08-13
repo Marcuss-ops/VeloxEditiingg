@@ -4,9 +4,9 @@ package forwarding
 import (
 	"context"
 	"fmt"
-	"log"
 	"sync"
 
+	"velox-server/internal/logging"
 	"velox-server/internal/store"
 	"velox-server/internal/telemetry"
 )
@@ -48,7 +48,7 @@ func (r *CreatorForwardingRunner) tick(ctx context.Context) error {
 	}
 
 	r.recordClaimed(int64(len(leases)))
-	log.Printf("[FORWARDING] claimed %d forwardings", len(leases))
+	r.logInfo(logging.CodeForwardingClaimed, logging.F("claimed", len(leases)))
 
 	var (
 		wg         sync.WaitGroup

@@ -160,6 +160,49 @@ const (
 	CodeSQLiteMigrationApplied   = "SQLITE_MIGRATION_APPLIED"
 )
 
+// Forwarding runner (replaces log.Printf in forwarding/runner_*.go)
+const (
+	CodeForwardingClaimed             = "FORWARDING_CLAIMED"
+	CodeForwardingLeaseLost           = "FORWARDING_LEASE_LOST"
+	CodeForwardingPollFailed          = "FORWARDING_POLL_FAILED"
+	CodeForwardingNilResponse         = "FORWARDING_NIL_RESPONSE"
+	CodeForwardingRenewLeaseFailed    = "FORWARDING_RENEW_LEASE_FAILED"
+	CodeForwardingPayloadMarshalFail  = "FORWARDING_PAYLOAD_MARSHAL_FAILED"
+	CodeForwardingMarkReadyFail       = "FORWARDING_MARK_READY_FAILED"
+	CodeForwardingReadyToForward      = "FORWARDING_READY_TO_FORWARD"
+	CodeForwardingFailed              = "FORWARDING_FAILED"
+	CodeForwardingMaxAttempts         = "FORWARDING_MAX_ATTEMPTS"
+	CodeForwardingRetryCASFail        = "FORWARDING_RETRY_CAS_FAILED"
+	CodeForwardingResolverUnavailable = "FORWARDING_RESOLVER_UNAVAILABLE"
+	CodeForwardingResolveFailed       = "FORWARDING_RESOLVE_FAILED"
+	CodeForwardingForwarded           = "FORWARDING_FORWARDED"
+	CodeForwardingMetricsRefreshFail  = "FORWARDING_METRICS_REFRESH_FAILED"
+)
+
+// Delivery runner (replaces log.Printf in deliveries/runner*.go)
+const (
+	CodeDeliveryReconcileSweepFail   = "DELIVERY_RECONCILE_SWEEP_FAILED"
+	CodeDeliveryLeaseAbandoned       = "DELIVERY_LEASE_ABANDONED"
+	CodeDeliveryProcessFailed        = "DELIVERY_PROCESS_FAILED"
+	CodeDeliveryMarkFailed           = "DELIVERY_MARK_FAILED"
+	CodeDeliveryMarkReconcileFail    = "DELIVERY_MARK_RECONCILE_FAILED"
+	CodeDeliveryCredentialRefFail    = "DELIVERY_CREDENTIAL_REF_FAILED"
+	CodeDeliveryCredentialAuthFail   = "DELIVERY_CREDENTIAL_AUTH_FAILED"
+	CodeDeliveryCredentialAuditFail  = "DELIVERY_CREDENTIAL_AUDIT_FAILED"
+	CodeDeliveryLeaseRenewalFail     = "DELIVERY_LEASE_RENEWAL_FAILED"
+	CodeDeliveryResultValidationFail = "DELIVERY_RESULT_VALIDATION_FAILED"
+	CodeDeliveryMarkBlockedAuth      = "DELIVERY_MARK_BLOCKED_AUTH"
+	CodeDeliveryMarkRetry            = "DELIVERY_MARK_RETRY"
+)
+
+// Completion reconcile supervisor (replaces log.Printf in reconcile_supervisor.go)
+const (
+	CodeCompletionReconcileStarted      = "COMPLETION_RECONCILE_STARTED"
+	CodeCompletionReconcileScanFail     = "COMPLETION_RECONCILE_SCAN_FAILED"
+	CodeCompletionReconcileTick         = "COMPLETION_RECONCILE_TICK"
+	CodeCompletionReconcileDispatchFail = "COMPLETION_RECONCILE_DISPATCH_FAILED"
+)
+
 // Level constants
 const (
 	LevelInfo  = "INFO"
@@ -294,6 +337,43 @@ var codeDescriptions = map[string]string{
 	CodeSQLiteMigrationCloseFail: "SQLite close after migration failure",
 	CodeSQLiteClosePostMigration: "SQLite close after post-migration",
 	CodeSQLiteMigrationApplied:   "SQLite migration applied",
+
+	// Forwarding runner.
+	CodeForwardingClaimed:             "Forwardings claimed from the queue",
+	CodeForwardingLeaseLost:           "Forwarding lease lost",
+	CodeForwardingPollFailed:          "Remote creator poll failed",
+	CodeForwardingNilResponse:         "Remote creator returned nil without error",
+	CodeForwardingRenewLeaseFailed:    "Forwarding lease renewal failed",
+	CodeForwardingPayloadMarshalFail:  "Forwarding payload is not JSON-serializable",
+	CodeForwardingMarkReadyFail:       "Failed to mark forwarding ready-to-forward",
+	CodeForwardingReadyToForward:      "Forwarding ready to forward",
+	CodeForwardingFailed:              "Forwarding failed",
+	CodeForwardingMaxAttempts:         "Forwarding max attempts exhausted",
+	CodeForwardingRetryCASFail:        "Forwarding enqueue retry CAS failed",
+	CodeForwardingResolverUnavailable: "Forwarding resolver unavailable",
+	CodeForwardingResolveFailed:       "Forwarding resolver failed",
+	CodeForwardingForwarded:           "Forwarding forwarded to job",
+	CodeForwardingMetricsRefreshFail:  "Forwarding metrics refresh failed",
+
+	// Delivery runner.
+	CodeDeliveryReconcileSweepFail:   "Delivery reconciliation sweep failed",
+	CodeDeliveryLeaseAbandoned:       "Delivery lease abandoned (runner shutting down)",
+	CodeDeliveryProcessFailed:        "Delivery processing failed",
+	CodeDeliveryMarkFailed:           "Failed to mark delivery failed",
+	CodeDeliveryMarkReconcileFail:    "Failed to mark delivery reconciliation failure",
+	CodeDeliveryCredentialRefFail:    "Failed to mark delivery credential-reference failure",
+	CodeDeliveryCredentialAuthFail:   "Failed to mark delivery credential auth failure",
+	CodeDeliveryCredentialAuditFail:  "Delivery credential usage audit failed",
+	CodeDeliveryLeaseRenewalFail:     "Delivery lease renewal failed",
+	CodeDeliveryResultValidationFail: "Delivery provider result validation failed",
+	CodeDeliveryMarkBlockedAuth:      "Failed to mark delivery blocked-auth",
+	CodeDeliveryMarkRetry:            "Failed to mark delivery retry",
+
+	// Completion reconcile supervisor.
+	CodeCompletionReconcileStarted:      "Reconcile supervisor started",
+	CodeCompletionReconcileScanFail:     "Reconcile scan failed",
+	CodeCompletionReconcileTick:         "Reconcile tick candidates",
+	CodeCompletionReconcileDispatchFail: "Reconcile dispatch failed",
 }
 
 // GetDescription returns the human-readable description for a code

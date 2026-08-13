@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"velox-server/internal/logging"
 )
 
 // reconcile_dispatch.go owns the supervisor's post-scan work:
@@ -26,7 +28,7 @@ func (s *ReconcileSupervisor) dispatch(ctx context.Context, c ReconcileCandidate
 			s.Metrics.IncReconcile(string(c.Case), string(ActionNoop))
 			return
 		}
-		s.logf("[RECONCILE-SUPERVISOR] dispatch %s (%s): %v", c.CommitID, c.Case, err)
+		s.logWarn(logging.CodeCompletionReconcileDispatchFail, logging.F("commit_id", c.CommitID, "case", c.Case, "err", err))
 		s.Metrics.IncReconcile(string(c.Case), string(ActionEscalate))
 		return
 	}
