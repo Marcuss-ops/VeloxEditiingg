@@ -248,14 +248,14 @@ func syncAssetDirectory(path string) error {
 	return dir.Sync()
 }
 
-// syncAssetDirectoryFn is injectable only for deterministic atomic-promotion
-// failure tests. Production always uses syncAssetDirectory.
-var syncAssetDirectoryFn = syncAssetDirectory
-
 // writeVeloxAssetToCacheAtOffset appends a 206 response to an existing
 // partial, or truncates/restarts the partial when offset is zero. It never
 // promotes a file until the complete partial has passed size and SHA checks.
-func writeVeloxAssetToCacheAtOffset(cacheDir, assetID string, expectedSHA256 string, expectedSizeBytes int64, resp *http.Response, offset int64) (string, int64, string, time.Duration, error) {
+// syncDir is the directory-durability primitive: production passes
+// syncAssetDirectory, tests pass a deterministic stand-in. It is an explicit
+// parameter rather than a package-level variable so the shared state stays
+// immutable and the seam is visible at the call site.
+func writeVeloxAssetToCacheAtOffset(cacheDir, assetID string, expectedSHA256 string, expectedSizeBytes int64, resp *http.Response, offset int64, syncDir func(string) error) (string, int64, string, time.Duration, error) {
 	if offset < 0 {
 		return "", 0, "", 0, fmt.Errorf("%w: negative resume offset", ErrAssetVerification)
 	}
@@ -410,11 +410,11 @@ func writeVeloxAssetToCacheAtOffset(cacheDir, assetID string, expectedSHA256 str
 	// Persist both directory entries after the atomic promotion. If fsync is
 	// unavailable on a platform, restore the previous final rather than
 	// claiming the new promotion succeeded.
-	if err := syncAssetDirectoryFn(filepath.Join(cacheDir, "partial")); err != nil {
+	if err := syncDir(filepath.Join(cacheDir, "partial")); err != nil {
 		restorePrevious()
 		return "", 0, "", time.Since(verifyStarted), err
 	}
-	if err := syncAssetDirectoryFn(cacheDir); err != nil {
+	if err := syncDir(cacheDir); err != nil {
 		restorePrevious()
 		return "", 0, "", time.Since(verifyStarted), err
 	}
@@ -422,7 +422,7 @@ func writeVeloxAssetToCacheAtOffset(cacheDir, assetID string, expectedSHA256 str
 		_ = os.Remove(backupPath)
 		// The new final is already durable; failure to persist deletion of the
 		// rollback copy is harmless and will be cleaned on a later cache pass.
-		_ = syncAssetDirectoryFn(cacheDir)
+		_ = syncDir(cacheDir)
 	}
 	return finalPath, written, actualSHA256, time.Since(verifyStarted), nil
 }

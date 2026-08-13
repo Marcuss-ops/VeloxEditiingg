@@ -90,7 +90,7 @@ func TestWriteAssetCacheAtOffsetPromotesOnlyCompleteVerifiedPartial(t *testing.T
 		Header:        http.Header{"Content-Range": []string{fmt.Sprintf("bytes 7-%d/%d", len(data)-1, len(data))}},
 		Body:          ioReadCloser{Reader: bytes.NewReader(data[7:])},
 	}
-	path, size, _, _, err := writeVeloxAssetToCacheAtOffset(cacheDir, assetID, "", int64(len(data)), resp, 7)
+	path, size, _, _, err := writeVeloxAssetToCacheAtOffset(cacheDir, assetID, "", int64(len(data)), resp, 7, syncAssetDirectory)
 	if err != nil {
 		t.Fatalf("append/promote partial: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestWriteAssetCacheAtOffsetRejectsHashAndRemovesPartial(t *testing.T) {
 		Header:     make(http.Header),
 		Body:       ioReadCloser{Reader: bytes.NewReader([]byte("wrong bytes"))},
 	}
-	_, _, _, _, err := writeVeloxAssetToCacheAtOffset(cacheDir, assetID, "0000000000000000000000000000000000000000000000000000000000000000", 11, resp, 0)
+	_, _, _, _, err := writeVeloxAssetToCacheAtOffset(cacheDir, assetID, "0000000000000000000000000000000000000000000000000000000000000000", 11, resp, 0, syncAssetDirectory)
 	if err == nil {
 		t.Fatal("hash mismatch should fail")
 	}

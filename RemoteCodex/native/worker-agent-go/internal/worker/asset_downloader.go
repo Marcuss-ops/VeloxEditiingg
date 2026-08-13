@@ -501,7 +501,7 @@ func (t *masterAssetTransferer) Transfer(ctx context.Context, reportCtx context.
 			}
 			resp.Body = &assetProgressBody{ctx: ctx, src: resp.Body, onProgress: onProgress, done: resumeOffset, maxBPS: req.MaxBandwidthBytesPerSecond}
 		}
-		localPath, downloadedBytes, actualSHA, verifyDuration, err := writeVeloxAssetToCacheAtOffset(cacheDir, assetID, string(req.SHA256), req.SizeBytes, resp, resumeOffset)
+		localPath, downloadedBytes, actualSHA, verifyDuration, err := writeVeloxAssetToCacheAtOffset(cacheDir, assetID, string(req.SHA256), req.SizeBytes, resp, resumeOffset, syncAssetDirectory)
 		resp.Body.Close()
 		if err != nil {
 			recordCacheProjectionEvent(reportCtx, "hash_verify", verifyDuration, telemetry.StatusFailed, "", 0)

@@ -19,15 +19,13 @@ func TestWriteAssetCacheAtOffsetRestoresPreviousFinalOnDirectorySyncFailure(t *t
 	if err := os.WriteFile(oldPath, oldData, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	originalSync := syncAssetDirectoryFn
-	defer func() { syncAssetDirectoryFn = originalSync }()
 	calls := 0
-	syncAssetDirectoryFn = func(path string) error {
+	syncDir := func(path string) error {
 		calls++
 		if calls == 2 {
 			return errors.New("injected directory fsync failure")
 		}
-		return originalSync(path)
+		return syncAssetDirectory(path)
 	}
 	resp := &http.Response{
 		StatusCode:    http.StatusOK,
@@ -35,7 +33,7 @@ func TestWriteAssetCacheAtOffsetRestoresPreviousFinalOnDirectorySyncFailure(t *t
 		Header:        http.Header{"Content-Type": []string{"video/mp4"}},
 		Body:          ioReadCloser{Reader: bytes.NewReader(newData)},
 	}
-	_, _, _, _, err := writeVeloxAssetToCacheAtOffset(cacheDir, assetID, expectedSHA, int64(len(newData)), resp, 0)
+	_, _, _, _, err := writeVeloxAssetToCacheAtOffset(cacheDir, assetID, expectedSHA, int64(len(newData)), resp, 0, syncDir)
 	if err == nil {
 		t.Fatal("injected fsync failure must fail promotion")
 	}
