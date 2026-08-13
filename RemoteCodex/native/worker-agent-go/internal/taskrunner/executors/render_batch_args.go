@@ -49,8 +49,16 @@ func buildVideoOnlyArgs(plan *contract.CompiledRenderPlanV2, bindings runtimeass
 		}
 	}
 
-	filters := make([]string, 0, totalVideoSegments(plan)*2+1)
-	base := "[0:v]"
+	// Two filter strings per segment plus the final format filter, written in
+	// one pass into a single builder. The overlay's input label is derived from
+	// the previous overlay index ([0:v] for the first segment) instead of a base
+	// string variable, and segment/overlay labels are written directly from the
+	// integer index.
+	var filter strings.Builder
+	filter.Grow(totalVideoSegments(plan)*300 + 64)
+
+	width := plan.Output.Width
+	height := plan.Output.Height
 	segmentIndex := 0
 	for _, track := range plan.VideoTracks {
 		for _, segment := range track.Segments {
@@ -62,22 +70,65 @@ func buildVideoOnlyArgs(plan *contract.CompiledRenderPlanV2, bindings runtimeass
 			if math.Abs(frameDuration-sourceDuration) > 1.0/float64(plan.Output.FPSNum) {
 				return nil, fmt.Errorf("segment %q source_duration_us=%d does not match frame_count=%d at %d/%d fps", segment.SegmentID, segment.SourceDurationUS, segment.FrameCount, plan.Output.FPSNum, plan.Output.FPSDen)
 			}
-			segmentLabel := fmt.Sprintf("[batch_segment_%d]", segmentIndex)
-			filters = append(filters, fmt.Sprintf("[%d:v]trim=start=%.6f:duration=%.6f,setpts=PTS-STARTPTS+%.6f/TB,scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2:color=black%s", input, sourceIn, sourceDuration, start, plan.Output.Width, plan.Output.Height, plan.Output.Width, plan.Output.Height, segmentLabel))
-			overlayOutput := fmt.Sprintf("[batch_overlay_%d]", segmentIndex)
-			filters = append(filters, fmt.Sprintf("%s%soverlay=eof_action=pass:shortest=0%s", base, segmentLabel, overlayOutput))
-			base = overlayOutput
+
+			if filter.Len() > 0 {
+				filter.WriteByte(';')
+			}
+			filter.WriteByte('[')
+			writeInt(&filter, input)
+			filter.WriteString(":v]trim=start=")
+			writeFloat6(&filter, sourceIn)
+			filter.WriteString(":duration=")
+			writeFloat6(&filter, sourceDuration)
+			filter.WriteString(",setpts=PTS-STARTPTS+")
+			writeFloat6(&filter, start)
+			filter.WriteString("/TB,scale=")
+			writeInt(&filter, width)
+			filter.WriteByte(':')
+			writeInt(&filter, height)
+			filter.WriteString(":force_original_aspect_ratio=decrease,pad=")
+			writeInt(&filter, width)
+			filter.WriteByte(':')
+			writeInt(&filter, height)
+			filter.WriteString(":(ow-iw)/2:(oh-ih)/2:color=black[batch_segment_")
+			writeInt(&filter, segmentIndex)
+			filter.WriteByte(']')
+
+			filter.WriteByte(';')
+			if segmentIndex == 0 {
+				filter.WriteString("[0:v]")
+			} else {
+				filter.WriteString("[batch_overlay_")
+				writeInt(&filter, segmentIndex-1)
+				filter.WriteByte(']')
+			}
+			filter.WriteString("[batch_segment_")
+			writeInt(&filter, segmentIndex)
+			filter.WriteString("]overlay=eof_action=pass:shortest=0[batch_overlay_")
+			writeInt(&filter, segmentIndex)
+			filter.WriteByte(']')
 			segmentIndex++
 		}
 	}
-	filters = append(filters, base+"format=yuv420p[vout]")
+
+	if filter.Len() > 0 {
+		filter.WriteByte(';')
+	}
+	if segmentIndex == 0 {
+		filter.WriteString("[0:v]")
+	} else {
+		filter.WriteString("[batch_overlay_")
+		writeInt(&filter, segmentIndex-1)
+		filter.WriteByte(']')
+	}
+	filter.WriteString("format=yuv420p[vout]")
 
 	pixelFormat := plan.Output.PixelFormat
 	if pixelFormat == "" {
 		pixelFormat = "yuv420p"
 	}
 	args = append(args,
-		"-filter_complex", strings.Join(filters, ";"),
+		"-filter_complex", filter.String(),
 		"-map", "[vout]", "-an",
 		"-c:v", plan.Output.VideoCodec,
 		"-pix_fmt", pixelFormat,
