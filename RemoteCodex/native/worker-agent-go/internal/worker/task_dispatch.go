@@ -1,52 +1,12 @@
-// Package worker — task dispatch to TaskRunner + active-task lifecycle.
+// Package worker — task dispatch to TaskRunner.
 //
-// task_dispatch.go owns the dispatch path invoked by executeTask AND
-// the active-task lifecycle helpers that run alongside it:
-//
-//	runJobTask                — wraps dispatchTaskRunner with a 30-minute
-//	                            per-job timeout context (the canonical
-//	                            worker-side budget).
-//	dispatchTaskRunner        — resolves the pre-compiled TaskSpec's
-//	                            asset payload via the worker asset
-//	                            bridge, then invokes TaskRunner.Run.
-//	                            Surface area:
-//	                            - wraps taskRunner.Run errors with
-//	                              "taskrunner.Run: %w"
-//	                            - maps a non-success report to a wrapped
-//	                              error that preserves the canonical
-//	                              (executor_key, code, detail) tuple
-//	                              on the wire
-//	                            - preserves context.Canceled identity
-//	                              when report.ErrorCode ==
-//	                              taskrunner.CodeCanceled (operator
-//	                              aborts must NOT be flattened to a
-//	                              generic FAILED attempt on the master)
-//	                            - enforces "every successful output has
-//	                              a non-empty hash" so the executor
-//	                              cannot declare success with empty
-//	                              content hashes
-//
-//	registerActiveTask        — builds *ActiveTaskExecution, inserts it
-//	                            into the activeTasks + taskIDsByJob maps
-//	                            under activeTasksMu. Returns the pointer
-//	                            so the caller can assign
-//	                            activeTask.Cancel = jobCancel AFTER
-//	                            wakeHeartbeat (preserving the original
-//	                            ordering).
-//	unregisterActiveTask      — deferred cleanup that mirrors the
-//	                            original closure: deletes from the maps,
-//	                            removes empty jobID entries, wakes the
-//	                            heartbeat.
-//	withJobProgressCallback   — wraps the parent context with the
-//	                            progress callback that updates
-//	                            activeTask.Progress under the
-//	                            activeTasksMu lock.
-//
-// The dispatch path and the active-task lifecycle helpers live in the
-// same file because the lifecycle helpers (registration, progress
-// tracking, cleanup) are part of the dispatch flow's resource
-// management surface — they own the in-memory state that the dispatch
-// path mutates while a task is in flight.
+// task_dispatch.go owns the dispatch path invoked by executeTask:
+// runJobTask (per-job timeout budget) and dispatchTaskRunner (asset
+// resolution, lease protection, TaskRunner.Run and the canonical
+// error/report mapping). The active-task registration/cleanup helpers
+// live in task_lifecycle.go and the detailed-progress callback in
+// task_progress.go; all share the activeTasksMu-managed in-memory
+// state that the dispatch path mutates while a task is in flight.
 package worker
 
 import (
@@ -59,7 +19,6 @@ import (
 	"velox-worker-agent/internal/runtimeassets"
 	"velox-worker-agent/internal/taskrunner"
 	"velox-worker-agent/internal/telemetry"
-	"velox-worker-agent/pkg/video/pipeline"
 )
 
 // runJobTask executes the actual task via the TaskRunner.
@@ -309,166 +268,4 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 		report.AttemptEvents.ArtifactVerified(telemetry.StatusOK, nil)
 	}
 	return &report, nil
-}
-
-// registerActiveTask builds the ActiveTaskExecution entry, inserts
-// it under activeTasksMu, and returns the pointer. The caller MUST
-// call wakeHeartbeat immediately after, then assign
-// activeTask.Cancel = jobCancel — preserving the original ordering
-// where the heartbeat goroutine sees the new entry BEFORE the cancel
-// function is wired up.
-func (w *Worker) registerActiveTask(taskID, attemptID string, pte *PendingTaskExecution) *ActiveTaskExecution {
-	activeTask := &ActiveTaskExecution{
-		TaskID:    taskID,
-		AttemptID: attemptID,
-		JobID:     pte.JobID,
-		Task:      pte,
-		LeaseID:   pte.LeaseID,
-		StartedAt: time.Now(),
-	}
-	w.activeTasksMu.Lock()
-	w.activeTasks[taskID] = activeTask
-	w.taskIDsByJob[pte.JobID] = append(w.taskIDsByJob[pte.JobID], taskID)
-	w.activeTasksMu.Unlock()
-	return activeTask
-}
-
-// unregisterActiveTask is the deferred cleanup that mirrors the
-// original closure: deletes the active task from both maps, removes
-// the jobID entry when its task list drains to zero, then wakes the
-// heartbeat so the next tick reports the updated state.
-func (w *Worker) unregisterActiveTask(taskID string, pte *PendingTaskExecution) {
-	w.activeTasksMu.Lock()
-	delete(w.activeTasks, taskID)
-	taskIDs := w.taskIDsByJob[pte.JobID]
-	for i, tid := range taskIDs {
-		if tid == taskID {
-			w.taskIDsByJob[pte.JobID] = append(taskIDs[:i], taskIDs[i+1:]...)
-			break
-		}
-	}
-	if len(w.taskIDsByJob[pte.JobID]) == 0 {
-		delete(w.taskIDsByJob, pte.JobID)
-	}
-	w.activeTasksMu.Unlock()
-	w.wakeHeartbeat()
-}
-
-// logArtifactGraphProfiling emits the per-attempt intermediate-file
-// profiling summary (Fase E2). Empty graphs (no records registered by the
-// executor) are skipped entirely. Write-then-read candidates — the files a
-// later optimization phase should consider eliminating — surface at INFO;
-// the full ledger rides at DEBUG. This is the evidence base: nothing is
-// removed a priori, candidates are only flagged for a decision.
-func (w *Worker) logArtifactGraphProfiling(pte *PendingTaskExecution, g *artifactgraph.Graph) {
-	if w == nil || g == nil || pte == nil {
-		return
-	}
-	summary := g.Summary()
-	if summary.FileCount == 0 {
-		return
-	}
-	if len(summary.Candidates) > 0 {
-		w.logger.Info("[ARTIFACT-GRAPH] attempt=%s files=%d candidates=%d reread_bytes=%d",
-			pte.AttemptID, summary.FileCount, len(summary.Candidates), summary.TotalReReadBytes)
-		for _, c := range summary.Candidates {
-			w.logger.Info("[ARTIFACT-GRAPH]   reread_bytes=%d lifetime=%s producer=%s consumer=%s path=%s",
-				c.ReReadBytes, c.Lifetime.Round(time.Millisecond), c.ProducerPhase, c.ConsumerPhase, c.Path)
-		}
-	}
-	w.logger.Debug("[ARTIFACT-GRAPH] attempt=%s files=%d written_bytes=%d read_bytes=%d",
-		pte.AttemptID, summary.FileCount, summary.TotalWrittenBytes, summary.TotalReadBytes)
-}
-
-func cumulativeMetricsEqual(left, right map[string]float64) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for key, value := range left {
-		if other, ok := right[key]; !ok || other != value {
-			return false
-		}
-	}
-	return true
-}
-
-// withJobProgressCallback returns a child context carrying the
-// canonical progress callback that updates activeTask.Progress under
-// the activeTasksMu lock. The callback uses taskID to dynamically
-// look up the current entry — never the captured pointer — so a
-// later replace (which the original code does NOT do) would still
-// route to the fresh entry.
-func (w *Worker) withJobProgressCallback(parent context.Context, taskID string) context.Context {
-	return pipeline.WithDetailedProgressCallback(parent, func(snapshot pipeline.ProgressSnapshot) {
-		now := time.Now().UTC()
-		w.activeTasksMu.Lock()
-		if current := w.activeTasks[taskID]; current != nil {
-			previous := current.Progress
-			phaseChanged := previous.Phase != snapshot.Phase
-			segmentChanged := previous.Segment != snapshot.Segment
-			segmentCompleted := snapshot.SegmentCompleted &&
-				(!previous.SegmentCompleted || previous.Segment != snapshot.Segment)
-			identical := previous.Percent == snapshot.Percent &&
-				previous.Scene == snapshot.Scene && previous.TotalScenes == snapshot.TotalScenes &&
-				previous.Segment == snapshot.Segment && previous.TotalSegments == snapshot.TotalSegments &&
-				previous.SegmentCompleted == snapshot.SegmentCompleted &&
-				previous.Phase == snapshot.Phase && !segmentCompleted &&
-				previous.FramesEncoded == snapshot.FramesEncoded &&
-				previous.FramesDecoded == snapshot.FramesDecoded &&
-				previous.FramesComposited == snapshot.FramesComposited &&
-				previous.FfmpegSpeedX == snapshot.FfmpegSpeedX &&
-				previous.ElapsedMS == snapshot.ElapsedMS &&
-				cumulativeMetricsEqual(previous.CumulativeMetrics, snapshot.CumulativeMetrics)
-			publishDue := !identical && (previous.LastPublishedAt.IsZero() ||
-				now.Sub(previous.LastPublishedAt) >= 2*time.Second || phaseChanged || segmentChanged || segmentCompleted)
-
-			metrics := make(map[string]float64, len(snapshot.CumulativeMetrics))
-			for key, value := range snapshot.CumulativeMetrics {
-				metrics[key] = value
-			}
-			// Keep the latest snapshot in the same canonical Attempt
-			// projection even when heartbeat publication is throttled.
-			// LastProgressAt describes the newest engine observation;
-			// LastPublishedAt is only the local wake/throttle clock and
-			// is never serialized as operator telemetry.
-			if current.AttemptEvents != nil {
-				// Emit lifecycle edges before the progress sample updates the
-				// machine's last phase/segment context. Segment completion is
-				// emitted after the sample because ProgressUpdated resets the
-				// completion edge for the next segment.
-				if phaseChanged {
-					current.AttemptEvents.PhaseChanged(snapshot.Phase)
-				}
-				if segmentChanged {
-					current.AttemptEvents.SegmentStarted(snapshot.Segment, snapshot.Phase)
-				}
-				current.AttemptEvents.ProgressUpdated(snapshot.Phase, snapshot.Segment, snapshot.Percent, snapshot.ElapsedMS, snapshot.FramesEncoded, now)
-				if segmentCompleted {
-					current.AttemptEvents.SegmentCompleted(snapshot.Segment, snapshot.Phase)
-				}
-			}
-			current.Progress = JobProgress{
-				Percent:     snapshot.Percent,
-				Scene:       snapshot.Scene,
-				TotalScenes: snapshot.TotalScenes, Segment: snapshot.Segment,
-				TotalSegments:     snapshot.TotalSegments,
-				SegmentCompleted:  snapshot.SegmentCompleted,
-				Phase:             snapshot.Phase,
-				Stage:             snapshot.Phase,
-				FramesEncoded:     snapshot.FramesEncoded,
-				FramesDecoded:     snapshot.FramesDecoded,
-				FramesComposited:  snapshot.FramesComposited,
-				FfmpegSpeedX:      snapshot.FfmpegSpeedX,
-				ElapsedMS:         snapshot.ElapsedMS,
-				LastProgressAt:    now,
-				LastPublishedAt:   previous.LastPublishedAt,
-				CumulativeMetrics: metrics,
-			}
-			if publishDue {
-				current.Progress.LastPublishedAt = now
-				w.wakeHeartbeat()
-			}
-		}
-		w.activeTasksMu.Unlock()
-	})
 }
