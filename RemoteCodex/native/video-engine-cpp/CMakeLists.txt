@@ -524,6 +524,43 @@ if(VELOX_ENABLE_LIBAV)
     add_test(NAME render_copy_only_zero_intermediates_tests
              COMMAND velox_render_copy_only_zero_intermediates_tests)
 
+    # Mixed renderer: PACKET_COPY + NATIVE_TRANSCODE assembled through the
+    # single packet mux, with the produced-segment canonical-profile
+    # fail-closed gate. Render-level: canonical + non-canonical fixtures;
+    # the sentinel PATH proves the whole mixed path stays in-process.
+    add_executable(velox_render_mixed_tests
+        tests/test_render_mixed.cpp
+        src/audio/audio_plan.cpp
+        src/audio/audio_benchmark.cpp
+        src/core/render_engine.cpp
+        src/core/canonical_video_profile.cpp
+        src/core/render_engine_helpers.cpp
+        src/services/frame_pipeline.cpp
+        src/render/frame_graph.cpp
+        src/render/kernel_registry.cpp
+        src/services/file_utils.cpp
+        src/services/io_counters.cpp
+        src/services/media_probe.cpp
+        src/services/media_packet_pipeline.cpp
+        src/services/segment_execution_libav.cpp
+        src/services/segment_execution.cpp
+        src/services/segment_scheduler.cpp
+        src/services/media_utils.cpp
+        src/services/ffmpeg_progress_parser.cpp
+        src/telemetry/emitter.cpp
+    )
+
+    target_include_directories(velox_render_mixed_tests
+        PRIVATE include src include/velox)
+
+    if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(velox_render_mixed_tests PRIVATE -O2)
+    endif()
+    velox_link_ffmpeg(velox_render_mixed_tests)
+
+    add_test(NAME render_mixed_tests
+             COMMAND velox_render_mixed_tests)
+
     # CompiledRenderPlanV2 receiver: parser unit tests (int64 frames/us,
     # float rejection, contiguity, frame-exactness, bindings) plus a
     # render-level zero-spawn proof of the V2 envelope through
@@ -609,6 +646,9 @@ if(TARGET velox_media_packet_pipeline_tests)
 endif()
 if(TARGET velox_render_copy_only_zero_intermediates_tests)
     add_dependencies(velox_render_copy_only_zero_intermediates_tests velox_telemetry_catalog_codegen)
+endif()
+if(TARGET velox_render_mixed_tests)
+    add_dependencies(velox_render_mixed_tests velox_telemetry_catalog_codegen)
 endif()
 if(TARGET velox_render_plan_v2_tests)
     add_dependencies(velox_render_plan_v2_tests velox_telemetry_catalog_codegen)

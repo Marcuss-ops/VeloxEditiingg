@@ -541,7 +541,15 @@ bool renderFrames(const FramePipelineConfig& config, FramePipelineResult* result
         result->error = "avcodec_parameters_from_context failed";
         return false;
     }
-    out_stream->time_base = enc_ctx->time_base;
+    // MP4 needs a timescale with enough precision to represent the frame
+    // rate exactly. The encoder's {1, fps} time_base (frame-index units) is
+    // correct for libx264, but giving it to movenc as the stream time_base
+    // makes movenc rescale to a "nice" timescale without rescaling the
+    // frame durations, so a 30 fps segment muxes as ~65µs-per-frame.
+    // 90 kHz is the MP4 video convention and divides exactly for the
+    // canonical 30 fps (and 24/5/…); encoded packets are explicitly
+    // rescaled to this timescale before interleaving (see drainEncoded).
+    out_stream->time_base = AVRational{1, 90'000};
     out_stream->avg_frame_rate = AVRational{config.fps_num, config.fps_den};
     if (avio_open(&mux->pb, partial.c_str(), AVIO_FLAG_WRITE) < 0) {
         cleanupPartial();
@@ -741,7 +749,14 @@ bool renderFrames(const FramePipelineConfig& config, FramePipelineResult* result
                 return false;
             }
             out_packet->stream_index = 0;
-            out_packet->time_base = enc_ctx->time_base;
+            // Rescale the encoder's frame-index timestamps into the MP4
+            // stream time_base explicitly. movenc writes the timestamps it
+            // is given and does not reliably rescale pkt->time_base, so a
+            // {1, fps} encoder time_base would otherwise mux as one tick per
+            // frame regardless of the stream timescale.
+            av_packet_rescale_ts(out_packet.get(), enc_ctx->time_base,
+                                 out_stream->time_base);
+            out_packet->time_base = out_stream->time_base;
             if (av_interleaved_write_frame(mux.get(), out_packet.get()) < 0) {
                 failStage("av_interleaved_write_frame failed");
                 av_packet_unref(out_packet.get());

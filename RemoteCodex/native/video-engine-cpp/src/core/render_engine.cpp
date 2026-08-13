@@ -698,6 +698,28 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                 frames_decoded_.fetch_add(nativeResult.frames_decoded);
                 frames_composited_.fetch_add(nativeResult.frames_encoded);
                 encode_passes_.fetch_add(1);
+                // Fail-closed canonical-profile gate: a produced (transcoded)
+                // segment must be compatible with the canonical output
+                // profile before the packet mux concatenates it with
+                // packet-copied ranges. The mux's own pairwise check is a
+                // backstop; this is the explicit
+                // mediaSignaturesCompatible(produced, canonical) gate.
+                media::SegmentProbe produced_probe;
+                std::string produced_error;
+                if (!media::probeSegmentForExecution(
+                        normalized, 0, media::MediaKind::Video,
+                        &produced_probe, &produced_error)) {
+                    result.error = "failed to probe produced segment " +
+                        std::to_string(i) + ": " + produced_error;
+                    return failRender("mixed_produced_probe_failed");
+                }
+                std::string profile_reason;
+                if (!media::mediaSignaturesCompatible(
+                        produced_probe.signature, canonical, &profile_reason)) {
+                    result.error = "produced segment " + std::to_string(i) +
+                        " is not canonical-profile compatible: " + profile_reason;
+                    return failRender("mixed_produced_profile_mismatch");
+                }
                 request.video_segments.push_back({
                     normalized, 0, duration_us, false, true});
             }
