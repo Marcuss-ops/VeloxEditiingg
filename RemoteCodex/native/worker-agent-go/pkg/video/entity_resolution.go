@@ -58,29 +58,33 @@ func deduplicateMatches(matches []MatchResult) []MatchResult {
 		return sorted[i].Score > sorted[j].Score
 	})
 
-	// Keep only non-overlapping matches (5-second window). Preallocate to the
-	// input size so the filter loop never re-grows the backing array.
+	// Greedily keep the highest-scoring non-overlapping matches. Instead of
+	// rescanning every kept match for each candidate (O(n^2)), the kept slice
+	// is maintained sorted by TimestampStart, so the overlap test reduces to a
+	// single binary search + one comparison (O(log n)). Kept intervals are
+	// pairwise non-overlapping by construction, so their ends are also sorted
+	// ascending and the candidate interval [Start-window, End+window] can only
+	// overlap the last kept match whose start still precedes its window end.
 	const dedupWindow = 5.0
-	result := make([]MatchResult, 0, len(sorted))
+	kept := make([]MatchResult, 0, len(sorted))
 	for _, m := range sorted {
-		overlaps := false
-		for _, kept := range result {
-			// Check temporal overlap within window
-			if m.TimestampStart < kept.TimestampEnd+dedupWindow && m.TimestampEnd > kept.TimestampStart-dedupWindow {
-				overlaps = true
-				break
-			}
+		// r = count of kept matches whose start < m.TimestampEnd+dedupWindow.
+		// Only those can satisfy m.TimestampEnd > kept.TimestampStart-dedupWindow.
+		r := sort.Search(len(kept), func(i int) bool {
+			return kept[i].TimestampStart >= m.TimestampEnd+dedupWindow
+		})
+		if r > 0 && kept[r-1].TimestampEnd > m.TimestampStart-dedupWindow {
+			continue // overlaps a higher-scored kept match
 		}
-		if !overlaps {
-			result = append(result, m)
-		}
+		// Insert m at index r (sorted by TimestampStart; kept[r-1].start < m.start
+		// and kept[r].start > m.start hold whenever the overlap test passes).
+		kept = append(kept, m)
+		copy(kept[r+1:], kept[r:])
+		kept[r] = m
 	}
 
-	// Sort result by timestamp for chronological order.
-	sort.SliceStable(result, func(i, j int) bool {
-		return result[i].TimestampStart < result[j].TimestampStart
-	})
-	return result
+	// kept is already ordered chronologically by TimestampStart.
+	return kept
 }
 
 // validatePreAssociatedEntities checks that pre-associated entity timestamps are reasonable.
