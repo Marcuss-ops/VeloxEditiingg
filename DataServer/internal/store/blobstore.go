@@ -80,6 +80,12 @@ func (b *FilesystemBlobStore) FinalPath(jobID, artifactID, extension string) str
 // PromoteToFinal atomically moves a staged file to its final location.
 // The parent directory is created if necessary. Returns the storage_key
 // (absolute path to final location).
+//
+// Callers fsync the staged file's CONTENT before calling this, so the bytes
+// are durable; the rename itself needs a directory fsync of both the source
+// (entry removed) and destination (entry created) directories so a crash
+// cannot lose the new final name while a DB row already references it.
+// Both are best-effort (POSIX; no-op where directory fsync is unsupported).
 func (b *FilesystemBlobStore) PromoteToFinal(stagingPath, finalPath string) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(finalPath), 0755); err != nil {
 		return "", fmt.Errorf("blobstore: mkdir final: %w", err)
@@ -87,7 +93,18 @@ func (b *FilesystemBlobStore) PromoteToFinal(stagingPath, finalPath string) (str
 	if err := os.Rename(stagingPath, finalPath); err != nil {
 		return "", fmt.Errorf("blobstore: rename %s → %s: %w", stagingPath, finalPath, err)
 	}
+	syncDirBestEffort(filepath.Dir(stagingPath))
+	syncDirBestEffort(filepath.Dir(finalPath))
 	return finalPath, nil
+}
+
+// syncDirBestEffort fsyncs a directory entry so a rename/link/copy that
+// precedes a DB commit survives a crash (POSIX best-effort; no-op elsewhere).
+func syncDirBestEffort(path string) {
+	if dir, err := os.Open(path); err == nil {
+		_ = dir.Sync()
+		_ = dir.Close()
+	}
 }
 
 // PromoteDurable streams a staged blob to finalPath with the durability
@@ -157,10 +174,7 @@ func (b *FilesystemBlobStore) PromoteDurable(stagingPath, finalPath string) (str
 	}
 
 	// fsync the directory entry (POSIX best-effort).
-	if dir, derr := os.Open(filepath.Dir(finalPath)); derr == nil {
-		_ = dir.Sync()
-		_ = dir.Close()
-	}
+	syncDirBestEffort(filepath.Dir(finalPath))
 
 	return finalPath, nil
 }
