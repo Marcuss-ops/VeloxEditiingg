@@ -15,6 +15,8 @@ visibile in `/metrics`, nei log strutturati e nei trace?".
 
 ## 1. GAP 1 — metriche del forwarding runner orfane (P1)
 
+**Stato: ✅ RISOLTO** — `a09e384d` (`feat(forwarding): wire runner metrics onto the Prometheus registry`): family `velox_forwarding_*` registrate su `Registry` e iniettate nel runner via `WithTelemetry`.
+
 Il `CreatorForwardingRunner` — lo stesso `processLease` a complessità 82
 dell'audit complessità, cioè un hotspot — possiede un `RunnerMetrics`
 (`Claimed/Forwarded/Failed/Retried/QueueDepth/OldestPending`, `atomic.Int64`),
@@ -37,6 +39,8 @@ forwarded,failed,retried,total,queue_depth,oldest_pending}` registrate su
 rischio, puro add-on.
 
 ## 2. GAP 2 — copertura tracing: 4 span su ~7 path critici (P1)
+
+**Stato: ✅ RISOLTO** — `a751f473` (`feat(observability): open tracing spans on the 5 critical gap-2 paths`): `forward_tick`/`forward_lease`/`deliver_lease`/`complete_upload`/`resolve_forwarding`/`outbox_dispatch`.
 
 Span espliciti oggi:
 
@@ -62,6 +66,8 @@ come nome span (già codificato nella policy del package telemetry).
 
 ## 3. GAP 3 — log strutturati quasi assenti (P2)
 
+**Stato: ✅ RISOLTO** — `2f544de6` (`feat(observability): structured logging on forwarding/deliveries/completion runners`): 43 `log.Printf` → `logging.Info/Warn/Error` con codici `FORWARDING_*`/`DELIVERY_*`/`COMPLETION_RECONCILE_*`.
+
 Conteggio reale nei path di produzione (`internal/` + `cmd/`, esclusi test):
 
 | Forma | Call-site |
@@ -85,6 +91,8 @@ non una migrazione bulk dei 565. I runner (`forwarding`, `deliveries`,
 
 ## 4. GAP 4 — nessuna correlazione trace ↔ log (P2)
 
+**Stato: ✅ RISOLTO** — `c1249bba` (`feat(observability): inject trace_id/span_id into structured logs (GAP 4)`): varianti `*Context` di `logging` + threading `ctx` nei runner.
+
 `telemetry.TraceIDFromContext`/`SpanIDFromContext` esistono ma **non sono
 usati** (`grep` → 0 call-site; l'unico `TraceID` presente è il campo dati
 del modello `taskattempts`/`audittrail`, non l'iniezione nei log).
@@ -96,15 +104,16 @@ ricostruire il percorso di un singolo `forwarding_id` attraverso i servizi.
 negli `Event.Fields` (o campi dedicati) leggendoli da `context.Context`; i
 call-site critici passano già `ctx`.
 
-## 5. Ordine di intervento
+## 5. Stato di chiusura (2026-08-13)
 
-1. **GAP 1 (P1)** — metriche forwarding sul `Registry` + iniezione nel runner
-   (chiude il buco di visibilità del runner a più alta complessità).
-2. **GAP 2 (P1)** — span sui 5 path critici mancanti.
-3. **GAP 4 (P2)** — correlazione `trace_id` nei log (sblocca il debug
-   end-to-end).
-4. **GAP 3 (P2)** — log strutturati sui runner critici (adoption incrementale,
-   non bulk).
+Tutti i gap dell'audit sono chiusi su `main`, nell'ordine: GAP 1 → GAP 2 → GAP 3 → GAP 4.
+
+| Gap | Commit | Cosa |
+|---|---|---|
+| GAP 1 (P1) | `a09e384d` | metriche forwarding `velox_forwarding_*` sul `Registry` + iniezione nel runner |
+| GAP 2 (P1) | `a751f473` | span `forward_tick`/`forward_lease`/`deliver_lease`/`complete_upload`/`resolve_forwarding`/`outbox_dispatch` |
+| GAP 3 (P2) | `2f544de6` | `log.Printf` → `logging.Info/Warn/Error` sui 3 runner critici |
+| GAP 4 (P2) | `c1249bba` | iniezione `trace_id`/`span_id` nei log via varianti `*Context` |
 
 ## Vincoli operativi
 
