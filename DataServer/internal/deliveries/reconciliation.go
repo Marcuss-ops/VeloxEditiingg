@@ -53,24 +53,31 @@ func (r *DeliveryRunner) reconcileRecent(ctx context.Context) error {
 		if meta, ok := result.ProviderMeta["error_message"].(string); ok {
 			errMessage = meta
 		}
-		if err := r.dbStore.ApplyReconciledDelivery(ctx, row.DeliveryID, status, result.RemoteID, result.RemoteURL, errCode, errMessage); err != nil {
+		// The SQLite TEXT column stays a plain string; convert the typed
+		// status at the store boundary.
+		if err := r.dbStore.ApplyReconciledDelivery(ctx, row.DeliveryID, string(status), result.RemoteID, result.RemoteURL, errCode, errMessage); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func reconciliationStatus(status string) string {
+// reconciliationStatus maps a provider's remote status observation to the
+// canonical delivery lifecycle status. The provider string is untrusted and
+// case-insensitive; the returned value is the typed DeliveryStatus so callers
+// and persistence compare against the delivery vocabulary instead of bare
+// "SUCCEEDED"/"BLOCKED_AUTH"/"RETRY_WAIT" string literals.
+func reconciliationStatus(status string) DeliveryStatus {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "published", "completed":
-		return "SUCCEEDED"
+		return DeliverySucceeded
 	case "failed", "dead_letter":
-		return "FAILED"
+		return DeliveryFailed
 	case "blocked_auth":
-		return "BLOCKED_AUTH"
+		return DeliveryBlockedAuth
 	case "retry_wait", "rate_limited":
-		return "RETRY_WAIT"
+		return DeliveryRetryWait
 	default:
-		return "RUNNING"
+		return DeliveryRunning
 	}
 }

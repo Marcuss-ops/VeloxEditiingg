@@ -19,6 +19,28 @@ func TestDeliveryStatusValidity(t *testing.T) {
 	}
 }
 
+func TestReconciliationStatusMapsToTypedDeliveryStatus(t *testing.T) {
+	cases := []struct {
+		provider string
+		want     DeliveryStatus
+	}{
+		{"published", DeliverySucceeded},
+		{"COMPLETED", DeliverySucceeded},
+		{"failed", DeliveryFailed},
+		{"dead_letter", DeliveryFailed},
+		{"blocked_auth", DeliveryBlockedAuth},
+		{"retry_wait", DeliveryRetryWait},
+		{"rate_limited", DeliveryRetryWait},
+		{"  processing  ", DeliveryRunning},
+		{"", DeliveryRunning},
+	}
+	for _, tc := range cases {
+		if got := reconciliationStatus(tc.provider); got != tc.want {
+			t.Errorf("reconciliationStatus(%q) = %q, want %q", tc.provider, got, tc.want)
+		}
+	}
+}
+
 func TestDeliveryStatusKeepsWireSpelling(t *testing.T) {
 	data, err := json.Marshal(struct {
 		Status DeliveryStatus `json:"status"`
