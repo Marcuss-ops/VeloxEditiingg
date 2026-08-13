@@ -324,10 +324,6 @@ func asString(v any) string {
 	return payload.AsString(v)
 }
 
-func asInt(v any) int {
-	return payload.AsInt(v)
-}
-
 func (s *SQLiteStore) columnExists(table, column string) (bool, error) {
 	rows, err := s.db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
 	if err != nil {

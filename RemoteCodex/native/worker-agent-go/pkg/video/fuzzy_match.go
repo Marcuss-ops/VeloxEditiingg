@@ -59,12 +59,7 @@ func min3(a, b, c int) int {
 	return c
 }
 
-// fuzzyRatio computes a similarity ratio (0-100) between two strings.
-func fuzzyRatio(a, b string) float64 {
-	return fuzzyRatioNormalized(normalizeForMatch(a), normalizeForMatch(b))
-}
-
-// fuzzyRatioNormalized is fuzzyRatio for two already-normalized strings.
+// fuzzyRatioNormalized is the normalized-string variant of the fuzzy ratio.
 // Hoisting normalization to the caller lets a hot loop skip a second
 // normalization pass over strings normalized once upstream.
 func fuzzyRatioNormalized(a, b string) float64 {
@@ -89,12 +84,7 @@ func ratioFromDistance(a, b string, dist int) float64 {
 	return (1.0 - float64(dist)/float64(maxLen)) * 100.0
 }
 
-// partialFuzzyRatio finds the best partial match of needle in haystack.
-func partialFuzzyRatio(needle, haystack string) float64 {
-	return partialFuzzyRatioNormalized(normalizeForMatch(needle), normalizeForMatch(haystack))
-}
-
-// partialFuzzyRatioNormalized is the buffer-reusing core of partialFuzzyRatio
+// partialFuzzyRatioNormalized is the buffer-reusing core of the partial ratio
 // for two already-normalized strings. Hoisting normalization to the caller
 // lets matchEntityToSegments normalize an entity ONCE and reuse it across
 // every transcription segment instead of re-normalizing the same needle per
@@ -139,18 +129,6 @@ func normalizeForMatch(s string) string {
 		}
 	}
 	return strings.TrimSpace(b.String())
-}
-
-// keywordMatch checks if any WORD (with boundary) from needle appears in haystack.
-// Returns the best matching word and its coverage ratio (0-100).
-// Word boundary: the word must be surrounded by non-letter/non-digit chars or string edges.
-func keywordMatch(needle, haystack string) (bool, string, float64) {
-	return keywordMatchNormalized(normalizeForMatch(needle), normalizeForMatch(haystack))
-}
-
-// keywordMatchNormalized is keywordMatch for two already-normalized strings.
-func keywordMatchNormalized(normNeedle, normHaystack string) (bool, string, float64) {
-	return keywordMatchFields(normNeedle, strings.Fields(normNeedle), strings.Fields(normHaystack))
 }
 
 // keywordMatchFields matches pre-normalized needle words against pre-split

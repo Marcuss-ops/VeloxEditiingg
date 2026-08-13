@@ -117,18 +117,22 @@ func (l *Logger) SetOutput(w io.Writer) {
 }
 
 // log logs a message at the specified level.
+//
+// The level gate and prefix read happen under the same mutex that guards
+// SetLevel/SetPrefix/SetOutput so a concurrent SetDefaultLevel (or
+// SetPrefix on a shared logger) can never race the hot logging path. The
+// format call stays outside the lock: it touches only the caller's args.
 func (l *Logger) log(level Level, logger *log.Logger, format string, args ...interface{}) {
-	if level < l.level {
-		return
-	}
-
 	msg := fmt.Sprintf(format, args...)
-	if l.prefix != "" {
-		msg = l.prefix + " " + msg
-	}
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if level < l.level {
+		return
+	}
+	if l.prefix != "" {
+		msg = l.prefix + " " + msg
+	}
 	logger.Println(msg)
 }
 
@@ -159,8 +163,14 @@ func (l *Logger) Fatal(format string, args ...interface{}) {
 }
 
 // WithPrefix returns a new logger with the specified prefix.
+//
+// The level/output snapshot is taken under the mutex so a shared logger's
+// configuration cannot race this read.
 func (l *Logger) WithPrefix(prefix string) *Logger {
-	return New(l.level, l.out)
+	l.mu.Lock()
+	level, out := l.level, l.out
+	l.mu.Unlock()
+	return New(level, out)
 }
 
 // Global functions that use the default logger
