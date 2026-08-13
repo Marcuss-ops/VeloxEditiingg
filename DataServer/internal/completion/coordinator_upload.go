@@ -129,5 +129,14 @@ func materializeCanonicalDuplicate(blobStore interface{ FinalDir() string }, sou
 		_ = os.Remove(target)
 		return err
 	}
+	// Sync before Close so "success" means the duplicate bytes are durable,
+	// not merely resident in the page cache. The primary canonical is already
+	// durable (PromoteToCanonical); a crash between here and the DB stamp
+	// must not leave a corrupt/empty duplicate referenced by the row.
+	if err := out.Sync(); err != nil {
+		_ = out.Close()
+		_ = os.Remove(target)
+		return err
+	}
 	return out.Close()
 }
