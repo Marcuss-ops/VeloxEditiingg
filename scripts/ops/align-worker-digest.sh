@@ -110,6 +110,10 @@ else
   echo "       got: $TARGET_DIGEST" >&2
   exit 2
 fi
+# fleetctl inspect exposes image_digest as bare 64-hex data, while update
+# accepts the canonical sha256:<hex> form. Keep both representations explicit
+# so the post-update gate compares like with like.
+EXPECTED_SHA="${SHA_ONLY#sha256:}"
 
 VELOX_MASTER_URL="${VELOX_MASTER_URL:-http://127.0.0.1:8000}"
 VELOX_MASTER_URL="${VELOX_MASTER_URL%/}"
@@ -235,7 +239,7 @@ for w in "${ALL_WORKERS[@]}"; do
   fi
   WORKER_DIGESTS["$w"]="$WDIGEST"
 
-  if [[ "$WDIGEST" != "$SHA_ONLY" ]]; then
+  if [[ "$WDIGEST" != "$EXPECTED_SHA" ]]; then
     MISMATCH=1
     echo "  ✗ $w → $WDIGEST  (expected $SHA_ONLY)"
   else
