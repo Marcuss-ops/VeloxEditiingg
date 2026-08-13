@@ -3,7 +3,6 @@ package credentials
 import (
 	"encoding/json"
 	"regexp"
-	"strings"
 )
 
 var sensitiveKeyRE = regexp.MustCompile(`(?i)(access[_-]?token|refresh[_-]?token|client[_-]?secret|authorization|cookie|api[_-]?key|signed[_-]?url|signature|password|credential)`)
@@ -107,14 +106,4 @@ func redactValue(value any) any {
 	default:
 		return value
 	}
-}
-
-func ContainsPlaintext(raw string) bool {
-	lower := strings.ToLower(raw)
-	for _, marker := range []string{"access_token", "refresh_token", "client_secret", "authorization", "cookie", "api_key"} {
-		if strings.Contains(lower, marker+"\":") || strings.Contains(lower, marker+"=") {
-			return true
-		}
-	}
-	return false
 }

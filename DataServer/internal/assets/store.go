@@ -103,13 +103,6 @@ func (s *Store) SecurityMetrics() *inputsecurity.Metrics {
 	return s.security.Metrics
 }
 
-func (s *Store) AssetDir() string {
-	if s == nil {
-		return ""
-	}
-	return s.assetDir
-}
-
 func (s *Store) allowedLocalPath(source string) bool {
 	if s == nil {
 		return false

@@ -54,19 +54,6 @@ func (w *MediaProbeWorker) WithPollInterval(d time.Duration) *MediaProbeWorker {
 	}
 	return w
 }
-func (w *MediaProbeWorker) WithLeaseTTL(d time.Duration) *MediaProbeWorker {
-	if d > 0 {
-		w.lease = d
-	}
-	return w
-}
-func (w *MediaProbeWorker) WithOwner(owner string) *MediaProbeWorker {
-	if owner != "" {
-		w.owner = owner
-	}
-	return w
-}
-
 func (w *MediaProbeWorker) Run(ctx context.Context) error {
 	if w == nil || w.repo == nil {
 		return fmt.Errorf("artifacts: media probe worker unavailable")

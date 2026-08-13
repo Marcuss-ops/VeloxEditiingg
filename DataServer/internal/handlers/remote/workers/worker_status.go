@@ -38,10 +38,6 @@ func firstUpdateHandler(updateHandler []*WorkerUpdateHandler) *WorkerUpdateHandl
 	return updateHandler[0]
 }
 
-func WorkerStatusMetadata(h *WorkerUpdateHandler) gin.H {
-	return workerStatusMetadata(h)
-}
-
 func workerStatusMetadata(h *WorkerUpdateHandler) gin.H {
 	version := ""
 	codeVersion := ""

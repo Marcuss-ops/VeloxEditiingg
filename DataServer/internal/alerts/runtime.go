@@ -322,14 +322,6 @@ func (p *Pipeline) Dispatch(ctx context.Context, events []AlertEvent) error {
 	return err
 }
 
-func (p *Pipeline) DispatchOne(ctx context.Context, event AlertEvent) (bool, error) {
-	results, err := p.dispatch(ctx, []AlertEvent{event})
-	if len(results) == 0 {
-		return false, err
-	}
-	return results[0], err
-}
-
 func (p *Pipeline) resetAfterCommit(key string) {
 	p.mu.Lock()
 	delete(p.afterDone, key)

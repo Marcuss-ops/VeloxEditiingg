@@ -33,13 +33,9 @@ type FreshSmokeRunner struct {
 	assetID  string
 }
 
-func NewFreshSmokeRunner(executor OperationExecutor, runs BackendSmokeRuns) *FreshSmokeRunner {
-	return NewFreshSmokeRunnerWithAsset(executor, runs, "")
-}
-
 // NewFreshSmokeRunnerWithAsset binds the production smoke gate to an
-// operator-configured READY asset. The legacy default remains only for
-// isolated callers/tests; production wiring must provide VELOX_SMOKE_ASSET_ID.
+// operator-configured READY asset; production wiring must provide
+// VELOX_SMOKE_ASSET_ID.
 func NewFreshSmokeRunnerWithAsset(executor OperationExecutor, runs BackendSmokeRuns, assetID string) *FreshSmokeRunner {
 	return &FreshSmokeRunner{executor: executor, runs: runs, assetID: strings.TrimSpace(assetID)}
 }

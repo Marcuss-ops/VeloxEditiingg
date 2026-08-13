@@ -28,12 +28,6 @@ func NewStaleExecutionReconciler(s *SQLiteStore) (*StaleExecutionReconciler, err
 	}, nil
 }
 
-func (r *StaleExecutionReconciler) SetWorkerOfflineAfter(d time.Duration) {
-	if d > 0 {
-		r.workerOfflineAfter = d
-	}
-}
-
 // Scan is SELECT-only and deterministic. It never writes state or audit rows.
 func (r *StaleExecutionReconciler) Scan(ctx context.Context, now time.Time, limit int) ([]StaleExecutionFinding, error) {
 	if now.IsZero() {

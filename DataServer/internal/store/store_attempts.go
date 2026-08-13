@@ -131,14 +131,6 @@ func (s *SQLiteStore) InsertArtifact(artifact *Artifact) error {
 	return err
 }
 
-func (s *SQLiteStore) FinalizeArtifact(id, status, storageURL string) error {
-	_, err := s.db.Exec(
-		`UPDATE artifacts SET status=?, storage_url=? WHERE id=?`,
-		status, storageURL, id,
-	)
-	return err
-}
-
 func (s *SQLiteStore) GetArtifact(id string) (*Artifact, error) {
 	row := s.db.QueryRow(
 		`SELECT id, job_id, COALESCE(attempt_id,0), type, storage_provider,

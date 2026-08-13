@@ -387,18 +387,3 @@ func (s *SQLiteStore) GetCalendarEventsByDateRange(ctx context.Context, startMon
 	}
 	return events, nil
 }
-
-func (e *CalendarEvent) HasQueueAssets() bool {
-	if e == nil {
-		return false
-	}
-	if len(e.InitialClips)+len(e.IntermediateClips)+len(e.FinalClips)+len(e.StockFootage) == 0 {
-		return false
-	}
-	for _, s := range e.VoiceoverPaths {
-		if strings.TrimSpace(s) != "" {
-			return true
-		}
-	}
-	return strings.TrimSpace(e.ScriptText) != ""
-}

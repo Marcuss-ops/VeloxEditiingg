@@ -156,13 +156,6 @@ func (d *DedupStore) Forget(key DedupKey) {
 	delete(d.occurrences, key)
 }
 
-func (d *DedupStore) SnapshotForTest(key DedupKey) (DedupState, bool) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	state, ok := d.entries[key]
-	return state, ok
-}
-
 func (d *DedupStore) iterateWorker(workerID string) []DedupKey {
 	d.mu.Lock()
 	defer d.mu.Unlock()

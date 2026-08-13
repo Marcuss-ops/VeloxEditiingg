@@ -74,14 +74,6 @@ func ConnectionStatus(sessionActive bool, lastHB string, drain bool, now time.Ti
 	return cs.WireStatus(ss)
 }
 
-func (r *Registry) IsRegistered(ctx context.Context, workerID string) bool {
-	workerID = identity.NormalizeWorkerID(workerID)
-	r.mu.RLock()
-	_, ok := r.inMem[identity.ParseWorkerID(workerID)]
-	r.mu.RUnlock()
-	return ok
-}
-
 // GetWorker returns a single worker's info by ID, with SessionActive +
 // ConnectionStatus hydrated from SQLite (worker_sessions) at read time.
 // Returns nil if the worker is not registered or has been revoked.
