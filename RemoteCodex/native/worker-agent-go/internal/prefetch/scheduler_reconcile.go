@@ -28,9 +28,9 @@ func (s *Scheduler) Reconcile(plan futureasset.Plan) error {
 		s.signalWork()
 		return releaseProtections(store, oldProtects, nil)
 	}
-	// Index the incoming plan's jobs once so the removal sweep below is O(1)
-	// per active job instead of a linear scan of plan.PrefetchJobs per job
-	// (the previous O(n²) findScheduledJob loop).
+	// Phase 1 (under lock): sweep stale jobs and snapshot the protection
+	// projection. Reservation IDs are deterministic per (worker, asset), so
+	// rebuilding newProtects here is pure bookkeeping — no durable I/O yet.
 	scheduled := make(map[string]struct{}, len(plan.PrefetchJobs))
 	for _, job := range plan.PrefetchJobs {
 		scheduled[job.JobID] = struct{}{}
@@ -45,17 +45,30 @@ func (s *Scheduler) Reconcile(plan futureasset.Plan) error {
 	store := s.protect
 	oldProtects := s.protects
 	newProtects := make(map[string]string, len(plan.Protect))
-	pendingProtects := make(map[string]struct{})
 	protectExpiries := make(map[string]time.Time, len(plan.Protect))
 	s.hints = make(map[string]futureasset.ProtectedAsset, len(plan.Protect))
-	if err := s.reserveProtectionsLocked(store, plan, newProtects, pendingProtects, protectExpiries); err != nil {
-		s.mu.Unlock()
+	for _, asset := range plan.Protect {
+		s.hints[asset.AssetKey] = asset
+		reservationID := fmt.Sprintf("future:%s:%s", s.cfg.WorkerID, asset.AssetKey)
+		newProtects[asset.AssetKey] = reservationID
+		protectExpiries[asset.AssetKey] = plan.ExpiresAt
+	}
+	s.mu.Unlock()
+
+	// Phase 2 (no lock): perform the durable reservation I/O outside the
+	// scheduler lock so sqlite writes never stall the control loop or the
+	// scheduler workers. Reserves run before releases so eviction never sees
+	// a protection gap; both are keyed by deterministic reservation IDs.
+	pendingProtects, err := reserveProtections(store, plan, newProtects)
+	if err != nil {
 		return err
 	}
 	if err := releaseProtections(store, oldProtects, newProtects); err != nil {
-		s.mu.Unlock()
 		return err
 	}
+
+	// Phase 3 (under lock): install the new projection and enqueue jobs.
+	s.mu.Lock()
 	s.protects = newProtects
 	s.pendingProtects = pendingProtects
 	s.protectExpiries = protectExpiries
@@ -103,31 +116,30 @@ func (s *Scheduler) resetForExpiredLocked() (store workercache.LeaseReservationS
 	return store, oldProtects
 }
 
-// reserveProtectionsLocked installs the incoming snapshot's protection
-// barriers, reserving each in the store before the prior snapshot's
-// reservation is released so eviction never sees a protection gap. A future
-// asset is allowed to be absent until its prefetch resolver creates the
-// verified canonical-cache row (protection is an eviction barrier, not a
-// download prerequisite): those reservations are kept pending. Other store
-// failures remain fail-closed. Caller holds s.mu and releases it on error.
-func (s *Scheduler) reserveProtectionsLocked(store workercache.LeaseReservationStore, plan futureasset.Plan, newProtects map[string]string, pendingProtects map[string]struct{}, protectExpiries map[string]time.Time) error {
+// reserveProtections performs the durable reservation I/O for an incoming
+// snapshot OUTSIDE the scheduler lock. It reserves every barrier (keyed by
+// the deterministic per-(worker, asset) reservation ID built under the lock)
+// and returns the set of assets whose canonical-cache row does not exist yet,
+// so Reconcile can keep them pending. A future asset is allowed to be absent
+// until its prefetch resolver creates the verified canonical-cache row
+// (protection is an eviction barrier, not a download prerequisite); other
+// store failures remain fail-closed.
+func reserveProtections(store workercache.LeaseReservationStore, plan futureasset.Plan, newProtects map[string]string) (map[string]struct{}, error) {
+	pendingProtects := make(map[string]struct{})
+	if store == nil {
+		return pendingProtects, nil
+	}
 	for _, asset := range plan.Protect {
-		s.hints[asset.AssetKey] = asset
-		reservationID := fmt.Sprintf("future:%s:%s", s.cfg.WorkerID, asset.AssetKey)
-		newProtects[asset.AssetKey] = reservationID
-		protectExpiries[asset.AssetKey] = plan.ExpiresAt
-		if store == nil {
-			continue
-		}
+		reservationID := newProtects[asset.AssetKey]
 		if err := store.Reserve(context.Background(), assetref.AssetKey(asset.AssetKey), reservationID, plan.ExpiresAt); err != nil {
 			if errors.Is(err, workercache.ErrNotFound) {
 				pendingProtects[asset.AssetKey] = struct{}{}
 				continue
 			}
-			return fmt.Errorf("prefetch: protect %s: %w", asset.AssetKey, err)
+			return nil, fmt.Errorf("prefetch: protect %s: %w", asset.AssetKey, err)
 		}
 	}
-	return nil
+	return pendingProtects, nil
 }
 
 // releaseProtections releases every prior reservation that is not kept by the

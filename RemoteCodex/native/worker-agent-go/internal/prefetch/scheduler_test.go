@@ -587,3 +587,58 @@ func TestScheduler_DiskPressureUsesRestrictedCriticalAndRecoveryHysteresis(t *te
 		}
 	}
 }
+
+// blockingReserveStore blocks inside Reserve until released, so a test can
+// assert that Reconcile performs the durable reservation I/O OUTSIDE the
+// scheduler lock (the sqlite write must not stall the control loop).
+type blockingReserveStore struct {
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *blockingReserveStore) Acquire(context.Context, assetref.AssetKey, string) error { return nil }
+func (s *blockingReserveStore) Release(context.Context, assetref.AssetKey, string) error { return nil }
+func (s *blockingReserveStore) Reserve(context.Context, assetref.AssetKey, string, time.Time) error {
+	s.once.Do(func() { close(s.entered) })
+	<-s.release
+	return nil
+}
+func (s *blockingReserveStore) ReleaseReservation(context.Context, assetref.AssetKey, string) error {
+	return nil
+}
+
+func TestScheduler_ReconcileDoesNotHoldLockDuringProtectionIO(t *testing.T) {
+	store := &blockingReserveStore{entered: make(chan struct{}), release: make(chan struct{})}
+	s := NewScheduler(Config{WorkerID: "worker-a", MaxConcurrent: 1, ByteBudget: 100})
+	s.SetProtectionStore(store)
+	defer s.Close()
+
+	done := make(chan error, 1)
+	go func() { done <- s.Reconcile(futureTestPlan()) }()
+
+	select {
+	case <-store.entered:
+	case <-time.After(time.Second):
+		t.Fatal("Reserve never entered")
+	}
+
+	// While Reserve is blocked, s.mu must be acquirable: the durable I/O is
+	// meant to run OUTSIDE the scheduler lock.
+	acquired := make(chan struct{})
+	go func() {
+		s.mu.Lock()
+		close(acquired)
+		s.mu.Unlock()
+	}()
+	select {
+	case <-acquired:
+	case <-time.After(time.Second):
+		t.Fatal("s.mu held during blocking protection I/O")
+	}
+
+	close(store.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
