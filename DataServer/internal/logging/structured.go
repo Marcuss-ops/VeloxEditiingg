@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -20,54 +20,74 @@ type Event struct {
 
 // Logger provides structured logging with throttling support
 type Logger struct {
-	mu         sync.Mutex
 	component  string
 	throttler  *Throttler
 	quiet      bool
 	jsonOutput bool
 	debug      bool
+	// processCfg is non-nil only on the process-wide default logger. When
+	// set, quiet/jsonOutput/debug are read from the immutable snapshot held
+	// by the atomic pointer instead of the (always zero) local copies, so a
+	// live Configure/SetQuiet/SetJSONOutput never races with emission.
+	processCfg *atomic.Pointer[processConfig]
 }
 
-// Global default logger
+// processConfig is the immutable process-wide logging configuration published
+// atomically by Configure/SetQuiet/SetJSONOutput. Readers load it without
+// locking, so a configuration change never races with logger construction or
+// log emission.
+type processConfig struct {
+	quiet      bool
+	jsonOutput bool
+	debug      bool
+}
+
+var processConfigValue atomic.Pointer[processConfig]
+
+func init() {
+	processConfigValue.Store(&processConfig{})
+}
+
+// defaultThrottler is the shared, concurrency-safe throttle used by every
+// component logger. It is created once and never mutated.
+var defaultThrottler = NewThrottler(5 * time.Minute)
+
+// defaultLogger logs at process scope using the current immutable config
+// snapshot rather than holding stale mutable copies.
 var defaultLogger = &Logger{
-	throttler:  NewThrottler(5 * time.Minute),
-	quiet:      false,
-	jsonOutput: false,
-	debug:      false,
+	throttler:  defaultThrottler,
+	processCfg: &processConfigValue,
 }
 
 // NewLogger creates a new logger for a component
 // Configure applies the centrally parsed process logging settings.
 func Configure(quiet, jsonOutput, debug bool) {
-	defaultLogger.mu.Lock()
-	defer defaultLogger.mu.Unlock()
-	defaultLogger.quiet = quiet
-	defaultLogger.jsonOutput = jsonOutput
-	defaultLogger.debug = debug
+	processConfigValue.Store(&processConfig{quiet: quiet, jsonOutput: jsonOutput, debug: debug})
 }
 
 func NewLogger(component string) *Logger {
+	cfg := processConfigValue.Load()
 	return &Logger{
 		component:  component,
-		throttler:  defaultLogger.throttler,
-		quiet:      defaultLogger.quiet,
-		jsonOutput: defaultLogger.jsonOutput,
-		debug:      defaultLogger.debug,
+		throttler:  defaultThrottler,
+		quiet:      cfg.quiet,
+		jsonOutput: cfg.jsonOutput,
+		debug:      cfg.debug,
 	}
 }
 
 // SetQuiet enables/disables quiet mode (errors only)
 func SetQuiet(quiet bool) {
-	defaultLogger.mu.Lock()
-	defer defaultLogger.mu.Unlock()
-	defaultLogger.quiet = quiet
+	cfg := *processConfigValue.Load()
+	cfg.quiet = quiet
+	processConfigValue.Store(&cfg)
 }
 
 // SetJSONOutput enables/disables JSON output
 func SetJSONOutput(json bool) {
-	defaultLogger.mu.Lock()
-	defer defaultLogger.mu.Unlock()
-	defaultLogger.jsonOutput = json
+	cfg := *processConfigValue.Load()
+	cfg.jsonOutput = json
+	processConfigValue.Store(&cfg)
 }
 
 // Info logs an info-level event
@@ -103,9 +123,10 @@ func (l *Logger) ErrorWithMsg(code, message string, fields map[string]interface{
 // Debug logs a debug-level event when debug mode has been enabled by the
 // composition root. The package no longer reads process environment.
 func (l *Logger) Debug(code string, fields map[string]interface{}) {
-	l.mu.Lock()
 	debug := l.debug
-	l.mu.Unlock()
+	if l.processCfg != nil {
+		debug = l.processCfg.Load().debug
+	}
 	if !debug {
 		return
 	}
@@ -135,8 +156,13 @@ func (l *Logger) InfoThrottled(code string, key string, fields map[string]interf
 
 // log is the internal logging function
 func (l *Logger) log(level, code, message string, fields map[string]interface{}) {
+	quiet, jsonOutput := l.quiet, l.jsonOutput
+	if l.processCfg != nil {
+		cfg := l.processCfg.Load()
+		quiet, jsonOutput = cfg.quiet, cfg.jsonOutput
+	}
 	// In quiet mode, only log errors
-	if l.quiet && level != LevelError {
+	if quiet && level != LevelError {
 		return
 	}
 
@@ -155,7 +181,7 @@ func (l *Logger) log(level, code, message string, fields map[string]interface{})
 		event.Message = GetDescription(code)
 	}
 
-	if l.jsonOutput {
+	if jsonOutput {
 		l.outputJSON(event)
 	} else {
 		l.outputHuman(event)
