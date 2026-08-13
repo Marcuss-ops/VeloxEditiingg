@@ -3,6 +3,8 @@
 #include "velox/plan/render_plan.hpp"
 #include "velox/services/ffmpeg_progress_parser.hpp"
 #include "velox/services/frame_pipeline.hpp"
+#include "velox/services/media_packet_pipeline.hpp"
+#include "velox/services/segment_execution.hpp"
 #include "velox/telemetry/emitter.hpp"
 
 #include <atomic>
@@ -103,6 +105,33 @@ private:
         const std::filesystem::path& outPath,
         RenderResult& result,
         const std::function<RenderResult(const std::string&)>& failRender);
+
+    // Mixed renderer helpers. resolveMixedFinalAudio stages the single final
+    // audio track and enforces the FINAL_AUDIO_COPY contract;
+    // transcodeMixedSegment normalizes one segment through the native
+    // FramePipeline and re-checks the produced output against the canonical
+    // profile (fail-closed). Both return false on failure with result.error
+    // and error_code populated for failRender.
+    bool resolveMixedFinalAudio(
+        const plan::RenderPlan& plan,
+        const std::filesystem::path& workDir,
+        double total_duration,
+        media::CopyOnlyMuxRequest& request,
+        RenderResult& result,
+        std::string& error_code);
+
+    bool transcodeMixedSegment(
+        const plan::RenderPlan& plan,
+        const std::filesystem::path& workDir,
+        const std::filesystem::path& local_video,
+        const plan::TimelineItem& item,
+        int64_t duration_us,
+        std::size_t index,
+        const media::MediaSignature& canonical,
+        media::CopyOnlyMuxRequest& request,
+        SegmentTiming& segment,
+        RenderResult& result,
+        std::string& error_code);
 
     class SidecarGuard {
     public:

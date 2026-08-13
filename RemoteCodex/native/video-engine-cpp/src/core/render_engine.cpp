@@ -489,6 +489,134 @@ RenderResult RenderEngine::renderCopyOnly(
     return result;
 }
 
+bool RenderEngine::transcodeMixedSegment(
+    const plan::RenderPlan& plan,
+    const std::filesystem::path& workDir,
+    const std::filesystem::path& local_video,
+    const plan::TimelineItem& item,
+    int64_t duration_us,
+    std::size_t index,
+    const media::MediaSignature& canonical,
+    media::CopyOnlyMuxRequest& request,
+    SegmentTiming& segment,
+    RenderResult& result,
+    std::string& error_code) {
+    const fs::path normalized =
+        numberedWorkPath(workDir, "mixed_segment_", ".mp4", index);
+    media::FramePipelineConfig nativeConfig;
+    nativeConfig.input_path = local_video;
+    nativeConfig.output_path = normalized;
+    nativeConfig.width = plan.canvas.width;
+    nativeConfig.height = plan.canvas.height;
+    nativeConfig.fps_num = plan.canvas.fps_num > 0 ? plan.canvas.fps_num : plan.canvas.fps;
+    nativeConfig.fps_den = plan.canvas.fps_den > 0 ? plan.canvas.fps_den : 1;
+    nativeConfig.source_in_us = item.source_in_us;
+    nativeConfig.source_duration_us = duration_us;
+    nativeConfig.codec = "libx264";
+    nativeConfig.preset = "medium";
+    const NativeThreadConfig threads = nativeThreadConfig();
+    nativeConfig.decoder_threads = threads.decoder_threads;
+    nativeConfig.encoder_threads = threads.encoder_threads;
+    media::FramePipelineResult nativeResult;
+    const auto transcodeStart = std::chrono::steady_clock::now();
+    bool transcodeOk = false;
+    {
+        ScopedTimer timer(metrics_, "mixed_transcode_ms");
+        transcodeOk = media::renderFrames(nativeConfig, &nativeResult);
+    }
+    if (!transcodeOk) {
+        error_code = "mixed_transcode_failed";
+        result.error = "mixed transcode failed for segment " + std::to_string(index) +
+            (nativeResult.error.empty() ? std::string() : ": " + nativeResult.error);
+        return false;
+    }
+    segment.ffmpeg_encode_ms = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - transcodeStart).count();
+    segment.frames_encoded = nativeResult.frames_encoded;
+    segment.frames_decoded = nativeResult.frames_decoded;
+    segment.frames_composited = nativeResult.frames_encoded;
+    recordFramePipeline(nativeResult);
+    frames_encoded_.fetch_add(nativeResult.frames_encoded);
+    frames_decoded_.fetch_add(nativeResult.frames_decoded);
+    frames_composited_.fetch_add(nativeResult.frames_encoded);
+    encode_passes_.fetch_add(1);
+    // Fail-closed canonical-profile gate: a produced (transcoded) segment
+    // must be compatible with the canonical output profile before the packet
+    // mux concatenates it with packet-copied ranges.
+    media::SegmentProbe produced_probe;
+    std::string produced_error;
+    if (!media::probeSegmentForExecution(
+            normalized, 0, media::MediaKind::Video,
+            &produced_probe, &produced_error)) {
+        error_code = "mixed_produced_probe_failed";
+        result.error = "failed to probe produced segment " +
+            std::to_string(index) + ": " + produced_error;
+        return false;
+    }
+    std::string profile_reason;
+    if (!media::mediaSignaturesCompatible(
+            produced_probe.signature, canonical, &profile_reason)) {
+        error_code = "mixed_produced_profile_mismatch";
+        result.error = "produced segment " + std::to_string(index) +
+            " is not canonical-profile compatible: " + profile_reason;
+        return false;
+    }
+    request.video_segments.push_back({
+        normalized, 0, duration_us, false, true});
+    return true;
+}
+
+bool RenderEngine::resolveMixedFinalAudio(
+    const plan::RenderPlan& plan,
+    const std::filesystem::path& workDir,
+    double total_duration,
+    media::CopyOnlyMuxRequest& request,
+    RenderResult& result,
+    std::string& error_code) {
+    if (plan.audio_tracks.empty()) {
+        return true;
+    }
+    const auto& track = plan.audio_tracks.front();
+    if (track.loop || track.volume != 1.0 || track.start_time_offset < 0.0) {
+        error_code = "mixed_audio_transform_unsupported";
+        result.error = "mixed render final audio requires finite, neutral-volume audio";
+        return false;
+    }
+    const fs::path local_audio = workDir / "mixed_final_audio.m4a";
+    if (!file::downloadAsset(track.source_url, local_audio)) {
+        error_code = "mixed_audio_download_failed";
+        result.error = "failed to resolve mixed audio track";
+        return false;
+    }
+    if (!media::hasAudioStream(local_audio)) {
+        error_code = "mixed_audio_invalid";
+        result.error = "failed to resolve valid mixed audio track";
+        return false;
+    }
+    const media::FinalAudioDecision audio_decision = media::resolveFinalAudioModePacket(
+        media::probeFinalAudioMetadata(local_audio), true, total_duration);
+    if (audio_decision.mode != media::FinalAudioMode::Copy) {
+        error_code = "mixed_audio_not_final_copy";
+        result.error = "mixed render final audio is not FINAL_AUDIO_COPY: " +
+            audio_decision.reason;
+        return false;
+    }
+    const int64_t declared_audio_duration = track.duration_us > 0
+        ? track.duration_us
+        : (track.duration_seconds > 0.0
+               ? static_cast<int64_t>(
+                     std::llround(track.duration_seconds * 1'000'000.0))
+               : 0);
+    request.audio = media::CopyOnlyAudioTrack{
+        local_audio,
+        track.start_offset_us > 0
+            ? track.start_offset_us
+            : static_cast<int64_t>(
+                  std::llround(track.start_time_offset * 1'000'000.0)),
+        declared_audio_duration};
+    return true;
+}
+
 std::optional<RenderResult> RenderEngine::renderMixed(
     const plan::RenderPlan& plan,
     const std::filesystem::path& workDir,
@@ -591,68 +719,11 @@ std::optional<RenderResult> RenderEngine::renderMixed(
             segment.codec = "libx264";
             segment.preset = "medium";
             ++transcode_segments;
-            const fs::path normalized =
-                numberedWorkPath(workDir, "mixed_segment_", ".mp4", i);
-            media::FramePipelineConfig nativeConfig;
-            nativeConfig.input_path = local_video;
-            nativeConfig.output_path = normalized;
-            nativeConfig.width = plan.canvas.width;
-            nativeConfig.height = plan.canvas.height;
-            nativeConfig.fps_num = plan.canvas.fps_num > 0 ? plan.canvas.fps_num : plan.canvas.fps;
-            nativeConfig.fps_den = plan.canvas.fps_den > 0 ? plan.canvas.fps_den : 1;
-            nativeConfig.source_in_us = item.source_in_us;
-            nativeConfig.source_duration_us = duration_us;
-            nativeConfig.codec = "libx264";
-            nativeConfig.preset = "medium";
-            const NativeThreadConfig threads = nativeThreadConfig();
-            nativeConfig.decoder_threads = threads.decoder_threads;
-            nativeConfig.encoder_threads = threads.encoder_threads;
-            media::FramePipelineResult nativeResult;
-            const auto transcodeStart = std::chrono::steady_clock::now();
-            bool transcodeOk = false;
-            {
-                ScopedTimer timer(metrics_, "mixed_transcode_ms");
-                transcodeOk = media::renderFrames(nativeConfig, &nativeResult);
+            std::string error_code;
+            if (!transcodeMixedSegment(plan, workDir, local_video, item, duration_us, i,
+                                       canonical, request, segment, result, error_code)) {
+                return failRender(error_code);
             }
-            if (!transcodeOk) {
-                result.error = "mixed transcode failed for segment " + std::to_string(i) +
-                    (nativeResult.error.empty() ? std::string() : ": " + nativeResult.error);
-                return failRender("mixed_transcode_failed");
-            }
-            segment.ffmpeg_encode_ms = std::chrono::duration<double, std::milli>(
-                std::chrono::steady_clock::now() - transcodeStart).count();
-            segment.frames_encoded = nativeResult.frames_encoded;
-            segment.frames_decoded = nativeResult.frames_decoded;
-            segment.frames_composited = nativeResult.frames_encoded;
-            recordFramePipeline(nativeResult);
-            frames_encoded_.fetch_add(nativeResult.frames_encoded);
-            frames_decoded_.fetch_add(nativeResult.frames_decoded);
-            frames_composited_.fetch_add(nativeResult.frames_encoded);
-            encode_passes_.fetch_add(1);
-            // Fail-closed canonical-profile gate: a produced (transcoded)
-            // segment must be compatible with the canonical output
-            // profile before the packet mux concatenates it with
-            // packet-copied ranges. The mux's own pairwise check is a
-            // backstop; this is the explicit
-            // mediaSignaturesCompatible(produced, canonical) gate.
-            media::SegmentProbe produced_probe;
-            std::string produced_error;
-            if (!media::probeSegmentForExecution(
-                    normalized, 0, media::MediaKind::Video,
-                    &produced_probe, &produced_error)) {
-                result.error = "failed to probe produced segment " +
-                    std::to_string(i) + ": " + produced_error;
-                return failRender("mixed_produced_probe_failed");
-            }
-            std::string profile_reason;
-            if (!media::mediaSignaturesCompatible(
-                    produced_probe.signature, canonical, &profile_reason)) {
-                result.error = "produced segment " + std::to_string(i) +
-                    " is not canonical-profile compatible: " + profile_reason;
-                return failRender("mixed_produced_profile_mismatch");
-            }
-            request.video_segments.push_back({
-                normalized, 0, duration_us, false, true});
         }
         segment.total_ms = std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - segmentStart).count();
@@ -663,41 +734,9 @@ std::optional<RenderResult> RenderEngine::renderMixed(
 
     if (!fell_back) {
         const double total_duration = static_cast<double>(total_duration_us) / 1'000'000.0;
-        if (!plan.audio_tracks.empty()) {
-            const auto& track = plan.audio_tracks.front();
-            if (track.loop || track.volume != 1.0 || track.start_time_offset < 0.0) {
-                result.error = "mixed render final audio requires finite, neutral-volume audio";
-                return failRender("mixed_audio_transform_unsupported");
-            }
-            const fs::path local_audio = workDir / "mixed_final_audio.m4a";
-            if (!file::downloadAsset(track.source_url, local_audio)) {
-                result.error = "failed to resolve mixed audio track";
-                return failRender("mixed_audio_download_failed");
-            }
-            if (!media::hasAudioStream(local_audio)) {
-                result.error = "failed to resolve valid mixed audio track";
-                return failRender("mixed_audio_invalid");
-            }
-            const media::FinalAudioDecision audio_decision = media::resolveFinalAudioModePacket(
-                media::probeFinalAudioMetadata(local_audio), true, total_duration);
-            if (audio_decision.mode != media::FinalAudioMode::Copy) {
-                result.error = "mixed render final audio is not FINAL_AUDIO_COPY: " +
-                    audio_decision.reason;
-                return failRender("mixed_audio_not_final_copy");
-            }
-            const int64_t declared_audio_duration = track.duration_us > 0
-                ? track.duration_us
-                : (track.duration_seconds > 0.0
-                       ? static_cast<int64_t>(
-                             std::llround(track.duration_seconds * 1'000'000.0))
-                       : 0);
-            request.audio = media::CopyOnlyAudioTrack{
-                local_audio,
-                track.start_offset_us > 0
-                    ? track.start_offset_us
-                    : static_cast<int64_t>(
-                          std::llround(track.start_time_offset * 1'000'000.0)),
-                declared_audio_duration};
+        std::string error_code;
+        if (!resolveMixedFinalAudio(plan, workDir, total_duration, request, result, error_code)) {
+            return failRender(error_code);
         }
 
         duration_seconds_.store(total_duration);
