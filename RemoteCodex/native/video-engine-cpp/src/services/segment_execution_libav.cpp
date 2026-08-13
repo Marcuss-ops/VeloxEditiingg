@@ -7,10 +7,17 @@
 // to its fail-closed stub and never references mediaSignatureFromStream).
 #ifdef VELOX_ENABLE_LIBAV
 
+// InputSession/Demuxer (media_packet_components.hpp) provide the in-process
+// open/seek/keyframe probe; their definitions live in
+// media_packet_pipeline.cpp, which is linked alongside this TU everywhere.
+#include "velox/services/media_packet_components.hpp"
+
 extern "C" {
 #include <libavutil/channel_layout.h>
 #include <libavutil/version.h>
 }
+
+namespace fs = std::filesystem;
 
 namespace velox::media {
 
@@ -54,6 +61,43 @@ MediaSignature mediaSignatureFromStream(const AVStream* stream) {
 #endif
     }
     return signature;
+}
+
+bool probeSegmentForExecution(const fs::path& path,
+                              int64_t source_in_us,
+                              MediaKind kind,
+                              SegmentProbe* out,
+                              std::string* error) {
+    if (out == nullptr) {
+        return false;
+    }
+    *out = SegmentProbe{};
+
+    packet::InputSession session;
+    if (!session.open(path, error)) {
+        return false;
+    }
+    packet::Demuxer& demuxer = session.demuxer();
+    const int stream_index = demuxer.firstStream(
+        kind == MediaKind::Audio ? AVMEDIA_TYPE_AUDIO : AVMEDIA_TYPE_VIDEO);
+    if (stream_index < 0) {
+        if (error != nullptr) {
+            *error = "media stream missing from " + path.string();
+        }
+        return false;
+    }
+    const AVStream* stream = demuxer.stream(stream_index);
+    out->signature = mediaSignatureFromStream(stream);
+
+    if (kind == MediaKind::Video) {
+        std::string keyframe_error;
+        // A non-keyframe trim is a valid, recoverable outcome (route to
+        // transcode), not a probe failure, so the keyframe error is
+        // deliberately not propagated.
+        out->source_window_keyframe_safe =
+            session.sourceWindowStartsOnKeyframe(stream_index, source_in_us, keyframe_error);
+    }
+    return true;
 }
 
 } // namespace velox::media

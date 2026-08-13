@@ -432,6 +432,29 @@ if(VELOX_ENABLE_LIBAV)
     add_test(NAME media_packet_pipeline_tests
              COMMAND velox_media_packet_pipeline_tests)
 
+    # probeSegmentForExecution: the AVStream -> MediaSignature bridge plus
+    # keyframe-safety probe the mixed renderer uses to resolve each segment.
+    add_executable(velox_segment_execution_libav_tests
+        tests/test_segment_execution_libav.cpp
+        src/services/file_utils.cpp
+        src/services/io_counters.cpp
+        src/services/media_probe.cpp
+        src/services/media_packet_pipeline.cpp
+        src/services/segment_execution_libav.cpp
+        src/services/segment_execution.cpp
+    )
+
+    target_include_directories(velox_segment_execution_libav_tests
+        PRIVATE include src include/velox)
+
+    if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(velox_segment_execution_libav_tests PRIVATE -O2)
+    endif()
+    velox_link_ffmpeg(velox_segment_execution_libav_tests)
+
+    add_test(NAME segment_execution_libav_tests
+             COMMAND velox_segment_execution_libav_tests)
+
     # Component-level unit tests for the named packet pipeline pieces
     # (Demuxer, PacketTrimmer, TimestampRewriter): pure AVPacket harnesses
     # for the rewrite pass plus a real-fixture Demuxer/demuxAndRewrite

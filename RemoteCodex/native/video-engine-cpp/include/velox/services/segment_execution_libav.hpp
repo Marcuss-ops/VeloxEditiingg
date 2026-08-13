@@ -23,6 +23,10 @@ extern "C" {
 
 #include "velox/services/segment_execution.hpp"
 
+#include <cstdint>
+#include <filesystem>
+#include <string>
+
 namespace velox::media {
 
 // Translates one AVStream into its canonical MediaSignature. A null stream
@@ -32,5 +36,24 @@ namespace velox::media {
 // filled per the stream's media kind; profile/level/extradata are captured
 // for both.
 MediaSignature mediaSignatureFromStream(const AVStream* stream);
+
+// What the resolver needs about one local media asset: its full
+// MediaSignature plus, for video, whether a trim at source_in_us starts on
+// an exact keyframe (so packet copy is safe). A non-keyframe video trim is
+// NOT a probe failure — it returns true with source_window_keyframe_safe
+// false so the caller can route the segment to native transcode.
+struct SegmentProbe {
+    MediaSignature signature;
+    bool source_window_keyframe_safe{false};
+};
+
+// Opens `path`, resolves the first stream of `kind` and fills the probe.
+// Returns false with `error` set only on a hard failure (unopenable file,
+// missing stream). The audio keyframe flag is always left false (unused).
+bool probeSegmentForExecution(const std::filesystem::path& path,
+                              int64_t source_in_us,
+                              MediaKind kind,
+                              SegmentProbe* out,
+                              std::string* error);
 
 } // namespace velox::media
