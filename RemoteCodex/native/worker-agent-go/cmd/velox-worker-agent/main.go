@@ -114,11 +114,19 @@ var Version = "dev"
 // boundary for the render executor family. V1 remains registered first and
 // unchanged; V2 is additive and uses the same registry advertised by worker
 // capabilities and used by dispatch.
-func registerCanonicalRenderExecutors(reg *executor.Registry, outputRoot string) error {
+func registerCanonicalRenderExecutors(reg *executor.Registry, outputRoot string, runners ...*pipeline.Runner) error {
 	if err := executors.RegisterRenderPlanExecutors(reg, outputRoot); err != nil {
 		return err
 	}
-	return executors.RegisterRenderBatchExecutor(reg, nil, outputRoot)
+	if err := executors.RegisterRenderBatchExecutor(reg, nil, outputRoot); err != nil {
+		return err
+	}
+	if len(runners) > 0 && runners[0] != nil {
+		if err := reg.Register(executors.NewVideoAssembleCopy(runners[0], outputRoot)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func main() {
@@ -341,12 +349,13 @@ func main() {
 	}
 	// Register V1 and V2 render executors in the single canonical registry.
 	// V2 is additive and never replaces the four legacy entries.
-	if err := registerCanonicalRenderExecutors(registry, cfg.OutputDir); err != nil {
+	if err := registerCanonicalRenderExecutors(registry, cfg.OutputDir, pipelineRunner); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: failed to register render executors: %v\n", err)
 		os.Exit(1)
 	}
 	logger.Info("[BOOT] Registered RenderPlan executors: %s@1, %s@1, %s@1, %s@1", executors.SubtitleAlignID, executors.AudioMixID, executors.ComposeID, executors.EncodeID)
 	logger.Info("[BOOT] Registered V2 executor: %s@%d", executors.RenderBatchID, executors.RenderBatchVersion)
+	logger.Info("[BOOT] Registered packet-copy executor: %s@%d", executors.VideoAssembleCopyID, executors.VideoAssembleCopyVersion)
 	// RW-PROD-004 §3 A4: surface the live executor count on the read
 	// snapshot so /health/ready has a non-zero Executors reason.
 	// SetExecutorsCount accepts the entire roster size rather than +

@@ -154,6 +154,13 @@ type RenderClient interface {
 	RenderWithMetrics(ctx context.Context, p *plan.RenderPlan) (RenderMetrics, error)
 }
 
+// CompiledPlanV2Renderer is the narrow optional native surface used by the
+// packet-copy executor. Keeping it separate preserves existing test clients
+// and prevents legacy V1 pipeline callers from depending on V2.
+type CompiledPlanV2Renderer interface {
+	RenderCompiledPlanV2(context.Context, []byte, string) (RenderMetrics, error)
+}
+
 // RenderMetrics captures the native engine sidecar + subprocess wall-clock
 // counters. The zero value is safe — executors that don't use native
 // rendering return it unpopulated.
@@ -298,6 +305,19 @@ func (r *Runner) RenderClient() RenderClient {
 		return nil
 	}
 	return r.renderClient
+}
+
+// RenderCompiledPlanV2 delegates to the native zero-spawn V2 path. A runner
+// without that capability fails closed; it never falls back to FFmpeg.
+func (r *Runner) RenderCompiledPlanV2(ctx context.Context, planJSON []byte, outputPath string) (RenderMetrics, error) {
+	if r == nil || r.renderClient == nil {
+		return RenderMetrics{}, fmt.Errorf("pipeline: compiled V2 renderer is not configured")
+	}
+	renderer, ok := r.renderClient.(CompiledPlanV2Renderer)
+	if !ok {
+		return RenderMetrics{}, fmt.Errorf("pipeline: compiled V2 renderer is not supported")
+	}
+	return renderer.RenderCompiledPlanV2(ctx, planJSON, outputPath)
 }
 
 // Runner orchestrates: resolve compiler → validate → compile → render.

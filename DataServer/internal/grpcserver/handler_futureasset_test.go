@@ -1,8 +1,11 @@
 package grpcserver
 
 import (
+	"encoding/json"
 	"reflect"
 	"testing"
+
+	"velox-shared/contract"
 )
 
 func TestFutureAssetManifestsIsDeterministicallyOrdered(t *testing.T) {
@@ -25,5 +28,34 @@ func TestFutureAssetManifestsIsDeterministicallyOrdered(t *testing.T) {
 		if got := futureAssetManifests(payload); !reflect.DeepEqual(got, want) {
 			t.Fatalf("manifest changed between runs: got=%v want=%v", got, want)
 		}
+	}
+}
+
+func TestFutureAssetManifestsIncludesCompiledPlanAssets(t *testing.T) {
+	const timelineSHA = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	plan := &contract.CompiledRenderPlanV2{
+		PlanVersion: 2, TimelineRevision: 1, TimelineSHA256: timelineSHA, DurationUS: 1_000_000,
+		Output:      contract.OutputContractV2{Container: "mp4", VideoCodec: "h264", Width: 1920, Height: 1080, FPSNum: 30, FPSDen: 1},
+		FinalAudio:  contract.FinalAudioV2{Mode: contract.AudioModeFinalAudioCopy, AssetID: "audio", SHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", SizeBytes: 20, Codec: "aac", SampleRateHz: 48000, Channels: 2, DurationUS: 1_000_000, TimelineRevision: 1, TimelineSHA256: timelineSHA},
+		VideoTracks: []contract.VideoTrackV2{{TrackID: "main", Segments: []contract.VideoSegmentV2{{SegmentID: "fragment", AssetID: "fragment", SHA256: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", TimelineStartFrame: 0, FrameCount: 30, SourceInUS: 0, SourceDurationUS: 1_000_000}}}},
+		Assets: []contract.AssetRefV2{
+			{AssetID: "fragment", AssetKey: "fragment-key", SHA256: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", SizeBytes: 10, Kind: "prepared_video_fragment", MIME: "video/mp4", DurationUS: 1_000_000},
+			{AssetID: "audio", SHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", SizeBytes: 20, Kind: "final_audio", MIME: "audio/mp4", DurationUS: 1_000_000},
+		},
+	}
+	rawPlan, err := plan.CanonicalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(map[string]interface{}{contract.PayloadKeyCompiledRenderPlanJSON: string(rawPlan)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assets := futureAssetManifests(payload)
+	if len(assets) != 2 || assets[0].AssetKey != "audio" || assets[1].AssetKey != "fragment-key" {
+		t.Fatalf("compiled plan assets = %+v; want canonical audio + fragment-key", assets)
+	}
+	if assets[1].Role != "prepared_video_fragment" || assets[1].SHA256 == "" || assets[1].SizeBytes != 10 {
+		t.Fatalf("prepared fragment manifest = %+v", assets[1])
 	}
 }

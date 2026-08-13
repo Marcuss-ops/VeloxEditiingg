@@ -10,6 +10,7 @@ import (
 
 	"velox-server/internal/placement"
 	"velox-server/internal/taskgraph"
+	"velox-shared/contract"
 	"velox-shared/futureasset"
 )
 
@@ -167,6 +168,9 @@ func futureAssetManifests(payload []byte) []futureasset.AssetManifest {
 				walk(child)
 			}
 		case map[string]interface{}:
+			if rawPlan, ok := node[contract.PayloadKeyCompiledRenderPlanJSON].(string); ok {
+				appendCompiledPlanAssetManifests(rawPlan, seen)
+			}
 			key, _ := node["asset_key"].(string)
 			if key == "" {
 				key, _ = node["asset_id"].(string)
@@ -200,4 +204,24 @@ func futureAssetManifests(payload []byte) []futureasset.AssetManifest {
 		return out[i].AssetKey < out[j].AssetKey
 	})
 	return out
+}
+
+func appendCompiledPlanAssetManifests(raw string, seen map[string]futureasset.AssetManifest) {
+	plan, err := contract.DecodeCompiledRenderPlanV2([]byte(raw))
+	if err != nil || plan == nil {
+		return
+	}
+	for _, asset := range plan.Assets {
+		key := asset.AssetKey
+		if key == "" {
+			key = asset.AssetID
+		}
+		if key == "" || asset.SHA256 == "" || asset.SizeBytes <= 0 {
+			continue
+		}
+		seen[key] = futureasset.AssetManifest{
+			AssetKey: key, AssetID: asset.AssetID, SHA256: asset.SHA256,
+			SizeBytes: asset.SizeBytes, MIMEType: asset.MIME, Role: asset.Kind,
+		}
+	}
 }

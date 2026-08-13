@@ -49,6 +49,18 @@ type OutputContractV2 struct {
 	FPSNum      int    `json:"fps_num"`
 	FPSDen      int    `json:"fps_den"`
 	PixelFormat string `json:"pixel_format,omitempty"`
+
+	// Strengthened canonical-profile fields. They are optional on legacy V2
+	// documents so existing render_batch plans remain wire-compatible; the
+	// packet-copy executor requires ProfileID and validates the full profile.
+	ProfileID    string `json:"profile_id,omitempty"`
+	CodecProfile string `json:"codec_profile,omitempty"`
+	CodecLevel   string `json:"codec_level,omitempty"`
+	GOPSize      int    `json:"gop_size,omitempty"`
+	BFrames      int    `json:"b_frames,omitempty"`
+	ClosedGOP    bool   `json:"closed_gop,omitempty"`
+	TimeBaseNum  int    `json:"time_base_num,omitempty"`
+	TimeBaseDen  int    `json:"time_base_den,omitempty"`
 }
 
 // FinalAudioV2 identifies the one already-finalized audio source for the
@@ -110,6 +122,16 @@ type AssetRefV2 struct {
 	DurationUS int64 `json:"duration_us,omitempty"`
 	Width      int   `json:"width,omitempty"`
 	Height     int   `json:"height,omitempty"`
+
+	// Prepared-fragment admission metadata. Optional for ordinary V2 assets;
+	// video.assemble.copy.v1 requires it for every externally prepared video.
+	ProfileID          string `json:"profile_id,omitempty"`
+	FrameCount         int64  `json:"frame_count,omitempty"`
+	TimelineRevision   int64  `json:"timeline_revision,omitempty"`
+	TimelineSHA256     string `json:"timeline_sha256,omitempty"`
+	TimelineStartFrame int64  `json:"timeline_start_frame,omitempty"`
+	FirstFrameKeyframe bool   `json:"first_frame_keyframe,omitempty"`
+	ClosedGOP          bool   `json:"closed_gop,omitempty"`
 }
 
 // CanonicalJSON returns the deterministic V2 document used for persistence

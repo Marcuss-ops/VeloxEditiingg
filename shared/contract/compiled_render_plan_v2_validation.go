@@ -303,7 +303,7 @@ func validateAsset(violations *CompiledRenderPlanV2ValidationErrors, path string
 	if asset.Width < 0 || asset.Height < 0 {
 		violations.add(path, "invalid_dimensions", "non-negative width and height", fmt.Sprintf("%dx%d", asset.Width, asset.Height))
 	}
-	if asset.Kind == "video" || asset.Kind == "final_audio" {
+	if asset.Kind == "video" || asset.Kind == "prepared_video_fragment" || asset.Kind == "final_audio" {
 		if asset.DurationUS <= 0 {
 			violations.add(path+".duration_us", "required", "positive microseconds for media assets", fmt.Sprint(asset.DurationUS))
 		}
@@ -328,8 +328,8 @@ func validateSegment(violations *CompiledRenderPlanV2ValidationErrors, path stri
 	if !assetFound {
 		violations.add(path+".asset_id", "unknown_reference", "an asset_id in assets[]", segment.AssetID)
 	} else {
-		if asset.Kind != "video" {
-			violations.add(path+".asset_id", "wrong_asset_kind", "video", asset.Kind)
+		if asset.Kind != "video" && asset.Kind != "prepared_video_fragment" {
+			violations.add(path+".asset_id", "wrong_asset_kind", "video or prepared_video_fragment", asset.Kind)
 		}
 		if segment.SHA256 != asset.SHA256 {
 			violations.add(path+".sha256", "asset_hash_mismatch", asset.SHA256, segment.SHA256)
