@@ -270,8 +270,15 @@ func (s *Scheduler) Reconcile(plan futureasset.Plan) error {
 		}
 		return releaseErr
 	}
+	// Index the incoming plan's jobs once so the removal sweep below is O(1)
+	// per active job instead of a linear scan of plan.PrefetchJobs per job
+	// (the previous O(n²) findScheduledJob loop).
+	scheduled := make(map[string]struct{}, len(plan.PrefetchJobs))
+	for _, job := range plan.PrefetchJobs {
+		scheduled[job.JobID] = struct{}{}
+	}
 	for id, runtime := range s.jobs {
-		if _, ok := findScheduledJob(plan.PrefetchJobs, id); !ok {
+		if _, ok := scheduled[id]; !ok {
 			runtime.cancel()
 			delete(s.jobs, id)
 			s.detachJobLocked(runtime.job)
@@ -707,11 +714,3 @@ func priorityForDistance(distance int) int {
 	}
 }
 
-func findScheduledJob(jobs []futureasset.Job, id string) (futureasset.Job, bool) {
-	for _, job := range jobs {
-		if job.JobID == id {
-			return job, true
-		}
-	}
-	return futureasset.Job{}, false
-}

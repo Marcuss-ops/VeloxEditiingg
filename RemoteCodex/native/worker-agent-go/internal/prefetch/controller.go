@@ -51,8 +51,15 @@ func (c *Controller) Apply(plan futureasset.Plan) (ReconcileResult, error) {
 		return ReconcileResult{Stale: true}, nil
 	}
 	result := ReconcileResult{Applied: true}
+	// Index the incoming plan's jobs once so the removal sweep below is O(1)
+	// per active job instead of a linear scan of plan.PrefetchJobs per job
+	// (the previous O(n²) findJob loop).
+	scheduled := make(map[string]struct{}, len(plan.PrefetchJobs))
+	for _, job := range plan.PrefetchJobs {
+		scheduled[job.JobID] = struct{}{}
+	}
 	for jobID, old := range c.active {
-		if _, ok := findJob(plan.PrefetchJobs, jobID); !ok {
+		if _, ok := scheduled[jobID]; !ok {
 			result.Removed = append(result.Removed, old)
 			delete(c.active, jobID)
 		}
@@ -124,11 +131,3 @@ func (c *Controller) ProtectedAssets() []futureasset.ProtectedAsset {
 	return out
 }
 
-func findJob(jobs []futureasset.Job, id string) (futureasset.Job, bool) {
-	for _, job := range jobs {
-		if job.JobID == id {
-			return job, true
-		}
-	}
-	return futureasset.Job{}, false
-}
