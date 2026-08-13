@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 type Client struct {
@@ -60,7 +61,10 @@ func (c Client) Translate(ctx context.Context, text, targetLanguage string) (str
 	req.Header.Set("Content-Type", "application/json")
 	hc := c.HTTP
 	if hc == nil {
-		hc = http.DefaultClient
+		// http.DefaultClient has no timeout: a stalled translation provider
+		// would block the request goroutine indefinitely. Fall back to a
+		// bounded client instead; callers may still override via Client.HTTP.
+		hc = &http.Client{Timeout: 60 * time.Second}
 	}
 	resp, err := hc.Do(req)
 	if err != nil {
