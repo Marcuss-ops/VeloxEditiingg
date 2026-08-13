@@ -63,7 +63,6 @@ const (
 	timeoutDriveUpload   = 60 * time.Second
 	timeoutSmokeFinal    = 5 * time.Second
 	timeoutCleanupWorker = 30 * time.Second
-	defaultSmokeBudget   = 10 * time.Minute
 )
 
 // LevelDSmokeExecutor is the Step 12/15 OperationExecutor binding

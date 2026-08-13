@@ -11,7 +11,6 @@ import (
 
 // Asset statuses.
 const (
-	AssetStatusStaging     = "STAGING"
 	AssetStatusReady       = "READY"
 	AssetStatusQuarantined = "QUARANTINED"
 	AssetStatusDeleted     = "DELETED"
@@ -25,14 +24,7 @@ const (
 
 	RoleVoiceover   = "voiceover"
 	RoleSceneImage  = "scene_image"
-	RoleStockClip   = "stock_clip"
-	RoleMusic       = "music"
-	RoleSubtitle    = "subtitle"
-	RoleFont        = "font"
-	RoleThumbnail   = "thumbnail"
 	RoleProjectFile = "project_file"
-	RoleOverlay     = "overlay"
-	RoleLogo        = "logo"
 )
 
 // Asset is the canonical domain record for a content-addressed asset.

@@ -52,7 +52,6 @@ import (
 )
 
 const (
-	exitOK          = 0
 	exitDrift       = 1
 	exitGenerr      = 2
 	manifestVersion = 1

@@ -359,20 +359,3 @@ func SpanIDFromContext(ctx context.Context) string {
 	}
 	return span.SpanContext().SpanID().String()
 }
-
-// ── Common span attribute keys ────────────────────────────────────────
-
-// Low-cardinality attributes safe for all spans.
-var (
-	AttrService       = attribute.String("service.name", "velox-server")
-	AttrSpanKind      = func(kind string) attribute.KeyValue { return attribute.String("span.kind", kind) }
-	AttrJobID         = func(id string) attribute.KeyValue { return attribute.String("velox.job_id", id) }
-	AttrTaskID        = func(id string) attribute.KeyValue { return attribute.String("velox.task_id", id) }
-	AttrAttemptID     = func(id string) attribute.KeyValue { return attribute.String("velox.attempt_id", id) }
-	AttrWorkerID      = func(id string) attribute.KeyValue { return attribute.String("velox.worker_id", id) }
-	AttrLeaseID       = func(id string) attribute.KeyValue { return attribute.String("velox.lease_id", id) }
-	AttrExecutorID    = func(id string) attribute.KeyValue { return attribute.String("velox.executor_id", id) }
-	AttrAttemptNumber = func(n int) attribute.KeyValue { return attribute.Int("velox.attempt_number", n) }
-	AttrStatus        = func(s string) attribute.KeyValue { return attribute.String("velox.status", s) }
-	AttrErrorCode     = func(c string) attribute.KeyValue { return attribute.String("velox.error_code", c) }
-)

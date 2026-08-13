@@ -160,28 +160,6 @@ const (
 	CodeSQLiteMigrationApplied   = "SQLITE_MIGRATION_APPLIED"
 )
 
-// Component identifiers for structured logging
-const (
-	ComponentAnsible   = "ansible"
-	ComponentWorker    = "worker"
-	ComponentQueue     = "queue"
-	ComponentMaster    = "master"
-	ComponentPreflight = "preflight"
-)
-
-// Components added for handler/store domains
-const (
-	ComponentWorkerReg        = "workers.registry"
-	ComponentWorkerUpdate     = "workers.update_handler"
-	ComponentWorkerBundle     = "workers.bundle"
-	ComponentWorkerValidation = "workers.validation"
-	ComponentWorkerLifecycle  = "workers.lifecycle"
-	ComponentInstall          = "install"
-	ComponentUploads          = "uploads"
-	ComponentStore            = "store.sqlite"
-	ComponentDriveLink        = "store.drive_links"
-)
-
 // Level constants
 const (
 	LevelInfo  = "INFO"

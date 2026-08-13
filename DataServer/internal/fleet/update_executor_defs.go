@@ -157,13 +157,11 @@ func classifyDeploymentError(err error) string {
 // ("DRAINING → /health/ready → health → Master connection
 // → Level D smoke → Drive delivery verification").
 const (
-	timeoutSnapshot       = 10 * time.Second
 	timeoutDrainVerify    = 5 * time.Second
 	timeoutActiveJobsIdle = 5 * time.Minute
 	timeoutWaitReady      = 5 * time.Minute
 	timeoutCosign         = 30 * time.Second
 	timeoutDockerPull     = 10 * time.Minute
-	timeoutComposeRestart = 2 * time.Minute
 	timeoutContainerCheck = 30 * time.Second
 	timeoutHealthReady    = 60 * time.Second
 	timeoutMasterCheck    = 30 * time.Second
