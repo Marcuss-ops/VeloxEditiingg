@@ -399,7 +399,11 @@ func writeFixed2(b *strings.Builder, v int) {
 }
 
 func writeInt(b *strings.Builder, v int) {
-	b.WriteString(strconv.Itoa(v))
+	// AppendInt into a stack buffer avoids the per-call string allocation
+	// that strconv.Itoa would incur on the hot per-segment/per-event/per-track
+	// builder loops (same pattern as writeFloat6).
+	var buf [24]byte
+	b.Write(strconv.AppendInt(buf[:0], int64(v), 10))
 }
 
 // writeASSText writes the subtitle text with newlines escaped to \N. The
