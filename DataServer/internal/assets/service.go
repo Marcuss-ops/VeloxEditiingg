@@ -17,10 +17,12 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net/url"
 	"strings"
 
 	"velox-server/internal/inputsecurity"
 	"velox-server/internal/platform/clock"
+	"velox-shared/assetref"
 )
 
 // AssetRepository is the narrow persistence contract for the asset
@@ -224,6 +226,32 @@ func (s *AssetService) ResolveExternalSource(ctx context.Context, assetID string
 		return nil, fmt.Errorf("asset %s external source unavailable: %w", assetID, lastErr)
 	}
 	return nil, fmt.Errorf("asset %s has no resolvable external source", assetID)
+}
+
+// ResolveDeferredDriveSource materializes a canonical velox-drive reference
+// at worker execution time. Deferred Drive assets intentionally do not have a
+// local registry row: the worker sends the opaque file ID to the Master asset
+// bridge, which must resolve it through the configured Drive resolver.
+func (s *AssetService) ResolveDeferredDriveSource(ctx context.Context, fileID string) (*Source, error) {
+	if s == nil || s.registry == nil {
+		return nil, fmt.Errorf("asset external source resolution unavailable")
+	}
+	deferred, err := assetref.NewDeferredDrive(strings.TrimSpace(fileID))
+	if err != nil {
+		return nil, fmt.Errorf("invalid deferred Drive asset: %w", err)
+	}
+	reference := "https://drive.google.com/uc?export=download&id=" + url.QueryEscape(deferred.ID())
+	if !s.registry.SupportsReference(reference) {
+		return nil, fmt.Errorf("Drive resolver unavailable")
+	}
+	resolved, err := s.registry.ResolveByInference(ctx, reference)
+	if err != nil {
+		return nil, fmt.Errorf("deferred Drive asset %s unavailable: %w", deferred.ID(), err)
+	}
+	if resolved == nil || resolved.Reader == nil {
+		return nil, fmt.Errorf("deferred Drive asset %s returned no source", deferred.ID())
+	}
+	return resolved, nil
 }
 
 // verifyExternalSource validates the downloaded bytes against the canonical

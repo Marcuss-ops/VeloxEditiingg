@@ -57,7 +57,7 @@ func (h *Handler) ServeAsset() gin.HandlerFunc {
 			return
 		}
 
-		if h.assetSvc == nil || h.blobStore == nil {
+		if h.assetSvc == nil {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "asset service unavailable"})
 			return
 		}
@@ -87,6 +87,13 @@ func (h *Handler) ServeAsset() gin.HandlerFunc {
 		}
 
 		source, resolveErr := h.assetSvc.ResolveExternalSource(c.Request.Context(), assetID)
+		if resolveErr != nil || source == nil || source.Reader == nil {
+			// Worker references for deferred Drive assets carry only the opaque
+			// file ID at this HTTP boundary. If no local registry row exists,
+			// materialize through the authenticated Drive resolver at execution
+			// time; local assets remain the fast path above.
+			source, resolveErr = h.assetSvc.ResolveDeferredDriveSource(c.Request.Context(), assetID)
+		}
 		if resolveErr != nil || source == nil || source.Reader == nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "asset source unavailable"})
 			return

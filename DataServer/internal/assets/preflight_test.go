@@ -135,6 +135,19 @@ func TestAssetServiceResolveExternalSourceUsesRegisteredReference(t *testing.T) 
 	}
 }
 
+func TestAssetServiceResolveDeferredDriveSourceUsesDriveResolver(t *testing.T) {
+	service := &AssetService{registry: NewResolverRegistry(staticResolver{})}
+	source, err := service.ResolveDeferredDriveSource(context.Background(), "drive-file-123456")
+	if err != nil {
+		t.Fatalf("ResolveDeferredDriveSource: %v", err)
+	}
+	defer source.Reader.Close()
+	body, err := io.ReadAll(source.Reader)
+	if err != nil || string(body) != "drive-bytes" {
+		t.Fatalf("resolved body = %q, err=%v", body, err)
+	}
+}
+
 // writePreflightBlob writes a deterministic blob into the preflight blob
 // store root and returns its content + SHA-256 digest for asset fixtures.
 func writePreflightBlob(t *testing.T, root, name string, content []byte) string {
