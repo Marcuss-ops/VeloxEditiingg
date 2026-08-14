@@ -196,6 +196,11 @@ func copyTimelinePayloadFields(out, src map[string]interface{}) {
 		// boundary, never persisted in the master payload.
 		"audio_tracks",
 		"layers",
+		// Explicit opt-in for the worker's strict packet-copy path. The
+		// worker validates stream identity, keyframe boundaries and audio
+		// compatibility before using it; it must therefore survive the
+		// master normalization boundary unchanged.
+		"copy_only",
 		// Preserve control-plane inputs through normalization so the
 		// compiler can move them into TaskSpec.DeliveryPlan and
 		// TaskSpec.PublicationSpecs. They are removed again by
