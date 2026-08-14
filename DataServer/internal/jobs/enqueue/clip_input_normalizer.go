@@ -290,7 +290,7 @@ func normalizeScenesInput(rawPayload map[string]interface{}, scenes []map[string
 		entry := cloneCanonicalScene(scene)
 		entries = append(entries, entry)
 		items = append(items, map[string]interface{}{
-			"type": "video", "url": url, "duration": duration, "fit": "contain", "role": "scene_clip",
+			"type": "video", "url": url, "duration": duration, "fit": "contain", "role": "scene_clip", "include_audio": true,
 		})
 		clips = append(clips, url)
 	}
