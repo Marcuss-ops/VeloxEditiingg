@@ -26,6 +26,30 @@ func TestBuildClipPayloadForMasterDoesNotReemitVoiceoverPaths(t *testing.T) {
 	}
 }
 
+func TestBuildClipPayloadForMasterPreservesCopyOnlyOptIn(t *testing.T) {
+	result, err := BuildClipPayloadForMaster(map[string]interface{}{
+		"video_name": "copy-only",
+		"script_text": "copy-only test",
+		"copy_only": true,
+		"scenes": []interface{}{
+			map[string]interface{}{
+				"scene_id": "scene-0",
+				"clip": map[string]interface{}{
+					"asset_id": "clip-1",
+					"url":      "velox-asset://clip-1",
+					"duration_ms": 1000,
+				},
+			},
+		},
+	}, t.TempDir(), t.TempDir(), "")
+	if err != nil {
+		t.Fatalf("BuildClipPayloadForMaster: %v", err)
+	}
+	if got, ok := result["copy_only"].(bool); !ok || !got {
+		t.Fatalf("copy_only = %#v, want true", result["copy_only"])
+	}
+}
+
 func TestBuildNarratedClipPayloadUsesCanonicalDurations(t *testing.T) {
 	scenes := []map[string]interface{}{{
 		"clip":      map[string]interface{}{"asset_id": "clip-1", "url": "velox-asset://clip-1", "duration_ms": 2500},

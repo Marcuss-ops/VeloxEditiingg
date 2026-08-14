@@ -183,6 +183,14 @@ func BuildClipPayloadForMaster(rawPayload map[string]interface{}, dataDir, video
 	if len(audioTracks) > 0 {
 		out["audio_tracks"] = audioTracks
 	}
+	// Preserve the explicit packet-copy opt-in through the public
+	// /script/generate clip builder. The worker's copy-only renderer remains
+	// fail-closed: it accepts this flag only when every source window and
+	// stream is packet-compatible, otherwise the job fails instead of
+	// silently re-encoding under a misleading performance contract.
+	if copyOnly, ok := rawPayload["copy_only"].(bool); ok && copyOnly {
+		out["copy_only"] = true
+	}
 	out["fit"] = payload.FirstString(rawPayload, "fit")
 	if out["fit"] == "" {
 		out["fit"] = "contain"
