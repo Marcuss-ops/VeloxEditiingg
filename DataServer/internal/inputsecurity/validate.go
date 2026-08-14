@@ -161,7 +161,9 @@ type mimeSniffer struct {
 var mimeSniffers = []mimeSniffer{
 	{minLen: 12, mime: "image/png", match: func(b []byte) bool { return bytes.Equal(b[:8], []byte("\x89PNG\r\n\x1a\n")) }},
 	{minLen: 3, mime: "image/jpeg", match: func(b []byte) bool { return bytes.Equal(b[:3], []byte{0xff, 0xd8, 0xff}) }},
-	{minLen: 6, mime: "image/gif", match: func(b []byte) bool { return bytes.Equal(b[:6], []byte("GIF87a")) || bytes.Equal(b[:6], []byte("GIF89a")) }},
+	{minLen: 6, mime: "image/gif", match: func(b []byte) bool {
+		return bytes.Equal(b[:6], []byte("GIF87a")) || bytes.Equal(b[:6], []byte("GIF89a"))
+	}},
 	{minLen: 12, mime: "image/webp", match: func(b []byte) bool { return bytes.Equal(b[:4], []byte("RIFF")) && bytes.Equal(b[8:12], []byte("WEBP")) }},
 	{minLen: 12, mime: "video/mp4", match: func(b []byte) bool { return bytes.Equal(b[4:8], []byte("ftyp")) }},
 	{minLen: 3, mime: "audio/mpeg", match: func(b []byte) bool { return bytes.Equal(b[:3], []byte("ID3")) }},
@@ -175,7 +177,9 @@ var mimeSniffers = []mimeSniffer{
 	{minLen: 4, mime: "audio/ogg", match: func(b []byte) bool { return bytes.Equal(b[:4], []byte("OggS")) }},
 	{minLen: 4, mime: "audio/flac", match: func(b []byte) bool { return bytes.Equal(b[:4], []byte("fLaC")) }},
 	{minLen: 4, mime: "font/woff", match: func(b []byte) bool { return bytes.Equal(b[:4], []byte("wOFF")) || bytes.Equal(b[:4], []byte("wOF2")) }},
-	{minLen: 4, mime: "font/ttf", match: func(b []byte) bool { return bytes.Equal(b[:4], []byte("OTTO")) || bytes.Equal(b[:4], []byte{0, 1, 0, 0}) }},
+	{minLen: 4, mime: "font/ttf", match: func(b []byte) bool {
+		return bytes.Equal(b[:4], []byte("OTTO")) || bytes.Equal(b[:4], []byte{0, 1, 0, 0})
+	}},
 }
 
 func sniffMIME(data []byte, path string) string {
@@ -231,6 +235,18 @@ func mimeCompatible(declared, detected string) bool {
 func mimeCompatibleForKind(kind Kind, declared, detected string) bool {
 	if mimeCompatible(declared, detected) {
 		return true
+	}
+	// M4A/AAC is commonly transported as an MP4 container. The byte sniffer
+	// intentionally reports that container as video/mp4, while Drive metadata
+	// and file extensions commonly declare audio/mp4 (or audio/m4a). Permit
+	// only this audio-role container mismatch; ffprobe below still requires a
+	// valid audio stream and therefore prevents a video payload from entering
+	// an audio or voiceover slot.
+	if (kind == KindAudio || kind == KindVoiceover) && detected == "video/mp4" {
+		switch declared {
+		case "audio/mp4", "audio/m4a", "audio/x-m4a":
+			return true
+		}
 	}
 	// JSON manifests are frequently served with text/plain by static object
 	// stores. Content sniffing still rejects HTML and malformed JSON below,
