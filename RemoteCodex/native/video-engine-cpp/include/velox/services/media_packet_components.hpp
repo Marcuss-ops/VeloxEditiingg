@@ -153,7 +153,11 @@ bool rewritePacket(AVPacket& packet,
 // Demuxes `path` through a fresh Demuxer and rewrites every accepted packet
 // through rewritePacket into `packets`, counting accepted packets into
 // `packet_count`. This is the per-segment zero-spawn reader the ConcatMuxer
-// drives: one avformat open, one packet pass, no child process.
+// drives: one avformat open, one packet pass, no child process. When
+// `extend_video_tail` is true for a video segment whose source ends before
+// the requested window, the last encoded packet is repeated at successive
+// frame timestamps until the requested end. This is a decode-free freeze of
+// the last frame; it is intentionally opt-in and never applies to audio.
 bool demuxAndRewrite(const std::filesystem::path& path,
                      AVMediaType type,
                      int input_stream_index,
@@ -164,7 +168,8 @@ bool demuxAndRewrite(const std::filesystem::path& path,
                      TimestampState& state,
                      std::vector<std::unique_ptr<PacketHolder>>& packets,
                      int64_t& packet_count,
-                     std::string& error);
+                     std::string& error,
+                     bool extend_video_tail = false);
 
 bool demuxAndRewrite(Demuxer& input,
                      const std::filesystem::path& path,
@@ -177,7 +182,8 @@ bool demuxAndRewrite(Demuxer& input,
                      TimestampState& state,
                      std::vector<std::unique_ptr<PacketHolder>>& packets,
                      int64_t& packet_count,
-                     std::string& error);
+                     std::string& error,
+                     bool extend_video_tail = false);
 
 // Returns true only when source_in_us identifies an exact video keyframe.
 // Packet-copy never guesses for a non-keyframe cut: callers must route that

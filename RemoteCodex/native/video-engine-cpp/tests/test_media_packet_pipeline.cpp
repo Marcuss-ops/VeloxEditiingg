@@ -279,6 +279,25 @@ int main() {
     expect(segmentAudioProbe.has_value() && segmentAudioProbe->streams.size() == 2,
            "segment audio packet mapping produces video and audio streams");
 
+    const fs::path tailExtensionOutput = root / "tail-extension-output.mp4";
+    velox::media::CopyOnlyMuxRequest tailExtensionRequest;
+    tailExtensionRequest.video_segments = {{video, 0, 1'800'000}};
+    tailExtensionRequest.output_path = tailExtensionOutput;
+    velox::media::CopyOnlyMuxResult tailExtensionResult;
+    expect(velox::media::muxCopyOnly(tailExtensionRequest, &tailExtensionResult),
+           "copy-only freezes the last encoded video packet when the source is short");
+    expect(tailExtensionResult.success && tailExtensionResult.video_packets > 6,
+           "tail extension appends decode-free video packets");
+    const auto tailExtensionProbe = velox::media::probeMediaInProcess(tailExtensionOutput);
+    expect(tailExtensionProbe.has_value() && tailExtensionProbe->duration_verified &&
+               tailExtensionProbe->duration_seconds > 1.55 &&
+               tailExtensionProbe->duration_seconds < 1.95,
+           "tail extension covers the requested duration (actual=" +
+               (tailExtensionProbe.has_value()
+                    ? std::to_string(tailExtensionProbe->duration_seconds)
+                    : std::string("none")) +
+               ")");
+
     velox::media::CopyOnlyMuxRequest incompatibleRequest;
     incompatibleRequest.video_segments = {{video, 0, 800'000}, {incompatible, 0, 800'000}};
     incompatibleRequest.output_path = failedOutput;

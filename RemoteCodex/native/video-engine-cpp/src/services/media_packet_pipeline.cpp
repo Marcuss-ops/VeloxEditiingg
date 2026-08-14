@@ -400,7 +400,8 @@ bool demuxAndRewrite(const fs::path& path,
                      TimestampState& state,
                      std::vector<std::unique_ptr<PacketHolder>>& packets,
                      int64_t& packet_count,
-                     std::string& error) {
+                     std::string& error,
+                     bool extend_video_tail) {
     Demuxer input;
     if (!input.open(path, error)) {
         return false;
@@ -408,7 +409,7 @@ bool demuxAndRewrite(const fs::path& path,
 
     return demuxAndRewrite(input, path, type, input_stream_index, output_stream,
                            timeline_offset, source_in_us, duration_us, state,
-                           packets, packet_count, error);
+                           packets, packet_count, error, extend_video_tail);
 }
 
 bool demuxAndRewrite(Demuxer& input,
@@ -422,7 +423,8 @@ bool demuxAndRewrite(Demuxer& input,
                      TimestampState& state,
                      std::vector<std::unique_ptr<PacketHolder>>& packets,
                      int64_t& packet_count,
-                     std::string& error) {
+                     std::string& error,
+                     bool extend_video_tail) {
     if (!input.seekToTimestampUs(input_stream_index, source_in_us, error)) {
         return false;
     }
@@ -446,6 +448,9 @@ bool demuxAndRewrite(Demuxer& input,
         return false;
     }
 
+    AVPacket last_video_packet{};
+    bool have_last_video_packet = false;
+
     bool eof = false;
     // Hoisted out of the per-packet loop: readError is reused across
     // packets instead of being default-constructed once per packet. The
@@ -466,6 +471,15 @@ bool demuxAndRewrite(Demuxer& input,
             if (rewritePacket(*packet, input_stream, output_stream, source_start,
                               source_in_us,
                               timeline_offset, duration_us, state, sort_dts)) {
+                if (extend_video_tail && type == AVMEDIA_TYPE_VIDEO) {
+                    av_packet_unref(&last_video_packet);
+                    if (av_packet_ref(&last_video_packet, packet) < 0) {
+                        error = "av_packet_ref failed while retaining the last video packet";
+                        av_packet_free(&packet);
+                        return false;
+                    }
+                    have_last_video_packet = true;
+                }
                 auto holder = std::make_unique<PacketHolder>();
                 av_packet_move_ref(&holder->packet, packet);
                 holder->output_stream_index = output_stream->index;
@@ -477,6 +491,56 @@ bool demuxAndRewrite(Demuxer& input,
         av_packet_unref(packet);
     }
     av_packet_free(&packet);
+
+    if (extend_video_tail && type == AVMEDIA_TYPE_VIDEO && have_last_video_packet) {
+        const int64_t timeline_end = timeline_offset + duration_us;
+        AVRational frame_rate = input_stream->avg_frame_rate;
+        if (frame_rate.num <= 0 || frame_rate.den <= 0) {
+            frame_rate = input_stream->r_frame_rate;
+        }
+        const int64_t frame_duration_us = frame_rate.num > 0 && frame_rate.den > 0
+            ? std::max<int64_t>(1, av_rescale_q(
+                  1, AVRational{frame_rate.den, frame_rate.num}, kMicrosecondTimeBase))
+            : 1;
+        const int64_t packet_step_us = last_video_packet.duration > 0
+            ? last_video_packet.duration
+            : frame_duration_us;
+        int64_t next_pts = validTimestamp(last_video_packet.pts)
+            ? last_video_packet.pts + packet_step_us : AV_NOPTS_VALUE;
+        int64_t next_dts = validTimestamp(last_video_packet.dts)
+            ? last_video_packet.dts + packet_step_us : AV_NOPTS_VALUE;
+
+        while (validTimestamp(next_pts) || validTimestamp(next_dts)) {
+            const int64_t next_timestamp = validTimestamp(next_pts)
+                ? next_pts : next_dts;
+            if (next_timestamp >= timeline_end) {
+                break;
+            }
+
+            AVPacket duplicate{};
+            if (av_packet_ref(&duplicate, &last_video_packet) < 0) {
+                av_packet_unref(&last_video_packet);
+                error = "av_packet_ref failed while extending the video tail";
+                return false;
+            }
+            duplicate.pts = next_pts;
+            duplicate.dts = next_dts;
+            duplicate.duration = std::min<int64_t>(
+                packet_step_us, timeline_end - next_timestamp);
+            duplicate.stream_index = output_stream->index;
+
+            auto holder = std::make_unique<PacketHolder>();
+            av_packet_move_ref(&holder->packet, &duplicate);
+            holder->output_stream_index = output_stream->index;
+            holder->sort_dts = validTimestamp(next_dts) ? next_dts : next_pts;
+            packets.push_back(std::move(holder));
+            ++packet_count;
+
+            if (validTimestamp(next_pts)) next_pts += packet_step_us;
+            if (validTimestamp(next_dts)) next_dts += packet_step_us;
+        }
+    }
+    av_packet_unref(&last_video_packet);
     return true;
 }
 
@@ -663,15 +727,12 @@ bool muxCopyOnly(const CopyOnlyMuxRequest& request, CopyOnlyMuxResult* result) {
         // A normalized segment is its own complete segment (source_in_us == 0),
         // so the raw-source "shorter than requested" heuristic does not apply;
         // the final output-duration validation below still bounds the whole
-        // assembled timeline. Raw copy ranges keep the heuristic so a source
-        // clip that cannot cover its requested trim fails before any write.
+        // assembled timeline. Raw copy ranges may opt into a decode-free tail
+        // freeze when the requested window exceeds the source duration.
         const int64_t source_video_duration = streamDurationUs(input.raw(), input_video);
-        if (!segment.normalized &&
+        const bool extendVideoTail = !segment.normalized &&
             source_video_duration > 0 &&
-            source_video_duration + 50'000 < segment.source_in_us + segment.source_duration_us) {
-            cleanupPartial();
-            return fail(result, "copy-only video source is shorter than its requested segment");
-        }
+            source_video_duration + 50'000 < segment.source_in_us + segment.source_duration_us;
         // A normalized segment starts on a keyframe by construction (a fresh
         // encode's first frame); only raw source ranges need the keyframe
         // probe, which never guesses for a non-keyframe cut.
@@ -706,6 +767,7 @@ bool muxCopyOnly(const CopyOnlyMuxRequest& request, CopyOnlyMuxResult* result) {
         }
 
         int audio_index = -1;
+        int64_t audio_duration_us = segment.source_duration_us;
         if (segment.include_audio) {
             audio_index = input.firstStream(AVMEDIA_TYPE_AUDIO);
             if (audio_index < 0) {
@@ -714,11 +776,9 @@ bool muxCopyOnly(const CopyOnlyMuxRequest& request, CopyOnlyMuxResult* result) {
             }
             const AVStream* input_audio = input.stream(audio_index);
             const int64_t source_audio_duration = streamDurationUs(input.raw(), input_audio);
-            if (source_audio_duration > 0 &&
-                source_audio_duration + 50'000 < segment.source_in_us + segment.source_duration_us) {
-                cleanupPartial();
-                return fail(result, "copy-only segment audio is shorter than its requested segment");
-            }
+            audio_duration_us = source_audio_duration > 0
+                ? std::min<int64_t>(segment.source_duration_us, source_audio_duration)
+                : segment.source_duration_us;
             const MediaSignature sourceAudioSignature = mediaSignatureFromStream(input_audio);
             if (streams.audio == nullptr) {
                 if (!initializeOutputStream(output.get(), input_audio, streams.audio, error)) {
@@ -745,13 +805,13 @@ bool muxCopyOnly(const CopyOnlyMuxRequest& request, CopyOnlyMuxResult* result) {
         if (!packet::demuxAndRewrite(input, segment.path, AVMEDIA_TYPE_VIDEO, video_index, streams.video,
                                      timeline_offset, segment.source_in_us, segment.source_duration_us,
                                      video_state, packets,
-                                     result->video_packets, error)) {
+                                     result->video_packets, error, extendVideoTail)) {
             cleanupPartial();
             return fail(result, error);
         }
         if (segment.include_audio && !packet::demuxAndRewrite(
                 input, segment.path, AVMEDIA_TYPE_AUDIO, audio_index, streams.audio,
-                timeline_offset, segment.source_in_us, segment.source_duration_us,
+                timeline_offset, segment.source_in_us, audio_duration_us,
                 segment_audio_state, packets,
                 result->audio_packets, error)) {
             cleanupPartial();
