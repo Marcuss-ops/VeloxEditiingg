@@ -204,9 +204,12 @@ func TestSupervisorStopsAllRunners(t *testing.T) {
 		done <- sup.Run(ctx)
 	}()
 
-	// Give runners a moment to start.
-	time.Sleep(100 * time.Millisecond)
-
+	// Wait (poll) for all runners to start; a fixed sleep is flaky under
+	// full-module gate load.
+	deadline := time.Now().Add(5 * time.Second)
+	for started.Load() != 3 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
 	if n := started.Load(); n != 3 {
 		t.Fatalf("expected 3 runners started, got %d", n)
 	}
