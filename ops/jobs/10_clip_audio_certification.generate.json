@@ -6,6 +6,7 @@
   "video_name": "10 Clip Audio Certification",
   "script_text": "Certificazione audio e video a dieci clip. Ogni clip mantiene e porta il proprio audio nativo nella traccia finale.",
   "copy_only": true,
+  "drive_output_folder": "https://drive.google.com/drive/u/0/folders/1u3ckIvtTTl71lySILysPTvJB03sdASRn",
   "scenes": [
     {"scene_id":"scene-0","index":0,"kind":"clip","text":"Paul Giamatti condivide riflessioni durante un incontro tra attori.","duration_seconds":17.544,"clip":{"asset_id":"11MRzjKA3o7OZGmYZGJMPTGxM_eNt6qAX","url":"velox-drive://11MRzjKA3o7OZGmYZGJMPTGxM_eNt6qAX","duration_ms":18800}},
     {"scene_id":"scene-1","index":1,"kind":"clip","text":"Andrew Scott partecipa a una conversazione vivace e parla delle proprie esperienze.","duration_seconds":17.112,"clip":{"asset_id":"11_5vtQgxOfFdBnsC8FQnCu0UQ2WpfO-c","url":"velox-drive://11_5vtQgxOfFdBnsC8FQnCu0UQ2WpfO-c","duration_ms":18800}},
