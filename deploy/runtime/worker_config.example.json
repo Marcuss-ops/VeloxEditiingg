@@ -24,6 +24,12 @@
   "prometheus_port": 9090,
   "health_port": 8081,
 
+  "_asset_chunked_download_note": "Opt-in per-asset parallel download. When asset_chunked_download_enabled=true, an asset at/above asset_chunked_download_threshold_bytes is split into asset_chunked_download_concurrency parallel Range requests (single-stream resumable fallback when the upstream ignores Range). Env overrides: VELOX_ASSET_CHUNKED_DOWNLOAD (truthy), VELOX_ASSET_CHUNKED_DOWNLOAD_THRESHOLD_BYTES, VELOX_ASSET_CHUNKED_DOWNLOAD_CONCURRENCY. Fail-closed: enabled with a zero/negative threshold or concurrency is rejected at config validation.",
+
+  "asset_chunked_download_enabled": false,
+  "asset_chunked_download_threshold_bytes": 67108864,
+  "asset_chunked_download_concurrency": 4,
+
   "protocol_version": "2026-06-worker-v1",
 
   "bundle_version": "",

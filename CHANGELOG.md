@@ -1,5 +1,29 @@
 ## [Unreleased] - 2026-07-29
 
+### Added — parallel chunked asset download + Drive asset Range serving
+
+Per-asset parallel chunked download on the worker, plus HTTP Range (206)
+serving on the master asset bridge for staged Drive/external sources.
+
+- Worker: `masterAssetTransferer` now splits an asset at/above the chunked
+  threshold into N parallel `Range: bytes=start-end` requests, writes each
+  chunk at its offset into a pre-allocated `.part` (`fallocate(2)` on Linux,
+  sparse truncate elsewhere) via `WriteAt`, and reports aggregate progress
+  through a shared atomic counter. The single-stream resumable path remains
+  the automatic fallback when the upstream ignores Range. The integrity gate
+  (size + SHA-256 before atomic promotion) is unchanged.
+- Config: `asset_chunked_download_enabled` /
+  `asset_chunked_download_threshold_bytes` (default 64 MiB) /
+  `asset_chunked_download_concurrency` (default 4) in `worker_config.json`,
+  bound from `VELOX_ASSET_CHUNKED_DOWNLOAD` /
+  `VELOX_ASSET_CHUNKED_DOWNLOAD_THRESHOLD_BYTES` /
+  `VELOX_ASSET_CHUNKED_DOWNLOAD_CONCURRENCY`. Fail-closed: enabling the
+  feature with a zero/negative threshold or concurrency is rejected by
+  `Validate()`.
+- Master: `GET /api/v1/agent/assets/:id` now serves Range requests for
+  staged Drive/external sources via `http.ServeContent` (previously a plain
+  `io.Copy`), matching the local-final-blob path.
+
 ### Added — capability state machine rule (DISABLED / READY / MISCONFIGURED)
 
 Codified in AGENTS.md §6 after the 2026-08-10 fail-open audit: every

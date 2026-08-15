@@ -143,6 +143,20 @@ export VELOX_GRPC_TLS_CA_FILE=/etc/velox/certs/ca.crt
 | `VELOX_VIDEO_ENGINE_CPP_BIN` | `velox-render-cpp` | Path to the C++ video render binary (resolved via `exec.LookPath`) |
 | `VELOX_MAX_ACTIVE_JOBS` | `1` | Concurrent active jobs per worker (currently bound via `worker_config.json` as `max_active_jobs`; `VELOX_MAX_ACTIVE_JOBS` env-var binding is on the roadmap) |
 
+### 6. Asset download (chunked + prefetch)
+
+Per-asset parallel chunked download is opt-in. When enabled, an asset at/above
+the threshold is split into N parallel `Range: bytes=start-end` requests; the
+single-stream resumable path remains the fallback when the upstream ignores
+Range.
+
+| Env var | Default | Purpose |
+|---------|---------|---------|
+| `VELOX_ASSET_DOWNLOAD_CONCURRENCY` | `4` | Simultaneous byte transfers across assets |
+| `VELOX_ASSET_CHUNKED_DOWNLOAD` | off | Enables per-asset parallel chunked download |
+| `VELOX_ASSET_CHUNKED_DOWNLOAD_THRESHOLD_BYTES` | `67108864` (64 MiB) | Minimum asset size that triggers chunking |
+| `VELOX_ASSET_CHUNKED_DOWNLOAD_CONCURRENCY` | `4` | Parallel chunk connections per chunked asset |
+
 ### Failure modes (operator-visible)
 
 | Misconfiguration | Master's response |
