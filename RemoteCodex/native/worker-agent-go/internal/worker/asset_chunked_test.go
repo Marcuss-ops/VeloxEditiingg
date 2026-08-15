@@ -130,25 +130,34 @@ func TestMasterAssetTransfererChunkedDownload(t *testing.T) {
 	}
 }
 
-func TestPerChunkBandwidthCap(t *testing.T) {
-	cases := []struct {
-		name string
-		cap  int64
-		n    int
-		want int64
-	}{
-		{"uncapped", 0, 4, 0},
-		{"negative", -1, 4, 0},
-		{"even split", 100, 4, 25},
-		{"cap smaller than chunks", 2, 4, 1},
-		{"zero chunks defaults to one", 100, 0, 100},
+func TestSharedBandwidthLimiterUncapped(t *testing.T) {
+	if l := newSharedBandwidthLimiter(0); l != nil {
+		t.Fatal("zero cap should return a nil limiter")
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := perChunkBandwidthCap(tc.cap, tc.n); got != tc.want {
-				t.Fatalf("perChunkBandwidthCap(%d, %d) = %d, want %d", tc.cap, tc.n, got, tc.want)
-			}
-		})
+	if l := newSharedBandwidthLimiter(-1); l != nil {
+		t.Fatal("negative cap should return a nil limiter")
+	}
+}
+
+func TestSharedBandwidthLimiterPacesAggregate(t *testing.T) {
+	const cap = int64(1_000_000) // 1 MB/s
+	l := newSharedBandwidthLimiter(cap)
+	if l == nil {
+		t.Fatal("nil limiter for positive cap")
+	}
+	start := time.Now()
+	// 500 KB at 1 MB/s → ~500 ms of aggregate pacing.
+	for i := 0; i < 5; i++ {
+		if err := l.pace(context.Background(), 100_000); err != nil {
+			t.Fatal(err)
+		}
+	}
+	elapsed := time.Since(start)
+	if elapsed < 400*time.Millisecond {
+		t.Fatalf("elapsed = %v, want >= ~400ms for 500KB at 1MB/s", elapsed)
+	}
+	if elapsed > 3*time.Second {
+		t.Fatalf("elapsed = %v, suspiciously slow", elapsed)
 	}
 }
 
@@ -170,7 +179,7 @@ func TestFetchChunkRangeRejectsHTMLOnFirstChunk(t *testing.T) {
 	}
 	defer f.Close()
 
-	err = fetchChunkRange(context.Background(), srv.Client(), srv.URL, "", chunkRange{start: 0, end: int64(len(html) - 1)}, f, nil, nil, 0, true)
+	err = fetchChunkRange(context.Background(), srv.Client(), srv.URL, "", chunkRange{start: 0, end: int64(len(html) - 1)}, f, nil, nil, nil, true)
 	if err == nil || !strings.Contains(err.Error(), "unexpected HTML response") {
 		t.Fatalf("err = %v, want unexpected HTML response", err)
 	}

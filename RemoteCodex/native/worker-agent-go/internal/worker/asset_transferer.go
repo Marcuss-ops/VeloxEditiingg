@@ -374,21 +374,48 @@ func chunkPlan(size int64, concurrency int) []chunkRange {
 	return chunks
 }
 
-// perChunkBandwidthCap divides an aggregate bandwidth cap evenly across n
-// chunk connections so parallel chunks do not multiply the configured QoS
-// ceiling by N. It returns 0 for an uncapped transfer and at least 1 for a
-// capped transfer with more chunks than bytes-per-second of headroom.
-func perChunkBandwidthCap(cap int64, n int) int64 {
+// sharedBandwidthLimiter paces aggregate byte throughput across concurrent
+// chunk readers against a single virtual clock, so the total transfer never
+// exceeds cap bytes/second. It replaces the previous per-chunk division of
+// the cap: every chunk accounts its bytes to the SAME clock, enforcing the
+// aggregate ceiling exactly instead of approximately per connection.
+type sharedBandwidthLimiter struct {
+	mu       sync.Mutex
+	cap      int64
+	start    time.Time
+	consumed int64
+}
+
+// newSharedBandwidthLimiter returns a limiter enforcing cap bytes/second, or
+// nil for an uncapped transfer (cap <= 0).
+func newSharedBandwidthLimiter(cap int64) *sharedBandwidthLimiter {
 	if cap <= 0 {
-		return 0
+		return nil
 	}
-	if n < 1 {
-		n = 1
+	return &sharedBandwidthLimiter{cap: cap}
+}
+
+// pace accounts n bytes against the shared clock and sleeps until those bytes
+// are due at the capped rate. A nil limiter is a no-op. Safe for concurrent
+// use; returns the ctx error when the wait is cancelled.
+func (l *sharedBandwidthLimiter) pace(ctx context.Context, n int64) error {
+	if l == nil {
+		return nil
 	}
-	if cap < int64(n) {
-		return 1
+	now := time.Now()
+	l.mu.Lock()
+	if l.start.IsZero() {
+		l.start = now
+		l.consumed = 0
 	}
-	return cap / int64(n)
+	l.consumed += n
+	target := l.start.Add(time.Duration(float64(l.consumed) / float64(l.cap) * float64(time.Second)))
+	l.mu.Unlock()
+
+	if wait := time.Until(target); wait > 0 {
+		return waitForAssetDuration(ctx, wait)
+	}
+	return nil
 }
 
 // transferChunked downloads one large asset with N parallel Range requests
@@ -450,9 +477,10 @@ func (t *masterAssetTransferer) transferChunked(ctx context.Context, reportCtx c
 		progressMu.Unlock()
 	}
 
-	// Divide the prefetch QoS cap across chunks so the aggregate transfer
-	// stays at/under the configured bandwidth instead of multiplying it by N.
-	perChunkBPS := perChunkBandwidthCap(req.MaxBandwidthBytesPerSecond, len(chunks))
+	// One shared token-bucket paces every chunk against a single virtual
+	// clock, so the aggregate transfer stays exactly at/under the prefetch
+	// QoS cap instead of dividing it (approximately) per connection.
+	limiter := newSharedBandwidthLimiter(req.MaxBandwidthBytesPerSecond)
 
 	chunkCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -463,7 +491,7 @@ func (t *masterAssetTransferer) transferChunked(ctx context.Context, reportCtx c
 		wg.Add(1)
 		go func(c chunkRange) {
 			defer wg.Done()
-			if err := fetchChunkRange(chunkCtx, client, downloadURL, authToken, c, f, &downloaded, report, perChunkBPS, c.start == 0); err != nil {
+			if err := fetchChunkRange(chunkCtx, client, downloadURL, authToken, c, f, &downloaded, report, limiter, c.start == 0); err != nil {
 				primaryOnce.Do(func() {
 					primaryErr <- err
 					cancel()
@@ -509,7 +537,7 @@ func (t *masterAssetTransferer) transferChunked(ctx context.Context, reportCtx c
 // malformed/absent Content-Range for the requested window (so the dispatcher
 // can fall back to single-stream), and otherwise a permanent/retryable-style
 // error. shared/report aggregate progress across all chunk goroutines.
-func fetchChunkRange(ctx context.Context, client *http.Client, downloadURL, authToken string, c chunkRange, w io.WriterAt, shared *atomic.Int64, report func(), maxBPS int64, sniffHTML bool) error {
+func fetchChunkRange(ctx context.Context, client *http.Client, downloadURL, authToken string, c chunkRange, w io.WriterAt, shared *atomic.Int64, report func(), limiter *sharedBandwidthLimiter, sniffHTML bool) error {
 	backoffs := downloader.BackoffSchedule(downloader.DefaultMaxAttempts, downloader.DefaultBaseBackoff, downloader.DefaultJitter)
 	var lastErr error
 	for attempt := 0; attempt < downloader.DefaultMaxAttempts; attempt++ {
@@ -562,7 +590,7 @@ func fetchChunkRange(ctx context.Context, client *http.Client, downloadURL, auth
 				body = br
 			}
 			if shared != nil && report != nil {
-				body = &chunkProgressReader{ctx: ctx, src: body, shared: shared, report: report, maxBPS: maxBPS}
+				body = &chunkProgressReader{ctx: ctx, src: body, shared: shared, report: report, limiter: limiter}
 			}
 			_, copyErr := io.Copy(section, body)
 			resp.Body.Close()
@@ -628,28 +656,20 @@ func (s *sectionWriter) Write(p []byte) (int, error) {
 // maxBPS is the per-chunk bandwidth cap (the aggregate QoS cap already divided
 // by the chunk count).
 type chunkProgressReader struct {
-	ctx      context.Context
-	src      io.Reader
-	shared   *atomic.Int64
-	report   func()
-	maxBPS   int64
-	lastRead time.Time
+	ctx     context.Context
+	src     io.Reader
+	shared  *atomic.Int64
+	report  func()
+	limiter *sharedBandwidthLimiter
 }
 
 func (r *chunkProgressReader) Read(b []byte) (int, error) {
-	if r.maxBPS > 0 && r.lastRead.IsZero() {
-		r.lastRead = time.Now()
-	}
 	n, err := r.src.Read(b)
 	if n > 0 {
 		r.shared.Add(int64(n))
 		r.report()
-		if r.maxBPS > 0 {
-			delay := time.Duration(float64(n) / float64(r.maxBPS) * float64(time.Second))
-			if waitErr := waitForAssetDuration(r.ctx, delay); waitErr != nil {
-				return n, waitErr
-			}
-			r.lastRead = time.Now()
+		if waitErr := r.limiter.pace(r.ctx, int64(n)); waitErr != nil {
+			return n, waitErr
 		}
 	}
 	return n, err
