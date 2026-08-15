@@ -18,6 +18,51 @@ package telemetry
 
 import "sort"
 
+// ── Canonical phase name constants ─────────────────────────────────────────
+//
+// These are the stable labels of the 12-phase model declared in
+// schema/catalog.json (schema.phases / schema.phase_order). The literals live
+// here ONCE so worker/master consumers can reference compile-time constants
+// instead of re-declaring the vocabulary; validateCanonicalPhaseConstants
+// (init) pins them to the catalog-loaded order so a catalog edit that renames
+// a phase fails startup rather than silently drifting consumers.
+const (
+	PhaseQueue       = "queue"
+	PhaseAssetWait   = "asset_wait"
+	PhaseCacheLookup = "cache_lookup"
+	PhaseDownload    = "download"
+	PhaseDecode      = "decode"
+	PhaseCompile     = "compile"
+	PhaseSimulate    = "simulate"
+	PhaseRender      = "render"
+	PhaseComposite   = "composite"
+	PhaseEncode      = "encode"
+	PhaseUpload      = "upload"
+	PhaseFinalize    = "finalize"
+)
+
+// canonicalPhaseConstants mirrors CanonicalPhaseOrder() in the exact catalog
+// order; validateCanonicalPhaseConstants enforces the 1:1 correspondence.
+var canonicalPhaseConstants = [...]string{
+	PhaseQueue, PhaseAssetWait, PhaseCacheLookup, PhaseDownload,
+	PhaseDecode, PhaseCompile, PhaseSimulate, PhaseRender,
+	PhaseComposite, PhaseEncode, PhaseUpload, PhaseFinalize,
+}
+
+func validateCanonicalPhaseConstants() {
+	if len(canonicalPhaseOrder) != len(canonicalPhaseConstants) {
+		panic("telemetry: canonical phase constant count diverges from catalog phase_order")
+	}
+	for i := range canonicalPhaseOrder {
+		if canonicalPhaseOrder[i] != canonicalPhaseConstants[i] {
+			panic("telemetry: canonical phase constant " + canonicalPhaseConstants[i] +
+				" diverges from catalog phase_order " + canonicalPhaseOrder[i])
+		}
+	}
+}
+
+func init() { validateCanonicalPhaseConstants() }
+
 // PhaseTaxon is one canonical phase's role in the taxonomy. Name is the
 // canonical phase label; Role is its accounted role (a TimingMode value:
 // exclusive | span_parent | span_child); Parent is the containing phase,

@@ -6,6 +6,22 @@ import (
 	"testing"
 )
 
+// TestCanonicalPhaseConstantsMatchCatalog pins the compile-time phase-name
+// constants to the catalog-loaded order. The init-time
+// validateCanonicalPhaseConstants panics on drift in production; this test
+// documents the same contract and pins it in CI.
+func TestCanonicalPhaseConstantsMatchCatalog(t *testing.T) {
+	order := CanonicalPhaseOrder()
+	if len(order) != len(canonicalPhaseConstants) {
+		t.Fatalf("canonical phase constants = %d, want %d", len(canonicalPhaseConstants), len(order))
+	}
+	for i := range order {
+		if order[i] != canonicalPhaseConstants[i] {
+			t.Fatalf("canonical phase constants[%d] = %q, want %q", i, canonicalPhaseConstants[i], order[i])
+		}
+	}
+}
+
 func TestCanonicalPhaseOrderProjectsSharedSchema(t *testing.T) {
 	got := CanonicalPhaseOrder()
 	if len(got) != len(Taxonomy()) {
