@@ -1,3 +1,58 @@
+## [Unreleased] - 2026-08-15
+
+### Refactor tranche — telemetry SSOT, foundation layering, observability, and complexity reduction
+
+A 13-commit atomic tranche on `main` (commit-at-a-time, dependency-ordered,
+no branches) covering four themes. Full-module verification
+(`bash scripts/ci/pre-removal-verify.sh` in `DataServer` → vet 0, build 0,
+test 0, 197s) plus `worker-agent-go` and `shared` build/vet all green.
+
+**Telemetry single-source-of-truth vocabulary (3 commits):**
+
+- `f0961cb3` — `shared/telemetry` now declares the canonical phase and
+  attempt-event vocabulary as the SSOT root, so the Go and C++ bindings
+  and every consumer resolve one language-neutral source instead of a
+  parallel `canonicalEventKeys` / `canonicalOriginScope` / `canonicalPhaseSpecs`.
+- `4172c0f2` — `worker-agent-go` aliases the shared vocabulary instead of
+  maintaining its own copy.
+- `53f6de19` — `internal/store` consumes the shared attempt-event vocabulary
+  (event-name switch) instead of its own constants.
+
+**Foundation layering + dead-code / YAGNI cleanup (5 commits):**
+
+- `9be8e4e2` — `internal/storecore` drops the `database/sql` import from its
+  error leaf (`RowsAffectedReader`), so the error contract no longer depends
+  on a concrete driver; SQL ratchet moved to the store layer.
+- `75487d2d` — `internal/fleet` reuses the canonical `store.SmokeStatus*`
+  enum; the forked smoke-status enum is removed (single source of truth).
+- `4d6494c5` — dead exported helpers removed from `internal/store` (7
+  functions + `disconnectedAt`).
+- `a93d21e6` — the single-implementation `Dialect` abstraction removed from
+  `internal/store` (YAGNI; SQLite is the only backend after the Postgres
+  removal).
+- `ef42692f` — `internal/netsecurity` unifies non-public IP classification
+  into one canonical helper (removes duplicated classification logic).
+
+**Observability + asset transfer (3 commits):**
+
+- `a0ff8bd0` — `internal/remoteengine` gains structured logging and
+  Prometheus telemetry.
+- `6c16b15c` — master asset bridge serves HTTP Range (206) requests for
+  staged Drive/external sources (`http.ServeContent`).
+- `d9155aff` — `worker-agent-go` downloads assets via parallel chunked
+  Range requests (client side of the Range-serving feature).
+
+**Complexity reduction + architecture guard (2 commits):**
+
+- `430b3f13` — `internal/store` `computeParallelism` and
+  `internal/observability` `SummarizeTask` refactored into pure, testable
+  helpers (`collectValidSegments` / `sweepSegments`, `rollupPhaseTimings` /
+  `mergeWallBounds` / `earlierTime` / `laterTime`) with new table-driven
+  tests; `SummarizeTask` drops 48 → 35 branches.
+- `1b4ae5a4` — `scripts/ci/check-architecture.sh` adds guard rule #13:
+  upward imports and network I/O (`net/http`) in foundation packages are
+  statically forbidden, pinning the layering boundaries in CI.
+
 ## [Unreleased] - 2026-07-29
 
 ### Added — parallel chunked asset download + Drive asset Range serving
