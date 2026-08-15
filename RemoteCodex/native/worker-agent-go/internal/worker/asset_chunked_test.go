@@ -14,6 +14,7 @@ import (
 
 	"velox-shared/assetref"
 	"velox-worker-agent/internal/downloader"
+	"velox-worker-agent/internal/telemetry"
 )
 
 func TestChunkPlan(t *testing.T) {
@@ -122,6 +123,17 @@ func TestMasterAssetTransfererChunkedDownload(t *testing.T) {
 	defer mu.Unlock()
 	if len(ranges) != 4 {
 		t.Fatalf("distinct Range headers = %d (%v), want 4", len(ranges), ranges)
+	}
+
+	// The dedicated chunk gauges must settle after the transfer: the additive
+	// active count balances back to its pre-transfer value and the throughput
+	// gauge is reset to zero.
+	chunkMetrics := telemetry.GetPrometheusMetrics()
+	if got := chunkMetrics.AssetDownloadChunksActive(); got != 0 {
+		t.Fatalf("chunk active gauge = %v after transfer, want 0 (balanced)", got)
+	}
+	if got := chunkMetrics.AssetDownloadChunkThroughput(); got != 0 {
+		t.Fatalf("chunk throughput gauge = %v after transfer, want 0 (reset)", got)
 	}
 	for rng := range ranges {
 		if rng == "" || !strings.HasPrefix(rng, "bytes=") {

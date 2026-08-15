@@ -185,6 +185,24 @@ func (g *GaugeVec) set(label string, value float64) {
 	g.values[label] = value
 }
 
+// add adjusts a gauge label by a (possibly negative) delta. It is the
+// additive counterpart to set, used by producers whose contributions from
+// multiple goroutines/transfers must SUM on one shared low-cardinality
+// label rather than overwrite each other.
+func (g *GaugeVec) add(label string, value float64) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.values[label] += value
+}
+
+// get returns the current value for a label (diagnostics and deterministic
+// tests only; never a metric label).
+func (g *GaugeVec) get(label string) float64 {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.values[label]
+}
+
 func (g *GaugeVec) export() string {
 	g.mu.RLock()
 	defer g.mu.RUnlock()

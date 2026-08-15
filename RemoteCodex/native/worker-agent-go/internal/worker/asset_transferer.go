@@ -137,7 +137,7 @@ func (t *masterAssetTransferer) transferSingleStream(ctx context.Context, report
 	// canonical CacheResolver boundary records the classified miss exactly
 	// once per resolution (attempt + worker views). This transfer only owns
 	// the byte pipeline.
-	downloadURL, authToken, client := t.assetTransferRequest(assetID)
+	source := t.assetSource(assetID)
 	// Reserve this asset's partial before cleanup so an active transfer in
 	// this process cannot be mistaken for an orphan. The cleanup is scoped
 	// to this worker's asset cache and never touches final cache entries.
@@ -159,64 +159,56 @@ func (t *masterAssetTransferer) transferSingleStream(ctx context.Context, report
 		}
 
 		resumeOffset := assetPartialSize(cacheDir, assetID, string(req.SHA256))
-		reqHTTP, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
-		if err != nil {
-			return downloader.TransferResult{}, err
-		}
-		if authToken != "" {
-			reqHTTP.Header.Set("Authorization", "Bearer "+authToken)
-		}
-		if resumeOffset > 0 {
-			reqHTTP.Header.Set("Range", fmt.Sprintf("bytes=%d-", resumeOffset))
-		}
-
-		resp, err := client.Do(reqHTTP)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-
-		if resp.StatusCode == http.StatusRequestedRangeNotSatisfiable && resumeOffset > 0 {
-			resp.Body.Close()
-			removeAssetPartial(cacheDir, assetID, string(req.SHA256))
-			lastErr = fmt.Errorf("range offset %d is no longer valid", resumeOffset)
-			continue
-		}
-		if resp.StatusCode == http.StatusNotFound {
-			resp.Body.Close()
-			return downloader.TransferResult{}, fmt.Errorf("asset not found")
-		}
-		if downloader.IsPermanentStatus(resp.StatusCode) {
-			body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-			resp.Body.Close()
-			return downloader.TransferResult{}, fmt.Errorf("asset download failed: %s", strings.TrimSpace(string(body)))
-		}
-		if downloader.IsRetryableStatus(resp.StatusCode) {
-			retryAfter := downloader.RetryAfter(resp)
-			body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-			resp.Body.Close()
-			lastErr = fmt.Errorf("master returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
-			if retryAfter > 0 && attempt+1 < len(backoffs)+1 {
-				backoffs[attempt] = retryAfter
-			}
-			continue
-		}
-		if resumeOffset > 0 && resp.StatusCode != http.StatusPartialContent {
-			// A server that ignores Range is safe: the writer truncates the
-			// old partial and starts from byte zero, preventing concatenation
-			// of a complete response onto stale bytes.
+		if !source.SupportsRange() {
+			// The byte source cannot satisfy a suffix request: restart the
+			// whole asset from byte zero (the writer truncates the partial).
 			resumeOffset = 0
 		}
-		if resumeOffset > 0 {
-			contentRange := strings.TrimSpace(resp.Header.Get("Content-Range"))
-			start, _, _, parseErr := parseAssetContentRange(contentRange)
-			if parseErr != nil || start != resumeOffset {
-				resp.Body.Close()
-				// The upstream did not honor the requested offset safely.
-				// Discard the partial before retrying so the next attempt
-				// cannot concatenate a full/ambiguous response onto it.
+
+		body, meta, openErr := source.Open(ctx, resumeOffset)
+		if openErr != nil {
+			lastErr = openErr
+			var re *retryableStatusError
+			var pe *permanentStatusError
+			switch {
+			case errors.Is(openErr, errAssetNotFound):
+				return downloader.TransferResult{}, fmt.Errorf("asset not found")
+			case errors.Is(openErr, errRangeNotSatisfiable):
+				if resumeOffset <= 0 {
+					return downloader.TransferResult{}, openErr
+				}
 				removeAssetPartial(cacheDir, assetID, string(req.SHA256))
-				lastErr = fmt.Errorf("invalid Content-Range for resume offset %d: %q", resumeOffset, contentRange)
+				continue
+			case errors.Is(openErr, errRangeIgnored) && resumeOffset > 0:
+				// The upstream ignored the Range header (or returned a
+				// mismatched Content-Range): discard the stale partial and
+				// restart from byte zero within this attempt.
+				removeAssetPartial(cacheDir, assetID, string(req.SHA256))
+				body, meta, openErr = source.Open(ctx, 0)
+				if openErr != nil {
+					lastErr = openErr
+					if errors.Is(openErr, errAssetNotFound) {
+						return downloader.TransferResult{}, fmt.Errorf("asset not found")
+					}
+					if errors.As(openErr, &re) {
+						if re.retryAfter > 0 && attempt+1 < len(backoffs)+1 {
+							backoffs[attempt] = re.retryAfter
+						}
+						continue
+					}
+					return downloader.TransferResult{}, openErr
+				}
+				resumeOffset = 0
+			case errors.As(openErr, &re):
+				if re.retryAfter > 0 && attempt+1 < len(backoffs)+1 {
+					backoffs[attempt] = re.retryAfter
+				}
+				continue
+			case errors.As(openErr, &pe):
+				// Permanent status (auth/forbidden/other 4xx): terminal.
+				return downloader.TransferResult{}, openErr
+			default:
+				// Transport error or other transient failure: retry.
 				continue
 			}
 		}
@@ -236,10 +228,10 @@ func (t *masterAssetTransferer) transferSingleStream(ctx context.Context, report
 			if attempt > 0 {
 				onProgress(resumeOffset)
 			}
-			resp.Body = &assetProgressBody{ctx: ctx, src: resp.Body, onProgress: onProgress, done: resumeOffset, maxBPS: req.MaxBandwidthBytesPerSecond}
+			body = &assetProgressBody{ctx: ctx, src: body, onProgress: onProgress, done: resumeOffset, maxBPS: req.MaxBandwidthBytesPerSecond}
 		}
-		localPath, downloadedBytes, actualSHA, verifyDuration, err := writeVeloxAssetToCacheAtOffset(cacheDir, assetID, string(req.SHA256), req.SizeBytes, resp, resumeOffset, syncAssetDirectory)
-		resp.Body.Close()
+		localPath, downloadedBytes, actualSHA, verifyDuration, err := writeVeloxAssetStreamToCacheAtOffset(cacheDir, assetID, string(req.SHA256), req.SizeBytes, body, resumeOffset, meta.MIMEType, meta.SizeBytes, syncAssetDirectory)
+		body.Close()
 		if err != nil {
 			recordCacheProjectionEvent(reportCtx, "hash_verify", verifyDuration, telemetry.StatusFailed, "", 0)
 			if transferHandle != nil {
@@ -304,6 +296,15 @@ func (t *masterAssetTransferer) assetTransferRequest(assetID string) (downloadUR
 		},
 	}
 	return downloadURL, authToken, client
+}
+
+// assetSource builds the downloader.AssetSource seam for one asset. The URL,
+// token and client are still produced by assetTransferRequest (single source
+// of truth for the integration boundary); the source is the pluggable
+// byte-open layer on top, shared by the resume pipeline.
+func (t *masterAssetTransferer) assetSource(assetID string) downloader.AssetSource {
+	downloadURL, authToken, client := t.assetTransferRequest(assetID)
+	return newHTTPAssetSource(downloadURL, authToken, client)
 }
 
 // shouldChunk reports whether req should use the parallel chunked path: the
@@ -462,7 +463,34 @@ func (t *masterAssetTransferer) transferChunked(ctx context.Context, reportCtx c
 	var downloaded atomic.Int64
 	var progressMu sync.Mutex
 	var lastReported int64
+
+	// Dedicated chunk telemetry: the number of in-flight chunk connections
+	// (additive, so concurrent chunked transfers SUM on the shared gauge) and
+	// the current transfer throughput (bytes/s, last-writer-wins). Throughput
+	// is sampled during progress under a time throttle; both gauges settle
+	// back to zero when this transfer ends so no stale rate lingers.
+	chunkMetrics := telemetry.GetPrometheusMetrics()
+	chunkMetrics.AddAssetDownloadChunksActive(len(chunks))
+	defer chunkMetrics.AddAssetDownloadChunksActive(-len(chunks))
+	chunkStarted := time.Now()
+	defer chunkMetrics.SetAssetDownloadChunkThroughput(0)
+	var lastThroughputPublish atomic.Int64 // UnixNano of last throttled publish
+	publishThroughput := func() {
+		now := time.Now().UnixNano()
+		last := lastThroughputPublish.Load()
+		if now-last < int64(250*time.Millisecond) {
+			return
+		}
+		if !lastThroughputPublish.CompareAndSwap(last, now) {
+			return
+		}
+		if elapsed := time.Since(chunkStarted).Seconds(); elapsed > 0 {
+			chunkMetrics.SetAssetDownloadChunkThroughput(float64(downloaded.Load()) / elapsed)
+		}
+	}
+
 	report := func() {
+		publishThroughput()
 		if onProgress == nil {
 			return
 		}

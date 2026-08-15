@@ -179,6 +179,38 @@ func (m *PrometheusMetrics) SetAssetDownloadOperational(active, queued, ready, f
 	// value, so only move the exported value forward under one lock.
 	m.assetDownloadCoalesced.setMonotonic("total", float64(coalesced))
 }
+// AddAssetDownloadChunksActive adjusts the active-chunk gauge by delta. It
+// is additive so concurrent chunked transfers SUM on the shared
+// low-cardinality "total" label; every positive delta is balanced by a
+// matching negative one when that transfer's chunks settle.
+func (m *PrometheusMetrics) AddAssetDownloadChunksActive(delta int) {
+	m.assetDownloadChunksActive.add("total", float64(delta))
+}
+
+// SetAssetDownloadChunkThroughput publishes the current chunked transfer
+// throughput (bytes/s). It is last-writer-wins across concurrent chunked
+// transfers; the precise aggregate per-transfer rate stays available on
+// velox_asset_download_throughput_bytes_per_second. Producers reset it to
+// zero when their transfer ends so a stale rate never lingers.
+func (m *PrometheusMetrics) SetAssetDownloadChunkThroughput(bps float64) {
+	if bps < 0 {
+		bps = 0
+	}
+	m.assetDownloadChunkThroughput.set("total", bps)
+}
+
+// AssetDownloadChunksActive returns the current active-chunk gauge value
+// (diagnostics and deterministic tests only).
+func (m *PrometheusMetrics) AssetDownloadChunksActive() float64 {
+	return m.assetDownloadChunksActive.get("total")
+}
+
+// AssetDownloadChunkThroughput returns the current chunked-throughput gauge
+// value (diagnostics and deterministic tests only).
+func (m *PrometheusMetrics) AssetDownloadChunkThroughput() float64 {
+	return m.assetDownloadChunkThroughput.get("total")
+}
+
 func (m *PrometheusMetrics) GetAssetCacheHitRate() float64 {
 	hits := m.assetCacheHit.total()
 	misses := m.assetCacheMiss.total()

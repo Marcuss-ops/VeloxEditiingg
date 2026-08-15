@@ -3,7 +3,6 @@ package worker
 import (
 	"bytes"
 	"errors"
-	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -27,13 +26,7 @@ func TestWriteAssetCacheAtOffsetRestoresPreviousFinalOnDirectorySyncFailure(t *t
 		}
 		return syncAssetDirectory(path)
 	}
-	resp := &http.Response{
-		StatusCode:    http.StatusOK,
-		ContentLength: int64(len(newData)),
-		Header:        http.Header{"Content-Type": []string{"video/mp4"}},
-		Body:          ioReadCloser{Reader: bytes.NewReader(newData)},
-	}
-	_, _, _, _, err := writeVeloxAssetToCacheAtOffset(cacheDir, assetID, expectedSHA, int64(len(newData)), resp, 0, syncDir)
+	_, _, _, _, err := writeVeloxAssetStreamToCacheAtOffset(cacheDir, assetID, expectedSHA, int64(len(newData)), ioReadCloser{Reader: bytes.NewReader(newData)}, 0, "video/mp4", int64(len(newData)), syncDir)
 	if err == nil {
 		t.Fatal("injected fsync failure must fail promotion")
 	}

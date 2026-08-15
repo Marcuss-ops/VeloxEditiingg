@@ -239,21 +239,26 @@ func syncAssetDirectory(path string) error {
 	return dir.Sync()
 }
 
-// writeVeloxAssetToCacheAtOffset appends a 206 response to an existing
-// partial, or truncates/restarts the partial when offset is zero. It never
-// promotes a file until the complete partial has passed size and SHA checks.
+// writeVeloxAssetStreamToCacheAtOffset streams body into the asset partial at
+// offset (appending a resumed suffix or truncating a fresh download), then
+// verifies size and SHA-256 before atomic promotion. It is the generic byte
+// sink behind the downloader.AssetSource seam: it takes a plain reader plus
+// source metadata instead of an *http.Response, so the HTTP coupling lives
+// only in httpAssetSource.Open. The offset/total contract is validated by the
+// caller (Open validates Content-Range start; the chunked pipeline validates
+// its own bounded ranges); the final size+SHA check here is the last gate.
 // syncDir is the directory-durability primitive: production passes
 // syncAssetDirectory, tests pass a deterministic stand-in. It is an explicit
 // parameter rather than a package-level variable so the shared state stays
 // immutable and the seam is visible at the call site.
-func writeVeloxAssetToCacheAtOffset(cacheDir, assetID string, expectedSHA256 string, expectedSizeBytes int64, resp *http.Response, offset int64, syncDir func(string) error) (string, int64, string, time.Duration, error) {
+func writeVeloxAssetStreamToCacheAtOffset(cacheDir, assetID string, expectedSHA256 string, expectedSizeBytes int64, body io.Reader, offset int64, mediaType string, totalSizeBytes int64, syncDir func(string) error) (string, int64, string, time.Duration, error) {
 	if offset < 0 {
 		return "", 0, "", 0, fmt.Errorf("%w: negative resume offset", ErrAssetVerification)
 	}
 	if err := os.MkdirAll(filepath.Join(cacheDir, "partial"), 0o755); err != nil {
 		return "", 0, "", 0, err
 	}
-	mediaType := strings.TrimSpace(resp.Header.Get("Content-Type"))
+	mediaType = strings.TrimSpace(mediaType)
 	if idx := strings.Index(mediaType, ";"); idx >= 0 {
 		mediaType = strings.TrimSpace(mediaType[:idx])
 	}
@@ -261,7 +266,7 @@ func writeVeloxAssetToCacheAtOffset(cacheDir, assetID string, expectedSHA256 str
 		return "", 0, "", 0, fmt.Errorf("unexpected HTML response while downloading asset")
 	}
 
-	reader := bufio.NewReader(resp.Body)
+	reader := bufio.NewReader(body)
 	peek, _ := reader.Peek(512)
 	if isHTMLPayload(peek) {
 		return "", 0, "", 0, fmt.Errorf("unexpected HTML response while downloading asset")
@@ -280,29 +285,11 @@ func writeVeloxAssetToCacheAtOffset(cacheDir, assetID string, expectedSHA256 str
 	defer deactivatePartial()
 
 	effectiveExpectedSize := expectedSizeBytes
-	if resp.StatusCode == http.StatusPartialContent {
-		contentRange := strings.TrimSpace(resp.Header.Get("Content-Range"))
-		start, end, total, rangeErr := parseAssetContentRange(contentRange)
-		if rangeErr != nil || start != offset {
-			return "", 0, "", 0, fmt.Errorf("%w: invalid Content-Range %q", ErrAssetVerification, contentRange)
-		}
-		if resp.ContentLength > 0 && end-start+1 != resp.ContentLength {
-			return "", 0, "", 0, fmt.Errorf("%w: Content-Range length does not match Content-Length", ErrAssetVerification)
-		}
-		if total > 0 {
-			if effectiveExpectedSize > 0 && total != effectiveExpectedSize {
-				return "", 0, "", 0, fmt.Errorf("%w: Content-Range total %d does not match expected size %d", ErrAssetVerification, total, effectiveExpectedSize)
-			}
-			if effectiveExpectedSize <= 0 {
-				effectiveExpectedSize = total
-			}
-		}
-	}
-	if effectiveExpectedSize <= 0 && resp.ContentLength <= 0 {
-		return "", 0, "", 0, fmt.Errorf("%w: response has no verifiable total size", ErrAssetIncomplete)
+	if effectiveExpectedSize <= 0 {
+		effectiveExpectedSize = totalSizeBytes
 	}
 	if effectiveExpectedSize <= 0 {
-		effectiveExpectedSize = resp.ContentLength
+		return "", 0, "", 0, fmt.Errorf("%w: response has no verifiable total size", ErrAssetIncomplete)
 	}
 
 	flags := os.O_CREATE | os.O_WRONLY
@@ -318,8 +305,7 @@ func writeVeloxAssetToCacheAtOffset(cacheDir, assetID string, expectedSHA256 str
 
 	// Hash the complete partial after each append. This avoids treating the
 	// suffix hash from a resumed response as the asset hash.
-	writtenNow, err := io.Copy(partFile, reader)
-	if err != nil {
+	if _, err := io.Copy(partFile, reader); err != nil {
 		_ = partFile.Close()
 		// Preserve the partial on stream errors: a later retry/restart can
 		// request the remaining suffix instead of starting over.
@@ -333,9 +319,6 @@ func writeVeloxAssetToCacheAtOffset(cacheDir, assetID string, expectedSHA256 str
 		return "", 0, "", 0, err
 	}
 
-	if resp.ContentLength > 0 && writtenNow != resp.ContentLength {
-		return "", 0, "", 0, fmt.Errorf("%w: response body truncated (got %d, want %d)", ErrAssetIncomplete, writtenNow, resp.ContentLength)
-	}
 	return verifyAndPromoteVeloxAsset(cacheDir, assetID, expectedSHA256, effectiveExpectedSize, partPath, ext, syncDir)
 }
 
@@ -464,7 +447,7 @@ func extensionForMediaType(mediaType string) string {
 
 // sniffAssetExtension detects a completed asset's MIME type from its first
 // bytes and maps it to the cache filename extension, falling back to ".audio"
-// (mirrors the single-stream fallback in writeVeloxAssetToCacheAtOffset). The
+// (mirrors the single-stream fallback in writeVeloxAssetStreamToCacheAtOffset). The
 // chunked pipeline uses it because no single response Content-Type header is
 // authoritative across parallel range requests.
 func sniffAssetExtension(path string) string {

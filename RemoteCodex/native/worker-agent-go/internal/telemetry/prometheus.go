@@ -62,6 +62,8 @@ type PrometheusMetrics struct {
 	assetDownloadBytes               *GaugeVec
 	assetDownloadTotalBytes          *GaugeVec
 	assetDownloadThroughput          *GaugeVec
+	assetDownloadChunksActive        *GaugeVec
+	assetDownloadChunkThroughput     *GaugeVec
 	assetDownloadETA                 *GaugeVec
 	assetDownloadCoalesced           *CounterVec
 	workerActiveJobs                 *GaugeVec
@@ -201,6 +203,8 @@ func NewPrometheusMetrics() *PrometheusMetrics {
 		assetDownloadBytes:      &GaugeVec{Name: "velox_asset_download_bytes_downloaded", Help: "Bytes downloaded across registered asset transfers", values: map[string]float64{"total": 0}},
 		assetDownloadTotalBytes: &GaugeVec{Name: "velox_asset_download_bytes_total", Help: "Expected bytes across registered asset transfers", values: map[string]float64{"total": 0}},
 		assetDownloadThroughput: &GaugeVec{Name: "velox_asset_download_throughput_bytes_per_second", Help: "Current aggregate asset download throughput", values: map[string]float64{"total": 0}},
+		assetDownloadChunksActive: &GaugeVec{Name: "velox_asset_download_chunks_active", Help: "Active parallel chunk connections across chunked asset transfers", values: map[string]float64{"total": 0}},
+		assetDownloadChunkThroughput: &GaugeVec{Name: "velox_asset_download_chunk_throughput_bytes_per_second", Help: "Current chunked asset transfer throughput (bytes/s)", values: map[string]float64{"total": 0}},
 		assetDownloadETA:        &GaugeVec{Name: "velox_asset_download_eta_seconds", Help: "Longest remaining asset transfer ETA", values: map[string]float64{"total": 0}},
 		assetDownloadCoalesced:  &CounterVec{Name: "velox_asset_download_coalesced_requests_total", Help: "Asset requests coalesced onto an existing transfer", values: map[string]float64{"total": 0}},
 		workerActiveJobs: &GaugeVec{
@@ -304,6 +308,8 @@ func (m *PrometheusMetrics) ExportPrometheus() string {
 	output += m.assetDownloadBytes.export()
 	output += m.assetDownloadTotalBytes.export()
 	output += m.assetDownloadThroughput.export()
+	output += m.assetDownloadChunksActive.export()
+	output += m.assetDownloadChunkThroughput.export()
 	output += m.assetDownloadETA.export()
 	output += m.assetDownloadCoalesced.export()
 	output += m.fallbackCount.export()

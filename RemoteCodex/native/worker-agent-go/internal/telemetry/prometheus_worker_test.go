@@ -109,6 +109,53 @@ func TestPrometheusWorker_AssetDownloadOperationalSetIsMonotonicAndLowCardinalit
 	}
 }
 
+// TestPrometheusWorker_ChunkDownloadGauges verifies the dedicated chunked-
+// download gauges: the active-chunk counter is additive (balances back to
+// zero) and the throughput gauge is last-writer-wins on the static "total"
+// label — never an asset/transfer identifier.
+func TestPrometheusWorker_ChunkDownloadGauges(t *testing.T) {
+	metrics := NewPrometheusMetrics()
+	fresh := metrics.ExportPrometheus()
+	for _, series := range []string{
+		`velox_asset_download_chunks_active{label="total"} 0`,
+		`velox_asset_download_chunk_throughput_bytes_per_second{label="total"} 0`,
+	} {
+		if !strings.Contains(fresh, series) {
+			t.Errorf("fresh export missing pre-seeded series %q:\n%s", series, fresh)
+		}
+	}
+
+	// Two concurrent chunked transfers would each add their chunk count; the
+	// additive gauge must reflect the sum, then settle to zero as they end.
+	metrics.AddAssetDownloadChunksActive(4)
+	metrics.AddAssetDownloadChunksActive(4)
+	metrics.SetAssetDownloadChunkThroughput(1024)
+	if got := metrics.AssetDownloadChunksActive(); got != 8 {
+		t.Errorf("AssetDownloadChunksActive = %v, want 8", got)
+	}
+	if got := metrics.AssetDownloadChunkThroughput(); got != 1024 {
+		t.Errorf("AssetDownloadChunkThroughput = %v, want 1024", got)
+	}
+
+	metrics.AddAssetDownloadChunksActive(-4)
+	metrics.AddAssetDownloadChunksActive(-4)
+	metrics.SetAssetDownloadChunkThroughput(0)
+	export := metrics.ExportPrometheus()
+	for _, series := range []string{
+		`velox_asset_download_chunks_active{label="total"} 0`,
+		`velox_asset_download_chunk_throughput_bytes_per_second{label="total"} 0`,
+	} {
+		if !strings.Contains(export, series) {
+			t.Errorf("settled export missing series %q:\n%s", series, export)
+		}
+	}
+	for _, forbidden := range []string{"asset-", "job-", "sha256:", "xfer-"} {
+		if strings.Contains(export, forbidden) {
+			t.Errorf("chunk gauges must not expose identifiers (found %q):\n%s", forbidden, export)
+		}
+	}
+}
+
 func TestPrometheusWorker_ParallelismCertificationCounters(t *testing.T) {
 	metrics := NewPrometheusMetrics()
 
