@@ -1,17 +1,16 @@
 // Package store / jobs_repository_shared.go
 //
 // Writer AND Reader implementation used by SQLiteJobRepository. The
-// Dialect interface encapsulates SQL-dialect differences plus optional
-// audit hooks; SQLite is currently the only implementation.
+// sqliteDialect type encapsulates SQLite SQL syntax plus audit hooks.
 //
 // Job-level ClaimNext / ClaimNextForProfile were REMOVED in favor of
 // task-level ClaimNextWithAttemptAtomic (PR-2 / canonical-attempt-identity).
 // The shared Writer (SetStatus / Fail / Cancel) and Reader (Get / List)
 // are the remaining domain surface.
 //
-// This file keeps the Dialect contract, the base repository shape and
-// the Reader (Get / List / Counts) + internal getJob projection. The
-// Writer transitions (SetStatus / Fail / FailWithCode / Cancel / Delete)
+// This file keeps the sqliteDialect implementation, the base repository
+// shape and the Reader (Get / List / Counts) + internal getJob projection.
+// The Writer transitions (SetStatus / Fail / FailWithCode / Cancel / Delete)
 // live in the sibling file jobs_repository_transitions.go.
 
 package store
@@ -22,16 +21,13 @@ import (
 	"fmt"
 
 	"velox-server/internal/jobs"
-	"velox-server/internal/repository"
-) // ── Dialect ──────────────────────────────────────────────────────────────
-// Dialect is re-exported from the repository leaf package.
-type Dialect = repository.Dialect
+)
 
 // ── baseJobRepository ───────────────────────────────────────────────────
 
 type baseJobRepository struct {
 	db      *sql.DB
-	dialect Dialect
+	dialect sqliteDialect
 }
 
 // ── jobs.Reader ─────────────────────────────────────────────────────────
