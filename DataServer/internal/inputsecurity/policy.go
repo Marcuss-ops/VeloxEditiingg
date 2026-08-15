@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"net"
 	"net/http"
 	"net/url"
@@ -13,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"velox-server/internal/netsecurity"
 )
 
 // Policy is the security policy applied to every acquired input.
@@ -156,29 +157,11 @@ func (p Policy) validateHost(ctx context.Context, host string, redirect bool) er
 }
 
 func disallowedIP(ip net.IP) bool {
-	if ip == nil {
-		return true
-	}
-	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() {
-		return true
-	}
-	// Carrier-grade NAT, benchmarking and the common cloud metadata ranges
-	// are not safe destinations even when a platform library does not classify
-	// them as private.
-	blocked := []struct {
-		network string
-		bits    int
-	}{
-		{"100.64.0.0", 10}, {"192.0.0.0", 24}, {"198.18.0.0", 15},
-		{"169.254.0.0", 16}, {"100.100.100.200", 32},
-	}
-	for _, entry := range blocked {
-		_, network, err := net.ParseCIDR(fmt.Sprintf("%s/%d", entry.network, entry.bits))
-		if err == nil && network.Contains(ip) {
-			return true
-		}
-	}
-	return false
+	// Single source of truth for the non-public network-address blocklist,
+	// shared with the SSRF validator (internal/handlers/server/pipeline).
+	// Kept as a thin wrapper so the error-classification call sites above
+	// do not need to import netsecurity directly.
+	return netsecurity.DisallowedIP(ip)
 }
 
 func (p Policy) dialContext(ctx context.Context, network, address string) (net.Conn, error) {

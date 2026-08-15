@@ -51,6 +51,7 @@ import (
 	"sync"
 
 	"velox-server/internal/config"
+	"velox-server/internal/netsecurity"
 )
 
 // ValidateExternalURL inspects raw and returns nil when the URL is
@@ -274,6 +275,13 @@ func classifyIP(ip net.IP, allowLoopbackHTTP bool, scheme string) string {
 
 	// Private (RFC 1918 IPv4 + RFC 4193 IPv6 unique-local).
 	if ip.IsPrivate() {
+		return "ip_private"
+	}
+
+	// Non-public CIDR ranges that the stdlib predicates above do not
+	// classify (RFC 6598 CGNAT, benchmarking, cloud metadata). Single
+	// source of truth in internal/netsecurity, shared with inputsecurity.
+	if netsecurity.DisallowedIP(ip) {
 		return "ip_private"
 	}
 
