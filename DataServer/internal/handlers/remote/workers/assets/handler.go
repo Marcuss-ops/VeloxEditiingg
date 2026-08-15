@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -109,6 +110,18 @@ func (h *Handler) ServeAsset() gin.HandlerFunc {
 			contentType = "application/octet-stream"
 		}
 		c.Header("Content-Type", contentType)
+
+		// External and Drive sources are staged in seekable temp files (see
+		// the resolver implementations in internal/assets and
+		// verifyExternalSource), so the same http.ServeContent used for local
+		// final blobs can honor Range requests (206 Partial Content) here too
+		// — enabling resumable and future parallel-chunked downloads for
+		// Drive-backed assets. A non-seekable reader (a future streaming
+		// resolver) degrades to the full-body copy without Range support.
+		if seeker, ok := source.Reader.(io.ReadSeeker); ok {
+			http.ServeContent(c.Writer, c.Request, source.SuggestedName, time.Time{}, seeker)
+			return
+		}
 		if source.ExpectedSize > 0 {
 			c.Header("Content-Length", fmt.Sprintf("%d", source.ExpectedSize))
 		}
