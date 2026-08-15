@@ -1062,8 +1062,8 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                 start - renderStart).count();
             telemetry::ScopedPhase encodePhase(
                 recorder_, telemetry::kOriginEngine, telemetry::kScopeSegment,
-                "engine.frame_pipeline", "native_encode_segment_" + std::to_string(job.index),
-                "encode");
+                "engine.frame_pipeline", "encode_segment", "encode", "",
+                "native_encode_segment_" + std::to_string(job.index));
             media::FramePipelineConfig config;
             config.input_path = job.input_path;
             config.output_path = job.output_path;
@@ -1285,12 +1285,14 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             std::unique_ptr<telemetry::ScopedPhase> encodePhase;
             if (!params.copy_only) {
                 encodePhase = std::make_unique<telemetry::ScopedPhase>(
-                    recorder_, telemetry::kOriginEngine, telemetry::kScopeSegment,
+                    recorder_,
+                    useNativeTranscode ? telemetry::kOriginEngine : telemetry::kOriginFFmpeg,
+                    telemetry::kScopeSegment,
                     useNativeTranscode ? "engine.frame_pipeline" : "ffmpeg",
+                    "encode_segment", "encode", "",
                     useNativeTranscode
                         ? "native_encode_segment_" + std::to_string(i)
-                        : "encode_segment_" + std::to_string(i),
-                    "encode");
+                        : "encode_segment_" + std::to_string(i));
             }
             auto encStart = std::chrono::steady_clock::now();
             ScopedTimer t(metrics_, "segment_build_ms");

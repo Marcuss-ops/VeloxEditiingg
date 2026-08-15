@@ -60,9 +60,10 @@ inline constexpr const char* kStatusFailed = "failed";
 bool IsCanonicalOrigin(const std::string& s);
 bool IsCanonicalScope(const std::string& s);
 // IsCanonicalEvent exposes the generated catalog lookup to C++ producers.
-// PhaseRecorder itself remains compatibility-tolerant for legacy sidecar
-// event names; new producers should gate component/action pairs with this
-// predicate so unknown facts are detectable before recording.
+// PhaseRecorder::Begin/Emit fail closed on non-canonical component/action
+// pairs: an unknown fact is dropped, never recorded. Producers must register
+// stable names in catalog.json; per-instance labels (e.g. a segment index)
+// belong in event_name, not in the action.
 bool IsCanonicalEvent(const std::string& component, const std::string& action);
 // Validates a complete JSON object using the recorder's dependency-free
 // parser. Used by sidecar compatibility tests and metadata guards.
@@ -117,7 +118,9 @@ public:
     void Reset();
 
     // Begin opens a timed event and returns a token for Complete/Abort.
-    // Non-canonical origin/scope are coerced to engine/attempt.
+    // Non-canonical origin/scope are coerced to engine/attempt; a
+    // non-canonical component/action is dropped (returns -1, and all
+    // Complete/Abort/Set* calls on that token are no-ops).
     int64_t Begin(std::string origin, std::string scope, std::string component,
                   std::string action, std::string phase,
                   std::string event_type = "", std::string event_name = "");
@@ -145,7 +148,8 @@ public:
                             int64_t frames_in, int64_t frames_out);
 
     // Emit records a point-in-time event (no duration). Non-canonical
-    // origin/scope are coerced to engine/attempt.
+    // origin/scope are coerced to engine/attempt; a non-canonical
+    // component/action is dropped.
     void Emit(std::string origin, std::string scope, std::string component,
               std::string action, std::string phase, const std::string& status,
               const std::string& event_type = "", const std::string& error_code = "",

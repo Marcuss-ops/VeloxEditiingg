@@ -278,6 +278,13 @@ int64_t PhaseRecorder::Begin(std::string origin, std::string scope,
                              std::string event_name) {
     if (!IsCanonicalOrigin(origin)) origin = kOriginEngine;
     if (!IsCanonicalScope(scope)) scope = kScopeAttempt;
+    if (!IsCanonicalEvent(component, action)) {
+        // Fail closed: a component/action pair absent from the shared
+        // catalog is a taxonomy violation, never a silently-emitted fact.
+        // Producers must register stable names in catalog.json instead of
+        // inventing labels at runtime (dynamic labels go in event_name).
+        return -1;
+    }
 
     std::lock_guard<std::mutex> lock(mu_);
     PhaseEvent ev;
@@ -341,6 +348,9 @@ void PhaseRecorder::Emit(std::string origin, std::string scope, std::string comp
                          const std::string& error_message) {
     if (!IsCanonicalOrigin(origin)) origin = kOriginEngine;
     if (!IsCanonicalScope(scope)) scope = kScopeAttempt;
+    if (!IsCanonicalEvent(component, action)) {
+        return; // fail-closed: unknown component/action is never recorded
+    }
 
     std::lock_guard<std::mutex> lock(mu_);
     PhaseEvent ev;

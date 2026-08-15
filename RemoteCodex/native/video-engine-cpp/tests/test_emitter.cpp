@@ -115,9 +115,9 @@ void testBeginComplete() {
 void testPerOriginIndexes() {
     SUBCASE("event_index increments per origin");
     vt::PhaseRecorder r;
-    r.Emit(vt::kOriginWorker, vt::kScopeAttempt, "runner", "a", "", "ok");
-    r.Emit(vt::kOriginEngine, vt::kScopeAttempt, "ffmpeg", "b", "", "ok");
-    r.Emit(vt::kOriginWorker, vt::kScopeAttempt, "runner", "c", "", "ok");
+    r.Emit(vt::kOriginWorker, vt::kScopeAttempt, "runner", "execute", "", "ok");
+    r.Emit(vt::kOriginEngine, vt::kScopeAttempt, "engine", "render", "", "ok");
+    r.Emit(vt::kOriginWorker, vt::kScopeAttempt, "runner", "report", "", "ok");
 
     auto events = r.Snapshot();
     EXPECT_EQ_INT(static_cast<int>(events.size()), 3);
@@ -129,7 +129,7 @@ void testPerOriginIndexes() {
 void testAbortAndNormalize() {
     SUBCASE("Abort yields failed event; non-canonical values coerced");
     vt::PhaseRecorder r;
-    int64_t tok = r.Begin("bogus", "nope", "ffmpeg", "encode", "encode");
+    int64_t tok = r.Begin("bogus", "nope", "engine", "render", "render");
     r.Abort(tok, "EIO", "disk full");
     auto events = r.Snapshot();
     EXPECT_EQ_INT(static_cast<int>(events.size()), 1);
@@ -153,13 +153,15 @@ void testScopedPhaseRaii() {
     SUBCASE("ScopedPhase completes on scope exit, aborts on failure");
     vt::PhaseRecorder r;
     {
-        vt::ScopedPhase okPhase(r, vt::kOriginEngine, vt::kScopeSegment,
-                                "ffmpeg", "encode_segment_0", "encode");
+        vt::ScopedPhase okPhase(r, vt::kOriginFFmpeg, vt::kScopeSegment,
+                                "ffmpeg", "encode_segment", "encode", "",
+                                "encode_segment_0");
         // destructor completes as ok
     }
     {
-        vt::ScopedPhase failPhase(r, vt::kOriginEngine, vt::kScopeSegment,
-                                  "ffmpeg", "encode_segment_1", "encode");
+        vt::ScopedPhase failPhase(r, vt::kOriginFFmpeg, vt::kScopeSegment,
+                                  "ffmpeg", "encode_segment", "encode", "",
+                                  "encode_segment_1");
         failPhase.Abort("encode_failed", "boom");
     }
     auto events = r.Snapshot();
@@ -286,7 +288,7 @@ void testAppendJsonMetadataValidationAndDetailedFields() {
     SUBCASE("AppendJson omits invalid metadata and keeps detailed fields");
     vt::PhaseRecorder r;
     int64_t token = r.Begin(vt::kOriginEngine, vt::kScopeSegment,
-                            "engine", "encode", "encode");
+                            "engine.encode", "setup", "encode");
     r.SetMetadataJSON(token, "{\"codec\":]");
     r.SetDetailedMetrics(token, 3, "video", 1, 1.25, 8.5, 42.0, 2.0, 31, 30);
     r.Complete(token, 100, 200, 30, vt::kStatusOk);
@@ -306,7 +308,7 @@ void testAppendJsonMetadataValidationAndDetailedFields() {
 
     vt::PhaseRecorder validRecorder;
     int64_t validToken = validRecorder.Begin(vt::kOriginEngine, vt::kScopeSegment,
-                                             "engine", "encode", "encode");
+                                             "engine.encode", "setup", "encode");
     validRecorder.SetMetadataJSON(validToken, "{\"codec\":\"h264\",\"stream\":{\"index\":0},\"tags\":[\"main\"]}");
     validRecorder.Complete(validToken, 0, 0, 0, vt::kStatusOk);
     std::ostringstream validOut;
@@ -319,7 +321,7 @@ void testAppendJsonEscapesStrings() {
     SUBCASE("AppendJson escapes detailed event strings so phases[] remains valid JSON");
     vt::PhaseRecorder r;
     int64_t token = r.Begin(vt::kOriginEngine, vt::kScopeSegment,
-                            "engine", "encode", "encode", "", "segment\"0");
+                            "engine.encode", "setup", "encode", "", "segment\"0");
     r.Abort(token, "E\\\"IO", "line 1\nline 2");
     auto events = r.Snapshot();
     EXPECT_EQ_INT(static_cast<int>(events.size()), 1);
@@ -388,7 +390,7 @@ void testCompleteSidecarSchema() {
         vt::kOriginValidation, vt::kScopeArtifact, "quality", "ffprobe", "quality");
     engine.recorder().Complete(qualityToken, 0, 0, 0, vt::kStatusOk);
     int64_t failedAssetToken = engine.recorder().Begin(
-        vt::kOriginWorker, vt::kScopeArtifact, "worker.asset", "download", "download");
+        vt::kOriginWorker, vt::kScopeArtifact, "worker.asset", "disk_write", "download");
     engine.recorder().Complete(failedAssetToken, 512, 0, 0, vt::kStatusFailed, "EIO", "disk full");
     engine.recorder().Emit(
         vt::kOriginWorker, vt::kScopeAttempt, "attempt", "retry", "retry", vt::kStatusOk);
@@ -631,11 +633,11 @@ void testCopyOnlyTelemetryDoesNotClaimVideoEncoding() {
 void testReset() {
     SUBCASE("Reset clears events and re-starts indexes at 0");
     vt::PhaseRecorder r;
-    r.Emit(vt::kOriginEngine, vt::kScopeAttempt, "engine", "a", "", "ok");
+    r.Emit(vt::kOriginEngine, vt::kScopeAttempt, "engine", "render", "", "ok");
     EXPECT_EQ_INT(static_cast<int>(r.Count()), 1);
     r.Reset();
     EXPECT_EQ_INT(static_cast<int>(r.Count()), 0);
-    r.Emit(vt::kOriginEngine, vt::kScopeAttempt, "engine", "b", "", "ok");
+    r.Emit(vt::kOriginEngine, vt::kScopeAttempt, "engine", "render", "", "ok");
     auto events = r.Snapshot();
     EXPECT_EQ_INT(static_cast<int>(events.size()), 1);
     EXPECT_EQ_INT(events[0].event_index, 0);
@@ -666,6 +668,24 @@ void testCanonicalEnums() {
     EXPECT_EQ_STR(std::string(encode->owner), "encoder");
 }
 
+void testFailClosedGate() {
+    SUBCASE("non-canonical component/action is dropped, not recorded");
+    vt::PhaseRecorder r;
+    int64_t dropped = r.Begin(vt::kOriginEngine, vt::kScopeAttempt, "engine", "invented", "render");
+    EXPECT_EQ_INT(dropped, -1);
+    r.Complete(dropped, 0, 0, 0, vt::kStatusOk); // no-op on dropped token
+    r.Emit(vt::kOriginEngine, vt::kScopeAttempt, "engine", "invented", "render", vt::kStatusOk);
+    EXPECT_EQ_INT(static_cast<int>(r.Count()), 0);
+
+    SUBCASE("newly-registered mux events are canonical and recorded");
+    EXPECT(vt::IsCanonicalEvent("engine", "packet_mux"), "packet_mux registered");
+    EXPECT(vt::IsCanonicalEvent("engine", "concat"), "concat registered");
+    EXPECT(vt::IsCanonicalEvent("engine", "mixed_packet_mux"), "mixed_packet_mux registered");
+    int64_t mux = r.Begin(vt::kOriginEngine, vt::kScopeAttempt, "engine", "packet_mux", "finalize");
+    r.Complete(mux, 0, 0, 0, vt::kStatusOk);
+    EXPECT_EQ_INT(static_cast<int>(r.Count()), 1);
+}
+
 } // namespace
 
 int main() {
@@ -690,6 +710,7 @@ int main() {
     testCopyOnlyTelemetryDoesNotClaimVideoEncoding();
     testReset();
     testCanonicalEnums();
+    testFailClosedGate();
 
     std::cerr << "\nsummary: pass=" << g_pass << " fail=" << g_fail << "\n";
     return g_fail == 0 ? 0 : 1;

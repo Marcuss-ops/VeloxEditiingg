@@ -38,7 +38,7 @@ struct EventDescriptor {
     std::string_view owner;
 };
 
-inline constexpr std::array<EventDescriptor, 152> kEvents = {{
+inline constexpr std::array<EventDescriptor, 159> kEvents = {{
     { "attempt.failure", "attempt", "failure", "worker", "attempt", "finalize", "", "counter", "count", "none", "sum", "per_attempt", "worker" },
     { "attempt.retry", "attempt", "retry", "worker", "attempt", "finalize", "", "counter", "count", "none", "sum", "per_attempt", "worker" },
     { "audio.summary", "audio", "summary", "validation", "attempt", "finalize", "", "duration", "milliseconds", "exclusive", "sum", "per_attempt", "validation" },
@@ -70,10 +70,12 @@ inline constexpr std::array<EventDescriptor, 152> kEvents = {{
     { "engine.color_convert_in", "engine", "color_convert_in", "engine", "segment", "composite", "", "duration", "milliseconds", "span_child", "sum", "per_segment", "media_engine" },
     { "engine.color_convert_out", "engine", "color_convert_out", "engine", "segment", "composite", "", "duration", "milliseconds", "span_child", "sum", "per_segment", "media_engine" },
     { "engine.composite", "engine", "composite", "engine", "segment", "composite", "", "duration", "milliseconds", "span_child", "sum", "per_segment", "media_engine" },
+    { "engine.concat", "engine", "concat", "engine", "attempt", "finalize", "", "duration", "milliseconds", "exclusive", "sum", "per_attempt", "media_engine" },
     { "engine.crop", "engine", "crop", "engine", "segment", "composite", "", "duration", "milliseconds", "span_child", "sum", "per_segment", "media_engine" },
     { "engine.encode.flush", "engine.encode", "flush", "engine", "segment", "encode", "", "duration", "milliseconds", "span_child", "sum", "per_segment", "encoder" },
     { "engine.encode.frame_submit", "engine.encode", "frame_submit", "engine", "segment", "encode", "", "counter", "count", "none", "sum", "per_segment", "encoder" },
     { "engine.encode.setup", "engine.encode", "setup", "engine", "segment", "encode", "", "duration", "milliseconds", "span_child", "sum", "per_segment", "encoder" },
+    { "engine.frame_pipeline.encode_segment", "engine.frame_pipeline", "encode_segment", "engine", "segment", "encode", "", "duration", "milliseconds", "span_child", "sum", "per_segment", "media_engine" },
     { "engine.input.demux_probe", "engine.input", "demux_probe", "engine", "segment", "decode", "", "duration", "milliseconds", "span_child", "sum", "per_segment", "media_engine" },
     { "engine.input.duration_probe", "engine.input", "duration_probe", "engine", "segment", "decode", "", "duration", "milliseconds", "span_child", "sum", "per_segment", "media_engine" },
     { "engine.input.keyframe_scan", "engine.input", "keyframe_scan", "engine", "segment", "decode", "", "duration", "milliseconds", "span_child", "sum", "per_segment", "media_engine" },
@@ -81,11 +83,14 @@ inline constexpr std::array<EventDescriptor, 152> kEvents = {{
     { "engine.input.seek", "engine.input", "seek", "engine", "segment", "decode", "", "duration", "milliseconds", "span_child", "sum", "per_segment", "media_engine" },
     { "engine.input.stream_discovery", "engine.input", "stream_discovery", "engine", "segment", "decode", "", "duration", "milliseconds", "span_child", "sum", "per_segment", "media_engine" },
     { "engine.mask", "engine", "mask", "engine", "segment", "composite", "", "duration", "milliseconds", "span_child", "sum", "per_segment", "media_engine" },
+    { "engine.mixed_packet_mux", "engine", "mixed_packet_mux", "engine", "attempt", "finalize", "", "duration", "milliseconds", "exclusive", "sum", "per_attempt", "media_engine" },
+    { "engine.mux.audio", "engine.mux", "audio", "engine", "audio_track", "encode", "", "duration", "milliseconds", "span_child", "sum", "per_track", "muxer" },
     { "engine.mux.header", "engine.mux", "header", "engine", "artifact", "encode", "", "duration", "milliseconds", "span_child", "sum", "per_artifact", "muxer" },
     { "engine.mux.packet_write", "engine.mux", "packet_write", "engine", "artifact", "encode", "", "counter", "count", "none", "sum", "per_artifact", "muxer" },
     { "engine.mux.trailer", "engine.mux", "trailer", "engine", "artifact", "encode", "", "duration", "milliseconds", "span_child", "sum", "per_artifact", "muxer" },
     { "engine.opacity", "engine", "opacity", "engine", "segment", "composite", "", "duration", "milliseconds", "span_child", "sum", "per_segment", "media_engine" },
     { "engine.output.fsync", "engine.output", "fsync", "engine", "artifact", "finalize", "", "duration", "milliseconds", "span_child", "sum", "per_artifact", "muxer" },
+    { "engine.packet_mux", "engine", "packet_mux", "engine", "attempt", "finalize", "", "duration", "milliseconds", "exclusive", "sum", "per_attempt", "media_engine" },
     { "engine.render", "engine", "render", "engine", "attempt", "render", "", "duration", "milliseconds", "exclusive", "sum", "per_attempt", "media_engine" },
     { "engine.scale", "engine", "scale", "engine", "segment", "composite", "", "duration", "milliseconds", "span_child", "sum", "per_segment", "media_engine" },
     { "engine.simulate", "engine", "simulate", "engine", "segment", "simulate", "", "duration", "milliseconds", "span_child", "sum", "per_segment", "media_engine" },
@@ -94,6 +99,7 @@ inline constexpr std::array<EventDescriptor, 152> kEvents = {{
     { "engine.video.frame_reorder", "engine.video", "frame_reorder", "engine", "segment", "decode", "", "duration", "milliseconds", "span_child", "sum", "per_segment", "decoder" },
     { "engine.video.hw_download", "engine.video", "hw_download", "engine", "segment", "decode", "", "duration", "milliseconds", "span_child", "sum", "per_segment", "decoder" },
     { "engine.video.timestamp_normalize", "engine.video", "timestamp_normalize", "engine", "segment", "decode", "", "duration", "milliseconds", "span_child", "sum", "per_segment", "decoder" },
+    { "ffmpeg.encode_segment", "ffmpeg", "encode_segment", "ffmpeg", "segment", "encode", "", "duration", "milliseconds", "span_child", "sum", "per_segment", "process_runner" },
     { "ffmpeg.progress", "ffmpeg", "progress", "ffmpeg", "segment", "encode", "", "counter", "count", "none", "sum", "per_segment", "process_runner" },
     { "io.summary", "io", "summary", "validation", "attempt", "finalize", "", "duration", "milliseconds", "exclusive", "sum", "per_attempt", "validation" },
     { "master.artifact.sha_mismatch", "master.artifact", "sha_mismatch", "master", "attempt", "finalize", "", "counter", "count", "none", "sum", "per_attempt", "master" },
@@ -148,6 +154,7 @@ inline constexpr std::array<EventDescriptor, 152> kEvents = {{
     { "subtitle.transcribe", "subtitle", "transcribe", "validation", "subtitle_track", "compile", "", "duration", "milliseconds", "span_child", "sum", "per_track", "validation" },
     { "subtitle.word_alignment", "subtitle", "word_alignment", "validation", "subtitle_track", "compile", "", "duration", "milliseconds", "span_child", "sum", "per_track", "validation" },
     { "waste.summary", "waste", "summary", "validation", "attempt", "finalize", "", "duration", "milliseconds", "exclusive", "sum", "per_attempt", "validation" },
+    { "worker.asset.bind", "worker.asset", "bind", "worker", "task", "asset_wait", "", "duration", "milliseconds", "span_child", "sum", "per_task", "downloader" },
     { "worker.asset.connect", "worker.asset", "connect", "worker", "task", "download", "", "duration", "milliseconds", "span_child", "sum", "per_task", "downloader" },
     { "worker.asset.disk_write", "worker.asset", "disk_write", "worker", "artifact", "download", "", "duration", "milliseconds", "span_child", "sum", "per_asset", "downloader" },
     { "worker.asset.dns", "worker.asset", "dns", "worker", "task", "download", "", "duration", "milliseconds", "span_child", "sum", "per_task", "downloader" },

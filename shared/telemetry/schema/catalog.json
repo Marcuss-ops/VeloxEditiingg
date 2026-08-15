@@ -659,6 +659,21 @@
       "owner": "media_engine"
     },
     {
+      "key": "engine.concat",
+      "component": "engine",
+      "action": "concat",
+      "origin": "engine",
+      "scope": "attempt",
+      "phase": "finalize",
+      "event_type": "",
+      "kind": "duration",
+      "unit": "milliseconds",
+      "timing_mode": "exclusive",
+      "aggregation": "sum",
+      "cardinality": "per_attempt",
+      "owner": "media_engine"
+    },
+    {
       "key": "engine.crop",
       "component": "engine",
       "action": "crop",
@@ -717,6 +732,21 @@
       "aggregation": "sum",
       "cardinality": "per_segment",
       "owner": "encoder"
+    },
+    {
+      "key": "engine.frame_pipeline.encode_segment",
+      "component": "engine.frame_pipeline",
+      "action": "encode_segment",
+      "origin": "engine",
+      "scope": "segment",
+      "phase": "encode",
+      "event_type": "",
+      "kind": "duration",
+      "unit": "milliseconds",
+      "timing_mode": "span_child",
+      "aggregation": "sum",
+      "cardinality": "per_segment",
+      "owner": "media_engine"
     },
     {
       "key": "engine.input.demux_probe",
@@ -824,6 +854,36 @@
       "owner": "media_engine"
     },
     {
+      "key": "engine.mixed_packet_mux",
+      "component": "engine",
+      "action": "mixed_packet_mux",
+      "origin": "engine",
+      "scope": "attempt",
+      "phase": "finalize",
+      "event_type": "",
+      "kind": "duration",
+      "unit": "milliseconds",
+      "timing_mode": "exclusive",
+      "aggregation": "sum",
+      "cardinality": "per_attempt",
+      "owner": "media_engine"
+    },
+    {
+      "key": "engine.mux.audio",
+      "component": "engine.mux",
+      "action": "audio",
+      "origin": "engine",
+      "scope": "audio_track",
+      "phase": "encode",
+      "event_type": "",
+      "kind": "duration",
+      "unit": "milliseconds",
+      "timing_mode": "span_child",
+      "aggregation": "sum",
+      "cardinality": "per_track",
+      "owner": "muxer"
+    },
+    {
       "key": "engine.mux.header",
       "component": "engine.mux",
       "action": "header",
@@ -897,6 +957,21 @@
       "aggregation": "sum",
       "cardinality": "per_artifact",
       "owner": "muxer"
+    },
+    {
+      "key": "engine.packet_mux",
+      "component": "engine",
+      "action": "packet_mux",
+      "origin": "engine",
+      "scope": "attempt",
+      "phase": "finalize",
+      "event_type": "",
+      "kind": "duration",
+      "unit": "milliseconds",
+      "timing_mode": "exclusive",
+      "aggregation": "sum",
+      "cardinality": "per_attempt",
+      "owner": "media_engine"
     },
     {
       "key": "engine.render",
@@ -1017,6 +1092,21 @@
       "aggregation": "sum",
       "cardinality": "per_segment",
       "owner": "decoder"
+    },
+    {
+      "key": "ffmpeg.encode_segment",
+      "component": "ffmpeg",
+      "action": "encode_segment",
+      "origin": "ffmpeg",
+      "scope": "segment",
+      "phase": "encode",
+      "event_type": "",
+      "kind": "duration",
+      "unit": "milliseconds",
+      "timing_mode": "span_child",
+      "aggregation": "sum",
+      "cardinality": "per_segment",
+      "owner": "process_runner"
     },
     {
       "key": "ffmpeg.progress",
@@ -1827,6 +1917,21 @@
       "aggregation": "sum",
       "cardinality": "per_attempt",
       "owner": "validation"
+    },
+    {
+      "key": "worker.asset.bind",
+      "component": "worker.asset",
+      "action": "bind",
+      "origin": "worker",
+      "scope": "task",
+      "phase": "asset_wait",
+      "event_type": "",
+      "kind": "duration",
+      "unit": "milliseconds",
+      "timing_mode": "span_child",
+      "aggregation": "sum",
+      "cardinality": "per_task",
+      "owner": "downloader"
     },
     {
       "key": "worker.asset.connect",
