@@ -273,5 +273,55 @@ check_module_imports shared velox-shared velox-worker-agent
 check_module_imports DataServer velox-server velox-worker-agent
 check_module_imports RemoteCodex/native/worker-agent-go velox-worker-agent velox-server
 
+# 13. Intra-module layering (velox-server): the persistence/foundation
+# layer must never import the API/application/transport layer, nor do
+# network I/O directly (net/http).
+#
+# Go forbids LITERAL cycles within a module (build would fail), but it
+# does NOT forbid an "upward" import that re-couples a data-layer
+# package to the HTTP/gRPC handlers or the composition root. Such an
+# import is the seed of a future cycle and defeats isolated testing
+# (`go test ./internal/store/...` should not drag in the API surface).
+# The net/http prohibition is the I/O side of the same boundary: the
+# persistence layer reaches the network only through adapters, never
+# by importing the HTTP client directly.
+#
+# Rule #12 guards cross-module direction; this guards the same invariant
+# INSIDE velox-server, where only a cyclic edge would trip the compiler.
+check_upward_import() {
+  local importer="$1" forbidden_re="$2"
+  local hits
+  hits="$(
+    (cd "$REPO_ROOT/DataServer" \
+      && go list -f '{{range .Imports}}{{println .}}{{end}}' "$importer" 2>/dev/null) \
+      | grep -E "$forbidden_re" \
+      | sort -u \
+      || true
+  )"
+  if [[ -n "$hits" ]]; then
+    printf '  %s imports API/application layer or net/http (isolation break):\n%s\n' \
+      "$importer" "$hits" >&2
+    return 1
+  fi
+  return 0
+}
+FORBIDDEN_UP='^velox-server/internal/(handlers|app|fleet|grpcserver)(/|$)|^net/http$'
+foundation_violation=0
+foundation_pkgs="$(
+  cd "$REPO_ROOT/DataServer" \
+    && go list \
+      velox-server/internal/store \
+      velox-server/internal/config \
+      velox-server/internal/repository \
+      velox-server/internal/storecore \
+      velox-server/internal/platform/... 2>/dev/null
+)"
+while IFS= read -r pkg; do
+  [[ -z "$pkg" ]] && continue
+  check_upward_import "$pkg" "$FORBIDDEN_UP" || foundation_violation=1
+done <<<"$foundation_pkgs"
+[[ "$foundation_violation" -eq 0 ]] \
+  || fail "foundation-layer package imports API/application layer or net/http — breaks isolated testing"
+
 
 echo "check-architecture: OK"
