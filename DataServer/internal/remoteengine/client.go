@@ -15,6 +15,8 @@ package remoteengine
 import (
 	"net/http"
 	"time"
+
+	"velox-server/internal/logging"
 )
 
 // NewClient creates a new remote engine client.
@@ -28,6 +30,7 @@ func NewClient(cfg Config) *Client {
 		httpClient: &http.Client{
 			Timeout: timeout,
 		},
+		logger: logging.NewLogger("remoteengine"),
 	}
 }
 

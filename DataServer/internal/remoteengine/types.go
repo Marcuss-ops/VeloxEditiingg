@@ -3,6 +3,8 @@ package remoteengine
 import (
 	"net/http"
 	"time"
+
+	"velox-server/internal/logging"
 )
 
 // Config holds remote engine configuration
@@ -15,10 +17,15 @@ type Config struct {
 	Retries int
 }
 
-// Client is the remote engine client
+// Client is the remote engine client.
 type Client struct {
 	config     Config
 	httpClient *http.Client
+
+	// logger is the structured logger (trace-correlated); nil is safe.
+	logger *logging.Logger
+	// metrics is the optional Prometheus retry/request sink; nil is safe.
+	metrics RetryMetrics
 }
 
 // SimpleScriptRequest is the input for simple script generation

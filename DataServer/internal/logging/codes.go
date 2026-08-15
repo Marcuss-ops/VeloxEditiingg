@@ -179,6 +179,16 @@ const (
 	CodeForwardingMetricsRefreshFail  = "FORWARDING_METRICS_REFRESH_FAILED"
 )
 
+// Remote engine client (replaces log.Printf in remoteengine/*.go)
+const (
+	CodeRemoteEngineRequestStarted    = "REMOTE_ENGINE_REQUEST_STARTED"
+	CodeRemoteEngineRequestCompleted  = "REMOTE_ENGINE_REQUEST_COMPLETED"
+	CodeRemoteEngineRequestFailed     = "REMOTE_ENGINE_REQUEST_FAILED"
+	CodeRemoteEngineContractViolation = "REMOTE_ENGINE_CONTRACT_VIOLATION"
+	CodeRemoteEngineRetry             = "REMOTE_ENGINE_RETRY"
+	CodeRemoteEngineRetryExhausted    = "REMOTE_ENGINE_RETRY_EXHAUSTED"
+)
+
 // Delivery runner (replaces log.Printf in deliveries/runner*.go)
 const (
 	CodeDeliveryReconcileSweepFail   = "DELIVERY_RECONCILE_SWEEP_FAILED"
@@ -413,6 +423,14 @@ var codeDescriptions = map[string]string{
 	CodeSQLiteMigrationCloseFail: "SQLite close after migration failure",
 	CodeSQLiteClosePostMigration: "SQLite close after post-migration",
 	CodeSQLiteMigrationApplied:   "SQLite migration applied",
+
+	// Remote engine client.
+	CodeRemoteEngineRequestStarted:    "Remote engine request started",
+	CodeRemoteEngineRequestCompleted:  "Remote engine request completed",
+	CodeRemoteEngineRequestFailed:     "Remote engine request failed",
+	CodeRemoteEngineContractViolation: "Remote engine response contract violation",
+	CodeRemoteEngineRetry:             "Remote engine retryable error, retrying with backoff",
+	CodeRemoteEngineRetryExhausted:    "Remote engine retry exhausted",
 
 	// Forwarding runner.
 	CodeForwardingClaimed:             "Forwardings claimed from the queue",

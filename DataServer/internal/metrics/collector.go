@@ -59,9 +59,10 @@ import (
 // the matching <domain>Families list method, both living in the
 // collector_<domain>.go file next to that domain's recorders.
 type Collector struct {
-	reg         *Registry
-	operational *OperationalTelemetry
-	forwarding  *ForwardingTelemetry
+	reg          *Registry
+	operational  *OperationalTelemetry
+	forwarding   *ForwardingTelemetry
+	remoteengine *RemoteEngineTelemetry
 
 	// Per-project.
 	renderSpeed *Family // velox_project_render_speed_ratio (gauge)
@@ -233,6 +234,7 @@ func NewCollector(reg *Registry) *Collector {
 	c := &Collector{reg: reg}
 	c.operational = NewOperationalTelemetry(reg)
 	c.forwarding = NewForwardingTelemetry(reg)
+	c.remoteengine = NewRemoteEngineTelemetry(reg)
 
 	c.initRenderFamilies()
 	c.initFFmpegFamilies()
@@ -271,6 +273,15 @@ func (c *Collector) ForwardingTelemetry() *ForwardingTelemetry {
 		return nil
 	}
 	return c.forwarding
+}
+
+// RemoteEngineTelemetry returns the remote-engine client sink registered on
+// the same registry (velox_remote_engine_* families).
+func (c *Collector) RemoteEngineTelemetry() *RemoteEngineTelemetry {
+	if c == nil {
+		return nil
+	}
+	return c.remoteengine
 }
 
 // allFamilies returns the curated list to register. Adding a new family

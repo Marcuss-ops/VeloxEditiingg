@@ -213,6 +213,14 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 		m.ForwardingRunner.WithTelemetry(metricsCollector.ForwardingTelemetry())
 		m.ForwardingRunner.WithLogger(logging.NewLogger("forwarding.runner"))
 	}
+	if m != nil && m.RemoteEngineClient != nil {
+		// The remote-engine client owns the fragile retry loop at the
+		// integration boundary; wire its Prometheus sink and structured
+		// logger at the composition root so retries/failures surface in
+		// /metrics and trace-correlated logs.
+		m.RemoteEngineClient.WithMetrics(metricsCollector.RemoteEngineTelemetry())
+		m.RemoteEngineClient.WithLogger(logging.NewLogger("remoteengine"))
+	}
 	if m != nil && m.AssetService != nil {
 		for _, family := range velmetrics.NewInputSecurityFamilies(m.AssetService.SecurityMetrics()) {
 			if family != nil {

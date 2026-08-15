@@ -289,15 +289,16 @@ func (a *deliveryPlanResolverAdapter) ResolvePlan(ctx context.Context, jobID, ar
 // instances pointed at the same *SQLiteStore would be a stateless
 // duplicate — we share the single instance owned by buildTasks.
 type moduleDeps struct {
-	Registry         *app.Registry
-	Health           *app.HealthModule
-	Drive            *app.DriveModule
-	Ansible          *app.AnsibleModule
-	Workers          *app.WorkersModule
-	AssetService     *voiceoverassets.AssetService
-	Enqueuer         *enqueue.Enqueuer
-	DeliveryRunner   *deliveries.DeliveryRunner
-	ForwardingRunner *forwarding.CreatorForwardingRunner
+	Registry           *app.Registry
+	Health             *app.HealthModule
+	Drive              *app.DriveModule
+	Ansible            *app.AnsibleModule
+	Workers            *app.WorkersModule
+	AssetService       *voiceoverassets.AssetService
+	Enqueuer           *enqueue.Enqueuer
+	DeliveryRunner     *deliveries.DeliveryRunner
+	ForwardingRunner   *forwarding.CreatorForwardingRunner
+	RemoteEngineClient *remoteengine.Client
 }
 
 // buildModules creates all Gin modules, the asset service (which needs
@@ -466,8 +467,9 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 
 	// ── Creator Forwarding runner ───────────────────────────────────
 	var fwdRunner *forwarding.CreatorForwardingRunner
+	var reClient *remoteengine.Client
 	if cfg.Render.RemoteEngineURL != "" {
-		reClient := remoteengine.NewClient(remoteengine.Config{
+		reClient = remoteengine.NewClient(remoteengine.Config{
 			URL:       cfg.Render.RemoteEngineURL,
 			Token:     cfg.Render.RemoteEngineToken,
 			TimeoutMS: cfg.Render.RemoteEngineTimeoutMS,
@@ -484,14 +486,15 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 	}
 
 	return &moduleDeps{
-		Registry:         registry,
-		Health:           healthMod,
-		Drive:            driveMod,
-		Workers:          workersModule,
-		AssetService:     assetSvc,
-		Enqueuer:         enqueuer,
-		DeliveryRunner:   deliveryRunner,
-		ForwardingRunner: fwdRunner,
+		Registry:           registry,
+		Health:             healthMod,
+		Drive:              driveMod,
+		Workers:            workersModule,
+		AssetService:       assetSvc,
+		Enqueuer:           enqueuer,
+		DeliveryRunner:     deliveryRunner,
+		ForwardingRunner:   fwdRunner,
+		RemoteEngineClient: reClient,
 	}, nil
 } // Compile-time references that FORCE the compiler to keep the imports below.
 // The static anchor complements the live runtime wiring of

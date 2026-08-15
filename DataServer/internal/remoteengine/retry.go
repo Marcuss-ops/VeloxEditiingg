@@ -4,8 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"time"
+
+	"velox-server/internal/logging"
 )
 
 // DefaultMalformedRetryLimit is the maximum number of retry attempts for
@@ -118,25 +119,36 @@ func (c *Client) withRetry(ctx context.Context, fn func(attempt int) error) erro
 			return err
 		}
 
+		// Capture the ORIGINAL error class before ShouldStop may promote a
+		// MALFORMED_RESPONSE to PERMANENT, so metrics/logs attribute the
+		// failure to what actually happened rather than the promotion.
+		class := errorClassOf(lastErr)
+
 		// Ask the policy whether to stop.
 		var stop bool
 		lastErr, stop = policy.ShouldStop(lastErr, malformedAttempts)
 		if stop {
-			if errors.As(lastErr, &re) {
-				log.Printf("Remote engine stopping (attempt %d/%d): %s", attempt+1, policy.MaxAttempts, re)
-			} else {
-				log.Printf("Remote engine stopping (attempt %d/%d): %v", attempt+1, policy.MaxAttempts, lastErr)
-			}
+			// Definitive failure: permanent/validation/auth/malformed-promoted.
+			c.recordFailure(class)
+			c.logError(ctx, logging.CodeRemoteEngineRequestFailed, logging.F(
+				"attempt", attempt+1,
+				"max_attempts", policy.MaxAttempts,
+				"class", class,
+				"err", lastErr.Error(),
+			))
 			return lastErr
 		}
 
-		// Log the retryable error.
-		if errors.As(lastErr, &re) {
-			log.Printf("Remote engine retryable error (attempt %d/%d, malformed %d/%d): %s",
-				attempt+1, policy.MaxAttempts, malformedAttempts, policy.MaxMalformedAttempts, re)
-		} else {
-			log.Printf("Remote engine error (attempt %d/%d): %v", attempt+1, policy.MaxAttempts, lastErr)
-		}
+		// Retryable error: schedule a retry with backoff.
+		c.recordRetry(class)
+		c.logWarn(ctx, logging.CodeRemoteEngineRetry, logging.F(
+			"attempt", attempt+1,
+			"max_attempts", policy.MaxAttempts,
+			"malformed_attempts", malformedAttempts,
+			"max_malformed_attempts", policy.MaxMalformedAttempts,
+			"class", class,
+			"err", lastErr.Error(),
+		))
 
 		// Compute backoff.
 		backoff := RetrySchedule(attempt)
@@ -167,7 +179,25 @@ func (c *Client) withRetry(ctx context.Context, fn func(attempt int) error) erro
 		}
 	}
 
+	// Exhausted the retry budget while still failing with a retryable error.
+	c.recordFailure(errorClassOf(lastErr))
+	c.logWarn(ctx, logging.CodeRemoteEngineRetryExhausted, logging.F(
+		"max_attempts", policy.MaxAttempts,
+		"class", errorClassOf(lastErr),
+		"err", lastErr.Error(),
+	))
 	return lastErr
+}
+
+// errorClassOf returns the stable, low-cardinality error class for the
+// metrics/log label. Untyped errors map to "UNKNOWN" so a nil or non-
+// *RemoteError never produces an empty label value.
+func errorClassOf(err error) string {
+	var re *RemoteError
+	if errors.As(err, &re) {
+		return string(re.Class)
+	}
+	return "UNKNOWN"
 }
 
 // RetrySchedule returns the backoff duration for the given attempt index
