@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"velox-server/internal/store"
 )
 
 type realArtifactWorker struct {
@@ -193,7 +195,7 @@ func TestLevelDSmoke_RealArtifactVerifiedBeforeSuccessAndCleaned(t *testing.T) {
 		t.Fatalf("smoke rows=%d want 1", len(runs.rows))
 	}
 	for _, run := range runs.rows {
-		if run.Status != SmokeStatusSucceeded || run.ArtifactDriveID == "" {
+		if run.Status != store.SmokeStatusSucceeded || run.ArtifactDriveID == "" {
 			t.Fatalf("smoke row is not successful artifact evidence: %+v", run)
 		}
 	}

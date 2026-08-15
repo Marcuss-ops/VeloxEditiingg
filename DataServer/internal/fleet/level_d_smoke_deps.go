@@ -84,24 +84,13 @@ var (
 	ErrSmokeCleanupFailed = errors.New("smoke_cleanup_failed")
 )
 
-// ── Status enum (mirrors DeployStatus* in store_deployment_records.go) ──
-
-const (
-	// SmokeStatusPending is the initial state at insert. The
-	// row exists but no phase has completed yet.
-	SmokeStatusPending = "PENDING"
-
-	// SmokeStatusSucceeded marks a smoke where every phase
-	// completed: lease acquired → asset downloaded → ffmpeg
-	// rendered → artifact uploaded to Drive. The artifact_drive_id
-	// columns holds the canonical Drive URL.
-	SmokeStatusSucceeded = "SUCCEEDED"
-
-	// SmokeStatusFailed marks a smoke where any phase failed
-	// AND cleanup could not recover. The error_message column
-	// stores the operator-readable failure diagnosis.
-	SmokeStatusFailed = "FAILED"
-)
+// ── Status enum ────────────────────────────────────────────────────
+//
+// The smoke_runs status vocabulary is NOT defined here. The single
+// canonical source is smokerunstore.SmokeStatus* (re-exported by
+// store as store.SmokeStatus*); the executor and the smoke-health
+// runner reference it via the store import above. Defining a local
+// copy would fork the vocabulary and let the two drift.
 
 // ── Payload schema ──────────────────────────────────────────────────
 

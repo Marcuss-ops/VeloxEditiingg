@@ -92,7 +92,7 @@ func TestLevelDSmoke_ControllerLifecyclePersistsVerifiedArtifactEvidence(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.Status != SmokeStatusSucceeded || run.ArtifactDriveID == "" {
+	if run.Status != store.SmokeStatusSucceeded || run.ArtifactDriveID == "" {
 		t.Fatalf("smoke evidence=%+v, want SUCCEEDED with artifact id", run)
 	}
 	if drive.bytes <= 0 || len(drive.hash) != 64 {
