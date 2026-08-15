@@ -420,7 +420,7 @@ func (t *masterAssetTransferer) transferChunked(ctx context.Context, reportCtx c
 	defer f.Close()
 	// Pre-allocate the full size so each chunk writes to a reserved offset
 	// without incremental growth (avoids fragmentation and per-append churn).
-	if err := f.Truncate(size); err != nil {
+	if err := preallocateFile(f, size); err != nil {
 		return downloader.TransferResult{}, err
 	}
 
