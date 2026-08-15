@@ -8,10 +8,13 @@ import (
 	"context"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+
 	"velox-server/internal/jobs"
 	"velox-server/internal/logging"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
+	"velox-server/internal/telemetry"
 	pb "velox-shared/controltransport/pb"
 )
 
@@ -23,13 +26,26 @@ func (h *Handler) handleTaskRenewal(workerID string, tr *pb.TaskLeaseRenewal, se
 	if tr == nil || h.taskRepo == nil || sess == nil || sess.workerID != workerID {
 		return
 	}
-	ctx := context.Background()
 	taskID := tr.GetTaskId()
 	jobID := tr.GetJobId()
 	attemptID := tr.GetAttemptId()
 	leaseID := tr.GetLeaseId()
 	attemptNumber := tr.GetAttemptNumber()
 	renewalRevision := tr.GetRevision()
+
+	// Inherit the stream trace context so this latency-critical renewal
+	// correlates with the worker's trace (mirrors the ingest_result span
+	// in handler_result.go).
+	ctx := context.Background()
+	if sess != nil && sess.ctx != nil {
+		ctx = sess.ctx
+	}
+	ctx, span := telemetry.StartSpan(ctx, "task_lease_renewal",
+		attribute.String("velox.task_id", taskID),
+		attribute.String("velox.worker_id", workerID),
+		attribute.String("velox.lease_id", leaseID),
+	)
+	defer span.End()
 
 	t, err := h.taskRepo.Get(ctx, taskID)
 	if err != nil || t == nil {
