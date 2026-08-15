@@ -27,8 +27,8 @@ func TestDerive_AccountedRatioSumsOnlyExclusiveTopLevelPhases(t *testing.T) {
 			{Name: "engine.composite", DurationMS: 200, TimingMode: sharedtelemetry.TimingSpanChild},
 			// A span parent overlaps its children — also never summed.
 			{Name: "engine.render.tree", DurationMS: 100, TimingMode: sharedtelemetry.TimingSpanParent},
-			// Unclassified (no catalog key): quarantined, never exclusive.
-			{Name: "engine.concat", DurationMS: 30},
+			// Unclassified (no TimingMode): quarantined, never exclusive.
+			{Name: "engine.invented_op", DurationMS: 30},
 		},
 	})
 	require.Equal(t, int64(600), d.UnaccountedMS)
@@ -92,7 +92,7 @@ func TestDerive_MatchesReceiptAssembly(t *testing.T) {
 	run.RenderMetrics.DetailedPhases = []pipeline.DetailedPhaseTiming{
 		{Component: "engine", Action: "render", DurationMS: 400},                  // exclusive → summed
 		{Component: "engine", Action: "composite", DurationMS: 200},               // span_child → never summed
-		{Component: "engine", Action: "concat", DurationMS: 30, Scope: "attempt"}, // unclassified → quarantined
+		{Component: "engine", Action: "invented_op", DurationMS: 30}, // unclassified → quarantined
 	}
 	ctx := AssemblyContext{
 		WallMs:           1000,
