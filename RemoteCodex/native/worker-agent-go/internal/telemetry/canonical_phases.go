@@ -32,21 +32,28 @@ import (
 // Canonical 12 phase names. Lower-case, snake_case, with stable
 // ordering. SCORECARD-CANONICAL-PHASES-V1 — do NOT rename without
 // updating Scorecard dashboards, audit rollups, and the master-side
-// 5→12 mapper. String constants rather than typed enum so wire shape
-// stays a plain string (already true on PhaseMarker.Name).
+// 5→12 mapper.
+//
+// Single-source rule: the phase labels are declared in
+// shared/telemetry/schema/catalog.json (schema.phases/phase_order); the
+// worker aliases the shared constants rather than re-declaring the
+// vocabulary. shared/telemetry pins those constants to the catalog at init
+// (validateCanonicalPhaseConstants), so a catalog rename fails startup here
+// instead of drifting silently. String constants rather than typed enum so
+// wire shape stays a plain string (already true on PhaseMarker.Name).
 const (
-	PhaseQueue       = "queue"
-	PhaseAssetWait   = "asset_wait"
-	PhaseCacheLookup = "cache_lookup"
-	PhaseDownload    = "download"
-	PhaseDecode      = "decode"
-	PhaseCompile     = "compile"
-	PhaseSimulate    = "simulate"
-	PhaseRender      = "render"
-	PhaseComposite   = "composite"
-	PhaseEncode      = "encode"
-	PhaseUpload      = "upload"
-	PhaseFinalize    = "finalize"
+	PhaseQueue       = sharedtelemetry.PhaseQueue
+	PhaseAssetWait   = sharedtelemetry.PhaseAssetWait
+	PhaseCacheLookup = sharedtelemetry.PhaseCacheLookup
+	PhaseDownload    = sharedtelemetry.PhaseDownload
+	PhaseDecode      = sharedtelemetry.PhaseDecode
+	PhaseCompile     = sharedtelemetry.PhaseCompile
+	PhaseSimulate    = sharedtelemetry.PhaseSimulate
+	PhaseRender      = sharedtelemetry.PhaseRender
+	PhaseComposite   = sharedtelemetry.PhaseComposite
+	PhaseEncode      = sharedtelemetry.PhaseEncode
+	PhaseUpload      = sharedtelemetry.PhaseUpload
+	PhaseFinalize    = sharedtelemetry.PhaseFinalize
 )
 
 // CanonicalPhaseOrder is the stable ordering for the 12 canonical

@@ -4,29 +4,27 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	sharedtelemetry "velox-shared/telemetry"
 )
 
 // Canonical Attempt lifecycle events. They are emitted through the existing
 // EventRecorder and therefore use the same ordered TaskResult/heartbeat path.
+//
+// Single-source rule: the event-name literals live in shared/telemetry
+// (attempt_events.go) so the worker and the master never fork the lifecycle
+// vocabulary; the worker only aliases them.
 const (
-	AttemptEventStarted               = "ATTEMPT_STARTED"
-	AttemptEventPhaseChanged          = "PHASE_CHANGED"
-	AttemptEventSegmentStarted        = "SEGMENT_STARTED"
-	AttemptEventSegmentCompleted      = "SEGMENT_COMPLETED"
-	AttemptEventProgressUpdated       = "PROGRESS_UPDATED"
-	AttemptEventArtifactVerifyStarted = "ARTIFACT_VERIFY_STARTED"
-	AttemptEventArtifactVerified      = "ARTIFACT_VERIFIED"
-	AttemptEventDeliveryStarted       = "DELIVERY_STARTED"
-	AttemptEventCompleted             = "ATTEMPT_COMPLETED"
+	AttemptEventStarted               = sharedtelemetry.AttemptEventStarted
+	AttemptEventPhaseChanged          = sharedtelemetry.AttemptEventPhaseChanged
+	AttemptEventSegmentStarted        = sharedtelemetry.AttemptEventSegmentStarted
+	AttemptEventSegmentCompleted      = sharedtelemetry.AttemptEventSegmentCompleted
+	AttemptEventProgressUpdated       = sharedtelemetry.AttemptEventProgressUpdated
+	AttemptEventArtifactVerifyStarted = sharedtelemetry.AttemptEventArtifactVerifyStarted
+	AttemptEventArtifactVerified      = sharedtelemetry.AttemptEventArtifactVerified
+	AttemptEventDeliveryStarted       = sharedtelemetry.AttemptEventDeliveryStarted
+	AttemptEventCompleted             = sharedtelemetry.AttemptEventCompleted
 )
-
-var canonicalAttemptEventNames = map[string]struct{}{
-	AttemptEventStarted: {}, AttemptEventPhaseChanged: {},
-	AttemptEventSegmentStarted: {}, AttemptEventSegmentCompleted: {},
-	AttemptEventProgressUpdated: {}, AttemptEventArtifactVerifyStarted: {},
-	AttemptEventArtifactVerified: {}, AttemptEventDeliveryStarted: {},
-	AttemptEventCompleted: {},
-}
 
 // CanonicalAttemptEvent is the stable live heartbeat representation. The
 // detailed counters remain in the existing progress projection; this compact
@@ -42,8 +40,7 @@ type CanonicalAttemptEvent struct {
 }
 
 func IsCanonicalAttemptEvent(name string) bool {
-	_, ok := canonicalAttemptEventNames[name]
-	return ok
+	return sharedtelemetry.IsCanonicalAttemptEvent(name)
 }
 
 // CanonicalAttemptEvents projects only lifecycle events from a recorder
