@@ -421,14 +421,7 @@ func deterministicEventID(attemptID string, timing taskattempts.PhaseTimingDetai
 }
 
 func isCanonicalAttemptEventName(name string) bool {
-	switch name {
-	case "ATTEMPT_STARTED", "PHASE_CHANGED", "SEGMENT_STARTED", "SEGMENT_COMPLETED",
-		"PROGRESS_UPDATED", "ARTIFACT_VERIFY_STARTED", "ARTIFACT_VERIFIED",
-		"DELIVERY_STARTED", "ATTEMPT_COMPLETED":
-		return true
-	default:
-		return false
-	}
+	return sharedtelemetry.IsCanonicalAttemptEvent(name)
 }
 
 func phaseName(timing taskattempts.PhaseTimingDetailed) string {
