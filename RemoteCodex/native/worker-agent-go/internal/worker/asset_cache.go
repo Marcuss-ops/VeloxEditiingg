@@ -275,7 +275,6 @@ func writeVeloxAssetToCacheAtOffset(cacheDir, assetID string, expectedSHA256 str
 		ext = ".audio"
 	}
 
-	prefix := cacheKeyPrefix(assetID, expectedSHA256)
 	partPath := assetPartialPath(cacheDir, assetID, expectedSHA256)
 	deactivatePartial := markAssetPartialActive(partPath)
 	defer deactivatePartial()
@@ -337,6 +336,17 @@ func writeVeloxAssetToCacheAtOffset(cacheDir, assetID string, expectedSHA256 str
 	if resp.ContentLength > 0 && writtenNow != resp.ContentLength {
 		return "", 0, "", 0, fmt.Errorf("%w: response body truncated (got %d, want %d)", ErrAssetIncomplete, writtenNow, resp.ContentLength)
 	}
+	return verifyAndPromoteVeloxAsset(cacheDir, assetID, expectedSHA256, effectiveExpectedSize, partPath, ext, syncDir)
+}
+
+// verifyAndPromoteVeloxAsset is the shared finalize step for both the
+// single-stream and chunked byte pipelines: it verifies the fully-written
+// partial against the integrity contract (size + SHA-256) and atomically
+// promotes it to the final cache path. A size mismatch returns
+// ErrAssetIncomplete and PRESERVES the partial (a short write is retryable);
+// a hash mismatch deletes it (resuming corrupt bytes can never produce a
+// valid asset).
+func verifyAndPromoteVeloxAsset(cacheDir, assetID, expectedSHA256 string, effectiveExpectedSize int64, partPath, ext string, syncDir func(string) error) (string, int64, string, time.Duration, error) {
 	info, err := os.Stat(partPath)
 	if err != nil {
 		return "", 0, "", 0, err
@@ -346,13 +356,10 @@ func writeVeloxAssetToCacheAtOffset(cacheDir, assetID string, expectedSHA256 str
 		return "", 0, "", 0, fmt.Errorf("%w: downloaded asset is empty", ErrAssetVerification)
 	}
 
-	// Verify all supplied integrity metadata against the complete partial
-	// before promoting it. Verification errors delete the partial because
-	// resuming a corrupt byte sequence cannot produce a valid asset.
 	verifyStarted := time.Now()
 	if effectiveExpectedSize > 0 && written != effectiveExpectedSize {
 		// A short partial is a retryable interrupted transfer. Preserve it
-		// so the next HTTP attempt can request the missing suffix.
+		// so a later attempt can request the missing suffix.
 		return "", written, "", time.Since(verifyStarted), fmt.Errorf("%w: downloaded asset size mismatch (got %d, want %d)", ErrAssetIncomplete, written, effectiveExpectedSize)
 	}
 	actualSHA256, err := sha256File(partPath)
@@ -370,6 +377,7 @@ func writeVeloxAssetToCacheAtOffset(cacheDir, assetID string, expectedSHA256 str
 	// the entry through the content-addressed key (primo → MISS, successivi
 	// → HIT). Files already on disk under the bare asset-ID name from older
 	// worker builds are simply re-downloaded once into the suffixed form.
+	prefix := cacheKeyPrefix(assetID, expectedSHA256)
 	if expectedSHA256 == "" && actualSHA256 != "" {
 		prefix = cacheKeyPrefix(assetID, actualSHA256)
 	}
@@ -452,4 +460,26 @@ func extensionForMediaType(mediaType string) string {
 	default:
 		return ""
 	}
+}
+
+// sniffAssetExtension detects a completed asset's MIME type from its first
+// bytes and maps it to the cache filename extension, falling back to ".audio"
+// (mirrors the single-stream fallback in writeVeloxAssetToCacheAtOffset). The
+// chunked pipeline uses it because no single response Content-Type header is
+// authoritative across parallel range requests.
+func sniffAssetExtension(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ".audio"
+	}
+	defer f.Close()
+	head := make([]byte, 512)
+	n, _ := io.ReadFull(f, head)
+	// io.ReadFull returns ErrUnexpectedEOF when the file is smaller than 512;
+	// n still carries the bytes read, which is all sniffing needs.
+	ext := extensionForMediaType(http.DetectContentType(head[:n]))
+	if ext == "" {
+		return ".audio"
+	}
+	return ext
 }

@@ -70,6 +70,22 @@ type WorkerConfig struct {
 	// VELOX_ASSET_DOWNLOAD_CONCURRENCY; default 4.
 	AssetDownloadConcurrency int `json:"asset_download_concurrency,omitempty"`
 
+	// AssetChunkedDownloadEnabled opts a worker into per-asset parallel
+	// chunked download: an asset at/above AssetChunkedDownloadThresholdBytes
+	// is split into AssetChunkedDownloadConcurrency Range: bytes=start-end
+	// requests to saturate the network pipe instead of a single TCP stream.
+	// Off by default; the single-stream resumable path remains the fallback
+	// when the upstream does not honor Range requests.
+	AssetChunkedDownloadEnabled bool `json:"asset_chunked_download_enabled,omitempty"`
+	// AssetChunkedDownloadThresholdBytes is the minimum asset size that
+	// triggers chunked download. Binds from
+	// VELOX_ASSET_CHUNKED_DOWNLOAD_THRESHOLD_BYTES; default 64 MiB.
+	AssetChunkedDownloadThresholdBytes int64 `json:"asset_chunked_download_threshold_bytes,omitempty"`
+	// AssetChunkedDownloadConcurrency is the number of parallel chunk
+	// connections per chunked asset. Binds from
+	// VELOX_ASSET_CHUNKED_DOWNLOAD_CONCURRENCY; default 4.
+	AssetChunkedDownloadConcurrency int `json:"asset_chunked_download_concurrency,omitempty"`
+
 	// Future-asset prefetch policy. These values are centrally loaded here and
 	// passed to the worker scheduler; consumers must not read env directly.
 	PrefetchHorizonJobs                int   `json:"prefetch_horizon_jobs,omitempty"`

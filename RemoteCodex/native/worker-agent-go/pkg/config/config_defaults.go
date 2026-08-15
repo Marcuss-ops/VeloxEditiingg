@@ -22,6 +22,8 @@ const DefaultTmpfsThresholdBytes int64 = 64 * 1024 * 1024
 
 const (
 	DefaultAssetDownloadConcurrency            = 4
+	DefaultAssetChunkedDownloadThresholdBytes int64 = 64 * 1024 * 1024
+	DefaultAssetChunkedDownloadConcurrency         = 4
 	DefaultPrefetchByteBudget            int64 = 20 * 1024 * 1024 * 1024
 	DefaultPrefetchRAMBudgetBytes        int64 = 512 * 1024 * 1024
 	DefaultPrefetchRAMMaxAssetBytes      int64 = 128 * 1024 * 1024
@@ -117,6 +119,16 @@ func (c *WorkerConfig) applyDefaults() {
 	}
 	if c.AssetDownloadConcurrency <= 0 {
 		c.AssetDownloadConcurrency = DefaultAssetDownloadConcurrency
+	}
+	// Chunked-download tuning is safe-by-default even when the feature is off:
+	// the threshold and concurrency always hold sane values so toggling
+	// VELOX_ASSET_CHUNKED_DOWNLOAD on later cannot pair with a zero/negative
+	// threshold or a zero pool.
+	if c.AssetChunkedDownloadThresholdBytes <= 0 {
+		c.AssetChunkedDownloadThresholdBytes = DefaultAssetChunkedDownloadThresholdBytes
+	}
+	if c.AssetChunkedDownloadConcurrency <= 0 {
+		c.AssetChunkedDownloadConcurrency = DefaultAssetChunkedDownloadConcurrency
 	}
 	if c.PrefetchHorizonJobs <= 0 {
 		c.PrefetchHorizonJobs = 3

@@ -69,6 +69,9 @@ const (
 	// EnvAssetDownloadConcurrency caps the number of simultaneous asset byte
 	// transfers the canonical download manager runs per worker. Default 4.
 	EnvAssetDownloadConcurrency           = "VELOX_ASSET_DOWNLOAD_CONCURRENCY"
+	EnvAssetChunkedDownloadEnabled        = "VELOX_ASSET_CHUNKED_DOWNLOAD"
+	EnvAssetChunkedDownloadThresholdBytes = "VELOX_ASSET_CHUNKED_DOWNLOAD_THRESHOLD_BYTES"
+	EnvAssetChunkedDownloadConcurrency    = "VELOX_ASSET_CHUNKED_DOWNLOAD_CONCURRENCY"
 	EnvPrefetchHorizonJobs                = "VELOX_PREFETCH_HORIZON_JOBS"
 	EnvPrefetchProtectionLookaheadJobs    = "VELOX_PREFETCH_PROTECTION_LOOKAHEAD_JOBS"
 	EnvPrefetchMaxConcurrent              = "VELOX_PREFETCH_MAX_CONCURRENT"
@@ -111,6 +114,7 @@ var EnvBindings = []string{
 	EnvTelemetryJSONDir,
 	EnvPrometheusPort,
 	EnvAssetDownloadConcurrency,
+	EnvAssetChunkedDownloadEnabled, EnvAssetChunkedDownloadThresholdBytes, EnvAssetChunkedDownloadConcurrency,
 	EnvPrefetchHorizonJobs, EnvPrefetchProtectionLookaheadJobs,
 	EnvPrefetchMaxConcurrent, EnvPrefetchByteBudget,
 	EnvPrefetchMaxBandwidthBytesPerSecond, EnvPrefetchDiskRestrictedPercent,
@@ -256,6 +260,11 @@ func applyEnvOverrides(cfg *WorkerConfig) error {
 			}
 		}
 	}
+	if v := strings.TrimSpace(os.Getenv(EnvAssetChunkedDownloadEnabled)); v != "" {
+		cfg.AssetChunkedDownloadEnabled = envTruthy(v)
+	}
+	bindPositiveInt64(EnvAssetChunkedDownloadThresholdBytes, &cfg.AssetChunkedDownloadThresholdBytes)
+	bindPositiveInt(EnvAssetChunkedDownloadConcurrency, &cfg.AssetChunkedDownloadConcurrency)
 	bindPositiveInt(EnvPrefetchHorizonJobs, &cfg.PrefetchHorizonJobs)
 	bindPositiveInt(EnvPrefetchProtectionLookaheadJobs, &cfg.PrefetchProtectionLookaheadJobs)
 	bindPositiveInt(EnvPrefetchMaxConcurrent, &cfg.PrefetchMaxConcurrent)

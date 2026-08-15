@@ -38,6 +38,46 @@ func TestValidatePrefetchReservesForegroundDownloadSlot(t *testing.T) {
 	}
 }
 
+func TestValidateChunkedDownloadFailClosed(t *testing.T) {
+	t.Run("enabled with valid threshold and concurrency", func(t *testing.T) {
+		cfg := devValidBase()
+		cfg.AssetChunkedDownloadEnabled = true
+		cfg.AssetChunkedDownloadThresholdBytes = 64 * 1024 * 1024
+		cfg.AssetChunkedDownloadConcurrency = 4
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("expected enabled chunked download to pass, got: %v", err)
+		}
+	})
+
+	t.Run("enabled with zero threshold rejected", func(t *testing.T) {
+		cfg := devValidBase()
+		cfg.AssetChunkedDownloadEnabled = true
+		cfg.AssetChunkedDownloadConcurrency = 4
+		err := cfg.Validate()
+		if err == nil || !strings.Contains(err.Error(), "asset_chunked_download_threshold_bytes") {
+			t.Fatalf("Validate() error = %v, want asset_chunked_download_threshold_bytes rejection", err)
+		}
+	})
+
+	t.Run("enabled with zero concurrency rejected", func(t *testing.T) {
+		cfg := devValidBase()
+		cfg.AssetChunkedDownloadEnabled = true
+		cfg.AssetChunkedDownloadThresholdBytes = 64 * 1024 * 1024
+		err := cfg.Validate()
+		if err == nil || !strings.Contains(err.Error(), "asset_chunked_download_concurrency") {
+			t.Fatalf("Validate() error = %v, want asset_chunked_download_concurrency rejection", err)
+		}
+	})
+
+	t.Run("disabled with zero values passes", func(t *testing.T) {
+		cfg := devValidBase()
+		// Feature off: zero threshold/concurrency must not fail validation.
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("expected disabled chunked download to pass, got: %v", err)
+		}
+	})
+}
+
 func TestValidateNil(t *testing.T) {
 	var cfg *WorkerConfig
 

@@ -141,6 +141,18 @@ func (c *WorkerConfig) Validate() error {
 			prefetchSlots, assetDownloadSlots))
 	}
 
+	// Chunked download is opt-in, but when enabled it must be fail-closed: a
+	// zero/negative threshold or a zero chunk pool would otherwise silently
+	// disable the parallelism the operator asked for.
+	if c.AssetChunkedDownloadEnabled {
+		if c.AssetChunkedDownloadThresholdBytes <= 0 {
+			errs = append(errs, "asset_chunked_download_threshold_bytes must be positive when asset_chunked_download_enabled is true")
+		}
+		if c.AssetChunkedDownloadConcurrency < 1 {
+			errs = append(errs, "asset_chunked_download_concurrency must be >= 1 when asset_chunked_download_enabled is true")
+		}
+	}
+
 	hasCert := tlsCfg.CertFile != ""
 	hasKey := tlsCfg.KeyFile != ""
 	hasCA := tlsCfg.CAFile != ""
