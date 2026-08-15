@@ -329,7 +329,7 @@ void PhaseRecorder::Complete(int64_t token, int64_t bytes_in, int64_t bytes_out,
                          end_mono - it->second.start_mono)
                          .count();
     if (ev.event_type.empty()) {
-        ev.event_type = (status == kStatusFailed) ? "failed" : "completed";
+        ev.event_type = (status == kStatusFailed) ? kEventTypeFailed : kEventTypeCompleted;
     }
     it->second.active = false;
     events_.push_back(std::move(ev));
@@ -360,7 +360,7 @@ void PhaseRecorder::Emit(std::string origin, std::string scope, std::string comp
     ev.action = std::move(action);
     ev.phase = std::move(phase);
     ev.event_type = event_type.empty()
-                        ? ((status == kStatusFailed) ? "failed" : "completed")
+                        ? ((status == kStatusFailed) ? kEventTypeFailed : kEventTypeCompleted)
                         : event_type;
     ev.event_index = indexes_[ev.origin]++;
     ev.started_at = UtcNowIso8601();

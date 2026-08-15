@@ -16,6 +16,16 @@
       "cardinality",
       "owner"
     ],
+    "statuses": [
+      "ok",
+      "failed"
+    ],
+    "event_types": [
+      "completed",
+      "failed",
+      "started",
+      "progress"
+    ],
     "units": [
       "count",
       "milliseconds",

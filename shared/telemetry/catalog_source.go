@@ -31,10 +31,17 @@ type languageNeutralCatalog struct {
 type languageNeutralSchema struct {
 	EventKey            string   `json:"event_key"`
 	RequiredEventFields []string `json:"required_event_fields"`
-	Origins             []string `json:"origins"`
-	Scopes              []string `json:"scopes"`
-	Phases              []string `json:"phases"`
-	PhaseOrder          []string `json:"phase_order"`
+	// Statuses is the closed completion-outcome vocabulary (ok | failed)
+	// shared by the Go worker recorder and the C++ engine emitter.
+	Statuses []string `json:"statuses"`
+	// EventTypes is the closed lifecycle-shape vocabulary (started |
+	// completed | failed | progress) shared by the Go worker recorder and
+	// the C++ engine emitter.
+	EventTypes []string `json:"event_types"`
+	Origins    []string `json:"origins"`
+	Scopes     []string `json:"scopes"`
+	Phases     []string `json:"phases"`
+	PhaseOrder []string `json:"phase_order"`
 	// PhaseTaxonomy models the 12 canonical lifecycle phases as a tree:
 	// each phase declares its accounted role (exclusive | span_parent |
 	// span_child) and, when nested, its parent phase. Only phases with
@@ -145,6 +152,9 @@ func validateLanguageNeutralCatalog(doc languageNeutralCatalog) error {
 			!containsString(doc.Schema.Owners, event.Owner) {
 			return fmt.Errorf("telemetry catalog event %q uses a value absent from the declared schema vocabulary", event.Key)
 		}
+		if event.EventType != "" && !containsString(doc.Schema.EventTypes, event.EventType) {
+			return fmt.Errorf("telemetry catalog event %q uses non-canonical event_type %q", event.Key, event.EventType)
+		}
 		descriptor := EventDescriptor{
 			Component:   event.Component,
 			Action:      event.Action,
@@ -186,6 +196,8 @@ func validateSchemaVocabularies(schema languageNeutralSchema) error {
 		got  []string
 		want []string
 	}{
+		{name: "statuses", got: schema.Statuses, want: []string{StatusOK, StatusFailed}},
+		{name: "event_types", got: schema.EventTypes, want: []string{EventTypeCompleted, EventTypeFailed, EventTypeStarted, EventTypeProgress}},
 		{name: "origins", got: schema.Origins, want: []string{string(OriginEngine), string(OriginFFmpeg), string(OriginMaster), string(OriginUpload), string(OriginValidation), string(OriginWorker)}},
 		{name: "scopes", got: schema.Scopes, want: []string{string(ScopeArtifact), string(ScopeAttempt), string(ScopeAudioTrack), string(ScopeJob), string(ScopeSegment), string(ScopeSubtitleTrack), string(ScopeTask)}},
 		{name: "units", got: schema.Units, want: []string{string(UnitCount), string(UnitMilliseconds), string(UnitBytes), string(UnitRatio), string(UnitItems), string(UnitFrames)}},

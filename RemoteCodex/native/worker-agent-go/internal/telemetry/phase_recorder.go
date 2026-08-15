@@ -12,8 +12,11 @@ import (
 )
 
 const (
-	StatusOK     = "ok"
-	StatusFailed = "failed"
+	// StatusOK / StatusFailed are aliases to the shared canonical status
+	// vocabulary (velox-shared/telemetry) — this package owns no second
+	// literal list.
+	StatusOK     = sharedtelemetry.StatusOK
+	StatusFailed = sharedtelemetry.StatusFailed
 
 	// MaxAttemptEvents bounds the in-memory attempt journal. Once full,
 	// new observations are dropped and counted on the final snapshot. This
@@ -360,9 +363,9 @@ func eventTypeFor(explicit, status string) string {
 		return explicit
 	}
 	if status == StatusFailed {
-		return StatusFailed
+		return sharedtelemetry.EventTypeFailed
 	}
-	return "completed"
+	return sharedtelemetry.EventTypeCompleted
 }
 
 func normalizeEventSpec(spec *EventSpec) bool {

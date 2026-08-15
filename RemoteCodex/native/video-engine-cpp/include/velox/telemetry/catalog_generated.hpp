@@ -22,6 +22,12 @@ inline constexpr std::string_view kScopeSegment = "segment";
 inline constexpr std::string_view kScopeAudioTrack = "audio_track";
 inline constexpr std::string_view kScopeSubtitleTrack = "subtitle_track";
 inline constexpr std::string_view kScopeArtifact = "artifact";
+inline constexpr std::string_view kStatusOk = "ok";
+inline constexpr std::string_view kStatusFailed = "failed";
+inline constexpr std::string_view kEventTypeCompleted = "completed";
+inline constexpr std::string_view kEventTypeFailed = "failed";
+inline constexpr std::string_view kEventTypeStarted = "started";
+inline constexpr std::string_view kEventTypeProgress = "progress";
 struct EventDescriptor {
     std::string_view key;
     std::string_view component;
@@ -259,6 +265,15 @@ constexpr bool IsCanonicalScope(std::string_view value) {
     return value == kScopeJob || value == kScopeTask || value == kScopeAttempt ||
            value == kScopeSegment || value == kScopeAudioTrack ||
            value == kScopeSubtitleTrack || value == kScopeArtifact;
+}
+
+constexpr bool IsCanonicalStatus(std::string_view value) {
+    return value == kStatusOk || value == kStatusFailed;
+}
+
+constexpr bool IsCanonicalEventType(std::string_view value) {
+    return value == kEventTypeCompleted || value == kEventTypeFailed ||
+           value == kEventTypeStarted || value == kEventTypeProgress;
 }
 
 constexpr const EventDescriptor* FindEvent(std::string_view component, std::string_view action) {

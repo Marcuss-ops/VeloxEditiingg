@@ -51,9 +51,15 @@ inline constexpr const char* kScopeAudioTrack = catalog::kScopeAudioTrack.data()
 inline constexpr const char* kScopeSubtitleTrack = catalog::kScopeSubtitleTrack.data();
 inline constexpr const char* kScopeArtifact = catalog::kScopeArtifact.data();
 
-// ── Status vocabulary (shared with task_phase_timings) ─────────────────────
-inline constexpr const char* kStatusOk = "ok";
-inline constexpr const char* kStatusFailed = "failed";
+// ── Status / event_type vocabularies (shared with the Go recorder) ─────────
+// Both are aliases to the generated language-neutral catalog; this header
+// owns no second literal list.
+inline constexpr const char* kStatusOk = catalog::kStatusOk.data();
+inline constexpr const char* kStatusFailed = catalog::kStatusFailed.data();
+inline constexpr const char* kEventTypeCompleted = catalog::kEventTypeCompleted.data();
+inline constexpr const char* kEventTypeFailed = catalog::kEventTypeFailed.data();
+inline constexpr const char* kEventTypeStarted = catalog::kEventTypeStarted.data();
+inline constexpr const char* kEventTypeProgress = catalog::kEventTypeProgress.data();
 
 // IsCanonicalOrigin / IsCanonicalScope report membership in the closed
 // enums above. Empty strings are NOT canonical.
@@ -78,13 +84,13 @@ struct PhaseEvent {
     std::string component;
     std::string action;
     std::string phase;
-    std::string event_type;   // "started" | "completed" | "failed" | "progress" | ...
+    std::string event_type;   // canonical event_type vocabulary (kEventType*)
     std::string event_name;   // free-form short label (e.g. "encode_segment_4")
     int64_t event_index{0};   // per-(origin) sequence number from 0
     std::string started_at;   // ISO-8601 UTC
     std::string completed_at; // ISO-8601 UTC
     int64_t duration_ms{0};
-    std::string status;       // "ok" | "failed"
+    std::string status;       // canonical status vocabulary (kStatusOk | kStatusFailed)
     std::string error_code;
     std::string error_message;
     int64_t bytes_in{0};
