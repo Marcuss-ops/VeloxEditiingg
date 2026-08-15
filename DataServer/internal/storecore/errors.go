@@ -8,7 +8,6 @@ package storecore
 // existing call sites.
 
 import (
-	"database/sql"
 	"errors"
 	"fmt"
 
@@ -53,10 +52,22 @@ var (
 	ErrPublicationPhaseConflict = errors.New("store: publication phase effect conflict")
 )
 
+// RowsAffectedReader is the narrow persistence-boundary contract this leaf
+// needs to read an affected-row count. It is satisfied by database/sql.Result
+// but deliberately declared here so storecore does not import database/sql:
+// the error infrastructure stays a driver-agnostic leaf and a future store
+// backend swap never reaches this package.
+type RowsAffectedReader interface {
+	RowsAffected() (int64, error)
+}
+
 // ReadRowsAffected is the store boundary for driver-specific RowsAffected
 // failures. A transition must never treat an unreadable row count as zero or
 // as a successful CAS decision.
-func ReadRowsAffected(result sql.Result, operation string) (int64, error) {
+func ReadRowsAffected(result RowsAffectedReader, operation string) (int64, error) {
+	if result == nil {
+		return 0, WrapDBInfrastructure(operation+" rows affected", errors.New("nil result"))
+	}
 	affected, err := result.RowsAffected()
 	if err != nil {
 		return 0, WrapDBInfrastructure(operation+" rows affected", err)
