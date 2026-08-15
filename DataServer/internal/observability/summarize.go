@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"velox-server/internal/taskattempts"
 )
 
 // SummarizeTask returns the aggregated execution diagnostics for a task.
@@ -84,49 +86,8 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 		// Phase timings
 		timings, err := s.attempts.GetPhaseTimings(ctx, a.ID)
 		if err == nil {
-			var totalDur int64
-			var attemptFirstStart *time.Time
-			var attemptLastEnd *time.Time
-			for _, pt := range timings {
-				as.PhaseBreakdown[pt.Phase] += pt.DurationMS
-				summary.PhaseTotals[pt.Phase] += pt.DurationMS
-				summary.PhaseTimings = append(summary.PhaseTimings, PhaseSnapshot{
-					AttemptID: pt.AttemptID, Phase: pt.Phase, DurationMS: pt.DurationMS,
-					WallStart: pt.WallStart, WallEnd: pt.WallEnd,
-				})
-				totalDur += pt.DurationMS
-				if !pt.WallStart.IsZero() && (attemptFirstStart == nil || pt.WallStart.Before(*attemptFirstStart)) {
-					start := pt.WallStart
-					attemptFirstStart = &start
-				}
-				if !pt.WallEnd.IsZero() && (attemptLastEnd == nil || pt.WallEnd.After(*attemptLastEnd)) {
-					end := pt.WallEnd
-					attemptLastEnd = &end
-				}
-			}
-			// Phase timings can overlap (for example render contains
-			// compile/encode/audio). Report wall duration for the attempt;
-			// retain the sum only for legacy rows without wall bounds.
-			if attemptFirstStart != nil && attemptLastEnd != nil {
-				as.DurationMS = attemptLastEnd.Sub(*attemptFirstStart).Milliseconds()
-			} else {
-				as.DurationMS = totalDur
-			}
-
-			for _, timing := range timings {
-				// Summary rows (for example quality/ffprobe) may carry no
-				// wall-clock bounds. Never let a zero timestamp replace a
-				// valid execution bound: time.Time.Sub would otherwise
-				// saturate and expose MaxInt64-like wall times.
-				if !timing.WallStart.IsZero() && (firstStart == nil || timing.WallStart.Before(*firstStart)) {
-					start := timing.WallStart
-					firstStart = &start
-				}
-				if !timing.WallEnd.IsZero() && (lastEnd == nil || timing.WallEnd.After(*lastEnd)) {
-					end := timing.WallEnd
-					lastEnd = &end
-				}
-			}
+			as.DurationMS = rollupPhaseTimings(timings, &as, summary)
+			firstStart, lastEnd = mergeWallBounds(timings, firstStart, lastEnd)
 		}
 
 		// Metrics
@@ -245,6 +206,64 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 	}
 
 	return summary, nil
+}
+
+// rollupPhaseTimings folds one attempt's phase timings into its phase
+// breakdown and the shared ExecutionSummary (phase totals and the ordered
+// PhaseTimings list), and returns the attempt wall duration: the span from
+// the earliest WallStart to the latest WallEnd, or the summed durations when
+// the rows carry no wall bounds (legacy rows / summary-only phases such as
+// quality/ffprobe).
+func rollupPhaseTimings(timings []taskattempts.PhaseTiming, as *AttemptSummary, summary *ExecutionSummary) int64 {
+	var totalDur int64
+	var firstStart, lastEnd *time.Time
+	for _, pt := range timings {
+		as.PhaseBreakdown[pt.Phase] += pt.DurationMS
+		summary.PhaseTotals[pt.Phase] += pt.DurationMS
+		summary.PhaseTimings = append(summary.PhaseTimings, PhaseSnapshot{
+			AttemptID: pt.AttemptID, Phase: pt.Phase, DurationMS: pt.DurationMS,
+			WallStart: pt.WallStart, WallEnd: pt.WallEnd,
+		})
+		totalDur += pt.DurationMS
+		firstStart = earlierTime(firstStart, pt.WallStart)
+		lastEnd = laterTime(lastEnd, pt.WallEnd)
+	}
+	if firstStart != nil && lastEnd != nil {
+		return lastEnd.Sub(*firstStart).Milliseconds()
+	}
+	return totalDur
+}
+
+// mergeWallBounds extends the task-level wall-clock bounds with this attempt's
+// phase timing rows. A zero timestamp never replaces a valid bound:
+// time.Time.Sub on a zero value would otherwise saturate and expose
+// MaxInt64-like wall times.
+func mergeWallBounds(timings []taskattempts.PhaseTiming, firstStart, lastEnd *time.Time) (*time.Time, *time.Time) {
+	for _, timing := range timings {
+		firstStart = earlierTime(firstStart, timing.WallStart)
+		lastEnd = laterTime(lastEnd, timing.WallEnd)
+	}
+	return firstStart, lastEnd
+}
+
+func earlierTime(cur *time.Time, candidate time.Time) *time.Time {
+	if candidate.IsZero() {
+		return cur
+	}
+	if cur == nil || candidate.Before(*cur) {
+		return &candidate
+	}
+	return cur
+}
+
+func laterTime(cur *time.Time, candidate time.Time) *time.Time {
+	if candidate.IsZero() {
+		return cur
+	}
+	if cur == nil || candidate.After(*cur) {
+		return &candidate
+	}
+	return cur
 }
 
 // SummarizeJob returns the aggregated diagnostics for the task owning a job.

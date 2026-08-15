@@ -40,50 +40,10 @@ func computeParallelism(segments []taskattempts.SegmentTiming, metrics taskattem
 		return p
 	}
 
-	// Collect only completed segments with valid offsets.
-	type seg struct {
-		startMS float64
-		endMS   float64
-		durMS   float64
-		slot    int
-	}
-	var valid []seg
-	for _, s := range segments {
-		if s.Status != "ok" && s.Status != "" {
-			continue
-		}
-		dur := s.DurationMS
-		start := s.StartedOffsetMS
-		end := s.FinishedOffsetMS
-
-		// If offsets are zero but duration is present, fall back to
-		// serial placement (end = accumulated serial work).
-		if dur <= 0 {
-			continue
-		}
-		if start == 0 && end == 0 {
-			end = dur
-		}
-		if end <= start {
-			end = start + dur
-		}
-
-		valid = append(valid, seg{
-			startMS: start,
-			endMS:   end,
-			durMS:   dur,
-			slot:    s.WorkerSlot,
-		})
-	}
-
+	valid := collectValidSegments(segments)
 	if len(valid) == 0 {
 		return p
 	}
-
-	// Sort by start offset.
-	sort.Slice(valid, func(i, j int) bool {
-		return valid[i].startMS < valid[j].startMS
-	})
 
 	// serial_work_ms = sum of all segment durations.
 	var serial float64
@@ -105,61 +65,20 @@ func computeParallelism(segments []taskattempts.SegmentTiming, metrics taskattem
 		p.RenderWindowMS = serial
 	}
 
-	// union_busy_ms via sweep line: compute total wall-clock time
-	// during which at least one segment was active.
-	type event struct {
-		time float64
-		down bool // true = segment ending, false = segment starting
-	}
-	events := make([]event, 0, len(valid)*2)
-	for _, s := range valid {
-		events = append(events, event{time: s.startMS, down: false})
-		events = append(events, event{time: s.endMS, down: true})
-	}
-	sort.Slice(events, func(i, j int) bool {
-		if events[i].time == events[j].time {
-			return events[i].down && !events[j].down // end before start at same time
-		}
-		return events[i].time < events[j].time
-	})
-	active := 0
-	var unionBusy float64
-	var overlap float64
-	var lastTime float64
-	peakConcurrency := 0
-	for _, e := range events {
-		if active > 0 && e.time > lastTime {
-			unionBusy += e.time - lastTime
-			// Overlap = time where >1 segment active.
-			if active > 1 {
-				overlap += e.time - lastTime
-			}
-		}
-		if e.down {
-			active--
-		} else {
-			active++
-		}
-		if active > peakConcurrency {
-			peakConcurrency = active
-		}
-		lastTime = e.time
-	}
-	p.UnionBusyMS = unionBusy
-	p.OverlapMS = overlap
-	p.PeakConcurrency = peakConcurrency
+	// union_busy_ms / overlap_ms / peak_concurrency via sweep line.
+	p.UnionBusyMS, p.OverlapMS, p.PeakConcurrency = sweepSegments(valid)
 
 	// idle_gap_ms = render_window - union_busy (time within the window
 	// where no segment was active — gaps between segments).
-	idle := p.RenderWindowMS - unionBusy
+	idle := p.RenderWindowMS - p.UnionBusyMS
 	if idle < 0 {
 		idle = 0
 	}
 	p.IdleGapMS = idle
 
 	// average_concurrency = serial_work / union_busy.
-	if unionBusy > 0 {
-		p.AverageConcurrency = serial / unionBusy
+	if p.UnionBusyMS > 0 {
+		p.AverageConcurrency = serial / p.UnionBusyMS
 	} else {
 		p.AverageConcurrency = 1
 	}
@@ -172,16 +91,14 @@ func computeParallelism(segments []taskattempts.SegmentTiming, metrics taskattem
 	}
 
 	// parallel_efficiency_ratio = average_concurrency / peak_concurrency.
-	if peakConcurrency > 0 {
-		p.ParallelEfficiency = p.AverageConcurrency / float64(peakConcurrency)
+	if p.PeakConcurrency > 0 {
+		p.ParallelEfficiency = p.AverageConcurrency / float64(p.PeakConcurrency)
 	} else {
 		p.ParallelEfficiency = 1
 	}
 
 	// CPU oversubscription — derive from segment data.
-	if len(valid) > 0 {
-		p.FFmpegThreadsPerSegment = segments[0].FfmpegThreads
-	}
+	p.FFmpegThreadsPerSegment = segments[0].FfmpegThreads
 	// Count unique non-zero worker slots.
 	slotsUsed := make(map[int]bool)
 	for _, s := range valid {
@@ -213,18 +130,16 @@ func computeParallelism(segments []taskattempts.SegmentTiming, metrics taskattem
 	}
 
 	// Determine bottleneck phase from segment durations.
-	if len(valid) > 0 {
-		maxDur := valid[0].durMS
-		for _, s := range valid[1:] {
-			if s.durMS > maxDur {
-				maxDur = s.durMS
-			}
+	maxDur := valid[0].durMS
+	for _, s := range valid[1:] {
+		if s.durMS > maxDur {
+			maxDur = s.durMS
 		}
-		p.BottleneckPhase = fmt.Sprintf("longest_segment_%.0fms", maxDur)
 	}
+	p.BottleneckPhase = fmt.Sprintf("longest_segment_%.0fms", maxDur)
 
 	// Determine parallel strategy from overlap.
-	if overlap > 0 {
+	if p.OverlapMS > 0 {
 		p.ParallelStrategy = "concurrent_segments"
 	} else {
 		p.ParallelStrategy = "serial_segments"
@@ -244,6 +159,84 @@ func computeParallelism(segments []taskattempts.SegmentTiming, metrics taskattem
 	}
 
 	return p
+}
+
+// segmentSpan is a normalized, start-sorted view of one valid segment
+// timing row used by computeParallelism.
+type segmentSpan struct {
+	startMS float64
+	endMS   float64
+	durMS   float64
+	slot    int
+}
+
+// collectValidSegments filters and normalizes segment timings into a
+// start-sorted slice. Segments without a positive duration are dropped;
+// zero offsets fall back to serial placement (end = accumulated serial work).
+func collectValidSegments(segments []taskattempts.SegmentTiming) []segmentSpan {
+	var valid []segmentSpan
+	for _, s := range segments {
+		if s.Status != "ok" && s.Status != "" {
+			continue
+		}
+		dur := s.DurationMS
+		start := s.StartedOffsetMS
+		end := s.FinishedOffsetMS
+		if dur <= 0 {
+			continue
+		}
+		if start == 0 && end == 0 {
+			end = dur
+		}
+		if end <= start {
+			end = start + dur
+		}
+		valid = append(valid, segmentSpan{startMS: start, endMS: end, durMS: dur, slot: s.WorkerSlot})
+	}
+	sort.Slice(valid, func(i, j int) bool {
+		return valid[i].startMS < valid[j].startMS
+	})
+	return valid
+}
+
+// sweepSegments computes union busy time, overlap time and peak concurrency
+// over a start-sorted segment list using a sweep line over start/end events.
+func sweepSegments(valid []segmentSpan) (unionBusyMS, overlapMS float64, peakConcurrency int) {
+	type event struct {
+		time float64
+		down bool // true = segment ending, false = segment starting
+	}
+	events := make([]event, 0, len(valid)*2)
+	for _, s := range valid {
+		events = append(events, event{time: s.startMS, down: false})
+		events = append(events, event{time: s.endMS, down: true})
+	}
+	sort.Slice(events, func(i, j int) bool {
+		if events[i].time == events[j].time {
+			return events[i].down && !events[j].down // end before start at same time
+		}
+		return events[i].time < events[j].time
+	})
+	active := 0
+	var lastTime float64
+	for _, e := range events {
+		if active > 0 && e.time > lastTime {
+			unionBusyMS += e.time - lastTime
+			if active > 1 {
+				overlapMS += e.time - lastTime
+			}
+		}
+		if e.down {
+			active--
+		} else {
+			active++
+		}
+		if active > peakConcurrency {
+			peakConcurrency = active
+		}
+		lastTime = e.time
+	}
+	return unionBusyMS, overlapMS, peakConcurrency
 }
 
 // insertSegmentTimingsAndParallelism is the shared implementation for both

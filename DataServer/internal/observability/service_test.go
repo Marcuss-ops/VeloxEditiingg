@@ -920,3 +920,118 @@ func findWorker(workers []WorkerPerformance, id string) *WorkerPerformance {
 	}
 	return nil
 }
+
+func TestRollupPhaseTimings(t *testing.T) {
+	mk := func(dur int64, phase string, start, end time.Time) taskattempts.PhaseTiming {
+		return taskattempts.PhaseTiming{AttemptID: "A", Phase: phase, DurationMS: dur, WallStart: start, WallEnd: end}
+	}
+	base := time.Date(2026, 8, 10, 10, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name        string
+		timings     []taskattempts.PhaseTiming
+		wantDur     int64
+		wantTotals  map[string]int64
+		wantSnaps   int
+		wantBreakdn map[string]int64
+	}{
+		{
+			name:        "empty",
+			timings:     nil,
+			wantDur:     0,
+			wantTotals:  map[string]int64{},
+			wantSnaps:   0,
+			wantBreakdn: map[string]int64{},
+		},
+		{
+			name:    "wall bounds derive duration",
+			timings: []taskattempts.PhaseTiming{
+				mk(100, "render", base, base.Add(10*time.Second)),
+				mk(50, "encode", base.Add(2*time.Second), base.Add(14*time.Second)),
+			},
+			wantDur:     14000,
+			wantTotals:  map[string]int64{"render": 100, "encode": 50},
+			wantSnaps:   2,
+			wantBreakdn: map[string]int64{"render": 100, "encode": 50},
+		},
+		{
+			name:    "out-of-order bounds still span min/max",
+			timings: []taskattempts.PhaseTiming{
+				mk(30, "encode", base.Add(20*time.Second), base.Add(25*time.Second)),
+				mk(30, "render", base, base.Add(10*time.Second)),
+			},
+			wantDur:     25000,
+			wantTotals:  map[string]int64{"encode": 30, "render": 30},
+			wantSnaps:   2,
+			wantBreakdn: map[string]int64{"encode": 30, "render": 30},
+		},
+		{
+			name:    "no wall bounds falls back to sum",
+			timings: []taskattempts.PhaseTiming{
+				mk(100, "render", time.Time{}, time.Time{}),
+				mk(50, "encode", time.Time{}, time.Time{}),
+			},
+			wantDur:     150,
+			wantTotals:  map[string]int64{"render": 100, "encode": 50},
+			wantSnaps:   2,
+			wantBreakdn: map[string]int64{"render": 100, "encode": 50},
+		},
+		{
+			name:    "partial bounds ignore zero timestamps",
+			timings: []taskattempts.PhaseTiming{
+				mk(100, "render", base, base.Add(10*time.Second)),
+				mk(50, "quality", time.Time{}, time.Time{}),
+			},
+			wantDur:     10000,
+			wantTotals:  map[string]int64{"render": 100, "quality": 50},
+			wantSnaps:   2,
+			wantBreakdn: map[string]int64{"render": 100, "quality": 50},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			as := &AttemptSummary{PhaseBreakdown: make(map[string]int64)}
+			summary := &ExecutionSummary{PhaseTotals: make(map[string]int64)}
+			got := rollupPhaseTimings(tt.timings, as, summary)
+			if got != tt.wantDur {
+				t.Fatalf("duration = %d, want %d", got, tt.wantDur)
+			}
+			if len(summary.PhaseTimings) != tt.wantSnaps {
+				t.Fatalf("PhaseTimings len = %d, want %d", len(summary.PhaseTimings), tt.wantSnaps)
+			}
+			for phase, want := range tt.wantTotals {
+				if summary.PhaseTotals[phase] != want {
+					t.Errorf("PhaseTotals[%q] = %d, want %d", phase, summary.PhaseTotals[phase], want)
+				}
+				if as.PhaseBreakdown[phase] != want {
+					t.Errorf("PhaseBreakdown[%q] = %d, want %d", phase, as.PhaseBreakdown[phase], want)
+				}
+			}
+		})
+	}
+}
+
+func TestMergeWallBounds(t *testing.T) {
+	base := time.Date(2026, 8, 10, 10, 0, 0, 0, time.UTC)
+
+	// Starts nil and gets seeded from the first non-zero row.
+	firstStart, lastEnd := mergeWallBounds([]taskattempts.PhaseTiming{
+		{AttemptID: "A", WallStart: base.Add(5 * time.Second), WallEnd: base.Add(15 * time.Second)},
+		{AttemptID: "A", WallStart: base, WallEnd: base.Add(20 * time.Second)},
+	}, nil, nil)
+	if firstStart == nil || lastEnd == nil {
+		t.Fatal("expected non-nil bounds after seeding")
+	}
+	if !firstStart.Equal(base) || !lastEnd.Equal(base.Add(20*time.Second)) {
+		t.Fatalf("bounds = %v..%v, want %v..%v", firstStart, lastEnd, base, base.Add(20*time.Second))
+	}
+
+	// Zero timestamps never replace a valid bound.
+	firstStart, lastEnd = mergeWallBounds([]taskattempts.PhaseTiming{
+		{AttemptID: "A", WallStart: time.Time{}, WallEnd: time.Time{}},
+	}, firstStart, lastEnd)
+	if !firstStart.Equal(base) || !lastEnd.Equal(base.Add(20*time.Second)) {
+		t.Fatalf("zero timestamps replaced valid bounds: %v..%v", firstStart, lastEnd)
+	}
+}
