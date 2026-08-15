@@ -7,7 +7,6 @@
 package retry
 
 import (
-	"context"
 	"math"
 	"math/rand"
 	"time"
@@ -58,16 +57,4 @@ func (p Policy) Backoff(attempt int) time.Duration {
 // internally delegated to Backoff which expects a 0-indexed attempt.
 func (p Policy) Delay(attempt int) time.Duration {
 	return p.Backoff(attempt - 1)
-}
-
-// SleepWithContext sleeps for the given duration or until ctx is cancelled.
-func SleepWithContext(ctx context.Context, d time.Duration) error {
-	timer := time.NewTimer(d)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
 }

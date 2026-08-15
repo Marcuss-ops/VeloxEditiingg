@@ -103,14 +103,6 @@ func loadEnvFile(path string) (map[string]struct{}, error) {
 	return loaded, nil
 }
 
-// LoadEnvFile is retained as a compatibility helper for callers that only
-// need to populate the process environment. New bootstrap code should call
-// RawConfigFromEnvFile so source provenance stays attached to the snapshot.
-func LoadEnvFile(path string) error {
-	_, err := loadEnvFile(path)
-	return err
-}
-
 // EnvFilePath returns the path to the .env file to load. Precedence:
 // 1. VELOX_ENV_FILE environment variable
 // 2. .env in the current working directory

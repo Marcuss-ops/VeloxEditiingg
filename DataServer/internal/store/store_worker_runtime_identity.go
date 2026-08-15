@@ -112,8 +112,6 @@ func (s *SQLiteStore) GetWorkerRuntimeSnapshotBySession(workerID, sessionID stri
 	var configHash, dockerImageDigest, cpuModel sql.NullString
 	var gpuModel, gpuDriver, kernelVersion, osRelease, storageClass sql.NullString
 	var capabilitiesJSON sql.NullString
-	var disconnectedAt sql.NullString
-	_ = disconnectedAt // reserved for a future lifecycle read model
 
 	err := s.db.QueryRow(`
 		SELECT snapshot_id, worker_id, session_id, hostname,

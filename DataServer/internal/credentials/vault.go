@@ -9,7 +9,6 @@ package credentials
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -279,10 +278,4 @@ func scopesWithin(requested, granted []string) bool {
 		}
 	}
 	return true
-}
-
-// SecretDigest is safe for audit correlation and never returns secret data.
-func SecretDigest(value string) string {
-	digest := sha256.Sum256([]byte(value))
-	return hex.EncodeToString(digest[:8])
 }

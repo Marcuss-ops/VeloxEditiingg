@@ -195,13 +195,6 @@ func loadCredentialsConfig(raw RawConfig) CredentialsConfig {
 	return cfg
 }
 
-// LoadFromEnv is the canonical bootstrap pipeline: load, parse, validate,
-// freeze. FromEnv remains available for tests and callers that need to inspect
-// an invalid configuration before deciding how to report it.
-func LoadFromEnv() (*Config, error) {
-	return LoadFromRaw(RawConfigFromEnv())
-}
-
 // LoadFromRaw validates and freezes one captured raw snapshot. The optional
 // env-file source information must be attached to that snapshot before this
 // boundary; runtime consumers never reload process environment state.

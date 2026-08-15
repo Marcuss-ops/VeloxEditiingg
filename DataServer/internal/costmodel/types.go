@@ -1,7 +1,5 @@
 package costmodel
 
-import "strings"
-
 // ── Enums (mirror of executor package) ──────────────────────────────────────
 //
 // These constants shadow the canonical ones in
@@ -182,13 +180,4 @@ type Explanation struct {
 type Cost struct {
 	Eligible bool
 	Score    float64
-}
-
-// ── Compatibility helpers used by tests ──────────────────────────────────────
-
-// CanonicalKey is the canonical ResourceClass × TemporalMode
-// identifier used in assertions. Stable across releases so golden
-// vectors stay reproducible.
-func CanonicalKey(rc ResourceClass, tm TemporalMode) string {
-	return strings.TrimSpace(string(rc)) + "|" + strings.TrimSpace(string(tm))
 }

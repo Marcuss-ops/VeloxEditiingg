@@ -272,14 +272,10 @@ func (c *SecureSSHClient) baseSSHArgs(e *WorkerRegistryEntry) []string {
 // ---------------------------------------------------------------------------
 
 var safeWorkerIDRegex = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$`)
-var safeRunIDRegex = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,255}$`)
 var safeScriptPathRegex = regexp.MustCompile(`^/(var/lib/velox-worker|usr/local/bin|usr/local/sbin|etc/velox)/[a-zA-Z0-9_/.-]+$`)
 
 // ErrInvalidWorkerID is returned when a worker_id contains shell metacharacters.
 var ErrInvalidWorkerID = errors.New("invalid worker_id: contains shell metacharacters")
-
-// ErrInvalidRunID is returned when a run_id contains shell metacharacters.
-var ErrInvalidRunID = errors.New("invalid run_id: contains shell metacharacters")
 
 // ErrInvalidShellCommand is returned when a command contains unsafe patterns.
 var ErrInvalidShellCommand = errors.New("invalid shell command: contains metacharacters or unsafe patterns")
@@ -293,17 +289,6 @@ func validateWorkerID(id string) error {
 	}
 	if !safeWorkerIDRegex.MatchString(id) {
 		return fmt.Errorf("%w: %q", ErrInvalidWorkerID, id)
-	}
-	return nil
-}
-
-// ValidateRunID rejects run IDs containing shell metacharacters.
-func ValidateRunID(id string) error {
-	if id == "" {
-		return fmt.Errorf("%w: empty", ErrInvalidRunID)
-	}
-	if !safeRunIDRegex.MatchString(id) {
-		return fmt.Errorf("%w: %q", ErrInvalidRunID, id)
 	}
 	return nil
 }
