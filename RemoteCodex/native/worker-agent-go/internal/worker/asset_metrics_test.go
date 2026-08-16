@@ -80,6 +80,11 @@ func TestDownloadVeloxAssetWithSHA_ReportsMissHitAndCorruptRedownload(t *testing
 	if bytes.Equal(corruptBytes, assetBytes) {
 		t.Fatal("test corruption must differ from the valid payload")
 	}
+	// Promoted blobs are chmod 0444 (immutable from the normal worker); to
+	// simulate out-of-band corruption restore write permission first.
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatalf("make cache entry writable for corruption: %v", err)
+	}
 	if err := os.WriteFile(path, corruptBytes, 0o644); err != nil {
 		t.Fatalf("corrupt cache entry: %v", err)
 	}
@@ -289,6 +294,11 @@ func TestDownloadVeloxAssetWithMetadataLegacyReuseAfterSelfVerify(t *testing.T) 
 
 	// Corrupting the cached file must self-heal: verified mismatch evicts
 	// the entry and re-downloads fresh bytes, then remembers the new digest.
+	// Promoted blobs are chmod 0444; restore write permission to simulate
+	// out-of-band corruption.
+	if err := os.Chmod(cold, 0o644); err != nil {
+		t.Fatalf("make cached entry writable for corruption: %v", err)
+	}
 	if err := os.WriteFile(cold, bytes.Repeat([]byte{'x'}, len(assetBytes)), 0o644); err != nil {
 		t.Fatalf("corrupt cached entry: %v", err)
 	}

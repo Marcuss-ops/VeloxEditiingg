@@ -128,6 +128,13 @@ func TestCommonAssetResolverColdWarmCacheAcrossMediaKinds(t *testing.T) {
 	if err != nil || corruptPath == "" {
 		t.Fatalf("find cached music asset: path=%q err=%v", corruptPath, err)
 	}
+	// Promoted blobs are chmod 0444 (immutable from the normal worker). To
+	// simulate out-of-band corruption (e.g. a root-owned tool or bit rot),
+	// restore write permission first — the read-only guard is not a security
+	// boundary, only an accident guard.
+	if err := os.Chmod(corruptPath, 0o644); err != nil {
+		t.Fatalf("make cached music asset writable for corruption: %v", err)
+	}
 	if err := os.WriteFile(corruptPath, bytes.Repeat([]byte("x"), len(assets[corruptID])), 0o644); err != nil {
 		t.Fatalf("corrupt cached music asset: %v", err)
 	}

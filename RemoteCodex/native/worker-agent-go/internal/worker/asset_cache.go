@@ -445,6 +445,16 @@ func verifyAndPromoteVeloxAsset(cacheDir, assetID, expectedSHA256 string, effect
 		restorePrevious()
 		return "", 0, "", time.Since(verifyStarted), err
 	}
+	// The promoted blob is now immutable from the normal worker: read-only
+	// (0444) so an accidental write can never corrupt a verified
+	// content-addressed file. A later re-download still replaces it
+	// atomically (rename needs only directory write permission) and eviction
+	// still unlinks it (a directory operation), so the read-only mode does
+	// not restrict the cache lifecycle.
+	if err := os.Chmod(finalPath, 0o444); err != nil {
+		restorePrevious()
+		return "", 0, "", time.Since(verifyStarted), fmt.Errorf("chmod promoted blob read-only: %w", err)
+	}
 	if backupPath != "" {
 		_ = os.Remove(backupPath)
 		// The new final is already durable; failure to persist deletion of the
