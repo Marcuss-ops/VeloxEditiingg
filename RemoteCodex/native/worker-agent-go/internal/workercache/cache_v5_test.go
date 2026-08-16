@@ -164,3 +164,44 @@ func TestCache_SharedContentHashKeepsOneBlobUntilLastAssetEvicted(t *testing.T) 
 		t.Fatalf("blob row leaked after last asset evicted: %d", remaining)
 	}
 }
+
+// TestCache_FindBlobAndMarkBlobUsed covers the blob-layer lookup added for the
+// content-addressed resolver route: a known SHA probes cached_blobs directly
+// and its LRU timestamp is refreshed independently of the asset mapping.
+func TestCache_FindBlobAndMarkBlobUsed(t *testing.T) {
+	cache := newTestCache(t)
+	ctx := context.Background()
+	hash := acceptanceContentHash([]byte("blob bytes"))
+	path := filepath.Join(t.TempDir(), "blob.mp4")
+	if err := cache.Store(ctx, Entry{AssetKey: "asset", ContentHash: hash, LocalPath: path, SizeBytes: 10, DownloadComplete: true}); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+
+	blob, found, err := cache.FindBlob(ctx, hash)
+	if err != nil || !found {
+		t.Fatalf("FindBlob: found=%v err=%v", found, err)
+	}
+	if blob.LocalPath != path || blob.SizeBytes != 10 || !blob.DownloadComplete || blob.ContentHash != hash {
+		t.Fatalf("blob = %+v, want path/size/complete/hash to match", blob)
+	}
+
+	unknown := assetref.ContentHash("0000000000000000000000000000000000000000000000000000000000000000")
+	if _, found, err := cache.FindBlob(ctx, unknown); err != nil || found {
+		t.Fatalf("FindBlob on unknown hash = found=%v err=%v, want not-found", found, err)
+	}
+
+	old := blob.LastUsedAt
+	if err := cache.MarkBlobUsed(ctx, hash); err != nil {
+		t.Fatalf("MarkBlobUsed: %v", err)
+	}
+	blob2, _, err := cache.FindBlob(ctx, hash)
+	if err != nil {
+		t.Fatalf("FindBlob after MarkBlobUsed: %v", err)
+	}
+	if blob2.LastUsedAt.Before(old) {
+		t.Fatalf("MarkBlobUsed did not refresh last_used_at: before=%v after=%v", old, blob2.LastUsedAt)
+	}
+	if err := cache.MarkBlobUsed(ctx, unknown); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("MarkBlobUsed on missing hash = %v, want ErrNotFound", err)
+	}
+}

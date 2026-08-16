@@ -45,6 +45,22 @@ func (t *masterAssetTransferer) Check(ctx context.Context, reportCtx context.Con
 	key := assetref.AssetKey(req.AssetKey)
 	var foundIncomplete, foundHashMismatch, foundSizeMismatch, foundExpired bool
 	if w.canonicalAssetCache != nil {
+		// Route by verified content identity first: a known SHA probes the
+		// blob store directly, so an asset whose bytes are already cached
+		// under a different asset ID is still a verified hit without a
+		// master round-trip or a full re-hash. The stat+size check (no hash
+		// recompute) is the verified-blob contract: the file was SHA-256
+		// verified at promotion time.
+		if req.SHA256 != "" {
+			if blob, found, err := w.canonicalAssetCache.FindBlob(ctx, req.SHA256); err != nil {
+				return downloader.CacheCheckResult{}, err
+			} else if found && blob.DownloadComplete && (req.SizeBytes <= 0 || blob.SizeBytes == req.SizeBytes) {
+				if info, statErr := os.Stat(blob.LocalPath); statErr == nil && info.Mode().IsRegular() && info.Size() == blob.SizeBytes {
+					_ = w.canonicalAssetCache.MarkBlobUsed(ctx, req.SHA256)
+					return downloader.CacheCheckResult{CacheHit: true, LocalPath: blob.LocalPath, SHA256: req.SHA256, Outcome: downloader.CacheOutcomeHitValid}, nil
+				}
+			}
+		}
 		if entry, found, err := w.canonicalAssetCache.Find(ctx, key); err != nil {
 			return downloader.CacheCheckResult{}, err
 		} else if found {

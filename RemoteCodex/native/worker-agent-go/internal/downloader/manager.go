@@ -244,16 +244,31 @@ func (m *Manager) Promote(key assetref.AssetKey, priority int) bool {
 	return m.sched.Promote(key, priority)
 }
 
+// contentHashKey derives the registry dedup key for a verified SHA-256, so
+// transfers for identical bytes coalesce independently of the asset key. The
+// dedup map is separate from the asset-keyed transfers map, so this synthetic
+// key can never collide with a real asset key.
+func contentHashKey(hash assetref.ContentHash) assetref.AssetKey {
+	return assetref.AssetKey("sha256:" + string(hash))
+}
+
 // acquireTransfer returns the live transfer for key, creating one (and
 // starting its run loop) when absent or when the previous transfer reached a
 // terminal state. Terminal transfers stay in the registry for snapshot
-// visibility; new Resolve calls re-check the cache cheaply.
+// visibility; new Resolve calls re-check the cache cheaply. When the request
+// carries a verified content hash, a live transfer for the same bytes is
+// shared even across different asset keys (single-flight by content_hash).
 func (m *Manager) acquireTransfer(key assetref.AssetKey, req DownloadRequest, reportCtx context.Context) (*Transfer, bool) {
 	m.registry.PruneTerminal(m.cfg.MaxRetainedTransfers)
 	m.registry.mu.Lock()
 	defer m.registry.mu.Unlock()
 	if existing := m.registry.transfers[key]; existing != nil && !existing.isTerminal() {
 		return existing, true
+	}
+	if req.SHA256 != "" {
+		if existing := m.registry.dedup[contentHashKey(req.SHA256)]; existing != nil && !existing.isTerminal() {
+			return existing, true
+		}
 	}
 	generation := m.generation.Add(1)
 	t := newTransfer(m.ctx, key, req, reportCtx, m.cfg.Now, nextTransferID(), generation)
@@ -265,6 +280,9 @@ func (m *Manager) acquireTransfer(key assetref.AssetKey, req DownloadRequest, re
 	t.onCheckpoint = m.cfg.OnCheckpoint
 	t.onOperationalSnapshot = m.refreshOperational
 	m.registry.transfers[key] = t
+	if req.SHA256 != "" {
+		m.registry.dedup[contentHashKey(req.SHA256)] = t
+	}
 	go t.run(m)
 	return t, false
 }

@@ -13,10 +13,17 @@ import (
 type TransferRegistry struct {
 	mu        sync.Mutex
 	transfers map[assetref.AssetKey]*Transfer
+	// dedup coalesces transfers by verified content identity: when a request
+	// carries a SHA-256, a live transfer for the same bytes is shared even if
+	// the asset key differs.
+	dedup map[assetref.AssetKey]*Transfer
 }
 
 func newTransferRegistry() *TransferRegistry {
-	return &TransferRegistry{transfers: make(map[assetref.AssetKey]*Transfer)}
+	return &TransferRegistry{
+		transfers: make(map[assetref.AssetKey]*Transfer),
+		dedup:     make(map[assetref.AssetKey]*Transfer),
+	}
 }
 
 // Get returns the transfer for key (nil when absent).
@@ -72,6 +79,15 @@ func (r *TransferRegistry) PruneTerminal(max int) {
 		}
 		delete(r.transfers, oldestKey)
 		terminalCount--
+	}
+	// Drop stale dedup entries whose transfer is no longer retained, so the
+	// content-hash index stays bounded alongside the transfer registry.
+	for k, t := range r.dedup {
+		if t.isTerminal() {
+			if _, retained := r.transfers[t.Key]; !retained {
+				delete(r.dedup, k)
+			}
+		}
 	}
 }
 

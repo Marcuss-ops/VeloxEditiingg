@@ -19,13 +19,18 @@ type AssetRegistry interface {
 
 // ContentAddressedCache is the verified-byte boundary. An entry becomes
 // usable only through a hash-aware completion operation, and eviction is
-// fenced against concurrent lease/reservation acquisition.
+// fenced against concurrent lease/reservation acquisition. It also exposes
+// the blob layer: a resolver that already knows the content hash can look a
+// blob up directly (and refresh its LRU timestamp) without an asset_key
+// mapping.
 type ContentAddressedCache interface {
 	AssetRegistry
 	LeaseReservationStore
 	MarkDownloadCompleteWithHash(context.Context, assetref.AssetKey, string, int64, assetref.ContentHash) error
 	PreserveContentHash(context.Context, assetref.AssetKey, string, int64, assetref.ContentHash) error
 	EvictIfUnleased(context.Context, assetref.AssetKey, string) error
+	FindBlob(context.Context, assetref.ContentHash) (Blob, bool, error)
+	MarkBlobUsed(context.Context, assetref.ContentHash) error
 }
 
 // DerivedAssetStore is the normalization-cache extension of the canonical
@@ -94,6 +99,14 @@ func (s *CanonicalAssetStore) PreserveContentHash(ctx context.Context, key asset
 
 func (s *CanonicalAssetStore) EvictIfUnleased(ctx context.Context, key assetref.AssetKey, localPath string) error {
 	return s.cache.EvictIfUnleased(ctx, string(key), localPath)
+}
+
+func (s *CanonicalAssetStore) FindBlob(ctx context.Context, contentHash assetref.ContentHash) (Blob, bool, error) {
+	return s.cache.FindBlob(ctx, contentHash)
+}
+
+func (s *CanonicalAssetStore) MarkBlobUsed(ctx context.Context, contentHash assetref.ContentHash) error {
+	return s.cache.MarkBlobUsed(ctx, contentHash)
 }
 
 func (s *CanonicalAssetStore) FindDerived(ctx context.Context, sourceHash assetref.ContentHash, profile NormalizationProfile) (Entry, bool, error) {

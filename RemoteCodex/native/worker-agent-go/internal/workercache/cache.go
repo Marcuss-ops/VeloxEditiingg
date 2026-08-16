@@ -77,6 +77,19 @@ type Entry struct {
 	ActiveReservationCount int
 }
 
+// Blob is the physical content-addressed row of cached_blobs: the verified
+// bytes at LocalPath, keyed by ContentHash. Multiple assets can reference one
+// blob when their bytes are identical (dedup).
+type Blob struct {
+	ContentHash      assetref.ContentHash
+	LocalPath        string
+	SizeBytes        int64
+	DownloadComplete bool
+	CreatedAt        time.Time
+	LastUsedAt       time.Time
+	VerifiedAt       time.Time
+}
+
 // Sentinel errors so callers can branch via errors.Is, not string match.
 var (
 	ErrNotFound           = errors.New("workercache: cached asset not found")
@@ -155,6 +168,46 @@ func (c *Cache) Find(ctx context.Context, assetKey string) (Entry, bool, error) 
 		return Entry{}, false, fmt.Errorf("workercache.Find(%q): %w", assetKey, err)
 	}
 	return *e, true, nil
+}
+
+// FindBlob returns the physical blob for a verified content hash. It is the
+// content-addressed lookup a resolver uses when the asset_key mapping is
+// unknown: a known SHA probes cached_blobs directly, so an asset whose bytes
+// are already cached under another asset ID is still found. The boolean is
+// false (with a zero Blob) when no blob exists, mirroring Find.
+func (c *Cache) FindBlob(ctx context.Context, contentHash assetref.ContentHash) (Blob, bool, error) {
+	if contentHash == "" {
+		return Blob{}, false, nil
+	}
+	var (
+		b         Blob
+		dlInt     int
+		createdS  string
+		usedS     string
+		verifiedS string
+	)
+	err := c.db.QueryRowContext(ctx,
+		`SELECT content_hash, local_path, size_bytes, download_complete, created_at, last_used_at, verified_at
+		   FROM cached_blobs WHERE content_hash = ?`,
+		string(contentHash),
+	).Scan(&b.ContentHash, &b.LocalPath, &b.SizeBytes, &dlInt, &createdS, &usedS, &verifiedS)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Blob{}, false, nil
+		}
+		return Blob{}, false, fmt.Errorf("workercache.FindBlob(%q): %w", contentHash, err)
+	}
+	b.DownloadComplete = dlInt != 0
+	if b.CreatedAt, err = parseRFC3339Nano(createdS); err != nil {
+		return Blob{}, false, fmt.Errorf("workercache.FindBlob(%q): created_at: %w", contentHash, err)
+	}
+	if b.LastUsedAt, err = parseRFC3339Nano(usedS); err != nil {
+		return Blob{}, false, fmt.Errorf("workercache.FindBlob(%q): last_used_at: %w", contentHash, err)
+	}
+	if b.VerifiedAt, err = parseRFC3339Nano(verifiedS); err != nil {
+		return Blob{}, false, fmt.Errorf("workercache.FindBlob(%q): verified_at: %w", contentHash, err)
+	}
+	return b, true, nil
 }
 
 // Store inserts a new entry. Returns ErrDuplicate if asset_key is
@@ -256,6 +309,31 @@ func (c *Cache) MarkUsed(ctx context.Context, assetKey string) error {
 		return fmt.Errorf("workercache.MarkUsed(%q): %w", assetKey, err)
 	}
 	return mustHaveAffected(res, assetKey, "MarkUsed")
+}
+
+// MarkBlobUsed bumps a blob's last_used_at, the LRU signal for blob-level
+// eviction. It is the content-addressed counterpart of MarkUsed and is called
+// on a blob-level cache hit so a shared blob used by several assets is not
+// treated as cold while any of them is active.
+func (c *Cache) MarkBlobUsed(ctx context.Context, contentHash assetref.ContentHash) error {
+	if contentHash == "" {
+		return ErrInvalidContentHash
+	}
+	res, err := c.db.ExecContext(ctx,
+		`UPDATE cached_blobs SET last_used_at = ? WHERE content_hash = ?`,
+		time.Now().UTC().Format(time.RFC3339Nano), string(contentHash),
+	)
+	if err != nil {
+		return fmt.Errorf("workercache.MarkBlobUsed(%q): %w", contentHash, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("workercache.MarkBlobUsed(%q): rows affected: %w", contentHash, err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: content_hash=%s", ErrNotFound, contentHash)
+	}
+	return nil
 }
 
 // MarkDownloadComplete transitions a row to the complete state:

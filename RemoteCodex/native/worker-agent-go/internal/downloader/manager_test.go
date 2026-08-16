@@ -963,3 +963,74 @@ func TestManager_JobSnapshot_ByteWeighted(t *testing.T) {
 		}
 	}
 }
+
+// TestManager_ContentHashSingleFlight_DifferentAssetKeys proves the
+// single-flight-by-content_hash rule: two jobs on DIFFERENT asset keys but the
+// same verified SHA-256 coalesce onto one shared transfer (one upstream), and
+// each waiter receives the same local path.
+func TestManager_ContentHashSingleFlight_DifferentAssetKeys(t *testing.T) {
+	release := make(chan struct{})
+	tf := &fakeTransferer{
+		transfer: func(ctx context.Context, reportCtx context.Context, req DownloadRequest, _ func(downloadedBytes int64)) (TransferResult, error) {
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return TransferResult{}, ctx.Err()
+			}
+			return TransferResult{LocalPath: "/shared/content-blob.mp4", Bytes: req.SizeBytes, SHA256: assetref.ContentHash("shared")}, nil
+		},
+	}
+	m := newTestManager(t, tf)
+
+	const sharedSHA = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	type out struct {
+		asset DownloadedAsset
+		err   error
+	}
+	results := make([]out, 2)
+	keys := []string{"asset-a", "asset-b"}
+	var wg sync.WaitGroup
+	for i := range results {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			results[i].asset, results[i].err = m.Resolve(context.Background(), DownloadRequest{
+				JobID: fmt.Sprintf("job-%d", i), TaskID: fmt.Sprintf("task-%d", i),
+				AssetKey: assetref.AssetKey(keys[i]), AssetID: keys[i],
+				SHA256: assetref.ContentHash(sharedSHA), SizeBytes: 2048, Priority: DefaultPriority,
+			})
+		}(i)
+	}
+
+	// Both waiters must be on ONE live transfer before the gate is released,
+	// regardless of which asset key won the registry slot.
+	waitFor(t, "two waiters on one content-hash transfer", func() bool {
+		m.registry.mu.Lock()
+		defer m.registry.mu.Unlock()
+		live, waiters := 0, 0
+		for _, tr := range m.registry.transfers {
+			if tr.isTerminal() {
+				continue
+			}
+			live++
+			tr.mu.Lock()
+			waiters += len(tr.waiters)
+			tr.mu.Unlock()
+		}
+		return live == 1 && waiters == 2
+	})
+	close(release)
+	wg.Wait()
+
+	for i := range results {
+		if results[i].err != nil {
+			t.Fatalf("resolve[%d]: %v", i, results[i].err)
+		}
+		if results[i].asset.LocalPath != "/shared/content-blob.mp4" {
+			t.Fatalf("resolve[%d] path = %q, want shared path", i, results[i].asset.LocalPath)
+		}
+	}
+	if got := tf.transferCalls.Load(); got != 1 {
+		t.Fatalf("transfer calls = %d, want exactly 1 (content-hash single-flight)", got)
+	}
+}
