@@ -23,6 +23,7 @@ import (
 	"io"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"velox-server/internal/store"
@@ -64,9 +65,50 @@ type ChunkState struct {
 // (OpenStagedWrite / OpenStagedRead / RemoveStaging) so the service
 // never touches the filesystem driver directly.
 type ChunkedUploadService struct {
-	artifactSvc *Service
-	repo        store.UploadRepository
-	blobStore   store.BlobStore
+	artifactSvc  *Service
+	repo         store.UploadRepository
+	blobStore    store.BlobStore
+	receiveLocks keyedUploadLocks
+}
+
+// keyedUploadLocks serializes ReceiveChunked/CompleteChunked for one upload
+// while allowing different uploads to assemble concurrently. Both paths use
+// the deterministic <temporary>.assembled staging name, so concurrent
+// receives for the same upload would otherwise truncate/read that file at the
+// same time and produce a false whole-artifact hash mismatch.
+type keyedUploadLocks struct {
+	mu    sync.Mutex
+	items map[string]*keyedUploadLock
+}
+
+type keyedUploadLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+func (l *keyedUploadLocks) acquire(uploadID string) func() {
+	l.mu.Lock()
+	if l.items == nil {
+		l.items = make(map[string]*keyedUploadLock)
+	}
+	item := l.items[uploadID]
+	if item == nil {
+		item = &keyedUploadLock{}
+		l.items[uploadID] = item
+	}
+	item.refs++
+	l.mu.Unlock()
+
+	item.mu.Lock()
+	return func() {
+		item.mu.Unlock()
+		l.mu.Lock()
+		item.refs--
+		if item.refs == 0 {
+			delete(l.items, uploadID)
+		}
+		l.mu.Unlock()
+	}
 }
 
 // GetUploadByJob returns the active CREATED/UPLOADING upload session for a
@@ -281,6 +323,9 @@ func (s *ChunkedUploadService) GetUpload(ctx context.Context, uploadID string) (
 // coordinator performs the later artifact promotion and job commit after all
 // declared outputs have passed verification.
 func (s *ChunkedUploadService) ReceiveChunked(ctx context.Context, uploadID string) (*ReceiveResult, error) {
+	release := s.receiveLocks.acquire(uploadID)
+	defer release()
+
 	session, err := s.GetUpload(ctx, uploadID)
 	if err != nil {
 		return nil, err
@@ -340,6 +385,8 @@ func (s *ChunkedUploadService) CompleteChunked(ctx context.Context, cmd ChunkedC
 	if cmd.UploadID == "" || cmd.JobID == "" {
 		return nil, fmt.Errorf("artifacts: CompleteChunked: uploadID and jobID are required")
 	}
+	release := s.receiveLocks.acquire(cmd.UploadID)
+	defer release()
 
 	session, err := s.repo.GetUploadSession(ctx, cmd.UploadID)
 	if err != nil {
