@@ -39,6 +39,8 @@ ExecStart=/usr/bin/docker run --rm \
     --network host \
     --env-file /etc/velox-server.env \
     --env VELOX_HTTP_PORT=${VELOX_MASTER_PORT} \
+    --env VELOX_DATA_DIR=${VELOX_DATA_DIR} \
+    --env VELOX_DB_PATH=${VELOX_DB_PATH} \
     --mount type=bind,src=/var/lib/velox,dst=/var/lib/velox \
     --mount type=bind,src=/opt/velox/current/.velox,dst=/opt/velox/current/.velox \
     --mount type=bind,src=/opt/velox/certs,dst=/opt/velox/certs,readonly \
