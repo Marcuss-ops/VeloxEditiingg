@@ -211,6 +211,44 @@ func TestCache_MarkDownloadCompleteWithHashPersistsVerifiedContentHash(t *testin
 	}
 }
 
+func TestCache_MarkDownloadCompleteWithHashRekeysLegacyPath(t *testing.T) {
+	c := newTestCache(t)
+	ctx := context.Background()
+	assetKey := "legacy-rekey"
+	path := filepath.Join(t.TempDir(), "asset.mp4")
+	hash := acceptanceContentHash([]byte("legacy bytes"))
+
+	if err := c.Store(ctx, Entry{
+		AssetKey:  assetref.AssetKey(assetKey),
+		LocalPath: path,
+		SizeBytes: 12,
+	}); err != nil {
+		t.Fatalf("Store legacy entry: %v", err)
+	}
+	if err := c.MarkDownloadCompleteWithHash(ctx, assetKey, path, 12, hash); err != nil {
+		t.Fatalf("MarkDownloadCompleteWithHash legacy re-key: %v", err)
+	}
+
+	entry, found, err := c.Find(ctx, assetKey)
+	if err != nil {
+		t.Fatalf("Find re-keyed entry: %v", err)
+	}
+	if !found {
+		t.Fatal("re-keyed entry not found")
+	}
+	if entry.ContentHash != hash {
+		t.Fatalf("content hash = %q, want %q", entry.ContentHash, hash)
+	}
+
+	var blobCount int
+	if err := c.DB().QueryRowContext(ctx, `SELECT COUNT(1) FROM cached_blobs`).Scan(&blobCount); err != nil {
+		t.Fatalf("count cached blobs: %v", err)
+	}
+	if blobCount != 1 {
+		t.Fatalf("cached blob count = %d, want 1", blobCount)
+	}
+}
+
 func TestCache_ReserveProtectsUntilReleasedOrExpired(t *testing.T) {
 	t.Parallel()
 	c := newTestCache(t)

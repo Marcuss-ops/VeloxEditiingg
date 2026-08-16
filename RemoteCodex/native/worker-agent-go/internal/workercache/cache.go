@@ -415,6 +415,27 @@ func (c *Cache) markDownloadComplete(ctx context.Context, assetKey, localPath st
 		return rollback(fmt.Errorf("workercache.MarkDownloadComplete(%q): probe: %w", assetKey, err))
 	}
 
+	// A legacy/hashless entry uses the same deterministic local_path that the
+	// verified transfer just promoted. Remove that orphaned physical index
+	// before inserting the SHA-addressed row: local_path is UNIQUE, so waiting
+	// until after INSERT would reject the legitimate legacy → SHA re-key.
+	if oldBlobKey != "" && oldBlobKey != blobKey {
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM cached_blobs
+			  WHERE content_hash = ?
+			    AND local_path = ?
+			    AND NOT EXISTS (
+			      SELECT 1
+			        FROM cached_assets
+			       WHERE content_hash = ?
+			         AND asset_key <> ?
+			    )`,
+			oldBlobKey, localPath, oldBlobKey, assetKey,
+		); err != nil {
+			return rollback(fmt.Errorf("workercache.MarkDownloadComplete(%q): remove legacy blob: %w", assetKey, err))
+		}
+	}
+
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO cached_blobs
 		   (content_hash, local_path, size_bytes, created_at, last_used_at, verified_at, download_complete)
