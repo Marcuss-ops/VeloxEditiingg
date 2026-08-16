@@ -283,7 +283,13 @@ func overlayLegacyRawMetrics(dst *telemetry.RawExecutionMetrics, typed telemetry
 	overlay("frames.encoded", func() { dst.FramesEncoded = typed.FramesEncoded })
 	overlay("ffmpeg.speed_ratio", func() { dst.FfmpegSpeedRatio = typed.FfmpegSpeedRatio })
 	overlay("encode.passes", func() { dst.EncodePasses = typed.EncodePasses })
-	overlay("concat.mode", func() { dst.ConcatMode = typed.ConcatMode })
+	overlay("concat.mode", func() {
+		dst.ConcatMode = typed.ConcatMode
+		// The executor may have initialized RawMetrics with the proto zero
+		// value before the compatibility projection runs. Keep the canonical
+		// concat mode authoritative for the legacy boolean as well.
+		dst.FinalConcatStreamCopy = typed.FinalConcatStreamCopy
+	})
 	overlay("gpu.time.ms", func() { dst.GpuTimeMs = typed.GpuTimeMs })
 	overlay("vram.peak.bytes", func() { dst.PeakVramBytes = typed.PeakVramBytes })
 	overlay("temp.bytes.written", func() { dst.TempBytesWritten = typed.TempBytesWritten })
