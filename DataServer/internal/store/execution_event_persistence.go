@@ -36,6 +36,7 @@ func persistPhaseTimingsAndExecutionEvents(ctx context.Context, tx *sql.Tx, cmd 
 		timings = append(timings, cmd.PartialPhaseMetrics...)
 	}
 	timings = deduplicatePhaseTimings(timings)
+	timings = normalizePhaseTimingWalls(timings)
 
 	// A report hash is the idempotency boundary for the whole worker event
 	// set. An identical terminal replay must not rewrite anything; a
@@ -159,6 +160,29 @@ func deduplicatePhaseTimings(timings []taskattempts.PhaseTimingDetailed) []taska
 		out = append(out, timing)
 	}
 	return out
+}
+
+// normalizePhaseTimingWalls prevents one malformed producer timestamp from
+// inflating the attempt/task wall clock. Detailed phase durations remain
+// useful, so only impossible wall bounds are discarded; the event itself is
+// still persisted with its declared duration and taxonomy.
+func normalizePhaseTimingWalls(timings []taskattempts.PhaseTimingDetailed) []taskattempts.PhaseTimingDetailed {
+	for i := range timings {
+		timing := &timings[i]
+		if timing.StartedAt.IsZero() || timing.CompletedAt.IsZero() {
+			continue
+		}
+		span := timing.CompletedAt.Sub(timing.StartedAt)
+		declared := time.Duration(timing.DurationMS) * time.Millisecond
+		// A phase can include a small scheduling/clock discrepancy. A span
+		// greater than 30s and more than 10x its declared duration is not a
+		// credible phase measurement (for example 1ms reported over 5m).
+		if span < 0 || timing.DurationMS < 0 || (span > 30*time.Second && span > declared*10) {
+			timing.StartedAt = time.Time{}
+			timing.CompletedAt = time.Time{}
+		}
+	}
+	return timings
 }
 
 func validateExecutionEventTiming(timing taskattempts.PhaseTimingDetailed) error {

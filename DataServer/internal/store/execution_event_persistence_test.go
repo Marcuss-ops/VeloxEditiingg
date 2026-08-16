@@ -263,6 +263,22 @@ func TestPersistExecutionEvents_RepeatedSegmentsAndCanonicalIdentity(t *testing.
 	}
 }
 
+func TestNormalizePhaseTimingWallsDropsImpossibleLateBounds(t *testing.T) {
+	base := time.Date(2026, 8, 16, 16, 42, 19, 0, time.UTC)
+	timings := []taskattempts.PhaseTimingDetailed{
+		{AttemptID: "attempt-1", DurationMS: 1, StartedAt: base, CompletedAt: base.Add(5 * time.Minute)},
+		{AttemptID: "attempt-1", DurationMS: 1000, StartedAt: base, CompletedAt: base.Add(time.Second)},
+	}
+
+	got := normalizePhaseTimingWalls(timings)
+	if !got[0].StartedAt.IsZero() || !got[0].CompletedAt.IsZero() {
+		t.Fatalf("impossible late bounds survived: %#v", got[0])
+	}
+	if !got[1].StartedAt.Equal(base) || !got[1].CompletedAt.Equal(base.Add(time.Second)) {
+		t.Fatalf("valid phase bounds were changed: %#v", got[1])
+	}
+}
+
 func TestPersistExecutionEvents_MapsAudioTrackIdentityAndTelemetry(t *testing.T) {
 	db := openExecutionEventPersistenceTestDB(t)
 	seedExecutionEventIdentity(t, db)

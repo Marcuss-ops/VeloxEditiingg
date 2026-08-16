@@ -625,6 +625,51 @@ func TestService_SummarizeTaskTerminalAttemptWinsOverStaleLiveProjection(t *test
 	}
 }
 
+func TestService_SummarizeTaskUsesAttemptLifecycleForWallClock(t *testing.T) {
+	svc, tasks, attempts, _, _ := newTestService()
+	started := time.Date(2026, 8, 16, 16, 42, 19, 0, time.UTC)
+	completed := started.Add(3*time.Minute + 14*time.Second)
+	tasks.tasks["T-telemetry-clock"] = &taskgraph.Task{
+		ID: "T-telemetry-clock", JobID: "J-telemetry-clock",
+		Status: taskgraph.StatusSucceeded, AttemptCount: 1,
+	}
+	attempts.attempts["T-telemetry-clock"] = []taskattempts.TaskAttempt{{
+		ID: "A-telemetry-clock", TaskID: "T-telemetry-clock", JobID: "J-telemetry-clock",
+		AttemptNumber: 1, WorkerID: "worker-clock", Status: taskattempts.AttemptStatusSucceeded,
+		StartedAt: &started, CompletedAt: &completed,
+	}}
+	attempts.phaseTimings["A-telemetry-clock"] = []taskattempts.PhaseTiming{
+		{AttemptID: "A-telemetry-clock", Phase: "render", DurationMS: 190000,
+			WallStart: started, WallEnd: started.Add(190 * time.Second)},
+		// Regression fixture: a 1ms finalize event whose wall end was
+		// accidentally stamped five minutes late.
+		{AttemptID: "A-telemetry-clock", Phase: "finalize", DurationMS: 1,
+			WallStart: completed, WallEnd: completed.Add(5 * time.Minute)},
+	}
+	attempts.metrics["A-telemetry-clock"] = &taskattempts.AttemptMetrics{
+		AttemptID: "A-telemetry-clock", WallClockSeconds: 486.072,
+	}
+
+	result, err := svc.SummarizeTask(context.Background(), "T-telemetry-clock")
+	if err != nil {
+		t.Fatalf("SummarizeTask() error: %v", err)
+	}
+	if len(result.Attempts) != 1 {
+		t.Fatalf("attempts = %#v, want one attempt", result.Attempts)
+	}
+	got := result.Attempts[0]
+	wantMS := int64((3*time.Minute + 14*time.Second) / time.Millisecond)
+	if got.DurationMS != wantMS {
+		t.Fatalf("attempt duration = %dms, want lifecycle duration %dms", got.DurationMS, wantMS)
+	}
+	if result.TotalWallTimeMS != wantMS {
+		t.Fatalf("total wall time = %dms, want lifecycle duration %dms", result.TotalWallTimeMS, wantMS)
+	}
+	if got.Metrics == nil || math.Abs(got.Metrics.WallClockSeconds-float64(wantMS)/1000) > 1e-9 {
+		t.Fatalf("wall_clock_seconds = %#v, want lifecycle duration %.3f", got.Metrics, float64(wantMS)/1000)
+	}
+}
+
 func TestService_SummarizeJobLiveAttemptIdentityIsImmediateAndUnique(t *testing.T) {
 	svc, tasks, attempts, _, _ := newTestService()
 	tasks.tasks["T-live-admin"] = &taskgraph.Task{ID: "T-live-admin", JobID: "J-live-admin", Status: taskgraph.StatusRunning, AttemptCount: 1}
@@ -944,7 +989,7 @@ func TestRollupPhaseTimings(t *testing.T) {
 			wantBreakdn: map[string]int64{},
 		},
 		{
-			name:    "wall bounds derive duration",
+			name: "wall bounds derive duration",
 			timings: []taskattempts.PhaseTiming{
 				mk(100, "render", base, base.Add(10*time.Second)),
 				mk(50, "encode", base.Add(2*time.Second), base.Add(14*time.Second)),
@@ -955,7 +1000,7 @@ func TestRollupPhaseTimings(t *testing.T) {
 			wantBreakdn: map[string]int64{"render": 100, "encode": 50},
 		},
 		{
-			name:    "out-of-order bounds still span min/max",
+			name: "out-of-order bounds still span min/max",
 			timings: []taskattempts.PhaseTiming{
 				mk(30, "encode", base.Add(20*time.Second), base.Add(25*time.Second)),
 				mk(30, "render", base, base.Add(10*time.Second)),
@@ -966,7 +1011,7 @@ func TestRollupPhaseTimings(t *testing.T) {
 			wantBreakdn: map[string]int64{"encode": 30, "render": 30},
 		},
 		{
-			name:    "no wall bounds falls back to sum",
+			name: "no wall bounds falls back to sum",
 			timings: []taskattempts.PhaseTiming{
 				mk(100, "render", time.Time{}, time.Time{}),
 				mk(50, "encode", time.Time{}, time.Time{}),
@@ -977,7 +1022,7 @@ func TestRollupPhaseTimings(t *testing.T) {
 			wantBreakdn: map[string]int64{"render": 100, "encode": 50},
 		},
 		{
-			name:    "partial bounds ignore zero timestamps",
+			name: "partial bounds ignore zero timestamps",
 			timings: []taskattempts.PhaseTiming{
 				mk(100, "render", base, base.Add(10*time.Second)),
 				mk(50, "quality", time.Time{}, time.Time{}),

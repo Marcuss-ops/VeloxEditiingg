@@ -85,27 +85,48 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 
 		// Phase timings
 		timings, err := s.attempts.GetPhaseTimings(ctx, a.ID)
+		lifecycleDuration, hasLifecycleDuration := attemptLifecycleDurationMS(a)
 		if err == nil {
-			as.DurationMS = rollupPhaseTimings(timings, &as, summary)
-			firstStart, lastEnd = mergeWallBounds(timings, firstStart, lastEnd)
+			phaseDuration := rollupPhaseTimings(timings, &as, summary)
+			if !hasLifecycleDuration {
+				as.DurationMS = phaseDuration
+				firstStart, lastEnd = mergeWallBounds(timings, firstStart, lastEnd)
+			}
+		}
+		if hasLifecycleDuration {
+			// Attempt lifecycle timestamps are the authoritative wall-clock
+			// boundary. Phase rows are overlapping detail and may contain a
+			// late/malformed finalization timestamp; they must never extend the
+			// reported attempt duration or task wall time.
+			as.DurationMS = lifecycleDuration
+			firstStart = earlierTime(firstStart, *a.StartedAt)
+			lastEnd = laterTime(lastEnd, *a.CompletedAt)
 		}
 
 		// Metrics
 		metrics, err := s.attempts.GetMetrics(ctx, a.ID)
 		if err == nil && metrics != nil {
-			as.Metrics = metrics
-			summary.TotalInputBytes += metrics.InputBytes
-			summary.TotalOutputBytes += metrics.OutputBytes
-			summary.BytesFromDrive += metrics.BytesFromDrive
-			summary.BytesFromBlobstore += metrics.BytesFromBlobstore
-			summary.BytesFromLocalCache += metrics.BytesFromLocalCache
-			summary.CPUTimeMS += metrics.CPUTimeMS
-			summary.GPUTimeMS += metrics.GPUTimeMS
-			if metrics.PeakRSSBytes > summary.PeakRSSBytes {
-				summary.PeakRSSBytes = metrics.PeakRSSBytes
+			// The worker metric is retained for resource accounting, but the
+			// canonical wall-clock value exposed by this read model comes from
+			// the durable attempt lifecycle. This prevents a malformed phase
+			// timestamp from presenting a five-minute render as eight minutes.
+			metricsCopy := *metrics
+			if lifecycleDuration, ok := attemptLifecycleDurationMS(a); ok {
+				metricsCopy.WallClockSeconds = float64(lifecycleDuration) / 1000
 			}
-			if metrics.PeakVRAMBytes > summary.PeakVRAMBytes {
-				summary.PeakVRAMBytes = metrics.PeakVRAMBytes
+			as.Metrics = &metricsCopy
+			summary.TotalInputBytes += metricsCopy.InputBytes
+			summary.TotalOutputBytes += metricsCopy.OutputBytes
+			summary.BytesFromDrive += metricsCopy.BytesFromDrive
+			summary.BytesFromBlobstore += metricsCopy.BytesFromBlobstore
+			summary.BytesFromLocalCache += metricsCopy.BytesFromLocalCache
+			summary.CPUTimeMS += metricsCopy.CPUTimeMS
+			summary.GPUTimeMS += metricsCopy.GPUTimeMS
+			if metricsCopy.PeakRSSBytes > summary.PeakRSSBytes {
+				summary.PeakRSSBytes = metricsCopy.PeakRSSBytes
+			}
+			if metricsCopy.PeakVRAMBytes > summary.PeakVRAMBytes {
+				summary.PeakVRAMBytes = metricsCopy.PeakVRAMBytes
 			}
 		} else if live != nil && liveDecision.overlaysAttempt(a.ID) {
 			// Before final TaskResult ingest, expose the same typed metric
@@ -206,6 +227,20 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 	}
 
 	return summary, nil
+}
+
+// attemptLifecycleDurationMS returns the authoritative elapsed wall time for
+// a terminal attempt. Phase timings are intentionally excluded: they overlap
+// and are diagnostic detail, not the attempt clock.
+func attemptLifecycleDurationMS(a taskattempts.TaskAttempt) (int64, bool) {
+	if a.StartedAt == nil || a.CompletedAt == nil {
+		return 0, false
+	}
+	duration := a.CompletedAt.Sub(*a.StartedAt).Milliseconds()
+	if duration < 0 {
+		return 0, false
+	}
+	return duration, true
 }
 
 // rollupPhaseTimings folds one attempt's phase timings into its phase
