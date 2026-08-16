@@ -1,19 +1,22 @@
 // Package workercache — CleanupLoop runs the periodic + post-job
-// cleanup pass. The user-spec requirement is:
+// cache-pressure pass. The user-spec requirement is:
 //
 //   - "gira dopo ogni job" → after every job the worker dispatches,
 //     a Tick fires.
-//   - "ogni 5 minuti" → a periodic ticker (interval from
-//     VELOX_CACHE_CLEANUP_INTERVAL, default 5m).
+//   - a periodic ticker (interval from VELOX_CACHE_EVICTION_INTERVAL_SECS,
+//     default 30s) so pressure is re-evaluated without a job boundary.
 //
 // On every Tick, the loop:
 //   1. Calls SnapshotSource.Current to fetch the latest protected
 //      asset snapshot (the worker polled it during Pass 8 wiring).
-//   2. Calls CleanupWithPolicy (Pass 12) with the fresh
-//      snapshotGeneratedAt + protected IDs + the operator-facing
-//      policy + the loop's clock (time.Now().UTC()).
-//   3. Surfaces the result via OnTick callback for observability
-//      (Prometheus counters in Pass 12.5) + log lines in production.
+//   2. Short-circuits (no eviction) when the snapshot is missing or
+//      stale — a protected set we cannot trust must never authorize a wipe.
+//   3. Delegates to EvictUnderPressure with the HIGH/LOW watermarks,
+//      the LRU batch size, and the injectable disk-usage probe:
+//      below HIGH nothing is evicted; at/above HIGH LRU blobs are removed
+//      until usage drops to LOW.
+//   4. Surfaces the result via OnTick callback for observability
+//      (Prometheus counters + log lines in production).
 //
 // The SnapshotSource interface is local to workercache so the loop
 // does not import velox-shared/protectedasset directly. Tests use a
@@ -78,9 +81,24 @@ type CleanupLoop struct {
 	// Cache is the workercache.Cache being kept tidy. Required.
 	Cache *Cache
 
-	// Policy is the operator-facing CleanupPolicy (Pass 12).
+	// Policy is the operator-facing CleanupPolicy (Pass 12). Its
+	// SnapshotMaxAge is the staleness threshold for the protected-set
+	// snapshot; the grace/interval fields are unused by the pressure
+	// controller and retained for source compatibility.
 	// Required.
 	Policy CleanupPolicy
+
+	// Pressure carries the pressure-eviction hysteresis + batch tuning
+	// (HIGH/LOW watermarks and the LRU batch size). The loop is the
+	// pressure controller: each tick evicts nothing below the HIGH
+	// watermark and evicts LRU blobs down to the LOW watermark above it.
+	// Required for eviction; a zero config is a no-op pass.
+	Pressure PressureEvictionConfig
+
+	// UsagePercent is the injectable disk-usage probe. Production passes a
+	// statfs closure over the blob cache root; tests pass a deterministic
+	// sequence. Nil means "no pressure data" — the tick is a fail-safe no-op.
+	UsagePercent func() int
 
 	// Snapshot is the master's protected-asset snapshot source.
 	// Optional for direct TickOnce callers; production supplies it.
@@ -100,9 +118,9 @@ type CleanupLoop struct {
 	JobDone <-chan struct{}
 
 	// OnTick is the observability callback invoked once per Tick
-	// with the stats + any error from CleanupWithPolicy. Optional;
+	// with the pressure-eviction stats + any error. Optional;
 	// production wires Prometheus counters / log lines here.
-	OnTick func(CleanupStats, error)
+	OnTick func(PressureEvictionStats, error)
 
 	// Now is the clock injection point. Optional; when nil, the
 	// loop falls back to time.Now().UTC(). Tests inject a fixed
@@ -190,7 +208,7 @@ func (cl *CleanupLoop) runTick(ctx context.Context) {
 	// authenticated snapshot before touching the cache again.
 	if err := cl.Barrier.WaitReady(ctx); err != nil {
 		if cl.OnTick != nil {
-			cl.OnTick(CleanupStats{}, fmt.Errorf("%w: %v", ErrProtectionBarrierNotReady, err))
+			cl.OnTick(PressureEvictionStats{}, fmt.Errorf("%w: %v", ErrProtectionBarrierNotReady, err))
 		}
 		return
 	}
@@ -200,35 +218,59 @@ func (cl *CleanupLoop) runTick(ctx context.Context) {
 	}
 }
 
-// TickOnce runs one cleanup pass against the current snapshot.
+// TickOnce runs one pressure-eviction pass against the current snapshot.
 // Public so tests can drive deterministically without the loop
 // overhead; production callers do NOT use this directly (Run is
 // the canonical entry point).
 //
 // TickOnce NEVER blocks; the snapshot fetch is synchronous but
-// bounded by ctx. Errors from the SnapshotSource are tolerated
-// (logged via OnTick if wired) — the pass proceeds with whatever
-// data it has, which on a nil source or freshly-ingested failure
-// triggers the ErrSnapshotStale short-circuit in CleanupWithPolicy.
-func (cl *CleanupLoop) TickOnce(ctx context.Context) (CleanupStats, error) {
+// bounded by ctx. A failed poll, a missing snapshot, or a stale
+// snapshot are all fail-safe: the cache is left untouched (no eviction)
+// and the corresponding sentinel error is returned for observability.
+// With a fresh snapshot the pass delegates to EvictUnderPressure, which
+// evicts nothing below the HIGH watermark.
+func (cl *CleanupLoop) TickOnce(ctx context.Context) (PressureEvictionStats, error) {
 	if cl.Cache == nil {
-		return CleanupStats{}, errors.New("workercache.CleanupLoop.TickOnce: nil Cache")
+		return PressureEvictionStats{}, errors.New("workercache.CleanupLoop.TickOnce: nil Cache")
 	}
 
 	var generatedAt time.Time
 	var protected []string
 	if cl.Snapshot != nil {
 		snapAt, ids, snapErr := cl.Snapshot.Current(ctx)
-		if snapErr == nil {
-			generatedAt = snapAt
-			protected = ids
-		} else {
+		if snapErr != nil {
 			// A failed poll must never be converted into an empty
 			// protected set. Keep the cache untouched until a valid
 			// snapshot is available.
-			return CleanupStats{}, fmt.Errorf("snapshot fetch: %w", snapErr)
+			return PressureEvictionStats{}, fmt.Errorf("snapshot fetch: %w", snapErr)
 		}
+		generatedAt = snapAt
+		protected = ids
 	}
 
-	return CleanupWithPolicy(ctx, cl.Cache, generatedAt, protected, cl.Policy, cl.resolveNow())
+	// Missing protection data is fail-safe: do not evict anything until the
+	// worker has received at least one valid snapshot from the master.
+	if generatedAt.IsZero() {
+		return PressureEvictionStats{}, ErrSnapshotUnavailable
+	}
+
+	// Staleness short-circuit: the supplied snapshot is too old to authorize
+	// eviction, so the pass becomes a no-op.
+	if cl.Policy.SnapshotMaxAge > 0 && cl.resolveNow().Sub(generatedAt) > cl.Policy.SnapshotMaxAge {
+		return PressureEvictionStats{}, fmt.Errorf("%w: snapshot_age=%v max_age=%v",
+			ErrSnapshotStale, cl.resolveNow().Sub(generatedAt), cl.Policy.SnapshotMaxAge)
+	}
+
+	if cl.UsagePercent == nil {
+		// Without a disk-usage probe there is no pressure signal; a
+		// fail-safe no-op beats evicting on a guess.
+		return PressureEvictionStats{}, errors.New("workercache.CleanupLoop.TickOnce: nil UsagePercent probe")
+	}
+
+	protectedSet := make(map[string]struct{}, len(protected))
+	for _, id := range protected {
+		protectedSet[id] = struct{}{}
+	}
+
+	return EvictUnderPressure(ctx, cl.Cache, cl.Pressure, cl.UsagePercent, protectedSet)
 }

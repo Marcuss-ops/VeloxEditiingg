@@ -12,6 +12,7 @@ package spool
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -505,6 +506,173 @@ func TestLifecycle_TimestampMonotonic(t *testing.T) {
 	got, _ := s.Get(ctx, e.SpoolID)
 	if !got.UpdatedAt.After(first) {
 		t.Errorf("UpdatedAt did not advance: first=%v second=%v", first, got.UpdatedAt)
+	}
+}
+
+func TestStorageTier_IsValid_And_Volatile(t *testing.T) {
+	cases := map[StorageTier]struct{ valid, volatile bool }{
+		StorageTierNvmeDurable:   {true, false},
+		StorageTierTmpfsVolatile: {true, true},
+		"INVENTED":               {false, false},
+		"":                       {false, false},
+	}
+	for tier, want := range cases {
+		if got := tier.IsValid(); got != want.valid {
+			t.Errorf("StorageTier(%q).IsValid() = %v; want %v", tier, got, want.valid)
+		}
+		if got := tier.Volatile(); got != want.volatile {
+			t.Errorf("StorageTier(%q).Volatile() = %v; want %v", tier, got, want.volatile)
+		}
+	}
+}
+
+func TestInsert_StorageTier_DefaultsAndPersists(t *testing.T) {
+	s := newInMemoryTestStore(t)
+	ctx := context.Background()
+
+	// Empty tier defaults to durable.
+	def, err := s.Insert(ctx, SpoolEntry{TaskID: "T-default", AttemptID: "A-default", WorkerSpoolKey: "K-default"})
+	if err != nil {
+		t.Fatalf("Insert(default) → %v", err)
+	}
+	if def.StorageTier != StorageTierNvmeDurable {
+		t.Errorf("default tier = %q; want NVME_DURABLE", def.StorageTier)
+	}
+
+	// Explicit volatile tier round-trips through Get.
+	vol, err := s.Insert(ctx, SpoolEntry{TaskID: "T-vol", AttemptID: "A-vol", WorkerSpoolKey: "K-vol", StorageTier: StorageTierTmpfsVolatile})
+	if err != nil {
+		t.Fatalf("Insert(volatile) → %v", err)
+	}
+	got, err := s.Get(ctx, vol.SpoolID)
+	if err != nil {
+		t.Fatalf("Get(volatile) → %v", err)
+	}
+	if got.StorageTier != StorageTierTmpfsVolatile {
+		t.Errorf("persisted tier = %q; want TMPFS_VOLATILE", got.StorageTier)
+	}
+
+	// Invalid tier is rejected.
+	if _, err := s.Insert(ctx, SpoolEntry{TaskID: "T-bad", AttemptID: "A-bad", WorkerSpoolKey: "K-bad", StorageTier: "BOGUS"}); err == nil {
+		t.Error("Insert with invalid storage tier should error")
+	}
+}
+
+func TestMarkSpilled_RepointsVolatileToDurable(t *testing.T) {
+	s := newInMemoryTestStore(t)
+	ctx := context.Background()
+	e := mustInsertBasic(t, s, "spill")
+	_ = s.MarkReady(ctx, e.SpoolID, strings.Repeat("a", 64), 100)
+	_ = s.MarkUploadPending(ctx, e.SpoolID, "up-spill")
+	_ = s.MarkUploading(ctx, e.SpoolID, 0)
+
+	if err := s.MarkSpilled(ctx, e.SpoolID, "/nvme/artifact/spilled.mp4"); err != nil {
+		t.Fatalf("MarkSpilled → %v", err)
+	}
+	got, err := s.Get(ctx, e.SpoolID)
+	if err != nil {
+		t.Fatalf("Get → %v", err)
+	}
+	if got.LocalPath != "/nvme/artifact/spilled.mp4" {
+		t.Errorf("local_path = %q; want spilled durable path", got.LocalPath)
+	}
+	if got.StorageTier != StorageTierNvmeDurable {
+		t.Errorf("storage_tier = %q; want NVME_DURABLE", got.StorageTier)
+	}
+	if got.Status != StatusUploading {
+		t.Errorf("status = %q; want UPLOADING (spill must not advance the state)", got.Status)
+	}
+
+	// Spill must not repoint a terminal row.
+	_ = s.MarkUploaded(ctx, e.SpoolID)
+	_ = s.MarkCommitted(ctx, e.SpoolID)
+	if err := s.MarkSpilled(ctx, e.SpoolID, "/nvme/artifact/late.mp4"); err == nil {
+		t.Error("MarkSpilled on COMMITTED should CAS-conflict")
+	}
+}
+
+func TestListVolatileUncommitted_OnlyVolatileMidUpload(t *testing.T) {
+	s := newInMemoryTestStore(t)
+	ctx := context.Background()
+
+	vol := mustInsertBasic(t, s, "vol")
+	_ = s.MarkReady(ctx, vol.SpoolID, strings.Repeat("v", 64), 1)
+	_ = s.MarkUploadPending(ctx, vol.SpoolID, "up-vol")
+	_ = s.MarkUploading(ctx, vol.SpoolID, 0)
+	// Re-tag to volatile (spill lists by tier, not by insert-time tier).
+	if _, err := s.db.ExecContext(ctx, `UPDATE worker_output_spool SET storage_tier = 'TMPFS_VOLATILE' WHERE spool_id = ?`, vol.SpoolID); err != nil {
+		t.Fatalf("tag volatile: %v", err)
+	}
+
+	// Durable mid-upload row must NOT appear.
+	dur := mustInsertBasic(t, s, "dur")
+	_ = s.MarkReady(ctx, dur.SpoolID, strings.Repeat("d", 64), 1)
+	_ = s.MarkUploadPending(ctx, dur.SpoolID, "up-dur")
+	_ = s.MarkUploading(ctx, dur.SpoolID, 0)
+
+	// Volatile terminal row must NOT appear.
+	term := mustInsertBasic(t, s, "term")
+	_ = s.MarkReady(ctx, term.SpoolID, strings.Repeat("t", 64), 1)
+	if _, err := s.db.ExecContext(ctx, `UPDATE worker_output_spool SET storage_tier = 'TMPFS_VOLATILE', status = 'COMMITTED' WHERE spool_id = ?`, term.SpoolID); err != nil {
+		t.Fatalf("tag terminal volatile: %v", err)
+	}
+
+	got, err := s.ListVolatileUncommitted(ctx)
+	if err != nil {
+		t.Fatalf("ListVolatileUncommitted → %v", err)
+	}
+	if len(got) != 1 || got[0].SpoolID != vol.SpoolID {
+		t.Fatalf("ListVolatileUncommitted = %v; want exactly [%s]", got, vol.SpoolID)
+	}
+}
+
+func TestEnsureStorageTierColumn_MigratesAndIsIdempotent(t *testing.T) {
+	// Old-schema table (no storage_tier column).
+	const oldDDL = `CREATE TABLE worker_output_spool (
+		spool_id        TEXT PRIMARY KEY,
+		task_id         TEXT NOT NULL,
+		attempt_id      TEXT NOT NULL,
+		commit_id       TEXT NOT NULL DEFAULT '',
+		worker_spool_key TEXT NOT NULL,
+		local_path      TEXT NOT NULL DEFAULT '',
+		sha256          TEXT NOT NULL DEFAULT '',
+		size_bytes      INTEGER NOT NULL DEFAULT 0,
+		upload_id       TEXT NOT NULL DEFAULT '',
+		uploaded_bytes  INTEGER NOT NULL DEFAULT 0,
+		status          TEXT NOT NULL,
+		last_error      TEXT NOT NULL DEFAULT '',
+		created_at      TEXT NOT NULL,
+		updated_at      TEXT NOT NULL,
+		UNIQUE(task_id, attempt_id, worker_spool_key)
+	)`
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(oldDDL); err != nil {
+		t.Fatalf("create old schema: %v", err)
+	}
+
+	if err := ensureStorageTierColumn(db); err != nil {
+		t.Fatalf("first ensureStorageTierColumn: %v", err)
+	}
+	if err := ensureStorageTierColumn(db); err != nil {
+		t.Fatalf("second ensureStorageTierColumn (idempotent): %v", err)
+	}
+
+	// Insert through the raw SQL path to confirm the column default works.
+	if _, err := db.Exec(`INSERT INTO worker_output_spool
+		(spool_id, task_id, attempt_id, worker_spool_key, status, created_at, updated_at)
+		VALUES ('s1','T1','A1','K1','RENDERING','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatalf("raw insert: %v", err)
+	}
+	var tier string
+	if err := db.QueryRow(`SELECT storage_tier FROM worker_output_spool WHERE spool_id = 's1'`).Scan(&tier); err != nil {
+		t.Fatalf("read storage_tier: %v", err)
+	}
+	if tier != string(StorageTierNvmeDurable) {
+		t.Errorf("migrated default storage_tier = %q; want NVME_DURABLE", tier)
 	}
 }
 

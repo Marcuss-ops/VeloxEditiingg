@@ -10,6 +10,7 @@ import (
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/blob"
 	"velox-worker-agent/pkg/cache"
+	"velox-worker-agent/pkg/storage"
 	"velox-worker-agent/pkg/video/ffmpegrunner"
 )
 
@@ -62,6 +63,11 @@ type ContextOptions struct {
 	// FFmpegProfiles is the attempt-scoped accumulator executors push
 	// every canonical FFmpegResult into. Optional; nil skips aggregation.
 	FFmpegProfiles *ffmpegrunner.Aggregator
+
+	// StorageResolver is the canonical Fase E1 placement resolver threaded
+	// from the worker. Optional; nil means executors fall back to their
+	// legacy outputBase (no ARTIFACT_STAGING placement).
+	StorageResolver *storage.Resolver
 }
 
 // runnerContext is the per-task ExecutionContext handed to Executor.Execute.
@@ -82,6 +88,7 @@ type runnerContext struct {
 	cacheStats     CacheStatsProvider
 	blobStats      BlobStatsProvider
 	ffmpegProfiles *ffmpegrunner.Aggregator
+	storage        *storage.Resolver
 }
 
 func newRunnerContext(opts ContextOptions) (*runnerContext, error) {
@@ -126,6 +133,7 @@ func newRunnerContext(opts ContextOptions) (*runnerContext, error) {
 		cacheStats:     opts.CacheStats,
 		blobStats:      opts.BlobStats,
 		ffmpegProfiles: opts.FFmpegProfiles,
+		storage:        opts.StorageResolver,
 	}, nil
 }
 
@@ -161,6 +169,16 @@ func (c *runnerContext) Recorder() *telemetry.EventRecorder {
 // wired (safe to skip).
 func (c *runnerContext) FFmpegProfiles() *ffmpegrunner.Aggregator {
 	return c.ffmpegProfiles
+}
+
+// StorageResolver exposes the canonical Fase E1 placement resolver to
+// executors that produce a final artifact. Deliberately NOT part of the
+// public executor.ExecutionContext interface — executors detect it through
+// the optional-interface pattern (same as Recorder/FFmpegProfiles) so
+// third-party executors and test stubs remain untouched. Nil when the
+// runner was not wired with a resolver.
+func (c *runnerContext) StorageResolver() *storage.Resolver {
+	return c.storage
 }
 
 // Done is closed when the parent ctx is canceled AND when the runner

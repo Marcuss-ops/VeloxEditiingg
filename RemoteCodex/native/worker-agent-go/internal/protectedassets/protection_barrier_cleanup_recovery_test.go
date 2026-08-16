@@ -52,7 +52,11 @@ func TestProtectedAssetsErrorsAfterStartupBlockCleanupUntilRecovery(t *testing.T
 	}
 	loop := &workercache.CleanupLoop{
 		Cache: cache, Policy: workercache.CleanupPolicy{RecentUseGrace: 0, SnapshotMaxAge: time.Minute},
-		Snapshot: poller, Barrier: poller, Interval: time.Hour,
+		Snapshot:     poller,
+		Barrier:      poller,
+		Interval:     time.Hour,
+		Pressure:     workercache.PressureEvictionConfig{HighWatermarkPercent: 80, LowWatermarkPercent: 72, BatchSize: 128},
+		UsagePercent: func() int { return 90 },
 	}
 
 	if _, err := loop.TickOnce(context.Background()); err != nil {
@@ -61,13 +65,14 @@ func TestProtectedAssetsErrorsAfterStartupBlockCleanupUntilRecovery(t *testing.T
 	if _, err := os.Stat(cachePath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("initial valid snapshot did not remove evictable file: %v", err)
 	}
-	// Recreate the row/file for the failure phase.
+	// Recreate the file + physical blob for the failure phase. Pressure
+	// eviction retains the asset_key → content_hash mapping (cheap
+	// metadata), so re-establish the blob via MarkDownloadComplete rather
+	// than Store (which would collide on the retained asset_key).
 	if err := os.WriteFile(cachePath, []byte("old-cache"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := cache.Store(context.Background(), workercache.Entry{
-		AssetKey: "old-cache", LocalPath: cachePath, DownloadComplete: true,
-	}); err != nil {
+	if err := cache.MarkDownloadComplete(context.Background(), "old-cache", cachePath, int64(len("old-cache"))); err != nil {
 		t.Fatal(err)
 	}
 
@@ -106,7 +111,10 @@ func TestProtectedAssetsErrorsAfterStartupBlockCleanupUntilRecovery(t *testing.T
 	if _, err := os.Stat(cachePath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("recovered 200 did not re-enable cleanup; file stat=%v", err)
 	}
-	if _, found, err := cache.Find(context.Background(), "old-cache"); err != nil || found {
-		t.Fatalf("recovered 200 did not remove cache index row: found=%v err=%v", found, err)
+	// The asset_key → content_hash mapping is retained after pressure
+	// eviction (cheap metadata for a future resolve); only the physical
+	// bytes are removed.
+	if _, found, err := cache.Find(context.Background(), "old-cache"); err != nil || !found {
+		t.Fatalf("recovered cleanup removed the retained asset mapping: found=%v err=%v", found, err)
 	}
 }

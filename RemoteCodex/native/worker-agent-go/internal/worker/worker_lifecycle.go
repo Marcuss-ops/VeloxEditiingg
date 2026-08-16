@@ -405,6 +405,11 @@ func (w *Worker) Stop() {
 		w.cacheResolverMu.Lock()
 		w.cacheResolver = nil
 		w.cacheResolverMu.Unlock()
+		// Graceful-shutdown durability: move every still-volatile (tmpfs)
+		// artifact onto durable NVMe within a bounded budget so a normal
+		// deploy/signal does not lose a rendered-but-uncommitted output.
+		// Hard crashes are not covered — the master re-schedules those.
+		w.spillVolatileUncommitted()
 	})
 }
 

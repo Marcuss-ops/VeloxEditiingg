@@ -11,7 +11,9 @@
 //	ATTEMPT_TEMP     — per-attempt scratch (manifests, concat lists, small
 //	                   audio fragments, control files, segments) → tmpfs
 //	                   for small files ONLY, NVMe otherwise
-//	ARTIFACT_FINAL   — the final artifact staged for upload → NVMe
+//	ARTIFACT_FINAL   — the durable final artifact staged for upload → NVMe
+//	ARTIFACT_STAGING — the final artifact staging placement → tmpfs when a
+//	                   RAM reservation succeeds, durable NVMe otherwise
 //
 // tmpfs rule: an ATTEMPT_TEMP file is eligible for TmpfsDir only when its
 // size is in [0, TmpfsThresholdBytes). Files at/above the threshold — and
@@ -35,8 +37,15 @@ const (
 	CachePersistent Class = "CACHE_PERSISTENT"
 	// AttemptTemp is per-attempt scratch storage.
 	AttemptTemp Class = "ATTEMPT_TEMP"
-	// ArtifactFinal is where the final artifact is staged before upload.
+	// ArtifactFinal is where the durable final artifact is staged before
+	// upload. It NEVER routes to tmpfs — the deliverable must survive a
+	// worker restart.
 	ArtifactFinal Class = "ARTIFACT_FINAL"
+	// ArtifactStaging is the volatile-capable final-artifact placement. It
+	// prefers tmpfs (RAM) when a reservation succeeds and falls back to the
+	// durable ArtifactDir otherwise. Callers MUST pair a tmpfs placement
+	// with ReleaseArtifact after commit/spill so the reservation is freed.
+	ArtifactStaging Class = "ARTIFACT_STAGING"
 )
 
 // Backing is the physical medium selected for a placement. It is a
@@ -69,6 +78,15 @@ type Config struct {
 	// threshold (or with unknown size) always go to TempDir. Must be > 0
 	// when TmpfsDir is set.
 	TmpfsThresholdBytes int64
+	// ArtifactStaging configures volatile tmpfs staging for
+	// ARTIFACT_STAGING placements. Zero value (Enabled=false) routes every
+	// staging placement to the durable ArtifactDir.
+	ArtifactStaging ArtifactStagingConfig
+	// StagingMetrics is the optional observability sink for ARTIFACT_STAGING
+	// decisions (fallback reason + live reserved-bytes gauge). Nil disables
+	// collection. The concrete Prometheus implementation is wired at the
+	// worker composition root.
+	StagingMetrics StagingMetrics
 }
 
 // Validate fails closed on missing required backings or an inconsistent
@@ -86,13 +104,19 @@ func (c Config) Validate() error {
 	if c.TmpfsDir != "" && c.TmpfsThresholdBytes <= 0 {
 		return fmt.Errorf("storage: tmpfs_dir is set but tmpfs_threshold_bytes must be > 0")
 	}
+	if err := c.ArtifactStaging.Validate(); err != nil {
+		return err
+	}
 	return nil
 }
 
 // Resolver places files onto storage classes. It is safe for concurrent
-// use: it holds no mutable state beyond the immutable Config.
+// use: it holds the immutable Config plus the staging reservation ledger
+// (which is itself mutex-guarded).
 type Resolver struct {
-	cfg Config
+	cfg     Config
+	staging *ArtifactStagingManager
+	metrics StagingMetrics
 }
 
 // New builds a Resolver. It does NOT touch the filesystem — call
@@ -102,7 +126,11 @@ func New(cfg Config) (*Resolver, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	return &Resolver{cfg: cfg}, nil
+	r := &Resolver{cfg: cfg, metrics: cfg.StagingMetrics}
+	if cfg.ArtifactStaging.Enabled {
+		r.staging = newArtifactStagingManager(cfg.ArtifactStaging)
+	}
+	return r, nil
 }
 
 // Placement is the outcome of a placement decision: which class, which
@@ -111,6 +139,14 @@ type Placement struct {
 	Class   Class
 	Backing Backing
 	Path    string
+	// ReservedBytes is the RAM reservation held for this placement. It is
+	// non-zero only when Backing == BackingTmpfs (ARTIFACT_STAGING).
+	// ReleaseArtifact subtracts it from the ledger; do not free it manually.
+	ReservedBytes int64
+	// FallbackReason is non-empty only when an ARTIFACT_STAGING placement
+	// fell back to durable NVMe; it carries the reason the tmpfs
+	// reservation could not be satisfied (FallbackNoSpace, ...).
+	FallbackReason FallbackReason
 }
 
 // Class returns the backing directory root for a class. For
@@ -127,6 +163,10 @@ func (r *Resolver) Class(class Class) (string, error) {
 	case AttemptTemp:
 		return r.cfg.TempDir, nil
 	case ArtifactFinal:
+		return r.cfg.ArtifactDir, nil
+	case ArtifactStaging:
+		// Class() reports the durable NVMe root; Place() makes the
+		// tmpfs-vs-NVMe decision.
 		return r.cfg.ArtifactDir, nil
 	default:
 		return "", fmt.Errorf("storage: unknown class %q", class)
@@ -159,9 +199,96 @@ func (r *Resolver) Place(class Class, rel string, sizeBytes int64) (Placement, e
 			return Placement{Class: class, Backing: BackingTmpfs, Path: filepath.Join(r.cfg.TmpfsDir, rel)}, nil
 		}
 		return Placement{Class: class, Backing: BackingNvme, Path: filepath.Join(r.cfg.TempDir, rel)}, nil
+	case ArtifactStaging:
+		return r.placeArtifactStaging(rel, sizeBytes)
 	default:
 		return Placement{}, fmt.Errorf("storage: unknown class %q", class)
 	}
+}
+
+// placeArtifactStaging implements the ARTIFACT_STAGING decision: try to
+// reserve tmpfs capacity for sizeBytes; fall back to durable NVMe when the
+// reservation fails, tmpfs is disabled, or the size is unknown.
+func (r *Resolver) placeArtifactStaging(rel string, sizeBytes int64) (Placement, error) {
+	if r.staging != nil {
+		if path, reserved, reason, ok := r.staging.reserve(rel, sizeBytes); ok {
+			p := Placement{
+				Class:         ArtifactStaging,
+				Backing:       BackingTmpfs,
+				Path:          path,
+				ReservedBytes: reserved,
+			}
+			r.recordReserved()
+			return p, nil
+		} else {
+			p := Placement{
+				Class:          ArtifactStaging,
+				Backing:        BackingNvme,
+				Path:           filepath.Join(r.cfg.ArtifactDir, rel),
+				FallbackReason: reason,
+			}
+			r.recordFallback(reason)
+			return p, nil
+		}
+	}
+	p := Placement{
+		Class:          ArtifactStaging,
+		Backing:        BackingNvme,
+		Path:           filepath.Join(r.cfg.ArtifactDir, rel),
+		FallbackReason: FallbackTmpfsDisabled,
+	}
+	r.recordFallback(FallbackTmpfsDisabled)
+	return p, nil
+}
+
+// recordReserved publishes the live tmpfs reservation ledger to the metrics
+// sink (if wired). Called after every reserve and release.
+func (r *Resolver) recordReserved() {
+	if r == nil || r.metrics == nil || r.staging == nil {
+		return
+	}
+	r.metrics.SetArtifactTmpfsReservedBytes(r.staging.ReservedBytes())
+}
+
+// recordFallback reports one NVMe fallback to the metrics sink (if wired).
+func (r *Resolver) recordFallback(reason FallbackReason) {
+	if r == nil || r.metrics == nil {
+		return
+	}
+	r.metrics.RecordArtifactNvmeFallback(string(reason))
+}
+
+// ReleaseArtifact frees the RAM reservation held by a tmpfs
+// ARTIFACT_STAGING placement. The reservation is looked up by path (not by
+// ReservedBytes) so the post-commit cleanup, which only knows the URI, can
+// release the exact amount. No-op for NVMe placements and nil resolvers.
+func (r *Resolver) ReleaseArtifact(p Placement) {
+	r.releaseStagingPath(p.Path)
+}
+
+// ReleaseStagingPath frees the reservation for a tmpfs staging path. It is
+// the URI-keyed form used by post-commit cleanup and the NVMe spill path,
+// where only the spooled local_path survives. Unknown paths are a no-op
+// (idempotent).
+func (r *Resolver) ReleaseStagingPath(path string) {
+	r.releaseStagingPath(path)
+}
+
+func (r *Resolver) releaseStagingPath(path string) {
+	if r == nil || r.staging == nil || path == "" {
+		return
+	}
+	r.staging.releasePath(path)
+	r.recordReserved()
+}
+
+// ReservedTmpfsBytes reports the tmpfs bytes currently reserved for
+// ARTIFACT_STAGING placements (metrics/diagnostics).
+func (r *Resolver) ReservedTmpfsBytes() int64 {
+	if r == nil || r.staging == nil {
+		return 0
+	}
+	return r.staging.ReservedBytes()
 }
 
 // TmpfsEligible reports whether sizeBytes may be placed on tmpfs. Unknown
@@ -179,7 +306,7 @@ func (r *Resolver) EnsureDirs() error {
 	if r == nil {
 		return fmt.Errorf("storage: nil resolver")
 	}
-	for _, dir := range []string{r.cfg.CacheDir, r.cfg.TempDir, r.cfg.ArtifactDir, r.cfg.TmpfsDir} {
+	for _, dir := range []string{r.cfg.CacheDir, r.cfg.TempDir, r.cfg.ArtifactDir, r.cfg.TmpfsDir, r.cfg.ArtifactStaging.Dir} {
 		if dir == "" {
 			continue
 		}
@@ -204,6 +331,11 @@ func (r *Resolver) String() string {
 	if r == nil {
 		return "storage{nil}"
 	}
-	return fmt.Sprintf("storage{cache=%s temp=%s tmpfs=%s tmpfs_threshold_bytes=%d artifact=%s}",
+	s := fmt.Sprintf("storage{cache=%s temp=%s tmpfs=%s tmpfs_threshold_bytes=%d artifact=%s}",
 		r.cfg.CacheDir, r.cfg.TempDir, r.cfg.TmpfsDir, r.cfg.TmpfsThresholdBytes, r.cfg.ArtifactDir)
+	if r.cfg.ArtifactStaging.Enabled {
+		s += fmt.Sprintf(" artifact_staging{tmpfs=%s max_percent=%d reserve_bytes=%d}",
+			r.cfg.ArtifactStaging.Dir, r.cfg.ArtifactStaging.MaxPercent, r.cfg.ArtifactStaging.ReserveBytes)
+	}
+	return s
 }

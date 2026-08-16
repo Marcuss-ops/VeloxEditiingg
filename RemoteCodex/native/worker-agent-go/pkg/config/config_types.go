@@ -189,6 +189,45 @@ type WorkerConfig struct {
 	// tune it per fleet via VELOX_TMPFS_THRESHOLD_BYTES.
 	TmpfsThresholdBytes int64 `json:"tmpfs_threshold_bytes,omitempty"`
 
+	// ArtifactTmpfsEnabled opts the worker into volatile RAM staging for the
+	// final artifact (StorageResolver ARTIFACT_STAGING class). Off by
+	// default: the durable NVMe ArtifactDir remains the staging backing.
+	// When enabled, a placement lands on ArtifactTmpfsDir only if a RAM
+	// reservation succeeds; otherwise it falls back to durable NVMe.
+	// Binds from VELOX_ARTIFACT_TMPFS_ENABLED.
+	ArtifactTmpfsEnabled bool `json:"artifact_tmpfs_enabled,omitempty"`
+	// ArtifactTmpfsDir is the tmpfs staging root (e.g.
+	// /dev/shm/velox-artifacts). Required when ArtifactTmpfsEnabled. Binds
+	// from VELOX_ARTIFACT_TMPFS_DIR.
+	ArtifactTmpfsDir string `json:"artifact_tmpfs_dir,omitempty"`
+	// ArtifactTmpfsMaxPercent caps the fraction (1-99) of the tmpfs total
+	// size that may be reserved for staging. Binds from
+	// VELOX_ARTIFACT_TMPFS_MAX_PERCENT; default 65.
+	ArtifactTmpfsMaxPercent int `json:"artifact_tmpfs_max_percent,omitempty"`
+	// ArtifactTmpfsReserveBytes is the tmpfs headroom (in bytes) that must
+	// always remain free beyond reserved bytes. Binds from
+	// VELOX_ARTIFACT_TMPFS_RESERVE_BYTES; default 512 MiB.
+	ArtifactTmpfsReserveBytes int64 `json:"artifact_tmpfs_reserve_bytes,omitempty"`
+
+	// Cache pressure-eviction tuning for the content-addressed asset cache
+	// (the CleanupLoop's pressure controller). The cache only evicts when
+	// disk usage reaches CacheHighWatermarkPercent and stops once it drops
+	// to CacheLowWatermarkPercent (hysteresis: no 80.1↔79.9 thrash).
+	// These are centrally loaded here; consumers must not read env directly.
+	// Binds from VELOX_CACHE_HIGH_WATERMARK_PERCENT; default 80.
+	CacheHighWatermarkPercent int `json:"cache_high_watermark_percent,omitempty"`
+	// CacheLowWatermarkPercent is the stop target for pressure eviction.
+	// Must be strictly below CacheHighWatermarkPercent. Binds from
+	// VELOX_CACHE_LOW_WATERMARK_PERCENT; default 72.
+	CacheLowWatermarkPercent int `json:"cache_low_watermark_percent,omitempty"`
+	// CacheEvictionBatchSize is the maximum number of LRU blobs removed per
+	// pressure-eviction pass. Binds from VELOX_CACHE_EVICTION_BATCH_SIZE;
+	// default 128.
+	CacheEvictionBatchSize int `json:"cache_eviction_batch_size,omitempty"`
+	// CacheEvictionIntervalSecs is the cleanup-loop tick cadence in seconds.
+	// Binds from VELOX_CACHE_EVICTION_INTERVAL_SECS; default 30.
+	CacheEvictionIntervalSecs int `json:"cache_eviction_interval_secs,omitempty"`
+
 	// WorkerClass is the operator-assigned fleet class (cpu-xlarge, gpu-a100,
 	// mixed, io, ...). Binds from VELOX_WORKER_CLASS env. Surfaces in Hello
 	// metadata → master WorkerInfo.Class → GET /api/v1/workers?class= filter.

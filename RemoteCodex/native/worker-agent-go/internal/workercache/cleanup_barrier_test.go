@@ -62,7 +62,7 @@ func TestCleanupLoop_RunWaitsForProtectionBarrier(t *testing.T) {
 		Policy:   CleanupPolicy{CleanupInterval: time.Hour},
 		Interval: time.Hour,
 		Barrier:  barrier,
-		OnTick: func(CleanupStats, error) {
+		OnTick: func(PressureEvictionStats, error) {
 			ticksMu.Lock()
 			ticks++
 			ticksMu.Unlock()
@@ -117,7 +117,7 @@ func TestCleanupLoop_RunBarrierCancellationIsFailSafe(t *testing.T) {
 	barrier := &testProtectionBarrier{started: make(chan struct{}), release: make(chan struct{})}
 	var ticksMu sync.Mutex
 	ticks := 0
-	loop := &CleanupLoop{Cache: cache, Barrier: barrier, Interval: time.Hour, OnTick: func(CleanupStats, error) {
+	loop := &CleanupLoop{Cache: cache, Barrier: barrier, Interval: time.Hour, OnTick: func(PressureEvictionStats, error) {
 		ticksMu.Lock()
 		ticks++
 		ticksMu.Unlock()

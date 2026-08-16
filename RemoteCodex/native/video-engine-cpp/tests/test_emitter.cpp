@@ -369,25 +369,25 @@ void testCompleteSidecarSchema() {
     engine.recorder().Complete(token, 1000, 2000, 118, vt::kStatusOk);
 
     int64_t tempToken = engine.recorder().Begin(
-        vt::kOriginEngine, vt::kScopeAttempt, "worker.temp", "create", "prepare");
+        vt::kOriginEngine, vt::kScopeAttempt, "worker.temp", "create", "render");
     engine.recorder().Complete(tempToken, 0, 0, 0, vt::kStatusOk);
     int64_t assetToken = engine.recorder().Begin(
         vt::kOriginEngine, vt::kScopeSegment, "worker.asset", "transfer", "download");
     engine.recorder().Complete(assetToken, 1000, 1000, 0, vt::kStatusOk);
     int64_t concatToken = engine.recorder().Begin(
-        vt::kOriginEngine, vt::kScopeAttempt, "engine", "concat", "composite");
+        vt::kOriginEngine, vt::kScopeAttempt, "engine", "concat", "finalize");
     engine.recorder().Complete(concatToken, 1000, 2000, 120, vt::kStatusOk);
     int64_t audioToken = engine.recorder().Begin(
-        vt::kOriginEngine, vt::kScopeAudioTrack, "engine.audio", "mix", "audio");
+        vt::kOriginEngine, vt::kScopeAudioTrack, "engine.audio", "mix", "composite");
     engine.recorder().Complete(audioToken, 300, 400, 0, vt::kStatusOk);
     int64_t muxToken = engine.recorder().Begin(
         vt::kOriginEngine, vt::kScopeAudioTrack, "engine.mux", "audio", "encode");
     engine.recorder().Complete(muxToken, 300, 400, 0, vt::kStatusOk);
     int64_t subtitleToken = engine.recorder().Begin(
-        vt::kOriginValidation, vt::kScopeSubtitleTrack, "subtitle", "burn_in", "subtitle");
+        vt::kOriginValidation, vt::kScopeSubtitleTrack, "subtitle", "burn_in", "composite");
     engine.recorder().Complete(subtitleToken, 0, 0, 0, vt::kStatusOk);
     int64_t qualityToken = engine.recorder().Begin(
-        vt::kOriginValidation, vt::kScopeArtifact, "quality", "ffprobe", "quality");
+        vt::kOriginValidation, vt::kScopeArtifact, "quality", "ffprobe", "finalize");
     engine.recorder().Complete(qualityToken, 0, 0, 0, vt::kStatusOk);
     int64_t failedAssetToken = engine.recorder().Begin(
         vt::kOriginWorker, vt::kScopeArtifact, "worker.asset", "disk_write", "download");

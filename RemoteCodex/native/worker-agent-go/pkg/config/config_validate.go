@@ -153,6 +153,38 @@ func (c *WorkerConfig) Validate() error {
 		}
 	}
 
+	// Cache pressure-eviction hysteresis (RW-PROD cache pressure controller).
+	// Zero fields mean "use default" (applyDefaults repairs them); Validate
+	// enforces the [1,100] range and the low<high invariant only on
+	// explicitly-set values so direct-construction callers keep working.
+	if c.CacheHighWatermarkPercent > 100 {
+		errs = append(errs, "cache_high_watermark_percent must be in [1,100]")
+	}
+	if c.CacheLowWatermarkPercent > 100 {
+		errs = append(errs, "cache_low_watermark_percent must be in [1,100]")
+	}
+	if c.CacheHighWatermarkPercent > 0 && c.CacheLowWatermarkPercent > 0 &&
+		c.CacheLowWatermarkPercent >= c.CacheHighWatermarkPercent {
+		errs = append(errs, "cache_low_watermark_percent must be strictly less than cache_high_watermark_percent")
+	}
+
+	// ARTIFACT_STAGING is opt-in; when enabled it must be fail-closed so a
+	// missing tmpfs dir, an out-of-range max-percent, or a non-positive
+	// reserve never silently drops the optimization the operator asked for.
+	if c.ArtifactTmpfsEnabled {
+		if c.ArtifactTmpfsDir == "" {
+			errs = append(errs, "artifact_tmpfs_dir is required when artifact_tmpfs_enabled is true")
+		}
+		if c.ArtifactTmpfsMaxPercent < 1 || c.ArtifactTmpfsMaxPercent > 99 {
+			errs = append(errs, fmt.Sprintf(
+				"artifact_tmpfs_max_percent must be in [1,99] when artifact_tmpfs_enabled is true, got %d",
+				c.ArtifactTmpfsMaxPercent))
+		}
+		if c.ArtifactTmpfsReserveBytes <= 0 {
+			errs = append(errs, "artifact_tmpfs_reserve_bytes must be positive when artifact_tmpfs_enabled is true")
+		}
+	}
+
 	hasCert := tlsCfg.CertFile != ""
 	hasKey := tlsCfg.KeyFile != ""
 	hasCA := tlsCfg.CAFile != ""

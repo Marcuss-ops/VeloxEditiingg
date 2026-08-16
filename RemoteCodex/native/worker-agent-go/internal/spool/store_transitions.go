@@ -132,6 +132,35 @@ func (s *Store) MarkRejected(ctx context.Context, spoolID, code, message string)
 	return nil
 }
 
+// MarkSpilled repoints a volatile (tmpfs) artifact to a durable NVMe path
+// after a spill (upload failure or graceful shutdown). It is CAS-gated to
+// the mid-upload states so a terminal row (COMMITTED / REJECTED / CLEANED)
+// cannot be repointed. The caller is responsible for copying the bytes and
+// unlinking the tmpfs source; this transition only flips the durable
+// pointer + tier.
+func (s *Store) MarkSpilled(ctx context.Context, spoolID, newLocalPath string) error {
+	if spoolID == "" {
+		return fmt.Errorf("spool.MarkSpilled: spool_id empty")
+	}
+	if newLocalPath == "" {
+		return fmt.Errorf("spool.MarkSpilled: new_local_path empty")
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE worker_output_spool
+		   SET local_path = ?, storage_tier = ?, updated_at = ?
+		 WHERE spool_id = ? AND status IN ('OUTPUT_READY','UPLOAD_PENDING','UPLOADING','UPLOADED')`,
+		newLocalPath, string(StorageTierNvmeDurable), now, spoolID,
+	)
+	if err != nil {
+		return fmt.Errorf("spool.MarkSpilled: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return fmt.Errorf("%w: spool=%s (expected mid-upload state)", ErrCASConflict, spoolID)
+	}
+	return nil
+}
+
 // MarkCleaned transitions COMMITTED | REJECTED → CLEANED. After
 // Cleaned the row is audit-only and the local_path is expected to be
 // empty (caller is responsible for unlinking the file).

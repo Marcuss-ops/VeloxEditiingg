@@ -90,6 +90,88 @@ func TestEnvTmpfsOverrides(t *testing.T) {
 	}
 }
 
+// ARTIFACT_STAGING env bindings: VELOX_ARTIFACT_TMPFS_* opt into volatile
+// RAM staging for the final artifact. Invalid numerics are ignored so a
+// typo cannot zero the tuning knobs (Validate() then fails closed on the
+// enabled combination).
+func TestEnvArtifactTmpfsOverrides(t *testing.T) {
+	t.Setenv(EnvArtifactTmpfsEnabled, "true")
+	t.Setenv(EnvArtifactTmpfsDir, "/dev/shm/velox-artifacts")
+	t.Setenv(EnvArtifactTmpfsMaxPercent, "70")
+	t.Setenv(EnvArtifactTmpfsReserveBytes, "1073741824") // 1 GiB
+	cfg := &WorkerConfig{}
+	if err := applyEnvOverrides(cfg); err != nil {
+		t.Fatalf("applyEnvOverrides: %v", err)
+	}
+	if !cfg.ArtifactTmpfsEnabled {
+		t.Error("ArtifactTmpfsEnabled = false, want true")
+	}
+	if cfg.ArtifactTmpfsDir != "/dev/shm/velox-artifacts" {
+		t.Errorf("ArtifactTmpfsDir = %q, want /dev/shm/velox-artifacts", cfg.ArtifactTmpfsDir)
+	}
+	if cfg.ArtifactTmpfsMaxPercent != 70 {
+		t.Errorf("ArtifactTmpfsMaxPercent = %d, want 70", cfg.ArtifactTmpfsMaxPercent)
+	}
+	if cfg.ArtifactTmpfsReserveBytes != 1073741824 {
+		t.Errorf("ArtifactTmpfsReserveBytes = %d, want 1073741824", cfg.ArtifactTmpfsReserveBytes)
+	}
+
+	// Invalid / non-positive numerics are ignored (pre-env value kept).
+	t.Setenv(EnvArtifactTmpfsMaxPercent, "not-a-number")
+	t.Setenv(EnvArtifactTmpfsReserveBytes, "0")
+	cfg2 := &WorkerConfig{ArtifactTmpfsMaxPercent: 7, ArtifactTmpfsReserveBytes: 9}
+	if err := applyEnvOverrides(cfg2); err != nil {
+		t.Fatalf("applyEnvOverrides invalid staging numerics: %v", err)
+	}
+	if cfg2.ArtifactTmpfsMaxPercent != 7 {
+		t.Errorf("invalid max percent should be ignored, got %d", cfg2.ArtifactTmpfsMaxPercent)
+	}
+	if cfg2.ArtifactTmpfsReserveBytes != 9 {
+		t.Errorf("zero reserve should be ignored, got %d", cfg2.ArtifactTmpfsReserveBytes)
+	}
+}
+
+// Cache pressure-eviction env bindings: VELOX_CACHE_*_WATERMARK_PERCENT,
+// VELOX_CACHE_EVICTION_BATCH_SIZE / _INTERVAL_SECS. Invalid numerics are
+// ignored so a typo cannot zero the tuning knobs (applyDefaults + Validate
+// then fail closed on the explicitly-set values).
+func TestEnvCachePressureOverrides(t *testing.T) {
+	t.Setenv(EnvCacheHighWatermarkPercent, "85")
+	t.Setenv(EnvCacheLowWatermarkPercent, "70")
+	t.Setenv(EnvCacheEvictionBatchSize, "256")
+	t.Setenv(EnvCacheEvictionIntervalSecs, "45")
+	cfg := &WorkerConfig{}
+	if err := applyEnvOverrides(cfg); err != nil {
+		t.Fatalf("applyEnvOverrides: %v", err)
+	}
+	if cfg.CacheHighWatermarkPercent != 85 {
+		t.Errorf("CacheHighWatermarkPercent = %d, want 85", cfg.CacheHighWatermarkPercent)
+	}
+	if cfg.CacheLowWatermarkPercent != 70 {
+		t.Errorf("CacheLowWatermarkPercent = %d, want 70", cfg.CacheLowWatermarkPercent)
+	}
+	if cfg.CacheEvictionBatchSize != 256 {
+		t.Errorf("CacheEvictionBatchSize = %d, want 256", cfg.CacheEvictionBatchSize)
+	}
+	if cfg.CacheEvictionIntervalSecs != 45 {
+		t.Errorf("CacheEvictionIntervalSecs = %d, want 45", cfg.CacheEvictionIntervalSecs)
+	}
+
+	// Invalid / non-positive numerics are ignored (pre-env value kept).
+	t.Setenv(EnvCacheEvictionBatchSize, "not-a-number")
+	t.Setenv(EnvCacheEvictionIntervalSecs, "0")
+	cfg2 := &WorkerConfig{CacheEvictionBatchSize: 7, CacheEvictionIntervalSecs: 9}
+	if err := applyEnvOverrides(cfg2); err != nil {
+		t.Fatalf("applyEnvOverrides invalid cache-pressure numerics: %v", err)
+	}
+	if cfg2.CacheEvictionBatchSize != 7 {
+		t.Errorf("invalid batch size should be ignored, got %d", cfg2.CacheEvictionBatchSize)
+	}
+	if cfg2.CacheEvictionIntervalSecs != 9 {
+		t.Errorf("zero interval should be ignored, got %d", cfg2.CacheEvictionIntervalSecs)
+	}
+}
+
 func TestWorkerCredentialFileFallback(t *testing.T) {
 	tmpDir := t.TempDir()
 	credentialFile := filepath.Join(tmpDir, "worker_credential")

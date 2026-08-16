@@ -26,6 +26,8 @@ type PrometheusMetrics struct {
 	assetCacheMissesCanonical        *CounterVec
 	assetCacheRequests               *CounterVec
 	assetCacheEvictions              *CounterVec
+	assetCacheEvictedBytes           *CounterVec
+	assetCacheDiskUsagePercent       *GaugeVec
 	assetCacheDownloads              *CounterVec
 	assetCacheDownloadBytes          *CounterVec
 	assetCacheDownloadMS             *HistogramVec
@@ -76,6 +78,10 @@ type PrometheusMetrics struct {
 	taskResultAckSeconds             *HistogramVec
 	taskResultAcksTotal              *CounterVec
 	telemetryInvalidEvents           *CounterVec
+	artifactTmpfsReservedBytes       *GaugeVec
+	artifactTmpfsSpillTotal          *CounterVec
+	artifactTmpfsSpillBytes          *CounterVec
+	artifactNvmeFallback             *CounterVec
 	// Typed per-attempt raw projections. Labels are fixed semantic kinds;
 	// attempt/job/asset identifiers are deliberately excluded.
 	attemptCPUTimeMs    *CounterVec
@@ -143,6 +149,8 @@ func NewPrometheusMetrics() *PrometheusMetrics {
 		},
 		assetCacheRequests:               &CounterVec{Name: "velox_cache_requests_total", Help: "Asset cache requests by result", Label: "result", values: map[string]float64{"hit": 0, "miss": 0}},
 		assetCacheEvictions:              &CounterVec{Name: "velox_cache_evictions_total", Help: "Asset cache evictions by reason", Label: "reason", values: make(map[string]float64)},
+		assetCacheEvictedBytes:           &CounterVec{Name: "velox_cache_evicted_bytes_total", Help: "Bytes physically evicted from the asset cache", values: map[string]float64{"total": 0}},
+		assetCacheDiskUsagePercent:       &GaugeVec{Name: "velox_cache_disk_usage_percent", Help: "Current asset cache disk usage percent observed by the pressure controller", values: map[string]float64{"total": 0}},
 		assetCacheDownloads:              &CounterVec{Name: "velox_cache_downloads_total", Help: "Completed local asset downloads", values: map[string]float64{"asset": 0}},
 		assetCacheDownloadBytes:          &CounterVec{Name: "velox_cache_download_bytes_total", Help: "Bytes downloaded into the local asset cache", values: make(map[string]float64)},
 		assetCacheDownloadMS:             &HistogramVec{Name: "velox_cache_download_duration_seconds", Help: "Asset cache download duration", Buckets: []float64{.01, .1, 1, 5, 30, 120, 600}, values: make(map[string]*histogramData)},
@@ -195,18 +203,18 @@ func NewPrometheusMetrics() *PrometheusMetrics {
 			Name: "velox_worker_errors_total", Help: "Worker task failures",
 			values: map[string]float64{"total": 0},
 		},
-		assetDownloadActive:     &GaugeVec{Name: "velox_asset_download_transfers_active", Help: "Active asset transfers", values: map[string]float64{"total": 0}},
-		assetDownloadQueued:     &GaugeVec{Name: "velox_asset_download_transfers_queued", Help: "Queued asset transfers", values: map[string]float64{"total": 0}},
-		assetDownloadReady:      &GaugeVec{Name: "velox_asset_download_transfers_ready", Help: "Ready asset transfers retained by the manager", values: map[string]float64{"total": 0}},
-		assetDownloadFailed:     &GaugeVec{Name: "velox_asset_download_transfers_failed", Help: "Failed asset transfers retained by the manager", values: map[string]float64{"total": 0}},
-		assetDownloadCacheHits:  &GaugeVec{Name: "velox_asset_download_cache_hits", Help: "Ready asset transfers completed from cache", values: map[string]float64{"total": 0}},
-		assetDownloadBytes:      &GaugeVec{Name: "velox_asset_download_bytes_downloaded", Help: "Bytes downloaded across registered asset transfers", values: map[string]float64{"total": 0}},
-		assetDownloadTotalBytes: &GaugeVec{Name: "velox_asset_download_bytes_total", Help: "Expected bytes across registered asset transfers", values: map[string]float64{"total": 0}},
-		assetDownloadThroughput: &GaugeVec{Name: "velox_asset_download_throughput_bytes_per_second", Help: "Current aggregate asset download throughput", values: map[string]float64{"total": 0}},
-		assetDownloadChunksActive: &GaugeVec{Name: "velox_asset_download_chunks_active", Help: "Active parallel chunk connections across chunked asset transfers", values: map[string]float64{"total": 0}},
+		assetDownloadActive:          &GaugeVec{Name: "velox_asset_download_transfers_active", Help: "Active asset transfers", values: map[string]float64{"total": 0}},
+		assetDownloadQueued:          &GaugeVec{Name: "velox_asset_download_transfers_queued", Help: "Queued asset transfers", values: map[string]float64{"total": 0}},
+		assetDownloadReady:           &GaugeVec{Name: "velox_asset_download_transfers_ready", Help: "Ready asset transfers retained by the manager", values: map[string]float64{"total": 0}},
+		assetDownloadFailed:          &GaugeVec{Name: "velox_asset_download_transfers_failed", Help: "Failed asset transfers retained by the manager", values: map[string]float64{"total": 0}},
+		assetDownloadCacheHits:       &GaugeVec{Name: "velox_asset_download_cache_hits", Help: "Ready asset transfers completed from cache", values: map[string]float64{"total": 0}},
+		assetDownloadBytes:           &GaugeVec{Name: "velox_asset_download_bytes_downloaded", Help: "Bytes downloaded across registered asset transfers", values: map[string]float64{"total": 0}},
+		assetDownloadTotalBytes:      &GaugeVec{Name: "velox_asset_download_bytes_total", Help: "Expected bytes across registered asset transfers", values: map[string]float64{"total": 0}},
+		assetDownloadThroughput:      &GaugeVec{Name: "velox_asset_download_throughput_bytes_per_second", Help: "Current aggregate asset download throughput", values: map[string]float64{"total": 0}},
+		assetDownloadChunksActive:    &GaugeVec{Name: "velox_asset_download_chunks_active", Help: "Active parallel chunk connections across chunked asset transfers", values: map[string]float64{"total": 0}},
 		assetDownloadChunkThroughput: &GaugeVec{Name: "velox_asset_download_chunk_throughput_bytes_per_second", Help: "Current chunked asset transfer throughput (bytes/s)", values: map[string]float64{"total": 0}},
-		assetDownloadETA:        &GaugeVec{Name: "velox_asset_download_eta_seconds", Help: "Longest remaining asset transfer ETA", values: map[string]float64{"total": 0}},
-		assetDownloadCoalesced:  &CounterVec{Name: "velox_asset_download_coalesced_requests_total", Help: "Asset requests coalesced onto an existing transfer", values: map[string]float64{"total": 0}},
+		assetDownloadETA:             &GaugeVec{Name: "velox_asset_download_eta_seconds", Help: "Longest remaining asset transfer ETA", values: map[string]float64{"total": 0}},
+		assetDownloadCoalesced:       &CounterVec{Name: "velox_asset_download_coalesced_requests_total", Help: "Asset requests coalesced onto an existing transfer", values: map[string]float64{"total": 0}},
 		workerActiveJobs: &GaugeVec{
 			Name: "velox_worker_active_jobs", Help: "Number of active jobs per worker",
 			values: make(map[string]float64),
@@ -223,12 +231,16 @@ func NewPrometheusMetrics() *PrometheusMetrics {
 			Name: "velox_python_emergency_path_total", Help: "Total Python emergency path usages (should be 0 in production)",
 			values: make(map[string]float64),
 		},
-		renderSeconds:           &HistogramVec{Name: "velox_render_seconds", Help: "Render duration", Buckets: []float64{.1, 1, 5, 10, 30, 60, 300, 900, 1800}, values: make(map[string]*histogramData)},
-		artifactUploadSeconds:   &HistogramVec{Name: "velox_artifact_upload_seconds", Help: "Artifact upload duration", Buckets: []float64{.01, .1, 1, 5, 30, 120, 600}, values: make(map[string]*histogramData)},
-		taskResultSubmitSeconds: &HistogramVec{Name: "velox_task_result_submit_seconds", Help: "TaskResult persistence and send duration", Buckets: []float64{.001, .01, .1, 1, 5, 30, 120}, values: make(map[string]*histogramData)},
-		taskResultAckSeconds:    &HistogramVec{Name: "velox_task_result_ack_seconds", Help: "TaskResult acknowledgement wait duration", Buckets: []float64{.001, .01, .1, 1, 5, 30, 120}, values: make(map[string]*histogramData)},
-		taskResultAcksTotal:     &CounterVec{Name: "velox_task_result_acks_total", Help: "TaskResult acknowledgements received", values: make(map[string]float64)},
-		telemetryInvalidEvents:  &CounterVec{Name: "velox_telemetry_invalid_events_total", Help: "Telemetry events rejected by the worker catalog and forwarded for master quarantine", Label: "reason", values: make(map[string]float64)},
+		renderSeconds:              &HistogramVec{Name: "velox_render_seconds", Help: "Render duration", Buckets: []float64{.1, 1, 5, 10, 30, 60, 300, 900, 1800}, values: make(map[string]*histogramData)},
+		artifactUploadSeconds:      &HistogramVec{Name: "velox_artifact_upload_seconds", Help: "Artifact upload duration", Buckets: []float64{.01, .1, 1, 5, 30, 120, 600}, values: make(map[string]*histogramData)},
+		taskResultSubmitSeconds:    &HistogramVec{Name: "velox_task_result_submit_seconds", Help: "TaskResult persistence and send duration", Buckets: []float64{.001, .01, .1, 1, 5, 30, 120}, values: make(map[string]*histogramData)},
+		taskResultAckSeconds:       &HistogramVec{Name: "velox_task_result_ack_seconds", Help: "TaskResult acknowledgement wait duration", Buckets: []float64{.001, .01, .1, 1, 5, 30, 120}, values: make(map[string]*histogramData)},
+		taskResultAcksTotal:        &CounterVec{Name: "velox_task_result_acks_total", Help: "TaskResult acknowledgements received", values: make(map[string]float64)},
+		telemetryInvalidEvents:     &CounterVec{Name: "velox_telemetry_invalid_events_total", Help: "Telemetry events rejected by the worker catalog and forwarded for master quarantine", Label: "reason", values: make(map[string]float64)},
+		artifactTmpfsReservedBytes: &GaugeVec{Name: "velox_artifact_tmpfs_reserved_bytes", Help: "RAM bytes currently reserved for tmpfs artifact staging", values: map[string]float64{"total": 0}},
+		artifactTmpfsSpillTotal:    &CounterVec{Name: "velox_artifact_tmpfs_spill_total", Help: "Artifacts spilled from tmpfs to durable NVMe", values: map[string]float64{"total": 0}},
+		artifactTmpfsSpillBytes:    &CounterVec{Name: "velox_artifact_tmpfs_spill_bytes_total", Help: "Bytes spilled from tmpfs to durable NVMe", values: map[string]float64{"total": 0}},
+		artifactNvmeFallback:       &CounterVec{Name: "velox_artifact_nvme_fallback_total", Help: "Artifact staging placements that fell back to NVMe by reason", Label: "reason", values: make(map[string]float64)},
 		attemptCPUTimeMs: &CounterVec{
 			Name: "velox_attempt_cpu_time_ms_total", Help: "Accumulated CPU time observed across completed attempts (ms)",
 			values: map[string]float64{"total": 0},
@@ -272,6 +284,8 @@ func (m *PrometheusMetrics) ExportPrometheus() string {
 	output += m.assetCacheMissesCanonical.export()
 	output += m.assetCacheRequests.export()
 	output += m.assetCacheEvictions.export()
+	output += m.assetCacheEvictedBytes.export()
+	output += m.assetCacheDiskUsagePercent.export()
 	output += m.assetCacheDownloads.export()
 	output += m.assetCacheDownloadBytes.export()
 	output += m.assetCacheDownloadMS.export()
@@ -322,6 +336,10 @@ func (m *PrometheusMetrics) ExportPrometheus() string {
 	output += m.taskResultAckSeconds.export()
 	output += m.taskResultAcksTotal.export()
 	output += m.telemetryInvalidEvents.export()
+	output += m.artifactTmpfsReservedBytes.export()
+	output += m.artifactTmpfsSpillTotal.export()
+	output += m.artifactTmpfsSpillBytes.export()
+	output += m.artifactNvmeFallback.export()
 	output += m.attemptCPUTimeMs.export()
 	output += m.attemptPeakRSSBytes.export()
 	output += m.attemptIOBytes.export()

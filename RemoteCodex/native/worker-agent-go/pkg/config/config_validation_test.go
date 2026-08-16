@@ -78,6 +78,102 @@ func TestValidateChunkedDownloadFailClosed(t *testing.T) {
 	})
 }
 
+func TestValidateArtifactTmpfsStagingFailClosed(t *testing.T) {
+	t.Run("enabled with valid knobs passes", func(t *testing.T) {
+		cfg := devValidBase()
+		cfg.ArtifactTmpfsEnabled = true
+		cfg.ArtifactTmpfsDir = "/dev/shm/velox-artifacts"
+		cfg.ArtifactTmpfsMaxPercent = 65
+		cfg.ArtifactTmpfsReserveBytes = 512 * 1024 * 1024
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("expected valid staging to pass, got: %v", err)
+		}
+	})
+
+	t.Run("enabled with missing dir rejected", func(t *testing.T) {
+		cfg := devValidBase()
+		cfg.ArtifactTmpfsEnabled = true
+		cfg.ArtifactTmpfsMaxPercent = 65
+		cfg.ArtifactTmpfsReserveBytes = 512 * 1024 * 1024
+		err := cfg.Validate()
+		if err == nil || !strings.Contains(err.Error(), "artifact_tmpfs_dir") {
+			t.Fatalf("Validate() error = %v, want artifact_tmpfs_dir rejection", err)
+		}
+	})
+
+	t.Run("enabled with out-of-range max percent rejected", func(t *testing.T) {
+		cfg := devValidBase()
+		cfg.ArtifactTmpfsEnabled = true
+		cfg.ArtifactTmpfsDir = "/dev/shm/velox-artifacts"
+		cfg.ArtifactTmpfsMaxPercent = 100
+		cfg.ArtifactTmpfsReserveBytes = 512 * 1024 * 1024
+		err := cfg.Validate()
+		if err == nil || !strings.Contains(err.Error(), "artifact_tmpfs_max_percent") {
+			t.Fatalf("Validate() error = %v, want artifact_tmpfs_max_percent rejection", err)
+		}
+	})
+
+	t.Run("enabled with zero reserve rejected", func(t *testing.T) {
+		cfg := devValidBase()
+		cfg.ArtifactTmpfsEnabled = true
+		cfg.ArtifactTmpfsDir = "/dev/shm/velox-artifacts"
+		cfg.ArtifactTmpfsMaxPercent = 65
+		cfg.ArtifactTmpfsReserveBytes = 0
+		err := cfg.Validate()
+		if err == nil || !strings.Contains(err.Error(), "artifact_tmpfs_reserve_bytes") {
+			t.Fatalf("Validate() error = %v, want artifact_tmpfs_reserve_bytes rejection", err)
+		}
+	})
+
+	t.Run("disabled with zero values passes", func(t *testing.T) {
+		cfg := devValidBase()
+		// Feature off: zero knobs must not fail validation.
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("expected disabled staging to pass, got: %v", err)
+		}
+	})
+}
+
+func TestValidateCacheWatermarks(t *testing.T) {
+	t.Run("zero fields (use default) pass", func(t *testing.T) {
+		cfg := devValidBase()
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("zero cache-pressure fields should pass (defaults), got: %v", err)
+		}
+	})
+
+	t.Run("valid hysteresis passes", func(t *testing.T) {
+		cfg := devValidBase()
+		cfg.CacheHighWatermarkPercent = 80
+		cfg.CacheLowWatermarkPercent = 72
+		cfg.CacheEvictionBatchSize = 128
+		cfg.CacheEvictionIntervalSecs = 30
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("valid cache-pressure config should pass, got: %v", err)
+		}
+	})
+
+	t.Run("low >= high rejected", func(t *testing.T) {
+		cfg := devValidBase()
+		cfg.CacheHighWatermarkPercent = 70
+		cfg.CacheLowWatermarkPercent = 70
+		err := cfg.Validate()
+		if err == nil || !strings.Contains(err.Error(), "strictly less than cache_high_watermark_percent") {
+			t.Fatalf("Validate() error = %v, want low<high hysteresis rejection", err)
+		}
+	})
+
+	t.Run("high above 100 rejected", func(t *testing.T) {
+		cfg := devValidBase()
+		cfg.CacheHighWatermarkPercent = 101
+		cfg.CacheLowWatermarkPercent = 70
+		err := cfg.Validate()
+		if err == nil || !strings.Contains(err.Error(), "cache_high_watermark_percent") {
+			t.Fatalf("Validate() error = %v, want cache_high_watermark_percent rejection", err)
+		}
+	})
+}
+
 func TestValidateNil(t *testing.T) {
 	var cfg *WorkerConfig
 

@@ -455,20 +455,29 @@ func main() {
 	cleanupPolicy := workercache.LoadCleanupPolicy()
 	protectedPoller.SnapshotMaxAge = cleanupPolicy.SnapshotMaxAge
 	telemetry.MarkCacheProtectionReady(false)
+	// The cleanup loop is the cache pressure controller: it evicts LRU blobs
+	// only when the blob filesystem reaches the HIGH watermark and stops at
+	// the LOW watermark. The tick cadence comes from the cache-eviction
+	// interval (default 30s); the snapshot staleness gate is unchanged.
+	evictionInterval := time.Duration(cfg.CacheEvictionIntervalSecs) * time.Second
+	if evictionInterval <= 0 {
+		evictionInterval = time.Duration(config.DefaultCacheEvictionIntervalSecs) * time.Second
+	}
 	cleanupLoop := &workercache.CleanupLoop{
 		Cache: clipCache, Policy: cleanupPolicy, Snapshot: protectedPoller,
 		Barrier:  protectedPoller,
-		Interval: cleanupPolicy.CleanupInterval, JobDone: w.JobDone(),
-		OnTick: func(stats workercache.CleanupStats, err error) {
+		Interval: evictionInterval, JobDone: w.JobDone(),
+		Pressure: workercache.PressureEvictionConfig{
+			HighWatermarkPercent: cfg.CacheHighWatermarkPercent,
+			LowWatermarkPercent:  cfg.CacheLowWatermarkPercent,
+			BatchSize:            cfg.CacheEvictionBatchSize,
+		},
+		UsagePercent: w.AssetCacheDiskUsagePercent,
+		OnTick: func(stats workercache.PressureEvictionStats, err error) {
 			metrics := telemetry.GetPrometheusMetrics()
 			metrics.RecordCacheCleanup(time.Duration(stats.DurationMS) * time.Millisecond)
-			metrics.RecordCacheEvictions("ttl", stats.Removed)
-			metrics.RecordCacheCleanupSkips("protected", stats.SkippedProtected)
-			metrics.RecordCacheCleanupSkips("leased", stats.SkippedLeased)
-			metrics.RecordCacheCleanupSkips("grace", stats.SkippedGrace)
-			metrics.RecordCacheCleanupSkips("in_flight", stats.SkippedInFlight)
-			metrics.RecordCacheCleanupSkips("stale_snapshot", stats.SkippedSnapshotStale)
-			metrics.RecordCacheCleanupSkips("no_snapshot", stats.SkippedSnapshotUnavailable)
+			metrics.RecordCacheEvictions("pressure", stats.Removed)
+			metrics.RecordCacheCleanupSkips("protected", stats.Protected)
 			if entries, bytes, sizeErr := clipCache.Size(context.Background()); sizeErr == nil {
 				metrics.SetCacheSize(entries, bytes)
 			}
@@ -480,13 +489,11 @@ func main() {
 				if errors.Is(err, workercache.ErrSnapshotStale) {
 					reason = "stale_snapshot"
 				}
-				if stats.SkippedSnapshotStale == 0 && stats.SkippedSnapshotUnavailable == 0 {
-					metrics.RecordCacheCleanupSkip(reason)
-				}
-				logger.Warn("[CACHE_CLEANUP] inspected=%d removed=%d skipped_protected=%d skipped_leased=%d err=%v", stats.Inspected, stats.Removed, stats.SkippedProtected, stats.SkippedLeased, err)
+				metrics.RecordCacheCleanupSkip(reason)
+				logger.Warn("[CACHE_PRESSURE] usage=%d%% removed=%d removed_bytes=%d protected=%d err=%v", stats.UsagePercent, stats.Removed, stats.RemovedBytes, stats.Protected, err)
 				return
 			}
-			logger.Info("[CACHE_CLEANUP] inspected=%d removed=%d skipped_protected=%d skipped_leased=%d", stats.Inspected, stats.Removed, stats.SkippedProtected, stats.SkippedLeased)
+			logger.Info("[CACHE_PRESSURE] usage=%d%% attempted=%d removed=%d removed_bytes=%d protected=%d", stats.UsagePercent, stats.Attempted, stats.Removed, stats.RemovedBytes, stats.Protected)
 		},
 	}
 	// RW-PROD-004 §3 A4: MarkBootstrapped(true) is set here because

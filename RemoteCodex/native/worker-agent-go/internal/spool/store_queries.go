@@ -45,6 +45,12 @@ func (s *Store) Insert(ctx context.Context, e SpoolEntry) (*SpoolEntry, error) {
 	if !e.Status.IsValid() {
 		return nil, fmt.Errorf("%w: %q", ErrInvalidStatus, e.Status)
 	}
+	if e.StorageTier == "" {
+		e.StorageTier = StorageTierNvmeDurable
+	}
+	if !e.StorageTier.IsValid() {
+		return nil, fmt.Errorf("%w: storage_tier %q", ErrInvalidStatus, e.StorageTier)
+	}
 	if e.SpoolID == "" {
 		e.SpoolID = newSpoolID()
 	}
@@ -57,11 +63,11 @@ func (s *Store) Insert(ctx context.Context, e SpoolEntry) (*SpoolEntry, error) {
 		INSERT INTO worker_output_spool (
 		    spool_id, task_id, attempt_id, commit_id, worker_spool_key,
 		    local_path, sha256, size_bytes, upload_id, uploaded_bytes,
-		    status, last_error, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		    status, storage_tier, last_error, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		e.SpoolID, e.TaskID, e.AttemptID, e.CommitID, e.WorkerSpoolKey,
 		e.LocalPath, e.SHA256, e.SizeBytes, e.UploadID, e.UploadedBytes,
-		string(e.Status), e.LastError, nowStr, nowStr,
+		string(e.Status), string(e.StorageTier), e.LastError, nowStr, nowStr,
 	)
 	if err != nil {
 		if isUniqueConflict(err) {
@@ -143,9 +149,35 @@ func (s *Store) ListResumeCandidates(ctx context.Context) ([]SpoolEntry, error) 
 	return out, rows.Err()
 }
 
+// ListVolatileUncommitted returns tmpfs-backed rows that have not reached a
+// terminal state. The graceful-shutdown spill iterates this set so a SIGTERM
+// moves every still-volatile artifact onto durable NVMe before /dev/shm
+// disappears at reboot. COMMITTED / REJECTED / CLEANED rows are excluded
+// (they are terminal: the post-commit cleanup owns their file lifecycle).
+func (s *Store) ListVolatileUncommitted(ctx context.Context) ([]SpoolEntry, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+selectSpoolCols+` FROM worker_output_spool
+		  WHERE storage_tier = 'TMPFS_VOLATILE'
+		    AND status IN ('OUTPUT_READY','UPLOAD_PENDING','UPLOADING','UPLOADED')
+		  ORDER BY created_at ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("spool.ListVolatileUncommitted: %w", err)
+	}
+	defer rows.Close()
+	var out []SpoolEntry
+	for rows.Next() {
+		e, err := scanSpool(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *e)
+	}
+	return out, rows.Err()
+}
+
 const selectSpoolCols = `spool_id, task_id, attempt_id, commit_id,
     worker_spool_key, local_path, sha256, size_bytes, upload_id,
-    uploaded_bytes, status, last_error, created_at, updated_at`
+    uploaded_bytes, status, storage_tier, last_error, created_at, updated_at`
 
 const selectSpoolBySpoolID = `SELECT ` + selectSpoolCols +
 	` FROM worker_output_spool WHERE spool_id = ?`
@@ -164,13 +196,14 @@ func scanSpool(r scanDBI) (*SpoolEntry, error) {
 		sizeB   sql.NullInt64
 		uploadB sql.NullInt64
 		statusS string
+		tierS   string
 		created string
 		updated string
 	)
 	err := r.Scan(
 		&e.SpoolID, &e.TaskID, &e.AttemptID, &e.CommitID, &e.WorkerSpoolKey,
 		&e.LocalPath, &e.SHA256, &sizeB, &e.UploadID, &uploadB,
-		&statusS, &e.LastError, &created, &updated,
+		&statusS, &tierS, &e.LastError, &created, &updated,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -181,6 +214,10 @@ func scanSpool(r scanDBI) (*SpoolEntry, error) {
 	e.SizeBytes = sizeB.Int64
 	e.UploadedBytes = uploadB.Int64
 	e.Status = Status(statusS)
+	e.StorageTier = StorageTier(tierS)
+	if e.StorageTier == "" {
+		e.StorageTier = StorageTierNvmeDurable
+	}
 	if e.CreatedAt, err = parseRFC3339Nano(created); err != nil {
 		return nil, fmt.Errorf("spool.scanSpool: created_at: %w", err)
 	}

@@ -99,3 +99,89 @@ func TestDefaultConfigStorageTmpfs(t *testing.T) {
 		t.Errorf("operator threshold should be preserved, got %d", cfg.TmpfsThresholdBytes)
 	}
 }
+
+// ARTIFACT_STAGING: volatile RAM staging is opt-out, but its tuning knobs
+// always carry safe defaults so toggling it on later cannot pair with a
+// zero max-percent or a zero reserve.
+func TestDefaultConfigArtifactTmpfsStaging(t *testing.T) {
+	cfg := DefaultConfig("/opt/velox")
+	cfg.applyDefaults()
+
+	if cfg.ArtifactTmpfsEnabled {
+		t.Error("artifact tmpfs staging should default to disabled")
+	}
+	if cfg.ArtifactTmpfsDir != "" {
+		t.Errorf("artifact_tmpfs_dir should default to empty, got %q", cfg.ArtifactTmpfsDir)
+	}
+	if cfg.ArtifactTmpfsMaxPercent != DefaultArtifactTmpfsMaxPercent {
+		t.Errorf("artifact_tmpfs_max_percent should default to %d, got %d",
+			DefaultArtifactTmpfsMaxPercent, cfg.ArtifactTmpfsMaxPercent)
+	}
+	if cfg.ArtifactTmpfsReserveBytes != DefaultArtifactTmpfsReserveBytes {
+		t.Errorf("artifact_tmpfs_reserve_bytes should default to %d, got %d",
+			DefaultArtifactTmpfsReserveBytes, cfg.ArtifactTmpfsReserveBytes)
+	}
+
+	// Zero values are repaired by applyDefaults.
+	cfg.ArtifactTmpfsMaxPercent = 0
+	cfg.ArtifactTmpfsReserveBytes = 0
+	cfg.applyDefaults()
+	if cfg.ArtifactTmpfsMaxPercent != DefaultArtifactTmpfsMaxPercent {
+		t.Errorf("zero max percent should be repaired to %d, got %d",
+			DefaultArtifactTmpfsMaxPercent, cfg.ArtifactTmpfsMaxPercent)
+	}
+	if cfg.ArtifactTmpfsReserveBytes != DefaultArtifactTmpfsReserveBytes {
+		t.Errorf("zero reserve should be repaired to %d, got %d",
+			DefaultArtifactTmpfsReserveBytes, cfg.ArtifactTmpfsReserveBytes)
+	}
+
+	// An operator-supplied value survives applyDefaults untouched.
+	cfg.ArtifactTmpfsMaxPercent = 70
+	cfg.ArtifactTmpfsReserveBytes = 1 << 30
+	cfg.applyDefaults()
+	if cfg.ArtifactTmpfsMaxPercent != 70 {
+		t.Errorf("operator max percent should be preserved, got %d", cfg.ArtifactTmpfsMaxPercent)
+	}
+	if cfg.ArtifactTmpfsReserveBytes != 1<<30 {
+		t.Errorf("operator reserve should be preserved, got %d", cfg.ArtifactTmpfsReserveBytes)
+	}
+}
+
+// Cache pressure-eviction tuning always carries safe defaults so the
+// cleanup loop can never pair a zero watermark/batch with its LRU pass.
+func TestDefaultConfigCachePressureEviction(t *testing.T) {
+	cfg := DefaultConfig("/opt/velox")
+	cfg.applyDefaults()
+
+	if cfg.CacheHighWatermarkPercent != DefaultCacheHighWatermarkPercent {
+		t.Errorf("cache_high_watermark_percent should default to %d, got %d",
+			DefaultCacheHighWatermarkPercent, cfg.CacheHighWatermarkPercent)
+	}
+	if cfg.CacheLowWatermarkPercent != DefaultCacheLowWatermarkPercent {
+		t.Errorf("cache_low_watermark_percent should default to %d, got %d",
+			DefaultCacheLowWatermarkPercent, cfg.CacheLowWatermarkPercent)
+	}
+	if cfg.CacheEvictionBatchSize != DefaultCacheEvictionBatchSize {
+		t.Errorf("cache_eviction_batch_size should default to %d, got %d",
+			DefaultCacheEvictionBatchSize, cfg.CacheEvictionBatchSize)
+	}
+	if cfg.CacheEvictionIntervalSecs != DefaultCacheEvictionIntervalSecs {
+		t.Errorf("cache_eviction_interval_secs should default to %d, got %d",
+			DefaultCacheEvictionIntervalSecs, cfg.CacheEvictionIntervalSecs)
+	}
+
+	// Zero values are repaired by applyDefaults.
+	cfg.CacheHighWatermarkPercent = 0
+	cfg.CacheLowWatermarkPercent = 0
+	cfg.CacheEvictionBatchSize = 0
+	cfg.CacheEvictionIntervalSecs = 0
+	cfg.applyDefaults()
+	if cfg.CacheHighWatermarkPercent != DefaultCacheHighWatermarkPercent ||
+		cfg.CacheLowWatermarkPercent != DefaultCacheLowWatermarkPercent ||
+		cfg.CacheEvictionBatchSize != DefaultCacheEvictionBatchSize ||
+		cfg.CacheEvictionIntervalSecs != DefaultCacheEvictionIntervalSecs {
+		t.Errorf("zero cache-pressure fields should be repaired to defaults, got h=%d l=%d b=%d i=%d",
+			cfg.CacheHighWatermarkPercent, cfg.CacheLowWatermarkPercent,
+			cfg.CacheEvictionBatchSize, cfg.CacheEvictionIntervalSecs)
+	}
+}

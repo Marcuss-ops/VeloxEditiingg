@@ -14,6 +14,7 @@ import (
 	"velox-worker-agent/internal/spool"
 	"velox-worker-agent/pkg/config"
 	"velox-worker-agent/pkg/logger"
+	"velox-worker-agent/pkg/storage"
 
 	"google.golang.org/protobuf/proto"
 )
@@ -190,6 +191,103 @@ func TestHandleTaskResultAck_CleansCommittedRenderOutputAfterTerminalAck(t *test
 	})
 	if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
 		t.Fatalf("committed output stat error=%v; output must be removed after terminal ACK", err)
+	}
+	cleaned, err := store.Get(context.Background(), entry.SpoolID)
+	if err != nil {
+		t.Fatalf("get cleaned spool entry: %v", err)
+	}
+	if cleaned.Status != spool.StatusCleaned || cleaned.LocalPath != "" {
+		t.Fatalf("spool after terminal ACK = status=%q path=%q; want CLEANED/empty", cleaned.Status, cleaned.LocalPath)
+	}
+}
+
+// TestHandleTaskResultAck_CleansTmpfsArtifactAndReleasesReservation is the
+// tmpfs happy-path acceptance test: a render output staged on the volatile
+// tmpfs root is uploaded (the uploader reads LocalPath straight from RAM),
+// committed, and only removed after the terminal TaskResultAck — which also
+// frees the RAM reservation.
+func TestHandleTaskResultAck_CleansTmpfsArtifactAndReleasesReservation(t *testing.T) {
+	store, err := spool.Open(":memory:")
+	if err != nil {
+		t.Fatalf("spool.Open: %v", err)
+	}
+	defer store.Close()
+
+	stagingDir := t.TempDir()
+	artifactDir := t.TempDir()
+	resolver := spillTestResolver(t, stagingDir, artifactDir)
+
+	// Resolve the render output through ARTIFACT_STAGING: a successful RAM
+	// reservation places it on the tmpfs root.
+	placement, err := resolver.Place(storage.ArtifactStaging, "job-tmpfs.mp4", 1024)
+	if err != nil {
+		t.Fatalf("Place(ARTIFACT_STAGING): %v", err)
+	}
+	if placement.Backing != storage.BackingTmpfs {
+		t.Fatalf("backing = %s, want tmpfs", placement.Backing)
+	}
+	if placement.ReservedBytes == 0 {
+		t.Fatal("tmpfs placement must hold a RAM reservation")
+	}
+	if err := os.WriteFile(placement.Path, []byte("tmpfs-rendered-output"), 0o640); err != nil {
+		t.Fatalf("write tmpfs output: %v", err)
+	}
+
+	// Register the output in the durable spool with its volatile tier.
+	entry, err := store.Insert(context.Background(), spool.SpoolEntry{
+		TaskID: "task-tmpfs-cleanup", AttemptID: "attempt-tmpfs-cleanup",
+		WorkerSpoolKey: "task-tmpfs-cleanup:output:0", LocalPath: placement.Path,
+		StorageTier: spool.StorageTierTmpfsVolatile, Status: spool.StatusRendering,
+	})
+	if err != nil {
+		t.Fatalf("insert spool entry: %v", err)
+	}
+	for _, step := range []func() error{
+		func() error {
+			return store.MarkReady(context.Background(), entry.SpoolID, string64('t'), int64(len("tmpfs-rendered-output")))
+		},
+		func() error {
+			return store.MarkUploadPending(context.Background(), entry.SpoolID, "upload-tmpfs-cleanup")
+		},
+		func() error { return store.MarkUploading(context.Background(), entry.SpoolID, 0) },
+		func() error { return store.MarkUploaded(context.Background(), entry.SpoolID) },
+		func() error { return store.MarkCommitted(context.Background(), entry.SpoolID) },
+	} {
+		if err := step(); err != nil {
+			t.Fatalf("commit spool lifecycle: %v", err)
+		}
+	}
+
+	payload, err := proto.Marshal(&pb.TaskResult{
+		TaskId: "task-tmpfs-cleanup", JobId: "job-tmpfs-cleanup",
+		AttemptId: "attempt-tmpfs-cleanup", ReportHash: "hash-tmpfs-cleanup",
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := store.UpsertTaskResult(context.Background(), "task-tmpfs-cleanup", "attempt-tmpfs-cleanup", "hash-tmpfs-cleanup", payload); err != nil {
+		t.Fatalf("upsert task result: %v", err)
+	}
+
+	w := &Worker{
+		config:          &config.WorkerConfig{WorkerID: "worker-tmpfs-cleanup", OutputDir: artifactDir},
+		logger:          logger.New(logger.InfoLevel, io.Discard),
+		outputSpool:     store,
+		storageResolver: resolver,
+	}
+	rep := wireTestReporter(w, store)
+	rep.HandleAck(&pb.TaskResultAck{
+		TaskId: "task-tmpfs-cleanup", JobId: "job-tmpfs-cleanup",
+		AttemptId: "attempt-tmpfs-cleanup",
+	})
+
+	// The tmpfs artifact is gone only after the terminal commit ACK.
+	if _, err := os.Stat(placement.Path); !os.IsNotExist(err) {
+		t.Fatalf("tmpfs output stat error=%v; must be removed after terminal ACK", err)
+	}
+	// The RAM reservation is freed by the post-commit cleanup.
+	if got := resolver.ReservedTmpfsBytes(); got != 0 {
+		t.Fatalf("ReservedTmpfsBytes = %d after terminal ACK; want 0", got)
 	}
 	cleaned, err := store.Get(context.Background(), entry.SpoolID)
 	if err != nil {

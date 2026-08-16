@@ -45,6 +45,15 @@ func (w *Worker) StorageResolver() *storage.Resolver {
 	return w.storageResolver
 }
 
+// AssetCacheDiskUsagePercent reports the disk-usage percentage of the
+// filesystem backing the worker's asset cache (the same directory that holds
+// the content-addressed blobs). It is the composition root's pressure signal
+// for the workercache.CleanupLoop: a nil-safe statfs probe that returns 0 on
+// any error so a transient statfs failure never fabricates pressure.
+func (w *Worker) AssetCacheDiskUsagePercent() int {
+	return w.prefetchDiskUsagePercent()
+}
+
 // AttachClipCache is used only by the composition root while the worker is
 // still stopped. It keeps construction of the durable SQLite index next to
 // the process lifecycle while preserving the existing Option API for tests.

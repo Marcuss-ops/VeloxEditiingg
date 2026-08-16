@@ -310,7 +310,7 @@ RenderResult RenderEngine::renderCopyOnly(
             telemetry::ScopedPhase assetPhase(
                 recorder_, telemetry::kOriginWorker, telemetry::kScopeTask,
                 "worker.asset", boundVideo.second ? "bind" : "transfer",
-                boundVideo.second ? "resolve" : "download");
+                boundVideo.second ? "asset_wait" : "download");
             assetPhase.Complete();
         }
         segment.source_bytes = fileSize(localVideo);
@@ -394,7 +394,7 @@ RenderResult RenderEngine::renderCopyOnly(
             telemetry::ScopedPhase assetPhase(
                 recorder_, telemetry::kOriginWorker, telemetry::kScopeTask,
                 "worker.asset", boundAudio.second ? "bind" : "transfer",
-                boundAudio.second ? "resolve" : "download");
+                boundAudio.second ? "asset_wait" : "download");
             assetPhase.Complete();
         }
         const int64_t declared_audio_duration = track.duration_us > 0
@@ -423,7 +423,7 @@ RenderResult RenderEngine::renderCopyOnly(
             std::chrono::steady_clock::now() - renderStart).count());
     telemetry::ScopedPhase packetPhase(
         recorder_, telemetry::kOriginEngine, telemetry::kScopeAttempt,
-        "engine", "packet_mux", "composite");
+        "engine", "packet_mux", "finalize");
     if (!plan.audio_tracks.empty()) {
         // The packet mux performs the single final mux: video packets +
         // the upstream-prepared final audio packets, no AAC encode pass.
@@ -744,7 +744,7 @@ std::optional<RenderResult> RenderEngine::renderMixed(
         reportProgress(90, "mixed_packet_mux");
         telemetry::ScopedPhase mixedPhase(
             recorder_, telemetry::kOriginEngine, telemetry::kScopeAttempt,
-            "engine", "mixed_packet_mux", "composite");
+            "engine", "mixed_packet_mux", "finalize");
         mixedPhase.SetMetadataJSON(
             std::string("{\"copy_segments\":") + std::to_string(copy_segments) +
             ",\"transcode_segments\":" + std::to_string(transcode_segments) +
@@ -791,7 +791,7 @@ bool RenderEngine::burnSubtitles(
     }
     telemetry::ScopedPhase subtitlePhase(
         recorder_, telemetry::kOriginEngine, telemetry::kScopeSubtitleTrack,
-        "subtitle", "burn_in", "subtitle");
+        "subtitle", "burn_in", "composite");
     reportProgress(80, "burning_subtitles");
     reportDetailedProgress(last_progress_, static_cast<int>(plan.timeline.size()),
                            static_cast<int>(plan.timeline.size()), static_cast<int>(plan.timeline.size()),
@@ -872,7 +872,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
     {
 		telemetry::ScopedPhase tempPhase(
 			recorder_, telemetry::kOriginWorker, telemetry::kScopeAttempt,
-            "worker.temp", "create", "prepare");
+            "worker.temp", "create", "render");
         ScopedTimer t(metrics_, "workdir_create_ms");
         workDir = file::makeTempDir(workBase, "plan_job_");
         if (workDir.empty()) {
@@ -1422,7 +1422,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
     {
         telemetry::ScopedPhase concatPhase(
             recorder_, telemetry::kOriginEngine, telemetry::kScopeAttempt,
-            "engine", "concat", "composite");
+            "engine", "concat", "finalize");
         ScopedTimer t(metrics_, "concat_ms");
         if (!media::concatSegments(segmentPaths, videoOnly, workDir)) {
             concatPhase.Abort("concat_failed", "failed to concatenate video segments");
@@ -1454,7 +1454,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
     if (!plan.audio_tracks.empty()) {
         telemetry::ScopedPhase audioPhase(
             recorder_, telemetry::kOriginEngine, telemetry::kScopeAudioTrack,
-            "engine.audio", "mix", "audio");
+            "engine.audio", "mix", "composite");
         std::vector<std::pair<fs::path, const plan::AudioTrack*>> downloadedTracks;
         {
             ScopedTimer t(metrics_, "audio_download_ms");
@@ -1496,7 +1496,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             bool muxOk;
             telemetry::ScopedPhase muxPhase(
                 recorder_, telemetry::kOriginEngine, telemetry::kScopeAudioTrack,
-                "engine.mux", "audio", "audio_mux");
+                "engine.mux", "audio", "encode");
             file::CommandResult muxProfile;
             media::FinalAudioDecision muxDecision;
             {
@@ -1623,7 +1623,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             bool mixOk;
             telemetry::ScopedPhase audioEncodePhase(
                 recorder_, telemetry::kOriginEngine, telemetry::kScopeAudioTrack,
-                "engine.audio", "encode", "audio_encode", "audio", "audio_mix_encode");
+                "engine.audio", "encode", "encode", "", "audio_mix_encode");
             audioEncodePhase.SetMetadataJSON(
                 audioPlanMetadata(compiledAudioPlan, requestedAudioStrategy,
                                   selectedAudioStrategy, downloadedTracks.size(),
@@ -1671,7 +1671,7 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
                 bool muxOk;
                 telemetry::ScopedPhase muxPhase(
                     recorder_, telemetry::kOriginEngine, telemetry::kScopeAudioTrack,
-                    "engine.mux", "audio", "audio_mux");
+                    "engine.mux", "audio", "encode");
                 file::CommandResult muxProfile;
                 media::FinalAudioDecision muxDecision;
                 {

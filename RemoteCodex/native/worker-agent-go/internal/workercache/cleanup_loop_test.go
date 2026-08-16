@@ -101,59 +101,124 @@ func TestCleanupLoop_TickOnce_NoSnapshot(t *testing.T) {
 		Cache:  f.cache,
 		Policy: f.policy,
 		// Snapshot is intentionally nil.
-		Interval: 5 * time.Minute,
-		// Inject T0 as the wall clock so the 3-minute grace rule
-		// can predictably cover the seeded last_used_at; without
-		// this, time.Now().UTC() drifts past 2026-07-27T12:00:00Z.
-		Now: func() time.Time { return T0 },
+		Interval:     5 * time.Minute,
+		Pressure:     PressureEvictionConfig{HighWatermarkPercent: 80, LowWatermarkPercent: 72, BatchSize: 128},
+		UsagePercent: func() int { return 90 },
+		Now:          func() time.Time { return T0 },
 	}
 	stats, err := cl.TickOnce(context.Background())
 	if !errors.Is(err, ErrSnapshotUnavailable) {
 		t.Fatalf("TickOnce err=%v; want ErrSnapshotUnavailable", err)
 	}
-	if stats.SkippedSnapshotUnavailable != 1 {
-		t.Errorf("SkippedSnapshotUnavailable=%d want 1", stats.SkippedSnapshotUnavailable)
-	}
-	if stats.Removed != 0 {
-		t.Errorf("Removed=%d want 0", stats.Removed)
+	if stats.Removed != 0 || stats.Attempted != 0 {
+		t.Errorf("stats=%+v, want zero evictions without a snapshot", stats)
 	}
 }
 
-// TestCleanupLoop_TickOnce_SnapshotProtected: protects rows via the
-// snapshot's protected IDs.
-func TestCleanupLoop_TickOnce_SnapshotProtected(t *testing.T) {
+// TestCleanupLoop_TickOnce_PressureEvictsLRUOnly: at/above the HIGH
+// watermark the loop evicts the LRU blob but never the snapshot-protected
+// blob, stopping when the usage probe reports below the LOW watermark.
+func TestCleanupLoop_TickOnce_PressureEvictsLRUOnly(t *testing.T) {
 	f := newCleanupLoopFixture(t)
 	t.Cleanup(f.cleanup)
 
 	T0 := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
-	oldTime := T0
 	seedRowLoop(t, f.cache, f.dir, "PROTECTED", T0)
-	seedRowLoop(t, f.cache, f.dir, "OLD", oldTime.Add(-10*time.Minute))
+	seedRowLoop(t, f.cache, f.dir, "LRU", T0.Add(-1*time.Hour))
 
-	// Snapshot: PROTECTED is in; OLD is not. GeneratedAt=T0 keeps
+	// Snapshot: PROTECTED is in; LRU is not. GeneratedAt=T0 keeps
 	// staleness < SnapshotMaxAge (2m) deterministically.
 	cl := &CleanupLoop{
 		Cache:    f.cache,
 		Policy:   f.policy,
 		Snapshot: &FixedSnapshotSource{GeneratedAt: T0, ProtectedIDs: []string{"PROTECTED"}},
 		Interval: 5 * time.Minute,
+		Pressure: PressureEvictionConfig{HighWatermarkPercent: 80, LowWatermarkPercent: 72, BatchSize: 128},
 		Now:      func() time.Time { return T0 },
+	}
+	// One above-HIGH reading, then below-LOW so the pass stops after the
+	// first LRU batch (mimicking the freed bytes of the evicted blob).
+	calls := 0
+	cl.UsagePercent = func() int {
+		calls++
+		if calls == 1 {
+			return 85
+		}
+		return 70
+	}
+
+	stats, err := cl.TickOnce(context.Background())
+	if err != nil {
+		t.Fatalf("TickOnce: %v", err)
+	}
+	if stats.Removed != 1 {
+		t.Errorf("Removed=%d want 1 (only the unleased LRU blob)", stats.Removed)
+	}
+	if stats.Protected != 1 {
+		t.Errorf("Protected=%d want 1 (snapshot-protected blob skipped)", stats.Protected)
+	}
+	// LRU is physically evicted; PROTECTED stays.
+	if _, err := os.Stat(filepath.Join(f.dir, "LRU.mp4")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("LRU blob should be evicted, stat err=%v", err)
+	}
+	if _, ok, _ := f.cache.Find(context.Background(), "PROTECTED"); !ok {
+		t.Errorf("PROTECTED disappeared despite being in snapshot")
+	}
+}
+
+// TestCleanupLoop_TickOnce_BelowHighWatermarkNoEviction: even with a fresh
+// snapshot and unprotected warm blobs, a usage reading below the HIGH
+// watermark makes the tick a no-op.
+func TestCleanupLoop_TickOnce_BelowHighWatermarkNoEviction(t *testing.T) {
+	f := newCleanupLoopFixture(t)
+	t.Cleanup(f.cleanup)
+
+	T0 := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	seedRowLoop(t, f.cache, f.dir, "WARM", T0)
+
+	cl := &CleanupLoop{
+		Cache:        f.cache,
+		Policy:       f.policy,
+		Snapshot:     &FixedSnapshotSource{GeneratedAt: T0},
+		Interval:     5 * time.Minute,
+		Pressure:     PressureEvictionConfig{HighWatermarkPercent: 80, LowWatermarkPercent: 72, BatchSize: 128},
+		UsagePercent: func() int { return 79 },
+		Now:          func() time.Time { return T0 },
 	}
 	stats, err := cl.TickOnce(context.Background())
 	if err != nil {
 		t.Fatalf("TickOnce: %v", err)
 	}
-	if stats.SkippedProtected != 1 {
-		t.Errorf("SkippedProtected=%d want 1 (PROTECTED via snapshot)", stats.SkippedProtected)
+	if stats.Removed != 0 || stats.Attempted != 0 {
+		t.Errorf("stats=%+v, want zero evictions below the HIGH watermark", stats)
 	}
-	// OLD: grace expired (last_used_at=T-10m, now=T0, grace=3m → expired)
-	// → must be removed.
-	if stats.Removed != 1 {
-		t.Errorf("Removed=%d want 1 (OLD is beyond grace, not in snapshot, not leased)", stats.Removed)
+}
+
+// TestCleanupLoop_TickOnce_StaleSnapshotNoEviction: a snapshot older than
+// SnapshotMaxAge short-circuits the pressure pass (fail-safe) and never
+// evicts, matching the ErrSnapshotStale sentinel.
+func TestCleanupLoop_TickOnce_StaleSnapshotNoEviction(t *testing.T) {
+	f := newCleanupLoopFixture(t)
+	t.Cleanup(f.cleanup)
+
+	T0 := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	seedRowLoop(t, f.cache, f.dir, "WARM", T0.Add(-1*time.Hour))
+
+	cl := &CleanupLoop{
+		Cache:        f.cache,
+		Policy:       f.policy, // SnapshotMaxAge = 2m
+		Snapshot:     &FixedSnapshotSource{GeneratedAt: T0.Add(-5 * time.Minute)},
+		Interval:     5 * time.Minute,
+		Pressure:     PressureEvictionConfig{HighWatermarkPercent: 80, LowWatermarkPercent: 72, BatchSize: 128},
+		UsagePercent: func() int { return 90 },
+		Now:          func() time.Time { return T0 },
 	}
-	// PROTECTED stays in cache.
-	if _, ok, _ := f.cache.Find(context.Background(), "PROTECTED"); !ok {
-		t.Errorf("PROTECTED disappeared despite being in snapshot")
+	stats, err := cl.TickOnce(context.Background())
+	if !errors.Is(err, ErrSnapshotStale) {
+		t.Fatalf("TickOnce err=%v; want ErrSnapshotStale", err)
+	}
+	if stats.Removed != 0 {
+		t.Errorf("Removed=%d want 0 on stale snapshot", stats.Removed)
 	}
 }
 
@@ -216,7 +281,7 @@ func TestCleanupLoop_Run_JobDoneTriggersTick(t *testing.T) {
 		Policy:   f.policy,
 		Snapshot: &FixedSnapshotSource{},
 		Interval: 1 * time.Hour,
-		OnTick:   func(_ CleanupStats, _ error) { ticks = append(ticks, 1) },
+		OnTick:   func(_ PressureEvictionStats, _ error) { ticks = append(ticks, 1) },
 		Barrier:  alwaysReadyProtectionBarrier{},
 		JobDone:  jobDone,
 	}

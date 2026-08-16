@@ -2,9 +2,12 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"velox-shared/controltransport"
@@ -12,6 +15,7 @@ import (
 	"velox-worker-agent/internal/publisher"
 	"velox-worker-agent/internal/spool"
 	"velox-worker-agent/internal/taskrunner"
+	"velox-worker-agent/internal/telemetry"
 )
 
 // active_task_publish.go owns the typed Artifact Commit Protocol
@@ -167,6 +171,10 @@ func (w *Worker) publishArtifactsV1(ctx context.Context, pte *PendingTaskExecuti
 				"artifact_type": ref.Type,
 				"error":         err.Error(),
 			})
+			// Preserve a volatile (tmpfs) artifact on durable NVMe before
+			// failing, so the retry/audit path can read it after /dev/shm
+			// pressure or a restart.
+			w.spillVolatileToNVMe(ctx, spoolEntries[i])
 			return fmt.Errorf("worker artifact upload: transfer %q: %w", ref.Type, err)
 		}
 		if result == nil || result.UploadID == "" || result.UploadedBytes != ref.SizeBytes {
@@ -261,6 +269,7 @@ func (w *Worker) registerOutputSpool(ctx context.Context, pte *PendingTaskExecut
 			SHA256:         ref.Hash,
 			SizeBytes:      ref.SizeBytes,
 			Status:         spool.StatusRendering,
+			StorageTier:    w.outputStorageTier(ref.URI),
 		})
 		if err != nil {
 			return nil, err
@@ -283,4 +292,154 @@ func (w *Worker) rejectOutputSpool(entries []spool.SpoolEntry, code, message str
 	for _, entry := range entries {
 		_ = w.outputSpool.MarkRejected(context.Background(), entry.SpoolID, code, message)
 	}
+}
+
+// outputStorageTier classifies an output URI as tmpfs-volatile or
+// nvme-durable by checking whether it lives under the ARTIFACT_STAGING
+// tmpfs root. The durable default covers every legacy NVMe output.
+func (w *Worker) outputStorageTier(uri string) spool.StorageTier {
+	if w == nil || w.storageResolver == nil {
+		return spool.StorageTierNvmeDurable
+	}
+	if dir := w.storageResolver.Config().ArtifactStaging.Dir; dir != "" && pathWithinRoot(dir, uri) {
+		return spool.StorageTierTmpfsVolatile
+	}
+	return spool.StorageTierNvmeDurable
+}
+
+// spillVolatileToNVMe copies a tmpfs-backed artifact onto durable NVMe,
+// repoints the spool row (MarkSpilled), removes the tmpfs copy, and frees
+// the RAM reservation. It is a no-op for NVMe rows and never fails the
+// caller: spill is a best-effort durability move, not a lifecycle gate.
+func (w *Worker) spillVolatileToNVMe(ctx context.Context, entry spool.SpoolEntry) bool {
+	if entry.StorageTier != spool.StorageTierTmpfsVolatile || entry.LocalPath == "" {
+		return false
+	}
+	if w == nil || w.outputSpool == nil {
+		return false
+	}
+	durableDir := ""
+	if w.config != nil {
+		durableDir = w.config.OutputDir
+	}
+	if w.storageResolver != nil {
+		if dir := w.storageResolver.Config().ArtifactDir; dir != "" {
+			durableDir = dir
+		}
+	}
+	if durableDir == "" {
+		return false
+	}
+	newPath := filepath.Join(durableDir, entry.SpoolID+"_"+filepath.Base(entry.LocalPath))
+	if err := copyFileDurable(entry.LocalPath, newPath); err != nil {
+		w.logger.Warn("[SPILL] copy tmpfs→NVMe failed spool=%s src=%q: %v", entry.SpoolID, entry.LocalPath, err)
+		return false
+	}
+	if err := w.outputSpool.MarkSpilled(ctx, entry.SpoolID, newPath); err != nil {
+		w.logger.Warn("[SPILL] mark spilled failed spool=%s: %v", entry.SpoolID, err)
+		return false
+	}
+	if err := os.Remove(entry.LocalPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		w.logger.Warn("[SPILL] remove tmpfs copy failed spool=%s path=%q: %v", entry.SpoolID, entry.LocalPath, err)
+	}
+	if w.storageResolver != nil {
+		w.storageResolver.ReleaseStagingPath(entry.LocalPath)
+	}
+	// Observability: count the spill and its durable byte total.
+	var spilledBytes int64
+	if st, err := os.Stat(newPath); err == nil {
+		spilledBytes = st.Size()
+	}
+	telemetry.GetPrometheusMetrics().RecordArtifactTmpfsSpill(spilledBytes)
+	w.logger.Info("[SPILL] tmpfs→NVMe spool=%s → %q", entry.SpoolID, newPath)
+	return true
+}
+
+// spillVolatileUncommitted moves every tmpfs-backed, non-terminal spool row
+// onto durable NVMe. It is invoked during graceful shutdown (Stop) so a
+// normal deploy/signal does not lose a rendered-but-not-committed artifact
+// when /dev/shm disappears at reboot. Hard crashes (kill -9 / power loss)
+// are not covered: the master re-schedules those renders.
+func (w *Worker) spillVolatileUncommitted() {
+	if w == nil || w.outputSpool == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	entries, err := w.outputSpool.ListVolatileUncommitted(ctx)
+	if err != nil {
+		w.logger.Warn("[SPILL] list volatile uncommitted failed: %v", err)
+		return
+	}
+	for _, e := range entries {
+		w.spillVolatileToNVMe(ctx, e)
+	}
+}
+
+// copyFileDurable copies src → dst with an fsync before close so the spill
+// is durable against power loss, not just page-cache resident. Any failure
+// removes the partial destination.
+func copyFileDurable(src, dst string) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
+		return err
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o640)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		_ = os.Remove(dst)
+		return err
+	}
+	if err := out.Sync(); err != nil {
+		_ = out.Close()
+		_ = os.Remove(dst)
+		return err
+	}
+	if err := out.Close(); err != nil {
+		_ = os.Remove(dst)
+		return err
+	}
+	return nil
+}
+
+// pathWithinRoot reports whether path (abs or rel) lives under root (abs or
+// rel). A path equal to root itself, or to root's parent, is NOT inside.
+func pathWithinRoot(root, path string) bool {
+	if root == "" || path == "" {
+		return false
+	}
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return false
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(absRoot, absPath)
+	if err != nil {
+		return false
+	}
+	if rel == "." || rel == ".." {
+		return false
+	}
+	return !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// pathWithinAnyRoot reports whether path lives under any of the supplied
+// cleanup roots.
+func pathWithinAnyRoot(roots []string, path string) bool {
+	for _, root := range roots {
+		if pathWithinRoot(root, path) {
+			return true
+		}
+	}
+	return false
 }

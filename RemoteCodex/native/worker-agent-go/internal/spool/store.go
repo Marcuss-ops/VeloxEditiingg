@@ -51,6 +51,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -106,6 +107,35 @@ func (s Status) IsValid() bool {
 	return ok
 }
 
+// ────────────────────────────────────────────────────────────────────────
+// StorageTier — the physical medium backing a spooled artifact.
+// ────────────────────────────────────────────────────────────────────────
+
+// StorageTier records whether the spooled artifact lives on volatile tmpfs
+// (lost on hard crash / reboot) or durable NVMe (survives restart). It is
+// captured at Insert time from the output URI so the post-commit cleanup and
+// the graceful-shutdown spill know which durability contract applies.
+type StorageTier string
+
+const (
+	// StorageTierNvmeDurable is the durable medium (always survives restart).
+	StorageTierNvmeDurable StorageTier = "NVME_DURABLE"
+	// StorageTierTmpfsVolatile is the volatile RAM staging medium (lost on
+	// hard crash / reboot; must be re-rendered or spilled before shutdown).
+	StorageTierTmpfsVolatile StorageTier = "TMPFS_VOLATILE"
+)
+
+// IsValid reports whether t is one of the two closed tiers.
+func (t StorageTier) IsValid() bool {
+	return t == StorageTierNvmeDurable || t == StorageTierTmpfsVolatile
+}
+
+// Volatile reports whether t is backed by tmpfs (and therefore lost on a
+// hard crash / reboot).
+func (t StorageTier) Volatile() bool {
+	return t == StorageTierTmpfsVolatile
+}
+
 // Sentinel errors so callers can branch on syscall-equivalent
 // conditions from the store layer. Use errors.Is, not str match.
 var (
@@ -135,9 +165,12 @@ type SpoolEntry struct {
 	UploadID       string
 	UploadedBytes  int64
 	Status         Status
-	LastError      string
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	// StorageTier records the physical backing (tmpfs vs NVMe) of
+	// LocalPath. Defaults to NVME_DURABLE on Insert when empty.
+	StorageTier StorageTier
+	LastError   string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -176,7 +209,27 @@ func Open(path string) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("spool.Open: apply schema: %w", err)
 	}
+	// Roll-forward migration for spool DBs created before storage_tier
+	// existed: the column is in schemaDDL for fresh databases, and added
+	// idempotently here for pre-existing ones.
+	if err := ensureStorageTierColumn(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return &Store{db: db}, nil
+}
+
+// ensureStorageTierColumn adds storage_tier to pre-existing spool DBs.
+// Fresh DBs already carry the column (schemaDDL), so the ALTER fails with
+// "duplicate column name" and is ignored.
+func ensureStorageTierColumn(db *sql.DB) error {
+	if _, err := db.Exec(`ALTER TABLE worker_output_spool ADD COLUMN storage_tier TEXT NOT NULL DEFAULT 'NVME_DURABLE'`); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+			return nil
+		}
+		return fmt.Errorf("spool.Open: add storage_tier column: %w", err)
+	}
+	return nil
 }
 
 // Close releases the underlying *sql.DB. The store cannot be reused
@@ -209,6 +262,7 @@ CREATE TABLE IF NOT EXISTS worker_output_spool (
     upload_id       TEXT NOT NULL DEFAULT '',
     uploaded_bytes  INTEGER NOT NULL DEFAULT 0,
     status          TEXT NOT NULL,
+    storage_tier    TEXT NOT NULL DEFAULT 'NVME_DURABLE',
     last_error      TEXT NOT NULL DEFAULT '',
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL,

@@ -38,7 +38,7 @@ func TestProtectedAssetsErrorsKeepCleanupBehindBarrier(t *testing.T) {
 		Snapshot: poller,
 		Barrier:  poller,
 		Interval: time.Hour,
-		OnTick: func(workercache.CleanupStats, error) {
+		OnTick: func(workercache.PressureEvictionStats, error) {
 			ticks.Add(1)
 		},
 	}

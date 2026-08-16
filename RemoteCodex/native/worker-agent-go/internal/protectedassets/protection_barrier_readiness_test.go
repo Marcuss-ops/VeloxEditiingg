@@ -142,7 +142,9 @@ func TestProtectedAssetsBarrier_CleanupBlocksBetweenSessions(t *testing.T) {
 	events := make(chan error, 4)
 	loop := &workercache.CleanupLoop{
 		Cache: cache, Snapshot: poller, Barrier: poller, Interval: time.Hour, JobDone: jobDone,
-		OnTick: func(_ workercache.CleanupStats, err error) { events <- err },
+		Pressure:     workercache.PressureEvictionConfig{HighWatermarkPercent: 80, LowWatermarkPercent: 72, BatchSize: 128},
+		UsagePercent: func() int { return 90 },
+		OnTick:       func(_ workercache.PressureEvictionStats, err error) { events <- err },
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -163,10 +165,14 @@ func TestProtectedAssetsBarrier_CleanupBlocksBetweenSessions(t *testing.T) {
 		t.Fatalf("initial cleanup did not evict file: err=%v", err)
 	}
 
+	// Recreate the file + physical blob for the disconnected phase. Pressure
+	// eviction retains the asset_key → content_hash mapping, so re-establish
+	// the blob via MarkDownloadComplete rather than Store (which would
+	// collide on the retained asset_key).
 	if err := os.WriteFile(path, []byte("cache"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := cache.Store(context.Background(), workercache.Entry{AssetKey: "evictable", LocalPath: path, DownloadComplete: true}); err != nil {
+	if err := cache.MarkDownloadComplete(context.Background(), "evictable", path, int64(len("cache"))); err != nil {
 		t.Fatal(err)
 	}
 	telemetry.MarkRegistered(false)

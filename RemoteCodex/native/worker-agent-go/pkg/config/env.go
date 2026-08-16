@@ -91,6 +91,30 @@ const (
 	// EnvTmpfsThresholdBytes sets the tmpfs size gate in bytes (default
 	// 64 MiB). Files at/above the threshold always land on TempDir (NVMe).
 	EnvTmpfsThresholdBytes = "VELOX_TMPFS_THRESHOLD_BYTES"
+	// EnvArtifactTmpfsEnabled opts into volatile RAM staging for the final
+	// artifact (ARTIFACT_STAGING). Off by default.
+	EnvArtifactTmpfsEnabled = "VELOX_ARTIFACT_TMPFS_ENABLED"
+	// EnvArtifactTmpfsDir selects the tmpfs staging root (e.g.
+	// /dev/shm/velox-artifacts). Required when enabled.
+	EnvArtifactTmpfsDir = "VELOX_ARTIFACT_TMPFS_DIR"
+	// EnvArtifactTmpfsMaxPercent caps the reserved fraction of the tmpfs
+	// total (1-99, default 65).
+	EnvArtifactTmpfsMaxPercent = "VELOX_ARTIFACT_TMPFS_MAX_PERCENT"
+	// EnvArtifactTmpfsReserveBytes is the tmpfs headroom in bytes that must
+	// always remain free (default 512 MiB).
+	EnvArtifactTmpfsReserveBytes = "VELOX_ARTIFACT_TMPFS_RESERVE_BYTES"
+	// EnvCacheHighWatermarkPercent sets the disk-usage percentage at/above
+	// which the cache eviction loop starts deleting LRU blobs (default 80).
+	EnvCacheHighWatermarkPercent = "VELOX_CACHE_HIGH_WATERMARK_PERCENT"
+	// EnvCacheLowWatermarkPercent sets the stop target for pressure eviction
+	// (default 72; must be < high).
+	EnvCacheLowWatermarkPercent = "VELOX_CACHE_LOW_WATERMARK_PERCENT"
+	// EnvCacheEvictionBatchSize caps the LRU blobs removed per pass
+	// (default 128).
+	EnvCacheEvictionBatchSize = "VELOX_CACHE_EVICTION_BATCH_SIZE"
+	// EnvCacheEvictionIntervalSecs is the cleanup-loop tick cadence in
+	// seconds (default 30).
+	EnvCacheEvictionIntervalSecs = "VELOX_CACHE_EVICTION_INTERVAL_SECS"
 )
 
 // EnvBindings is the set of env-var names this package inspects.
@@ -124,6 +148,10 @@ var EnvBindings = []string{
 	EnvPrefetchRAMMaxNextUseDistance,
 	EnvTmpfsDir,
 	EnvTmpfsThresholdBytes,
+	EnvArtifactTmpfsEnabled, EnvArtifactTmpfsDir,
+	EnvArtifactTmpfsMaxPercent, EnvArtifactTmpfsReserveBytes,
+	EnvCacheHighWatermarkPercent, EnvCacheLowWatermarkPercent,
+	EnvCacheEvictionBatchSize, EnvCacheEvictionIntervalSecs,
 }
 
 // envTruthy reports whether a string from os.Getenv should be interpreted
@@ -292,5 +320,24 @@ func applyEnvOverrides(cfg *WorkerConfig) error {
 			cfg.TmpfsThresholdBytes = n
 		}
 	}
+	// ARTIFACT_STAGING: volatile RAM staging for the final artifact. Opt-in
+	// via VELOX_ARTIFACT_TMPFS_ENABLED; the dir / max-percent / reserve are
+	// the tuning surface. Invalid numerics are ignored (applyDefaults +
+	// Validate then fail closed on the enabled combination).
+	if v := strings.TrimSpace(os.Getenv(EnvArtifactTmpfsEnabled)); v != "" {
+		cfg.ArtifactTmpfsEnabled = envTruthy(v)
+	}
+	if v := strings.TrimSpace(os.Getenv(EnvArtifactTmpfsDir)); v != "" {
+		cfg.ArtifactTmpfsDir = v
+	}
+	bindPositiveInt(EnvArtifactTmpfsMaxPercent, &cfg.ArtifactTmpfsMaxPercent)
+	bindPositiveInt64(EnvArtifactTmpfsReserveBytes, &cfg.ArtifactTmpfsReserveBytes)
+	// Cache pressure-eviction tuning (RW-PROD cache pressure controller).
+	// Invalid numerics are ignored (applyDefaults + Validate then fail closed
+	// on the explicitly-set values).
+	bindPositiveInt(EnvCacheHighWatermarkPercent, &cfg.CacheHighWatermarkPercent)
+	bindPositiveInt(EnvCacheLowWatermarkPercent, &cfg.CacheLowWatermarkPercent)
+	bindPositiveInt(EnvCacheEvictionBatchSize, &cfg.CacheEvictionBatchSize)
+	bindPositiveInt(EnvCacheEvictionIntervalSecs, &cfg.CacheEvictionIntervalSecs)
 	return nil
 }

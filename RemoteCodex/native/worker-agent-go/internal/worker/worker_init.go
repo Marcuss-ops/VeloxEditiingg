@@ -188,6 +188,15 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		TmpfsDir:            cfg.TmpfsDir,
 		ArtifactDir:         storageArtifactDir,
 		TmpfsThresholdBytes: storageThreshold,
+		ArtifactStaging: storage.ArtifactStagingConfig{
+			Enabled:      cfg.ArtifactTmpfsEnabled,
+			Dir:          cfg.ArtifactTmpfsDir,
+			MaxPercent:   cfg.ArtifactTmpfsMaxPercent,
+			ReserveBytes: cfg.ArtifactTmpfsReserveBytes,
+		},
+		// The storage resolver reports staging fallback reasons and the live
+		// tmpfs reservation ledger through the worker's Prometheus registry.
+		StagingMetrics: telemetry.GetPrometheusMetrics(),
 	})
 	if err != nil {
 		_ = initialTransport.Close()
@@ -205,6 +214,10 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 	if wo.blobs != nil {
 		tr = tr.WithArtifacts(wo.blobs).WithBlobStats(wo.blobs)
 	}
+	// Fase E2: thread the canonical StorageResolver into the TaskRunner so
+	// executors resolve ARTIFACT_STAGING output placement through the
+	// single central decision (tmpfs-with-reservation / NVMe fallback).
+	tr = tr.WithStorageResolver(storageResolver)
 
 	sampler := telemetry.NewResourceSampler("", "", cfg.WorkDir, 0, 0)
 	sampler.SetTempDir(cfg.TempDir)
@@ -257,15 +270,15 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		// PR-2 followup: per-task-native lease-state registry. Threaded
 		// by MsgTaskLeaseGranted handler (separate PR) so leaseRenewLoop
 		// can fire MsgTaskLeaseRenewal.
-		activeTaskLeases:          make(map[string]*ActiveTaskLease),
-		connState:                 ConnDisconnected,
-		concurrencyLimiter:        concurrency.NewConcurrencyLimiter(detectedConcurrency),
-		stageExecutor:             stageExecutor,
-		executorRegistry:          wo.registry,
-		cache:                     wo.cache,
-		blobs:                     wo.blobs,
-		clipCache:                 wo.clipCache,
-		canonicalAssetCache:       workercache.NewCanonicalAssetStore(wo.clipCache),
+		activeTaskLeases:    make(map[string]*ActiveTaskLease),
+		connState:           ConnDisconnected,
+		concurrencyLimiter:  concurrency.NewConcurrencyLimiter(detectedConcurrency),
+		stageExecutor:       stageExecutor,
+		executorRegistry:    wo.registry,
+		cache:               wo.cache,
+		blobs:               wo.blobs,
+		clipCache:           wo.clipCache,
+		canonicalAssetCache: workercache.NewCanonicalAssetStore(wo.clipCache),
 		// Anti-collision observer (RW-PROD-005 §3): wired from
 		// workerOptions.onWorkerIDCollision (set by
 		// WithCollisionObserver). nil-safe; Start() guards before
@@ -298,12 +311,15 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 			w.transportMu.RLock()
 			defer w.transportMu.RUnlock()
 			return w.transport
-		},
-		workerID:  cfg.WorkerID,
+		}, workerID: cfg.WorkerID,
 		protocol:  cfg.ProtocolVersion,
 		outputDir: cfg.OutputDir,
-		logger:    log,
-		onTerminal: w.signalTaskTerminal,
+		// The reporter owns the committed-output cleanup; give it the
+		// resolver so it can free tmpfs RAM reservations and delete under
+		// the ARTIFACT_STAGING root.
+		storageResolver: storageResolver,
+		logger:          log,
+		onTerminal:      w.signalTaskTerminal,
 		logArtifact: func(event string, pte *PendingTaskExecution, startedAt time.Time, commitID, artifactID, uploadID string, fields map[string]interface{}) {
 			w.logArtifactProtocol(event, pte, startedAt, commitID, artifactID, uploadID, fields)
 		},

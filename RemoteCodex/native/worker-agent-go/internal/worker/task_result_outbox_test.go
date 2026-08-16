@@ -252,11 +252,12 @@ func wireTestReporter(w *Worker, store *spool.Store) *taskResultReporter {
 			defer w.transportMu.RUnlock()
 			return w.transport
 		},
-		workerID:   workerID,
-		protocol:   protocol,
-		outputDir:  outputDir,
-		logger:     w.logger,
-		onTerminal: w.signalTaskTerminal,
+		workerID:        workerID,
+		protocol:        protocol,
+		outputDir:       outputDir,
+		storageResolver: w.storageResolver,
+		logger:          w.logger,
+		onTerminal:      w.signalTaskTerminal,
 		logArtifact: func(event string, pte *PendingTaskExecution, startedAt time.Time, commitID, artifactID, uploadID string, fields map[string]interface{}) {
 			w.logArtifactProtocol(event, pte, startedAt, commitID, artifactID, uploadID, fields)
 		},

@@ -28,6 +28,7 @@ import (
 	"velox-worker-agent/internal/taskrunner"
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/logger"
+	"velox-worker-agent/pkg/storage"
 
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -79,7 +80,12 @@ type taskResultReporter struct {
 	workerID  string
 	protocol  string
 	outputDir string
-	logger    *logger.Logger
+	// storageResolver lets the committed-output cleanup free tmpfs RAM
+	// reservations and recognize the ARTIFACT_STAGING tmpfs root as a valid
+	// deletion root (in addition to outputDir). nil in legacy/headless
+	// workers: cleanup stays constrained to outputDir.
+	storageResolver *storage.Resolver
+	logger          *logger.Logger
 
 	// onTerminal is the observer invoked after a terminal TaskResultAck
 	// (the Worker wires it to signalTaskTerminal / jobDone).
@@ -97,18 +103,19 @@ type taskResultReporter struct {
 
 func newTaskResultReporter(cfg taskResultReporterConfig) *taskResultReporter {
 	return &taskResultReporter{
-		spool:       cfg.spool,
-		transport:   cfg.transport,
-		workerID:    cfg.workerID,
-		protocol:    cfg.protocol,
-		outputDir:   cfg.outputDir,
-		logger:      cfg.logger,
-		onTerminal:  cfg.onTerminal,
-		logArtifact: cfg.logArtifact,
-		acks:        make(map[string]chan *pb.TaskResultAck),
-		ackCache:    make(map[string]taskResultAckCacheEntry),
-		wg:          cfg.wg,
-		stopChan:    cfg.stopChan,
+		spool:           cfg.spool,
+		transport:       cfg.transport,
+		workerID:        cfg.workerID,
+		protocol:        cfg.protocol,
+		outputDir:       cfg.outputDir,
+		storageResolver: cfg.storageResolver,
+		logger:          cfg.logger,
+		onTerminal:      cfg.onTerminal,
+		logArtifact:     cfg.logArtifact,
+		acks:            make(map[string]chan *pb.TaskResultAck),
+		ackCache:        make(map[string]taskResultAckCacheEntry),
+		wg:              cfg.wg,
+		stopChan:        cfg.stopChan,
 	}
 }
 
@@ -118,11 +125,14 @@ type taskResultReporterConfig struct {
 	workerID  string
 	protocol  string
 	outputDir string
-	logger    *logger.Logger
-	onTerminal func()
-	logArtifact artifactProtocolLogger
-	wg          *sync.WaitGroup
-	stopChan    <-chan struct{}
+	// storageResolver is threaded from New() so the cleanup can release
+	// tmpfs reservations and allow deletion under the staging root.
+	storageResolver *storage.Resolver
+	logger          *logger.Logger
+	onTerminal      func()
+	logArtifact     artifactProtocolLogger
+	wg              *sync.WaitGroup
+	stopChan        <-chan struct{}
 }
 
 // Submit durably sends a typed pb.TaskResult. Terminal cleanup is
@@ -583,36 +593,54 @@ func (r *taskResultReporter) cleanupCommittedAttemptOutputs(taskID, attemptID st
 		r.logger.Warn("[TASK_RESULT_OUTBOX] output cleanup list failed task=%s attempt=%s: %v", taskID, attemptID, err)
 		return
 	}
-	root := "/tmp/velox/scene-composite"
-	if r.outputDir != "" {
-		root = r.outputDir
-	}
-	root, err = filepath.Abs(root)
-	if err != nil {
-		r.logger.Warn("[TASK_RESULT_OUTBOX] output cleanup root invalid task=%s attempt=%s: %v", taskID, attemptID, err)
-		return
-	}
+	roots := r.cleanupRoots()
 	for _, entry := range entries {
 		if entry.Status != spool.StatusCommitted && entry.Status != spool.StatusRejected {
 			continue
 		}
 		if entry.LocalPath != "" {
 			path, absErr := filepath.Abs(entry.LocalPath)
-			rel, relErr := filepath.Rel(root, path)
-			outside := relErr != nil || absErr != nil || rel == "." || rel == ".." || len(rel) >= 3 && rel[:3] == ".."+string(filepath.Separator)
-			if outside {
-				r.logger.Warn("[TASK_RESULT_OUTBOX] refusing output cleanup outside output dir task=%s attempt=%s path=%q root=%q", taskID, attemptID, entry.LocalPath, root)
+			if absErr != nil || !pathWithinAnyRoot(roots, path) {
+				r.logger.Warn("[TASK_RESULT_OUTBOX] refusing output cleanup outside output dir task=%s attempt=%s path=%q", taskID, attemptID, entry.LocalPath)
 				continue
 			}
 			if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 				r.logger.Warn("[TASK_RESULT_OUTBOX] output file cleanup failed task=%s attempt=%s path=%q: %v", taskID, attemptID, path, removeErr)
 				continue
 			}
+			// A tmpfs artifact held a RAM reservation; free it once the
+			// file is gone (after the terminal TaskResultAck).
+			if entry.StorageTier == spool.StorageTierTmpfsVolatile && r.storageResolver != nil {
+				r.storageResolver.ReleaseStagingPath(path)
+			}
 		}
 		if cleanErr := r.spool.MarkCleaned(context.Background(), entry.SpoolID); cleanErr != nil {
 			r.logger.Warn("[TASK_RESULT_OUTBOX] output spool cleanup failed task=%s attempt=%s spool=%s: %v", taskID, attemptID, entry.SpoolID, cleanErr)
 		}
 	}
+}
+
+// cleanupRoots returns the deletion roots for committed/rejected outputs:
+// the configured output dir (NVMe) plus the ARTIFACT_STAGING tmpfs root (and
+// the durable ArtifactDir) when a resolver is wired. Deletion is refused for
+// any path outside this set so a spool row can never turn an ACK into an
+// arbitrary filesystem delete.
+func (r *taskResultReporter) cleanupRoots() []string {
+	root := "/tmp/velox/scene-composite"
+	if r.outputDir != "" {
+		root = r.outputDir
+	}
+	roots := []string{root}
+	if r.storageResolver != nil {
+		cfg := r.storageResolver.Config()
+		if cfg.ArtifactDir != "" {
+			roots = append(roots, cfg.ArtifactDir)
+		}
+		if cfg.ArtifactStaging.Dir != "" {
+			roots = append(roots, cfg.ArtifactStaging.Dir)
+		}
+	}
+	return roots
 }
 
 func (r *taskResultReporter) expireTaskResultAckCacheLocked(now time.Time) {

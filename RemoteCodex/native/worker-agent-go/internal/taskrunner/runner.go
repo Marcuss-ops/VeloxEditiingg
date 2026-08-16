@@ -48,6 +48,7 @@ import (
 	"velox-worker-agent/internal/oteltrace"
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/logger"
+	"velox-worker-agent/pkg/storage"
 	"velox-worker-agent/pkg/video/ffmpegrunner"
 )
 
@@ -64,6 +65,13 @@ type TaskRunner struct {
 	// TaskExecutionReport.Metrics as dotted-key entries.
 	cacheStats CacheStatsProvider
 	blobStats  BlobStatsProvider
+
+	// storage is the canonical StorageResolver (Fase E1) threaded into the
+	// per-task ExecutionContext so executors resolve output placement
+	// (ARTIFACT_STAGING) through the single central decision instead of
+	// scattering os.TempDir()/filepath.Join calls. nil keeps the legacy
+	// outputBase fallback in executors that predate the resolver.
+	storage *storage.Resolver
 
 	callerLog *logger.Logger
 	version   int // spec-version default to attempt when master omits
@@ -125,6 +133,16 @@ func (r *TaskRunner) WithCacheStats(p CacheStatsProvider) *TaskRunner {
 // blob.fetch_miss, blob.fetch_corruption, blob.entries, blob.bytes).
 func (r *TaskRunner) WithBlobStats(p BlobStatsProvider) *TaskRunner {
 	r.blobStats = p
+	return r
+}
+
+// WithStorageResolver threads the canonical StorageResolver into every
+// per-task ExecutionContext. Executors that produce a final artifact read
+// the ARTIFACT_STAGING placement through it (tmpfs-with-reservation,
+// NVMe fallback) instead of hardcoding an output dir. nil keeps the
+// executor's legacy outputBase fallback.
+func (r *TaskRunner) WithStorageResolver(s *storage.Resolver) *TaskRunner {
+	r.storage = s
 	return r
 }
 
@@ -235,17 +253,18 @@ func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskEx
 		},
 	}
 	rc, err := newRunnerContext(ContextOptions{
-		Spec:           spec,
-		ParentCtx:      parent,
-		Logger:         execLog,
-		Clock:          r.clock,
-		Telemetry:      r.telemetry,
-		Resources:      r.resources,
-		LocalCache:     r.cache,
-		Artifacts:      r.artifacts,
-		CacheStats:     r.cacheStats,
-		BlobStats:      r.blobStats,
-		FFmpegProfiles: report.FFmpegProfiles,
+		Spec:            spec,
+		ParentCtx:       parent,
+		Logger:          execLog,
+		Clock:           r.clock,
+		Telemetry:       r.telemetry,
+		Resources:       r.resources,
+		LocalCache:      r.cache,
+		Artifacts:       r.artifacts,
+		CacheStats:      r.cacheStats,
+		BlobStats:       r.blobStats,
+		FFmpegProfiles:  report.FFmpegProfiles,
+		StorageResolver: r.storage,
 	})
 	if err != nil {
 		return r.completeError(rec, report, appendPhase, CodeInternalRunnerFault,

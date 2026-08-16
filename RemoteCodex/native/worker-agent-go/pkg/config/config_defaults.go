@@ -21,15 +21,34 @@ import (
 const DefaultTmpfsThresholdBytes int64 = 64 * 1024 * 1024
 
 const (
-	DefaultAssetDownloadConcurrency            = 4
+	DefaultAssetDownloadConcurrency                 = 4
 	DefaultAssetChunkedDownloadThresholdBytes int64 = 64 * 1024 * 1024
-	DefaultAssetChunkedDownloadConcurrency         = 4
-	DefaultPrefetchByteBudget            int64 = 20 * 1024 * 1024 * 1024
-	DefaultPrefetchRAMBudgetBytes        int64 = 512 * 1024 * 1024
-	DefaultPrefetchRAMMaxAssetBytes      int64 = 128 * 1024 * 1024
-	DefaultPrefetchDiskRestrictedPercent       = 70
-	DefaultPrefetchDiskCriticalPercent         = 85
-	DefaultPrefetchDiskRecoveryPercent         = 75
+	DefaultAssetChunkedDownloadConcurrency          = 4
+	DefaultPrefetchByteBudget                 int64 = 20 * 1024 * 1024 * 1024
+	DefaultPrefetchRAMBudgetBytes             int64 = 512 * 1024 * 1024
+	DefaultPrefetchRAMMaxAssetBytes           int64 = 128 * 1024 * 1024
+	DefaultPrefetchDiskRestrictedPercent            = 70
+	DefaultPrefetchDiskCriticalPercent              = 85
+	DefaultPrefetchDiskRecoveryPercent              = 75
+)
+
+// Artifact tmpfs staging (ARTIFACT_STAGING) safe defaults. The feature is
+// opt-in (ArtifactTmpfsEnabled=false), but the tuning knobs always hold
+// sane values so toggling VELOX_ARTIFACT_TMPFS_ENABLED on later cannot pair
+// with a zero max-percent or a zero reserve.
+const (
+	DefaultArtifactTmpfsMaxPercent         = 65
+	DefaultArtifactTmpfsReserveBytes int64 = 512 * 1024 * 1024 // 512 MiB
+)
+
+// Cache pressure-eviction defaults (RW-PROD cache pressure controller):
+// evict only above the high watermark, stop at the low watermark
+// (hysteresis), bounded batch, and a 30s tick cadence.
+const (
+	DefaultCacheHighWatermarkPercent = 80
+	DefaultCacheLowWatermarkPercent  = 72
+	DefaultCacheEvictionBatchSize    = 128
+	DefaultCacheEvictionIntervalSecs = 30
 )
 
 // GenerateWorkerID creates a unique worker ID in the format "worker-{8-char-hex}".
@@ -116,6 +135,32 @@ func (c *WorkerConfig) applyDefaults() {
 	// tmpfs_dir can never pair with a zero/negative threshold.
 	if c.TmpfsThresholdBytes <= 0 {
 		c.TmpfsThresholdBytes = DefaultTmpfsThresholdBytes
+	}
+	// Artifact tmpfs staging: the feature stays opt-out, but the tuning
+	// knobs are repaired so an enabled staging never pairs with a
+	// zero/negative max-percent or reserve. Validate() enforces the
+	// [1,99] range on the operator-supplied value.
+	if c.ArtifactTmpfsMaxPercent <= 0 {
+		c.ArtifactTmpfsMaxPercent = DefaultArtifactTmpfsMaxPercent
+	}
+	if c.ArtifactTmpfsReserveBytes <= 0 {
+		c.ArtifactTmpfsReserveBytes = DefaultArtifactTmpfsReserveBytes
+	}
+	// Cache pressure-eviction tuning: safe defaults so a missing/invalid
+	// value can never pair a zero watermark or batch with the cleanup loop.
+	// Validate() enforces the low<high hysteresis and [1,100] range on the
+	// operator-supplied values.
+	if c.CacheHighWatermarkPercent <= 0 {
+		c.CacheHighWatermarkPercent = DefaultCacheHighWatermarkPercent
+	}
+	if c.CacheLowWatermarkPercent <= 0 {
+		c.CacheLowWatermarkPercent = DefaultCacheLowWatermarkPercent
+	}
+	if c.CacheEvictionBatchSize <= 0 {
+		c.CacheEvictionBatchSize = DefaultCacheEvictionBatchSize
+	}
+	if c.CacheEvictionIntervalSecs <= 0 {
+		c.CacheEvictionIntervalSecs = DefaultCacheEvictionIntervalSecs
 	}
 	if c.AssetDownloadConcurrency <= 0 {
 		c.AssetDownloadConcurrency = DefaultAssetDownloadConcurrency

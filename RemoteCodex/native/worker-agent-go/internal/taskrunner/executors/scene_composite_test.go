@@ -11,6 +11,7 @@ import (
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/logger"
+	"velox-worker-agent/pkg/storage"
 	"velox-worker-agent/pkg/video/pipeline"
 	"velox-worker-agent/pkg/video/plan"
 )
@@ -394,6 +395,132 @@ func TestSceneComposite_Execute_SynthesizesOutputPath(t *testing.T) {
 	wantPath := filepath.Join(exec.outputBase, "j-no-path.mp4")
 	if got := res.Outputs[0].URI; got != wantPath {
 		t.Errorf("synthesized path = %q, want %q", got, wantPath)
+	}
+}
+
+// storageExecutionContext exposes a StorageResolver to the executor, the
+// same way the real taskrunner.runnerContext does through the
+// optional-interface seam.
+type storageExecutionContext struct {
+	*sinkExecutionContext
+	resolver *storage.Resolver
+}
+
+func (c *storageExecutionContext) StorageResolver() *storage.Resolver { return c.resolver }
+
+// testStagingResolver builds a resolver with ARTIFACT_STAGING enabled over a
+// real temp dir. The real filesystem hosts the "tmpfs" backing, so the
+// reservation's statfs probe reports a large enough budget for the tiny
+// fixture estimates without needing a mounted /dev/shm.
+func testStagingResolver(t *testing.T) *storage.Resolver {
+	t.Helper()
+	root := t.TempDir()
+	r, err := storage.New(storage.Config{
+		CacheDir:            filepath.Join(root, "cache"),
+		TempDir:             filepath.Join(root, "temp"),
+		ArtifactDir:         filepath.Join(root, "artifact"),
+		TmpfsThresholdBytes: 64 * 1024 * 1024,
+		ArtifactStaging: storage.ArtifactStagingConfig{
+			Enabled:      true,
+			Dir:          filepath.Join(root, "shm"),
+			MaxPercent:   99,
+			ReserveBytes: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("build staging resolver: %v", err)
+	}
+	if err := r.EnsureDirs(); err != nil {
+		t.Fatalf("ensure staging dirs: %v", err)
+	}
+	return r
+}
+
+func TestSceneComposite_Execute_UsesStorageResolverPlacement(t *testing.T) {
+	exec, _ := newTestSceneComposite(t, nil)
+	resolver := testStagingResolver(t)
+	spec := executor.TaskSpec{
+		Version: 1, JobID: "j-staging", ExecutorID: SceneCompositeID,
+		Payload: map[string]interface{}{
+			"items": []interface{}{
+				map[string]interface{}{"type": "video", "url": "https://example.com/clip.mp4", "duration": 0.1},
+			},
+		},
+	}
+
+	res, err := exec.Execute(context.Background(), &storageExecutionContext{resolver: resolver}, spec)
+	if err != nil {
+		t.Fatalf("Execute err = %v", err)
+	}
+	if res.Status != "succeeded" {
+		t.Fatalf("res.Status = %q, want succeeded (code=%q detail=%q)", res.Status, res.ErrorCode, res.ErrorDetail)
+	}
+	wantURI := filepath.Join(resolver.Config().ArtifactStaging.Dir, "j-staging.mp4")
+	if got := res.Outputs[0].URI; got != wantURI {
+		t.Errorf("staging URI = %q, want %q (resolver placement)", got, wantURI)
+	}
+	if !strings.HasPrefix(res.Outputs[0].URI, resolver.Config().ArtifactStaging.Dir) {
+		t.Errorf("staging URI %q must live under the tmpfs staging root %q", res.Outputs[0].URI, resolver.Config().ArtifactStaging.Dir)
+	}
+}
+
+func TestSceneComposite_Execute_ResolverDisabledFallsBackToArtifactDir(t *testing.T) {
+	exec, _ := newTestSceneComposite(t, nil)
+	root := t.TempDir()
+	resolver, err := storage.New(storage.Config{
+		CacheDir:            filepath.Join(root, "cache"),
+		TempDir:             filepath.Join(root, "temp"),
+		ArtifactDir:         filepath.Join(root, "artifact"),
+		TmpfsThresholdBytes: 64 * 1024 * 1024,
+	})
+	if err != nil {
+		t.Fatalf("build resolver: %v", err)
+	}
+	spec := executor.TaskSpec{
+		Version: 1, JobID: "j-nvme", ExecutorID: SceneCompositeID,
+		Payload: map[string]interface{}{
+			"items": []interface{}{
+				map[string]interface{}{"type": "video", "url": "https://example.com/clip.mp4", "duration": 0.1},
+			},
+		},
+	}
+	res, err := exec.Execute(context.Background(), &storageExecutionContext{resolver: resolver}, spec)
+	if err != nil {
+		t.Fatalf("Execute err = %v", err)
+	}
+	if res.Status != "succeeded" {
+		t.Fatalf("res.Status = %q, want succeeded (code=%q detail=%q)", res.Status, res.ErrorCode, res.ErrorDetail)
+	}
+	// Staging disabled → durable NVMe artifact dir (the resolver's
+	// ArtifactDir), NOT the executor's legacy outputBase.
+	wantURI := filepath.Join(root, "artifact", "j-nvme.mp4")
+	if got := res.Outputs[0].URI; got != wantURI {
+		t.Errorf("fallback URI = %q, want %q (durable artifact dir)", got, wantURI)
+	}
+}
+
+func TestEstimateOutputBytes(t *testing.T) {
+	cases := []struct {
+		name    string
+		payload map[string]interface{}
+		want    int64
+	}{
+		{"nil payload", nil, -1},
+		{"empty payload", map[string]interface{}{}, -1},
+		{"top-level duration_seconds", map[string]interface{}{"duration_seconds": 10.0}, int64(10 * 12_000_000 / 8 * 1.2)},
+		{"items durations sum", map[string]interface{}{"items": []interface{}{
+			map[string]interface{}{"duration": 4.0},
+			map[string]interface{}{"duration_seconds": 6.0},
+		}}, int64(10 * 12_000_000 / 8 * 1.2)},
+		{"scenes_json durations sum", map[string]interface{}{"scenes_json": `[{"duration_seconds":5},{"duration_seconds":3}]`}, int64(8 * 12_000_000 / 8 * 1.2)},
+		{"unknown duration → -1", map[string]interface{}{"script_text": "no media"}, -1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := estimateOutputBytes(tc.payload); got != tc.want {
+				t.Errorf("estimateOutputBytes = %d, want %d", got, tc.want)
+			}
+		})
 	}
 }
 
