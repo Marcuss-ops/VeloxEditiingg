@@ -55,12 +55,12 @@ func assetBlobGlob(cacheDir, sha256Hex string) string {
 	return filepath.Join(cacheDir, sha256Hex[:2], sha256Hex+".*")
 }
 
-// cacheKeyPrefix builds the filesystem-safe partial-namespace key from
+// assetPartialKey builds the filesystem-safe partial-namespace key from
 // assetID and an optional SHA-256 prefix. It is used ONLY for the resumable
 // staging file (<cacheDir>/partial/<assetID>_<sha12>.part): the partial is
 // keyed by asset so a restarted worker can resume the same transfer. Final
 // blobs are content-addressed via assetBlobPath and never use this key.
-func cacheKeyPrefix(assetID string, sha256Prefix string) string {
+func assetPartialKey(assetID string, sha256Prefix string) string {
 	safe := strings.Map(func(r rune) rune {
 		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
 			return r
@@ -159,7 +159,7 @@ var activeAssetPartials sync.Map
 // partial namespace is deliberately separate from final cache files so an
 // incomplete response can never be mistaken for a ready asset.
 func assetPartialPath(cacheDir, assetID, expectedSHA256 string) string {
-	return filepath.Join(cacheDir, "partial", cacheKeyPrefix(assetID, expectedSHA256)+".part")
+	return filepath.Join(cacheDir, "partial", assetPartialKey(assetID, expectedSHA256)+".part")
 }
 
 func assetPartialSize(cacheDir, assetID, expectedSHA256 string) int64 {
