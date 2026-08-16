@@ -140,6 +140,15 @@ type BackendRuntimeSnapshotReader interface {
 	GetAuthenticatedRuntimeSnapshot(ctx context.Context, workerID string) (*store.WorkerRuntimeSnapshot, error)
 }
 
+// BackendRuntimePreflight verifies the immutable, canonical worker runtime
+// before an update owns the worker's drain transition. The check is
+// deliberately read-only: it may inspect the worker's systemd/Compose/
+// container/health contract, but it must not repair or mutate the host.
+// Recovery is a separate operation and must be audited independently.
+type BackendRuntimePreflight interface {
+	Check(ctx context.Context, workerID string) error
+}
+
 // RealRegistryUpdateGater adapts the production worker registry to the
 // UpdateExecutor registry surface. The executor owns the drain transition;
 // this adapter keeps that mutation on the same registry used by placement.

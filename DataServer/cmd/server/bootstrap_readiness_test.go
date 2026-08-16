@@ -67,6 +67,7 @@ func fullyWiredUpdateExecutor(t *testing.T, p *persistenceDeps) *fleet.UpdateExe
 		Cosign:      newUpdateCosignVerifier(),
 		Image:       deployUpdateImageValidator{},
 		Registry:    &fleet.RealRegistryUpdateGater{Reg: workersreg.New(nil)},
+		Preflight:   &fleet.CanonicalWorkerRuntimePreflight{SSH: ssh},
 		Smoke:       readinessSmokeRunner{},
 		Drive:       readinessDriveVerifier{},
 	})

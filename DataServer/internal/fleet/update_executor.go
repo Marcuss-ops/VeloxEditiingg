@@ -141,6 +141,7 @@ type UpdateBackend struct {
 	Registry    BackendRegistryGater
 	Deployments BackendDeploymentRepo
 	Runtime     BackendRuntimeSnapshotReader
+	Preflight   BackendRuntimePreflight
 	Image       BackendImageRefValidator
 	Now         NowFunc
 }
@@ -220,6 +221,17 @@ func (e *UpdateExecutor) Execute(ctx context.Context, op *store.Operation) error
 	}
 	if info == nil {
 		return fmt.Errorf("%w: %s", ErrUnregisteredWorker, op.WorkerID)
+	}
+
+	// A release update is not a host-recovery operation. Refuse to drain a
+	// worker whose canonical runtime is missing or unhealthy; otherwise a
+	// failed activation strands the worker in DRAINING/OFFLINE and rollback
+	// cannot even find the fixed velox-worker container.
+	if e.backend.Preflight == nil {
+		return errors.New("update: runtime preflight not wired")
+	}
+	if err := e.backend.Preflight.Check(ctx, op.WorkerID); err != nil {
+		return fmt.Errorf("update: runtime preflight: %w", err)
 	}
 
 	// ── Phase 3: snapshot previous_digest ───────────────────────────

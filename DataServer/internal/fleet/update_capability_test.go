@@ -7,8 +7,9 @@
 //   - the operator boot log (names the missing backends).
 //
 // These tests pin the verdict semantics: Ready requires ALL critical
-// backends (SSH, Docker, Deployments, Cosign, Image, Registry, Smoke,
-// Drive), the Missing list uses the same grep-friendly vocabulary as
+// backends (SSH, Docker, Deployments, Cosign, Image, Registry, Runtime,
+// Preflight, Smoke, Drive), the Missing list uses the same grep-friendly
+// vocabulary as
 // ValidateProductionBackends, and AttachRuntimeBackends is the wiring
 // that flips a partially-wired executor to READY.
 package fleet
@@ -50,6 +51,7 @@ func TestUpdateCapability_MissingBackend_NotReady(t *testing.T) {
 		{name: "cosign", unwire: func(b *UpdateBackend) { b.Cosign = nil }, wantKey: "cosign"},
 		{name: "image", unwire: func(b *UpdateBackend) { b.Image = nil }, wantKey: "image"},
 		{name: "registry", unwire: func(b *UpdateBackend) { b.Registry = nil }, wantKey: "registry"},
+		{name: "runtime_preflight", unwire: func(b *UpdateBackend) { b.Preflight = nil }, wantKey: "runtime_preflight"},
 		{name: "smoke", unwire: func(b *UpdateBackend) { b.Smoke = nil }, wantKey: "smoke"},
 		{name: "drive", unwire: func(b *UpdateBackend) { b.Drive = nil }, wantKey: "drive"},
 	}

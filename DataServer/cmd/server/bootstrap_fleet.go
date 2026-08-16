@@ -208,6 +208,7 @@ func buildFleet(p *persistenceDeps, workerRegistry *workersreg.Registry, sharedS
 		Image:       deployUpdateImageValidator{},
 		Registry:    registryGater,
 		Runtime:     registryGater,
+		Preflight:   &fleet.CanonicalWorkerRuntimePreflight{SSH: sharedSSH},
 	}
 	updateExecutor := fleet.NewUpdateExecutor(updateBackend)
 	if err := registry.Register(fleet.OperationKindUpdate, updateExecutor); err != nil {

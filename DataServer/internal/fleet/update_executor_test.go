@@ -122,6 +122,7 @@ func stubBackends(t *testing.T) (UpdateBackend, *stubBackendsState) {
 		Drive:       st,
 		Registry:    st,
 		Runtime:     st, // production always wires the authenticated runtime reader
+		Preflight:   st, // production always checks the canonical host before drain
 		Deployments: st,
 		Image:       stubImageValidator{},
 		Now:         func() time.Time { return time.Date(2026, 7, 28, 17, 0, 0, 0, time.UTC) },
@@ -129,7 +130,7 @@ func stubBackends(t *testing.T) (UpdateBackend, *stubBackendsState) {
 }
 
 // stubBackendsState is the in-process implementation of all
-// 7 Backends. Type-asserted to a single struct so test code
+// UpdateBackend backends. Type-asserted to a single struct so test code
 // can mutate one field at a time and inspect counters across
 // surfaces.
 type stubBackendsState struct {
@@ -187,6 +188,10 @@ func (s *stubBackendsState) Run(_ context.Context, _ string, _ string) (string, 
 		return "", s.healthErr
 	}
 	return "loopback /health/ready: ok\n", nil
+}
+
+func (s *stubBackendsState) Check(_ context.Context, _ string) error {
+	return nil
 }
 
 // ── BackendDockerClient ──────────────────────────────────────────────
@@ -1157,7 +1162,7 @@ func validImageRef() string {
 
 // stubBackendCosignErr wraps errors.New for the cosign verifier
 // surface. Required because the stubBackendsState is the same
-// struct for all 7 Backends (Go single-receiver pattern); a
+// struct for all UpdateBackend backends (Go single-receiver pattern); a
 // per-method override uses a separate type to drive the cosign
 // return without affecting other surfaces in the same test.
 type stubBackendCosignErr struct{ err error }

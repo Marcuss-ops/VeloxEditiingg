@@ -9,7 +9,8 @@ import (
 // UpdateCapability is the fail-closed boot verdict for the update
 // path (AZIONE 2: no "docker client not wired" discovered 30s after
 // a POST). Ready is true ONLY when every critical backend is wired:
-// SSH, Docker, Cosign, Registry, Deployments, Image, Smoke and Drive.
+// SSH, Docker, Cosign, Registry, Deployments, Runtime, Preflight, Image,
+// Smoke and Drive.
 // Missing lists the names of the absent backends so the operator log,
 // the /ready probe and the 503 gate detail all surface the same
 // grep-friendly vocabulary.
@@ -128,6 +129,9 @@ func (e *UpdateExecutor) Capability() UpdateCapability {
 	}
 	if e.backend.Registry == nil {
 		missing = append(missing, "registry")
+	}
+	if e.backend.Preflight == nil {
+		missing = append(missing, "runtime_preflight")
 	}
 	if e.backend.Smoke == nil {
 		missing = append(missing, "smoke")
