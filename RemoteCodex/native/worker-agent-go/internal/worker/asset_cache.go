@@ -35,6 +35,26 @@ func (w *Worker) assetCacheDir() string {
 	return filepath.Join(os.TempDir(), "velox-worker", "assets", "audio")
 }
 
+// assetBlobPath returns the content-addressed blob location for a verified
+// SHA-256 digest: <cacheDir>/<sha[:2]>/<sha><ext>. The blob is identified by
+// its bytes, never the asset ID, so distinct assets with identical bytes share
+// one physical file (dedup).
+func assetBlobPath(cacheDir, sha256Hex, ext string) string {
+	if len(sha256Hex) < 2 {
+		return filepath.Join(cacheDir, sha256Hex+ext)
+	}
+	return filepath.Join(cacheDir, sha256Hex[:2], sha256Hex+ext)
+}
+
+// assetBlobGlob returns a glob matching a content-addressed blob for any
+// extension: the bytes are the identity, the extension is only a hint.
+func assetBlobGlob(cacheDir, sha256Hex string) string {
+	if len(sha256Hex) < 2 {
+		return filepath.Join(cacheDir, sha256Hex+".*")
+	}
+	return filepath.Join(cacheDir, sha256Hex[:2], sha256Hex+".*")
+}
+
 // cacheKeyPrefix builds the filesystem-safe cache key from assetID and an
 // optional SHA-256 prefix. When sha256Prefix is non-empty, the first 12
 // characters are embedded in the filename so different versions of the same
@@ -85,9 +105,18 @@ func cachedAssetPathTimedWithContext(ctx context.Context, cacheDir, assetID stri
 		}
 		return "", 0, nil
 	}
-	prefix := cacheKeyPrefix(assetID, expectedSHA256)
-	matches, err := filepath.Glob(filepath.Join(cacheDir, prefix+".*"))
-	if err != nil || len(matches) == 0 {
+	// Content-addressed blob path first (v5 layout), then the pre-v5 flat
+	// <assetID>_<sha12>.* layout as a migration fallback.
+	var matches []string
+	if blobMatches, globErr := filepath.Glob(assetBlobGlob(cacheDir, expectedSHA256)); globErr == nil {
+		matches = append(matches, blobMatches...)
+	}
+	if len(matches) == 0 {
+		if flatMatches, globErr := filepath.Glob(filepath.Join(cacheDir, cacheKeyPrefix(assetID, expectedSHA256)+".*")); globErr == nil {
+			matches = append(matches, flatMatches...)
+		}
+	}
+	if len(matches) == 0 {
 		// Fall back to legacy cache key (assetID without SHA-256 suffix)
 		// when the new key yields no results.
 		if expectedSHA256 != "" {
@@ -99,7 +128,7 @@ func cachedAssetPathTimedWithContext(ctx context.Context, cacheDir, assetID stri
 				return "", 0, nil
 			}
 		}
-		return "", 0, err
+		return "", 0, nil
 	}
 	cachedPath := matches[0]
 
@@ -355,17 +384,27 @@ func verifyAndPromoteVeloxAsset(cacheDir, assetID, expectedSHA256 string, effect
 		return "", 0, "", time.Since(verifyStarted), fmt.Errorf("%w: downloaded asset SHA-256 mismatch", ErrAssetVerification)
 	}
 
-	// When no expected digest was supplied, embed the computed digest in the
-	// final filename anyway so a later remembered-integrity access can find
-	// the entry through the content-addressed key (primo → MISS, successivi
-	// → HIT). Files already on disk under the bare asset-ID name from older
-	// worker builds are simply re-downloaded once into the suffixed form.
-	prefix := cacheKeyPrefix(assetID, expectedSHA256)
-	if expectedSHA256 == "" && actualSHA256 != "" {
-		prefix = cacheKeyPrefix(assetID, actualSHA256)
+	// The final blob is content-addressed: the identity is the verified
+	// digest, never the asset ID, so two assets with the same bytes share one
+	// physical file. When no expected digest was supplied, the digest computed
+	// during verification becomes the identity anyway, so a later
+	// remembered-integrity access finds the entry through the same key. The
+	// pre-v5 flat <assetID>_<sha12> path is the fallback only when no digest
+	// could be computed (unreachable for a verified promotion: the size+SHA
+	// gate above always yields actualSHA256).
+	blobSHA := expectedSHA256
+	if blobSHA == "" {
+		blobSHA = actualSHA256
 	}
-
-	finalPath := filepath.Join(cacheDir, prefix+ext)
+	finalPath := filepath.Join(cacheDir, cacheKeyPrefix(assetID, blobSHA)+ext)
+	blobDir := cacheDir
+	if len(blobSHA) >= 2 {
+		finalPath = assetBlobPath(cacheDir, blobSHA, ext)
+		blobDir = filepath.Dir(finalPath)
+	}
+	if err := os.MkdirAll(blobDir, 0o755); err != nil {
+		return "", 0, "", time.Since(verifyStarted), err
+	}
 	// Preserve an existing valid destination until both directory fsyncs have
 	// succeeded. A plain rename-overwrite followed by Remove(finalPath) on
 	// fsync failure would otherwise destroy the last known-good copy.
@@ -395,6 +434,12 @@ func verifyAndPromoteVeloxAsset(cacheDir, assetID, expectedSHA256 string, effect
 	if err := syncDir(filepath.Join(cacheDir, "partial")); err != nil {
 		restorePrevious()
 		return "", 0, "", time.Since(verifyStarted), err
+	}
+	if blobDir != cacheDir {
+		if err := syncDir(blobDir); err != nil {
+			restorePrevious()
+			return "", 0, "", time.Since(verifyStarted), err
+		}
 	}
 	if err := syncDir(cacheDir); err != nil {
 		restorePrevious()

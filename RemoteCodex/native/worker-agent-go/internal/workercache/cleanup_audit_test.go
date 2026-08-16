@@ -91,7 +91,7 @@ func TestCleanupWithAudit_AuditsInFlightAsset(t *testing.T) {
 	cache, dir := cleanupFixture(t)
 	ctx := context.Background()
 	storeSeeded(t, cache, dir, "IN-FLIGHT")
-	if _, err := cache.DB().ExecContext(ctx, `UPDATE cached_assets SET download_complete = 0 WHERE asset_key = ?`, "IN-FLIGHT"); err != nil {
+	if _, err := cache.DB().ExecContext(ctx, `UPDATE cached_blobs SET download_complete = 0 WHERE content_hash = (SELECT content_hash FROM cached_assets WHERE asset_key = ?)`, "IN-FLIGHT"); err != nil {
 		t.Fatalf("mark in-flight: %v", err)
 	}
 

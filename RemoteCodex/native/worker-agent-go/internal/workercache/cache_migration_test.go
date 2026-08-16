@@ -151,7 +151,7 @@ func TestApplySchema_UpgradeFromV2_RestoresAssetKeyAndLeases(t *testing.T) {
 		t.Fatalf("user_version=%d, want %d", version, currentSchemaVersion)
 	}
 	var key, job string
-	if err := db.QueryRow(`SELECT asset_key FROM cached_assets WHERE local_path = '/cache/v2.mp4'`).Scan(&key); err != nil {
+	if err := db.QueryRow(`SELECT a.asset_key FROM cached_assets a JOIN cached_blobs b ON b.content_hash = a.content_hash WHERE b.local_path = '/cache/v2.mp4'`).Scan(&key); err != nil {
 		t.Fatalf("migrated asset key: %v", err)
 	}
 	if key != "V2KEY" {

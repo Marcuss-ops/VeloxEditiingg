@@ -145,7 +145,7 @@ func (c *Cache) Find(ctx context.Context, assetKey string) (Entry, bool, error) 
 		return Entry{}, false, ErrEmptyID
 	}
 	row := c.db.QueryRowContext(ctx,
-		`SELECT `+selectCols+` FROM cached_assets WHERE asset_key = ?`,
+		`SELECT `+selectCols+selectFrom+` WHERE a.asset_key = ?`,
 		assetKey)
 	e, err := scanEntry(row)
 	if errors.Is(err, ErrNotFound) {
@@ -189,20 +189,52 @@ func (c *Cache) Store(ctx context.Context, e Entry) error {
 	if e.DownloadComplete {
 		dlInt = 1
 	}
-	_, err := c.db.ExecContext(ctx,
-		`INSERT INTO cached_assets
-		   (asset_key, content_hash, local_path, size_bytes,
-		    download_complete, created_at, last_used_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		string(e.AssetKey), string(e.ContentHash), e.LocalPath, e.SizeBytes,
-		dlInt, e.CreatedAt.Format(time.RFC3339Nano),
-		e.LastUsedAt.Format(time.RFC3339Nano),
-	)
+	blobKey := string(e.ContentHash)
+	if blobKey == "" {
+		blobKey = legacyBlobKey(string(e.AssetKey))
+	}
+	verifiedAt := ""
+	if e.DownloadComplete {
+		verifiedAt = e.LastUsedAt.Format(time.RFC3339Nano)
+	}
+
+	tx, err := c.db.BeginTx(ctx, nil)
 	if err != nil {
+		return fmt.Errorf("workercache.Store(%q): begin: %w", e.AssetKey, err)
+	}
+	rollback := func(cause error) error {
+		_ = tx.Rollback()
+		return cause
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO cached_assets
+		   (asset_key, content_hash, created_at, last_used_at)
+		 VALUES (?, ?, ?, ?)`,
+		string(e.AssetKey), blobKey,
+		e.CreatedAt.Format(time.RFC3339Nano),
+		e.LastUsedAt.Format(time.RFC3339Nano),
+	); err != nil {
 		if isUniqueConflict(err) {
-			return fmt.Errorf("%w: asset_key=%s", ErrDuplicate, e.AssetKey)
+			return rollback(fmt.Errorf("%w: asset_key=%s", ErrDuplicate, e.AssetKey))
 		}
-		return fmt.Errorf("workercache.Store(%q): %w", e.AssetKey, err)
+		return rollback(fmt.Errorf("workercache.Store(%q): %w", e.AssetKey, err))
+	}
+	// First writer wins the blob path: assets sharing a content_hash must
+	// reference one physical file, so a re-insert of the same blob keeps the
+	// existing local_path.
+	if _, err := tx.ExecContext(ctx,
+		`INSERT OR IGNORE INTO cached_blobs
+		   (content_hash, local_path, size_bytes, created_at, last_used_at, verified_at, download_complete)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		blobKey, e.LocalPath, e.SizeBytes,
+		e.CreatedAt.Format(time.RFC3339Nano),
+		e.LastUsedAt.Format(time.RFC3339Nano),
+		verifiedAt, dlInt,
+	); err != nil {
+		return rollback(fmt.Errorf("workercache.Store(%q): blob: %w", e.AssetKey, err))
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("workercache.Store(%q): commit: %w", e.AssetKey, err)
 	}
 	return nil
 }
@@ -280,17 +312,67 @@ func (c *Cache) markDownloadComplete(ctx context.Context, assetKey, localPath st
 	if localPath == "" {
 		return fmt.Errorf("workercache.MarkDownloadComplete: local_path is required")
 	}
-	res, err := c.db.ExecContext(ctx,
-		`UPDATE cached_assets
-		   SET local_path = ?, size_bytes = ?, content_hash = ?, download_complete = 1, last_used_at = ?
-		 WHERE asset_key = ?`,
-		localPath, sizeBytes, hash,
-		time.Now().UTC().Format(time.RFC3339Nano), assetKey,
+	blobKey := hash
+	if blobKey == "" {
+		blobKey = legacyBlobKey(assetKey)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+
+	tx, err := c.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("workercache.MarkDownloadComplete(%q): begin: %w", assetKey, err)
+	}
+	rollback := func(cause error) error {
+		_ = tx.Rollback()
+		return cause
+	}
+
+	// Capture the previous mapping so a legacy→hash re-key can remove the now
+	// orphaned legacy blob.
+	var oldBlobKey string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT content_hash FROM cached_assets WHERE asset_key = ?`, assetKey).Scan(&oldBlobKey); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return rollback(fmt.Errorf("%w: asset_key=%s", ErrNotFound, assetKey))
+		}
+		return rollback(fmt.Errorf("workercache.MarkDownloadComplete(%q): probe: %w", assetKey, err))
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO cached_blobs
+		   (content_hash, local_path, size_bytes, created_at, last_used_at, verified_at, download_complete)
+		 VALUES (?, ?, ?, ?, ?, ?, 1)
+		 ON CONFLICT(content_hash) DO UPDATE SET
+		   local_path = excluded.local_path,
+		   size_bytes = excluded.size_bytes,
+		   download_complete = 1,
+		   last_used_at = excluded.last_used_at,
+		   verified_at = excluded.verified_at`,
+		blobKey, localPath, sizeBytes, now, now, now,
+	); err != nil {
+		return rollback(fmt.Errorf("workercache.MarkDownloadComplete(%q): blob: %w", assetKey, err))
+	}
+	res, err := tx.ExecContext(ctx,
+		`UPDATE cached_assets SET content_hash = ?, last_used_at = ? WHERE asset_key = ?`,
+		blobKey, now, assetKey,
 	)
 	if err != nil {
-		return fmt.Errorf("workercache.MarkDownloadComplete(%q): %w", assetKey, err)
+		return rollback(fmt.Errorf("workercache.MarkDownloadComplete(%q): %w", assetKey, err))
 	}
-	return mustHaveAffected(res, assetKey, "MarkDownloadComplete")
+	if err := mustHaveAffected(res, assetKey, "MarkDownloadComplete"); err != nil {
+		return rollback(err)
+	}
+	if oldBlobKey != "" && oldBlobKey != blobKey {
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM cached_blobs WHERE content_hash = ? AND NOT EXISTS (SELECT 1 FROM cached_assets WHERE content_hash = ?)`,
+			oldBlobKey, oldBlobKey); err != nil {
+			return rollback(fmt.Errorf("workercache.MarkDownloadComplete(%q): cleanup orphan blob: %w", assetKey, err))
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("workercache.MarkDownloadComplete(%q): commit: %w", assetKey, err)
+	}
+	return nil
 }
 
 // Acquire adds the (asset, job) relation to the authoritative lease table.
@@ -423,7 +505,20 @@ func (c *Cache) DeleteIfUnleased(ctx context.Context, assetKey string) error {
 	if err != nil {
 		return fmt.Errorf("workercache.DeleteIfUnleased(%q): %w", assetKey, err)
 	}
-	return mustHaveAffected(res, assetKey, "DeleteIfUnleased")
+	if err := mustHaveAffected(res, assetKey, "DeleteIfUnleased"); err != nil {
+		return err
+	}
+	c.deleteOrphanedBlobs(ctx)
+	return nil
+}
+
+// deleteOrphanedBlobs removes blob rows no longer referenced by any asset.
+// It is a best-effort hygiene pass: orphaned blobs are invisible to the
+// asset-keyed read model, so a failed sweep is harmless and retried on a
+// later delete/eviction.
+func (c *Cache) deleteOrphanedBlobs(ctx context.Context) {
+	_, _ = c.db.ExecContext(ctx,
+		`DELETE FROM cached_blobs WHERE NOT EXISTS (SELECT 1 FROM cached_assets a WHERE a.content_hash = cached_blobs.content_hash)`)
 }
 
 // Delete removes the row. Returns ErrNotFound when no row matches.
@@ -440,14 +535,18 @@ func (c *Cache) Delete(ctx context.Context, assetKey string) error {
 	if err != nil {
 		return fmt.Errorf("workercache.Delete(%q): %w", assetKey, err)
 	}
-	return mustHaveAffected(res, assetKey, "Delete")
+	if err := mustHaveAffected(res, assetKey, "Delete"); err != nil {
+		return err
+	}
+	c.deleteOrphanedBlobs(ctx)
+	return nil
 }
 
 // List returns all rows ordered by asset_key (deterministic for
 // tests + supervisor scans).
 func (c *Cache) List(ctx context.Context) ([]Entry, error) {
 	rows, err := c.db.QueryContext(ctx,
-		`SELECT `+selectCols+` FROM cached_assets ORDER BY asset_key ASC`)
+		`SELECT `+selectCols+selectFrom+` ORDER BY a.asset_key ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("workercache.List: %w", err)
 	}
@@ -469,7 +568,7 @@ func (c *Cache) Size(ctx context.Context) (entries int, bytes int64, err error) 
 	if c == nil || c.db == nil {
 		return 0, 0, fmt.Errorf("workercache.Size: nil cache")
 	}
-	if err := c.db.QueryRowContext(ctx, `SELECT COUNT(1), COALESCE(SUM(size_bytes), 0) FROM cached_assets`).Scan(&entries, &bytes); err != nil {
+	if err := c.db.QueryRowContext(ctx, `SELECT (SELECT COUNT(1) FROM cached_assets), COALESCE((SELECT SUM(b.size_bytes) FROM cached_blobs b WHERE EXISTS (SELECT 1 FROM cached_assets a WHERE a.content_hash = b.content_hash)), 0)`).Scan(&entries, &bytes); err != nil {
 		return 0, 0, fmt.Errorf("workercache.Size: %w", err)
 	}
 	return entries, bytes, nil
@@ -480,7 +579,7 @@ func (c *Cache) Size(ctx context.Context) (entries int, bytes int64, err error) 
 // callers must not treat it as a lease or as proof that a file cannot be
 // evicted before the task acquires its lease.
 func (c *Cache) ReadyKeys(ctx context.Context) ([]string, error) {
-	rows, err := c.db.QueryContext(ctx, `SELECT asset_key FROM cached_assets WHERE download_complete = 1 ORDER BY asset_key`)
+	rows, err := c.db.QueryContext(ctx, `SELECT a.asset_key FROM cached_assets a JOIN cached_blobs b ON b.content_hash = a.content_hash WHERE b.download_complete = 1 ORDER BY a.asset_key`)
 	if err != nil {
 		return nil, fmt.Errorf("workercache.ReadyKeys: %w", err)
 	}

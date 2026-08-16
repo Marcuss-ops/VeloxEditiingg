@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -14,20 +15,52 @@ import (
 // schema creation/migration, the row projection, the scanner and shared
 // predicates. The public CRUD surface lives in cache.go.
 
-const currentSchemaVersion = 4
+const currentSchemaVersion = 5
 
-// schemaDDL is the canonical schema for new databases. Lease ownership is
-// represented only by cached_asset_leases; cached_assets has no lease mirror.
+// legacyBlobKeyPrefix names the degenerate content identity used for a cache
+// entry whose verified SHA-256 is unknown (legacy callers, test fixtures,
+// folder-backed assets). Such an entry cannot be deduplicated against any
+// other asset, so its physical blob is keyed by the asset itself. The prefix
+// keeps those synthetic keys from ever colliding with a real 64-hex digest,
+// and displayContentHash strips it back to "" for callers.
+const legacyBlobKeyPrefix = "legacy:"
+
+func legacyBlobKey(assetKey string) string { return legacyBlobKeyPrefix + assetKey }
+
+// displayContentHash maps a stored blob key back to the caller-facing content
+// identity: a synthetic legacy key has no verified digest, so it is reported
+// as empty.
+func displayContentHash(stored string) string {
+	if strings.HasPrefix(stored, legacyBlobKeyPrefix) {
+		return ""
+	}
+	return stored
+}
+
+// schemaDDL is the canonical schema for new databases (v5). The logical
+// identity (asset_key → content_hash) lives in cached_assets; the physical
+// bytes (content_hash → local_path/size/verification) live in cached_blobs.
+// Lease ownership remains only in cached_asset_leases, keyed by asset_key.
 const schemaDDL = `
-CREATE TABLE IF NOT EXISTS cached_assets (
-    asset_key      TEXT PRIMARY KEY,
-    content_hash   TEXT NOT NULL DEFAULT '',
-    local_path         TEXT NOT NULL,
-    size_bytes         INTEGER NOT NULL DEFAULT 0,
-    download_complete  INTEGER NOT NULL DEFAULT 0,
-    created_at         TEXT NOT NULL,
-    last_used_at       TEXT NOT NULL
+CREATE TABLE IF NOT EXISTS cached_blobs (
+    content_hash      TEXT PRIMARY KEY,
+    local_path        TEXT NOT NULL UNIQUE,
+    size_bytes        INTEGER NOT NULL DEFAULT 0,
+    created_at        TEXT NOT NULL,
+    last_used_at      TEXT NOT NULL,
+    verified_at       TEXT NOT NULL DEFAULT '',
+    download_complete INTEGER NOT NULL DEFAULT 0
 );
+CREATE INDEX IF NOT EXISTS idx_cached_blobs_last_used
+    ON cached_blobs(last_used_at);
+CREATE TABLE IF NOT EXISTS cached_assets (
+    asset_key    TEXT PRIMARY KEY,
+    content_hash TEXT NOT NULL DEFAULT '',
+    created_at   TEXT NOT NULL,
+    last_used_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cached_assets_hash
+    ON cached_assets(content_hash);
 CREATE INDEX IF NOT EXISTS idx_cached_assets_last_used_at
     ON cached_assets(last_used_at);
 CREATE TABLE IF NOT EXISTS cached_asset_reservations (
@@ -62,16 +95,23 @@ CREATE INDEX IF NOT EXISTS idx_pending_lease_releases_due
     ON pending_lease_releases(next_attempt_at, created_at);
 `
 
-const selectCols = `asset_key, content_hash, local_path, size_bytes,
-    download_complete, created_at, last_used_at,
-    (SELECT COUNT(1) FROM cached_asset_leases l WHERE l.asset_key = cached_assets.asset_key),
-    COALESCE((SELECT MIN(job_id) FROM cached_asset_leases l2 WHERE l2.asset_key = cached_assets.asset_key), ''),
-    (SELECT COUNT(1) FROM cached_asset_reservations r WHERE r.asset_key = cached_assets.asset_key AND julianday(r.expires_at) > julianday('now'))`
+// selectCols projects the composite Entry read-model from the two-table join.
+// The physical columns come from cached_blobs; lease/reservation counts are
+// still derived from the asset_key side. Callers must append selectFrom.
+const selectCols = `a.asset_key, a.content_hash,
+    COALESCE(b.local_path, ''), COALESCE(b.size_bytes, 0),
+    COALESCE(b.download_complete, 0), a.created_at, a.last_used_at,
+    (SELECT COUNT(1) FROM cached_asset_leases l WHERE l.asset_key = a.asset_key),
+    COALESCE((SELECT MIN(job_id) FROM cached_asset_leases l2 WHERE l2.asset_key = a.asset_key), ''),
+    (SELECT COUNT(1) FROM cached_asset_reservations r WHERE r.asset_key = a.asset_key AND julianday(r.expires_at) > julianday('now'))`
+
+// selectFrom is the canonical FROM/JOIN clause for selectCols.
+const selectFrom = ` FROM cached_assets a LEFT JOIN cached_blobs b ON b.content_hash = a.content_hash `
 
 // applySchema creates the current schema or upgrades a legacy database. The
-// migration is deliberately forward-only: legacy drive_file_id / active_job_id
-// columns are gone after upgrade and older binaries are not supported against
-// the migrated DB.
+// migration is deliberately forward-only: legacy drive_file_id /
+// active_job_id columns are gone after upgrade and older binaries are not
+// supported against the migrated DB.
 // Deployment contract: roll out the new worker before opening the upgraded DB,
 // and do not downgrade that worker against the same DB after this migration.
 func applySchema(db *sql.DB) error {
@@ -105,6 +145,8 @@ func applySchema(db *sql.DB) error {
 		return nil
 	}
 
+	// v3/v4 canonical schema: ensure the content_hash column exists before the
+	// blob split reads it.
 	hasContentHash, err := columnExists(db, "cached_assets", "content_hash")
 	if err != nil {
 		return err
@@ -112,6 +154,15 @@ func applySchema(db *sql.DB) error {
 	if !hasContentHash {
 		if _, err := db.Exec(`ALTER TABLE cached_assets ADD COLUMN content_hash TEXT NOT NULL DEFAULT ''`); err != nil {
 			return fmt.Errorf("add content_hash column: %w", err)
+		}
+	}
+	blobsExist, err := tableExists(db, "cached_blobs")
+	if err != nil {
+		return err
+	}
+	if !blobsExist {
+		if err := migrateToBlobsSchema(db); err != nil {
+			return fmt.Errorf("migrate to blob schema: %w", err)
 		}
 	}
 	if _, err := db.Exec(schemaDDL); err != nil {
@@ -168,10 +219,93 @@ func setSchemaVersion(db *sql.DB, version int) error {
 	return nil
 }
 
+// migrateToBlobsSchema splits a v3/v4 single-table cache into the v5 two-table
+// model. Physical columns move to cached_blobs (deduplicated by content_hash;
+// a hashless row becomes a per-asset legacy blob), and cached_assets is
+// rebuilt down to the logical asset_key → content_hash mapping. Leases and
+// reservations are untouched: they already key on asset_key, and the
+// FOREIGN KEY definitions re-resolve to the rebuilt table by name.
+func migrateToBlobsSchema(db *sql.DB) error {
+	if _, err := db.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
+		return fmt.Errorf("disable foreign keys for blob migration: %w", err)
+	}
+	defer func() { _, _ = db.Exec(`PRAGMA foreign_keys = ON`) }()
+
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	rollback := func(cause error) error {
+		_ = tx.Rollback()
+		return cause
+	}
+
+	if _, err := tx.Exec(`CREATE TABLE cached_blobs (
+		content_hash TEXT PRIMARY KEY,
+		local_path TEXT NOT NULL UNIQUE,
+		size_bytes INTEGER NOT NULL DEFAULT 0,
+		created_at TEXT NOT NULL,
+		last_used_at TEXT NOT NULL,
+		verified_at TEXT NOT NULL DEFAULT '',
+		download_complete INTEGER NOT NULL DEFAULT 0
+	)`); err != nil {
+		return rollback(fmt.Errorf("create blob table: %w", err))
+	}
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO cached_blobs
+		(content_hash, local_path, size_bytes, created_at, last_used_at, verified_at, download_complete)
+		SELECT
+			CASE WHEN content_hash = '' THEN '` + legacyBlobKeyPrefix + `' || asset_key ELSE content_hash END,
+			local_path, size_bytes, created_at, last_used_at,
+			CASE WHEN download_complete = 1 THEN last_used_at ELSE '' END,
+			download_complete
+		FROM cached_assets`); err != nil {
+		return rollback(fmt.Errorf("populate blobs: %w", err))
+	}
+	if _, err := tx.Exec(`CREATE INDEX idx_cached_blobs_last_used ON cached_blobs(last_used_at)`); err != nil {
+		return rollback(fmt.Errorf("create blob timestamp index: %w", err))
+	}
+
+	if _, err := tx.Exec(`CREATE TABLE cached_assets_new (
+		asset_key TEXT PRIMARY KEY,
+		content_hash TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL,
+		last_used_at TEXT NOT NULL
+	)`); err != nil {
+		return rollback(fmt.Errorf("create migrated cache table: %w", err))
+	}
+	if _, err := tx.Exec(`INSERT INTO cached_assets_new
+		(asset_key, content_hash, created_at, last_used_at)
+		SELECT asset_key,
+			CASE WHEN content_hash = '' THEN '` + legacyBlobKeyPrefix + `' || asset_key ELSE content_hash END,
+			created_at, last_used_at
+		FROM cached_assets`); err != nil {
+		return rollback(fmt.Errorf("copy cached assets: %w", err))
+	}
+	if _, err := tx.Exec(`DROP TABLE cached_assets`); err != nil {
+		return rollback(fmt.Errorf("drop legacy cache table: %w", err))
+	}
+	if _, err := tx.Exec(`ALTER TABLE cached_assets_new RENAME TO cached_assets`); err != nil {
+		return rollback(fmt.Errorf("rename migrated cache table: %w", err))
+	}
+	if _, err := tx.Exec(`CREATE INDEX idx_cached_assets_hash ON cached_assets(content_hash)`); err != nil {
+		return rollback(fmt.Errorf("create cache hash index: %w", err))
+	}
+	if _, err := tx.Exec(`CREATE INDEX idx_cached_assets_last_used_at ON cached_assets(last_used_at)`); err != nil {
+		return rollback(fmt.Errorf("create cache timestamp index: %w", err))
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit blob migration: %w", err)
+	}
+	return nil
+}
+
 // migrateLegacySchema preserves every cached asset, backfills the many-to-
-// many lease table from the old single-owner column, and rebuilds the parent
-// table without that column. All DDL and data movement is one transaction;
-// any failure rolls back the upgrade and leaves the legacy database usable.
+// many lease table from the old single-owner column, splits the physical
+// columns into cached_blobs, and rebuilds the parent table down to the
+// logical asset_key → content_hash mapping. All DDL and data movement is one
+// transaction; any failure rolls back the upgrade and leaves the legacy
+// database usable.
 func migrateLegacySchema(db *sql.DB) error {
 	return migrateLegacySchemaWithHook(db, nil)
 }
@@ -244,20 +378,42 @@ func migrateLegacySchemaWithHook(db *sql.DB, afterAssetsRebuild func() error) er
 		}
 	}
 
+	// Split physical columns into cached_blobs, keyed by the legacy per-asset
+	// identity (a legacy row has no verified digest to deduplicate against).
+	if _, err := tx.Exec(`CREATE TABLE cached_blobs (
+		content_hash TEXT PRIMARY KEY,
+		local_path TEXT NOT NULL UNIQUE,
+		size_bytes INTEGER NOT NULL DEFAULT 0,
+		created_at TEXT NOT NULL,
+		last_used_at TEXT NOT NULL,
+		verified_at TEXT NOT NULL DEFAULT '',
+		download_complete INTEGER NOT NULL DEFAULT 0
+	)`); err != nil {
+		return rollback(fmt.Errorf("create blob table: %w", err))
+	}
+	if _, err := tx.Exec(`INSERT INTO cached_blobs
+		(content_hash, local_path, size_bytes, created_at, last_used_at, verified_at, download_complete)
+		SELECT '` + legacyBlobKeyPrefix + `' || drive_file_id, local_path, size_bytes, created_at, last_used_at,
+			CASE WHEN download_complete = 1 THEN last_used_at ELSE '' END,
+			download_complete
+		FROM cached_assets`); err != nil {
+		return rollback(fmt.Errorf("populate blobs: %w", err))
+	}
+	if _, err := tx.Exec(`CREATE INDEX idx_cached_blobs_last_used ON cached_blobs(last_used_at)`); err != nil {
+		return rollback(fmt.Errorf("create blob timestamp index: %w", err))
+	}
+
 	if _, err := tx.Exec(`CREATE TABLE cached_assets_new (
 		asset_key TEXT PRIMARY KEY,
 		content_hash TEXT NOT NULL DEFAULT '',
-		local_path TEXT NOT NULL,
-		size_bytes INTEGER NOT NULL DEFAULT 0,
-		download_complete INTEGER NOT NULL DEFAULT 0,
 		created_at TEXT NOT NULL,
 		last_used_at TEXT NOT NULL
 	)`); err != nil {
 		return rollback(fmt.Errorf("create migrated cache table: %w", err))
 	}
 	if _, err := tx.Exec(`INSERT INTO cached_assets_new
-		(asset_key, content_hash, local_path, size_bytes, download_complete, created_at, last_used_at)
-		SELECT drive_file_id, '', local_path, size_bytes, download_complete, created_at, last_used_at
+		(asset_key, content_hash, created_at, last_used_at)
+		SELECT drive_file_id, '` + legacyBlobKeyPrefix + `' || drive_file_id, created_at, last_used_at
 		FROM cached_assets`); err != nil {
 		return rollback(fmt.Errorf("copy cached assets: %w", err))
 	}
@@ -266,6 +422,9 @@ func migrateLegacySchemaWithHook(db *sql.DB, afterAssetsRebuild func() error) er
 	}
 	if _, err := tx.Exec(`ALTER TABLE cached_assets_new RENAME TO cached_assets`); err != nil {
 		return rollback(fmt.Errorf("rename migrated cache table: %w", err))
+	}
+	if _, err := tx.Exec(`CREATE INDEX idx_cached_assets_hash ON cached_assets(content_hash)`); err != nil {
+		return rollback(fmt.Errorf("create cache hash index: %w", err))
 	}
 	if _, err := tx.Exec(`CREATE INDEX idx_cached_assets_last_used_at ON cached_assets(last_used_at)`); err != nil {
 		return rollback(fmt.Errorf("create cache timestamp index: %w", err))
@@ -363,7 +522,7 @@ func scanEntry(r scanDBI) (*Entry, error) {
 	var (
 		e                Entry
 		assetKey         string
-		hash             string
+		storedHash       string
 		dlInt            int
 		createdS         string
 		usedS            string
@@ -372,7 +531,7 @@ func scanEntry(r scanDBI) (*Entry, error) {
 		reservationCount int
 	)
 	err := r.Scan(
-		&assetKey, &hash, &e.LocalPath, &e.SizeBytes,
+		&assetKey, &storedHash, &e.LocalPath, &e.SizeBytes,
 		&dlInt, &createdS, &usedS, &leaseCount, &leaseJob, &reservationCount,
 	)
 	if err != nil {
@@ -382,7 +541,7 @@ func scanEntry(r scanDBI) (*Entry, error) {
 		return nil, fmt.Errorf("workercache.scanEntry: %w", err)
 	}
 	e.AssetKey = assetref.AssetKey(assetKey)
-	e.ContentHash = assetref.ContentHash(hash)
+	e.ContentHash = assetref.ContentHash(displayContentHash(storedHash))
 	e.ActiveLeaseCount = leaseCount
 	e.ActiveJobID = leaseJob
 	e.ActiveReservationCount = reservationCount

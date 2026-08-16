@@ -14,7 +14,10 @@ func TestWriteAssetCacheAtOffsetRestoresPreviousFinalOnDirectorySyncFailure(t *t
 	oldData := []byte("previous valid bytes")
 	newData := []byte("new verified bytes")
 	expectedSHA := testAssetDigest(newData)
-	oldPath := filepath.Join(cacheDir, cacheKeyPrefix(assetID, expectedSHA)+".mp4")
+	oldPath := assetBlobPath(cacheDir, expectedSHA, ".mp4")
+	if err := os.MkdirAll(filepath.Dir(oldPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(oldPath, oldData, 0o644); err != nil {
 		t.Fatal(err)
 	}
