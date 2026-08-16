@@ -2,6 +2,7 @@ package uploads
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"strconv"
@@ -73,7 +74,7 @@ func (h *ChunkedUploadHandler) MasterStreamChunk() gin.HandlerFunc {
 			UploadID: uploadID, ChunkIndex: idx, Reader: c.Request.Body,
 		}); err != nil {
 			log.Printf("[CHUNKED] master-stream chunk upload failed upload=%s idx=%d: %v", uploadID, idx, err)
-			c.JSON(http.StatusBadRequest, gin.H{"error": "artifact chunk rejected"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "artifact chunk rejected", "error_code": classifyChunkedArtifactError(err)})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true, "upload_id": uploadID, "chunk": idx})
@@ -92,10 +93,36 @@ func (h *ChunkedUploadHandler) MasterStreamComplete() gin.HandlerFunc {
 		result, err := h.svc.ReceiveChunked(c.Request.Context(), uploadID)
 		if err != nil {
 			log.Printf("[CHUNKED] master-stream receive failed upload=%s: %v", uploadID, err)
-			c.JSON(http.StatusBadRequest, gin.H{"error": "artifact receive rejected"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "artifact receive rejected", "error_code": classifyChunkedArtifactError(err)})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true, "upload_id": uploadID, "sha256": result.ReceivedSHA256, "size": result.ReceivedSizeBytes})
+	}
+}
+
+// classifyChunkedArtifactError returns a stable data-plane code without
+// exposing internal paths, SQL details, or topology to the bearer of the
+// upload token. The full wrapped error remains in the Master log.
+func classifyChunkedArtifactError(err error) string {
+	switch {
+	case errors.Is(err, artifacts.ErrChunkConflict):
+		return "CHUNK_CONFLICT"
+	case errors.Is(err, artifacts.ErrArtifactTransferCorrupted):
+		return "ARTIFACT_TRANSFER_CORRUPTED"
+	case errors.Is(err, artifacts.ErrHashMismatch):
+		return "HASH_MISMATCH"
+	case errors.Is(err, artifacts.ErrSizeMismatch):
+		return "SIZE_MISMATCH"
+	case errors.Is(err, artifacts.ErrUploadStateInvalid):
+		return "UPLOAD_STATE_INVALID"
+	case errors.Is(err, artifacts.ErrUploadNotFound):
+		return "UPLOAD_NOT_FOUND"
+	case errors.Is(err, artifacts.ErrUploadExpired):
+		return "UPLOAD_EXPIRED"
+	case errors.Is(err, artifacts.ErrBlobWriteFailed):
+		return "BLOB_WRITE_FAILED"
+	default:
+		return "ARTIFACT_RECEIVE_REJECTED"
 	}
 }
 
