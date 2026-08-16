@@ -276,6 +276,7 @@ func (w *Worker) completeResumedArtifactCommit(ctx context.Context, entry spool.
 		}
 		return false
 	}
+	w.releaseCommittedArtifact(entry)
 	w.logger.Info("[ARTIFACT_RESUME] commit completed spool=%s upload=%s", entry.SpoolID, result.UploadID)
 	return true
 }

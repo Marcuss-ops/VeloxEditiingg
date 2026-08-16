@@ -181,8 +181,9 @@ func stagingE2EReportAndPTE(taskID, jobID, attemptID, uri string) (*PendingTaskE
 
 // TestArtifactStagingE2E_TmpfsUploadAndCleanupAfterCommit is the happy-path
 // acceptance test: a render output staged on tmpfs is uploaded (the uploader
-// reads LocalPath straight from RAM), survives the TaskCommitAck, and is only
-// unlinked + reservation-released after the terminal TaskResultAck.
+// reads LocalPath straight from RAM), then unlinked + reservation-released
+// immediately after TaskCommitAck while the spool row remains auditable until
+// the terminal TaskResultAck.
 func TestArtifactStagingE2E_TmpfsUploadAndCleanupAfterCommit(t *testing.T) {
 	stagingDir := t.TempDir()
 	artifactDir := t.TempDir()
@@ -213,14 +214,17 @@ func TestArtifactStagingE2E_TmpfsUploadAndCleanupAfterCommit(t *testing.T) {
 			uploader.path, uploader.bytes, placement.Path, len(stagingE2ERenderBytes))
 	}
 
-	// The tmpfs artifact must survive the commit ack; only the terminal
-	// TaskResultAck authorizes deletion.
-	if _, err := os.Stat(placement.Path); err != nil {
-		t.Fatalf("tmpfs artifact removed before terminal ACK: %v", err)
+	// The artifact-level commit ack authorizes local cleanup. The spool row is
+	// still retained for the terminal TaskResultAck/audit transition.
+	if _, err := os.Stat(placement.Path); !os.IsNotExist(err) {
+		t.Fatalf("tmpfs artifact still exists after commit ACK: %v", err)
+	}
+	if got := resolver.ReservedTmpfsBytes(); got != 0 {
+		t.Fatalf("ReservedTmpfsBytes = %d after commit ACK; want 0", got)
 	}
 
-	// Deliver the terminal TaskResultAck: cleanup must unlink the tmpfs file
-	// and free the RAM reservation.
+	// Deliver the terminal TaskResultAck: cleanup marks the retained spool row
+	// CLEANED; file removal/release is already idempotently complete.
 	payload, err := proto.Marshal(&pb.TaskResult{
 		TaskId: pte.TaskID, JobId: pte.JobID, AttemptId: pte.AttemptID, ReportHash: "hash-tmpfs-e2e",
 	})

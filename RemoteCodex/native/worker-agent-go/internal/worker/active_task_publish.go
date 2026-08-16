@@ -270,11 +270,61 @@ func (w *Worker) publishArtifactsV1(ctx context.Context, pte *PendingTaskExecuti
 		if err := w.outputSpool.MarkCommitted(ctx, spoolEntries[i].SpoolID); err != nil {
 			return fmt.Errorf("worker artifact upload: mark target %d committed: %w", i, err)
 		}
+		// The Master has accepted this artifact at TaskCommitAck. Release the
+		// local file and any tmpfs reservation now; the spool row remains
+		// COMMITTED until the terminal TaskResultAck for audit/reconciliation.
+		w.releaseCommittedArtifact(spoolEntries[i])
 	}
 	committed = true
 	w.logger.Info("[TASK] %d output artifacts committed for task %s (job=%s attempt=%s)",
 		len(completed), pte.TaskID, pte.JobID, pte.AttemptID)
 	return nil
+}
+
+// releaseCommittedArtifact removes a local output after the artifact-level
+// TaskCommitAck. It is deliberately separate from MarkCleaned: the spool row
+// remains the audit record until the terminal TaskResultAck, while no longer
+// holding a potentially multi-GB tmpfs/NVMe file after the Master commit.
+func (w *Worker) releaseCommittedArtifact(entry spool.SpoolEntry) {
+	if w == nil || entry.LocalPath == "" {
+		return
+	}
+	path, err := filepath.Abs(entry.LocalPath)
+	if err != nil {
+		w.logger.Warn("[ARTIFACT_CLEANUP] resolve committed path spool=%s: %v", entry.SpoolID, err)
+		return
+	}
+	roots := []string{}
+	if w.config != nil && w.config.OutputDir != "" {
+		roots = append(roots, w.config.OutputDir)
+	}
+	if w.storageResolver != nil {
+		cfg := w.storageResolver.Config()
+		if cfg.ArtifactDir != "" {
+			roots = append(roots, cfg.ArtifactDir)
+		}
+		if cfg.ArtifactStaging.Dir != "" {
+			roots = append(roots, cfg.ArtifactStaging.Dir)
+		}
+	}
+	allowed := false
+	for _, root := range roots {
+		if pathWithinRoot(root, path) {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		w.logger.Warn("[ARTIFACT_CLEANUP] refusing committed output outside configured roots spool=%s path=%q", entry.SpoolID, path)
+		return
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		w.logger.Warn("[ARTIFACT_CLEANUP] remove committed output failed spool=%s path=%q: %v", entry.SpoolID, path, err)
+		return
+	}
+	if entry.StorageTier == spool.StorageTierTmpfsVolatile && w.storageResolver != nil {
+		w.storageResolver.ReleaseStagingPath(path)
+	}
 }
 
 func (w *Worker) registerOutputSpool(ctx context.Context, pte *PendingTaskExecution, report *taskrunner.TaskExecutionReport) ([]spool.SpoolEntry, error) {
