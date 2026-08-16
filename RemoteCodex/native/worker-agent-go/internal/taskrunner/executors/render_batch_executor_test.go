@@ -550,3 +550,32 @@ func TestRenderBatch_V2PlanHasNoLocalPaths(t *testing.T) {
 		t.Fatal("V2 plan contains local_path")
 	}
 }
+
+func TestRenderBatch_RoutesFinalOutputThroughStorageResolver(t *testing.T) {
+	runner := &batchFakeFFmpegRunner{}
+	exec := NewRenderBatch(runner, t.TempDir())
+	exec.(*renderBatchExecutor).probe = func(_ context.Context, path string) (publisher.MediaProbe, error) {
+		if strings.Contains(path, "audio-master-001") {
+			return publisher.MediaProbe{HasAudio: true, AudioTrackCount: 1, AudioCodec: "aac", AudioSampleRateHz: 48_000, AudioChannels: 2, DurationSec: 2}, nil
+		}
+		return publisher.MediaProbe{HasVideo: true, VideoTrackCount: 1, HasAudio: true, AudioTrackCount: 1, AudioCodec: "aac", AudioSampleRateHz: 48_000, AudioChannels: 2, DurationSec: 2}, nil
+	}
+	resolver := testStagingResolver(t)
+	spec := batchTaskSpec(t, "job-batch-staging")
+
+	execCtx := &storageExecutionContext{sinkExecutionContext: &sinkExecutionContext{}, resolver: resolver}
+	result, err := exec.Execute(runtimeassets.WithBindings(context.Background(), batchBindings(t)), execCtx, spec)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result.Status != "succeeded" {
+		t.Fatalf("result = %+v", result)
+	}
+	if len(result.Outputs) != 1 {
+		t.Fatalf("outputs = %+v", result.Outputs)
+	}
+	stagingDir := resolver.Config().ArtifactStaging.Dir
+	if got := result.Outputs[0].URI; !strings.HasPrefix(got, stagingDir) {
+		t.Errorf("final URI %q must live under tmpfs staging root %q", got, stagingDir)
+	}
+}

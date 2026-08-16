@@ -135,6 +135,43 @@ func seedOutputFile(t *testing.T, path string) {
 	}
 }
 
+func TestEncodeExecutor_RoutesFinalOutputThroughStorageResolver(t *testing.T) {
+	const jobID = "job-encode-staging"
+	outputRoot := t.TempDir()
+	fake := &fakeFFmpegRunner{result: ffmpegrunner.FFmpegResult{ExitCode: 0}}
+	resolver := testStagingResolver(t)
+
+	e := NewEncode(fake, outputRoot)
+	spec := executor.TaskSpec{
+		Version:    1,
+		JobID:      jobID,
+		ExecutorID: EncodeID,
+		Payload: map[string]interface{}{
+			"render_plan_json": validRenderPlanJSON(t, jobID),
+			"input_path":       "/cache/worker/video.mp4",
+		},
+	}
+	// The final encoded artifact lands on the resolver's tmpfs staging root;
+	// the fake runner does not write files, so pre-seed it there.
+	stagingDir := resolver.Config().ArtifactStaging.Dir
+	seedOutputFile(t, filepath.Join(stagingDir, jobID+".mp4"))
+
+	execCtx := &storageExecutionContext{sinkExecutionContext: &sinkExecutionContext{}, resolver: resolver}
+	result, err := e.Execute(context.Background(), execCtx, spec)
+	if err != nil {
+		t.Fatalf("Execute = %v, want nil", err)
+	}
+	if result.Status != "succeeded" {
+		t.Fatalf("Status = %q, want succeeded (%s)", result.Status, result.ErrorDetail)
+	}
+	if len(result.Outputs) != 1 {
+		t.Fatalf("outputs = %+v", result.Outputs)
+	}
+	if got := result.Outputs[0].URI; !strings.HasPrefix(got, stagingDir) {
+		t.Errorf("encode URI %q must live under tmpfs staging root %q", got, stagingDir)
+	}
+}
+
 func TestEncodeExecutor_ConsumesCanonicalRunnerAndPublishesProfile(t *testing.T) {
 	const jobID = "job-encode-1"
 	outputRoot := t.TempDir()

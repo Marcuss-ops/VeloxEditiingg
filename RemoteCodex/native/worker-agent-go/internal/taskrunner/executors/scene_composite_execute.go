@@ -242,6 +242,17 @@ func estimateOutputBytes(payload map[string]interface{}) int64 {
 	return int64(float64(dur) * outputEstimateConservativeBps / 8 * outputEstimateMargin)
 }
 
+// estimateOutputBytesFromDuration estimates the final artifact size from a
+// declared media duration in microseconds, using the same conservative
+// composite bitrate and margin as estimateOutputBytes. Non-positive durations
+// return -1, the resolver's "unknown size → NVMe" sentinel.
+func estimateOutputBytesFromDuration(durationUS int64) int64 {
+	if durationUS <= 0 {
+		return -1
+	}
+	return int64(float64(durationUS) / 1_000_000 * outputEstimateConservativeBps / 8 * outputEstimateMargin)
+}
+
 // timelineDurationSeconds sums the payload's declared timeline duration,
 // following the hybrid compiler's canonical precedence: items[] first, then
 // scenes_json, then the top-level duration_seconds.

@@ -16,6 +16,7 @@ import (
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/runtimeassets"
 	"velox-worker-agent/internal/telemetry"
+	"velox-worker-agent/pkg/storage"
 	"velox-worker-agent/pkg/video/ffmpegrunner"
 )
 
@@ -71,7 +72,7 @@ func (e *renderBatchExecutor) Execute(ctx context.Context, execCtx executor.Exec
 		return obs.failure(started, "output_directory", err), nil
 	}
 	videoOnlyPath := filepath.Join(e.outputRoot, jobID+".video-only.mp4")
-	finalPath := filepath.Join(e.outputRoot, jobID+".mp4")
+	finalPath := e.resolveFinalOutputPath(execCtx, jobID, plan.DurationUS)
 	defer os.Remove(videoOnlyPath)
 
 	visual := obs.begin("visual_render", "engine", "render")
@@ -134,6 +135,20 @@ func (e *renderBatchExecutor) Execute(ctx context.Context, execCtx executor.Exec
 		Status: "succeeded", Outputs: []executor.ArtifactRef{finalArtifact},
 		RawMetrics: obs.rawMetrics, Metrics: metrics.Map(), StartedAt: started, CompletedAt: time.Now().UTC(),
 	}, nil
+}
+
+// resolveFinalOutputPath routes the final artifact through the canonical
+// StorageResolver (ARTIFACT_STAGING: tmpfs-with-reservation → NVMe fallback)
+// when one is present in the ExecutionContext, mirroring scene_composite.
+// Without a resolver the legacy outputRoot root is used, so headless/test
+// harnesses that never wire storage keep working unchanged.
+func (e *renderBatchExecutor) resolveFinalOutputPath(execCtx executor.ExecutionContext, jobID string, durationUS int64) string {
+	if resolver := storageResolverFromExecutionContext(execCtx); resolver != nil {
+		if placement, err := resolver.Place(storage.ArtifactStaging, jobID+".mp4", estimateOutputBytesFromDuration(durationUS)); err == nil {
+			return placement.Path
+		}
+	}
+	return filepath.Join(e.outputRoot, jobID+".mp4")
 }
 
 func (e *renderBatchExecutor) runCommand(ctx context.Context, execCtx executor.ExecutionContext, operation ffmpegrunner.OperationType, args []string, outputPath, outputType string) (executor.ArtifactRef, map[string]interface{}, *telemetry.RawExecutionMetrics, error) {

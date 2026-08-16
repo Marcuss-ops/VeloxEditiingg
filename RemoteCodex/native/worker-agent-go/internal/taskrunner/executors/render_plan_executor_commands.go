@@ -23,6 +23,7 @@ import (
 
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/telemetry"
+	"velox-worker-agent/pkg/storage"
 	"velox-worker-agent/pkg/video/ffmpegrunner"
 	"velox-worker-agent/pkg/video/plan"
 )
@@ -452,6 +453,18 @@ func (e *encodeExecutor) Execute(ctx context.Context, execCtx executor.Execution
 		return failedResult(started, "validation_failed", errors.New("encode: input_path or compose_path is required")), nil
 	}
 	output := e.outputPath(spec, ".mp4")
+	// The final encoded video is the upload deliverable, so it routes through
+	// the canonical ARTIFACT_STAGING placement (tmpfs-with-reservation → NVMe
+	// fallback) when a StorageResolver is present; otherwise the legacy
+	// outputRoot root is kept. The reservation estimate uses the parsed
+	// render-plan timeline duration (same conservative bitrate as
+	// scene_composite).
+	if resolver := storageResolverFromExecutionContext(execCtx); resolver != nil {
+		durationUS := int64(totalDuration(p) * 1_000_000)
+		if placement, err := resolver.Place(storage.ArtifactStaging, spec.JobID+".mp4", estimateOutputBytesFromDuration(durationUS)); err == nil {
+			output = placement.Path
+		}
+	}
 	args := []string{"-i", input}
 	inputs := []string{input}
 	if audioPath, _ := spec.Payload["audio_mix_path"].(string); strings.TrimSpace(audioPath) != "" {
