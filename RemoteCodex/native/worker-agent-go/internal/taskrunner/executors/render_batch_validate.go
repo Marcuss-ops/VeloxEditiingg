@@ -78,6 +78,9 @@ func validateBinding(assetID, wantSHA string, wantSize int64, bindings runtimeas
 	if info.Size() != wantSize {
 		return fmt.Errorf("%w: asset_id=%q actual size=%d want=%d", ErrRenderBatchAssetIntegrity, assetID, info.Size(), wantSize)
 	}
+	if binding.Verified {
+		return nil
+	}
 	file, err := os.Open(binding.Path)
 	if err != nil {
 		return fmt.Errorf("%w: asset_id=%q open: %v", ErrRenderBatchAssetIntegrity, assetID, err)
@@ -95,6 +98,84 @@ func validateBinding(assetID, wantSHA string, wantSize int64, bindings runtimeas
 }
 
 const renderBatchDurationToleranceSec = 0.050
+
+type packetCopyVideoSignature struct {
+	codec, codecTag, profile, pixelFormat string
+	level, width, height                  int
+	fpsNum, fpsDen                        int
+	timeBaseNum, timeBaseDen              int
+}
+
+func (s packetCopyVideoSignature) equal(other packetCopyVideoSignature) bool {
+	return s == other
+}
+
+func normalizeVideoCodec(codec string) string {
+	switch strings.ToLower(strings.TrimSpace(codec)) {
+	case "libx264", "h264_nvenc", "h264_vaapi":
+		return "h264"
+	default:
+		return strings.ToLower(strings.TrimSpace(codec))
+	}
+}
+
+// validatePacketCopySources is intentionally strict. FFmpeg's concat
+// demuxer can only packet-copy complete clips with identical stream identity;
+// accepting a mismatch here would make it silently re-encode or produce a
+// timeline with broken timestamps. The caller receives the ordered paths only
+// after every segment has passed this contract.
+func validatePacketCopySources(plan *contract.CompiledRenderPlanV2, bindings runtimeassets.Bindings, probe func(context.Context, string) (publisher.MediaProbe, error), ctx context.Context) ([]string, error) {
+	if plan == nil || len(plan.VideoTracks) != 1 || len(plan.VideoTracks[0].Segments) == 0 {
+		return nil, fmt.Errorf("%w: exactly one non-empty video track is required", ErrCopyOnlyVideoIncompatible)
+	}
+	if probe == nil {
+		return nil, fmt.Errorf("%w: media probe is not configured", ErrCopyOnlyVideoIncompatible)
+	}
+	var expected packetCopyVideoSignature
+	var haveExpected bool
+	paths := make([]string, 0, len(plan.VideoTracks[0].Segments))
+	probed := make(map[string]publisher.MediaProbe, len(plan.VideoTracks[0].Segments))
+	var timelineFrame int64
+	for _, segment := range plan.VideoTracks[0].Segments {
+		if segment.TimelineStartFrame != timelineFrame || segment.SourceInUS != 0 || segment.FrameCount <= 0 || segment.SourceDurationUS <= 0 {
+			return nil, fmt.Errorf("%w: segment %q is not a contiguous complete clip", ErrCopyOnlyVideoIncompatible, segment.SegmentID)
+		}
+		binding, ok := bindings[segment.AssetID]
+		if !ok || strings.TrimSpace(binding.Path) == "" {
+			return nil, fmt.Errorf("%w: segment %q has no local binding", ErrCopyOnlyVideoIncompatible, segment.SegmentID)
+		}
+		media, ok := probed[segment.AssetID]
+		if !ok {
+			var err error
+			media, err = probe(ctx, binding.Path)
+			if err != nil {
+				return nil, fmt.Errorf("%w: probe segment %q: %v", ErrCopyOnlyVideoIncompatible, segment.SegmentID, err)
+			}
+			probed[segment.AssetID] = media
+		}
+		if !media.HasVideo || media.VideoTrackCount != 1 || media.VideoCodec == "" || media.Width <= 0 || media.Height <= 0 || media.VideoFPSNum <= 0 || media.VideoFPSDen <= 0 || media.VideoTimeBaseNum <= 0 || media.VideoTimeBaseDen <= 0 || media.VideoPixelFormat == "" {
+			return nil, fmt.Errorf("%w: segment %q lacks a complete video stream signature: %+v", ErrCopyOnlyVideoIncompatible, segment.SegmentID, media)
+		}
+		if math.Abs(media.DurationSec-float64(segment.SourceDurationUS)/1_000_000) > renderBatchDurationToleranceSec {
+			return nil, fmt.Errorf("%w: segment %q duration=%0.6fs does not equal complete source duration=%0.6fs", ErrCopyOnlyVideoIncompatible, segment.SegmentID, media.DurationSec, float64(segment.SourceDurationUS)/1_000_000)
+		}
+		signature := packetCopyVideoSignature{
+			codec: normalizeVideoCodec(media.VideoCodec), codecTag: strings.ToLower(strings.TrimSpace(media.VideoCodecTag)), profile: strings.ToLower(strings.TrimSpace(media.VideoProfile)), pixelFormat: strings.ToLower(strings.TrimSpace(media.VideoPixelFormat)),
+			level: media.VideoLevel, width: media.Width, height: media.Height, fpsNum: media.VideoFPSNum, fpsDen: media.VideoFPSDen, timeBaseNum: media.VideoTimeBaseNum, timeBaseDen: media.VideoTimeBaseDen,
+		}
+		if !haveExpected {
+			expected, haveExpected = signature, true
+		} else if !expected.equal(signature) {
+			return nil, fmt.Errorf("%w: segment %q stream identity differs from the first clip", ErrCopyOnlyVideoIncompatible, segment.SegmentID)
+		}
+		if normalizeVideoCodec(plan.Output.VideoCodec) != expected.codec || plan.Output.Width != expected.width || plan.Output.Height != expected.height || plan.Output.FPSNum != expected.fpsNum || plan.Output.FPSDen != expected.fpsDen || (plan.Output.PixelFormat != "" && strings.ToLower(plan.Output.PixelFormat) != expected.pixelFormat) {
+			return nil, fmt.Errorf("%w: segment %q does not match output contract", ErrCopyOnlyVideoIncompatible, segment.SegmentID)
+		}
+		paths = append(paths, binding.Path)
+		timelineFrame += segment.FrameCount
+	}
+	return paths, nil
+}
 
 func validateMediaFile(probe func(context.Context, string) (publisher.MediaProbe, error), ctx context.Context, path, label string, wantDurationUS int64, requireVideo, requireAudio bool, expectedAudio *contract.FinalAudioV2) error {
 	if probe == nil {

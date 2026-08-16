@@ -1,7 +1,7 @@
 // Package executors — render_batch@1 execution path.
 //
-// render_batch_execute.go owns Execute (the two-phase visual render + stream-copy
-// mux orchestration) and its runCommand helper. The executor surface lives in
+// render_batch_execute.go owns Execute (the two-phase video packet-copy +
+// stream-copy mux orchestration) and its runCommand helper. The executor surface lives in
 // render_batch_executor.go.
 package executors
 
@@ -20,9 +20,10 @@ import (
 	"velox-worker-agent/pkg/video/ffmpegrunner"
 )
 
-// Execute renders the visual timeline without audio, then muxes the one
-// already-finalized audio asset. It never calls AudioMix and never encodes
-// the final audio stream: the mux command uses -c:v copy -c:a copy.
+// Execute assembles complete, compatible video clips with packet-copy only,
+// then muxes the one already-finalized audio asset. It never calls AudioMix,
+// never encodes video, and never encodes the final audio stream. Any trim,
+// gap, filter or stream-identity mismatch is rejected before FFmpeg starts.
 func (e *renderBatchExecutor) Execute(ctx context.Context, execCtx executor.ExecutionContext, spec executor.TaskSpec) (executor.ExecutionResult, error) {
 	started := time.Now().UTC()
 	obs := newRenderBatchObservability(execCtx, compiledPlanSHA(spec))
@@ -65,6 +66,11 @@ func (e *renderBatchExecutor) Execute(ctx context.Context, execCtx executor.Exec
 		obs.finish(assetResolution, telemetry.StatusFailed, "FINAL_AUDIO_INVALID", audioErr)
 		return obs.failure(started, "FINAL_AUDIO_INVALID", audioErr), nil
 	}
+	videoPaths, videoErr := validatePacketCopySources(plan, bindings, e.probe, ctx)
+	if videoErr != nil {
+		obs.finish(assetResolution, telemetry.StatusFailed, "COPY_ONLY_VIDEO_INCOMPATIBLE", videoErr)
+		return obs.failure(started, "COPY_ONLY_VIDEO_INCOMPATIBLE", videoErr), nil
+	}
 	obs.finish(assetResolution, telemetry.StatusOK, "", nil)
 
 	if err := os.MkdirAll(e.outputRoot, 0o750); err != nil {
@@ -72,15 +78,17 @@ func (e *renderBatchExecutor) Execute(ctx context.Context, execCtx executor.Exec
 		return obs.failure(started, "output_directory", err), nil
 	}
 	videoOnlyPath := filepath.Join(e.outputRoot, jobID+".video-only.mp4")
+	concatListPath := filepath.Join(e.outputRoot, jobID+".concat.txt")
 	finalPath := e.resolveFinalOutputPath(execCtx, jobID, plan.DurationUS)
 	defer os.Remove(videoOnlyPath)
+	defer os.Remove(concatListPath)
+	if err := writeConcatList(concatListPath, videoPaths); err != nil {
+		obs.logFailure("video_packet_copy", "COPY_ONLY_VIDEO_INCOMPATIBLE", err)
+		return obs.failure(started, "COPY_ONLY_VIDEO_INCOMPATIBLE", err), nil
+	}
 
 	visual := obs.begin("visual_render", "engine", "render")
-	visualArgs, err := buildVideoOnlyArgs(plan, bindings, videoOnlyPath)
-	if err != nil {
-		obs.finish(visual, telemetry.StatusFailed, "visual_plan_invalid", err)
-		return obs.failure(started, "visual_plan_invalid", err), nil
-	}
+	visualArgs := buildVideoOnlyPacketCopyArgs(concatListPath, videoOnlyPath)
 	visualArtifact, visualProfile, visualRaw, err := e.runCommand(ctx, execCtx, ffmpegrunner.OperationCompose, visualArgs, videoOnlyPath, "video-only")
 	obs.mergeRawMetrics(visualRaw)
 	if err != nil {
@@ -117,11 +125,13 @@ func (e *renderBatchExecutor) Execute(ctx context.Context, execCtx executor.Exec
 	metrics.Set("audio_mix_count", int64(0))
 	metrics.Set("audio_encode_count", int64(0))
 	metrics.Set("final_audio_copy", int64(1))
+	metrics.Set("video_packet_copy", int64(1))
+	metrics.Set("video_encode_count", int64(0))
 	metrics.Set("video_only_bytes", visualArtifact.SizeBytes)
 	metrics.Set("final_output_bytes", finalArtifact.SizeBytes)
 	metrics.Set("ffmpeg_visual_profile", visualProfile)
 	metrics.Set("ffmpeg_mux_profile", muxProfile)
-	obs.info("render_batch.succeeded", map[string]interface{}{"compiled_asset_count": int64(len(plan.Assets)), "final_audio_copy": int64(1)})
+	obs.info("render_batch.succeeded", map[string]interface{}{"compiled_asset_count": int64(len(plan.Assets)), "final_audio_copy": int64(1), "video_packet_copy": int64(1)})
 
 	obs.ensureRawMetrics()
 	obs.rawMetrics.OutputBytes = finalArtifact.SizeBytes

@@ -2,17 +2,14 @@ package executors
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
 	"velox-shared/contract"
 	"velox-worker-agent/internal/publisher"
 	"velox-worker-agent/internal/runtimeassets"
-	"velox-worker-agent/pkg/video/ffmpegrunner"
 )
 
 func syntheticCertificationPlan(t *testing.T, assets map[string][]byte) *contract.CompiledRenderPlanV2 {
@@ -62,7 +59,7 @@ func syntheticCertificationPlan(t *testing.T, assets map[string][]byte) *contrac
 	}
 }
 
-func TestRenderBatchReceiverCertification_SyntheticABCDPlacementDurationAudioCopyCleanup(t *testing.T) {
+func TestRenderBatchReceiverCertification_RejectsTrimmedAndGappedSources(t *testing.T) {
 	assets := map[string][]byte{
 		"video-A":      []byte("synthetic-red-A"),
 		"video-B":      []byte("synthetic-green-B"),
@@ -98,78 +95,10 @@ func TestRenderBatchReceiverCertification_SyntheticABCDPlacementDurationAudioCop
 	if err != nil {
 		t.Fatalf("first certification execution: %v", err)
 	}
-	if first.Status != "succeeded" || len(first.Outputs) != 1 {
-		t.Fatalf("first certification result = %+v", first)
+	if first.Status != "failed" || first.ErrorCode != "COPY_ONLY_VIDEO_INCOMPATIBLE" {
+		t.Fatalf("incompatible certification result = %+v", first)
 	}
-	if len(runner.requests) != 2 {
-		t.Fatalf("first execution FFmpeg requests = %d, want visual + mux", len(runner.requests))
-	}
-	visual := strings.Join(runner.requests[0].Args, " ")
-	mux := strings.Join(runner.requests[1].Args, " ")
-	if runner.requests[0].Operation != ffmpegrunner.OperationCompose || runner.requests[1].Operation != ffmpegrunner.OperationEncode {
-		t.Fatalf("operation order = %q then %q, want compose then encode", runner.requests[0].Operation, runner.requests[1].Operation)
-	}
-	placements := []struct {
-		segment string
-		assetID string
-		input   int
-		trim    string
-		setpts  string
-	}{
-		{"A", "video-A", 1, "trim=start=33.200000:duration=5.600000", "setpts=PTS-STARTPTS+12.400000/TB"},
-		{"B", "video-B", 2, "trim=start=7.100000:duration=6.500000", "setpts=PTS-STARTPTS+22.000000/TB"},
-		{"C", "video-C", 3, "trim=start=91.000000:duration=4.000000", "setpts=PTS-STARTPTS+35.000000/TB"},
-		{"D", "video-D", 4, "trim=start=15.500000:duration=6.000000", "setpts=PTS-STARTPTS+47.000000/TB"},
-	}
-	previousPathArg := -1
-	for _, placement := range placements {
-		path := bindings[placement.assetID].Path
-		pathArg := -1
-		for index, arg := range runner.requests[0].Args {
-			if arg == path {
-				pathArg = index
-				break
-			}
-		}
-		if pathArg < 0 || pathArg <= previousPathArg || pathArg == 0 || runner.requests[0].Args[pathArg-1] != "-i" {
-			t.Errorf("segment %s asset %s is not mapped to ordered FFmpeg input %d: args=%v", placement.segment, placement.assetID, placement.input, runner.requests[0].Args)
-		}
-		previousPathArg = pathArg
-		if !strings.Contains(visual, fmt.Sprintf("[%d:v]%s", placement.input, placement.trim)) || !strings.Contains(visual, placement.setpts) {
-			t.Errorf("segment %s missing exact input/placement/source duration: %s", placement.segment, visual)
-		}
-	}
-	for _, expected := range []string{"d=53.000000", "-t 53.000000", "-an"} {
-		if !strings.Contains(visual, expected) {
-			t.Errorf("visual command missing output duration/audio exclusion %q: %s", expected, visual)
-		}
-	}
-	for _, expected := range []string{"-map 0:v:0", "-map 1:a:0", "-c:v copy", "-c:a copy", "-movflags +faststart"} {
-		if !strings.Contains(mux, expected) {
-			t.Errorf("mux command missing %q: %s", expected, mux)
-		}
-	}
-	if strings.Contains(mux, "-shortest") || strings.Contains(mux, "-c:a aac") {
-		t.Fatalf("mux command must copy final audio without shortening or encoding: %s", mux)
-	}
-	if first.Metrics["audio_mix_count"] != int64(0) || first.Metrics["audio_encode_count"] != int64(0) || first.Metrics["final_audio_copy"] != int64(1) {
-		t.Fatalf("audio-copy metrics = %#v", first.Metrics)
-	}
-	if _, err := os.Stat(filepath.Join(outputRoot, "receiver-only-job.video-only.mp4")); !os.IsNotExist(err) {
-		t.Fatalf("video-only intermediate was not cleaned up after first run: %v", err)
-	}
-
-	second, err := exec.Execute(runtimeassets.WithBindings(context.Background(), bindings), nil, spec)
-	if err != nil {
-		t.Fatalf("second certification execution: %v", err)
-	}
-	if second.Outputs[0].Hash != first.Outputs[0].Hash {
-		t.Fatalf("certification output is not deterministic: first=%s second=%s", first.Outputs[0].Hash, second.Outputs[0].Hash)
-	}
-	if len(runner.requests) != 4 || !reflect.DeepEqual(runner.requests[:2], runner.requests[2:]) {
-		t.Fatal("A/B/C/D FFmpeg commands changed between deterministic replays")
-	}
-	if _, err := os.Stat(filepath.Join(outputRoot, "receiver-only-job.video-only.mp4")); !os.IsNotExist(err) {
-		t.Fatalf("video-only intermediate was not cleaned up after second run: %v", err)
+	if len(runner.requests) != 0 {
+		t.Fatalf("incompatible plan started FFmpeg: %d requests", len(runner.requests))
 	}
 }

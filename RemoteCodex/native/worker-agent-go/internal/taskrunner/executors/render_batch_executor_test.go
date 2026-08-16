@@ -105,7 +105,7 @@ func batchTestPlan() *contract.CompiledRenderPlanV2 {
 		TimelineSHA256:   timelineSHA,
 		DurationUS:       2_000_000,
 		Output: contract.OutputContractV2{
-			Container: "mp4", VideoCodec: "libx264", Width: 640, Height: 360,
+			Container: "mp4", VideoCodec: "h264", Width: 640, Height: 360,
 			FPSNum: 30, FPSDen: 1, PixelFormat: "yuv420p",
 		},
 		FinalAudio: contract.FinalAudioV2{
@@ -131,6 +131,18 @@ func batchTestPlan() *contract.CompiledRenderPlanV2 {
 func batchSHA(data []byte) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
+}
+
+func batchVideoProbe(duration float64) publisher.MediaProbe {
+	return publisher.MediaProbe{
+		HasVideo: true, VideoTrackCount: 1, HasAudio: true, AudioTrackCount: 1,
+		VideoCodec: "h264", VideoCodecTag: "avc1", VideoProfile: "high", VideoLevel: 40,
+		VideoPixelFormat: "yuv420p", VideoFPSNum: 30, VideoFPSDen: 1,
+		VideoTimeBaseNum: 1, VideoTimeBaseDen: 90000,
+		Width: 640, Height: 360,
+		AudioCodec: "aac", AudioSampleRateHz: 48_000, AudioChannels: 2,
+		DurationSec: duration,
+	}
 }
 
 func batchTaskSpec(t *testing.T, jobID string) executor.TaskSpec {
@@ -273,7 +285,7 @@ func TestRenderBatch_VideoOnlyThenFinalAudioCopyMux(t *testing.T) {
 		if strings.Contains(path, "audio-master-001") {
 			return publisher.MediaProbe{HasAudio: true, AudioTrackCount: 1, AudioCodec: "aac", AudioSampleRateHz: 48_000, AudioChannels: 2, DurationSec: 2}, nil
 		}
-		return publisher.MediaProbe{HasVideo: true, VideoTrackCount: 1, HasAudio: true, AudioTrackCount: 1, AudioCodec: "aac", AudioSampleRateHz: 48_000, AudioChannels: 2, DurationSec: 2}, nil
+		return batchVideoProbe(2), nil
 	}
 	ctx := runtimeassets.WithBindings(context.Background(), batchBindings(t))
 
@@ -295,10 +307,8 @@ func TestRenderBatch_VideoOnlyThenFinalAudioCopyMux(t *testing.T) {
 	if !strings.Contains(visualArgs, "-an") {
 		t.Fatalf("visual command must be video-only: %s", visualArgs)
 	}
-	// The V2 command preserves frame placement with overlays instead of
-	// routing through the legacy concat executor.
-	if !strings.Contains(visualArgs, "overlay") {
-		t.Fatalf("visual command does not describe positioned rendering: %s", visualArgs)
+	if !strings.Contains(visualArgs, "-f concat") || !strings.Contains(visualArgs, "-c:v copy") {
+		t.Fatalf("visual command is not strict packet-copy: %s", visualArgs)
 	}
 	muxArgs := strings.Join(mux.Args, " ")
 	for _, required := range []string{"-c:v copy", "-c:a copy", "-map 0:v:0", "-map 1:a:0", "-movflags +faststart"} {
@@ -339,7 +349,7 @@ func TestRenderBatch_EmitsPhaseMetricsAndStructuredIdentity(t *testing.T) {
 		if strings.Contains(path, "audio-master-001") {
 			return publisher.MediaProbe{HasAudio: true, AudioTrackCount: 1, AudioCodec: "aac", AudioSampleRateHz: 48_000, AudioChannels: 2, DurationSec: 2}, nil
 		}
-		return publisher.MediaProbe{HasVideo: true, VideoTrackCount: 1, HasAudio: true, AudioTrackCount: 1, AudioCodec: "aac", AudioSampleRateHz: 48_000, AudioChannels: 2, DurationSec: 2}, nil
+		return batchVideoProbe(2), nil
 	}
 	logger := &batchRecordingLogger{}
 	recorder := telemetry.NewEventRecorder()
@@ -558,7 +568,7 @@ func TestRenderBatch_RoutesFinalOutputThroughStorageResolver(t *testing.T) {
 		if strings.Contains(path, "audio-master-001") {
 			return publisher.MediaProbe{HasAudio: true, AudioTrackCount: 1, AudioCodec: "aac", AudioSampleRateHz: 48_000, AudioChannels: 2, DurationSec: 2}, nil
 		}
-		return publisher.MediaProbe{HasVideo: true, VideoTrackCount: 1, HasAudio: true, AudioTrackCount: 1, AudioCodec: "aac", AudioSampleRateHz: 48_000, AudioChannels: 2, DurationSec: 2}, nil
+		return batchVideoProbe(2), nil
 	}
 	resolver := testStagingResolver(t)
 	spec := batchTaskSpec(t, "job-batch-staging")

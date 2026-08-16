@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
 	"strconv"
 	"strings"
 
@@ -149,5 +150,35 @@ func buildFinalAudioCopyArgs(videoOnlyPath, audioPath, outputPath string) []stri
 		"-c:a", "copy",
 		"-movflags", "+faststart",
 		"-y", outputPath,
+	}
+}
+
+// writeConcatList creates the only input consumed by the strict video
+// packet-copy pass. Every entry is a complete, already-trimmed clip. Partial
+// trims, filters, scaling and gaps are deliberately handled by the validator
+// as incompatible rather than silently falling back to a video encode.
+func writeConcatList(path string, videoPaths []string) error {
+	if strings.TrimSpace(path) == "" || len(videoPaths) == 0 {
+		return errors.New("render_batch@1: concat list requires a path and at least one video")
+	}
+	var content strings.Builder
+	for _, videoPath := range videoPaths {
+		if strings.TrimSpace(videoPath) == "" {
+			return errors.New("render_batch@1: concat list contains an empty path")
+		}
+		// The concat demuxer uses single-quoted paths. Escape the only
+		// metacharacter that can terminate that quoted value.
+		content.WriteString("file '")
+		content.WriteString(strings.ReplaceAll(videoPath, "'", "'\\''"))
+		content.WriteString("'\n")
+	}
+	return os.WriteFile(path, []byte(content.String()), 0o640)
+}
+
+func buildVideoOnlyPacketCopyArgs(concatListPath, outputPath string) []string {
+	return []string{
+		"-f", "concat", "-safe", "0", "-i", concatListPath,
+		"-map", "0:v:0", "-an", "-c:v", "copy",
+		"-movflags", "+faststart", "-y", outputPath,
 	}
 }

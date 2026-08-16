@@ -83,10 +83,11 @@ func (w *Worker) resolveCompiledRenderPlanAssets(ctx context.Context, payload ma
 			return nil, fmt.Errorf("compiled render plan v2: assets[%d] local path invalid: %w", index, err)
 		}
 		bindings[asset.AssetID] = runtimeassets.Binding{
-			AssetID: asset.AssetID,
-			Path:    path,
-			SHA256:  asset.SHA256,
-			Size:    asset.SizeBytes,
+			AssetID:  asset.AssetID,
+			Path:     path,
+			SHA256:   asset.SHA256,
+			Size:     asset.SizeBytes,
+			Verified: true,
 		}
 	}
 	return bindings, nil

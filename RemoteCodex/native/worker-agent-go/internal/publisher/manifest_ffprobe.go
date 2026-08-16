@@ -23,6 +23,14 @@ import (
 // prove that the delivered artifact really contains audio as well as video.
 type MediaProbe struct {
 	VideoCodec        string
+	VideoCodecTag     string
+	VideoProfile      string
+	VideoLevel        int
+	VideoPixelFormat  string
+	VideoFPSNum       int
+	VideoFPSDen       int
+	VideoTimeBaseNum  int
+	VideoTimeBaseDen  int
 	AudioCodec        string
 	DurationSec       float64
 	Width             int
@@ -41,13 +49,19 @@ type ffprobeDocument struct {
 }
 
 type ffprobeStream struct {
-	CodecType  string `json:"codec_type"`
-	CodecName  string `json:"codec_name"`
-	Width      int    `json:"width"`
-	Height     int    `json:"height"`
-	Duration   string `json:"duration"`
-	SampleRate string `json:"sample_rate"`
-	Channels   int    `json:"channels"`
+	CodecType   string `json:"codec_type"`
+	CodecName   string `json:"codec_name"`
+	CodecTag    string `json:"codec_tag_string"`
+	Profile     string `json:"profile"`
+	Level       int    `json:"level"`
+	Width       int    `json:"width"`
+	Height      int    `json:"height"`
+	PixelFormat string `json:"pix_fmt"`
+	FrameRate   string `json:"r_frame_rate"`
+	TimeBase    string `json:"time_base"`
+	Duration    string `json:"duration"`
+	SampleRate  string `json:"sample_rate"`
+	Channels    int    `json:"channels"`
 }
 
 type ffprobeFormat struct {
@@ -106,8 +120,14 @@ func parseFfprobeDetails(b []byte) (MediaProbe, error) {
 			probe.VideoTrackCount++
 			if probe.VideoCodec == "" {
 				probe.VideoCodec = stream.CodecName
+				probe.VideoCodecTag = stream.CodecTag
+				probe.VideoProfile = stream.Profile
+				probe.VideoLevel = stream.Level
 				probe.Width = stream.Width
 				probe.Height = stream.Height
+				probe.VideoPixelFormat = stream.PixelFormat
+				probe.VideoFPSNum, probe.VideoFPSDen = parseRatio(stream.FrameRate)
+				probe.VideoTimeBaseNum, probe.VideoTimeBaseDen = parseRatio(stream.TimeBase)
 			}
 		case "audio":
 			probe.HasAudio = true
@@ -126,6 +146,19 @@ func parseFfprobeDetails(b []byte) (MediaProbe, error) {
 		probe.DurationSec, _ = strconv.ParseFloat(doc.Format.Duration, 64)
 	}
 	return probe, nil
+}
+
+func parseRatio(raw string) (int, int) {
+	parts := strings.Split(strings.TrimSpace(raw), "/")
+	if len(parts) != 2 {
+		return 0, 0
+	}
+	numerator, errNum := strconv.Atoi(parts[0])
+	denominator, errDen := strconv.Atoi(parts[1])
+	if errNum != nil || errDen != nil || numerator <= 0 || denominator <= 0 {
+		return 0, 0
+	}
+	return numerator, denominator
 }
 
 // parseFfprobeJSON tolerates minimal JSON shapes so the test fixtures

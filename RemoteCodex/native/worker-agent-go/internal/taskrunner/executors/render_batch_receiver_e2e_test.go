@@ -64,7 +64,7 @@ func receiverOnlyManualPlan(t *testing.T, assets map[string][]byte) *contract.Co
 		TimelineSHA256:   timelineSHA,
 		DurationUS:       4_000_000,
 		Output: contract.OutputContractV2{
-			Container: "mp4", VideoCodec: "libx264", Width: 640, Height: 360,
+			Container: "mp4", VideoCodec: "h264", Width: 640, Height: 360,
 			FPSNum: 30, FPSDen: 1, PixelFormat: "yuv420p",
 		},
 		FinalAudio: contract.FinalAudioV2{
@@ -76,8 +76,8 @@ func receiverOnlyManualPlan(t *testing.T, assets map[string][]byte) *contract.Co
 		VideoTracks: []contract.VideoTrackV2{{
 			TrackID: "main", Segments: []contract.VideoSegmentV2{
 				{SegmentID: "manual-a", AssetID: "video-a", SHA256: receiverOnlySHA(assets["video-a"]), TimelineStartFrame: 0, FrameCount: 30, SourceInUS: 0, SourceDurationUS: 1_000_000},
-				{SegmentID: "manual-b", AssetID: "video-b", SHA256: receiverOnlySHA(assets["video-b"]), TimelineStartFrame: 45, FrameCount: 30, SourceInUS: 250_000, SourceDurationUS: 1_000_000},
-				{SegmentID: "manual-c", AssetID: "video-c", SHA256: receiverOnlySHA(assets["video-c"]), TimelineStartFrame: 90, FrameCount: 30, SourceInUS: 500_000, SourceDurationUS: 1_000_000},
+				{SegmentID: "manual-b", AssetID: "video-b", SHA256: receiverOnlySHA(assets["video-b"]), TimelineStartFrame: 30, FrameCount: 30, SourceInUS: 0, SourceDurationUS: 1_000_000},
+				{SegmentID: "manual-c", AssetID: "video-c", SHA256: receiverOnlySHA(assets["video-c"]), TimelineStartFrame: 60, FrameCount: 60, SourceInUS: 0, SourceDurationUS: 2_000_000},
 			},
 		}},
 		Assets: []contract.AssetRefV2{
@@ -151,7 +151,13 @@ func TestRenderBatchReceiverOnly_ManualPlanLeaseRenderMuxDeterministic(t *testin
 		if strings.Contains(path, "audio-master") {
 			return publisher.MediaProbe{HasAudio: true, AudioTrackCount: 1, AudioCodec: "aac", AudioSampleRateHz: 48_000, AudioChannels: 2, DurationSec: 4}, nil
 		}
-		return publisher.MediaProbe{HasVideo: true, VideoTrackCount: 1, HasAudio: true, AudioTrackCount: 1, AudioCodec: "aac", AudioSampleRateHz: 48_000, AudioChannels: 2, DurationSec: 4}, nil
+		if strings.Contains(path, "video-only") || strings.Contains(path, "receiver-only-job.mp4") {
+			return batchVideoProbe(4), nil
+		}
+		if strings.Contains(path, "video-c") {
+			return batchVideoProbe(2), nil
+		}
+		return batchVideoProbe(1), nil
 	}
 
 	run := func(runNumber int) string {
@@ -223,7 +229,7 @@ func TestRenderBatchReceiverOnly_ManualPlanLeaseRenderMuxDeterministic(t *testin
 	}
 	visualArgs := strings.Join(runner.requests[0].Args, " ")
 	muxArgs := strings.Join(runner.requests[1].Args, " ")
-	if !strings.Contains(visualArgs, "-an") || !strings.Contains(visualArgs, "overlay") {
+	if !strings.Contains(visualArgs, "-an") || !strings.Contains(visualArgs, "-f concat") || !strings.Contains(visualArgs, "-c:v copy") {
 		t.Fatalf("visual-only command = %s", visualArgs)
 	}
 	for _, required := range []string{"-map 0:v:0", "-map 1:a:0", "-c:v copy", "-c:a copy"} {

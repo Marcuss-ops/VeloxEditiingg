@@ -32,6 +32,7 @@ const (
 var (
 	ErrMissingRenderBatchBindings = errors.New("render_batch@1: resolved asset bindings are required")
 	ErrRenderBatchAssetIntegrity  = errors.New("render_batch@1: asset binding integrity mismatch")
+	ErrCopyOnlyVideoIncompatible  = errors.New("render_batch@1: video packet-copy contract rejected")
 )
 
 type renderBatchExecutor struct {

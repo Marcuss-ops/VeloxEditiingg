@@ -9,6 +9,11 @@ type Binding struct {
 	Path    string
 	SHA256  string
 	Size    int64
+	// Verified is true only when the canonical worker asset resolver has
+	// already completed the size/SHA-256 verification before projecting the
+	// binding. Executors still stat the file, but do not reread a warm cache
+	// blob solely to repeat the same integrity scan for every job.
+	Verified bool
 }
 
 // Bindings maps canonical asset IDs to verified local files.
