@@ -228,9 +228,10 @@ jobs:
           # -X flag, which choked on the parentheses and printed link
           # usage instead of building.
           BUILD_TIME="${VERSION}-$(git log -1 --format=%cI)"
+          BUILD_COMMIT="$(git rev-parse HEAD)"
           go build \
             -trimpath \
-            -ldflags "-s -w -X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME}" \
+            -ldflags "-s -w -X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.BuildCommit=${BUILD_COMMIT}" \
             -o ./bin/velox-server ./cmd/server
 
       - name: Set up Docker Buildx
@@ -266,6 +267,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             VERSION=${{ steps.version.outputs.tag }}
+            BUILD_COMMIT=${{ github.sha }}
           provenance: true
           sbom: true
           cache-from: type=gha,scope=${{ github.workflow }}-${{ github.ref_name }}

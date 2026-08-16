@@ -56,6 +56,10 @@ func TestValidateBootstrapEndpointsRequiresPublicAndGRPCForPush(t *testing.T) {
 		t.Fatal("missing grpc endpoint accepted in push mode")
 	}
 	cfg.ControlPlane.GRPCControl = "master.example:9000"
+	if err := validateBootstrapEndpoints(cfg); err == nil {
+		t.Fatal("push mode accepted with GRPCPort=0")
+	}
+	cfg.Server.GRPCPort = 9000
 	if err := validateBootstrapEndpoints(cfg); err != nil {
 		t.Fatalf("valid endpoint set rejected: %v", err)
 	}

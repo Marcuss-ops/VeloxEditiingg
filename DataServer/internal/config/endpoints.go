@@ -88,6 +88,12 @@ func validateBootstrapEndpoints(c *Config) error {
 	if err := validateConfiguredEndpoints(c); err != nil {
 		return err
 	}
+	if c.Server.GRPCPushMode && c.Server.GRPCPort <= 0 {
+		return fmt.Errorf(
+			"config: GRPCPushMode=true requires VELOX_GRPC_PORT>0 (got %d). "+
+				"Either set VELOX_GRPC_PORT or disable VELOX_GRPC_PUSH_MODE.",
+			c.Server.GRPCPort)
+	}
 	if strings.TrimSpace(string(c.ControlPlane.RESTPublic)) == "" {
 		return fmt.Errorf("config: control-plane REST public endpoint is required (VELOX_CONTROL_PLANE_REST_PUBLIC_URL)")
 	}

@@ -86,3 +86,34 @@ func TestHealth_ReadinessCapabilityIsExposedWithoutFailing(t *testing.T) {
 		t.Fatalf("opsalerts capability = %q, want DISABLED", got)
 	}
 }
+
+func TestHealth_RuntimeInfoIsExposed(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	m := NewHealthModule()
+	m.SetRuntimeInfo(RuntimeInfo{
+		Version:   "1.2.3",
+		BuildTime: "2026-08-16T00:00:00Z",
+		Commit:    "abc123",
+		GRPC:      GRPCInfo{Configured: true, Port: 9000, Started: true},
+	})
+	m.MarkReady()
+
+	r := gin.New()
+	m.RegisterRoutes(r)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/health/ready", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("ready status = %d: %s", w.Code, w.Body.String())
+	}
+	var body struct {
+		Version string   `json:"version"`
+		Commit  string   `json:"commit"`
+		GRPC    GRPCInfo `json:"grpc"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode readiness body: %v", err)
+	}
+	if body.Version != "1.2.3" || body.Commit != "abc123" || body.GRPC.Port != 9000 || !body.GRPC.Started {
+		t.Fatalf("runtime info = %+v, want build identity and active gRPC transport", body)
+	}
+}

@@ -13,7 +13,7 @@
 # (go-sqlite3 + glibc + `-extldflags '-static'` is fragile and breaks
 # whenever SQLite or glibc upgrade).
 #
-# Why LDFLAGS `-X main.Version=... -X main.BuildTime=...` works: those
+# Why LDFLAGS `-X main.Version=... -X main.BuildTime=... -X main.BuildCommit=...` works: those
 # variables are declared as `var` (not `const`) in
 # DataServer/cmd/server/main.go. Go's linker's `-X` flag only mutates
 # writable symbols — this is the standard pattern.
@@ -42,6 +42,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # Build metadata — re-declared after FROM so they scope to this stage.
 ARG VERSION=dev
 ARG BUILD_TIME=unknown
+ARG BUILD_COMMIT=unknown
 
 # CGO toolchain required by go-sqlite3.
 ENV CGO_ENABLED=1
@@ -71,7 +72,7 @@ WORKDIR /app/DataServer
 # stack traces are still readable enough for this project.
 RUN go build \
         -trimpath \
-        -ldflags "-s -w -X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME}" \
+        -ldflags "-s -w -X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.BuildCommit=${BUILD_COMMIT}" \
         -o /out/velox-server \
         ./cmd/server
 

@@ -143,6 +143,42 @@ func TestReadiness_UpdateCapabilityProbe_GreenWhenFullyWired(t *testing.T) {
 	}
 }
 
+func TestReadiness_GrpcPushWithoutPortIsNotReady(t *testing.T) {
+	components := readinessTestComponents(t, nil)
+	components.cfg.Server.GRPCPushMode = true
+	components.cfg.Server.GRPCPort = 0
+
+	registerReadinessChecks(components, &transportBundle{})
+	w := serveReady(components)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("/ready = %d, want 503 when gRPC push is enabled without a port: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "transport") || !strings.Contains(body, "GRPCPort=0") {
+		t.Fatalf("/ready must identify the disabled gRPC transport: %s", body)
+	}
+}
+
+func TestReadiness_ExposesBuildAndGrpcRuntimeInfo(t *testing.T) {
+	components := readinessTestComponents(t, nil)
+	components.cfg.Server.GRPCPushMode = false
+	components.cfg.Server.GRPCPort = 0
+
+	registerReadinessChecks(components, &transportBundle{})
+	w := serveReady(components)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("/ready = %d, want 200 for explicit gRPC opt-out: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `"version":"dev"`) ||
+		!strings.Contains(body, `"commit":"unknown"`) ||
+		!strings.Contains(body, `"grpc":{"configured":false,"port":0,"started":false}`) {
+		t.Fatalf("/ready missing runtime identity/transport state: %s", body)
+	}
+}
+
 // TestReadiness_CapabilityExposuresHaveFailClosedGates pins the
 // architectural capability contract (AGENTS.md §6): every
 // AddReadinessCapability("X") exposure MUST be paired with a fail-closed

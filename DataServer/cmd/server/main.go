@@ -12,13 +12,14 @@ import (
 )
 
 // Build-time metadata, injected via `go build -ldflags "-X main.Version=...
-// -X main.BuildTime=..."`. Declared as `var` (not `const`) because
+// -X main.BuildTime=... -X main.BuildCommit=..."`. Declared as `var` (not `const`) because
 // ldflags -X only mutates writable symbols. Defaults are safe values
 // for local dev; release pipelines (DataServer/Dockerfile and
 // .github/workflows/master-image.yml) override them at build time.
 var (
-	Version   = "dev"
-	BuildTime = "unknown"
+	Version     = "dev"
+	BuildTime   = "unknown"
+	BuildCommit = "unknown"
 )
 
 const usageText = `Usage: velox-server [serve]

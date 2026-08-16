@@ -24,6 +24,7 @@ type HealthModule struct {
 	booted     bool
 	checks     []namedCheck
 	capability []namedCapability
+	runtime    *RuntimeInfo
 }
 
 type namedCheck struct {
@@ -36,9 +37,37 @@ type namedCapability struct {
 	state func() string
 }
 
+// RuntimeInfo is the build and transport identity exposed by the health
+// endpoints. It is supplied by the composition root so this module never
+// reads process environment or build metadata itself.
+type RuntimeInfo struct {
+	Version   string   `json:"version,omitempty"`
+	BuildTime string   `json:"build_time,omitempty"`
+	Commit    string   `json:"commit,omitempty"`
+	GRPC      GRPCInfo `json:"grpc"`
+}
+
+// GRPCInfo makes the worker control transport observable independently from
+// the HTTP listener. A healthy REST endpoint is not sufficient when workers
+// depend on the gRPC control stream.
+type GRPCInfo struct {
+	Configured bool `json:"configured"`
+	Port       int  `json:"port"`
+	Started    bool `json:"started"`
+}
+
 // NewHealthModule creates a new health module.
 func NewHealthModule() *HealthModule {
 	return &HealthModule{}
+}
+
+// SetRuntimeInfo installs the bootstrap identity exposed by the health
+// endpoints. Bootstrap calls this before marking the module ready.
+func (m *HealthModule) SetRuntimeInfo(info RuntimeInfo) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	copy := info
+	m.runtime = &copy
 }
 
 // Name returns the module identifier.
@@ -112,7 +141,7 @@ func (m *HealthModule) MarkReady() {
 }
 
 func (m *HealthModule) health(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"status": "healthy"})
+	c.JSON(http.StatusOK, m.withRuntime(gin.H{"status": "healthy"}))
 }
 
 func (m *HealthModule) ready(c *gin.Context) {
@@ -122,13 +151,18 @@ func (m *HealthModule) ready(c *gin.Context) {
 	copy(checks, m.checks)
 	capability := make([]namedCapability, len(m.capability))
 	copy(capability, m.capability)
+	var runtime *RuntimeInfo
+	if m.runtime != nil {
+		copy := *m.runtime
+		runtime = &copy
+	}
 	m.mu.RUnlock()
 
 	if !isReady {
-		c.JSON(http.StatusServiceUnavailable, gin.H{
+		c.JSON(http.StatusServiceUnavailable, m.withRuntime(gin.H{
 			"status":  "not_ready",
 			"message": "bootstrap not yet complete",
-		})
+		}))
 		return
 	}
 
@@ -150,17 +184,41 @@ func (m *HealthModule) ready(c *gin.Context) {
 	}
 
 	if !allOK {
-		c.JSON(http.StatusServiceUnavailable, gin.H{
+		payload := gin.H{
 			"status":       "not_ready",
 			"failures":     failures,
 			"capabilities": capabilityStates,
-		})
+		}
+		if runtime != nil {
+			addRuntime(payload, *runtime)
+		}
+		c.JSON(http.StatusServiceUnavailable, payload)
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	payload := gin.H{
 		"status":       "ready",
 		"checks":       len(checks),
 		"capabilities": capabilityStates,
-	})
+	}
+	if runtime != nil {
+		addRuntime(payload, *runtime)
+	}
+	c.JSON(http.StatusOK, payload)
+}
+
+func (m *HealthModule) withRuntime(payload gin.H) gin.H {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.runtime != nil {
+		addRuntime(payload, *m.runtime)
+	}
+	return payload
+}
+
+func addRuntime(payload gin.H, info RuntimeInfo) {
+	payload["version"] = info.Version
+	payload["build_time"] = info.BuildTime
+	payload["commit"] = info.Commit
+	payload["grpc"] = info.GRPC
 }

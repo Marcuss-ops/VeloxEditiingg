@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 
+	"velox-server/internal/app"
 	"velox-server/internal/fleet"
 	"velox-server/internal/fleet/opsalerts"
 	"velox-server/internal/logging"
@@ -27,6 +28,18 @@ import (
 // so the gRPC handler's SetCapabilityRegistry call (startTransports)
 // has a non-nil value; here we just populate the registry.
 func registerReadinessChecks(c *appComponents, t *transportBundle) {
+	if c.modules != nil && c.modules.Health != nil {
+		c.modules.Health.SetRuntimeInfo(app.RuntimeInfo{
+			Version:   Version,
+			BuildTime: BuildTime,
+			Commit:    BuildCommit,
+			GRPC: app.GRPCInfo{
+				Configured: c.cfg.Server.GRPCPushMode || c.cfg.Server.GRPCPort > 0,
+				Port:       c.cfg.Server.GRPCPort,
+				Started:    t != nil && t.grpcStarted,
+			},
+		})
+	}
 	for _, probe := range []registry.Probe{
 		{
 			Name: "coordinator",
@@ -62,11 +75,16 @@ func registerReadinessChecks(c *appComponents, t *transportBundle) {
 			// probe surfaces the misconfiguration in /ready instead
 			// of serving the HTTP API with a dead gRPC transport.
 			//
-			// When GRPCPort=0 the probe is satisfied: the operator
-			// has explicitly opted out of the gRPC transport.
+			// GRPCPort=0 is an explicit opt-out only when push mode is
+			// disabled. With push mode enabled, accepting HTTP readiness
+			// while no worker control transport can exist would strand
+			// every worker as DISCONNECTED.
 			Name: "transport",
 			Check: func() error {
-				if c.cfg.Server.GRPCPort == 0 {
+				if c.cfg.Server.GRPCPort <= 0 {
+					if c.cfg.Server.GRPCPushMode {
+						return fmt.Errorf("transport: gRPC push enabled but GRPCPort=%d; set VELOX_GRPC_PORT>0 or disable VELOX_GRPC_PUSH_MODE", c.cfg.Server.GRPCPort)
+					}
 					return nil // gRPC opt-out; no transport probe required
 				}
 				if !t.grpcStarted {
