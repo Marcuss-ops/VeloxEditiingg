@@ -477,6 +477,10 @@ func main() {
 			metrics := telemetry.GetPrometheusMetrics()
 			metrics.RecordCacheCleanup(time.Duration(stats.DurationMS) * time.Millisecond)
 			metrics.RecordCacheEvictions("pressure", stats.Removed)
+			metrics.RecordCacheEvictedBytes(stats.RemovedBytes)
+			if stats.UsagePercent > 0 {
+				metrics.SetCacheDiskUsagePercent(stats.UsagePercent)
+			}
 			metrics.RecordCacheCleanupSkips("protected", stats.Protected)
 			if entries, bytes, sizeErr := clipCache.Size(context.Background()); sizeErr == nil {
 				metrics.SetCacheSize(entries, bytes)

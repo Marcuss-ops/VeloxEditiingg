@@ -27,7 +27,6 @@ import (
 	"time"
 
 	"velox-shared/assetref"
-	"velox-worker-agent/internal/telemetry"
 )
 
 // ErrBlobProtected is returned by EvictBlobIfUnprotected when a blob is still
@@ -232,18 +231,11 @@ type PressureEvictionStats struct {
 func EvictUnderPressure(ctx context.Context, c *Cache, cfg PressureEvictionConfig, usage func() int, protected map[string]struct{}) (PressureEvictionStats, error) {
 	started := time.Now()
 	var stats PressureEvictionStats
-	defer func() {
-		stats.DurationMS = time.Since(started).Milliseconds()
-		// Observability: publish eviction count/bytes and the current disk
-		// usage on every pass, including the below-watermark no-op pass so
-		// the usage gauge tracks reality even when nothing is evicted.
-		metrics := telemetry.GetPrometheusMetrics()
-		if stats.Removed > 0 {
-			metrics.RecordCacheEvictions("pressure", stats.Removed)
-			metrics.RecordCacheEvictedBytes(stats.RemovedBytes)
-		}
-		metrics.SetCacheDiskUsagePercent(stats.UsagePercent)
-	}()
+	// EvictUnderPressure is PURE: it returns stats and leaves observability to
+	// the caller (the CleanupLoop's OnTick is the single Prometheus boundary).
+	// Recording here would double-count the same pass when the loop's OnTick
+	// also publishes the eviction counters.
+	defer func() { stats.DurationMS = time.Since(started).Milliseconds() }()
 
 	if c == nil {
 		return stats, fmt.Errorf("workercache.EvictUnderPressure: nil cache")
