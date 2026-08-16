@@ -233,11 +233,14 @@ func (r *TaskRunner) mergeStatsInto(report *TaskExecutionReport, m map[string]in
 	// final_concat_stream_copy is conventionally a bool in the proto
 	// and a JSON-style key in the legacy map. The native sidecar's
 	// canonical concat_mode is authoritative when the legacy bool alias is
-	// absent; stream_copy means the final video stream was never re-encoded.
+	// absent; stream_copy and packet_copy both mean the final video stream was
+	// never re-encoded. packet_copy is the native engine's canonical value for
+	// the strict clip concatenation path.
 	if v, ok := m["final.concat.stream_copy"].(bool); ok {
 		typed.FinalConcatStreamCopy = v
 	} else {
-		typed.FinalConcatStreamCopy = strings.EqualFold(typed.ConcatMode, "stream_copy")
+		typed.FinalConcatStreamCopy = strings.EqualFold(typed.ConcatMode, "stream_copy") ||
+			strings.EqualFold(typed.ConcatMode, "packet_copy")
 	}
 	if report.RawMetrics == nil {
 		report.RawMetrics = &typed
