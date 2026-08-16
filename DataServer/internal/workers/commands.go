@@ -307,6 +307,16 @@ func (tm *TokenManager) RevokeWorkerTokens(workerID string) error {
 	return tm.store.RevokeWorkerSessions(workerID)
 }
 
+// RevokeSessionType revokes only one session class for a worker. This is used
+// for rotating internal bootstrap tokens without touching the worker's
+// authenticated control session.
+func (tm *TokenManager) RevokeSessionType(workerID, sessionType string) error {
+	if tm == nil || tm.store == nil {
+		return fmt.Errorf("token manager store is not configured")
+	}
+	return tm.store.RevokeWorkerSessionsByType(workerID, sessionType)
+}
+
 // generateRandomToken generates a cryptographically secure random token
 func generateRandomToken() string {
 	const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"

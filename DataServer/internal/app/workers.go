@@ -86,6 +86,9 @@ func (m *WorkersModule) IssueAssetPickupToken(principal string) string {
 		return ""
 	}
 	const smokePickupSessionType = "smoke_asset"
+	if err := m.tokenMgr.RevokeSessionType(strings.TrimSpace(principal), smokePickupSessionType); err != nil {
+		return ""
+	}
 	token, err := m.tokenMgr.GenerateTokenForSessionType(strings.TrimSpace(principal), smokePickupSessionType)
 	if err != nil {
 		return ""

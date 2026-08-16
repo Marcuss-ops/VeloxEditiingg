@@ -290,6 +290,28 @@ func (s *SQLiteStore) RevokeWorkerSessions(workerID string) error {
 	return err
 }
 
+// RevokeWorkerSessionsByType revokes only sessions of the requested class.
+// Internal bootstrap sessions, such as smoke-asset pickup tokens, may be
+// rotated independently of the worker's authenticated control session.
+func (s *SQLiteStore) RevokeWorkerSessionsByType(workerID, sessionType string) error {
+	if strings.TrimSpace(workerID) == "" || strings.TrimSpace(sessionType) == "" {
+		return fmt.Errorf("revoke worker sessions by type: missing worker_id or session_type")
+	}
+	now := nowRFC3339Nano()
+	result, err := s.db.Exec(`UPDATE worker_sessions
+		SET revoked = 1,
+		    status = CASE WHEN status = 'ACTIVE' THEN 'DISCONNECTED' ELSE status END,
+		    disconnected_at = COALESCE(disconnected_at, ?),
+		    disconnect_reason = 'replaced'
+		WHERE worker_id = ? AND session_type = ? AND revoked = 0`,
+		now, workerID, sessionType)
+	if err != nil {
+		return fmt.Errorf("revoke worker sessions by type: %w", err)
+	}
+	_, err = readRowsAffected(result, "revoke worker sessions by type")
+	return err
+}
+
 // RevokeSession revokes a single session and closes its immutable runtime
 // snapshot, when one exists. Keeping both lifecycle records aligned lets
 // historical attempt queries distinguish a connected runtime from one that
