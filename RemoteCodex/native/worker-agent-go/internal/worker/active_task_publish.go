@@ -32,6 +32,8 @@ func (w *Worker) publishArtifactsV1(ctx context.Context, pte *PendingTaskExecuti
 	if report == nil || w.transport == nil || w.publisherRegistry == nil {
 		return nil
 	}
+	w.artifactUploadMu.Lock()
+	defer w.artifactUploadMu.Unlock()
 
 	for _, ref := range report.Outputs {
 		if ref.URI == "" || ref.Hash == "" || ref.SizeBytes <= 0 {

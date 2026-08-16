@@ -197,6 +197,12 @@ type Worker struct {
 	// only: after a restart the next access simply re-downloads once.
 	assetIntegrity   map[string]assetIntegrityRecord
 	assetIntegrityMu sync.Mutex
+	// artifactUploadMu prevents the foreground publisher and the durable
+	// resume loop from driving the same worker spool lifecycle concurrently.
+	// A row becomes UPLOADING before the network transfer starts; without this
+	// gate the resume loop can observe that intermediate state, upload the same
+	// bytes, and win MarkUploaded before the foreground path does.
+	artifactUploadMu sync.Mutex
 
 	// Status management — error state only; busy/idle derived from activeTasks
 	status Status

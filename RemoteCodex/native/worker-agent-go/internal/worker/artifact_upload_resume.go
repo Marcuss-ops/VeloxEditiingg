@@ -118,6 +118,9 @@ func (w *Worker) resumeDueArtifactUploads(ctx context.Context) error {
 // idempotent and safe to call repeatedly: state transitions are CAS-gated, so
 // a concurrent driver (e.g. the original publish path) cannot be corrupted.
 func (w *Worker) resumeArtifactUpload(ctx context.Context, entry spool.SpoolEntry) {
+	w.artifactUploadMu.Lock()
+	defer w.artifactUploadMu.Unlock()
+
 	if entry.UploadTargetJSON == "" {
 		// No persisted target (plan never stashed). Nothing to re-drive;
 		// leave it for the master's attempt reaper.
