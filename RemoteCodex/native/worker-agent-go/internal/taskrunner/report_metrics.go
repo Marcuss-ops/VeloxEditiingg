@@ -236,9 +236,16 @@ func (r *TaskRunner) mergeStatsInto(report *TaskExecutionReport, m map[string]in
 	// absent; stream_copy and packet_copy both mean the final video stream was
 	// never re-encoded. packet_copy is the native engine's canonical value for
 	// the strict clip concatenation path.
-	if v, ok := m["final.concat.stream_copy"].(bool); ok {
-		typed.FinalConcatStreamCopy = v
-	} else {
+	// Some producers materialize the legacy boolean with its proto zero value
+	// even when the canonical concat mode is packet_copy. A false value must
+	// therefore not mask the authoritative mode; explicit true still wins.
+	legacyStreamCopy, hasLegacyStreamCopy := m["final.concat.stream_copy"].(bool)
+	typed.FinalConcatStreamCopy = legacyStreamCopy ||
+		strings.EqualFold(typed.ConcatMode, "stream_copy") ||
+		strings.EqualFold(typed.ConcatMode, "packet_copy")
+	if !hasLegacyStreamCopy {
+		// The mode-derived value above is the complete signal when the legacy
+		// alias was not emitted by the producer.
 		typed.FinalConcatStreamCopy = strings.EqualFold(typed.ConcatMode, "stream_copy") ||
 			strings.EqualFold(typed.ConcatMode, "packet_copy")
 	}
