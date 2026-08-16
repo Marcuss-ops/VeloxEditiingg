@@ -49,6 +49,9 @@ var (
 	// Fase 3 (Finalize) + Fase 4 (single-tx CAS) gates.
 	ErrUploadNotFound     = errors.New("artifacts: upload session not found")
 	ErrUploadStateInvalid = errors.New("artifacts: upload session not in expected state")
+	// ErrChunkConflict means a retry supplied different bytes for an index
+	// that already has a durable first-write record.
+	ErrChunkConflict      = errors.New("artifacts: chunk retry conflicts with persisted chunk")
 	ErrUploadExpired      = errors.New("artifacts: upload session expired")
 	ErrTransitionConflict = domain.NewLeaseConflict("artifacts: state transition conflict (CAS failed)")
 	ErrStorageKeyInvalid  = errors.New("artifacts: storage key / sha derivation error")

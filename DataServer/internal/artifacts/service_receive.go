@@ -49,6 +49,12 @@ func (s *Service) Receive(ctx context.Context, uploadID string, reader io.Reader
 	if session == nil {
 		return nil, fmt.Errorf("%w: upload_id=%s", ErrUploadNotFound, uploadID)
 	}
+	// A lost HTTP response can make the worker retry /complete after the
+	// server already persisted RECEIVED. Return the persisted master result
+	// without consuming the retry body or touching the staging file.
+	if session.Status == string(store.UploadReceived) {
+		return receiveResultFromSession(session)
+	}
 	if session.Status != string(store.UploadCreated) && session.Status != string(store.UploadUploading) {
 		return nil, fmt.Errorf("%w: upload_id=%s status=%s",
 			ErrUploadStateInvalid, uploadID, session.Status)
@@ -157,6 +163,18 @@ func (s *Service) Receive(ctx context.Context, uploadID string, reader io.Reader
 		ReceivedSizeBytes: receivedSize,
 		ReceivedSHA256:    receivedSHA,
 		Status:            string(store.UploadReceived),
+	}, nil
+}
+
+func receiveResultFromSession(session *store.UploadSession) (*ReceiveResult, error) {
+	if session == nil || session.Status != string(store.UploadReceived) || session.ReceivedSHA256 == "" || session.ReceivedSizeBytes < 0 {
+		return nil, fmt.Errorf("%w: received session is incomplete", ErrUploadStateInvalid)
+	}
+	return &ReceiveResult{
+		UploadID:          session.UploadID,
+		ReceivedSizeBytes: session.ReceivedSizeBytes,
+		ReceivedSHA256:    session.ReceivedSHA256,
+		Status:            session.Status,
 	}, nil
 }
 

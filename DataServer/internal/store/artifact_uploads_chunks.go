@@ -7,6 +7,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 )
@@ -31,6 +32,35 @@ func (r *SQLiteUploadRepository) InsertChunk(ctx context.Context, c ChunkRecord)
 		return fmt.Errorf("store: InsertChunk: %w", err)
 	}
 	return nil
+}
+
+// GetChunk returns one persisted chunk, or (nil, nil) when the index has not
+// been received yet. It is used to make duplicate chunk retries compare the
+// incoming bytes with the first durable record before discarding the retry.
+func (r *SQLiteUploadRepository) GetChunk(ctx context.Context, uploadID string, chunkIndex int) (*ChunkRecord, error) {
+	if uploadID == "" {
+		return nil, fmt.Errorf("store: GetChunk: empty uploadID")
+	}
+	row := r.db.QueryRowContext(ctx, `
+		SELECT upload_id, chunk_index, size_bytes,
+		       COALESCE(sha256, ''), storage_key, received_at
+		FROM artifact_upload_chunks
+		WHERE upload_id = ? AND chunk_index = ?`, uploadID, chunkIndex)
+	var c ChunkRecord
+	var receivedAt string
+	if err := row.Scan(&c.UploadID, &c.ChunkIndex, &c.SizeBytes,
+		&c.SHA256, &c.StorageKey, &receivedAt); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("store: GetChunk: %w", err)
+	}
+	parsed, err := parsePersistedWorkerTimestamp(receivedAt, "artifact_upload_chunks.received_at")
+	if err != nil {
+		return nil, err
+	}
+	c.ReceivedAt = parsed
+	return &c, nil
 }
 
 // ListChunks returns all chunks for an upload, ordered by chunk_index.

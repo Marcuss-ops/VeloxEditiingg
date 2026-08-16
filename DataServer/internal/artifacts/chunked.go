@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"velox-server/internal/store"
@@ -105,6 +106,9 @@ func (s *ChunkedUploadService) UploadChunk(ctx context.Context, cmd ChunkedUploa
 	if cmd.UploadID == "" || cmd.Reader == nil {
 		return fmt.Errorf("artifacts: ChunkedUpload: uploadID and reader are required")
 	}
+	if cmd.ChunkIndex < 0 {
+		return fmt.Errorf("artifacts: ChunkedUpload: chunk index must be non-negative")
+	}
 
 	session, err := s.repo.GetUploadSession(ctx, cmd.UploadID)
 	if err != nil {
@@ -120,8 +124,9 @@ func (s *ChunkedUploadService) UploadChunk(ctx context.Context, cmd ChunkedUploa
 		return fmt.Errorf("%w: upload=%s expired_at=%s", ErrUploadExpired, cmd.UploadID, session.ExpiresAt.Format(time.RFC3339))
 	}
 
-	// Write chunk to a unique staging path.
-	chunkKey := chunkStagingKey(s.blobStore, cmd.UploadID, cmd.ChunkIndex)
+	// Always write to a unique temporary path. A retry must never overwrite
+	// the first chunk file that the database already references.
+	chunkKey := chunkRetryStagingKey(s.blobStore, cmd.UploadID, cmd.ChunkIndex)
 	dst, err := s.blobStore.OpenStagedWrite(chunkKey)
 	if err != nil {
 		return fmt.Errorf("%w: create chunk file: %v", ErrBlobWriteFailed, err)
@@ -163,7 +168,25 @@ func (s *ChunkedUploadService) UploadChunk(ctx context.Context, cmd ChunkedUploa
 
 	chunkSHA := hex.EncodeToString(hasher.Sum(nil))
 
-	// Persist chunk record.
+	// A duplicate retry is accepted only when its streamed size and SHA match
+	// the first durable record. The temporary file is removed in either case;
+	// the original storage key remains authoritative.
+	existing, err := s.repo.GetChunk(ctx, cmd.UploadID, cmd.ChunkIndex)
+	if err != nil {
+		_ = s.blobStore.RemoveStaging(chunkKey)
+		return translateStoreErr(err)
+	}
+	if existing != nil {
+		if existing.SizeBytes != written || !strings.EqualFold(existing.SHA256, chunkSHA) {
+			_ = s.blobStore.RemoveStaging(chunkKey)
+			return fmt.Errorf("%w: upload=%s index=%d", ErrChunkConflict, cmd.UploadID, cmd.ChunkIndex)
+		}
+		_ = s.blobStore.RemoveStaging(chunkKey)
+		return nil
+	}
+
+	// Persist chunk record. Concurrent writers may race here; the follow-up
+	// lookup below determines whether this writer won INSERT OR IGNORE.
 	if err := s.repo.InsertChunk(ctx, store.ChunkRecord{
 		UploadID:   cmd.UploadID,
 		ChunkIndex: cmd.ChunkIndex,
@@ -174,6 +197,22 @@ func (s *ChunkedUploadService) UploadChunk(ctx context.Context, cmd ChunkedUploa
 	}); err != nil {
 		_ = s.blobStore.RemoveStaging(chunkKey)
 		return translateStoreErr(err)
+	}
+	stored, err := s.repo.GetChunk(ctx, cmd.UploadID, cmd.ChunkIndex)
+	if err != nil {
+		_ = s.blobStore.RemoveStaging(chunkKey)
+		return translateStoreErr(err)
+	}
+	if stored == nil {
+		_ = s.blobStore.RemoveStaging(chunkKey)
+		return fmt.Errorf("artifacts: ChunkedUpload: chunk record disappeared upload=%s index=%d", cmd.UploadID, cmd.ChunkIndex)
+	}
+	if stored.SizeBytes != written || !strings.EqualFold(stored.SHA256, chunkSHA) {
+		_ = s.blobStore.RemoveStaging(chunkKey)
+		return fmt.Errorf("%w: upload=%s index=%d", ErrChunkConflict, cmd.UploadID, cmd.ChunkIndex)
+	}
+	if stored.StorageKey != chunkKey {
+		_ = s.blobStore.RemoveStaging(chunkKey)
 	}
 
 	return nil
@@ -245,6 +284,9 @@ func (s *ChunkedUploadService) ReceiveChunked(ctx context.Context, uploadID stri
 	session, err := s.GetUpload(ctx, uploadID)
 	if err != nil {
 		return nil, err
+	}
+	if session.Status == string(store.UploadReceived) {
+		return receiveResultFromSession(session)
 	}
 	chunks, err := s.repo.ListChunks(ctx, uploadID)
 	if err != nil {
@@ -432,6 +474,13 @@ func (s *ChunkedUploadService) cleanupChunks(ctx context.Context, uploadID strin
 func chunkStagingKey(bl store.BlobStore, uploadID string, chunkIndex int) string {
 	dir := filepath.Join(bl.StagingDir(), "chunks", uploadID)
 	return filepath.Join(dir, fmt.Sprintf("chunk_%04d", chunkIndex))
+}
+
+// chunkRetryStagingKey is deliberately unique per write. A retry cannot
+// overwrite the staging file referenced by the first durable DB record.
+func chunkRetryStagingKey(bl store.BlobStore, uploadID string, chunkIndex int) string {
+	dir := filepath.Join(bl.StagingDir(), "chunks", uploadID)
+	return filepath.Join(dir, fmt.Sprintf("chunk_%04d.retry_%d", chunkIndex, time.Now().UnixNano()))
 }
 
 // Compile-time check: *ChunkedUploadService is used as a value receiver.

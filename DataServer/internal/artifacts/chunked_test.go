@@ -79,25 +79,30 @@ func TestChunkedUpload_StreamHashMatchesInput(t *testing.T) {
 	require.Equal(t, sha256Hex(payload), sha256Hex(staged))
 }
 
-// TestChunkedUpload_IdempotentChunkIndex pins the resume contract: re-uploading
-// the same chunk_index is a no-op through the repository uniqueness contract
-// (INSERT OR IGNORE on (upload_id, chunk_index)) — the FIRST record wins even
-// when the second upload carries different bytes.
+// TestChunkedUpload_IdempotentChunkIndex pins the resume contract: an identical
+// retry is a no-op, while different bytes for the same index are rejected and
+// cannot overwrite the first staged file.
 func TestChunkedUpload_IdempotentChunkIndex(t *testing.T) {
 	chunked, e, uploadID := setupChunkedEnv(t)
 
 	first := []byte("first-content")
 	second := []byte("second-content-OVERWRITE")
 	require.NoError(t, uploadChunk(t, chunked, uploadID, 0, first))
-	require.NoError(t, uploadChunk(t, chunked, uploadID, 0, second))
+	require.NoError(t, uploadChunk(t, chunked, uploadID, 0, first))
+	err := uploadChunk(t, chunked, uploadID, 0, second)
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrChunkConflict)
 
 	chunks, err := e.repo.ListChunks(context.Background(), uploadID)
 	require.NoError(t, err)
 	require.Len(t, chunks, 1, "duplicate chunk_index must not create a second row")
 
-	// INSERT OR IGNORE keeps the first record's identity.
+	// The first record and its physical bytes remain authoritative.
 	require.Equal(t, int64(len(first)), chunks[0].SizeBytes)
 	require.Equal(t, sha256Hex(first), chunks[0].SHA256)
+	stored, readErr := os.ReadFile(chunks[0].StorageKey)
+	require.NoError(t, readErr)
+	require.Equal(t, first, stored)
 
 	// Adjacent indices are independent.
 	require.NoError(t, uploadChunk(t, chunked, uploadID, 1, second))
@@ -174,6 +179,12 @@ func TestChunkedAssembly_VerifiesAllChunkSHAs(t *testing.T) {
 	require.Equal(t, int64(len(concat)), result.ReceivedSizeBytes)
 	require.Equal(t, sha256Hex(concat), result.ReceivedSHA256,
 		"assembly SHA must be the master hash of the concatenated chunk bytes")
+
+	// A lost response must be safe to retry after chunk cleanup. The second
+	// call returns the persisted result without requiring the chunks again.
+	retry, err := chunked.ReceiveChunked(context.Background(), uploadID)
+	require.NoError(t, err)
+	require.Equal(t, result, retry)
 }
 
 // TestChunkedAssembly_CorruptedChunkFailsClosed: a staged chunk that was

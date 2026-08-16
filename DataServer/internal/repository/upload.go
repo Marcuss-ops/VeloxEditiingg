@@ -79,6 +79,7 @@ type UploadRepository interface {
 
 	// Chunk methods (chunked upload persistence).
 	InsertChunk(ctx context.Context, c ChunkRecord) error
+	GetChunk(ctx context.Context, uploadID string, chunkIndex int) (*ChunkRecord, error)
 	ListChunks(ctx context.Context, uploadID string) ([]ChunkRecord, error)
 	DeleteChunks(ctx context.Context, uploadID string) error
 }
