@@ -70,23 +70,23 @@ non compatibile.
 
 ## Stato misurato al 2026-08-16
 
-Il percorso di cache calda è già certificato:
+Il benchmark ripetibile a dieci clip è ora separato in cold e warm run:
 
-- 169 lookup;
-- 169 cache hit;
-- 0 miss;
-- 0 download;
-- 0 byte scaricati;
-- output con audio e video;
-- `ffprobe_valid=1`;
-- output SHA stabile: `beab0280f5a3deb405d08e7a55cef84ae6634321997c176152cc23bac33e3884`;
-- artifact Drive completato senza retry;
-- durata complessiva osservata: circa 3m18s.
+| Run | Worker | Totale | Cache | Download | Video | Audio/validazione | Output |
+|---|---|---:|---|---:|---|---|---|
+| `scriptclip_34c399da-5f91-49a4-8ba1-0d70215349cb` | `host_57_131_20_173` | 20.512 s | 20 hit / 10 miss | 105,336,881 B | `packet_copy`, 0 frame encoded | audio/video presenti, `ffprobe_valid=1` | SHA `560f5003…`, 79,625,950 B |
+| `scriptclip_20b468b6-56c4-4e68-a216-fb0845daa517` | `host_57_131_20_173` | 2.834 s | 30 hit / 0 miss | 0 B | `packet_copy`, 0 frame encoded | audio/video presenti, `ffprobe_valid=1` | stesso SHA e size |
+| `scriptclip_29dd218a-7e37-43d9-81f3-74f539b7a7a0` | `host_57_129_132_133` | 21.223 s | 20 hit / 10 miss | 105,336,881 B | `packet_copy`, 0 frame encoded | audio/video presenti, `ffprobe_valid=1` | stesso SHA e size |
 
-La durata complessiva non è ancora il target di 1 secondo: il job attuale
-include render/ricomposizione, audio già finalizzato, mux e upload Drive. Il
-prossimo benchmark deve separare questi tempi e misurare il solo packet-copy
-video.
+Il primo run ha completato anche la delivery Drive senza retry, in circa
+6.5 s. Il run warm dimostra che il video non viene ricodificato e che gli
+asset già caldi non vengono riscaricati. Il canary è risultato
+`CONNECTED/HEALTHY/AVAILABLE` sulla nuova immagine `v1.2.34-canonical`.
+
+Il tempo warm è ancora sopra l'obiettivo locale di 1 s: il breakdown osservato
+è circa 1.1 s di compile, 0.5 s di render packet-copy e 0.35--0.5 s di
+finalizzazione, mentre il totale include scheduling e persistenza Master.
+L'upload Drive resta fuori dal target locale.
 
 ## Problemi risolti
 
@@ -150,12 +150,13 @@ video.
 
 ### 2026-08-16 — packet-copy obbligatorio
 
-- Probe preventiva di ogni segmento video con confronto completo dei parametri.
-- Rifiuto del job prima del render se un segmento è incompatibile.
-- Uso obbligatorio di `-c:v copy` per il percorso compatibile.
-- Eliminazione del fallback implicito a video re-encode nel percorso packet-copy.
-- Metriche separate: `video_packet_copy_ms`, `audio_mix_ms`, `audio_encode_ms`,
-  `mux_ms`, `drive_upload_ms`.
+- Implementato il probe preventivo e il confronto dei parametri video.
+- Un asset incompatibile viene rifiutato prima del render copy-only.
+- Il percorso compatibile usa packet-copy e produce `frames_encoded=0`.
+- Eliminato il fallback implicito a video re-encode nel percorso copy-only.
+- Corretto il mapping telemetry: `packet_copy` valorizza anche
+  `final_concat_stream_copy=true`.
+- Restano da separare ulteriormente i tempi video, audio, mux e delivery.
 
 ### 2026-08-16 — audio corretto
 
@@ -164,6 +165,18 @@ video.
 - Verificare che ogni scena abbia audio nel segmento corretto e che non venga
   perso l'audio originale del clip.
 - Aggiungere test con voiceover, audio clip, ducking e durata non identica.
+
+### 2026-08-16 — intake job da unificare
+
+- Superficie canonica da adottare: `POST /api/v1/jobs` su Velox e
+  `POST /api/v1/jobs` sul BFF InstaEdit.
+- Oggi esistono ancora adapter di dominio separati: creator, script,
+  `/api/v1/jobs/batch`, pipeline-run, calendar enqueue e
+  `/api/v1/instaedit/jobs` interno.
+- Il passo sicuro è far convergere tutti gli adapter verso un solo submitter
+  interno e poi deprecare/rimuovere gli endpoint di creazione duplicati con
+  telemetry e gate full-module. Non si devono mantenere dieci logiche di
+  enqueue diverse.
 
 ### 2026-08-16 — benchmark 1 secondo
 
@@ -191,6 +204,15 @@ video.
 - Restart Master durante upload.
 - Restart worker durante render/upload.
 - Soak test di 10–20 job consecutivi su più worker.
+
+### 2026-08-16 — build/deploy worker
+
+- `v1.2.34-canonical`: buildx, race test, Cosign, bootstrap e audio canary
+  verdi; digest `sha256:12ada4912a680f49a15d464216ba284257980b85435f255c769699448f7cd9a7`.
+- La build CI completa ha impiegato circa 2 minuti grazie alla cache GHA di
+  Buildx; il precedente comportamento da ore non è più il percorso osservato.
+- `v1.2.35-canonical` contiene la correzione telemetry aggiuntiva ed è in
+  pubblicazione al momento di questo aggiornamento.
 
 ## Definition of Done
 
