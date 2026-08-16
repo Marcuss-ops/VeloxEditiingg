@@ -77,16 +77,23 @@ Il benchmark ripetibile a dieci clip è ora separato in cold e warm run:
 | `scriptclip_34c399da-5f91-49a4-8ba1-0d70215349cb` | `host_57_131_20_173` | 20.512 s | 20 hit / 10 miss | 105,336,881 B | `packet_copy`, 0 frame encoded | audio/video presenti, `ffprobe_valid=1` | SHA `560f5003…`, 79,625,950 B |
 | `scriptclip_20b468b6-56c4-4e68-a216-fb0845daa517` | `host_57_131_20_173` | 2.834 s | 30 hit / 0 miss | 0 B | `packet_copy`, 0 frame encoded | audio/video presenti, `ffprobe_valid=1` | stesso SHA e size |
 | `scriptclip_29dd218a-7e37-43d9-81f3-74f539b7a7a0` | `host_57_129_132_133` | 21.223 s | 20 hit / 10 miss | 105,336,881 B | `packet_copy`, 0 frame encoded | audio/video presenti, `ffprobe_valid=1` | stesso SHA e size |
+| `job_cae61e986f67cc37` — intake canonico caldo | `host_57_129_132_133` | 4.236 s | 30 hit / 0 miss | 0 B | `packet_copy`, 0 frame encoded | audio/video presenti, `ffprobe_valid=1`, `final_concat_stream_copy=true` | stesso SHA e size |
 
 Il primo run ha completato anche la delivery Drive senza retry, in circa
 6.5 s. Il run warm dimostra che il video non viene ricodificato e che gli
 asset già caldi non vengono riscaricati. Il canary è risultato
-`CONNECTED/HEALTHY/AVAILABLE` sulla nuova immagine `v1.2.34-canonical`.
+`CONNECTED/HEALTHY/AVAILABLE` sulla nuova immagine `v1.2.36-canonical`.
 
 Il tempo warm è ancora sopra l'obiettivo locale di 1 s: il breakdown osservato
 è circa 1.1 s di compile, 0.5 s di render packet-copy e 0.35--0.5 s di
 finalizzazione, mentre il totale include scheduling e persistenza Master.
 L'upload Drive resta fuori dal target locale.
+
+Il test canonico ha anche confermato che il pin verso
+`host_57_129_132_133` viene rispettato dal percorso `POST /api/v1/jobs`.
+Il percorso script precedente, invece, ha lasciato cadere il pin e ha esposto
+un conflitto di spool su `host_57_131_20_173`; questo è un motivo concreto per
+convergere gli adapter, non per aggiungere un altro endpoint.
 
 ## Problemi risolti
 
@@ -211,8 +218,34 @@ L'upload Drive resta fuori dal target locale.
   verdi; digest `sha256:12ada4912a680f49a15d464216ba284257980b85435f255c769699448f7cd9a7`.
 - La build CI completa ha impiegato circa 2 minuti grazie alla cache GHA di
   Buildx; il precedente comportamento da ore non è più il percorso osservato.
-- `v1.2.35-canonical` contiene la correzione telemetry aggiuntiva ed è in
-  pubblicazione al momento di questo aggiornamento.
+- `v1.2.35-canonical` è stato superato da `v1.2.36-canonical` dopo la
+  correzione dell'overlay sui raw metrics.
+- `v1.2.36-canonical`: digest `sha256:ca08c34a3b65e69bee55f5caa41f1eab80cc0447555a23c2dcf2fc643ee7d5d9`, firma Cosign e
+  canary verdi; overlay corretto per `final_concat_stream_copy` sui raw
+  metrics già inizializzati dall'executor.
+
+### 2026-08-16 — inventario intake job
+
+Oggi ci sono **9 superfici produttive** che possono creare o accodare job su
+Velox, più **1 endpoint smoke operativo**:
+
+1. `POST /api/v1/jobs` — intake canonico M2M.
+2. `POST /api/v1/jobs/batch` — batch di job indipendenti.
+3. `POST /api/v1/creator/jobs` — creator push.
+4. `POST /api/v1/pipeline-runs` — pipeline run durevole.
+5. `POST /api/v1/instaedit/jobs` — adapter interno BFF InstaEdit.
+6. `POST /api/v1/script/generate-with-images` — script/clip legacy.
+7. `POST /api/v1/script/generate` — script ingress.
+8. `POST /api/v1/script/jobs/:kind` — script kind dinamico.
+9. `POST /api/v1/calendar/events/:id/enqueue` — calendar enqueue.
+10. `POST /api/v1/video/smoke-clip-stock` — solo smoke/operazioni.
+
+La superficie pubblica del BFF InstaEdit è già una sola:
+`POST /api/v1/jobs`. Il lavoro ancora da fare è rendere tutti gli adapter
+Velox thin adapters di un unico `CanonicalJobSubmitter`, deprecare gli alias
+con telemetry, migrare i chiamanti noti e solo dopo rimuoverli. Non vanno
+rimossi oggi alla cieca: creator, script, calendar e client BFF sono chiamanti
+reali e la rimozione richiede il gate `scripts/ci/pre-removal-verify.sh`.
 
 ## Definition of Done
 
