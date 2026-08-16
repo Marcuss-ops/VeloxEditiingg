@@ -202,6 +202,10 @@ func (m *Manager) Resolve(ctx context.Context, req DownloadRequest) (DownloadedA
 		case <-t.doneCh():
 			result, err := t.result()
 			t.removeWaiter(waiterID)
+			// The transfer is terminal before doneCh closes. Prune after
+			// observing that terminal result as well as before acquisition so
+			// the retained-history bound is deterministic when Resolve returns.
+			m.registry.PruneTerminal(m.cfg.MaxRetainedTransfers)
 			if err != nil {
 				if errors.Is(err, errTransferCancelled) && ctx.Err() == nil {
 					continue
