@@ -514,8 +514,8 @@ func (t *masterAssetTransferer) transferChunked(ctx context.Context, reportCtx c
 		progressMu.Lock()
 		if total > lastReported {
 			lastReported = total
-			progressMu.Unlock()
 			onProgress(total)
+			progressMu.Unlock()
 			return
 		}
 		progressMu.Unlock()
