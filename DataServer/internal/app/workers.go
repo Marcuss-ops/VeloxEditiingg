@@ -85,7 +85,12 @@ func (m *WorkersModule) IssueAssetPickupToken(principal string) string {
 	if m == nil || m.tokenMgr == nil || strings.TrimSpace(principal) == "" {
 		return ""
 	}
-	return m.tokenMgr.GenerateToken(strings.TrimSpace(principal))
+	const smokePickupSessionType = "smoke_asset"
+	token, err := m.tokenMgr.GenerateTokenForSessionType(strings.TrimSpace(principal), smokePickupSessionType)
+	if err != nil {
+		return ""
+	}
+	return token
 }
 
 // SetProtectedAssetsHandler wires the master lookahead snapshot consumed by

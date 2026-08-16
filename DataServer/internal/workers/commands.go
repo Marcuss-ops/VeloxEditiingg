@@ -219,8 +219,20 @@ func (tm *TokenManager) GenerateToken(workerID string) string {
 // With a nil store it preserves the in-memory test/dev token behavior; such a
 // token cannot validate because all validation paths require a store.
 func (tm *TokenManager) GenerateTokenWithError(workerID string) (string, error) {
+	return tm.GenerateTokenForSessionType(workerID, "asset")
+}
+
+// GenerateTokenForSessionType creates and durably persists a token for the
+// requested session class. Worker-issued HTTP tokens retain the historical
+// "asset" class; internal smoke pickup tokens use a separate class so a
+// restarted Master cannot collide with a worker's active asset session.
+func (tm *TokenManager) GenerateTokenForSessionType(workerID, sessionType string) (string, error) {
 	if tm == nil {
 		return "", fmt.Errorf("token manager is nil")
+	}
+	sessionType = strings.TrimSpace(sessionType)
+	if sessionType == "" {
+		return "", fmt.Errorf("session type is empty")
 	}
 	token := generateRandomToken()
 	tokenHash := store.HashCredential(token)
@@ -236,7 +248,7 @@ func (tm *TokenManager) GenerateTokenWithError(workerID string) (string, error) 
 	sess := &store.PersistedSession{
 		SessionID:   sessionID,
 		WorkerID:    workerID,
-		SessionType: "asset",
+		SessionType: sessionType,
 		TokenHash:   tokenHash,
 		ExpiresAt:   time.Now().UTC().Add(time.Hour),
 	}
