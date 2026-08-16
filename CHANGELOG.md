@@ -1,3 +1,65 @@
+## [Unreleased] - 2026-08-16
+
+### Content-addressed asset cache + pressure LRU + volatile artifact staging
+
+A 7-commit tranche on `main` (dependency-ordered, no branches) that replaces
+the worker's TTL asset cache with a content-addressed blob store, converts
+cache eviction to a pressure-based LRU, and introduces volatile tmpfs staging
+for the final render artifact. Full-module verification in `worker-agent-go`
+(`go vet ./...`, `go build ./...`, `go test -count=1 ./...`) green.
+
+**Content-addressed blob store (schema v5) — 2 commits:**
+
+- `c7ac05bc` — `workercache` splits the cache into `cached_blobs`
+  (`content_hash` → `local_path` / `size_bytes` / `verified_at` /
+  `download_complete`) and `cached_assets` (`asset_key` → `content_hash`). A
+  verified blob lives at `<cache>/<sha[:2]>/<full-sha>`, so distinct asset IDs
+  with identical bytes share one physical file. The forward-only migration
+  preserves lease/reservation state; hashless rows become per-asset `legacy:`
+  blobs.
+- `54d720a4` — `CacheResolver` routes through the blob store: a known SHA
+  probes `cached_blobs` directly (stat + size, no re-hash), and the downloader
+  single-flights on `content_hash`, so concurrent jobs sharing bytes download
+  once.
+
+**Pressure-based LRU eviction (80%/72% hysteresis) — 2 commits:**
+
+- `3a18858c` — `CleanupLoop` becomes the cache pressure controller:
+  `EvictUnderPressure` evicts nothing below the HIGH watermark and evicts LRU
+  blobs down to the LOW watermark. Eviction is blob-scoped and gated by
+  lease/reservation/snapshot protection, retaining the `asset_key` → SHA
+  mapping. Adds `VELOX_CACHE_HIGH/LOW_WATERMARK_PERCENT`,
+  `VELOX_CACHE_EVICTION_BATCH_SIZE` / `_INTERVAL_SECS`, a statfs usage probe,
+  and the pressure eviction metrics.
+- `3a295cea` — `EvictUnderPressure` is pure; the `CleanupLoop` OnTick is the
+  single Prometheus boundary (removes the eviction double-count and adds the
+  evicted-bytes + disk-usage gauges).
+
+**Volatile artifact staging (ARTIFACT_STAGING) — 3 commits:**
+
+- `3a18858c` — `storage.Resolver` gains the `ARTIFACT_STAGING` class with a
+  tmpfs RAM reservation ledger (`MaxPercent` ceiling + `ReserveBytes`
+  headroom) and durable-NVMe fallback; the spool records `storage_tier`
+  (`TMPFS_VOLATILE` / `NVME_DURABLE`). Upload failure and graceful shutdown
+  spill volatile artifacts to NVMe; the tmpfs file + reservation are freed
+  only after the terminal `TaskResultAck`.
+- `8234b54e` — `render_batch@1` and `encode@1` resolve their final output
+  through `Place(ArtifactStaging, ...)` instead of hardcoding `outputRoot`;
+  the uploader interface is unchanged (`ArtifactRef.URI` remains the
+  `LocalPath` the publisher opens).
+- `c724bf66` — promoted content-addressed blobs are chmod `0444` (immutable
+  from the normal worker); re-download (atomic rename) and eviction (unlink)
+  remain directory operations.
+
+**Acceptance tests — 1 commit:**
+
+- `1f45d495` — e2e staging acceptance: tmpfs render → upload → commit →
+  unlink + reservation release only after the terminal `TaskResultAck`, and
+  insufficient-RAM → `no_space` fallback to NVMe without failing the job.
+  Cache-level acceptance (3 asset IDs → one file, zero eviction under 80%, LRU
+  down to 72%, lease/reservation/snapshot-protected blobs) shipped in
+  `3a18858c`.
+
 ## [Unreleased] - 2026-08-15
 
 ### Refactor tranche — telemetry SSOT, foundation layering, observability, and complexity reduction
