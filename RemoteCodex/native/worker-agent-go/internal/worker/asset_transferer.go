@@ -102,7 +102,7 @@ func (t *masterAssetTransferer) Check(ctx context.Context, reportCtx context.Con
 		}
 	}
 	if probeSHA != "" && probeSize > 0 {
-		if existing, _, err := cachedAssetPathTimedWithContext(reportCtx, w.assetCacheDir(), req.AssetID, probeSHA, probeSize); err == nil && existing != "" {
+		if existing, _, err := cachedAssetPathTimedWithContext(reportCtx, w.assetCacheDir(), probeSHA, probeSize); err == nil && existing != "" {
 			return downloader.CacheCheckResult{CacheHit: true, LocalPath: existing, SHA256: assetref.ContentHash(probeSHA), Outcome: downloader.CacheOutcomeHitValid}, nil
 		}
 	}
@@ -566,7 +566,7 @@ func (t *masterAssetTransferer) transferChunked(ctx context.Context, reportCtx c
 	if ext == "" {
 		ext = sniffAssetExtension(partialPath)
 	}
-	finalPath, written, actualSHA, verifyDuration, err := verifyAndPromoteVeloxAsset(cacheDir, req.AssetID, string(req.SHA256), size, partialPath, ext, syncAssetDirectory)
+	finalPath, written, actualSHA, verifyDuration, err := verifyAndPromoteVeloxAsset(cacheDir, string(req.SHA256), size, partialPath, ext, syncAssetDirectory)
 	if err != nil {
 		recordCacheProjectionEvent(reportCtx, "hash_verify", verifyDuration, telemetry.StatusFailed, "", 0)
 		return downloader.TransferResult{}, err

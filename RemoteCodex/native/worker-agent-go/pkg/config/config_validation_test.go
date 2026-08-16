@@ -174,6 +174,59 @@ func TestValidateCacheWatermarks(t *testing.T) {
 	})
 }
 
+func TestValidateCacheScrubFailClosed(t *testing.T) {
+	t.Run("enabled with valid knobs passes", func(t *testing.T) {
+		cfg := devValidBase()
+		cfg.CacheScrubEnabled = true
+		cfg.CacheScrubIntervalSecs = 3600
+		cfg.CacheScrubBytesPerPass = 256 * 1024 * 1024
+		cfg.CacheScrubMaxBlobsPerPass = 8
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("expected valid scrub config to pass, got: %v", err)
+		}
+	})
+
+	t.Run("enabled with zero interval rejected", func(t *testing.T) {
+		cfg := devValidBase()
+		cfg.CacheScrubEnabled = true
+		cfg.CacheScrubBytesPerPass = 256 * 1024 * 1024
+		cfg.CacheScrubMaxBlobsPerPass = 8
+		err := cfg.Validate()
+		if err == nil || !strings.Contains(err.Error(), "cache_scrub_interval_secs") {
+			t.Fatalf("Validate() error = %v, want cache_scrub_interval_secs rejection", err)
+		}
+	})
+
+	t.Run("enabled with zero byte budget rejected", func(t *testing.T) {
+		cfg := devValidBase()
+		cfg.CacheScrubEnabled = true
+		cfg.CacheScrubIntervalSecs = 3600
+		cfg.CacheScrubMaxBlobsPerPass = 8
+		err := cfg.Validate()
+		if err == nil || !strings.Contains(err.Error(), "cache_scrub_bytes_per_pass") {
+			t.Fatalf("Validate() error = %v, want cache_scrub_bytes_per_pass rejection", err)
+		}
+	})
+
+	t.Run("enabled with zero max blobs rejected", func(t *testing.T) {
+		cfg := devValidBase()
+		cfg.CacheScrubEnabled = true
+		cfg.CacheScrubIntervalSecs = 3600
+		cfg.CacheScrubBytesPerPass = 256 * 1024 * 1024
+		err := cfg.Validate()
+		if err == nil || !strings.Contains(err.Error(), "cache_scrub_max_blobs_per_pass") {
+			t.Fatalf("Validate() error = %v, want cache_scrub_max_blobs_per_pass rejection", err)
+		}
+	})
+
+	t.Run("disabled with zero values passes", func(t *testing.T) {
+		cfg := devValidBase()
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("expected disabled scrub to pass, got: %v", err)
+		}
+	})
+}
+
 func TestValidateNil(t *testing.T) {
 	var cfg *WorkerConfig
 

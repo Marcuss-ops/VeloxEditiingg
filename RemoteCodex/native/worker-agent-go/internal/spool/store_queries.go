@@ -63,11 +63,15 @@ func (s *Store) Insert(ctx context.Context, e SpoolEntry) (*SpoolEntry, error) {
 		INSERT INTO worker_output_spool (
 		    spool_id, task_id, attempt_id, commit_id, worker_spool_key,
 		    local_path, sha256, size_bytes, upload_id, uploaded_bytes,
-		    status, storage_tier, last_error, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		    status, storage_tier, last_error,
+		    upload_target_json, commit_token, upload_attempt_count,
+		    next_upload_attempt_at, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		e.SpoolID, e.TaskID, e.AttemptID, e.CommitID, e.WorkerSpoolKey,
 		e.LocalPath, e.SHA256, e.SizeBytes, e.UploadID, e.UploadedBytes,
-		string(e.Status), string(e.StorageTier), e.LastError, nowStr, nowStr,
+		string(e.Status), string(e.StorageTier), e.LastError,
+		e.UploadTargetJSON, e.CommitToken, e.UploadAttemptCount,
+		formatUploadAttemptAt(e.NextUploadAttemptAt), nowStr, nowStr,
 	)
 	if err != nil {
 		if isUniqueConflict(err) {
@@ -149,6 +153,39 @@ func (s *Store) ListResumeCandidates(ctx context.Context) ([]SpoolEntry, error) 
 	return out, rows.Err()
 }
 
+// ListUploadResumeCandidates returns mid-upload rows that have a persisted
+// upload target (StashUploadPlan ran), so the worker can re-drive their
+// upload or re-send the commit completion from the (possibly repointed)
+// local_path. UPLOADED rows are included because the bytes may already be
+// accepted by the transport while the master TaskCommitAck was lost. Ordered by
+// next_upload_attempt_at so the most-overdue retry is first. The caller
+// filters the exact due-instant in Go (next_upload_attempt_at is
+// RFC3339Nano; zero means due immediately).
+func (s *Store) ListUploadResumeCandidates(ctx context.Context, limit int) ([]SpoolEntry, error) {
+	if limit <= 0 {
+		limit = 32
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+selectSpoolCols+` FROM worker_output_spool
+		  WHERE status IN ('UPLOAD_PENDING','UPLOADING','UPLOADED')
+		    AND upload_target_json != ''
+		  ORDER BY next_upload_attempt_at ASC, created_at ASC
+		  LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("spool.ListUploadResumeCandidates: %w", err)
+	}
+	defer rows.Close()
+	var out []SpoolEntry
+	for rows.Next() {
+		e, err := scanSpool(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *e)
+	}
+	return out, rows.Err()
+}
+
 // ListVolatileUncommitted returns tmpfs-backed rows that have not reached a
 // terminal state. The graceful-shutdown spill iterates this set so a SIGTERM
 // moves every still-volatile artifact onto durable NVMe before /dev/shm
@@ -177,7 +214,9 @@ func (s *Store) ListVolatileUncommitted(ctx context.Context) ([]SpoolEntry, erro
 
 const selectSpoolCols = `spool_id, task_id, attempt_id, commit_id,
     worker_spool_key, local_path, sha256, size_bytes, upload_id,
-    uploaded_bytes, status, storage_tier, last_error, created_at, updated_at`
+    uploaded_bytes, status, storage_tier, last_error,
+    upload_target_json, commit_token, upload_attempt_count,
+    next_upload_attempt_at, created_at, updated_at`
 
 const selectSpoolBySpoolID = `SELECT ` + selectSpoolCols +
 	` FROM worker_output_spool WHERE spool_id = ?`
@@ -192,18 +231,22 @@ type scanDBI interface {
 
 func scanSpool(r scanDBI) (*SpoolEntry, error) {
 	var (
-		e       SpoolEntry
-		sizeB   sql.NullInt64
-		uploadB sql.NullInt64
-		statusS string
-		tierS   string
-		created string
-		updated string
+		e            SpoolEntry
+		sizeB        sql.NullInt64
+		uploadB      sql.NullInt64
+		statusS      string
+		tierS        string
+		attemptCount int
+		nextAttemptS string
+		created      string
+		updated      string
 	)
 	err := r.Scan(
 		&e.SpoolID, &e.TaskID, &e.AttemptID, &e.CommitID, &e.WorkerSpoolKey,
 		&e.LocalPath, &e.SHA256, &sizeB, &e.UploadID, &uploadB,
-		&statusS, &tierS, &e.LastError, &created, &updated,
+		&statusS, &tierS, &e.LastError,
+		&e.UploadTargetJSON, &e.CommitToken, &attemptCount, &nextAttemptS,
+		&created, &updated,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -217,6 +260,12 @@ func scanSpool(r scanDBI) (*SpoolEntry, error) {
 	e.StorageTier = StorageTier(tierS)
 	if e.StorageTier == "" {
 		e.StorageTier = StorageTierNvmeDurable
+	}
+	e.UploadAttemptCount = attemptCount
+	if nextAttemptS != "" {
+		if e.NextUploadAttemptAt, err = parseRFC3339Nano(nextAttemptS); err != nil {
+			return nil, fmt.Errorf("spool.scanSpool: next_upload_attempt_at: %w", err)
+		}
 	}
 	if e.CreatedAt, err = parseRFC3339Nano(created); err != nil {
 		return nil, fmt.Errorf("spool.scanSpool: created_at: %w", err)
@@ -251,6 +300,15 @@ func parseRFC3339Nano(s string) (time.Time, error) {
 		return t, nil
 	}
 	return time.Parse(time.RFC3339, s)
+}
+
+// formatUploadAttemptAt renders the next-upload-attempt instant for the
+// spool column. A zero time renders as "" (due immediately).
+func formatUploadAttemptAt(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339Nano)
 }
 
 // isUniqueConflict returns true when err is a SQLite UNIQUE constraint

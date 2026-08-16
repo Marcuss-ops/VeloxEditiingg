@@ -1,0 +1,122 @@
+{
+  "annotations": { "list": [] },
+  "description": "Worker cache-pressure eviction and artifact tmpfs staging operations. Exposes the pressure controller (disk-usage gauge, evictions/evicted-bytes by reason) and the RAM staging path (tmpfs reserved bytes, tmpfs->NVMe spill count/bytes, NVMe fallback by reason). All metrics use the static total label or the closed reason enum; asset/job/task identifiers, hashes and URLs remain out of Prometheus.",
+  "editable": true,
+  "graphTooltip": 1,
+  "id": null,
+  "panels": [
+    {
+      "type": "gauge",
+      "title": "Cache disk usage %",
+      "description": "Cache-root disk usage percent observed by the pressure controller (statfs on every tick). Hysteresis: eviction starts at HIGH (default 80%) and stops at LOW (default 72%).",
+      "gridPos": { "h": 9, "w": 6, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 72 },
+              { "color": "red", "value": 80 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "showThresholdLabels": false, "showThresholdMarkers": true },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "velox_cache_disk_usage_percent", "legendFormat": "usage", "refId": "A" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "tmpfs reserved bytes",
+      "description": "RAM bytes currently reserved for ARTIFACT_STAGING tmpfs placements. Tracks the live reservation ledger: every reserve/release moves this gauge.",
+      "gridPos": { "h": 9, "w": 6, "x": 6, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "velox_artifact_tmpfs_reserved_bytes", "legendFormat": "reserved", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Cache evictions by reason",
+      "description": "rate(velox_cache_evictions_total[5m]) grouped by reason. Closed reason enum: pressure, ttl, invalid, protected, leased, grace, in_flight, stale_snapshot, no_snapshot, error. A sustained pressure rate above zero means the cache root is over the high watermark.",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "sum by (reason) (rate(velox_cache_evictions_total[5m]))", "legendFormat": "{{reason}}", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Cache evicted bytes (rate)",
+      "description": "rate(velox_cache_evicted_bytes_total[5m]) — physical bytes removed from the cache by pressure eviction and corruption invalidation. Bytes/s.",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 9 },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": false }, "tooltip": { "mode": "single" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "rate(velox_cache_evicted_bytes_total[5m])", "legendFormat": "evicted B/s", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "NVMe fallback by reason",
+      "description": "rate(velox_artifact_nvme_fallback_total[5m]) grouped by reason. Closed reason enum: no_space, unknown_size, statfs_error, tmpfs_disabled, reservation_failed, other. A rising no_space/reservation_failed rate means RAM staging is over-committed for the current job mix.",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 9 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "sum by (reason) (rate(velox_artifact_nvme_fallback_total[5m]))", "legendFormat": "{{reason}}", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "tmpfs spills (rate)",
+      "description": "rate(velox_artifact_tmpfs_spill_total[5m]) — artifacts spilled from tmpfs to durable NVMe (upload failure or graceful shutdown). Count/s.",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 18 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": false }, "tooltip": { "mode": "single" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "rate(velox_artifact_tmpfs_spill_total[5m])", "legendFormat": "spills/s", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "tmpfs spilled bytes (rate)",
+      "description": "rate(velox_artifact_tmpfs_spill_bytes_total[5m]) — bytes spilled from tmpfs to durable NVMe. Bytes/s.",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 18 },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": false }, "tooltip": { "mode": "single" } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "rate(velox_artifact_tmpfs_spill_bytes_total[5m])", "legendFormat": "spilled B/s", "refId": "A" }
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Cardinality contract",
+      "options": { "mode": "markdown", "content": "This dashboard intentionally uses only the static `label=total` series (referenced by bare metric name) and the closed `reason` enum. Asset IDs, content hashes, job/task/attempt IDs, URLs and error details remain in the spool/read-model APIs, not Prometheus labels. Fallback and eviction reasons are a bounded set, so `sum by (reason)` stays low-cardinality." },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 27 }
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "tags": ["velox", "observability", "worker", "cache-pressure", "artifact-staging"],
+  "templating": { "list": [ { "name": "DS_PROMETHEUS", "type": "datasource", "query": "prometheus", "label": "Datasource", "current": { "text": "Prometheus", "value": "Prometheus" } } ] },
+  "time": { "from": "now-6h", "to": "now" },
+  "timezone": "",
+  "title": "Velox — Cache Pressure & Artifact Staging",
+  "uid": "velox-cache-pressure-artifact-staging",
+  "version": 1
+}

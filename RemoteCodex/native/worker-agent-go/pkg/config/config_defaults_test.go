@@ -185,3 +185,49 @@ func TestDefaultConfigCachePressureEviction(t *testing.T) {
 			cfg.CacheEvictionBatchSize, cfg.CacheEvictionIntervalSecs)
 	}
 }
+
+// Background integrity scrubber is opt-in but its throttling knobs always
+// carry safe defaults so toggling it on later cannot pair with a zero
+// budget, interval, or blob count.
+func TestDefaultConfigCacheScrub(t *testing.T) {
+	cfg := DefaultConfig("/opt/velox")
+	cfg.applyDefaults()
+
+	if cfg.CacheScrubEnabled {
+		t.Error("cache scrub should default to disabled")
+	}
+	if cfg.CacheScrubIntervalSecs != DefaultCacheScrubIntervalSecs {
+		t.Errorf("cache_scrub_interval_secs should default to %d, got %d",
+			DefaultCacheScrubIntervalSecs, cfg.CacheScrubIntervalSecs)
+	}
+	if cfg.CacheScrubBytesPerPass != DefaultCacheScrubBytesPerPass {
+		t.Errorf("cache_scrub_bytes_per_pass should default to %d, got %d",
+			DefaultCacheScrubBytesPerPass, cfg.CacheScrubBytesPerPass)
+	}
+	if cfg.CacheScrubMaxBlobsPerPass != DefaultCacheScrubMaxBlobsPerPass {
+		t.Errorf("cache_scrub_max_blobs_per_pass should default to %d, got %d",
+			DefaultCacheScrubMaxBlobsPerPass, cfg.CacheScrubMaxBlobsPerPass)
+	}
+
+	// Zero values are repaired by applyDefaults.
+	cfg.CacheScrubIntervalSecs = 0
+	cfg.CacheScrubBytesPerPass = 0
+	cfg.CacheScrubMaxBlobsPerPass = 0
+	cfg.applyDefaults()
+	if cfg.CacheScrubIntervalSecs != DefaultCacheScrubIntervalSecs ||
+		cfg.CacheScrubBytesPerPass != DefaultCacheScrubBytesPerPass ||
+		cfg.CacheScrubMaxBlobsPerPass != DefaultCacheScrubMaxBlobsPerPass {
+		t.Errorf("zero scrub fields should be repaired to defaults, got i=%d b=%d m=%d",
+			cfg.CacheScrubIntervalSecs, cfg.CacheScrubBytesPerPass, cfg.CacheScrubMaxBlobsPerPass)
+	}
+
+	// An operator-supplied value survives applyDefaults untouched.
+	cfg.CacheScrubIntervalSecs = 7200
+	cfg.CacheScrubBytesPerPass = 1 << 30
+	cfg.CacheScrubMaxBlobsPerPass = 16
+	cfg.applyDefaults()
+	if cfg.CacheScrubIntervalSecs != 7200 || cfg.CacheScrubBytesPerPass != 1<<30 || cfg.CacheScrubMaxBlobsPerPass != 16 {
+		t.Errorf("operator scrub values should be preserved, got i=%d b=%d m=%d",
+			cfg.CacheScrubIntervalSecs, cfg.CacheScrubBytesPerPass, cfg.CacheScrubMaxBlobsPerPass)
+	}
+}

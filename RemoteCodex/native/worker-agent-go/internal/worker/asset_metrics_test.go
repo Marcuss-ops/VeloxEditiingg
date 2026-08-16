@@ -215,12 +215,12 @@ func TestDownloadVeloxAssetWithMetadataRememberedIntegrityEnablesPartialHits(t *
 		t.Fatalf("complete-metadata download: %v", err)
 	}
 	cacheDir := w.assetCacheDir()
-	// Direct partial-metadata lookups never hit: the legacy branch only
-	// reuses a fully verified entry, never a bare asset-ID file.
-	if got, err := cachedAssetPath(cacheDir, assetID, expectedSHA, 0); err != nil || got != "" {
+	// Direct partial-metadata lookups never hit: the content-addressed probe
+	// requires the full integrity contract (SHA + size) to address a blob.
+	if got, err := cachedAssetPath(cacheDir, expectedSHA, 0); err != nil || got != "" {
 		t.Fatalf("SHA-only cache lookup = %q, err=%v; partial metadata must not hit", got, err)
 	}
-	if got, err := cachedAssetPath(cacheDir, assetID, "", completeSize); err != nil || got != "" {
+	if got, err := cachedAssetPath(cacheDir, "", completeSize); err != nil || got != "" {
 		t.Fatalf("size-only cache lookup = %q, err=%v; partial metadata must not hit", got, err)
 	}
 	// After the worker remembered the self-verified digest, partial-metadata

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -12,6 +13,7 @@ import (
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/runtimeassets"
 	"velox-worker-agent/pkg/logger"
+	"velox-worker-agent/pkg/storage"
 	"velox-worker-agent/pkg/video/pipeline"
 	"velox-worker-agent/pkg/video/plan"
 )
@@ -90,6 +92,49 @@ func TestVideoAssembleCopy_UsesNativeV2WithoutFFmpegFallback(t *testing.T) {
 	}
 	if got := result.Metrics["frames_encoded"]; got != int64(0) {
 		t.Fatalf("frames_encoded = %v, want 0", got)
+	}
+}
+
+func TestVideoAssembleCopy_UsesArtifactStagingResolver(t *testing.T) {
+	video := []byte("prepared-video")
+	audio := []byte("final-audio")
+	videoSHA, audioSHA := copyOnlySHA(video), copyOnlySHA(audio)
+	plan := copyOnlyPlan(videoSHA, audioSHA, int64(len(video)), int64(len(audio)))
+	canonical, err := plan.CanonicalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	resolver, err := storage.New(storage.Config{
+		CacheDir: filepath.Join(root, "cache"), TempDir: filepath.Join(root, "temp"), ArtifactDir: filepath.Join(root, "artifact"),
+		ArtifactStaging: storage.ArtifactStagingConfig{Enabled: true, Dir: filepath.Join(root, "shm"), MaxPercent: 99, ReserveBytes: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resolver.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	client := &copyOnlyRenderClient{}
+	runner := pipeline.NewRunner(nil, client, logger.New(logger.WarnLevel, os.Stderr))
+	exec := NewVideoAssembleCopy(runner, filepath.Join(root, "legacy-output"))
+	videoPath, audioPath := filepath.Join(root, "video.mp4"), filepath.Join(root, "audio.m4a")
+	if err := os.WriteFile(videoPath, video, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(audioPath, audio, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	spec := executorTaskSpec(VideoAssembleCopyID, "job-copy-staging", canonical, plan)
+	result, err := exec.Execute(runtimeassets.WithBindings(context.Background(), runtimeassets.Bindings{
+		"video": {AssetID: "video", Path: videoPath, SHA256: videoSHA, Size: int64(len(video))},
+		"audio": {AssetID: "audio", Path: audioPath, SHA256: audioSHA, Size: int64(len(audio))},
+	}), &storageExecutionContext{resolver: resolver}, spec)
+	if err != nil || result.Status != "succeeded" {
+		t.Fatalf("Execute = %+v, %v", result, err)
+	}
+	if len(result.Outputs) != 1 || !strings.HasPrefix(result.Outputs[0].URI, resolver.Config().ArtifactStaging.Dir) {
+		t.Fatalf("output URI = %+v; want ARTIFACT_STAGING root %q", result.Outputs, resolver.Config().ArtifactStaging.Dir)
 	}
 }
 

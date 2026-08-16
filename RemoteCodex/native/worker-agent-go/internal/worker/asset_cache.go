@@ -55,11 +55,11 @@ func assetBlobGlob(cacheDir, sha256Hex string) string {
 	return filepath.Join(cacheDir, sha256Hex[:2], sha256Hex+".*")
 }
 
-// cacheKeyPrefix builds the filesystem-safe cache key from assetID and an
-// optional SHA-256 prefix. When sha256Prefix is non-empty, the first 12
-// characters are embedded in the filename so different versions of the same
-// asset do not collide. Format: <assetID>_<sha12> (when sha256 is set) or
-// just <assetID> (legacy, no integrity check possible).
+// cacheKeyPrefix builds the filesystem-safe partial-namespace key from
+// assetID and an optional SHA-256 prefix. It is used ONLY for the resumable
+// staging file (<cacheDir>/partial/<assetID>_<sha12>.part): the partial is
+// keyed by asset so a restarted worker can resume the same transfer. Final
+// blobs are content-addressed via assetBlobPath and never use this key.
 func cacheKeyPrefix(assetID string, sha256Prefix string) string {
 	safe := strings.Map(func(r rune) rune {
 		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
@@ -82,52 +82,22 @@ func cacheKeyPrefix(assetID string, sha256Prefix string) string {
 // expectedSizeBytes (when positive) and expectedSHA256 (when non-empty).
 // Any invalid entry is removed individually and reported as a miss so the
 // caller re-downloads it from the Master.
-func cachedAssetPath(cacheDir, assetID string, expectedSHA256 string, expectedSizeBytes int64) (string, error) {
-	path, _, err := cachedAssetPathTimedWithContext(context.Background(), cacheDir, assetID, expectedSHA256, expectedSizeBytes)
+func cachedAssetPath(cacheDir, expectedSHA256 string, expectedSizeBytes int64) (string, error) {
+	path, _, err := cachedAssetPathTimedWithContext(context.Background(), cacheDir, expectedSHA256, expectedSizeBytes)
 	return path, err
 }
 
-func cachedAssetPathTimedWithContext(ctx context.Context, cacheDir, assetID string, expectedSHA256 string, expectedSizeBytes int64) (string, time.Duration, error) {
-	// Folder-backed assets may have no expected hash/size in the job payload.
-	// In that mode reuse the asset-ID cache entry after a basic regular-file
-	// check; the downloader computed the SHA while creating the file.
+func cachedAssetPathTimedWithContext(ctx context.Context, cacheDir, expectedSHA256 string, expectedSizeBytes int64) (string, time.Duration, error) {
+	// A content-addressed blob hit requires the full integrity contract: the
+	// SHA locates the blob and the size gates the stat check. Partial metadata
+	// (SHA-only or size-only) cannot address a verified blob and is reported
+	// as a miss; the resolver upgrades partial metadata through the remembered
+	// self-verified digest before reaching this probe.
 	if expectedSHA256 == "" || expectedSizeBytes <= 0 {
-		prefix := cacheKeyPrefix(assetID, "")
-		matches, err := filepath.Glob(filepath.Join(cacheDir, prefix+".*"))
-		if err != nil || len(matches) == 0 {
-			return "", 0, err
-		}
-		for _, candidate := range matches {
-			info, statErr := os.Stat(candidate)
-			if statErr == nil && info.Mode().IsRegular() && info.Size() > 0 {
-				return candidate, 0, nil
-			}
-		}
 		return "", 0, nil
 	}
-	// Content-addressed blob path first (v5 layout), then the pre-v5 flat
-	// <assetID>_<sha12>.* layout as a migration fallback.
-	var matches []string
-	if blobMatches, globErr := filepath.Glob(assetBlobGlob(cacheDir, expectedSHA256)); globErr == nil {
-		matches = append(matches, blobMatches...)
-	}
-	if len(matches) == 0 {
-		if flatMatches, globErr := filepath.Glob(filepath.Join(cacheDir, cacheKeyPrefix(assetID, expectedSHA256)+".*")); globErr == nil {
-			matches = append(matches, flatMatches...)
-		}
-	}
-	if len(matches) == 0 {
-		// Fall back to legacy cache key (assetID without SHA-256 suffix)
-		// when the new key yields no results.
-		if expectedSHA256 != "" {
-			legacyPrefix := cacheKeyPrefix(assetID, "")
-			legacyMatches, legacyErr := filepath.Glob(filepath.Join(cacheDir, legacyPrefix+".*"))
-			if legacyErr == nil && len(legacyMatches) > 0 {
-				// Legacy cache entry exists but has no SHA-256 guarantee.
-				// Treat as cache miss so we re-download with integrity.
-				return "", 0, nil
-			}
-		}
+	matches, err := filepath.Glob(assetBlobGlob(cacheDir, expectedSHA256))
+	if err != nil || len(matches) == 0 {
 		return "", 0, nil
 	}
 	cachedPath := matches[0]
@@ -140,29 +110,26 @@ func cachedAssetPathTimedWithContext(ctx context.Context, cacheDir, assetID stri
 		_ = os.Remove(cachedPath)
 		return "", 0, nil
 	}
-	verifyDuration := time.Duration(0)
-	if expectedSizeBytes > 0 && info.Size() != expectedSizeBytes {
+	if info.Size() != expectedSizeBytes {
 		recordCacheProjectionEvent(ctx, "eviction", 0, telemetry.StatusOK, "invalid", 0)
 		_ = os.Remove(cachedPath)
 		return "", 0, nil // size mismatch → re-download
 	}
-	if expectedSHA256 != "" {
-		verifyStarted := time.Now()
-		actual, err := sha256File(cachedPath)
-		verifyDuration = time.Since(verifyStarted)
-		verifyStatus := telemetry.StatusOK
-		if err != nil || actual != expectedSHA256 {
-			verifyStatus = telemetry.StatusFailed
-		}
-		recordCacheProjectionEvent(ctx, "hash_verify", verifyDuration, verifyStatus, "", 0)
-		if err != nil || actual != expectedSHA256 {
-			// A cache hit is valid only after the digest matches. Remove
-			// this corrupt entry atomically from the cache namespace before
-			// reacquiring it; never clear the entire cache.
-			recordCacheProjectionEvent(ctx, "eviction", 0, telemetry.StatusOK, "invalid", 0)
-			_ = os.Remove(cachedPath)
-			return "", verifyDuration, nil // hash mismatch → re-download
-		}
+	verifyStarted := time.Now()
+	actual, err := sha256File(cachedPath)
+	verifyDuration := time.Since(verifyStarted)
+	verifyStatus := telemetry.StatusOK
+	if err != nil || actual != expectedSHA256 {
+		verifyStatus = telemetry.StatusFailed
+	}
+	recordCacheProjectionEvent(ctx, "hash_verify", verifyDuration, verifyStatus, "", 0)
+	if err != nil || actual != expectedSHA256 {
+		// A cache hit is valid only after the digest matches. Remove
+		// this corrupt entry atomically from the cache namespace before
+		// reacquiring it; never clear the entire cache.
+		recordCacheProjectionEvent(ctx, "eviction", 0, telemetry.StatusOK, "invalid", 0)
+		_ = os.Remove(cachedPath)
+		return "", verifyDuration, nil // hash mismatch → re-download
 	}
 	return cachedPath, verifyDuration, nil
 }
@@ -348,7 +315,7 @@ func writeVeloxAssetStreamToCacheAtOffset(cacheDir, assetID string, expectedSHA2
 		return "", 0, "", 0, err
 	}
 
-	return verifyAndPromoteVeloxAsset(cacheDir, assetID, expectedSHA256, effectiveExpectedSize, partPath, ext, syncDir)
+	return verifyAndPromoteVeloxAsset(cacheDir, expectedSHA256, effectiveExpectedSize, partPath, ext, syncDir)
 }
 
 // verifyAndPromoteVeloxAsset is the shared finalize step for both the
@@ -358,7 +325,7 @@ func writeVeloxAssetStreamToCacheAtOffset(cacheDir, assetID string, expectedSHA2
 // ErrAssetIncomplete and PRESERVES the partial (a short write is retryable);
 // a hash mismatch deletes it (resuming corrupt bytes can never produce a
 // valid asset).
-func verifyAndPromoteVeloxAsset(cacheDir, assetID, expectedSHA256 string, effectiveExpectedSize int64, partPath, ext string, syncDir func(string) error) (string, int64, string, time.Duration, error) {
+func verifyAndPromoteVeloxAsset(cacheDir, expectedSHA256 string, effectiveExpectedSize int64, partPath, ext string, syncDir func(string) error) (string, int64, string, time.Duration, error) {
 	info, err := os.Stat(partPath)
 	if err != nil {
 		return "", 0, "", 0, err
@@ -388,20 +355,13 @@ func verifyAndPromoteVeloxAsset(cacheDir, assetID, expectedSHA256 string, effect
 	// digest, never the asset ID, so two assets with the same bytes share one
 	// physical file. When no expected digest was supplied, the digest computed
 	// during verification becomes the identity anyway, so a later
-	// remembered-integrity access finds the entry through the same key. The
-	// pre-v5 flat <assetID>_<sha12> path is the fallback only when no digest
-	// could be computed (unreachable for a verified promotion: the size+SHA
-	// gate above always yields actualSHA256).
+	// remembered-integrity access finds the entry through the same key.
 	blobSHA := expectedSHA256
 	if blobSHA == "" {
 		blobSHA = actualSHA256
 	}
-	finalPath := filepath.Join(cacheDir, cacheKeyPrefix(assetID, blobSHA)+ext)
-	blobDir := cacheDir
-	if len(blobSHA) >= 2 {
-		finalPath = assetBlobPath(cacheDir, blobSHA, ext)
-		blobDir = filepath.Dir(finalPath)
-	}
+	finalPath := assetBlobPath(cacheDir, blobSHA, ext)
+	blobDir := filepath.Dir(finalPath)
 	if err := os.MkdirAll(blobDir, 0o755); err != nil {
 		return "", 0, "", time.Since(verifyStarted), err
 	}

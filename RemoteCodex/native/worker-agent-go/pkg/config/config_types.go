@@ -228,6 +228,25 @@ type WorkerConfig struct {
 	// Binds from VELOX_CACHE_EVICTION_INTERVAL_SECS; default 30.
 	CacheEvictionIntervalSecs int `json:"cache_eviction_interval_secs,omitempty"`
 
+	// CacheScrubEnabled opts the worker into the background integrity
+	// scrubber: a low-priority loop that re-verifies a throttled fraction of
+	// the blob cache's SHA-256 each pass and invalidates corrupt bytes. Off
+	// by default; when enabled the interval/byte-budget/blob-count knobs must
+	// all be positive (Validate fails closed otherwise). Binds from
+	// VELOX_CACHE_SCRUB_ENABLED.
+	CacheScrubEnabled bool `json:"cache_scrub_enabled,omitempty"`
+	// CacheScrubIntervalSecs is the scrub-loop tick cadence in seconds.
+	// Binds from VELOX_CACHE_SCRUB_INTERVAL_SECS; default 3600 (1h).
+	CacheScrubIntervalSecs int `json:"cache_scrub_interval_secs,omitempty"`
+	// CacheScrubBytesPerPass is the soft ceiling on total re-hashed bytes per
+	// scrub pass, throttling NVMe read I/O so scrubbing never starves jobs.
+	// Binds from VELOX_CACHE_SCRUB_BYTES_PER_PASS; default 256 MiB.
+	CacheScrubBytesPerPass int64 `json:"cache_scrub_bytes_per_pass,omitempty"`
+	// CacheScrubMaxBlobsPerPass caps the number of blobs touched per pass
+	// regardless of size. Binds from VELOX_CACHE_SCRUB_MAX_BLOBS_PER_PASS;
+	// default 8.
+	CacheScrubMaxBlobsPerPass int `json:"cache_scrub_max_blobs_per_pass,omitempty"`
+
 	// WorkerClass is the operator-assigned fleet class (cpu-xlarge, gpu-a100,
 	// mixed, io, ...). Binds from VELOX_WORKER_CLASS env. Surfaces in Hello
 	// metadata → master WorkerInfo.Class → GET /api/v1/workers?class= filter.

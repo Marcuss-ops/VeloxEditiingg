@@ -34,9 +34,8 @@
 //     skip that asset. Acquire inserts a relation; Release removes only
 //     the caller's relation.
 //  4. last_used_at is bumped by every MarkUsed / MarkDownloadComplete /
-
-//	Release; the cleaner uses it for the 3-minute grace period
-//	(see Pass 11 plan; enforced in the cleaner, not here).
+//     MarkBlobUsed / Release. The pressure controller uses the blob-level value
+//     for LRU ordering; it is not a TTL eviction policy.
 //
 // The schema DDL, the row scanner and the helper predicates live in
 // the sibling file cache_helpers.go.

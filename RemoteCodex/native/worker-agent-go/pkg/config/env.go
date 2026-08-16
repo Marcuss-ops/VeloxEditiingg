@@ -115,6 +115,18 @@ const (
 	// EnvCacheEvictionIntervalSecs is the cleanup-loop tick cadence in
 	// seconds (default 30).
 	EnvCacheEvictionIntervalSecs = "VELOX_CACHE_EVICTION_INTERVAL_SECS"
+	// EnvCacheScrubEnabled opts into the background integrity scrubber
+	// (default off).
+	EnvCacheScrubEnabled = "VELOX_CACHE_SCRUB_ENABLED"
+	// EnvCacheScrubIntervalSecs is the scrub-loop tick cadence in seconds
+	// (default 3600).
+	EnvCacheScrubIntervalSecs = "VELOX_CACHE_SCRUB_INTERVAL_SECS"
+	// EnvCacheScrubBytesPerPass is the soft byte budget per scrub pass
+	// (default 256 MiB).
+	EnvCacheScrubBytesPerPass = "VELOX_CACHE_SCRUB_BYTES_PER_PASS"
+	// EnvCacheScrubMaxBlobsPerPass caps the blobs touched per pass
+	// (default 8).
+	EnvCacheScrubMaxBlobsPerPass = "VELOX_CACHE_SCRUB_MAX_BLOBS_PER_PASS"
 )
 
 // EnvBindings is the set of env-var names this package inspects.
@@ -152,6 +164,8 @@ var EnvBindings = []string{
 	EnvArtifactTmpfsMaxPercent, EnvArtifactTmpfsReserveBytes,
 	EnvCacheHighWatermarkPercent, EnvCacheLowWatermarkPercent,
 	EnvCacheEvictionBatchSize, EnvCacheEvictionIntervalSecs,
+	EnvCacheScrubEnabled, EnvCacheScrubIntervalSecs,
+	EnvCacheScrubBytesPerPass, EnvCacheScrubMaxBlobsPerPass,
 }
 
 // envTruthy reports whether a string from os.Getenv should be interpreted
@@ -339,5 +353,14 @@ func applyEnvOverrides(cfg *WorkerConfig) error {
 	bindPositiveInt(EnvCacheLowWatermarkPercent, &cfg.CacheLowWatermarkPercent)
 	bindPositiveInt(EnvCacheEvictionBatchSize, &cfg.CacheEvictionBatchSize)
 	bindPositiveInt(EnvCacheEvictionIntervalSecs, &cfg.CacheEvictionIntervalSecs)
+	// Background integrity scrubber: opt-in flag + throttling knobs. Invalid
+	// numerics are ignored (applyDefaults + Validate then fail closed on the
+	// enabled combination).
+	if v := strings.TrimSpace(os.Getenv(EnvCacheScrubEnabled)); v != "" {
+		cfg.CacheScrubEnabled = envTruthy(v)
+	}
+	bindPositiveInt(EnvCacheScrubIntervalSecs, &cfg.CacheScrubIntervalSecs)
+	bindPositiveInt64(EnvCacheScrubBytesPerPass, &cfg.CacheScrubBytesPerPass)
+	bindPositiveInt(EnvCacheScrubMaxBlobsPerPass, &cfg.CacheScrubMaxBlobsPerPass)
 	return nil
 }

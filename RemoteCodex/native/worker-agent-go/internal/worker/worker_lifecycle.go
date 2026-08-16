@@ -268,6 +268,10 @@ func (w *Worker) runSession(ctx context.Context) bool {
 	w.startPersistenceLoop(sessionCtx)
 	w.reporter.StartReplayLoop(sessionCtx)
 	w.startLeaseReconciliationLoop(sessionCtx)
+	// Artifact-upload resume: re-drive mid-upload spool rows (spilled to
+	// NVMe) with bounded backoff. No-op when the spool / publisher registry
+	// are absent (legacy fixtures).
+	w.startArtifactUploadResumeLoop(sessionCtx)
 
 	sessionEnded := false
 	select {

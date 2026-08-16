@@ -172,6 +172,50 @@ func TestEnvCachePressureOverrides(t *testing.T) {
 	}
 }
 
+// Background integrity-scrubber env bindings: VELOX_CACHE_SCRUB_* opt in and
+// tune the throttled re-verification. Invalid numerics are ignored so a typo
+// cannot zero the knobs (applyDefaults + Validate then fail closed on the
+// enabled combination).
+func TestEnvCacheScrubOverrides(t *testing.T) {
+	t.Setenv(EnvCacheScrubEnabled, "true")
+	t.Setenv(EnvCacheScrubIntervalSecs, "7200")
+	t.Setenv(EnvCacheScrubBytesPerPass, "536870912") // 512 MiB
+	t.Setenv(EnvCacheScrubMaxBlobsPerPass, "16")
+	cfg := &WorkerConfig{}
+	if err := applyEnvOverrides(cfg); err != nil {
+		t.Fatalf("applyEnvOverrides: %v", err)
+	}
+	if !cfg.CacheScrubEnabled {
+		t.Error("CacheScrubEnabled = false, want true")
+	}
+	if cfg.CacheScrubIntervalSecs != 7200 {
+		t.Errorf("CacheScrubIntervalSecs = %d, want 7200", cfg.CacheScrubIntervalSecs)
+	}
+	if cfg.CacheScrubBytesPerPass != 536870912 {
+		t.Errorf("CacheScrubBytesPerPass = %d, want 536870912", cfg.CacheScrubBytesPerPass)
+	}
+	if cfg.CacheScrubMaxBlobsPerPass != 16 {
+		t.Errorf("CacheScrubMaxBlobsPerPass = %d, want 16", cfg.CacheScrubMaxBlobsPerPass)
+	}
+
+	// Invalid / non-positive numerics are ignored (pre-env value kept).
+	t.Setenv(EnvCacheScrubIntervalSecs, "not-a-number")
+	t.Setenv(EnvCacheScrubBytesPerPass, "0")
+	t.Setenv(EnvCacheScrubMaxBlobsPerPass, "-3")
+	cfg2 := &WorkerConfig{
+		CacheScrubIntervalSecs:    7,
+		CacheScrubBytesPerPass:    9,
+		CacheScrubMaxBlobsPerPass: 11,
+	}
+	if err := applyEnvOverrides(cfg2); err != nil {
+		t.Fatalf("applyEnvOverrides invalid scrub numerics: %v", err)
+	}
+	if cfg2.CacheScrubIntervalSecs != 7 || cfg2.CacheScrubBytesPerPass != 9 || cfg2.CacheScrubMaxBlobsPerPass != 11 {
+		t.Errorf("invalid scrub numerics should be ignored, got i=%d b=%d m=%d",
+			cfg2.CacheScrubIntervalSecs, cfg2.CacheScrubBytesPerPass, cfg2.CacheScrubMaxBlobsPerPass)
+	}
+}
+
 func TestWorkerCredentialFileFallback(t *testing.T) {
 	tmpDir := t.TempDir()
 	credentialFile := filepath.Join(tmpDir, "worker_credential")

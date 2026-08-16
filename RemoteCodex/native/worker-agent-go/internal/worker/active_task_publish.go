@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -49,9 +50,13 @@ func (w *Worker) publishArtifactsV1(ctx context.Context, pte *PendingTaskExecuti
 		return fmt.Errorf("worker artifact upload: register durable spool: %w", err)
 	}
 	committed := false
+	// resumable marks spool rows whose upload failed and were handed to the
+	// background resume loop. The deferred reject must not overwrite their
+	// mid-upload state (the resume loop owns their terminal transition).
+	resumable := make(map[string]bool)
 	defer func() {
 		if !committed {
-			w.rejectOutputSpool(spoolEntries, "publication_failed", "typed artifact publication did not reach commit acknowledgement")
+			w.rejectOutputSpool(spoolEntries, resumable, "publication_failed", "typed artifact publication did not reach commit acknowledgement")
 		}
 	}()
 
@@ -133,12 +138,6 @@ func (w *Worker) publishArtifactsV1(ctx context.Context, pte *PendingTaskExecuti
 			})
 			return fmt.Errorf("worker artifact upload: target %d is incomplete", i)
 		}
-		if err := w.outputSpool.MarkUploadPending(ctx, spoolEntries[i].SpoolID, targetPB.GetUploadId()); err != nil {
-			return fmt.Errorf("worker artifact upload: mark target %d pending: %w", i, err)
-		}
-		if err := w.outputSpool.MarkUploading(ctx, spoolEntries[i].SpoolID, 0); err != nil {
-			return fmt.Errorf("worker artifact upload: mark target %d uploading: %w", i, err)
-		}
 		target := publisher.UploadTarget{
 			DeclarationID: targetPB.GetDeclarationId(),
 			ArtifactID:    targetPB.GetArtifactId(),
@@ -147,6 +146,24 @@ func (w *Worker) publishArtifactsV1(ctx context.Context, pte *PendingTaskExecuti
 			UploadURL:     targetPB.GetUploadUrl(),
 			ChunkSize:     targetPB.GetChunkSize(),
 			ExpiresAtUnix: targetPB.GetExpiresAtUnix(),
+		}
+		// Persist the full upload target + commit token BEFORE starting the
+		// upload so a later failure can be resumed (same-session retry or
+		// cross-restart) from the spool row alone. The commit token is a
+		// secret: it is stored only in the dedicated column, never in the
+		// target JSON and never logged.
+		targetJSON, jsonErr := json.Marshal(target)
+		if jsonErr != nil {
+			return fmt.Errorf("worker artifact upload: marshal target %d: %w", i, jsonErr)
+		}
+		if err := w.outputSpool.StashUploadPlan(ctx, spoolEntries[i].SpoolID, plan.GetCommitId(), target.UploadID, string(targetJSON), plan.GetCommitToken()); err != nil {
+			return fmt.Errorf("worker artifact upload: stash target %d: %w", i, err)
+		}
+		if err := w.outputSpool.MarkUploadPending(ctx, spoolEntries[i].SpoolID, targetPB.GetUploadId()); err != nil {
+			return fmt.Errorf("worker artifact upload: mark target %d pending: %w", i, err)
+		}
+		if err := w.outputSpool.MarkUploading(ctx, spoolEntries[i].SpoolID, 0); err != nil {
+			return fmt.Errorf("worker artifact upload: mark target %d uploading: %w", i, err)
 		}
 		transport, err := w.publisherRegistry.Resolve(target.TransportID)
 		if err != nil {
@@ -171,10 +188,15 @@ func (w *Worker) publishArtifactsV1(ctx context.Context, pte *PendingTaskExecuti
 				"artifact_type": ref.Type,
 				"error":         err.Error(),
 			})
-			// Preserve a volatile (tmpfs) artifact on durable NVMe before
-			// failing, so the retry/audit path can read it after /dev/shm
-			// pressure or a restart.
+			// Preserve a volatile (tmpfs) artifact on durable NVMe, then
+			// schedule a bounded resume instead of rejecting immediately:
+			// the row stays mid-upload and the resume loop re-drives the
+			// upload from the repointed (NVMe) local_path.
 			w.spillVolatileToNVMe(ctx, spoolEntries[i])
+			resumable[spoolEntries[i].SpoolID] = true
+			if recErr := w.outputSpool.RecordUploadFailure(ctx, spoolEntries[i].SpoolID, err.Error(), time.Now().Add(uploadResumeBackoff(0))); recErr != nil {
+				w.logger.Warn("[ARTIFACT_RESUME] record upload failure failed spool=%s: %v", spoolEntries[i].SpoolID, recErr)
+			}
 			return fmt.Errorf("worker artifact upload: transfer %q: %w", ref.Type, err)
 		}
 		if result == nil || result.UploadID == "" || result.UploadedBytes != ref.SizeBytes {
@@ -285,11 +307,16 @@ func (w *Worker) registerOutputSpool(ctx context.Context, pte *PendingTaskExecut
 	return entries, nil
 }
 
-func (w *Worker) rejectOutputSpool(entries []spool.SpoolEntry, code, message string) {
+func (w *Worker) rejectOutputSpool(entries []spool.SpoolEntry, skip map[string]bool, code, message string) {
 	if w.outputSpool == nil {
 		return
 	}
 	for _, entry := range entries {
+		if skip != nil && skip[entry.SpoolID] {
+			// The upload failure was handed to the resume loop; do not
+			// overwrite its resumable mid-upload state.
+			continue
+		}
 		_ = w.outputSpool.MarkRejected(context.Background(), entry.SpoolID, code, message)
 	}
 }

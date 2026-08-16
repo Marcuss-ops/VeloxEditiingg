@@ -51,6 +51,17 @@ const (
 	DefaultCacheEvictionIntervalSecs = 30
 )
 
+// Background integrity-scrubber defaults. The scrubber is opt-in
+// (CacheScrubEnabled=false), but the tuning knobs always hold sane values so
+// toggling VELOX_CACHE_SCRUB_ENABLED on later cannot pair with a zero budget
+// or interval. A 256 MiB budget per hour re-verifies the cache slowly enough
+// that a render's NVMe headroom is never contended.
+const (
+	DefaultCacheScrubIntervalSecs    = 3600
+	DefaultCacheScrubBytesPerPass    = 256 * 1024 * 1024 // 256 MiB
+	DefaultCacheScrubMaxBlobsPerPass = 8
+)
+
 // GenerateWorkerID creates a unique worker ID in the format "worker-{8-char-hex}".
 //
 // Implementation lives in shared/identity so that the Velox master server and
@@ -161,6 +172,19 @@ func (c *WorkerConfig) applyDefaults() {
 	}
 	if c.CacheEvictionIntervalSecs <= 0 {
 		c.CacheEvictionIntervalSecs = DefaultCacheEvictionIntervalSecs
+	}
+	// Background integrity scrubber: opt-in via CacheScrubEnabled, but the
+	// interval/byte-budget/blob-count knobs are repaired so an enabled scrub
+	// never pairs with a zero value. Validate() fail-closes on the enabled
+	// combination.
+	if c.CacheScrubIntervalSecs <= 0 {
+		c.CacheScrubIntervalSecs = DefaultCacheScrubIntervalSecs
+	}
+	if c.CacheScrubBytesPerPass <= 0 {
+		c.CacheScrubBytesPerPass = DefaultCacheScrubBytesPerPass
+	}
+	if c.CacheScrubMaxBlobsPerPass <= 0 {
+		c.CacheScrubMaxBlobsPerPass = DefaultCacheScrubMaxBlobsPerPass
 	}
 	if c.AssetDownloadConcurrency <= 0 {
 		c.AssetDownloadConcurrency = DefaultAssetDownloadConcurrency

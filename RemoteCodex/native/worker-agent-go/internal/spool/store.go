@@ -169,8 +169,24 @@ type SpoolEntry struct {
 	// LocalPath. Defaults to NVME_DURABLE on Insert when empty.
 	StorageTier StorageTier
 	LastError   string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	// UploadTargetJSON is the serialized upload target from the master's
+	// ArtifactUploadPlan (transport_id, upload_url, declaration_id, …). It is
+	// opaque to this package (the worker marshals/unmarshals it) and empty
+	// until StashUploadPlan runs. It is the durable resume key: without it an
+	// upload cannot be re-driven after a restart.
+	UploadTargetJSON string
+	// CommitToken is the short-lived master-issued token authorizing the
+	// upload. It is a secret: never log it, never serialize it into
+	// UploadTargetJSON.
+	CommitToken string
+	// UploadAttemptCount is the bounded retry counter for the artifact
+	// upload resume loop.
+	UploadAttemptCount int
+	// NextUploadAttemptAt is the earliest instant the resume loop may retry
+	// this row's upload. Zero means "due immediately".
+	NextUploadAttemptAt time.Time
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -216,6 +232,13 @@ func Open(path string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	// Roll-forward migration for spool DBs created before the artifact-
+	// upload resume ledger existed (upload_target_json / commit_token /
+	// upload_attempt_count / next_upload_attempt_at).
+	if err := ensureUploadResumeColumns(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return &Store{db: db}, nil
 }
 
@@ -228,6 +251,28 @@ func ensureStorageTierColumn(db *sql.DB) error {
 			return nil
 		}
 		return fmt.Errorf("spool.Open: add storage_tier column: %w", err)
+	}
+	return nil
+}
+
+// ensureUploadResumeColumns adds the artifact-upload resume ledger columns to
+// pre-existing spool DBs. Fresh DBs already carry them (schemaDDL), so each
+// ALTER fails with "duplicate column name" and is ignored. The columns are
+// additive and default-empty, so an existing spool keeps working unchanged.
+func ensureUploadResumeColumns(db *sql.DB) error {
+	cols := []struct{ name, ddl string }{
+		{"upload_target_json", `ALTER TABLE worker_output_spool ADD COLUMN upload_target_json TEXT NOT NULL DEFAULT ''`},
+		{"commit_token", `ALTER TABLE worker_output_spool ADD COLUMN commit_token TEXT NOT NULL DEFAULT ''`},
+		{"upload_attempt_count", `ALTER TABLE worker_output_spool ADD COLUMN upload_attempt_count INTEGER NOT NULL DEFAULT 0`},
+		{"next_upload_attempt_at", `ALTER TABLE worker_output_spool ADD COLUMN next_upload_attempt_at TEXT NOT NULL DEFAULT ''`},
+	}
+	for _, col := range cols {
+		if _, err := db.Exec(col.ddl); err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+				continue
+			}
+			return fmt.Errorf("spool.Open: add %s column: %w", col.name, err)
+		}
 	}
 	return nil
 }
@@ -264,6 +309,10 @@ CREATE TABLE IF NOT EXISTS worker_output_spool (
     status          TEXT NOT NULL,
     storage_tier    TEXT NOT NULL DEFAULT 'NVME_DURABLE',
     last_error      TEXT NOT NULL DEFAULT '',
+    upload_target_json TEXT NOT NULL DEFAULT '',
+    commit_token    TEXT NOT NULL DEFAULT '',
+    upload_attempt_count INTEGER NOT NULL DEFAULT 0,
+    next_upload_attempt_at TEXT NOT NULL DEFAULT '',
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL,
     UNIQUE(task_id, attempt_id, worker_spool_key)

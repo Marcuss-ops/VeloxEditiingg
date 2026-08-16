@@ -527,6 +527,42 @@ func main() {
 		}
 	}()
 
+	// Background integrity scrubber: re-verifies a throttled fraction of the
+	// blob cache each pass (oldest-verified first) and invalidates corrupt
+	// bytes. Opt-in via VELOX_CACHE_SCRUB_ENABLED; the byte budget per pass
+	// keeps NVMe read I/O low enough that a running render is never starved.
+	if cfg.CacheScrubEnabled {
+		scrubInterval := time.Duration(cfg.CacheScrubIntervalSecs) * time.Second
+		if scrubInterval <= 0 {
+			scrubInterval = time.Duration(config.DefaultCacheScrubIntervalSecs) * time.Second
+		}
+		scrubLoop := &workercache.ScrubLoop{
+			Cache:    clipCache,
+			Interval: scrubInterval,
+			Config: workercache.ScrubConfig{
+				BytesPerPass:    cfg.CacheScrubBytesPerPass,
+				MaxBlobsPerPass: cfg.CacheScrubMaxBlobsPerPass,
+			},
+			OnTick: func(stats workercache.ScrubStats, err error) {
+				metrics := telemetry.GetPrometheusMetrics()
+				metrics.RecordCacheVerify(time.Duration(stats.DurationMS) * time.Millisecond)
+				metrics.RecordCacheEvictions("invalid", stats.Corrupt)
+				metrics.RecordCacheEvictedBytes(stats.CorruptBytes)
+				if err != nil {
+					logger.Warn("[CACHE_SCRUB] scanned=%d scanned_bytes=%d corrupt=%d err=%v", stats.Scanned, stats.ScannedBytes, stats.Corrupt, err)
+					return
+				}
+				logger.Info("[CACHE_SCRUB] scanned=%d scanned_bytes=%d corrupt=%d corrupt_bytes=%d", stats.Scanned, stats.ScannedBytes, stats.Corrupt, stats.CorruptBytes)
+			},
+		}
+		go func() {
+			if err := scrubLoop.Run(ctx); err != nil && ctx.Err() == nil {
+				logger.Warn("[CACHE_SCRUB] loop stopped: %v", err)
+			}
+		}()
+		logger.Info("[CACHE_SCRUB] integrity scrubber enabled (interval=%s budget=%d MiB max_blobs=%d)", scrubInterval, cfg.CacheScrubBytesPerPass/(1024*1024), cfg.CacheScrubMaxBlobsPerPass)
+	}
+
 	// Step 6/8: fail-fast self-check on cfg.StateDir writability.
 	// Runs BEFORE any cache/blob wiring or disk-watcher startup so a
 	// host where the canonical root is unwritable exits with a

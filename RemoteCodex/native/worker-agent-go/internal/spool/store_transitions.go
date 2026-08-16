@@ -67,6 +67,64 @@ func (s *Store) MarkUploading(ctx context.Context, spoolID string, uploadedBytes
 	})
 }
 
+// StashUploadPlan persists the master's per-artifact upload target (and the
+// attempt's commit_id + short-lived commit token) without moving the row's
+// status. It is the durable resume key: without it the worker cannot re-drive
+// a mid-upload row after a restart because transport_id / upload_url /
+// chunk_size live only in the (lost) ArtifactUploadPlan message. CAS-gated on
+// OUTPUT_READY so it can only run between MarkReady and MarkUploading; a
+// late call after the row has moved on is a benign CAS conflict.
+func (s *Store) StashUploadPlan(ctx context.Context, spoolID, commitID, uploadID, targetJSON, commitToken string) error {
+	if spoolID == "" {
+		return fmt.Errorf("spool.StashUploadPlan: spool_id empty")
+	}
+	if uploadID == "" {
+		return fmt.Errorf("spool.StashUploadPlan: upload_id empty")
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE worker_output_spool
+		   SET commit_id = ?, upload_id = ?, upload_target_json = ?,
+		       commit_token = ?, updated_at = ?
+		 WHERE spool_id = ? AND status = ?`,
+		commitID, uploadID, targetJSON, commitToken, now, spoolID, string(StatusOutputReady),
+	)
+	if err != nil {
+		return fmt.Errorf("spool.StashUploadPlan: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return fmt.Errorf("%w: spool=%s (expected status=OUTPUT_READY)", ErrCASConflict, spoolID)
+	}
+	return nil
+}
+
+// RecordUploadFailure stamps a non-fatal upload or commit-completion failure
+// onto a resumable row WITHOUT moving its status. UPLOADED is included because
+// the bytes may already be accepted while the TaskCommitAck was lost; that
+// row must retry the completion message, not start a second upload. It bumps
+// the bounded attempt counter and schedules the next retry instant
+// (nextAttemptAt; zero = immediate). Terminal rows are never re-opened.
+func (s *Store) RecordUploadFailure(ctx context.Context, spoolID, lastError string, nextAttemptAt time.Time) error {
+	if spoolID == "" {
+		return fmt.Errorf("spool.RecordUploadFailure: spool_id empty")
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE worker_output_spool
+		   SET last_error = ?, upload_attempt_count = upload_attempt_count + 1,
+		       next_upload_attempt_at = ?, updated_at = ?
+			 WHERE spool_id = ? AND status IN ('UPLOAD_PENDING','UPLOADING','UPLOADED')`,
+		lastError, formatUploadAttemptAt(nextAttemptAt), now, spoolID,
+	)
+	if err != nil {
+		return fmt.Errorf("spool.RecordUploadFailure: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return fmt.Errorf("%w: spool=%s (expected mid-upload state)", ErrCASConflict, spoolID)
+	}
+	return nil
+}
+
 // RecordProgress bumps UploadedBytes while still in UPLOADING. NOT a
 // status transition; idempotent.
 func (s *Store) RecordProgress(ctx context.Context, spoolID string, uploadedBytes int64) error {

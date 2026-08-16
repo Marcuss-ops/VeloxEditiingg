@@ -13,6 +13,7 @@ import (
 	"velox-shared/contract"
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/runtimeassets"
+	"velox-worker-agent/pkg/storage"
 	"velox-worker-agent/pkg/video/pipeline"
 )
 
@@ -73,7 +74,7 @@ func (e *videoAssembleCopyExecutor) Validate(spec executor.TaskSpec) error {
 	return nil
 }
 
-func (e *videoAssembleCopyExecutor) Execute(ctx context.Context, _ executor.ExecutionContext, spec executor.TaskSpec) (executor.ExecutionResult, error) {
+func (e *videoAssembleCopyExecutor) Execute(ctx context.Context, execCtx executor.ExecutionContext, spec executor.TaskSpec) (executor.ExecutionResult, error) {
 	started := time.Now().UTC()
 	fail := func(code string, err error) (executor.ExecutionResult, error) {
 		return executor.ExecutionResult{Status: "failed", ErrorCode: code, ErrorDetail: err.Error(), StartedAt: started, CompletedAt: time.Now().UTC()}, nil
@@ -100,10 +101,18 @@ func (e *videoAssembleCopyExecutor) Execute(ctx context.Context, _ executor.Exec
 	if err != nil {
 		return fail("INVALID_JOB_ID", err)
 	}
-	if err := os.MkdirAll(e.outputRoot, 0o750); err != nil {
+	// The packet-copy output is the final upload artifact too. Route it through
+	// the same canonical staging resolver as render_batch/encode/scene.composite
+	// so this executor cannot silently bypass tmpfs reservations.
+	outputPath := filepath.Join(e.outputRoot, jobID+".mp4")
+	if resolver := storageResolverFromExecutionContext(execCtx); resolver != nil {
+		if placement, placeErr := resolver.Place(storage.ArtifactStaging, jobID+".mp4", estimateOutputBytesFromDuration(plan.DurationUS)); placeErr == nil {
+			outputPath = placement.Path
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0o750); err != nil {
 		return fail("OUTPUT_DIRECTORY", err)
 	}
-	outputPath := filepath.Join(e.outputRoot, jobID+".mp4")
 	wire, err := marshalCopyOnlyWire(plan, spec.JobID, outputPath, bindings)
 	if err != nil {
 		return fail("COPY_ONLY_PLAN_INVALID", err)

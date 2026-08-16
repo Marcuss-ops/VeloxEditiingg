@@ -20,9 +20,8 @@
 //
 // The SnapshotSource interface is local to workercache so the loop
 // does not import velox-shared/protectedasset directly. Tests use a
-// trivial in-memory fake; production wires the master polling
-// client (Pass 8 gap is still open, documented in the architecture
-// doc §8).
+// trivial in-memory fake; production wires the authenticated master polling
+// client at the worker composition root.
 
 package workercache
 

@@ -124,7 +124,7 @@ func TestCommonAssetResolverColdWarmCacheAcrossMediaKinds(t *testing.T) {
 
 	corruptID := "music-001"
 	corruptDigest := sha256Hex(assets[corruptID])
-	corruptPath, err := cachedAssetPath(w.assetCacheDir(), corruptID, corruptDigest, int64(len(assets[corruptID])))
+	corruptPath, err := cachedAssetPath(w.assetCacheDir(), corruptDigest, int64(len(assets[corruptID])))
 	if err != nil || corruptPath == "" {
 		t.Fatalf("find cached music asset: path=%q err=%v", corruptPath, err)
 	}

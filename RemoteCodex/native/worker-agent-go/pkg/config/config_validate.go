@@ -168,6 +168,22 @@ func (c *WorkerConfig) Validate() error {
 		errs = append(errs, "cache_low_watermark_percent must be strictly less than cache_high_watermark_percent")
 	}
 
+	// Background integrity scrubber: opt-in; when enabled the throttling
+	// knobs must be positive so a typo cannot produce a no-op (zero budget)
+	// or a hot loop (zero interval) that defeats the "without slowing jobs"
+	// contract.
+	if c.CacheScrubEnabled {
+		if c.CacheScrubIntervalSecs <= 0 {
+			errs = append(errs, "cache_scrub_interval_secs must be positive when cache_scrub_enabled is true")
+		}
+		if c.CacheScrubBytesPerPass <= 0 {
+			errs = append(errs, "cache_scrub_bytes_per_pass must be positive when cache_scrub_enabled is true")
+		}
+		if c.CacheScrubMaxBlobsPerPass <= 0 {
+			errs = append(errs, "cache_scrub_max_blobs_per_pass must be positive when cache_scrub_enabled is true")
+		}
+	}
+
 	// ARTIFACT_STAGING is opt-in; when enabled it must be fail-closed so a
 	// missing tmpfs dir, an out-of-range max-percent, or a non-positive
 	// reserve never silently drops the optimization the operator asked for.
