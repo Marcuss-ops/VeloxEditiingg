@@ -32,7 +32,7 @@ func loadDriveConfig(secretsDir, dataDir string, raw RawConfig) DriveConfig {
 	}
 	c.CredentialsDir = raw.Get("VELOX_DRIVE_CREDENTIALS_DIR")
 	if c.TokensDir == "" {
-		c.TokensDir = firstExistingDir([]string{
+		c.TokensDir = firstExistingDirWithFiles([]string{
 			filepath.Join(secretsDir, "drive", "tokens"),
 			filepath.Join(dataDir, "drive", "tokens"),
 		})

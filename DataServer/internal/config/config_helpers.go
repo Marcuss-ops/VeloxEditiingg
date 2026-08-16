@@ -31,6 +31,36 @@ func firstExistingDir(candidates []string) string {
 	return ""
 }
 
+// firstExistingDirWithFiles prefers a directory that contains at least one
+// regular file. Runtime token directories may be provisioned eagerly, so the
+// first existing directory can be empty while a fallback contains the active
+// OAuth tokens.
+func firstExistingDirWithFiles(candidates []string) string {
+	var firstDir string
+	for _, path := range candidates {
+		if path == "" {
+			continue
+		}
+		info, err := os.Stat(path)
+		if err != nil || !info.IsDir() {
+			continue
+		}
+		if firstDir == "" {
+			firstDir = path
+		}
+		entries, err := os.ReadDir(path)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				return path
+			}
+		}
+	}
+	return firstDir
+}
+
 func splitByComma(s string) []string {
 	var result []string
 	for _, part := range strings.Split(s, ",") {
