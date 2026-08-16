@@ -28,6 +28,33 @@ func TestSQLiteLabelResolver_RejectsCorruptPhaseTimestamp(t *testing.T) {
 	}
 }
 
+func TestSQLiteLabelResolver_AllowsMissingPhaseTimestamps(t *testing.T) {
+	db, err := store.NewSQLiteStore(filepath.Join(t.TempDir(), "metrics-missing-time.sqlite"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+	defer db.Close()
+
+	if _, err := db.DB().Exec(`INSERT INTO task_phase_timings
+		(attempt_id, phase, duration_ms, wall_start, wall_end, phase_order, component, action)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		"attempt-missing-time", "render", 10, "", "", 1, "engine", "render"); err != nil {
+		t.Fatalf("seed phase timing: %v", err)
+	}
+
+	resolver := NewSQLiteLabelResolver(db.DB())
+	timings, err := resolver.GetPhaseTimingsDetailed(context.Background(), "attempt-missing-time")
+	if err != nil {
+		t.Fatalf("GetPhaseTimingsDetailed: %v", err)
+	}
+	if len(timings) != 1 {
+		t.Fatalf("got %d phase timings, want 1", len(timings))
+	}
+	if !timings[0].StartedAt.IsZero() || !timings[0].CompletedAt.IsZero() {
+		t.Fatalf("missing timestamps were not preserved as zero times: %#v", timings[0])
+	}
+}
+
 func TestSQLiteLabelResolver_RejectsCorruptDailyRollupValue(t *testing.T) {
 	db, err := store.NewSQLiteStore(filepath.Join(t.TempDir(), "rollup-corrupt.sqlite"))
 	if err != nil {

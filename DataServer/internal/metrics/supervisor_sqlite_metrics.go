@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"velox-server/internal/taskattempts"
@@ -205,13 +206,17 @@ func (r *SQLiteLabelResolver) GetPhaseTimingsDetailed(ctx context.Context, attem
 			&pt.ExecutorID, &pt.ExecutorVersion); err != nil {
 			return nil, fmt.Errorf("supervisor: scan phase timing: %w", err)
 		}
-		pt.StartedAt, err = time.Parse(time.RFC3339, wallStart)
-		if err != nil {
-			return nil, fmt.Errorf("supervisor: parse phase timing start: %w", err)
+		if strings.TrimSpace(wallStart) != "" {
+			pt.StartedAt, err = time.Parse(time.RFC3339, wallStart)
+			if err != nil {
+				return nil, fmt.Errorf("supervisor: parse phase timing start: %w", err)
+			}
 		}
-		pt.CompletedAt, err = time.Parse(time.RFC3339, wallEnd)
-		if err != nil {
-			return nil, fmt.Errorf("supervisor: parse phase timing end: %w", err)
+		if strings.TrimSpace(wallEnd) != "" {
+			pt.CompletedAt, err = time.Parse(time.RFC3339, wallEnd)
+			if err != nil {
+				return nil, fmt.Errorf("supervisor: parse phase timing end: %w", err)
+			}
 		}
 		results = append(results, pt)
 	}
