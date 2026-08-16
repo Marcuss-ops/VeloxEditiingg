@@ -17,11 +17,11 @@ type CanonicalWorkerRuntimePreflight struct {
 var _ BackendRuntimePreflight = (*CanonicalWorkerRuntimePreflight)(nil)
 
 var canonicalWorkerRuntimePreflightCommands = []string{
-	"test -r /etc/velox-worker/worker.env",
+	"sudo -n test -r /etc/velox-worker/worker.env",
 	"test -r /opt/velox-worker/compose.yml",
 	"test -x /usr/local/sbin/velox-worker-activate-image",
 	"systemctl cat velox-worker.service",
-	"docker compose --project-name velox-worker --file /opt/velox-worker/compose.yml config --quiet",
+	"sudo -n docker compose --env-file /etc/velox-worker/worker.env --project-name velox-worker --file /opt/velox-worker/compose.yml config --quiet",
 	"docker inspect --format '{{.State.Running}}' velox-worker",
 	"curl -fsS --max-time 5 http://127.0.0.1:8081/health/ready",
 }
