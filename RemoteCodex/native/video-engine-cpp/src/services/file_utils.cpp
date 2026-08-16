@@ -374,6 +374,16 @@ bool downloadAsset(const std::string& source, const fs::path& dest, const std::s
             return false;
         }
     }
+    // A missing local path must not be handed to curl: curl interprets an
+    // arbitrary cache/path string as a URL and reports the misleading
+    // "bad/illegal format" error. The worker resolver is responsible for
+    // turning verified velox asset references into local files before this
+    // boundary; only explicit HTTP(S) sources may reach the network path.
+    const bool isHTTP = resolvedSource.rfind("http://", 0) == 0 ||
+                        resolvedSource.rfind("https://", 0) == 0;
+    if (!isHTTP) {
+        return false;
+    }
     const auto url = normalizeDriveUrl(resolvedSource);
 
     auto tempDest = fs::path(dest.string() + ".download_tmp");

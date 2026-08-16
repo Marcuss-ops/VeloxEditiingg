@@ -30,6 +30,7 @@ type ContentAddressedCache interface {
 	PreserveContentHash(context.Context, assetref.AssetKey, string, int64, assetref.ContentHash) error
 	EvictIfUnleased(context.Context, assetref.AssetKey, string) error
 	FindBlob(context.Context, assetref.ContentHash) (Blob, bool, error)
+	ValidateBlobForRead(context.Context, Blob) (bool, error)
 	MarkBlobUsed(context.Context, assetref.ContentHash) error
 }
 
@@ -103,6 +104,10 @@ func (s *CanonicalAssetStore) EvictIfUnleased(ctx context.Context, key assetref.
 
 func (s *CanonicalAssetStore) FindBlob(ctx context.Context, contentHash assetref.ContentHash) (Blob, bool, error) {
 	return s.cache.FindBlob(ctx, contentHash)
+}
+
+func (s *CanonicalAssetStore) ValidateBlobForRead(ctx context.Context, blob Blob) (bool, error) {
+	return s.cache.ValidateBlobForRead(ctx, blob)
 }
 
 func (s *CanonicalAssetStore) MarkBlobUsed(ctx context.Context, contentHash assetref.ContentHash) error {

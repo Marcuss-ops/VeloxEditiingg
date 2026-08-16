@@ -213,6 +213,17 @@ void testParserUnit(const fs::path& clipA, const fs::path& clipB,
     }
 }
 
+void testMissingLocalSourceDoesNotSpawnCurl(const fs::path& root) {
+    velox::services::resetIOCounters();
+    const fs::path missing = root / "missing-local-asset.mp4";
+    const fs::path dest = root / "missing-dest.mp4";
+    expect(!velox::file::downloadAsset(missing.string(), dest),
+           "missing local source is rejected");
+    expect(velox::services::ioCounters().curl_spawn_count.load() == 0,
+           "missing local source never reaches curl");
+    expect(!fs::exists(dest), "missing local source creates no destination");
+}
+
 void testRenderLevel(const fs::path& root, const fs::path& clipA,
                      const fs::path& clipB, const fs::path& audio) {
     std::cerr << "── render-level: V2 envelope through RenderEngine::render ──\n";
@@ -350,6 +361,7 @@ int main() {
     expect(makeVideo(clipB, "64x64"), "clip B fixture can be created");
     expect(makeAudio(audio), "audio fixture can be created");
 
+    testMissingLocalSourceDoesNotSpawnCurl(root);
     testParserUnit(clipA, clipB, audio);
     testRenderLevel(root, clipA, clipB, audio);
 

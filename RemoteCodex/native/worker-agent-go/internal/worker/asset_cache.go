@@ -21,6 +21,9 @@ import (
 // assetCacheDir returns the directory where downloaded audio assets are
 // cached. Returns the canonical assets/audio subdirectory.
 func (w *Worker) assetCacheDir() string {
+	if trimmed := strings.TrimSpace(os.Getenv("VELOX_WORKER_CACHE_DIR")); trimmed != "" {
+		return filepath.Join(trimmed, "assets", "audio")
+	}
 	if w != nil && w.config != nil {
 		if trimmed := strings.TrimSpace(w.config.AssetCacheDir); trimmed != "" {
 			return filepath.Join(trimmed, "assets", "audio")

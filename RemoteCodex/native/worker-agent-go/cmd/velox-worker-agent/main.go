@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -432,7 +433,15 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error: failed to create remote clip-cache directory: %v\n", err)
 		os.Exit(1)
 	}
-	clipCache, clipCacheErr := workercache.Open(clipCacheDB)
+	assetCacheRoot := strings.TrimSpace(os.Getenv("VELOX_WORKER_CACHE_DIR"))
+	if assetCacheRoot == "" {
+		assetCacheRoot = strings.TrimSpace(cfg.AssetCacheDir)
+	}
+	if assetCacheRoot == "" {
+		assetCacheRoot = filepath.Join(cfg.StateDir, "asset-cache")
+	}
+	assetCacheRoot = filepath.Join(assetCacheRoot, "assets", "audio")
+	clipCache, clipCacheErr := workercache.OpenWithRoot(clipCacheDB, assetCacheRoot)
 	if clipCacheErr != nil {
 		fmt.Fprintf(os.Stderr, "Error: failed to open remote clip-cache index at %s: %v\n", clipCacheDB, clipCacheErr)
 		os.Exit(1)

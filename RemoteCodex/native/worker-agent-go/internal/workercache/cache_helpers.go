@@ -542,6 +542,7 @@ func scanEntry(r scanDBI) (*Entry, error) {
 	}
 	e.AssetKey = assetref.AssetKey(assetKey)
 	e.ContentHash = assetref.ContentHash(displayContentHash(storedHash))
+	e.storedContentHash = storedHash
 	e.ActiveLeaseCount = leaseCount
 	e.ActiveJobID = leaseJob
 	e.ActiveReservationCount = reservationCount

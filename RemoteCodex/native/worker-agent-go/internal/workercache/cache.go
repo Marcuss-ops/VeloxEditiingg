@@ -46,6 +46,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"velox-shared/assetref"
@@ -74,6 +75,9 @@ type Entry struct {
 	LastUsedAt             time.Time
 	ActiveLeaseCount       int
 	ActiveReservationCount int
+	// storedContentHash preserves the internal legacy:<asset> key so Find can
+	// invalidate a broken physical blob without exposing synthetic identity.
+	storedContentHash string
 }
 
 // Blob is the physical content-addressed row of cached_blobs: the verified
@@ -102,6 +106,8 @@ var (
 type Cache struct {
 	db *sql.DB
 	fs cacheFileSystem
+	// root is the authorized physical cache tree for safe invalidation.
+	root string
 }
 
 // Open creates or opens the cache database at path. WAL + busy timeout
@@ -119,6 +125,12 @@ type Cache struct {
 // here to match the internal/spool package convention. Passing
 // ":memory:" returns an in-memory database suitable for tests.
 func Open(path string) (*Cache, error) {
+	return OpenWithRoot(path, "")
+}
+
+// OpenWithRoot opens the cache index and records the authorized physical blob
+// root. Paths outside this tree are never removed during invalidation.
+func OpenWithRoot(path, root string) (*Cache, error) {
 	dsn := path
 	if path != ":memory:" {
 		// DSN init params match DataServer/spool convention so
@@ -133,7 +145,16 @@ func Open(path string) (*Cache, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("workercache.Open: apply schema: %w", err)
 	}
-	return &Cache{db: db, fs: osCacheFileSystem{}}, nil
+	cleanRoot := ""
+	if root != "" {
+		absRoot, err := filepath.Abs(root)
+		if err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("workercache.Open: resolve root: %w", err)
+		}
+		cleanRoot = filepath.Clean(absRoot)
+	}
+	return &Cache{db: db, fs: osCacheFileSystem{}, root: cleanRoot}, nil
 }
 
 // Close releases the underlying *sql.DB. The cache cannot be reused
@@ -165,6 +186,31 @@ func (c *Cache) Find(ctx context.Context, assetKey string) (Entry, bool, error) 
 	}
 	if err != nil {
 		return Entry{}, false, fmt.Errorf("workercache.Find(%q): %w", assetKey, err)
+	}
+	if e.DownloadComplete {
+		if !validStoredContentHash(e.storedContentHash) {
+			if invalidateErr := c.invalidateStoredBlob(ctx, e.storedContentHash); invalidateErr != nil && !errors.Is(invalidateErr, ErrNotFound) && !errors.Is(invalidateErr, ErrBlobInFlight) {
+				return Entry{}, false, fmt.Errorf("workercache.Find(%q): invalidate invalid hash: %w", assetKey, invalidateErr)
+			}
+			e.LocalPath = ""
+			e.SizeBytes = 0
+			e.DownloadComplete = false
+			return *e, true, nil
+		}
+		valid, validationErr := c.validatePhysicalPath(e.LocalPath, e.SizeBytes)
+		if validationErr != nil {
+			return Entry{}, false, fmt.Errorf("workercache.Find(%q): validate blob: %w", assetKey, validationErr)
+		}
+		if !valid {
+			if invalidateErr := c.invalidateStoredBlob(ctx, e.storedContentHash); invalidateErr != nil && !errors.Is(invalidateErr, ErrNotFound) && !errors.Is(invalidateErr, ErrBlobInFlight) {
+				return Entry{}, false, fmt.Errorf("workercache.Find(%q): invalidate blob: %w", assetKey, invalidateErr)
+			}
+			// Keep asset_key → content_hash metadata, but turn this lookup into
+			// a miss so the resolver downloads and promotes a fresh blob.
+			e.LocalPath = ""
+			e.SizeBytes = 0
+			e.DownloadComplete = false
+		}
 	}
 	return *e, true, nil
 }
@@ -205,6 +251,16 @@ func (c *Cache) FindBlob(ctx context.Context, contentHash assetref.ContentHash) 
 	}
 	if b.VerifiedAt, err = parseRFC3339Nano(verifiedS); err != nil {
 		return Blob{}, false, fmt.Errorf("workercache.FindBlob(%q): verified_at: %w", contentHash, err)
+	}
+	valid, validationErr := c.ValidateBlobForRead(ctx, b)
+	if validationErr != nil {
+		return Blob{}, false, fmt.Errorf("workercache.FindBlob(%q): validate blob: %w", contentHash, validationErr)
+	}
+	if !b.DownloadComplete || !valid {
+		if invalidateErr := c.InvalidateCorruptBlob(ctx, contentHash); invalidateErr != nil && !errors.Is(invalidateErr, ErrNotFound) && !errors.Is(invalidateErr, ErrBlobInFlight) {
+			return Blob{}, false, fmt.Errorf("workercache.FindBlob(%q): invalidate blob: %w", contentHash, invalidateErr)
+		}
+		return Blob{}, false, nil
 	}
 	return b, true, nil
 }

@@ -199,9 +199,23 @@ func (c *Cache) InvalidateCorruptBlob(ctx context.Context, contentHash assetref.
 	if contentHash == "" {
 		return ErrInvalidContentHash
 	}
+	if _, err := assetref.ParseContentHash(string(contentHash)); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidContentHash, err)
+	}
+	return c.invalidateStoredBlob(ctx, string(contentHash))
+}
+
+// invalidateStoredBlob removes a blob row while retaining all logical asset
+// mappings. Physical removal is performed only for paths inside the configured
+// cache root; an outside path is untrusted DB metadata and is never passed to
+// os.Remove.
+func (c *Cache) invalidateStoredBlob(ctx context.Context, storedHash string) error {
+	if storedHash == "" {
+		return ErrInvalidContentHash
+	}
 	conn, err := c.db.Conn(ctx)
 	if err != nil {
-		return fmt.Errorf("workercache.InvalidateCorruptBlob(%q): connection: %w", contentHash, err)
+		return fmt.Errorf("workercache.invalidateStoredBlob(%q): connection: %w", storedHash, err)
 	}
 	defer conn.Close()
 	rollback := func(cause error) error {
@@ -209,7 +223,7 @@ func (c *Cache) InvalidateCorruptBlob(ctx context.Context, contentHash assetref.
 		return cause
 	}
 	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
-		return fmt.Errorf("workercache.InvalidateCorruptBlob(%q): begin: %w", contentHash, err)
+		return fmt.Errorf("workercache.invalidateStoredBlob(%q): begin: %w", storedHash, err)
 	}
 
 	var (
@@ -218,27 +232,27 @@ func (c *Cache) InvalidateCorruptBlob(ctx context.Context, contentHash assetref.
 	)
 	err = conn.QueryRowContext(ctx,
 		`SELECT local_path, download_complete FROM cached_blobs WHERE content_hash = ?`,
-		string(contentHash)).Scan(&blobPath, &dlInt)
+		storedHash).Scan(&blobPath, &dlInt)
 	if errors.Is(err, sql.ErrNoRows) {
-		return rollback(fmt.Errorf("%w: content_hash=%s", ErrNotFound, contentHash))
+		return rollback(fmt.Errorf("%w: content_hash=%s", ErrNotFound, storedHash))
 	}
 	if err != nil {
-		return rollback(fmt.Errorf("workercache.InvalidateCorruptBlob(%q): probe: %w", contentHash, err))
+		return rollback(fmt.Errorf("workercache.invalidateStoredBlob(%q): probe: %w", storedHash, err))
 	}
 	if dlInt == 0 {
-		return rollback(fmt.Errorf("%w: content_hash=%s", ErrBlobInFlight, contentHash))
+		return rollback(fmt.Errorf("%w: content_hash=%s", ErrBlobInFlight, storedHash))
 	}
 
-	if blobPath != "" {
+	if blobPath != "" && (c.root == "" || pathWithinRoot(c.root, blobPath)) {
 		if err := c.fs.Remove(blobPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return rollback(fmt.Errorf("workercache.InvalidateCorruptBlob(%q): physical remove: %w", contentHash, err))
+			return rollback(fmt.Errorf("workercache.invalidateStoredBlob(%q): physical remove: %w", storedHash, err))
 		}
 	}
-	if _, err := conn.ExecContext(ctx, `DELETE FROM cached_blobs WHERE content_hash = ?`, string(contentHash)); err != nil {
-		return rollback(fmt.Errorf("workercache.InvalidateCorruptBlob(%q): delete blob: %w", contentHash, err))
+	if _, err := conn.ExecContext(ctx, `DELETE FROM cached_blobs WHERE content_hash = ?`, storedHash); err != nil {
+		return rollback(fmt.Errorf("workercache.invalidateStoredBlob(%q): delete blob: %w", storedHash, err))
 	}
 	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
-		return fmt.Errorf("workercache.InvalidateCorruptBlob(%q): commit: %w", contentHash, err)
+		return fmt.Errorf("workercache.invalidateStoredBlob(%q): commit: %w", storedHash, err)
 	}
 	return nil
 }

@@ -55,10 +55,8 @@ func (t *masterAssetTransferer) Check(ctx context.Context, reportCtx context.Con
 			if blob, found, err := w.canonicalAssetCache.FindBlob(ctx, req.SHA256); err != nil {
 				return downloader.CacheCheckResult{}, err
 			} else if found && blob.DownloadComplete && (req.SizeBytes <= 0 || blob.SizeBytes == req.SizeBytes) {
-				if info, statErr := os.Stat(blob.LocalPath); statErr == nil && info.Mode().IsRegular() && info.Size() == blob.SizeBytes {
-					_ = w.canonicalAssetCache.MarkBlobUsed(ctx, req.SHA256)
-					return downloader.CacheCheckResult{CacheHit: true, LocalPath: blob.LocalPath, SHA256: req.SHA256, Outcome: downloader.CacheOutcomeHitValid}, nil
-				}
+				_ = w.canonicalAssetCache.MarkBlobUsed(ctx, req.SHA256)
+				return downloader.CacheCheckResult{CacheHit: true, LocalPath: blob.LocalPath, SHA256: req.SHA256, Outcome: downloader.CacheOutcomeHitValid}, nil
 			}
 		}
 		if entry, found, err := w.canonicalAssetCache.Find(ctx, key); err != nil {
@@ -85,9 +83,7 @@ func (t *masterAssetTransferer) Check(ctx context.Context, reportCtx context.Con
 				// is a size-invalid entry (MISS_INVALID), not a hash corrupt.
 				foundSizeMismatch = true
 			default:
-				if info, statErr := os.Stat(entry.LocalPath); statErr == nil && info.Mode().IsRegular() {
-					return downloader.CacheCheckResult{CacheHit: true, LocalPath: entry.LocalPath, SHA256: entry.ContentHash, Outcome: downloader.CacheOutcomeHitValid}, nil
-				}
+				return downloader.CacheCheckResult{CacheHit: true, LocalPath: entry.LocalPath, SHA256: entry.ContentHash, Outcome: downloader.CacheOutcomeHitValid}, nil
 				// The durable index claims a complete entry but the physical
 				// file is gone (evicted/expired underneath the index). Keep
 				// the probe as a final chance before classifying MISS_EXPIRED.
