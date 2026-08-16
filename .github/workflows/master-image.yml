@@ -196,7 +196,7 @@ jobs:
           echo "push=${SHOULD_PUSH}" >> "$GITHUB_OUTPUT"
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: '1.25.8'
           cache-dependency-path: ${{ env.BUILD_DIR }}/go.sum
