@@ -25,9 +25,9 @@ const (
 // failed transfer should be retried by the transfer lifecycle (resilience
 // commit) or surfaced as terminal.
 var (
-	// ErrRetryable marks a transient failure (timeout, reset, 429, 5xx).
+	// ErrRetryable marks a transient failure (timeout, reset, 401/429, 5xx).
 	ErrRetryable = errors.New("downloader: retryable transfer failure")
-	// ErrPermanent marks a failure that must never be retried (401/403/404,
+	// ErrPermanent marks a failure that must never be retried (403/404,
 	// verified hash mismatch, permanent size mismatch, missing metadata).
 	ErrPermanent = errors.New("downloader: permanent transfer failure")
 	// ErrVerify marks a verification failure (hash or size mismatch).
@@ -35,9 +35,13 @@ var (
 )
 
 // IsRetryableStatus reports whether an upstream HTTP status is safe to retry.
-// Retryable: 408, 429 (honour Retry-After), 500-599. Everything else is not.
+// Retryable: 401 (the worker's session token is re-issued on reconnect, so an
+// auth failure during a master restart heals), 408, 429 (honour Retry-After),
+// 500-599. Everything else is not.
 func IsRetryableStatus(code int) bool {
 	switch {
+	case code == http.StatusUnauthorized:
+		return true
 	case code == http.StatusRequestTimeout:
 		return true
 	case code == http.StatusTooManyRequests:
@@ -50,8 +54,10 @@ func IsRetryableStatus(code int) bool {
 }
 
 // IsPermanentStatus reports whether an upstream HTTP status must never be
-// retried: any 4xx that is not 408/429 (auth, forbidden, not-found, and other
-// client errors will not heal on retry).
+// retried: any 4xx that is not 401/408/429 (forbidden, not-found, and other
+// client errors will not heal on retry). 401 is excluded because the worker's
+// session token is re-issued on reconnect, so an auth failure during a master
+// restart heals.
 func IsPermanentStatus(code int) bool {
 	if code < 400 || code >= 500 {
 		return false

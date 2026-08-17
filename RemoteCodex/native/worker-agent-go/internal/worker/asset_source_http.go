@@ -21,12 +21,16 @@ import (
 
 // httpAssetSource adapts one master-bridge asset GET to downloader.AssetSource.
 type httpAssetSource struct {
-	baseURL   string
-	authToken string
+	baseURL string
+	// authToken is a getter so every Open (each retry) re-reads the worker's
+	// CURRENT session token. The token is cleared on disconnect and re-issued
+	// on reconnect, so a 401 during a master restart heals only if the retry
+	// uses the fresh token instead of the one captured at transfer start.
+	authToken func() string
 	client    *http.Client
 }
 
-func newHTTPAssetSource(baseURL, authToken string, client *http.Client) *httpAssetSource {
+func newHTTPAssetSource(baseURL string, authToken func() string, client *http.Client) *httpAssetSource {
 	return &httpAssetSource{baseURL: baseURL, authToken: authToken, client: client}
 }
 
@@ -50,8 +54,8 @@ func (s *httpAssetSource) Open(ctx context.Context, offset int64) (io.ReadCloser
 	if err != nil {
 		return nil, downloader.SourceMetadata{}, err
 	}
-	if s.authToken != "" {
-		req.Header.Set("Authorization", "Bearer "+s.authToken)
+	if token := s.authToken(); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	if offset > 0 {
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
@@ -124,8 +128,8 @@ var (
 	errAssetNotFound       = errors.New("asset not found")
 )
 
-// retryableStatusError carries a retryable upstream status (408/429/5xx) so
-// the retry loop can honour Retry-After and keep its attempt accounting.
+// retryableStatusError carries a retryable upstream status (401/408/429/5xx)
+// so the retry loop can honour Retry-After and keep its attempt accounting.
 type retryableStatusError struct {
 	statusCode int
 	retryAfter time.Duration
@@ -136,8 +140,8 @@ func (e *retryableStatusError) Error() string {
 	return fmt.Sprintf("master returned %d: %s", e.statusCode, e.body)
 }
 
-// permanentStatusError carries a permanent upstream status (auth/forbidden and
-// other 4xx) that must never be retried.
+// permanentStatusError carries a permanent upstream status (forbidden,
+// not-found, and other non-retryable 4xx) that must never be retried.
 type permanentStatusError struct {
 	statusCode int
 	body       string

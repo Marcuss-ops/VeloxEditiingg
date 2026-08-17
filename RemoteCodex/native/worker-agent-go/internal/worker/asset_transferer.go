@@ -134,9 +134,10 @@ func (t *masterAssetTransferer) Transfer(ctx context.Context, reportCtx context.
 }
 
 // transferSingleStream is the original resumable single-connection pipeline.
-// The retry loop is classification-aware: 401/403/404 and other permanent 4xx
-// are terminal; 408/429/5xx and transport errors are retried (1s/2s/4s +
-// jitter).
+// The retry loop is classification-aware: 403/404 and other permanent 4xx
+// are terminal; 401/408/429/5xx and transport errors are retried (1s/2s/4s +
+// jitter). The 401 heals because the token getter re-reads the re-issued
+// session token on each retry.
 func (t *masterAssetTransferer) transferSingleStream(ctx context.Context, reportCtx context.Context, req downloader.DownloadRequest, onProgress func(downloadedBytes int64)) (downloader.TransferResult, error) {
 	w := t.w
 	assetID := req.AssetID
@@ -217,7 +218,8 @@ func (t *masterAssetTransferer) transferSingleStream(ctx context.Context, report
 				}
 				continue
 			case errors.As(openErr, &pe):
-				// Permanent status (auth/forbidden/other 4xx): terminal.
+				// Permanent status (forbidden/not-found/other non-retryable
+				// 4xx): terminal.
 				return downloader.TransferResult{}, openErr
 			default:
 				// Transport error or other transient failure: retry.
@@ -282,14 +284,20 @@ func (t *masterAssetTransferer) transferSingleStream(ctx context.Context, report
 	return downloader.TransferResult{}, fmt.Errorf("failed to download velox asset %s: %w", assetID, lastErr)
 }
 
-// assetTransferRequest builds the master-bridge download URL, the bearer token
-// and the redirect-hardened HTTP client shared by the single-stream and
+// assetTransferRequest builds the master-bridge download URL, the bearer-token
+// GETTER and the redirect-hardened HTTP client shared by the single-stream and
 // chunked pipelines (single source of truth for the integration boundary).
-func (t *masterAssetTransferer) assetTransferRequest(assetID string) (downloadURL, authToken string, client *http.Client) {
+// The token is a getter (not a snapshot) so a retry after a master restart
+// re-reads the freshly re-issued session token instead of reusing the stale/
+// cleared one captured at transfer start.
+func (t *masterAssetTransferer) assetTransferRequest(assetID string) (downloadURL string, authToken func() string, client *http.Client) {
 	w := t.w
 	downloadURL = strings.TrimRight(strings.TrimSpace(w.config.MasterURL), "/") + "/api/v1/agent/assets/" + neturl.PathEscape(assetID)
-	if w.apiClient != nil {
-		authToken = strings.TrimSpace(w.apiClient.AuthToken())
+	authToken = func() string {
+		if w.apiClient != nil {
+			return strings.TrimSpace(w.apiClient.AuthToken())
+		}
+		return ""
 	}
 	baseHost := ""
 	if parsed, err := neturl.Parse(strings.TrimSpace(w.config.MasterURL)); err == nil {
@@ -576,8 +584,10 @@ func (t *masterAssetTransferer) transferChunked(ctx context.Context, reportCtx c
 // errChunkRangeUnsupported when the upstream returns a full 200 or a
 // malformed/absent Content-Range for the requested window (so the dispatcher
 // can fall back to single-stream), and otherwise a permanent/retryable-style
-// error. shared/report aggregate progress across all chunk goroutines.
-func fetchChunkRange(ctx context.Context, client *http.Client, downloadURL, authToken string, c chunkRange, w io.WriterAt, shared *atomic.Int64, report func(), limiter *sharedBandwidthLimiter, sniffHTML bool) error {
+// error. shared/report aggregate progress across all chunk goroutines. The
+// authToken getter is re-read per attempt so a retry after a master restart
+// uses the freshly re-issued session token.
+func fetchChunkRange(ctx context.Context, client *http.Client, downloadURL string, authToken func() string, c chunkRange, w io.WriterAt, shared *atomic.Int64, report func(), limiter *sharedBandwidthLimiter, sniffHTML bool) error {
 	backoffs := downloader.BackoffSchedule(downloader.DefaultMaxAttempts, downloader.DefaultBaseBackoff, downloader.DefaultJitter)
 	var lastErr error
 	for attempt := 0; attempt < downloader.DefaultMaxAttempts; attempt++ {
@@ -590,8 +600,8 @@ func fetchChunkRange(ctx context.Context, client *http.Client, downloadURL, auth
 		if err != nil {
 			return err
 		}
-		if authToken != "" {
-			reqHTTP.Header.Set("Authorization", "Bearer "+authToken)
+		if token := authToken(); token != "" {
+			reqHTTP.Header.Set("Authorization", "Bearer "+token)
 		}
 		reqHTTP.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", c.start, c.end))
 
