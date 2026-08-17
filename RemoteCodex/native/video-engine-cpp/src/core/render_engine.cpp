@@ -21,7 +21,6 @@
 #include <functional>
 #include <iostream>
 #include <memory>
-#include <optional>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -489,83 +488,6 @@ RenderResult RenderEngine::renderCopyOnly(
     return result;
 }
 
-bool RenderEngine::transcodeMixedSegment(
-    const plan::RenderPlan& plan,
-    const std::filesystem::path& workDir,
-    const std::filesystem::path& local_video,
-    const plan::TimelineItem& item,
-    int64_t duration_us,
-    std::size_t index,
-    const media::MediaSignature& canonical,
-    media::CopyOnlyMuxRequest& request,
-    SegmentTiming& segment,
-    RenderResult& result,
-    std::string& error_code) {
-    const fs::path normalized =
-        numberedWorkPath(workDir, "mixed_segment_", ".mp4", index);
-    media::FramePipelineConfig nativeConfig;
-    nativeConfig.input_path = local_video;
-    nativeConfig.output_path = normalized;
-    nativeConfig.width = plan.canvas.width;
-    nativeConfig.height = plan.canvas.height;
-    nativeConfig.fps_num = plan.canvas.fps_num > 0 ? plan.canvas.fps_num : plan.canvas.fps;
-    nativeConfig.fps_den = plan.canvas.fps_den > 0 ? plan.canvas.fps_den : 1;
-    nativeConfig.source_in_us = item.source_in_us;
-    nativeConfig.source_duration_us = duration_us;
-    nativeConfig.codec = "libx264";
-    nativeConfig.preset = "medium";
-    const NativeThreadConfig threads = nativeThreadConfig();
-    nativeConfig.decoder_threads = threads.decoder_threads;
-    nativeConfig.encoder_threads = threads.encoder_threads;
-    media::FramePipelineResult nativeResult;
-    const auto transcodeStart = std::chrono::steady_clock::now();
-    bool transcodeOk = false;
-    {
-        ScopedTimer timer(metrics_, "mixed_transcode_ms");
-        transcodeOk = media::renderFrames(nativeConfig, &nativeResult);
-    }
-    if (!transcodeOk) {
-        error_code = "mixed_transcode_failed";
-        result.error = "mixed transcode failed for segment " + std::to_string(index) +
-            (nativeResult.error.empty() ? std::string() : ": " + nativeResult.error);
-        return false;
-    }
-    segment.ffmpeg_encode_ms = std::chrono::duration<double, std::milli>(
-        std::chrono::steady_clock::now() - transcodeStart).count();
-    segment.frames_encoded = nativeResult.frames_encoded;
-    segment.frames_decoded = nativeResult.frames_decoded;
-    segment.frames_composited = nativeResult.frames_encoded;
-    recordFramePipeline(nativeResult);
-    frames_encoded_.fetch_add(nativeResult.frames_encoded);
-    frames_decoded_.fetch_add(nativeResult.frames_decoded);
-    frames_composited_.fetch_add(nativeResult.frames_encoded);
-    encode_passes_.fetch_add(1);
-    // Fail-closed canonical-profile gate: a produced (transcoded) segment
-    // must be compatible with the canonical output profile before the packet
-    // mux concatenates it with packet-copied ranges.
-    media::SegmentProbe produced_probe;
-    std::string produced_error;
-    if (!media::probeSegmentForExecution(
-            normalized, 0, media::MediaKind::Video,
-            &produced_probe, &produced_error)) {
-        error_code = "mixed_produced_probe_failed";
-        result.error = "failed to probe produced segment " +
-            std::to_string(index) + ": " + produced_error;
-        return false;
-    }
-    std::string profile_reason;
-    if (!media::mediaSignaturesCompatible(
-            produced_probe.signature, canonical, &profile_reason)) {
-        error_code = "mixed_produced_profile_mismatch";
-        result.error = "produced segment " + std::to_string(index) +
-            " is not canonical-profile compatible: " + profile_reason;
-        return false;
-    }
-    request.video_segments.push_back({
-        normalized, 0, duration_us, false, true});
-    return true;
-}
-
 bool RenderEngine::resolveMixedFinalAudio(
     const plan::RenderPlan& plan,
     const std::filesystem::path& workDir,
@@ -617,7 +539,7 @@ bool RenderEngine::resolveMixedFinalAudio(
     return true;
 }
 
-std::optional<RenderResult> RenderEngine::renderMixed(
+RenderResult RenderEngine::renderMixed(
     const plan::RenderPlan& plan,
     const std::filesystem::path& workDir,
     const std::filesystem::path& outPath,
@@ -644,14 +566,14 @@ std::optional<RenderResult> RenderEngine::renderMixed(
     request.video_segments.reserve(plan.timeline.size());
 
     int64_t total_duration_us = 0;
-    int64_t copy_segments = 0;
-    int64_t transcode_segments = 0;
-    bool fell_back = false;
-    for (std::size_t i = 0; i < plan.timeline.size() && !fell_back; ++i) {
+    int64_t packet_copy_segments = 0;
+    int64_t rejected_segments = 0;
+    for (std::size_t i = 0; i < plan.timeline.size(); ++i) {
         const auto& item = plan.timeline[i];
         if (!std::holds_alternative<plan::VideoSource>(item.source)) {
-            fell_back = true;
-            break;
+            result.error = "mixed render requires video sources only (segment " +
+                std::to_string(i) + ")";
+            return failRender("mixed_source_unsupported");
         }
         SegmentTiming segment;
         segment.index = i;
@@ -706,25 +628,20 @@ std::optional<RenderResult> RenderEngine::renderMixed(
         const media::SegmentExecutionDecision decision =
             media::resolveSegmentExecution(execution_request);
 
-        if (decision.mode == media::SegmentExecutionMode::LegacyFallback) {
-            fell_back = true;
-            break;
+        // Copy-only contract: only PACKET_COPY is accepted. Any Reject
+        // (transform, legacy feature, non-keyframe-safe trim, incompatible
+        // media signature) fails the job deterministically with the exact
+        // reason — the mixed path never re-encodes and never falls back.
+        if (decision.mode != media::SegmentExecutionMode::PacketCopy) {
+            ++rejected_segments;
+            result.error = "segment_execution_rejected: " + decision.reason +
+                " (segment " + std::to_string(i) + ")";
+            return failRender("segment_execution_rejected");
         }
-        if (decision.mode == media::SegmentExecutionMode::PacketCopy) {
-            segment.codec = "packet_copy";
-            ++copy_segments;
-            request.video_segments.push_back({
-                local_video, item.source_in_us, duration_us, false, false});
-        } else {
-            segment.codec = "libx264";
-            segment.preset = "medium";
-            ++transcode_segments;
-            std::string error_code;
-            if (!transcodeMixedSegment(plan, workDir, local_video, item, duration_us, i,
-                                       canonical, request, segment, result, error_code)) {
-                return failRender(error_code);
-            }
-        }
+        segment.codec = "packet_copy";
+        ++packet_copy_segments;
+        request.video_segments.push_back({
+            local_video, item.source_in_us, duration_us, false, false});
         segment.total_ms = std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - segmentStart).count();
         segment.status = telemetry::kStatusOk;
@@ -732,46 +649,43 @@ std::optional<RenderResult> RenderEngine::renderMixed(
         total_duration_us += duration_us;
     }
 
-    if (!fell_back) {
-        const double total_duration = static_cast<double>(total_duration_us) / 1'000'000.0;
-        std::string error_code;
-        if (!resolveMixedFinalAudio(plan, workDir, total_duration, request, result, error_code)) {
-            return failRender(error_code);
-        }
-
-        duration_seconds_.store(total_duration);
-        concat_mode_ = "mixed_packet";
-        reportProgress(90, "mixed_packet_mux");
-        telemetry::ScopedPhase mixedPhase(
-            recorder_, telemetry::kOriginEngine, telemetry::kScopeAttempt,
-            "engine", "mixed_packet_mux", "finalize");
-        mixedPhase.SetMetadataJSON(
-            std::string("{\"copy_segments\":") + std::to_string(copy_segments) +
-            ",\"transcode_segments\":" + std::to_string(transcode_segments) +
-            ",\"total_segments\":" + std::to_string(plan.timeline.size()) +
-            ",\"total_duration_seconds\":" + std::to_string(total_duration) + "}");
-        media::CopyOnlyMuxResult muxResult;
-        bool muxOk;
-        {
-            ScopedTimer timer(metrics_, "packet_mux_ms");
-            muxOk = media::muxCopyOnly(request, &muxResult);
-        }
-        if (!muxOk) {
-            mixedPhase.Abort("mixed_packet_mux_failed", muxResult.error);
-            result.error = "mixed packet mux failed: " + muxResult.error;
-            return failRender("mixed_packet_mux_failed");
-        }
-        output_durable_.store(muxResult.output_durable);
-        mixedPhase.Complete(0, static_cast<int64_t>(fileSize(outPath)), 0,
-                            telemetry::kStatusOk);
-        last_progress_.total_size = static_cast<int64_t>(fileSize(outPath));
-        last_progress_.progress_pct = 100.0;
-        last_progress_.finished = true;
-        reportProgress(100, "completed");
-        result.success = true;
-        return result;
+    const double total_duration = static_cast<double>(total_duration_us) / 1'000'000.0;
+    std::string error_code;
+    if (!resolveMixedFinalAudio(plan, workDir, total_duration, request, result, error_code)) {
+        return failRender(error_code);
     }
-    return std::nullopt;
+
+    duration_seconds_.store(total_duration);
+    concat_mode_ = "mixed_packet";
+    reportProgress(90, "mixed_packet_mux");
+    telemetry::ScopedPhase mixedPhase(
+        recorder_, telemetry::kOriginEngine, telemetry::kScopeAttempt,
+        "engine", "mixed_packet_mux", "finalize");
+    mixedPhase.SetMetadataJSON(
+        std::string("{\"packet_copy_segments\":") + std::to_string(packet_copy_segments) +
+        ",\"rejected_segments\":" + std::to_string(rejected_segments) +
+        ",\"total_segments\":" + std::to_string(plan.timeline.size()) +
+        ",\"total_duration_seconds\":" + std::to_string(total_duration) + "}");
+    media::CopyOnlyMuxResult muxResult;
+    bool muxOk;
+    {
+        ScopedTimer timer(metrics_, "packet_mux_ms");
+        muxOk = media::muxCopyOnly(request, &muxResult);
+    }
+    if (!muxOk) {
+        mixedPhase.Abort("mixed_packet_mux_failed", muxResult.error);
+        result.error = "mixed packet mux failed: " + muxResult.error;
+        return failRender("mixed_packet_mux_failed");
+    }
+    output_durable_.store(muxResult.output_durable);
+    mixedPhase.Complete(0, static_cast<int64_t>(fileSize(outPath)), 0,
+                        telemetry::kStatusOk);
+    last_progress_.total_size = static_cast<int64_t>(fileSize(outPath));
+    last_progress_.progress_pct = 100.0;
+    last_progress_.finished = true;
+    reportProgress(100, "completed");
+    result.success = true;
+    return result;
 }
 #endif
 
@@ -945,19 +859,14 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
     }
 #endif // VELOX_ENABLE_LIBAV
 
-    // ── Mixed renderer: per-segment PACKET_COPY / NATIVE_TRANSCODE
-    //    resolution assembled through the single packet mux ─────────────
-    // Delegated to renderMixed() to keep render() linear. renderMixed()
-    // returns std::nullopt when the resolver cannot handle a segment and
-    // the legacy loop below must take over.
+    // ── Mixed renderer: per-segment PACKET_COPY / REJECT resolution
+    //    assembled through the single packet mux ─────────────────────────
+    // Delegated to renderMixed() to keep render() linear. renderMixed() is
+    // copy-only: it returns the final result (success or a deterministic
+    // job failure) and never falls back to the legacy loop below.
 #ifdef VELOX_ENABLE_LIBAV
     if (plan.mixed && !plan.copy_only) {
-        const std::optional<RenderResult> mixed =
-            renderMixed(plan, workDir, outPath, result, failRender);
-        if (mixed.has_value()) {
-            return *mixed;
-        }
-        // fell_back: fall through to the legacy segment loop below.
+        return renderMixed(plan, workDir, outPath, result, failRender);
     }
 #endif
 
@@ -1192,7 +1101,6 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
         std::string args_only;
         bool useNativeTranscode = false;
         fs::path nativeTranscodeInput;
-        media::SegmentExecutionDecision executionDecision;
         if (std::holds_alternative<plan::ImageSource>(item.source)) {
             seg.source_type = "image";
             auto src = std::get<plan::ImageSource>(item.source);
@@ -1243,21 +1151,22 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
             assetPhase.Complete();
             seg.source_bytes = fileSize(localVid);
 #ifdef VELOX_ENABLE_LIBAV
-            media::SegmentExecutionRequest executionRequest;
-            executionRequest.source.kind = media::MediaKind::Video;
-            executionRequest.target.kind = media::MediaKind::Video;
-            executionRequest.transform_required = true;
-            executionRequest.source_window_keyframe_safe = true;
-            executionRequest.legacy_required = item.include_audio ||
+            // Legacy render loop (kept per the copy-only scope: the rule is
+            // "the assembly/mixed/concat path is copy-only", not "no part of
+            // the repo may ever encode"). This loop still normalizes video
+            // for legacy plans (images/color/legacy rendering), so the
+            // native-vs-ffmpeg decision is made locally instead of through
+            // the SegmentExecutionMode enum, which is now strictly
+            // PacketCopy/Reject for the copy-only assembly path.
+            const bool legacyNeedsFfmpeg = item.include_audio ||
                 item.transform.slow_zoom || !plan.subtitle_tracks.empty();
-            executionDecision = media::resolveSegmentExecution(executionRequest);
-            if (executionDecision.mode == media::SegmentExecutionMode::NativeTranscode) {
+            if (legacyNeedsFfmpeg) {
+                args_only = media::buildVideoSegmentArgs(
+                    localVid, segmentOut, item.duration_seconds, params, item.include_audio);
+            } else {
                 useNativeTranscode = true;
                 nativeTranscodeInput = localVid;
                 args_only = "native_frame_pipeline";
-            } else {
-                args_only = media::buildVideoSegmentArgs(
-                    localVid, segmentOut, item.duration_seconds, params, item.include_audio);
             }
 #else
             args_only = media::buildVideoSegmentArgs(

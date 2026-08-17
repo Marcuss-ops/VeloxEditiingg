@@ -172,7 +172,8 @@ add_test(NAME ffmpeg_progress_parser_tests
          COMMAND velox_ffmpeg_progress_parser_tests)
 
 # Canonical segment execution resolver. This value-only test verifies the
-# PacketCopy/NativeTranscode/LegacyFallback contract without a media fixture.
+# copy-only PacketCopy/Reject contract without a media fixture: the assembly
+# path either stream-copies a segment or rejects it, never transcodes.
 add_executable(velox_segment_execution_tests
     tests/test_segment_execution.cpp
     src/services/segment_execution.cpp
@@ -524,10 +525,11 @@ if(VELOX_ENABLE_LIBAV)
     add_test(NAME render_copy_only_zero_intermediates_tests
              COMMAND velox_render_copy_only_zero_intermediates_tests)
 
-    # Mixed renderer: PACKET_COPY + NATIVE_TRANSCODE assembled through the
-    # single packet mux, with the produced-segment canonical-profile
-    # fail-closed gate. Render-level: canonical + non-canonical fixtures;
-    # the sentinel PATH proves the whole mixed path stays in-process.
+    # Mixed renderer: the copy-only PACKET_COPY / REJECT assembly path
+    # through the single packet mux. Render-level: all-canonical fixtures
+    # succeed with zero encode work; a non-canonical fixture fails the job
+    # deterministically with the exact resolver reason. The sentinel PATH
+    # proves the whole mixed path stays in-process.
     add_executable(velox_render_mixed_tests
         tests/test_render_mixed.cpp
         src/audio/audio_plan.cpp

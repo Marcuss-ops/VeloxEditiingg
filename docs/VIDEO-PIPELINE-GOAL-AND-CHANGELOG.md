@@ -185,6 +185,27 @@ convergere gli adapter, non per aggiungere un altro endpoint.
   telemetry e gate full-module. Non si devono mantenere dieci logiche di
   enqueue diverse.
 
+### 2026-08-17 — mixed/concat copy-only: SegmentExecutionMode Reject + invariant canary
+
+- `SegmentExecutionMode` ridotto a `PacketCopy / Reject` (rimossi
+  `NativeTranscode` e `LegacyFallback`); `resolveSegmentExecution()` è
+  fail-closed: legacy, transform, trim non-keyframe-safe e signature
+  mismatch producono `Reject` con il reason esatto
+  (`media signature mismatch: width`, `segment requires a media transform`,
+  `source window is not keyframe-safe for packet copy`, …).
+- `RenderEngine::renderMixed` accetta solo `PacketCopy`; ogni `Reject`
+  fallisce il job con `segment_execution_rejected` (mai fallback a libx264).
+  Rimossa `transcodeMixedSegment()`; il mixed non conosce più
+  libx264/preset medium.
+- Telemetria mixed: `copy_segments`/`transcode_segments` →
+  `packet_copy_segments`/`rejected_segments`; `concat_mode=mixed_packet`.
+- Invariant di produzione: un assembly mixed SUCCEEDED deve avere
+  `frames_encoded == 0` e `encode_passes == 0`. Enforced dal nuovo canary
+  `scripts/ci/worker-mixed-canary.sh` (immutable digest, cablato in
+  `.github/workflows/worker-image.yml`): render all-canonical → SUCCEEDED
+  con `frames=0`/`encode_passes=0`; scena 720p fuori profilo →
+  `segment_execution_rejected` (rc=1, `frames=0`) senza crash del worker.
+
 ### 2026-08-16 — benchmark 1 secondo
 
 - Creare fixture con segmenti realmente compatibili e già caldi.

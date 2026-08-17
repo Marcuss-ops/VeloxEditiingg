@@ -56,7 +56,7 @@ int main() {
 
     // The derived signature must be the canonical packet-copy target: a
     // source that already matches the canonical profile resolves to
-    // PACKET_COPY, while a mismatched source resolves to NATIVE_TRANSCODE.
+    // PACKET_COPY, while a mismatched source resolves to REJECT (copy-only).
     velox::media::SegmentExecutionRequest request;
     request.source = signature;
     request.target = signature;
@@ -70,8 +70,8 @@ int main() {
 
     request.source.width = 1280;
     decision = velox::media::resolveSegmentExecution(request);
-    expect(decision.mode == SegmentExecutionMode::NativeTranscode,
-           "off-profile source resolves to native transcode against the canonical target");
+    expect(decision.mode == SegmentExecutionMode::Reject,
+           "off-profile source is rejected against the canonical target (copy-only)");
 
     // A real on-profile source carries its own stream extradata (SPS/PPS).
     // The canonical target does not pin extradata, so a matching source must

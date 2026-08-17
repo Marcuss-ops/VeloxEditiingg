@@ -89,37 +89,40 @@ const char* segmentExecutionModeName(SegmentExecutionMode mode) {
     switch (mode) {
     case SegmentExecutionMode::PacketCopy:
         return "packet_copy";
-    case SegmentExecutionMode::NativeTranscode:
-        return "native_transcode";
-    case SegmentExecutionMode::LegacyFallback:
-        return "legacy_fallback";
+    case SegmentExecutionMode::Reject:
+        return "reject";
     }
-    return "legacy_fallback";
+    return "reject";
 }
 
 SegmentExecutionDecision resolveSegmentExecution(const SegmentExecutionRequest& request) {
     SegmentExecutionDecision decision;
     decision.keyframe_safe = request.source_window_keyframe_safe;
 
+    // Fail-closed: the assembly path is copy-only. ANY condition that would
+    // need re-encoding (legacy feature, media transform, non-keyframe-safe
+    // trim, incompatible media signature) resolves to Reject with an exact
+    // reason, never to a transcode. Upstream (Chronon/RenderingGen) must
+    // produce segments that are already canonical and keyframe-safe.
     if (request.legacy_required) {
-        decision.mode = SegmentExecutionMode::LegacyFallback;
+        decision.mode = SegmentExecutionMode::Reject;
         decision.reason = "feature requires legacy renderer";
         return decision;
     }
     if (request.transform_required) {
-        decision.mode = SegmentExecutionMode::NativeTranscode;
+        decision.mode = SegmentExecutionMode::Reject;
         decision.reason = "segment requires a media transform";
         return decision;
     }
     if (!request.source_window_keyframe_safe) {
-        decision.mode = SegmentExecutionMode::NativeTranscode;
+        decision.mode = SegmentExecutionMode::Reject;
         decision.reason = "source window is not keyframe-safe for packet copy";
         return decision;
     }
 
     std::string compatibility_reason;
     if (!mediaSignaturesCompatible(request.source, request.target, &compatibility_reason)) {
-        decision.mode = SegmentExecutionMode::NativeTranscode;
+        decision.mode = SegmentExecutionMode::Reject;
         decision.reason = compatibility_reason;
         return decision;
     }

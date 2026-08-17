@@ -12,7 +12,6 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
-#include <optional>
 #include <string>
 #include <utility>
 
@@ -110,42 +109,29 @@ private:
         const std::function<RenderResult(const std::string&)>& failRender,
         const std::chrono::steady_clock::time_point& renderStart);
 
-    // Mixed renderer: resolve each video segment independently against the
-    // canonical output profile (PACKET_COPY for compatible sources,
-    // NATIVE_TRANSCODE for the rest) and assemble them through the single
-    // packet mux. Returns std::nullopt when the path falls back to the
-    // legacy loop; otherwise the final result (success or failure).
-    std::optional<RenderResult> renderMixed(
+    // Mixed renderer: the copy-only assembly path. Resolve each video
+    // segment independently against the canonical output profile; only
+    // PACKET_COPY segments are accepted and assembled through the single
+    // packet mux. Any Reject decision (transform, legacy feature,
+    // non-keyframe-safe trim, incompatible media signature) fails the job
+    // deterministically via failRender — the mixed path never re-encodes and
+    // never falls back to the legacy loop.
+    RenderResult renderMixed(
         const plan::RenderPlan& plan,
         const std::filesystem::path& workDir,
         const std::filesystem::path& outPath,
         RenderResult& result,
         const std::function<RenderResult(const std::string&)>& failRender);
 
-    // Mixed renderer helpers. resolveMixedFinalAudio stages the single final
-    // audio track and enforces the FINAL_AUDIO_COPY contract;
-    // transcodeMixedSegment normalizes one segment through the native
-    // FramePipeline and re-checks the produced output against the canonical
-    // profile (fail-closed). Both return false on failure with result.error
-    // and error_code populated for failRender.
+    // Mixed renderer helper: stages the single final audio track and enforces
+    // the FINAL_AUDIO_COPY contract (audio stays copy-only; anything that
+    // would need a re-encode fails closed). Returns false on failure with
+    // result.error and error_code populated for failRender.
     bool resolveMixedFinalAudio(
         const plan::RenderPlan& plan,
         const std::filesystem::path& workDir,
         double total_duration,
         media::CopyOnlyMuxRequest& request,
-        RenderResult& result,
-        std::string& error_code);
-
-    bool transcodeMixedSegment(
-        const plan::RenderPlan& plan,
-        const std::filesystem::path& workDir,
-        const std::filesystem::path& local_video,
-        const plan::TimelineItem& item,
-        int64_t duration_us,
-        std::size_t index,
-        const media::MediaSignature& canonical,
-        media::CopyOnlyMuxRequest& request,
-        SegmentTiming& segment,
         RenderResult& result,
         std::string& error_code);
 

@@ -44,10 +44,17 @@ bool mediaSignaturesCompatible(const MediaSignature& source,
                                const MediaSignature& target,
                                std::string* reason = nullptr);
 
+// The single packet-copy execution mode. Velox's video assembly / mixed /
+// concat path is COPY-ONLY: a segment is either stream-copied into the
+// packet mux (PacketCopy) or rejected (Reject). NativeTranscode and
+// LegacyFallback were removed on purpose — the assembly path must never
+// re-encode a segment, and a binary enum makes it impossible for a future
+// change to silently re-introduce transcoding. Transcoding still exists for
+// the legacy render loop (images/color/legacy rendering), but that decision
+// is made locally there, never through this enum.
 enum class SegmentExecutionMode {
     PacketCopy,
-    NativeTranscode,
-    LegacyFallback,
+    Reject,
 };
 
 const char* segmentExecutionModeName(SegmentExecutionMode mode);
@@ -61,16 +68,20 @@ struct SegmentExecutionRequest {
 };
 
 struct SegmentExecutionDecision {
-    SegmentExecutionMode mode{SegmentExecutionMode::LegacyFallback};
+    // Fail-closed default: an unset/unknown decision is a reject, never a
+    // silent fallback to transcoding.
+    SegmentExecutionMode mode{SegmentExecutionMode::Reject};
     std::string reason;
     bool keyframe_safe{false};
 };
 
-// Resolves a segment exactly once. Packet copy is selected only when the
-// source already matches the canonical target and its requested trim starts
-// on a keyframe. Transform and incompatible-profile work is explicitly
-// NativeTranscode; only features not yet supported by the native renderer
-// are LegacyFallback.
+// Resolves a segment exactly once, fail-closed. Packet copy is selected only
+// when the source already matches the canonical target AND its requested trim
+// starts on a keyframe AND no transform/legacy feature is requested. Every
+// other condition (legacy feature, media transform, non-keyframe-safe trim,
+// incompatible media signature) resolves to Reject with an exact reason —
+// never to a transcode. The assembly path is copy-only; jobs that need any
+// re-encoding must be prepared upstream (Chronon/RenderingGen).
 SegmentExecutionDecision resolveSegmentExecution(const SegmentExecutionRequest& request);
 
 } // namespace velox::media

@@ -403,6 +403,19 @@ jobs:
           chmod +x scripts/ci/worker-audio-canary.sh
           scripts/ci/worker-audio-canary.sh "${{ env.IMAGE_REPO }}@${{ steps.digest.outputs.digest }}"
 
+      # Copy-only mixed-assembly invariant gate: render an all-canonical mixed
+      # plan and assert frames_encoded == 0 && encode_passes == 0
+      # (concat_mode=mixed_packet), then render a mixed plan with one
+      # non-canonical 720p scene and assert the JOB fails deterministically
+      # (segment_execution_rejected, rc=1, frames_encoded==0) without crashing
+      # the worker process. Same immutable-digest discipline as the audio canary.
+      - name: "Mixed copy-only invariant canary (immutable digest)"
+        if: steps.digest.outputs.digest != '' && steps.version.outputs.push == 'true'
+        run: |
+          set -euo pipefail
+          chmod +x scripts/ci/worker-mixed-canary.sh
+          scripts/ci/worker-mixed-canary.sh "${{ env.IMAGE_REPO }}@${{ steps.digest.outputs.digest }}"
+
       # Phase 1 also keeps the legacy "stays up" smoke as a fast-fail
       # before the slower real-bootstrap smoke. Companion to the
       # health endpoint probe on the Dockerfile.

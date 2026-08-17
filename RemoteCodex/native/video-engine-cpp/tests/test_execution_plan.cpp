@@ -79,9 +79,10 @@ int main() {
                "video segment targets the canonical profile");
     }
 
-    // A mixed plan: one incompatible source resolves to NATIVE_TRANSCODE and
-    // the remaining compatible sources stay PACKET_COPY — a single decision
-    // per segment in one compile pass.
+    // A mixed plan: one incompatible source resolves to REJECT and the
+    // remaining compatible sources stay PACKET_COPY — a single decision per
+    // segment in one compile pass. The copy-only contract means the
+    // incompatible segment is rejected, never transcoded.
     inputs.clear();
     inputs.push_back(segmentInput(0, canonical));
     auto incompatible = canonical;
@@ -93,15 +94,15 @@ int main() {
     expect(plan.segments.size() == 3, "mixed plan keeps one decision per segment");
     expect(plan.segments[0].execution.mode == SegmentExecutionMode::PacketCopy,
            "compatible segment stays packet copy in a mixed plan");
-    expect(plan.segments[1].execution.mode == SegmentExecutionMode::NativeTranscode,
-           "incompatible segment resolves to native transcode");
+    expect(plan.segments[1].execution.mode == SegmentExecutionMode::Reject,
+           "incompatible segment is rejected (copy-only)");
     expect(plan.segments[1].execution.reason == "media signature mismatch: width",
            "mixed plan preserves the resolver's deterministic reason");
     expect(plan.segments[2].execution.mode == SegmentExecutionMode::PacketCopy,
            "trailing compatible segment stays packet copy");
 
-    // Transform and legacy-required segments resolve to their dedicated modes
-    // without disturbing the neighboring packet-copy decision.
+    // Transform and legacy-required segments resolve to REJECT without
+    // disturbing the neighboring packet-copy decision.
     inputs.clear();
     inputs.push_back(segmentInput(0, canonical));
     inputs.push_back(segmentInput(1, canonical, true, true, false));   // transform
@@ -109,17 +110,17 @@ int main() {
     plan = compiler.compile(inputs, canonical);
     expect(plan.segments[0].execution.mode == SegmentExecutionMode::PacketCopy,
            "transform segment does not disturb the leading packet copy");
-    expect(plan.segments[1].execution.mode == SegmentExecutionMode::NativeTranscode,
-           "transform-required segment resolves to native transcode");
-    expect(plan.segments[2].execution.mode == SegmentExecutionMode::LegacyFallback,
-           "legacy-required segment resolves to legacy fallback");
+    expect(plan.segments[1].execution.mode == SegmentExecutionMode::Reject,
+           "transform-required segment is rejected (copy-only)");
+    expect(plan.segments[2].execution.mode == SegmentExecutionMode::Reject,
+           "legacy-required segment is rejected (copy-only)");
 
     // Non-keyframe-safe trim must not use packet copy.
     inputs.clear();
     inputs.push_back(segmentInput(0, canonical, false));
     plan = compiler.compile(inputs, canonical);
-    expect(plan.segments[0].execution.mode == SegmentExecutionMode::NativeTranscode,
-           "non-keyframe trim resolves to native transcode");
+    expect(plan.segments[0].execution.mode == SegmentExecutionMode::Reject,
+           "non-keyframe trim is rejected (copy-only)");
 
     // Audio segments keep their own target signature instead of the video
     // canonical profile.

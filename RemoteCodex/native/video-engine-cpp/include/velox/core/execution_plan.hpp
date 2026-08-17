@@ -28,8 +28,9 @@ struct SegmentExecutionInput {
 };
 
 // One segment after resolution. The execution decision is the single
-// runtime source of truth for this segment: packet mux, frame pipeline and
-// legacy fallback all read this decision instead of re-resolving.
+// runtime source of truth for this segment: the copy-only packet mux reads
+// this decision instead of re-resolving, and Reject means the job fails
+// deterministically rather than transcoding.
 struct ExecutableSegment {
     std::size_t index{0};
     std::filesystem::path input_path;
@@ -51,8 +52,8 @@ struct RuntimeExecutionPlan {
 // Produces exactly one execution decision per segment. This is the SSOT of
 // runtime execution: every downstream consumer reads the resolved decision
 // produced here rather than calling resolveSegmentExecution() again, so the
-// PACKET_COPY / NATIVE_TRANSCODE / LEGACY_FALLBACK contract is decided in
-// one place for the whole render.
+// copy-only PACKET_COPY / REJECT contract is decided in one place for the
+// whole render.
 class RuntimeExecutionPlanCompiler {
 public:
     RuntimeExecutionPlan compile(
