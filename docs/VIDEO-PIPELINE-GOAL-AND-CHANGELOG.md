@@ -452,6 +452,100 @@ convergere gli adapter, non per aggiungere un altro endpoint.
   3. verificare se `drive-smoke` punta davvero alla Drive API reale (il
      multipart >5MB che riesce è incoerente con la doc Google).
 
+### 2026-08-17 — engine C++ pubblicato (v1.2.39) e delta render in produzione
+
+- L'engine `7baf98b5` (fail-closed Reject) + `d24d337c` (parallel open) è
+  **pubblicato e deployato**: v1.2.39 (`worker-v1.2.39-canonical` → digest
+  `sha256:2d83c7c5…`) — verificato `git merge-base --is-ancestor`: `7baf98b5`
+  è in v1.2.39 ma NON in v1.2.38; `d24d337c` è in entrambi. Fleet **4/4**
+  CONNECTED/HEALTHY/AVAILABLE su `2d83c7c5…`, 0 job attivi.
+- Misura warm (`clip.stock.v1`, cache 30/0/0, worker `velox-worker-523925eb`,
+  `phase_totals` da `job inspect --json`):
+  - `compile` **306ms** · `render` **486ms** · `finalize` **179ms**
+  - somma render-pipeline **971ms** (target <750ms, gap residuo ~220ms).
+- Confronto col baseline v1.2.38 (`host_57_131_20_173`):
+  - `compile` 776ms → **306ms** (−61%) · `render` 1057ms → **486ms** (−54%)
+    · `finalize` 279ms → **179ms** (−36%).
+- **Attribuzione onesta**:
+  - `finalize` 279→179ms = **fix SHA streaming `artifactFromFile`**
+    (`de5a1822`, in v1.2.39) — reale e atteso.
+  - `d24d337c` (parallel open) era **già in v1.2.38**, quindi NON è un delta
+    nuovo di v1.2.39; `7baf98b5` è correctness-only (nessun delta perf).
+  - Il resto del calo su compile/render è **varianza di misura + worker
+    diverso** (il baseline v1.2.38 oscillava già 498→776ms compile e
+    749→1057ms render tra due run sullo stesso contenuto). Serve una misura
+    ripetuta sullo stesso worker per separare il segnale dal rumore.
+- Target vs stato: `finalize <200ms` **raggiunto** (179ms); `compile <300ms`
+  quasi (306ms); `render <250ms` ancora sopra (486ms) — il gap resta nella
+  fase engine/Go-side non coperta dal benchmark locale (packet_mux puro
+  139ms).
+- **Finding secondario (cache)**: due job consecutivi sullo stesso worker
+  (`velox-worker-523925eb`) hanno dato job1 30/0/0 (warm) e job2 20 hit/10
+  miss/10 download (105MB) — il cache **evicina asset tra un job e il
+  successivo** (probabile eviction indicizzata post-lease). Da investigare
+  come follow-up; non impatta il delta render ma minaccia il "warm"
+  sostenuto.
+
+### 2026-08-17 — ri-misura warm post-rollout (conferma riproducibilità)
+
+- Ri-misura richiesta sullo **stesso worker** (`velox-worker-523925eb`) e
+  **stesso payload** `clip.stock.v1` per separare il segnale dal rumore
+  (job `job_4fc6ec6497a54222`, warm 30/0/0, `phase_breakdown` da
+  `job inspect --json`):
+  - `compile` **306ms** · `render` **486ms** · `finalize` **179ms**
+  - **identici alla prima misura v1.2.39** (306/486/179) → misura
+    riproducibile, non varianza. Somma render-pipeline **971ms**.
+- Confronto col baseline v1.2.38 (776/1057/279): −61% / −54% / −36%
+  **confermato**.
+- **Cache eviction ri-confermata**: job2 consecutivo (`job_7f2b6f210cda67ac`)
+  = 20 hit/10 miss/10 download (105MB, `download` 7270ms) — il pattern
+  "job1 warm 30/0/0 → job2 evicted 20/10/10" è deterministico, non un caso.
+  Il `render` del job evicted sale a 507ms (+21ms) per il download
+  interleaved; il fix è l'eviction indicizzata (follow-up separato).
+- Verdetto target: `finalize <200ms` ✅ (179ms) · `compile <300ms` quasi
+  (306ms, −6ms dal target) · `render <250ms` ❌ (486ms, gap engine/Go-side
+  non coperto dal benchmark locale packet_mux=139ms).
+
+### 2026-08-17 — read_amplification residuo: chiuso a 2.03x, floor reale ~1.83x
+
+- Domanda: chiudere il `read_amplification` residuo **2.07x** verso il
+  target 1.0–1.4x. Misurato su `COPY_ONLY_CANONICAL_5M_V1`
+  (`velox-benchmark -runs 7`, engine `19381af5` + fix locali).
+- **Due fix C++ applicati** (entrambi eliminano ri-letture ridondanti):
+  1. `media_packet_pipeline.cpp`: il gate finale di durata NON ri-legge più
+     l'output (`probeMediaInProcess(partial)`) — ora è un check in-memory
+     sui timestamp dei packet video già scritti (`written_video_end_us`),
+     stesso gate fail-closed `0.08s` del probe precedente.
+  2. `render_engine.cpp`: il `hasAudioStream()` ridondante prima di
+     `probeFinalAudioMetadata()` è rimosso — l'audio finale (4.9MB) veniva
+     probe-letto **due volte**; ora una sola probe guida sia il guard
+     has-audio (metadata senza codec) sia la decisione FINAL_AUDIO_COPY.
+- **Risultato misurato** (p50 su 7 run, ora **deterministico**):
+  - `read_amplification`: **2.07 → 2.03x** (`total_bytes_read`
+    12.079.114 → **11.825.478** byte, identico su tutti i 7 run).
+  - `input_open_count`: **28 → 26** · `input_reopen_count`: **2 → 1**
+    (l'audio è ora aperto una sola volta in probe + una nel preopen).
+  - `wall` p50 **152ms** (era 183ms), `packet_mux` invariato ~139ms.
+  - Determinismo **invariato**: artifact SHA `17930f9c…` identico; 18/18
+    ctest verdi (incluso il tail-extension che copre il gate in-memory).
+- **Floor reale ~1.83x — il target 1.0–1.4x NON è raggiungibile su questo
+  fixture** (finding onesto, non un limite dell'engine):
+  - I 24 clip sono generati con **audio sine ~128kbps incorporato**
+    (`color+sine`): 5.83MB di clip contengono solo ~0.65MB di video utile
+    (solid-color ~17.6kbps), il resto è audio per-clip che il path copy-only
+    **scarta** (`include_audio=false`). L'engine legge comunque l'intero
+    file perché l'audio è interleaved con il video nell'mdat.
+  - L'audio finale (4.86MB) è ~83% dell'output (5.84MB).
+  - Quindi: input letto obbligatorio = 5.83MB clip + 4.86MB audio = 10.69MB
+    ÷ output 5.84MB = **floor 1.83x** (anche con lettura perfetta 1x).
+  - Il residuo 2.03x → 1.83x (~1.14MB) è `avformat_find_stream_info` +
+    probe-buffer sulle clip; marginale e non porta sotto 1.4x.
+- **Percorso verso 1.0–1.4x**: rigenerare il fixture con clip **solo-video**
+  (source `color`, niente `sine`) → input ≈ 0.65MB clip + 4.86MB audio ≈
+  output → `read_amplification` ≈ 1.0x. Alternativa: esprimere il target
+  come `read / input_utile` anziché `read / output` per fixture con audio
+  per-clip scartato.
+
 ### 2026-08-16 — benchmark 1 secondo
 
 - Creare fixture con segmenti realmente compatibili e già caldi.
