@@ -191,6 +191,24 @@ convergere gli adapter, non per aggiungere un altro endpoint.
   telemetry e gate full-module. Non si devono mantenere dieci logiche di
   enqueue diverse.
 
+### 2026-08-17 — CanonicalJobSubmitter e telemetry intake_source
+
+- Introdotto `creatorflow.CanonicalJobSubmitter` come unico percorso di
+  submission Job+Task (il vecchio `JobSubmissionService` resta come alias
+  deprecato). Il submitter stampa `IntakeSource` su ogni submission e
+  registra la telemetria `pipeline.intake_source_accepted_total{intake_source}`.
+- Gli adapter che già passavano dal submitter (canonico `/api/v1/jobs`,
+  creator push, batch, instaedit BFF) ora stampano il proprio
+  `intake_source`: `canonical`, `creator`, `batch`, `instaedit`.
+- Le superfici che accodano direttamente (script `generate-with-images`,
+  script ingress `generate`/`jobs/:kind`, pipeline-run) registrano il proprio
+  `intake_source`: `script_generate`, `script_kind`, `pipeline_run`.
+- La famiglia è registrata sul collector `/metrics` (insieme alla preesistente
+  `pipeline_creator_intake_accepted_total`, che prima non era esposta).
+- Obiettivo: misurare l'utilizzo degli alias prima di deprecare/rimuovere
+  qualsiasi endpoint legacy (gate full-module `pre-removal-verify.sh`).
+  Nessun alias è stato rimosso in questa tranche.
+
 ### 2026-08-17 — mixed/concat copy-only: SegmentExecutionMode Reject + invariant canary
 
 - `SegmentExecutionMode` ridotto a `PacketCopy / Reject` (rimossi
@@ -211,6 +229,228 @@ convergere gli adapter, non per aggiungere un altro endpoint.
   `.github/workflows/worker-image.yml`): render all-canonical → SUCCEEDED
   con `frames=0`/`encode_passes=0`; scena 720p fuori profilo →
   `segment_execution_rejected` (rc=1, `frames=0`) senza crash del worker.
+
+### 2026-08-17 — soak test 20 job via POST /api/v1/jobs
+
+- Eseguito il soak test con **20 job** tutti attraverso `POST /api/v1/jobs`
+  (payload canonico a 10 clip, `job_type=clip.stock.v1`, nessun pin di
+  placement — lo scheduler ha distribuito). Script: `ops/jobs/soak_20.sh`
+  (mint M2M → 20 POST → poll fino a stato terminale → verdetto aggregato).
+- **Risultato: 18/20 SUCCEEDED, 2/20 FAILED.** Cache perfettamente calda su
+  tutti i job riusciti: **30 hit / 0 miss / 0 download**, `packet_copy`,
+  0 frame encoded, SHA `560f5003…` identico al run canonico, delivery
+  `drive-smoke` SUCCEEDED.
+- I 2 FAILED sono il **conflitto spool già noto in FASE 7** (CAS conflict
+  `expected status=UPLOADING` al `MarkUploaded`) su `host_57_131_20_173` e
+  `velox-worker-13197`, entrambi sulla immagine `9e7dcf3c…` (pre-Ensure).
+  Il canary `host_57_129_132_133` sulla immagine più recente
+  `f4907398…` ha avuto 0 failure (5/5 SUCCEEDED).
+- Conferma: il fix `spool.Store.Ensure` (già implementato localmente, non
+  ancora deployato) è il rimedio previsto; il rollout agli altri 3 worker
+  (FASE 9) è il prerequisito per un soak 20/20 pulito.
+
+### 2026-08-17 — rollout altri 3 worker sul digest canary (FASE 9)
+
+- Eseguito `fleetctl rollout` seriale con `--wait-ready` sugli altri 3 worker
+  (`host_57_131_20_173`, `velox-worker-13197`, `velox-worker-523925eb`)
+  verso il digest canary `sha256:f4907398…` (l'immagine con 0 failure nel
+  soak; i 3 worker erano su `9e7dcf3c…` pre-Ensure).
+- 3/3 update SUCCEEDED e READY sul nuovo digest; fleet ora uniforme.
+- Verifica post-rollout: **4/4 worker su `f4907398…`**, 4/4 CONNECTED /
+  HEALTHY / AVAILABLE / session_active=true, 0 job attivi.
+- Nota: `f4907398…` è l'immagine canary che nel soak ha avuto 0 failure
+  (5/5 SUCCEEDED), a fronte dei 2 failure spool sull'immagine precedente
+  `9e7dcf3c…`. Il codice `spool.Store.Ensure` nel repo resta lavoro locale
+  non ancora pubblicato; un prossimo soak 20/20 pulito confermerà la
+  risoluzione del conflitto CAS su tutta la fleet.
+
+### 2026-08-17 — re-soak 20 job su fleet uniforme (20/20 SUCCEEDED)
+
+- Dopo il rollout FASE 9 (fleet uniforme su `f4907398…`), re-eseguito il
+  soak con 20 job via `POST /api/v1/jobs` (stesso payload canonico a 10
+  clip, nessun pin). Script: `ops/jobs/soak_20.sh`.
+- **Risultato: 20/20 SUCCEEDED, 0 FAILED, 0 timeout.** Il conflitto spool
+  CAS (`expected status=UPLOADING` al MarkUploaded) che aveva prodotto i 2
+  failure sul digest `9e7dcf3c…` **non è ricomparso**.
+- Cache calda: il primo job (cold-start dopo il restart del rollout) ha
+  scaricato i 10 asset unici (20 hit / 10 miss / 10 download); i successivi
+  19 job sono tutti **30 hit / 0 miss / 0 download** (hit_ratio=1).
+- Su tutti i 20: SHA `560f5003…` identico (determinismo), `packet_copy`,
+  0 frame encoded, `final_concat_stream_copy`, delivery `drive-smoke`
+  SUCCEEDED.
+- Lo scheduler ha distribuito tutti i 20 job sullo stesso worker
+  (`velox-worker-523925eb`); fleet finale 4/4 CONNECTED / HEALTHY /
+  AVAILABLE / session_active=true, 0 job attivi.
+
+### 2026-08-17 — spool: unica superficie Ensure/GetOrCreate
+
+- Aggiunto `spool.Store.Ensure(ctx, entry) (*SpoolEntry, bool, error)` come
+  unica superficie di registrazione del publisher: row inesistente → INSERT
+  (`created=true`); row esistente con contenuto compatibile → ritorna la row
+  esistente (`created=false`); row esistente con contenuto incompatibile
+  (sha256/size diversi) → `ErrIncompatibleSpool`.
+- Il publisher (`registerOutputSpool`) ora usa `Ensure` e non gestisce più
+  `ErrDuplicateSpool` nei caller: la logica di dedup vive una sola volta nel
+  store. Nessuna nuova tabella, nessun secondo spool, nessuna map in-memory.
+- Compatibilità definita sul fingerprint di contenuto (sha256 + size_bytes);
+  `local_path` non è parte del confronto (può cambiare legittimamente per
+  spill/re-render). Una row creata ma mai finalizzata (MarkReady non eseguito)
+  è compatibile: il MarkReady del chiamante la completa.
+- 6 test obbligatori verdi: `TestEnsure_NewOutputCreatesRow`,
+  `TestEnsure_DuplicateRenderingReturnsExisting`,
+  `TestEnsure_DuplicateOutputReadyReturnsExisting`,
+  `TestEnsure_DuplicateUploadingReturnsExisting`,
+  `TestEnsure_AfterRestartReturnsExisting`,
+  `TestEnsure_IncompatibleIdentityFails`.
+
+### 2026-08-17 — certificazione recovery artifact (FASE 8)
+
+- Fix `CompleteChunked` idempotente: short-circuit `COMPLETED` (con fencing
+  worker/lease/revision/attempt) prima del guard "no chunks", perché la prima
+  complete ha già fatto Receive → Finalize → cleanup (row rimosse): un retry
+  da risposta persa non deve più cadere nel guard e fallire come 400.
+- Refactor `openTestEnvAt` in `service_test.go` per riaprire lo STESSO file
+  SQLite (simulazione restart master) mantenendo `setupTestEnv` delegato.
+- 3 test master-side verdi (`chunked_recovery_test.go`):
+  - `TestChunkedRecovery_DuplicateChunkSucceedsWithoutDuplication` — chunk 0,
+    1, 1 (retry), 2 → complete → READY con SHA/size della concatenazione
+    esatta, 3 sole row (nessuna duplicazione).
+  - `TestChunkedRecovery_DuplicateCompleteReturnsSameArtifact` — secondo
+    `/complete` restituisce lo STESSO artifact (COMPLETED short-circuit), non
+    un 400; fencing su worker diverso (`ErrTransitionConflict`).
+  - `TestChunkedRecovery_MasterRestartDuringUploadResumesAndSucceeds` —
+    chunk 0 → close DB → riapri STESSO file → chunk 1 → complete → READY,
+    session COMPLETED (chunk/sessione persistono).
+- 1 test worker-side verde (`artifact_upload_resume_test.go`):
+  `TestResumeArtifactUpload_WorkerRestartPersistsSpoolAndCommits` — spool
+  FILE-BACKED (non :memory:), close + riapri lo stesso file, la row UPLOADING
+  persiste e il resume loop ri-carica dal path spillato e porta a COMMITTED.
+- Invarianti preservati: SHA/fsync/atomic-promotion/fencing/durable-spool non
+  toccati; build + vet + test (artifacts, worker, spool) verdi.
+
+### 2026-08-17 — performance <1s: baseline misurata e primo fix finalize
+
+- Baseline reale dal job warm di produzione (`clip.stock.v1`, 180s contenuto,
+  cache 30/0/0) via `phase_breakdown` dell'attempt:
+  - `compile` **498ms** (target <300ms)
+  - `render` **749ms** (target <250ms, packet-copy)
+  - `finalize` **250ms** (target <200ms)
+  - `asset_wait`/`cache_lookup`/`download`/`encode` tutti 0 (warm).
+- I due bottleneck maggiori (`compile` + `render`) sono fasi del **native
+  C++ engine** (apertura input + packet mux): il lavoro è già in corso nel
+  modulo `video-engine-cpp` (WIP non committato su `render_engine.cpp`,
+  `segment_execution.cpp`, `media_packet_pipeline.hpp`) e sui commit
+  `d24d337c` (open copy-only mux inputs in parallel) + `31be840b`
+  (parallelize artifact manifest + skip ffprobe on sidecar).
+- Fix Go-side sul **finalize**: `executors.artifactFromFile` calcolava lo
+  SHA-256 con `os.ReadFile` (l'intero artifact in RAM, ~79MB per il job
+  canonico, OOM su output da GB) → convertito a **SHA streaming** con buffer
+  da 1 MiB, identico pattern di `publisher.streamSHAAndSize`. Digest esatto
+  invariato (test di regressione `artifact_from_file_test.go`: hash streaming
+  == `sha256.Sum256` su file >1MiB, rifiuto file vuoto/mancante).
+- Invarianti preservati: SHA verification intatta, fsync/atomic-promotion/
+  fencing/durable-spool non toccati. Build + vet + test taskrunner/worker
+  verdi.
+- Rimane aperto: il target `<250ms` packet-copy e `<300ms` compile richiedono
+  il completamento del WIP engine C++; il `<200ms` finalize dipende dallo SHA
+  (~150ms per 79MB, non eliminabile) + il flush/finalize dell'engine.
+
+### 2026-08-17 — tranche performance: misurazione completa submit→commit
+
+- Misurazione sulla fleet v1.2.38 (`e74e2b7c…`), job warm `clip.stock.v1`
+  (180s contenuto, cache 30/0/0, worker `host_57_131_20_173`).
+- Pipeline completa (job warm, fleet idle):
+  - submit→assignment: **~0ms** (`time_to_first_worker_ms=0`, `queue_ms=0`;
+    in questa misura il gap `created→started` di 23s era SOLO serializzazione
+    dello scheduler dietro il job precedente sullo stesso worker).
+  - assignment→compile: **~0ms** (`cache_lookup=0`, `lease_wait=0`, cache
+    warm).
+  - compile: **776ms** (target <300ms, +476ms)
+  - render (packet-copy): **1057ms** (target <250ms, +807ms)
+  - finalize: **279ms** (target <200ms, +79ms)
+  - commit/delivery `drive-smoke`: upload **20.0s** per 79.6MB (~4 MB/s,
+    `total_ms=20.9s`) — il collo di bottiglia NETWORK, fuori dai target
+    render-pipeline.
+- Somma render-pipeline (compile+render+finalize) = **2112ms** vs target
+  **<750ms**; gap 1.36s concentrato in `render` (+807ms) e `compile`
+  (+476ms), entrambi fasi del native C++ engine (WIP non committato).
+- Job cold-start (stesso payload, 10 download): `compile=864ms`,
+  `render=1211ms`, `finalize=346ms`, `download=1171ms`, `cache_lookup=298ms`.
+- Conclusione: il `<1s` locale NON è raggiungibile con i soli fix Go-side;
+  servono (a) il WIP engine C++ per compile/render e (b) il fix SHA streaming
+  `artifactFromFile` (già fatto, non ancora rilasciato) per il margine sul
+  finalize. L'upload Drive (20s) è un collo di bottiglia separato da
+  profilare a parte.
+
+### 2026-08-17 — engine C++: WIP integrato, build/test verdi e delta compile/render
+
+- Il WIP non committato visto su `render_engine.cpp` / `segment_execution.cpp` /
+  `media_packet_pipeline.hpp` risulta **già committato**: `7baf98b5`
+  (`feat(engine): enforce copy-only mixed/concat with fail-closed Reject` —
+  **correctness**, rimuove il fallback libx264: nessun segmento non copy-safe
+  viene mai ricodificato) + `d24d337c` (`perf(engine): open copy-only mux
+  inputs in parallel` — il delta perf reale). Nessuna modifica pendente su
+  `video-engine-cpp/`.
+- **Build + test**: `cmake --build build --parallel` verde (tutti i target,
+  `velox_video_engine` contiene le stringhe distintive di `7baf98b5`);
+  `ctest` **18/18 pass** (inclusi `render_mixed_tests`, `render_plan_v2_tests`,
+  `render_copy_only_zero_intermediates_tests`).
+- **Delta misurato** sul benchmark canonico `COPY_ONLY_CANONICAL_5M_V1`
+  (24 clip × 375 frame = 300s 1080p, spec digest `8dce9a44…`) con
+  `velox-benchmark -runs 5` sull'engine corrente vs baseline Phase-1
+  (`be1a56b4`, engine sequenziale):
+  - `wall` p50: **333ms → 183ms** (−45%)
+  - `engine.packet_mux` (render): **273ms → 139ms** (−49%)
+  - `engine.render` (exclusive): **280ms → 145ms** (−48%)
+  - `input_reopen_count`: **27 → 2** (il preopen parallelo elimina i
+    ri-aprimenti sequenziali)
+  - `read_amplification`: **2.40 → 2.07**; `write_amplification`: **1.00x**
+    (`mux_bytes_written == final_bytes_written == 5.838.599`, misurato, non
+    più il limite sampler 0.05 della Phase-1)
+  - Invarianti zero-spawn preservati: `external_process_count=0`,
+    `ffmpeg=0`, `ffprobe=0`, `temp_bytes_written=0`, `file_copy_count=0`.
+  - Determinismo: **5/5 run** stesso artifact SHA `17930f9c…` (il byte-SHA
+    differisce dalla Phase-1 `324a8ecd…` perché il fixture è rigenerato e il
+    muxer è cambiato; la determinismo intra-run resta intatto).
+- **Nota onesta**: questo isola l'engine. Il `render` di produzione
+  (`clip.stock.v1`, 1057ms su v1.2.38) include overhead Go worker/DataServer
+  + delivery non presenti nel benchmark locale; il target end-to-end richiede
+  il **rilascio** dell'immagine con queste modifiche engine + i fix Go-side
+  già fatti (SHA streaming `artifactFromFile`).
+
+### 2026-08-17 — profilo upload Drive: rete, NON re-upload
+
+- Domanda: i 20s/79MB del commit/delivery sono collo di bottiglia di rete o
+  re-upload? Misurato sui 20 job del re-soak (`drive-smoke`, artifact
+  79.625.950 byte) via `fleetctl job inspect --json` → `deliveries[]`.
+- **Verdetto: è rete, zero re-upload.** Su tutti i 20 job:
+  `retry_count=0`, `attempt_count=1` → ogni delivery ha caricato l'artifact
+  **esattamente una volta** (nessun retry, nessun doppio upload).
+- Distribuzione dell'upload reale (`upload_ms`, stesso file 79.6MB):
+  - min **4000ms** · p50 **8000ms** · p90 **26000ms** · max **31000ms**
+  - throughput equivalente **53 → 159 Mbps** (p50 ~80 Mbps) — la firma di un
+    percorso di rete condiviso/variabile, non di un difetto deterministico.
+  - il “20s/79MB ≈ 4MB/s” del tranche precedente era **un'osservazione in una
+    coda larga**, non il valore tipico (qui p50 upload = 8s).
+- Contributo secondario — `queue_ms` (coda delivery): min 310ms · p50 ~8s ·
+  max 32s. Causa: il delivery runner è `Concurrency=2`
+  (`DefaultRunnerConfig`), quindi i 20 job in burst si accodano dietro il pool
+  da 2; `total_ms` p50 ~20s. Non è upload: è attesa di slot.
+- Code smell rilevato in `integrations/drive/service_files.go#UploadFile`:
+  usa `uploadType=multipart` — **un solo POST monolitico** con l'intero
+  79.6MB bufferizzato in RAM (`bytes.Buffer`) prima dell'invio. La
+  documentazione Google Drive prescrive `uploadType=resumable` per file
+  >5MB (resume su fallimento transitorio + nessun full-buffer). Nota: in
+  questo ambiente il multipart a 79.6MB **riesce** (20/20), quindi non è un
+  blocco attuale ma un rischio latente (un'interruzione = re-upload integrale
+  da zero) + spike di memoria con `Concurrency=2` (~160MB in volo).
+- Azioni possibili (non eseguite, da decidere):
+  1. migrare `UploadFile` a `uploadType=resumable` (chunked + resume) per
+     i file >5MB — elimina il full-buffer e il re-upload integrale su retry;
+  2. alzare `Concurrency` delivery (es. 2→4) per assorbire i burst e
+     ridurre `queue_ms`, bilanciando la pressione sulle API Drive;
+  3. verificare se `drive-smoke` punta davvero alla Drive API reale (il
+     multipart >5MB che riesce è incoerente con la doc Google).
 
 ### 2026-08-16 — benchmark 1 secondo
 
