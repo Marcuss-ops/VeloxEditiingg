@@ -1,1 +1,1 @@
-v1.2.36-canonical
+v1.2.37-canonical
