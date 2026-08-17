@@ -342,6 +342,38 @@ func TestCanonicalExtension_Normalization(t *testing.T) {
 	}
 }
 
+// TestComputeLocalManifestLight_SkipsFFprobe — the light variant is the
+// correct computation for non-media receipts (progress sidecars, JSON
+// documents). It must still hash + size + sniff the file, but must NOT
+// run the external ffprobe pass: FfprobeOK stays false and FfprobeErr
+// stays empty (no probe was attempted), while SHA/size stay exact.
+func TestComputeLocalManifestLight_SkipsFFprobe(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "receipt.json")
+	content := []byte(`{"progress":100,"phase":"completed"}`)
+	if err := os.WriteFile(p, content, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	want := sha256.Sum256(content)
+
+	m, err := ComputeLocalManifestLight(context.Background(), p)
+	if err != nil {
+		t.Fatalf("ComputeLocalManifestLight → %v", err)
+	}
+	if m.SHA256Hex != hex.EncodeToString(want[:]) {
+		t.Errorf("light sha = %s; want %s", m.SHA256Hex, hex.EncodeToString(want[:]))
+	}
+	if m.SizeBytes != int64(len(content)) {
+		t.Errorf("light size = %d; want %d", m.SizeBytes, len(content))
+	}
+	if m.FfprobeOK {
+		t.Errorf("light FfprobeOK = true; want false (ffprobe must be skipped)")
+	}
+	if m.FfprobeErr != "" {
+		t.Errorf("light FfprobeErr = %q; want empty (no probe attempted)", m.FfprobeErr)
+	}
+}
+
 func TestComputeLocalManifest_MissingFile_Errors(t *testing.T) {
 	_, err := ComputeLocalManifest(context.Background(), filepath.Join(t.TempDir(), "nope.mp4"))
 	if err == nil {

@@ -107,7 +107,10 @@ func verifyAndBuildOutputs(ctx context.Context, outputPath string, startedAt tim
 
 	outputs = []executor.ArtifactRef{{Type: "render.output", Hash: outputHash, URI: outputPath, SizeBytes: outputSize}}
 	sidecarPath := outputPath + ".progress.json"
-	if sidecarManifest, sidecarErr := publisher.ComputeLocalManifest(ctx, sidecarPath); sidecarErr == nil && sidecarManifest.SizeBytes > 0 {
+	// The progress sidecar is a JSON receipt, not a media artifact: the
+	// light manifest (SHA + size + sniff) is the correct computation and
+	// avoids a wasted ffprobe process spawn on the hot path.
+	if sidecarManifest, sidecarErr := publisher.ComputeLocalManifestLight(ctx, sidecarPath); sidecarErr == nil && sidecarManifest.SizeBytes > 0 {
 		// The renderer owns this file as a durable receipt. Do not remove it
 		// here: the worker must keep it available through declaration,
 		// upload, and the master's commit acknowledgement.

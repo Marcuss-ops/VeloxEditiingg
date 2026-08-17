@@ -102,13 +102,39 @@ var (
 // Top-level computation.
 // ────────────────────────────────────────────────────────────────────────
 
+// manifestOptions controls the optional passes of the local manifest
+// computation. The zero value runs every pass (SHA + sniff + ffprobe).
+type manifestOptions struct {
+	// skipFFprobe skips the external ffprobe enrichment pass. It is the
+	// correct choice for non-media receipts (e.g. the engine progress
+	// sidecar, a JSON document): running ffprobe on such a file is wasted
+	// work (the probe always fails with "no media streams") and a wasted
+	// process spawn on the hot path.
+	skipFFprobe bool
+}
+
 // ComputeLocalManifest reads path once, streams through the SHA
 // hasher + byte counter, then enriches with sniff + optional
 // ffprobe. Returns a fully-populated manifest.
 //
 // The function never buffers the whole file in memory; large outputs
-// stay streaming even on 4 GB files.
+// stay streaming even on 4 GB files. The SHA-256 and the ffprobe
+// enrichment are independent heavy passes over the same file; they run
+// concurrently so the manifest wall time is the max of the two, not
+// their sum.
 func ComputeLocalManifest(ctx context.Context, path string) (*OutputManifest, error) {
+	return computeLocalManifest(ctx, path, manifestOptions{})
+}
+
+// ComputeLocalManifestLight computes a manifest without the external
+// ffprobe enrichment pass. Use it for non-media artifacts (progress
+// receipts, JSON sidecars) where a media probe is definitionally
+// meaningless and would only add a process spawn to the hot path.
+func ComputeLocalManifestLight(ctx context.Context, path string) (*OutputManifest, error) {
+	return computeLocalManifest(ctx, path, manifestOptions{skipFFprobe: true})
+}
+
+func computeLocalManifest(ctx context.Context, path string, opts manifestOptions) (*OutputManifest, error) {
 	if path == "" {
 		return nil, fmt.Errorf("%w: path is empty", ErrFileMissing)
 	}
@@ -123,11 +149,35 @@ func ComputeLocalManifest(ctx context.Context, path string) (*OutputManifest, er
 	manifestStarted := time.Now()
 	defer func() { m.Timings.TotalMS = time.Since(manifestStarted).Milliseconds() }()
 
+	// SHA-256 and ffprobe enrichment are independent reads of the same
+	// artifact. Streaming them concurrently (the output was just written
+	// and is page-cache resident) makes the manifest wall time the max of
+	// the two passes rather than their sum. streamSHAAndSize owns
+	// m.SHA256Hex / m.SizeBytes; the probe result is kept in a local and
+	// applied after the join, so no field is written concurrently.
 	shaStarted := time.Now()
-	if err := streamSHAAndSize(path, m); err != nil {
-		return nil, err
+	var shaErr error
+	shaDone := make(chan struct{})
+	go func() {
+		defer close(shaDone)
+		shaErr = streamSHAAndSize(path, m)
+	}()
+
+	var probe MediaProbe
+	var perr error
+	probeStarted := time.Now()
+	if !opts.skipFFprobe {
+		probe, perr = ProbeMediaDetails(ctx, path)
 	}
+	m.Timings.FfprobeMS = time.Since(probeStarted).Milliseconds()
+
+	// Join the hasher before touching m.SizeBytes / m.SHA256Hex (owned by
+	// the goroutine) or returning.
+	<-shaDone
 	m.Timings.SHA256MS = time.Since(shaStarted).Milliseconds()
+	if shaErr != nil {
+		return nil, shaErr
+	}
 
 	// mimeSniffLen is the head-buffer size http.DetectContentType needs
 	// for a confident guess. Go's stdlib does not expose this constant;
@@ -160,9 +210,9 @@ func ComputeLocalManifest(ctx context.Context, path string) (*OutputManifest, er
 
 	// ffprobe enrichment is best-effort; missing binary must not
 	// fail the manifest computation.
-	probeStarted := time.Now()
-	probe, perr := ProbeMediaDetails(ctx, path)
-	m.Timings.FfprobeMS = time.Since(probeStarted).Milliseconds()
+	if opts.skipFFprobe {
+		return m, nil
+	}
 	if perr != nil {
 		m.FfprobeErr = perr.Error()
 	} else {
