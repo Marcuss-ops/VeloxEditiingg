@@ -124,6 +124,16 @@ class InputSessionRegistry {
 public:
     InputSession* resolve(const std::filesystem::path& path, std::string& error);
 
+    // Opens every distinct path concurrently. Each open is an independent
+    // libav context setup (avformat_open_input + avformat_find_stream_info),
+    // so driving them from multiple threads is safe and turns the
+    // sequential per-segment open cost into roughly one parallel round.
+    // Returns false and sets error on the first failing path. Paths that
+    // are already registered are skipped. After a successful preopen,
+    // resolve() returns the pre-opened sessions without further I/O.
+    bool preopen(const std::vector<std::filesystem::path>& paths,
+                 std::string& error);
+
 private:
     std::map<std::string, std::unique_ptr<InputSession>> sessions_;
 };

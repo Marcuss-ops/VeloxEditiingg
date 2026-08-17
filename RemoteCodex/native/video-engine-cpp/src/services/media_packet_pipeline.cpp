@@ -31,9 +31,12 @@ extern "C" {
 #include <fcntl.h>
 #include <memory>
 #include <limits>
+#include <set>
 #include <sstream>
 #include <system_error>
+#include <thread>
 #include <unistd.h>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -287,6 +290,62 @@ InputSession* InputSessionRegistry::resolve(const fs::path& path, std::string& e
     InputSession* result = session.get();
     sessions_.emplace(key, std::move(session));
     return result;
+}
+
+bool InputSessionRegistry::preopen(const std::vector<fs::path>& paths,
+                                   std::string& error) {
+    // Register every distinct, not-yet-open path first (single-threaded map
+    // writes), then open each registered session concurrently. Each session
+    // owns an independent AVFormatContext, so libav is safe to drive from
+    // multiple threads for these independent opens; no shared state is
+    // mutated during the parallel phase.
+    std::vector<fs::path> unique;
+    std::vector<InputSession*> sessions;
+    std::set<std::string> seen;
+    unique.reserve(paths.size());
+    sessions.reserve(paths.size());
+    for (const auto& path : paths) {
+        const std::string key = path.lexically_normal().string();
+        if (!seen.insert(key).second) {
+            continue;
+        }
+        if (sessions_.find(key) != sessions_.end()) {
+            continue;
+        }
+        unique.push_back(path);
+        auto session = std::make_unique<InputSession>();
+        sessions.push_back(session.get());
+        sessions_.emplace(key, std::move(session));
+    }
+    if (unique.empty()) {
+        return true;
+    }
+    // Bound concurrent opens so a pathological many-segment job cannot
+    // oversubscribe the host with one thread per input. Each chunk is a
+    // fully parallel round; chunks run sequentially.
+    constexpr std::size_t kMaxConcurrentOpens = 8;
+    std::vector<std::string> errors(unique.size());
+    std::vector<bool> ok(unique.size(), false);
+    for (std::size_t begin = 0; begin < unique.size(); begin += kMaxConcurrentOpens) {
+        const std::size_t end = std::min(unique.size(), begin + kMaxConcurrentOpens);
+        std::vector<std::thread> workers;
+        workers.reserve(end - begin);
+        for (std::size_t i = begin; i < end; ++i) {
+            workers.emplace_back([&, i]() {
+                ok[i] = sessions[i]->open(unique[i], errors[i]);
+            });
+        }
+        for (auto& worker : workers) {
+            worker.join();
+        }
+    }
+    for (std::size_t i = 0; i < unique.size(); ++i) {
+        if (!ok[i]) {
+            error = errors[i];
+            return false;
+        }
+    }
+    return true;
 }
 
 // Same-TU helpers only (no header declarations): keep them internal so the
@@ -694,6 +753,27 @@ bool muxCopyOnly(const CopyOnlyMuxRequest& request, CopyOnlyMuxResult* result) {
     packet::InputSessionRegistry input_sessions;
     int64_t timeline_offset = 0;
     std::string error;
+
+    // Pre-open every distinct input concurrently. The dominant cost of a
+    // warm copy-only mux is the per-input avformat_find_stream_info probe;
+    // opening all inputs in parallel turns N sequential probes into roughly
+    // one parallel round while keeping the sequential packet loop below on
+    // already-open sessions (resolve() is then map-lookup only).
+    {
+        std::vector<fs::path> all_inputs;
+        all_inputs.reserve(request.video_segments.size() +
+                           (request.audio.has_value() ? 1 : 0));
+        for (const auto& segment : request.video_segments) {
+            all_inputs.push_back(segment.path);
+        }
+        if (request.audio.has_value()) {
+            all_inputs.push_back(request.audio->path);
+        }
+        if (!input_sessions.preopen(all_inputs, error)) {
+            cleanupPartial();
+            return fail(result, error);
+        }
+    }
 
     for (const auto& segment : request.video_segments) {
         if (segment.source_duration_us <= 0 || segment.source_in_us < 0) {
