@@ -388,7 +388,7 @@ func TestCheckIdempotencyFastPath(t *testing.T) {
 func TestPersistPendingRemoteForwarding(t *testing.T) {
 	t.Run("missing source provider", func(t *testing.T) {
 		r := &Resolver{forwardRepo: &fakeForwardingRepo{}}
-		_, err := r.PersistPendingRemoteForwarding(context.Background(), "", "job-1", "scene.composite.v1", "")
+		_, err := r.PersistPendingRemoteForwarding(context.Background(), "", "job-1", "scene.composite.v1", "", "")
 		if err == nil {
 			t.Fatalf("expected error for empty source provider")
 		}
@@ -401,7 +401,7 @@ func TestPersistPendingRemoteForwarding(t *testing.T) {
 			},
 		}
 		r := &Resolver{forwardRepo: repo}
-		cf, err := r.PersistPendingRemoteForwarding(context.Background(), "remote_engine", "job-1", "scene.composite.v1", "")
+		cf, err := r.PersistPendingRemoteForwarding(context.Background(), "remote_engine", "job-1", "scene.composite.v1", "", "")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -420,7 +420,7 @@ func TestPersistPendingRemoteForwarding(t *testing.T) {
 	t.Run("lookup error other than no row", func(t *testing.T) {
 		repo := &fakeForwardingRepo{getSourceErr: errors.New("db down")}
 		r := &Resolver{forwardRepo: repo}
-		_, err := r.PersistPendingRemoteForwarding(context.Background(), "remote_engine", "job-1", "scene.composite.v1", "")
+		_, err := r.PersistPendingRemoteForwarding(context.Background(), "remote_engine", "job-1", "scene.composite.v1", "", "")
 		if err == nil {
 			t.Fatalf("expected error from lookup failure")
 		}
@@ -429,7 +429,7 @@ func TestPersistPendingRemoteForwarding(t *testing.T) {
 	t.Run("creates new forwarding with default executor", func(t *testing.T) {
 		repo := &fakeForwardingRepo{}
 		r := &Resolver{forwardRepo: repo}
-		cf, err := r.PersistPendingRemoteForwarding(context.Background(), "remote_engine", "job-new", "", "")
+		cf, err := r.PersistPendingRemoteForwarding(context.Background(), "remote_engine", "job-new", "", "", IntakeSourcePipelineRun)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -445,12 +445,15 @@ func TestPersistPendingRemoteForwarding(t *testing.T) {
 		if repo.insertCalls[0].SourceProvider != "remote_engine" || repo.insertCalls[0].SourceJobID != "job-new" {
 			t.Fatalf("insert called with wrong source: %+v", repo.insertCalls[0])
 		}
+		if repo.insertCalls[0].IntakeSource != IntakeSourcePipelineRun {
+			t.Fatalf("insert called with intake_source %q, want %q", repo.insertCalls[0].IntakeSource, IntakeSourcePipelineRun)
+		}
 	})
 
 	t.Run("insert error", func(t *testing.T) {
 		repo := &fakeForwardingRepo{insertErr: errors.New("insert failed")}
 		r := &Resolver{forwardRepo: repo}
-		_, err := r.PersistPendingRemoteForwarding(context.Background(), "remote_engine", "job-new", "", "")
+		_, err := r.PersistPendingRemoteForwarding(context.Background(), "remote_engine", "job-new", "", "", "")
 		if err == nil {
 			t.Fatalf("expected error from insert failure")
 		}

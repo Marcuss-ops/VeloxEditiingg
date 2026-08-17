@@ -25,7 +25,7 @@ import (
 // incomplete response from being mistaken for a forwardable worker payload.
 func (r *Resolver) PersistPendingRemoteForwarding(
 	ctx context.Context,
-	sourceProvider, sourceJobID, targetExecutorID, externalClientID string,
+	sourceProvider, sourceJobID, targetExecutorID, externalClientID, intakeSource string,
 ) (*store.CreatorForwarding, error) {
 	if r == nil || r.forwardRepo == nil {
 		return nil, domain.NewInvalidPayload("resolver", "unavailable", "resolver database access is required")
@@ -58,6 +58,7 @@ func (r *Resolver) PersistPendingRemoteForwarding(
 		SourceProvider:   sourceProvider,
 		SourceJobID:      sourceJobID,
 		TargetExecutorID: targetExecutorID,
+		IntakeSource:     intakeSource,
 		Status:           string(store.CFStatusPending),
 	})
 	if err != nil {

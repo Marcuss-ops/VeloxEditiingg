@@ -48,8 +48,9 @@ func (s *SQLiteStore) InsertCreatorForwarding(ctx context.Context, cf *CreatorFo
 		  poll_attempts, next_poll_at, last_polled_at, last_remote_status,
 		  locked_by, lease_id, lease_expires_at,
 		  last_error_code, last_error_message, last_error_class,
+		  intake_source,
 		  created_at, updated_at, forwarded_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		cf.ForwardingID, nullIfEmpty(cf.ExternalClientID), cf.SourceProvider, cf.SourceJobID, cf.SourceStatus,
 		cf.TargetExecutorID,
 		nullIfEmpty(cf.TargetJobID),
@@ -61,6 +62,7 @@ func (s *SQLiteStore) InsertCreatorForwarding(ctx context.Context, cf *CreatorFo
 		cf.LockedBy, cf.LeaseID,
 		cf.LeaseExpiresAt,
 		cf.LastErrorCode, cf.LastErrorMessage, cf.LastErrorClass,
+		cf.IntakeSource,
 		cf.CreatedAt, cf.UpdatedAt,
 		cf.ForwardedAt,
 	)

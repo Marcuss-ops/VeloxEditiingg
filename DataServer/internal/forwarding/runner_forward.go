@@ -4,6 +4,7 @@ package forwarding
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"velox-server/internal/creatorflow"
 	"velox-server/internal/logging"
@@ -112,5 +113,12 @@ func (r *CreatorForwardingRunner) atomicEnqueueAndForward(ctx context.Context, l
 	}
 	r.logInfo(ctx, logging.CodeForwardingForwarded, logging.F("forwarding", lease.ForwardingID, "job", out.JobID, "source", lease.SourceProvider))
 	r.recordForwarded()
+	// Record the intake source at the point the downstream Job is created
+	// (async forwarding completion), mirroring CanonicalJobSubmitter.Submit.
+	// Legacy rows and the synchronous creator-push path carry an empty source
+	// and are skipped.
+	if src := strings.TrimSpace(lease.IntakeSource); src != "" && r.intakeRec != nil {
+		r.intakeRec.IncAccepted(src)
+	}
 	return nil
 }

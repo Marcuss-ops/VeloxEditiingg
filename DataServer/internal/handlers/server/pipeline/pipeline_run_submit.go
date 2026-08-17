@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 
+	"velox-server/internal/creatorflow"
 	"velox-server/internal/pipelineruns"
 	"velox-server/internal/remoteengine"
 
@@ -219,7 +220,7 @@ func (h *Handlers) RetryPipelineRun() gin.HandlerFunc {
 
 		targetExecutor := firstStringResolver(workerPayload, "executor_id", "pipeline_id")
 		forwarding, persistErr := h.resolver.PersistPendingRemoteForwarding(
-			ctx, "remote_engine", jobID, targetExecutor, ClientIDFromContext(c),
+			ctx, "remote_engine", jobID, targetExecutor, ClientIDFromContext(c), creatorflow.IntakeSourcePipelineRun,
 		)
 		if persistErr != nil {
 			pipelineLog("RETRY: failed to persist forwarding run=%s: %v", pr.ID, persistErr)

@@ -46,10 +46,11 @@ type CreatorForwardingRunner struct {
 	enqueuer     *enqueue.Enqueuer
 	identity     string
 	metrics      *RunnerMetrics
-	telemetry    Telemetry             // optional Prometheus sink; nil-safe
-	logger       *logging.Logger       // structured logger; nil-safe via logf helpers
-	resolver     *creatorflow.Resolver // canonical forward-completed entry point
-	resolverOnce sync.Once             // guards lazyResolver against concurrent first-call race
+	telemetry    Telemetry                        // optional Prometheus sink; nil-safe
+	logger       *logging.Logger                  // structured logger; nil-safe via logf helpers
+	resolver     *creatorflow.Resolver            // canonical forward-completed entry point
+	intakeRec    creatorflow.IntakeSourceRecorder // optional intake-source sink; nil-safe
+	resolverOnce sync.Once                        // guards lazyResolver against concurrent first-call race
 
 	sem chan struct{} // bounded concurrency
 
@@ -153,6 +154,18 @@ func (r *CreatorForwardingRunner) WithTelemetry(t Telemetry) *CreatorForwardingR
 func (r *CreatorForwardingRunner) WithLogger(l *logging.Logger) *CreatorForwardingRunner {
 	if r != nil {
 		r.logger = l
+	}
+	return r
+}
+
+// WithIntakeSourceRecorder wires the canonical intake-source sink so the
+// runner records `pipeline.intake_source_accepted_total{intake_source}` at
+// the point the downstream Job is created (forwarding completion) for
+// async surfaces (pipeline-run). Production passes
+// velmetrics.NewIntakeSourceSink(); nil is a noop.
+func (r *CreatorForwardingRunner) WithIntakeSourceRecorder(rec creatorflow.IntakeSourceRecorder) *CreatorForwardingRunner {
+	if r != nil {
+		r.intakeRec = rec
 	}
 	return r
 }

@@ -228,7 +228,7 @@ func (s *pipelineRunService) Create(ctx context.Context, clientID string, req Cr
 
 		targetExecutor := firstStringResolver(workerPayload, "executor_id", "pipeline_id")
 		forwarding, persistErr := s.resolver.PersistPendingRemoteForwarding(
-			ctx, "remote_engine", jobID, targetExecutor, clientID,
+			ctx, "remote_engine", jobID, targetExecutor, clientID, creatorflow.IntakeSourcePipelineRun,
 		)
 		if persistErr != nil {
 			pipelineLog("CREATE: failed to persist forwarding run=%s job=%s: %v",

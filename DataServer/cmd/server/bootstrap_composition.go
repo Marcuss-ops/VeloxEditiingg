@@ -212,6 +212,10 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 	if m != nil && m.ForwardingRunner != nil {
 		m.ForwardingRunner.WithTelemetry(metricsCollector.ForwardingTelemetry())
 		m.ForwardingRunner.WithLogger(logging.NewLogger("forwarding.runner"))
+		// The runner records the intake source of async forwardings
+		// (pipeline-run) at the point the downstream Job is created, using
+		// the same canonical sink as CanonicalJobSubmitter.
+		m.ForwardingRunner.WithIntakeSourceRecorder(velmetrics.NewIntakeSourceSink())
 	}
 	if m != nil && m.RemoteEngineClient != nil {
 		// The remote-engine client owns the fragile retry loop at the

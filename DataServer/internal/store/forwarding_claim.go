@@ -84,7 +84,8 @@ func (s *SQLiteStore) ClaimCreatorForwardings(ctx context.Context, runnerID, lea
 		 )
 		 RETURNING forwarding_id, source_provider, source_job_id,
 		           target_executor_id, attempt_count,
-		           COALESCE(payload_json, ''), COALESCE(payload_sha256, '')`,
+		           COALESCE(payload_json, ''), COALESCE(payload_sha256, ''),
+		           COALESCE(intake_source, '')`,
 		runnerID, provisionalLeaseID, leaseExpiresISO, nowISO,
 		nowISO, nowISO, batch,
 	)
@@ -96,13 +97,15 @@ func (s *SQLiteStore) ClaimCreatorForwardings(ctx context.Context, runnerID, lea
 		forwardingID, sourceProvider, sourceJobID, targetExecutorID string
 		attemptCount                                                int
 		payloadJSON, payloadSHA256                                  string
+		intakeSource                                                string
 	}
 	var claimed []claimedRow
 	for rows.Next() {
 		var c claimedRow
 		if err := rows.Scan(&c.forwardingID, &c.sourceProvider, &c.sourceJobID,
 			&c.targetExecutorID, &c.attemptCount,
-			&c.payloadJSON, &c.payloadSHA256); err != nil {
+			&c.payloadJSON, &c.payloadSHA256,
+			&c.intakeSource); err != nil {
 			return nil, wrapDBInfrastructure("ClaimCreatorForwardings: scan claimed row", err)
 		}
 		claimed = append(claimed, c)
@@ -150,6 +153,7 @@ func (s *SQLiteStore) ClaimCreatorForwardings(ctx context.Context, runnerID, lea
 			SourceProvider:   c.sourceProvider,
 			SourceJobID:      c.sourceJobID,
 			TargetExecutorID: c.targetExecutorID,
+			IntakeSource:     c.intakeSource,
 			PayloadJSON:      c.payloadJSON,
 			PayloadSHA256:    c.payloadSHA256,
 		})

@@ -76,6 +76,7 @@ type CreatorForwarding struct {
 	LastErrorCode    string `json:"last_error_code,omitempty"`
 	LastErrorMessage string `json:"last_error_message,omitempty"`
 	LastErrorClass   string `json:"last_error_class,omitempty"`
+	IntakeSource     string `json:"intake_source,omitempty"`
 	CreatedAt        string `json:"created_at"`
 	UpdatedAt        string `json:"updated_at"`
 	ForwardedAt      string `json:"forwarded_at,omitempty"`
@@ -93,6 +94,7 @@ type CreatorForwardingLease struct {
 	SourceProvider   string
 	SourceJobID      string
 	TargetExecutorID string
+	IntakeSource     string
 	PayloadJSON      string
 	PayloadSHA256    string
 }
