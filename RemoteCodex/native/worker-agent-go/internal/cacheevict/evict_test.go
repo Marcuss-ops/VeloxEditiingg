@@ -8,12 +8,28 @@ import (
 	"testing"
 	"time"
 
+	"velox-shared/assetref"
 	"velox-worker-agent/internal/workercache"
 )
 
-func writeCacheFile(t *testing.T, root, name string, data []byte) string {
+const (
+	hashA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	hashB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	hashC = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	hashD = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+)
+
+// blobPath builds a content-addressed (v5) blob location, mirroring the
+// worker's assetBlobPath layout: <root>/<sha[:2]>/<sha><ext>.
+func blobPath(root, sha, ext string) string {
+	return filepath.Join(root, sha[:2], sha+ext)
+}
+
+func writeCacheFile(t *testing.T, path string, data []byte) string {
 	t.Helper()
-	path := filepath.Join(root, name)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir for %s: %v", path, err)
+	}
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
@@ -30,13 +46,24 @@ func openIndex(t *testing.T) *workercache.Cache {
 	return index
 }
 
+func storeEntry(t *testing.T, index *workercache.Cache, assetKey, sha, localPath string, data []byte) {
+	t.Helper()
+	if err := index.Store(context.Background(), workercache.Entry{
+		AssetKey:         assetref.AssetKey(assetKey),
+		ContentHash:      assetref.ContentHash(sha),
+		LocalPath:        localPath,
+		SizeBytes:        int64(len(data)),
+		DownloadComplete: true,
+	}); err != nil {
+		t.Fatalf("store %s: %v", assetKey, err)
+	}
+}
+
 func TestRun_DryRunDoesNotMutateFilesOrIndex(t *testing.T) {
 	root := t.TempDir()
-	path := writeCacheFile(t, root, "clip-stock-a_0123456789ab.mp4", []byte("clip"))
+	path := writeCacheFile(t, blobPath(root, hashA, ".mp4"), []byte("clip"))
 	index := openIndex(t)
-	if err := index.Store(context.Background(), workercache.Entry{AssetKey: "clip-stock-a", LocalPath: path, DownloadComplete: true}); err != nil {
-		t.Fatalf("store index: %v", err)
-	}
+	storeEntry(t, index, "clip-stock-a", hashA, path, []byte("clip"))
 
 	items, err := Run(context.Background(), Options{Root: root, AssetIDs: []string{"clip-stock-a"}, Index: index})
 	if err != nil {
@@ -44,6 +71,9 @@ func TestRun_DryRunDoesNotMutateFilesOrIndex(t *testing.T) {
 	}
 	if len(items) != 1 || items[0].Action != "dry_run" || items[0].CacheStatus != "present" {
 		t.Fatalf("items = %+v, want one present dry-run item", items)
+	}
+	if items[0].Bytes != int64(len("clip")) {
+		t.Fatalf("bytes = %d, want %d", items[0].Bytes, len("clip"))
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("dry-run removed file: %v", err)
@@ -55,16 +85,13 @@ func TestRun_DryRunDoesNotMutateFilesOrIndex(t *testing.T) {
 
 func TestRun_ExecuteDeletesOnlyExactSelectedAsset(t *testing.T) {
 	root := t.TempDir()
-	selected := writeCacheFile(t, root, "clip-stock-a_0123456789ab.mp4", []byte("selected"))
-	unselected := writeCacheFile(t, root, "clip-stock-ab_0123456789ab.mp4", []byte("keep"))
-	other := writeCacheFile(t, root, "production-asset.mp4", []byte("keep"))
+	selected := writeCacheFile(t, blobPath(root, hashA, ".mp4"), []byte("selected"))
+	unselected := writeCacheFile(t, blobPath(root, hashB, ".mp4"), []byte("keep"))
+	// An unindexed file must be untouched: the index is the sole authority.
+	orphan := writeCacheFile(t, filepath.Join(root, "orphan.mp4"), []byte("keep"))
 	index := openIndex(t)
-	if err := index.Store(context.Background(), workercache.Entry{AssetKey: "clip-stock-a", LocalPath: selected, DownloadComplete: true}); err != nil {
-		t.Fatalf("store selected: %v", err)
-	}
-	if err := index.Store(context.Background(), workercache.Entry{AssetKey: "clip-stock-ab", LocalPath: unselected, DownloadComplete: true}); err != nil {
-		t.Fatalf("store unselected: %v", err)
-	}
+	storeEntry(t, index, "clip-stock-a", hashA, selected, []byte("selected"))
+	storeEntry(t, index, "clip-stock-ab", hashB, unselected, []byte("keep"))
 
 	items, err := Run(context.Background(), Options{Root: root, AssetIDs: []string{"clip-stock-a"}, Index: index, Execute: true})
 	if err != nil {
@@ -76,9 +103,9 @@ func TestRun_ExecuteDeletesOnlyExactSelectedAsset(t *testing.T) {
 	if _, err := os.Stat(selected); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("selected file still exists, err=%v", err)
 	}
-	for _, keep := range []string{unselected, other} {
+	for _, keep := range []string{unselected, orphan} {
 		if _, err := os.Stat(keep); err != nil {
-			t.Fatalf("unselected file %s changed: %v", keep, err)
+			t.Fatalf("unselected/orphan file %s changed: %v", keep, err)
 		}
 	}
 	if _, ok, err := index.Find(context.Background(), "clip-stock-a"); err != nil || ok {
@@ -89,13 +116,11 @@ func TestRun_ExecuteDeletesOnlyExactSelectedAsset(t *testing.T) {
 	}
 }
 
-func TestRun_ExecuteDeletesF4VAsset(t *testing.T) {
+func TestRun_ExecuteDeletesIndexedPathRegardlessOfExtension(t *testing.T) {
 	root := t.TempDir()
-	path := writeCacheFile(t, root, "clip-stock-a_0123456789ab.f4v", []byte("selected"))
+	path := writeCacheFile(t, blobPath(root, hashC, ".f4v"), []byte("selected"))
 	index := openIndex(t)
-	if err := index.Store(context.Background(), workercache.Entry{AssetKey: "clip-stock-a", LocalPath: path, DownloadComplete: true}); err != nil {
-		t.Fatalf("store index: %v", err)
-	}
+	storeEntry(t, index, "clip-stock-a", hashC, path, []byte("selected"))
 
 	items, err := Run(context.Background(), Options{Root: root, AssetIDs: []string{"clip-stock-a"}, Index: index, Execute: true})
 	if err != nil {
@@ -111,11 +136,9 @@ func TestRun_ExecuteDeletesF4VAsset(t *testing.T) {
 
 func TestRun_ExecuteRefusesActiveReservationWithoutMutation(t *testing.T) {
 	root := t.TempDir()
-	path := writeCacheFile(t, root, "future-asset_0123456789ab.mp4", []byte("future"))
+	path := writeCacheFile(t, blobPath(root, hashA, ".mp4"), []byte("future"))
 	index := openIndex(t)
-	if err := index.Store(context.Background(), workercache.Entry{AssetKey: "future-asset", LocalPath: path, DownloadComplete: true}); err != nil {
-		t.Fatalf("store: %v", err)
-	}
+	storeEntry(t, index, "future-asset", hashA, path, []byte("future"))
 	if err := index.Reserve(context.Background(), "future-asset", "future-job", time.Now().UTC().Add(time.Hour)); err != nil {
 		t.Fatalf("reserve: %v", err)
 	}
@@ -131,11 +154,9 @@ func TestRun_ExecuteRefusesActiveReservationWithoutMutation(t *testing.T) {
 
 func TestRun_ExecuteRefusesActiveLeaseWithoutMutation(t *testing.T) {
 	root := t.TempDir()
-	path := writeCacheFile(t, root, "voiceover-smoke_deadbeefdead.mp3", []byte("voice"))
+	path := writeCacheFile(t, blobPath(root, hashD, ".mp3"), []byte("voice"))
 	index := openIndex(t)
-	if err := index.Store(context.Background(), workercache.Entry{AssetKey: "voiceover-smoke", LocalPath: path, DownloadComplete: true}); err != nil {
-		t.Fatalf("store: %v", err)
-	}
+	storeEntry(t, index, "voiceover-smoke", hashD, path, []byte("voice"))
 	if err := index.Acquire(context.Background(), "voiceover-smoke", "job-1"); err != nil {
 		t.Fatalf("acquire: %v", err)
 	}
@@ -151,7 +172,8 @@ func TestRun_ExecuteRefusesActiveLeaseWithoutMutation(t *testing.T) {
 
 func TestRun_MissingAssetIsReportedWithoutMutation(t *testing.T) {
 	root := t.TempDir()
-	items, err := Run(context.Background(), Options{Root: root, AssetIDs: []string{"missing-asset"}})
+	index := openIndex(t)
+	items, err := Run(context.Background(), Options{Root: root, AssetIDs: []string{"missing-asset"}, Index: index})
 	if err != nil {
 		t.Fatalf("Run missing: %v", err)
 	}
@@ -160,14 +182,22 @@ func TestRun_MissingAssetIsReportedWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestRun_RequiresIndex(t *testing.T) {
+	_, err := Run(context.Background(), Options{Root: t.TempDir(), AssetIDs: []string{"safe"}})
+	if !errors.Is(err, ErrNoIndex) {
+		t.Fatalf("Run without index err=%v, want ErrNoIndex", err)
+	}
+}
+
 func TestRun_RejectsInvalidIDsAndUnsafeRoots(t *testing.T) {
 	root := t.TempDir()
+	index := openIndex(t)
 	for _, ids := range [][]string{{"../production"}, {"asset/child"}, {""}} {
-		if _, err := Run(context.Background(), Options{Root: root, AssetIDs: ids}); !errors.Is(err, ErrInvalidID) && !errors.Is(err, ErrNoAssetIDs) {
+		if _, err := Run(context.Background(), Options{Root: root, AssetIDs: ids, Index: index}); !errors.Is(err, ErrInvalidID) && !errors.Is(err, ErrNoAssetIDs) {
 			t.Errorf("IDs=%q err=%v, want input validation error", ids, err)
 		}
 	}
-	if _, err := Run(context.Background(), Options{Root: "/", AssetIDs: []string{"safe"}}); !errors.Is(err, ErrUnsafeRoot) {
+	if _, err := Run(context.Background(), Options{Root: "/", AssetIDs: []string{"safe"}, Index: index}); !errors.Is(err, ErrUnsafeRoot) {
 		t.Errorf("root=/ err=%v, want ErrUnsafeRoot", err)
 	}
 }
@@ -179,14 +209,57 @@ func TestRun_RejectsIndexedPathOutsideRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	index := openIndex(t)
-	if err := index.Store(context.Background(), workercache.Entry{AssetKey: "outside", LocalPath: outside, DownloadComplete: true}); err != nil {
-		t.Fatalf("store: %v", err)
-	}
+	storeEntry(t, index, "outside", hashA, outside, []byte("do not remove"))
 	_, err := Run(context.Background(), Options{Root: root, AssetIDs: []string{"outside"}, Index: index, Execute: true})
 	if err == nil {
 		t.Fatal("Run unexpectedly accepted indexed path outside cache root")
 	}
 	if _, statErr := os.Stat(outside); statErr != nil {
 		t.Fatalf("outside file changed: %v", statErr)
+	}
+}
+
+// TestRun_ExecuteKeepsSharedBlobUntilLastAssetEvicted locks the dedup contract
+// through the tool boundary: two assets referencing the same content-addressed
+// blob share one physical file, and evicting one asset must leave the file
+// (and the surviving asset's index row) untouched until the LAST referent is
+// evicted.
+func TestRun_ExecuteKeepsSharedBlobUntilLastAssetEvicted(t *testing.T) {
+	root := t.TempDir()
+	payload := []byte("shared blob bytes")
+	shared := writeCacheFile(t, blobPath(root, hashA, ".mp4"), payload)
+	index := openIndex(t)
+	storeEntry(t, index, "asset-a", hashA, shared, payload)
+	storeEntry(t, index, "asset-b", hashA, shared, payload)
+
+	// Evict only asset-a: the blob is still referenced by asset-b, so the
+	// physical file must survive and asset-b's index row must remain.
+	items, err := Run(context.Background(), Options{Root: root, AssetIDs: []string{"asset-a"}, Index: index, Execute: true})
+	if err != nil {
+		t.Fatalf("Run evict asset-a: %v", err)
+	}
+	if len(items) != 1 || items[0].Action != "deleted" {
+		t.Fatalf("items = %+v, want one deleted item", items)
+	}
+	if _, err := os.Stat(shared); err != nil {
+		t.Fatalf("shared file removed while asset-b still references it: %v", err)
+	}
+	if _, ok, err := index.Find(context.Background(), "asset-a"); err != nil || ok {
+		t.Fatalf("asset-a index row remains: ok=%v err=%v", ok, err)
+	}
+	if _, ok, err := index.Find(context.Background(), "asset-b"); err != nil || !ok {
+		t.Fatalf("asset-b index row changed: ok=%v err=%v", ok, err)
+	}
+
+	// Evict asset-b (the last referent): the blob is now orphaned and the
+	// physical file must be removed.
+	if _, err := Run(context.Background(), Options{Root: root, AssetIDs: []string{"asset-b"}, Index: index, Execute: true}); err != nil {
+		t.Fatalf("Run evict asset-b: %v", err)
+	}
+	if _, err := os.Stat(shared); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("shared file still exists after last referent evicted: %v", err)
+	}
+	if _, ok, err := index.Find(context.Background(), "asset-b"); err != nil || ok {
+		t.Fatalf("asset-b index row remains: ok=%v err=%v", ok, err)
 	}
 }

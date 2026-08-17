@@ -60,6 +60,33 @@ for the final render artifact. Full-module verification in `worker-agent-go`
   down to 72%, lease/reservation/snapshot-protected blobs) shipped in
   `3a18858c`.
 
+### Removal of the pre-v5 flat filesystem fallback + index-driven cache-evict
+
+Follow-up on the content-addressed blob store: the downloader no longer
+reads or writes the pre-v5 flat `<assetID>_<sha12>.ext` layout, and the
+`velox-cache-evict` admin tool now resolves asset paths exclusively through
+the SQLite index.
+
+- `internal/worker/asset_cache.go` — `cachedAssetPathTimedWithContext` drops
+  the flat migration fallback: a hit requires the full integrity contract
+  (SHA + size) and probes only the content-addressed blob glob
+  `<cacheDir>/<sha[:2]>/<sha>.*`. `verifyAndPromoteVeloxAsset` always promotes
+  to `assetBlobPath` (the flat `finalPath` branch is gone). The dead `assetID`
+  parameter was removed from both; `cacheKeyPrefix` was renamed
+  `assetPartialKey` and now serves only the resumable `.part` namespace.
+- `internal/cacheevict` — `discover`/`matchesAssetFile`/`allowedCacheExtension`
+  /`shaPrefixPattern` removed; `Run` resolves asset → blob path only via
+  `Index.Find → LocalPath` and deletes through the fenced `EvictIfUnleased`
+  (correct blob-level dedup: the physical file is removed only when the blob
+  becomes orphaned). `cmd/velox-cache-evict` now requires `--index` in both
+  dry-run and execute modes (read-only open for dry-run).
+- Tests — `TestDownloadVeloxAsset_IgnoresLegacyFlatFile` pins the miss +
+  re-download contract: a flat file carrying the correct bytes is never
+  resolved, and the asset is promoted to the content-addressed blob path.
+
+Full-module verification in `worker-agent-go` (`go build ./...`,
+`go vet ./...`, `go test -count=1 ./...`) green.
+
 ## [Unreleased] - 2026-08-15
 
 ### Refactor tranche — telemetry SSOT, foundation layering, observability, and complexity reduction
