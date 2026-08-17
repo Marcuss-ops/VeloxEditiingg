@@ -233,21 +233,20 @@ func (r *TaskRunner) mergeStatsInto(report *TaskExecutionReport, m map[string]in
 	// final_concat_stream_copy is conventionally a bool in the proto
 	// and a JSON-style key in the legacy map. The native sidecar's
 	// canonical concat_mode is authoritative when the legacy bool alias is
-	// absent; stream_copy and packet_copy both mean the final video stream was
-	// never re-encoded. packet_copy is the native engine's canonical value for
-	// the strict clip concatenation path.
+	// absent; stream_copy, packet_copy and mixed_packet all mean the final
+	// video stream was never re-encoded (copy-only). packet_copy is the native
+	// engine's canonical value for the strict clip concatenation path and
+	// mixed_packet for the mixed copy-only assembly path.
 	// Some producers materialize the legacy boolean with its proto zero value
-	// even when the canonical concat mode is packet_copy. A false value must
+	// even when the canonical concat mode is copy-only. A false value must
 	// therefore not mask the authoritative mode; explicit true still wins.
 	legacyStreamCopy, hasLegacyStreamCopy := m["final.concat.stream_copy"].(bool)
 	typed.FinalConcatStreamCopy = legacyStreamCopy ||
-		strings.EqualFold(typed.ConcatMode, "stream_copy") ||
-		strings.EqualFold(typed.ConcatMode, "packet_copy")
+		concatModeIsStreamCopy(typed.ConcatMode)
 	if !hasLegacyStreamCopy {
 		// The mode-derived value above is the complete signal when the legacy
 		// alias was not emitted by the producer.
-		typed.FinalConcatStreamCopy = strings.EqualFold(typed.ConcatMode, "stream_copy") ||
-			strings.EqualFold(typed.ConcatMode, "packet_copy")
+		typed.FinalConcatStreamCopy = concatModeIsStreamCopy(typed.ConcatMode)
 	}
 	if report.RawMetrics == nil {
 		report.RawMetrics = &typed
@@ -260,6 +259,17 @@ func (r *TaskRunner) mergeStatsInto(report *TaskExecutionReport, m map[string]in
 	}
 	report.TypedMetrics = report.RawMetrics
 	// ── End typed raw projection ─────────────────────────────────────
+}
+
+// concatModeIsStreamCopy reports whether the engine's concat_mode means the
+// final video stream was never re-encoded. Copy-only modes are stream_copy
+// (legacy ffmpeg -c:v copy), packet_copy (native copy_only path) and
+// mixed_packet (native mixed copy-only path); reencode and frame_pipeline
+// mean a re-encode happened.
+func concatModeIsStreamCopy(mode string) bool {
+	return strings.EqualFold(mode, "stream_copy") ||
+		strings.EqualFold(mode, "packet_copy") ||
+		strings.EqualFold(mode, "mixed_packet")
 }
 
 func overlayLegacyRawMetrics(dst *telemetry.RawExecutionMetrics, typed telemetry.RawExecutionMetrics, m map[string]interface{}) {

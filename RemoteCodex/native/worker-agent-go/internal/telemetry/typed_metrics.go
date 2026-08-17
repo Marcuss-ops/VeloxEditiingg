@@ -71,7 +71,7 @@ type RawExecutionMetrics struct {
 	// ── Encode / concat metadata proto3 int32 / bool / string ───────────
 	EncodePasses          int32  `json:"encode_passes"`
 	FinalConcatStreamCopy bool   `json:"final_concat_stream_copy"`
-	ConcatMode            string `json:"concat_mode,omitempty"` // "stream_copy", "reencode", ""
+	ConcatMode            string `json:"concat_mode,omitempty"` // copy-only: "stream_copy", "packet_copy", "mixed_packet" | re-encode: "reencode", "frame_pipeline"
 
 	// ── Cost basis (per-second / per-GiB rates — master multiplies) ─────
 	CpuPricePerSecond float64 `json:"cpu_price_per_second"`

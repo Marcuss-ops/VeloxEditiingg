@@ -49,6 +49,15 @@ func TestTypedMetricsFromMapDerivesFinalStreamCopyFromPacketCopy(t *testing.T) {
 	}
 }
 
+func TestTypedMetricsFromMapDerivesFinalStreamCopyFromMixedPacket(t *testing.T) {
+	metrics := TypedMetricsFromMap(map[string]interface{}{
+		"engine.concat_mode": "mixed_packet",
+	})
+	if metrics == nil || !metrics.FinalConcatStreamCopy || metrics.ConcatMode != "mixed_packet" {
+		t.Fatalf("mixed-packet projection = %#v, want final_concat_stream_copy=true and concat_mode=mixed_packet", metrics)
+	}
+}
+
 func TestDetailedPhaseTimingToProtoMapsExtendedFields(t *testing.T) {
 	input := DetailedPhaseTiming{
 		PhaseOrder:             4,
