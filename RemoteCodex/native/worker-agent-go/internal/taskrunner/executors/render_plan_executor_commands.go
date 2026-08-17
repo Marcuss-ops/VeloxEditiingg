@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -157,12 +158,22 @@ func artifactFromFile(kind, path string) (executor.ArtifactRef, error) {
 	if info.Size() <= 0 {
 		return executor.ArtifactRef{}, errors.New("artifact is empty")
 	}
-	data, err := os.ReadFile(path)
+	// Stream the SHA-256 instead of buffering the whole artifact in memory.
+	// Render outputs routinely reach hundreds of MB; os.ReadFile would pin
+	// the full file in RAM (and OOM on very large outputs). Streaming keeps
+	// the finalize SHA bounded and page-cache friendly without changing the
+	// digest. 1 MiB matches streamSHAAndSize in the publisher manifest.
+	f, err := os.Open(path)
 	if err != nil {
 		return executor.ArtifactRef{}, err
 	}
-	sum := sha256.Sum256(data)
-	return executor.ArtifactRef{Type: kind, Hash: hex.EncodeToString(sum[:]), URI: path, SizeBytes: info.Size()}, nil
+	defer f.Close()
+	hash := sha256.New()
+	buf := make([]byte, 1<<20)
+	if _, err := io.CopyBuffer(hash, f, buf); err != nil {
+		return executor.ArtifactRef{}, err
+	}
+	return executor.ArtifactRef{Type: kind, Hash: hex.EncodeToString(hash.Sum(nil)), URI: path, SizeBytes: info.Size()}, nil
 }
 
 func planDigest(p *plan.RenderPlan) string {
