@@ -29,6 +29,7 @@ func (c *appComponents) routerBundle() RouterBundle {
 			Cfg:         c.cfg,
 			SQLiteStore: c.persistence.SQLite,
 			Enqueuer:    c.modules.Enqueuer,
+			Resolver:    c.resolver,
 			DocCreator: func() scripthandlers.GoogleDocCreator {
 				if c.modules.Drive == nil {
 					return nil

@@ -54,7 +54,11 @@ type ScriptRouteDeps struct {
 	Cfg         *config.Config
 	SQLiteStore *store.SQLiteStore
 	Enqueuer    *enqueue.Enqueuer
-	DocCreator  scripthandlers.GoogleDocCreator
+	// Resolver backs the canonical submitter the script ingress routes
+	// through (SubmitScratch → enqueuer). Nil here means the script
+	// job-creation path reports unavailable (fail-closed).
+	Resolver   *creatorflow.Resolver
+	DocCreator scripthandlers.GoogleDocCreator
 }
 
 // PipelineRouteDeps carries the deps for the canonical job and

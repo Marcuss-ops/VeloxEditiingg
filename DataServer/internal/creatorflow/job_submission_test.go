@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 
+	"velox-server/internal/costmodel"
 	"velox-server/internal/store"
 )
 
@@ -176,6 +177,55 @@ func TestCanonicalJobSubmitter_NilRecorderIsNoop(t *testing.T) {
 	}
 	if out == nil {
 		t.Fatal("want non-nil resolve output")
+	}
+}
+
+// TestCanonicalJobSubmitter_SubmitScratchEnqueuesFromScratch verifies that
+// the from-scratch path routes through the shared enqueuer (no forwarding
+// guard) and records the intake source on an accepted enqueue.
+func TestCanonicalJobSubmitter_SubmitScratchEnqueuesFromScratch(t *testing.T) {
+	rs := newTestSubmitterStack(t)
+	recorder := &fakeIntakeRecorder{}
+	submitter := NewCanonicalJobSubmitter(rs).WithIntakeSourceRecorder(recorder)
+
+	payload := map[string]interface{}{
+		"video_name":  "scratch.mp4",
+		"script_text": "from scratch",
+		"audio_tracks": []interface{}{map[string]interface{}{
+			"source_url": "velox-asset://voice-1",
+			"role":       "voiceover",
+		}},
+		"scenes": []interface{}{map[string]interface{}{
+			"scene_id": "scene-1",
+			"clip": map[string]interface{}{
+				"asset_id":    "drive-file-1",
+				"url":         "velox-drive://drive-file-1",
+				"duration_ms": 3000,
+			},
+			"voiceover": map[string]interface{}{
+				"asset_id":    "voice-1",
+				"url":         "velox-asset://voice-1",
+				"duration_ms": 3000,
+			},
+		}},
+		"delivery_plan": []interface{}{map[string]interface{}{
+			"destination_id": "drive-main",
+			"retry_budget":   1,
+		}},
+	}
+
+	out, err := submitter.SubmitScratch(context.Background(), CanonicalJobSubmission{
+		IntakeSource: IntakeSourceScriptGenerate,
+		Payload:      payload,
+	}, costmodel.DefaultRequirements())
+	if err != nil {
+		t.Fatalf("SubmitScratch: %v", err)
+	}
+	if out == nil || out["job_id"] == nil || out["job_id"] == "" {
+		t.Fatalf("want non-empty job_id in enqueue response, got %v", out)
+	}
+	if calls := recorder.Calls(); len(calls) != 1 || calls[0] != IntakeSourceScriptGenerate {
+		t.Fatalf("recorder calls = %v, want [%s]", calls, IntakeSourceScriptGenerate)
 	}
 }
 

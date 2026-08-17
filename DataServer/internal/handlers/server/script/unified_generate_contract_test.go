@@ -30,7 +30,7 @@ func newUnifiedGenerateTestRouter(t *testing.T) *gin.Engine {
 		VideosDir: filepath.Join(tempDir, "videos"),
 	}}
 	r := gin.New()
-	RegisterRoutes(r.Group("/api/script"), cfg, db, enqueuer)
+	RegisterRoutes(r.Group("/api/script"), cfg, db, enqueuer, nil)
 	return r
 }
 

@@ -7,25 +7,23 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"velox-server/internal/creatorflow"
-	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/jobs/ingress"
-	velmetrics "velox-server/internal/metrics"
 	"velox-server/internal/routing"
 	"velox-shared/payload"
 )
 
 type Handler struct {
-	registry *ingress.Registry
-	enqueuer *enqueue.Enqueuer
+	registry   *ingress.Registry
+	submission *creatorflow.CanonicalJobSubmitter
 }
 
 func NewHandler(
 	registry *ingress.Registry,
-	enqueuer *enqueue.Enqueuer,
+	submission *creatorflow.CanonicalJobSubmitter,
 ) *Handler {
 	return &Handler{
-		registry: registry,
-		enqueuer: enqueuer,
+		registry:   registry,
+		submission: submission,
 	}
 }
 
@@ -42,7 +40,7 @@ func (h *Handler) SubmitFixed(kind string) gin.HandlerFunc {
 }
 
 func (h *Handler) submit(c *gin.Context, kind string) {
-	if h.registry == nil || h.enqueuer == nil {
+	if h.registry == nil || h.submission == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{
 			"ok":    false,
 			"error": "job ingress unavailable",
@@ -83,9 +81,12 @@ func (h *Handler) submit(c *gin.Context, kind string) {
 	}
 	applyDefinition(canonicalPayload, definition)
 
-	result, err := h.enqueuer.Enqueue(
+	result, err := h.submission.SubmitScratch(
 		c.Request.Context(),
-		canonicalPayload,
+		creatorflow.CanonicalJobSubmission{
+			IntakeSource: scriptIntakeSourceForKind(kind),
+			Payload:      canonicalPayload,
+		},
 		definition.Requirements,
 	)
 	if err != nil {
@@ -96,11 +97,6 @@ func (h *Handler) submit(c *gin.Context, kind string) {
 		})
 		return
 	}
-	// The script ingress is a direct-enqueue surface (it does not route
-	// through the canonical submitter because it creates jobs from scratch
-	// rather than forwarding a completed result). Record its intake source
-	// so alias usage is measurable before any convergence work.
-	velmetrics.RecordIntakeSource(scriptIntakeSourceForKind(kind))
 
 	response := gin.H{
 		"ok":                  true,

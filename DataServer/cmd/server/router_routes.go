@@ -69,7 +69,7 @@ func registerScriptRoutes(r *gin.Engine, deps ScriptRouteDeps) {
 	v1Group.Use(api.AdminAuthMiddleware(deps.Cfg))
 	// PR15.7a: thread *enqueue.Enqueuer through RegisterRoutes so the
 	// script endpoint can submit jobs without package-level state.
-	scripthandlers.RegisterRoutes(v1Group, deps.Cfg, deps.SQLiteStore, deps.Enqueuer, deps.DocCreator)
+	scripthandlers.RegisterRoutes(v1Group, deps.Cfg, deps.SQLiteStore, deps.Enqueuer, deps.Resolver, deps.DocCreator)
 }
 
 // registerPipelineRoutes mounts the canonical pipeline/job routes.

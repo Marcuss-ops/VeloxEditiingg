@@ -196,6 +196,18 @@ func (r *Resolver) HasDBAccess() bool {
 	return r != nil && r.forwardRepo != nil
 }
 
+// Enqueuer exposes the shared from-scratch enqueuer that backs the
+// forwarding resolver. The canonical submitter drives the script/calendar
+// job-creation path through this same enqueuer so every surface converges
+// on one persistence/scheduling/dedupe implementation instead of calling
+// store.AtomicJobTaskCreator directly.
+func (r *Resolver) Enqueuer() *enqueue.Enqueuer {
+	if r == nil {
+		return nil
+	}
+	return r.enqueuer
+}
+
 // Resolve returns the canonical (job_id, forwarding_id) pair for the
 // input. Implementation invariants:
 //

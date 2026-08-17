@@ -82,7 +82,7 @@ func TestGenerateWithImages_EnqueuesSceneImageJob(t *testing.T) {
 	enqueuer := jobenqueue.NewEnqueuer(atomic, nil, nil, noopPlanResolver{})
 
 	r := gin.New()
-	RegisterRoutes(r.Group("/api/script"), cfg, db, enqueuer)
+	RegisterRoutes(r.Group("/api/script"), cfg, db, enqueuer, nil)
 
 	payload := map[string]interface{}{
 		"video_name":          "Amish",
@@ -284,7 +284,7 @@ func TestGenerateWithImages_UsesCreatorStageWhenConfigured(t *testing.T) {
 	enqueuer := jobenqueue.NewEnqueuer(atomic, jobRepo, voiceoverSvc, noopPlanResolver{})
 
 	r := gin.New()
-	RegisterRoutes(r.Group("/api/script"), cfg, db, enqueuer)
+	RegisterRoutes(r.Group("/api/script"), cfg, db, enqueuer, nil)
 
 	reqBody, _ := json.Marshal(map[string]interface{}{
 		"video_name":     "Creator Video",
@@ -379,7 +379,7 @@ func TestGenerateWithImages_BypassesCreatorForRenderReadyPayload(t *testing.T) {
 	enqueuer := jobenqueue.NewEnqueuer(atomic, nil, nil, noopPlanResolver{})
 
 	r := gin.New()
-	RegisterRoutes(r.Group("/api/script"), cfg, db, enqueuer)
+	RegisterRoutes(r.Group("/api/script"), cfg, db, enqueuer, nil)
 
 	reqBody, _ := json.Marshal(map[string]interface{}{
 		"skip_creator":   true,
@@ -433,7 +433,7 @@ func TestGenerate_SourceClips_EnqueuesClipJob(t *testing.T) {
 	enqueuer := jobenqueue.NewEnqueuer(atomic, nil, nil, noopPlanResolver{})
 
 	r := gin.New()
-	RegisterRoutes(r.Group("/api/script"), cfg, db, enqueuer)
+	RegisterRoutes(r.Group("/api/script"), cfg, db, enqueuer, nil)
 
 	payload := map[string]interface{}{
 		"video_name": "Jackie Chan Funniest Moments",
@@ -541,7 +541,7 @@ func TestGenerate_RequiresSourceType(t *testing.T) {
 	}
 	enqueuer := jobenqueue.NewEnqueuer(atomic, nil, nil, noopPlanResolver{})
 	r := gin.New()
-	RegisterRoutes(r.Group("/api/script"), cfg, db, enqueuer)
+	RegisterRoutes(r.Group("/api/script"), cfg, db, enqueuer, nil)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/script/generate", bytes.NewBufferString(`{"video_name":"missing source"}`))
@@ -575,7 +575,7 @@ func TestSubmitJob_SlideshowVideo_EnqueuesImagesPipelineJob(t *testing.T) {
 
 	enqueuer := jobenqueue.NewEnqueuer(atomic, nil, nil, noopPlanResolver{})
 	r := gin.New()
-	RegisterRoutes(r.Group("/api/script"), cfg, db, enqueuer)
+	RegisterRoutes(r.Group("/api/script"), cfg, db, enqueuer, nil)
 
 	reqBody, _ := json.Marshal(map[string]interface{}{
 		"video_name":     "Slideshow Demo",

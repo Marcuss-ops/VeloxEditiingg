@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	assetbridge "velox-server/internal/assets"
+	"velox-server/internal/costmodel"
 	"velox-server/internal/jobs/enqueue"
 	"velox-shared/contract/domain"
 	"velox-shared/publication"
@@ -178,6 +179,37 @@ func (s *CanonicalJobSubmitter) Submit(ctx context.Context, req CanonicalJobSubm
 	// attempts). A missing source defaults to "canonical" so a producer
 	// that forgets to stamp its identity is still measurable instead of
 	// silently creating an unnamed series.
+	if err == nil && out != nil {
+		source := strings.TrimSpace(req.IntakeSource)
+		if source == "" {
+			source = IntakeSourceCanonical
+		}
+		if s.intake != nil {
+			s.intake.IncAccepted(source)
+		}
+	}
+	return out, err
+}
+
+// SubmitScratch drives the from-scratch job-creation path (script ingress,
+// calendar enqueue) through the SAME enqueuer that backs the forwarding
+// resolver. Unlike Submit — which forwards a completed pipeline result and
+// therefore requires ShouldForwardPipelineResult — SubmitScratch enqueues a
+// fresh payload with the shared validate → normalize → persist → schedule
+// pipeline. Intake-source telemetry is recorded on an accepted enqueue, with
+// the same canonical default for a missing source.
+func (s *CanonicalJobSubmitter) SubmitScratch(ctx context.Context, req CanonicalJobSubmission, requirements costmodel.JobRequirements) (map[string]interface{}, error) {
+	if s == nil || s.resolver == nil {
+		return nil, fmt.Errorf("job submission service is not configured")
+	}
+	if req.Payload == nil {
+		return nil, domain.NewInvalidPayload("payload", "required", "payload is required")
+	}
+	enq := s.resolver.Enqueuer()
+	if enq == nil {
+		return nil, fmt.Errorf("job submission service is not configured")
+	}
+	out, err := enq.Enqueue(ctx, req.Payload, requirements)
 	if err == nil && out != nil {
 		source := strings.TrimSpace(req.IntakeSource)
 		if source == "" {

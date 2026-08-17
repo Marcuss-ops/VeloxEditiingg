@@ -68,13 +68,19 @@ func NewScriptHandlers(cfg *config.Config, sqliteDB *store.SQLiteStore, enqueuer
 // RegisterRoutes wires the public script routes on the given group.
 //
 // PR15.7a: a *enqueue.Enqueuer is now mandatory alongside sqliteDB.
-func RegisterRoutes(group gin.IRoutes, cfg *config.Config, sqliteDB *store.SQLiteStore, enqueuer *enqueue.Enqueuer, docCreators ...GoogleDocCreator) *ScriptHandlers {
+func RegisterRoutes(group gin.IRoutes, cfg *config.Config, sqliteDB *store.SQLiteStore, enqueuer *enqueue.Enqueuer, resolver *creatorflow.Resolver, docCreators ...GoogleDocCreator) *ScriptHandlers {
 	handlers := NewScriptHandlers(cfg, sqliteDB, enqueuer)
 	if len(docCreators) > 0 {
 		handlers.docCreator = docCreators[0]
 	}
+	// A nil resolver falls back to a minimal resolver built from the same
+	// enqueuer + store so test mounts and partial wiring still drive the
+	// from-scratch SubmitScratch path (the forwarding path is unused here).
+	if resolver == nil {
+		resolver = creatorflow.NewResolverMinimal(enqueuer, sqliteDB)
+	}
 	registry := newScriptIngressRegistry(cfg, handlers.dataDir, handlers.sqliteDB, handlers.docCreator)
-	ingressHandler := jobshandler.NewHandler(registry, enqueuer)
+	ingressHandler := jobshandler.NewHandler(registry, creatorflow.NewCanonicalJobSubmitter(resolver))
 	group.POST("/generate-with-images", handlers.GenerateWithImagesHandler(cfg))
 	group.POST("/generate", ingressHandler.SubmitFixed("generate"))
 	group.POST("/jobs/:kind", ingressHandler.Submit())
