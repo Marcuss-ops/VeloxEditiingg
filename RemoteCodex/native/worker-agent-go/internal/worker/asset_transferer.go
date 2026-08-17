@@ -83,10 +83,15 @@ func (t *masterAssetTransferer) Check(ctx context.Context, reportCtx context.Con
 				// is a size-invalid entry (MISS_INVALID), not a hash corrupt.
 				foundSizeMismatch = true
 			default:
-				return downloader.CacheCheckResult{CacheHit: true, LocalPath: entry.LocalPath, SHA256: entry.ContentHash, Outcome: downloader.CacheOutcomeHitValid}, nil
-				// The durable index claims a complete entry but the physical
-				// file is gone (evicted/expired underneath the index). Keep
-				// the probe as a final chance before classifying MISS_EXPIRED.
+				// The durable index claims a complete entry, but the physical
+				// blob may still be gone (evicted/expired underneath the index,
+				// or a root-less fixture whose cache layer skipped the stat).
+				// Only a present, regular, non-empty file is a valid hit;
+				// otherwise fall through to the probe for a final chance before
+				// classifying MISS_EXPIRED.
+				if info, statErr := os.Stat(entry.LocalPath); statErr == nil && info.Mode().IsRegular() && info.Size() > 0 {
+					return downloader.CacheCheckResult{CacheHit: true, LocalPath: entry.LocalPath, SHA256: entry.ContentHash, Outcome: downloader.CacheOutcomeHitValid}, nil
+				}
 				foundExpired = true
 			}
 		}
