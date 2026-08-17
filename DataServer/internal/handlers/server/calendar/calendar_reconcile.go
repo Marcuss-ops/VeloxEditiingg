@@ -11,7 +11,6 @@ import (
 
 	"velox-server/internal/creatorflow"
 	"velox-server/internal/jobs"
-	velmetrics "velox-server/internal/metrics"
 	"velox-server/internal/store"
 	"velox-server/internal/taskgraph"
 )
@@ -74,7 +73,7 @@ func (api *CalendarAPI) reconcileCalendarEvent(ctx context.Context, event *store
 		event.JobID = "cal_" + uuid.NewString()
 		jobPayload = buildCalendarJobPayload(event, "")
 	}
-	if err := submitCalendarJob(ctx, api.atomic, event.JobID, jobPayload); err != nil {
+	if err := submitCalendarJob(ctx, api.submission, event.JobID, jobPayload); err != nil {
 		return err
 	}
 	event.Status = "queued"
@@ -161,16 +160,19 @@ func applyQueueStateToEvent(ctx context.Context, event *store.CalendarEvent, job
 	}
 }
 
-// submitCalendarJob creates a new job via AtomicJobTaskCreator (Job+Task atomically).
-// PR #3: replaces jobs.Writer.Create (Job-only) with the single atomic creation path.
+// submitCalendarJob routes the raw calendar job creation through the
+// canonical submitter (SubmitRaw) instead of calling AtomicJobTaskCreator +
+// RecordIntakeSource directly. The calendar payload carries domain-specific
+// metadata (calendar_event_id, external_id, …) that the canonical enqueue
+// normalization would drop, so the caller builds the Job+TaskSpec raw and the
+// submitter owns the atomic write + intake telemetry.
 //
 // Render-only calendar events intentionally carry no delivery target. Events
 // with a delivery intent must provide their own explicit destination in the
 // payload; there is no calendar_noop or other implicit route.
-
-func submitCalendarJob(ctx context.Context, atomic *store.AtomicJobTaskCreator, jobID string, payload map[string]interface{}) error {
-	if atomic == nil {
-		return fmt.Errorf("submit calendar job: creator is nil")
+func submitCalendarJob(ctx context.Context, submission *creatorflow.CanonicalJobSubmitter, jobID string, payload map[string]interface{}) error {
+	if submission == nil {
+		return fmt.Errorf("submit calendar job: submitter is nil")
 	}
 	var videoName, projectID, runID string
 	if s, ok := payload["video_name"].(string); ok {
@@ -202,12 +204,5 @@ func submitCalendarJob(ctx context.Context, atomic *store.AtomicJobTaskCreator, 
 		Payload:    payload,
 	}
 	priority := 5
-	if err := atomic.CreateJobWithTask(ctx, job, spec, priority); err != nil {
-		return err
-	}
-	// Record the calendar intake source on an accepted creation so the
-	// calendar enqueue surface is measurable alongside the other aliases
-	// (script, pipeline-run) before any deprecation/removal decision.
-	velmetrics.RecordIntakeSource(creatorflow.IntakeSourceCalendar)
-	return nil
+	return submission.SubmitRaw(ctx, creatorflow.IntakeSourceCalendar, job, spec, priority)
 }

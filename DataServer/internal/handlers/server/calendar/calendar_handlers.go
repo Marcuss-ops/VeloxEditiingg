@@ -8,21 +8,23 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"velox-server/internal/creatorflow"
 	"velox-server/internal/jobs"
 	"velox-server/internal/store"
 )
 
 // CalendarAPI provides handlers for calendar event operations
 type CalendarAPI struct {
-	store     *store.SQLiteStore
-	reader    jobs.Reader
-	atomic    *store.AtomicJobTaskCreator
-	scheduler *CalendarScheduler
+	store      *store.SQLiteStore
+	reader     jobs.Reader
+	atomic     *store.AtomicJobTaskCreator
+	submission *creatorflow.CanonicalJobSubmitter
+	scheduler  *CalendarScheduler
 }
 
 // NewCalendarAPI creates a new CalendarAPI instance
-func NewCalendarAPI(s *store.SQLiteStore, reader jobs.Reader, atomic *store.AtomicJobTaskCreator, sched *CalendarScheduler) *CalendarAPI {
-	return &CalendarAPI{store: s, reader: reader, atomic: atomic, scheduler: sched}
+func NewCalendarAPI(s *store.SQLiteStore, reader jobs.Reader, atomic *store.AtomicJobTaskCreator, submission *creatorflow.CanonicalJobSubmitter, sched *CalendarScheduler) *CalendarAPI {
+	return &CalendarAPI{store: s, reader: reader, atomic: atomic, submission: submission, scheduler: sched}
 }
 
 // MinimalEvent is a lightweight event representation for fast list queries
@@ -373,8 +375,8 @@ func (api *CalendarAPI) EnqueueEvent() gin.HandlerFunc {
 }
 
 // RegisterRoutes registers all calendar routes
-func RegisterRoutes(r *gin.RouterGroup, s *store.SQLiteStore, reader jobs.Reader, atomic *store.AtomicJobTaskCreator, sched *CalendarScheduler) {
-	api := NewCalendarAPI(s, reader, atomic, sched)
+func RegisterRoutes(r *gin.RouterGroup, s *store.SQLiteStore, reader jobs.Reader, atomic *store.AtomicJobTaskCreator, submission *creatorflow.CanonicalJobSubmitter, sched *CalendarScheduler) {
+	api := NewCalendarAPI(s, reader, atomic, submission, sched)
 
 	r.GET("/calendar/events", api.ListEvents())
 	r.GET("/calendar/events/range", api.GetEventsByDateRange())

@@ -10,7 +10,9 @@ import (
 
 	assetbridge "velox-server/internal/assets"
 	"velox-server/internal/costmodel"
+	"velox-server/internal/jobs"
 	"velox-server/internal/jobs/enqueue"
+	"velox-server/internal/taskgraph"
 	"velox-shared/contract/domain"
 	"velox-shared/publication"
 )
@@ -220,6 +222,34 @@ func (s *CanonicalJobSubmitter) SubmitScratch(ctx context.Context, req Canonical
 		}
 	}
 	return out, err
+}
+
+// SubmitRaw persists an already-built Job+Task atomically through the shared
+// atomic creator and records the intake source on an accepted creation. It is
+// the raw counterpart of SubmitScratch for surfaces whose payload carries
+// domain-specific metadata (e.g. calendar_event_id) that the canonical
+// enqueue normalization would drop. The caller owns Job+TaskSpec construction
+// and field preservation; the submitter owns the atomic write + intake
+// telemetry.
+func (s *CanonicalJobSubmitter) SubmitRaw(ctx context.Context, source string, job *jobs.Job, spec *taskgraph.TaskSpec, priority int) error {
+	if s == nil || s.resolver == nil {
+		return fmt.Errorf("job submission service is not configured")
+	}
+	enq := s.resolver.Enqueuer()
+	if enq == nil || enq.Creator == nil {
+		return fmt.Errorf("job submission service is not configured")
+	}
+	if err := enq.Creator.CreateJobWithTask(ctx, job, spec, priority); err != nil {
+		return err
+	}
+	src := strings.TrimSpace(source)
+	if src == "" {
+		src = IntakeSourceCanonical
+	}
+	if s.intake != nil {
+		s.intake.IncAccepted(src)
+	}
+	return nil
 }
 
 // sanitizedErrorSummary gives operators the actionable shape of an enqueue

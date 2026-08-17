@@ -7,7 +7,9 @@ import (
 	"testing"
 
 	"velox-server/internal/costmodel"
+	"velox-server/internal/jobs"
 	"velox-server/internal/store"
+	"velox-server/internal/taskgraph"
 )
 
 // fakeIntakeRecorder is a test double for IntakeSourceRecorder that
@@ -226,6 +228,39 @@ func TestCanonicalJobSubmitter_SubmitScratchEnqueuesFromScratch(t *testing.T) {
 	}
 	if calls := recorder.Calls(); len(calls) != 1 || calls[0] != IntakeSourceScriptGenerate {
 		t.Fatalf("recorder calls = %v, want [%s]", calls, IntakeSourceScriptGenerate)
+	}
+}
+
+// TestCanonicalJobSubmitter_SubmitRawCreatesJobAndRecordsIntake verifies
+// that the raw Job+Task path persists through the shared atomic creator and
+// records the producer's intake source (calendar).
+func TestCanonicalJobSubmitter_SubmitRawCreatesJobAndRecordsIntake(t *testing.T) {
+	rs := newTestSubmitterStack(t)
+	recorder := &fakeIntakeRecorder{}
+	submitter := NewCanonicalJobSubmitter(rs).WithIntakeSourceRecorder(recorder)
+
+	payload := map[string]interface{}{
+		"calendar_event_id": "evt-1",
+		"render_only":       true,
+	}
+	job := &jobs.Job{
+		ID:         "cal_test_job",
+		Status:     jobs.StatusPending,
+		VideoName:  "calendar video",
+		MaxRetries: 3,
+		Payload:    `{"calendar_event_id":"evt-1","render_only":true}`,
+	}
+	spec := &taskgraph.TaskSpec{
+		Version:    taskgraph.SpecVersion,
+		JobID:      "cal_test_job",
+		ExecutorID: "scene.composite.v1",
+		Payload:    payload,
+	}
+	if err := submitter.SubmitRaw(context.Background(), IntakeSourceCalendar, job, spec, 5); err != nil {
+		t.Fatalf("SubmitRaw: %v", err)
+	}
+	if calls := recorder.Calls(); len(calls) != 1 || calls[0] != IntakeSourceCalendar {
+		t.Fatalf("recorder calls = %v, want [%s]", calls, IntakeSourceCalendar)
 	}
 }
 

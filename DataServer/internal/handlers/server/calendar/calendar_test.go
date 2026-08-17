@@ -14,13 +14,30 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"velox-server/internal/config"
+	"velox-server/internal/creatorflow"
 	"velox-server/internal/jobs"
+	jobenqueue "velox-server/internal/jobs/enqueue"
 	"velox-server/internal/store"
 )
 
 type listResponse struct {
 	Events []store.CalendarEvent `json:"events"`
 	Count  int                   `json:"count"`
+}
+
+// noopPlanResolver satisfies enqueue.NewEnqueuer's mandatory PlanResolver.
+// SubmitRaw bypasses normalization + delivery-plan precondition, so the
+// resolved plan is never consulted; it exists only so the calendar test can
+// construct a CanonicalJobSubmitter.
+type noopPlanResolver struct{}
+
+func (noopPlanResolver) ResolvePlan(_ context.Context, _, _ string) (*jobenqueue.ResolvedPlan, error) {
+	return &jobenqueue.ResolvedPlan{
+		JobID: "test-job",
+		Destinations: []jobenqueue.PlanDestination{
+			{DestinationID: "calendar_noop", Priority: 0, RetryBudget: 5},
+		},
+	}, nil
 }
 
 func setupCalendarTestEnv(t *testing.T) (*store.SQLiteStore, jobs.Repository, *gin.Engine) {
@@ -36,6 +53,8 @@ func setupCalendarTestEnv(t *testing.T) (*store.SQLiteStore, jobs.Repository, *g
 
 	jobRepo := store.NewSQLiteJobRepository(db)
 	atomic := store.NewAtomicJobTaskCreator(db)
+	enqueuer := jobenqueue.NewEnqueuer(atomic, jobRepo, nil, noopPlanResolver{})
+	submission := creatorflow.NewCanonicalJobSubmitter(creatorflow.NewResolverMinimal(enqueuer, db))
 
 	// fix(scheduler): seed calendar_noop destination so the canonical
 	// delivery-plan validator (parseDeliveryPlanPayload) accepts the
@@ -56,8 +75,8 @@ func setupCalendarTestEnv(t *testing.T) (*store.SQLiteStore, jobs.Repository, *g
 
 	r := gin.New()
 	v1 := r.Group("/api/v1")
-	sched := NewCalendarScheduler(db, jobRepo, atomic, config.SchedulerConfig{CalendarInterval: 30 * time.Second})
-	RegisterRoutes(v1, db, jobRepo, atomic, sched)
+	sched := NewCalendarScheduler(db, jobRepo, atomic, submission, config.SchedulerConfig{CalendarInterval: 30 * time.Second})
+	RegisterRoutes(v1, db, jobRepo, atomic, submission, sched)
 
 	return db, jobRepo, r
 }

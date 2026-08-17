@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"velox-server/internal/config"
+	"velox-server/internal/creatorflow"
 	"velox-server/internal/jobs"
 	"velox-server/internal/store"
 )
@@ -21,7 +22,7 @@ type CalendarScheduler struct {
 }
 
 // NewCalendarScheduler creates a scheduler with the typed config interval.
-func NewCalendarScheduler(s *store.SQLiteStore, reader jobs.Reader, atomic *store.AtomicJobTaskCreator, runtime config.SchedulerConfig) *CalendarScheduler {
+func NewCalendarScheduler(s *store.SQLiteStore, reader jobs.Reader, atomic *store.AtomicJobTaskCreator, submission *creatorflow.CanonicalJobSubmitter, runtime config.SchedulerConfig) *CalendarScheduler {
 	interval := runtime.CalendarInterval
 	if interval <= 0 {
 		interval = 30 * time.Second
@@ -31,7 +32,7 @@ func NewCalendarScheduler(s *store.SQLiteStore, reader jobs.Reader, atomic *stor
 		reader:   reader,
 		atomic:   atomic,
 		interval: interval,
-		api:      &CalendarAPI{store: s, reader: reader, atomic: atomic},
+		api:      &CalendarAPI{store: s, reader: reader, atomic: atomic, submission: submission},
 	}
 }
 
