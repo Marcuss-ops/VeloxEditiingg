@@ -521,6 +521,7 @@ Il goal è raggiunto quando tutti i punti seguenti sono veri:
 - [ ] Con asset caldi e compatibili, packet-copy video locale ≤ 1s al p95.
 - [ ] Il job rifiuta gli asset incompatibili prima di avviare il render.
 - [ ] Il video non viene mai ricodificato nel percorso copy-only.
+- [ ] Invariante copy-only verificato su ogni assembly SUCCEEDED: `packet_copy_segments == total_segments`, `rejected_segments == 0`, `frames_encoded == 0` e `encode_passes == 0` (`concat_mode=mixed_packet`); un segmento non copy-safe viene rifiutato (`Reject`), mai ricodificato.
 - [ ] L'audio voiceover + clip viene mixato correttamente quando richiesto.
 - [ ] L'output contiene sempre uno stream video e uno audio validi.
 - [ ] `ffprobe_valid=1` e durata entro la tolleranza contrattuale.
