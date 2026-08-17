@@ -24,7 +24,18 @@ func (r *sqliteCompletionTx) MarkCompletionCommitted(ctx context.Context, commit
 }
 
 func (r *sqliteCompletionTx) MarkCompletionTaskAttemptSucceeded(ctx context.Context, attemptID, workerID, leaseID, now string) error {
-	res, err := r.tx.ExecContext(ctx, `UPDATE task_attempts SET status='SUCCEEDED',completed_at=COALESCE(completed_at,?),report_version=report_version+1,updated_at=? WHERE id=? AND worker_id=? AND lease_id=? AND status NOT IN ('SUCCEEDED','FAILED','CANCELLED','TIMED_OUT')`, now, now, attemptID, workerID, leaseID)
+	// A valid completion commit may resurrect a FAILED attempt. The
+	// attempt_commits row is created only by DeclareOutputs, which runs
+	// strictly AFTER a successful render; a commit that reaches this point
+	// has ready >= required and therefore proves the render + upload
+	// succeeded. The worker's durable outbox can race a transient
+	// upload/declare failure (e.g. master restart) as TaskResult "failed"
+	// BEFORE the resume loop re-drives the commit — that false FAILED must
+	// not block the commit. CANCELLED and TIMED_OUT stay terminal
+	// (operator/master decisions, never resurrected); SUCCEEDED is the
+	// idempotent-replay no-op. error_code/error_message are cleared so a
+	// resurrected attempt never carries a stale failure reason.
+	res, err := r.tx.ExecContext(ctx, `UPDATE task_attempts SET status='SUCCEEDED',completed_at=COALESCE(completed_at,?),report_version=report_version+1,updated_at=?,error_code='',error_message='' WHERE id=? AND worker_id=? AND lease_id=? AND status NOT IN ('SUCCEEDED','CANCELLED','TIMED_OUT')`, now, now, attemptID, workerID, leaseID)
 	if err != nil {
 		return fmt.Errorf("store: mark completion attempt succeeded: %w", err)
 	}
@@ -37,7 +48,12 @@ func (r *sqliteCompletionTx) MarkCompletionTaskAttemptSucceeded(ctx context.Cont
 }
 
 func (r *sqliteCompletionTx) MarkCompletionTaskSucceeded(ctx context.Context, taskID, attemptID, workerID, leaseID, now string) error {
-	res, err := r.tx.ExecContext(ctx, `UPDATE tasks SET status='SUCCEEDED',completed_at=?,updated_at=?,winning_attempt_id=?,winning_attempt_committed_at=?,winning_attempt_terminal_pending=0,revision=revision+1 WHERE task_id=? AND attempt_id=? AND worker_id=? AND lease_id=? AND status IN ('RUNNING','LEASED')`, now, now, attemptID, now, taskID, attemptID, workerID, leaseID)
+	// FAILED is allowed alongside RUNNING/LEASED: the same resume-loop race
+	// that can leave the attempt FAILED also left the task FAILED (the
+	// ingest's task CAS does not clear attempt_id/worker_id/lease_id, so the
+	// fence still matches). The valid commit resurrects the task together
+	// with its attempt in one transaction.
+	res, err := r.tx.ExecContext(ctx, `UPDATE tasks SET status='SUCCEEDED',completed_at=?,updated_at=?,winning_attempt_id=?,winning_attempt_committed_at=?,winning_attempt_terminal_pending=0,revision=revision+1 WHERE task_id=? AND attempt_id=? AND worker_id=? AND lease_id=? AND status IN ('RUNNING','LEASED','FAILED')`, now, now, attemptID, now, taskID, attemptID, workerID, leaseID)
 	if err != nil {
 		return fmt.Errorf("store: mark completion task succeeded: %w", err)
 	}
@@ -80,11 +96,13 @@ func (r *sqliteCompletionTx) MarkCompletionJobSucceededIfTasksDone(ctx context.C
 	// that promotion itself (see below) inside the SAME transaction that
 	// writes SUCCEEDED — the intermediate state is never skipped, but it is
 	// finalizer-owned in this flow instead of ingest-owned. A job in any
-	// other state (PENDING/LEASED/FAILED/CANCELLED) is still rejected.
-	if artifactContract && status != "AWAITING_ARTIFACT" && status != "RUNNING" {
-		return fmt.Errorf("%w: completion job %s must be AWAITING_ARTIFACT (or RUNNING) before SUCCEEDED (status=%s)", ErrCompletionTransitionConflict, jobID, status)
+	// other state (PENDING/LEASED/CANCELLED) is still rejected; FAILED is
+	// admitted (see the gate below) so a false "failed" TaskResult raced
+	// ahead of the resume-loop commit cannot strand a valid commit.
+	if artifactContract && status != "AWAITING_ARTIFACT" && status != "RUNNING" && status != "FAILED" {
+		return fmt.Errorf("%w: completion job %s must be AWAITING_ARTIFACT (or RUNNING, or FAILED) before SUCCEEDED (status=%s)", ErrCompletionTransitionConflict, jobID, status)
 	}
-	if !artifactContract && status != "RUNNING" && status != "AWAITING_ARTIFACT" {
+	if !artifactContract && status != "RUNNING" && status != "AWAITING_ARTIFACT" && status != "FAILED" {
 		return fmt.Errorf("%w: render-only job %s cannot complete from status=%s", ErrCompletionTransitionConflict, jobID, status)
 	}
 
