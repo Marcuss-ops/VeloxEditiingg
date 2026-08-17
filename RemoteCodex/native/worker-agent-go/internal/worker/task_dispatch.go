@@ -117,6 +117,14 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 		taskrunner.AppendDetailedPhases(partialReport, rec)
 		return partialReport, err
 	}
+	// Pass 9 pre-extraction: the clip lease keys MUST be read from the
+	// ORIGINAL payload BEFORE resolveTaskAssets rewrites velox-drive://
+	// (and velox-asset://) refs into local filesystem paths. The legacy
+	// walker (assetref.ExtractAssetKeys) only sees wire refs, so a
+	// post-resolve extraction yields an empty key set and silently skips
+	// the lease for legacy clip jobs — the FASE 6 bug (0 lease acquires).
+	leaseAssetKeys := extractAssetKeysFromJSON(spec.Payload)
+
 	if spec.Payload != nil {
 		resolvedPayload, err := w.resolveTaskAssets(ctx, spec.Payload)
 		if err != nil {
@@ -162,7 +170,7 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 		reservationStore = w.clipCache.AsCanonicalStore()
 	}
 	if w.clipCache != nil {
-		assetKeys := extractAssetKeysFromJSON(spec.Payload)
+		assetKeys := leaseAssetKeys
 		if len(assetKeys) > 0 {
 			var v2Reservation *v2AssetReservation
 			var leaseReleaseErr error
