@@ -17,7 +17,7 @@
 #   builder has no ambient go.work lookup path.
 #
 # The go-builder stage delegates the worker-agent build to the project's
-# own Makefile (`make BIN_DIR=/out agent`) so that:
+# own Makefile (`make BIN_DIR=/out agent evict`) so that:
 #   1. VERSION.txt is enforced (Makefile FATALs when missing — the
 #      Dockerfile would otherwise silently fall back to "dev").
 #   2. Reproducible Builds BUILD_TIME chain (SOURCE_DATE_EPOCH → git
@@ -118,7 +118,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # golang:1.25.8-bookworm does NOT ship `make`. PR-3 requires it because
 # the go-builder delegates to the host Makefile. Keep the dep set
-# minimal: only what's needed to run the Makefile's agent target.
+# minimal: only what's needed to run the Makefile's agent and evict targets.
 RUN apt-get update -qq && apt-get install -y --no-install-recommends \
         make \
         ca-certificates \
@@ -150,17 +150,19 @@ COPY RemoteCodex/native/worker-agent-go/go.mod \
 WORKDIR /src/RemoteCodex/native/worker-agent-go
 RUN go mod download
 
-# Now copy the full module. The Makefile's `make agent` target then takes
-# over from BIN_DIR=/out, baking main.Version + main.BuildTime via the
-# Makefile's LDFLAGS contract (VERSION.txt + Reproducible-Builds chain).
+# Now copy the full module. The Makefile's `make agent evict` targets then
+# take over from BIN_DIR=/out: `agent` bakes main.Version + main.BuildTime
+# via the Makefile's LDFLAGS contract (VERSION.txt + Reproducible-Builds
+# chain), while `evict` builds the cache-admin CLI without version stamping.
 COPY RemoteCodex/native/worker-agent-go/ /src/RemoteCodex/native/worker-agent-go/
 
 # The Makefile is the single source of truth for the LDFLAGS pattern,
 # so the image's main.Version + main.BuildTime match the host `make agent`
 # output byte-for-byte (modulo /go/pkg/mod cache contents). /out is then
 # COPYed in stage 3.
-RUN make BIN_DIR=/out agent && \
-    test -x /out/velox-worker-agent
+RUN make BIN_DIR=/out agent evict && \
+    test -x /out/velox-worker-agent && \
+    test -x /out/velox-cache-evict
 
 
 # ─── Stage 3: runtime — NO compilers, NO cmake, NO binutils ─────────────────
@@ -221,12 +223,13 @@ COPY --from=cpp-builder /usr/local/share/velox/video-engine.sha256 /usr/local/sh
 # PR-3: copy the Go worker binary from the go-builder stage — no
 # pre-built bin/ from the build context is required.
 COPY --from=go-builder /out/velox-worker-agent /usr/local/bin/velox-worker-agent
+COPY --from=go-builder /out/velox-cache-evict /usr/local/bin/velox-cache-evict
 
 # Derive the runtime bundle identity from the exact binaries that crossed
 # the builder/runtime boundary. The source-tree BUNDLE_HASH.txt is not used
 # as an assertion because it can describe a different host build; this hash
 # is the value operators and the release manifest can actually verify.
-RUN sha256sum /usr/local/bin/velox-worker-agent /usr/local/bin/velox_video_engine \
+RUN sha256sum /usr/local/bin/velox-worker-agent /usr/local/bin/velox_video_engine /usr/local/bin/velox-cache-evict \
       | sha256sum | awk '{print $1}' > /app/RemoteCodex/BUNDLE_HASH.txt && \
     test "$(wc -c < /app/RemoteCodex/BUNDLE_HASH.txt)" -eq 65
 
@@ -254,10 +257,12 @@ RUN groupadd --system --gid "${VELOX_GID}" velox && \
     chown "${VELOX_UID}:${VELOX_GID}" \
         /usr/local/bin/velox_video_engine \
         /usr/local/bin/velox-worker-agent \
+        /usr/local/bin/velox-cache-evict \
         /usr/local/bin/worker-entrypoint.sh && \
     chmod 0755 \
         /usr/local/bin/velox_video_engine \
         /usr/local/bin/velox-worker-agent \
+        /usr/local/bin/velox-cache-evict \
         /usr/local/bin/worker-entrypoint.sh
 
 ENV HOME=/home/velox

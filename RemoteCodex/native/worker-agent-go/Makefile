@@ -47,6 +47,7 @@ GOMOD := $(GOCMD) mod
 
 AGENT_BINARY := velox-worker-agent
 INSTALLER_BINARY := velox-installer
+EVICT_BINARY := velox-cache-evict
 
 PREFIX ?= /usr/local
 BINDIR := $(PREFIX)/bin
@@ -54,14 +55,14 @@ BINDIR := $(PREFIX)/bin
 BUILD_DIR := build
 BIN_DIR := bin
 
-.PHONY: all build clean test install uninstall agent installer release
+.PHONY: all build clean test install uninstall agent installer evict release
 .PHONY: release-linux release-darwin release-windows test-coverage
 .PHONY: fmt lint deps verify-deps docs run-agent docker help
 .PHONY: bootstrap-smoke bootstrap-selftest-regenerate
 
 all: build
 
-build: agent installer
+build: agent installer evict
 
 agent:
 	@echo "Building $(AGENT_BINARY)..."
@@ -72,6 +73,11 @@ installer:
 	@echo "Building $(INSTALLER_BINARY)..."
 	@mkdir -p $(BIN_DIR)
 	$(GOBUILD) $(LDFLAGS) -o $(BIN_DIR)/$(INSTALLER_BINARY) ./cmd/installer
+
+evict:
+	@echo "Building $(EVICT_BINARY)..."
+	@mkdir -p $(BIN_DIR)
+	$(GOBUILD) -o $(BIN_DIR)/$(EVICT_BINARY) ./cmd/velox-cache-evict
 
 release: release-linux release-darwin release-windows
 
@@ -114,12 +120,14 @@ install: build
 	@echo "Installing binaries to $(BINDIR)..."
 	install -m 755 $(BIN_DIR)/$(AGENT_BINARY) $(BINDIR)/
 	install -m 755 $(BIN_DIR)/$(INSTALLER_BINARY) $(BINDIR)/
+	install -m 755 $(BIN_DIR)/$(EVICT_BINARY) $(BINDIR)/
 	@echo "Installation complete"
 
 uninstall:
 	@echo "Removing binaries from $(BINDIR)..."
 	rm -f $(BINDIR)/$(AGENT_BINARY)
 	rm -f $(BINDIR)/$(INSTALLER_BINARY)
+	rm -f $(BINDIR)/$(EVICT_BINARY)
 	@echo "Uninstallation complete"
 
 clean:
@@ -224,6 +232,7 @@ help:
 	@echo "  build          Build all binaries"
 	@echo "  agent          Build the worker agent binary"
 	@echo "  installer      Build the installer binary"
+	@echo "  evict          Build the velox-cache-evict admin binary"
 	@echo "  release        Build for all platforms (Linux, macOS, Windows)"
 	@echo "  test           Run all tests"
 	@echo "  test-coverage  Run tests with coverage report"
