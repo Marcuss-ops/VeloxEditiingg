@@ -449,8 +449,62 @@ convergere gli adapter, non per aggiungere un altro endpoint.
      i file >5MB — elimina il full-buffer e il re-upload integrale su retry;
   2. alzare `Concurrency` delivery (es. 2→4) per assorbire i burst e
      ridurre `queue_ms`, bilanciando la pressione sulle API Drive;
-  3. verificare se `drive-smoke` punta davvero alla Drive API reale (il
-     multipart >5MB che riesce è incoerente con la doc Google).
+  3. verificare se `drive-smoke` punta davvero alla Drive API reale —
+     **VERIFICATO (2026-08-17): SÌ, è la Drive API reale** (vedi sotto).
+
+### 2026-08-17 — `drive-smoke` confermato: punta alla Google Drive API reale
+
+Tracciamento completo del path di delivery:
+
+1. `drive-smoke` è una **row** in `delivery_destinations` (non un endpoint
+   né un provider): `destination_id='drive-smoke'`, `provider='google_drive'`,
+   `folder_id` reale. "smoke" è solo il nome convenzionale del folder Drive
+   usato come target canary.
+2. Il runner normalizza `google_drive` → `drive` (`canonicalProviderName` in
+   `runner_helpers.go`) e risolve il provider dal registry di produzione
+   (`bootstrap_modules.go`), che registra **solo due** provider reali:
+   `drive` → `NewDriveProvider(driveMod.Service(), …)` (wrappa
+   `internal/integrations/drive.Service`) e `social_gateway`.
+3. `DriveProvider.Deliver` → `Service.UploadVideo` → `UploadFile`, e **ogni
+   endpoint** del servizio è hardcoded verso l'API Google reale:
+   - base `doAPIRequest`: `https://www.googleapis.com/drive/v3`
+   - multipart: `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart`
+   - resumable init: `https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable`
+   - download: `https://www.googleapis.com/drive/v3/files/{id}?alt=media`
+   - OAuth: `https://oauth2.googleapis.com/token` + `https://accounts.google.com/o/oauth2/v2/auth`
+   - `FolderLink`: `https://drive.google.com/drive/folders/{id}`
+4. **Nessun mock/stub/noop** nel wiring di produzione: i soli
+   `stubProvider`/`fakeProvider` sono in `_test.go` (provider_test.go,
+   runner_destination_unmapped_test.go). L'unico altro uso di "smoke" è
+   `VELOX_SMOKE_DRIVE_FOLDER_ID` (folder reale del Level-D smoke) e il
+   `driveUploaderAdapter` del Level-D smoke, che usa anch'esso il
+   `integrations/drive.Service` reale.
+
+Conclusione: il multipart >5MB che riesce **non** indica un endpoint smoke —
+è la Drive API reale che accetta l'upload (ora comunque migrato a
+`uploadType=resumable` per >5MB, vedi sezione delivery).
+
+### 2026-08-17 — telemetria delivery: split upload network vs buffer locale
+
+Per rispondere a "quanto dei ~20s di upload è rete e quanto è lettura/buffer
+locale" il path delivery ora misura le due componenti separatamente.
+
+- `drive.UploadResult` espone `network_ms` e `local_buffer_ms`:
+  - `network_ms` = tempo negli HTTP round-trip Drive (transfer upload +
+    init/status query del protocollo resumable);
+  - `local_buffer_ms` = tempo di lettura dell'artifact da disco locale nel
+    buffer (multipart `io.Copy`, resumable `ReadAt` per-chunk).
+- `DriveProvider.Deliver` propaga i due valori in `Result.ProviderMeta`
+  (`upload_network_ms` / `upload_local_buffer_ms`); il runner li rilegge e
+  chiama il nuovo `Telemetry.ObserveDeliveryUploadBreakdown`.
+- Nuove famiglie Prometheus (OperationalTelemetry):
+  `velox_delivery_upload_network_ms` e `velox_delivery_upload_local_buffer_ms`
+  (label `provider`). Provider che non misurano lo split (es. social_gateway)
+  restano no-op (0/0).
+- Test: `TestOperationalTelemetry_UploadBreakdownExportsNetworkAndLocalBuffer`
+  (export histogram) e `TestUploadFile_MultipartRecordsNetworkAndLocalBufferSplit`
+  (round-trip misurato). Verifica: build+vet+test verdi su
+  `integrations/drive`, `deliveries`, `metrics`.
 
 ### 2026-08-17 — engine C++ pubblicato (v1.2.39) e delta render in produzione
 
@@ -545,6 +599,31 @@ convergere gli adapter, non per aggiungere un altro endpoint.
   output → `read_amplification` ≈ 1.0x. Alternativa: esprimere il target
   come `read / input_utile` anziché `read / output` per fixture con audio
   per-clip scartato.
+
+### 2026-08-17 — delivery: upload Drive resumable + concurrency 2→4
+
+- **UploadFile → uploadType=resumable per file >5MB** (`service_upload_resumable.go`):
+  il multipart monolitico (79.6MB bufferizzati in RAM in un solo POST) è
+  sostituito da una sessione resumable con **chunk da 8 MiB** (multiplo di
+  256 KiB) e **resume** sul committed offset (`bytes */<total>` → `Range`).
+  - Initiate → `POST .../files?uploadType=resumable` con
+    `X-Upload-Content-Length`; chunk PUT con `Content-Range`; `308` =
+    continua, `200/201` = completo.
+  - 5xx/408/429/transport → query status + resume da `committed+1`
+    (max 3 tentativi/chunk); 4xx permanente → fail-fast senza retry.
+  - File ≤5MB restano su multipart (path estratto in `uploadMultipart`).
+  - Test: chunked multi-chunk, resume dopo 500, permanent-failure no-retry
+    (`service_upload_resumable_test.go`); build + drive/deliveries verdi.
+- **Delivery concurrency 2→4**: `DefaultRunnerConfig().Concurrency`,
+  il fallback di `NewDeliveryRunner` e il default `VELOX_DELIVERY_CONCURRENCY`
+  passano da 2 a 4 (il forwarding runner era già a 4). Il tick cap già
+  `ClaimBatch` a `Concurrency`, quindi il batch per tick passa da 2 a 4:
+  un burst da 20 job si distribuisce in ~5 tick invece di ~10.
+  - **Misura del nuovo `queue_ms` NON ancora eseguita**: richiede il
+    **deploy del master** (il live `cb708fbf` è precedente alla modifica);
+    il baseline concurrency=2 era `queue_ms` p50 ~8s / max 32s. Da misurare
+    con un burst post-deploy via `fleetctl job inspect --json` →
+    `deliveries[]`.
 
 ### 2026-08-16 — benchmark 1 secondo
 

@@ -24,7 +24,7 @@ type RunnerConfig struct {
 	ClaimBatch int
 	// Concurrency limits how many deliveries are processed concurrently.
 	// Each delivery gets its own lease renewal goroutine; a bounded pool
-	// prevents resource exhaustion. Default 2.
+	// prevents resource exhaustion. Default 4.
 	Concurrency int
 
 	// BackoffSchedule maps attempt number (1-based) to the delay before
@@ -40,7 +40,7 @@ func DefaultRunnerConfig() *RunnerConfig {
 		LeaseDuration: 5 * time.Minute,
 		MaxAttempts:   5,
 		ClaimBatch:    4,
-		Concurrency:   2,
+		Concurrency:   4,
 		BackoffSchedule: []time.Duration{
 			30 * time.Second,
 			2 * time.Minute,

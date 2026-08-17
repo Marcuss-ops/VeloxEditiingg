@@ -59,6 +59,34 @@ func TestUploadFile_ReusesExistingDelivery(t *testing.T) {
 	}
 }
 
+func TestUploadFile_MultipartRecordsNetworkAndLocalBufferSplit(t *testing.T) {
+	filePath := filepath.Join(t.TempDir(), "small.mp4")
+	if err := os.WriteFile(filePath, []byte("video"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	service := driveTestService(func(req *http.Request) (*http.Response, error) {
+		if req.Method == http.MethodGet {
+			return driveResponse(http.StatusOK, `{"files":[]}`), nil
+		}
+		time.Sleep(10 * time.Millisecond)
+		return driveResponse(http.StatusOK, `{"id":"drive-net","webViewLink":"https://drive.google.com/file/d/drive-net"}`), nil
+	})
+
+	result, err := service.UploadFile(context.Background(), filePath, "folder", "delivery-net")
+	if err != nil {
+		t.Fatalf("UploadFile: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("want success, got %#v", result)
+	}
+	if result.NetworkMS <= 0 {
+		t.Fatalf("NetworkMS = %d, want > 0 (network round-trip should be measured)", result.NetworkMS)
+	}
+	if result.LocalBufferMS < 0 {
+		t.Fatalf("LocalBufferMS = %d, want >= 0", result.LocalBufferMS)
+	}
+}
+
 func TestUploadFile_StoresDeliveryMarkerAndParent(t *testing.T) {
 	filePath := filepath.Join(t.TempDir(), "comic.mp4")
 	if err := os.WriteFile(filePath, []byte("video"), 0o600); err != nil {

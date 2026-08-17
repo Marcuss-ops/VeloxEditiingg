@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"velox-server/internal/credentials"
 )
@@ -56,30 +57,40 @@ func (s *Service) UploadFile(ctx context.Context, filePath string, folderID stri
 	}
 
 	fileName := filepath.Base(filePath)
-	_ = fileInfo // silence unused variable warning - can be used for progress reporting
+
+	// Files larger than the Drive multipart limit use the resumable,
+	// chunked protocol: the body is streamed instead of buffered whole in
+	// memory, and an interrupted upload resumes from the committed offset
+	// rather than restarting from zero.
+	var result *UploadResult
+	if fileInfo.Size() > resumableUploadThreshold {
+		result, err = s.uploadResumable(ctx, file, fileInfo.Size(), fileName, folderID, deliveryID, token)
+	} else {
+		result, err = s.uploadMultipart(ctx, file, fileName, folderID, deliveryID, token)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if result.Success {
+		log.Printf("[CLOUD] Uploaded '%s' to Drive (ID: %s)", fileName, result.FileID)
+		result.FolderLink = fmt.Sprintf("https://drive.google.com/drive/folders/%s", folderID)
+	}
+	return result, nil
+}
+
+// uploadMultipart performs the simple multipart upload for small files
+// (<= 5 MB), where buffering the whole body in memory is acceptable.
+func (s *Service) uploadMultipart(ctx context.Context, file *os.File, fileName, folderID, deliveryID string, token *Token) (*UploadResult, error) {
+	metaJSON, err := buildUploadMetadata(fileName, folderID, deliveryID)
+	if err != nil {
+		return nil, fmt.Errorf("marshal upload metadata: %w", err)
+	}
 
 	// Create multipart upload
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 
 	// Write metadata part
-	meta := map[string]interface{}{
-		"name":    fileName,
-		"parents": []string{folderID},
-	}
-	// Stamp deliveryID as a public properties key so retries of the same
-	// delivery are traceable to the canonical delivery_id without requiring
-	// the drive.appdata OAuth scope.
-	if deliveryID != "" {
-		meta["properties"] = map[string]string{
-			"velox_delivery_id": deliveryID,
-		}
-	}
-
-	metaJSON, err := json.Marshal(meta)
-	if err != nil {
-		return nil, fmt.Errorf("marshal upload metadata: %w", err)
-	}
 	h := make(textproto.MIMEHeader)
 	h.Set("Content-Type", "application/json; charset=UTF-8")
 	part, err := writer.CreatePart(h)
@@ -90,16 +101,19 @@ func (s *Service) UploadFile(ctx context.Context, filePath string, folderID stri
 		return nil, fmt.Errorf("write metadata part: %w", err)
 	}
 
-	// Write file content part
+	// Write file content part. The io.Copy below is the local read: it
+	// streams the artifact off disk into the in-memory multipart buffer.
 	h = make(textproto.MIMEHeader)
 	h.Set("Content-Type", "application/octet-stream")
 	part, err = writer.CreatePart(h)
 	if err != nil {
 		return nil, fmt.Errorf("create content part: %w", err)
 	}
+	localStart := time.Now()
 	if _, err := io.Copy(part, file); err != nil {
 		return nil, fmt.Errorf("copy file into upload body: %w", err)
 	}
+	localBufferMS := time.Since(localStart).Milliseconds()
 
 	if err := writer.Close(); err != nil {
 		return nil, fmt.Errorf("close multipart body: %w", err)
@@ -115,7 +129,9 @@ func (s *Service) UploadFile(ctx context.Context, filePath string, folderID stri
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token.AccessToken))
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
+	networkStart := time.Now()
 	resp, err := s.httpClient.Do(req)
+	networkMS := time.Since(networkStart).Milliseconds()
 	if err != nil {
 		return nil, fmt.Errorf("upload failed: %w", err)
 	}
@@ -134,18 +150,12 @@ func (s *Service) UploadFile(ctx context.Context, filePath string, folderID stri
 		return nil, fmt.Errorf("failed to decode upload response: %w", err)
 	}
 
-	log.Printf("[CLOUD] Uploaded '%s' to Drive (ID: %s)", fileName, result.ID)
-
-	folderLink := ""
-	if folderID != "" {
-		folderLink = fmt.Sprintf("https://drive.google.com/drive/folders/%s", folderID)
-	}
-
 	return &UploadResult{
-		Success:     true,
-		FileID:      result.ID,
-		WebViewLink: result.WebViewLink,
-		FolderLink:  folderLink,
+		Success:       true,
+		FileID:        result.ID,
+		WebViewLink:   result.WebViewLink,
+		NetworkMS:     networkMS,
+		LocalBufferMS: localBufferMS,
 	}, nil
 }
 

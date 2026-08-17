@@ -46,6 +46,9 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 	providerStarted := processStarted
 	providerRan := false
 	var artifactBytes int64
+	// Network vs local-buffer split, populated from the provider result
+	// (currently only the Drive adapter measures it).
+	var uploadNetworkMS, uploadLocalBufferMS float64
 	status := "failed"
 	defer func() {
 		if r.telemetry == nil {
@@ -61,6 +64,7 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 		}
 		totalMS := float64(time.Since(processStarted).Microseconds()) / 1000
 		r.telemetry.ObserveDelivery(providerName, queueMS, uploadMS, totalMS, status)
+		r.telemetry.ObserveDeliveryUploadBreakdown(providerName, uploadNetworkMS, uploadLocalBufferMS)
 		if artifactBytes > 0 && uploadMS > 0 && status == "succeeded" {
 			mbps := float64(artifactBytes*8) / uploadMS / 1000
 			r.telemetry.RecordDeliveryUpload(providerName, artifactBytes, mbps)
@@ -252,6 +256,10 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 	} else {
 		res, runErr = provider.Deliver(deliverCtx, artifact, dest, lease.DeliveryID, lease.DeliveryID)
 	}
+	if res != nil && res.ProviderMeta != nil {
+		uploadNetworkMS = metaFloatMS(res.ProviderMeta["upload_network_ms"])
+		uploadLocalBufferMS = metaFloatMS(res.ProviderMeta["upload_local_buffer_ms"])
+	}
 
 	// Stop the heartbeat goroutine and wait for it to exit.
 	cancelDeliver()
@@ -368,5 +376,23 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 			r.telemetry.RecordDeliveryRetry(providerName)
 		}
 		return nil
+	}
+}
+
+// metaFloatMS coerces a ProviderMeta value into milliseconds. The Drive
+// adapter stores int64 milliseconds; a missing or non-numeric value is 0
+// so providers that do not measure the split stay a silent no-op.
+func metaFloatMS(v interface{}) float64 {
+	switch n := v.(type) {
+	case int64:
+		return float64(n)
+	case int:
+		return float64(n)
+	case float64:
+		return n
+	case float32:
+		return float64(n)
+	default:
+		return 0
 	}
 }

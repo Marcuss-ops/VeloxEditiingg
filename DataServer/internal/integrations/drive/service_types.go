@@ -41,6 +41,13 @@ type UploadResult struct {
 	WebViewLink string `json:"web_view_link,omitempty"`
 	FolderLink  string `json:"folder_link,omitempty"`
 	Error       string `json:"error,omitempty"`
+	// NetworkMS is the time spent in Drive HTTP round-trips (the upload
+	// transfer plus resumable init/status queries). LocalBufferMS is the
+	// time spent reading the artifact from local disk into the upload
+	// buffer. Together they partition the upload wall time so operators can
+	// tell a slow network path from local I/O/buffering.
+	NetworkMS     int64 `json:"network_ms,omitempty"`
+	LocalBufferMS int64 `json:"local_buffer_ms,omitempty"`
 }
 
 // Service provides Google Drive API operations

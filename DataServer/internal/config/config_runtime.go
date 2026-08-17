@@ -70,7 +70,7 @@ func loadRuntimeConfig(dataDir string, raw RawConfig) RuntimeConfig {
 	// validates length on NewCoordinator() and boot fails-fast.
 	c.CommitHMACKey = strings.TrimSpace(raw.Get("VELOX_COMMIT_HMAC_KEY"))
 	c.DeliveryDisabled = raw.Bool("VELOX_DELIVERY_DISABLED", false)
-	c.DeliveryConcurrency = raw.Int("VELOX_DELIVERY_CONCURRENCY", 2, 1)
+	c.DeliveryConcurrency = raw.Int("VELOX_DELIVERY_CONCURRENCY", 4, 1)
 
 	return c
 }

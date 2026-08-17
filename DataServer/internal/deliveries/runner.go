@@ -151,7 +151,7 @@ func NewDeliveryRunner(cfg *RunnerConfig, registry *Registry, dbStore *store.SQL
 		identity = fmt.Sprintf("delivery-runner-%d", time.Now().UnixNano())
 	}
 	if cfg.Concurrency <= 0 {
-		cfg.Concurrency = 2
+		cfg.Concurrency = 4
 	}
 	return &DeliveryRunner{
 		cfg:       cfg,

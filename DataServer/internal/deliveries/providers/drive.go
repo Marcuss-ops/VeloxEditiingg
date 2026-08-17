@@ -63,6 +63,10 @@ func (d *DriveProvider) Deliver(ctx context.Context, artifact *store.Artifact, d
 		RemoteURL: uploadRes.WebViewLink,
 		ProviderMeta: map[string]interface{}{
 			"folder_link": uploadRes.FolderLink,
+			// Network vs local-buffer split: lets the runner's telemetry
+			// separate Drive round-trip time from local disk read time.
+			"upload_network_ms":      uploadRes.NetworkMS,
+			"upload_local_buffer_ms": uploadRes.LocalBufferMS,
 		},
 	}, nil
 }

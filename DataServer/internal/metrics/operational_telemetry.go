@@ -5,14 +5,16 @@ package metrics
 // separate from the scorecard collector so store/delivery packages can depend
 // on a tiny structural interface without importing this package.
 type OperationalTelemetry struct {
-	deliveryQueueMS       *Family
-	deliveryUploadMS      *Family
-	deliveryTotalMS       *Family
-	deliveryRetries       *Family
-	deliveryTimeouts      *Family
-	deliveryBytes         *Family
-	deliveryUploadMbps    *Family
-	deliveryProviderError *Family
+	deliveryQueueMS             *Family
+	deliveryUploadMS            *Family
+	deliveryTotalMS             *Family
+	deliveryUploadNetworkMS     *Family
+	deliveryUploadLocalBufferMS *Family
+	deliveryRetries             *Family
+	deliveryTimeouts            *Family
+	deliveryBytes               *Family
+	deliveryUploadMbps          *Family
+	deliveryProviderError       *Family
 
 	dbWriteWaitMS        *Family
 	dbTransactionMS      *Family
@@ -51,6 +53,8 @@ func NewOperationalTelemetry(reg *Registry) *OperationalTelemetry {
 	t.deliveryQueueMS = NewHistogramFamily("velox_delivery_queue_ms", "Delivery queue wait in milliseconds", []string{"provider"}, []float64{10, 50, 100, 250, 500, 1000, 5000, 15000, 60000})
 	t.deliveryUploadMS = NewHistogramFamily("velox_delivery_upload_ms", "Provider delivery operation duration in milliseconds", []string{"provider", "status"}, []float64{10, 50, 100, 250, 500, 1000, 5000, 15000, 60000, 300000})
 	t.deliveryTotalMS = NewHistogramFamily("velox_delivery_total_ms", "End-to-end delivery duration in milliseconds", []string{"provider", "status"}, []float64{10, 50, 100, 250, 500, 1000, 5000, 15000, 60000, 300000})
+	t.deliveryUploadNetworkMS = NewHistogramFamily("velox_delivery_upload_network_ms", "Delivery upload network round-trip time in milliseconds (Drive HTTP transfer + resumable init/status)", []string{"provider"}, []float64{10, 50, 100, 250, 500, 1000, 5000, 15000, 60000, 300000})
+	t.deliveryUploadLocalBufferMS = NewHistogramFamily("velox_delivery_upload_local_buffer_ms", "Delivery upload local disk read/buffer time in milliseconds", []string{"provider"}, []float64{0.1, 1, 5, 10, 25, 50, 100, 250, 500, 1000, 5000})
 	t.deliveryRetries = NewCounterFamily("velox_delivery_retry_count", "Delivery attempts that scheduled a retry", []string{"provider"})
 	t.deliveryTimeouts = NewCounterFamily("velox_delivery_timeout_count", "Delivery operations terminated by timeout", []string{"provider"})
 	t.deliveryBytes = NewCounterFamily("velox_delivery_bytes_uploaded", "Bytes successfully delivered", []string{"provider"})
@@ -80,7 +84,8 @@ func NewOperationalTelemetry(reg *Registry) *OperationalTelemetry {
 	t.cacheDownloadBytes = NewCounterFamily("velox_cache_download_bytes_total", "Bytes downloaded into the local asset cache per attempt", []string{})
 
 	for _, f := range []*Family{
-		t.deliveryQueueMS, t.deliveryUploadMS, t.deliveryTotalMS, t.deliveryRetries,
+		t.deliveryQueueMS, t.deliveryUploadMS, t.deliveryTotalMS,
+		t.deliveryUploadNetworkMS, t.deliveryUploadLocalBufferMS, t.deliveryRetries,
 		t.deliveryTimeouts, t.deliveryBytes, t.deliveryUploadMbps, t.deliveryProviderError,
 		t.dbWriteWaitMS, t.dbTransactionMS, t.dbBusy, t.dbBusyTimeout, t.dbRetries,
 		t.dbWriteOperations, t.dbReadOperations, t.dbLongestTransaction,
@@ -122,6 +127,19 @@ func (t *OperationalTelemetry) ObserveDelivery(provider string, queueMS, uploadM
 	}
 	if totalMS >= 0 {
 		t.deliveryTotalMS.Observe([]string{provider, status}, totalMS)
+	}
+}
+
+func (t *OperationalTelemetry) ObserveDeliveryUploadBreakdown(provider string, networkMS, localBufferMS float64) {
+	if t == nil || (networkMS <= 0 && localBufferMS <= 0) {
+		return
+	}
+	provider = stableLabel(provider, "unknown")
+	if networkMS > 0 && t.deliveryUploadNetworkMS != nil {
+		t.deliveryUploadNetworkMS.Observe([]string{provider}, networkMS)
+	}
+	if localBufferMS > 0 && t.deliveryUploadLocalBufferMS != nil {
+		t.deliveryUploadLocalBufferMS.Observe([]string{provider}, localBufferMS)
 	}
 }
 
