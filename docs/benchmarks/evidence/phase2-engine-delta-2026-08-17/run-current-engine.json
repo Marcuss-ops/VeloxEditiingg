@@ -1,0 +1,2481 @@
+{
+  "benchmark_run_id": "bench-e4a99e625120a9598b6a4414b192eb49",
+  "fixture_id": "COPY_ONLY_CANONICAL_5M_V1",
+  "git_commit": "bc71849a5f89afb5927db2b861f8c7191c1b3522",
+  "worker_id": "vps-334f342f",
+  "host_fingerprint": "69afb24d9601910694057273d9aa06d87ebd0155a2581d56eaa8aca2d245f179",
+  "kernel": "linux/amd64",
+  "cpu_model": "Intel Core Processor (Haswell, no TSX)",
+  "ram_bytes": 24061263872,
+  "cache_mode": "warm",
+  "concurrency": 1,
+  "runs": 5,
+  "receipts": [
+    {
+      "run_index": 0,
+      "wall_ms": 188,
+      "artifact_sha": "17930f9cbad6a93276ad2d4841495217fd33ccc875bec7f2f612096918ae2937",
+      "receipt": {
+        "version": 1,
+        "identity": {
+          "job_id": "bench-bench-d4f7d35c7252fce5f2614221dee4a84a",
+          "worker_id": "vps-334f342f",
+          "git_commit": "bc71849a5f89afb5927db2b861f8c7191c1b3522",
+          "engine_sha256": "2ee050c3adfe7a11689d14f11f2935c493e9358d09ca9f32ba5a2cfe203b4fe0",
+          "benchmark_fixture_id": "COPY_ONLY_CANONICAL_5M_V1"
+        },
+        "workload": {
+          "job_type": "copy_only",
+          "duration_us": 300000000,
+          "clip_count": 24,
+          "asset_count": 25,
+          "copy_only": true,
+          "final_audio_copy": true,
+          "video_codec": "h264",
+          "audio_codec": "aac",
+          "width": 1920,
+          "height": 1080,
+          "fps": 30
+        },
+        "timing": {
+          "wall_ms": 188,
+          "resolve_ms": 0,
+          "validate_ms": 0,
+          "compile_ms": 0,
+          "render_ms": 0,
+          "pipeline_total_ms": 188,
+          "plan_marshal_ms": 0,
+          "plan_write_ms": 0,
+          "process_start_ms": 0,
+          "process_wait_ms": 0,
+          "native_total_ms": 188,
+          "executor_total_ms": 0,
+          "artifact_total_ms": 0
+        },
+        "process": {
+          "engine_spawn_count": 1,
+          "engine_spawn_ms": 0,
+          "external_process_count": 0,
+          "ffmpeg_exec_count": 0,
+          "ffprobe_exec_count": 0,
+          "shell_exec_count": 0,
+          "curl_exec_count": 0,
+          "engine_external_spawn_count": 0,
+          "engine_ffmpeg_spawn_count": 0,
+          "engine_ffprobe_spawn_count": 0,
+          "engine_shell_spawn_count": 0,
+          "engine_curl_spawn_count": 0,
+          "child_wait_ms": 187
+        },
+        "cpu": {
+          "wall_ms": 188,
+          "cpu_user_ms": 140,
+          "cpu_system_ms": 110,
+          "cpu_total_ms": 250,
+          "cpu_wall_ratio": 1.3297872340425532,
+          "engine_cpu_user_ms": 161,
+          "engine_cpu_system_ms": 118
+        },
+        "io": {
+          "total_bytes_read": 12079114,
+          "total_bytes_written": 5846871,
+          "asset_bytes_read": 5825040,
+          "asset_bytes_copied": 0,
+          "temp_bytes_written": 0,
+          "mux_bytes_read": 0,
+          "mux_bytes_written": 5838599,
+          "final_bytes_written": 5838599,
+          "file_copy_count": 0,
+          "file_copy_bytes": 0,
+          "input_open_count": 28,
+          "input_reopen_count": 2
+        },
+        "media": {
+          "frames": 0,
+          "frames_decoded": 0,
+          "frames_composited": 0,
+          "encode_passes": 0,
+          "temp_bytes": 0,
+          "output_bytes": 5838599,
+          "duration_sec": 300,
+          "concat_mode": "packet_copy",
+          "fps": 0,
+          "speed_x": 0,
+          "bitrate": 0,
+          "dup_frames": 0,
+          "drop_frames": 0
+        },
+        "memory": {
+          "peak_rss_bytes": 141570048,
+          "current_rss_bytes": 141570048
+        },
+        "scheduling": {
+          "queue_wait_ms": 0,
+          "off_cpu_ms": 0,
+          "voluntary_context_switches": 136,
+          "involuntary_context_switches": 137,
+          "minor_page_faults": 39256,
+          "major_page_faults": 0
+        },
+        "frame_pipeline": {
+          "producer_busy_ms": 0,
+          "producer_wait_ms": 0,
+          "consumer_busy_ms": 0,
+          "consumer_wait_ms": 0,
+          "queue_depth_avg": 0,
+          "queue_depth_max": 0,
+          "queue_empty_ms": 0,
+          "queue_full_ms": 0,
+          "producer_stall_ratio": 0,
+          "encoder_starvation_ratio": 0,
+          "backpressure_ratio": 0
+        },
+        "phases": [
+          {
+            "name": "worker.temp.create",
+            "duration_ms": 0,
+            "timing_mode": "exclusive"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "engine.packet_mux",
+            "duration_ms": 144,
+            "bytes_out": 5838599,
+            "timing_mode": "exclusive"
+          },
+          {
+            "name": "engine.render",
+            "duration_ms": 151,
+            "timing_mode": "exclusive"
+          }
+        ],
+        "segments": [
+          {
+            "segment_index": 0,
+            "scene_id": "seg_001",
+            "source_type": "video",
+            "duration_ms": 0.006019,
+            "source_bytes": 242710,
+            "status": "ok",
+            "finished_offset_ms": 0.156956
+          },
+          {
+            "segment_index": 1,
+            "scene_id": "seg_002",
+            "source_type": "video",
+            "duration_ms": 0.004773,
+            "source_bytes": 242742,
+            "status": "ok",
+            "finished_offset_ms": 0.202442
+          },
+          {
+            "segment_index": 2,
+            "scene_id": "seg_003",
+            "source_type": "video",
+            "duration_ms": 0.004032,
+            "source_bytes": 242741,
+            "status": "ok",
+            "finished_offset_ms": 0.247446
+          },
+          {
+            "segment_index": 3,
+            "scene_id": "seg_004",
+            "source_type": "video",
+            "duration_ms": 0.003981,
+            "source_bytes": 242683,
+            "status": "ok",
+            "finished_offset_ms": 0.291895
+          },
+          {
+            "segment_index": 4,
+            "scene_id": "seg_005",
+            "source_type": "video",
+            "duration_ms": 0.003465,
+            "source_bytes": 242680,
+            "status": "ok",
+            "finished_offset_ms": 0.332888
+          },
+          {
+            "segment_index": 5,
+            "scene_id": "seg_006",
+            "source_type": "video",
+            "duration_ms": 0.0043,
+            "source_bytes": 242733,
+            "status": "ok",
+            "finished_offset_ms": 0.373086
+          },
+          {
+            "segment_index": 6,
+            "scene_id": "seg_007",
+            "source_type": "video",
+            "duration_ms": 0.003515,
+            "source_bytes": 242695,
+            "status": "ok",
+            "finished_offset_ms": 0.414982
+          },
+          {
+            "segment_index": 7,
+            "scene_id": "seg_008",
+            "source_type": "video",
+            "duration_ms": 0.004315,
+            "source_bytes": 242737,
+            "status": "ok",
+            "finished_offset_ms": 0.458127
+          },
+          {
+            "segment_index": 8,
+            "scene_id": "seg_009",
+            "source_type": "video",
+            "duration_ms": 0.013604,
+            "source_bytes": 242659,
+            "status": "ok",
+            "finished_offset_ms": 0.507528
+          },
+          {
+            "segment_index": 9,
+            "scene_id": "seg_010",
+            "source_type": "video",
+            "duration_ms": 0.003566,
+            "source_bytes": 242320,
+            "status": "ok",
+            "finished_offset_ms": 0.549043
+          },
+          {
+            "segment_index": 10,
+            "scene_id": "seg_011",
+            "source_type": "video",
+            "duration_ms": 0.003197,
+            "source_bytes": 242726,
+            "status": "ok",
+            "finished_offset_ms": 0.586513
+          },
+          {
+            "segment_index": 11,
+            "scene_id": "seg_012",
+            "source_type": "video",
+            "duration_ms": 0.00317,
+            "source_bytes": 242724,
+            "status": "ok",
+            "finished_offset_ms": 0.625362
+          },
+          {
+            "segment_index": 12,
+            "scene_id": "seg_013",
+            "source_type": "video",
+            "duration_ms": 0.003638,
+            "source_bytes": 242730,
+            "status": "ok",
+            "finished_offset_ms": 0.663179
+          },
+          {
+            "segment_index": 13,
+            "scene_id": "seg_014",
+            "source_type": "video",
+            "duration_ms": 0.003175,
+            "source_bytes": 242764,
+            "status": "ok",
+            "finished_offset_ms": 0.701451
+          },
+          {
+            "segment_index": 14,
+            "scene_id": "seg_015",
+            "source_type": "video",
+            "duration_ms": 0.003252,
+            "source_bytes": 242753,
+            "status": "ok",
+            "finished_offset_ms": 0.740539
+          },
+          {
+            "segment_index": 15,
+            "scene_id": "seg_016",
+            "source_type": "video",
+            "duration_ms": 0.016065,
+            "source_bytes": 242715,
+            "status": "ok",
+            "finished_offset_ms": 0.7921
+          },
+          {
+            "segment_index": 16,
+            "scene_id": "seg_017",
+            "source_type": "video",
+            "duration_ms": 0.003581,
+            "source_bytes": 242793,
+            "status": "ok",
+            "finished_offset_ms": 0.833518
+          },
+          {
+            "segment_index": 17,
+            "scene_id": "seg_018",
+            "source_type": "video",
+            "duration_ms": 0.003807,
+            "source_bytes": 242753,
+            "status": "ok",
+            "finished_offset_ms": 0.874307
+          },
+          {
+            "segment_index": 18,
+            "scene_id": "seg_019",
+            "source_type": "video",
+            "duration_ms": 0.003368,
+            "source_bytes": 242690,
+            "status": "ok",
+            "finished_offset_ms": 0.914427
+          },
+          {
+            "segment_index": 19,
+            "scene_id": "seg_020",
+            "source_type": "video",
+            "duration_ms": 0.010051,
+            "source_bytes": 242718,
+            "status": "ok",
+            "finished_offset_ms": 0.963758
+          },
+          {
+            "segment_index": 20,
+            "scene_id": "seg_021",
+            "source_type": "video",
+            "duration_ms": 0.003522,
+            "source_bytes": 242675,
+            "status": "ok",
+            "finished_offset_ms": 1.00503
+          },
+          {
+            "segment_index": 21,
+            "scene_id": "seg_022",
+            "source_type": "video",
+            "duration_ms": 0.003279,
+            "source_bytes": 242776,
+            "status": "ok",
+            "finished_offset_ms": 1.04276
+          },
+          {
+            "segment_index": 22,
+            "scene_id": "seg_023",
+            "source_type": "video",
+            "duration_ms": 0.005466,
+            "source_bytes": 242771,
+            "status": "ok",
+            "finished_offset_ms": 1.08688
+          },
+          {
+            "segment_index": 23,
+            "scene_id": "seg_024",
+            "source_type": "video",
+            "duration_ms": 0.00702,
+            "source_bytes": 242752,
+            "status": "ok",
+            "finished_offset_ms": 1.14847
+          }
+        ],
+        "derived": {
+          "unaccounted_ms": -107,
+          "accounted_ratio": 1.5691489361702127,
+          "read_amplification": 2.068837746863588,
+          "write_amplification": 1.001416778237382,
+          "processes_per_clip": 0,
+          "useful_work_ratio": 1.5691489361702127,
+          "cpu_wall_ratio": 1.3297872340425532
+        }
+      }
+    },
+    {
+      "run_index": 1,
+      "wall_ms": 174,
+      "artifact_sha": "17930f9cbad6a93276ad2d4841495217fd33ccc875bec7f2f612096918ae2937",
+      "receipt": {
+        "version": 1,
+        "identity": {
+          "job_id": "bench-bench-6574b2a26fd906e927878d144f701ccc",
+          "worker_id": "vps-334f342f",
+          "git_commit": "bc71849a5f89afb5927db2b861f8c7191c1b3522",
+          "engine_sha256": "2ee050c3adfe7a11689d14f11f2935c493e9358d09ca9f32ba5a2cfe203b4fe0",
+          "benchmark_fixture_id": "COPY_ONLY_CANONICAL_5M_V1"
+        },
+        "workload": {
+          "job_type": "copy_only",
+          "duration_us": 300000000,
+          "clip_count": 24,
+          "asset_count": 25,
+          "copy_only": true,
+          "final_audio_copy": true,
+          "video_codec": "h264",
+          "audio_codec": "aac",
+          "width": 1920,
+          "height": 1080,
+          "fps": 30
+        },
+        "timing": {
+          "wall_ms": 174,
+          "resolve_ms": 0,
+          "validate_ms": 0,
+          "compile_ms": 0,
+          "render_ms": 0,
+          "pipeline_total_ms": 174,
+          "plan_marshal_ms": 0,
+          "plan_write_ms": 0,
+          "process_start_ms": 0,
+          "process_wait_ms": 0,
+          "native_total_ms": 174,
+          "executor_total_ms": 0,
+          "artifact_total_ms": 0
+        },
+        "process": {
+          "engine_spawn_count": 1,
+          "engine_spawn_ms": 0,
+          "external_process_count": 0,
+          "ffmpeg_exec_count": 0,
+          "ffprobe_exec_count": 0,
+          "shell_exec_count": 0,
+          "curl_exec_count": 0,
+          "engine_external_spawn_count": 0,
+          "engine_ffmpeg_spawn_count": 0,
+          "engine_ffprobe_spawn_count": 0,
+          "engine_shell_spawn_count": 0,
+          "engine_curl_spawn_count": 0,
+          "child_wait_ms": 173
+        },
+        "cpu": {
+          "wall_ms": 174,
+          "cpu_user_ms": 150,
+          "cpu_system_ms": 100,
+          "cpu_total_ms": 250,
+          "cpu_wall_ratio": 1.4367816091954022,
+          "engine_cpu_user_ms": 154,
+          "engine_cpu_system_ms": 102
+        },
+        "io": {
+          "total_bytes_read": 11063305,
+          "total_bytes_written": 8240,
+          "asset_bytes_read": 5825040,
+          "asset_bytes_copied": 0,
+          "temp_bytes_written": 0,
+          "mux_bytes_read": 0,
+          "mux_bytes_written": 5838599,
+          "final_bytes_written": 5838599,
+          "file_copy_count": 0,
+          "file_copy_bytes": 0,
+          "input_open_count": 28,
+          "input_reopen_count": 2
+        },
+        "media": {
+          "frames": 0,
+          "frames_decoded": 0,
+          "frames_composited": 0,
+          "encode_passes": 0,
+          "temp_bytes": 0,
+          "output_bytes": 5838599,
+          "duration_sec": 300,
+          "concat_mode": "packet_copy",
+          "fps": 0,
+          "speed_x": 0,
+          "bitrate": 0,
+          "dup_frames": 0,
+          "drop_frames": 0
+        },
+        "memory": {
+          "peak_rss_bytes": 134885376,
+          "current_rss_bytes": 0
+        },
+        "scheduling": {
+          "queue_wait_ms": 0,
+          "off_cpu_ms": 0,
+          "voluntary_context_switches": 110,
+          "involuntary_context_switches": 175,
+          "minor_page_faults": 39254,
+          "major_page_faults": 0
+        },
+        "frame_pipeline": {
+          "producer_busy_ms": 0,
+          "producer_wait_ms": 0,
+          "consumer_busy_ms": 0,
+          "consumer_wait_ms": 0,
+          "queue_depth_avg": 0,
+          "queue_depth_max": 0,
+          "queue_empty_ms": 0,
+          "queue_full_ms": 0,
+          "producer_stall_ratio": 0,
+          "encoder_starvation_ratio": 0,
+          "backpressure_ratio": 0
+        },
+        "phases": [
+          {
+            "name": "worker.temp.create",
+            "duration_ms": 0,
+            "timing_mode": "exclusive"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "engine.packet_mux",
+            "duration_ms": 129,
+            "bytes_out": 5838599,
+            "timing_mode": "exclusive"
+          },
+          {
+            "name": "engine.render",
+            "duration_ms": 137,
+            "timing_mode": "exclusive"
+          }
+        ],
+        "segments": [
+          {
+            "segment_index": 0,
+            "scene_id": "seg_001",
+            "source_type": "video",
+            "duration_ms": 0.005612,
+            "source_bytes": 242710,
+            "status": "ok",
+            "finished_offset_ms": 0.146187
+          },
+          {
+            "segment_index": 1,
+            "scene_id": "seg_002",
+            "source_type": "video",
+            "duration_ms": 0.004411,
+            "source_bytes": 242742,
+            "status": "ok",
+            "finished_offset_ms": 0.185796
+          },
+          {
+            "segment_index": 2,
+            "scene_id": "seg_003",
+            "source_type": "video",
+            "duration_ms": 0.004011,
+            "source_bytes": 242741,
+            "status": "ok",
+            "finished_offset_ms": 0.227234
+          },
+          {
+            "segment_index": 3,
+            "scene_id": "seg_004",
+            "source_type": "video",
+            "duration_ms": 0.00385,
+            "source_bytes": 242683,
+            "status": "ok",
+            "finished_offset_ms": 0.26072
+          },
+          {
+            "segment_index": 4,
+            "scene_id": "seg_005",
+            "source_type": "video",
+            "duration_ms": 0.003801,
+            "source_bytes": 242680,
+            "status": "ok",
+            "finished_offset_ms": 0.292734
+          },
+          {
+            "segment_index": 5,
+            "scene_id": "seg_006",
+            "source_type": "video",
+            "duration_ms": 0.00331,
+            "source_bytes": 242733,
+            "status": "ok",
+            "finished_offset_ms": 0.324015
+          },
+          {
+            "segment_index": 6,
+            "scene_id": "seg_007",
+            "source_type": "video",
+            "duration_ms": 0.003439,
+            "source_bytes": 242695,
+            "status": "ok",
+            "finished_offset_ms": 0.355571
+          },
+          {
+            "segment_index": 7,
+            "scene_id": "seg_008",
+            "source_type": "video",
+            "duration_ms": 0.004492,
+            "source_bytes": 242737,
+            "status": "ok",
+            "finished_offset_ms": 0.387714
+          },
+          {
+            "segment_index": 8,
+            "scene_id": "seg_009",
+            "source_type": "video",
+            "duration_ms": 0.003268,
+            "source_bytes": 242659,
+            "status": "ok",
+            "finished_offset_ms": 0.418208
+          },
+          {
+            "segment_index": 9,
+            "scene_id": "seg_010",
+            "source_type": "video",
+            "duration_ms": 0.003313,
+            "source_bytes": 242320,
+            "status": "ok",
+            "finished_offset_ms": 0.449481
+          },
+          {
+            "segment_index": 10,
+            "scene_id": "seg_011",
+            "source_type": "video",
+            "duration_ms": 0.003349,
+            "source_bytes": 242726,
+            "status": "ok",
+            "finished_offset_ms": 0.480455
+          },
+          {
+            "segment_index": 11,
+            "scene_id": "seg_012",
+            "source_type": "video",
+            "duration_ms": 0.003621,
+            "source_bytes": 242724,
+            "status": "ok",
+            "finished_offset_ms": 0.522762
+          },
+          {
+            "segment_index": 12,
+            "scene_id": "seg_013",
+            "source_type": "video",
+            "duration_ms": 0.003252,
+            "source_bytes": 242730,
+            "status": "ok",
+            "finished_offset_ms": 0.553297
+          },
+          {
+            "segment_index": 13,
+            "scene_id": "seg_014",
+            "source_type": "video",
+            "duration_ms": 0.003227,
+            "source_bytes": 242764,
+            "status": "ok",
+            "finished_offset_ms": 0.583791
+          },
+          {
+            "segment_index": 14,
+            "scene_id": "seg_015",
+            "source_type": "video",
+            "duration_ms": 0.003249,
+            "source_bytes": 242753,
+            "status": "ok",
+            "finished_offset_ms": 0.614591
+          },
+          {
+            "segment_index": 15,
+            "scene_id": "seg_016",
+            "source_type": "video",
+            "duration_ms": 0.015507,
+            "source_bytes": 242715,
+            "status": "ok",
+            "finished_offset_ms": 0.663484
+          },
+          {
+            "segment_index": 16,
+            "scene_id": "seg_017",
+            "source_type": "video",
+            "duration_ms": 0.003459,
+            "source_bytes": 242793,
+            "status": "ok",
+            "finished_offset_ms": 0.695561
+          },
+          {
+            "segment_index": 17,
+            "scene_id": "seg_018",
+            "source_type": "video",
+            "duration_ms": 0.003309,
+            "source_bytes": 242753,
+            "status": "ok",
+            "finished_offset_ms": 0.728515
+          },
+          {
+            "segment_index": 18,
+            "scene_id": "seg_019",
+            "source_type": "video",
+            "duration_ms": 0.003272,
+            "source_bytes": 242690,
+            "status": "ok",
+            "finished_offset_ms": 0.759515
+          },
+          {
+            "segment_index": 19,
+            "scene_id": "seg_020",
+            "source_type": "video",
+            "duration_ms": 0.010141,
+            "source_bytes": 242718,
+            "status": "ok",
+            "finished_offset_ms": 0.806772
+          },
+          {
+            "segment_index": 20,
+            "scene_id": "seg_021",
+            "source_type": "video",
+            "duration_ms": 0.003657,
+            "source_bytes": 242675,
+            "status": "ok",
+            "finished_offset_ms": 0.839021
+          },
+          {
+            "segment_index": 21,
+            "scene_id": "seg_022",
+            "source_type": "video",
+            "duration_ms": 0.003264,
+            "source_bytes": 242776,
+            "status": "ok",
+            "finished_offset_ms": 0.869933
+          },
+          {
+            "segment_index": 22,
+            "scene_id": "seg_023",
+            "source_type": "video",
+            "duration_ms": 0.003238,
+            "source_bytes": 242771,
+            "status": "ok",
+            "finished_offset_ms": 0.90051
+          },
+          {
+            "segment_index": 23,
+            "scene_id": "seg_024",
+            "source_type": "video",
+            "duration_ms": 0.003234,
+            "source_bytes": 242752,
+            "status": "ok",
+            "finished_offset_ms": 0.930783
+          }
+        ],
+        "derived": {
+          "unaccounted_ms": -92,
+          "accounted_ratio": 1.528735632183908,
+          "read_amplification": 1.8948561118857452,
+          "write_amplification": 0.0014112974705061951,
+          "processes_per_clip": 0,
+          "useful_work_ratio": 1.528735632183908,
+          "cpu_wall_ratio": 1.4367816091954022
+        }
+      }
+    },
+    {
+      "run_index": 2,
+      "wall_ms": 183,
+      "artifact_sha": "17930f9cbad6a93276ad2d4841495217fd33ccc875bec7f2f612096918ae2937",
+      "receipt": {
+        "version": 1,
+        "identity": {
+          "job_id": "bench-bench-3566a27655a7be17ebd801ea6031982e",
+          "worker_id": "vps-334f342f",
+          "git_commit": "bc71849a5f89afb5927db2b861f8c7191c1b3522",
+          "engine_sha256": "2ee050c3adfe7a11689d14f11f2935c493e9358d09ca9f32ba5a2cfe203b4fe0",
+          "benchmark_fixture_id": "COPY_ONLY_CANONICAL_5M_V1"
+        },
+        "workload": {
+          "job_type": "copy_only",
+          "duration_us": 300000000,
+          "clip_count": 24,
+          "asset_count": 25,
+          "copy_only": true,
+          "final_audio_copy": true,
+          "video_codec": "h264",
+          "audio_codec": "aac",
+          "width": 1920,
+          "height": 1080,
+          "fps": 30
+        },
+        "timing": {
+          "wall_ms": 183,
+          "resolve_ms": 0,
+          "validate_ms": 0,
+          "compile_ms": 0,
+          "render_ms": 0,
+          "pipeline_total_ms": 183,
+          "plan_marshal_ms": 0,
+          "plan_write_ms": 0,
+          "process_start_ms": 0,
+          "process_wait_ms": 0,
+          "native_total_ms": 183,
+          "executor_total_ms": 0,
+          "artifact_total_ms": 0
+        },
+        "process": {
+          "engine_spawn_count": 1,
+          "engine_spawn_ms": 0,
+          "external_process_count": 0,
+          "ffmpeg_exec_count": 0,
+          "ffprobe_exec_count": 0,
+          "shell_exec_count": 0,
+          "curl_exec_count": 0,
+          "engine_external_spawn_count": 0,
+          "engine_ffmpeg_spawn_count": 0,
+          "engine_ffprobe_spawn_count": 0,
+          "engine_shell_spawn_count": 0,
+          "engine_curl_spawn_count": 0,
+          "child_wait_ms": 182
+        },
+        "cpu": {
+          "wall_ms": 183,
+          "cpu_user_ms": 150,
+          "cpu_system_ms": 90,
+          "cpu_total_ms": 240,
+          "cpu_wall_ratio": 1.3114754098360655,
+          "engine_cpu_user_ms": 156,
+          "engine_cpu_system_ms": 102
+        },
+        "io": {
+          "total_bytes_read": 12393657,
+          "total_bytes_written": 5846871,
+          "asset_bytes_read": 5825040,
+          "asset_bytes_copied": 0,
+          "temp_bytes_written": 0,
+          "mux_bytes_read": 0,
+          "mux_bytes_written": 5838599,
+          "final_bytes_written": 5838599,
+          "file_copy_count": 0,
+          "file_copy_bytes": 0,
+          "input_open_count": 28,
+          "input_reopen_count": 2
+        },
+        "media": {
+          "frames": 0,
+          "frames_decoded": 0,
+          "frames_composited": 0,
+          "encode_passes": 0,
+          "temp_bytes": 0,
+          "output_bytes": 5838599,
+          "duration_sec": 300,
+          "concat_mode": "packet_copy",
+          "fps": 0,
+          "speed_x": 0,
+          "bitrate": 0,
+          "dup_frames": 0,
+          "drop_frames": 0
+        },
+        "memory": {
+          "peak_rss_bytes": 145670144,
+          "current_rss_bytes": 145670144
+        },
+        "scheduling": {
+          "queue_wait_ms": 0,
+          "off_cpu_ms": 0,
+          "voluntary_context_switches": 87,
+          "involuntary_context_switches": 127,
+          "minor_page_faults": 38561,
+          "major_page_faults": 0
+        },
+        "frame_pipeline": {
+          "producer_busy_ms": 0,
+          "producer_wait_ms": 0,
+          "consumer_busy_ms": 0,
+          "consumer_wait_ms": 0,
+          "queue_depth_avg": 0,
+          "queue_depth_max": 0,
+          "queue_empty_ms": 0,
+          "queue_full_ms": 0,
+          "producer_stall_ratio": 0,
+          "encoder_starvation_ratio": 0,
+          "backpressure_ratio": 0
+        },
+        "phases": [
+          {
+            "name": "worker.temp.create",
+            "duration_ms": 0,
+            "timing_mode": "exclusive"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "engine.packet_mux",
+            "duration_ms": 139,
+            "bytes_out": 5838599,
+            "timing_mode": "exclusive"
+          },
+          {
+            "name": "engine.render",
+            "duration_ms": 145,
+            "timing_mode": "exclusive"
+          }
+        ],
+        "segments": [
+          {
+            "segment_index": 0,
+            "scene_id": "seg_001",
+            "source_type": "video",
+            "duration_ms": 0.005728,
+            "source_bytes": 242710,
+            "status": "ok",
+            "finished_offset_ms": 0.133926
+          },
+          {
+            "segment_index": 1,
+            "scene_id": "seg_002",
+            "source_type": "video",
+            "duration_ms": 0.004352,
+            "source_bytes": 242742,
+            "status": "ok",
+            "finished_offset_ms": 0.177059
+          },
+          {
+            "segment_index": 2,
+            "scene_id": "seg_003",
+            "source_type": "video",
+            "duration_ms": 0.004999,
+            "source_bytes": 242741,
+            "status": "ok",
+            "finished_offset_ms": 0.22026
+          },
+          {
+            "segment_index": 3,
+            "scene_id": "seg_004",
+            "source_type": "video",
+            "duration_ms": 0.00422,
+            "source_bytes": 242683,
+            "status": "ok",
+            "finished_offset_ms": 0.262874
+          },
+          {
+            "segment_index": 4,
+            "scene_id": "seg_005",
+            "source_type": "video",
+            "duration_ms": 0.003727,
+            "source_bytes": 242680,
+            "status": "ok",
+            "finished_offset_ms": 0.302961
+          },
+          {
+            "segment_index": 5,
+            "scene_id": "seg_006",
+            "source_type": "video",
+            "duration_ms": 0.003345,
+            "source_bytes": 242733,
+            "status": "ok",
+            "finished_offset_ms": 0.34355
+          },
+          {
+            "segment_index": 6,
+            "scene_id": "seg_007",
+            "source_type": "video",
+            "duration_ms": 0.003441,
+            "source_bytes": 242695,
+            "status": "ok",
+            "finished_offset_ms": 0.382954
+          },
+          {
+            "segment_index": 7,
+            "scene_id": "seg_008",
+            "source_type": "video",
+            "duration_ms": 0.004318,
+            "source_bytes": 242737,
+            "status": "ok",
+            "finished_offset_ms": 0.42426
+          },
+          {
+            "segment_index": 8,
+            "scene_id": "seg_009",
+            "source_type": "video",
+            "duration_ms": 0.003684,
+            "source_bytes": 242659,
+            "status": "ok",
+            "finished_offset_ms": 0.462474
+          },
+          {
+            "segment_index": 9,
+            "scene_id": "seg_010",
+            "source_type": "video",
+            "duration_ms": 0.003228,
+            "source_bytes": 242320,
+            "status": "ok",
+            "finished_offset_ms": 0.503415
+          },
+          {
+            "segment_index": 10,
+            "scene_id": "seg_011",
+            "source_type": "video",
+            "duration_ms": 0.003221,
+            "source_bytes": 242726,
+            "status": "ok",
+            "finished_offset_ms": 0.543104
+          },
+          {
+            "segment_index": 11,
+            "scene_id": "seg_012",
+            "source_type": "video",
+            "duration_ms": 0.003209,
+            "source_bytes": 242724,
+            "status": "ok",
+            "finished_offset_ms": 0.582975
+          },
+          {
+            "segment_index": 12,
+            "scene_id": "seg_013",
+            "source_type": "video",
+            "duration_ms": 0.003196,
+            "source_bytes": 242730,
+            "status": "ok",
+            "finished_offset_ms": 0.62261
+          },
+          {
+            "segment_index": 13,
+            "scene_id": "seg_014",
+            "source_type": "video",
+            "duration_ms": 0.003224,
+            "source_bytes": 242764,
+            "status": "ok",
+            "finished_offset_ms": 0.662212
+          },
+          {
+            "segment_index": 14,
+            "scene_id": "seg_015",
+            "source_type": "video",
+            "duration_ms": 0.003611,
+            "source_bytes": 242753,
+            "status": "ok",
+            "finished_offset_ms": 0.703555
+          },
+          {
+            "segment_index": 15,
+            "scene_id": "seg_016",
+            "source_type": "video",
+            "duration_ms": 0.019806,
+            "source_bytes": 242715,
+            "status": "ok",
+            "finished_offset_ms": 0.768056
+          },
+          {
+            "segment_index": 16,
+            "scene_id": "seg_017",
+            "source_type": "video",
+            "duration_ms": 0.004065,
+            "source_bytes": 242793,
+            "status": "ok",
+            "finished_offset_ms": 0.810749
+          },
+          {
+            "segment_index": 17,
+            "scene_id": "seg_018",
+            "source_type": "video",
+            "duration_ms": 0.003288,
+            "source_bytes": 242753,
+            "status": "ok",
+            "finished_offset_ms": 0.851167
+          },
+          {
+            "segment_index": 18,
+            "scene_id": "seg_019",
+            "source_type": "video",
+            "duration_ms": 0.003386,
+            "source_bytes": 242690,
+            "status": "ok",
+            "finished_offset_ms": 0.892166
+          },
+          {
+            "segment_index": 19,
+            "scene_id": "seg_020",
+            "source_type": "video",
+            "duration_ms": 0.006648,
+            "source_bytes": 242718,
+            "status": "ok",
+            "finished_offset_ms": 0.957913
+          },
+          {
+            "segment_index": 20,
+            "scene_id": "seg_021",
+            "source_type": "video",
+            "duration_ms": 0.003393,
+            "source_bytes": 242675,
+            "status": "ok",
+            "finished_offset_ms": 0.998349
+          },
+          {
+            "segment_index": 21,
+            "scene_id": "seg_022",
+            "source_type": "video",
+            "duration_ms": 0.003425,
+            "source_bytes": 242776,
+            "status": "ok",
+            "finished_offset_ms": 1.03771
+          },
+          {
+            "segment_index": 22,
+            "scene_id": "seg_023",
+            "source_type": "video",
+            "duration_ms": 0.003226,
+            "source_bytes": 242771,
+            "status": "ok",
+            "finished_offset_ms": 1.07009
+          },
+          {
+            "segment_index": 23,
+            "scene_id": "seg_024",
+            "source_type": "video",
+            "duration_ms": 0.003591,
+            "source_bytes": 242752,
+            "status": "ok",
+            "finished_offset_ms": 1.10137
+          }
+        ],
+        "derived": {
+          "unaccounted_ms": -101,
+          "accounted_ratio": 1.5519125683060109,
+          "read_amplification": 2.12271077359483,
+          "write_amplification": 1.001416778237382,
+          "processes_per_clip": 0,
+          "useful_work_ratio": 1.5519125683060109,
+          "cpu_wall_ratio": 1.3114754098360655
+        }
+      }
+    },
+    {
+      "run_index": 3,
+      "wall_ms": 193,
+      "artifact_sha": "17930f9cbad6a93276ad2d4841495217fd33ccc875bec7f2f612096918ae2937",
+      "receipt": {
+        "version": 1,
+        "identity": {
+          "job_id": "bench-bench-80635b4338c7f0d0915cf7b3906d90ba",
+          "worker_id": "vps-334f342f",
+          "git_commit": "bc71849a5f89afb5927db2b861f8c7191c1b3522",
+          "engine_sha256": "2ee050c3adfe7a11689d14f11f2935c493e9358d09ca9f32ba5a2cfe203b4fe0",
+          "benchmark_fixture_id": "COPY_ONLY_CANONICAL_5M_V1"
+        },
+        "workload": {
+          "job_type": "copy_only",
+          "duration_us": 300000000,
+          "clip_count": 24,
+          "asset_count": 25,
+          "copy_only": true,
+          "final_audio_copy": true,
+          "video_codec": "h264",
+          "audio_codec": "aac",
+          "width": 1920,
+          "height": 1080,
+          "fps": 30
+        },
+        "timing": {
+          "wall_ms": 193,
+          "resolve_ms": 0,
+          "validate_ms": 0,
+          "compile_ms": 0,
+          "render_ms": 0,
+          "pipeline_total_ms": 193,
+          "plan_marshal_ms": 0,
+          "plan_write_ms": 0,
+          "process_start_ms": 0,
+          "process_wait_ms": 0,
+          "native_total_ms": 193,
+          "executor_total_ms": 0,
+          "artifact_total_ms": 0
+        },
+        "process": {
+          "engine_spawn_count": 1,
+          "engine_spawn_ms": 0,
+          "external_process_count": 0,
+          "ffmpeg_exec_count": 0,
+          "ffprobe_exec_count": 0,
+          "shell_exec_count": 0,
+          "curl_exec_count": 0,
+          "engine_external_spawn_count": 0,
+          "engine_ffmpeg_spawn_count": 0,
+          "engine_ffprobe_spawn_count": 0,
+          "engine_shell_spawn_count": 0,
+          "engine_curl_spawn_count": 0,
+          "child_wait_ms": 192
+        },
+        "cpu": {
+          "wall_ms": 193,
+          "cpu_user_ms": 140,
+          "cpu_system_ms": 90,
+          "cpu_total_ms": 230,
+          "cpu_wall_ratio": 1.1917098445595855,
+          "engine_cpu_user_ms": 158,
+          "engine_cpu_system_ms": 99
+        },
+        "io": {
+          "total_bytes_read": 11948044,
+          "total_bytes_written": 5754596,
+          "asset_bytes_read": 5825040,
+          "asset_bytes_copied": 0,
+          "temp_bytes_written": 0,
+          "mux_bytes_read": 0,
+          "mux_bytes_written": 5838599,
+          "final_bytes_written": 5838599,
+          "file_copy_count": 0,
+          "file_copy_bytes": 0,
+          "input_open_count": 28,
+          "input_reopen_count": 2
+        },
+        "media": {
+          "frames": 0,
+          "frames_decoded": 0,
+          "frames_composited": 0,
+          "encode_passes": 0,
+          "temp_bytes": 0,
+          "output_bytes": 5838599,
+          "duration_sec": 300,
+          "concat_mode": "packet_copy",
+          "fps": 0,
+          "speed_x": 0,
+          "bitrate": 0,
+          "dup_frames": 0,
+          "drop_frames": 0
+        },
+        "memory": {
+          "peak_rss_bytes": 141484032,
+          "current_rss_bytes": 141484032
+        },
+        "scheduling": {
+          "queue_wait_ms": 0,
+          "off_cpu_ms": 0,
+          "voluntary_context_switches": 116,
+          "involuntary_context_switches": 353,
+          "minor_page_faults": 39253,
+          "major_page_faults": 0
+        },
+        "frame_pipeline": {
+          "producer_busy_ms": 0,
+          "producer_wait_ms": 0,
+          "consumer_busy_ms": 0,
+          "consumer_wait_ms": 0,
+          "queue_depth_avg": 0,
+          "queue_depth_max": 0,
+          "queue_empty_ms": 0,
+          "queue_full_ms": 0,
+          "producer_stall_ratio": 0,
+          "encoder_starvation_ratio": 0,
+          "backpressure_ratio": 0
+        },
+        "phases": [
+          {
+            "name": "worker.temp.create",
+            "duration_ms": 0,
+            "timing_mode": "exclusive"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "engine.packet_mux",
+            "duration_ms": 144,
+            "bytes_out": 5838599,
+            "timing_mode": "exclusive"
+          },
+          {
+            "name": "engine.render",
+            "duration_ms": 152,
+            "timing_mode": "exclusive"
+          }
+        ],
+        "segments": [
+          {
+            "segment_index": 0,
+            "scene_id": "seg_001",
+            "source_type": "video",
+            "duration_ms": 0.005364,
+            "source_bytes": 242710,
+            "status": "ok",
+            "finished_offset_ms": 0.132751
+          },
+          {
+            "segment_index": 1,
+            "scene_id": "seg_002",
+            "source_type": "video",
+            "duration_ms": 0.004496,
+            "source_bytes": 242742,
+            "status": "ok",
+            "finished_offset_ms": 0.168576
+          },
+          {
+            "segment_index": 2,
+            "scene_id": "seg_003",
+            "source_type": "video",
+            "duration_ms": 0.004205,
+            "source_bytes": 242741,
+            "status": "ok",
+            "finished_offset_ms": 0.201184
+          },
+          {
+            "segment_index": 3,
+            "scene_id": "seg_004",
+            "source_type": "video",
+            "duration_ms": 0.003767,
+            "source_bytes": 242683,
+            "status": "ok",
+            "finished_offset_ms": 0.234574
+          },
+          {
+            "segment_index": 4,
+            "scene_id": "seg_005",
+            "source_type": "video",
+            "duration_ms": 0.003624,
+            "source_bytes": 242680,
+            "status": "ok",
+            "finished_offset_ms": 0.267395
+          },
+          {
+            "segment_index": 5,
+            "scene_id": "seg_006",
+            "source_type": "video",
+            "duration_ms": 0.00335,
+            "source_bytes": 242733,
+            "status": "ok",
+            "finished_offset_ms": 0.299483
+          },
+          {
+            "segment_index": 6,
+            "scene_id": "seg_007",
+            "source_type": "video",
+            "duration_ms": 0.003485,
+            "source_bytes": 242695,
+            "status": "ok",
+            "finished_offset_ms": 0.331263
+          },
+          {
+            "segment_index": 7,
+            "scene_id": "seg_008",
+            "source_type": "video",
+            "duration_ms": 0.004597,
+            "source_bytes": 242737,
+            "status": "ok",
+            "finished_offset_ms": 0.36412
+          },
+          {
+            "segment_index": 8,
+            "scene_id": "seg_009",
+            "source_type": "video",
+            "duration_ms": 0.003459,
+            "source_bytes": 242659,
+            "status": "ok",
+            "finished_offset_ms": 0.395704
+          },
+          {
+            "segment_index": 9,
+            "scene_id": "seg_010",
+            "source_type": "video",
+            "duration_ms": 0.003336,
+            "source_bytes": 242320,
+            "status": "ok",
+            "finished_offset_ms": 0.427649
+          },
+          {
+            "segment_index": 10,
+            "scene_id": "seg_011",
+            "source_type": "video",
+            "duration_ms": 0.003276,
+            "source_bytes": 242726,
+            "status": "ok",
+            "finished_offset_ms": 0.458942
+          },
+          {
+            "segment_index": 11,
+            "scene_id": "seg_012",
+            "source_type": "video",
+            "duration_ms": 0.003273,
+            "source_bytes": 242724,
+            "status": "ok",
+            "finished_offset_ms": 0.491192
+          },
+          {
+            "segment_index": 12,
+            "scene_id": "seg_013",
+            "source_type": "video",
+            "duration_ms": 0.003296,
+            "source_bytes": 242730,
+            "status": "ok",
+            "finished_offset_ms": 0.524634
+          },
+          {
+            "segment_index": 13,
+            "scene_id": "seg_014",
+            "source_type": "video",
+            "duration_ms": 0.003281,
+            "source_bytes": 242764,
+            "status": "ok",
+            "finished_offset_ms": 0.55533
+          },
+          {
+            "segment_index": 14,
+            "scene_id": "seg_015",
+            "source_type": "video",
+            "duration_ms": 0.003255,
+            "source_bytes": 242753,
+            "status": "ok",
+            "finished_offset_ms": 0.587524
+          },
+          {
+            "segment_index": 15,
+            "scene_id": "seg_016",
+            "source_type": "video",
+            "duration_ms": 0.018443,
+            "source_bytes": 242715,
+            "status": "ok",
+            "finished_offset_ms": 0.634248
+          },
+          {
+            "segment_index": 16,
+            "scene_id": "seg_017",
+            "source_type": "video",
+            "duration_ms": 0.274754,
+            "source_bytes": 242793,
+            "status": "ok",
+            "finished_offset_ms": 0.938496
+          },
+          {
+            "segment_index": 17,
+            "scene_id": "seg_018",
+            "source_type": "video",
+            "duration_ms": 0.008346,
+            "source_bytes": 242753,
+            "status": "ok",
+            "finished_offset_ms": 1.28969
+          },
+          {
+            "segment_index": 18,
+            "scene_id": "seg_019",
+            "source_type": "video",
+            "duration_ms": 0.004936,
+            "source_bytes": 242690,
+            "status": "ok",
+            "finished_offset_ms": 1.62408
+          },
+          {
+            "segment_index": 19,
+            "scene_id": "seg_020",
+            "source_type": "video",
+            "duration_ms": 0.008886,
+            "source_bytes": 242718,
+            "status": "ok",
+            "finished_offset_ms": 1.86602
+          },
+          {
+            "segment_index": 20,
+            "scene_id": "seg_021",
+            "source_type": "video",
+            "duration_ms": 0.003439,
+            "source_bytes": 242675,
+            "status": "ok",
+            "finished_offset_ms": 1.89755
+          },
+          {
+            "segment_index": 21,
+            "scene_id": "seg_022",
+            "source_type": "video",
+            "duration_ms": 0.003302,
+            "source_bytes": 242776,
+            "status": "ok",
+            "finished_offset_ms": 1.9297
+          },
+          {
+            "segment_index": 22,
+            "scene_id": "seg_023",
+            "source_type": "video",
+            "duration_ms": 0.003282,
+            "source_bytes": 242771,
+            "status": "ok",
+            "finished_offset_ms": 1.96071
+          },
+          {
+            "segment_index": 23,
+            "scene_id": "seg_024",
+            "source_type": "video",
+            "duration_ms": 0.003311,
+            "source_bytes": 242752,
+            "status": "ok",
+            "finished_offset_ms": 1.99118
+          }
+        ],
+        "derived": {
+          "unaccounted_ms": -103,
+          "accounted_ratio": 1.5336787564766838,
+          "read_amplification": 2.046388868288437,
+          "write_amplification": 0.9856124731292558,
+          "processes_per_clip": 0,
+          "useful_work_ratio": 1.5336787564766838,
+          "cpu_wall_ratio": 1.1917098445595855
+        }
+      }
+    },
+    {
+      "run_index": 4,
+      "wall_ms": 183,
+      "artifact_sha": "17930f9cbad6a93276ad2d4841495217fd33ccc875bec7f2f612096918ae2937",
+      "receipt": {
+        "version": 1,
+        "identity": {
+          "job_id": "bench-bench-d54d7255a0181a4bb0f13194c2647aa2",
+          "worker_id": "vps-334f342f",
+          "git_commit": "bc71849a5f89afb5927db2b861f8c7191c1b3522",
+          "engine_sha256": "2ee050c3adfe7a11689d14f11f2935c493e9358d09ca9f32ba5a2cfe203b4fe0",
+          "benchmark_fixture_id": "COPY_ONLY_CANONICAL_5M_V1"
+        },
+        "workload": {
+          "job_type": "copy_only",
+          "duration_us": 300000000,
+          "clip_count": 24,
+          "asset_count": 25,
+          "copy_only": true,
+          "final_audio_copy": true,
+          "video_codec": "h264",
+          "audio_codec": "aac",
+          "width": 1920,
+          "height": 1080,
+          "fps": 30
+        },
+        "timing": {
+          "wall_ms": 183,
+          "resolve_ms": 0,
+          "validate_ms": 0,
+          "compile_ms": 0,
+          "render_ms": 0,
+          "pipeline_total_ms": 183,
+          "plan_marshal_ms": 0,
+          "plan_write_ms": 0,
+          "process_start_ms": 0,
+          "process_wait_ms": 0,
+          "native_total_ms": 183,
+          "executor_total_ms": 0,
+          "artifact_total_ms": 0
+        },
+        "process": {
+          "engine_spawn_count": 1,
+          "engine_spawn_ms": 1,
+          "external_process_count": 0,
+          "ffmpeg_exec_count": 0,
+          "ffprobe_exec_count": 0,
+          "shell_exec_count": 0,
+          "curl_exec_count": 0,
+          "engine_external_spawn_count": 0,
+          "engine_ffmpeg_spawn_count": 0,
+          "engine_ffprobe_spawn_count": 0,
+          "engine_shell_spawn_count": 0,
+          "engine_curl_spawn_count": 0,
+          "child_wait_ms": 180
+        },
+        "cpu": {
+          "wall_ms": 183,
+          "cpu_user_ms": 160,
+          "cpu_system_ms": 110,
+          "cpu_total_ms": 270,
+          "cpu_wall_ratio": 1.4754098360655739,
+          "engine_cpu_user_ms": 164,
+          "engine_cpu_system_ms": 110
+        },
+        "io": {
+          "total_bytes_read": 12393659,
+          "total_bytes_written": 5846871,
+          "asset_bytes_read": 5825040,
+          "asset_bytes_copied": 0,
+          "temp_bytes_written": 0,
+          "mux_bytes_read": 0,
+          "mux_bytes_written": 5838599,
+          "final_bytes_written": 5838599,
+          "file_copy_count": 0,
+          "file_copy_bytes": 0,
+          "input_open_count": 28,
+          "input_reopen_count": 2
+        },
+        "media": {
+          "frames": 0,
+          "frames_decoded": 0,
+          "frames_composited": 0,
+          "encode_passes": 0,
+          "temp_bytes": 0,
+          "output_bytes": 5838599,
+          "duration_sec": 300,
+          "concat_mode": "packet_copy",
+          "fps": 0,
+          "speed_x": 0,
+          "bitrate": 0,
+          "dup_frames": 0,
+          "drop_frames": 0
+        },
+        "memory": {
+          "peak_rss_bytes": 130650112,
+          "current_rss_bytes": 129716224
+        },
+        "scheduling": {
+          "queue_wait_ms": 0,
+          "off_cpu_ms": 0,
+          "voluntary_context_switches": 90,
+          "involuntary_context_switches": 530,
+          "minor_page_faults": 39258,
+          "major_page_faults": 0
+        },
+        "frame_pipeline": {
+          "producer_busy_ms": 0,
+          "producer_wait_ms": 0,
+          "consumer_busy_ms": 0,
+          "consumer_wait_ms": 0,
+          "queue_depth_avg": 0,
+          "queue_depth_max": 0,
+          "queue_empty_ms": 0,
+          "queue_full_ms": 0,
+          "producer_stall_ratio": 0,
+          "encoder_starvation_ratio": 0,
+          "backpressure_ratio": 0
+        },
+        "phases": [
+          {
+            "name": "worker.temp.create",
+            "duration_ms": 0,
+            "timing_mode": "exclusive"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "worker.asset.bind",
+            "duration_ms": 0,
+            "timing_mode": "span_child"
+          },
+          {
+            "name": "engine.packet_mux",
+            "duration_ms": 132,
+            "bytes_out": 5838599,
+            "timing_mode": "exclusive"
+          },
+          {
+            "name": "engine.render",
+            "duration_ms": 139,
+            "timing_mode": "exclusive"
+          }
+        ],
+        "segments": [
+          {
+            "segment_index": 0,
+            "scene_id": "seg_001",
+            "source_type": "video",
+            "duration_ms": 0.008726,
+            "source_bytes": 242710,
+            "status": "ok",
+            "finished_offset_ms": 0.193131
+          },
+          {
+            "segment_index": 1,
+            "scene_id": "seg_002",
+            "source_type": "video",
+            "duration_ms": 0.00547,
+            "source_bytes": 242742,
+            "status": "ok",
+            "finished_offset_ms": 0.252954
+          },
+          {
+            "segment_index": 2,
+            "scene_id": "seg_003",
+            "source_type": "video",
+            "duration_ms": 0.004035,
+            "source_bytes": 242741,
+            "status": "ok",
+            "finished_offset_ms": 0.293555
+          },
+          {
+            "segment_index": 3,
+            "scene_id": "seg_004",
+            "source_type": "video",
+            "duration_ms": 0.005144,
+            "source_bytes": 242683,
+            "status": "ok",
+            "finished_offset_ms": 0.36
+          },
+          {
+            "segment_index": 4,
+            "scene_id": "seg_005",
+            "source_type": "video",
+            "duration_ms": 0.003566,
+            "source_bytes": 242680,
+            "status": "ok",
+            "finished_offset_ms": 0.400615
+          },
+          {
+            "segment_index": 5,
+            "scene_id": "seg_006",
+            "source_type": "video",
+            "duration_ms": 0.004472,
+            "source_bytes": 242733,
+            "status": "ok",
+            "finished_offset_ms": 0.461358
+          },
+          {
+            "segment_index": 6,
+            "scene_id": "seg_007",
+            "source_type": "video",
+            "duration_ms": 0.003518,
+            "source_bytes": 242695,
+            "status": "ok",
+            "finished_offset_ms": 0.501493
+          },
+          {
+            "segment_index": 7,
+            "scene_id": "seg_008",
+            "source_type": "video",
+            "duration_ms": 0.005319,
+            "source_bytes": 242737,
+            "status": "ok",
+            "finished_offset_ms": 0.564027
+          },
+          {
+            "segment_index": 8,
+            "scene_id": "seg_009",
+            "source_type": "video",
+            "duration_ms": 0.005043,
+            "source_bytes": 242659,
+            "status": "ok",
+            "finished_offset_ms": 0.625365
+          },
+          {
+            "segment_index": 9,
+            "scene_id": "seg_010",
+            "source_type": "video",
+            "duration_ms": 0.003492,
+            "source_bytes": 242320,
+            "status": "ok",
+            "finished_offset_ms": 0.667975
+          },
+          {
+            "segment_index": 10,
+            "scene_id": "seg_011",
+            "source_type": "video",
+            "duration_ms": 0.00425,
+            "source_bytes": 242726,
+            "status": "ok",
+            "finished_offset_ms": 0.72726
+          },
+          {
+            "segment_index": 11,
+            "scene_id": "seg_012",
+            "source_type": "video",
+            "duration_ms": 0.003362,
+            "source_bytes": 242724,
+            "status": "ok",
+            "finished_offset_ms": 0.767042
+          },
+          {
+            "segment_index": 12,
+            "scene_id": "seg_013",
+            "source_type": "video",
+            "duration_ms": 0.004433,
+            "source_bytes": 242730,
+            "status": "ok",
+            "finished_offset_ms": 0.831933
+          },
+          {
+            "segment_index": 13,
+            "scene_id": "seg_014",
+            "source_type": "video",
+            "duration_ms": 0.012241,
+            "source_bytes": 242764,
+            "status": "ok",
+            "finished_offset_ms": 0.879516
+          },
+          {
+            "segment_index": 14,
+            "scene_id": "seg_015",
+            "source_type": "video",
+            "duration_ms": 0.004305,
+            "source_bytes": 242753,
+            "status": "ok",
+            "finished_offset_ms": 0.932524
+          },
+          {
+            "segment_index": 15,
+            "scene_id": "seg_016",
+            "source_type": "video",
+            "duration_ms": 0.016038,
+            "source_bytes": 242715,
+            "status": "ok",
+            "finished_offset_ms": 0.9915
+          },
+          {
+            "segment_index": 16,
+            "scene_id": "seg_017",
+            "source_type": "video",
+            "duration_ms": 0.004443,
+            "source_bytes": 242793,
+            "status": "ok",
+            "finished_offset_ms": 1.04489
+          },
+          {
+            "segment_index": 17,
+            "scene_id": "seg_018",
+            "source_type": "video",
+            "duration_ms": 0.013756,
+            "source_bytes": 242753,
+            "status": "ok",
+            "finished_offset_ms": 1.09537
+          },
+          {
+            "segment_index": 18,
+            "scene_id": "seg_019",
+            "source_type": "video",
+            "duration_ms": 0.004205,
+            "source_bytes": 242690,
+            "status": "ok",
+            "finished_offset_ms": 1.14946
+          },
+          {
+            "segment_index": 19,
+            "scene_id": "seg_020",
+            "source_type": "video",
+            "duration_ms": 0.016054,
+            "source_bytes": 242718,
+            "status": "ok",
+            "finished_offset_ms": 1.21553
+          },
+          {
+            "segment_index": 20,
+            "scene_id": "seg_021",
+            "source_type": "video",
+            "duration_ms": 0.003567,
+            "source_bytes": 242675,
+            "status": "ok",
+            "finished_offset_ms": 1.25682
+          },
+          {
+            "segment_index": 21,
+            "scene_id": "seg_022",
+            "source_type": "video",
+            "duration_ms": 0.004151,
+            "source_bytes": 242776,
+            "status": "ok",
+            "finished_offset_ms": 1.30977
+          },
+          {
+            "segment_index": 22,
+            "scene_id": "seg_023",
+            "source_type": "video",
+            "duration_ms": 0.012141,
+            "source_bytes": 242771,
+            "status": "ok",
+            "finished_offset_ms": 1.35938
+          },
+          {
+            "segment_index": 23,
+            "scene_id": "seg_024",
+            "source_type": "video",
+            "duration_ms": 0.004201,
+            "source_bytes": 242752,
+            "status": "ok",
+            "finished_offset_ms": 1.4094
+          }
+        ],
+        "derived": {
+          "unaccounted_ms": -88,
+          "accounted_ratio": 1.4808743169398908,
+          "read_amplification": 2.1227111161427596,
+          "write_amplification": 1.001416778237382,
+          "processes_per_clip": 0,
+          "useful_work_ratio": 1.4808743169398908,
+          "cpu_wall_ratio": 1.4754098360655739
+        }
+      }
+    }
+  ],
+  "artifact_sha": "17930f9cbad6a93276ad2d4841495217fd33ccc875bec7f2f612096918ae2937",
+  "summary": {
+    "wall_ms_p50": 183,
+    "wall_ms_p95": 193,
+    "accounted_ratio_p50": 1.5336787564766838,
+    "write_amplification_p50": 1.001416778237382,
+    "processes_per_clip_p50": 0,
+    "gate_failures": 0,
+    "failed_runs": 0
+  },
+  "created_at": "2026-08-17T09:34:50.473544389Z"
+}
