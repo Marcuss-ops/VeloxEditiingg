@@ -30,9 +30,111 @@ import (
 // Insert / lookup / list.
 // ────────────────────────────────────────────────────────────────────────
 
+// Ensure registers a spool entry idempotently. It is the SINGLE
+// registration surface publishers use — callers MUST NOT catch
+// ErrDuplicateSpool and branch on it (that logic lives here, once).
+//
+// Semantics:
+//
+//	row does not exist
+//	    → INSERT (same as Insert) → created=true
+//	row exists with the same identity AND compatible content
+//	    → RETURN existing row → created=false
+//	row exists with the same identity but INCOMPATIBLE content
+//	    (sha256 / size_bytes differ) → *ErrIncompatibleSpool
+//
+// "Compatible content" means the existing row's content fingerprint
+// (sha256 + size_bytes) either matches the incoming entry OR was never
+// stamped (the row was created but MarkReady never ran — the caller's
+// MarkReady completes it). local_path is deliberately NOT part of the
+// compatibility check: it is a physical location that may legitimately
+// change (spill, re-render to a different staging dir) without making
+// the logical output a different artifact. The durable identity is the
+// content.
+//
+// The returned row is the authoritative one (the existing row on a
+// duplicate, the freshly-inserted row otherwise). created reports
+// whether this call performed the INSERT.
+func (s *Store) Ensure(ctx context.Context, e SpoolEntry) (*SpoolEntry, bool, error) {
+	if e.TaskID == "" || e.AttemptID == "" || e.WorkerSpoolKey == "" {
+		return nil, false, fmt.Errorf("spool.Ensure: TaskID, AttemptID, WorkerSpoolKey are required")
+	}
+	// Fast path: the row already exists for the identity tuple.
+	existing, err := s.getByIdentity(ctx, e.TaskID, e.AttemptID, e.WorkerSpoolKey)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return nil, false, fmt.Errorf("spool.Ensure: lookup: %w", err)
+	}
+	if existing != nil {
+		if !spoolContentMatches(existing, &e) {
+			return nil, false, fmt.Errorf(
+				"%w: (task_id=%s attempt_id=%s worker_spool_key=%s) existing_sha256=%s incoming_sha256=%s existing_size=%d incoming_size=%d",
+				ErrIncompatibleSpool, e.TaskID, e.AttemptID, e.WorkerSpoolKey,
+				existing.SHA256, e.SHA256, existing.SizeBytes, e.SizeBytes)
+		}
+		return existing, false, nil
+	}
+
+	created, err := s.Insert(ctx, e)
+	if err != nil {
+		// A concurrent Ensure may have inserted the row between our lookup
+		// and insert. Re-read and classify instead of surfacing the raw
+		// duplicate to the caller.
+		if errors.Is(err, ErrDuplicateSpool) {
+			again, getErr := s.getByIdentity(ctx, e.TaskID, e.AttemptID, e.WorkerSpoolKey)
+			if getErr != nil {
+				return nil, false, fmt.Errorf("spool.Ensure: post-conflict lookup: %w", getErr)
+			}
+			if again == nil {
+				return nil, false, fmt.Errorf("spool.Ensure: duplicate reported but row not found: %w", err)
+			}
+			if !spoolContentMatches(again, &e) {
+				return nil, false, fmt.Errorf(
+					"%w: (task_id=%s attempt_id=%s worker_spool_key=%s) existing_sha256=%s incoming_sha256=%s existing_size=%d incoming_size=%d",
+					ErrIncompatibleSpool, e.TaskID, e.AttemptID, e.WorkerSpoolKey,
+					again.SHA256, e.SHA256, again.SizeBytes, e.SizeBytes)
+			}
+			return again, false, nil
+		}
+		return nil, false, err
+	}
+	return created, true, nil
+}
+
+// getByIdentity looks up the single row for the UNIQUE identity tuple
+// (task_id, attempt_id, worker_spool_key), returning ErrNotFound when it
+// does not exist.
+func (s *Store) getByIdentity(ctx context.Context, taskID, attemptID, workerSpoolKey string) (*SpoolEntry, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT `+selectSpoolCols+` FROM worker_output_spool
+		  WHERE task_id = ? AND attempt_id = ? AND worker_spool_key = ?`,
+		taskID, attemptID, workerSpoolKey)
+	return scanSpool(row)
+}
+
+// spoolContentMatches reports whether an existing row is a benign
+// duplicate of the incoming entry: either the existing row never had
+// content stamped (MarkReady never ran — the caller's MarkReady
+// completes it) or its content fingerprint (sha256 + size_bytes)
+// matches the incoming entry. local_path is intentionally ignored (it
+// is a physical location that can legitimately change).
+func spoolContentMatches(existing, incoming *SpoolEntry) bool {
+	if existing == nil || incoming == nil {
+		return false
+	}
+	if existing.SHA256 == "" && existing.SizeBytes == 0 {
+		// Row created but never finalized; the caller stamps content.
+		return true
+	}
+	return existing.SHA256 == incoming.SHA256 && existing.SizeBytes == incoming.SizeBytes
+}
+
 // Insert registers a new spool entry in StatusRendering. The unique
 // tuple (task_id, attempt_id, worker_spool_key) prevents the same
 // worker from double-spooling the same logical output.
+//
+// Insert is the low-level create primitive. Publishers MUST use Ensure
+// (the idempotent surface) instead of Insert so a duplicate registration
+// converges on the existing row rather than an ErrDuplicateSpool failure.
 //
 // Returns the SpoolEntry with SpoolID + CreatedAt stamped.
 func (s *Store) Insert(ctx context.Context, e SpoolEntry) (*SpoolEntry, error) {

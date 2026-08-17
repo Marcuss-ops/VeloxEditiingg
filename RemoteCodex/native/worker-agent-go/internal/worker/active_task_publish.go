@@ -335,7 +335,13 @@ func (w *Worker) registerOutputSpool(ctx context.Context, pte *PendingTaskExecut
 	}
 	entries := make([]spool.SpoolEntry, 0, len(report.Outputs))
 	for i, ref := range report.Outputs {
-		entry, err := w.outputSpool.Insert(ctx, spool.SpoolEntry{
+		// Ensure is the single idempotent registration surface: a
+		// duplicate (task_id, attempt_id, worker_spool_key) with matching
+		// content converges on the existing row instead of failing the
+		// whole publication with ErrDuplicateSpool. No duplicate-handling
+		// logic lives here — the spool store owns it. An incompatible
+		// duplicate (same identity, different bytes) is a hard error.
+		entry, _, err := w.outputSpool.Ensure(ctx, spool.SpoolEntry{
 			TaskID:         pte.TaskID,
 			AttemptID:      pte.AttemptID,
 			WorkerSpoolKey: fmt.Sprintf("%s:output:%d", pte.TaskID, i),

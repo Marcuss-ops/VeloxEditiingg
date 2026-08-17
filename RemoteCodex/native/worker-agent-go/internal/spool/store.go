@@ -143,6 +143,12 @@ var (
 	ErrCASConflict    = errors.New("spool: lifecycle CAS conflict")
 	ErrInvalidStatus  = errors.New("spool: invalid status input")
 	ErrDuplicateSpool = errors.New("spool: duplicate (task_id, attempt_id, worker_spool_key)")
+	// ErrIncompatibleSpool is returned by Ensure when a row already
+	// exists for the (task_id, attempt_id, worker_spool_key) identity
+	// but its content (sha256 / size_bytes) differs from the incoming
+	// entry — a real conflict (the same logical output re-encoded to
+	// different bytes), not a benign retry.
+	ErrIncompatibleSpool = errors.New("spool: existing row has incompatible content")
 )
 
 // ────────────────────────────────────────────────────────────────────────
