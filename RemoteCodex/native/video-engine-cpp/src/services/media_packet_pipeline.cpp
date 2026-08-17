@@ -1,7 +1,6 @@
 #include "velox/services/media_packet_pipeline.hpp"
 #include "velox/services/file_utils.hpp"
 #include "velox/services/io_counters.hpp"
-#include "velox/services/media_probe.hpp"
 #include "velox/services/segment_execution.hpp"
 
 // The in-process packet copy pipeline is built only when VELOX_ENABLE_LIBAV
@@ -991,6 +990,12 @@ bool muxCopyOnly(const CopyOnlyMuxRequest& request, CopyOnlyMuxResult* result) {
         return fail(result, "avformat_write_header: " + packet::ffmpegError(headerResult));
     }
 
+    // Highest video end timestamp (pts + duration) observed while writing,
+    // tracked in microseconds BEFORE the muxer rescales each packet to its
+    // final time base. Used by the post-mux duration gate instead of
+    // re-reading the written file (which would double the copy-only read
+    // amplification — rchar/output — for a duration we already know exactly).
+    int64_t written_video_end_us = AV_NOPTS_VALUE;
     packet::TimestampState final_video_state;
     packet::TimestampState final_audio_state;
     for (auto& holder : packets) {
@@ -1006,6 +1011,18 @@ bool muxCopyOnly(const CopyOnlyMuxRequest& request, CopyOnlyMuxResult* result) {
             if (output->pb != nullptr) avio_closep(&output->pb);
             cleanupPartial();
             return fail(result, "packet references an unknown output stream");
+        }
+        if (output_stream == streams.video) {
+            const int64_t base = packet::validTimestamp(holder->packet.pts)
+                ? holder->packet.pts : holder->packet.dts;
+            if (packet::validTimestamp(base)) {
+                const int64_t end_us = holder->packet.duration > 0
+                    ? base + holder->packet.duration : base;
+                if (!packet::validTimestamp(written_video_end_us) ||
+                    end_us > written_video_end_us) {
+                    written_video_end_us = end_us;
+                }
+            }
         }
         // MP4 is allowed to replace the provisional microsecond time base
         // while writing the header. Convert the already rewritten packet from
@@ -1034,24 +1051,20 @@ bool muxCopyOnly(const CopyOnlyMuxRequest& request, CopyOnlyMuxResult* result) {
     }
     output.reset();
 
-    // Validate the completed partial before publishing it. This catches a
-    // short/corrupt packet range even when at least one packet was available;
-    // no truncated artifact may replace the caller's existing output.
-    const auto finalProbe = probeMediaInProcess(partial);
-    const double expectedDuration = static_cast<double>(result->duration_us) / 1'000'000.0;
-    const auto finalVideo = finalProbe.has_value()
-        ? std::find_if(finalProbe->streams.begin(), finalProbe->streams.end(),
-                       [](const MediaProbeStream& stream) { return stream.is_video; })
-        : std::vector<MediaProbeStream>::const_iterator{};
-    const bool videoCoversTimeline = finalProbe.has_value() &&
-        finalVideo != finalProbe->streams.end() &&
-        finalVideo->duration_verified &&
-        finalVideo->duration_seconds + 0.08 >= expectedDuration;
-    if (!finalProbe.has_value() || !finalProbe->duration_verified ||
-        std::abs(finalProbe->duration_seconds - expectedDuration) > 0.08 ||
-        !videoCoversTimeline) {
+    // Validate the assembled timeline before publishing it. This catches a
+    // short packet range (a source shorter than its requested window that
+    // could not be tail-extended) even when at least one packet was
+    // available; no truncated artifact may replace the caller's existing
+    // output. The gate is computed from the video packets we just wrote
+    // (in microseconds) instead of re-reading the written file: a full-file
+    // probe here re-reads every output byte once and doubles the copy-only
+    // read amplification (rchar/output) to verify a duration we already know
+    // exactly from the packet stream.
+    constexpr int64_t kDurationToleranceUs = 80'000;  // 0.08 s, same as the prior probe gate.
+    if (!packet::validTimestamp(written_video_end_us) ||
+        written_video_end_us + kDurationToleranceUs < result->duration_us) {
         cleanupPartial();
-        return fail(result, "copy-only packet mux output duration does not cover the requested timeline");
+        return fail(result, "copy-only packet mux video stream ends before the requested timeline");
     }
 
     bool durable = false;

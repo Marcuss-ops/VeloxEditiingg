@@ -369,7 +369,7 @@ RenderResult RenderEngine::renderCopyOnly(
         }
         const auto boundAudio = bindOrStage(
             track.source_url, "", workDir / "copy_input_audio.m4a");
-        if (boundAudio.first.empty() || !media::hasAudioStream(boundAudio.first)) {
+        if (boundAudio.first.empty()) {
             result.error = "failed to resolve valid copy-only audio track";
             return failRender("copy_only_audio_invalid");
         }
@@ -381,9 +381,21 @@ RenderResult RenderEngine::renderCopyOnly(
         // re-encode (non-AAC codec, raw ADTS container, unverified
         // transport, duration shorter than the timeline) fails closed:
         // the zero-spawn path cannot repair audio.
+        //
+        // Probe the final audio ONCE: the same metadata drives both the
+        // has-audio-stream guard and the FINAL_AUDIO_COPY decision. The
+        // previous hasAudioStream() + probeFinalAudioMetadata() pair
+        // re-opened and re-read the multi-MB audio asset for a check the
+        // decision gate already subsumes (a codec-less metadata means no
+        // audio stream was found).
+        const media::FinalAudioMetadata finalAudioMetadata =
+            media::probeFinalAudioMetadata(boundAudio.first);
+        if (finalAudioMetadata.codec.empty()) {
+            result.error = "failed to resolve valid copy-only audio track";
+            return failRender("copy_only_audio_invalid");
+        }
         finalAudioDecision = media::resolveFinalAudioModePacket(
-            media::probeFinalAudioMetadata(boundAudio.first),
-            true, total_copy_duration);
+            finalAudioMetadata, true, total_copy_duration);
         if (finalAudioDecision.mode != media::FinalAudioMode::Copy) {
             result.error = "copy_only final audio is not FINAL_AUDIO_COPY: " +
                 finalAudioDecision.reason;
