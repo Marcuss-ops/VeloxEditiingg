@@ -49,6 +49,16 @@ func (w *Worker) Start(ctx context.Context) error {
 	w.concurrencyLimiter.Start(ctx)
 	w.logger.Info("[CONCURRENCY] Started with max_active_jobs=%d", w.config.MaxActiveJobs)
 
+	// Derive the worker-lifetime task context from the process context. It
+	// is canceled ONLY on worker shutdown (Stop), never on a transient
+	// session teardown, so an in-flight task survives a master restart and
+	// is reported once the session reconnects (PR-master-restart resume).
+	// Explicit per-task cancellation (MsgCancelJob / MsgLeaseRevoked) is
+	// unaffected — it goes through each ActiveTaskExecution.Cancel.
+	taskBaseCtx, taskBaseCancel := context.WithCancel(ctx)
+	w.taskBaseCtx = taskBaseCtx
+	w.taskBaseCancel = taskBaseCancel
+
 	// PR-3.5: surface empty executor registry early. WithRegistry(empty)
 	// is the supported default; operators must see this on the wire
 	// before deciding the worker is broken or PR-3.6 hasn't shipped.
@@ -343,6 +353,20 @@ func waitForWorkerBackoff(ctx context.Context, stop <-chan struct{}, duration ti
 	}
 }
 
+// taskContext returns the context used to execute a task dispatched by the
+// receive loop. Tasks run under the worker-lifetime taskBaseCtx (canceled
+// only on worker shutdown) so a transient session teardown — e.g. a master
+// restart — does NOT cancel an in-flight render; the reconnect session
+// resumes lease renewal and the durable outbox reports the result. Falls
+// back to the session context for hand-built legacy test fixtures that
+// never went through Start().
+func (w *Worker) taskContext(sessionCtx context.Context) context.Context {
+	if w.taskBaseCtx != nil {
+		return w.taskBaseCtx
+	}
+	return sessionCtx
+}
+
 // Stop signals the worker to stop gracefully.
 // This method is idempotent - calling it multiple times has no additional effect.
 //
@@ -356,6 +380,13 @@ func (w *Worker) Stop() {
 		w.logger.Info("Stop requested")
 		close(w.stopChan)
 		w.stopped.Store(true)
+		// Cancel the worker-lifetime task context so in-flight tasks abort
+		// on shutdown. Tasks are decoupled from the session context (they
+		// survive a master restart), so Stop is now the only place that
+		// cancels them besides explicit per-job cancellation.
+		if w.taskBaseCancel != nil {
+			w.taskBaseCancel()
+		}
 		// PR-master-restart: persist the recovery snapshot BEFORE
 		// draining the in-memory maps so the next session (or a
 		// post-restart process) can replay activeTaskLeases +

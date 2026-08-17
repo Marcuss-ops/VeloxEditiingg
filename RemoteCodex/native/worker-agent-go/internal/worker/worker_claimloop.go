@@ -267,10 +267,14 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 				w.logger.Info("[RECEIVE] TaskLeaseGranted for task=%s attempt=%s job=%s lease=%s num=%d rev=%d — starting execution",
 					taskID, grantAttemptID, grantJobID, grantLeaseID, grantAttemptNumber, grantRevision)
 				// Defer RemoveActiveTaskLease so the lease slot is freed on
-				// every terminal exit.
+				// every terminal exit. The task runs under the worker-lifetime
+				// task context (taskContext), NOT the session ctx: a transient
+				// session teardown (master restart) must not cancel the
+				// in-flight render — the reconnect session resumes lease
+				// renewal and the durable outbox reports the result.
 				go func() {
 					defer w.RemoveActiveTaskLease(taskID)
-					w.executeTask(ctx, pte, taskID, grantAttemptID)
+					w.executeTask(w.taskContext(ctx), pte, taskID, grantAttemptID)
 				}()
 
 			case controltransport.MsgCommand:

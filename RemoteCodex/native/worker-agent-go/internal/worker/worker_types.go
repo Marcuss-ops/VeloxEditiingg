@@ -232,6 +232,20 @@ type Worker struct {
 	stopped  atomic.Bool
 	wg       sync.WaitGroup
 
+	// taskBaseCtx is the worker-lifetime context for in-flight task
+	// execution. It is derived from the process context in Start() and
+	// canceled ONLY on worker shutdown (Stop), NOT on a transient session
+	// teardown (master restart). Tasks must survive a session reconnect so
+	// a master restart can resume/report them instead of cancelling them
+	// with context.Canceled — the durable TaskResult outbox + replay loop
+	// then deliver the result once the session is re-established.
+	// Explicit cancellation (MsgCancelJob / MsgLeaseRevoked) still works
+	// via each ActiveTaskExecution.Cancel. nil for hand-built legacy test
+	// fixtures that call receiveLoop / executeTask directly; taskContext()
+	// falls back to the session context in that case.
+	taskBaseCtx    context.Context
+	taskBaseCancel context.CancelFunc
+
 	// Backoff for heartbeat failures
 	heartbeatBackoff *backoffConfig
 
