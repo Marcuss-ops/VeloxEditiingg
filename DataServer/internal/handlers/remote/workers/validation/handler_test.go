@@ -599,6 +599,38 @@ CREATE TABLE deployment_records (
   is_rollback INTEGER NOT NULL DEFAULT 0,
   FOREIGN KEY(worker_id) REFERENCES workers(worker_id)
 );
+-- This fixture records migrations through 136 as applied below, so it must
+-- also provide the pre-154 creator_forwardings table that migration 154
+-- extends (ALTER TABLE ADD COLUMN intake_source). The production chain
+-- creates this table in 055 and extends it through 101; the fixture mirrors
+-- that shape so 154 applies exactly as it would on a real upgraded database.
+CREATE TABLE creator_forwardings (
+  forwarding_id      TEXT PRIMARY KEY,
+  source_provider    TEXT NOT NULL,
+  source_job_id      TEXT NOT NULL,
+  source_status      TEXT NOT NULL DEFAULT '',
+  target_executor_id TEXT NOT NULL,
+  target_job_id      TEXT,
+  payload_json       TEXT NOT NULL DEFAULT '',
+  payload_sha256     TEXT NOT NULL DEFAULT '',
+  status             TEXT NOT NULL DEFAULT 'PENDING',
+  attempt_count      INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at    TEXT NOT NULL DEFAULT '',
+  locked_by          TEXT NOT NULL DEFAULT '',
+  lease_id           TEXT NOT NULL DEFAULT '',
+  lease_expires_at   TEXT NOT NULL DEFAULT '',
+  last_error_code    TEXT NOT NULL DEFAULT '',
+  last_error_message TEXT NOT NULL DEFAULT '',
+  created_at         TEXT NOT NULL DEFAULT '',
+  updated_at         TEXT NOT NULL DEFAULT '',
+  forwarded_at       TEXT NOT NULL DEFAULT '',
+  poll_attempts      INTEGER NOT NULL DEFAULT 0,
+  next_poll_at       TEXT NOT NULL DEFAULT '',
+  last_polled_at     TEXT NOT NULL DEFAULT '',
+  last_remote_status TEXT NOT NULL DEFAULT '',
+  last_error_class   TEXT NOT NULL DEFAULT '',
+  external_client_id TEXT
+);
 `)
 	require.NoError(t, err)
 	seedMigrationHistory(t, legacy, 136)
@@ -639,6 +671,13 @@ CREATE TABLE deployment_records (
 	err = migrated.DB().QueryRow(`SELECT version FROM schema_migrations WHERE version = 151`).Scan(&migrationVersion)
 	require.NoError(t, err)
 	require.Equal(t, 151, migrationVersion)
+
+	// Migration 154 (forwarding intake source) must apply on the
+	// legacy-upgrade path too — this pins the ALTER TABLE creator_forwardings
+	// against the fixture-provided pre-154 creator_forwardings shape.
+	err = migrated.DB().QueryRow(`SELECT version FROM schema_migrations WHERE version = 154`).Scan(&migrationVersion)
+	require.NoError(t, err)
+	require.Equal(t, 154, migrationVersion)
 }
 
 func TestValidationStoreHandlesConcurrentUpserts(t *testing.T) {
