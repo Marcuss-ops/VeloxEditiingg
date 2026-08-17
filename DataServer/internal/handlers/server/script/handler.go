@@ -46,6 +46,7 @@ type ScriptHandlers struct {
 	sqliteDB   *store.SQLiteStore
 	dataDir    string
 	creator    *creatorflow.Service
+	submission *creatorflow.CanonicalJobSubmitter
 	docCreator GoogleDocCreator
 }
 
@@ -62,6 +63,12 @@ func NewScriptHandlers(cfg *config.Config, sqliteDB *store.SQLiteStore, enqueuer
 		// the Enqueuer owns the queue so passing q again would be redundant
 		// and risks drift between two parallel references.
 		creator: creatorflow.New(cfg, enqueuer, sqliteDB),
+		// The from-scratch enqueue path routes through the canonical submitter
+		// (SubmitScratch) so intake-source telemetry is recorded once by the
+		// submitter instead of as a handler side-effect. RegisterRoutes
+		// overrides this with a resolver built from the composition-root
+		// resolver when one is supplied.
+		submission: creatorflow.NewCanonicalJobSubmitter(creatorflow.NewResolverMinimal(enqueuer, sqliteDB)),
 	}
 }
 
@@ -80,7 +87,9 @@ func RegisterRoutes(group gin.IRoutes, cfg *config.Config, sqliteDB *store.SQLit
 		resolver = creatorflow.NewResolverMinimal(enqueuer, sqliteDB)
 	}
 	registry := newScriptIngressRegistry(cfg, handlers.dataDir, handlers.sqliteDB, handlers.docCreator)
-	ingressHandler := jobshandler.NewHandler(registry, creatorflow.NewCanonicalJobSubmitter(resolver))
+	submission := creatorflow.NewCanonicalJobSubmitter(resolver)
+	handlers.submission = submission
+	ingressHandler := jobshandler.NewHandler(registry, submission)
 	group.POST("/generate-with-images", handlers.GenerateWithImagesHandler(cfg))
 	group.POST("/generate", ingressHandler.SubmitFixed("generate"))
 	group.POST("/jobs/:kind", ingressHandler.Submit())
@@ -305,7 +314,22 @@ func (h *ScriptHandlers) GenerateWithImagesHandler(cfg *config.Config) gin.Handl
 			return
 		}
 
-		response, err := h.enqueuer.Enqueue(c.Request.Context(), normalized, costmodel.DefaultRequirements())
+		// Route the from-scratch enqueue through the canonical submitter so
+		// intake-source telemetry is recorded once by the submitter (not as a
+		// handler side-effect). A nil submitter (partial test wiring) falls
+		// back to the direct enqueuer and records the source explicitly.
+		var response map[string]interface{}
+		if h.submission != nil {
+			response, err = h.submission.SubmitScratch(c.Request.Context(), creatorflow.CanonicalJobSubmission{
+				IntakeSource: creatorflow.IntakeSourceScriptGenerate,
+				Payload:      normalized,
+			}, costmodel.DefaultRequirements())
+		} else {
+			response, err = h.enqueuer.Enqueue(c.Request.Context(), normalized, costmodel.DefaultRequirements())
+			if err == nil {
+				velmetrics.RecordIntakeSource(creatorflow.IntakeSourceScriptGenerate)
+			}
+		}
 		if err != nil {
 			if assetErr, ok := voiceoverassets.AsAcquisitionError(err); ok {
 				c.JSON(http.StatusUnprocessableEntity, gin.H{
@@ -330,10 +354,6 @@ func (h *ScriptHandlers) GenerateWithImagesHandler(cfg *config.Config) gin.Handl
 			c.JSON(status, gin.H{"ok": false, "error": err.Error()})
 			return
 		}
-
-		// Direct-enqueue surface: record the intake source so the alias
-		// usage is measurable (script/generate-with-images).
-		velmetrics.RecordIntakeSource(creatorflow.IntakeSourceScriptGenerate)
 
 		c.JSON(http.StatusOK, gin.H{
 			"ok":                  true,
