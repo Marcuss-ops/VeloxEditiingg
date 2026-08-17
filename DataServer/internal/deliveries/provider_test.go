@@ -202,6 +202,9 @@ func TestDefaultRunnerConfig(t *testing.T) {
 	if cfg.ClaimBatch <= 0 {
 		t.Fatal("ClaimBatch should be positive")
 	}
+	if cfg.ClaimBatch <= cfg.Concurrency {
+		t.Fatalf("ClaimBatch (%d) should exceed Concurrency (%d) to absorb bursts in one tick", cfg.ClaimBatch, cfg.Concurrency)
+	}
 	if len(cfg.BackoffSchedule) == 0 {
 		t.Fatal("BackoffSchedule should not be empty")
 	}

@@ -20,7 +20,9 @@ type RunnerConfig struct {
 	// MaxAttempts per delivery before declaring FAILED.
 	MaxAttempts int
 	// ClaimBatch limits how many deliveries the runner can claim in a
-	// single tick. Should be ≥ Concurrency to keep the pool saturated.
+	// single tick. It may exceed Concurrency to absorb a burst in one poll:
+	// queued leases are renewed while waiting for a concurrency slot (see
+	// DeliveryRunner.tick), so they cannot expire before they start.
 	ClaimBatch int
 	// Concurrency limits how many deliveries are processed concurrently.
 	// Each delivery gets its own lease renewal goroutine; a bounded pool
@@ -39,7 +41,7 @@ func DefaultRunnerConfig() *RunnerConfig {
 		PollInterval:  5 * time.Second,
 		LeaseDuration: 5 * time.Minute,
 		MaxAttempts:   5,
-		ClaimBatch:    4,
+		ClaimBatch:    20,
 		Concurrency:   4,
 		BackoffSchedule: []time.Duration{
 			30 * time.Second,

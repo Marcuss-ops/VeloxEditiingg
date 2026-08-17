@@ -230,18 +230,15 @@ func (r *DeliveryRunner) Stop() {
 }
 
 // tick performs one poll: claim up to ClaimBatch claimable deliveries,
-// then process each one with bounded concurrency. Each lease starts
-// processing immediately — the claim batch is capped at Concurrency so
-// no row sits idle in memory with a ticking lease and no heartbeat.
+// then process each one with bounded concurrency. ClaimBatch may exceed
+// Concurrency: a lease waiting on the semaphore is renewed by a wait-phase
+// heartbeat so it cannot expire before it starts; once a slot is acquired,
+// processLease takes over with its own renewal loop.
 func (r *DeliveryRunner) tick(ctx context.Context) error {
 	if err := r.reconcileRecent(ctx); err != nil {
 		r.logWarn(ctx, logging.CodeDeliveryReconcileSweepFail, logging.F("err", err))
 	}
-	batch := r.cfg.ClaimBatch
-	if r.cfg.Concurrency > 0 && batch > r.cfg.Concurrency {
-		batch = r.cfg.Concurrency
-	}
-	leases, err := r.dbStore.ClaimDeliveries(ctx, r.identity, r.cfg.LeaseDuration, batch)
+	leases, err := r.dbStore.ClaimDeliveries(ctx, r.identity, r.cfg.LeaseDuration, r.cfg.ClaimBatch)
 	if err != nil {
 		return fmt.Errorf("claim deliveries: %w", err)
 	}
@@ -255,13 +252,30 @@ func (r *DeliveryRunner) tick(ctx context.Context) error {
 		wg.Add(1)
 		go func(l store.DeliveryLease) {
 			defer wg.Done()
-			// Acquire semaphore (bounded concurrency).
+
+			// Wait-phase renewal (P0-02 amended): ClaimBatch may exceed
+			// Concurrency, so a claimed lease can sit behind the semaphore.
+			// Renew it here so it cannot expire before it starts. The loop
+			// stops as soon as a slot is acquired and processLease starts
+			// its own renewal loop, so there is no double renewal.
+			waitCtx, cancelWait := context.WithCancel(ctx)
+			waitDone := make(chan struct{})
+			go r.renewDeliveryLeaseLoop(waitCtx, waitDone, l,
+				func(err error) {
+					r.logWarn(ctx, logging.CodeDeliveryLeaseRenewalFail, logging.F("delivery", l.DeliveryID, "err", err))
+					cancelWait()
+				})
+
+			// Acquire semaphore (bounded concurrency); abandon the lease if
+			// it is lost (re-claimed) while queued.
 			select {
 			case r.sem <- struct{}{}:
-			case <-ctx.Done():
+			case <-waitCtx.Done():
 				r.logWarn(ctx, logging.CodeDeliveryLeaseAbandoned, logging.F("delivery", l.DeliveryID))
 				return
 			}
+			cancelWait()
+			<-waitDone
 			defer func() { <-r.sem }()
 
 			if err := r.processLease(ctx, l); err != nil {

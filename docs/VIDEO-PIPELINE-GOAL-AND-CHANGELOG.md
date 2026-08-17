@@ -625,6 +625,35 @@ locale" il path delivery ora misura le due componenti separatamente.
     con un burst post-deploy via `fleetctl job inspect --json` →
     `deliveries[]`.
 
+### 2026-08-17 — delivery: ClaimBatch > Concurrency con renewal in attesa (P0-02 emendato)
+
+- **Contesto**: il design P0-02 (`effectiveClaimBatch <= Concurrency`) esiste
+  perché una lease reclamata ma in coda al semaphore non veniva rinnovata
+  (il renewal parte solo in `processLease`) → poteva scadere prima di
+  iniziare. Rimuovere il cap per assorbire burst più grandi richiedeva di
+  chiudere quel buco, non di riaprirlo.
+- **Modifica (solo delivery runner, `runner.go#tick`)**:
+  1. `DefaultRunnerConfig().ClaimBatch` **4 → 20** (Concurrency resta 4).
+  2. Rimosso il cap `batch = min(ClaimBatch, Concurrency)`: il tick ora
+     reclama fino a `ClaimBatch` in una sola poll.
+  3. **Wait-phase renewal**: prima di acquisire il semaphore, ogni lease
+     avvia `renewDeliveryLeaseLoop`; il loop si ferma appena lo slot è
+     acquisito (`cancelWait(); <-waitDone`) e `processLease` riparte col
+     suo renewal → nessun doppio renewal. Se la lease è persa in coda
+     (re-claim da un altro runner), `onFailure` cancella il contesto e la
+     goroutine abbandona lo slot.
+  - La fairness cross-job di `ClaimDeliveries` (`PARTITION BY job_id` +
+    `parent_rank`) resta intatta: un batch largo si distribuisce sui
+    parent job, non affama un job.
+- **Nota di consistenza**: il forwarding runner mantiene il vecchio cap
+  `effectiveClaimBatch <= Concurrency` (test
+  `TestTick_EffectiveClaimBatch_CappedAtConcurrency` invariato); il cambio
+  è volutamente limitato al delivery runner. Follow-up: allineare forwarding
+  allo stesso pattern se serve assorbire burst sul canale creator.
+- Test: `TestTick_ClaimBatchExceedsConcurrency_AbsorbsBurst` (6 delivery,
+  ClaimBatch=6 / Concurrency=2, drain completo senza deadlock, `-race` verde)
+  + assert `ClaimBatch > Concurrency` in `TestDefaultRunnerConfig`.
+
 ### 2026-08-16 — benchmark 1 secondo
 
 - Creare fixture con segmenti realmente compatibili e già caldi.
