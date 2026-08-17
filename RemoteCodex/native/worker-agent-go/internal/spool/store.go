@@ -165,7 +165,12 @@ type SpoolEntry struct {
 	AttemptID      string
 	CommitID       string
 	WorkerSpoolKey string
-	LocalPath      string
+	// OutputKind is the canonical manifest output kind (final_video /
+	// engine_progress_sidecar / raw artifact type) published in
+	// TaskOutputDeclared. It is persisted so the declare-resume loop can
+	// rebuild the manifest after a restart; the mime type is derived from it.
+	OutputKind string
+	LocalPath  string
 	SHA256         string
 	SizeBytes      int64
 	UploadID       string
@@ -245,6 +250,13 @@ func Open(path string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	// Roll-forward migration for spool DBs created before the declare-resume
+	// ledger existed (output_kind): the declare-resume loop needs it to
+	// rebuild TaskOutputDeclared manifests after a restart.
+	if err := ensureOutputKindColumn(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return &Store{db: db}, nil
 }
 
@@ -283,6 +295,20 @@ func ensureUploadResumeColumns(db *sql.DB) error {
 	return nil
 }
 
+// ensureOutputKindColumn adds output_kind to pre-existing spool DBs. Fresh
+// DBs already carry it (schemaDDL), so the ALTER fails with "duplicate column
+// name" and is ignored. The column is additive and default-empty, so an
+// existing spool keeps working unchanged.
+func ensureOutputKindColumn(db *sql.DB) error {
+	if _, err := db.Exec(`ALTER TABLE worker_output_spool ADD COLUMN output_kind TEXT NOT NULL DEFAULT ''`); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+			return nil
+		}
+		return fmt.Errorf("spool.Open: add output_kind column: %w", err)
+	}
+	return nil
+}
+
 // Close releases the underlying *sql.DB. The store cannot be reused
 // after Close.
 func (s *Store) Close() error {
@@ -307,6 +333,7 @@ CREATE TABLE IF NOT EXISTS worker_output_spool (
     attempt_id      TEXT NOT NULL,
     commit_id       TEXT NOT NULL DEFAULT '',
     worker_spool_key TEXT NOT NULL,
+    output_kind      TEXT NOT NULL DEFAULT '',
     local_path      TEXT NOT NULL DEFAULT '',
     sha256          TEXT NOT NULL DEFAULT '',
     size_bytes      INTEGER NOT NULL DEFAULT 0,

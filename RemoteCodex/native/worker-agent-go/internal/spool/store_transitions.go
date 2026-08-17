@@ -98,12 +98,14 @@ func (s *Store) StashUploadPlan(ctx context.Context, spoolID, commitID, uploadID
 	return nil
 }
 
-// RecordUploadFailure stamps a non-fatal upload or commit-completion failure
-// onto a resumable row WITHOUT moving its status. UPLOADED is included because
-// the bytes may already be accepted while the TaskCommitAck was lost; that
-// row must retry the completion message, not start a second upload. It bumps
-// the bounded attempt counter and schedules the next retry instant
-// (nextAttemptAt; zero = immediate). Terminal rows are never re-opened.
+// RecordUploadFailure stamps a non-fatal declare, upload, or
+// commit-completion failure onto a resumable row WITHOUT moving its status.
+// OUTPUT_READY is included so the declare-resume loop can back off a failed
+// TaskOutputDeclared send; UPLOADED is included because the bytes may already
+// be accepted while the TaskCommitAck was lost (that row must retry the
+// completion message, not start a second upload). It bumps the bounded
+// attempt counter and schedules the next retry instant (nextAttemptAt; zero =
+// immediate). Terminal rows are never re-opened.
 func (s *Store) RecordUploadFailure(ctx context.Context, spoolID, lastError string, nextAttemptAt time.Time) error {
 	if spoolID == "" {
 		return fmt.Errorf("spool.RecordUploadFailure: spool_id empty")
@@ -113,7 +115,7 @@ func (s *Store) RecordUploadFailure(ctx context.Context, spoolID, lastError stri
 		UPDATE worker_output_spool
 		   SET last_error = ?, upload_attempt_count = upload_attempt_count + 1,
 		       next_upload_attempt_at = ?, updated_at = ?
-			 WHERE spool_id = ? AND status IN ('UPLOAD_PENDING','UPLOADING','UPLOADED')`,
+			 WHERE spool_id = ? AND status IN ('OUTPUT_READY','UPLOAD_PENDING','UPLOADING','UPLOADED')`,
 		lastError, formatUploadAttemptAt(nextAttemptAt), now, spoolID,
 	)
 	if err != nil {

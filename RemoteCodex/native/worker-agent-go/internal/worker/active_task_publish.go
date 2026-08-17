@@ -65,15 +65,7 @@ func (w *Worker) publishArtifactsV1(ctx context.Context, pte *PendingTaskExecuti
 	manifests := make([]*pb.OutputManifest, 0, len(report.Outputs))
 	for i, ref := range report.Outputs {
 		spoolKey := fmt.Sprintf("%s:output:%d", pte.TaskID, i)
-		outputKind := ref.Type
-		mimeType := "application/octet-stream"
-		if ref.Type == "render.output" {
-			outputKind = "final_video"
-			mimeType = "video/mp4"
-		} else if ref.Type == "engine.progress.sidecar" {
-			outputKind = "engine_progress_sidecar"
-			mimeType = "application/json"
-		}
+		outputKind, mimeType := outputKindAndMime(ref.Type)
 		manifests = append(manifests, &pb.OutputManifest{
 			OutputKind:     outputKind,
 			LogicalName:    filepath.Base(ref.URI),
@@ -96,12 +88,21 @@ func (w *Worker) publishArtifactsV1(ctx context.Context, pte *PendingTaskExecuti
 
 	ackCh := w.registerPendingArtifactAck(pte.TaskID)
 	defer w.unregisterPendingArtifactAck(pte.TaskID)
-	if err := w.transport.Send(ctx, controltransport.NewTypedMessage(
+	if err := w.transportSend(ctx, controltransport.NewTypedMessage(
 		controltransport.MsgTaskOutputDeclared,
 		w.config.WorkerID,
 		w.config.ProtocolVersion,
 		declared,
 	)); err != nil {
+		// The declare receipt is resumable: leave every spool row in
+		// OUTPUT_READY (skip the deferred reject) and hand them to the
+		// declare-resume loop, which re-sends TaskOutputDeclared once the
+		// transport reconnects.
+		w.markDeclareResumable(ctx, spoolEntries, resumable, err)
+		w.logArtifactProtocol("ARTIFACT_DECLARE_SEND_FAILED", pte, publicationStartedAt, "", "", "", map[string]interface{}{
+			"manifest_count": len(manifests),
+			"error":          err.Error(),
+		})
 		return fmt.Errorf("worker sidecar upload: declare receipt: %w", err)
 	}
 	w.logArtifactProtocol("ARTIFACT_DECLARE_SENT", pte, publicationStartedAt, "", "", "", map[string]interface{}{
@@ -114,6 +115,11 @@ func (w *Worker) publishArtifactsV1(ctx context.Context, pte *PendingTaskExecuti
 	}
 	msg, err := w.waitForRegisteredArtifactAck(ctx, ackCh, deadline)
 	if err != nil {
+		// A lost plan response is the same transient declare-phase failure as
+		// a failed send: the rows stay OUTPUT_READY and the declare-resume
+		// loop re-sends TaskOutputDeclared (idempotent on the master) once the
+		// transport recovers.
+		w.markDeclareResumable(ctx, spoolEntries, resumable, err)
 		w.logArtifactProtocol("ARTIFACT_UPLOAD_PLAN_WAIT_FAILED", pte, publicationStartedAt, "", "", "", map[string]interface{}{
 			"error": err.Error(),
 		})
@@ -121,6 +127,8 @@ func (w *Worker) publishArtifactsV1(ctx context.Context, pte *PendingTaskExecuti
 	}
 	plan, ok := msg.TypedPayload.(*pb.ArtifactUploadPlan)
 	if msg.Type != controltransport.MsgArtifactUploadPlan || !ok || plan == nil {
+		// A malformed plan is a protocol error, not a transient failure: the
+		// deferred reject keeps it terminal.
 		return fmt.Errorf("worker sidecar upload: expected artifact upload plan, got %s/%T", msg.Type, msg.TypedPayload)
 	}
 	if plan.GetTaskId() != pte.TaskID || plan.GetAttemptId() != pte.AttemptID || plan.GetLeaseId() != pte.LeaseID || len(plan.GetTargets()) != len(report.Outputs) {
@@ -329,6 +337,48 @@ func (w *Worker) releaseCommittedArtifact(entry spool.SpoolEntry) {
 	}
 }
 
+// outputKindAndMime maps an executor artifact Type to the canonical
+// OutputManifest (kind, mime) pair published in TaskOutputDeclared. The kind
+// is persisted on the spool row so the declare-resume loop can rebuild the
+// manifest after a restart; mime is derived from the kind.
+func outputKindAndMime(refType string) (kind, mime string) {
+	switch refType {
+	case "render.output":
+		return "final_video", "video/mp4"
+	case "engine.progress.sidecar":
+		return "engine_progress_sidecar", "application/json"
+	default:
+		return refType, "application/octet-stream"
+	}
+}
+
+// mimeForOutputKind derives the manifest mime type from a persisted output
+// kind (the mime projection of outputKindAndMime).
+func mimeForOutputKind(kind string) string {
+	switch kind {
+	case "final_video":
+		return "video/mp4"
+	case "engine_progress_sidecar":
+		return "application/json"
+	default:
+		return "application/octet-stream"
+	}
+}
+
+// markDeclareResumable leaves every spool row in OUTPUT_READY (skip the
+// deferred reject) and hands them to the declare-resume loop, which re-sends
+// TaskOutputDeclared once the transport reconnects. Spill tmpfs rows first so
+// a restart does not lose the rendered bytes before the re-declare lands.
+func (w *Worker) markDeclareResumable(ctx context.Context, spoolEntries []spool.SpoolEntry, resumable map[string]bool, cause error) {
+	for _, e := range spoolEntries {
+		resumable[e.SpoolID] = true
+		w.spillVolatileToNVMe(ctx, e)
+		if recErr := w.outputSpool.RecordUploadFailure(ctx, e.SpoolID, "declare receipt: "+cause.Error(), time.Now().Add(uploadResumeBackoff(e.UploadAttemptCount))); recErr != nil {
+			w.logger.Warn("[ARTIFACT_RESUME] record declare failure failed spool=%s: %v", e.SpoolID, recErr)
+		}
+	}
+}
+
 func (w *Worker) registerOutputSpool(ctx context.Context, pte *PendingTaskExecution, report *taskrunner.TaskExecutionReport) ([]spool.SpoolEntry, error) {
 	if w.outputSpool == nil {
 		return nil, fmt.Errorf("durable output spool is not configured")
@@ -341,10 +391,12 @@ func (w *Worker) registerOutputSpool(ctx context.Context, pte *PendingTaskExecut
 		// whole publication with ErrDuplicateSpool. No duplicate-handling
 		// logic lives here — the spool store owns it. An incompatible
 		// duplicate (same identity, different bytes) is a hard error.
+		kind, _ := outputKindAndMime(ref.Type)
 		entry, _, err := w.outputSpool.Ensure(ctx, spool.SpoolEntry{
 			TaskID:         pte.TaskID,
 			AttemptID:      pte.AttemptID,
 			WorkerSpoolKey: fmt.Sprintf("%s:output:%d", pte.TaskID, i),
+			OutputKind:     kind,
 			LocalPath:      ref.URI,
 			SHA256:         ref.Hash,
 			SizeBytes:      ref.SizeBytes,

@@ -22,6 +22,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"path/filepath"
 	"time"
 
 	"velox-shared/controltransport"
@@ -48,6 +50,11 @@ const (
 	// during a resume-driven completion. A lost ack must not block the whole
 	// resume loop for minutes; the persisted UPLOADED row is retried later.
 	uploadResumeCommitWait = 5 * time.Second
+	// declareResumePlanWait is the bounded wait window for an
+	// ArtifactUploadPlan after a resume-driven TaskOutputDeclared. A lost
+	// plan must not block the declare pass; the rows stay OUTPUT_READY and
+	// are re-declared on a later tick.
+	declareResumePlanWait = 5 * time.Second
 )
 
 // uploadResumeBackoff returns the delay before the retry that follows
@@ -85,6 +92,11 @@ func (w *Worker) startArtifactUploadResumeLoop(ctx context.Context) {
 			case <-w.stopChan:
 				return
 			case <-ticker.C:
+				// Declare pass first so a freshly-declared row (now UPLOAD_PENDING)
+				// can be picked up by the upload pass in the same tick.
+				if err := w.resumeDueDeclarations(ctx); err != nil && ctx.Err() == nil {
+					w.logger.Warn("[ARTIFACT_RESUME] declare resume pass failed: %v", err)
+				}
 				if err := w.resumeDueArtifactUploads(ctx); err != nil && ctx.Err() == nil {
 					w.logger.Warn("[ARTIFACT_RESUME] resume pass failed: %v", err)
 				}
@@ -112,6 +124,184 @@ func (w *Worker) resumeDueArtifactUploads(ctx context.Context) error {
 		w.resumeArtifactUpload(ctx, entry)
 	}
 	return nil
+}
+
+// resumeDueDeclarations lists due OUTPUT_READY rows (no upload plan yet),
+// groups them by (task_id, attempt_id) and re-sends TaskOutputDeclared for
+// each group so the master's idempotent DeclareOutputs returns the (same)
+// upload plan. On success the targets are stashed + rows marked
+// UPLOAD_PENDING so the upload pass re-drives the bytes.
+func (w *Worker) resumeDueDeclarations(ctx context.Context) error {
+	if w == nil || w.outputSpool == nil || w.publisherRegistry == nil {
+		return nil
+	}
+	entries, err := w.outputSpool.ListDeclareResumeCandidates(ctx, uploadResumeBatch)
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	type attemptKey struct{ taskID, attemptID string }
+	groups := make(map[attemptKey][]spool.SpoolEntry)
+	var order []attemptKey
+	for _, e := range entries {
+		if !e.NextUploadAttemptAt.IsZero() && e.NextUploadAttemptAt.After(now) {
+			continue // backoff not elapsed yet
+		}
+		k := attemptKey{e.TaskID, e.AttemptID}
+		if _, ok := groups[k]; !ok {
+			order = append(order, k)
+		}
+		groups[k] = append(groups[k], e)
+	}
+	for _, k := range order {
+		w.resumeDeclaration(ctx, groups[k])
+	}
+	return nil
+}
+
+// resumeDeclaration re-sends TaskOutputDeclared for one (task_id, attempt_id)
+// group of OUTPUT_READY rows and, on a valid plan, stashes the per-output
+// upload targets + marks each row UPLOAD_PENDING. It is CAS-gated and
+// idempotent: a row that already moved on is skipped, and a re-declare on a
+// partially-declared attempt converges on the same commit via the master's
+// idempotent DeclareOutputs.
+func (w *Worker) resumeDeclaration(ctx context.Context, entries []spool.SpoolEntry) {
+	if len(entries) == 0 {
+		return
+	}
+	w.artifactUploadMu.Lock()
+	defer w.artifactUploadMu.Unlock()
+
+	taskID := entries[0].TaskID
+	attemptID := entries[0].AttemptID
+
+	w.activeTaskLeasesMu.RLock()
+	lease := w.activeTaskLeases[taskID]
+	w.activeTaskLeasesMu.RUnlock()
+	if lease == nil || lease.AttemptID != attemptID {
+		w.logger.Warn("[ARTIFACT_RESUME] no active lease for task=%s attempt=%s — deferring declare", taskID, attemptID)
+		return
+	}
+
+	// Bounded budget, mirroring the upload resume path: after the retry budget
+	// is exhausted the row is REJECTED so the master's attempt reaper can
+	// reschedule the render instead of the worker spinning forever.
+	if entries[0].UploadAttemptCount >= uploadResumeMaxAttempts {
+		for _, e := range entries {
+			if err := w.outputSpool.MarkRejected(ctx, e.SpoolID, "declare_retry_exhausted", "declare receipt retry budget exhausted"); err != nil && !errors.Is(err, spool.ErrCASConflict) {
+				w.logger.Warn("[ARTIFACT_RESUME] reject exhausted declare spool=%s: %v", e.SpoolID, err)
+			}
+		}
+		w.logger.Warn("[ARTIFACT_RESUME] declare retry budget exhausted task=%s attempt=%s — rejected", taskID, attemptID)
+		return
+	}
+
+	manifests := make([]*pb.OutputManifest, 0, len(entries))
+	for _, e := range entries {
+		if e.OutputKind == "" {
+			// Legacy row without the persisted manifest kind cannot rebuild the
+			// declaration; leave it for the master attempt reaper.
+			w.logger.Warn("[ARTIFACT_RESUME] output_kind empty spool=%s — cannot rebuild declare manifest", e.SpoolID)
+			return
+		}
+		manifests = append(manifests, &pb.OutputManifest{
+			OutputKind:     e.OutputKind,
+			LogicalName:    filepath.Base(e.LocalPath),
+			MimeType:       mimeForOutputKind(e.OutputKind),
+			SizeBytes:      e.SizeBytes,
+			Sha256:         e.SHA256,
+			WorkerSpoolKey: e.WorkerSpoolKey,
+		})
+	}
+
+	declared := &pb.TaskOutputDeclared{
+		TaskId:        taskID,
+		JobId:         lease.JobID,
+		AttemptId:     attemptID,
+		LeaseId:       lease.LeaseID,
+		AttemptNumber: int32(lease.AttemptNumber),
+		Revision:      int32(lease.Revision),
+		Manifests:     manifests,
+	}
+
+	ackCh := w.registerPendingArtifactAck(taskID)
+	defer w.unregisterPendingArtifactAck(taskID)
+	if err := w.transportSend(ctx, controltransport.NewTypedMessage(
+		controltransport.MsgTaskOutputDeclared,
+		w.config.WorkerID,
+		w.config.ProtocolVersion,
+		declared,
+	)); err != nil {
+		w.scheduleDeclarationRetry(ctx, entries, err)
+		return
+	}
+
+	deadline := time.Now().Add(declareResumePlanWait)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	msg, err := w.waitForRegisteredArtifactAck(ctx, ackCh, deadline)
+	if err != nil {
+		w.scheduleDeclarationRetry(ctx, entries, err)
+		return
+	}
+	plan, ok := msg.TypedPayload.(*pb.ArtifactUploadPlan)
+	if msg.Type != controltransport.MsgArtifactUploadPlan || !ok || plan == nil {
+		w.scheduleDeclarationRetry(ctx, entries, errors.New("expected artifact upload plan"))
+		return
+	}
+	if plan.GetTaskId() != taskID || plan.GetAttemptId() != attemptID || plan.GetLeaseId() != lease.LeaseID || len(plan.GetTargets()) != len(entries) {
+		w.scheduleDeclarationRetry(ctx, entries, errors.New("upload plan identity or target count mismatch"))
+		return
+	}
+
+	for i, e := range entries {
+		targetPB := plan.GetTargets()[i]
+		if targetPB == nil || targetPB.GetDeclarationId() == "" || targetPB.GetUploadId() == "" || targetPB.GetTransportId() == "" {
+			w.scheduleDeclarationRetry(ctx, entries, fmt.Errorf("upload plan target %d is incomplete", i))
+			return
+		}
+		target := publisher.UploadTarget{
+			DeclarationID: targetPB.GetDeclarationId(),
+			ArtifactID:    targetPB.GetArtifactId(),
+			UploadID:      targetPB.GetUploadId(),
+			TransportID:   targetPB.GetTransportId(),
+			UploadURL:     targetPB.GetUploadUrl(),
+			ChunkSize:     targetPB.GetChunkSize(),
+			ExpiresAtUnix: targetPB.GetExpiresAtUnix(),
+		}
+		targetJSON, jsonErr := json.Marshal(target)
+		if jsonErr != nil {
+			w.scheduleDeclarationRetry(ctx, entries, jsonErr)
+			return
+		}
+		if err := w.outputSpool.StashUploadPlan(ctx, e.SpoolID, plan.GetCommitId(), target.UploadID, string(targetJSON), plan.GetCommitToken()); err != nil {
+			if !errors.Is(err, spool.ErrCASConflict) {
+				w.logger.Warn("[ARTIFACT_RESUME] stash target spool=%s: %v", e.SpoolID, err)
+			}
+			continue
+		}
+		if err := w.outputSpool.MarkUploadPending(ctx, e.SpoolID, target.UploadID); err != nil && !errors.Is(err, spool.ErrCASConflict) {
+			w.logger.Warn("[ARTIFACT_RESUME] mark pending spool=%s: %v", e.SpoolID, err)
+		}
+	}
+	w.logger.Info("[ARTIFACT_RESUME] declare resumed task=%s attempt=%s outputs=%d", taskID, attemptID, len(entries))
+}
+
+// scheduleDeclarationRetry records a non-fatal declare failure on every row
+// in the group and bumps the bounded retry counter with exponential backoff.
+// The rows stay OUTPUT_READY so the next declare pass re-sends the declaration.
+func (w *Worker) scheduleDeclarationRetry(ctx context.Context, entries []spool.SpoolEntry, cause error) {
+	for _, e := range entries {
+		next := time.Now().Add(uploadResumeBackoff(e.UploadAttemptCount))
+		if err := w.outputSpool.RecordUploadFailure(ctx, e.SpoolID, "declare receipt: "+cause.Error(), next); err != nil {
+			if !errors.Is(err, spool.ErrCASConflict) {
+				w.logger.Warn("[ARTIFACT_RESUME] record declare failure spool=%s: %v", e.SpoolID, err)
+			}
+			continue
+		}
+		w.logger.Warn("[ARTIFACT_RESUME] declare retry scheduled spool=%s in %s: %v", e.SpoolID, time.Until(next).Round(time.Second), cause)
+	}
 }
 
 // resumeArtifactUpload drives one resumable spool row forward. It is

@@ -164,13 +164,13 @@ func (s *Store) Insert(ctx context.Context, e SpoolEntry) (*SpoolEntry, error) {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO worker_output_spool (
 		    spool_id, task_id, attempt_id, commit_id, worker_spool_key,
-		    local_path, sha256, size_bytes, upload_id, uploaded_bytes,
+		    output_kind, local_path, sha256, size_bytes, upload_id, uploaded_bytes,
 		    status, storage_tier, last_error,
 		    upload_target_json, commit_token, upload_attempt_count,
 		    next_upload_attempt_at, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		e.SpoolID, e.TaskID, e.AttemptID, e.CommitID, e.WorkerSpoolKey,
-		e.LocalPath, e.SHA256, e.SizeBytes, e.UploadID, e.UploadedBytes,
+		e.OutputKind, e.LocalPath, e.SHA256, e.SizeBytes, e.UploadID, e.UploadedBytes,
 		string(e.Status), string(e.StorageTier), e.LastError,
 		e.UploadTargetJSON, e.CommitToken, e.UploadAttemptCount,
 		formatUploadAttemptAt(e.NextUploadAttemptAt), nowStr, nowStr,
@@ -255,6 +255,36 @@ func (s *Store) ListResumeCandidates(ctx context.Context) ([]SpoolEntry, error) 
 	return out, rows.Err()
 }
 
+// ListDeclareResumeCandidates returns OUTPUT_READY rows that never received
+// an upload plan (upload_target_json empty), so the declare-resume loop can
+// re-send TaskOutputDeclared once the transport reconnects. Ordered by
+// next_upload_attempt_at (retry backoff) then created_at; the caller filters
+// the exact due-instant in Go (zero means due immediately).
+func (s *Store) ListDeclareResumeCandidates(ctx context.Context, limit int) ([]SpoolEntry, error) {
+	if limit <= 0 {
+		limit = 32
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+selectSpoolCols+` FROM worker_output_spool
+		  WHERE status = 'OUTPUT_READY'
+		    AND upload_target_json = ''
+		  ORDER BY next_upload_attempt_at ASC, created_at ASC
+		  LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("spool.ListDeclareResumeCandidates: %w", err)
+	}
+	defer rows.Close()
+	var out []SpoolEntry
+	for rows.Next() {
+		e, err := scanSpool(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *e)
+	}
+	return out, rows.Err()
+}
+
 // ListUploadResumeCandidates returns mid-upload rows that have a persisted
 // upload target (StashUploadPlan ran), so the worker can re-drive their
 // upload or re-send the commit completion from the (possibly repointed)
@@ -315,7 +345,7 @@ func (s *Store) ListVolatileUncommitted(ctx context.Context) ([]SpoolEntry, erro
 }
 
 const selectSpoolCols = `spool_id, task_id, attempt_id, commit_id,
-    worker_spool_key, local_path, sha256, size_bytes, upload_id,
+    worker_spool_key, output_kind, local_path, sha256, size_bytes, upload_id,
     uploaded_bytes, status, storage_tier, last_error,
     upload_target_json, commit_token, upload_attempt_count,
     next_upload_attempt_at, created_at, updated_at`
@@ -345,7 +375,7 @@ func scanSpool(r scanDBI) (*SpoolEntry, error) {
 	)
 	err := r.Scan(
 		&e.SpoolID, &e.TaskID, &e.AttemptID, &e.CommitID, &e.WorkerSpoolKey,
-		&e.LocalPath, &e.SHA256, &sizeB, &e.UploadID, &uploadB,
+		&e.OutputKind, &e.LocalPath, &e.SHA256, &sizeB, &e.UploadID, &uploadB,
 		&statusS, &tierS, &e.LastError,
 		&e.UploadTargetJSON, &e.CommitToken, &attemptCount, &nextAttemptS,
 		&created, &updated,
