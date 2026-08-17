@@ -54,6 +54,7 @@ import (
 	workersreg "velox-server/internal/workers"
 
 	"velox-server/internal/config"
+	"velox-server/internal/creatorflow"
 	"velox-server/internal/store"
 )
 
@@ -112,10 +113,36 @@ func NewServiceOrM2MOrAdminAuthMiddleware(cfg *config.Config, st *store.SQLiteSt
 // =====================================================================
 
 const (
-	m2mCtxKeyClientID  = "m2m_client_id"
-	m2mCtxKeyM2MKey    = "m2m_key_row"
-	m2mCtxKeyStartedAt = "m2m_started_at"
+	m2mCtxKeyClientID    = "m2m_client_id"
+	m2mCtxKeyM2MKey      = "m2m_key_row"
+	m2mCtxKeyStartedAt   = "m2m_started_at"
+	m2mCtxKeyIntakeSource = "m2m_intake_source"
 )
+
+// SetIntakeSource stamps the intake source for the current request. It is
+// used by the batch endpoint to distinguish its items from the plain
+// single-job surface; the single-job handler reads it via
+// IntakeSourceFromContext and stamps it on the CanonicalJobSubmission.
+func SetIntakeSource(c *gin.Context, source string) {
+	if c == nil {
+		return
+	}
+	c.Set(m2mCtxKeyIntakeSource, source)
+}
+
+// IntakeSourceFromContext returns the stamped intake source, or the
+// canonical default when none was set (the plain POST /api/v1/jobs path).
+func IntakeSourceFromContext(c *gin.Context) string {
+	if c == nil {
+		return creatorflow.IntakeSourceCanonical
+	}
+	if v, ok := c.Get(m2mCtxKeyIntakeSource); ok {
+		if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+			return s
+		}
+	}
+	return creatorflow.IntakeSourceCanonical
+}
 
 // ClientIDFromContext extracts the resolved client_id from a context
 // populated by the M2M middleware. Returns the empty string when the

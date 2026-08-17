@@ -6,6 +6,7 @@ import (
 	workerhandlersuploads "velox-server/internal/handlers/remote/workers/uploads"
 	instaedithandler "velox-server/internal/handlers/server/instaedit"
 	scripthandlers "velox-server/internal/handlers/server/script"
+	velmetrics "velox-server/internal/metrics"
 	"velox-server/internal/store"
 )
 
@@ -64,8 +65,12 @@ func (c *appComponents) routerBundle() RouterBundle {
 			RouteUsage: c.metricsCollector,
 		},
 		InstaEdit: InstaEditRouteDeps{
-			Verifier:      c.instaeditVerifier,
-			Service:       instaedithandler.NewServiceFromSQLite(c.persistence.SQLite, c.jobs.Repository, store.NewSQLiteAssetRepository(c.persistence.SQLite), c.modules.Enqueuer, c.resolver),
+			Verifier: c.instaeditVerifier,
+			Service: instaedithandler.NewServiceFromSQLite(
+				c.persistence.SQLite, c.jobs.Repository,
+				store.NewSQLiteAssetRepository(c.persistence.SQLite),
+				c.modules.Enqueuer, c.resolver,
+			).WithIntakeSourceRecorder(velmetrics.NewIntakeSourceSink()),
 			WebhookSecret: c.cfg.Auth.VeloxWebhookSecret,
 		},
 	}

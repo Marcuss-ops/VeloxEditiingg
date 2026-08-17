@@ -240,6 +240,7 @@ func (h *Handlers) SubmitJob() gin.HandlerFunc {
 			canonical.DeliveryPlan,
 			canonical.PublicationSpecs,
 			ClientIDFromContext(c),
+			IntakeSourceFromContext(c),
 		)
 		if err != nil {
 			// P0 contract: every resolver-layer error is mapped

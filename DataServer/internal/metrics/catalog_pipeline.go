@@ -54,6 +54,10 @@ func pipelineMetricDefinitions() []MetricDefinition {
 			Description: "Total number of creator payloads accepted by the master, split by intake path. Label cardinality is bounded — only 'creator_push' (HTTP endpoint /api/v1/creator/jobs) and 'creator_forwarder' (async CreatorForwardingRunner) are valid values. The 'remote_engine_legacy' label was retired when /api/remote/pipeline was fully removed from main (see docs/CREATOR-PUSH.md §Removal).",
 		},
 		{
+			Name: "pipeline.intake_source_accepted_total", Unit: "count", Component: CompPipeline, Kind: KindCounter,
+			Description: "Total number of jobs accepted by the master, split by intake source (the producer surface that submitted the job). Label cardinality is bounded to the closed creatorflow vocabulary: canonical (/api/v1/jobs), creator (/api/v1/creator/jobs), instaedit (/api/v1/instaedit/jobs), batch (/api/v1/jobs/batch), script_generate and script_kind (/api/v1/script/*), pipeline_run (/api/v1/pipeline-runs), calendar (/api/v1/calendar/events/:id/enqueue). Drives the alias-usage measurement that gates deprecation/removal of legacy job-creation endpoints.",
+		},
+		{
 			Name: "pipeline.compat_alias_reads_total", Unit: "count", Component: CompPipeline, Kind: KindCounter,
 			Description: "Reads of registered legacy payload aliases, labeled by alias and canonical key. Values are bounded by the shared compatibility registry.",
 		},

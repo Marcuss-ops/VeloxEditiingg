@@ -221,10 +221,12 @@ func (h *Handlers) resolveCompletedPayload(
 	deliveryPlan map[string]interface{},
 	publicationSpecs []publication.Spec,
 	externalClientID string,
+	intakeSource string,
 ) (map[string]interface{}, error) {
 	if h.submission != nil {
 		out, err := h.submission.Submit(ctx, creatorflow.CanonicalJobSubmission{
 			ExternalClientID: externalClientID,
+			IntakeSource:     intakeSource,
 			SourceProvider:   sourceProvider,
 			SourceJobID:      sourceJobID,
 			TargetExecutorID: targetExecutorID,
@@ -340,6 +342,7 @@ func (h *Handlers) CreatorPush() gin.HandlerFunc {
 			normalized.DeliveryPlan,
 			normalized.PublicationSpecs,
 			ClientIDFromContext(c),
+			creatorflow.IntakeSourceCreator,
 		)
 		if err != nil {
 			// P0 contract: every resolver-layer error is mapped to

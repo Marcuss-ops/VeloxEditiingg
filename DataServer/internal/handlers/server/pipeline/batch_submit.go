@@ -11,6 +11,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
+
+	"velox-server/internal/creatorflow"
 )
 
 // MaxSubmitJobBatchIDBytes bounds the stable batch identity used in
@@ -188,6 +190,10 @@ func (h *Handlers) submitBatchItem(parent *gin.Context, index int, item SubmitJo
 			subContext.Keys[key] = value
 		}
 	}
+	// The batch surface is a distinct intake source from the plain
+	// single-job endpoint: stamp it so the canonical submitter records
+	// `intake_source=batch` for every item.
+	SetIntakeSource(subContext, creatorflow.IntakeSourceBatch)
 
 	h.SubmitJob()(subContext)
 	return batchItemResultFromResponse(result, recorder.Code, recorder.Body.Bytes())

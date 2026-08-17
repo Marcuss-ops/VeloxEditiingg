@@ -18,10 +18,17 @@ import (
 // intake and the InstaEdit control-plane intake. HTTP handlers only adapt
 // their wire/authentication concerns into this value; persistence and
 // idempotency remain owned by the resolver below.
+//
+// IntakeSource is the bounded, operator-facing discriminator that tells
+// which producer surface routed this submission (canonical, creator,
+// instaedit, batch, …). It drives the `pipeline.intake_source_accepted_total`
+// telemetry so alias usage can be measured before any endpoint is
+// deprecated/removed. See IntakeSourceCanonical and friends below.
 type CanonicalJobSubmission struct {
 	ContractVersion  string
 	WorkspaceID      int64
 	ExternalClientID string
+	IntakeSource     string
 	SourceProvider   string
 	SourceJobID      string
 	TargetExecutorID string
@@ -30,21 +37,82 @@ type CanonicalJobSubmission struct {
 	PublicationSpecs []publication.Spec
 }
 
-// JobSubmissionService is the single production Job+Task submission path.
-// The resolver performs the durable idempotency check and the atomic
-// forwarding/job/task write.
-type JobSubmissionService struct {
-	resolver *Resolver
+// Canonical intake-source vocabulary. Each value is a bounded label on
+// `pipeline.intake_source_accepted_total`; do NOT add free-form strings
+// (job ids, client ids) here — they belong in structured logs.
+const (
+	// IntakeSourceCanonical is POST /api/v1/jobs (and /api/v1/jobs/batch
+	// items, which route through the same single-job path).
+	IntakeSourceCanonical = "canonical"
+	// IntakeSourceCreator is POST /api/v1/creator/jobs (creator push).
+	IntakeSourceCreator = "creator"
+	// IntakeSourceInstaedit is POST /api/v1/instaedit/jobs (BFF adapter).
+	IntakeSourceInstaedit = "instaedit"
+	// IntakeSourceBatch is POST /api/v1/jobs/batch (batch envelope).
+	IntakeSourceBatch = "batch"
+	// IntakeSourceScriptGenerate is POST /api/v1/script/generate-with-images
+	// and POST /api/v1/script/generate (script ingress, direct enqueue).
+	IntakeSourceScriptGenerate = "script_generate"
+	// IntakeSourceScriptKind is POST /api/v1/script/jobs/:kind.
+	IntakeSourceScriptKind = "script_kind"
+	// IntakeSourcePipelineRun is POST /api/v1/pipeline-runs (durable run).
+	IntakeSourcePipelineRun = "pipeline_run"
+	// IntakeSourceCalendar is POST /api/v1/calendar/events/:id/enqueue.
+	IntakeSourceCalendar = "calendar"
+)
+
+// IntakeSourceRecorder records an accepted submission by intake source.
+// The production implementation lives in velox-server/internal/metrics
+// (IntakeSourceSink); defining the consumer-owned interface here avoids
+// an import edge on the metrics package and lets tests inject a recorder.
+type IntakeSourceRecorder interface {
+	IncAccepted(source string)
 }
 
-func NewJobSubmissionService(resolver *Resolver) *JobSubmissionService {
+// CanonicalJobSubmitter is the single production Job+Task submission path.
+// The resolver performs the durable idempotency check and the atomic
+// forwarding/job/task write; the submitter adds the shared validation and
+// the intake-source telemetry so every producer converges on one path.
+type CanonicalJobSubmitter struct {
+	resolver *Resolver
+	intake   IntakeSourceRecorder
+}
+
+// NewCanonicalJobSubmitter constructs the canonical submitter. A nil
+// resolver yields a nil submitter (callers must nil-check before Submit).
+func NewCanonicalJobSubmitter(resolver *Resolver) *CanonicalJobSubmitter {
 	if resolver == nil {
 		return nil
 	}
-	return &JobSubmissionService{resolver: resolver}
+	return &CanonicalJobSubmitter{resolver: resolver}
 }
 
-func (s *JobSubmissionService) Submit(ctx context.Context, req CanonicalJobSubmission) (*ResolveOutput, error) {
+// WithIntakeSourceRecorder wires the intake-source telemetry sink. Nil is
+// a noop (the submitter then records nothing). The composition root passes
+// velmetrics.NewIntakeSourceSink().
+func (s *CanonicalJobSubmitter) WithIntakeSourceRecorder(r IntakeSourceRecorder) *CanonicalJobSubmitter {
+	if s == nil {
+		return s
+	}
+	s.intake = r
+	return s
+}
+
+// JobSubmissionService is a deprecated alias for CanonicalJobSubmitter,
+// retained so existing handlers compile during the migration. New code MUST
+// use CanonicalJobSubmitter.
+//
+// Deprecated: use CanonicalJobSubmitter.
+type JobSubmissionService = CanonicalJobSubmitter
+
+// NewJobSubmissionService is a deprecated alias for NewCanonicalJobSubmitter.
+//
+// Deprecated: use NewCanonicalJobSubmitter.
+func NewJobSubmissionService(resolver *Resolver) *CanonicalJobSubmitter {
+	return NewCanonicalJobSubmitter(resolver)
+}
+
+func (s *CanonicalJobSubmitter) Submit(ctx context.Context, req CanonicalJobSubmission) (*ResolveOutput, error) {
 	if s == nil || s.resolver == nil {
 		return nil, fmt.Errorf("job submission service is not configured")
 	}
@@ -104,6 +172,20 @@ func (s *JobSubmissionService) Submit(ctx context.Context, req CanonicalJobSubmi
 			assetSource = assetErr.SourceType
 		}
 		log.Printf("[CREATORFLOW] canonical submission rejected phase=%s error_type=%T error_hash=%x asset_error_code=%s asset_field=%s asset_source=%s error_summary=%q", phase, err, errHash[:4], assetCode, assetField, assetSource, sanitizedErrorSummary(err))
+	}
+	// Record the intake source ONLY on an accepted submission (the same
+	// semantics as the older creator-intake sink: accepted payloads, not
+	// attempts). A missing source defaults to "canonical" so a producer
+	// that forgets to stamp its identity is still measurable instead of
+	// silently creating an unnamed series.
+	if err == nil && out != nil {
+		source := strings.TrimSpace(req.IntakeSource)
+		if source == "" {
+			source = IntakeSourceCanonical
+		}
+		if s.intake != nil {
+			s.intake.IncAccepted(source)
+		}
 	}
 	return out, err
 }

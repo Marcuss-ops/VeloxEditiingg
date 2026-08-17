@@ -24,7 +24,7 @@ type Handlers struct {
 	enqueuer        *enqueue.Enqueuer
 	client          *remoteengine.Client
 	resolver        *creatorflow.Resolver
-	submission      *creatorflow.JobSubmissionService
+	submission      *creatorflow.CanonicalJobSubmitter
 	socialClient    *socialclient.Client
 	targetResolver  *targetpublishing.TargetResolver
 	jobs            JobsDeps
@@ -91,7 +91,7 @@ func HandlersFactory(
 		enqueuer:     enqueuer,
 		client:       client,
 		resolver:     resolver,
-		submission:   creatorflow.NewJobSubmissionService(resolver),
+		submission:   creatorflow.NewCanonicalJobSubmitter(resolver),
 		socialClient: socialclient.New(socialclient.ConfigFromRuntime(cfg.Runtime.Social)),
 		jobs:         JobsDeps{Reader: jobsReader, Writer: jobsWriter, CmdMgr: cmdMgr},
 		pipelineRuns: newPipelineRunService(nil, client, resolver),
@@ -136,6 +136,16 @@ func (h *Handlers) WithSocialClient(client *socialclient.Client) *Handlers {
 
 func (h *Handlers) WithIntakeSink(sink CreatorIntakeSink) *Handlers {
 	h.intakeSink = sink
+	return h
+}
+
+// WithIntakeSourceRecorder wires the canonical submitter's intake-source
+// telemetry sink. Production passes velmetrics.NewIntakeSourceSink(); nil
+// is a noop (the submitter then records nothing).
+func (h *Handlers) WithIntakeSourceRecorder(recorder creatorflow.IntakeSourceRecorder) *Handlers {
+	if h.submission != nil {
+		h.submission.WithIntakeSourceRecorder(recorder)
+	}
 	return h
 }
 

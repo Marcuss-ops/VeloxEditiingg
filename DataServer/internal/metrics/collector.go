@@ -254,6 +254,12 @@ func NewCollector(reg *Registry) *Collector {
 	for _, f := range c.allFamilies() {
 		reg.Register(f)
 	}
+	// Package-level intake families (creator-intake path + intake-source)
+	// are singletons shared across Collector instances; register them once
+	// per registry so /metrics exposes them. See creator_intake.go.
+	for _, f := range packageIntakeFamilies() {
+		reg.Register(f)
+	}
 	return c
 }
 

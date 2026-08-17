@@ -66,7 +66,7 @@ type Service struct {
 	workers        WorkerReader
 	assets         AssetReader
 	enqueuer       JobEnqueuer
-	submission     *creatorflow.JobSubmissionService
+	submission     *creatorflow.CanonicalJobSubmitter
 	deliveryEvents interface {
 		ApplyInstaEditDeliveryEvent(context.Context, store.InstaEditDeliveryEvent) (bool, error)
 	}
@@ -93,9 +93,19 @@ func NewServiceFromSQLite(sqlite *store.SQLiteStore, jobsRepo jobs.Repository, a
 		&enqueuerAdapter{enq: enq},
 	)
 	if len(resolvers) > 0 {
-		s.submission = creatorflow.NewJobSubmissionService(resolvers[0])
+		s.submission = creatorflow.NewCanonicalJobSubmitter(resolvers[0])
 	}
 	s.deliveryEvents = sqlite
+	return s
+}
+
+// WithIntakeSourceRecorder wires the canonical submitter's intake-source
+// telemetry sink. Production passes velmetrics.NewIntakeSourceSink(); nil
+// is a noop (the submitter then records nothing).
+func (s *Service) WithIntakeSourceRecorder(recorder creatorflow.IntakeSourceRecorder) *Service {
+	if s != nil && s.submission != nil {
+		s.submission.WithIntakeSourceRecorder(recorder)
+	}
 	return s
 }
 

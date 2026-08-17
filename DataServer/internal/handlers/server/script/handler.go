@@ -19,6 +19,7 @@ import (
 	driveintegration "velox-server/internal/integrations/drive"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/jobs/ingress"
+	velmetrics "velox-server/internal/metrics"
 	"velox-server/internal/store"
 	"velox-server/internal/translation"
 	"velox-shared/contract/domain"
@@ -323,6 +324,10 @@ func (h *ScriptHandlers) GenerateWithImagesHandler(cfg *config.Config) gin.Handl
 			c.JSON(status, gin.H{"ok": false, "error": err.Error()})
 			return
 		}
+
+		// Direct-enqueue surface: record the intake source so the alias
+		// usage is measurable (script/generate-with-images).
+		velmetrics.RecordIntakeSource(creatorflow.IntakeSourceScriptGenerate)
 
 		c.JSON(http.StatusOK, gin.H{
 			"ok":                  true,

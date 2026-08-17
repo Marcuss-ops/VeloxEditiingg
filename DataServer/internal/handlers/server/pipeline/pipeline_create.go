@@ -13,6 +13,9 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+
+	"velox-server/internal/creatorflow"
+	velmetrics "velox-server/internal/metrics"
 )
 
 // CreatePipelineRun handles POST /api/v1/pipeline-runs.
@@ -27,6 +30,12 @@ func (h *Handlers) CreatePipelineRun() gin.HandlerFunc {
 			return
 		}
 		resp := h.pipelineRuns.Create(c.Request.Context(), ClientIDFromContext(c), req)
+		// The durable pipeline-run surface is a distinct intake source from
+		// the canonical job submitter; record it on an accepted create so
+		// alias usage is measurable before any convergence work.
+		if resp.Status >= 200 && resp.Status < 300 {
+			velmetrics.RecordIntakeSource(creatorflow.IntakeSourcePipelineRun)
+		}
 		c.JSON(resp.Status, resp.Body)
 	}
 }

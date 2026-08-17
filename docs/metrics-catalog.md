@@ -184,6 +184,7 @@ by `1e3`. Cost gauges are micro-EUR and are divided by `1e6`.
 | 46 | `velox_master_outbox_pending`                 | G    | Pending outbox events (not yet dispatched)       | count     | _(none)_    | `orchestrator_outbox` COUNT      | 90d  | N  |
 | 47 | `velox_master_worker_heartbeat_age_seconds`   | G    | Seconds since last heartbeat per worker          | seconds   | `worker_id` | `collector.lastSeen` map diff    | 90d  | N  |
 | 48 | `velox_master_http_route_requests_total`      | C    | HTTP requests by API surface × route template (feeds the legacy-route removal decision) | count | `surface`, `route` | Router middleware (gin FullPath template) | 90d | N |
+| 48b | `pipeline_intake_source_accepted_total`    | C    | Accepted jobs by intake source (the producer surface that submitted the job) — feeds the legacy-endpoint deprecation/removal decision | count | `intake_source` | `CanonicalJobSubmitter` + direct-enqueue boundaries (script, pipeline-run) | 90d | N |
 
 ---
 
@@ -280,6 +281,7 @@ These dimensions exist in SQLite / Postgres (`task_attempt_metrics`, `task_attem
 | `action`           | `noop`, `transition`, `escalate`                    | 3                   |
 | `surface`          | `agent`, `admin`, `fleet`, `legacy`, `other`        | 5                   |
 | `route`            | Gin route templates (closed set = route table)      | ~50–100             |
+| `intake_source`    | `canonical`, `creator`, `instaedit`, `batch`, `script_generate`, `script_kind`, `pipeline_run`, `calendar` | 8 |
 
 ### NEVER in Prometheus (use SQL)
 
@@ -393,6 +395,7 @@ Worker (otelgrpc client handler)                    Master (otelgrpc server hand
 | 2026-07-31 | Eight observability dashboards, SQL detail queries and cardinality contract | — |
 | 2026-08-06 | Phase 6 API-surface split: `velox_master_http_route_requests_total{surface,route}` for legacy-route removal decisions | — |
 | 2026-08-11 | Phase A1.5: per-attempt cache download count/bytes hoisted to SQL (`cache_download_count`, `cache_download_bytes` on `task_attempt_cache_stats`) + `velox_cache_downloads_total` / `velox_cache_download_bytes_total` | 147 |
+| 2026-08-17 | CanonicalJobSubmitter: `pipeline_intake_source_accepted_total{intake_source}` for alias-usage measurement across every job-creation surface | — |
 
 ---
 

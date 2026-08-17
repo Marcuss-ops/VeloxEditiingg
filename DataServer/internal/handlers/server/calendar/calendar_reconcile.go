@@ -9,7 +9,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"velox-server/internal/creatorflow"
 	"velox-server/internal/jobs"
+	velmetrics "velox-server/internal/metrics"
 	"velox-server/internal/store"
 	"velox-server/internal/taskgraph"
 )
@@ -200,5 +202,12 @@ func submitCalendarJob(ctx context.Context, atomic *store.AtomicJobTaskCreator, 
 		Payload:    payload,
 	}
 	priority := 5
-	return atomic.CreateJobWithTask(ctx, job, spec, priority)
+	if err := atomic.CreateJobWithTask(ctx, job, spec, priority); err != nil {
+		return err
+	}
+	// Record the calendar intake source on an accepted creation so the
+	// calendar enqueue surface is measurable alongside the other aliases
+	// (script, pipeline-run) before any deprecation/removal decision.
+	velmetrics.RecordIntakeSource(creatorflow.IntakeSourceCalendar)
+	return nil
 }

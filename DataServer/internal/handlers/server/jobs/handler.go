@@ -6,8 +6,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"velox-server/internal/creatorflow"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/jobs/ingress"
+	velmetrics "velox-server/internal/metrics"
 	"velox-server/internal/routing"
 	"velox-shared/payload"
 )
@@ -94,6 +96,11 @@ func (h *Handler) submit(c *gin.Context, kind string) {
 		})
 		return
 	}
+	// The script ingress is a direct-enqueue surface (it does not route
+	// through the canonical submitter because it creates jobs from scratch
+	// rather than forwarding a completed result). Record its intake source
+	// so alias usage is measurable before any convergence work.
+	velmetrics.RecordIntakeSource(scriptIntakeSourceForKind(kind))
 
 	response := gin.H{
 		"ok":                  true,
@@ -119,6 +126,17 @@ func (h *Handler) submit(c *gin.Context, kind string) {
 	}
 
 	c.JSON(http.StatusOK, response)
+}
+
+// scriptIntakeSourceForKind maps a script-ingress kind to its bounded
+// intake-source label. The fixed "generate" kind is the unified
+// /api/v1/script/generate surface; every other kind is the dynamic
+// /api/v1/script/jobs/:kind surface.
+func scriptIntakeSourceForKind(kind string) string {
+	if strings.TrimSpace(kind) == "generate" {
+		return creatorflow.IntakeSourceScriptGenerate
+	}
+	return creatorflow.IntakeSourceScriptKind
 }
 
 func applyDefinition(payloadMap map[string]any, def ingress.Definition) {

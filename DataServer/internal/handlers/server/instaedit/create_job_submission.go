@@ -22,6 +22,7 @@ func (s *Service) submitCreateJob(ctx context.Context, cmd CreateJobCmd, payload
 		resolved, submitErr := s.submission.Submit(ctx, creatorflow.CanonicalJobSubmission{
 			ContractVersion:  cmd.ContractVersion,
 			WorkspaceID:      cmd.WorkspaceID,
+			IntakeSource:     creatorflow.IntakeSourceInstaedit,
 			SourceProvider:   "instaedit_bff",
 			SourceJobID:      sourceID,
 			TargetExecutorID: "scene.composite.v1",
