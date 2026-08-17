@@ -263,7 +263,7 @@ These dimensions exist in SQLite / Postgres (`task_attempt_metrics`, `task_attem
 
 | Label              | Values                                              | Approx. Cardinality |
 | ------------------ | --------------------------------------------------- | ------------------- |
-| `executor_id`      | `pipeline`, `scene.composite`, `transcode`, …        | ~10                 |
+| `executor_id`      | `scene.composite`, `subtitle_align`, `audio_mix`, `compose`, `encode`, `render_batch`, `video.assemble.copy`, …        | ~10                 |
 | `executor_version` | `1`, `2`, …                                         | ~10                 |
 | `worker_class`     | `cpu`, `gpu`, `mixed`, `io`, `default`, `all`       | 6                   |
 | `worker_id`        | _(per-deployment, capped by fleet size)_            | ~50–200             |

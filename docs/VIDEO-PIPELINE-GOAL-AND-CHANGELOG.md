@@ -49,6 +49,11 @@ probe media e verifica compatibilità
 La regola è fail-closed: non è ammesso un fallback silenzioso a libx264 o a
 un render completo quando il contratto packet-copy non è rispettato.
 
+Invariante di produzione: un assembly SUCCEEDED deve avere
+`packet_copy_segments == total_segments`, `rejected_segments == 0`,
+`frames_encoded == 0` e `encode_passes == 0` (`concat_mode=mixed_packet`).
+Un segmento non copy-safe viene rifiutato (`Reject`) e mai ricodificato.
+
 ## Criteri di compatibilità video
 
 Tutti i segmenti devono avere parametri compatibili, non soltanto lo stesso
@@ -64,9 +69,10 @@ nome di codec:
 - segmenti senza trasformazioni video, filtri, resize, crop, subtitle burn-in
   o altre operazioni che richiedano decodifica.
 
-Se un parametro differisce, il job deve terminare con un errore esplicito,
-per esempio `COPY_ONLY_MEDIA_INCOMPATIBLE`, indicando segmento e parametro
-non compatibile.
+Se un parametro differisce, il job deve terminare con un errore esplicito
+`segment_execution_rejected`, indicando il motivo esatto del resolver:
+`media signature mismatch: <campo>`, `segment requires a media transform`
+oppure `source window is not keyframe-safe for packet copy`.
 
 ## Stato misurato al 2026-08-16
 
