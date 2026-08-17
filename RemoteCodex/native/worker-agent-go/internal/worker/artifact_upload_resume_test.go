@@ -337,3 +337,81 @@ func TestResumeDueArtifactUploads_SkipsNotDue(t *testing.T) {
 		t.Fatalf("uploader.calls = %d; want 0 (row not due yet)", uploader.calls)
 	}
 }
+
+// TestResumeArtifactUpload_WorkerRestartPersistsSpoolAndCommits certifies the
+// worker-restart contract: a UPLOADING spool row in a FILE-BACKED spool
+// survives a close + re-open of the same database, and the resume loop on the
+// re-opened store re-uploads from the repointed path and drives the row to
+// COMMITTED (never a lost row or a second spool).
+func TestResumeArtifactUpload_WorkerRestartPersistsSpoolAndCommits(t *testing.T) {
+	uploader := &resumeUploadTransport{}
+	spoolPath := filepath.Join(t.TempDir(), "spool.db")
+
+	// Phase 1: file-backed spool (NOT :memory:) so the row outlives the store.
+	store, err := spool.Open(spoolPath)
+	if err != nil {
+		t.Fatalf("spool.Open: %v", err)
+	}
+	durablePath := filepath.Join(t.TempDir(), "spilled.mp4")
+	if err := os.WriteFile(durablePath, []byte("spilled nvme bytes"), 0o640); err != nil {
+		t.Fatalf("write durable artifact: %v", err)
+	}
+	entry := seedResumeRow(t, store, durablePath)
+	if err := store.Close(); err != nil {
+		t.Fatalf("close spool: %v", err)
+	}
+
+	// Phase 2: re-open the SAME file — the UPLOADING row must still be there.
+	store2, err := spool.Open(spoolPath)
+	if err != nil {
+		t.Fatalf("spool.Open after restart: %v", err)
+	}
+	t.Cleanup(func() { _ = store2.Close() })
+
+	persisted, err := store2.Get(context.Background(), entry.SpoolID)
+	if err != nil {
+		t.Fatalf("Get after restart: %v", err)
+	}
+	if persisted.Status != spool.StatusUploading {
+		t.Fatalf("status after restart = %q; want UPLOADING (spool row must persist)", persisted.Status)
+	}
+
+	// Build a worker around the re-opened store (same composition as
+	// resumeTestWorker, but over the persistent file).
+	registry := publisher.NewRegistry()
+	if err := registry.Register(uploader); err != nil {
+		t.Fatalf("register upload transport: %v", err)
+	}
+	transport := &resumeTestTransport{}
+	w := &Worker{
+		config: &config.WorkerConfig{
+			WorkerID:        "worker-resume-test",
+			ProtocolVersion: controltransport.ProtocolVersionCurrent,
+		},
+		logger:            logger.New(logger.InfoLevel, io.Discard),
+		transport:         transport,
+		publisherRegistry: registry,
+		outputSpool:       store2,
+		activeTaskLeases: map[string]*ActiveTaskLease{
+			"task-resume": {TaskID: "task-resume", JobID: "job-resume", AttemptID: "attempt-resume", LeaseID: "lease-resume", AttemptNumber: 1, Revision: 1},
+		},
+	}
+	transport.worker = w
+
+	w.resumeArtifactUpload(context.Background(), *persisted)
+
+	if uploader.calls != 1 {
+		t.Fatalf("uploader.calls = %d; want 1 (resume re-upload after restart)", uploader.calls)
+	}
+	if uploader.path != durablePath {
+		t.Fatalf("uploader read path=%q; want repointed NVMe path=%q", uploader.path, durablePath)
+	}
+
+	got, err := store2.Get(context.Background(), entry.SpoolID)
+	if err != nil {
+		t.Fatalf("Get after resume: %v", err)
+	}
+	if got.Status != spool.StatusCommitted {
+		t.Fatalf("status = %q; want COMMITTED after worker-restart resume", got.Status)
+	}
+}
