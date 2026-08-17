@@ -76,7 +76,15 @@ func (c *manualClock) Advance(d time.Duration) {
 
 func setupTestEnv(t *testing.T) *testEnv {
 	t.Helper()
-	tmp := t.TempDir()
+	return openTestEnvAt(t, t.TempDir())
+}
+
+// openTestEnvAt opens a fresh artifacts.Service against a SQLite DB rooted at
+// tmp (which must already exist). setupTestEnv delegates here so restart
+// tests can re-open the SAME database file after simulating a master restart
+// (see chunked_recovery_test.go).
+func openTestEnvAt(t *testing.T, tmp string) *testEnv {
+	t.Helper()
 
 	dbPath := filepath.Join(tmp, "test.db")
 	db, err := sql.Open("sqlite3", dbPath+"?_busy_timeout=5000&_journal_mode=WAL")

@@ -396,6 +396,40 @@ func (s *ChunkedUploadService) CompleteChunked(ctx context.Context, cmd ChunkedC
 		return nil, fmt.Errorf("%w: upload_id=%s", ErrUploadNotFound, cmd.UploadID)
 	}
 
+	// Idempotent COMPLETED short-circuit (duplicate /complete). The first
+	// CompleteChunked already ran Receive → Finalize and then cleanupChunks
+	// removed the chunk records, so a lost-response retry must NOT fall
+	// through to the "no chunks" guard below. Mirror the auth-field fencing
+	// of validateFinalizeSession's COMPLETED path: a duplicate retry from a
+	// *different* worker/lease/revision must not silently succeed.
+	if session.Status == string(store.UploadCompleted) {
+		if session.WorkerID != cmd.WorkerID {
+			return nil, fmt.Errorf("%w: completed upload=%s worker=%s->%s",
+				ErrTransitionConflict, cmd.UploadID, session.WorkerID, cmd.WorkerID)
+		}
+		if session.LeaseID != cmd.LeaseID {
+			return nil, fmt.Errorf("%w: completed upload=%s lease_mismatch",
+				ErrTransitionConflict, cmd.UploadID)
+		}
+		if session.ExpectedRevision != 0 && session.ExpectedRevision != cmd.ExpectedRevision {
+			return nil, fmt.Errorf("%w: completed upload=%s revision_mismatch",
+				ErrTransitionConflict, cmd.UploadID)
+		}
+		if cmd.AttemptNumber != 0 && session.AttemptNumber != cmd.AttemptNumber {
+			return nil, fmt.Errorf("%w: completed upload=%s attempt=%d->%d",
+				ErrAttemptMismatch, cmd.UploadID, session.AttemptNumber, cmd.AttemptNumber)
+		}
+		art, lerr := s.artifactSvc.artifactReader.GetByID(ctx, session.ArtifactID)
+		if lerr != nil {
+			return nil, lerr
+		}
+		if art == nil {
+			return nil, fmt.Errorf("%w: completed upload=%s but artifact missing",
+				ErrTransitionConflict, cmd.UploadID)
+		}
+		return art, nil
+	}
+
 	chunks, err := s.repo.ListChunks(ctx, cmd.UploadID)
 	if err != nil {
 		return nil, translateStoreErr(err)
