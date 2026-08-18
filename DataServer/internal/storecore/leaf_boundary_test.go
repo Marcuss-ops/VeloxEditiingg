@@ -16,6 +16,7 @@ import (
 // When a new leaf is extracted, add its directory name here so the boundary
 // is enforced from day one.
 var leafPackages = []string{
+	"artifactsstore",
 	"completionstore",
 	"forwardingstore",
 	"renderfingerprintstore",

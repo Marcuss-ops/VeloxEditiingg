@@ -1,4 +1,10 @@
-package store
+// Package artifactsstore is the SQLite persistence for the artifacts /
+// verified-finalization pipeline. It was split out of the internal/store
+// god-package: the consumer-owned ports (JobDeliveryCounter, FinalizationWriter,
+// …) live in internal/artifacts, the orchestration lives in internal/artifacts,
+// and this package owns only the SQLite SQL/CAS. It depends on leaves
+// (deliverycontract, storecore) and never on internal/store.
+package artifactsstore
 
 import (
 	"context"
@@ -31,15 +37,6 @@ func NewSQLiteJobDeliveryCounter(db *sql.DB) *SQLiteJobDeliveryCounter {
 		panic("store: NewSQLiteJobDeliveryCounter requires a non-nil *sql.DB")
 	}
 	return &SQLiteJobDeliveryCounter{db: db}
-}
-
-// NewSQLiteJobDeliveryCounterFromStore binds the read-only counter to the
-// canonical SQLiteStore. Raw database handles remain inside store.
-func NewSQLiteJobDeliveryCounterFromStore(s *SQLiteStore) *SQLiteJobDeliveryCounter {
-	if s == nil || s.db == nil {
-		panic("store: NewSQLiteJobDeliveryCounterFromStore requires a non-nil SQLiteStore")
-	}
-	return &SQLiteJobDeliveryCounter{db: s.db}
 }
 
 // Compile-time assertion using an anonymous interface. The consumer-owned

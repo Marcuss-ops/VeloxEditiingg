@@ -26,9 +26,6 @@ func TestArtifactRepositoriesFromStoreUseCanonicalSQLiteStore(t *testing.T) {
 	if got := NewSQLiteAuthReaderFromStore(s); got == nil || got.db != s.db {
 		t.Fatal("auth reader must use the canonical SQLiteStore database")
 	}
-	if got := NewSQLiteJobDeliveryCounterFromStore(s); got == nil || got.db != s.db {
-		t.Fatal("delivery counter must use the canonical SQLiteStore database")
-	}
 	if got := NewSQLiteArtifactFinalizerFromStore(s, nil); got == nil || got.db != s.db {
 		t.Fatal("artifact finalizer must use the canonical SQLiteStore database")
 	}

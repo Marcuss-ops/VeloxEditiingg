@@ -32,9 +32,8 @@ import (
 // derive the expected audio-stream count for the pre-commit gate.
 //
 // The consumer-owned contract lives here; concrete SQL adapters live
-// in the store package (e.g. store.SQLiteJobDeliveryCounter). Future
-// Postgres support can wire a parallel store adapter without
-// touching Service.
+// in the artifactsstore leaf (e.g. artifactsstore.SQLiteJobDeliveryCounter).
+// Future Postgres support can wire a parallel adapter without touching Service.
 type JobDeliveryCounter interface {
 	// CountExpectedDeliveries returns the number of delivery
 	// destinations the finalize tx WILL stamp at Step 5 for this

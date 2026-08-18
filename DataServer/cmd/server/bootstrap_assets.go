@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"velox-server/internal/artifacts"
+	"velox-server/internal/artifactsstore"
 	"velox-server/internal/completion"
 	"velox-server/internal/config"
 	"velox-server/internal/deliveries"
@@ -66,7 +67,7 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 	// the VELOX_FFPROBE_VERIFY_ON_FINALIZE gate (RW-PROD-008 A4).
 	// Production cannot silently run the gate without it; NewService
 	// panics on nil so a bootstrap miss is loud at startup.
-	deliveryCounter := store.NewSQLiteJobDeliveryCounterFromStore(p.SQLite)
+	deliveryCounter := artifactsstore.NewSQLiteJobDeliveryCounter(p.SQLite.DB())
 	probeRepo := store.NewSQLiteMediaProbeRepository(p.SQLite.DB())
 	probeWorker := artifacts.NewMediaProbeWorker(probeRepo, p.BlobStore.FinalDir(), 2, nil)
 	artifactSvc := artifacts.NewService(

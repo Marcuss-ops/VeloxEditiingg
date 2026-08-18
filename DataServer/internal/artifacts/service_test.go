@@ -26,6 +26,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/require"
 
+	"velox-server/internal/artifactsstore"
 	"velox-server/internal/deliveries"
 	"velox-server/internal/store"
 	"velox-server/internal/store/migrations"
@@ -120,7 +121,7 @@ func openTestEnvAt(t *testing.T, tmp string) *testEnv {
 	authReader := store.NewSQLiteAuthReader(db)
 	uploadWriter := NewSQLiteUploadSessionWriter(store.NewSQLiteUploadSessionWriter(db))
 	finalizeWriter := NewSQLiteFinalizeWriter(store.NewSQLiteArtifactFinalizer(db, deliveries.NewSQLiteDeliveryPlanResolver(db)))
-	jobCounter := store.NewSQLiteJobDeliveryCounter(db)
+	jobCounter := artifactsstore.NewSQLiteJobDeliveryCounter(db)
 	svc := NewService(repo, uploadWriter, finalizeWriter, artifactReader, bs, authReader, clk, jobCounter)
 
 	t.Cleanup(func() {
