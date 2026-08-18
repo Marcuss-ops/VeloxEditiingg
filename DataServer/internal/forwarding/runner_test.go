@@ -32,7 +32,7 @@ func insertTestForwardingRecord(t *testing.T, db *store.SQLiteStore, forwardingI
 		CreatedAt:        time.Now().UTC().Format(time.RFC3339),
 		UpdatedAt:        time.Now().UTC().Format(time.RFC3339),
 	}
-	if _, err := db.InsertCreatorForwarding(context.Background(), cf); err != nil {
+	if _, err := db.Forwarding().InsertCreatorForwarding(context.Background(), cf); err != nil {
 		t.Fatalf("insert forwarding: %v", err)
 	}
 }
@@ -181,7 +181,7 @@ func TestRunner_Tick_NoClient(t *testing.T) {
 	}
 
 	// The record should still be PENDING (not claimed).
-	cf, err := db.GetCreatorForwarding(context.Background(), "cf-no-client")
+	cf, err := db.Forwarding().GetCreatorForwarding(context.Background(), "cf-no-client")
 	if err != nil {
 		t.Fatalf("get forwarding: %v", err)
 	}
@@ -203,7 +203,7 @@ func TestRunner_Tick_UnconfiguredClient(t *testing.T) {
 		t.Errorf("tick with unconfigured client: %v", err)
 	}
 
-	cf, err := db.GetCreatorForwarding(context.Background(), "cf-unconfigured")
+	cf, err := db.Forwarding().GetCreatorForwarding(context.Background(), "cf-unconfigured")
 	if err != nil {
 		t.Fatalf("get forwarding: %v", err)
 	}

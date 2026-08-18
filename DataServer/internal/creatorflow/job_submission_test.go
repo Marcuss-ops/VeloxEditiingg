@@ -55,7 +55,7 @@ func newTestSubmitterStack(t *testing.T) *Resolver {
 		t.Fatalf("seed delivery_destinations: %v", err)
 	}
 	enqueuer := newTestEnqueuer(t, db)
-	rs := NewResolverFromDeps(enqueuer, db, tempDir, filepath.Join(tempDir, "videos"), "")
+	rs := NewResolverFromDeps(enqueuer, db.Forwarding(), db, tempDir, filepath.Join(tempDir, "videos"), "")
 	if rs == nil {
 		t.Fatalf("resolver construction failed")
 	}

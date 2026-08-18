@@ -152,7 +152,7 @@ func artifactDownloadHandler(reader artifacts.ArtifactReader, blobs store.BlobSt
 		}
 		if len(ownership) > 0 && ownership[0] != nil {
 			if clientID := pipeline.ClientIDFromContext(c); clientID != "" {
-				if _, err := ownership[0].GetCreatorForwardingByTargetJobID(c.Request.Context(), a.JobID, clientID); err != nil {
+				if _, err := ownership[0].Forwarding().GetCreatorForwardingByTargetJobID(c.Request.Context(), a.JobID, clientID); err != nil {
 					c.AbortWithStatus(http.StatusNotFound)
 					return
 				}

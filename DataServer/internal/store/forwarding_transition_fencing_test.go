@@ -12,7 +12,7 @@ func TestMarkCreatorForwardingReadyToForward_ExpiredLeaseIsFenced(t *testing.T) 
 	ctx := context.Background()
 	insertTestForwarding(t, db, "cf-ready-expired", "openai", "ready-expired", "scene.composite.v1", "PENDING")
 
-	leases, err := db.ClaimCreatorForwardings(ctx, "runner-ready", "cf", time.Minute, 1)
+	leases, err := db.Forwarding().ClaimCreatorForwardings(ctx, "runner-ready", "cf", time.Minute, 1)
 	if err != nil || len(leases) != 1 {
 		t.Fatalf("claim: err=%v len=%d", err, len(leases))
 	}
@@ -24,7 +24,7 @@ func TestMarkCreatorForwardingReadyToForward_ExpiredLeaseIsFenced(t *testing.T) 
 		t.Fatalf("expire lease: %v", err)
 	}
 
-	err = db.MarkCreatorForwardingReadyToForward(ctx, lease.ForwardingID, lease.RunnerID, lease.LeaseID, `{"video":"stale"}`, "sha-stale")
+	err = db.Forwarding().MarkCreatorForwardingReadyToForward(ctx, lease.ForwardingID, lease.RunnerID, lease.LeaseID, `{"video":"stale"}`, "sha-stale")
 	if err == nil {
 		t.Fatal("expired MarkReadyToForward unexpectedly succeeded")
 	}
@@ -32,7 +32,7 @@ func TestMarkCreatorForwardingReadyToForward_ExpiredLeaseIsFenced(t *testing.T) 
 		t.Fatalf("expired MarkReadyToForward error = %v, want ErrTransitionConflict", err)
 	}
 
-	row, err := db.GetCreatorForwarding(ctx, lease.ForwardingID)
+	row, err := db.Forwarding().GetCreatorForwarding(ctx, lease.ForwardingID)
 	if err != nil {
 		t.Fatalf("get forwarding: %v", err)
 	}
@@ -50,19 +50,19 @@ func TestLeaseFencedTransitionsRejectPartialIdentity(t *testing.T) {
 		{
 			name: "failed_runner_only",
 			call: func(db *SQLiteStore) error {
-				return db.MarkCreatorForwardingFailed(ctx, "missing-runner", "runner-only", "", "STALE", "stale", "")
+				return db.Forwarding().MarkCreatorForwardingFailed(ctx, "missing-runner", "runner-only", "", "STALE", "stale", "")
 			},
 		},
 		{
 			name: "blocked_lease_only",
 			call: func(db *SQLiteStore) error {
-				return db.MarkCreatorForwardingBlocked(ctx, "missing-lease", "", "lease-only", "STALE", "stale")
+				return db.Forwarding().MarkCreatorForwardingBlocked(ctx, "missing-lease", "", "lease-only", "STALE", "stale")
 			},
 		},
 		{
 			name: "cancelled_runner_only",
 			call: func(db *SQLiteStore) error {
-				return db.MarkCreatorForwardingCancelled(ctx, "missing-cancel-runner", "runner-only", "", "STALE", "stale")
+				return db.Forwarding().MarkCreatorForwardingCancelled(ctx, "missing-cancel-runner", "runner-only", "", "STALE", "stale")
 			},
 		},
 	}
@@ -85,19 +85,19 @@ func TestLeaseFencedTransitionsRejectExpiredLease(t *testing.T) {
 		{
 			name: "retry",
 			call: func(db *SQLiteStore, lease CreatorForwardingLease) error {
-				return db.MarkCreatorForwardingRetry(ctx, lease.ForwardingID, lease.RunnerID, lease.LeaseID, "STALE", "stale", "", time.Now().UTC())
+				return db.Forwarding().MarkCreatorForwardingRetry(ctx, lease.ForwardingID, lease.RunnerID, lease.LeaseID, "STALE", "stale", "", time.Now().UTC())
 			},
 		},
 		{
 			name: "failed",
 			call: func(db *SQLiteStore, lease CreatorForwardingLease) error {
-				return db.MarkCreatorForwardingFailed(ctx, lease.ForwardingID, lease.RunnerID, lease.LeaseID, "STALE", "stale", "")
+				return db.Forwarding().MarkCreatorForwardingFailed(ctx, lease.ForwardingID, lease.RunnerID, lease.LeaseID, "STALE", "stale", "")
 			},
 		},
 		{
 			name: "blocked",
 			call: func(db *SQLiteStore, lease CreatorForwardingLease) error {
-				return db.MarkCreatorForwardingBlocked(ctx, lease.ForwardingID, lease.RunnerID, lease.LeaseID, "STALE", "stale")
+				return db.Forwarding().MarkCreatorForwardingBlocked(ctx, lease.ForwardingID, lease.RunnerID, lease.LeaseID, "STALE", "stale")
 			},
 		},
 	}
@@ -108,7 +108,7 @@ func TestLeaseFencedTransitionsRejectExpiredLease(t *testing.T) {
 			forwardingID := "cf-expired-" + tc.name
 			insertTestForwarding(t, db, forwardingID, "openai", forwardingID+"-source", "scene.composite.v1", "PENDING")
 
-			leases, err := db.ClaimCreatorForwardings(ctx, "runner-expired", "cf", time.Minute, 1)
+			leases, err := db.Forwarding().ClaimCreatorForwardings(ctx, "runner-expired", "cf", time.Minute, 1)
 			if err != nil || len(leases) != 1 {
 				t.Fatalf("claim: err=%v len=%d", err, len(leases))
 			}
@@ -122,7 +122,7 @@ func TestLeaseFencedTransitionsRejectExpiredLease(t *testing.T) {
 			if err := tc.call(db, lease); !errors.Is(err, ErrTransitionConflict) {
 				t.Fatalf("expired %s transition error = %v, want ErrTransitionConflict", tc.name, err)
 			}
-			row, err := db.GetCreatorForwarding(ctx, forwardingID)
+			row, err := db.Forwarding().GetCreatorForwarding(ctx, forwardingID)
 			if err != nil {
 				t.Fatalf("get forwarding: %v", err)
 			}

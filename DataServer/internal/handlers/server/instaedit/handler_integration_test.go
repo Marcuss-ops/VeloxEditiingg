@@ -67,7 +67,7 @@ func setupIntegrationRouter(t *testing.T) (*gin.Engine, *store.SQLiteStore) {
 	planResolver := &testPlanResolver{db: db.DB()}
 	enq := enqueue.NewEnqueuer(atomic, jobRepo, nil, planResolver)
 
-	resolver := creatorflow.NewResolver(&config.Config{}, enq, db)
+	resolver := creatorflow.NewResolver(&config.Config{}, enq, db.Forwarding(), db)
 	svc := NewServiceFromSQLite(db, jobRepo, store.NewSQLiteAssetRepository(db), enq, resolver)
 	handler := NewHandler(HandlerDeps{
 		Verifier: verifier,

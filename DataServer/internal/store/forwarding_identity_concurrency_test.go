@@ -32,7 +32,7 @@ func TestInsertCreatorForwarding_ConcurrentRetriesConverge(t *testing.T) {
 		go func(index int) {
 			defer wg.Done()
 			<-start
-			result, err := db.InsertCreatorForwarding(ctx, &CreatorForwarding{
+			result, err := db.Forwarding().InsertCreatorForwarding(ctx, &CreatorForwarding{
 				ForwardingID:     fmt.Sprintf("cf-concurrent-%d", index),
 				SourceProvider:   provider,
 				SourceJobID:      sourceJobID,
@@ -71,7 +71,7 @@ func TestInsertCreatorForwarding_ConcurrentRetriesConverge(t *testing.T) {
 		t.Fatalf("created count = %d, want exactly 1", createdCount)
 	}
 
-	persisted, err := db.GetCreatorForwardingBySource(ctx, provider, sourceJobID, executorID)
+	persisted, err := db.Forwarding().GetCreatorForwardingBySource(ctx, provider, sourceJobID, executorID)
 	if err != nil {
 		t.Fatalf("get canonical forwarding: %v", err)
 	}

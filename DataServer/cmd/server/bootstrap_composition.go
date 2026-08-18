@@ -181,7 +181,7 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 	// ForwardingRunner.SetResolver below.
 	var resolver *creatorflow.Resolver
 	if p != nil && p.SQLite != nil && m != nil && m.Enqueuer != nil {
-		resolver = creatorflow.NewResolver(cfg, m.Enqueuer, p.SQLite)
+		resolver = creatorflow.NewResolver(cfg, m.Enqueuer, p.SQLite.Forwarding(), p.SQLite)
 	}
 	if m != nil && m.ForwardingRunner != nil && resolver != nil {
 		m.ForwardingRunner.SetResolver(resolver)

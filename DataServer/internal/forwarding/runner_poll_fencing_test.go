@@ -38,7 +38,7 @@ func TestProcessLease_StalePollStopsWithoutRetryOrTransition(t *testing.T) {
 	}))
 	defer server.Close()
 
-	oldLease, err := db.ClaimCreatorForwardings(context.Background(), "runner-old", "cf", time.Minute, 1)
+	oldLease, err := db.Forwarding().ClaimCreatorForwardings(context.Background(), "runner-old", "cf", time.Minute, 1)
 	if err != nil || len(oldLease) != 1 {
 		t.Fatalf("old claim: err=%v len=%d", err, len(oldLease))
 	}
@@ -69,7 +69,7 @@ func TestProcessLease_StalePollStopsWithoutRetryOrTransition(t *testing.T) {
 	}
 
 	time.Sleep(1200 * time.Millisecond)
-	newLease, err := db.ClaimCreatorForwardings(context.Background(), "runner-new", "cf", 5*time.Minute, 1)
+	newLease, err := db.Forwarding().ClaimCreatorForwardings(context.Background(), "runner-new", "cf", 5*time.Minute, 1)
 	if err != nil || len(newLease) != 1 {
 		t.Fatalf("takeover claim: err=%v len=%d", err, len(newLease))
 	}
@@ -87,7 +87,7 @@ func TestProcessLease_StalePollStopsWithoutRetryOrTransition(t *testing.T) {
 	if got := r.metrics.Retried.Load(); got != 0 {
 		t.Fatalf("stale runner Retried metric = %d, want 0", got)
 	}
-	row, err := db.GetCreatorForwarding(context.Background(), oldLease[0].ForwardingID)
+	row, err := db.Forwarding().GetCreatorForwarding(context.Background(), oldLease[0].ForwardingID)
 	if err != nil {
 		t.Fatalf("get forwarding: %v", err)
 	}

@@ -91,7 +91,7 @@ func TestSubmitThenPoll_M2MClientIsolationWithRealMiddleware(t *testing.T) {
 	jobRepo := store.NewSQLiteJobRepository(db)
 	atomic := store.NewAtomicJobTaskCreator(db)
 	enqueuer := enqueue.NewEnqueuer(atomic, jobRepo, nil, noopPlanResolver{})
-	resolver := creatorflow.NewResolverFromDeps(enqueuer, db, tempDir, filepath.Join(tempDir, "videos"), "")
+	resolver := creatorflow.NewResolverFromDeps(enqueuer, db.Forwarding(), db, tempDir, filepath.Join(tempDir, "videos"), "")
 	h := NewHandlersWithResolver(&config.Config{}, enqueuer, nil, resolver, jobRepo, nil, nil).WithStore(db)
 
 	clientASecret := store.GenerateM2MSecret()
@@ -176,7 +176,7 @@ func TestPipelineRunStatus_M2MOwnershipUsesIndistinguishable404(t *testing.T) {
 		t.Fatalf("sqlite store: %v", err)
 	}
 	ctx := context.Background()
-	if _, err := db.InsertCreatorForwarding(ctx, &store.CreatorForwarding{
+	if _, err := db.Forwarding().InsertCreatorForwarding(ctx, &store.CreatorForwarding{
 		ForwardingID:     "cf-pipeline-owned",
 		ExternalClientID: "client-a",
 		SourceProvider:   "remote_engine",
@@ -235,7 +235,7 @@ func TestInsertCreatorForwarding_PersistsExternalClientID(t *testing.T) {
 		t.Fatalf("sqlite store: %v", err)
 	}
 
-	inserted, err := db.InsertCreatorForwarding(context.Background(), &store.CreatorForwarding{
+	inserted, err := db.Forwarding().InsertCreatorForwarding(context.Background(), &store.CreatorForwarding{
 		ForwardingID:     "cf-client-id-persisted",
 		ExternalClientID: "client-persisted",
 		SourceProvider:   ExternalAPISourceProvider,
@@ -254,14 +254,14 @@ func TestInsertCreatorForwarding_PersistsExternalClientID(t *testing.T) {
 		t.Fatalf("inserted external client id = %q, want client-persisted", inserted.Forwarding.ExternalClientID)
 	}
 
-	got, err := db.GetCreatorForwardingByTargetJobID(context.Background(), "job-client-id-persisted", "client-persisted")
+	got, err := db.Forwarding().GetCreatorForwardingByTargetJobID(context.Background(), "job-client-id-persisted", "client-persisted")
 	if err != nil {
 		t.Fatalf("owner lookup: %v", err)
 	}
 	if got == nil || got.ExternalClientID != "client-persisted" {
 		t.Fatalf("owner lookup = %#v, want client-persisted", got)
 	}
-	if _, err := db.GetCreatorForwardingByTargetJobID(context.Background(), "job-client-id-persisted", "another-client"); err != store.ErrCreatorForwardingNoRow {
+	if _, err := db.Forwarding().GetCreatorForwardingByTargetJobID(context.Background(), "job-client-id-persisted", "another-client"); err != store.ErrCreatorForwardingNoRow {
 		t.Fatalf("cross-client lookup error = %v, want ErrCreatorForwardingNoRow", err)
 	}
 }

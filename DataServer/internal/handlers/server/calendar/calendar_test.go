@@ -54,7 +54,7 @@ func setupCalendarTestEnv(t *testing.T) (*store.SQLiteStore, jobs.Repository, *g
 	jobRepo := store.NewSQLiteJobRepository(db)
 	atomic := store.NewAtomicJobTaskCreator(db)
 	enqueuer := jobenqueue.NewEnqueuer(atomic, jobRepo, nil, noopPlanResolver{})
-	submission := creatorflow.NewCanonicalJobSubmitter(creatorflow.NewResolverMinimal(enqueuer, db))
+	submission := creatorflow.NewCanonicalJobSubmitter(creatorflow.NewResolverMinimal(enqueuer, db.Forwarding()))
 
 	// fix(scheduler): seed calendar_noop destination so the canonical
 	// delivery-plan validator (parseDeliveryPlanPayload) accepts the

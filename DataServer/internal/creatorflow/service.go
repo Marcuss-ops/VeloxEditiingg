@@ -23,7 +23,8 @@ import (
 //
 // Blocco 4 step #3 collapsed the public surface to its minimum:
 //
-//   - New(cfg, enqueuer, dbStore) constructs the optional creator stage.
+//   - New(cfg, enqueuer, forwardRepo, driveResolver) constructs the
+//     optional creator stage.
 //   - StartOrPersistForwarding runs the remote creator exactly once and
 //     routes the result through Resolver.Resolve (sync forward) OR
 //     persists a creator_forwardings row (async poll).
@@ -42,20 +43,25 @@ import (
 // The PR-operation 01 / Fase 2 Job+Task creation surface (RenderPlan,
 // CreateJobWithPlan, deriveJobID) lives in the sibling file service_job.go.
 type Service struct {
-	enqueuer  *enqueue.Enqueuer
-	client    *remoteengine.Client
-	dbStore   ResolverStore
-	dataDir   string
-	videosDir string
-	masterURL string
+	enqueuer      *enqueue.Enqueuer
+	client        *remoteengine.Client
+	forwardRepo   ForwardingRepository
+	driveResolver enqueue.DriveFolderResolver
+	dataDir       string
+	videosDir     string
+	masterURL     string
 }
 
 // New creates a creator-flow service from runtime config.
 // enqueuer is mandatory (PR15.7a): it owns the voiceover rewrite.
-// dbStore is mandatory (PR-forwarding-runner): used to persist
-// PENDING creator_forwardings rows for durable polling.
-func New(cfg *config.Config, enqueuer *enqueue.Enqueuer, dbStore ResolverStore) *Service {
-	if cfg == nil || enqueuer == nil || dbStore == nil {
+// forwardRepo is mandatory (PR-forwarding-runner): used to persist
+// PENDING creator_forwardings rows for durable polling. driveResolver is
+// the Drive master-folder resolver threaded into the one-shot Resolver;
+// the two ports are separate because the forwarding extraction moved the
+// creator_forwardings SQL/CAS into forwardingstore while Drive resolution
+// stayed on store.SQLiteStore.
+func New(cfg *config.Config, enqueuer *enqueue.Enqueuer, forwardRepo ForwardingRepository, driveResolver enqueue.DriveFolderResolver) *Service {
+	if cfg == nil || enqueuer == nil || forwardRepo == nil {
 		return nil
 	}
 	if strings.TrimSpace(cfg.Render.RemoteEngineURL) == "" {
@@ -70,10 +76,11 @@ func New(cfg *config.Config, enqueuer *enqueue.Enqueuer, dbStore ResolverStore) 
 			TimeoutMS: cfg.Render.RemoteEngineTimeoutMS,
 			Retries:   cfg.Render.RemoteEngineRetries,
 		}),
-		dbStore:   dbStore,
-		dataDir:   strings.TrimSpace(cfg.Runtime.DataDir),
-		videosDir: strings.TrimSpace(cfg.Runtime.VideosDir),
-		masterURL: string(cfg.ControlPlane.RESTPublic),
+		forwardRepo:   forwardRepo,
+		driveResolver: driveResolver,
+		dataDir:       strings.TrimSpace(cfg.Runtime.DataDir),
+		videosDir:     strings.TrimSpace(cfg.Runtime.VideosDir),
+		masterURL:     string(cfg.ControlPlane.RESTPublic),
 	}
 }
 
@@ -140,7 +147,7 @@ func (s *Service) StartOrPersistForwarding(ctx context.Context, rawPayload map[s
 		// (optionally) URL rewrite via BuildSceneImagePayloadForMaster,
 		// creator_forwardings row promotion, and the atomic
 		// AtomicForwardAndEnqueue that finalises the Job row.
-		rs := NewResolverFromDeps(s.enqueuer, s.dbStore, s.dataDir, s.videosDir, s.masterURL)
+		rs := NewResolverFromDeps(s.enqueuer, s.forwardRepo, s.driveResolver, s.dataDir, s.videosDir, s.masterURL)
 		if rs == nil {
 			return nil, false, fmt.Errorf("creatorflow: StartOrPersistForwarding: resolver construction failed")
 		}
@@ -185,13 +192,13 @@ func (s *Service) StartOrPersistForwarding(ctx context.Context, rawPayload map[s
 
 	// Defense-in-depth: pre-Blocco-4 step #3 the deleted
 	// forwardCompletedForwarderOnly shim doubled as a nil-dbStore guard.
-	// With the shim gone, a literal `&Service{dbStore: nil}{}` construction
-	// (e.g. a future unit test) would panic on the InsertCreatorForwarding
-	// call. Reject that case loudly with a typed error so the caller sees
-	// the cause. Unreachable from `creatorflow.New` (which returns nil
-	// when dbStore is nil).
-	if s.dbStore == nil {
-		return nil, false, fmt.Errorf("creatorflow: StartOrPersistForwarding: nil dbStore (required for durable forwarding row)")
+	// With the shim gone, a literal `&Service{forwardRepo: nil}{}`
+	// construction (e.g. a future unit test) would panic on the
+	// InsertCreatorForwarding call. Reject that case loudly with a typed
+	// error so the caller sees the cause. Unreachable from `creatorflow.New`
+	// (which returns nil when forwardRepo is nil).
+	if s.forwardRepo == nil {
+		return nil, false, fmt.Errorf("creatorflow: StartOrPersistForwarding: nil forwardRepo (required for durable forwarding row)")
 	}
 
 	// PR-forwarding-runner: persist a durable forwarding record instead of
@@ -203,7 +210,7 @@ func (s *Service) StartOrPersistForwarding(ctx context.Context, rawPayload map[s
 	}
 	forwardingID := "cf_" + uuid.NewString()
 	now := time.Now().UTC().Format(time.RFC3339)
-	if _, err := s.dbStore.InsertCreatorForwarding(ctx, &forwardingcontract.CreatorForwarding{
+	if _, err := s.forwardRepo.InsertCreatorForwarding(ctx, &forwardingcontract.CreatorForwarding{
 		ForwardingID:     forwardingID,
 		SourceProvider:   "remote_engine",
 		SourceJobID:      creatorJobID,

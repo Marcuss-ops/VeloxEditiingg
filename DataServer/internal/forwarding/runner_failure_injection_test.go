@@ -145,7 +145,7 @@ func TestTick_EffectiveClaimBatch_CappedAtConcurrency(t *testing.T) {
 	pendingCount := 0
 	pollingCount := 0
 	for i := 0; i < 10; i++ {
-		cf, getErr := db.GetCreatorForwarding(context.Background(), "cf-batch-"+string(rune('A'+i)))
+		cf, getErr := db.Forwarding().GetCreatorForwarding(context.Background(), "cf-batch-"+string(rune('A'+i)))
 		if getErr != nil {
 			t.Fatalf("get forwarding: %v", getErr)
 		}
@@ -245,7 +245,7 @@ func TestSetResolver_Idempotent(t *testing.T) {
 
 	r := NewCreatorForwardingRunner(DefaultRunnerConfig(), db.Forwarding(), nil, enqueuer, "test-set")
 
-	injected := creatorflow.NewResolverMinimal(enqueuer, db)
+	injected := creatorflow.NewResolverMinimal(enqueuer, db.Forwarding())
 	if injected == nil {
 		t.Fatal("NewResolverMinimal returned nil")
 	}
@@ -268,7 +268,7 @@ func TestEnsureForwarded_IdempotentRepair(t *testing.T) {
 	// Simulate a crash: manually move the row to FORWARDING (as if
 	// AtomicForwardAndEnqueue started but didn't finish).
 	ctx := context.Background()
-	_, err := db.InsertCreatorForwarding(ctx, &store.CreatorForwarding{
+	_, err := db.Forwarding().InsertCreatorForwarding(ctx, &store.CreatorForwarding{
 		ForwardingID:     "cf-repair-2",
 		SourceProvider:   "openai",
 		SourceJobID:      "src-repair-2",
@@ -282,12 +282,12 @@ func TestEnsureForwarded_IdempotentRepair(t *testing.T) {
 	}
 
 	// EnsureForwarded should stamp it to FORWARDED.
-	err = db.EnsureForwarded(ctx, "cf-repair-2", "job-derived-id-123")
+	err = db.Forwarding().EnsureForwarded(ctx, "cf-repair-2", "job-derived-id-123")
 	if err != nil {
 		t.Fatalf("EnsureForwarded: %v", err)
 	}
 
-	cf, err := db.GetCreatorForwarding(ctx, "cf-repair-2")
+	cf, err := db.Forwarding().GetCreatorForwarding(ctx, "cf-repair-2")
 	if err != nil {
 		t.Fatalf("get forwarding: %v", err)
 	}
@@ -299,7 +299,7 @@ func TestEnsureForwarded_IdempotentRepair(t *testing.T) {
 	}
 
 	// Second call should be idempotent (no-op, nil error).
-	err = db.EnsureForwarded(ctx, "cf-repair-2", "job-derived-id-123")
+	err = db.Forwarding().EnsureForwarded(ctx, "cf-repair-2", "job-derived-id-123")
 	if err != nil {
 		t.Errorf("idempotent EnsureForwarded should return nil, got %v", err)
 	}
@@ -311,7 +311,7 @@ func TestEnsureForwarded_DivergentJobID(t *testing.T) {
 	db := setupRunnerTestDB(t)
 	ctx := context.Background()
 
-	_, err := db.InsertCreatorForwarding(ctx, &store.CreatorForwarding{
+	_, err := db.Forwarding().InsertCreatorForwarding(ctx, &store.CreatorForwarding{
 		ForwardingID:     "cf-divergent",
 		SourceProvider:   "openai",
 		SourceJobID:      "src-divergent",
@@ -325,7 +325,7 @@ func TestEnsureForwarded_DivergentJobID(t *testing.T) {
 		t.Fatalf("insert forwarding: %v", err)
 	}
 
-	err = db.EnsureForwarded(ctx, "cf-divergent", "job-different-789")
+	err = db.Forwarding().EnsureForwarded(ctx, "cf-divergent", "job-different-789")
 	if err == nil {
 		t.Fatal("EnsureForwarded with divergent job_id should return error, got nil")
 	}
@@ -342,7 +342,7 @@ func TestEnsureForwarded_TerminalState(t *testing.T) {
 
 	for _, status := range []string{"FAILED", "BLOCKED"} {
 		fwdID := "cf-terminal-" + status
-		_, err := db.InsertCreatorForwarding(ctx, &store.CreatorForwarding{
+		_, err := db.Forwarding().InsertCreatorForwarding(ctx, &store.CreatorForwarding{
 			ForwardingID:     fwdID,
 			SourceProvider:   "openai",
 			SourceJobID:      "src-terminal-" + status,
@@ -355,7 +355,7 @@ func TestEnsureForwarded_TerminalState(t *testing.T) {
 			t.Fatalf("insert forwarding (%s): %v", status, err)
 		}
 
-		err = db.EnsureForwarded(ctx, fwdID, "job-repair-attempt")
+		err = db.Forwarding().EnsureForwarded(ctx, fwdID, "job-repair-attempt")
 		if err == nil {
 			t.Errorf("EnsureForwarded on %s should return error, got nil", status)
 		}
@@ -378,7 +378,7 @@ func TestProcessLease_MetricsAfterCAS(t *testing.T) {
 
 	// Insert a forwarding and manually claim it.
 	insertTestForwardingRecord(t, db, "cf-cas-metrics", "openai", "src-cas", "scene.composite.v1", "PENDING")
-	leases, err := db.ClaimCreatorForwardings(ctx, "test-cas", "cf", 5*time.Minute, 1)
+	leases, err := db.Forwarding().ClaimCreatorForwardings(ctx, "test-cas", "cf", 5*time.Minute, 1)
 	if err != nil || len(leases) == 0 {
 		t.Fatalf("claim forwarding: err=%v len=%d", err, len(leases))
 	}
@@ -410,7 +410,7 @@ func TestProcessLease_MetricsAfterCAS(t *testing.T) {
 	}
 
 	// Verify the row is now in RETRY_WAIT.
-	cf, err := db.GetCreatorForwarding(ctx, leases[0].ForwardingID)
+	cf, err := db.Forwarding().GetCreatorForwarding(ctx, leases[0].ForwardingID)
 	if err != nil {
 		t.Fatalf("get forwarding: %v", err)
 	}

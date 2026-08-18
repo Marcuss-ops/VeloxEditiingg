@@ -63,7 +63,7 @@ func newCreatorPushE2EStack(t *testing.T) (*Handlers, *store.SQLiteStore, *store
 	jobRepo := store.NewSQLiteJobRepository(db)
 	atomic := store.NewAtomicJobTaskCreator(db)
 	testEnqueuer := enqueue.NewEnqueuer(atomic, jobRepo, nil, noopPlanResolver{})
-	resolver := creatorflow.NewResolverFromDeps(testEnqueuer, db, tempDir, filepath.Join(tempDir, "videos"), "")
+	resolver := creatorflow.NewResolverFromDeps(testEnqueuer, db.Forwarding(), db, tempDir, filepath.Join(tempDir, "videos"), "")
 	h := NewHandlersWithResolver(&config.Config{}, testEnqueuer, nil, resolver, jobRepo, nil, nil).WithStore(db)
 	return h, db, jobRepo
 }
@@ -173,7 +173,7 @@ func TestCreatorPushJobsE2E_VoiceoverStockClipScene(t *testing.T) {
 	}
 
 	// creator_forwardings row written by Resolve's atomic CAS.
-	forwarding, err := db.GetCreatorForwardingBySource(context.Background(),
+	forwarding, err := db.Forwarding().GetCreatorForwardingBySource(context.Background(),
 		"creator_pc_1", "creator-job-001", "scene.composite.v1",
 	)
 	if err != nil {

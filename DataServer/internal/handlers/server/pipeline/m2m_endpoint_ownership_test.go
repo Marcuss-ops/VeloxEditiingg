@@ -21,7 +21,7 @@ func TestM2MPipelineEndpoints_CrossClientIsIndistinguishableFromMissing(t *testi
 		t.Fatalf("sqlite store: %v", err)
 	}
 	ctx := context.Background()
-	if _, err := db.InsertCreatorForwarding(ctx, &store.CreatorForwarding{
+	if _, err := db.Forwarding().InsertCreatorForwarding(ctx, &store.CreatorForwarding{
 		ForwardingID:     "cf-m2m-endpoint-owner",
 		ExternalClientID: "client-a",
 		SourceProvider:   "remote_engine",
@@ -116,7 +116,7 @@ func TestGetSubmittedJob_OwnerSeesScopedEnrichment(t *testing.T) {
 		jobID  = "job-scoped-enrichment"
 		client = "client-enrichment"
 	)
-	if _, err := db.InsertCreatorForwarding(ctx, &store.CreatorForwarding{
+	if _, err := db.Forwarding().InsertCreatorForwarding(ctx, &store.CreatorForwarding{
 		ForwardingID:     "cf-scoped-enrichment",
 		ExternalClientID: client,
 		SourceProvider:   ExternalAPISourceProvider,
@@ -198,7 +198,7 @@ func TestPipelineRunStatus_OrphanedForwardingJoinIsIndistinguishable404(t *testi
 		t.Fatalf("sqlite store: %v", err)
 	}
 	ctx := context.Background()
-	if _, err := db.InsertCreatorForwarding(ctx, &store.CreatorForwarding{
+	if _, err := db.Forwarding().InsertCreatorForwarding(ctx, &store.CreatorForwarding{
 		ForwardingID:     "cf-orphaned-join",
 		ExternalClientID: "client-a",
 		SourceProvider:   "remote_engine",

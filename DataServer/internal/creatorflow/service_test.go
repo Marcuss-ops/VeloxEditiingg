@@ -132,10 +132,11 @@ func TestForwardSchedulesAsyncPollAndWorkerHandoff(t *testing.T) {
 				Retries:   1,
 			})
 		}(),
-		dbStore:   db,
-		dataDir:   tempDir,
-		videosDir: filepath.Join(tempDir, "videos"),
-		masterURL: "http://master.test",
+		forwardRepo:   db.Forwarding(),
+		driveResolver: db,
+		dataDir:       tempDir,
+		videosDir:     filepath.Join(tempDir, "videos"),
+		masterURL:     "http://master.test",
 	}
 
 	response, used, err := svc.StartOrPersistForwarding(context.Background(), map[string]interface{}{
@@ -152,7 +153,7 @@ func TestForwardSchedulesAsyncPollAndWorkerHandoff(t *testing.T) {
 	}
 
 	// Verify the durable forwarding row was inserted.
-	cf, getErr := db.GetCreatorForwardingBySource(
+	cf, getErr := db.Forwarding().GetCreatorForwardingBySource(
 		context.Background(), "remote_engine", "creator-async-1", "scene.composite.v1",
 	)
 	if getErr != nil {
@@ -216,7 +217,7 @@ func TestResolverEnqueuesWorkerJob(t *testing.T) {
 		routing.FormatForwardingKey("remote_engine", "creator-complete-1", "scene.composite.v1").String(),
 	)
 
-	rs := NewResolverFromDeps(enqueuer, db, tempDir, filepath.Join(tempDir, "videos"), "")
+	rs := NewResolverFromDeps(enqueuer, db.Forwarding(), db, tempDir, filepath.Join(tempDir, "videos"), "")
 	if rs == nil {
 		t.Fatalf("resolver construction failed")
 	}

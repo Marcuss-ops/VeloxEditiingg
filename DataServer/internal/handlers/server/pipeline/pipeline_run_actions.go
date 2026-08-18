@@ -30,7 +30,7 @@ func (h *Handlers) lookupPipelineRun(ctx context.Context, idParam, externalClien
 	if clientID != "" {
 		pr, err := h.store.GetPipelineRunForClient(ctx, idParam, clientID)
 		if err == nil && pr != nil {
-			forwarding, fErr := h.store.GetCreatorForwardingByIDForClient(ctx, pr.ForwardingID, clientID)
+			forwarding, fErr := h.store.Forwarding().GetCreatorForwardingByIDForClient(ctx, pr.ForwardingID, clientID)
 			if fErr != nil {
 				// A forwarding-join miss (e.g. an orphaned run row whose
 				// forwarding row is gone) must be indistinguishable from a
@@ -58,7 +58,7 @@ func (h *Handlers) lookupPipelineRun(ctx context.Context, idParam, externalClien
 	if clientID != "" {
 		pr, err := h.store.GetPipelineRunByRequestIDForClient(ctx, idParam, clientID)
 		if err == nil && pr != nil {
-			forwarding, fErr := h.store.GetCreatorForwardingByIDForClient(ctx, pr.ForwardingID, clientID)
+			forwarding, fErr := h.store.Forwarding().GetCreatorForwardingByIDForClient(ctx, pr.ForwardingID, clientID)
 			if fErr != nil {
 				if errors.Is(fErr, store.ErrCreatorForwardingNoRow) {
 					return nil, nil, errPipelineRunNotFound
@@ -85,14 +85,14 @@ func (h *Handlers) lookupPipelineRun(ctx context.Context, idParam, externalClien
 	var forwarding *store.CreatorForwarding
 	var err error
 	if clientID != "" {
-		forwarding, err = h.store.GetCreatorForwardingByIDForClient(ctx, idParam, clientID)
+		forwarding, err = h.store.Forwarding().GetCreatorForwardingByIDForClient(ctx, idParam, clientID)
 		if errors.Is(err, store.ErrCreatorForwardingNoRow) {
-			forwarding, err = h.store.GetCreatorForwardingByRemoteJobForClient(ctx, "remote_engine", idParam, clientID)
+			forwarding, err = h.store.Forwarding().GetCreatorForwardingByRemoteJobForClient(ctx, "remote_engine", idParam, clientID)
 		}
 	} else {
-		forwarding, err = h.store.GetCreatorForwarding(ctx, idParam)
+		forwarding, err = h.store.Forwarding().GetCreatorForwarding(ctx, idParam)
 		if errors.Is(err, store.ErrCreatorForwardingNoRow) {
-			forwarding, err = h.store.GetCreatorForwardingByRemoteJob(ctx, "remote_engine", idParam)
+			forwarding, err = h.store.Forwarding().GetCreatorForwardingByRemoteJob(ctx, "remote_engine", idParam)
 		}
 	}
 	if err != nil {
@@ -212,7 +212,7 @@ func (h *Handlers) CancelPipelineRun() gin.HandlerFunc {
 				markErr = h.store.MarkCreatorForwardingCancelledForClient(ctx, forwarding.ForwardingID,
 					clientID, "CANCELLED_BY_USER", "cancelled by user")
 			} else {
-				markErr = h.store.MarkCreatorForwardingCancelled(ctx,
+				markErr = h.store.Forwarding().MarkCreatorForwardingCancelled(ctx,
 					forwarding.ForwardingID, "", "", "CANCELLED_BY_USER", "cancelled by user")
 			}
 			if markErr != nil {

@@ -40,7 +40,7 @@ func (h *Handlers) AssetDownloadProgress() gin.HandlerFunc {
 			writeAssetProgressNotFound(c)
 			return
 		}
-		if _, err := h.store.GetCreatorForwardingByTargetJobID(c.Request.Context(), jobID, clientID); err != nil {
+		if _, err := h.store.Forwarding().GetCreatorForwardingByTargetJobID(c.Request.Context(), jobID, clientID); err != nil {
 			if errors.Is(err, store.ErrCreatorForwardingNoRow) {
 				writeAssetProgressNotFound(c)
 				return

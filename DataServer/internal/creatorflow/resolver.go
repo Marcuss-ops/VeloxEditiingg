@@ -87,34 +87,27 @@ type Resolver struct {
 	driveResolver enqueue.DriveFolderResolver
 }
 
-// ResolverStore is the narrow persistence surface the Resolver needs at the
-// composition boundary: the creator-forwarding repository plus the Drive
-// master-folder resolver. store.SQLiteStore implements both ports; the
-// concrete *store.SQLiteStore is no longer part of the resolver's
-// constructor contract, so tests and alternate adapters inject only these
-// two ports.
-type ResolverStore interface {
-	ForwardingRepository
-	enqueue.DriveFolderResolver
-}
-
 // NewResolver is the canonical constructor for the handler-side Resolver.
 // It pulls dataDir/videosDir/masterURL from the supplied config so the
 // URL rewriting step (BuildSceneImagePayloadForMaster) uses per-process
-// values resolved at boot time.
+// values resolved at boot time. The two persistence ports are injected
+// separately because the forwarding extraction split them across leaf
+// packages: forwardRepo owns the creator_forwardings SQL/CAS lifecycle
+// (forwardingstore) and driveResolver resolves Drive master folders
+// (store.SQLiteStore) — no single concrete type implements both anymore.
 //
-// Returns nil if cfg, enqueuer, or dbStore is missing — callers must
+// Returns nil if cfg, enqueuer, or forwardRepo is missing — callers must
 // nil-check before calling Resolve (Resolve itself also returns a
 // typed error for missing dependencies).
-func NewResolver(cfg *config.Config, enqueuer *enqueue.Enqueuer, dbStore ResolverStore) *Resolver {
-	if cfg == nil || enqueuer == nil || dbStore == nil {
+func NewResolver(cfg *config.Config, enqueuer *enqueue.Enqueuer, forwardRepo ForwardingRepository, driveResolver enqueue.DriveFolderResolver) *Resolver {
+	if cfg == nil || enqueuer == nil || forwardRepo == nil {
 		return nil
 	}
 	return NewResolverWithRepositories(
 		enqueuer,
 		enqueuer.Jobs,
-		dbStore,
-		dbStore,
+		forwardRepo,
+		driveResolver,
 		strings.TrimSpace(cfg.Runtime.DataDir),
 		strings.TrimSpace(cfg.Runtime.VideosDir),
 		string(cfg.ControlPlane.RESTPublic),
@@ -142,15 +135,15 @@ func NewResolverMinimal(enqueuer *enqueue.Enqueuer, forwardRepo ForwardingReposi
 // fields directly. The dataDir, videosDir, masterURL triple drives
 // BuildSceneImagePayloadForMaster, so callers that want URL rewriting
 // must supply non-empty dataDir + masterURL.
-func NewResolverFromDeps(enqueuer *enqueue.Enqueuer, dbStore ResolverStore, dataDir, videosDir, masterURL string) *Resolver {
-	if enqueuer == nil || dbStore == nil {
+func NewResolverFromDeps(enqueuer *enqueue.Enqueuer, forwardRepo ForwardingRepository, driveResolver enqueue.DriveFolderResolver, dataDir, videosDir, masterURL string) *Resolver {
+	if enqueuer == nil || forwardRepo == nil {
 		return nil
 	}
 	return NewResolverWithRepositories(
 		enqueuer,
 		enqueuer.Jobs,
-		dbStore,
-		dbStore,
+		forwardRepo,
+		driveResolver,
 		dataDir,
 		videosDir,
 		masterURL,

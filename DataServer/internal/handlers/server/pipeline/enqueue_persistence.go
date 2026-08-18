@@ -54,7 +54,7 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 			})
 			return
 		}
-		forwarding, err := h.store.GetCreatorForwardingByTargetJobID(ctx, jobID, clientID)
+		forwarding, err := h.store.Forwarding().GetCreatorForwardingByTargetJobID(ctx, jobID, clientID)
 		if err != nil {
 			if errors.Is(err, store.ErrCreatorForwardingNoRow) {
 				c.JSON(http.StatusNotFound, gin.H{

@@ -62,13 +62,13 @@ func NewScriptHandlers(cfg *config.Config, sqliteDB *store.SQLiteStore, enqueuer
 		// creatorflow.New takes only (cfg, enqueuer) post-PR15.7a:
 		// the Enqueuer owns the queue so passing q again would be redundant
 		// and risks drift between two parallel references.
-		creator: creatorflow.New(cfg, enqueuer, sqliteDB),
+		creator: creatorflow.New(cfg, enqueuer, sqliteDB.Forwarding(), sqliteDB),
 		// The from-scratch enqueue path routes through the canonical submitter
 		// (SubmitScratch) so intake-source telemetry is recorded once by the
 		// submitter instead of as a handler side-effect. RegisterRoutes
 		// overrides this with a resolver built from the composition-root
 		// resolver when one is supplied.
-		submission: creatorflow.NewCanonicalJobSubmitter(creatorflow.NewResolverMinimal(enqueuer, sqliteDB)),
+		submission: creatorflow.NewCanonicalJobSubmitter(creatorflow.NewResolverMinimal(enqueuer, sqliteDB.Forwarding())),
 	}
 }
 
@@ -84,7 +84,7 @@ func RegisterRoutes(group gin.IRoutes, cfg *config.Config, sqliteDB *store.SQLit
 	// enqueuer + store so test mounts and partial wiring still drive the
 	// from-scratch SubmitScratch path (the forwarding path is unused here).
 	if resolver == nil {
-		resolver = creatorflow.NewResolverMinimal(enqueuer, sqliteDB)
+		resolver = creatorflow.NewResolverMinimal(enqueuer, sqliteDB.Forwarding())
 	}
 	registry := newScriptIngressRegistry(cfg, handlers.dataDir, handlers.sqliteDB, handlers.docCreator)
 	submission := creatorflow.NewCanonicalJobSubmitter(resolver)

@@ -33,7 +33,7 @@ func insertTestForwarding(t *testing.T, db *SQLiteStore, forwardingID, provider,
 		CreatedAt:        time.Now().UTC().Format(time.RFC3339),
 		UpdatedAt:        time.Now().UTC().Format(time.RFC3339),
 	}
-	if _, err := db.InsertCreatorForwarding(context.Background(), cf); err != nil {
+	if _, err := db.Forwarding().InsertCreatorForwarding(context.Background(), cf); err != nil {
 		t.Fatalf("insert forwarding: %v", err)
 	}
 }
@@ -51,7 +51,7 @@ func insertTestForwardingWithPayload(t *testing.T, db *SQLiteStore, forwardingID
 		CreatedAt:        time.Now().UTC().Format(time.RFC3339),
 		UpdatedAt:        time.Now().UTC().Format(time.RFC3339),
 	}
-	if _, err := db.InsertCreatorForwarding(context.Background(), cf); err != nil {
+	if _, err := db.Forwarding().InsertCreatorForwarding(context.Background(), cf); err != nil {
 		t.Fatalf("insert forwarding with payload: %v", err)
 	}
 }
@@ -64,7 +64,7 @@ func TestInsertAndGetForwarding(t *testing.T) {
 
 	insertTestForwarding(t, db, "cf-001", "openai", "creator-job-1", "scene.composite.v1", "PENDING")
 
-	cf, err := db.GetCreatorForwarding(ctx, "cf-001")
+	cf, err := db.Forwarding().GetCreatorForwarding(ctx, "cf-001")
 	if err != nil {
 		t.Fatalf("GetCreatorForwarding: %v", err)
 	}
@@ -96,12 +96,12 @@ func TestInsertForwarding_Idempotent(t *testing.T) {
 		CreatedAt:        time.Now().UTC().Format(time.RFC3339),
 		UpdatedAt:        time.Now().UTC().Format(time.RFC3339),
 	}
-	if _, err := db.InsertCreatorForwarding(ctx, cf2); err != nil {
+	if _, err := db.Forwarding().InsertCreatorForwarding(ctx, cf2); err != nil {
 		t.Fatalf("second insert: %v", err)
 	}
 
 	// First record should still exist
-	cf, err := db.GetCreatorForwarding(ctx, "cf-idem")
+	cf, err := db.Forwarding().GetCreatorForwarding(ctx, "cf-idem")
 	if err != nil {
 		t.Fatalf("GetCreatorForwarding: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestInsertForwarding_Idempotent(t *testing.T) {
 	}
 
 	// Second record should NOT exist (ignored by UNIQUE)
-	_, err = db.GetCreatorForwarding(ctx, "cf-idem-2")
+	_, err = db.Forwarding().GetCreatorForwarding(ctx, "cf-idem-2")
 	if err != ErrCreatorForwardingNoRow {
 		t.Errorf("expected ErrCreatorForwardingNoRow, got %v", err)
 	}
@@ -122,7 +122,7 @@ func TestGetForwardingBySource(t *testing.T) {
 
 	insertTestForwarding(t, db, "cf-src", "openai", "creator-job-3", "scene.composite.v1", "PENDING")
 
-	cf, err := db.GetCreatorForwardingBySource(ctx, "openai", "creator-job-3", "scene.composite.v1")
+	cf, err := db.Forwarding().GetCreatorForwardingBySource(ctx, "openai", "creator-job-3", "scene.composite.v1")
 	if err != nil {
 		t.Fatalf("GetCreatorForwardingBySource: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestGetForwardingMising(t *testing.T) {
 	db := setupForwardingTestDB(t)
 	ctx := context.Background()
 
-	_, err := db.GetCreatorForwarding(ctx, "nonexistent")
+	_, err := db.Forwarding().GetCreatorForwarding(ctx, "nonexistent")
 	if err != ErrCreatorForwardingNoRow {
 		t.Errorf("expected ErrCreatorForwardingNoRow, got %v", err)
 	}
@@ -149,7 +149,7 @@ func TestClaimForwardings_BasicClaim(t *testing.T) {
 
 	insertTestForwarding(t, db, "cf-claim-1", "openai", "creator-job-10", "scene.composite.v1", "PENDING")
 
-	leases, err := db.ClaimCreatorForwardings(ctx, "runner-1", "cf", 5*time.Minute, 4)
+	leases, err := db.Forwarding().ClaimCreatorForwardings(ctx, "runner-1", "cf", 5*time.Minute, 4)
 	if err != nil {
 		t.Fatalf("ClaimCreatorForwardings: %v", err)
 	}
@@ -182,11 +182,11 @@ func TestClaimForwardings_ConcurrentRunners(t *testing.T) {
 		insertTestForwarding(t, db, "cf-conc-"+suffix, "openai", "creator-conc-"+suffix, "scene.composite.v1", "PENDING")
 	}
 
-	leases1, err := db.ClaimCreatorForwardings(ctx, "runner-A", "cf", 5*time.Minute, 5)
+	leases1, err := db.Forwarding().ClaimCreatorForwardings(ctx, "runner-A", "cf", 5*time.Minute, 5)
 	if err != nil {
 		t.Fatalf("runner-A claim: %v", err)
 	}
-	leases2, err := db.ClaimCreatorForwardings(ctx, "runner-B", "cf", 5*time.Minute, 5)
+	leases2, err := db.Forwarding().ClaimCreatorForwardings(ctx, "runner-B", "cf", 5*time.Minute, 5)
 	if err != nil {
 		t.Fatalf("runner-B claim: %v", err)
 	}
@@ -212,7 +212,7 @@ func TestClaimForwardings_ZombieReclaim(t *testing.T) {
 	insertTestForwarding(t, db, "cf-zombie", "openai", "creator-zombie", "scene.composite.v1", "PENDING")
 
 	// Claim with short lease
-	leases, err := db.ClaimCreatorForwardings(ctx, "runner-old", "cf", 1*time.Second, 1)
+	leases, err := db.Forwarding().ClaimCreatorForwardings(ctx, "runner-old", "cf", 1*time.Second, 1)
 	if err != nil || len(leases) != 1 {
 		t.Fatalf("initial claim: %v len=%d", err, len(leases))
 	}
@@ -221,7 +221,7 @@ func TestClaimForwardings_ZombieReclaim(t *testing.T) {
 	time.Sleep(2100 * time.Millisecond)
 
 	// New runner should reclaim the zombie
-	leases2, err := db.ClaimCreatorForwardings(ctx, "runner-new", "cf", 5*time.Minute, 1)
+	leases2, err := db.Forwarding().ClaimCreatorForwardings(ctx, "runner-new", "cf", 5*time.Minute, 1)
 	if err != nil {
 		t.Fatalf("zombie reclaim: %v", err)
 	}
@@ -252,12 +252,12 @@ func TestClaimForwardings_RetryWaitWithFutureNextAttempt(t *testing.T) {
 		CreatedAt:        time.Now().UTC().Format(time.RFC3339),
 		UpdatedAt:        time.Now().UTC().Format(time.RFC3339),
 	}
-	if _, err := db.InsertCreatorForwarding(ctx, cf); err != nil {
+	if _, err := db.Forwarding().InsertCreatorForwarding(ctx, cf); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
 
 	// Should NOT be claimed because next_attempt_at is in the future
-	leases, err := db.ClaimCreatorForwardings(ctx, "runner-x", "cf", 5*time.Minute, 1)
+	leases, err := db.Forwarding().ClaimCreatorForwardings(ctx, "runner-x", "cf", 5*time.Minute, 1)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -282,11 +282,11 @@ func TestClaimForwardings_RetryWaitWithPastNextAttempt(t *testing.T) {
 		CreatedAt:        time.Now().UTC().Format(time.RFC3339),
 		UpdatedAt:        time.Now().UTC().Format(time.RFC3339),
 	}
-	if _, err := db.InsertCreatorForwarding(ctx, cf); err != nil {
+	if _, err := db.Forwarding().InsertCreatorForwarding(ctx, cf); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
 
-	leases, err := db.ClaimCreatorForwardings(ctx, "runner-x", "cf", 5*time.Minute, 1)
+	leases, err := db.Forwarding().ClaimCreatorForwardings(ctx, "runner-x", "cf", 5*time.Minute, 1)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -306,20 +306,20 @@ func TestRenewForwardingLease(t *testing.T) {
 
 	insertTestForwarding(t, db, "cf-renew", "openai", "creator-renew", "scene.composite.v1", "PENDING")
 
-	leases, err := db.ClaimCreatorForwardings(ctx, "runner-renew", "cf", 5*time.Minute, 1)
+	leases, err := db.Forwarding().ClaimCreatorForwardings(ctx, "runner-renew", "cf", 5*time.Minute, 1)
 	if err != nil || len(leases) != 1 {
 		t.Fatalf("claim: %v len=%d", err, len(leases))
 	}
 
 	l := leases[0]
 	newExpiry := time.Now().UTC().Add(10 * time.Minute)
-	err = db.RenewCreatorForwardingLease(ctx, l.ForwardingID, l.RunnerID, l.LeaseID, newExpiry)
+	err = db.Forwarding().RenewCreatorForwardingLease(ctx, l.ForwardingID, l.RunnerID, l.LeaseID, newExpiry)
 	if err != nil {
 		t.Fatalf("RenewCreatorForwardingLease: %v", err)
 	}
 
 	// Verify still in POLLING
-	cf, err := db.GetCreatorForwarding(ctx, l.ForwardingID)
+	cf, err := db.Forwarding().GetCreatorForwarding(ctx, l.ForwardingID)
 	if err != nil {
 		t.Fatalf("GetCreatorForwarding: %v", err)
 	}
@@ -334,14 +334,14 @@ func TestRenewForwardingLease_CASGuard(t *testing.T) {
 
 	insertTestForwarding(t, db, "cf-guard", "openai", "creator-guard", "scene.composite.v1", "PENDING")
 
-	leases, err := db.ClaimCreatorForwardings(ctx, "runner-real", "cf", 5*time.Minute, 1)
+	leases, err := db.Forwarding().ClaimCreatorForwardings(ctx, "runner-real", "cf", 5*time.Minute, 1)
 	if err != nil || len(leases) != 1 {
 		t.Fatalf("claim: %v len=%d", err, len(leases))
 	}
 
 	l := leases[0]
 	wrongExpiry := time.Now().UTC().Add(10 * time.Minute)
-	err = db.RenewCreatorForwardingLease(ctx, l.ForwardingID, "wrong-runner", l.LeaseID, wrongExpiry)
+	err = db.Forwarding().RenewCreatorForwardingLease(ctx, l.ForwardingID, "wrong-runner", l.LeaseID, wrongExpiry)
 	if err != ErrTransitionConflict {
 		t.Errorf("expected ErrTransitionConflict, got %v", err)
 	}
@@ -355,18 +355,18 @@ func TestMarkReadyToForward(t *testing.T) {
 
 	insertTestForwarding(t, db, "cf-r2f", "openai", "creator-r2f", "scene.composite.v1", "PENDING")
 
-	leases, err := db.ClaimCreatorForwardings(ctx, "runner-r2f", "cf", 5*time.Minute, 1)
+	leases, err := db.Forwarding().ClaimCreatorForwardings(ctx, "runner-r2f", "cf", 5*time.Minute, 1)
 	if err != nil || len(leases) != 1 {
 		t.Fatalf("claim: %v len=%d", err, len(leases))
 	}
 
 	l := leases[0]
-	err = db.MarkCreatorForwardingReadyToForward(ctx, l.ForwardingID, l.RunnerID, l.LeaseID, `{"video":"test"}`, "abc123")
+	err = db.Forwarding().MarkCreatorForwardingReadyToForward(ctx, l.ForwardingID, l.RunnerID, l.LeaseID, `{"video":"test"}`, "abc123")
 	if err != nil {
 		t.Fatalf("MarkCreatorForwardingReadyToForward: %v", err)
 	}
 
-	cf, err := db.GetCreatorForwarding(ctx, l.ForwardingID)
+	cf, err := db.Forwarding().GetCreatorForwarding(ctx, l.ForwardingID)
 	if err != nil {
 		t.Fatalf("GetCreatorForwarding: %v", err)
 	}
@@ -394,16 +394,16 @@ func TestMarkForwardingForwarded(t *testing.T) {
 	insertTestForwardingWithPayload(t, db, "cf-fwd", "openai", "creator-fwd", "scene.composite.v1", "READY_TO_FORWARD", `{"video":"test"}`, "abc")
 
 	// READY_TO_FORWARD → FORWARDING
-	if err := db.MarkCreatorForwardingForwarding(ctx, "cf-fwd"); err != nil {
+	if err := db.Forwarding().MarkCreatorForwardingForwarding(ctx, "cf-fwd"); err != nil {
 		t.Fatalf("MarkCreatorForwardingForwarding: %v", err)
 	}
 
 	// FORWARDING → FORWARDED
-	if err := db.MarkCreatorForwardingForwarded(ctx, "cf-fwd", "target-job-123"); err != nil {
+	if err := db.Forwarding().MarkCreatorForwardingForwarded(ctx, "cf-fwd", "target-job-123"); err != nil {
 		t.Fatalf("MarkCreatorForwardingForwarded: %v", err)
 	}
 
-	cf, err := db.GetCreatorForwarding(ctx, "cf-fwd")
+	cf, err := db.Forwarding().GetCreatorForwarding(ctx, "cf-fwd")
 	if err != nil {
 		t.Fatalf("GetCreatorForwarding: %v", err)
 	}
@@ -424,19 +424,19 @@ func TestMarkForwardingRetry(t *testing.T) {
 
 	insertTestForwarding(t, db, "cf-retry", "openai", "creator-retry", "scene.composite.v1", "PENDING")
 
-	leases, err := db.ClaimCreatorForwardings(ctx, "runner-retry", "cf", 5*time.Minute, 1)
+	leases, err := db.Forwarding().ClaimCreatorForwardings(ctx, "runner-retry", "cf", 5*time.Minute, 1)
 	if err != nil || len(leases) != 1 {
 		t.Fatalf("claim: %v len=%d", err, len(leases))
 	}
 
 	l := leases[0]
 	nextAttempt := time.Now().UTC().Add(2 * time.Minute)
-	err = db.MarkCreatorForwardingRetry(ctx, l.ForwardingID, l.RunnerID, l.LeaseID, "POLL_FAILED", "connection refused", "TRANSIENT", nextAttempt)
+	err = db.Forwarding().MarkCreatorForwardingRetry(ctx, l.ForwardingID, l.RunnerID, l.LeaseID, "POLL_FAILED", "connection refused", "TRANSIENT", nextAttempt)
 	if err != nil {
 		t.Fatalf("MarkCreatorForwardingRetry: %v", err)
 	}
 
-	cf, err := db.GetCreatorForwarding(ctx, l.ForwardingID)
+	cf, err := db.Forwarding().GetCreatorForwarding(ctx, l.ForwardingID)
 	if err != nil {
 		t.Fatalf("GetCreatorForwarding: %v", err)
 	}
@@ -468,11 +468,11 @@ func TestMarkCreatorForwardingReadySyncDoesNotStealLease(t *testing.T) {
 		t.Fatalf("seed forwarding lease: %v", err)
 	}
 
-	err := db.MarkCreatorForwardingReadySync(ctx, "cf-sync-fence", `{"complete":true}`, "sha-complete")
+	err := db.Forwarding().MarkCreatorForwardingReadySync(ctx, "cf-sync-fence", `{"complete":true}`, "sha-complete")
 	if err != ErrTransitionConflict {
 		t.Fatalf("ReadySync error=%v, want ErrTransitionConflict", err)
 	}
-	saved, err := db.GetCreatorForwarding(ctx, "cf-sync-fence")
+	saved, err := db.Forwarding().GetCreatorForwarding(ctx, "cf-sync-fence")
 	if err != nil {
 		t.Fatalf("GetCreatorForwarding: %v", err)
 	}
@@ -490,12 +490,12 @@ func TestMarkForwardingFailed(t *testing.T) {
 
 	insertTestForwarding(t, db, "cf-fail", "openai", "creator-fail", "scene.composite.v1", "RETRY_WAIT")
 
-	err := db.MarkCreatorForwardingFailed(ctx, "cf-fail", "", "", "MAX_ATTEMPTS", "exhausted retries", "PERMANENT")
+	err := db.Forwarding().MarkCreatorForwardingFailed(ctx, "cf-fail", "", "", "MAX_ATTEMPTS", "exhausted retries", "PERMANENT")
 	if err != nil {
 		t.Fatalf("MarkCreatorForwardingFailed: %v", err)
 	}
 
-	cf, err := db.GetCreatorForwarding(ctx, "cf-fail")
+	cf, err := db.Forwarding().GetCreatorForwarding(ctx, "cf-fail")
 	if err != nil {
 		t.Fatalf("GetCreatorForwarding: %v", err)
 	}
@@ -513,12 +513,12 @@ func TestMarkForwardingBlocked(t *testing.T) {
 
 	insertTestForwarding(t, db, "cf-block", "openai", "creator-block", "scene.composite.v1", "PENDING")
 
-	err := db.MarkCreatorForwardingBlocked(ctx, "cf-block", "", "", "INVALID_PAYLOAD", "bad schema")
+	err := db.Forwarding().MarkCreatorForwardingBlocked(ctx, "cf-block", "", "", "INVALID_PAYLOAD", "bad schema")
 	if err != nil {
 		t.Fatalf("MarkCreatorForwardingBlocked: %v", err)
 	}
 
-	cf, err := db.GetCreatorForwarding(ctx, "cf-block")
+	cf, err := db.Forwarding().GetCreatorForwarding(ctx, "cf-block")
 	if err != nil {
 		t.Fatalf("GetCreatorForwarding: %v", err)
 	}
@@ -537,7 +537,7 @@ func TestExpiredForwardingLeases(t *testing.T) {
 	insertTestForwarding(t, db, "cf-exp-2", "openai", "creator-exp-2", "scene.composite.v1", "PENDING")
 
 	// Claim both with short lease
-	leases, err := db.ClaimCreatorForwardings(ctx, "runner-exp", "cf", 1*time.Second, 4)
+	leases, err := db.Forwarding().ClaimCreatorForwardings(ctx, "runner-exp", "cf", 1*time.Second, 4)
 	if err != nil || len(leases) != 2 {
 		t.Fatalf("claim: %v len=%d", err, len(leases))
 	}
@@ -545,7 +545,7 @@ func TestExpiredForwardingLeases(t *testing.T) {
 	// Wait for lease to expire
 	time.Sleep(2100 * time.Millisecond)
 
-	expired, err := db.ExpiredCreatorForwardingLeases(ctx, time.Now().UTC().Format(time.RFC3339), 10)
+	expired, err := db.Forwarding().ExpiredCreatorForwardingLeases(ctx, time.Now().UTC().Format(time.RFC3339), 10)
 	if err != nil {
 		t.Fatalf("ExpiredCreatorForwardingLeases: %v", err)
 	}
@@ -562,7 +562,7 @@ func TestListReadyToForward(t *testing.T) {
 	insertTestForwardingWithPayload(t, db, "cf-ready-2", "openai", "creator-r-2", "scene.composite.v1", "READY_TO_FORWARD", `{"v":"2"}`, "sha2")
 	insertTestForwarding(t, db, "cf-pending", "openai", "creator-r-3", "scene.composite.v1", "PENDING")
 
-	ready, err := db.ListReadyToForward(ctx, 10)
+	ready, err := db.Forwarding().ListReadyToForward(ctx, 10)
 	if err != nil {
 		t.Fatalf("ListReadyToForward: %v", err)
 	}
@@ -623,13 +623,13 @@ func TestAtomicForwardAndEnqueue_CreatesJobAndMarksForwarded(t *testing.T) {
 	}
 
 	// Act: atomic enqueue + forward.
-	err := db.AtomicForwardAndEnqueue(ctx, "cf-atomic", job, spec, 5, "", "")
+	err := db.Forwarding().AtomicForwardAndEnqueue(ctx, "cf-atomic", job, spec, 5, "", "")
 	if err != nil {
 		t.Fatalf("AtomicForwardAndEnqueue: %v", err)
 	}
 
 	// Assert: forwarding is FORWARDED with target_job_id.
-	cf, err := db.GetCreatorForwarding(ctx, "cf-atomic")
+	cf, err := db.Forwarding().GetCreatorForwarding(ctx, "cf-atomic")
 	if err != nil {
 		t.Fatalf("GetCreatorForwarding: %v", err)
 	}
@@ -668,13 +668,13 @@ func TestAtomicForwardAndEnqueue_FencesWrongRunnerLease(t *testing.T) {
 		t.Fatalf("seed owner lease: %v", err)
 	}
 
-	err := db.AtomicForwardAndEnqueue(ctx, "cf-owner-fence", &jobs.Job{ID: "job-owner-fence", Type: "process_video"},
+	err := db.Forwarding().AtomicForwardAndEnqueue(ctx, "cf-owner-fence", &jobs.Job{ID: "job-owner-fence", Type: "process_video"},
 		&taskgraph.TaskSpec{Version: taskgraph.SpecVersion, JobID: "job-owner-fence", ExecutorID: "scene.composite.v1@1"},
 		5, "stale-runner", "stale-lease")
 	if err != ErrTransitionConflict {
 		t.Fatalf("wrong runner atomic enqueue error = %v, want ErrTransitionConflict", err)
 	}
-	cf, err := db.GetCreatorForwarding(ctx, "cf-owner-fence")
+	cf, err := db.Forwarding().GetCreatorForwarding(ctx, "cf-owner-fence")
 	if err != nil {
 		t.Fatalf("GetCreatorForwarding: %v", err)
 	}
@@ -705,13 +705,13 @@ func TestAtomicForwardAndEnqueue_ConflictWhenAlreadyClaimed(t *testing.T) {
 	spec := &taskgraph.TaskSpec{Version: taskgraph.SpecVersion, JobID: "job-conflict",
 		ExecutorID: "scene.composite.v1@1"}
 
-	err = db.AtomicForwardAndEnqueue(ctx, "cf-conflict", job, spec, 5, "", "")
+	err = db.Forwarding().AtomicForwardAndEnqueue(ctx, "cf-conflict", job, spec, 5, "", "")
 	if err != ErrTransitionConflict {
 		t.Errorf("expected ErrTransitionConflict, got %v", err)
 	}
 
 	// Verify forwarding is still FORWARDING (not mutated).
-	cf, err := db.GetCreatorForwarding(ctx, "cf-conflict")
+	cf, err := db.Forwarding().GetCreatorForwarding(ctx, "cf-conflict")
 	if err != nil {
 		t.Fatalf("GetCreatorForwarding: %v", err)
 	}
@@ -741,7 +741,7 @@ func TestMarkCreatorForwardingEnqueueRetry_FromForwarding(t *testing.T) {
 		CreatedAt:        time.Now().UTC().Format(time.RFC3339),
 		UpdatedAt:        time.Now().UTC().Format(time.RFC3339),
 	}
-	if _, err := db.InsertCreatorForwarding(ctx, cf); err != nil {
+	if _, err := db.Forwarding().InsertCreatorForwarding(ctx, cf); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
 	if _, err := db.db.ExecContext(ctx, `UPDATE creator_forwardings
@@ -751,13 +751,13 @@ func TestMarkCreatorForwardingEnqueueRetry_FromForwarding(t *testing.T) {
 	}
 
 	nextAttempt := time.Now().UTC().Add(2 * time.Minute)
-	err := db.MarkCreatorForwardingEnqueueRetry(ctx, "cf-enq-retry",
+	err := db.Forwarding().MarkCreatorForwardingEnqueueRetry(ctx, "cf-enq-retry",
 		"runner-enqueue", "lease-enqueue", "ENQUEUE_FAILED", "atomic write conflict", nextAttempt)
 	if err != nil {
 		t.Fatalf("MarkCreatorForwardingEnqueueRetry: %v", err)
 	}
 
-	saved, err := db.GetCreatorForwarding(ctx, "cf-enq-retry")
+	saved, err := db.Forwarding().GetCreatorForwarding(ctx, "cf-enq-retry")
 	if err != nil {
 		t.Fatalf("GetCreatorForwarding: %v", err)
 	}
@@ -788,13 +788,13 @@ func TestMarkCreatorForwardingEnqueueRetry_FromReadyToForward(t *testing.T) {
 	}
 
 	nextAttempt := time.Now().UTC().Add(30 * time.Second)
-	err := db.MarkCreatorForwardingEnqueueRetry(ctx, "cf-r2f-retry",
+	err := db.Forwarding().MarkCreatorForwardingEnqueueRetry(ctx, "cf-r2f-retry",
 		"runner-ready", "lease-ready", "PREPARE_FAILED", "invalid payload", nextAttempt)
 	if err != nil {
 		t.Fatalf("MarkCreatorForwardingEnqueueRetry: %v", err)
 	}
 
-	saved, err := db.GetCreatorForwarding(ctx, "cf-r2f-retry")
+	saved, err := db.Forwarding().GetCreatorForwarding(ctx, "cf-r2f-retry")
 	if err != nil {
 		t.Fatalf("GetCreatorForwarding: %v", err)
 	}
@@ -809,7 +809,7 @@ func TestCannotClaimTerminalForwarding(t *testing.T) {
 
 	insertTestForwarding(t, db, "cf-final", "openai", "creator-final", "scene.composite.v1", "FORWARDED")
 
-	leases, err := db.ClaimCreatorForwardings(ctx, "runner-x", "cf", 5*time.Minute, 1)
+	leases, err := db.Forwarding().ClaimCreatorForwardings(ctx, "runner-x", "cf", 5*time.Minute, 1)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
