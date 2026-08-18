@@ -10,17 +10,31 @@
 package forwardingstore
 
 import (
+	"context"
 	"database/sql"
 	"time"
 
 	"velox-server/internal/forwardingcontract"
+	"velox-server/internal/jobs"
 	"velox-server/internal/storecore"
+	"velox-server/internal/taskgraph"
 )
+
+// JobTaskTxCreator is the cross-domain injection point for the atomic
+// forwarding transaction. AtomicForwardAndEnqueue must create the Job+Task+
+// TaskSpec rows inside the SAME transaction as the forwarding CAS, so this
+// leaf accepts a narrow Tx-scoped creator instead of importing the store
+// god-package (which would create a store ↔ forwardingstore cycle).
+// store.AtomicJobTaskCreator implements it.
+type JobTaskTxCreator interface {
+	CreateJobWithTaskTx(ctx context.Context, tx *sql.Tx, job *jobs.Job, taskSpec *taskgraph.TaskSpec, priority int) error
+}
 
 // SQLiteForwardingStore implements the creator_forwardings persistence
 // surface against a *sql.DB.
 type SQLiteForwardingStore struct {
-	db *sql.DB
+	db             *sql.DB
+	jobTaskCreator JobTaskTxCreator
 }
 
 // NewSQLiteForwardingStore wraps an existing *sql.DB as a
@@ -30,6 +44,18 @@ func NewSQLiteForwardingStore(db *sql.DB) *SQLiteForwardingStore {
 		panic("store: NewSQLiteForwardingStore requires a non-nil *sql.DB")
 	}
 	return &SQLiteForwardingStore{db: db}
+}
+
+// WithJobTaskCreator injects the cross-domain Job+Task creator used by
+// AtomicForwardAndEnqueue. Without it the atomic enqueue fails closed,
+// because the forwarding CAS and the Job+Task+TaskSpec INSERTs must share
+// one transaction (see forwardingstore_atomic.go).
+func (s *SQLiteForwardingStore) WithJobTaskCreator(c JobTaskTxCreator) *SQLiteForwardingStore {
+	if s == nil {
+		return s
+	}
+	s.jobTaskCreator = c
+	return s
 }
 
 // nowRFC3339 returns the current UTC time formatted for a store timestamp
