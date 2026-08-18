@@ -9,8 +9,8 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 
 	"velox-server/internal/artifacts"
+	"velox-server/internal/artifactsstore"
 	"velox-server/internal/deliveries"
-	"velox-server/internal/store"
 )
 
 func TestFinalizeVerified_StampsRetryBudgetFromPlan(t *testing.T) {
@@ -49,7 +49,7 @@ func TestFinalizeVerified_MissingPlanFailsClosedWithoutDeliveries(t *testing.T) 
 	db := openPropagationDB(t)
 	seedPhase5Fixture(t, db, phase5Fixture{JobID: "J-no-plan", WorkerID: "w", LeaseID: "l", Revision: 1, AttemptNumber: 1, ArtifactID: "art-no-plan", UploadID: "up-no-plan", RequestJSON: `{}`})
 	resolver := deliveries.NewSQLiteDeliveryPlanResolver(db)
-	writer := artifacts.NewSQLiteFinalizeWriter(store.NewSQLiteArtifactFinalizer(db, resolver))
+	writer := artifacts.NewSQLiteFinalizeWriter(artifactsstore.NewSQLiteArtifactFinalizer(db, resolver))
 	_, err := writer.FinalizeVerified(context.Background(), artifacts.FinalizeVerifiedCommand{UploadID: "up-no-plan", ArtifactID: "art-no-plan", JobID: "J-no-plan", WorkerID: "w", LeaseID: "l", AttemptNumber: 1, ExpectedRevision: 1, StorageProvider: "local", StorageKey: "artifacts/J-no-plan/1", SHA256: testSHA256, SizeBytes: 1024, MIMEType: "video/mp4", VerifiedAt: time.Now().UTC()})
 	if err == nil || !errors.Is(err, deliveries.ErrNoExplicitPlan) {
 		t.Fatalf("missing explicit plan error = %v, want ErrNoExplicitPlan", err)
@@ -67,7 +67,7 @@ func TestFinalizeVerified_RenderOnlySucceedsWithoutPlan(t *testing.T) {
 	db := openPropagationDB(t)
 	seedPhase5Fixture(t, db, phase5Fixture{JobID: "J-render-only", WorkerID: "w", LeaseID: "l", Revision: 1, AttemptNumber: 1, ArtifactID: "art-render-only", UploadID: "up-render-only", RequestJSON: `{"render_only":true}`, Status: "AWAITING_ARTIFACT"})
 	resolver := deliveries.NewSQLiteDeliveryPlanResolver(db)
-	writer := artifacts.NewSQLiteFinalizeWriter(store.NewSQLiteArtifactFinalizer(db, resolver))
+	writer := artifacts.NewSQLiteFinalizeWriter(artifactsstore.NewSQLiteArtifactFinalizer(db, resolver))
 	_, err := writer.FinalizeVerified(context.Background(), artifacts.FinalizeVerifiedCommand{UploadID: "up-render-only", ArtifactID: "art-render-only", JobID: "J-render-only", WorkerID: "w", LeaseID: "l", AttemptNumber: 1, ExpectedRevision: 1, StorageProvider: "local", StorageKey: "artifacts/J-render-only/1", SHA256: testSHA256, SizeBytes: 1024, MIMEType: "video/mp4", VerifiedAt: time.Now().UTC()})
 	if err != nil {
 		t.Fatal(err)
@@ -92,7 +92,7 @@ func TestFinalizeVerified_SingleDestinationDefaultsToFive(t *testing.T) {
 	db := openPropagationDB(t)
 	seedPhase5Fixture(t, db, phase5Fixture{JobID: "J-single", WorkerID: "w", LeaseID: "l", Revision: 1, AttemptNumber: 1, ArtifactID: "art-single", UploadID: "up-single"})
 	seedDeliveryPlans(t, db, "J-single", []phase5Plan{{"primary", 1, 10, true}})
-	fin := artifacts.NewSQLiteFinalizeWriter(store.NewSQLiteArtifactFinalizer(db, nil))
+	fin := artifacts.NewSQLiteFinalizeWriter(artifactsstore.NewSQLiteArtifactFinalizer(db, nil))
 	_, err := fin.FinalizeVerified(context.Background(), artifacts.FinalizeVerifiedCommand{UploadID: "up-single", ArtifactID: "art-single", JobID: "J-single", WorkerID: "w", LeaseID: "l", AttemptNumber: 1, ExpectedRevision: 1, DestinationID: "primary", StorageProvider: "local", StorageKey: "artifacts/J-single/1", SHA256: testSHA256, SizeBytes: 1024, MIMEType: "video/mp4", VerifiedAt: time.Now().UTC()})
 	if err != nil {
 		t.Fatal(err)

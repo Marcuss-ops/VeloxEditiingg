@@ -68,8 +68,10 @@ var allowedWriters = map[string]bool{
 	filepath.Join("internal", "artifacts", "sqlite_finalize_writer.go"): true,
 	// FinalizeVerified (the jobs CAS) was split out of the model/schema
 	// base file into a responsibility-specific file; the SUCCEEDED flip
-	// and the count tripwire below both read this file.
-	filepath.Join("internal", "store", "artifact_finalization_finalize.go"): true,
+	// and the count tripwire below both read this file. The finalization
+	// transaction moved into the artifactsstore leaf during the store
+	// god-package decoupling.
+	filepath.Join("internal", "artifactsstore", "finalization_finalize.go"): true,
 	// Coordinator.CommitAttempt is the canonical atomic SUCCEEDED tx
 	// writer for tasks + task_attempts + jobs in the Completion flow.
 	filepath.Join("internal", "completion", "coordinator.go"): true,
@@ -82,7 +84,7 @@ var allowedWriters = map[string]bool{
 	// previously allowlisted as internal/store/completion_repository_finalize.go
 	// — it is NOT the verified-finalization lifecycle and does not
 	// route through FinalizeVerified.
-	filepath.Join("internal", "store", "completion_repository.go"): true,
+	filepath.Join("internal", "store", "completion_repository.go"):                    true,
 	filepath.Join("internal", "completionstore", "completion_repository_finalize.go"): true,
 	// Interface + commands: contains the regex literal in a doc
 	// comment EXPLAINING the contract. No executable SQL update.
@@ -323,7 +325,7 @@ func TestSucceededWriterIsFinalizationOnly(t *testing.T) {
 // reasoning) — the bound is a tripwire, not a permanent spec.
 func TestSucceededWriterCount(t *testing.T) {
 	root := findInternalRoot(t)
-	path := filepath.Join(root, "internal", "store", "artifact_finalization_finalize.go")
+	path := filepath.Join(root, "internal", "artifactsstore", "finalization_finalize.go")
 	b, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read writer: %v", err)

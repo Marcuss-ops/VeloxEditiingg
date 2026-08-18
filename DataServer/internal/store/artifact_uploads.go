@@ -53,6 +53,7 @@ import (
 	"errors"
 
 	"velox-server/internal/repository"
+	"velox-server/internal/storecore"
 )
 
 // ── TYPES ────────────────────────────────────────────────────────────────
@@ -98,10 +99,10 @@ const (
 var (
 	// ErrUploadNotFound is returned when an uploadID lookup matches 0
 	// rows in artifact_uploads.
-	ErrUploadNotFound = errors.New("store: upload session not found")
+	ErrUploadNotFound = storecore.ErrUploadNotFound
 	// ErrUploadStateInvalid is returned when the upload session exists
 	// but its status does not match an operation's precondition.
-	ErrUploadStateInvalid = errors.New("store: upload session not in expected state")
+	ErrUploadStateInvalid = storecore.ErrUploadStateInvalid
 	// ErrUploadExpired is returned when ExpiresAt has passed at lookup.
 	ErrUploadExpired = errors.New("store: upload session expired")
 	// ErrTransitionConflict is declared in jobs_writer_types.go for the

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"velox-server/internal/artifactsstore"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
 	"velox-server/internal/taskoutput_artifacts"
@@ -297,8 +298,8 @@ func TestE2E_RunningAttemptLifecycle(t *testing.T) {
 		 (job_id, destination_id, enabled, priority, retry_budget, metadata_json, created_at, updated_at)
 		VALUES (?, ?, 1, 0, 1, '{}', ?, ?)`, jobID, destID, nowString, nowString)
 
-	finalizer := NewSQLiteArtifactFinalizer(store.DB(), nil)
-	if _, err := finalizer.FinalizeVerified(ctx, FinalizeVerifiedParams{
+	finalizer := artifactsstore.NewSQLiteArtifactFinalizer(store.DB(), nil)
+	if _, err := finalizer.FinalizeVerified(ctx, artifactsstore.FinalizeVerifiedParams{
 		UploadID: uploadID, ArtifactID: artifactID, JobID: jobID,
 		WorkerID: workerID, LeaseID: leaseID, AttemptNumber: attempt.AttemptNumber,
 		StorageProvider: "local", StorageKey: "artifacts/" + jobID + "/" + verifiedSHA256,

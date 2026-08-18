@@ -25,6 +25,7 @@ import (
 	"fmt"
 
 	"velox-server/internal/statemachine"
+	"velox-server/internal/storecore"
 )
 
 // ErrArtifactTransitionConflict is returned when TransitionArtifactStatus
@@ -33,7 +34,7 @@ import (
 var ErrArtifactTransitionConflict = errors.New("artifact: transition from-state mismatch")
 
 // ErrArtifactNotFound is returned when the artifact_id does not exist.
-var ErrArtifactNotFound = errors.New("artifact: not found")
+var ErrArtifactNotFound = storecore.ErrArtifactNotFound
 
 // TransitionArtifactStatus atomically moves an artifact from `from` to `to`.
 // Used as Tx1 (STAGING → VERIFYING) and as the late Verifying→Quarantined

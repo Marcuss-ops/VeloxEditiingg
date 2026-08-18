@@ -50,6 +50,17 @@ var (
 	// ErrPublicationPhaseConflict is returned when a publication phase effect
 	// CAS does not match.
 	ErrPublicationPhaseConflict = errors.New("store: publication phase effect conflict")
+
+	// ErrUploadNotFound is returned when an uploadID lookup matches 0 rows in
+	// artifact_uploads.
+	ErrUploadNotFound = errors.New("store: upload session not found")
+
+	// ErrUploadStateInvalid is returned when the upload session exists but its
+	// status does not match an operation's precondition.
+	ErrUploadStateInvalid = errors.New("store: upload session not in expected state")
+
+	// ErrArtifactNotFound is returned when the artifact_id does not exist.
+	ErrArtifactNotFound = errors.New("artifact: not found")
 )
 
 // RowsAffectedReader is the narrow persistence-boundary contract this leaf

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"velox-server/internal/artifacts"
+	"velox-server/internal/artifactsstore"
 	"velox-server/internal/store"
 )
 
@@ -144,7 +145,7 @@ CREATE TABLE IF NOT EXISTS artifact_uploads (upload_id TEXT PRIMARY KEY, artifac
 	if _, err := db.DB().Exec(`INSERT INTO artifact_uploads (upload_id,artifact_id,job_id,attempt_number,worker_id,lease_id,status,expected_size_bytes,expected_sha256,expected_revision,temporary_storage_key,received_sha256,received_size_bytes,created_at,expires_at) VALUES (?, ?, ?, 1, ?, 'lease-level-d', 'FINALIZING', ?, ?, 0, ?, ?, ?, ?, ?)`, uploadID, artifactID, jobID, op.WorkerID, drive.bytes, drive.hash, "smoke-level-d-real", drive.hash, drive.bytes, now, now); err != nil {
 		t.Fatal(err)
 	}
-	writer := artifacts.NewSQLiteFinalizeWriter(store.NewSQLiteArtifactFinalizer(db.DB(), nil))
+	writer := artifacts.NewSQLiteFinalizeWriter(artifactsstore.NewSQLiteArtifactFinalizer(db.DB(), nil))
 	if _, err := writer.FinalizeVerified(context.Background(), artifacts.FinalizeVerifiedCommand{
 		UploadID: uploadID, ArtifactID: artifactID, JobID: jobID,
 		WorkerID: op.WorkerID, LeaseID: "lease-level-d", AttemptNumber: 1,

@@ -62,7 +62,7 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 	artifactReader := store.NewSQLiteArtifactReaderFromStore(p.SQLite)
 	authReader := store.NewSQLiteAuthReaderFromStore(p.SQLite)
 	uploadWriter := artifacts.NewSQLiteUploadSessionWriter(store.NewSQLiteUploadSessionWriterFromStore(p.SQLite))
-	finalizeWriter := artifacts.NewSQLiteFinalizeWriter(store.NewSQLiteArtifactFinalizerFromStore(p.SQLite, planResolver))
+	finalizeWriter := artifacts.NewSQLiteFinalizeWriter(artifactsstore.NewSQLiteArtifactFinalizer(p.SQLite.DB(), planResolver))
 	// JobDeliveryCounter typed reader — required by NewService post
 	// the VELOX_FFPROBE_VERIFY_ON_FINALIZE gate (RW-PROD-008 A4).
 	// Production cannot silently run the gate without it; NewService

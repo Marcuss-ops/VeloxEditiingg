@@ -68,7 +68,7 @@ func TestUploadCompletedVideo_ArtifactsPipeline(t *testing.T) {
 	artifactSvc := artifacts.NewService(
 		repo,
 		artifacts.NewSQLiteUploadSessionWriter(store.NewSQLiteUploadSessionWriter(db)),
-		artifacts.NewSQLiteFinalizeWriter(store.NewSQLiteArtifactFinalizer(db, nil)),
+		artifacts.NewSQLiteFinalizeWriter(artifactsstore.NewSQLiteArtifactFinalizer(db, nil)),
 		artifactReader,
 		bs,
 		store.NewSQLiteAuthReader(db),
@@ -265,7 +265,7 @@ func TestUploadCompletedVideo_BeginUploadRejected_MissingJob(t *testing.T) {
 	artifactSvc := artifacts.NewService(
 		repo,
 		artifacts.NewSQLiteUploadSessionWriter(store.NewSQLiteUploadSessionWriter(db)),
-		artifacts.NewSQLiteFinalizeWriter(store.NewSQLiteArtifactFinalizer(db, nil)),
+		artifacts.NewSQLiteFinalizeWriter(artifactsstore.NewSQLiteArtifactFinalizer(db, nil)),
 		artifactReader,
 		bs,
 		store.NewSQLiteAuthReader(db),
@@ -330,7 +330,7 @@ func TestUploadCompletedVideo_MissingVideo(t *testing.T) {
 	artifactSvc := artifacts.NewService(
 		repo,
 		artifacts.NewSQLiteUploadSessionWriter(store.NewSQLiteUploadSessionWriter(db)),
-		artifacts.NewSQLiteFinalizeWriter(store.NewSQLiteArtifactFinalizer(db, nil)),
+		artifacts.NewSQLiteFinalizeWriter(artifactsstore.NewSQLiteArtifactFinalizer(db, nil)),
 		artifactReader,
 		bs,
 		store.NewSQLiteAuthReader(db),

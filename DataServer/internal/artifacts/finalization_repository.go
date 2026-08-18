@@ -121,7 +121,8 @@ type UploadSessionWriter interface {
 }
 
 // FinalizationWriter is the narrow application port for verified finalization.
-// The store adapter owns the transaction and all SQL statements.
+// The artifactsstore leaf owns the transaction and all SQL statements; the
+// SQLiteFinalizeWriter adapter projects the command onto the leaf params.
 type FinalizationWriter interface {
 	FinalizeVerified(ctx context.Context, cmd FinalizeVerifiedCommand) (*store.Artifact, error)
 }

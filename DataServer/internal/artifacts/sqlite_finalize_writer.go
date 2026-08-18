@@ -3,22 +3,23 @@ package artifacts
 import (
 	"context"
 
+	"velox-server/internal/artifactsstore"
 	"velox-server/internal/store"
 )
 
-// COMPATIBILITY:
-// Owner:        P0.4 artifacts-store migration
-// Remove after: 2026-09-30
-// Read-only:    yes (delegates to the store finalizer; no second write path)
+// SQLiteFinalizeWriter adapts the artifactsstore leaf finalizer to the
+// FinalizationWriter port. It owns the command→params projection and the
+// store-error translation at the Service boundary; the leaf owns the
+// transaction and all SQL statements.
 type SQLiteFinalizeWriter struct {
-	inner *store.SQLiteArtifactFinalizer
+	inner *artifactsstore.SQLiteArtifactFinalizer
 }
 
-// NewSQLiteFinalizeWriter supports both existing (db, reader, resolver)
-// callers and the store-owned finalizer form.
-func NewSQLiteFinalizeWriter(inner *store.SQLiteArtifactFinalizer) *SQLiteFinalizeWriter {
+// NewSQLiteFinalizeWriter binds the leaf finalizer. The leaf owns the
+// transaction and all SQL statements.
+func NewSQLiteFinalizeWriter(inner *artifactsstore.SQLiteArtifactFinalizer) *SQLiteFinalizeWriter {
 	if inner == nil {
-		panic("artifacts: NewSQLiteFinalizeWriter requires a non-nil store finalizer")
+		panic("artifacts: NewSQLiteFinalizeWriter requires a non-nil artifactsstore finalizer")
 	}
 	return &SQLiteFinalizeWriter{inner: inner}
 }
@@ -26,7 +27,7 @@ func NewSQLiteFinalizeWriter(inner *store.SQLiteArtifactFinalizer) *SQLiteFinali
 var _ FinalizationWriter = (*SQLiteFinalizeWriter)(nil)
 
 func (w *SQLiteFinalizeWriter) FinalizeVerified(ctx context.Context, cmd FinalizeVerifiedCommand) (*store.Artifact, error) {
-	out, err := w.inner.FinalizeVerified(ctx, store.FinalizeVerifiedParams{
+	out, err := w.inner.FinalizeVerified(ctx, artifactsstore.FinalizeVerifiedParams{
 		UploadID: cmd.UploadID, ArtifactID: cmd.ArtifactID, JobID: cmd.JobID,
 		AttemptID: cmd.AttemptID, WorkerID: cmd.WorkerID, LeaseID: cmd.LeaseID,
 		AttemptNumber: cmd.AttemptNumber, ExpectedRevision: cmd.ExpectedRevision,

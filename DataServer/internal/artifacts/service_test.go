@@ -120,7 +120,7 @@ func openTestEnvAt(t *testing.T, tmp string) *testEnv {
 	artifactReader := store.NewSQLiteArtifactReader(db)
 	authReader := store.NewSQLiteAuthReader(db)
 	uploadWriter := NewSQLiteUploadSessionWriter(store.NewSQLiteUploadSessionWriter(db))
-	finalizeWriter := NewSQLiteFinalizeWriter(store.NewSQLiteArtifactFinalizer(db, deliveries.NewSQLiteDeliveryPlanResolver(db)))
+	finalizeWriter := NewSQLiteFinalizeWriter(artifactsstore.NewSQLiteArtifactFinalizer(db, deliveries.NewSQLiteDeliveryPlanResolver(db)))
 	jobCounter := artifactsstore.NewSQLiteJobDeliveryCounter(db)
 	svc := NewService(repo, uploadWriter, finalizeWriter, artifactReader, bs, authReader, clk, jobCounter)
 

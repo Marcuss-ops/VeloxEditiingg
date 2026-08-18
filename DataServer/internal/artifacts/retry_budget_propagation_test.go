@@ -11,7 +11,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 
 	"velox-server/internal/artifacts"
-	"velox-server/internal/store"
+	"velox-server/internal/artifactsstore"
 )
 
 const testSHA256 = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
@@ -94,7 +94,7 @@ func seedDeliveryPlans(t *testing.T, db *sql.DB, jobID string, plans []phase5Pla
 }
 func runFinalize(t *testing.T, db *sql.DB, resolver artifacts.DeliveryPlanResolver, cmd artifacts.FinalizeVerifiedCommand) (*artifacts.SQLiteFinalizeWriter, *sql.DB) {
 	t.Helper()
-	fin := artifacts.NewSQLiteFinalizeWriter(store.NewSQLiteArtifactFinalizer(db, resolver))
+	fin := artifacts.NewSQLiteFinalizeWriter(artifactsstore.NewSQLiteArtifactFinalizer(db, resolver))
 	if _, err := fin.FinalizeVerified(context.Background(), cmd); err != nil {
 		t.Fatalf("FinalizeVerified: %v", err)
 	}

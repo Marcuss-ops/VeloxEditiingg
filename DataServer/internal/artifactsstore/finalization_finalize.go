@@ -1,4 +1,4 @@
-package store
+package artifactsstore
 
 import (
 	"context"
@@ -12,25 +12,27 @@ import (
 	"velox-server/internal/deliverycontract"
 	"velox-server/internal/identity"
 	"velox-server/internal/jobs"
+	"velox-server/internal/repository"
+	"velox-server/internal/storecore"
 )
 
-// artifact_finalization_finalize.go owns the verified artifact finalization
+// finalization_finalize.go owns the verified artifact finalization
 // transaction (FinalizeVerified) and its delivery-insert / post-tx read
-// helpers. The finalizer type and params live in artifact_finalization.go.
+// helpers. The finalizer type and params live in finalization.go.
 
-func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p FinalizeVerifiedParams) (*Artifact, error) {
+func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p FinalizeVerifiedParams) (*repository.Artifact, error) {
 	if p.UploadID == "" || p.ArtifactID == "" || p.JobID == "" {
-		return nil, fmt.Errorf("store: FinalizeVerified: upload/artifact/job ids are required")
+		return nil, fmt.Errorf("artifactsstore: FinalizeVerified: upload/artifact/job ids are required")
 	}
 	// The final job transition is only legal after the verifier has produced
 	// durable content-addressed metadata. Empty keys or hashes must fail
 	// closed; a URL or worker declaration is not proof of a READY artifact.
 	if p.StorageKey == "" || !isCanonicalSHA256(p.SHA256) {
-		return nil, fmt.Errorf("store: FinalizeVerified: verified storage key and canonical sha256 are required")
+		return nil, fmt.Errorf("artifactsstore: FinalizeVerified: verified storage key and canonical sha256 are required")
 	}
 	tx, err := w.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, fmt.Errorf("store: FinalizeVerified begin: %w", err)
+		return nil, fmt.Errorf("artifactsstore: FinalizeVerified begin: %w", err)
 	}
 	committed := false
 	defer func() {
@@ -49,21 +51,21 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 		FROM artifact_uploads WHERE upload_id = ?`, p.UploadID).
 		Scan(&status, &workerID, &leaseID, &receivedSHA, &expectedSHA, &receivedSize, &expectedSize, &attemptNumber); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("%w: upload_id=%s", ErrUploadNotFound, p.UploadID)
+			return nil, fmt.Errorf("%w: upload_id=%s", storecore.ErrUploadNotFound, p.UploadID)
 		}
-		return nil, fmt.Errorf("store: FinalizeVerified upload precondition: %w", err)
+		return nil, fmt.Errorf("artifactsstore: FinalizeVerified upload precondition: %w", err)
 	}
 	if status != "FINALIZING" {
-		return nil, fmt.Errorf("%w: upload=%s status=%s (expected FINALIZING)", ErrUploadStateInvalid, p.UploadID, status)
+		return nil, fmt.Errorf("%w: upload=%s status=%s (expected FINALIZING)", storecore.ErrUploadStateInvalid, p.UploadID, status)
 	}
 	if workerID != p.WorkerID || leaseID != p.LeaseID || attemptNumber != p.AttemptNumber {
-		return nil, fmt.Errorf("%w: upload=%s auth mismatch", ErrTransitionConflict, p.UploadID)
+		return nil, fmt.Errorf("%w: upload=%s auth mismatch", storecore.ErrTransitionConflict, p.UploadID)
 	}
 	if !isCanonicalSHA256(receivedSHA) || receivedSHA != p.SHA256 ||
 		!isCanonicalSHA256(expectedSHA) || expectedSHA != receivedSHA ||
 		!receivedSize.Valid || receivedSize.Int64 != p.SizeBytes ||
 		!expectedSize.Valid || expectedSize.Int64 != receivedSize.Int64 {
-		return nil, fmt.Errorf("%w: upload=%s expected/master-computed hash/size does not match verified metadata", ErrTransitionConflict, p.UploadID)
+		return nil, fmt.Errorf("%w: upload=%s expected/master-computed hash/size does not match verified metadata", storecore.ErrTransitionConflict, p.UploadID)
 	}
 
 	now := p.VerifiedAt
@@ -86,14 +88,14 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 			"SUCCEEDED", nowStr, nowStr, attemptID, nowStr,
 			p.JobID, attemptID, p.WorkerID, p.LeaseID)
 		if err != nil {
-			return nil, fmt.Errorf("store: FinalizeVerified task winner CAS: %w", err)
+			return nil, fmt.Errorf("artifactsstore: FinalizeVerified task winner CAS: %w", err)
 		}
-		n, rowsErr := readRowsAffected(res, "FinalizeVerified task winner CAS")
+		n, rowsErr := storecore.ReadRowsAffected(res, "FinalizeVerified task winner CAS")
 		if rowsErr != nil {
 			return nil, rowsErr
 		}
 		if n != 1 {
-			return nil, fmt.Errorf("%w: task winner affected=%d attempt=%s", ErrTransitionConflict, n, attemptID)
+			return nil, fmt.Errorf("%w: task winner affected=%d attempt=%s", storecore.ErrTransitionConflict, n, attemptID)
 		}
 		// Determinism chain (migration 148): stamp the master-computed
 		// authoritative artifact SHA on the winning attempt. The worker
@@ -118,14 +120,14 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 			       OR (status = 'SUCCEEDED' AND (artifact_sha256 = '' OR artifact_sha256 = ?)))`,
 			"SUCCEEDED", nowStr, nowStr, p.SHA256, p.SHA256, attemptID, p.JobID, attemptID, p.WorkerID, p.LeaseID, p.SHA256)
 		if err != nil {
-			return nil, fmt.Errorf("store: FinalizeVerified attempt winner CAS: %w", err)
+			return nil, fmt.Errorf("artifactsstore: FinalizeVerified attempt winner CAS: %w", err)
 		}
-		n, rowsErr = readRowsAffected(res, "FinalizeVerified attempt winner CAS")
+		n, rowsErr = storecore.ReadRowsAffected(res, "FinalizeVerified attempt winner CAS")
 		if rowsErr != nil {
 			return nil, rowsErr
 		}
 		if n != 1 {
-			return nil, fmt.Errorf("%w: attempt winner affected=%d attempt=%s", ErrTransitionConflict, n, attemptID)
+			return nil, fmt.Errorf("%w: attempt winner affected=%d attempt=%s", storecore.ErrTransitionConflict, n, attemptID)
 		}
 	} else {
 		// Legacy finalize messages omit AttemptID. Keep compatibility with
@@ -140,9 +142,9 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 			  AND status IN ('RUNNING', 'LEASED', 'PENDING')`,
 			"SUCCEEDED", nowStr, nowStr, p.JobID, p.WorkerID, p.LeaseID)
 		if err != nil {
-			return nil, fmt.Errorf("store: FinalizeVerified legacy task fence: %w", err)
+			return nil, fmt.Errorf("artifactsstore: FinalizeVerified legacy task fence: %w", err)
 		}
-		n, rowsErr := readRowsAffected(res, "FinalizeVerified legacy task fence")
+		n, rowsErr := storecore.ReadRowsAffected(res, "FinalizeVerified legacy task fence")
 		if rowsErr != nil {
 			return nil, rowsErr
 		}
@@ -153,7 +155,7 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 					SELECT 1 FROM sqlite_master
 					WHERE type = 'table' AND name = 'task_attempts'
 				)`).Scan(&hasAttemptsTable); err != nil {
-				return nil, fmt.Errorf("store: FinalizeVerified legacy attempt schema lookup: %w", err)
+				return nil, fmt.Errorf("artifactsstore: FinalizeVerified legacy attempt schema lookup: %w", err)
 			}
 			if hasAttemptsTable == 1 {
 				// Since migration 048 the task row is deliberately not the
@@ -172,9 +174,9 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 					  )`,
 					"SUCCEEDED", nowStr, nowStr, p.JobID, p.AttemptNumber, p.WorkerID, p.LeaseID)
 				if err != nil {
-					return nil, fmt.Errorf("store: FinalizeVerified legacy attempt fence: %w", err)
+					return nil, fmt.Errorf("artifactsstore: FinalizeVerified legacy attempt fence: %w", err)
 				}
-				n, rowsErr = readRowsAffected(res, "FinalizeVerified legacy attempt fence")
+				n, rowsErr = storecore.ReadRowsAffected(res, "FinalizeVerified legacy attempt fence")
 				if rowsErr != nil {
 					return nil, rowsErr
 				}
@@ -187,13 +189,13 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 			// this upload lease.
 			var taskCount int
 			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM tasks WHERE job_id = ?`, p.JobID).Scan(&taskCount); err != nil {
-				return nil, fmt.Errorf("store: FinalizeVerified legacy task fence lookup: %w", err)
+				return nil, fmt.Errorf("artifactsstore: FinalizeVerified legacy task fence lookup: %w", err)
 			}
 			if taskCount > 0 {
 				var currentStatus, currentWorker, currentLease string
 				var hasMatchingAttempt int
 				if err := tx.QueryRowContext(ctx, `SELECT status, COALESCE(worker_id, ''), COALESCE(lease_id, '') FROM tasks WHERE job_id = ?`, p.JobID).Scan(&currentStatus, &currentWorker, &currentLease); err != nil {
-					return nil, fmt.Errorf("store: FinalizeVerified legacy task fence state: %w", err)
+					return nil, fmt.Errorf("artifactsstore: FinalizeVerified legacy task fence state: %w", err)
 				}
 				ownerMatches := currentWorker == p.WorkerID && currentLease == p.LeaseID
 				if !ownerMatches {
@@ -202,7 +204,7 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 							SELECT 1 FROM sqlite_master
 							WHERE type = 'table' AND name = 'task_attempts'
 						)`).Scan(&hasAttemptsTable); err != nil {
-						return nil, fmt.Errorf("store: FinalizeVerified legacy idempotency schema lookup: %w", err)
+						return nil, fmt.Errorf("artifactsstore: FinalizeVerified legacy idempotency schema lookup: %w", err)
 					}
 					if hasAttemptsTable == 1 {
 						if err := tx.QueryRowContext(ctx, `
@@ -213,13 +215,13 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 								  AND worker_id = ?
 								  AND lease_id = ?
 							)`, p.JobID, p.AttemptNumber, p.WorkerID, p.LeaseID).Scan(&hasMatchingAttempt); err != nil {
-							return nil, fmt.Errorf("store: FinalizeVerified legacy attempt idempotency lookup: %w", err)
+							return nil, fmt.Errorf("artifactsstore: FinalizeVerified legacy attempt idempotency lookup: %w", err)
 						}
 						ownerMatches = hasMatchingAttempt == 1
 					}
 				}
 				if currentStatus != "SUCCEEDED" || !ownerMatches {
-					return nil, fmt.Errorf("%w: legacy task fence affected=%d upload=%s", ErrTransitionConflict, n, p.UploadID)
+					return nil, fmt.Errorf("%w: legacy task fence affected=%d upload=%s", storecore.ErrTransitionConflict, n, p.UploadID)
 				}
 			}
 		}
@@ -236,27 +238,27 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 			p.StorageProvider, p.StorageKey, p.SHA256, p.SizeBytes, p.MIMEType,
 			nowStr, p.ArtifactID, p.JobID)
 		if err != nil {
-			return nil, fmt.Errorf("store: FinalizeVerified async artifacts CAS: %w", err)
+			return nil, fmt.Errorf("artifactsstore: FinalizeVerified async artifacts CAS: %w", err)
 		}
-		n, rowsErr := readRowsAffected(res, "FinalizeVerified async artifacts CAS")
+		n, rowsErr := storecore.ReadRowsAffected(res, "FinalizeVerified async artifacts CAS")
 		if rowsErr != nil {
 			return nil, rowsErr
 		}
 		if n != 1 {
-			return nil, fmt.Errorf("%w: async artifacts affected=%d artifact=%s", ErrTransitionConflict, n, p.ArtifactID)
+			return nil, fmt.Errorf("%w: async artifacts affected=%d artifact=%s", storecore.ErrTransitionConflict, n, p.ArtifactID)
 		}
 		res, err = tx.ExecContext(ctx, `
 			UPDATE artifact_uploads SET status = 'COMPLETED', completed_at = ?
 			WHERE upload_id = ? AND status = 'FINALIZING'`, nowStr, p.UploadID)
 		if err != nil {
-			return nil, fmt.Errorf("store: FinalizeVerified async upload CAS: %w", err)
+			return nil, fmt.Errorf("artifactsstore: FinalizeVerified async upload CAS: %w", err)
 		}
-		n, rowsErr = readRowsAffected(res, "FinalizeVerified async upload CAS")
+		n, rowsErr = storecore.ReadRowsAffected(res, "FinalizeVerified async upload CAS")
 		if rowsErr != nil {
 			return nil, rowsErr
 		}
 		if n != 1 {
-			return nil, fmt.Errorf("%w: async upload affected=%d upload=%s", ErrTransitionConflict, n, p.UploadID)
+			return nil, fmt.Errorf("%w: async upload affected=%d upload=%s", storecore.ErrTransitionConflict, n, p.UploadID)
 		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO media_probe_jobs			(artifact_id, sha256, storage_key, expected_audio_streams, destination_id, status,
@@ -266,10 +268,10 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 			ON CONFLICT(artifact_id, sha256) DO NOTHING`,
 			p.ArtifactID, p.SHA256, p.StorageKey, p.ExpectedAudioStreams, p.DestinationID,
 			nowStr, nowStr, nowStr); err != nil {
-			return nil, fmt.Errorf("store: FinalizeVerified async probe enqueue: %w", err)
+			return nil, fmt.Errorf("artifactsstore: FinalizeVerified async probe enqueue: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
-			return nil, fmt.Errorf("store: FinalizeVerified async commit: %w", err)
+			return nil, fmt.Errorf("artifactsstore: FinalizeVerified async commit: %w", err)
 		}
 		committed = true
 		return readArtifact(ctx, w.db, p.ArtifactID)
@@ -285,7 +287,7 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 	} else if w.resolver != nil {
 		resolved, resolveErr := w.resolver.ResolveDestinations(ctx, p.JobID, p.ArtifactID)
 		if resolveErr != nil && !errors.Is(resolveErr, deliverycontract.ErrNoExplicitPlan) {
-			return nil, fmt.Errorf("store: FinalizeVerified plan resolver: %w", resolveErr)
+			return nil, fmt.Errorf("artifactsstore: FinalizeVerified plan resolver: %w", resolveErr)
 		}
 		if resolveErr == nil {
 			destinations = resolved
@@ -297,11 +299,11 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 		if err := tx.QueryRowContext(ctx,
 			`SELECT COALESCE(request_json, '{}') FROM jobs WHERE job_id = ?`, p.JobID).
 			Scan(&requestJSON); err != nil {
-			return nil, fmt.Errorf("store: FinalizeVerified render contract: %w", err)
+			return nil, fmt.Errorf("artifactsstore: FinalizeVerified render contract: %w", err)
 		}
 		var contract map[string]interface{}
 		if err := json.Unmarshal([]byte(requestJSON), &contract); err != nil {
-			return nil, fmt.Errorf("store: FinalizeVerified render contract: invalid request_json: %w", err)
+			return nil, fmt.Errorf("artifactsstore: FinalizeVerified render contract: invalid request_json: %w", err)
 		}
 		renderOnly, _ := contract["render_only"].(bool)
 		if !renderOnly {
@@ -321,16 +323,16 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 		}
 		res, err = tx.ExecContext(ctx, jobQuery, args...)
 		if err != nil {
-			return nil, fmt.Errorf("store: FinalizeVerified jobs CAS: %w", err)
+			return nil, fmt.Errorf("artifactsstore: FinalizeVerified jobs CAS: %w", err)
 		}
-		n, rowsErr := readRowsAffected(res, "FinalizeVerified jobs CAS")
+		n, rowsErr := storecore.ReadRowsAffected(res, "FinalizeVerified jobs CAS")
 		if rowsErr != nil {
 			return nil, rowsErr
 		}
 		if n != 1 {
 			var current string
 			if scanErr := tx.QueryRowContext(ctx, `SELECT status FROM jobs WHERE job_id = ?`, p.JobID).Scan(&current); scanErr != nil || current != string(jobs.StatusDelivering) {
-				return nil, fmt.Errorf("%w: jobs affected=%d upload=%s", ErrTransitionConflict, n, p.UploadID)
+				return nil, fmt.Errorf("%w: jobs affected=%d upload=%s", storecore.ErrTransitionConflict, n, p.UploadID)
 			}
 		}
 	} else {
@@ -344,14 +346,14 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 		}
 		res, err = tx.ExecContext(ctx, jobQuery, args...)
 		if err != nil {
-			return nil, fmt.Errorf("store: FinalizeVerified jobs CAS: %w", err)
+			return nil, fmt.Errorf("artifactsstore: FinalizeVerified jobs CAS: %w", err)
 		}
-		n, rowsErr := readRowsAffected(res, "FinalizeVerified jobs CAS")
+		n, rowsErr := storecore.ReadRowsAffected(res, "FinalizeVerified jobs CAS")
 		if rowsErr != nil {
 			return nil, rowsErr
 		}
 		if n != 1 {
-			return nil, fmt.Errorf("%w: jobs affected=%d upload=%s", ErrTransitionConflict, n, p.UploadID)
+			return nil, fmt.Errorf("%w: jobs affected=%d upload=%s", storecore.ErrTransitionConflict, n, p.UploadID)
 		}
 	}
 
@@ -362,14 +364,14 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 		p.StorageProvider, p.StorageKey, p.SHA256, p.SizeBytes, p.MIMEType,
 		nowStr, p.ArtifactID, p.JobID)
 	if err != nil {
-		return nil, fmt.Errorf("store: FinalizeVerified artifacts CAS: %w", err)
+		return nil, fmt.Errorf("artifactsstore: FinalizeVerified artifacts CAS: %w", err)
 	}
-	n, rowsErr := readRowsAffected(res, "FinalizeVerified artifacts CAS")
+	n, rowsErr := storecore.ReadRowsAffected(res, "FinalizeVerified artifacts CAS")
 	if rowsErr != nil {
 		return nil, rowsErr
 	}
 	if n != 1 {
-		return nil, fmt.Errorf("%w: artifacts affected=%d artifact=%s", ErrTransitionConflict, n, p.ArtifactID)
+		return nil, fmt.Errorf("%w: artifacts affected=%d artifact=%s", storecore.ErrTransitionConflict, n, p.ArtifactID)
 	}
 
 	for _, dest := range destinations {
@@ -386,17 +388,17 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 		UPDATE artifact_uploads SET status = 'COMPLETED', completed_at = ?
 		WHERE upload_id = ? AND status = 'FINALIZING'`, nowStr, p.UploadID)
 	if err != nil {
-		return nil, fmt.Errorf("store: FinalizeVerified artifact_uploads CAS: %w", err)
+		return nil, fmt.Errorf("artifactsstore: FinalizeVerified artifact_uploads CAS: %w", err)
 	}
-	n, rowsErr = readRowsAffected(res, "FinalizeVerified artifact_uploads CAS")
+	n, rowsErr = storecore.ReadRowsAffected(res, "FinalizeVerified artifact_uploads CAS")
 	if rowsErr != nil {
 		return nil, rowsErr
 	}
 	if n != 1 {
-		return nil, fmt.Errorf("%w: upload affected=%d upload=%s", ErrTransitionConflict, n, p.UploadID)
+		return nil, fmt.Errorf("%w: upload affected=%d upload=%s", storecore.ErrTransitionConflict, n, p.UploadID)
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("store: FinalizeVerified commit: %w", err)
+		return nil, fmt.Errorf("artifactsstore: FinalizeVerified commit: %w", err)
 	}
 	committed = true
 
@@ -406,7 +408,7 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 func insertPendingDelivery(ctx context.Context, tx *sql.Tx, artifactID, destinationID string, maxAttempts int, now string) error {
 	deliveryID, err := identity.NewHex128()
 	if err != nil {
-		return fmt.Errorf("store: generate delivery ID: %w", err)
+		return fmt.Errorf("artifactsstore: generate delivery ID: %w", err)
 	}
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO job_deliveries (delivery_id, artifact_id, destination_id, status, max_attempts, idempotency_key, created_at, updated_at)
@@ -414,27 +416,27 @@ func insertPendingDelivery(ctx context.Context, tx *sql.Tx, artifactID, destinat
 		ON CONFLICT(artifact_id, destination_id) DO NOTHING`,
 		deliveryID, artifactID, destinationID, maxAttempts, artifactID+"_"+destinationID, now, now)
 	if err != nil {
-		return fmt.Errorf("store: FinalizeVerified job_deliveries insert (dest=%s): %w", destinationID, err)
+		return fmt.Errorf("artifactsstore: FinalizeVerified job_deliveries insert (dest=%s): %w", destinationID, err)
 	}
 	return nil
 }
 
-func readArtifact(ctx context.Context, db *sql.DB, artifactID string) (*Artifact, error) {
+func readArtifact(ctx context.Context, db *sql.DB, artifactID string) (*repository.Artifact, error) {
 	row := db.QueryRowContext(ctx, `
 		SELECT id, job_id, COALESCE(attempt_id,0), type, storage_provider,
 		       COALESCE(storage_key,''), COALESCE(storage_url,''), COALESCE(local_path,''),
 		       COALESCE(sha256,''), COALESCE(size_bytes,0), COALESCE(duration_seconds,0),
 		       COALESCE(duration_ms,0), COALESCE(mime_type,''), COALESCE(verified_at,''),
 		       status, created_at FROM artifacts WHERE id = ?`, artifactID)
-	var a Artifact
+	var a repository.Artifact
 	if err := row.Scan(&a.ID, &a.JobID, &a.AttemptID, &a.Type, &a.StorageProvider,
 		&a.StorageKey, &a.StorageURL, &a.LocalPath, &a.SHA256, &a.SizeBytes,
 		&a.DurationSeconds, &a.DurationMs, &a.MimeType, &a.VerifiedAt,
 		&a.Status, &a.CreatedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrArtifactNotFound
+			return nil, storecore.ErrArtifactNotFound
 		}
-		return nil, fmt.Errorf("store: FinalizeVerified post-tx read: %w", err)
+		return nil, fmt.Errorf("artifactsstore: FinalizeVerified post-tx read: %w", err)
 	}
 	return &a, nil
 }
