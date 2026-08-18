@@ -127,12 +127,11 @@ const (
 	CapabilityFutureAssetPrefetchV1 = "prefetch.plan.v1"
 )
 
-// AllCapabilities is the canonical closed-set of capabilities the
-// master TODAY recognises. Unknown strings are silently accepted and
-// logged; recognised strings are inspected against the dispatch policy.
-// Kept as a slice (not a map) so the iteration order is deterministic
-// across builds — important for log readability and snapshot diffing.
-var AllCapabilities = []string{
+// allCapabilities is the private canonical closed-set of capabilities the
+// master TODAY recognises. Unknown strings are silently accepted and logged;
+// recognised strings are inspected against the dispatch policy. Kept as an
+// array so the canonical registry itself cannot be replaced by a caller.
+var allCapabilities = [...]string{
 	CapabilityArtifactCommitV1,
 	CapabilityExecutorHybridV1,
 	CapabilityTaskOutputDeclaredV1,
@@ -143,14 +142,20 @@ var AllCapabilities = []string{
 	CapabilityFutureAssetPrefetchV1,
 }
 
-// knownCapabilitySet is the O(1) membership view of AllCapabilities.
-// Derived once at init so IsKnownCapability never scans the slice; the
-// slice itself is retained because callers rely on its deterministic
-// iteration order for logs and snapshot diffing (mirrors the telemetry
-// originSet/scopeSet idiom).
+// KnownCapabilities returns a deterministic snapshot for logs, diagnostics
+// and compatibility checks. Mutating the returned slice cannot affect the
+// private registry or IsKnownCapability.
+func KnownCapabilities() []string {
+	out := make([]string, len(allCapabilities))
+	copy(out, allCapabilities[:])
+	return out
+}
+
+// knownCapabilitySet is the O(1) membership view of the private registry.
+// Derived once at init so IsKnownCapability never scans the exported snapshot.
 var knownCapabilitySet = func() map[string]struct{} {
-	m := make(map[string]struct{}, len(AllCapabilities))
-	for _, c := range AllCapabilities {
+	m := make(map[string]struct{}, len(allCapabilities))
+	for _, c := range allCapabilities {
 		m[c] = struct{}{}
 	}
 	return m

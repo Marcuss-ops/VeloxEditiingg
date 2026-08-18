@@ -80,10 +80,11 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 	// Reject unsupported protocol versions before creating any durable
 	// runtime identity row. A refused Hello must leave no snapshot behind.
 	if !controltransport.IsSupportedProtocol(env.ProtocolVersion) {
-		logGRPCf(stream.Context(), logging.LevelWarn, logging.CodeGRPCStreamRejected, "[GRPC] worker %s protocol version %q rejected — supported: %v", declaredWorkerID, env.ProtocolVersion, controltransport.SupportedProtocolVersions)
+		supportedProtocols := controltransport.SupportedProtocols()
+		logGRPCf(stream.Context(), logging.LevelWarn, logging.CodeGRPCStreamRejected, "[GRPC] worker %s protocol version %q rejected — supported: %v", declaredWorkerID, env.ProtocolVersion, supportedProtocols)
 		return status.Errorf(codes.FailedPrecondition,
 			"worker %s protocol_version %q is not supported (supported: %v)",
-			declaredWorkerID, env.ProtocolVersion, controltransport.SupportedProtocolVersions)
+			declaredWorkerID, env.ProtocolVersion, supportedProtocols)
 	}
 
 	workerID := declaredWorkerID

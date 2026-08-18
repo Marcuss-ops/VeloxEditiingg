@@ -77,11 +77,11 @@ type WorkerHello struct {
 // at the gRPC handshake with FailedPrecondition.
 const ProtocolVersionCurrent = "v3"
 
-// SupportedProtocolVersions is the closed set of protocol versions the
-// master accepts at the gRPC handshake. Only ProtocolVersionCurrent is
-// accepted; legacy versions are no longer supported.
-var SupportedProtocolVersions = []string{
-	ProtocolVersionCurrent,
+// SupportedProtocols returns the protocol versions the master accepts at the
+// gRPC handshake. The returned slice is a snapshot; callers cannot mutate
+// the protocol registry or change handshake behaviour.
+func SupportedProtocols() []string {
+	return []string{ProtocolVersionCurrent}
 }
 
 // IsSupportedProtocol reports whether `v` is the current protocol version.

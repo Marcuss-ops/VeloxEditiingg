@@ -127,12 +127,23 @@ func TestProtocolVersionStrict(t *testing.T) {
 		}
 	}
 
-	// SupportedProtocolVersions contains ONLY the current version.
-	if len(SupportedProtocolVersions) != 1 {
-		t.Fatalf("SupportedProtocolVersions should have exactly 1 entry, got %d: %v", len(SupportedProtocolVersions), SupportedProtocolVersions)
+	// SupportedProtocols contains ONLY the current version.
+	protocols := SupportedProtocols()
+	if len(protocols) != 1 {
+		t.Fatalf("SupportedProtocols should have exactly 1 entry, got %d: %v", len(protocols), protocols)
 	}
-	if SupportedProtocolVersions[0] != ProtocolVersionCurrent {
-		t.Errorf("SupportedProtocolVersions[0] should be %q, got %q", ProtocolVersionCurrent, SupportedProtocolVersions[0])
+	if protocols[0] != ProtocolVersionCurrent {
+		t.Errorf("SupportedProtocols()[0] should be %q, got %q", ProtocolVersionCurrent, protocols[0])
+	}
+}
+
+func TestSupportedProtocolsSnapshotCannotMutateRegistry(t *testing.T) {
+	protocols := SupportedProtocols()
+	protocols[0] = "corrupted"
+
+	fresh := SupportedProtocols()
+	if fresh[0] != ProtocolVersionCurrent {
+		t.Fatalf("SupportedProtocols registry was mutated externally: %v", fresh)
 	}
 }
 

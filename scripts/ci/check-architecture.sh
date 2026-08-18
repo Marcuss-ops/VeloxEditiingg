@@ -233,6 +233,18 @@ grep -Fq "PROTOCOL_VERSION=\"${canonical_worker_protocol}\"" \
   deploy/scripts/apply-local-worker-config.sh \
   || fail "local worker config default does not match ProtocolVersionCurrent (${canonical_worker_protocol})"
 
+if grep -qE '^[[:space:]]*var[[:space:]]+SupportedProtocolVersions' shared/controltransport/transport.go; then
+  fail "SupportedProtocolVersions must not be an exported mutable global; use SupportedProtocols()"
+fi
+grep -qE '^[[:space:]]*func[[:space:]]+SupportedProtocols\(\)[[:space:]]+\[\]string' shared/controltransport/transport.go \
+  || fail "SupportedProtocols() read-only API is missing"
+
+if grep -qE '^[[:space:]]*var[[:space:]]+AllCapabilities' shared/controltransport/capabilities.go; then
+  fail "AllCapabilities must not be an exported mutable global; use KnownCapabilities()"
+fi
+grep -qE '^[[:space:]]*func[[:space:]]+KnownCapabilities\(\)[[:space:]]+\[\]string' shared/controltransport/capabilities.go \
+  || fail "KnownCapabilities() read-only API is missing"
+
 # 9c. Retired livestream surface must stay absent. Migration 155 is the only
 # permitted historical reference; no application package may recreate the
 # handler or store API.

@@ -22,11 +22,12 @@ func TestCapabilities_KnownConstants(t *testing.T) {
 		"payload.contract.v2",
 		"prefetch.plan.v1",
 	}
-	if len(AllCapabilities) != len(want) {
-		t.Fatalf("AllCapabilities length: got %d, want %d (orphaned literal?)",
-			len(AllCapabilities), len(want))
+	capabilities := KnownCapabilities()
+	if len(capabilities) != len(want) {
+		t.Fatalf("KnownCapabilities length: got %d, want %d (orphaned literal?)",
+			len(capabilities), len(want))
 	}
-	sortedGot := append([]string{}, AllCapabilities...)
+	sortedGot := append([]string{}, capabilities...)
 	sort.Strings(sortedGot)
 	sortedWant := append([]string{}, want...)
 	sort.Strings(sortedWant)
@@ -64,13 +65,13 @@ func TestCapabilities_IsKnownCapability(t *testing.T) {
 	}
 }
 
-// TestCapabilities_AllCapabilitiesIsClosedSet asserts the
-// AllCapabilities slice contains exactly the documented constants —
+// TestCapabilities_KnownCapabilitiesIsClosedSet asserts the
+// KnownCapabilities snapshot contains exactly the documented constants —
 // not more, not fewer. A constant declared in this file but missing
 // from AllCapabilities is a footgun: it would pass IsKnownCapability
 // negative tests but the master would never iterate it for log
 // inspection.
-func TestCapabilities_AllCapabilitiesIsClosedSet(t *testing.T) {
+func TestCapabilities_KnownCapabilitiesIsClosedSet(t *testing.T) {
 	declared := map[string]bool{
 		CapabilityArtifactCommitV1:          true,
 		CapabilityExecutorHybridV1:          true,
@@ -81,15 +82,15 @@ func TestCapabilities_AllCapabilitiesIsClosedSet(t *testing.T) {
 		CapabilityFutureAssetPrefetchV1: true,
 	}
 	allAsSet := map[string]bool{}
-	for _, c := range AllCapabilities {
+	for _, c := range KnownCapabilities() {
 		if allAsSet[c] {
-			t.Errorf("AllCapabilities contains duplicate entry %q", c)
+			t.Errorf("KnownCapabilities contains duplicate entry %q", c)
 		}
 		allAsSet[c] = true
 	}
 	if len(declared) != len(allAsSet) {
-		t.Fatalf("AllCapabilities length (%d) != declared constants (%d);"+
-			" either add the constant to AllCapabilities or remove the orphan",
+		t.Fatalf("KnownCapabilities length (%d) != declared constants (%d);"+
+			" either add the constant to the private registry or remove the orphan",
 			len(allAsSet), len(declared))
 	}
 	for c := range declared {
@@ -101,5 +102,18 @@ func TestCapabilities_AllCapabilitiesIsClosedSet(t *testing.T) {
 		if !declared[c] {
 			t.Errorf("AllCapabilities contains undeclared string %q", c)
 		}
+	}
+}
+
+func TestCapabilities_SnapshotCannotMutateRegistry(t *testing.T) {
+	capabilities := KnownCapabilities()
+	capabilities[0] = "corrupted"
+
+	fresh := KnownCapabilities()
+	if fresh[0] == "corrupted" {
+		t.Fatal("KnownCapabilities returned a mutable view of the registry")
+	}
+	if !IsKnownCapability(CapabilityArtifactCommitV1) {
+		t.Fatal("mutating a capability snapshot changed the known-capability registry")
 	}
 }
