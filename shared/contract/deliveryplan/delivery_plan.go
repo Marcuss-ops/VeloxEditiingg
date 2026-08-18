@@ -41,6 +41,10 @@ import (
 	"velox-shared/contract/domain"
 )
 
+// DefaultDeliveryRetryBudget is the canonical fallback budget stamped on a
+// delivery-plan entry when the caller does not supply one.
+const DefaultDeliveryRetryBudget = 5
+
 // ErrDeliveryTargetRequired identifies a delivery request that omitted
 // every explicit destination. Render-only jobs do not invoke Parse; once
 // a delivery envelope is present, this sentinel gives HTTP callers a

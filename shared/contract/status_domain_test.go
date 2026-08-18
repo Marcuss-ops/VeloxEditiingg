@@ -52,6 +52,41 @@ func TestNewJobPayloadV2CheckedRejectsInvalidRenderManifest(t *testing.T) {
 	}
 }
 
+func TestNewJobPayloadV2CheckedUsesTypedDeliveryPlanBoundary(t *testing.T) {
+	payload, err := NewJobPayloadV2Checked(map[string]any{
+		"delivery_plan": []any{
+			map[string]any{
+				"destination_id": "dest-1",
+				"retry_budget":   2,
+				"enabled":        true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("checked payload rejected valid delivery plan: %v", err)
+	}
+	if len(payload.DeliveryPlan) != 1 || payload.DeliveryPlan[0].DestinationID != "dest-1" {
+		t.Fatalf("typed delivery plan = %#v", payload.DeliveryPlan)
+	}
+	projected, err := payload.ToMap()
+	if err != nil {
+		t.Fatalf("ToMap(): %v", err)
+	}
+	if _, ok := projected["delivery_plan"].([]map[string]interface{}); !ok {
+		t.Fatalf("projected delivery plan type = %T, want []map[string]interface{}", projected["delivery_plan"])
+	}
+}
+
+func TestNewJobPayloadV2CheckedRejectsInvalidDeliveryPlan(t *testing.T) {
+	if _, err := NewJobPayloadV2Checked(map[string]any{
+		"delivery_plan": []any{
+			map[string]any{"destination_id": "dest-1", "enabled": false},
+		},
+	}); err == nil {
+		t.Fatal("checked payload accepted disabled delivery plan entry")
+	}
+}
+
 func TestJobPayloadV2DirectJSONReadsLegacyOverloadedStatus(t *testing.T) {
 	var payload JobPayloadV2
 	if err := json.Unmarshal([]byte(`{"job_id":"legacy-direct","status":"SUCCEEDED"}`), &payload); err != nil {

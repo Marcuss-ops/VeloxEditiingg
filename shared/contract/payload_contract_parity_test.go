@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"velox-shared/contract/deliveryplan"
 )
 
 func TestJobPayloadV2ContractParity(t *testing.T) {
@@ -69,7 +71,7 @@ func mustPayloadV2Map(t *testing.T) map[string]any {
 		Priority:      1, TimeoutSecs: 3600, SceneCount: 1, VoiceoverCount: 1,
 		TotalDurationSecs: 5, SceneDurationSecs: 5,
 		SubmittedVia: "test", Source: "test", JobFingerprint: "fingerprint", Status: InputAssemblyPending,
-		DeliveryPlan: []map[string]any{{"destination_id": "destination-1"}},
+		DeliveryPlan: []deliveryplan.Entry{{DestinationID: "destination-1", RetryBudget: 5, Enabled: true}},
 	}
 	output, err := payload.ToMap()
 	if err != nil {

@@ -3,8 +3,6 @@ package deliveryplan
 import (
 	"fmt"
 	"strings"
-
-	"velox-shared/contract"
 )
 
 // Entry is the canonical per-destination shape. It carries every
@@ -17,13 +15,41 @@ import (
 // construct Entries themselves. Validation runs in Parse, so the
 // downstream projection only sees well-formed entries.
 type Entry struct {
-	DestinationID         string
-	Priority              int
-	RetryBudget           int
-	Enabled               bool
-	ExternalDestinationID string
-	Platform              string
-	Metadata              map[string]interface{}
+	DestinationID         string                 `json:"destination_id"`
+	Priority              int                    `json:"priority"`
+	RetryBudget           int                    `json:"retry_budget"`
+	Enabled               bool                   `json:"enabled"`
+	ExternalDestinationID string                 `json:"external_destination_id,omitempty"`
+	Platform              string                 `json:"platform,omitempty"`
+	Metadata              map[string]interface{} `json:"metadata,omitempty"`
+}
+
+// EntriesToMaps projects the validated typed contract back to the canonical
+// wire shape used by compatibility readers and persistence boundaries.
+func EntriesToMaps(entries []Entry) []map[string]interface{} {
+	if len(entries) == 0 {
+		return nil
+	}
+	out := make([]map[string]interface{}, 0, len(entries))
+	for _, entry := range entries {
+		item := map[string]interface{}{
+			"destination_id": entry.DestinationID,
+			"priority":       entry.Priority,
+			"retry_budget":   entry.RetryBudget,
+			"enabled":        entry.Enabled,
+		}
+		if entry.ExternalDestinationID != "" {
+			item["external_destination_id"] = entry.ExternalDestinationID
+		}
+		if entry.Platform != "" {
+			item["platform"] = entry.Platform
+		}
+		if entry.Metadata != nil {
+			item["metadata"] = entry.Metadata
+		}
+		out = append(out, item)
+	}
+	return out
 }
 
 // Parse reads delivery_plan[] from a JSON-decoded payload map and
@@ -124,7 +150,7 @@ func Parse(payload map[string]interface{}) ([]Entry, error) {
 			entries = append(entries, Entry{
 				DestinationID: id,
 				Priority:      i,
-				RetryBudget:   contract.DefaultDeliveryRetryBudget,
+				RetryBudget:   DefaultDeliveryRetryBudget,
 				Enabled:       true,
 			})
 		}

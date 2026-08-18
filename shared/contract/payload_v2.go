@@ -24,6 +24,7 @@ import (
 	"github.com/google/uuid"
 
 	"velox-shared/compatibility"
+	"velox-shared/contract/deliveryplan"
 	"velox-shared/contract/rendermanifest"
 	"velox-shared/payload"
 )
@@ -114,10 +115,9 @@ type JobPayloadV2 struct {
 	// not that rendering, delivery, or publication finished.
 	Status InputAssemblyStatus `json:"status,omitempty"`
 
-	// Delivery contract. Mirrors the raw validated shape, which may be an
-	// array of maps or a single map depending on the ingress point. The
-	// enqueue-layer validator normalizes this downstream.
-	DeliveryPlan any `json:"delivery_plan,omitempty"`
+	// Delivery contract. The boundary parser accepts legacy wire variants,
+	// but the canonical payload stores one typed representation thereafter.
+	DeliveryPlan []deliveryplan.Entry `json:"delivery_plan,omitempty"`
 }
 
 // NewJobPayloadV2 reads a raw map (typically from JSON deserialization at
@@ -167,7 +167,11 @@ func NewJobPayloadV2(raw map[string]any) *JobPayloadV2 {
 		SubmittedVia:           payload.FirstString(raw, "submitted_via"),
 		Source:                 payload.FirstString(raw, "source"),
 		Status:                 parseInputAssemblyOrLegacy(raw["status"]),
-		DeliveryPlan:           raw["delivery_plan"],
+	}
+	if deliveryPlanInputPresent(raw) {
+		if entries, err := deliveryplan.Parse(raw); err == nil {
+			p.DeliveryPlan = entries
+		}
 	}
 	if p.Status == "" {
 		p.Status = InputAssemblyPending
@@ -266,6 +270,13 @@ func NewJobPayloadV2Checked(raw map[string]any) (*JobPayloadV2, error) {
 		}
 	}
 	payload := NewJobPayloadV2(raw)
+	if deliveryPlanInputPresent(raw) {
+		entries, err := deliveryplan.Parse(raw)
+		if err != nil {
+			return nil, fmt.Errorf("contract: delivery_plan: %w", err)
+		}
+		payload.DeliveryPlan = entries
+	}
 	if _, err := payload.TypedRenderManifest(); err != nil {
 		return nil, err
 	}
@@ -442,10 +453,33 @@ func (p *JobPayloadV2) ToMap() (map[string]any, error) {
 		}
 		out["status"] = p.Status.WireValue()
 	}
-	if p.DeliveryPlan != nil {
-		out["delivery_plan"] = p.DeliveryPlan
+	if len(p.DeliveryPlan) > 0 {
+		out["delivery_plan"] = deliveryplan.EntriesToMaps(p.DeliveryPlan)
 	}
 	return out, nil
+}
+
+// deliveryPlanInputPresent distinguishes a render-only payload from a
+// delivery payload that must cross the strict delivery-plan boundary.
+func deliveryPlanInputPresent(raw map[string]any) bool {
+	if raw == nil {
+		return false
+	}
+	for _, key := range []string{
+		"delivery_plan",
+		"delivery_destination_ids",
+		"destination_ids",
+		"delivery_destination_id",
+		"destination_id",
+	} {
+		if value, ok := raw[key]; ok && value != nil {
+			return true
+		}
+	}
+	if nested, ok := raw["payload"].(map[string]any); ok {
+		return deliveryPlanInputPresent(nested)
+	}
+	return false
 }
 
 func parseInputAssemblyOrLegacy(value any) InputAssemblyStatus {
