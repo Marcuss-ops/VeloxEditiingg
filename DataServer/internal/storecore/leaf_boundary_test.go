@@ -17,6 +17,7 @@ import (
 // is enforced from day one.
 var leafPackages = []string{
 	"completionstore",
+	"forwardingstore",
 	"renderfingerprintstore",
 	"smokerunstore",
 	"stalereconcile",

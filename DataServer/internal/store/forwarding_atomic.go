@@ -27,6 +27,11 @@ import (
 // If the initial CAS fails (another runner claimed the row), the
 // transaction rolls back and ErrTransitionConflict is returned without
 // any side effects.
+//
+// This method stays on SQLiteStore (rather than moving to the
+// forwardingstore leaf) because step 2 is a cross-domain write: it delegates
+// Job+Task+TaskSpec creation to the atomic creator, which owns delivery-plan,
+// publication-state and task-requirements SQL outside the forwarding domain.
 func (s *SQLiteStore) AtomicForwardAndEnqueue(
 	ctx context.Context,
 	forwardingID string,
@@ -110,88 +115,14 @@ func (s *SQLiteStore) AtomicForwardAndEnqueue(
 }
 
 // MarkCreatorForwardingReadySync transitions a PENDING/POLLING forwarding to
-// READY_TO_FORWARD WITHOUT a (locked_by, lease_id) CAS. This is the
-// synchronous handler path: the HTTP request INSERTed a fresh PENDING row
-// (no lease) and immediately needs to promote it for the atomic enqueue step.
-//
-// Diff vs MarkCreatorForwardingReadyToForward: the latter is the legitimate
-// runner lease-holder promotion (CAS on qualifier+lease_id pair). The sync
-// path has no lease — using a CAS that requires one would never match. The
-// sync method therefore matches the forwarding ID, a promotable status, and
-// the absence of ownership fields. If a runner claims the row between INSERT
-// and promotion, the sync path gets ErrTransitionConflict and cannot clear or
-// overwrite the runner's ownership.
-//
-// Returns ErrTransitionConflict if the row is not in a promotable state
-// (already READY_TO_FORWARD, FORWARDED, FAILED, BLOCKED, etc.).
+// READY_TO_FORWARD WITHOUT a (locked_by, lease_id) CAS (the synchronous
+// handler path). SQL lives in the forwardingstore leaf.
 func (s *SQLiteStore) MarkCreatorForwardingReadySync(ctx context.Context, forwardingID, payloadJSON, payloadSHA256 string) error {
-	if forwardingID == "" {
-		return fmt.Errorf("store: MarkCreatorForwardingReadySync: empty forwarding_id")
-	}
-	now := nowRFC3339()
-	result, err := s.db.ExecContext(ctx,
-		`UPDATE creator_forwardings
-		 SET status = 'READY_TO_FORWARD',
-		     source_status = 'completed',
-		     payload_json = ?, payload_sha256 = ?,
-			    locked_by = '', lease_id = '', lease_expires_at = '',
-			    updated_at = ?
-		 WHERE forwarding_id = ?
-		   AND status IN ('PENDING', 'POLLING')
-		   AND COALESCE(locked_by, '') = ''
-		   AND COALESCE(lease_id, '') = ''
-		   AND COALESCE(lease_expires_at, '') = ''`,
-		payloadJSON, payloadSHA256, now, forwardingID,
-	)
-	if err != nil {
-		return wrapDBInfrastructure("MarkCreatorForwardingReadySync exec", err)
-	}
-	affected, rowsErr := readRowsAffected(result, "MarkCreatorForwardingReadySync")
-	if rowsErr != nil {
-		return rowsErr
-	}
-	if affected == 0 {
-		return ErrTransitionConflict
-	}
-	return nil
+	return s.forwarding.MarkCreatorForwardingReadySync(ctx, forwardingID, payloadJSON, payloadSHA256)
 }
 
 // MarkCreatorForwardingEnqueueRetry moves a forwarding that failed to enqueue
 // (FORWARDING or READY_TO_FORWARD) to RETRY_WAIT with a backoff delay.
-// This is the enqueue-phase analog of MarkCreatorForwardingRetry (which
-// handles the POLLING phase). The transition is owned by the active lease;
-// a stale runner must not be able to rewrite a row claimed by another runner.
 func (s *SQLiteStore) MarkCreatorForwardingEnqueueRetry(ctx context.Context, forwardingID, runnerID, leaseID, errorCode, errorMsg string, nextAttemptAt time.Time) error {
-	if forwardingID == "" || runnerID == "" || leaseID == "" {
-		return fmt.Errorf("store: MarkCreatorForwardingEnqueueRetry: missing forwarding_id, runner_id or lease_id")
-	}
-
-	now := nowRFC3339()
-	nextISO := nextAttemptAt.UTC().Format(time.RFC3339)
-	result, err := s.db.ExecContext(ctx,
-		`UPDATE creator_forwardings
-		 SET status = 'RETRY_WAIT',
-		     locked_by = '', lease_id = '', lease_expires_at = '',
-		     next_attempt_at = ?,
-			 last_error_code = ?, last_error_message = ?,
-		     updated_at = ?
-		 WHERE forwarding_id = ?
-		   AND status IN ('FORWARDING', 'READY_TO_FORWARD')
-		   AND locked_by = ?
-		   AND lease_id = ?
-		   AND lease_expires_at > ?`,
-		nextISO, nullIfEmpty(errorCode), nullIfEmpty(errorMsg), now,
-		forwardingID, runnerID, leaseID, now,
-	)
-	if err != nil {
-		return wrapDBInfrastructure("MarkCreatorForwardingEnqueueRetry exec", err)
-	}
-	affected, rowsErr := readRowsAffected(result, "MarkCreatorForwardingEnqueueRetry")
-	if rowsErr != nil {
-		return rowsErr
-	}
-	if affected == 0 {
-		return ErrTransitionConflict
-	}
-	return nil
+	return s.forwarding.MarkCreatorForwardingEnqueueRetry(ctx, forwardingID, runnerID, leaseID, errorCode, errorMsg, nextAttemptAt)
 }

@@ -16,6 +16,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
+	"velox-server/internal/forwardingstore"
 	"velox-server/internal/outbox"
 	"velox-server/internal/platform/database"
 	"velox-server/internal/repository"
@@ -34,6 +35,11 @@ type SQLiteStore struct {
 	// Renamed from `partitionThresholds` to avoid a name collision with
 	// the `partitionThresholds()` helper method on the same receiver.
 	partitionKnobs partitionThresholds
+	// forwarding is the leaf SQLite persistence for creator_forwardings.
+	// The forwarding methods on SQLiteStore delegate to it; the
+	// cross-domain AtomicForwardAndEnqueue stays here because it also
+	// creates Job+Task+TaskSpec via the atomic creator.
+	forwarding *forwardingstore.SQLiteForwardingStore
 }
 
 // OutboxEmitter is re-exported from the repository leaf package. The
@@ -162,6 +168,7 @@ func NewSQLiteStoreFromHandle(handle *database.Handle, path string, migrateOnSta
 	}
 
 	s := &SQLiteStore{db: db, path: path}
+	s.forwarding = forwardingstore.NewSQLiteForwardingStore(db)
 
 	if !migrateOnStart {
 		// Forward-only tool mode: an external tool owns the schema.
