@@ -1,7 +1,10 @@
-// store_creator_forwardings.go owns the creator_forwardings domain model:
-// the status enumeration, the row/lease shapes, the sentinel errors and the
-// row scanners. Write paths live in store_creator_forwardings_write.go, read
-// paths in store_creator_forwardings_query.go, and queue metrics in
+// store_creator_forwardings.go owns the creator_forwardings row/lease shapes
+// and the row scanners. The status vocabulary and its terminal semantics now
+// live in the canonical internal/forwardingcontract leaf and are re-exported
+// below as a compatibility facade; the sentinel errors are re-exported from
+// internal/storecore via db_errors.go. Write paths live in
+// store_creator_forwardings_write.go, read paths in
+// store_creator_forwardings_query.go, and queue metrics in
 // store_creator_forwardings_metrics.go.
 //
 // Status vocabulary:
@@ -24,34 +27,31 @@ package store
 import (
 	"database/sql"
 	"time"
+
+	"velox-server/internal/forwardingcontract"
 )
 
 // ── Types ───────────────────────────────────────────────────────────────
 
-// CreatorForwardingStatus is the canonical status enumeration for a
-// creator_forwardings row. The type alias is string so callers can
-// write literal status constants; typed constants (below) are the
-// prefered reference in production code.
-type CreatorForwardingStatus string
+// CreatorForwardingStatus is a type alias for the canonical
+// forwardingcontract.CreatorForwardingStatus. It exists so existing callers
+// importing store.CreatorForwardingStatus continue to compile while the type
+// is unified at compile time with the forwarding leaf. New code should import
+// forwardingcontract directly.
+type CreatorForwardingStatus = forwardingcontract.CreatorForwardingStatus
 
 const (
-	CFStatusPending        CreatorForwardingStatus = "PENDING"
-	CFStatusPolling        CreatorForwardingStatus = "POLLING"
-	CFStatusReadyToForward CreatorForwardingStatus = "READY_TO_FORWARD"
-	CFStatusForwarding     CreatorForwardingStatus = "FORWARDING"
-	CFStatusRetryWait      CreatorForwardingStatus = "RETRY_WAIT"
-	CFStatusForwarded      CreatorForwardingStatus = "FORWARDED"
-	CFStatusFailed         CreatorForwardingStatus = "FAILED"
-	CFStatusCancelled      CreatorForwardingStatus = "CANCELLED"
-	CFStatusBlocked        CreatorForwardingStatus = "BLOCKED"
+	CFStatusPending        = forwardingcontract.CFStatusPending
+	CFStatusPolling        = forwardingcontract.CFStatusPolling
+	CFStatusReadyToForward = forwardingcontract.CFStatusReadyToForward
+	CFStatusForwarding     = forwardingcontract.CFStatusForwarding
+	CFStatusRetryWait      = forwardingcontract.CFStatusRetryWait
+	CFStatusForwarded      = forwardingcontract.CFStatusForwarded
+	CFStatusFailed         = forwardingcontract.CFStatusFailed
+	CFStatusCancelled      = forwardingcontract.CFStatusCancelled
+	CFStatusBlocked        = forwardingcontract.CFStatusBlocked
 )
 
-// IsTerminal returns true for statuses that will never transition again.
-func (s CreatorForwardingStatus) IsTerminal() bool {
-	return s == CFStatusForwarded || s == CFStatusFailed || s == CFStatusCancelled || s == CFStatusBlocked
-}
-
-// IsLeasable returns true for statuses a runner can claim.
 // CreatorForwarding is the typed view of a creator_forwardings row.
 type CreatorForwarding struct {
 	ForwardingID     string `json:"forwarding_id"`
