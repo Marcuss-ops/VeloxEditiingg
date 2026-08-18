@@ -1,0 +1,11 @@
+[Unit]
+Description=Conservative Velox worker host maintenance
+Documentation=https://github.com/Marcuss-ops/VeloxEditiingg/tree/main/deploy/runtime
+ConditionPathExists=/etc/velox-worker/worker.env
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/opt/velox-worker/velox-worker-maintenance.sh

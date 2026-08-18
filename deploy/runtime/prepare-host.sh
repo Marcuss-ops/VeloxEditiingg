@@ -47,6 +47,20 @@ readonly MTLS_RENEW_WRAPPER_DST="/opt/velox-worker/velox-worker-mtls-renew.sh"
 readonly MTLS_RENEW_SERVICE_DST="/etc/systemd/system/velox-worker-mtls-renew.service"
 MTLS_RENEW_TIMER_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/velox-worker-mtls-renew.timer"
 readonly MTLS_RENEW_TIMER_DST="/etc/systemd/system/velox-worker-mtls-renew.timer"
+MAINTENANCE_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/velox-worker-maintenance.sh"
+readonly MAINTENANCE_DST="/opt/velox-worker/velox-worker-maintenance.sh"
+MAINTENANCE_SERVICE_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/velox-worker-maintenance.service"
+readonly MAINTENANCE_SERVICE_DST="/etc/systemd/system/velox-worker-maintenance.service"
+MAINTENANCE_TIMER_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/velox-worker-maintenance.timer"
+readonly MAINTENANCE_TIMER_DST="/etc/systemd/system/velox-worker-maintenance.timer"
+RESOURCE_MONITOR_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/velox-worker-resource-monitor.sh"
+readonly RESOURCE_MONITOR_DST="/opt/velox-worker/velox-worker-resource-monitor.sh"
+RESOURCE_MONITOR_SERVICE_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/velox-worker-resource-monitor.service"
+readonly RESOURCE_MONITOR_SERVICE_DST="/etc/systemd/system/velox-worker-resource-monitor.service"
+RESOURCE_MONITOR_TIMER_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/velox-worker-resource-monitor.timer"
+readonly RESOURCE_MONITOR_TIMER_DST="/etc/systemd/system/velox-worker-resource-monitor.timer"
+JOURNALD_RETENTION_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/journald-velox-worker.conf"
+readonly JOURNALD_RETENTION_DST="/etc/systemd/journald.conf.d/velox-worker.conf"
 ACTIVATE_IMAGE_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/velox-worker-activate-image"
 readonly ACTIVATE_IMAGE_DST="/usr/local/sbin/velox-worker-activate-image"
 readonly ACTIVATE_SUDOERS_DST="/etc/sudoers.d/velox-worker-activate-image"
@@ -259,6 +273,14 @@ install -o root -g root -m 0644 "$MTLS_RENEW_SERVICE_SRC" "$MTLS_RENEW_SERVICE_D
 install -o root -g root -m 0644 "$MTLS_RENEW_TIMER_SRC" "$MTLS_RENEW_TIMER_DST"
 install -o root -g root -m 0755 "$ACTIVATE_IMAGE_SRC" "$ACTIVATE_IMAGE_DST"
 install -o root -g root -m 0755 "$SET_CONFIG_SRC" "$SET_CONFIG_DST"
+install -o root -g root -m 0755 "$MAINTENANCE_SRC" "$MAINTENANCE_DST"
+install -o root -g root -m 0644 "$MAINTENANCE_SERVICE_SRC" "$MAINTENANCE_SERVICE_DST"
+install -o root -g root -m 0644 "$MAINTENANCE_TIMER_SRC" "$MAINTENANCE_TIMER_DST"
+install -o root -g root -m 0755 "$RESOURCE_MONITOR_SRC" "$RESOURCE_MONITOR_DST"
+install -o root -g root -m 0644 "$RESOURCE_MONITOR_SERVICE_SRC" "$RESOURCE_MONITOR_SERVICE_DST"
+install -o root -g root -m 0644 "$RESOURCE_MONITOR_TIMER_SRC" "$RESOURCE_MONITOR_TIMER_DST"
+install -d -o root -g root -m 0755 /etc/systemd/journald.conf.d
+install -o root -g root -m 0644 "$JOURNALD_RETENTION_SRC" "$JOURNALD_RETENTION_DST"
 SSH_OPERATOR="${VELOX_SSH_USER:-${SUDO_USER:-}}"
 [[ -n "$SSH_OPERATOR" ]] || fail "VELOX_SSH_USER or SUDO_USER is required to install the activation sudoers rule"
 printf '%s ALL=(root) NOPASSWD: %s *\n' "$SSH_OPERATOR" "$ACTIVATE_IMAGE_DST" >"$ACTIVATE_SUDOERS_DST"
@@ -321,6 +343,9 @@ ok "image pulled"
 # ── 5. Bring up the canonical systemd-owned runtime ────────────────────────
 cd /opt/velox-worker
 if [[ -d /run/systemd/system ]] && systemctl daemon-reload >/dev/null 2>&1; then
+    systemctl try-reload-or-restart systemd-journald.service >/dev/null 2>&1 || true
+    systemctl enable --now velox-worker-maintenance.timer
+    systemctl enable --now velox-worker-resource-monitor.timer
     if [[ -n "${VELOX_OPENBAO_ADDR:-}" ]]; then
         systemctl enable --now velox-worker-mtls-renew.timer
     fi

@@ -1,0 +1,12 @@
+[Unit]
+Description=Every-five-minutes Velox worker resource monitor
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+RandomizedDelaySec=1min
+Persistent=true
+Unit=velox-worker-resource-monitor.service
+
+[Install]
+WantedBy=timers.target

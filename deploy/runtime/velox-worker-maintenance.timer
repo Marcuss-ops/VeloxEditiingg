@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly conservative Velox worker host maintenance
+
+[Timer]
+OnCalendar=Sun *-*-* 03:15:00
+RandomizedDelaySec=30min
+Persistent=true
+Unit=velox-worker-maintenance.service
+
+[Install]
+WantedBy=timers.target

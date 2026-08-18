@@ -21,6 +21,15 @@ services:
 
     container_name: velox-worker
 
+    # Bound container stdout/stderr logs. Worker diagnostics remain available
+    # in journald; Docker's json-file copy must not grow without limit.
+    logging:
+      driver: json-file
+      options:
+        labels: "service,version"
+        max-size: "10m"
+        max-file: "5"
+
     environment:
       VELOX_RENDER_BACKEND: ${VELOX_RENDER_BACKEND:-native}
       CHRONON3D_CLI: ${CHRONON3D_CLI:-/opt/chronon3d/bin/chronon3d_cli}

@@ -1,0 +1,9 @@
+[Unit]
+Description=Velox worker CPU RAM I/O disk resource monitor
+Documentation=https://github.com/Marcuss-ops/VeloxEditiingg/tree/main/deploy/runtime
+ConditionPathExists=/etc/velox-worker/worker.env
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/opt/velox-worker/velox-worker-resource-monitor.sh
