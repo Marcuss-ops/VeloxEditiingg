@@ -9,22 +9,21 @@ import (
 
 	"velox-server/internal/costmodel"
 	"velox-server/internal/jobs"
-	"velox-server/internal/store"
 	"velox-server/internal/taskgraph"
 )
 
 // service_job.go owns the PR-operation 01 / Fase 2 canonical Job+Task
 // creation surface (RenderPlan + CreateJobWithPlan + deriveJobID). The
 // remote-creator stage (Service / New / StartOrPersistForwarding) lives
-// in service.go; the atomic 3-table INSERT is delegated to
-// store.AtomicJobTaskCreator.
+// in service.go; the atomic 3-table INSERT is delegated to an injected
+// jobTaskCreator (implemented by store.AtomicJobTaskCreator).
 
 // =============================================================================
 // PR-operation 01 / Fase 2 — CreateService canonico
 // =============================================================================
 //
 // PR #8: workflow package removed. CreateService validates a RenderPlan,
-// derives the canonical TaskSpec, and delegates to store.AtomicJobTaskCreator
+// derives the canonical TaskSpec, and delegates to the injected jobTaskCreator
 // for atomic Job+Task insertion. One writer.
 //
 // Idempotency: the (RenderPlan.IdempotencyKey) is the canonical dedupe token. Two
@@ -41,6 +40,15 @@ import (
 // surface narrow and removes the dependency on the writer-side Commit path.
 type jobGetterForIdempotency interface {
 	Get(ctx context.Context, id string) (*jobs.Job, error)
+}
+
+// jobTaskCreator is the narrow atomic Job+Task creation contract
+// CreateJobWithPlan needs at persist time. store.AtomicJobTaskCreator
+// implements it; defining the contract here (consumer-side) removes
+// creatorflow's import edge on the concrete store package, mirroring
+// enqueue.AtomicJobTaskCreator.
+type jobTaskCreator interface {
+	CreateJobWithTask(ctx context.Context, job *jobs.Job, spec *taskgraph.TaskSpec, priority int) error
 }
 
 // RenderPlan is the validated, typed input shape for CreateJobWithPlan.
@@ -115,8 +123,9 @@ func deriveJobID(idempotencyKey string) string {
 //  3. Build the canonical *jobs.Job (status=PENDING).
 //  4. Build the canonical *taskgraph.TaskSpec (version=SpecVersion).
 //  5. Validate the TaskSpec (Version>0, JobID set).
-//  6. Delegate to store.AtomicJobTaskCreator.CreateJobWithTask, which performs
-//     the 3-table INSERT inside a single SQLite tx with `defer Rollback`.
+//  6. Delegate to the injected jobTaskCreator.CreateJobWithTask, which
+//     performs the 3-table INSERT inside a single SQLite tx with
+//     `defer Rollback`.
 //
 // Errors at any step propagate without side effects. If step 6 returns an
 // error, the tx is rolled back so the Job row does not orphan (per runbook
@@ -124,14 +133,14 @@ func deriveJobID(idempotencyKey string) string {
 //
 // The free-function form (vs. a method on Service) is intentional:
 // CreateJobWithPlan is part of the PR-operation 01 / Fase 2 cutover, which
-// owns the (jobs, tasks, task_specs) writer surface and reaches into the
-// store package directly. Keeping it off the Service struct isolates the
+// owns the (jobs, tasks, task_specs) writer surface via the narrow
+// jobTaskCreator contract. Keeping it off the Service struct isolates the
 // dependency graph (atomic creator + jobs repo) from the Service's runtime
 // topology (enqueuer + remoteengine client + dbStore). Both wiring paths
 // reach the same composition root under cmd/server/bootstrap.go.
 func CreateJobWithPlan(
 	ctx context.Context,
-	atomic *store.AtomicJobTaskCreator,
+	atomic jobTaskCreator,
 	repo jobGetterForIdempotency,
 	plan RenderPlan,
 	req costmodel.JobRequirements,

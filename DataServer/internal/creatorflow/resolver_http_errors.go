@@ -25,7 +25,6 @@ import (
 
 	"velox-server/internal/deliverycontract"
 	"velox-server/internal/jobs/enqueue"
-	"velox-server/internal/store"
 	"velox-server/internal/storecore"
 	"velox-shared/contract/deliveryplan"
 	"velox-shared/contract/domain"
@@ -42,25 +41,23 @@ import (
 var validationFieldExtractor = enqueue.ValidationErrorField
 
 // deliveryPlanFieldExtractor is the indirection point used by
-// WriteResolverError for the store-layer typed
-// DeliveryPlanValidationError. In production it always equals
-// store.DeliveryPlanValidationField; tests override it to inject a
+// WriteResolverError for the in-tx delivery-plan parser's typed
+// deliveryplan.ValidationError. In production it always equals
+// deliveryplan.ValidationField; tests override it to inject a
 // deterministic field path. Same indirection rationale as
 // validationFieldExtractor above.
 //
-// The store-layer typed error exists because store cannot import
-// enqueue (the dep edge goes enqueue -> store) so the parser in
-// internal/store/delivery_plan_payload.go must own its own typed
-// error type. Without this extractor, the in-tx parser would emit
-// plaintext errors that fall through to the default 500 branch —
-// the same classification regression that P0 commit 72a455c closed
-// for destination-existence, now closed for retry_budget and any
-// future per-entry rejection in this parser.
-var deliveryPlanFieldExtractor = store.DeliveryPlanValidationField
+// The in-tx parser (internal/store/delivery_plan_payload.go) emits the
+// canonical deliveryplan.ValidationError; without this extractor those
+// rejections would fall through to the default 500 branch — the same
+// classification regression that P0 commit 72a455c closed for
+// destination-existence, now closed for retry_budget and any future
+// per-entry rejection in this parser.
+var deliveryPlanFieldExtractor = deliveryplan.ValidationField
 
 // extractUnifiedFieldPath returns the structured field path of
 // either an enqueue.validationError OR a
-// store.DeliveryPlanValidationError wrapped inside err, or "" if
+// deliveryplan.ValidationError wrapped inside err, or "" if
 // neither typed error is present. Used by WriteResolverError as the
 // unified classification point so a future contributor can add
 // another typed error source without touching the switch below —
@@ -124,7 +121,7 @@ const idempotencyKeyDefault = "idempotency_key"
 //	          invalid, scenes empty, script_text oversized,
 //	          destination_id missing, social_destination_id
 //	          unrecognized, etc.)
-//	        - store.DeliveryPlanValidationError (in-tx
+//	        - deliveryplan.ValidationError (in-tx
 //	          parseDeliveryPlanPayload rejections such as
 //	          retry_budget < 0, priority < 0, duplicate
 //	          destination_id, disabled entry, metadata
