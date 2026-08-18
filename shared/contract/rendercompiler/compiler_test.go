@@ -67,6 +67,17 @@ func TestCompilePayloadRejectsInvalidRenderManifestShapes(t *testing.T) {
 	}
 }
 
+func TestCompilePayloadRejectsAmbiguousLifecycleStatus(t *testing.T) {
+	_, err := DefaultRegistry().CompilePayload(context.Background(), map[string]any{
+		"job_type": "process_video",
+		"version":  "v2",
+		"status":   "COMPLETED",
+	})
+	if err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("ambiguous lifecycle status was accepted: %v", err)
+	}
+}
+
 func TestDefaultRegistryCompilesProcessVideoDeterministically(t *testing.T) {
 	payload := testPayload()
 	registry := DefaultRegistry()

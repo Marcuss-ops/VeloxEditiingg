@@ -74,7 +74,10 @@ func (r Registry) CompilePayload(ctx context.Context, raw map[string]any) (*Rend
 			return nil, fmt.Errorf("rendercompiler: render_manifest must not be empty")
 		}
 	}
-	payload := contract.NewJobPayloadV2(raw)
+	payload, err := contract.NewJobPayloadV2Checked(raw)
+	if err != nil {
+		return nil, fmt.Errorf("rendercompiler: canonical payload validation: %w", err)
+	}
 	// NewJobPayloadV2 intentionally defaults missing routing fields for
 	// legacy readers. The registry must nevertheless dispatch explicit raw
 	// values faithfully so unsupported job types/versions fail closed.
