@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"velox-server/internal/storecore"
@@ -308,6 +309,37 @@ func (s *SQLiteForwardingStore) MarkCreatorForwardingCancelled(ctx context.Conte
 
 	if err := tx.Commit(); err != nil {
 		return storecore.WrapDBInfrastructure("MarkCreatorForwardingCancelled commit", err)
+	}
+	return nil
+}
+
+// MarkCreatorForwardingCancelledForClient cancels a leasable forwarding on
+// the client-initiated path, scoped by external_client_id so a caller can
+// only cancel its own rows. Unlike MarkCreatorForwardingCancelled there is
+// no lease CAS: a client does not hold a runner lease, so the guard is the
+// (forwarding_id, external_client_id) pair plus the non-terminal status
+// window. A miss (wrong client, terminal status, or unknown id) returns
+// storecore.ErrCreatorForwardingNoRow.
+func (s *SQLiteForwardingStore) MarkCreatorForwardingCancelledForClient(ctx context.Context, forwardingID, clientID, errorCode, errorMsg string) error {
+	if forwardingID == "" || strings.TrimSpace(clientID) == "" {
+		return storecore.ErrCreatorForwardingNoRow
+	}
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE creator_forwardings
+		 SET status = 'CANCELLED', locked_by = '', lease_id = '', lease_expires_at = '',
+		     last_error_code = ?, last_error_message = ?, updated_at = ?
+		 WHERE forwarding_id = ? AND external_client_id = ?
+		   AND status IN ('PENDING', 'POLLING', 'RETRY_WAIT', 'READY_TO_FORWARD', 'FORWARDING')`,
+		nullIfEmpty(errorCode), nullIfEmpty(errorMsg), nowRFC3339(), forwardingID, strings.TrimSpace(clientID))
+	if err != nil {
+		return storecore.WrapDBInfrastructure("MarkCreatorForwardingCancelledForClient exec", err)
+	}
+	affected, rowsErr := storecore.ReadRowsAffected(result, "MarkCreatorForwardingCancelledForClient")
+	if rowsErr != nil {
+		return rowsErr
+	}
+	if affected == 0 {
+		return storecore.ErrCreatorForwardingNoRow
 	}
 	return nil
 }

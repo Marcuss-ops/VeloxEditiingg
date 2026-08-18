@@ -13,6 +13,24 @@ import (
 // The methods in this file are the M2M repository boundary. Admin callers
 // continue to use the legacy unscoped methods; M2M callers must provide both
 // the canonical target_job_id and external_client_id.
+//
+// Why this file stays cross-domain (not a leaf):
+//
+// The single shared abstraction here is the creator_forwardings.external_client_id
+// ownership predicate (JOIN/EXISTS) applied as the M2M authorization gate on
+// read/write variants of EIGHT separate domain repositories — pipeline_runs,
+// jobs, artifacts, job_deliveries, job_events, job_attempts, task_attempts,
+// and worker_asset_downloads. Those methods return each domain's own row
+// types (pipelineruns.PipelineRun, Artifact, JobDelivery, JobEvent,
+// JobAttempt, TaskAttemptSnapshot, AssetDownloadProgressView) and reuse the
+// domain scan helpers (scanPipelineRun, scanJobRow, jobColumns, scanArtifacts,
+// scanAssetDownloadProgress). A leaf `ownership` package would have to import
+// internal/store for those types/helpers — which the leaf boundary test
+// forbids — or force a nine-domain type migration. The forwarding-only piece
+// (MarkCreatorForwardingCancelledForClient) was extracted to forwardingstore;
+// the remaining methods are ownership-scoped variants of the domains they
+// belong to, so they stay here until each domain is itself extracted to a
+// leaf.
 
 func requireM2MClient(clientID string) error {
 	if strings.TrimSpace(clientID) == "" {
@@ -143,31 +161,6 @@ func (s *SQLiteStore) UpdatePipelineRunErrorForClient(ctx context.Context, id, c
 		     updated_at = ?, completed_at = COALESCE(NULLIF(completed_at, ''), ?)
 		 WHERE pipeline_runs.id = ?`,
 		string(pipelineruns.StatusFailed), code, message, failedStage, now, now)
-}
-
-func (s *SQLiteStore) MarkCreatorForwardingCancelledForClient(ctx context.Context, forwardingID, clientID, errorCode, errorMsg string) error {
-	if forwardingID == "" || requireM2MClient(clientID) != nil {
-		return ErrCreatorForwardingNoRow
-	}
-	now := nowRFC3339()
-	result, err := s.db.ExecContext(ctx,
-		`UPDATE creator_forwardings
-		 SET status = 'CANCELLED', locked_by = '', lease_id = '', lease_expires_at = '',
-		     last_error_code = ?, last_error_message = ?, updated_at = ?
-		 WHERE forwarding_id = ? AND external_client_id = ?
-		   AND status IN ('PENDING', 'POLLING', 'RETRY_WAIT', 'READY_TO_FORWARD', 'FORWARDING')`,
-		nullIfEmpty(errorCode), nullIfEmpty(errorMsg), now, forwardingID, strings.TrimSpace(clientID))
-	if err != nil {
-		return err
-	}
-	n, err := readRowsAffected(result, "cancel creator forwarding for client")
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return ErrCreatorForwardingNoRow
-	}
-	return nil
 }
 
 func (s *SQLiteStore) GetJobForClient(ctx context.Context, jobID, clientID string) (map[string]any, error) {

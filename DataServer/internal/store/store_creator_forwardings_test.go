@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -815,5 +816,68 @@ func TestCannotClaimTerminalForwarding(t *testing.T) {
 	}
 	if len(leases) != 0 {
 		t.Errorf("expected 0 claims on FORWARDED forwarding, got %d", len(leases))
+	}
+}
+
+// TestMarkCreatorForwardingCancelledForClient pins the client-scoped cancel
+// now living in the forwardingstore leaf: the (forwarding_id,
+// external_client_id) pair plus the non-terminal status window is the guard
+// (no lease CAS on the client path).
+func TestMarkCreatorForwardingCancelledForClient(t *testing.T) {
+	db := setupForwardingTestDB(t)
+	ctx := context.Background()
+
+	insertClientForwarding := func(forwardingID, clientID, status string) {
+		t.Helper()
+		cf := &CreatorForwarding{
+			ForwardingID:     forwardingID,
+			ExternalClientID: clientID,
+			SourceProvider:   "external_api",
+			SourceJobID:      forwardingID + "-source",
+			TargetExecutorID: "scene.composite.v1",
+			Status:           status,
+			CreatedAt:        time.Now().UTC().Format(time.RFC3339),
+			UpdatedAt:        time.Now().UTC().Format(time.RFC3339),
+		}
+		if _, err := db.Forwarding().InsertCreatorForwarding(ctx, cf); err != nil {
+			t.Fatalf("insert forwarding %s: %v", forwardingID, err)
+		}
+	}
+
+	// 1. Matching client cancels the row.
+	insertClientForwarding("cf-client-cancel", "client-a", "PENDING")
+	if err := db.Forwarding().MarkCreatorForwardingCancelledForClient(ctx, "cf-client-cancel", "client-a", "CANCELLED_BY_USER", "cancelled by user"); err != nil {
+		t.Fatalf("cancel matching client: %v", err)
+	}
+	row, err := db.Forwarding().GetCreatorForwarding(ctx, "cf-client-cancel")
+	if err != nil {
+		t.Fatalf("get cancelled forwarding: %v", err)
+	}
+	if row.Status != "CANCELLED" || row.LastErrorCode != "CANCELLED_BY_USER" || row.LastErrorMessage != "cancelled by user" {
+		t.Errorf("cancelled row = status=%q err=%q msg=%q", row.Status, row.LastErrorCode, row.LastErrorMessage)
+	}
+
+	// 2. Wrong client is fenced and leaves the row untouched.
+	insertClientForwarding("cf-client-fence", "client-a", "PENDING")
+	if err := db.Forwarding().MarkCreatorForwardingCancelledForClient(ctx, "cf-client-fence", "client-b", "X", "y"); !errors.Is(err, ErrCreatorForwardingNoRow) {
+		t.Fatalf("wrong client error = %v, want ErrCreatorForwardingNoRow", err)
+	}
+	fenced, err := db.Forwarding().GetCreatorForwarding(ctx, "cf-client-fence")
+	if err != nil {
+		t.Fatalf("get fenced forwarding: %v", err)
+	}
+	if fenced.Status != "PENDING" {
+		t.Errorf("wrong-client cancel mutated status to %q", fenced.Status)
+	}
+
+	// 3. Terminal rows cannot be cancelled by a client.
+	insertClientForwarding("cf-client-terminal", "client-a", "FORWARDED")
+	if err := db.Forwarding().MarkCreatorForwardingCancelledForClient(ctx, "cf-client-terminal", "client-a", "X", "y"); !errors.Is(err, ErrCreatorForwardingNoRow) {
+		t.Fatalf("terminal cancel error = %v, want ErrCreatorForwardingNoRow", err)
+	}
+
+	// 4. Empty client ID is fenced.
+	if err := db.Forwarding().MarkCreatorForwardingCancelledForClient(ctx, "cf-client-cancel", "", "X", "y"); !errors.Is(err, ErrCreatorForwardingNoRow) {
+		t.Fatalf("empty client error = %v, want ErrCreatorForwardingNoRow", err)
 	}
 }

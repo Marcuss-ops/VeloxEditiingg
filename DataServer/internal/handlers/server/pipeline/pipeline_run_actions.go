@@ -209,7 +209,7 @@ func (h *Handlers) CancelPipelineRun() gin.HandlerFunc {
 		} else {
 			var markErr error
 			if clientID != "" {
-				markErr = h.store.MarkCreatorForwardingCancelledForClient(ctx, forwarding.ForwardingID,
+				markErr = h.store.Forwarding().MarkCreatorForwardingCancelledForClient(ctx, forwarding.ForwardingID,
 					clientID, "CANCELLED_BY_USER", "cancelled by user")
 			} else {
 				markErr = h.store.Forwarding().MarkCreatorForwardingCancelled(ctx,
