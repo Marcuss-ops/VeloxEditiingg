@@ -4,7 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
+
+	"velox-server/internal/deliverycontract"
 )
 
 func (r *DeliveryRunner) reconcileRecent(ctx context.Context) error {
@@ -45,7 +46,7 @@ func (r *DeliveryRunner) reconcileRecent(ctx context.Context) error {
 		if result == nil || result.Status == "" {
 			continue
 		}
-		status := reconciliationStatus(result.Status)
+		status := deliverycontract.StatusFromExternal(result.Status)
 		errCode, errMessage := "", ""
 		if meta, ok := result.ProviderMeta["error_code"].(string); ok {
 			errCode = meta
@@ -62,22 +63,3 @@ func (r *DeliveryRunner) reconcileRecent(ctx context.Context) error {
 	return nil
 }
 
-// reconciliationStatus maps a provider's remote status observation to the
-// canonical delivery lifecycle status. The provider string is untrusted and
-// case-insensitive; the returned value is the typed DeliveryStatus so callers
-// and persistence compare against the delivery vocabulary instead of bare
-// "SUCCEEDED"/"BLOCKED_AUTH"/"RETRY_WAIT" string literals.
-func reconciliationStatus(status string) DeliveryStatus {
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "published", "completed":
-		return DeliverySucceeded
-	case "failed", "dead_letter":
-		return DeliveryFailed
-	case "blocked_auth":
-		return DeliveryBlockedAuth
-	case "retry_wait", "rate_limited":
-		return DeliveryRetryWait
-	default:
-		return DeliveryRunning
-	}
-}

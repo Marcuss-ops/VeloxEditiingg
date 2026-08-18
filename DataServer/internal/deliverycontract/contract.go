@@ -6,6 +6,7 @@ package deliverycontract
 import (
 	"context"
 	"errors"
+	"strings"
 )
 
 // ErrNoExplicitPlan identifies a delivery operation without a per-job plan.
@@ -60,4 +61,34 @@ func (s DeliveryStatus) Valid() bool {
 // retries or state transitions).
 func (s DeliveryStatus) IsTerminal() bool {
 	return s == DeliverySucceeded || s == DeliveryFailed || s == DeliveryBlockedAuth || s == DeliveryCancelled
+}
+
+// StatusFromExternal maps an untrusted external delivery observation
+// (provider callback or reconciliation poll) to the canonical delivery
+// lifecycle status. The input is normalized (trimmed + lower-cased) so casing
+// and surrounding whitespace never change the verdict. Unknown observations
+// map to DeliveryRunning: a terminal projection is applied only when the
+// observation is explicit, so a malformed or mid-flight observation can never
+// prematurely terminate a delivery.
+//
+// This is the single authoritative mapping between the external status
+// vocabulary and DeliveryStatus. Both the InstaEdit callback persistence
+// (internal/store) and the delivery runner's reconciliation sweep
+// (internal/deliveries) route through it rather than maintaining separate
+// copies of the same mapping.
+func StatusFromExternal(status string) DeliveryStatus {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "published", "publication_completed", "completed":
+		return DeliverySucceeded
+	case "failed", "dead_letter":
+		return DeliveryFailed
+	case "blocked_auth":
+		return DeliveryBlockedAuth
+	case "retry_wait", "rate_limited":
+		return DeliveryRetryWait
+	case "cancel_requested", "cancelled":
+		return DeliveryCancelled
+	default:
+		return DeliveryRunning
+	}
 }

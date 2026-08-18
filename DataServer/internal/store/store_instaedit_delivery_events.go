@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"velox-server/internal/deliverycontract"
 )
 
 // InstaEditDeliveryEvent is the persisted, already-authenticated callback
@@ -85,7 +87,7 @@ func (s *SQLiteStore) ApplyInstaEditDeliveryEvent(ctx context.Context, event Ins
 		return false, nil
 	}
 
-	status := callbackDeliveryStatus(event.Status)
+	status := string(deliverycontract.StatusFromExternal(event.Status))
 	now := nowRFC3339Nano()
 	_, err = tx.ExecContext(ctx, `
 		UPDATE job_deliveries
@@ -111,21 +113,4 @@ func (s *SQLiteStore) ApplyInstaEditDeliveryEvent(ctx context.Context, event Ins
 		return false, fmt.Errorf("store: commit callback delivery: %w", err)
 	}
 	return true, nil
-}
-
-func callbackDeliveryStatus(status string) string {
-	switch status {
-	case "published", "publication_completed", "completed":
-		return "SUCCEEDED"
-	case "failed", "dead_letter":
-		return "FAILED"
-	case "blocked_auth":
-		return "BLOCKED_AUTH"
-	case "retry_wait", "rate_limited":
-		return "RETRY_WAIT"
-	case "cancel_requested", "cancelled":
-		return "CANCELLED"
-	default:
-		return "RUNNING"
-	}
 }
