@@ -117,7 +117,7 @@ func ValidateCreateRequest(
 
 			// When a destination_id is specified, check it exists + is enabled.
 			if d.Destination != "" {
-				dest, err := db.GetDeliveryDestination(ctx, d.Destination)
+				dest, err := db.Delivery().GetDeliveryDestination(ctx, d.Destination)
 				if err != nil {
 					return &ValidationError{
 						Field:   prefix + ".destination",

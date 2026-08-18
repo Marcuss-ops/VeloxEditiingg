@@ -7,6 +7,7 @@ import (
 
 	"velox-server/internal/costmodel"
 	"velox-server/internal/creatorflow"
+	"velox-server/internal/deliverystore"
 	"velox-server/internal/jobs"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/store"
@@ -28,9 +29,9 @@ type storeReader interface {
 	GetJobByWorkspace(ctx context.Context, jobID string, workspaceID int64) (map[string]any, error)
 	ListWorkersByWorkspace(workspaceID int64) ([]map[string]any, error)
 	GetWorkerByWorkspace(workerID string, workspaceID int64) (map[string]any, error)
-	GetDeliveryDestinationByExternalID(ctx context.Context, externalID string) (*store.DeliveryDestination, error)
-	ListJobDeliveriesByJob(jobID string) ([]store.JobDelivery, error)
-	GetDeliveryDestination(ctx context.Context, destID string) (*store.DeliveryDestination, error)
+	GetDeliveryDestinationByExternalID(ctx context.Context, externalID string) (*deliverystore.DeliveryDestination, error)
+	ListJobDeliveriesByJob(jobID string) ([]deliverystore.JobDelivery, error)
+	GetDeliveryDestination(ctx context.Context, destID string) (*deliverystore.DeliveryDestination, error)
 }
 
 // JobGateway is the port for job persistence and delivery metadata.
@@ -38,9 +39,9 @@ type JobGateway interface {
 	ListJobsByWorkspace(ctx context.Context, workspaceID int64, limit int) ([]map[string]any, error)
 	GetJobByWorkspace(ctx context.Context, jobID string, workspaceID int64) (map[string]any, error)
 	Cancel(ctx context.Context, jobID string, reason string, revision int) error
-	GetDeliveryDestinationByExternalID(ctx context.Context, externalID string) (*store.DeliveryDestination, error)
-	GetDeliveryDestination(ctx context.Context, destID string) (*store.DeliveryDestination, error)
-	ListJobDeliveriesByJob(jobID string) ([]store.JobDelivery, error)
+	GetDeliveryDestinationByExternalID(ctx context.Context, externalID string) (*deliverystore.DeliveryDestination, error)
+	GetDeliveryDestination(ctx context.Context, destID string) (*deliverystore.DeliveryDestination, error)
+	ListJobDeliveriesByJob(jobID string) ([]deliverystore.JobDelivery, error)
 }
 
 // WorkerReader is the port for worker snapshots.

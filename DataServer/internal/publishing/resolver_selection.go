@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	"velox-server/internal/store"
+	"velox-server/internal/deliverystore"
 )
 
 // ResolveSelection validates selected channels against both the upstream
@@ -184,7 +184,7 @@ func orderedGroupMembers(members []GroupMember) []GroupMember {
 	return ordered
 }
 
-func validateLocalDestinationSnapshot(workspaceID int64, platform string, channel Channel, row *store.DeliveryDestination) error {
+func validateLocalDestinationSnapshot(workspaceID int64, platform string, channel Channel, row *deliverystore.DeliveryDestination) error {
 	if row == nil {
 		return fmt.Errorf("%w: destination_id=%q", ErrDestinationNotFound, channel.DestinationID)
 	}

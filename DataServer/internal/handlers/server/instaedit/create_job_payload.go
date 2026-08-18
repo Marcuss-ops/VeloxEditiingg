@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"velox-server/internal/store"
+	"velox-server/internal/storecore"
 	"velox-shared/contract"
 )
 
@@ -32,7 +32,7 @@ func (s *Service) buildCreateJobPayload(ctx context.Context, cmd CreateJobCmd, r
 		}
 		dest, err := s.jobs.GetDeliveryDestinationByExternalID(ctx, externalID)
 		if err != nil {
-			if errors.Is(err, store.ErrDeliveryNoRow) {
+			if errors.Is(err, storecore.ErrDeliveryNoRow) {
 				return nil, fmt.Errorf("%w: %s", ErrDestinationUnknown, externalID)
 			}
 			return nil, err

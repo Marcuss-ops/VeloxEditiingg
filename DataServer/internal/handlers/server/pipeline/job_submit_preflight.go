@@ -13,7 +13,7 @@ import (
 	"strings"
 
 	voiceoverassets "velox-server/internal/assets"
-	"velox-server/internal/store"
+	"velox-server/internal/deliverystore"
 	"velox-shared/assetref"
 
 	"github.com/gin-gonic/gin"
@@ -234,7 +234,7 @@ func checkDeliveryPlanDestinations(c *gin.Context, h *Handlers, req SubmitJobReq
 	if len(ids) == 0 {
 		return false
 	}
-	statuses, qerr := h.store.BatchDeliveryDestinationsStatus(c.Request.Context(), ids)
+	statuses, qerr := h.store.Delivery().BatchDeliveryDestinationsStatus(c.Request.Context(), ids)
 	if qerr != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"ok":      false,
@@ -253,19 +253,19 @@ func checkDeliveryPlanDestinations(c *gin.Context, h *Handlers, req SubmitJobReq
 			continue
 		}
 		switch statuses[tid] {
-		case store.DeliveryDestinationNotFound:
+		case deliverystore.DeliveryDestinationNotFound:
 			destDetails = append(destDetails, gin.H{
 				"path":              fmt.Sprintf("delivery_plan.%d.destination_id", i),
 				"issue":             "destination_not_found",
 				"target_error_code": "DESTINATION_NOT_FOUND",
-				"status":            store.DeliveryDestinationNotFound.String(),
+				"status":            deliverystore.DeliveryDestinationNotFound.String(),
 			})
-		case store.DeliveryDestinationDisabled:
+		case deliverystore.DeliveryDestinationDisabled:
 			destDetails = append(destDetails, gin.H{
 				"path":              fmt.Sprintf("delivery_plan.%d.destination_id", i),
 				"issue":             "destination_disabled",
 				"target_error_code": BlockedCodeVeloxDisabled,
-				"status":            store.DeliveryDestinationDisabled.String(),
+				"status":            deliverystore.DeliveryDestinationDisabled.String(),
 			})
 		}
 	}

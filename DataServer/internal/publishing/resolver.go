@@ -23,8 +23,8 @@ import (
 	"errors"
 	"fmt"
 
+	"velox-server/internal/deliverystore"
 	"velox-server/internal/socialclient"
-	"velox-server/internal/store"
 )
 
 const (
@@ -53,7 +53,7 @@ type CatalogClient interface {
 type DestinationReader interface {
 	// BatchDeliveryDestinations returns one local registry snapshot for all
 	// requested opaque destinations. Missing IDs are absent from the map.
-	BatchDeliveryDestinations(context.Context, []string) (map[string]*store.DeliveryDestination, error)
+	BatchDeliveryDestinations(context.Context, []string) (map[string]*deliverystore.DeliveryDestination, error)
 }
 
 // TargetResolver validates authoritative publishing targets and selected
