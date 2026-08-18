@@ -55,7 +55,7 @@ func TestProcessLease_StalePollStopsWithoutRetryOrTransition(t *testing.T) {
 	cfg.LeaseDuration = 0 // renewal loop uses its 30s fallback; test controls expiry
 	cfg.BackoffSchedule = []time.Duration{0}
 	client := remoteengine.NewClient(remoteengine.Config{URL: server.URL, Retries: 0})
-	r := NewCreatorForwardingRunner(cfg, db, client, nil, "runner-old")
+	r := NewCreatorForwardingRunner(cfg, db.Forwarding(), client, nil, "runner-old")
 
 	resultCh := make(chan error, 1)
 	go func() {

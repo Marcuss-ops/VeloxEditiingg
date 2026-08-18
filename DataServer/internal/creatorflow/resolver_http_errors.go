@@ -26,6 +26,7 @@ import (
 	"velox-server/internal/deliverycontract"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/store"
+	"velox-server/internal/storecore"
 	"velox-shared/contract/deliveryplan"
 	"velox-shared/contract/domain"
 )
@@ -153,7 +154,7 @@ func WriteResolverError(c *gin.Context, err error) {
 			"payload_incomplete",
 			"payload is not complete enough to dispatch",
 			nil)
-	case errors.Is(err, store.ErrCreatorForwardingOwnershipConflict):
+	case errors.Is(err, storecore.ErrCreatorForwardingOwnershipConflict):
 		writeErrorEnvelope(c, http.StatusConflict,
 			"idempotency_key_reused",
 			"idempotency key belongs to another client",

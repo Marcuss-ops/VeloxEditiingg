@@ -57,7 +57,7 @@ func TestTick_DBOutage_PropagatesAsInfrastructure(t *testing.T) {
 	db.Close()
 
 	client := remoteengine.NewClient(remoteengine.Config{URL: "http://localhost:9999"})
-	r := NewCreatorForwardingRunner(DefaultRunnerConfig(), db, client, nil, "test-outage")
+	r := NewCreatorForwardingRunner(DefaultRunnerConfig(), db.Forwarding(), client, nil, "test-outage")
 
 	err = r.tick(context.Background())
 	if err == nil {
@@ -85,7 +85,7 @@ func TestTick_MetricsAfterCAS(t *testing.T) {
 	db.Close()
 
 	client := remoteengine.NewClient(remoteengine.Config{URL: "http://localhost:9999"})
-	r := NewCreatorForwardingRunner(DefaultRunnerConfig(), db, client, nil, "test-metrics")
+	r := NewCreatorForwardingRunner(DefaultRunnerConfig(), db.Forwarding(), client, nil, "test-metrics")
 
 	_ = r.tick(context.Background())
 
@@ -127,7 +127,7 @@ func TestTick_EffectiveClaimBatch_CappedAtConcurrency(t *testing.T) {
 	// This test isolates runner semaphore release; retry/backoff policy
 	// is covered by internal/remoteengine.
 	client := fastFailClient(t)
-	r := NewCreatorForwardingRunner(cfg, db, client, nil, "test-batch")
+	r := NewCreatorForwardingRunner(cfg, db.Forwarding(), client, nil, "test-batch")
 
 	err := r.tick(context.Background())
 	if err != nil {
@@ -190,7 +190,7 @@ func TestTick_EffectiveClaimBatch_ParallelNoDeadlock(t *testing.T) {
 	// (404 PERMANENT → no retry backoff) so the semaphore contention path
 	// is exercised without burning ~21s of remoteengine retry backoff.
 	client := fastFailClient(t)
-	r := NewCreatorForwardingRunner(cfg, db, client, nil, "test-par")
+	r := NewCreatorForwardingRunner(cfg, db.Forwarding(), client, nil, "test-par")
 
 	done := make(chan struct{})
 	go func() {
@@ -214,7 +214,7 @@ func TestLazyResolver_ConcurrentInit(t *testing.T) {
 	db := setupRunnerTestDB(t)
 	enqueuer := &enqueue.Enqueuer{} // zero-value enqueuer (lazyResolver checks nil on resolver, not enqueuer)
 
-	r := NewCreatorForwardingRunner(DefaultRunnerConfig(), db, nil, enqueuer, "test-lazy")
+	r := NewCreatorForwardingRunner(DefaultRunnerConfig(), db.Forwarding(), nil, enqueuer, "test-lazy")
 
 	var wg sync.WaitGroup
 	var callCount atomic.Int64
@@ -243,7 +243,7 @@ func TestSetResolver_Idempotent(t *testing.T) {
 	db := setupRunnerTestDB(t)
 	enqueuer := &enqueue.Enqueuer{}
 
-	r := NewCreatorForwardingRunner(DefaultRunnerConfig(), db, nil, enqueuer, "test-set")
+	r := NewCreatorForwardingRunner(DefaultRunnerConfig(), db.Forwarding(), nil, enqueuer, "test-set")
 
 	injected := creatorflow.NewResolverMinimal(enqueuer, db)
 	if injected == nil {
@@ -387,7 +387,7 @@ func TestProcessLease_MetricsAfterCAS(t *testing.T) {
 	// GetPipelineStatus call which returns a PERMANENT error on the
 	// first attempt (404, no retry backoff), triggering handleRetry.
 	client := fastFailClient(t)
-	r := NewCreatorForwardingRunner(DefaultRunnerConfig(), db, client, nil, "test-cas")
+	r := NewCreatorForwardingRunner(DefaultRunnerConfig(), db.Forwarding(), client, nil, "test-cas")
 
 	// processLease with the claimed lease. The unconfigured client will
 	// cause GetPipelineStatus to fail, triggering handleRetry.

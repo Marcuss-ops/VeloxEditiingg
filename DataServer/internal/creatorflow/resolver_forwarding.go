@@ -10,7 +10,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"velox-server/internal/store"
+	"velox-server/internal/forwardingcontract"
+	"velox-server/internal/storecore"
 	"velox-shared/contract/domain"
 )
 
@@ -26,7 +27,7 @@ import (
 func (r *Resolver) PersistPendingRemoteForwarding(
 	ctx context.Context,
 	sourceProvider, sourceJobID, targetExecutorID, externalClientID, intakeSource string,
-) (*store.CreatorForwarding, error) {
+) (*forwardingcontract.CreatorForwarding, error) {
 	if r == nil || r.forwardRepo == nil {
 		return nil, domain.NewInvalidPayload("resolver", "unavailable", "resolver database access is required")
 	}
@@ -42,24 +43,24 @@ func (r *Resolver) PersistPendingRemoteForwarding(
 	}
 
 	if existing, err := r.forwardRepo.GetCreatorForwardingBySource(ctx, sourceProvider, sourceJobID, targetExecutorID); err != nil {
-		if !errors.Is(err, store.ErrCreatorForwardingNoRow) {
+		if !errors.Is(err, storecore.ErrCreatorForwardingNoRow) {
 			return nil, fmt.Errorf("creatorflow: lookup pending forwarding: %w", err)
 		}
 	} else if existing != nil {
 		if clientID := strings.TrimSpace(externalClientID); clientID != "" && strings.TrimSpace(existing.ExternalClientID) != clientID {
-			return nil, store.ErrCreatorForwardingOwnershipConflict
+			return nil, storecore.ErrCreatorForwardingOwnershipConflict
 		}
 		return existing, nil
 	}
 
-	inserted, err := r.forwardRepo.InsertCreatorForwarding(ctx, &store.CreatorForwarding{
+	inserted, err := r.forwardRepo.InsertCreatorForwarding(ctx, &forwardingcontract.CreatorForwarding{
 		ForwardingID:     "cf_" + uuid.NewString(),
 		ExternalClientID: externalClientID,
 		SourceProvider:   sourceProvider,
 		SourceJobID:      sourceJobID,
 		TargetExecutorID: targetExecutorID,
 		IntakeSource:     intakeSource,
-		Status:           string(store.CFStatusPending),
+		Status:           string(forwardingcontract.CFStatusPending),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("creatorflow: persist pending forwarding: %w", err)
@@ -101,7 +102,7 @@ func (r *Resolver) ensureReadyForwarding(ctx context.Context, req ResolveRequest
 
 	// (b) Handler sync path: INSERT PENDING, then promote.
 	now := time.Now().UTC().Format(time.RFC3339)
-	cf := &store.CreatorForwarding{
+	cf := &forwardingcontract.CreatorForwarding{
 		ForwardingID:     "cf_" + uuid.NewString(),
 		SourceProvider:   req.SourceProvider,
 		SourceJobID:      req.SourceJobID,
@@ -109,7 +110,7 @@ func (r *Resolver) ensureReadyForwarding(ctx context.Context, req ResolveRequest
 		TargetExecutorID: targetExecutor,
 		PayloadJSON:      payloadJSON,
 		PayloadSHA256:    payloadSHA256,
-		Status:           string(store.CFStatusPending),
+		Status:           string(forwardingcontract.CFStatusPending),
 		AttemptCount:     0,
 		CreatedAt:        now,
 		UpdatedAt:        now,
@@ -130,12 +131,12 @@ func (r *Resolver) ensureReadyForwarding(ctx context.Context, req ResolveRequest
 			return "", ErrIdempotencyKeyReused
 		}
 
-		switch store.CreatorForwardingStatus(persisted.Status) {
-		case store.CFStatusReadyToForward:
+		switch forwardingcontract.CreatorForwardingStatus(persisted.Status) {
+		case forwardingcontract.CFStatusReadyToForward:
 			log.Printf("[CREATORFLOW] sync handler path: reusing %s already READY_TO_FORWARD (source=%s source_job=%s target_executor=%s)",
 				persisted.ForwardingID, req.SourceProvider, req.SourceJobID, targetExecutor)
 			return persisted.ForwardingID, nil
-		case store.CFStatusPending, store.CFStatusPolling:
+		case forwardingcontract.CFStatusPending, forwardingcontract.CFStatusPolling:
 			// Continue below and promote the existing row. These are the only
 			// non-terminal states accepted by the synchronous promotion CAS.
 		default:

@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"sync"
 
+	"velox-server/internal/forwardingcontract"
 	"velox-server/internal/logging"
-	"velox-server/internal/store"
 	"velox-server/internal/telemetry"
 )
 
@@ -57,7 +57,7 @@ func (r *CreatorForwardingRunner) tick(ctx context.Context) error {
 	)
 	for _, lease := range leases {
 		wg.Add(1)
-		go func(l store.CreatorForwardingLease) {
+		go func(l forwardingcontract.CreatorForwardingLease) {
 			defer wg.Done()
 			// Acquire semaphore (bounded concurrency).
 			select {

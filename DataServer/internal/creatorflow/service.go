@@ -11,10 +11,10 @@ import (
 	"github.com/google/uuid"
 
 	"velox-server/internal/config"
+	"velox-server/internal/forwardingcontract"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/remoteengine"
 	"velox-server/internal/routing"
-	"velox-server/internal/store"
 	"velox-shared/contract/deliveryplan"
 )
 
@@ -44,7 +44,7 @@ import (
 type Service struct {
 	enqueuer  *enqueue.Enqueuer
 	client    *remoteengine.Client
-	dbStore   *store.SQLiteStore
+	dbStore   ResolverStore
 	dataDir   string
 	videosDir string
 	masterURL string
@@ -54,7 +54,7 @@ type Service struct {
 // enqueuer is mandatory (PR15.7a): it owns the voiceover rewrite.
 // dbStore is mandatory (PR-forwarding-runner): used to persist
 // PENDING creator_forwardings rows for durable polling.
-func New(cfg *config.Config, enqueuer *enqueue.Enqueuer, dbStore *store.SQLiteStore) *Service {
+func New(cfg *config.Config, enqueuer *enqueue.Enqueuer, dbStore ResolverStore) *Service {
 	if cfg == nil || enqueuer == nil || dbStore == nil {
 		return nil
 	}
@@ -203,12 +203,12 @@ func (s *Service) StartOrPersistForwarding(ctx context.Context, rawPayload map[s
 	}
 	forwardingID := "cf_" + uuid.NewString()
 	now := time.Now().UTC().Format(time.RFC3339)
-	if _, err := s.dbStore.InsertCreatorForwarding(ctx, &store.CreatorForwarding{
+	if _, err := s.dbStore.InsertCreatorForwarding(ctx, &forwardingcontract.CreatorForwarding{
 		ForwardingID:     forwardingID,
 		SourceProvider:   "remote_engine",
 		SourceJobID:      creatorJobID,
 		TargetExecutorID: targetExecutorID,
-		Status:           string(store.CFStatusPending),
+		Status:           string(forwardingcontract.CFStatusPending),
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}); err != nil {

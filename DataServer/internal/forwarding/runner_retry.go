@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"time"
 
+	"velox-server/internal/forwardingcontract"
 	"velox-server/internal/logging"
-	"velox-server/internal/store"
 )
 
 // handleEnqueueRetry transitions the forwarding to RETRY_WAIT with backoff
@@ -20,7 +20,7 @@ import (
 // Returns an error classified by supervisor.ClassifyError. The
 // Verdetto P0 #1 contract: metrics (Failed / Retried) are persisted
 // only after the underlying SQL CAS returns nil.
-func (r *CreatorForwardingRunner) handleEnqueueRetry(ctx context.Context, lease store.CreatorForwardingLease, code, msg, errorClass string) error {
+func (r *CreatorForwardingRunner) handleEnqueueRetry(ctx context.Context, lease forwardingcontract.CreatorForwardingLease, code, msg, errorClass string) error {
 	maxAttempts := r.cfg.MaxAttempts
 	if maxAttempts <= 0 {
 		maxAttempts = 12
@@ -74,7 +74,7 @@ func (r *CreatorForwardingRunner) handleEnqueueRetry(ctx context.Context, lease 
 // Verdetto P0 #1 contract: metrics (Failed / Retried) are persisted
 // only after the underlying SQL CAS returns nil. The caller no
 // longer adds the Retried metric — handleRetry owns it.
-func (r *CreatorForwardingRunner) handleRetry(ctx context.Context, lease store.CreatorForwardingLease, code, msg, errorClass string) error {
+func (r *CreatorForwardingRunner) handleRetry(ctx context.Context, lease forwardingcontract.CreatorForwardingLease, code, msg, errorClass string) error {
 	maxAttempts := r.cfg.MaxAttempts
 	if maxAttempts <= 0 {
 		maxAttempts = 12

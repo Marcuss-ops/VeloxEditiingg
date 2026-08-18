@@ -477,7 +477,7 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 		})
 		fwdRunner = forwarding.NewCreatorForwardingRunner(
 			forwarding.DefaultRunnerConfig(),
-			p.SQLite,
+			p.SQLite.Forwarding(),
 			reClient,
 			enqueuer,
 			fmt.Sprintf("cf-runner-%d", time.Now().UnixNano()),

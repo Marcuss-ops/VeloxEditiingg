@@ -173,7 +173,7 @@ func TestRunner_Tick_NoClient(t *testing.T) {
 	insertTestForwardingRecord(t, db, "cf-no-client", "openai", "src-1", "scene.composite.v1", "PENDING")
 
 	// Runner with nil client should not claim anything.
-	r := NewCreatorForwardingRunner(DefaultRunnerConfig(), db, nil, nil, "test")
+	r := NewCreatorForwardingRunner(DefaultRunnerConfig(), db.Forwarding(), nil, nil, "test")
 
 	err := r.tick(context.Background())
 	if err != nil {
@@ -196,7 +196,7 @@ func TestRunner_Tick_UnconfiguredClient(t *testing.T) {
 
 	// Client that is not configured (no URL).
 	client := remoteengine.NewClient(remoteengine.Config{})
-	r := NewCreatorForwardingRunner(DefaultRunnerConfig(), db, client, nil, "test")
+	r := NewCreatorForwardingRunner(DefaultRunnerConfig(), db.Forwarding(), client, nil, "test")
 
 	err := r.tick(context.Background())
 	if err != nil {

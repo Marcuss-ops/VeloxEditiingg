@@ -3,8 +3,8 @@ package creatorflow
 import (
 	"context"
 
+	"velox-server/internal/forwardingcontract"
 	"velox-server/internal/jobs"
-	"velox-server/internal/store"
 	"velox-server/internal/taskgraph"
 )
 
@@ -17,7 +17,7 @@ type ForwardingRepository interface {
 	// GetCreatorForwardingBySource locates the canonical row for a
 	// (provider, source_job_id, target_executor_id) triple. Returns
 	// (nil, nil) when no row exists yet, mirroring store's idiom.
-	GetCreatorForwardingBySource(ctx context.Context, provider, sourceJobID, targetExecutorID string) (*store.CreatorForwarding, error)
+	GetCreatorForwardingBySource(ctx context.Context, provider, sourceJobID, targetExecutorID string) (*forwardingcontract.CreatorForwarding, error)
 
 	// InsertCreatorForwarding creates the initial PENDING row for the
 	// handler sync path. The UNIQUE constraint on
@@ -25,7 +25,7 @@ type ForwardingRepository interface {
 	// concurrent calls converge. Returns the result of the insert (or
 	// the existing row on idempotent duplicate) so callers can read the
 	// persisted forwarding_id.
-	InsertCreatorForwarding(ctx context.Context, cf *store.CreatorForwarding) (*store.InsertCreatorForwardingResult, error)
+	InsertCreatorForwarding(ctx context.Context, cf *forwardingcontract.CreatorForwarding) (*forwardingcontract.InsertCreatorForwardingResult, error)
 
 	// UpsertCreatorForwardingPayload stamps payload + source_status
 	// onto an existing row (runner path). Preserves status.

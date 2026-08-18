@@ -127,12 +127,13 @@ func NewResolver(cfg *config.Config, enqueuer *enqueue.Enqueuer, dbStore Resolve
 // engine already packaged scene-image URLs with their canonical refs).
 //
 // Any dataDir/videosDir/masterURL fields remain empty, which causes
-// Resolve to skip BuildSceneImagePayloadForMaster.
-func NewResolverMinimal(enqueuer *enqueue.Enqueuer, dbStore ResolverStore) *Resolver {
-	if enqueuer == nil || dbStore == nil {
+// Resolve to skip BuildSceneImagePayloadForMaster, so the Drive folder
+// resolver is intentionally nil here.
+func NewResolverMinimal(enqueuer *enqueue.Enqueuer, forwardRepo ForwardingRepository) *Resolver {
+	if enqueuer == nil || forwardRepo == nil {
 		return nil
 	}
-	return NewResolverWithRepositories(enqueuer, enqueuer.Jobs, dbStore, dbStore, "", "", "")
+	return NewResolverWithRepositories(enqueuer, enqueuer.Jobs, forwardRepo, nil, "", "", "")
 }
 
 // NewResolverFromDeps is the explicit-fields constructor. Useful for

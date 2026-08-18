@@ -28,10 +28,10 @@ import (
 	"time"
 
 	"velox-server/internal/creatorflow"
+	"velox-server/internal/forwardingstore"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/logging"
 	"velox-server/internal/remoteengine"
-	"velox-server/internal/store"
 )
 
 // ── Runner ───────────────────────────────────────────────────────────────
@@ -41,7 +41,7 @@ import (
 // creation + forwarding status update in a single SQLite transaction).
 type CreatorForwardingRunner struct {
 	cfg          *RunnerConfig
-	dbStore      *store.SQLiteStore
+	dbStore      *forwardingstore.SQLiteForwardingStore
 	client       *remoteengine.Client
 	enqueuer     *enqueue.Enqueuer
 	identity     string
@@ -67,7 +67,7 @@ type CreatorForwardingRunner struct {
 // Resolver is built lazily via NewResolverMinimal on first call to
 // atomicEnqueueAndForward; callers may pre-build it via SetResolver to
 // share a single Resolver instance with the HTTP handler.
-func NewCreatorForwardingRunner(cfg *RunnerConfig, dbStore *store.SQLiteStore, client *remoteengine.Client, enqueuer *enqueue.Enqueuer, identity string) *CreatorForwardingRunner {
+func NewCreatorForwardingRunner(cfg *RunnerConfig, dbStore *forwardingstore.SQLiteForwardingStore, client *remoteengine.Client, enqueuer *enqueue.Enqueuer, identity string) *CreatorForwardingRunner {
 	if cfg == nil {
 		cfg = DefaultRunnerConfig()
 	}

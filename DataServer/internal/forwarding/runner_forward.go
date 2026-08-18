@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	"velox-server/internal/creatorflow"
+	"velox-server/internal/forwardingcontract"
 	"velox-server/internal/logging"
-	"velox-server/internal/store"
 	"velox-server/internal/supervisor"
 	"velox-shared/contract/deliveryplan"
 )
@@ -38,7 +38,7 @@ import (
 // path the runner uses for the FORWARDING transition. The legacy
 // inline (BuildPayload + PrepareJobAndTask + AtomicForwardAndEnqueue)
 // sequence lives only inside the Resolver.
-func (r *CreatorForwardingRunner) atomicEnqueueAndForward(ctx context.Context, lease store.CreatorForwardingLease, result map[string]interface{}) error {
+func (r *CreatorForwardingRunner) atomicEnqueueAndForward(ctx context.Context, lease forwardingcontract.CreatorForwardingLease, result map[string]interface{}) error {
 	if result == nil {
 		result = map[string]interface{}{}
 	}

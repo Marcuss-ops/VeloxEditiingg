@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"velox-server/internal/store"
+	"velox-server/internal/storecore"
 	"velox-server/internal/supervisor"
 )
 
@@ -15,7 +15,7 @@ func forwardingStateError(operation string, err error) error {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, store.ErrTransitionConflict) || errors.Is(err, store.ErrLeaseLost) {
+	if errors.Is(err, storecore.ErrTransitionConflict) || errors.Is(err, storecore.ErrLeaseLost) {
 		return supervisor.ErrLeaseLost
 	}
 	if errors.Is(err, supervisor.ErrInfrastructure) {

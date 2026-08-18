@@ -383,6 +383,18 @@ func (s *SQLiteStore) DB() *sql.DB {
 	return s.db
 }
 
+// Forwarding exposes the creator_forwardings leaf persistence so the
+// composition root can wire leaf consumers (the forwarding runner, the
+// creatorflow resolver) directly against forwardingstore instead of going
+// through the store facade. The leaf is constructed once in
+// NewSQLiteStoreFromHandle with the injected Job+Task creator.
+func (s *SQLiteStore) Forwarding() *forwardingstore.SQLiteForwardingStore {
+	if s == nil {
+		return nil
+	}
+	return s.forwarding
+}
+
 // Path returns the on-disk file path this SQLiteStore was opened against.
 // Used by the /api/v1/audit/persistence endpoint to surface the live DB path
 // and detect duplicate copies (the previous dual-DB issue caused groups to
