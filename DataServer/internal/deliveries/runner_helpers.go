@@ -136,7 +136,7 @@ func canonicalProviderName(provider string) string {
 
 // hydrateArtifact reads artifacts by id.
 func (r *DeliveryRunner) hydrateArtifact(ctx context.Context, artID string) (*store.Artifact, error) {
-	a, err := r.dbStore.GetArtifact(artID)
+	a, err := r.store.GetArtifact(artID)
 	if err != nil {
 		return nil, err
 	}

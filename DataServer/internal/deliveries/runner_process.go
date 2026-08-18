@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"time"
 
+	"velox-server/internal/deliverystore"
 	"velox-server/internal/logging"
 	"velox-server/internal/publicationstate"
 	"velox-server/internal/store"
@@ -34,7 +35,7 @@ import (
 // budget takes effect without a runner restart. A 0
 // MaxAttempts falls back to r.cfg.MaxAttempts (the historical
 // behavior).
-func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryLease) error {
+func (r *DeliveryRunner) processLease(ctx context.Context, lease deliverystore.DeliveryLease) error {
 	providerName := canonicalProviderName(lease.Provider)
 	ctx, span := telemetry.StartSpan(ctx, "deliver_lease",
 		attribute.String("velox.provider", providerName),
@@ -134,14 +135,14 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease store.DeliveryL
 	// callers that enter it directly.
 	publicationID := publicationIDFromMetadata(dest.DeliveryMetadataJSON)
 	if publicationID == "" {
-		resolvedID, lookupErr := r.dbStore.GetPublicationIDForArtifact(ctx, lease.ArtifactID)
+		resolvedID, lookupErr := r.store.GetPublicationIDForArtifact(ctx, lease.ArtifactID)
 		if lookupErr != nil && !errors.Is(lookupErr, store.ErrPublicationStateNotFound) {
 			return fmt.Errorf("resolve publication state: %w", lookupErr)
 		}
 		publicationID = resolvedID
 	}
 	if publicationID != "" {
-		state, stateErr := r.dbStore.GetPublicationState(ctx, publicationID)
+		state, stateErr := r.store.GetPublicationState(ctx, publicationID)
 		if stateErr != nil && !errors.Is(stateErr, store.ErrPublicationStateNotFound) {
 			return fmt.Errorf("read publication state: %w", stateErr)
 		}

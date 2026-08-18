@@ -12,7 +12,7 @@ import (
 	"fmt"
 
 	"velox-server/internal/credentials"
-	"velox-server/internal/store"
+	"velox-server/internal/deliverystore"
 	"velox-shared/contract/domain"
 )
 
@@ -30,7 +30,7 @@ func resolveCredentialReference(metadataJSON, configurationJSON string) (string,
 	return credentials.ReferenceFromJSON(configurationJSON)
 }
 
-func (r *DeliveryRunner) issueCredentialLease(ctx context.Context, provider Provider, destination *Destination, lease store.DeliveryLease) (*credentials.AccessLease, error) {
+func (r *DeliveryRunner) issueCredentialLease(ctx context.Context, provider Provider, destination *Destination, lease deliverystore.DeliveryLease) (*credentials.AccessLease, error) {
 	credentialProvider, needsCredential := provider.(CredentialLeaseProvider)
 	if !needsCredential {
 		return nil, nil

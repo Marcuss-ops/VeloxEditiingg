@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"velox-server/internal/credentials"
+	"velox-server/internal/deliverystore"
 	"velox-server/internal/publicationstate"
 	"velox-server/internal/store"
 )
@@ -20,7 +21,7 @@ var errDeliveryRetryScheduled = errors.New("delivery retry scheduled")
 // publicationPhaseContext is deliberately private: only the runner can build
 // it after hydrating the artifact, destination, and credential lease.
 type publicationPhaseContext struct {
-	lease           store.DeliveryLease
+	lease           deliverystore.DeliveryLease
 	publicationID   string
 	artifact        *store.Artifact
 	destination     *Destination
@@ -28,7 +29,7 @@ type publicationPhaseContext struct {
 }
 
 func (r *DeliveryRunner) runPublicationPhases(ctx context.Context, input publicationPhaseContext, executor PublicationPhaseExecutor) error {
-	state, err := r.dbStore.GetPublicationState(ctx, input.publicationID)
+	state, err := r.store.GetPublicationState(ctx, input.publicationID)
 	if err != nil {
 		return r.phaseInfrastructureFailure("PUBLICATION_STATE_NOT_FOUND", err)
 	}
@@ -37,7 +38,7 @@ func (r *DeliveryRunner) runPublicationPhases(ctx context.Context, input publica
 			return r.phaseInfrastructureFailure("PUBLISHED_WITHOUT_DISTINCT_MEDIA_ID", fmt.Errorf("durable PUBLISHED state lacks distinct submission and final media evidence"))
 		}
 		verificationOperation := phaseOperation(publicationstate.Verifying, input.artifact, input.destination, state.SubmittedRemoteID)
-		if err := r.dbStore.ValidatePublishedAfterReconciliation(ctx, input.publicationID, verificationOperation); err != nil {
+		if err := r.store.ValidatePublishedAfterReconciliation(ctx, input.publicationID, verificationOperation); err != nil {
 			return r.phaseInfrastructureFailure("PUBLISHED_WITHOUT_RECONCILIATION_EVIDENCE", err)
 		}
 		if err := r.dbStore.MarkDeliverySucceeded(ctx, input.lease.DeliveryID, input.lease.RunnerID, input.lease.LeaseID, state.RemoteID, state.RemoteURL); err != nil {
@@ -86,16 +87,16 @@ func (r *DeliveryRunner) runPublicationPhases(ctx context.Context, input publica
 		}
 		operation := phaseOperation(phase, input.artifact, input.destination, remoteIDForOperation)
 
-		key, _, err := r.dbStore.BeginPublicationPhaseEffect(ctx, input.publicationID, phase, operation)
+		key, _, err := r.store.BeginPublicationPhaseEffect(ctx, input.publicationID, phase, operation)
 		if err != nil {
 			return r.phaseFailure(ctx, input.lease, input.publicationID, phase, "PHASE_RESERVATION", err)
 		}
-		status, err := r.dbStore.GetPublicationPhaseEffectStatus(ctx, input.publicationID, phase, operation)
+		status, err := r.store.GetPublicationPhaseEffectStatus(ctx, input.publicationID, phase, operation)
 		if err != nil {
 			return r.phaseFailure(ctx, input.lease, input.publicationID, phase, "PHASE_STATUS", err)
 		}
 		if status == "FAILED" {
-			if err := r.dbStore.RetryPublicationPhaseEffect(ctx, input.publicationID, phase, operation); err != nil {
+			if err := r.store.RetryPublicationPhaseEffect(ctx, input.publicationID, phase, operation); err != nil {
 				return r.phaseFailure(ctx, input.lease, input.publicationID, phase, "PHASE_REOPEN", err)
 			}
 			status = "RUNNING"
@@ -160,7 +161,7 @@ func (r *DeliveryRunner) runPublicationPhases(ctx context.Context, input publica
 			if result == nil || strings.TrimSpace(result.RemoteID) == "" {
 				return r.phaseFailure(ctx, input.lease, input.publicationID, phase, operation, fmt.Errorf("%w: upload did not return remote_id", ErrProviderPermanent))
 			}
-			state, err = r.dbStore.PersistPublicationVideoCreated(ctx, input.publicationID, input.artifact.ID, result.RemoteID, result.RemoteURL)
+			state, err = r.store.PersistPublicationVideoCreated(ctx, input.publicationID, input.artifact.ID, result.RemoteID, result.RemoteURL)
 			if err != nil {
 				return r.phaseFailure(ctx, input.lease, input.publicationID, phase, operation, err)
 			}
@@ -182,7 +183,7 @@ func (r *DeliveryRunner) runPublicationPhases(ctx context.Context, input publica
 					finalRemoteURL = result.RemoteURL
 				}
 			}
-			state, err = r.dbStore.GetPublicationState(ctx, input.publicationID)
+			state, err = r.store.GetPublicationState(ctx, input.publicationID)
 			if err != nil {
 				return r.phaseInfrastructureFailure("PUBLICATION_STATE_READ", err)
 			}
@@ -192,7 +193,7 @@ func (r *DeliveryRunner) runPublicationPhases(ctx context.Context, input publica
 			// replay cannot promote the submission/operation ID as the
 			// published media ID.
 			if phase == publicationstate.Verifying && finalRemoteID != "" && finalRemoteID != state.RemoteID {
-				if err := r.dbStore.RecordPublicationRemoteResult(ctx, input.publicationID, state.Revision, state.RemoteID, finalRemoteID, finalRemoteURL); err != nil {
+				if err := r.store.RecordPublicationRemoteResult(ctx, input.publicationID, state.Revision, state.RemoteID, finalRemoteID, finalRemoteURL); err != nil {
 					return fmt.Errorf("record final publication result: %w", err)
 				}
 				state.RemoteID = finalRemoteID
@@ -204,10 +205,10 @@ func (r *DeliveryRunner) runPublicationPhases(ctx context.Context, input publica
 		var phaseCommitErr error
 		if phase == publicationstate.Verifying {
 			if !verificationReplay {
-				phaseCommitErr = r.dbStore.CompletePublicationReconciliationEffect(ctx, input.publicationID, operation)
+				phaseCommitErr = r.store.CompletePublicationReconciliationEffect(ctx, input.publicationID, operation)
 			}
 		} else {
-			phaseCommitErr = r.dbStore.CompletePublicationPhaseEffect(ctx, input.publicationID, phase, operation, true, "")
+			phaseCommitErr = r.store.CompletePublicationPhaseEffect(ctx, input.publicationID, phase, operation, true, "")
 		}
 		if phaseCommitErr != nil {
 			return r.phaseInfrastructureFailure("PHASE_COMMIT", phaseCommitErr)
@@ -221,7 +222,7 @@ func (r *DeliveryRunner) runPublicationPhases(ctx context.Context, input publica
 		phase = nextPhase
 	}
 
-	finalState, err := r.dbStore.GetPublicationState(ctx, input.publicationID)
+	finalState, err := r.store.GetPublicationState(ctx, input.publicationID)
 	if err != nil {
 		return r.phaseInfrastructureFailure("PUBLICATION_STATE_READ", err)
 	}
@@ -251,19 +252,19 @@ func (r *DeliveryRunner) preparePublicationState(ctx context.Context, publicatio
 		return state.RetryFrom, nil
 	}
 	if state.State == publicationstate.Pending {
-		if _, err := r.dbStore.TransitionPublicationState(ctx, publicationID, publicationstate.WaitingForRender, ""); err != nil {
+		if _, err := r.store.TransitionPublicationState(ctx, publicationID, publicationstate.WaitingForRender, ""); err != nil {
 			return "", err
 		}
 		state.State = publicationstate.WaitingForRender
 	}
 	if state.State == publicationstate.WaitingForRender {
-		if _, err := r.dbStore.TransitionPublicationState(ctx, publicationID, publicationstate.ArtifactBound, ""); err != nil {
+		if _, err := r.store.TransitionPublicationState(ctx, publicationID, publicationstate.ArtifactBound, ""); err != nil {
 			return "", err
 		}
 		state.State = publicationstate.ArtifactBound
 	}
 	if state.State == publicationstate.ArtifactBound {
-		if _, err := r.dbStore.TransitionPublicationState(ctx, publicationID, publicationstate.Ready, ""); err != nil {
+		if _, err := r.store.TransitionPublicationState(ctx, publicationID, publicationstate.Ready, ""); err != nil {
 			return "", err
 		}
 		state.State = publicationstate.Ready
@@ -281,7 +282,7 @@ func (r *DeliveryRunner) preparePublicationState(ctx context.Context, publicatio
 }
 
 func (r *DeliveryRunner) enterPublicationPhase(ctx context.Context, publicationID string, phase publicationstate.State) error {
-	state, err := r.dbStore.GetPublicationState(ctx, publicationID)
+	state, err := r.store.GetPublicationState(ctx, publicationID)
 	if err != nil {
 		return err
 	}
@@ -289,19 +290,19 @@ func (r *DeliveryRunner) enterPublicationPhase(ctx context.Context, publicationI
 		return nil
 	}
 	if state.State == publicationstate.RetryWait || state.State == publicationstate.Partial {
-		_, err = r.dbStore.TransitionPublicationState(ctx, publicationID, phase, "")
+		_, err = r.store.TransitionPublicationState(ctx, publicationID, phase, "")
 		return err
 	}
 	if phase == publicationstate.Uploading && (state.State == publicationstate.Ready || state.State == publicationstate.Scheduled) {
-		_, err = r.dbStore.TransitionPublicationState(ctx, publicationID, phase, "")
+		_, err = r.store.TransitionPublicationState(ctx, publicationID, phase, "")
 		return err
 	}
 	if phase == publicationstate.MetadataApplying && state.State == publicationstate.VideoCreated {
-		_, err = r.dbStore.TransitionPublicationState(ctx, publicationID, phase, "")
+		_, err = r.store.TransitionPublicationState(ctx, publicationID, phase, "")
 		return err
 	}
 	if phase == publicationstate.Verifying && (state.State == publicationstate.MetadataApplying || state.State == publicationstate.LocalizationsApplying) {
-		_, err = r.dbStore.TransitionPublicationState(ctx, publicationID, phase, "")
+		_, err = r.store.TransitionPublicationState(ctx, publicationID, phase, "")
 		return err
 	}
 	return fmt.Errorf("%w: cannot enter %s from %s", ErrProviderPermanent, phase, state.State)
@@ -328,17 +329,17 @@ func (r *DeliveryRunner) advanceSkippedPhase(ctx context.Context, publicationID 
 func (r *DeliveryRunner) nextPublicationPhase(ctx context.Context, publicationID string, phase publicationstate.State, verificationOperation string) (publicationstate.State, error) {
 	switch phase {
 	case publicationstate.Uploading:
-		if _, err := r.dbStore.TransitionPublicationState(ctx, publicationID, publicationstate.MetadataApplying, ""); err != nil {
+		if _, err := r.store.TransitionPublicationState(ctx, publicationID, publicationstate.MetadataApplying, ""); err != nil {
 			return "", err
 		}
 		return publicationstate.MetadataApplying, nil
 	case publicationstate.MetadataApplying:
-		if _, err := r.dbStore.TransitionPublicationState(ctx, publicationID, publicationstate.Verifying, ""); err != nil {
+		if _, err := r.store.TransitionPublicationState(ctx, publicationID, publicationstate.Verifying, ""); err != nil {
 			return "", err
 		}
 		return publicationstate.Verifying, nil
 	case publicationstate.Verifying:
-		if _, err := r.dbStore.CompletePublicationAfterReconciliation(ctx, publicationID, verificationOperation); err != nil {
+		if _, err := r.store.CompletePublicationAfterReconciliation(ctx, publicationID, verificationOperation); err != nil {
 			return "", err
 		}
 		return "", nil
@@ -375,16 +376,16 @@ func phaseOperation(phase publicationstate.State, artifact *store.Artifact, dest
 	return name + ":" + hex.EncodeToString(hash[:])
 }
 
-func (r *DeliveryRunner) phaseFailure(ctx context.Context, lease store.DeliveryLease, publicationID string, phase publicationstate.State, operation string, runErr error) error {
+func (r *DeliveryRunner) phaseFailure(ctx context.Context, lease deliverystore.DeliveryLease, publicationID string, phase publicationstate.State, operation string, runErr error) error {
 	code := classifyErrorCode(runErr)
 	var persistenceErrors []error
 	if operation != "STATE_TRANSITION" && operation != "PUBLICATION_STATE_NOT_FOUND" {
-		if err := r.dbStore.CompletePublicationPhaseEffect(ctx, publicationID, phase, operation, false, code); err != nil {
+		if err := r.store.CompletePublicationPhaseEffect(ctx, publicationID, phase, operation, false, code); err != nil {
 			persistenceErrors = append(persistenceErrors, deliveryStatePersistenceError("complete failed publication phase effect", err))
 		}
 	}
 	if ClassifyError(runErr) == ErrorClassTransient || ClassifyError(runErr) == ErrorClassRateLimit {
-		if _, err := r.dbStore.TransitionPublicationState(ctx, publicationID, publicationstate.RetryWait, code); err != nil {
+		if _, err := r.store.TransitionPublicationState(ctx, publicationID, publicationstate.RetryWait, code); err != nil {
 			persistenceErrors = append(persistenceErrors, deliveryStatePersistenceError("transition publication to retry wait", err))
 		}
 		next := time.Now().UTC().Add(r.cfg.backoffForAttempt(lease.AttemptNumber))
@@ -400,11 +401,11 @@ func (r *DeliveryRunner) phaseFailure(ctx context.Context, lease store.DeliveryL
 		return errDeliveryRetryScheduled
 	}
 	if phase == publicationstate.Uploading {
-		if _, err := r.dbStore.TransitionPublicationState(ctx, publicationID, publicationstate.Failed, code); err != nil {
+		if _, err := r.store.TransitionPublicationState(ctx, publicationID, publicationstate.Failed, code); err != nil {
 			persistenceErrors = append(persistenceErrors, deliveryStatePersistenceError("transition publication to failed", err))
 		}
 	} else {
-		if _, err := r.dbStore.TransitionPublicationPartial(ctx, publicationID, phase, code); err != nil {
+		if _, err := r.store.TransitionPublicationPartial(ctx, publicationID, phase, code); err != nil {
 			persistenceErrors = append(persistenceErrors, deliveryStatePersistenceError("transition publication to partial", err))
 		}
 	}

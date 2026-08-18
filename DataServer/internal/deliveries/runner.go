@@ -43,6 +43,7 @@ import (
 	"time"
 
 	"velox-server/internal/credentials"
+	"velox-server/internal/deliverystore"
 	"velox-server/internal/logging"
 	"velox-server/internal/store"
 	"velox-server/internal/supervisor"
@@ -70,11 +71,31 @@ func joinDeliveryErrors(primary error, persistence ...error) error {
 	return errors.Join(joined...)
 }
 
+// DeliveryStore is the consumer-owned delivery persistence contract the
+// DeliveryRunner depends on. It is satisfied by
+// *deliverystore.SQLiteDeliveryStore (wired from SQLiteStore.Delivery() at the
+// composition root). The runner never touches the internal/store facade for
+// delivery persistence; publication-state and artifact reads (which belong to
+// other domains) go through the separate *store.SQLiteStore field.
+type DeliveryStore interface {
+	ClaimDeliveries(ctx context.Context, runnerID string, lease time.Duration, batch int) ([]deliverystore.DeliveryLease, error)
+	RenewDeliveryLease(ctx context.Context, deliveryID, runnerID, leaseID string, newExpiry time.Time) error
+	MarkDeliverySucceeded(ctx context.Context, deliveryID, runnerID, leaseID, remoteID, remoteURL string) error
+	MarkDeliveryRetry(ctx context.Context, deliveryID, runnerID, leaseID, errorCode, errorMsg string, nextAttemptAt time.Time) error
+	MarkDeliveryFailed(ctx context.Context, deliveryID, runnerID, leaseID, errorCode, errorMsg string) error
+	MarkDeliveryBlockedAuth(ctx context.Context, deliveryID, runnerID, leaseID, errorCode, errorMsg string) error
+	GetDeliveryPlanMetadata(ctx context.Context, artifactID, destinationID string) (string, error)
+	GetDeliveryDestination(ctx context.Context, destID string) (*deliverystore.DeliveryDestination, error)
+	ListDeliveryReconciliationCandidates(ctx context.Context, limit int) ([]deliverystore.JobDelivery, error)
+	ApplyReconciledDelivery(ctx context.Context, deliveryID, status, remoteID, remoteURL, errorCode, errorMessage string) error
+}
+
 // DeliveryRunner drives delivery_attempts persistence + provider dispatch.
 type DeliveryRunner struct {
 	cfg      *RunnerConfig
 	registry *Registry
-	dbStore  *store.SQLiteStore
+	dbStore  DeliveryStore
+	store    *store.SQLiteStore
 	vault    *credentials.Vault
 
 	sem chan struct{} // bounded concurrency
@@ -138,7 +159,11 @@ func (r *DeliveryRunner) logError(ctx context.Context, code string, fields map[s
 	}
 }
 
-// NewDeliveryRunner wires a runner. dbStore is the durable anchor;
+// NewDeliveryRunner wires a runner. dbStore is the durable anchor (a
+// *store.SQLiteStore at the composition root); the runner splits it internally:
+// delivery persistence is routed through the deliverystore leaf via
+// dbStore.Delivery() (bound to the DeliveryStore field), while the
+// publication-state and artifact reads keep the *store.SQLiteStore field.
 // registry supplies provider resolution.
 func NewDeliveryRunner(cfg *RunnerConfig, registry *Registry, dbStore *store.SQLiteStore, identity string) *DeliveryRunner {
 	if cfg == nil {
@@ -153,10 +178,15 @@ func NewDeliveryRunner(cfg *RunnerConfig, registry *Registry, dbStore *store.SQL
 	if cfg.Concurrency <= 0 {
 		cfg.Concurrency = 4
 	}
+	var delivery DeliveryStore
+	if dbStore != nil {
+		delivery = dbStore.Delivery()
+	}
 	return &DeliveryRunner{
 		cfg:       cfg,
 		registry:  registry,
-		dbStore:   dbStore,
+		dbStore:   delivery,
+		store:     dbStore,
 		identity:  identity,
 		logger:    logging.NewLogger("deliveries.runner"),
 		sem:       make(chan struct{}, cfg.Concurrency),
@@ -250,7 +280,7 @@ func (r *DeliveryRunner) tick(ctx context.Context) error {
 	stateErrors := make(chan error, len(leases))
 	for _, lease := range leases {
 		wg.Add(1)
-		go func(l store.DeliveryLease) {
+		go func(l deliverystore.DeliveryLease) {
 			defer wg.Done()
 
 			// Wait-phase renewal (P0-02 amended): ClaimBatch may exceed

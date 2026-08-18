@@ -10,7 +10,7 @@ import (
 	"net"
 	"time"
 
-	"velox-server/internal/store"
+	"velox-server/internal/deliverystore"
 )
 
 func isDeliveryTimeout(err error) bool {
@@ -29,7 +29,7 @@ func isDeliveryTimeout(err error) bool {
 // context is cancelled, the goroutine exits. When a renewal fails (e.g.
 // CAS conflict from another runner reclaiming the lease), the onFailure
 // callback is invoked so the upload can be interrupted.
-func (r *DeliveryRunner) renewDeliveryLeaseLoop(ctx context.Context, done chan<- struct{}, lease store.DeliveryLease, onFailure func(error)) {
+func (r *DeliveryRunner) renewDeliveryLeaseLoop(ctx context.Context, done chan<- struct{}, lease deliverystore.DeliveryLease, onFailure func(error)) {
 	defer close(done)
 
 	interval := r.cfg.LeaseDuration / 3
