@@ -328,9 +328,11 @@ func (h *Handlers) SubmitJob() gin.HandlerFunc {
 // Reuses the canonical lookup surface: creator_forwardings.target_job_id
 // + jobs.Reader.Get — the same data path the resolver committed to
 // when the job was created. No new SQL is introduced at the lookup
-// layer; the helper at store.GetCreatorForwardingByTargetJobID is the
-// only new addition, and it is exercised by the migration-102 B-tree
-// index for O(log N) polling under M2M load.
+// layer; the helper at
+// forwardingstore.GetCreatorForwardingByTargetJobID (reached via
+// SQLiteStore.Forwarding()) is the only new addition, and it is
+// exercised by the migration-102 B-tree index for O(log N) polling
+// under M2M load.
 //
 // Response shape (4 fields, per user P2 spec + status_url canonical
 // chain):
@@ -359,4 +361,5 @@ func (h *Handlers) SubmitJob() gin.HandlerFunc {
 // whose creator_forwardings.external_client_id is client A. A missing
 // job and a job owned by another client intentionally share the same
 // 404 job_not_found envelope. The ownership boundary is enforced by
-// store.GetCreatorForwardingByTargetJobID.
+// forwardingstore.GetCreatorForwardingByTargetJobID (via
+// SQLiteStore.Forwarding()).
