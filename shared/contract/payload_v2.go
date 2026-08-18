@@ -118,6 +118,9 @@ type JobPayloadV2 struct {
 	// Delivery contract. The boundary parser accepts legacy wire variants,
 	// but the canonical payload stores one typed representation thereafter.
 	DeliveryPlan []deliveryplan.Entry `json:"delivery_plan,omitempty"`
+	// deliveryPlanPresent preserves an explicit empty delivery_plan for
+	// render-only jobs without exposing another wire field.
+	deliveryPlanPresent bool
 }
 
 // NewJobPayloadV2 reads a raw map (typically from JSON deserialization at
@@ -168,9 +171,14 @@ func NewJobPayloadV2(raw map[string]any) *JobPayloadV2 {
 		Source:                 payload.FirstString(raw, "source"),
 		Status:                 parseInputAssemblyOrLegacy(raw["status"]),
 	}
+	if value, ok := raw["delivery_plan"]; ok && value != nil {
+		p.deliveryPlanPresent = true
+	}
 	if deliveryPlanInputPresent(raw) {
 		if entries, err := deliveryplan.Parse(raw); err == nil {
 			p.DeliveryPlan = entries
+		} else if isRenderOnlyEmptyDeliveryPlan(raw) {
+			p.DeliveryPlan = []deliveryplan.Entry{}
 		}
 	}
 	if p.Status == "" {
@@ -270,7 +278,7 @@ func NewJobPayloadV2Checked(raw map[string]any) (*JobPayloadV2, error) {
 		}
 	}
 	payload := NewJobPayloadV2(raw)
-	if deliveryPlanInputPresent(raw) {
+	if deliveryPlanInputPresent(raw) && !isRenderOnlyEmptyDeliveryPlan(raw) {
 		entries, err := deliveryplan.Parse(raw)
 		if err != nil {
 			return nil, fmt.Errorf("contract: delivery_plan: %w", err)
@@ -453,8 +461,12 @@ func (p *JobPayloadV2) ToMap() (map[string]any, error) {
 		}
 		out["status"] = p.Status.WireValue()
 	}
-	if len(p.DeliveryPlan) > 0 {
-		out["delivery_plan"] = deliveryplan.EntriesToMaps(p.DeliveryPlan)
+	if len(p.DeliveryPlan) > 0 || p.deliveryPlanPresent {
+		entries := p.DeliveryPlan
+		if entries == nil {
+			entries = []deliveryplan.Entry{}
+		}
+		out["delivery_plan"] = deliveryplan.EntriesToMaps(entries)
 	}
 	return out, nil
 }
@@ -480,6 +492,26 @@ func deliveryPlanInputPresent(raw map[string]any) bool {
 		return deliveryPlanInputPresent(nested)
 	}
 	return false
+}
+
+func isRenderOnlyEmptyDeliveryPlan(raw map[string]any) bool {
+	if raw == nil || raw["render_only"] != true {
+		return false
+	}
+	value, ok := raw["delivery_plan"]
+	if !ok || value == nil {
+		return false
+	}
+	switch plan := value.(type) {
+	case []any:
+		return len(plan) == 0
+	case []map[string]any:
+		return len(plan) == 0
+	case []deliveryplan.Entry:
+		return len(plan) == 0
+	default:
+		return false
+	}
 }
 
 func parseInputAssemblyOrLegacy(value any) InputAssemblyStatus {

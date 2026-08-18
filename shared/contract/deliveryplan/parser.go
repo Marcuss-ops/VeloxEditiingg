@@ -27,7 +27,7 @@ type Entry struct {
 // EntriesToMaps projects the validated typed contract back to the canonical
 // wire shape used by compatibility readers and persistence boundaries.
 func EntriesToMaps(entries []Entry) []map[string]interface{} {
-	if len(entries) == 0 {
+	if entries == nil {
 		return nil
 	}
 	out := make([]map[string]interface{}, 0, len(entries))
