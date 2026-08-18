@@ -233,6 +233,14 @@ grep -Fq "PROTOCOL_VERSION=\"${canonical_worker_protocol}\"" \
   deploy/scripts/apply-local-worker-config.sh \
   || fail "local worker config default does not match ProtocolVersionCurrent (${canonical_worker_protocol})"
 
+# 9c. Retired livestream surface must stay absent. Migration 155 is the only
+# permitted historical reference; no application package may recreate the
+# handler or store API.
+[[ ! -e DataServer/internal/handlers/remote/livestream ]] \
+  || fail "retired livestream handler package was reintroduced"
+[[ ! -e DataServer/internal/store/sqlite_livestream.go ]] \
+  || fail "retired livestream store was reintroduced"
+
 # 10. Canonical worker playbook — structural syntax check.
 # The normalize_worker_systemd.yml playbook guards canonical runtime
 # purity via its STEP 7 strict idempotency assert task: only

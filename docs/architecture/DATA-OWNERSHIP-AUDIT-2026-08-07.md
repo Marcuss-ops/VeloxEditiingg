@@ -28,8 +28,8 @@ canali. Una copia di drop non applicabile (postgres) è stata riparata.
   (mapping `InstaEdit project_id ↔ velox_project_id`, unico collegamento).
 - Nessun `SyncGroupsToVelox`, `SyncChannelsFromVelox`,
   `MirrorGroupMemberships` presente nel codice (verificato con ricerca
-  globale; compare solo come vincolo negativo in
-  `docs/VELOX-FRONTEND-GROUPS-BOUNDARY.md`).
+  globale); il vincolo negativo resta documentato nell'audit di ownership
+  condiviso con InstaEdit.
 
 ## 2. Velox DB = solo dominio editor/render (verificato)
 
