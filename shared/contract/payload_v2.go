@@ -64,16 +64,31 @@ type JobPayloadV2 struct {
 	UpdatedAt              string `json:"updated_at"`
 
 	// Business fields
-	VideoName        string           `json:"video_name"`
-	ScriptText       string           `json:"script_text"`
-	Spec             map[string]any   `json:"spec,omitempty"`
-	Output           map[string]any   `json:"output,omitempty"`
-	RenderManifest   map[string]any   `json:"render_manifest,omitempty"`
-	Assets           []map[string]any `json:"assets,omitempty"`
-	ManifestRef      map[string]any   `json:"manifest_ref,omitempty"`
-	ManifestSHA256   string           `json:"manifest_sha256,omitempty"`
-	RenderPlanJSON   string           `json:"render_plan_json,omitempty"`
-	RenderPlanSHA256 string           `json:"render_plan_sha256,omitempty"`
+	//
+	// Authoring-input vs compiled-authority boundary (audit 2026-08): the
+	// map/slice fields below (Output, Scenes, Layers, Items, AudioTracks,
+	// VideoMetadata) are AUTHORING INPUT — the uncompiled producer envelope
+	// consumed by the compilers (shared/contract/rendercompiler and
+	// DataServer/internal/renderplan) when `render_manifest` is absent.
+	// They are NOT duplicates of the render manifest: render_manifest is
+	// the COMPILED authority (rendermanifest.Manifest), and when it is
+	// present the compilers ignore the authoring fields and read only the
+	// manifest. There is no top-level `assets` field (removed); assets are
+	// derived from scenes/voiceovers or carried only inside render_manifest.
+	//
+	// Do NOT introduce a second typed struct for these authoring fields
+	// (e.g. a payload.Layer alongside rendermanifest.Layer): that would
+	// recreate the two-SSOT shape the single-shape envelope removed. The
+	// only typed authority for the compiled form is rendermanifest.Manifest.
+	VideoName        string         `json:"video_name"`
+	ScriptText       string         `json:"script_text"`
+	Spec             map[string]any `json:"spec,omitempty"`
+	Output           map[string]any `json:"output,omitempty"`          // authoring input (canvas/output dims), NOT rendermanifest.Output
+	RenderManifest   map[string]any `json:"render_manifest,omitempty"` // compiled authority (rendermanifest.Manifest)
+	ManifestRef      map[string]any `json:"manifest_ref,omitempty"`
+	ManifestSHA256   string         `json:"manifest_sha256,omitempty"`
+	RenderPlanJSON   string         `json:"render_plan_json,omitempty"`
+	RenderPlanSHA256 string         `json:"render_plan_sha256,omitempty"`
 	// CompiledRenderPlanJSON/SHA carry a producer-owned V2 execution plan.
 	// They are deliberately separate fields from the legacy render-plan
 	// values so the enqueue normalizer can preserve the exact V2 bytes and
@@ -81,10 +96,10 @@ type JobPayloadV2 struct {
 	CompiledRenderPlanJSON   string           `json:"compiled_render_plan_json,omitempty"`
 	CompiledRenderPlanSHA256 string           `json:"compiled_render_plan_sha256,omitempty"`
 	ScenesJSON               string           `json:"scenes_json,omitempty"`
-	Scenes                   []map[string]any `json:"scenes,omitempty"`
-	Layers                   []map[string]any `json:"layers,omitempty"`
-	Items                    []map[string]any `json:"items,omitempty"`
-	AudioTracks              []map[string]any `json:"audio_tracks,omitempty"`
+	Scenes                   []map[string]any `json:"scenes,omitempty"`       // authoring input (compiled into manifest tracks)
+	Layers                   []map[string]any `json:"layers,omitempty"`       // authoring input (compiled into manifest layers)
+	Items                    []map[string]any `json:"items,omitempty"`        // authoring input (compiled clip/stock timeline)
+	AudioTracks              []map[string]any `json:"audio_tracks,omitempty"` // authoring input (global audio layers; NOT manifest tracks)
 	VoiceoverPaths           []string         `json:"voiceover_paths,omitempty"`
 	AudioLanguage            string           `json:"audio_language_for_srt,omitempty"`
 	VideoMode                string           `json:"video_mode,omitempty"`
@@ -198,9 +213,6 @@ func NewJobPayloadV2(raw map[string]any) *JobPayloadV2 {
 	}
 	if manifest, ok := raw["render_manifest"].(map[string]any); ok {
 		p.RenderManifest = cloneObject(manifest)
-	}
-	if assetsVal, ok := raw["assets"]; ok {
-		p.Assets = normalizeObjectList(assetsVal)
 	}
 	if manifestRef, ok := raw["manifest_ref"].(map[string]any); ok {
 		p.ManifestRef = cloneObject(manifestRef)
@@ -364,9 +376,6 @@ func (p *JobPayloadV2) ToMap() (map[string]any, error) {
 	}
 	if len(p.RenderManifest) > 0 {
 		out["render_manifest"] = cloneObject(p.RenderManifest)
-	}
-	if len(p.Assets) > 0 {
-		out["assets"] = p.Assets
 	}
 	if len(p.ManifestRef) > 0 {
 		out["manifest_ref"] = cloneObject(p.ManifestRef)

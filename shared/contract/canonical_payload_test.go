@@ -34,7 +34,7 @@ func TestCanonicalTopLevelKeys_Integrity(t *testing.T) {
 		"contract_version",
 		"job_id", "job_run_id", "correlation_id",
 		"video_name", "script_text",
-		"scenes", "assets", "voiceover_paths", "items",
+		"scenes", "voiceover_paths", "items",
 		"audio_tracks", "delivery_plan",
 		"priority", "timeout_secs",
 		"status",
