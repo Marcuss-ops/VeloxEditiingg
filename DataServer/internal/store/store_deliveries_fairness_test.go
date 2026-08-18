@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"velox-server/internal/deliverystore"
 )
 
 func insertDeliveryTestJob(t *testing.T, db *SQLiteStore, jobID, status string) {
@@ -82,7 +84,7 @@ func TestDeliveryChildren_RetryIsolatedAndParentAggregatesAfterAllTerminal(t *te
 	if err != nil || len(leases) != 2 {
 		t.Fatalf("claim: %v leases=%d", err, len(leases))
 	}
-	byDestination := make(map[string]DeliveryLease, len(leases))
+	byDestination := make(map[string]deliverystore.DeliveryLease, len(leases))
 	for _, lease := range leases {
 		byDestination[lease.DestinationID] = lease
 	}
@@ -174,7 +176,7 @@ func TestDeliveryChildren_FailedChildDoesNotFailParentUntilSiblingsTerminal(t *t
 	if err != nil || len(leases) != 2 {
 		t.Fatalf("claim: %v leases=%d", err, len(leases))
 	}
-	var failed, sibling DeliveryLease
+	var failed, sibling deliverystore.DeliveryLease
 	for _, lease := range leases {
 		if lease.DestinationID == "dest-failed-a" {
 			failed = lease

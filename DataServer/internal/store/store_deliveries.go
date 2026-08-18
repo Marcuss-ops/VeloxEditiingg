@@ -13,13 +13,14 @@ import (
 	"velox-server/internal/deliverystore"
 )
 
-// DeliveryDestination, JobDelivery and DeliveryLease are re-exported as
-// aliases from the deliverystore leaf so existing store.<Type> call sites
-// keep compiling while the canonical declaration lives in the leaf.
+// DeliveryDestination and JobDelivery are re-exported as aliases from the
+// deliverystore leaf so existing store.<Type> call sites keep compiling while
+// the canonical declaration lives in the leaf. DeliveryLease is intentionally
+// NOT re-exported: no production call-site uses store.DeliveryLease, and
+// callers now depend on the canonical deliverystore.DeliveryLease directly.
 type (
 	DeliveryDestination = deliverystore.DeliveryDestination
 	JobDelivery         = deliverystore.JobDelivery
-	DeliveryLease       = deliverystore.DeliveryLease
 )
 
 // GetDeliveryPlanMetadata returns the immutable per-destination metadata
