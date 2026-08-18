@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"velox-server/internal/renderfingerprint"
+	"velox-server/internal/renderfingerprintstore"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
 )
@@ -32,7 +33,7 @@ func TestReliability_FeaturesPersistAndReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := SaveRenderFingerprint(ctx, tx, "attempt-1", "task-1", "job-1", &fp, time.Now()); err != nil {
+	if err := renderfingerprintstore.SaveRenderFingerprint(ctx, tx, "attempt-1", "task-1", "job-1", &fp, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Commit(); err != nil {

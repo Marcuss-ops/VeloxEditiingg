@@ -13,6 +13,7 @@ import (
 	"log"
 	"time"
 
+	"velox-server/internal/renderfingerprintstore"
 	"velox-server/internal/taskgraph"
 
 	sharedtelemetry "velox-shared/telemetry"
@@ -102,7 +103,7 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 	if err := persistAttemptTracing(ctx, tx, cmd, now); err != nil {
 		return err
 	}
-	if err := SaveRenderFingerprint(ctx, tx, cmd.AttemptID, cmd.TaskID, cmd.JobID, cmd.RenderFingerprint, ingestStartedAt); err != nil {
+	if err := renderfingerprintstore.SaveRenderFingerprint(ctx, tx, cmd.AttemptID, cmd.TaskID, cmd.JobID, cmd.RenderFingerprint, ingestStartedAt); err != nil {
 		return err
 	}
 	if err := persistAttemptMetrics(ctx, tx, cmd); err != nil {
