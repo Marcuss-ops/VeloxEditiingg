@@ -204,6 +204,35 @@ VIOLATION
   fi
 fi
 
+# 9b. Worker protocol SSOT guard.
+# The wire protocol is owned by shared/controltransport. Deployment templates
+# must not carry a stale protocol identifier that the master will reject.
+canonical_worker_protocol="$({
+  sed -n 's/.*ProtocolVersionCurrent[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' \
+    shared/controltransport/transport.go
+} | head -n 1)"
+[[ -n "$canonical_worker_protocol" ]] \
+  || fail "cannot resolve ProtocolVersionCurrent from shared/controltransport/transport.go"
+
+python3 - "$canonical_worker_protocol" <<'PY'
+import json
+import pathlib
+import sys
+
+expected = sys.argv[1]
+config_path = pathlib.Path("deploy/runtime/worker_config.example.json")
+with config_path.open() as config_file:
+    actual = json.load(config_file).get("protocol_version")
+if actual != expected:
+    raise SystemExit(
+        f"worker config protocol drift: {config_path} has {actual!r}, expected {expected!r}"
+    )
+PY
+
+grep -Fq "PROTOCOL_VERSION=\"${canonical_worker_protocol}\"" \
+  deploy/scripts/apply-local-worker-config.sh \
+  || fail "local worker config default does not match ProtocolVersionCurrent (${canonical_worker_protocol})"
+
 # 10. Canonical worker playbook — structural syntax check.
 # The normalize_worker_systemd.yml playbook guards canonical runtime
 # purity via its STEP 7 strict idempotency assert task: only

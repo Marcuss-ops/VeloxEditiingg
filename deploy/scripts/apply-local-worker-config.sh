@@ -76,7 +76,7 @@ HEALTH_PORT="8081"
 WORK_DIR=""
 WORK_DIR_EXPLICIT=false
 DST_EXPLICIT=false
-PROTOCOL_VERSION="2026-06-worker-v1"
+PROTOCOL_VERSION="v3"
 IMAGE="${VELOX_WORKER_IMAGE:-}"
 ENVIRONMENT="dev"                 # dev | prod
 ALLOW_INSECURE_GRPC=false
@@ -162,7 +162,7 @@ OPTIONAL flags:
   --work-dir               PATH             Optional override below required
                                             VELOX_STATE_DIR; default is
                                             VELOX_STATE_DIR/work.
-  --protocol-version       STRING           Default 2026-06-worker-v1.
+  --protocol-version       STRING           Default v3.
   --image                  GHCR_DIGEST      Required immutable ghcr.io/...@sha256:<64hex>.
 
   --environment            dev|prod         Default dev. prod requires

@@ -26,7 +26,7 @@ Ogni cambiamento deve partire da `origin/main` aggiornato e contenere test mirat
 
 Il bump a `ProtocolVersionCurrent = "v3"` (luglio 2026) chiude il ciclo
 dei typed metrics (PR-5 / F2). La master handshake accetta
-contemporaneamente "v3" e "2026-06-worker-v1" (legacy) — ma NON tutte
+contemporaneamente "v3" e una versione legacy — ma NON tutte
 le combinazioni di label set / payload sono retro-compatibili. La
 sequenza deve quindi essere:
 
@@ -46,7 +46,7 @@ sequenza deve quindi essere:
 
 1. Costruire la nuova immagine master con `protocol_version="v3"`
    nella envelope HelloAck + `IsSupportedProtocol("v3") /
-   IsSupportedProtocol("2026-06-worker-v1")` nel codepath gRPC.
+   IsSupportedProtocol("legacy")` nel codepath gRPC.
 2. Push immagine `velox-master:v3.0.0-rc1` solo dopo che
    almeno un worker v3 è registrato correttamente.
 3. Cutover del master — la nuova binario rilegge worker sia v3

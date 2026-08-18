@@ -139,7 +139,6 @@ server/pipeline                  994  | ##################
 server/script                    922  | ################
 server/youtube/creative          700  | ############
 server/youtube/videos            584  | ##########
-remote/livestream                352  | ######
 server/audit                     305  | #####
 server/smoke                     255  | ####
 remote/workers/validation        248  | ####
@@ -174,7 +173,6 @@ server/health                    11  | ##
 | server/calendar | 1 399 |
 | server/pipeline | 994 |
 | server/script | 922 |
-| remote/livestream | 352 |
 | server/audit | 305 |
 | server/smoke | 255 |
 | remote/install | 240 |

@@ -1,7 +1,7 @@
 // Package handlers_test — route contract test.
 //
 // Enumerates every HTTP route registered via the module Registry pattern
-// (health, workers, drive, ansible, livestream, frontend) plus the
+// (health, workers, drive, ansible, frontend) plus the
 // router.go legacy handlers, and compares the resulting set against a
 // canonical whitelist. Pre-emptively catches:
 //   1. Accidentally registering an endpoint outside the contract
@@ -46,7 +46,7 @@ func TestRouteContract_AllModules(t *testing.T) {
 
 	registry := app.NewRegistry()
 	registry.Register(app.NewHealthModule())
-	// Workers, Drive, Ansible, Livestream, Frontend constructors
+	// Workers, Drive, Ansible, Frontend constructors
 	// accept dependencies that vary across configurations; we feed nil
 	// where the test does not exercise the handler body (this test
 	// checks registration, not semantics).
@@ -57,12 +57,11 @@ func TestRouteContract_AllModules(t *testing.T) {
 	// ansible.New panics on nil cfg — module is verified separately in
 	// its own integration suite; we skip it here to keep the
 	// route-contract test focused on handler registration.
-	// livestream.New nil-derefs on cfg; full coverage in module-level integration.
 	// frontend.New nil-derefs on cfg; full coverage in module-level integration.
 	registry.RegisterRoutes(r)
 
 	// This test exercises the contract for the modules whose constructors
-	// accept nil-safe dependencies. Other modules (drive/livestream/
+	// accept nil-safe dependencies. Other modules (drive/
 	// frontend/ansible/workers-asset) require a real *config.Config and
 	// per-module deps; their route enumeration lives in module-level tests.
 	want := []string{

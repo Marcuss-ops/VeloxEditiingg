@@ -100,8 +100,8 @@ Eliminate the Registry's runtime-locked state.
 
 **Risks & mitigations.**
 - Low, because tests assert delivery provider presence.
-- The `LivestreamModule` (which takes `ytMod.Service`) becomes
-  `LivestreamModule.New(cfg, ytService, sqliteStore)`.
+- The retired streaming module is not part of the application registry; its
+  handlers and runtime persistence were removed by migration 155.
 
 **Verification.**
 ```bash

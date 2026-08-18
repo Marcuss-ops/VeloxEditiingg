@@ -32,7 +32,6 @@ handlers/
 └── remote/
     ├── ansible/           # Playbook Ansible per deploy
     ├── install/           # Script installazione worker
-    ├── livestream/        # Live stream management (platform-agnostic)
     ├── submission/        # Multi-clip submission management
     └── workers/           # Registrazione, heartbeat, bundle
 ```

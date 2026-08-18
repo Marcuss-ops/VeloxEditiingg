@@ -30,7 +30,7 @@
   "asset_chunked_download_threshold_bytes": 67108864,
   "asset_chunked_download_concurrency": 4,
 
-  "protocol_version": "2026-06-worker-v1",
+  "protocol_version": "v3",
 
   "bundle_version": "",
   "bundle_hash": "",

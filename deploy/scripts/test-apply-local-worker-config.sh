@@ -66,7 +66,7 @@ python3 "$RENDERER" \
   "$WORK/template.json" "$WORK/rendered.json" \
   "worker-01" "Display Worker" \
   "master.example:7443" "http://master.example:8000" \
-  "$WORK/work" "8082" "protocol-v1" \
+  "$WORK/work" "8082" "v3" \
   "bundle-1" "hash-1" "" "false"
 
 python3 - "$WORK/rendered.json" <<'PY'
@@ -82,7 +82,7 @@ assert cfg["worker_name"] == "Display Worker"
 assert cfg["control_grpc_url"] == "master.example:7443"
 assert cfg["master_url"] == "http://master.example:8000"
 assert cfg["health_port"] == 8082
-assert cfg["protocol_version"] == "protocol-v1"
+assert cfg["protocol_version"] == "v3"
 assert cfg["bundle_version"] == "bundle-1"
 assert cfg["bundle_hash"] == "hash-1"
 assert cfg["allow_insecure_grpc_dev"] is False

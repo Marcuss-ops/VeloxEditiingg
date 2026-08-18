@@ -59,7 +59,7 @@ by the FleetController activation cascade, not by a standalone rollout.
 
 When a worker requests a job via `ClaimNextJob`, the master validates:
 
-1. **Protocol version** — must match `DefaultWorkerProtocolVersion` (`2026-06-worker-v1`)
+1. **Protocol version** — must match `DefaultWorkerProtocolVersion` (`v3`)
 2. **Capabilities** — worker must report non-empty capabilities
 3. **Supported job types** — if the job type is specified, worker must list it in `capabilities.supported_job_types`
 

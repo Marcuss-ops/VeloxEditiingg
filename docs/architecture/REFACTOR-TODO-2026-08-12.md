@@ -207,9 +207,8 @@ reversibile, testato prima/dopo, committato su `main` e pubblicato.
 - [x] Phase timings: i record legacy compatti con sola durata non vengono più
       persi; i timestamp mancanti restano zero senza indebolire il reader
       dettagliato.
-- [x] Livestream store/API: rimosso il successo implicito con store nil o
-      schema non inizializzabile; lookup DB falliti non vengono più esposti
-      come 404.
+- [x] Vecchio store/API di streaming eliminato definitivamente; la migrazione
+  155 rimuove anche l'eventuale tabella residua.
 - [x] Pipeline lookup: i fallback tra PK, request id e forwarding legacy sono
       ammessi solo su miss tipizzati; gli errori infrastrutturali vengono
       propagati.
