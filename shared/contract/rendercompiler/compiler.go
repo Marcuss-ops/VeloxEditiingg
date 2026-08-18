@@ -169,18 +169,22 @@ func compileProcessVideoV2(ctx context.Context, payload *contract.JobPayloadV2) 
 		return nil, err
 	}
 	if len(payload.RenderManifest) > 0 {
-		return planFromMap(payload.RenderManifest)
+		manifest, err := payload.TypedRenderManifest()
+		if err != nil {
+			return nil, fmt.Errorf("rendercompiler: typed render_manifest: %w", err)
+		}
+		return planFromManifest(manifest)
 	}
 	return planFromPayload(payload)
 }
 
-func planFromMap(raw map[string]any) (*RenderPlan, error) {
-	if err := rendermanifest.ValidateMap(raw); err != nil {
-		return nil, fmt.Errorf("rendercompiler: render_manifest: %w", err)
+func planFromManifest(manifest *rendermanifest.Manifest) (*RenderPlan, error) {
+	if manifest == nil {
+		return nil, fmt.Errorf("rendercompiler: render_manifest is nil")
 	}
-	data, err := json.Marshal(raw)
+	data, err := json.Marshal(manifest)
 	if err != nil {
-		return nil, fmt.Errorf("rendercompiler: marshal render_manifest: %w", err)
+		return nil, fmt.Errorf("rendercompiler: marshal typed render_manifest: %w", err)
 	}
 	return newPlan(data)
 }

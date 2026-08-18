@@ -24,6 +24,7 @@ import (
 	"github.com/google/uuid"
 
 	"velox-shared/compatibility"
+	"velox-shared/contract/rendermanifest"
 	"velox-shared/payload"
 )
 
@@ -264,7 +265,31 @@ func NewJobPayloadV2Checked(raw map[string]any) (*JobPayloadV2, error) {
 			raw = copyPayload
 		}
 	}
-	return NewJobPayloadV2(raw), nil
+	payload := NewJobPayloadV2(raw)
+	if _, err := payload.TypedRenderManifest(); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+// TypedRenderManifest is the strict render-manifest boundary for canonical
+// writers and the renderer compiler. RenderManifest remains a map only for
+// compatibility readers that must inspect legacy SQLite rows; once a payload
+// crosses NewJobPayloadV2Checked, this method is the only valid business
+// representation and delegates validation to rendermanifest.Parse.
+func (p *JobPayloadV2) TypedRenderManifest() (*rendermanifest.Manifest, error) {
+	if p == nil || len(p.RenderManifest) == 0 {
+		return nil, nil
+	}
+	data, err := json.Marshal(p.RenderManifest)
+	if err != nil {
+		return nil, fmt.Errorf("contract: render_manifest encode: %w", err)
+	}
+	manifest, err := rendermanifest.Parse(data)
+	if err != nil {
+		return nil, fmt.Errorf("contract: render_manifest: %w", err)
+	}
+	return manifest, nil
 }
 
 // ToMap returns the canonical map representation of the payload for
