@@ -25,8 +25,8 @@ import (
 )
 
 // Execute performs the canonical work. It delegates to the existing
-// pipeline.Runner using the explicit payload `pipeline_id` when present;
-// otherwise it falls back to the historical "hybrid.v1" route.
+// pipeline.Runner using the explicit payload `pipeline_id` (the legacy
+// hybrid.v1 fallback was retired).
 //
 // CAVEAT: the C++ engine runs as a synchronous subprocess; context
 // cancellation propagates only AFTER the engine finishes. The

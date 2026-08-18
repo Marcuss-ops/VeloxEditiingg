@@ -126,7 +126,7 @@ func openDeliveryTestDB(t *testing.T) *store.SQLiteStore {
 func seedUnmappedDeliveryTriple(t *testing.T, db *store.SQLiteStore, destID, artifactID, deliveryID string) {
 	t.Helper()
 
-	if err := db.InsertDeliveryDestination(&store.DeliveryDestination{
+	if err := db.Delivery().InsertDeliveryDestination(&store.DeliveryDestination{
 		DestinationID:         destID,
 		Provider:              "social_gateway",
 		ExternalDestinationID: "",
@@ -153,7 +153,7 @@ func seedUnmappedDeliveryTriple(t *testing.T, db *store.SQLiteStore, destID, art
 		t.Fatalf("insert artifact: %v", err)
 	}
 
-	if err := db.InsertJobDelivery(&store.JobDelivery{
+	if err := db.Delivery().InsertJobDelivery(&store.JobDelivery{
 		DeliveryID:     deliveryID,
 		ArtifactID:     artifactID,
 		DestinationID:  destID,
@@ -192,7 +192,7 @@ func TestRunnerHydrateDestination_UnmappedRouting_FailsClosed(t *testing.T) {
 	// ── Claim: the runner's claim SQL matches PENDING with no
 	//    next_attempt_at + enabled destination + READY+verified
 	//    artifact — all true after seedUnmappedDeliveryTriple.
-	leases, err := db.ClaimDeliveries(ctx, "test-runner-unmapped", 5*time.Minute, 4)
+	leases, err := db.Delivery().ClaimDeliveries(ctx, "test-runner-unmapped", 5*time.Minute, 4)
 	if err != nil {
 		t.Fatalf("ClaimDeliveries: %v", err)
 	}
@@ -227,7 +227,7 @@ func TestRunnerHydrateDestination_UnmappedRouting_FailsClosed(t *testing.T) {
 
 	// ── Assert: the row is FAILED with code DESTINATION_UNMAPPED
 	//    + non-empty CompletedAt + cleared lease + lock cols.
-	jd, err := db.GetJobDelivery(ctx, deliveryID)
+	jd, err := db.Delivery().GetJobDelivery(ctx, deliveryID)
 	if err != nil {
 		t.Fatalf("GetJobDelivery: %v", err)
 	}

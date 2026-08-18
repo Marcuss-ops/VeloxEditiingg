@@ -62,13 +62,6 @@ func (s *AssetService) RewriteRemoteInputPayload(ctx context.Context, payload ma
 		payload["scenes_json"] = string(rewritten)
 	}
 
-	if tracks, ok := payload["audio_tracks"]; ok {
-		for _, track := range mapList(tracks) {
-			if err := rewriteFirstMapField(ctx, s, track, inputsecurity.KindAudio, "source_url", "source", "url"); err != nil {
-				return fmt.Errorf("audio_tracks: %w", err)
-			}
-		}
-	}
 	if layers, ok := payload["layers"]; ok {
 		for _, layer := range mapList(layers) {
 			if err := rewriteStringField(ctx, s, layer, "font", inputsecurity.KindFont); err != nil {
@@ -87,9 +80,12 @@ func (s *AssetService) RewriteRemoteInputPayload(ctx context.Context, payload ma
 }
 
 // rewriteTransitionSoundEffects resolves the configured SFX pool before the
-// narrated timeline is built. The normalizer creates audio_tracks from this
-// pool later, so the asset declarations must already be present in the
-// canonical payload for workers to verify and cache those tracks.
+// narrated timeline is built. The resolved integrity declarations are attached
+// to the transition_sound_effects config (config.assets) rather than a
+// top-level `assets` field, so the normalizer can stamp them onto the
+// generated sfx audio_tracks; the worker then verifies/caches those tracks
+// through the audio_tracks path. The top-level `assets` field was removed
+// from the canonical payload because it duplicated render_manifest.assets.
 func rewriteTransitionSoundEffects(ctx context.Context, s *AssetService, payload map[string]interface{}) error {
 	config, ok := payload["transition_sound_effects"].(map[string]interface{})
 	if !ok {
@@ -134,20 +130,43 @@ func rewriteTransitionSoundEffects(ctx context.Context, s *AssetService, payload
 	if len(declarations) == 0 {
 		return nil
 	}
-	assets := mapList(payload["assets"])
-	seen := make(map[string]bool, len(assets)+len(declarations))
-	for _, item := range assets {
-		if id, ok := item["id"].(string); ok {
-			seen[id] = true
-		}
-	}
+	// Dedupe against assets already declared by the canonical sources
+	// (render_manifest.assets and scenes[].clip) so a shared id is never
+	// re-declared, then attach the surviving declarations to the config.
+	seen := existingDeclaredAssetIDs(payload)
+	resolved := make([]map[string]interface{}, 0, len(declarations))
 	for id, declaration := range declarations {
-		if !seen[id] {
-			assets = append(assets, declaration)
+		if seen[id] {
+			continue
+		}
+		resolved = append(resolved, declaration)
+	}
+	if len(resolved) > 0 {
+		config["assets"] = resolved
+	}
+	return nil
+}
+
+// existingDeclaredAssetIDs returns the set of asset ids already declared by
+// the canonical asset sources: render_manifest.assets[] (id) and
+// scenes[].clip (asset_id).
+func existingDeclaredAssetIDs(payload map[string]interface{}) map[string]bool {
+	seen := make(map[string]bool)
+	if manifest, ok := payload["render_manifest"].(map[string]interface{}); ok {
+		for _, asset := range mapList(manifest["assets"]) {
+			if id, ok := asset["id"].(string); ok && strings.TrimSpace(id) != "" {
+				seen[strings.TrimSpace(id)] = true
+			}
 		}
 	}
-	payload["assets"] = assets
-	return nil
+	for _, scene := range mapList(payload["scenes"]) {
+		if clip, ok := scene["clip"].(map[string]interface{}); ok {
+			if id, ok := clip["asset_id"].(string); ok && strings.TrimSpace(id) != "" {
+				seen[strings.TrimSpace(id)] = true
+			}
+		}
+	}
+	return seen
 }
 
 // collectSFXDeclarations gathers the integrity metadata for already-resolved
@@ -171,7 +190,7 @@ func collectSFXDeclarations(ctx context.Context, s *AssetService, rewritten []st
 			return nil, i, fmt.Errorf("asset %q has incomplete integrity metadata", assetID)
 		}
 		declarations[assetID] = map[string]interface{}{
-			"id":         asset.AssetID,
+			"asset_id":   asset.AssetID,
 			"uri":        canonical,
 			"kind":       "sfx",
 			"sha256":     asset.SHA256,
@@ -237,13 +256,6 @@ func rewriteRemoteInputMap(ctx context.Context, s *AssetService, item map[string
 		}
 		if err := rewriteStringField(ctx, s, nested, "font", inputsecurity.KindFont); err != nil {
 			return err
-		}
-	}
-	if tracks, ok := item["audio_tracks"]; ok {
-		for _, track := range mapList(tracks) {
-			if err := rewriteFirstMapField(ctx, s, track, inputsecurity.KindAudio, "source_url", "source", "url"); err != nil {
-				return err
-			}
 		}
 	}
 	if layers, ok := item["layers"]; ok {

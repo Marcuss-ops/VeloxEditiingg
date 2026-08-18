@@ -114,7 +114,6 @@ func newTestSceneComposite(t *testing.T, renderErr error) (*SceneComposite, *fak
 	t.Helper()
 	outputBase := t.TempDir()
 	pipeRegistry := pipeline.NewRegistry()
-	pipeRegistry.Register(&fakeCompiler{id: "hybrid.v1", validate: true})
 	pipeRegistry.Register(&fakeCompiler{id: "clips.v1", validate: true})
 
 	rclient := &fakeRenderClient{renderErr: renderErr}
@@ -129,6 +128,7 @@ func goodPayload(jobID string) map[string]interface{} {
 		"clips":       []interface{}{"c.mp4"},
 		"script_text": "hello world",
 		"output_path": "/tmp/out.mp4",
+		"pipeline_id": "clips.v1",
 	}
 }
 
@@ -381,7 +381,8 @@ func TestSceneComposite_Execute_SynthesizesOutputPath(t *testing.T) {
 	spec := executor.TaskSpec{
 		Version: 1, JobID: "j-no-path", ExecutorID: SceneCompositeID,
 		Payload: map[string]interface{}{
-			"images": []interface{}{"a.png"},
+			"images":      []interface{}{"a.png"},
+			"pipeline_id": "clips.v1",
 		},
 	}
 	res, err := exec.Execute(context.Background(), nil, spec)
@@ -442,6 +443,7 @@ func TestSceneComposite_Execute_UsesStorageResolverPlacement(t *testing.T) {
 	spec := executor.TaskSpec{
 		Version: 1, JobID: "j-staging", ExecutorID: SceneCompositeID,
 		Payload: map[string]interface{}{
+			"pipeline_id": "clips.v1",
 			"items": []interface{}{
 				map[string]interface{}{"type": "video", "url": "https://example.com/clip.mp4", "duration": 0.1},
 			},
@@ -479,6 +481,7 @@ func TestSceneComposite_Execute_ResolverDisabledFallsBackToArtifactDir(t *testin
 	spec := executor.TaskSpec{
 		Version: 1, JobID: "j-nvme", ExecutorID: SceneCompositeID,
 		Payload: map[string]interface{}{
+			"pipeline_id": "clips.v1",
 			"items": []interface{}{
 				map[string]interface{}{"type": "video", "url": "https://example.com/clip.mp4", "duration": 0.1},
 			},

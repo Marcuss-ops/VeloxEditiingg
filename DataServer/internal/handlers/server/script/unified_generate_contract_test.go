@@ -2,7 +2,6 @@ package script
 
 import (
 	"bytes"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -32,32 +31,6 @@ func newUnifiedGenerateTestRouter(t *testing.T) *gin.Engine {
 	r := gin.New()
 	RegisterRoutes(r.Group("/api/script"), cfg, db, enqueuer, nil)
 	return r
-}
-
-func TestUnifiedGenerateRejectsMissingSource(t *testing.T) {
-	r := newUnifiedGenerateTestRouter(t)
-	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/script/generate", bytes.NewBufferString(`{"video_name":"missing source"}`))
-	req.Header.Set("Content-Type", "application/json")
-	r.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("want 400, got %d body=%s", w.Code, w.Body.String())
-	}
-}
-
-func TestUnifiedGenerateRejectsUnsupportedSourceType(t *testing.T) {
-	r := newUnifiedGenerateTestRouter(t)
-	body, _ := json.Marshal(map[string]any{
-		"video_name": "unsupported",
-		"source":     map[string]any{"type": "unknown"},
-	})
-	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/script/generate", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	r.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("want 400, got %d body=%s", w.Code, w.Body.String())
-	}
 }
 
 func TestLegacyGenerateFromClipsRouteIsRemoved(t *testing.T) {

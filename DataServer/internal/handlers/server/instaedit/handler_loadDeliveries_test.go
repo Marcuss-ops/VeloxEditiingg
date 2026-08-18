@@ -56,13 +56,13 @@ func (f *failingStore) GetDeliveryDestination(ctx context.Context, destID string
 	return &store.DeliveryDestination{ExternalDestinationID: "ext-" + destID}, nil
 }
 
-func newFailingRouter(mock storeReader) *gin.Engine {
+func newFailingRouter(mock *failingStore) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	v, _ := instaeditauth.New(testSecret)
 	h := NewHandler(HandlerDeps{
 		Verifier: v,
 		Service: NewService(
-			&sqliteJobGateway{storeReader: mock, jobs: nil},
+			&sqliteJobGateway{storeReader: mock, jobs: nil, delivery: mock},
 			nil, nil, nil,
 		),
 	})

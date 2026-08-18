@@ -31,7 +31,7 @@ func TestFailureTracker_ClosedStoreEscalatesAfterThreshold(t *testing.T) {
 	})
 
 	for attempt := 1; attempt <= 3; attempt++ {
-		_, err := realStore.GetJobDelivery(context.Background(), "delivery-after-close")
+		_, err := realStore.Delivery().GetJobDelivery(context.Background(), "delivery-after-close")
 		if err == nil {
 			t.Fatalf("attempt %d: GetJobDelivery on closed store returned nil error", attempt)
 		}

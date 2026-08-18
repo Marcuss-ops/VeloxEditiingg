@@ -153,11 +153,17 @@ func TestRewriteRemoteInputPayloadDeclaresTransitionSoundEffects(t *testing.T) {
 	if err := service.RewriteRemoteInputPayload(context.Background(), payload); err != nil {
 		t.Fatalf("RewriteRemoteInputPayload: %v", err)
 	}
-	assets, ok := payload["assets"].([]map[string]interface{})
-	if !ok || len(assets) != 1 {
-		t.Fatalf("assets = %#v, want one declaration", payload["assets"])
+	// The SFX integrity is attached to the transition_sound_effects config,
+	// not written to a top-level assets declaration.
+	if _, present := payload["assets"]; present {
+		t.Fatalf("top-level assets must not be written: %#v", payload["assets"])
 	}
-	if assets[0]["uri"] != "velox-asset://sfx-1" || assets[0]["kind"] != "sfx" || assets[0]["size_bytes"] != int64(1234) {
-		t.Fatalf("unexpected SFX declaration: %#v", assets[0])
+	config := payload["transition_sound_effects"].(map[string]interface{})
+	declarations, ok := config["assets"].([]map[string]interface{})
+	if !ok || len(declarations) != 1 {
+		t.Fatalf("transition_sound_effects.assets = %#v, want one declaration", config["assets"])
+	}
+	if declarations[0]["asset_id"] != "sfx-1" || declarations[0]["uri"] != "velox-asset://sfx-1" || declarations[0]["kind"] != "sfx" || declarations[0]["size_bytes"] != int64(1234) {
+		t.Fatalf("unexpected SFX declaration: %#v", declarations[0])
 	}
 }

@@ -52,6 +52,43 @@ type Canvas struct {
 	PixelFormat string `json:"pixel_format"`
 }
 
+// DefaultCanvas returns the fallback output geometry used by the scene-based
+// authoring compiler when a payload does not carry an explicit canvas in
+// video_metadata. It is a function (not a package var) so callers can never
+// mutate a shared registry value.
+func DefaultCanvas() Canvas {
+	return Canvas{Width: 1920, Height: 1080, FPSNum: 30, FPSDen: 1, PixelFormat: "yuv420p"}
+}
+
+// CanvasFromMap converts the canvas keys of an authoring video_metadata map
+// into the typed Canvas. It is the single typed boundary for the output
+// timeline geometry: the render compiler reads the typed Canvas instead of
+// poking width/height/fps_den fields out of an untyped map. Each field falls
+// back to `defaults` when it is absent or non-numeric, matching the lenient
+// authoring behavior of LayerFromMap.
+func CanvasFromMap(raw map[string]any, defaults Canvas) Canvas {
+	out := defaults
+	if raw == nil {
+		return out
+	}
+	if value := layerNumber(raw["width"]); value > 0 {
+		out.Width = int(value)
+	}
+	if value := layerNumber(raw["height"]); value > 0 {
+		out.Height = int(value)
+	}
+	if value := layerNumber(raw["fps_num"]); value > 0 {
+		out.FPSNum = int(value)
+	}
+	if value := layerNumber(raw["fps_den"]); value > 0 {
+		out.FPSDen = int(value)
+	}
+	if value, ok := raw["pixel_format"].(string); ok && strings.TrimSpace(value) != "" {
+		out.PixelFormat = strings.TrimSpace(value)
+	}
+	return out
+}
+
 // Track is one logical timeline layer. Captions use AssetID at track level;
 // media and audio tracks use Events to place their assets on the timeline.
 type Track struct {
@@ -78,6 +115,81 @@ type Layer struct {
 	DurationSeconds float64   `json:"duration_seconds,omitempty"`
 	Preset          string    `json:"preset,omitempty"`
 	Animation       string    `json:"animation,omitempty"`
+}
+
+// LayerFromMap converts one authoring-input layer map into the typed Layer.
+// It is the lenient authoring boundary for JobPayloadV2.Layers: a missing ID
+// is defaulted to layer-<index> and only the declared Layer fields are copied,
+// so unknown authoring keys are dropped at the typed boundary. Semantic rules
+// (non-empty type, finite font_size/start/duration, unique IDs) are validated
+// later by Manifest.Validate, not here — this keeps a compatibility reader
+// able to round-trip authoring input that a strict compiler would reject.
+func LayerFromMap(raw map[string]any, index int) Layer {
+	layer := Layer{
+		ID:              layerString(raw, "id"),
+		Type:            layerString(raw, "type"),
+		Role:            layerString(raw, "role"),
+		Text:            layerString(raw, "text"),
+		Asset:           layerString(raw, "asset"),
+		Source:          layerString(raw, "source"),
+		Font:            layerString(raw, "font"),
+		FontSize:        layerNumber(raw["font_size"]),
+		StartSeconds:    layerNumber(raw["start_seconds"]),
+		DurationSeconds: layerNumber(raw["duration_seconds"]),
+		Preset:          layerString(raw, "preset"),
+		Animation:       layerString(raw, "animation"),
+	}
+	if strings.TrimSpace(layer.ID) == "" {
+		layer.ID = fmt.Sprintf("layer-%03d", index)
+	}
+	if position, ok := raw["position"].([]any); ok {
+		for _, value := range position {
+			layer.Position = append(layer.Position, layerNumber(value))
+		}
+	}
+	return layer
+}
+
+// LayersToMaps converts typed layers to the generic authoring-input map
+// representation used by JobPayloadV2.ToMap and raw-payload readers. The JSON
+// round-trip reuses the Layer struct tags as the single source of truth, so
+// the map shape can never drift from the wire contract.
+func LayersToMaps(layers []Layer) ([]map[string]any, error) {
+	if len(layers) == 0 {
+		return nil, nil
+	}
+	data, err := json.Marshal(layers)
+	if err != nil {
+		return nil, fmt.Errorf("rendermanifest: marshal layers: %w", err)
+	}
+	var out []map[string]any
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("rendermanifest: unmarshal layers: %w", err)
+	}
+	return out, nil
+}
+
+func layerString(raw map[string]any, key string) string {
+	if value, ok := raw[key].(string); ok && strings.TrimSpace(value) != "" {
+		return strings.TrimSpace(value)
+	}
+	return ""
+}
+
+func layerNumber(value any) float64 {
+	switch v := value.(type) {
+	case int:
+		return float64(v)
+	case int64:
+		return float64(v)
+	case float64:
+		return v
+	case json.Number:
+		if parsed, err := v.Float64(); err == nil {
+			return parsed
+		}
+	}
+	return 0
 }
 
 // Event places one asset on a track. SourceStartMS defaults to zero when it

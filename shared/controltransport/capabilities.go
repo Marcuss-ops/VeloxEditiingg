@@ -16,8 +16,7 @@
 // require proto regeneration — workers can advertise new capability
 // strings as soon as this Go file publishes them. The master side
 // reads structpb.NewStruct() output of Hello.capabilities and consults
-// CapabilityArtifactCommitV1 / CapabilityExecutorHybridV1 at dispatch
-// time.
+// CapabilityArtifactCommitV1 at dispatch time.
 //
 // Adding a new capability
 // -----------------------
@@ -70,15 +69,6 @@ const (
 	// decide whether the Task requires required_outputs (Phase 2
 	// routes required_outputs-bearing Tasks only to v1+ workers).
 	CapabilityArtifactCommitV1 = "artifact.commit.v1"
-
-	// CapabilityExecutorHybridV1 — the worker ships the hybrid
-	// executor (audio_url relaxation + explicit pipeline_id
-	// resolution, see Phase 2 follow-ups). Pre-hybrid workers
-	// keep emitting the legacy audio_url-as-spool-key contract;
-	// hybrid-aware masters preferentially route to workers that
-	// advertise this so resolving pipeline IDs goes through
-	// ResolvePipelineID() instead of the wire-provided ID.
-	CapabilityExecutorHybridV1 = "executor.hybrid.v1"
 
 	// CapabilityTaskOutputDeclaredV1 — the worker emits the typed
 	// TaskOutputDeclared message (Fase 3.3 of
@@ -133,7 +123,6 @@ const (
 // array so the canonical registry itself cannot be replaced by a caller.
 var allCapabilities = [...]string{
 	CapabilityArtifactCommitV1,
-	CapabilityExecutorHybridV1,
 	CapabilityTaskOutputDeclaredV1,
 	CapabilityArtifactUploadPlanV1,
 	CapabilityArtifactUploadCompletedV1,

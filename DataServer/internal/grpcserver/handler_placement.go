@@ -16,7 +16,6 @@ import (
 
 	"velox-server/internal/logging"
 	"velox-server/internal/placement"
-	"velox-server/internal/renderplan"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
 	"velox-shared/contract"
@@ -193,10 +192,6 @@ func (h *Handler) sendClaimedTaskOffer(
 			workerPayload[contract.PayloadKeyCompiledRenderPlanJSON] = planJSON
 			workerPayload[contract.PayloadKeyCompiledRenderPlanSHA] = planSHA
 		}
-	} else {
-		// Keep the historical V1 compile/persist behavior without projecting
-		// the incompatible document into the worker payload.
-		h.compileAndStampAttemptRenderPlan(ctx, tws, attempt)
 	}
 	// render_batch@1 has no safe legacy fallback: a missing or malformed V2
 	// envelope must release the claim instead of offering a task that the
@@ -269,91 +264,41 @@ func (h *Handler) sendClaimedTaskOffer(
 	logGRPCf(ctx, logging.LevelInfo, logging.CodeGRPCPlacement, "[PLACEMENT] TaskOffer queued for worker %s: task=%s job=%s attempt=%s lease=%s executor=%s@%d rev=%d", sess.workerID, tws.ID, tws.JobID, attempt.ID, leaseID, tws.ExecutorID, tws.ExecutorVersion, tws.Revision)
 }
 
-// compileAndStampAttemptRenderPlan compiles the canonical render plan for
-// the claimed task payload (Fase D), persists plan_version/plan_sha256/
-// render_plan_json on the freshly-minted attempt, and returns the canonical
-// document + its SHA256 so the caller can DELIVER the compiled plan in the
-// TaskOffer payload (contract.PayloadKeyCompiledRenderPlanJSON / *_SHA). It
-// is deliberately best-effort and NIL-safe: a missing compiler, an
-// uncompileable payload, or a persist failure returns ("", "") — the worker
-// offer is never blocked by plan compilation.
+// compileAndStampAttemptRenderPlan stamps the already-compiled
+// CompiledRenderPlanV2 (produced at enqueue time) onto the freshly-minted
+// attempt and returns the canonical document + its SHA256 so the caller can
+// DELIVER the plan in the TaskOffer payload. The legacy V1 RenderPlanCompiler
+// is retired: only a pre-compiled V2 envelope in the TaskSpec is stamped, and
+// a task without one skips the stamp entirely. Best-effort and NIL-safe — a
+// missing repo, an invalid envelope, or a persist failure returns ("", ""),
+// so the worker offer is never blocked by plan stamping.
 func (h *Handler) compileAndStampAttemptRenderPlan(ctx context.Context, tws *taskgraph.TaskWithSpec, attempt *taskattempts.TaskAttempt) (string, string) {
 	if h == nil || tws == nil || attempt == nil {
 		return "", ""
 	}
-	startedAt := time.Now()
-	compileMS, canonicalizeMS, hashMS, persistMS := int64(0), int64(0), int64(0), int64(0)
-	logSkip := func(reason string, err error) {
-		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCRenderPlan, "[RENDERPLAN] skipped task=%s attempt=%s reason=%s error=%v compile_ms=%d canonicalize_ms=%d hash_ms=%d persist_ms=%d total_ms=%d", tws.ID, attempt.ID, reason, err, compileMS, canonicalizeMS, hashMS, persistMS, time.Since(startedAt).Milliseconds())
-	}
 	if h.taskAttemptRepo == nil {
-		logSkip("persistence_unavailable", nil)
+		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCRenderPlan, "[RENDERPLAN] skipped task=%s attempt=%s reason=persistence_unavailable", tws.ID, attempt.ID)
 		return "", ""
 	}
 
 	// V2 is compiled before the task is persisted. Re-validate the exact
 	// bytes delivered in the TaskSpec and stamp those bytes, rather than
 	// reconstructing a second plan from legacy float-based fields.
-	if rawJSON, rawSHA, present := compiledV2Payload(tws.SpecPayload); present {
-		if err := contract.ValidateCompiledRenderPlanV2Payload(tws.SpecPayload); err != nil {
-			logSkip("v2_validation_error", err)
-			return "", ""
-		}
-		if err := h.taskAttemptRepo.UpsertRenderPlan(ctx, attempt.ID, contract.CompiledPlanVersionV2, rawSHA, rawJSON); err != nil {
-			logSkip("v2_persist_error", err)
-			return "", ""
-		}
-		logGRPCf(ctx, logging.LevelInfo, logging.CodeGRPCRenderPlan, "[RENDERPLAN] stamped V2 attempt=%s task=%s plan_version=%d plan_sha256=%s", attempt.ID, tws.ID, contract.CompiledPlanVersionV2, rawSHA[:16])
-		return rawJSON, rawSHA
-	}
-	if h.renderPlanCompiler == nil {
-		logSkip("compiler_unavailable", nil)
+	rawJSON, rawSHA, present := compiledV2Payload(tws.SpecPayload)
+	if !present {
+		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCRenderPlan, "[RENDERPLAN] skipped task=%s attempt=%s reason=no_compiled_v2", tws.ID, attempt.ID)
 		return "", ""
 	}
-
-	compileStartedAt := time.Now()
-	plan, err := h.renderPlanCompiler.Compile(ctx, tws.SpecPayload, attempt.ID)
-	compileMS = time.Since(compileStartedAt).Milliseconds()
-	if err != nil {
-		logSkip("compile_error", err)
+	if err := contract.ValidateCompiledRenderPlanV2Payload(tws.SpecPayload); err != nil {
+		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCRenderPlan, "[RENDERPLAN] skipped task=%s attempt=%s reason=v2_validation_error error=%v", tws.ID, attempt.ID, err)
 		return "", ""
 	}
-	if plan == nil {
-		logSkip("nil_plan", nil)
+	if err := h.taskAttemptRepo.UpsertRenderPlan(ctx, attempt.ID, contract.CompiledPlanVersionV2, rawSHA, rawJSON); err != nil {
+		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCRenderPlan, "[RENDERPLAN] skipped task=%s attempt=%s reason=v2_persist_error error=%v", tws.ID, attempt.ID, err)
 		return "", ""
 	}
-	if err := plan.Validate(); err != nil {
-		logSkip("validation_error", err)
-		return "", ""
-	}
-	if plan.AttemptID != attempt.ID {
-		logSkip("attempt_identity_mismatch", fmt.Errorf("plan attempt_id=%s", plan.AttemptID))
-		return "", ""
-	}
-	if tws.JobID != "" && plan.JobID != tws.JobID {
-		logSkip("job_identity_mismatch", fmt.Errorf("plan job_id=%s task job_id=%s", plan.JobID, tws.JobID))
-		return "", ""
-	}
-	canonicalizeStartedAt := time.Now()
-	canonical, err := plan.CanonicalJSON()
-	canonicalizeMS = time.Since(canonicalizeStartedAt).Milliseconds()
-	if err != nil {
-		logSkip("canonicalization_error", err)
-		return "", ""
-	}
-	// Hash from the already-canonical bytes (no second marshaling).
-	hashStartedAt := time.Now()
-	planSHA := renderplan.HashCanonical(canonical)
-	hashMS = time.Since(hashStartedAt).Milliseconds()
-	persistStartedAt := time.Now()
-	if err := h.taskAttemptRepo.UpsertRenderPlan(ctx, attempt.ID, plan.PlanVersion, planSHA, string(canonical)); err != nil {
-		persistMS = time.Since(persistStartedAt).Milliseconds()
-		logSkip("persist_error", err)
-		return "", ""
-	}
-	persistMS = time.Since(persistStartedAt).Milliseconds()
-	logGRPCf(ctx, logging.LevelInfo, logging.CodeGRPCRenderPlan, "[RENDERPLAN] stamped attempt=%s task=%s plan_version=%d plan_sha256=%s duration_ms=%d segments=%d compile_ms=%d canonicalize_ms=%d hash_ms=%d persist_ms=%d total_ms=%d", attempt.ID, tws.ID, plan.PlanVersion, planSHA[:16], plan.DurationMS, len(plan.Segments), compileMS, canonicalizeMS, hashMS, persistMS, time.Since(startedAt).Milliseconds())
-	return string(canonical), planSHA
+	logGRPCf(ctx, logging.LevelInfo, logging.CodeGRPCRenderPlan, "[RENDERPLAN] stamped V2 attempt=%s task=%s plan_version=%d plan_sha256=%s", attempt.ID, tws.ID, contract.CompiledPlanVersionV2, rawSHA[:16])
+	return rawJSON, rawSHA
 }
 
 func compiledV2Payload(payload map[string]interface{}) (string, string, bool) {

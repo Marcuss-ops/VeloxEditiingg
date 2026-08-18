@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"velox-shared/contract/deliveryplan"
+	"velox-shared/contract/rendermanifest"
 )
 
 func TestJobPayloadV2ContractParity(t *testing.T) {
@@ -50,8 +51,6 @@ func mustPayloadV2Map(t *testing.T) map[string]any {
 		JobType: "process_video", TemplateID: "test-template", TemplateVersion: 1, Version: "v2",
 		CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z",
 		VideoName: "video", ScriptText: "script",
-		Spec:           map[string]any{"recipe": "canonical"},
-		Output:         map[string]any{"width": 1280, "height": 720, "fps": 24},
 		RenderManifest: map[string]any{"schema": "manifest"},
 		ManifestRef:    map[string]any{"uri": "velox-asset://manifest"},
 		ManifestSHA256: "manifest-sha",
@@ -59,9 +58,8 @@ func mustPayloadV2Map(t *testing.T) map[string]any {
 		CompiledRenderPlanJSON: "{}", CompiledRenderPlanSHA256: "compiled-plan-sha",
 		ScenesJSON:     "[]",
 		Scenes:         []map[string]any{{"id": "scene-1"}},
-		Layers:         []map[string]any{{"id": "layer-1"}},
+		Layers:         []rendermanifest.Layer{{ID: "layer-1", Type: "text"}},
 		Items:          []map[string]any{{"role": "scene"}},
-		AudioTracks:    []map[string]any{{"source_url": "audio.mp3"}},
 		VoiceoverPaths: []string{"voiceover.mp3"},
 		AudioLanguage:  "en", VideoMode: "scene_image", Effect: "slow_zoom", Orientation: "landscape", OutputPath: "/tmp/video.mp4",
 		DriveOutput: "drive-folder", ChannelID: "channel-1", OutputVideoID: "output-1",
@@ -117,22 +115,19 @@ func assertKeySetEqual(t *testing.T, leftName string, left map[string]bool, righ
 	t.Errorf("%s and %s differ: missing from %s=%v, extra in %s=%v", leftName, rightName, leftName, missing, rightName, extra)
 }
 
-func TestNewJobPayloadV2PreservesRenderTimelineArrays(t *testing.T) {
+func TestNewJobPayloadV2PreservesRenderTimelineItems(t *testing.T) {
 	raw := map[string]any{
-		"items":        []any{map[string]any{"role": "scene"}},
-		"audio_tracks": []any{map[string]any{"source_url": "audio.mp3"}},
-		"scenes":       []any{map[string]any{"text": "scene", "subtitles": map[string]any{"url": "subtitles.srt", "format": "srt"}}},
+		"items":  []any{map[string]any{"role": "scene"}},
+		"scenes": []any{map[string]any{"text": "scene", "subtitles": map[string]any{"url": "subtitles.srt", "format": "srt"}}},
 	}
 	payload := NewJobPayloadV2(raw)
 	mapped, err := payload.ToMap()
 	if err != nil {
 		t.Fatalf("JobPayloadV2.ToMap(): %v", err)
 	}
-	for _, key := range []string{"items", "audio_tracks"} {
-		values, ok := mapped[key].([]map[string]any)
-		if !ok || len(values) != 1 {
-			t.Fatalf("%s = %#v, want one object", key, mapped[key])
-		}
+	values, ok := mapped["items"].([]map[string]any)
+	if !ok || len(values) != 1 {
+		t.Fatalf("items = %#v, want one object", mapped["items"])
 	}
 }
 
@@ -141,8 +136,7 @@ func TestJobPayloadV2JSONAndToMapHaveTheSameKeys(t *testing.T) {
 		ContractVersion: 2, PayloadContractVersion: 2, JobID: "job-1", JobRunID: "run-1", CorrelationID: "corr-1",
 		JobType: "process_video", Version: "v2", CreatedAt: "now", UpdatedAt: "now",
 		VideoName: "video", ScriptText: "script", Priority: 1, TimeoutSecs: 1,
-		Items:       []map[string]any{{"role": "scene"}},
-		AudioTracks: []map[string]any{{"source_url": "audio.mp3"}},
+		Items: []map[string]any{{"role": "scene"}},
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -157,4 +151,69 @@ func TestJobPayloadV2JSONAndToMapHaveTheSameKeys(t *testing.T) {
 		t.Fatalf("JobPayloadV2.ToMap(): %v", err)
 	}
 	assertKeySetEqual(t, "MarshalJSON", mapKeys(t, raw), "ToMap", mapKeys(t, mapped))
+}
+
+// TestJobPayloadV2LayersAreTypedAndRoundTrip pins the typed layers boundary:
+// NewJobPayloadV2 converts authoring layer maps into []rendermanifest.Layer
+// (defaulting missing IDs via LayerFromMap) and ToMap projects them back to
+// the generic []map[string]any shape downstream readers expect.
+// TestJobPayloadV2CanvasIsTypedFromVideoMetadata pins the typed canvas
+// boundary: NewJobPayloadV2 derives the single-source rendermanifest.Canvas
+// from the video_metadata canvas keys (with per-field defaults), while the
+// untyped VideoMetadata map remains the wire compatibility projection.
+func TestJobPayloadV2CanvasIsTypedFromVideoMetadata(t *testing.T) {
+	payload := NewJobPayloadV2(map[string]any{
+		"video_metadata": map[string]any{
+			"width":   1280,
+			"height":  720,
+			"fps_num": float64(24),
+			// fps_den and pixel_format omitted: defaults must fill them.
+		},
+	})
+	if payload.Canvas.Width != 1280 || payload.Canvas.Height != 720 || payload.Canvas.FPSNum != 24 {
+		t.Fatalf("Canvas = %#v, want 1280x720@24", payload.Canvas)
+	}
+	if payload.Canvas.FPSDen != 1 || payload.Canvas.PixelFormat != "yuv420p" {
+		t.Fatalf("Canvas defaults = %#v, want fps_den=1 pixel_format=yuv420p", payload.Canvas)
+	}
+
+	// No video_metadata at all still yields the canonical default geometry.
+	empty := NewJobPayloadV2(map[string]any{})
+	if empty.Canvas != rendermanifest.DefaultCanvas() {
+		t.Fatalf("default Canvas = %#v, want %#v", empty.Canvas, rendermanifest.DefaultCanvas())
+	}
+}
+
+func TestJobPayloadV2LayersAreTypedAndRoundTrip(t *testing.T) {
+	raw := map[string]any{
+		"layers": []any{
+			map[string]any{"type": "text", "role": "title", "text": "Title", "position": []any{0.5, 0.25}},
+			map[string]any{"id": "explicit", "type": "image"},
+		},
+	}
+	payload := NewJobPayloadV2(raw)
+	if len(payload.Layers) != 2 {
+		t.Fatalf("layers = %d, want 2", len(payload.Layers))
+	}
+	if payload.Layers[0].ID != "layer-000" || payload.Layers[0].Type != "text" || len(payload.Layers[0].Position) != 2 {
+		t.Fatalf("layers[0] = %#v, want defaulted id, parsed type and position", payload.Layers[0])
+	}
+	if payload.Layers[1].ID != "explicit" || payload.Layers[1].Type != "image" {
+		t.Fatalf("layers[1] = %#v, want explicit id and type", payload.Layers[1])
+	}
+
+	mapped, err := payload.ToMap()
+	if err != nil {
+		t.Fatalf("JobPayloadV2.ToMap(): %v", err)
+	}
+	layerMaps, ok := mapped["layers"].([]map[string]any)
+	if !ok || len(layerMaps) != 2 {
+		t.Fatalf("ToMap layers = %#v, want two generic maps", mapped["layers"])
+	}
+	if layerMaps[0]["id"] != "layer-000" || layerMaps[0]["type"] != "text" {
+		t.Fatalf("layerMaps[0] = %#v, want defaulted id and type", layerMaps[0])
+	}
+	if layerMaps[1]["id"] != "explicit" || layerMaps[1]["type"] != "image" {
+		t.Fatalf("layerMaps[1] = %#v, want explicit id and type", layerMaps[1])
+	}
 }

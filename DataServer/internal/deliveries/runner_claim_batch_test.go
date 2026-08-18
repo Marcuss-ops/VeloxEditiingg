@@ -31,7 +31,7 @@ func (p *fastDriveTestProvider) Deliver(context.Context, *store.Artifact, *Desti
 func seedDriveDeliveryTriple(t *testing.T, db *store.SQLiteStore, destID, artifactID, deliveryID, jobID string) {
 	t.Helper()
 
-	if err := db.InsertDeliveryDestination(&store.DeliveryDestination{
+	if err := db.Delivery().InsertDeliveryDestination(&store.DeliveryDestination{
 		DestinationID:         destID,
 		Provider:              "drive",
 		ExternalDestinationID: "ext-" + destID,
@@ -58,7 +58,7 @@ func seedDriveDeliveryTriple(t *testing.T, db *store.SQLiteStore, destID, artifa
 		t.Fatalf("insert artifact: %v", err)
 	}
 
-	if err := db.InsertJobDelivery(&store.JobDelivery{
+	if err := db.Delivery().InsertJobDelivery(&store.JobDelivery{
 		DeliveryID:     deliveryID,
 		ArtifactID:     artifactID,
 		DestinationID:  destID,
@@ -123,7 +123,7 @@ func TestTick_ClaimBatchExceedsConcurrency_AbsorbsBurst(t *testing.T) {
 
 	// All n deliveries must be SUCCEEDED (not claimable): a second claim
 	// from a different runner returns zero.
-	remaining, err := db.ClaimDeliveries(ctx, "second-runner", time.Minute, 100)
+	remaining, err := db.Delivery().ClaimDeliveries(ctx, "second-runner", time.Minute, 100)
 	if err != nil {
 		t.Fatalf("second claim: %v", err)
 	}

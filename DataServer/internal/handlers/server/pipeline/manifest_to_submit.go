@@ -14,7 +14,7 @@ import (
 func renderManifestToSubmitRequest(base SubmitJobRequest, manifest map[string]interface{}) (SubmitJobRequest, []gin.H) {
 	var details []gin.H
 	requiredTop := []string{"schema_version", "manifest_id", "created_at", "source", "video", "script", "scenes", "delivery_plan", "integrity"}
-	allowedOptional := []string{"audio_tracks"}
+	var allowedOptional []string
 	for _, key := range requiredTop {
 		if _, ok := manifest[key]; !ok {
 			details = append(details, gin.H{"path": key, "issue": "missing"})
@@ -74,9 +74,6 @@ func renderManifestToSubmitRequest(base SubmitJobRequest, manifest map[string]in
 	details = append(details, sceneDetails...)
 	plan, planDetails := manifestDeliveryPlanToSubmit(manifest["delivery_plan"])
 	details = append(details, planDetails...)
-	audioTracks, audioDetails := manifestAudioTracksToSubmit(manifest["audio_tracks"])
-	details = append(details, audioDetails...)
-
 	if integrity != nil {
 		if got := int64Field(integrity, "scene_count"); got != int64(len(scenes)) {
 			details = append(details, gin.H{
@@ -86,12 +83,12 @@ func renderManifestToSubmitRequest(base SubmitJobRequest, manifest map[string]in
 				"expected": len(scenes),
 			})
 		}
-		if got := int64Field(integrity, "audio_track_count"); got != int64(len(audioTracks)) {
+		if got := int64Field(integrity, "audio_track_count"); got != 0 {
 			details = append(details, gin.H{
 				"path":     "integrity.audio_track_count",
 				"issue":    "mismatch",
 				"observed": got,
-				"expected": len(audioTracks),
+				"expected": 0,
 			})
 		}
 		var total int64
@@ -112,7 +109,6 @@ func renderManifestToSubmitRequest(base SubmitJobRequest, manifest map[string]in
 	base.ScriptText = stringField(script, "text")
 	base.Scenes = scenes
 	base.DeliveryPlan = plan
-	base.AudioTracks = audioTracks
 	base.Layers = nil
 	return base, details
 }
@@ -206,48 +202,6 @@ func manifestDeliveryPlanToSubmit(raw interface{}) ([]SubmitDeliveryPlanEntry, [
 			entry.RetryBudget = &rb
 		}
 		out = append(out, entry)
-	}
-	return out, details
-}
-
-// manifestAudioTracksToSubmit parses the optional top-level audio_tracks array
-// from a velox.render-manifest.v1 document into []SubmitAudioTrack. An absent
-// or null audio_tracks key returns an empty slice with no validation errors.
-func manifestAudioTracksToSubmit(raw interface{}) ([]SubmitAudioTrack, []gin.H) {
-	if raw == nil {
-		return nil, nil
-	}
-	arr, ok := raw.([]interface{})
-	if !ok {
-		return nil, []gin.H{{"path": "audio_tracks", "issue": "type"}}
-	}
-	if len(arr) == 0 {
-		return nil, nil
-	}
-	out := make([]SubmitAudioTrack, 0, len(arr))
-	var details []gin.H
-	for i, item := range arr {
-		m, ok := item.(map[string]interface{})
-		if !ok {
-			details = append(details, gin.H{"path": fmt.Sprintf("audio_tracks.%d", i), "issue": "type"})
-			continue
-		}
-		track := SubmitAudioTrack{
-			AssetID:         stringField(m, "asset_id"),
-			SourceURL:       stringField(m, "source_url"),
-			Role:            stringField(m, "role"),
-			Volume:          float64Field(m, "volume"),
-			StartTimeOffset: float64Field(m, "start_time_offset"),
-			DurationSeconds: float64Field(m, "duration_seconds"),
-		}
-		// At least one of asset_id or source_url must be present.
-		if track.AssetID == "" && track.SourceURL == "" {
-			details = append(details, gin.H{
-				"path":  fmt.Sprintf("audio_tracks.%d", i),
-				"issue": "missing_source",
-			})
-		}
-		out = append(out, track)
 	}
 	return out, details
 }

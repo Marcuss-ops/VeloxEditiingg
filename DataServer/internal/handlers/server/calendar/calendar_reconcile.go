@@ -145,7 +145,7 @@ func applyQueueStateToEvent(ctx context.Context, event *store.CalendarEvent, job
 				} else if a.StorageKey != "" {
 					event.OutputVideoPath = a.StorageKey
 				}
-				deliveries, _ := dbStore.ListJobDeliveriesByJob(job.JobID)
+				deliveries, _ := dbStore.Delivery().ListJobDeliveriesByJob(job.JobID)
 				for _, d := range deliveries {
 					if d.ArtifactID == a.ID && d.RemoteURL != "" {
 						event.OutputVideoURL = d.RemoteURL

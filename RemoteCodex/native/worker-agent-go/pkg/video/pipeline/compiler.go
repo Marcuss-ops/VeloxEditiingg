@@ -1,5 +1,5 @@
 // Package pipeline defines the compiler abstraction for video pipelines.
-// Each pipeline type (images, clips, entities, hybrid) implements the
+// Each pipeline type (images, clips, entities) implements the
 // Compiler interface. The registry resolves pipeline IDs to compilers,
 // and the runner orchestrates compilation + rendering.
 package pipeline
@@ -11,7 +11,7 @@ import (
 )
 
 // Compiler transforms a pipeline-specific request into a RenderPlan.
-// Each video endpoint (images, clips, entities, hybrid) has its own
+// Each video endpoint (images, clips, entities) has its own
 // compiler that knows the rules for that pipeline type.
 type Compiler interface {
 	// ID returns the unique pipeline identifier (e.g. "images.v1").

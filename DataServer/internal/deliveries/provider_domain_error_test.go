@@ -45,7 +45,7 @@ func seedDomainErrorDelivery(t *testing.T, db *store.SQLiteStore, suffix string,
 	deliveryID := "domain-error-delivery-" + suffix
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	if err := db.InsertDeliveryDestination(&store.DeliveryDestination{
+	if err := db.Delivery().InsertDeliveryDestination(&store.DeliveryDestination{
 		DestinationID:         destinationID,
 		Provider:              providerName,
 		ExternalDestinationID: "external-" + suffix,
@@ -72,7 +72,7 @@ func seedDomainErrorDelivery(t *testing.T, db *store.SQLiteStore, suffix string,
 	if len(maxAttempts) > 0 {
 		budget = maxAttempts[0]
 	}
-	if err := db.InsertJobDelivery(&store.JobDelivery{
+	if err := db.Delivery().InsertJobDelivery(&store.JobDelivery{
 		DeliveryID:     deliveryID,
 		ArtifactID:     artifactID,
 		DestinationID:  destinationID,
@@ -90,7 +90,7 @@ func seedDomainErrorDelivery(t *testing.T, db *store.SQLiteStore, suffix string,
 		}
 	}
 
-	leases, err := db.ClaimDeliveries(context.Background(), "domain-error-runner-"+suffix, 5*time.Minute, 1)
+	leases, err := db.Delivery().ClaimDeliveries(context.Background(), "domain-error-runner-"+suffix, 5*time.Minute, 1)
 	if err != nil {
 		t.Fatalf("ClaimDeliveries: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestDeliveryRunnerZeroRetryBudgetFailsAfterInitialAttempt(t *testing.T) {
 	if runErr := runner.processLease(context.Background(), lease); runErr == nil {
 		t.Fatal("processLease returned nil for exhausted zero retry budget")
 	}
-	row, err := db.GetJobDelivery(context.Background(), lease.DeliveryID)
+	row, err := db.Delivery().GetJobDelivery(context.Background(), lease.DeliveryID)
 	if err != nil {
 		t.Fatalf("GetJobDelivery: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestDomainErrorPropagatesThroughDeliveryRunner(t *testing.T) {
 				t.Fatalf("processLease returned error for retryable DomainError: %v", runErr)
 			}
 
-			row, err := db.GetJobDelivery(context.Background(), lease.DeliveryID)
+			row, err := db.Delivery().GetJobDelivery(context.Background(), lease.DeliveryID)
 			if err != nil {
 				t.Fatalf("GetJobDelivery: %v", err)
 			}

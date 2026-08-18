@@ -190,15 +190,13 @@ func planFromManifest(manifest *rendermanifest.Manifest) (*RenderPlan, error) {
 }
 
 func planFromPayload(payload *contract.JobPayloadV2) (*RenderPlan, error) {
-	canvas := rendermanifest.Canvas{Width: 1920, Height: 1080, FPSNum: 30, FPSDen: 1, PixelFormat: "yuv420p"}
-	if payload.VideoMetadata != nil {
-		canvas.Width = int(number(payload.VideoMetadata["width"], float64(canvas.Width)))
-		canvas.Height = int(number(payload.VideoMetadata["height"], float64(canvas.Height)))
-		canvas.FPSNum = int(number(payload.VideoMetadata["fps_num"], float64(canvas.FPSNum)))
-		canvas.FPSDen = int(number(payload.VideoMetadata["fps_den"], float64(canvas.FPSDen)))
-		if value, ok := payload.VideoMetadata["pixel_format"].(string); ok && strings.TrimSpace(value) != "" {
-			canvas.PixelFormat = strings.TrimSpace(value)
-		}
+	// Canvas is the typed single source of the output geometry, populated
+	// from video_metadata by NewJobPayloadV2. Payloads built directly (tests)
+	// may carry a zero Canvas, so fall back to the canonical default before
+	// the strict manifest validation rejects the plan.
+	canvas := payload.Canvas
+	if canvas.Width <= 0 || canvas.Height <= 0 || canvas.FPSNum <= 0 || canvas.FPSDen <= 0 || canvas.PixelFormat == "" {
+		canvas = rendermanifest.DefaultCanvas()
 	}
 
 	scenes, err := payloadScenes(payload)
@@ -269,14 +267,7 @@ func planFromPayload(payload *contract.JobPayloadV2) (*RenderPlan, error) {
 		tracks = append(tracks, rendermanifest.Track{ID: "voiceover-track", Kind: "voiceover", Events: voiceEvents})
 	}
 
-	layers := make([]rendermanifest.Layer, 0, len(payload.Layers))
-	for index, layer := range payload.Layers {
-		converted, layerErr := layerFromMap(layer, index)
-		if layerErr != nil {
-			return nil, fmt.Errorf("rendercompiler: layers[%d]: %w", index, layerErr)
-		}
-		layers = append(layers, converted)
-	}
+	layers := append([]rendermanifest.Layer(nil), payload.Layers...)
 	sort.SliceStable(layers, func(i, j int) bool {
 		if layers[i].StartSeconds != layers[j].StartSeconds {
 			return layers[i].StartSeconds < layers[j].StartSeconds
@@ -352,28 +343,6 @@ func assetFromMap(raw map[string]any, kind, fallbackID string) (rendermanifest.A
 		return rendermanifest.Asset{}, fmt.Errorf("sha256 and positive size_bytes are required")
 	}
 	return asset, nil
-}
-
-func layerFromMap(raw map[string]any, index int) (rendermanifest.Layer, error) {
-	layer := rendermanifest.Layer{
-		ID: stringValue(raw, "id"), Type: stringValue(raw, "type"), Role: stringValue(raw, "role"),
-		Text: stringValue(raw, "text"), Asset: stringValue(raw, "asset"), Source: stringValue(raw, "source"),
-		Font: stringValue(raw, "font"), FontSize: number(raw["font_size"], 0),
-		StartSeconds: number(raw["start_seconds"], 0), DurationSeconds: number(raw["duration_seconds"], 0),
-		Preset: stringValue(raw, "preset"), Animation: stringValue(raw, "animation"),
-	}
-	if layer.ID == "" {
-		layer.ID = fmt.Sprintf("layer-%03d", index)
-	}
-	if layer.Type == "" {
-		return rendermanifest.Layer{}, fmt.Errorf("type is required")
-	}
-	if rawPosition, ok := raw["position"].([]any); ok {
-		for _, value := range rawPosition {
-			layer.Position = append(layer.Position, number(value, 0))
-		}
-	}
-	return layer, nil
 }
 
 func addAsset(assets map[string]rendermanifest.Asset, asset rendermanifest.Asset) error {

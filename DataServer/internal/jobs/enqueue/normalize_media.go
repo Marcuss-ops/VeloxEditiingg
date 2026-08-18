@@ -3,7 +3,6 @@ package enqueue
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 
 	"velox-server/internal/routing"
@@ -93,18 +92,6 @@ func canonicalPipelineScenes(p map[string]interface{}) []map[string]interface{} 
 	return scenes
 }
 
-// hasAudioTracks reports whether at least one normalized audio track has a
-// usable source alias. It deliberately reuses normalizeAudioTracks so the
-// type-shape filtering is shared with the legacy timeline adapter.
-func hasAudioTracks(payloadMap map[string]interface{}) bool {
-	for _, track := range normalizeAudioTracks(payloadMap["audio_tracks"]) {
-		if payload.FirstString(track, "source_url", "source", "url") != "" {
-			return true
-		}
-	}
-	return false
-}
-
 func voiceoverCountFromPayload(payloadMap map[string]interface{}) int {
 	if arr, ok := payloadMap["voiceover_paths"].([]string); ok {
 		return len(arr)
@@ -132,10 +119,6 @@ func hasClipTimelinePayload(payloadMap map[string]interface{}) bool {
 	}
 	return false
 }
-func normalizeAudioTracks(raw interface{}) []map[string]interface{} {
-	return normalizeMapList(raw)
-}
-
 func normalizeMapList(raw interface{}) []map[string]interface{} {
 	var result []map[string]interface{}
 	switch values := raw.(type) {
@@ -153,18 +136,6 @@ func normalizeMapList(raw interface{}) []map[string]interface{} {
 		}
 	}
 	return result
-}
-func audioTrackKey(track map[string]interface{}) string {
-	if track == nil {
-		return ""
-	}
-	source := strings.TrimSpace(payload.FirstString(track, "source_url", "source", "url"))
-	if source == "" {
-		return ""
-	}
-	role := strings.TrimSpace(payload.FirstString(track, "role"))
-	offset := payload.NormalizedDuration(track["start_time_offset"])
-	return fmt.Sprintf("%s\x00%s\x00%.6f", role, source, offset)
 }
 func normalizeSubtitleTracks(raw interface{}) []map[string]interface{} {
 	return normalizeMapList(raw)

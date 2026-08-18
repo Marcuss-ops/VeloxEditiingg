@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"velox-shared/contract"
+	"velox-shared/contract/rendermanifest"
 )
 
 func TestCompilePayloadCompilesRawV2Payload(t *testing.T) {
@@ -38,6 +39,44 @@ func TestCompilePayloadCompilesRawV2Payload(t *testing.T) {
 	events := decoded["tracks"].([]any)[0].(map[string]any)["events"].([]any)
 	if got := events[0].(map[string]any)["duration_ms"]; got != float64(2500) {
 		t.Fatalf("duration_ms = %v, want 2500 (2.5 seconds)", got)
+	}
+}
+
+func TestCompilePayloadHonorsTypedCanvasFromVideoMetadata(t *testing.T) {
+	raw := map[string]any{
+		"job_type": "process_video", "version": "v2", "job_id": "job-canvas",
+		"voiceover_paths": []any{"velox-asset://voiceover-raw"},
+		"scenes": []any{map[string]any{
+			"duration_seconds": 2.5,
+			"clip": map[string]any{
+				"asset_id": "clip-raw", "uri": "velox-asset://clip-raw", "kind": "video",
+				"sha256":     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+				"size_bytes": 100, "duration_ms": 2500,
+			},
+			"voiceover": map[string]any{
+				"asset_id": "voiceover-raw", "uri": "velox-asset://voiceover-raw", "kind": "audio",
+				"sha256":     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+				"size_bytes": 200, "duration_ms": 2500,
+			},
+		}},
+		"video_metadata": map[string]any{
+			"width": 1280, "height": 720, "fps_num": 24, "fps_den": 1, "pixel_format": "yuv422p",
+		},
+	}
+	plan, err := DefaultRegistry().CompilePayload(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("CompilePayload: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(plan.JSON(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	canvas := decoded["canvas"].(map[string]any)
+	if canvas["width"] != float64(1280) || canvas["height"] != float64(720) || canvas["fps_num"] != float64(24) {
+		t.Fatalf("canvas = %#v, want 1280x720@24", canvas)
+	}
+	if canvas["pixel_format"] != "yuv422p" {
+		t.Fatalf("canvas.pixel_format = %v, want yuv422p", canvas["pixel_format"])
 	}
 }
 
@@ -148,7 +187,7 @@ func TestCompileDoesNotMutatePayloadOrShareNestedData(t *testing.T) {
 		t.Fatal(err)
 	}
 	payload.Scenes[0]["text"] = "mutated after compile"
-	payload.Layers[0]["text"] = "mutated layer"
+	payload.Layers[0].Text = "mutated layer"
 	if string(before) == mustMarshal(payload) {
 		t.Fatal("test mutation did not change the source payload")
 	}
@@ -173,10 +212,10 @@ func TestCompileDoesNotMutatePayloadOrShareNestedData(t *testing.T) {
 
 func TestCompilerSortsLayersAndAssetsDeterministically(t *testing.T) {
 	payload := testPayload()
-	payload.Layers = []map[string]any{
-		{"id": "z", "type": "text", "start_seconds": 1.0, "text": "z"},
-		{"id": "a", "type": "text", "start_seconds": 1.0, "text": "a"},
-		{"id": "b", "type": "text", "start_seconds": 0.5, "text": "b"},
+	payload.Layers = []rendermanifest.Layer{
+		{ID: "z", Type: "text", StartSeconds: 1.0, Text: "z"},
+		{ID: "a", Type: "text", StartSeconds: 1.0, Text: "a"},
+		{ID: "b", Type: "text", StartSeconds: 0.5, Text: "b"},
 	}
 	plan, err := DefaultRegistry().Compile(context.Background(), payload)
 	if err != nil {
@@ -271,8 +310,8 @@ func testPayload() *contract.JobPayloadV2 {
 				},
 			},
 		},
-		Layers: []map[string]any{
-			{"id": "layer-1", "type": "text", "role": "title", "text": "Title", "start_seconds": 0.0, "duration_seconds": 2.0},
+		Layers: []rendermanifest.Layer{
+			{ID: "layer-1", Type: "text", Role: "title", Text: "Title", StartSeconds: 0.0, DurationSeconds: 2.0},
 		},
 	}
 }

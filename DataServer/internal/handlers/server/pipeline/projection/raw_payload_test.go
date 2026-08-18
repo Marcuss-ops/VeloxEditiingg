@@ -15,14 +15,12 @@ func TestBuildRawPayloadEnvelopePreservesCanonicalWireShape(t *testing.T) {
 		TemplateID:       " template-1 ",
 		TemplateVersion:  2,
 		VideoMode:        " scene ",
-		VideoName:        "  Video  ",
-		ScriptText:       "verbatim content",
-		Spec:             map[string]interface{}{"voiceover_paths": []interface{}{"legacy.mp3"}},
-		Output:           map[string]interface{}{"width": 1920},
-		RenderManifest:   map[string]interface{}{"schema_version": "v1"},
-		ManifestRef:      map[string]interface{}{"url": "https://example.test/manifest"},
-		ManifestSHA256:   "sha256",
-		PlacementPin:     " worker-1 ",
+		VideoName:       "  Video  ",
+		ScriptText:      "verbatim content",
+		RenderManifest:  map[string]interface{}{"schema_version": "v1"},
+		ManifestRef:     map[string]interface{}{"url": "https://example.test/manifest"},
+		ManifestSHA256:  "sha256",
+		PlacementPin:    " worker-1 ",
 		LegacyVoiceovers: []string{"legacy.mp3"},
 		DeliveryPlan: []RawDeliveryPlanEntry{{
 			DestinationID: " drive ",
@@ -58,6 +56,23 @@ func TestBuildRawPayloadEnvelopePreservesCanonicalWireShape(t *testing.T) {
 	}
 }
 
+func TestBuildRawPayloadEnvelopeLegacyVoiceoversRemainExplicit(t *testing.T) {
+	got := BuildRawPayloadEnvelope(RawPayloadInput{
+		JobID:            "job-4",
+		LegacyVoiceovers: []string{"legacy-a.mp3", "legacy-b.mp3"},
+	})
+	// audio_tracks is retired from the canonical wire; legacy voiceover
+	// paths are carried under voiceover_paths until the worker consumes
+	// them from scenes[].voiceover.
+	paths, ok := got["voiceover_paths"].([]string)
+	if !ok || len(paths) != 2 {
+		t.Fatalf("voiceover_paths = %#v, want two legacy paths", got["voiceover_paths"])
+	}
+	if _, leaked := got["audio_tracks"]; leaked {
+		t.Fatalf("retired audio_tracks leaked into envelope: %#v", got["audio_tracks"])
+	}
+}
+
 func TestBuildRawPayloadEnvelopeUsesDefaultRetryBudgetWhenOmitted(t *testing.T) {
 	got := BuildRawPayloadEnvelope(RawPayloadInput{
 		JobID: "job-2",
@@ -75,13 +90,11 @@ func TestBuildRawPayloadEnvelopeUsesDefaultRetryBudgetWhenOmitted(t *testing.T) 
 func TestBuildRawPayloadEnvelopePreservesControlPlaneEnvelopeFields(t *testing.T) {
 	got := BuildRawPayloadEnvelope(RawPayloadInput{
 		JobID:          "job-3",
-		Output:         map[string]interface{}{"width": 1280},
 		RenderManifest: map[string]interface{}{"schema_version": "v1"},
 		ManifestRef:    map[string]interface{}{"url": "https://example.test/manifest"},
 		ManifestSHA256: "sha256",
 	})
 	for key, want := range map[string]interface{}{
-		"output":          map[string]interface{}{"width": 1280},
 		"render_manifest": map[string]interface{}{"schema_version": "v1"},
 		"manifest_ref":    map[string]interface{}{"url": "https://example.test/manifest"},
 		"manifest_sha256": "sha256",
@@ -93,19 +106,5 @@ func TestBuildRawPayloadEnvelopePreservesControlPlaneEnvelopeFields(t *testing.T
 		if !reflect.DeepEqual(got[key], want) {
 			t.Errorf("%s = %#v, want %#v", key, got[key], want)
 		}
-	}
-}
-
-func TestBuildRawPayloadEnvelopeLegacyVoiceoversRemainExplicit(t *testing.T) {
-	got := BuildRawPayloadEnvelope(RawPayloadInput{
-		JobID:            "job-4",
-		LegacyVoiceovers: []string{"legacy-a.mp3", "legacy-b.mp3"},
-	})
-	tracks, ok := got["audio_tracks"].([]interface{})
-	if !ok || len(tracks) != 2 {
-		t.Fatalf("audio_tracks = %#v, want two legacy tracks", got["audio_tracks"])
-	}
-	if tracks[0].(map[string]interface{})["role"] != "voiceover" {
-		t.Fatalf("legacy track role = %#v, want voiceover", tracks[0])
 	}
 }

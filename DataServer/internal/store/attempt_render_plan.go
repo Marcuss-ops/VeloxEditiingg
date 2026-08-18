@@ -1,9 +1,10 @@
 package store
 
-// attempt_render_plan.go: compiled render plan identity on task_attempts
-// (Fase D). The master RenderPlanCompiler stamps plan_version + plan_sha256
-// + the canonical plan JSON at claim time; these helpers persist and read
-// that identity. plan_version=0 / empty plan_sha256 means "no compiled plan".
+// attempt_render_plan.go: compiled render plan identity on task_attempts.
+// The plan is compiled at enqueue time (CompiledRenderPlanV2) and only
+// re-validated + stamped at claim time; the legacy V1 RenderPlanCompiler is
+// retired. These helpers persist and read that identity.
+// plan_version=0 / empty plan_sha256 means "no compiled plan".
 
 import (
 	"context"
@@ -15,7 +16,7 @@ import (
 
 // UpsertRenderPlan stamps the compiled render plan identity on an attempt.
 // It is idempotent (last writer wins) and intentionally NOT versioned: the
-// plan is compiled once at claim time from the immutable task spec payload,
+// plan is compiled once at enqueue time from the immutable task spec payload,
 // so repeated stamps of the same attempt converge to the same document.
 func (r *SQLiteTaskAttemptRepository) UpsertRenderPlan(ctx context.Context, attemptID string, planVersion int, planSHA256, planJSON string) error {
 	if r == nil || r.store == nil || r.store.db == nil {

@@ -86,9 +86,6 @@ func DetectPipelineID(params map[string]interface{}) string {
 	if hasEntities && hasScript {
 		return "entities.v1"
 	}
-	if hasImages && hasClips {
-		return "hybrid.v1"
-	}
 	if hasImages {
 		return "images.v1"
 	}

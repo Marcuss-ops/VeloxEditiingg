@@ -29,6 +29,12 @@ type storeReader interface {
 	GetJobByWorkspace(ctx context.Context, jobID string, workspaceID int64) (map[string]any, error)
 	ListWorkersByWorkspace(workspaceID int64) ([]map[string]any, error)
 	GetWorkerByWorkspace(workerID string, workspaceID int64) (map[string]any, error)
+}
+
+// deliveryReader is the narrow delivery-read surface the InstaEdit service
+// needs. It is satisfied by *deliverystore.SQLiteDeliveryStore (wired at the
+// composition root) and by test doubles.
+type deliveryReader interface {
 	GetDeliveryDestinationByExternalID(ctx context.Context, externalID string) (*deliverystore.DeliveryDestination, error)
 	ListJobDeliveriesByJob(jobID string) ([]deliverystore.JobDelivery, error)
 	GetDeliveryDestination(ctx context.Context, destID string) (*deliverystore.DeliveryDestination, error)
@@ -88,7 +94,7 @@ func NewService(jobs JobGateway, workers WorkerReader, assets AssetReader, enque
 // service's consumer-owned ports.
 func NewServiceFromSQLite(sqlite *store.SQLiteStore, jobsRepo jobs.Repository, assets store.AssetRepository, enq *enqueue.Enqueuer, resolvers ...*creatorflow.Resolver) *Service {
 	s := NewService(
-		&sqliteJobGateway{storeReader: sqlite, jobs: jobsRepo},
+		&sqliteJobGateway{storeReader: sqlite, jobs: jobsRepo, delivery: sqlite.Delivery()},
 		sqlite,
 		assets,
 		&enqueuerAdapter{enq: enq},
@@ -121,11 +127,27 @@ func (s *Service) ApplyDeliveryEvent(ctx context.Context, event store.InstaEditD
 // JobGateway. The service never sees the concrete SQLite types.
 type sqliteJobGateway struct {
 	storeReader
-	jobs jobs.Repository
+	jobs     jobs.Repository
+	delivery deliveryReader
 }
 
 func (g *sqliteJobGateway) Cancel(ctx context.Context, jobID string, reason string, revision int) error {
 	return g.jobs.Cancel(ctx, jobID, reason, revision)
+}
+
+// The three delivery reads below delegate to the deliverystore leaf so the
+// JobGateway port stays satisfied without *store.SQLiteStore owning delivery
+// read facades.
+func (g *sqliteJobGateway) GetDeliveryDestinationByExternalID(ctx context.Context, externalID string) (*deliverystore.DeliveryDestination, error) {
+	return g.delivery.GetDeliveryDestinationByExternalID(ctx, externalID)
+}
+
+func (g *sqliteJobGateway) ListJobDeliveriesByJob(jobID string) ([]deliverystore.JobDelivery, error) {
+	return g.delivery.ListJobDeliveriesByJob(jobID)
+}
+
+func (g *sqliteJobGateway) GetDeliveryDestination(ctx context.Context, destID string) (*deliverystore.DeliveryDestination, error) {
+	return g.delivery.GetDeliveryDestination(ctx, destID)
 }
 
 // enqueuerAdapter adapts *enqueue.Enqueuer to the JobEnqueuer port.

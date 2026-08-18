@@ -53,6 +53,8 @@ log "check-telemetry-catalog"
 ./scripts/ci/check-telemetry-catalog.sh
 log "check-telemetry-architecture"
 ./scripts/ci/check-telemetry-architecture.sh
+log "check-contract-schema (canonical wire schemas + generated Go/C++ bindings)"
+./scripts/ci/check-contract-schema.sh
 log "check-no-legacy"
 ./scripts/ci/check-no-legacy.sh
 log "test-check-no-legacy"

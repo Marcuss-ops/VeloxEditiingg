@@ -54,7 +54,7 @@ func newTestEnqueuer(t *testing.T) *Enqueuer {
 func seedDestinations(t *testing.T, db *store.SQLiteStore, pairs map[string]bool) {
 	t.Helper()
 	for id, enabled := range pairs {
-		if err := db.InsertDeliveryDestination(&store.DeliveryDestination{
+		if err := db.Delivery().InsertDeliveryDestination(&store.DeliveryDestination{
 			DestinationID: id,
 			Provider:      "drive",
 			Name:          id,

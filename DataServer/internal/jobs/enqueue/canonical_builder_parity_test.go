@@ -66,15 +66,6 @@ func TestCanonicalBuilderParity_RichPayload(t *testing.T) {
 				"duration_seconds": 5.0,
 			},
 		},
-		"audio_tracks": []interface{}{
-			map[string]interface{}{
-				"source_url":        "velox-asset://music/rich.mp3",
-				"role":              "background_music",
-				"volume":            0.12,
-				"start_time_offset": 0.0,
-				"duration_seconds":  5.0,
-			},
-		},
 		"delivery_plan": []interface{}{
 			map[string]interface{}{
 				"destination_id": "drive-rich",
@@ -162,7 +153,6 @@ func richWorkerProjection(payload map[string]interface{}) map[string]interface{}
 		"audio_language_for_srt",
 		"video_metadata",
 		"layers",
-		"audio_tracks",
 	} {
 		value, ok := payload[key]
 		if !ok {

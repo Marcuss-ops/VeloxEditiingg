@@ -1,8 +1,10 @@
 package rendermanifest
 
 import (
+	"encoding/json"
 	"errors"
 	"math"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -150,4 +152,70 @@ func hasPath(errs ValidationErrors, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestLayerFromMapDefaultsIDAndParsesFields(t *testing.T) {
+	layer := LayerFromMap(map[string]any{
+		"type":     "text",
+		"role":     "title",
+		"position": []any{0.5, 0.25},
+	}, 0)
+	if layer.ID != "layer-000" {
+		t.Fatalf("ID = %q, want layer-000", layer.ID)
+	}
+	if layer.Type != "text" || layer.Role != "title" {
+		t.Fatalf("layer = %#v, want type/role parsed", layer)
+	}
+	if len(layer.Position) != 2 || layer.Position[0] != 0.5 || layer.Position[1] != 0.25 {
+		t.Fatalf("Position = %v, want [0.5 0.25]", layer.Position)
+	}
+}
+
+func TestCanvasFromMapParsesFieldsAndAppliesDefaults(t *testing.T) {
+	defaults := DefaultCanvas()
+	canvas := CanvasFromMap(map[string]any{
+		"width":   1280,
+		"height":  float64(720),
+		"fps_num": json.Number("24"),
+	}, defaults)
+	if canvas.Width != 1280 || canvas.Height != 720 || canvas.FPSNum != 24 {
+		t.Fatalf("canvas = %#v, want 1280x720@24", canvas)
+	}
+	if canvas.FPSDen != defaults.FPSDen || canvas.PixelFormat != defaults.PixelFormat {
+		t.Fatalf("canvas defaults = %#v, want fps_den=%d pixel_format=%q", canvas, defaults.FPSDen, defaults.PixelFormat)
+	}
+
+	// Non-numeric and absent values must fall back to defaults, never panic.
+	fallback := CanvasFromMap(map[string]any{"width": "nope", "pixel_format": "  "}, defaults)
+	if fallback != defaults {
+		t.Fatalf("fallback canvas = %#v, want defaults %#v", fallback, defaults)
+	}
+	if got := CanvasFromMap(nil, defaults); got != defaults {
+		t.Fatalf("nil map canvas = %#v, want defaults %#v", got, defaults)
+	}
+}
+
+func TestDefaultCanvasIsAValueNotAMutableGlobal(t *testing.T) {
+	first := DefaultCanvas()
+	first.Width = 0
+	if got := DefaultCanvas(); got.Width != 1920 {
+		t.Fatalf("DefaultCanvas width = %d, want 1920 (mutated shared value)", got.Width)
+	}
+}
+
+func TestLayersToMapsRoundTripsThroughLayerFromMap(t *testing.T) {
+	layers := []Layer{
+		{ID: "layer-1", Type: "text", Role: "title", Text: "Title", StartSeconds: 0, DurationSeconds: 2},
+	}
+	maps, err := LayersToMaps(layers)
+	if err != nil {
+		t.Fatalf("LayersToMaps: %v", err)
+	}
+	if len(maps) != 1 || maps[0]["id"] != "layer-1" || maps[0]["type"] != "text" || maps[0]["role"] != "title" {
+		t.Fatalf("LayersToMaps = %#v, want typed layer maps", maps)
+	}
+	round := LayerFromMap(maps[0], 0)
+	if !reflect.DeepEqual(round, layers[0]) {
+		t.Fatalf("round-trip = %#v, want %#v", round, layers[0])
+	}
 }

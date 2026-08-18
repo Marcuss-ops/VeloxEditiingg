@@ -652,51 +652,6 @@ components:
             type: object
         SubmitJobRequest:
             properties:
-                audio_tracks:
-                    items:
-                        properties:
-                            asset_id:
-                                maxLength: 128
-                                type: string
-                            ducking_enabled:
-                                type: boolean
-                            duration_seconds:
-                                format: float
-                                minimum: 0
-                                type: number
-                            fade_in_seconds:
-                                format: float
-                                minimum: 0
-                                type: number
-                            fade_out_seconds:
-                                format: float
-                                minimum: 0
-                                type: number
-                            loop:
-                                type: boolean
-                            role:
-                                enum:
-                                    - voiceover
-                                    - scene_clip_audio
-                                    - background_music
-                                    - sfx
-                                type: string
-                            source_url:
-                                format: uri
-                                maxLength: 2048
-                                type: string
-                            start_time_offset:
-                                format: float
-                                minimum: 0
-                                type: number
-                            volume:
-                                format: float
-                                maximum: 2
-                                minimum: 0
-                                type: number
-                        type: object
-                    minItems: 0
-                    type: array
                 delivery_plan:
                     items:
                         $ref: '#/components/schemas/SubmitDeliveryPlanEntry'
@@ -860,6 +815,12 @@ components:
                 video_name:
                     maxLength: 300
                     type: string
+                visual_replacements:
+                    items:
+                        $ref: '#/components/schemas/SubmitVisualReplacement'
+                    maxItems: 10000
+                    minItems: 0
+                    type: array
             required:
                 - idempotency_key
             type: object
@@ -1086,6 +1047,29 @@ components:
                     format: uri
                     maxLength: 2048
                     type: string
+            type: object
+        SubmitVisualReplacement:
+            properties:
+                asset:
+                    $ref: '#/components/schemas/SubmitClip'
+                profile_id:
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                replacement_id:
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                timeline_end_us:
+                    minimum: 1
+                    type: integer
+                timeline_start_us:
+                    minimum: 0
+                    type: integer
+            required:
+                - asset
+                - profile_id
+                - replacement_id
             type: object
         SubmitVoiceover:
             properties:

@@ -15,6 +15,7 @@ package contract
 
 import (
 	"errors"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -35,7 +36,7 @@ func TestCanonicalTopLevelKeys_Integrity(t *testing.T) {
 		"job_id", "job_run_id", "correlation_id",
 		"video_name", "script_text",
 		"scenes", "voiceover_paths", "items",
-		"audio_tracks", "delivery_plan",
+		"delivery_plan",
 		"priority", "timeout_secs",
 		"status",
 	}
@@ -62,6 +63,185 @@ func TestCanonicalTopLevelKeys_Integrity(t *testing.T) {
 	// A non-canonical key must not be reported as canonical.
 	if IsCanonicalKey("not_a_real_key") {
 		t.Error("IsCanonicalKey returned true for an unknown key")
+	}
+}
+
+// TestSpecFieldRemovedFromCanonicalContract pins the full removal of the
+// legacy `spec` top-level field (previously a caller-supplied passthrough map
+// with no business consumer). After removal:
+//   - the JobPayloadV2 struct has no Spec field, so no typed consumer can
+//     read it (Go is statically typed: the field's absence is the guarantee);
+//   - `spec` is no longer a canonical top-level key;
+//   - NewJobPayloadV2 does not carry a `spec` value into the typed struct;
+//   - ToMap never emits a `spec` key, so a legacy reader cannot resurrect it.
+func TestSpecFieldRemovedFromCanonicalContract(t *testing.T) {
+	// No consumer can read JobPayloadV2.Spec — the field is gone from the
+	// struct, so any read would be a compile error rather than a silent
+	// round-trip through an untyped map.
+	if field, ok := reflect.TypeOf(JobPayloadV2{}).FieldByName("Spec"); ok {
+		t.Fatalf("JobPayloadV2 still has a Spec field (%s %s); no consumer may read it", field.Name, field.Type)
+	}
+
+	if IsCanonicalKey("spec") {
+		t.Fatal("`spec` must not be a canonical top-level key after removal")
+	}
+	for _, k := range CanonicalTopLevelKeys {
+		if k == "spec" {
+			t.Fatal("`spec` still present in CanonicalTopLevelKeys")
+		}
+	}
+
+	raw := map[string]interface{}{
+		"job_id": "job-spec-removed",
+		"spec":   map[string]interface{}{"audit_marker": "SHOULD NOT ROUND-TRIP"},
+	}
+	payload := NewJobPayloadV2(raw)
+	mapped, err := payload.ToMap()
+	if err != nil {
+		t.Fatalf("ToMap(): %v", err)
+	}
+	if _, present := mapped["spec"]; present {
+		t.Fatalf("ToMap emitted `spec` = %#v; the field must be fully removed", mapped["spec"])
+	}
+}
+
+// TestCanonicalPayloadRejectsRetiredTopLevelOutput pins the retirement of the
+// top-level `output` key: it is no longer canonical, and the strict drift
+// gate must refuse a payload that still carries it (the renderer's output
+// authority now lives exclusively under render_manifest.output).
+func TestCanonicalPayloadRejectsRetiredTopLevelOutput(t *testing.T) {
+	payload := map[string]interface{}{
+		"job_id": "job-1",
+		"output": map[string]interface{}{
+			"width":  1920,
+			"height": 1080,
+		},
+	}
+
+	if IsCanonicalKey("output") {
+		t.Fatal(`retired top-level key "output" is still canonical`)
+	}
+	err := StrictValidatePayload(payload)
+	if err == nil {
+		t.Fatal(`retired top-level key "output" was accepted`)
+	}
+	if !errors.Is(err, ErrNonCanonicalKey) {
+		t.Fatalf(`expected ErrNonCanonicalKey for retired "output", got %v`, err)
+	}
+}
+
+// TestJobPayloadV2DoesNotExposeRetiredOutput guards two independent
+// reintroduction vectors: the Go field `Output` and any JSON tag literally
+// named `output`. Reflection cannot prove no other code constructs an
+// untyped map manually, but it does pin the typed contract's absence.
+func TestJobPayloadV2DoesNotExposeRetiredOutput(t *testing.T) {
+	typ := reflect.TypeOf(JobPayloadV2{})
+
+	if _, ok := typ.FieldByName("Output"); ok {
+		t.Fatal("JobPayloadV2.Output was reintroduced")
+	}
+
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+		tag := strings.Split(field.Tag.Get("json"), ",")[0]
+		if tag == "output" {
+			t.Fatalf(
+				"JobPayloadV2.%s reintroduced retired top-level JSON key %q",
+				field.Name,
+				tag,
+			)
+		}
+	}
+}
+
+// TestNewJobPayloadV2DoesNotProjectRetiredOutput pins the reader/writer
+// split: a legacy raw map may still carry `output` (the reader ignores it),
+// but the canonical projection must never re-publish it.
+func TestNewJobPayloadV2DoesNotProjectRetiredOutput(t *testing.T) {
+	payload := NewJobPayloadV2(map[string]any{
+		"job_id": "job-1",
+		"output": map[string]any{
+			"width": 1920,
+		},
+	})
+
+	mapped, err := payload.ToMap()
+	if err != nil {
+		t.Fatalf("ToMap: %v", err)
+	}
+
+	if _, exists := mapped["output"]; exists {
+		t.Fatal(`retired top-level "output" leaked through JobPayloadV2`)
+	}
+}
+
+// TestCanonicalPayloadRejectsRetiredTopLevelAudioTracks pins the retirement of
+// the top-level `audio_tracks` key: it is no longer canonical, and the strict
+// drift gate must refuse a payload that still carries it (global audio layers
+// now live exclusively under render_manifest.tracks / final_audio).
+func TestCanonicalPayloadRejectsRetiredTopLevelAudioTracks(t *testing.T) {
+	payload := map[string]interface{}{
+		"job_id": "job-1",
+		"audio_tracks": []interface{}{
+			map[string]interface{}{"source_url": "velox-asset://music-1", "role": "background_music"},
+		},
+	}
+
+	if IsCanonicalKey("audio_tracks") {
+		t.Fatal(`retired top-level key "audio_tracks" is still canonical`)
+	}
+	err := StrictValidatePayload(payload)
+	if err == nil {
+		t.Fatal(`retired top-level key "audio_tracks" was accepted`)
+	}
+	if !errors.Is(err, ErrNonCanonicalKey) {
+		t.Fatalf(`expected ErrNonCanonicalKey for retired "audio_tracks", got %v`, err)
+	}
+}
+
+// TestJobPayloadV2DoesNotExposeRetiredAudioTracks guards two independent
+// reintroduction vectors: the Go field `AudioTracks` and any JSON tag
+// literally named `audio_tracks`. Reflection cannot prove no other code
+// constructs an untyped map manually, but it does pin the typed contract's
+// absence.
+func TestJobPayloadV2DoesNotExposeRetiredAudioTracks(t *testing.T) {
+	typ := reflect.TypeOf(JobPayloadV2{})
+
+	if _, ok := typ.FieldByName("AudioTracks"); ok {
+		t.Fatal("JobPayloadV2.AudioTracks was reintroduced")
+	}
+
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+		tag := strings.Split(field.Tag.Get("json"), ",")[0]
+		if tag == "audio_tracks" {
+			t.Fatalf(
+				"JobPayloadV2.%s reintroduced retired top-level JSON key %q",
+				field.Name,
+				tag,
+			)
+		}
+	}
+}
+
+// TestNewJobPayloadV2DoesNotProjectRetiredAudioTracks pins the reader/writer
+// split: a legacy raw map may still carry `audio_tracks` (the reader ignores
+// it), but the canonical projection must never re-publish it.
+func TestNewJobPayloadV2DoesNotProjectRetiredAudioTracks(t *testing.T) {
+	payload := NewJobPayloadV2(map[string]any{
+		"job_id": "job-1",
+		"audio_tracks": []any{
+			map[string]any{"source_url": "velox-asset://music-1"},
+		},
+	})
+
+	mapped, err := payload.ToMap()
+	if err != nil {
+		t.Fatalf("ToMap: %v", err)
+	}
+
+	if _, exists := mapped["audio_tracks"]; exists {
+		t.Fatal(`retired top-level "audio_tracks" leaked through JobPayloadV2`)
 	}
 }
 

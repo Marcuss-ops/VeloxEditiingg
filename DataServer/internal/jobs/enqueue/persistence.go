@@ -50,23 +50,6 @@ func compileSceneVideoJobContext(ctx context.Context, normalized map[string]inte
 	priority := payload.EnsureInt(normalized["priority"], 5)
 
 	publicationSpecs := normalizedPublicationSpecs(normalized)
-	// Remote inputs are rewritten to velox-asset:// references before this
-	// stage. Compile the canonical scene timeline here so the hybrid worker
-	// receives both the immutable scene description and the renderable items
-	// it requires. BuildPipelinePayload runs earlier for some legacy callers,
-	// while this is the first common point after asset resolution.
-	if hasCanonicalClipBindings(normalized) {
-		_, items, _, audioTracks, _, timelineErr := normalizeClipPayload(normalized)
-		if timelineErr != nil {
-			return nil, nil, 0, fmt.Errorf("build clip-stock timeline: %w", timelineErr)
-		}
-		if len(items) > 0 {
-			normalized["items"] = items
-		}
-		if len(audioTracks) > 0 {
-			normalized["audio_tracks"] = audioTracks
-		}
-	}
 
 	rendererPayload, err := contract.RenderOnlyPayload(normalized)
 	if err != nil {

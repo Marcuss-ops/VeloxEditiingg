@@ -66,7 +66,7 @@ func TestBlockedAuth_ArtifactUnchanged(t *testing.T) {
 	// Seed: 1 destination (Drive), 1 artifact in READY,
 	// 1 job_deliveries row in PENDING.
 	now := time.Now().UTC().Format(time.RFC3339)
-	if err := db.InsertDeliveryDestination(&store.DeliveryDestination{
+	if err := db.Delivery().InsertDeliveryDestination(&store.DeliveryDestination{
 		DestinationID:     "dest-drive",
 		Provider:          "drive",
 		Name:              "test-drive",
@@ -99,22 +99,22 @@ func TestBlockedAuth_ArtifactUnchanged(t *testing.T) {
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}
-	if err := db.InsertJobDelivery(jd); err != nil {
+	if err := db.Delivery().InsertJobDelivery(jd); err != nil {
 		t.Fatalf("insert job_delivery: %v", err)
 	}
 
 	// 1. Claim and BLOCKED_AUTH.
-	leases, err := db.ClaimDeliveries(ctx, "runner-ba", 5*time.Minute, 1)
+	leases, err := db.Delivery().ClaimDeliveries(ctx, "runner-ba", 5*time.Minute, 1)
 	if err != nil || len(leases) != 1 {
 		t.Fatalf("claim: %v len=%d", err, len(leases))
 	}
 	l := leases[0]
-	if err := db.MarkDeliveryBlockedAuth(ctx, l.DeliveryID, l.RunnerID, l.LeaseID, "AUTH", "Drive token expired"); err != nil {
+	if err := db.Delivery().MarkDeliveryBlockedAuth(ctx, l.DeliveryID, l.RunnerID, l.LeaseID, "AUTH", "Drive token expired"); err != nil {
 		t.Fatalf("MarkDeliveryBlockedAuth: %v", err)
 	}
 
 	// 2. The job_deliveries row IS in BLOCKED_AUTH.
-	jdAfter, err := db.GetJobDelivery(ctx, l.DeliveryID)
+	jdAfter, err := db.Delivery().GetJobDelivery(ctx, l.DeliveryID)
 	if err != nil {
 		t.Fatalf("GetJobDelivery: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestBlockedAuth_IsIdempotentOnReplay(t *testing.T) {
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	// Minimal seed: 1 dest + 1 artifact + 1 delivery.
-	if err := db.InsertDeliveryDestination(&store.DeliveryDestination{
+	if err := db.Delivery().InsertDeliveryDestination(&store.DeliveryDestination{
 		DestinationID:     "dest-rep",
 		Provider:          "drive",
 		Name:              "replay",
@@ -177,27 +177,27 @@ func TestBlockedAuth_IsIdempotentOnReplay(t *testing.T) {
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}
-	if err := db.InsertJobDelivery(jd); err != nil {
+	if err := db.Delivery().InsertJobDelivery(jd); err != nil {
 		t.Fatalf("insert job_delivery: %v", err)
 	}
 
-	leases, err := db.ClaimDeliveries(ctx, "runner-rep", 5*time.Minute, 1)
+	leases, err := db.Delivery().ClaimDeliveries(ctx, "runner-rep", 5*time.Minute, 1)
 	if err != nil || len(leases) != 1 {
 		t.Fatalf("claim: %v len=%d", err, len(leases))
 	}
 	l := leases[0]
 	// First BLOCKED_AUTH.
-	if err := db.MarkDeliveryBlockedAuth(ctx, l.DeliveryID, l.RunnerID, l.LeaseID, "AUTH", "expired"); err != nil {
+	if err := db.Delivery().MarkDeliveryBlockedAuth(ctx, l.DeliveryID, l.RunnerID, l.LeaseID, "AUTH", "expired"); err != nil {
 		t.Fatalf("first BLOCKED_AUTH: %v", err)
 	}
 	// A second call (without re-claiming) is gated by the SQL CAS
 	// on status='RUNNING'. We accept either outcome (error from
 	// the CAS, or no-op success) — the load-bearing assertion is
 	// that the row stays BLOCKED_AUTH.
-	if err := db.MarkDeliveryBlockedAuth(ctx, l.DeliveryID, l.RunnerID, l.LeaseID, "AUTH", "still expired"); err != nil {
+	if err := db.Delivery().MarkDeliveryBlockedAuth(ctx, l.DeliveryID, l.RunnerID, l.LeaseID, "AUTH", "still expired"); err != nil {
 		t.Logf("second BLOCKED_AUTH (informational CAS): %v", err)
 	}
-	jdAfter, err := db.GetJobDelivery(ctx, l.DeliveryID)
+	jdAfter, err := db.Delivery().GetJobDelivery(ctx, l.DeliveryID)
 	if err != nil {
 		t.Fatalf("GetJobDelivery: %v", err)
 	}

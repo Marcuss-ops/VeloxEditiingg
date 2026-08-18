@@ -52,21 +52,21 @@ package apiwire
 // format and the schemagen doesn't know how to express the
 // http(s) + velox-asset:// scheme choice cleanly.
 type SubmitJobRequest struct {
-	JobType          string                    `json:"job_type,omitempty"`
-	TemplateID       string                    `json:"template_id,omitempty"`
-	TemplateVersion  int                       `json:"template_version,omitempty"`
-	Spec             map[string]any            `json:"spec,omitempty"`
-	Output           *SubmitOutput             `json:"output,omitempty"`
-	IdempotencyKey   string                    `json:"idempotency_key" validate:"required,min=1,max=128"`
-	VideoName        string                    `json:"video_name,omitempty" validate:"omitempty,max=300"`
-	ScriptText       string                    `json:"script_text,omitempty"`
-	Scenes           []SubmitScene             `json:"scenes,omitempty" validate:"omitempty,max=10000"`
-	Layers           []SubmitLayer             `json:"layers,omitempty" validate:"omitempty,dive"`
-	AudioTracks      []SubmitAudioTrack        `json:"audio_tracks,omitempty" validate:"omitempty,dive"`
-	DeliveryPlan     []SubmitDeliveryPlanEntry `json:"delivery_plan,omitempty" validate:"omitempty,dive"`
-	PublishingTarget *SubmitPublishingTarget   `json:"publishing_target,omitempty" validate:"omitempty"`
-	Publications     []SubmitPublication       `json:"publications,omitempty" validate:"omitempty,dive"`
-	ManifestRef      *SubmitManifestRef        `json:"manifest_ref,omitempty" validate:"omitempty"`
+	JobType            string                    `json:"job_type,omitempty"`
+	TemplateID         string                    `json:"template_id,omitempty"`
+	TemplateVersion    int                       `json:"template_version,omitempty"`
+	Spec               map[string]any            `json:"spec,omitempty"`
+	Output             *SubmitOutput             `json:"output,omitempty"`
+	IdempotencyKey     string                    `json:"idempotency_key" validate:"required,min=1,max=128"`
+	VideoName          string                    `json:"video_name,omitempty" validate:"omitempty,max=300"`
+	ScriptText         string                    `json:"script_text,omitempty"`
+	Scenes             []SubmitScene             `json:"scenes,omitempty" validate:"omitempty,max=10000"`
+	Layers             []SubmitLayer             `json:"layers,omitempty" validate:"omitempty,dive"`
+	VisualReplacements []SubmitVisualReplacement `json:"visual_replacements,omitempty" validate:"omitempty,max=10000,dive"`
+	DeliveryPlan       []SubmitDeliveryPlanEntry `json:"delivery_plan,omitempty" validate:"omitempty,dive"`
+	PublishingTarget   *SubmitPublishingTarget   `json:"publishing_target,omitempty" validate:"omitempty"`
+	Publications       []SubmitPublication       `json:"publications,omitempty" validate:"omitempty,dive"`
+	ManifestRef        *SubmitManifestRef        `json:"manifest_ref,omitempty" validate:"omitempty"`
 
 	// PlacementPinWorkerID is an optional operator/admin field that
 	// forces the job to be placed on a specific worker, skipping the
@@ -378,20 +378,27 @@ type SubmitLayer struct {
 	Animation       string    `json:"animation,omitempty"`
 }
 
-// SubmitAudioTrack is a top-level audio track mixed into the final render.
-// Independent from per-scene voiceover — this is for global audio layers
-// such as background music, ambient sound, or narration beds.
-type SubmitAudioTrack struct {
-	AssetID         string  `json:"asset_id,omitempty" validate:"omitempty,max=128"`
-	SourceURL       string  `json:"source_url,omitempty" validate:"omitempty,url,max=2048"`
-	Role            string  `json:"role,omitempty" validate:"omitempty,oneof=voiceover scene_clip_audio background_music sfx"`
-	Volume          float64 `json:"volume,omitempty" validate:"omitempty,gte=0,lte=2"`
-	StartTimeOffset float64 `json:"start_time_offset,omitempty" validate:"omitempty,gte=0"`
-	DurationSeconds float64 `json:"duration_seconds,omitempty" validate:"omitempty,gte=0"`
-	Loop            bool    `json:"loop,omitempty"`
-	FadeInSeconds   float64 `json:"fade_in_seconds,omitempty" validate:"omitempty,gte=0"`
-	FadeOutSeconds  float64 `json:"fade_out_seconds,omitempty" validate:"omitempty,gte=0"`
-	DuckingEnabled  bool    `json:"ducking_enabled,omitempty"`
+// SubmitVisualReplacement is one already-composited video segment that
+// replaces the base visual timeline over an absolute interval
+// [timeline_start_us, timeline_end_us). Unlike SubmitLayer (which
+// describes a Chronon compositing layer), a visual replacement is a
+// FINISHED H264 video-only MP4: Velox does not overlay, composite or
+// transcode it — the VisualTimelineResolver swaps it into the timeline
+// as a normal VideoSource.
+//
+// Asset reuses SubmitClip so there is a single asset envelope
+// (asset_id / drive_file_id / url / sha256) and a single asset
+// resolver across clips, stock and replacements. Audio belongs to the
+// independent final-audio timeline and is therefore NOT allowed inside
+// a prepared replacement.
+type SubmitVisualReplacement struct {
+	ReplacementID string      `json:"replacement_id" validate:"required,min=1,max=128"`
+	Asset         *SubmitClip `json:"asset" validate:"required"`
+
+	TimelineStartUS int64 `json:"timeline_start_us" validate:"gte=0"`
+	TimelineEndUS   int64 `json:"timeline_end_us" validate:"gte=1"`
+
+	ProfileID string `json:"profile_id" validate:"required,min=1,max=128"`
 }
 
 // SubmitDeliveryPlanEntry is one destination in the delivery plan.

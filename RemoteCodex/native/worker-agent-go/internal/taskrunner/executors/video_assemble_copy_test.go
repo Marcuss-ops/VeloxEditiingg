@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,6 +21,25 @@ import (
 
 type copyOnlyRenderClient struct {
 	planJSON []byte
+}
+
+// keyframeUnsafeRenderClient always fails the native render with the exact
+// keyframe-safety rejection emitted by the C++ packet mux. It records whether
+// RenderCompiledPlanV2 was invoked so the test can prove the executor fails
+// BEFORE publishing any output and never falls back to a transcode.
+type keyframeUnsafeRenderClient struct {
+	renderAttempted bool
+}
+
+func (c *keyframeUnsafeRenderClient) Render(context.Context, *plan.RenderPlan) error { return nil }
+
+func (c *keyframeUnsafeRenderClient) RenderWithMetrics(context.Context, *plan.RenderPlan) (pipeline.RenderMetrics, error) {
+	return pipeline.RenderMetrics{}, nil
+}
+
+func (c *keyframeUnsafeRenderClient) RenderCompiledPlanV2(_ context.Context, _ []byte, _ string) (pipeline.RenderMetrics, error) {
+	c.renderAttempted = true
+	return pipeline.RenderMetrics{}, errors.New("engine failed: exit status 1 (stderr=errore rendering: copy-only packet mux failed: copy-only source window must start on an exact video keyframe: /cache/base.mp4 source_in_us=60000000)")
 }
 
 func (c *copyOnlyRenderClient) Render(context.Context, *plan.RenderPlan) error { return nil }
@@ -135,6 +155,78 @@ func TestVideoAssembleCopy_UsesArtifactStagingResolver(t *testing.T) {
 	}
 	if len(result.Outputs) != 1 || !strings.HasPrefix(result.Outputs[0].URI, resolver.Config().ArtifactStaging.Dir) {
 		t.Fatalf("output URI = %+v; want ARTIFACT_STAGING root %q", result.Outputs, resolver.Config().ArtifactStaging.Dir)
+	}
+}
+
+// TestVideoAssembleCopy_RejectsNonKeyframeSafeCut pins the fail-closed
+// keyframe-safety gate (plan §9): a source window that does not start on an
+// exact video keyframe is rejected with COPY_ONLY_NOT_KEYFRAME_SAFE, produces
+// NO output artifact, and — crucially — is never silently repaired by a
+// decode→encode fallback. The executor only ever calls the native packet mux;
+// there is no transcode path to fall back to.
+func TestVideoAssembleCopy_RejectsNonKeyframeSafeCut(t *testing.T) {
+	video := []byte("prepared-video")
+	audio := []byte("final-audio")
+	videoSHA, audioSHA := copyOnlySHA(video), copyOnlySHA(audio)
+	plan := copyOnlyPlan(videoSHA, audioSHA, int64(len(video)), int64(len(audio)))
+	canonical, err := plan.CanonicalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	client := &keyframeUnsafeRenderClient{}
+	runner := pipeline.NewRunner(nil, client, logger.New(logger.WarnLevel, os.Stderr))
+	outputRoot := t.TempDir()
+	exec := NewVideoAssembleCopy(runner, outputRoot)
+
+	videoPath, audioPath := filepath.Join(outputRoot, "video.mp4"), filepath.Join(outputRoot, "audio.m4a")
+	if err := os.WriteFile(videoPath, video, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(audioPath, audio, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	spec := executorTaskSpec(VideoAssembleCopyID, "job-keyframe-unsafe", canonical, plan)
+	result, err := exec.Execute(runtimeassets.WithBindings(context.Background(), runtimeassets.Bindings{
+		"video": {AssetID: "video", Path: videoPath, SHA256: videoSHA, Size: int64(len(video))},
+		"audio": {AssetID: "audio", Path: audioPath, SHA256: audioSHA, Size: int64(len(audio))},
+	}), nil, spec)
+	if err != nil {
+		t.Fatalf("Execute returned error (executors surface failures in the result): %v", err)
+	}
+	if result.Status != "failed" || result.ErrorCode != "COPY_ONLY_NOT_KEYFRAME_SAFE" {
+		t.Fatalf("result = %+v; want failed/COPY_ONLY_NOT_KEYFRAME_SAFE", result)
+	}
+	if !client.renderAttempted {
+		t.Fatalf("native render was never attempted; the keyframe gate must run after plan validation")
+	}
+	// No output must be published: the executor failed before the artifact
+	// step, and there is no decode→encode fallback that could emit one.
+	if len(result.Outputs) != 0 {
+		t.Fatalf("rejected render published outputs: %+v", result.Outputs)
+	}
+	if _, statErr := os.Stat(filepath.Join(outputRoot, "job-keyframe-unsafe.mp4")); !os.IsNotExist(statErr) {
+		t.Fatalf("rejected render left an output artifact: %v", statErr)
+	}
+}
+
+func TestCopyOnlyRenderErrorCode(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"nil error defaults to generic", nil, "PACKET_COPY_FAILED"},
+		{"exact keyframe rejection", errors.New("engine failed: copy-only source window must start on an exact video keyframe: /c.mp4 source_in_us=60000000"), "COPY_ONLY_NOT_KEYFRAME_SAFE"},
+		{"mixed-path keyframe rejection", errors.New("segment_execution_rejected: source window is not keyframe-safe for packet copy (segment 0)"), "COPY_ONLY_NOT_KEYFRAME_SAFE"},
+		{"unrelated mux failure stays generic", errors.New("engine failed: copy-only packet mux failed: avformat_alloc_output_context2"), "PACKET_COPY_FAILED"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := copyOnlyRenderErrorCode(tc.err); got != tc.want {
+				t.Fatalf("copyOnlyRenderErrorCode(%v) = %q, want %q", tc.err, got, tc.want)
+			}
+		})
 	}
 }
 

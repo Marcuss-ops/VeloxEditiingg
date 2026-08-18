@@ -52,6 +52,13 @@ public:
     int64_t tempBytesWritten() const { return temp_bytes_written_.load(); }
     double durationSeconds() const { return duration_seconds_.load(); }
     const std::string& concatMode() const { return concat_mode_; }
+    // Segment accounting for the zero-render release gate (plan §16):
+    // copySegments() is the number of video segments stream-copied into the
+    // packet mux; transcodeSegments() is the number that were re-encoded
+    // (always 0 on the copy-only/mixed packet paths — any nonzero value is a
+    // hidden-transcode regression).
+    int64_t copySegments() const { return copy_segments_.load(); }
+    int64_t transcodeSegments() const { return transcode_segments_.load(); }
 
     // Last FFmpeg progress snapshot from the most recent encode pass.
     // Used by the sidecar writer to populate fps / speed / frame / time.
@@ -155,6 +162,8 @@ private:
     std::atomic<int64_t> frames_composited_{0};
     std::atomic<int64_t> encode_passes_{0};
     std::atomic<int64_t> temp_bytes_written_{0};
+    std::atomic<int64_t> copy_segments_{0};
+    std::atomic<int64_t> transcode_segments_{0};
     std::atomic<double> duration_seconds_{0.0};
     std::atomic<bool> output_durable_{false};
     std::string concat_mode_{"reencode"};

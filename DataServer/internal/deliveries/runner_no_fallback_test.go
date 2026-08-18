@@ -37,7 +37,7 @@ func TestDeliveryRunner_UnavailableExplicitDestinationDoesNotFallback(t *testing
 	)
 	now := time.Now().UTC().Format(time.RFC3339)
 	for _, destinationID := range []string{destinationA, destinationB} {
-		if err := db.InsertDeliveryDestination(&store.DeliveryDestination{
+		if err := db.Delivery().InsertDeliveryDestination(&store.DeliveryDestination{
 			DestinationID:         destinationID,
 			Provider:              "drive",
 			ExternalDestinationID: "external-" + destinationID,
@@ -62,7 +62,7 @@ func TestDeliveryRunner_UnavailableExplicitDestinationDoesNotFallback(t *testing
 	}); err != nil {
 		t.Fatalf("InsertArtifact: %v", err)
 	}
-	if err := db.InsertJobDelivery(&store.JobDelivery{
+	if err := db.Delivery().InsertJobDelivery(&store.JobDelivery{
 		DeliveryID:     deliveryID,
 		ArtifactID:     artifactID,
 		DestinationID:  destinationA,
@@ -82,7 +82,7 @@ func TestDeliveryRunner_UnavailableExplicitDestinationDoesNotFallback(t *testing
 	registry := NewRegistry()
 	registry.Register(provider)
 	runner := NewDeliveryRunner(DefaultRunnerConfig(), registry, db.Delivery(), db, "no-fallback-runner")
-	leases, err := db.ClaimDeliveries(context.Background(), "no-fallback-runner", 5*time.Minute, 1)
+	leases, err := db.Delivery().ClaimDeliveries(context.Background(), "no-fallback-runner", 5*time.Minute, 1)
 	if err != nil {
 		t.Fatalf("ClaimDeliveries: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestDeliveryRunner_UnavailableExplicitDestinationDoesNotFallback(t *testing
 		t.Fatalf("provider attempts = %v, want exactly [%q]", provider.attempted, destinationA)
 	}
 
-	row, err := db.GetJobDelivery(context.Background(), deliveryID)
+	row, err := db.Delivery().GetJobDelivery(context.Background(), deliveryID)
 	if err != nil {
 		t.Fatalf("GetJobDelivery: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestDeliveryRunner_UnavailableExplicitDestinationDoesNotFallback(t *testing
 	}); err != nil {
 		t.Fatalf("InsertArtifact transient: %v", err)
 	}
-	if err := db.InsertJobDelivery(&store.JobDelivery{
+	if err := db.Delivery().InsertJobDelivery(&store.JobDelivery{
 		DeliveryID:     transientDeliveryID,
 		ArtifactID:     transientArtifactID,
 		DestinationID:  destinationA,
@@ -153,7 +153,7 @@ func TestDeliveryRunner_UnavailableExplicitDestinationDoesNotFallback(t *testing
 	}); err != nil {
 		t.Fatalf("InsertJobDelivery transient: %v", err)
 	}
-	transientLeases, err := db.ClaimDeliveries(context.Background(), "no-fallback-runner", 5*time.Minute, 1)
+	transientLeases, err := db.Delivery().ClaimDeliveries(context.Background(), "no-fallback-runner", 5*time.Minute, 1)
 	if err != nil {
 		t.Fatalf("ClaimDeliveries transient: %v", err)
 	}
@@ -163,7 +163,7 @@ func TestDeliveryRunner_UnavailableExplicitDestinationDoesNotFallback(t *testing
 	if err := runner.processLease(context.Background(), transientLeases[0]); err != nil {
 		t.Fatalf("transient processLease should schedule retry, got %v", err)
 	}
-	transientRow, err := db.GetJobDelivery(context.Background(), transientDeliveryID)
+	transientRow, err := db.Delivery().GetJobDelivery(context.Background(), transientDeliveryID)
 	if err != nil {
 		t.Fatalf("GetJobDelivery transient: %v", err)
 	}

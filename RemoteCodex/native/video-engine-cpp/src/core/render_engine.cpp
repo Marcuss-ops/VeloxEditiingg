@@ -480,6 +480,11 @@ RenderResult RenderEngine::renderCopyOnly(
     if (!muxResult.output_durable) {
         std::cerr << "warning: output was atomically published but directory durability was not confirmed\n";
     }
+    // Zero-render release gate (plan §16): every timeline segment is a
+    // packet-copy segment; nothing is re-encoded. copy_segments must equal
+    // the timeline size and transcode_segments must stay 0.
+    copy_segments_.store(static_cast<int64_t>(plan.timeline.size()));
+    transcode_segments_.store(0);
     // Packet counters are not decoded/encoded frame counters. Keep the
     // phase event truthful and leave frames_encoded/decoded at zero; the
     // sidecar's packet work is represented by the packet_mux phase itself.
@@ -660,6 +665,10 @@ RenderResult RenderEngine::renderMixed(
         metrics_.addSegment(segment);
         total_duration_us += duration_us;
     }
+    // Zero-render release gate (plan §16): rejected segments are never
+    // re-encoded, so transcode_segments stays 0 even on the mixed path.
+    copy_segments_.store(packet_copy_segments);
+    transcode_segments_.store(0);
 
     const double total_duration = static_cast<double>(total_duration_us) / 1'000'000.0;
     std::string error_code;
@@ -756,6 +765,8 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
     frames_composited_.store(0);
     encode_passes_.store(0);
     temp_bytes_written_.store(0);
+    copy_segments_.store(0);
+    transcode_segments_.store(0);
     duration_seconds_.store(0.0);
     output_durable_.store(false);
     concat_mode_ = "reencode";
@@ -1785,6 +1796,8 @@ std::string RenderEngine::sidecarJson(const std::string& output_path) const {
     s << ",\"speed_x\":" << last.speed_x;
     s << ",\"encode_passes\":" << encode_passes_.load();
     s << ",\"concat_mode\":\"" << concat_mode_ << "\"";
+    s << ",\"copy_segments\":" << copy_segments_.load();
+    s << ",\"transcode_segments\":" << transcode_segments_.load();
     s << ",\"temp_bytes\":" << temp_bytes_written_.load();
     s << ",\"out_time_us\":" << last.out_time_us;
     s << ",\"out_time_ms\":" << last.out_time_ms;

@@ -41,12 +41,13 @@ type SubmitJobRequest struct {
 	// submit a video, images and any combination of overlays together.
 	Layers []SubmitLayer `json:"layers,omitempty"`
 
-	// AudioTracks are top-level audio layers mixed into the final
-	// render (background music, ambient sound, global narration).
-	// Independent from per-scene voiceover — these span the entire
-	// video duration. The renderer mixes audio_tracks together with
-	// per-scene clip audio + voiceover into a single AAC output.
-	AudioTracks []SubmitAudioTrack `json:"audio_tracks,omitempty"`
+	// VisualReplacements are already-composited video segments that
+	// replace the base visual timeline over an absolute interval. Each
+	// entry is a FINISHED video-only MP4; the master swaps it into the
+	// timeline as a normal VideoSource (no overlay/compositing) and the
+	// audio timeline remains independent. Resolved master-side by
+	// VisualTimelineResolver; requires render_manifest + final_audio.
+	VisualReplacements []SubmitVisualReplacement `json:"visual_replacements,omitempty"`
 
 	// DeliveryPlan is the ordered list of delivery targets. Empty
 	// allowed (defaults to scene.composite.v1's default resolver).
@@ -240,34 +241,20 @@ type SubmitLayer struct {
 	Animation       string    `json:"animation,omitempty"`
 }
 
-// SubmitAudioTrack is a top-level audio track mixed into the final render.
-// Independent from per-scene voiceover — this is for global audio layers
-// such as background music, ambient sound, or narration beds that span the
-// entire video. The renderer mixes all audio_tracks together with per-scene
-// clip audio and voiceover into a single AAC output stream.
-//
-// Canonical roles (closed enum):
-//   - "voiceover"          narration / speech (volume ~1.0)
-//   - "scene_clip_audio"   original audio from timeline clips
-//   - "background_music"   background music bed (volume 0.10-0.18 recommended)
-//   - "sfx"                short transition or impact sound (volume ~0.1)
-//
-// Initial release rules (no loop/fade/ducking yet):
-//   - volume in [0.0, 2.0]
-//   - source_url must match the http(s) + velox-asset:// allow-list
-//   - role must be one of the four canonical values
-//   - asset_id is optional; when present, the Master resolves it to a URL
-type SubmitAudioTrack struct {
-	AssetID         string  `json:"asset_id,omitempty"`
-	SourceURL       string  `json:"source_url"`
-	Role            string  `json:"role,omitempty"`
-	Volume          float64 `json:"volume,omitempty"`
-	StartTimeOffset float64 `json:"start_time_offset,omitempty"`
-	DurationSeconds float64 `json:"duration_seconds,omitempty"`
-	Loop            bool    `json:"loop,omitempty"`
-	FadeInSeconds   float64 `json:"fade_in_seconds,omitempty"`
-	FadeOutSeconds  float64 `json:"fade_out_seconds,omitempty"`
-	DuckingEnabled  bool    `json:"ducking_enabled,omitempty"`
+// SubmitVisualReplacement is one already-composited video segment that
+// replaces the base visual timeline over [timeline_start_us,
+// timeline_end_us). It deliberately reuses SubmitClip as the asset
+// envelope (one asset format / one resolver / one validator) rather than
+// introducing a parallel asset type. It is NOT a SubmitLayer role=overlay:
+// a visual replacement is the finished video, not a compositing input.
+type SubmitVisualReplacement struct {
+	ReplacementID string      `json:"replacement_id"`
+	Asset         *SubmitClip `json:"asset"`
+
+	TimelineStartUS int64 `json:"timeline_start_us"`
+	TimelineEndUS   int64 `json:"timeline_end_us"`
+
+	ProfileID string `json:"profile_id"`
 }
 
 // SubmitPublishingTarget selects one concrete channel or one upstream group.

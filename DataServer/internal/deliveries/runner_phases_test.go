@@ -109,27 +109,27 @@ func TestProcessLeaseRejectsSynchronousPublishedStatus(t *testing.T) {
 		deliveryID    = "delivery-sync-published"
 	)
 	now := time.Now().UTC().Format(time.RFC3339)
-	if err := db.InsertDeliveryDestination(&store.DeliveryDestination{DestinationID: destinationID, Provider: "sync-published", ExternalDestinationID: "external-sync", Enabled: true, ConfigurationJSON: "{}"}); err != nil {
+	if err := db.Delivery().InsertDeliveryDestination(&store.DeliveryDestination{DestinationID: destinationID, Provider: "sync-published", ExternalDestinationID: "external-sync", Enabled: true, ConfigurationJSON: "{}"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.InsertArtifact(&store.Artifact{ID: artifactID, JobID: "job-sync-published", Type: "video", StorageProvider: "local", StorageKey: filepath.Join(t.TempDir(), "video.mp4"), SHA256: "sync-published-sha", SizeBytes: 1, Status: "READY", VerifiedAt: now, CreatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.InsertJobDelivery(&store.JobDelivery{DeliveryID: deliveryID, ArtifactID: artifactID, DestinationID: destinationID, Status: "PENDING", IdempotencyKey: deliveryID, MaxAttempts: 3, CreatedAt: now, UpdatedAt: now}); err != nil {
+	if err := db.Delivery().InsertJobDelivery(&store.JobDelivery{DeliveryID: deliveryID, ArtifactID: artifactID, DestinationID: destinationID, Status: "PENDING", IdempotencyKey: deliveryID, MaxAttempts: 3, CreatedAt: now, UpdatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
 
 	registry := NewRegistry()
 	registry.Register(syncPublishedProvider{})
 	runner := NewDeliveryRunner(&RunnerConfig{LeaseDuration: time.Minute, MaxAttempts: 3}, registry, db.Delivery(), db, "sync-published-runner")
-	leases, err := db.ClaimDeliveries(ctx, runner.identity, time.Minute, 1)
+	leases, err := db.Delivery().ClaimDeliveries(ctx, runner.identity, time.Minute, 1)
 	if err != nil || len(leases) != 1 {
 		t.Fatalf("claim: %v leases=%d", err, len(leases))
 	}
 	if err := runner.processLease(ctx, leases[0]); err == nil {
 		t.Fatal("synchronous published status was allowed without reconciliation")
 	}
-	row, err := db.GetJobDelivery(ctx, deliveryID)
+	row, err := db.Delivery().GetJobDelivery(ctx, deliveryID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,27 +152,27 @@ func TestProcessLeaseRejectsUnregisteredReconciler(t *testing.T) {
 		deliveryID    = "delivery-unregistered-reconciler"
 	)
 	now := time.Now().UTC().Format(time.RFC3339)
-	if err := db.InsertDeliveryDestination(&store.DeliveryDestination{DestinationID: destinationID, Provider: "unregistered-reconciler", ExternalDestinationID: "external-reconciler", Enabled: true, ConfigurationJSON: "{}"}); err != nil {
+	if err := db.Delivery().InsertDeliveryDestination(&store.DeliveryDestination{DestinationID: destinationID, Provider: "unregistered-reconciler", ExternalDestinationID: "external-reconciler", Enabled: true, ConfigurationJSON: "{}"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.InsertArtifact(&store.Artifact{ID: artifactID, JobID: "job-unregistered-reconciler", Type: "video", StorageProvider: "local", StorageKey: filepath.Join(t.TempDir(), "video.mp4"), SHA256: "unregistered-reconciler-sha", SizeBytes: 1, Status: "READY", VerifiedAt: now, CreatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.InsertJobDelivery(&store.JobDelivery{DeliveryID: deliveryID, ArtifactID: artifactID, DestinationID: destinationID, Status: "PENDING", IdempotencyKey: deliveryID, MaxAttempts: 3, CreatedAt: now, UpdatedAt: now}); err != nil {
+	if err := db.Delivery().InsertJobDelivery(&store.JobDelivery{DeliveryID: deliveryID, ArtifactID: artifactID, DestinationID: destinationID, Status: "PENDING", IdempotencyKey: deliveryID, MaxAttempts: 3, CreatedAt: now, UpdatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
 
 	registry := NewRegistry()
 	registry.Register(unregisteredReconcilerProvider{})
 	runner := NewDeliveryRunner(&RunnerConfig{LeaseDuration: time.Minute, MaxAttempts: 3}, registry, db.Delivery(), db, "unregistered-reconciler-runner")
-	leases, err := db.ClaimDeliveries(ctx, runner.identity, time.Minute, 1)
+	leases, err := db.Delivery().ClaimDeliveries(ctx, runner.identity, time.Minute, 1)
 	if err != nil || len(leases) != 1 {
 		t.Fatalf("claim: %v leases=%d", err, len(leases))
 	}
 	if err := runner.processLease(ctx, leases[0]); err == nil {
 		t.Fatal("unregistered reconciler was allowed to use monolithic success path")
 	}
-	row, err := db.GetJobDelivery(ctx, deliveryID)
+	row, err := db.Delivery().GetJobDelivery(ctx, deliveryID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,14 +195,14 @@ func TestLegacyProviderCannotPromoteAcceptedOperationToPublished(t *testing.T) {
 		destinationID = "destination-legacy-accepted"
 		deliveryID    = "delivery-legacy-accepted"
 	)
-	if err := db.InsertDeliveryDestination(&store.DeliveryDestination{DestinationID: destinationID, Provider: "legacy-accepted", ExternalDestinationID: "external-legacy", Enabled: true, ConfigurationJSON: "{}"}); err != nil {
+	if err := db.Delivery().InsertDeliveryDestination(&store.DeliveryDestination{DestinationID: destinationID, Provider: "legacy-accepted", ExternalDestinationID: "external-legacy", Enabled: true, ConfigurationJSON: "{}"}); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	if err := db.InsertArtifact(&store.Artifact{ID: artifactID, JobID: "job-legacy-accepted", Type: "video", StorageProvider: "local", StorageKey: filepath.Join(t.TempDir(), "video.mp4"), SHA256: "legacy-accepted-sha", SizeBytes: 1, Status: "READY", VerifiedAt: now, CreatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.InsertJobDelivery(&store.JobDelivery{DeliveryID: deliveryID, ArtifactID: artifactID, DestinationID: destinationID, Status: "PENDING", IdempotencyKey: deliveryID, MaxAttempts: 3, CreatedAt: now, UpdatedAt: now}); err != nil {
+	if err := db.Delivery().InsertJobDelivery(&store.JobDelivery{DeliveryID: deliveryID, ArtifactID: artifactID, DestinationID: destinationID, Status: "PENDING", IdempotencyKey: deliveryID, MaxAttempts: 3, CreatedAt: now, UpdatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.CreatePublicationState(ctx, publicationID); err != nil {
@@ -217,7 +217,7 @@ func TestLegacyProviderCannotPromoteAcceptedOperationToPublished(t *testing.T) {
 	registry.Register(provider)
 	registry.RegisterLegacyPhaseProvider(provider)
 	runner := NewDeliveryRunner(&RunnerConfig{LeaseDuration: time.Minute, MaxAttempts: 3}, registry, db.Delivery(), db, "legacy-phase-runner")
-	leases, err := db.ClaimDeliveries(ctx, runner.identity, time.Minute, 1)
+	leases, err := db.Delivery().ClaimDeliveries(ctx, runner.identity, time.Minute, 1)
 	if err != nil || len(leases) != 1 {
 		t.Fatalf("claim: %v leases=%d", err, len(leases))
 	}
@@ -235,7 +235,7 @@ func TestLegacyProviderCannotPromoteAcceptedOperationToPublished(t *testing.T) {
 	if state.State != publicationstate.Partial || state.RetryFrom != publicationstate.MetadataApplying {
 		t.Fatalf("publication failure checkpoint = %+v, want PARTIAL/METADATA_APPLYING", state)
 	}
-	row, rowErr := db.GetJobDelivery(ctx, deliveryID)
+	row, rowErr := db.Delivery().GetJobDelivery(ctx, deliveryID)
 	if rowErr != nil {
 		t.Fatal(rowErr)
 	}
@@ -254,14 +254,14 @@ func TestDeliveryRunnerResumesMetadataWithoutSecondUpload(t *testing.T) {
 	const artifactID = "artifact-phase-resume"
 	const deliveryID = "delivery-phase-resume"
 	const destinationID = "destination-phase-resume"
-	if err := db.InsertDeliveryDestination(&store.DeliveryDestination{DestinationID: destinationID, Provider: "phase-test", ExternalDestinationID: "external-phase", Enabled: true, ConfigurationJSON: "{}"}); err != nil {
+	if err := db.Delivery().InsertDeliveryDestination(&store.DeliveryDestination{DestinationID: destinationID, Provider: "phase-test", ExternalDestinationID: "external-phase", Enabled: true, ConfigurationJSON: "{}"}); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	if err := db.InsertArtifact(&store.Artifact{ID: artifactID, JobID: "job-phase-resume", Type: "video", StorageProvider: "local", StorageKey: filepath.Join(t.TempDir(), "video.mp4"), SHA256: "artifact-sha", SizeBytes: 1, Status: "READY", VerifiedAt: now, CreatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.InsertJobDelivery(&store.JobDelivery{DeliveryID: deliveryID, ArtifactID: artifactID, DestinationID: destinationID, Status: "PENDING", IdempotencyKey: deliveryID, MaxAttempts: 3, CreatedAt: now, UpdatedAt: now}); err != nil {
+	if err := db.Delivery().InsertJobDelivery(&store.JobDelivery{DeliveryID: deliveryID, ArtifactID: artifactID, DestinationID: destinationID, Status: "PENDING", IdempotencyKey: deliveryID, MaxAttempts: 3, CreatedAt: now, UpdatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.CreatePublicationState(context.Background(), "publication-phase-resume"); err != nil {
@@ -273,7 +273,7 @@ func TestDeliveryRunnerResumesMetadataWithoutSecondUpload(t *testing.T) {
 	registry.Register(provider)
 	runner := NewDeliveryRunner(&RunnerConfig{LeaseDuration: time.Minute, MaxAttempts: 3, BackoffSchedule: []time.Duration{0}}, registry, db.Delivery(), db, "phase-runner")
 
-	leases, err := db.ClaimDeliveries(context.Background(), "phase-runner", time.Minute, 1)
+	leases, err := db.Delivery().ClaimDeliveries(context.Background(), "phase-runner", time.Minute, 1)
 	if err != nil || len(leases) != 1 {
 		t.Fatalf("first claim: %v leases=%d", err, len(leases))
 	}
@@ -288,7 +288,7 @@ func TestDeliveryRunnerResumesMetadataWithoutSecondUpload(t *testing.T) {
 		t.Fatalf("checkpoint after metadata failure: %+v", state)
 	}
 
-	leases, err = db.ClaimDeliveries(context.Background(), "phase-runner", time.Minute, 1)
+	leases, err = db.Delivery().ClaimDeliveries(context.Background(), "phase-runner", time.Minute, 1)
 	if err != nil || len(leases) != 1 {
 		t.Fatalf("resume claim: %v leases=%d", err, len(leases))
 	}
@@ -306,7 +306,7 @@ func TestDeliveryRunnerResumesMetadataWithoutSecondUpload(t *testing.T) {
 	if provider.uploads != 1 || provider.metadata != 2 || provider.verifications != 1 {
 		t.Fatalf("phase calls upload=%d metadata=%d verify=%d; want 1/2/1", provider.uploads, provider.metadata, provider.verifications)
 	}
-	row, err := db.GetJobDelivery(context.Background(), deliveryID)
+	row, err := db.Delivery().GetJobDelivery(context.Background(), deliveryID)
 	if err != nil {
 		t.Fatal(err)
 	}

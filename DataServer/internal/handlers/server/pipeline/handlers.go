@@ -96,7 +96,7 @@ func HandlersFactory(
 		jobs:         JobsDeps{Reader: jobsReader, Writer: jobsWriter, CmdMgr: cmdMgr},
 		pipelineRuns: newPipelineRunService(nil, client, resolver),
 	}
-	h.targetResolver = targetpublishing.NewTargetResolver(h.socialClient, h.store)
+	h.targetResolver = targetpublishing.NewTargetResolver(h.socialClient, h.store.Delivery())
 	return h
 }
 
@@ -119,7 +119,7 @@ func (h *Handlers) WithStore(db *store.SQLiteStore) *Handlers {
 			h.credentialVault, _ = credentials.NewVault(db, keys)
 		}
 	}
-	h.targetResolver = targetpublishing.NewTargetResolver(h.socialClient, h.store)
+	h.targetResolver = targetpublishing.NewTargetResolver(h.socialClient, h.store.Delivery())
 	// The pipeline-run service needs the store, wired later than the other
 	// service dependencies (client + resolver), so rebuild it here.
 	h.pipelineRuns = newPipelineRunService(db, h.client, h.resolver)
@@ -130,7 +130,7 @@ func (h *Handlers) WithStore(db *store.SQLiteStore) *Handlers {
 // the factory default; tests inject an httptest-backed client.
 func (h *Handlers) WithSocialClient(client *socialclient.Client) *Handlers {
 	h.socialClient = client
-	h.targetResolver = targetpublishing.NewTargetResolver(h.socialClient, h.store)
+	h.targetResolver = targetpublishing.NewTargetResolver(h.socialClient, h.store.Delivery())
 	return h
 }
 

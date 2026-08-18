@@ -140,7 +140,7 @@ func (h *Handlers) PipelineRunDeliveries() gin.HandlerFunc {
 		if clientID != "" {
 			deliveries, _ = h.store.ListJobDeliveriesByJobForClient(ctx, veloxJobID, clientID)
 		} else {
-			deliveries, _ = h.store.ListJobDeliveriesByJob(veloxJobID)
+			deliveries, _ = h.store.Delivery().ListJobDeliveriesByJob(veloxJobID)
 		}
 		result := make([]gin.H, 0, len(deliveries))
 		for _, d := range deliveries {

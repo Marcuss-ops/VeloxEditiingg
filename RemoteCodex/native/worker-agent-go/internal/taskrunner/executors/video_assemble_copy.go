@@ -119,7 +119,7 @@ func (e *videoAssembleCopyExecutor) Execute(ctx context.Context, execCtx executo
 	}
 	metrics, err := e.runner.RenderCompiledPlanV2(ctx, wire, outputPath)
 	if err != nil {
-		return fail("PACKET_COPY_FAILED", err)
+		return fail(copyOnlyRenderErrorCode(err), err)
 	}
 	artifact, err := artifactFromFile("video/mp4", outputPath)
 	if err != nil {
@@ -154,6 +154,25 @@ func marshalCopyOnlyWire(plan *contract.CompiledRenderPlanV2, jobID, outputPath 
 		paths[assetID] = binding.Path
 	}
 	return json.Marshal(copyOnlyPlanWire{CompiledRenderPlanV2: plan, JobID: jobID, OutputPath: outputPath, Bindings: paths})
+}
+
+// copyOnlyRenderErrorCode classifies a native copy-only render failure into
+// a stable worker-facing error code. The native engine already fails closed
+// for every packet-mux rejection (it never re-encodes), but it reports them
+// all under a generic packet_mux_failed code; the worker re-classifies the
+// keyframe-safety rejection so operators can distinguish "the cut is not
+// packet-copy safe" from an unrelated mux failure without losing the exact
+// engine reason.
+func copyOnlyRenderErrorCode(err error) string {
+	if err == nil {
+		return "PACKET_COPY_FAILED"
+	}
+	lower := strings.ToLower(err.Error())
+	if strings.Contains(lower, "must start on an exact video keyframe") ||
+		strings.Contains(lower, "not keyframe-safe for packet copy") {
+		return "COPY_ONLY_NOT_KEYFRAME_SAFE"
+	}
+	return "PACKET_COPY_FAILED"
 }
 
 func validateCopyOnlyPlan(plan *contract.CompiledRenderPlanV2) error {

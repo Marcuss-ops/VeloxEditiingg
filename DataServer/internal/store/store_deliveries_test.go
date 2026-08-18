@@ -21,7 +21,7 @@ func setupDeliveryTestDB(t *testing.T) *SQLiteStore {
 
 func insertTestDeliveryDestination(t *testing.T, db *SQLiteStore, destID, provider string) {
 	t.Helper()
-	err := db.InsertDeliveryDestination(&DeliveryDestination{
+	err := db.Delivery().InsertDeliveryDestination(&DeliveryDestination{
 		DestinationID:     destID,
 		Provider:          provider,
 		Name:              "test-" + destID,
@@ -64,7 +64,7 @@ func insertTestJobDelivery(t *testing.T, db *SQLiteStore, deliveryID, artifactID
 		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
 		UpdatedAt:      time.Now().UTC().Format(time.RFC3339),
 	}
-	if err := db.InsertJobDelivery(jd); err != nil {
+	if err := db.Delivery().InsertJobDelivery(jd); err != nil {
 		t.Fatalf("insert job delivery: %v", err)
 	}
 }
@@ -77,7 +77,7 @@ func TestClaimDeliveries_BasicClaim(t *testing.T) {
 	insertTestArtifact(t, db, "art-1", "job-1", "/tmp/test.mp4")
 	insertTestJobDelivery(t, db, "del_art-1_dest-yt", "art-1", "dest-yt")
 
-	leases, err := db.ClaimDeliveries(ctx, "runner-1", 5*time.Minute, 4)
+	leases, err := db.Delivery().ClaimDeliveries(ctx, "runner-1", 5*time.Minute, 4)
 	if err != nil {
 		t.Fatalf("ClaimDeliveries: %v", err)
 	}
@@ -114,11 +114,11 @@ func TestClaimDeliveries_ConcurrentRunners(t *testing.T) {
 	}
 
 	// Two runners claim 5 each
-	leases1, err := db.ClaimDeliveries(ctx, "runner-A", 5*time.Minute, 5)
+	leases1, err := db.Delivery().ClaimDeliveries(ctx, "runner-A", 5*time.Minute, 5)
 	if err != nil {
 		t.Fatalf("runner-A claim: %v", err)
 	}
-	leases2, err := db.ClaimDeliveries(ctx, "runner-B", 5*time.Minute, 5)
+	leases2, err := db.Delivery().ClaimDeliveries(ctx, "runner-B", 5*time.Minute, 5)
 	if err != nil {
 		t.Fatalf("runner-B claim: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestClaimDeliveries_ZombieReclaim(t *testing.T) {
 	insertTestJobDelivery(t, db, "del_art-z_dest-z", "art-z", "dest-z")
 
 	// Claim and let the lease expire
-	leases, err := db.ClaimDeliveries(ctx, "runner-old", 1*time.Second, 1)
+	leases, err := db.Delivery().ClaimDeliveries(ctx, "runner-old", 1*time.Second, 1)
 	if err != nil || len(leases) != 1 {
 		t.Fatalf("initial claim: %v len=%d", err, len(leases))
 	}
@@ -156,7 +156,7 @@ func TestClaimDeliveries_ZombieReclaim(t *testing.T) {
 	time.Sleep(2100 * time.Millisecond)
 
 	// A new runner should reclaim the zombie
-	leases2, err := db.ClaimDeliveries(ctx, "runner-new", 5*time.Minute, 1)
+	leases2, err := db.Delivery().ClaimDeliveries(ctx, "runner-new", 5*time.Minute, 1)
 	if err != nil {
 		t.Fatalf("zombie reclaim: %v", err)
 	}
@@ -185,7 +185,7 @@ func TestClaimDeliveries_MaxAttemptsExhausted(t *testing.T) {
 		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
 		UpdatedAt:      time.Now().UTC().Format(time.RFC3339),
 	}
-	if err := db.InsertJobDelivery(jd); err != nil {
+	if err := db.Delivery().InsertJobDelivery(jd); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
 
@@ -193,7 +193,7 @@ func TestClaimDeliveries_MaxAttemptsExhausted(t *testing.T) {
 	// in the runner, not in ClaimDeliveries (the claim just flips status).
 	// But RETRY_WAIT with next_attempt_at=NULL should still be claimable
 	// per the SQL. This is correct — the runner enforces max_attempts.
-	leases, err := db.ClaimDeliveries(ctx, "runner-x", 5*time.Minute, 1)
+	leases, err := db.Delivery().ClaimDeliveries(ctx, "runner-x", 5*time.Minute, 1)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -212,18 +212,18 @@ func TestMarkDeliverySucceeded(t *testing.T) {
 	insertTestArtifact(t, db, "art-s", "job-s", "/tmp/s.mp4")
 	insertTestJobDelivery(t, db, "del_art-s_dest-s", "art-s", "dest-s")
 
-	leases, err := db.ClaimDeliveries(ctx, "runner-s", 5*time.Minute, 1)
+	leases, err := db.Delivery().ClaimDeliveries(ctx, "runner-s", 5*time.Minute, 1)
 	if err != nil || len(leases) != 1 {
 		t.Fatalf("claim: %v len=%d", err, len(leases))
 	}
 
 	l := leases[0]
-	err = db.MarkDeliverySucceeded(ctx, l.DeliveryID, l.RunnerID, l.LeaseID, "social-video-123", "https://social.example/watch?v=123")
+	err = db.Delivery().MarkDeliverySucceeded(ctx, l.DeliveryID, l.RunnerID, l.LeaseID, "social-video-123", "https://social.example/watch?v=123")
 	if err != nil {
 		t.Fatalf("MarkDeliverySucceeded: %v", err)
 	}
 
-	jd, err := db.GetJobDelivery(ctx, l.DeliveryID)
+	jd, err := db.Delivery().GetJobDelivery(ctx, l.DeliveryID)
 	if err != nil {
 		t.Fatalf("GetJobDelivery: %v", err)
 	}
@@ -246,19 +246,19 @@ func TestApplyReconciledDeliveryDoesNotRegressSucceeded(t *testing.T) {
 	insertTestArtifact(t, db, "art-reconcile", "job-reconcile", "/tmp/reconcile.mp4")
 	insertTestJobDelivery(t, db, "del-reconcile", "art-reconcile", "dest-reconcile")
 
-	leases, err := db.ClaimDeliveries(ctx, "runner-reconcile", 5*time.Minute, 1)
+	leases, err := db.Delivery().ClaimDeliveries(ctx, "runner-reconcile", 5*time.Minute, 1)
 	if err != nil || len(leases) != 1 {
 		t.Fatalf("claim: %v len=%d", err, len(leases))
 	}
 	lease := leases[0]
-	if err := db.MarkDeliverySucceeded(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, "remote-reconcile", ""); err != nil {
+	if err := db.Delivery().MarkDeliverySucceeded(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, "remote-reconcile", ""); err != nil {
 		t.Fatalf("MarkDeliverySucceeded: %v", err)
 	}
 
-	if err := db.ApplyReconciledDelivery(ctx, lease.DeliveryID, "RUNNING", "remote-reconcile", "", "", ""); err != nil {
+	if err := db.Delivery().ApplyReconciledDelivery(ctx, lease.DeliveryID, "RUNNING", "remote-reconcile", "", "", ""); err != nil {
 		t.Fatalf("ApplyReconciledDelivery: %v", err)
 	}
-	row, err := db.GetJobDelivery(ctx, lease.DeliveryID)
+	row, err := db.Delivery().GetJobDelivery(ctx, lease.DeliveryID)
 	if err != nil {
 		t.Fatalf("GetJobDelivery: %v", err)
 	}
@@ -270,7 +270,7 @@ func TestApplyReconciledDeliveryDoesNotRegressSucceeded(t *testing.T) {
 func TestApplyReconciledDeliveryMissingRowFailsClosed(t *testing.T) {
 	db := setupDeliveryTestDB(t)
 
-	err := db.ApplyReconciledDelivery(context.Background(), "missing-delivery", "SUCCEEDED", "remote-id", "", "", "")
+	err := db.Delivery().ApplyReconciledDelivery(context.Background(), "missing-delivery", "SUCCEEDED", "remote-id", "", "", "")
 	if !errors.Is(err, ErrDeliveryNoRow) {
 		t.Fatalf("ApplyReconciledDelivery missing row error = %v, want ErrDeliveryNoRow", err)
 	}
@@ -284,19 +284,19 @@ func TestMarkDeliveryRetry(t *testing.T) {
 	insertTestArtifact(t, db, "art-r", "job-r", "/tmp/r.mp4")
 	insertTestJobDelivery(t, db, "del_art-r_dest-r", "art-r", "dest-r")
 
-	leases, err := db.ClaimDeliveries(ctx, "runner-r", 5*time.Minute, 1)
+	leases, err := db.Delivery().ClaimDeliveries(ctx, "runner-r", 5*time.Minute, 1)
 	if err != nil || len(leases) != 1 {
 		t.Fatalf("claim: %v len=%d", err, len(leases))
 	}
 
 	l := leases[0]
 	nextAttempt := time.Now().UTC().Add(2 * time.Minute)
-	err = db.MarkDeliveryRetry(ctx, l.DeliveryID, l.RunnerID, l.LeaseID, "TRANSIENT", "timeout", nextAttempt)
+	err = db.Delivery().MarkDeliveryRetry(ctx, l.DeliveryID, l.RunnerID, l.LeaseID, "TRANSIENT", "timeout", nextAttempt)
 	if err != nil {
 		t.Fatalf("MarkDeliveryRetry: %v", err)
 	}
 
-	jd, err := db.GetJobDelivery(ctx, l.DeliveryID)
+	jd, err := db.Delivery().GetJobDelivery(ctx, l.DeliveryID)
 	if err != nil {
 		t.Fatalf("GetJobDelivery: %v", err)
 	}
@@ -325,18 +325,18 @@ func TestMarkDeliveryFailed(t *testing.T) {
 	insertTestArtifact(t, db, "art-f", "job-f", "/tmp/f.mp4")
 	insertTestJobDelivery(t, db, "del_art-f_dest-f", "art-f", "dest-f")
 
-	leases, err := db.ClaimDeliveries(ctx, "runner-f", 5*time.Minute, 1)
+	leases, err := db.Delivery().ClaimDeliveries(ctx, "runner-f", 5*time.Minute, 1)
 	if err != nil || len(leases) != 1 {
 		t.Fatalf("claim: %v len=%d", err, len(leases))
 	}
 
 	l := leases[0]
-	err = db.MarkDeliveryFailed(ctx, l.DeliveryID, l.RunnerID, l.LeaseID, "PERMANENT", "invalid file")
+	err = db.Delivery().MarkDeliveryFailed(ctx, l.DeliveryID, l.RunnerID, l.LeaseID, "PERMANENT", "invalid file")
 	if err != nil {
 		t.Fatalf("MarkDeliveryFailed: %v", err)
 	}
 
-	jd, err := db.GetJobDelivery(ctx, l.DeliveryID)
+	jd, err := db.Delivery().GetJobDelivery(ctx, l.DeliveryID)
 	if err != nil {
 		t.Fatalf("GetJobDelivery: %v", err)
 	}
@@ -356,18 +356,18 @@ func TestMarkDeliveryBlockedAuth(t *testing.T) {
 	insertTestArtifact(t, db, "art-a", "job-a", "/tmp/a.mp4")
 	insertTestJobDelivery(t, db, "del_art-a_dest-a", "art-a", "dest-a")
 
-	leases, err := db.ClaimDeliveries(ctx, "runner-a", 5*time.Minute, 1)
+	leases, err := db.Delivery().ClaimDeliveries(ctx, "runner-a", 5*time.Minute, 1)
 	if err != nil || len(leases) != 1 {
 		t.Fatalf("claim: %v len=%d", err, len(leases))
 	}
 
 	l := leases[0]
-	err = db.MarkDeliveryBlockedAuth(ctx, l.DeliveryID, l.RunnerID, l.LeaseID, "AUTH", "token expired")
+	err = db.Delivery().MarkDeliveryBlockedAuth(ctx, l.DeliveryID, l.RunnerID, l.LeaseID, "AUTH", "token expired")
 	if err != nil {
 		t.Fatalf("MarkDeliveryBlockedAuth: %v", err)
 	}
 
-	jd, err := db.GetJobDelivery(ctx, l.DeliveryID)
+	jd, err := db.Delivery().GetJobDelivery(ctx, l.DeliveryID)
 	if err != nil {
 		t.Fatalf("GetJobDelivery: %v", err)
 	}
@@ -384,20 +384,20 @@ func TestRenewDeliveryLease(t *testing.T) {
 	insertTestArtifact(t, db, "art-ren", "job-ren", "/tmp/ren.mp4")
 	insertTestJobDelivery(t, db, "del_art-ren_dest-ren", "art-ren", "dest-ren")
 
-	leases, err := db.ClaimDeliveries(ctx, "runner-ren", 1*time.Second, 1)
+	leases, err := db.Delivery().ClaimDeliveries(ctx, "runner-ren", 1*time.Second, 1)
 	if err != nil || len(leases) != 1 {
 		t.Fatalf("claim: %v len=%d", err, len(leases))
 	}
 
 	l := leases[0]
 	newExpiry := time.Now().UTC().Add(10 * time.Minute)
-	err = db.RenewDeliveryLease(ctx, l.DeliveryID, l.RunnerID, l.LeaseID, newExpiry)
+	err = db.Delivery().RenewDeliveryLease(ctx, l.DeliveryID, l.RunnerID, l.LeaseID, newExpiry)
 	if err != nil {
 		t.Fatalf("RenewDeliveryLease: %v", err)
 	}
 
 	// Verify the delivery is still RUNNING and lease extended.
-	jd, err := db.GetJobDelivery(ctx, l.DeliveryID)
+	jd, err := db.Delivery().GetJobDelivery(ctx, l.DeliveryID)
 	if err != nil {
 		t.Fatalf("GetJobDelivery: %v", err)
 	}
@@ -414,7 +414,7 @@ func TestRenewDeliveryLease_CASGuard(t *testing.T) {
 	insertTestArtifact(t, db, "art-guard", "job-guard", "/tmp/guard.mp4")
 	insertTestJobDelivery(t, db, "del_art-guard_dest-guard", "art-guard", "dest-guard")
 
-	leases, err := db.ClaimDeliveries(ctx, "runner-real", 5*time.Minute, 1)
+	leases, err := db.Delivery().ClaimDeliveries(ctx, "runner-real", 5*time.Minute, 1)
 	if err != nil || len(leases) != 1 {
 		t.Fatalf("claim: %v len=%d", err, len(leases))
 	}
@@ -422,7 +422,7 @@ func TestRenewDeliveryLease_CASGuard(t *testing.T) {
 	l := leases[0]
 	// Try renewing with wrong runner_id — should fail with conflict.
 	wrongExpiry := time.Now().UTC().Add(10 * time.Minute)
-	err = db.RenewDeliveryLease(ctx, l.DeliveryID, "wrong-runner", l.LeaseID, wrongExpiry)
+	err = db.Delivery().RenewDeliveryLease(ctx, l.DeliveryID, "wrong-runner", l.LeaseID, wrongExpiry)
 	if err != ErrTransitionConflict {
 		t.Errorf("expected ErrTransitionConflict, got %v", err)
 	}
@@ -449,12 +449,12 @@ func TestClaimDeliveries_RetryWaitWithNextAttemptAt(t *testing.T) {
 		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
 		UpdatedAt:      time.Now().UTC().Format(time.RFC3339),
 	}
-	if err := db.InsertJobDelivery(jd); err != nil {
+	if err := db.Delivery().InsertJobDelivery(jd); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
 
 	// Should NOT be claimed because next_attempt_at is in the future.
-	leases, err := db.ClaimDeliveries(ctx, "runner-nxt", 5*time.Minute, 1)
+	leases, err := db.Delivery().ClaimDeliveries(ctx, "runner-nxt", 5*time.Minute, 1)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -472,17 +472,17 @@ func TestClaimDeliveries_SucceededDoubleClaim(t *testing.T) {
 	insertTestJobDelivery(t, db, "del_art-2x_dest-2x", "art-2x", "dest-2x")
 
 	// Claim and succeed
-	leases, err := db.ClaimDeliveries(ctx, "runner-2x", 5*time.Minute, 1)
+	leases, err := db.Delivery().ClaimDeliveries(ctx, "runner-2x", 5*time.Minute, 1)
 	if err != nil || len(leases) != 1 {
 		t.Fatalf("claim: %v len=%d", err, len(leases))
 	}
 	l := leases[0]
-	if err := db.MarkDeliverySucceeded(ctx, l.DeliveryID, l.RunnerID, l.LeaseID, "vid-1", "https://social.example/1"); err != nil {
+	if err := db.Delivery().MarkDeliverySucceeded(ctx, l.DeliveryID, l.RunnerID, l.LeaseID, "vid-1", "https://social.example/1"); err != nil {
 		t.Fatalf("succeed: %v", err)
 	}
 
 	// Second claim should get nothing (delivery is SUCCEEDED, not PENDING/RETRY_WAIT)
-	leases2, err := db.ClaimDeliveries(ctx, "runner-2x-b", 5*time.Minute, 1)
+	leases2, err := db.Delivery().ClaimDeliveries(ctx, "runner-2x-b", 5*time.Minute, 1)
 	if err != nil {
 		t.Fatalf("second claim: %v", err)
 	}

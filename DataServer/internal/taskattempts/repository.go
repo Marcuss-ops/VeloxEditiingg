@@ -83,9 +83,12 @@ type Writer interface {
 	PersistSegmentTimings(ctx context.Context, attemptID string, segments []SegmentTiming) error
 
 	// UpsertRenderPlan stamps the master-compiled render plan identity on
-	// an attempt (Fase D): plan_version, plan_sha256 and the canonical plan
-	// JSON produced by the RenderPlanCompiler at claim time. Idempotent
-	// last-writer-wins; plan_version=0 rows are stamped exactly once.
+	// an attempt: plan_version, plan_sha256 and the canonical plan JSON.
+	// The plan is compiled at enqueue time (CompiledRenderPlanV2 in
+	// shared/contract/rendercompiler, the single source of truth) and only
+	// re-validated + stamped at claim time; the legacy V1 RenderPlanCompiler
+	// is retired. Idempotent last-writer-wins; plan_version=0 rows are
+	// stamped exactly once.
 	UpsertRenderPlan(ctx context.Context, attemptID string, planVersion int, planSHA256, planJSON string) error
 }
 

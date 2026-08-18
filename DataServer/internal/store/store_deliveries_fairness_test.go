@@ -42,7 +42,7 @@ func TestClaimDeliveries_FairAcrossParentJobs(t *testing.T) {
 		insertTestJobDelivery(t, db, deliveryID, artifactID, "dest-fair")
 	}
 
-	leases, err := db.ClaimDeliveries(ctx, "fair-runner", 5*time.Minute, 4)
+	leases, err := db.Delivery().ClaimDeliveries(ctx, "fair-runner", 5*time.Minute, 4)
 	if err != nil {
 		t.Fatalf("ClaimDeliveries: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestDeliveryChildren_RetryIsolatedAndParentAggregatesAfterAllTerminal(t *te
 	insertTestJobDelivery(t, db, "delivery-aggregate-a", "artifact-aggregate-a", "dest-aggregate-a")
 	insertTestJobDelivery(t, db, "delivery-aggregate-b", "artifact-aggregate-b", "dest-aggregate-b")
 
-	leases, err := db.ClaimDeliveries(ctx, "aggregate-runner", 5*time.Minute, 2)
+	leases, err := db.Delivery().ClaimDeliveries(ctx, "aggregate-runner", 5*time.Minute, 2)
 	if err != nil || len(leases) != 2 {
 		t.Fatalf("claim: %v leases=%d", err, len(leases))
 	}
@@ -93,21 +93,21 @@ func TestDeliveryChildren_RetryIsolatedAndParentAggregatesAfterAllTerminal(t *te
 	// independently RUNNING. The parent must remain DELIVERING while A is
 	// waiting and B has not reached a terminal state.
 	nextAttempt := time.Now().UTC().Add(time.Hour)
-	if err := db.MarkDeliveryRetry(ctx,
+	if err := db.Delivery().MarkDeliveryRetry(ctx,
 		byDestination["dest-aggregate-a"].DeliveryID,
 		"aggregate-runner",
 		byDestination["dest-aggregate-a"].LeaseID,
 		"TRANSIENT", "provider timeout", nextAttempt); err != nil {
 		t.Fatalf("retry child A: %v", err)
 	}
-	rowA, err := db.GetJobDelivery(ctx, "delivery-aggregate-a")
+	rowA, err := db.Delivery().GetJobDelivery(ctx, "delivery-aggregate-a")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if rowA.Status != "RETRY_WAIT" || rowA.NextAttemptAt == "" || rowA.LastError != "TRANSIENT" {
 		t.Fatalf("child A retry state = %+v", rowA)
 	}
-	rowB, err := db.GetJobDelivery(ctx, "delivery-aggregate-b")
+	rowB, err := db.Delivery().GetJobDelivery(ctx, "delivery-aggregate-b")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func TestDeliveryChildren_RetryIsolatedAndParentAggregatesAfterAllTerminal(t *te
 
 	// Completing B while A is still retryable must not fail or complete the
 	// parent. Once A is re-claimed and completes, the parent succeeds.
-	if err := db.MarkDeliverySucceeded(ctx,
+	if err := db.Delivery().MarkDeliverySucceeded(ctx,
 		byDestination["dest-aggregate-b"].DeliveryID,
 		"aggregate-runner",
 		byDestination["dest-aggregate-b"].LeaseID,
@@ -145,11 +145,11 @@ func TestDeliveryChildren_RetryIsolatedAndParentAggregatesAfterAllTerminal(t *te
 		now, "delivery-aggregate-a"); err != nil {
 		t.Fatal(err)
 	}
-	retryLeases, err := db.ClaimDeliveries(ctx, "aggregate-runner", 5*time.Minute, 1)
+	retryLeases, err := db.Delivery().ClaimDeliveries(ctx, "aggregate-runner", 5*time.Minute, 1)
 	if err != nil || len(retryLeases) != 1 || retryLeases[0].DeliveryID != "delivery-aggregate-a" {
 		t.Fatalf("reclaim child A: %v leases=%#v", err, retryLeases)
 	}
-	if err := db.MarkDeliverySucceeded(ctx, retryLeases[0].DeliveryID, "aggregate-runner", retryLeases[0].LeaseID, "remote-a", "https://example.test/a"); err != nil {
+	if err := db.Delivery().MarkDeliverySucceeded(ctx, retryLeases[0].DeliveryID, "aggregate-runner", retryLeases[0].LeaseID, "remote-a", "https://example.test/a"); err != nil {
 		t.Fatalf("succeed retried child A: %v", err)
 	}
 	if err := db.DB().QueryRowContext(ctx,
@@ -172,7 +172,7 @@ func TestDeliveryChildren_FailedChildDoesNotFailParentUntilSiblingsTerminal(t *t
 	insertTestJobDelivery(t, db, "delivery-failed-a", "artifact-failed-a", "dest-failed-a")
 	insertTestJobDelivery(t, db, "delivery-failed-b", "artifact-failed-b", "dest-failed-b")
 
-	leases, err := db.ClaimDeliveries(ctx, "failed-runner", 5*time.Minute, 2)
+	leases, err := db.Delivery().ClaimDeliveries(ctx, "failed-runner", 5*time.Minute, 2)
 	if err != nil || len(leases) != 2 {
 		t.Fatalf("claim: %v leases=%d", err, len(leases))
 	}
@@ -184,7 +184,7 @@ func TestDeliveryChildren_FailedChildDoesNotFailParentUntilSiblingsTerminal(t *t
 			sibling = lease
 		}
 	}
-	if err := db.MarkDeliveryFailed(ctx, failed.DeliveryID, failed.RunnerID, failed.LeaseID, "PERMANENT", "invalid target"); err != nil {
+	if err := db.Delivery().MarkDeliveryFailed(ctx, failed.DeliveryID, failed.RunnerID, failed.LeaseID, "PERMANENT", "invalid target"); err != nil {
 		t.Fatalf("fail child: %v", err)
 	}
 	var parentStatus string
@@ -195,7 +195,7 @@ func TestDeliveryChildren_FailedChildDoesNotFailParentUntilSiblingsTerminal(t *t
 	if parentStatus != "DELIVERING" {
 		t.Fatalf("parent failed before sibling terminal: %q", parentStatus)
 	}
-	if err := db.MarkDeliverySucceeded(ctx, sibling.DeliveryID, sibling.RunnerID, sibling.LeaseID, "remote-sibling", "https://example.test/sibling"); err != nil {
+	if err := db.Delivery().MarkDeliverySucceeded(ctx, sibling.DeliveryID, sibling.RunnerID, sibling.LeaseID, "remote-sibling", "https://example.test/sibling"); err != nil {
 		t.Fatalf("succeed sibling: %v", err)
 	}
 	if err := db.DB().QueryRowContext(ctx,

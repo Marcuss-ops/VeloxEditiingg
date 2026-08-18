@@ -9,16 +9,16 @@ import (
 
 	clipCompiler "velox-worker-agent/pkg/video/pipelines/clips"
 	entityCompiler "velox-worker-agent/pkg/video/pipelines/entities"
-	hybridCompiler "velox-worker-agent/pkg/video/pipelines/hybrid"
 	imgCompiler "velox-worker-agent/pkg/video/pipelines/images"
 )
 
 // registerPipelines registers all pipeline compilers in the registry.
+// hybrid.v1 was retired (it was the legacy scene-composite authoring path);
+// only the remaining single-source pipelines are registered.
 func registerPipelines(registry *pipeline.Registry, probe audio.Probe) {
 	registry.Register(&pipelineAdapter{id: "images.v1", validate: imgCompiler.Validate, compile: imgCompiler.Compile, probe: probe})
 	registry.Register(&pipelineAdapter{id: "clips.v1", validate: clipCompiler.Validate, compile: clipCompiler.Compile, probe: probe})
 	registry.Register(&pipelineAdapter{id: "entities.v1", validate: entityCompiler.Validate, compile: entityCompiler.Compile, probe: probe})
-	registry.Register(&pipelineAdapter{id: "hybrid.v1", validate: hybridCompiler.Validate, compile: hybridCompiler.Compile, probe: probe})
 }
 
 // pipelineAdapter wraps a compile function as a pipeline.Compiler.

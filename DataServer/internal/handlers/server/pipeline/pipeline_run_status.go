@@ -77,7 +77,7 @@ func (h *Handlers) PipelineRunStatus() gin.HandlerFunc {
 					if clientID != "" {
 						deliveries, _ = h.store.ListJobDeliveriesByJobForClient(ctx, forwarding.TargetJobID, clientID)
 					} else {
-						deliveries, _ = h.store.ListJobDeliveriesByJob(forwarding.TargetJobID)
+						deliveries, _ = h.store.Delivery().ListJobDeliveriesByJob(forwarding.TargetJobID)
 					}
 					if len(deliveries) > 0 {
 						d := deliveries[0]

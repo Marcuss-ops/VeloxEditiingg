@@ -17,7 +17,7 @@ import (
 // =====================================================================
 //
 // Verifies that BuildSceneImagePayload / BuildSceneImagePayloadForMaster /
-// BuildClipPayloadForMaster / PrepareJobAndTask produce the canonical
+// PrepareJobAndTask produce the canonical
 // payload (no legacy alias keys like voiceover_path / audio_path / id /
 // run_id / title / parameters in V2 writes) AND that the in-memory
 // job+spec composition pre-atomically stamps the canonical
@@ -254,81 +254,6 @@ func TestBuildSceneImagePayloadForMaster_PreservesRemoteSources(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(tempDir, "worker_downloads")); !os.IsNotExist(err) {
 		t.Fatalf("did not expect staged assets for remote sources")
-	}
-}
-
-func TestBuildClipPayloadForMaster_UsesDetectedVoiceoverDurationForOffsets(t *testing.T) {
-	tempDir := t.TempDir()
-	stubDir := filepath.Join(tempDir, "bin")
-	if err := os.MkdirAll(stubDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	ffprobeStub := filepath.Join(stubDir, "ffprobe")
-	stub := `#!/bin/sh
-last=""
-for arg in "$@"; do
-  last="$arg"
-done
-case "$last" in
-  *voice-1.mp3) echo "11" ;;
-  *voice-2.mp3) echo "13" ;;
-  *) echo "0" ;;
-esac
-`
-	if err := os.WriteFile(ffprobeStub, []byte(stub), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	oldPath := os.Getenv("PATH")
-	t.Setenv("PATH", stubDir+string(os.PathListSeparator)+oldPath)
-
-	payload := map[string]interface{}{
-		"video_name": "Narrated Clips",
-		"scenes": []interface{}{
-			map[string]interface{}{
-				"text":      "Scene 1",
-				"clip":      map[string]interface{}{"asset_id": "clip-1", "url": "velox-asset://clip-1", "duration_ms": 2000},
-				"stock":     []interface{}{map[string]interface{}{"asset_id": "stock-1", "url": "velox-asset://stock-1", "duration_ms": 5000}},
-				"voiceover": map[string]interface{}{"asset_id": "voice-1", "url": "velox-asset://voice-1", "duration_ms": 11000},
-			},
-			map[string]interface{}{
-				"text":      "Scene 2",
-				"clip":      map[string]interface{}{"asset_id": "clip-2", "url": "velox-asset://clip-2", "duration_ms": 3000},
-				"stock":     []interface{}{map[string]interface{}{"asset_id": "stock-2", "url": "velox-asset://stock-2", "duration_ms": 5000}},
-				"voiceover": map[string]interface{}{"asset_id": "voice-2", "url": "velox-asset://voice-2", "duration_ms": 13000},
-			},
-		},
-	}
-
-	result, err := BuildClipPayloadForMaster(payload, tempDir, filepath.Join(tempDir, "videos"), "")
-	if err != nil {
-		t.Fatalf("BuildClipPayloadForMaster: %v", err)
-	}
-
-	items, ok := result["items"].([]map[string]interface{})
-	if !ok || len(items) != 4 {
-		t.Fatalf("want 4 items, got %#v", result["items"])
-	}
-	if got := asFloat(items[0]["duration"]); got != 11.0 {
-		t.Fatalf("want first narrated bed duration 11.0, got %v", got)
-	}
-	if got := asFloat(items[1]["duration"]); got != 2.0 {
-		t.Fatalf("want first final clip duration 2.0, got %v", got)
-	}
-	if got := asFloat(items[2]["duration"]); got != 13.0 {
-		t.Fatalf("want second narrated bed duration 13.0, got %v", got)
-	}
-
-	audioTracks, ok := result["audio_tracks"].([]map[string]interface{})
-	if !ok || len(audioTracks) != 4 {
-		t.Fatalf("want 4 audio tracks, got %#v", result["audio_tracks"])
-	}
-	if got := asFloat(audioTracks[2]["start_time_offset"]); got != 13.0 {
-		t.Fatalf("want second voiceover offset 13.0, got %v", got)
-	}
-	if got := asFloat(audioTracks[3]["start_time_offset"]); got != 26.0 {
-		t.Fatalf("want second final clip audio offset 26.0, got %v", got)
 	}
 }
 

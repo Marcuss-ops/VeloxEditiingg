@@ -125,5 +125,5 @@ func resolvePipelineID(payload map[string]interface{}) string {
 			return strings.TrimSpace(pipelineID)
 		}
 	}
-	return "hybrid.v1"
+	return ""
 }

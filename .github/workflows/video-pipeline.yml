@@ -104,6 +104,76 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
+  zero-render-gate:
+    name: zero-render release gate (visual replacement)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install native media dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ffmpeg pkg-config libavformat-dev libavcodec-dev libavutil-dev python3
+          cmake --version
+          ffmpeg -version | head -1
+          ffprobe -version | head -1
+
+      - name: Run zero-render release gate
+        env:
+          VIDEO_ZERO_RENDER_BUILD_DIR: ${{ runner.temp }}/velox-zero-render-build
+          VIDEO_ZERO_RENDER_EVIDENCE: ${{ runner.temp }}/velox-zero-render-evidence
+          VIDEO_ZERO_RENDER_KEEP: "1"
+        run: bash scripts/ci/check-zero-render-gate.sh
+
+      - name: Upload gate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: video-pipeline-zero-render-evidence
+          path: |
+            ${{ runner.temp }}/velox-zero-render-evidence/
+          retention-days: 7
+          if-no-files-found: warn
+
+  copy-vs-encode-benchmark:
+    name: copy-vs-encode benchmark (visual replacement)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install native media dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ffmpeg pkg-config libavformat-dev libavcodec-dev libavutil-dev python3
+          cmake --version
+          ffmpeg -version | head -1
+          ffprobe -version | head -1
+
+      - name: Run copy-vs-encode benchmark gate
+        env:
+          VIDEO_BENCH_BUILD_DIR: ${{ runner.temp }}/velox-copy-vs-encode-build
+          VIDEO_BENCH_EVIDENCE: ${{ runner.temp }}/velox-copy-vs-encode-evidence
+          VIDEO_BENCH_KEEP: "1"
+        run: bash scripts/ci/check-copy-vs-encode-benchmark.sh
+
+      - name: Upload benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: video-pipeline-copy-vs-encode-evidence
+          path: |
+            ${{ runner.temp }}/velox-copy-vs-encode-evidence/
+          retention-days: 7
+          if-no-files-found: warn
+
   media-contract-smokes:
     name: media contract smoke matrix
     runs-on: ubuntu-latest

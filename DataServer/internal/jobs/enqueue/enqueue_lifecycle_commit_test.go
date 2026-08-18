@@ -90,12 +90,9 @@ func TestEnqueuePreservesDeferredDriveAssetWireAndKind(t *testing.T) {
 	t.Parallel()
 	enq := newTestEnqueuer(t)
 	payload := map[string]interface{}{
-		"video_name":  "Deferred Drive enqueue",
-		"script_text": "typed asset boundary",
-		"audio_tracks": []interface{}{map[string]interface{}{
-			"source_url": "velox-asset://voice-1",
-			"role":       "voiceover",
-		}},
+		"video_name":      "Deferred Drive enqueue",
+		"script_text":     "typed asset boundary",
+		"voiceover_paths": []interface{}{"velox-asset://voice-1"},
 		"scenes": []interface{}{map[string]interface{}{
 			"scene_id": "scene-1",
 			"clip": map[string]interface{}{"asset_id": "drive-file-123456",

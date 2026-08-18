@@ -601,6 +601,85 @@ if(VELOX_ENABLE_LIBAV)
     add_test(NAME render_plan_v2_tests
              COMMAND velox_render_plan_v2_tests)
 
+    # Golden end-to-end proof of the visual_replacement copy-only path:
+    # a 120 s red BASE + 5 s green PREPARED at 60→65 s + final audio is
+    # assembled BASE/PREPARED/BASE with zero decode/encode, verified at the
+    # exact visual boundaries (59.9/60.1/64.9/65.1), ffprobe-signature, full
+    # decode and warm-cache determinism. Fixtures are generated before the
+    # sentinel PATH is installed; the render itself must stay in-process.
+    add_executable(velox_render_visual_replacement_golden_tests
+        tests/test_render_visual_replacement_golden.cpp
+        src/plan/render_plan_parser.cpp
+        src/audio/audio_plan.cpp
+        src/audio/audio_benchmark.cpp
+        src/core/render_engine.cpp
+        src/core/canonical_video_profile.cpp
+        src/core/render_engine_helpers.cpp
+        src/services/frame_pipeline.cpp
+        src/render/frame_graph.cpp
+        src/render/kernel_registry.cpp
+        src/services/file_utils.cpp
+        src/services/io_counters.cpp
+        src/services/media_probe.cpp
+        src/services/media_packet_pipeline.cpp
+        src/services/segment_execution_libav.cpp
+        src/services/segment_execution.cpp
+        src/services/segment_scheduler.cpp
+        src/services/media_utils.cpp
+        src/services/ffmpeg_progress_parser.cpp
+        src/telemetry/emitter.cpp
+    )
+
+    target_include_directories(velox_render_visual_replacement_golden_tests
+        PRIVATE include src include/velox)
+
+    if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(velox_render_visual_replacement_golden_tests PRIVATE -O2)
+    endif()
+    velox_link_ffmpeg(velox_render_visual_replacement_golden_tests)
+
+    add_test(NAME render_visual_replacement_golden_tests
+             COMMAND velox_render_visual_replacement_golden_tests)
+
+    # Performance comparison (plan §17): renders the SAME visual timeline
+    # through the copy-only packet path (zero decode/encode) and the legacy
+    # full-encode path (decode→scale→encode), recording wall/CPU/frames/
+    # copy-counters/finalization and asserting copy beats encode with zero
+    # transcode. VELOX_BENCH_EVIDENCE_DIR pins fixtures + benchmark.json.
+    add_executable(velox_render_visual_replacement_benchmark_tests
+        tests/test_render_visual_replacement_benchmark.cpp
+        src/plan/render_plan_parser.cpp
+        src/audio/audio_plan.cpp
+        src/audio/audio_benchmark.cpp
+        src/core/render_engine.cpp
+        src/core/canonical_video_profile.cpp
+        src/core/render_engine_helpers.cpp
+        src/services/frame_pipeline.cpp
+        src/render/frame_graph.cpp
+        src/render/kernel_registry.cpp
+        src/services/file_utils.cpp
+        src/services/io_counters.cpp
+        src/services/media_probe.cpp
+        src/services/media_packet_pipeline.cpp
+        src/services/segment_execution_libav.cpp
+        src/services/segment_execution.cpp
+        src/services/segment_scheduler.cpp
+        src/services/media_utils.cpp
+        src/services/ffmpeg_progress_parser.cpp
+        src/telemetry/emitter.cpp
+    )
+
+    target_include_directories(velox_render_visual_replacement_benchmark_tests
+        PRIVATE include src include/velox)
+
+    if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(velox_render_visual_replacement_benchmark_tests PRIVATE -O2)
+    endif()
+    velox_link_ffmpeg(velox_render_visual_replacement_benchmark_tests)
+
+    add_test(NAME render_visual_replacement_benchmark_tests
+             COMMAND velox_render_visual_replacement_benchmark_tests)
+
     # Phase-3 AVFrame producer-consumer pipeline: bounded pool, three
     # decode/render/encode threads and exactly one persistent encoder
     # AVCodecContext. Unit + end-to-end encode test (libav-only).
@@ -654,4 +733,10 @@ if(TARGET velox_render_mixed_tests)
 endif()
 if(TARGET velox_render_plan_v2_tests)
     add_dependencies(velox_render_plan_v2_tests velox_telemetry_catalog_codegen)
+endif()
+if(TARGET velox_render_visual_replacement_golden_tests)
+    add_dependencies(velox_render_visual_replacement_golden_tests velox_telemetry_catalog_codegen)
+endif()
+if(TARGET velox_render_visual_replacement_benchmark_tests)
+    add_dependencies(velox_render_visual_replacement_benchmark_tests velox_telemetry_catalog_codegen)
 endif()

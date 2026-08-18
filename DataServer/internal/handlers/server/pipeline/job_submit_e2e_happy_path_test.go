@@ -349,9 +349,6 @@ func TestSubmitJobE2E_CanonicalRecipePassthrough(t *testing.T) {
 	body.TemplateID = "audit.canonical"
 	body.TemplateVersion = 17
 	body.VideoName = "CANONICAL AUDIT"
-	body.Spec = map[string]interface{}{
-		"audit_marker": "CANONICAL SPEC",
-	}
 	body.Output = &SubmitOutput{Width: 1280, Height: 720, FPS: 24, Format: "mp4"}
 
 	w := postSubmitJob(t, r, body)
@@ -416,22 +413,11 @@ func assertCanonicalRecipeFields(t *testing.T, surface string, payload map[strin
 		t.Errorf("%s video_name = %v, want CANONICAL AUDIT", surface, got)
 	}
 
-	spec, ok := payload["spec"].(map[string]interface{})
-	if !ok || spec["audit_marker"] != "CANONICAL SPEC" {
-		t.Errorf("%s spec = %#v, want audit_marker=CANONICAL SPEC", surface, payload["spec"])
+	if _, present := payload["spec"]; present {
+		t.Errorf("%s spec = %#v, want the spec field fully removed", surface, payload["spec"])
 	}
-	output, ok := payload["output"].(map[string]interface{})
-	if !ok {
-		t.Errorf("%s output = %#v, want output object", surface, payload["output"])
-		return
-	}
-	for key, want := range map[string]float64{"width": 1280, "height": 720, "fps": 24} {
-		if got := output[key]; got != want && got != int(want) {
-			t.Errorf("%s output.%s = %v, want %v", surface, key, got, want)
-		}
-	}
-	if got := output["format"]; got != "mp4" {
-		t.Errorf("%s output.format = %v, want mp4", surface, got)
+	if _, present := payload["output"]; present {
+		t.Errorf("%s output = %#v, want retired top-level output dropped at the boundary", surface, payload["output"])
 	}
 }
 

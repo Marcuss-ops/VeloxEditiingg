@@ -89,7 +89,6 @@ func TestProductionCompositionRegistersRequiredRoutes(t *testing.T) {
 
 	want := map[string]bool{
 		"POST /api/v1/script/generate-with-images": false,
-		"POST /api/v1/script/generate":             false,
 		"POST /api/v1/script/jobs/:kind":           false,
 		"GET /api/v1/workers":                      false,
 		"GET /health":                              false,

@@ -53,7 +53,7 @@ var CanonicalTopLevelKeys = []string{
 	"job_type", "template_id", "template_version", "version", "created_at", "updated_at",
 
 	// Business fields
-	"video_name", "script_text", "spec", "output",
+	"video_name", "script_text",
 	"render_manifest", "manifest_ref", "manifest_sha256",
 	"render_plan_json", "render_plan_sha256",
 	"compiled_render_plan_json", "compiled_render_plan_sha256",
@@ -61,7 +61,6 @@ var CanonicalTopLevelKeys = []string{
 	"voiceover_paths",
 	"layers",
 	"items", // Step 2/8: items[].role scene/clip contract (worker payload layer)
-	"audio_tracks",
 	"video_metadata",
 	"audio_language_for_srt",
 	"video_mode", "effect", "orientation", "output_path",
@@ -201,7 +200,7 @@ func ValidatePayload(payload map[string]interface{}) error {
 	}
 
 	// Rule 4 — array-shaped canonical fields.
-	arrayFields := []string{"scenes", "voiceover_paths", "scene_image_paths", "layers", "items", "audio_tracks"}
+	arrayFields := []string{"scenes", "voiceover_paths", "scene_image_paths", "layers", "items"}
 
 	for _, field := range arrayFields {
 		v, ok := payload[field]
@@ -214,7 +213,7 @@ func ValidatePayload(payload map[string]interface{}) error {
 		}
 	}
 
-	for _, field := range []string{"video_metadata", "spec", "output"} {
+	for _, field := range []string{"video_metadata"} {
 		if v, ok := payload[field]; ok && v != nil {
 			if _, ok := v.(map[string]interface{}); !ok {
 				return fmt.Errorf("%w: %q must be an object (got %T)",

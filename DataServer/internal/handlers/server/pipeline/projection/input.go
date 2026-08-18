@@ -13,8 +13,6 @@ type SubmissionInput struct {
 	VideoMode          string
 	VideoName          string
 	ScriptText         string
-	Spec               map[string]interface{}
-	Output             *OutputInput
 	RenderManifest     map[string]interface{}
 	ManifestRef        map[string]interface{}
 	ManifestSHA256     string
@@ -22,16 +20,9 @@ type SubmissionInput struct {
 	LegacyVoiceovers   []string
 	Scenes             []SceneInput
 	Layers             []LayerInput
-	AudioTracks        []AudioTrackInput
+	VisualReplacements []VisualReplacementInput
 	DeliveryPlan       []RawDeliveryPlanEntry
 	RetryBudgetDefault int
-}
-
-type OutputInput struct {
-	Width  int
-	Height int
-	FPS    int
-	Format string
 }
 
 type SceneInput struct {
@@ -92,17 +83,18 @@ type LayerInput struct {
 	Animation       string
 }
 
-type AudioTrackInput struct {
+// VisualReplacementInput is one already-composited video segment that
+// replaces the base visual timeline over an absolute interval. It carries
+// the replacement's asset identity (asset_id / url / sha256) and its
+// timeline binding; no compositing semantics reach the renderer.
+type VisualReplacementInput struct {
+	ReplacementID   string
 	AssetID         string
-	SourceURL       string
-	Role            string
-	Volume          float64
-	StartTimeOffset float64
-	DurationSeconds float64
-	Loop            bool
-	FadeInSeconds   float64
-	FadeOutSeconds  float64
-	DuckingEnabled  bool
+	URL             string
+	SHA256          string
+	TimelineStartUS int64
+	TimelineEndUS   int64
+	ProfileID       string
 }
 
 // BuildRawPayload constructs the complete raw canonical payload from the
@@ -117,8 +109,6 @@ func BuildRawPayload(input SubmissionInput) map[string]interface{} {
 		VideoMode:          input.VideoMode,
 		VideoName:          input.VideoName,
 		ScriptText:         input.ScriptText,
-		Spec:               input.Spec,
-		Output:             outputToMap(input.Output),
 		RenderManifest:     input.RenderManifest,
 		ManifestRef:        input.ManifestRef,
 		ManifestSHA256:     input.ManifestSHA256,
@@ -188,21 +178,27 @@ func BuildRawPayload(input SubmissionInput) map[string]interface{} {
 		}
 		payload["layers"] = layers
 	}
-	if len(input.AudioTracks) > 0 {
-		audioTracks := make([]interface{}, 0, len(input.AudioTracks))
-		for _, track := range input.AudioTracks {
-			audioTracks = append(audioTracks, audioTrackToMap(track))
+	if len(input.VisualReplacements) > 0 {
+		visualReplacements := make([]interface{}, 0, len(input.VisualReplacements))
+		for _, r := range input.VisualReplacements {
+			entry := map[string]interface{}{
+				"replacement_id":    strings.TrimSpace(r.ReplacementID),
+				"asset_id":          strings.TrimSpace(r.AssetID),
+				"timeline_start_us": r.TimelineStartUS,
+				"timeline_end_us":   r.TimelineEndUS,
+				"profile_id":        strings.TrimSpace(r.ProfileID),
+			}
+			if url := strings.TrimSpace(r.URL); url != "" {
+				entry["url"] = url
+			}
+			if r.SHA256 != "" {
+				entry["sha256"] = r.SHA256
+			}
+			visualReplacements = append(visualReplacements, entry)
 		}
-		payload["audio_tracks"] = audioTracks
+		payload["visual_replacements"] = visualReplacements
 	}
 	return payload
-}
-
-func outputToMap(output *OutputInput) map[string]interface{} {
-	if output == nil {
-		return nil
-	}
-	return map[string]interface{}{"width": output.Width, "height": output.Height, "fps": output.FPS, "format": output.Format}
 }
 
 func clipToMap(input *ClipInput) map[string]interface{} {
@@ -282,41 +278,6 @@ func subtitlesToMap(input *SubtitlesInput) map[string]interface{} {
 	}
 	if input.Language != "" {
 		out["language"] = input.Language
-	}
-	return out
-}
-
-func audioTrackToMap(input AudioTrackInput) map[string]interface{} {
-	out := map[string]interface{}{}
-	if trimmed := strings.TrimSpace(input.SourceURL); trimmed != "" {
-		out["source_url"] = trimmed
-	}
-	if input.AssetID != "" {
-		out["asset_id"] = input.AssetID
-	}
-	if input.Role != "" {
-		out["role"] = input.Role
-	}
-	if input.Volume > 0 {
-		out["volume"] = input.Volume
-	}
-	if input.StartTimeOffset > 0 {
-		out["start_time_offset"] = input.StartTimeOffset
-	}
-	if input.DurationSeconds > 0 {
-		out["duration_seconds"] = input.DurationSeconds
-	}
-	if input.Loop {
-		out["loop"] = true
-	}
-	if input.FadeInSeconds > 0 {
-		out["fade_in_seconds"] = input.FadeInSeconds
-	}
-	if input.FadeOutSeconds > 0 {
-		out["fade_out_seconds"] = input.FadeOutSeconds
-	}
-	if input.DuckingEnabled {
-		out["ducking_enabled"] = true
 	}
 	return out
 }

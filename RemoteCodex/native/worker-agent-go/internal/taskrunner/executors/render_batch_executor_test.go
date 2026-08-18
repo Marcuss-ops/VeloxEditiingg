@@ -561,6 +561,99 @@ func TestRenderBatch_V2PlanHasNoLocalPaths(t *testing.T) {
 	}
 }
 
+// TestRenderBatch_StaysHealthyAfterReplacementRejections pins plan §18
+// ("worker health after rejected job = HEALTHY"): a rejected prepared-
+// replacement job must never crash, wedge, or corrupt the worker. Each
+// media-level rejection is a clean typed failure (nil error, no panic, no
+// published artifact), and the SAME executor instance still succeeds on the
+// next valid job.
+//
+// The master-side VISUAL_REPLACEMENT_* codes (overlap / invalid range /
+// out-of-bounds / asset identity) are rejected at normalize time with a 422
+// and therefore never reach the worker by construction; the worker-side
+// replacement-media rejections surface as COPY_ONLY_VIDEO_INCOMPATIBLE /
+// FINAL_AUDIO_INVALID, which this test drives through the real probe seam
+// (the same seam ValidateVisualReplacementMedia is intended to feed).
+func TestRenderBatch_StaysHealthyAfterReplacementRejections(t *testing.T) {
+	runner := &batchFakeFFmpegRunner{}
+	exec := NewRenderBatch(runner, t.TempDir())
+	batch := exec.(*renderBatchExecutor)
+	ctx := runtimeassets.WithBindings(context.Background(), batchBindings(t))
+
+	validAudio := func() publisher.MediaProbe {
+		return publisher.MediaProbe{HasAudio: true, AudioTrackCount: 1, AudioCodec: "aac", AudioSampleRateHz: 48_000, AudioChannels: 2, DurationSec: 2}
+	}
+
+	rejections := []struct {
+		name     string
+		probe    func(context.Context, string) (publisher.MediaProbe, error)
+		wantCode string
+	}{
+		{
+			name: "replacement video signature mismatch",
+			probe: func(_ context.Context, path string) (publisher.MediaProbe, error) {
+				if strings.Contains(path, "audio-master-001") {
+					return validAudio(), nil
+				}
+				probe := batchVideoProbe(2)
+				probe.VideoCodec = "h265"
+				return probe, nil
+			},
+			wantCode: "COPY_ONLY_VIDEO_INCOMPATIBLE",
+		},
+		{
+			name: "replacement duration mismatch",
+			probe: func(_ context.Context, path string) (publisher.MediaProbe, error) {
+				if strings.Contains(path, "audio-master-001") {
+					return validAudio(), nil
+				}
+				return batchVideoProbe(4.2), nil // plan declares 2 s
+			},
+			wantCode: "COPY_ONLY_VIDEO_INCOMPATIBLE",
+		},
+		{
+			name: "final audio contract mismatch",
+			probe: func(_ context.Context, _ string) (publisher.MediaProbe, error) {
+				return publisher.MediaProbe{HasAudio: true, AudioTrackCount: 1, AudioCodec: "mp3", AudioSampleRateHz: 44_100, AudioChannels: 1, DurationSec: 2}, nil
+			},
+			wantCode: "FINAL_AUDIO_INVALID",
+		},
+	}
+
+	for _, tc := range rejections {
+		batch.probe = tc.probe
+		result, err := batch.Execute(ctx, nil, batchTaskSpec(t, "job-reject-"+tc.name))
+		if err != nil {
+			t.Fatalf("%s: Execute returned error (rejections must surface in the result, never crash the worker): %v", tc.name, err)
+		}
+		if result.Status != "failed" || result.ErrorCode != tc.wantCode {
+			t.Fatalf("%s: result = %+v; want failed/%s", tc.name, result, tc.wantCode)
+		}
+		if len(result.Outputs) != 0 {
+			t.Fatalf("%s: rejected job published outputs: %+v", tc.name, result.Outputs)
+		}
+	}
+
+	// Worker stays healthy: the same executor instance still processes a
+	// valid replacement job successfully after every rejection above.
+	batch.probe = func(_ context.Context, path string) (publisher.MediaProbe, error) {
+		if strings.Contains(path, "audio-master-001") {
+			return validAudio(), nil
+		}
+		return batchVideoProbe(2), nil
+	}
+	result, err := batch.Execute(ctx, nil, batchTaskSpec(t, "job-after-rejections"))
+	if err != nil {
+		t.Fatalf("Execute after rejections returned error: %v", err)
+	}
+	if result.Status != "succeeded" {
+		t.Fatalf("worker did not recover after rejections: %+v", result)
+	}
+	if len(result.Outputs) != 1 {
+		t.Fatalf("post-rejection valid job outputs = %+v, want 1", result.Outputs)
+	}
+}
+
 func TestRenderBatch_RoutesFinalOutputThroughStorageResolver(t *testing.T) {
 	runner := &batchFakeFFmpegRunner{}
 	exec := NewRenderBatch(runner, t.TempDir())

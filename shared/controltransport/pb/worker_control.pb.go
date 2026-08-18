@@ -364,7 +364,6 @@ type Hello struct {
 	// can advertise older caps without rebuilding the proto).
 	//
 	//	"artifact.commit.v1"
-	//	"executor.hybrid.v1"
 	//	"task.output.declared.v1"
 	//	"artifact.upload.plan.v1"
 	//	"artifact.upload.completed.v1"

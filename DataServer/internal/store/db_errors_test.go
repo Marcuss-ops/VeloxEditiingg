@@ -104,7 +104,7 @@ func TestSQLiteStore_ClosedDBReturnsInfrastructure(t *testing.T) {
 		t.Fatalf("close store: %v", err)
 	}
 
-	_, err := db.GetJobDelivery(context.Background(), "delivery-closed-db")
+	_, err := db.Delivery().GetJobDelivery(context.Background(), "delivery-closed-db")
 	if err == nil {
 		t.Fatal("GetJobDelivery on closed DB returned nil error")
 	}

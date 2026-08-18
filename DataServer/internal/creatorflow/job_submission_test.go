@@ -191,12 +191,9 @@ func TestCanonicalJobSubmitter_SubmitScratchEnqueuesFromScratch(t *testing.T) {
 	submitter := NewCanonicalJobSubmitter(rs).WithIntakeSourceRecorder(recorder)
 
 	payload := map[string]interface{}{
-		"video_name":  "scratch.mp4",
-		"script_text": "from scratch",
-		"audio_tracks": []interface{}{map[string]interface{}{
-			"source_url": "velox-asset://voice-1",
-			"role":       "voiceover",
-		}},
+		"video_name":      "scratch.mp4",
+		"script_text":     "from scratch",
+		"voiceover_paths": []interface{}{"velox-asset://voice-1"},
 		"scenes": []interface{}{map[string]interface{}{
 			"scene_id": "scene-1",
 			"clip": map[string]interface{}{

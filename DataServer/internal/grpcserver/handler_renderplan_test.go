@@ -4,91 +4,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"testing"
 
-	"velox-server/internal/renderplan"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
 	"velox-shared/contract"
 )
-
-var errFakeCompile = errors.New("fake compile failure")
-
-// fakePlanCompiler implements the renderPlanCompiler seam for handler tests.
-type fakePlanCompiler struct {
-	compileErr    error
-	returnNilPlan bool
-	wrongIdentity bool
-	calls         int
-	lastAttemptID string
-}
-
-func (f *fakePlanCompiler) Compile(_ context.Context, payload map[string]interface{}, attemptID string) (*renderplan.CompiledRenderPlan, error) {
-	f.calls++
-	f.lastAttemptID = attemptID
-	if f.compileErr != nil {
-		return nil, f.compileErr
-	}
-	if f.returnNilPlan {
-		return nil, nil
-	}
-	jobID := "job-plan"
-	if f.wrongIdentity {
-		jobID = "different-job"
-	}
-	return &renderplan.CompiledRenderPlan{
-		PlanVersion:   renderplan.PlanVersion,
-		JobID:         jobID,
-		AttemptID:     attemptID,
-		DurationMS:    1000,
-		MediaContract: renderplan.MediaContract{VideoCodec: "h264", Width: 1920, Height: 1080, FpsNum: 30, FpsDen: 1},
-		Segments:      []renderplan.Segment{{SegmentID: "seg_000", AssetID: "asset-a", TimelineStartMS: 0}},
-	}, nil
-}
-
-func TestStampAttemptRenderPlan_PersistsPlanIdentity(t *testing.T) {
-	handler := NewHandler(nil, nil, nil, nil, nil, nil, nil, &HandlerConfig{PushMode: true})
-	compiler := &fakePlanCompiler{}
-	handler.SetRenderPlanCompiler(compiler)
-	attempts := &spoofStubAttemptRepo{}
-	handler.taskAttemptRepo = attempts
-
-	tws := &taskgraph.TaskWithSpec{
-		Task:        taskgraph.Task{ID: "task-plan", JobID: "job-plan"},
-		SpecPayload: map[string]interface{}{"job_id": "job-plan", "video_name": "plan test"},
-	}
-	attempt := &taskattempts.TaskAttempt{ID: "attempt-plan", TaskID: "task-plan", JobID: "job-plan", AttemptNumber: 1}
-
-	planJSON, planSHA := handler.compileAndStampAttemptRenderPlan(context.Background(), tws, attempt)
-
-	if attempts.upsertPlanCalls != 1 {
-		t.Fatalf("upsert calls = %d, want 1", attempts.upsertPlanCalls)
-	}
-	if attempts.lastPlanVersion != renderplan.PlanVersion {
-		t.Fatalf("plan version = %d, want %d", attempts.lastPlanVersion, renderplan.PlanVersion)
-	}
-	if attempts.lastPlanSHA256 == "" {
-		t.Fatal("plan_sha256 must be non-empty")
-	}
-	if attempts.lastPlanJSON == "" {
-		t.Fatal("render_plan_json must be non-empty")
-	}
-	if compiler.calls != 1 || compiler.lastAttemptID != "attempt-plan" {
-		t.Fatalf("compiler calls = %d (attempt %q), want 1 for attempt-plan", compiler.calls, compiler.lastAttemptID)
-	}
-	// The returned document must be the persisted canonical JSON and the
-	// returned hash must match it — the same pair delivered in the offer.
-	if planJSON == "" || planJSON != attempts.lastPlanJSON {
-		t.Fatalf("returned planJSON = %q; want persisted canonical %q", planJSON, attempts.lastPlanJSON)
-	}
-	if planSHA == "" || planSHA != attempts.lastPlanSHA256 {
-		t.Fatalf("returned planSHA = %q; want persisted %q", planSHA, attempts.lastPlanSHA256)
-	}
-	if planSHA != renderplan.HashCanonical([]byte(planJSON)) {
-		t.Fatal("returned planSHA must be SHA256 of the returned canonical JSON")
-	}
-}
 
 func TestStampAttemptRenderPlan_PersistsStrictV2Payload(t *testing.T) {
 	handler := NewHandler(nil, nil, nil, nil, nil, nil, nil, &HandlerConfig{PushMode: true})
@@ -124,61 +45,20 @@ func TestStampAttemptRenderPlan_PersistsStrictV2Payload(t *testing.T) {
 	}
 }
 
-func TestStampAttemptRenderPlan_NilCompilerSkips(t *testing.T) {
+// TestStampAttemptRenderPlan_NoCompiledV2Skips pins the retirement of the
+// legacy V1 RenderPlanCompiler: a task without a pre-compiled V2 envelope is
+// never re-compiled at claim time, so no plan identity is stamped and the
+// worker offer is not blocked.
+func TestStampAttemptRenderPlan_NoCompiledV2Skips(t *testing.T) {
 	handler := NewHandler(nil, nil, nil, nil, nil, nil, nil, &HandlerConfig{PushMode: true})
 	attempts := &spoofStubAttemptRepo{}
 	handler.taskAttemptRepo = attempts
 	if planJSON, planSHA := handler.compileAndStampAttemptRenderPlan(context.Background(),
-		&taskgraph.TaskWithSpec{SpecPayload: map[string]interface{}{"job_id": "job-x"}},
+		&taskgraph.TaskWithSpec{Task: taskgraph.Task{ID: "task-x", JobID: "job-x"}, SpecPayload: map[string]interface{}{"job_id": "job-x"}},
 		&taskattempts.TaskAttempt{ID: "attempt-x"}); planJSON != "" || planSHA != "" {
-		t.Fatalf("nil compiler returned %q/%q; want empty/empty", planJSON, planSHA)
+		t.Fatalf("no-V2 payload returned %q/%q; want empty/empty", planJSON, planSHA)
 	}
 	if attempts.upsertPlanCalls != 0 {
-		t.Fatalf("upsert calls = %d, want 0 (nil compiler)", attempts.upsertPlanCalls)
-	}
-}
-
-func TestStampAttemptRenderPlan_CompileErrorSkips(t *testing.T) {
-	handler := NewHandler(nil, nil, nil, nil, nil, nil, nil, &HandlerConfig{PushMode: true})
-	handler.SetRenderPlanCompiler(&fakePlanCompiler{compileErr: errFakeCompile})
-	attempts := &spoofStubAttemptRepo{}
-	handler.taskAttemptRepo = attempts
-	if planJSON, planSHA := handler.compileAndStampAttemptRenderPlan(context.Background(),
-		&taskgraph.TaskWithSpec{SpecPayload: map[string]interface{}{"job_id": "job-x"}},
-		&taskattempts.TaskAttempt{ID: "attempt-x"}); planJSON != "" || planSHA != "" {
-		t.Fatalf("compile error returned %q/%q; want empty/empty", planJSON, planSHA)
-	}
-	if attempts.upsertPlanCalls != 0 {
-		t.Fatalf("upsert calls = %d, want 0 (compile error is best-effort)", attempts.upsertPlanCalls)
-	}
-}
-
-func TestStampAttemptRenderPlan_NilPlanSkips(t *testing.T) {
-	handler := NewHandler(nil, nil, nil, nil, nil, nil, nil, &HandlerConfig{PushMode: true})
-	handler.SetRenderPlanCompiler(&fakePlanCompiler{returnNilPlan: true})
-	attempts := &spoofStubAttemptRepo{}
-	handler.taskAttemptRepo = attempts
-	if planJSON, planSHA := handler.compileAndStampAttemptRenderPlan(context.Background(),
-		&taskgraph.TaskWithSpec{Task: taskgraph.Task{ID: "task-plan", JobID: "job-plan"}},
-		&taskattempts.TaskAttempt{ID: "attempt-plan"}); planJSON != "" || planSHA != "" {
-		t.Fatalf("nil plan returned %q/%q; want empty/empty", planJSON, planSHA)
-	}
-	if attempts.upsertPlanCalls != 0 {
-		t.Fatalf("upsert calls = %d, want 0 (nil plan)", attempts.upsertPlanCalls)
-	}
-}
-
-func TestStampAttemptRenderPlan_WrongIdentitySkips(t *testing.T) {
-	handler := NewHandler(nil, nil, nil, nil, nil, nil, nil, &HandlerConfig{PushMode: true})
-	handler.SetRenderPlanCompiler(&fakePlanCompiler{wrongIdentity: true})
-	attempts := &spoofStubAttemptRepo{}
-	handler.taskAttemptRepo = attempts
-	if planJSON, planSHA := handler.compileAndStampAttemptRenderPlan(context.Background(),
-		&taskgraph.TaskWithSpec{Task: taskgraph.Task{ID: "task-plan", JobID: "job-plan"}},
-		&taskattempts.TaskAttempt{ID: "attempt-plan"}); planJSON != "" || planSHA != "" {
-		t.Fatalf("wrong identity returned %q/%q; want empty/empty", planJSON, planSHA)
-	}
-	if attempts.upsertPlanCalls != 0 {
-		t.Fatalf("upsert calls = %d, want 0 (wrong identity)", attempts.upsertPlanCalls)
+		t.Fatalf("upsert calls = %d, want 0 (legacy V1 compile retired)", attempts.upsertPlanCalls)
 	}
 }

@@ -66,8 +66,8 @@ type JobPayloadV2 struct {
 	// Business fields
 	//
 	// Authoring-input vs compiled-authority boundary (audit 2026-08): the
-	// map/slice fields below (Output, Scenes, Layers, Items, AudioTracks,
-	// VideoMetadata) are AUTHORING INPUT — the uncompiled producer envelope
+	// map/slice fields below (Scenes, Layers, Items, VideoMetadata) are
+	// AUTHORING INPUT — the uncompiled producer envelope
 	// consumed by the compilers (shared/contract/rendercompiler and
 	// DataServer/internal/renderplan) when `render_manifest` is absent.
 	// They are NOT duplicates of the render manifest: render_manifest is
@@ -82,8 +82,6 @@ type JobPayloadV2 struct {
 	// only typed authority for the compiled form is rendermanifest.Manifest.
 	VideoName        string         `json:"video_name"`
 	ScriptText       string         `json:"script_text"`
-	Spec             map[string]any `json:"spec,omitempty"`
-	Output           map[string]any `json:"output,omitempty"`          // authoring input (canvas/output dims), NOT rendermanifest.Output
 	RenderManifest   map[string]any `json:"render_manifest,omitempty"` // compiled authority (rendermanifest.Manifest)
 	ManifestRef      map[string]any `json:"manifest_ref,omitempty"`
 	ManifestSHA256   string         `json:"manifest_sha256,omitempty"`
@@ -93,25 +91,32 @@ type JobPayloadV2 struct {
 	// They are deliberately separate fields from the legacy render-plan
 	// values so the enqueue normalizer can preserve the exact V2 bytes and
 	// hash without compiling or re-serializing them.
-	CompiledRenderPlanJSON   string           `json:"compiled_render_plan_json,omitempty"`
-	CompiledRenderPlanSHA256 string           `json:"compiled_render_plan_sha256,omitempty"`
-	ScenesJSON               string           `json:"scenes_json,omitempty"`
-	Scenes                   []map[string]any `json:"scenes,omitempty"`       // authoring input (compiled into manifest tracks)
-	Layers                   []map[string]any `json:"layers,omitempty"`       // authoring input (compiled into manifest layers)
-	Items                    []map[string]any `json:"items,omitempty"`        // authoring input (compiled clip/stock timeline)
-	AudioTracks              []map[string]any `json:"audio_tracks,omitempty"` // authoring input (global audio layers; NOT manifest tracks)
-	VoiceoverPaths           []string         `json:"voiceover_paths,omitempty"`
-	AudioLanguage            string           `json:"audio_language_for_srt,omitempty"`
-	VideoMode                string           `json:"video_mode,omitempty"`
-	Effect                   string           `json:"effect,omitempty"`
-	Orientation              string           `json:"orientation,omitempty"`
-	OutputPath               string           `json:"output_path,omitempty"`
-	DriveOutput              string           `json:"drive_output_folder,omitempty"`
-	ChannelID                string           `json:"channel_id,omitempty"`
-	OutputVideoID            string           `json:"output_video_id,omitempty"`
-	SceneImagePaths          []string         `json:"scene_image_paths,omitempty"`
-	ImageSourceMap           string           `json:"image_source_map,omitempty"`
-	VideoMetadata            map[string]any   `json:"video_metadata,omitempty"`
+	CompiledRenderPlanJSON   string                 `json:"compiled_render_plan_json,omitempty"`
+	CompiledRenderPlanSHA256 string                 `json:"compiled_render_plan_sha256,omitempty"`
+	ScenesJSON               string                 `json:"scenes_json,omitempty"`
+	Scenes                   []map[string]any       `json:"scenes,omitempty"` // authoring input (compiled into manifest tracks)
+	Layers                   []rendermanifest.Layer `json:"layers,omitempty"` // authoring input (compiled into manifest layers)
+	Items                    []map[string]any       `json:"items,omitempty"`  // authoring input (compiled clip/stock timeline)
+	VoiceoverPaths           []string               `json:"voiceover_paths,omitempty"`
+	AudioLanguage            string                 `json:"audio_language_for_srt,omitempty"`
+	VideoMode                string                 `json:"video_mode,omitempty"`
+	Effect                   string                 `json:"effect,omitempty"`
+	Orientation              string                 `json:"orientation,omitempty"`
+	OutputPath               string                 `json:"output_path,omitempty"`
+	DriveOutput              string                 `json:"drive_output_folder,omitempty"`
+	ChannelID                string                 `json:"channel_id,omitempty"`
+	OutputVideoID            string                 `json:"output_video_id,omitempty"`
+	SceneImagePaths          []string               `json:"scene_image_paths,omitempty"`
+	ImageSourceMap           string                 `json:"image_source_map,omitempty"`
+	VideoMetadata            map[string]any         `json:"video_metadata,omitempty"`
+	// Canvas is the typed single source of the output timeline geometry,
+	// derived from the video_metadata canvas keys (width/height/fps_num/
+	// fps_den/pixel_format) at the boundary. The render compiler reads
+	// Canvas (not the untyped VideoMetadata map) when render_manifest is
+	// absent. It is a derived view (json:"-"), never a top-level wire key:
+	// ToMap still emits video_metadata from the compatibility map, and the
+	// wire shape is unchanged.
+	Canvas rendermanifest.Canvas `json:"-"`
 
 	// Numeric metadata (sent as JSON numbers)
 	Priority          int     `json:"priority"`
@@ -202,15 +207,10 @@ func NewJobPayloadV2(raw map[string]any) *JobPayloadV2 {
 	if p.JobType == "" {
 		p.JobType = "process_video"
 	}
-	if spec, ok := raw["spec"].(map[string]any); ok {
-		p.Spec = cloneObject(spec)
-	}
-	if output, ok := raw["output"].(map[string]any); ok {
-		p.Output = cloneObject(output)
-	}
 	if metadata, ok := raw["video_metadata"].(map[string]any); ok {
 		p.VideoMetadata = cloneObject(metadata)
 	}
+	p.Canvas = rendermanifest.CanvasFromMap(objectMap(raw["video_metadata"]), rendermanifest.DefaultCanvas())
 	if manifest, ok := raw["render_manifest"].(map[string]any); ok {
 		p.RenderManifest = cloneObject(manifest)
 	}
@@ -237,13 +237,10 @@ func NewJobPayloadV2(raw map[string]any) *JobPayloadV2 {
 		}
 	}
 	if layersVal, ok := raw["layers"]; ok {
-		p.Layers = normalizeObjectList(layersVal)
+		p.Layers = normalizeLayers(layersVal)
 	}
 	if itemsVal, ok := raw["items"]; ok {
 		p.Items = normalizeObjectList(itemsVal)
-	}
-	if audioTracksVal, ok := raw["audio_tracks"]; ok {
-		p.AudioTracks = normalizeObjectList(audioTracksVal)
 	}
 	if p.JobID == "" {
 		p.JobID = "scriptimg_" + uuid.NewString()
@@ -362,12 +359,6 @@ func (p *JobPayloadV2) ToMap() (map[string]any, error) {
 	if p.ScenesJSON != "" {
 		out["scenes_json"] = p.ScenesJSON
 	}
-	if len(p.Spec) > 0 {
-		out["spec"] = cloneObject(p.Spec)
-	}
-	if len(p.Output) > 0 {
-		out["output"] = cloneObject(p.Output)
-	}
 	if p.TemplateID != "" {
 		out["template_id"] = p.TemplateID
 	}
@@ -399,13 +390,14 @@ func (p *JobPayloadV2) ToMap() (map[string]any, error) {
 		out["scenes"] = p.Scenes
 	}
 	if len(p.Layers) > 0 {
-		out["layers"] = p.Layers
+		layers, err := rendermanifest.LayersToMaps(p.Layers)
+		if err != nil {
+			return nil, fmt.Errorf("contract: layers: %w", err)
+		}
+		out["layers"] = layers
 	}
 	if len(p.Items) > 0 {
 		out["items"] = p.Items
-	}
-	if len(p.AudioTracks) > 0 {
-		out["audio_tracks"] = p.AudioTracks
 	}
 	if len(p.VoiceoverPaths) > 0 {
 		out["voiceover_paths"] = p.VoiceoverPaths
@@ -549,6 +541,11 @@ func cloneObject(in map[string]any) map[string]any {
 	return out
 }
 
+func objectMap(value any) map[string]any {
+	m, _ := value.(map[string]any)
+	return m
+}
+
 func normalizeObjectList(value any) []map[string]any {
 	switch items := value.(type) {
 	case []map[string]any:
@@ -562,6 +559,34 @@ func normalizeObjectList(value any) []map[string]any {
 		for _, item := range items {
 			if object, ok := item.(map[string]any); ok {
 				out = append(out, cloneObject(object))
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+// normalizeLayers converts the authoring-input layers value ([]any or
+// []map[string]any from JSON, or an already-typed slice) into the typed
+// []rendermanifest.Layer field. Each map is converted through
+// rendermanifest.LayerFromMap, which owns the layer shape boundary; there is
+// no second PayloadLayer type.
+func normalizeLayers(value any) []rendermanifest.Layer {
+	switch items := value.(type) {
+	case []rendermanifest.Layer:
+		return append([]rendermanifest.Layer(nil), items...)
+	case []map[string]any:
+		out := make([]rendermanifest.Layer, 0, len(items))
+		for index, item := range items {
+			out = append(out, rendermanifest.LayerFromMap(item, index))
+		}
+		return out
+	case []any:
+		out := make([]rendermanifest.Layer, 0, len(items))
+		for index, item := range items {
+			if object, ok := item.(map[string]any); ok {
+				out = append(out, rendermanifest.LayerFromMap(object, index))
 			}
 		}
 		return out

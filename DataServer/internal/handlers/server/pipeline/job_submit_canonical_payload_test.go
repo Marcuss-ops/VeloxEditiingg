@@ -147,9 +147,6 @@ func TestCanonicalPayloadParity_PipelinePreservesCanonicalKeys(t *testing.T) {
 		Layers: []SubmitLayer{{
 			ID: "layer-parity", Type: "text", Role: "title", Text: "Parity",
 		}},
-		AudioTracks: []SubmitAudioTrack{{
-			SourceURL: "velox-asset://audio/parity.mp3", Role: "music", Volume: 1,
-		}},
 		DeliveryPlan: []SubmitDeliveryPlanEntry{{
 			DestinationID: "drive", Priority: 1, RetryBudget: intPtr(3),
 			Metadata: map[string]interface{}{"folder_id": "folder-parity"},

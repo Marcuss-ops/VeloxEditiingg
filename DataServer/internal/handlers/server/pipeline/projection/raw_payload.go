@@ -19,8 +19,6 @@ type RawPayloadInput struct {
 	VideoMode          string
 	VideoName          string
 	ScriptText         string
-	Spec               map[string]interface{}
-	Output             map[string]interface{}
 	RenderManifest     map[string]interface{}
 	ManifestRef        map[string]interface{}
 	ManifestSHA256     string
@@ -67,12 +65,6 @@ func BuildRawPayloadEnvelope(input RawPayloadInput) map[string]interface{} {
 	if input.ScriptText != "" {
 		payload["script_text"] = input.ScriptText
 	}
-	if len(input.Spec) > 0 {
-		payload["spec"] = input.Spec
-	}
-	if input.Output != nil {
-		payload["output"] = input.Output
-	}
 	if input.RenderManifest != nil {
 		payload["render_manifest"] = input.RenderManifest
 	}
@@ -84,14 +76,7 @@ func BuildRawPayloadEnvelope(input RawPayloadInput) map[string]interface{} {
 	}
 
 	if len(input.LegacyVoiceovers) > 0 {
-		audioTracks := make([]interface{}, 0, len(input.LegacyVoiceovers))
-		for _, sourceURL := range input.LegacyVoiceovers {
-			audioTracks = append(audioTracks, map[string]interface{}{
-				"source_url": sourceURL,
-				"role":       "voiceover",
-			})
-		}
-		payload["audio_tracks"] = audioTracks
+		payload["voiceover_paths"] = input.LegacyVoiceovers
 	}
 	if value := strings.TrimSpace(input.PlacementPin); value != "" {
 		payload["_placement_pin_worker_id"] = value

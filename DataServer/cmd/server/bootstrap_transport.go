@@ -127,9 +127,6 @@ func startTransports(cfg *config.Config, c *appComponents) (*transportBundle, er
 				grpcHandler.SetIngestionSvc(c.tasks.IngestionSvc)
 				logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] installed TaskReportIngestionService on gRPC handler (feat/task-report-ingestion)")
 			}
-			// Fase D: stamp plan_version/plan_sha256 on attempts at claim
-			// time via the canonical master-side RenderPlanCompiler.
-			wireRenderPlanCompiler(grpcHandler, c)
 			// Scorecard v1: wire the placement rejection counter and
 			// worker resource sink onto the gRPC handler so placement
 			// rejections and heartbeat resource counters land on the

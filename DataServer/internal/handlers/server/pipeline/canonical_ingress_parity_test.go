@@ -48,13 +48,9 @@ func TestCanonicalIngressParity(t *testing.T) {
 			StartSeconds:    0,
 			DurationSeconds: 5,
 		}},
-		AudioTracks: []SubmitAudioTrack{{
-			SourceURL:       "velox-asset://audio/parity.mp3",
-			Role:            "background_music",
-			Volume:          0.12,
-			StartTimeOffset: 0,
-			DurationSeconds: 5,
-		}},
+		Spec: map[string]interface{}{
+			"voiceover_paths": []interface{}{"velox-asset://voiceover/parity.mp3"},
+		},
 		DeliveryPlan: []SubmitDeliveryPlanEntry{{
 			DestinationID: "drive-parity",
 			Priority:      1,
@@ -73,7 +69,7 @@ func TestCanonicalIngressParity(t *testing.T) {
 	}
 	for _, key := range []string{
 		"video_name", "script_text", "scenes_json",
-		"audio_tracks", "layers",
+		"layers",
 	} {
 		if _, ok := apiPayload[key]; !ok {
 			t.Fatalf("API baseline is missing required common worker field %q", key)
@@ -132,7 +128,6 @@ func canonicalWorkerProjection(payload map[string]interface{}) map[string]interf
 		videoName       = "video_name"
 		scriptText      = "script_text"
 		scenesJSON      = "scenes_json"
-		audioTracks     = "audio_tracks"
 		layers          = "layers"
 		videoMetadata   = "video_metadata"
 		outputPath      = "output_path"
@@ -147,7 +142,7 @@ func canonicalWorkerProjection(payload map[string]interface{}) map[string]interf
 	)
 	projection := make(map[string]interface{})
 	for _, key := range []string{
-		videoName, scriptText, scenesJSON, audioTracks, layers, videoMetadata, outputPath, driveOutput,
+		videoName, scriptText, scenesJSON, layers, videoMetadata, outputPath, driveOutput,
 
 		audioLanguage, videoMode, sceneImagePaths, imageSourceMap,
 		clips, images,

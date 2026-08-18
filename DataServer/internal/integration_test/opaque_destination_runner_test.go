@@ -55,7 +55,7 @@ func TestIntegration_DeliveryRunnerForwardsOpaqueDestinationID(t *testing.T) {
 		deliveryID            = "delivery-runner-opaque"
 		publicationID         = "publication-runner-opaque"
 	)
-	if err := db.InsertDeliveryDestination(&store.DeliveryDestination{
+	if err := db.Delivery().InsertDeliveryDestination(&store.DeliveryDestination{
 		DestinationID:         localDestinationID,
 		Provider:              "social_gateway",
 		ExternalDestinationID: externalDestinationID,
@@ -119,7 +119,7 @@ func TestIntegration_DeliveryRunnerForwardsOpaqueDestinationID(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("InsertArtifact: %v", err)
 	}
-	if err := db.InsertJobDelivery(&store.JobDelivery{
+	if err := db.Delivery().InsertJobDelivery(&store.JobDelivery{
 		DeliveryID:     deliveryID,
 		ArtifactID:     artifactID,
 		DestinationID:  localDestinationID,
@@ -169,7 +169,7 @@ func TestIntegration_DeliveryRunnerForwardsOpaqueDestinationID(t *testing.T) {
 	// context, otherwise the final DB assertion can race the lease worker.
 	deadline := time.Now().Add(time.Second)
 	for {
-		row, queryErr := db.GetJobDelivery(context.Background(), deliveryID)
+		row, queryErr := db.Delivery().GetJobDelivery(context.Background(), deliveryID)
 		if queryErr == nil && row != nil && row.Status == "SUCCEEDED" && row.RemoteID == "runner-opaque-remote-final-1" {
 			break
 		}
@@ -201,7 +201,7 @@ func TestIntegration_DeliveryRunnerForwardsOpaqueDestinationID(t *testing.T) {
 		}
 	}
 
-	row, err := db.GetJobDelivery(context.Background(), deliveryID)
+	row, err := db.Delivery().GetJobDelivery(context.Background(), deliveryID)
 	if err != nil {
 		t.Fatalf("GetJobDelivery: %v", err)
 	}

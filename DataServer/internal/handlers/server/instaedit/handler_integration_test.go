@@ -106,7 +106,7 @@ func TestInstaEditBFF_EndToEnd(t *testing.T) {
 		Name:                  "E2E Destination",
 		Enabled:               true,
 	}
-	if err := db.InsertDeliveryDestination(dest); err != nil {
+	if err := db.Delivery().InsertDeliveryDestination(dest); err != nil {
 		t.Fatalf("seed destination: %v", err)
 	}
 

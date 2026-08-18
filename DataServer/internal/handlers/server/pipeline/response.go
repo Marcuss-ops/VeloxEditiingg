@@ -130,7 +130,7 @@ func (h *Handlers) buildPipelineRunProjection(ctx context.Context, pr *pipeliner
 			if clientID != "" {
 				deliveries, _ = h.store.ListJobDeliveriesByJobForClient(ctx, pr.VeloxJobID, clientID)
 			} else {
-				deliveries, _ = h.store.ListJobDeliveriesByJob(pr.VeloxJobID)
+				deliveries, _ = h.store.Delivery().ListJobDeliveriesByJob(pr.VeloxJobID)
 			}
 			if len(deliveries) > 0 {
 				d := deliveries[0]

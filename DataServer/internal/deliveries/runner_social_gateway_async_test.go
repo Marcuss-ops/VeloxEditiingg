@@ -51,7 +51,7 @@ func TestDeliveryRunnerSocialGatewayWaitsForRemotePublication(t *testing.T) {
 		deliveryID    = "delivery-social-gateway-async"
 	)
 	now := time.Now().UTC().Format(time.RFC3339)
-	if err := db.InsertDeliveryDestination(&store.DeliveryDestination{
+	if err := db.Delivery().InsertDeliveryDestination(&store.DeliveryDestination{
 		DestinationID:         destinationID,
 		Provider:              "social_gateway",
 		ExternalDestinationID: "external-social-destination",
@@ -74,7 +74,7 @@ func TestDeliveryRunnerSocialGatewayWaitsForRemotePublication(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.InsertJobDelivery(&store.JobDelivery{
+	if err := db.Delivery().InsertJobDelivery(&store.JobDelivery{
 		DeliveryID:     deliveryID,
 		ArtifactID:     artifactID,
 		DestinationID:  destinationID,
@@ -102,7 +102,7 @@ func TestDeliveryRunnerSocialGatewayWaitsForRemotePublication(t *testing.T) {
 		BackoffSchedule: []time.Duration{0},
 	}, registry, db.Delivery(), db, "social-gateway-async-runner")
 
-	leases, err := db.ClaimDeliveries(ctx, runner.identity, time.Minute, 1)
+	leases, err := db.Delivery().ClaimDeliveries(ctx, runner.identity, time.Minute, 1)
 	if err != nil || len(leases) != 1 {
 		t.Fatalf("first claim: %v leases=%d", err, len(leases))
 	}
@@ -110,7 +110,7 @@ func TestDeliveryRunnerSocialGatewayWaitsForRemotePublication(t *testing.T) {
 		t.Fatalf("first process: %v", err)
 	}
 
-	row, err := db.GetJobDelivery(ctx, deliveryID)
+	row, err := db.Delivery().GetJobDelivery(ctx, deliveryID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +134,7 @@ func TestDeliveryRunnerSocialGatewayWaitsForRemotePublication(t *testing.T) {
 		t.Fatal(err)
 	}
 	provider.remoteStatus = "published"
-	leases, err = db.ClaimDeliveries(ctx, runner.identity, time.Minute, 1)
+	leases, err = db.Delivery().ClaimDeliveries(ctx, runner.identity, time.Minute, 1)
 	if err != nil || len(leases) != 1 {
 		t.Fatalf("reconcile claim: %v leases=%d", err, len(leases))
 	}
@@ -142,7 +142,7 @@ func TestDeliveryRunnerSocialGatewayWaitsForRemotePublication(t *testing.T) {
 		t.Fatalf("reconcile process: %v", err)
 	}
 
-	row, err = db.GetJobDelivery(ctx, deliveryID)
+	row, err = db.Delivery().GetJobDelivery(ctx, deliveryID)
 	if err != nil {
 		t.Fatal(err)
 	}

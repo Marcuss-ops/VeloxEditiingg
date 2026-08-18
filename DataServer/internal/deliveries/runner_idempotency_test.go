@@ -51,7 +51,7 @@ func TestDeliveryRunnerPublishedShortCircuitSkipsGoogleWork(t *testing.T) {
 		VALUES (?, 'DELIVERING', 0, 3, ?, ?, ?)`, jobID, now, now, now); err != nil {
 		t.Fatalf("seed job: %v", err)
 	}
-	if err := db.InsertDeliveryDestination(&store.DeliveryDestination{
+	if err := db.Delivery().InsertDeliveryDestination(&store.DeliveryDestination{
 		DestinationID:         destinationID,
 		Provider:              "youtube",
 		ExternalDestinationID: "google-channel-opaque",
@@ -83,7 +83,7 @@ func TestDeliveryRunnerPublishedShortCircuitSkipsGoogleWork(t *testing.T) {
 		now, now); err != nil {
 		t.Fatalf("seed delivery plan: %v", err)
 	}
-	if err := db.InsertJobDelivery(&store.JobDelivery{
+	if err := db.Delivery().InsertJobDelivery(&store.JobDelivery{
 		DeliveryID:     deliveryID,
 		ArtifactID:     artifactID,
 		DestinationID:  destinationID,
@@ -111,7 +111,7 @@ func TestDeliveryRunnerPublishedShortCircuitSkipsGoogleWork(t *testing.T) {
 	registry.Register(provider)
 	runner := NewDeliveryRunner(DefaultRunnerConfig(), registry, db.Delivery(), db, "published-short-circuit-runner")
 
-	leases, err := db.ClaimDeliveries(context.Background(), "published-short-circuit-runner", 5*time.Minute, 1)
+	leases, err := db.Delivery().ClaimDeliveries(context.Background(), "published-short-circuit-runner", 5*time.Minute, 1)
 	if err != nil {
 		t.Fatalf("ClaimDeliveries: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestDeliveryRunnerPublishedShortCircuitSkipsGoogleWork(t *testing.T) {
 	if provider.credentialCalls != 0 || provider.providerCalls != 0 {
 		t.Fatalf("already-published target performed Google work: credential_calls=%d provider_calls=%d", provider.credentialCalls, provider.providerCalls)
 	}
-	row, err := db.GetJobDelivery(context.Background(), deliveryID)
+	row, err := db.Delivery().GetJobDelivery(context.Background(), deliveryID)
 	if err != nil {
 		t.Fatalf("GetJobDelivery: %v", err)
 	}

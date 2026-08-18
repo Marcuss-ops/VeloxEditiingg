@@ -58,9 +58,6 @@ func TestCreatorPushAndExternalSubmitConvergeToTheSameCanonicalContract(t *testi
 		Layers: []SubmitLayer{{
 			ID: "title", Type: "text", Role: "title", Text: "Equivalence",
 		}},
-		AudioTracks: []SubmitAudioTrack{{
-			SourceURL: "velox-asset://audio/equivalence.mp3", Role: "background_music", Volume: 0.2,
-		}},
 		DeliveryPlan: []SubmitDeliveryPlanEntry{{
 			DestinationID: "drive-equivalence", Priority: 1, RetryBudget: intPointer(3),
 		}},
@@ -120,9 +117,6 @@ func TestCreatorPushAndExternalSubmitConvergeToTheSameCanonicalContract(t *testi
 		},
 		"layers": []interface{}{
 			map[string]interface{}{"id": "title", "type": "text", "role": "title", "text": "Equivalence"},
-		},
-		"audio_tracks": []interface{}{
-			map[string]interface{}{"source_url": "velox-asset://audio/equivalence.mp3", "role": "background_music", "volume": 0.2},
 		},
 		"delivery_plan": []interface{}{
 			map[string]interface{}{"destination_id": "drive-equivalence", "priority": 1, "retry_budget": 3},

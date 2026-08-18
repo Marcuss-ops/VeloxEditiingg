@@ -5,9 +5,7 @@ package projection
 
 import (
 	"fmt"
-	"strings"
 
-	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/remoteengine"
 )
 
@@ -15,7 +13,9 @@ import (
 // remote-engine DTO and emits the renderer-only worker payload. Delivery and
 // publication control-plane fields are removed by the DTO projection.
 // rendererMode is supplied by the intake layer so this package does not depend
-// on pipeline recipe or request types.
+// on pipeline recipe or request types. The legacy clip_stock timeline
+// projection (BuildClipStockTimeline → items/audio_tracks for hybrid.v1) was
+// retired together with the hybrid.v1 worker pipeline.
 func ProjectWorkerPayload(rawPayload map[string]interface{}, rendererMode string) (map[string]interface{}, error) {
 	dto, err := remoteengine.ParseRemotePipelineResult(rawPayload)
 	if err != nil {
@@ -25,19 +25,7 @@ func ProjectWorkerPayload(rawPayload map[string]interface{}, rendererMode string
 	if projectionErr != nil {
 		return nil, fmt.Errorf("project canonical submission: %w", projectionErr)
 	}
-	preserveFields(workerPayload, rawPayload, "audio_tracks", "layers", "_placement_pin_worker_id")
-	if strings.EqualFold(rendererMode, "clip_stock") {
-		items, audioTracks, timelineErr := enqueue.BuildClipStockTimeline(rawPayload)
-		if timelineErr != nil {
-			return nil, fmt.Errorf("build clip-stock timeline: %w", timelineErr)
-		}
-		if len(items) > 0 {
-			workerPayload["items"] = items
-		}
-		if len(audioTracks) > 0 {
-			workerPayload["audio_tracks"] = audioTracks
-		}
-	}
+	preserveFields(workerPayload, rawPayload, "layers", "_placement_pin_worker_id")
 	return workerPayload, nil
 }
 

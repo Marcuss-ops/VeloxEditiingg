@@ -34,7 +34,7 @@ func TestBatchDeliveryDestinationsStatus_AllThreeBuckets(t *testing.T) {
 	ctx := context.Background()
 
 	// Seed ENABLED row.
-	if err := s.InsertDeliveryDestination(&DeliveryDestination{
+	if err := s.Delivery().InsertDeliveryDestination(&DeliveryDestination{
 		DestinationID:         "dest-enabled",
 		Provider:              "social_gateway",
 		ExternalDestinationID: "dest-enabled-external",
@@ -44,7 +44,7 @@ func TestBatchDeliveryDestinationsStatus_AllThreeBuckets(t *testing.T) {
 	}
 
 	// Seed DISABLED row.
-	if err := s.InsertDeliveryDestination(&DeliveryDestination{
+	if err := s.Delivery().InsertDeliveryDestination(&DeliveryDestination{
 		DestinationID:         "dest-disabled",
 		Provider:              "social_gateway",
 		ExternalDestinationID: "dest-disabled-external",
@@ -54,7 +54,7 @@ func TestBatchDeliveryDestinationsStatus_AllThreeBuckets(t *testing.T) {
 	}
 
 	// Query all three (one ENABLED, one DISABLED, one NOT_FOUND).
-	got, err := s.BatchDeliveryDestinationsStatus(ctx, []string{
+	got, err := s.Delivery().BatchDeliveryDestinationsStatus(ctx, []string{
 		"dest-enabled",
 		"dest-disabled",
 		"dest-missing",
@@ -116,7 +116,7 @@ func TestBatchDeliveryDestinationsStatus_DeduplicatesAndTrims(t *testing.T) {
 	defer s.Close()
 
 	ctx := context.Background()
-	if err := s.InsertDeliveryDestination(&DeliveryDestination{
+	if err := s.Delivery().InsertDeliveryDestination(&DeliveryDestination{
 		DestinationID:         "dest-x",
 		Provider:              "social_gateway",
 		ExternalDestinationID: "dest-x-external",
@@ -126,7 +126,7 @@ func TestBatchDeliveryDestinationsStatus_DeduplicatesAndTrims(t *testing.T) {
 	}
 
 	// 5 inputs collapse to 1 unique id ("dest-x" after trim).
-	got, err := s.BatchDeliveryDestinationsStatus(ctx, []string{
+	got, err := s.Delivery().BatchDeliveryDestinationsStatus(ctx, []string{
 		"  dest-x  ",
 		"dest-x",
 		"dest-x",
@@ -159,7 +159,7 @@ func TestValidateDeliveryDestinationTx_ErrDestinationDisabledIs(t *testing.T) {
 	defer s.Close()
 
 	ctx := context.Background()
-	if err := s.InsertDeliveryDestination(&DeliveryDestination{
+	if err := s.Delivery().InsertDeliveryDestination(&DeliveryDestination{
 		DestinationID:         "dest-disabled",
 		Provider:              "social_gateway",
 		ExternalDestinationID: "dest-disabled-external",

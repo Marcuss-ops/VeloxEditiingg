@@ -106,9 +106,6 @@ var assetURLRegexp = regexp.MustCompile(`^(https?://|velox-asset://|velox-drive:
 // when it recomputes the SHA-256 of the downloaded manifest JSON.
 var manifestRefSHA256Regexp = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
-// audioRoleValues is the closed set of accepted SubmitAudioTrack.Role values.
-var audioRoleValues = []string{"voiceover", "scene_clip_audio", "background_music", "sfx"}
-
 // containsString is a tiny slice-membership helper. Used by the
 // manifest_ref.schema_version closed-enum check; inlined here so
 // the validator has no third-party dependency on top of stdlib +

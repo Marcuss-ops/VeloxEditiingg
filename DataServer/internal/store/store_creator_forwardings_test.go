@@ -578,7 +578,7 @@ func TestAtomicForwardAndEnqueue_CreatesJobAndMarksForwarded(t *testing.T) {
 	db := setupForwardingTestDB(t)
 	ctx := context.Background()
 
-	if err := db.InsertDeliveryDestination(&DeliveryDestination{
+	if err := db.Delivery().InsertDeliveryDestination(&DeliveryDestination{
 		DestinationID: "drive",
 		Provider:      "drive",
 		Name:          "drive",

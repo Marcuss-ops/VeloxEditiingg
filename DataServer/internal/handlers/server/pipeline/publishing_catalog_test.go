@@ -29,7 +29,7 @@ func TestPublishingCatalogAndTargetsRoutesAreRetired(t *testing.T) {
 
 	db := openHandlerTestDB(t)
 	defer db.Close()
-	if err := db.InsertDeliveryDestination(&store.DeliveryDestination{
+	if err := db.Delivery().InsertDeliveryDestination(&store.DeliveryDestination{
 		DestinationID:         "existing-destination",
 		Provider:              "social_gateway",
 		ExternalDestinationID: "external-destination",

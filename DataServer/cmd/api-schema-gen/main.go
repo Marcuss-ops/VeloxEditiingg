@@ -54,6 +54,7 @@ func main() {
 		{"SubmitVoiceover", apiwire.SubmitVoiceover{}},
 		{"SubmitSubtitles", apiwire.SubmitSubtitles{}},
 		{"SubmitLayer", apiwire.SubmitLayer{}},
+		{"SubmitVisualReplacement", apiwire.SubmitVisualReplacement{}},
 		{"SubmitDeliveryPlanEntry", apiwire.SubmitDeliveryPlanEntry{}},
 		{"SubmitPublishingTarget", apiwire.SubmitPublishingTarget{}},
 		{"SubmitManifestRef", apiwire.SubmitManifestRef{}},

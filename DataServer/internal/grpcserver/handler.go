@@ -11,7 +11,6 @@
 package grpcserver
 
 import (
-	"context"
 	"sync"
 
 	"velox-server/internal/artifacts"
@@ -22,7 +21,6 @@ import (
 	velmetrics "velox-server/internal/metrics"
 	"velox-server/internal/placement"
 	"velox-server/internal/registry"
-	"velox-server/internal/renderplan"
 	"velox-server/internal/store"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
@@ -30,14 +28,6 @@ import (
 	pb "velox-shared/controltransport/pb"
 	sharedfutureasset "velox-shared/futureasset"
 )
-
-// renderPlanCompiler is the narrow seam for the canonical master-side
-// RenderPlanCompiler (Fase D). Kept as an interface so lightweight handler
-// tests can inject a fake; the production composition wires
-// *renderplan.RenderPlanCompiler, which satisfies it.
-type renderPlanCompiler interface {
-	Compile(ctx context.Context, payload map[string]interface{}, attemptID string) (*renderplan.CompiledRenderPlan, error)
-}
 
 // Handler implements pb.WorkerControlServer. It manages persistent worker
 // streams and bridges gRPC messages to the existing control plane.
@@ -82,13 +72,6 @@ type Handler struct {
 	// dependency is already owned by Handler; this sink is an optional
 	// setter to keep lightweight handler tests independent of SQLite.
 	assetDownloadProgressSink AssetDownloadProgressSink
-
-	// renderPlanCompiler (Fase D) compiles the claimed task payload into a
-	// canonical CompiledRenderPlan and stamps plan_version/plan_sha256 on
-	// the attempt at claim time. Wired post-construction via
-	// SetRenderPlanCompiler; NIL-safe — handlers without a compiler skip
-	// the stamp (the attempt stays plan_version=0).
-	renderPlanCompiler renderPlanCompiler
 
 	placementMatcher   *placement.Matcher
 	futureAssetPlanner *futureassetmaster.FutureAssetPlanner
@@ -153,16 +136,4 @@ func NewHandler(
 		sessions:           make(map[string]*workerSession),
 		workerSessions:     make(map[string]string),
 	}
-}
-
-// SetRenderPlanCompiler installs the canonical master-side compiler so the
-// placement pipeline stamps plan_version/plan_sha256 on the attempt before
-// offering the task (Fase D). Accepts the interface seam so tests can inject
-// fakes; production passes *renderplan.RenderPlanCompiler. NIL-safe: a nil
-// compiler disables the stamp.
-func (h *Handler) SetRenderPlanCompiler(compiler renderPlanCompiler) {
-	if h == nil {
-		return
-	}
-	h.renderPlanCompiler = compiler
 }

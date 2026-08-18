@@ -75,8 +75,6 @@ func ValidateSubmitJobRequest(req SubmitJobRequest) (*SubmitJobValidationError, 
 
 	details = append(details, validateSubmitScenes(req)...)
 
-	details = append(details, validateSubmitAudioTracks(req)...)
-
 	details = append(details, validateSubmitDelivery(req)...)
 
 	// Publications are validated against the shared canonical contract.

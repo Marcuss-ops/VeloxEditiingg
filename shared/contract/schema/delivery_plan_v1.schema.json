@@ -1,0 +1,21 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "velox.contract.delivery-plan-v1",
+  "title": "DeliveryPlanV1",
+  "description": "Canonical delivery_plan domain shape. This schema is the authoritative registry of per-entry field NAMES and their JSON types; per-entry semantic validation (retry_budget >= 0, priority >= 0, enabled truthiness, destination_id dedupe) lives in shared/contract/deliveryplan (Parse). The wire value is an array of entries; the enqueue/store parsers also tolerate a single entry object for back-compat. metadata is an extension container, so additionalProperties is true at the entry level.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "additionalProperties": true,
+    "properties": {
+      "destination_id": { "type": "string" },
+      "priority": { "type": "integer" },
+      "retry_budget": { "type": "integer" },
+      "enabled": { "type": "boolean" },
+      "external_destination_id": { "type": "string" },
+      "platform": { "type": "string" },
+      "metadata": { "type": "object" }
+    },
+    "required": ["destination_id"]
+  }
+}

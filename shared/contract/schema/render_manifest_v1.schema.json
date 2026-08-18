@@ -1,0 +1,108 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "velox.contract.render-manifest-v1",
+  "title": "RenderManifestV1",
+  "description": "Canonical render_manifest contract (velox.render-manifest.v1). This schema is the authoritative registry of field NAMES and their JSON types; semantic validation (asset references, sha256 format, fps bounds, enum values) lives in shared/contract/rendermanifest (strict Parse with DisallowUnknownFields), so additionalProperties is false here to match that strict decode. The schema.version const MUST stay in lock-step with rendermanifest.Schema — the contractgen parity pin fails generation on drift.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema": { "const": "velox.render-manifest.v1" },
+    "canvas": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "width": { "type": "integer" },
+        "height": { "type": "integer" },
+        "fps_num": { "type": "integer" },
+        "fps_den": { "type": "integer" },
+        "pixel_format": { "type": "string" }
+      },
+      "required": ["width", "height", "fps_num", "fps_den", "pixel_format"]
+    },
+    "assets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "uri": { "type": "string" },
+          "kind": { "type": "string" },
+          "format": { "type": "string" },
+          "sha256": { "type": "string" },
+          "size_bytes": { "type": "integer" },
+          "duration_ms": { "type": "integer" }
+        },
+        "required": ["id", "uri", "kind", "sha256", "size_bytes"]
+      }
+    },
+    "tracks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "kind": { "type": "string" },
+          "asset_id": { "type": "string" },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "asset_id": { "type": "string" },
+                "timeline_start_ms": { "type": "integer" },
+                "source_start_ms": { "type": "integer" },
+                "duration_ms": { "type": "integer" },
+                "gain_db": { "type": "number" },
+                "fade_in_ms": { "type": "integer" },
+                "fade_out_ms": { "type": "integer" },
+                "duck_under_voiceover": { "type": "boolean" }
+              },
+              "required": ["asset_id", "timeline_start_ms", "duration_ms"]
+            }
+          },
+          "burn_in": { "type": "boolean" }
+        },
+        "required": ["id", "kind"]
+      }
+    },
+    "layers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "type": { "type": "string" },
+          "role": { "type": "string" },
+          "text": { "type": "string" },
+          "asset": { "type": "string" },
+          "source": { "type": "string" },
+          "font": { "type": "string" },
+          "font_size": { "type": "number" },
+          "position": { "type": "array", "items": { "type": "number" } },
+          "start_seconds": { "type": "number" },
+          "duration_seconds": { "type": "number" },
+          "preset": { "type": "string" },
+          "animation": { "type": "string" }
+        },
+        "required": ["id", "type"]
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "container": { "type": "string" },
+        "video_codec": { "type": "string" },
+        "audio_codec": { "type": "string" },
+        "audio_sample_rate": { "type": "integer" },
+        "audio_channels": { "type": "integer" }
+      },
+      "required": ["container", "video_codec", "audio_codec", "audio_sample_rate", "audio_channels"]
+    }
+  },
+  "required": ["schema", "canvas", "assets", "tracks", "output"]
+}

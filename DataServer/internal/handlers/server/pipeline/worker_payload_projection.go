@@ -25,18 +25,12 @@ func submitRequestToRawPayload(req *SubmitJobRequest) map[string]interface{} {
 		VideoMode:          rendererModeForJobType(req.JobType),
 		VideoName:          req.VideoName,
 		ScriptText:         req.ScriptText,
-		Spec:               req.Spec,
 		RenderManifest:     req.ResolvedManifest,
 		ManifestRef:        req.ResolvedManifestRef,
 		ManifestSHA256:     req.ResolvedManifestSHA256,
 		PlacementPin:       req.PlacementPinWorkerID,
 		LegacyVoiceovers:   compatibility.ReadStringList(req.Spec, compatibility.VoiceoverPathsKey),
 		RetryBudgetDefault: DefaultRetryBudget,
-	}
-	if req.Output != nil {
-		input.Output = &projection.OutputInput{
-			Width: req.Output.Width, Height: req.Output.Height, FPS: req.Output.FPS, Format: req.Output.Format,
-		}
 	}
 	input.DeliveryPlan = make([]projection.RawDeliveryPlanEntry, 0, len(req.DeliveryPlan))
 	for _, entry := range req.DeliveryPlan {
@@ -74,14 +68,20 @@ func submitRequestToRawPayload(req *SubmitJobRequest) map[string]interface{} {
 			Preset: layer.Preset, Animation: layer.Animation,
 		})
 	}
-	input.AudioTracks = make([]projection.AudioTrackInput, 0, len(req.AudioTracks))
-	for _, track := range req.AudioTracks {
-		input.AudioTracks = append(input.AudioTracks, projection.AudioTrackInput{
-			AssetID: track.AssetID, SourceURL: track.SourceURL, Role: track.Role, Volume: track.Volume,
-			StartTimeOffset: track.StartTimeOffset, DurationSeconds: track.DurationSeconds, Loop: track.Loop,
-			FadeInSeconds: track.FadeInSeconds, FadeOutSeconds: track.FadeOutSeconds,
-			DuckingEnabled: track.DuckingEnabled,
-		})
+	input.VisualReplacements = make([]projection.VisualReplacementInput, 0, len(req.VisualReplacements))
+	for _, replacement := range req.VisualReplacements {
+		vr := projection.VisualReplacementInput{
+			ReplacementID:   replacement.ReplacementID,
+			TimelineStartUS: replacement.TimelineStartUS,
+			TimelineEndUS:   replacement.TimelineEndUS,
+			ProfileID:       replacement.ProfileID,
+		}
+		if replacement.Asset != nil {
+			vr.AssetID = replacement.Asset.AssetID
+			vr.URL = replacement.Asset.URL
+			vr.SHA256 = replacement.Asset.SHA256
+		}
+		input.VisualReplacements = append(input.VisualReplacements, vr)
 	}
 	return projection.BuildRawPayload(input)
 }

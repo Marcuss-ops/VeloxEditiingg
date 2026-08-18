@@ -253,204 +253,6 @@ func TestBuildPipelinePayload(t *testing.T) {
 	})
 }
 
-func TestBuildPipelinePayload_CompilesCanonicalSceneCompositeTimeline(t *testing.T) {
-	result, err := BuildPipelinePayload(map[string]interface{}{
-		"status":      "completed",
-		"video_name":  "Scene composite",
-		"script_text": "Narrated scene",
-		"scenes": []interface{}{
-			map[string]interface{}{
-				"text":             "Scene 1",
-				"duration_seconds": 5.0,
-				"clip":             map[string]interface{}{"asset_id": "clip-1", "url": "velox-asset://clip-1", "duration_ms": 5000},
-				"voiceover":        map[string]interface{}{"asset_id": "voice-1", "url": "velox-asset://voice-1", "duration_ms": 5000},
-			},
-		},
-	})
-	if err != nil {
-		t.Fatalf("BuildPipelinePayload: %v", err)
-	}
-	items, ok := result["items"].([]map[string]interface{})
-	if !ok || len(items) != 2 {
-		t.Fatalf("items = %#v, want narrated bed + scene clip", result["items"])
-	}
-	tracks, ok := result["audio_tracks"].([]map[string]interface{})
-	if !ok || len(tracks) != 2 {
-		t.Fatalf("audio_tracks = %#v, want voiceover + clip audio", result["audio_tracks"])
-	}
-}
-
-func TestNormalizeSceneVideoPayload_PreservesBackgroundMusicAndMergesTwoVoiceovers(t *testing.T) {
-	t.Parallel()
-
-	normalized, err := normalizeSceneVideoPayload(map[string]interface{}{
-		"video_name":  "Mixed audio timeline smoke",
-		"script_text": "Background music plus two scene voiceovers.",
-		"voiceover_paths": []interface{}{
-			"velox-asset://voiceover-scene-0",
-			"velox-asset://voiceover-scene-1",
-		},
-		"scenes": []interface{}{
-			map[string]interface{}{
-				"scene_id":         "scene-0",
-				"clip_link":        "velox-asset://clip-scene-0",
-				"duration_seconds": float64(6),
-			},
-			map[string]interface{}{
-				"scene_id":         "scene-1",
-				"clip_link":        "velox-asset://clip-scene-1",
-				"duration_seconds": float64(6),
-			},
-		},
-		"audio_tracks": []interface{}{
-			map[string]interface{}{
-				"source_url":        "velox-asset://background-music",
-				"role":              "background_music",
-				"volume":            float64(0.12),
-				"start_time_offset": float64(0),
-				"duration_seconds":  float64(12),
-			},
-		},
-	})
-	if err != nil {
-		t.Fatalf("normalizeSceneVideoPayload: %v", err)
-	}
-	tracks := normalizeAudioTracks(normalized["audio_tracks"])
-	if len(tracks) != 1 {
-		t.Fatalf("audio_tracks len = %d, want 1 canonical global music track", len(tracks))
-	}
-
-	bySource := make(map[string]map[string]interface{}, len(tracks))
-	for _, track := range tracks {
-		source, _ := track["source_url"].(string)
-		bySource[source] = track
-	}
-
-	assertTrack := func(source, role string, volume, offset, duration float64) {
-		t.Helper()
-		track, exists := bySource[source]
-		if !exists {
-			t.Fatalf("missing %s track %q in %#v", role, source, tracks)
-		}
-		if got := track["role"]; got != role {
-			t.Errorf("%s role = %v, want %q", source, got, role)
-		}
-		if got := asFloat(track["volume"]); got != volume {
-			t.Errorf("%s volume = %v, want %v", source, got, volume)
-		}
-		if got := asFloat(track["start_time_offset"]); got != offset {
-			t.Errorf("%s start_time_offset = %v, want %v", source, got, offset)
-		}
-		if got := asFloat(track["duration_seconds"]); got != duration {
-			t.Errorf("%s duration_seconds = %v, want %v", source, got, duration)
-		}
-	}
-
-	assertTrack("velox-asset://background-music", "background_music", 0.12, 0, 12)
-}
-
-func TestNormalizeSceneVideoPayload_DeduplicatesCombinedAudioTracks(t *testing.T) {
-	t.Parallel()
-
-	normalized, err := normalizeSceneVideoPayload(map[string]interface{}{
-		"video_name":  "Deduplicated audio timeline smoke",
-		"script_text": "Duplicate and offset audio tracks.",
-		"voiceover_paths": []interface{}{
-			"velox-asset://voiceover-scene-0",
-		},
-		"scenes": []interface{}{
-
-			map[string]interface{}{
-				"clip_link":        "velox-asset://clip-scene-0",
-				"duration_seconds": float64(12),
-			},
-		},
-		"audio_tracks": []interface{}{
-			map[string]interface{}{
-				"source_url":        "velox-asset://background-music",
-				"role":              "background_music",
-				"volume":            float64(0.12),
-				"start_time_offset": float64(0),
-				"duration_seconds":  float64(12),
-			},
-			map[string]interface{}{
-				"source_url":        "velox-asset://background-music",
-				"role":              "background_music",
-				"volume":            float64(0.5),
-				"start_time_offset": float64(0),
-				"duration_seconds":  float64(12),
-			},
-			map[string]interface{}{
-				"source_url":        "velox-asset://background-music",
-				"role":              "background_music",
-				"volume":            float64(0.12),
-				"start_time_offset": float64(6),
-				"duration_seconds":  float64(6),
-			},
-		},
-	})
-	if err != nil {
-		t.Fatalf("normalizeSceneVideoPayload: %v", err)
-	}
-	tracks := normalizeAudioTracks(normalized["audio_tracks"])
-	if len(tracks) != 3 {
-		t.Fatalf("audio_tracks len = %d, want 3 explicit canonical tracks", len(tracks))
-	}
-	if got := tracks[0]["role"]; got != "background_music" {
-		t.Errorf("first track role = %v, want background_music", got)
-	}
-	if got := asFloat(tracks[0]["volume"]); got != 0.12 {
-		t.Errorf("first duplicate volume = %v, want first occurrence volume 0.12", got)
-	}
-	if got := asFloat(tracks[0]["start_time_offset"]); got != 0 {
-		t.Errorf("first track offset = %v, want 0", got)
-	}
-	if got := asFloat(tracks[0]["duration_seconds"]); got != 12 {
-		t.Errorf("first track duration = %v, want 12", got)
-	}
-}
-
-func TestNormalizeSceneVideoPayload_UsesNestedVoiceoverDurationForClipTimeline(t *testing.T) {
-	t.Parallel()
-
-	normalized, err := normalizeSceneVideoPayload(map[string]interface{}{
-		"video_name":  "Narrated clip smoke",
-		"script_text": "Narrated clip body.",
-		"voiceover_paths": []interface{}{
-			"velox-asset://voice-1",
-		},
-		"scenes": []interface{}{
-			map[string]interface{}{
-				"text":             "Scene 1",
-				"clip_link":        "velox-asset://clip-1",
-				"duration_seconds": float64(5),
-				"clip": map[string]interface{}{
-					"url":         "velox-asset://clip-1",
-					"duration_ms": float64(5000),
-				},
-				"voiceover": map[string]interface{}{
-					"url":         "velox-asset://voice-1",
-					"duration_ms": float64(24216),
-				},
-			},
-		},
-	})
-	if err != nil {
-		t.Fatalf("normalizeSceneVideoPayload: %v", err)
-	}
-	tracks := normalizeAudioTracks(normalized["audio_tracks"])
-	if len(tracks) != 0 {
-		t.Fatalf("audio_tracks = %#v, want no implicit legacy voiceover track", tracks)
-	}
-	scenes, ok := normalized["scenes"].([]map[string]interface{})
-	if !ok || len(scenes) != 1 {
-		t.Fatalf("scenes = %#v, want one scene", normalized["scenes"])
-	}
-	if got := asFloat(scenes[0]["duration_seconds"]); got != 5 {
-		t.Fatalf("scenes[0].duration_seconds = %v, want canonical scene duration 5", got)
-	}
-}
-
 func TestNormalizeSceneVideoPayload_PreservesVisualTimelineFields(t *testing.T) {
 	t.Parallel()
 
@@ -585,12 +387,11 @@ func TestShouldForwardPipelineResult(t *testing.T) {
 	if !ShouldForwardPipelineResult(map[string]interface{}{"status": "completed", "result": map[string]interface{}{"scenes_json": sceneJSON}}) {
 		t.Error("want true for renderable scenes without voiceover")
 	}
-	// audio_tracks-only payload: background music + scenes, no voiceover,
-	// should be forwardable (the worker muxes audio_tracks into the final AAC).
-	// Uses scenes_json — the canonical shape after ToWorkerPayload marshals
-	// the typed DTO scenes back to JSON.
+	// audio_tracks-only payload is no longer forwardable: top-level
+	// audio_tracks was retired and does not count as a renderable audio
+	// source. Only voiceover or renderable media make a result forwardable.
 	bgmSceneJSON := `[{"text":"BGM-only scene","duration_seconds":12}]`
-	if !ShouldForwardPipelineResult(map[string]interface{}{
+	if ShouldForwardPipelineResult(map[string]interface{}{
 		"status":      "completed",
 		"scenes_json": bgmSceneJSON,
 		"audio_tracks": []interface{}{
@@ -601,9 +402,9 @@ func TestShouldForwardPipelineResult(t *testing.T) {
 			},
 		},
 	}) {
-		t.Error("want true for audio_tracks-only payload (BGM + scenes, no voiceover)")
+		t.Error("want false for audio_tracks-only payload (audio_tracks retired)")
 	}
-	// audio_tracks with no source_url should NOT count as forwardable.
+	// audio_tracks with no source_url must not count as forwardable.
 	if ShouldForwardPipelineResult(map[string]interface{}{
 		"status":      "completed",
 		"scenes_json": `[{"text":"Empty tracks","duration_seconds":5}]`,

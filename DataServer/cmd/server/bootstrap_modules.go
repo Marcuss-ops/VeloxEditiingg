@@ -128,7 +128,7 @@ func (a *sqliteJobInspectionAdapter) ListArtifacts(_ context.Context, jobID stri
 }
 
 func (a *sqliteJobInspectionAdapter) ListDeliveries(_ context.Context, jobID string) ([]observability.DeliverySnapshot, error) {
-	rows, err := a.store.ListJobDeliveriesByJob(jobID)
+	rows, err := a.store.Delivery().ListJobDeliveriesByJob(jobID)
 	if err != nil {
 		return nil, err
 	}

@@ -35,7 +35,7 @@ func TestDeliveryRunnerHydratesOpaqueDestinationBeforeProviderDispatch(t *testin
 		artifactID            = "artifact-opaque-runner"
 		deliveryID            = "delivery-opaque-runner"
 	)
-	if err := db.InsertDeliveryDestination(&store.DeliveryDestination{
+	if err := db.Delivery().InsertDeliveryDestination(&store.DeliveryDestination{
 		DestinationID:         localDestinationID,
 		Provider:              "social_gateway",
 		ExternalDestinationID: externalDestinationID,
@@ -59,7 +59,7 @@ func TestDeliveryRunnerHydratesOpaqueDestinationBeforeProviderDispatch(t *testin
 	}); err != nil {
 		t.Fatalf("InsertArtifact: %v", err)
 	}
-	if err := db.InsertJobDelivery(&store.JobDelivery{
+	if err := db.Delivery().InsertJobDelivery(&store.JobDelivery{
 		DeliveryID:     deliveryID,
 		ArtifactID:     artifactID,
 		DestinationID:  localDestinationID,
@@ -76,7 +76,7 @@ func TestDeliveryRunnerHydratesOpaqueDestinationBeforeProviderDispatch(t *testin
 	registry := NewRegistry()
 	registry.Register(capture)
 	runner := NewDeliveryRunner(DefaultRunnerConfig(), registry, db.Delivery(), db, "opaque-runner")
-	leases, err := db.ClaimDeliveries(context.Background(), "opaque-runner", 5*time.Minute, 1)
+	leases, err := db.Delivery().ClaimDeliveries(context.Background(), "opaque-runner", 5*time.Minute, 1)
 	if err != nil {
 		t.Fatalf("ClaimDeliveries: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestDeliveryRunnerHydratesOpaqueDestinationBeforeProviderDispatch(t *testin
 	if capture.externalDestinationID != externalDestinationID {
 		t.Fatalf("provider external_destination_id = %q, want opaque InstaEdit ID %q", capture.externalDestinationID, externalDestinationID)
 	}
-	row, err := db.GetJobDelivery(context.Background(), deliveryID)
+	row, err := db.Delivery().GetJobDelivery(context.Background(), deliveryID)
 	if err != nil {
 		t.Fatalf("GetJobDelivery: %v", err)
 	}

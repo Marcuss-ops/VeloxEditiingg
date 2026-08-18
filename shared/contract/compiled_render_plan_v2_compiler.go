@@ -20,6 +20,17 @@ import (
 // it requires exactly one verified final_audio asset so render_batch@1 can
 // perform FINAL_AUDIO_COPY without choosing an audio mix or AAC encode.
 func CompileRenderPlanV2FromManifest(raw map[string]any) (*CompiledRenderPlanV2, error) {
+	return CompileRenderPlanV2FromManifestWithReplacements(raw, nil)
+}
+
+// CompileRenderPlanV2FromManifestWithReplacements compiles the strict
+// render_manifest and then applies the visual_replacements[] list: each
+// replacement swaps a prepared, video-only asset into the base video
+// timeline over its absolute interval. The replacement asset must already be
+// declared as a `video` asset in the manifest assets[] (its identity is
+// re-verified against the declared SHA256), so the compiled plan still
+// carries verified asset metadata and no contract relaxation is needed.
+func CompileRenderPlanV2FromManifestWithReplacements(raw map[string]any, replacements []VisualReplacement) (*CompiledRenderPlanV2, error) {
 	if raw == nil {
 		return nil, fmt.Errorf("compiled render plan v2: render_manifest is required")
 	}
@@ -31,10 +42,10 @@ func CompileRenderPlanV2FromManifest(raw map[string]any) (*CompiledRenderPlanV2,
 	if err != nil {
 		return nil, fmt.Errorf("compiled render plan v2: strict render_manifest: %w", err)
 	}
-	return compileRenderPlanV2Manifest(manifest)
+	return compileRenderPlanV2Manifest(manifest, replacements)
 }
 
-func compileRenderPlanV2Manifest(manifest *rendermanifest.Manifest) (*CompiledRenderPlanV2, error) {
+func compileRenderPlanV2Manifest(manifest *rendermanifest.Manifest, replacements []VisualReplacement) (*CompiledRenderPlanV2, error) {
 	if manifest == nil {
 		return nil, fmt.Errorf("compiled render plan v2: nil render_manifest")
 	}
@@ -59,6 +70,18 @@ func compileRenderPlanV2Manifest(manifest *rendermanifest.Manifest) (*CompiledRe
 			MIME:       asset.Format,
 			DurationUS: millisecondsToMicroseconds(asset.DurationMS),
 		})
+	}
+	for _, r := range replacements {
+		asset, ok := assetByID[r.AssetID]
+		if !ok {
+			return nil, visualReplacementErrorf(VisualReplacementCodeAssetInvalid, r.ReplacementID, r.TimelineStartUS, "asset_id %q is not declared in the render_manifest assets", r.AssetID)
+		}
+		if asset.Kind != "video" {
+			return nil, visualReplacementErrorf(VisualReplacementCodeAssetInvalid, r.ReplacementID, r.TimelineStartUS, "asset_id %q must reference a video asset, got kind %q", r.AssetID, asset.Kind)
+		}
+		if r.SHA256 != "" && r.SHA256 != asset.SHA256 {
+			return nil, visualReplacementErrorf(VisualReplacementCodeAssetInvalid, r.ReplacementID, r.TimelineStartUS, "sha256 %q does not match manifest asset %q", r.SHA256, r.AssetID)
+		}
 	}
 	if count != 1 {
 		return nil, fmt.Errorf("compiled render plan v2: exactly one final_audio asset is required, found %d", count)
@@ -142,12 +165,40 @@ func compileRenderPlanV2Manifest(manifest *rendermanifest.Manifest) (*CompiledRe
 				SourceDurationUS:   sourceDurationUS,
 			})
 		}
+		if len(replacements) > 0 {
+			resolved, err := ResolveVisualReplacements(videoTrack.Segments, replacements, manifest.Canvas.FPSNum, manifest.Canvas.FPSDen)
+			if err != nil {
+				return nil, fmt.Errorf("compiled render plan v2: tracks[%s] visual replacements: %w", track.ID, err)
+			}
+			for i := range resolved {
+				resolved[i].SegmentID = fmt.Sprintf("%s-segment-%06d", track.ID, i)
+			}
+			videoTrack.Segments = resolved
+		}
 		if len(videoTrack.Segments) > 0 {
 			plan.VideoTracks = append(plan.VideoTracks, videoTrack)
 		}
 	}
 	if len(plan.VideoTracks) == 0 {
 		return nil, fmt.Errorf("compiled render plan v2: at least one video track with events is required")
+	}
+	// Fail-closed declared-duration gate (plan §6). Runs AFTER the resolver
+	// has validated range/overlap/bounds so a malformed timeline surfaces its
+	// timeline error first; a well-formed timeline with a wrong declared media
+	// duration then surfaces VISUAL_REPLACEMENT_DURATION_MISMATCH. The worker
+	// re-checks the REAL probed duration later — this master-side check only
+	// catches a producer that declares the wrong media up front.
+	for _, r := range replacements {
+		asset, ok := assetByID[r.AssetID]
+		if !ok {
+			continue // identity gate already rejected this above
+		}
+		if windowUS := r.TimelineEndUS - r.TimelineStartUS; windowUS > 0 {
+			declaredUS := millisecondsToMicroseconds(asset.DurationMS)
+			if diff := absInt64(declaredUS - windowUS); diff > ReplacementDurationToleranceUS {
+				return nil, visualReplacementErrorf(VisualReplacementCodeDurationMismatch, r.ReplacementID, r.TimelineStartUS, "manifest asset %q declares %d us but the replacement window is %d us (tolerance %d us)", r.AssetID, declaredUS, windowUS, ReplacementDurationToleranceUS)
+			}
+		}
 	}
 	if err := ValidateCompiledRenderPlanV2(plan); err != nil {
 		return nil, fmt.Errorf("compiled render plan v2: generated plan failed validation: %w", err)
@@ -159,7 +210,13 @@ func compileRenderPlanV2Manifest(manifest *rendermanifest.Manifest) (*CompiledRe
 // It is the single producer helper used before TaskSpec persistence and
 // TaskOffer delivery.
 func CompileRenderPlanV2JSON(raw map[string]any) ([]byte, string, error) {
-	plan, err := CompileRenderPlanV2FromManifest(raw)
+	return CompileRenderPlanV2JSONWithReplacements(raw, nil)
+}
+
+// CompileRenderPlanV2JSONWithReplacements returns canonical V2 bytes plus the
+// transport hash after applying the supplied visual replacements.
+func CompileRenderPlanV2JSONWithReplacements(raw map[string]any, replacements []VisualReplacement) ([]byte, string, error) {
+	plan, err := CompileRenderPlanV2FromManifestWithReplacements(raw, replacements)
 	if err != nil {
 		return nil, "", err
 	}

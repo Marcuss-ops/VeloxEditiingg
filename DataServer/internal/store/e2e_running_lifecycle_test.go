@@ -349,14 +349,14 @@ func TestE2E_RunningAttemptLifecycle(t *testing.T) {
 		t.Fatalf("materialized delivery = id=%q status=%q; want non-empty/PENDING", deliveryID, deliveryStatus)
 	}
 
-	leases, err := store.ClaimDeliveries(ctx, "e2e-delivery-runner", time.Minute, 1)
+	leases, err := store.Delivery().ClaimDeliveries(ctx, "e2e-delivery-runner", time.Minute, 1)
 	if err != nil {
 		t.Fatalf("ClaimDeliveries: %v", err)
 	}
 	if len(leases) != 1 || leases[0].DeliveryID != deliveryID {
 		t.Fatalf("delivery leases = %#v; want one lease for %s", leases, deliveryID)
 	}
-	if err := store.MarkDeliverySucceeded(ctx, deliveryID, leases[0].RunnerID, leases[0].LeaseID, "e2e-remote-id", "https://example.test/e2e"); err != nil {
+	if err := store.Delivery().MarkDeliverySucceeded(ctx, deliveryID, leases[0].RunnerID, leases[0].LeaseID, "e2e-remote-id", "https://example.test/e2e"); err != nil {
 		t.Fatalf("MarkDeliverySucceeded: %v", err)
 	}
 	if err := store.DB().QueryRowContext(ctx, `SELECT status FROM job_deliveries WHERE delivery_id = ?`, deliveryID).Scan(&deliveryStatus); err != nil {

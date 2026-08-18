@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -21,7 +20,6 @@ import (
 	"velox-server/internal/jobs/ingress"
 	velmetrics "velox-server/internal/metrics"
 	"velox-server/internal/store"
-	"velox-server/internal/translation"
 	"velox-shared/contract/domain"
 )
 
@@ -91,7 +89,6 @@ func RegisterRoutes(group gin.IRoutes, cfg *config.Config, sqliteDB *store.SQLit
 	handlers.submission = submission
 	ingressHandler := jobshandler.NewHandler(registry, submission)
 	group.POST("/generate-with-images", handlers.GenerateWithImagesHandler(cfg))
-	group.POST("/generate", ingressHandler.SubmitFixed("generate"))
 	group.POST("/jobs/:kind", ingressHandler.Submit())
 	group.GET("/jobs/:job_id", handlers.ScriptJobHandler(false))
 	group.GET("/jobs/:job_id/full", handlers.ScriptJobHandler(true))
@@ -106,71 +103,6 @@ func newScriptIngressRegistry(cfg *config.Config, dataDir string, sqliteDB *stor
 	}
 	registry := ingress.NewRegistry()
 	registry.MustRegister(ingress.Definition{
-		Kind:            "generate",
-		ExecutorID:      "scene.composite.v1",
-		ExecutorVersion: 1,
-		PipelineID:      "hybrid.v1",
-		Builder: func(ctx context.Context, raw map[string]any) (map[string]any, error) {
-			normalized, err := buildUnifiedGeneratePayload(raw, dataDir, cfg.Runtime.VideosDir, resolver)
-			if err != nil {
-				return nil, err
-			}
-			// Preserve explicit authoring overlays through the scene translation
-			// step. They are independent of clip/image normalization and must
-			// reach the canonical worker payload unchanged.
-			requestedLayers := normalized["layers"]
-			translated, err := translation.TranslateScenes(ctx, normalized, translation.Client{
-				BaseURL: cfg.Pipeline.OllamaURL,
-				Model:   cfg.Pipeline.OllamaModel,
-			})
-			if err != nil {
-				return nil, err
-			}
-			if requestedLayers != nil {
-				translated["layers"] = requestedLayers
-			}
-			if folder := strings.TrimSpace(firstStringValue(translated, "drive_output_folder", "output_directory")); folder != "" {
-				if docCreator == nil {
-					return nil, fmt.Errorf("google doc requested by drive_output_folder but Drive is not configured")
-				}
-				content, err := translation.RenderGoogleDocContent(translated)
-				if err != nil {
-					return nil, err
-				}
-				title := firstStringValue(translated, "video_name", "title", "topic")
-				driveFolder, err := enqueue.ResolveDriveOutputFolderReference(ctx, folder, resolver)
-				if err != nil {
-					return nil, fmt.Errorf("resolve script google doc folder: %w", err)
-				}
-				doc, err := docCreator.CreateGoogleDoc(ctx, title, content, driveFolder, firstStringValue(translated, "correlation_id"))
-				if err != nil {
-					return nil, fmt.Errorf("create script google doc: %w", err)
-				}
-				metadata := map[string]interface{}{}
-				if existing, ok := translated["video_metadata"].(map[string]interface{}); ok {
-					for key, value := range existing {
-						metadata[key] = value
-					}
-				}
-				metadata["google_doc"] = map[string]interface{}{
-					"id":    doc.FileID,
-					"link":  doc.WebViewLink,
-					"title": title,
-				}
-				translated["video_metadata"] = metadata
-			}
-			result, err := enqueue.BuildClipPayloadForMaster(translated, dataDir, cfg.Runtime.VideosDir, "", resolver)
-			if err != nil {
-				return nil, err
-			}
-			if requestedLayers != nil {
-				result["layers"] = requestedLayers
-			}
-			return result, nil
-		},
-		Requirements: costmodel.DefaultRequirements(),
-	})
-	registry.MustRegister(ingress.Definition{
 		Kind:            "slideshow-video",
 		ExecutorID:      "scene.composite.v1",
 		ExecutorVersion: 1,
@@ -181,64 +113,6 @@ func newScriptIngressRegistry(cfg *config.Config, dataDir string, sqliteDB *stor
 		Requirements: costmodel.DefaultRequirements(),
 	})
 	return registry
-}
-
-// buildUnifiedGeneratePayload is the single public POST /script/generate
-// dispatcher. source.type selects the canonical input normalizer without
-// exposing a separate endpoint for each source family.
-func buildUnifiedGeneratePayload(raw map[string]any, dataDir, videosDir string, resolver enqueue.DriveFolderResolver) (map[string]any, error) {
-	if raw == nil {
-		return nil, fmt.Errorf("request body is required")
-	}
-
-	sourceValue, ok := raw["source"]
-	if !ok {
-		return nil, fmt.Errorf("source is required")
-	}
-	source, ok := sourceValue.(map[string]any)
-	if !ok {
-		return nil, fmt.Errorf("source must be an object")
-	}
-	sourceType, _ := source["type"].(string)
-	sourceType = strings.ToLower(strings.TrimSpace(sourceType))
-	if sourceType == "" {
-		return nil, fmt.Errorf("source.type is required")
-	}
-
-	switch sourceType {
-	case "clips":
-		// Accept both the canonical nested source payload and the current
-		// render-ready top-level fields during the contract cutover. Top-level
-		// values win so a caller cannot silently override explicit request data.
-		merged := make(map[string]any, len(raw)+len(source))
-		for key, value := range raw {
-			merged[key] = value
-		}
-		for key, value := range source {
-			if key == "type" {
-				continue
-			}
-			if _, exists := merged[key]; !exists {
-				merged[key] = value
-			}
-		}
-
-		normalized, err := enqueue.BuildClipPayloadForMaster(merged, dataDir, videosDir, "", resolver)
-		if err != nil {
-			return nil, err
-		}
-		sourceCopy := make(map[string]any, len(source))
-		for key, value := range source {
-			sourceCopy[key] = value
-		}
-		normalized["source"] = sourceCopy
-		if layers, exists := raw["layers"]; exists {
-			normalized["layers"] = layers
-		}
-		return normalized, nil
-	default:
-		return nil, fmt.Errorf("unsupported source.type %q", sourceType)
-	}
 }
 
 // GenerateWithImagesHandler accepts a job payload built from scenes or images,
@@ -285,19 +159,9 @@ func (h *ScriptHandlers) GenerateWithImagesHandler(cfg *config.Config) gin.Handl
 			}
 		}
 
-		// `generate-with-images` is also used by the canonical clip/stock
-		// intake. Preserve that explicit mode instead of forcing the image
-		// builder (which drops the narrated `items` timeline required by
-		// hybrid.v1).
-		var (
-			normalized map[string]interface{}
-			err        error
-		)
-		if strings.EqualFold(firstStringValue(payload, "video_mode"), "clip_stock") {
-			normalized, err = enqueue.BuildClipPayloadForMaster(payload, h.dataDir, cfg.Runtime.VideosDir, resolvedMasterURL, h.sqliteDB)
-		} else {
-			normalized, err = enqueue.BuildSceneImagePayloadForMaster(payload, h.dataDir, cfg.Runtime.VideosDir, resolvedMasterURL, h.sqliteDB)
-		}
+		// The clip/stock intake (video_mode=clip_stock) fed the retired
+		// hybrid.v1 path; only the scene-image builder remains.
+		normalized, err := enqueue.BuildSceneImagePayloadForMaster(payload, h.dataDir, cfg.Runtime.VideosDir, resolvedMasterURL, h.sqliteDB)
 		if err != nil {
 			if assetErr, ok := voiceoverassets.AsAcquisitionError(err); ok {
 				c.JSON(http.StatusUnprocessableEntity, gin.H{

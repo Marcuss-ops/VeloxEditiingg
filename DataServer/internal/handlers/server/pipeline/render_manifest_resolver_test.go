@@ -76,13 +76,6 @@ func TestResolveRenderManifestRef_SubstitutesCanonicalRequest(t *testing.T) {
 	if len(resolved.DeliveryPlan) != 1 || resolved.DeliveryPlan[0].DestinationID != "drive" {
 		t.Fatalf("DeliveryPlan = %#v", resolved.DeliveryPlan)
 	}
-	if len(resolved.AudioTracks) != 1 {
-		t.Fatalf("AudioTracks len = %d; want 1", len(resolved.AudioTracks))
-	}
-	at := resolved.AudioTracks[0]
-	if at.Role != "background_music" || at.Volume != 0.15 || at.SourceURL != "velox-asset://music/bgm-test-001.mp3" {
-		t.Fatalf("AudioTracks[0] = %#v", at)
-	}
 	if resolved.ResolvedManifest == nil || resolved.ResolvedManifestRef == nil || resolved.ResolvedManifestSHA256 != rawHex {
 		t.Fatalf("resolved manifest snapshot missing: manifest=%v ref=%v sha=%q", resolved.ResolvedManifest, resolved.ResolvedManifestRef, resolved.ResolvedManifestSHA256)
 	}
@@ -195,21 +188,11 @@ func testRenderManifest() map[string]interface{} {
 				},
 			},
 		},
-		"audio_tracks": []interface{}{
-			map[string]interface{}{
-				"asset_id":          "bgm-test-001",
-				"source_url":        "velox-asset://music/bgm-test-001.mp3",
-				"role":              "background_music",
-				"volume":            0.15,
-				"start_time_offset": 0,
-				"duration_seconds":  12.0,
-			},
-		},
 		"integrity": map[string]interface{}{
 			"algorithm":         "sha256",
 			"manifest_sha256":   "",
 			"scene_count":       1,
-			"audio_track_count": 1,
+			"audio_track_count": 0,
 			"total_duration_ms": 7200,
 		},
 	}

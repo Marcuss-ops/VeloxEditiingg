@@ -33,12 +33,11 @@ const (
 	SceneCompositeVersion = 1
 )
 
-// SceneComposite composes a scene from heterogeneous sources
-// (images + clips + audio) by delegating to the existing
-// pipeline.Runner. The pipeline registry's "hybrid.v1" compiler
-// handles the actual render plan compilation; SceneComposite adds the
-// Executor contract layer (Descriptor, Validate, Execute, error
-// mapping).
+// SceneComposite composes a scene from heterogeneous sources by
+// delegating to the existing pipeline.Runner. The payload's explicit
+// pipeline_id selects the compiler (images.v1 / clips.v1 / entities.v1);
+// SceneComposite adds the Executor contract layer (Descriptor, Validate,
+// Execute, error mapping). The legacy hybrid.v1 fallback was retired.
 //
 // PR-3.4 invariant: no duplicated rendering. Every byte of video
 // produced by this executor comes from the canonical pipeline path.

@@ -14,7 +14,6 @@ import (
 func TestCapabilities_KnownConstants(t *testing.T) {
 	want := []string{
 		"artifact.commit.v1",
-		"executor.hybrid.v1",
 		"task.output.declared.v1",
 		"artifact.upload.plan.v1",
 		"artifact.upload.completed.v1",
@@ -45,7 +44,6 @@ func TestCapabilities_IsKnownCapability(t *testing.T) {
 		want bool
 	}{
 		{CapabilityArtifactCommitV1, true},
-		{CapabilityExecutorHybridV1, true},
 		{CapabilityTaskOutputDeclaredV1, true},
 		{CapabilityArtifactUploadPlanV1, true},
 		{CapabilityArtifactUploadCompletedV1, true},
@@ -74,7 +72,6 @@ func TestCapabilities_IsKnownCapability(t *testing.T) {
 func TestCapabilities_KnownCapabilitiesIsClosedSet(t *testing.T) {
 	declared := map[string]bool{
 		CapabilityArtifactCommitV1:          true,
-		CapabilityExecutorHybridV1:          true,
 		CapabilityTaskOutputDeclaredV1:      true,
 		CapabilityArtifactUploadPlanV1:      true,
 		CapabilityArtifactUploadCompletedV1: true, CapabilityTaskCommitAckV1: true,

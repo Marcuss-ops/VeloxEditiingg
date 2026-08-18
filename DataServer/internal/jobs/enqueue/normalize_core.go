@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -55,6 +56,14 @@ func normalizeSceneVideoPayloadContext(ctx context.Context, payloadMap map[strin
 			return nil, deliveryplan.NewValidationError("render_manifest", "must not be empty")
 		}
 	}
+	// visual_replacements[] is only resolvable when the master compiles a
+	// strict render_manifest with a verified final_audio asset into a
+	// CompiledRenderPlanV2. Any other intake (scene-based jobs, pre-compiled
+	// V2 pass-through) would silently drop the replacements, so we fail
+	// closed instead of accepting an ambiguous request.
+	if visualReplacementsPresent(payloadMap) && !(strictManifest && !compiledV2Present && renderManifestHasFinalAudio(strictManifestMap)) {
+		return nil, deliveryplan.NewValidationError("visual_replacements", "requires a render_manifest with a verified final_audio asset (scene-based and pre-compiled V2 jobs are not supported)")
+	}
 	base, err := contract.NewJobPayloadV2Checked(payloadMap)
 	if err != nil {
 		return nil, err
@@ -100,8 +109,8 @@ func normalizeSceneVideoPayloadContext(ctx context.Context, payloadMap map[strin
 		base.SceneCount = len(scenesValue)
 
 		voiceovers := normalizeVoiceoverList(payloadMap)
-		if len(voiceovers) == 0 && !hasClipTimelinePayload(payloadMap) && !hasRenderableMedia(payloadMap) && !hasAudioTracks(payloadMap) {
-			return nil, deliveryplan.NewValidationError("voiceover_paths", "at least one voiceover path is required (or audio_tracks, or renderable media)")
+		if len(voiceovers) == 0 && !hasClipTimelinePayload(payloadMap) && !hasRenderableMedia(payloadMap) {
+			return nil, deliveryplan.NewValidationError("voiceover_paths", "at least one voiceover path is required (or renderable media)")
 		}
 		base.VoiceoverPaths = voiceovers
 		base.VoiceoverCount = len(voiceovers)
@@ -173,8 +182,23 @@ func normalizeSceneVideoPayloadContext(ctx context.Context, payloadMap map[strin
 		// remain on the existing scene-composite/V1 path until their audio
 		// compiler output is registered.
 		if renderManifestHasFinalAudio(strictManifestMap) {
-			compiledJSON, compiledSHA, v2Err := contract.CompileRenderPlanV2JSON(strictManifestMap)
+			replacements, parseErr := contract.ParseVisualReplacements(payloadMap["visual_replacements"])
+			if parseErr != nil {
+				return nil, deliveryplan.NewValidationErrorWrapped("visual_replacements", "parse failed", parseErr)
+			}
+			compiledJSON, compiledSHA, v2Err := contract.CompileRenderPlanV2JSONWithReplacements(strictManifestMap, replacements)
 			if v2Err != nil {
+				// Overlap / invalid-range / out-of-bounds / asset-identity
+				// rejections carry a machine-readable VISUAL_REPLACEMENT_*
+				// code. Surface it as the 422 details[].issue (instead of a
+				// generic "render_manifest compile failed") so invalid jobs
+				// are refused with a stable code BEFORE any worker offer is
+				// produced. Non-replacement compile failures keep the generic
+				// render_manifest classification.
+				var vre *contract.VisualReplacementError
+				if errors.As(v2Err, &vre) && vre != nil {
+					return nil, deliveryplan.NewValidationErrorCode("visual_replacements", vre.Code, vre.Error())
+				}
 				return nil, deliveryplan.NewValidationErrorWrapped("render_manifest", "CompiledRenderPlanV2 compile failed", v2Err)
 			}
 			out[contract.PayloadKeyCompiledRenderPlanJSON] = string(compiledJSON)
@@ -194,7 +218,6 @@ func copyTimelinePayloadFields(out, src map[string]interface{}) {
 		// Canonical timeline fields only. Legacy images/clips/items
 		// and clip-pool aliases are projected at the worker offer
 		// boundary, never persisted in the master payload.
-		"audio_tracks",
 		"layers",
 		// Explicit opt-in for the worker's strict packet-copy path. The
 		// worker validates stream identity, keyframe boundaries and audio
@@ -249,6 +272,24 @@ func compiledRenderPlanV2Present(payloadMap map[string]interface{}) bool {
 	_, hasJSON := payloadMap[contract.PayloadKeyCompiledRenderPlanJSON]
 	_, hasSHA := payloadMap[contract.PayloadKeyCompiledRenderPlanSHA]
 	return hasJSON || hasSHA
+}
+
+func visualReplacementsPresent(payloadMap map[string]interface{}) bool {
+	if payloadMap == nil {
+		return false
+	}
+	raw, ok := payloadMap["visual_replacements"]
+	if !ok || raw == nil {
+		return false
+	}
+	switch v := raw.(type) {
+	case []interface{}:
+		return len(v) > 0
+	case []map[string]interface{}:
+		return len(v) > 0
+	default:
+		return true
+	}
 }
 
 func resolveInternalExecutorID(payloadMap map[string]interface{}) string {
