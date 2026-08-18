@@ -102,7 +102,7 @@ func TestTick_ClaimBatchExceedsConcurrency_AbsorbsBurst(t *testing.T) {
 		Concurrency:     2,
 		MaxAttempts:     3,
 		BackoffSchedule: []time.Duration{0},
-	}, registry, db, "claim-batch-runner")
+	}, registry, db.Delivery(), db, "claim-batch-runner")
 
 	done := make(chan struct{})
 	go func() {

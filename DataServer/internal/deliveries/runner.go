@@ -73,10 +73,11 @@ func joinDeliveryErrors(primary error, persistence ...error) error {
 
 // DeliveryStore is the consumer-owned delivery persistence contract the
 // DeliveryRunner depends on. It is satisfied by
-// *deliverystore.SQLiteDeliveryStore (wired from SQLiteStore.Delivery() at the
-// composition root). The runner never touches the internal/store facade for
-// delivery persistence; publication-state and artifact reads (which belong to
-// other domains) go through the separate *store.SQLiteStore field.
+// *deliverystore.SQLiteDeliveryStore (wired explicitly as a constructor port at
+// the composition root, not re-derived from the store inside the runner). The
+// runner never touches the internal/store facade for delivery persistence;
+// publication-state and artifact reads (which belong to other domains) go
+// through the separate *store.SQLiteStore field.
 type DeliveryStore interface {
 	ClaimDeliveries(ctx context.Context, runnerID string, lease time.Duration, batch int) ([]deliverystore.DeliveryLease, error)
 	RenewDeliveryLease(ctx context.Context, deliveryID, runnerID, leaseID string, newExpiry time.Time) error
@@ -159,13 +160,16 @@ func (r *DeliveryRunner) logError(ctx context.Context, code string, fields map[s
 	}
 }
 
-// NewDeliveryRunner wires a runner. dbStore is the durable anchor (a
-// *store.SQLiteStore at the composition root); the runner splits it internally:
-// delivery persistence is routed through the deliverystore leaf via
-// dbStore.Delivery() (bound to the DeliveryStore field), while the
-// publication-state and artifact reads keep the *store.SQLiteStore field.
+// NewDeliveryRunner wires a runner from two explicit persistence ports:
+// deliveryStore is the deliverystore leaf (claim/lease/marks/plan-metadata/
+// destination/reconciliation), and dbStore is the *store.SQLiteStore used for
+// the publication-state and artifact reads that belong to other domains. The
+// composition root supplies both ports (SQLiteStore.Delivery() + the store
+// itself); the runner no longer re-derives the leaf internally. Both ports
+// are nil-safe: a nil deliveryStore leaves the DeliveryStore field nil (Run
+// fails closed), and a nil dbStore disables publication/artifact reads.
 // registry supplies provider resolution.
-func NewDeliveryRunner(cfg *RunnerConfig, registry *Registry, dbStore *store.SQLiteStore, identity string) *DeliveryRunner {
+func NewDeliveryRunner(cfg *RunnerConfig, registry *Registry, deliveryStore *deliverystore.SQLiteDeliveryStore, dbStore *store.SQLiteStore, identity string) *DeliveryRunner {
 	if cfg == nil {
 		cfg = DefaultRunnerConfig()
 	}
@@ -179,8 +183,8 @@ func NewDeliveryRunner(cfg *RunnerConfig, registry *Registry, dbStore *store.SQL
 		cfg.Concurrency = 4
 	}
 	var delivery DeliveryStore
-	if dbStore != nil {
-		delivery = dbStore.Delivery()
+	if deliveryStore != nil {
+		delivery = deliveryStore
 	}
 	return &DeliveryRunner{
 		cfg:       cfg,

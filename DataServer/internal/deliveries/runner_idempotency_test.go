@@ -109,7 +109,7 @@ func TestDeliveryRunnerPublishedShortCircuitSkipsGoogleWork(t *testing.T) {
 	provider := &publishedShortCircuitProvider{}
 	registry := NewRegistry()
 	registry.Register(provider)
-	runner := NewDeliveryRunner(DefaultRunnerConfig(), registry, db, "published-short-circuit-runner")
+	runner := NewDeliveryRunner(DefaultRunnerConfig(), registry, db.Delivery(), db, "published-short-circuit-runner")
 
 	leases, err := db.ClaimDeliveries(context.Background(), "published-short-circuit-runner", 5*time.Minute, 1)
 	if err != nil {

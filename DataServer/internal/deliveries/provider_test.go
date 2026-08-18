@@ -211,7 +211,7 @@ func TestDefaultRunnerConfig(t *testing.T) {
 }
 
 func TestNewDeliveryRunner_Defaults(t *testing.T) {
-	r := NewDeliveryRunner(nil, nil, nil, "")
+	r := NewDeliveryRunner(nil, nil, nil, nil, "")
 	if r == nil {
 		t.Fatal("NewDeliveryRunner returned nil")
 	}
@@ -227,7 +227,7 @@ func TestNewDeliveryRunner_Defaults(t *testing.T) {
 }
 
 func TestDeliveryRunner_Stop(t *testing.T) {
-	r := NewDeliveryRunner(nil, nil, nil, "test-runner")
+	r := NewDeliveryRunner(nil, nil, nil, nil, "test-runner")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -237,7 +237,7 @@ func TestDeliveryRunner_Stop(t *testing.T) {
 }
 
 func TestDeliveryRunner_RunFailsClosedWithoutStore(t *testing.T) {
-	r := NewDeliveryRunner(nil, nil, nil, "missing-store-runner")
+	r := NewDeliveryRunner(nil, nil, nil, nil, "missing-store-runner")
 	err := r.Run(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "store is not configured") {
 		t.Fatalf("Run error = %v, want missing-store failure", err)

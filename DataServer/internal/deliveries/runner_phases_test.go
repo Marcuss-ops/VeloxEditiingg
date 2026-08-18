@@ -121,7 +121,7 @@ func TestProcessLeaseRejectsSynchronousPublishedStatus(t *testing.T) {
 
 	registry := NewRegistry()
 	registry.Register(syncPublishedProvider{})
-	runner := NewDeliveryRunner(&RunnerConfig{LeaseDuration: time.Minute, MaxAttempts: 3}, registry, db, "sync-published-runner")
+	runner := NewDeliveryRunner(&RunnerConfig{LeaseDuration: time.Minute, MaxAttempts: 3}, registry, db.Delivery(), db, "sync-published-runner")
 	leases, err := db.ClaimDeliveries(ctx, runner.identity, time.Minute, 1)
 	if err != nil || len(leases) != 1 {
 		t.Fatalf("claim: %v leases=%d", err, len(leases))
@@ -164,7 +164,7 @@ func TestProcessLeaseRejectsUnregisteredReconciler(t *testing.T) {
 
 	registry := NewRegistry()
 	registry.Register(unregisteredReconcilerProvider{})
-	runner := NewDeliveryRunner(&RunnerConfig{LeaseDuration: time.Minute, MaxAttempts: 3}, registry, db, "unregistered-reconciler-runner")
+	runner := NewDeliveryRunner(&RunnerConfig{LeaseDuration: time.Minute, MaxAttempts: 3}, registry, db.Delivery(), db, "unregistered-reconciler-runner")
 	leases, err := db.ClaimDeliveries(ctx, runner.identity, time.Minute, 1)
 	if err != nil || len(leases) != 1 {
 		t.Fatalf("claim: %v leases=%d", err, len(leases))
@@ -216,7 +216,7 @@ func TestLegacyProviderCannotPromoteAcceptedOperationToPublished(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(provider)
 	registry.RegisterLegacyPhaseProvider(provider)
-	runner := NewDeliveryRunner(&RunnerConfig{LeaseDuration: time.Minute, MaxAttempts: 3}, registry, db, "legacy-phase-runner")
+	runner := NewDeliveryRunner(&RunnerConfig{LeaseDuration: time.Minute, MaxAttempts: 3}, registry, db.Delivery(), db, "legacy-phase-runner")
 	leases, err := db.ClaimDeliveries(ctx, runner.identity, time.Minute, 1)
 	if err != nil || len(leases) != 1 {
 		t.Fatalf("claim: %v leases=%d", err, len(leases))
@@ -271,7 +271,7 @@ func TestDeliveryRunnerResumesMetadataWithoutSecondUpload(t *testing.T) {
 	provider := &crashResumePhaseProvider{}
 	registry := NewRegistry()
 	registry.Register(provider)
-	runner := NewDeliveryRunner(&RunnerConfig{LeaseDuration: time.Minute, MaxAttempts: 3, BackoffSchedule: []time.Duration{0}}, registry, db, "phase-runner")
+	runner := NewDeliveryRunner(&RunnerConfig{LeaseDuration: time.Minute, MaxAttempts: 3, BackoffSchedule: []time.Duration{0}}, registry, db.Delivery(), db, "phase-runner")
 
 	leases, err := db.ClaimDeliveries(context.Background(), "phase-runner", time.Minute, 1)
 	if err != nil || len(leases) != 1 {

@@ -16,7 +16,7 @@ func TestPhaseFailurePropagatesStatePersistenceFailure(t *testing.T) {
 		t.Fatalf("close test database: %v", err)
 	}
 
-	runner := NewDeliveryRunner(nil, nil, db, "state-persistence-test")
+	runner := NewDeliveryRunner(nil, nil, db.Delivery(), db, "state-persistence-test")
 	providerErr := errors.Join(ErrProviderPermanent, errors.New("provider rejected publication"))
 
 	err := runner.phaseFailure(

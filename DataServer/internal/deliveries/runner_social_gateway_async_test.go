@@ -100,7 +100,7 @@ func TestDeliveryRunnerSocialGatewayWaitsForRemotePublication(t *testing.T) {
 		LeaseDuration:   time.Minute,
 		MaxAttempts:     3,
 		BackoffSchedule: []time.Duration{0},
-	}, registry, db, "social-gateway-async-runner")
+	}, registry, db.Delivery(), db, "social-gateway-async-runner")
 
 	leases, err := db.ClaimDeliveries(ctx, runner.identity, time.Minute, 1)
 	if err != nil || len(leases) != 1 {

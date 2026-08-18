@@ -215,7 +215,7 @@ func TestRunnerHydrateDestination_UnmappedRouting_FailsClosed(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&fakeProvider{})
 
-	runner := NewDeliveryRunner(DefaultRunnerConfig(), registry, db, "test-runner-unmapped")
+	runner := NewDeliveryRunner(DefaultRunnerConfig(), registry, db.Delivery(), db, "test-runner-unmapped")
 
 	// ── processLease is private (white-box test). Call it directly
 	//    so the assertion below observes only the routing branch

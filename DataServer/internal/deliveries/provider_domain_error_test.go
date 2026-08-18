@@ -122,7 +122,7 @@ func TestDeliveryRunnerZeroRetryBudgetFailsAfterInitialAttempt(t *testing.T) {
 		LeaseDuration:   time.Minute,
 		MaxAttempts:     3,
 		BackoffSchedule: []time.Duration{time.Millisecond},
-	}, registry, db, "domain-error-runner-zero-budget")
+	}, registry, db.Delivery(), db, "domain-error-runner-zero-budget")
 
 	if runErr := runner.processLease(context.Background(), lease); runErr == nil {
 		t.Fatal("processLease returned nil for exhausted zero retry budget")
@@ -191,7 +191,7 @@ func TestDomainErrorPropagatesThroughDeliveryRunner(t *testing.T) {
 				LeaseDuration:   time.Minute,
 				MaxAttempts:     3,
 				BackoffSchedule: []time.Duration{time.Millisecond},
-			}, registry, db, "domain-error-runner-case")
+			}, registry, db.Delivery(), db, "domain-error-runner-case")
 
 			runErr := runner.processLease(context.Background(), lease)
 			if tt.wantRunnerErr && runErr == nil {

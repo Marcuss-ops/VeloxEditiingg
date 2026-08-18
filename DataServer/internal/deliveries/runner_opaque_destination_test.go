@@ -75,7 +75,7 @@ func TestDeliveryRunnerHydratesOpaqueDestinationBeforeProviderDispatch(t *testin
 	capture := &opaqueDestinationCaptureProvider{}
 	registry := NewRegistry()
 	registry.Register(capture)
-	runner := NewDeliveryRunner(DefaultRunnerConfig(), registry, db, "opaque-runner")
+	runner := NewDeliveryRunner(DefaultRunnerConfig(), registry, db.Delivery(), db, "opaque-runner")
 	leases, err := db.ClaimDeliveries(context.Background(), "opaque-runner", 5*time.Minute, 1)
 	if err != nil {
 		t.Fatalf("ClaimDeliveries: %v", err)

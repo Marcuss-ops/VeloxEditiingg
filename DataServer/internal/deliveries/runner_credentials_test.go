@@ -62,7 +62,7 @@ func TestDeliveryRunnerIssuesShortLeaseAndAuditsResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runner := NewDeliveryRunner(nil, nil, nil, "worker-1").WithCredentialVault(vault)
+	runner := NewDeliveryRunner(nil, nil, nil, nil, "worker-1").WithCredentialVault(vault)
 	lease, err := runner.issueCredentialLease(context.Background(), credentialAwareTestProvider{}, &Destination{CredentialRef: ref, DeliveryMetadataJSON: `{"publication_id":"pub-1"}`}, store.DeliveryLease{DeliveryID: "delivery-1"})
 	if err != nil {
 		t.Fatal(err)

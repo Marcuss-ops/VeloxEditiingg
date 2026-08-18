@@ -452,6 +452,7 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 		deliveryRunner = deliveries.NewDeliveryRunner(
 			deliveryConfig,
 			deliveryReg,
+			p.SQLite.Delivery(),
 			p.SQLite,
 			fmt.Sprintf("delivery-runner-%d", time.Now().UnixNano()),
 		)

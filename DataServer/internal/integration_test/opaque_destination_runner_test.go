@@ -149,7 +149,7 @@ func TestIntegration_DeliveryRunnerForwardsOpaqueDestinationID(t *testing.T) {
 		ClaimBatch:      1,
 		Concurrency:     1,
 		BackoffSchedule: []time.Duration{10 * time.Millisecond},
-	}, registry, db, "runner-opaque-integration")
+	}, registry, db.Delivery(), db, "runner-opaque-integration")
 	runner.WithCredentialVault(vault)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

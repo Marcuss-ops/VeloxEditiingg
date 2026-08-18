@@ -81,7 +81,7 @@ func TestDeliveryRunner_UnavailableExplicitDestinationDoesNotFallback(t *testing
 	provider := &unavailableDestinationProvider{err: ErrProviderNotConfigured}
 	registry := NewRegistry()
 	registry.Register(provider)
-	runner := NewDeliveryRunner(DefaultRunnerConfig(), registry, db, "no-fallback-runner")
+	runner := NewDeliveryRunner(DefaultRunnerConfig(), registry, db.Delivery(), db, "no-fallback-runner")
 	leases, err := db.ClaimDeliveries(context.Background(), "no-fallback-runner", 5*time.Minute, 1)
 	if err != nil {
 		t.Fatalf("ClaimDeliveries: %v", err)
