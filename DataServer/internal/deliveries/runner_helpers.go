@@ -100,7 +100,7 @@ func classifyErrorCode(err error) string {
 // identifier has been removed; the typed Destination struct now carries
 // only `ExternalDestinationID` as the opaque identifier.
 func (r *DeliveryRunner) hydrateDestination(ctx context.Context, destID string) (*Destination, error) {
-	d, err := r.dbStore.GetDeliveryDestination(ctx, destID)
+	d, err := r.deliveryStore.GetDeliveryDestination(ctx, destID)
 	if err != nil {
 		return nil, err
 	}

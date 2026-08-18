@@ -3,17 +3,17 @@ package deliveries
 // runner_contract_test.go — white-box contract test that pins the
 // DeliveryRunner persistence split.
 //
-// dbStore MUST be the consumer-owned DeliveryStore interface (the runner
-// defines the seam it depends on), never *store.SQLiteStore or a concrete
-// *deliverystore.SQLiteDeliveryStore. This is what lets the runner be
-// tested against a fake DeliveryStore without SQLite. store is the
+// deliveryStore MUST be the consumer-owned DeliveryStore interface (the
+// runner defines the seam it depends on), never *store.SQLiteStore or a
+// concrete *deliverystore.SQLiteDeliveryStore. This is what lets the runner
+// be tested against a fake DeliveryStore without SQLite. store is the
 // deliberately separate *store.SQLiteStore port for publication-state and
 // artifact reads, which belong to other domains and are NOT part of the
 // delivery persistence contract.
 //
 // The reflection assertions below fail at test time (not silently at
 // compile time) if either field drifts, so a future refactor that widens
-// dbStore back to the concrete store is caught in CI.
+// deliveryStore back to the concrete store is caught in CI.
 
 import (
 	"reflect"
@@ -31,14 +31,14 @@ var _ DeliveryStore = (*deliverystore.SQLiteDeliveryStore)(nil)
 func TestDeliveryRunnerPersistencePortsAreContract(t *testing.T) {
 	typ := reflect.TypeOf(DeliveryRunner{})
 
-	// dbStore must remain the consumer-owned DeliveryStore interface.
-	dbField, ok := typ.FieldByName("dbStore")
+	// deliveryStore must remain the consumer-owned DeliveryStore interface.
+	deliveryStoreField, ok := typ.FieldByName("deliveryStore")
 	if !ok {
-		t.Fatal("DeliveryRunner.dbStore field not found")
+		t.Fatal("DeliveryRunner.deliveryStore field not found")
 	}
 	wantInterface := reflect.TypeOf((*DeliveryStore)(nil)).Elem()
-	if dbField.Type != wantInterface {
-		t.Fatalf("DeliveryRunner.dbStore type = %v, want the consumer-owned DeliveryStore interface %v (not *store.SQLiteStore or *deliverystore.SQLiteDeliveryStore)", dbField.Type, wantInterface)
+	if deliveryStoreField.Type != wantInterface {
+		t.Fatalf("DeliveryRunner.deliveryStore type = %v, want the consumer-owned DeliveryStore interface %v (not *store.SQLiteStore or *deliverystore.SQLiteDeliveryStore)", deliveryStoreField.Type, wantInterface)
 	}
 
 	// store must remain the separate *store.SQLiteStore port for

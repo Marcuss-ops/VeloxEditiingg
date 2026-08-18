@@ -41,7 +41,7 @@ func (r *DeliveryRunner) runPublicationPhases(ctx context.Context, input publica
 		if err := r.store.ValidatePublishedAfterReconciliation(ctx, input.publicationID, verificationOperation); err != nil {
 			return r.phaseInfrastructureFailure("PUBLISHED_WITHOUT_RECONCILIATION_EVIDENCE", err)
 		}
-		if err := r.dbStore.MarkDeliverySucceeded(ctx, input.lease.DeliveryID, input.lease.RunnerID, input.lease.LeaseID, state.RemoteID, state.RemoteURL); err != nil {
+		if err := r.deliveryStore.MarkDeliverySucceeded(ctx, input.lease.DeliveryID, input.lease.RunnerID, input.lease.LeaseID, state.RemoteID, state.RemoteURL); err != nil {
 			return deliveryStatePersistenceError("mark already-published delivery succeeded", err)
 		}
 		return nil
@@ -235,7 +235,7 @@ func (r *DeliveryRunner) runPublicationPhases(ctx context.Context, input publica
 	if finalState.State != publicationstate.Published {
 		return r.phaseInfrastructureFailure("PUBLICATION_NOT_PUBLISHED", fmt.Errorf("publication ended in %s", finalState.State))
 	}
-	if err := r.dbStore.MarkDeliverySucceeded(ctx, input.lease.DeliveryID, input.lease.RunnerID, input.lease.LeaseID, finalRemoteID, finalRemoteURL); err != nil {
+	if err := r.deliveryStore.MarkDeliverySucceeded(ctx, input.lease.DeliveryID, input.lease.RunnerID, input.lease.LeaseID, finalRemoteID, finalRemoteURL); err != nil {
 		return deliveryStatePersistenceError("mark completed delivery succeeded", err)
 	}
 	return nil
@@ -392,7 +392,7 @@ func (r *DeliveryRunner) phaseFailure(ctx context.Context, lease deliverystore.D
 		if retryAfter := r.resolveRetryAfter(runErr); !retryAfter.IsZero() && retryAfter.After(time.Now().UTC()) {
 			next = retryAfter
 		}
-		if err := r.dbStore.MarkDeliveryRetry(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, code, runErr.Error(), next); err != nil {
+		if err := r.deliveryStore.MarkDeliveryRetry(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, code, runErr.Error(), next); err != nil {
 			persistenceErrors = append(persistenceErrors, deliveryStatePersistenceError("mark delivery retry", err))
 		}
 		if len(persistenceErrors) > 0 {
@@ -410,11 +410,11 @@ func (r *DeliveryRunner) phaseFailure(ctx context.Context, lease deliverystore.D
 		}
 	}
 	if ClassifyError(runErr) == ErrorClassAuth {
-		if err := r.dbStore.MarkDeliveryBlockedAuth(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, code, runErr.Error()); err != nil {
+		if err := r.deliveryStore.MarkDeliveryBlockedAuth(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, code, runErr.Error()); err != nil {
 			persistenceErrors = append(persistenceErrors, deliveryStatePersistenceError("mark delivery blocked auth", err))
 		}
 	} else {
-		if err := r.dbStore.MarkDeliveryFailed(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, code, runErr.Error()); err != nil {
+		if err := r.deliveryStore.MarkDeliveryFailed(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, code, runErr.Error()); err != nil {
 			persistenceErrors = append(persistenceErrors, deliveryStatePersistenceError("mark delivery failed", err))
 		}
 	}

@@ -93,11 +93,11 @@ type DeliveryStore interface {
 
 // DeliveryRunner drives delivery_attempts persistence + provider dispatch.
 type DeliveryRunner struct {
-	cfg      *RunnerConfig
-	registry *Registry
-	dbStore  DeliveryStore
-	store    *store.SQLiteStore
-	vault    *credentials.Vault
+	cfg           *RunnerConfig
+	registry      *Registry
+	deliveryStore DeliveryStore
+	store         *store.SQLiteStore
+	vault         *credentials.Vault
 
 	sem chan struct{} // bounded concurrency
 
@@ -162,14 +162,14 @@ func (r *DeliveryRunner) logError(ctx context.Context, code string, fields map[s
 
 // NewDeliveryRunner wires a runner from two explicit persistence ports:
 // deliveryStore is the deliverystore leaf (claim/lease/marks/plan-metadata/
-// destination/reconciliation), and dbStore is the *store.SQLiteStore used for
+// destination/reconciliation), and store is the *store.SQLiteStore used for
 // the publication-state and artifact reads that belong to other domains. The
 // composition root supplies both ports (SQLiteStore.Delivery() + the store
 // itself); the runner no longer re-derives the leaf internally. Both ports
 // are nil-safe: a nil deliveryStore leaves the DeliveryStore field nil (Run
-// fails closed), and a nil dbStore disables publication/artifact reads.
+// fails closed), and a nil store disables publication/artifact reads.
 // registry supplies provider resolution.
-func NewDeliveryRunner(cfg *RunnerConfig, registry *Registry, deliveryStore *deliverystore.SQLiteDeliveryStore, dbStore *store.SQLiteStore, identity string) *DeliveryRunner {
+func NewDeliveryRunner(cfg *RunnerConfig, registry *Registry, deliveryStore *deliverystore.SQLiteDeliveryStore, store *store.SQLiteStore, identity string) *DeliveryRunner {
 	if cfg == nil {
 		cfg = DefaultRunnerConfig()
 	}
@@ -187,15 +187,15 @@ func NewDeliveryRunner(cfg *RunnerConfig, registry *Registry, deliveryStore *del
 		delivery = deliveryStore
 	}
 	return &DeliveryRunner{
-		cfg:       cfg,
-		registry:  registry,
-		dbStore:   delivery,
-		store:     dbStore,
-		identity:  identity,
-		logger:    logging.NewLogger("deliveries.runner"),
-		sem:       make(chan struct{}, cfg.Concurrency),
-		stopCh:    make(chan struct{}),
-		stoppedCh: make(chan struct{}),
+		cfg:           cfg,
+		registry:      registry,
+		deliveryStore: delivery,
+		store:         store,
+		identity:      identity,
+		logger:        logging.NewLogger("deliveries.runner"),
+		sem:           make(chan struct{}, cfg.Concurrency),
+		stopCh:        make(chan struct{}),
+		stoppedCh:     make(chan struct{}),
 	}
 }
 
@@ -219,7 +219,7 @@ func (r *DeliveryRunner) Run(ctx context.Context) error {
 		return errors.New("deliveries: nil runner")
 	}
 	defer close(r.stoppedCh)
-	if r.dbStore == nil {
+	if r.deliveryStore == nil {
 		return errors.New("deliveries: runner store is not configured")
 	}
 
@@ -272,7 +272,7 @@ func (r *DeliveryRunner) tick(ctx context.Context) error {
 	if err := r.reconcileRecent(ctx); err != nil {
 		r.logWarn(ctx, logging.CodeDeliveryReconcileSweepFail, logging.F("err", err))
 	}
-	leases, err := r.dbStore.ClaimDeliveries(ctx, r.identity, r.cfg.LeaseDuration, r.cfg.ClaimBatch)
+	leases, err := r.deliveryStore.ClaimDeliveries(ctx, r.identity, r.cfg.LeaseDuration, r.cfg.ClaimBatch)
 	if err != nil {
 		return fmt.Errorf("claim deliveries: %w", err)
 	}

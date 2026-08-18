@@ -9,10 +9,10 @@ import (
 )
 
 func (r *DeliveryRunner) reconcileRecent(ctx context.Context) error {
-	if r == nil || r.dbStore == nil || r.registry == nil {
+	if r == nil || r.deliveryStore == nil || r.registry == nil {
 		return nil
 	}
-	rows, err := r.dbStore.ListDeliveryReconciliationCandidates(ctx, 100)
+	rows, err := r.deliveryStore.ListDeliveryReconciliationCandidates(ctx, 100)
 	if err != nil {
 		return err
 	}
@@ -56,7 +56,7 @@ func (r *DeliveryRunner) reconcileRecent(ctx context.Context) error {
 		}
 		// The SQLite TEXT column stays a plain string; convert the typed
 		// status at the store boundary.
-		if err := r.dbStore.ApplyReconciledDelivery(ctx, row.DeliveryID, string(status), result.RemoteID, result.RemoteURL, errCode, errMessage); err != nil {
+		if err := r.deliveryStore.ApplyReconciledDelivery(ctx, row.DeliveryID, string(status), result.RemoteID, result.RemoteURL, errCode, errMessage); err != nil {
 			return err
 		}
 	}

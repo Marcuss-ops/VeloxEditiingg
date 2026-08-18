@@ -45,7 +45,7 @@ func (r *DeliveryRunner) renewDeliveryLeaseLoop(ctx context.Context, done chan<-
 			return
 		case <-ticker.C:
 			newExpiry := time.Now().UTC().Add(r.cfg.LeaseDuration)
-			if err := r.dbStore.RenewDeliveryLease(
+			if err := r.deliveryStore.RenewDeliveryLease(
 				context.Background(), // intentionally detached from request ctx
 				lease.DeliveryID, lease.RunnerID, lease.LeaseID, newExpiry,
 			); err != nil {
