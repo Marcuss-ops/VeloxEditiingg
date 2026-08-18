@@ -105,8 +105,10 @@ var allowedWriters = map[string]bool{
 	// a COMMITTED attempt after a crash, append-audited and idempotent).
 	filepath.Join("internal", "stalereconcile", "stalereconcile_apply.go"): true,
 	// Separate delivery lifecycle: the terminal/retry SQL moved from
-	// store_deliveries_lease.go into the responsibility-specific marks file.
-	filepath.Join("internal", "store", "store_deliveries_marks.go"): true,
+	// store_deliveries_marks.go into the deliverystore leaf marks file.
+	// UPDATE job_deliveries SET status='SUCCEEDED' is delivery-completion
+	// (NOT jobs).
+	filepath.Join("internal", "deliverystore", "marks.go"): true,
 	// SEPARATE lifecycles: UPDATE workflow_steps / workflow_runs SET
 	// status='SUCCEEDED' is workflow-completion (NOT jobs).
 	filepath.Join("internal", "workflow", "sqlite_repository.go"):         true,

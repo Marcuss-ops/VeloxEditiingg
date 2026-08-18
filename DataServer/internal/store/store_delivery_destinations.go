@@ -9,6 +9,8 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+
+	"velox-server/internal/deliverystore"
 )
 
 // ── Destination CRUD ─────────────────────────────────────────────────────────
@@ -130,46 +132,17 @@ func (s *SQLiteStore) GetDeliveryDestinationByExternalID(ctx context.Context, ex
 }
 
 // DeliveryDestinationStatus is the 3-state verdict returned by
-// BatchDeliveryDestinationsStatus. It exists so the handler-layer
-// pre-flight can distinguish the two failure modes that §0.3.4
-// item 4 of the runbook splits (Velox-side enabled=false vs.
-// an upstream InstaEdit-side verdict) — the previous 2-state
-// batched helper collapsed both into a single `false` and made
-// operator dashboards unable to disambiguate the remediation.
-type DeliveryDestinationStatus int
+// BatchDeliveryDestinationsStatus. Re-exported as an alias from the
+// deliverystore leaf (the canonical declaration).
+type DeliveryDestinationStatus = deliverystore.DeliveryDestinationStatus
 
+// The three buckets are re-exported so existing store.<Const> call sites keep
+// compiling while the canonical constants live in the leaf.
 const (
-	// DeliveryDestinationNotFound indicates the destination_id is
-	// not present in delivery_destinations. The producer picked
-	// (or fabricated) an unknown id; handler emits 422
-	// target_error_code=DESTINATION_NOT_FOUND.
-	DeliveryDestinationNotFound DeliveryDestinationStatus = iota
-	// DeliveryDestinationDisabled indicates the row exists but
-	// enabled = 0. Handler emits 422
-	// target_error_code=BLOCKED_VELOX_DISABLED — distinct from
-	// the catalog-sourced BLOCKED_NO_PUBLISHABLE_CHANNEL.
-	DeliveryDestinationDisabled
-	// DeliveryDestinationEnabled indicates the row exists and
-	// enabled = 1. Handler allows the enqueue.
-	DeliveryDestinationEnabled
+	DeliveryDestinationNotFound = deliverystore.DeliveryDestinationNotFound
+	DeliveryDestinationDisabled = deliverystore.DeliveryDestinationDisabled
+	DeliveryDestinationEnabled  = deliverystore.DeliveryDestinationEnabled
 )
-
-// String returns the canonical wire-format name for use in JSON
-// envelopes. Stable contract: the lowercase strings are the
-// accepted values for `details[].status` in the §0.3.4 split
-// response.
-func (s DeliveryDestinationStatus) String() string {
-	switch s {
-	case DeliveryDestinationNotFound:
-		return "not_found"
-	case DeliveryDestinationDisabled:
-		return "disabled"
-	case DeliveryDestinationEnabled:
-		return "enabled"
-	default:
-		return "unknown"
-	}
-}
 
 // BatchDeliveryDestinationsStatus replaces the previous 2-state
 // BatchDeliveryDestinationsExistAndEnabled helper. Each

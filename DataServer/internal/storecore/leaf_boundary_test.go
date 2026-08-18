@@ -18,6 +18,7 @@ import (
 var leafPackages = []string{
 	"artifactsstore",
 	"completionstore",
+	"deliverystore",
 	"forwardingstore",
 	"renderfingerprintstore",
 	"smokerunstore",

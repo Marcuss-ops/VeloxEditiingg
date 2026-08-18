@@ -16,6 +16,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
+	"velox-server/internal/deliverystore"
 	"velox-server/internal/forwardingstore"
 	"velox-server/internal/outbox"
 	"velox-server/internal/platform/database"
@@ -41,6 +42,12 @@ type SQLiteStore struct {
 	// AtomicForwardAndEnqueue can own the whole creator_forwardings +
 	// job/task transaction without importing store.
 	forwarding *forwardingstore.SQLiteForwardingStore
+	// delivery is the leaf SQLite persistence for job_deliveries +
+	// delivery_destinations. The delivery methods on SQLiteStore delegate
+	// to it. The cross-domain parent-job finalizer is injected into the
+	// leaf so the terminal MarkDelivery* transitions can own the
+	// job_deliveries + jobs transaction without importing store.
+	delivery *deliverystore.SQLiteDeliveryStore
 }
 
 // OutboxEmitter is re-exported from the repository leaf package. The
@@ -170,6 +177,7 @@ func NewSQLiteStoreFromHandle(handle *database.Handle, path string, migrateOnSta
 
 	s := &SQLiteStore{db: db, path: path}
 	s.forwarding = forwardingstore.NewSQLiteForwardingStore(db).WithJobTaskCreator(NewAtomicJobTaskCreator(s))
+	s.delivery = deliverystore.NewSQLiteDeliveryStore(db).WithParentJobFinalizer(s)
 
 	if !migrateOnStart {
 		// Forward-only tool mode: an external tool owns the schema.
@@ -393,6 +401,28 @@ func (s *SQLiteStore) Forwarding() *forwardingstore.SQLiteForwardingStore {
 		return nil
 	}
 	return s.forwarding
+}
+
+// Delivery exposes the job_deliveries leaf persistence so the composition
+// root can wire leaf consumers directly against deliverystore instead of
+// going through the store facade. The leaf is constructed once in
+// NewSQLiteStoreFromHandle with the injected parent-job finalizer, and lazily
+// for directly-constructed test stores.
+func (s *SQLiteStore) Delivery() *deliverystore.SQLiteDeliveryStore {
+	if s == nil {
+		return nil
+	}
+	return s.deliveryStore()
+}
+
+// deliveryStore returns the delivery leaf, lazily constructing it for
+// directly-constructed *SQLiteStore values (test fixtures) so the facade
+// methods never nil-panic.
+func (s *SQLiteStore) deliveryStore() *deliverystore.SQLiteDeliveryStore {
+	if s.delivery == nil && s.db != nil {
+		s.delivery = deliverystore.NewSQLiteDeliveryStore(s.db).WithParentJobFinalizer(s)
+	}
+	return s.delivery
 }
 
 // Path returns the on-disk file path this SQLiteStore was opened against.
