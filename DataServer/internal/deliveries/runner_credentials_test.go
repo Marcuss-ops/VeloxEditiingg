@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"velox-server/internal/credentials"
+	"velox-server/internal/deliverystore"
 	"velox-server/internal/store"
 )
 
@@ -63,7 +64,7 @@ func TestDeliveryRunnerIssuesShortLeaseAndAuditsResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	runner := NewDeliveryRunner(nil, nil, nil, nil, "worker-1").WithCredentialVault(vault)
-	lease, err := runner.issueCredentialLease(context.Background(), credentialAwareTestProvider{}, &Destination{CredentialRef: ref, DeliveryMetadataJSON: `{"publication_id":"pub-1"}`}, store.DeliveryLease{DeliveryID: "delivery-1"})
+	lease, err := runner.issueCredentialLease(context.Background(), credentialAwareTestProvider{}, &Destination{CredentialRef: ref, DeliveryMetadataJSON: `{"publication_id":"pub-1"}`}, deliverystore.DeliveryLease{DeliveryID: "delivery-1"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
+	"velox-server/internal/deliverystore"
 	"velox-server/internal/publicationstate"
-	"velox-server/internal/store"
 	"velox-server/internal/supervisor"
 )
 
@@ -21,7 +21,7 @@ func TestPhaseFailurePropagatesStatePersistenceFailure(t *testing.T) {
 
 	err := runner.phaseFailure(
 		context.Background(),
-		store.DeliveryLease{AttemptNumber: 1},
+		deliverystore.DeliveryLease{AttemptNumber: 1},
 		"publication-missing-after-db-close",
 		publicationstate.Uploading,
 		"upload_media:operation",

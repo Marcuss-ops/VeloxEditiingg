@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"velox-server/internal/deliverystore"
 	"velox-server/internal/store"
 	"velox-shared/contract/domain"
 )
@@ -36,7 +37,7 @@ func (p domainErrorProvider) Deliver(context.Context, *store.Artifact, *Destinat
 	return nil, fmt.Errorf("provider delivery: %w", p.err)
 }
 
-func seedDomainErrorDelivery(t *testing.T, db *store.SQLiteStore, suffix string, maxAttempts ...int) store.DeliveryLease {
+func seedDomainErrorDelivery(t *testing.T, db *store.SQLiteStore, suffix string, maxAttempts ...int) deliverystore.DeliveryLease {
 	t.Helper()
 	const providerName = "domain-error-test"
 	destinationID := "domain-error-destination-" + suffix
