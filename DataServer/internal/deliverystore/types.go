@@ -22,7 +22,7 @@ import (
 //
 // The column `external_destination_id` was added by migration 091
 // (Residuo 2 — DROPPED the legacy account_id / channel_id / language
-// columns) and renamed from `social_destination_id` by migration 092
+// columns) and renamed from the former social-destination key by migration 092
 // (Residuo 4 — canonical-rename of the opaque-mode identifier).
 type DeliveryDestination struct {
 	DestinationID         string `json:"destination_id"`

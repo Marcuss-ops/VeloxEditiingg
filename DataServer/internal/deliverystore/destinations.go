@@ -52,7 +52,7 @@ func (w *SQLiteDeliveryStore) InsertDeliveryDestination(dest *DeliveryDestinatio
 // Opaque-mode SQL (Residuo 2 of YouTube → Social closure + migration 091):
 // the legacy account_id / channel_id / language columns have been dropped
 // from the delivery_destinations table. ExternalDestinationID is the
-// canonical opaque reference (renamed from social_destination_id by
+// canonical opaque reference (renamed from the former social-destination key by
 // migration 092, Residuo 4).
 func (w *SQLiteDeliveryStore) ListDeliveryDestinations(provider string, limit int) ([]DeliveryDestination, error) {
 	w.observeDBOperation(false)
@@ -311,7 +311,7 @@ func (w *SQLiteDeliveryStore) BatchDeliveryDestinations(ctx context.Context, ids
 // Opaque-mode SQL (Residuo 2 of YouTube → Social closure + migration 091):
 // the legacy account_id / channel_id / language columns have been dropped
 // from the delivery_destinations table. ExternalDestinationID is the
-// canonical opaque reference (renamed from social_destination_id by
+// canonical opaque reference (renamed from the former social-destination key by
 // migration 092, Residuo 4).
 func (w *SQLiteDeliveryStore) GetDeliveryDestination(ctx context.Context, destID string) (*DeliveryDestination, error) {
 	w.observeDBOperation(false)
