@@ -13,23 +13,45 @@ type CreateJobCmd struct {
 	IdempotencyKey  string
 	RenderSpec      json.RawMessage
 	Destinations    []CreateDestinationCmd
+	PublishAt       string
+	Target          *PublicationTargetCmd
+	Publications    json.RawMessage
 	RenderOnly      bool
+}
+
+// PublicationTargetCmd is payload metadata describing the logical social
+// target selected in InstaEdit Social. Velox still delivers through opaque
+// destination IDs; these fields are carried for auditability and UI/job
+// inspection, never used as credentials or as a replacement for destination
+// resolution.
+type PublicationTargetCmd struct {
+	Type        string   `json:"type"`
+	ChannelID   string   `json:"channel_id,omitempty"`
+	ChannelName string   `json:"channel_name,omitempty"`
+	GroupID     int64    `json:"group_id,omitempty"`
+	GroupName   string   `json:"group_name,omitempty"`
+	ChannelIDs  []string `json:"channel_ids,omitempty"`
 }
 
 // CreateDestinationCmd is a single destination inside CreateJobCmd.
 type CreateDestinationCmd struct {
 	ExternalDestinationID string
+	PublicationID         string
+	VariantID             string
 	Metadata              json.RawMessage
 }
 
 // createJobRequest is the HTTP request body for POST /jobs.
 type createJobRequest struct {
-	ContractVersion string          `json:"contract_version"`
-	IdempotencyKey  string          `json:"idempotency_key"`
-	ProjectID       string          `json:"project_id"`
-	RenderSpec      json.RawMessage `json:"render_spec"`
-	DeliveryPlan    deliveryPlanReq `json:"delivery_plan"`
-	RenderOnly      bool            `json:"render_only,omitempty"`
+	ContractVersion string                `json:"contract_version"`
+	IdempotencyKey  string                `json:"idempotency_key"`
+	ProjectID       string                `json:"project_id"`
+	RenderSpec      json.RawMessage       `json:"render_spec"`
+	DeliveryPlan    deliveryPlanReq       `json:"delivery_plan"`
+	PublishAt       string                `json:"publish_at,omitempty"`
+	Target          *PublicationTargetCmd `json:"target,omitempty"`
+	Publications    json.RawMessage       `json:"publications,omitempty"`
+	RenderOnly      bool                  `json:"render_only,omitempty"`
 
 	// Canonical velox.job.v1 fields are accepted at the transport boundary
 	// so the InstaEdit client can use the provider-neutral job contract.
@@ -51,6 +73,7 @@ type deliveryPlanReq struct {
 // deliveryDestinationReq is the HTTP wrapper for a single destination.
 type deliveryDestinationReq struct {
 	ExternalDestinationID string          `json:"external_destination_id"`
+	PublicationID         string          `json:"publication_id,omitempty"`
 	Metadata              json.RawMessage `json:"metadata"`
 }
 
@@ -69,6 +92,7 @@ type jobResponse struct {
 
 // deliveryResponse is the InstaEdit view of a job delivery.
 type deliveryResponse struct {
+	PublicationID         string `json:"publication_id,omitempty"`
 	ExternalDestinationID string `json:"external_destination_id"`
 	SocialDeliveryID      string `json:"social_delivery_id"`
 	Status                string `json:"status"`

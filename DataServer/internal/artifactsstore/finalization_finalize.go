@@ -379,7 +379,7 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 		if maxAttempts < 0 {
 			maxAttempts = 5
 		}
-		if err := insertPendingDelivery(ctx, tx, p.ArtifactID, dest.DestinationID, maxAttempts, nowStr); err != nil {
+		if err := insertPendingDelivery(ctx, tx, p.ArtifactID, dest.PublicationID, dest.DestinationID, maxAttempts, nowStr); err != nil {
 			return nil, err
 		}
 	}
@@ -405,16 +405,16 @@ func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p Finali
 	return readArtifact(ctx, w.db, p.ArtifactID)
 }
 
-func insertPendingDelivery(ctx context.Context, tx *sql.Tx, artifactID, destinationID string, maxAttempts int, now string) error {
+func insertPendingDelivery(ctx context.Context, tx *sql.Tx, artifactID, publicationID, destinationID string, maxAttempts int, now string) error {
 	deliveryID, err := identity.NewHex128()
 	if err != nil {
 		return fmt.Errorf("artifactsstore: generate delivery ID: %w", err)
 	}
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO job_deliveries (delivery_id, artifact_id, destination_id, status, max_attempts, idempotency_key, created_at, updated_at)
-		VALUES (?, ?, ?, 'PENDING', ?, ?, ?, ?)
-		ON CONFLICT(artifact_id, destination_id) DO NOTHING`,
-		deliveryID, artifactID, destinationID, maxAttempts, artifactID+"_"+destinationID, now, now)
+		INSERT INTO job_deliveries (delivery_id, artifact_id, publication_id, destination_id, status, max_attempts, idempotency_key, created_at, updated_at)
+		VALUES (?, ?, ?, ?, 'PENDING', ?, ?, ?, ?)
+		ON CONFLICT(artifact_id, publication_id, destination_id) DO NOTHING`,
+		deliveryID, artifactID, publicationID, destinationID, maxAttempts, artifactID+"_"+publicationID+"_"+destinationID, now, now)
 	if err != nil {
 		return fmt.Errorf("artifactsstore: FinalizeVerified job_deliveries insert (dest=%s): %w", destinationID, err)
 	}

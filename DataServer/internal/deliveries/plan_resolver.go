@@ -42,6 +42,7 @@ var ErrNoExplicitPlan = deliverycontract.ErrNoExplicitPlan
 // in effect" boundary for any audit log / re-resolve decision.
 type PlanContext struct {
 	DestinationID string
+	PublicationID string
 	Priority      int
 	RetryBudget   int             // max attempts before FAILED
 	Backoff       []time.Duration // optional per-plan override; nil → runner default
@@ -98,6 +99,7 @@ func (r *SQLiteDeliveryPlanResolver) ResolveDestinations(ctx context.Context, jo
 		}
 		out = append(out, deliverycontract.DeliveryDestination{
 			DestinationID: pc.DestinationID,
+			PublicationID: pc.PublicationID,
 			MaxAttempts:   budget,
 		})
 	}
@@ -127,10 +129,30 @@ func (r *SQLiteDeliveryPlanResolver) ResolvePlan(ctx context.Context, jobID, art
 
 	// Step 1: check for per-job plans.
 	telemetry.RecordEnqueueResolverQuery(ctx, "plans")
-	rows, err := r.db.QueryContext(ctx,
-		`SELECT destination_id, priority, retry_budget FROM job_delivery_plans
-		 WHERE job_id = ? AND enabled = 1
-		 ORDER BY priority ASC, destination_id ASC`, jobID)
+	query := `SELECT p.destination_id, COALESCE(p.publication_id,''), p.priority, p.retry_budget
+		FROM job_delivery_plans p
+		WHERE p.job_id = ? AND p.enabled = 1`
+	args := []any{jobID}
+	if artifactID != "" {
+		query = `SELECT p.destination_id, COALESCE(p.publication_id,''), p.priority, p.retry_budget
+		FROM job_delivery_plans p
+		JOIN artifacts a ON a.id = ?
+		WHERE p.job_id = ? AND p.enabled = 1
+		  AND (
+			(json_extract(p.metadata_json, '$.output_variant_id') IS NOT NULL
+			 AND a.output_kind = json_extract(p.metadata_json, '$.output_variant_id'))
+			OR
+			(json_extract(p.metadata_json, '$.output_artifact_role') IS NOT NULL
+			 AND a.output_kind = json_extract(p.metadata_json, '$.output_artifact_role'))
+			OR
+			(json_extract(p.metadata_json, '$.output_variant_id') IS NULL
+			 AND json_extract(p.metadata_json, '$.output_artifact_role') IS NULL
+			 AND (a.output_kind IN ('final_video','video') OR (a.output_kind='' AND a.type IN ('video','final_video'))))
+		  )`
+		args = []any{artifactID, jobID}
+	}
+	query += ` ORDER BY p.priority ASC, p.publication_id ASC, p.destination_id ASC`
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("deliveries: ResolvePlan plans query: %w", err)
 	}
@@ -139,15 +161,16 @@ func (r *SQLiteDeliveryPlanResolver) ResolvePlan(ctx context.Context, jobID, art
 	plan := &Plan{JobID: jobID, ResolvedAt: time.Now().UTC()}
 	for rows.Next() {
 		var (
-			destID   string
-			priority int
-			retryBud int
+			destID, publicationID string
+			priority              int
+			retryBud              int
 		)
-		if err := rows.Scan(&destID, &priority, &retryBud); err != nil {
+		if err := rows.Scan(&destID, &publicationID, &priority, &retryBud); err != nil {
 			return nil, fmt.Errorf("deliveries: ResolvePlan plans scan: %w", err)
 		}
 		plan.Destinations = append(plan.Destinations, PlanContext{
 			DestinationID: destID,
+			PublicationID: publicationID,
 			Priority:      priority,
 			RetryBudget:   retryBud,
 			AcquiredAt:    plan.ResolvedAt,

@@ -206,23 +206,38 @@ func (r *sqliteCompletionTx) MarkCompletionJobSucceededIfTasksDone(ctx context.C
 }
 
 func (r *sqliteCompletionTx) InsertCompletionDeliveries(ctx context.Context, jobID, now string) error {
-	rows, err := r.tx.QueryContext(ctx, `SELECT a.id,p.destination_id FROM artifacts a CROSS JOIN job_delivery_plans p WHERE a.job_id=? AND p.job_id=? AND a.status='READY' AND (a.output_kind='final_video' OR (a.output_kind='' AND a.type IN ('video','final_video'))) AND p.enabled=1`, jobID, jobID)
+	rows, err := r.tx.QueryContext(ctx, `
+		SELECT a.id, p.destination_id, COALESCE(p.publication_id, '')
+		FROM artifacts a CROSS JOIN job_delivery_plans p
+		WHERE a.job_id=? AND p.job_id=? AND a.status='READY' AND p.enabled=1
+		  AND (
+			(json_extract(p.metadata_json, '$.output_variant_id') IS NOT NULL
+			 AND a.output_kind = json_extract(p.metadata_json, '$.output_variant_id'))
+			OR
+			(json_extract(p.metadata_json, '$.output_artifact_role') IS NOT NULL
+			 AND a.output_kind = json_extract(p.metadata_json, '$.output_artifact_role'))
+			OR
+			(json_extract(p.metadata_json, '$.output_variant_id') IS NULL
+			 AND json_extract(p.metadata_json, '$.output_artifact_role') IS NULL
+			AND (a.output_kind IN ('final_video','video') OR (a.output_kind='' AND a.type IN ('video','final_video')))))
+		  )`, jobID, jobID)
 	if err != nil {
 		return fmt.Errorf("store: completion delivery query: %w", err)
 	}
 	defer rows.Close()
-	type key struct{ a, d string }
+	type key struct{ a, p, d string }
 	seen := map[key]bool{}
 	for rows.Next() {
-		var a, d string
-		if err := rows.Scan(&a, &d); err != nil {
+		var a, d, publicationID string
+		if err := rows.Scan(&a, &d, &publicationID); err != nil {
 			return fmt.Errorf("store: completion delivery scan: %w", err)
 		}
-		if a == "" || d == "" || seen[key{a, d}] {
+		if a == "" || d == "" || seen[key{a, publicationID, d}] {
 			continue
 		}
-		seen[key{a, d}] = true
-		if _, err := r.tx.ExecContext(ctx, `INSERT OR IGNORE INTO job_deliveries (delivery_id,artifact_id,destination_id,status,idempotency_key,created_at,updated_at) VALUES (?,?,?,'PENDING',?,?,?)`, `jbd_comp_`+a+`_`+d, a, d, a+`_`+d, now, now); err != nil {
+		seen[key{a, publicationID, d}] = true
+		deliveryKey := a + "_" + publicationID + "_" + d
+		if _, err := r.tx.ExecContext(ctx, `INSERT OR IGNORE INTO job_deliveries (delivery_id,artifact_id,publication_id,destination_id,status,idempotency_key,created_at,updated_at) VALUES (?,?,?,?,'PENDING',?,?,?)`, `jbd_comp_`+deliveryKey, a, publicationID, d, deliveryKey, now, now); err != nil {
 			return fmt.Errorf("store: completion delivery insert: %w", err)
 		}
 	}

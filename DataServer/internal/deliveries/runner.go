@@ -85,7 +85,7 @@ type DeliveryStore interface {
 	MarkDeliveryRetry(ctx context.Context, deliveryID, runnerID, leaseID, errorCode, errorMsg string, nextAttemptAt time.Time) error
 	MarkDeliveryFailed(ctx context.Context, deliveryID, runnerID, leaseID, errorCode, errorMsg string) error
 	MarkDeliveryBlockedAuth(ctx context.Context, deliveryID, runnerID, leaseID, errorCode, errorMsg string) error
-	GetDeliveryPlanMetadata(ctx context.Context, artifactID, destinationID string) (string, error)
+	GetDeliveryPlanMetadata(ctx context.Context, artifactID, publicationID, destinationID string) (string, error)
 	GetDeliveryDestination(ctx context.Context, destID string) (*deliverystore.DeliveryDestination, error)
 	ListDeliveryReconciliationCandidates(ctx context.Context, limit int) ([]deliverystore.JobDelivery, error)
 	ApplyReconciledDelivery(ctx context.Context, deliveryID, status, remoteID, remoteURL, errorCode, errorMessage string) error

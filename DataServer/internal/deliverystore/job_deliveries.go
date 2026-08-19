@@ -32,12 +32,12 @@ func (w *SQLiteDeliveryStore) InsertJobDelivery(jobD *JobDelivery) error {
 	}
 	_, err := w.db.Exec(
 		`INSERT OR IGNORE INTO job_deliveries
-		 (delivery_id, artifact_id, destination_id, status,
+		 (delivery_id, artifact_id, publication_id, destination_id, status,
 		  idempotency_key, remote_id, remote_url, created_at, updated_at,
 		  locked_by, lease_id, lease_expires_at, next_attempt_at,
 		  attempt_count, max_attempts, last_error_code, last_error_message, completed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		jobD.DeliveryID, jobD.ArtifactID, jobD.DestinationID,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		jobD.DeliveryID, jobD.ArtifactID, jobD.PublicationID, jobD.DestinationID,
 		jobD.Status, nullIfEmpty(jobD.IdempotencyKey),
 		nullIfEmpty(jobD.RemoteID), nullIfEmpty(jobD.RemoteURL),
 		jobD.CreatedAt, jobD.UpdatedAt,
@@ -57,7 +57,7 @@ func (w *SQLiteDeliveryStore) InsertJobDelivery(jobD *JobDelivery) error {
 func (w *SQLiteDeliveryStore) ListJobDeliveriesByJob(jobID string) ([]JobDelivery, error) {
 	w.observeDBOperation(false)
 	rows, err := w.db.Query(
-		`SELECT jd.delivery_id, jd.artifact_id, jd.destination_id,
+		`SELECT jd.delivery_id, jd.artifact_id, COALESCE(jd.publication_id,''), jd.destination_id,
 		        jd.status,
 		        COALESCE(jd.idempotency_key,''), COALESCE(jd.remote_id,''),
 		        COALESCE(jd.remote_url,''),
@@ -82,7 +82,7 @@ func (w *SQLiteDeliveryStore) ListJobDeliveriesByJob(jobID string) ([]JobDeliver
 	var out []JobDelivery
 	for rows.Next() {
 		var jd JobDelivery
-		if err := rows.Scan(&jd.DeliveryID, &jd.ArtifactID, &jd.DestinationID,
+		if err := rows.Scan(&jd.DeliveryID, &jd.ArtifactID, &jd.PublicationID, &jd.DestinationID,
 			&jd.Status, &jd.IdempotencyKey, &jd.RemoteID,
 			&jd.RemoteURL, &jd.CreatedAt, &jd.UpdatedAt,
 			&jd.LockedBy, &jd.LeaseID, &jd.LeaseExpiresAt, &jd.NextAttemptAt,
@@ -103,7 +103,7 @@ func (w *SQLiteDeliveryStore) ListJobDeliveriesByJob(jobID string) ([]JobDeliver
 func (w *SQLiteDeliveryStore) GetJobDelivery(ctx context.Context, deliveryID string) (*JobDelivery, error) {
 	w.observeDBOperation(false)
 	row := w.db.QueryRowContext(ctx,
-		`SELECT delivery_id, artifact_id, destination_id,
+		`SELECT delivery_id, artifact_id, COALESCE(publication_id,''), destination_id,
 		        status,
 		        COALESCE(idempotency_key,''), COALESCE(remote_id,''),
 		        COALESCE(remote_url,''),
@@ -119,7 +119,7 @@ func (w *SQLiteDeliveryStore) GetJobDelivery(ctx context.Context, deliveryID str
 		 FROM job_deliveries WHERE delivery_id = ?`, deliveryID)
 	var jd JobDelivery
 	var idempotencyKey, remoteID, remoteURL string
-	err := row.Scan(&jd.DeliveryID, &jd.ArtifactID, &jd.DestinationID,
+	err := row.Scan(&jd.DeliveryID, &jd.ArtifactID, &jd.PublicationID, &jd.DestinationID,
 		&jd.Status, &idempotencyKey, &remoteID,
 		&remoteURL, &jd.CreatedAt, &jd.UpdatedAt, &jd.CompletedAt, &jd.QueuedAt, &jd.StartedAt,
 		&jd.LockedBy, &jd.LeaseID, &jd.LeaseExpiresAt, &jd.NextAttemptAt,

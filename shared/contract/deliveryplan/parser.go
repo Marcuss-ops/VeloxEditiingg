@@ -16,6 +16,7 @@ import (
 // downstream projection only sees well-formed entries.
 type Entry struct {
 	DestinationID         string                 `json:"destination_id"`
+	PublicationID         string                 `json:"publication_id,omitempty"`
 	Priority              int                    `json:"priority"`
 	RetryBudget           int                    `json:"retry_budget"`
 	Enabled               bool                   `json:"enabled"`
@@ -37,6 +38,9 @@ func EntriesToMaps(entries []Entry) []map[string]interface{} {
 			"priority":       entry.Priority,
 			"retry_budget":   entry.RetryBudget,
 			"enabled":        entry.Enabled,
+		}
+		if entry.PublicationID != "" {
+			item["publication_id"] = entry.PublicationID
 		}
 		if entry.ExternalDestinationID != "" {
 			item["external_destination_id"] = entry.ExternalDestinationID
@@ -172,13 +176,14 @@ func Parse(payload map[string]interface{}) ([]Entry, error) {
 				"is required",
 			)
 		}
-		if _, dup := seen[id]; dup {
+		key := entries[i].PublicationID + "\x00" + id
+		if _, dup := seen[key]; dup {
 			return nil, NewValidationError(
 				fmt.Sprintf("delivery_plan.%d.destination_id", i),
 				fmt.Sprintf("duplicate destination_id %q", id),
 			)
 		}
-		seen[id] = struct{}{}
+		seen[key] = struct{}{}
 		entries[i].DestinationID = id
 	}
 	return entries, nil
@@ -275,6 +280,7 @@ func shapeFromMap(m map[string]interface{}) Entry {
 	externalDestID := firstStringField(m, "external_destination_id", "social_destination_id")
 	return Entry{
 		DestinationID:         firstStringField(m, "destination_id", "id"),
+		PublicationID:         firstStringField(m, "publication_id"),
 		Priority:              intFromAny(m["priority"]),
 		RetryBudget:           intFromAny(m["retry_budget"]),
 		Enabled:               boolFromAny(m["enabled"], true),

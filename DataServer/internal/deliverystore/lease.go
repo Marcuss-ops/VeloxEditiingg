@@ -101,7 +101,7 @@ func (w *SQLiteDeliveryStore) ClaimDeliveries(ctx context.Context, runnerID stri
 				         eligible.delivery_created_at ASC,
 				         eligible.delivery_id ASC
 		   LIMIT ?
-		   )		RETURNING delivery_id, artifact_id, destination_id, attempt_count, max_attempts, COALESCE(queued_at, created_at)`,
+				   )		RETURNING delivery_id, artifact_id, publication_id, destination_id, attempt_count, max_attempts, COALESCE(queued_at, created_at)`,
 		runnerID, provisionalLeaseID, leaseExpiresISO, nowISO,
 		nowISO, nowISO, batch,
 	)
@@ -110,15 +110,15 @@ func (w *SQLiteDeliveryStore) ClaimDeliveries(ctx context.Context, runnerID stri
 	}
 
 	type claimedRow struct {
-		deliveryID, artifactID, destID string
-		attemptCount                   int
-		maxAttempts                    int
-		createdAt                      string
+		deliveryID, artifactID, publicationID, destID string
+		attemptCount                                  int
+		maxAttempts                                   int
+		createdAt                                     string
 	}
 	var claimed []claimedRow
 	for rows.Next() {
 		var c claimedRow
-		if err := rows.Scan(&c.deliveryID, &c.artifactID, &c.destID, &c.attemptCount, &c.maxAttempts, &c.createdAt); err != nil {
+		if err := rows.Scan(&c.deliveryID, &c.artifactID, &c.publicationID, &c.destID, &c.attemptCount, &c.maxAttempts, &c.createdAt); err != nil {
 			return nil, storecore.WrapDBInfrastructure("ClaimDeliveries: scan claimed row", err)
 		}
 		claimed = append(claimed, c)
@@ -202,6 +202,7 @@ func (w *SQLiteDeliveryStore) ClaimDeliveries(ctx context.Context, runnerID stri
 			Provider:      provider,
 			ConfigJSON:    configJSON,
 			ArtifactID:    c.artifactID,
+			PublicationID: c.publicationID,
 			DestinationID: c.destID,
 			QueuedAt:      queuedAt,
 		})

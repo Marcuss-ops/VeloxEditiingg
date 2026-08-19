@@ -16,7 +16,7 @@ func (w *SQLiteDeliveryStore) ListDeliveryReconciliationCandidates(ctx context.C
 		limit = 100
 	}
 	rows, err := w.db.QueryContext(ctx, `
-		SELECT delivery_id, artifact_id, destination_id, status,
+		SELECT delivery_id, artifact_id, COALESCE(publication_id,''), destination_id, status,
 		       COALESCE(remote_id,''), COALESCE(remote_url,''),
 		       created_at, updated_at
 		FROM job_deliveries
@@ -31,7 +31,7 @@ func (w *SQLiteDeliveryStore) ListDeliveryReconciliationCandidates(ctx context.C
 	var out []JobDelivery
 	for rows.Next() {
 		var d JobDelivery
-		if err := rows.Scan(&d.DeliveryID, &d.ArtifactID, &d.DestinationID, &d.Status, &d.RemoteID, &d.RemoteURL, &d.CreatedAt, &d.UpdatedAt); err != nil {
+		if err := rows.Scan(&d.DeliveryID, &d.ArtifactID, &d.PublicationID, &d.DestinationID, &d.Status, &d.RemoteID, &d.RemoteURL, &d.CreatedAt, &d.UpdatedAt); err != nil {
 			return nil, storecore.WrapDBInfrastructure("ListDeliveryReconciliationCandidates scan", err)
 		}
 		out = append(out, d)

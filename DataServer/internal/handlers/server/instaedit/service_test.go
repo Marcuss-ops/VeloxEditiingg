@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"velox-shared/contract"
 
@@ -270,6 +271,100 @@ func TestService_CreateJob_Success(t *testing.T) {
 	}
 	if plan[0]["retry_budget"] != contract.DefaultDeliveryRetryBudget {
 		t.Fatalf("expected retry_budget %d, got %v", contract.DefaultDeliveryRetryBudget, plan[0]["retry_budget"])
+	}
+}
+
+func TestService_CreateJob_PropagatesScheduleAndPublicationTarget(t *testing.T) {
+	jobs := &memoryJobGateway{
+		destinations: map[string]*store.DeliveryDestination{
+			"ext-1": {DestinationID: "d-1", ExternalDestinationID: "ext-1", Enabled: true},
+		},
+		getByID: map[string]map[string]any{
+			"job-target": {"job_id": "job-target", "status": "PENDING", "project_id": "proj-1"},
+		},
+	}
+	enq := &memoryEnqueuer{result: map[string]any{"job_id": "job-target"}}
+	svc := NewService(jobs, nil, nil, enq)
+	publishAt := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
+	_, err := svc.CreateJob(context.Background(), CreateJobCmd{
+		WorkspaceID: 45,
+		ProjectID:   "proj-1",
+		RenderSpec:  json.RawMessage(`{"video_name":"Test","scenes":[]}`),
+		Destinations: []CreateDestinationCmd{{
+			ExternalDestinationID: "ext-1",
+		}},
+		PublishAt: publishAt,
+		Target: &PublicationTargetCmd{
+			Type: "group", GroupID: 12, GroupName: "Social IT",
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	plan, ok := enq.last["delivery_plan"].([]map[string]any)
+	if !ok || len(plan) != 1 {
+		t.Fatalf("expected one delivery plan entry, got %#v", enq.last["delivery_plan"])
+	}
+	metadata, ok := plan[0]["metadata"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected metadata map, got %#v", plan[0]["metadata"])
+	}
+	if metadata["publish_at"] != publishAt || metadata["group_name"] != "Social IT" || metadata["group_id"] != int64(12) {
+		t.Fatalf("publication metadata not propagated: %#v", metadata)
+	}
+}
+
+func TestService_CreateJob_PropagatesPublicationBundle(t *testing.T) {
+	jobs := &memoryJobGateway{
+		destinations: map[string]*store.DeliveryDestination{
+			"ext-it": {DestinationID: "d-it", ExternalDestinationID: "ext-it", Enabled: true},
+		},
+		getByID: map[string]map[string]any{
+			"job-boxe": {"job_id": "job-boxe", "status": "PENDING", "project_id": "proj-boxe"},
+		},
+	}
+	enq := &memoryEnqueuer{result: map[string]any{"job_id": "job-boxe"}}
+	svc := NewService(jobs, nil, nil, enq)
+	publications := json.RawMessage(`[{"publication_id":"boxe-it","output_ref":{"variant_id":"it"},"language":"it","metadata":{"publish_at":"2030-01-01T12:00:00Z"},"destinations":[{"destination_id":"ext-it"}],"provider_options":{"voiceover":{"asset_id":"vo-it","language":"it"}}},{"publication_id":"boxe-en","output_ref":{"variant_id":"en"},"language":"en","metadata":{"publish_at":"2030-01-02T12:00:00Z"},"destinations":[{"destination_id":"ext-it"}],"provider_options":{"voiceover":{"asset_id":"vo-en","language":"en"}}}]`)
+	_, err := svc.CreateJob(context.Background(), CreateJobCmd{
+		WorkspaceID: 45,
+		ProjectID:   "proj-boxe",
+		RenderSpec:  json.RawMessage(`{"video_name":"Boxe","scenes":[]}`),
+		// Compatibility clients may still send the legacy top-level plan;
+		// publications must remain authoritative for language fan-out.
+		Destinations: []CreateDestinationCmd{{ExternalDestinationID: "ext-it"}},
+		Publications: publications,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	items, ok := enq.last["publications"].([]any)
+	if !ok || len(items) != 2 {
+		t.Fatalf("publication bundle not propagated: %#v", enq.last["publications"])
+	}
+	for index, expected := range []string{"boxe-it", "boxe-en"} {
+		item, itemOK := items[index].(map[string]any)
+		if !itemOK || item["publication_id"] != expected {
+			t.Fatalf("unexpected publication item: %#v", items[index])
+		}
+	}
+	plan, ok := enq.last["delivery_plan"].([]map[string]any)
+	if !ok || len(plan) != 2 {
+		t.Fatalf("expected derived delivery plan, got %#v", enq.last["delivery_plan"])
+	}
+	for index, expected := range []struct {
+		publicationID, language, variant, publishAt string
+	}{
+		{"boxe-it", "it", "it", "2030-01-01T12:00:00Z"},
+		{"boxe-en", "en", "en", "2030-01-02T12:00:00Z"},
+	} {
+		metadata, metadataOK := plan[index]["metadata"].(map[string]any)
+		if !metadataOK || metadata["publication_id"] != expected.publicationID || metadata["language"] != expected.language || metadata["output_variant_id"] != expected.variant || metadata["publish_at"] != expected.publishAt {
+			t.Fatalf("publication routing metadata not propagated: %#v", plan[index]["metadata"])
+		}
+		if plan[index]["publication_id"] != expected.publicationID {
+			t.Fatalf("publication id not propagated to delivery plan: %#v", plan[index])
+		}
 	}
 }
 

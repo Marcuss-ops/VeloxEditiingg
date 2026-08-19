@@ -308,16 +308,16 @@ func insertDeliveryPlanTx(ctx context.Context, tx *sql.Tx, jobID string, plan []
 
 		_, err := tx.ExecContext(ctx,
 			`INSERT INTO job_delivery_plans (
-				job_id, destination_id, enabled, priority, retry_budget,
+				job_id, publication_id, destination_id, enabled, priority, retry_budget,
 				metadata_json, created_at, updated_at
-			) VALUES (?, ?, 1, ?, ?, ?, ?, ?)
-			ON CONFLICT(job_id, destination_id) DO UPDATE SET
+			) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)
+			ON CONFLICT(job_id, publication_id, destination_id) DO UPDATE SET
 				enabled = excluded.enabled,
 				priority = excluded.priority,
 				retry_budget = excluded.retry_budget,
 				metadata_json = excluded.metadata_json,
 				updated_at = excluded.updated_at`,
-			jobID, entry.DestinationID, entry.Priority, entry.RetryBudget,
+			jobID, entry.PublicationID, entry.DestinationID, entry.Priority, entry.RetryBudget,
 			entry.MetadataJSON, now, now,
 		)
 		if err != nil {

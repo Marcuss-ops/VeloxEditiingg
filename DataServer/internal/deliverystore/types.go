@@ -40,6 +40,7 @@ type DeliveryDestination struct {
 type JobDelivery struct {
 	DeliveryID       string                          `json:"delivery_id"`
 	ArtifactID       string                          `json:"artifact_id"`
+	PublicationID    string                          `json:"publication_id,omitempty"`
 	DestinationID    string                          `json:"destination_id"`
 	Status           deliverycontract.DeliveryStatus `json:"status"`
 	IdempotencyKey   string                          `json:"idempotency_key,omitempty"`
@@ -78,6 +79,7 @@ type DeliveryLease struct {
 	Provider      string
 	ConfigJSON    string
 	ArtifactID    string
+	PublicationID string
 	DestinationID string
 	QueuedAt      time.Time
 }

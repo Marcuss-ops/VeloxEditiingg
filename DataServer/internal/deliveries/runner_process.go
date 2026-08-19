@@ -120,7 +120,7 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease deliverystore.D
 		}
 		return fmt.Errorf("hydrate destination: %w", err)
 	}
-	if metadata, metadataErr := r.deliveryStore.GetDeliveryPlanMetadata(ctx, lease.ArtifactID, lease.DestinationID); metadataErr != nil {
+	if metadata, metadataErr := r.deliveryStore.GetDeliveryPlanMetadata(ctx, lease.ArtifactID, lease.PublicationID, lease.DestinationID); metadataErr != nil {
 		return fmt.Errorf("hydrate delivery metadata: %w", metadataErr)
 	} else {
 		dest.DeliveryMetadataJSON = metadata

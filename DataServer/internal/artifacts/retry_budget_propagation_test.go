@@ -18,12 +18,12 @@ const testSHA256 = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
 
 const phase5Schema = `
 CREATE TABLE jobs (job_id TEXT PRIMARY KEY,status TEXT,revision INTEGER,completed_at TEXT,updated_at TEXT,migrated_at TEXT,request_json TEXT NOT NULL DEFAULT '{}');
-CREATE TABLE artifacts (id TEXT PRIMARY KEY,job_id TEXT,attempt_id INTEGER,type TEXT,storage_provider TEXT,storage_key TEXT,storage_url TEXT,local_path TEXT,sha256 TEXT,size_bytes INTEGER,duration_seconds REAL,duration_ms INTEGER,mime_type TEXT,status TEXT,verified_at TEXT,created_at TEXT);
+CREATE TABLE artifacts (id TEXT PRIMARY KEY,job_id TEXT,attempt_id INTEGER,type TEXT,output_kind TEXT NOT NULL DEFAULT 'final_video',storage_provider TEXT,storage_key TEXT,storage_url TEXT,local_path TEXT,sha256 TEXT,size_bytes INTEGER,duration_seconds REAL,duration_ms INTEGER,mime_type TEXT,status TEXT,verified_at TEXT,created_at TEXT);
 CREATE TABLE artifact_uploads (upload_id TEXT PRIMARY KEY,artifact_id TEXT,job_id TEXT,attempt_number INTEGER,worker_id TEXT,lease_id TEXT,status TEXT,temporary_storage_key TEXT,expected_size_bytes INTEGER,expected_sha256 TEXT,expected_revision INTEGER,received_size_bytes INTEGER,received_sha256 TEXT,created_at TEXT,expires_at TEXT,completed_at TEXT);
 CREATE TABLE outbox_events (aggregate_type TEXT,aggregate_id TEXT,event_type TEXT,payload_json TEXT,status TEXT,available_at TEXT,created_at TEXT);
 CREATE TABLE delivery_destinations (destination_id TEXT PRIMARY KEY,provider TEXT,name TEXT,enabled INTEGER DEFAULT 1,created_at TEXT,updated_at TEXT,account_id TEXT,folder_id TEXT,channel_id TEXT,language TEXT,configuration_json TEXT,metadata_json TEXT);
-CREATE TABLE job_delivery_plans (job_id TEXT,destination_id TEXT,enabled INTEGER NOT NULL DEFAULT 1,priority INTEGER NOT NULL DEFAULT 0,retry_budget INTEGER NOT NULL DEFAULT 5,metadata_json TEXT NOT NULL DEFAULT '{}',created_at TEXT,updated_at TEXT,PRIMARY KEY (job_id,destination_id));
-CREATE TABLE job_deliveries (delivery_id TEXT PRIMARY KEY,artifact_id TEXT,destination_id TEXT,status TEXT DEFAULT 'PENDING',max_attempts INTEGER NOT NULL DEFAULT 5,idempotency_key TEXT,remote_id TEXT,remote_url TEXT,locked_by TEXT,lease_id TEXT,lease_expires_at TEXT,next_attempt_at TEXT,attempt_count INTEGER NOT NULL DEFAULT 0,last_error_code TEXT,last_error_message TEXT,completed_at TEXT,created_at TEXT,updated_at TEXT,UNIQUE (artifact_id,destination_id));
+CREATE TABLE job_delivery_plans (job_id TEXT,publication_id TEXT NOT NULL DEFAULT '',destination_id TEXT,enabled INTEGER NOT NULL DEFAULT 1,priority INTEGER NOT NULL DEFAULT 0,retry_budget INTEGER NOT NULL DEFAULT 5,metadata_json TEXT NOT NULL DEFAULT '{}',created_at TEXT,updated_at TEXT,PRIMARY KEY (job_id,publication_id,destination_id));
+CREATE TABLE job_deliveries (delivery_id TEXT PRIMARY KEY,artifact_id TEXT,publication_id TEXT NOT NULL DEFAULT '',destination_id TEXT,status TEXT DEFAULT 'PENDING',max_attempts INTEGER NOT NULL DEFAULT 5,idempotency_key TEXT,remote_id TEXT,remote_url TEXT,locked_by TEXT,lease_id TEXT,lease_expires_at TEXT,next_attempt_at TEXT,attempt_count INTEGER NOT NULL DEFAULT 0,last_error_code TEXT,last_error_message TEXT,completed_at TEXT,created_at TEXT,updated_at TEXT,UNIQUE (artifact_id,publication_id,destination_id));
 CREATE TABLE tasks (task_id TEXT PRIMARY KEY,job_id TEXT NOT NULL,project_id TEXT NOT NULL DEFAULT '',render_plan_id TEXT NOT NULL DEFAULT '',executor_id TEXT NOT NULL DEFAULT '',executor_version INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL DEFAULT 'PENDING',priority INTEGER NOT NULL DEFAULT 0,revision INTEGER NOT NULL DEFAULT 0,attempt_count INTEGER NOT NULL DEFAULT 0,worker_id TEXT NOT NULL DEFAULT '',lease_id TEXT NOT NULL DEFAULT '',ready_at TEXT,started_at TEXT,completed_at TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
 `
 
@@ -87,7 +87,7 @@ func seedDeliveryPlans(t *testing.T, db *sql.DB, jobID string, plans []phase5Pla
 		if p.Enabled {
 			enabled = 1
 		}
-		if _, err := db.Exec(`INSERT INTO job_delivery_plans (job_id,destination_id,enabled,priority,retry_budget,metadata_json,created_at,updated_at) VALUES (?,?,?,?,?,'{}',?,?)`, jobID, p.DestinationID, enabled, p.Priority, p.RetryBudget, now, now); err != nil {
+		if _, err := db.Exec(`INSERT INTO job_delivery_plans (job_id,publication_id,destination_id,enabled,priority,retry_budget,metadata_json,created_at,updated_at) VALUES (?,'',?,?,?,?, '{}',?,?)`, jobID, p.DestinationID, enabled, p.Priority, p.RetryBudget, now, now); err != nil {
 			t.Fatal(err)
 		}
 	}

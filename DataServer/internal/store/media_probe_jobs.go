@@ -225,10 +225,25 @@ func (r *MediaProbeRepository) CompleteMediaProbe(ctx context.Context, job Media
 	if err != nil {
 		return err
 	}
-	planQuery := `SELECT destination_id, COALESCE(retry_budget, 5) FROM job_delivery_plans WHERE job_id=? AND enabled=1 ORDER BY priority, destination_id`
-	planArgs := []any{jobID}
+	planQuery := `SELECT p.destination_id, COALESCE(p.publication_id,''), COALESCE(p.retry_budget, 5)
+		FROM job_delivery_plans p JOIN artifacts a ON a.id=?
+		WHERE p.job_id=? AND p.enabled=1
+		AND (
+			(COALESCE(json_extract(p.metadata_json, '$.output_variant_id'),'') <> '' AND json_extract(p.metadata_json, '$.output_variant_id')=a.output_kind)
+			OR (COALESCE(json_extract(p.metadata_json, '$.output_artifact_role'),'') <> '' AND json_extract(p.metadata_json, '$.output_artifact_role')=a.output_kind)
+			OR (COALESCE(json_extract(p.metadata_json, '$.output_variant_id'),'')='' AND COALESCE(json_extract(p.metadata_json, '$.output_artifact_role'),'')='' AND (a.output_kind IN ('final_video','video') OR (a.output_kind='' AND a.type IN ('video','final_video'))))
+		)
+		ORDER BY p.priority, p.publication_id, p.destination_id`
+	planArgs := []any{job.ArtifactID, jobID}
 	if job.DestinationID != "" {
-		planQuery = `SELECT destination_id, COALESCE(retry_budget, 5) FROM job_delivery_plans WHERE job_id=? AND destination_id=? AND enabled=1`
+		planQuery = `SELECT p.destination_id, COALESCE(p.publication_id,''), COALESCE(p.retry_budget, 5)
+			FROM job_delivery_plans p JOIN artifacts a ON a.id=?
+			WHERE p.job_id=? AND p.destination_id=? AND p.enabled=1
+			AND (
+				(COALESCE(json_extract(p.metadata_json, '$.output_variant_id'),'') <> '' AND json_extract(p.metadata_json, '$.output_variant_id')=a.output_kind)
+				OR (COALESCE(json_extract(p.metadata_json, '$.output_artifact_role'),'') <> '' AND json_extract(p.metadata_json, '$.output_artifact_role')=a.output_kind)
+				OR (COALESCE(json_extract(p.metadata_json, '$.output_variant_id'),'')='' AND COALESCE(json_extract(p.metadata_json, '$.output_artifact_role'),'')='' AND (a.output_kind IN ('final_video','video') OR (a.output_kind='' AND a.type IN ('video','final_video'))))
+			)`
 		planArgs = append(planArgs, job.DestinationID)
 	}
 	rows, err := tx.QueryContext(ctx, planQuery, planArgs...)
@@ -236,15 +251,15 @@ func (r *MediaProbeRepository) CompleteMediaProbe(ctx context.Context, job Media
 		return fmt.Errorf("store: media probe plans: %w", err)
 	}
 	var destinations []struct {
-		id  string
-		max int
+		id, publicationID string
+		max               int
 	}
 	for rows.Next() {
 		var d struct {
-			id  string
-			max int
+			id, publicationID string
+			max               int
 		}
-		if err := rows.Scan(&d.id, &d.max); err != nil {
+		if err := rows.Scan(&d.id, &d.publicationID, &d.max); err != nil {
 			rows.Close()
 			return err
 		}
@@ -285,7 +300,7 @@ func (r *MediaProbeRepository) CompleteMediaProbe(ctx context.Context, job Media
 			if err != nil {
 				return err
 			}
-			if _, err := tx.ExecContext(ctx, `INSERT INTO job_deliveries (delivery_id,artifact_id,destination_id,status,max_attempts,idempotency_key,created_at,updated_at) VALUES (?,?,?,'PENDING',?,?,?,?) ON CONFLICT(artifact_id,destination_id) DO NOTHING`, id, job.ArtifactID, d.id, d.max, job.ArtifactID+"_"+d.id, nowStr, nowStr); err != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO job_deliveries (delivery_id,artifact_id,publication_id,destination_id,status,max_attempts,idempotency_key,created_at,updated_at) VALUES (?,?,?,?,'PENDING',?,?,?,?) ON CONFLICT(artifact_id,publication_id,destination_id) DO NOTHING`, id, job.ArtifactID, d.publicationID, d.id, d.max, job.ArtifactID+"_"+d.publicationID+"_"+d.id, nowStr, nowStr); err != nil {
 				return err
 			}
 		}

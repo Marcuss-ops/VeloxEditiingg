@@ -66,6 +66,7 @@ func (s *Service) loadDeliveries(ctx context.Context, jobID string) ([]deliveryR
 			externalID = dest.ExternalDestinationID
 		}
 		out = append(out, deliveryResponse{
+			PublicationID:         row.PublicationID,
 			ExternalDestinationID: externalID,
 			SocialDeliveryID:      row.DeliveryID,
 			Status:                string(row.Status),

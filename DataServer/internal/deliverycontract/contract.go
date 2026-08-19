@@ -21,6 +21,7 @@ var ErrResolverNotConfigured = errors.New("deliveries: plan resolver not configu
 // DeliveryDestination is the finalization projection of one explicit target.
 type DeliveryDestination struct {
 	DestinationID string
+	PublicationID string
 	MaxAttempts   int
 }
 

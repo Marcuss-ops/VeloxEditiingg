@@ -207,12 +207,12 @@ func (r *StaleExecutionReconciler) applyCommittedArtifact(ctx context.Context, f
 	// implicitly.
 	if _, err := tx.ExecContext(ctx, `
 		INSERT OR IGNORE INTO job_deliveries
-		    (delivery_id, artifact_id, destination_id, status, max_attempts,
+		    (delivery_id, artifact_id, publication_id, destination_id, status, max_attempts,
 		     idempotency_key, created_at, updated_at)
-		SELECT 'reconcile_' || a.id || '_' || p.destination_id,
-		       a.id, p.destination_id, 'PENDING',
+		SELECT 'reconcile_' || a.id || '_' || p.publication_id || '_' || p.destination_id,
+		       a.id, COALESCE(p.publication_id,''), p.destination_id, 'PENDING',
 		       CASE WHEN p.retry_budget > 0 THEN p.retry_budget ELSE 5 END,
-		       a.id || '_' || p.destination_id, ?, ?
+		       a.id || '_' || p.publication_id || '_' || p.destination_id, ?, ?
 		  FROM artifacts a
 		  JOIN job_delivery_plans p ON p.job_id=a.job_id AND p.enabled=1
 		 WHERE a.id=? AND a.status='READY'`, nowStr, nowStr, f.ArtifactID); err != nil {

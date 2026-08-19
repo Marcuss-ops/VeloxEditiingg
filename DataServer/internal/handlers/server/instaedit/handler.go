@@ -154,8 +154,8 @@ func (h *Handler) createJob() gin.HandlerFunc {
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"error_code": "INVALID_IDEMPOTENCY_KEY", "message": "idempotency_key is required"})
 			return
 		}
-		if !req.RenderOnly && len(req.DeliveryPlan.Destinations) == 0 {
-			c.JSON(http.StatusUnprocessableEntity, gin.H{"error_code": "INVALID_DELIVERY_PLAN", "message": "delivery_plan.destinations is required unless render_only=true"})
+		if !req.RenderOnly && len(req.DeliveryPlan.Destinations) == 0 && len(req.Publications) == 0 {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error_code": "INVALID_DELIVERY_PLAN", "message": "delivery_plan.destinations or publications is required unless render_only=true"})
 			return
 		}
 
@@ -163,6 +163,7 @@ func (h *Handler) createJob() gin.HandlerFunc {
 		for _, d := range req.DeliveryPlan.Destinations {
 			dsts = append(dsts, CreateDestinationCmd{
 				ExternalDestinationID: d.ExternalDestinationID,
+				PublicationID:         d.PublicationID,
 				Metadata:              d.Metadata,
 			})
 		}
@@ -174,6 +175,9 @@ func (h *Handler) createJob() gin.HandlerFunc {
 			IdempotencyKey:  req.IdempotencyKey,
 			RenderSpec:      req.RenderSpec,
 			Destinations:    dsts,
+			PublishAt:       req.PublishAt,
+			Target:          req.Target,
+			Publications:    req.Publications,
 			RenderOnly:      req.RenderOnly,
 		})
 		if err != nil {

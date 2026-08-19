@@ -109,6 +109,7 @@ func NewDeliveryPlanValidationError(field, message string) *DeliveryPlanValidati
 // downstream by the delivery runner.
 type deliveryPlanEntry struct {
 	DestinationID string
+	PublicationID string
 	Priority      int
 	RetryBudget   int
 	MetadataJSON  string
@@ -173,6 +174,7 @@ func parseDeliveryPlanPayload(payload map[string]interface{}) ([]deliveryPlanEnt
 		}
 		out = append(out, deliveryPlanEntry{
 			DestinationID: e.DestinationID,
+			PublicationID: e.PublicationID,
 			Priority:      e.Priority,
 			RetryBudget:   e.RetryBudget,
 			MetadataJSON:  metadataJSON,
