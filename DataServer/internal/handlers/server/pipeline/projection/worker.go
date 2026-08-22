@@ -34,11 +34,49 @@ func ProjectWorkerPayload(rawPayload map[string]interface{}, rendererMode string
 	switch rendererMode {
 	case "clip_stock":
 		setPipelineID(workerPayload, "clips.v1")
+		ensureClipPipelineInputs(workerPayload, rawPayload)
 	case "scene_image", "slideshow":
 		setPipelineID(workerPayload, "images.v1")
 	}
 	preserveFields(workerPayload, rawPayload, "layers", "_placement_pin_worker_id")
 	return workerPayload, nil
+}
+
+func ensureClipPipelineInputs(dst, raw map[string]interface{}) {
+	if dst == nil || raw == nil {
+		return
+	}
+	if _, ok := dst["clips"]; !ok {
+		if scenes, ok := raw["scenes"].([]interface{}); ok {
+			clips := make([]interface{}, 0, len(scenes))
+			for _, value := range scenes {
+				scene, ok := value.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				clip, ok := scene["clip"].(map[string]interface{})
+				if !ok {
+					continue
+				}
+				url, _ := clip["url"].(string)
+				if url == "" {
+					continue
+				}
+				clips = append(clips, map[string]interface{}{
+					"url":      url,
+					"duration": scene["duration_seconds"],
+				})
+			}
+			if len(clips) > 0 {
+				dst["clips"] = clips
+			}
+		}
+	}
+	if _, ok := dst["audio_url"]; !ok {
+		if audio, ok := raw["audio_url"].(string); ok && audio != "" {
+			dst["audio_url"] = audio
+		}
+	}
 }
 
 // setPipelineID keeps the routing value in the internal metadata key until

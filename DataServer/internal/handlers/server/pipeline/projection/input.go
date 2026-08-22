@@ -13,6 +13,7 @@ type SubmissionInput struct {
 	VideoMode          string
 	VideoName          string
 	ScriptText         string
+	AudioURL           string
 	RenderManifest     map[string]interface{}
 	ManifestRef        map[string]interface{}
 	ManifestSHA256     string
@@ -109,6 +110,7 @@ func BuildRawPayload(input SubmissionInput) map[string]interface{} {
 		VideoMode:          input.VideoMode,
 		VideoName:          input.VideoName,
 		ScriptText:         input.ScriptText,
+		AudioURL:           input.AudioURL,
 		RenderManifest:     input.RenderManifest,
 		ManifestRef:        input.ManifestRef,
 		ManifestSHA256:     input.ManifestSHA256,

@@ -25,6 +25,7 @@ func submitRequestToRawPayload(req *SubmitJobRequest) map[string]interface{} {
 		VideoMode:          rendererModeForJobType(req.JobType),
 		VideoName:          req.VideoName,
 		ScriptText:         req.ScriptText,
+		AudioURL:           req.AudioURL,
 		RenderManifest:     req.ResolvedManifest,
 		ManifestRef:        req.ResolvedManifestRef,
 		ManifestSHA256:     req.ResolvedManifestSHA256,

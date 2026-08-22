@@ -19,6 +19,7 @@ type RawPayloadInput struct {
 	VideoMode          string
 	VideoName          string
 	ScriptText         string
+	AudioURL           string
 	RenderManifest     map[string]interface{}
 	ManifestRef        map[string]interface{}
 	ManifestSHA256     string
@@ -64,6 +65,9 @@ func BuildRawPayloadEnvelope(input RawPayloadInput) map[string]interface{} {
 	}
 	if input.ScriptText != "" {
 		payload["script_text"] = input.ScriptText
+	}
+	if input.AudioURL != "" {
+		payload["audio_url"] = input.AudioURL
 	}
 	if input.RenderManifest != nil {
 		payload["render_manifest"] = input.RenderManifest
