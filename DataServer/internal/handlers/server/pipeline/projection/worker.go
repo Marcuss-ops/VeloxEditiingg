@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"velox-server/internal/remoteengine"
+	"velox-server/internal/routing"
 )
 
 // ProjectWorkerPayload parses the canonical submission map through the typed
@@ -32,12 +33,23 @@ func ProjectWorkerPayload(rawPayload map[string]interface{}, rendererMode string
 	// hybrid.v1 path).
 	switch rendererMode {
 	case "clip_stock":
-		workerPayload["pipeline_id"] = "clips.v1"
+		setPipelineID(workerPayload, "clips.v1")
 	case "scene_image", "slideshow":
-		workerPayload["pipeline_id"] = "images.v1"
+		setPipelineID(workerPayload, "images.v1")
 	}
 	preserveFields(workerPayload, rawPayload, "layers", "_placement_pin_worker_id")
 	return workerPayload, nil
+}
+
+// setPipelineID keeps the routing value in the internal metadata key until
+// the enqueue normalizer projects it into the renderer-facing pipeline_id.
+// The public alias is retained for direct worker-payload consumers.
+func setPipelineID(payload map[string]interface{}, id string) {
+	if payload == nil || id == "" {
+		return
+	}
+	payload[routing.KeyPipelineID] = id
+	payload["pipeline_id"] = id
 }
 
 func preserveFields(dst, src map[string]interface{}, keys ...string) {
