@@ -135,6 +135,15 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 	if err := persistPhaseTimingsAndExecutionEvents(ctx, tx, cmd); err != nil {
 		return err
 	}
+	// Older workers (and a few mixed-version reports) persist the detailed
+	// phase ledger but leave the flat aggregate columns at zero.  Project the
+	// canonical ledger into the typed row in the same transaction so SQL
+	// reports, daily rollups and cost dashboards see the same timings that are
+	// already visible in task_phase_timings.  Non-zero worker values remain
+	// authoritative.
+	if err := projectPhaseAggregates(ctx, tx, cmd.AttemptID); err != nil {
+		return err
+	}
 	if err := persistRawReport(ctx, tx, cmd, now); err != nil {
 		return err
 	}
