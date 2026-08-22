@@ -215,10 +215,11 @@ func copyTimelinePayloadFields(out, src map[string]interface{}) {
 		return
 	}
 	for _, key := range []string{
-		// Canonical timeline fields only. Legacy images/clips/items
-		// and clip-pool aliases are projected at the worker offer
-		// boundary, never persisted in the master payload.
+		// Canonical timeline fields plus the explicit clips.v1 renderer
+		// input. clips is no longer a legacy alias for clip pipelines: the
+		// worker validator requires it to survive into TaskSpec.Payload.
 		"layers",
+		"clips",
 		// Explicit opt-in for the worker's strict packet-copy path. The
 		// worker validates stream identity, keyframe boundaries and audio
 		// compatibility before using it; it must therefore survive the
