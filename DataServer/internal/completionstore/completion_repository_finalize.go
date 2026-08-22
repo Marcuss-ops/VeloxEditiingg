@@ -219,7 +219,7 @@ func (r *sqliteCompletionTx) InsertCompletionDeliveries(ctx context.Context, job
 			OR
 			(json_extract(p.metadata_json, '$.output_variant_id') IS NULL
 			 AND json_extract(p.metadata_json, '$.output_artifact_role') IS NULL
-			AND (a.output_kind IN ('final_video','video') OR (a.output_kind='' AND a.type IN ('video','final_video')))))
+				AND (a.output_kind IN ('final_video','video') OR (a.output_kind='' AND a.type IN ('video','final_video'))))
 		  )`, jobID, jobID)
 	if err != nil {
 		return fmt.Errorf("store: completion delivery query: %w", err)
