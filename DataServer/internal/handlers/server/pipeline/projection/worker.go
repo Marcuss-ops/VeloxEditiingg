@@ -47,7 +47,11 @@ func ensureClipPipelineInputs(dst, raw map[string]interface{}) {
 	if dst == nil || raw == nil {
 		return
 	}
-	if _, ok := dst["clips"]; !ok {
+	// Typed JSON projection may emit the clips key as null. Treat null and
+	// empty arrays as missing so canonical scene clips are still normalized
+	// into the renderer-facing clips.v1 payload.
+	existingClips, hasExistingClips := dst["clips"].([]interface{})
+	if !hasExistingClips || len(existingClips) == 0 {
 		scenes, ok := raw["scenes"].([]interface{})
 		if !ok {
 			scenes, ok = dst["scenes"].([]interface{})
