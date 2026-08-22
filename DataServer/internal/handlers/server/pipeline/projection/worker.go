@@ -47,7 +47,11 @@ func ensureClipPipelineInputs(dst, raw map[string]interface{}) {
 		return
 	}
 	if _, ok := dst["clips"]; !ok {
-		if scenes, ok := raw["scenes"].([]interface{}); ok {
+		scenes, ok := raw["scenes"].([]interface{})
+		if !ok {
+			scenes, ok = dst["scenes"].([]interface{})
+		}
+		if ok {
 			clips := make([]interface{}, 0, len(scenes))
 			for _, value := range scenes {
 				scene, ok := value.(map[string]interface{})
