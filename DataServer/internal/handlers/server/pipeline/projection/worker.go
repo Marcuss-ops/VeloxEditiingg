@@ -4,6 +4,7 @@
 package projection
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"velox-server/internal/remoteengine"
@@ -50,6 +51,11 @@ func ensureClipPipelineInputs(dst, raw map[string]interface{}) {
 		scenes, ok := raw["scenes"].([]interface{})
 		if !ok {
 			scenes, ok = dst["scenes"].([]interface{})
+		}
+		if !ok {
+			if encoded, encodedOK := raw["scenes_json"].(string); encodedOK {
+				ok = json.Unmarshal([]byte(encoded), &scenes) == nil
+			}
 		}
 		if ok {
 			clips := make([]interface{}, 0, len(scenes))
