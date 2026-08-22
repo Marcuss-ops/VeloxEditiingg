@@ -25,6 +25,17 @@ func ProjectWorkerPayload(rawPayload map[string]interface{}, rendererMode string
 	if projectionErr != nil {
 		return nil, fmt.Errorf("project canonical submission: %w", projectionErr)
 	}
+	// The worker's scene.composite executor now requires an explicit
+	// single-source pipeline id.  clip.stock.v1 is the canonical intake
+	// recipe for clip timelines, so route it to the registered clips.v1
+	// compiler instead of emitting an empty pipeline_id (or the retired
+	// hybrid.v1 path).
+	switch rendererMode {
+	case "clip_stock":
+		workerPayload["pipeline_id"] = "clips.v1"
+	case "scene_image", "slideshow":
+		workerPayload["pipeline_id"] = "images.v1"
+	}
 	preserveFields(workerPayload, rawPayload, "layers", "_placement_pin_worker_id")
 	return workerPayload, nil
 }

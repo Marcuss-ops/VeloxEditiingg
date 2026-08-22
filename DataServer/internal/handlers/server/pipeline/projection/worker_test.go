@@ -58,3 +58,29 @@ func TestProjectWorkerPayload_PreservesExplicitWorkerBoundaryFields(t *testing.T
 		}
 	}
 }
+
+func TestProjectWorkerPayload_MapsClipStockToRegisteredClipsPipeline(t *testing.T) {
+	raw := map[string]interface{}{
+		"status":      "completed",
+		"job_id":      "projection-clip-stock",
+		"job_type":    "clip.stock.v1",
+		"video_name":  "Clip stock",
+		"script_text": "Clip narration",
+		"scenes": []interface{}{
+			map[string]interface{}{
+				"scene_id":         "scene-0",
+				"text":             "A clip scene",
+				"duration_seconds": float64(5),
+				"clip":             map[string]interface{}{"asset_id": "asset-1", "duration_ms": int64(5000)},
+			},
+		},
+	}
+
+	got, err := ProjectWorkerPayload(raw, "clip_stock")
+	if err != nil {
+		t.Fatalf("ProjectWorkerPayload() error: %v", err)
+	}
+	if got["pipeline_id"] != "clips.v1" {
+		t.Fatalf("pipeline_id = %#v, want clips.v1; payload=%#v", got["pipeline_id"], got)
+	}
+}
