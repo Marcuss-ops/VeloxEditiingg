@@ -68,6 +68,16 @@ type ContextOptions struct {
 	// from the worker. Optional; nil means executors fall back to their
 	// legacy outputBase (no ARTIFACT_STAGING placement).
 	StorageResolver *storage.Resolver
+
+	// PhaseTimer is the shared fine-grained job phase timer. Optional;
+	// when set, executors use it to record per-phase wall-clock durations
+	// that feed the performance report.
+	PhaseTimer *telemetry.JobPhaseTimer
+
+	// GPUTransferTracker is the shared GPU frame transfer accumulator.
+	// Optional; executors feed it engine phase data to track PCIe bus
+	// crossings (NVDEC→CPU download, CPU→NVENC upload).
+	GPUTransferTracker *telemetry.GPUTransferTracker
 }
 
 // runnerContext is the per-task ExecutionContext handed to Executor.Execute.
@@ -89,6 +99,8 @@ type runnerContext struct {
 	blobStats      BlobStatsProvider
 	ffmpegProfiles *ffmpegrunner.Aggregator
 	storage        *storage.Resolver
+	phaseTimer     *telemetry.JobPhaseTimer
+	gpuTransfer    *telemetry.GPUTransferTracker
 }
 
 func newRunnerContext(opts ContextOptions) (*runnerContext, error) {
@@ -132,8 +144,9 @@ func newRunnerContext(opts ContextOptions) (*runnerContext, error) {
 		artifacts:      opts.Artifacts,
 		cacheStats:     opts.CacheStats,
 		blobStats:      opts.BlobStats,
-		ffmpegProfiles: opts.FFmpegProfiles,
-		storage:        opts.StorageResolver,
+		ffmpegProfiles: opts.FFmpegProfiles,		storage:            opts.StorageResolver,
+		phaseTimer:         opts.PhaseTimer,
+		gpuTransfer:        opts.GPUTransferTracker,
 	}, nil
 }
 
@@ -180,6 +193,15 @@ func (c *runnerContext) FFmpegProfiles() *ffmpegrunner.Aggregator {
 func (c *runnerContext) StorageResolver() *storage.Resolver {
 	return c.storage
 }
+
+// PhaseTimer returns the shared fine-grained phase timer, or nil when not wired.
+// Executors use this for Begin/End instrumentation around rendering phases.
+func (c *runnerContext) PhaseTimer() *telemetry.JobPhaseTimer { return c.phaseTimer }
+
+// GPUTransferTracker returns the shared GPU frame transfer accumulator, or
+// nil when not wired. Executors feed this with engine detailed phases to
+// track PCIe bus crossings.
+func (c *runnerContext) GPUTransferTracker() *telemetry.GPUTransferTracker { return c.gpuTransfer }
 
 // Done is closed when the parent ctx is canceled AND when the runner
 // explicitly fires Cancel(). PR-3 invariant #8: executors MUST check

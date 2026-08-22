@@ -32,6 +32,8 @@ package telemetry
 
 import (
 	"encoding/json"
+	"sort"
+	"strings"
 
 	pb "velox-shared/controltransport/pb"
 )
@@ -85,6 +87,9 @@ type RawExecutionMetrics struct {
 	DuplicateDownloadBytes int64   `json:"duplicate_download_bytes"`
 	MediaDurationSeconds   float64 `json:"media_duration_seconds"`
 	WallClockSeconds       float64 `json:"wall_clock_seconds"`
+	// ── Derived performance ratios ──────────────────────────────────
+	RealTimeFactor float64 `json:"realtime_factor"`   // wall / media (lower is better; <1 = faster-than-realtime)
+	ThroughputX    float64 `json:"throughput_x"`      // media / wall (higher is better; 2x = 10min in 5min)
 
 	// ── Scorecard v2 / output quality validation (migration 072) ───────
 	FfprobeValid      int32   `json:"ffprobe_valid"`
@@ -136,6 +141,119 @@ type RawExecutionMetrics struct {
 	// certification never mixes in worker-lifetime counters.
 	CacheDownloadCount int64 `json:"cache_download_count"`
 	CacheDownloadBytes int64 `json:"cache_download_bytes"`
+
+	// ── Fine-grained phase timings (ms) ────────────────────────────────
+	// These decompose the wall clock into the complete job timeline.
+	QueueWaitMs          int64 `json:"queue_wait_ms"`
+	JobSetupMs           int64 `json:"job_setup_ms"`
+	AssetResolveMs       int64 `json:"asset_resolve_ms"`
+	AssetDownloadMs      int64 `json:"asset_download_ms"`
+	AssetVerifyMs        int64 `json:"asset_verify_ms"`
+	AssetMaterializeMs   int64 `json:"asset_materialize_ms"`
+	AudioPrepareMs       int64 `json:"audio_prepare_ms"`
+	AudioTimelineBuildMs int64 `json:"audio_timeline_build_ms"`
+	RenderPlanBuildMs    int64 `json:"render_plan_build_ms"`
+	VideoDecodeMs        int64 `json:"video_decode_ms"`
+	VideoSubtitleMs      int64 `json:"video_subtitle_ms"`
+	VideoSubtitleRasterMs    int64 `json:"video_subtitle_raster_ms"`
+	VideoSubtitleCompositeMs int64 `json:"video_subtitle_composite_ms"`
+	VideoWatermarkMs         int64 `json:"video_watermark_ms"`
+	VideoWatermarkUploadMs   int64 `json:"video_watermark_upload_ms"`
+	VideoWatermarkCompositeMs int64 `json:"video_watermark_composite_ms"`
+	VideoBlurMs           int64 `json:"video_blur_ms"`
+	VideoFilterMs         int64 `json:"video_filter_ms"`
+	VideoCompositeMs      int64 `json:"video_composite_ms"`
+	VideoEncodeMs         int64 `json:"video_encode_ms"`
+	VideoConcatMs         int64 `json:"video_concat_ms"`
+	AudioMuxMs            int64 `json:"audio_mux_ms"`
+	OutputFinalizeMs      int64 `json:"output_finalize_ms"`
+	Sha256Ms              int64 `json:"sha256_ms"`
+	FfprobeMs             int64 `json:"ffprobe_ms"`
+	ArtifactVerifyMs      int64 `json:"artifact_verify_ms"`
+	DriveUploadMs         int64 `json:"drive_upload_ms"`
+	DriveVerifyMs         int64 `json:"drive_verify_ms"`
+	JobTotalMs            int64 `json:"job_total_ms"`
+
+	// ── GPU transfers (VRAM ↔ RAM) ─────────────────────────────────────
+	FramesDownloadedFromGPU int64 `json:"frames_downloaded_from_gpu"`
+	FramesUploadedToGPU     int64 `json:"frames_uploaded_to_gpu"`
+	GpuToCpuTransferMs      int64 `json:"gpu_to_cpu_transfer_ms"`
+	CpuToGpuTransferMs      int64 `json:"cpu_to_gpu_transfer_ms"`
+	GpuToCpuBytes           int64 `json:"gpu_to_cpu_bytes"`
+	CpuToGpuBytes           int64 `json:"cpu_to_gpu_bytes"`
+
+	// ── GPU utilization sampled averages ────────────────────────────────
+	GpuUtilAvgPct    float64 `json:"gpu_util_avg_percent"`
+	GpuUtilPeakPct   float64 `json:"gpu_util_peak_percent"`
+	NvdecUtilAvgPct  float64 `json:"nvdec_util_avg_percent"`
+	NvdecUtilPeakPct float64 `json:"nvdec_util_peak_percent"`
+	NvencUtilAvgPct  float64 `json:"nvenc_util_avg_percent"`
+	NvencUtilPeakPct float64 `json:"nvenc_util_peak_percent"`
+	VramUsedAvgBytes  int64   `json:"vram_used_avg_bytes"`
+	GpuIdleMs        int64   `json:"gpu_idle_during_render_ms"`
+
+	// ── CPU attribution to phases ───────────────────────────────────────
+	CpuPercentAvg float64 `json:"cpu_percent_avg"`
+	CpuUserMs     int64   `json:"cpu_user_ms"`
+	CpuSystemMs   int64   `json:"cpu_system_ms"`
+	SubtitleCpuMs int64   `json:"subtitle_cpu_ms"`
+	BlurCpuMs     int64   `json:"blur_cpu_ms"`
+	CompositeCpuMs int64  `json:"composite_cpu_ms"`
+	EncodeCpuMs   int64   `json:"encode_cpu_ms"`
+	HashCpuMs     int64   `json:"hash_cpu_ms"`
+
+	// ── Segment / packet-copy stats ─────────────────────────────────────
+	SegmentsTotal       int32   `json:"segments_total"`
+	SegmentsPacketCopy  int32   `json:"segments_packet_copy"`
+	SegmentsReencoded   int32   `json:"segments_reencoded"`
+	SegmentsComposited  int32   `json:"segments_composited"`
+	PacketCopyBytes     int64   `json:"packet_copy_bytes"`
+	ReencodedBytes      int64   `json:"reencoded_bytes"`
+	PacketCopyDurationMs int64  `json:"packet_copy_duration_ms"`
+	ReencodeDurationMs   int64  `json:"reencode_duration_ms"`
+	PacketCopyRatio      float64 `json:"packet_copy_ratio"`
+
+	// ── Download / cache timing ─────────────────────────────────────────
+	DriveDownloadMs     int64 `json:"drive_download_ms"`
+	BlobstoreDownloadMs int64 `json:"blobstore_download_ms"`
+	LocalCacheReadMs    int64 `json:"local_cache_read_ms"`
+	AssetDownloadWaitMs int64 `json:"asset_download_wait_ms"`
+	CacheHitBytes       int64 `json:"cache_hit_bytes"`
+	CacheMissBytes      int64 `json:"cache_miss_bytes"`
+
+	// ── Disk I/O timing ─────────────────────────────────────────────────
+	OutputWriteMs int64 `json:"output_write_ms"`
+	TempWriteMs   int64 `json:"temp_write_ms"`
+	FinalReadMs   int64 `json:"final_read_ms"`   // re-read of output for verification
+	DiskReadMs    int64 `json:"disk_read_ms"`
+	DiskWriteMs   int64 `json:"disk_write_ms"`
+
+	// ── Bandwidth derived ───────────────────────────────────────────────
+	DownloadMbpsAvg     float64 `json:"download_mbps_avg"`
+	UploadMbpsAvg       float64 `json:"upload_mbps_avg"`
+	DriveUploadMbps     float64 `json:"drive_upload_mbps"`
+	ArtifactDownloadMbps float64 `json:"artifact_download_mbps"`
+
+	// ── Process spawn ───────────────────────────────────────────────────
+	FfmpegExecCount  int64 `json:"ffmpeg_exec_count"`
+	FfprobeExecCount int64 `json:"ffprobe_exec_count"`
+	ProcessSpawnCount int64 `json:"process_spawn_count"`
+	FfmpegProcessMs  int64 `json:"ffmpeg_process_ms"`
+	FfprobeProcessMs int64 `json:"ffprobe_process_ms"`
+	ProcessStartupMs int64 `json:"process_startup_ms"`
+
+	// ── Audio encode/copy ───────────────────────────────────────────────
+	AudioCopyMs      int64 `json:"audio_copy_ms"`
+	AudioEncodeMs    int64 `json:"audio_encode_ms"`
+	AudioPacketCopy  int64 `json:"audio_packet_copy"`
+	AudioReencoded   int64 `json:"audio_reencoded"`
+	AudioInputBytes  int64 `json:"audio_input_bytes"`
+	AudioOutputBytes int64 `json:"audio_output_bytes"`
+
+	// ── Critical path ───────────────────────────────────────────────────
+	CriticalPathComponent string  `json:"critical_path_component,omitempty"`
+	CriticalPathMs        int64   `json:"critical_path_ms"`
+	CriticalPathPercent   float64 `json:"critical_path_percent"`
 }
 
 // TypedExecutionMetrics is retained as a source-compatible name for
@@ -305,6 +423,335 @@ func FromProto(p *pb.TaskExecutionMetrics) RawExecutionMetrics {
 
 // CoverageMap decodes the optional report coverage block. Invalid or empty
 // JSON is intentionally reported as absent rather than as all-false data.
+// PopulateFromJobPhaseTimer fills all fine-grained phase timing fields from
+// a JobPhaseTimer that was used to instrument the job execution. This is the
+// canonical bridge between the runtime timer and the typed metrics envelope.
+func (t *RawExecutionMetrics) PopulateFromJobPhaseTimer(timer *JobPhaseTimer) {
+	if t == nil || timer == nil {
+		return
+	}
+	phases := timer.PhaseTimings()
+	for _, p := range phases {
+		ms := p.Timing.DurationMs()
+		if ms == 0 {
+			continue
+		}
+		switch p.Name {
+		case PhaseQueueWait:
+			t.QueueWaitMs = ms
+		case PhaseJobSetup:
+			t.JobSetupMs = ms
+		case PhaseAssetResolve:
+			t.AssetResolveMs = ms
+		case PhaseAssetDownload:
+			t.AssetDownloadMs = ms
+		case PhaseAssetVerify:
+			t.AssetVerifyMs = ms
+		case PhaseAssetMaterialize:
+			t.AssetMaterializeMs = ms
+		case PhaseAudioPrepare:
+			t.AudioPrepareMs = ms
+		case PhaseAudioTimelineBuild:
+			t.AudioTimelineBuildMs = ms
+		case PhaseRenderPlanBuild:
+			t.RenderPlanBuildMs = ms
+		case PhaseVideoDecode:
+			t.VideoDecodeMs = ms
+		case PhaseVideoSubtitle:
+			t.VideoSubtitleMs = ms
+		case PhaseVideoSubtitleRaster:
+			t.VideoSubtitleRasterMs = ms
+		case PhaseVideoSubtitleComposite:
+			t.VideoSubtitleCompositeMs = ms
+		case PhaseVideoWatermark:
+			t.VideoWatermarkMs = ms
+		case PhaseVideoWatermarkUpload:
+			t.VideoWatermarkUploadMs = ms
+		case PhaseVideoWatermarkComposite:
+			t.VideoWatermarkCompositeMs = ms
+		case PhaseVideoBlur:
+			t.VideoBlurMs = ms
+		case PhaseVideoFilter:
+			t.VideoFilterMs = ms
+		case PhaseVideoComposite:
+			t.VideoCompositeMs = ms
+		case PhaseVideoEncode:
+			t.VideoEncodeMs = ms
+		case PhaseVideoConcat:
+			t.VideoConcatMs = ms
+		case PhaseAudioMux:
+			t.AudioMuxMs = ms
+		case PhaseOutputFinalize:
+			t.OutputFinalizeMs = ms
+		case PhaseArtifactHash:
+			t.Sha256Ms = ms
+		case PhaseArtifactProbe:
+			t.FfprobeMs = ms
+		case PhaseArtifactVerify:
+			t.ArtifactVerifyMs = ms
+		case PhaseDriveUpload:
+			t.DriveUploadMs = ms
+		case PhaseDriveVerify:
+			t.DriveVerifyMs = ms
+		case PhaseDriveDownload:
+			t.DriveDownloadMs = ms
+		case PhaseBlobstoreDownload:
+			t.BlobstoreDownloadMs = ms
+		case PhaseLocalCacheRead:
+			t.LocalCacheReadMs = ms
+		case PhaseAssetDownloadWait:
+			t.AssetDownloadWaitMs = ms
+		case PhaseOutputWrite:
+			t.OutputWriteMs = ms
+		case PhaseTempWrite:
+			t.TempWriteMs = ms
+		case PhaseFinalRead:
+			t.FinalReadMs = ms
+		}
+	}
+	// Total = sum of all phases (wall-clock may differ due to parallelism).
+	t.JobTotalMs = timer.TotalDuration().Milliseconds()
+
+	// ── Download / cache byte attribution ────────────────────────────
+	// Accumulate per-source byte counters from phase-level data.
+	timer.cacheMut.Lock()
+	t.CacheHitBytes = timer.cacheHitBytes
+	t.CacheMissBytes = timer.cacheMissBytes
+	timer.cacheMut.Unlock()
+
+	// ── Per-phase CPU time attribution ────────────────────────────────
+	// Map phase-level accumulated CPU milliseconds to the canonical per-phase
+	// CPU fields. These are additive: multiple invocations of the same phase
+	// (e.g. across segments) are summed by the timer before reaching here.
+	for _, p := range phases {
+		cpuMs := p.Timing.CPUMs
+		if cpuMs == 0 {
+			continue
+		}
+		// Integer truncation from float64: CPUMS is measured in milliseconds
+		// and typical values fit int64 without loss.
+		cpu := int64(cpuMs)
+		switch p.Name {
+		case PhaseVideoSubtitle, PhaseVideoSubtitleRaster, PhaseVideoSubtitleComposite:
+			t.SubtitleCpuMs += cpu
+		case PhaseVideoBlur:
+			t.BlurCpuMs += cpu
+		case PhaseVideoComposite:
+			t.CompositeCpuMs += cpu
+		case PhaseVideoEncode:
+			t.EncodeCpuMs += cpu
+		case PhaseArtifactHash:
+			t.HashCpuMs += cpu
+		}
+	}
+}
+
+// ComputeDerivedMetrics fills all derived ratio fields from the raw facts.
+// Must be called AFTER MediaDurationSeconds and WallClockSeconds are set.
+// Safe to call multiple times; always recomputes from current values.
+func (t *RawExecutionMetrics) ComputeDerivedMetrics() {
+	if t == nil {
+		return
+	}
+	if t.MediaDurationSeconds > 0 && t.WallClockSeconds > 0 {
+		t.RealTimeFactor = t.WallClockSeconds / t.MediaDurationSeconds
+		t.ThroughputX = t.MediaDurationSeconds / t.WallClockSeconds
+	}
+}
+
+// ComputeCriticalPath scans all fine-grained phase durations and identifies
+// the single phase that dominates the job wall time — the critical path.
+// Must be called AFTER PopulateFromJobPhaseTimer so all phase timings are
+// populated. The result is written into CriticalPathComponent,
+// CriticalPathMs, and CriticalPathPercent.
+//
+// Critical path semantics:
+//   - In a sequential pipeline, the critical path is the single phase with
+//     the highest duration.
+//   - In a parallel pipeline, the critical path may span multiple phases
+//     that execute on the critical chain. This method sums the durations
+//     of the top-N phases until the total exceeds 50% of job wall time;
+//     the "critical path component" becomes a concatenation of those
+//     phases (e.g. "video.encode + video.composite").
+//   - The percentage is computed against the job wall clock, not the sum
+//     of all phase durations (which may exceed wall clock due to parallelism).
+func (t *RawExecutionMetrics) ComputeCriticalPath() {
+	if t == nil {
+		return
+	}
+	// Collect all fine-grained phase durations into a sortable list.
+	type namedDuration struct {
+		name string
+		ms   int64
+	}
+	phases := []namedDuration{
+		{"queue_wait", t.QueueWaitMs},
+		{"job_setup", t.JobSetupMs},
+		{"asset.resolve", t.AssetResolveMs},
+		{"asset.download", t.AssetDownloadMs},
+		{"asset.verify", t.AssetVerifyMs},
+		{"asset.materialize", t.AssetMaterializeMs},
+		{"audio.prepare", t.AudioPrepareMs},
+		{"audio.timeline_build", t.AudioTimelineBuildMs},
+		{"render_plan_build", t.RenderPlanBuildMs},
+		{"video.decode", t.VideoDecodeMs},
+		{"video.subtitle", t.VideoSubtitleMs},
+		{"video.subtitle_raster", t.VideoSubtitleRasterMs},
+		{"video.subtitle_composite", t.VideoSubtitleCompositeMs},
+		{"video.watermark", t.VideoWatermarkMs},
+		{"video.watermark_upload", t.VideoWatermarkUploadMs},
+		{"video.watermark_composite", t.VideoWatermarkCompositeMs},
+		{"video.blur", t.VideoBlurMs},
+		{"video.filter", t.VideoFilterMs},
+		{"video.composite", t.VideoCompositeMs},
+		{"video.encode", t.VideoEncodeMs},
+		{"video.concat", t.VideoConcatMs},
+		{"audio.mux", t.AudioMuxMs},
+		{"output_finalize", t.OutputFinalizeMs},
+		{"artifact.hash", t.Sha256Ms},
+		{"artifact.probe", t.FfprobeMs},
+		{"artifact.verify", t.ArtifactVerifyMs},
+		{"drive.upload", t.DriveUploadMs},
+		{"drive.verify", t.DriveVerifyMs},
+		{"asset.download_drive", t.DriveDownloadMs},
+		{"asset.download_blobstore", t.BlobstoreDownloadMs},
+		{"asset.cache_read", t.LocalCacheReadMs},
+	}
+
+	// Sort descending by duration.
+	sort.Slice(phases, func(i, j int) bool { return phases[i].ms > phases[j].ms })
+
+	// Single-dominant-phase mode: the top phase IS the critical path.
+	// We also accumulate top-N in case no single phase dominates.
+	wallMs := int64(t.WallClockSeconds * 1000)
+	if wallMs <= 0 {
+		return
+	}
+
+	top := phases[0]
+	if top.ms == 0 {
+		return
+	}
+
+	// If the top phase alone is >20% of wall time, it's the single
+	// dominant bottleneck.
+	if float64(top.ms)/float64(wallMs) >= 0.20 {
+		t.CriticalPathComponent = top.name
+		t.CriticalPathMs = top.ms
+		t.CriticalPathPercent = float64(top.ms) / float64(wallMs) * 100
+		return
+	}
+
+	// Multi-phase critical path: accumulate top phases until >50% of wall.
+	var cumulative int64
+	var names []string
+	for _, p := range phases {
+		if p.ms == 0 {
+			break
+		}
+		cumulative += p.ms
+		names = append(names, p.name)
+		if float64(cumulative)/float64(wallMs) > 0.50 || len(names) >= 3 {
+			break
+		}
+	}
+	t.CriticalPathComponent = strings.Join(names, " + ")
+	t.CriticalPathMs = cumulative
+	if wallMs > 0 {
+		t.CriticalPathPercent = float64(cumulative) / float64(wallMs) * 100
+	}
+}
+
+// ComputeDerivedBandwidth fills bandwidth metrics from byte counts and
+// phase durations. Must be called AFTER PopulateFromJobPhaseTimer so
+// DriveUploadMs and the disk timings are already populated.
+func (t *RawExecutionMetrics) ComputeDerivedBandwidth() {
+	if t == nil {
+		return
+	}
+	// download_mbps_avg: total input bytes ÷ total download time.
+	dlMs := t.AssetDownloadMs
+	if dlMs == 0 {
+		dlMs = t.DriveDownloadMs + t.BlobstoreDownloadMs
+	}
+	if dlMs > 0 && t.InputBytes > 0 {
+		t.DownloadMbpsAvg = (float64(t.InputBytes) * 8 / 1_000_000) / (float64(dlMs) / 1000)
+	}
+	// upload_mbps_avg: output bytes ÷ drive upload time.
+	if t.DriveUploadMs > 0 && t.OutputBytes > 0 {
+		t.UploadMbpsAvg = (float64(t.OutputBytes) * 8 / 1_000_000) / (float64(t.DriveUploadMs) / 1000)
+	}
+	// drive_upload_mbps: same as upload but using DriveUpload bytes.
+	if t.DriveUploadMs > 0 && t.OutputBytes > 0 {
+		t.DriveUploadMbps = (float64(t.OutputBytes) * 8 / 1_000_000) / (float64(t.DriveUploadMs) / 1000)
+	}
+	// artifact_download_mbps: input bytes on drive download.
+	if t.DriveDownloadMs > 0 && t.BytesFromDrive > 0 {
+		t.ArtifactDownloadMbps = (float64(t.BytesFromDrive) * 8 / 1_000_000) / (float64(t.DriveDownloadMs) / 1000)
+	}
+}
+
+// PopulateCentralMetrics is the single entry point for all central
+// observability population. It MUST be called by the TaskRunner after the
+// executor has returned its result. It sequentially:
+//
+//  1. Populates fine-grained phase durations from the job phase timer.
+//  2. Populates GPU↔CPU transfer metrics from the transfer tracker.
+//  3. Populates GPU utilization stats from the background sampler.
+//  4. Sets the authoritative wall clock.
+//  5. Computes derived ratios (RTF, throughput, bandwidth, critical path).
+//
+// Executors MUST NOT call this method. It is owned exclusively by the
+// TaskRunner — this is the architectural contract that keeps observability
+// centralised rather than scattered across twenty executors.
+//
+// The gpuSamplerStats parameter may be zero-valued when no GPU is present.
+func (t *RawExecutionMetrics) PopulateCentralMetrics(
+	timer *JobPhaseTimer,
+	transfers GPUTransferMetrics,
+	gpuSamplerStats GPUStats,
+	wallClockSeconds float64,
+) {
+	if t == nil {
+		return
+	}
+	t.PopulateFromJobPhaseTimer(timer)
+	t.PopulateFromGPUTransfers(transfers)
+	t.PopulateFromGPUStats(gpuSamplerStats)
+	t.WallClockSeconds = wallClockSeconds
+	t.ComputeDerivedMetrics()
+	t.ComputeDerivedBandwidth()
+	t.ComputeCriticalPath()
+}
+
+// PopulateFromGPUStats fills GPU utilization metrics from the sampler.
+func (t *RawExecutionMetrics) PopulateFromGPUStats(stats GPUStats) {
+	if t == nil || stats.SampleCount == 0 {
+		return
+	}
+	t.GpuUtilAvgPct = stats.GPUUtilAvgPct
+	t.GpuUtilPeakPct = stats.GPUUtilPeakPct
+	t.NvdecUtilAvgPct = stats.NVDECUtilAvgPct
+	t.NvdecUtilPeakPct = stats.NVDECUtilPeakPct
+	t.NvencUtilAvgPct = stats.NVENCUtilAvgPct
+	t.NvencUtilPeakPct = stats.NVENCUtilPeakPct
+	t.VramUsedAvgBytes = stats.VRAMUsedAvgBytes
+	t.GpuIdleMs = stats.GPUIdleDuringRenderMs
+}
+
+// PopulateFromGPUTransfers fills VRAM ↔ RAM transfer metrics.
+func (t *RawExecutionMetrics) PopulateFromGPUTransfers(g GPUTransferMetrics) {
+	if t == nil {
+		return
+	}
+	t.FramesDownloadedFromGPU = g.FramesDownloadedGPU
+	t.FramesUploadedToGPU = g.FramesUploadedGPU
+	t.GpuToCpuTransferMs = g.GPUToCPUMs
+	t.CpuToGpuTransferMs = g.CPUToGPUMs
+	t.GpuToCpuBytes = g.GPUToCPUBytes
+	t.CpuToGpuBytes = g.CPUToGPUBytes
+}
+
 func (t RawExecutionMetrics) CoverageMap() map[string]bool {
 	if t.TelemetryCoverageJSON == "" {
 		return nil

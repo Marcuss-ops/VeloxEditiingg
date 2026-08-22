@@ -212,6 +212,118 @@ func (r *TaskRunner) mergeStatsInto(report *TaskExecutionReport, m map[string]in
 		// envelope so the master can persist them in SQL (migration 147).
 		CacheDownloadCount: positiveIntegerToInt64(m["asset.cache.download.count"]),
 		CacheDownloadBytes: positiveIntegerToInt64(m["asset.cache.download.bytes"]),
+
+		// ── Fine-grained phase timings (dotted-key → typed) ──────────
+		QueueWaitMs:          positiveIntegerToInt64(m["queue.wait.ms"]),
+		JobSetupMs:           positiveIntegerToInt64(m["job.setup.ms"]),
+		AssetResolveMs:       positiveIntegerToInt64(m["asset.resolve.ms"]),
+		AssetDownloadMs:      positiveIntegerToInt64(m["asset.download.ms"]),
+		AssetVerifyMs:        positiveIntegerToInt64(m["asset.verify.ms"]),
+		AssetMaterializeMs:   positiveIntegerToInt64(m["asset.materialize.ms"]),
+		AudioPrepareMs:       positiveIntegerToInt64(m["audio.prepare.ms"]),
+		AudioTimelineBuildMs: positiveIntegerToInt64(m["audio.timeline.build.ms"]),
+		RenderPlanBuildMs:    positiveIntegerToInt64(m["render.plan.build.ms"]),
+		VideoDecodeMs:        positiveIntegerToInt64(m["video.decode.ms"]),
+		VideoSubtitleMs:      positiveIntegerToInt64(m["video.subtitle.ms"]),
+		VideoSubtitleRasterMs:    positiveIntegerToInt64(m["video.subtitle.raster.ms"]),
+		VideoSubtitleCompositeMs: positiveIntegerToInt64(m["video.subtitle.composite.ms"]),
+		VideoWatermarkMs:         positiveIntegerToInt64(m["video.watermark.ms"]),
+		VideoWatermarkUploadMs:   positiveIntegerToInt64(m["video.watermark.upload.ms"]),
+		VideoWatermarkCompositeMs: positiveIntegerToInt64(m["video.watermark.composite.ms"]),
+		VideoBlurMs:           positiveIntegerToInt64(m["video.blur.ms"]),
+		VideoFilterMs:         positiveIntegerToInt64(m["video.filter.ms"]),
+		VideoCompositeMs:      positiveIntegerToInt64(m["video.composite.ms"]),
+		VideoEncodeMs:         positiveIntegerToInt64(m["video.encode.ms"]),
+		VideoConcatMs:         positiveIntegerToInt64(m["video.concat.ms"]),
+		AudioMuxMs:            positiveIntegerToInt64(m["audio.mux.ms"]),
+		OutputFinalizeMs:      positiveIntegerToInt64(m["output.finalize.ms"]),
+		Sha256Ms:              positiveIntegerToInt64(m["sha256.ms"]),
+		FfprobeMs:             positiveIntegerToInt64(m["ffprobe.ms"]),
+		ArtifactVerifyMs:      positiveIntegerToInt64(m["artifact.verify.ms"]),
+		DriveUploadMs:         positiveIntegerToInt64(m["drive.upload.ms"]),
+		DriveVerifyMs:         positiveIntegerToInt64(m["drive.verify.ms"]),
+		JobTotalMs:            positiveIntegerToInt64(m["job.total.ms"]),
+
+		// ── GPU transfers ───────────────────────────────────────────
+		FramesDownloadedFromGPU: positiveIntegerToInt64(m["frames.downloaded.from.gpu"]),
+		FramesUploadedToGPU:     positiveIntegerToInt64(m["frames.uploaded.to.gpu"]),
+		GpuToCpuTransferMs:      positiveIntegerToInt64(m["gpu.to.cpu.transfer.ms"]),
+		CpuToGpuTransferMs:      positiveIntegerToInt64(m["cpu.to.gpu.transfer.ms"]),
+		GpuToCpuBytes:           positiveIntegerToInt64(m["gpu.to.cpu.bytes"]),
+		CpuToGpuBytes:           positiveIntegerToInt64(m["cpu.to.gpu.bytes"]),
+
+		// ── GPU utilization sampled ─────────────────────────────────
+		GpuUtilAvgPct:    floatFromMap(m["gpu.util.avg.pct"]),
+		GpuUtilPeakPct:   floatFromMap(m["gpu.util.peak.pct"]),
+		NvdecUtilAvgPct:  floatFromMap(m["nvdec.util.avg.pct"]),
+		NvdecUtilPeakPct: floatFromMap(m["nvdec.util.peak.pct"]),
+		NvencUtilAvgPct:  floatFromMap(m["nvenc.util.avg.pct"]),
+		NvencUtilPeakPct: floatFromMap(m["nvenc.util.peak.pct"]),
+		VramUsedAvgBytes:  positiveIntegerToInt64(m["vram.used.avg.bytes"]),
+		GpuIdleMs:        positiveIntegerToInt64(m["gpu.idle.during.render.ms"]),
+
+		// ── CPU attribution ─────────────────────────────────────────
+		CpuPercentAvg:  floatFromMap(m["cpu.percent.avg"]),
+		CpuUserMs:      positiveIntegerToInt64(m["cpu.user.ms"]),
+		CpuSystemMs:    positiveIntegerToInt64(m["cpu.system.ms"]),
+		SubtitleCpuMs:  positiveIntegerToInt64(m["subtitle.cpu.ms"]),
+		BlurCpuMs:      positiveIntegerToInt64(m["blur.cpu.ms"]),
+		CompositeCpuMs: positiveIntegerToInt64(m["composite.cpu.ms"]),
+		EncodeCpuMs:    positiveIntegerToInt64(m["encode.cpu.ms"]),
+		HashCpuMs:      positiveIntegerToInt64(m["hash.cpu.ms"]),
+
+		// ── Segment stats ───────────────────────────────────────────
+		SegmentsTotal:       int32(positiveIntegerToInt64(m["segments.total"])),
+		SegmentsPacketCopy:  int32(positiveIntegerToInt64(m["segments.packet.copy"])),
+		SegmentsReencoded:   int32(positiveIntegerToInt64(m["segments.reencoded"])),
+		SegmentsComposited:  int32(positiveIntegerToInt64(m["segments.composited"])),
+		PacketCopyBytes:     positiveIntegerToInt64(m["packet.copy.bytes"]),
+		ReencodedBytes:      positiveIntegerToInt64(m["reencoded.bytes"]),
+		PacketCopyDurationMs: positiveIntegerToInt64(m["packet.copy.duration.ms"]),
+		ReencodeDurationMs:   positiveIntegerToInt64(m["reencode.duration.ms"]),
+		PacketCopyRatio:      floatFromMap(m["packet.copy.ratio"]),
+
+		// ── Download / cache timing ─────────────────────────────────
+		DriveDownloadMs:     positiveIntegerToInt64(m["drive.download.ms"]),
+		BlobstoreDownloadMs: positiveIntegerToInt64(m["blobstore.download.ms"]),
+		LocalCacheReadMs:    positiveIntegerToInt64(m["local.cache.read.ms"]),
+		AssetDownloadWaitMs: positiveIntegerToInt64(m["asset.download.wait.ms"]),
+		CacheHitBytes:       positiveIntegerToInt64(m["cache.hit.bytes"]),
+		CacheMissBytes:      positiveIntegerToInt64(m["cache.miss.bytes"]),
+
+		// ── Disk I/O timing ─────────────────────────────────────────
+		OutputWriteMs: positiveIntegerToInt64(m["output.write.ms"]),
+		TempWriteMs:   positiveIntegerToInt64(m["temp.write.ms"]),
+		FinalReadMs:   positiveIntegerToInt64(m["final.read.ms"]),
+		DiskReadMs:    positiveIntegerToInt64(m["disk.read.ms"]),
+		DiskWriteMs:   positiveIntegerToInt64(m["disk.write.ms"]),
+
+		// ── Bandwidth ───────────────────────────────────────────────
+		DownloadMbpsAvg:      floatFromMap(m["download.mbps.avg"]),
+		UploadMbpsAvg:        floatFromMap(m["upload.mbps.avg"]),
+		DriveUploadMbps:      floatFromMap(m["drive.upload.mbps"]),
+		ArtifactDownloadMbps: floatFromMap(m["artifact.download.mbps"]),
+
+		// ── Process spawn ───────────────────────────────────────────
+		FfmpegExecCount:  positiveIntegerToInt64(m["ffmpeg.exec.count"]),
+		FfprobeExecCount: positiveIntegerToInt64(m["ffprobe.exec.count"]),
+		ProcessSpawnCount: positiveIntegerToInt64(m["process.spawn.count"]),
+		FfmpegProcessMs:  positiveIntegerToInt64(m["ffmpeg.process.ms"]),
+		FfprobeProcessMs: positiveIntegerToInt64(m["ffprobe.process.ms"]),
+		ProcessStartupMs: positiveIntegerToInt64(m["process.startup.ms"]),
+
+		// ── Audio ───────────────────────────────────────────────────
+		AudioCopyMs:      positiveIntegerToInt64(m["audio.copy.ms"]),
+		AudioEncodeMs:    positiveIntegerToInt64(m["audio.encode.ms"]),
+		AudioPacketCopy:  positiveIntegerToInt64(m["audio.packet.copy"]),
+		AudioReencoded:   positiveIntegerToInt64(m["audio.reencoded"]),
+		AudioInputBytes:  positiveIntegerToInt64(m["audio.input.bytes"]),
+		AudioOutputBytes: positiveIntegerToInt64(m["audio.output.bytes"]),
+
+		// ── Critical path ───────────────────────────────────────────
+		CriticalPathComponent: stringFromMap(m["critical.path.component"]),
+		CriticalPathMs:        positiveIntegerToInt64(m["critical.path.ms"]),
+		CriticalPathPercent:   floatFromMap(m["critical.path.percent"]),
 	}
 
 	// CPU capacity is a host-level property, not something the executor
@@ -339,6 +451,114 @@ func overlayLegacyRawMetrics(dst *telemetry.RawExecutionMetrics, typed telemetry
 	overlay("unique.assets.requested", func() { dst.UniqueAssetsRequested = typed.UniqueAssetsRequested })
 	overlay("asset.cache.download.count", func() { dst.CacheDownloadCount = typed.CacheDownloadCount })
 	overlay("asset.cache.download.bytes", func() { dst.CacheDownloadBytes = typed.CacheDownloadBytes })
+
+	// ── Fine-grained phase timings ────────────────────────────────────
+	overlay("queue.wait.ms", func() { dst.QueueWaitMs = typed.QueueWaitMs })
+	overlay("job.setup.ms", func() { dst.JobSetupMs = typed.JobSetupMs })
+	overlay("asset.resolve.ms", func() { dst.AssetResolveMs = typed.AssetResolveMs })
+	overlay("asset.download.ms", func() { dst.AssetDownloadMs = typed.AssetDownloadMs })
+	overlay("asset.verify.ms", func() { dst.AssetVerifyMs = typed.AssetVerifyMs })
+	overlay("asset.materialize.ms", func() { dst.AssetMaterializeMs = typed.AssetMaterializeMs })
+	overlay("audio.prepare.ms", func() { dst.AudioPrepareMs = typed.AudioPrepareMs })
+	overlay("audio.timeline.build.ms", func() { dst.AudioTimelineBuildMs = typed.AudioTimelineBuildMs })
+	overlay("render.plan.build.ms", func() { dst.RenderPlanBuildMs = typed.RenderPlanBuildMs })
+	overlay("video.decode.ms", func() { dst.VideoDecodeMs = typed.VideoDecodeMs })
+	overlay("video.subtitle.ms", func() { dst.VideoSubtitleMs = typed.VideoSubtitleMs })
+	overlay("video.subtitle.raster.ms", func() { dst.VideoSubtitleRasterMs = typed.VideoSubtitleRasterMs })
+	overlay("video.subtitle.composite.ms", func() { dst.VideoSubtitleCompositeMs = typed.VideoSubtitleCompositeMs })
+	overlay("video.watermark.ms", func() { dst.VideoWatermarkMs = typed.VideoWatermarkMs })
+	overlay("video.watermark.upload.ms", func() { dst.VideoWatermarkUploadMs = typed.VideoWatermarkUploadMs })
+	overlay("video.watermark.composite.ms", func() { dst.VideoWatermarkCompositeMs = typed.VideoWatermarkCompositeMs })
+	overlay("video.blur.ms", func() { dst.VideoBlurMs = typed.VideoBlurMs })
+	overlay("video.filter.ms", func() { dst.VideoFilterMs = typed.VideoFilterMs })
+	overlay("video.composite.ms", func() { dst.VideoCompositeMs = typed.VideoCompositeMs })
+	overlay("video.encode.ms", func() { dst.VideoEncodeMs = typed.VideoEncodeMs })
+	overlay("video.concat.ms", func() { dst.VideoConcatMs = typed.VideoConcatMs })
+	overlay("audio.mux.ms", func() { dst.AudioMuxMs = typed.AudioMuxMs })
+	overlay("output.finalize.ms", func() { dst.OutputFinalizeMs = typed.OutputFinalizeMs })
+	overlay("sha256.ms", func() { dst.Sha256Ms = typed.Sha256Ms })
+	overlay("ffprobe.ms", func() { dst.FfprobeMs = typed.FfprobeMs })
+	overlay("artifact.verify.ms", func() { dst.ArtifactVerifyMs = typed.ArtifactVerifyMs })
+	overlay("drive.upload.ms", func() { dst.DriveUploadMs = typed.DriveUploadMs })
+	overlay("drive.verify.ms", func() { dst.DriveVerifyMs = typed.DriveVerifyMs })
+	overlay("job.total.ms", func() { dst.JobTotalMs = typed.JobTotalMs })
+
+	// ── GPU transfers ─────────────────────────────────────────────────
+	overlay("frames.downloaded.from.gpu", func() { dst.FramesDownloadedFromGPU = typed.FramesDownloadedFromGPU })
+	overlay("frames.uploaded.to.gpu", func() { dst.FramesUploadedToGPU = typed.FramesUploadedToGPU })
+	overlay("gpu.to.cpu.transfer.ms", func() { dst.GpuToCpuTransferMs = typed.GpuToCpuTransferMs })
+	overlay("cpu.to.gpu.transfer.ms", func() { dst.CpuToGpuTransferMs = typed.CpuToGpuTransferMs })
+	overlay("gpu.to.cpu.bytes", func() { dst.GpuToCpuBytes = typed.GpuToCpuBytes })
+	overlay("cpu.to.gpu.bytes", func() { dst.CpuToGpuBytes = typed.CpuToGpuBytes })
+
+	// ── GPU utilization ───────────────────────────────────────────────
+	overlay("gpu.util.avg.pct", func() { dst.GpuUtilAvgPct = typed.GpuUtilAvgPct })
+	overlay("gpu.util.peak.pct", func() { dst.GpuUtilPeakPct = typed.GpuUtilPeakPct })
+	overlay("nvdec.util.avg.pct", func() { dst.NvdecUtilAvgPct = typed.NvdecUtilAvgPct })
+	overlay("nvdec.util.peak.pct", func() { dst.NvdecUtilPeakPct = typed.NvdecUtilPeakPct })
+	overlay("nvenc.util.avg.pct", func() { dst.NvencUtilAvgPct = typed.NvencUtilAvgPct })
+	overlay("nvenc.util.peak.pct", func() { dst.NvencUtilPeakPct = typed.NvencUtilPeakPct })
+	overlay("vram.used.avg.bytes", func() { dst.VramUsedAvgBytes = typed.VramUsedAvgBytes })
+	overlay("gpu.idle.during.render.ms", func() { dst.GpuIdleMs = typed.GpuIdleMs })
+
+	// ── CPU attribution ───────────────────────────────────────────────
+	overlay("cpu.percent.avg", func() { dst.CpuPercentAvg = typed.CpuPercentAvg })
+	overlay("cpu.user.ms", func() { dst.CpuUserMs = typed.CpuUserMs })
+	overlay("cpu.system.ms", func() { dst.CpuSystemMs = typed.CpuSystemMs })
+	overlay("subtitle.cpu.ms", func() { dst.SubtitleCpuMs = typed.SubtitleCpuMs })
+	overlay("blur.cpu.ms", func() { dst.BlurCpuMs = typed.BlurCpuMs })
+	overlay("composite.cpu.ms", func() { dst.CompositeCpuMs = typed.CompositeCpuMs })
+	overlay("encode.cpu.ms", func() { dst.EncodeCpuMs = typed.EncodeCpuMs })
+	overlay("hash.cpu.ms", func() { dst.HashCpuMs = typed.HashCpuMs })
+
+	// ── Segment stats ─────────────────────────────────────────────────
+	overlay("segments.total", func() { dst.SegmentsTotal = typed.SegmentsTotal })
+	overlay("segments.packet.copy", func() { dst.SegmentsPacketCopy = typed.SegmentsPacketCopy })
+	overlay("segments.reencoded", func() { dst.SegmentsReencoded = typed.SegmentsReencoded })
+	overlay("segments.composited", func() { dst.SegmentsComposited = typed.SegmentsComposited })
+	overlay("packet.copy.bytes", func() { dst.PacketCopyBytes = typed.PacketCopyBytes })
+	overlay("reencoded.bytes", func() { dst.ReencodedBytes = typed.ReencodedBytes })
+	overlay("packet.copy.duration.ms", func() { dst.PacketCopyDurationMs = typed.PacketCopyDurationMs })
+	overlay("reencode.duration.ms", func() { dst.ReencodeDurationMs = typed.ReencodeDurationMs })
+	overlay("packet.copy.ratio", func() { dst.PacketCopyRatio = typed.PacketCopyRatio })
+
+	// ── Download / cache / disk / bandwidth ───────────────────────────
+	overlay("drive.download.ms", func() { dst.DriveDownloadMs = typed.DriveDownloadMs })
+	overlay("blobstore.download.ms", func() { dst.BlobstoreDownloadMs = typed.BlobstoreDownloadMs })
+	overlay("local.cache.read.ms", func() { dst.LocalCacheReadMs = typed.LocalCacheReadMs })
+	overlay("asset.download.wait.ms", func() { dst.AssetDownloadWaitMs = typed.AssetDownloadWaitMs })
+	overlay("cache.hit.bytes", func() { dst.CacheHitBytes = typed.CacheHitBytes })
+	overlay("cache.miss.bytes", func() { dst.CacheMissBytes = typed.CacheMissBytes })
+	overlay("output.write.ms", func() { dst.OutputWriteMs = typed.OutputWriteMs })
+	overlay("temp.write.ms", func() { dst.TempWriteMs = typed.TempWriteMs })
+	overlay("final.read.ms", func() { dst.FinalReadMs = typed.FinalReadMs })
+	overlay("disk.read.ms", func() { dst.DiskReadMs = typed.DiskReadMs })
+	overlay("disk.write.ms", func() { dst.DiskWriteMs = typed.DiskWriteMs })
+	overlay("download.mbps.avg", func() { dst.DownloadMbpsAvg = typed.DownloadMbpsAvg })
+	overlay("upload.mbps.avg", func() { dst.UploadMbpsAvg = typed.UploadMbpsAvg })
+	overlay("drive.upload.mbps", func() { dst.DriveUploadMbps = typed.DriveUploadMbps })
+	overlay("artifact.download.mbps", func() { dst.ArtifactDownloadMbps = typed.ArtifactDownloadMbps })
+
+	// ── Process spawn ─────────────────────────────────────────────────
+	overlay("ffmpeg.exec.count", func() { dst.FfmpegExecCount = typed.FfmpegExecCount })
+	overlay("ffprobe.exec.count", func() { dst.FfprobeExecCount = typed.FfprobeExecCount })
+	overlay("process.spawn.count", func() { dst.ProcessSpawnCount = typed.ProcessSpawnCount })
+	overlay("ffmpeg.process.ms", func() { dst.FfmpegProcessMs = typed.FfmpegProcessMs })
+	overlay("ffprobe.process.ms", func() { dst.FfprobeProcessMs = typed.FfprobeProcessMs })
+	overlay("process.startup.ms", func() { dst.ProcessStartupMs = typed.ProcessStartupMs })
+
+	// ── Audio ─────────────────────────────────────────────────────────
+	overlay("audio.copy.ms", func() { dst.AudioCopyMs = typed.AudioCopyMs })
+	overlay("audio.encode.ms", func() { dst.AudioEncodeMs = typed.AudioEncodeMs })
+	overlay("audio.packet.copy", func() { dst.AudioPacketCopy = typed.AudioPacketCopy })
+	overlay("audio.reencoded", func() { dst.AudioReencoded = typed.AudioReencoded })
+	overlay("audio.input.bytes", func() { dst.AudioInputBytes = typed.AudioInputBytes })
+	overlay("audio.output.bytes", func() { dst.AudioOutputBytes = typed.AudioOutputBytes })
+
+	// ── Critical path ─────────────────────────────────────────────────
+	overlay("critical.path.component", func() { dst.CriticalPathComponent = typed.CriticalPathComponent })
+	overlay("critical.path.ms", func() { dst.CriticalPathMs = typed.CriticalPathMs })
+	overlay("critical.path.percent", func() { dst.CriticalPathPercent = typed.CriticalPathPercent })
 }
 
 // positiveIntegerToInt64 reads dotted-key counters (int64 / int32 /

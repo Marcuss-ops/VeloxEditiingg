@@ -175,6 +175,20 @@ func (r *TaskRunner) WithClock(c executor.Clock) *TaskRunner {
 // runs UNDER panic containment.
 func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskExecutionReport, error) {
 	overallStart := r.now()
+	phaseTimer := telemetry.NewJobPhaseTimer()
+	gpuTransferTracker := telemetry.NewGPUTransferTracker()
+	// GPU sampler: runs in background for the job duration, sampling
+	// nvidia-smi utilization/VRAM. Skipped silently if no GPU present.
+	var gpuSampler *telemetry.GPUSampler
+	if telemetry.IsGPUAvailable() {
+		gpuSampler = telemetry.NewGPUSampler(parent, 500*time.Millisecond)
+	}
+	// Ensure GPU sampler is stopped on all exit paths.
+	defer func() {
+		if gpuSampler != nil {
+			gpuSampler.Stop()
+		}
+	}()
 	report := &TaskExecutionReport{
 		JobID:        spec.JobID,
 		ExecutorID:   spec.ExecutorID,
@@ -263,8 +277,10 @@ func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskEx
 		Artifacts:       r.artifacts,
 		CacheStats:      r.cacheStats,
 		BlobStats:       r.blobStats,
-		FFmpegProfiles:  report.FFmpegProfiles,
-		StorageResolver: r.storage,
+		FFmpegProfiles:     report.FFmpegProfiles,
+		StorageResolver:    r.storage,
+		PhaseTimer:         phaseTimer,
+		GPUTransferTracker: gpuTransferTracker,
 	})
 	if err != nil {
 		return r.completeError(rec, report, appendPhase, CodeInternalRunnerFault,
@@ -279,6 +295,10 @@ func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskEx
 	appendPhase(r.runDeferredPhase(rec, PhasePrefetch, "prefetch is owned by the worker prefetch scheduler"))
 
 	// Phase: Execute with panic containment + cancellation mapping.
+	// Start GPU sampler right before the render phase.
+	if gpuSampler != nil {
+		gpuSampler.Start()
+	}
 	// Scorecard v2 / Step 15: starts a "render" span for distributed tracing.
 	_, renderSpan := oteltrace.StartSpan(rc.ctx, "render",
 		oteltrace.AttrJobID(spec.JobID),
@@ -286,6 +306,11 @@ func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskEx
 	)
 	result, execErr := r.runExecute(rc, exec, spec, appendPhase, rec)
 	renderSpan.End()
+
+	// Stop GPU sampler after render phase.
+	if gpuSampler != nil {
+		gpuSampler.Stop()
+	}
 
 	// Preserve executor telemetry before classifying the outcome. Native
 	// phases enter the canonical Attempt journal here before any report,
@@ -349,11 +374,35 @@ func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskEx
 	appendPhase(r.runPhase(rec, PhaseReport, func() error { return nil }))
 	report.Status = "succeeded"
 	report.Outputs = result.Outputs
+	// Populate fine-grained phase timings from the shared timer into the
+	// raw metrics envelope. Executors instrumented their phases via the
+	// PhaseTimer; this collapses accumulated durations into the typed shape.
+	if report.RawMetrics == nil {
+		report.RawMetrics = &telemetry.RawExecutionMetrics{}
+	}
+	// ── Central observability pipeline ────────────────────────────────
+	// PopulateCentralMetrics is the single entry point that aggregates all
+	// runtime observability (phase timer, GPU transfers, GPU sampler) and
+	// computes every derived ratio. Executors write ONLY their executor-
+	// owned facts (CPU, frames, process spawns — via result.RawMetrics);
+	// everything else flows through this one call.
+	report.RawMetrics.PopulateCentralMetrics(
+		phaseTimer,
+		gpuTransferTracker.Snapshot(),
+		gpuSampler.Stats(), // zero-valued if no GPU
+		time.Since(overallStart).Seconds(),
+	)
+	report.TypedMetrics = report.RawMetrics
 	// Project both legacy dotted metrics and the typed wire mirror on every
 	// outcome. This must not depend on cache/blob providers because native
 	// engine metrics are executor-provided.
 	r.mergeStatsInto(report, report.LegacyMetrics())
 	r.attachDetailedPhases(rec, report)
+
+	// Build and log the performance report at job completion.
+	perfReport := telemetry.BuildPerformanceReport(phaseTimer, report.RawMetrics, gpuSampler.Stats())
+	r.callerLog.Info("%s", perfReport.Format())
+
 	return *report, nil
 }
 

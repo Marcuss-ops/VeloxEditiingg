@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -34,6 +35,8 @@ import (
 // property to the master scheduler.
 func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.ExecutionContext, spec executor.TaskSpec) (executor.ExecutionResult, error) {
 	startedAt := time.Now().UTC()
+	timer := jobPhaseTimerFromExecutionContext(execCtx)
+	gpuTracker := gpuTransferTrackerFromExecutionContext(execCtx)
 	// Legacy compatibility projection for pre-typed report consumers. The
 	// canonical producer output is rawMetrics below; this map is retired
 	// incrementally as downstream consumers adopt RawMetrics.
@@ -72,7 +75,44 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 	// duration_seconds) merged into the final task-scoped metrics map.
 	pipelineID := resolvePipelineID(spec.Payload)
 	pipelineStart := time.Now()
+
+	// Fine-grained phase timer: wrap the pipeline run for the top-level video
+	// phases. Sub-phase timings are populated from the engine's own sidecar
+	// detailed phases after the run completes.
+	var spanDecode, spanSubtitle, spanBlur, spanWatermark, spanFilter, spanComposite, spanEncode string
+	if timer != nil {
+		spanDecode = timer.Begin(telemetry.PhaseVideoDecode)
+		spanSubtitle = timer.Begin(telemetry.PhaseVideoSubtitle)
+		spanBlur = timer.Begin(telemetry.PhaseVideoBlur)
+		spanWatermark = timer.Begin(telemetry.PhaseVideoWatermark)
+		spanFilter = timer.Begin(telemetry.PhaseVideoFilter)
+		spanComposite = timer.Begin(telemetry.PhaseVideoComposite)
+		spanEncode = timer.Begin(telemetry.PhaseVideoEncode)
+	}
+
 	runMetrics, err := s.pipelineRunner.RunWithMetrics(ctx, pipelineID, spec.JobID, spec.Payload, outputPath)
+
+	// Populate fine-grained phase timings from the C++ engine's detailed
+	// phase ledger. Each engine component/action is mapped to a fine-grained
+	// phase and accumulated into the shared timer.
+	if timer != nil {
+		// Close all spans (the engine run is synchronous).
+		timer.End(spanDecode)
+		timer.End(spanSubtitle)
+		timer.End(spanBlur)
+		timer.End(spanWatermark)
+		timer.End(spanFilter)
+		timer.End(spanComposite)
+		timer.End(spanEncode)
+		// Map engine detailed phases into fine-grained timer data.
+		populateTimerFromEnginePhases(timer, runMetrics.RenderMetrics.DetailedPhases)
+		// Populate per-scene breakdown from engine segments and detailed phases.
+		populateSceneTimingsFromEngine(timer, runMetrics.RenderMetrics.Segments, runMetrics.RenderMetrics.DetailedPhases)
+	}
+	// Feed GPU transfer tracker from engine detailed phases.
+	if gpuTracker != nil {
+		ingestGPUTransferPhases(gpuTracker, runMetrics.RenderMetrics.DetailedPhases)
+	}
 
 	// Materialize native telemetry before handling the render error. The
 	// engine may have emitted useful completed phases and segment timings
@@ -160,7 +200,7 @@ func compiledPlanClipCount(payload map[string]interface{}) int {
 
 func rawMetricsFromPipeline(run pipeline.RunMetrics, io performance.IOMetrics, cpu performance.CPUMetrics) *telemetry.RawExecutionMetrics {
 	rm := run.RenderMetrics
-	return &telemetry.RawExecutionMetrics{
+	m := &telemetry.RawExecutionMetrics{
 		InputBytes:           io.AssetBytesRead,
 		OutputBytes:          io.FinalBytesWritten,
 		CpuTimeMs:            cpu.CPUTotalMs,
@@ -177,7 +217,158 @@ func rawMetricsFromPipeline(run pipeline.RunMetrics, io performance.IOMetrics, c
 		OutputFileSize:       io.FinalBytesWritten,
 		DiskReadBytes:        io.TotalBytesRead,
 		DiskWriteBytes:       io.TotalBytesWritten,
+
+		// ── CPU attribution from engine sidecar ────────────────────
+		CpuUserMs:   rm.CPUUserMs,
+		CpuSystemMs: rm.CPUSystemMs,
+
+		// ── Process spawn metrics from engine sidecar ──────────────
+		// /proc sampler counts of external processes spawned by the engine.
+		FfmpegExecCount:  rm.FfmpegExecCount,
+		FfprobeExecCount: rm.FfprobeExecCount,
+		// Engine-level spawn count (cmd.Start() succeeded) + timing.
+		ProcessSpawnCount: rm.EngineSpawnCount,
+		ProcessStartupMs:  rm.EngineSpawnMs,
+		// Total time consumed by external ffmpeg/ffprobe processes.
+		FfmpegProcessMs:  rm.ProcessWaitMs,
+		FfprobeProcessMs: 0, // not separated in current /proc sampler; zero for clarity
 	}
+	// Derive segment statistics from the engine's per-segment sidecar.
+	computePipelineSegmentStats(m, run)
+	// Derive audio metrics from pipeline metadata.
+	computePipelineAudioStats(m, run)
+	// Derive cpu_percent_avg from total CPU time vs wall clock.
+	if m.WallClockSeconds > 0 && m.CpuTimeMs > 0 {
+		// cpu_percent_avg: average CPU utilization across the render window.
+		// cpu_time_ms is accumulated across all cores; divide by wall clock
+		// and by logical CPU count to get a 0-100 percentage.
+		logicalCPUs := runtime.NumCPU()
+		if logicalCPUs > 0 {
+			m.CpuPercentAvg = (float64(m.CpuTimeMs) / (m.WallClockSeconds * 1000) / float64(logicalCPUs)) * 100
+		}
+	}
+	return m
+}
+
+// computePipelineSegmentStats derives per-segment packet-copy/re-encode/composite
+// breakdown from the engine sidecar. Classification rules:
+//
+//   - packet_copy: segment with FfmpegEncodeMS == 0 (stream/packet copy)
+//   - reencoded:   segment with FfmpegEncodeMS > 0 and FramesComposited == 0
+//   - composited:  segment with FramesComposited > 0
+//
+// Byte totals: packet_copy_bytes sums source bytes of copy-only segments;
+// reencoded_bytes sums source bytes of re-encoded segments. Duration is
+// the sum of FfmpegEncodeMS for each category.
+func computePipelineSegmentStats(m *telemetry.RawExecutionMetrics, run pipeline.RunMetrics) {
+	rm := run.RenderMetrics
+	segments := rm.Segments
+	m.SegmentsTotal = int32(len(segments))
+	if m.SegmentsTotal == 0 {
+		return
+	}
+
+	var packetCopyCount, reencodedCount, compositedCount int32
+	var packetCopyBytes, reencodedBytes int64
+	var packetCopyDurMs, reencodeDurMs int64
+
+	for _, seg := range segments {
+		encodeMs := int64(seg.FfmpegEncodeMS)
+		isComposited := seg.FramesComposited > 0
+		isPacketCopy := encodeMs == 0 && !isComposited
+
+		if isPacketCopy {
+			packetCopyCount++
+			packetCopyBytes += seg.SourceBytes
+			packetCopyDurMs += encodeMs // 0 for stream copy
+		} else if isComposited {
+			compositedCount++
+			// Composited segments are also encoded, so source bytes
+			// go to reencoded (filters change pixel data).
+			reencodedBytes += seg.SourceBytes
+			reencodeDurMs += encodeMs
+		} else {
+			reencodedCount++
+			reencodedBytes += seg.SourceBytes
+			reencodeDurMs += encodeMs
+		}
+	}
+
+	m.SegmentsPacketCopy = packetCopyCount
+	m.SegmentsReencoded = reencodedCount
+	m.SegmentsComposited = compositedCount
+	m.PacketCopyBytes = packetCopyBytes
+	m.ReencodedBytes = reencodedBytes
+	m.PacketCopyDurationMs = packetCopyDurMs
+	m.ReencodeDurationMs = reencodeDurMs
+	if m.SegmentsTotal > 0 {
+		m.PacketCopyRatio = float64(packetCopyCount) / float64(m.SegmentsTotal) * 100
+	}
+}
+
+// computePipelineAudioStats fills audio encode/copy metrics from pipeline
+// metadata. Classification: when the engine concat mode indicates a stream
+// copy for audio (AudioTracks == 0 or the Observability map has audio_copy),
+// we count it as a copy; otherwise we treat the audio as re-encoded.
+//
+// The engine sidecar Observability map is the authoritative source when
+// present; otherwise we fall back to AudioTracks heuristic.
+func computePipelineAudioStats(m *telemetry.RawExecutionMetrics, run pipeline.RunMetrics) {
+	rm := run.RenderMetrics
+	obs := rm.Observability
+
+	// Extract audio metrics from sidecar when available.
+	// Observability keys are engine-defined: audio_copy_ms, audio_encode_ms,
+	// audio_input_bytes, audio_output_bytes, audio_packet_copy_count,
+	// audio_reencode_count.
+	if obs != nil {
+		if v, ok := intFromObs(obs, "audio_copy_ms"); ok {
+			m.AudioCopyMs = v
+		}
+		if v, ok := intFromObs(obs, "audio_encode_ms"); ok {
+			m.AudioEncodeMs = v
+		}
+		if v, ok := intFromObs(obs, "audio_input_bytes"); ok {
+			m.AudioInputBytes = v
+		}
+		if v, ok := intFromObs(obs, "audio_output_bytes"); ok {
+			m.AudioOutputBytes = v
+		}
+		if v, ok := intFromObs(obs, "audio_packet_copy_count"); ok {
+			m.AudioPacketCopy = v
+		}
+		if v, ok := intFromObs(obs, "audio_reencode_count"); ok {
+			m.AudioReencoded = v
+		}
+	}
+
+	// Heuristic: when no observability data exists, infer from track count.
+	// AudioTracks == 0 means audio was stream-copied (no engine processing).
+	if m.AudioCopyMs == 0 && m.AudioEncodeMs == 0 {
+		if run.AudioTracks == 0 {
+			m.AudioPacketCopy = 1
+			m.AudioReencoded = 0
+		}
+	}
+}
+
+// intFromObs extracts an int64 value from an engine observability map.
+func intFromObs(obs map[string]interface{}, key string) (int64, bool) {
+	v, ok := obs[key]
+	if !ok {
+		return 0, false
+	}
+	switch x := v.(type) {
+	case float64:
+		return int64(x), true
+	case int64:
+		return x, true
+	case int:
+		return int64(x), true
+	case int32:
+		return int64(x), true
+	}
+	return 0, false
 }
 
 func renderErrorCode(err error) string {
@@ -313,4 +504,203 @@ func durationSecondsOf(m map[string]interface{}) float64 {
 func PayloadOutputPath(spec executor.TaskSpec) string {
 	p, _ := spec.Payload["output_path"].(string)
 	return p
+}
+
+// populateSceneTimingsFromEngine maps per-segment engine data and per-segment
+// detailed phases into the shared JobPhaseTimer's per-scene breakdown.
+// This produces the TOP SLOWEST SCENES ranking in the performance report.
+func populateSceneTimingsFromEngine(timer *telemetry.JobPhaseTimer, segments []pipeline.SegmentTiming, phases []pipeline.DetailedPhaseTiming) {
+	if timer == nil {
+		return
+	}
+	// Phase 1: ingest per-segment summary data (scene-level totals).
+	for _, seg := range segments {
+		sceneID := seg.SceneID
+		if sceneID == "" {
+			continue
+		}
+		// Add segment-level aggregate data.
+		timer.AddSceneData(
+			sceneID,
+			int64(seg.InputDurationMS),
+			int64(seg.OutputDurationMS),
+			seg.SourceBytes,
+			seg.OutputBytes,
+			seg.FramesDecoded,
+			seg.FramesEncoded,
+			seg.FfmpegSpeedX,
+		)
+		// Add segment-level download and encode phases.
+		if seg.AssetDownloadMS > 0 {
+			timer.AddScenePhaseData(sceneID, telemetry.PhaseAssetDownload,
+				seg.SourceBytes, 0, 0, 0, 0,
+			)
+		}
+	}
+
+	// Phase 2: ingest per-segment detailed phases for sub-phase breakdown.
+	// Build a segment index → sceneID map for fast lookup.
+	segScene := make(map[int32]string, len(segments))
+	for _, seg := range segments {
+		segScene[int32(seg.SegmentIndex)] = seg.SceneID
+	}
+	for _, phase := range phases {
+		if phase.SegmentIndex < 0 {
+			continue
+		}
+		sceneID, ok := segScene[phase.SegmentIndex]
+		if !ok || sceneID == "" {
+			continue
+		}
+		finePhase := mapEnginePhaseToFineGrained(phase.Component, phase.Action)
+		if finePhase == "" {
+			continue
+		}
+		timer.AddScenePhaseData(sceneID, finePhase,
+			phase.BytesIn, phase.BytesOut,
+			phase.FramesIn, phase.FramesOut,
+			phase.CPUMS,
+		)
+	}
+}
+
+// ingestGPUTransferPhases feeds the engine's detailed phase stream into the
+// GPU transfer tracker. Each phase is classified as GPU-side or CPU-side;
+// transfers are inferred when frames cross the PCIe boundary.
+func ingestGPUTransferPhases(tracker *telemetry.GPUTransferTracker, phases []pipeline.DetailedPhaseTiming) {
+	if tracker == nil {
+		return
+	}
+	ingests := make([]telemetry.PhaseIngest, 0, len(phases))
+	for _, phase := range phases {
+		ingests = append(ingests, telemetry.PhaseIngest{
+			Component:  phase.Component,
+			Action:     phase.Action,
+			FramesIn:   phase.FramesIn,
+			FramesOut:  phase.FramesOut,
+			BytesIn:    phase.BytesIn,
+			BytesOut:   phase.BytesOut,
+			DurationMS: phase.DurationMS,
+		})
+	}
+	tracker.IngestEnginePhases(ingests)
+}
+
+// populateTimerFromEnginePhases maps the C++ engine's detailed phase ledger
+// onto the shared fine-grained JobPhaseTimer. Each engine component/action
+// pair is mapped to the corresponding fine-grained phase; duration, bytes,
+// frames, and CPU time are accumulated.
+func populateTimerFromEnginePhases(timer *telemetry.JobPhaseTimer, phases []pipeline.DetailedPhaseTiming) {
+	if timer == nil {
+		return
+	}
+	for _, phase := range phases {
+		finePhase := mapEnginePhaseToFineGrained(phase.Component, phase.Action)
+		if finePhase == "" {
+			continue
+		}
+		timer.AddPhaseData(finePhase,
+			phase.BytesIn, phase.BytesOut,
+			phase.FramesIn, phase.FramesOut,
+			phase.CPUMS, phase.QueueWaitMS,
+		)
+	}
+}
+
+// mapEnginePhaseToFineGrained maps C++ engine component/action pairs to the
+// canonical fine-grained phase name. Returns "" for unknown pairs.
+func mapEnginePhaseToFineGrained(component, action string) string {
+	// Normalize to a canonical key for matching: "component.action"
+	key := component + "." + action
+
+	// Direct matches first.
+	switch key {
+	case "engine.video.decode":
+		return telemetry.PhaseVideoDecode
+	case "engine.video.blur":
+		return telemetry.PhaseVideoBlur
+	case "engine.video.filter":
+		return telemetry.PhaseVideoFilter
+	case "engine.video.composite", "engine.composite":
+		return telemetry.PhaseVideoComposite
+	case "engine.encode.setup", "engine.encode.frame_submit", "engine.encode.flush":
+		return telemetry.PhaseVideoEncode
+	case "engine.subtitle.render", "engine.video.subtitle":
+		return telemetry.PhaseVideoSubtitle
+	case "engine.subtitle.raster", "engine.video.subtitle_raster":
+		return telemetry.PhaseVideoSubtitleRaster
+	case "engine.subtitle.composite", "engine.video.subtitle_composite":
+		return telemetry.PhaseVideoSubtitleComposite
+	case "engine.watermark.upload", "engine.video.watermark_upload":
+		return telemetry.PhaseVideoWatermarkUpload
+	case "engine.watermark.composite", "engine.video.watermark_composite":
+		return telemetry.PhaseVideoWatermarkComposite
+	case "engine.watermark.render", "engine.video.watermark":
+		return telemetry.PhaseVideoWatermark
+	case "engine.audio.mix":
+		return telemetry.PhaseAudioPrepare
+	case "engine.mux.audio", "engine.mux.finalize":
+		return telemetry.PhaseAudioMux
+	case "engine.concat":
+		return telemetry.PhaseVideoConcat
+	}
+
+	// Fallback: match by component prefix for grouped phases.
+	switch {
+	case strings.HasPrefix(component, "engine.video"):
+		switch action {
+		case "decode":
+			return telemetry.PhaseVideoDecode
+		case "blur":
+			return telemetry.PhaseVideoBlur
+		case "filter":
+			return telemetry.PhaseVideoFilter
+		case "composite":
+			return telemetry.PhaseVideoComposite
+		case "subtitle":
+			return telemetry.PhaseVideoSubtitle
+		case "subtitle_raster":
+			return telemetry.PhaseVideoSubtitleRaster
+		case "subtitle_composite":
+			return telemetry.PhaseVideoSubtitleComposite
+		case "watermark":
+			return telemetry.PhaseVideoWatermark
+		case "watermark_upload":
+			return telemetry.PhaseVideoWatermarkUpload
+		case "watermark_composite":
+			return telemetry.PhaseVideoWatermarkComposite
+		}
+	case strings.HasPrefix(component, "engine.encode"):
+		return telemetry.PhaseVideoEncode
+	case strings.HasPrefix(component, "engine.subtitle"):
+		switch action {
+		case "raster":
+			return telemetry.PhaseVideoSubtitleRaster
+		case "composite":
+			return telemetry.PhaseVideoSubtitleComposite
+		default:
+			return telemetry.PhaseVideoSubtitle
+		}
+	case strings.HasPrefix(component, "engine.watermark"):
+		switch action {
+		case "upload":
+			return telemetry.PhaseVideoWatermarkUpload
+		case "composite":
+			return telemetry.PhaseVideoWatermarkComposite
+		default:
+			return telemetry.PhaseVideoWatermark
+		}
+	case strings.HasPrefix(component, "engine.audio"):
+		return telemetry.PhaseAudioPrepare
+	case strings.HasPrefix(component, "engine.mux"):
+		return telemetry.PhaseAudioMux
+	case component == "engine" && action == "composite":
+		return telemetry.PhaseVideoComposite
+	case component == "engine" && action == "render":
+		// Top-level engine render: span wraps sub-phases, not individually accumulated.
+		return ""
+	case component == "engine" && action == "concat":
+		return telemetry.PhaseVideoConcat
+	}
+	return ""
 }
