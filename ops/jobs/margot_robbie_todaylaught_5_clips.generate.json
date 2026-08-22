@@ -1,0 +1,63 @@
+{
+  "source": {"type": "clips"},
+  "idempotency_key": "margot-robbie-todaylaught-5-audio-run8-test-20260822",
+  "job_type": "clip.stock.v1",
+  "template_id": "todaylaught-5-clips",
+  "template_version": 1,
+  "skip_creator": true,
+  "video_name": "Margot Robbie - 5 Funny Clips TodayLaught",
+  "language": "en",
+  "audio_language_for_srt": "en",
+  "render_video": true,
+  "save_to_db": true,
+  "output": {"width": 1920, "height": 1080, "fps": 24, "format": "mp4"},
+  "script_text": "Ryan jokes about being invited to sing I'm Just Ken at the Oscars. The spotlight shines as Margot shares her karaoke anthem, while Ryan playfully jumps into a comedic verse, setting the stage for unexpected musical moments. Attempting to channel a flamingo's energy proved unexpectedly challenging for Margot. She confessed that even after forty-five minutes of channeling the bird, the animal work simply wasn't translating into her performance as Barbie. The discussion touches upon Young Hercules and a crotchless doll, exploring the unexpected comparisons made during an interview setting. It highlights moments of playful critique regarding pop culture references. The genesis of a character, particularly one as iconic as Ken, is often shrouded in layers of creative absurdity. Examining the script reveals an almost unbelievable level of preparation for such a seemingly simple concept—a doll devoid of any traditional anatomy. It raises profound questions about the artistic process itself, suggesting that some performances demand research beyond what seems conceivable.",
+  "delivery_plan": [
+    {
+      "destination_id": "drive-smoke",
+      "priority": 1,
+      "retry_budget": 3,
+      "metadata": {
+        "drive_output_folder": "1ST6FxPuRaxwBOIz39MAN8Jj4gDv509-K",
+        "drive_subfolder_name": "margot-robbie-todaylaught-5-audio-run8",
+        "source_audio": "velox-drive://12Z-mG_Jh3DRcfevJo7HeyFiHHsYh3ZiR",
+        "final_audio_asset_id": "eb8997d2e92e8b96d6ae994bd0ba5e8a",
+        "final_audio_duration_us": 67776000,
+        "final_audio_sha256": "d504a83d1eda808acab81ee59a7c13468f1ad42690a2c2a60f710ad35343e216",
+        "watermark": {"enabled": true, "text": "TODAYLAUGHT", "position": "center", "opacity": 1}
+      }
+    }
+  ],
+  "scenes": [
+    {
+      "id": "scene-0", "index": 0, "kind": "clip", "duration_seconds": 11.184,
+      "text": "Ryan jokes about being invited to sing I'm Just Ken at the Oscars.",
+      "clip": {"url": "velox-drive://1ydNBuwAtMWbC1fWYg_3xTsot3OhLje9d", "asset_id": "1ydNBuwAtMWbC1fWYg_3xTsot3OhLje9d", "start_ms": 0, "end_ms": 11184, "duration_ms": 11184},
+      "voiceover": {"asset_id": "1_v2iFpH4R_wYV44w2JA1mhOA7Iot4z0f", "url": "velox-drive://1_v2iFpH4R_wYV44w2JA1mhOA7Iot4z0f", "duration_ms": 11184, "language": "en"}
+    },
+    {
+      "id": "scene-1", "index": 1, "kind": "clip", "duration_seconds": 8.952,
+      "text": "The spotlight shines as Margot shares her karaoke anthem, while Ryan playfully jumps into a comedic verse, setting the stage for unexpected musical moments.",
+      "clip": {"url": "velox-drive://1PID9THzr1vFQWWjMIpYydV6tB0q_xvvC", "asset_id": "1PID9THzr1vFQWWjMIpYydV6tB0q_xvvC", "start_ms": 0, "end_ms": 8952, "duration_ms": 8952},
+      "voiceover": {"asset_id": "1pTkM3SrD7M6B3HFOESWnAYoA5wG1jwOs", "url": "velox-drive://1pTkM3SrD7M6B3HFOESWnAYoA5wG1jwOs", "duration_ms": 8952, "language": "en"}
+    },
+    {
+      "id": "scene-2", "index": 2, "kind": "clip", "duration_seconds": 12.576,
+      "text": "Attempting to channel a flamingo's energy proved unexpectedly challenging for Margot. She confessed that even after forty-five minutes of channeling the bird, the animal work simply wasn't translating into her performance as Barbie.",
+      "clip": {"url": "velox-drive://1fGXUHfrrshaq67-i5M2G84BaN7Z20OZQ", "asset_id": "1fGXUHfrrshaq67-i5M2G84BaN7Z20OZQ", "start_ms": 0, "end_ms": 12576, "duration_ms": 12576},
+      "voiceover": {"asset_id": "1HLazTA4Prc9Gkq8SJdJPENFBJRkULzri", "url": "velox-drive://1HLazTA4Prc9Gkq8SJdJPENFBJRkULzri", "duration_ms": 12576, "language": "en"}
+    },
+    {
+      "id": "scene-3", "index": 3, "kind": "clip", "duration_seconds": 11.64,
+      "text": "The discussion touches upon Young Hercules and a crotchless doll, exploring the unexpected comparisons made during an interview setting. It highlights moments of playful critique regarding pop culture references.",
+      "clip": {"url": "velox-drive://1sEe-b2w0w2bug9MX6OfNMijpCGdfVK06", "asset_id": "1sEe-b2w0w2bug9MX6OfNMijpCGdfVK06", "start_ms": 0, "end_ms": 11640, "duration_ms": 11640},
+      "voiceover": {"asset_id": "1294HE3MsWBe12pFSyHCKinyCQ2pPzq4Y", "url": "velox-drive://1294HE3MsWBe12pFSyHCKinyCQ2pPzq4Y", "duration_ms": 11640, "language": "en"}
+    },
+    {
+      "id": "scene-4", "index": 4, "kind": "clip", "duration_seconds": 23.424,
+      "text": "The genesis of a character, particularly one as iconic as Ken, is often shrouded in layers of creative absurdity. Examining the script reveals an almost unbelievable level of preparation for such a seemingly simple concept—a doll devoid of any traditional anatomy. It raises profound questions about the artistic process itself, suggesting that some performances demand research beyond what seems conceivable.",
+      "clip": {"url": "velox-drive://1QIIN9iQKaPXsXCyW4eQGEURHIcCpn-bk", "asset_id": "1QIIN9iQKaPXsXCyW4eQGEURHIcCpn-bk", "start_ms": 0, "end_ms": 23424, "duration_ms": 23424},
+      "voiceover": {"asset_id": "10kinbPaeDNvLnLd8YE_qRMQ1C6xjP7aO", "url": "velox-drive://10kinbPaeDNvLnLd8YE_qRMQ1C6xjP7aO", "duration_ms": 23424, "language": "en"}
+    }
+  ]
+}

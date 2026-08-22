@@ -11,6 +11,7 @@
 package migrations
 
 import (
+	"context"
 	"database/sql"
 	"embed"
 	"fmt"
@@ -25,7 +26,32 @@ import (
 // (duplicate-column) and DROP COLUMN (no-such-column) errors so partial
 // boots or Path-B rollouts don't crash the master.
 func applyMigration(db *sql.DB, m Migration) error {
-	tx, err := db.Begin()
+	// SQLite ignores PRAGMA foreign_keys changes while a transaction is
+	// active. A few historical migrations intentionally rebuild tables with
+	// foreign_keys disabled, so those migrations must configure the same
+	// dedicated connection before beginning the transaction.
+	needsForeignKeysOff := strings.Contains(strings.ToLower(m.SQL), "pragma foreign_keys = off")
+	var conn *sql.Conn
+	if needsForeignKeysOff {
+		var err error
+		conn, err = db.Conn(context.Background())
+		if err != nil {
+			return err
+		}
+		defer conn.Close()
+		if _, err := conn.ExecContext(context.Background(), "PRAGMA foreign_keys = OFF"); err != nil {
+			return err
+		}
+		defer func() { _, _ = conn.ExecContext(context.Background(), "PRAGMA foreign_keys = ON") }()
+	}
+
+	var tx *sql.Tx
+	var err error
+	if conn != nil {
+		tx, err = conn.BeginTx(context.Background(), nil)
+	} else {
+		tx, err = db.Begin()
+	}
 	if err != nil {
 		return err
 	}

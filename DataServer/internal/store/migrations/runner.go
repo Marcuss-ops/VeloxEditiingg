@@ -40,6 +40,14 @@ var legacyChecksums = map[int]map[string]struct{}{
 		// that recorded the retired v40 checksum.
 		"b2095b5cf5342e67301c1638c83a4c9f4df7da6e37bb4523de70f8d635e6e4b4": {},
 	},
+	8: {
+		// Production databases may contain the pre-reconciliation v008
+		// checksum. The migration remains embedded and is not re-executed;
+		// accept this exact historical checksum so later additive migrations
+		// (including phase metrics) can be applied safely.
+		"916ae8a7e7687ca04460e8908cb559eabf0764432cf4e387158c350a0c8c9e33": {},
+		"e72ef0634f748571c0f7878f9cbcce86f654bd3f4635ea2f1919d2a7dd839694": {},
+	},
 }
 
 // retiredMigrationChecksums contains exact checksums for migrations that

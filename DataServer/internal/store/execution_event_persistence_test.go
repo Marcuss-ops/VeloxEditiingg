@@ -54,6 +54,17 @@ CREATE TABLE task_phase_timings (
     executor_version INTEGER NOT NULL DEFAULT 0,
     UNIQUE (attempt_id, component, action)
 );
+CREATE TABLE task_attempt_phase_metrics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    attempt_id TEXT NOT NULL, job_id TEXT NOT NULL DEFAULT '', task_id TEXT NOT NULL DEFAULT '',
+    worker_id TEXT NOT NULL DEFAULT '', phase TEXT NOT NULL, duration_ms INTEGER NOT NULL DEFAULT 0,
+    event_count INTEGER NOT NULL DEFAULT 0, cpu_ms REAL NOT NULL DEFAULT 0,
+    queue_wait_ms REAL NOT NULL DEFAULT 0, bytes_in INTEGER NOT NULL DEFAULT 0,
+    bytes_out INTEGER NOT NULL DEFAULT 0, frames INTEGER NOT NULL DEFAULT 0,
+    max_duration_ms INTEGER NOT NULL DEFAULT 0, first_started_at TEXT NOT NULL DEFAULT '',
+    last_completed_at TEXT NOT NULL DEFAULT '', calculated_at TEXT NOT NULL DEFAULT '',
+    UNIQUE (attempt_id, phase)
+);
 CREATE TABLE task_execution_event_replacement_authorizations (
     attempt_id TEXT PRIMARY KEY,
     authorization TEXT NOT NULL,
@@ -224,6 +235,14 @@ func TestPersistExecutionEvents_RepeatedSegmentsAndCanonicalIdentity(t *testing.
 	}
 	if summaryDuration != 45 || summaryBytes != 3600 || summaryFrames != 360 {
 		t.Fatalf("summary=(duration=%d bytes=%d frames=%d), want (45,3600,360)", summaryDuration, summaryBytes, summaryFrames)
+	}
+	var phaseDuration, phaseEvents, phaseFrames int64
+	var phaseCPU, phaseQueue float64
+	if err := db.QueryRow(`SELECT duration_ms, event_count, cpu_ms, queue_wait_ms, frames FROM task_attempt_phase_metrics WHERE attempt_id='attempt-1' AND phase='encode'`).Scan(&phaseDuration, &phaseEvents, &phaseCPU, &phaseQueue, &phaseFrames); err != nil {
+		t.Fatalf("read canonical phase metrics: %v", err)
+	}
+	if phaseDuration != 45 || phaseEvents != 3 || phaseCPU != 52 || phaseQueue != 6 || phaseFrames != 360 {
+		t.Fatalf("canonical phase=(duration=%d events=%d cpu=%v queue=%v frames=%d), want (45,3,52,6,360)", phaseDuration, phaseEvents, phaseCPU, phaseQueue, phaseFrames)
 	}
 
 	var jobID, taskID, workerID, sessionID, snapshotID, executorID string
