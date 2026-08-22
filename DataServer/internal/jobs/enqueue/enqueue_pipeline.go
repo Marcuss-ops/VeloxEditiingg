@@ -115,6 +115,15 @@ func BuildPipelinePayload(result map[string]interface{}) (map[string]interface{}
 	// natively — layers and renderable media keys. copyTimelinePayloadFields
 	// mirrors the same preservation done in normalizeSceneVideoPayload.
 	copyTimelinePayloadFields(out, flat)
+	// The typed V2 envelope intentionally stores canonical scenes_json, while
+	// clips.v1 validates the renderer-facing top-level clips array. Rebuild it
+	// at this final boundary so no later map projection can silently drop the
+	// clip inputs.
+	if !hasNonEmptySlice(out["clips"]) {
+		if clips := clipsFromScenesJSON(scenesJSON); len(clips) > 0 {
+			out["clips"] = clips
+		}
+	}
 	// BuildPipelinePayload is the worker-facing projection. Keep the
 	// canonical delivery envelope available to callers that extracted it
 	// before this step, but never send routing/control-plane fields to the
@@ -124,6 +133,45 @@ func BuildPipelinePayload(result map[string]interface{}) (map[string]interface{}
 		return nil, fmt.Errorf("project renderer payload: %w", err)
 	}
 	return workerPayload, nil
+}
+
+func hasNonEmptySlice(value interface{}) bool {
+	switch values := value.(type) {
+	case []interface{}:
+		return len(values) > 0
+	case []map[string]interface{}:
+		return len(values) > 0
+	default:
+		return false
+	}
+}
+
+func clipsFromScenesJSON(scenesJSON string) []interface{} {
+	var scenes []map[string]interface{}
+	if strings.TrimSpace(scenesJSON) == "" || json.Unmarshal([]byte(scenesJSON), &scenes) != nil {
+		return nil
+	}
+	clips := make([]interface{}, 0, len(scenes))
+	for _, scene := range scenes {
+		clip, ok := scene["clip"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		url := payload.FirstString(clip, "url", "drive_link", "clip_link")
+		if url == "" {
+			if assetID := payload.FirstString(clip, "asset_id", "drive_file_id"); assetID != "" {
+				url = "velox-drive://" + assetID
+			}
+		}
+		if url == "" {
+			continue
+		}
+		clips = append(clips, map[string]interface{}{
+			"url":      url,
+			"duration": scene["duration_seconds"],
+		})
+	}
+	return clips
 }
 
 // FlattenPipelineResult flattens a nested pipeline result by merging top-level
