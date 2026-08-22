@@ -44,10 +44,9 @@ func Validate(input map[string]interface{}) error {
 			return fmt.Errorf("clips.v1: clips[%d].url is required", i)
 		}
 	}
-	audioURL, _ := input["audio_url"].(string)
-	if strings.TrimSpace(audioURL) == "" {
-		return fmt.Errorf("clips.v1: audio_url is required")
-	}
+	// A clips-only submission may intentionally omit an external final mix.
+	// In that mode the renderer preserves each source clip's original audio;
+	// an explicit audio_url still takes precedence when supplied.
 	return nil
 }
 
@@ -66,6 +65,7 @@ func Compile(ctx context.Context, jobID string, input map[string]interface{}, ou
 		timeline_items[i] = plan.TimelineItem{
 			Source:          plan.MediaSource{Type: "video", URL: clip.URL},
 			DurationSeconds: clip.Duration,
+			IncludeAudio:    req.AudioURL == "",
 			Transform:       transform,
 		}
 	}
