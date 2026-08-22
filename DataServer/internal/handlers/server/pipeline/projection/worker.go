@@ -70,6 +70,11 @@ func ensureClipPipelineInputs(dst, raw map[string]interface{}) {
 				}
 				url, _ := clip["url"].(string)
 				if url == "" {
+					if assetID, assetOK := clip["asset_id"].(string); assetOK && assetID != "" {
+						url = "velox-drive://" + assetID
+					}
+				}
+				if url == "" {
 					continue
 				}
 				clips = append(clips, map[string]interface{}{
