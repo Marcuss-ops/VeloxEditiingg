@@ -580,6 +580,39 @@ CREATE TABLE jobs (
   created_at TEXT,
   updated_at TEXT
 );
+-- Migration 156 upgrades these delivery tables in place.  Keep the legacy
+-- shape in this sparse upgrade fixture so the full migration chain is
+-- exercised just like a production database created before publication IDs.
+CREATE TABLE delivery_destinations (
+  destination_id TEXT PRIMARY KEY,
+  provider TEXT NOT NULL,
+  name TEXT NOT NULL DEFAULT '',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  configuration_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE job_delivery_plans (
+  job_id TEXT NOT NULL,
+  destination_id TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  priority INTEGER NOT NULL DEFAULT 0,
+  retry_budget INTEGER NOT NULL DEFAULT 5,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (job_id, destination_id)
+);
+CREATE TABLE job_deliveries (
+  delivery_id TEXT PRIMARY KEY,
+  artifact_id TEXT NOT NULL DEFAULT '',
+  destination_id TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'PENDING',
+  idempotency_key TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT '',
+  next_attempt_at TEXT
+);
 -- This fixture records migrations through 136 as applied below, so it must
 -- also provide the pre-151 deployment_records table that migration 151
 -- extends (ALTER TABLE ADD COLUMN error_message + backfill into
