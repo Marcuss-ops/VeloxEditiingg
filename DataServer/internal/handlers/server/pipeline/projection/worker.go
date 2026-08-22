@@ -52,9 +52,9 @@ func ensureClipPipelineInputs(dst, raw map[string]interface{}) {
 	// into the renderer-facing clips.v1 payload.
 	existingClips, hasExistingClips := dst["clips"].([]interface{})
 	if !hasExistingClips || len(existingClips) == 0 {
-		scenes, ok := raw["scenes"].([]interface{})
+		scenes, ok := sceneList(raw["scenes"])
 		if !ok {
-			scenes, ok = dst["scenes"].([]interface{})
+			scenes, ok = sceneList(dst["scenes"])
 		}
 		if !ok {
 			if encoded, encodedOK := raw["scenes_json"].(string); encodedOK {
@@ -95,6 +95,25 @@ func ensureClipPipelineInputs(dst, raw map[string]interface{}) {
 		if audio, ok := raw["audio_url"].(string); ok && audio != "" {
 			dst["audio_url"] = audio
 		}
+	}
+}
+
+// sceneList accepts both JSON-decoded []interface{} and the []map form used
+// by the typed intake DTO. Both forms are present in production depending on
+// whether the payload came directly from HTTP or from the canonical request
+// projection.
+func sceneList(value interface{}) ([]interface{}, bool) {
+	switch scenes := value.(type) {
+	case []interface{}:
+		return scenes, true
+	case []map[string]interface{}:
+		out := make([]interface{}, 0, len(scenes))
+		for _, scene := range scenes {
+			out = append(out, scene)
+		}
+		return out, true
+	default:
+		return nil, false
 	}
 }
 

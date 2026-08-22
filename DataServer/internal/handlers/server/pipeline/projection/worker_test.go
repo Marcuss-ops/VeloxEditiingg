@@ -83,4 +83,23 @@ func TestProjectWorkerPayload_MapsClipStockToRegisteredClipsPipeline(t *testing.
 	if got["pipeline_id"] != "clips.v1" {
 		t.Fatalf("pipeline_id = %#v, want clips.v1; payload=%#v", got["pipeline_id"], got)
 	}
+	clips, ok := got["clips"].([]interface{})
+	if !ok || len(clips) != 1 {
+		t.Fatalf("clips = %#v, want one normalized clip", got["clips"])
+	}
+}
+
+func TestEnsureClipPipelineInputs_NormalizesTypedSceneSlice(t *testing.T) {
+	dst := map[string]interface{}{"clips": nil}
+	raw := map[string]interface{}{
+		"scenes": []map[string]interface{}{{
+			"duration_seconds": 2.5,
+			"clip":             map[string]interface{}{"asset_id": "asset-typed"},
+		}},
+	}
+	ensureClipPipelineInputs(dst, raw)
+	clips, ok := dst["clips"].([]interface{})
+	if !ok || len(clips) != 1 {
+		t.Fatalf("clips = %#v, want one normalized typed scene clip", dst["clips"])
+	}
 }
