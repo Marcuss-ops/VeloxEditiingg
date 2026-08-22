@@ -149,6 +149,9 @@ func TestAwaitingArtifactReconciler_SkipsActiveTransfer(t *testing.T) {
 	now := time.Now().UTC()
 	old := now.Add(-48 * time.Hour).Format(time.RFC3339Nano)
 	seedAwaitingArtifactJob(t, db, "job-transfer", old)
+	if _, err := db.Exec(`INSERT INTO artifacts (id, job_id, status, created_at) VALUES ('art-transfer', 'job-transfer', 'READY', ?)`, old); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.Exec(`INSERT INTO artifact_uploads (upload_id, artifact_id, job_id, attempt_number, worker_id, lease_id, status, temporary_storage_key, created_at, expires_at)
 		VALUES ('upload-transfer', 'art-transfer', 'job-transfer', 1, 'w', 'l', 'CREATED', 'tmp', ?, ?)`, old, now.Add(time.Hour).Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
@@ -289,6 +292,9 @@ func TestAwaitingArtifactReconciler_ExpiresLingeringCommitAndUpload(t *testing.T
 	now := time.Now().UTC()
 	old := now.Add(-48 * time.Hour).Format(time.RFC3339Nano)
 	seedAwaitingArtifactJob(t, db, "job-linger", old)
+	if _, err := db.Exec(`INSERT INTO artifacts (id, job_id, status, created_at) VALUES ('art-linger', 'job-linger', 'READY', ?)`, old); err != nil {
+		t.Fatal(err)
+	}
 	// Layer a second, still-DECLARED commit row plus an active-looking
 	// upload session, then drive applyCandidate directly (the scan
 	// would normally skip this job because of these rows).

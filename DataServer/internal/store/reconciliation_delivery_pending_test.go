@@ -26,6 +26,10 @@ func seedDeliveringJob(t *testing.T, db *sql.DB, jobID string, old string, deliv
 	for _, d := range deliveries {
 		// job_deliveries is UNIQUE(artifact_id, destination_id): each fixture
 		// delivery gets its own destination so multiple rows per job are legal.
+		exec(`INSERT INTO delivery_destinations
+			(destination_id, provider, name, configuration_json, created_at, updated_at)
+			VALUES (?, 'test', ?, '{}', ?, ?)`,
+			"dst-"+d.id, "test-"+d.id, old, old)
 		exec(`INSERT INTO job_deliveries (delivery_id, artifact_id, destination_id, status, idempotency_key, created_at, updated_at, attempt_count, max_attempts, lease_expires_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			d.id, "art-"+jobID, "dst-"+d.id, d.status, d.id, old, old, d.attempt, d.max, d.leaseExpires)
