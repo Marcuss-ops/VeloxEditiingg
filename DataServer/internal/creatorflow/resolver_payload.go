@@ -26,6 +26,12 @@ func (r *Resolver) buildAndRewritePayload(reqPayload map[string]interface{}, fwd
 	if err != nil {
 		return nil, fmt.Errorf("creatorflow: Resolve build worker payload: %w", err)
 	}
+	// BuildPipelinePayload intentionally rebuilds a renderer map from the
+	// typed V2 envelope. Re-attach routing metadata after that projection so
+	// pipeline selection cannot disappear before PrepareJobAndTask persists
+	// the TaskSpec. This is especially important for clip.stock.v1, whose
+	// worker executor requires the explicit clips.v1 pipeline.
+	routing.FromPayload(reqPayload).InjectIntoPayload(workerPayload)
 
 	// Skip rewriting when the resolver was constructed without
 	// dataDir+masterURL (in-runner path; the remote engine already
