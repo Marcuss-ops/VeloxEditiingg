@@ -1,0 +1,36 @@
+{
+  "source": {"type": "clips"},
+  "job_type": "clip.stock.v1",
+  "template_id": "todaylaught-10-verified",
+  "template_version": 1,
+  "skip_creator": true,
+  "video_name": "Margot Robbie - 10 verified funny clips",
+  "language": "en",
+  "render_video": true,
+  "save_to_db": true,
+  "output": {"width": 1920, "height": 1080, "fps": 24, "format": "mp4"},
+  "delivery_plan": [
+    {
+      "destination_id": "drive-smoke",
+      "priority": 1,
+      "retry_budget": 3,
+      "metadata": {
+        "drive_output_folder": "1TiCjzIgYaHA-0tZAs6H4zykHqUOYWs7q",
+        "drive_subfolder_name": "margot-robbie-todaylaught-10-verified",
+        "watermark": {"enabled": true, "text": "TODAYLAUGHT", "position": "center", "opacity": 1}
+      }
+    }
+  ],
+  "scenes": [
+    {"id":"scene-0","index":0,"kind":"clip","text":"Imagine spending a day with an icon like J.K. Rowling; one might jokingly suggest asking her a staggering number of questions, perhaps even reaching a million and seventy-three inquiries for sheer entertainment value.","duration_seconds":13.2,"clip":{"url":"velox-drive://1sFM9IGMKkzkgwPLjeFJS3FsqUm5f9zTS","asset_id":"yt_Bl5630CeYFs_19_32_v1","start_ms":0,"end_ms":13200,"duration_ms":13200}},
+    {"id":"scene-1","index":1,"kind":"clip","text":"Observing Margot Robbie playfully improvising the Australian national anthem on the piano presents a surprisingly charming and unexpected performance moment for viewers.","duration_seconds":8.8,"clip":{"url":"velox-drive://1mrBx5U5p90pPbXH--wlevaHpbh0Dwehb","asset_id":"yt_Bl5630CeYFs_50_66_v1","start_ms":0,"end_ms":8800,"duration_ms":8800}},
+    {"id":"scene-2","index":2,"kind":"clip","text":"The cultural ritual of a brunch gathering is dissected, revealing distinct roles—the outdoor revelers and the indoor culinary efforts. Amidst this social scene, one specific dish elicits strong reactions, deemed utterly unappetizing by the speaker.","duration_seconds":14,"clip":{"url":"velox-drive://1vpOiGBfig0Kb0oUfUI0W23ritpcQIULQ","asset_id":"yt_Bl5630CeYFs_150_171_v1","start_ms":0,"end_ms":14000,"duration_ms":14000}},
+    {"id":"scene-3","index":3,"kind":"clip","text":"She admits to tattooing the Suicide Squad cast, a moment captured when she realizes failing to provide that promised glass of water.","duration_seconds":8.8,"clip":{"url":"velox-drive://1no6cN4Zn6fiOOJQc6Fk0oAbciej2N_CO","asset_id":"yt_Bl5630CeYFs_210_235_v1","start_ms":0,"end_ms":8800,"duration_ms":8800}},
+    {"id":"scene-4","index":4,"kind":"clip","text":"Observing her on a surfboard, Margot humorously assesses her own skill level, playfully rating her surfing ability at just a two out of ten, making for an entertaining moment.","duration_seconds":11.6,"clip":{"url":"velox-drive://1SZx88ym2wWuJLrOY5m832LZdsPRTvfTv","asset_id":"yt_Bl5630CeYFs_346_365_v1","start_ms":0,"end_ms":11600,"duration_ms":11600}},
+    {"id":"scene-5","index":5,"kind":"clip","text":"Blue jeans paired with stripey toe socks—a fashion trend some question. These seemingly simple socks evoke memories for many, sparking conversation about fleeting moments in style history.","duration_seconds":10.8,"clip":{"url":"velox-drive://15kXkEhMdVI4l8PyEBQ9NRNcajGAnHHMp","asset_id":"yt_Bl5630CeYFs_377_387_v1","start_ms":0,"end_ms":10800,"duration_ms":10800}},
+    {"id":"scene-6","index":6,"kind":"clip","text":"When she encountered 50 Cent, Margot Robbie admitted feeling completely starstruck. Beyond the celebrity encounters, a surprising passion emerged for tiny kitchens; the miniature food creations captivated her attention, revealing an unexpected depth to her interests.","duration_seconds":14.4,"clip":{"url":"velox-drive://1kaIAJfy8Tzyb4w_2RPBBUvpvNS00Iyy_","asset_id":"yt_Bl5630CeYFs_404_421_v1","start_ms":0,"end_ms":14400,"duration_ms":14400}},
+    {"id":"scene-7","index":7,"kind":"clip","text":"The legendary set traditions surrounding Quentin Tarantino are revealing; even Margot Robbie shared stories about filming's unique atmosphere.","duration_seconds":7.2,"clip":{"url":"velox-drive://1bclT6unnzLDGCNT08az74XxjBzAXCMyP","asset_id":"yt_Bl5630CeYFs_431_449_v1","start_ms":0,"end_ms":7200,"duration_ms":7200}},
+    {"id":"scene-8","index":8,"kind":"clip","text":"The inherent talent for crafting a perfect raspberry pie crust is something revealed effortlessly. It's more than just baking; it’s an inherited knack, a skill passed down through generations that results in truly remarkable pastry work.","duration_seconds":14.4,"clip":{"url":"velox-drive://1--P8lK2B3WZSNN_78Sd-aFFKOkxJXDOo","asset_id":"yt_2Hls8pQuLgM_427_457_v1","start_ms":0,"end_ms":14400,"duration_ms":14400}},
+    {"id":"scene-9","index":9,"kind":"clip","text":"The sheer spectacle of filming outdoors for Barbie, clad in vibrant, fluorescent attire, brought an unexpected wave of mortification when confronted by a throng of paparazzi photographers.","duration_seconds":10.8,"clip":{"url":"velox-drive://1Dm2v6z6lUEIx5PkusEcYa_fKLQ38t29C","asset_id":"yt_5vTDEj_bFh8_165_225_v1","start_ms":0,"end_ms":10800,"duration_ms":10800}}
+  ]
+}
