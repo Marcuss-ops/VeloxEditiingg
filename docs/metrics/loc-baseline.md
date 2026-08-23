@@ -498,5 +498,5 @@ threshold gate`).
   that is now prepended to every per-category scan. This silences
   false positives in third-party and CMake build trees that were
   wrongly tripping the gate. Per-category excludes (e.g.
-  `./docs/archive`, `./shared/controltransport/pb/*.pb.go`) are kept
+  `./shared/controltransport/pb/*.pb.go`) are kept
   on a per-scan basis.

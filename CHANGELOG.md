@@ -1522,12 +1522,7 @@ its rationale. The full set:
    (git pathspec semantics: at least one path component required).
    Added explicitly to cover the root-level case.
 
-8. `MILESTONE_PR_YOUTUBE_SOCIAL_SEPARATION.md`
-   Root-level milestone doc that intentionally cites the audit
-   pattern verbatim as a record of "this string should never
-   re-appear in active code".
-
-9. `**/socialcontract/**` + `**/social_contract/**`
+8. `**/socialcontract/**` + `**/social_contract/**`
    Forward-looking carve-outs for `social_repo` boundary tests
    that may pin YouTube as FORBIDDEN contract markers. Zero-cost
    on current `main` (no matching directories yet); reserved for
@@ -1641,7 +1636,6 @@ Operator playbook for the 7 forbidden disjuncts:
     -- ':!.github/workflows/no-youtube-regression.yml' \
     ':!**/migrations/**' ':!**/testdata/**' ':!**/*_test.go' \
     ':!**/*.example' ':!**/*.md' ':!CHANGELOG.md' \
-    ':!MILESTONE_PR_YOUTUBE_SOCIAL_SEPARATION.md' \
     ':!**/socialcontract/**' ':!**/social_contract/**' \
     ':!DataServer/internal/jobs/enqueue/delivery_plan_validator.go' \
     ':!DataServer/internal/store/delivery_plan_payload.go'

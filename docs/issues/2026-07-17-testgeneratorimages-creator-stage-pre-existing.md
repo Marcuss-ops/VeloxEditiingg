@@ -28,9 +28,6 @@ Cross-references:
   "small and well-bounded" criterion.
 - **§ 19.8** of the same document — the forward-pointer that this
   issue FILLS.
-- **Triage archive** at `docs/trials/handler-test-preTriage.2026-07-17/`
-  (carry-over of the iter-1+2 cascade snapshot, with `//go:build ignore`
-  to prevent compile-time confusion).
 
 ## Two-stage cascade (the actual failure mode)
 

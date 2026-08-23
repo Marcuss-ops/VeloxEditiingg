@@ -26,7 +26,7 @@ effects. For architecture / agent contract / ownership, see:
 | Production Go (`*.go` excluding `*_test.go`) | **600** | **900** |
 | Test Go (`*_test.go`) | **900** | **1 200** |
 | Shell scripts (`*.sh`, `*.bash`) | 400 | 700 |
-| Documentation (`*.md`, excluding `docs/archive/`) | 800 | 1 200 |
+| Documentation (`*.md`) | 800 | 1 200 |
 | CI / Ansible YAML (`*.yml`, `*.yaml`, excluding `.github/workflows/`) | 400 | 800 |
 
 - The **warn** tier triggers a `::warning` annotation in the CI
@@ -51,9 +51,8 @@ patterns. They may be arbitrarily long:
   into the repo (e.g. `cmd/seed-velox-db-fixture/...`). Mark as a
   fixture in the per-package godoc so reviewers know it's
   intentional.
-- **Archived docs.** Anything under `docs/archive/`. The archive is
-  the intended overflow sink for stale architectural notes that have
-  moved to a current document.
+- **Archived docs.** Stale architectural notes belong in Git history,
+  not in a docs/archive/ directory.
 - **CI workflows themselves.** Anything under `.github/workflows/`.
   These define the verification pipeline and may grow as the
   pipeline grows.

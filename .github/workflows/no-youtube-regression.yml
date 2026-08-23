@@ -49,9 +49,6 @@
 #     record. Git pathspec `**/*.md` matches `path/file.md` but does
 #     NOT match `file.md` at repo root (requires at least one path
 #     component). Add CHANGELOG.md explicitly.
-#   * MILESTONE_PR_YOUTUBE_SOCIAL_SEPARATION.md  — ROOT-level milestone
-#     doc that intentionally cites the audit pattern verbatim as a
-#     record of "this string should never re-appear in active code".
 #   * **/socialcontract/** + **/social_contract/— forward-looking
 #     carve-outs for the social_repo boundary tests that may pin
 #     YouTube as FORBIDDEN contract markers (zero-cost on current
@@ -120,7 +117,6 @@ jobs:
               ':!**/*.example' \
               ':!**/*.md' \
               ':!CHANGELOG.md' \
-              ':!MILESTONE_PR_YOUTUBE_SOCIAL_SEPARATION.md' \
               ':!**/socialcontract/**' \
               ':!**/social_contract/**' \
             || true

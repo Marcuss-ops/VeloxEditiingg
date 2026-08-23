@@ -10,10 +10,10 @@
 #   prod Go (non-test, non-generated)   >  900 LOC
 #   test Go (*_test.go)                 > 1200 LOC
 #   shell (.sh)                         >  700 LOC
-#   docs (.md, excl. ./docs/archive)    > 1200 LOC
+#   docs (.md)                      > 1200 LOC
 #   yaml (.yml, excl. workflows/)       >  800 LOC
 #
-# Generated code (e.g. *.pb.go), archived docs, and CI workflows
+# Generated code (e.g. *.pb.go) and CI workflows
 # themselves are exempt per §10 / §11 policy annotations.
 #
 # KNOWN_VIOLATIONS list format:
@@ -183,7 +183,7 @@ STRUCTURAL_LONG_FILES=(
 # trips on vendored / generated / build artifacts (node_modules, CMake
 # build trees, .pb-cache, .git, .github/workflows). These are passed
 # to every scan_dir call below as the leading path filter; per-category
-# excludes (e.g. ./docs/archive, ./shared/controltransport/pb/*.pb.go)
+# excludes (e.g. ./shared/controltransport/pb/*.pb.go)
 # are appended on a per-scan basis. Nested variants (`*/X`, `*/X/*`)
 # are required because top-level `*/X`-only would still walk into the
 # tree; both forms together guarantee that no file ever reaches the
@@ -259,8 +259,7 @@ scan_dir shell "$THRESH_SH" \
 
 scan_dir docs "$THRESH_MD" \
   "${BUILD_NOISE_EXCLUDES[@]}" \
-  -type f -name '*.md' \
-  -not -path './docs/archive/*'
+  -type f -name '*.md'
 
 scan_dir yaml "$THRESH_YML" \
   "${BUILD_NOISE_EXCLUDES[@]}" \

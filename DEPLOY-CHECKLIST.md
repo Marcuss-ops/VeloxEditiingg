@@ -162,7 +162,7 @@ git log --oneline -5
 # Gate residui Dark Editor (definizione di done)
 rg -n -i 'dark[ _-]?editor|darkeditor|DARK_EDITOR|VELOX_DARK_EDITOR|CodeDarkEditor' \
   --glob '!CHANGELOG.md' --glob '!docs/CHANGELOG.md' --glob '!docs/metrics/**' \
-  --glob '!docs/adr/**' --glob '!docs/archive/**' --glob '!scripts/ci/check-no-legacy.sh' \
+  --glob '!docs/adr/**' --glob '!scripts/ci/check-no-legacy.sh' \
   --glob '!DataServer/internal/store/migrations/**' --glob '!deploy/scripts/audit-no-youtube-residuals.sh' \
   . || echo "ZERO RESIDUI (ok)"
 ```

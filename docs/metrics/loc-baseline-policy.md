@@ -72,7 +72,6 @@ Threshold policy used in this baseline:
 | 1 492 | `docs/architecture/CURRENT-TO-TARGET-ARCHITECTURE.md` | docs |
 | 1 067 | `deploy/runtime/checklist-verify.sh` | deploy script |
 | 794 | `scripts/cert/certify-worker-2c-2d.sh` | cert script |
-| 765 | `docs/archive/architecture-pre-grpc.md` | archive docs |
 | 696 | `docs/completion-protocol.md` | docs |
 | 694 | `docs/operations/03-build-deploy-and-ci-hardening.md` | docs |
 | 632 | `tests/e2e/grpc-control-plane/run.sh` | test infra |

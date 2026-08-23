@@ -4,8 +4,7 @@
 # Grep-based CI guards for the TASK runtime lifecycle. Each guard is a
 # direct assertion of a single architectural invariant and fails CI on
 # regression. See docs/architecture/OWNERSHIP.md for the canonical map
-# and docs/architecture/legacy-cutover-followups/README.md for the PR
-# trail (PR-01..PR-16) that established them.
+# and the PR trail (PR-01..PR-16) that established them.
 #
 # Invariants asserted:
 #   (a) The ONLY writer of jobs.status='SUCCEEDED' is

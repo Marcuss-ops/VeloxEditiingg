@@ -7,7 +7,6 @@
 # fire on UUIDs, env var names, or random base64 in test fixtures.
 #
 # Excluded (intentional):
-#   * docs/archive/            historical context
 #   * RemoteCodex/native/worker-agent-go/bin/ compiled worker binary
 #   * DataServer/server / server.exe   compiled Go master (PEM-like strings
 #                                      inside TLS stdlib linked into binary)
@@ -64,7 +63,6 @@ report_match() {
 
 # Common git-grep prefix: scan everything that's TRACKED today.
 GIT_GREP_BASE=(
-    ':!docs/archive/**'
     ':!*_test.go'
     ':!scripts/ci/check-secrets.sh'
     # The companion test embeds literal `github_pat_*` / `ghp_*` fixture
