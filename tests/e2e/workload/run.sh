@@ -52,6 +52,17 @@ pass() { printf "${C_GREEN}PASS${C_RST}  %s\n" "$*"; }
 fail() { printf "${C_RED}FAIL${C_RST}  %s\n" "$*"; return 1; }
 info() { printf "${C_CYAN}.. %s${C_RST}\n" "$*"; }
 
+# Reusable workload phases and assertions share this script's environment.
+for helper in \
+  "$ROOT/lib/submit.sh" \
+  "$ROOT/lib/worker_wait.sh" \
+  "$ROOT/lib/artifact_assertions.sh" \
+  "$ROOT/lib/video_assertions.sh" \
+  "$ROOT/lib/metrics_assertions.sh"; do
+  # shellcheck disable=SC1090
+  source "$helper"
+done
+
 # ─── Cleanup ────────────────────────────────────────────────────────────────
 declare -a CHILD_PIDS=()
 push_pid() { CHILD_PIDS+=("$1"); }
@@ -214,7 +225,10 @@ VELOX_ASSET_REWRITE_DEV_BYPASS=true
 GIN_MODE=release
 ENV
 
-  set -a; source "$MASTER_ENV"; set +a
+  set -a
+  # shellcheck disable=SC1090
+  source "$MASTER_ENV"
+  set +a
   rm -f "$MASTER_LOG"
 
   setsid "$MASTER_BIN" serve >"$MASTER_LOG" 2>&1 &
@@ -242,32 +256,6 @@ ENV
 # ═══════════════════════════════════════════════════════════════════════════════
 # Phase 4: Submit job
 # ═══════════════════════════════════════════════════════════════════════════════
-phase_submit() {
-  info "Phase 4: submitting job"
-
-  local scene_path="$FIXTURE_DIR/scene.png"
-  local audio_path="$FIXTURE_DIR/silent.mp4"
-  [[ -f "$audio_path" ]] || audio_path="$FIXTURE_DIR/silent.mp3"
-  local audio_file
-  audio_file="$(basename "$audio_path")"
-
-  "${REPO_ROOT}/scripts/e2e/write-local-workload-fixture.sh" "$WORKDIR/job.json" "$FIXTURE_DIR" "$DESTINATION_ID" "$audio_file"
-
-  local submit_out
-  submit_out="$(curl -sS -m 15 -X POST \
-    -H "Authorization: Bearer ${ADMIN_TOKEN}" \
-    -H "Content-Type: application/json" \
-    --data-binary @"$WORKDIR/job.json" \
-    "http://127.0.0.1:${MASTER_PORT}/api/v1/script/generate-with-images" 2>&1)" || true
-
-  JOB_ID="$(echo "$submit_out" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('job_id',''))" 2>/dev/null || true)"
-
-  if [[ -z "$JOB_ID" ]]; then
-    fail "job submission failed — response: $submit_out"
-    exit 1
-  fi
-  pass "job submitted: job_id=$JOB_ID"
-}
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Phase 5: Start worker
@@ -329,25 +317,7 @@ JSON
   push_pid "$pid"
   info "worker PID=$pid"
 
-  # Wait for registration
-  for i in $(seq 1 20); do
-    if grep -qE "Worker ${WORKER_ID} connected" "$MASTER_LOG" 2>/dev/null \
-      || grep -q "Registration successful" "$WORKER_LOG" 2>/dev/null; then
-      pass "worker registered after ${i}s"
-      sleep 2  # let the worker settle
-      return 0
-    fi
-    if ! kill -0 "$pid" 2>/dev/null; then
-      fail "worker crashed during registration"
-      tail -40 "$WORKER_LOG" 2>/dev/null || true
-      exit 1
-    fi
-    sleep 2
-  done
-  fail "worker did not register within 40s"
-  tail -20 "$MASTER_LOG" 2>/dev/null || true
-  tail -20 "$WORKER_LOG" 2>/dev/null || true
-  exit 1
+  wait_for_worker_registration "$pid"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -360,7 +330,6 @@ phase_poll_and_verify() {
 
   for i in $(seq 1 60); do
     status="$(sqlite3 "$db" "SELECT status FROM jobs WHERE job_id='${JOB_ID}';" 2>/dev/null || true)"
-
     case "$status" in
       SUCCEEDED)
         pass "job SUCCEEDED after ~$(( i * 5 ))s"
@@ -383,106 +352,13 @@ phase_poll_and_verify() {
     exit 1
   fi
 
-  # ── Verification 1: Artifact exists ───────────────────────────
-  info "Verification 1: artifact exists on disk"
-  local artifact
-  # The C++ engine may produce either an MP4 or an F4V container
-  # depending on the FFmpeg version / compile-time defaults.
-  artifact="$(find "$STORAGE_DIR" -type f \( -name '*.mp4' -o -name '*.f4v' \) 2>/dev/null | head -1 || true)"
-  if [[ -z "$artifact" ]]; then
-    fail "no .mp4 or .f4v artifact found in $STORAGE_DIR"
-    ls -laR "$STORAGE_DIR" 2>/dev/null || true
-    exit 1
-  fi
-  local art_size
-  art_size="$(stat -c%s "$artifact" 2>/dev/null || stat -f%z "$artifact" 2>/dev/null || echo 0)"
-  if (( art_size < 1000 )); then
-    fail "artifact too small: ${art_size} bytes (expected ≥1 KB)"
-    exit 1
-  fi
-  pass "artifact: $(basename "$artifact") (${art_size} bytes)"
+  assert_artifact_exists
+  assert_video_properties
+  assert_artifact_sha256
 
-  # ── Verification 2: ffprobe (strict) ────────────────────────────
-  info "Verification 2: ffprobe inspection (strict: codec h264 ONLY, 320x180, 1.8..2.2s)"
-  if ! command -v ffprobe >/dev/null 2>&1; then
-    fail "ffprobe not found — cannot validate artifact codec/resolution/duration"
-    exit 1
-  fi
-  local probe_json
-  probe_json="$(ffprobe -v quiet -print_format json -show_format -show_streams "$artifact" 2>/dev/null || true)"
-  if [[ -z "$probe_json" ]]; then
-    fail "ffprobe returned empty output — artifact may be corrupt"
-    exit 1
-  fi
-
-  # ── Codec: h264 ONLY. hevc / mpeg4 / vp9 / av1 are explicit failures. ──
-  local codec
-  codec="$(echo "$probe_json" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-vid = [s for s in d.get('streams', []) if s.get('codec_type') == 'video']
-if not vid: sys.exit(2)
-print(vid[0].get('codec_name',''))
-")" || { fail "ffprobe: no video stream found"; exit 1; }
-  if [[ "$codec" != "h264" ]]; then
-    fail "ffprobe: codec=$codec (only h264 accepted; hevc/mpeg4/vp9/av1 reject)"
-    exit 1
-  fi
-  pass "ffprobe: codec=h264"
-
-  # ── Resolution: the engine default canvas is 1920x1080. ──
-  local width height
-  width="$(echo "$probe_json" | python3 -c "import sys,json;d=json.load(sys.stdin);s=[x for x in d['streams'] if x.get('codec_type')=='video'];print(s[0].get('width','0'))" 2>/dev/null || echo 0)"
-  height="$(echo "$probe_json" | python3 -c "import sys,json;d=json.load(sys.stdin);s=[x for x in d['streams'] if x.get('codec_type')=='video'];print(s[0].get('height','0'))" 2>/dev/null || echo 0)"
-  if (( width != 1920 || height != 1080 )); then
-    fail "ffprobe: resolution=${width}x${height} (must be exactly 1920x1080)"
-    exit 1
-  fi
-  pass "ffprobe: resolution=1920x1080"
-
-  # ── Duration: 1.8s ≤ dur ≤ 2.2s. ──
-  local dur
-  dur="$(echo "$probe_json" | python3 -c "import sys,json;d=json.load(sys.stdin);f=d.get('format',{});print(f.get('duration','0'))" 2>/dev/null || echo 0)"
-  if ! awk -v d="$dur" 'BEGIN{ exit !(d+0 >= 1.8 && d+0 <= 2.2) }'; then
-    fail "ffprobe: duration=${dur}s (must be in 1.8..2.2s)"
-    exit 1
-  fi
-  pass "ffprobe: duration=${dur}s (within 1.8..2.2s)"
-
-  # ── Verification 3: SHA-256 checksum (mandatory) ──────────────
-  # Determinism: the SHA-256 of the rendered artifact is byte-stable for
-  # a fixed (FFmpeg version, libx264 build, fixture triple). CI MUST
-  # populate E2E_EXPECTED_SHA256 with the platform-correct hash — we
-  # no longer accept a "skip if unset" fallback. Operators committing
-  # to a recorded baseline can derive the value once via:
-  #     make e2e-workload && cat $E2E_WORKDIR/storage/artifact.sha256
-  # and pin it in the workflow file.
-  if [[ -z "${E2E_EXPECTED_SHA256:-}" ]]; then
-    fail "E2E_EXPECTED_SHA256 must be set for deterministic SHA-256 enforcement (was unset)"
-    exit 1
-  fi
-  info "Verification 3: SHA-256 checksum (expected=${E2E_EXPECTED_SHA256:0:16}...)"
-  local sha
-  sha="$(sha256sum "$artifact" 2>/dev/null | awk '{print $1}' || shasum -a 256 "$artifact" 2>/dev/null | awk '{print $1}' || true)"
-  if [[ -z "$sha" ]]; then
-    fail "SHA-256 could not be computed"
-    exit 1
-  fi
-  echo "$sha  $(basename "$artifact")" > "$STORAGE_DIR/artifact.sha256"
-  if [[ "$sha" != "$E2E_EXPECTED_SHA256" ]]; then
-    fail "SHA-256 mismatch: got ${sha:0:16}... want ${E2E_EXPECTED_SHA256:0:16}..."
-    exit 1
-  fi
-  pass "SHA-256 matches: ${sha:0:16}..."
-
-  # ── Verification 4: Worker visible in API ──────────────────────
-  # Phase 6 API-surface unification moved the legacy /api/v1/workers
-  # diagnostic surface behind adminAuth, so this check must present the
-  # admin bearer token like every other operator-facing curl in this
-  # script.
   info "Verification 4: GET /api/v1/workers"
   local workers_json
-  workers_json="$(curl -sS -m 5 -H "Authorization: Bearer ${ADMIN_TOKEN}" "http://127.0.0.1:${MASTER_PORT}/api/v1/workers" 2>/dev/null || true)"
+  workers_json="$(curl -sS -m 5 -H "Authorization: Bearer ${ADMIN_TOKEN}"     "http://127.0.0.1:${MASTER_PORT}/api/v1/workers" 2>/dev/null || true)"
   if echo "$workers_json" | grep -qF "$WORKER_ID"; then
     pass "worker '$WORKER_ID' visible in /api/v1/workers"
   else
@@ -491,184 +367,24 @@ print(vid[0].get('codec_name',''))
     exit 1
   fi
 
-  # ── Verification 5: Metrics > 0 (strict, blocking) ───────────
-  # The metrics supervisor ticks every 15s and stamps per-attempt
-  # telemetry once it scrapes a terminal attempt. A successful run
-  # must therefore expose at least one positive task-runner metric
-  # derived from the attempt parallelism row.
-  #
-  # Note: we use velox_taskrunner_serial_work_ms because the C++ engine
-  # currently does not report cpu.ms, so velox_compute_seconds_total
-  # is only emitted when cpu_time_ms > 0. Once the worker reports CPU
-  # time, this check can be strengthened back to compute_seconds.
-  info "Verification 5: Prometheus metrics (strict: velox_taskrunner_serial_work_ms > 0)"
-  local metrics tr_val
-  metrics=""; tr_val=""
-  for attempt in $(seq 1 30); do
-    local tmp_metrics
-    tmp_metrics="$(curl -sS -m 5 "http://127.0.0.1:${MASTER_PORT}/metrics" 2>/dev/null || true)"
-    if [[ -n "$tmp_metrics" ]]; then
-      metrics="$tmp_metrics"
-      tr_val="$(echo "$metrics" | grep -E '^velox_taskrunner_serial_work_ms\b' | awk '{print $NF}' || true)"
-    fi
-    if [[ -n "$tr_val" ]]; then
-      break
-    fi
-    sleep 1
-  done
-
-  if [[ -z "$metrics" ]]; then
-    fail "/metrics returned empty — Prometheus endpoint disabled or master unhealthy"
-    exit 1
-  fi
-  if [[ -z "$tr_val" ]]; then
-    info "available taskrunner metric lines:"
-    echo "$metrics" | grep -E '^velox_taskrunner_' || true
-    fail "metrics: velox_taskrunner_serial_work_ms missing after 30s"
-    exit 1
-  fi
-  if ! awk -v v="$tr_val" 'BEGIN{ exit !(v+0 > 0) }'; then
-    fail "metrics: velox_taskrunner_serial_work_ms value $tr_val is not > 0"
-    exit 1
-  fi
-  pass "metrics: velox_taskrunner_serial_work_ms = $tr_val ms"
-
-  # ── Verification 6: Database state (4-part, all blocking) ─────
-  # After the job reaches SUCCEEDED, verify the four canonical
-  # invariants the success path depends on. ALL four must hold;
-  # any failure exits non-zero before the script returns.
-  info "Verification 6: Database state assertions (4-part, blocking)"
-
-  if ! command -v sqlite3 >/dev/null 2>&1; then
-    fail "sqlite3 missing — cannot verify DB state"
-    exit 1
-  fi
-  if [[ ! -f "$db" ]]; then
-    fail "DB file not found at $db"
-    exit 1
-  fi
-
-  # sql_query <sql_with_job_id_inline>
-  # sqlite3 query helper; pipe-separated first column of the first
-  # row; empty on no-rows or driver error. job_id is inlined (it is
-  # a script-generated UUID) because the sqlite3 CLI on some builds
-  # does not treat trailing arguments as bound parameters.
-  sql_query() {
-    sqlite3 -separator '|' "$db" "$1" 2>/dev/null
-  }
-
-  # ── (a) task_attempts row reached SUCCEEDED for our job_id ────
-  local attempts_succ
-  attempts_succ="$(sql_query "SELECT COUNT(*) FROM task_attempts WHERE job_id = '${JOB_ID}' AND status='SUCCEEDED'" || true)"
-  if [[ "${attempts_succ:-0}" =~ ^[1-9][0-9]*$ ]]; then
-    pass "DB (a): task_attempts SUCCEEDED count=$attempts_succ for job_id=$JOB_ID"
-  else
-    fail "DB (a): no SUCCEEDED row in task_attempts for job_id=$JOB_ID (got '$attempts_succ')"
-    exit 1
-  fi
-
-  # ── (b) artifacts row marked READY (finalization committed) ───
-  local arts_ready
-  arts_ready="$(sql_query "SELECT COUNT(*) FROM artifacts WHERE job_id = '${JOB_ID}' AND status='READY'" || true)"
-  if [[ "${arts_ready:-0}" =~ ^[1-9][0-9]*$ ]]; then
-    pass "DB (b): artifacts READY count=$arts_ready for job_id=$JOB_ID"
-  else
-    fail "DB (b): no READY row in artifacts for job_id=$JOB_ID (got '$arts_ready')"
-    exit 1
-  fi
-
-  # ── (c) artifacts.sha256 == sha256 of the downloaded file ─────
-  # Scope to the final_video artifact: a job may carry additional
-  # READY artifacts (e.g. engine_progress_sidecar) verified moments
-  # later, so ORDER BY verified_at DESC would pick the wrong sha.
-  local db_sha
-  db_sha="$(sql_query "SELECT sha256 FROM artifacts WHERE job_id = '${JOB_ID}' AND status='READY' AND type='final_video' ORDER BY verified_at DESC LIMIT 1" || true)"
-  if [[ -z "$db_sha" ]]; then
-    fail "DB (c): artifacts.sha256 missing/empty for job_id=$JOB_ID"
-    exit 1
-  fi
-  if [[ "$db_sha" != "$sha" ]]; then
-    fail "DB (c): sha256 mismatch (artifacts.sha256=$db_sha, downloaded=$sha, expected_baseline=${E2E_EXPECTED_SHA256:-<unset>})"
-    exit 1
-  fi
-  pass "DB (c): artifacts.sha256 matches downloaded file ($db_sha)"
-
-  # ── (d) jobs.completed_at >= artifacts.verified_at (ordinal) ──
-  # `>=` (not strict `>`) is the correct gate: a single-tx finalize
-  # writes both columns within the same SQL transaction, so equal
-  # timestamps are acceptable; only TRUE reversal fails.
-  local jobs_completed_at db_verified_at jobs_epoch art_epoch
-  jobs_completed_at="$(sql_query "SELECT completed_at FROM jobs WHERE job_id = '${JOB_ID}' LIMIT 1" || true)"
-  db_verified_at="$(sql_query "SELECT verified_at FROM artifacts WHERE job_id = '${JOB_ID}' AND status='READY' AND type='final_video' ORDER BY verified_at DESC LIMIT 1" || true)"
-  if [[ -z "$jobs_completed_at" || -z "$db_verified_at" ]]; then
-    fail "DB (d): missing timestamp (jobs.completed_at='$jobs_completed_at', artifacts.verified_at='$db_verified_at')"
-    exit 1
-  fi
-  jobs_epoch="$(date -d "$jobs_completed_at" +%s 2>/dev/null || true)"
-  art_epoch="$(date -d "$db_verified_at"    +%s 2>/dev/null || true)"
-  if [[ -z "$jobs_epoch" || ! "$jobs_epoch" =~ ^[0-9]+$ ]]; then
-    fail "DB (d): jobs.completed_at='$jobs_completed_at' is not a valid RFC3339 timestamp"
-    exit 1
-  fi
-  if [[ -z "$art_epoch" || ! "$art_epoch" =~ ^[0-9]+$ ]]; then
-    fail "DB (d): artifacts.verified_at='$db_verified_at' is not a valid RFC3339 timestamp"
-    exit 1
-  fi
-  if (( jobs_epoch >= art_epoch )); then
-    pass "DB (d): jobs.completed_at (epoch=$jobs_epoch, ${jobs_completed_at}) >= artifacts.verified_at (epoch=$art_epoch, ${db_verified_at}) — finalization ordering holds"
-  else
-    fail "DB (d): jobs.completed_at (epoch=$jobs_epoch, ${jobs_completed_at}) is BEFORE artifacts.verified_at (epoch=$art_epoch, ${db_verified_at}) — ordering bug"
-    exit 1
-  fi
-
-  # ── Verification 7: Worker Prometheus cache metrics (strict) ──
-  # Commit 2 gate: the worker must expose its own Prometheus endpoint
-  # (previously shipped disabled with prometheus_port=0) and export the
-  # low-cardinality velox_cache_* families. The workload fixture does
-  # not guarantee a cache access, so we assert the endpoint is live, the
-  # metric families are registered, and any request samples only carry
-  # the canonical result labels (hit/miss/other — never job/asset/worker
-  # IDs, which would blow up cardinality).
-  info "Verification 7: worker Prometheus /metrics (velox_cache_* families)"
-  if ! grep -q "Prometheus metrics server starting on :${WORKER_PROMETHEUS_PORT}" "$WORKER_LOG"; then
-    fail "worker log missing Prometheus startup line for :${WORKER_PROMETHEUS_PORT}"
-    grep -E "TELEMETRY|Prometheus" "$WORKER_LOG" | tail -5 || true
-    exit 1
-  fi
-  local wmetrics=""
-  for attempt in $(seq 1 10); do
-    wmetrics="$(curl -sS -m 5 "http://127.0.0.1:${WORKER_PROMETHEUS_PORT}/metrics" 2>/dev/null || true)"
-    [[ -n "$wmetrics" ]] && break
-    sleep 1
-  done
-  if [[ -z "$wmetrics" ]]; then
-    fail "worker /metrics on :${WORKER_PROMETHEUS_PORT} returned empty — Prometheus endpoint not serving"
-    exit 1
-  fi
-  for name in \
-    velox_cache_requests_total velox_cache_downloads_total \
-    velox_cache_download_bytes_total velox_cache_download_duration_seconds \
-    velox_cache_sha_verify_duration_seconds velox_cache_cleanup_duration_seconds \
-    velox_cache_evictions_total velox_cache_cleanup_skipped_total \
-    velox_cache_size_bytes velox_cache_entries; do
-    if ! echo "$wmetrics" | grep -qE "^# HELP ${name} "; then
-      fail "worker /metrics missing family ${name}"
-      exit 1
-    fi
-  done
-  local bad_request_labels
-  bad_request_labels="$(echo "$wmetrics" | grep -E '^velox_cache_requests_total\{' | grep -vE 'result="(hit|miss|other)"' || true)"
-  if [[ -n "$bad_request_labels" ]]; then
-    fail "high-cardinality result label detected on velox_cache_requests_total:"
-    echo "$bad_request_labels"
-    exit 1
-  fi
-  pass "worker /metrics live on :${WORKER_PROMETHEUS_PORT} with all velox_cache_* families + low-cardinality labels"
+  assert_master_metrics
+  assert_database_state
+  assert_worker_metrics
 }
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Main
-# ═══════════════════════════════════════════════════════════════════════════════
+# Keep the workload entrypoint focused on orchestration. Assertions and
+# protocol-specific helpers live in the adjacent library files.
+for helper in \
+  artifact_assertions.sh \
+  metrics_assertions.sh \
+  submit.sh \
+  video_assertions.sh \
+  worker_wait.sh; do
+  # shellcheck disable=SC1091
+  # shellcheck disable=SC1090
+  source "$ROOT/lib/$helper"
+done
+
 main() {
   echo ""
   echo "══════════════════════════════════════════════════════════════"
