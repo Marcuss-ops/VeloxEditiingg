@@ -36,7 +36,7 @@ type TaskExecutionReport struct {
 	// Metrics is the deprecated legacy compatibility projection. It remains
 	// populated only because unmigrated executors and old consumers still
 	// require dotted keys; migrated producers must use RawMetrics. The
-	// migration is intentionally incremental, with LegacyMetricsAdapter as
+	// migration is intentionally incremental
 	// the only typed↔map compatibility boundary.
 	Metrics  map[string]interface{}   `json:"metrics,omitempty"`
 	Segments []executor.SegmentTiming `json:"segments,omitempty"`
