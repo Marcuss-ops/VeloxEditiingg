@@ -3,7 +3,7 @@
 // TaskOffer → executeTask → TaskResult, using PendingTaskExecution
 // as the canonical typed carrier for all identity and spec data.
 //
-// File layout in this package (job_executor split):
+// File layout in this package:
 //
 //	task_execution.go       — this file: executeTask orchestrator.
 //	                          Owns the canonical package doc above.
@@ -21,13 +21,6 @@
 //	                          recordTaskFinish, uploadTaskOutputs
 //	                          (OTel "upload" span + master API
 //	                          upload), selectUploadableOutput.
-//	job_executor.go         — redistributive shell (kept for git
-//	                          history; content moved to the four
-//	                          files above).
-//	output_upload.go        — redistributive shell: uploadTaskOutputs
-//	                          + selectUploadableOutput moved into
-//	                          active_task_lifecycle.go alongside
-//	                          the metriche helpers.
 package worker
 
 import (
@@ -48,8 +41,7 @@ func reportRecorder(report *taskrunner.TaskExecutionReport) *telemetry.EventReco
 
 // executeTask executes a task and reports the result via typed TaskResult.
 //
-// Lifecycle order is preserved byte-identical to the original
-// job_executor.go executeTask:
+// Lifecycle order:
 //
 //  1. Concurrency limiter acquire (with deferred release).
 //  2. State-transition check (StatusIdle → StatusBusy).

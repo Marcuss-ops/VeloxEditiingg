@@ -4,7 +4,7 @@ package worker
 // — what the worker advertises to the master at Hello time and
 // keeps in sync with heartbeat.Extra.capabilities. Single source of
 // truth (capabilityReport) is reused by both worker_registration.go
-// (buildHello) and worker_comms.go (sendHeartbeat); any wire-shape
+// (buildHello) and heartbeat_loop.go (sendHeartbeat); any wire-shape
 // change must touch one function. Resource sampling lives behind
 // w.sampler (telemetry.Sampler) — see worker_types.go for the field
 // definition.

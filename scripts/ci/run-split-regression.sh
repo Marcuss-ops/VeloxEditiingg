@@ -91,9 +91,6 @@ run_group() {
 # and the overall wrapper exit to 2.
 #
 # Rationale (cross-references):
-#   - store_worker_runtime.go (shell)         — per-package single-writer
-#                                                contract;
-#                                                explicit three-site exception.
 #   - store_worker_heartbeat.go               — heartbeat-path opener
 #                                                (#1 of 3):
 #                                                PersistWorkerHeartbeat.
@@ -238,7 +235,6 @@ run_group "full-velox-worker-agent" "RemoteCodex/native/worker-agent-go" "./..."
 
 # Single-writer tx contract (commit babcb81 + a6b293a documented
 # exception). Static audit; runs near-instantaneously. See
-# store_worker_runtime.go (shell) for the underlying contract and
 # store_worker_recovery_tx.go for the recovery-path opener.
 run_audit_single_writer_begin_tx
 

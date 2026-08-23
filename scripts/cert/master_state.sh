@@ -74,7 +74,7 @@ if expected_proto and match.get("protocol_version") and match["protocol_version"
 # B5 fix makes the empty-master case fail-CLOSED rather than warn).
 master_bundle_version = match.get("bundle_version") or ""
 if expected_bversion and not master_bundle_version:
-    print(f"::error::worker {expected_id} bundle_version absent from master /api/v1/workers response (B5 fail-closed); operator should verify DataServer/internal/handlers/server/api/workers_handler_types.go exposes BundleVersion in the response struct, OR pass plain 'CONNECTED' state assertion via an explicit per-worker API contract change.")
+    print(f"::error::worker {expected_id} bundle_version absent from master /api/v1/workers response (B5 fail-closed); operator should verify DataServer/internal/handlers/server/api/workers_dto.go exposes BundleVersion in the response struct, OR pass plain 'CONNECTED' state assertion via an explicit per-worker API contract change.")
     sys.exit(20)
 if expected_bversion and master_bundle_version and master_bundle_version != expected_bversion:
     print(f"::error::worker {expected_id} bundle_version={master_bundle_version!r} != {expected_bversion!r} (B3' cross-check fail)")

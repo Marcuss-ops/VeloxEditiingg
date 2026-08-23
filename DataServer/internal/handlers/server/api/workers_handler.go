@@ -19,10 +19,6 @@
 //	workers_dto.go                — DTO shapes + canonical enum constants.
 //	workers_mapper.go             — conversion / sanitization / parsing
 //	                                helpers (security-critical surface).
-//	workers_handler_types.go      — redistributive shell (kept for git
-//	                                history; content moved to dto.go).
-//	workers_handler_filters.go    — redistributive shell (kept for git
-//	                                history; content moved to mapper.go).
 //	workers_handler_current_task.go — LoadCurrentTask adapter (separate
 //	                                concern; not part of the dto/mapper
 //	                                split).

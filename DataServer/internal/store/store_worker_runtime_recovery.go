@@ -9,8 +9,7 @@ import (
 // the persistent layer, plus the public recovery loop entry-point
 // (ReconcileWorkerPartitions).
 //
-// Per-package single-writer tx contract (see store_worker_runtime.go
-// for the canonical statement): every helper in this file either
+// Per-package single-writer tx contract: every helper in this file either
 // receives a *sql.Tx parameter (on the heartbeat path) or uses
 // s.db.Query / s.db.Exec directly (read + post-commit side effects).
 // No function in this file opens its own *sql.Tx — the recovery-path

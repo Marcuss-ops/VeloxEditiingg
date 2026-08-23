@@ -5,7 +5,7 @@
 // waiters blocked at capacity so they can evaluate the new ceiling
 // immediately. Public API (NewConcurrencyLimiter / Acquire / Release /
 // Stats / MaxActiveJobs / SetMaxActiveJobs / CanAcceptJob / Stop) is
-// unchanged so call sites in worker.go and worker_comms.go need no
+// unchanged so call sites in worker.go need no
 // adjustments.
 //
 // Concurrency model:

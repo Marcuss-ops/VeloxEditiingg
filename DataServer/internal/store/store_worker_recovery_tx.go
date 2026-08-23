@@ -1,9 +1,9 @@
 // store_worker_recovery_tx.go is the recovery-path *sql.Tx primitives
 // file.
 //
-// Per-package single-writer tx contract (see store_worker_runtime.go
-// for the canonical statement, and store_worker_runtime_recovery.go
-// for the recovery-path state-machine):
+// Per-package single-writer tx contract (see
+// store_worker_runtime_recovery.go for the recovery-path
+// state-machine):
 //
 //   - PersistWorkerHeartbeat (store_worker_heartbeat.go) is the
 //     heartbeat-path opener of *sql.Tx (s.db.BeginTx). It is the
@@ -17,8 +17,7 @@
 //
 // Together these two sites are the per-package single-writer
 // exception. No other function in the package is permitted to open
-// a *sql.Tx. See store_worker_runtime.go for the rationale and the
-// per-package invariant that the two-site exception preserves.
+// a *sql.Tx.
 //
 // What lives in this file:
 //
@@ -58,12 +57,6 @@
 //
 // Cross-references:
 //
-//   - store_worker_runtime.go (shell)         — per-package
-//     single-writer
-//     contract;
-//     cross-references
-//     from both
-//     BEGIN-TX openings.
 //   - store_worker_heartbeat.go               — heartbeat-path
 //     BEGIN-TX site
 //     (#1 of 2).

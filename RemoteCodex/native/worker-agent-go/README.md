@@ -10,19 +10,26 @@ worker-agent-go/
 │   ├── installer/          # Installer per deploy worker
 │   └── velox-worker-agent/ # Worker agent principale
 ├── internal/               # Logica interna (non esportabile)
-│   ├── worker/             # Orchestrazione worker (15 file)
+│   ├── worker/             # Orchestrazione worker
 │   │   ├── worker.go               # Start/Stop lifecycle
 │   │   ├── worker_init.go          # Worker struct e New()
-│   │   ├── worker_comms.go         # Heartbeat, register/unregister
-│   │   ├── worker_config.go        # Configurazione runtime
-│   │   ├── worker_jobs.go          # Job polling e dispatch
+│   │   ├── worker_lifecycle.go     # Start/Stop/runSession
+│   │   ├── worker_registration.go  # buildHello + capabilityReport
+│   │   ├── worker_claimloop.go     # receiveLoop + task dispatch
+│   │   ├── worker_artifacts.go     # Artifact Commit Protocol
 │   │   ├── worker_commands.go      # Command handling
-│   │   ├── job_params.go           # Estrazione parametri job
-│   │   ├── job_upload.go           # Upload video completati (Drive/S3)
-│   │   ├── job_executor.go         # Esecuzione job (process_video, render, audio)
-│   │   ├── concurrency.go          # Limitatore concorrenza (max N job paralleli)
-│   │   ├── stage_executor.go       # Esecuzione per stage
-│   │   └── stage_executor_types.go # Tipi stage executor
+│   │   ├── worker_config.go        # Configurazione runtime
+│   │   ├── worker_types.go         # Helper types
+│   │   ├── worker_persistence.go   # Persistenza stato
+│   │   ├── heartbeat_loop.go       # Heartbeat loop
+│   │   ├── heartbeat_payload.go    # Heartbeat proto construction
+│   │   ├── heartbeat_intervals.go  # Interval policy
+│   │   ├── lease_renewal.go        # Lease renewal loop
+│   │   ├── active_lease_registry.go # Active task leases
+│   │   ├── task_execution.go       # executeTask orchestrator
+│   │   ├── task_dispatch.go        # dispatch path
+│   │   ├── task_result_builder.go  # submitTaskResult
+│   │   ├── active_task_lifecycle.go # metriche + upload
 │   └── telemetry/          # Metriche Prometheus
 │       ├── prometheus.go           # PrometheusMetrics, KPI, server
 │       ├── metrics.go              # Metriche runtime

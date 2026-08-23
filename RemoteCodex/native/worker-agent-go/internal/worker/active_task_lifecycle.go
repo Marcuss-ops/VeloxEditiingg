@@ -1,9 +1,10 @@
 // Package worker — active-task metriche + upload.
 //
 // active_task_lifecycle.go owns the helpers extracted from the
-// monolithic executeTask in the original job_executor.go that are
+// monolithic executeTask that are
 // about the task's metriche (telemetry) and upload (output bytes)
 // side-effects. Behaviour-preserving structural split:
+//
 //
 //	recordTaskStart           — telemetry seeds (SetWorkerStatus=2,
 //	                            SetWorkerActiveJobs, LogJobStart).
