@@ -13,6 +13,7 @@ import (
 	"velox-server/internal/jobs"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/taskgraph"
+	"velox-shared/contract/assembly"
 	"velox-shared/contract/domain"
 	"velox-shared/publication"
 )
@@ -38,6 +39,7 @@ type CanonicalJobSubmission struct {
 	Payload          map[string]interface{}
 	DeliveryPlan     map[string]interface{}
 	PublicationSpecs []publication.Spec
+	Assembly         *assembly.AssemblyJobV1
 }
 
 // Canonical intake-source vocabulary. Each value is a bounded label on
@@ -145,6 +147,7 @@ func (s *CanonicalJobSubmitter) Submit(ctx context.Context, req CanonicalJobSubm
 		Payload:          req.Payload,
 		DeliveryPlan:     req.DeliveryPlan,
 		PublicationSpecs: req.PublicationSpecs,
+		Assembly:         req.Assembly,
 	})
 	if err != nil {
 		phase := "unknown"

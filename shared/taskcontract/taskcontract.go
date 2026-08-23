@@ -12,6 +12,8 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+
+	"velox-shared/contract/assembly"
 )
 
 // SpecVersion is the current canonical task spec version.
@@ -39,6 +41,9 @@ type TaskSpec struct {
 	// retained with the canonical spec but are never included in Payload.
 	PublicationSpecs     []map[string]interface{} `json:"publication_specs,omitempty"`
 	RequiredCapabilities []string                 `json:"required_capabilities,omitempty"`
+	// Assembly is control-plane preparation metadata. It is persisted with
+	// the task spec but is never included in Payload sent to the renderer.
+	Assembly *assembly.AssemblyJobV1 `json:"assembly,omitempty"`
 }
 
 // Validate checks the task spec for structural correctness.
@@ -57,6 +62,11 @@ func (s *TaskSpec) Validate() error {
 	}
 	if s.ExecutorID == "" {
 		return fmt.Errorf("%w: executor_id is required", ErrInvalidSpec)
+	}
+	if s.Assembly != nil {
+		if err := s.Assembly.Validate(); err != nil {
+			return fmt.Errorf("%w: assembly: %v", ErrInvalidSpec, err)
+		}
 	}
 	return nil
 }

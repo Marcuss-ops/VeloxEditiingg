@@ -12,6 +12,7 @@ import (
 	"velox-server/internal/remoteengine"
 	"velox-server/internal/statusboundary"
 	"velox-shared/contract"
+	"velox-shared/contract/assembly"
 	"velox-shared/contract/deliveryplan"
 	"velox-shared/contract/domain"
 	"velox-shared/publication"
@@ -68,7 +69,8 @@ type normalizedCreatorPush struct {
 	// StatusDomains is the typed view of status values known at this
 	// boundary. The wire payload remains in WorkerPayload unchanged; domains
 	// that are not present here stay nil rather than being inferred.
-	StatusDomains statusboundary.Domains `json:"-"`
+	StatusDomains statusboundary.Domains  `json:"-"`
+	Assembly      *assembly.AssemblyJobV1 `json:"-"`
 }
 
 // CanonicalCompletedPayload is the typed struct every intake path
@@ -220,6 +222,7 @@ func (h *Handlers) resolveCompletedPayload(
 	result map[string]interface{},
 	deliveryPlan map[string]interface{},
 	publicationSpecs []publication.Spec,
+	assemblyJob *assembly.AssemblyJobV1,
 	externalClientID string,
 	intakeSource string,
 ) (map[string]interface{}, error) {
@@ -233,6 +236,7 @@ func (h *Handlers) resolveCompletedPayload(
 			Payload:          result,
 			DeliveryPlan:     deliveryPlan,
 			PublicationSpecs: publicationSpecs,
+			Assembly:         assemblyJob,
 		})
 		if err != nil {
 			return nil, err
@@ -266,6 +270,7 @@ func (h *Handlers) resolveCompletedPayload(
 		Payload:          result,
 		DeliveryPlan:     deliveryPlan,
 		PublicationSpecs: publicationSpecs,
+		Assembly:         nil,
 		ExternalClientID: externalClientID,
 	})
 	if err != nil {
@@ -341,6 +346,7 @@ func (h *Handlers) CreatorPush() gin.HandlerFunc {
 			normalized.WorkerPayload,
 			normalized.DeliveryPlan,
 			normalized.PublicationSpecs,
+			nil,
 			ClientIDFromContext(c),
 			creatorflow.IntakeSourceCreator,
 		)

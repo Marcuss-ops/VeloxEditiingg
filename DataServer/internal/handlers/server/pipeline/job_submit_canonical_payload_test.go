@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"velox-shared/contract"
+	"velox-shared/contract/assembly"
 )
 
 // TestSubmitJobBuildsWorkerPayloadCorrectly is replaced by
@@ -122,6 +123,27 @@ func TestNormalizeExternalJobSubmission_ProducesCanonicalPayload(t *testing.T) {
 	}
 	if _, present := wp["publications"]; present {
 		t.Errorf("worker_payload contains publications: %v", wp["publications"])
+	}
+}
+
+func TestNormalizeExternalJobSubmissionCarriesAssemblyOutsideRendererPayload(t *testing.T) {
+	req := SubmitJobRequest{
+		IdempotencyKey: "assembly-job-1",
+		Scenes:         []SubmitScene{{Text: "scene", DurationSeconds: 1}},
+		Assembly: &assembly.ExternalAssemblyRequest{
+			SendToVelox: true, TimelineRevision: 1, TimelineHash: "sha256:timeline", OutputProfile: "velox-h264-copy-v1",
+			Assets: []assembly.AssetRequirement{{AssetID: "clip-1", Kind: assembly.KindSourceClip, Availability: assembly.AvailabilityKnown, URL: "https://example.test/clip", SHA256: strings.Repeat("a", 64), Required: true, State: assembly.AssetReady}},
+		},
+	}
+	canonical := (&Handlers{}).NormalizeExternalJobSubmission(req)
+	if canonical == nil || canonical.Assembly == nil {
+		t.Fatal("assembly was not normalized into canonical control-plane payload")
+	}
+	if canonical.Assembly.Dispatch.Mode != assembly.ModeEager || !canonical.Assembly.Dispatch.StartPrepare {
+		t.Fatalf("dispatch = %#v, want eager preparation", canonical.Assembly.Dispatch)
+	}
+	if _, leaked := canonical.WorkerPayload["assembly"]; leaked {
+		t.Fatal("assembly control-plane metadata leaked into renderer payload")
 	}
 }
 

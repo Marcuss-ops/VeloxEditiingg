@@ -3,6 +3,7 @@ package creatorflow
 import (
 	"fmt"
 
+	"velox-shared/contract/assembly"
 	"velox-shared/publication"
 )
 
@@ -40,6 +41,7 @@ type ResolveRequest struct {
 	// PublicationSpecs are control-plane delivery intents. They are kept
 	// outside Payload so renderer workers never receive publication metadata.
 	PublicationSpecs []publication.Spec
+	Assembly         *assembly.AssemblyJobV1
 }
 
 // ResolveOutput is what every caller receives. JobID and ForwardingID

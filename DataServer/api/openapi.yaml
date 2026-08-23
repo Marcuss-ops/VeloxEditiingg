@@ -324,6 +324,49 @@ components:
                 - error
                 - message
             type: object
+        ExternalAssemblyRequest:
+            properties:
+                assets:
+                    items:
+                        properties:
+                            asset_id:
+                                type: string
+                            availability:
+                                type: string
+                            kind:
+                                type: string
+                            producer:
+                                type: string
+                            required:
+                                type: boolean
+                            sha256:
+                                type: string
+                            state:
+                                type: string
+                            url:
+                                type: string
+                        type: object
+                    minItems: 0
+                    type: array
+                output_profile:
+                    type: string
+                send_to_velox:
+                    type: boolean
+                timeline:
+                    items:
+                        properties:
+                            asset_id:
+                                type: string
+                            scene_id:
+                                type: string
+                        type: object
+                    minItems: 0
+                    type: array
+                timeline_hash:
+                    type: string
+                timeline_revision:
+                    type: integer
+            type: object
         PublishingCatalogCapabilities:
             properties:
                 publish:
@@ -652,6 +695,8 @@ components:
             type: object
         SubmitJobRequest:
             properties:
+                assembly:
+                    $ref: '#/components/schemas/ExternalAssemblyRequest'
                 delivery_plan:
                     items:
                         $ref: '#/components/schemas/SubmitDeliveryPlanEntry'

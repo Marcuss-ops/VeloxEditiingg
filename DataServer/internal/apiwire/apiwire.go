@@ -27,6 +27,8 @@
 // the registry list in cmd/api-schema-gen.
 package apiwire
 
+import "velox-shared/contract/assembly"
+
 // ── POST /api/v1/jobs family ────────────────────────────────────────────────
 
 // SubmitJobRequest is the wire shape for POST /api/v1/jobs.
@@ -52,21 +54,22 @@ package apiwire
 // format and the schemagen doesn't know how to express the
 // http(s) + velox-asset:// scheme choice cleanly.
 type SubmitJobRequest struct {
-	JobType            string                    `json:"job_type,omitempty"`
-	TemplateID         string                    `json:"template_id,omitempty"`
-	TemplateVersion    int                       `json:"template_version,omitempty"`
-	Spec               map[string]any            `json:"spec,omitempty"`
-	Output             *SubmitOutput             `json:"output,omitempty"`
-	IdempotencyKey     string                    `json:"idempotency_key" validate:"required,min=1,max=128"`
-	VideoName          string                    `json:"video_name,omitempty" validate:"omitempty,max=300"`
-	ScriptText         string                    `json:"script_text,omitempty"`
-	Scenes             []SubmitScene             `json:"scenes,omitempty" validate:"omitempty,max=10000"`
-	Layers             []SubmitLayer             `json:"layers,omitempty" validate:"omitempty,dive"`
-	VisualReplacements []SubmitVisualReplacement `json:"visual_replacements,omitempty" validate:"omitempty,max=10000,dive"`
-	DeliveryPlan       []SubmitDeliveryPlanEntry `json:"delivery_plan,omitempty" validate:"omitempty,dive"`
-	PublishingTarget   *SubmitPublishingTarget   `json:"publishing_target,omitempty" validate:"omitempty"`
-	Publications       []SubmitPublication       `json:"publications,omitempty" validate:"omitempty,dive"`
-	ManifestRef        *SubmitManifestRef        `json:"manifest_ref,omitempty" validate:"omitempty"`
+	JobType            string                            `json:"job_type,omitempty"`
+	TemplateID         string                            `json:"template_id,omitempty"`
+	TemplateVersion    int                               `json:"template_version,omitempty"`
+	Spec               map[string]any                    `json:"spec,omitempty"`
+	Output             *SubmitOutput                     `json:"output,omitempty"`
+	IdempotencyKey     string                            `json:"idempotency_key" validate:"required,min=1,max=128"`
+	VideoName          string                            `json:"video_name,omitempty" validate:"omitempty,max=300"`
+	ScriptText         string                            `json:"script_text,omitempty"`
+	Scenes             []SubmitScene                     `json:"scenes,omitempty" validate:"omitempty,max=10000"`
+	Layers             []SubmitLayer                     `json:"layers,omitempty" validate:"omitempty,dive"`
+	VisualReplacements []SubmitVisualReplacement         `json:"visual_replacements,omitempty" validate:"omitempty,max=10000,dive"`
+	DeliveryPlan       []SubmitDeliveryPlanEntry         `json:"delivery_plan,omitempty" validate:"omitempty,dive"`
+	PublishingTarget   *SubmitPublishingTarget           `json:"publishing_target,omitempty" validate:"omitempty"`
+	Publications       []SubmitPublication               `json:"publications,omitempty" validate:"omitempty,dive"`
+	ManifestRef        *SubmitManifestRef                `json:"manifest_ref,omitempty" validate:"omitempty"`
+	Assembly           *assembly.ExternalAssemblyRequest `json:"assembly,omitempty" validate:"omitempty"`
 
 	// PlacementPinWorkerID is an optional operator/admin field that
 	// forces the job to be placed on a specific worker, skipping the

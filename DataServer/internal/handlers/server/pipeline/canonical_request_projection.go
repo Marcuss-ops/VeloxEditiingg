@@ -2,6 +2,7 @@
 package pipeline
 
 import (
+	"velox-shared/contract/assembly"
 	"velox-shared/contract/deliveryplan"
 	"velox-shared/publication"
 )
@@ -19,6 +20,10 @@ func (h *Handlers) NormalizeExternalJobSubmission(req SubmitJobRequest) *Canonic
 		return nil
 	}
 
+	var assemblyJob *assembly.AssemblyJobV1
+	if req.Assembly != nil {
+		assemblyJob, _ = req.Assembly.Normalize(req.IdempotencyKey)
+	}
 	return &CanonicalCompletedPayload{
 		SourceProvider:   ExternalAPISourceProvider,
 		SourceJobID:      req.IdempotencyKey,
@@ -26,6 +31,7 @@ func (h *Handlers) NormalizeExternalJobSubmission(req SubmitJobRequest) *Canonic
 		WorkerPayload:    workerPayload,
 		DeliveryPlan:     deliveryplan.ExtractEnvelope(rawPayload),
 		PublicationSpecs: projectPublicationSpecs(req.Publications),
+		Assembly:         assemblyJob,
 		StatusDomains:    inputAssemblyStatusDomain(workerPayload),
 	}
 }

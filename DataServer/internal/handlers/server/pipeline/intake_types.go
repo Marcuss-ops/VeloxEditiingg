@@ -1,6 +1,8 @@
 // Package pipeline — request DTOs for the external job intake contract.
 package pipeline
 
+import "velox-shared/contract/assembly"
+
 // MaxSubmitJobBatchItems bounds the number of independent jobs accepted by
 // POST /api/v1/jobs/batch. The limit protects request latency and keeps a
 // batch's per-item response bounded; each item still has its own idempotency
@@ -78,6 +80,10 @@ type SubmitJobRequest struct {
 	// ValidateSubmitJobRequest. Fetch + verification are handled by
 	// ResolveRenderManifestRef before enqueue.
 	ManifestRef *SubmitManifestRef `json:"manifest_ref,omitempty"`
+
+	// Assembly is control-plane metadata for eager Velox preparation. It is
+	// normalized and persisted on TaskSpec; it never enters renderer Payload.
+	Assembly *assembly.ExternalAssemblyRequest `json:"assembly,omitempty"`
 
 	// PlacementPinWorkerID is an optional operator/admin field that
 	// forces the job to be placed on a specific worker, skipping

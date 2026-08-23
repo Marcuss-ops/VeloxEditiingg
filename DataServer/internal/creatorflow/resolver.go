@@ -330,6 +330,7 @@ func (r *Resolver) Resolve(ctx context.Context, req ResolveRequest) (*ResolveOut
 	// TaskSpec, where AtomicJobTaskCreator persists job_delivery_plans.
 	spec.DeliveryPlan = cloneControlPlaneMap(req.DeliveryPlan)
 	spec.PublicationSpecs = clonePublicationSpecs(req.PublicationSpecs)
+	spec.Assembly = req.Assembly
 
 	// 7. Atomic FORWARDED transition.
 	if err := r.forwardRepo.AtomicForwardAndEnqueue(ctx, forwardingID, job, spec, priority, req.RunnerID, req.LeaseID); err != nil {

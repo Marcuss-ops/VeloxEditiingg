@@ -79,6 +79,12 @@ func (h *Handlers) SubmitJob() gin.HandlerFunc {
 			})
 			return
 		}
+		if req.Assembly != nil {
+			if _, err := req.Assembly.Normalize(req.IdempotencyKey); err != nil {
+				c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "error": "invalid_assembly", "message": err.Error()})
+				return
+			}
+		}
 
 		// SubmitJob-level validation: video_name byte-length, scenes
 		// count + each scene (text, duration bounds), each delivery
@@ -239,6 +245,7 @@ func (h *Handlers) SubmitJob() gin.HandlerFunc {
 			canonical.WorkerPayload,
 			canonical.DeliveryPlan,
 			canonical.PublicationSpecs,
+			canonical.Assembly,
 			ClientIDFromContext(c),
 			IntakeSourceFromContext(c),
 		)
