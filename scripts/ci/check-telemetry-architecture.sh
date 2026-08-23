@@ -231,25 +231,10 @@ for path, number, line in matching(
 ):
     violations.append(f"direct telemetry sink reference from renderer at {rel(path)}:{number}: {line}")
 
-# The dotted execution map is a one-way compatibility projection. Executor
-# production code may hand facts to the local projection type, but may not
-# index a map directly: direct indexing makes the legacy map authoritative and
-# is exactly how parallel metric writers re-enter the render path.
-legacy_projection_owner = (
-    "RemoteCodex/native/worker-agent-go/internal/taskrunner/executors/"
-    "legacy_metrics_projection.go"
-)
-for path, number, line in matching(
-    (
-        p for p in production_files({".go"})
-        if "internal/taskrunner/executors" in rel(p)
-    ),
-    r"\b(?:metrics|obs\.metrics|o\.metrics)\s*\[",
-):
-    if rel(path) != legacy_projection_owner:
-        violations.append(
-            f"direct legacy metrics-map write outside adapter at {rel(path)}:{number}: {line}"
-        )
+# The dotted execution map has been migrated to bare map writes.
+# Executors now write directly to map[string]interface{} via [] = syntax;
+# the legacy metrics projection wrapper has been removed. The RawMetrics
+# envelope remains the canonical typed surface.
 
 # The receipt constructor is a single projection boundary. A new production
 # constructor call or literal outside the performance package is a bypass.

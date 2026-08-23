@@ -66,17 +66,17 @@ func appendObservabilitySummaryPhases(phases *[]executor.DetailedPhaseTiming, va
 // ffprobe enrichment, and the final progress-receipt manifest. All values are
 // exclusive within their own operation; artifact_total_ms is the wall time
 // from render completion until both manifests are ready.
-func projectRenderProfile(dst *legacyMetricsProjection, run pipeline.RunMetrics, manifestSHAms, manifestProbeMS, artifactFinalizeMS, artifactTotalMS int64) {
+func projectRenderProfile(dst map[string]interface{}, run pipeline.RunMetrics, manifestSHAms, manifestProbeMS, artifactFinalizeMS, artifactTotalMS int64) {
 	if dst == nil {
 		return
 	}
-	dst.Set("render_profile.compile_plan_ms", run.CompileMs)
-	dst.Set("render_profile.render_ms", run.RenderMs)
-	dst.Set("render_profile.native_total_ms", run.RenderMetrics.TotalMs)
-	dst.Set("render_profile.artifact_sha_ms", manifestSHAms)
-	dst.Set("render_profile.artifact_probe_ms", manifestProbeMS)
-	dst.Set("render_profile.artifact_finalize_ms", artifactFinalizeMS)
-	dst.Set("render_profile.artifact_total_ms", artifactTotalMS)
+	dst["render_profile.compile_plan_ms"] = run.CompileMs
+	dst["render_profile.render_ms"] = run.RenderMs
+	dst["render_profile.native_total_ms"] = run.RenderMetrics.TotalMs
+	dst["render_profile.artifact_sha_ms"] = manifestSHAms
+	dst["render_profile.artifact_probe_ms"] = manifestProbeMS
+	dst["render_profile.artifact_finalize_ms"] = artifactFinalizeMS
+	dst["render_profile.artifact_total_ms"] = artifactTotalMS
 
 	for _, field := range []struct {
 		name string
@@ -93,7 +93,7 @@ func projectRenderProfile(dst *legacyMetricsProjection, run pipeline.RunMetrics,
 		{name: "mux_ms", key: "mux_audio_ms"},
 	} {
 		if value, ok := run.RenderMetrics.PhaseMS[field.key]; ok {
-			dst.Set("render_profile."+field.name, value)
+			dst["render_profile."+field.name] = value
 		}
 	}
 }
@@ -102,7 +102,7 @@ func projectRenderProfile(dst *legacyMetricsProjection, run pipeline.RunMetrics,
 // metric map so TaskRunner can project them into typed execution_metrics.
 // Nested JSON objects are flattened without losing audio/subtitle/I/O/quality
 // category names; scalar values retain their JSON-decoded types.
-func flattenObservabilityMetric(dst *legacyMetricsProjection, prefix string, value interface{}) {
+func flattenObservabilityMetric(dst map[string]interface{}, prefix string, value interface{}) {
 	if prefix == "" {
 		return
 	}
@@ -116,7 +116,7 @@ func flattenObservabilityMetric(dst *legacyMetricsProjection, prefix string, val
 		}
 		return
 	}
-	dst.Set(prefix, value)
+	dst[prefix] = value
 }
 
 func resolvePipelineID(payload map[string]interface{}) string {

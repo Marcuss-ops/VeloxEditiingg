@@ -76,7 +76,7 @@ func (e *renderBatchExecutor) Execute(ctx context.Context, execCtx executor.Exec
 	}
 	audioResolveStarted := time.Now()
 	audioErr := validateMediaFile(e.probe, ctx, bindings[plan.FinalAudio.AssetID].Path, "final audio", plan.DurationUS, false, true, &plan.FinalAudio)
-	obs.metrics.Set("final_audio_resolve_ms", time.Since(audioResolveStarted).Milliseconds())
+	obs.metrics["final_audio_resolve_ms"] = time.Since(audioResolveStarted).Milliseconds()
 	if audioErr != nil {
 		endAssetResolve()
 		obs.finish(assetResolution, telemetry.StatusFailed, "FINAL_AUDIO_INVALID", audioErr)
@@ -155,16 +155,16 @@ func (e *renderBatchExecutor) Execute(ctx context.Context, execCtx executor.Exec
 	obs.finish(mux, telemetry.StatusOK, "", nil)
 
 	metrics := obs.metrics
-	metrics.Set("compiled_asset_count", int64(len(plan.Assets)))
-	metrics.Set("audio_mix_count", int64(0))
-	metrics.Set("audio_encode_count", int64(0))
-	metrics.Set("final_audio_copy", int64(1))
-	metrics.Set("video_packet_copy", int64(1))
-	metrics.Set("video_encode_count", int64(0))
-	metrics.Set("video_only_bytes", visualArtifact.SizeBytes)
-	metrics.Set("final_output_bytes", finalArtifact.SizeBytes)
-	metrics.Set("ffmpeg_visual_profile", visualProfile)
-	metrics.Set("ffmpeg_mux_profile", muxProfile)
+	metrics["compiled_asset_count"] = int64(len(plan.Assets))
+	metrics["audio_mix_count"] = int64(0)
+	metrics["audio_encode_count"] = int64(0)
+	metrics["final_audio_copy"] = int64(1)
+	metrics["video_packet_copy"] = int64(1)
+	metrics["video_encode_count"] = int64(0)
+	metrics["video_only_bytes"] = visualArtifact.SizeBytes
+	metrics["final_output_bytes"] = finalArtifact.SizeBytes
+	metrics["ffmpeg_visual_profile"] = visualProfile
+	metrics["ffmpeg_mux_profile"] = muxProfile
 	obs.info("render_batch.succeeded", map[string]interface{}{"compiled_asset_count": int64(len(plan.Assets)), "final_audio_copy": int64(1), "video_packet_copy": int64(1)})
 
 	obs.ensureRawMetrics()
@@ -211,7 +211,7 @@ func (e *renderBatchExecutor) Execute(ctx context.Context, execCtx executor.Exec
 	}
 	return executor.ExecutionResult{
 		Status: "succeeded", Outputs: []executor.ArtifactRef{finalArtifact},
-		RawMetrics: obs.rawMetrics, Metrics: metrics.Map(), StartedAt: started, CompletedAt: time.Now().UTC(),
+		RawMetrics: obs.rawMetrics, Metrics: metrics, StartedAt: started, CompletedAt: time.Now().UTC(),
 	}, nil
 }
 

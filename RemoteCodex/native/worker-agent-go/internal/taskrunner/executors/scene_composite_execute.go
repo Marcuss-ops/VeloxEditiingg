@@ -40,7 +40,7 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 	// Legacy compatibility projection for pre-typed report consumers. The
 	// canonical producer output is rawMetrics below; this map is retired
 	// incrementally as downstream consumers adopt RawMetrics.
-	metrics := newLegacyMetricsProjection()
+	metrics := make(map[string]interface{})
 	rec := recorderFromExecutionContext(execCtx)
 	planHandle := rec.Begin(telemetry.EventSpec{Origin: telemetry.OriginWorker, Scope: telemetry.ScopeTask, Component: "worker.plan", Action: "compile"})
 	if planHandle != nil {
@@ -135,7 +135,7 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 				Status:    "failed",
 				ErrorCode: "cancelled", ErrorDetail: err.Error(),
 				RawMetrics:     rawMetrics,
-				Metrics:        metrics.Map(),
+				Metrics:        metrics,
 				Segments:       segments,
 				DetailedPhases: detailedPhases,
 				StartedAt:      startedAt,
@@ -147,7 +147,7 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 			ErrorCode:      renderErrorCode(err),
 			ErrorDetail:    fmt.Sprintf("pipeline.Runner.RunWithMetrics(%s): %v", pipelineID, err),
 			RawMetrics:     rawMetrics,
-			Metrics:        metrics.Map(),
+			Metrics:        metrics,
 			Segments:       segments,
 			DetailedPhases: detailedPhases,
 			StartedAt:      startedAt,
@@ -174,7 +174,7 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 		Status:         "succeeded",
 		Outputs:        outputs,
 		RawMetrics:     rawMetrics,
-		Metrics:        metrics.Map(),
+		Metrics:        metrics,
 		Segments:       segments,
 		DetailedPhases: detailedPhases,
 		StartedAt:      startedAt,

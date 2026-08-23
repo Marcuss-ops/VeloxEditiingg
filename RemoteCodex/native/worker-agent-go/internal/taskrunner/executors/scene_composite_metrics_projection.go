@@ -20,55 +20,55 @@ import (
 // counters onto the legacy dotted metric map. The I/O and CPU derivations
 // (performance.DeriveIO / DeriveCPU) are returned so the caller can share
 // them with the raw metrics projection instead of recomputing them.
-func projectRunMetrics(metrics *legacyMetricsProjection, pipelineID string, pipelineStart time.Time, run pipeline.RunMetrics, clipCount int) (performance.IOMetrics, performance.CPUMetrics) {
-	metrics.Set("pipeline.total_ms", time.Since(pipelineStart).Milliseconds())
-	metrics.Set("pipeline.id", pipelineID)
-	metrics.Set("pipeline.resolve_ms", run.ResolveMs)
-	metrics.Set("pipeline.validate_ms", run.ValidateMs)
-	metrics.Set("pipeline.compile_ms", run.CompileMs)
-	metrics.Set("pipeline.render_ms", run.RenderMs)
-	metrics.Set("pipeline.timeline_items", int64(run.TimelineItems))
-	metrics.Set("pipeline.audio_tracks", int64(run.AudioTracks))
-	metrics.Set("native.total_ms", run.RenderMetrics.TotalMs)
-	metrics.Set("native.plan_write_ms", run.RenderMetrics.PlanWriteMs)
-	metrics.Set("native.process_wait_ms", run.RenderMetrics.ProcessWaitMs)
-	metrics.Set("process.engine_spawn_count", run.RenderMetrics.EngineSpawnCount)
-	metrics.Set("process.engine_spawn_ms", run.RenderMetrics.EngineSpawnMs)
-	metrics.Set("process.external_count", run.RenderMetrics.ExternalProcessCount)
-	metrics.Set("process.ffmpeg_exec_count", run.RenderMetrics.FfmpegExecCount)
-	metrics.Set("process.ffprobe_exec_count", run.RenderMetrics.FfprobeExecCount)
-	metrics.Set("process.shell_exec_count", run.RenderMetrics.ShellExecCount)
-	metrics.Set("process.curl_exec_count", run.RenderMetrics.CurlExecCount)
-	metrics.Set("process.child_wait_ms", run.RenderMetrics.ChildWaitMs)
+func projectRunMetrics(metrics map[string]interface{}, pipelineID string, pipelineStart time.Time, run pipeline.RunMetrics, clipCount int) (performance.IOMetrics, performance.CPUMetrics) {
+	metrics["pipeline.total_ms"] = time.Since(pipelineStart).Milliseconds()
+	metrics["pipeline.id"] = pipelineID
+	metrics["pipeline.resolve_ms"] = run.ResolveMs
+	metrics["pipeline.validate_ms"] = run.ValidateMs
+	metrics["pipeline.compile_ms"] = run.CompileMs
+	metrics["pipeline.render_ms"] = run.RenderMs
+	metrics["pipeline.timeline_items"] = int64(run.TimelineItems)
+	metrics["pipeline.audio_tracks"] = int64(run.AudioTracks)
+	metrics["native.total_ms"] = run.RenderMetrics.TotalMs
+	metrics["native.plan_write_ms"] = run.RenderMetrics.PlanWriteMs
+	metrics["native.process_wait_ms"] = run.RenderMetrics.ProcessWaitMs
+	metrics["process.engine_spawn_count"] = run.RenderMetrics.EngineSpawnCount
+	metrics["process.engine_spawn_ms"] = run.RenderMetrics.EngineSpawnMs
+	metrics["process.external_count"] = run.RenderMetrics.ExternalProcessCount
+	metrics["process.ffmpeg_exec_count"] = run.RenderMetrics.FfmpegExecCount
+	metrics["process.ffprobe_exec_count"] = run.RenderMetrics.FfprobeExecCount
+	metrics["process.shell_exec_count"] = run.RenderMetrics.ShellExecCount
+	metrics["process.curl_exec_count"] = run.RenderMetrics.CurlExecCount
+	metrics["process.child_wait_ms"] = run.RenderMetrics.ChildWaitMs
 	// I/O counters share ONE derivation with the PerformanceReceiptV1
 	// (performance.DeriveIO): the executor telemetry and the receipt can
 	// never disagree about what each io.* value means.
 	derivedIO := performance.DeriveIO(run.RenderMetrics)
-	metrics.Set("io.total_bytes_read", derivedIO.TotalBytesRead)
-	metrics.Set("io.total_bytes_written", derivedIO.TotalBytesWritten)
-	metrics.Set("io.asset_bytes_read", derivedIO.AssetBytesRead)
-	metrics.Set("io.asset_bytes_copied", derivedIO.AssetBytesCopied)
-	metrics.Set("io.temp_bytes_written", derivedIO.TempBytesWritten)
-	metrics.Set("io.mux_bytes_read", derivedIO.MuxBytesRead)
-	metrics.Set("io.mux_bytes_written", derivedIO.MuxBytesWritten)
-	metrics.Set("io.final_bytes_written", derivedIO.FinalBytesWritten)
-	metrics.Set("io.file_copy_count", derivedIO.FileCopyCount)
-	metrics.Set("io.file_copy_bytes", derivedIO.FileCopyBytes)
-	metrics.Set("io.input_open_count", derivedIO.InputOpenCount)
-	metrics.Set("io.input_reopen_count", derivedIO.InputReopenCount)
+	metrics["io.total_bytes_read"] = derivedIO.TotalBytesRead
+	metrics["io.total_bytes_written"] = derivedIO.TotalBytesWritten
+	metrics["io.asset_bytes_read"] = derivedIO.AssetBytesRead
+	metrics["io.asset_bytes_copied"] = derivedIO.AssetBytesCopied
+	metrics["io.temp_bytes_written"] = derivedIO.TempBytesWritten
+	metrics["io.mux_bytes_read"] = derivedIO.MuxBytesRead
+	metrics["io.mux_bytes_written"] = derivedIO.MuxBytesWritten
+	metrics["io.final_bytes_written"] = derivedIO.FinalBytesWritten
+	metrics["io.file_copy_count"] = derivedIO.FileCopyCount
+	metrics["io.file_copy_bytes"] = derivedIO.FileCopyBytes
+	metrics["io.input_open_count"] = derivedIO.InputOpenCount
+	metrics["io.input_reopen_count"] = derivedIO.InputReopenCount
 	// CPU counters share ONE derivation with the PerformanceReceiptV1
 	// (performance.DeriveCPU): cpu.wall_ms mirrors the pipeline wall
 	// clock, cpu.total_ms = user + system, and cpu.wall_ratio tells us
 	// whether the attempt was CPU-bound at all. The RSS counters come
 	// straight from the /proc sampler (memory.* is not a derivation).
 	derivedCPU := performance.DeriveCPU(run.RenderMetrics, run.TotalMs)
-	metrics.Set("cpu.wall_ms", derivedCPU.WallMs)
-	metrics.Set("cpu.user_ms", derivedCPU.CPUUserMs)
-	metrics.Set("cpu.system_ms", derivedCPU.CPUSystemMs)
-	metrics.Set("cpu.total_ms", derivedCPU.CPUTotalMs)
-	metrics.Set("cpu.wall_ratio", derivedCPU.CPUWallRatio)
-	metrics.Set("memory.peak_rss_bytes", run.RenderMetrics.PeakRSSBytes)
-	metrics.Set("memory.current_rss_bytes", run.RenderMetrics.CurrentRSSBytes)
+	metrics["cpu.wall_ms"] = derivedCPU.WallMs
+	metrics["cpu.user_ms"] = derivedCPU.CPUUserMs
+	metrics["cpu.system_ms"] = derivedCPU.CPUSystemMs
+	metrics["cpu.total_ms"] = derivedCPU.CPUTotalMs
+	metrics["cpu.wall_ratio"] = derivedCPU.CPUWallRatio
+	metrics["memory.peak_rss_bytes"] = run.RenderMetrics.PeakRSSBytes
+	metrics["memory.current_rss_bytes"] = run.RenderMetrics.CurrentRSSBytes
 	// Derived KPIs share ONE derivation with the PerformanceReceiptV1
 	// (performance.DerivedFromRenderMetrics → Derive): unaccounted_ms,
 	// accounted_ratio, read/write amplification, processes_per_clip,
@@ -82,32 +82,32 @@ func projectRunMetrics(metrics *legacyMetricsProjection, pipelineID string, pipe
 	// that has no compiled plan is explicitly "not measured"; timeline item
 	// count is not a valid substitute because it can include non-clip work.
 	derived := performance.DerivedFromRenderMetrics(run.RenderMetrics, run.TotalMs, clipCount, run.RenderMetrics.TotalSize)
-	metrics.Set("derived.unaccounted_ms", derived.UnaccountedMS)
-	metrics.Set("derived.accounted_ratio", derived.AccountedRatio)
-	metrics.Set("derived.read_amplification", derived.ReadAmplification)
-	metrics.Set("derived.write_amplification", derived.WriteAmplification)
-	metrics.Set("derived.processes_per_clip", derived.ProcessesPerClip)
-	metrics.Set("derived.useful_work_ratio", derived.UsefulWorkRatio)
-	metrics.Set("derived.cpu_wall_ratio", derived.CPUWallRatio)
+	metrics["derived.unaccounted_ms"] = derived.UnaccountedMS
+	metrics["derived.accounted_ratio"] = derived.AccountedRatio
+	metrics["derived.read_amplification"] = derived.ReadAmplification
+	metrics["derived.write_amplification"] = derived.WriteAmplification
+	metrics["derived.processes_per_clip"] = derived.ProcessesPerClip
+	metrics["derived.useful_work_ratio"] = derived.UsefulWorkRatio
+	metrics["derived.cpu_wall_ratio"] = derived.CPUWallRatio
 	// The Phase-1 accounted_ratio budget (>= 95%) is surfaced as a
 	// single boolean so operators can alert on it without recomputing
 	// the rule; "not measured" (ratio 0) is never a violation.
-	metrics.Set("derived.accounted_ratio_budget_ok", len(performance.CheckDerivedBudgets(derived)) == 0)
-	metrics.Set("engine.frames", run.RenderMetrics.Frames)
-	metrics.Set("engine.frames_decoded", run.RenderMetrics.FramesDecoded)
-	metrics.Set("engine.frames_composited", run.RenderMetrics.FramesComposited)
-	metrics.Set("engine.fps", run.RenderMetrics.Fps)
-	metrics.Set("engine.speed_x", run.RenderMetrics.SpeedX)
-	metrics.Set("engine.encode_passes", run.RenderMetrics.EncodePasses)
-	metrics.Set("engine.temp_bytes", run.RenderMetrics.TempBytes)
-	metrics.Set("engine.output_durable", run.RenderMetrics.OutputDurable)
-	metrics.Set("engine.duration_seconds", run.RenderMetrics.DurationSec)
-	metrics.Set("engine.concat_mode", run.RenderMetrics.ConcatMode)
-	metrics.Set("engine.bitrate", run.RenderMetrics.Bitrate)
-	metrics.Set("engine.dup_frames", run.RenderMetrics.DupFrames)
-	metrics.Set("engine.drop_frames", run.RenderMetrics.DropFrames)
+	metrics["derived.accounted_ratio_budget_ok"] = len(performance.CheckDerivedBudgets(derived)) == 0
+	metrics["engine.frames"] = run.RenderMetrics.Frames
+	metrics["engine.frames_decoded"] = run.RenderMetrics.FramesDecoded
+	metrics["engine.frames_composited"] = run.RenderMetrics.FramesComposited
+	metrics["engine.fps"] = run.RenderMetrics.Fps
+	metrics["engine.speed_x"] = run.RenderMetrics.SpeedX
+	metrics["engine.encode_passes"] = run.RenderMetrics.EncodePasses
+	metrics["engine.temp_bytes"] = run.RenderMetrics.TempBytes
+	metrics["engine.output_durable"] = run.RenderMetrics.OutputDurable
+	metrics["engine.duration_seconds"] = run.RenderMetrics.DurationSec
+	metrics["engine.concat_mode"] = run.RenderMetrics.ConcatMode
+	metrics["engine.bitrate"] = run.RenderMetrics.Bitrate
+	metrics["engine.dup_frames"] = run.RenderMetrics.DupFrames
+	metrics["engine.drop_frames"] = run.RenderMetrics.DropFrames
 	for k, v := range run.RenderMetrics.PhaseMS {
-		metrics.Set("engine."+k, v)
+		metrics["engine."+k] = v
 	}
 	for key, value := range run.RenderMetrics.Observability {
 		flattenObservabilityMetric(metrics, key, value)

@@ -7,7 +7,7 @@ import (
 )
 
 func TestProjectRenderProfileUsesCanonicalExistingTimers(t *testing.T) {
-	metrics := newLegacyMetricsProjection()
+	metrics := make(map[string]interface{})
 	projectRenderProfile(metrics, pipeline.RunMetrics{
 		CompileMs: 2400,
 		RenderMs:  8400,
@@ -38,7 +38,7 @@ func TestProjectRenderProfileUsesCanonicalExistingTimers(t *testing.T) {
 		"render_profile.mux_ms":               float64(700),
 	}
 	for key, expected := range want {
-		if got := metrics.Map()[key]; got != expected {
+		if got := metrics[key]; got != expected {
 			t.Errorf("%s = %v (%T), want %v (%T)", key, got, got, expected, expected)
 		}
 	}
