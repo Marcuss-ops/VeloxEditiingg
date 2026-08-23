@@ -64,6 +64,11 @@ bool mediaSignaturesCompatible(const MediaSignature& source,
             mismatch(reason, "frame_rate");
             return false;
         }
+        if (source.time_base_num != target.time_base_num ||
+            source.time_base_den != target.time_base_den) {
+            mismatch(reason, "time_base");
+            return false;
+        }
     } else {
         if (source.pixel_format != target.pixel_format) {
             mismatch(reason, "sample_format");
@@ -79,6 +84,11 @@ bool mediaSignaturesCompatible(const MediaSignature& source,
         }
         if (source.channel_layout != target.channel_layout) {
             mismatch(reason, "channel_layout");
+            return false;
+        }
+        if (source.time_base_num != target.time_base_num ||
+            source.time_base_den != target.time_base_den) {
+            mismatch(reason, "time_base");
             return false;
         }
     }

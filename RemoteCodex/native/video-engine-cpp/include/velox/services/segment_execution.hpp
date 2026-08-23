@@ -24,6 +24,8 @@ struct MediaSignature {
     int pixel_format{-1};
     int frame_rate_num{0};
     int frame_rate_den{1};
+    int time_base_num{0};
+    int time_base_den{1};
     int sample_rate{0};
     int channels{0};
     std::string channel_layout;
