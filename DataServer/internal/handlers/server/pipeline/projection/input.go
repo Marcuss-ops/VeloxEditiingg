@@ -163,6 +163,28 @@ func BuildRawPayload(input SubmissionInput) map[string]interface{} {
 			scenes = append(scenes, scene)
 		}
 		payload["scenes"] = scenes
+		clips := make([]interface{}, 0, len(input.Scenes))
+		for _, sceneInput := range input.Scenes {
+			if sceneInput.Clip == nil {
+				continue
+			}
+			clip := clipToMap(sceneInput.Clip)
+			url, _ := clip["url"].(string)
+			if url == "" {
+				if assetID, ok := clip["asset_id"].(string); ok && assetID != "" {
+					url = "velox-drive://" + assetID
+				}
+			}
+			if url == "" {
+				continue
+			}
+			clips = append(clips, map[string]interface{}{
+				"url": url, "duration": sceneInput.DurationSeconds,
+			})
+		}
+		if len(clips) > 0 {
+			payload["clips"] = clips
+		}
 	}
 	if len(input.Layers) > 0 {
 		layers := make([]interface{}, 0, len(input.Layers))
