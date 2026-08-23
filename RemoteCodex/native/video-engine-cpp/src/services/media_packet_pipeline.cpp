@@ -745,6 +745,8 @@ bool muxCopyOnly(const CopyOnlyMuxRequest& request, CopyOnlyMuxResult* result) {
     UniqueOutputContext output(raw_output);
 
     OutputStreams streams;
+    std::optional<MediaSignature> canonical_video_signature;
+    std::optional<MediaSignature> canonical_audio_signature;
     std::vector<std::unique_ptr<packet::PacketHolder>> packets;
     packets.reserve(request.video_segments.size() * 16);
     packet::TimestampState video_state;
@@ -825,6 +827,9 @@ bool muxCopyOnly(const CopyOnlyMuxRequest& request, CopyOnlyMuxResult* result) {
             }
         }
         const MediaSignature sourceVideoSignature = mediaSignatureFromStream(input_video);
+        if (!canonical_video_signature.has_value()) {
+            canonical_video_signature = sourceVideoSignature;
+        }
         if (streams.video == nullptr) {
             if (!initializeOutputStream(output.get(), input_video, streams.video, error)) {
                 cleanupPartial();
@@ -833,9 +838,7 @@ bool muxCopyOnly(const CopyOnlyMuxRequest& request, CopyOnlyMuxResult* result) {
         }
         SegmentExecutionRequest videoExecution;
         videoExecution.source = sourceVideoSignature;
-        videoExecution.target = streams.video == nullptr
-            ? sourceVideoSignature
-            : mediaSignatureFromStream(streams.video);
+        videoExecution.target = *canonical_video_signature;
         videoExecution.source_window_keyframe_safe = keyframeSafe;
         const SegmentExecutionDecision videoDecision =
             resolveSegmentExecution(videoExecution);
@@ -859,6 +862,9 @@ bool muxCopyOnly(const CopyOnlyMuxRequest& request, CopyOnlyMuxResult* result) {
                 ? std::min<int64_t>(segment.source_duration_us, source_audio_duration)
                 : segment.source_duration_us;
             const MediaSignature sourceAudioSignature = mediaSignatureFromStream(input_audio);
+            if (!canonical_audio_signature.has_value()) {
+                canonical_audio_signature = sourceAudioSignature;
+            }
             if (streams.audio == nullptr) {
                 if (!initializeOutputStream(output.get(), input_audio, streams.audio, error)) {
                     cleanupPartial();
@@ -867,9 +873,7 @@ bool muxCopyOnly(const CopyOnlyMuxRequest& request, CopyOnlyMuxResult* result) {
             }
             SegmentExecutionRequest audioExecution;
             audioExecution.source = sourceAudioSignature;
-            audioExecution.target = streams.audio == nullptr
-                ? sourceAudioSignature
-                : mediaSignatureFromStream(streams.audio);
+            audioExecution.target = *canonical_audio_signature;
             // Audio has no video keyframe boundary; the source window has
             // already passed the packet-duration checks above.
             audioExecution.source_window_keyframe_safe = true;
@@ -921,8 +925,11 @@ bool muxCopyOnly(const CopyOnlyMuxRequest& request, CopyOnlyMuxResult* result) {
             }
         } else {
             std::string compatibility_reason;
+            if (!canonical_audio_signature.has_value()) {
+                canonical_audio_signature = mediaSignatureFromStream(input_audio);
+            }
             if (!mediaSignaturesCompatible(
-                    mediaSignatureFromStream(input_audio), mediaSignatureFromStream(streams.audio),
+                    mediaSignatureFromStream(input_audio), *canonical_audio_signature,
                     &compatibility_reason)) {
                 cleanupPartial();
                 return fail(result, "copy-only audio codec parameters are incompatible: " +
