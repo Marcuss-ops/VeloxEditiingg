@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "velox.contract.assembly.v1",
+  "title": "AssemblyJobV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract_version", "job_id", "timeline_revision", "timeline_hash", "dispatch", "assets", "output"],
+  "properties": {
+    "contract_version": {"const": "velox.assembly.v1"},
+    "job_id": {"type": "string", "minLength": 1},
+    "timeline_revision": {"type": "integer", "minimum": 1},
+    "timeline_hash": {"type": "string", "minLength": 1},
+    "dispatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target", "mode", "start_prepare"],
+      "properties": {
+        "target": {"const": "velox"},
+        "mode": {"enum": ["never", "eager", "when_complete", "manual"]},
+        "start_prepare": {"type": "boolean"}
+      }
+    },
+    "assets": {"type": "array", "items": {"$ref": "#/$defs/asset"}},
+    "timeline": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["scene_id", "asset_id"], "properties": {"scene_id": {"type": "string"}, "asset_id": {"type": "string"}}}},
+    "output": {"type": "object", "additionalProperties": false, "required": ["profile_id"], "properties": {"profile_id": {"type": "string", "minLength": 1}}},
+    "state": {"enum": ["preparing", "waiting_runtime_assets", "ready_to_finalize", "finalizing", "completed", "failed", "cancelled"]}
+  },
+  "$defs": {
+    "asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["asset_id", "kind", "availability", "required", "state"],
+      "properties": {
+        "asset_id": {"type": "string", "minLength": 1},
+        "kind": {"enum": ["source_clip", "voiceover", "image", "overlay_asset", "prepared_scene", "generated_clip", "final_audio"]},
+        "availability": {"enum": ["known", "runtime", "optional"]},
+        "producer": {"enum": ["pipelinegen", "renderinggen", "chronon"]},
+        "url": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^(sha256:)?[0-9a-fA-F]{64}$"},
+        "required": {"type": "boolean"},
+        "state": {"enum": ["declared", "waiting_producer", "materializing", "ready", "invalidated", "failed"]}
+      }
+    }
+  }
+}
