@@ -180,6 +180,10 @@ func (k AssetKind) Valid() bool {
 	}
 }
 
+func (p AssetProducer) Valid() bool {
+	return p == ProducerPipelineGen || p == ProducerRenderingGen || p == ProducerChronon
+}
+
 func validSHA256(value string) bool {
 	if len(value) == sha256.Size*2 {
 		_, err := hex.DecodeString(value)
@@ -225,8 +229,8 @@ func (j AssemblyJobV1) Validate() error {
 			if strings.TrimSpace(asset.URL) == "" || !validSHA256(asset.SHA256) {
 				return fmt.Errorf("assembly: known asset %q requires url and sha256", asset.AssetID)
 			}
-		} else if asset.Availability == AvailabilityRuntime && strings.TrimSpace(string(asset.Producer)) == "" {
-			return fmt.Errorf("assembly: runtime asset %q requires producer", asset.AssetID)
+		} else if asset.Availability == AvailabilityRuntime && !asset.Producer.Valid() {
+			return fmt.Errorf("assembly: runtime asset %q requires a known producer", asset.AssetID)
 		}
 	}
 	for i, item := range j.Timeline {
