@@ -35,6 +35,10 @@ RemoteCodex/native/video-engine-cpp/build*
 *.webm
 **/tmp
 **/output
-**/artifacts
+# Keep DataServer/internal/artifacts in the server build context: it is a
+# compiled Go package, not generated output. Exclude only generated artifact
+# directories outside the source tree.
+artifacts
+**/output/artifacts
 **/coverage
 docs/benchmarks/evidence
