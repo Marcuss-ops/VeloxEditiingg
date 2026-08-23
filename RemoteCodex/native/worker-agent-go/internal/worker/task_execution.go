@@ -164,14 +164,6 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 		telemetry.MergeAttemptResourceFactsInto(&raw, result.Metrics)
 		report.RawMetrics = &raw
 		report.TypedMetrics = report.RawMetrics
-
-		// Compatibility only: legacy report consumers receive a dotted
-		// projection from the typed facts. No producer writes this map as
-		// its authoritative metric store.
-		legacy := report.LegacyMetrics()
-		for key, value := range (taskrunner.LegacyMetricsAdapter{}).ProjectAttempt(result) {
-			legacy[key] = value
-		}
 	}
 
 	w.recordTaskOutcome(pte, execErr, duration)

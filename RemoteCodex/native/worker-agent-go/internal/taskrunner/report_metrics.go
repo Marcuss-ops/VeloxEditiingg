@@ -39,9 +39,11 @@ import (
 // safe and idempotent for tests).
 // TypedMetricsFromMap is the legacy compatibility adapter for reports
 // produced by unmigrated executors. New producers must set RawMetrics
-// directly; this function exists only at compatibility boundaries.
+// directly; this function exists only at test boundaries.
 func TypedMetricsFromMap(m map[string]interface{}) *telemetry.RawExecutionMetrics {
-	return (LegacyMetricsAdapter{}).FromMap(m)
+	report := &TaskExecutionReport{}
+	(&TaskRunner{}).mergeStatsInto(report, m)
+	return report.RawMetrics
 }
 
 func (r *TaskRunner) mergeStatsInto(report *TaskExecutionReport, m map[string]interface{}) {

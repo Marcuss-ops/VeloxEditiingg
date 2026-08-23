@@ -185,10 +185,10 @@ func (r *taskResultReporter) Submit(ctx context.Context, pte *PendingTaskExecuti
 		tr.ExecutorKey = report.ExecutorKey
 
 		// Build typed execution_metrics from the canonical raw envelope.
-		// Legacy reports are adapted only as a compatibility fallback at
+		// Legacy reports with Metrics but no RawMetrics are adapted at
 		// this transport boundary.
 		if report.RawMetrics == nil && report.TypedMetrics == nil && report.HasLegacyMetrics() {
-			report.RawMetrics = (taskrunner.LegacyMetricsAdapter{}).FromMap(report.LegacyMetrics())
+			report.RawMetrics = taskrunner.TypedMetricsFromMap(report.LegacyMetrics())
 			report.TypedMetrics = report.RawMetrics
 		}
 		metrics := report.RawMetrics
