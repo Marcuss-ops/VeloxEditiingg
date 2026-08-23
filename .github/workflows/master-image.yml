@@ -276,6 +276,8 @@ jobs:
       - name: Extract image digest
         id: digest
         if: steps.build.outputs.digest != ''
+        env:
+          IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
         run: |
           set -euo pipefail
           echo "digest=${{ steps.build.outputs.digest }}" >> "$GITHUB_OUTPUT"
@@ -283,9 +285,10 @@ jobs:
           echo "## Image digest" >> "$GITHUB_STEP_SUMMARY"
           echo ":package: \`${{ steps.build.outputs.digest }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "Tags:" >> "$GITHUB_STEP_SUMMARY"
-          for t in ${{ steps.meta.outputs.tags }}; do
+          while IFS= read -r t; do
+            [[ -n "$t" ]] || continue
             echo "- \`$t\`" >> "$GITHUB_STEP_SUMMARY"
-          done
+          done <<< "$IMAGE_TAGS"
 
       - name: Upload digest artifact
         if: steps.build.outputs.digest != ''
