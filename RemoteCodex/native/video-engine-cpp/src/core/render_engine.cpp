@@ -589,6 +589,7 @@ RenderResult RenderEngine::renderMixed(
     int64_t total_duration_us = 0;
     int64_t packet_copy_segments = 0;
     int64_t rejected_segments = 0;
+    std::optional<media::MediaSignature> mixed_canonical_source;
     for (std::size_t i = 0; i < plan.timeline.size(); ++i) {
         const auto& item = plan.timeline[i];
         if (!std::holds_alternative<plan::VideoSource>(item.source)) {
@@ -642,7 +643,12 @@ RenderResult RenderEngine::renderMixed(
 
         media::SegmentExecutionRequest execution_request;
         execution_request.source = probe.signature;
-        execution_request.target = canonical;
+        if (!mixed_canonical_source.has_value()) {
+            mixed_canonical_source = canonical;
+            mixed_canonical_source->time_base_num = probe.signature.time_base_num;
+            mixed_canonical_source->time_base_den = probe.signature.time_base_den;
+        }
+        execution_request.target = *mixed_canonical_source;
         execution_request.transform_required = item.transform.slow_zoom;
         execution_request.source_window_keyframe_safe = probe.source_window_keyframe_safe;
         execution_request.legacy_required = item.include_audio;
