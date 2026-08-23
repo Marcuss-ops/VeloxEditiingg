@@ -64,9 +64,8 @@ bool mediaSignaturesCompatible(const MediaSignature& source,
             mismatch(reason, "frame_rate");
             return false;
         }
-        if (target.time_base_num > 0 &&
-            (source.time_base_num != target.time_base_num ||
-             source.time_base_den != target.time_base_den)) {
+        if (source.time_base_num != target.time_base_num ||
+            source.time_base_den != target.time_base_den) {
             mismatch(reason, "time_base");
             return false;
         }
@@ -87,9 +86,8 @@ bool mediaSignaturesCompatible(const MediaSignature& source,
             mismatch(reason, "channel_layout");
             return false;
         }
-        if (target.time_base_num > 0 &&
-            (source.time_base_num != target.time_base_num ||
-             source.time_base_den != target.time_base_den)) {
+        if (source.time_base_num != target.time_base_num ||
+            source.time_base_den != target.time_base_den) {
             mismatch(reason, "time_base");
             return false;
         }
