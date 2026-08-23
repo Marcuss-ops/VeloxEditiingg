@@ -235,6 +235,10 @@ RenderResult RenderEngine::renderCopyOnly(
         result.error = "copy_only does not support subtitle burn-in";
         return failRender("copy_only_subtitles_unsupported");
     }
+    if (plan.watermark_requested && !plan.watermark_already_applied) {
+        result.error = "copy_only watermark would require composition; source must already contain the watermark";
+        return failRender("copy_only_watermark_composition_required");
+    }
 
     media::CopyOnlyMuxRequest request;
     request.output_path = outPath;
