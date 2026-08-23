@@ -9,7 +9,7 @@
 
 // InputSession/Demuxer (media_packet_components.hpp) provide the in-process
 // open/seek/keyframe probe; their definitions live in
-// media_packet_pipeline.cpp, which is linked alongside this TU everywhere.
+// media_packet_muxer.cpp, which is linked alongside this TU everywhere.
 #include "velox/services/media_packet_components.hpp"
 
 extern "C" {

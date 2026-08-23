@@ -9,7 +9,7 @@
 //   demuxAndRewrite    the per-segment reader the ConcatMuxer drives
 //
 // This header is LibAV-aware by design: it is included only by
-// media_packet_pipeline.cpp and the libav-only component tests, both of
+// media_packet_demuxer.cpp, media_packet_rewriter.cpp and the libav-only component tests, both of
 // which compile exclusively when VELOX_ENABLE_LIBAV=ON.
 #ifndef VELOX_ENABLE_LIBAV
 #error "media_packet_components.hpp requires -DVELOX_ENABLE_LIBAV=ON"
@@ -17,7 +17,7 @@
 
 // The LibAV public headers must be included under C linkage. The project
 // applies the same extern "C" wrapper around every libav include (see
-// media_packet_pipeline.cpp / media_probe.cpp): some distro -dev packages
+// media_packet_demuxer.cpp / media_probe.cpp): some distro -dev packages
 // ship headers without their own __cplusplus guard, so a bare include here
 // would declare C++-mangled symbols and every pipeline link would fail.
 extern "C" {

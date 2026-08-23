@@ -236,8 +236,8 @@ int main() {
     request.audio = velox::media::CopyOnlyAudioTrack{audio, 0, 1'600'000};
     request.output_path = output;
     velox::media::CopyOnlyMuxResult muxResult;
-    expect(velox::media::muxCopyOnly(request, &muxResult),
-           "packet pipeline concatenates video and muxes audio in-process");
+    expect(velox::media::MediaPacketPipeline::muxCopyOnly(request, &muxResult),
+           "MediaPacketPipeline facade concatenates video and muxes audio in-process");
     expect(muxResult.success, "successful packet mux reports success");
     expect(muxResult.output_durable, "packet mux reports durable atomic publication");
     expect(muxResult.video_packets > 0, "packet mux writes video packets");

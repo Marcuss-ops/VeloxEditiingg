@@ -25,6 +25,7 @@ using MediaSource = std::variant<ImageSource, VideoSource, ColorSource>;
 struct TransformSpec {
     std::string scale_mode{"cover"}; // cover, contain, stretch
     bool slow_zoom{true};
+    bool explicit_request{false};
 };
 
 struct TimelineItem {
@@ -74,7 +75,7 @@ struct SubtitleTrack {
 struct CanvasSpec {
     int width{1920};
     int height{1080};
-    int fps{30};
+    int fps{24};
     // CompiledRenderPlanV2 rational frame rate (fps = fps_num / fps_den).
     int fps_num{0};
     int fps_den{0};

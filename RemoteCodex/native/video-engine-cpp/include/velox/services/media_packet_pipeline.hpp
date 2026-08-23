@@ -65,6 +65,16 @@ struct CopyOnlyMuxResult {
 // raw-source keyframe/duration heuristics but still pass the fail-closed
 // canonical-profile compatibility check before being concatenated by the
 // same single mux.
+class MediaPacketPipeline {
+public:
+    // Stable facade for packet-copy assembly. The implementation delegates
+    // to the demux/session, rewrite/trim and mux stages without exposing
+    // their ownership or LibAV details to callers.
+    static bool muxCopyOnly(const CopyOnlyMuxRequest& request,
+                            CopyOnlyMuxResult* result = nullptr);
+};
+
+// Backward-compatible free-function facade retained for existing callers.
 bool muxCopyOnly(const CopyOnlyMuxRequest& request, CopyOnlyMuxResult* result = nullptr);
 
 } // namespace velox::media

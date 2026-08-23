@@ -358,7 +358,7 @@ std::optional<RenderPlan> parseRenderPlan(const std::string& jsonStr) {
     // ── RenderPlan V1 (legacy floating-second contract) ────────────────
     plan.canvas.width = static_cast<int>(ju::extractJsonNumberValue(jsonStr, "width", 1920.0));
     plan.canvas.height = static_cast<int>(ju::extractJsonNumberValue(jsonStr, "height", 1080.0));
-    plan.canvas.fps = static_cast<int>(ju::extractJsonNumberValue(jsonStr, "fps", 30.0));
+    plan.canvas.fps = static_cast<int>(ju::extractJsonNumberValue(jsonStr, "fps", 24.0));
     plan.copy_only = ju::extractJsonBoolValue(jsonStr, "copy_only", false);
     plan.watermark_already_applied = ju::extractJsonBoolValue(jsonStr, "watermark_already_applied", false);
     plan.watermark_requested = ju::extractJsonBoolValue(jsonStr, "watermark_requested", false);
@@ -378,7 +378,14 @@ std::optional<RenderPlan> parseRenderPlan(const std::string& jsonStr) {
             if (item.transform.scale_mode.empty()) {
                 item.transform.scale_mode = "cover";
             }
-            item.transform.slow_zoom = ju::extractJsonBoolValue(itemStr, "slow_zoom", true);
+            item.transform.explicit_request =
+                itemStr.find("\"slow_zoom\"") != std::string::npos ||
+                itemStr.find("\"scale_mode\"") != std::string::npos;
+            // Missing transforms are safe only for the packet-copy policy.
+            // A mixed/legacy render must fail closed when the creator did not
+            // explicitly declare that no transform is required.
+            item.transform.slow_zoom = ju::extractJsonBoolValue(
+                itemStr, "slow_zoom", !plan.copy_only);
 
             // Source
             std::string sourceBlock = ju::extractArrayBlock(itemStr, "source");

@@ -14,6 +14,7 @@
 #include <functional>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace velox::core {
 
@@ -87,6 +88,40 @@ public:
 private:
     void emitSidecar(const std::string& output_path) const;
     void recordFramePipeline(const media::FramePipelineResult& result);
+    void resetRenderState();
+    bool createRenderWorkDir(const std::filesystem::path& base,
+                             std::filesystem::path& work_dir,
+                             std::string& error);
+    std::string publishRenderOutput(const std::filesystem::path& partial,
+                                    const std::filesystem::path& output);
+    bool concatenateTimelineSegments(
+        const std::vector<std::filesystem::path>& segment_paths,
+        const std::filesystem::path& video_only,
+        const std::filesystem::path& work_dir,
+        RenderResult& result,
+        const std::function<RenderResult(const std::string&)>& fail_render);
+    std::vector<std::pair<std::filesystem::path, const plan::AudioTrack*>>
+    downloadAudioTracks(const plan::RenderPlan& plan,
+                        const std::filesystem::path& work_dir);
+    bool finalizeAudioTracks(
+        const plan::RenderPlan& plan,
+        const std::filesystem::path& work_dir,
+        const std::filesystem::path& out_path,
+        const std::filesystem::path& video_for_mux,
+        const std::chrono::steady_clock::time_point& render_start,
+        const std::function<std::string(const std::filesystem::path&)>& publish_output,
+        const std::function<void(const std::filesystem::path&)>& track_partial,
+        RenderResult& result,
+        const std::function<RenderResult(const std::string&)>& fail_render);
+    bool renderLegacyTimeline(
+        const plan::RenderPlan& plan,
+        const std::filesystem::path& work_dir,
+        const std::chrono::steady_clock::time_point& render_start,
+        std::vector<std::filesystem::path>& segment_paths,
+        double& total_duration_seconds,
+        RenderResult& result,
+        const std::function<RenderResult(const std::string&)>& fail_render);
+
 
     // Subtitle burn stage: download the first subtitle track and burn it into
     // the concatenated video. When the plan carries no subtitle track,

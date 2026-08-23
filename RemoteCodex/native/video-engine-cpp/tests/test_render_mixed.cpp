@@ -16,7 +16,7 @@
 //   packet_copy_segments == total_segments
 // and a rejected segment MUST fail the job with frames_encoded == 0.
 //
-// Part 1 (positive): three FramePipeline-normalized canonical 1080p30
+// Part 1 (positive): three FramePipeline-normalized canonical-profile
 // sources resolve to PACKET_COPY and assemble through the single packet mux;
 // the output is canonical-profile compatible and zero frames were encoded.
 //
@@ -106,16 +106,17 @@ bool makeHevcVideo(const fs::path& output, const std::string& size, int fps) {
 // Normalizes a source into the canonical profile with the FramePipeline so
 // its SPS/PPS matches the canonical identity (identical encoder knobs).
 bool normalizeCanonical(const fs::path& input, const fs::path& output) {
+    const auto& profile = velox::core::canonicalVideoProfileV1();
     velox::media::FramePipelineConfig config;
     config.input_path = input;
     config.output_path = output;
-    config.width = 1920;
-    config.height = 1080;
-    config.fps_num = 30;
-    config.fps_den = 1;
+    config.width = profile.width;
+    config.height = profile.height;
+    config.fps_num = profile.fps_num;
+    config.fps_den = profile.fps_den;
     config.source_duration_us = 1'000'000;
-    config.codec = "libx264";
-    config.preset = "medium";
+    config.codec = profile.codec;
+    config.preset = profile.preset;
     velox::media::FramePipelineResult result;
     return velox::media::renderFrames(config, &result);
 }
@@ -145,12 +146,14 @@ int main() {
     const fs::path rejectedOutput = root / "mixed-rejected.mp4";
     const fs::path hevcRejectedOutput = root / "mixed-hevc-rejected.mp4";
     const fs::path keyframeRejectedOutput = root / "mixed-keyframe-rejected.mp4";
-    expect(makeVideo(nonCanonicalClip, "1280x720", 30),
-           "non-canonical 720p30 fixture can be created");
+    const auto& canonicalProfile = velox::core::canonicalVideoProfileV1();
+    const int canonicalFps = canonicalProfile.fps_num / canonicalProfile.fps_den;
+    expect(makeVideo(nonCanonicalClip, "1280x720", canonicalFps),
+           "non-canonical fixture can be created");
     expect(normalizeCanonical(nonCanonicalClip, canonicalClip),
            "canonical fixture can be FramePipeline-normalized");
-    expect(makeHevcVideo(hevcClip, "1920x1080", 30),
-           "HEVC 1080p30 fixture can be created");
+    expect(makeHevcVideo(hevcClip, "1920x1080", canonicalFps),
+           "HEVC fixture can be created");
 
     // ── Sentinel PATH: any ffmpeg/ffprobe spawn fails hard. ─────────────
     const fs::path sentinelBin = root / "sentinel-bin";
@@ -174,11 +177,13 @@ int main() {
 
     // ── Positive plan: three canonical, keyframe-safe segments. All must
     //    resolve to PACKET_COPY and assemble with zero encode work. ──────
-    const double segmentDuration = 0.3;
+    // Keep each segment on an exact frame boundary for the canonical rate.
+    const double segmentDuration = 0.5;
     RenderPlan plan;
     plan.version = 1;
     plan.job_id = "mixed-positive";
-    plan.canvas = {1920, 1080, 30};
+    plan.canvas = {canonicalProfile.width, canonicalProfile.height,
+                   canonicalProfile.fps_num / canonicalProfile.fps_den};
     plan.mixed = true;
     plan.output_path = output.string();
     plan.timeline = {
@@ -196,7 +201,8 @@ int main() {
     RenderPlan rejectedPlan;
     rejectedPlan.version = 1;
     rejectedPlan.job_id = "mixed-rejected";
-    rejectedPlan.canvas = {1920, 1080, 30};
+    rejectedPlan.canvas = {canonicalProfile.width, canonicalProfile.height,
+                           canonicalProfile.fps_num / canonicalProfile.fps_den};
     rejectedPlan.mixed = true;
     rejectedPlan.output_path = rejectedOutput.string();
     rejectedPlan.timeline = {
@@ -212,7 +218,8 @@ int main() {
     RenderPlan hevcPlan;
     hevcPlan.version = 1;
     hevcPlan.job_id = "mixed-hevc-rejected";
-    hevcPlan.canvas = {1920, 1080, 30};
+    hevcPlan.canvas = {canonicalProfile.width, canonicalProfile.height,
+                       canonicalProfile.fps_num / canonicalProfile.fps_den};
     hevcPlan.mixed = true;
     hevcPlan.output_path = hevcRejectedOutput.string();
     hevcPlan.timeline = {
@@ -229,7 +236,8 @@ int main() {
     RenderPlan keyframePlan;
     keyframePlan.version = 1;
     keyframePlan.job_id = "mixed-keyframe-rejected";
-    keyframePlan.canvas = {1920, 1080, 30};
+    keyframePlan.canvas = {canonicalProfile.width, canonicalProfile.height,
+                           canonicalProfile.fps_num / canonicalProfile.fps_den};
     keyframePlan.mixed = true;
     keyframePlan.output_path = keyframeRejectedOutput.string();
     keyframePlan.timeline = {
@@ -271,13 +279,30 @@ int main() {
            "copy-only mixed render decodes zero frames");
     expect(engine.encodePasses() == 0,
            "copy-only mixed render runs zero encode passes");
+    expect(engine.copySegments() == static_cast<int64_t>(plan.timeline.size()),
+           "mixed release gate counts every compatible segment as packet copy");
+    expect(engine.transcodeSegments() == 0,
+           "mixed release gate reports zero transcoded segments");
     expect(engine.tempBytesWritten() == 0,
            "copy-only mixed render writes no intermediate files");
-    expect(engine.durationSeconds() > 0.89 && engine.durationSeconds() < 0.91,
-           "mixed output covers the full 0.9 s timeline");
+    expect(engine.durationSeconds() > 1.49 && engine.durationSeconds() < 1.51,
+           "mixed output covers the full 1.5 s timeline");
     expect(!fs::exists(ffmpegTouched), "mixed render never executed ffmpeg");
     expect(!fs::exists(ffprobeTouched), "mixed render never executed ffprobe");
     expect(fs::exists(output), "mixed output is published");
+    const std::string sidecar = velox::file::readFile(output.string() + ".progress.json");
+    expect(contains(sidecar, "\"concat_mode\":\"mixed_packet\""),
+           "mixed sidecar records the extracted packet mode");
+    expect(contains(sidecar, "\"copy_segments\":3"),
+           "mixed sidecar records all compatible packet-copy segments");
+    expect(contains(sidecar, "\"transcode_segments\":0"),
+           "mixed sidecar records zero transcoded segments");
+    expect(contains(sidecar, "\"output_durable\":true"),
+           "mixed sidecar confirms durable atomic publication");
+    expect(contains(sidecar, "\"packet_copy_segments\":3"),
+           "mixed phase metadata records the packet-copy count");
+    expect(contains(sidecar, "\"rejected_segments\":0"),
+           "mixed phase metadata records no rejected segments on success");
 
     // The assembled output must be canonical-profile compatible: every
     // stream-copied range resolves to the same canonical identity.
@@ -288,8 +313,16 @@ int main() {
     expect(velox::media::probeSegmentForExecution(
                output, 0, velox::media::MediaKind::Video, &outProbe, &outError),
            "mixed output can be probed in-process");
-    expect(velox::media::mediaSignaturesCompatible(outProbe.signature, canonical),
-           "mixed output is canonical-profile compatible");
+    std::string outputCompatibilityReason;
+    const bool outputCompatible = velox::media::mediaSignaturesCompatible(
+        outProbe.signature, canonical, &outputCompatibilityReason);
+    expect(outputCompatible,
+           "mixed output is canonical-profile compatible: " +
+               outputCompatibilityReason + " (actual=" +
+               std::to_string(outProbe.signature.frame_rate_num) + "/" +
+               std::to_string(outProbe.signature.frame_rate_den) +
+               ", expected=" + std::to_string(canonical.frame_rate_num) + "/" +
+               std::to_string(canonical.frame_rate_den) + ")");
 
     // ── Negative assertions: the job fails, the worker process stays alive. ──
     expect(!rejected.success,
@@ -306,6 +339,18 @@ int main() {
            "rejected segment runs zero encode passes");
     expect(!fs::exists(rejectedOutput),
            "rejected mixed render does not publish output");
+    {
+        bool leftoverPartial = false;
+        for (const auto& entry : fs::directory_iterator(root)) {
+            const std::string name = entry.path().filename().string();
+            if (name.rfind("mixed-rejected.partial.", 0) == 0) {
+                leftoverPartial = true;
+                std::cerr << "leftover mixed partial: " << name << "\n";
+            }
+        }
+        expect(!leftoverPartial,
+               "width-mismatch mixed render cleans up its atomic partial");
+    }
 
     // ── HEVC negative assertions: codec_id mismatch, zero encode work. ──
     expect(!hevcRejected.success,
@@ -322,6 +367,18 @@ int main() {
            "HEVC segment runs zero encode passes");
     expect(!fs::exists(hevcRejectedOutput),
            "HEVC rejected render does not publish output");
+    {
+        bool leftoverPartial = false;
+        for (const auto& entry : fs::directory_iterator(root)) {
+            const std::string name = entry.path().filename().string();
+            if (name.rfind("mixed-hevc-rejected.partial.", 0) == 0) {
+                leftoverPartial = true;
+                std::cerr << "leftover HEVC partial: " << name << "\n";
+            }
+        }
+        expect(!leftoverPartial,
+               "codec-mismatch mixed render cleans up its atomic partial");
+    }
 
     // ── Non-keyframe trim assertions: reject, never re-encode. ───────────
     expect(!keyframeRejected.success,
@@ -339,6 +396,18 @@ int main() {
            "non-keyframe trim runs zero encode passes");
     expect(!fs::exists(keyframeRejectedOutput),
            "keyframe rejected render does not publish output");
+    {
+        bool leftoverPartial = false;
+        for (const auto& entry : fs::directory_iterator(root)) {
+            const std::string name = entry.path().filename().string();
+            if (name.rfind("mixed-keyframe-rejected.partial.", 0) == 0) {
+                leftoverPartial = true;
+                std::cerr << "leftover keyframe partial: " << name << "\n";
+            }
+        }
+        expect(!leftoverPartial,
+               "keyframe-mismatch mixed render cleans up its atomic partial");
+    }
 
     return failures == 0 ? 0 : 1;
 }

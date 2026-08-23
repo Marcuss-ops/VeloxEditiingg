@@ -23,7 +23,7 @@ struct CanonicalVideoProfile {
     int width{1920};
     int height{1080};
 
-    int fps_num{30};
+    int fps_num{24};
     int fps_den{1};
 
     // LibAV pixel format. 0 == AV_PIX_FMT_YUV420P.
@@ -33,7 +33,7 @@ struct CanonicalVideoProfile {
     // LibAV codec level. 40 == H.264 level 4.0.
     int level{40};
 
-    int gop_size{60};
+    int gop_size{48};
     int max_b_frames{0};
 
     std::string preset{"medium"};
@@ -51,8 +51,8 @@ struct CanonicalVideoProfile {
 media::MediaSignature mediaSignatureFromCanonicalProfile(
     const CanonicalVideoProfile& profile);
 
-// The canonical V1 mixed-renderer profile: H.264, 1920x1080, 30 fps,
-// yuv420p, High, GOP 60, B-frames 0, CRF 23.
+// The canonical V1 mixed-renderer profile: H.264, 1920x1080, 24 fps,
+// yuv420p, High, GOP 48, B-frames 0, CRF 23.
 const CanonicalVideoProfile& canonicalVideoProfileV1();
 
 } // namespace velox::core

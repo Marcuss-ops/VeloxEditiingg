@@ -2,7 +2,7 @@
 #include "velox/services/io_counters.hpp"
 
 // The in-process MediaProbe is built only when VELOX_ENABLE_LIBAV is ON.
-// Without the flag this translation unit is empty: media_utils.cpp uses the
+// Without the flag this translation unit is empty: media_utils_probe.cpp uses the
 // ffprobe CLI fallback for every probe, so probeMediaInProcess() has no
 // callers in a non-LibAV build (and the libav-only tests are excluded).
 #ifdef VELOX_ENABLE_LIBAV

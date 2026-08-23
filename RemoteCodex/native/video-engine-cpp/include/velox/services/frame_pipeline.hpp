@@ -10,8 +10,8 @@ class FrameGraph;
 
 // This header is the value-types-only public surface (the OFF-build fallback
 // and RenderEngine include it). The LibAV-aware producer-consumer pipeline
-// behind renderFrames() lives in frame_pipeline.cpp and is compiled
-// exclusively when VELOX_ENABLE_LIBAV=ON.
+// behind renderFrames() lives in the private frame_pipeline_* implementation
+// units and is compiled exclusively when VELOX_ENABLE_LIBAV=ON.
 //
 // The frame pipeline is the Phase-3 encode path: decode/render/encode run on
 // three threads over a bounded pool of pre-allocated AVFrames with one
@@ -31,7 +31,7 @@ struct FramePipelineConfig {
     int height{0};
 
     // Rational output frame rate.
-    int fps_num{30};
+    int fps_num{24};
     int fps_den{1};
 
     // Optional source window. The native decoder may decode from an earlier

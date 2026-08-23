@@ -263,7 +263,7 @@ int cmdFullVideo(int argc, char** argv) {
     media::SceneSegmentParams clipParams;
     clipParams.width = static_cast<int>(json::extractJsonNumberValue(requestJson, "width", 1920.0));
     clipParams.height = static_cast<int>(json::extractJsonNumberValue(requestJson, "height", 1080.0));
-    clipParams.fps = static_cast<int>(json::extractJsonNumberValue(requestJson, "fps", 30.0));
+    clipParams.fps = static_cast<int>(json::extractJsonNumberValue(requestJson, "fps", 24.0));
     clipParams.copy_only = clipMode;
 
     // Download voiceover (with asset cache if configured)

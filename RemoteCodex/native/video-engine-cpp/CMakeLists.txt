@@ -29,6 +29,66 @@ option(VELOX_ENABLE_LIBAV
     "Build with in-process libavformat/libavcodec/libavutil (MediaProbe + packet mux)"
     OFF)
 
+# The public facade is compiled in every configuration. LibAV-only packet
+# stages are guarded inside their translation units, so OFF builds retain the
+# fail-closed facade without including LibAV headers.
+set(VELOX_PACKET_PIPELINE_FACADE_SOURCE
+    src/services/media_packet_pipeline.cpp)
+
+# Shared source groups keep every executable/test target aligned with the
+# split translation units. LibAV-only sources are selected explicitly so an
+# OFF build never includes a header that requires VELOX_ENABLE_LIBAV.
+set(VELOX_PACKET_PIPELINE_COMPONENT_SOURCES
+    src/services/media_packet_demuxer.cpp
+    src/services/media_packet_sessions.cpp
+    src/services/media_packet_rewriter.cpp
+    src/services/media_packet_copy.cpp
+    src/services/media_packet_muxer.cpp)
+set(VELOX_MEDIA_UTILS_SOURCES
+    src/services/media_utils_config.cpp
+    src/services/media_utils_probe.cpp
+    src/services/media_utils_audio.cpp
+    src/services/media_utils_builders.cpp
+    src/services/media_utils_execution.cpp)
+set(VELOX_FRAME_PIPELINE_SOURCES
+    src/services/frame_pipeline.cpp
+    src/services/frame_pipeline_queue.cpp
+    src/services/frame_pipeline_support.cpp
+    src/services/frame_pipeline_decoder.cpp
+    src/services/frame_pipeline_filter.cpp
+    src/services/frame_pipeline_compositor.cpp
+    src/services/frame_pipeline_encoder.cpp
+    src/services/frame_pipeline_stages.cpp
+    src/render/frame_graph.cpp
+    src/render/kernel_registry.cpp)
+set(VELOX_FRAME_GRAPH_TEST_SOURCES
+    src/render/frame_backend.cpp
+    src/render/frame_graph.cpp
+    src/render/kernel_registry.cpp)
+set(VELOX_FRAME_OVERLAY_TEST_SOURCES
+    src/render/frame_overlay.cpp
+    src/render/frame_graph.cpp)
+set(VELOX_RENDER_ENGINE_SOURCES
+    src/core/render_engine.cpp
+    src/core/render_engine_lifecycle.cpp
+    src/core/render_engine_metrics.cpp
+    src/core/render_engine_orchestrator.cpp
+    src/core/render_engine_audio.cpp
+    src/core/render_engine_timeline.cpp
+    src/core/render_engine_sidecar.cpp
+    src/core/render_engine_subtitles.cpp
+    src/core/render_engine_packet.cpp
+    src/core/canonical_video_profile.cpp
+    src/core/render_engine_helpers.cpp)
+set(VELOX_SEGMENT_EXECUTION_SOURCES
+    src/services/segment_execution.cpp
+    src/services/segment_scheduler.cpp)
+set(VELOX_SEGMENT_EXECUTION_LIBAV_SOURCES)
+if(VELOX_ENABLE_LIBAV)
+    set(VELOX_SEGMENT_EXECUTION_LIBAV_SOURCES
+        src/services/segment_execution_libav.cpp)
+endif()
+
 if(VELOX_ENABLE_LIBAV)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
@@ -127,21 +187,17 @@ add_executable(velox_video_engine
     src/services/file_utils.cpp
     src/services/io_counters.cpp
     src/services/media_probe.cpp
-    src/services/media_packet_pipeline.cpp
-    src/services/segment_execution_libav.cpp
-    src/services/segment_execution.cpp
-    src/services/segment_scheduler.cpp
-    src/services/media_utils.cpp
-    src/services/frame_pipeline.cpp
-    src/render/frame_graph.cpp
-    src/render/kernel_registry.cpp
+    ${VELOX_PACKET_PIPELINE_FACADE_SOURCE}
+    ${VELOX_PACKET_PIPELINE_COMPONENT_SOURCES}
+    ${VELOX_SEGMENT_EXECUTION_LIBAV_SOURCES}
+    ${VELOX_SEGMENT_EXECUTION_SOURCES}
+    ${VELOX_MEDIA_UTILS_SOURCES}
+    ${VELOX_FRAME_PIPELINE_SOURCES}
     src/audio/audio_plan.cpp
     src/audio/audio_benchmark.cpp
     src/services/ffmpeg_progress_parser.cpp
-    src/core/render_engine.cpp
-    src/core/render_engine_helpers.cpp
+    ${VELOX_RENDER_ENGINE_SOURCES}
     src/core/execution_plan.cpp
-    src/core/canonical_video_profile.cpp
     src/telemetry/emitter.cpp
 )
 
@@ -259,6 +315,51 @@ endif()
 add_test(NAME render_engine_helpers_tests
          COMMAND velox_render_engine_helpers_tests)
 
+add_executable(velox_frame_graph_tests
+    tests/test_frame_graph.cpp
+    ${VELOX_FRAME_GRAPH_TEST_SOURCES}
+)
+
+target_include_directories(velox_frame_graph_tests
+    PRIVATE include src include/velox)
+
+if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(velox_frame_graph_tests PRIVATE -O2)
+endif()
+
+add_test(NAME frame_graph_tests
+         COMMAND velox_frame_graph_tests)
+
+add_executable(velox_frame_overlay_tests
+    tests/test_frame_overlay.cpp
+    ${VELOX_FRAME_OVERLAY_TEST_SOURCES}
+)
+
+target_include_directories(velox_frame_overlay_tests
+    PRIVATE include src include/velox)
+
+if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(velox_frame_overlay_tests PRIVATE -O2)
+endif()
+
+add_test(NAME frame_overlay_tests
+         COMMAND velox_frame_overlay_tests)
+
+add_executable(velox_frame_overlay_simd_tests
+    tests/test_frame_overlay_simd.cpp
+    ${VELOX_FRAME_OVERLAY_TEST_SOURCES}
+)
+
+target_include_directories(velox_frame_overlay_simd_tests
+    PRIVATE include src include/velox)
+
+if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(velox_frame_overlay_simd_tests PRIVATE -O2)
+endif()
+
+add_test(NAME frame_overlay_simd_tests
+         COMMAND velox_frame_overlay_simd_tests)
+
 add_executable(velox_audio_plan_tests
     tests/test_audio_plan.cpp
     src/audio/audio_plan.cpp
@@ -278,20 +379,16 @@ add_executable(velox_audio_timeline_tests
     tests/test_audio_timeline.cpp
     src/audio/audio_plan.cpp
     src/audio/audio_benchmark.cpp
-    src/core/render_engine.cpp
-    src/core/canonical_video_profile.cpp
-    src/core/render_engine_helpers.cpp
-    src/services/frame_pipeline.cpp
-    src/render/frame_graph.cpp
-    src/render/kernel_registry.cpp
+    ${VELOX_RENDER_ENGINE_SOURCES}
+    ${VELOX_FRAME_PIPELINE_SOURCES}
     src/services/file_utils.cpp
     src/services/io_counters.cpp
     src/services/media_probe.cpp
-    src/services/media_packet_pipeline.cpp
-    src/services/segment_execution_libav.cpp
-    src/services/segment_execution.cpp
-    src/services/segment_scheduler.cpp
-    src/services/media_utils.cpp
+    ${VELOX_PACKET_PIPELINE_FACADE_SOURCE}
+    ${VELOX_PACKET_PIPELINE_COMPONENT_SOURCES}
+    ${VELOX_SEGMENT_EXECUTION_LIBAV_SOURCES}
+    ${VELOX_SEGMENT_EXECUTION_SOURCES}
+    ${VELOX_MEDIA_UTILS_SOURCES}
     src/services/ffmpeg_progress_parser.cpp
     src/telemetry/emitter.cpp
 )
@@ -315,20 +412,16 @@ add_executable(velox_emitter_tests
     src/audio/audio_plan.cpp
     src/audio/audio_benchmark.cpp
     src/telemetry/emitter.cpp
-    src/core/render_engine.cpp
-    src/core/canonical_video_profile.cpp
-    src/core/render_engine_helpers.cpp
-    src/services/frame_pipeline.cpp
-    src/render/frame_graph.cpp
-    src/render/kernel_registry.cpp
+    ${VELOX_RENDER_ENGINE_SOURCES}
+    ${VELOX_FRAME_PIPELINE_SOURCES}
     src/services/file_utils.cpp
     src/services/io_counters.cpp
     src/services/media_probe.cpp
-    src/services/media_packet_pipeline.cpp
-    src/services/segment_execution_libav.cpp
-    src/services/segment_execution.cpp
-    src/services/segment_scheduler.cpp
-    src/services/media_utils.cpp
+    ${VELOX_PACKET_PIPELINE_FACADE_SOURCE}
+    ${VELOX_PACKET_PIPELINE_COMPONENT_SOURCES}
+    ${VELOX_SEGMENT_EXECUTION_LIBAV_SOURCES}
+    ${VELOX_SEGMENT_EXECUTION_SOURCES}
+    ${VELOX_MEDIA_UTILS_SOURCES}
     src/services/ffmpeg_progress_parser.cpp
 )
 
@@ -352,20 +445,16 @@ add_executable(velox_looped_music_tests
     tests/test_looped_music.cpp
     src/audio/audio_plan.cpp
     src/audio/audio_benchmark.cpp
-    src/core/render_engine.cpp
-    src/core/canonical_video_profile.cpp
-    src/core/render_engine_helpers.cpp
-    src/services/frame_pipeline.cpp
-    src/render/frame_graph.cpp
-    src/render/kernel_registry.cpp
+    ${VELOX_RENDER_ENGINE_SOURCES}
+    ${VELOX_FRAME_PIPELINE_SOURCES}
     src/services/file_utils.cpp
     src/services/io_counters.cpp
     src/services/media_probe.cpp
-    src/services/media_packet_pipeline.cpp
-    src/services/segment_execution_libav.cpp
-    src/services/segment_execution.cpp
-    src/services/segment_scheduler.cpp
-    src/services/media_utils.cpp
+    ${VELOX_PACKET_PIPELINE_FACADE_SOURCE}
+    ${VELOX_PACKET_PIPELINE_COMPONENT_SOURCES}
+    ${VELOX_SEGMENT_EXECUTION_LIBAV_SOURCES}
+    ${VELOX_SEGMENT_EXECUTION_SOURCES}
+    ${VELOX_MEDIA_UTILS_SOURCES}
     src/services/ffmpeg_progress_parser.cpp
     src/telemetry/emitter.cpp
 )
@@ -393,11 +482,11 @@ if(VELOX_ENABLE_LIBAV)
         src/services/file_utils.cpp
         src/services/io_counters.cpp
         src/services/media_probe.cpp
-        src/services/media_packet_pipeline.cpp
-        src/services/segment_execution_libav.cpp
-        src/services/segment_execution.cpp
-        src/services/segment_scheduler.cpp
-        src/services/media_utils.cpp
+        ${VELOX_PACKET_PIPELINE_FACADE_SOURCE}
+            ${VELOX_PACKET_PIPELINE_COMPONENT_SOURCES}
+        ${VELOX_SEGMENT_EXECUTION_LIBAV_SOURCES}
+        ${VELOX_SEGMENT_EXECUTION_SOURCES}
+        ${VELOX_MEDIA_UTILS_SOURCES}
     )
 
     target_include_directories(velox_media_probe_tests
@@ -420,8 +509,9 @@ if(VELOX_ENABLE_LIBAV)
         src/services/file_utils.cpp
         src/services/io_counters.cpp
         src/services/media_probe.cpp
-        src/services/media_packet_pipeline.cpp
-        src/services/segment_execution_libav.cpp
+        ${VELOX_PACKET_PIPELINE_FACADE_SOURCE}
+            ${VELOX_PACKET_PIPELINE_COMPONENT_SOURCES}
+        ${VELOX_SEGMENT_EXECUTION_LIBAV_SOURCES}
         src/services/segment_execution.cpp
     )
 
@@ -443,8 +533,9 @@ if(VELOX_ENABLE_LIBAV)
         src/services/file_utils.cpp
         src/services/io_counters.cpp
         src/services/media_probe.cpp
-        src/services/media_packet_pipeline.cpp
-        src/services/segment_execution_libav.cpp
+        ${VELOX_PACKET_PIPELINE_FACADE_SOURCE}
+            ${VELOX_PACKET_PIPELINE_COMPONENT_SOURCES}
+        ${VELOX_SEGMENT_EXECUTION_LIBAV_SOURCES}
         src/services/segment_execution.cpp
     )
 
@@ -469,8 +560,9 @@ if(VELOX_ENABLE_LIBAV)
         src/services/file_utils.cpp
         src/services/io_counters.cpp
         src/services/media_probe.cpp
-        src/services/media_packet_pipeline.cpp
-        src/services/segment_execution_libav.cpp
+        ${VELOX_PACKET_PIPELINE_FACADE_SOURCE}
+            ${VELOX_PACKET_PIPELINE_COMPONENT_SOURCES}
+        ${VELOX_SEGMENT_EXECUTION_LIBAV_SOURCES}
         src/services/segment_execution.cpp
     )
 
@@ -496,20 +588,16 @@ if(VELOX_ENABLE_LIBAV)
         tests/test_render_copy_only_zero_intermediates.cpp
         src/audio/audio_plan.cpp
         src/audio/audio_benchmark.cpp
-        src/core/render_engine.cpp
-        src/core/canonical_video_profile.cpp
-        src/core/render_engine_helpers.cpp
-        src/services/frame_pipeline.cpp
-        src/render/frame_graph.cpp
-        src/render/kernel_registry.cpp
+        ${VELOX_RENDER_ENGINE_SOURCES}
+            ${VELOX_FRAME_PIPELINE_SOURCES}
         src/services/file_utils.cpp
         src/services/io_counters.cpp
         src/services/media_probe.cpp
-        src/services/media_packet_pipeline.cpp
-        src/services/segment_execution_libav.cpp
-        src/services/segment_execution.cpp
-        src/services/segment_scheduler.cpp
-        src/services/media_utils.cpp
+        ${VELOX_PACKET_PIPELINE_FACADE_SOURCE}
+            ${VELOX_PACKET_PIPELINE_COMPONENT_SOURCES}
+        ${VELOX_SEGMENT_EXECUTION_LIBAV_SOURCES}
+        ${VELOX_SEGMENT_EXECUTION_SOURCES}
+        ${VELOX_MEDIA_UTILS_SOURCES}
         src/services/ffmpeg_progress_parser.cpp
         src/telemetry/emitter.cpp
     )
@@ -534,20 +622,16 @@ if(VELOX_ENABLE_LIBAV)
         tests/test_render_mixed.cpp
         src/audio/audio_plan.cpp
         src/audio/audio_benchmark.cpp
-        src/core/render_engine.cpp
-        src/core/canonical_video_profile.cpp
-        src/core/render_engine_helpers.cpp
-        src/services/frame_pipeline.cpp
-        src/render/frame_graph.cpp
-        src/render/kernel_registry.cpp
+        ${VELOX_RENDER_ENGINE_SOURCES}
+            ${VELOX_FRAME_PIPELINE_SOURCES}
         src/services/file_utils.cpp
         src/services/io_counters.cpp
         src/services/media_probe.cpp
-        src/services/media_packet_pipeline.cpp
-        src/services/segment_execution_libav.cpp
-        src/services/segment_execution.cpp
-        src/services/segment_scheduler.cpp
-        src/services/media_utils.cpp
+        ${VELOX_PACKET_PIPELINE_FACADE_SOURCE}
+            ${VELOX_PACKET_PIPELINE_COMPONENT_SOURCES}
+        ${VELOX_SEGMENT_EXECUTION_LIBAV_SOURCES}
+        ${VELOX_SEGMENT_EXECUTION_SOURCES}
+        ${VELOX_MEDIA_UTILS_SOURCES}
         src/services/ffmpeg_progress_parser.cpp
         src/telemetry/emitter.cpp
     )
@@ -572,20 +656,16 @@ if(VELOX_ENABLE_LIBAV)
         src/plan/render_plan_parser.cpp
         src/audio/audio_plan.cpp
         src/audio/audio_benchmark.cpp
-        src/core/render_engine.cpp
-        src/core/canonical_video_profile.cpp
-        src/core/render_engine_helpers.cpp
-        src/services/frame_pipeline.cpp
-        src/render/frame_graph.cpp
-        src/render/kernel_registry.cpp
+        ${VELOX_RENDER_ENGINE_SOURCES}
+            ${VELOX_FRAME_PIPELINE_SOURCES}
         src/services/file_utils.cpp
         src/services/io_counters.cpp
         src/services/media_probe.cpp
-        src/services/media_packet_pipeline.cpp
-        src/services/segment_execution_libav.cpp
-        src/services/segment_execution.cpp
-        src/services/segment_scheduler.cpp
-        src/services/media_utils.cpp
+        ${VELOX_PACKET_PIPELINE_FACADE_SOURCE}
+            ${VELOX_PACKET_PIPELINE_COMPONENT_SOURCES}
+        ${VELOX_SEGMENT_EXECUTION_LIBAV_SOURCES}
+        ${VELOX_SEGMENT_EXECUTION_SOURCES}
+        ${VELOX_MEDIA_UTILS_SOURCES}
         src/services/ffmpeg_progress_parser.cpp
         src/telemetry/emitter.cpp
     )
@@ -612,20 +692,16 @@ if(VELOX_ENABLE_LIBAV)
         src/plan/render_plan_parser.cpp
         src/audio/audio_plan.cpp
         src/audio/audio_benchmark.cpp
-        src/core/render_engine.cpp
-        src/core/canonical_video_profile.cpp
-        src/core/render_engine_helpers.cpp
-        src/services/frame_pipeline.cpp
-        src/render/frame_graph.cpp
-        src/render/kernel_registry.cpp
+        ${VELOX_RENDER_ENGINE_SOURCES}
+            ${VELOX_FRAME_PIPELINE_SOURCES}
         src/services/file_utils.cpp
         src/services/io_counters.cpp
         src/services/media_probe.cpp
-        src/services/media_packet_pipeline.cpp
-        src/services/segment_execution_libav.cpp
-        src/services/segment_execution.cpp
-        src/services/segment_scheduler.cpp
-        src/services/media_utils.cpp
+        ${VELOX_PACKET_PIPELINE_FACADE_SOURCE}
+            ${VELOX_PACKET_PIPELINE_COMPONENT_SOURCES}
+        ${VELOX_SEGMENT_EXECUTION_LIBAV_SOURCES}
+        ${VELOX_SEGMENT_EXECUTION_SOURCES}
+        ${VELOX_MEDIA_UTILS_SOURCES}
         src/services/ffmpeg_progress_parser.cpp
         src/telemetry/emitter.cpp
     )
@@ -651,20 +727,16 @@ if(VELOX_ENABLE_LIBAV)
         src/plan/render_plan_parser.cpp
         src/audio/audio_plan.cpp
         src/audio/audio_benchmark.cpp
-        src/core/render_engine.cpp
-        src/core/canonical_video_profile.cpp
-        src/core/render_engine_helpers.cpp
-        src/services/frame_pipeline.cpp
-        src/render/frame_graph.cpp
-        src/render/kernel_registry.cpp
+        ${VELOX_RENDER_ENGINE_SOURCES}
+            ${VELOX_FRAME_PIPELINE_SOURCES}
         src/services/file_utils.cpp
         src/services/io_counters.cpp
         src/services/media_probe.cpp
-        src/services/media_packet_pipeline.cpp
-        src/services/segment_execution_libav.cpp
-        src/services/segment_execution.cpp
-        src/services/segment_scheduler.cpp
-        src/services/media_utils.cpp
+        ${VELOX_PACKET_PIPELINE_FACADE_SOURCE}
+            ${VELOX_PACKET_PIPELINE_COMPONENT_SOURCES}
+        ${VELOX_SEGMENT_EXECUTION_LIBAV_SOURCES}
+        ${VELOX_SEGMENT_EXECUTION_SOURCES}
+        ${VELOX_MEDIA_UTILS_SOURCES}
         src/services/ffmpeg_progress_parser.cpp
         src/telemetry/emitter.cpp
     )
@@ -685,11 +757,10 @@ if(VELOX_ENABLE_LIBAV)
     # AVCodecContext. Unit + end-to-end encode test (libav-only).
     add_executable(velox_frame_pipeline_tests
         tests/test_frame_pipeline.cpp
-        src/services/frame_pipeline.cpp
-        src/render/frame_graph.cpp
-        src/render/kernel_registry.cpp
-        src/services/media_packet_pipeline.cpp
-        src/services/segment_execution_libav.cpp
+        ${VELOX_FRAME_PIPELINE_SOURCES}
+        ${VELOX_PACKET_PIPELINE_FACADE_SOURCE}
+            ${VELOX_PACKET_PIPELINE_COMPONENT_SOURCES}
+        ${VELOX_SEGMENT_EXECUTION_LIBAV_SOURCES}
         src/services/segment_execution.cpp
         src/services/media_probe.cpp
         src/services/file_utils.cpp

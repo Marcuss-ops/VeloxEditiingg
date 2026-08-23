@@ -194,6 +194,90 @@ void testRewriteTimelineOffsetAccumulation() {
            "second-segment packet lands at 0.8s + 0.2s = 1s on the shared timeline");
 }
 
+void testRewriteMissingTimestamps() {
+    RewriteHarness h;
+    velox::media::packet::TimestampState state;
+
+    AVPacket ptsOnly{};
+    ptsOnly.pts = 250;
+    ptsOnly.dts = AV_NOPTS_VALUE;
+    int64_t ptsOnlySort = AV_NOPTS_VALUE;
+    expect(velox::media::packet::rewritePacket(
+               ptsOnly, h.input_stream, h.output_stream, 0, 0, 0,
+               10'000'000, state, ptsOnlySort),
+           "pts-only packet uses pts as its trim reference");
+    expect(ptsOnly.pts == 250'000 && ptsOnly.dts == AV_NOPTS_VALUE,
+           "pts-only packet preserves missing dts and rescales pts");
+    expect(ptsOnlySort == ptsOnly.pts,
+           "pts-only packet uses pts as sort key");
+    expect(state.last_pts == ptsOnly.pts && state.last_dts == AV_NOPTS_VALUE,
+           "pts-only packet advances only the pts monotonic state");
+
+    AVPacket dtsOnly{};
+    dtsOnly.pts = AV_NOPTS_VALUE;
+    dtsOnly.dts = 500;
+    int64_t sort = AV_NOPTS_VALUE;
+    expect(velox::media::packet::rewritePacket(
+               dtsOnly, h.input_stream, h.output_stream, 0, 0, 0,
+               10'000'000, state, sort),
+           "dts-only packet uses dts as its trim reference");
+    expect(dtsOnly.pts == AV_NOPTS_VALUE && dtsOnly.dts == 500'000,
+           "dts-only packet preserves missing pts and rescales dts");
+    expect(sort == dtsOnly.dts, "dts-only packet uses dts as sort key");
+
+    AVPacket noTimestamp{};
+    noTimestamp.pts = AV_NOPTS_VALUE;
+    noTimestamp.dts = AV_NOPTS_VALUE;
+    int64_t noTimestampSort = AV_NOPTS_VALUE;
+    expect(!velox::media::packet::rewritePacket(
+               noTimestamp, h.input_stream, h.output_stream, 0, 0, 0,
+               10'000'000, state, noTimestampSort),
+           "packet without pts and dts is rejected");
+}
+
+void testRewriteCombinedSourceAndTimelineOffsets() {
+    RewriteHarness h;
+    velox::media::packet::TimestampState state;
+    AVPacket packet{};
+    packet.pts = 1'700;
+    packet.dts = 1'600;
+    int64_t sort = AV_NOPTS_VALUE;
+    expect(velox::media::packet::rewritePacket(
+               packet, h.input_stream, h.output_stream, 500, 300'000,
+               2'000'000, 1'000'000, state, sort),
+           "packet with source and timeline offsets is accepted");
+    expect(packet.pts == 2'900'000 && packet.dts == 2'800'000,
+           "source start and trim are removed before timeline offset is added");
+    expect(sort == packet.dts,
+           "combined-offset packet keeps dts as its sort key");
+
+    AVPacket outside{};
+    outside.pts = 700;
+    outside.dts = 700;
+    int64_t outsideSort = AV_NOPTS_VALUE;
+    expect(!velox::media::packet::rewritePacket(
+               outside, h.input_stream, h.output_stream, 500, 300'000,
+               2'000'000, 1'000'000, state, outsideSort),
+           "packet before the trimmed source window is rejected");
+    expect(outsideSort == AV_NOPTS_VALUE,
+           "rejected offset packet does not receive a sort key");
+}
+
+void testRewriteSourceWindowBeforeStart() {
+    RewriteHarness h;
+    velox::media::packet::TimestampState state;
+    AVPacket beforeWindow{};
+    beforeWindow.pts = 100;
+    beforeWindow.dts = 100;
+    int64_t sort = AV_NOPTS_VALUE;
+    expect(!velox::media::packet::rewritePacket(
+               beforeWindow, h.input_stream, h.output_stream, 0,
+               200'000, 0, 800'000, state, sort),
+           "packet before a positive source window is rejected");
+    expect(state.last_pts == AV_NOPTS_VALUE && state.last_dts == AV_NOPTS_VALUE,
+           "packet before a source window does not update monotonic state");
+}
+
 // ── Demuxer + demuxAndRewrite against a real fixture ─────────────────────
 
 void testDemuxer(const fs::path& fixture) {
@@ -308,6 +392,9 @@ int main() {
     testRewriteMonotonicDuplicates();
     testRewriteDurationClampAtEnd();
     testRewriteTimelineOffsetAccumulation();
+    testRewriteMissingTimestamps();
+    testRewriteCombinedSourceAndTimelineOffsets();
+    testRewriteSourceWindowBeforeStart();
 
     const fs::path fixture = root / "fixture.mp4";
     expect(makeMuxedVideo(fixture), "muxed video/audio fixture can be created");

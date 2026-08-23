@@ -410,17 +410,103 @@ int main() {
                "non-zero-start source-window output is probeable");
     }
 
+    // ── Small-pool backpressure proof. ────────────────────────────────────
+    // Two slots force the decode/render hand-off to reuse the bounded pool
+    // immediately; all reported queue and pool high-water marks must remain
+    // within that same hard bound while the single encoder/decoder contract
+    // and frame counters remain intact.
+    const fs::path tinyPoolOutput = root / "tiny-pool.mp4";
+    velox::media::FramePipelineConfig tinyPoolConfig = config;
+    tinyPoolConfig.output_path = tinyPoolOutput;
+    tinyPoolConfig.pool_capacity = 2;
+    velox::media::FramePipelineResult tinyPoolResult;
+    expect(velox::media::renderFrames(tinyPoolConfig, &tinyPoolResult),
+           "two-slot pool encode succeeds");
+    if (tinyPoolResult.success) {
+        expect(tinyPoolResult.encode_contexts_created == 1,
+               "two-slot pool keeps one encoder context");
+        expect(tinyPoolResult.decoder_contexts_created == 1,
+               "two-slot pool keeps one decoder context");
+        expect(tinyPoolResult.frames_decoded > 0 &&
+                   tinyPoolResult.frames_encoded > 0,
+               "two-slot pool reports decoded and encoded frames");
+        expect(tinyPoolResult.peak_pool_usage <= 2,
+               "two-slot pool never exceeds its capacity");
+        expect(tinyPoolResult.peak_render_queue <= 2 &&
+                   tinyPoolResult.peak_encode_queue <= 2,
+               "two-slot hand-off queues never exceed pool capacity");
+        const auto& tinyMetrics = tinyPoolResult.pipeline_metrics;
+        expect(tinyMetrics.queue_full_ms <= tinyMetrics.producer_wait_ms,
+               "two-slot backpressure wait is included in producer wait");
+        expect(tinyMetrics.backpressure_ratio >= 0.0 &&
+                   tinyMetrics.backpressure_ratio <= 1.0,
+               "two-slot backpressure ratio stays within [0,1]");
+        expect(hasVideoStream(tinyPoolOutput),
+               "two-slot pool output is probeable");
+    }
+
     // ── Negative cases fail closed. ───────────────────────────────────────
     velox::media::FramePipelineConfig badPool = config;
     badPool.pool_capacity = 1;
     velox::media::FramePipelineResult badResult;
     expect(!velox::media::renderFrames(badPool, &badResult),
            "pool_capacity below 2 fails closed");
+    expect(badResult.error.find("pool_capacity must be in [2, 64]") != std::string::npos,
+           "small pool failure reports the supported capacity range");
+
+    velox::media::FramePipelineConfig oversizedPool = config;
+    oversizedPool.pool_capacity = 65;
+    velox::media::FramePipelineResult oversizedPoolResult;
+    expect(!velox::media::renderFrames(oversizedPool, &oversizedPoolResult),
+           "pool_capacity above 64 fails closed");
+    expect(oversizedPoolResult.error.find("pool_capacity must be in [2, 64]") != std::string::npos,
+           "oversized pool failure reports the supported capacity range");
 
     velox::media::FramePipelineConfig missingInput = config;
     missingInput.input_path = root / "does-not-exist.mp4";
     expect(!velox::media::renderFrames(missingInput, nullptr),
            "missing input fails closed");
+
+    velox::media::FramePipelineConfig invalidWindow = config;
+    invalidWindow.source_in_us = -1;
+    velox::media::FramePipelineResult invalidWindowResult;
+    expect(!velox::media::renderFrames(invalidWindow, &invalidWindowResult),
+           "negative source window fails closed");
+    expect(invalidWindowResult.error.find("source window is invalid") != std::string::npos,
+           "negative source window reports the exact validation error");
+
+    velox::media::FramePipelineConfig negativeDuration = config;
+    negativeDuration.source_duration_us = -1;
+    velox::media::FramePipelineResult negativeDurationResult;
+    expect(!velox::media::renderFrames(negativeDuration, &negativeDurationResult),
+           "negative source duration fails closed");
+    expect(negativeDurationResult.error.find("source window is invalid") != std::string::npos,
+           "negative source duration reports the exact validation error");
+
+    velox::media::FramePipelineConfig overflowingWindow = config;
+    overflowingWindow.source_in_us = std::numeric_limits<int64_t>::max();
+    overflowingWindow.source_duration_us = 1;
+    velox::media::FramePipelineResult overflowingWindowResult;
+    expect(!velox::media::renderFrames(overflowingWindow, &overflowingWindowResult),
+           "overflowing source window fails closed");
+    expect(overflowingWindowResult.error.find("source window is invalid") != std::string::npos,
+           "overflowing source window reports the exact validation error");
+
+    velox::media::FramePipelineConfig missingCodec = config;
+    missingCodec.codec.clear();
+    velox::media::FramePipelineResult missingCodecResult;
+    expect(!velox::media::renderFrames(missingCodec, &missingCodecResult),
+           "empty encoder codec fails closed");
+    expect(missingCodecResult.error.find("requires a codec name") != std::string::npos,
+           "empty codec failure reports the required codec validation");
+
+    velox::media::FramePipelineConfig unknownCodec = config;
+    unknownCodec.codec = "velox_missing_encoder";
+    velox::media::FramePipelineResult unknownCodecResult;
+    expect(!velox::media::renderFrames(unknownCodec, &unknownCodecResult),
+           "unknown encoder fails closed");
+    expect(unknownCodecResult.error.find("encoder not found") != std::string::npos,
+           "unknown encoder reports the exact validation error");
 
     if (hadPath) {
         setenv("PATH", previousPathValue.c_str(), 1);

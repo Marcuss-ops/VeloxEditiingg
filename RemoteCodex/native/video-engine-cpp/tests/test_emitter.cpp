@@ -218,6 +218,48 @@ void testFinalAudioModeResolver() {
     auto wrongCodec = velox::media::resolveFinalAudioMode(verified, true, 698.92, 1.0, 0.0);
     EXPECT_EQ_STR(velox::media::finalAudioModeName(wrongCodec.mode), "ENCODE");
     EXPECT_EQ_STR(wrongCodec.reason, "audio_codec_not_aac");
+
+    verified.codec = "aac";
+    auto zeroExpectedDuration = velox::media::resolveFinalAudioMode(
+        verified, true, 0.0, 1.0, 0.0);
+    EXPECT_EQ_STR(velox::media::finalAudioModeName(zeroExpectedDuration.mode), "ENCODE");
+    EXPECT_EQ_STR(zeroExpectedDuration.reason, "audio_duration_mismatch");
+
+    verified.duration_seconds = 10.25;
+    auto exactDurationTolerance = velox::media::resolveFinalAudioMode(
+        verified, true, 10.0, 1.0, 0.0);
+    EXPECT_EQ_STR(velox::media::finalAudioModeName(exactDurationTolerance.mode), "COPY");
+    EXPECT_EQ_STR(exactDurationTolerance.reason, "verified_final_mix");
+
+    verified.duration_seconds = 10.251;
+    auto beyondDurationTolerance = velox::media::resolveFinalAudioMode(
+        verified, true, 10.0, 1.0, 0.0);
+    EXPECT_EQ_STR(velox::media::finalAudioModeName(beyondDurationTolerance.mode), "ENCODE");
+    EXPECT_EQ_STR(beyondDurationTolerance.reason, "audio_duration_mismatch");
+
+    verified.duration_seconds = 10.0;
+    verified.start_time_seconds = 0.05;
+    auto exactStartTolerance = velox::media::resolveFinalAudioMode(
+        verified, true, 10.0, 1.0, 0.0);
+    EXPECT_EQ_STR(velox::media::finalAudioModeName(exactStartTolerance.mode), "COPY");
+    EXPECT_EQ_STR(exactStartTolerance.reason, "verified_final_mix");
+
+    verified.start_time_seconds = 0.051;
+    auto beyondStartTolerance = velox::media::resolveFinalAudioMode(
+        verified, true, 10.0, 1.0, 0.0);
+    EXPECT_EQ_STR(velox::media::finalAudioModeName(beyondStartTolerance.mode), "ENCODE");
+    EXPECT_EQ_STR(beyondStartTolerance.reason, "audio_start_time_mismatch");
+
+    verified.start_time_seconds = 0.0;
+    auto nearNeutralVolume = velox::media::resolveFinalAudioMode(
+        verified, true, 10.0, 0.999, 0.0);
+    EXPECT_EQ_STR(velox::media::finalAudioModeName(nearNeutralVolume.mode), "ENCODE");
+    EXPECT_EQ_STR(nearNeutralVolume.reason, "final_audio_filter_required");
+
+    auto positiveOffset = velox::media::resolveFinalAudioMode(
+        verified, true, 10.0, 1.0, 0.001);
+    EXPECT_EQ_STR(velox::media::finalAudioModeName(positiveOffset.mode), "ENCODE");
+    EXPECT_EQ_STR(positiveOffset.reason, "final_audio_filter_required");
 }
 
 void testFinalAudioModePacketResolver() {
@@ -257,10 +299,48 @@ void testFinalAudioModePacketResolver() {
     EXPECT_EQ_STR(wrongCodec.reason, "audio_codec_not_aac");
 
     verified.codec = "aac";
+    verified.start_time_seconds = 4.0;
+    auto shiftedPacket = velox::media::resolveFinalAudioModePacket(verified, true, 1.6);
+    EXPECT_EQ_STR(velox::media::finalAudioModeName(shiftedPacket.mode), "COPY");
+    EXPECT_EQ_STR(shiftedPacket.reason, "verified_final_mix");
+
+    verified.start_time_seconds = 0.0;
     verified.duration_seconds = 1.2;
     auto tooShort = velox::media::resolveFinalAudioModePacket(verified, true, 1.6);
     EXPECT_EQ_STR(velox::media::finalAudioModeName(tooShort.mode), "ENCODE");
     EXPECT_EQ_STR(tooShort.reason, "audio_duration_mismatch");
+
+    verified.duration_seconds = 1.55;
+    auto packetTolerance = velox::media::resolveFinalAudioModePacket(verified, true, 1.6);
+    EXPECT_EQ_STR(velox::media::finalAudioModeName(packetTolerance.mode), "COPY");
+    EXPECT_EQ_STR(packetTolerance.reason, "verified_final_mix");
+
+    auto packetZeroExpected = velox::media::resolveFinalAudioModePacket(
+        verified, true, 0.0);
+    EXPECT_EQ_STR(velox::media::finalAudioModeName(packetZeroExpected.mode), "ENCODE");
+    EXPECT_EQ_STR(packetZeroExpected.reason, "audio_duration_mismatch");
+
+    verified.duration_seconds = 1.55;
+    auto packetExactTolerance = velox::media::resolveFinalAudioModePacket(
+        verified, true, 1.6);
+    EXPECT_EQ_STR(velox::media::finalAudioModeName(packetExactTolerance.mode), "COPY");
+    EXPECT_EQ_STR(packetExactTolerance.reason, "verified_final_mix");
+
+    verified.duration_seconds = 1.549;
+    auto packetBelowTolerance = velox::media::resolveFinalAudioModePacket(
+        verified, true, 1.6);
+    EXPECT_EQ_STR(velox::media::finalAudioModeName(packetBelowTolerance.mode), "ENCODE");
+    EXPECT_EQ_STR(packetBelowTolerance.reason, "audio_duration_mismatch");
+
+    // Packet mode intentionally ignores source start_time: rewriting shifts
+    // timestamps in the muxer, so a verified track with a non-zero start is
+    // still COPY when it covers the requested timeline.
+    verified.duration_seconds = 1.6;
+    verified.start_time_seconds = -12.0;
+    auto packetShiftedSource = velox::media::resolveFinalAudioModePacket(
+        verified, true, 1.6);
+    EXPECT_EQ_STR(velox::media::finalAudioModeName(packetShiftedSource.mode), "COPY");
+    EXPECT_EQ_STR(packetShiftedSource.reason, "verified_final_mix");
 }
 
 void testAppendJson() {

@@ -26,12 +26,12 @@ int main() {
     expect(profile.codec_id == 27, "V1 profile uses the H.264 stream codec id");
     expect(profile.width == 1920 && profile.height == 1080,
            "V1 profile is 1920x1080");
-    expect(profile.fps_num == 30 && profile.fps_den == 1,
-           "V1 profile is 30 fps");
+    expect(profile.fps_num == 24 && profile.fps_den == 1,
+           "V1 profile is 24 fps");
     expect(profile.pixel_format == 0, "V1 profile is yuv420p");
     expect(profile.profile == 100, "V1 profile is H.264 High");
     expect(profile.level == 40, "V1 profile is H.264 level 4.0");
-    expect(profile.gop_size == 60, "V1 profile pins GOP 60");
+    expect(profile.gop_size == 48, "V1 profile pins GOP 48");
     expect(profile.max_b_frames == 0, "V1 profile disables B-frames");
     expect(profile.preset == "medium", "V1 profile uses the medium preset");
     expect(profile.crf == 23, "V1 profile pins CRF 23");

@@ -288,6 +288,18 @@ int main() {
     }
     expect(!fs::exists(rejectedOutput),
            "rejected plan publishes no output");
+    {
+        bool rejectedPartial = false;
+        for (const auto& entry : fs::directory_iterator(root)) {
+            const std::string name = entry.path().filename().string();
+            if (name.rfind("rejected-output.partial.", 0) == 0) {
+                rejectedPartial = true;
+                std::cerr << "leftover rejected partial: " << name << "\n";
+            }
+        }
+        expect(!rejectedPartial,
+               "rejected copy-only render cleans up its atomic partial");
+    }
     expect(!fs::exists(ffmpegTouched), "rejected plan never executed ffmpeg");
     expect(!fs::exists(ffprobeTouched), "rejected plan never executed ffprobe");
 
@@ -309,6 +321,10 @@ int main() {
     expect(engine.concatMode() == "packet_copy",
            "concat_mode is packet_copy (in-process packet mux), actual=\"" +
                engine.concatMode() + "\"");
+    expect(engine.copySegments() == static_cast<int64_t>(renderPlan.timeline.size()),
+           "copy-only release gate counts every timeline segment as packet copy");
+    expect(engine.transcodeSegments() == 0,
+           "copy-only release gate reports zero transcoded segments");
 
     // The legacy segment/concat path accumulates temp bytes for every
     // segment_*.mp4 and the final video_only.mp4. Zero here means none of
@@ -396,6 +412,12 @@ int main() {
     if (!sidecar.empty()) {
         expect(contains(sidecar, "\"concat_mode\":\"packet_copy\""),
                "sidecar reports concat_mode packet_copy");
+        expect(contains(sidecar, "\"copy_segments\":2"),
+               "sidecar reports the complete packet-copy segment count");
+        expect(contains(sidecar, "\"transcode_segments\":0"),
+               "sidecar reports zero transcoded segments");
+        expect(contains(sidecar, "\"output_durable\":true"),
+               "sidecar reports durable publication");
         expect(contains(sidecar, "\"temp_bytes\":0"),
                "sidecar reports zero temp bytes");
         expect(contains(sidecar, "packet_mux_ms"),
