@@ -21,7 +21,7 @@ func attachWorkerIdentityAndTimings(workerID string, report *taskrunner.TaskExec
 	// compatibility with existing dashboards. Keep this entire surface at
 	// the explicit legacy projection boundary; RawMetrics remains canonical
 	// for raw facts.
-	legacy := report.LegacyMetrics()
+	legacy := report.Metrics
 	hostname, _ := os.Hostname()
 	display := workerDisplayName(hostname)
 	workerIP := "unknown-ip"

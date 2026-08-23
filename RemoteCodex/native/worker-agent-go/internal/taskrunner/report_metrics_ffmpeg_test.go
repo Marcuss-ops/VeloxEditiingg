@@ -16,13 +16,12 @@ func TestMergeStatsInto_StampsFFmpegAggregate(t *testing.T) {
 		ProcessSpawnMS: 10, FirstOutputMS: 40, ProcessingMS: 500,
 		ExitWaitMS: 2, ProcessWallMS: 545,
 	})
-	report := &TaskExecutionReport{FFmpegProfiles: agg}
-	metrics := map[string]interface{}{}
-	(&TaskRunner{}).mergeStatsInto(report, metrics)
+	report := &TaskExecutionReport{FFmpegProfiles: agg, Metrics: map[string]interface{}{}}
+	(&TaskRunner{}).mergeStatsInto(report)
 
-	value, ok := metrics["ffmpeg.aggregate"].(ffmpegrunner.ProfileAggregate)
+	value, ok := report.Metrics["ffmpeg.aggregate"].(ffmpegrunner.ProfileAggregate)
 	if !ok {
-		t.Fatalf("metrics[ffmpeg.aggregate] missing or wrong type: %#v", metrics["ffmpeg.aggregate"])
+		t.Fatalf("metrics[ffmpeg.aggregate] missing or wrong type: %#v", report.Metrics["ffmpeg.aggregate"])
 	}
 	if value.ProcessCount != 1 {
 		t.Errorf("aggregate ProcessCount = %d, want 1", value.ProcessCount)
@@ -36,20 +35,18 @@ func TestMergeStatsInto_StampsFFmpegAggregate(t *testing.T) {
 }
 
 func TestMergeStatsInto_SkipsEmptyAggregate(t *testing.T) {
-	report := &TaskExecutionReport{FFmpegProfiles: ffmpegrunner.NewAggregator()}
-	metrics := map[string]interface{}{}
-	(&TaskRunner{}).mergeStatsInto(report, metrics)
-	if _, ok := metrics["ffmpeg.aggregate"]; ok {
-		t.Errorf("ffmpeg.aggregate stamped for an empty aggregator: %v", metrics["ffmpeg.aggregate"])
+	report := &TaskExecutionReport{FFmpegProfiles: ffmpegrunner.NewAggregator(), Metrics: map[string]interface{}{}}
+	(&TaskRunner{}).mergeStatsInto(report)
+	if _, ok := report.Metrics["ffmpeg.aggregate"]; ok {
+		t.Errorf("ffmpeg.aggregate stamped for an empty aggregator: %v", report.Metrics["ffmpeg.aggregate"])
 	}
 }
 
 func TestMergeStatsInto_NoAggregatorIsANoOp(t *testing.T) {
-	report := &TaskExecutionReport{}
-	metrics := map[string]interface{}{}
-	(&TaskRunner{}).mergeStatsInto(report, metrics)
-	if _, ok := metrics["ffmpeg.aggregate"]; ok {
-		t.Errorf("ffmpeg.aggregate stamped without an aggregator: %v", metrics["ffmpeg.aggregate"])
+	report := &TaskExecutionReport{Metrics: map[string]interface{}{}}
+	(&TaskRunner{}).mergeStatsInto(report)
+	if _, ok := report.Metrics["ffmpeg.aggregate"]; ok {
+		t.Errorf("ffmpeg.aggregate stamped without an aggregator: %v", report.Metrics["ffmpeg.aggregate"])
 	}
 }
 
@@ -60,19 +57,18 @@ func TestMergeStatsInto_NoAggregatorIsANoOp(t *testing.T) {
 func TestTypedMetricsFromMap_PreservesAggregateInLegacyMap(t *testing.T) {
 	agg := ffmpegrunner.NewAggregator()
 	agg.Add(ffmpegrunner.FFmpegResult{Operation: ffmpegrunner.OperationEncode, ProcessWallMS: 970})
-	report := &TaskExecutionReport{FFmpegProfiles: agg}
-	metrics := map[string]interface{}{}
-	(&TaskRunner{}).mergeStatsInto(report, metrics)
+	report := &TaskExecutionReport{FFmpegProfiles: agg, Metrics: map[string]interface{}{}}
+	(&TaskRunner{}).mergeStatsInto(report)
 
-	typed := TypedMetricsFromMap(metrics)
+	typed := TypedMetricsFromMap(report.Metrics)
 	if typed == nil {
 		t.Fatal("typed metrics are nil")
 	}
 	// The aggregate must survive inside the legacy map used for the
 	// typed projection (it is not a typed field itself).
-	value, ok := metrics["ffmpeg.aggregate"].(ffmpegrunner.ProfileAggregate)
+	value, ok := report.Metrics["ffmpeg.aggregate"].(ffmpegrunner.ProfileAggregate)
 	if !ok || value.ProcessCount != 1 {
-		t.Errorf("aggregate lost after TypedMetricsFromMap round-trip: %#v", metrics["ffmpeg.aggregate"])
+		t.Errorf("aggregate lost after TypedMetricsFromMap round-trip: %#v", report.Metrics["ffmpeg.aggregate"])
 	}
 }
 

@@ -281,7 +281,7 @@ func attachAssetOperations(report *taskrunner.TaskExecutionReport, tracker *asse
 	records := tracker.snapshot()
 	cache := tracker.cacheSnapshot()
 	projectAttemptCacheFacts(report, cache, records)
-	legacy := report.LegacyMetrics()
+	legacy := report.Metrics
 
 	// The per-attempt counters are accumulated by the canonical resolver
 	// sink (single emission point inside CacheResolver.Resolve). They are
@@ -356,10 +356,10 @@ func projectAttemptCacheFacts(report *taskrunner.TaskExecutionReport, cache Atte
 // Master. PhaseMarker.Notes is already persisted with the report; the JSON is
 // self-describing for operators and downstream parsers.
 func attachAssetOperationsToPhaseMarkers(report *taskrunner.TaskExecutionReport) {
-	if report == nil || !report.HasLegacyMetrics() {
+	if report == nil || len(report.Metrics) == 0 {
 		return
 	}
-	legacy := report.LegacyMetrics()
+	legacy := report.Metrics
 	records, ok := legacy["asset_operations"].([]AssetOperationRecord)
 	cacheEnabled, hasCacheEnabled := legacy["cache.enabled"]
 	cacheLookups, hasCacheLookups := legacy["asset.cache.lookups"]

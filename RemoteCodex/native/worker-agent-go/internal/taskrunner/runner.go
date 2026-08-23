@@ -312,32 +312,24 @@ func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskEx
 		gpuSampler.Stop()
 	}
 
-	// Preserve executor telemetry before classifying the outcome. Native
-	// phases enter the canonical Attempt journal here before any report,
-	// receipt, heartbeat, or TaskResult projection. Executors provide
-	// RawMetrics directly; the legacy dotted map is derived from it at
-	// this single boundary for downstream compatibility (Phase 3 will
-	// eliminate the map entirely). Executor projection keys (pipeline.*,
-	// native.*, render_profile.*, ffmpeg_profile, command_plan, etc.) are
-	// merged on top so display consumers see the complete picture.
+	// Preserve executor telemetry before classifying the outcome.
+	// Executors provide RawMetrics directly as the canonical typed
+	// envelope. The executor's projection map (pipeline.*, native.*,
+	// render_profile.*, ffmpeg_profile, command_plan, etc.) is merged
+	// into the display map for dashboard consumers. mergeStatsInto
+	// enriches RawMetrics with cache/blob/FFmpeg facts.
 	report.RawMetrics = result.RawMetrics
 	report.TypedMetrics = result.RawMetrics
-	if result.RawMetrics != nil {
-		legacy := rawMetricsToLegacyMap(result.RawMetrics)
-		// Merge executor projection keys on top of the raw-metrics-derived
-		// map. Executor keys override only if absent (raw metrics are truth).
-		for k, v := range result.Metrics {
-			if _, exists := legacy[k]; !exists {
-				legacy[k] = v
-			}
+	// Build the display map from RawMetrics + executor projection keys.
+	report.Metrics = rawMetricsToLegacyMap(result.RawMetrics)
+	for k, v := range result.Metrics {
+		if _, exists := report.Metrics[k]; !exists {
+			report.Metrics[k] = v
 		}
-		report.AdoptLegacyMetrics(legacy)
-	} else {
-		report.AdoptLegacyMetrics(result.Metrics)
 	}
 	report.Segments = result.Segments
 	if importErr := importExecutorDetailedPhases(rec, result.DetailedPhases); importErr != nil {
-		report.SetLegacyMetric("telemetry.cpp_import_error", importErr.Error())
+		report.Metrics["telemetry.cpp_import_error"] = importErr.Error()
 	}
 
 	// Map internal err into a stable Code for the report.
@@ -405,7 +397,7 @@ func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskEx
 	// Project both legacy dotted metrics and the typed wire mirror on every
 	// outcome. This must not depend on cache/blob providers because native
 	// engine metrics are executor-provided.
-	r.mergeStatsInto(report, report.LegacyMetrics())
+	r.mergeStatsInto(report)
 	r.attachDetailedPhases(rec, report)
 
 	// Build and log the performance report at job completion.

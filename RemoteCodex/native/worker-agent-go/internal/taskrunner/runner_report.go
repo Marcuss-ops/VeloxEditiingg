@@ -41,7 +41,7 @@ func (r *TaskRunner) completeError(rec *telemetry.EventRecorder, report *TaskExe
 	appendPhase(PhaseMarker{Name: PhaseReport, StartedAt: r.now(), CompletedAt: r.now(), Status: "ok", Notes: "failure recorded"})
 	// Preserve the typed mirror on failure as well; native phases often
 	// explain why the executor failed and must remain wire-visible.
-	r.mergeStatsInto(report, report.LegacyMetrics())
+	r.mergeStatsInto(report)
 	r.attachDetailedPhases(rec, report)
 	return *report
 }

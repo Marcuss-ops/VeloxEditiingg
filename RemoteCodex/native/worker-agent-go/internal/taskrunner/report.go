@@ -33,11 +33,10 @@ type TaskExecutionReport struct {
 	ErrorCode   string                 `json:"error_code,omitempty"`
 	ErrorDetail string                 `json:"error_detail,omitempty"`
 	Outputs     []executor.ArtifactRef `json:"outputs,omitempty"`
-	// Metrics is the deprecated legacy compatibility projection. It remains
-	// populated only because unmigrated executors and old consumers still
-	// require dotted keys; migrated producers must use RawMetrics. The
-	// migration is intentionally incremental
-	// the only typed↔map compatibility boundary.
+	// Metrics is a display-only projection map. It carries executor
+	// projection keys (pipeline.*, native.*, render_profile.*) and
+	// provider display facts (cache.*, blob.*, ffmpeg.aggregate) for
+	// dashboard compatibility. RawMetrics is the canonical typed envelope.
 	Metrics  map[string]interface{}   `json:"metrics,omitempty"`
 	Segments []executor.SegmentTiming `json:"segments,omitempty"`
 	// RawMetrics is the canonical typed raw metric envelope. Migrated
@@ -174,48 +173,6 @@ type PhaseMarker struct {
 	Notes       string    `json:"notes,omitempty"`
 }
 
-// LegacyMetrics returns the report's deprecated map through the single
-// compatibility boundary. New consumers must use RawMetrics; callers that
-// still need dotted keys must make that choice explicit at this method.
-func (r *TaskExecutionReport) LegacyMetrics() map[string]interface{} {
-	if r == nil {
-		return nil
-	}
-	if r.Metrics == nil {
-		r.Metrics = make(map[string]interface{})
-	}
-	return r.Metrics
-}
-
-// AdoptLegacyMetrics attaches an executor-produced legacy projection to the
-// report. This is the only report-level hand-off for unmigrated executors;
-// callers must not treat the supplied map as canonical raw telemetry.
-func (r *TaskExecutionReport) AdoptLegacyMetrics(metrics map[string]interface{}) {
-	if r == nil {
-		return
-	}
-	r.Metrics = metrics
-}
-
-// HasLegacyMetrics reports whether the deprecated compatibility projection
-// contains any entries without allocating the map.
-func (r TaskExecutionReport) HasLegacyMetrics() bool { return len(r.Metrics) > 0 }
-
-// LegacyMetric reads one dotted-key value at the compatibility boundary.
-func (r TaskExecutionReport) LegacyMetric(key string) (interface{}, bool) {
-	value, ok := r.Metrics[key]
-	return value, ok
-}
-
-// SetLegacyMetric writes one dotted-key value at the compatibility boundary.
-// This is intentionally named so new code cannot mistake the map for the
-// canonical typed metric envelope.
-func (r *TaskExecutionReport) SetLegacyMetric(key string, value interface{}) {
-	if r == nil {
-		return
-	}
-	r.LegacyMetrics()[key] = value
-}
 
 // RenderDuration returns the canonical execution-phase duration. It is a
 // report lifecycle fact, not a legacy metric-map lookup. The boolean is false
