@@ -123,8 +123,6 @@ func applyCalendarTimestamps(event *CalendarEvent, createdAt, updatedAt sql.Null
 }
 
 // initCalendarSchema has been migrated to migrations/001_initial.sql.
-// Post-migration column adjustments are handled in postMigrationAdjustments().
-// The embedded migrations/sqlite/002_calendar.sql can be removed once confirmed.
 
 // CreateCalendarEvent creates a new calendar event
 func (s *SQLiteStore) CreateCalendarEvent(ctx context.Context, event *CalendarEvent) error {

@@ -10,9 +10,7 @@
 -- schema_migrations table once committed, so re-running skips 021 entirely.
 -- ALTER TABLE ADD COLUMN cannot use IF NOT EXISTS on SQLite versions older
 -- than 3.35 (2021); we use plain ADD COLUMN here and rely on the runner for
--- idempotency. The application's postMigrationAdjustments() in store/sqlite.go
--- also re-applies any missing column via ensureColumn as a defensive measure
--- for partial-migration recovery.
+-- idempotency.
 
 -- 1. Status vocabulary normalization. Idempotent by WHERE filter: only touches
 --    rows whose status is outside the canonical set; a re-run is a no-op.

@@ -141,7 +141,7 @@ func sqliteStorePoolSize() (int, int, time.Duration) {
 //
 //   - migrateOnStart == true (legacy default, tests, default for ops
 //     who do NOT run an external migration tool): run
-//     migrations.RunMigrations + postMigrationAdjustments. The runner
+//     migrations.RunMigrations. The runner
 //     is idempotent (checksums + schema_migrations tracking prevent
 //     double-apply) so a caller that previously held the DB open sees
 //     no change on subsequent opens.
@@ -183,8 +183,7 @@ func NewSQLiteStoreFromHandle(handle *database.Handle, path string, migrateOnSta
 		// Forward-only tool mode: an external tool owns the schema.
 		// Log current applied version (or "untouched DB") so operators
 		// running that tool can see what version is in the DB at
-		// boot. The runner is intentionally NOT invoked and
-		// postMigrationAdjustments is intentionally NOT invoked.
+		// boot. The runner is intentionally NOT invoked.
 		logSQLiteForwardOnlySummary(db, path)
 		return s, nil
 	}
@@ -197,11 +196,6 @@ func NewSQLiteStoreFromHandle(handle *database.Handle, path string, migrateOnSta
 	// opens.
 	if err := migrations.RunMigrations(db, migrations.SQLiteMigrationsFS(), "sqlite"); err != nil {
 		return nil, fmt.Errorf("store: run migrations: %w", err)
-	}
-
-	// Post-migration schema adjustments (ensureColumn for existing columns).
-	if err := s.postMigrationAdjustments(); err != nil {
-		return nil, fmt.Errorf("store: post-migration: %w", err)
 	}
 
 	return s, nil
@@ -280,46 +274,11 @@ func (s *SQLiteStore) Close() error {
 	return s.db.Close()
 }
 
-// postMigrationAdjustments handles schema additions that can't be done via CREATE TABLE IF NOT EXISTS
-// (e.g., adding columns to existing tables, backfilling). This runs after all migrations.
-func (s *SQLiteStore) postMigrationAdjustments() error {
-	// Calendar: backfill schema additions
-	calendarColumns := []struct {
-		table      string
-		column     string
-		definition string
-	}{
-		{"calendar_events", "external_id", "TEXT DEFAULT ''"},
-		{"calendar_events", "source", "TEXT DEFAULT ''"},
-		{"calendar_events", "status", "TEXT DEFAULT 'draft'"},
-		{"calendar_events", "titles_json", "TEXT DEFAULT '[]'"},
-		{"calendar_events", "script_text", "TEXT DEFAULT ''"},
-		{"calendar_events", "voiceover_paths_json", "TEXT DEFAULT '[]'"},
-		{"calendar_events", "category", "TEXT DEFAULT ''"},
-		{"calendar_events", "job_id", "TEXT DEFAULT ''"},
-		{"calendar_events", "job_status", "TEXT DEFAULT ''"},
-		{"calendar_events", "queued_at", "TEXT"},
-		{"calendar_events", "queue_error", "TEXT DEFAULT ''"},
-	}
-	for _, col := range calendarColumns {
-		if err := s.ensureColumn(col.table, col.column, col.definition); err != nil {
-			return err
-		}
-	}
-
-	// Calendar output: ensure output result columns
-	if err := s.ensureColumn("calendar_events", "output_video_path", "TEXT"); err != nil {
-		return err
-	}
-	if err := s.ensureColumn("calendar_events", "output_video_url", "TEXT"); err != nil {
-		return err
-	}
-	if err := s.ensureColumn("calendar_events", "publish_status", "TEXT"); err != nil {
-		return err
-	}
-
-	return nil
-}
+// postMigrationAdjustments and its helpers (ensureColumn, columnExists)
+// have been removed. All columns formerly added by ensureColumn are
+// already defined in migration 001_initial.sql (calendar_events table
+// includes every column). The migrations.RunMigrations path is the
+// single source of schema truth.
 
 func toISO(v any) string {
 	switch t := v.(type) {
@@ -338,47 +297,6 @@ func toISO(v any) string {
 
 func asString(v any) string {
 	return payload.AsString(v)
-}
-
-func (s *SQLiteStore) columnExists(table, column string) (bool, error) {
-	rows, err := s.db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
-	if err != nil {
-		return false, err
-	}
-	defer rows.Close()
-
-	var (
-		cid       int
-		name      string
-		dataType  string
-		notnull   int
-		dfltValue sql.NullString
-		pk        int
-	)
-	for rows.Next() {
-		if err := rows.Scan(&cid, &name, &dataType, &notnull, &dfltValue, &pk); err != nil {
-			return false, fmt.Errorf("scan table info for %s: %w", table, err)
-		}
-		if name == column {
-			return true, nil
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return false, fmt.Errorf("iterate table info for %s: %w", table, err)
-	}
-	return false, nil
-}
-
-func (s *SQLiteStore) ensureColumn(table, column, definition string) error {
-	exists, err := s.columnExists(table, column)
-	if err != nil {
-		return err
-	}
-	if exists {
-		return nil
-	}
-	_, err = s.db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, definition))
-	return err
 }
 
 // Ping tests the database connection
