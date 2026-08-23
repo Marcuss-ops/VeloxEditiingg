@@ -32,6 +32,7 @@ type SubmitJobRequest struct {
 	// here; matches the creator path's tolerance.
 	ScriptText string `json:"script_text,omitempty"`
 	AudioURL   string `json:"audio_url,omitempty"`
+	CopyOnly   bool   `json:"copy_only,omitempty"`
 
 	// Scenes is the scene list. Each scene drives one composited
 	// segment. At least one scene is required; max MaxScenes (10k).
