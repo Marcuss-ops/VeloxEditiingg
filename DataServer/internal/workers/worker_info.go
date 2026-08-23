@@ -112,13 +112,6 @@ type Worker struct {
 	Capacity WorkerCapacity `json:"capacity"`
 }
 
-// WorkerInfo is retained as a source-compatible alias during the migration
-// of external consumers. New code must use Worker. The alias does not create
-// a second model or a second identity representation.
-//
-// Deprecated: use Worker.
-type WorkerInfo = Worker
-
 // UnmarshalJSON restores the typed registry and performs the one-time
 // persistence-boundary migration from the former `capabilities` JSON key.
 // No legacy map is retained on Worker; malformed legacy data fails closed.

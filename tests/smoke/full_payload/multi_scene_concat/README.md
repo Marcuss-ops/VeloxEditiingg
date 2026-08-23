@@ -15,7 +15,7 @@ In addition, the smoke records **CPU/RAM/disk** measurement: a worker metrics
 snapshot is taken BEFORE submit and AFTER `SUCCEEDED`, then the harness reports
 `disk_free_bytes` delta, `cpu_utilization_ratio`, and `memory_used_bytes` for
 the duration of the run. The metrics map is sourced from
-`DataServer/internal/handlers/server/api/workers_dto.go §WorkerInfo.Metrics`.
+`DataServer/internal/handlers/server/api/workers_dto.go §Worker.Metrics`.
 
 ## Quick start
 

@@ -64,10 +64,10 @@ type WorkerHello struct {
 	EngineVersion   string `json:"engine_version,omitempty"`
 	CredentialHash  string `json:"credential_hash,omitempty"`
 	// WorkerClass is the operator-assigned fleet class (RW-PROD-005 §3 A9).
-	// Binds from VELOX_WORKER_CLASS env on worker side → master WorkerInfo.Class.
+	// Binds from VELOX_WORKER_CLASS env on worker side → master Worker.Class.
 	WorkerClass string `json:"worker_class,omitempty"`
 	// RolloutGroup is the operator-assigned rollout cohort (RW-PROD-005 §3 A9).
-	// Binds from VELOX_ROLLOUT_GROUP env on worker side → master WorkerInfo.RolloutGroup.
+	// Binds from VELOX_ROLLOUT_GROUP env on worker side → master Worker.RolloutGroup.
 	RolloutGroup string                 `json:"rollout_group,omitempty"`
 	Capabilities map[string]interface{} `json:"capabilities,omitempty"`
 }

@@ -6,7 +6,7 @@
 // is intentionally tiny — Go convention: consumer interfaces
 // are smaller than producer interfaces. Production wires live
 // implementations:
-//   - lease store    → WorkerInfo.Drain transient (Step 6/15 owner)//   - worker exec   → BackendSSHClient (the production SSH adapter)
+//   - lease store    → Worker.Drain transient (Step 6/15 owner)//   - worker exec   → BackendSSHClient (the production SSH adapter)
 //   - drive uploader → integrations/drive.Service.UploadFile
 //   - asset resolver → the production asset-bundle lookup; no stub is
 //     permitted in the production composition
@@ -122,7 +122,7 @@ type SmokePayload struct {
 // ── Consumer interfaces ─────────────────────────────────────────────
 
 // BackendLeaseStore is the typed surface for "acquire and release
-// a smoke lease on a worker". Production wires a WorkerInfo.Drain
+// a smoke lease on a worker". Production wires a Worker.Drain
 // transient implementation (SetWorkerDrain(true) on acquire;
 // SetWorkerDrain(false) on release) which excludes the worker
 // from real-job placement for the smoke duration.

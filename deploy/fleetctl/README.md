@@ -140,7 +140,7 @@ VELOX_MASTER_URL=https://velox.example.com:8000 scripts/fleetctl drain velox-wor
 # scripts/fleetctl drain velox-worker-13197 "manual drain for cert rotation"
 ```
 
-Sets the worker's `WorkerInfo.Drain = true` via the Step 6/15
+Sets the worker's `Worker.Drain = true` via the Step 6/15
 mutation endpoint, then polls the `fleet_operations` ledger
 until terminal status. Default wait budget: **10 min**.
 

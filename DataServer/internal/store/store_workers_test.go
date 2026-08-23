@@ -1,5 +1,5 @@
 // Package store_test verifies the persistence contract for
-// worker_flags.raw_json: it must NOT carry WorkerInfo vocabulary
+// worker_flags.raw_json: it must NOT carry Worker vocabulary
 // (SessionActive, ConnectionStatus, etc.) so the persistence-leak
 // vector fixed by workers.ScrubForPersist cannot be reintroduced via
 // the revoke path. This file exists as a reviewer-flagged mitigation
@@ -18,16 +18,16 @@ import (
 	"velox-server/internal/store"
 )
 
-// workerInfoVocabulary is the set of WorkerInfo JSON keys that MUST NOT
+// workerInfoVocabulary is the set of Worker JSON keys that MUST NOT
 // appear in worker_flags.raw_json. If any of these leak into the audit
 // blob, a future "harmonization" refactor would re-introduce the
 // read-time-derived state leak that ScrubForPersist is meant to prevent
 // — but without a matching read-time hydrator on this side (none
 // exists and none should exist).
-// NOTE: keep this in lockstep with the JSON tags on workers.WorkerInfo
-// (DataServer/internal/workers/worker_info.go). Every WorkerInfo field
+// NOTE: keep this in lockstep with the JSON tags on workers.Worker
+// (DataServer/internal/workers/worker_info.go). Every Worker field
 // MUST appear here unless it is one of the three allowed audit keys
-// ({worker_id, revoked, updated_at}). The three stale WorkerInfo keys
+// ({worker_id, revoked, updated_at}). The three stale keys
 // caught only by a future review (worker_name, status, ...) MUST be
 // added here the same day the corresponding struct field is added.
 var workerInfoVocabulary = []string{
@@ -102,9 +102,9 @@ func readWorkerFlagRawJSON(t *testing.T, s *store.SQLiteStore, workerID string) 
 
 // TestSetWorkerRevoked_RawJsonShapeContract pins the contract on
 // worker_flags.raw_json after a revoke call: it contains EXACTLY
-// {worker_id, revoked, updated_at} and NOTHING from the WorkerInfo
+// {worker_id, revoked, updated_at} and NOTHING from the Worker
 // vocabulary. Any future regression that re-introduces the sibling
-// leak vector (e.g. by marshalling a *workers.WorkerInfo into the blob,
+// leak vector (e.g. by marshalling a *workers.Worker into the blob,
 // or by "harmonizing" worker_flags.raw_json with workers.raw_json)
 // will be caught here.
 //
@@ -141,10 +141,10 @@ func TestSetWorkerRevoked_RawJsonShapeContract(t *testing.T) {
 		}
 	}
 
-	// (b) Parsed-key check: must NOT contain any WorkerInfo vocabulary key.
+	// (b) Parsed-key check: must NOT contain any Worker vocabulary key.
 	for _, forbidden := range workerInfoVocabulary {
 		if _, leaked := m[forbidden]; leaked {
-			t.Errorf("LEAK VECTOR: worker_flags.raw_json contains WorkerInfo key %q; blob=%s", forbidden, raw)
+			t.Errorf("LEAK VECTOR: worker_flags.raw_json contains Worker key %q; blob=%s", forbidden, raw)
 		}
 	}
 
@@ -159,7 +159,7 @@ func TestSetWorkerRevoked_RawJsonShapeContract(t *testing.T) {
 
 // TestSetWorkerRevoked_UnrevokeRoundTripPreservesShape pins that
 // UnrevokeWorker writes the same shape, so a revoked→unrevoked→revoked
-// sequence never accidentally conjures a WorkerInfo-shaped blob.
+// sequence never accidentally conjures a Worker-shaped blob.
 func TestSetWorkerRevoked_UnrevokeRoundTripPreservesShape(t *testing.T) {
 	s := newWorkersFlagStore(t)
 	workerID := "worker-roundtrip-1"

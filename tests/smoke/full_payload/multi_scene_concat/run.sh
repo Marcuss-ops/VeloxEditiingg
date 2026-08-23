@@ -286,7 +286,7 @@ log_info "M2M client_id=${PROVISIONED_CLIENT_ID}"
 
 # ─── Pre-flight: snap worker metrics BEFORE submit ─────────────────────────
 # GET /api/v1/workers/{worker_id} returns the typed worker record with
-# .metrics = ParseWorkerMetrics(WorkerInfo.Metrics); the typed struct
+# .metrics = ParseWorkerMetrics(Worker.Metrics); the typed struct
 # exposes cpu_utilization_ratio, memory_used_bytes, disk_free_bytes,
 # process_rss_bytes, load_average. We snapshot the raw JSON metrics map so
 # the post-submit delta calculation does not lose any sampler-derived keys.

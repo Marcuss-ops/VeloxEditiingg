@@ -168,7 +168,7 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 	// returns moduleDeps.Workers, so the FleetController and Registry
 	// are both available here. The mutations handler publishes via
 	// FleetController.PublishOperation and synchronously flips
-	// WorkerInfo.Drain / WorkerInfo.Quarantined via the Registry so the
+	// Worker.Drain / Worker.Quarantined via the Registry so the
 	// placement matcher immediately excludes the worker.
 	//
 	// Nil-tolerant: a partial-boot FleetController keeps the POST
@@ -234,7 +234,7 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 	//
 	// Wired deps:
 	//   - SSH (Level A host + Level B docker inspect) — real SSH via sharedSSH
-	//   - Registry (Level C) — in-process WorkerInfo read
+	//   - Registry (Level C) — in-process Worker read
 	//   - Deployments (Level B image_digest_match) — SQLite ledger
 	//   - Smoke (Level D) — nil; the operator sees "smoke runner not wired"
 	if fleetDep != nil && m != nil && m.Workers != nil {

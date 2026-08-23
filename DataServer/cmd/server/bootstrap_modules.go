@@ -27,7 +27,7 @@ import (
 )
 
 // workerRegistryAdapter adapts *workers.Registry to the
-// observability.WorkerReader interface, converting WorkerInfo
+// observability.WorkerReader interface, converting Worker
 // structs to map[string]any.
 type workerRegistryAdapter struct {
 	reg   *workers.Registry

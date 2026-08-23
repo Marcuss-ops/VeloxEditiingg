@@ -14,7 +14,7 @@ import (
 //
 // SECURITY / SHAPE CONTRACT — read before "harmonizing" with workers.raw_json:
 // The `raw_json` blob here is INTENTIONALLY a separate three-key audit
-// shape ({worker_id, revoked, updated_at}), NOT a WorkerInfo copy. WorkerInfo
+// shape ({worker_id, revoked, updated_at}), NOT a Worker copy. Worker
 // carries read-time-hydrated fields (SessionActive, ConnectionStatus) that
 // must NEVER be persisted (see workers.ScrubForPersist) — adding them to
 // this blob would reintroduce the persistence-leak class fixed by that

@@ -2,19 +2,10 @@ package workers
 
 import (
 	"encoding/json"
-	"reflect"
 	"testing"
 
 	"velox-shared/identity"
 )
-
-func TestWorkerInfoIsCanonicalWorkerAlias(t *testing.T) {
-	var canonical Worker
-	var compatibility WorkerInfo
-	if reflect.TypeOf(canonical) != reflect.TypeOf(compatibility) {
-		t.Fatalf("WorkerInfo must alias Worker: canonical=%T compatibility=%T", canonical, compatibility)
-	}
-}
 
 func TestWorkerJSONKeepsTypedWorkerIDAsString(t *testing.T) {
 	worker := Worker{WorkerID: identity.ParseWorkerID("worker-json-001")}

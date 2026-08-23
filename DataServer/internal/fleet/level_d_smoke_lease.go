@@ -15,12 +15,12 @@ import (
 
 // RegistryDrainLease adapts the in-process workersreg.Registry
 // to the BackendLeaseStore surface: AcquireSmokeLease flips
-// WorkerInfo.Drain=true (excluding the worker from real-job
+// Worker.Drain=true (excluding the worker from real-job
 // placement for the smoke duration); ReleaseSmokeLease restores
 // Drain=false. Symmetric with Step 6/15's mutations handler
 // which calls SetWorkerDrain directly.
 //
-// Audit-only invariant: when WorkerInfo.Drain is set transiently
+// Audit-only invariant: when Worker.Drain is set transiently
 // by smoke, the Worker's Health derivation (Step 3/15) reflects
 // DRAINING on the next poll. The deferred ReleaseSmokeLease
 // in LevelDSmokeExecutor's Phase 3 cleanup ensures the worker

@@ -249,13 +249,13 @@ type WorkerConfig struct {
 
 	// WorkerClass is the operator-assigned fleet class (cpu-xlarge, gpu-a100,
 	// mixed, io, ...). Binds from VELOX_WORKER_CLASS env. Surfaces in Hello
-	// metadata → master WorkerInfo.Class → GET /api/v1/workers?class= filter.
+	// metadata → master Worker.Class → GET /api/v1/workers?class= filter.
 	// RW-PROD-005 §3 A9.
 	WorkerClass string `json:"worker_class,omitempty"`
 
 	// RolloutGroup is the operator-assigned rollout cohort (v3.4, canary,
 	// holdout, ...). Binds from VELOX_ROLLOUT_GROUP env. Surfaces in Hello
-	// metadata → master WorkerInfo.RolloutGroup → GET /api/v1/workers?rollout_group= filter.
+	// metadata → master Worker.RolloutGroup → GET /api/v1/workers?rollout_group= filter.
 	// RW-PROD-005 §3 A9.
 	RolloutGroup string `json:"rollout_group,omitempty"`
 

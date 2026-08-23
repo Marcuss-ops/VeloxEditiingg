@@ -5,7 +5,7 @@
 //	Phase 1 — Resolve asset       (BackendAssetResolver)
 //	Phase 2 — Insert PENDING row  (BackendSmokeRuns)
 //	Phase 3 — Acquire smoke lease (BackendLeaseStore; sets
-//	                                   WorkerInfo.Drain=true so
+//	                                   Worker.Drain=true so
 //	                                   placement excludes the worker
 //	                                   during the test)
 //	Phase 4 — Download asset      (BackendWorkerExec; SSH +
@@ -174,7 +174,7 @@ func (e *LevelDSmokeExecutor) Execute(ctx context.Context, op *store.Operation) 
 	}
 	log.Printf("[SMOKE] worker=%s run=%s asset_id=%s pickup=%s QUEUED", op.WorkerID, runID, payload.AssetID, pickupURL)
 	// ── Phase 3: acquire smoke lease ─────────────────────────────
-	// Symmetric with Step 6/15's drain — WorkerInfo.Drain=true
+	// Symmetric with Step 6/15's drain — Worker.Drain=true
 	// excludes the worker from real-job placement for the smoke
 	// duration. Deferred release fires on every return path so a
 	// panic / cleanup-skipped state still recovers the worker.

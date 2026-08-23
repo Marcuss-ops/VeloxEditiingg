@@ -64,7 +64,7 @@ type HealthProbeDeps struct {
 	// "no deployment_records row to compare".
 	Deployments fleet.BackendDeploymentRepo
 	// Registry — required for ProbeLevelC (in-process
-	// WorkerInfo read). Production wires
+	// Worker read). Production wires
 	// *fleet.RealRegistryLevelCGater.
 	Registry fleet.HealthLevelCGater
 	// Smoke — required for ProbeLevelD (level-d smoke test).

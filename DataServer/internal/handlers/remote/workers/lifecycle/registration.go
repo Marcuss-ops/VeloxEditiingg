@@ -11,7 +11,7 @@ import (
 // credential validation via the worker_credentials table.
 //
 // Flow:
-//  1. Parse WorkerInfo from JSON body.
+//  1. Parse Worker metadata from JSON body.
 //  2. If Credential is provided:
 //     a. Check HasWorkerCredential(workerID).
 //     b. If credential exists → ValidateWorkerCredential(workerID, credential):
@@ -27,7 +27,7 @@ func (h *Handler) RegisterV2Handler() gin.HandlerFunc {
 		var body struct {
 			WorkerID   string `json:"worker_id"`
 			Credential string `json:"credential,omitempty"`
-			// WorkerInfo fields forwarded from the worker's buildHello.
+			// Worker fields forwarded from the worker's buildHello.
 			WorkerName      string                 `json:"worker_name,omitempty"`
 			Hostname        string                 `json:"hostname,omitempty"`
 			IP              string                 `json:"ip,omitempty"`

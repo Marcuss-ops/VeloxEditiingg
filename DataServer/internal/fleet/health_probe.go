@@ -24,7 +24,7 @@
 //
 // Each level is independent: a Level A failure (SSH unreachable)
 // does NOT block Level C (which reads in-process cached
-// WorkerInfo) or Level B's image_digest_match (which queries
+// Worker) or Level B's image_digest_match (which queries
 // deployment_records without SSH). The probes return CheckResult
 // per sub-check so the operator dashboard can surface WHERE the
 // level failed — not just THAT the level failed.
@@ -127,7 +127,7 @@ const (
 	ThresholdMemAvailMin    = 256  // MB; smaller → fail
 	ThresholdDiskUsedMax    = 85   // pct; larger → fail
 	ThresholdRestartLoopMax = 5    // RestartCount
-	HeartbeatFreshnessWin   = 150  // seconds; matches WorkerInfo.ConnectionStatus derivation
+	HeartbeatFreshnessWin   = 150  // seconds; matches Worker.ConnectionStatus derivation
 )
 
 // newReport allocates a fresh HealthReport skeleton with the
