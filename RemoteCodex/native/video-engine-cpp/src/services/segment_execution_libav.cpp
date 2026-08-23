@@ -60,6 +60,8 @@ MediaSignature mediaSignatureFromStream(const AVStream* stream) {
         signature.channel_layout = std::to_string(parameters->channel_layout);
 #endif
     }
+    signature.time_base_num = stream->time_base.num;
+    signature.time_base_den = stream->time_base.den;
     return signature;
 }
 

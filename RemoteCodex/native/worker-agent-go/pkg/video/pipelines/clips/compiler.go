@@ -13,9 +13,12 @@ import (
 
 // Request is the validated input for the clips.v1 pipeline.
 type Request struct {
-	Clips    []ClipInput
-	AudioURL string
-	Fit      string // "contain", "cover", "stretch"
+	Clips                   []ClipInput
+	AudioURL                string
+	Fit                     string // "contain", "cover", "stretch"
+	CopyOnly                bool
+	WatermarkAlreadyApplied bool
+	WatermarkRequested      bool
 }
 
 // ClipInput is a single clip with URL and duration.
@@ -26,6 +29,9 @@ type ClipInput struct {
 
 // Validate checks raw input parameters for the clips.v1 pipeline.
 func Validate(input map[string]interface{}) error {
+	if !toBoolDefault(input["copy_only"], false) {
+		return fmt.Errorf("clips.v1: copy-only policy is required; set copy_only=true")
+	}
 	clips := input["clips"]
 	if clips == nil {
 		return fmt.Errorf("clips.v1: clips array is required")
@@ -61,12 +67,10 @@ func Compile(ctx context.Context, jobID string, input map[string]interface{}, ou
 	// Build timeline
 	timeline_items := make([]plan.TimelineItem, len(req.Clips))
 	for i, clip := range req.Clips {
-		transform := &plan.TransformSpec{ScaleMode: req.Fit}
 		timeline_items[i] = plan.TimelineItem{
 			Source:          plan.MediaSource{Type: "video", URL: clip.URL},
 			DurationSeconds: clip.Duration,
 			IncludeAudio:    req.AudioURL == "",
-			Transform:       transform,
 		}
 	}
 
@@ -80,19 +84,25 @@ func Compile(ctx context.Context, jobID string, input map[string]interface{}, ou
 	}
 
 	return &plan.RenderPlan{
-		Version:     1,
-		JobID:       jobID,
-		Canvas:      plan.DefaultCanvas(),
-		Timeline:    timeline_items,
-		AudioTracks: audioTracks,
-		OutputPath:  outputPath,
+		Version:                 1,
+		JobID:                   jobID,
+		Canvas:                  plan.DefaultCanvas(),
+		CopyOnly:                true,
+		WatermarkAlreadyApplied: req.WatermarkAlreadyApplied,
+		WatermarkRequested:      req.WatermarkRequested,
+		Timeline:                timeline_items,
+		AudioTracks:             audioTracks,
+		OutputPath:              outputPath,
 	}, nil
 }
 
 func parseRequest(input map[string]interface{}) *Request {
 	req := &Request{
-		AudioURL: toString(input["audio_url"]),
-		Fit:      toStringDefault(input["fit"], "contain"),
+		AudioURL:                toString(input["audio_url"]),
+		Fit:                     toStringDefault(input["fit"], "contain"),
+		CopyOnly:                toBoolDefault(input["copy_only"], false),
+		WatermarkAlreadyApplied: toBoolDefault(input["watermark_already_applied"], false),
+		WatermarkRequested:      toBoolDefault(input["watermark_requested"], false),
 	}
 
 	if clips, ok := input["clips"].([]interface{}); ok {
@@ -113,6 +123,13 @@ func parseRequest(input map[string]interface{}) *Request {
 	}
 
 	return req
+}
+
+func toBoolDefault(v interface{}, fallback bool) bool {
+	if b, ok := v.(bool); ok {
+		return b
+	}
+	return fallback
 }
 
 func toString(v interface{}) string {

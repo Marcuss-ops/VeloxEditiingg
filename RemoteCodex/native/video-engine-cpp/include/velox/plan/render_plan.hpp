@@ -85,6 +85,8 @@ struct RenderPlan {
     std::string job_id;
     CanvasSpec canvas;
     bool copy_only{false};
+    bool watermark_already_applied{false};
+    bool watermark_requested{false};
     // Mixed renderer: the copy-only assembly path. Each video segment is
     // resolved independently against the canonical output profile and either
     // stream-copied (PACKET_COPY) or rejected (REJECT — the job fails

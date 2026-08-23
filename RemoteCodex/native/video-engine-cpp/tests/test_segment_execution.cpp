@@ -26,6 +26,8 @@ velox::media::MediaSignature videoSignature() {
     signature.pixel_format = 0;
     signature.frame_rate_num = 30;
     signature.frame_rate_den = 1;
+    signature.time_base_num = 1;
+    signature.time_base_den = 90000;
     signature.extradata = {1, 2, 3};
     return signature;
 }
@@ -92,6 +94,14 @@ int main() {
            "frame rate mismatch is rejected (copy-only)");
     expect(decision.reason == "media signature mismatch: frame_rate",
            "frame rate mismatch identifies frame_rate");
+
+    request.source = target;
+    request.source.time_base_den = 48000;
+    decision = velox::media::resolveSegmentExecution(request);
+    expect(decision.mode == SegmentExecutionMode::Reject,
+           "timebase mismatch is rejected (copy-only)");
+    expect(decision.reason == "media signature mismatch: time_base",
+           "timebase mismatch identifies time_base");
 
     request.source = target;
     request.source.profile = 66; // FF_PROFILE_H264_BASELINE

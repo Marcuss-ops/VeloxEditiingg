@@ -6,15 +6,17 @@ package plan
 // RenderPlan is the V1 contract for video rendering.
 // All pipeline compilers produce this; the C++ engine consumes it.
 type RenderPlan struct {
-	Version     int             `json:"version"`
-	JobID       string          `json:"job_id"`
-	Canvas      CanvasSpec      `json:"canvas"`
-	CopyOnly    bool            `json:"copy_only,omitempty"`
-	Timeline    []TimelineItem  `json:"timeline"`
-	AudioTracks []AudioTrack    `json:"audio_tracks"`
-	Layers      []Layer         `json:"layers,omitempty"`
-	Subtitles   []SubtitleTrack `json:"subtitle_tracks,omitempty"`
-	OutputPath  string          `json:"output_path"`
+	Version                 int             `json:"version"`
+	JobID                   string          `json:"job_id"`
+	Canvas                  CanvasSpec      `json:"canvas"`
+	CopyOnly                bool            `json:"copy_only,omitempty"`
+	WatermarkAlreadyApplied bool            `json:"watermark_already_applied,omitempty"`
+	WatermarkRequested      bool            `json:"watermark_requested,omitempty"`
+	Timeline                []TimelineItem  `json:"timeline"`
+	AudioTracks             []AudioTrack    `json:"audio_tracks"`
+	Layers                  []Layer         `json:"layers,omitempty"`
+	Subtitles               []SubtitleTrack `json:"subtitle_tracks,omitempty"`
+	OutputPath              string          `json:"output_path"`
 }
 
 // CanvasSpec defines the output video dimensions and frame rate.
