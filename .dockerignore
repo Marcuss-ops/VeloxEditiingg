@@ -27,3 +27,14 @@ RemoteCodex/native/video-engine-cpp/build*
 *.db-shm
 *.db-wal
 *.log
+
+# Large local media and generated build evidence are never Docker inputs.
+*.mp4
+*.mov
+*.mkv
+*.webm
+**/tmp
+**/output
+**/artifacts
+**/coverage
+docs/benchmarks/evidence
