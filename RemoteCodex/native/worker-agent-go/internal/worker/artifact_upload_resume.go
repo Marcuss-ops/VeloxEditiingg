@@ -204,10 +204,14 @@ func (w *Worker) resumeDeclaration(ctx context.Context, entries []spool.SpoolEnt
 			w.logger.Warn("[ARTIFACT_RESUME] output_kind empty spool=%s — cannot rebuild declare manifest", e.SpoolID)
 			return
 		}
+		mimeType := mimeForOutputKind(e.OutputKind)
+		if e.OutputKind == "engine_progress_sidecar" {
+			mimeType = "application/json"
+		}
 		manifests = append(manifests, &pb.OutputManifest{
 			OutputKind:     e.OutputKind,
 			LogicalName:    filepath.Base(e.LocalPath),
-			MimeType:       mimeForOutputKind(e.OutputKind),
+			MimeType:       mimeType,
 			SizeBytes:      e.SizeBytes,
 			Sha256:         e.SHA256,
 			WorkerSpoolKey: e.WorkerSpoolKey,

@@ -25,6 +25,7 @@ type (
 	SampledHost      = collectors.SampledHost
 	CPUCapacity      = collectors.CPUCapacity
 	DiskGC           = collectors.DiskGC
+	GPUProbe         = collectors.GPUProbe
 )
 
 // Constructor/function wrappers keep the root package's public API
@@ -48,3 +49,8 @@ func DiskFreeAt(path string) (int64, error) { return collectors.DiskFreeAt(path)
 // NewDiskGC constructs the scratch-tree garbage collector. See
 // collectors.NewDiskGC.
 func NewDiskGC(workDir string) *DiskGC { return collectors.NewDiskGC(workDir) }
+
+// DetectGPU reports whether a supported GPU is visible to the worker. The
+// implementation lives in the GPU collector; this wrapper preserves the
+// root telemetry facade as the stable caller boundary.
+func DetectGPU() bool { return collectors.GPUProbe{}.DetectGPU() }

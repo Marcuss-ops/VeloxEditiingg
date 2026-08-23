@@ -58,6 +58,7 @@ func mustPayloadV2Map(t *testing.T) map[string]any {
 		CompiledRenderPlanJSON: "{}", CompiledRenderPlanSHA256: "compiled-plan-sha",
 		ScenesJSON:     "[]",
 		Scenes:         []map[string]any{{"id": "scene-1"}},
+		Clips:          []map[string]any{{"url": "velox-asset://clip-1", "duration": 5}},
 		Layers:         []rendermanifest.Layer{{ID: "layer-1", Type: "text"}},
 		Items:          []map[string]any{{"role": "scene"}},
 		VoiceoverPaths: []string{"voiceover.mp3"},

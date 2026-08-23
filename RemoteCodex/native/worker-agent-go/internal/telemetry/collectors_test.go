@@ -11,6 +11,16 @@ type fakeCacheSource struct{ facts CacheFacts }
 
 func (f *fakeCacheSource) CacheFacts() CacheFacts { return f.facts }
 
+func TestCollectorsFacade_PreservesSamplerAndGPUContract(t *testing.T) {
+	sampler := NewResourceSampler("", "", "/", time.Second, 1)
+	if sampler == nil {
+		t.Fatal("NewResourceSampler returned nil")
+	}
+	// The root facade must expose the dedicated GPU boundary without
+	// requiring callers to import the implementation package.
+	_ = DetectGPU()
+}
+
 func TestCollectorRegistry_CollectInRegistrationOrder(t *testing.T) {
 	registry := NewCollectorRegistry()
 	registry.Register(&ProcessCollector{})

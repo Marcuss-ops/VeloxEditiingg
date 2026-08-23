@@ -4468,8 +4468,30 @@ type TaskExecutionMetrics struct {
 	// task_attempt_cache_stats (migration 147) alongside cache_lookups.
 	CacheDownloadCount int64 `protobuf:"varint,58,opt,name=cache_download_count,json=cacheDownloadCount,proto3" json:"cache_download_count,omitempty"`
 	CacheDownloadBytes int64 `protobuf:"varint,59,opt,name=cache_download_bytes,json=cacheDownloadBytes,proto3" json:"cache_download_bytes,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// ── Scorecard v3 / observability pipeline completion ──────────────
+	// Derived throughput ratios computed from wall/phase timings.
+	ThroughputX           float64 `protobuf:"fixed64,60,opt,name=throughput_x,json=throughputX,proto3" json:"throughput_x,omitempty"`                               // media_duration / wall_clock (>1 = faster than realtime)
+	CriticalPathPercent   float64 `protobuf:"fixed64,61,opt,name=critical_path_percent,json=criticalPathPercent,proto3" json:"critical_path_percent,omitempty"`     // critical path as % of wall clock
+	CriticalPathMs        int64   `protobuf:"varint,62,opt,name=critical_path_ms,json=criticalPathMs,proto3" json:"critical_path_ms,omitempty"`                     // longest blocking path duration
+	CriticalPathComponent string  `protobuf:"bytes,63,opt,name=critical_path_component,json=criticalPathComponent,proto3" json:"critical_path_component,omitempty"` // human-readable bottleneck label
+	PacketCopyRatio       float64 `protobuf:"fixed64,64,opt,name=packet_copy_ratio,json=packetCopyRatio,proto3" json:"packet_copy_ratio,omitempty"`                 // % segments stream-copied vs re-encoded
+	// GPU utilization per-second sampled averages over the job window.
+	GpuUtilAvgPercent     float64 `protobuf:"fixed64,65,opt,name=gpu_util_avg_percent,json=gpuUtilAvgPercent,proto3" json:"gpu_util_avg_percent,omitempty"`
+	GpuUtilPeakPercent    float64 `protobuf:"fixed64,66,opt,name=gpu_util_peak_percent,json=gpuUtilPeakPercent,proto3" json:"gpu_util_peak_percent,omitempty"`
+	NvdecUtilAvgPercent   float64 `protobuf:"fixed64,67,opt,name=nvdec_util_avg_percent,json=nvdecUtilAvgPercent,proto3" json:"nvdec_util_avg_percent,omitempty"`
+	NvdecUtilPeakPercent  float64 `protobuf:"fixed64,68,opt,name=nvdec_util_peak_percent,json=nvdecUtilPeakPercent,proto3" json:"nvdec_util_peak_percent,omitempty"`
+	NvencUtilAvgPercent   float64 `protobuf:"fixed64,69,opt,name=nvenc_util_avg_percent,json=nvencUtilAvgPercent,proto3" json:"nvenc_util_avg_percent,omitempty"`
+	NvencUtilPeakPercent  float64 `protobuf:"fixed64,70,opt,name=nvenc_util_peak_percent,json=nvencUtilPeakPercent,proto3" json:"nvenc_util_peak_percent,omitempty"`
+	VramUsedAvgBytes      int64   `protobuf:"varint,71,opt,name=vram_used_avg_bytes,json=vramUsedAvgBytes,proto3" json:"vram_used_avg_bytes,omitempty"`
+	GpuIdleDuringRenderMs int64   `protobuf:"varint,72,opt,name=gpu_idle_during_render_ms,json=gpuIdleDuringRenderMs,proto3" json:"gpu_idle_during_render_ms,omitempty"`
+	// GPU ↔ CPU transfer estimates (inferred from engine phase analysis;
+	// zero until real hwupload/hwdownload instrumentation).
+	FramesDownloadedFromGpu int64 `protobuf:"varint,73,opt,name=frames_downloaded_from_gpu,json=framesDownloadedFromGpu,proto3" json:"frames_downloaded_from_gpu,omitempty"`
+	FramesUploadedToGpu     int64 `protobuf:"varint,74,opt,name=frames_uploaded_to_gpu,json=framesUploadedToGpu,proto3" json:"frames_uploaded_to_gpu,omitempty"`
+	GpuToCpuBytes           int64 `protobuf:"varint,75,opt,name=gpu_to_cpu_bytes,json=gpuToCpuBytes,proto3" json:"gpu_to_cpu_bytes,omitempty"`
+	CpuToGpuBytes           int64 `protobuf:"varint,76,opt,name=cpu_to_gpu_bytes,json=cpuToGpuBytes,proto3" json:"cpu_to_gpu_bytes,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *TaskExecutionMetrics) Reset() {
@@ -4911,6 +4933,125 @@ func (x *TaskExecutionMetrics) GetCacheDownloadCount() int64 {
 func (x *TaskExecutionMetrics) GetCacheDownloadBytes() int64 {
 	if x != nil {
 		return x.CacheDownloadBytes
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetThroughputX() float64 {
+	if x != nil {
+		return x.ThroughputX
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetCriticalPathPercent() float64 {
+	if x != nil {
+		return x.CriticalPathPercent
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetCriticalPathMs() int64 {
+	if x != nil {
+		return x.CriticalPathMs
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetCriticalPathComponent() string {
+	if x != nil {
+		return x.CriticalPathComponent
+	}
+	return ""
+}
+
+func (x *TaskExecutionMetrics) GetPacketCopyRatio() float64 {
+	if x != nil {
+		return x.PacketCopyRatio
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetGpuUtilAvgPercent() float64 {
+	if x != nil {
+		return x.GpuUtilAvgPercent
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetGpuUtilPeakPercent() float64 {
+	if x != nil {
+		return x.GpuUtilPeakPercent
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetNvdecUtilAvgPercent() float64 {
+	if x != nil {
+		return x.NvdecUtilAvgPercent
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetNvdecUtilPeakPercent() float64 {
+	if x != nil {
+		return x.NvdecUtilPeakPercent
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetNvencUtilAvgPercent() float64 {
+	if x != nil {
+		return x.NvencUtilAvgPercent
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetNvencUtilPeakPercent() float64 {
+	if x != nil {
+		return x.NvencUtilPeakPercent
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetVramUsedAvgBytes() int64 {
+	if x != nil {
+		return x.VramUsedAvgBytes
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetGpuIdleDuringRenderMs() int64 {
+	if x != nil {
+		return x.GpuIdleDuringRenderMs
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetFramesDownloadedFromGpu() int64 {
+	if x != nil {
+		return x.FramesDownloadedFromGpu
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetFramesUploadedToGpu() int64 {
+	if x != nil {
+		return x.FramesUploadedToGpu
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetGpuToCpuBytes() int64 {
+	if x != nil {
+		return x.GpuToCpuBytes
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetCpuToGpuBytes() int64 {
+	if x != nil {
+		return x.CpuToGpuBytes
 	}
 	return 0
 }
@@ -5575,7 +5716,7 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\x06job_id\x18\x02 \x01(\tR\x05jobId\x12\x1d\n" +
 	"\n" +
 	"attempt_id\x18\x03 \x01(\tR\tattemptId\x12\x14\n" +
-	"\x05error\x18\x04 \x01(\tR\x05error\"\xb3\x14\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error\"\x81\x1b\n" +
 	"\x14TaskExecutionMetrics\x12\x1f\n" +
 	"\vinput_bytes\x18\x01 \x01(\x03R\n" +
 	"inputBytes\x12!\n" +
@@ -5639,7 +5780,24 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\rcache_lookups\x188 \x01(\x03R\fcacheLookups\x126\n" +
 	"\x17unique_assets_requested\x189 \x01(\x03R\x15uniqueAssetsRequested\x120\n" +
 	"\x14cache_download_count\x18: \x01(\x03R\x12cacheDownloadCount\x120\n" +
-	"\x14cache_download_bytes\x18; \x01(\x03R\x12cacheDownloadBytes\"\x92\b\n" +
+	"\x14cache_download_bytes\x18; \x01(\x03R\x12cacheDownloadBytes\x12!\n" +
+	"\fthroughput_x\x18< \x01(\x01R\vthroughputX\x122\n" +
+	"\x15critical_path_percent\x18= \x01(\x01R\x13criticalPathPercent\x12(\n" +
+	"\x10critical_path_ms\x18> \x01(\x03R\x0ecriticalPathMs\x126\n" +
+	"\x17critical_path_component\x18? \x01(\tR\x15criticalPathComponent\x12*\n" +
+	"\x11packet_copy_ratio\x18@ \x01(\x01R\x0fpacketCopyRatio\x12/\n" +
+	"\x14gpu_util_avg_percent\x18A \x01(\x01R\x11gpuUtilAvgPercent\x121\n" +
+	"\x15gpu_util_peak_percent\x18B \x01(\x01R\x12gpuUtilPeakPercent\x123\n" +
+	"\x16nvdec_util_avg_percent\x18C \x01(\x01R\x13nvdecUtilAvgPercent\x125\n" +
+	"\x17nvdec_util_peak_percent\x18D \x01(\x01R\x14nvdecUtilPeakPercent\x123\n" +
+	"\x16nvenc_util_avg_percent\x18E \x01(\x01R\x13nvencUtilAvgPercent\x125\n" +
+	"\x17nvenc_util_peak_percent\x18F \x01(\x01R\x14nvencUtilPeakPercent\x12-\n" +
+	"\x13vram_used_avg_bytes\x18G \x01(\x03R\x10vramUsedAvgBytes\x128\n" +
+	"\x19gpu_idle_during_render_ms\x18H \x01(\x03R\x15gpuIdleDuringRenderMs\x12;\n" +
+	"\x1aframes_downloaded_from_gpu\x18I \x01(\x03R\x17framesDownloadedFromGpu\x123\n" +
+	"\x16frames_uploaded_to_gpu\x18J \x01(\x03R\x13framesUploadedToGpu\x12'\n" +
+	"\x10gpu_to_cpu_bytes\x18K \x01(\x03R\rgpuToCpuBytes\x12'\n" +
+	"\x10cpu_to_gpu_bytes\x18L \x01(\x03R\rcpuToGpuBytes\"\x92\b\n" +
 	"\x16WorkerResourceCounters\x122\n" +
 	"\x15cpu_utilization_ratio\x18\x01 \x01(\x01R\x13cpuUtilizationRatio\x12(\n" +
 	"\x10cpu_iowait_ratio\x18\x02 \x01(\x01R\x0ecpuIowaitRatio\x12&\n" +

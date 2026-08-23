@@ -158,6 +158,27 @@ type AttemptMetrics struct {
 	BlobCacheHitCount   int64 `json:"blob_cache_hit_count"`
 	BlobCacheMissCount  int64 `json:"blob_cache_miss_count"`
 	RenderCacheHitCount int64 `json:"render_cache_hit_count"`
+
+	// ── Scorecard v3 / observability pipeline completion ──────────
+	ThroughputX           float64 `json:"throughput_x"`
+	CriticalPathPercent   float64 `json:"critical_path_percent"`
+	CriticalPathMS        int64   `json:"critical_path_ms"`
+	CriticalPathComponent string  `json:"critical_path_component,omitempty"`
+	PacketCopyRatio       float64 `json:"packet_copy_ratio"`
+
+	GPUUtilAvgPct       float64 `json:"gpu_util_avg_percent"`
+	GPUUtilPeakPct      float64 `json:"gpu_util_peak_percent"`
+	NVDECUtilAvgPct     float64 `json:"nvdec_util_avg_percent"`
+	NVDECUtilPeakPct    float64 `json:"nvdec_util_peak_percent"`
+	NVENCUtilAvgPct     float64 `json:"nvenc_util_avg_percent"`
+	NVENCUtilPeakPct    float64 `json:"nvenc_util_peak_percent"`
+	VRAMUsedAvgBytes    int64   `json:"vram_used_avg_bytes"`
+	GPUIdleDuringRenderMS int64 `json:"gpu_idle_during_render_ms"`
+
+	FramesDownloadedFromGPU int64 `json:"frames_downloaded_from_gpu"`
+	FramesUploadedToGPU     int64 `json:"frames_uploaded_to_gpu"`
+	GPUToCPUBytes           int64 `json:"gpu_to_cpu_bytes"`
+	CPUToGPUBytes           int64 `json:"cpu_to_gpu_bytes"`
 }
 
 // AttemptCacheStats is the per-attempt cache snapshot extracted from the

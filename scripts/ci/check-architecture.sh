@@ -76,19 +76,25 @@ done < <(find . \
 # 5. No *_legacy / *_old / *.deprecated files anywhere.
 if find . \
      -path './.git' -prune -o \
+     -path '*/build' -prune -o \
+     -path '*/build-*' -prune -o \
+     -path '*/Testing' -prune -o \
      -type f \( \
        -iname '*.deprecated' -o \
        -iname '*_legacy.*'  -o \
-       -iname '*_old.*' \
+       -iname '*_old.*'  \
      \) -print -quit | grep -q .; then
   find . \
     -path './.git' -prune -o \
+    -path '*/build' -prune -o \
+    -path '*/build-*' -prune -o \
+    -path '*/Testing' -prune -o \
     -type f \( \
       -iname '*.deprecated' -o \
       -iname '*_legacy.*'  -o \
-      -iname '*_old.*' \
+      -iname '*_old.*'  \
     \) -print >&2
-  fail "legacy/deprecated files are forbidden -- see above"
+  fail "legacy/deprecated source files are forbidden -- see above"
 fi
 
 # 6. Removed queue package must stay dead.

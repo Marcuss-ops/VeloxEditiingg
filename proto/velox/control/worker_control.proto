@@ -823,6 +823,31 @@ message TaskExecutionMetrics {
   // task_attempt_cache_stats (migration 147) alongside cache_lookups.
   int64 cache_download_count = 58;
   int64 cache_download_bytes = 59;
+
+  // ── Scorecard v3 / observability pipeline completion ──────────────
+  // Derived throughput ratios computed from wall/phase timings.
+  double throughput_x = 60;       // media_duration / wall_clock (>1 = faster than realtime)
+  double critical_path_percent = 61; // critical path as % of wall clock
+  int64 critical_path_ms = 62;    // longest blocking path duration
+  string critical_path_component = 63; // human-readable bottleneck label
+  double packet_copy_ratio = 64;  // % segments stream-copied vs re-encoded
+
+  // GPU utilization per-second sampled averages over the job window.
+  double gpu_util_avg_percent = 65;
+  double gpu_util_peak_percent = 66;
+  double nvdec_util_avg_percent = 67;
+  double nvdec_util_peak_percent = 68;
+  double nvenc_util_avg_percent = 69;
+  double nvenc_util_peak_percent = 70;
+  int64 vram_used_avg_bytes = 71;
+  int64 gpu_idle_during_render_ms = 72;
+
+  // GPU ↔ CPU transfer estimates (inferred from engine phase analysis;
+  // zero until real hwupload/hwdownload instrumentation).
+  int64 frames_downloaded_from_gpu = 73;
+  int64 frames_uploaded_to_gpu = 74;
+  int64 gpu_to_cpu_bytes = 75;
+  int64 cpu_to_gpu_bytes = 76;
 }
 
 // WorkerResourceCounters is the typed payload of Heartbeat.resources.

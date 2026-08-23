@@ -28,6 +28,7 @@ std::string scaleFilterString(
     const std::string& scale_mode,
     const std::string& size,
     const std::string& resolution);
+int frameCountForDuration(double duration, int fps);
 
 bool nativeVideoStreamCopyCompatible(
     const std::filesystem::path& clip_path,

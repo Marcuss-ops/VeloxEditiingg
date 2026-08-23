@@ -30,21 +30,27 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/diff-scope.sh"
 
 fail_if_no_base_ref
 
-# Locate ALL migration files for context (sequencer needs every file,
-# not just the diff).
+# Locate ALL canonical production migration files for context (the
+# sequencer needs every runtime migration, not just the diff). The
+# `testdata/` tree is an intentionally mirrored fixture set embedded only
+# by migration tests; counting it here would report every mirrored version
+# as a duplicate production migration (notably 021_artifact_states).
+MIGRATIONS_ROOT="DataServer/internal/store/migrations/sqlite"
 all_migrations=()
 while IFS= read -r f; do
   all_migrations+=("$f")
-done < <(find DataServer RemoteCodex \
-            -path '*/vendor/*' -prune -o \
+done < <(find "$MIGRATIONS_ROOT" \
             -type f -name '*.sql' -print | sort)
 
-# Locate NEW + MODIFIED migrations only.
+# Locate NEW + MODIFIED production migrations only. Mirrored testdata SQL
+# is validated by the migration package tests and is deliberately excluded
+# from production numbering/ordering decisions.
 new_sql=()
 while IFS= read -r f; do
+  [[ "$f" == "$MIGRATIONS_ROOT"/* ]] || continue
   new_sql+=("$f")
 done < <(git diff --name-only --diff-filter=ACMR "$BASE_REF"...HEAD \
-            -- '*.sql' 2>/dev/null || true)
+            -- "$MIGRATIONS_ROOT/*.sql" 2>/dev/null || true)
 
 violations=0
 

@@ -66,6 +66,11 @@ DataServer/data/backups/
 DataServer/data/drive/
 DataServer/data/jobs/
 DataServer/data/worker_downloads/
+# Generated worker bundle outputs are local/runtime artifacts, never source.
+# The canonical bundler writes DataServer/data/worker_downloads/; the
+# historical RemoteCodex/worker_downloads path is ignored to prevent stale
+# binaries from being reintroduced there.
+RemoteCodex/worker_downloads/
 DataServer/data/ansible/playbooks/inventory.ini
 DataServer/completed_videos/
 
@@ -80,6 +85,15 @@ DataServer/velox-server
 RemoteCodex/native/worker-agent-go/bin/
 RemoteCodex/native/worker-agent-go/velox-worker-agent
 RemoteCodex/native/video-engine-cpp/build*/
+RemoteCodex/native/video-engine-cpp/Testing/
+# CMake metadata is generated and must never appear as repository source,
+# even when a local configure is accidentally pointed at the source tree.
+**/CMakeFiles/
+**/CMakeCache.txt
+**/cmake_install.cmake
+**/CTestTestfile.cmake
+**/CTestCostData.txt
+**/install_manifest.txt
 # ── External repos (standalone submodules — not tracked in this repo) ────
 Chronon3d/
 Instaedit/

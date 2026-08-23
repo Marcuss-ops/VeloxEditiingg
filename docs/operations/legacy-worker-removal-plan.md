@@ -10,6 +10,31 @@ The production rollout path is now the FleetController API. The definitive path 
 `scripts/fleetctl` → Master FleetController → UpdateExecutor and must remain
 backed by real backends and a canary.
 
+## Binary artifact policy
+
+`worker_code_linux_x86_64.zip` is a generated deployment artifact, not source
+code and not a release record. It MUST NOT be committed to this repository.
+
+- The canonical local output is `DataServer/data/worker_downloads/`, produced
+  by `DataServer/cmd/velox-bundler` and post-processed by
+  `scripts/ops/ensure-worker-bundle-runtime.sh` when the legacy bundle path is
+  explicitly used.
+- `RemoteCodex/worker_downloads/` is not a distribution channel. A historical
+  copy tracked there was a stale binary-only bundle from the old worker release
+  flow; it has been removed from Git and the directory is now ignored.
+- Release artifacts are distributed through the signed immutable GHCR worker
+  image and the CI workflow artifacts (`worker-image.yml`), not through a
+  checked-in ZIP. Operators needing the legacy recovery bundle must generate it
+  locally from the current checkout and verify its checksum before use.
+- Runtime ZIPs are ignored by `.gitignore`; do not use `git add -f` for them.
+  If an artifact must be retained for incident evidence, store it in the
+  external evidence/archive system with its SHA-256 and source commit, not in
+  the source repository.
+
+The legacy bundle remains only as a migration/recovery compatibility path until
+Phase 4 below is complete; this policy prevents that compatibility path from
+turning into a second, unreviewed binary distribution mechanism.
+
 The current paths are:
 
 | Path | Current role | Removal condition |

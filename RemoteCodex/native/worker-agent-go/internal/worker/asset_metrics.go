@@ -281,6 +281,9 @@ func attachAssetOperations(report *taskrunner.TaskExecutionReport, tracker *asse
 	records := tracker.snapshot()
 	cache := tracker.cacheSnapshot()
 	projectAttemptCacheFacts(report, cache, records)
+	if report.Metrics == nil {
+		report.Metrics = make(map[string]interface{})
+	}
 	legacy := report.Metrics
 
 	// The per-attempt counters are accumulated by the canonical resolver

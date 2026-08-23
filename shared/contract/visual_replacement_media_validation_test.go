@@ -15,8 +15,8 @@ func canonicalProbe(durationUS int64) ReplacementMediaProbe {
 		PixelFormat: "yuv420p",
 		Width:       1920,
 		Height:      1080,
-		FPSNum:      30,
-		FPSDen:      1,
+		FPSNum:      CanonicalVideoProfileV1Default.FPSNum,
+		FPSDen:      CanonicalVideoProfileV1Default.FPSDen,
 		DurationUS:  durationUS,
 		HasAudio:    false,
 	}

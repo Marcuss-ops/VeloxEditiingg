@@ -67,14 +67,14 @@ func copyOnlyPlan(videoSHA, audioSHA string, videoSize, audioSize int64) *contra
 		PlanVersion: 2, TimelineRevision: 7, TimelineSHA256: timelineSHA, DurationUS: 1_000_000,
 		Output: contract.OutputContractV2{
 			Container: "mp4", VideoCodec: "h264", Width: 1920, Height: 1080,
-			FPSNum: 30, FPSDen: 1, PixelFormat: "yuv420p", ProfileID: contract.CanonicalVideoProfileIDV1,
-			CodecProfile: "high", CodecLevel: "4.0", GOPSize: 60, BFrames: 0,
+			FPSNum: 24, FPSDen: 1, PixelFormat: "yuv420p", ProfileID: contract.CanonicalVideoProfileIDV1,
+			CodecProfile: "high", CodecLevel: "4.0", GOPSize: 48, BFrames: 0,
 			ClosedGOP: true, TimeBaseNum: 1, TimeBaseDen: 90000,
 		},
 		FinalAudio:  contract.FinalAudioV2{Mode: contract.AudioModeFinalAudioCopy, AssetID: "audio", SHA256: audioSHA, SizeBytes: audioSize, Codec: "aac", SampleRateHz: 48000, Channels: 2, DurationUS: 1_000_000, TimelineRevision: 7, TimelineSHA256: timelineSHA},
-		VideoTracks: []contract.VideoTrackV2{{TrackID: "main", Segments: []contract.VideoSegmentV2{{SegmentID: "fragment-1", AssetID: "video", SHA256: videoSHA, TimelineStartFrame: 0, FrameCount: 30, SourceInUS: 0, SourceDurationUS: 1_000_000}}}},
+		VideoTracks: []contract.VideoTrackV2{{TrackID: "main", Segments: []contract.VideoSegmentV2{{SegmentID: "fragment-1", AssetID: "video", SHA256: videoSHA, TimelineStartFrame: 0, FrameCount: 24, SourceInUS: 0, SourceDurationUS: 1_000_000}}}},
 		Assets: []contract.AssetRefV2{
-			{AssetID: "video", SHA256: videoSHA, SizeBytes: videoSize, Kind: "prepared_video_fragment", MIME: "video/mp4", DurationUS: 1_000_000, Width: 1920, Height: 1080, ProfileID: contract.CanonicalVideoProfileIDV1, FrameCount: 30, TimelineRevision: 7, TimelineSHA256: timelineSHA, TimelineStartFrame: 0, FirstFrameKeyframe: true, ClosedGOP: true},
+			{AssetID: "video", SHA256: videoSHA, SizeBytes: videoSize, Kind: "prepared_video_fragment", MIME: "video/mp4", DurationUS: 1_000_000, Width: 1920, Height: 1080, ProfileID: contract.CanonicalVideoProfileIDV1, FrameCount: 24, TimelineRevision: 7, TimelineSHA256: timelineSHA, TimelineStartFrame: 0, FirstFrameKeyframe: true, ClosedGOP: true},
 			{AssetID: "audio", SHA256: audioSHA, SizeBytes: audioSize, Kind: "final_audio", MIME: "audio/mp4", DurationUS: 1_000_000},
 		},
 	}

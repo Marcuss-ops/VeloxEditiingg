@@ -2,12 +2,10 @@ package observability
 
 import (
 	"encoding/json"
+	"github.com/gin-gonic/gin"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-
-	"github.com/gin-gonic/gin"
-
 	"velox-server/internal/jobs"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"

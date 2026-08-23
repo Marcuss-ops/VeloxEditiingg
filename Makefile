@@ -25,7 +25,7 @@ SHELL := /usr/bin/env bash
 EVIDENCE_ROOT_CAP9      ?= /tmp/velox-cap9-evidence
 EVIDENCE_ROOT_CAP10     ?= /tmp/velox-cap10-evidence
 
-.PHONY: verify verify-fast verify-heavy telemetry-done test-certify-fleet test-canary-worker-rollout canary-worker-rollout certify-fleet fmt fmt-check vet pilot api-docs api-docs-apply \
+.PHONY: verify verify-fast verify-heavy refactor-metrics telemetry-done test-certify-fleet test-canary-worker-rollout canary-worker-rollout certify-fleet fmt fmt-check vet pilot api-docs api-docs-apply \
         jobs-smoke publishing-flow-smoke video-smoke media-smoke \
         e2e-grpc e2e-workload e2e-workload-mtls e2e-master-worker \
         enable-branch-protection disable-branch-protection inspect-branch-protection \
@@ -253,6 +253,12 @@ media-smoke:
 # into `make verify` — normal CI stays on deterministic invariants.
 benchmark-worker:  ## Tier-2 performance gate on the dedicated benchmark worker
 	@bash scripts/benchmarks/benchmark-worker.sh
+
+refactor-metrics: ## Compare LOC, complexity, duplication and responsibility against BASE_REF
+	@python3 scripts/metrics/refactor_metrics.py \
+	  --base-ref "$${BASE_REF:-$$(git rev-parse HEAD^)}" \
+	  --head-ref "$${HEAD_REF:-HEAD}" \
+	  --out-dir "$${METRICS_OUT:-metrics-out}"
 
 verify:        ## Architecture + Go (-race) + cmake + docker (full suite)
 	./scripts/ci/verify.sh

@@ -2,7 +2,6 @@ package observability
 
 import (
 	"testing"
-
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
 )

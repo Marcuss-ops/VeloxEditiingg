@@ -2,8 +2,6 @@
 #include "velox/services/file_utils.hpp"
 #include "media_utils_internal.hpp"
 
-#include <algorithm>
-#include <cmath>
 #include <sstream>
 
 namespace fs = std::filesystem;
@@ -47,7 +45,7 @@ std::string buildSceneSegmentArgs(
     detail::canvasDims(params, width, height, fps);
     const std::string resolution = std::to_string(width) + "x" + std::to_string(height);
     const std::string size = std::to_string(width) + ":" + std::to_string(height);
-    const int frames = std::max(1, static_cast<int>(std::round(duration * fps)));
+    const int frames = detail::frameCountForDuration(duration, fps);
     std::string filter = detail::scaleFilterString(params.scale_mode, size, resolution);
     if (params.slow_zoom) {
         filter += ",zoompan=z='1+0.08*on/(" + std::to_string(frames) + ")'"

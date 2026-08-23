@@ -185,10 +185,10 @@ add_executable(velox_video_engine
     src/main.cpp
     src/cmd_full_video.cpp
     src/video_builder.cpp
-        src/plan/render_plan_parser.cpp
-        src/plan/render_plan_parser_helpers.cpp
-        src/plan/render_plan_parser_v1.cpp
-        src/plan/render_plan_parser_v2.cpp
+    src/plan/render_plan_parser.cpp
+    src/plan/render_plan_parser_helpers.cpp
+    src/plan/render_plan_parser_v1.cpp
+    src/plan/render_plan_parser_v2.cpp
     src/app/commands.cpp
     src/services/file_utils.cpp
     src/services/io_counters.cpp
@@ -659,7 +659,7 @@ if(VELOX_ENABLE_LIBAV)
     # RenderEngine::render() under a sentinel PATH.
     add_executable(velox_render_plan_v2_tests
         tests/test_render_plan_v2.cpp
-            src/plan/render_plan_parser.cpp
+        src/plan/render_plan_parser.cpp
         src/plan/render_plan_parser_helpers.cpp
         src/plan/render_plan_parser_v1.cpp
         src/plan/render_plan_parser_v2.cpp
@@ -698,7 +698,7 @@ if(VELOX_ENABLE_LIBAV)
     # sentinel PATH is installed; the render itself must stay in-process.
     add_executable(velox_render_visual_replacement_golden_tests
         tests/test_render_visual_replacement_golden.cpp
-            src/plan/render_plan_parser.cpp
+        src/plan/render_plan_parser.cpp
         src/plan/render_plan_parser_helpers.cpp
         src/plan/render_plan_parser_v1.cpp
         src/plan/render_plan_parser_v2.cpp
@@ -736,7 +736,7 @@ if(VELOX_ENABLE_LIBAV)
     # transcode. VELOX_BENCH_EVIDENCE_DIR pins fixtures + benchmark.json.
     add_executable(velox_render_visual_replacement_benchmark_tests
         tests/test_render_visual_replacement_benchmark.cpp
-            src/plan/render_plan_parser.cpp
+        src/plan/render_plan_parser.cpp
         src/plan/render_plan_parser_helpers.cpp
         src/plan/render_plan_parser_v1.cpp
         src/plan/render_plan_parser_v2.cpp

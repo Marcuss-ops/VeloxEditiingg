@@ -38,14 +38,14 @@ type CanonicalVideoProfileV1 struct {
 	Version int `json:"version"`
 }
 
-const CanonicalVideoProfileIDV1 = "VELOX_H264_1080P30_V1"
+const CanonicalVideoProfileIDV1 = "VELOX_ASSEMBLY_READY_V1"
 
 // CanonicalVideoProfileV1Default is the first profile admitted by Velox.
 var CanonicalVideoProfileV1Default = CanonicalVideoProfileV1{
 	ProfileID: CanonicalVideoProfileIDV1,
 	Container: "mp4", Codec: "h264", Width: 1920, Height: 1080,
-	FPSNum: 30, FPSDen: 1, PixelFormat: "yuv420p",
-	CodecProfile: "high", CodecLevel: "4.0", GOPSize: 60,
+	FPSNum: 24, FPSDen: 1, PixelFormat: "yuv420p",
+	CodecProfile: "high", CodecLevel: "4.0", GOPSize: 48,
 	BFrames: 0, ClosedGOP: true, TimeBaseNum: 1, TimeBaseDen: 90000,
 	Version: CanonicalVideoProfileVersionV1,
 }

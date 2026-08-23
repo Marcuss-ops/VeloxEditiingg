@@ -16,13 +16,11 @@ package completion
 import (
 	"crypto/sha256"
 	"database/sql"
+	_ "github.com/mattn/go-sqlite3"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
-
-	_ "github.com/mattn/go-sqlite3"
-
 	"velox-server/internal/store"
 	"velox-server/internal/store/migrations"
 	"velox-shared/identity"

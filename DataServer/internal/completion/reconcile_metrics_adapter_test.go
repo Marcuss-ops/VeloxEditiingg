@@ -25,7 +25,6 @@ package completion
 
 import (
 	"testing"
-
 	"velox-server/internal/metrics"
 )
 

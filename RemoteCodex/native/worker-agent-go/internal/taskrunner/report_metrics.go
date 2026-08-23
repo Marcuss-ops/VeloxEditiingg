@@ -56,31 +56,45 @@ func TypedMetricsFromMap(m map[string]interface{}) *telemetry.RawExecutionMetric
 // path; production executors set RawMetrics directly.
 func legacyMapToTyped(m map[string]interface{}) telemetry.RawExecutionMetrics {
 	typed := telemetry.RawExecutionMetrics{
-		BytesFromLocalCache: positiveIntegerToInt64(m["cache.bytes"]),
-		InputBytes:          positiveIntegerToInt64(m["input.bytes"]),
-		OutputBytes:         positiveIntegerToInt64(m["output.bytes"]),
-		BytesFromDrive:      positiveIntegerToInt64(m["drive.bytes"]),
-		BytesFromBlobstore:  positiveIntegerToInt64(m["blobstore.bytes"]),
-		CpuTimeMs:           positiveIntegerToInt64(m["cpu.ms"]),
-		PeakRssBytes:        positiveIntegerToInt64(m["rss.peak.bytes"]),
-		FramesDecoded:       positiveIntegerToInt64(m["frames.decoded"]),
-		FramesComposited:    positiveIntegerToInt64(m["frames.composited"]),
-		FramesEncoded:       positiveIntegerToInt64(m["frames.encoded"]),
-		ConcatMode:          stringFromMap(firstString(m, "concat.mode", "engine.concat_mode")),
-		FfmpegSpeedRatio:    floatFromMap(m["ffmpeg.speed_ratio"]),
-		EncodePasses:        int32(positiveIntegerToInt64(m["encode.passes"])),
-		TempBytesWritten:    positiveIntegerToInt64(m["temp.bytes.written"]),
-		MediaDurationSeconds: floatFromMap(m["media.duration.seconds"]),
-		WallClockSeconds:     floatFromMap(m["wall.clock.seconds"]),
-		AssetCacheHitCount:   firstPresent(m, "asset.cache.hit.count", "cache.hits"),
-		AssetCacheMissCount:  firstPresent(m, "asset.cache.miss.count", "cache.misses"),
-		BlobCacheHitCount:    firstPresent(m, "blob.cache.hit.count", "blob.fetch"),
-		BlobCacheMissCount:   firstPresent(m, "blob.cache.miss.count", "blob.fetch_miss"),
-		CacheDownloadCount:   positiveIntegerToInt64(m["asset.cache.download.count"]),
-		CacheDownloadBytes:   positiveIntegerToInt64(m["asset.cache.download.bytes"]),
-		CacheLookups:         firstPresent(m, "asset.cache.lookups", "cache.lookups"),
+		BytesFromLocalCache:   positiveIntegerToInt64(firstValue(m, "cache.bytes")),
+		InputBytes:            positiveIntegerToInt64(firstValue(m, "input.bytes")),
+		OutputBytes:           positiveIntegerToInt64(firstValue(m, "output.bytes")),
+		BytesFromDrive:        positiveIntegerToInt64(firstValue(m, "drive.bytes")),
+		DiskReadBytes:         positiveIntegerToInt64(firstValue(m, "disk.read.bytes", "io.disk.read.bytes")),
+		BytesFromBlobstore:    positiveIntegerToInt64(firstValue(m, "blobstore.bytes")),
+		CpuTimeMs:             positiveIntegerToInt64(firstValue(m, "cpu.ms")),
+		PeakRssBytes:          positiveIntegerToInt64(firstValue(m, "rss.peak.bytes")),
+		FramesDecoded:         positiveIntegerToInt64(firstValue(m, "frames.decoded")),
+		FramesComposited:      positiveIntegerToInt64(firstValue(m, "frames.composited")),
+		FramesEncoded:         positiveIntegerToInt64(firstValue(m, "frames.encoded", "engine.frames")),
+		ConcatMode:            stringFromMap(firstString(m, "concat.mode", "engine.concat_mode")),
+		FfmpegSpeedRatio:      floatFromMap(firstValue(m, "ffmpeg.speed_ratio", "engine.speed_x")),
+		EncodePasses:          int32(positiveIntegerToInt64(firstValue(m, "encode.passes", "engine.encode_passes"))),
+		TempBytesWritten:      positiveIntegerToInt64(firstValue(m, "temp.bytes.written")),
+		MediaDurationSeconds:  floatFromMap(firstValue(m, "media.duration.seconds")),
+		WallClockSeconds:      floatFromMap(firstValue(m, "wall.clock.seconds")),
+		FfprobeValid:          int32(positiveIntegerToInt64(firstValue(m, "ffprobe.valid", "quality.ffprobe.valid"))),
+		BlackFrameRatio:       floatFromMap(firstValue(m, "black.frame.ratio", "quality.black.frame.ratio")),
+		WastedCpuMs:           positiveIntegerToInt64(firstValue(m, "wasted.cpu.ms")),
+		WastedDownloadBytes:   positiveIntegerToInt64(firstValue(m, "wasted.download.bytes")),
+		CompletedSegments:     int32(positiveIntegerToInt64(firstValue(m, "completed.segments"))),
+		ErrorComponent:        stringFromMap(firstString(m, "error.component")),
+		ErrorPhase:            stringFromMap(firstString(m, "error.phase")),
+		AssetCacheHitCount:    firstPresent(m, "asset.cache.hit.count", "cache.hits"),
+		AssetCacheMissCount:   firstPresent(m, "asset.cache.miss.count", "cache.misses"),
+		BlobCacheHitCount:     firstPresent(m, "blob.cache.hit.count", "blob.fetch"),
+		BlobCacheMissCount:    firstPresent(m, "blob.cache.miss.count", "blob.fetch_miss"),
+		CacheDownloadCount:    positiveIntegerToInt64(m["asset.cache.download.count"]),
+		CacheDownloadBytes:    positiveIntegerToInt64(m["asset.cache.download.bytes"]),
+		CacheLookups:          firstPresent(m, "asset.cache.lookups", "cache.lookups"),
 		UniqueAssetsRequested: positiveIntegerToInt64(m["unique.assets.requested"]),
-		RenderCacheHitCount:  positiveIntegerToInt64(m["render.cache.hit.count"]),
+		RenderCacheHitCount:   positiveIntegerToInt64(m["render.cache.hit.count"]),
+	}
+	if value := firstValue(m, "native.total_ms"); value != nil {
+		typed.WallClockSeconds = floatFromMap(value) / 1000
+	}
+	if value := firstValue(m, "native.total_ms"); value != nil {
+		typed.WallClockSeconds = floatFromMap(value) / 1000
 	}
 	// Concat mode → stream copy derivation.
 	typed.FinalConcatStreamCopy = concatModeIsStreamCopy(typed.ConcatMode)
@@ -404,8 +418,6 @@ func concatModeIsStreamCopy(mode string) bool {
 		strings.EqualFold(mode, "mixed_packet")
 }
 
-
-
 // positiveIntegerToInt64 reads dotted-key counters (int64 / int32 /
 // int / float64 / uint64 / uint32) and returns a non-negative int64
 // compatible with proto3 wire shape. Negatives are floored to 0.
@@ -491,6 +503,15 @@ func maxInt64(a, b int64) int64 {
 // Unlike firstPositive, zero is meaningful here: a producer that reports an
 // attempt-scoped counter has authority over the fallback provider even when
 // that counter is zero.
+func firstValue(metrics map[string]interface{}, keys ...string) interface{} {
+	for _, key := range keys {
+		if value, ok := metrics[key]; ok {
+			return value
+		}
+	}
+	return nil
+}
+
 func firstPresent(metrics map[string]interface{}, keys ...string) int64 {
 	for _, key := range keys {
 		value, ok := metrics[key]
