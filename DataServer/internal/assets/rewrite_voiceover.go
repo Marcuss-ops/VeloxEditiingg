@@ -53,9 +53,7 @@ func collectVoiceoverReferences(payloadMap map[string]interface{}) []string {
 //
 // PR15.6 + refactor/payload-v2-single-shape: writes ONLY the canonical
 // `voiceover_paths` key (array). The singular `voiceover_path` and
-// `audio_path` aliases are intentionally NOT written here — downstream
-// HTTP-edge reads via RenderHTTPBoundaryJobResponse still tolerate them
-// when reading legacy SQLite rows. The `parameters` sub-map mirror is
+// `audio_path` aliases are intentionally NOT written here.
 // also NOT written: the refactor establishes top-level keys as the
 // single source of truth, and any legacy `parameters` mirror present on
 // input is left untouched (so the round-trip for old rows is preserved).

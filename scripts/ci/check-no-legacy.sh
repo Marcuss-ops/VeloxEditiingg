@@ -242,8 +242,7 @@ for pattern in "${ambiguous_completed_status_patterns[@]}"; do
         'DataServer/internal/jobs/enqueue/**' \
         'DataServer/internal/jobs/ingress/**' \
         'DataServer/internal/handlers/server/pipeline/**' \
-        ':!*_test.go' \
-        ':!**/http_response_compat.go')"; [[ -n "$matches" ]]; then
+        ':!*_test.go')"; [[ -n "$matches" ]]; then
     printf 'FORBIDDEN (ambiguous input-assembly status in new writer): %s\n%s\n\n' "$pattern" "$matches" >&2
     violations=$((violations + 1))
   fi

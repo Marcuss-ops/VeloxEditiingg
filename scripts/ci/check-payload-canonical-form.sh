@@ -91,16 +91,10 @@ done
 #     They legitimately mock legacy keys to assert reader tolerance for
 #     legacy SQLite rows; the gate audits WRITER behaviour, not TEST
 #     coverage.
-#   - enqueue/http_response_compat.go is the PR15.6 HTTP-edge back-compat
-#     surface that intentionally dual-writes legacy aliases. See the
-#     top-of-file docstring in that file for the full rationale; the
-#     gate exposes the discipline by listing the file in this allowlist
-#     rather than silencing the alert silently.
 FILTERED=()
 for f in "${FILE_LIST[@]}"; do
   case "$f" in
     *_test.go)                                                continue ;;
-    DataServer/internal/jobs/enqueue/http_response_compat.go) continue ;;
   esac
   FILTERED+=("$f")
 done

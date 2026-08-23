@@ -26,8 +26,6 @@ import (
 //   - TestEnqueueDefaultsPreserved: zero-value JobRequirements flow
 //     through unchanged (no false-positive requirement propagation).
 //   - TestNewEnqueuer_PanicsOnNilPlanResolver: fail-fast invariant
-//     catches misconfiguration at boot, not at first production enqueue.
-//   - TestRenderHTTPBoundaryJobResponse: HTTP-edge adapter (5 subtests)
 //     covering basic/legacy-alias-fallback/full/nil/error.
 //   - TestEnqueue_Precondition_*: tests pinning payload/transaction
 //     rejection paths and max-retry propagation, plus integration tests
@@ -411,87 +409,7 @@ func TestEnqueue_Precondition_PropagatesMaxRetryBudget(t *testing.T) {
 	}
 	if j.MaxRetries != 7 {
 		t.Errorf("MaxRetries = %d, want 7 (max of [3, 7, 5])", j.MaxRetries)
-	}
-}
-
-func TestRenderHTTPBoundaryJobResponse(t *testing.T) {
-	t.Parallel()
-
-	t.Run("basic", func(t *testing.T) {
-		t.Parallel()
-		job := map[string]interface{}{
-			"job_id": "j1", "status": "COMPLETED", "video_name": "V", "scene_count": 5,
-			"voiceover_count": 3, "video_mode": "scene_image",
-		}
-		r, err := RenderHTTPBoundaryJobResponse(context.Background(), job, false, nil)
-		if err != nil {
-			t.Fatalf("render response: %v", err)
-		}
-		if r["ok"] != true || r["job_id"] != "j1" || r["status"] != "COMPLETED" {
-			t.Errorf("unexpected: %v", r)
-		}
-		if _, has := r["job"]; has {
-			t.Error("no 'job' key when full=false")
-		}
-	})
-
-	t.Run("basic_legacy_alias_fallback", func(t *testing.T) {
-		t.Parallel()
-		// HTTP-edge adapter tolerates legacy aliases on read for backwards compat with old SQLite rows.
-		job := map[string]interface{}{
-			"id": "j1", "status": "COMPLETED", "title": "V",
-		}
-		r, err := RenderHTTPBoundaryJobResponse(context.Background(), job, false, nil)
-		if err != nil {
-			t.Fatalf("render response: %v", err)
-		}
-		if r["ok"] != true {
-			t.Error("want ok=true")
-		}
-		// script_id leg falls back to id via job_id lookup
-		if r["script_id"] != "j1" {
-			t.Errorf("script_id alias fallback failed, got %v", r["script_id"])
-		}
-		if r["video_name"] != "V" {
-			t.Errorf("video_name title fallback failed, got %v", r["video_name"])
-		}
-	})
-
-	t.Run("full", func(t *testing.T) {
-		t.Parallel()
-		job := map[string]interface{}{"job_id": "j2", "request": map[string]interface{}{"raw": "x"}}
-		r, err := RenderHTTPBoundaryJobResponse(context.Background(), job, true, nil)
-		if err != nil {
-			t.Fatalf("render response: %v", err)
-		}
-		if r["job"] == nil || r["request"] == nil {
-			t.Error("want job/request keys when full=true")
-		}
-	})
-
-	t.Run("nil", func(t *testing.T) {
-		t.Parallel()
-		r, err := RenderHTTPBoundaryJobResponse(context.Background(), nil, false, nil)
-		if err != nil {
-			t.Fatalf("render response: %v", err)
-		}
-		if r["ok"] != false {
-			t.Errorf("want ok=false, got %v", r["ok"])
-		}
-	})
-
-	t.Run("error", func(t *testing.T) {
-		t.Parallel()
-		job := map[string]interface{}{"job_id": "j3", "status": "FAILED", "error": "boom"}
-		r, err := RenderHTTPBoundaryJobResponse(context.Background(), job, false, nil)
-		if err != nil {
-			t.Fatalf("render response: %v", err)
-		}
-		if r["error"] != "boom" {
-			t.Errorf("want error 'boom', got %v", r["error"])
-		}
-	})
-}
+	}}
 
 // TestEnforceDeliveryPlanPrecondition_IntegrationWithRealResolver
 // exercises enforceDeliveryPlanPrecondition end-to-end against a real
