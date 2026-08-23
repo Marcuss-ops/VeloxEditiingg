@@ -178,10 +178,13 @@ func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskEx
 	phaseTimer := telemetry.NewJobPhaseTimer()
 	gpuTransferTracker := telemetry.NewGPUTransferTracker()
 	// GPU sampler: runs in background for the job duration, sampling
-	// nvidia-smi utilization/VRAM. Skipped silently if no GPU present.
+	// nvidia-smi utilization/VRAM. The GPU is selected from
+	// CUDA_VISIBLE_DEVICES so each worker samples its own GPU.
+	// Skipped silently if no GPU present.
 	var gpuSampler *telemetry.GPUSampler
 	if telemetry.IsGPUAvailable() {
-		gpuSampler = telemetry.NewGPUSampler(parent, 500*time.Millisecond)
+		gpuID := telemetry.GPUIndexFromCUDAVisibleDevices()
+		gpuSampler = telemetry.NewGPUSampler(parent, 500*time.Millisecond, gpuID)
 	}
 	// Ensure GPU sampler is stopped on all exit paths.
 	defer func() {
@@ -314,18 +317,27 @@ func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskEx
 
 	// Preserve executor telemetry before classifying the outcome. Native
 	// phases enter the canonical Attempt journal here before any report,
-	// receipt, heartbeat, or TaskResult projection. Migrated executors
-	// provide RawMetrics directly; legacy executors still provide Metrics
-	// and are adapted below without making the map canonical.
+	// receipt, heartbeat, or TaskResult projection. Executors provide
+	// RawMetrics directly; the legacy dotted map is derived from it at
+	// this single boundary for downstream compatibility (Phase 3 will
+	// eliminate the map entirely). Executor projection keys (pipeline.*,
+	// native.*, render_profile.*, ffmpeg_profile, command_plan, etc.) are
+	// merged on top so display consumers see the complete picture.
 	report.RawMetrics = result.RawMetrics
-	if report.RawMetrics != nil {
-		report.TypedMetrics = report.RawMetrics
+	report.TypedMetrics = result.RawMetrics
+	if result.RawMetrics != nil {
+		legacy := rawMetricsToLegacyMap(result.RawMetrics)
+		// Merge executor projection keys on top of the raw-metrics-derived
+		// map. Executor keys override only if absent (raw metrics are truth).
+		for k, v := range result.Metrics {
+			if _, exists := legacy[k]; !exists {
+				legacy[k] = v
+			}
+		}
+		report.AdoptLegacyMetrics(legacy)
+	} else {
+		report.AdoptLegacyMetrics(result.Metrics)
 	}
-	// Keep the executor's legacy map as a compatibility projection only;
-	// migrated executors provide RawMetrics above. The report exposes the
-	// map through LegacyMetrics so remaining compatibility consumers are
-	// visible and auditable.
-	report.AdoptLegacyMetrics(result.Metrics)
 	report.Segments = result.Segments
 	if importErr := importExecutorDetailedPhases(rec, result.DetailedPhases); importErr != nil {
 		report.SetLegacyMetric("telemetry.cpp_import_error", importErr.Error())

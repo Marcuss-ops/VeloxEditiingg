@@ -46,6 +46,234 @@ func TypedMetricsFromMap(m map[string]interface{}) *telemetry.RawExecutionMetric
 	return report.RawMetrics
 }
 
+// rawMetricsToLegacyMap converts the canonical typed raw envelope into the
+// legacy dotted-key map consumed by mergeStatsInto and the remaining
+// unmigrated report consumers (asset_metrics, report_observability).
+// This is the single reverse-projection point; executors write only
+// RawMetrics and the runner round-trips through this map for backward
+// compatibility. Phase 3 will eliminate the map entirely.
+func rawMetricsToLegacyMap(raw *telemetry.RawExecutionMetrics) map[string]interface{} {
+	if raw == nil {
+		return make(map[string]interface{})
+	}
+	m := make(map[string]interface{}, 200)
+
+	// ── Byte accounting ───────────────────────────────────────────────
+	setI64(m, "input.bytes", raw.InputBytes)
+	setI64(m, "output.bytes", raw.OutputBytes)
+	setI64(m, "drive.bytes", raw.BytesFromDrive)
+	setI64(m, "blobstore.bytes", raw.BytesFromBlobstore)
+	setI64(m, "cache.bytes", raw.BytesFromLocalCache)
+
+	// ── CPU + memory ───────────────────────────────────────────────────
+	setI64(m, "cpu.ms", raw.CpuTimeMs)
+	setI64(m, "rss.peak.bytes", raw.PeakRssBytes)
+
+	// ── Engine counters ────────────────────────────────────────────────
+	setI64(m, "frames.decoded", raw.FramesDecoded)
+	setI64(m, "frames.composited", raw.FramesComposited)
+	setI64(m, "frames.encoded", raw.FramesEncoded)
+	if raw.FfmpegSpeedRatio != 0 {
+		m["ffmpeg.speed_ratio"] = raw.FfmpegSpeedRatio
+	}
+	setI32(m, "encode.passes", raw.EncodePasses)
+	if raw.ConcatMode != "" {
+		m["concat.mode"] = raw.ConcatMode
+	}
+	setBool(m, "final.concat.stream_copy", raw.FinalConcatStreamCopy)
+
+	// ── Scorecard v2 resource counters ─────────────────────────────────
+	setI64(m, "gpu.time.ms", raw.GpuTimeMs)
+	setI64(m, "vram.peak.bytes", raw.PeakVramBytes)
+	setI64(m, "temp.bytes.written", raw.TempBytesWritten)
+	setI64(m, "duplicate.download.bytes", raw.DuplicateDownloadBytes)
+	setF64(m, "media.duration.seconds", raw.MediaDurationSeconds)
+	setF64(m, "wall.clock.seconds", raw.WallClockSeconds)
+	setF64(m, "realtime.factor", raw.RealTimeFactor)
+	setF64(m, "throughput.x", raw.ThroughputX)
+
+	// ── Quality validation ─────────────────────────────────────────────
+	setI32(m, "ffprobe.valid", raw.FfprobeValid)
+	setF64(m, "duration.diff.sec", raw.DurationDiffSec)
+	setBool(m, "has.video.stream", raw.HasVideoStream)
+	setBool(m, "has.audio.stream", raw.HasAudioStream)
+	setI32(m, "audio.track.count", raw.AudioTrackCount)
+	setI64(m, "output.file.size", raw.OutputFileSize)
+	setF64(m, "black.frame.ratio", raw.BlackFrameRatio)
+	setI64(m, "audio.sync.offset.ms", raw.AudioSyncOffsetMs)
+	setStr(m, "output.sha256", raw.OutputSha256)
+
+	// ── Resource snapshot ──────────────────────────────────────────────
+	setF64(m, "cpu.percent.peak", raw.CpuPercentPeak)
+	setI64(m, "disk.read.bytes", raw.DiskReadBytes)
+	setI64(m, "disk.write.bytes", raw.DiskWriteBytes)
+	setI64(m, "network.rx.bytes", raw.NetworkRxBytes)
+	setI64(m, "network.tx.bytes", raw.NetworkTxBytes)
+	setI64(m, "iowait.ms", raw.IowaitMs)
+	setI64(m, "open.fds.peak", raw.OpenFdsPeak)
+
+	// ── Cache hit/miss counters ────────────────────────────────────────
+	setI64(m, "asset.cache.hit.count", raw.AssetCacheHitCount)
+	setI64(m, "asset.cache.miss.count", raw.AssetCacheMissCount)
+	setI64(m, "blob.cache.hit.count", raw.BlobCacheHitCount)
+	setI64(m, "blob.cache.miss.count", raw.BlobCacheMissCount)
+	setI64(m, "render.cache.hit.count", raw.RenderCacheHitCount)
+
+	// ── Failure attribution ────────────────────────────────────────────
+	setI64(m, "wasted.cpu.ms", raw.WastedCpuMs)
+	setI64(m, "wasted.download.bytes", raw.WastedDownloadBytes)
+	setI32(m, "completed.segments", raw.CompletedSegments)
+	setStr(m, "error.component", raw.ErrorComponent)
+	setStr(m, "error.phase", raw.ErrorPhase)
+
+	// ── Telemetry metadata ─────────────────────────────────────────────
+	setStr(m, "telemetry.coverage.json", raw.TelemetryCoverageJSON)
+	setBool(m, "telemetry.complete", raw.TelemetryComplete)
+	setStr(m, "telemetry.cpu.source", raw.TelemetryCPUSource)
+	setI64(m, "cache.lookups", raw.CacheLookups)
+	setI64(m, "unique.assets.requested", raw.UniqueAssetsRequested)
+	setI64(m, "asset.cache.download.count", raw.CacheDownloadCount)
+	setI64(m, "asset.cache.download.bytes", raw.CacheDownloadBytes)
+
+	// ── Fine-grained phase timings ─────────────────────────────────────
+	setI64(m, "queue.wait.ms", raw.QueueWaitMs)
+	setI64(m, "job.setup.ms", raw.JobSetupMs)
+	setI64(m, "asset.resolve.ms", raw.AssetResolveMs)
+	setI64(m, "asset.download.ms", raw.AssetDownloadMs)
+	setI64(m, "asset.verify.ms", raw.AssetVerifyMs)
+	setI64(m, "asset.materialize.ms", raw.AssetMaterializeMs)
+	setI64(m, "audio.prepare.ms", raw.AudioPrepareMs)
+	setI64(m, "audio.timeline.build.ms", raw.AudioTimelineBuildMs)
+	setI64(m, "render.plan.build.ms", raw.RenderPlanBuildMs)
+	setI64(m, "video.decode.ms", raw.VideoDecodeMs)
+	setI64(m, "video.subtitle.ms", raw.VideoSubtitleMs)
+	setI64(m, "video.subtitle.raster.ms", raw.VideoSubtitleRasterMs)
+	setI64(m, "video.subtitle.composite.ms", raw.VideoSubtitleCompositeMs)
+	setI64(m, "video.watermark.ms", raw.VideoWatermarkMs)
+	setI64(m, "video.watermark.upload.ms", raw.VideoWatermarkUploadMs)
+	setI64(m, "video.watermark.composite.ms", raw.VideoWatermarkCompositeMs)
+	setI64(m, "video.blur.ms", raw.VideoBlurMs)
+	setI64(m, "video.filter.ms", raw.VideoFilterMs)
+	setI64(m, "video.composite.ms", raw.VideoCompositeMs)
+	setI64(m, "video.encode.ms", raw.VideoEncodeMs)
+	setI64(m, "video.concat.ms", raw.VideoConcatMs)
+	setI64(m, "audio.mux.ms", raw.AudioMuxMs)
+	setI64(m, "output.finalize.ms", raw.OutputFinalizeMs)
+	setI64(m, "sha256.ms", raw.Sha256Ms)
+	setI64(m, "ffprobe.ms", raw.FfprobeMs)
+	setI64(m, "artifact.verify.ms", raw.ArtifactVerifyMs)
+	setI64(m, "drive.upload.ms", raw.DriveUploadMs)
+	setI64(m, "drive.verify.ms", raw.DriveVerifyMs)
+	setI64(m, "job.total.ms", raw.JobTotalMs)
+
+	// ── GPU transfers ──────────────────────────────────────────────────
+	setI64(m, "frames.downloaded.from.gpu", raw.FramesDownloadedFromGPU)
+	setI64(m, "frames.uploaded.to.gpu", raw.FramesUploadedToGPU)
+	setI64(m, "gpu.to.cpu.transfer.ms", raw.GpuToCpuTransferMs)
+	setI64(m, "cpu.to.gpu.transfer.ms", raw.CpuToGpuTransferMs)
+	setI64(m, "gpu.to.cpu.bytes", raw.GpuToCpuBytes)
+	setI64(m, "cpu.to.gpu.bytes", raw.CpuToGpuBytes)
+
+	// ── GPU utilization ────────────────────────────────────────────────
+	setF64(m, "gpu.util.avg.pct", raw.GpuUtilAvgPct)
+	setF64(m, "gpu.util.peak.pct", raw.GpuUtilPeakPct)
+	setF64(m, "nvdec.util.avg.pct", raw.NvdecUtilAvgPct)
+	setF64(m, "nvdec.util.peak.pct", raw.NvdecUtilPeakPct)
+	setF64(m, "nvenc.util.avg.pct", raw.NvencUtilAvgPct)
+	setF64(m, "nvenc.util.peak.pct", raw.NvencUtilPeakPct)
+	setI64(m, "vram.used.avg.bytes", raw.VramUsedAvgBytes)
+	setI64(m, "gpu.idle.during.render.ms", raw.GpuIdleMs)
+
+	// ── CPU attribution ────────────────────────────────────────────────
+	setF64(m, "cpu.percent.avg", raw.CpuPercentAvg)
+	setI64(m, "cpu.user.ms", raw.CpuUserMs)
+	setI64(m, "cpu.system.ms", raw.CpuSystemMs)
+	setI64(m, "subtitle.cpu.ms", raw.SubtitleCpuMs)
+	setI64(m, "blur.cpu.ms", raw.BlurCpuMs)
+	setI64(m, "composite.cpu.ms", raw.CompositeCpuMs)
+	setI64(m, "encode.cpu.ms", raw.EncodeCpuMs)
+	setI64(m, "hash.cpu.ms", raw.HashCpuMs)
+
+	// ── Segment / packet-copy stats ────────────────────────────────────
+	setI32(m, "segments.total", raw.SegmentsTotal)
+	setI32(m, "segments.packet.copy", raw.SegmentsPacketCopy)
+	setI32(m, "segments.reencoded", raw.SegmentsReencoded)
+	setI32(m, "segments.composited", raw.SegmentsComposited)
+	setI64(m, "packet.copy.bytes", raw.PacketCopyBytes)
+	setI64(m, "reencoded.bytes", raw.ReencodedBytes)
+	setI64(m, "packet.copy.duration.ms", raw.PacketCopyDurationMs)
+	setI64(m, "reencode.duration.ms", raw.ReencodeDurationMs)
+	setF64(m, "packet.copy.ratio", raw.PacketCopyRatio)
+
+	// ── Download / cache / disk timing ─────────────────────────────────
+	setI64(m, "drive.download.ms", raw.DriveDownloadMs)
+	setI64(m, "blobstore.download.ms", raw.BlobstoreDownloadMs)
+	setI64(m, "local.cache.read.ms", raw.LocalCacheReadMs)
+	setI64(m, "asset.download.wait.ms", raw.AssetDownloadWaitMs)
+	setI64(m, "cache.hit.bytes", raw.CacheHitBytes)
+	setI64(m, "cache.miss.bytes", raw.CacheMissBytes)
+	setI64(m, "output.write.ms", raw.OutputWriteMs)
+	setI64(m, "temp.write.ms", raw.TempWriteMs)
+	setI64(m, "final.read.ms", raw.FinalReadMs)
+	setI64(m, "disk.read.ms", raw.DiskReadMs)
+	setI64(m, "disk.write.ms", raw.DiskWriteMs)
+
+	// ── Bandwidth ──────────────────────────────────────────────────────
+	setF64(m, "download.mbps.avg", raw.DownloadMbpsAvg)
+	setF64(m, "upload.mbps.avg", raw.UploadMbpsAvg)
+	setF64(m, "drive.upload.mbps", raw.DriveUploadMbps)
+	setF64(m, "artifact.download.mbps", raw.ArtifactDownloadMbps)
+
+	// ── Process spawn ──────────────────────────────────────────────────
+	setI64(m, "ffmpeg.exec.count", raw.FfmpegExecCount)
+	setI64(m, "ffprobe.exec.count", raw.FfprobeExecCount)
+	setI64(m, "process.spawn.count", raw.ProcessSpawnCount)
+	setI64(m, "ffmpeg.process.ms", raw.FfmpegProcessMs)
+	setI64(m, "ffprobe.process.ms", raw.FfprobeProcessMs)
+	setI64(m, "process.startup.ms", raw.ProcessStartupMs)
+
+	// ── Audio encode/copy ──────────────────────────────────────────────
+	setI64(m, "audio.copy.ms", raw.AudioCopyMs)
+	setI64(m, "audio.encode.ms", raw.AudioEncodeMs)
+	setI64(m, "audio.packet.copy", raw.AudioPacketCopy)
+	setI64(m, "audio.reencoded", raw.AudioReencoded)
+	setI64(m, "audio.input.bytes", raw.AudioInputBytes)
+	setI64(m, "audio.output.bytes", raw.AudioOutputBytes)
+
+	// ── Critical path ──────────────────────────────────────────────────
+	setStr(m, "critical.path.component", raw.CriticalPathComponent)
+	setI64(m, "critical.path.ms", raw.CriticalPathMs)
+	setF64(m, "critical.path.percent", raw.CriticalPathPercent)
+
+	return m
+}
+
+func setI64(m map[string]interface{}, key string, v int64) {
+	if v != 0 {
+		m[key] = v
+	}
+}
+func setI32(m map[string]interface{}, key string, v int32) {
+	if v != 0 {
+		m[key] = int64(v)
+	}
+}
+func setF64(m map[string]interface{}, key string, v float64) {
+	if v != 0 {
+		m[key] = v
+	}
+}
+func setBool(m map[string]interface{}, key string, v bool) {
+	if v {
+		m[key] = v
+	}
+}
+func setStr(m map[string]interface{}, key string, v string) {
+	if v != "" {
+		m[key] = v
+	}
+}
+
 func (r *TaskRunner) mergeStatsInto(report *TaskExecutionReport, m map[string]interface{}) {
 	if r.cacheStats != nil {
 		cs := r.cacheStats.Stats()
