@@ -82,3 +82,18 @@ func TestLeaseKindsSeparatePreparationFromExecution(t *testing.T) {
 		t.Fatalf("execution lease Validate() error = %v", err)
 	}
 }
+
+func TestSelectPreferredWorkerIsCacheAwareAndStable(t *testing.T) {
+	request := PlacementRequest{RequiredCapabilities: []string{"assembly.v1"}, AssetSHA256: []string{"a", "b", "c"}}
+	decision, err := SelectPreferredWorker([]WorkerPlacementSnapshot{
+		{WorkerID: "worker-c", Available: true, CapacityAuthoritative: true, ActiveExecutionSlots: 0, MaxExecutionSlots: 1, FreeDiskBytes: 100, Capabilities: []string{"assembly.v1"}, CachedSHA256: []string{"a", "b"}},
+		{WorkerID: "worker-b", Available: true, CapacityAuthoritative: true, ActiveExecutionSlots: 0, MaxExecutionSlots: 1, FreeDiskBytes: 100, Capabilities: []string{"assembly.v1"}, CachedSHA256: []string{"a", "b", "c"}},
+		{WorkerID: "worker-a", Available: true, CapacityAuthoritative: false, MaxExecutionSlots: 1, Capabilities: []string{"assembly.v1"}, CachedSHA256: []string{"a", "b", "c"}},
+	}, request)
+	if err != nil {
+		t.Fatalf("SelectPreferredWorker() error = %v", err)
+	}
+	if decision.WorkerID != "worker-b" || decision.CachedAssets != 3 || decision.MissingAssets != 0 {
+		t.Fatalf("decision = %#v, want cache-complete worker-b", decision)
+	}
+}
