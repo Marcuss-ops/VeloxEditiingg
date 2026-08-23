@@ -14,6 +14,7 @@ import (
 
 	"velox-server/internal/ingest"
 	"velox-server/internal/jobs"
+	velmetrics "velox-server/internal/metrics"
 	"velox-server/internal/placement"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
@@ -402,5 +403,6 @@ func buildSpoofHandler(t *testing.T) (*Handler, *spoofStubTaskRepo, *spoofStubJo
 	}
 	handler := NewHandler(nil, nil, jobsRepo, taskRepo, attempts, nil, nil, &HandlerConfig{PushMode: true})
 	handler.SetIngestionSvc(svc)
+	handler.SetCostFactors(velmetrics.DefaultCostFactors())
 	return handler, taskRepo, jobsRepo, outputArts
 }

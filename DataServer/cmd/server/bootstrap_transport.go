@@ -20,6 +20,7 @@ import (
 	"velox-server/internal/config"
 	"velox-server/internal/grpcserver"
 	"velox-server/internal/logging"
+	velmetrics "velox-server/internal/metrics"
 )
 
 // transportBundle owns the running listeners and the single error
@@ -127,6 +128,10 @@ func startTransports(cfg *config.Config, c *appComponents) (*transportBundle, er
 				grpcHandler.SetIngestionSvc(c.tasks.IngestionSvc)
 				logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] installed TaskReportIngestionService on gRPC handler (feat/task-report-ingestion)")
 			}
+			// master-owned cost profile: pass the snapshot from
+			// bootstrap so executionMetricsToCostBasis resolves
+			// price defaults from the operator's configured rates.
+			grpcHandler.SetCostFactors(velmetrics.CostFactorsFromConfig(cfg.Runtime.Metrics))
 			// Scorecard v1: wire the placement rejection counter and
 			// worker resource sink onto the gRPC handler so placement
 			// rejections and heartbeat resource counters land on the

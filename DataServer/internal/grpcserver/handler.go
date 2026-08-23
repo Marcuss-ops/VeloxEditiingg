@@ -90,6 +90,7 @@ type Handler struct {
 	completionStore    completion.UploadProtocolStore
 	chunkedUploadSvc   *artifacts.ChunkedUploadService
 	masterURL          string
+	costFactors        velmetrics.CostFactors
 
 	mu             sync.RWMutex
 	sessions       map[string]*workerSession // sessionID → active stream session

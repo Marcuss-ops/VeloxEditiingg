@@ -98,3 +98,12 @@ func (h *Handler) SetCompletionProtocol(coord completion.Coordinator, store comp
 func (h *Handler) SetPlacementPin(workerID string) {
 	h.placementMatcher.SetPin(strings.TrimSpace(workerID))
 }
+
+// SetCostFactors installs the master-owned cost profile used by
+// executionMetricsToCostBasis to resolve price defaults from the
+// bootstrap-snapshot MetricsConfig. Production MUST call this with
+// CostFactorsFromConfig(cfg.Runtime.Metrics); test handlers default to
+// DefaultCostFactors() when the field is zero.
+func (h *Handler) SetCostFactors(f velmetrics.CostFactors) {
+	h.costFactors = f
+}

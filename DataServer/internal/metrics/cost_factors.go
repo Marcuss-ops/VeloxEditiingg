@@ -1,9 +1,10 @@
 // Package metrics / cost_factors.go
 //
-// SPEC §14 follow-up (cost metrics wiring). Loads the per-EU cost
-// factors from VELOX_* env vars and exposes a typed `CostFactors`
-// struct with a default constructor `LoadCostFactorsFromEnv` used by
-// the supervisor on each tick.
+// SPEC §14 follow-up (cost metrics wiring). Exposes a typed
+// `CostFactors` struct with `DefaultCostFactors` (Hetzner CCX baseline)
+// and `CostFactorsFromConfig(cfg)` for bootstrap-snapshot injection.
+// Environment loading belongs exclusively to internal/config;
+// runtime services receive the snapshot via SetCostFactors().
 //
 // Defaults calibrated to Hetzner Cloud CCX pricing snapshot:
 //   - €0.000005 per CPU·core·second
@@ -85,13 +86,6 @@ func CostFactorsFromConfig(c config.MetricsConfig) CostFactors {
 		NetworkGBEUR:     c.NetworkCostEUR,
 		StorageGBEUR:     c.StorageCostEUR,
 	}
-}
-
-// LoadCostFactorsFromEnv is retained for package-level compatibility tests.
-// Deprecated: pass config.MetricsConfig from the bootstrap snapshot to
-// CostFactorsFromConfig; runtime services must not reload process env.
-func LoadCostFactorsFromEnv() CostFactors {
-	return CostFactorsFromConfig(config.FromEnv().Runtime.Metrics)
 }
 
 // CostPerOutputMinute computes the cost per output minute for a

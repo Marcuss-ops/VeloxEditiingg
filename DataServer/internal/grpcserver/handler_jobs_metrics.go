@@ -165,6 +165,27 @@ func executionMetricsToAttemptMetrics(attemptID string, em *pb.TaskExecutionMetr
 	am.CPUQuota = em.GetCpuQuota()
 	am.EffectiveCPUCount = int(em.GetEffectiveCpuCount())
 
+	// ── Scorecard v3 / observability pipeline completion ─────────────
+	am.ThroughputX = em.GetThroughputX()
+	am.CriticalPathPercent = em.GetCriticalPathPercent()
+	am.CriticalPathMS = em.GetCriticalPathMs()
+	am.CriticalPathComponent = em.GetCriticalPathComponent()
+	am.PacketCopyRatio = em.GetPacketCopyRatio()
+
+	am.GPUUtilAvgPct = em.GetGpuUtilAvgPercent()
+	am.GPUUtilPeakPct = em.GetGpuUtilPeakPercent()
+	am.NVDECUtilAvgPct = em.GetNvdecUtilAvgPercent()
+	am.NVDECUtilPeakPct = em.GetNvdecUtilPeakPercent()
+	am.NVENCUtilAvgPct = em.GetNvencUtilAvgPercent()
+	am.NVENCUtilPeakPct = em.GetNvencUtilPeakPercent()
+	am.VRAMUsedAvgBytes = em.GetVramUsedAvgBytes()
+	am.GPUIdleDuringRenderMS = em.GetGpuIdleDuringRenderMs()
+
+	am.FramesDownloadedFromGPU = em.GetFramesDownloadedFromGpu()
+	am.FramesUploadedToGPU = em.GetFramesUploadedToGpu()
+	am.GPUToCPUBytes = em.GetGpuToCpuBytes()
+	am.CPUToGPUBytes = em.GetCpuToGpuBytes()
+
 	return am
 }
 
@@ -305,7 +326,7 @@ var cacheStatsDerivationWarn sync.Once
 //
 // All-zero on a 0-byte / old-worker attempt still produces a valid
 // (zero) cost row so the scorecard exporter has a stable row to roll up.
-func executionMetricsToCostBasis(attemptID string, em *pb.TaskExecutionMetrics) taskattempts.AttemptCostBasis {
+func executionMetricsToCostBasis(attemptID string, em *pb.TaskExecutionMetrics, factors velmetrics.CostFactors) taskattempts.AttemptCostBasis {
 	cb := taskattempts.AttemptCostBasis{
 		AttemptID:           attemptID,
 		CPUTimeSecondsTotal: 0,
@@ -319,9 +340,9 @@ func executionMetricsToCostBasis(attemptID string, em *pb.TaskExecutionMetrics) 
 	}
 	// Prices are master-owned. A worker-provided non-zero value is retained
 	// for compatibility with older deployments, but a zero/missing value is
-	// resolved from the master's configured cost profile so real usage never
-	// produces an all-zero cost row.
-	factors := velmetrics.LoadCostFactorsFromEnv()
+	// resolved from the master's configured cost profile (injected via
+	// CostFactorsFromConfig at bootstrap) so real usage never produces an
+	// all-zero cost row.
 	cb.CPUPricePerSecond = em.GetCpuPricePerSecond()
 	if cb.CPUPricePerSecond <= 0 {
 		cb.CPUPricePerSecond = factors.CPUCoreSecondEUR
