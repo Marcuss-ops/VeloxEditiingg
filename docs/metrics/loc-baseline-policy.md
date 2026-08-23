@@ -6,8 +6,10 @@
 
 Threshold policy used in this baseline:
 - **Production Go:** warn > 600 LOC, refactor-required > 900 LOC
+- **Production C/C++:** warn > 600 LOC, refactor-required > 900 LOC
 - **Test Go:** warn > 900 LOC, refactor-required > 1 200 LOC
 - **Generated** (`.pb.go`, gRPC schemas, mocks): exempt
+- **Generated/build C/C++** (`generated/`, `CMakeFiles/`, build trees): exempt
 - **Docs:** warn > 800 LOC, refactor-required > 1 200 LOC
 - **Scripts:** warn > 400 LOC, refactor-required > 700 LOC
 

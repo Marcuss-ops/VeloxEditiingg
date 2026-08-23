@@ -413,14 +413,17 @@ operator E2E orchestrator; the refactor split is tracked above and in
 
 ### Round-6 carry-over (snapshot 2026-08-13)
 
-| File | LOC | Category | Refactor target | Status |
-| --- | ---: | --- | --- | --- |
-| `DataServer/internal/store/store_deployment_records_test.go` | 1 551 | test Go | Split deployment-record, worker-state, and restart-recovery scenarios by domain | real refactor target, tracked |
+The deployment-record test split has landed. The former monolith is now a
+small package anchor, with CRUD, state, and recovery scenarios in focused
+companion files under `DataServer/internal/store/`; its carry-over entry was
+removed from the LOC gate.
 
-The deployment-record test grew with the canonical deployment state machine,
-verified digest transitions, and restart-recovery invariants. It remains a
-real refactor target; remove this entry when the scenarios are split into
-focused test files.
+### C/C++ gate (added 2026-08-23)
+
+Production C/C++ now uses the same refactor-required boundary as production
+Go: files above 900 LOC fail the gate. Generated code, vendored code, and
+CMake build metadata are excluded from the scan. The current video-engine
+facades and service units are below the threshold.
 
 ### Round-4 carry-over (snapshot 2026-07-28)
 

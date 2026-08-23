@@ -8,12 +8,13 @@
 #
 # Thresholds per §11 (refactor-required boundary):
 #   prod Go (non-test, non-generated)   >  900 LOC
+#   production C/C++ (non-generated)    >  900 LOC
 #   test Go (*_test.go)                 > 1200 LOC
 #   shell (.sh)                         >  700 LOC
 #   docs (.md)                      > 1200 LOC
 #   yaml (.yml, excl. workflows/)       >  800 LOC
 #
-# Generated code (e.g. *.pb.go) and CI workflows
+# Generated code (e.g. *.pb.go), CMake build trees, and CI workflows
 # themselves are exempt per §10 / §11 policy annotations.
 #
 # KNOWN_VIOLATIONS list format:
@@ -28,6 +29,7 @@
 set -u
 
 THRESH_PROD_GO=900
+THRESH_PROD_CPP=900
 THRESH_TEST_GO=1200
 THRESH_SH=700
 THRESH_MD=1200
@@ -139,7 +141,6 @@ KNOWN_VIOLATIONS_ROUND3=(
 # 2026-08-13). Split by domain after the concurrent store error-leaf
 # extraction lands; keep the gate visible until that refactor is complete.
 KNOWN_VIOLATIONS_ROUND4=(
-  "DataServer/internal/store/store_deployment_records_test.go|Round-6 test carry-over (1551 LOC); split deployment-record and worker-deployment-state/recovery scenarios by domain — tracked in loc-baseline.md §10c"
 )
 
 # STRUCTURAL_LONG_FILES — files whose LOC naturally exceeds the
@@ -197,6 +198,8 @@ BUILD_NOISE_EXCLUDES=(
   -not -path '*/node_modules/*'
   -not -path '*/build'
   -not -path '*/build/*'
+  -not -path '*/CMakeFiles'
+  -not -path '*/CMakeFiles/*'
   -not -path '*/.pb-cache'
   -not -path '*/.pb-cache/*'
 )
@@ -248,6 +251,15 @@ scan_dir prod-go "$THRESH_PROD_GO" \
   -type f -name '*.go' \
   -not -name '*_test.go' \
   -not -path './shared/controltransport/pb/*.pb.go'
+
+scan_dir prod-cpp "$THRESH_PROD_CPP" \
+  "${BUILD_NOISE_EXCLUDES[@]}" \
+  -type f \( \
+    -name '*.c' -o -name '*.cc' -o -name '*.cpp' -o -name '*.cxx' \
+    -o -name '*.h' -o -name '*.hh' -o -name '*.hpp' -o -name '*.hxx' \
+  \) \
+  -not -path '*/generated/*' \
+  -not -path '*/vendor/*'
 
 scan_dir test-go "$THRESH_TEST_GO" \
   "${BUILD_NOISE_EXCLUDES[@]}" \
