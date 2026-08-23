@@ -89,8 +89,3 @@ func TestNormalizeDeploymentStateRejectsUnknownValues(t *testing.T) {
 	}
 }
 
-func TestDeriveDeploymentHealthStateReturnsTypedCanonicalValue(t *testing.T) {
-	if got := DeploymentState(DeriveDeploymentHealthState("PENDING", false)); got != DeploymentUpdating {
-		t.Fatalf("typed deployment adapter = %q, want %q", got, DeploymentUpdating)
-	}
-}

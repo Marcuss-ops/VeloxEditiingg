@@ -17,7 +17,7 @@
 
 //  5. INSERT deployment_records row, status=PENDING,
 //     is_rollback=false. Health() flips to UPDATING via
-//     DeriveDeploymentHealthState precedence rank 4.
+//     NormalizeDeploymentState precedence rank 4.
 //  6. forward pipeline:
 //     a. cosign verify target_digest (with VELOX_SKIP_*
 //     override sentinel).

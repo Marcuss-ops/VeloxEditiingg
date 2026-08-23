@@ -103,7 +103,7 @@ func (e *UpdateExecutor) runRollback(ctx context.Context, op *store.Operation, p
 		op.WorkerID, forwardErr, previousDigest, deploymentID)
 
 	// Insert the rollback PENDING row. is_rollback=true from
-	// creation so Health() flips to ROLLBACK immediately.
+	// creation so DeriveHealthState flips to ROLLBACK immediately.
 	if err := e.backend.Deployments.InsertDeploymentRecord(ctx, store.DeploymentRecord{
 		DeploymentID:   deploymentID,
 		WorkerID:       op.WorkerID,
