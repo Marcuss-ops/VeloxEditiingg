@@ -45,11 +45,14 @@ set(VELOX_PACKET_PIPELINE_COMPONENT_SOURCES
     src/services/media_packet_copy.cpp
     src/services/media_packet_muxer.cpp)
 set(VELOX_MEDIA_UTILS_SOURCES
-    src/services/media_utils_config.cpp
-    src/services/media_utils_probe.cpp
+    src/services/media_utils_codec.cpp
+    src/services/media_utils_stream.cpp
+    src/services/media_utils_timestamp.cpp
+    src/services/media_utils_pixel_format.cpp
     src/services/media_utils_audio.cpp
     src/services/media_utils_builders.cpp
-    src/services/media_utils_execution.cpp)
+    src/services/media_utils_execution.cpp
+    src/services/media_utils_probe.cpp)
 set(VELOX_FRAME_PIPELINE_SOURCES
     src/services/frame_pipeline.cpp
     src/services/frame_pipeline_queue.cpp
@@ -182,7 +185,10 @@ add_executable(velox_video_engine
     src/main.cpp
     src/cmd_full_video.cpp
     src/video_builder.cpp
-    src/plan/render_plan_parser.cpp
+        src/plan/render_plan_parser.cpp
+        src/plan/render_plan_parser_helpers.cpp
+        src/plan/render_plan_parser_v1.cpp
+        src/plan/render_plan_parser_v2.cpp
     src/app/commands.cpp
     src/services/file_utils.cpp
     src/services/io_counters.cpp
@@ -653,7 +659,10 @@ if(VELOX_ENABLE_LIBAV)
     # RenderEngine::render() under a sentinel PATH.
     add_executable(velox_render_plan_v2_tests
         tests/test_render_plan_v2.cpp
-        src/plan/render_plan_parser.cpp
+            src/plan/render_plan_parser.cpp
+        src/plan/render_plan_parser_helpers.cpp
+        src/plan/render_plan_parser_v1.cpp
+        src/plan/render_plan_parser_v2.cpp
         src/audio/audio_plan.cpp
         src/audio/audio_benchmark.cpp
         ${VELOX_RENDER_ENGINE_SOURCES}
@@ -689,7 +698,10 @@ if(VELOX_ENABLE_LIBAV)
     # sentinel PATH is installed; the render itself must stay in-process.
     add_executable(velox_render_visual_replacement_golden_tests
         tests/test_render_visual_replacement_golden.cpp
-        src/plan/render_plan_parser.cpp
+            src/plan/render_plan_parser.cpp
+        src/plan/render_plan_parser_helpers.cpp
+        src/plan/render_plan_parser_v1.cpp
+        src/plan/render_plan_parser_v2.cpp
         src/audio/audio_plan.cpp
         src/audio/audio_benchmark.cpp
         ${VELOX_RENDER_ENGINE_SOURCES}
@@ -724,7 +736,10 @@ if(VELOX_ENABLE_LIBAV)
     # transcode. VELOX_BENCH_EVIDENCE_DIR pins fixtures + benchmark.json.
     add_executable(velox_render_visual_replacement_benchmark_tests
         tests/test_render_visual_replacement_benchmark.cpp
-        src/plan/render_plan_parser.cpp
+            src/plan/render_plan_parser.cpp
+        src/plan/render_plan_parser_helpers.cpp
+        src/plan/render_plan_parser_v1.cpp
+        src/plan/render_plan_parser_v2.cpp
         src/audio/audio_plan.cpp
         src/audio/audio_benchmark.cpp
         ${VELOX_RENDER_ENGINE_SOURCES}
