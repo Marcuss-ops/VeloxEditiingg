@@ -178,13 +178,10 @@ func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskEx
 	phaseTimer := telemetry.NewJobPhaseTimer()
 	gpuTransferTracker := telemetry.NewGPUTransferTracker()
 	// GPU sampler: runs in background for the job duration, sampling
-	// nvidia-smi utilization/VRAM. The GPU is selected from
-	// CUDA_VISIBLE_DEVICES so each worker samples its own GPU.
-	// Skipped silently if no GPU present.
+	// nvidia-smi utilization/VRAM. Skipped silently if no GPU present.
 	var gpuSampler *telemetry.GPUSampler
 	if telemetry.IsGPUAvailable() {
-		gpuID := telemetry.GPUIndexFromCUDAVisibleDevices()
-		gpuSampler = telemetry.NewGPUSampler(parent, 500*time.Millisecond, gpuID)
+		gpuSampler = telemetry.NewGPUSampler(parent, 500*time.Millisecond)
 	}
 	// Ensure GPU sampler is stopped on all exit paths.
 	defer func() {
