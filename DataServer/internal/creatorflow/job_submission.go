@@ -101,20 +101,6 @@ func (s *CanonicalJobSubmitter) WithIntakeSourceRecorder(r IntakeSourceRecorder)
 	return s
 }
 
-// JobSubmissionService is a deprecated alias for CanonicalJobSubmitter,
-// retained so existing handlers compile during the migration. New code MUST
-// use CanonicalJobSubmitter.
-//
-// Deprecated: use CanonicalJobSubmitter.
-type JobSubmissionService = CanonicalJobSubmitter
-
-// NewJobSubmissionService is a deprecated alias for NewCanonicalJobSubmitter.
-//
-// Deprecated: use NewCanonicalJobSubmitter.
-func NewJobSubmissionService(resolver *Resolver) *CanonicalJobSubmitter {
-	return NewCanonicalJobSubmitter(resolver)
-}
-
 func (s *CanonicalJobSubmitter) Submit(ctx context.Context, req CanonicalJobSubmission) (*ResolveOutput, error) {
 	if s == nil || s.resolver == nil {
 		return nil, fmt.Errorf("job submission service is not configured")

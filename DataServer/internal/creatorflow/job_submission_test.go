@@ -260,12 +260,3 @@ func TestCanonicalJobSubmitter_SubmitRawCreatesJobAndRecordsIntake(t *testing.T)
 		t.Fatalf("recorder calls = %v, want [%s]", calls, IntakeSourceCalendar)
 	}
 }
-
-// TestJobSubmissionServiceAliasCompiles pins the deprecated alias so the
-// migration contract (old name still resolves to CanonicalJobSubmitter) is
-// explicit and guarded against accidental removal. It uses a nil resolver
-// (nil submitter) because the test only checks the type contract.
-func TestJobSubmissionServiceAliasCompiles(t *testing.T) {
-	var _ *JobSubmissionService = NewJobSubmissionService(nil)
-	var _ *CanonicalJobSubmitter = NewCanonicalJobSubmitter(nil)
-}

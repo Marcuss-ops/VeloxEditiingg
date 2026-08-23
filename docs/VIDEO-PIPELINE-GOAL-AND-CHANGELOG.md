@@ -194,8 +194,7 @@ convergere gli adapter, non per aggiungere un altro endpoint.
 ### 2026-08-17 — CanonicalJobSubmitter e telemetry intake_source
 
 - Introdotto `creatorflow.CanonicalJobSubmitter` come unico percorso di
-  submission Job+Task (il vecchio `JobSubmissionService` resta come alias
-  deprecato). Il submitter stampa `IntakeSource` su ogni submission e
+  submission Job+Task. Il submitter stampa `IntakeSource` su ogni submission e
   registra la telemetria `pipeline.intake_source_accepted_total{intake_source}`.
 - Gli adapter che già passavano dal submitter (canonico `/api/v1/jobs`,
   creator push, batch, instaedit BFF) ora stampano il proprio
