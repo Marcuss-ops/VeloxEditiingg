@@ -293,7 +293,12 @@ def test_current_worker_release_provenance_and_operator_bridge() -> None:
     require(
         ".github/workflows/worker-image.yml",
         "Verify checkout is the event commit",
+        "./.github/actions/worker-certify",
+    )
+    require(
+        ".github/actions/worker-certify/action.yml",
         '"commit":         "${{ github.sha }}"',
+        '"workflow_file":  "worker-image.yml"',
     )
     # scripts/fleetctl is only the thin executable launcher now. The canonical
     # Master-API implementation lives in the typed Go fleetctl package:

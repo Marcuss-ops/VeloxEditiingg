@@ -420,10 +420,16 @@ removed from the LOC gate.
 
 ### C/C++ gate (added 2026-08-23)
 
-Production C/C++ now uses the same refactor-required boundary as production
-Go: files above 900 LOC fail the gate. Generated code, vendored code, and
-CMake build metadata are excluded from the scan. The current video-engine
-facades and service units are below the threshold.
+Production C/C++ now uses the same policy as production Go: files above
+900 LOC fail the gate, with 600 LOC as the review-warning threshold. The
+scan covers `.c`, `.cc`, `.cpp`, `.cxx`, `.h`, `.hh`, `.hpp`, and `.hxx`.
+Generated paths/names, vendored code, CMake build trees, and CI workflow
+metadata remain excluded; changelog and OpenAPI remain known structural
+warning-only exceptions according to their existing policy.
+The current video-engine facades and service units are below the threshold.
+The boundary and exclusion behavior is regression-tested offline by
+`scripts/ci/test-loc-thresholds.sh`, which exercises both `.cpp` and `.hpp`
+files plus generated, vendor, build, changelog, and OpenAPI cases.
 
 ### Round-4 carry-over (snapshot 2026-07-28)
 

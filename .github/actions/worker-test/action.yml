@@ -1,0 +1,29 @@
+name: Worker tests
+description: Run the worker-agent Go race test gate with one retry.
+inputs:
+  build-dir:
+    description: Worker agent directory containing go.mod.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Setup Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.25.8'
+        cache-dependency-path: ${{ inputs.build-dir }}/go.sum
+
+    - name: Run tests with race detector (fail-fast gate)
+      shell: bash
+      working-directory: ${{ inputs.build-dir }}
+      run: |
+        set -euo pipefail
+        for attempt in 1 2; do
+          if go test -race -timeout 5m ./internal/... ./pkg/...; then
+            exit 0
+          fi
+          if [ "$attempt" -eq 1 ]; then
+            echo "Race suite failed once; retrying once to distinguish a transient failure." >&2
+          fi
+        done
+        exit 1

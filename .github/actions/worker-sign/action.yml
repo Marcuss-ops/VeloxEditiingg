@@ -1,0 +1,47 @@
+name: Worker image signing
+description: Sign and verify a published worker image digest with Cosign keyless OIDC.
+inputs:
+  image-repo:
+    description: Fully qualified worker image repository.
+    required: true
+  digest:
+    description: Immutable image digest to sign and verify.
+    required: true
+  push:
+    description: Whether signing is enabled for this run.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Install cosign
+      if: inputs.digest != '' && inputs.push == 'true'
+      uses: sigstore/cosign-installer@v3
+      with:
+        cosign-release: 'v2.4.1'
+
+    - name: Cosign keyless sign (OIDC)
+      if: inputs.digest != '' && inputs.push == 'true'
+      shell: bash
+      env:
+        COSIGN_EXPERIMENTAL: '1'
+      run: |
+        set -euo pipefail
+        IMAGE="${{ inputs.image-repo }}@${{ inputs.digest }}"
+        echo "Signing image: $IMAGE"
+        cosign sign --yes "$IMAGE"
+
+    # The identity policy is intentionally pinned to this repository's
+    # worker-image workflow and the Actions OIDC issuer.
+    - name: Cosign keyless verify (OIDC, Phase 1)
+      if: inputs.digest != '' && inputs.push == 'true'
+      shell: bash
+      env:
+        COSIGN_EXPERIMENTAL: '1'
+      run: |
+        set -euo pipefail
+        IMAGE="${{ inputs.image-repo }}@${{ inputs.digest }}"
+        echo "Verifying image: $IMAGE"
+        cosign verify \
+          --certificate-identity-regexp='^https://github.com/Marcuss-ops/VeloxEditiingg/\.github/workflows/worker-image\.yml@refs/(tags/worker-v.+|heads/.+)' \
+          --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
+          "$IMAGE"

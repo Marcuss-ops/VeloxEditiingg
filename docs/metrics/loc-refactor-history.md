@@ -16,7 +16,7 @@
 * **File:** `scripts/ci/check-loc-thresholds.sh` (**+84 LOC**, deferral-friendly via `KNOWN_VIOLATIONS` allow-list).
 * **CI step:** `.github/workflows/ci.yml` → new step `LOC threshold gate` with `if: always()` (runs even if other steps fail).
 * **Lint:** `.golangci.yml` → `funlen: lines: 600` enabled (warn-only; inform but do not block).
-* **Threshold policy:** unchanged from §11 (prod-go>900, test-go>1200, shell>700, docs>1200, yaml>800).
+* **Threshold policy:** prod Go/C++ >900, test Go >1200, shell >700, docs >1200, yaml >800; generated/build C++ and structural changelog/OpenAPI files remain exempt or warning-only per §11.
 * **Result:** script exits **0** with **9 `::warning`** + **0 `::error`** on day-1.
 
 ### 15.2 KNOWN_VIOLATIONS allow-list (9 entries, 2 sub-arrays)

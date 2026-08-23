@@ -14,8 +14,9 @@
 #   docs (.md)                      > 1200 LOC
 #   yaml (.yml, excl. workflows/)       >  800 LOC
 #
-# Generated code (e.g. *.pb.go), CMake build trees, and CI workflows
-# themselves are exempt per §10 / §11 policy annotations.
+# Generated code (e.g. *.pb.go, *_generated.cpp, *_generated.hpp), CMake
+# build trees, and CI workflows themselves are exempt per §10 / §11 policy
+# annotations.
 #
 # KNOWN_VIOLATIONS list format:
 #   <repo-relative-path>|<kind>|<approx-loc>|<tracking-ref>
@@ -211,8 +212,14 @@ KNOWN_HITS=0
 STRUCTURAL_HITS=0
 
 # Anchor at the repository root regardless of how/where this script is invoked.
-ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || ROOT=$(cd "$(dirname "$0")/../.." && pwd)
-cd "$ROOT"
+# LOC_GATE_ROOT is intentionally supported for the offline policy fixture tests;
+# normal CI invocations leave it unset and use the current Git repository.
+if [ -n "${LOC_GATE_ROOT:-}" ]; then
+  ROOT="$LOC_GATE_ROOT"
+else
+  ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || ROOT=$(cd "$(dirname "$0")/../.." && pwd)
+fi
+cd "$ROOT" || exit 1
 
 is_known() {
   # Strip leading ./ emitted by `find .` so the path matches against the
@@ -259,7 +266,12 @@ scan_dir prod-cpp "$THRESH_PROD_CPP" \
     -o -name '*.h' -o -name '*.hh' -o -name '*.hpp' -o -name '*.hxx' \
   \) \
   -not -path '*/generated/*' \
-  -not -path '*/vendor/*'
+  -not -path '*/gen/*' \
+  -not -path '*/vendor/*' \
+  -not -path './.github/workflows/*' \
+  -not -name '*_generated.*' \
+  -not -name '*.generated.*' \
+  -not -name 'generated_*.*'
 
 scan_dir test-go "$THRESH_TEST_GO" \
   "${BUILD_NOISE_EXCLUDES[@]}" \

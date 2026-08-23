@@ -102,351 +102,56 @@ jobs:
           echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
           if [ "${{ github.event_name }}" = "push" ]; then
             SHOULD_PUSH="true"
+          elif [ "${{ inputs.no_push }}" = "true" ]; then
+            SHOULD_PUSH="false"
           else
-            if [ "${{ inputs.no_push }}" = "true" ]; then
-              SHOULD_PUSH="false"
-            else
-              SHOULD_PUSH="true"
-            fi
+            SHOULD_PUSH="true"
           fi
           echo "push=${SHOULD_PUSH}" >> "$GITHUB_OUTPUT"
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      # The test action owns only the worker race gate. It deliberately runs
+      # before Buildx and publication, preserving the fail-fast release order.
+      - name: Worker tests (race detector)
+        uses: ./.github/actions/worker-test
         with:
-          go-version: '1.25.8'
-          cache-dependency-path: ${{ env.BUILD_DIR }}/go.sum
+          build-dir: ${{ env.BUILD_DIR }}
 
-      - name: Run tests with race detector (fail-fast gate)
-        working-directory: ${{ env.BUILD_DIR }}
-        run: |
-          set -euo pipefail
-          for attempt in 1 2; do
-            if go test -race -timeout 5m ./internal/... ./pkg/...; then
-              exit 0
-            fi
-            if [ "$attempt" -eq 1 ]; then
-              echo "Race suite failed once; retrying once to distinguish a transient failure." >&2
-            fi
-          done
-          exit 1
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GHCR
-        if: steps.version.outputs.push == 'true'
-        uses: docker/login-action@v3
+      # This action owns Buildx, GHCR login, explicit non-latest tags, image
+      # publication, digest extraction, registry digest verification, and the
+      # worker-image-digest artifact. It keeps the digest in the same job so
+      # later signing and certification consume the exact build output.
+      - name: Worker image build and digest verification
+        id: build
+        uses: ./.github/actions/worker-build
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          image-repo: ${{ env.IMAGE_REPO }}
+          build-context: ${{ env.BUILD_CONTEXT }}
+          dockerfile: ${{ env.DOCKERFILE }}
+          tag: ${{ steps.version.outputs.tag }}
+          push: ${{ steps.version.outputs.push }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cache-scope: ${{ github.workflow }}-${{ github.ref_name }}
 
-      # Phase 1: NEVER tag :latest. metadata-action's `flavor: latest=false`
-      # disables all default tag-generation paths; the two explicit tags
-      # below (raw semver + sha-<short>) carry every release.
-      - name: "Compute image tags (NO :latest)"
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.IMAGE_REPO }}
-          tags: |
-            type=raw,value=${{ steps.version.outputs.tag }}
-            type=sha,prefix=sha-,format=short
-          flavor: |
-            latest=false
-
-      - name: Build + push image
-        id: build
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ env.BUILD_CONTEXT }}
-          file: ${{ env.DOCKERFILE }}
-          push: ${{ steps.version.outputs.push == 'true' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            SOURCE_DATE_EPOCH=0
-          provenance: true
-          sbom: true
-          cache-from: type=gha,scope=${{ github.workflow }}-${{ github.ref_name }}
-          cache-to:   type=gha,mode=max,scope=${{ github.workflow }}-${{ github.ref_name }}
-
-      - name: Extract image digest
-        id: digest
-        if: steps.build.outputs.digest != ''
-        run: |
-          set -euo pipefail
-          echo "digest=${{ steps.build.outputs.digest }}" >> "$GITHUB_OUTPUT"
-          echo "${{ steps.build.outputs.digest }}" > image-digest.txt
-          echo "## Image digest" >> "$GITHUB_STEP_SUMMARY"
-          echo ":package: \`${{ steps.build.outputs.digest }}\`" >> "$GITHUB_STEP_SUMMARY"
-          TAGS='${{ steps.meta.outputs.tags }}'
-          while IFS= read -r t; do
-            [ -n "$t" ] && echo "- \`$t\`" >> "$GITHUB_STEP_SUMMARY"
-          done <<< "$TAGS"
-
-      # Verify the registry resolves the exact immutable digest emitted by
-      # build-push. This prevents a mutable tag or registry propagation race
-      # from silently changing the release identity after publication.
-      - name: Verify published image digest (canonical)
+      # Signing remains digest-only and is disabled for no-push validation
+      # runs. The action contains the repository/workflow-bound OIDC identity
+      # policy and the canonical token issuer check.
+      - name: Worker image signing and verification
         if: steps.build.outputs.digest != '' && steps.version.outputs.push == 'true'
-        run: |
-          set -euo pipefail
-          IMAGE="${{ env.IMAGE_REPO }}"
-          EXPECTED="${{ steps.digest.outputs.digest }}"
-          ACTUAL="$(docker buildx imagetools inspect "${IMAGE}:${{ steps.version.outputs.tag }}" \
-            | awk '/^Digest:/ {print $2; exit}')"
-          if [ "$ACTUAL" != "$EXPECTED" ]; then
-            echo "::error::published digest mismatch: expected=${EXPECTED} actual=${ACTUAL}" >&2
-            exit 1
-          fi
-          echo "Published digest verified: ${IMAGE}@${ACTUAL}"
-
-      - name: Upload digest artifact
-        if: steps.build.outputs.digest != ''
-        uses: actions/upload-artifact@v4
+        uses: ./.github/actions/worker-sign
         with:
-          name: worker-image-digest
-          path: image-digest.txt
-          if-no-files-found: error
+          image-repo: ${{ env.IMAGE_REPO }}
+          digest: ${{ steps.build.outputs.digest }}
+          push: ${{ steps.version.outputs.push }}
 
-      - name: Install cosign
-        if: steps.digest.outputs.digest != '' && steps.version.outputs.push == 'true'
-        uses: sigstore/cosign-installer@v3
+      # Certification runs only against the immutable published digest and
+      # preserves baseline, real bootstrap, audio canary, mixed canary, and
+      # entrypoint smoke in their original order.
+      - name: Worker image certification
+        if: steps.build.outputs.digest != '' && steps.version.outputs.push == 'true'
+        uses: ./.github/actions/worker-certify
         with:
-          cosign-release: 'v2.4.1'
-
-      - name: Cosign keyless sign (OIDC)
-        if: steps.digest.outputs.digest != '' && steps.version.outputs.push == 'true'
-        env:
-          COSIGN_EXPERIMENTAL: '1'
-        run: |
-          set -euo pipefail
-          IMAGE="${{ env.IMAGE_REPO }}@${{ steps.digest.outputs.digest }}"
-          echo "Signing image: $IMAGE"
-          cosign sign --yes "$IMAGE"
-
-      # Phase 1 of 100% Velox certification plan (cap. 2): close the
-      # sign+verify loop inside CI. Mirrors prepare-host.sh's regex so
-      # the worker host and CI agree on the canonical signatory
-      # identity for the worker-image workflow file in this exact repo.
-      - name: Cosign keyless verify (OIDC, Phase 1)
-        if: steps.digest.outputs.digest != '' && steps.version.outputs.push == 'true'
-        env:
-          COSIGN_EXPERIMENTAL: '1'
-        run: |
-          set -euo pipefail
-          IMAGE="${{ env.IMAGE_REPO }}@${{ steps.digest.outputs.digest }}"
-          echo "Verifying image: $IMAGE"
-          cosign verify \
-            --certificate-identity-regexp='^https://github.com/Marcuss-ops/VeloxEditiingg/\.github/workflows/worker-image\.yml@refs/(tags/worker-v.+|heads/.+)' \
-            --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
-            "$IMAGE"
-
-      # Phase 1 baseline manifest (cap. 2): record canonical mapping
-      # digest -> version + bundle_hash + source_hash so certifiers
-      # + cap. 11 evidence pack can pin every running worker to a
-      # known bundle identity without an extra DB lookup.
-      - name: Record baseline manifest (Phase 1)
-        if: steps.digest.outputs.digest != '' && steps.version.outputs.push == 'true'
-        env:
-          IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
-        run: |
-          set -euo pipefail
-          VERSION="$(tr -d '[:space:]' < VERSION.txt 2>/dev/null || echo '')"
-          BUNDLE_HASH=""
-          SOURCE_HASH="$(python3 -c 'import json;print(json.load(open("RemoteCodex/BUILD_INFO.json")).get("source_hash",""))' 2>/dev/null || echo '')"
-          PROTOCOL_VERSION="$(python3 -c 'import json;print(json.load(open("RemoteCodex/BUILD_INFO.json")).get("protocol_version",""))' 2>/dev/null || echo '')"
-          CAPABILITY_SCHEMA="$(python3 -c 'import json;print(json.load(open("RemoteCodex/BUILD_INFO.json")).get("capability_schema",""))' 2>/dev/null || echo '')"
-          ENGINE_SHA=""
-          if [[ "${{ steps.version.outputs.push }}" == "true" ]]; then
-            # The builder writes this file into the runtime image. Pull the
-            # exact digest before inspecting it, so the engine hash and image
-            # digest form one identity. This step is skipped for no-push
-            # validation builds because buildx does not load an image locally.
-            IMAGE_REF="${{ env.IMAGE_REPO }}@${{ steps.digest.outputs.digest }}"
-            docker pull "$IMAGE_REF" >/dev/null
-            ENGINE_SHA="$(docker run --rm --entrypoint /bin/sh "$IMAGE_REF" -c 'awk "length(\$1)==64 && \$1 ~ /^[0-9a-fA-F]+$/ {print tolower(\$1); exit}" /usr/local/share/velox/video-engine.sha256' 2>/dev/null || true)"
-            BUNDLE_HASH="$(docker run --rm --entrypoint /bin/sh "$IMAGE_REF" -c 'awk "length(\$1)==64 && \$1 ~ /^[0-9a-fA-F]+$/ {print tolower(\$1); exit}" /app/RemoteCodex/BUNDLE_HASH.txt' 2>/dev/null || true)"
-            IMAGE_BUNDLE_HASH="$(docker run --rm --entrypoint /bin/sh "$IMAGE_REF" -c 'set -eu; sha256sum /usr/local/bin/velox-worker-agent /usr/local/bin/velox_video_engine /usr/local/bin/velox-cache-evict | sha256sum | awk "{print \$1}"' 2>/dev/null || true)"
-            [[ "$IMAGE_BUNDLE_HASH" == "$BUNDLE_HASH" ]] || {
-              echo "::error::image bundle hash mismatch: embedded=$BUNDLE_HASH actual=$IMAGE_BUNDLE_HASH" >&2
-              exit 1
-            }
-          fi
-          if [[ -z "$VERSION" || ! "$ENGINE_SHA" =~ ^[a-f0-9]{64}$ || ! "$BUNDLE_HASH" =~ ^[a-f0-9]{64}$ || ! "$SOURCE_HASH" =~ ^[a-f0-9]{64}$ ]]; then
-            echo "::error::release metadata missing canonical VERSION, bundle hash, source hash, or engine SHA-256" >&2
-            exit 1
-          fi
-          if [[ -z "$PROTOCOL_VERSION" || -z "$CAPABILITY_SCHEMA" ]]; then
-            echo "::error::release metadata missing protocol_version or capability_schema (BUILD_INFO.json)" >&2
-            exit 1
-          fi
-          python3 - <<PYEOF
-          import json, os
-          tags = os.environ["IMAGE_TAGS"].split()
-          manifest = {
-            "digest":         "${{ steps.digest.outputs.digest }}",
-            "registry_image": "${{ env.IMAGE_REPO }}",
-            "tags":           tags,
-            "version":        "$VERSION",
-            "bundle_hash":    "$BUNDLE_HASH",
-            "source_hash":    "$SOURCE_HASH",
-            "commit":         "${{ github.sha }}",
-            "engine_sha256":  "$ENGINE_SHA",
-            "protocol_version":  "$PROTOCOL_VERSION",
-            "capability_schema": "$CAPABILITY_SCHEMA",
-            "github_run":     "${{ github.run_id }}",
-            "github_run_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
-            "workflow_file":  "worker-image.yml",
-          }
-          with open("worker-baseline-manifest.json", "w") as f:
-              json.dump(manifest, f, indent=2, sort_keys=True)
-          print(json.dumps(manifest, indent=2, sort_keys=True))
-          PYEOF
-
-      - name: Upload baseline manifest artifact
-        if: steps.digest.outputs.digest != '' && steps.version.outputs.push == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: worker-baseline-manifest
-          path: worker-baseline-manifest.json
-          if-no-files-found: error
-
-      # Phase 1 (cap. 2): REAL bootstrap smoke against the published
-      # image. NOT the fake-FFmpeg path of `make bootstrap-smoke`; this
-      # runs the binary against the production deps baked into the
-      # image, captures [BOOTSTRAP_REPORT] from stderr (worker-agent's
-      # new --bootstrap-report mode) and asserts verdict=OK + all 4
-      # canonical step PASS.
-      - name: "Real bootstrap smoke (Phase 1 cap. 2)"
-        if: steps.digest.outputs.digest != '' && steps.version.outputs.push == 'true'
-        run: |
-          set -euo pipefail
-          IMAGE="${{ env.IMAGE_REPO }}@${{ steps.digest.outputs.digest }}"
-          BUNDLE_HASH="$(docker run --rm --entrypoint /bin/sh "$IMAGE" -c 'awk "length(\$1)==64 && \$1 ~ /^[0-9a-fA-F]+$/ {print tolower(\$1); exit}" /app/RemoteCodex/BUNDLE_HASH.txt' 2>/dev/null || echo '')"
-          [[ "$BUNDLE_HASH" =~ ^[a-f0-9]{64}$ ]] || { echo "::error::invalid embedded bundle hash"; exit 1; }
-          mkdir -p /tmp/velox-real-bootstrap
-          jq '
-            with_entries(select(.key | startswith("_") | not))
-            | .master_url = "http://127.0.0.1:9999"
-            | .control_grpc_url = "http://127.0.0.1:9999"
-            | .worker_id = "ci-real-bootstrap"
-            | .worker_name = "ci-real-bootstrap"
-            | .state_dir = "/tmp/velox-worker-state"
-            | .output_dir = "/tmp/velox-worker-output"
-            | .allow_insecure_grpc_dev = true
-          ' deploy/runtime/worker_config.example.json \
-            > /tmp/velox-real-bootstrap/worker_config.json
-          mkdir -p /tmp/velox-real-bootstrap/work
-          printf '%s\n' "$BUNDLE_HASH" > /tmp/velox-real-bootstrap/work/BUNDLE_HASH.txt
-          mkdir -p /tmp/velox-real-bootstrap/work/tests/fixtures
-          cp RemoteCodex/native/worker-agent-go/tests/fixtures/engine_selftest_baseline.sha256 \
-            /tmp/velox-real-bootstrap/work/tests/fixtures/engine_selftest_baseline.sha256
-          set +e
-          docker run --rm \
-            --name worker-real-bootstrap \
-            -e VELOX_WORKER_ID=ci-real-bootstrap \
-            -e VELOX_BUNDLE_HASH="$BUNDLE_HASH" \
-            -e VELOX_GRPC_MASTER_URL=127.0.0.1:9999 \
-            -e VELOX_ALLOW_INSECURE_GRPC_DEV=true \
-            -e VELOX_ENV=dev \
-            -v /tmp/velox-real-bootstrap:/var/lib/velox-worker \
-            -v /tmp/velox-real-bootstrap/worker_config.json:/opt/velox/worker_config.json:ro \
-            "$IMAGE" \
-            --bootstrap-report > /tmp/velox-real-bootstrap/stdout.log 2> /tmp/velox-real-bootstrap/stderr.log
-          rc=$?
-          set -e
-          if [[ ! "$rc" =~ ^(0|1)$ ]]; then
-            echo "::error::bootstrap-report exited with $rc (expected 0=OK or 1=FAIL)"
-            cat /tmp/velox-real-bootstrap/stderr.log >&2 || true
-            exit 1
-          fi
-          JSON="$(cat /tmp/velox-real-bootstrap/stderr.log /tmp/velox-real-bootstrap/stdout.log | awk '/^\[BOOTSTRAP_REPORT\]$/{flag=1;next}flag && (/^\[/ || /^Error:/) {exit} flag')"
-          if [[ -z "$JSON" ]]; then
-            echo "::error::no [BOOTSTRAP_REPORT] JSON block"
-            cat /tmp/velox-real-bootstrap/stderr.log >&2 || true
-            cat /tmp/velox-real-bootstrap/stdout.log >&2 || true
-            exit 2
-          fi
-          echo "--- [BOOTSTRAP_REPORT] ---"
-          printf '%s\n' "$JSON"
-          echo "--- /[BOOTSTRAP_REPORT] ---"
-          printf '%s' "$JSON" > /tmp/velox-real-bootstrap/bootstrap-report.json
-          BOOTSTRAP_JSON="$JSON" python3 - <<'PYEOF'
-          import json, sys
-          import os
-          d = json.loads(os.environ["BOOTSTRAP_JSON"])
-          verdict = d.get("verdict", "UNKNOWN")
-          steps = {s.get("name"): s.get("status") for s in d.get("steps", [])}
-          required = ("bundle_hash", "ffmpeg", "output_dir", "engine_self_render")
-          missing = [r for r in required if r not in steps]
-          if missing:
-              print(f"::error::bootstrap report missing required step: {missing}")
-              sys.exit(2)
-          bad = [r for r in required if steps.get(r) != "OK"]
-          if verdict != "OK" or bad:
-              print(f"::error::bootstrap verdict={verdict}, failed={bad}, all={steps}")
-              sys.exit(3)
-          print(f"OK: real-bootstrap verdict=OK; all 4 step PASS: {steps}")
-          PYEOF
-
-      # Engine-specific canary: run the exact immutable image digest, render
-      # loop=true without duration_seconds to 95 seconds, verify engine hash,
-      # duration, and no residual ffmpeg process. This is deliberately after
-      # publication/signing so it certifies the artifact operators will run.
-      - name: "Audio loop canary (95s, immutable digest)"
-        if: steps.digest.outputs.digest != '' && steps.version.outputs.push == 'true'
-        run: |
-          set -euo pipefail
-          chmod +x scripts/ci/worker-audio-canary.sh
-          scripts/ci/worker-audio-canary.sh "${{ env.IMAGE_REPO }}@${{ steps.digest.outputs.digest }}"
-
-      # Copy-only mixed-assembly invariant gate: render an all-canonical mixed
-      # plan and assert frames_encoded == 0 && encode_passes == 0
-      # (concat_mode=mixed_packet), then render a mixed plan with one
-      # non-canonical 720p scene and assert the JOB fails deterministically
-      # (segment_execution_rejected, rc=1, frames_encoded==0) without crashing
-      # the worker process. Same immutable-digest discipline as the audio canary.
-      - name: "Mixed copy-only invariant canary (immutable digest)"
-        if: steps.digest.outputs.digest != '' && steps.version.outputs.push == 'true'
-        run: |
-          set -euo pipefail
-          chmod +x scripts/ci/worker-mixed-canary.sh
-          scripts/ci/worker-mixed-canary.sh "${{ env.IMAGE_REPO }}@${{ steps.digest.outputs.digest }}"
-
-      # Phase 1 also keeps the legacy "stays up" smoke as a fast-fail
-      # before the slower real-bootstrap smoke. Companion to the
-      # health endpoint probe on the Dockerfile.
-      - name: "Smoke test: entrypoint stays up (no immediate crash)"
-        if: steps.digest.outputs.digest != '' && steps.version.outputs.push == 'true'
-        run: |
-          set -euo pipefail
-          IMAGE="${{ env.IMAGE_REPO }}@${{ steps.digest.outputs.digest }}"
-          BUNDLE_HASH="$(docker run --rm --entrypoint /bin/sh "$IMAGE" -c 'awk "length(\$1)==64 && \$1 ~ /^[0-9a-fA-F]+$/ {print tolower(\$1); exit}" /app/RemoteCodex/BUNDLE_HASH.txt' 2>/dev/null || echo '')"
-          [[ "$BUNDLE_HASH" =~ ^[a-f0-9]{64}$ ]] || { echo "::error::invalid embedded bundle hash"; exit 1; }
-          echo "Smoke testing entrypoint of: $IMAGE"
-          mkdir -p /tmp/velox-real-bootstrap/work
-          printf '%s\n' "$BUNDLE_HASH" > /tmp/velox-real-bootstrap/work/BUNDLE_HASH.txt
-          docker run --rm -d \
-            --name worker-smoke \
-            -e VELOX_WORKER_ID=ci-smoke \
-            -e VELOX_GRPC_MASTER_URL=127.0.0.1:9999 \
-            -e VELOX_ALLOW_INSECURE_GRPC_DEV=true \
-            -e VELOX_ENV=dev \
-            -e VELOX_BUNDLE_HASH="$BUNDLE_HASH" \
-            -v /tmp/velox-real-bootstrap:/var/lib/velox-worker \
-            -v /tmp/velox-real-bootstrap/worker_config.json:/opt/velox/worker_config.json:ro \
-            -p 8081:8081 \
-            "$IMAGE"
-          sleep 5
-          STATUS="$(docker inspect --format='{{.State.Running}}' worker-smoke || true)"
-          if [ "$STATUS" != "true" ]; then
-            echo "::error::Worker container did not stay running after 5s"
-            docker logs worker-smoke || true
-            docker rm -f worker-smoke || true
-            exit 1
-          fi
-          echo "Smoke OK — container stayed up."
-          docker rm -f worker-smoke
+          image-repo: ${{ env.IMAGE_REPO }}
+          digest: ${{ steps.build.outputs.digest }}
+          push: ${{ steps.version.outputs.push }}
+          image-tags: ${{ steps.build.outputs.tags }}

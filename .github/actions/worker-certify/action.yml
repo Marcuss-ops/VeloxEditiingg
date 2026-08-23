@@ -1,0 +1,205 @@
+name: Worker image certification
+description: Certify a published immutable worker image and upload its baseline manifest.
+inputs:
+  image-repo:
+    description: Fully qualified worker image repository.
+    required: true
+  digest:
+    description: Immutable image digest to certify.
+    required: true
+  push:
+    description: Whether publication certification is enabled for this run.
+    required: true
+  image-tags:
+    description: Newline-separated image tags generated for this release.
+    required: true
+runs:
+  using: composite
+  steps:
+    # Phase 1 baseline manifest: digest -> version + bundle_hash + source_hash
+    # plus engine and capability identity.
+    - name: Record baseline manifest (Phase 1)
+      if: inputs.digest != '' && inputs.push == 'true'
+      shell: bash
+      env:
+        IMAGE_TAGS: ${{ inputs.image-tags }}
+      run: |
+        set -euo pipefail
+        VERSION="$(tr -d '[:space:]' < VERSION.txt 2>/dev/null || echo '')"
+        BUNDLE_HASH=""
+        SOURCE_HASH="$(python3 -c 'import json;print(json.load(open("RemoteCodex/BUILD_INFO.json")).get("source_hash",""))' 2>/dev/null || echo '')"
+        PROTOCOL_VERSION="$(python3 -c 'import json;print(json.load(open("RemoteCodex/BUILD_INFO.json")).get("protocol_version",""))' 2>/dev/null || echo '')"
+        CAPABILITY_SCHEMA="$(python3 -c 'import json;print(json.load(open("RemoteCodex/BUILD_INFO.json")).get("capability_schema",""))' 2>/dev/null || echo '')"
+        ENGINE_SHA=""
+        IMAGE_REF="${{ inputs.image-repo }}@${{ inputs.digest }}"
+        docker pull "$IMAGE_REF" >/dev/null
+        ENGINE_SHA="$(docker run --rm --entrypoint /bin/sh "$IMAGE_REF" -c 'awk "length(\$1)==64 && \$1 ~ /^[0-9a-fA-F]+$/ {print tolower(\$1); exit}" /usr/local/share/velox/video-engine.sha256' 2>/dev/null || true)"
+        BUNDLE_HASH="$(docker run --rm --entrypoint /bin/sh "$IMAGE_REF" -c 'awk "length(\$1)==64 && \$1 ~ /^[0-9a-fA-F]+$/ {print tolower(\$1); exit}" /app/RemoteCodex/BUNDLE_HASH.txt' 2>/dev/null || true)"
+        IMAGE_BUNDLE_HASH="$(docker run --rm --entrypoint /bin/sh "$IMAGE_REF" -c 'set -eu; sha256sum /usr/local/bin/velox-worker-agent /usr/local/bin/velox_video_engine /usr/local/bin/velox-cache-evict | sha256sum | awk "{print \$1}"' 2>/dev/null || true)"
+        [[ "$IMAGE_BUNDLE_HASH" == "$BUNDLE_HASH" ]] || {
+          echo "::error::image bundle hash mismatch: embedded=$BUNDLE_HASH actual=$IMAGE_BUNDLE_HASH" >&2
+          exit 1
+        }
+        if [[ -z "$VERSION" || ! "$ENGINE_SHA" =~ ^[a-f0-9]{64}$ || ! "$BUNDLE_HASH" =~ ^[a-f0-9]{64}$ || ! "$SOURCE_HASH" =~ ^[a-f0-9]{64}$ ]]; then
+          echo "::error::release metadata missing canonical VERSION, bundle hash, source hash, or engine SHA-256" >&2
+          exit 1
+        fi
+        if [[ -z "$PROTOCOL_VERSION" || -z "$CAPABILITY_SCHEMA" ]]; then
+          echo "::error::release metadata missing protocol_version or capability_schema (BUILD_INFO.json)" >&2
+          exit 1
+        fi
+        python3 - <<PYEOF
+        import json, os
+        tags = os.environ["IMAGE_TAGS"].split()
+        manifest = {
+          "digest":         "${{ inputs.digest }}",
+          "registry_image": "${{ inputs.image-repo }}",
+          "tags":           tags,
+          "version":        "$VERSION",
+          "bundle_hash":    "$BUNDLE_HASH",
+          "source_hash":    "$SOURCE_HASH",
+          "commit":         "${{ github.sha }}",
+          "engine_sha256":  "$ENGINE_SHA",
+          "protocol_version":  "$PROTOCOL_VERSION",
+          "capability_schema": "$CAPABILITY_SCHEMA",
+          "github_run":     "${{ github.run_id }}",
+          "github_run_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+          "workflow_file":  "worker-image.yml",
+        }
+        with open("worker-baseline-manifest.json", "w") as f:
+            json.dump(manifest, f, indent=2, sort_keys=True)
+        print(json.dumps(manifest, indent=2, sort_keys=True))
+        PYEOF
+
+    - name: Upload baseline manifest artifact
+      if: inputs.digest != '' && inputs.push == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: worker-baseline-manifest
+        path: worker-baseline-manifest.json
+        if-no-files-found: error
+
+    # Real bootstrap smoke against the published digest, not the fake-FFmpeg
+    # development path. The image's production dependencies and report remain
+    # the certification source of truth.
+    - name: "Real bootstrap smoke (Phase 1 cap. 2)"
+      if: inputs.digest != '' && inputs.push == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        IMAGE="${{ inputs.image-repo }}@${{ inputs.digest }}"
+        BUNDLE_HASH="$(docker run --rm --entrypoint /bin/sh "$IMAGE" -c 'awk "length(\$1)==64 && \$1 ~ /^[0-9a-fA-F]+$/ {print tolower(\$1); exit}" /app/RemoteCodex/BUNDLE_HASH.txt' 2>/dev/null || echo '')"
+        [[ "$BUNDLE_HASH" =~ ^[a-f0-9]{64}$ ]] || { echo "::error::invalid embedded bundle hash"; exit 1; }
+        mkdir -p /tmp/velox-real-bootstrap
+        jq '
+          with_entries(select(.key | startswith("_") | not))
+          | .master_url = "http://127.0.0.1:9999"
+          | .control_grpc_url = "http://127.0.0.1:9999"
+          | .worker_id = "ci-real-bootstrap"
+          | .worker_name = "ci-real-bootstrap"
+          | .state_dir = "/tmp/velox-worker-state"
+          | .output_dir = "/tmp/velox-worker-output"
+          | .allow_insecure_grpc_dev = true
+        ' deploy/runtime/worker_config.example.json \
+          > /tmp/velox-real-bootstrap/worker_config.json
+        mkdir -p /tmp/velox-real-bootstrap/work
+        printf '%s\n' "$BUNDLE_HASH" > /tmp/velox-real-bootstrap/work/BUNDLE_HASH.txt
+        mkdir -p /tmp/velox-real-bootstrap/work/tests/fixtures
+        cp RemoteCodex/native/worker-agent-go/tests/fixtures/engine_selftest_baseline.sha256 \
+          /tmp/velox-real-bootstrap/work/tests/fixtures/engine_selftest_baseline.sha256
+        set +e
+        docker run --rm \
+          --name worker-real-bootstrap \
+          -e VELOX_WORKER_ID=ci-real-bootstrap \
+          -e VELOX_BUNDLE_HASH="$BUNDLE_HASH" \
+          -e VELOX_GRPC_MASTER_URL=127.0.0.1:9999 \
+          -e VELOX_ALLOW_INSECURE_GRPC_DEV=true \
+          -e VELOX_ENV=dev \
+          -v /tmp/velox-real-bootstrap:/var/lib/velox-worker \
+          -v /tmp/velox-real-bootstrap/worker_config.json:/opt/velox/worker_config.json:ro \
+          "$IMAGE" \
+          --bootstrap-report > /tmp/velox-real-bootstrap/stdout.log 2> /tmp/velox-real-bootstrap/stderr.log
+        rc=$?
+        set -e
+        if [[ ! "$rc" =~ ^(0|1)$ ]]; then
+          echo "::error::bootstrap-report exited with $rc (expected 0=OK or 1=FAIL)"
+          cat /tmp/velox-real-bootstrap/stderr.log >&2 || true
+          exit 1
+        fi
+        JSON="$(cat /tmp/velox-real-bootstrap/stderr.log /tmp/velox-real-bootstrap/stdout.log | awk '/^\[BOOTSTRAP_REPORT\]$/{flag=1;next}flag && (/^\[/ || /^Error:/) {exit} flag')"
+        if [[ -z "$JSON" ]]; then
+          echo "::error::no [BOOTSTRAP_REPORT] JSON block"
+          cat /tmp/velox-real-bootstrap/stderr.log >&2 || true
+          cat /tmp/velox-real-bootstrap/stdout.log >&2 || true
+          exit 2
+        fi
+        echo "--- [BOOTSTRAP_REPORT] ---"
+        printf '%s\n' "$JSON"
+        echo "--- /[BOOTSTRAP_REPORT] ---"
+        printf '%s' "$JSON" > /tmp/velox-real-bootstrap/bootstrap-report.json
+        BOOTSTRAP_JSON="$JSON" python3 - <<'PYEOF'
+        import json, sys
+        import os
+        d = json.loads(os.environ["BOOTSTRAP_JSON"])
+        verdict = d.get("verdict", "UNKNOWN")
+        steps = {s.get("name"): s.get("status") for s in d.get("steps", [])}
+        required = ("bundle_hash", "ffmpeg", "output_dir", "engine_self_render")
+        missing = [r for r in required if r not in steps]
+        if missing:
+            print(f"::error::bootstrap report missing required step: {missing}")
+            sys.exit(2)
+        bad = [r for r in required if steps.get(r) != "OK"]
+        if verdict != "OK" or bad:
+            print(f"::error::bootstrap verdict={verdict}, failed={bad}, all={steps}")
+            sys.exit(3)
+        print(f"OK: real-bootstrap verdict=OK; all 4 step PASS: {steps}")
+        PYEOF
+
+    - name: "Audio loop canary (95s, immutable digest)"
+      if: inputs.digest != '' && inputs.push == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        chmod +x scripts/ci/worker-audio-canary.sh
+        scripts/ci/worker-audio-canary.sh "${{ inputs.image-repo }}@${{ inputs.digest }}"
+
+    - name: "Mixed copy-only invariant canary (immutable digest)"
+      if: inputs.digest != '' && inputs.push == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        chmod +x scripts/ci/worker-mixed-canary.sh
+        scripts/ci/worker-mixed-canary.sh "${{ inputs.image-repo }}@${{ inputs.digest }}"
+
+    - name: "Smoke test: entrypoint stays up (no immediate crash)"
+      if: inputs.digest != '' && inputs.push == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        IMAGE="${{ inputs.image-repo }}@${{ inputs.digest }}"
+        BUNDLE_HASH="$(docker run --rm --entrypoint /bin/sh "$IMAGE" -c 'awk "length(\$1)==64 && \$1 ~ /^[0-9a-fA-F]+$/ {print tolower(\$1); exit}" /app/RemoteCodex/BUNDLE_HASH.txt' 2>/dev/null || echo '')"
+        [[ "$BUNDLE_HASH" =~ ^[a-f0-9]{64}$ ]] || { echo "::error::invalid embedded bundle hash"; exit 1; }
+        echo "Smoke testing entrypoint of: $IMAGE"
+        mkdir -p /tmp/velox-real-bootstrap/work
+        printf '%s\n' "$BUNDLE_HASH" > /tmp/velox-real-bootstrap/work/BUNDLE_HASH.txt
+        docker run --rm -d \
+          --name worker-smoke \
+          -e VELOX_WORKER_ID=ci-smoke \
+          -e VELOX_GRPC_MASTER_URL=127.0.0.1:9999 \
+          -e VELOX_ALLOW_INSECURE_GRPC_DEV=true \
+          -e VELOX_ENV=dev \
+          -e VELOX_BUNDLE_HASH="$BUNDLE_HASH" \
+          -v /tmp/velox-real-bootstrap:/var/lib/velox-worker \
+          -v /tmp/velox-real-bootstrap/worker_config.json:/opt/velox/worker_config.json:ro \
+          -p 8081:8081 \
+          "$IMAGE"
+        sleep 5
+        STATUS="$(docker inspect --format='{{.State.Running}}' worker-smoke || true)"
+        if [ "$STATUS" != "true" ]; then
+          echo "::error::Worker container did not stay running after 5s"
+          docker logs worker-smoke || true
+          docker rm -f worker-smoke || true
+          exit 1
+        fi
+        echo "Smoke OK — container stayed up."
+        docker rm -f worker-smoke

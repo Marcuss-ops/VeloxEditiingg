@@ -3,8 +3,8 @@
 #
 # Purpose:
 #   Forward-protect the per-category LOC thresholds defined in
-#   `docs/metrics/loc-baseline.md §11` (prod Go: 900, test Go: 1200, shell:
-#   700, docs: 1200, yaml: 800). The gate fails the build on any NEW violation;
+#   `docs/metrics/loc-baseline.md §11` (prod Go/C++: 900, test Go: 1200,
+#   shell: 700, docs: 1200, yaml: 800). The gate fails the build on any NEW violation;
 #   KNOWN_VIOLATIONS in `scripts/ci/check-loc-thresholds.sh` (annotated
 #   baseline carry-over) are accepted via `::warning` and do NOT fail the
 #   build. See §10c of `loc-baseline.md` for the carry-over tracking list and
@@ -72,6 +72,8 @@ jobs:
           BASE_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || 'HEAD^' }}
           HEAD_REF: HEAD
         run: python3 scripts/ci/check-new-production-loc.py
+      - name: Run LOC policy tests
+        run: bash scripts/ci/test-loc-thresholds.sh
       - name: Run LOC threshold gate
         run: |
           set -euo pipefail

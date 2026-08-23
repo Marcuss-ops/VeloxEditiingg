@@ -372,19 +372,6 @@ phase_poll_and_verify() {
   assert_worker_metrics
 }
 
-# Keep the workload entrypoint focused on orchestration. Assertions and
-# protocol-specific helpers live in the adjacent library files.
-for helper in \
-  artifact_assertions.sh \
-  metrics_assertions.sh \
-  submit.sh \
-  video_assertions.sh \
-  worker_wait.sh; do
-  # shellcheck disable=SC1091
-  # shellcheck disable=SC1090
-  source "$ROOT/lib/$helper"
-done
-
 main() {
   echo ""
   echo "══════════════════════════════════════════════════════════════"

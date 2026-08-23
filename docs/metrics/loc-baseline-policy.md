@@ -82,18 +82,19 @@ Threshold policy used in this baseline:
 
 ---
 
-## 11. Threshold policy (proposed)
+## 11. Threshold policy
 
 | File type | Warn at | Refactor required at |
 | --- | ---: | ---: |
 | Production Go (`.go` excluding `_test.go`) | 600 | 900 |
+| Production C/C++ (`.c`, `.cc`, `.cpp`, `.cxx`, `.h`, `.hh`, `.hpp`, `.hxx`) | 600 | 900 |
 | Test Go (`*_test.go`) | 900 | 1 200 |
 | Generated (`*.pb.go`, mocks) | n/a (exempt) | n/a |
+| Generated C/C++ (`generated/`, `gen/`, `*_generated.*`, `*.generated.*`) | n/a (exempt) | n/a |
 | Shell scripts (`.sh`, `.bash`) | 400 | 700 |
 | Documentation (`.md`) | 800 | 1 200 |
-| CI / Ansible (`.yml`, `.yaml`) | 400 | 800 |
-
-These thresholds will be promoted into a `golangci-lint` `funlen` rule (Go) plus a CI guard for scripts/docs, see follow-up plan.
+| CI / Ansible (`.yml`, `.yaml`) | 400 | 800 |The hard gate uses the refactor-required boundary; warning thresholds remain documented for review visibility. The LOC gate applies the C/C++ rule to non-generated source/header files and excludes CMake build trees, vendored code, and generated naming/path conventions.
+ The policy is covered by `scripts/ci/test-loc-thresholds.sh` and wired into `.github/workflows/loc-thresholds.yml`.
 
 ---
 
@@ -114,6 +115,15 @@ for area in DataServer RemoteCodex/native/worker-agent-go scripts docs shared de
     -exec wc -l {} + 2>/dev/null | tail -1 | awk '{print $1}')
   echo "$area: ${total:-0}"
 done
+
+# Production C/C++ threshold scan (the CI gate is authoritative):
+#   find . -type f \( -name '*.c' -o -name '*.cc' -o -name '*.cpp' -o -name '*.cxx' \
+#     -o -name '*.h' -o -name '*.hh' -o -name '*.hpp' -o -name '*.hxx' \) \
+#     -not -path '*/generated/*' -not -path '*/gen/*' \
+#     -not -path '*/vendor/*' -not -path '*/build/*' \
+#     -not -path '*/CMakeFiles/*' \
+#     -not -name '*_generated.*' -not -name '*.generated.*' \
+#     -not -name 'generated_*.*' -exec wc -l {} +
 
 # Per-extension global totals (drives §1 language columns)
 for ext in go sh md yml yaml json proto py ts tsx js jsx; do
