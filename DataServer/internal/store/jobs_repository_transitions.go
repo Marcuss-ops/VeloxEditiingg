@@ -20,7 +20,7 @@ import (
 
 // ── jobs.Writer ─────────────────────────────────────────────────────────
 
-func (b *baseJobRepository) SetStatus(ctx context.Context, id string, from, to jobs.Status) error {
+func (b *baseJobRepository) SetStatus(ctx context.Context, id string, from, to jobs.JobStatus) error {
 	if err := statemachine.DefaultRegistry().Validate(statemachine.DomainJob, string(from), string(to), ""); err != nil {
 		return fmt.Errorf("setstatus: %w", err)
 	}

@@ -4,8 +4,8 @@ import "testing"
 
 func TestCanTransition(t *testing.T) {
 	tests := []struct {
-		from Status
-		to   Status
+	from JobStatus
+	to   JobStatus
 		want bool
 	}{
 		// Transitions to empty string must be false (P0 fix)

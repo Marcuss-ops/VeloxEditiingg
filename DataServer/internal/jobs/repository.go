@@ -7,12 +7,12 @@ import (
 // Filter narrows list queries on the Reader surface.
 // Zero-value means "no filter" — all jobs are returned.
 type Filter struct {
-	Statuses []Status // empty = all statuses
+	Statuses []JobStatus // empty = all statuses
 	Limit    int      // 0 = all
 }
 
 // Counts is the aggregate count by status returned by Reader.Counts.
-type Counts map[Status]int64
+type Counts map[JobStatus]int64
 
 // Reader is the read-only job query surface.
 // Implemented by store.SQLiteJobRepository.
@@ -40,7 +40,7 @@ type Reader interface {
 type Writer interface {
 	// SetStatus performs a CAS status change from → to.
 	// Returns ErrTransitionConflict if the precondition does not hold.
-	SetStatus(ctx context.Context, id string, from, to Status) error
+	SetStatus(ctx context.Context, id string, from, to JobStatus) error
 
 	// Fail marks a job FAILED and records the reason. Single-tx:
 	// UPDATE + history + event + outbox. Rejects terminal jobs.

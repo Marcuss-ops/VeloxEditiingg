@@ -10,11 +10,11 @@ import (
 
 type transitionServiceWriter struct {
 	calls int
-	from  Status
-	to    Status
+	from  JobStatus
+	to    JobStatus
 }
 
-func (w *transitionServiceWriter) SetStatus(_ context.Context, _ string, from, to Status) error {
+func (w *transitionServiceWriter) SetStatus(_ context.Context, _ string, from, to JobStatus) error {
 	w.calls++
 	w.from, w.to = from, to
 	return nil

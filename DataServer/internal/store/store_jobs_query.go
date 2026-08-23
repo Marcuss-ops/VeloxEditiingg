@@ -222,7 +222,7 @@ func (s *SQLiteStore) GetJobByWorkspace(ctx context.Context, jobID string, works
 
 // JobCounts returns a status → count map keyed by the canonical UPPER
 // jobs.status name. Returns raw bucket counts only — NO binning and NO
-// "total" key. toJobsCounts (jobs.Status(k) literal cast) needs canonical
+// "total" key. toJobsCounts (jobs.JobStatus(k) literal cast) needs canonical
 // keys; non-canonical keys land under Status("pending") and get
 // double-counted by TotalRuns summation and lost under
 // LegacyRunStatusPending in the orchestrator adapter.

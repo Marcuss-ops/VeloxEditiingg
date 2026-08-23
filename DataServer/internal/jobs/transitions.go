@@ -27,6 +27,6 @@ import "velox-server/internal/statemachine"
 //
 // Returns true when the transition is legal; false otherwise.
 // Idempotent transitions (from == to) are always legal.
-func CanTransition(from, to Status) bool {
+func CanTransition(from, to JobStatus) bool {
 	return statemachine.DefaultRegistry().CanTransition(statemachine.DomainJob, string(from), string(to))
 }

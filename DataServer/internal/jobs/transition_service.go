@@ -33,7 +33,7 @@ var ErrArtifactContractMissing = errors.New("jobs: artifact contract is missing"
 // ErrArtifactContractCheck is returned when the contract lookup itself fails.
 var ErrArtifactContractCheck = errors.New("jobs: artifact contract check failed")
 
-// TransitionService is the canonical application boundary for JobState
+// TransitionService is the canonical application boundary for JobStatus
 // mutations. Persistence remains behind jobs.Writer; callers do not perform
 // job-state writes directly. The service validates the lifecycle registry and
 // applies the final artifact gate before delegating the CAS write.
@@ -57,7 +57,7 @@ func NewTransitionService(writer Writer, readiness ArtifactReadiness) (*Transiti
 // contract reader reports no artifact requirement. Contract-bound jobs must
 // pass through AWAITING_ARTIFACT and
 // the final transition must observe verified readiness.
-func (s *TransitionService) Transition(ctx context.Context, id string, from, to JobState, actor statemachine.Actor) error {
+func (s *TransitionService) Transition(ctx context.Context, id string, from, to JobStatus, actor statemachine.Actor) error {
 	if s == nil || s.writer == nil {
 		return fmt.Errorf("jobs: TransitionService is not configured")
 	}

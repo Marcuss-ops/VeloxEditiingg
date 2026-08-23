@@ -94,7 +94,7 @@ func (b *baseJobRepository) getJob(ctx context.Context, id string) (*jobs.Job, e
 	}
 	return &jobs.Job{
 		ID:          jID,
-		Status:      jobs.Status(status),
+		Status:      jobs.JobStatus(status),
 		VideoName:   videoName,
 		ProjectID:   projectID,
 		Revision:    rev,

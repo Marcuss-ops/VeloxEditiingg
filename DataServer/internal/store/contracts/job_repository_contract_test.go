@@ -116,7 +116,7 @@ func JobRepositoryContractCrossBackend(t *testing.T, newRepo func(t *testing.T) 
 			})
 		}
 
-		list, err := repo.List(ctx, jobs.Filter{Statuses: []jobs.Status{jobs.StatusPending}, Limit: 100})
+		list, err := repo.List(ctx, jobs.Filter{Statuses: []jobs.JobStatus{jobs.StatusPending}, Limit: 100})
 		if err != nil {
 			t.Fatalf("List pending: %v", err)
 		}

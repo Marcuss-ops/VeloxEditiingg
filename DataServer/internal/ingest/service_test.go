@@ -137,7 +137,7 @@ type stubIngestJobsRepo struct {
 	mu               sync.Mutex
 	getJob           *jobs.Job
 	setStatusCalls   int
-	lastFrom, lastTo jobs.Status
+	lastFrom, lastTo jobs.JobStatus
 	lastSetErr       error
 }
 
@@ -155,7 +155,7 @@ func (s *stubIngestJobsRepo) List(context.Context, jobs.Filter) ([]jobs.Job, err
 	}
 	return []jobs.Job{*s.getJob}, nil
 }
-func (s *stubIngestJobsRepo) SetStatus(_ context.Context, _ string, from, to jobs.Status) error {
+func (s *stubIngestJobsRepo) SetStatus(_ context.Context, _ string, from, to jobs.JobStatus) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.setStatusCalls++

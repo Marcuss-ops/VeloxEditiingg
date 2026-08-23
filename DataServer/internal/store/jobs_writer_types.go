@@ -4,13 +4,13 @@ import (
 	"velox-server/internal/jobs"
 )
 
-// JobStatus is a type alias for the canonical jobs.Status. It exists so
+// JobStatus is a type alias for the canonical jobs.JobStatus. It exists so
 // existing callers importing store.JobStatus continue to compile without
-// changes while the type itself is unified at compile time with jobs.Status.
+// changes while the type itself is unified at compile time with jobs.JobStatus.
 //
 // All status constants are re-exported aliases from the jobs package.
-// New code should import and use jobs.Status / jobs.StatusPending directly.
-type JobStatus = jobs.Status
+// New code should import and use jobs.JobStatus / jobs.StatusPending directly.
+type JobStatus = jobs.JobStatus
 
 const (
 	JobStatusPending          = jobs.StatusPending

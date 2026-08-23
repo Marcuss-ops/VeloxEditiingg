@@ -83,7 +83,7 @@ func (s *TaskReportIngestionService) maybeTransitionJob(ctx context.Context, job
 		allSucceededAndCommitted = false
 	}
 
-	var newStatus jobs.Status
+	var newStatus jobs.JobStatus
 	if allSucceededAndCommitted {
 		newStatus = jobs.StatusAwaitingArtifact
 	} else if anyCancelled && !anyHardFailed {

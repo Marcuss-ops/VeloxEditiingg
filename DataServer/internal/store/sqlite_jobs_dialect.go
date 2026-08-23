@@ -67,7 +67,7 @@ func (d sqliteDialect) ScanJob(row interface{ Scan(...interface{}) error }) (*jo
 	return &jobs.Job{
 		ID:          j.JobID,
 		Type:        "",
-		Status:      jobs.Status(j.Status),
+		Status:      jobs.JobStatus(j.Status),
 		Attempts:    0,
 		Revision:    j.Revision,
 		VideoName:   j.VideoName,
@@ -142,7 +142,7 @@ func (d sqliteDialect) GetCounts(ctx context.Context, db *sql.DB) (jobs.Counts, 
 	}
 	out := make(jobs.Counts, len(raw))
 	for k, v := range raw {
-		out[jobs.Status(k)] = v
+		out[jobs.JobStatus(k)] = v
 	}
 	return out, nil
 }

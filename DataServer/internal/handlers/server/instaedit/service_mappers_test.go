@@ -180,7 +180,7 @@ func (r *recordingJobsRepository) List(context.Context, jobs.Filter) ([]jobs.Job
 	return nil, nil
 }
 func (r *recordingJobsRepository) Counts(context.Context) (jobs.Counts, error) { return nil, nil }
-func (r *recordingJobsRepository) SetStatus(context.Context, string, jobs.Status, jobs.Status) error {
+func (r *recordingJobsRepository) SetStatus(context.Context, string, jobs.JobStatus, jobs.JobStatus) error {
 	return nil
 }
 func (r *recordingJobsRepository) Fail(context.Context, string, string) error { return nil }

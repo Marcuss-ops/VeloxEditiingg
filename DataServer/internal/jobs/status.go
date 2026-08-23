@@ -1,7 +1,7 @@
 // Package jobs defines the canonical job domain model.
 //
 // JobStatus is the single source of truth for job state constants.
-// store.JobStatus remains a source-compatible alias of this type.
+// store.JobStatus is a type alias for this type.
 // The distinct type prevents accidental comparison with statuses from
 // attempts, deliveries, publications, or input assembly, even though these
 // values are persisted as strings at storage and wire boundaries.
@@ -31,31 +31,25 @@
 // CANCELLED.
 package jobs
 
-// JobStatus is the canonical job lifecycle state. It is deliberately
-// distinct from task-attempt, delivery, publication, and input-assembly
-// statuses even though each is persisted as a string at storage/wire edges.
+// JobStatus is the canonical job lifecycle state. It is the ONLY type
+// for job status in this domain — former aliases JobState and Status
+// have been removed. It is deliberately distinct from task-attempt,
+// delivery, publication, and input-assembly statuses even though each
+// is persisted as a string at storage/wire edges.
 type JobStatus string
 
-// JobState is retained as a source-compatible alias for existing callers.
-// New code should use JobStatus to make the job aggregate boundary explicit.
-type JobState = JobStatus
-
-// Status is retained as a source-compatible alias for existing callers.
-// Deprecated: use JobStatus.
-type Status = JobStatus
-
 const (
-	StatusPending          Status = "PENDING"
-	StatusLeased           Status = "LEASED"
-	StatusRunning          Status = "RUNNING"
-	StatusAwaitingArtifact Status = "AWAITING_ARTIFACT"
+	StatusPending          JobStatus = "PENDING"
+	StatusLeased           JobStatus = "LEASED"
+	StatusRunning          JobStatus = "RUNNING"
+	StatusAwaitingArtifact JobStatus = "AWAITING_ARTIFACT"
 	// StatusDelivering means the artifact is READY and one or more explicit
 	// required deliveries are still pending. It is intentionally non-terminal.
-	StatusDelivering Status = "DELIVERING"
-	StatusRetryWait  Status = "RETRY_WAIT"
-	StatusSucceeded  Status = "SUCCEEDED"
-	StatusFailed     Status = "FAILED"
-	StatusCancelled  Status = "CANCELLED"
+	StatusDelivering JobStatus = "DELIVERING"
+	StatusRetryWait  JobStatus = "RETRY_WAIT"
+	StatusSucceeded  JobStatus = "SUCCEEDED"
+	StatusFailed     JobStatus = "FAILED"
+	StatusCancelled  JobStatus = "CANCELLED"
 )
 
 // IsTerminal reports whether a job in this state has finished its lifecycle.

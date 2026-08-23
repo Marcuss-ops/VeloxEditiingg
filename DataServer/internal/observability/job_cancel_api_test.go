@@ -3,12 +3,10 @@ package observability
 import (
 	"context"
 	"errors"
+	"github.com/gin-gonic/gin"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-
-	"github.com/gin-gonic/gin"
-
 	"velox-server/internal/jobs"
 )
 
@@ -19,7 +17,7 @@ type cancelRecordingWriter struct {
 	err    error
 }
 
-func (w *cancelRecordingWriter) SetStatus(context.Context, string, jobs.Status, jobs.Status) error {
+func (w *cancelRecordingWriter) SetStatus(context.Context, string, jobs.JobStatus, jobs.JobStatus) error {
 	return nil
 }
 func (w *cancelRecordingWriter) Fail(context.Context, string, string) error { return nil }

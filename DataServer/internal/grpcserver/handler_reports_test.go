@@ -226,7 +226,7 @@ func (s *spoofStubJobsRepo) List(_ context.Context, _ jobs.Filter) ([]jobs.Job, 
 	cp := *s.getJob
 	return []jobs.Job{cp}, nil
 }
-func (s *spoofStubJobsRepo) SetStatus(_ context.Context, _ string, _, _ jobs.Status) error {
+func (s *spoofStubJobsRepo) SetStatus(_ context.Context, _ string, _, _ jobs.JobStatus) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.setStatusCalls++
