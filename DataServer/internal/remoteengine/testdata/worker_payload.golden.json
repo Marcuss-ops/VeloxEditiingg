@@ -6,6 +6,12 @@
       "volume": 0.2
     }
   ],
+  "clips": [
+    {
+      "duration": 4.5,
+      "url": "velox-asset://clips/opening.mp4"
+    }
+  ],
   "correlation_id": "golden-worker-job-001",
   "job_id": "golden-worker-job-001",
   "job_run_id": "golden-worker-job-001",

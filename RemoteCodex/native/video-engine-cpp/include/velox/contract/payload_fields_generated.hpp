@@ -9,9 +9,11 @@ namespace velox::contract::fields {
 // job_payload_v2.schema.json
 inline constexpr std::string_view AUDIO_LANGUAGE_FOR_SRT = "audio_language_for_srt";
 inline constexpr std::string_view CHANNEL_ID = "channel_id";
+inline constexpr std::string_view CLIPS = "clips";
 inline constexpr std::string_view COMPILED_RENDER_PLAN_JSON = "compiled_render_plan_json";
 inline constexpr std::string_view COMPILED_RENDER_PLAN_SHA256 = "compiled_render_plan_sha256";
 inline constexpr std::string_view CONTRACT_VERSION = "contract_version";
+inline constexpr std::string_view COPY_ONLY = "copy_only";
 inline constexpr std::string_view CORRELATION_ID = "correlation_id";
 inline constexpr std::string_view CREATED_AT = "created_at";
 inline constexpr std::string_view DELIVERY_PLAN = "delivery_plan";

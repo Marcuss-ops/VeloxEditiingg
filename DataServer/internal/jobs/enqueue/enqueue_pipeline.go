@@ -124,6 +124,15 @@ func BuildPipelinePayload(result map[string]interface{}) (map[string]interface{}
 			out["clips"] = clips
 		}
 	}
+	if !hasNonEmptySlice(out["clips"]) {
+		if scenesValue, ok := flat["scenes"]; ok {
+			if data, marshalErr := json.Marshal(scenesValue); marshalErr == nil {
+				if clips := clipsFromScenesJSON(string(data)); len(clips) > 0 {
+					out["clips"] = clips
+				}
+			}
+		}
+	}
 	// BuildPipelinePayload is the worker-facing projection. Keep the
 	// canonical delivery envelope available to callers that extracted it
 	// before this step, but never send routing/control-plane fields to the
@@ -131,6 +140,11 @@ func BuildPipelinePayload(result map[string]interface{}) (map[string]interface{}
 	workerPayload, err := cloneRendererPayload(out)
 	if err != nil {
 		return nil, fmt.Errorf("project renderer payload: %w", err)
+	}
+	if !hasNonEmptySlice(workerPayload["clips"]) {
+		if clips := clipsFromScenesJSON(scenesJSON); len(clips) > 0 {
+			workerPayload["clips"] = clips
+		}
 	}
 	return workerPayload, nil
 }

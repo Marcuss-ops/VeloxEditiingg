@@ -30,6 +30,8 @@
     "scenes": { "type": "array" },
     "voiceover_paths": { "type": "array" },
     "layers": { "type": "array" },
+    "clips": { "type": "array" },
+    "copy_only": { "type": "boolean" },
     "items": { "type": "array" },
     "video_metadata": { "type": "object" },
     "audio_language_for_srt": { "type": "string" },

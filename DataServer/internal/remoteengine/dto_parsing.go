@@ -169,6 +169,28 @@ func (r *RemotePipelineResult) ToWorkerPayloadChecked() (map[string]interface{},
 		if scenesJSON, err := json.Marshal(r.Scenes); err == nil {
 			m["scenes_json"] = string(scenesJSON)
 		}
+		// clips.v1 consumes an explicit renderer-facing clip list. Derive it
+		// from the same typed scene assets used for scenes_json so creator and
+		// external intake cannot diverge at the projection boundary.
+		clips := make([]interface{}, 0, len(r.Scenes))
+		for _, scene := range r.Scenes {
+			if scene.Clip == nil {
+				continue
+			}
+			url := strings.TrimSpace(scene.Clip.URL)
+			if url == "" && strings.TrimSpace(scene.Clip.AssetID) != "" {
+				url = "velox-drive://" + strings.TrimSpace(scene.Clip.AssetID)
+			}
+			if url == "" {
+				continue
+			}
+			clips = append(clips, map[string]interface{}{
+				"url": url, "duration": scene.DurationSeconds,
+			})
+		}
+		if len(clips) > 0 {
+			m["clips"] = clips
+		}
 	}
 
 	// Enforce the renderer boundary after all typed overlays. This removes

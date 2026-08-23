@@ -5,9 +5,11 @@ package payloadfield
 // job_payload_v2.schema.json
 const AudioLanguageForSRT = "audio_language_for_srt"
 const ChannelID = "channel_id"
+const Clips = "clips"
 const CompiledRenderPlanJSON = "compiled_render_plan_json"
 const CompiledRenderPlanSHA256 = "compiled_render_plan_sha256"
 const ContractVersion = "contract_version"
+const CopyOnly = "copy_only"
 const CorrelationID = "correlation_id"
 const CreatedAt = "created_at"
 const DeliveryPlan = "delivery_plan"
@@ -57,9 +59,11 @@ func JobPayloadV2Keys() []string {
 	return []string{
 		AudioLanguageForSRT,
 		ChannelID,
+		Clips,
 		CompiledRenderPlanJSON,
 		CompiledRenderPlanSHA256,
 		ContractVersion,
+		CopyOnly,
 		CorrelationID,
 		CreatedAt,
 		DeliveryPlan,

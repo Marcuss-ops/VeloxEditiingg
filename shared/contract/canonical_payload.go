@@ -60,6 +60,8 @@ var CanonicalTopLevelKeys = []string{
 	"scenes_json", "scenes",
 	"voiceover_paths",
 	"layers",
+	"clips",
+	"copy_only",
 	"items", // Step 2/8: items[].role scene/clip contract (worker payload layer)
 	"video_metadata",
 	"audio_language_for_srt",

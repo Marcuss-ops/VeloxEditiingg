@@ -252,6 +252,15 @@ func copyTimelinePayloadFields(out, src map[string]interface{}) {
 			out[key] = value
 		}
 	}
+	if !hasNonEmptySlice(out["clips"]) {
+		if scenesValue, ok := src["scenes"]; ok {
+			if data, marshalErr := json.Marshal(scenesValue); marshalErr == nil {
+				if clips := clipsFromScenesJSON(string(data)); len(clips) > 0 {
+					out["clips"] = clips
+				}
+			}
+		}
+	}
 	meta := routing.FromPayload(src)
 	if meta.PipelineID != "" {
 		out["pipeline_id"] = meta.PipelineID.String()
