@@ -188,104 +188,140 @@ func strPtr(s string) *string {
 // effects. Callers persist the returned Status via
 // store.UpdatePipelineRunStatus.
 func DeriveStatus(state InternalState) Status {
-	// ── 1. Terminal failure ──────────────────────────────────────────
-	if isFailedState(state.ForwardingStatus) ||
+	// Preserve the documented precedence: terminal failure, cancellation,
+	// then the most advanced internal phase available.
+	if hasFailedState(state) {
+		return StatusFailed
+	}
+	if hasCancelledState(state) {
+		return StatusCancelled
+	}
+	if status, ok := deriveDeliveryStatus(state); ok {
+		return status
+	}
+	if status, ok := deriveArtifactStatus(state); ok {
+		return status
+	}
+	if status, ok := deriveJobStatus(state); ok {
+		return status
+	}
+	if status, ok := deriveForwardingStatus(state); ok {
+		return status
+	}
+	if status, ok := deriveRemoteStatus(state); ok {
+		return status
+	}
+	return StatusAccepted
+}
+
+func hasFailedState(state InternalState) bool {
+	return isFailedState(state.ForwardingStatus) ||
 		isFailedState(state.JobStatus) ||
 		isFailedState(state.ArtifactStatus) ||
 		isFailedState(state.DeliveryStatus) ||
-		isFailedRemoteState(state.RemoteJobStatus) {
-		return StatusFailed
-	}
+		isFailedRemoteState(state.RemoteJobStatus)
+}
 
-	// ── 2. Cancelled ─────────────────────────────────────────────────
-	if isCancelledState(state.ForwardingStatus) ||
+func hasCancelledState(state InternalState) bool {
+	return isCancelledState(state.ForwardingStatus) ||
 		isCancelledState(state.JobStatus) ||
 		isCancelledState(state.DeliveryStatus) ||
-		isCancelledRemoteState(state.RemoteJobStatus) {
-		return StatusCancelled
-	}
+		isCancelledRemoteState(state.RemoteJobStatus)
+}
 
-	// ── 3. Delivery phase ────────────────────────────────────────────
-	if state.DeliveryStatus != nil {
-		switch *state.DeliveryStatus {
-		case "SUCCEEDED":
-			if state.HasScheduledDelivery {
-				return StatusScheduled
-			}
-			if state.AllDeliveriesSucceeded {
-				return StatusCompleted
-			}
-			return StatusPublished
-		case "PENDING":
-			// PENDING means the delivery runner has not picked up the
-			// row yet, regardless of artifact readiness.
-			return StatusDeliveryPending
-		case "RUNNING", "RETRY_WAIT":
-			// RUNNING / RETRY_WAIT = actively delivering (or waiting to
-			// retry). Requires a READY artifact.
-			if state.ArtifactStatus != nil && *state.ArtifactStatus == "READY" {
-				return StatusDelivering
-			}
-			return StatusDeliveryPending
+func deriveDeliveryStatus(state InternalState) (Status, bool) {
+	if state.DeliveryStatus == nil {
+		return "", false
+	}
+	switch *state.DeliveryStatus {
+	case "SUCCEEDED":
+		if state.HasScheduledDelivery {
+			return StatusScheduled, true
 		}
-	}
-
-	// ── 4. Artifact phase ────────────────────────────────────────────
-	if state.ArtifactStatus != nil {
-		switch *state.ArtifactStatus {
-		case "READY":
-			// Artifact is ready but no delivery row yet → waiting for
-			// delivery to be created.
-			return StatusArtifactReady
-		case "STAGING":
-			return StatusArtifactProcessing
-		// QUARANTINED / DELETED / other non-failed → still processing
-		default:
-			return StatusArtifactProcessing
+		if state.AllDeliveriesSucceeded {
+			return StatusCompleted, true
 		}
-	}
-
-	// ── 5. Velox job phase ───────────────────────────────────────────
-	if state.JobStatus != nil {
-		switch *state.JobStatus {
-		case "SUCCEEDED":
-			// Job succeeded but artifact not yet ready → artifact phase.
-			return StatusArtifactProcessing
-		case "AWAITING_ARTIFACT":
-			return StatusArtifactProcessing
-		case "RUNNING", "LEASED":
-			return StatusRendering
-		case "PENDING", "RETRY_WAIT":
-			return StatusWorkerQueued
+		return StatusPublished, true
+	case "PENDING":
+		// PENDING means the delivery runner has not picked up the row yet,
+		// regardless of artifact readiness.
+		return StatusDeliveryPending, true
+	case "RUNNING", "RETRY_WAIT":
+		// Active delivery requires a READY artifact. Otherwise it remains
+		// pending from the aggregate pipeline's point of view.
+		if state.ArtifactStatus != nil && *state.ArtifactStatus == "READY" {
+			return StatusDelivering, true
 		}
+		return StatusDeliveryPending, true
+	default:
+		return "", false
 	}
+}
 
-	// ── 6. Forwarding phase ──────────────────────────────────────────
-	if state.ForwardingStatus != nil {
-		switch *state.ForwardingStatus {
-		case "FORWARDED":
-			return StatusWorkerQueued
-		case "FORWARDING", "READY_TO_FORWARD":
-			return StatusForwarding
-		case "PENDING", "POLLING", "RETRY_WAIT":
-			return StatusRemoteQueued
-		}
+func deriveArtifactStatus(state InternalState) (Status, bool) {
+	if state.ArtifactStatus == nil {
+		return "", false
 	}
-
-	// ── 7. Remote engine phase ───────────────────────────────────────
-	if state.RemoteJobStatus != nil {
-		switch *state.RemoteJobStatus {
-		case "completed":
-			return StatusRemoteCompleted
-		case "running":
-			return StatusRemoteRunning
-		case "queued":
-			return StatusRemoteQueued
-		}
+	switch *state.ArtifactStatus {
+	case "READY":
+		// Artifact is ready but no delivery row exists yet.
+		return StatusArtifactReady, true
+	case "STAGING":
+		return StatusArtifactProcessing, true
+	default:
+		// QUARANTINED / DELETED / other non-failed states remain in
+		// artifact processing; failure precedence was handled above.
+		return StatusArtifactProcessing, true
 	}
+}
 
-	// ── 8. Default ───────────────────────────────────────────────────
-	return StatusAccepted
+func deriveJobStatus(state InternalState) (Status, bool) {
+	if state.JobStatus == nil {
+		return "", false
+	}
+	switch *state.JobStatus {
+	case "SUCCEEDED", "AWAITING_ARTIFACT":
+		// The job is done rendering but its artifact phase is not complete.
+		return StatusArtifactProcessing, true
+	case "RUNNING", "LEASED":
+		return StatusRendering, true
+	case "PENDING", "RETRY_WAIT":
+		return StatusWorkerQueued, true
+	default:
+		return "", false
+	}
+}
+
+func deriveForwardingStatus(state InternalState) (Status, bool) {
+	if state.ForwardingStatus == nil {
+		return "", false
+	}
+	switch *state.ForwardingStatus {
+	case "FORWARDED":
+		return StatusWorkerQueued, true
+	case "FORWARDING", "READY_TO_FORWARD":
+		return StatusForwarding, true
+	case "PENDING", "POLLING", "RETRY_WAIT":
+		return StatusRemoteQueued, true
+	default:
+		return "", false
+	}
+}
+
+func deriveRemoteStatus(state InternalState) (Status, bool) {
+	if state.RemoteJobStatus == nil {
+		return "", false
+	}
+	switch *state.RemoteJobStatus {
+	case "completed":
+		return StatusRemoteCompleted, true
+	case "running":
+		return StatusRemoteRunning, true
+	case "queued":
+		return StatusRemoteQueued, true
+	default:
+		return "", false
+	}
 }
 
 // ── Internal classification helpers ──────────────────────────────────

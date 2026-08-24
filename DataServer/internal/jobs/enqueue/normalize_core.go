@@ -26,9 +26,34 @@ func normalizeSceneVideoPayload(payloadMap map[string]interface{}) (map[string]i
 // the enqueue path. The compatibility wrapper above keeps existing package
 // callers and tests on the historical signature.
 func normalizeSceneVideoPayloadContext(ctx context.Context, payloadMap map[string]interface{}) (map[string]interface{}, error) {
-	// Build the canonical typed envelope, then project to the downstream
-	// map. No `parameters` sub-map, no legacy alias keys. Single source
-	// of truth is the contract.JobPayloadV2 struct.
+	compiledV2Present, strictManifest, strictManifestMap, err := validateSceneVideoInputs(payloadMap)
+	if err != nil {
+		return nil, err
+	}
+
+	base, err := contract.NewJobPayloadV2Checked(payloadMap)
+	if err != nil {
+		return nil, err
+	}
+	if err := normalizeSceneVideoFields(ctx, payloadMap, base, strictManifest, compiledV2Present); err != nil {
+		return nil, err
+	}
+
+	return projectNormalizedSceneVideoPayload(
+		ctx,
+		payloadMap,
+		base,
+		strictManifest,
+		compiledV2Present,
+		strictManifestMap,
+	)
+}
+
+// validateSceneVideoInputs owns the mutually exclusive compiled-plan and
+// render-manifest preflight rules. Keeping these gates together prevents a
+// later normalization branch from accidentally accepting an unsupported
+// visual-replacement combination.
+func validateSceneVideoInputs(payloadMap map[string]interface{}) (bool, bool, map[string]interface{}, error) {
 	compiledV2Present := compiledRenderPlanV2Present(payloadMap)
 	if compiledV2Present {
 		// PipelineGen owns V2 compilation. At this boundary the master only
@@ -36,7 +61,7 @@ func normalizeSceneVideoPayloadContext(ctx context.Context, payloadMap map[strin
 		// then strict-decode and validate the plan. No manifest compiler or
 		// timeline reconstruction is allowed on this path.
 		if err := contract.ValidateCompiledRenderPlanV2Payload(payloadMap); err != nil {
-			return nil, deliveryplan.NewValidationErrorWrapped("compiled_render_plan_v2", "pass-through validation failed", err)
+			return false, false, nil, deliveryplan.NewValidationErrorWrapped("compiled_render_plan_v2", "pass-through validation failed", err)
 		}
 	}
 
@@ -45,41 +70,43 @@ func normalizeSceneVideoPayloadContext(ctx context.Context, payloadMap map[strin
 	var strictManifestMap map[string]interface{}
 	if strictManifest {
 		if rawManifest == nil {
-			return nil, deliveryplan.NewValidationError("render_manifest", "must be an object")
+			return false, false, nil, deliveryplan.NewValidationError("render_manifest", "must be an object")
 		}
 		manifest, ok := rawManifest.(map[string]interface{})
 		if !ok {
-			return nil, deliveryplan.NewValidationError("render_manifest", "must be an object")
+			return false, false, nil, deliveryplan.NewValidationError("render_manifest", "must be an object")
 		}
 		strictManifestMap = manifest
 		if len(manifest) == 0 {
-			return nil, deliveryplan.NewValidationError("render_manifest", "must not be empty")
+			return false, false, nil, deliveryplan.NewValidationError("render_manifest", "must not be empty")
 		}
 	}
 	// visual_replacements[] is only resolvable when the master compiles a
 	// strict render_manifest with a verified final_audio asset into a
-	// CompiledRenderPlanV2. Any other intake (scene-based jobs, pre-compiled
-	// V2 pass-through) would silently drop the replacements, so we fail
-	// closed instead of accepting an ambiguous request.
+	// CompiledRenderPlanV2. Any other intake would silently drop the
+	// replacements, so fail closed instead of accepting an ambiguous request.
 	if visualReplacementsPresent(payloadMap) && !(strictManifest && !compiledV2Present && renderManifestHasFinalAudio(strictManifestMap)) {
-		return nil, deliveryplan.NewValidationError("visual_replacements", "requires a render_manifest with a verified final_audio asset (scene-based and pre-compiled V2 jobs are not supported)")
+		return false, false, nil, deliveryplan.NewValidationError("visual_replacements", "requires a render_manifest with a verified final_audio asset (scene-based and pre-compiled V2 jobs are not supported)")
 	}
-	base, err := contract.NewJobPayloadV2Checked(payloadMap)
-	if err != nil {
-		return nil, err
-	}
+	return compiledV2Present, strictManifest, strictManifestMap, nil
+}
+
+// normalizeSceneVideoFields owns the ordered typed-field normalization. The
+// order intentionally matches the previous single function so validation
+// errors remain stable for callers and tests.
+func normalizeSceneVideoFields(ctx context.Context, payloadMap map[string]interface{}, base *contract.JobPayloadV2, strictManifest, compiledV2Present bool) error {
 	title := strings.TrimSpace(base.VideoName)
 	if title == "" {
-		return nil, deliveryplan.NewValidationError("video_name", "is required")
+		return deliveryplan.NewValidationError("video_name", "is required")
 	}
 	base.VideoName = title
 	if rawMetadata, present := payloadMap["video_metadata"]; present && rawMetadata != nil {
 		metadata, ok := rawMetadata.(map[string]interface{})
 		if !ok {
-			return nil, deliveryplan.NewValidationError("video_metadata", "must be an object")
+			return deliveryplan.NewValidationError("video_metadata", "must be an object")
 		}
 		if err := validateVideoMetadata(metadata); err != nil {
-			return nil, err
+			return err
 		}
 		// Keep only renderer-owned technical settings. Publication fields
 		// are validated at intake but never enter the typed render payload,
@@ -92,38 +119,51 @@ func normalizeSceneVideoPayloadContext(ctx context.Context, payloadMap map[strin
 		scriptText = title
 	}
 	if scriptText == "" {
-		return nil, deliveryplan.NewValidationError("script_text", "is required")
+		return deliveryplan.NewValidationError("script_text", "is required")
 	}
 	base.ScriptText = scriptText
 
-	if !strictManifest && !compiledV2Present {
-		scenesValue, scenesJSON, err := normalizeScenesContext(ctx, payloadMap)
-		if err != nil {
-			return nil, err
-		}
-		if len(scenesValue) == 0 {
-			return nil, deliveryplan.NewValidationError("scenes", "at least one scene is required")
-		}
-		base.Scenes = scenesValue
-		base.ScenesJSON = scenesJSON
-		base.SceneCount = len(scenesValue)
-
-		voiceovers := normalizeVoiceoverList(payloadMap)
-		if len(voiceovers) == 0 && !hasClipTimelinePayload(payloadMap) && !hasRenderableMedia(payloadMap) {
-			return nil, deliveryplan.NewValidationError("voiceover_paths", "at least one voiceover path is required (or renderable media)")
-		}
-		base.VoiceoverPaths = voiceovers
-		base.VoiceoverCount = len(voiceovers)
+	if strictManifest || compiledV2Present {
+		return nil
 	}
+	return normalizeLegacySceneInputs(ctx, payloadMap, base)
+}
 
-	// Identity enrichment — prefer explicit caller-provided IDs/new
-	// UUIDs over the constructor's defaults so the typed struct always
-	// ends with concrete, non-empty lifecycle fields.
-	jobID := strings.TrimSpace(payload.FirstString(payloadMap, "job_id", "id"))
-	jobRunID := strings.TrimSpace(payload.FirstString(payloadMap, "job_run_id", "run_id"))
-	correlationID := strings.TrimSpace(payload.FirstString(payloadMap, "correlation_id"))
-	base.SetIdentity(jobID, jobRunID, correlationID)
+func normalizeLegacySceneInputs(ctx context.Context, payloadMap map[string]interface{}, base *contract.JobPayloadV2) error {
+	scenesValue, scenesJSON, err := normalizeScenesContext(ctx, payloadMap)
+	if err != nil {
+		return err
+	}
+	if len(scenesValue) == 0 {
+		return deliveryplan.NewValidationError("scenes", "at least one scene is required")
+	}
+	base.Scenes = scenesValue
+	base.ScenesJSON = scenesJSON
+	base.SceneCount = len(scenesValue)
 
+	voiceovers := normalizeVoiceoverList(payloadMap)
+	if len(voiceovers) == 0 && !hasClipTimelinePayload(payloadMap) && !hasRenderableMedia(payloadMap) {
+		return deliveryplan.NewValidationError("voiceover_paths", "at least one voiceover path is required (or renderable media)")
+	}
+	base.VoiceoverPaths = voiceovers
+	base.VoiceoverCount = len(voiceovers)
+	return nil
+}
+
+func projectNormalizedSceneVideoPayload(
+	ctx context.Context,
+	payloadMap map[string]interface{},
+	base *contract.JobPayloadV2,
+	strictManifest, compiledV2Present bool,
+	strictManifestMap map[string]interface{},
+) (map[string]interface{}, error) {
+	// Identity enrichment — prefer explicit caller-provided IDs/new UUIDs
+	// over constructor defaults so the typed struct ends with concrete IDs.
+	base.SetIdentity(
+		strings.TrimSpace(payload.FirstString(payloadMap, "job_id", "id")),
+		strings.TrimSpace(payload.FirstString(payloadMap, "job_run_id", "run_id")),
+		strings.TrimSpace(payload.FirstString(payloadMap, "correlation_id")),
+	)
 	if base.SubmittedVia == "" {
 		base.SubmittedVia = "api_v1_scene_video"
 	}
@@ -133,8 +173,7 @@ func normalizeSceneVideoPayloadContext(ctx context.Context, payloadMap map[strin
 	base.Status = contract.InputAssemblyPending
 	base.Version = "v2"
 
-	// Apply the fingerprint AFTER all identity + business fields are
-	// finalized, so the hash reflects the canonical V2 shape.
+	// Apply the fingerprint after all identity and business fields are final.
 	base.JobFingerprint = sceneVideoFingerprintContext(ctx,
 		base.JobID,
 		base.VideoName,
@@ -144,13 +183,10 @@ func normalizeSceneVideoPayloadContext(ctx context.Context, payloadMap map[strin
 		base.OutputPath,
 		base.AudioLanguage,
 	)
-
 	if v := strings.TrimSpace(payload.FirstString(payloadMap, "output_video_id")); v != "" {
 		base.OutputVideoID = v
 	}
 
-	// Spread to a canonical map for downstream consumers. NO
-	// `parameters` sub-map mirror; legacy alias keys NOT emitted.
 	out, err := base.ToMap()
 	if err != nil {
 		return nil, err
@@ -158,54 +194,53 @@ func normalizeSceneVideoPayloadContext(ctx context.Context, payloadMap map[strin
 	if err := attachVideoMetadataToDeliveryPlan(out); err != nil {
 		return nil, err
 	}
-	// A strict render_manifest is the sole timeline source. Legacy timeline
-	// projection is intentionally skipped so raw scenes/layers cannot shadow
-	// the compiled immutable plan. Legacy payloads retain the old pass-through
-	// behavior.
 	if !strictManifest && !compiledV2Present {
 		copyTimelinePayloadFields(out, payloadMap)
 	}
-
-	// Strict V2 manifests are compiled master-side before the task is
-	// created. Legacy payloads remain on their existing path because they
-	// do not necessarily carry verified asset size/hash metadata.
-	if strictManifest && !compiledV2Present {
-		plan, compileErr := rendercompiler.DefaultRegistry().Compile(ctx, base)
-		if compileErr != nil {
-			return nil, deliveryplan.NewValidationErrorWrapped("render_manifest", "compile failed", compileErr)
-		}
-		out["render_plan_json"] = string(plan.JSON())
-		out["render_plan_sha256"] = plan.SHA256()
-
-		// A manifest carrying the verified final_audio asset opts into the
-		// strict V2 receiver. Legacy strict manifests without final_audio
-		// remain on the existing scene-composite/V1 path until their audio
-		// compiler output is registered.
-		if renderManifestHasFinalAudio(strictManifestMap) {
-			replacements, parseErr := contract.ParseVisualReplacements(payloadMap["visual_replacements"])
-			if parseErr != nil {
-				return nil, deliveryplan.NewValidationErrorWrapped("visual_replacements", "parse failed", parseErr)
-			}
-			compiledJSON, compiledSHA, v2Err := contract.CompileRenderPlanV2JSONWithReplacements(strictManifestMap, replacements)
-			if v2Err != nil {
-				// Overlap / invalid-range / out-of-bounds / asset-identity
-				// rejections carry a machine-readable VISUAL_REPLACEMENT_*
-				// code. Surface it as the 422 details[].issue (instead of a
-				// generic "render_manifest compile failed") so invalid jobs
-				// are refused with a stable code BEFORE any worker offer is
-				// produced. Non-replacement compile failures keep the generic
-				// render_manifest classification.
-				var vre *contract.VisualReplacementError
-				if errors.As(v2Err, &vre) && vre != nil {
-					return nil, deliveryplan.NewValidationErrorCode("visual_replacements", vre.Code, vre.Error())
-				}
-				return nil, deliveryplan.NewValidationErrorWrapped("render_manifest", "CompiledRenderPlanV2 compile failed", v2Err)
-			}
-			out[contract.PayloadKeyCompiledRenderPlanJSON] = string(compiledJSON)
-			out[contract.PayloadKeyCompiledRenderPlanSHA] = compiledSHA
-		}
+	if err := compileStrictScenePlan(ctx, payloadMap, base, out, strictManifest, compiledV2Present, strictManifestMap); err != nil {
+		return nil, err
 	}
 	return out, nil
+}
+
+func compileStrictScenePlan(
+	ctx context.Context,
+	payloadMap map[string]interface{},
+	base *contract.JobPayloadV2,
+	out map[string]interface{},
+	strictManifest, compiledV2Present bool,
+	strictManifestMap map[string]interface{},
+) error {
+	if !strictManifest || compiledV2Present {
+		return nil
+	}
+	plan, compileErr := rendercompiler.DefaultRegistry().Compile(ctx, base)
+	if compileErr != nil {
+		return deliveryplan.NewValidationErrorWrapped("render_manifest", "compile failed", compileErr)
+	}
+	out["render_plan_json"] = string(plan.JSON())
+	out["render_plan_sha256"] = plan.SHA256()
+
+	if !renderManifestHasFinalAudio(strictManifestMap) {
+		return nil
+	}
+	replacements, parseErr := contract.ParseVisualReplacements(payloadMap["visual_replacements"])
+	if parseErr != nil {
+		return deliveryplan.NewValidationErrorWrapped("visual_replacements", "parse failed", parseErr)
+	}
+	compiledJSON, compiledSHA, v2Err := contract.CompileRenderPlanV2JSONWithReplacements(strictManifestMap, replacements)
+	if v2Err != nil {
+		// Replacement validation errors retain their machine-readable code;
+		// other compiler failures keep the render_manifest classification.
+		var vre *contract.VisualReplacementError
+		if errors.As(v2Err, &vre) && vre != nil {
+			return deliveryplan.NewValidationErrorCode("visual_replacements", vre.Code, vre.Error())
+		}
+		return deliveryplan.NewValidationErrorWrapped("render_manifest", "CompiledRenderPlanV2 compile failed", v2Err)
+	}
+	out[contract.PayloadKeyCompiledRenderPlanJSON] = string(compiledJSON)
+	out[contract.PayloadKeyCompiledRenderPlanSHA] = compiledSHA
+	return nil
 }
 func CopyTimelinePayloadFields(out, src map[string]interface{}) {
 	copyTimelinePayloadFields(out, src)

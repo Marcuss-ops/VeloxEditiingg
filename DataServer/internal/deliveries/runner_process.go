@@ -297,6 +297,7 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease deliverystore.D
 			r.logError(ctx, logging.CodeDeliveryResultValidationFail, logging.F("delivery", lease.DeliveryID, "err", err))
 			if merr := r.deliveryStore.MarkDeliveryFailed(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, "INVALID_RESULT", err.Error()); merr != nil {
 				r.logError(ctx, logging.CodeDeliveryMarkFailed, logging.F("delivery", lease.DeliveryID, "err", merr))
+				return joinDeliveryErrors(err, deliveryStatePersistenceError("mark invalid provider result", merr))
 			}
 			return err
 		}

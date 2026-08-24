@@ -1,6 +1,7 @@
 package grpcserver
 
 import (
+	"fmt"
 	"testing"
 
 	"velox-shared/controltransport"
@@ -40,6 +41,41 @@ func TestParseExecutorCapabilitiesMissingBlockIsRejected(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("missing executors array must be rejected")
+	}
+}
+
+func TestWorkerSessionPlacementSnapshotNeverMixesCapabilityGenerations(t *testing.T) {
+	sess := &workerSession{workerID: "generation-worker"}
+	initial, err := controltransport.NewExecutorRegistry(controltransport.ExecutorCapability{ID: "generation-0", Version: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.replaceCapabilities(initial, controltransport.CapabilitySet{"generation-0"})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 1; i <= 10000; i++ {
+			generation := fmt.Sprintf("generation-%d", i)
+			registry, err := controltransport.NewExecutorRegistry(controltransport.ExecutorCapability{ID: generation, Version: 1})
+			if err != nil {
+				return
+			}
+			sess.replaceCapabilities(registry, controltransport.CapabilitySet{generation})
+		}
+	}()
+
+	for {
+		select {
+		case <-done:
+			return
+		default:
+		}
+		snapshot := sess.placementSnapshot(sess.workerID)
+		executors := snapshot.ExecutorRegistry.All()
+		if len(executors) != 1 || len(snapshot.Capabilities) != 1 || executors[0].ID != snapshot.Capabilities[0] {
+			t.Fatalf("mixed placement generation: executors=%+v capabilities=%v revision=%d", executors, snapshot.Capabilities, snapshot.CapabilityRevision)
+		}
 	}
 }
 

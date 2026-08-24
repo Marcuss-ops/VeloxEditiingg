@@ -189,18 +189,15 @@ func TestClaimDeliveries_MaxAttemptsExhausted(t *testing.T) {
 		t.Fatalf("insert: %v", err)
 	}
 
-	// Should not claim because attempt_count >= max_attempts check is done
-	// in the runner, not in ClaimDeliveries (the claim just flips status).
-	// But RETRY_WAIT with next_attempt_at=NULL should still be claimable
-	// per the SQL. This is correct — the runner enforces max_attempts.
+	// An exhausted RETRY_WAIT row must not be reclaimed. The retry budget
+	// is enforced in the repository claim itself so every caller observes
+	// the same terminal boundary, including publication-phase callers.
 	leases, err := db.Delivery().ClaimDeliveries(ctx, "runner-x", 5*time.Minute, 1)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
-	// The claim should succeed (the SQL doesn't filter by max_attempts).
-	// The runner's processLease enforces max_attempts before calling MarkDelivery*.
-	if len(leases) != 1 {
-		t.Fatalf("expected 1 lease, got %d", len(leases))
+	if len(leases) != 0 {
+		t.Fatalf("expected exhausted delivery to remain unclaimable, got %d leases", len(leases))
 	}
 }
 

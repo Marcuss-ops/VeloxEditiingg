@@ -384,7 +384,19 @@ func (r *DeliveryRunner) phaseFailure(ctx context.Context, lease deliverystore.D
 			persistenceErrors = append(persistenceErrors, deliveryStatePersistenceError("complete failed publication phase effect", err))
 		}
 	}
-	if ClassifyError(runErr) == ErrorClassTransient || ClassifyError(runErr) == ErrorClassRateLimit {
+	retryable := ClassifyError(runErr) == ErrorClassTransient || ClassifyError(runErr) == ErrorClassRateLimit
+	maxAttempts := 0
+	if r.cfg != nil {
+		maxAttempts = r.cfg.MaxAttempts
+	}
+	// DeliveryLease.MaxAttempts is stamped by ClaimDeliveries. A value of
+	// zero is meaningful: it allows the initial claim but no retry after it.
+	// The claim path and this phase path must apply the same budget so a
+	// resumable publication cannot outlive the delivery lease policy.
+	if lease.MaxAttempts >= 0 {
+		maxAttempts = lease.MaxAttempts
+	}
+	if retryable && lease.AttemptNumber < maxAttempts {
 		if _, err := r.store.TransitionPublicationState(ctx, publicationID, publicationstate.RetryWait, code); err != nil {
 			persistenceErrors = append(persistenceErrors, deliveryStatePersistenceError("transition publication to retry wait", err))
 		}

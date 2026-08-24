@@ -17,7 +17,6 @@
 #                                                           widen via a
 #                                                           wildcard.
 #   * DataServer/internal/audit/                          -- read-only auditor
-#   * DataServer/internal/dbutil/                         -- shared low-level helpers
 #   * DataServer/cmd/server/bootstrap.go                  -- schema bootstrap
 #   * `*_test.go`                                         -- unit tests
 #
@@ -53,7 +52,6 @@ hits="$(scoped_grep "$call_pattern" -- \
           ':!DataServer/internal/assets/**/*_repository.go' \
           ':!DataServer/internal/integrations/**/*_repository.go' \
           ':!DataServer/internal/audit/**' \
-          ':!DataServer/internal/dbutil/**' \
           ':!DataServer/cmd/server/bootstrap.go' \
           ':!DataServer/**/*_test.go' \
           ':!scripts/ci/check-db-access.sh' \
@@ -91,7 +89,6 @@ open_pattern='\bsql\.Open\(|\bsql\.OpenDB\('
 open_hits="$(scoped_grep "$open_pattern" -- \
                 'DataServer/**/*.go' \
                 ':!DataServer/internal/store/**' \
-                ':!DataServer/internal/dbutil/**' \
                 ':!DataServer/cmd/server/bootstrap.go' \
                 ':!DataServer/**/*_test.go' \
                 ':!scripts/ci/check-db-access.sh' \

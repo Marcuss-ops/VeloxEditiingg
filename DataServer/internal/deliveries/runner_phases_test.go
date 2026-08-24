@@ -9,6 +9,7 @@ import (
 
 	"velox-server/internal/publicationstate"
 	"velox-server/internal/store"
+	"velox-server/internal/supervisor"
 )
 
 type crashResumePhaseProvider struct {
@@ -59,6 +60,16 @@ func (legacyAcceptedProvider) Deliver(context.Context, *store.Artifact, *Destina
 }
 
 type syncPublishedProvider struct{}
+
+type invalidResultClosingStoreProvider struct {
+	db *store.SQLiteStore
+}
+
+func (p *invalidResultClosingStoreProvider) Name() string { return "drive" }
+func (p *invalidResultClosingStoreProvider) Deliver(context.Context, *store.Artifact, *Destination, string, string) (*Result, error) {
+	_ = p.db.Close()
+	return &Result{Success: true}, nil
+}
 
 func (syncPublishedProvider) Name() string { return "sync-published" }
 func (syncPublishedProvider) Deliver(context.Context, *store.Artifact, *Destination, string, string) (*Result, error) {
@@ -241,6 +252,110 @@ func TestLegacyProviderCannotPromoteAcceptedOperationToPublished(t *testing.T) {
 	}
 	if row.Status != "FAILED" || row.RemoteID != "" {
 		t.Fatalf("delivery result = %+v, want FAILED without remote publication", row)
+	}
+}
+
+func TestPublicationPhaseFailureExhaustsDeliveryRetryBudget(t *testing.T) {
+	ctx := context.Background()
+	db := openDeliveryTestDB(t)
+
+	const (
+		publicationID = "publication-phase-budget"
+		artifactID    = "artifact-phase-budget"
+		destinationID = "destination-phase-budget"
+		deliveryID    = "delivery-phase-budget"
+	)
+	now := time.Now().UTC().Format(time.RFC3339)
+	if err := db.Delivery().InsertDeliveryDestination(&store.DeliveryDestination{
+		DestinationID: destinationID, Provider: "phase-test", ExternalDestinationID: "external-phase-budget",
+		Enabled: true, ConfigurationJSON: "{}",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InsertArtifact(&store.Artifact{
+		ID: artifactID, JobID: "job-phase-budget", Type: "video", StorageProvider: "local",
+		StorageKey: filepath.Join(t.TempDir(), "video.mp4"), SHA256: "phase-budget-sha",
+		SizeBytes: 1, Status: "READY", VerifiedAt: now, CreatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Delivery().InsertJobDelivery(&store.JobDelivery{
+		DeliveryID: deliveryID, ArtifactID: artifactID, DestinationID: destinationID,
+		Status: "PENDING", IdempotencyKey: deliveryID, MaxAttempts: 1,
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CreatePublicationState(ctx, publicationID); err != nil {
+		t.Fatal(err)
+	}
+
+	provider := &crashResumePhaseProvider{}
+	registry := NewRegistry()
+	registry.Register(provider)
+	runner := NewDeliveryRunner(&RunnerConfig{
+		LeaseDuration: time.Minute, MaxAttempts: 3, BackoffSchedule: []time.Duration{0},
+	}, registry, db.Delivery(), db, "phase-budget-runner")
+
+	leases, err := db.Delivery().ClaimDeliveries(ctx, runner.identity, time.Minute, 1)
+	if err != nil || len(leases) != 1 {
+		t.Fatalf("claim: %v leases=%d", err, len(leases))
+	}
+	if leases[0].AttemptNumber != 1 || leases[0].MaxAttempts != 1 {
+		t.Fatalf("lease budget = attempt %d/max %d, want 1/1", leases[0].AttemptNumber, leases[0].MaxAttempts)
+	}
+	if err := runner.processLease(ctx, leases[0]); err == nil {
+		t.Fatal("exhausted phase retry budget was reported as a retry")
+	}
+
+	state, err := db.GetPublicationState(ctx, publicationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.State != publicationstate.Partial || state.RetryFrom != publicationstate.MetadataApplying {
+		t.Fatalf("publication checkpoint = %+v, want PARTIAL/METADATA_APPLYING", state)
+	}
+	row, err := db.Delivery().GetJobDelivery(ctx, deliveryID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.Status != "FAILED" {
+		t.Fatalf("delivery status = %q, want FAILED after exhausted phase retry budget", row.Status)
+	}
+	again, err := db.Delivery().ClaimDeliveries(ctx, "phase-budget-retry", time.Minute, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(again) != 0 {
+		t.Fatalf("exhausted delivery remained claimable: %+v", again)
+	}
+}
+
+func TestInvalidProviderResultPropagatesPersistenceFailure(t *testing.T) {
+	ctx := context.Background()
+	db := openDeliveryTestDB(t)
+	const (
+		destinationID = "destination-invalid-result"
+		artifactID    = "artifact-invalid-result"
+		deliveryID    = "delivery-invalid-result"
+	)
+	seedDriveDeliveryTriple(t, db, destinationID, artifactID, deliveryID, "job-invalid-result")
+
+	provider := &invalidResultClosingStoreProvider{db: db}
+	registry := NewRegistry()
+	registry.Register(provider)
+	runner := NewDeliveryRunner(&RunnerConfig{LeaseDuration: time.Minute, MaxAttempts: 1}, registry, db.Delivery(), db, "invalid-result-runner")
+	leases, err := db.Delivery().ClaimDeliveries(ctx, runner.identity, time.Minute, 1)
+	if err != nil || len(leases) != 1 {
+		t.Fatalf("claim: %v leases=%d", err, len(leases))
+	}
+
+	err = runner.processLease(ctx, leases[0])
+	if !errors.Is(err, errDeliveryStatePersistence) {
+		t.Fatalf("invalid provider result error = %v; want persistence failure", err)
+	}
+	if !errors.Is(err, supervisor.ErrInfrastructure) {
+		t.Fatalf("invalid provider result error = %v; want infrastructure classification", err)
 	}
 }
 

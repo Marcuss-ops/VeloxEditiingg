@@ -74,6 +74,10 @@ type workerSession struct {
 	// on heartbeat-driven re-advertisement. The placement snapshot is
 	// built from these fields under RLock so the snapshot is always
 	// consistent without blocking the main message loop.
+	// placementMu makes the executor registry and named capability set one
+	// generation. The individual locks remain for narrow legacy readers, but
+	// placement snapshots must never observe one field before the other.
+	placementMu sync.RWMutex
 	executorsMu sync.RWMutex
 	executors   controltransport.ExecutorRegistry
 
@@ -123,6 +127,9 @@ type workerSession struct {
 // and capabilities read under their respective RLock). The caller must
 // NOT hold any session mutex when calling this method.
 func (s *workerSession) placementSnapshot(workerID string) placement.WorkerSnapshot {
+	s.placementMu.RLock()
+	defer s.placementMu.RUnlock()
+
 	s.executorsMu.RLock()
 	executorRegistry := s.executors
 	s.executorsMu.RUnlock()
@@ -222,14 +229,22 @@ func (s *workerSession) replaceCapabilities(
 	executors controltransport.ExecutorRegistry,
 	capabilities controltransport.CapabilitySet,
 ) {
-	s.replaceExecutorRegistry(executors)
+	s.placementMu.Lock()
+	defer s.placementMu.Unlock()
 
+	s.executorsMu.Lock()
+	s.executors = executors
+	s.executorsMu.Unlock()
 	s.capabilitiesMu.Lock()
 	s.capabilities = capabilities
 	s.capabilitiesMu.Unlock()
+	s.capabilityRevision.Add(1)
 }
 
 func (s *workerSession) replaceExecutorRegistry(executors controltransport.ExecutorRegistry) {
+	s.placementMu.Lock()
+	defer s.placementMu.Unlock()
+
 	s.executorsMu.Lock()
 	s.executors = executors
 	s.executorsMu.Unlock()
@@ -306,6 +321,9 @@ func maxParallelJobsFromCapabilities(capsMap map[string]interface{}) int {
 // worker disagrees. Invalidating prevents further offers of the same
 // incompatible executor until the next Hello re-advertises it.
 func (s *workerSession) invalidateExecutor(key placement.ExecutorKey) {
+	s.placementMu.Lock()
+	defer s.placementMu.Unlock()
+
 	s.executorsMu.Lock()
 	s.executors = s.executors.Without(key.ID, key.Version)
 	s.executorsMu.Unlock()

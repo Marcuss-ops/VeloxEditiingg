@@ -95,6 +95,9 @@ func (w *SQLiteDeliveryStore) ClaimDeliveries(ctx context.Context, runnerID stri
 		       AND dd.enabled = 1
 		       AND a.status = 'READY'
 		       AND a.verified_at IS NOT NULL
+		       -- Permit the initial attempt even when max_attempts=0;
+		       -- after it starts, never reclaim or retry an exhausted row.
+		       AND (jd.attempt_count = 0 OR jd.attempt_count < jd.max_attempts)
 		   ) AS eligible			ORDER BY eligible.parent_rank ASC,
 				         eligible.eligible_at ASC,
 				         eligible.parent_job_id ASC,
