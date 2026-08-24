@@ -73,6 +73,16 @@ func (h *Handler) handleHeartbeat(workerID, sessionID string, hb *pb.Heartbeat) 
 			extraMap := hb.GetExtra().AsMap()
 			if caps, ok := extraMap["capabilities"].(map[string]interface{}); ok {
 				sess.replaceAssetCacheKeys(extractAssetCacheKeys(caps))
+				if mpj := maxParallelJobsFromCapabilities(caps); mpj > 0 {
+					sess.maxParallelJobs.Store(int32(mpj))
+					sess.setCapacityAuthoritative(true)
+				} else {
+					sess.maxParallelJobs.Store(0)
+					sess.setCapacityAuthoritative(false)
+				}
+				diskFreeBytes := snapshotHostInt64(caps, "disk_free_bytes")
+				_, diskPresent := snapshotHostValue(caps, "disk_free_bytes")
+				sess.updatePlacementResources(diskFreeBytes, diskPresent && diskFreeBytes >= 0, sess.placementSnapshot(workerID).EstimatedAvailableMS, sess.placementSnapshot(workerID).NetworkMbps, sess.placementSnapshot(workerID).LoadRatio)
 				registry, err := parseExecutorCapabilities(caps)
 				if err != nil {
 					// A malformed re-advertisement must not leave stale
@@ -81,18 +91,6 @@ func (h *Handler) handleHeartbeat(workerID, sessionID string, hb *pb.Heartbeat) 
 					sess.replaceExecutorRegistry(controltransport.EmptyExecutorRegistry())
 				} else {
 					sess.replaceExecutorRegistry(registry)
-				}
-				// Capacity refresh reads the canonical capabilities shape
-				// (host.max_parallel_jobs) only. The legacy top-level
-				// extra["max_parallel_jobs"] read was never written by the
-				// worker and is removed.
-				mpj := maxParallelJobsFromCapabilities(caps)
-				if mpj > 0 {
-					sess.maxParallelJobs.Store(int32(mpj))
-				} else {
-					// Missing or malformed declared capacity must not leave
-					// a stale max-slot value on the session.
-					sess.maxParallelJobs.Store(0)
 				}
 			}
 		}
@@ -150,6 +148,48 @@ func (h *Handler) handleHeartbeat(workerID, sessionID string, hb *pb.Heartbeat) 
 	// session. The accepted snapshot is stored on the session for admin-API
 	// / placement projections.
 	acceptedTelemetry := ingestTelemetrySnapshot(workerID, sess, extra)
+
+	// Feed the latest accepted operational facts into the warm-placement
+	// snapshot. Availability is deliberately an estimate (active work plus
+	// queued downloads at a conservative one-second unit); it is a ranking
+	// signal only, while capacity and disk remain authoritative gates.
+	if sess != nil {
+		current := sess.placementSnapshot(workerID)
+		estimatedAvailableMS := current.EstimatedAvailableMS
+		loadRatio := current.LoadRatio
+		diskFreeBytes := int64(current.FreeDiskBytes)
+		diskAuthoritative := current.DiskAuthoritative
+		if acceptedTelemetry != nil {
+			sess.setActiveExecutionSlots(acceptedTelemetry.ActiveLeases)
+			estimatedAvailableMS = int64(acceptedTelemetry.ActiveLeases+acceptedTelemetry.DownloadQueue) * 1000
+			if acceptedTelemetry.ActiveLeases > 0 && current.MaxParallelJobs > 0 {
+				loadRatio = float64(acceptedTelemetry.ActiveLeases) / float64(current.MaxParallelJobs)
+			}
+			if acceptedTelemetry.DiskFreeBytes >= 0 {
+				diskFreeBytes = acceptedTelemetry.DiskFreeBytes
+				diskAuthoritative = true
+			}
+		}
+		if resources := hb.GetResources(); resources != nil {
+			if acceptedTelemetry == nil && resources.GetActiveTasks() >= 0 {
+				sess.setActiveExecutionSlots(int(resources.GetActiveTasks()))
+			}
+			if resources.GetTaskSlots() > 0 {
+				resourceLoad := float64(resources.GetActiveTasks()) / float64(resources.GetTaskSlots())
+				if resourceLoad > loadRatio {
+					loadRatio = resourceLoad
+				}
+			}
+			if resources.GetActiveTasks() > 0 {
+				estimatedAvailableMS = int64(resources.GetActiveTasks()) * 1000
+			}
+			if resources.GetDiskFreeBytes() >= 0 {
+				diskFreeBytes = resources.GetDiskFreeBytes()
+				diskAuthoritative = true
+			}
+		}
+		sess.updatePlacementResources(diskFreeBytes, diskAuthoritative, estimatedAvailableMS, current.NetworkMbps, loadRatio)
+	}
 
 	// F2: forward typed resource counters onto the Prometheus registry
 	// via the sink interface. NIL-tolerant — handlers running WITHOUT a

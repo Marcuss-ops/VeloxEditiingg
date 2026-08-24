@@ -46,6 +46,7 @@ import (
 
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/oteltrace"
+	"velox-worker-agent/internal/runtimeassets"
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/logger"
 	"velox-worker-agent/pkg/storage"
@@ -173,7 +174,23 @@ func (r *TaskRunner) WithClock(c executor.Clock) *TaskRunner {
 // Spec.Validate is run BEFORE any executor lookup; Executor.Validate
 // runs AFTER resolve but BEFORE resource acquisition; Executor.Execute
 // runs UNDER panic containment.
+// Run executes one task using the normal worker-owned asset resolution path.
 func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskExecutionReport, error) {
+	return r.run(parent, spec)
+}
+
+// RunWithBindings executes one task with bindings that were already resolved
+// and verified by the worker control-plane. It is used by the READY fast path:
+// the executor still performs its profile/certificate checks, but no asset
+// resolver or downloader is invoked again.
+func (r *TaskRunner) RunWithBindings(parent context.Context, spec executor.TaskSpec, bindings runtimeassets.Bindings) (TaskExecutionReport, error) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	return r.run(runtimeassets.WithBindings(parent, bindings), spec)
+}
+
+func (r *TaskRunner) run(parent context.Context, spec executor.TaskSpec) (TaskExecutionReport, error) {
 	overallStart := r.now()
 	phaseTimer := telemetry.NewJobPhaseTimer()
 	gpuTransferTracker := telemetry.NewGPUTransferTracker()
@@ -267,16 +284,16 @@ func (r *TaskRunner) Run(parent context.Context, spec executor.TaskSpec) (TaskEx
 		},
 	}
 	rc, err := newRunnerContext(ContextOptions{
-		Spec:            spec,
-		ParentCtx:       parent,
-		Logger:          execLog,
-		Clock:           r.clock,
-		Telemetry:       r.telemetry,
-		Resources:       r.resources,
-		LocalCache:      r.cache,
-		Artifacts:       r.artifacts,
-		CacheStats:      r.cacheStats,
-		BlobStats:       r.blobStats,
+		Spec:               spec,
+		ParentCtx:          parent,
+		Logger:             execLog,
+		Clock:              r.clock,
+		Telemetry:          r.telemetry,
+		Resources:          r.resources,
+		LocalCache:         r.cache,
+		Artifacts:          r.artifacts,
+		CacheStats:         r.cacheStats,
+		BlobStats:          r.blobStats,
 		FFmpegProfiles:     report.FFmpegProfiles,
 		StorageResolver:    r.storage,
 		PhaseTimer:         phaseTimer,

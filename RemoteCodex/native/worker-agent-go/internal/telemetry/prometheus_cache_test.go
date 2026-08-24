@@ -64,6 +64,42 @@ func TestPrometheusCacheMetricsExportWithLowCardinalityLabels(t *testing.T) {
 	}
 }
 
+func TestPrometheusWarmAssemblyKPIExport(t *testing.T) {
+	metrics := NewPrometheusMetrics()
+	metrics.RecordAssemblyPrefetch(true, 0, 250*time.Millisecond)
+	metrics.RecordAssemblyPrefetch(false, 4096, 1500*time.Millisecond)
+	metrics.RecordAssemblyExecution(20, 0, 0)
+
+	export := metrics.ExportPrometheus()
+	for _, name := range []string{
+		"velox_assembly_prefetch_cache_hits_total",
+		"velox_assembly_prefetch_download_bytes_total",
+		"velox_assembly_prefetch_ms",
+		"velox_assembly_assets_ready_at_execution",
+		"velox_assembly_assets_missing_at_execution",
+		"velox_assembly_execution_download_ms",
+	} {
+		if !strings.Contains(export, name) {
+			t.Errorf("Prometheus export missing warm-assembly KPI %s:\n%s", name, export)
+		}
+	}
+	for _, series := range []string{
+		`velox_assembly_prefetch_cache_hits_total{label="total"} 1`,
+		`velox_assembly_prefetch_download_bytes_total{label="total"} 4096`,
+		`velox_assembly_assets_ready_at_execution{label="total"} 20`,
+		`velox_assembly_assets_missing_at_execution{label="total"} 0`,
+	} {
+		if !strings.Contains(export, series) {
+			t.Errorf("warm-assembly series missing %q:\n%s", series, export)
+		}
+	}
+	for _, forbidden := range []string{"job-", "asset-", "sha256:"} {
+		if strings.Contains(export, forbidden) {
+			t.Errorf("warm-assembly metrics contain high-cardinality value %q:\n%s", forbidden, export)
+		}
+	}
+}
+
 func TestPrometheusPrefetchTimingMetricsUseOnlyDistanceLabels(t *testing.T) {
 	metrics := NewPrometheusMetrics()
 	metrics.RecordPrefetchQueueWait(1, 250*time.Millisecond)

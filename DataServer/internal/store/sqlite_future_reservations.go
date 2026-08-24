@@ -136,6 +136,36 @@ FROM future_task_reservations r LEFT JOIN task_specs s ON s.task_id=r.task_id WH
 	return out, rows.Err()
 }
 
+// TransferFutureTask atomically moves an active preparation reservation
+// from expectedWorkerID to reservation.WorkerID. It is the fallback CAS:
+// a reconnect/race that changes the owner causes (false, nil), never an
+// overwrite of a newer reservation.
+func (r *SQLiteTaskRepository) TransferFutureTask(ctx context.Context, taskID, expectedWorkerID string, reservation taskgraph.FutureReservation) (bool, error) {
+	if r == nil || r.store == nil || r.store.db == nil {
+		return false, fmt.Errorf("future reservation store: not initialized")
+	}
+	if taskID == "" || expectedWorkerID == "" || reservation.TaskID != taskID || reservation.WorkerID == "" || reservation.ReservationID == "" || reservation.ExpiresAt.IsZero() {
+		return false, fmt.Errorf("future reservation: incomplete transfer")
+	}
+	if reservation.WorkerID == expectedWorkerID {
+		return false, fmt.Errorf("future reservation: transfer target must differ from current worker")
+	}
+	res, err := r.store.db.ExecContext(ctx, `UPDATE future_task_reservations
+SET job_id = ?, worker_id = ?, reservation_id = ?, task_revision = ?, distance = ?, expires_at = ?, updated_at = ?
+WHERE task_id = ? AND worker_id = ? AND expires_at > ?`,
+		reservation.JobID, reservation.WorkerID, reservation.ReservationID, reservation.TaskRevision,
+		reservation.Distance, reservation.ExpiresAt.UTC().Format(time.RFC3339), nowRFC3339(),
+		taskID, expectedWorkerID, nowRFC3339())
+	if err != nil {
+		return false, wrapDBInfrastructure("future reservation transfer", err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return false, wrapDBInfrastructure("future reservation transfer rows", err)
+	}
+	return rows == 1, nil
+}
+
 func (r *SQLiteTaskRepository) FutureTaskPayload(ctx context.Context, taskID string) ([]byte, error) {
 	if r == nil || r.store == nil || r.store.db == nil {
 		return nil, fmt.Errorf("future reservation store: not initialized")

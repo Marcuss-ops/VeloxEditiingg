@@ -1,0 +1,90 @@
+{
+  "annotations": { "list": [] },
+  "description": "Warm placement and fast assembly: verified cache reuse, prefetch latency, bytes removed from the execution critical path, and residual foreground download.",
+  "editable": true,
+  "graphTooltip": 1,
+  "id": null,
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Prefetch cache hits",
+      "description": "Cumulative assets satisfied from the verified SHA256 cache during warm preparation.",
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] } }, "overrides": [] },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "increase(velox_assembly_prefetch_cache_hits_total[$__range])", "legendFormat": "cache hits", "refId": "A" } ]
+    },
+    {
+      "type": "stat",
+      "title": "Prefetch download bytes",
+      "description": "Bytes downloaded while preparing assets before the execution lease.",
+      "gridPos": { "h": 8, "w": 6, "x": 6, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "increase(velox_assembly_prefetch_download_bytes_total[$__range])", "legendFormat": "prefetch bytes", "refId": "A" } ]
+    },
+    {
+      "type": "stat",
+      "title": "Assets missing at execution",
+      "description": "Latest count of assets that were not locally verified when the execution lease started; target is zero.",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] } }, "overrides": [] },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "velox_assembly_assets_missing_at_execution", "legendFormat": "missing", "refId": "A" } ]
+    },
+    {
+      "type": "stat",
+      "title": "Execution download p95",
+      "description": "Residual download time on the execution critical path; the fast path should remain at zero.",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "targets": [ { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "histogram_quantile(0.95, sum by (le) (rate(velox_assembly_execution_download_ms_bucket[15m])))", "legendFormat": "p95", "refId": "A" } ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Prefetch latency",
+      "description": "Per-asset warm preparation latency in milliseconds. Spikes indicate queue, network, verification or metadata pressure.",
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "histogram_quantile(0.50, sum by (le) (rate(velox_assembly_prefetch_ms_bucket[15m])))", "legendFormat": "p50", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "histogram_quantile(0.95, sum by (le) (rate(velox_assembly_prefetch_ms_bucket[15m])))", "legendFormat": "p95", "refId": "B" },
+        { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "histogram_quantile(0.99, sum by (le) (rate(velox_assembly_prefetch_ms_bucket[15m])))", "legendFormat": "p99", "refId": "C" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Warm preparation vs execution downloads",
+      "description": "Compare bytes downloaded before execution with residual execution download duration.",
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "rate(velox_assembly_prefetch_download_bytes_total[15m])", "legendFormat": "prefetch bytes/s", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "histogram_quantile(0.95, sum by (le) (rate(velox_assembly_execution_download_ms_bucket[15m])))", "legendFormat": "execution download p95 ms", "refId": "B" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Execution readiness",
+      "description": "Assets ready and missing at execution. A healthy warm placement keeps the missing series at zero.",
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 18 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "velox_assembly_assets_ready_at_execution", "legendFormat": "ready", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "velox_assembly_assets_missing_at_execution", "legendFormat": "missing", "refId": "B" }
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Interpretation",
+      "options": { "mode": "markdown", "content": "**Target:** `assets_missing_at_execution = 0` and `execution_download_ms` ≈ 0. The prefetch counters are worker-lifetime totals and the readiness gauges describe the latest execution start. Asset IDs, job IDs, URLs and SHA256 values are intentionally absent from Prometheus; use the attempt explorer/SQL detail plane for drill-down." },
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 18 }
+    }
+  ],
+  "refresh": "15s",
+  "schemaVersion": 38,
+  "tags": ["velox", "observability", "assembly", "warm-placement", "prefetch"],
+  "templating": { "list": [ { "name": "DS_PROMETHEUS", "type": "datasource", "query": "prometheus", "label": "Datasource", "current": { "text": "Prometheus", "value": "Prometheus" } } ] },
+  "time": { "from": "now-6h", "to": "now" },
+  "timezone": "",
+  "title": "Velox — Warm Assembly",
+  "uid": "velox-warm-assembly",
+  "version": 1
+}

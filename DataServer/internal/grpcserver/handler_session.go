@@ -7,6 +7,7 @@ package grpcserver
 
 import (
 	"context"
+	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -62,7 +63,8 @@ type workerSession struct {
 	// Worker capacity limit from the canonical capability report. Current
 	// occupancy is never stored on the session: placement reads active leases
 	// from the master task store before admission.
-	maxParallelJobs atomic.Int32
+	maxParallelJobs      atomic.Int32
+	activeExecutionSlots atomic.Int32
 
 	// Sequence numbers for replay protection (Issue 7 fix).
 	lastRecvSeq int64 // last received sequence number from worker
@@ -86,6 +88,16 @@ type workerSession struct {
 	draining atomic.Bool
 
 	lastHeartbeatUnix atomic.Int64
+
+	// Warm-placement resource facts. They are updated from the canonical
+	// capability/telemetry snapshots and remain hints until the shared
+	// selector applies its fail-closed admission gates.
+	capacityAuthoritative atomic.Bool
+	diskAuthoritative     atomic.Bool
+	freeDiskBytes         atomic.Uint64
+	estimatedAvailableMS  atomic.Int64
+	networkMbpsBits       atomic.Uint64
+	loadRatioBits         atomic.Uint64
 
 	// Version correlation (Step 4 / Velox Metrics Center): software
 	// versions reported by the worker via heartbeat, stored on the
@@ -135,19 +147,59 @@ func (s *workerSession) placementSnapshot(workerID string) placement.WorkerSnaps
 		Draining:        s.draining.Load(),
 		SessionAlive:    true,
 		MaxParallelJobs: int(s.maxParallelJobs.Load()),
-		// ActiveJobs is replaced by the lease-store projection in the
-		// placement pipeline before Matcher.Select. Zero here prevents a
-		// heartbeat counter from becoming an admission decision.
-		ActiveJobs:         0,
-		ExecutorRegistry:   executorRegistry,
-		Capabilities:       caps,
-		CachedAssetKeys:    assetKeys,
-		CapabilityRevision: s.capabilityRevision.Load(),
+		// The normal dispatch path replaces ActiveJobs with the authoritative
+		// lease-store projection before Matcher.Select. Warm placement uses
+		// the latest accepted worker telemetry as its availability estimate.
+		ActiveJobs:            int(s.activeExecutionSlots.Load()),
+		CapacityAuthoritative: s.capacityAuthoritative.Load(),
+		DiskAuthoritative:     s.diskAuthoritative.Load(),
+		FreeDiskBytes:         s.freeDiskBytes.Load(),
+		EstimatedAvailableMS:  s.estimatedAvailableMS.Load(),
+		NetworkMbps:           math.Float64frombits(s.networkMbpsBits.Load()),
+		LoadRatio:             math.Float64frombits(s.loadRatioBits.Load()),
+		ExecutorRegistry:      executorRegistry,
+		Capabilities:          caps,
+		CachedAssetKeys:       assetKeys,
+		CapabilityRevision:    s.capabilityRevision.Load(),
 		LastHeartbeat: time.Unix(
 			s.lastHeartbeatUnix.Load(),
 			0,
 		).UTC(),
 	}
+}
+
+func (s *workerSession) setActiveExecutionSlots(value int) {
+	if value < 0 {
+		value = 0
+	}
+	s.activeExecutionSlots.Store(int32(value))
+}
+
+func (s *workerSession) setCapacityAuthoritative(value bool) {
+	s.capacityAuthoritative.Store(value)
+}
+
+func (s *workerSession) updatePlacementResources(freeDiskBytes int64, diskAuthoritative bool, estimatedAvailableMS int64, networkMbps, loadRatio float64) {
+	if freeDiskBytes < 0 {
+		freeDiskBytes = 0
+	}
+	if estimatedAvailableMS < 0 {
+		estimatedAvailableMS = 0
+	}
+	if math.IsNaN(networkMbps) || networkMbps < 0 {
+		networkMbps = 0
+	}
+	if math.IsNaN(loadRatio) || loadRatio < 0 {
+		loadRatio = 0
+	}
+	if loadRatio > 1 {
+		loadRatio = 1
+	}
+	s.diskAuthoritative.Store(diskAuthoritative)
+	s.freeDiskBytes.Store(uint64(freeDiskBytes))
+	s.estimatedAvailableMS.Store(estimatedAvailableMS)
+	s.networkMbpsBits.Store(math.Float64bits(networkMbps))
+	s.loadRatioBits.Store(math.Float64bits(loadRatio))
 }
 
 func (s *workerSession) replaceAssetCacheKeys(keys []string) {

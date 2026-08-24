@@ -189,6 +189,12 @@ type Worker struct {
 	prefetchController *prefetch.Controller
 	prefetchScheduler  *prefetch.Scheduler
 
+	// finalManifestReconciler applies late-bound FinalManifestDelta updates
+	// (including Chronon artifacts) through the same cache resolver used by
+	// prefetch. It is control-plane state; it never owns byte downloads.
+	finalManifestMu         sync.Mutex
+	finalManifestReconciler *prefetch.FinalManifestReconciler
+
 	// assetIntegrity remembers the self-verified digest+size of the most
 	// recent successful download of each asset (computed while the file was
 	// written). Payloads that reference velox-asset://<id> without sha256 /

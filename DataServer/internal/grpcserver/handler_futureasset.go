@@ -11,6 +11,7 @@ import (
 	"velox-server/internal/placement"
 	"velox-server/internal/taskgraph"
 	"velox-shared/contract"
+	"velox-shared/contract/assembly"
 	"velox-shared/futureasset"
 )
 
@@ -58,6 +59,7 @@ func (h *Handler) refreshFutureAssetPlan(ctx context.Context, workerID, currentJ
 	}
 	snapshot := sess.placementSnapshot(workerID)
 	snapshot.ActiveJobs = 0 // future reservations do not consume current slots
+	warmSnapshots := h.warmPlacementSnapshots()
 	prefetchLimit := h.config.FutureAssetPrefetchHorizon
 	if prefetchLimit <= 0 {
 		prefetchLimit = futureasset.DefaultPrefetchHorizon
@@ -75,15 +77,28 @@ func (h *Handler) refreshFutureAssetPlan(ctx context.Context, workerID, currentJ
 		if _, blocked := reservedByOther[candidate.TaskID]; blocked {
 			continue
 		}
-		match := h.placementMatcher.Select(snapshot, []placement.TaskCandidate{candidate})
-		if match.Candidate == nil {
-			continue
-		}
 		if existing, exists := owned[candidate.TaskID]; exists {
+			// Existing ownership is sticky until TTL/reconciliation. The
+			// ranking only chooses new reservations; it must not migrate a
+			// live preparation implicitly or change worker_id identity.
 			reservation := existing.FutureReservation
 			reservation.Distance = len(jobs) + 1
 			desired = append(desired, reservation)
 			jobs = append(jobs, futureasset.Job{JobID: existing.JobID, TaskID: existing.TaskID, ReservationID: existing.ReservationID, TaskRevision: existing.TaskRevision, Assets: futureAssetManifests(existing.Payload)})
+			continue
+		}
+
+		payload, err := store.FutureTaskPayload(ctx, candidate.TaskID)
+		if err != nil {
+			continue
+		}
+		assets := futureAssetManifests(payload)
+		decision, err := selectWarmPlacement(warmSnapshots, assets)
+		if err != nil || decision.WorkerID != workerID {
+			continue
+		}
+		match := h.placementMatcher.Select(snapshot, []placement.TaskCandidate{candidate})
+		if match.Candidate == nil {
 			continue
 		}
 		reservation := taskgraph.FutureReservation{TaskID: candidate.TaskID, JobID: candidate.JobID, WorkerID: workerID, ReservationID: fmt.Sprintf("future:%s:%s", workerID, candidate.TaskID), TaskRevision: candidate.Revision, Distance: len(jobs) + 1, ExpiresAt: time.Now().UTC().Add(h.futureAssetPlanTTL())}
@@ -102,10 +117,6 @@ func (h *Handler) refreshFutureAssetPlan(ctx context.Context, workerID, currentJ
 			// represented in the worker snapshot, but must not acquire a
 			// hard placement reservation or consume a scheduler slot.
 			reservation.ReservationID = ""
-		}
-		payload, err := store.FutureTaskPayload(ctx, candidate.TaskID)
-		if err != nil {
-			continue
 		}
 		if reservation.ReservationID != "" {
 			desired = append(desired, reservation)
@@ -145,6 +156,129 @@ func durationBetween(start, end time.Time) int64 {
 		return 0
 	}
 	return end.Sub(start).Milliseconds()
+}
+
+func (h *Handler) warmPlacementSnapshots() []assembly.WorkerPlacementSnapshot {
+	if h == nil {
+		return nil
+	}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	out := make([]assembly.WorkerPlacementSnapshot, 0, len(h.sessions))
+	for _, sess := range h.sessions {
+		if sess == nil {
+			continue
+		}
+		snapshot := sess.placementSnapshot(sess.workerID)
+		cached := make([]string, 0, len(snapshot.CachedAssetKeys))
+		for key := range snapshot.CachedAssetKeys {
+			cached = append(cached, key)
+		}
+		sort.Strings(cached)
+		out = append(out, assembly.WorkerPlacementSnapshot{
+			WorkerID:              snapshot.WorkerID,
+			Available:             snapshot.SessionAlive && snapshot.Ready && !snapshot.Draining,
+			CapacityAuthoritative: snapshot.CapacityAuthoritative,
+			DiskAuthoritative:     snapshot.DiskAuthoritative,
+			ActiveExecutionSlots:  snapshot.ActiveJobs,
+			MaxExecutionSlots:     snapshot.MaxParallelJobs,
+			FreeDiskBytes:         snapshot.FreeDiskBytes,
+			EstimatedAvailableMS:  snapshot.EstimatedAvailableMS,
+			NetworkMbps:           snapshot.NetworkMbps,
+			LoadRatio:             snapshot.LoadRatio,
+			Capabilities:          snapshot.Capabilities.All(),
+			CachedSHA256:          cached,
+		})
+	}
+	return out
+}
+
+func selectWarmPlacement(workers []assembly.WorkerPlacementSnapshot, assets []futureasset.AssetManifest) (assembly.PlacementDecision, error) {
+	request := assembly.PlacementRequest{AssetSizes: make(map[string]uint64)}
+	for _, asset := range assets {
+		if asset.SHA256 == "" {
+			continue
+		}
+		request.AssetSHA256 = append(request.AssetSHA256, asset.SHA256)
+		if asset.SizeBytes > 0 {
+			request.AssetSizes[asset.SHA256] = uint64(asset.SizeBytes)
+			request.MinimumFreeDiskBytes += uint64(asset.SizeBytes)
+		}
+	}
+	return assembly.SelectPreferredWorker(workers, request)
+}
+
+// ensureFutureReservationOwnership preserves a live preparation lease on
+// its owner, but transfers it with a CAS when that owner is no longer
+// eligible. This runs immediately before execution claim, so an unavailable
+// preferred worker cannot strand a READY task until the original TTL.
+func (h *Handler) ensureFutureReservationOwnership(ctx context.Context, workerID string, candidate *placement.TaskCandidate) (bool, error) {
+	if h == nil || candidate == nil {
+		return false, fmt.Errorf("future reservation fallback: missing handler or candidate")
+	}
+	store, ok := h.taskRepo.(taskgraph.FutureReservationStore)
+	if !ok {
+		// Lightweight repositories used by non-prefetch deployments have no
+		// preparation reservations and retain the normal claim path.
+		return true, nil
+	}
+	reservations, err := store.ListFutureReservations(ctx, "")
+	if err != nil {
+		return false, err
+	}
+	var current *taskgraph.FutureReservationWithPayload
+	for i := range reservations {
+		if reservations[i].TaskID == candidate.TaskID {
+			current = &reservations[i]
+			break
+		}
+	}
+	if current == nil || current.WorkerID == workerID {
+		return true, nil
+	}
+
+	assets := futureAssetManifests(current.Payload)
+	request := assembly.PlacementRequest{AssetSizes: make(map[string]uint64)}
+	for _, asset := range assets {
+		if asset.SHA256 == "" {
+			continue
+		}
+		request.AssetSHA256 = append(request.AssetSHA256, asset.SHA256)
+		if asset.SizeBytes > 0 {
+			request.AssetSizes[asset.SHA256] = uint64(asset.SizeBytes)
+			request.MinimumFreeDiskBytes += uint64(asset.SizeBytes)
+		}
+	}
+
+	// If the preparation owner remains eligible, it retains the soft lease;
+	// another worker must not steal its execution task merely because it ran
+	// a placement tick first.
+	for _, snapshot := range h.warmPlacementSnapshots() {
+		if snapshot.WorkerID != current.WorkerID {
+			continue
+		}
+		if _, ownerErr := assembly.SelectPreferredWorker([]assembly.WorkerPlacementSnapshot{snapshot}, request); ownerErr == nil {
+			return false, nil
+		}
+		break
+	}
+
+	decision, err := assembly.SelectPreferredWorker(h.warmPlacementSnapshots(), request)
+	if err != nil || decision.WorkerID != workerID {
+		return false, nil
+	}
+	transferred := current.FutureReservation
+	transferred.WorkerID = workerID
+	transferred.ReservationID = fmt.Sprintf("future:%s:%s:fallback:%d", workerID, candidate.TaskID, time.Now().UnixNano())
+	transferred.ExpiresAt = time.Now().UTC().Add(h.futureAssetPlanTTL())
+	acquired, err := store.TransferFutureTask(ctx, candidate.TaskID, current.WorkerID, transferred)
+	if err != nil {
+		return false, err
+	}
+	if acquired {
+		logGRPCf(ctx, logging.LevelInfo, logging.CodeGRPCPrefetch, "[PREFETCH] preparation lease fallback task=%s from_worker=%s to_worker=%s", candidate.TaskID, current.WorkerID, workerID)
+	}
+	return acquired, nil
 }
 
 func (h *Handler) futureAssetPlanTTL() time.Duration {

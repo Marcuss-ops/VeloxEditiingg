@@ -51,6 +51,15 @@ type PrometheusMetrics struct {
 	prefetchActive                   *GaugeVec
 	prefetchQueueDepth               *GaugeVec
 
+	// Warm-assembly KPI families. All use the static "total" label so
+	// worker/job/asset identifiers never become Prometheus series.
+	assemblyPrefetchCacheHits        *CounterVec
+	assemblyPrefetchDownloadBytes    *CounterVec
+	assemblyPrefetchMS               *HistogramVec
+	assemblyAssetsReadyAtExecution   *GaugeVec
+	assemblyAssetsMissingAtExecution *GaugeVec
+	assemblyExecutionDownloadMS      *HistogramVec
+
 	workerErrorsTotal            *CounterVec
 	assetDownloadActive          *GaugeVec
 	assetDownloadQueued          *GaugeVec

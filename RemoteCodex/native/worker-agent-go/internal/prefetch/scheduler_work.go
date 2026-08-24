@@ -84,6 +84,11 @@ func (s *Scheduler) runWorkItem(item *workItem, resolver *downloader.CacheResolv
 		s.cfg.OnState("requested", job, asset, nil)
 	}
 	resolved, err := resolver.Resolve(item.ctx, request)
+	var metadata PreparedAssetMetadata
+	var metadataErr error
+	if err == nil {
+		metadata, metadataErr = s.cfg.MetadataResolver(item.ctx, asset, resolved)
+	}
 	var protectionErr error
 	if err == nil {
 		// The canonical transferer commits the verified cache row before
@@ -113,7 +118,7 @@ func (s *Scheduler) runWorkItem(item *workItem, resolver *downloader.CacheResolv
 	}
 	s.releaseWork(asset.SizeBytes)
 	readyAt := s.cfg.Now()
-	if err == nil && protectionErr == nil {
+	if err == nil && metadataErr == nil && protectionErr == nil {
 		s.mu.Lock()
 		if s.readyAtByJob[job.JobID] == nil {
 			s.readyAtByJob[job.JobID] = make(map[string]readyRecord)
@@ -122,25 +127,46 @@ func (s *Scheduler) runWorkItem(item *workItem, resolver *downloader.CacheResolv
 		s.mu.Unlock()
 	}
 	if s.currentItem(item) {
+		preparedJob, prepared := PreparedJob{}, false
+		if err == nil && metadataErr == nil && protectionErr == nil {
+			preparedJob, prepared = s.preparedForJob(job, metadata)
+		}
 		if s.cfg.OnState != nil {
-			if err != nil {
+			switch {
+			case err != nil:
 				s.cfg.OnState("failed", job, asset, err)
-			} else if protectionErr != nil {
-				s.cfg.OnState("protection_failed", job, asset, protectionErr)
-			} else {
-				s.cfg.OnState("ready", job, asset, nil)
+			default:
+				if metadataErr != nil {
+					s.cfg.OnState("metadata_failed", job, asset, metadataErr)
+				}
+				if protectionErr != nil {
+					s.cfg.OnState("protection_failed", job, asset, protectionErr)
+				}
+				if metadataErr == nil && protectionErr == nil {
+					s.cfg.OnState("ready", job, asset, nil)
+				}
 			}
+			if prepared {
+				s.cfg.OnState("prepared", job, asset, nil)
+			}
+		}
+		if prepared && s.cfg.OnPrepared != nil {
+			s.cfg.OnPrepared(preparedJob)
 		}
 		s.mu.Lock()
 		active, queueDepth := s.activePrefetch, s.queue.Len()
 		s.mu.Unlock()
 		eventName := "asset_ready"
-		if protectionErr != nil && err == nil {
+		if metadataErr != nil && err == nil {
+			eventName = "asset_metadata_failed"
+		} else if protectionErr != nil && err == nil {
 			eventName = "asset_ready_unprotected"
 		}
-		event := Event{Name: eventName, At: readyAt, PlanVersion: item.planVersion, JobID: job.JobID, TaskID: job.TaskID, AssetKey: asset.AssetKey, Distance: job.Distance, Generation: item.generation, QueuedAt: item.enqueuedAt, StartedAt: startedAt, ReadyAt: readyAt, QueueDepth: queueDepth, Active: active}
+		event := Event{Name: eventName, At: readyAt, PlanVersion: item.planVersion, JobID: job.JobID, TaskID: job.TaskID, AssetKey: asset.AssetKey, Distance: job.Distance, Generation: item.generation, QueuedAt: item.enqueuedAt, StartedAt: startedAt, ReadyAt: readyAt, QueueDepth: queueDepth, Active: active, CacheHit: resolved.CacheHit, DownloadBytes: resolved.DownloadBytes}
 		if err != nil {
 			event.ErrorMessage = err.Error()
+		} else if metadataErr != nil {
+			event.ErrorMessage = metadataErr.Error()
 		} else if protectionErr != nil {
 			event.ErrorMessage = protectionErr.Error()
 		}

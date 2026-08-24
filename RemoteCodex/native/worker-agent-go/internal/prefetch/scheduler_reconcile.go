@@ -39,6 +39,7 @@ func (s *Scheduler) Reconcile(plan futureasset.Plan) error {
 		if _, ok := scheduled[id]; !ok {
 			runtime.cancel()
 			delete(s.jobs, id)
+			delete(s.prepared, id)
 			s.detachJobLocked(runtime.job)
 		}
 	}
@@ -80,6 +81,7 @@ func (s *Scheduler) Reconcile(plan futureasset.Plan) error {
 			}
 			runtime.job = job
 			runtime.generation++
+			delete(s.prepared, job.JobID)
 			events = append(events, s.enqueueJobLocked(plan.Version, runtime)...)
 			continue
 		}
@@ -113,6 +115,7 @@ func (s *Scheduler) resetForExpiredLocked() (store workercache.LeaseReservationS
 	s.protectExpiries = make(map[string]time.Time)
 	s.hints = make(map[string]futureasset.ProtectedAsset)
 	s.readyAtByJob = make(map[string]map[string]readyRecord)
+	s.prepared = make(map[string]PreparedJob)
 	return store, oldProtects
 }
 
@@ -171,6 +174,7 @@ func (s *Scheduler) Cancel(jobID string) bool {
 	}
 	runtime.cancel()
 	delete(s.jobs, jobID)
+	delete(s.prepared, jobID)
 	s.detachJobLocked(runtime.job)
 	s.signalWork()
 	return true

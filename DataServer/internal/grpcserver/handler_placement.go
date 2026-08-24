@@ -109,6 +109,17 @@ func (h *Handler) sendPushTaskOffer(ctx context.Context, workerID string) {
 	}
 
 	candidate := result.Candidate
+	canClaim, err := h.ensureFutureReservationOwnership(ctx, workerID, candidate)
+	if err != nil {
+		logGRPCf(ctx, logging.LevelError, logging.CodeGRPCPlacementFailed, "[PLACEMENT] future reservation fallback check failed worker=%s task=%s: %v", workerID, candidate.TaskID, err)
+		return
+	}
+	if !canClaim {
+		// Another eligible worker still owns the preparation lease, or this
+		// worker lost the fallback race. Leave the task READY and let the
+		// owner/next placement tick claim it.
+		return
+	}
 	leaseID := fmt.Sprintf("l-%s-%s", workerID, uuid.NewString()[:8])
 
 	tws, attempt, err := h.taskRepo.ClaimTaskForWorkerAtomic(ctx, taskgraph.ClaimTaskForWorkerCommand{

@@ -10,9 +10,16 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	videoContract "velox-shared/contract"
 )
 
 const ContractVersion = "velox.assembly.v1"
+
+// CanonicalAssemblyContractVersionV1 is the explicit version constant shared
+// by PipelineGen, Velox and RenderingGen. ContractVersion remains as a
+// backwards-compatible alias for existing callers.
+const CanonicalAssemblyContractVersionV1 = ContractVersion
 
 type DispatchTarget string
 
@@ -100,6 +107,9 @@ type AssetRequirement struct {
 	Producer     AssetProducer     `json:"producer,omitempty"`
 	URL          string            `json:"url,omitempty"`
 	SHA256       string            `json:"sha256,omitempty"`
+	SizeBytes    int64             `json:"size_bytes,omitempty"`
+	MIMEType     string            `json:"mime_type,omitempty"`
+	ProfileID    string            `json:"profile_id,omitempty"`
 	Required     bool              `json:"required"`
 	State        AssetState        `json:"state"`
 }
@@ -125,26 +135,39 @@ const (
 	StateCancelled       AssemblyState = "cancelled"
 )
 
-type AssemblyJobV1 struct {
-	ContractVersion  string             `json:"contract_version"`
-	JobID            string             `json:"job_id"`
-	TimelineRevision uint64             `json:"timeline_revision"`
-	TimelineHash     string             `json:"timeline_hash"`
-	Dispatch         DispatchPolicy     `json:"dispatch"`
-	Assets           []AssetRequirement `json:"assets"`
-	Timeline         []TimelineItem     `json:"timeline,omitempty"`
-	Output           Output             `json:"output"`
-	State            AssemblyState      `json:"state,omitempty"`
+// CanonicalAssemblyContractV1 is the final, versioned handoff exchanged by
+// PipelineGen, Velox and RenderingGen. It contains control-plane identity,
+// the immutable timeline binding, the complete asset state, and the output
+// profile; renderer payloads must not be used as a substitute for this type.
+type CanonicalAssemblyContractV1 struct {
+	ContractVersion  string                                 `json:"contract_version"`
+	JobID            string                                 `json:"job_id"`
+	TimelineRevision uint64                                 `json:"timeline_revision"`
+	TimelineHash     string                                 `json:"timeline_hash"`
+	PreparationHash  string                                 `json:"preparation_hash,omitempty"`
+	Dispatch         DispatchPolicy                         `json:"dispatch"`
+	Assets           []AssetRequirement                     `json:"assets"`
+	Timeline         []TimelineItem                         `json:"timeline,omitempty"`
+	Output           Output                                 `json:"output"`
+	Profile          *videoContract.CanonicalVideoProfileV1 `json:"profile,omitempty"`
+	State            AssemblyState                          `json:"state,omitempty"`
 }
 
+// AssemblyJobV1 is retained as a source-compatible name for existing Velox
+// intake and task-contract callers. Both names are the exact same wire type.
+type AssemblyJobV1 = CanonicalAssemblyContractV1
+
 type PublishedArtifact struct {
-	JobID            string `json:"job_id"`
-	TimelineRevision uint64 `json:"timeline_revision"`
-	AssetID          string `json:"asset_id"`
-	StorageURL       string `json:"storage_url"`
-	SHA256           string `json:"sha256"`
-	ProfileID        string `json:"profile_id,omitempty"`
-	FrameCount       uint64 `json:"frame_count,omitempty"`
+	JobID            string        `json:"job_id"`
+	TimelineRevision uint64        `json:"timeline_revision"`
+	AssetID          string        `json:"asset_id"`
+	StorageURL       string        `json:"storage_url"`
+	SHA256           string        `json:"sha256"`
+	SizeBytes        int64         `json:"size_bytes"`
+	MIMEType         string        `json:"mime_type,omitempty"`
+	ProfileID        string        `json:"profile_id,omitempty"`
+	Producer         AssetProducer `json:"producer,omitempty"`
+	FrameCount       uint64        `json:"frame_count,omitempty"`
 }
 
 type InvalidateArtifact struct {
@@ -171,6 +194,15 @@ func (a AssetAvailability) Valid() bool {
 	return a == AvailabilityKnown || a == AvailabilityRuntime || a == AvailabilityOptional
 }
 
+func (s AssemblyState) Valid() bool {
+	switch s {
+	case StatePreparing, StateWaitingRuntime, StateReadyToFinalize, StateFinalizing, StateCompleted, StateFailed, StateCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
 func (k AssetKind) Valid() bool {
 	switch k {
 	case KindSourceClip, KindVoiceover, KindImage, KindOverlayAsset, KindPreparedScene, KindGeneratedClip, KindFinalAudio:
@@ -194,7 +226,7 @@ func validSHA256(value string) bool {
 
 // Validate enforces the wire invariants before a job can enter intake.
 // Unknown contract versions and incomplete known assets are rejected.
-func (j AssemblyJobV1) Validate() error {
+func (j CanonicalAssemblyContractV1) Validate() error {
 	if j.ContractVersion != ContractVersion {
 		return fmt.Errorf("assembly: unsupported contract_version %q", j.ContractVersion)
 	}
@@ -213,6 +245,20 @@ func (j AssemblyJobV1) Validate() error {
 	if strings.TrimSpace(j.Output.ProfileID) == "" {
 		return errors.New("assembly: output.profile_id is required")
 	}
+	if j.Profile != nil {
+		if err := j.Profile.Validate(); err != nil {
+			return fmt.Errorf("assembly: invalid canonical profile: %w", err)
+		}
+		if j.Profile.ProfileID != j.Output.ProfileID {
+			return fmt.Errorf("assembly: profile.profile_id %q does not match output.profile_id %q", j.Profile.ProfileID, j.Output.ProfileID)
+		}
+	}
+	if j.PreparationHash != "" && j.PreparationHash != j.ComputePreparationHash() {
+		return errors.New("assembly: preparation_hash does not match contract contents")
+	}
+	if j.State != "" && !j.State.Valid() {
+		return fmt.Errorf("assembly: unknown state %q", j.State)
+	}
 	seen := make(map[string]struct{}, len(j.Assets))
 	for i, asset := range j.Assets {
 		if strings.TrimSpace(asset.AssetID) == "" {
@@ -224,6 +270,9 @@ func (j AssemblyJobV1) Validate() error {
 		seen[asset.AssetID] = struct{}{}
 		if !asset.Kind.Valid() || !asset.Availability.Valid() {
 			return fmt.Errorf("assembly: assets[%d] has an unknown kind or availability", i)
+		}
+		if asset.SizeBytes < 0 {
+			return fmt.Errorf("assembly: asset %q has negative size_bytes", asset.AssetID)
 		}
 		if asset.Availability == AvailabilityKnown {
 			if strings.TrimSpace(asset.URL) == "" || !validSHA256(asset.SHA256) {
@@ -246,7 +295,7 @@ func (j AssemblyJobV1) Validate() error {
 
 // DeriveState keeps waiting jobs out of render slots. Optional assets do not
 // block finalization; required runtime assets do.
-func (j AssemblyJobV1) DeriveState() AssemblyState {
+func (j CanonicalAssemblyContractV1) DeriveState() AssemblyState {
 	for _, asset := range j.Assets {
 		if asset.Required && asset.State != AssetReady {
 			if asset.Availability == AvailabilityRuntime {

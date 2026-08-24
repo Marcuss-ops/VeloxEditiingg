@@ -212,7 +212,13 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 	// are not admitted or retained.
 	if mpj := maxParallelJobsFromCapabilities(caps); mpj > 0 {
 		sess.maxParallelJobs.Store(int32(mpj))
+		sess.setCapacityAuthoritative(true)
+	} else {
+		sess.setCapacityAuthoritative(false)
 	}
+	_, diskPresent := snapshotHostValue(caps, "disk_free_bytes")
+	diskFreeBytes := snapshotHostInt64(caps, "disk_free_bytes")
+	sess.updatePlacementResources(diskFreeBytes, diskPresent && diskFreeBytes >= 0, 0, 0, 0)
 	sess.replaceCapabilities(executorRegistry, capabilitiesBoolMap(caps))
 	sess.replaceAssetCacheKeys(extractAssetCacheKeys(caps))
 	sess.ready.Store(true)

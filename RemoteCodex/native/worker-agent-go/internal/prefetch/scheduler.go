@@ -33,10 +33,15 @@ type Config struct {
 	DiskUsagePercent           func() int
 	Now                        func() time.Time
 	OnState                    func(string, futureasset.Job, futureasset.AssetManifest, error)
-	RAM                        *RAMCache
-	RAMMinFutureRefs           int
-	RAMMaxNextUseDistance      int
-	OnEvent                    func(Event)
+	// MetadataResolver runs after a verified cache hit/download and before
+	// an asset is considered prepared. It must not mutate the cache path.
+	MetadataResolver MetadataResolver
+	// OnPrepared receives the aggregate PREPARED transition for a job.
+	OnPrepared            func(PreparedJob)
+	RAM                   *RAMCache
+	RAMMinFutureRefs      int
+	RAMMaxNextUseDistance int
+	OnEvent               func(Event)
 }
 
 type jobRuntime struct {
@@ -50,21 +55,23 @@ type jobRuntime struct {
 // asset identifiers are available to structured-log consumers through the
 // callback, but are intentionally not metric labels.
 type Event struct {
-	Name         string
-	At           time.Time
-	PlanVersion  uint64
-	PlanID       string
-	JobID        string
-	TaskID       string
-	AssetKey     string
-	Distance     int
-	Generation   uint64
-	QueuedAt     time.Time
-	StartedAt    time.Time
-	ReadyAt      time.Time
-	QueueDepth   int
-	Active       int
-	ErrorMessage string
+	Name          string
+	At            time.Time
+	PlanVersion   uint64
+	PlanID        string
+	JobID         string
+	TaskID        string
+	AssetKey      string
+	Distance      int
+	Generation    uint64
+	QueuedAt      time.Time
+	StartedAt     time.Time
+	ReadyAt       time.Time
+	QueueDepth    int
+	Active        int
+	CacheHit      bool
+	DownloadBytes int64
+	ErrorMessage  string
 }
 
 type workItem struct {
@@ -141,6 +148,7 @@ type Scheduler struct {
 	workerCancel    context.CancelFunc
 	activePrefetch  int
 	readyAtByJob    map[string]map[string]readyRecord
+	prepared        map[string]PreparedJob
 }
 
 type diskPressureState uint8
@@ -176,8 +184,11 @@ func NewScheduler(cfg Config) *Scheduler {
 	if cfg.RAMMaxNextUseDistance <= 0 {
 		cfg.RAMMaxNextUseDistance = 3
 	}
+	if cfg.MetadataResolver == nil {
+		cfg.MetadataResolver = defaultMetadataResolver
+	}
 	workerCtx, workerCancel := context.WithCancel(context.Background())
-	s := &Scheduler{cfg: cfg, ram: cfg.RAM, jobs: make(map[string]*jobRuntime), protects: make(map[string]string), pendingProtects: make(map[string]struct{}), protectExpiries: make(map[string]time.Time), hints: make(map[string]futureasset.ProtectedAsset), prefetched: make(map[string]int64), useful: make(map[string]bool), assetJobs: make(map[string]map[string]struct{}), wake: make(chan struct{}, 1), workerCtx: workerCtx, workerCancel: workerCancel, readyAtByJob: make(map[string]map[string]readyRecord)}
+	s := &Scheduler{cfg: cfg, ram: cfg.RAM, jobs: make(map[string]*jobRuntime), protects: make(map[string]string), pendingProtects: make(map[string]struct{}), protectExpiries: make(map[string]time.Time), hints: make(map[string]futureasset.ProtectedAsset), prefetched: make(map[string]int64), useful: make(map[string]bool), assetJobs: make(map[string]map[string]struct{}), wake: make(chan struct{}, 1), workerCtx: workerCtx, workerCancel: workerCancel, readyAtByJob: make(map[string]map[string]readyRecord), prepared: make(map[string]PreparedJob)}
 	heap.Init(&s.queue)
 	for i := 0; i < cfg.MaxConcurrent; i++ {
 		go s.runWorker()

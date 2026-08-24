@@ -56,3 +56,38 @@ func TestFutureReservations_AreExclusiveAndReconciled(t *testing.T) {
 		t.Fatalf("reconcile did not release: %+v", rows)
 	}
 }
+
+func TestFutureReservations_TransferUsesOwnerCAS(t *testing.T) {
+	db, err := sql.Open("sqlite3", "file:future-reservation-transfer-test?mode=memory&cache=shared&_busy_timeout=5000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	_, err = db.Exec(`CREATE TABLE tasks(task_id TEXT PRIMARY KEY); CREATE TABLE task_specs(task_id TEXT PRIMARY KEY,payload_json TEXT); CREATE TABLE future_task_reservations(task_id TEXT PRIMARY KEY,job_id TEXT NOT NULL,worker_id TEXT NOT NULL,reservation_id TEXT NOT NULL UNIQUE,task_revision INTEGER,distance INTEGER,expires_at TEXT,created_at TEXT,updated_at TEXT);`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := NewSQLiteTaskRepository(&SQLiteStore{db: db})
+	ctx := context.Background()
+	first := taskgraph.FutureReservation{TaskID: "t1", JobID: "j1", WorkerID: "worker-a", ReservationID: "r-a", Distance: 1, ExpiresAt: time.Now().UTC().Add(time.Minute)}
+	if ok, err := repo.TryReserveFutureTask(ctx, first); err != nil || !ok {
+		t.Fatalf("initial reservation: ok=%v err=%v", ok, err)
+	}
+	fallback := first
+	fallback.WorkerID = "worker-b"
+	fallback.ReservationID = "r-b"
+	fallback.ExpiresAt = time.Now().UTC().Add(2 * time.Minute)
+	if ok, err := repo.TransferFutureTask(ctx, "t1", "worker-a", fallback); err != nil || !ok {
+		t.Fatalf("transfer: ok=%v err=%v", ok, err)
+	}
+	rows, err := repo.ListFutureReservations(ctx, "worker-b")
+	if err != nil || len(rows) != 1 || rows[0].ReservationID != "r-b" {
+		t.Fatalf("transferred reservation=%+v err=%v", rows, err)
+	}
+	stale := first
+	stale.WorkerID = "worker-c"
+	stale.ReservationID = "r-c"
+	if ok, err := repo.TransferFutureTask(ctx, "t1", "worker-a", stale); err != nil || ok {
+		t.Fatalf("stale owner transfer: ok=%v err=%v, want false", ok, err)
+	}
+}

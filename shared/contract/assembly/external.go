@@ -1,6 +1,9 @@
 package assembly
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // ExternalAssemblyRequest is the small public intake shape. The handler
 // normalizes it once into AssemblyJobV1 before it reaches control-plane
@@ -12,6 +15,9 @@ type ExternalAssemblyRequest struct {
 	Assets           []AssetRequirement `json:"assets,omitempty"`
 	Timeline         []TimelineItem     `json:"timeline,omitempty"`
 	OutputProfile    string             `json:"output_profile,omitempty"`
+	// EarlyManifest is the preferred producer-facing handoff. Legacy fields
+	// remain accepted for compatibility, but cannot be combined with it.
+	EarlyManifest *EarlyAssemblyManifest `json:"early_manifest,omitempty"`
 }
 
 // Normalize converts the public convenience shape into the canonical typed
@@ -19,6 +25,23 @@ type ExternalAssemblyRequest struct {
 // can treat send_to_velox=false as a no-op without manufacturing invalid
 // control-plane state.
 func (r ExternalAssemblyRequest) Normalize(jobID string) (*AssemblyJobV1, error) {
+	if r.EarlyManifest != nil {
+		if r.TimelineRevision != 0 || r.TimelineHash != "" || len(r.Assets) != 0 || len(r.Timeline) != 0 || r.OutputProfile != "" {
+			return nil, fmt.Errorf("assembly: early_manifest cannot be combined with legacy assembly fields")
+		}
+		manifest := *r.EarlyManifest
+		if strings.TrimSpace(manifest.JobID) == "" {
+			manifest.JobID = jobID
+		}
+		if strings.TrimSpace(manifest.JobID) != strings.TrimSpace(jobID) {
+			return nil, fmt.Errorf("assembly: early_manifest.job_id must match idempotency key")
+		}
+		canonical, err := manifest.CanonicalContract()
+		if err != nil {
+			return nil, err
+		}
+		return &canonical, nil
+	}
 	if !r.SendToVelox {
 		return nil, nil
 	}

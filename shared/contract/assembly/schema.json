@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "velox.contract.assembly.v1",
-  "title": "AssemblyJobV1",
+  "title": "CanonicalAssemblyContractV1",
   "type": "object",
   "additionalProperties": false,
   "required": ["contract_version", "job_id", "timeline_revision", "timeline_hash", "dispatch", "assets", "output"],
@@ -10,6 +10,10 @@
     "job_id": {"type": "string", "minLength": 1},
     "timeline_revision": {"type": "integer", "minimum": 1},
     "timeline_hash": {"type": "string", "minLength": 1},
+    "revision": {"type": "integer", "minimum": 1},
+    "preparation_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "expected_profile": {"type": "string", "minLength": 1},
+    "profile": {"type": "object"},
     "dispatch": {
       "type": "object",
       "additionalProperties": false,
@@ -23,7 +27,9 @@
     "assets": {"type": "array", "items": {"$ref": "#/$defs/asset"}},
     "timeline": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["scene_id", "asset_id"], "properties": {"scene_id": {"type": "string"}, "asset_id": {"type": "string"}}}},
     "output": {"type": "object", "additionalProperties": false, "required": ["profile_id"], "properties": {"profile_id": {"type": "string", "minLength": 1}}},
-    "state": {"enum": ["preparing", "waiting_runtime_assets", "ready_to_finalize", "finalizing", "completed", "failed", "cancelled"]}
+    "state": {"enum": ["preparing", "waiting_runtime_assets", "ready_to_finalize", "finalizing", "completed", "failed", "cancelled"]},
+    "final_manifest": {"$ref": "#/$defs/final_manifest"},
+    "final_manifest_delta": {"$ref": "#/$defs/final_manifest_delta"}
   },
   "$defs": {
     "asset": {
@@ -37,8 +43,61 @@
         "producer": {"enum": ["pipelinegen", "renderinggen", "chronon"]},
         "url": {"type": "string", "minLength": 1},
         "sha256": {"type": "string", "pattern": "^(sha256:)?[0-9a-fA-F]{64}$"},
+        "size_bytes": {"type": "integer", "minimum": 0},
+        "mime_type": {"type": "string"},
+        "profile_id": {"type": "string"},
         "required": {"type": "boolean"},
         "state": {"enum": ["declared", "waiting_producer", "materializing", "ready", "invalidated", "failed"]}
+      }
+    },
+    "published_artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["job_id", "timeline_revision", "asset_id", "storage_url", "sha256", "size_bytes"],
+      "properties": {
+        "job_id": {"type": "string", "minLength": 1},
+        "timeline_revision": {"type": "integer", "minimum": 1},
+        "asset_id": {"type": "string", "minLength": 1},
+        "storage_url": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^(sha256:)?[0-9a-fA-F]{64}$"},
+        "size_bytes": {"type": "integer", "minimum": 0},
+        "mime_type": {"type": "string"},
+        "profile_id": {"type": "string"},
+        "producer": {"enum": ["pipelinegen", "renderinggen", "chronon"]},
+        "frame_count": {"type": "integer", "minimum": 0}
+      }
+    },
+    "final_manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "job_id", "revision", "preparation_hash", "timeline_revision", "timeline_hash", "expected_profile", "artifacts"],
+      "properties": {
+        "contract_version": {"const": "velox.assembly.v1"},
+        "job_id": {"type": "string", "minLength": 1},
+        "revision": {"type": "integer", "minimum": 1},
+        "preparation_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "timeline_revision": {"type": "integer", "minimum": 1},
+        "timeline_hash": {"type": "string", "minLength": 1},
+        "expected_profile": {"type": "string", "minLength": 1},
+        "artifacts": {"type": "array", "items": {"$ref": "#/$defs/published_artifact"}},
+        "last_delta_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "final_manifest_delta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "job_id", "base_revision", "revision", "preparation_hash"],
+      "properties": {
+        "contract_version": {"const": "velox.assembly.v1"},
+        "job_id": {"type": "string", "minLength": 1},
+        "base_revision": {"type": "integer", "minimum": 0},
+        "revision": {"type": "integer", "minimum": 1},
+        "preparation_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "timeline_revision": {"type": "integer", "minimum": 1},
+        "timeline_hash": {"type": "string", "minLength": 1},
+        "expected_profile": {"type": "string"},
+        "upserted_artifacts": {"type": "array", "items": {"$ref": "#/$defs/published_artifact"}},
+        "invalidated_artifact_ids": {"type": "array", "items": {"type": "string", "minLength": 1}}
       }
     }
   }

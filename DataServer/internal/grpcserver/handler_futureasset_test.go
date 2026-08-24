@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"velox-shared/contract"
+	"velox-shared/contract/assembly"
+	"velox-shared/futureasset"
 )
 
 func TestFutureAssetManifestsIsDeterministicallyOrdered(t *testing.T) {
@@ -28,6 +30,32 @@ func TestFutureAssetManifestsIsDeterministicallyOrdered(t *testing.T) {
 		if got := futureAssetManifests(payload); !reflect.DeepEqual(got, want) {
 			t.Fatalf("manifest changed between runs: got=%v want=%v", got, want)
 		}
+	}
+}
+
+func TestSelectWarmPlacementUsesCacheAwareWorkerRanking(t *testing.T) {
+	workers := []assembly.WorkerPlacementSnapshot{
+		{WorkerID: "cold", Available: true, CapacityAuthoritative: true, DiskAuthoritative: true, MaxExecutionSlots: 2, FreeDiskBytes: 1 << 30},
+		{WorkerID: "warm", Available: true, CapacityAuthoritative: true, DiskAuthoritative: true, MaxExecutionSlots: 2, FreeDiskBytes: 1 << 30, CachedSHA256: []string{"sha-video"}},
+	}
+	assets := []futureasset.AssetManifest{{AssetKey: "video", SHA256: "sha-video", SizeBytes: 10}}
+	decision, err := selectWarmPlacement(workers, assets)
+	if err != nil {
+		t.Fatalf("selectWarmPlacement() error = %v", err)
+	}
+	if decision.WorkerID != "warm" || decision.CachedAssets != 1 || decision.MissingAssets != 0 {
+		t.Fatalf("decision = %#v, want warm worker with complete cache locality", decision)
+	}
+}
+
+func TestSelectWarmPlacementRejectsUnknownDiskForPrefetch(t *testing.T) {
+	workers := []assembly.WorkerPlacementSnapshot{{
+		WorkerID: "unknown-disk", Available: true, CapacityAuthoritative: true,
+		MaxExecutionSlots: 1, FreeDiskBytes: 1 << 30,
+	}}
+	assets := []futureasset.AssetManifest{{AssetKey: "video", SHA256: "sha-video", SizeBytes: 10}}
+	if _, err := selectWarmPlacement(workers, assets); err == nil {
+		t.Fatal("warm prefetch must fail closed when disk authority is unavailable")
 	}
 }
 

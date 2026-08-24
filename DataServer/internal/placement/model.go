@@ -96,6 +96,16 @@ type WorkerSnapshot struct {
 	MaxParallelJobs int
 	ActiveJobs      int
 
+	// CapacityAuthoritative and DiskAuthoritative are fail-closed resource
+	// facts used by warm placement. A zero/unknown value is never treated as
+	// spare capacity or free disk when a preparation needs that resource.
+	CapacityAuthoritative bool
+	DiskAuthoritative     bool
+	FreeDiskBytes         uint64
+	EstimatedAvailableMS  int64
+	NetworkMbps           float64
+	LoadRatio             float64
+
 	ExecutorRegistry controltransport.ExecutorRegistry
 	// Capabilities contains only typed named admission features. Executor
 	// metadata is exclusively represented by ExecutorRegistry.

@@ -58,6 +58,11 @@ per-job labels. Per-job delivery timing and cache totals come from
 | `velox_db_longest_transaction_ms` | G | none | maximum observed transaction duration since process start |
 | `velox_cache_lookups_total` / `velox_cache_hits_total` / `velox_cache_misses_total` | C | `result` or none | cache accounting with `lookups = hits + misses` |
 | `velox_cache_downloads_total` / `velox_cache_download_bytes_total` | C | none | attempt-scoped asset download count/bytes (Phase A1.5 CacheResolver) |
+| `velox_assembly_prefetch_cache_hits_total` | C | `label=total` | warm-assembly prefetch assets served from the verified SHA256 cache |
+| `velox_assembly_prefetch_download_bytes_total` | C | `label=total` | bytes downloaded before the execution lease for warm assembly |
+| `velox_assembly_prefetch_ms` | H | `label=total` | per-asset warm prefetch latency in milliseconds |
+| `velox_assembly_assets_ready_at_execution` / `velox_assembly_assets_missing_at_execution` | G | `label=total` | verified assets available/missing when execution starts; missing target is zero |
+| `velox_assembly_execution_download_ms` | H | `label=total` | residual download duration on the execution critical path; fast-path target is zero |
 | `velox_unique_assets_requested` / `velox_cache_invariant_violations_total` | G/C | none | latest unique-asset snapshot and rejected accounting mismatches |
 
 `db_write_wait_ms` measures time to acquire a `database/sql` transaction

@@ -2,7 +2,11 @@ package prefetch
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -302,10 +306,26 @@ func TestScheduler_CancelDetachesReferencesAndReportsWasted(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("prefetch did not resolve the asset")
 	}
+	// Resolve signals at entry. Wait until runWorkItem has recorded the
+	// verified transfer before cancelling; otherwise the test races the
+	// bookkeeping that makes the asset eligible for a wasted event.
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case state := <-events:
+			if state == "downloaded" {
+				goto downloaded
+			}
+		case <-deadline:
+			t.Fatal("prefetch did not report the verified download")
+		}
+	}
+
+downloaded:
 	if !s.Cancel("n1") {
 		t.Fatal("Cancel(n1) = false, want true")
 	}
-	deadline := time.After(time.Second)
+	deadline = time.After(time.Second)
 	for {
 		select {
 		case state := <-events:
@@ -640,5 +660,95 @@ func TestScheduler_ReconcileDoesNotHoldLockDuringProtectionIO(t *testing.T) {
 	close(store.release)
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDefaultMetadataResolverVerifiesSizeHashAndCapturesFFprobe(t *testing.T) {
+	path := t.TempDir() + "/asset.bin"
+	contents := []byte("prefetch metadata")
+	if err := os.WriteFile(path, contents, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(contents)
+	asset := futureasset.AssetManifest{AssetKey: "asset", AssetID: "asset", SHA256: hex.EncodeToString(sum[:]), SizeBytes: int64(len(contents))}
+	metadata, err := defaultMetadataResolver(context.Background(), asset, downloader.CacheResolution{LocalPath: path})
+	if err != nil {
+		t.Fatalf("defaultMetadataResolver() error = %v", err)
+	}
+	if metadata.SHA256 != asset.SHA256 || metadata.SizeBytes != asset.SizeBytes {
+		t.Fatalf("metadata integrity = %#v, want sha=%s size=%d", metadata, asset.SHA256, asset.SizeBytes)
+	}
+	if metadata.FfprobeError == "" {
+		t.Fatal("non-media fixture should retain ffprobe result/error metadata")
+	}
+
+	asset.SHA256 = strings.Repeat("0", 64)
+	if _, err := defaultMetadataResolver(context.Background(), asset, downloader.CacheResolution{LocalPath: path}); err == nil {
+		t.Fatal("hash mismatch must be rejected before PREPARED")
+	}
+}
+
+func TestScheduler_CacheHitRunsMetadataAndReachesPreparedWithoutDownload(t *testing.T) {
+	path := t.TempDir() + "/cached.bin"
+	contents := []byte("verified cache hit")
+	if err := os.WriteFile(path, contents, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(contents)
+	digest := hex.EncodeToString(sum[:])
+	var transfers atomic.Int32
+	transferer := downloader.TransfererFunc(func(_ context.Context, _ context.Context, req downloader.DownloadRequest, check bool, _ func(int64)) (downloader.CacheCheckResult, downloader.TransferResult, error) {
+		if check {
+			return downloader.CacheCheckResult{CacheHit: true, LocalPath: path, SHA256: req.SHA256, Outcome: downloader.CacheOutcomeHitValid}, downloader.TransferResult{}, nil
+		}
+		transfers.Add(1)
+		return downloader.CacheCheckResult{}, downloader.TransferResult{}, errors.New("cache hit must not download")
+	})
+	manager := downloader.NewManager(downloader.Config{Concurrency: 1}, transferer)
+	defer manager.Close()
+	prepared := make(chan PreparedJob, 1)
+	s := NewScheduler(Config{WorkerID: "worker-a", MaxConcurrent: 1, ByteBudget: 100, OnPrepared: func(job PreparedJob) { prepared <- job }})
+	s.SetResolver(downloader.NewCacheResolver(manager, nil))
+	defer s.Close()
+	now := time.Now().UTC()
+	plan := futureasset.Plan{Version: 1, PlanID: "cache-hit", WorkerID: "worker-a", GeneratedAt: now, ExpiresAt: now.Add(time.Minute), Limits: futureasset.Limits{PrefetchHorizon: 1, ProtectionLookahead: 1}, PrefetchJobs: []futureasset.Job{{JobID: "job-cache", TaskID: "task-cache", ReservationID: "reservation-cache", Distance: 1, Assets: []futureasset.AssetManifest{{AssetKey: "asset-cache", AssetID: "asset-cache", SHA256: digest, SizeBytes: int64(len(contents))}}}}}
+	if err := s.Reconcile(plan); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case job := <-prepared:
+		if job.State != PreparationStatePrepared || len(job.Assets) != 1 || job.Assets["asset-cache"].SHA256 != digest {
+			t.Fatalf("prepared cache-hit job = %#v", job)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cache-hit job did not reach PREPARED")
+	}
+	if got := transfers.Load(); got != 0 {
+		t.Fatalf("cache-hit physical transfers = %d, want 0", got)
+	}
+}
+
+func TestScheduler_MetadataFailureDoesNotReachPrepared(t *testing.T) {
+	manager := &schedulerManager{started: make(chan struct{}, 1)}
+	prepared := make(chan PreparedJob, 1)
+	s := NewScheduler(Config{
+		WorkerID: "worker-a", MaxConcurrent: 1, ByteBudget: 100,
+		MetadataResolver: func(context.Context, futureasset.AssetManifest, downloader.CacheResolution) (PreparedAssetMetadata, error) {
+			return PreparedAssetMetadata{}, errors.New("probe failed")
+		},
+		OnPrepared: func(job PreparedJob) { prepared <- job },
+	})
+	s.SetResolver(downloader.NewCacheResolver(manager, nil))
+	defer s.Close()
+	if err := s.Reconcile(futureTestPlan()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case job := <-prepared:
+		t.Fatalf("metadata failure reached PREPARED: %#v", job)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if got := s.PreparedJobs(); len(got) != 0 {
+		t.Fatalf("prepared read model after metadata failure = %#v", got)
 	}
 }

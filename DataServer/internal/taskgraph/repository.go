@@ -42,6 +42,11 @@ type FutureReservationStore interface {
 	ReconcileFutureReservations(context.Context, string, []FutureReservation) error
 	ListFutureReservations(context.Context, string) ([]FutureReservationWithPayload, error)
 	FutureTaskPayload(context.Context, string) ([]byte, error)
+	// TransferFutureTask atomically moves an unexpired preparation
+	// reservation when its current worker is no longer eligible. The
+	// expected worker ID is a CAS fence; worker identity itself is never
+	// rewritten, only reservation ownership is changed.
+	TransferFutureTask(context.Context, string, string, FutureReservation) (bool, error)
 }
 
 // Reader is the read-only task query surface.

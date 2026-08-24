@@ -38,6 +38,16 @@ func initPrometheusCacheFamily(m *PrometheusMetrics) {
 	m.prefetchReadyLeadSeconds = &HistogramVec{Name: "velox_prefetch_ready_lead_seconds", Help: "Time between asset READY and job start; negative means foreground catch-up", Buckets: []float64{-30, -10, -1, 0, .001, .01, .1, 1, 5, 30, 120}, values: make(map[string]*histogramData)}
 	m.prefetchActive = &GaugeVec{Name: "velox_prefetch_active", Help: "Active prefetch resolver calls", values: map[string]float64{"total": 0}}
 	m.prefetchQueueDepth = &GaugeVec{Name: "velox_prefetch_queue_depth", Help: "Queued prefetch asset work items", values: map[string]float64{"total": 0}}
+
+	// Warm-assembly KPI families. These are intentionally separate from
+	// the legacy cache/download families: they describe the warm-placement
+	// critical path, not all worker asset traffic.
+	m.assemblyPrefetchCacheHits = &CounterVec{Name: "velox_assembly_prefetch_cache_hits_total", Help: "Prefetch assets satisfied from the verified SHA256 cache", values: map[string]float64{"total": 0}}
+	m.assemblyPrefetchDownloadBytes = &CounterVec{Name: "velox_assembly_prefetch_download_bytes_total", Help: "Bytes downloaded while preparing warm assembly assets", values: map[string]float64{"total": 0}}
+	m.assemblyPrefetchMS = &HistogramVec{Name: "velox_assembly_prefetch_ms", Help: "Warm assembly prefetch latency per asset", Buckets: []float64{1, 10, 50, 100, 500, 1000, 5000, 30000, 120000}, values: make(map[string]*histogramData)}
+	m.assemblyAssetsReadyAtExecution = &GaugeVec{Name: "velox_assembly_assets_ready_at_execution", Help: "Verified warm assembly assets available when execution started", values: map[string]float64{"total": 0}}
+	m.assemblyAssetsMissingAtExecution = &GaugeVec{Name: "velox_assembly_assets_missing_at_execution", Help: "Warm assembly assets missing when execution started", values: map[string]float64{"total": 0}}
+	m.assemblyExecutionDownloadMS = &HistogramVec{Name: "velox_assembly_execution_download_ms", Help: "Download latency remaining on the warm assembly execution critical path", Buckets: []float64{0, 1, 10, 50, 100, 500, 1000, 5000, 30000}, values: make(map[string]*histogramData)}
 }
 
 func exportPrometheusCacheFamily(m *PrometheusMetrics) string {
@@ -75,5 +85,11 @@ func exportPrometheusCacheFamily(m *PrometheusMetrics) string {
 		m.prefetchResolveSeconds.export() +
 		m.prefetchReadyLeadSeconds.export() +
 		m.prefetchActive.export() +
-		m.prefetchQueueDepth.export()
+		m.prefetchQueueDepth.export() +
+		m.assemblyPrefetchCacheHits.export() +
+		m.assemblyPrefetchDownloadBytes.export() +
+		m.assemblyPrefetchMS.export() +
+		m.assemblyAssetsReadyAtExecution.export() +
+		m.assemblyAssetsMissingAtExecution.export() +
+		m.assemblyExecutionDownloadMS.export()
 }

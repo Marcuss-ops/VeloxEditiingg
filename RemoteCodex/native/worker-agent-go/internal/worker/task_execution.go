@@ -101,6 +101,7 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 	w.logger.Info("[TASK] Executing task %s (job=%s attempt=%s)", taskID, pte.JobID, attemptID)
 
 	report, execErr := w.runJobTask(jobCtx, pte)
+	recordExecutionDownloadMetrics(report)
 	if execErr == nil {
 		pipelineStatus := pte.ExecutorID
 		if report != nil && report.ExecutorKey != "" {

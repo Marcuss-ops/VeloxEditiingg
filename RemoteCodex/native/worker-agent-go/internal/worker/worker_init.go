@@ -262,6 +262,8 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 			case "wasted":
 				metrics.RecordPrefetchWastedBytes(asset.SizeBytes)
 			}
+		}, OnPrepared: func(job prefetch.PreparedJob) {
+			log.Info("[PREFETCH] state=PREPARED job=%s task=%s assets=%d prepared_at=%s", job.JobID, job.TaskID, len(job.Assets), job.PreparedAt.UTC().Format(time.RFC3339Nano))
 		}, OnEvent: recordPrefetchEvent}),
 		// PR-2: TaskOffer-accepted tasks awaiting TaskLeaseGranted before
 		// executeTask dispatch. Keyed by task_id — one canonical entry per

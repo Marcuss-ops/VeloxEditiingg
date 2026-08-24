@@ -130,6 +130,49 @@ func (m *PrometheusMetrics) RecordPrefetchReadyLead(distance int, lead time.Dura
 	m.prefetchReadyLeadSeconds.observe(prefetchDistanceLabel(distance), lead.Seconds())
 }
 
+// RecordAssemblyPrefetch projects one verified prefetch resolution onto the
+// warm-assembly KPI surface. The counters are worker-lifetime totals; the
+// histogram is an observation in milliseconds. No job, asset, URL, or hash
+// is accepted as a label.
+func (m *PrometheusMetrics) RecordAssemblyPrefetch(cacheHit bool, downloadedBytes int64, duration time.Duration) {
+	if cacheHit {
+		m.assemblyPrefetchCacheHits.inc("total")
+	}
+	if downloadedBytes > 0 {
+		m.assemblyPrefetchDownloadBytes.add("total", float64(downloadedBytes))
+	}
+	if duration < 0 {
+		duration = 0
+	}
+	m.assemblyPrefetchMS.observe("total", float64(duration.Milliseconds()))
+}
+
+// RecordAssemblyExecution records the state at the instant the real
+// execution lease starts. Fast-path executions should report zero residual
+// download time; a non-zero value identifies foreground catch-up work.
+func (m *PrometheusMetrics) RecordAssemblyExecution(assetsReady, assetsMissing int, executionDownload time.Duration) {
+	if assetsReady < 0 {
+		assetsReady = 0
+	}
+	if assetsMissing < 0 {
+		assetsMissing = 0
+	}
+	m.assemblyAssetsReadyAtExecution.set("total", float64(assetsReady))
+	m.assemblyAssetsMissingAtExecution.set("total", float64(assetsMissing))
+	m.RecordAssemblyExecutionDownload(executionDownload)
+}
+
+// RecordAssemblyExecutionDownload adds one execution-side download
+// observation without changing the latest readiness gauges. This is used by
+// ordinary task execution, where asset_operations is available after the
+// resolver has run but no FinalManifest fast-path entry point was used.
+func (m *PrometheusMetrics) RecordAssemblyExecutionDownload(duration time.Duration) {
+	if duration < 0 {
+		duration = 0
+	}
+	m.assemblyExecutionDownloadMS.observe("total", float64(duration.Milliseconds()))
+}
+
 func (m *PrometheusMetrics) SetPrefetchOperational(active, queued int) {
 	if active < 0 {
 		active = 0
@@ -179,6 +222,7 @@ func (m *PrometheusMetrics) SetAssetDownloadOperational(active, queued, ready, f
 	// value, so only move the exported value forward under one lock.
 	m.assetDownloadCoalesced.setMonotonic("total", float64(coalesced))
 }
+
 // AddAssetDownloadChunksActive adjusts the active-chunk gauge by delta. It
 // is additive so concurrent chunked transfers SUM on the shared
 // low-cardinality "total" label; every positive delta is balanced by a

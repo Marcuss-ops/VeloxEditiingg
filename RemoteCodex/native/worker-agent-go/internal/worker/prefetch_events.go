@@ -20,7 +20,9 @@ func recordPrefetchEvent(event prefetch.Event) {
 		metrics.SetPrefetchOperational(event.Active, event.QueueDepth)
 	case "asset_ready":
 		if !event.StartedAt.IsZero() && !event.ReadyAt.IsZero() {
-			metrics.RecordPrefetchResolve(event.Distance, event.ReadyAt.Sub(event.StartedAt))
+			latency := event.ReadyAt.Sub(event.StartedAt)
+			metrics.RecordPrefetchResolve(event.Distance, latency)
+			metrics.RecordAssemblyPrefetch(event.CacheHit, event.DownloadBytes, latency)
 		}
 		metrics.SetPrefetchOperational(event.Active, event.QueueDepth)
 	case "prefetch_ready_lead":
