@@ -30,7 +30,7 @@ case "${1:-}" in
     elif [[ -f "${MOCK_ROLLBACK_MARKER:-}" ]]; then
       jq -n --arg worker "$worker" '{worker_id:$worker,status:"CONNECTED",health:"HEALTHY",active_jobs:0,image_digest:"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",software_version:"v1.2.27"}'
     elif [[ "${MOCK_CANARY_MARKER:-}" && -f "$MOCK_CANARY_MARKER" ]]; then
-      jq -n --arg worker "$worker" '{worker_id:$worker,status:"CONNECTED",health:"HEALTHY",active_jobs:0,image_digest:"sha256:beb1cfc48d4ffb591e954cff0572ede8b9bf36fdd215239f05c5a403b8278415",software_version:"v1.2.28-canonical"}'
+      jq -n --arg worker "$worker" '{worker_id:$worker,status:"CONNECTED",health:"HEALTHY",active_jobs:0,image_digest:"sha256:ca617b2ef22344cd64ebc428501217973f8cfc0b656108d7cea810f1e9aaa11a",software_version:"v1.3.0"}'
     else
       jq -n --arg worker "$worker" '{worker_id:$worker,status:"CONNECTED",health:"HEALTHY",active_jobs:0,image_digest:"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",software_version:"v1.2.27"}'
     fi
@@ -58,8 +58,8 @@ export MOCK_ROLLBACK_MARKER="$TMP_DIR/rolled-back"
 export MOCK_CANARY_MARKER="$TMP_DIR/canary-active"
 PREVIOUS_DIGEST='sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 WORKER='offline-worker'
-IMAGE='ghcr.io/marcuss-ops/velox-worker@sha256:beb1cfc48d4ffb591e954cff0572ede8b9bf36fdd215239f05c5a403b8278415'
-DIGEST='sha256:beb1cfc48d4ffb591e954cff0572ede8b9bf36fdd215239f05c5a403b8278415'
+IMAGE='ghcr.io/marcuss-ops/velox-worker@sha256:ca617b2ef22344cd64ebc428501217973f8cfc0b656108d7cea810f1e9aaa11a'
+DIGEST='sha256:ca617b2ef22344cd64ebc428501217973f8cfc0b656108d7cea810f1e9aaa11a'
 
 output="$(bash "$SCRIPT" --worker-id "$WORKER" --dry-run)"
 grep -Fq "target_image:  $IMAGE" <<<"$output"
