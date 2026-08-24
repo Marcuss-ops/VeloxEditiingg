@@ -1,3 +1,36 @@
+## [v1.3.0] - 2026-08-24
+
+### Worker image v1.3.0 — warm assembly prefetch + delivery consolidation
+
+Canonical worker image release built from the v1.2.43 codebase. Published
+and deployed to all 4 fleet workers (`host_57_129_132_133`,
+`host_57_131_20_173`, `velox-worker-13197`, `velox-worker-523925eb`) via
+canary rollout. Image digest: `sha256:ca617b2ef22344cd64ebc428501217973f8cfc0b656108d7cea810f1e9aaa11a`.
+
+**Features:**
+
+- `92f874f1` — Complete warm assembly prefetch path: workers now pre-fetch
+  and stage assembly inputs before job assignment, reducing cold-start
+  latency for scenes with cached source assets.
+- `4d1ba8e0` — Consolidate delivery runner and session handling: unified
+  session lifecycle management reduces code duplication across delivery
+  paths and simplifies error propagation.
+
+**Fixes:**
+
+- `79876991` — Preserve applied migration checksum: the schema migration
+  verifier now correctly handles the applied-migration checksum across
+  restarts, preventing spurious migration re-runs.
+- `6e672fef` — Handle multiline master image tags: the fleet controller
+  correctly parses Docker image tags that span multiple lines in the
+  deployment configuration.
+
+**Ops:**
+
+- Canary rollout script and test harness pinned to v1.3.0 image digest.
+- CI build pipeline (`worker-image.yml`) triggered and certified all steps
+  (build, sign, verify, baseline, real-bootstrap) in 8m44s.
+
 ## [Unreleased] - 2026-08-16
 
 ### Content-addressed asset cache + pressure LRU + volatile artifact staging
