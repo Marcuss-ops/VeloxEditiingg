@@ -98,6 +98,10 @@ services:
       # reasonable upper bound for normal jobs; bump per-host if larger
       # payloads are routinely processed.
       - /tmp:size=4g,mode=1777
+      # Dedicated bounded RAM staging for Velox scratch and artifact output.
+      # The worker config points both tmpfs placement classes here; the
+      # storage resolver still reserves RAM and falls back to NVMe safely.
+      - /dev/shm/velox-work:size=3g,mode=1777,noexec,nosuid,nodev
 
     security_opt:
       - no-new-privileges:true
@@ -129,13 +133,6 @@ services:
       timeout: 3s
       start_period: 30s
       retries: 5
-
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "5"
-        labels: "service,version"
 
     # Resource envelopes (adjust per host if needed).
     pids_limit: 256

@@ -213,6 +213,13 @@
       VELOX_HEALTH_PORT={{ velox_worker_health_port }}
       VELOX_MASTER_URL={{ master_url }}
       VELOX_WORK_DIR={{ velox_worker_runtime_container_dir }}/work
+      VELOX_MAX_ACTIVE_JOBS=2
+      VELOX_TMPFS_DIR=/dev/shm/velox-work
+      VELOX_TMPFS_THRESHOLD_BYTES=67108864
+      VELOX_ARTIFACT_TMPFS_ENABLED=true
+      VELOX_ARTIFACT_TMPFS_DIR=/dev/shm/velox-work
+      VELOX_ARTIFACT_TMPFS_MAX_PERCENT=65
+      VELOX_ARTIFACT_TMPFS_RESERVE_BYTES=536870912
       VELOX_WORKER_IMAGE={{ _worker_image_tag }}
       VELOX_WORKER_IMAGE_VERSION={{ _worker_image_version }}
       VELOX_WORKER_IMAGE_COMMIT={{ _worker_image_commit }}
@@ -334,7 +341,13 @@
         "protocol_version": "{{ worker_protocol_version | default('v3') }}",
         "engine_version": "{{ version_number | default('v1.0.6') }}",
         "environment": "staging",
-        "max_active_jobs": 1,
+        "max_active_jobs": 2,
+        "tmpfs_dir": "/dev/shm/velox-work",
+        "tmpfs_threshold_bytes": 67108864,
+        "artifact_tmpfs_enabled": true,
+        "artifact_tmpfs_dir": "/dev/shm/velox-work",
+        "artifact_tmpfs_max_percent": 65,
+        "artifact_tmpfs_reserve_bytes": 536870912,
         "prometheus_port": {{ velox_worker_prometheus_port | default(9090) }},
         "health_port": {{ velox_worker_health_port }},
         "control_grpc_url": "{{ velox_worker_control_grpc_url }}",
