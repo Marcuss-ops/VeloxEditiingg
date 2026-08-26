@@ -222,6 +222,13 @@ VELOX_ALLOWED_WORKERS=$WORKER_ID
 VELOX_CODE_VERSION=$VERSION
 VELOX_GRPC_ALLOW_INSECURE_DEV=true
 VELOX_ASSET_REWRITE_DEV_BYPASS=true
+# Fail-closed Level-D smoke (2026-08-10 capability audit): production wiring
+# requires a real Drive service + asset resolver, neither of which exists on
+# this dev sandbox. Development mode wires the documented local fakes
+# (LocalShellWorker / LocalFileDriveUploader / StubAssetResolver) so the
+# master boots without mTLS certs or production asset wiring.
+VELOX_ENVIRONMENT=development
+VELOX_SMOKE_MODE=development
 GIN_MODE=release
 ENV
 
@@ -372,6 +379,56 @@ phase_poll_and_verify() {
   assert_worker_metrics
 }
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 6a: live attempt-milestone projection (STEP A)
+# ═══════════════════════════════════════════════════════════════════════════════
+# While the job is RUNNING, the worker publishes the monotonic milestone
+# timeline (execution.started → assets.requested → assets.all_ready → ...)
+# in every heartbeat, and the master folds it into the volatile
+# worker_task_runtime projection. This phase polls the /live admin endpoint
+# every second and requires at least one non-empty attempt_milestones sample
+# to appear BEFORE the job reaches a terminal status — proving the milestone
+# timeline is visible live, not only after the durable report lands.
+phase_live_milestones() {
+  info "Phase 6a: capturing attempt_milestones from the LIVE projection"
+  local db="$DATA_DIR/velox.db"
+  local status=""
+  local milestones=""
+  for i in $(seq 1 90); do
+    status="$(sqlite3 "$db" "SELECT status FROM jobs WHERE job_id='${JOB_ID}';" 2>/dev/null || true)"
+    case "$status" in
+      SUCCEEDED|FAILED|TIMEOUT|REJECTED|CANCELLED) break ;;
+    esac
+    local live
+    live="$(curl -sS -m 5 -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+      "http://127.0.0.1:${MASTER_PORT}/api/v1/admin/jobs/${JOB_ID}/live" 2>/dev/null || true)"
+    if echo "$live" | grep -q '"attempt_milestones"'; then
+      milestones="$(echo "$live" | python3 -c '
+import sys, json
+d = json.load(sys.stdin)
+ms = (d.get("execution") or {}).get("attempt_milestones") or []
+for m in ms:
+    print("{} @ {}ms".format(m.get("name"), m.get("elapsed_ms")))
+' 2>/dev/null || true)"
+      if [[ -n "$milestones" ]]; then
+        break
+      fi
+    fi
+    sleep 1
+  done
+
+  if [[ -z "$milestones" ]]; then
+    fail "attempt_milestones never appeared in the /live projection while RUNNING (final status=$status)"
+    tail -30 "$WORKER_LOG" 2>/dev/null || true
+    exit 1
+  fi
+  pass "live attempt_milestones captured while job status=$status"
+  info "milestone timeline (elapsed_ms since attempt start):"
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && info "  $line"
+  done <<< "$milestones"
+}
+
 main() {
   echo ""
   echo "══════════════════════════════════════════════════════════════"
@@ -396,6 +453,7 @@ main() {
   phase_master_start
   phase_submit
   phase_worker_start
+  phase_live_milestones
   phase_poll_and_verify
 
   echo ""

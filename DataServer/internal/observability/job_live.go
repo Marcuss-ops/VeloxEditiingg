@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	sharedtelemetry "velox-shared/telemetry"
 )
 
 // Stall detection thresholds. Overridable via environment variables for
@@ -104,6 +106,11 @@ type JobLiveExecution struct {
 	FramesComposited int64   `json:"frames_composited"`
 	FramesEncoded    int64   `json:"frames_encoded"`
 	SpeedX           float64 `json:"speed_x"`
+	// AttemptMilestones is the worker's monotonic milestone timeline
+	// (elapsed_ms since attempt start) exposed live while the attempt is
+	// RUNNING. The durable attempt report carries the same timeline after
+	// completion.
+	AttemptMilestones []sharedtelemetry.AttemptMilestoneSample `json:"attempt_milestones,omitempty"`
 }
 
 // JobLiveAssets contains the aggregated asset download progress for the job.
@@ -214,6 +221,7 @@ func (s *Service) JobLive(ctx context.Context, jobID string) (*JobLiveStatus, er
 		FramesComposited: live.FramesComposited,
 		FramesEncoded:    live.FramesEncoded,
 		SpeedX:           live.FFmpegSpeedX,
+		AttemptMilestones: live.AttemptMilestones,
 	}
 
 	// Operational phase and upload progress from CumulativeMetrics.

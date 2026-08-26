@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	sharedtelemetry "velox-shared/telemetry"
 	"velox-server/internal/jobs"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
@@ -86,6 +87,64 @@ func TestJobLive_ReturnsLiveStatusWithWorkerAndExecution(t *testing.T) {
 	}
 	if resp.Stalled {
 		t.Error("stalled = true, want false (progress is 2s old)")
+	}
+}
+
+// TestJobLive_ExposesAttemptMilestones locks STEP A on the compact live
+// endpoint: while the attempt is RUNNING, the worker's milestone timeline
+// (execution.started → assets.requested → assets.all_ready → ...) must be
+// exposed under execution.attempt_milestones so operators can watch the
+// waterfall unfold live without waiting for the durable report.
+func TestJobLive_ExposesAttemptMilestones(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc, tasks, attempts, _, _ := newTestService()
+
+	tasks.tasks["T-live-ms"] = &taskgraph.Task{
+		ID: "T-live-ms", JobID: "J-live-ms", Status: taskgraph.StatusRunning, AttemptCount: 1,
+	}
+	attempts.attempts["T-live-ms"] = []taskattempts.TaskAttempt{{
+		ID: "A-live-ms", TaskID: "T-live-ms", JobID: "J-live-ms", AttemptNumber: 1,
+		WorkerID: "worker-live-ms", Status: taskattempts.AttemptStatusRunning,
+	}}
+
+	svc.WithJobs(&inspectionJobReader{job: &jobs.Job{ID: "J-live-ms", Status: jobs.StatusRunning}}).
+		WithJobInspection(inspectionExtras{}).
+		WithLiveAttempts(stubLiveAttemptReader{live: &LiveAttempt{
+			TaskID: "T-live-ms", JobID: "J-live-ms", AttemptID: "A-live-ms", AttemptNumber: 1,
+			WorkerID: "worker-live-ms", RuntimeStatus: "RUNNING",
+			WorkerConnectionState: "CONNECTED",
+			ProgressPercent: 40, ProgressPhase: "prefetching",
+			LastProgressAt: time.Now().Add(-2 * time.Second).UTC().Format(time.RFC3339Nano),
+			UpdatedAt:      time.Now().Add(-500 * time.Millisecond).UTC().Format(time.RFC3339Nano),
+			AttemptMilestones: []sharedtelemetry.AttemptMilestoneSample{
+				{Name: sharedtelemetry.MilestoneExecutionStarted, Sequence: 1, ElapsedMS: 0, OccurredAt: "2026-08-26T12:00:00Z"},
+				{Name: sharedtelemetry.MilestoneAssetsRequested, Sequence: 2, ElapsedMS: 211, OccurredAt: "2026-08-26T12:00:00Z"},
+				{Name: sharedtelemetry.MilestoneAllAssetsReady, Sequence: 3, ElapsedMS: 298421, OccurredAt: "2026-08-26T12:04:58Z"},
+			},
+		}})
+
+	r := gin.New()
+	NewModule(svc).RegisterRoutes(r)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/admin/jobs/J-live-ms/live", nil))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /live = %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp JobLiveStatus
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Execution == nil {
+		t.Fatal("execution is nil")
+	}
+	if len(resp.Execution.AttemptMilestones) != 3 {
+		t.Fatalf("execution.attempt_milestones = %+v, want 3 samples", resp.Execution.AttemptMilestones)
+	}
+	if resp.Execution.AttemptMilestones[2].Name != sharedtelemetry.MilestoneAllAssetsReady || resp.Execution.AttemptMilestones[2].ElapsedMS != 298421 {
+		t.Fatalf("milestone[2] = %+v, want assets.all_ready @ 298421ms", resp.Execution.AttemptMilestones[2])
 	}
 }
 
