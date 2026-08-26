@@ -157,6 +157,16 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 	if m := telemetry.MilestoneRecorderFromContext(ctx); m != nil {
 		m.Mark(sharedtelemetry.MilestoneAllAssetsReady)
 	}
+	// Plan construction begins after all assets are locally ready: the V2
+	// plan arrives pre-compiled on the wire, but it still needs
+	// materialization (resolveCompiledRenderPlanAssets), the per-job clip
+	// lease and policy wrapping below. Bracket that whole stretch with
+	// plan.started -> plan.completed so the waterfall's plan_compile bucket
+	// reflects real worker-side plan setup and is not ~0ms from two marks
+	// fired back-to-back.
+	if m := telemetry.MilestoneRecorderFromContext(ctx); m != nil {
+		m.Mark(sharedtelemetry.MilestonePlanStarted)
+	}
 	// Operational lifecycle: assets resolved, verify V2 plan.
 	w.UpdateOperationalPhase(pte.TaskID, PhaseVerifyingAssets)
 	// V2 carries the canonical plan as an opaque JSON string, so the legacy
@@ -272,7 +282,6 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 	}
 
 	if m := telemetry.MilestoneRecorderFromContext(ctx); m != nil {
-		m.Mark(sharedtelemetry.MilestonePlanStarted)
 		m.Mark(sharedtelemetry.MilestonePlanCompleted)
 		m.Mark(sharedtelemetry.MilestoneRenderStarted)
 	}
