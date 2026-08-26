@@ -282,9 +282,12 @@ func TestCompiledPlanAssetKeyUsesCanonicalCacheIdentity(t *testing.T) {
 	payload[contract.PayloadKeyCompiledRenderPlanSHA] = hex.EncodeToString(digest[:])
 
 	var requested []string
+	var requestedMu sync.Mutex
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		identity := strings.TrimPrefix(r.URL.Path, "/api/v1/agent/assets/")
+		requestedMu.Lock()
 		requested = append(requested, identity)
+		requestedMu.Unlock()
 		var body []byte
 		switch identity {
 		case "cache-video-v2":
@@ -305,12 +308,15 @@ func TestCompiledPlanAssetKeyUsesCanonicalCacheIdentity(t *testing.T) {
 	if _, err := w.resolveCompiledRenderPlanAssets(context.Background(), payload); err != nil {
 		t.Fatalf("resolve keyed V2 assets: %v", err)
 	}
-	seen := make(map[string]bool, len(requested))
-	for _, identity := range requested {
+	requestedMu.Lock()
+	requestedSnapshot := append([]string(nil), requested...)
+	requestedMu.Unlock()
+	seen := make(map[string]bool, len(requestedSnapshot))
+	for _, identity := range requestedSnapshot {
 		seen[identity] = true
 	}
-	if len(requested) != 2 || !seen["cache-video-v2"] || !seen["cache-audio-v2"] {
-		t.Fatalf("resolver identities = %v, want cache keys", requested)
+	if len(requestedSnapshot) != 2 || !seen["cache-video-v2"] || !seen["cache-audio-v2"] {
+		t.Fatalf("resolver identities = %v, want cache keys", requestedSnapshot)
 	}
 }
 
