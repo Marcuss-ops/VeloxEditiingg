@@ -289,7 +289,10 @@ func newRouter(cfg *config.Config, bundle RouterBundle, registry interface {
 	registry.RegisterRoutes(r)
 
 	// ── Remaining (non-module) routes wired per their own deps bundle ───
-	registerScriptRoutes(r, bundle.Script)
+	// The script-generation ingress is retired. Job creation has one public
+	// entry point: POST /api/v1/jobs. Keep the dependency in the bundle for
+	// compatibility with partial test/application wiring, but do not mount
+	// the legacy /api/v1/script/* surface.
 	// registerPipelineRoutes takes (adminAuth, m2mAuth); the M2M
 	// middleware is constructed here from the production SQLite
 	// store + M2M defaults. The composition root is the only place

@@ -88,15 +88,13 @@ func TestProductionCompositionRegistersRequiredRoutes(t *testing.T) {
 	routes := router.Routes()
 
 	want := map[string]bool{
-		"POST /api/v1/script/generate-with-images": false,
-		"POST /api/v1/script/jobs/:kind":           false,
-		"GET /api/v1/workers":                      false,
-		"GET /health":                              false,
+		"GET /api/v1/workers": false,
+		"GET /health":         false,
 	}
 	for _, route := range routes {
 		key := route.Method + " " + route.Path
-		if key == "POST /api/v1/script/generate-from-clips" {
-			t.Fatalf("legacy route must not be mounted: %s", key)
+		if key == "POST /api/v1/script/generate-with-images" || key == "POST /api/v1/script/jobs/:kind" {
+			t.Fatalf("retired script route must not be mounted: %s", key)
 		}
 		if _, ok := want[key]; ok {
 			want[key] = true
