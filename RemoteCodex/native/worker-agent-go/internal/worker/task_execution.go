@@ -138,6 +138,8 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 			w.concurrencyLimiter.Release()
 			acquired = false
 		}
+		// Operational lifecycle: publishing output artifacts.
+		w.UpdateOperationalPhase(taskID, PhasePublishing)
 		if uploadErr := w.uploadTaskOutputs(jobCtx, pte, report); uploadErr != nil {
 			execErr = fmt.Errorf("upload task outputs: %w", uploadErr)
 		}
@@ -180,12 +182,18 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 	w.recordTaskOutcome(pte, execErr, duration)
 	w.recordTaskFinish()
 
+	// Operational lifecycle: committing task result.
+	w.UpdateOperationalPhase(taskID, PhaseCommitWait)
+
 	submitCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	ackStartTime := time.Now()
 
 	w.reporter.Submit(submitCtx, pte, taskID, attemptID, report, execErr)
+
+	// Operational lifecycle: task completed.
+	w.UpdateOperationalPhase(taskID, PhaseDone)
 
 	telemetry.GetPrometheusMetrics().RecordJobCompleteAck(pte.ExecutorID, float64(time.Since(ackStartTime).Milliseconds()))
 

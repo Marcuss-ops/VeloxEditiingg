@@ -35,6 +35,13 @@ func (w *Worker) downloadVeloxAssetWithMetadata(ctx context.Context, assetID, ex
 	}
 
 	jobID, role := telemetry.CacheAccessContextFromContext(ctx)
+	// Operational lifecycle: when the asset resolver blocks on a cache miss,
+	// surface the WaitingRuntimeAssets phase so operators see the worker
+	// is waiting for a download rather than stuck.
+	taskID := TaskIDFromContext(ctx)
+	if taskID != "" {
+		w.UpdateOperationalPhase(taskID, PhaseWaitingRuntimeAssets)
+	}
 	resolution, err := w.assetCacheResolver().Resolve(ctx, downloader.DownloadRequest{
 		JobID:     jobID,
 		AssetKey:  assetref.AssetKey(assetID),
@@ -47,6 +54,10 @@ func (w *Worker) downloadVeloxAssetWithMetadata(ctx context.Context, assetID, ex
 	})
 	if err != nil {
 		return "", fmt.Errorf("failed to download velox asset %s: %w", assetID, err)
+	}
+	// Restore prefetching phase after the asset is resolved.
+	if taskID != "" {
+		w.UpdateOperationalPhase(taskID, PhasePrefetching)
 	}
 	if w.prefetchScheduler != nil {
 		w.prefetchScheduler.MarkForegroundUse(assetref.AssetKey(assetID))

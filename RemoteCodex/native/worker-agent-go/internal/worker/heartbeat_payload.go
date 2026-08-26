@@ -125,6 +125,9 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 			jobInfo["segment_completed"] = at.Progress.SegmentCompleted
 			jobInfo["progress_phase"] = at.Progress.Phase
 			jobInfo["progress_stage"] = at.Progress.Stage
+			if at.OperationalPhase != "" {
+				jobInfo["operational_phase"] = at.OperationalPhase
+			}
 			jobInfo["frames_encoded"] = at.Progress.FramesEncoded
 			jobInfo["frames_decoded"] = at.Progress.FramesDecoded
 			jobInfo["frames_composited"] = at.Progress.FramesComposited

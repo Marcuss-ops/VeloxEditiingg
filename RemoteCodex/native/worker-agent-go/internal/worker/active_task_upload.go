@@ -14,6 +14,12 @@ import (
 
 func (w *Worker) uploadDeclaredArtifacts(ctx context.Context, pte *PendingTaskExecution, report *taskrunner.TaskExecutionReport, plan *pb.ArtifactUploadPlan, entries []spool.SpoolEntry, resumable map[string]bool, started time.Time) ([]*pb.ArtifactUploadCompleted, error) {
 	completed := make([]*pb.ArtifactUploadCompleted, 0, len(report.Outputs))
+	// Compute total upload size for progress tracking.
+	var totalUploadBytes int64
+	for _, ref := range report.Outputs {
+		totalUploadBytes += ref.SizeBytes
+	}
+	var uploadedBytes int64
 	for i, ref := range report.Outputs {
 		targetPB := plan.GetTargets()[i]
 		if err := w.stashUploadPlan(ctx, entries[i], plan, targetPB); err != nil {
@@ -44,6 +50,10 @@ func (w *Worker) uploadDeclaredArtifacts(ctx context.Context, pte *PendingTaskEx
 			return nil, fmt.Errorf("worker artifact upload: mark target %d uploaded: %w", i, err)
 		}
 		w.logArtifactProtocol("ARTIFACT_TRANSFER_COMPLETED", pte, started, plan.GetCommitId(), target.ArtifactID, result.UploadID, map[string]interface{}{"artifact_type": ref.Type, "uploaded_bytes": result.UploadedBytes})
+		uploadedBytes += result.UploadedBytes
+		// Update upload progress in the active task's cumulative metrics
+		// so the heartbeat carries per-artifact upload visibility.
+		w.updateUploadProgress(pte.TaskID, uploadedBytes, totalUploadBytes, i+1, len(report.Outputs), started)
 		completed = append(completed, &pb.ArtifactUploadCompleted{TaskId: pte.TaskID, AttemptId: pte.AttemptID, CommitId: plan.GetCommitId(), LeaseId: pte.LeaseID, UploadId: result.UploadID, UploadedBytes: result.UploadedBytes, WorkerSha256: ref.Hash})
 	}
 	return completed, nil

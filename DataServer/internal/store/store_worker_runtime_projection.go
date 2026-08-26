@@ -213,7 +213,7 @@ func reconcileWorkerRuntime(ctx context.Context, tx *sql.Tx, workerID, sessionID
 			int64Value(task["progress_segment"]), int64Value(task["progress_total_segments"]),
 			int64Value(task["frames_encoded"]), int64Value(task["frames_decoded"]),
 			int64Value(task["frames_composited"]), floatValue(task["ffmpeg_speed_x"]),
-			int64Value(task["elapsed_ms"]), jsonString(task["progress_metrics"]),
+			int64Value(task["elapsed_ms"]), jsonString(mergeOperationalPhaseIntoMetrics(task)),
 			jsonString(task["canonical_attempt_events"]),
 			defaultString(task["started_at"], now), defaultString(task["last_progress_at"], now), now)
 		if err != nil {
@@ -330,4 +330,21 @@ func bulkEmitTaskRuntimeDisappearedOnPartition(ctx context.Context, tx *sql.Tx, 
 		}
 	}
 	return len(identities), nil
+}
+
+// mergeOperationalPhaseIntoMetrics injects the worker's operational_phase
+// heartbeat field into the progress_metrics JSON blob so it is stored in
+// cumulative_metrics_json without a new DB column. Returns the original
+// progress_metrics when operational_phase is absent.
+func mergeOperationalPhaseIntoMetrics(task map[string]interface{}) interface{} {
+	opPhase, _ := task["operational_phase"].(string)
+	if opPhase == "" {
+		return task["progress_metrics"]
+	}
+	metrics, ok := task["progress_metrics"].(map[string]interface{})
+	if !ok {
+		metrics = make(map[string]interface{})
+	}
+	metrics["operational_phase"] = opPhase
+	return metrics
 }

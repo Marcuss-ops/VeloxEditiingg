@@ -51,3 +51,9 @@ func toInt64Zero(v interface{}) int64 {
 	n, _ := toInt64(v)
 	return n
 }
+
+// toFloat64Zero extracts a float, defaulting to 0.
+func toFloat64Zero(v interface{}) float64 {
+	n, _ := toFloat64(v)
+	return n
+}

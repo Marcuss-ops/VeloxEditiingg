@@ -189,6 +189,31 @@ func (h *Handlers) WorkersHandler() gin.HandlerFunc {
 	}
 }
 
+// JobLiveHandler returns a compact, lightweight live snapshot of a job's
+// current state. Designed for high-frequency polling by fleetctl, dashboards,
+// and Codex. All data is sourced from existing projections.
+//
+//	GET /api/v1/admin/jobs/:job_id/live
+func (h *Handlers) JobLiveHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		jobID := c.Param("job_id")
+		if jobID == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "missing_job_id"})
+			return
+		}
+		result, err := h.svc.JobLive(c.Request.Context(), jobID)
+		if err != nil {
+			status := http.StatusInternalServerError
+			if strings.Contains(err.Error(), "not found") {
+				status = http.StatusNotFound
+			}
+			c.JSON(status, gin.H{"error": "job_live_failed", "message": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, result)
+	}
+}
+
 // ProductionDoctorHandler returns a fail-closed fleet/security/readiness
 // report. The HTTP response remains 200 so callers can inspect every check;
 // the `healthy` field is the contract used by fleetctl.

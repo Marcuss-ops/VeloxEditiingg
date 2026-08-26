@@ -81,16 +81,25 @@ func sanitizeWorker(w workersreg.Worker) WorkerResponse {
 		resp.ActiveTaskRuntime = make([]ActiveTaskRuntime, len(metrics.ActiveJobs))
 		for i, job := range metrics.ActiveJobs {
 			resp.ActiveTaskRuntime[i] = ActiveTaskRuntime{
-				JobID:       job.JobID,
-				TaskID:      job.TaskID,
-				AttemptID:   job.AttemptID,
-				Executor:    job.Executor,
-				Stage:       job.Stage,
-				Percent:     job.Percent,
-				Scene:       job.Scene,
-				TotalScenes: job.TotalScenes,
-				LeaseID:     job.LeaseID,
-				StartedAt:   job.StartedAt,
+				JobID:            job.JobID,
+				TaskID:           job.TaskID,
+				AttemptID:        job.AttemptID,
+				Executor:         job.Executor,
+				Stage:            job.Stage,
+				Percent:          job.Percent,
+				Scene:            job.Scene,
+				TotalScenes:      job.TotalScenes,
+				LeaseID:          job.LeaseID,
+				StartedAt:        job.StartedAt,
+				OperationalPhase: job.OperationalPhase,
+				Segment:          job.Segment,
+				TotalSegments:    job.TotalSegments,
+				FramesDecoded:    job.FramesDecoded,
+				FramesComposited: job.FramesComposited,
+				FramesEncoded:    job.FramesEncoded,
+				SpeedX:           job.SpeedX,
+				ElapsedMS:        job.ElapsedMS,
+				LastProgressAt:   job.LastProgressAt,
 			}
 		}
 	}

@@ -139,7 +139,7 @@ func parseJobReadArgs(args []string, command string) (string, bool, error) {
 
 func parseJobWatchArgs(args []string) (jobID string, timeout, interval time.Duration, jsonOutput bool, err error) {
 	timeout = envSeconds("FLEETCTL_JOB_TIMEOUT_SECONDS", 3600)
-	interval = envSeconds("FLEETCTL_JOB_POLL_SECONDS", 5)
+	interval = envSeconds("FLEETCTL_JOB_POLL_SECONDS", 2)
 	for i := 0; i < len(args); i++ {
 		switch {
 		case args[i] == "--timeout" || args[i] == "--poll":
@@ -238,11 +238,15 @@ func runJobMetrics(client *fleetClient, jobID string) int {
 }
 func runJobWatchWithInterval(client *fleetClient, jobID string, timeout, interval time.Duration, jsonOutput bool) int {
 	seen := map[string]bool{}
+	var lastPhase string
+	var lastPercent int
+	var sawLive bool
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	for {
-		requestCtx, requestCancel := context.WithTimeout(ctx, 30*time.Second)
-		var response struct {
+		// ── Fetch /events (deduped timeline) ─────────────────────────
+		eventsCtx, eventsCancel := context.WithTimeout(ctx, 30*time.Second)
+		var eventsResp struct {
 			Status string `json:"status"`
 			Job    struct {
 				Status string `json:"status"`
@@ -253,22 +257,111 @@ func runJobWatchWithInterval(client *fleetClient, jobID string, timeout, interva
 				Payload   map[string]any `json:"payload"`
 			} `json:"events"`
 		}
-		status, err := client.doJSON(requestCtx, "GET", "/api/v1/admin/jobs/"+url.PathEscape(jobID)+"/events", nil, &response)
-		requestCancel()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, fmtExit(ExitUnexpected, "%v", err))
+		eventsStatus, eventsErr := client.doJSON(eventsCtx, "GET", "/api/v1/admin/jobs/"+url.PathEscape(jobID)+"/events", nil, &eventsResp)
+		eventsCancel()
+		if eventsErr != nil {
+			fmt.Fprintln(os.Stderr, fmtExit(ExitUnexpected, "%v", eventsErr))
 			return ExitUnexpected
 		}
-		if status != httpOK {
-			ec := MapHTTPStatusToOpExit(status)
-			fmt.Fprintln(os.Stderr, fmtExit(ec, "GET job events status=%d", status))
+		if eventsStatus != httpOK {
+			ec := MapHTTPStatusToOpExit(eventsStatus)
+			fmt.Fprintln(os.Stderr, fmtExit(ec, "GET job events status=%d", eventsStatus))
 			return ec
 		}
-		if jsonOutput {
-			encoded, _ := json.Marshal(response)
-			fmt.Println(string(encoded))
+
+		// ── Fetch /live (compact live snapshot) ───────────────────────
+		liveCtx, liveCancel := context.WithTimeout(ctx, 30*time.Second)
+		var liveResp struct {
+			JobID  string `json:"job_id"`
+			Status string `json:"status"`
+			Worker struct {
+				WorkerID       string `json:"worker_id"`
+				WorkerName     string `json:"worker_name"`
+				Connection     string `json:"connection"`
+				HeartbeatAgeMS int64  `json:"heartbeat_age_ms"`
+			} `json:"worker"`
+			Execution struct {
+				Phase            string  `json:"phase"`
+				OperationalPhase string  `json:"operational_phase"`
+				Percent          int     `json:"percent"`
+				Scene            int     `json:"scene"`
+				ScenesTotal      int     `json:"scenes_total"`
+				Segment          int     `json:"segment"`
+				SegmentsTotal    int     `json:"segments_total"`
+				ElapsedMS        int64   `json:"elapsed_ms"`
+				FramesDecoded    int64   `json:"frames_decoded"`
+				FramesComposited int64   `json:"frames_composited"`
+				FramesEncoded    int64   `json:"frames_encoded"`
+				SpeedX           float64 `json:"speed_x"`
+			} `json:"execution"`
+			Publication struct {
+				State            string  `json:"state"`
+				UploadBytes      int64   `json:"upload_bytes"`
+				UploadTotalBytes int64   `json:"upload_total_bytes"`
+				UploadPercent    float64 `json:"upload_percent"`
+				UploadBPS        float64 `json:"upload_bytes_per_second"`
+				UploadETASeconds float64 `json:"upload_eta_seconds"`
+			} `json:"publication"`
+			Stalled       bool   `json:"stalled"`
+			StallReason   string `json:"stall_reason"`
+			ProgressAgeMS int64  `json:"progress_age_ms"`
+		}
+		_, liveErr := client.doJSON(liveCtx, "GET", "/api/v1/admin/jobs/"+url.PathEscape(jobID)+"/live", nil, &liveResp)
+		liveCancel()
+		// /live may not exist yet on older servers; treat 404 as non-fatal.
+		if liveErr != nil {
+			// fall through — events-only mode
 		} else {
-			for _, event := range response.Events {
+			// Print live progress line when phase or percent changes.
+			if liveResp.Execution.Phase != "" && (!sawLive || liveResp.Execution.Phase != lastPhase || liveResp.Execution.Percent != lastPercent) {
+				workerLabel := liveResp.Worker.WorkerID
+				if liveResp.Worker.WorkerName != "" {
+					workerLabel = liveResp.Worker.WorkerName
+				}
+				ts := time.Now().Format("15:04:05")
+				// Use operational phase when available, fall back to renderer phase.
+				displayPhase := liveResp.Execution.Phase
+				if liveResp.Execution.OperationalPhase != "" {
+					displayPhase = liveResp.Execution.OperationalPhase
+				}
+				fmt.Printf("%s  worker=%-20s  %-24s  %3d%%", ts, workerLabel, displayPhase, liveResp.Execution.Percent)
+				if liveResp.Execution.SpeedX > 0 {
+					fmt.Printf("  %.2fx", liveResp.Execution.SpeedX)
+				}
+				if liveResp.Execution.ScenesTotal > 0 {
+					fmt.Printf("  scene %d/%d", liveResp.Execution.Scene, liveResp.Execution.ScenesTotal)
+				}
+				if liveResp.Execution.SegmentsTotal > 0 {
+					fmt.Printf("  seg %d/%d", liveResp.Execution.Segment, liveResp.Execution.SegmentsTotal)
+				}
+				if liveResp.Stalled {
+					fmt.Printf("  STALLED (%s)", liveResp.StallReason)
+				}
+				fmt.Println()
+				lastPhase = liveResp.Execution.Phase
+				lastPercent = liveResp.Execution.Percent
+				sawLive = true
+			}
+			// Print upload progress line when in publishing phase.
+			if liveResp.Publication.State == "UPLOADING" && liveResp.Publication.UploadTotalBytes > 0 {
+				ts := time.Now().Format("15:04:05")
+				fmt.Printf("%s  PUBLISHING  %s / %s  %.1f%%", ts,
+					formatBytes(liveResp.Publication.UploadBytes),
+					formatBytes(liveResp.Publication.UploadTotalBytes),
+					liveResp.Publication.UploadPercent)
+				if liveResp.Publication.UploadBPS > 0 {
+					fmt.Printf("  %s/s", formatBytes(int64(liveResp.Publication.UploadBPS)))
+				}
+				if liveResp.Publication.UploadETASeconds > 0 {
+					fmt.Printf("  ETA %.1fs", liveResp.Publication.UploadETASeconds)
+				}
+				fmt.Println()
+			}
+		}
+
+		// ── Print new events (deduped) ───────────────────────────────
+		if !jsonOutput {
+			for _, event := range eventsResp.Events {
 				key := event.Timestamp + "\x00" + event.Event
 				if seen[key] {
 					continue
@@ -281,10 +374,26 @@ func runJobWatchWithInterval(client *fleetClient, jobID string, timeout, interva
 				}
 				fmt.Println()
 			}
+		} else {
+			// JSON mode: merge live + events into one object per cycle.
+			merged := map[string]any{
+				"status": eventsResp.Status,
+				"events": eventsResp.Events,
+			}
+			if liveErr == nil && liveResp.JobID != "" {
+				merged["live"] = liveResp
+			}
+			encoded, _ := json.Marshal(merged)
+			fmt.Println(string(encoded))
 		}
-		terminalStatus := response.Status
+
+		// ── Terminal status check ─────────────────────────────────────
+		terminalStatus := eventsResp.Status
 		if terminalStatus == "" {
-			terminalStatus = response.Job.Status
+			terminalStatus = eventsResp.Job.Status
+			if terminalStatus == "" && liveErr == nil {
+				terminalStatus = liveResp.Status
+			}
 		}
 		// This endpoint reports the Velox JobStatus domain. Parse it into
 		// the domain type before applying terminal semantics. COMPLETED is
@@ -293,6 +402,9 @@ func runJobWatchWithInterval(client *fleetClient, jobID string, timeout, interva
 		jobStatus := jobs.JobStatus(strings.TrimSpace(terminalStatus))
 		switch jobStatus {
 		case jobs.StatusSucceeded:
+			if !jsonOutput {
+				fmt.Printf("%s  %s\n", time.Now().Format("15:04:05"), jobStatus)
+			}
 			return ExitOK
 		case jobs.StatusFailed, jobs.StatusCancelled:
 			fmt.Fprintln(os.Stderr, fmtExit(ExitUnexpected, "job %s ended %s", jobID, jobStatus))
@@ -307,6 +419,7 @@ func runJobWatchWithInterval(client *fleetClient, jobID string, timeout, interva
 		}
 	}
 }
+
 func runDoctor(client *fleetClient, args []string) int {
 	production := false
 	for _, arg := range args {
@@ -350,6 +463,25 @@ func runDoctor(client *fleetClient, args []string) int {
 		return ExitUnexpected
 	}
 	return ExitOK
+}
+
+// formatBytes formats bytes as a human-readable string (B, KB, MB, GB).
+func formatBytes(b int64) string {
+	const (
+		KB = 1024
+		MB = KB * 1024
+		GB = MB * 1024
+	)
+	switch {
+	case b >= GB:
+		return fmt.Sprintf("%.1f GB", float64(b)/float64(GB))
+	case b >= MB:
+		return fmt.Sprintf("%.1f MB", float64(b)/float64(MB))
+	case b >= KB:
+		return fmt.Sprintf("%.1f KB", float64(b)/float64(KB))
+	default:
+		return fmt.Sprintf("%d B", b)
+	}
 }
 
 const httpOK = 200

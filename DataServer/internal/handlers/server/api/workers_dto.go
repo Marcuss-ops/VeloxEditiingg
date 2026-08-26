@@ -122,6 +122,19 @@ type ActiveTaskRuntime struct {
 	TotalScenes int64  `json:"total_scenes"`
 	LeaseID     string `json:"lease_id,omitempty"`
 	StartedAt   string `json:"started_at,omitempty"`
+
+	// Operational lifecycle phase (prefetching/rendering/publishing/...).
+	OperationalPhase string `json:"operational_phase,omitempty"`
+
+	// Detailed render progress from the C++ engine.
+	Segment          int64   `json:"segment,omitempty"`
+	TotalSegments    int64   `json:"total_segments,omitempty"`
+	FramesDecoded    int64   `json:"frames_decoded,omitempty"`
+	FramesComposited int64   `json:"frames_composited,omitempty"`
+	FramesEncoded    int64   `json:"frames_encoded,omitempty"`
+	SpeedX           float64 `json:"speed_x,omitempty"`
+	ElapsedMS        int64   `json:"elapsed_ms,omitempty"`
+	LastProgressAt   string  `json:"last_progress_at,omitempty"`
 }
 
 // ExecutorEntry is a single executor advertised by a worker in its

@@ -75,15 +75,16 @@ const (
 // ActiveTaskExecution represents a single task execution in progress.
 // Keyed by taskID (not jobID) so multi-task DAGs never collide.
 type ActiveTaskExecution struct {
-	TaskID        string
-	AttemptID     string
-	JobID         string
-	Task          *PendingTaskExecution
-	LeaseID       string
-	StartedAt     time.Time
-	Cancel        context.CancelFunc
-	Progress      JobProgress
-	AttemptEvents *telemetry.AttemptEventMachine
+	TaskID           string
+	AttemptID        string
+	JobID            string
+	Task             *PendingTaskExecution
+	LeaseID          string
+	StartedAt        time.Time
+	Cancel           context.CancelFunc
+	Progress         JobProgress
+	OperationalPhase string // canonical lifecycle phase (prefetching/rendering/publishing/...)
+	AttemptEvents    *telemetry.AttemptEventMachine
 	// Fase E2: per-attempt intermediate-file telemetry (AttemptArtifactGraph).
 	// Created in dispatchTaskRunner, threaded through the dispatch context
 	// (artifactgraph.GraphFromContext), and profiled at attempt end. Executors

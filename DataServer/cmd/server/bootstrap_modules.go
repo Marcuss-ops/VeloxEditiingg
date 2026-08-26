@@ -46,6 +46,33 @@ type sqliteLiveAttemptAdapter struct {
 	store *store.SQLiteStore
 }
 
+// sqliteAssetProgressAdapter bridges the store-level admin query to the
+// observability AssetProgressReader contract.
+type sqliteAssetProgressAdapter struct {
+	store *store.SQLiteStore
+}
+
+func (a *sqliteAssetProgressAdapter) ListAssetDownloadProgressForJob(ctx context.Context, jobID string) ([]observability.AssetProgressView, error) {
+	rows, err := a.store.ListAssetDownloadProgressForJob(ctx, jobID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]observability.AssetProgressView, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, observability.AssetProgressView{
+			State:           r.State,
+			BytesDownloaded: r.BytesDownloaded,
+			BytesTotal:      r.BytesTotal,
+			BytesPerSecond:  r.BytesPerSecond,
+			ETASeconds:      r.ETASeconds,
+			CacheHit:        r.CacheHit,
+		})
+	}
+	return out, nil
+}
+
+var _ observability.AssetProgressReader = (*sqliteAssetProgressAdapter)(nil)
+
 func deliveryRetryCount(attempts int) int {
 	if attempts <= 1 {
 		return 0
@@ -407,7 +434,8 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 		workerReader := &workerRegistryAdapter{reg: w.Registry, store: p.SQLite}
 		obsSvc := t.Observability.WithJobs(j.Repository).WithJobWriter(j.Repository).WithWorkers(workerReader).
 			WithJobInspection(&sqliteJobInspectionAdapter{store: p.SQLite}).
-			WithLiveAttempts(&sqliteLiveAttemptAdapter{store: p.SQLite})
+			WithLiveAttempts(&sqliteLiveAttemptAdapter{store: p.SQLite}).
+			WithAssetProgress(&sqliteAssetProgressAdapter{store: p.SQLite})
 		registry.Register(observability.NewModule(obsSvc, api.AdminAuthMiddleware(cfg)))
 		logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] Observability REST API registered")
 	}

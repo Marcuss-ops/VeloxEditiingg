@@ -132,6 +132,12 @@ type WorkerCard struct {
 	Readiness    map[string]any `json:"readiness,omitempty"`
 	Runtime      map[string]any `json:"runtime,omitempty"`
 	RecentErrors []string       `json:"recent_errors,omitempty"`
+
+	// ActiveTaskRuntime exposes per-active-job live progress from the
+	// worker heartbeat. Each entry carries phase, percent, scene/segment,
+	// frames, speed, elapsed and last_progress_at — the same data the
+	// diagnostic /api/v1/workers endpoint already surfaces.
+	ActiveTaskRuntime []ActiveTaskRuntime `json:"active_task_runtime,omitempty"`
 }
 
 // WorkerImageState is the canonical real-time image state of a worker:

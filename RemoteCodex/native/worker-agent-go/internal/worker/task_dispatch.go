@@ -125,13 +125,20 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 	// the lease for legacy clip jobs — the FASE 6 bug (0 lease acquires).
 	leaseAssetKeys := extractAssetKeysFromJSON(spec.Payload)
 
+	// Operational lifecycle: prefetching assets.
+	w.UpdateOperationalPhase(pte.TaskID, PhasePrefetching)
 	if spec.Payload != nil {
-		resolvedPayload, err := w.resolveTaskAssets(ctx, spec.Payload)
+		// Thread the task ID through context so the asset resolver can
+		// update the operational phase on cache-miss download boundaries.
+		assetCtx := ContextWithTaskID(ctx, pte.TaskID)
+		resolvedPayload, err := w.resolveTaskAssets(assetCtx, spec.Payload)
 		if err != nil {
 			return failBeforeRun("asset_resolution_failed", err)
 		}
 		spec.Payload = resolvedPayload
 	}
+	// Operational lifecycle: assets resolved, verify V2 plan.
+	w.UpdateOperationalPhase(pte.TaskID, PhaseVerifyingAssets)
 	// V2 carries the canonical plan as an opaque JSON string, so the legacy
 	// payload resolver intentionally leaves it untouched. Resolve every typed
 	// AssetRefV2 through the same verified resolver separately, then carry only
@@ -139,12 +146,17 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 	// SHA remain byte-identical across workers and retries.
 	_, isCompiledPlan := spec.Payload[contract.PayloadKeyCompiledRenderPlanJSON]
 	if isCompiledPlan {
+		// Operational lifecycle: materializing runtime assets.
+		w.UpdateOperationalPhase(pte.TaskID, PhaseMaterializing)
 		bindings, err := w.resolveCompiledRenderPlanAssets(ctx, spec.Payload)
 		if err != nil {
 			return failBeforeRun("compiled_plan_asset_resolution_failed", err)
 		}
 		ctx = runtimeassets.WithBindings(ctx, bindings)
 	}
+
+	// Operational lifecycle: render plan built (V2) or legacy payload ready.
+	w.UpdateOperationalPhase(pte.TaskID, PhaseBuildingPlan)
 
 	// Pass 9 — Wrap the render in a per-job clip lease so the
 	// workercache.Cleanup loop never deletes an asset the executor
@@ -239,6 +251,8 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 		}
 	}
 
+	// Operational lifecycle: rendering.
+	w.UpdateOperationalPhase(pte.TaskID, PhaseRendering)
 	report, runErr := w.taskRunner.Run(ctx, spec)
 	if report.AttemptEvents == nil {
 		report.AttemptEvents = attemptEvents
@@ -261,6 +275,8 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 		return &report, fmt.Errorf("executor %s failed: code=%q detail=%q",
 			report.ExecutorKey, report.ErrorCode, report.ErrorDetail)
 	}
+	// Operational lifecycle: finalizing output artifacts.
+	w.UpdateOperationalPhase(pte.TaskID, PhaseFinalizing)
 	// fix/artifact-metadata: validate every output artifact has a non-empty
 	// Hash before declaring the task succeeded.
 	for i, ref := range report.Outputs {
@@ -272,6 +288,8 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 				report.ExecutorKey, i, ref.Type, ref.URI)
 		}
 	}
+	// Operational lifecycle: output ready.
+	w.UpdateOperationalPhase(pte.TaskID, PhaseOutputReady)
 	if report.AttemptEvents != nil {
 		report.AttemptEvents.ArtifactVerified(telemetry.StatusOK, nil)
 	}

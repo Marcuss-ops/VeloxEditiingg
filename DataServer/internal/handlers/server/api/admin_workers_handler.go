@@ -360,7 +360,7 @@ func buildWorkerCard(info *workersreg.Worker) WorkerCard {
 		execID = exs[0].ID
 		execVer = exs[0].Version
 	}
-	return WorkerCard{
+	card := WorkerCard{
 		WorkerID:            info.WorkerID.String(),
 		WorkerName:          sanitiseHostname(info.WorkerName),
 		Hostname:            sanitiseHostname(info.WorkerName),
@@ -392,6 +392,34 @@ func buildWorkerCard(info *workersreg.Worker) WorkerCard {
 		Runtime:             runtimeSnapshot(info.Metrics),
 		RecentErrors:        append([]string(nil), info.RecentErrors...),
 	}
+	// Active task live progress from heartbeat.
+	if len(metrics.ActiveJobs) > 0 {
+		card.ActiveTaskRuntime = make([]ActiveTaskRuntime, 0, len(metrics.ActiveJobs))
+		for _, job := range metrics.ActiveJobs {
+			card.ActiveTaskRuntime = append(card.ActiveTaskRuntime, ActiveTaskRuntime{
+				JobID:            job.JobID,
+				TaskID:           job.TaskID,
+				AttemptID:        job.AttemptID,
+				Executor:         job.Executor,
+				Stage:            job.Stage,
+				Percent:          job.Percent,
+				Scene:            job.Scene,
+				TotalScenes:      job.TotalScenes,
+				LeaseID:          job.LeaseID,
+				StartedAt:        job.StartedAt,
+				OperationalPhase: job.OperationalPhase,
+				Segment:          job.Segment,
+				TotalSegments:    job.TotalSegments,
+				FramesDecoded:    job.FramesDecoded,
+				FramesComposited: job.FramesComposited,
+				FramesEncoded:    job.FramesEncoded,
+				SpeedX:           job.SpeedX,
+				ElapsedMS:        job.ElapsedMS,
+				LastProgressAt:   job.LastProgressAt,
+			})
+		}
+	}
+	return card
 }
 
 func cloneAnyMap(in map[string]interface{}) map[string]any {

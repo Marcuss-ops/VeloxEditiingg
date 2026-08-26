@@ -20,16 +20,30 @@ type WorkerMetrics struct {
 // ActiveTaskMetrics is the typed counterpart of the per-active-job
 // sub-document carried inside the metrics blob.
 type ActiveTaskMetrics struct {
-	JobID       string
-	TaskID      string
-	AttemptID   string
-	Executor    string
-	Stage       string
-	Percent     int64
-	Scene       int64
-	TotalScenes int64
-	LeaseID     string
-	StartedAt   string
+	JobID       string `json:"job_id"`
+	TaskID      string `json:"task_id,omitempty"`
+	AttemptID   string `json:"attempt_id,omitempty"`
+	Executor    string `json:"executor,omitempty"`
+	Stage       string `json:"stage,omitempty"`
+	Percent     int64  `json:"percent"`
+	Scene       int64  `json:"scene"`
+	TotalScenes int64  `json:"total_scenes"`
+	LeaseID     string `json:"lease_id,omitempty"`
+	StartedAt   string `json:"started_at,omitempty"`
+
+	// Operational lifecycle phase (prefetching/rendering/publishing/...).
+	// Populated when the worker sends operational_phase in its heartbeat.
+	OperationalPhase string `json:"operational_phase,omitempty"`
+
+	// Detailed render progress fields from the C++ engine.
+	Segment          int64   `json:"segment,omitempty"`
+	TotalSegments    int64   `json:"total_segments,omitempty"`
+	FramesDecoded    int64   `json:"frames_decoded,omitempty"`
+	FramesComposited int64   `json:"frames_composited,omitempty"`
+	FramesEncoded    int64   `json:"frames_encoded,omitempty"`
+	SpeedX           float64 `json:"speed_x,omitempty"`
+	ElapsedMS        int64   `json:"elapsed_ms,omitempty"`
+	LastProgressAt   string  `json:"last_progress_at,omitempty"`
 }
 
 // ParseWorkerMetrics converts the raw JSON-decoded metrics map into a
@@ -98,15 +112,24 @@ func parseActiveJobs(raw []interface{}) []ActiveTaskMetrics {
 
 func activeTaskFromMap(m map[string]interface{}) ActiveTaskMetrics {
 	return ActiveTaskMetrics{
-		JobID:       toString(m["job_id"]),
-		TaskID:      toString(m["task_id"]),
-		AttemptID:   toString(m["attempt_id"]),
-		Executor:    toString(m["job_type"]),
-		Stage:       toString(m["progress_stage"]),
-		Percent:     toInt64Zero(m["progress_percent"]),
-		Scene:       toInt64Zero(m["progress_scene"]),
-		TotalScenes: toInt64Zero(m["progress_total"]),
-		LeaseID:     toString(m["lease_id"]),
-		StartedAt:   toString(m["started_at"]),
+		JobID:            toString(m["job_id"]),
+		TaskID:           toString(m["task_id"]),
+		AttemptID:        toString(m["attempt_id"]),
+		Executor:         toString(m["job_type"]),
+		Stage:            toString(m["progress_stage"]),
+		Percent:          toInt64Zero(m["progress_percent"]),
+		Scene:            toInt64Zero(m["progress_scene"]),
+		TotalScenes:      toInt64Zero(m["progress_total"]),
+		LeaseID:          toString(m["lease_id"]),
+		StartedAt:        toString(m["started_at"]),
+		OperationalPhase: toString(m["operational_phase"]),
+		Segment:          toInt64Zero(m["progress_segment"]),
+		TotalSegments:    toInt64Zero(m["progress_total_segments"]),
+		FramesDecoded:    toInt64Zero(m["frames_decoded"]),
+		FramesComposited: toInt64Zero(m["frames_composited"]),
+		FramesEncoded:    toInt64Zero(m["frames_encoded"]),
+		SpeedX:           toFloat64Zero(m["ffmpeg_speed_x"]),
+		ElapsedMS:        toInt64Zero(m["elapsed_ms"]),
+		LastProgressAt:   toString(m["last_progress_at"]),
 	}
 }

@@ -77,6 +77,25 @@ type AuditReader interface {
 	ListAuditEvents(context.Context, string, int) ([]audittrail.Event, error)
 }
 
+// AssetProgressReader provides job-scoped asset download progress for
+// admin read paths. Unlike the M2M-scoped pipeline handler, this does
+// not require a clientID — it reads the canonical job_asset_refs join.
+type AssetProgressReader interface {
+	ListAssetDownloadProgressForJob(ctx context.Context, jobID string) ([]AssetProgressView, error)
+}
+
+// AssetProgressView is the admin-level asset progress shape consumed
+// by the /live endpoint. It mirrors the store's AssetDownloadProgressView
+// but avoids importing the store package from the observability layer.
+type AssetProgressView struct {
+	State           string  `json:"state"`
+	BytesDownloaded int64   `json:"bytes_downloaded"`
+	BytesTotal      int64   `json:"bytes_total"`
+	BytesPerSecond  float64 `json:"bytes_per_second"`
+	ETASeconds      int64   `json:"eta_seconds"`
+	CacheHit        bool    `json:"cache_hit"`
+}
+
 // JobInspectionReader is the optional read model behind the operator-facing
 // job inspection surface. Keeping this as a small local contract means the
 // observability package does not depend on a concrete database backend.
@@ -97,6 +116,7 @@ type Service struct {
 	audit          AuditReader
 	jobInspection  JobInspectionReader
 	liveAttempts   LiveAttemptReader
+	assetProgress  AssetProgressReader
 }
 
 // NewService constructs the observability aggregation service.
@@ -158,6 +178,12 @@ func (s *Service) WithJobInspection(r JobInspectionReader) *Service {
 // admin read model. It does not create or persist a second tracker.
 func (s *Service) WithLiveAttempts(r LiveAttemptReader) *Service {
 	s.liveAttempts = r
+	return s
+}
+
+// WithAssetProgress wires the admin-level asset download progress reader.
+func (s *Service) WithAssetProgress(r AssetProgressReader) *Service {
+	s.assetProgress = r
 	return s
 }
 
