@@ -1,6 +1,6 @@
 {
   "idempotency_key": "matt-damon-20-clips-canonical-v1",
-  "job_type": "scene.composite.v1",
+  "job_type": "clip.stock.v1",
   "template_id": "matt-damon-20-clips-canonical",
   "template_version": 1,
   "video_name": "Matt Damon — 20 short clips with 3 intros",
