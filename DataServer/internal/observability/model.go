@@ -259,4 +259,14 @@ type AttemptSummary struct {
 	LastProgressAt         string                          `json:"last_progress_at,omitempty"`
 	CumulativeMetrics      map[string]any                  `json:"cumulative_metrics,omitempty"`
 	CanonicalAttemptEvents []map[string]any                `json:"canonical_attempt_events,omitempty"`
+	Waterfall              []WaterfallStage                `json:"waterfall,omitempty"`
+	WaterfallValid         bool                            `json:"waterfall_valid,omitempty"`
+}
+
+type WaterfallStage struct {
+	Name        string    `json:"name"`
+	StartedAt   time.Time `json:"started_at"`
+	CompletedAt time.Time `json:"completed_at"`
+	DurationMS  int64     `json:"duration_ms"`
+	Status      string    `json:"status,omitempty"`
 }

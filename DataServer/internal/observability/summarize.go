@@ -102,6 +102,13 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 			firstStart = earlierTime(firstStart, *a.StartedAt)
 			lastEnd = laterTime(lastEnd, *a.CompletedAt)
 		}
+		if reports, ok := s.attempts.(AttemptReportReader); ok {
+			raw, reportErr := reports.GetRawReportJSON(ctx, a.ID)
+			if reportErr != nil {
+				return nil, fmt.Errorf("observability summarize waterfall for attempt %s: %w", a.ID, reportErr)
+			}
+			as.Waterfall, as.WaterfallValid = decodeWaterfall(raw, a.StartedAt, a.CompletedAt)
+		}
 
 		// Metrics
 		metrics, err := s.attempts.GetMetrics(ctx, a.ID)

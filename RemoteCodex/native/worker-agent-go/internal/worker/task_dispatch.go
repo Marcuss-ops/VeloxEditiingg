@@ -65,6 +65,10 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 	}
 
 	spec := pte.Spec
+	waterfall := taskrunner.WaterfallRecorderFromContext(ctx)
+	if waterfall != nil {
+		waterfall.Transition("asset_resolve", time.Now().UTC())
+	}
 	assetTracker := &assetOperationTracker{cacheEnabled: w.canonicalAssetCache != nil}
 	// One recorder belongs to this attempt and is shared with asset
 	// resolution and TaskRunner. Binding it before resolving assets keeps
@@ -253,6 +257,9 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 
 	// Operational lifecycle: rendering.
 	w.UpdateOperationalPhase(pte.TaskID, PhaseRendering)
+	if waterfall != nil {
+		waterfall.Transition("render", time.Now().UTC())
+	}
 	report, runErr := w.taskRunner.Run(ctx, spec)
 	if report.AttemptEvents == nil {
 		report.AttemptEvents = attemptEvents

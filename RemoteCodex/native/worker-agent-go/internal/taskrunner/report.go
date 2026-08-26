@@ -50,6 +50,7 @@ type TaskExecutionReport struct {
 	StartedAt    time.Time                        `json:"started_at"`
 	CompletedAt  time.Time                        `json:"completed_at"`
 	PhaseMarkers []PhaseMarker                    `json:"phase_markers,omitempty"`
+	Waterfall    []WaterfallStage                 `json:"waterfall,omitempty"`
 	// DetailedPhases is the full, ordered, event-taxonomy phase list for
 	// the attempt, snapshotted from the append-only recorder at Run completion.
 	// Serialized to TaskResult.phase_timings (proto field 20); the

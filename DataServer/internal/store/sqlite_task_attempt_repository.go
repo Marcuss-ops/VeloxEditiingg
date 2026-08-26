@@ -2,11 +2,27 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
 	"velox-server/internal/taskattempts"
 )
+
+func (r *SQLiteTaskAttemptRepository) GetRawReportJSON(ctx context.Context, attemptID string) (string, error) {
+	if r == nil || r.store == nil || r.store.db == nil || attemptID == "" {
+		return "", nil
+	}
+	var raw string
+	err := r.store.db.QueryRowContext(ctx, `SELECT raw_report_json FROM task_attempt_reports WHERE attempt_id = ?`, attemptID).Scan(&raw)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("raw report get: %w", err)
+	}
+	return raw, nil
+}
 
 // ── Phase Timings ──────────────────────────────────────────────────────────
 

@@ -26,6 +26,10 @@ type AttemptReader interface {
 	GetCacheStats(ctx context.Context, attemptID string) (*taskattempts.AttemptCacheStats, error)
 }
 
+type AttemptReportReader interface {
+	GetRawReportJSON(ctx context.Context, attemptID string) (string, error)
+}
+
 // SegmentReader is optional so deployments with older schemas continue to
 // serve job inspection; newer SQLite repositories expose sidecar segment
 // telemetry through this read-only seam.

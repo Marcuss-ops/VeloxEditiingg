@@ -96,6 +96,8 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 	w.recordTaskStart(pte)
 
 	startTime := time.Now()
+	waterfall := taskrunner.NewWaterfallRecorder(startTime)
+	waterfall.Transition("wait_before_assets", startTime)
 	attemptTelemetry := telemetry.NewAttemptTelemetrySession(w.sampler)
 	// Start/Stop is the single telemetry entry point: the session drives
 	// the collector+sink pipeline (collectors gather the RAW facts at
@@ -103,10 +105,12 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 	attemptTelemetry.BindPipeline(w.newAttemptPipeline(pte, attemptID, attemptTelemetry))
 	attemptTelemetry.Start(jobCtx)
 	jobCtx = telemetry.WithAttemptTelemetry(jobCtx, attemptTelemetry)
+	jobCtx = taskrunner.WithWaterfallRecorder(jobCtx, waterfall)
 
 	w.logger.Info("[TASK] Executing task %s (job=%s attempt=%s)", taskID, pte.JobID, attemptID)
 
 	report, execErr := w.runJobTask(jobCtx, pte)
+	waterfall.Transition("finalize", time.Now().UTC())
 	recordExecutionDownloadMetrics(report)
 	if execErr == nil {
 		pipelineStatus := pte.ExecutorID
@@ -140,6 +144,7 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 		}
 		// Operational lifecycle: publishing output artifacts.
 		w.UpdateOperationalPhase(taskID, PhasePublishing)
+		waterfall.Transition("upload", time.Now().UTC())
 		if uploadErr := w.uploadTaskOutputs(jobCtx, pte, report); uploadErr != nil {
 			execErr = fmt.Errorf("upload task outputs: %w", uploadErr)
 		}
@@ -152,6 +157,7 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 		}
 		report.AttemptEvents.AttemptCompleted(status)
 	}
+	waterfall.Transition("commit_wait", time.Now().UTC())
 
 	// Upload/commit runs outside TaskRunner.Run. Snapshot those late events
 	// only after the complete attempt lifecycle, preserving the canonical
@@ -190,6 +196,11 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 
 	ackStartTime := time.Now()
 
+	waterfall.Transition("result_report", time.Now().UTC())
+	waterfall.Finish(time.Now().UTC(), waterfallStatus(execErr))
+	if report != nil {
+		report.Waterfall = waterfall.Snapshot()
+	}
 	w.reporter.Submit(submitCtx, pte, taskID, attemptID, report, execErr)
 
 	// Operational lifecycle: task completed.
@@ -210,4 +221,11 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 			w.setStatus(StatusIdle)
 		}
 	}
+}
+
+func waterfallStatus(err error) string {
+	if err != nil {
+		return "failed"
+	}
+	return "ok"
 }

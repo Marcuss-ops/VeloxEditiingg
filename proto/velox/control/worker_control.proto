@@ -226,6 +226,18 @@ message TaskResult {
   // detailed phase stream. Zero means a legacy worker that predates this
   // field; the master accepts it through the compatibility path.
   int32 telemetry_schema_version = 21;
+  // Non-overlapping worker lifecycle waterfall. Unlike phase_timings, these
+  // segments are a partition of the worker-side attempt interval and are
+  // intended for gap attribution rather than aggregate diagnostics.
+  repeated AttemptWaterfallStage waterfall = 22;
+}
+
+message AttemptWaterfallStage {
+  string name = 1;
+  google.protobuf.Timestamp started_at = 2;
+  google.protobuf.Timestamp completed_at = 3;
+  int64 duration_ms = 4;
+  string status = 5;
 }
 
 message TaskLeaseRenewal {

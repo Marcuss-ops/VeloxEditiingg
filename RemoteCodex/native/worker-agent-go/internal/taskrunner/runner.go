@@ -213,6 +213,7 @@ func (r *TaskRunner) run(parent context.Context, spec executor.TaskSpec) (TaskEx
 		StartedAt:    overallStart,
 		PhaseMarkers: make([]PhaseMarker, 0, 5),
 	}
+	waterfall := WaterfallRecorderFromContext(parent)
 	if r.cacheStats != nil {
 		cs := r.cacheStats.Stats()
 		report.CacheBaseline = map[string]int64{
@@ -410,6 +411,9 @@ func (r *TaskRunner) run(parent context.Context, spec executor.TaskSpec) (TaskEx
 		gpuSampler.Stats(), // zero-valued if no GPU
 		time.Since(overallStart).Seconds(),
 	)
+	if waterfall != nil {
+		report.Waterfall = waterfall.Snapshot()
+	}
 	report.TypedMetrics = report.RawMetrics
 	// Project both legacy dotted metrics and the typed wire mirror on every
 	// outcome. This must not depend on cache/blob providers because native

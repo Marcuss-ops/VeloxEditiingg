@@ -76,6 +76,13 @@ func buildTaskResult(r *taskResultReporter, pte *PendingTaskExecution, taskID, a
 		})
 	}
 	result.PhaseTimings = appendDetailedPhaseTimings(result.PhaseTimings, report.DetailedPhases, pte.LeaseID, pte.ExecutorID, int32(pte.ExecutorVersion))
+	for _, stage := range report.Waterfall {
+		result.Waterfall = append(result.Waterfall, &pb.AttemptWaterfallStage{
+			Name: stage.Name, StartedAt: timestamppb.New(stage.StartedAt),
+			CompletedAt: timestamppb.New(stage.CompletedAt), DurationMs: stage.DurationMS,
+			Status: stage.Status,
+		})
+	}
 	for _, segment := range report.Segments {
 		result.SegmentTimings = append(result.SegmentTimings, &pb.SegmentTiming{
 			SegmentIndex: int32(segment.SegmentIndex), SceneWorkerIndex: int32(segment.SceneWorkerIndex),
