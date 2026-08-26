@@ -28,10 +28,12 @@ func (w *Worker) publishArtifactsV1(ctx context.Context, pte *PendingTaskExecuti
 			return err
 		}
 		defer w.publisherPool.Release()
-	} else {
-		w.artifactUploadMu.Lock()
-		defer w.artifactUploadMu.Unlock()
 	}
+	// The pool limits publisher concurrency, but it does not serialize the
+	// foreground publisher with the durable resume loop. Both paths can touch
+	// the same spool row, so the lifecycle mutex is mandatory in either mode.
+	w.artifactUploadMu.Lock()
+	defer w.artifactUploadMu.Unlock()
 
 	if err := validateArtifactOutputs(report); err != nil {
 		return err

@@ -168,10 +168,11 @@ func (w *Worker) resumeDeclaration(ctx context.Context, entries []spool.SpoolEnt
 			return
 		}
 		defer w.publisherPool.Release()
-	} else {
-		w.artifactUploadMu.Lock()
-		defer w.artifactUploadMu.Unlock()
 	}
+	// PublisherPool bounds concurrency, but only this mutex serializes a
+	// foreground publication against the resume loop for the same worker spool.
+	w.artifactUploadMu.Lock()
+	defer w.artifactUploadMu.Unlock()
 
 	taskID := entries[0].TaskID
 	attemptID := entries[0].AttemptID
@@ -315,10 +316,11 @@ func (w *Worker) resumeArtifactUpload(ctx context.Context, entry spool.SpoolEntr
 			return
 		}
 		defer w.publisherPool.Release()
-	} else {
-		w.artifactUploadMu.Lock()
-		defer w.artifactUploadMu.Unlock()
 	}
+	// Keep the spool lifecycle single-writer even when the publisher pool is
+	// enabled; otherwise resume can race the foreground upload and win the CAS.
+	w.artifactUploadMu.Lock()
+	defer w.artifactUploadMu.Unlock()
 
 	if entry.UploadTargetJSON == "" {
 		// No persisted target (plan never stashed). Nothing to re-drive;
