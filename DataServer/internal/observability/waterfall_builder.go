@@ -12,13 +12,14 @@ type WaterfallBucket struct {
 }
 
 type AttemptWaterfall struct {
-	AttemptID        string            `json:"attempt_id"`
-	WallMS           int64             `json:"wall_ms"`
-	Buckets          []WaterfallBucket `json:"buckets"`
-	AccountedMS      int64             `json:"accounted_ms"`
-	UnaccountedMS    int64             `json:"unaccounted_ms"`
-	CoveragePct      float64           `json:"coverage_pct"`
-	MissingMilestones []string         `json:"missing_milestones,omitempty"`
+	AttemptID         string            `json:"attempt_id"`
+	WallMS            int64             `json:"wall_ms"`
+	Buckets           []WaterfallBucket `json:"buckets"`
+	AccountedMS       int64             `json:"accounted_ms"`
+	UnaccountedMS     int64             `json:"unaccounted_ms"`
+	CoveragePct       float64           `json:"coverage_pct"`
+	MissingMilestones []string          `json:"missing_milestones,omitempty"`
+	InvertedBuckets   []string          `json:"inverted_buckets,omitempty"`
 }
 
 var bucketDefs = []struct {
@@ -48,6 +49,7 @@ func BuildAttemptWaterfall(attemptID string, samples []sharedtelemetry.AttemptMi
 	var buckets []WaterfallBucket
 	var accounted int64
 	var missing []string
+	var inverted []string
 	for _, def := range bucketDefs {
 		start, okStart := elapsed[def.From]
 		end, okEnd := elapsed[def.To]
@@ -61,27 +63,29 @@ func BuildAttemptWaterfall(attemptID string, samples []sharedtelemetry.AttemptMi
 			continue
 		}
 		if end < start {
+			// Inverted boundary pair (end < start): the bucket cannot be built and
+			// the stretch is NOT silently attributed anywhere. The pair is reported
+			// explicitly and its span lands in unaccounted_ms as honest UNKNOWN.
+			inverted = append(inverted, def.Name)
 			continue
 		}
 		dur := end - start
 		buckets = append(buckets, WaterfallBucket{Name: def.Name, StartMS: start, EndMS: end, DurationMS: dur})
 		accounted += dur
 	}
+	// Deliberately NOT clamped: when the milestone timeline over-covers the wall
+	// (overlapping buckets, duplicate/late milestones, or worker/master clock skew
+	// on the boundary pair) unaccounted_ms goes negative and coverage_pct exceeds
+	// 100 — the corruption is surfaced instead of being masked as "100% covered".
 	unaccounted := wallMS - accounted
-	if unaccounted < 0 {
-		unaccounted = 0
-	}
 	coverage := 0.0
 	if wallMS > 0 {
 		coverage = float64(accounted) / float64(wallMS) * 100
-		if coverage > 100 {
-			coverage = 100
-		}
 	}
 	if missing == nil {
 		missing = []string{}
 	}
-	return AttemptWaterfall{AttemptID: attemptID, WallMS: wallMS, Buckets: buckets, AccountedMS: accounted, UnaccountedMS: unaccounted, CoveragePct: coverage, MissingMilestones: dedupMissing(missing)}
+	return AttemptWaterfall{AttemptID: attemptID, WallMS: wallMS, Buckets: buckets, AccountedMS: accounted, UnaccountedMS: unaccounted, CoveragePct: coverage, MissingMilestones: dedupMissing(missing), InvertedBuckets: dedupMissing(inverted)}
 }
 
 func dedupMissing(in []string) []string {

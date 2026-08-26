@@ -194,6 +194,90 @@ func assertAccountsWall(t *testing.T, got AttemptWaterfall, wallMS int64) {
 	}
 }
 
+// TestBuildAttemptWaterfall_InvertedPairNeverSilentlyDropped locks the rule that
+// an inverted boundary pair (end < start — duplicate/late milestone, clock skew)
+// must be reported explicitly instead of silently skipping the bucket: the pair
+// lands in inverted_buckets and its span stays in unaccounted_ms as honest UNKNOWN.
+func TestBuildAttemptWaterfall_InvertedPairNeverSilentlyDropped(t *testing.T) {
+	samples := []sharedtelemetry.AttemptMilestoneSample{
+		{Name: sharedtelemetry.MilestoneAttemptAccepted, ElapsedMS: 0},
+		{Name: sharedtelemetry.MilestoneExecutionStarted, ElapsedMS: 10},
+		{Name: sharedtelemetry.MilestoneAssetsRequested, ElapsedMS: 25},
+		// render.started AFTER render.completed: inverted pair for the render bucket.
+		{Name: sharedtelemetry.MilestoneAllAssetsReady, ElapsedMS: 125},
+		{Name: sharedtelemetry.MilestonePlanStarted, ElapsedMS: 130},
+		{Name: sharedtelemetry.MilestonePlanCompleted, ElapsedMS: 150},
+		{Name: sharedtelemetry.MilestoneRenderStarted, ElapsedMS: 260},
+		{Name: sharedtelemetry.MilestoneRenderCompleted, ElapsedMS: 255},
+		{Name: sharedtelemetry.MilestoneOutputDurable, ElapsedMS: 270},
+		{Name: sharedtelemetry.MilestonePublishStarted, ElapsedMS: 280},
+		{Name: sharedtelemetry.MilestonePublishCompleted, ElapsedMS: 320},
+		{Name: sharedtelemetry.MilestoneResultSent, ElapsedMS: 325},
+		{Name: sharedtelemetry.MilestoneAttemptCompleted, ElapsedMS: 330},
+	}
+
+	got := BuildAttemptWaterfall("attempt-inverted", samples, 330)
+
+	// The inverted bucket must not be built, and the pair must be reported.
+	for _, bucket := range got.Buckets {
+		if bucket.Name == "render" {
+			t.Fatalf("render bucket was built from an inverted pair: %+v", bucket)
+		}
+	}
+	if !containsStr(got.InvertedBuckets, "render") {
+		t.Fatalf("inverted_buckets = %v, want render present", got.InvertedBuckets)
+	}
+	// The corruption is NOT masked: the inverted span leaks into the preceding
+	// bucket (pre_render_wait ends at the impossible render.started=260), so the
+	// milestone claims over-cover the 330ms wall. That over-accounting surfaces
+	// as NEGATIVE unaccounted_ms and coverage > 100 — never a fake 100% report.
+	if got.UnaccountedMS >= 0 {
+		t.Fatalf("unaccounted_ms = %d, want negative to surface the inverted-pair corruption", got.UnaccountedMS)
+	}
+	if got.CoveragePct <= 100 {
+		t.Fatalf("coverage_pct = %f, want > 100 when a pair is inverted", got.CoveragePct)
+	}
+}
+
+// TestBuildAttemptWaterfall_OverlapNeverMasked locks the anti-masking rule: when
+// the milestone timeline over-covers the wall (accounted > wall — overlapping
+// buckets, duplicated milestones, cross-machine skew), unaccounted_ms must go
+// NEGATIVE and coverage_pct must EXCEED 100. The corruption is surfaced, not
+// clamped away into a fake "100% covered" report.
+func TestBuildAttemptWaterfall_OverlapNeverMasked(t *testing.T) {
+	samples := []sharedtelemetry.AttemptMilestoneSample{
+		{Name: sharedtelemetry.MilestoneAttemptAccepted, ElapsedMS: 0},
+		{Name: sharedtelemetry.MilestoneExecutionStarted, ElapsedMS: 10},
+		{Name: sharedtelemetry.MilestoneAssetsRequested, ElapsedMS: 25},
+		{Name: sharedtelemetry.MilestoneAllAssetsReady, ElapsedMS: 125},
+		{Name: sharedtelemetry.MilestonePlanStarted, ElapsedMS: 130},
+		{Name: sharedtelemetry.MilestonePlanCompleted, ElapsedMS: 150},
+		{Name: sharedtelemetry.MilestoneRenderStarted, ElapsedMS: 155},
+		{Name: sharedtelemetry.MilestoneRenderCompleted, ElapsedMS: 255},
+		{Name: sharedtelemetry.MilestoneOutputDurable, ElapsedMS: 270},
+		{Name: sharedtelemetry.MilestonePublishStarted, ElapsedMS: 280},
+		{Name: sharedtelemetry.MilestonePublishCompleted, ElapsedMS: 320},
+		{Name: sharedtelemetry.MilestoneResultSent, ElapsedMS: 325},
+		// attempt.completed claims 360ms but the wall is only 330ms: 30ms of
+		// over-accounting that must NOT be clamped to zero/100%.
+		{Name: sharedtelemetry.MilestoneAttemptCompleted, ElapsedMS: 360},
+	}
+
+	got := BuildAttemptWaterfall("attempt-overlap", samples, 330)
+	if got.UnaccountedMS >= 0 {
+		t.Fatalf("unaccounted_ms = %d, want negative to surface the overlap", got.UnaccountedMS)
+	}
+	if got.CoveragePct <= 100 {
+		t.Fatalf("coverage_pct = %f, want > 100 to surface the overlap", got.CoveragePct)
+	}
+	if got.AccountedMS != 360 {
+		t.Fatalf("accounted_ms = %d, want the honest 360ms over-accounting kept", got.AccountedMS)
+	}
+	if len(got.MissingMilestones) != 0 || len(got.InvertedBuckets) != 0 {
+		t.Fatalf("missing=%v inverted=%v, want no diagnostics for a pure overlap", got.MissingMilestones, got.InvertedBuckets)
+	}
+}
+
 func containsStr(xs []string, v string) bool {
 	for _, x := range xs {
 		if x == v {
