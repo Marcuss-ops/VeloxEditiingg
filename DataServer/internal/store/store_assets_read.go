@@ -81,6 +81,35 @@ func (r *SQLiteAssetRepository) GetBySHA256(ctx context.Context, sha256 string) 
 	return &a, nil
 }
 
+// GetBySourceReference returns the newest READY asset registered for an exact
+// provider reference. This is the durable reverse index for deferred sources
+// materialized by the remote worker bridge.
+func (r *SQLiteAssetRepository) GetBySourceReference(ctx context.Context, reference string) (*AssetRecord, error) {
+	if r.store == nil || r.store.db == nil {
+		return nil, fmt.Errorf("asset repository: store not initialized")
+	}
+	row := r.store.db.QueryRowContext(ctx, `
+		SELECT a.asset_id, a.kind, a.status, a.sha256, COALESCE(a.mime_type,''),
+		       a.size_bytes, a.storage_provider, a.storage_key, COALESCE(a.metadata_json,''),
+		       a.created_at, COALESCE(a.verified_at,''), COALESCE(a.deleted_at,'')
+		  FROM assets a
+		  JOIN asset_sources s ON s.asset_id = a.asset_id
+		 WHERE s.source_reference = ? AND a.status = 'READY'
+		 ORDER BY s.created_at DESC, s.source_id DESC
+		 LIMIT 1`, reference)
+	var a AssetRecord
+	err := row.Scan(&a.AssetID, &a.Kind, &a.Status, &a.SHA256, &a.MimeType,
+		&a.SizeBytes, &a.StorageProvider, &a.StorageKey, &a.MetadataJSON,
+		&a.CreatedAt, &a.VerifiedAt, &a.DeletedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get asset by source reference: %w", err)
+	}
+	return &a, nil
+}
+
 // GetMediaMetadata returns the verified media metadata row for an asset, or
 // (nil, nil) when no row exists (metadata_verified=false).
 func (r *SQLiteAssetRepository) GetMediaMetadata(ctx context.Context, assetID string) (*MediaMetadataRecord, error) {

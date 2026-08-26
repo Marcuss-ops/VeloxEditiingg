@@ -1,11 +1,13 @@
 package assets
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -24,18 +26,27 @@ import (
 // Uses the canonical AssetService (DB as source of truth) + BlobStore
 // for all asset resolution and serving.
 type Handler struct {
-	tokenMgr  *workersreg.TokenManager
-	assetSvc  *voiceoverassets.AssetService
-	blobStore repository.BlobStore
-	driveSvc  *driveintegration.Service
+	tokenMgr      *workersreg.TokenManager
+	assetSvc      *voiceoverassets.AssetService
+	blobStore     repository.BlobStore
+	driveSvc      *driveintegration.Service
+	materializeMu sync.Mutex
+	materializing map[string]*materializationCall
+}
+
+type materializationCall struct {
+	done  chan struct{}
+	asset *voiceoverassets.Asset
+	err   error
 }
 
 // NewHandler creates a new assets Handler.
 func NewHandler(cfg *config.Config, tokenMgr *workersreg.TokenManager, assetSvc *voiceoverassets.AssetService, blobStore repository.BlobStore, driveSvcs ...*driveintegration.Service) *Handler {
 	h := &Handler{
-		tokenMgr:  tokenMgr,
-		assetSvc:  assetSvc,
-		blobStore: blobStore,
+		tokenMgr:      tokenMgr,
+		assetSvc:      assetSvc,
+		blobStore:     blobStore,
+		materializing: make(map[string]*materializationCall),
 	}
 	if len(driveSvcs) > 0 {
 		h.driveSvc = driveSvcs[0]
@@ -87,6 +98,18 @@ func (h *Handler) ServeAsset() gin.HandlerFunc {
 			}
 		}
 
+		// Deferred provider IDs are materialized once into the verified local
+		// registry. This removes repeated Drive downloads and coalesces the
+		// first request when multiple workers ask for the same clip.
+		if asset == nil {
+			if deferredReference, refErr := voiceoverassets.DeferredDriveReference(assetID); refErr == nil {
+				asset, _ = h.materializeDeferred(c.Request.Context(), deferredReference)
+				if asset != nil && h.serveLocal(c, asset) {
+					return
+				}
+			}
+		}
+
 		source, resolveErr := h.assetSvc.ResolveExternalSource(c.Request.Context(), assetID)
 		if resolveErr != nil || source == nil || source.Reader == nil {
 			// Worker references for deferred Drive assets carry only the opaque
@@ -127,6 +150,56 @@ func (h *Handler) ServeAsset() gin.HandlerFunc {
 		}
 		_, _ = io.Copy(c.Writer, source.Reader)
 	}
+}
+
+func (h *Handler) serveLocal(c *gin.Context, asset *voiceoverassets.Asset) bool {
+	if asset == nil || h.blobStore == nil || asset.StorageKey == "" {
+		return false
+	}
+	file, err := h.blobStore.ReadFinal(asset.StorageKey)
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return false
+	}
+	contentType := strings.TrimSpace(asset.MimeType)
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	c.Header("Content-Type", contentType)
+	c.Header("Content-Length", fmt.Sprintf("%d", info.Size()))
+	http.ServeContent(c.Writer, c.Request, filepath.Base(asset.StorageKey), info.ModTime(), file)
+	return true
+}
+
+func (h *Handler) materializeDeferred(ctx context.Context, reference string) (*voiceoverassets.Asset, error) {
+	if existing, err := h.assetSvc.GetBySourceReference(ctx, reference); err == nil && existing != nil {
+		return existing, nil
+	}
+	h.materializeMu.Lock()
+	if call, ok := h.materializing[reference]; ok {
+		h.materializeMu.Unlock()
+		select {
+		case <-call.done:
+			return call.asset, call.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	call := &materializationCall{done: make(chan struct{})}
+	h.materializing[reference] = call
+	h.materializeMu.Unlock()
+	call.asset, call.err = h.assetSvc.ResolveAndRegister(ctx, voiceoverassets.ResolveAssetCommand{
+		Kind: "clip", Reference: reference, SourceType: "drive_deferred",
+	})
+	h.materializeMu.Lock()
+	delete(h.materializing, reference)
+	close(call.done)
+	h.materializeMu.Unlock()
+	return call.asset, call.err
 }
 
 func (h *Handler) authorizeWorker(c *gin.Context) bool {

@@ -134,6 +134,21 @@ func (s *AssetService) ResolveAndRegister(ctx context.Context, cmd ResolveAssetC
 	// 4. Dedup: if SHA-256 already exists, return existing asset
 	if existing, err := s.repo.GetBySHA256(ctx, sha256hex); err == nil && existing != nil {
 		_ = s.blobStore.RemoveStaging(stagingPath)
+		sourceID, sourceErr := identity.NewHex128()
+		if sourceErr != nil {
+			return nil, fmt.Errorf("generate source ID: %w", sourceErr)
+		}
+		sourceType := strings.TrimSpace(cmd.SourceType)
+		if sourceType == "" {
+			sourceType = source.SourceType
+		}
+		if insertErr := s.repo.InsertSource(ctx, AssetSourceRecord{
+			SourceID: sourceID, AssetID: existing.AssetID, SourceType: sourceType,
+			SourceReference: reference, MetadataJSON: cmd.MetadataJSON,
+			CreatedAt: s.clock.Now().UTC().Format(time.RFC3339),
+		}); insertErr != nil {
+			return nil, fmt.Errorf("insert deduplicated source: %w", insertErr)
+		}
 		return s.recordToAsset(existing), nil
 	}
 

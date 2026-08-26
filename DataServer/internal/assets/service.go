@@ -92,6 +92,14 @@ type assetSourceReader interface {
 	ListSources(ctx context.Context, assetID string) ([]AssetSourceRecord, error)
 }
 
+// assetSourceAssetReader is the optional reverse lookup used by the remote
+// worker bridge. Deferred provider references are not content-addressed IDs;
+// once materialized, asset_sources is the durable index that lets every
+// worker reuse the local verified blob.
+type assetSourceAssetReader interface {
+	GetBySourceReference(ctx context.Context, reference string) (*AssetRecord, error)
+}
+
 // NewAssetService creates a new generic asset service.
 func NewAssetService(repo AssetRepository, blobStore BlobStore, registry *ResolverRegistry, c clock.Clock) *AssetService {
 	if c == nil {
@@ -175,6 +183,35 @@ func (s *AssetService) Get(ctx context.Context, assetID string) (*Asset, error) 
 		return nil, nil
 	}
 	return s.recordToAsset(rec), nil
+}
+
+// GetBySourceReference returns the READY asset registered for an exact source
+// reference. Repositories that do not provide the optional reverse index fail
+// closed instead of silently re-downloading the provider source.
+func (s *AssetService) GetBySourceReference(ctx context.Context, reference string) (*Asset, error) {
+	if s == nil || s.repo == nil {
+		return nil, fmt.Errorf("asset service unavailable")
+	}
+	reader, ok := s.repo.(assetSourceAssetReader)
+	if !ok {
+		return nil, fmt.Errorf("asset source reverse index unavailable")
+	}
+	rec, err := reader.GetBySourceReference(ctx, strings.TrimSpace(reference))
+	if err != nil || rec == nil || rec.Status != AssetStatusReady {
+		return nil, err
+	}
+	return s.recordToAsset(rec), nil
+}
+
+// DeferredDriveReference returns the canonical resolver reference for a
+// deferred Drive file ID. Keeping this in the asset service guarantees that
+// registration and worker serving use the same source key.
+func DeferredDriveReference(fileID string) (string, error) {
+	deferred, err := assetref.NewDeferredDrive(strings.TrimSpace(fileID))
+	if err != nil {
+		return "", fmt.Errorf("invalid deferred Drive asset: %w", err)
+	}
+	return "https://drive.google.com/uc?export=download&id=" + url.QueryEscape(deferred.ID()), nil
 }
 
 // ResolveExternalSource opens the newest registered source for an asset that
