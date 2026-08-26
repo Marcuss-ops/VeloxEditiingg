@@ -213,3 +213,68 @@ func TestDecodeAttemptWaterfallAcceptsProtoJSONMilestones(t *testing.T) {
 		t.Fatal("expected missing milestone diagnostics for incomplete timeline")
 	}
 }
+
+// realisticAttemptReportJSON is a realistic ~328s attempt timeline as the
+// worker emits it in the durable raw report (the design's canonical case:
+// a ~680MB job where asset preparation dominates). The milestone elapsed_ms
+// values exactly tile the 328041ms attempt wall, so a decode of this report
+// must account for 100%% of the wall.
+const realisticAttemptReportJSON = `{"milestones":[
+{"name":"attempt.accepted","sequence":1,"elapsed_ms":0},
+{"name":"execution.started","sequence":2,"elapsed_ms":34},
+{"name":"assets.requested","sequence":3,"elapsed_ms":68},
+{"name":"assets.all_ready","sequence":4,"elapsed_ms":298314},
+{"name":"plan.started","sequence":5,"elapsed_ms":298406},
+{"name":"plan.completed","sequence":6,"elapsed_ms":299847},
+{"name":"render.started","sequence":7,"elapsed_ms":299939},
+{"name":"render.completed","sequence":8,"elapsed_ms":306761},
+{"name":"output.durable","sequence":9,"elapsed_ms":310755},
+{"name":"publish.started","sequence":10,"elapsed_ms":310766},
+{"name":"publish.completed","sequence":11,"elapsed_ms":327510},
+{"name":"result.sent","sequence":12,"elapsed_ms":328039},
+{"name":"attempt.completed","sequence":13,"elapsed_ms":328041}
+]}`
+
+// TestDecodeAttemptWaterfallAccountsForEveryAttemptWall locks the STEP C(+test)
+// invariant on the decode path: for every decoded attempt report the waterfall
+// must reconcile accounted_ms + unknown_ms ≈ attempt_wall_ms (≤100ms or ≤1%)
+// with coverage_pct > 98%% on a well-formed timeline — the same guarantee the
+// builder-level test pins, applied to the realistic worker wire shape.
+func TestDecodeAttemptWaterfallAccountsForEveryAttemptWall(t *testing.T) {
+	t.Run("realistic 328s report covers the whole wall", func(t *testing.T) {
+		got := decodeAttemptWaterfall(realisticAttemptReportJSON, "attempt-328s", 328041)
+		if got == nil {
+			t.Fatal("decode returned nil for a realistic full report")
+		}
+		assertAccountsWall(t, *got, 328041)
+		if got.CoveragePct != 100 || got.UnaccountedMS != 0 || len(got.MissingMilestones) != 0 {
+			t.Fatalf("realistic report coverage=%f unaccounted=%d missing=%v, want 100/0/none", got.CoveragePct, got.UnaccountedMS, got.MissingMilestones)
+		}
+		if len(got.Buckets) != 12 {
+			t.Fatalf("bucket count = %d, want 12", len(got.Buckets))
+		}
+		// asset_preparation must be the dominant bucket: this is the whole point
+		// of the drill-down — the ~300s mystery lives here.
+		for _, b := range got.Buckets {
+			if b.Name == "asset_preparation" && b.DurationMS != 298246 {
+				t.Fatalf("asset_preparation = %dms, want 298246ms", b.DurationMS)
+			}
+		}
+	})
+
+	t.Run("cross-machine tail gap stays over 98%% coverage", func(t *testing.T) {
+		// Same worker timeline, but the master-local wall is 59ms longer
+		// (result sent → attempt completed recorded by the master clock).
+		got := decodeAttemptWaterfall(realisticAttemptReportJSON, "attempt-328s-gap", 328100)
+		if got == nil {
+			t.Fatal("decode returned nil")
+		}
+		assertAccountsWall(t, *got, 328100)
+		if got.CoveragePct <= 98 {
+			t.Fatalf("coverage_pct = %f, want > 98 for a nearly-complete attempt", got.CoveragePct)
+		}
+		if got.UnaccountedMS != 59 {
+			t.Fatalf("unaccounted_ms = %d, want the 59ms master/worker boundary gap", got.UnaccountedMS)
+		}
+	})
+}
