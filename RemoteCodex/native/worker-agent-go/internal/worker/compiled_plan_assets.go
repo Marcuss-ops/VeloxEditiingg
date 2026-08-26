@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	"velox-shared/assetref"
 	"velox-shared/contract"
@@ -54,15 +55,46 @@ func (w *Worker) resolveCompiledRenderPlanAssets(ctx context.Context, payload ma
 			"size_bytes": asset.SizeBytes,
 		})
 	}
-	adapterPayload := map[string]interface{}{"assets": assetEnvelopes}
-	resolvedPayload, err := w.resolveCommonAssetPayload(ctx, adapterPayload)
-	if err != nil {
-		return nil, fmt.Errorf("compiled render plan v2: resolve assets: %w", err)
+	// The common resolver walks slices serially. Resolve each plan item through
+	// that same resolver concurrently so the downloader's bounded pool is
+	// actually used for V2 plans. The manager still coalesces duplicate keys;
+	// the result slice remains ordered and every item keeps the same validation
+	// and integrity-verification path as before.
+	resolvedAssets := make([]interface{}, len(assetEnvelopes))
+	var wg sync.WaitGroup
+	var errMu sync.Mutex
+	var firstErr error
+	for index, envelope := range assetEnvelopes {
+		index, envelope := index, envelope
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			resolvedPayload, resolveErr := w.resolveCommonAssetPayload(ctx, map[string]interface{}{
+				"assets": []interface{}{envelope},
+			})
+			if resolveErr != nil {
+				errMu.Lock()
+				if firstErr == nil {
+					firstErr = fmt.Errorf("asset %d: %w", index, resolveErr)
+				}
+				errMu.Unlock()
+				return
+			}
+			items, ok := resolvedPayload["assets"].([]interface{})
+			if !ok || len(items) != 1 {
+				errMu.Lock()
+				if firstErr == nil {
+					firstErr = fmt.Errorf("asset %d: resolver returned invalid result", index)
+				}
+				errMu.Unlock()
+				return
+			}
+			resolvedAssets[index] = items[0]
+		}()
 	}
-
-	resolvedAssets, ok := resolvedPayload["assets"].([]interface{})
-	if !ok || len(resolvedAssets) != len(plan.Assets) {
-		return nil, fmt.Errorf("compiled render plan v2: resolver returned %d assets, want %d", len(resolvedAssets), len(plan.Assets))
+	wg.Wait()
+	if firstErr != nil {
+		return nil, fmt.Errorf("compiled render plan v2: resolve assets: %w", firstErr)
 	}
 	bindings := make(runtimeassets.Bindings, len(plan.Assets))
 	for index, asset := range plan.Assets {

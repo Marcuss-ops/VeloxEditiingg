@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"velox-shared/assetref"
 	"velox-shared/contract"
@@ -87,6 +88,59 @@ func TestResolveCompiledRenderPlanAssets_UsesCommonResolverForEveryAsset(t *test
 	}
 	if strings.Contains(canonicalBefore, workerDir) || strings.Contains(canonicalBefore, "local_path") {
 		t.Fatal("canonical V2 plan contains a local path after resolution")
+	}
+}
+
+func TestResolveCompiledRenderPlanAssets_UsesBoundedConcurrency(t *testing.T) {
+	assets := map[string][]byte{
+		"v2-video": []byte("asset-video"),
+		"v2-audio": []byte("asset-audio"),
+	}
+	var mu sync.Mutex
+	active, maxActive := 0, 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assetID := strings.TrimPrefix(r.URL.Path, "/api/v1/agent/assets/")
+		mu.Lock()
+		active++
+		if active > maxActive {
+			maxActive = active
+		}
+		mu.Unlock()
+		defer func() {
+			mu.Lock()
+			active--
+			mu.Unlock()
+		}()
+		time.Sleep(100 * time.Millisecond)
+		body, ok := assets[assetID]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write(body)
+	}))
+	defer server.Close()
+
+	w := &Worker{
+		config:    &config.WorkerConfig{WorkerID: "worker-v2-concurrency", MasterURL: server.URL, WorkDir: t.TempDir()},
+		apiClient: api.NewClient(server.URL),
+	}
+	started := time.Now()
+	bindings, err := w.resolveCompiledRenderPlanAssets(context.Background(), compiledPlanAssetPayload(t, assets))
+	if err != nil {
+		t.Fatalf("resolve V2 assets: %v", err)
+	}
+	if len(bindings) != len(assets) {
+		t.Fatalf("bindings count = %d, want %d", len(bindings), len(assets))
+	}
+	mu.Lock()
+	gotMaxActive := maxActive
+	mu.Unlock()
+	if gotMaxActive < 2 {
+		t.Fatalf("maximum concurrent asset requests = %d, want at least 2", gotMaxActive)
+	}
+	if elapsed := time.Since(started); elapsed >= 180*time.Millisecond {
+		t.Fatalf("asset resolution took %s; expected bounded parallel resolution", elapsed)
 	}
 }
 
