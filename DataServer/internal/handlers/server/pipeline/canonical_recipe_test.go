@@ -45,6 +45,24 @@ func TestNormalizeCanonicalRecipe_SpecSceneBindings(t *testing.T) {
 	}
 }
 
+func TestNormalizeCanonicalRecipe_PropagatesCopyOnlyFromSpec(t *testing.T) {
+	req := SubmitJobRequest{
+		JobType: "clip.stock.v1",
+		Spec: map[string]interface{}{
+			"copy_only": true,
+			"scenes": []interface{}{
+				map[string]interface{}{"id": "scene-0", "text": "clip", "duration_seconds": 1},
+			},
+		},
+	}
+	if err := NormalizeCanonicalRecipe(&req); err != nil {
+		t.Fatalf("NormalizeCanonicalRecipe: %v", err)
+	}
+	if !req.CopyOnly {
+		t.Fatal("CopyOnly = false, want true from spec.copy_only")
+	}
+}
+
 func TestNormalizeCanonicalRecipe_RejectsUnknownJobType(t *testing.T) {
 	req := SubmitJobRequest{JobType: "boxing.v9"}
 	if err := NormalizeCanonicalRecipe(&req); err == nil {

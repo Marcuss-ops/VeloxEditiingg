@@ -50,6 +50,11 @@ func NormalizeCanonicalRecipe(req *SubmitJobRequest) error {
 	if len(req.Spec) == 0 {
 		return nil
 	}
+	if !req.CopyOnly {
+		if copyOnly, ok := req.Spec["copy_only"].(bool); ok {
+			req.CopyOnly = copyOnly
+		}
+	}
 
 	if req.VideoName == "" {
 		req.VideoName = firstRecipeString(req.Spec, "video_name", "title")
