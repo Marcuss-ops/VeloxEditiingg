@@ -4,6 +4,7 @@ set -euo pipefail
 ENGINE_SRC="${VELOX_VIDEO_ENGINE_SRC:-}"
 OUT_BIN="${VELOX_VIDEO_ENGINE_OUT:-/usr/local/bin/velox_video_engine}"
 BUILD_DIR="${VELOX_VIDEO_ENGINE_BUILD_DIR:-/tmp/velox-video-engine-build}"
+BUILD_JOBS="${VELOX_VIDEO_ENGINE_BUILD_JOBS:-2}"
 METADATA_DIR="${VELOX_VIDEO_ENGINE_METADATA_DIR:-/usr/local/share/velox}"
 ENGINE_SHA_FILE="${VELOX_VIDEO_ENGINE_SHA_FILE:-${METADATA_DIR}/video-engine.sha256}"
 
@@ -77,7 +78,7 @@ if [ -f "$ENGINE_SRC/CMakeLists.txt" ]; then
       -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
       -DVELOX_ENABLE_LIBAV="${VELOX_VIDEO_ENGINE_LIBAV}"
 
-  cmake --build "$BUILD_DIR" -j"$(nproc)"
+  cmake --build "$BUILD_DIR" --parallel "$BUILD_JOBS"
   ctest --test-dir "$BUILD_DIR" --output-on-failure
 
   if [ -f "$BUILD_DIR/velox_video_engine" ]; then
@@ -92,7 +93,7 @@ if [ -f "$ENGINE_SRC/CMakeLists.txt" ]; then
 
 elif [ -f "$ENGINE_SRC/Makefile" ] || [ -f "$ENGINE_SRC/makefile" ]; then
   echo "Detected Makefile project"
-  make -C "$ENGINE_SRC" CC="ccache cc" CXX="ccache c++" -j"$(nproc)"
+  make -C "$ENGINE_SRC" CC="ccache cc" CXX="ccache c++" -j"$BUILD_JOBS"
 
   if [ -f "$ENGINE_SRC/velox_video_engine" ]; then
     install -m 0755 "$ENGINE_SRC/velox_video_engine" "$OUT_BIN"
