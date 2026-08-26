@@ -10,10 +10,32 @@
 package worker
 
 import (
+	"context"
+	"strings"
 	"time"
 
 	"velox-worker-agent/pkg/video/pipeline"
 )
+
+type taskIDContextKey struct{}
+
+// ContextWithTaskID carries the active task identity through asset
+// resolution, allowing cache-miss progress to update the correct task.
+func ContextWithTaskID(ctx context.Context, taskID string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, taskIDContextKey{}, strings.TrimSpace(taskID))
+}
+
+// TaskIDFromContext returns the task identity attached by ContextWithTaskID.
+func TaskIDFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	taskID, _ := ctx.Value(taskIDContextKey{}).(string)
+	return strings.TrimSpace(taskID)
+}
 
 // Re-export canonical phase constants from the shared pipeline catalog.
 // Consumer code should prefer pipeline.PhaseXxx directly; these
