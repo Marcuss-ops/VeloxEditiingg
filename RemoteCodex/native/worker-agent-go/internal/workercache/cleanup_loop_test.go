@@ -58,6 +58,7 @@ func LoadCleanupPolicyDefaults_CleanupPolicyHelper() CleanupPolicy {
 	// the OS env which may be polluted by the test runner.
 	p.CleanupInterval = 5 * time.Minute
 	p.RecentUseGrace = 3 * time.Minute
+	p.IdleTTL = 10 * time.Hour
 	p.SnapshotMaxAge = 2 * time.Minute
 	return p
 }

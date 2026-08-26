@@ -82,8 +82,8 @@ type CleanupLoop struct {
 
 	// Policy is the operator-facing CleanupPolicy (Pass 12). Its
 	// SnapshotMaxAge is the staleness threshold for the protected-set
-	// snapshot; the grace/interval fields are unused by the pressure
-	// controller and retained for source compatibility.
+	// snapshot. IdleTTL is applied on every tick in addition to pressure
+	// eviction, so an idle worker eventually releases old unneeded assets.
 	// Required.
 	Policy CleanupPolicy
 
@@ -271,5 +271,13 @@ func (cl *CleanupLoop) TickOnce(ctx context.Context) (PressureEvictionStats, err
 		protectedSet[id] = struct{}{}
 	}
 
-	return EvictUnderPressure(ctx, cl.Cache, cl.Pressure, cl.UsagePercent, protectedSet)
+	pressureStats, pressureErr := EvictUnderPressure(ctx, cl.Cache, cl.Pressure, cl.UsagePercent, protectedSet)
+	if pressureErr != nil {
+		return pressureStats, pressureErr
+	}
+	_, idleErr := CleanupWithPolicy(ctx, cl.Cache, generatedAt, protected, cl.Policy, cl.resolveNow())
+	if idleErr != nil {
+		return pressureStats, fmt.Errorf("idle cache cleanup: %w", idleErr)
+	}
+	return pressureStats, nil
 }

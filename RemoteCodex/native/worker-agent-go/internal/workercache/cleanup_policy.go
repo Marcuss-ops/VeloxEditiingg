@@ -9,7 +9,7 @@
 //
 //  2. Recent-use grace: even when a row is un-leased, complete, and
 //     missing from the current protected set, Cleanup keeps it if
-//     last_used_at is within RecentUseGrace. This dampens the
+//     last_used_at is within the configured idle TTL. This dampens the
 //     race-window when a snapshot's protected set has shifted after
 //     a new job arrived (T0 snapshot, T+5s new job, T+10s cleaner
 //     scans). Without the grace, the old snapshot's protected set
@@ -19,7 +19,8 @@
 // can set to override defaults without a recompile:
 //
 //	VELOX_CACHE_CLEANUP_INTERVAL  (default 5m) — cleanup loop ticker
-//	VELOX_CACHE_RECENT_USE_GRACE  (default 3m) — grace period on last_used_at
+//	VELOX_CACHE_IDLE_TTL          (default 10h) — remove unneeded assets after idle time
+//	VELOX_CACHE_RECENT_USE_GRACE  (default 3m) — legacy direct-call predicate
 //	VELOX_CACHE_SNAPSHOT_MAX_AGE  (default 2m) — staleness skip threshold
 //
 // Master-side tunables (VELOX_CACHE_LOOKAHEAD_JOBS,
@@ -77,6 +78,12 @@ type CleanupPolicy struct {
 	// matrix exercises both modes).
 	RecentUseGrace time.Duration
 
+	// IdleTTL is the maximum age since last_used_at for an unleased,
+	// complete asset absent from the master's future-job snapshot.
+	// Leases, reservations, in-flight downloads and protected entries
+	// always override this timer.
+	IdleTTL time.Duration
+
 	// SnapshotMaxAge is the staleness threshold. A snapshot whose
 	// GeneratedAt is older than now-SnapshotMaxAge causes the entire
 	// cleanup pass to short-circuit with ErrSnapshotStale.
@@ -86,6 +93,7 @@ type CleanupPolicy struct {
 const (
 	defaultCleanupInterval = 5 * time.Minute
 	defaultRecentUseGrace  = 3 * time.Minute
+	defaultIdleTTL         = 10 * time.Hour
 	defaultSnapshotMaxAge  = 2 * time.Minute
 )
 
@@ -101,6 +109,7 @@ func LoadCleanupPolicy() CleanupPolicy {
 	p := CleanupPolicy{
 		CleanupInterval: defaultCleanupInterval,
 		RecentUseGrace:  defaultRecentUseGrace,
+		IdleTTL:         defaultIdleTTL,
 		SnapshotMaxAge:  defaultSnapshotMaxAge,
 	}
 	if v := strings.TrimSpace(os.Getenv("VELOX_CACHE_CLEANUP_INTERVAL")); v != "" {
@@ -111,6 +120,11 @@ func LoadCleanupPolicy() CleanupPolicy {
 	if v := strings.TrimSpace(os.Getenv("VELOX_CACHE_RECENT_USE_GRACE")); v != "" {
 		if d, err := time.ParseDuration(v); err == nil && d > 0 {
 			p.RecentUseGrace = d
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("VELOX_CACHE_IDLE_TTL")); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			p.IdleTTL = d
 		}
 	}
 	if v := strings.TrimSpace(os.Getenv("VELOX_CACHE_SNAPSHOT_MAX_AGE")); v != "" {
@@ -199,7 +213,11 @@ func CleanupWithPolicy(
 	stats.Inspected = len(entries)
 
 	for _, e := range entries {
-		decision := evaluateEviction(e, protected, policy.RecentUseGrace, now)
+		grace := policy.IdleTTL
+		if grace <= 0 {
+			grace = policy.RecentUseGrace
+		}
+		decision := evaluateEviction(e, protected, grace, now)
 		switch decision {
 		case evictionKeepLease:
 			stats.SkippedLeased++
