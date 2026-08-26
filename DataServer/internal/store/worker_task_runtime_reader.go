@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+
+	sharedtelemetry "velox-shared/telemetry"
 )
 
 // WorkerTaskRuntimeRow is the live, heartbeat-derived view of an active
@@ -31,9 +33,14 @@ type WorkerTaskRuntimeRow struct {
 	ElapsedMS              int64
 	CumulativeMetrics      map[string]any
 	CanonicalAttemptEvents []map[string]any
-	StartedAt              string
-	LastProgressAt         string
-	UpdatedAt              string
+	// AttemptMilestones is the worker's monotonic milestone timeline folded
+	// into the same canonical_events_json column by the heartbeat reconciler
+	// (see mergeCanonicalEventsAndMilestones). It is a live-only projection:
+	// the durable attempt report carries the same timeline after completion.
+	AttemptMilestones []sharedtelemetry.AttemptMilestoneSample
+	StartedAt         string
+	LastProgressAt    string
+	UpdatedAt         string
 }
 
 // GetWorkerTaskRuntimeByTask returns the current live Attempt projection
@@ -106,9 +113,12 @@ func scanWorkerTaskRuntimeRow(row *sql.Row) (*WorkerTaskRuntimeRow, error) {
 		runtime.LastProgressAt = lastProgressAt.String
 	}
 	if canonicalEventsJSON.Valid && canonicalEventsJSON.String != "" {
-		if err := json.Unmarshal([]byte(canonicalEventsJSON.String), &runtime.CanonicalAttemptEvents); err != nil {
-			return nil, fmt.Errorf("decode worker task runtime canonical events: %w", err)
+		events, milestones, decodeErr := decodeCanonicalEventsAndMilestones(canonicalEventsJSON.String)
+		if decodeErr != nil {
+			return nil, fmt.Errorf("decode worker task runtime canonical events: %w", decodeErr)
 		}
+		runtime.CanonicalAttemptEvents = events
+		runtime.AttemptMilestones = milestones
 	}
 	if metricsJSON.Valid && metricsJSON.String != "" {
 		if err := json.Unmarshal([]byte(metricsJSON.String), &runtime.CumulativeMetrics); err != nil {
@@ -116,4 +126,37 @@ func scanWorkerTaskRuntimeRow(row *sql.Row) (*WorkerTaskRuntimeRow, error) {
 		}
 	}
 	return &runtime, nil
+}
+
+// decodeCanonicalEventsAndMilestones splits the folded canonical_events_json
+// array back into canonical lifecycle events (elements carrying event_id) and
+// attempt milestone samples (all other elements, which carry name/sequence/
+// elapsed_ms). Rows written before milestone support contain only events, so
+// the milestone slice is empty for them. A malformed column is a hard read
+// error, matching the pre-milestone reader behavior.
+func decodeCanonicalEventsAndMilestones(raw string) ([]map[string]any, []sharedtelemetry.AttemptMilestoneSample, error) {
+	var elements []map[string]any
+	if err := json.Unmarshal([]byte(raw), &elements); err != nil {
+		return nil, nil, err
+	}
+	var events []map[string]any
+	var milestones []sharedtelemetry.AttemptMilestoneSample
+	for _, element := range elements {
+		if eventID, _ := element["event_id"].(string); eventID != "" {
+			events = append(events, element)
+			continue
+		}
+		encoded, err := json.Marshal(element)
+		if err != nil {
+			continue
+		}
+		var sample sharedtelemetry.AttemptMilestoneSample
+		if json.Unmarshal(encoded, &sample) == nil && sample.Name != "" {
+			milestones = append(milestones, sample)
+		}
+	}
+	if events == nil {
+		events = []map[string]any{}
+	}
+	return events, milestones, nil
 }

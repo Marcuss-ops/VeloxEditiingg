@@ -6,6 +6,7 @@ package observability
 import (
 	"time"
 
+	sharedtelemetry "velox-shared/telemetry"
 	"velox-server/internal/jobs"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
@@ -35,9 +36,13 @@ type LiveAttempt struct {
 	ElapsedMS              int64
 	CumulativeMetrics      map[string]any
 	CanonicalAttemptEvents []map[string]any
-	StartedAt              string
-	LastProgressAt         string
-	UpdatedAt              string
+	// AttemptMilestones is the worker's monotonic milestone timeline
+	// (elapsed_ms since attempt start), live-only while the runtime row
+	// exists. The durable attempt report is the authority after completion.
+	AttemptMilestones []sharedtelemetry.AttemptMilestoneSample
+	StartedAt         string
+	LastProgressAt    string
+	UpdatedAt         string
 }
 
 type JobEvent struct {
@@ -259,6 +264,7 @@ type AttemptSummary struct {
 	LastProgressAt         string                          `json:"last_progress_at,omitempty"`
 	CumulativeMetrics      map[string]any                  `json:"cumulative_metrics,omitempty"`
 	CanonicalAttemptEvents []map[string]any                `json:"canonical_attempt_events,omitempty"`
+	AttemptMilestones      []sharedtelemetry.AttemptMilestoneSample `json:"attempt_milestones,omitempty"`
 	Waterfall              []WaterfallStage                `json:"waterfall,omitempty"`
 	WaterfallValid         bool                            `json:"waterfall_valid,omitempty"`
 	AttemptWaterfall       *AttemptWaterfall               `json:"attempt_waterfall,omitempty"`

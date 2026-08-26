@@ -112,6 +112,7 @@ func applyLiveAttemptOverlay(target *AttemptSummary, live *LiveAttempt) {
 	target.LastProgressAt = live.LastProgressAt
 	target.CumulativeMetrics = live.CumulativeMetrics
 	target.CanonicalAttemptEvents = live.CanonicalAttemptEvents
+	target.AttemptMilestones = live.AttemptMilestones
 }
 
 func liveAttemptStatus(live *LiveAttempt) taskattempts.AttemptStatus {

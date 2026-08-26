@@ -214,7 +214,7 @@ func reconcileWorkerRuntime(ctx context.Context, tx *sql.Tx, workerID, sessionID
 			int64Value(task["frames_encoded"]), int64Value(task["frames_decoded"]),
 			int64Value(task["frames_composited"]), floatValue(task["ffmpeg_speed_x"]),
 			int64Value(task["elapsed_ms"]), jsonString(mergeOperationalPhaseIntoMetrics(task)),
-			jsonString(task["canonical_attempt_events"]),
+			jsonString(mergeCanonicalEventsAndMilestones(task)),
 			defaultString(task["started_at"], now), defaultString(task["last_progress_at"], now), now)
 		if err != nil {
 			return fmt.Errorf("upsert worker task runtime %s: %w", taskID, err)
@@ -330,6 +330,24 @@ func bulkEmitTaskRuntimeDisappearedOnPartition(ctx context.Context, tx *sql.Tx, 
 		}
 	}
 	return len(identities), nil
+}
+
+// mergeCanonicalEventsAndMilestones folds the worker's attempt_milestones
+// heartbeat field into the same canonical_events_json column that already
+// carries canonical_attempt_events, so the volatile live projection carries
+// the milestone timeline without a schema change (STEP A: no migration).
+// Milestone samples are distinguishable from canonical events by the
+// absence of an event_id key; the reader splits them back out.
+func mergeCanonicalEventsAndMilestones(task map[string]interface{}) interface{} {
+	milestones, _ := task["attempt_milestones"].([]interface{})
+	if len(milestones) == 0 {
+		return task["canonical_attempt_events"]
+	}
+	events, _ := task["canonical_attempt_events"].([]interface{})
+	merged := make([]interface{}, 0, len(events)+len(milestones))
+	merged = append(merged, events...)
+	merged = append(merged, milestones...)
+	return merged
 }
 
 // mergeOperationalPhaseIntoMetrics injects the worker's operational_phase

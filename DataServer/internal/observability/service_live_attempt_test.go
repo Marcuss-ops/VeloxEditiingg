@@ -5,6 +5,8 @@ import (
 	"math"
 	"testing"
 	"time"
+
+	sharedtelemetry "velox-shared/telemetry"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
 )
@@ -32,6 +34,39 @@ func TestApplyLiveAttemptOverlayPreservesDurableFields(t *testing.T) {
 		t.Fatalf("overlay did not apply volatile progress: %#v", target)
 	}
 }
+// TestService_SummarizeTaskLiveOverlayIncludesAttemptMilestones locks STEP A
+// end-to-end on the read side: the live worker_task_runtime overlay must
+// surface the worker's milestone timeline (attempt_milestones) inside the
+// AttemptSummary consumed by fleetctl job inspect while the job is RUNNING.
+func TestService_SummarizeTaskLiveOverlayIncludesAttemptMilestones(t *testing.T) {
+	svc, tasks, _, _, _ := newTestService()
+	tasks.tasks["T-milestones"] = &taskgraph.Task{ID: "T-milestones", JobID: "J-milestones", Status: taskgraph.StatusRunning, AttemptCount: 1}
+	svc.WithLiveAttempts(stubLiveAttemptReader{live: &LiveAttempt{
+		TaskID: "T-milestones", JobID: "J-milestones", AttemptID: "A-milestones", AttemptNumber: 1,
+		WorkerID: "worker-milestones", RuntimeStatus: "RUNNING", ProgressPercent: 40,
+		AttemptMilestones: []sharedtelemetry.AttemptMilestoneSample{
+			{Name: sharedtelemetry.MilestoneExecutionStarted, Sequence: 1, ElapsedMS: 0, OccurredAt: "2026-08-26T12:00:00Z"},
+			{Name: sharedtelemetry.MilestoneAssetsRequested, Sequence: 2, ElapsedMS: 211, OccurredAt: "2026-08-26T12:00:00Z"},
+			{Name: sharedtelemetry.MilestoneAllAssetsReady, Sequence: 3, ElapsedMS: 298421, OccurredAt: "2026-08-26T12:04:58Z"},
+		},
+	}})
+
+	result, err := svc.SummarizeTask(context.Background(), "T-milestones")
+	if err != nil {
+		t.Fatalf("SummarizeTask() error: %v", err)
+	}
+	if len(result.Attempts) != 1 || !result.Attempts[0].Live {
+		t.Fatalf("live attempts = %#v", result.Attempts)
+	}
+	live := result.Attempts[0]
+	if len(live.AttemptMilestones) != 3 {
+		t.Fatalf("attempt_milestones = %+v, want 3 samples", live.AttemptMilestones)
+	}
+	if live.AttemptMilestones[2].Name != sharedtelemetry.MilestoneAllAssetsReady || live.AttemptMilestones[2].ElapsedMS != 298421 {
+		t.Fatalf("milestone[2] = %+v, want assets.all_ready @ 298421ms", live.AttemptMilestones[2])
+	}
+}
+
 func TestService_SummarizeTaskIncludesLiveAttemptProgress(t *testing.T) {
 	svc, tasks, _, _, _ := newTestService()
 	tasks.tasks["T-live"] = &taskgraph.Task{ID: "T-live", JobID: "J-live", Status: taskgraph.StatusRunning, AttemptCount: 1}

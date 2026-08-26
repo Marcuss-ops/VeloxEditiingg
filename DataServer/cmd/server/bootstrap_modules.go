@@ -114,7 +114,8 @@ func liveAttemptFromRuntimeRow(row *store.WorkerTaskRuntimeRow, err error) (*obs
 		FramesDecoded: row.FramesDecoded, FramesComposited: row.FramesComposited,
 		FFmpegSpeedX: row.FFmpegSpeedX, ElapsedMS: row.ElapsedMS,
 		CumulativeMetrics: row.CumulativeMetrics, CanonicalAttemptEvents: row.CanonicalAttemptEvents,
-		StartedAt: row.StartedAt, LastProgressAt: row.LastProgressAt, UpdatedAt: row.UpdatedAt,
+		AttemptMilestones: row.AttemptMilestones,
+		StartedAt:         row.StartedAt, LastProgressAt: row.LastProgressAt, UpdatedAt: row.UpdatedAt,
 	}, nil
 }
 
