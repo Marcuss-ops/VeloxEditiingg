@@ -74,6 +74,11 @@ type assetOperationTracker struct {
 	cacheEnabled bool
 	cache        AttemptCacheMetrics
 	prep         AssetPreparationSummary
+	// uniqueAssets is the sink-fed unique-asset identity set. It is populated
+	// by recordResolution (the canonical single emission point) so the
+	// preparation summary never depends on the per-asset record list, which is
+	// a separate detail producer and can be empty in resolver-only paths.
+	uniqueAssets map[string]struct{}
 }
 
 // recordResolution accumulates one canonical cache resolution into the
@@ -96,6 +101,12 @@ func (t *assetOperationTracker) recordResolution(resolution downloader.CacheReso
 		t.cache.CacheDownloadBytes += resolution.DownloadBytes
 	}
 	t.prep.AssetsTotal++
+	if assetID := strings.TrimSpace(resolution.AssetID); assetID != "" {
+		if t.uniqueAssets == nil {
+			t.uniqueAssets = make(map[string]struct{})
+		}
+		t.uniqueAssets[assetID] = struct{}{}
+	}
 	if resolution.CacheHit {
 		t.prep.ReadyBefore++
 	} else if resolution.Downloaded {
@@ -165,20 +176,10 @@ func (t *assetOperationTracker) prepSnapshot() AssetPreparationSummary {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	out := t.prep
-	out.AssetsUnique = len(t.uniqueAssetsLocked())
+	out.AssetsUnique = len(t.uniqueAssets)
 	out.CacheHits = int(t.cache.CacheHits)
 	out.CacheMisses = int(t.cache.CacheMisses)
 	return out
-}
-
-func (t *assetOperationTracker) uniqueAssetsLocked() map[string]struct{} {
-	unique := make(map[string]struct{}, len(t.records))
-	for _, record := range t.records {
-		if assetID := strings.TrimSpace(record.AssetID); assetID != "" {
-			unique[assetID] = struct{}{}
-		}
-	}
-	return unique
 }
 
 func (t *assetOperationTracker) snapshot() []AssetOperationRecord {
