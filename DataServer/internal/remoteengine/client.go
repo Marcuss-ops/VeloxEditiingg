@@ -13,6 +13,7 @@
 package remoteengine
 
 import (
+	"net"
 	"net/http"
 	"time"
 
@@ -25,10 +26,23 @@ func NewClient(cfg Config) *Client {
 	if timeout <= 0 {
 		timeout = 60 * time.Second
 	}
+	transport := &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		MaxIdleConns:          32,
+		MaxIdleConnsPerHost:   8,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		DialContext: (&net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+	}
 	return &Client{
 		config: cfg,
 		httpClient: &http.Client{
-			Timeout: timeout,
+			Timeout:   timeout,
+			Transport: transport,
 		},
 		logger: logging.NewLogger("remoteengine"),
 	}

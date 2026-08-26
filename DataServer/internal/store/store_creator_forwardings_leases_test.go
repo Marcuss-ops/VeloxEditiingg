@@ -84,7 +84,7 @@ func TestClaimForwardings_ZombieReclaim(t *testing.T) {
 	}
 
 	// Wait for lease to expire
-	time.Sleep(1100 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 
 	// New runner should reclaim the zombie
 	leases2, err := db.Forwarding().ClaimCreatorForwardings(ctx, "runner-new", "cf", 5*time.Minute, 1)

@@ -73,10 +73,12 @@ ARG CA_CERTIFICATES_VERSION=20230311+deb12u1
 ARG FFMPEG_VERSION=7:5.1.9-0+deb12u1
 ARG PROCPS_VERSION=2:4.0.2-3
 ARG LIBC_BIN_VERSION=2.36-9+deb12u14
+ARG CCACHE_VERSION=4.8.3-1
 RUN apt-get update -qq && apt-get install -y --no-install-recommends \
         build-essential=${BUILD_ESSENTIAL_VERSION} \
         cmake=${CMAKE_VERSION} \
         g++=${GXX_VERSION} \
+        ccache=${CCACHE_VERSION} \
         pkg-config=${PKG_CONFIG_VERSION} \
         ca-certificates=${CA_CERTIFICATES_VERSION} \
         ffmpeg=${FFMPEG_VERSION} \
@@ -95,7 +97,10 @@ COPY RemoteCodex/native/video-engine-cpp /app/native/video-engine-cpp
 # Compile and test the engine into /usr/local/bin/velox_video_engine.
 # The builder also writes the canonical binary hash consumed by the runtime
 # verification gate; no host-built or docker-copied binary is accepted.
-RUN /usr/local/bin/build-video-engine.sh && \
+RUN --mount=type=cache,target=/root/.ccache \
+    --mount=type=cache,target=/tmp/velox-video-engine-build,sharing=locked \
+    ccache -z 2>/dev/null || true; \
+    /usr/local/bin/build-video-engine.sh && \
     test -x /usr/local/bin/velox_video_engine && \
     test -s /usr/local/share/velox/video-engine.sha256
 

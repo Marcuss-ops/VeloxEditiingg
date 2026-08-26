@@ -202,7 +202,7 @@ func TestExpiredForwardingLeases(t *testing.T) {
 	}
 
 	// Wait for lease to expire
-	time.Sleep(1100 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 
 	expired, err := db.Forwarding().ExpiredCreatorForwardingLeases(ctx, time.Now().UTC().Format(time.RFC3339), 10)
 	if err != nil {

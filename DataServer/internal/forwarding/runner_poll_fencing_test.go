@@ -68,7 +68,7 @@ func TestProcessLease_StalePollStopsWithoutRetryOrTransition(t *testing.T) {
 		t.Fatal("remote poll did not start")
 	}
 
-	time.Sleep(1200 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 	newLease, err := db.Forwarding().ClaimCreatorForwardings(context.Background(), "runner-new", "cf", 5*time.Minute, 1)
 	if err != nil || len(newLease) != 1 {
 		t.Fatalf("takeover claim: err=%v len=%d", err, len(newLease))

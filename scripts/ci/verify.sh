@@ -128,29 +128,39 @@ log "test-canary-worker-rollout (single-worker canary contract self-test)"
 # build fail loudly if anything was reformatted but not committed \u2014 the
 # canonical signal that someone bypassed `make verify` before pushing.
 if [[ "$SKIP_LIGHT" -ne 1 ]]; then
-  # shared is now part of the loop, so its gofmt failures are surfaced
-  # exactly like DataServer's or worker-agent-go's. The redundant
-  # post-loop `go-build+vet: shared` block was removed in the round-2
-  # cleanup; `go test` against ./... compiles every package even when
-  # no internal *_test.go exists, so the same loop covers shared.
   for mod in DataServer RemoteCodex/native/worker-agent-go shared; do
     log "go-fmt: ${mod}"
     (
       set -euo pipefail
       cd "$REPO_ROOT/$mod"
       gofmt -w .
-      # `git diff --exit-code` errors out if any tracked file differs from HEAD
-      # post-format. CI: this should never trigger (committed = formatted).
-      # Local dev: format was auto-applied; run `git commit -am gofmt` and retry.
       cd "$REPO_ROOT"
       git diff --exit-code -- "$mod"
+    )
+  done
+  log "go-vet + go-test -race (parallel across 3 modules)"
+  pids=()
+  failures=()
+  for mod in DataServer RemoteCodex/native/worker-agent-go shared; do
+    (
+      set -euo pipefail
       cd "$REPO_ROOT/$mod"
       log "go-vet: ${mod}"
       go vet ./...
       log "go-test -race: ${mod}"
-      go test -race -count=1 -timeout 180s ./...
-    )
+      go test -race -count=1 -timeout 300s ./...
+    ) &
+    pids+=($!)
   done
+  rc=0
+  for pid in "${pids[@]}"; do
+    if ! wait "$pid"; then
+      rc=1
+    fi
+  done
+  if [[ $rc -ne 0 ]]; then
+    fail "go vet/test failed in at least one module"
+  fi
 fi
 
 # ── 3. Pre-existing mutation guard (DataServer-specific legacy removal) ────
@@ -172,28 +182,13 @@ if [[ "$SKIP_HEAVY" -ne 1 ]]; then
   ctest --test-dir /tmp/velox-engine --output-on-failure
 
   if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-    log "docker build: velox-server"
-    # context = repo root because DataServer/go.mod's
-    #     replace velox-shared => ../shared
-    # resolves to ./shared at the repo root.
-    docker build -f "$REPO_ROOT/DataServer/Dockerfile" -t velox-server:verify .
-
-    log "docker build: velox-worker (PR-3 self-sufficient, no pre-build required)"
-    # PR-3: the worker Dockerfile now compiles both the C++ engine AND
-    # the Go worker binary inline (via the cpp-builder + go-builder stages)
-    # so `make verify` SIMPLY runs `docker build` against the repo root.
-    # No pre-step `make agent` is required; the bin/velox-worker-agent
-    # that `make agent` would write into the build context is now ignored
-    # by the Dockerfile (the go-builder stage COPY --from=copies the
-    # freshly-built binary, not the build-context artifact).
-    #
-    # NO build-args are passed: the Dockerfile's go-builder stage delegates
-    # to the project's Makefile (single source of truth for the LDFLAGS
-    # pattern + VERSION.txt enforcement + Reproducible Builds chain).
-    docker build \
-      -f "$REPO_ROOT/RemoteCodex/native/worker-agent-go/Dockerfile" \
-      -t velox-worker:verify \
-      "$REPO_ROOT"
+    log "docker build: velox-server + velox-worker (parallel)"
+    docker build -f "$REPO_ROOT/DataServer/Dockerfile" -t velox-server:verify . &
+    pid_server=$!
+    docker build -f "$REPO_ROOT/RemoteCodex/native/worker-agent-go/Dockerfile" -t velox-worker:verify "$REPO_ROOT" &
+    pid_worker=$!
+    wait $pid_server || fail "docker build velox-server failed"
+    wait $pid_worker || fail "docker build velox-worker failed"
     log "verify canonical worker image: engine ABI + SHA-256 + image ID"
     "$REPO_ROOT/RemoteCodex/scripts/verify-worker-image.sh" velox-worker:verify
   else

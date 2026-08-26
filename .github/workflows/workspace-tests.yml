@@ -62,75 +62,36 @@ permissions:
 
 jobs:
   gate:
-    name: Workspace Tests
+    name: Workspace Tests (${{ matrix.module }})
     runs-on: ubuntu-latest
-    # Sequential per-module test run. Worst-case wall clock observed
-    # locally: ~6 minutes DataServer + ~30 s worker-agent + ~10 s
-    # shared; ceiling padded to 15 minutes. If a future module grows
-    # past 5 minutes independently, consider splitting into a matrix
-    # strategy with parallel jobs.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - module: DataServer
+            dir: DataServer
+          - module: worker-agent-go
+            dir: RemoteCodex/native/worker-agent-go
+          - module: shared
+            dir: shared
     timeout-minutes: 15
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          # fetch-depth: 1 is sufficient — this gate does not use
-          # BASE_REF or any deep-history diff-aware logic. Mirrors
-          # routing-invariants.yml's shallow checkout policy.
           fetch-depth: 1
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          # go-version-file tracks DataServer/go.mod (single-source-
-          # of-truth) — mirrors routing-invariants.yml. The shared
-          # module's go.mod and worker-agent-go's go.mod should
-          # declare compatible Go toolchain versions; if any future
-          # module's go.mod pins a different major Go version,
-          # lift this into a per-module setup step in a matrix.
           go-version-file: DataServer/go.mod
+          cache: true
+          cache-dependency-path: |
+            DataServer/go.sum
+            RemoteCodex/native/worker-agent-go/go.sum
+            shared/go.sum
 
-      - name: Cache Go build module cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          # Cache key spans every module's go.sum so a cache hit
-          # warms the entire workspace in a single cache write.
-          # Mirrors canonical ci.yml's key shape.
-          key: ${{ runner.os }}-go-${{ hashFiles('DataServer/go.sum', 'RemoteCodex/native/worker-agent-go/go.sum', 'shared/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
-
-      - name: Run DataServer tests
-        working-directory: DataServer
-        # -count=1 disables Go test result caching so the gate ALWAYS
-        #      physically runs every test, never serves stale PASS from
-        #      a cached result.
-        # ./...                every package in the DataServer module.
-        # No -short: this gate deliberately exercises the FULL test
-        #           surface (race-aware + integration style). The
-        #           cheaper `-short` mode is reserved for the
-        #           routing-invariants.yml gate (which is precisely
-        #           focused on its 3 typed-routing packages).
-        run: go test -count=1 ./...
-
-      - name: Run worker-agent-go tests
-        # worker-agent-go is a sibling module under RemoteCodex. The
-        # worker side shares velox-shared/taskcontract with DataServer
-        # via the workspace replacement; the per-module go.mod pins
-        # the worker-toolchain compat assertions this gate should catch.
-        working-directory: RemoteCodex/native/worker-agent-go
-        run: go test -count=1 ./...
-
-      - name: Run shared tests
-        # shared/ is the cross-module type contract. A failure here is
-        # the most-disruptive class of breakage because both
-        # DataServer and worker-agent-go compile against
-        # velox-shared/* — so it surfaces as compile errors in BOTH
-        # consumer modules in the canonical CI; running the gate
-        # explicitly here makes the failure locator obvious.
-        working-directory: shared
+      - name: Run ${{ matrix.module }} tests
+        working-directory: ${{ matrix.dir }}
         run: go test -count=1 ./...

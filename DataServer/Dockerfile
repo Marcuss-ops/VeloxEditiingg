@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 # ============================================================================
 # Velox Master (DataServer) — Multi-stage runtime build
 # ============================================================================
@@ -33,8 +34,6 @@
 #     VERSION:   <tag>     (or "dev" on dispatch dry-runs)
 #     BUILD_TIME: <now-U>
 # ============================================================================
-
-# syntax=docker/dockerfile:1.7
 
 # ─── Stage 1: builder ──────────────────────────────────────────────────────
 FROM golang:1.25.8-bookworm@sha256:4557cf171e3cdf5053a298d5171b1a5f5734d920260c25f22c79e94760eb2084 AS builder
