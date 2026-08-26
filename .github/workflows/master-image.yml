@@ -270,8 +270,9 @@ jobs:
             BUILD_COMMIT=${{ github.sha }}
           provenance: true
           sbom: true
-          cache-from: type=gha,scope=${{ github.workflow }}-${{ github.ref_name }}
-          cache-to:   type=gha,mode=max,scope=${{ github.workflow }}-${{ github.ref_name }}
+          # Share the warm BuildKit cache across main, tags, and dispatches.
+          cache-from: type=gha,scope=velox-master-build
+          cache-to:   type=gha,mode=max,scope=velox-master-build
 
       - name: Extract image digest
         id: digest

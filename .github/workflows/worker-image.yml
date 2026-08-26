@@ -131,7 +131,8 @@ jobs:
           tag: ${{ steps.version.outputs.tag }}
           push: ${{ steps.version.outputs.push }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          cache-scope: ${{ github.workflow }}-${{ github.ref_name }}
+          # Share the warm BuildKit cache across main, tags, and dispatches.
+          cache-scope: velox-worker-build
 
       # Signing remains digest-only and is disabled for no-push validation
       # runs. The action contains the repository/workflow-bound OIDC identity

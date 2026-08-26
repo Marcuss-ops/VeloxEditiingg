@@ -47,11 +47,11 @@ rm -rf \
     "$ENGINE_SRC/CMakeCache.txt" \
     "$ENGINE_SRC/cmake_install.cmake"
 
-# Ensure a clean out-of-source build directory. When BuildKit mounts the
-# directory as a cache, the mount itself cannot be removed; clear its
-# contents while preserving the mount point.
+# Keep the out-of-source build directory intact when it is backed by a
+# BuildKit cache mount. CMake's dependency tracking plus ccache can then
+# reuse unchanged objects between image builds; deleting this directory here
+# turned the cache mount into an expensive no-op.
 mkdir -p "$BUILD_DIR"
-find "$BUILD_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
 
 if [ -f "$ENGINE_SRC/CMakeLists.txt" ]; then
   echo "Detected CMake project"
@@ -74,6 +74,7 @@ if [ -f "$ENGINE_SRC/CMakeLists.txt" ]; then
       -S "$ENGINE_SRC" \
       -B "$BUILD_DIR" \
       -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
       -DVELOX_ENABLE_LIBAV="${VELOX_VIDEO_ENGINE_LIBAV}"
 
   cmake --build "$BUILD_DIR" -j"$(nproc)"
@@ -91,8 +92,7 @@ if [ -f "$ENGINE_SRC/CMakeLists.txt" ]; then
 
 elif [ -f "$ENGINE_SRC/Makefile" ] || [ -f "$ENGINE_SRC/makefile" ]; then
   echo "Detected Makefile project"
-  make -C "$ENGINE_SRC" clean || true
-  make -C "$ENGINE_SRC" -j"$(nproc)"
+  make -C "$ENGINE_SRC" CC="ccache cc" CXX="ccache c++" -j"$(nproc)"
 
   if [ -f "$ENGINE_SRC/velox_video_engine" ]; then
     install -m 0755 "$ENGINE_SRC/velox_video_engine" "$OUT_BIN"
