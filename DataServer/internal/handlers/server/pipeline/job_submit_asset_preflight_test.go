@@ -60,6 +60,7 @@ type preflightTestBlobStore struct {
 }
 
 func (b preflightTestBlobStore) StagingPath(string, string, string) (string, error) { return "", nil }
+func (b preflightTestBlobStore) OpenStagedWrite(string) (*os.File, error)           { return nil, nil }
 func (b preflightTestBlobStore) PromoteToFinal(string, string) (string, error)      { return "", nil }
 func (b preflightTestBlobStore) RemoveStaging(string) error                         { return nil }
 func (b preflightTestBlobStore) FinalPath(_, _, _ string) string                    { return "" }
