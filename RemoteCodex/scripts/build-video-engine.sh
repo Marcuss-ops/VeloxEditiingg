@@ -47,9 +47,11 @@ rm -rf \
     "$ENGINE_SRC/CMakeCache.txt" \
     "$ENGINE_SRC/cmake_install.cmake"
 
-# Ensure clean out-of-source build directory
-rm -rf "$BUILD_DIR"
+# Ensure a clean out-of-source build directory. When BuildKit mounts the
+# directory as a cache, the mount itself cannot be removed; clear its
+# contents while preserving the mount point.
 mkdir -p "$BUILD_DIR"
+find "$BUILD_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
 
 if [ -f "$ENGINE_SRC/CMakeLists.txt" ]; then
   echo "Detected CMake project"
