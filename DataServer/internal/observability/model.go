@@ -261,6 +261,7 @@ type AttemptSummary struct {
 	CanonicalAttemptEvents []map[string]any                `json:"canonical_attempt_events,omitempty"`
 	Waterfall              []WaterfallStage                `json:"waterfall,omitempty"`
 	WaterfallValid         bool                            `json:"waterfall_valid,omitempty"`
+	AttemptWaterfall       *AttemptWaterfall               `json:"attempt_waterfall,omitempty"`
 }
 
 type WaterfallStage struct {

@@ -230,6 +230,10 @@ message TaskResult {
   // segments are a partition of the worker-side attempt interval and are
   // intended for gap attribution rather than aggregate diagnostics.
   repeated AttemptWaterfallStage waterfall = 22;
+  // Monotonic milestone timeline (elapsed_ms from attempt start). Each
+  // millisecond belongs to at most one waterfall bucket; this timeline is
+  // the source for the bucket builder and the unaccounted gap calculation.
+  repeated AttemptMilestone milestones = 23;
 }
 
 message AttemptWaterfallStage {
@@ -238,6 +242,13 @@ message AttemptWaterfallStage {
   google.protobuf.Timestamp completed_at = 3;
   int64 duration_ms = 4;
   string status = 5;
+}
+
+message AttemptMilestone {
+  string name = 1;
+  uint64 sequence = 2;
+  int64 elapsed_ms = 3;
+  string occurred_at = 4;
 }
 
 message TaskLeaseRenewal {

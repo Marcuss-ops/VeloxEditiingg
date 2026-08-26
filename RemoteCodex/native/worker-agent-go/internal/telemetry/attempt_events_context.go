@@ -18,3 +18,20 @@ func AttemptEventMachineFromContext(ctx context.Context) *AttemptEventMachine {
 	machine, _ := ctx.Value(attemptEventMachineContextKey{}).(*AttemptEventMachine)
 	return machine
 }
+
+type milestoneRecorderContextKey struct{}
+
+func WithMilestoneRecorder(ctx context.Context, recorder *AttemptMilestoneRecorder) context.Context {
+	if ctx == nil || recorder == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, milestoneRecorderContextKey{}, recorder)
+}
+
+func MilestoneRecorderFromContext(ctx context.Context) *AttemptMilestoneRecorder {
+	if ctx == nil {
+		return nil
+	}
+	recorder, _ := ctx.Value(milestoneRecorderContextKey{}).(*AttemptMilestoneRecorder)
+	return recorder
+}

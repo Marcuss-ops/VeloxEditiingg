@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"time"
 
+	sharedtelemetry "velox-shared/telemetry"
 	"velox-worker-agent/internal/taskrunner"
 	"velox-worker-agent/internal/telemetry"
 )
@@ -96,20 +97,29 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 	w.recordTaskStart(pte)
 
 	startTime := time.Now()
+	milestones := telemetry.NewAttemptMilestoneRecorderAt(startTime)
+	milestones.Mark(sharedtelemetry.MilestoneAttemptAccepted)
+	milestones.Mark(sharedtelemetry.MilestoneExecutionStarted)
+	activeTask.Milestones = milestones
 	waterfall := taskrunner.NewWaterfallRecorder(startTime)
 	waterfall.Transition("wait_before_assets", startTime)
 	attemptTelemetry := telemetry.NewAttemptTelemetrySession(w.sampler)
-	// Start/Stop is the single telemetry entry point: the session drives
-	// the collector+sink pipeline (collectors gather the RAW facts at
-	// Stop, sinks project them). Producers never call the pipeline.
 	attemptTelemetry.BindPipeline(w.newAttemptPipeline(pte, attemptID, attemptTelemetry))
 	attemptTelemetry.Start(jobCtx)
 	jobCtx = telemetry.WithAttemptTelemetry(jobCtx, attemptTelemetry)
+	jobCtx = telemetry.WithMilestoneRecorder(jobCtx, milestones)
 	jobCtx = taskrunner.WithWaterfallRecorder(jobCtx, waterfall)
 
 	w.logger.Info("[TASK] Executing task %s (job=%s attempt=%s)", taskID, pte.JobID, attemptID)
 
 	report, execErr := w.runJobTask(jobCtx, pte)
+	if m := telemetry.MilestoneRecorderFromContext(jobCtx); m != nil {
+		if execErr == nil {
+			m.Mark(sharedtelemetry.MilestoneAllAssetsReady)
+		}
+		m.Mark(sharedtelemetry.MilestoneRenderCompleted)
+		m.Mark(sharedtelemetry.MilestoneFinalizeStarted)
+	}
 	waterfall.Transition("finalize", time.Now().UTC())
 	recordExecutionDownloadMetrics(report)
 	if execErr == nil {
@@ -142,11 +152,19 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 			w.concurrencyLimiter.Release()
 			acquired = false
 		}
-		// Operational lifecycle: publishing output artifacts.
+		if m := telemetry.MilestoneRecorderFromContext(jobCtx); m != nil {
+			m.Mark(sharedtelemetry.MilestoneFinalizeCompleted)
+			m.Mark(sharedtelemetry.MilestoneOutputDurable)
+			m.Mark(sharedtelemetry.MilestonePublishQueued)
+			m.Mark(sharedtelemetry.MilestonePublishStarted)
+		}
 		w.UpdateOperationalPhase(taskID, PhasePublishing)
 		waterfall.Transition("upload", time.Now().UTC())
 		if uploadErr := w.uploadTaskOutputs(jobCtx, pte, report); uploadErr != nil {
 			execErr = fmt.Errorf("upload task outputs: %w", uploadErr)
+		}
+		if m := telemetry.MilestoneRecorderFromContext(jobCtx); m != nil {
+			m.Mark(sharedtelemetry.MilestonePublishCompleted)
 		}
 	}
 
@@ -156,6 +174,9 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 			status = telemetry.StatusFailed
 		}
 		report.AttemptEvents.AttemptCompleted(status)
+	}
+	if m := telemetry.MilestoneRecorderFromContext(jobCtx); m != nil {
+		m.Mark(sharedtelemetry.MilestoneResultSending)
 	}
 	waterfall.Transition("commit_wait", time.Now().UTC())
 
@@ -200,6 +221,14 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 	waterfall.Finish(time.Now().UTC(), waterfallStatus(execErr))
 	if report != nil {
 		report.Waterfall = waterfall.Snapshot()
+		if m := telemetry.MilestoneRecorderFromContext(jobCtx); m != nil {
+			m.Mark(sharedtelemetry.MilestoneResultSent)
+			m.Mark(sharedtelemetry.MilestoneAttemptCompleted)
+			report.Milestones = m.Snapshot()
+		}
+	} else if m := telemetry.MilestoneRecorderFromContext(jobCtx); m != nil {
+		m.Mark(sharedtelemetry.MilestoneResultSent)
+		m.Mark(sharedtelemetry.MilestoneAttemptCompleted)
 	}
 	w.reporter.Submit(submitCtx, pte, taskID, attemptID, report, execErr)
 

@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"time"
 
+	sharedtelemetry "velox-shared/telemetry"
 	"velox-shared/contract"
 	"velox-worker-agent/internal/artifactgraph"
 	"velox-worker-agent/internal/runtimeassets"
@@ -84,6 +85,13 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 		session.BindRecorder(rec)
 	}
 	attemptEvents := telemetry.NewAttemptEventMachine(rec, pte.AttemptID)
+	milestones := telemetry.MilestoneRecorderFromContext(ctx)
+	if milestones == nil {
+		milestones = telemetry.NewAttemptMilestoneRecorder()
+		milestones.Mark(sharedtelemetry.MilestoneAssetsRequested)
+	} else {
+		milestones.Mark(sharedtelemetry.MilestoneAssetsRequested)
+	}
 	// Fase E2: one AttemptArtifactGraph per attempt, bound to the active
 	// task and threaded through the dispatch context so executors can
 	// attribute intermediate files via artifactgraph.GraphFromContext. The
@@ -94,6 +102,9 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 	w.activeTasksMu.Lock()
 	if active := w.activeTasks[pte.TaskID]; active != nil {
 		active.AttemptEvents = attemptEvents
+		if active.Milestones == nil {
+			active.Milestones = milestones
+		}
 		active.ArtifactGraph = artifactGraph
 	}
 	w.activeTasksMu.Unlock()
@@ -102,6 +113,7 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 	}
 	ctx = telemetry.WithRecorder(ctx, rec)
 	ctx = telemetry.WithAttemptEventMachine(ctx, attemptEvents)
+	ctx = telemetry.WithMilestoneRecorder(ctx, milestones)
 	ctx = artifactgraph.WithGraph(ctx, artifactGraph)
 	ctx = withAssetOperationTracker(ctx, assetTracker)
 	ctx = withCacheAccessContext(ctx, pte.JobID, "asset")
@@ -131,15 +143,19 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 
 	// Operational lifecycle: prefetching assets.
 	w.UpdateOperationalPhase(pte.TaskID, PhasePrefetching)
+	if m := telemetry.MilestoneRecorderFromContext(ctx); m != nil {
+		m.Mark(sharedtelemetry.MilestoneFirstAssetStarted)
+	}
 	if spec.Payload != nil {
-		// Thread the task ID through context so the asset resolver can
-		// update the operational phase on cache-miss download boundaries.
 		assetCtx := ContextWithTaskID(ctx, pte.TaskID)
 		resolvedPayload, err := w.resolveTaskAssets(assetCtx, spec.Payload)
 		if err != nil {
 			return failBeforeRun("asset_resolution_failed", err)
 		}
 		spec.Payload = resolvedPayload
+	}
+	if m := telemetry.MilestoneRecorderFromContext(ctx); m != nil {
+		m.Mark(sharedtelemetry.MilestoneAllAssetsReady)
 	}
 	// Operational lifecycle: assets resolved, verify V2 plan.
 	w.UpdateOperationalPhase(pte.TaskID, PhaseVerifyingAssets)
@@ -255,12 +271,21 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 		}
 	}
 
+	if m := telemetry.MilestoneRecorderFromContext(ctx); m != nil {
+		m.Mark(sharedtelemetry.MilestonePlanStarted)
+		m.Mark(sharedtelemetry.MilestonePlanCompleted)
+		m.Mark(sharedtelemetry.MilestoneRenderStarted)
+	}
 	// Operational lifecycle: rendering.
 	w.UpdateOperationalPhase(pte.TaskID, PhaseRendering)
 	if waterfall != nil {
 		waterfall.Transition("render", time.Now().UTC())
 	}
 	report, runErr := w.taskRunner.Run(ctx, spec)
+	if m := telemetry.MilestoneRecorderFromContext(ctx); m != nil {
+		m.Mark(sharedtelemetry.MilestoneRenderCompleted)
+		m.Mark(sharedtelemetry.MilestoneFinalizeStarted)
+	}
 	if report.AttemptEvents == nil {
 		report.AttemptEvents = attemptEvents
 	}

@@ -83,6 +83,11 @@ func buildTaskResult(r *taskResultReporter, pte *PendingTaskExecution, taskID, a
 			Status: stage.Status,
 		})
 	}
+	for _, ms := range report.Milestones {
+		result.Milestones = append(result.Milestones, &pb.AttemptMilestone{
+			Name: string(ms.Name), Sequence: ms.Sequence, ElapsedMs: ms.ElapsedMS, OccurredAt: ms.OccurredAt,
+		})
+	}
 	for _, segment := range report.Segments {
 		result.SegmentTimings = append(result.SegmentTimings, &pb.SegmentTiming{
 			SegmentIndex: int32(segment.SegmentIndex), SceneWorkerIndex: int32(segment.SceneWorkerIndex),

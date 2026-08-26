@@ -109,6 +109,9 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 		if at.AttemptEvents != nil {
 			jobInfo["canonical_attempt_events"] = at.AttemptEvents.Snapshot()
 		}
+		if at.Milestones != nil {
+			jobInfo["attempt_milestones"] = at.Milestones.Snapshot()
+		}
 		// Fase E2: surface the per-attempt intermediate-file profiling
 		// summary (totals + write-then-read candidates) on the same additive
 		// jobInfo key pattern as canonical_attempt_events, so the master's

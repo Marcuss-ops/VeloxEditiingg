@@ -108,6 +108,9 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 				return nil, fmt.Errorf("observability summarize waterfall for attempt %s: %w", a.ID, reportErr)
 			}
 			as.Waterfall, as.WaterfallValid = decodeWaterfall(raw, a.StartedAt, a.CompletedAt)
+			if hasLifecycleDuration {
+				as.AttemptWaterfall = decodeAttemptWaterfall(raw, a.ID, lifecycleDuration)
+			}
 		}
 
 		// Metrics

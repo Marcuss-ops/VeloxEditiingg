@@ -85,6 +85,7 @@ type ActiveTaskExecution struct {
 	Progress         JobProgress
 	OperationalPhase string // canonical lifecycle phase (prefetching/rendering/publishing/...)
 	AttemptEvents    *telemetry.AttemptEventMachine
+	Milestones *telemetry.AttemptMilestoneRecorder
 	// Fase E2: per-attempt intermediate-file telemetry (AttemptArtifactGraph).
 	// Created in dispatchTaskRunner, threaded through the dispatch context
 	// (artifactgraph.GraphFromContext), and profiled at attempt end. Executors
