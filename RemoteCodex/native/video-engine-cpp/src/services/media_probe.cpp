@@ -19,12 +19,49 @@ extern "C" {
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <mutex>
+#include <unordered_map>
 #include <utility>
 
 namespace fs = std::filesystem;
 
 namespace velox::media {
 namespace {
+
+struct ProbeCacheEntry {
+    MediaProbeResult result;
+    uintmax_t file_size{0};
+    std::filesystem::file_time_type mtime{};
+};
+
+std::unordered_map<std::string, ProbeCacheEntry> g_probeCache;
+std::mutex g_probeCacheMu;
+
+std::optional<ProbeCacheEntry> probeCacheLookup(const fs::path& mediaPath) {
+    std::lock_guard<std::mutex> lock(g_probeCacheMu);
+    auto it = g_probeCache.find(mediaPath.string());
+    if (it == g_probeCache.end()) return std::nullopt;
+    std::error_code ec;
+    auto sz = fs::file_size(mediaPath, ec);
+    if (ec) return std::nullopt;
+    auto mt = fs::last_write_time(mediaPath, ec);
+    if (ec) return std::nullopt;
+    if (it->second.file_size != sz || it->second.mtime != mt) {
+        g_probeCache.erase(it);
+        return std::nullopt;
+    }
+    return it->second;
+}
+
+void probeCacheStore(const fs::path& mediaPath, const MediaProbeResult& result) {
+    std::error_code ec;
+    auto sz = fs::file_size(mediaPath, ec);
+    if (ec) return;
+    auto mt = fs::last_write_time(mediaPath, ec);
+    if (ec) return;
+    std::lock_guard<std::mutex> lock(g_probeCacheMu);
+    g_probeCache[mediaPath.string()] = ProbeCacheEntry{result, sz, mt};
+}
 
 struct FormatContextDeleter {
     void operator()(AVFormatContext* context) const {
@@ -160,7 +197,12 @@ std::optional<MediaProbeResult> probeMediaInProcess(const fs::path& mediaPath) {
     if (mediaPath.empty() || !fs::is_regular_file(mediaPath)) {
         return std::nullopt;
     }
-    return probeOpenContext(mediaPath);
+    if (auto cached = probeCacheLookup(mediaPath)) {
+        return cached->result;
+    }
+    auto result = probeOpenContext(mediaPath);
+    if (result) probeCacheStore(mediaPath, *result);
+    return result;
 }
 
 } // namespace velox::media

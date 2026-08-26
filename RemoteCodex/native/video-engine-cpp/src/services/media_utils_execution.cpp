@@ -138,7 +138,10 @@ bool muxAudio(
     if (expected_duration_seconds > 0.0) {
         command << " -t " << expected_duration_seconds;
     }
-    command << " -movflags +faststart " << file::shellQuote(output_path.string());
+    const char* faststart_env = std::getenv("VELOX_FASTSTART");
+    bool faststart = faststart_env && (std::string(faststart_env)=="1" || std::string(faststart_env)=="true" || std::string(faststart_env)=="yes");
+    if (faststart) command << " -movflags +faststart";
+    command << " " << file::shellQuote(output_path.string());
     const std::string command_text = command.str();
     const file::CommandResult result = file::runCommandTimed(command_text);
     if (profile != nullptr) *profile = result;

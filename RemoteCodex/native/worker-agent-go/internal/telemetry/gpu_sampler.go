@@ -26,58 +26,55 @@ import (
 	"time"
 )
 
-// GPUSample is one instantaneous GPU measurement.
 type GPUSample struct {
 	Timestamp   time.Time
-	GPUUtilPct  float64 // GPU utilization 0-100
-	NVDECUtilPct float64 // NVDEC engine utilization 0-100
-	NVENCUtilPct float64 // NVENC engine utilization 0-100
-	VRAMUsedBytes int64  // VRAM used in bytes
-	VRAMTotalBytes int64 // VRAM total in bytes
+	GPUUUID     string
+	GPUUtilPct  float64
+	NVDECUtilPct float64
+	NVENCUtilPct float64
+	VRAMUsedBytes int64
+	VRAMTotalBytes int64
 }
 
-// GPUStats aggregates samples into summary statistics.
 type GPUStats struct {
 	SampleCount int64
-
+	GPUUUID     string
 	GPUUtilAvgPct   float64
 	GPUUtilPeakPct  float64
 	NVDECUtilAvgPct  float64
 	NVDECUtilPeakPct float64
 	NVENCUtilAvgPct  float64
 	NVENCUtilPeakPct float64
-
 	VRAMUsedAvgBytes  int64
 	VRAMUsedPeakBytes int64
 	VRAMTotalBytes    int64
-
-	GPUIdleDuringRenderMs int64 // accumulated time GPU was < 5% utilized
+	GPUIdleDuringRenderMs int64
 }
 
-// GPUSampler polls nvidia-smi at a configurable interval and aggregates
-// results. It is scoped to one job: call Start() at job beginning and
-// Stop() at job end.
 type GPUSampler struct {
 	ctx       context.Context
 	cancel    context.CancelFunc
 	interval  time.Duration
+	gpuUUID   string
 	started   atomic.Bool
 
 	mu        sync.Mutex
 	samples   []GPUSample
 	idleTime  time.Duration
-	lastAbove time.Time // last time GPU was above idle threshold
+	lastAbove time.Time
 }
 
-// NewGPUSampler creates a sampler backed by the parent context. The parent
-// cancellation also stops the sampler. interval is how often to poll nvidia-smi;
-// a reasonable default is 500ms-1s.
 func NewGPUSampler(parent context.Context, interval time.Duration) *GPUSampler {
+	return NewGPUSamplerForGPU(parent, interval, "")
+}
+
+func NewGPUSamplerForGPU(parent context.Context, interval time.Duration, gpuUUID string) *GPUSampler {
 	ctx, cancel := context.WithCancel(parent)
 	return &GPUSampler{
 		ctx:      ctx,
 		cancel:   cancel,
 		interval: interval,
+		gpuUUID:  gpuUUID,
 	}
 }
 
@@ -145,9 +142,8 @@ func (s *GPUSampler) loop() {
 }
 
 func (s *GPUSampler) sample() {
-	gpu, err := queryNVidiaSMI()
+	gpu, err := queryNVidiaSMIForGPU(s.gpuUUID)
 	if err != nil {
-		// Silently skip failed samples; the Stats will report 0 counts.
 		return
 	}
 	s.mu.Lock()
@@ -166,7 +162,7 @@ func (s *GPUSampler) sample() {
 func (s *GPUSampler) computeStatsLocked() GPUStats {
 	n := int64(len(s.samples))
 	if n == 0 {
-		return GPUStats{SampleCount: 0}
+		return GPUStats{SampleCount: 0, GPUUUID: s.gpuUUID}
 	}
 
 	var (
@@ -213,6 +209,7 @@ func (s *GPUSampler) computeStatsLocked() GPUStats {
 
 	return GPUStats{
 		SampleCount:        n,
+		GPUUUID:            s.gpuUUID,
 		GPUUtilAvgPct:      round2(avgGPU),
 		GPUUtilPeakPct:     round2(peakGPU),
 		NVDECUtilAvgPct:    round2(avgNVDEC),
@@ -228,54 +225,68 @@ func (s *GPUSampler) computeStatsLocked() GPUStats {
 
 // ── nvidia-smi query ────────────────────────────────────────────────────────
 
-// queryNVidiaSMI runs `nvidia-smi --query-gpu=... --format=csv,noheader`
-// and parses a single sample. Returns zero GPUSample on error.
 func queryNVidiaSMI() (GPUSample, error) {
-	// nvidia-smi --query-gpu=utilization.gpu,utilization.decoder,utilization.encoder,memory.used,memory.total --format=csv,noheader,nounits
-	cmd := exec.Command("nvidia-smi",
-		"--query-gpu=utilization.gpu,utilization.decoder,utilization.encoder,memory.used,memory.total",
-		"--format=csv,noheader,nounits",
-	)
+	return queryNVidiaSMIForGPU("")
+}
+
+func queryNVidiaSMIForGPU(gpuUUID string) (GPUSample, error) {
+	args := []string{"--query-gpu=uuid,utilization.gpu,utilization.decoder,utilization.encoder,memory.used,memory.total", "--format=csv,noheader,nounits"}
+	if gpuUUID != "" {
+		args = append(args, "-i", gpuUUID)
+	}
+	cmd := exec.Command("nvidia-smi", args...)
 	out, err := cmd.Output()
 	if err != nil {
 		return GPUSample{}, err
 	}
-	return parseNVidiaSMIOutput(strings.TrimSpace(string(out)))
+	return parseNVidiaSMIOutput(strings.TrimSpace(string(out)), gpuUUID)
 }
 
-// parseNVidiaSMIOutput parses a single CSV line like: "31, 14, 27, 3210, 16384"
-// Returns zero GPUSample on parse failure.
-func parseNVidiaSMIOutput(line string) (GPUSample, error) {
+func parseNVidiaSMIOutput(line string, wantUUID string) (GPUSample, error) {
 	if line == "" {
 		return GPUSample{}, nil
 	}
-	// Take only the first GPU line if multiple GPUs.
-	if idx := strings.Index(line, "\n"); idx >= 0 {
-		line = line[:idx]
+	lines := strings.Split(line, "\n")
+	for _, l := range lines {
+		l = strings.TrimSpace(l)
+		if l == "" {
+			continue
+		}
+		fields := strings.Split(l, ",")
+		if len(fields) < 6 {
+			continue
+		}
+		uuid := strings.TrimSpace(fields[0])
+		if wantUUID != "" && uuid != wantUUID {
+			continue
+		}
+		values := make([]int64, 5)
+		ok := true
+		for i := 0; i < 5; i++ {
+			v, err := strconv.ParseInt(strings.TrimSpace(fields[i+1]), 10, 64)
+			if err != nil {
+				ok = false
+				break
+			}
+			values[i] = v
+		}
+		if !ok {
+			continue
+		}
+		return GPUSample{
+			Timestamp:      time.Now(),
+			GPUUUID:        uuid,
+			GPUUtilPct:      float64(values[0]),
+			NVDECUtilPct:    float64(values[1]),
+			NVENCUtilPct:    float64(values[2]),
+			VRAMUsedBytes:   values[3] * 1024 * 1024,
+			VRAMTotalBytes:  values[4] * 1024 * 1024,
+		}, nil
 	}
-
-	fields := strings.Split(line, ",")
-	if len(fields) < 5 {
+	if wantUUID != "" {
 		return GPUSample{}, nil
 	}
-
-	values := make([]int64, 5)
-	for i := 0; i < 5; i++ {
-		v, err := strconv.ParseInt(strings.TrimSpace(fields[i]), 10, 64)
-		if err != nil {
-			return GPUSample{}, err
-		}
-		values[i] = v
-	}
-
-	return GPUSample{
-		Timestamp:      time.Now(),
-		GPUUtilPct:      float64(values[0]),
-		NVDECUtilPct:    float64(values[1]),
-		NVENCUtilPct:    float64(values[2]),
-		VRAMUsedBytes:   values[3] * 1024 * 1024, // MiB → bytes
-		VRAMTotalBytes:  values[4] * 1024 * 1024,
-	}, nil
+	return GPUSample{}, nil
 }
 
 // IsGPUAvailable returns true if nvidia-smi is present on the system.

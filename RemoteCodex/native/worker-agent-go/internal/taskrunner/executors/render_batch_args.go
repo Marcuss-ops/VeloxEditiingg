@@ -140,17 +140,30 @@ func buildVideoOnlyArgs(plan *contract.CompiledRenderPlanV2, bindings runtimeass
 	return args, nil
 }
 
+func faststartEnabled() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("VELOX_FASTSTART")))
+	return v == "1" || v == "true" || v == "yes"
+}
+
+func faststartArgs() []string {
+	if faststartEnabled() {
+		return []string{"-movflags", "+faststart"}
+	}
+	return nil
+}
+
 func buildFinalAudioCopyArgs(videoOnlyPath, audioPath, outputPath string) []string {
-	return []string{
+	args := []string{
 		"-i", videoOnlyPath,
 		"-i", audioPath,
 		"-map", "0:v:0",
 		"-map", "1:a:0",
 		"-c:v", "copy",
 		"-c:a", "copy",
-		"-movflags", "+faststart",
-		"-y", outputPath,
 	}
+	args = append(args, faststartArgs()...)
+	args = append(args, "-y", outputPath)
+	return args
 }
 
 // writeConcatList creates the only input consumed by the strict video
@@ -176,9 +189,8 @@ func writeConcatList(path string, videoPaths []string) error {
 }
 
 func buildVideoOnlyPacketCopyArgs(concatListPath, outputPath string) []string {
-	return []string{
-		"-f", "concat", "-safe", "0", "-i", concatListPath,
-		"-map", "0:v:0", "-an", "-c:v", "copy",
-		"-movflags", "+faststart", "-y", outputPath,
-	}
+	args := []string{"-f", "concat", "-safe", "0", "-i", concatListPath, "-map", "0:v:0", "-an", "-c:v", "copy"}
+	args = append(args, faststartArgs()...)
+	args = append(args, "-y", outputPath)
+	return args
 }

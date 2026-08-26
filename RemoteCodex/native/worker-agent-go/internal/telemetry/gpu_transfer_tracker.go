@@ -65,9 +65,6 @@ func (t *GPUTransferTracker) IngestEnginePhases(phases []PhaseIngest) {
 		op := classifyGPUOperation(phase.Component, phase.Action)
 		switch op {
 		case gpuOpDecode:
-			// NVDEC outputs frames on GPU. The output frames count is tracked;
-			// transfers are recorded when those frames are consumed by CPU ops.
-			t.metrics.FramesUploadedGPU += phase.FramesOut
 		case gpuOpCPUConsume:
 			// A CPU-side operation consumed frames that may have been decoded
 			// on GPU. The input frames imply a GPU→CPU download.

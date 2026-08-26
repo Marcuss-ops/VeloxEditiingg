@@ -64,7 +64,18 @@ std::string withDecodeTelemetry(const std::string& filter) {
 }
 
 int ffmpegThreadCount() {
-    return envInt("VELOX_FFMPEG_THREADS", 0);
+    int explicit_v = envInt("VELOX_FFMPEG_THREADS", 0);
+    if (explicit_v > 0) return explicit_v;
+    int effective = envInt("VELOX_EFFECTIVE_CPU_COUNT", 0);
+    int active = envInt("VELOX_ACTIVE_RENDER_JOBS", 0);
+    if (effective > 0) {
+        if (active <= 0) active = 1;
+        int per_job = effective / active;
+        if (per_job < 1) per_job = 1;
+        if (per_job > effective) per_job = effective;
+        return per_job;
+    }
+    return 0;
 }
 
 std::string ffmpegRateControlArgsForCodec(const std::string& codec) {

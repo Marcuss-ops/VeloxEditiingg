@@ -30,28 +30,6 @@
 // rejected upstream by the dotted-key parser before they reach here.
 package telemetry
 
-import (
-	"encoding/json"
-	"sort"
-	"strings"
-
-	pb "velox-shared/controltransport/pb"
-)
-
-// RawExecutionMetrics is the canonical typed, raw per-attempt metric
-// envelope. It contains observed facts only: counters, byte totals,
-// resource samples, quality observations, and producer-declared values.
-// Derived ratios are calculated by the performance package, never by
-// producers writing a metric map.
-//
-// Field-by-field correspondence with proto.TaskExecutionMetrics is kept
-// deliberately stable so the transport projection remains lossless.
-// Naming follows the proto (snake_case in proto → PascalCase here) and
-// unit suffixes are explicit (Ms for milliseconds, Ratio for float64
-// ratios, Bytes for raw bytes, PerSecond / PerGb for prices).
-// Number types mirror the proto3 wire schema (int64 / int32 for counters,
-// double for ratios and prices). Worker sources never emit negative
-// counters; negative values are a producer bug.
 type RawExecutionMetrics struct {
 	// ── Byte accounting (raw bytes, not GiB) proto3 int64 ───────────────
 	InputBytes          int64 `json:"input_bytes"`
@@ -172,6 +150,7 @@ type RawExecutionMetrics struct {
 	ArtifactVerifyMs      int64 `json:"artifact_verify_ms"`
 	DriveUploadMs         int64 `json:"drive_upload_ms"`
 	DriveVerifyMs         int64 `json:"drive_verify_ms"`
+	CleanupMs             int64 `json:"cleanup_ms"`
 	JobTotalMs            int64 `json:"job_total_ms"`
 
 	// ── GPU transfers (VRAM ↔ RAM) ─────────────────────────────────────
@@ -201,6 +180,13 @@ type RawExecutionMetrics struct {
 	CompositeCpuMs int64  `json:"composite_cpu_ms"`
 	EncodeCpuMs   int64   `json:"encode_cpu_ms"`
 	HashCpuMs     int64   `json:"hash_cpu_ms"`
+
+	CpuStealAvgPct  float64 `json:"cpu_steal_avg_percent"`
+	CpuStealPeakPct float64 `json:"cpu_steal_peak_percent"`
+	CpuIOWaitAvgPct  float64 `json:"cpu_iowait_avg_percent"`
+	CpuIOWaitPeakPct float64 `json:"cpu_iowait_peak_percent"`
+	RunQueueAvg     float64 `json:"run_queue_avg"`
+	RunQueuePeak    int32   `json:"run_queue_peak"`
 
 	// ── Segment / packet-copy stats ─────────────────────────────────────
 	SegmentsTotal       int32   `json:"segments_total"`
@@ -250,6 +236,26 @@ type RawExecutionMetrics struct {
 	AudioInputBytes  int64 `json:"audio_input_bytes"`
 	AudioOutputBytes int64 `json:"audio_output_bytes"`
 
+	// ── Faststart ───────────────────────────────────────────────────────
+	FaststartEnabled       bool  `json:"faststart_enabled"`
+	FaststartMs            int64 `json:"faststart_ms"`
+	FaststartBytesRewritten int64 `json:"faststart_bytes_rewritten"`
+
+	// ── HTTP asset transport ────────────────────────────────────────────
+	HttpRequests          int64 `json:"http_requests"`
+	HttpConnectionReused  int64 `json:"http_connection_reused"`
+	HttpNewConnections    int64 `json:"http_new_connections"`
+	DnsMs                 int64 `json:"dns_ms"`
+	TcpConnectMs          int64 `json:"tcp_connect_ms"`
+	TlsHandshakeMs        int64 `json:"tls_handshake_ms"`
+	TtfbMs                int64 `json:"ttfb_ms"`
+	Http2Requests         int64 `json:"http2_requests"`
+
+	ExternalProcessSpawnExact int64 `json:"external_process_spawn_exact"`
+
+	// ── GPU sampler identity ────────────────────────────────────────────
+	GpuUUID string `json:"gpu_uuid,omitempty"`
+
 	// ── Critical path ───────────────────────────────────────────────────
 	CriticalPathComponent string  `json:"critical_path_component,omitempty"`
 	CriticalPathMs        int64   `json:"critical_path_ms"`
@@ -261,504 +267,3 @@ type RawExecutionMetrics struct {
 // RawExecutionMetrics; both names describe the same canonical typed facts.
 type TypedExecutionMetrics = RawExecutionMetrics
 
-// ToProto serializes raw typed metrics onto the typed wire envelope. All
-// protobuf field setters are infallible in Go; this function returns a
-// *pb.TaskExecutionMetrics and never panics.
-//
-// Callers typically:
-//  1. Build the TypedExecutionMetrics inside TaskRunner.Run /
-//     mergeStatsInto from cache.Stats() / blob.Stats() + report.Metrics.
-//  2. In worker.job_executor.submitTaskResult, set
-//     resultPayload["execution_metrics"] = tm.ToProto() before the
-//     transport.Send dispatch.
-func (t RawExecutionMetrics) ToProto() *pb.TaskExecutionMetrics {
-	return &pb.TaskExecutionMetrics{
-		InputBytes:            t.InputBytes,
-		OutputBytes:           t.OutputBytes,
-		BytesFromDrive:        t.BytesFromDrive,
-		BytesFromBlobstore:    t.BytesFromBlobstore,
-		BytesFromLocalCache:   t.BytesFromLocalCache,
-		CpuTimeMs:             t.CpuTimeMs,
-		PeakRssBytes:          t.PeakRssBytes,
-		FramesDecoded:         t.FramesDecoded,
-		FramesComposited:      t.FramesComposited,
-		FramesEncoded:         t.FramesEncoded,
-		FfmpegSpeedRatio:      t.FfmpegSpeedRatio,
-		EncodePasses:          t.EncodePasses,
-		FinalConcatStreamCopy: t.FinalConcatStreamCopy,
-		ConcatMode:            t.ConcatMode,
-		CpuPricePerSecond:     t.CpuPricePerSecond,
-		StoragePricePerGb:     t.StoragePricePerGb,
-		NetworkPricePerGb:     t.NetworkPricePerGb,
-
-		// Scorecard v2 extensions.
-		GpuTimeMs:              t.GpuTimeMs,
-		PeakVramBytes:          t.PeakVramBytes,
-		TempBytesWritten:       t.TempBytesWritten,
-		DuplicateDownloadBytes: t.DuplicateDownloadBytes,
-		MediaDurationSeconds:   t.MediaDurationSeconds,
-		WallClockSeconds:       t.WallClockSeconds,
-
-		FfprobeValid:      t.FfprobeValid,
-		DurationDiffSec:   t.DurationDiffSec,
-		HasVideoStream:    t.HasVideoStream,
-		HasAudioStream:    t.HasAudioStream,
-		AudioTrackCount:   t.AudioTrackCount,
-		OutputFileSize:    t.OutputFileSize,
-		BlackFrameRatio:   t.BlackFrameRatio,
-		AudioSyncOffsetMs: t.AudioSyncOffsetMs,
-		OutputSha256:      t.OutputSha256,
-
-		CpuPercentPeak: t.CpuPercentPeak,
-		DiskReadBytes:  t.DiskReadBytes,
-		DiskWriteBytes: t.DiskWriteBytes,
-		NetworkRxBytes: t.NetworkRxBytes,
-		NetworkTxBytes: t.NetworkTxBytes,
-		IowaitMs:       t.IowaitMs,
-		OpenFdsPeak:    t.OpenFdsPeak,
-
-		AssetCacheHitCount:  t.AssetCacheHitCount,
-		AssetCacheMissCount: t.AssetCacheMissCount,
-		BlobCacheHitCount:   t.BlobCacheHitCount,
-		BlobCacheMissCount:  t.BlobCacheMissCount,
-		RenderCacheHitCount: t.RenderCacheHitCount,
-
-		WastedCpuMs:         t.WastedCpuMs,
-		WastedDownloadBytes: t.WastedDownloadBytes,
-		CompletedSegments:   t.CompletedSegments,
-		ErrorComponent:      t.ErrorComponent,
-		ErrorPhase:          t.ErrorPhase,
-
-		LogicalCpuCount:   t.LogicalCpuCount,
-		CpuQuota:          t.CpuQuota,
-		EffectiveCpuCount: t.EffectiveCpuCount,
-
-		TelemetryCoverageJson: t.TelemetryCoverageJSON,
-		TelemetryComplete:     t.TelemetryComplete,
-		TelemetryCpuSource:    t.TelemetryCPUSource,
-		CacheLookups:          t.CacheLookups,
-		UniqueAssetsRequested: t.UniqueAssetsRequested,
-		CacheDownloadCount:    t.CacheDownloadCount,
-		CacheDownloadBytes:    t.CacheDownloadBytes,
-	}
-}
-
-// FromProto accepts a wire payload and mirrors it onto the Go struct.
-// Useful for tests, replay tools, and the master-side reverse path
-// where a master observer wants the typed view of a wire report.
-// Tolerates nil receivers by returning the zero value.
-func FromProto(p *pb.TaskExecutionMetrics) RawExecutionMetrics {
-	if p == nil {
-		return RawExecutionMetrics{}
-	}
-	return RawExecutionMetrics{
-		InputBytes:            p.GetInputBytes(),
-		OutputBytes:           p.GetOutputBytes(),
-		BytesFromDrive:        p.GetBytesFromDrive(),
-		BytesFromBlobstore:    p.GetBytesFromBlobstore(),
-		BytesFromLocalCache:   p.GetBytesFromLocalCache(),
-		CpuTimeMs:             p.GetCpuTimeMs(),
-		PeakRssBytes:          p.GetPeakRssBytes(),
-		FramesDecoded:         p.GetFramesDecoded(),
-		FramesComposited:      p.GetFramesComposited(),
-		FramesEncoded:         p.GetFramesEncoded(),
-		FfmpegSpeedRatio:      p.GetFfmpegSpeedRatio(),
-		EncodePasses:          p.GetEncodePasses(),
-		FinalConcatStreamCopy: p.GetFinalConcatStreamCopy(),
-		ConcatMode:            p.GetConcatMode(),
-		CpuPricePerSecond:     p.GetCpuPricePerSecond(),
-		StoragePricePerGb:     p.GetStoragePricePerGb(),
-		NetworkPricePerGb:     p.GetNetworkPricePerGb(),
-
-		GpuTimeMs:              p.GetGpuTimeMs(),
-		PeakVramBytes:          p.GetPeakVramBytes(),
-		TempBytesWritten:       p.GetTempBytesWritten(),
-		DuplicateDownloadBytes: p.GetDuplicateDownloadBytes(),
-		MediaDurationSeconds:   p.GetMediaDurationSeconds(),
-		WallClockSeconds:       p.GetWallClockSeconds(),
-
-		FfprobeValid:      p.GetFfprobeValid(),
-		DurationDiffSec:   p.GetDurationDiffSec(),
-		HasVideoStream:    p.GetHasVideoStream(),
-		HasAudioStream:    p.GetHasAudioStream(),
-		AudioTrackCount:   p.GetAudioTrackCount(),
-		OutputFileSize:    p.GetOutputFileSize(),
-		BlackFrameRatio:   p.GetBlackFrameRatio(),
-		AudioSyncOffsetMs: p.GetAudioSyncOffsetMs(),
-		OutputSha256:      p.GetOutputSha256(),
-
-		CpuPercentPeak: p.GetCpuPercentPeak(),
-		DiskReadBytes:  p.GetDiskReadBytes(),
-		DiskWriteBytes: p.GetDiskWriteBytes(),
-		NetworkRxBytes: p.GetNetworkRxBytes(),
-		NetworkTxBytes: p.GetNetworkTxBytes(),
-		IowaitMs:       p.GetIowaitMs(),
-		OpenFdsPeak:    p.GetOpenFdsPeak(),
-
-		AssetCacheHitCount:  p.GetAssetCacheHitCount(),
-		AssetCacheMissCount: p.GetAssetCacheMissCount(),
-		BlobCacheHitCount:   p.GetBlobCacheHitCount(),
-		BlobCacheMissCount:  p.GetBlobCacheMissCount(),
-		RenderCacheHitCount: p.GetRenderCacheHitCount(),
-
-		WastedCpuMs:         p.GetWastedCpuMs(),
-		WastedDownloadBytes: p.GetWastedDownloadBytes(),
-		CompletedSegments:   p.GetCompletedSegments(),
-		ErrorComponent:      p.GetErrorComponent(),
-		ErrorPhase:          p.GetErrorPhase(),
-
-		LogicalCpuCount:   p.GetLogicalCpuCount(),
-		CpuQuota:          p.GetCpuQuota(),
-		EffectiveCpuCount: p.GetEffectiveCpuCount(),
-
-		TelemetryCoverageJSON: p.GetTelemetryCoverageJson(),
-		TelemetryComplete:     p.GetTelemetryComplete(),
-		TelemetryCPUSource:    p.GetTelemetryCpuSource(),
-		CacheLookups:          p.GetCacheLookups(),
-		UniqueAssetsRequested: p.GetUniqueAssetsRequested(),
-		CacheDownloadCount:    p.GetCacheDownloadCount(),
-		CacheDownloadBytes:    p.GetCacheDownloadBytes(),
-	}
-}
-
-// CoverageMap decodes the optional report coverage block. Invalid or empty
-// JSON is intentionally reported as absent rather than as all-false data.
-// PopulateFromJobPhaseTimer fills all fine-grained phase timing fields from
-// a JobPhaseTimer that was used to instrument the job execution. This is the
-// canonical bridge between the runtime timer and the typed metrics envelope.
-func (t *RawExecutionMetrics) PopulateFromJobPhaseTimer(timer *JobPhaseTimer) {
-	if t == nil || timer == nil {
-		return
-	}
-	phases := timer.PhaseTimings()
-	for _, p := range phases {
-		ms := p.Timing.DurationMs()
-		if ms == 0 {
-			continue
-		}
-		switch p.Name {
-		case PhaseQueueWait:
-			t.QueueWaitMs = ms
-		case PhaseJobSetup:
-			t.JobSetupMs = ms
-		case PhaseAssetResolve:
-			t.AssetResolveMs = ms
-		case PhaseAssetDownload:
-			t.AssetDownloadMs = ms
-		case PhaseAssetVerify:
-			t.AssetVerifyMs = ms
-		case PhaseAssetMaterialize:
-			t.AssetMaterializeMs = ms
-		case PhaseAudioPrepare:
-			t.AudioPrepareMs = ms
-		case PhaseAudioTimelineBuild:
-			t.AudioTimelineBuildMs = ms
-		case PhaseRenderPlanBuild:
-			t.RenderPlanBuildMs = ms
-		case PhaseVideoDecode:
-			t.VideoDecodeMs = ms
-		case PhaseVideoSubtitle:
-			t.VideoSubtitleMs = ms
-		case PhaseVideoSubtitleRaster:
-			t.VideoSubtitleRasterMs = ms
-		case PhaseVideoSubtitleComposite:
-			t.VideoSubtitleCompositeMs = ms
-		case PhaseVideoWatermark:
-			t.VideoWatermarkMs = ms
-		case PhaseVideoWatermarkUpload:
-			t.VideoWatermarkUploadMs = ms
-		case PhaseVideoWatermarkComposite:
-			t.VideoWatermarkCompositeMs = ms
-		case PhaseVideoBlur:
-			t.VideoBlurMs = ms
-		case PhaseVideoFilter:
-			t.VideoFilterMs = ms
-		case PhaseVideoComposite:
-			t.VideoCompositeMs = ms
-		case PhaseVideoEncode:
-			t.VideoEncodeMs = ms
-		case PhaseVideoConcat:
-			t.VideoConcatMs = ms
-		case PhaseAudioMux:
-			t.AudioMuxMs = ms
-		case PhaseOutputFinalize:
-			t.OutputFinalizeMs = ms
-		case PhaseArtifactHash:
-			t.Sha256Ms = ms
-		case PhaseArtifactProbe:
-			t.FfprobeMs = ms
-		case PhaseArtifactVerify:
-			t.ArtifactVerifyMs = ms
-		case PhaseDriveUpload:
-			t.DriveUploadMs = ms
-		case PhaseDriveVerify:
-			t.DriveVerifyMs = ms
-		case PhaseDriveDownload:
-			t.DriveDownloadMs = ms
-		case PhaseBlobstoreDownload:
-			t.BlobstoreDownloadMs = ms
-		case PhaseLocalCacheRead:
-			t.LocalCacheReadMs = ms
-		case PhaseAssetDownloadWait:
-			t.AssetDownloadWaitMs = ms
-		case PhaseOutputWrite:
-			t.OutputWriteMs = ms
-		case PhaseTempWrite:
-			t.TempWriteMs = ms
-		case PhaseFinalRead:
-			t.FinalReadMs = ms
-		}
-	}
-	// Total = sum of all phases (wall-clock may differ due to parallelism).
-	t.JobTotalMs = timer.TotalDuration().Milliseconds()
-
-	// ── Download / cache byte attribution ────────────────────────────
-	// Accumulate per-source byte counters from phase-level data.
-	timer.cacheMut.Lock()
-	t.CacheHitBytes = timer.cacheHitBytes
-	t.CacheMissBytes = timer.cacheMissBytes
-	timer.cacheMut.Unlock()
-
-	// ── Per-phase CPU time attribution ────────────────────────────────
-	// Map phase-level accumulated CPU milliseconds to the canonical per-phase
-	// CPU fields. These are additive: multiple invocations of the same phase
-	// (e.g. across segments) are summed by the timer before reaching here.
-	for _, p := range phases {
-		cpuMs := p.Timing.CPUMs
-		if cpuMs == 0 {
-			continue
-		}
-		// Integer truncation from float64: CPUMS is measured in milliseconds
-		// and typical values fit int64 without loss.
-		cpu := int64(cpuMs)
-		switch p.Name {
-		case PhaseVideoSubtitle, PhaseVideoSubtitleRaster, PhaseVideoSubtitleComposite:
-			t.SubtitleCpuMs += cpu
-		case PhaseVideoBlur:
-			t.BlurCpuMs += cpu
-		case PhaseVideoComposite:
-			t.CompositeCpuMs += cpu
-		case PhaseVideoEncode:
-			t.EncodeCpuMs += cpu
-		case PhaseArtifactHash:
-			t.HashCpuMs += cpu
-		}
-	}
-}
-
-// ComputeDerivedMetrics fills all derived ratio fields from the raw facts.
-// Must be called AFTER MediaDurationSeconds and WallClockSeconds are set.
-// Safe to call multiple times; always recomputes from current values.
-func (t *RawExecutionMetrics) ComputeDerivedMetrics() {
-	if t == nil {
-		return
-	}
-	if t.MediaDurationSeconds > 0 && t.WallClockSeconds > 0 {
-		t.RealTimeFactor = t.WallClockSeconds / t.MediaDurationSeconds
-		t.ThroughputX = t.MediaDurationSeconds / t.WallClockSeconds
-	}
-}
-
-// ComputeCriticalPath scans all fine-grained phase durations and identifies
-// the single phase that dominates the job wall time — the critical path.
-// Must be called AFTER PopulateFromJobPhaseTimer so all phase timings are
-// populated. The result is written into CriticalPathComponent,
-// CriticalPathMs, and CriticalPathPercent.
-//
-// Critical path semantics:
-//   - In a sequential pipeline, the critical path is the single phase with
-//     the highest duration.
-//   - In a parallel pipeline, the critical path may span multiple phases
-//     that execute on the critical chain. This method sums the durations
-//     of the top-N phases until the total exceeds 50% of job wall time;
-//     the "critical path component" becomes a concatenation of those
-//     phases (e.g. "video.encode + video.composite").
-//   - The percentage is computed against the job wall clock, not the sum
-//     of all phase durations (which may exceed wall clock due to parallelism).
-func (t *RawExecutionMetrics) ComputeCriticalPath() {
-	if t == nil {
-		return
-	}
-	// Collect all fine-grained phase durations into a sortable list.
-	type namedDuration struct {
-		name string
-		ms   int64
-	}
-	phases := []namedDuration{
-		{"queue_wait", t.QueueWaitMs},
-		{"job_setup", t.JobSetupMs},
-		{"asset.resolve", t.AssetResolveMs},
-		{"asset.download", t.AssetDownloadMs},
-		{"asset.verify", t.AssetVerifyMs},
-		{"asset.materialize", t.AssetMaterializeMs},
-		{"audio.prepare", t.AudioPrepareMs},
-		{"audio.timeline_build", t.AudioTimelineBuildMs},
-		{"render_plan_build", t.RenderPlanBuildMs},
-		{"video.decode", t.VideoDecodeMs},
-		{"video.subtitle", t.VideoSubtitleMs},
-		{"video.subtitle_raster", t.VideoSubtitleRasterMs},
-		{"video.subtitle_composite", t.VideoSubtitleCompositeMs},
-		{"video.watermark", t.VideoWatermarkMs},
-		{"video.watermark_upload", t.VideoWatermarkUploadMs},
-		{"video.watermark_composite", t.VideoWatermarkCompositeMs},
-		{"video.blur", t.VideoBlurMs},
-		{"video.filter", t.VideoFilterMs},
-		{"video.composite", t.VideoCompositeMs},
-		{"video.encode", t.VideoEncodeMs},
-		{"video.concat", t.VideoConcatMs},
-		{"audio.mux", t.AudioMuxMs},
-		{"output_finalize", t.OutputFinalizeMs},
-		{"artifact.hash", t.Sha256Ms},
-		{"artifact.probe", t.FfprobeMs},
-		{"artifact.verify", t.ArtifactVerifyMs},
-		{"drive.upload", t.DriveUploadMs},
-		{"drive.verify", t.DriveVerifyMs},
-		{"asset.download_drive", t.DriveDownloadMs},
-		{"asset.download_blobstore", t.BlobstoreDownloadMs},
-		{"asset.cache_read", t.LocalCacheReadMs},
-	}
-
-	// Sort descending by duration.
-	sort.Slice(phases, func(i, j int) bool { return phases[i].ms > phases[j].ms })
-
-	// Single-dominant-phase mode: the top phase IS the critical path.
-	// We also accumulate top-N in case no single phase dominates.
-	wallMs := int64(t.WallClockSeconds * 1000)
-	if wallMs <= 0 {
-		return
-	}
-
-	top := phases[0]
-	if top.ms == 0 {
-		return
-	}
-
-	// If the top phase alone is >20% of wall time, it's the single
-	// dominant bottleneck.
-	if float64(top.ms)/float64(wallMs) >= 0.20 {
-		t.CriticalPathComponent = top.name
-		t.CriticalPathMs = top.ms
-		t.CriticalPathPercent = float64(top.ms) / float64(wallMs) * 100
-		return
-	}
-
-	// Multi-phase critical path: accumulate top phases until >50% of wall.
-	var cumulative int64
-	var names []string
-	for _, p := range phases {
-		if p.ms == 0 {
-			break
-		}
-		cumulative += p.ms
-		names = append(names, p.name)
-		if float64(cumulative)/float64(wallMs) > 0.50 || len(names) >= 3 {
-			break
-		}
-	}
-	t.CriticalPathComponent = strings.Join(names, " + ")
-	t.CriticalPathMs = cumulative
-	if wallMs > 0 {
-		t.CriticalPathPercent = float64(cumulative) / float64(wallMs) * 100
-	}
-}
-
-// ComputeDerivedBandwidth fills bandwidth metrics from byte counts and
-// phase durations. Must be called AFTER PopulateFromJobPhaseTimer so
-// DriveUploadMs and the disk timings are already populated.
-func (t *RawExecutionMetrics) ComputeDerivedBandwidth() {
-	if t == nil {
-		return
-	}
-	// download_mbps_avg: total input bytes ÷ total download time.
-	dlMs := t.AssetDownloadMs
-	if dlMs == 0 {
-		dlMs = t.DriveDownloadMs + t.BlobstoreDownloadMs
-	}
-	if dlMs > 0 && t.InputBytes > 0 {
-		t.DownloadMbpsAvg = (float64(t.InputBytes) * 8 / 1_000_000) / (float64(dlMs) / 1000)
-	}
-	// upload_mbps_avg: output bytes ÷ drive upload time.
-	if t.DriveUploadMs > 0 && t.OutputBytes > 0 {
-		t.UploadMbpsAvg = (float64(t.OutputBytes) * 8 / 1_000_000) / (float64(t.DriveUploadMs) / 1000)
-	}
-	// drive_upload_mbps: same as upload but using DriveUpload bytes.
-	if t.DriveUploadMs > 0 && t.OutputBytes > 0 {
-		t.DriveUploadMbps = (float64(t.OutputBytes) * 8 / 1_000_000) / (float64(t.DriveUploadMs) / 1000)
-	}
-	// artifact_download_mbps: input bytes on drive download.
-	if t.DriveDownloadMs > 0 && t.BytesFromDrive > 0 {
-		t.ArtifactDownloadMbps = (float64(t.BytesFromDrive) * 8 / 1_000_000) / (float64(t.DriveDownloadMs) / 1000)
-	}
-}
-
-// PopulateCentralMetrics is the single entry point for all central
-// observability population. It MUST be called by the TaskRunner after the
-// executor has returned its result. It sequentially:
-//
-//  1. Populates fine-grained phase durations from the job phase timer.
-//  2. Populates GPU↔CPU transfer metrics from the transfer tracker.
-//  3. Populates GPU utilization stats from the background sampler.
-//  4. Sets the authoritative wall clock.
-//  5. Computes derived ratios (RTF, throughput, bandwidth, critical path).
-//
-// Executors MUST NOT call this method. It is owned exclusively by the
-// TaskRunner — this is the architectural contract that keeps observability
-// centralised rather than scattered across twenty executors.
-//
-// The gpuSamplerStats parameter may be zero-valued when no GPU is present.
-func (t *RawExecutionMetrics) PopulateCentralMetrics(
-	timer *JobPhaseTimer,
-	transfers GPUTransferMetrics,
-	gpuSamplerStats GPUStats,
-	wallClockSeconds float64,
-) {
-	if t == nil {
-		return
-	}
-	t.PopulateFromJobPhaseTimer(timer)
-	t.PopulateFromGPUTransfers(transfers)
-	t.PopulateFromGPUStats(gpuSamplerStats)
-	t.WallClockSeconds = wallClockSeconds
-	t.ComputeDerivedMetrics()
-	t.ComputeDerivedBandwidth()
-	t.ComputeCriticalPath()
-}
-
-// PopulateFromGPUStats fills GPU utilization metrics from the sampler.
-func (t *RawExecutionMetrics) PopulateFromGPUStats(stats GPUStats) {
-	if t == nil || stats.SampleCount == 0 {
-		return
-	}
-	t.GpuUtilAvgPct = stats.GPUUtilAvgPct
-	t.GpuUtilPeakPct = stats.GPUUtilPeakPct
-	t.NvdecUtilAvgPct = stats.NVDECUtilAvgPct
-	t.NvdecUtilPeakPct = stats.NVDECUtilPeakPct
-	t.NvencUtilAvgPct = stats.NVENCUtilAvgPct
-	t.NvencUtilPeakPct = stats.NVENCUtilPeakPct
-	t.VramUsedAvgBytes = stats.VRAMUsedAvgBytes
-	t.GpuIdleMs = stats.GPUIdleDuringRenderMs
-}
-
-// PopulateFromGPUTransfers fills VRAM ↔ RAM transfer metrics.
-func (t *RawExecutionMetrics) PopulateFromGPUTransfers(g GPUTransferMetrics) {
-	if t == nil {
-		return
-	}
-	t.FramesDownloadedFromGPU = g.FramesDownloadedGPU
-	t.FramesUploadedToGPU = g.FramesUploadedGPU
-	t.GpuToCpuTransferMs = g.GPUToCPUMs
-	t.CpuToGpuTransferMs = g.CPUToGPUMs
-	t.GpuToCpuBytes = g.GPUToCPUBytes
-	t.CpuToGpuBytes = g.CPUToGPUBytes
-}
-
-func (t RawExecutionMetrics) CoverageMap() map[string]bool {
-	if t.TelemetryCoverageJSON == "" {
-		return nil
-	}
-	var coverage map[string]bool
-	if err := json.Unmarshal([]byte(t.TelemetryCoverageJSON), &coverage); err != nil {
-		return nil
-	}
-	return coverage
-}

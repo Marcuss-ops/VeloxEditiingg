@@ -159,18 +159,19 @@ func (w *Worker) resumeDueDeclarations(ctx context.Context) error {
 	return nil
 }
 
-// resumeDeclaration re-sends TaskOutputDeclared for one (task_id, attempt_id)
-// group of OUTPUT_READY rows and, on a valid plan, stashes the per-output
-// upload targets + marks each row UPLOAD_PENDING. It is CAS-gated and
-// idempotent: a row that already moved on is skipped, and a re-declare on a
-// partially-declared attempt converges on the same commit via the master's
-// idempotent DeclareOutputs.
 func (w *Worker) resumeDeclaration(ctx context.Context, entries []spool.SpoolEntry) {
 	if len(entries) == 0 {
 		return
 	}
-	w.artifactUploadMu.Lock()
-	defer w.artifactUploadMu.Unlock()
+	if w.publisherPool != nil {
+		if err := w.publisherPool.Acquire(ctx); err != nil {
+			return
+		}
+		defer w.publisherPool.Release()
+	} else {
+		w.artifactUploadMu.Lock()
+		defer w.artifactUploadMu.Unlock()
+	}
 
 	taskID := entries[0].TaskID
 	attemptID := entries[0].AttemptID
@@ -308,12 +309,16 @@ func (w *Worker) scheduleDeclarationRetry(ctx context.Context, entries []spool.S
 	}
 }
 
-// resumeArtifactUpload drives one resumable spool row forward. It is
-// idempotent and safe to call repeatedly: state transitions are CAS-gated, so
-// a concurrent driver (e.g. the original publish path) cannot be corrupted.
 func (w *Worker) resumeArtifactUpload(ctx context.Context, entry spool.SpoolEntry) {
-	w.artifactUploadMu.Lock()
-	defer w.artifactUploadMu.Unlock()
+	if w.publisherPool != nil {
+		if err := w.publisherPool.Acquire(ctx); err != nil {
+			return
+		}
+		defer w.publisherPool.Release()
+	} else {
+		w.artifactUploadMu.Lock()
+		defer w.artifactUploadMu.Unlock()
+	}
 
 	if entry.UploadTargetJSON == "" {
 		// No persisted target (plan never stashed). Nothing to re-drive;

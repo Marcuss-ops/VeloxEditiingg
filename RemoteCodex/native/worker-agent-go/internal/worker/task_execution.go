@@ -67,11 +67,17 @@ func reportRecorder(report *taskrunner.TaskExecutionReport) *telemetry.EventReco
 //  16. Error backoff: cancellable 2-second delay + StatusIdle transition (only on
 //     non-nil execErr).
 func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, taskID, attemptID string) {
+	acquired := false
 	if err := w.concurrencyLimiter.Acquire(ctx, pte.JobID, 0); err != nil {
 		w.logger.Warn("[CONCURRENCY] Failed to acquire slot for job %s: %v", pte.JobID, err)
 		return
 	}
-	defer w.concurrencyLimiter.Release()
+	acquired = true
+	defer func() {
+		if acquired {
+			w.concurrencyLimiter.Release()
+		}
+	}()
 
 	if !w.canTransitionTo(StatusBusy) {
 		w.logger.Warn("Cannot accept task: invalid state transition from %s to busy", w.Status())
@@ -128,6 +134,10 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 	// duration for task outcome accounting.
 
 	if execErr == nil {
+		if acquired {
+			w.concurrencyLimiter.Release()
+			acquired = false
+		}
 		if uploadErr := w.uploadTaskOutputs(jobCtx, pte, report); uploadErr != nil {
 			execErr = fmt.Errorf("upload task outputs: %w", uploadErr)
 		}

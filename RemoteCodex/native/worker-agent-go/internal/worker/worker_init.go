@@ -275,6 +275,7 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		activeTaskLeases:    make(map[string]*ActiveTaskLease),
 		connState:           ConnDisconnected,
 		concurrencyLimiter:  concurrency.NewConcurrencyLimiter(detectedConcurrency),
+		publisherPool:       NewPublisherPool(4),
 		stageExecutor:       stageExecutor,
 		executorRegistry:    wo.registry,
 		cache:               wo.cache,

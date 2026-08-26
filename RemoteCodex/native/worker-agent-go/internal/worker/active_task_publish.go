@@ -23,8 +23,15 @@ func (w *Worker) publishArtifactsV1(ctx context.Context, pte *PendingTaskExecuti
 	if report == nil || w.transport == nil || w.publisherRegistry == nil {
 		return nil
 	}
-	w.artifactUploadMu.Lock()
-	defer w.artifactUploadMu.Unlock()
+	if w.publisherPool != nil {
+		if err := w.publisherPool.Acquire(ctx); err != nil {
+			return err
+		}
+		defer w.publisherPool.Release()
+	} else {
+		w.artifactUploadMu.Lock()
+		defer w.artifactUploadMu.Unlock()
+	}
 
 	if err := validateArtifactOutputs(report); err != nil {
 		return err

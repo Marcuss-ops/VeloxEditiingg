@@ -1,7 +1,6 @@
 # Main production engine target.
 add_executable(velox_video_engine
     src/main.cpp
-    src/cmd_full_video.cpp
     src/video_builder.cpp
     src/plan/render_plan_parser.cpp
     src/plan/render_plan_parser_helpers.cpp
