@@ -53,7 +53,6 @@ func TestUpdateCapability_MissingBackend_NotReady(t *testing.T) {
 		{name: "registry", unwire: func(b *UpdateBackend) { b.Registry = nil }, wantKey: "registry"},
 		{name: "runtime_preflight", unwire: func(b *UpdateBackend) { b.Preflight = nil }, wantKey: "runtime_preflight"},
 		{name: "smoke", unwire: func(b *UpdateBackend) { b.Smoke = nil }, wantKey: "smoke"},
-		{name: "drive", unwire: func(b *UpdateBackend) { b.Drive = nil }, wantKey: "drive"},
 	}
 
 	for _, tt := range tests {
@@ -96,9 +95,8 @@ func TestUpdateCapability_NilExecutor_NotReady(t *testing.T) {
 
 // TestUpdateCapability_FlipsReadyAfterAttachRuntimeBackends locks the
 // boot wiring path: buildFleet constructs the executor with SSH/Docker/
-// Cosign/Registry/Deployments/Image, then AttachRuntimeBackends (from
-// wireFleetOperatorHandlers) attaches the fresh Level-D smoke runner +
-// Drive verifier, and only then does Capability flip to READY.
+// Cosign/Registry/Deployments/Image, then AttachRuntimeBackends attaches
+// the worker-local smoke runner, and only then does Capability flip to READY.
 func TestUpdateCapability_FlipsReadyAfterAttachRuntimeBackends(t *testing.T) {
 	backend, _ := stubBackends(t)
 	backend.Smoke = nil
@@ -106,7 +104,7 @@ func TestUpdateCapability_FlipsReadyAfterAttachRuntimeBackends(t *testing.T) {
 	e := NewUpdateExecutor(backend)
 
 	if e.Ready() {
-		t.Fatal("executor without smoke/drive reported Ready")
+		t.Fatal("executor without smoke reported Ready")
 	}
 	if err := e.AttachRuntimeBackends(stubSmokeRunner{}, stubDriveVerifier{}); err != nil {
 		t.Fatalf("AttachRuntimeBackends: %v", err)

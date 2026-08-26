@@ -172,20 +172,3 @@ func (e *UpdateExecutor) stepSmoke(parent context.Context, workerID string) (str
 	}
 	return artifactID, nil
 }
-
-func (e *UpdateExecutor) stepDriveVerify(parent context.Context, driveFileID string) error {
-	if e.backend.Drive == nil {
-		return errors.New("drive verifier not wired")
-	}
-	ctx, cancel := context.WithTimeout(parent, timeoutDriveVerify)
-	defer cancel()
-	if err := e.backend.Drive.VerifyDelivery(ctx, driveFileID, 0 /*expectedBytes: caller may inject via deps upgrade*/); err != nil {
-		// Map the dep's error to our canonical sentinels so the
-		// audit dashboard's classification logic stays stable.
-		if errors.Is(err, ErrDriveDeliverySize) || errors.Is(err, ErrDriveDeliveryMissing) {
-			return err
-		}
-		return fmt.Errorf("%w: %v", ErrDriveDeliveryMissing, err)
-	}
-	return nil
-}

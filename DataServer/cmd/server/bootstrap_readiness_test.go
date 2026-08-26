@@ -113,8 +113,8 @@ func TestReadiness_UpdateCapabilityProbe_FailClosedWhenBackendsMissing(t *testin
 	if !strings.Contains(body, "NOT READY") {
 		t.Errorf("/ready body must surface 'NOT READY'; got: %s", body)
 	}
-	if !strings.Contains(body, "docker") || !strings.Contains(body, "smoke") || !strings.Contains(body, "drive") {
-		t.Errorf("/ready body must list the missing backends (docker/smoke/drive); got: %s", body)
+	if !strings.Contains(body, "docker") || !strings.Contains(body, "smoke") || strings.Contains(body, "drive") {
+		t.Errorf("/ready body must list worker update backends without socialediting Drive; got: %s", body)
 	}
 }
 

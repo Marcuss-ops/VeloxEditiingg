@@ -136,7 +136,7 @@ func TestOfflineRollout_CompleteSequenceUsesExpectedDigestAndReconnects(t *testi
 	if !containsEvent(trace.events, "worker.reconnected") || trace.reconnectChecks == 0 || !containsEvent(trace.events, "master.connected") {
 		t.Fatalf("rollout did not reconnect and verify an active master connection: %v", trace.events)
 	}
-	for _, required := range []string{"drain=true", "drained=true", "active_tasks=0", "cosign", "docker.activate", "docker.running", "ssh", "worker.reconnected", "master.connected", "smoke", "drive.verify", "drain=false"} {
+	for _, required := range []string{"drain=true", "drained=true", "active_tasks=0", "cosign", "docker.activate", "docker.running", "ssh", "worker.reconnected", "master.connected", "smoke", "drain=false"} {
 		if !containsEvent(trace.events, required) {
 			t.Fatalf("rollout trace missing %q: %v", required, trace.events)
 		}

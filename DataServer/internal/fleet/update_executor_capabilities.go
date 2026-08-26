@@ -8,9 +8,9 @@ import (
 
 // UpdateCapability is the fail-closed boot verdict for the update
 // path (AZIONE 2: no "docker client not wired" discovered 30s after
-// a POST). Ready is true ONLY when every critical backend is wired:
-// SSH, Docker, Cosign, Registry, Deployments, Runtime, Preflight, Image,
-// Smoke and Drive.
+// a POST). Ready is true ONLY when every worker-update backend is wired.
+// Drive is intentionally excluded: Drive delivery belongs to the
+// socialediting publishing path and must not block a Velox image rollout.
 // Missing lists the names of the absent backends so the operator log,
 // the /ready probe and the 503 gate detail all surface the same
 // grep-friendly vocabulary.
@@ -99,8 +99,8 @@ func (e *UpdateExecutor) AttachRuntimeBackends(smoke BackendSmokeRunner, drive B
 	if e == nil {
 		return errors.New("update: nil executor")
 	}
-	if smoke == nil || drive == nil {
-		return errors.New("update: fresh smoke and drive verifier are required")
+	if smoke == nil {
+		return errors.New("update: worker smoke runner is required")
 	}
 	e.backend.Smoke = smoke
 	e.backend.Drive = drive
@@ -135,9 +135,6 @@ func (e *UpdateExecutor) Capability() UpdateCapability {
 	}
 	if e.backend.Smoke == nil {
 		missing = append(missing, "smoke")
-	}
-	if e.backend.Drive == nil {
-		missing = append(missing, "drive")
 	}
 	return UpdateCapability{Ready: len(missing) == 0, Missing: missing}
 }

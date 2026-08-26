@@ -67,14 +67,9 @@ func (e *UpdateExecutor) runForward(ctx context.Context, op *store.Operation, ta
 		return "", err
 	}
 
-	// (h) Level D smoke on the worker.
-	smokeArtifactID, err := e.stepSmoke(ctx, op.WorkerID)
+	// (h) Worker-local smoke; publishing to Drive is a separate product path.
+	_, err = e.stepSmoke(ctx, op.WorkerID)
 	if err != nil {
-		return "", err
-	}
-
-	// (i) Drive verifier on the smoke artifact.
-	if err := e.stepDriveVerify(ctx, smokeArtifactID); err != nil {
 		return "", err
 	}
 

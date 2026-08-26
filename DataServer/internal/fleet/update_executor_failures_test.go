@@ -110,23 +110,14 @@ func TestUpdate_SmokeFail_RollsBack(t *testing.T) {
 		t.Errorf("err must mention ErrSmokeFailed; got %v", err)
 	}
 }
-func TestUpdate_DriveDeliveryMissing_RollsBack(t *testing.T) {
+func TestUpdate_DriveFailureDoesNotBlockWorkerRollout(t *testing.T) {
 	backend, st := stubBackends(t)
-	st.runtimeDigest = validImageRef() // digest verifies; the Drive check is the rejecting gate
+	st.runtimeDigest = validImageRef()
 	st.driveErr = ErrDriveDeliveryMissing
 	e := NewUpdateExecutor(backend)
 	err := e.Execute(context.Background(), mkOp("wkr-1", validImageRef(), ""))
-	// Drive verify is FORWARD-ONLY (not in the rollback
-	// cascade), so rollback succeeds → ErrRollbackSucceeded.
-	// runRollback uses %v (not %w) for forwardErr when wrapping
-	// ErrRollbackSucceeded, so the original sentinel is NOT
-	// in the error chain — assert its string-Error() form
-	// instead (matches TestUpdate_SmokeFail_RollsBack pattern).
-	if err == nil || !errors.Is(err, ErrRollbackSucceeded) {
-		t.Errorf("drive missing: want ErrRollbackSucceeded wrap, got %v", err)
-	}
-	if !strings.Contains(err.Error(), ErrDriveDeliveryMissing.Error()) {
-		t.Errorf("err message must mention ErrDriveDeliveryMissing; got %v", err)
+	if err != nil {
+		t.Fatalf("Drive failure must not block worker rollout: %v", err)
 	}
 }
 func TestUpdate_RollbackSucceedsAfterForwardFail(t *testing.T) {

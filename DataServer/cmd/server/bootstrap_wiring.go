@@ -364,26 +364,14 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 		} else {
 			logServerf(context.Background(), logging.LevelWarn, logging.CodeServerSmoke, "[BOOTSTRAP] LevelDSmokeExecutor capability=%s: %s; smoke and resume are not registered", status.State, status.Reason)
 		}
-		if fleetDep.Update != nil && status.State == fleet.SmokeCapabilityReady && smokeBackend.Drive != nil {
-			freshSmoke := fleet.NewFreshSmokeRunnerWithAsset(levelDSmokeExecutor, p.SQLite, cfg.Fleet.SmokeAssetID)
-			// Nil-safe Drive attach (AZIONE 2): a Drive module without a
-			// live service leaves the update capability NOT READY rather
-			// than panicking on m.Drive.Service() at boot — the fail-closed
-			// signal the operator can act on.
-			var driveVerifier fleet.BackendDriveVerifier
-			if m.Drive != nil && m.Drive.Service() != nil {
-				driveVerifier = &driveVerifierAdapter{svc: m.Drive.Service()}
-			}
-			if driveVerifier == nil {
-				// AttachRuntimeBackends is atomic (both-or-nothing): with the
-				// Drive service missing neither smoke nor drive is attached,
-				// so the capability verdict lists both — NOT READY by design.
-				logServerf(context.Background(), logging.LevelWarn, logging.CodeServerCapabilityWarn, "[BOOTSTRAP] WARN: update runtime backends NOT attached (Drive service missing) — capability stays NOT READY (smoke, drive missing; POST /update refuses 503; /ready update-capability probe red)")
-			} else if err := fleetDep.Update.AttachRuntimeBackends(freshSmoke, driveVerifier); err != nil {
+		if fleetDep.Update != nil {
+			// Worker image rollout is deliberately independent from the
+			// socialediting Drive publisher. Its gate performs a real local
+			// ffmpeg render over SSH and checks authenticated readiness above.
+			if err := fleetDep.Update.AttachRuntimeBackends(fleet.NewWorkerUpdateSmokeRunner(sharedSSH), nil); err != nil {
 				return fmt.Errorf("update runtime backends: %w", err)
-			} else {
-				logServerf(context.Background(), logging.LevelInfo, logging.CodeServerCapability, "[BOOTSTRAP] UpdateExecutor fresh Level-D smoke + Drive verifier wired")
 			}
+			logServerf(context.Background(), logging.LevelInfo, logging.CodeServerCapability, "[BOOTSTRAP] UpdateExecutor worker-local smoke wired (Drive-independent)")
 		}
 		if status.State == fleet.SmokeCapabilityReady {
 			logServerf(context.Background(), logging.LevelInfo, logging.CodeServerSmoke, "[BOOTSTRAP] Admin workers smoke handler wired (POST /api/v1/admin/workers/{id}/smoke; tick goroutine drives LevelDSmokeExecutor)")
