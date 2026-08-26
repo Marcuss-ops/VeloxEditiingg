@@ -17,7 +17,7 @@ func TestRawMetricsFromFFmpegResultProjectsObservedFacts(t *testing.T) {
 		CpuTimeMs: 10, PeakRssBytes: 100, DiskReadBytes: 200,
 		DiskWriteBytes: 300, WallClockSeconds: 0.34,
 		// Per-process spawn facts: one ffmpeg process.
-		FfmpegExecCount:  1,
+		FfmpegExecCount:   1,
 		ProcessSpawnCount: 1,
 		FfmpegProcessMs:   340,
 		ProcessStartupMs:  25,

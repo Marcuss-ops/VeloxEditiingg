@@ -166,14 +166,14 @@ type AttemptMetrics struct {
 	CriticalPathComponent string  `json:"critical_path_component,omitempty"`
 	PacketCopyRatio       float64 `json:"packet_copy_ratio"`
 
-	GPUUtilAvgPct       float64 `json:"gpu_util_avg_percent"`
-	GPUUtilPeakPct      float64 `json:"gpu_util_peak_percent"`
-	NVDECUtilAvgPct     float64 `json:"nvdec_util_avg_percent"`
-	NVDECUtilPeakPct    float64 `json:"nvdec_util_peak_percent"`
-	NVENCUtilAvgPct     float64 `json:"nvenc_util_avg_percent"`
-	NVENCUtilPeakPct    float64 `json:"nvenc_util_peak_percent"`
-	VRAMUsedAvgBytes    int64   `json:"vram_used_avg_bytes"`
-	GPUIdleDuringRenderMS int64 `json:"gpu_idle_during_render_ms"`
+	GPUUtilAvgPct         float64 `json:"gpu_util_avg_percent"`
+	GPUUtilPeakPct        float64 `json:"gpu_util_peak_percent"`
+	NVDECUtilAvgPct       float64 `json:"nvdec_util_avg_percent"`
+	NVDECUtilPeakPct      float64 `json:"nvdec_util_peak_percent"`
+	NVENCUtilAvgPct       float64 `json:"nvenc_util_avg_percent"`
+	NVENCUtilPeakPct      float64 `json:"nvenc_util_peak_percent"`
+	VRAMUsedAvgBytes      int64   `json:"vram_used_avg_bytes"`
+	GPUIdleDuringRenderMS int64   `json:"gpu_idle_during_render_ms"`
 
 	FramesDownloadedFromGPU int64 `json:"frames_downloaded_from_gpu"`
 	FramesUploadedToGPU     int64 `json:"frames_uploaded_to_gpu"`

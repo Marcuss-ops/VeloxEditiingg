@@ -1,4 +1,5 @@
 package telemetry
+
 func BuildPerformanceReport(
 	timer *JobPhaseTimer,
 	raw *RawExecutionMetrics,
@@ -156,4 +157,3 @@ func BuildPerformanceReport(
 
 	return r
 }
-

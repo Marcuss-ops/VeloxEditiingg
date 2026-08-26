@@ -9,6 +9,7 @@ import (
 
 	"velox-shared/assetref"
 )
+
 func (c *Cache) Store(ctx context.Context, e Entry) error {
 	if e.AssetKey == "" {
 		return ErrEmptyID

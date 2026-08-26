@@ -1,4 +1,5 @@
 package telemetry
+
 // CoverageMap decodes the optional report coverage block. Invalid or empty
 // JSON is intentionally reported as absent rather than as all-false data.
 // PopulateFromJobPhaseTimer fills all fine-grained phase timing fields from

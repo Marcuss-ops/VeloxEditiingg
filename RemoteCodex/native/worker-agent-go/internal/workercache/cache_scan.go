@@ -9,6 +9,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"velox-shared/assetref"
 )
+
 func columnExistsTx(tx *sql.Tx, table, column string) (bool, error) {
 	rows, err := tx.Query(`PRAGMA table_info(` + quoteSQLiteIdentifier(table) + `)`)
 	if err != nil {

@@ -144,9 +144,9 @@ func newRunnerContext(opts ContextOptions) (*runnerContext, error) {
 		artifacts:      opts.Artifacts,
 		cacheStats:     opts.CacheStats,
 		blobStats:      opts.BlobStats,
-		ffmpegProfiles: opts.FFmpegProfiles,		storage:            opts.StorageResolver,
-		phaseTimer:         opts.PhaseTimer,
-		gpuTransfer:        opts.GPUTransferTracker,
+		ffmpegProfiles: opts.FFmpegProfiles, storage: opts.StorageResolver,
+		phaseTimer:  opts.PhaseTimer,
+		gpuTransfer: opts.GPUTransferTracker,
 	}, nil
 }
 

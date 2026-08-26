@@ -1,4 +1,5 @@
 package telemetry
+
 func (r *PerformanceReport) SetGPUTransferMetrics(g GPUTransferMetrics) {
 	r.FramesDownloadedGPU = g.FramesDownloadedGPU
 	r.FramesUploadedGPU = g.FramesUploadedGPU
@@ -56,4 +57,3 @@ func (r *PerformanceReport) SetBandwidth(downloadMBps, uploadMBps float64) {
 // ── Formatting ─────────────────────────────────────────────────────────────
 
 const reportSeparator = "────────────────────────────────────"
-

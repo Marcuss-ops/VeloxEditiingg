@@ -27,36 +27,36 @@ import (
 )
 
 type GPUSample struct {
-	Timestamp   time.Time
-	GPUUUID     string
-	GPUUtilPct  float64
-	NVDECUtilPct float64
-	NVENCUtilPct float64
-	VRAMUsedBytes int64
+	Timestamp      time.Time
+	GPUUUID        string
+	GPUUtilPct     float64
+	NVDECUtilPct   float64
+	NVENCUtilPct   float64
+	VRAMUsedBytes  int64
 	VRAMTotalBytes int64
 }
 
 type GPUStats struct {
-	SampleCount int64
-	GPUUUID     string
-	GPUUtilAvgPct   float64
-	GPUUtilPeakPct  float64
-	NVDECUtilAvgPct  float64
-	NVDECUtilPeakPct float64
-	NVENCUtilAvgPct  float64
-	NVENCUtilPeakPct float64
-	VRAMUsedAvgBytes  int64
-	VRAMUsedPeakBytes int64
-	VRAMTotalBytes    int64
+	SampleCount           int64
+	GPUUUID               string
+	GPUUtilAvgPct         float64
+	GPUUtilPeakPct        float64
+	NVDECUtilAvgPct       float64
+	NVDECUtilPeakPct      float64
+	NVENCUtilAvgPct       float64
+	NVENCUtilPeakPct      float64
+	VRAMUsedAvgBytes      int64
+	VRAMUsedPeakBytes     int64
+	VRAMTotalBytes        int64
 	GPUIdleDuringRenderMs int64
 }
 
 type GPUSampler struct {
-	ctx       context.Context
-	cancel    context.CancelFunc
-	interval  time.Duration
-	gpuUUID   string
-	started   atomic.Bool
+	ctx      context.Context
+	cancel   context.CancelFunc
+	interval time.Duration
+	gpuUUID  string
+	started  atomic.Bool
 
 	mu        sync.Mutex
 	samples   []GPUSample
@@ -166,11 +166,11 @@ func (s *GPUSampler) computeStatsLocked() GPUStats {
 	}
 
 	var (
-		sumGPU, sumNVDEC, sumNVENC float64
+		sumGPU, sumNVDEC, sumNVENC    float64
 		peakGPU, peakNVDEC, peakNVENC float64
-		sumVRAM, peakVRAM int64
-		totalVRAM          int64
-		idleAccum           time.Duration
+		sumVRAM, peakVRAM             int64
+		totalVRAM                     int64
+		idleAccum                     time.Duration
 	)
 
 	for i, sample := range s.samples {
@@ -208,17 +208,17 @@ func (s *GPUSampler) computeStatsLocked() GPUStats {
 	avgVRAM := sumVRAM / n
 
 	return GPUStats{
-		SampleCount:        n,
-		GPUUUID:            s.gpuUUID,
-		GPUUtilAvgPct:      round2(avgGPU),
-		GPUUtilPeakPct:     round2(peakGPU),
-		NVDECUtilAvgPct:    round2(avgNVDEC),
-		NVDECUtilPeakPct:   round2(peakNVDEC),
-		NVENCUtilAvgPct:    round2(avgNVENC),
-		NVENCUtilPeakPct:   round2(peakNVENC),
-		VRAMUsedAvgBytes:   avgVRAM,
-		VRAMUsedPeakBytes:  peakVRAM,
-		VRAMTotalBytes:     totalVRAM,
+		SampleCount:           n,
+		GPUUUID:               s.gpuUUID,
+		GPUUtilAvgPct:         round2(avgGPU),
+		GPUUtilPeakPct:        round2(peakGPU),
+		NVDECUtilAvgPct:       round2(avgNVDEC),
+		NVDECUtilPeakPct:      round2(peakNVDEC),
+		NVENCUtilAvgPct:       round2(avgNVENC),
+		NVENCUtilPeakPct:      round2(peakNVENC),
+		VRAMUsedAvgBytes:      avgVRAM,
+		VRAMUsedPeakBytes:     peakVRAM,
+		VRAMTotalBytes:        totalVRAM,
 		GPUIdleDuringRenderMs: idleAccum.Milliseconds(),
 	}
 }
@@ -276,11 +276,11 @@ func parseNVidiaSMIOutput(line string, wantUUID string) (GPUSample, error) {
 		return GPUSample{
 			Timestamp:      time.Now(),
 			GPUUUID:        uuid,
-			GPUUtilPct:      float64(values[0]),
-			NVDECUtilPct:    float64(values[1]),
-			NVENCUtilPct:    float64(values[2]),
-			VRAMUsedBytes:   values[3] * 1024 * 1024,
-			VRAMTotalBytes:  values[4] * 1024 * 1024,
+			GPUUtilPct:     float64(values[0]),
+			NVDECUtilPct:   float64(values[1]),
+			NVENCUtilPct:   float64(values[2]),
+			VRAMUsedBytes:  values[3] * 1024 * 1024,
+			VRAMTotalBytes: values[4] * 1024 * 1024,
 		}, nil
 	}
 	if wantUUID != "" {

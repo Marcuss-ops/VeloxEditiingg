@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 )
+
 // ComputeDerivedMetrics fills all derived ratio fields from the raw facts.
 // Must be called AFTER MediaDurationSeconds and WallClockSeconds are set.
 // Safe to call multiple times; always recomputes from current values.

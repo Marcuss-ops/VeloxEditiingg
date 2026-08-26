@@ -56,7 +56,7 @@ func ruleErrorRate(deps RuleDeps) RuleFunc {
 		}
 		if ov.ErrorRate > deps.ErrorRatePct {
 			return &runtimealerts.AlertEvent{
-				RuleID:     "ErrorRateHigh",
+				RuleID:   "ErrorRateHigh",
 				Severity: "warning",
 				Summary:  fmt.Sprintf("Error rate %.1f%% exceeds threshold %.1f%%", ov.ErrorRate, deps.ErrorRatePct),
 				Description: fmt.Sprintf(
@@ -81,7 +81,7 @@ func ruleP95WallMs(deps RuleDeps) RuleFunc {
 		}
 		if ov.P95RenderMS > deps.P95WallMs {
 			return &runtimealerts.AlertEvent{
-				RuleID:        "P95WallMsHigh",
+				RuleID:      "P95WallMsHigh",
 				Severity:    "warning",
 				Summary:     fmt.Sprintf("P95 render time %dms exceeds threshold %dms", ov.P95RenderMS, deps.P95WallMs),
 				Description: fmt.Sprintf("P95 render: %dms. Active workers: %d.", ov.P95RenderMS, ov.ActiveWorkers),
@@ -113,7 +113,7 @@ func ruleWorkerOffline(deps RuleDeps) RuleFunc {
 		}
 		if len(offline) > 0 {
 			return &runtimealerts.AlertEvent{
-				RuleID:        "WorkersOffline",
+				RuleID:      "WorkersOffline",
 				Severity:    "critical",
 				Summary:     fmt.Sprintf("%d workers offline", len(offline)),
 				Description: fmt.Sprintf("Offline workers: %v", offline),
@@ -137,7 +137,7 @@ func ruleDiskFree(deps RuleDeps) RuleFunc {
 		freeGB := float64(stat.Bavail*uint64(stat.Bsize)) / 1_073_741_824.0
 		if freeGB < deps.DiskFreeGB {
 			return &runtimealerts.AlertEvent{
-				RuleID:        "DiskFreeLow",
+				RuleID:      "DiskFreeLow",
 				Severity:    "critical",
 				Summary:     fmt.Sprintf("Disk free %.1f GB below threshold %.1f GB on %s", freeGB, deps.DiskFreeGB, dir),
 				Description: fmt.Sprintf("Available: %.1f GB. Block size: %d, available blocks: %d.", freeGB, stat.Bsize, stat.Bavail),
@@ -166,7 +166,7 @@ func ruleFFmpegSpeedRatio(deps RuleDeps) RuleFunc {
 		p95 := result.P95
 		if p95 > 0 && p95 < deps.FFmpegMin {
 			return &runtimealerts.AlertEvent{
-				RuleID:        "FFmpegSpeedRatioLow",
+				RuleID:      "FFmpegSpeedRatioLow",
 				Severity:    "warning",
 				Summary:     fmt.Sprintf("FFmpeg speed ratio P95 %.2fx below threshold %.2fx", p95, deps.FFmpegMin),
 				Description: fmt.Sprintf("P95 ffmpeg speed ratio: %.2fx over %d samples.", p95, result.Samples),

@@ -17,7 +17,7 @@ func rawMetricsFromFFmpegResult(result ffmpegrunner.FFmpegResult) *telemetry.Raw
 		DiskWriteBytes:   nonNegative(result.WriteBytes),
 		WallClockSeconds: float64(nonNegative(result.ProcessWallMS)) / 1000,
 		// Per-process spawn metrics: each FFmpegResult = one ffmpeg process.
-		FfmpegExecCount:  1,
+		FfmpegExecCount:   1,
 		ProcessSpawnCount: 1,
 		FfmpegProcessMs:   nonNegative(result.ProcessWallMS),
 		ProcessStartupMs:  nonNegative(result.ProcessSpawnMS),

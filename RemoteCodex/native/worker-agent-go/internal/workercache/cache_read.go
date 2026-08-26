@@ -8,6 +8,7 @@ import (
 
 	"velox-shared/assetref"
 )
+
 func (c *Cache) Find(ctx context.Context, assetKey string) (Entry, bool, error) {
 	if assetKey == "" {
 		return Entry{}, false, ErrEmptyID

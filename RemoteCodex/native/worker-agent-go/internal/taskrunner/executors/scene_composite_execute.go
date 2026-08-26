@@ -173,4 +173,3 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 		CompletedAt:    time.Now().UTC(),
 	}, nil
 }
-

@@ -90,8 +90,8 @@ func TestDerive_ZeroGuards(t *testing.T) {
 func TestDerive_MatchesReceiptAssembly(t *testing.T) {
 	run := sampleRun()
 	run.RenderMetrics.DetailedPhases = []pipeline.DetailedPhaseTiming{
-		{Component: "engine", Action: "render", DurationMS: 400},                  // exclusive → summed
-		{Component: "engine", Action: "composite", DurationMS: 200},               // span_child → never summed
+		{Component: "engine", Action: "render", DurationMS: 400},     // exclusive → summed
+		{Component: "engine", Action: "composite", DurationMS: 200},  // span_child → never summed
 		{Component: "engine", Action: "invented_op", DurationMS: 30}, // unclassified → quarantined
 	}
 	ctx := AssemblyContext{

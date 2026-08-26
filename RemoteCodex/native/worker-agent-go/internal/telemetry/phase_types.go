@@ -1,6 +1,7 @@
 package telemetry
 
 import "time"
+
 // ── Phase timing accumulator ───────────────────────────────────────────────
 
 // PhaseTiming holds accumulated timing and data metrics for one phase.
@@ -36,15 +37,15 @@ func (t PhaseTiming) DurationMs() int64 {
 
 // ScenePhaseTiming is per-scene timing data.
 type ScenePhaseTiming struct {
-	SceneID             string
-	SourceDurationMs    int64
-	OutputDurationMs    int64
-	Phases              map[string]PhaseTiming
-	InputBytes          int64
-	OutputBytes         int64
-	FramesDecoded       int64
-	FramesEncoded       int64
-	FPS                 float64
+	SceneID          string
+	SourceDurationMs int64
+	OutputDurationMs int64
+	Phases           map[string]PhaseTiming
+	InputBytes       int64
+	OutputBytes      int64
+	FramesDecoded    int64
+	FramesEncoded    int64
+	FPS              float64
 }
 
 // TotalMs returns the sum of all phase durations for this scene.

@@ -173,7 +173,6 @@ type PhaseMarker struct {
 	Notes       string    `json:"notes,omitempty"`
 }
 
-
 // RenderDuration returns the canonical execution-phase duration. It is a
 // report lifecycle fact, not a legacy metric-map lookup. The boolean is false
 // when no execute marker was recorded, allowing callers to preserve their

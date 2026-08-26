@@ -8,7 +8,7 @@ import (
 // Zero-value means "no filter" — all jobs are returned.
 type Filter struct {
 	Statuses []JobStatus // empty = all statuses
-	Limit    int      // 0 = all
+	Limit    int         // 0 = all
 }
 
 // Counts is the aggregate count by status returned by Reader.Counts.

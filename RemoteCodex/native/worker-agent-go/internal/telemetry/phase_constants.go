@@ -1,11 +1,12 @@
 package telemetry
+
 const (
 	// ── Pre-render phases ─────────────────────────────────────────────
-	PhaseQueueWait       = "queue_wait"
-	PhaseJobSetup        = "job_setup"
-	PhaseAssetResolve    = "asset.resolve"
-	PhaseAssetDownload   = "asset.download"
-	PhaseAssetVerify     = "asset.verify"
+	PhaseQueueWait        = "queue_wait"
+	PhaseJobSetup         = "job_setup"
+	PhaseAssetResolve     = "asset.resolve"
+	PhaseAssetDownload    = "asset.download"
+	PhaseAssetVerify      = "asset.verify"
 	PhaseAssetMaterialize = "asset.materialize"
 
 	// ── Audio phases ──────────────────────────────────────────────────
@@ -114,43 +115,43 @@ var FineGrainedPhaseOrder = []string{
 
 // PhaseDisplayNames maps phase constants to human-readable labels for reports.
 var PhaseDisplayNames = map[string]string{
-	PhaseQueueWait:              "Queue wait",
-	PhaseJobSetup:               "Job setup",
-	PhaseAssetResolve:           "Asset resolve",
-	PhaseAssetDownload:          "Asset download",
-	PhaseAssetVerify:            "Asset verify",
-	PhaseAssetMaterialize:       "Asset materialize",
-	PhaseAudioPrepare:           "Audio prepare",
-	PhaseAudioTimelineBuild:     "Audio timeline build",
-	PhaseRenderPlanBuild:        "Plan build",
-	PhaseVideoDecode:            "Video decode",
-	PhaseVideoSubtitle:          "Subtitle (libass)",
-	PhaseVideoSubtitleRaster:    "  Subtitle raster",
-	PhaseVideoSubtitleComposite: "  Subtitle composite",
-	PhaseVideoWatermark:         "Watermark",
-	PhaseVideoWatermarkUpload:   "  Watermark upload",
+	PhaseQueueWait:               "Queue wait",
+	PhaseJobSetup:                "Job setup",
+	PhaseAssetResolve:            "Asset resolve",
+	PhaseAssetDownload:           "Asset download",
+	PhaseAssetVerify:             "Asset verify",
+	PhaseAssetMaterialize:        "Asset materialize",
+	PhaseAudioPrepare:            "Audio prepare",
+	PhaseAudioTimelineBuild:      "Audio timeline build",
+	PhaseRenderPlanBuild:         "Plan build",
+	PhaseVideoDecode:             "Video decode",
+	PhaseVideoSubtitle:           "Subtitle (libass)",
+	PhaseVideoSubtitleRaster:     "  Subtitle raster",
+	PhaseVideoSubtitleComposite:  "  Subtitle composite",
+	PhaseVideoWatermark:          "Watermark",
+	PhaseVideoWatermarkUpload:    "  Watermark upload",
 	PhaseVideoWatermarkComposite: "  Watermark composite",
-	PhaseVideoBlur:              "Blur",
-	PhaseVideoFilter:            "Filter",
-	PhaseVideoComposite:         "Composite",
-	PhaseVideoEncode:            "Video encode",
-	PhaseVideoConcat:            "Concat",
-	PhaseAudioMux:               "Audio mux",
-	PhaseOutputFinalize:         "Output finalize",
-	PhaseArtifactHash:           "SHA256",
-	PhaseArtifactProbe:          "ffprobe",
-	PhaseArtifactVerify:         "Artifact verify",
-	PhaseArtifactWrite:          "Artifact write",
-	PhaseDriveUpload:            "Drive upload",
-	PhaseDriveVerify:            "Drive verify",
-	PhaseDriveDownload:          "  Drive download",
-	PhaseBlobstoreDownload:      "  Blobstore download",
-	PhaseLocalCacheRead:         "  Local cache read",
-	PhaseAssetDownloadWait:      "  Download wait",
-	PhaseOutputWrite:            "Output write",
-	PhaseTempWrite:              "Temp write",
-	PhaseFinalRead:              "Final read",
-	PhaseCleanup:                "Cleanup",
+	PhaseVideoBlur:               "Blur",
+	PhaseVideoFilter:             "Filter",
+	PhaseVideoComposite:          "Composite",
+	PhaseVideoEncode:             "Video encode",
+	PhaseVideoConcat:             "Concat",
+	PhaseAudioMux:                "Audio mux",
+	PhaseOutputFinalize:          "Output finalize",
+	PhaseArtifactHash:            "SHA256",
+	PhaseArtifactProbe:           "ffprobe",
+	PhaseArtifactVerify:          "Artifact verify",
+	PhaseArtifactWrite:           "Artifact write",
+	PhaseDriveUpload:             "Drive upload",
+	PhaseDriveVerify:             "Drive verify",
+	PhaseDriveDownload:           "  Drive download",
+	PhaseBlobstoreDownload:       "  Blobstore download",
+	PhaseLocalCacheRead:          "  Local cache read",
+	PhaseAssetDownloadWait:       "  Download wait",
+	PhaseOutputWrite:             "Output write",
+	PhaseTempWrite:               "Temp write",
+	PhaseFinalRead:               "Final read",
+	PhaseCleanup:                 "Cleanup",
 }
 
 // fineGrainedSet enables O(1) phase name validation.

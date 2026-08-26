@@ -5,7 +5,6 @@
 // about the task's metriche (telemetry) and upload (output bytes)
 // side-effects. Behaviour-preserving structural split:
 //
-//
 //	recordTaskStart           — telemetry seeds (SetWorkerStatus=2,
 //	                            SetWorkerActiveJobs, LogJobStart).
 //	recordTaskOutcome         — the 3-branch outcome telemetry

@@ -16,7 +16,8 @@ func TestDefaultCostFactors(t *testing.T) {
 		t.Errorf("NetworkGBEUR default = %v; want 0.01 (Hetzner egress rate)", f.NetworkGBEUR)
 	}
 	if f.StorageGBEUR != 0.00012 {
-		t.Errorf("StorageGBEUR default = %v; want 0.00012 (per-GB-per-month amortised)", f.StorageGBEUR)	}
+		t.Errorf("StorageGBEUR default = %v; want 0.00012 (per-GB-per-month amortised)", f.StorageGBEUR)
+	}
 }
 
 // TestCostPerOutputMinute_ZeroFloor: a 0.001-minute output floor

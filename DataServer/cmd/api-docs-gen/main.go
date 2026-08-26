@@ -298,4 +298,3 @@ func main() {
 		os.Exit(exitDrift)
 	}
 }
-

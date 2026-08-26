@@ -136,7 +136,7 @@ func runCommandExecutor(ctx context.Context, e *renderPlanExecutor, spec executo
 	// compiled plan drove this command. Additive — absent payloads emit none.
 	if compiled := compiledPlanEvidence(spec); compiled != nil {
 		for key, value := range compiled {
-		metrics[key] = value
+			metrics[key] = value
 		}
 	}
 	return executor.ExecutionResult{

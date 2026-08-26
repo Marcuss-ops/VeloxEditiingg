@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 )
+
 type activeSpan struct {
 	Phase   string
 	SceneID string
@@ -21,8 +22,8 @@ type JobPhaseTimer struct {
 	activeSpans map[string]activeSpan
 	spanSeq     uint64
 
-	cacheMut      sync.Mutex
-	cacheHitBytes int64
+	cacheMut       sync.Mutex
+	cacheHitBytes  int64
 	cacheMissBytes int64
 }
 

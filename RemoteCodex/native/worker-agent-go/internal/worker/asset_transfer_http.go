@@ -9,6 +9,7 @@ import (
 
 	"velox-worker-agent/internal/telemetry"
 )
+
 var assetTransport = &http.Transport{
 	MaxIdleConns:        128,
 	MaxIdleConnsPerHost: 64,
@@ -18,14 +19,14 @@ var assetTransport = &http.Transport{
 
 var assetHTTPMetricsMu sync.Mutex
 var assetHTTPMetrics struct {
-	requests    int64
-	reused      int64
-	newConns    int64
-	dnsMs       int64
-	tcpMs       int64
-	tlsMs       int64
-	ttfbMs      int64
-	http2       int64
+	requests int64
+	reused   int64
+	newConns int64
+	dnsMs    int64
+	tcpMs    int64
+	tlsMs    int64
+	ttfbMs   int64
+	http2    int64
 }
 
 func recordAssetHTTPTrace(reused bool, dns, tcp, tls, ttfb time.Duration, isHTTP2 bool) {
@@ -60,10 +61,10 @@ func newAssetHTTPTrace() (*httptrace.ClientTrace, func() (dns, tcp, tls, ttfb ti
 	var dnsDur, tcpDur, tlsDur, ttfbDur time.Duration
 	var reused, isHTTP2 bool
 	trace := &httptrace.ClientTrace{
-		DNSStart: func(info httptrace.DNSStartInfo) { dnsStart = time.Now() },
-		DNSDone:  func(info httptrace.DNSDoneInfo) { dnsDur = time.Since(dnsStart) },
-		ConnectStart: func(network, addr string) { tcpStart = time.Now() },
-		ConnectDone:  func(network, addr string, err error) { tcpDur = time.Since(tcpStart) },
+		DNSStart:          func(info httptrace.DNSStartInfo) { dnsStart = time.Now() },
+		DNSDone:           func(info httptrace.DNSDoneInfo) { dnsDur = time.Since(dnsStart) },
+		ConnectStart:      func(network, addr string) { tcpStart = time.Now() },
+		ConnectDone:       func(network, addr string, err error) { tcpDur = time.Since(tcpStart) },
 		TLSHandshakeStart: func() { tlsStart = time.Now() },
 		TLSHandshakeDone:  func(s tls.ConnectionState, err error) { tlsDur = time.Since(tlsStart) },
 		GotConn: func(info httptrace.GotConnInfo) {

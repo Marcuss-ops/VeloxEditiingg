@@ -409,7 +409,8 @@ func TestEnqueue_Precondition_PropagatesMaxRetryBudget(t *testing.T) {
 	}
 	if j.MaxRetries != 7 {
 		t.Errorf("MaxRetries = %d, want 7 (max of [3, 7, 5])", j.MaxRetries)
-	}}
+	}
+}
 
 // TestEnforceDeliveryPlanPrecondition_IntegrationWithRealResolver
 // exercises enforceDeliveryPlanPrecondition end-to-end against a real

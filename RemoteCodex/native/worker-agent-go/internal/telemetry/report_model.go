@@ -1,4 +1,5 @@
 package telemetry
+
 type PerformanceReport struct {
 	// ── Summary ────────────────────────────────────────────────────
 	MediaDurationSeconds float64
@@ -23,7 +24,7 @@ type PerformanceReport struct {
 	Phases []PhaseBreakdown
 
 	// ── Segment stats ──────────────────────────────────────────────
-	SegmentsTotal     int32
+	SegmentsTotal      int32
 	SegmentsPacketCopy int32
 	SegmentsReencoded  int32
 	SegmentsComposited int32
@@ -32,8 +33,8 @@ type PerformanceReport struct {
 	PacketCopyRatio    float64
 
 	// ── GPU ────────────────────────────────────────────────────────
-	GPUUtilAvgPct    float64
-	GPUUtilPeakPct   float64
+	GPUUtilAvgPct     float64
+	GPUUtilPeakPct    float64
 	NVDECUtilAvgPct   float64
 	NVDECUtilPeakPct  float64
 	NVENCUtilAvgPct   float64
@@ -55,14 +56,14 @@ type PerformanceReport struct {
 	PeakRSSBytes   int64
 
 	// ── Output ─────────────────────────────────────────────────────
-	OutputBytes    int64
-	OutputSHA256   string
-	FfprobeValid   bool
+	OutputBytes     int64
+	OutputSHA256    string
+	FfprobeValid    bool
 	DurationDiffSec float64
 
 	// ── Audio ──────────────────────────────────────────────────────
-	AudioCopyMs   int64
-	AudioEncodeMs int64
+	AudioCopyMs         int64
+	AudioEncodeMs       int64
 	AudioPacketsCopied  int64
 	AudioPacketsEncoded int64
 	AudioInputBytes     int64

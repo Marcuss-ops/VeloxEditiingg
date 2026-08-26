@@ -63,6 +63,9 @@ jobs:
           # for the toolchain used by internal/telemetry and
           # pkg/performance) rather than a hardcoded "1.x".
           go-version-file: RemoteCodex/native/worker-agent-go/go.mod
+          # The explicit cache below owns these paths. Disable setup-go's
+          # implicit cache to avoid concurrent archive extraction/save races.
+          cache: false
 
       - name: Cache Go build module cache
         uses: actions/cache@v4

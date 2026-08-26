@@ -48,6 +48,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 )
+
 func loadManifest(path string) (*Manifest, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {

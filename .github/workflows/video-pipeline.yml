@@ -81,7 +81,7 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            cmake ffmpeg pkg-config libavformat-dev libavcodec-dev libavutil-dev
+            cmake ffmpeg pkg-config libavformat-dev libavcodec-dev libavutil-dev libswscale-dev
           cmake --version
           ffmpeg -version | head -1
           ffprobe -version | head -1
@@ -117,7 +117,7 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            cmake ffmpeg pkg-config libavformat-dev libavcodec-dev libavutil-dev python3
+            cmake ffmpeg pkg-config libavformat-dev libavcodec-dev libavutil-dev libswscale-dev python3
           cmake --version
           ffmpeg -version | head -1
           ffprobe -version | head -1
@@ -152,7 +152,7 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            cmake ffmpeg pkg-config libavformat-dev libavcodec-dev libavutil-dev python3
+            cmake ffmpeg pkg-config libavformat-dev libavcodec-dev libavutil-dev libswscale-dev python3
           cmake --version
           ffmpeg -version | head -1
           ffprobe -version | head -1

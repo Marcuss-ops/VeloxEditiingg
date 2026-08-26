@@ -114,9 +114,9 @@ func NewServiceOrM2MOrAdminAuthMiddleware(cfg *config.Config, st *store.SQLiteSt
 // =====================================================================
 
 const (
-	m2mCtxKeyClientID    = "m2m_client_id"
-	m2mCtxKeyM2MKey      = "m2m_key_row"
-	m2mCtxKeyStartedAt   = "m2m_started_at"
+	m2mCtxKeyClientID     = "m2m_client_id"
+	m2mCtxKeyM2MKey       = "m2m_key_row"
+	m2mCtxKeyStartedAt    = "m2m_started_at"
 	m2mCtxKeyIntakeSource = "m2m_intake_source"
 )
 

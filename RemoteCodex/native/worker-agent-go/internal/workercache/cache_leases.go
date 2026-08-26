@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
-
 )
+
 // ErrNotFound when no cached asset row matches.
 func (c *Cache) Acquire(ctx context.Context, assetKey, jobID string) error {
 	if assetKey == "" {

@@ -130,4 +130,3 @@ func (c *Controller) ProtectedAssets() []futureasset.ProtectedAsset {
 	}
 	return out
 }
-

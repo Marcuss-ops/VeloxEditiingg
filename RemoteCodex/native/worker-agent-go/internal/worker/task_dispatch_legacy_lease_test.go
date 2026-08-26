@@ -56,12 +56,12 @@ func TestDispatchTaskRunner_LegacyClipPayloadAcquiresLease(t *testing.T) {
 	}
 	log := logger.New(logger.InfoLevel, os.Stderr)
 	w := &Worker{
-		config:      &config.WorkerConfig{WorkerID: "worker-legacy-lease", MasterURL: server.URL, WorkDir: t.TempDir()},
-		apiClient:   api.NewClient(server.URL),
-		logger:      log,
-		activeTasks: make(map[string]*ActiveTaskExecution),
-		taskRunner:  taskrunner.NewTaskRunner(registry, log),
-		clipCache:   cache,
+		config:              &config.WorkerConfig{WorkerID: "worker-legacy-lease", MasterURL: server.URL, WorkDir: t.TempDir()},
+		apiClient:           api.NewClient(server.URL),
+		logger:              log,
+		activeTasks:         make(map[string]*ActiveTaskExecution),
+		taskRunner:          taskrunner.NewTaskRunner(registry, log),
+		clipCache:           cache,
 		canonicalAssetCache: workercache.NewCanonicalAssetStore(cache),
 	}
 
@@ -165,12 +165,12 @@ func TestDispatchTaskRunner_LegacyClipPayloadReleasesLeaseOnExecutorError(t *tes
 	}
 	log := logger.New(logger.InfoLevel, os.Stderr)
 	w := &Worker{
-		config:      &config.WorkerConfig{WorkerID: "worker-legacy-lease-err", MasterURL: server.URL, WorkDir: t.TempDir()},
-		apiClient:   api.NewClient(server.URL),
-		logger:      log,
-		activeTasks: make(map[string]*ActiveTaskExecution),
-		taskRunner:  taskrunner.NewTaskRunner(registry, log),
-		clipCache:   cache,
+		config:              &config.WorkerConfig{WorkerID: "worker-legacy-lease-err", MasterURL: server.URL, WorkDir: t.TempDir()},
+		apiClient:           api.NewClient(server.URL),
+		logger:              log,
+		activeTasks:         make(map[string]*ActiveTaskExecution),
+		taskRunner:          taskrunner.NewTaskRunner(registry, log),
+		clipCache:           cache,
 		canonicalAssetCache: workercache.NewCanonicalAssetStore(cache),
 	}
 

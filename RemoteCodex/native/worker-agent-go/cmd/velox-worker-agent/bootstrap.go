@@ -112,4 +112,3 @@ func registerCanonicalRenderExecutors(reg *executor.Registry, outputRoot string,
 	}
 	return nil
 }
-

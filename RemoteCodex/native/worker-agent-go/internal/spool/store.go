@@ -169,13 +169,13 @@ type SpoolEntry struct {
 	// engine_progress_sidecar / raw artifact type) published in
 	// TaskOutputDeclared. It is persisted so the declare-resume loop can
 	// rebuild the manifest after a restart; the mime type is derived from it.
-	OutputKind string
-	LocalPath  string
-	SHA256         string
-	SizeBytes      int64
-	UploadID       string
-	UploadedBytes  int64
-	Status         Status
+	OutputKind    string
+	LocalPath     string
+	SHA256        string
+	SizeBytes     int64
+	UploadID      string
+	UploadedBytes int64
+	Status        Status
 	// StorageTier records the physical backing (tmpfs vs NVMe) of
 	// LocalPath. Defaults to NVME_DURABLE on Insert when empty.
 	StorageTier StorageTier

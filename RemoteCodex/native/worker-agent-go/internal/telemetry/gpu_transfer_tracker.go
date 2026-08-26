@@ -34,7 +34,7 @@ import (
 // boundary by analyzing the engine's detailed phase stream. It is thread-safe
 // and scoped to a single job.
 type GPUTransferTracker struct {
-	mu sync.Mutex
+	mu      sync.Mutex
 	metrics GPUTransferMetrics
 }
 
@@ -160,13 +160,13 @@ const (
 // for GPU transfer analysis. Only the fields needed for classification
 // are included.
 type PhaseIngest struct {
-	Component   string
-	Action      string
-	FramesIn    int64
-	FramesOut   int64
-	BytesIn     int64
-	BytesOut    int64
-	DurationMS  int64
+	Component  string
+	Action     string
+	FramesIn   int64
+	FramesOut  int64
+	BytesIn    int64
+	BytesOut   int64
+	DurationMS int64
 }
 
 // TransferDirection names the direction of a GPU↔CPU data movement.

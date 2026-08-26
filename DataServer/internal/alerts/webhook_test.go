@@ -34,26 +34,26 @@ func TestNewWebhookNotifierRoutesCanonicalAlert(t *testing.T) {
 			defer server.Close()
 
 			notifier := alerts.NewWebhookNotifier(server.URL+tc.urlSuffix, tc.typ)
-		if notifier == nil {
-			t.Fatal("NewWebhookNotifier returned nil for configured URL")
-		}
-		err := notifier.Notify(context.Background(), alerts.Alert{
-			Source:   "source.test",
-			Severity: alerts.SeverityError,
-			Subject:  "subject-1",
-			Body:     "failure detail",
-			Tags:     map[string]string{"job_id": "job-1"},
+			if notifier == nil {
+				t.Fatal("NewWebhookNotifier returned nil for configured URL")
+			}
+			err := notifier.Notify(context.Background(), alerts.Alert{
+				Source:   "source.test",
+				Severity: alerts.SeverityError,
+				Subject:  "subject-1",
+				Body:     "failure detail",
+				Tags:     map[string]string{"job_id": "job-1"},
+			})
+			if err != nil {
+				t.Fatalf("Notify: %v", err)
+			}
+			if method != tc.wantMethod {
+				t.Fatalf("method = %q, want %q", method, tc.wantMethod)
+			}
+			if !strings.Contains(body, tc.wantBody) {
+				t.Fatalf("body = %q, want %q", body, tc.wantBody)
+			}
 		})
-		if err != nil {
-			t.Fatalf("Notify: %v", err)
-		}
-		if method != tc.wantMethod {
-			t.Fatalf("method = %q, want %q", method, tc.wantMethod)
-		}
-		if !strings.Contains(body, tc.wantBody) {
-			t.Fatalf("body = %q, want %q", body, tc.wantBody)
-		}
-	})
 	}
 }
 

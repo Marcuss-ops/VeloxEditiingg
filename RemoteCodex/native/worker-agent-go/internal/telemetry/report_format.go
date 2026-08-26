@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 )
+
 func (r PerformanceReport) Format() string {
 	var b strings.Builder
 

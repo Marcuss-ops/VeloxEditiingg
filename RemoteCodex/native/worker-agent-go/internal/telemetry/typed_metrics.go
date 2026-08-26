@@ -66,8 +66,8 @@ type RawExecutionMetrics struct {
 	MediaDurationSeconds   float64 `json:"media_duration_seconds"`
 	WallClockSeconds       float64 `json:"wall_clock_seconds"`
 	// ── Derived performance ratios ──────────────────────────────────
-	RealTimeFactor float64 `json:"realtime_factor"`   // wall / media (lower is better; <1 = faster-than-realtime)
-	ThroughputX    float64 `json:"throughput_x"`      // media / wall (higher is better; 2x = 10min in 5min)
+	RealTimeFactor float64 `json:"realtime_factor"` // wall / media (lower is better; <1 = faster-than-realtime)
+	ThroughputX    float64 `json:"throughput_x"`    // media / wall (higher is better; 2x = 10min in 5min)
 
 	// ── Scorecard v2 / output quality validation (migration 072) ───────
 	FfprobeValid      int32   `json:"ffprobe_valid"`
@@ -122,36 +122,36 @@ type RawExecutionMetrics struct {
 
 	// ── Fine-grained phase timings (ms) ────────────────────────────────
 	// These decompose the wall clock into the complete job timeline.
-	QueueWaitMs          int64 `json:"queue_wait_ms"`
-	JobSetupMs           int64 `json:"job_setup_ms"`
-	AssetResolveMs       int64 `json:"asset_resolve_ms"`
-	AssetDownloadMs      int64 `json:"asset_download_ms"`
-	AssetVerifyMs        int64 `json:"asset_verify_ms"`
-	AssetMaterializeMs   int64 `json:"asset_materialize_ms"`
-	AudioPrepareMs       int64 `json:"audio_prepare_ms"`
-	AudioTimelineBuildMs int64 `json:"audio_timeline_build_ms"`
-	RenderPlanBuildMs    int64 `json:"render_plan_build_ms"`
-	VideoDecodeMs        int64 `json:"video_decode_ms"`
-	VideoSubtitleMs      int64 `json:"video_subtitle_ms"`
-	VideoSubtitleRasterMs    int64 `json:"video_subtitle_raster_ms"`
-	VideoSubtitleCompositeMs int64 `json:"video_subtitle_composite_ms"`
-	VideoWatermarkMs         int64 `json:"video_watermark_ms"`
-	VideoWatermarkUploadMs   int64 `json:"video_watermark_upload_ms"`
+	QueueWaitMs               int64 `json:"queue_wait_ms"`
+	JobSetupMs                int64 `json:"job_setup_ms"`
+	AssetResolveMs            int64 `json:"asset_resolve_ms"`
+	AssetDownloadMs           int64 `json:"asset_download_ms"`
+	AssetVerifyMs             int64 `json:"asset_verify_ms"`
+	AssetMaterializeMs        int64 `json:"asset_materialize_ms"`
+	AudioPrepareMs            int64 `json:"audio_prepare_ms"`
+	AudioTimelineBuildMs      int64 `json:"audio_timeline_build_ms"`
+	RenderPlanBuildMs         int64 `json:"render_plan_build_ms"`
+	VideoDecodeMs             int64 `json:"video_decode_ms"`
+	VideoSubtitleMs           int64 `json:"video_subtitle_ms"`
+	VideoSubtitleRasterMs     int64 `json:"video_subtitle_raster_ms"`
+	VideoSubtitleCompositeMs  int64 `json:"video_subtitle_composite_ms"`
+	VideoWatermarkMs          int64 `json:"video_watermark_ms"`
+	VideoWatermarkUploadMs    int64 `json:"video_watermark_upload_ms"`
 	VideoWatermarkCompositeMs int64 `json:"video_watermark_composite_ms"`
-	VideoBlurMs           int64 `json:"video_blur_ms"`
-	VideoFilterMs         int64 `json:"video_filter_ms"`
-	VideoCompositeMs      int64 `json:"video_composite_ms"`
-	VideoEncodeMs         int64 `json:"video_encode_ms"`
-	VideoConcatMs         int64 `json:"video_concat_ms"`
-	AudioMuxMs            int64 `json:"audio_mux_ms"`
-	OutputFinalizeMs      int64 `json:"output_finalize_ms"`
-	Sha256Ms              int64 `json:"sha256_ms"`
-	FfprobeMs             int64 `json:"ffprobe_ms"`
-	ArtifactVerifyMs      int64 `json:"artifact_verify_ms"`
-	DriveUploadMs         int64 `json:"drive_upload_ms"`
-	DriveVerifyMs         int64 `json:"drive_verify_ms"`
-	CleanupMs             int64 `json:"cleanup_ms"`
-	JobTotalMs            int64 `json:"job_total_ms"`
+	VideoBlurMs               int64 `json:"video_blur_ms"`
+	VideoFilterMs             int64 `json:"video_filter_ms"`
+	VideoCompositeMs          int64 `json:"video_composite_ms"`
+	VideoEncodeMs             int64 `json:"video_encode_ms"`
+	VideoConcatMs             int64 `json:"video_concat_ms"`
+	AudioMuxMs                int64 `json:"audio_mux_ms"`
+	OutputFinalizeMs          int64 `json:"output_finalize_ms"`
+	Sha256Ms                  int64 `json:"sha256_ms"`
+	FfprobeMs                 int64 `json:"ffprobe_ms"`
+	ArtifactVerifyMs          int64 `json:"artifact_verify_ms"`
+	DriveUploadMs             int64 `json:"drive_upload_ms"`
+	DriveVerifyMs             int64 `json:"drive_verify_ms"`
+	CleanupMs                 int64 `json:"cleanup_ms"`
+	JobTotalMs                int64 `json:"job_total_ms"`
 
 	// ── GPU transfers (VRAM ↔ RAM) ─────────────────────────────────────
 	FramesDownloadedFromGPU int64 `json:"frames_downloaded_from_gpu"`
@@ -168,35 +168,35 @@ type RawExecutionMetrics struct {
 	NvdecUtilPeakPct float64 `json:"nvdec_util_peak_percent"`
 	NvencUtilAvgPct  float64 `json:"nvenc_util_avg_percent"`
 	NvencUtilPeakPct float64 `json:"nvenc_util_peak_percent"`
-	VramUsedAvgBytes  int64   `json:"vram_used_avg_bytes"`
+	VramUsedAvgBytes int64   `json:"vram_used_avg_bytes"`
 	GpuIdleMs        int64   `json:"gpu_idle_during_render_ms"`
 
 	// ── CPU attribution to phases ───────────────────────────────────────
-	CpuPercentAvg float64 `json:"cpu_percent_avg"`
-	CpuUserMs     int64   `json:"cpu_user_ms"`
-	CpuSystemMs   int64   `json:"cpu_system_ms"`
-	SubtitleCpuMs int64   `json:"subtitle_cpu_ms"`
-	BlurCpuMs     int64   `json:"blur_cpu_ms"`
-	CompositeCpuMs int64  `json:"composite_cpu_ms"`
-	EncodeCpuMs   int64   `json:"encode_cpu_ms"`
-	HashCpuMs     int64   `json:"hash_cpu_ms"`
+	CpuPercentAvg  float64 `json:"cpu_percent_avg"`
+	CpuUserMs      int64   `json:"cpu_user_ms"`
+	CpuSystemMs    int64   `json:"cpu_system_ms"`
+	SubtitleCpuMs  int64   `json:"subtitle_cpu_ms"`
+	BlurCpuMs      int64   `json:"blur_cpu_ms"`
+	CompositeCpuMs int64   `json:"composite_cpu_ms"`
+	EncodeCpuMs    int64   `json:"encode_cpu_ms"`
+	HashCpuMs      int64   `json:"hash_cpu_ms"`
 
-	CpuStealAvgPct  float64 `json:"cpu_steal_avg_percent"`
-	CpuStealPeakPct float64 `json:"cpu_steal_peak_percent"`
+	CpuStealAvgPct   float64 `json:"cpu_steal_avg_percent"`
+	CpuStealPeakPct  float64 `json:"cpu_steal_peak_percent"`
 	CpuIOWaitAvgPct  float64 `json:"cpu_iowait_avg_percent"`
 	CpuIOWaitPeakPct float64 `json:"cpu_iowait_peak_percent"`
-	RunQueueAvg     float64 `json:"run_queue_avg"`
-	RunQueuePeak    int32   `json:"run_queue_peak"`
+	RunQueueAvg      float64 `json:"run_queue_avg"`
+	RunQueuePeak     int32   `json:"run_queue_peak"`
 
 	// ── Segment / packet-copy stats ─────────────────────────────────────
-	SegmentsTotal       int32   `json:"segments_total"`
-	SegmentsPacketCopy  int32   `json:"segments_packet_copy"`
-	SegmentsReencoded   int32   `json:"segments_reencoded"`
-	SegmentsComposited  int32   `json:"segments_composited"`
-	PacketCopyBytes     int64   `json:"packet_copy_bytes"`
-	ReencodedBytes      int64   `json:"reencoded_bytes"`
-	PacketCopyDurationMs int64  `json:"packet_copy_duration_ms"`
-	ReencodeDurationMs   int64  `json:"reencode_duration_ms"`
+	SegmentsTotal        int32   `json:"segments_total"`
+	SegmentsPacketCopy   int32   `json:"segments_packet_copy"`
+	SegmentsReencoded    int32   `json:"segments_reencoded"`
+	SegmentsComposited   int32   `json:"segments_composited"`
+	PacketCopyBytes      int64   `json:"packet_copy_bytes"`
+	ReencodedBytes       int64   `json:"reencoded_bytes"`
+	PacketCopyDurationMs int64   `json:"packet_copy_duration_ms"`
+	ReencodeDurationMs   int64   `json:"reencode_duration_ms"`
 	PacketCopyRatio      float64 `json:"packet_copy_ratio"`
 
 	// ── Download / cache timing ─────────────────────────────────────────
@@ -210,23 +210,23 @@ type RawExecutionMetrics struct {
 	// ── Disk I/O timing ─────────────────────────────────────────────────
 	OutputWriteMs int64 `json:"output_write_ms"`
 	TempWriteMs   int64 `json:"temp_write_ms"`
-	FinalReadMs   int64 `json:"final_read_ms"`   // re-read of output for verification
+	FinalReadMs   int64 `json:"final_read_ms"` // re-read of output for verification
 	DiskReadMs    int64 `json:"disk_read_ms"`
 	DiskWriteMs   int64 `json:"disk_write_ms"`
 
 	// ── Bandwidth derived ───────────────────────────────────────────────
-	DownloadMbpsAvg     float64 `json:"download_mbps_avg"`
-	UploadMbpsAvg       float64 `json:"upload_mbps_avg"`
-	DriveUploadMbps     float64 `json:"drive_upload_mbps"`
+	DownloadMbpsAvg      float64 `json:"download_mbps_avg"`
+	UploadMbpsAvg        float64 `json:"upload_mbps_avg"`
+	DriveUploadMbps      float64 `json:"drive_upload_mbps"`
 	ArtifactDownloadMbps float64 `json:"artifact_download_mbps"`
 
 	// ── Process spawn ───────────────────────────────────────────────────
-	FfmpegExecCount  int64 `json:"ffmpeg_exec_count"`
-	FfprobeExecCount int64 `json:"ffprobe_exec_count"`
+	FfmpegExecCount   int64 `json:"ffmpeg_exec_count"`
+	FfprobeExecCount  int64 `json:"ffprobe_exec_count"`
 	ProcessSpawnCount int64 `json:"process_spawn_count"`
-	FfmpegProcessMs  int64 `json:"ffmpeg_process_ms"`
-	FfprobeProcessMs int64 `json:"ffprobe_process_ms"`
-	ProcessStartupMs int64 `json:"process_startup_ms"`
+	FfmpegProcessMs   int64 `json:"ffmpeg_process_ms"`
+	FfprobeProcessMs  int64 `json:"ffprobe_process_ms"`
+	ProcessStartupMs  int64 `json:"process_startup_ms"`
 
 	// ── Audio encode/copy ───────────────────────────────────────────────
 	AudioCopyMs      int64 `json:"audio_copy_ms"`
@@ -237,19 +237,19 @@ type RawExecutionMetrics struct {
 	AudioOutputBytes int64 `json:"audio_output_bytes"`
 
 	// ── Faststart ───────────────────────────────────────────────────────
-	FaststartEnabled       bool  `json:"faststart_enabled"`
-	FaststartMs            int64 `json:"faststart_ms"`
+	FaststartEnabled        bool  `json:"faststart_enabled"`
+	FaststartMs             int64 `json:"faststart_ms"`
 	FaststartBytesRewritten int64 `json:"faststart_bytes_rewritten"`
 
 	// ── HTTP asset transport ────────────────────────────────────────────
-	HttpRequests          int64 `json:"http_requests"`
-	HttpConnectionReused  int64 `json:"http_connection_reused"`
-	HttpNewConnections    int64 `json:"http_new_connections"`
-	DnsMs                 int64 `json:"dns_ms"`
-	TcpConnectMs          int64 `json:"tcp_connect_ms"`
-	TlsHandshakeMs        int64 `json:"tls_handshake_ms"`
-	TtfbMs                int64 `json:"ttfb_ms"`
-	Http2Requests         int64 `json:"http2_requests"`
+	HttpRequests         int64 `json:"http_requests"`
+	HttpConnectionReused int64 `json:"http_connection_reused"`
+	HttpNewConnections   int64 `json:"http_new_connections"`
+	DnsMs                int64 `json:"dns_ms"`
+	TcpConnectMs         int64 `json:"tcp_connect_ms"`
+	TlsHandshakeMs       int64 `json:"tls_handshake_ms"`
+	TtfbMs               int64 `json:"ttfb_ms"`
+	Http2Requests        int64 `json:"http2_requests"`
 
 	ExternalProcessSpawnExact int64 `json:"external_process_spawn_exact"`
 
@@ -266,4 +266,3 @@ type RawExecutionMetrics struct {
 // callers that adopted the pre-migration type. New producers must use
 // RawExecutionMetrics; both names describe the same canonical typed facts.
 type TypedExecutionMetrics = RawExecutionMetrics
-

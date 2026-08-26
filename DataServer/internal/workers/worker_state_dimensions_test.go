@@ -88,4 +88,3 @@ func TestNormalizeDeploymentStateRejectsUnknownValues(t *testing.T) {
 		t.Fatalf("NormalizeDeploymentState valid = %q, want %q", got, DeploymentRollback)
 	}
 }
-

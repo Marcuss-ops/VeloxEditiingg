@@ -12,7 +12,7 @@ func TestBuildRawPayload_PreservesNestedRenderBoundary(t *testing.T) {
 			Clip:            &ClipInput{URL: "velox-asset://clip.mp4"},
 			Voiceover:       &VoiceoverInput{URL: "velox-asset://voice.mp3", Language: "it"},
 		}},
-		Layers:      []LayerInput{{ID: "title", Type: "text", Text: "Title", Position: []float64{0.5, 0.5}}},
+		Layers: []LayerInput{{ID: "title", Type: "text", Text: "Title", Position: []float64{0.5, 0.5}}},
 	})
 
 	if raw["job_id"] != "boundary-job" {

@@ -115,22 +115,30 @@ func (e *renderBatchExecutor) Execute(ctx context.Context, execCtx executor.Exec
 	visualArtifact, visualProfile, visualRaw, err := e.runCommand(ctx, execCtx, ffmpegrunner.OperationCompose, visualArgs, videoOnlyPath, "video-only")
 	obs.mergeRawMetrics(visualRaw)
 	if err != nil {
-		if timer != nil && spanConcat != "" { timer.End(spanConcat) }
+		if timer != nil && spanConcat != "" {
+			timer.End(spanConcat)
+		}
 		obs.finish(visual, telemetry.StatusFailed, "visual_execute_failed", err)
 		return obs.failure(started, "visual_execute_failed", err), nil
 	}
 	if visualArtifact.SizeBytes <= 0 {
 		err := errors.New("video-only output is empty")
-		if timer != nil && spanConcat != "" { timer.End(spanConcat) }
+		if timer != nil && spanConcat != "" {
+			timer.End(spanConcat)
+		}
 		obs.finish(visual, telemetry.StatusFailed, "visual_output_empty", err)
 		return obs.failure(started, "visual_output_empty", err), nil
 	}
 	if err := validateMediaFile(e.probe, ctx, videoOnlyPath, "video-only output", plan.DurationUS, true, false, nil); err != nil {
-		if timer != nil && spanConcat != "" { timer.End(spanConcat) }
+		if timer != nil && spanConcat != "" {
+			timer.End(spanConcat)
+		}
 		obs.finish(visual, telemetry.StatusFailed, "VISUAL_OUTPUT_INVALID", err)
 		return obs.failure(started, "VISUAL_OUTPUT_INVALID", err), nil
 	}
-	if timer != nil && spanConcat != "" { timer.End(spanConcat) }
+	if timer != nil && spanConcat != "" {
+		timer.End(spanConcat)
+	}
 	obs.finish(visual, telemetry.StatusOK, "", nil)
 
 	mux := obs.begin("final_mux", "engine.mux", "packet_write")
@@ -142,16 +150,22 @@ func (e *renderBatchExecutor) Execute(ctx context.Context, execCtx executor.Exec
 	finalArtifact, muxProfile, muxRaw, err := e.runCommand(ctx, execCtx, ffmpegrunner.OperationEncode, muxArgs, finalPath, "final-mux")
 	obs.mergeRawMetrics(muxRaw)
 	if err != nil {
-		if timer != nil && spanAudioMux != "" { timer.End(spanAudioMux) }
+		if timer != nil && spanAudioMux != "" {
+			timer.End(spanAudioMux)
+		}
 		obs.finish(mux, telemetry.StatusFailed, "final_mux_failed", err)
 		return obs.failure(started, "final_mux_failed", err), nil
 	}
 	if err := validateMediaFile(e.probe, ctx, finalPath, "final output", plan.DurationUS, true, true, &plan.FinalAudio); err != nil {
-		if timer != nil && spanAudioMux != "" { timer.End(spanAudioMux) }
+		if timer != nil && spanAudioMux != "" {
+			timer.End(spanAudioMux)
+		}
 		obs.finish(mux, telemetry.StatusFailed, "FINAL_OUTPUT_INVALID", err)
 		return obs.failure(started, "FINAL_OUTPUT_INVALID", err), nil
 	}
-	if timer != nil && spanAudioMux != "" { timer.End(spanAudioMux) }
+	if timer != nil && spanAudioMux != "" {
+		timer.End(spanAudioMux)
+	}
 	obs.finish(mux, telemetry.StatusOK, "", nil)
 
 	metrics := obs.metrics
@@ -191,8 +205,8 @@ func (e *renderBatchExecutor) Execute(ctx context.Context, execCtx executor.Exec
 	// via -c:a copy into the mux container. This is the target.
 	obs.rawMetrics.AudioPacketCopy = 1
 	obs.rawMetrics.AudioReencoded = 0
-	obs.rawMetrics.AudioCopyMs = 0       // packet copy has no per-packet timing
-	obs.rawMetrics.AudioEncodeMs = 0     // zero encode
+	obs.rawMetrics.AudioCopyMs = 0   // packet copy has no per-packet timing
+	obs.rawMetrics.AudioEncodeMs = 0 // zero encode
 	obs.rawMetrics.AudioInputBytes = plan.FinalAudio.SizeBytes
 	obs.rawMetrics.AudioOutputBytes = plan.FinalAudio.SizeBytes
 	// Packet-copy executor: no decode, no encode, no GPU transfers.

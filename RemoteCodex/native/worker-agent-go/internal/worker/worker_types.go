@@ -209,7 +209,7 @@ type Worker struct {
 	// gate the resume loop can observe that intermediate state, upload the same
 	// bytes, and win MarkUploaded before the foreground path does.
 	artifactUploadMu sync.Mutex
-	publisherPool  *PublisherPool
+	publisherPool    *PublisherPool
 
 	// Status management — error state only; busy/idle derived from activeTasks
 	status Status

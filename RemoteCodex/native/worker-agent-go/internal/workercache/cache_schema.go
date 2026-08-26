@@ -482,4 +482,3 @@ func migrateLegacySchemaWithHook(db *sql.DB, afterAssetsRebuild func() error) er
 	}
 	return nil
 }
-

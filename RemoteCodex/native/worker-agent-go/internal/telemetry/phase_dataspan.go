@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 )
+
 type DataSpan struct {
 	timer   *JobPhaseTimer
 	spanID  string
@@ -134,4 +135,3 @@ func (d *DataSpan) Complete() {
 		d.timer.AddPhaseData(d.phase, bytesIn, bytesOut, framesIn, framesOut, cpuMs, queueMs)
 	}
 }
-

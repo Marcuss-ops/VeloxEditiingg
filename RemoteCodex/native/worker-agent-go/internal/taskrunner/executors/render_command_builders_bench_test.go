@@ -84,9 +84,9 @@ func benchmarkVideoPlan(nSegments int) (*contract.CompiledRenderPlanV2, runtimea
 		assetID := "video-" + id
 		sha := strings.Repeat("a", 64)
 		segments = append(segments, contract.VideoSegmentV2{
-			SegmentID:         "segment-" + id,
-			AssetID:           assetID,
-			SHA256:            sha,
+			SegmentID:          "segment-" + id,
+			AssetID:            assetID,
+			SHA256:             sha,
 			TimelineStartFrame: int64(i) * 30,
 			FrameCount:         30,
 			SourceInUS:         int64(i) * 1_000_000,

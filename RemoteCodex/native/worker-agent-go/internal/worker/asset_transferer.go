@@ -23,7 +23,6 @@ import (
 // accounting — the CacheResolver boundary records classified outcomes once
 // per resolution.
 
-
 type masterAssetTransferer struct{ w *Worker }
 
 // Check probes the local cache and classifies the outcome AT the lookup
