@@ -73,14 +73,13 @@ ARG CA_CERTIFICATES_VERSION=20230311+deb12u1
 ARG FFMPEG_VERSION=7:5.1.9-0+deb12u1
 ARG PROCPS_VERSION=2:4.0.2-3
 ARG LIBC_BIN_VERSION=2.36-9+deb12u14
-ARG CCACHE_VERSION=4.8.3-1
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update -qq && apt-get install -y --no-install-recommends \
         build-essential=${BUILD_ESSENTIAL_VERSION} \
         cmake=${CMAKE_VERSION} \
         g++=${GXX_VERSION} \
-        ccache=${CCACHE_VERSION} \
+        ccache \
         pkg-config=${PKG_CONFIG_VERSION} \
         ca-certificates=${CA_CERTIFICATES_VERSION} \
         ffmpeg=${FFMPEG_VERSION} \
