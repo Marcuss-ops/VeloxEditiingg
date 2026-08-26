@@ -7,8 +7,10 @@ import (
 
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
+	sharedtelemetry "velox-shared/telemetry"
 	"velox-worker-agent/internal/spool"
 	"velox-worker-agent/internal/taskrunner"
+	"velox-worker-agent/internal/telemetry"
 )
 
 // active_task_publish.go is the orchestration root for Artifact Commit
@@ -42,6 +44,12 @@ func (w *Worker) publishArtifactsV1(ctx context.Context, pte *PendingTaskExecuti
 	if err != nil {
 		return fmt.Errorf("worker artifact upload: register durable spool: %w", err)
 	}
+	// The local spool now holds bytes + SHA + size durably: mark output.durable
+	// here so the waterfall publish_queue_wait bucket (output.durable ->
+	// publish.started) reflects real time spent queued before the upload.
+	if m := telemetry.MilestoneRecorderFromContext(ctx); m != nil {
+		m.Mark(sharedtelemetry.MilestoneOutputDurable)
+	}
 	committed := false
 	resumable := make(map[string]bool)
 	defer func() {
@@ -59,6 +67,13 @@ func (w *Worker) publishArtifactsV1(ctx context.Context, pte *PendingTaskExecuti
 	if err != nil {
 		return err
 	}
+	// The artifacts are declared/queued for publication. Mark publish.queued
+	// now; the actual transfer boundary is publish.started just before the
+	// first upload call.
+	if m := telemetry.MilestoneRecorderFromContext(ctx); m != nil {
+		m.Mark(sharedtelemetry.MilestonePublishQueued)
+		m.Mark(sharedtelemetry.MilestonePublishStarted)
+	}
 
 	completed, err := w.uploadDeclaredArtifacts(ctx, pte, report, plan, spoolEntries, resumable, publicationStartedAt)
 	if err != nil {
@@ -72,6 +87,12 @@ func (w *Worker) publishArtifactsV1(ctx context.Context, pte *PendingTaskExecuti
 	}
 	if err := w.commitArtifactSpool(ctx, pte, spoolEntries); err != nil {
 		return err
+	}
+	// commitArtifactSpool is the terminal publish boundary (all outputs
+	// uploaded and the commit acknowledged). Mark publish.completed here so
+	// the publish bucket spans the actual transfer, not the whole lifecycle.
+	if m := telemetry.MilestoneRecorderFromContext(ctx); m != nil {
+		m.Mark(sharedtelemetry.MilestonePublishCompleted)
 	}
 	committed = true
 	w.logger.Info("[TASK] %d output artifacts committed for task %s (job=%s attempt=%s)", len(completed), pte.TaskID, pte.JobID, pte.AttemptID)

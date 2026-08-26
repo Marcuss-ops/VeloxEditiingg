@@ -154,9 +154,16 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 		}
 		if m := telemetry.MilestoneRecorderFromContext(jobCtx); m != nil {
 			m.Mark(sharedtelemetry.MilestoneFinalizeCompleted)
-			m.Mark(sharedtelemetry.MilestoneOutputDurable)
-			m.Mark(sharedtelemetry.MilestonePublishQueued)
-			m.Mark(sharedtelemetry.MilestonePublishStarted)
+			// The typed publisher (modern path) marks output.durable, publish.queued
+			// and publish.started at their real boundaries inside publishArtifactsV1
+			// (spool registered, declared, transfer begun). Only the legacy apiClient
+			// upload path needs those coarse marks here; firing them earlier would
+			// otherwise clobber the precise times, since Mark is first-write-wins.
+			if w.transport == nil || w.publisherRegistry == nil {
+				m.Mark(sharedtelemetry.MilestoneOutputDurable)
+				m.Mark(sharedtelemetry.MilestonePublishQueued)
+				m.Mark(sharedtelemetry.MilestonePublishStarted)
+			}
 		}
 		w.UpdateOperationalPhase(taskID, PhasePublishing)
 		waterfall.Transition("upload", time.Now().UTC())
