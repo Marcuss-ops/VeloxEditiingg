@@ -94,7 +94,13 @@ if source_catalogs or catalog_sources != [expected_catalog]:
 # compatibility constants/mapping, but reject a second literal phase list in
 # worker or Master code and pin both projections to the shared accessor.
 phase_list_pattern = r"\b(?:canonicalPhases|CanonicalPhaseOrder)\s*=\s*\[\s*"
-for path, number, line in matching(production_files({".go"}), phase_list_pattern):
+for path, number, line in matching(
+    (p for p in production_files({".go"})
+     # jobperf is an explicitly separate job-level performance timeline,
+     # not an attempt-event catalog or telemetry phase projection.
+     if "internal/jobperf/" not in rel(p)),
+    phase_list_pattern,
+):
     violations.append(f"manual canonical phase list at {rel(path)}:{number}: {line}")
 phase_projection_pins = {
     "RemoteCodex/native/worker-agent-go/internal/telemetry/canonical_phases.go": r"sharedtelemetry\.CanonicalPhaseOrder\(\)",
