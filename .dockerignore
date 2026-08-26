@@ -42,3 +42,10 @@ artifacts
 **/output/artifacts
 **/coverage
 docs/benchmarks/evidence
+
+# CI/deployment metadata is not needed by either production image.
+.github
+docs
+ops
+deploy
+DataServer/data/ansible

@@ -34,6 +34,8 @@
 #     BUILD_TIME: <now-U>
 # ============================================================================
 
+# syntax=docker/dockerfile:1.7
+
 # ─── Stage 1: builder ──────────────────────────────────────────────────────
 FROM golang:1.25.8-bookworm@sha256:4557cf171e3cdf5053a298d5171b1a5f5734d920260c25f22c79e94760eb2084 AS builder
 
@@ -57,7 +59,9 @@ COPY DataServer/go.mod DataServer/go.sum ./DataServer/
 
 # 2. Pre-download DataServer's full dep graph (including CGO sqlite3).
 WORKDIR /app/DataServer
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go mod download
 
 # 3. Now copy source trees (only invalidates layer 3 if any code moves).
 WORKDIR /app
@@ -70,7 +74,9 @@ WORKDIR /app/DataServer
 # reproducibility (build cache is keyed off repro builds).
 # `-s -w` strips debug symbols to shrink the image; runtime panic
 # stack traces are still readable enough for this project.
-RUN go build \
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go build \
         -trimpath \
         -ldflags "-s -w -X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.BuildCommit=${BUILD_COMMIT}" \
         -o /out/velox-server \

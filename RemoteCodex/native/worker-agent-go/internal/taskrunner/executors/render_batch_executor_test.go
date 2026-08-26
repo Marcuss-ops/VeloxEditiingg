@@ -277,6 +277,7 @@ func TestRenderBatch_RejectsLegacyAndMissingBindings(t *testing.T) {
 }
 
 func TestRenderBatch_VideoOnlyThenFinalAudioCopyMux(t *testing.T) {
+	t.Setenv("VELOX_FASTSTART", "1")
 	runner := &batchFakeFFmpegRunner{}
 	outputRoot := t.TempDir()
 	exec := NewRenderBatch(runner, outputRoot)

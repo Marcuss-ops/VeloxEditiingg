@@ -78,13 +78,13 @@ func TestClaimForwardings_ZombieReclaim(t *testing.T) {
 	insertTestForwarding(t, db, "cf-zombie", "openai", "creator-zombie", "scene.composite.v1", "PENDING")
 
 	// Claim with short lease
-	leases, err := db.Forwarding().ClaimCreatorForwardings(ctx, "runner-old", "cf", 1*time.Second, 1)
+	leases, err := db.Forwarding().ClaimCreatorForwardings(ctx, "runner-old", "cf", 10*time.Millisecond, 1)
 	if err != nil || len(leases) != 1 {
 		t.Fatalf("initial claim: %v len=%d", err, len(leases))
 	}
 
 	// Wait for lease to expire
-	time.Sleep(2100 * time.Millisecond)
+	time.Sleep(1100 * time.Millisecond)
 
 	// New runner should reclaim the zombie
 	leases2, err := db.Forwarding().ClaimCreatorForwardings(ctx, "runner-new", "cf", 5*time.Minute, 1)

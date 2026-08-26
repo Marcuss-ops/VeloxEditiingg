@@ -155,7 +155,7 @@ func TestClaimDeliveries_ZombieReclaim(t *testing.T) {
 	}
 
 	// Wait for lease to expire
-	time.Sleep(2100 * time.Millisecond)
+	time.Sleep(1100 * time.Millisecond)
 
 	// A new runner should reclaim the zombie
 	leases2, err := db.Delivery().ClaimDeliveries(ctx, "runner-new", 5*time.Minute, 1)
