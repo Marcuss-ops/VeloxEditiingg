@@ -16,8 +16,8 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
-# Deterministic portable release flags. Do not use -march=native or
-# -mtune=native: worker bundles must run on CPUs different from the build host.
+# Deterministic portable release flags. Do not use host-specific CPU tuning:
+# worker bundles must run on CPUs different from the build host.
 if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     add_compile_options(
         -O3
