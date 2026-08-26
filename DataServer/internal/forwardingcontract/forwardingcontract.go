@@ -6,9 +6,9 @@
 // (internal/store, and the forwardingstore leaf) can name these types without
 // an import cycle.
 //
-// internal/store re-exports every symbol below as a compatibility facade so
-// existing call sites keep the store.CreatorForwarding / store.CFStatus*
-// spelling while the canonical definition lives here.
+// Callers import this package directly; the former internal/store forwarding
+// compatibility facade has been removed after all production and test callers
+// migrated.
 package forwardingcontract
 
 import "time"

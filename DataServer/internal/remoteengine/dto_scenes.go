@@ -1,64 +1,52 @@
 package remoteengine
 
 import (
-	"encoding/json"
 	"strconv"
 	"strings"
 
+	"velox-shared/contract"
 	"velox-shared/payload"
 )
 
 func extractScenesDTO(flat map[string]interface{}) []SceneResult {
-	// Try scenes_json string first.
+	// scenes_json and scenes share one parser and normalizer. The DTO only
+	// performs the adapter conversion after the canonical contract boundary.
 	if rawJSON := payload.FirstString(flat, "scenes_json"); rawJSON != "" {
-		var scenes []SceneResult
-		if err := json.Unmarshal([]byte(rawJSON), &scenes); err == nil && len(scenes) > 0 {
-			return scenes
-		}
-		// Try as a generic []interface{}.
-		var rawScenes []interface{}
-		if err := json.Unmarshal([]byte(rawJSON), &rawScenes); err == nil {
-			return convertRawScenes(rawScenes)
+		if scenes, err := contract.ParseSceneMapsJSON([]byte(rawJSON)); err == nil && len(scenes) > 0 {
+			return convertCanonicalScenes(scenes)
 		}
 	}
-
-	// Try scenes as a parsed array.
-	if rawScenes, ok := flat["scenes"].([]interface{}); ok && len(rawScenes) > 0 {
-		return convertRawScenes(rawScenes)
+	if rawScenes, ok := flat["scenes"]; ok {
+		if scenes, err := contract.ParseSceneMaps(rawScenes); err == nil && len(scenes) > 0 {
+			return convertCanonicalScenes(scenes)
+		}
 	}
-
 	return nil
 }
 
-// convertRawScenes converts a []interface{} of map[string]interface{}
-// into typed []SceneResult.
-//
-// Scene identity and canonical clip / voiceover / subtitles objects are read
-// from the raw input so the typed DTO carries the per-scene enrichment.
-// Flat aliases are parsed only at ingestion; ToWorkerPayload never serializes
-// them into the renderer payload.
+// convertRawScenes remains as a compatibility adapter for package-local
+// callers, but delegates parsing and normalization to the shared contract.
 func convertRawScenes(raw []interface{}) []SceneResult {
+	scenes, err := contract.ParseSceneMaps(raw)
+	if err != nil {
+		return nil
+	}
+	return convertCanonicalScenes(scenes)
+}
+
+// convertCanonicalScenes converts already parsed canonical scene maps into
+// the remote-engine DTO. Asset field conversion belongs to this adapter; JSON
+// parsing, alias normalization and default duration handling do not.
+func convertCanonicalScenes(raw []map[string]interface{}) []SceneResult {
 	scenes := make([]SceneResult, 0, len(raw))
-	for _, item := range raw {
-		m, ok := item.(map[string]interface{})
-		if !ok {
-			continue
-		}
+	for _, m := range raw {
 		scene := SceneResult{
-			Text:      payload.FirstString(m, "text", "description", "narration"),
-			SceneID:   payload.FirstString(m, "scene_id"),
-			Index:     intFromAnyMap(m["index"]),
-			Kind:      payload.FirstString(m, "kind"),
-			ImageLink: payload.FirstString(m, "image_link", "image_url", "image"),
-			ClipLink:  payload.FirstString(m, "clip_link", "clip_url", "video_link"),
-			// StockLinks is intentionally never populated here: the old
-			// compatibility adapter read stock_links / stock_clip_links /
-			// drive_links through ReadStringList on UNREGISTERED canonical
-			// keys (Lookup always missed) and therefore always returned nil.
-			// Those scene keys are legacy input the canonical renderer
-			// boundary rejects; stock sources flow via the typed
-			// scene.stock objects. Keeping the field lets callers rely on
-			// the zero value instead of a no-op that looked alive.
+			Text:       payload.FirstString(m, "text"),
+			SceneID:    payload.FirstString(m, "scene_id"),
+			Index:      intFromAnyMap(m["index"]),
+			Kind:       payload.FirstString(m, "kind"),
+			ImageLink:  payload.FirstString(m, "image_link"),
+			ClipLink:   payload.FirstString(m, "clip_link", "clip_url", "video_link"),
 			StockLinks: nil,
 		}
 		if fallback, ok := m["stock_fallback"].(bool); ok {
@@ -83,14 +71,6 @@ func convertRawScenes(raw []interface{}) []SceneResult {
 
 // intFromAnyMap coerces an arbitrary JSON-decoded value (int /
 // int64 / float64 / string with numeric content / nil) into a Go int64.
-// Returns 0 for unknown shapes so the caller can treat 0 as "absent".
-// Used by convertRawScenes for the new scene.Index field and the
-// ClipAsset.StartMS / EndMS / DurationMS / VoiceoverAsset.DurationMS
-// fields — JSON numbers are decoded as float64 by encoding/json,
-// so the typed fields need explicit coercion. int64 (rather than
-// int) is the canonical Go type for millisecond durations so the
-// renderer can compose 64-bit timestamps without overflow up to
-// ~292M years.
 func intFromAnyMap(v interface{}) int64 {
 	switch n := v.(type) {
 	case int:

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+	"velox-server/internal/deliverystore"
 
 	"velox-server/internal/store"
 )
@@ -35,7 +36,7 @@ func TestDeliveryRunnerHydratesOpaqueDestinationBeforeProviderDispatch(t *testin
 		artifactID            = "artifact-opaque-runner"
 		deliveryID            = "delivery-opaque-runner"
 	)
-	if err := db.Delivery().InsertDeliveryDestination(&store.DeliveryDestination{
+	if err := db.Delivery().InsertDeliveryDestination(&deliverystore.DeliveryDestination{
 		DestinationID:         localDestinationID,
 		Provider:              "social_gateway",
 		ExternalDestinationID: externalDestinationID,
@@ -59,7 +60,7 @@ func TestDeliveryRunnerHydratesOpaqueDestinationBeforeProviderDispatch(t *testin
 	}); err != nil {
 		t.Fatalf("InsertArtifact: %v", err)
 	}
-	if err := db.Delivery().InsertJobDelivery(&store.JobDelivery{
+	if err := db.Delivery().InsertJobDelivery(&deliverystore.JobDelivery{
 		DeliveryID:     deliveryID,
 		ArtifactID:     artifactID,
 		DestinationID:  localDestinationID,

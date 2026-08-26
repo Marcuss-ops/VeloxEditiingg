@@ -52,6 +52,7 @@ import (
 
 	"velox-server/internal/config"
 	"velox-server/internal/netsecurity"
+	"velox-shared/assetref"
 )
 
 // ValidateExternalURL inspects raw and returns nil when the URL is
@@ -106,7 +107,7 @@ func ValidateExternalURL(raw string, allowDomains []string, allowLoopbackHTTP bo
 	// Drive bridge — both are materialized by the worker through the
 	// authenticated master bridge, never by an egress fetch of the URL
 	// itself.
-	if strings.HasPrefix(strings.ToLower(raw), "velox-asset://") || strings.HasPrefix(strings.ToLower(raw), "velox-drive://") {
+	if _, err := assetref.ParseCanonicalWire(raw); err == nil {
 		return nil
 	}
 

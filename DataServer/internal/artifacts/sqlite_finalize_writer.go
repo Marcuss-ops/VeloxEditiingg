@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"velox-server/internal/artifactsstore"
-	"velox-server/internal/store"
+	"velox-server/internal/repository"
 )
 
 // SQLiteFinalizeWriter adapts the artifactsstore leaf finalizer to the
@@ -26,7 +26,7 @@ func NewSQLiteFinalizeWriter(inner *artifactsstore.SQLiteArtifactFinalizer) *SQL
 
 var _ FinalizationWriter = (*SQLiteFinalizeWriter)(nil)
 
-func (w *SQLiteFinalizeWriter) FinalizeVerified(ctx context.Context, cmd FinalizeVerifiedCommand) (*store.Artifact, error) {
+func (w *SQLiteFinalizeWriter) FinalizeVerified(ctx context.Context, cmd FinalizeVerifiedCommand) (*repository.Artifact, error) {
 	out, err := w.inner.FinalizeVerified(ctx, artifactsstore.FinalizeVerifiedParams{
 		UploadID: cmd.UploadID, ArtifactID: cmd.ArtifactID, JobID: cmd.JobID,
 		AttemptID: cmd.AttemptID, WorkerID: cmd.WorkerID, LeaseID: cmd.LeaseID,

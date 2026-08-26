@@ -1,5 +1,10 @@
 package store
 
+// COMPATIBILITY:
+// Owner:        P0.4 store-facade migration
+// Remove after: 2026-09-30
+// Read-only:    yes — M2M contracts/helpers are re-exported; SQLiteStore methods remain forwarding shims.
+
 // store_m2mkeys.go: re-export + delegation shim for the m2mkeys leaf
 // package (internal/m2mkeys), which owns the typed CRUD over the M2M
 // credential tables (m2m_api_keys + m2m_audit_log). The SQL moved out of

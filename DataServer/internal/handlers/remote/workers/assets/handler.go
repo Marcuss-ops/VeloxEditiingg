@@ -13,7 +13,7 @@ import (
 	voiceoverassets "velox-server/internal/assets"
 	"velox-server/internal/config"
 	driveintegration "velox-server/internal/integrations/drive"
-	"velox-server/internal/store"
+	"velox-server/internal/repository"
 	workersreg "velox-server/internal/workers"
 )
 
@@ -26,12 +26,12 @@ import (
 type Handler struct {
 	tokenMgr  *workersreg.TokenManager
 	assetSvc  *voiceoverassets.AssetService
-	blobStore store.BlobStore
+	blobStore repository.BlobStore
 	driveSvc  *driveintegration.Service
 }
 
 // NewHandler creates a new assets Handler.
-func NewHandler(cfg *config.Config, tokenMgr *workersreg.TokenManager, assetSvc *voiceoverassets.AssetService, blobStore store.BlobStore, driveSvcs ...*driveintegration.Service) *Handler {
+func NewHandler(cfg *config.Config, tokenMgr *workersreg.TokenManager, assetSvc *voiceoverassets.AssetService, blobStore repository.BlobStore, driveSvcs ...*driveintegration.Service) *Handler {
 	h := &Handler{
 		tokenMgr:  tokenMgr,
 		assetSvc:  assetSvc,

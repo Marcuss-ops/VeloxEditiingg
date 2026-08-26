@@ -3,9 +3,9 @@ package grpcserver
 import (
 	"testing"
 
+	"velox-server/internal/forwardingstore"
 	"velox-server/internal/ingest"
 	"velox-server/internal/jobs"
-	"velox-server/internal/store"
 	"velox-server/internal/taskgraph"
 
 	pb "velox-shared/controltransport/pb"
@@ -202,7 +202,7 @@ func TestHandleTaskResult_PersistTypedMetrics_StaleReplaySkipsMetrics(t *testing
 	attempts := &spoofStubAttemptRepo{}
 	attempts.seedCanonical(fx.taskID, fx.workerID, fx.canonicalLease)
 	taskRepo := &spoofStubTaskRepo{
-		transitionErr: store.ErrTransitionConflict,
+		transitionErr: forwardingstore.ErrTransitionConflict,
 		listTasks:     []taskgraph.Task{{ID: fx.taskID, JobID: fx.wireJobID, Status: taskgraph.StatusSucceeded}},
 	}
 	jobsRepo := &spoofStubJobsRepo{getJob: &jobs.Job{ID: fx.wireJobID, Status: jobs.StatusAwaitingArtifact, Revision: 0}}

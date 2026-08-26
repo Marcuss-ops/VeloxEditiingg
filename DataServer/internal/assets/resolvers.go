@@ -2,6 +2,7 @@ package assets
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	neturl "net/url"
@@ -13,7 +14,7 @@ import (
 	"velox-server/internal/inputsecurity"
 	driveapi "velox-server/internal/integrations/drive"
 
-	"velox-shared/paths"
+	"velox-shared/assetref"
 )
 
 // DriveDownloader is the minimal authenticated Drive surface required by resolvers.
@@ -29,14 +30,18 @@ type veloxAssetResolver struct {
 	store *Store
 }
 
-func (r *veloxAssetResolver) Scheme() string   { return "velox-asset" }
+func (r *veloxAssetResolver) Scheme() string   { return assetref.SchemeVeloxAsset }
 func (r *veloxAssetResolver) ServerOnly() bool { return false }
 
 func (r *veloxAssetResolver) Open(ctx context.Context, reference string) (*Source, error) {
 	if r == nil || r.store == nil {
 		return nil, fmt.Errorf("asset store unavailable")
 	}
-	assetID := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(reference), VeloxAssetScheme+"://"))
+	parsed, err := assetref.ParseCanonicalWire(reference)
+	if err != nil || parsed.Kind() != assetref.RefKindLocal {
+		return nil, fmt.Errorf("invalid canonical asset reference")
+	}
+	assetID := parsed.ID()
 	if assetID == "" {
 		return nil, fmt.Errorf("missing asset id")
 	}
@@ -196,10 +201,11 @@ func (r *driveResolver) Open(ctx context.Context, reference string) (*Source, er
 		return nil, newAcquisitionError("reference", "drive", "Drive authentication is unavailable", nil)
 	}
 
-	fileID := paths.ExtractDriveID(reference)
-	if fileID == "" {
-		return nil, newAcquisitionError("reference", "drive", "unable to extract Drive file id", nil)
+	driveFileID, err := assetref.ParseDriveFileID(reference)
+	if err != nil {
+		return nil, newAcquisitionError("reference", "drive", "unable to extract Drive file id", err)
 	}
+	fileID := driveFileID.String()
 	meta, err := r.drive.GetFileMetadata(ctx, fileID)
 	if err != nil {
 		return nil, newAcquisitionError("reference", "drive", "Drive file metadata unavailable", err)
@@ -278,14 +284,12 @@ func looksLikeDriveURL(reference string) bool {
 	if trimmed == "" {
 		return false
 	}
-	lower := strings.ToLower(trimmed)
-	if strings.Contains(lower, "drive.usercontent.google.com") {
-		return false
-	}
-	if strings.Contains(lower, "drive.google.com") {
+	_, err := assetref.ParseDriveFileID(trimmed)
+	if err == nil {
 		return true
 	}
-	return paths.ExtractDriveID(trimmed) != ""
+	var folderErr *assetref.FolderError
+	return errors.As(err, &folderErr)
 }
 
 func publicDriveDownloadURL(reference string) (string, string, bool) {
@@ -293,14 +297,11 @@ func publicDriveDownloadURL(reference string) (string, string, bool) {
 	if trimmed == "" {
 		return "", "", false
 	}
-	lower := strings.ToLower(trimmed)
-	if !strings.Contains(lower, "drive.google.com") || strings.Contains(lower, "/folders/") {
+	driveFileID, err := assetref.ParseDriveFileID(trimmed)
+	if err != nil {
 		return "", "", false
 	}
-	fileID := strings.TrimSpace(paths.ExtractDriveID(trimmed))
-	if fileID == "" {
-		return "", "", false
-	}
+	fileID := driveFileID.String()
 	return "https://drive.usercontent.google.com/download?id=" + neturl.QueryEscape(fileID) + "&export=download&confirm=t", fileID, true
 }
 

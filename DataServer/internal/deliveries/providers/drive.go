@@ -12,18 +12,18 @@ import (
 
 	"velox-server/internal/deliveries"
 	integrationsDrive "velox-server/internal/integrations/drive"
-	"velox-server/internal/store"
+	"velox-server/internal/repository"
 )
 
 // DriveProvider is the production Drive adapter.
 type DriveProvider struct {
 	service   *integrationsDrive.Service
-	blobStore store.BlobStore
+	blobStore repository.BlobStore
 }
 
 // NewDriveProvider constructs a DriveProvider. nil service is allowed for
 // tests; Deliver then returns ErrProviderNotConfigured.
-func NewDriveProvider(svc *integrationsDrive.Service, blobStore store.BlobStore) *DriveProvider {
+func NewDriveProvider(svc *integrationsDrive.Service, blobStore repository.BlobStore) *DriveProvider {
 	return &DriveProvider{service: svc, blobStore: blobStore}
 }
 
@@ -36,7 +36,7 @@ func (d *DriveProvider) Name() string { return "drive" }
 // properties and reuses the matching remote file before uploading. The
 // runner's durable lease prevents normal concurrent duplicates; the remote
 // property lookup also covers retries after a lease expires.
-func (d *DriveProvider) Deliver(ctx context.Context, artifact *store.Artifact, destination *deliveries.Destination, deliveryID, idempotencyKey string) (*deliveries.Result, error) {
+func (d *DriveProvider) Deliver(ctx context.Context, artifact *repository.Artifact, destination *deliveries.Destination, deliveryID, idempotencyKey string) (*deliveries.Result, error) {
 	if d == nil || d.service == nil {
 		return nil, deliveries.ErrProviderNotConfigured
 	}

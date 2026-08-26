@@ -2,13 +2,13 @@
 //
 // Consumer-owned read-only artifact port. The artifacts domain defines
 // the contract it needs; concrete SQL adapters live in
-// internal/store and implement this interface.
+// internal/artifactsstore and implement this interface.
 package artifacts
 
 import (
 	"context"
 
-	"velox-server/internal/store"
+	"velox-server/internal/repository"
 )
 
 // ArtifactReader is the read-only artifact contract: one method,
@@ -19,7 +19,7 @@ import (
 //     can decide whether absence is a bug or expected (the finalize
 //     post-tx wraps nil as a hard error because a successful CAS on
 //     the same id guarantees the row exists).
-//   - SELECT column list is the canonical *store.Artifact projection;
+//   - SELECT column list is the canonical *repository.Artifact projection;
 //     adding verified_at_full / retention_class / etc. happens here
 //     in exactly one place.
 //
@@ -30,5 +30,5 @@ import (
 //   - Empty id                  → fmt.Errorf("artifacts: GetByID: empty id").
 //   - Scan error ≠ ErrNoRows    → wrapped ("...: %w").
 type ArtifactReader interface {
-	GetByID(ctx context.Context, id string) (*store.Artifact, error)
+	GetByID(ctx context.Context, id string) (*repository.Artifact, error)
 }

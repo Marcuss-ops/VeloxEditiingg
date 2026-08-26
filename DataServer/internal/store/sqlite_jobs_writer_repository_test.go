@@ -8,6 +8,8 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+
+	"velox-server/internal/jobs"
 )
 
 // openTransitionTestDB creates a minimal in-memory SQLite with the
@@ -92,8 +94,8 @@ func TestTransition_LeasedToRunning_HappyPath(t *testing.T) {
 
 	if err := repo.Transition(ctx, TransitionParams{
 		JobID:          "job-1",
-		ExpectedStatus: JobStatusLeased,
-		NewStatus:      JobStatusRunning,
+		ExpectedStatus: jobs.StatusLeased,
+		NewStatus:      jobs.StatusRunning,
 		Revision:       7,
 	}); err != nil {
 		t.Fatalf("Transition happy path: %v", err)
@@ -119,8 +121,8 @@ func TestTransition_StaleRevisionConflict(t *testing.T) {
 
 	err := repo.Transition(ctx, TransitionParams{
 		JobID:          "job-1",
-		ExpectedStatus: JobStatusLeased,
-		NewStatus:      JobStatusRunning,
+		ExpectedStatus: jobs.StatusLeased,
+		NewStatus:      jobs.StatusRunning,
 		Revision:       2, // stale: real rev = 3
 	})
 	if !errors.Is(err, ErrTransitionConflict) {
@@ -149,8 +151,8 @@ func TestTransition_WrongExpectedStatus(t *testing.T) {
 
 	err := repo.Transition(ctx, TransitionParams{
 		JobID:          "job-1",
-		ExpectedStatus: JobStatusPending, // wrong
-		NewStatus:      JobStatusRunning,
+		ExpectedStatus: jobs.StatusPending, // wrong
+		NewStatus:      jobs.StatusRunning,
 		Revision:       0,
 	})
 	if !errors.Is(err, ErrTransitionConflict) {
@@ -171,8 +173,8 @@ func TestTransition_AlreadyRunning(t *testing.T) {
 
 	err := repo.Transition(ctx, TransitionParams{
 		JobID:          "job-1",
-		ExpectedStatus: JobStatusLeased,
-		NewStatus:      JobStatusRunning,
+		ExpectedStatus: jobs.StatusLeased,
+		NewStatus:      jobs.StatusRunning,
 		Revision:       0,
 	})
 	if !errors.Is(err, ErrTransitionConflict) {
@@ -196,8 +198,8 @@ func TestTransition_NonexistentJob(t *testing.T) {
 
 	err := repo.Transition(ctx, TransitionParams{
 		JobID:          "nonexistent",
-		ExpectedStatus: JobStatusLeased,
-		NewStatus:      JobStatusRunning,
+		ExpectedStatus: jobs.StatusLeased,
+		NewStatus:      jobs.StatusRunning,
 		Revision:       0,
 	})
 	if !errors.Is(err, ErrTransitionConflict) {
@@ -214,8 +216,8 @@ func TestTransition_EmptyJobID(t *testing.T) {
 
 	err := repo.Transition(ctx, TransitionParams{
 		JobID:          "",
-		ExpectedStatus: JobStatusPending,
-		NewStatus:      JobStatusRunning,
+		ExpectedStatus: jobs.StatusPending,
+		NewStatus:      jobs.StatusRunning,
 		Revision:       0,
 	})
 	if err == nil {

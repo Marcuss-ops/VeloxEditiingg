@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 
 	"velox-server/internal/deliveries"
-	"velox-server/internal/store"
+	"velox-server/internal/repository"
 )
 
 // resolveArtifactFilePath is the single path contract shared by file-based
@@ -15,7 +15,7 @@ import (
 // BlobStore; a delivery never falls back to a worker-local artifact path. A
 // successful result is always an absolute, existing regular file path suitable
 // for SDK upload APIs.
-func resolveArtifactFilePath(blobStore store.BlobStore, artifact *store.Artifact) (string, error) {
+func resolveArtifactFilePath(blobStore repository.BlobStore, artifact *repository.Artifact) (string, error) {
 	if artifact == nil {
 		return "", permanentArtifactPathError("nil artifact", nil)
 	}

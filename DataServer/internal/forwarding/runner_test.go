@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"velox-server/internal/forwardingcontract"
 	"velox-server/internal/remoteengine"
 	"velox-server/internal/store"
 )
@@ -23,7 +24,7 @@ func setupRunnerTestDB(t *testing.T) *store.SQLiteStore {
 
 func insertTestForwardingRecord(t *testing.T, db *store.SQLiteStore, forwardingID, provider, sourceJobID, executorID, status string) {
 	t.Helper()
-	cf := &store.CreatorForwarding{
+	cf := &forwardingcontract.CreatorForwarding{
 		ForwardingID:     forwardingID,
 		SourceProvider:   provider,
 		SourceJobID:      sourceJobID,

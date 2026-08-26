@@ -1,9 +1,9 @@
-// Package store / artifact_uploads_chunks.go
+// Package artifactsstore / artifact_uploads_chunks.go
 //
 // Per-chunk CRUD over artifact_upload_chunks rows (resumable chunked
 // uploads). Part of the UploadRepository contract; see
 // artifact_uploads.go for the interface and wiring.
-package store
+package artifactsstore
 
 import (
 	"context"
@@ -15,7 +15,7 @@ import (
 // InsertChunk persists a single chunk record.
 func (r *SQLiteUploadRepository) InsertChunk(ctx context.Context, c ChunkRecord) error {
 	if c.UploadID == "" {
-		return fmt.Errorf("store: InsertChunk: empty uploadID")
+		return fmt.Errorf("artifactsstore: InsertChunk: empty uploadID")
 	}
 	now := c.ReceivedAt.UTC().Format(time.RFC3339)
 	if c.ReceivedAt.IsZero() {
@@ -29,7 +29,7 @@ func (r *SQLiteUploadRepository) InsertChunk(ctx context.Context, c ChunkRecord)
 		c.StorageKey, now,
 	)
 	if err != nil {
-		return fmt.Errorf("store: InsertChunk: %w", err)
+		return fmt.Errorf("artifactsstore: InsertChunk: %w", err)
 	}
 	return nil
 }
@@ -39,7 +39,7 @@ func (r *SQLiteUploadRepository) InsertChunk(ctx context.Context, c ChunkRecord)
 // incoming bytes with the first durable record before discarding the retry.
 func (r *SQLiteUploadRepository) GetChunk(ctx context.Context, uploadID string, chunkIndex int) (*ChunkRecord, error) {
 	if uploadID == "" {
-		return nil, fmt.Errorf("store: GetChunk: empty uploadID")
+		return nil, fmt.Errorf("artifactsstore: GetChunk: empty uploadID")
 	}
 	row := r.db.QueryRowContext(ctx, `
 		SELECT upload_id, chunk_index, size_bytes,
@@ -53,7 +53,7 @@ func (r *SQLiteUploadRepository) GetChunk(ctx context.Context, uploadID string, 
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("store: GetChunk: %w", err)
+		return nil, fmt.Errorf("artifactsstore: GetChunk: %w", err)
 	}
 	parsed, err := parsePersistedWorkerTimestamp(receivedAt, "artifact_upload_chunks.received_at")
 	if err != nil {
@@ -66,7 +66,7 @@ func (r *SQLiteUploadRepository) GetChunk(ctx context.Context, uploadID string, 
 // ListChunks returns all chunks for an upload, ordered by chunk_index.
 func (r *SQLiteUploadRepository) ListChunks(ctx context.Context, uploadID string) ([]ChunkRecord, error) {
 	if uploadID == "" {
-		return nil, fmt.Errorf("store: ListChunks: empty uploadID")
+		return nil, fmt.Errorf("artifactsstore: ListChunks: empty uploadID")
 	}
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT upload_id, chunk_index, size_bytes,
@@ -75,7 +75,7 @@ func (r *SQLiteUploadRepository) ListChunks(ctx context.Context, uploadID string
 		WHERE upload_id = ?
 		ORDER BY chunk_index ASC`, uploadID)
 	if err != nil {
-		return nil, fmt.Errorf("store: ListChunks: %w", err)
+		return nil, fmt.Errorf("artifactsstore: ListChunks: %w", err)
 	}
 	defer rows.Close()
 
@@ -85,7 +85,7 @@ func (r *SQLiteUploadRepository) ListChunks(ctx context.Context, uploadID string
 		var receivedAt string
 		if err := rows.Scan(&c.UploadID, &c.ChunkIndex, &c.SizeBytes,
 			&c.SHA256, &c.StorageKey, &receivedAt); err != nil {
-			return nil, fmt.Errorf("store: ListChunks scan: %w", err)
+			return nil, fmt.Errorf("artifactsstore: ListChunks scan: %w", err)
 		}
 		parsed, err := parsePersistedWorkerTimestamp(receivedAt, "artifact_upload_chunks.received_at")
 		if err != nil {
@@ -95,7 +95,7 @@ func (r *SQLiteUploadRepository) ListChunks(ctx context.Context, uploadID string
 		out = append(out, c)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: ListChunks rows: %w", err)
+		return nil, fmt.Errorf("artifactsstore: ListChunks rows: %w", err)
 	}
 	return out, nil
 }
@@ -103,11 +103,11 @@ func (r *SQLiteUploadRepository) ListChunks(ctx context.Context, uploadID string
 // DeleteChunks removes all chunk records for an upload (cleanup after finalize).
 func (r *SQLiteUploadRepository) DeleteChunks(ctx context.Context, uploadID string) error {
 	if uploadID == "" {
-		return fmt.Errorf("store: DeleteChunks: empty uploadID")
+		return fmt.Errorf("artifactsstore: DeleteChunks: empty uploadID")
 	}
 	if _, err := r.db.ExecContext(ctx,
 		`DELETE FROM artifact_upload_chunks WHERE upload_id = ?`, uploadID); err != nil {
-		return fmt.Errorf("store: DeleteChunks: %w", err)
+		return fmt.Errorf("artifactsstore: DeleteChunks: %w", err)
 	}
 	return nil
 }

@@ -1,6 +1,10 @@
 package projection
 
-import "strings"
+import (
+	"strings"
+
+	"velox-shared/assetref"
+)
 
 // SubmissionInput is the projection boundary between intake DTOs and the
 // renderer payload. It contains no HTTP, Gin, publishing, security, or
@@ -172,7 +176,9 @@ func BuildRawPayload(input SubmissionInput) map[string]interface{} {
 			url, _ := clip["url"].(string)
 			if url == "" {
 				if assetID, ok := clip["asset_id"].(string); ok && assetID != "" {
-					url = "velox-drive://" + assetID
+					if ref, err := assetref.NewDeferredDrive(assetID); err == nil {
+						url = ref.Wire()
+					}
 				}
 			}
 			if url == "" {

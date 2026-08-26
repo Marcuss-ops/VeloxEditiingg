@@ -1,10 +1,16 @@
+// COMPATIBILITY:
+// Owner:        P0.4 store-facade migration
+// Remove after: 2026-09-30
+// Read-only:    yes
+
 package store
 
 // store_smoke_runs.go: re-export + delegation shim for the smokerunstore
 // leaf package (internal/smokerunstore), which owns the smoke_runs analytics
 // table. The SQL moved out of this god-package into the leaf; the *SQLiteStore
-// methods below stay as thin forwarders so the fleet callers (LevelDSmoke
-// executor + smoke dashboard) keep the store.SmokeRun surface unchanged.
+// methods below remain as a temporary compatibility shim. All production and
+// test callers should use smokerunstore directly so this file can be removed
+// in a later atomic cleanup.
 
 import (
 	"context"

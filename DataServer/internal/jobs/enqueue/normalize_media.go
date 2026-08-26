@@ -2,11 +2,11 @@
 package enqueue
 
 import (
-	"encoding/json"
 	"strings"
 
 	"velox-server/internal/routing"
 	"velox-shared/compatibility"
+	"velox-shared/contract"
 	"velox-shared/payload"
 )
 
@@ -85,8 +85,8 @@ func canonicalPipelineScenes(p map[string]interface{}) []map[string]interface{} 
 	if encoded == "" {
 		return nil
 	}
-	var scenes []map[string]interface{}
-	if json.Unmarshal([]byte(encoded), &scenes) != nil {
+	scenes, err := contract.ParseSceneMapsJSON([]byte(encoded))
+	if err != nil {
 		return nil
 	}
 	return scenes

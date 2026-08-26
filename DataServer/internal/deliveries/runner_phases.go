@@ -13,6 +13,7 @@ import (
 	"velox-server/internal/credentials"
 	"velox-server/internal/deliverystore"
 	"velox-server/internal/publicationstate"
+	"velox-server/internal/repository"
 	"velox-server/internal/store"
 )
 
@@ -23,7 +24,7 @@ var errDeliveryRetryScheduled = errors.New("delivery retry scheduled")
 type publicationPhaseContext struct {
 	lease           deliverystore.DeliveryLease
 	publicationID   string
-	artifact        *store.Artifact
+	artifact        *repository.Artifact
 	destination     *Destination
 	credentialLease *credentials.AccessLease
 }
@@ -348,7 +349,7 @@ func (r *DeliveryRunner) nextPublicationPhase(ctx context.Context, publicationID
 	}
 }
 
-func phaseOperation(phase publicationstate.State, artifact *store.Artifact, destination *Destination, remoteID string) string {
+func phaseOperation(phase publicationstate.State, artifact *repository.Artifact, destination *Destination, remoteID string) string {
 	value := remoteID
 	destinationID := ""
 	if destination != nil {

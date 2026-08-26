@@ -12,7 +12,7 @@ legitimately write or read this capability from outside that owner.
 | Responsibility | Canonical owner | Forbidden |
 | --- | --- | --- |
 | Job business state (status, runs identity) | `internal/jobs` repository + `LifecycleService` | Direct SQL writes from handlers or background jobs |
-| Job finalisation (`SUCCEEDED` flip — exclusive gate) | `internal/artifacts.Service` orchestration + `internal/store.SQLiteArtifactFinalizer` SQL gateway | A second writer that sets `status = 'SUCCEEDED'` outside the service; `maybeTransitionJob → SUCCEEDED` (PR-02 closed it) |
+| Job finalisation (`SUCCEEDED` flip — exclusive gate) | `internal/artifacts.Service` orchestration + `internal/artifactsstore.SQLiteArtifactFinalizer` SQL gateway | A second writer that sets `status = 'SUCCEEDED'` outside the service; `maybeTransitionJob → SUCCEEDED` (PR-02 closed it) |
 | Asset registry | `internal/assets.ResolverRegistry` | Switch/case trees that pick a resolver by URL scheme |
 | Asset upload / canonicalisation | `internal/assets.Service` | Hand-rolled blob persistence from a job handler |
 | Configuration (env / file) | `internal/config` (loader + validator) | Sparse `os.Getenv` calls in handlers |
@@ -25,11 +25,12 @@ legitimately write or read this capability from outside that owner.
 | InstaEdit application catalog (users, workspaces, groups, channels, permissions) | InstaEdit | Any Velox-owned copy, catalog, membership snapshot or sync writer |
 | Project bridge context | InstaEdit `project_id` ↔ opaque `velox_project_id` | `velox_group_id`, `velox_channel_group_id`, workspace copies, bidirectional sync |
 | Editor state and render execution | Velox editor/runtime | InstaEdit domain data, global group/channel enumeration, reverse ownership writes |
-| Artifact persistence and reconciliation | `internal/artifacts` orchestration → focused `internal/store` repositories | SQL queries, transactions, or row scans directly in `internal/artifacts` |
+| Artifact persistence and reconciliation | `internal/artifacts` orchestration → `internal/artifactsstore` repositories | Artifact-domain SQL adapters in `internal/store`; SQL queries, transactions, or row scans directly in `internal/artifacts` |
 | Binary storage | Filesystem / blob storage | Blobs persisted inside the DB |
 | Versioning | `/VERSION.txt` (single root file) | CI fallback to `git describe`, `dev`, local snapshots |
 | Worker ID minting | `internal/workers.Registry` | Random IDs generated from request payloads |
-| Audit logging | `internal/audit/data_layer` | Free-form `log.Printf` calls for events that the auditor must observe |
+| Data-layer integrity auditing | `internal/audit.DataLayerAuditor` (bootstrapped by `cmd/server/bootstrap_audit.go`) | Operator/security events, audit ledger writes, or free-form logs treated as integrity evidence |
+| Operator/security audit trail | `internal/audittrail.Event` + `internal/audittrail.Repository` (SQLite adapter in `internal/store`) | Filesystem/schema integrity checks, startup structure scans, or a second event/audit model |
 | Migrations | Canonical SQL files + migration registration in `cmd/server/bootstrap.go` | Programmatic `CREATE TABLE IF NOT EXISTS` outside the migration registry |
 | Task scheduling state (status, attempts, revision, lease expiry) | `internal/taskgraph` repository + `LifecycleService` | Direct SQL writes from handlers or background jobs; `internal/obs`; re-introducing `internal/obs` as a parallel state owner |
 | Task execution attempt (status, reports, metrics, phase timing) | `internal/taskattempts` repository | Direct SQL writes from handlers or background jobs |
@@ -49,6 +50,64 @@ legitimately write or read this capability from outside that owner.
 | `WorkerToMaster` envelope dispatch (master side) | `internal/grpcserver/handler.go` dispatcher switch → typed `WorkerToMasterEnvelope_*` arms. Single source of truth for protocol-side routing. Legacy Job arms (`LeaseRenewal`, `JobAccepted`, `JobRejected`, `JobProgress`, `JobResult`) were declared `reserved` in `proto/velox/control/worker_control.proto` (PR-07) and the handlers removed. | New `case *pb.WorkerToMasterEnvelope_LeaseRenewal:` / `_JobAccepted:` / `_JobRejected:` / `_JobProgress:` / `_JobResult:` arms — they cannot compile (types reserved-but-missing). Reintroducing a separate worker-message router parallel to `handler.go`. |
 | Legacy pool (`internal/queue` — deleted) | **REMOVED**: `internal/queue` has been deleted. `LifecycleService` lives at `internal/jobs`. | Reintroducing `internal/queue`, `queue.Job`, `queue.QueueItem`, `queue.JobStatus`, or `*queue.FileQueue` |
 
+## Audit boundaries
+
+Velox has two intentionally separate audit bounded contexts. They may both be
+called "audit" in operational language, but they do not share ownership or
+semantics:
+
+| Boundary | Package owner | Owns | Must not own |
+| --- | --- | --- | --- |
+| Data-layer integrity | `DataServer/internal/audit` | Read-only checks of data-directory layout, duplicate sources of truth, naming consistency, configured primary files, and basic SQLite availability; startup/CI pass/fail reporting | User or operator actions, resource history, security events, `audit_events` inserts, or event redaction |
+| Operator/security audit trail | `DataServer/internal/audittrail` | The append-only `Event` contract, actor/resource/action identity, before/after hashes, metadata redaction, and the repository interface consumed by auditable services; persistence is implemented by the canonical `internal/store` adapter | Filesystem integrity scans, migration/schema validation, replacement of structured events with log lines, or a second audit-event model |
+
+The dependency direction is one-way at the contract boundary:
+
+```text
+Data-layer integrity checks
+    internal/audit ──► startup/CI result
+
+Operator/security actions and auditable lifecycle transitions
+    service/handler ──► audittrail.Event
+                         └─► audittrail.Repository
+                              └─► internal/store ──► audit_events
+```
+
+Rules for future changes:
+
+- Add a new filesystem/data-source integrity invariant to `internal/audit`,
+  not to `internal/audittrail`.
+- Record an operator action or security-relevant lifecycle transition as an
+  `internal/audittrail.Event`; do not rely on `log.Printf` as durable evidence.
+- Keep `audit_events` append-only and redact metadata at the store boundary
+  through `audittrail.RedactMetadata`.
+- Do not introduce a third package or event type whose purpose is to bridge
+  these two responsibilities. If a feature needs both, it performs its
+  integrity check in `internal/audit` and records its durable action through
+  `internal/audittrail` independently.
+
+## Render-plan boundaries
+
+Render plans have four deliberately separate boundaries. A package may adapt
+between two boundaries, but it must not re-parse or re-validate a document
+owned by another boundary.
+
+| Boundary | Canonical owner | Responsibility | Forbidden |
+| --- | --- | --- | --- |
+| Wire contract | `velox-shared/contract.CompiledRenderPlanV2` and its `DecodeCompiledRenderPlanV2Payload` entrypoint | Strict V2 envelope decoding, exact SHA binding, canonical JSON and semantic plan validation | Executor-specific reimplementation of V2 envelope/hash/schema checks |
+| Legacy compiled wire adapter | `velox-worker-agent/pkg/api/renderplan` | Versioned admission for the historical master `CompiledRenderPlan` V1 envelope and its compatibility routing | Treating the legacy V1 mirror as the V2 contract or adding a second SHA/envelope parser in an executor |
+| Runtime plan | `velox-worker-agent/pkg/video/plan` | Strict decode and validation of the V1 `render_plan`/`render_plan_json` document passed to the C++ renderer; task identity binding is exposed through `ValidateForJob` | Command executors owning timeline/audio/subtitle schema validation |
+| Executor | `internal/taskrunner/executors` | Payload-key allowlisting, selection of the correct contract boundary, asset binding, command construction and execution-specific checks | Reconstructing timelines, parsing another copy of a render-plan schema, or replacing contract validation with permissive fallback |
+
+The names `renderplan.CompiledRenderPlan`, `contract.CompiledRenderPlanV2`,
+and `plan.RenderPlan` are not interchangeable: they represent the legacy
+compiled mirror, the current producer-compiled V2 wire document, and the
+worker/C++ runtime plan respectively. The V1 compiled mirror remains only for
+compatibility during fleet migration; new V2 paths must use the shared
+contract decoder. Hashes over V2 wire documents are owned by
+`CompiledRenderPlanV2`; a runtime command digest is executor evidence and is
+not a substitute for the producer plan hash.
+
 ## Removed packages (historical, retained for traceability)
 
 These packages existed at some point in the codebase and have been
@@ -62,6 +121,7 @@ documentation.
 | `RemoteCodex/native/worker-agent-go/internal/costmodel` (worker-side scoring mirror) | PR-04 cleanup (audit §3.6 — `Duplicata in due` resolved as DELETION not mirroring) | master `velox-server/internal/costmodel` is the single scoring owner; worker advertises `WorkerProfile` only |
 | `DataServer/internal/queue` (file-backed JobQueue) | PR-03 collapser into `internal/jobs.LifecycleService` | `internal/jobs.LifecycleService` + `internal/store.AtomicJobTaskCreator` |
 | `DataServer/internal/obs` (early observability placeholder) | superseded by `internal/observability` (canonical aggregator) | `internal/observability` |
+| `DataServer/internal/store/store_creator_forwardings.go` (forwarding compatibility facade) | forwarding facade removal after caller migration | `internal/forwardingcontract` + `internal/forwardingstore` |
 
 ## InstaEdit/Velox separation rule
 
@@ -111,6 +171,33 @@ What we explicitly forbid:
 If a contributor is tempted to skip the service/repo layer, the answer
 is always: extend the canonical owner. Adding a side path is a regression
 by definition.
+
+## `internal/store` compatibility inventory
+
+The SQLite implementation remains the canonical persistence owner, but
+these names are compatibility aliases or facades. Production code must use
+the canonical package in the last column; aliases remain only for legacy and
+test callers until the listed deadline.
+
+| Store surface | Canonical owner | Current legacy use | Removal condition |
+| --- | --- | --- | --- |
+| `completion_repository.go`: completion contracts, errors, `SQLiteCompletionStore`, constructor | `internal/repository` + `internal/completionstore` | tests and downstream compatibility | zero external/test callers; target 2026-09-30 |
+| `blobstore.go`: `BlobStore` | `internal/repository` | compatibility only | zero legacy callers; target 2026-09-30 |
+| `artifact_uploads.go`: upload contracts and row types | `internal/repository` | compatibility only | zero legacy callers; target 2026-09-30 |
+| `store_assets.go`, `store_attempts.go`: asset/task projections | `internal/repository` + `internal/assets` | compatibility and store-owned non-artifact SQL adapters | zero legacy callers; target 2026-09-30 |
+| `repository_workers.go`: `WorkersRepository` | `internal/repository` | compatibility only | zero legacy callers; target 2026-09-30 |
+| `jobs_writer_types.go`: `JobStatus` and constants | `internal/jobs` | compatibility only | zero legacy callers; target 2026-09-30 |
+| `store_deliveries.go`: delivery types/status constants | `internal/deliverystore` | compatibility only | zero legacy callers; target 2026-09-30 |
+| `store_smoke_runs.go`: smoke type/status/error | `internal/smokerunstore` | compatibility only | migrate fleet/dashboard callers; target 2026-09-30 |
+| `store_stale_execution.go`: stale reconciliation types | `internal/stalereconcile` | admin/test compatibility | zero legacy callers; target 2026-09-30 |
+| `store_m2mkeys.go`: M2M types/helpers plus forwarding methods | `internal/m2mkeys` | compatibility facade, includes writes | migrate method callers before facade removal; target 2026-09-30 |
+| `media_probe_jobs.go`: enqueue contract | `internal/repository` + `internal/artifactsstore` adapter | compatibility only | zero legacy callers; target 2026-09-30 |
+| `delivery_plan_payload.go`: validation error alias | `velox-shared/contract/deliveryplan` | compatibility/error classification | zero legacy callers; target 2026-09-30 |
+| `telemetry.go`, `sqlite.go`: `DBTelemetry`, `OutboxEmitter` | `internal/repository` | compatibility only | zero legacy callers; target 2026-09-30 |
+
+Every alias is type-compatible with its canonical owner; no alias may add a
+second write path. New production callers must not be added to this table's
+legacy surfaces.
 
 ## Compatibility shims
 

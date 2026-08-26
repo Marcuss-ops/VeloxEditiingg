@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"testing"
 	"time"
+
+	"velox-server/internal/stalereconcile"
 )
 
 func insertAttemptCommitFixture(t *testing.T, db *sql.DB, commitID, jobID, taskID, attemptID, status, deadline string) {
@@ -51,15 +53,12 @@ func TestStaleExecutionReconciler_CommittedArtifactDrift(t *testing.T) {
 	) VALUES ('decl-drift','commit-drift','task-drift','attempt-drift','final_video','out.mp4','video/mp4',100,'sha','READY','art-drift',?,?)`, old, old); err != nil {
 		t.Fatal(err)
 	}
-	reconciler, err := NewStaleExecutionReconciler(store)
-	if err != nil {
-		t.Fatal(err)
-	}
+	reconciler := newStaleExecutionReconcilerForTest(store)
 	first, err := reconciler.Reconcile(context.Background(), now, 100, true, "operator")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(first.Applied) != 1 || first.Applied[0].Category != StaleCommittedArtifact {
+	if len(first.Applied) != 1 || first.Applied[0].Category != stalereconcile.StaleCommittedArtifact {
 		t.Fatalf("unexpected first report: %+v", first)
 	}
 	var status string
@@ -131,10 +130,7 @@ func TestStaleExecutionReconciler_DoesNotPromoteTaskWithoutMatchingAttempt(t *te
 	) VALUES ('decl-attempt-guard','commit-attempt-guard','task-attempt-guard','attempt-attempt-guard','final_video','out.mp4','video/mp4',100,'sha','READY','art-attempt-guard',?,?)`, old, old); err != nil {
 		t.Fatal(err)
 	}
-	reconciler, err := NewStaleExecutionReconciler(store)
-	if err != nil {
-		t.Fatal(err)
-	}
+	reconciler := newStaleExecutionReconcilerForTest(store)
 	report, err := reconciler.Reconcile(context.Background(), now, 100, true, "operator")
 	if err != nil {
 		t.Fatal(err)
@@ -165,15 +161,12 @@ func TestStaleExecutionReconciler_UnconfirmedSpool(t *testing.T) {
 	) VALUES ('decl-spool','commit-spool','task-spool','attempt-spool','final_video','out.mp4','video/mp4',100,'sha','spool-key','DECLARED',?,?)`, old, old); err != nil {
 		t.Fatal(err)
 	}
-	reconciler, err := NewStaleExecutionReconciler(store)
-	if err != nil {
-		t.Fatal(err)
-	}
+	reconciler := newStaleExecutionReconcilerForTest(store)
 	first, err := reconciler.Reconcile(context.Background(), now, 100, true, "operator")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(first.Applied) != 1 || first.Applied[0].Category != StaleUnconfirmedSpool {
+	if len(first.Applied) != 1 || first.Applied[0].Category != stalereconcile.StaleUnconfirmedSpool {
 		t.Fatalf("unexpected first report: %+v", first)
 	}
 	var declarationStatus, commitStatus string

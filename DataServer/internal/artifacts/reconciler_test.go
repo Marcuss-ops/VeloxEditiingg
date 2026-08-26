@@ -11,7 +11,8 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/require"
 
-	"velox-server/internal/store"
+	"velox-server/internal/artifactsstore"
+	"velox-server/internal/repository"
 )
 
 // =====================================================================
@@ -32,7 +33,7 @@ func setupReconcilerEnv(t *testing.T, env *testEnv) *Reconciler {
 	cfg.QuarantineMinAge = 60 * time.Second
 	cfg.BatchLimit = 200
 
-	rec, err := NewReconciler(store.NewArtifactReconcilerRepository(env.db), env.bs, env.repo, env.clock, cfg)
+	rec, err := NewReconciler(artifactsstore.NewArtifactReconcilerRepository(env.db), env.bs, env.repo, env.clock, cfg)
 	require.NoError(t, err)
 	return rec
 }
@@ -51,8 +52,8 @@ func TestReconciler_WorkerDiedDuringUpload_MarksExpired(t *testing.T) {
 	require.NoError(t, err)
 
 	// Simulate that the worker started streaming and then died.
-	uploading := string(store.UploadUploading)
-	require.NoError(t, env.repo.UpdateUploadStatus(context.Background(), sess.UploadID, store.UploadFields{Status: &uploading}))
+	uploading := string(repository.UploadUploading)
+	require.NoError(t, env.repo.UpdateUploadStatus(context.Background(), sess.UploadID, repository.UploadFields{Status: &uploading}))
 
 	// Advance time past the 24h upload TTL.
 	env.clock.Advance(25 * time.Hour)

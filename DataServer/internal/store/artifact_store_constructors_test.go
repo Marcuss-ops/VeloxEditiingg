@@ -3,6 +3,8 @@ package store
 import (
 	"path/filepath"
 	"testing"
+
+	"velox-server/internal/artifactsstore"
 )
 
 func TestArtifactRepositoriesFromStoreUseCanonicalSQLiteStore(t *testing.T) {
@@ -14,22 +16,25 @@ func TestArtifactRepositoriesFromStoreUseCanonicalSQLiteStore(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 
-	if got := NewSQLiteUploadRepositoryFromStore(s); got == nil || got.db != s.db {
-		t.Fatal("upload repository must use the canonical SQLiteStore database")
+	if got := artifactsstore.NewSQLiteUploadRepository(s.DB()); got == nil {
+		t.Fatal("upload repository must be constructed from the canonical database")
 	}
-	if got := NewSQLiteUploadSessionWriterFromStore(s); got == nil || got.db != s.db {
-		t.Fatal("upload session writer must use the canonical SQLiteStore database")
+	if got := artifactsstore.NewSQLiteUploadSessionWriter(s.DB()); got == nil {
+		t.Fatal("upload session writer must be constructed from the canonical database")
 	}
-	if got := NewSQLiteArtifactReaderFromStore(s); got == nil || got.db != s.db {
-		t.Fatal("artifact reader must use the canonical SQLiteStore database")
+	if got := artifactsstore.NewSQLiteArtifactRepository(s.DB()); got == nil {
+		t.Fatal("artifact repository must be constructed from the canonical database")
+	}
+	if got := artifactsstore.NewSQLiteArtifactReader(s.DB()); got == nil {
+		t.Fatal("artifact reader must be constructed from the canonical database")
 	}
 	if got := NewSQLiteAuthReaderFromStore(s); got == nil || got.db != s.db {
 		t.Fatal("auth reader must use the canonical SQLiteStore database")
 	}
-	if got := NewArtifactReconcilerRepositoryFromStore(s); got == nil || got.db != s.db {
-		t.Fatal("artifact reconciler repository must use the canonical SQLiteStore database")
+	if got := artifactsstore.NewArtifactReconcilerRepository(s.DB()); got == nil {
+		t.Fatal("artifact reconciler repository must be constructed from the canonical database")
 	}
-	if got := NewArtifactGCStoreFromStore(s); got == nil || got.db != s.db {
-		t.Fatal("artifact GC store must use the canonical SQLiteStore database")
+	if got := artifactsstore.NewArtifactGCStore(s.DB()); got == nil {
+		t.Fatal("artifact GC store must be constructed from the canonical database")
 	}
 }

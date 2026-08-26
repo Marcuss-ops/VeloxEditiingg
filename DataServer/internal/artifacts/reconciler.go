@@ -6,14 +6,15 @@ import (
 	"log"
 	"time"
 
+	"velox-server/internal/artifactsstore"
 	"velox-server/internal/platform/clock"
-	"velox-server/internal/store"
+	"velox-server/internal/repository"
 )
 
 type Reconciler struct {
-	artifactRepo *store.ArtifactReconcilerRepository
-	blobStore    store.BlobStore
-	repo         store.UploadRepository
+	artifactRepo *artifactsstore.ArtifactReconcilerRepository
+	blobStore    repository.BlobStore
+	repo         repository.UploadRepository
 	clock        clock.Clock
 	config       ReconcilerConfig
 }
@@ -39,7 +40,7 @@ type ReconcileStats struct {
 	GCFailed              int
 }
 
-func NewReconciler(artifactRepo *store.ArtifactReconcilerRepository, blobStore store.BlobStore, repo store.UploadRepository, c clock.Clock, config ReconcilerConfig) (*Reconciler, error) {
+func NewReconciler(artifactRepo *artifactsstore.ArtifactReconcilerRepository, blobStore repository.BlobStore, repo repository.UploadRepository, c clock.Clock, config ReconcilerConfig) (*Reconciler, error) {
 	if artifactRepo == nil {
 		return nil, fmt.Errorf("artifacts: Reconciler: nil artifact repository")
 	}

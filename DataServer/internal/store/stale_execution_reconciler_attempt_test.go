@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"velox-server/internal/stalereconcile"
 )
 
 func TestStaleExecutionReconciler_OrphanAttemptIsCancelledAndConvergent(t *testing.T) {
@@ -17,15 +19,12 @@ func TestStaleExecutionReconciler_OrphanAttemptIsCancelledAndConvergent(t *testi
 		t.Fatal(err)
 	}
 
-	reconciler, err := NewStaleExecutionReconciler(store)
-	if err != nil {
-		t.Fatal(err)
-	}
+	reconciler := newStaleExecutionReconcilerForTest(store)
 	first, err := reconciler.Reconcile(context.Background(), now, 100, true, "operator-test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(first.Applied) != 1 || first.Applied[0].Category != StaleOrphanAttempt {
+	if len(first.Applied) != 1 || first.Applied[0].Category != stalereconcile.StaleOrphanAttempt {
 		t.Fatalf("unexpected first report: %+v", first)
 	}
 
@@ -70,15 +69,12 @@ func TestStaleExecutionReconciler_TerminalJobAttemptIsCancelled(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reconciler, err := NewStaleExecutionReconciler(store)
-	if err != nil {
-		t.Fatal(err)
-	}
+	reconciler := newStaleExecutionReconcilerForTest(store)
 	report, err := reconciler.Reconcile(context.Background(), now, 100, true, "operator-test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(report.Applied) != 1 || report.Applied[0].Category != StaleOrphanTask {
+	if len(report.Applied) != 1 || report.Applied[0].Category != stalereconcile.StaleOrphanTask {
 		t.Fatalf("terminal-job task/attempt reconciliation was not convergent: %+v", report)
 	}
 	var status string
@@ -107,15 +103,12 @@ func TestStaleExecutionReconciler_TerminalParentAttemptIsCancelled(t *testing.T)
 		t.Fatal(err)
 	}
 
-	reconciler, err := NewStaleExecutionReconciler(store)
-	if err != nil {
-		t.Fatal(err)
-	}
+	reconciler := newStaleExecutionReconcilerForTest(store)
 	report, err := reconciler.Reconcile(context.Background(), now, 100, true, "operator-test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(report.Applied) != 1 || report.Applied[0].Category != StaleOrphanAttempt {
+	if len(report.Applied) != 1 || report.Applied[0].Category != stalereconcile.StaleOrphanAttempt {
 		t.Fatalf("unexpected report: %+v", report)
 	}
 	var status string

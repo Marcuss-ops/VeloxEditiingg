@@ -191,39 +191,52 @@ func ValidateCompiledRenderPlanV2JSON(data []byte) (*CompiledRenderPlanV2, error
 	return DecodeCompiledRenderPlanV2(data)
 }
 
-// ValidateCompiledRenderPlanV2Payload validates the TaskOffer envelope keys
-// when a V2 compiled plan is present. A payload with neither V2 key remains
-// valid for legacy workers; a partial or malformed V2 envelope fails closed.
-// The SHA256 is computed over the exact JSON string carried on the wire.
-func ValidateCompiledRenderPlanV2Payload(raw map[string]interface{}) error {
+// DecodeCompiledRenderPlanV2Payload is the single TaskOffer-envelope boundary
+// for a V2 compiled plan. It verifies the exact wire SHA and delegates the
+// document checks to DecodeCompiledRenderPlanV2. A payload without either V2
+// key returns (nil, nil) so legacy workers remain unaffected; a partial or
+// malformed envelope fails closed.
+func DecodeCompiledRenderPlanV2Payload(raw map[string]interface{}) (*CompiledRenderPlanV2, error) {
 	if raw == nil {
-		return nil
+		return nil, nil
 	}
 	planJSON, hasJSON := raw[PayloadKeyCompiledRenderPlanJSON]
 	planSHA, hasSHA := raw[PayloadKeyCompiledRenderPlanSHA]
 	if !hasJSON && !hasSHA {
-		return nil
+		return nil, nil
 	}
 	if !hasJSON {
-		return fmt.Errorf("compiled render plan v2: %q is required when %q is present", PayloadKeyCompiledRenderPlanJSON, PayloadKeyCompiledRenderPlanSHA)
+		return nil, fmt.Errorf("compiled render plan v2: %q is required when %q is present", PayloadKeyCompiledRenderPlanJSON, PayloadKeyCompiledRenderPlanSHA)
 	}
 	if !hasSHA {
-		return fmt.Errorf("compiled render plan v2: %q is required when %q is present", PayloadKeyCompiledRenderPlanSHA, PayloadKeyCompiledRenderPlanJSON)
+		return nil, fmt.Errorf("compiled render plan v2: %q is required when %q is present", PayloadKeyCompiledRenderPlanSHA, PayloadKeyCompiledRenderPlanJSON)
 	}
 
 	rawJSON, ok := planJSON.(string)
 	if !ok || strings.TrimSpace(rawJSON) == "" {
-		return fmt.Errorf("compiled render plan v2: %q must be a non-empty string", PayloadKeyCompiledRenderPlanJSON)
+		return nil, fmt.Errorf("compiled render plan v2: %q must be a non-empty string", PayloadKeyCompiledRenderPlanJSON)
 	}
 	rawSHA, ok := planSHA.(string)
 	if !ok || !isLowerSHA256(strings.TrimSpace(rawSHA)) {
-		return fmt.Errorf("compiled render plan v2: %q must be 64 lowercase hexadecimal characters", PayloadKeyCompiledRenderPlanSHA)
+		return nil, fmt.Errorf("compiled render plan v2: %q must be 64 lowercase hexadecimal characters", PayloadKeyCompiledRenderPlanSHA)
 	}
 	actual := sha256.Sum256([]byte(rawJSON))
 	if rawSHA != hex.EncodeToString(actual[:]) {
-		return fmt.Errorf("compiled render plan v2: %q does not match %q", PayloadKeyCompiledRenderPlanSHA, PayloadKeyCompiledRenderPlanJSON)
+		return nil, fmt.Errorf("compiled render plan v2: %q does not match %q", PayloadKeyCompiledRenderPlanSHA, PayloadKeyCompiledRenderPlanJSON)
 	}
-	_, err := DecodeCompiledRenderPlanV2([]byte(rawJSON))
+	plan, err := DecodeCompiledRenderPlanV2([]byte(rawJSON))
+	if err != nil {
+		return nil, err
+	}
+	return plan, nil
+}
+
+// ValidateCompiledRenderPlanV2Payload validates the TaskOffer envelope keys
+// when a V2 compiled plan is present. Validation and decoding intentionally
+// share DecodeCompiledRenderPlanV2Payload so callers cannot drift in hash or
+// envelope semantics.
+func ValidateCompiledRenderPlanV2Payload(raw map[string]interface{}) error {
+	_, err := DecodeCompiledRenderPlanV2Payload(raw)
 	return err
 }
 

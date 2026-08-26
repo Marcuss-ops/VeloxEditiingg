@@ -1,6 +1,11 @@
 // Package store provides database access layers for Velox.
 // SQLite is the single database used for jobs, workers, analytics,
 // calendar, and drive links.
+// COMPATIBILITY:
+// Owner:        P0.4 store-facade migration
+// Remove after: 2026-09-30
+// Read-only:    yes
+
 package store
 
 import (

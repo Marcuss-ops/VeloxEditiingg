@@ -55,6 +55,7 @@ import (
 
 	"velox-server/internal/config"
 	"velox-server/internal/creatorflow"
+	"velox-server/internal/m2mkeys"
 	"velox-server/internal/store"
 )
 
@@ -161,12 +162,12 @@ func ClientIDFromContext(c *gin.Context) string {
 
 // KeyFromContext returns the typed M2MAPIKey the middleware
 // resolved against, or nil if M2M auth did not run.
-func KeyFromContext(c *gin.Context) *store.M2MAPIKey {
+func KeyFromContext(c *gin.Context) *m2mkeys.M2MAPIKey {
 	if c == nil {
 		return nil
 	}
 	if v, ok := c.Get(m2mCtxKeyM2MKey); ok {
-		if k, ok := v.(*store.M2MAPIKey); ok {
+		if k, ok := v.(*m2mkeys.M2MAPIKey); ok {
 			return k
 		}
 	}
@@ -217,9 +218,9 @@ func NewM2MJwAuthMiddleware(cfg *config.Config, st *store.SQLiteStore, limiter *
 			return
 		}
 
-		hashed := store.HashM2MSecret(token)
+		hashed := m2mkeys.HashM2MSecret(token)
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
-		key, err := st.GetActiveM2MAPIKeyBySecretHash(ctx, hashed)
+		key, err := m2mkeys.GetActiveM2MAPIKeyBySecretHash(ctx, st.DB(), hashed)
 		cancel()
 		if err != nil {
 			auditM2MReject(c, st, "", "db_error")

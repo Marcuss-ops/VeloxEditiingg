@@ -33,7 +33,7 @@ import (
 	"errors"
 	"time"
 
-	"velox-server/internal/store"
+	"velox-server/internal/smokerunstore"
 )
 
 // ── Sentinel errors ──────────────────────────────────────────────────
@@ -87,9 +87,7 @@ var (
 // ── Status enum ────────────────────────────────────────────────────
 //
 // The smoke_runs status vocabulary is NOT defined here. The single
-// canonical source is smokerunstore.SmokeStatus* (re-exported by
-// store as store.SmokeStatus*); the executor and the smoke-health
-// runner reference it via the store import above. Defining a local
+// canonical source is smokerunstore.SmokeStatus*. Defining a local
 // copy would fork the vocabulary and let the two drift.
 
 // ── Payload schema ──────────────────────────────────────────────────
@@ -112,9 +110,8 @@ type SmokePayload struct {
 
 // ── Run-record shape ────────────────────────────────────────────────
 //
-// Executor uses store.SmokeRun directly (no local mirror).
-// Defined in store/store_smoke_runs.go; this file references
-// it via the store import above. Tests use store.SmokeRun
+// Executor uses smokerunstore.SmokeRun directly (no local mirror).
+// Tests use smokerunstore.SmokeRun
 // values directly via the BackendSmokeRuns interface; a
 // separate SmokeRun local type would just create a second
 // field-set the executor has to maintain.
@@ -200,11 +197,11 @@ type BackendAssetResolver interface {
 // dashboard never observes a torn (status=SUCCEEDED, finished_at=NULL)
 // row.
 type BackendSmokeRuns interface {
-	InsertSmokeRun(ctx context.Context, rec store.SmokeRun) error
+	InsertSmokeRun(ctx context.Context, rec smokerunstore.SmokeRun) error
 	MarkSmokeSucceeded(ctx context.Context, runID string, finishedAt time.Time, durationMs int64, artifactDriveID string) error
 	MarkSmokeFailed(ctx context.Context, runID string, finishedAt time.Time, durationMs int64, errMsg string) error
-	GetLatestSmokeForWorker(ctx context.Context, workerID string) (*store.SmokeRun, error)
-	ListRecentSmokesForWorker(ctx context.Context, workerID string, limit int) ([]store.SmokeRun, error)
+	GetLatestSmokeForWorker(ctx context.Context, workerID string) (*smokerunstore.SmokeRun, error)
+	ListRecentSmokesForWorker(ctx context.Context, workerID string, limit int) ([]smokerunstore.SmokeRun, error)
 }
 
 // ── Backend bundle ─────────────────────────────────────────────────
@@ -219,10 +216,10 @@ type BackendSmokeRuns interface {
 // construction is useful for tests and partial composition only; production
 // validation rejects an incomplete backend before the supervisor starts.
 //
-// Compile-time shape contract: Executor uses store.SmokeRun
+// Compile-time shape contract: Executor uses smokerunstore.SmokeRun
 // throughout (rather than a local mirror struct) so Go's
 // import-graph type-check enforces the field set across the
-// store + fleet packages. Renaming a field on store.SmokeRun
+// store + fleet packages. Renaming a field on smokerunstore.SmokeRun
 // breaks both the executor compile AND the store tests; both
 // are caught by the AGENTS.md §1 gate's `go build ./...`.
 type LevelDSmokeBackend struct {

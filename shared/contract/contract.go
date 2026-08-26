@@ -328,7 +328,7 @@ func NormalizeSceneEntry(scene map[string]interface{}) map[string]interface{} {
 	for k, v := range scene {
 		normalized[k] = v
 	}
-	if text := payload.FirstString(scene, "text"); text != "" {
+	if text := payload.FirstString(scene, "text", "description", "narration"); text != "" {
 		normalized["text"] = text
 	}
 	image := payload.FirstString(scene, "image_link", "image_url", "image")

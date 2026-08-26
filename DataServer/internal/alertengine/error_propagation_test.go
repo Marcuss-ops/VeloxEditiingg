@@ -56,11 +56,11 @@ func TestEvaluatePropagatesInfrastructureErrorAndPreservesHealthySibling(t *test
 	engine := New(0, nil)
 	metrics := &computeErrorMetrics{}
 	engine.SetErrorMetrics(metrics)
-	engine.AddRule(func(context.Context) (*Alert, error) {
+	engine.AddRule(func(context.Context) (*runtimealerts.AlertEvent, error) {
 		return nil, sql.ErrConnDone
 	})
-	engine.AddRule(func(context.Context) (*Alert, error) {
-		return &Alert{Name: "HealthyRule", Severity: "warning", Summary: "still visible"}, nil
+	engine.AddRule(func(context.Context) (*runtimealerts.AlertEvent, error) {
+		return &runtimealerts.AlertEvent{RuleID: "HealthyRule", Severity: "warning", Summary: "still visible"}, nil
 	})
 
 	events, err := engine.Evaluate(context.Background())
@@ -79,8 +79,8 @@ func TestEvaluateAllKeepsIsolatedSinkErrorForPipelineRetryWithoutRestart(t *test
 	engine := New(0, nil)
 	sink := &computeFailingSink{}
 	engine.AddSink(sink)
-	engine.AddRule(func(context.Context) (*Alert, error) {
-		return &Alert{Name: "AlwaysOn", Severity: "warning", Summary: "test"}, nil
+	engine.AddRule(func(context.Context) (*runtimealerts.AlertEvent, error) {
+		return &runtimealerts.AlertEvent{RuleID: "AlwaysOn", Severity: "warning", Summary: "test"}, nil
 	})
 
 	if err := engine.evaluateAll(context.Background()); err != nil {

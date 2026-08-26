@@ -58,6 +58,8 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+
+	"velox-server/internal/jobs"
 )
 
 // ── §1. TOCTOU across competing connections ────────────────────────────────
@@ -102,8 +104,8 @@ func TestTransition_TOCTOU_ConcurrentConnection(t *testing.T) {
 	// Caller submits the stale CAS — must fail with ErrTransitionConflict.
 	err = repo.Transition(ctx, TransitionParams{
 		JobID:          "job-toc",
-		ExpectedStatus: JobStatusLeased,
-		NewStatus:      JobStatusRunning,
+		ExpectedStatus: jobs.StatusLeased,
+		NewStatus:      jobs.StatusRunning,
 		Revision:       5,
 	})
 	if !errors.Is(err, ErrTransitionConflict) {
@@ -136,15 +138,15 @@ func TestTransition_LifecycleHappyPath(t *testing.T) {
 	seedJob(t, repo.store.db, "job-1", "PENDING", 0)
 
 	steps := []struct {
-		from JobStatus
-		to   JobStatus
+		from jobs.JobStatus
+		to   jobs.JobStatus
 		pre  int // expected pre-state revision (caller's view)
 		post int // expected post-state revision
 	}{
-		{JobStatusPending, JobStatusLeased, 0, 1},
-		{JobStatusLeased, JobStatusRunning, 1, 2},
-		{JobStatusRunning, JobStatusAwaitingArtifact, 2, 3},
-		{JobStatusAwaitingArtifact, JobStatusSucceeded, 3, 4},
+		{jobs.StatusPending, jobs.StatusLeased, 0, 1},
+		{jobs.StatusLeased, jobs.StatusRunning, 1, 2},
+		{jobs.StatusRunning, jobs.StatusAwaitingArtifact, 2, 3},
+		{jobs.StatusAwaitingArtifact, jobs.StatusSucceeded, 3, 4},
 	}
 	for _, s := range steps {
 		err := repo.Transition(ctx, TransitionParams{
@@ -188,8 +190,8 @@ func TestTransition_TerminalStatesRejectFurtherChanges(t *testing.T) {
 			// Any non-matching ExpectedStatus MUST yield ErrTransitionConflict.
 			err := repo.Transition(ctx, TransitionParams{
 				JobID:          "j-" + term,
-				ExpectedStatus: JobStatusLeased, // wrong, regardless of NewStatus
-				NewStatus:      JobStatusRunning,
+				ExpectedStatus: jobs.StatusLeased, // wrong, regardless of NewStatus
+				NewStatus:      jobs.StatusRunning,
 				Revision:       7,
 			})
 			if !errors.Is(err, ErrTransitionConflict) {
@@ -234,8 +236,8 @@ func TestTransition_ParallelConcurrent_ExactlyOneWins(t *testing.T) {
 			<-start
 			results[idx] = repo.Transition(ctx, TransitionParams{
 				JobID:          "job-parallel",
-				ExpectedStatus: JobStatusLeased,
-				NewStatus:      JobStatusRunning,
+				ExpectedStatus: jobs.StatusLeased,
+				NewStatus:      jobs.StatusRunning,
 				Revision:       0,
 			})
 		}(i)
@@ -287,8 +289,8 @@ func TestTransition_RevisionBumpsVisibleToNextRead(t *testing.T) {
 	// First Transition: LEASED -> RUNNING at rev 0 succeeds.
 	if err := repo.Transition(ctx, TransitionParams{
 		JobID:          "job-bumps",
-		ExpectedStatus: JobStatusLeased,
-		NewStatus:      JobStatusRunning,
+		ExpectedStatus: jobs.StatusLeased,
+		NewStatus:      jobs.StatusRunning,
 		Revision:       0,
 	}); err != nil {
 		t.Fatalf("first Transition: %v", err)
@@ -301,8 +303,8 @@ func TestTransition_RevisionBumpsVisibleToNextRead(t *testing.T) {
 	// Second Transition with the OLD revision MUST fail (CAS stale).
 	err := repo.Transition(ctx, TransitionParams{
 		JobID:          "job-bumps",
-		ExpectedStatus: JobStatusRunning,
-		NewStatus:      JobStatusSucceeded,
+		ExpectedStatus: jobs.StatusRunning,
+		NewStatus:      jobs.StatusSucceeded,
 		Revision:       0, // stale
 	})
 	if !errors.Is(err, ErrTransitionConflict) {
@@ -312,8 +314,8 @@ func TestTransition_RevisionBumpsVisibleToNextRead(t *testing.T) {
 	// Third Transition with the bumped rev=1 succeeds.
 	if err := repo.Transition(ctx, TransitionParams{
 		JobID:          "job-bumps",
-		ExpectedStatus: JobStatusRunning,
-		NewStatus:      JobStatusSucceeded,
+		ExpectedStatus: jobs.StatusRunning,
+		NewStatus:      jobs.StatusSucceeded,
 		Revision:       1,
 	}); err != nil {
 		t.Fatalf("third Transition at rev=1: %v", err)
@@ -354,8 +356,8 @@ func TestTransition_CancelledContext_NoHalfRowOrphan(t *testing.T) {
 	// Return value deliberately ignored — see docstring.
 	_ = repo.Transition(ctx, TransitionParams{
 		JobID:          "job-cancel-ctx",
-		ExpectedStatus: JobStatusLeased,
-		NewStatus:      JobStatusRunning,
+		ExpectedStatus: jobs.StatusLeased,
+		NewStatus:      jobs.StatusRunning,
 		Revision:       0,
 	})
 
@@ -377,7 +379,7 @@ func TestTransition_MultipleJobs_IndependentRevisions(t *testing.T) {
 	_, repo := openTransitionTestDB(t)
 	ctx := context.Background()
 
-	jobs := []struct {
+	jobRows := []struct {
 		id  string
 		rev int
 	}{
@@ -385,14 +387,14 @@ func TestTransition_MultipleJobs_IndependentRevisions(t *testing.T) {
 		{"job-B", 5},
 		{"job-C", 12},
 	}
-	for _, j := range jobs {
+	for _, j := range jobRows {
 		seedJob(t, repo.store.db, j.id, "LEASED", j.rev)
 	}
-	for _, j := range jobs {
+	for _, j := range jobRows {
 		if err := repo.Transition(ctx, TransitionParams{
 			JobID:          j.id,
-			ExpectedStatus: JobStatusLeased,
-			NewStatus:      JobStatusRunning,
+			ExpectedStatus: jobs.StatusLeased,
+			NewStatus:      jobs.StatusRunning,
 			Revision:       j.rev,
 		}); err != nil {
 			t.Fatalf("Transition %s: %v", j.id, err)

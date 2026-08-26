@@ -7,12 +7,14 @@ import (
 	"path/filepath"
 	"testing"
 
+	"velox-server/internal/completionstore"
+	"velox-server/internal/repository"
 	"velox-server/internal/store/migrations"
 
 	_ "github.com/mattn/go-sqlite3"
 )
 
-func openCompletionRepositoryTestDB(t *testing.T) (*SQLiteCompletionStore, *sql.DB) {
+func openCompletionRepositoryTestDB(t *testing.T) (*completionstore.SQLiteCompletionStore, *sql.DB) {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "completion-repository.db")
 	db, err := sql.Open("sqlite3", dbPath+"?_busy_timeout=5000&_journal_mode=WAL")
@@ -23,11 +25,11 @@ func openCompletionRepositoryTestDB(t *testing.T) (*SQLiteCompletionStore, *sql.
 	if err := migrations.RunMigrations(db, migrations.SQLiteMigrationsFS(), "sqlite"); err != nil {
 		t.Fatal(err)
 	}
-	return NewSQLiteCompletionStore(db), db
+	return completionstore.NewSQLiteCompletionStore(db), db
 }
 
-func completionDeclareParams(commitID string) CompletionDeclareParams {
-	return CompletionDeclareParams{
+func completionDeclareParams(commitID string) repository.CompletionDeclareParams {
+	return repository.CompletionDeclareParams{
 		CommitID:            commitID,
 		TaskID:              "task-completion-test",
 		AttemptID:           "attempt-completion-test",
@@ -47,7 +49,7 @@ func TestCompletionRepository_RunCommitsAndRollsBackAsOneUnit(t *testing.T) {
 	ctx := context.Background()
 
 	params := completionDeclareParams("commit-completion-commit")
-	if err := repo.Run(ctx, func(tx CompletionTx) error {
+	if err := repo.Run(ctx, func(tx repository.CompletionTx) error {
 		got, err := tx.InsertCompletionAttempt(ctx, params)
 		if err != nil {
 			return err
@@ -70,7 +72,7 @@ func TestCompletionRepository_RunCommitsAndRollsBackAsOneUnit(t *testing.T) {
 
 	rollbackParams := completionDeclareParams("commit-completion-rollback")
 	sentinel := errors.New("force completion transaction rollback")
-	if err := repo.Run(ctx, func(tx CompletionTx) error {
+	if err := repo.Run(ctx, func(tx repository.CompletionTx) error {
 		if _, err := tx.InsertCompletionAttempt(ctx, rollbackParams); err != nil {
 			return err
 		}
@@ -92,21 +94,21 @@ func TestCompletionRepository_ReadCompletionFenceRejectsStaleIdentity(t *testing
 	repo, _ := openCompletionRepositoryTestDB(t)
 	ctx := context.Background()
 	params := completionDeclareParams("commit-completion-fence")
-	if err := repo.Run(ctx, func(tx CompletionTx) error {
+	if err := repo.Run(ctx, func(tx repository.CompletionTx) error {
 		_, err := tx.InsertCompletionAttempt(ctx, params)
 		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	goodFence := CompletionFence{
+	goodFence := repository.CompletionFence{
 		TaskID:    params.TaskID,
 		AttemptID: params.AttemptID,
 		WorkerID:  params.WorkerID,
 		LeaseID:   params.LeaseID,
 		Revision:  params.Revision,
 	}
-	if err := repo.Run(ctx, func(tx CompletionTx) error {
+	if err := repo.Run(ctx, func(tx repository.CompletionTx) error {
 		state, err := tx.ReadCompletionFence(ctx, goodFence, false)
 		if err != nil {
 			return err
@@ -121,16 +123,16 @@ func TestCompletionRepository_ReadCompletionFenceRejectsStaleIdentity(t *testing
 
 	staleFence := goodFence
 	staleFence.LeaseID = "stale-lease"
-	if err := repo.Run(ctx, func(tx CompletionTx) error {
+	if err := repo.Run(ctx, func(tx repository.CompletionTx) error {
 		_, err := tx.ReadCompletionFence(ctx, staleFence, false)
 		return err
-	}); !errors.Is(err, ErrCompletionTransitionConflict) {
+	}); !errors.Is(err, repository.ErrCompletionTransitionConflict) {
 		t.Fatalf("stale fence error=%v, want ErrCompletionTransitionConflict", err)
 	}
 
 	missingFence := goodFence
 	missingFence.AttemptID = "missing-attempt"
-	if err := repo.Run(ctx, func(tx CompletionTx) error {
+	if err := repo.Run(ctx, func(tx repository.CompletionTx) error {
 		state, err := tx.ReadCompletionFence(ctx, missingFence, true)
 		if err != nil {
 			return err

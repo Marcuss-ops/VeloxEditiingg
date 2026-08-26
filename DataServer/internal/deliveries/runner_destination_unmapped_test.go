@@ -28,6 +28,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"velox-server/internal/deliverystore"
 
 	"velox-server/internal/store"
 )
@@ -126,7 +127,7 @@ func openDeliveryTestDB(t *testing.T) *store.SQLiteStore {
 func seedUnmappedDeliveryTriple(t *testing.T, db *store.SQLiteStore, destID, artifactID, deliveryID string) {
 	t.Helper()
 
-	if err := db.Delivery().InsertDeliveryDestination(&store.DeliveryDestination{
+	if err := db.Delivery().InsertDeliveryDestination(&deliverystore.DeliveryDestination{
 		DestinationID:         destID,
 		Provider:              "social_gateway",
 		ExternalDestinationID: "",
@@ -153,7 +154,7 @@ func seedUnmappedDeliveryTriple(t *testing.T, db *store.SQLiteStore, destID, art
 		t.Fatalf("insert artifact: %v", err)
 	}
 
-	if err := db.Delivery().InsertJobDelivery(&store.JobDelivery{
+	if err := db.Delivery().InsertJobDelivery(&deliverystore.JobDelivery{
 		DeliveryID:     deliveryID,
 		ArtifactID:     artifactID,
 		DestinationID:  destID,

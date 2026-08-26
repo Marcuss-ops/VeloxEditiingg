@@ -183,11 +183,7 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 }
 
 func compiledPlanClipCount(payload map[string]interface{}) int {
-	raw, ok := payload[contract.PayloadKeyCompiledRenderPlanJSON].(string)
-	if !ok || strings.TrimSpace(raw) == "" {
-		return 0
-	}
-	plan, err := contract.DecodeCompiledRenderPlanV2([]byte(raw))
+	plan, err := contract.DecodeCompiledRenderPlanV2Payload(payload)
 	if err != nil || plan == nil {
 		return 0
 	}

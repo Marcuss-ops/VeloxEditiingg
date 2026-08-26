@@ -10,6 +10,7 @@ import (
 	"velox-server/internal/logging"
 	"velox-server/internal/outbox"
 	"velox-server/internal/platform/database"
+	"velox-server/internal/repository"
 	"velox-server/internal/store"
 )
 
@@ -24,7 +25,7 @@ import (
 type persistenceDeps struct {
 	Handle         *database.Handle
 	SQLite         *store.SQLiteStore
-	BlobStore      store.BlobStore
+	BlobStore      repository.BlobStore
 	Outbox         *outbox.Store
 	OutboxRegistry *outbox.Registry
 }
@@ -82,7 +83,7 @@ func buildPersistence(cfg *config.Config) (*persistenceDeps, error) {
 	sqliteStore.SetRetention(cfg.Retention.WorkerMetricsDays, cfg.Retention.WorkerEventsDays)
 	sqliteStore.SetResourceRetention(cfg.Retention.WorkerResourceRawDays, cfg.Retention.WorkerResourceRollupDays)
 
-	var blobStore store.BlobStore
+	var blobStore repository.BlobStore
 	blobStore, bsErr := store.NewFilesystemBlobStore(cfg.Runtime.StagingDir, cfg.Runtime.StorageDir)
 	if bsErr != nil {
 		// Check if operator explicitly opted into the dev no-op store.

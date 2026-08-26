@@ -14,6 +14,8 @@ import (
 
 	"velox-server/internal/identity"
 	"velox-server/internal/inputsecurity"
+
+	"velox-shared/assetref"
 )
 
 // RewriteVideoClipSegments trims local master-side clip sources and rewrites
@@ -96,13 +98,11 @@ func (s *AssetService) rewriteVideoClipSegmentMaps(ctx context.Context, segments
 // drive URLs) yield ("", false) and skip the Fase C2 fail-closed metadata
 // gate.
 func registeredAssetReference(reference string) (string, bool) {
-	trimmed := strings.TrimSpace(reference)
-	prefix := VeloxAssetScheme + "://"
-	if !strings.HasPrefix(trimmed, prefix) {
+	ref, err := assetref.ParseCanonicalWire(reference)
+	if err != nil || ref.Kind() != assetref.RefKindLocal || ref.ID() == "" {
 		return "", false
 	}
-	id := strings.TrimSpace(strings.TrimPrefix(trimmed, prefix))
-	return id, id != ""
+	return ref.ID(), true
 }
 
 func (s *AssetService) rewriteVideoClipSegment(ctx context.Context, segment map[string]interface{}, index int, probes map[string]*VideoProbe) error {

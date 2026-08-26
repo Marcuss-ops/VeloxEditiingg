@@ -8,7 +8,8 @@ import (
 	"net/http"
 	"strings"
 
-	"velox-server/internal/store"
+	"velox-server/internal/deliverystore"
+	"velox-server/internal/repository"
 
 	"github.com/gin-gonic/gin"
 )
@@ -59,7 +60,7 @@ func (h *Handlers) PipelineRunArtifacts() gin.HandlerFunc {
 			return
 		}
 
-		var artifacts []store.Artifact
+		var artifacts []repository.Artifact
 		if clientID != "" {
 			artifacts, _ = h.store.GetArtifactsByJobForClient(ctx, veloxJobID, clientID, 50)
 		} else {
@@ -136,7 +137,7 @@ func (h *Handlers) PipelineRunDeliveries() gin.HandlerFunc {
 			return
 		}
 
-		var deliveries []store.JobDelivery
+		var deliveries []deliverystore.JobDelivery
 		if clientID != "" {
 			deliveries, _ = h.store.ListJobDeliveriesByJobForClient(ctx, veloxJobID, clientID)
 		} else {

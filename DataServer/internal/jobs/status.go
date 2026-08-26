@@ -1,7 +1,6 @@
 // Package jobs defines the canonical job domain model.
 //
 // JobStatus is the single source of truth for job state constants.
-// store.JobStatus is a type alias for this type.
 // The distinct type prevents accidental comparison with statuses from
 // attempts, deliveries, publications, or input assembly, even though these
 // values are persisted as strings at storage and wire boundaries.

@@ -115,12 +115,10 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 	// instead of being marked processed without an alert. buildSupervisor registers
 	// outbox-dispatcher as a ClassCritical supervisor runner, and
 	// we don't want any startup-window alerts silently dropped.
-	// The return value of buildAlerts is DISCARDED on purpose: the
-	// wiring is a side effect of registering alert handlers with
-	// the outbox dispatcher; the resulting *alertsDeps is consumed
-	// internally and never read by anyone else. Storing it on
-	// appComponents would create a dead field.
-	if _, err := buildAlerts(); err != nil {
+	// The resulting canonical notifier is passed into buildSupervisor
+	// so the compute alert engine and outbox dispatcher share one sink.
+	alertDeps, err := buildAlerts(cfg.Runtime.Alerts.WebhookURL, cfg.Runtime.Alerts.WebhookType)
+	if err != nil {
 		return nil, fmt.Errorf("bootstrap: alerts: %w", err)
 	}
 
@@ -260,7 +258,7 @@ func buildAppComponents(cfg *config.Config) (*appComponents, error) {
 	}
 
 	var opsAlertsCapability opsalerts.CapabilityStatus
-	supervisor, err := buildSupervisor(cfg, a, m, j, p, w, t, metricsCollector, &opsAlertsCapability)
+	supervisor, err := buildSupervisor(cfg, a, m, j, p, w, t, metricsCollector, &opsAlertsCapability, alertDeps.Notifier)
 	if err != nil {
 		_ = p.SQLite.Close()
 		return nil, err

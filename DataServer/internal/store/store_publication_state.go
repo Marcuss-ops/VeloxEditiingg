@@ -1,5 +1,10 @@
 package store
 
+// COMPATIBILITY:
+// Owner:        P0.4 store-facade migration
+// Remove after: 2026-09-30
+// Read-only:    yes — publication error names delegate to storecore; lifecycle behavior remains here.
+
 import (
 	"velox-server/internal/publicationstate"
 )

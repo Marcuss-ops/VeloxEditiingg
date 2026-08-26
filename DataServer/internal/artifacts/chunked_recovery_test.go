@@ -15,7 +15,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"velox-server/internal/store"
+	"velox-server/internal/repository"
 )
 
 // advanceClockPastRealNow mirrors the clock jump in setupChunkedEnv: the
@@ -179,5 +179,5 @@ func TestChunkedRecovery_MasterRestartDuringUploadResumesAndSucceeds(t *testing.
 	// The durable session must be COMPLETED, never left RECEIVED/UPLOADING.
 	session, err := chunked2.GetUpload(context.Background(), uploadID)
 	require.NoError(t, err)
-	require.Equal(t, string(store.UploadCompleted), session.Status)
+	require.Equal(t, string(repository.UploadCompleted), session.Status)
 }

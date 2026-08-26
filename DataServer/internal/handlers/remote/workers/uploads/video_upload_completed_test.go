@@ -59,15 +59,15 @@ func TestUploadCompletedVideo_ArtifactsPipeline(t *testing.T) {
 		t.Fatalf("blob store: %v", err)
 	}
 
-	// store.NewSQLiteUploadRepository is the typed artifact_uploads +
+	// The SQLite upload repository is the typed artifact_uploads +
 	// artifact_upload_chunks CRUD surface. The artifacts-package
 	// Service composes it with three narrow writers behind
 	// UploadSessionWriter / FinalizationWriter / ArtifactReader.
-	repo := store.NewSQLiteUploadRepository(db)
-	artifactReader := store.NewSQLiteArtifactReader(db)
+	repo := artifactsstore.NewSQLiteUploadRepository(db)
+	artifactReader := artifactsstore.NewSQLiteArtifactReader(db)
 	artifactSvc := artifacts.NewService(
 		repo,
-		artifacts.NewSQLiteUploadSessionWriter(store.NewSQLiteUploadSessionWriter(db)),
+		artifacts.NewSQLiteUploadSessionWriter(artifactsstore.NewSQLiteUploadSessionWriter(db)),
 		artifacts.NewSQLiteFinalizeWriter(artifactsstore.NewSQLiteArtifactFinalizer(db, nil)),
 		artifactReader,
 		bs,
@@ -260,11 +260,11 @@ func TestUploadCompletedVideo_BeginUploadRejected_MissingJob(t *testing.T) {
 		t.Fatalf("blob store: %v", err)
 	}
 
-	repo := store.NewSQLiteUploadRepository(db)
-	artifactReader := store.NewSQLiteArtifactReader(db)
+	repo := artifactsstore.NewSQLiteUploadRepository(db)
+	artifactReader := artifactsstore.NewSQLiteArtifactReader(db)
 	artifactSvc := artifacts.NewService(
 		repo,
-		artifacts.NewSQLiteUploadSessionWriter(store.NewSQLiteUploadSessionWriter(db)),
+		artifacts.NewSQLiteUploadSessionWriter(artifactsstore.NewSQLiteUploadSessionWriter(db)),
 		artifacts.NewSQLiteFinalizeWriter(artifactsstore.NewSQLiteArtifactFinalizer(db, nil)),
 		artifactReader,
 		bs,
@@ -325,11 +325,11 @@ func TestUploadCompletedVideo_MissingVideo(t *testing.T) {
 		t.Fatalf("blob store: %v", err)
 	}
 
-	repo := store.NewSQLiteUploadRepository(db)
-	artifactReader := store.NewSQLiteArtifactReader(db)
+	repo := artifactsstore.NewSQLiteUploadRepository(db)
+	artifactReader := artifactsstore.NewSQLiteArtifactReader(db)
 	artifactSvc := artifacts.NewService(
 		repo,
-		artifacts.NewSQLiteUploadSessionWriter(store.NewSQLiteUploadSessionWriter(db)),
+		artifacts.NewSQLiteUploadSessionWriter(artifactsstore.NewSQLiteUploadSessionWriter(db)),
 		artifacts.NewSQLiteFinalizeWriter(artifactsstore.NewSQLiteArtifactFinalizer(db, nil)),
 		artifactReader,
 		bs,

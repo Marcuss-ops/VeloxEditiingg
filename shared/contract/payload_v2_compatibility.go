@@ -213,8 +213,8 @@ func JobPayloadV2FromJSON(data []byte) (*JobPayloadV2, error) {
 	if trimmed == "" {
 		return nil, nil
 	}
-	var raw map[string]any
-	if err := json.Unmarshal([]byte(trimmed), &raw); err != nil {
+	raw, err := ParsePayloadObjectJSON([]byte(trimmed))
+	if err != nil {
 		return nil, err
 	}
 	return NewJobPayloadV2(raw), nil

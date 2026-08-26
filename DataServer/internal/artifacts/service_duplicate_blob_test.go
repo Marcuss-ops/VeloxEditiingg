@@ -19,8 +19,8 @@ func (w *closeFailingWriter) Write(p []byte) (int, error) { return len(p), nil }
 func (w *closeFailingWriter) Sync() error                 { return nil }
 func (w *closeFailingWriter) Close() error                { return errInjectedClose }
 
-// testBlobStore is a minimal store.BlobStore implementation for testing
-// materializeDuplicateFinalBlob without pulling in the store package
+// testBlobStore is a minimal repository.BlobStore implementation for testing
+// materializeDuplicateFinalBlob without pulling in the SQLite store adapter
 // (which depends on CGO via go-sqlite3). Only FinalDir() is exercised
 // by the test; the rest are no-ops.
 type testBlobStore struct {

@@ -45,7 +45,7 @@ func seedDomainErrorDelivery(t *testing.T, db *store.SQLiteStore, suffix string,
 	deliveryID := "domain-error-delivery-" + suffix
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	if err := db.Delivery().InsertDeliveryDestination(&store.DeliveryDestination{
+	if err := db.Delivery().InsertDeliveryDestination(&deliverystore.DeliveryDestination{
 		DestinationID:         destinationID,
 		Provider:              providerName,
 		ExternalDestinationID: "external-" + suffix,
@@ -72,7 +72,7 @@ func seedDomainErrorDelivery(t *testing.T, db *store.SQLiteStore, suffix string,
 	if len(maxAttempts) > 0 {
 		budget = maxAttempts[0]
 	}
-	if err := db.Delivery().InsertJobDelivery(&store.JobDelivery{
+	if err := db.Delivery().InsertJobDelivery(&deliverystore.JobDelivery{
 		DeliveryID:     deliveryID,
 		ArtifactID:     artifactID,
 		DestinationID:  destinationID,

@@ -1,15 +1,41 @@
 package pipeline
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"sort"
 	"time"
 
 	"github.com/gin-gonic/gin"
 )
+
+// parseRenderManifestRefJSON is the single decoder for the API manifest_ref
+// format. Its schema is intentionally separate from rendermanifest.Manifest:
+// manifest_ref is the producer handoff envelope, while render_manifest is the
+// compiled worker contract.
+func parseRenderManifestRefJSON(data []byte) (map[string]interface{}, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	var manifest map[string]interface{}
+	if err := decoder.Decode(&manifest); err != nil {
+		return nil, fmt.Errorf("manifest_ref: decode: %w", err)
+	}
+	var trailing interface{}
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("manifest_ref: trailing JSON value")
+		}
+		return nil, fmt.Errorf("manifest_ref: trailing data: %w", err)
+	}
+	if manifest == nil {
+		return nil, fmt.Errorf("manifest_ref: document must be an object")
+	}
+	return manifest, nil
+}
 
 func renderManifestToSubmitRequest(base SubmitJobRequest, manifest map[string]interface{}) (SubmitJobRequest, []gin.H) {
 	var details []gin.H

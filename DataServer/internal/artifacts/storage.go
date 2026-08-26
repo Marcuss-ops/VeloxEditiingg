@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"velox-server/internal/repository"
 	"velox-server/internal/store"
 )
 
@@ -49,7 +50,7 @@ func CanonicalStorageKey(sha256Hex, extension string) (string, error) {
 // FinalStorageKey is a higher-level wrapper: takes a BlobStore + sha +
 // mime and returns both the relative canonical key AND the absolute
 // filesystem path the Promotion will land on.
-func FinalStorageKey(blobStore store.BlobStore, sha256Hex, extension string) (relKey, absPath string, err error) {
+func FinalStorageKey(blobStore repository.BlobStore, sha256Hex, extension string) (relKey, absPath string, err error) {
 	relKey, err = CanonicalStorageKey(sha256Hex, extension)
 	if err != nil {
 		return "", "", err
@@ -63,7 +64,7 @@ func FinalStorageKey(blobStore store.BlobStore, sha256Hex, extension string) (re
 // (Fase 3: flush; fsync; close; rename atomico dalla staging alla
 // destinazione; fsync directory, quando supportato).
 //
-// The durable filesystem I/O is delegated to store.BlobStore.PromoteDurable
+// The durable filesystem I/O is delegated to repository.BlobStore.PromoteDurable
 // so this package's business logic (content-addressable key derivation +
 // finalization semantics) never touches the filesystem driver directly.
 //
@@ -75,7 +76,7 @@ func FinalStorageKey(blobStore store.BlobStore, sha256Hex, extension string) (re
 // SQL "no blob promoted without matching SQL row in READY" promise
 // real. An orphaned blob on disk must be (and is) cleaned up by the
 // reconciler in chunk 5.
-func PromoteToCanonical(blobStore store.BlobStore, stagingPath, sha256Hex, extension string) (string, error) {
+func PromoteToCanonical(blobStore repository.BlobStore, stagingPath, sha256Hex, extension string) (string, error) {
 	if blobStore == nil {
 		return "", fmt.Errorf("artifacts: PromoteToCanonical: nil blob store")
 	}
@@ -104,7 +105,7 @@ func PromoteToCanonical(blobStore store.BlobStore, stagingPath, sha256Hex, exten
 // RemoveStaging best-effort removes the staging blob. Called on
 // Receive() failures (ErrHashMismatch, ErrSizeMismatch, write error)
 // so we don't leave orphan temp files.
-func RemoveStaging(blobStore store.BlobStore, stagingPath string) {
+func RemoveStaging(blobStore repository.BlobStore, stagingPath string) {
 	if stagingPath == "" || blobStore == nil {
 		return
 	}

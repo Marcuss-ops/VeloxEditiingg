@@ -3,6 +3,8 @@ package pipeline
 import (
 	"fmt"
 	"strings"
+
+	"velox-shared/assetref"
 )
 
 // RecipeDefinition is the registry entry for one technical rendering recipe.
@@ -161,10 +163,14 @@ func recipeClip(raw map[string]interface{}) *SubmitClip {
 	}
 	clip.URL = firstRecipeString(raw, "url", "link", "drive_link", "folder_link")
 	if clip.URL == "" && clip.AssetID != "" {
-		clip.URL = "velox-asset://" + clip.AssetID
+		if ref, err := assetref.NewLocal(clip.AssetID); err == nil {
+			clip.URL = ref.Wire()
+		}
 	}
-	if clip.AssetID == "" && strings.HasPrefix(strings.ToLower(clip.URL), "velox-asset://") {
-		clip.AssetID = strings.TrimPrefix(clip.URL, "velox-asset://")
+	if clip.AssetID == "" {
+		if ref, err := assetref.ParseCanonicalWire(clip.URL); err == nil && ref.Kind() == assetref.RefKindLocal {
+			clip.AssetID = ref.ID()
+		}
 	}
 	return clip
 }
@@ -196,7 +202,9 @@ func recipeVoiceover(raw map[string]interface{}) *SubmitVoiceover {
 	}
 	voiceover.URL = firstRecipeString(raw, "url", "link", "drive_link", "local_path")
 	if voiceover.URL == "" && voiceover.AssetID != "" {
-		voiceover.URL = "velox-asset://" + voiceover.AssetID
+		if ref, err := assetref.NewLocal(voiceover.AssetID); err == nil {
+			voiceover.URL = ref.Wire()
+		}
 	}
 	return voiceover
 }

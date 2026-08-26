@@ -22,6 +22,7 @@ import (
 	"velox-server/internal/logging"
 	velmetrics "velox-server/internal/metrics"
 	"velox-server/internal/performance"
+	"velox-server/internal/repository"
 	"velox-server/internal/store"
 	"velox-server/internal/taskgraph"
 	"velox-server/internal/workers"
@@ -89,7 +90,7 @@ type UploadRouteDeps struct {
 	WorkerTokens            *workers.TokenManager
 	ArtifactSvc             *artifacts.Service
 	ArtifactReader          artifacts.ArtifactReader
-	BlobStore               store.BlobStore
+	BlobStore               repository.BlobStore
 	ChunkedHandler          *workerhandlersuploads.ChunkedUploadHandler
 	CompletionTokenVerifier workerhandlersuploads.CommitTokenVerifier
 }

@@ -179,14 +179,17 @@ func (s *NotifySink) Process(ctx context.Context, event AlertEvent) error {
 	if s == nil || s.Notifier == nil {
 		return ErrNotifierNotConfigured
 	}
-	return s.Notifier.Notify(ctx, Alert{
+	if err := s.Notifier.Notify(ctx, Alert{
 		Source:    string(event.Group) + "." + event.RuleID,
 		Severity:  SeverityFromString(event.Severity),
 		Subject:   event.Subject,
 		Body:      event.Description,
 		Tags:      event.Labels,
 		Timestamp: event.FiredAt,
-	})
+	}); err != nil {
+		return SinkError{Stage: "notifier", Err: err}
+	}
+	return nil
 }
 
 // SeverityFromString normalizes a rule severity into the canonical

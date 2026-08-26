@@ -24,7 +24,7 @@ import (
 
 	"velox-server/internal/credentials"
 	"velox-server/internal/publicationstate"
-	"velox-server/internal/store"
+	"velox-server/internal/repository"
 	"velox-shared/contract/domain"
 )
 
@@ -172,14 +172,14 @@ type Provider interface {
 	//   * return ProviderError (or wrap one) so the runner can classify
 	//     the failure. Returning a plain error means the runner treats
 	//     it as transient and retries with backoff.
-	Deliver(ctx context.Context, artifact *store.Artifact, destination *Destination, deliveryID, idempotencyKey string) (*Result, error)
+	Deliver(ctx context.Context, artifact *repository.Artifact, destination *Destination, deliveryID, idempotencyKey string) (*Result, error)
 }
 
 // CredentialLeaseProvider opts into the central credential boundary. The
 // runner issues a short-lived lease immediately before delivery and never
 // passes a permanent refresh token to the provider.
 type CredentialLeaseProvider interface {
-	DeliverWithCredential(ctx context.Context, artifact *store.Artifact, destination *Destination, deliveryID, idempotencyKey string, lease *credentials.AccessLease) (*Result, error)
+	DeliverWithCredential(ctx context.Context, artifact *repository.Artifact, destination *Destination, deliveryID, idempotencyKey string, lease *credentials.AccessLease) (*Result, error)
 }
 
 // CredentialScopeProvider declares the minimum fixed scopes needed by a
@@ -192,7 +192,7 @@ type CredentialScopeProvider interface {
 // one publication phase. RemoteID is populated for every phase after media
 // creation; providers must use SideEffectKey as their idempotency boundary.
 type PublicationPhaseContext struct {
-	Artifact        *store.Artifact
+	Artifact        *repository.Artifact
 	Destination     *Destination
 	CredentialLease *credentials.AccessLease
 	PublicationID   string

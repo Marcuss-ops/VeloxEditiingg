@@ -26,8 +26,8 @@ import (
 
 	"velox-server/internal/credentials"
 	"velox-server/internal/deliveries"
+	"velox-server/internal/repository"
 	"velox-server/internal/socialclient"
-	"velox-server/internal/store"
 )
 
 // SocialGatewayProvider is the production adapter for the external
@@ -67,11 +67,11 @@ func (s *SocialGatewayProvider) RequiredCredentialScopes() []string {
 // wrapped in the matching deliveries sentinel so the runner's
 // ClassifyError can decide retry semantics without needing to know
 // about socialclient internals.
-func (s *SocialGatewayProvider) Deliver(ctx context.Context, artifact *store.Artifact, destination *deliveries.Destination, deliveryID, idempotencyKey string) (*deliveries.Result, error) {
+func (s *SocialGatewayProvider) Deliver(ctx context.Context, artifact *repository.Artifact, destination *deliveries.Destination, deliveryID, idempotencyKey string) (*deliveries.Result, error) {
 	return s.deliver(ctx, artifact, destination, deliveryID, idempotencyKey, "")
 }
 
-func (s *SocialGatewayProvider) DeliverWithCredential(ctx context.Context, artifact *store.Artifact, destination *deliveries.Destination, deliveryID, idempotencyKey string, lease *credentials.AccessLease) (*deliveries.Result, error) {
+func (s *SocialGatewayProvider) DeliverWithCredential(ctx context.Context, artifact *repository.Artifact, destination *deliveries.Destination, deliveryID, idempotencyKey string, lease *credentials.AccessLease) (*deliveries.Result, error) {
 	if lease == nil || lease.AccessToken == "" {
 		return nil, deliveries.ErrProviderAuth
 	}
@@ -119,7 +119,7 @@ func (s *SocialGatewayProvider) Reconcile(ctx context.Context, deliveryID, remot
 	}, nil
 }
 
-func (s *SocialGatewayProvider) deliver(ctx context.Context, artifact *store.Artifact, destination *deliveries.Destination, deliveryID, idempotencyKey, accessToken string) (*deliveries.Result, error) {
+func (s *SocialGatewayProvider) deliver(ctx context.Context, artifact *repository.Artifact, destination *deliveries.Destination, deliveryID, idempotencyKey, accessToken string) (*deliveries.Result, error) {
 	if s == nil || s.client == nil {
 		return nil, deliveries.ErrProviderNotConfigured
 	}
@@ -169,7 +169,7 @@ func (s *SocialGatewayProvider) deliver(ctx context.Context, artifact *store.Art
 // no longer parsed for platform/account_id — those values are
 // operator-facing observability only and are inert in the wire
 // contract.
-func (s *SocialGatewayProvider) buildRequest(artifact *store.Artifact, destination *deliveries.Destination, deliveryID, idempotencyKey string) (socialclient.DeliverArtifactRequest, error) {
+func (s *SocialGatewayProvider) buildRequest(artifact *repository.Artifact, destination *deliveries.Destination, deliveryID, idempotencyKey string) (socialclient.DeliverArtifactRequest, error) {
 	// Rendered Velox video artifacts created by the current executors may not
 	// carry MIME metadata in the persisted row. The Social API requires an
 	// explicit video MIME type, and this provider only handles video delivery.

@@ -1,8 +1,8 @@
 // Package contracts holds cross-backend test suites for the narrow repository
-// interfaces defined in internal/store (spec §5). The pattern is:
+// interfaces defined in internal/repository (spec §5). The pattern is:
 //
 //	func TestX_Contract(t *testing.T) {
-//	    store.ArtifactRepositoryContract(t, store.NewSQLiteArtifactRepositoryContractFactory())
+//	    ArtifactRepositoryContract(t, NewSQLiteArtifactRepositoryFactory)
 //	}
 //
 // Tests are intentionally placed in a sub-package so the production code in

@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"velox-shared/assetref"
 	"velox-shared/contract"
 	"velox-shared/payload"
 )
@@ -161,8 +162,8 @@ func hasNonEmptySlice(value interface{}) bool {
 }
 
 func clipsFromScenesJSON(scenesJSON string) []interface{} {
-	var scenes []map[string]interface{}
-	if strings.TrimSpace(scenesJSON) == "" || json.Unmarshal([]byte(scenesJSON), &scenes) != nil {
+	scenes, err := contract.ParseSceneMapsJSON([]byte(scenesJSON))
+	if err != nil {
 		return nil
 	}
 	clips := make([]interface{}, 0, len(scenes))
@@ -174,7 +175,9 @@ func clipsFromScenesJSON(scenesJSON string) []interface{} {
 		url := payload.FirstString(clip, "url", "drive_link", "clip_link")
 		if url == "" {
 			if assetID := payload.FirstString(clip, "asset_id", "drive_file_id"); assetID != "" {
-				url = "velox-drive://" + assetID
+				if ref, err := assetref.NewDeferredDrive(assetID); err == nil {
+					url = ref.Wire()
+				}
 			}
 		}
 		if url == "" {
@@ -241,8 +244,7 @@ func hasRenderableMedia(flat map[string]interface{}) bool {
 		}
 	}
 	if encoded := payload.FirstString(flat, "scenes_json"); encoded != "" {
-		var scenes []map[string]interface{}
-		if json.Unmarshal([]byte(encoded), &scenes) == nil {
+		if scenes, err := contract.ParseSceneMapsJSON([]byte(encoded)); err == nil {
 			for _, scene := range scenes {
 				if payload.FirstString(scene, "clip_link", "image_link") != "" {
 					return true

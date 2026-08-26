@@ -1,16 +1,16 @@
 // Package alertengine / rules.go
 //
-// Rule evaluation functions. Each returns an *Alert when the
-// condition is breached, nil when healthy.
+// Rule evaluation functions. Each returns a canonical runtime AlertEvent
+// when the condition is breached, nil when healthy.
 
 package alertengine
 
 import (
 	"context"
 	"fmt"
-
 	"syscall"
 
+	runtimealerts "velox-server/internal/alerts"
 	"velox-server/internal/observability"
 )
 
@@ -46,7 +46,7 @@ func MakeRules(deps RuleDeps) []RuleFunc {
 }
 
 func ruleErrorRate(deps RuleDeps) RuleFunc {
-	return func(ctx context.Context) (*Alert, error) {
+	return func(ctx context.Context) (*runtimealerts.AlertEvent, error) {
 		if deps.Obs == nil {
 			return nil, nil
 		}
@@ -55,8 +55,8 @@ func ruleErrorRate(deps RuleDeps) RuleFunc {
 			return nil, fmt.Errorf("alert rule ErrorRateHigh: overview: %w", err)
 		}
 		if ov.ErrorRate > deps.ErrorRatePct {
-			return &Alert{
-				Name:     "ErrorRateHigh",
+			return &runtimealerts.AlertEvent{
+				RuleID:     "ErrorRateHigh",
 				Severity: "warning",
 				Summary:  fmt.Sprintf("Error rate %.1f%% exceeds threshold %.1f%%", ov.ErrorRate, deps.ErrorRatePct),
 				Description: fmt.Sprintf(
@@ -71,7 +71,7 @@ func ruleErrorRate(deps RuleDeps) RuleFunc {
 }
 
 func ruleP95WallMs(deps RuleDeps) RuleFunc {
-	return func(ctx context.Context) (*Alert, error) {
+	return func(ctx context.Context) (*runtimealerts.AlertEvent, error) {
 		if deps.Obs == nil {
 			return nil, nil
 		}
@@ -80,8 +80,8 @@ func ruleP95WallMs(deps RuleDeps) RuleFunc {
 			return nil, fmt.Errorf("alert rule P95WallMsHigh: overview: %w", err)
 		}
 		if ov.P95RenderMS > deps.P95WallMs {
-			return &Alert{
-				Name:        "P95WallMsHigh",
+			return &runtimealerts.AlertEvent{
+				RuleID:        "P95WallMsHigh",
 				Severity:    "warning",
 				Summary:     fmt.Sprintf("P95 render time %dms exceeds threshold %dms", ov.P95RenderMS, deps.P95WallMs),
 				Description: fmt.Sprintf("P95 render: %dms. Active workers: %d.", ov.P95RenderMS, ov.ActiveWorkers),
@@ -93,7 +93,7 @@ func ruleP95WallMs(deps RuleDeps) RuleFunc {
 }
 
 func ruleWorkerOffline(deps RuleDeps) RuleFunc {
-	return func(ctx context.Context) (*Alert, error) {
+	return func(ctx context.Context) (*runtimealerts.AlertEvent, error) {
 		if deps.Obs == nil {
 			return nil, nil
 		}
@@ -112,8 +112,8 @@ func ruleWorkerOffline(deps RuleDeps) RuleFunc {
 			}
 		}
 		if len(offline) > 0 {
-			return &Alert{
-				Name:        "WorkersOffline",
+			return &runtimealerts.AlertEvent{
+				RuleID:        "WorkersOffline",
 				Severity:    "critical",
 				Summary:     fmt.Sprintf("%d workers offline", len(offline)),
 				Description: fmt.Sprintf("Offline workers: %v", offline),
@@ -125,7 +125,7 @@ func ruleWorkerOffline(deps RuleDeps) RuleFunc {
 }
 
 func ruleDiskFree(deps RuleDeps) RuleFunc {
-	return func(ctx context.Context) (*Alert, error) {
+	return func(ctx context.Context) (*runtimealerts.AlertEvent, error) {
 		dir := deps.DataDir
 		if dir == "" {
 			return nil, nil
@@ -136,8 +136,8 @@ func ruleDiskFree(deps RuleDeps) RuleFunc {
 		}
 		freeGB := float64(stat.Bavail*uint64(stat.Bsize)) / 1_073_741_824.0
 		if freeGB < deps.DiskFreeGB {
-			return &Alert{
-				Name:        "DiskFreeLow",
+			return &runtimealerts.AlertEvent{
+				RuleID:        "DiskFreeLow",
 				Severity:    "critical",
 				Summary:     fmt.Sprintf("Disk free %.1f GB below threshold %.1f GB on %s", freeGB, deps.DiskFreeGB, dir),
 				Description: fmt.Sprintf("Available: %.1f GB. Block size: %d, available blocks: %d.", freeGB, stat.Bsize, stat.Bavail),
@@ -149,7 +149,7 @@ func ruleDiskFree(deps RuleDeps) RuleFunc {
 }
 
 func ruleFFmpegSpeedRatio(deps RuleDeps) RuleFunc {
-	return func(ctx context.Context) (*Alert, error) {
+	return func(ctx context.Context) (*runtimealerts.AlertEvent, error) {
 		if deps.Obs == nil {
 			return nil, nil
 		}
@@ -165,8 +165,8 @@ func ruleFFmpegSpeedRatio(deps RuleDeps) RuleFunc {
 		}
 		p95 := result.P95
 		if p95 > 0 && p95 < deps.FFmpegMin {
-			return &Alert{
-				Name:        "FFmpegSpeedRatioLow",
+			return &runtimealerts.AlertEvent{
+				RuleID:        "FFmpegSpeedRatioLow",
 				Severity:    "warning",
 				Summary:     fmt.Sprintf("FFmpeg speed ratio P95 %.2fx below threshold %.2fx", p95, deps.FFmpegMin),
 				Description: fmt.Sprintf("P95 ffmpeg speed ratio: %.2fx over %d samples.", p95, result.Samples),

@@ -28,6 +28,7 @@ import (
 
 	"velox-server/internal/artifactsstore"
 	"velox-server/internal/deliveries"
+	"velox-server/internal/repository"
 	"velox-server/internal/store"
 	"velox-server/internal/store/migrations"
 )
@@ -45,9 +46,9 @@ const (
 type testEnv struct {
 	t              *testing.T
 	db             *sql.DB
-	bs             store.BlobStore
+	bs             repository.BlobStore
 	svc            *Service
-	repo           store.UploadRepository
+	repo           repository.UploadRepository
 	uploadWriter   UploadSessionWriter
 	finalizeWriter FinalizationWriter
 	artifactReader ArtifactReader
@@ -112,14 +113,14 @@ func openTestEnvAt(t *testing.T, tmp string) *testEnv {
 	require.NoError(t, err, "NewFilesystemBlobStore")
 
 	clk := newManualClock()
-	// store.NewSQLiteUploadRepository is the typed artifact_uploads +
+	// The SQLite upload repository is the typed artifact_uploads +
 	// artifact_upload_chunks CRUD surface. Sharing the same *sql.DB
 	// with the artifacts-package writers lets the finalize tx join
 	// with concurrent UpdateUploadStatus on artifact_uploads.
-	repo := store.NewSQLiteUploadRepository(db)
-	artifactReader := store.NewSQLiteArtifactReader(db)
+	repo := artifactsstore.NewSQLiteUploadRepository(db)
+	artifactReader := artifactsstore.NewSQLiteArtifactReader(db)
 	authReader := store.NewSQLiteAuthReader(db)
-	uploadWriter := NewSQLiteUploadSessionWriter(store.NewSQLiteUploadSessionWriter(db))
+	uploadWriter := NewSQLiteUploadSessionWriter(artifactsstore.NewSQLiteUploadSessionWriter(db))
 	finalizeWriter := NewSQLiteFinalizeWriter(artifactsstore.NewSQLiteArtifactFinalizer(db, deliveries.NewSQLiteDeliveryPlanResolver(db)))
 	jobCounter := artifactsstore.NewSQLiteJobDeliveryCounter(db)
 	svc := NewService(repo, uploadWriter, finalizeWriter, artifactReader, bs, authReader, clk, jobCounter)

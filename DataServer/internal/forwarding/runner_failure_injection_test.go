@@ -12,9 +12,11 @@ import (
 	"time"
 
 	"velox-server/internal/creatorflow"
+	"velox-server/internal/forwardingcontract"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/remoteengine"
 	"velox-server/internal/store"
+	"velox-server/internal/storecore"
 	"velox-server/internal/supervisor"
 )
 
@@ -268,7 +270,7 @@ func TestEnsureForwarded_IdempotentRepair(t *testing.T) {
 	// Simulate a crash: manually move the row to FORWARDING (as if
 	// AtomicForwardAndEnqueue started but didn't finish).
 	ctx := context.Background()
-	_, err := db.Forwarding().InsertCreatorForwarding(ctx, &store.CreatorForwarding{
+	_, err := db.Forwarding().InsertCreatorForwarding(ctx, &forwardingcontract.CreatorForwarding{
 		ForwardingID:     "cf-repair-2",
 		SourceProvider:   "openai",
 		SourceJobID:      "src-repair-2",
@@ -311,7 +313,7 @@ func TestEnsureForwarded_DivergentJobID(t *testing.T) {
 	db := setupRunnerTestDB(t)
 	ctx := context.Background()
 
-	_, err := db.Forwarding().InsertCreatorForwarding(ctx, &store.CreatorForwarding{
+	_, err := db.Forwarding().InsertCreatorForwarding(ctx, &forwardingcontract.CreatorForwarding{
 		ForwardingID:     "cf-divergent",
 		SourceProvider:   "openai",
 		SourceJobID:      "src-divergent",
@@ -329,7 +331,7 @@ func TestEnsureForwarded_DivergentJobID(t *testing.T) {
 	if err == nil {
 		t.Fatal("EnsureForwarded with divergent job_id should return error, got nil")
 	}
-	if !errors.Is(err, store.ErrTransitionConflict) {
+	if !errors.Is(err, storecore.ErrTransitionConflict) {
 		t.Errorf("EnsureForwarded divergent should return ErrTransitionConflict, got %v", err)
 	}
 }
@@ -342,7 +344,7 @@ func TestEnsureForwarded_TerminalState(t *testing.T) {
 
 	for _, status := range []string{"FAILED", "BLOCKED"} {
 		fwdID := "cf-terminal-" + status
-		_, err := db.Forwarding().InsertCreatorForwarding(ctx, &store.CreatorForwarding{
+		_, err := db.Forwarding().InsertCreatorForwarding(ctx, &forwardingcontract.CreatorForwarding{
 			ForwardingID:     fwdID,
 			SourceProvider:   "openai",
 			SourceJobID:      "src-terminal-" + status,
@@ -359,7 +361,7 @@ func TestEnsureForwarded_TerminalState(t *testing.T) {
 		if err == nil {
 			t.Errorf("EnsureForwarded on %s should return error, got nil", status)
 		}
-		if !errors.Is(err, store.ErrTransitionConflict) {
+		if !errors.Is(err, storecore.ErrTransitionConflict) {
 			t.Errorf("EnsureForwarded on %s should return ErrTransitionConflict, got %v", status, err)
 		}
 	}

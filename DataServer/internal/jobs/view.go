@@ -30,9 +30,8 @@
 package jobs
 
 import (
-	"encoding/json"
-
 	"velox-server/internal/costmodel"
+	"velox-shared/contract"
 )
 
 // ToQueueItem is the scheduling/transport projection of a Job.
@@ -101,14 +100,11 @@ type JobLogEntry struct {
 // empty map (the consumer treats the job as having no payload metadata).
 // This is the canonical implementation; legacy copies were removed.
 func ParsePayloadJSON(raw string) map[string]interface{} {
-	if raw == "" || raw == "{}" {
+	parsed, err := contract.ParsePayloadObjectJSON([]byte(raw))
+	if err != nil {
 		return make(map[string]interface{})
 	}
-	var m map[string]interface{}
-	if err := json.Unmarshal([]byte(raw), &m); err != nil {
-		return make(map[string]interface{})
-	}
-	return m
+	return parsed
 }
 
 // ToQueueItem converts a canonical jobs.Job into its transport projection.

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"velox-server/internal/store"
+	"velox-server/internal/repository"
 )
 
 // UploadChunk persists a single chunk to blob-store staging and records it in
@@ -30,7 +30,7 @@ func (s *ChunkedUploadService) UploadChunk(ctx context.Context, cmd ChunkedUploa
 	if session == nil {
 		return fmt.Errorf("%w: upload_id=%s", ErrUploadNotFound, cmd.UploadID)
 	}
-	if session.Status != string(store.UploadCreated) && session.Status != string(store.UploadUploading) {
+	if session.Status != string(repository.UploadCreated) && session.Status != string(repository.UploadUploading) {
 		return fmt.Errorf("%w: upload=%s status=%s", ErrUploadStateInvalid, cmd.UploadID, session.Status)
 	}
 	if !session.ExpiresAt.IsZero() && time.Now().After(session.ExpiresAt) {
@@ -79,7 +79,7 @@ func (s *ChunkedUploadService) UploadChunk(ctx context.Context, cmd ChunkedUploa
 		return nil
 	}
 
-	if err := s.repo.InsertChunk(ctx, store.ChunkRecord{
+	if err := s.repo.InsertChunk(ctx, repository.ChunkRecord{
 		UploadID: cmd.UploadID, ChunkIndex: cmd.ChunkIndex, SizeBytes: written,
 		SHA256: chunkSHA, StorageKey: chunkKey, ReceivedAt: time.Now().UTC(),
 	}); err != nil {

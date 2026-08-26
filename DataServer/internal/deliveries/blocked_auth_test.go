@@ -34,6 +34,7 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+	"velox-server/internal/deliverystore"
 
 	"velox-server/internal/store"
 )
@@ -66,7 +67,7 @@ func TestBlockedAuth_ArtifactUnchanged(t *testing.T) {
 	// Seed: 1 destination (Drive), 1 artifact in READY,
 	// 1 job_deliveries row in PENDING.
 	now := time.Now().UTC().Format(time.RFC3339)
-	if err := db.Delivery().InsertDeliveryDestination(&store.DeliveryDestination{
+	if err := db.Delivery().InsertDeliveryDestination(&deliverystore.DeliveryDestination{
 		DestinationID:     "dest-drive",
 		Provider:          "drive",
 		Name:              "test-drive",
@@ -89,7 +90,7 @@ func TestBlockedAuth_ArtifactUnchanged(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("insert artifact: %v", err)
 	}
-	jd := &store.JobDelivery{
+	jd := &deliverystore.JobDelivery{
 		DeliveryID:     "del_art-BA-1_dest-drive",
 		ArtifactID:     "art-BA-1",
 		DestinationID:  "dest-drive",
@@ -150,7 +151,7 @@ func TestBlockedAuth_IsIdempotentOnReplay(t *testing.T) {
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	// Minimal seed: 1 dest + 1 artifact + 1 delivery.
-	if err := db.Delivery().InsertDeliveryDestination(&store.DeliveryDestination{
+	if err := db.Delivery().InsertDeliveryDestination(&deliverystore.DeliveryDestination{
 		DestinationID:     "dest-rep",
 		Provider:          "drive",
 		Name:              "replay",
@@ -167,7 +168,7 @@ func TestBlockedAuth_IsIdempotentOnReplay(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("insert artifact: %v", err)
 	}
-	jd := &store.JobDelivery{
+	jd := &deliverystore.JobDelivery{
 		DeliveryID:     "del_art-rep_dest-rep",
 		ArtifactID:     "art-rep",
 		DestinationID:  "dest-rep",

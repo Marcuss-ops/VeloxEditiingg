@@ -9,6 +9,11 @@
 //	final/    ← atomic move after VERIFYING → READY (storage_key points here)
 //
 // Future: swap the implementation for S3/MinIO/R2 without changing callers.
+// COMPATIBILITY:
+// Owner:        P0.4 store-facade migration
+// Remove after: 2026-09-30
+// Read-only:    yes
+
 package store
 
 import (

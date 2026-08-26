@@ -14,6 +14,7 @@ import (
 
 	"velox-server/internal/artifacts"
 	"velox-server/internal/artifactsstore"
+	"velox-server/internal/smokerunstore"
 	"velox-server/internal/store"
 )
 
@@ -27,7 +28,8 @@ func TestLevelDSmoke_ControllerLifecyclePersistsVerifiedArtifactEvidence(t *test
 	if err := db.CreateFleetOperationsTableIfNotExists(); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.CreateSmokeRunsTableIfNotExists(); err != nil {
+	smokeRuns := smokerunstore.NewSQLiteSmokeRunStore(db.DB())
+	if err := smokeRuns.CreateSmokeRunsTableIfNotExists(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -46,7 +48,7 @@ func TestLevelDSmoke_ControllerLifecyclePersistsVerifiedArtifactEvidence(t *test
 	backend.Verifier = NewFFprobeArtifactVerifier()
 	drive := &hashCheckingDrive{durablePath: durableBlob}
 	backend.Drive = drive
-	backend.SmokeRuns = db
+	backend.SmokeRuns = smokeRuns
 	backend.Now = func() time.Time { return time.Now().UTC() }
 
 	registry := NewTestExecutorRegistry()
@@ -89,11 +91,11 @@ func TestLevelDSmoke_ControllerLifecyclePersistsVerifiedArtifactEvidence(t *test
 	if storedOp == nil || storedOp.Status != store.OperationStatusSucceeded || storedOp.StartedAt == nil || storedOp.FinishedAt == nil {
 		t.Fatalf("operation lifecycle=%+v, want async SUCCEEDED with timestamps", storedOp)
 	}
-	run, err := db.GetLatestSmokeForWorker(context.Background(), op.WorkerID)
+	run, err := smokeRuns.GetLatestSmokeForWorker(context.Background(), op.WorkerID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.Status != store.SmokeStatusSucceeded || run.ArtifactDriveID == "" {
+	if run.Status != smokerunstore.SmokeStatusSucceeded || run.ArtifactDriveID == "" {
 		t.Fatalf("smoke evidence=%+v, want SUCCEEDED with artifact id", run)
 	}
 	if drive.bytes <= 0 || len(drive.hash) != 64 {

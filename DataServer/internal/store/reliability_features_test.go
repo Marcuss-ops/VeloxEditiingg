@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"velox-server/internal/artifactsstore"
 	"velox-server/internal/renderfingerprint"
 	"velox-server/internal/renderfingerprintstore"
 	"velox-server/internal/taskattempts"
@@ -50,24 +51,24 @@ func TestReliability_FeaturesPersistAndReplay(t *testing.T) {
 	if _, err := s.db.Exec(`INSERT INTO artifacts (id,job_id,type,storage_provider,status,created_at) VALUES ('artifact-1','job-1','video','local','FAILED',?)`, time.Now().UTC().Format(time.RFC3339)); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.EnqueueArtifactGCCandidate(ctx, "artifact-1", "render_failed", time.Now().Add(-time.Minute)); err != nil {
+	if err := artifactsstore.NewArtifactGCStore(s.DB()).EnqueueArtifactGCCandidate(ctx, "artifact-1", "render_failed", time.Now().Add(-time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	candidates, err := s.LeaseArtifactGCCandidates(ctx, "gc-test", time.Now(), time.Hour, 10)
+	candidates, err := artifactsstore.NewArtifactGCStore(s.DB()).LeaseArtifactGCCandidates(ctx, "gc-test", time.Now(), time.Hour, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(candidates) != 1 || candidates[0].ArtifactID != "artifact-1" {
 		t.Fatalf("unexpected GC lease: %#v", candidates)
 	}
-	if err := s.CompleteArtifactGC(ctx, "artifact-1", "gc-test", true, ""); err != nil {
+	if err := artifactsstore.NewArtifactGCStore(s.DB()).CompleteArtifactGC(ctx, "artifact-1", "gc-test", true, ""); err != nil {
 		t.Fatal(err)
 	}
 	var artifactStatus string
 	if err := s.db.QueryRow(`SELECT status FROM artifacts WHERE id='artifact-1'`).Scan(&artifactStatus); err != nil {
 		t.Fatal(err)
 	}
-	if artifactStatus != ArtifactGCDeleted {
+	if artifactStatus != artifactsstore.ArtifactGCDeleted {
 		t.Fatalf("artifact status=%q want DELETED", artifactStatus)
 	}
 

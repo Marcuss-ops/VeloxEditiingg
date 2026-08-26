@@ -4,6 +4,9 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"velox-server/internal/forwardingcontract"
+	"velox-server/internal/forwardingstore"
 )
 
 func TestClaimForwardings_BasicClaim(t *testing.T) {
@@ -104,7 +107,7 @@ func TestClaimForwardings_RetryWaitWithFutureNextAttempt(t *testing.T) {
 	ctx := context.Background()
 
 	future := time.Now().UTC().Add(1 * time.Hour)
-	cf := &CreatorForwarding{
+	cf := &forwardingcontract.CreatorForwarding{
 		ForwardingID:     "cf-future",
 		SourceProvider:   "openai",
 		SourceJobID:      "creator-future",
@@ -134,7 +137,7 @@ func TestClaimForwardings_RetryWaitWithPastNextAttempt(t *testing.T) {
 	ctx := context.Background()
 
 	past := time.Now().UTC().Add(-1 * time.Hour)
-	cf := &CreatorForwarding{
+	cf := &forwardingcontract.CreatorForwarding{
 		ForwardingID:     "cf-past",
 		SourceProvider:   "openai",
 		SourceJobID:      "creator-past",
@@ -203,7 +206,7 @@ func TestRenewForwardingLease_CASGuard(t *testing.T) {
 	l := leases[0]
 	wrongExpiry := time.Now().UTC().Add(10 * time.Minute)
 	err = db.Forwarding().RenewCreatorForwardingLease(ctx, l.ForwardingID, "wrong-runner", l.LeaseID, wrongExpiry)
-	if err != ErrTransitionConflict {
-		t.Errorf("expected ErrTransitionConflict, got %v", err)
+	if err != forwardingstore.ErrTransitionConflict {
+		t.Errorf("expected forwardingstore.ErrTransitionConflict, got %v", err)
 	}
 }

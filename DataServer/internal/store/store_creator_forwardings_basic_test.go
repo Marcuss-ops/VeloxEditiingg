@@ -4,6 +4,9 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"velox-server/internal/forwardingcontract"
+	"velox-server/internal/forwardingstore"
 )
 
 func TestInsertAndGetForwarding(t *testing.T) {
@@ -35,7 +38,7 @@ func TestInsertForwarding_Idempotent(t *testing.T) {
 	insertTestForwarding(t, db, "cf-idem", "openai", "creator-job-2", "scene.composite.v1", "PENDING")
 
 	// Second insert with same unique key should be ignored
-	cf2 := &CreatorForwarding{
+	cf2 := &forwardingcontract.CreatorForwarding{
 		ForwardingID:     "cf-idem-2",
 		SourceProvider:   "openai",
 		SourceJobID:      "creator-job-2",
@@ -59,8 +62,8 @@ func TestInsertForwarding_Idempotent(t *testing.T) {
 
 	// Second record should NOT exist (ignored by UNIQUE)
 	_, err = db.Forwarding().GetCreatorForwarding(ctx, "cf-idem-2")
-	if err != ErrCreatorForwardingNoRow {
-		t.Errorf("expected ErrCreatorForwardingNoRow, got %v", err)
+	if err != forwardingstore.ErrCreatorForwardingNoRow {
+		t.Errorf("expected forwardingstore.ErrCreatorForwardingNoRow, got %v", err)
 	}
 }
 
@@ -84,7 +87,7 @@ func TestGetForwardingMising(t *testing.T) {
 	ctx := context.Background()
 
 	_, err := db.Forwarding().GetCreatorForwarding(ctx, "nonexistent")
-	if err != ErrCreatorForwardingNoRow {
-		t.Errorf("expected ErrCreatorForwardingNoRow, got %v", err)
+	if err != forwardingstore.ErrCreatorForwardingNoRow {
+		t.Errorf("expected forwardingstore.ErrCreatorForwardingNoRow, got %v", err)
 	}
 }

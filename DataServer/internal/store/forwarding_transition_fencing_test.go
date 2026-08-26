@@ -5,6 +5,9 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"velox-server/internal/forwardingcontract"
+	"velox-server/internal/forwardingstore"
 )
 
 func TestMarkCreatorForwardingReadyToForward_ExpiredLeaseIsFenced(t *testing.T) {
@@ -28,8 +31,8 @@ func TestMarkCreatorForwardingReadyToForward_ExpiredLeaseIsFenced(t *testing.T) 
 	if err == nil {
 		t.Fatal("expired MarkReadyToForward unexpectedly succeeded")
 	}
-	if !errors.Is(err, ErrTransitionConflict) {
-		t.Fatalf("expired MarkReadyToForward error = %v, want ErrTransitionConflict", err)
+	if !errors.Is(err, forwardingstore.ErrTransitionConflict) {
+		t.Fatalf("expired MarkReadyToForward error = %v, want forwardingstore.ErrTransitionConflict", err)
 	}
 
 	row, err := db.Forwarding().GetCreatorForwarding(ctx, lease.ForwardingID)
@@ -80,23 +83,23 @@ func TestLeaseFencedTransitionsRejectExpiredLease(t *testing.T) {
 	ctx := context.Background()
 	cases := []struct {
 		name string
-		call func(*SQLiteStore, CreatorForwardingLease) error
+		call func(*SQLiteStore, forwardingcontract.CreatorForwardingLease) error
 	}{
 		{
 			name: "retry",
-			call: func(db *SQLiteStore, lease CreatorForwardingLease) error {
+			call: func(db *SQLiteStore, lease forwardingcontract.CreatorForwardingLease) error {
 				return db.Forwarding().MarkCreatorForwardingRetry(ctx, lease.ForwardingID, lease.RunnerID, lease.LeaseID, "STALE", "stale", "", time.Now().UTC())
 			},
 		},
 		{
 			name: "failed",
-			call: func(db *SQLiteStore, lease CreatorForwardingLease) error {
+			call: func(db *SQLiteStore, lease forwardingcontract.CreatorForwardingLease) error {
 				return db.Forwarding().MarkCreatorForwardingFailed(ctx, lease.ForwardingID, lease.RunnerID, lease.LeaseID, "STALE", "stale", "")
 			},
 		},
 		{
 			name: "blocked",
-			call: func(db *SQLiteStore, lease CreatorForwardingLease) error {
+			call: func(db *SQLiteStore, lease forwardingcontract.CreatorForwardingLease) error {
 				return db.Forwarding().MarkCreatorForwardingBlocked(ctx, lease.ForwardingID, lease.RunnerID, lease.LeaseID, "STALE", "stale")
 			},
 		},
@@ -119,8 +122,8 @@ func TestLeaseFencedTransitionsRejectExpiredLease(t *testing.T) {
 				t.Fatalf("expire lease: %v", err)
 			}
 
-			if err := tc.call(db, lease); !errors.Is(err, ErrTransitionConflict) {
-				t.Fatalf("expired %s transition error = %v, want ErrTransitionConflict", tc.name, err)
+			if err := tc.call(db, lease); !errors.Is(err, forwardingstore.ErrTransitionConflict) {
+				t.Fatalf("expired %s transition error = %v, want forwardingstore.ErrTransitionConflict", tc.name, err)
 			}
 			row, err := db.Forwarding().GetCreatorForwarding(ctx, forwardingID)
 			if err != nil {

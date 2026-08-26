@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"velox-server/internal/store"
+	"velox-server/internal/repository"
 )
 
 // =====================================================================
@@ -52,10 +52,10 @@ func (s *Service) Receive(ctx context.Context, uploadID string, reader io.Reader
 	// A lost HTTP response can make the worker retry /complete after the
 	// server already persisted RECEIVED. Return the persisted master result
 	// without consuming the retry body or touching the staging file.
-	if session.Status == string(store.UploadReceived) {
+	if session.Status == string(repository.UploadReceived) {
 		return receiveResultFromSession(session)
 	}
-	if session.Status != string(store.UploadCreated) && session.Status != string(store.UploadUploading) {
+	if session.Status != string(repository.UploadCreated) && session.Status != string(repository.UploadUploading) {
 		return nil, fmt.Errorf("%w: upload_id=%s status=%s",
 			ErrUploadStateInvalid, uploadID, session.Status)
 	}
@@ -66,9 +66,9 @@ func (s *Service) Receive(ctx context.Context, uploadID string, reader io.Reader
 
 	// Move CREATED -> UPLOADING so the reconciler (chunk 5) treats it
 	// differently from a row that hasn't started streaming yet.
-	if session.Status == string(store.UploadCreated) {
-		uploading := string(store.UploadUploading)
-		if err := s.repo.UpdateUploadStatus(ctx, uploadID, store.UploadFields{
+	if session.Status == string(repository.UploadCreated) {
+		uploading := string(repository.UploadUploading)
+		if err := s.repo.UpdateUploadStatus(ctx, uploadID, repository.UploadFields{
 			Status: &uploading,
 		}); err != nil {
 			return nil, translateStoreErr(err)
@@ -148,8 +148,8 @@ func (s *Service) Receive(ctx context.Context, uploadID string, reader io.Reader
 
 	// ----- mark RECEIVED -----
 	now := s.clock.Now()
-	received := string(store.UploadReceived)
-	if err := s.repo.UpdateUploadStatus(ctx, uploadID, store.UploadFields{
+	received := string(repository.UploadReceived)
+	if err := s.repo.UpdateUploadStatus(ctx, uploadID, repository.UploadFields{
 		Status:            &received,
 		ReceivedSizeBytes: &receivedSize,
 		ReceivedSHA256:    &receivedSHA,
@@ -162,12 +162,12 @@ func (s *Service) Receive(ctx context.Context, uploadID string, reader io.Reader
 		UploadID:          uploadID,
 		ReceivedSizeBytes: receivedSize,
 		ReceivedSHA256:    receivedSHA,
-		Status:            string(store.UploadReceived),
+		Status:            string(repository.UploadReceived),
 	}, nil
 }
 
-func receiveResultFromSession(session *store.UploadSession) (*ReceiveResult, error) {
-	if session == nil || session.Status != string(store.UploadReceived) || session.ReceivedSHA256 == "" || session.ReceivedSizeBytes < 0 {
+func receiveResultFromSession(session *repository.UploadSession) (*ReceiveResult, error) {
+	if session == nil || session.Status != string(repository.UploadReceived) || session.ReceivedSHA256 == "" || session.ReceivedSizeBytes < 0 {
 		return nil, fmt.Errorf("%w: received session is incomplete", ErrUploadStateInvalid)
 	}
 	return &ReceiveResult{
@@ -182,8 +182,8 @@ func receiveResultFromSession(session *store.UploadSession) (*ReceiveResult, err
 // reconciler can clean up the staging blob later.
 func (s *Service) markFailed(ctx context.Context, uploadID, reason string) error {
 	now := s.clock.Now()
-	failed := string(store.UploadFailed)
-	err := s.repo.UpdateUploadStatus(ctx, uploadID, store.UploadFields{
+	failed := string(repository.UploadFailed)
+	err := s.repo.UpdateUploadStatus(ctx, uploadID, repository.UploadFields{
 		Status:      &failed,
 		CompletedAt: &now,
 	})

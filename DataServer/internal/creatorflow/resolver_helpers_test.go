@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"velox-server/internal/forwardingcontract"
 	"velox-server/internal/jobs"
 	"velox-server/internal/routing"
-	"velox-server/internal/store"
 	"velox-server/internal/taskgraph"
 )
 
@@ -30,7 +30,7 @@ func (f *fakeJobLookup) Get(ctx context.Context, id string) (*jobs.Job, error) {
 }
 
 type fakeForwardingRepo struct {
-	bySource map[string]*store.CreatorForwarding
+	bySource map[string]*forwardingcontract.CreatorForwarding
 
 	getSourceErr       error
 	insertErr          error
@@ -39,7 +39,7 @@ type fakeForwardingRepo struct {
 	ensureForwardedErr error
 
 	getSourceCalls       []string
-	insertCalls          []*store.CreatorForwarding
+	insertCalls          []*forwardingcontract.CreatorForwarding
 	upsertCalls          []string
 	upsertPayloads       []string
 	upsertHashes         []string
@@ -53,7 +53,7 @@ func keyForSource(provider, sourceJobID, targetExecutorID string) string {
 	return fmt.Sprintf("%s:%s:%s", provider, sourceJobID, targetExecutorID)
 }
 
-func (f *fakeForwardingRepo) GetCreatorForwardingBySource(ctx context.Context, provider, sourceJobID, targetExecutorID string) (*store.CreatorForwarding, error) {
+func (f *fakeForwardingRepo) GetCreatorForwardingBySource(ctx context.Context, provider, sourceJobID, targetExecutorID string) (*forwardingcontract.CreatorForwarding, error) {
 	f.getSourceCalls = append(f.getSourceCalls, keyForSource(provider, sourceJobID, targetExecutorID))
 	if f.getSourceErr != nil {
 		return nil, f.getSourceErr
@@ -64,17 +64,17 @@ func (f *fakeForwardingRepo) GetCreatorForwardingBySource(ctx context.Context, p
 	return f.bySource[keyForSource(provider, sourceJobID, targetExecutorID)], nil
 }
 
-func (f *fakeForwardingRepo) InsertCreatorForwarding(ctx context.Context, cf *store.CreatorForwarding) (*store.InsertCreatorForwardingResult, error) {
+func (f *fakeForwardingRepo) InsertCreatorForwarding(ctx context.Context, cf *forwardingcontract.CreatorForwarding) (*forwardingcontract.InsertCreatorForwardingResult, error) {
 	f.insertCalls = append(f.insertCalls, cf)
 	if f.insertErr != nil {
 		return nil, f.insertErr
 	}
 	if f.bySource != nil {
 		if existing := f.bySource[keyForSource(cf.SourceProvider, cf.SourceJobID, cf.TargetExecutorID)]; existing != nil {
-			return &store.InsertCreatorForwardingResult{Created: false, Forwarding: existing}, nil
+			return &forwardingcontract.InsertCreatorForwardingResult{Created: false, Forwarding: existing}, nil
 		}
 	}
-	return &store.InsertCreatorForwardingResult{Created: true, Forwarding: cf}, nil
+	return &forwardingcontract.InsertCreatorForwardingResult{Created: true, Forwarding: cf}, nil
 }
 
 func (f *fakeForwardingRepo) UpsertCreatorForwardingPayload(ctx context.Context, forwardingID, payloadJSON, payloadSHA256 string) error {
@@ -305,7 +305,7 @@ func TestCheckIdempotencyFastPath(t *testing.T) {
 
 	t.Run("job hit with explicit forwarding id", func(t *testing.T) {
 		repo := &fakeForwardingRepo{
-			bySource: map[string]*store.CreatorForwarding{
+			bySource: map[string]*forwardingcontract.CreatorForwarding{
 				keyForSource("remote_engine", "src-1", "scene.composite.v1"): {ForwardingID: "cf-1"},
 			},
 		}
@@ -327,7 +327,7 @@ func TestCheckIdempotencyFastPath(t *testing.T) {
 	t.Run("job hit with ensure forwarded error fails closed", func(t *testing.T) {
 		repo := &fakeForwardingRepo{
 			ensureForwardedErr: errors.New("transition conflict"),
-			bySource: map[string]*store.CreatorForwarding{
+			bySource: map[string]*forwardingcontract.CreatorForwarding{
 				keyForSource("remote_engine", "src-1", "scene.composite.v1"): {ForwardingID: "cf-1"},
 			},
 		}
@@ -345,7 +345,7 @@ func TestCheckIdempotencyFastPath(t *testing.T) {
 
 	t.Run("job hit looks up forwarding by source", func(t *testing.T) {
 		repo := &fakeForwardingRepo{
-			bySource: map[string]*store.CreatorForwarding{
+			bySource: map[string]*forwardingcontract.CreatorForwarding{
 				keyForSource("remote_engine", "src-1", "scene.composite.v1"): {ForwardingID: "cf-2"},
 			},
 		}
@@ -396,7 +396,7 @@ func TestPersistPendingRemoteForwarding(t *testing.T) {
 
 	t.Run("returns existing forwarding", func(t *testing.T) {
 		repo := &fakeForwardingRepo{
-			bySource: map[string]*store.CreatorForwarding{
+			bySource: map[string]*forwardingcontract.CreatorForwarding{
 				keyForSource("remote_engine", "job-1", "scene.composite.v1"): {ForwardingID: "cf-existing"},
 			},
 		}
@@ -507,15 +507,15 @@ func TestEnsureReadyForwarding(t *testing.T) {
 
 	t.Run("handler retry reuses an existing ready row", func(t *testing.T) {
 		_, storedHash := resolverMarshalPayload(map[string]interface{}{"ok": true})
-		existing := &store.CreatorForwarding{
+		existing := &forwardingcontract.CreatorForwarding{
 			ForwardingID:     "cf-existing",
 			SourceProvider:   "remote_engine",
 			SourceJobID:      "job-1",
 			TargetExecutorID: "scene.composite.v1",
 			PayloadSHA256:    storedHash,
-			Status:           string(store.CFStatusReadyToForward),
+			Status:           string(forwardingcontract.CFStatusReadyToForward),
 		}
-		repo := &fakeForwardingRepo{bySource: map[string]*store.CreatorForwarding{
+		repo := &fakeForwardingRepo{bySource: map[string]*forwardingcontract.CreatorForwarding{
 			keyForSource("remote_engine", "job-1", "scene.composite.v1"): existing,
 		}}
 		r := &Resolver{forwardRepo: repo}
@@ -535,12 +535,12 @@ func TestEnsureReadyForwarding(t *testing.T) {
 
 	t.Run("handler retry rejects a changed payload", func(t *testing.T) {
 		_, storedHash := resolverMarshalPayload(map[string]interface{}{"ok": true})
-		existing := &store.CreatorForwarding{
+		existing := &forwardingcontract.CreatorForwarding{
 			ForwardingID: "cf-existing", SourceProvider: "remote_engine", SourceJobID: "job-1",
 			TargetExecutorID: "scene.composite.v1", PayloadSHA256: storedHash,
-			Status: string(store.CFStatusReadyToForward),
+			Status: string(forwardingcontract.CFStatusReadyToForward),
 		}
-		repo := &fakeForwardingRepo{bySource: map[string]*store.CreatorForwarding{
+		repo := &fakeForwardingRepo{bySource: map[string]*forwardingcontract.CreatorForwarding{
 			keyForSource("remote_engine", "job-1", "scene.composite.v1"): existing,
 		}}
 		r := &Resolver{forwardRepo: repo}

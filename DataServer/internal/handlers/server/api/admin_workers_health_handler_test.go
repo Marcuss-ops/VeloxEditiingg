@@ -32,6 +32,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"velox-server/internal/fleet"
+	"velox-server/internal/smokerunstore"
 	"velox-server/internal/store"
 	workersreg "velox-server/internal/workers"
 	"velox-shared/controltransport"
@@ -299,9 +300,9 @@ func TestHealth_HTTPDispatchesAllLevels(t *testing.T) {
 		SSH:         ssh,
 		Deployments: healthHTTPDeployments{rec: &store.DeploymentRecord{TargetDigest: "sha256:health-http", Status: "SUCCEEDED"}},
 		Registry:    healthHTTPRegistry{workerID: workerID},
-		Smoke: fleet.NewSmokeRunHealthChecker(healthHTTPSmokeRuns{run: store.SmokeRun{
+		Smoke: fleet.NewSmokeRunHealthChecker(healthHTTPSmokeRuns{run: smokerunstore.SmokeRun{
 			RunID: "smoke-health-http", WorkerID: workerID,
-			StartedAt: time.Now().UTC(), Status: store.SmokeStatusSucceeded,
+			StartedAt: time.Now().UTC(), Status: smokerunstore.SmokeStatusSucceeded,
 			ArtifactDriveID: "smoke-health-http",
 		}}),
 	})
@@ -411,20 +412,22 @@ func (r healthHTTPRegistry) GetWorker(context.Context, string) (*workersreg.Work
 }
 
 type healthHTTPSmokeRuns struct {
-	run store.SmokeRun
+	run smokerunstore.SmokeRun
 }
 
-func (s healthHTTPSmokeRuns) InsertSmokeRun(context.Context, store.SmokeRun) error { return nil }
+func (s healthHTTPSmokeRuns) InsertSmokeRun(context.Context, smokerunstore.SmokeRun) error {
+	return nil
+}
 func (s healthHTTPSmokeRuns) MarkSmokeSucceeded(context.Context, string, time.Time, int64, string) error {
 	return nil
 }
 func (s healthHTTPSmokeRuns) MarkSmokeFailed(context.Context, string, time.Time, int64, string) error {
 	return nil
 }
-func (s healthHTTPSmokeRuns) GetLatestSmokeForWorker(context.Context, string) (*store.SmokeRun, error) {
+func (s healthHTTPSmokeRuns) GetLatestSmokeForWorker(context.Context, string) (*smokerunstore.SmokeRun, error) {
 	run := s.run
 	return &run, nil
 }
-func (s healthHTTPSmokeRuns) ListRecentSmokesForWorker(context.Context, string, int) ([]store.SmokeRun, error) {
-	return []store.SmokeRun{s.run}, nil
+func (s healthHTTPSmokeRuns) ListRecentSmokesForWorker(context.Context, string, int) ([]smokerunstore.SmokeRun, error) {
+	return []smokerunstore.SmokeRun{s.run}, nil
 }

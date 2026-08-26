@@ -17,6 +17,11 @@
 // `remote_id` + `last_remote_status`, and platform metadata is owned
 // by the social_repo. Do NOT reintroduce YouTube-prefixed fields
 // into this struct.
+// COMPATIBILITY:
+// Owner:        P0.4 store-facade migration
+// Remove after: 2026-09-30
+// Read-only:    yes
+
 package store
 
 import (

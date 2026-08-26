@@ -33,6 +33,8 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
+
+	"velox-server/internal/stalereconcile"
 )
 
 // ReconciliationReasonStaleDeliveryPending is the stable machine reason
@@ -249,8 +251,8 @@ func (r *DeliveryPendingReconciler) applyJobRollup(ctx context.Context, c Delive
 		return nil
 	}
 
-	finding := StaleExecutionFinding{
-		Category: StaleDeliveryPending, ResourceType: "job", ResourceID: c.ID,
+	finding := stalereconcile.StaleExecutionFinding{
+		Category: stalereconcile.StaleDeliveryPending, ResourceType: "job", ResourceID: c.ID,
 		JobID: c.ID, OldStatus: c.OldStatus, ProposedStatus: "SUCCEEDED or FAILED",
 		Reason: reason, ObservedAt: now.UTC(),
 	}
@@ -318,8 +320,8 @@ func (r *DeliveryPendingReconciler) applyDeliveryTerminal(ctx context.Context, c
 		}
 	}
 
-	finding := StaleExecutionFinding{
-		Category: StaleDeliveryPending, ResourceType: "delivery", ResourceID: c.ID,
+	finding := stalereconcile.StaleExecutionFinding{
+		Category: stalereconcile.StaleDeliveryPending, ResourceType: "delivery", ResourceID: c.ID,
 		JobID: c.JobID, OldStatus: c.OldStatus, ProposedStatus: "FAILED",
 		Reason: reason, ObservedAt: now.UTC(),
 	}

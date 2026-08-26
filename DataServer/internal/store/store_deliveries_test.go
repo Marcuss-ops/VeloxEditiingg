@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"velox-server/internal/deliverystore"
 )
 
 func setupDeliveryTestDB(t *testing.T) *SQLiteStore {
@@ -21,7 +23,7 @@ func setupDeliveryTestDB(t *testing.T) *SQLiteStore {
 
 func insertTestDeliveryDestination(t *testing.T, db *SQLiteStore, destID, provider string) {
 	t.Helper()
-	err := db.Delivery().InsertDeliveryDestination(&DeliveryDestination{
+	err := db.Delivery().InsertDeliveryDestination(&deliverystore.DeliveryDestination{
 		DestinationID:     destID,
 		Provider:          provider,
 		Name:              "test-" + destID,
@@ -54,7 +56,7 @@ func insertTestArtifact(t *testing.T, db *SQLiteStore, artifactID, jobID, storag
 
 func insertTestJobDelivery(t *testing.T, db *SQLiteStore, deliveryID, artifactID, destID string) {
 	t.Helper()
-	jd := &JobDelivery{
+	jd := &deliverystore.JobDelivery{
 		DeliveryID:     deliveryID,
 		ArtifactID:     artifactID,
 		DestinationID:  destID,
@@ -174,7 +176,7 @@ func TestClaimDeliveries_MaxAttemptsExhausted(t *testing.T) {
 
 	insertTestDeliveryDestination(t, db, "dest-m", "drive")
 	insertTestArtifact(t, db, "art-m", "job-m", "/tmp/m.mp4")
-	jd := &JobDelivery{
+	jd := &deliverystore.JobDelivery{
 		DeliveryID:     "del_art-m_dest-m",
 		ArtifactID:     "art-m",
 		DestinationID:  "dest-m",
@@ -434,7 +436,7 @@ func TestClaimDeliveries_RetryWaitWithNextAttemptAt(t *testing.T) {
 
 	// Insert a RETRY_WAIT delivery with next_attempt_at in the future.
 	future := time.Now().UTC().Add(1 * time.Hour)
-	jd := &JobDelivery{
+	jd := &deliverystore.JobDelivery{
 		DeliveryID:     "del_art-nxt_dest-nxt",
 		ArtifactID:     "art-nxt",
 		DestinationID:  "dest-nxt",

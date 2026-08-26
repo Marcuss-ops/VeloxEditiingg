@@ -3,8 +3,8 @@ package artifacts
 // ── Artifact statuses (artifacts table) ──────────────────────────────────────
 //
 // Upload-status enum (UploadStatus + UploadCreated etc.) lives on
-// store.UploadStatus in internal/store. Callers in this package
-// reference store.UploadCreated etc. directly.
+// repository.UploadStatus in internal/repository, the canonical artifact
+// persistence contract.
 
 // ArtifactState is the canonical lifecycle state for a produced artifact.
 // Artifact readiness is independent from every delivery attempt: a READY
@@ -22,6 +22,7 @@ const (
 
 // ArtifactStatus is retained as a source-compatible alias. New code should
 // use ArtifactState to make the artifact/delivery boundary explicit.
+// UploadStatus is intentionally owned by repository, not this domain package.
 type ArtifactStatus = ArtifactState
 
 func (s ArtifactState) IsTerminal() bool {

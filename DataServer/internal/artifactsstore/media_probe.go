@@ -1,4 +1,6 @@
-package store
+// Package artifactsstore owns SQLite persistence for the asynchronous media
+// probe queue and its artifact/job publication transitions.
+package artifactsstore
 
 import (
 	"context"
@@ -9,6 +11,7 @@ import (
 
 	"velox-server/internal/identity"
 	"velox-server/internal/repository"
+	"velox-server/internal/storecore"
 )
 
 type MediaProbeEnqueueParams = repository.MediaProbeEnqueueParams
@@ -32,14 +35,14 @@ type MediaProbeRepository struct{ db *sql.DB }
 
 func NewSQLiteMediaProbeRepository(db *sql.DB) *MediaProbeRepository {
 	if db == nil {
-		panic("store: NewSQLiteMediaProbeRepository requires a non-nil database")
+		panic("artifactsstore: NewSQLiteMediaProbeRepository requires a non-nil database")
 	}
 	return &MediaProbeRepository{db: db}
 }
 
 func (r *MediaProbeRepository) EnqueueMediaProbe(ctx context.Context, p MediaProbeEnqueueParams) error {
 	if p.ArtifactID == "" || p.SHA256 == "" || p.StorageKey == "" {
-		return fmt.Errorf("store: enqueue media probe: artifact_id, sha256 and storage_key are required")
+		return fmt.Errorf("artifactsstore: enqueue media probe: artifact_id, sha256 and storage_key are required")
 	}
 	if p.MaxAttempts <= 0 {
 		p.MaxAttempts = 5
@@ -64,14 +67,14 @@ func (r *MediaProbeRepository) EnqueueMediaProbe(ctx context.Context, p MediaPro
 			updated_at = excluded.updated_at`, p.ArtifactID, p.SHA256, p.StorageKey, p.ExpectedAudioStreams, p.DestinationID,
 		p.MaxAttempts, now, now, now)
 	if err != nil {
-		return fmt.Errorf("store: enqueue media probe: %w", err)
+		return fmt.Errorf("artifactsstore: enqueue media probe: %w", err)
 	}
 	return nil
 }
 
 func (r *MediaProbeRepository) ClaimMediaProbe(ctx context.Context, owner string, leaseTTL time.Duration, now time.Time) (*MediaProbeJob, error) {
 	if owner == "" {
-		return nil, fmt.Errorf("store: claim media probe: owner is required")
+		return nil, fmt.Errorf("artifactsstore: claim media probe: owner is required")
 	}
 	if leaseTTL <= 0 {
 		leaseTTL = 60 * time.Second
@@ -82,7 +85,7 @@ func (r *MediaProbeRepository) ClaimMediaProbe(ctx context.Context, owner string
 	now = now.UTC()
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, fmt.Errorf("store: claim media probe begin: %w", err)
+		return nil, fmt.Errorf("artifactsstore: claim media probe begin: %w", err)
 	}
 	defer tx.Rollback()
 	var job MediaProbeJob
@@ -101,11 +104,11 @@ func (r *MediaProbeRepository) ClaimMediaProbe(ctx context.Context, owner string
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("store: claim media probe select: %w", err)
+		return nil, fmt.Errorf("artifactsstore: claim media probe select: %w", err)
 	}
 	leaseID, err := identity.NewHex128()
 	if err != nil {
-		return nil, fmt.Errorf("store: claim media probe lease: %w", err)
+		return nil, fmt.Errorf("artifactsstore: claim media probe lease: %w", err)
 	}
 	leaseUntil := now.Add(leaseTTL)
 	res, err := tx.ExecContext(ctx, `
@@ -114,9 +117,9 @@ func (r *MediaProbeRepository) ClaimMediaProbe(ctx context.Context, owner string
 		WHERE id=? AND (status='PENDING' OR (status='RUNNING' AND lease_until=?))`,
 		leaseID, leaseUntil.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), job.ID, oldLeaseUntil)
 	if err != nil {
-		return nil, fmt.Errorf("store: claim media probe update: %w", err)
+		return nil, fmt.Errorf("artifactsstore: claim media probe update: %w", err)
 	}
-	n, err := readRowsAffected(res, "claim media probe")
+	n, err := storecore.ReadRowsAffected(res, "claim media probe")
 	if err != nil {
 		return nil, err
 	}
@@ -124,7 +127,7 @@ func (r *MediaProbeRepository) ClaimMediaProbe(ctx context.Context, owner string
 		return nil, nil
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("store: claim media probe commit: %w", err)
+		return nil, fmt.Errorf("artifactsstore: claim media probe commit: %w", err)
 	}
 	job.AttemptCount++
 	job.LeaseID, job.LeaseUntil = leaseID, leaseUntil
@@ -141,7 +144,7 @@ func (r *MediaProbeRepository) CompleteMediaProbe(ctx context.Context, job Media
 	nowStr := now.UTC().Format(time.RFC3339Nano)
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("store: complete media probe begin: %w", err)
+		return fmt.Errorf("artifactsstore: complete media probe begin: %w", err)
 	}
 	defer tx.Rollback()
 	probeStatus := "SUCCEEDED"
@@ -153,9 +156,9 @@ func (r *MediaProbeRepository) CompleteMediaProbe(ctx context.Context, job Media
 		SET status=?, actual_audio_streams=?, duration_ms=?, lease_id='', lease_until='', completed_at=?, updated_at=?, last_error=''
 		WHERE id=? AND status='RUNNING' AND lease_id=?`, probeStatus, actualAudioStreams, durationMs, nowStr, nowStr, job.ID, job.LeaseID)
 	if err != nil {
-		return fmt.Errorf("store: complete media probe job: %w", err)
+		return fmt.Errorf("artifactsstore: complete media probe job: %w", err)
 	}
-	n, err := readRowsAffected(res, "complete media probe job")
+	n, err := storecore.ReadRowsAffected(res, "complete media probe job")
 	if err != nil {
 		return err
 	}
@@ -168,7 +171,7 @@ func (r *MediaProbeRepository) CompleteMediaProbe(ctx context.Context, job Media
 		if err != nil {
 			return err
 		}
-		n, err := readRowsAffected(res, "media probe mismatch error")
+		n, err := storecore.ReadRowsAffected(res, "media probe mismatch error")
 		if err != nil {
 			return err
 		}
@@ -177,9 +180,9 @@ func (r *MediaProbeRepository) CompleteMediaProbe(ctx context.Context, job Media
 		}
 		res, err = tx.ExecContext(ctx, `UPDATE artifacts SET status='QUARANTINED', duration_ms=?, duration_seconds=? WHERE id=? AND status='VERIFYING'`, durationMs, float64(durationMs)/1000, job.ArtifactID)
 		if err != nil {
-			return fmt.Errorf("store: quarantine artifact: %w", err)
+			return fmt.Errorf("artifactsstore: quarantine artifact: %w", err)
 		}
-		n, err = readRowsAffected(res, "quarantine media probe artifact")
+		n, err = storecore.ReadRowsAffected(res, "quarantine media probe artifact")
 		if err != nil {
 			return err
 		}
@@ -193,9 +196,9 @@ func (r *MediaProbeRepository) CompleteMediaProbe(ctx context.Context, job Media
 		const jobFailed = "FAILED"
 		res, err = tx.ExecContext(ctx, `UPDATE jobs SET status=?, completed_at=?, updated_at=? WHERE job_id=? AND status='AWAITING_ARTIFACT'`, jobFailed, nowStr, nowStr, jobID)
 		if err != nil {
-			return fmt.Errorf("store: fail media probe parent: %w", err)
+			return fmt.Errorf("artifactsstore: fail media probe parent: %w", err)
 		}
-		n, err = readRowsAffected(res, "fail media probe parent")
+		n, err = storecore.ReadRowsAffected(res, "fail media probe parent")
 		if err != nil {
 			return err
 		}
@@ -203,7 +206,7 @@ func (r *MediaProbeRepository) CompleteMediaProbe(ctx context.Context, job Media
 			return ErrMediaProbeLeaseConflict
 		}
 		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("store: complete media probe quarantine commit: %w", err)
+			return fmt.Errorf("artifactsstore: complete media probe quarantine commit: %w", err)
 		}
 		return nil
 	}
@@ -211,9 +214,9 @@ func (r *MediaProbeRepository) CompleteMediaProbe(ctx context.Context, job Media
 		UPDATE artifacts SET status='READY', duration_ms=?, duration_seconds=?, verified_at=COALESCE(NULLIF(verified_at,''), ?)
 		WHERE id=? AND status='VERIFYING'`, durationMs, float64(durationMs)/1000, nowStr, job.ArtifactID)
 	if err != nil {
-		return fmt.Errorf("store: ready artifact: %w", err)
+		return fmt.Errorf("artifactsstore: ready artifact: %w", err)
 	}
-	n, err = readRowsAffected(res, "ready media probe artifact")
+	n, err = storecore.ReadRowsAffected(res, "ready media probe artifact")
 	if err != nil {
 		return err
 	}
@@ -248,7 +251,7 @@ func (r *MediaProbeRepository) CompleteMediaProbe(ctx context.Context, job Media
 	}
 	rows, err := tx.QueryContext(ctx, planQuery, planArgs...)
 	if err != nil {
-		return fmt.Errorf("store: media probe plans: %w", err)
+		return fmt.Errorf("artifactsstore: media probe plans: %w", err)
 	}
 	var destinations []struct {
 		id, publicationID string
@@ -270,7 +273,7 @@ func (r *MediaProbeRepository) CompleteMediaProbe(ctx context.Context, job Media
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		return fmt.Errorf("store: media probe plans iterate: %w", err)
+		return fmt.Errorf("artifactsstore: media probe plans iterate: %w", err)
 	}
 	if err := rows.Close(); err != nil {
 		return err
@@ -281,14 +284,14 @@ func (r *MediaProbeRepository) CompleteMediaProbe(ctx context.Context, job Media
 			return err
 		}
 		if requestJSON != `{"render_only":true}` && requestJSON != `{"render_only": true}` {
-			return fmt.Errorf("store: media probe: missing explicit delivery plan for job %s", jobID)
+			return fmt.Errorf("artifactsstore: media probe: missing explicit delivery plan for job %s", jobID)
 		}
 	} else {
 		res, err := tx.ExecContext(ctx, `UPDATE jobs SET status='DELIVERING', updated_at=?, revision=revision+1 WHERE job_id=? AND status='AWAITING_ARTIFACT'`, nowStr, jobID)
 		if err != nil {
 			return err
 		}
-		n, err := readRowsAffected(res, "media probe parent delivering")
+		n, err := storecore.ReadRowsAffected(res, "media probe parent delivering")
 		if err != nil {
 			return err
 		}
@@ -311,7 +314,7 @@ func (r *MediaProbeRepository) CompleteMediaProbe(ctx context.Context, job Media
 		if err != nil {
 			return err
 		}
-		n, err := readRowsAffected(res, "media probe render-only parent succeeded")
+		n, err := storecore.ReadRowsAffected(res, "media probe render-only parent succeeded")
 		if err != nil {
 			return err
 		}
@@ -320,7 +323,7 @@ func (r *MediaProbeRepository) CompleteMediaProbe(ctx context.Context, job Media
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("store: complete media probe commit: %w", err)
+		return fmt.Errorf("artifactsstore: complete media probe commit: %w", err)
 	}
 	return nil
 }
@@ -328,12 +331,12 @@ func (r *MediaProbeRepository) CompleteMediaProbe(ctx context.Context, job Media
 func queryArtifactJobID(ctx context.Context, tx *sql.Tx, artifactID string) (string, error) {
 	var jobID string
 	if err := tx.QueryRowContext(ctx, `SELECT job_id FROM artifacts WHERE id=?`, artifactID).Scan(&jobID); err != nil {
-		return "", fmt.Errorf("store: media probe artifact job: %w", err)
+		return "", fmt.Errorf("artifactsstore: media probe artifact job: %w", err)
 	}
 	return jobID, nil
 }
 
-var ErrMediaProbeLeaseConflict = errors.New("store: media probe lease conflict")
+var ErrMediaProbeLeaseConflict = errors.New("artifactsstore: media probe lease conflict")
 
 func (r *MediaProbeRepository) FailMediaProbe(ctx context.Context, job MediaProbeJob, probeErr error, now time.Time) error {
 	if now.IsZero() {
@@ -355,14 +358,14 @@ func (r *MediaProbeRepository) FailMediaProbe(ctx context.Context, job MediaProb
 	nowStr := now.UTC().Format(time.RFC3339Nano)
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("store: fail media probe begin: %w", err)
+		return fmt.Errorf("artifactsstore: fail media probe begin: %w", err)
 	}
 	defer tx.Rollback()
 	res, err := tx.ExecContext(ctx, `UPDATE media_probe_jobs SET status=?, next_attempt_at=?, lease_id='', lease_until='', last_error=?, updated_at=?, completed_at=CASE WHEN ?='FAILED' THEN ? ELSE completed_at END WHERE id=? AND status='RUNNING' AND lease_id=?`, status, next.UTC().Format(time.RFC3339Nano), message, nowStr, status, nowStr, job.ID, job.LeaseID)
 	if err != nil {
-		return fmt.Errorf("store: fail media probe: %w", err)
+		return fmt.Errorf("artifactsstore: fail media probe: %w", err)
 	}
-	n, err := readRowsAffected(res, "fail media probe")
+	n, err := storecore.ReadRowsAffected(res, "fail media probe")
 	if err != nil {
 		return err
 	}
@@ -374,7 +377,7 @@ func (r *MediaProbeRepository) FailMediaProbe(ctx context.Context, job MediaProb
 		if err != nil {
 			return err
 		}
-		n, err := readRowsAffected(res, "quarantine terminal media probe artifact")
+		n, err := storecore.ReadRowsAffected(res, "quarantine terminal media probe artifact")
 		if err != nil {
 			return err
 		}
@@ -390,7 +393,7 @@ func (r *MediaProbeRepository) FailMediaProbe(ctx context.Context, job MediaProb
 		if err != nil {
 			return err
 		}
-		n, err = readRowsAffected(res, "fail terminal media probe parent")
+		n, err = storecore.ReadRowsAffected(res, "fail terminal media probe parent")
 		if err != nil {
 			return err
 		}
@@ -399,7 +402,7 @@ func (r *MediaProbeRepository) FailMediaProbe(ctx context.Context, job MediaProb
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("store: fail media probe commit: %w", err)
+		return fmt.Errorf("artifactsstore: fail media probe commit: %w", err)
 	}
 	return nil
 }
@@ -411,4 +414,4 @@ func minInt(a, b int) int {
 	return b
 }
 
-var _ MediaProbeEnqueuer = (*MediaProbeRepository)(nil)
+var _ repository.MediaProbeEnqueuer = (*MediaProbeRepository)(nil)

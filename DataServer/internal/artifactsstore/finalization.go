@@ -17,6 +17,29 @@ import (
 // validation helper. The finalization transaction itself lives in
 // finalization_finalize.go.
 
+// CreateUploadSessionParams is the persistence projection for the atomic
+// artifacts + artifact_uploads BeginUpload write. It lives in the
+// artifactsstore leaf so the application package does not depend on the
+// internal/store facade for an artifact contract.
+type CreateUploadSessionParams struct {
+	ArtifactID          string
+	UploadID            string
+	JobID               string
+	AttemptID           int64
+	Kind                string
+	WorkerID            string
+	LeaseID             string
+	AttemptNumber       int
+	ExpectedRevision    int
+	StorageProvider     string
+	ExpectedMIME        string
+	ExpectedSizeBytes   int64
+	ExpectedSHA256      string
+	TemporaryStorageKey string
+	CreatedAt           time.Time
+	ExpiresAt           time.Time
+}
+
 // FinalizeVerifiedParams is the persistence projection for the verified
 // artifact finalization transaction. It lives in the artifactsstore leaf so
 // internal/artifacts can depend on the leaf without importing internal/store.

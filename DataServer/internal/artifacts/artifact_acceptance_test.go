@@ -15,7 +15,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"velox-server/internal/store"
+	"velox-server/internal/repository"
 )
 
 func TestArtifactAcceptance_HashMismatchNeverFinalizesAndCleansTemporaryFile(t *testing.T) {
@@ -39,7 +39,7 @@ func TestArtifactAcceptance_HashMismatchNeverFinalizesAndCleansTemporaryFile(t *
 	require.ErrorIs(t, statErr, os.ErrNotExist, "hash mismatch must remove the staging file")
 	fresh, err := env.repo.GetUploadSession(context.Background(), session.UploadID)
 	require.NoError(t, err)
-	require.Equal(t, string(store.UploadFailed), fresh.Status)
+	require.Equal(t, string(repository.UploadFailed), fresh.Status)
 
 	var artifactStatus string
 	require.NoError(t, env.db.QueryRow(`SELECT status FROM artifacts WHERE id = ?`, session.ArtifactID).Scan(&artifactStatus))
@@ -150,7 +150,7 @@ func TestArtifactAcceptance_FFProbeValidatesRenderedVideoAndRejectsCorruptBytes(
 	require.ErrorIs(t, err, ErrFFProbeAudioCountMismatch)
 	fresh, err := env.repo.GetUploadSession(ctx, corruptSession.UploadID)
 	require.NoError(t, err)
-	require.Equal(t, string(store.UploadReceived), fresh.Status)
+	require.Equal(t, string(repository.UploadReceived), fresh.Status)
 	var corruptStatus string
 	require.NoError(t, env.db.QueryRow(`SELECT status FROM artifacts WHERE id = ?`, corruptSession.ArtifactID).Scan(&corruptStatus))
 	require.Equal(t, string(ArtifactStaging), corruptStatus, "ffprobe failure must not make a corrupt artifact READY")

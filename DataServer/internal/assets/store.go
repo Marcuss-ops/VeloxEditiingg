@@ -9,9 +9,9 @@ import (
 	"strings"
 
 	"velox-server/internal/inputsecurity"
-)
 
-const VeloxAssetScheme = "velox-asset"
+	"velox-shared/assetref"
+)
 
 // ResolvedAsset is the canonical asset record returned by the bridge.
 type ResolvedAsset struct {
@@ -163,7 +163,7 @@ func (s *Store) Lookup(assetID string) (*ResolvedAsset, error) {
 			MediaType:  mediaType,
 			ByteSize:   info.Size(),
 			SourceType: "velox_asset",
-			Reference:  VeloxAssetScheme + "://" + assetID,
+			Reference:  assetref.SchemeVeloxAsset + "://" + assetID,
 		}, nil
 	}
 	return nil, fmt.Errorf("asset not found")

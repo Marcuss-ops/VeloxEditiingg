@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"velox-server/internal/store"
+	"velox-server/internal/artifactsstore"
 )
 
 const (
@@ -29,7 +29,7 @@ type MediaProbeFunc func(context.Context, string) (int, int64, error)
 // before probing, so a slow ffprobe consumes a pool slot but never blocks the
 // ingest request or causes local over-claiming.
 type MediaProbeWorker struct {
-	repo        *store.MediaProbeRepository
+	repo        *artifactsstore.MediaProbeRepository
 	finalDir    string
 	concurrency int
 	poll        time.Duration
@@ -38,7 +38,7 @@ type MediaProbeWorker struct {
 	owner       string
 }
 
-func NewMediaProbeWorker(repo *store.MediaProbeRepository, finalDir string, concurrency int, probe MediaProbeFunc) *MediaProbeWorker {
+func NewMediaProbeWorker(repo *artifactsstore.MediaProbeRepository, finalDir string, concurrency int, probe MediaProbeFunc) *MediaProbeWorker {
 	if concurrency <= 0 {
 		concurrency = defaultMediaProbeConcurrency
 	}

@@ -10,7 +10,11 @@
 // RecordRenderFinishedCommand, FailCommand, CancelCommand.
 package store
 
-import "time"
+import (
+	"time"
+
+	"velox-server/internal/jobs"
+)
 
 // ── Command types used by PR3 transactional repository methods ─────────
 
@@ -92,8 +96,8 @@ type Lease struct {
 // RequeueExpiredLeases. The slice returned is bounded by `limit`.
 type RequeueResult struct {
 	JobID          string
-	PreviousStatus JobStatus // LEASED or RUNNING
-	NewStatus      JobStatus // PENDING, RETRY_WAIT, or FAILED
-	Reason         string    // "expired_lease_no_retries_left" | "expired_lease_retry"
-	Attempt        int       // attempt that just failed
+	PreviousStatus jobs.JobStatus // LEASED or RUNNING
+	NewStatus      jobs.JobStatus // PENDING, RETRY_WAIT, or FAILED
+	Reason         string         // "expired_lease_no_retries_left" | "expired_lease_retry"
+	Attempt        int            // attempt that just failed
 }

@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"velox-server/internal/store"
+	"velox-server/internal/artifactsstore"
 )
 
 func TestFinalizeWithMediaProbeQueueDoesNotWaitForSlowProbe(t *testing.T) {
@@ -27,7 +27,7 @@ func TestFinalizeWithMediaProbeQueueDoesNotWaitForSlowProbe(t *testing.T) {
 	_, err = env.svc.Receive(context.Background(), session.UploadID, uploadBytes(payload))
 	require.NoError(t, err)
 
-	probeRepo := store.NewSQLiteMediaProbeRepository(env.db)
+	probeRepo := artifactsstore.NewSQLiteMediaProbeRepository(env.db)
 	env.svc.WithMediaProbeQueue(probeRepo)
 
 	started := time.Now()
@@ -51,8 +51,8 @@ func TestFinalizeWithMediaProbeQueueDoesNotWaitForSlowProbe(t *testing.T) {
 
 func TestMediaProbeEnqueueDeduplicatesByArtifactAndSHA(t *testing.T) {
 	env := setupTestEnv(t)
-	repo := store.NewSQLiteMediaProbeRepository(env.db)
-	params := store.MediaProbeEnqueueParams{
+	repo := artifactsstore.NewSQLiteMediaProbeRepository(env.db)
+	params := artifactsstore.MediaProbeEnqueueParams{
 		ArtifactID: "artifact-dedupe", SHA256: "sha-dedupe", StorageKey: "artifacts/sha-dedupe.mp4",
 		ExpectedAudioStreams: 1, Now: env.clock.Now(),
 	}
@@ -66,7 +66,7 @@ func TestMediaProbeEnqueueDeduplicatesByArtifactAndSHA(t *testing.T) {
 
 func TestMediaProbeWorkerUsesBoundedConcurrencyAndPublishesAfterProbe(t *testing.T) {
 	env := setupTestEnv(t)
-	repo := store.NewSQLiteMediaProbeRepository(env.db)
+	repo := artifactsstore.NewSQLiteMediaProbeRepository(env.db)
 	for i := 0; i < 4; i++ {
 		jobID := "J-probe-pool-" + string(rune('0'+i))
 		env.seedJob(jobID, "AWAITING_ARTIFACT", testWorkerID, testLeaseID, testRevision, env.clock.Now().Add(5*time.Minute))
@@ -74,7 +74,7 @@ func TestMediaProbeWorkerUsesBoundedConcurrencyAndPublishesAfterProbe(t *testing
 		artifactID := "artifact-probe-pool-" + string(rune('0'+i))
 		_, err := env.db.Exec(`INSERT INTO artifacts (id,job_id,type,storage_provider,storage_key,sha256,size_bytes,status,created_at) VALUES (?,?, 'video','local',?,?,1,'VERIFYING',?)`, artifactID, jobID, "artifacts/"+artifactID, "sha-"+artifactID, env.clock.Now().UTC().Format(time.RFC3339))
 		require.NoError(t, err)
-		require.NoError(t, repo.EnqueueMediaProbe(context.Background(), store.MediaProbeEnqueueParams{ArtifactID: artifactID, SHA256: "sha-" + artifactID, StorageKey: "artifacts/" + artifactID, ExpectedAudioStreams: 1, Now: env.clock.Now()}))
+		require.NoError(t, repo.EnqueueMediaProbe(context.Background(), artifactsstore.MediaProbeEnqueueParams{ArtifactID: artifactID, SHA256: "sha-" + artifactID, StorageKey: "artifacts/" + artifactID, ExpectedAudioStreams: 1, Now: env.clock.Now()}))
 	}
 
 	var active, maxActive atomic.Int32
@@ -119,9 +119,9 @@ func TestMediaProbeWorkerUsesBoundedConcurrencyAndPublishesAfterProbe(t *testing
 
 func TestMediaProbeRetryIsIsolatedPerJob(t *testing.T) {
 	env := setupTestEnv(t)
-	repo := store.NewSQLiteMediaProbeRepository(env.db)
+	repo := artifactsstore.NewSQLiteMediaProbeRepository(env.db)
 	for _, id := range []string{"retry-a", "retry-b"} {
-		require.NoError(t, repo.EnqueueMediaProbe(context.Background(), store.MediaProbeEnqueueParams{ArtifactID: id, SHA256: id + "-sha", StorageKey: "artifacts/" + id, Now: env.clock.Now(), MaxAttempts: 2}))
+		require.NoError(t, repo.EnqueueMediaProbe(context.Background(), artifactsstore.MediaProbeEnqueueParams{ArtifactID: id, SHA256: id + "-sha", StorageKey: "artifacts/" + id, Now: env.clock.Now(), MaxAttempts: 2}))
 	}
 	first, err := repo.ClaimMediaProbe(context.Background(), "test-owner", time.Minute, env.clock.Now())
 	require.NoError(t, err)

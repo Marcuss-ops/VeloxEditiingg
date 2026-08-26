@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"velox-server/internal/store"
+	"velox-server/internal/storecore"
 	"velox-server/internal/supervisor"
 )
 
@@ -20,7 +20,7 @@ func TestForwardingStateErrorKeepsInfrastructureVisible(t *testing.T) {
 }
 
 func TestForwardingStateErrorMapsCASConflictToLeaseLost(t *testing.T) {
-	err := forwardingStateError("mark retry", store.ErrTransitionConflict)
+	err := forwardingStateError("mark retry", storecore.ErrTransitionConflict)
 	if !errors.Is(err, supervisor.ErrLeaseLost) {
 		t.Fatalf("CAS conflict = %v, want ErrLeaseLost", err)
 	}

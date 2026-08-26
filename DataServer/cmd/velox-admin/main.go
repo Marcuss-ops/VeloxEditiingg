@@ -17,6 +17,7 @@ import (
 	"velox-server/internal/config"
 	drivecleanup "velox-server/internal/drivecleanup"
 	driveintegration "velox-server/internal/integrations/drive"
+	"velox-server/internal/stalereconcile"
 	"velox-server/internal/store"
 )
 
@@ -230,7 +231,11 @@ func runStaleExecutionReconcile(args []string, stdout, stderr io.Writer) error {
 		return fmt.Errorf("open database: %w", err)
 	}
 	defer db.Close()
-	reconciler, err := store.NewStaleExecutionReconciler(db)
+	reconciler := stalereconcile.New(
+		db.DB(),
+		store.NewSQLiteTaskRepository(db),
+		store.NewSQLiteJobRepository(db),
+	)
 	if err != nil {
 		return err
 	}

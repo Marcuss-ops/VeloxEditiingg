@@ -13,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"velox-server/internal/config"
+	"velox-server/internal/m2mkeys"
 	"velox-server/internal/store"
 )
 
@@ -63,7 +64,7 @@ func auditM2MReject(c *gin.Context, st *store.SQLiteStore, clientID, reason stri
 		clientID = "anonymous_rejected"
 	}
 	status := statusFromReason(reason)
-	_ = st.AppendM2MAuditLog(c.Request.Context(), store.M2MAuditEntry{
+	_ = m2mkeys.AppendM2MAuditLog(c.Request.Context(), st.DB(), m2mkeys.M2MAuditEntry{
 		ClientID:             clientID,
 		IdemKeyHash:          idemHashForLog(c.GetHeader("Idempotency-Key")),
 		Method:               c.Request.Method,
@@ -87,7 +88,7 @@ func auditM2MSuccess(c *gin.Context, st *store.SQLiteStore, clientID string, sta
 		return
 	}
 	scenes, totalDur := usageFromContext(c)
-	entry := store.M2MAuditEntry{
+	entry := m2mkeys.M2MAuditEntry{
 		ClientID:             clientID,
 		IdemKeyHash:          idemHashForLog(c.GetHeader("Idempotency-Key")),
 		Method:               c.Request.Method,
@@ -101,7 +102,7 @@ func auditM2MSuccess(c *gin.Context, st *store.SQLiteStore, clientID string, sta
 	if statusCode >= 400 {
 		entry.RejectReason = sqlNullString("handler_rejected")
 	}
-	_ = st.AppendM2MAuditLog(c.Request.Context(), entry)
+	_ = m2mkeys.AppendM2MAuditLog(c.Request.Context(), st.DB(), entry)
 }
 
 // usageFromContext extracts scene count + total duration the
@@ -213,7 +214,7 @@ func idemHashForLog(key string) string {
 	if key = strings.TrimSpace(key); key == "" {
 		return ""
 	}
-	full := store.HashM2MSecret(key)
+	full := m2mkeys.HashM2MSecret(key)
 	if len(full) >= 12 {
 		return full[:12]
 	}

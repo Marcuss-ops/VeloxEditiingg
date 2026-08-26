@@ -11,7 +11,7 @@ import (
 	"io"
 	"sync"
 
-	"velox-server/internal/store"
+	"velox-server/internal/repository"
 )
 
 // ChunkedUploadCommand carries the per-chunk metadata for UploadChunk.
@@ -40,8 +40,8 @@ type ChunkState struct {
 // ChunkedUploadService provides persistent chunked upload sessions.
 type ChunkedUploadService struct {
 	artifactSvc  *Service
-	repo         store.UploadRepository
-	blobStore    store.BlobStore
+	repo         repository.UploadRepository
+	blobStore    repository.BlobStore
 	receiveLocks keyedUploadLocks
 }
 
@@ -81,12 +81,12 @@ func (l *keyedUploadLocks) acquire(uploadID string) func() {
 }
 
 // GetUploadByJob returns the active CREATED/UPLOADING upload for a job.
-func (s *ChunkedUploadService) GetUploadByJob(ctx context.Context, jobID string) (*store.UploadSession, error) {
+func (s *ChunkedUploadService) GetUploadByJob(ctx context.Context, jobID string) (*repository.UploadSession, error) {
 	return s.repo.GetActiveUploadByJob(ctx, jobID)
 }
 
 // NewChunkedUploadService creates a durable chunked upload service.
-func NewChunkedUploadService(artifactSvc *Service, repo store.UploadRepository, blobStore store.BlobStore) *ChunkedUploadService {
+func NewChunkedUploadService(artifactSvc *Service, repo repository.UploadRepository, blobStore repository.BlobStore) *ChunkedUploadService {
 	if artifactSvc == nil {
 		panic("artifacts: NewChunkedUploadService requires a non-nil artifactSvc")
 	}
@@ -101,13 +101,13 @@ func NewChunkedUploadService(artifactSvc *Service, repo store.UploadRepository, 
 }
 
 // InitChunkedSession creates a chunked upload session via BeginUpload.
-func (s *ChunkedUploadService) InitChunkedSession(ctx context.Context, cmd BeginUploadCommand) (*store.UploadSession, error) {
+func (s *ChunkedUploadService) InitChunkedSession(ctx context.Context, cmd BeginUploadCommand) (*repository.UploadSession, error) {
 	return s.artifactSvc.BeginUpload(ctx, cmd)
 }
 
 // GetUpload returns a durable upload session for the typed master-stream
 // protocol. The worker never supplies the session identity as authority.
-func (s *ChunkedUploadService) GetUpload(ctx context.Context, uploadID string) (*store.UploadSession, error) {
+func (s *ChunkedUploadService) GetUpload(ctx context.Context, uploadID string) (*repository.UploadSession, error) {
 	if uploadID == "" {
 		return nil, fmt.Errorf("artifacts: GetUpload: uploadID required")
 	}

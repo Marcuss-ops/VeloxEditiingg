@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
+	"velox-server/internal/forwardingcontract"
 	"velox-server/internal/jobs"
-	"velox-server/internal/store"
 )
 
 // TestPayloadHashIdempotency exercises the [P0 #3] payload-hash
@@ -63,7 +63,7 @@ func TestPayloadHashIdempotency(t *testing.T) {
 
 	t.Run("same key + identical payload -> idempotent hit (created:false)", func(t *testing.T) {
 		repo := &fakeForwardingRepo{
-			bySource: map[string]*store.CreatorForwarding{
+			bySource: map[string]*forwardingcontract.CreatorForwarding{
 				keyForSource(provider, sourceJobID, targetExec): {
 					ForwardingID:  storedForward,
 					PayloadSHA256: shaA,
@@ -104,7 +104,7 @@ func TestPayloadHashIdempotency(t *testing.T) {
 
 	t.Run("same key + different payload -> ErrIdempotencyKeyReused (409)", func(t *testing.T) {
 		repo := &fakeForwardingRepo{
-			bySource: map[string]*store.CreatorForwarding{
+			bySource: map[string]*forwardingcontract.CreatorForwarding{
 				keyForSource(provider, sourceJobID, targetExec): {
 					ForwardingID:  storedForward,
 					PayloadSHA256: shaA, // stores Version A
@@ -159,7 +159,7 @@ func TestPayloadHashIdempotency(t *testing.T) {
 		// deliveries for legacy rows must continue to return the
 		// idempotent hit.
 		repo := &fakeForwardingRepo{
-			bySource: map[string]*store.CreatorForwarding{
+			bySource: map[string]*forwardingcontract.CreatorForwarding{
 				keyForSource(provider, sourceJobID, targetExec): {
 					ForwardingID:  storedForward,
 					PayloadSHA256: "", // legacy empty default

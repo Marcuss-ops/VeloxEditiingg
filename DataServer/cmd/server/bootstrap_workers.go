@@ -8,6 +8,7 @@ import (
 	workerhandlers "velox-server/internal/handlers/remote/workers"
 	"velox-server/internal/handlers/remote/workers/lifecycle"
 	"velox-server/internal/logging"
+	"velox-server/internal/repository"
 	"velox-server/internal/store"
 	workersreg "velox-server/internal/workers"
 )
@@ -15,7 +16,7 @@ import (
 // workerDeps holds the worker-layer components built at bootstrap.
 type workerDeps struct {
 	Registry       *workersreg.Registry
-	Repository     store.WorkersRepository
+	Repository     repository.WorkersRepository
 	CommandManager *workersreg.CommandManager
 	TokenManager   *workersreg.TokenManager
 	UpdateHandler  *workerhandlers.WorkerUpdateHandler

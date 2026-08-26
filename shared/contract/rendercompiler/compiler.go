@@ -62,18 +62,9 @@ func (r Registry) CompilePayload(ctx context.Context, raw map[string]any) (*Rend
 	if raw == nil {
 		return nil, fmt.Errorf("rendercompiler: raw payload is nil")
 	}
-	if rawManifest, present := raw["render_manifest"]; present {
-		if rawManifest == nil {
-			return nil, fmt.Errorf("rendercompiler: render_manifest must be an object")
-		}
-		manifest, ok := rawManifest.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("rendercompiler: render_manifest must be an object, got %T", rawManifest)
-		}
-		if len(manifest) == 0 {
-			return nil, fmt.Errorf("rendercompiler: render_manifest must not be empty")
-		}
-	}
+	// NewJobPayloadV2Checked is the single canonical payload + manifest
+	// validation boundary. Do not preflight render_manifest here with a
+	// second map-shape validator.
 	payload, err := contract.NewJobPayloadV2Checked(raw)
 	if err != nil {
 		return nil, fmt.Errorf("rendercompiler: canonical payload validation: %w", err)

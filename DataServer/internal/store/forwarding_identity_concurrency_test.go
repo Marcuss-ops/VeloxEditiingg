@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"velox-server/internal/forwardingcontract"
 )
 
 // TestInsertCreatorForwarding_ConcurrentRetriesConverge verifies the storage
@@ -23,7 +25,7 @@ func TestInsertCreatorForwarding_ConcurrentRetriesConverge(t *testing.T) {
 	const executorID = "scene.composite.v1"
 
 	start := make(chan struct{})
-	results := make([]*InsertCreatorForwardingResult, callers)
+	results := make([]*forwardingcontract.InsertCreatorForwardingResult, callers)
 	errs := make([]error, callers)
 	var wg sync.WaitGroup
 	wg.Add(callers)
@@ -32,12 +34,12 @@ func TestInsertCreatorForwarding_ConcurrentRetriesConverge(t *testing.T) {
 		go func(index int) {
 			defer wg.Done()
 			<-start
-			result, err := db.Forwarding().InsertCreatorForwarding(ctx, &CreatorForwarding{
+			result, err := db.Forwarding().InsertCreatorForwarding(ctx, &forwardingcontract.CreatorForwarding{
 				ForwardingID:     fmt.Sprintf("cf-concurrent-%d", index),
 				SourceProvider:   provider,
 				SourceJobID:      sourceJobID,
 				TargetExecutorID: executorID,
-				Status:           string(CFStatusPending),
+				Status:           string(forwardingcontract.CFStatusPending),
 				CreatedAt:        time.Now().UTC().Format(time.RFC3339Nano),
 				UpdatedAt:        time.Now().UTC().Format(time.RFC3339Nano),
 			})

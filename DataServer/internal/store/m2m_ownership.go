@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"strings"
 
+	"velox-server/internal/deliverystore"
 	"velox-server/internal/pipelineruns"
+	"velox-server/internal/storecore"
 )
 
 // The methods in this file are the M2M repository boundary. Admin callers
@@ -34,7 +36,7 @@ import (
 
 func requireM2MClient(clientID string) error {
 	if strings.TrimSpace(clientID) == "" {
-		return ErrCreatorForwardingNoRow
+		return storecore.ErrCreatorForwardingNoRow
 	}
 	return nil
 }
@@ -178,7 +180,7 @@ func (s *SQLiteStore) GetJobForClient(ctx context.Context, jobID, clientID strin
 
 func (s *SQLiteStore) GetArtifactsByJobForClient(ctx context.Context, jobID, clientID string, limit int) ([]Artifact, error) {
 	if jobID == "" || requireM2MClient(clientID) != nil {
-		return nil, ErrCreatorForwardingNoRow
+		return nil, storecore.ErrCreatorForwardingNoRow
 	}
 	if limit <= 0 {
 		limit = 20
@@ -217,9 +219,9 @@ func scanArtifacts(rows *sql.Rows) ([]Artifact, error) {
 	return out, rows.Err()
 }
 
-func (s *SQLiteStore) ListJobDeliveriesByJobForClient(ctx context.Context, jobID, clientID string) ([]JobDelivery, error) {
+func (s *SQLiteStore) ListJobDeliveriesByJobForClient(ctx context.Context, jobID, clientID string) ([]deliverystore.JobDelivery, error) {
 	if jobID == "" || requireM2MClient(clientID) != nil {
-		return nil, ErrCreatorForwardingNoRow
+		return nil, storecore.ErrCreatorForwardingNoRow
 	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT jd.delivery_id, jd.artifact_id, jd.destination_id, jd.status,
@@ -237,9 +239,9 @@ func (s *SQLiteStore) ListJobDeliveriesByJobForClient(ctx context.Context, jobID
 		return nil, err
 	}
 	defer rows.Close()
-	var out []JobDelivery
+	var out []deliverystore.JobDelivery
 	for rows.Next() {
-		var d JobDelivery
+		var d deliverystore.JobDelivery
 		if err := rows.Scan(&d.DeliveryID, &d.ArtifactID, &d.DestinationID, &d.Status,
 			&d.IdempotencyKey, &d.RemoteID, &d.RemoteURL, &d.CreatedAt, &d.UpdatedAt,
 			&d.NextAttemptAt, &d.AttemptCount, &d.LastError, &d.LastErrorMessage,
@@ -253,7 +255,7 @@ func (s *SQLiteStore) ListJobDeliveriesByJobForClient(ctx context.Context, jobID
 
 func (s *SQLiteStore) ListJobEventsForClient(ctx context.Context, jobID, clientID string, limit int) ([]JobEvent, error) {
 	if jobID == "" || requireM2MClient(clientID) != nil {
-		return nil, ErrCreatorForwardingNoRow
+		return nil, storecore.ErrCreatorForwardingNoRow
 	}
 	if limit <= 0 {
 		limit = 100
@@ -283,7 +285,7 @@ func (s *SQLiteStore) ListJobEventsForClient(ctx context.Context, jobID, clientI
 
 func (s *SQLiteStore) GetJobAttemptsForClient(ctx context.Context, jobID, clientID string, limit int) ([]JobAttempt, error) {
 	if jobID == "" || requireM2MClient(clientID) != nil {
-		return nil, ErrCreatorForwardingNoRow
+		return nil, storecore.ErrCreatorForwardingNoRow
 	}
 	if limit <= 0 {
 		limit = 10
@@ -318,7 +320,7 @@ func (s *SQLiteStore) GetJobAttemptsForClient(ctx context.Context, jobID, client
 
 func (s *SQLiteStore) GetLatestTaskAttemptForJobForClient(ctx context.Context, jobID, clientID string) (*TaskAttemptSnapshot, error) {
 	if jobID == "" || requireM2MClient(clientID) != nil {
-		return nil, ErrCreatorForwardingNoRow
+		return nil, storecore.ErrCreatorForwardingNoRow
 	}
 	row := s.db.QueryRowContext(ctx,
 		`SELECT ta.task_id, ta.id, ta.job_id, ta.worker_id, ta.lease_id, ta.attempt_number
@@ -340,7 +342,7 @@ func (s *SQLiteStore) GetLatestTaskAttemptForJobForClient(ctx context.Context, j
 
 func (s *SQLiteStore) ListAssetDownloadProgressForJobForClient(ctx context.Context, jobID, clientID string) ([]AssetDownloadProgressView, error) {
 	if jobID == "" || requireM2MClient(clientID) != nil {
-		return nil, ErrCreatorForwardingNoRow
+		return nil, storecore.ErrCreatorForwardingNoRow
 	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT r.job_id, d.worker_id, d.asset_key, d.asset_id, d.role, d.state,

@@ -1,16 +1,9 @@
-// Package store / artifact_uploads_helpers.go
-//
-// package-level SQL helpers shared by the artifact_uploads sessions and
-// chunks files.
-//
-// nilOrString maps "" -> nil so the column stores NULL rather than "",
-// matching the migration's nullable TEXT columns for expected_sha256 /
-// received_sha256. Private to the store package. The artifacts package
-// owns its own private copy in sqlite_upload_session_writer.go
-// (scoped to the BeginUpload paired-insert path).
-package store
+package artifactsstore
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 func nilOrString(s string) interface{} {
 	if s == "" {
@@ -44,4 +37,17 @@ func parseTimeRFC3339(t *time.Time, raw string) error {
 	}
 	*t = parsed
 	return nil
+}
+
+func nowRFC3339() string {
+	return time.Now().UTC().Format(time.RFC3339)
+}
+
+func parsePersistedWorkerTimestamp(value, field string) (time.Time, error) {
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02 15:04:05"} {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("artifactsstore: invalid %s %q", field, value)
 }

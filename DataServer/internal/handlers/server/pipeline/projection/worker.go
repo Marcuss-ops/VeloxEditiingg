@@ -4,11 +4,12 @@
 package projection
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"velox-server/internal/remoteengine"
 	"velox-server/internal/routing"
+	"velox-shared/assetref"
+	"velox-shared/contract"
 )
 
 // ProjectWorkerPayload parses the canonical submission map through the typed
@@ -58,7 +59,13 @@ func ensureClipPipelineInputs(dst, raw map[string]interface{}) {
 		}
 		if !ok {
 			if encoded, encodedOK := raw["scenes_json"].(string); encodedOK {
-				ok = json.Unmarshal([]byte(encoded), &scenes) == nil
+				if parsed, err := contract.ParseSceneMapsJSON([]byte(encoded)); err == nil {
+					scenes = make([]interface{}, 0, len(parsed))
+					for _, scene := range parsed {
+						scenes = append(scenes, scene)
+					}
+					ok = true
+				}
 			}
 		}
 		if ok {
@@ -75,7 +82,9 @@ func ensureClipPipelineInputs(dst, raw map[string]interface{}) {
 				url, _ := clip["url"].(string)
 				if url == "" {
 					if assetID, assetOK := clip["asset_id"].(string); assetOK && assetID != "" {
-						url = "velox-drive://" + assetID
+						if ref, err := assetref.NewDeferredDrive(assetID); err == nil {
+							url = ref.Wire()
+						}
 					}
 				}
 				if url == "" {

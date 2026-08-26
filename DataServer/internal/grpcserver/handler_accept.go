@@ -9,8 +9,8 @@ import (
 	"errors"
 	"fmt"
 
+	"velox-server/internal/forwardingstore"
 	"velox-server/internal/logging"
-	"velox-server/internal/store"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
 	"velox-server/internal/telemetry"
@@ -152,7 +152,7 @@ func (h *Handler) handleTaskAccepted(workerID string, ta *pb.TaskAccepted, sess 
 	}
 
 	if err := h.taskRepo.AcceptTaskAtomic(ctx, attempt, int(revision)); err != nil {
-		if errors.Is(err, store.ErrTransitionConflict) {
+		if errors.Is(err, forwardingstore.ErrTransitionConflict) {
 			logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCTaskAcceptRefused, "[GRPC] Worker %s accepted task %s but lease is stale or canonical attempt drift (offer.attempt_id=%s offer.attempt_number=%d attempt_id=%s attempt_number=%d) rev=%d — dropping TaskAccepted", workerID, taskID, offer.AttemptID, offer.AttemptNumber, attempt.ID, attemptNumber, offer.Revision)
 			// Stale lease: clear the pending offer so the next
 			// ClaimNextReadyTask can re-offer this task.

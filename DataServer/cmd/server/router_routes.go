@@ -17,6 +17,7 @@ import (
 	scripthandlers "velox-server/internal/handlers/server/script"
 	"velox-server/internal/logging"
 	velmetrics "velox-server/internal/metrics"
+	"velox-server/internal/repository"
 	"velox-server/internal/store"
 )
 
@@ -139,7 +140,7 @@ func registerUploadRoutes(r *gin.Engine, deps UploadRouteDeps) {
 	}
 }
 
-func artifactDownloadHandler(reader artifacts.ArtifactReader, blobs store.BlobStore, ownership ...*store.SQLiteStore) gin.HandlerFunc {
+func artifactDownloadHandler(reader artifacts.ArtifactReader, blobs repository.BlobStore, ownership ...*store.SQLiteStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		a, err := reader.GetByID(c.Request.Context(), c.Param("artifact_id"))
 		if err != nil {

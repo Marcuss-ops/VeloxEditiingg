@@ -70,7 +70,7 @@ func registerOpsAlertsSupervisor(sup *supervisor.Supervisor, store opsalerts.Ale
 //     removed and the supervisor logs WARN.
 //   - ClassOneShot:     manifest-generator. Run once on startup;
 //     failure is non-fatal (logged WARN).
-func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDeps, w *workerDeps, t *taskDeps, metricsCollector *velmetrics.Collector, opsAlertsCapability *opsalerts.CapabilityStatus) (*supervisor.Supervisor, error) {
+func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDeps, w *workerDeps, t *taskDeps, metricsCollector *velmetrics.Collector, opsAlertsCapability *opsalerts.CapabilityStatus, alertNotifier runtimealerts.Notifier) (*supervisor.Supervisor, error) {
 	sup := supervisor.New()
 	if opsAlertsCapability != nil {
 		*opsAlertsCapability = opsalerts.DisabledStatus("worker datasource is not wired")
@@ -291,7 +291,7 @@ func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDep
 		alertDeps.DiskFreeGB = cfg.Runtime.Alerts.DiskFreeGB
 		alertDeps.FFmpegMin = cfg.Runtime.Alerts.FFmpegMin
 
-		engine := alertengine.New(cfg.Runtime.Alerts.EvaluationInterval, alertengine.NewNotifier(cfg.Runtime.Alerts.WebhookURL, cfg.Runtime.Alerts.WebhookType))
+		engine := alertengine.New(cfg.Runtime.Alerts.EvaluationInterval, alertNotifier)
 		engine.SetErrorMetrics(metricsCollector)
 		engine.Cooldown = cfg.Runtime.Alerts.Cooldown
 		for _, r := range alertengine.MakeRules(alertDeps) {

@@ -35,6 +35,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"velox-server/internal/m2mkeys"
 	"velox-server/internal/store"
 )
 
@@ -161,13 +162,13 @@ func IssueM2MKey(st *store.SQLiteStore) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_payload", "message": err.Error()})
 			return
 		}
-		plaintext := store.GenerateM2MSecret()
-		hash := store.HashM2MSecret(plaintext)
+		plaintext := m2mkeys.GenerateM2MSecret()
+		hash := m2mkeys.HashM2MSecret(plaintext)
 		scopes := req.Scopes
 		if len(scopes) == 0 {
 			scopes = []string{"jobs.submit"}
 		}
-		key := store.M2MAPIKey{
+		key := m2mkeys.M2MAPIKey{
 			ClientID:       req.ClientID,
 			SecretHash:     hash,
 			Scopes:         scopes,
@@ -175,14 +176,14 @@ func IssueM2MKey(st *store.SQLiteStore) gin.HandlerFunc {
 			Description:    req.Description,
 			RateLimitRPS:   derefInt(req.RateLimitRPS),
 			RateLimitBurst: derefInt(req.RateLimitBurst),
-			Quotas: store.M2MQuotas{
+			Quotas: m2mkeys.M2MQuotas{
 				MaxScenes:         derefInt(req.QuotaMaxScenes),
 				MaxTotalDurationS: dereqF64(req.QuotaMaxTotalSecs),
 			},
 		}
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
 		defer cancel()
-		if err := st.InsertM2MAPIKey(ctx, key); err != nil {
+		if err := m2mkeys.InsertM2MAPIKey(ctx, st.DB(), key); err != nil {
 			// The most common error is the PK violation on a duplicate
 			// client_id. Map to 409 with a stable error code.
 			if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "constraint failed") {
@@ -228,7 +229,7 @@ func ListM2MKeys(st *store.SQLiteStore) gin.HandlerFunc {
 		}
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
 		defer cancel()
-		rows, err := st.ListM2MAPIKeys(ctx)
+		rows, err := m2mkeys.ListM2MAPIKeys(ctx, st.DB())
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "store_failure", "message": err.Error()})
 			return
@@ -270,7 +271,7 @@ func GetM2MKey(st *store.SQLiteStore) gin.HandlerFunc {
 		}
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
 		defer cancel()
-		k, err := st.GetM2MAPIKeyByClientID(ctx, clientID)
+		k, err := m2mkeys.GetM2MAPIKeyByClientID(ctx, st.DB(), clientID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "store_failure", "message": err.Error()})
 			return
@@ -313,7 +314,7 @@ func DisableM2MKey(st *store.SQLiteStore) gin.HandlerFunc {
 		}
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
 		defer cancel()
-		if err := st.DisableM2MAPIKey(ctx, clientID); err != nil {
+		if err := m2mkeys.DisableM2MAPIKey(ctx, st.DB(), clientID); err != nil {
 			if err == sql.ErrNoRows {
 				c.JSON(http.StatusNotFound, gin.H{"error": "client_id unknown"})
 				return
@@ -351,7 +352,7 @@ func ListM2MAudit(st *store.SQLiteStore) gin.HandlerFunc {
 		}
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
 		defer cancel()
-		rows, err := st.ListM2MAuditLog(ctx, clientID, limit)
+		rows, err := m2mkeys.ListM2MAuditLog(ctx, st.DB(), clientID, limit)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "store_failure", "message": err.Error()})
 			return

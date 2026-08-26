@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"velox-shared/assetref"
 )
 
 // Asset statuses.
@@ -83,7 +85,7 @@ func (a *Asset) Reference() string {
 	if a == nil || strings.TrimSpace(a.AssetID) == "" {
 		return ""
 	}
-	return VeloxAssetScheme + "://" + a.AssetID
+	return assetref.SchemeVeloxAsset + "://" + a.AssetID
 }
 
 // IsTerminal reports whether this asset has finished its lifecycle.

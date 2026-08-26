@@ -23,13 +23,12 @@ func (w *Worker) resolveCompiledRenderPlanAssets(ctx context.Context, payload ma
 	if payload == nil {
 		return nil, fmt.Errorf("compiled render plan v2: payload is required")
 	}
-	raw, ok := payload[contract.PayloadKeyCompiledRenderPlanJSON].(string)
-	if !ok || strings.TrimSpace(raw) == "" {
-		return nil, fmt.Errorf("compiled render plan v2: %q is required", contract.PayloadKeyCompiledRenderPlanJSON)
-	}
-	plan, err := contract.DecodeCompiledRenderPlanV2([]byte(raw))
+	plan, err := contract.DecodeCompiledRenderPlanV2Payload(payload)
 	if err != nil {
 		return nil, fmt.Errorf("compiled render plan v2: decode: %w", err)
+	}
+	if plan == nil {
+		return nil, fmt.Errorf("compiled render plan v2: %q is required", contract.PayloadKeyCompiledRenderPlanJSON)
 	}
 
 	// This structure is an adapter input, not a replacement plan. The

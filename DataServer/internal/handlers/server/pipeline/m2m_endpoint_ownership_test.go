@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"velox-server/internal/config"
+	"velox-server/internal/forwardingcontract"
 	"velox-server/internal/pipelineruns"
 	"velox-server/internal/store"
 
@@ -21,14 +22,14 @@ func TestM2MPipelineEndpoints_CrossClientIsIndistinguishableFromMissing(t *testi
 		t.Fatalf("sqlite store: %v", err)
 	}
 	ctx := context.Background()
-	if _, err := db.Forwarding().InsertCreatorForwarding(ctx, &store.CreatorForwarding{
+	if _, err := db.Forwarding().InsertCreatorForwarding(ctx, &forwardingcontract.CreatorForwarding{
 		ForwardingID:     "cf-m2m-endpoint-owner",
 		ExternalClientID: "client-a",
 		SourceProvider:   "remote_engine",
 		SourceJobID:      "remote-m2m-endpoint-owner",
 		TargetExecutorID: JobSubmitTargetExecutorID,
 		TargetJobID:      "job-m2m-endpoint-owner",
-		Status:           string(store.CFStatusForwarded),
+		Status:           string(forwardingcontract.CFStatusForwarded),
 	}); err != nil {
 		t.Fatalf("insert forwarding: %v", err)
 	}
@@ -116,14 +117,14 @@ func TestGetSubmittedJob_OwnerSeesScopedEnrichment(t *testing.T) {
 		jobID  = "job-scoped-enrichment"
 		client = "client-enrichment"
 	)
-	if _, err := db.Forwarding().InsertCreatorForwarding(ctx, &store.CreatorForwarding{
+	if _, err := db.Forwarding().InsertCreatorForwarding(ctx, &forwardingcontract.CreatorForwarding{
 		ForwardingID:     "cf-scoped-enrichment",
 		ExternalClientID: client,
 		SourceProvider:   ExternalAPISourceProvider,
 		SourceJobID:      "idem-scoped-enrichment",
 		TargetExecutorID: JobSubmitTargetExecutorID,
 		TargetJobID:      jobID,
-		Status:           string(store.CFStatusForwarded),
+		Status:           string(forwardingcontract.CFStatusForwarded),
 	}); err != nil {
 		t.Fatalf("seed forwarding: %v", err)
 	}
@@ -198,14 +199,14 @@ func TestPipelineRunStatus_OrphanedForwardingJoinIsIndistinguishable404(t *testi
 		t.Fatalf("sqlite store: %v", err)
 	}
 	ctx := context.Background()
-	if _, err := db.Forwarding().InsertCreatorForwarding(ctx, &store.CreatorForwarding{
+	if _, err := db.Forwarding().InsertCreatorForwarding(ctx, &forwardingcontract.CreatorForwarding{
 		ForwardingID:     "cf-orphaned-join",
 		ExternalClientID: "client-a",
 		SourceProvider:   "remote_engine",
 		SourceJobID:      "remote-orphaned",
 		TargetExecutorID: JobSubmitTargetExecutorID,
 		TargetJobID:      "job-orphaned",
-		Status:           string(store.CFStatusForwarded),
+		Status:           string(forwardingcontract.CFStatusForwarded),
 	}); err != nil {
 		t.Fatalf("insert forwarding: %v", err)
 	}

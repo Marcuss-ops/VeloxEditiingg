@@ -9,10 +9,12 @@ import (
 	"velox-server/internal/artifacts"
 	"velox-server/internal/artifactsstore"
 	"velox-server/internal/completion"
+	"velox-server/internal/completionstore"
 	"velox-server/internal/config"
 	"velox-server/internal/deliveries"
 	"velox-server/internal/logging"
 	"velox-server/internal/outbox"
+	"velox-server/internal/repository"
 	"velox-server/internal/store"
 )
 
@@ -27,11 +29,11 @@ import (
 type assetDeps struct {
 	ArtifactSvc           *artifacts.Service
 	ArtifactReader        artifacts.ArtifactReader
-	BlobStore             store.BlobStore
+	BlobStore             repository.BlobStore
 	ChunkedUploadSvc      *artifacts.ChunkedUploadService
 	Completion            completion.Coordinator
 	CompletionStore       completion.UploadProtocolStore
-	CompletionSQLiteStore *store.SQLiteCompletionStore
+	CompletionSQLiteStore *completionstore.SQLiteCompletionStore
 	Reconciler            *artifacts.Reconciler // mandatory — buildAssets fails fast if init fails
 	OutboxRegistry        *outbox.Registry
 	OutboxDispatcher      *outbox.Dispatcher
@@ -58,17 +60,17 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 	// constructor (NOT method-chained) so the per-job destination set
 	// is resolved inside the same tx that INSERTs job_deliveries.
 	planResolver := deliveries.NewSQLiteDeliveryPlanResolver(p.SQLite.DB())
-	uploadRepo := store.NewSQLiteUploadRepositoryFromStore(p.SQLite)
-	artifactReader := store.NewSQLiteArtifactReaderFromStore(p.SQLite)
+	uploadRepo := artifactsstore.NewSQLiteUploadRepository(p.SQLite.DB())
+	artifactReader := artifactsstore.NewSQLiteArtifactReader(p.SQLite.DB())
 	authReader := store.NewSQLiteAuthReaderFromStore(p.SQLite)
-	uploadWriter := artifacts.NewSQLiteUploadSessionWriter(store.NewSQLiteUploadSessionWriterFromStore(p.SQLite))
+	uploadWriter := artifacts.NewSQLiteUploadSessionWriter(artifactsstore.NewSQLiteUploadSessionWriter(p.SQLite.DB()))
 	finalizeWriter := artifacts.NewSQLiteFinalizeWriter(artifactsstore.NewSQLiteArtifactFinalizer(p.SQLite.DB(), planResolver))
 	// JobDeliveryCounter typed reader — required by NewService post
 	// the VELOX_FFPROBE_VERIFY_ON_FINALIZE gate (RW-PROD-008 A4).
 	// Production cannot silently run the gate without it; NewService
 	// panics on nil so a bootstrap miss is loud at startup.
 	deliveryCounter := artifactsstore.NewSQLiteJobDeliveryCounter(p.SQLite.DB())
-	probeRepo := store.NewSQLiteMediaProbeRepository(p.SQLite.DB())
+	probeRepo := artifactsstore.NewSQLiteMediaProbeRepository(p.SQLite.DB())
 	probeWorker := artifacts.NewMediaProbeWorker(probeRepo, p.BlobStore.FinalDir(), 2, nil)
 	artifactSvc := artifacts.NewService(
 		uploadRepo,
@@ -92,13 +94,13 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 
 	var completionCoord completion.Coordinator
 	var completionStore completion.UploadProtocolStore
-	var completionSQLiteStore *store.SQLiteCompletionStore
+	var completionSQLiteStore *completionstore.SQLiteCompletionStore
 	if keyHex := cfg.Runtime.CommitHMACKey; keyHex != "" {
 		key, decodeErr := hex.DecodeString(keyHex)
 		if decodeErr != nil {
 			return nil, fmt.Errorf("bootstrap: decode VELOX_COMMIT_HMAC_KEY: %w", decodeErr)
 		}
-		completionStoreRepo := store.NewSQLiteCompletionStore(p.SQLite.DB())
+		completionStoreRepo := completionstore.NewSQLiteCompletionStore(p.SQLite.DB())
 		coord, coordErr := completion.NewCoordinator(completion.CoordinatorConfig{Store: completionStoreRepo, HMACKey: key, BlobStore: p.BlobStore})
 		if coordErr != nil {
 			return nil, fmt.Errorf("bootstrap: completion coordinator: %w", coordErr)
@@ -117,7 +119,7 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 
 	// ── Reconciler (mandatory — fail-fast if init fails) ──────────
 	reconciler, recErr := artifacts.NewReconciler(
-		store.NewArtifactReconcilerRepositoryFromStore(p.SQLite),
+		artifactsstore.NewArtifactReconcilerRepository(p.SQLite.DB()),
 		p.BlobStore,
 		uploadRepo,
 		nil, // clock.System default (production)

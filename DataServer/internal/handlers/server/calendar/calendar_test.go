@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"testing"
 	"time"
+	"velox-server/internal/deliverystore"
 
 	"github.com/gin-gonic/gin"
 
@@ -63,7 +64,7 @@ func setupCalendarTestEnv(t *testing.T) (*store.SQLiteStore, jobs.Repository, *g
 	// this seed validateDeliveryDestinationTx rejects with
 	// "destination_id %q does not exist" and the calendar event stays
 	// in `scheduled` instead of transitioning to `queued`.
-	if err := db.Delivery().InsertDeliveryDestination(&store.DeliveryDestination{
+	if err := db.Delivery().InsertDeliveryDestination(&deliverystore.DeliveryDestination{
 		DestinationID:     "calendar_noop",
 		Provider:          "calendar",
 		Name:              "Calendar No-Op (render-only)",

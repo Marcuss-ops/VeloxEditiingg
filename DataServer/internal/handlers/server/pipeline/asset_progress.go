@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"velox-server/internal/forwardingstore"
 	"velox-server/internal/store"
 )
 
@@ -41,7 +42,7 @@ func (h *Handlers) AssetDownloadProgress() gin.HandlerFunc {
 			return
 		}
 		if _, err := h.store.Forwarding().GetCreatorForwardingByTargetJobID(c.Request.Context(), jobID, clientID); err != nil {
-			if errors.Is(err, store.ErrCreatorForwardingNoRow) {
+			if errors.Is(err, forwardingstore.ErrCreatorForwardingNoRow) {
 				writeAssetProgressNotFound(c)
 				return
 			}

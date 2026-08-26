@@ -24,13 +24,13 @@ import (
 	"os"
 	"path/filepath"
 
-	"velox-server/internal/store"
+	"velox-server/internal/repository"
 )
 
 // stagingTempKey returns the staging blob path used during Receive().
 // Lives under blobStore.StagingDir() so removal is trivial on hash /
 // size mismatch (just call blobStore.RemoveStaging).
-func stagingTempKey(bl store.BlobStore, uploadID string) string {
+func stagingTempKey(bl repository.BlobStore, uploadID string) string {
 	return filepath.Join(bl.StagingDir(), "upload-"+uploadID+".tmp")
 }
 

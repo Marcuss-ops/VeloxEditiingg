@@ -13,13 +13,14 @@ import (
 	"context"
 	"time"
 
+	"velox-server/internal/artifactsstore"
 	"velox-server/internal/deliverycontract"
-	"velox-server/internal/store"
+	"velox-server/internal/repository"
 )
 
 // CreateArtifactAndUploadSessionCommand is retained as the application-side
-// command used by BeginUpload. The store adapter receives the cycle-free
-// store.CreateUploadSessionParams projection.
+// command used by BeginUpload. The artifactsstore adapter receives the
+// cycle-free persistence projection.
 type CreateArtifactAndUploadSessionCommand struct {
 	ArtifactID       string
 	UploadID         string
@@ -114,15 +115,16 @@ type DeliveryDestination = deliverycontract.DeliveryDestination
 type DeliveryPlanResolver = deliverycontract.DeliveryPlanResolver
 
 // UploadSessionWriter is the narrow application port for BeginUpload.
-// SQL implementations live in internal/store; artifacts only supplies the
-// persistence projection and never owns a database handle.
+// SQL implementations are wired through the artifactsstore boundary;
+// artifacts only supplies the application command and never owns a database
+// handle.
 type UploadSessionWriter interface {
-	CreateArtifactAndUploadSession(ctx context.Context, params store.CreateUploadSessionParams) error
+	CreateArtifactAndUploadSession(ctx context.Context, params artifactsstore.CreateUploadSessionParams) error
 }
 
 // FinalizationWriter is the narrow application port for verified finalization.
 // The artifactsstore leaf owns the transaction and all SQL statements; the
 // SQLiteFinalizeWriter adapter projects the command onto the leaf params.
 type FinalizationWriter interface {
-	FinalizeVerified(ctx context.Context, cmd FinalizeVerifiedCommand) (*store.Artifact, error)
+	FinalizeVerified(ctx context.Context, cmd FinalizeVerifiedCommand) (*repository.Artifact, error)
 }

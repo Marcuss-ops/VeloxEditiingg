@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	runtimealerts "velox-server/internal/alerts"
+
 	"velox-server/internal/supervisor"
 )
 
@@ -16,7 +18,7 @@ func TestRunPropagatesInfrastructureToSupervisorRetry(t *testing.T) {
 	var calls atomic.Int32
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	engine.AddRule(func(context.Context) (*Alert, error) {
+	engine.AddRule(func(context.Context) (*runtimealerts.AlertEvent, error) {
 		call := calls.Add(1)
 		if call < 3 {
 			return nil, sql.ErrConnDone

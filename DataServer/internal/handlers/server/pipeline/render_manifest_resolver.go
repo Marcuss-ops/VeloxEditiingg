@@ -1,12 +1,9 @@
 package pipeline
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
-	"io"
 	"net/url"
 	"os"
 	"strings"
@@ -41,17 +38,8 @@ func (h *Handlers) ResolveRenderManifestRef(ctx context.Context, req SubmitJobRe
 		})
 	}
 
-	var manifest map[string]interface{}
-	dec := json.NewDecoder(bytes.NewReader(body))
-	dec.UseNumber()
-	if err := dec.Decode(&manifest); err != nil {
-		return req, manifestValidationError(gin.H{
-			"path":  "manifest_ref.url",
-			"issue": "invalid_json",
-		})
-	}
-	var extra interface{}
-	if err := dec.Decode(&extra); err != io.EOF {
+	manifest, parseErr := parseRenderManifestRefJSON(body)
+	if parseErr != nil {
 		return req, manifestValidationError(gin.H{
 			"path":  "manifest_ref.url",
 			"issue": "invalid_json",

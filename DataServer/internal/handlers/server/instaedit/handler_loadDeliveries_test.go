@@ -8,8 +8,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"velox-server/internal/deliverystore"
 	"velox-server/internal/instaeditauth"
-	"velox-server/internal/store"
 
 	"github.com/gin-gonic/gin"
 )
@@ -17,7 +17,7 @@ import (
 // failingStore is a storeReader implementation that lets tests force
 // failures on the delivery-related store calls.
 type failingStore struct {
-	listJobDeliveriesResult   []store.JobDelivery
+	listJobDeliveriesResult   []deliverystore.JobDelivery
 	listJobDeliveriesErr      error
 	getDeliveryDestinationErr error
 }
@@ -38,22 +38,22 @@ func (f *failingStore) GetWorkerByWorkspace(workerID string, workspaceID int64) 
 	return nil, nil
 }
 
-func (f *failingStore) GetDeliveryDestinationByExternalID(ctx context.Context, externalID string) (*store.DeliveryDestination, error) {
+func (f *failingStore) GetDeliveryDestinationByExternalID(ctx context.Context, externalID string) (*deliverystore.DeliveryDestination, error) {
 	return nil, nil
 }
 
-func (f *failingStore) ListJobDeliveriesByJob(jobID string) ([]store.JobDelivery, error) {
+func (f *failingStore) ListJobDeliveriesByJob(jobID string) ([]deliverystore.JobDelivery, error) {
 	if f.listJobDeliveriesErr != nil {
 		return nil, f.listJobDeliveriesErr
 	}
 	return f.listJobDeliveriesResult, nil
 }
 
-func (f *failingStore) GetDeliveryDestination(ctx context.Context, destID string) (*store.DeliveryDestination, error) {
+func (f *failingStore) GetDeliveryDestination(ctx context.Context, destID string) (*deliverystore.DeliveryDestination, error) {
 	if f.getDeliveryDestinationErr != nil {
 		return nil, f.getDeliveryDestinationErr
 	}
-	return &store.DeliveryDestination{ExternalDestinationID: "ext-" + destID}, nil
+	return &deliverystore.DeliveryDestination{ExternalDestinationID: "ext-" + destID}, nil
 }
 
 func newFailingRouter(mock *failingStore) *gin.Engine {
@@ -88,7 +88,7 @@ func TestGetJob_ListDeliveriesFailure_Returns500(t *testing.T) {
 
 func TestGetJob_GetDestinationFailure_Returns500(t *testing.T) {
 	mock := &failingStore{
-		listJobDeliveriesResult:   []store.JobDelivery{{DeliveryID: "d-1", DestinationID: "dest-1"}},
+		listJobDeliveriesResult:   []deliverystore.JobDelivery{{DeliveryID: "d-1", DestinationID: "dest-1"}},
 		getDeliveryDestinationErr: errors.New("db: destination lookup failed"),
 	}
 	r := newFailingRouter(mock)
@@ -121,7 +121,7 @@ func TestListJobDeliveries_ListDeliveriesFailure_Returns500(t *testing.T) {
 
 func TestListJobDeliveries_GetDestinationFailure_Returns500(t *testing.T) {
 	mock := &failingStore{
-		listJobDeliveriesResult:   []store.JobDelivery{{DeliveryID: "d-1", DestinationID: "dest-1"}},
+		listJobDeliveriesResult:   []deliverystore.JobDelivery{{DeliveryID: "d-1", DestinationID: "dest-1"}},
 		getDeliveryDestinationErr: errors.New("db: destination lookup failed"),
 	}
 	r := newFailingRouter(mock)
@@ -139,7 +139,7 @@ func TestListJobDeliveries_GetDestinationFailure_Returns500(t *testing.T) {
 
 func TestListJobDeliveries_Success_ReturnsDeliveries(t *testing.T) {
 	mock := &failingStore{
-		listJobDeliveriesResult: []store.JobDelivery{
+		listJobDeliveriesResult: []deliverystore.JobDelivery{
 			{DeliveryID: "d-1", DestinationID: "dest-1", Status: "PENDING", RemoteID: "remote-1", RemoteURL: "https://example.com"},
 		},
 	}

@@ -9,16 +9,11 @@ package main
 // outbox.SetAlertNotifier BEFORE the OutboxDispatcher goroutine
 // starts.
 //
-// Today the production sink is a MultiNotifier wrapping:
-//
-//   1. LogNotifier — guarantees operator-visibility even on a fresh
-//      boot when no external sink is wired (every alert is at least
-//      logged; nothing is silently dropped).
-//
-// Future sinks (Slack / PagerDuty / Kafka / admin HTTP endpoint) can
-// append to buildAlerts's MultiNotifier without touching the
-// outbox handler or the dispatcher — outbox.SetAlertNotifier is the
-// single integration seam.
+// The production sink is a MultiNotifier wrapping the always-on
+// LogNotifier and, when configured, one canonical Slack or Telegram
+// webhook notifier. Future sinks (PagerDuty / Kafka / admin HTTP
+// endpoint) can append here without touching the outbox handler or
+// dispatcher — outbox.SetAlertNotifier is the single integration seam.
 
 import (
 	"velox-server/internal/alerts"
@@ -34,26 +29,27 @@ type alertsDeps struct {
 }
 
 // buildAlerts constructs the canonical production Notifier. Called
-// from runServer BEFORE any supervisor goroutine starts, so the
-// outbox JOB_FAILED handler (which reads outbox.AlertNotifier()) sees
-// the wired sink on its very first invocation.
+// from buildAppComponents BEFORE any supervisor goroutine starts, so
+// both the outbox JOB_FAILED handler and compute alert engine see the
+// same wired sink on their first invocation.
 //
 // Sink composition (greppable from this single function):
 //
 //	┌─ alerts.MultiNotifier
 //	│
 //	├─ LogNotifier("[ALERTS]") — minimum-viable visibility, always on.
+//	├─ optional Slack/Telegram webhook notifier from typed config.
 //	Future sinks can be appended to Children here without changing the
-//	 outbox handler or dispatcher.
+//	outbox handler or dispatcher.
 //
 // The MultiNotifier does NOT short-circuit on individual failures, so
 // a Slack outage does NOT silence the log sink.
-func buildAlerts() (*alertsDeps, error) {
-	n := &alerts.MultiNotifier{
-		Children: []alerts.Notifier{
-			alerts.NewLogNotifier("[ALERTS]"),
-		},
+func buildAlerts(webhookURL, webhookType string) (*alertsDeps, error) {
+	children := []alerts.Notifier{alerts.NewLogNotifier("[ALERTS]")}
+	if webhook := alerts.NewWebhookNotifier(webhookURL, webhookType); webhook != nil {
+		children = append(children, webhook)
 	}
+	n := &alerts.MultiNotifier{Children: children}
 
 	// Register the sink with the outbox package BEFORE the dispatcher
 	// goroutine starts so no JOB_FAILED event is silently dropped

@@ -128,36 +128,3 @@ func NormalizeDriveURL(url string) string {
 	}
 	return s
 }
-
-// ExtractDriveID extracts the file ID from a Google Drive URL.
-// Looks for /d/FILE_ID and id=FILE_ID patterns, validating length >= 10.
-// Returns an empty string if no valid ID is found.
-func ExtractDriveID(url string) string {
-	s := strings.TrimSpace(url)
-	if s == "" {
-		return ""
-	}
-	// /d/FILE_ID pattern — Google Drive file ID is typically 28+ chars, min 10
-	if idx := strings.Index(s, "/d/"); idx >= 0 {
-		rest := s[idx+3:]
-		if end := strings.IndexAny(rest, "/?"); end > 0 {
-			if len(rest[:end]) >= 10 {
-				return rest[:end]
-			}
-		} else if len(rest) >= 10 {
-			return rest
-		}
-	}
-	// id=FILE_ID pattern
-	if idx := strings.Index(s, "id="); idx >= 0 {
-		rest := s[idx+3:]
-		if end := strings.IndexAny(rest, "&?"); end > 0 {
-			if len(rest[:end]) >= 10 {
-				return rest[:end]
-			}
-		} else if len(rest) >= 10 {
-			return rest
-		}
-	}
-	return ""
-}

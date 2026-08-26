@@ -5,6 +5,11 @@
 // destinations/job_deliveries/reconciliation) lives in the deliverystore leaf
 // and is reached via SQLiteStore.Delivery(); the store package no longer owns
 // delivery read/write facades.
+// COMPATIBILITY:
+// Owner:        P0.4 store-facade migration
+// Remove after: 2026-09-30
+// Read-only:    yes
+
 package store
 
 import (

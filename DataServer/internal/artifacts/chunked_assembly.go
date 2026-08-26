@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"velox-server/internal/store"
+	"velox-server/internal/repository"
 )
 
 // ReceiveChunked assembles durable chunks and runs the master-side Receive phase.
@@ -21,7 +21,7 @@ func (s *ChunkedUploadService) ReceiveChunked(ctx context.Context, uploadID stri
 	if err != nil {
 		return nil, err
 	}
-	if session.Status == string(store.UploadReceived) {
+	if session.Status == string(repository.UploadReceived) {
 		return receiveResultFromSession(session)
 	}
 	chunks, err := s.repo.ListChunks(ctx, uploadID)
@@ -67,7 +67,7 @@ func (s *ChunkedUploadService) ReceiveChunked(ctx context.Context, uploadID stri
 }
 
 // CompleteChunked assembles all chunks and runs Receive followed by Finalize.
-func (s *ChunkedUploadService) CompleteChunked(ctx context.Context, cmd ChunkedCompleteCommand) (*store.Artifact, error) {
+func (s *ChunkedUploadService) CompleteChunked(ctx context.Context, cmd ChunkedCompleteCommand) (*repository.Artifact, error) {
 	if cmd.UploadID == "" || cmd.JobID == "" {
 		return nil, fmt.Errorf("artifacts: CompleteChunked: uploadID and jobID are required")
 	}
@@ -81,7 +81,7 @@ func (s *ChunkedUploadService) CompleteChunked(ctx context.Context, cmd ChunkedC
 	if session == nil {
 		return nil, fmt.Errorf("%w: upload_id=%s", ErrUploadNotFound, cmd.UploadID)
 	}
-	if session.Status == string(store.UploadCompleted) {
+	if session.Status == string(repository.UploadCompleted) {
 		if session.WorkerID != cmd.WorkerID {
 			return nil, fmt.Errorf("%w: completed upload=%s worker=%s->%s", ErrTransitionConflict, cmd.UploadID, session.WorkerID, cmd.WorkerID)
 		}
@@ -156,7 +156,7 @@ func (s *ChunkedUploadService) CompleteChunked(ctx context.Context, cmd ChunkedC
 	return art, nil
 }
 
-func (s *ChunkedUploadService) assembleChunksVerified(dst io.Writer, chunks []store.ChunkRecord) error {
+func (s *ChunkedUploadService) assembleChunksVerified(dst io.Writer, chunks []repository.ChunkRecord) error {
 	for _, c := range chunks {
 		in, openErr := s.blobStore.OpenStagedRead(c.StorageKey)
 		if openErr != nil {
@@ -192,14 +192,14 @@ func (s *ChunkedUploadService) cleanupChunks(ctx context.Context, uploadID strin
 }
 
 // chunkStagingKey returns the staging path for a single chunk.
-func chunkStagingKey(bl store.BlobStore, uploadID string, chunkIndex int) string {
+func chunkStagingKey(bl repository.BlobStore, uploadID string, chunkIndex int) string {
 	dir := filepath.Join(bl.StagingDir(), "chunks", uploadID)
 	return filepath.Join(dir, fmt.Sprintf("chunk_%04d", chunkIndex))
 }
 
 // chunkRetryStagingKey is unique per write so retries cannot overwrite the
 // staging file referenced by an existing durable row.
-func chunkRetryStagingKey(bl store.BlobStore, uploadID string, chunkIndex int) string {
+func chunkRetryStagingKey(bl repository.BlobStore, uploadID string, chunkIndex int) string {
 	dir := filepath.Join(bl.StagingDir(), "chunks", uploadID)
 	return filepath.Join(dir, fmt.Sprintf("chunk_%04d.retry_%d", chunkIndex, time.Now().UnixNano()))
 }

@@ -12,24 +12,12 @@ import (
 	"velox-server/internal/supervisor"
 )
 
-// RuleFunc is a compute rule: returns an alert when its condition is
-// breached, or a non-nil error when the rule's data sources fail.
+// RuleFunc is a compute rule: returns canonical runtime alert events when
+// its condition is breached, or a non-nil error when its data source fails.
 // Infrastructure failures MUST propagate to the supervisor — they are
-// never converted into "no alert", which would let the alert engine
+// never converted into "no alert", which would let the alert runtime
 // appear healthy while it is actually blind.
-type RuleFunc func(ctx context.Context) (*Alert, error)
-
-// Alert is the legacy compute rule output. Evaluate converts it to the
-// shared runtime AlertEvent before deduplication and notification.
-type Alert struct {
-	EventID     string            `json:"event_id,omitempty"`
-	Name        string            `json:"name"`
-	Severity    string            `json:"severity"`
-	Summary     string            `json:"summary"`
-	Description string            `json:"description"`
-	Labels      map[string]string `json:"labels,omitempty"`
-	Timestamp   time.Time         `json:"timestamp"`
-}
+type RuleFunc func(ctx context.Context) (*runtimealerts.AlertEvent, error)
 
 // Engine evaluates the compute rule group on a periodic tick.
 type Engine struct {
@@ -48,40 +36,19 @@ type Engine struct {
 
 var _ runtimealerts.Evaluator = (*Engine)(nil)
 
-// Notifier is retained as the compute-facing compatibility contract.
-type Notifier interface {
-	Send(ctx context.Context, alert Alert) error
-}
-
-type computeNotifierSink struct{ notifier Notifier }
-
-func (s computeNotifierSink) Process(ctx context.Context, event runtimealerts.AlertEvent) error {
-	if s.notifier == nil {
-		return nil
-	}
-	if err := s.notifier.Send(ctx, Alert{
-		EventID:     event.EventID,
-		Name:        event.RuleID,
-		Severity:    event.Severity,
-		Summary:     event.Summary,
-		Description: event.Description,
-		Labels:      event.Labels,
-		Timestamp:   event.FiredAt,
-	}); err != nil {
-		return runtimealerts.SinkError{Stage: "notifier", Err: err}
-	}
-	return nil
-}
-
 // New builds a compute engine with the shared runtime pipeline.
-func New(tick time.Duration, notifier Notifier) *Engine {
+func New(tick time.Duration, notifier runtimealerts.Notifier) *Engine {
 	if tick <= 0 {
 		tick = 30 * time.Second
 	}
 	e := &Engine{tick: tick, Cooldown: 5 * time.Minute}
+	var sinks []runtimealerts.Sink
+	if notifier != nil {
+		sinks = append(sinks, &runtimealerts.NotifySink{Notifier: notifier})
+	}
 	e.pipeline = runtimealerts.NewPipeline(
 		runtimealerts.NewCooldownDeduplicator(e.Cooldown),
-		computeNotifierSink{notifier: notifier},
+		sinks...,
 	)
 	e.runtime = runtimealerts.NewRuntime(e, e.pipeline, tick)
 	e.runtime.NormalizeDispatchError = func(err error) error {
@@ -100,8 +67,6 @@ func New(tick time.Duration, notifier Notifier) *Engine {
 func (e *Engine) AddRule(r RuleFunc) { e.rules = append(e.rules, r) }
 
 // AddSink adds a persistence or notification sink to the shared pipeline.
-// This is the gradual-migration seam for compute integrations beyond the
-// legacy webhook notifier.
 func (e *Engine) AddSink(sink runtimealerts.Sink) { e.pipeline.AddSink(sink) }
 
 // SetErrorMetrics installs the low-cardinality error metric sink. It is
@@ -121,7 +86,8 @@ func (e *Engine) recordError(category string) {
 	}
 }
 
-// Evaluate converts the independent compute rule group into shared events.
+// Evaluate returns the canonical runtime events emitted by the independent
+// compute rule group.
 // Each rule is evaluated independently: alerts from healthy rules are still
 // returned even when a sibling rule fails, and all rule errors are joined
 // into the returned error so the supervisor can act on consecutive
@@ -151,22 +117,19 @@ func (e *Engine) Evaluate(ctx context.Context) ([]runtimealerts.AlertEvent, erro
 		if alert == nil {
 			continue
 		}
-		firedAt := alert.Timestamp
-		if firedAt.IsZero() {
-			firedAt = time.Now().UTC()
+		if alert.Group == "" {
+			alert.Group = runtimealerts.GroupCompute
 		}
-		event := runtimealerts.AlertEvent{
-			Group:       runtimealerts.GroupCompute,
-			RuleID:      alert.Name,
-			Severity:    alert.Severity,
-			Subject:     alert.Name,
-			Summary:     alert.Summary,
-			Description: alert.Description,
-			Labels:      alert.Labels,
-			FiredAt:     firedAt,
+		if alert.Subject == "" {
+			alert.Subject = alert.RuleID
 		}
-		event.EventID = runtimealerts.EventIDFor(event)
-		events = append(events, event)
+		if alert.FiredAt.IsZero() {
+			alert.FiredAt = time.Now().UTC()
+		}
+		if alert.EventID == "" {
+			alert.EventID = runtimealerts.EventIDFor(*alert)
+		}
+		events = append(events, *alert)
 	}
 	return events, errors.Join(errs...)
 }

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"velox-server/internal/smokerunstore"
 )
 
 func TestAuditReadModelRejectsCorruptTimestampAndMetadata(t *testing.T) {
@@ -56,7 +58,8 @@ func TestOperatorReadModelsRejectCorruption(t *testing.T) {
 		VALUES ('smoke-corrupt', 'worker-corrupt', 'not-a-time', 'not-a-time', 0, 'asset', 'PENDING', 'test')`); err != nil {
 		t.Fatalf("insert corrupt smoke row: %v", err)
 	}
-	if _, err := s.ListRecentSmokesForWorker(context.Background(), "worker-corrupt", 10); err == nil {
+	smokeRuns := smokerunstore.NewSQLiteSmokeRunStore(s.DB())
+	if _, err := smokeRuns.ListRecentSmokesForWorker(context.Background(), "worker-corrupt", 10); err == nil {
 		t.Fatal("ListRecentSmokesForWorker returned nil error for corrupt timestamp")
 	}
 

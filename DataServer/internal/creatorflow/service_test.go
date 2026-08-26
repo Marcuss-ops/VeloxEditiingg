@@ -13,10 +13,11 @@ import (
 	"velox-server/internal/jobs"
 	jobenqueue "velox-server/internal/jobs/enqueue"
 	"velox-server/internal/routing"
+	"velox-server/internal/store"
 
 	"strings"
+	"velox-server/internal/forwardingcontract"
 	"velox-server/internal/remoteengine"
-	"velox-server/internal/store"
 )
 
 // newTestJobStack sets up the real persistence layer used by Phase 2 tests
@@ -162,7 +163,7 @@ func TestForwardSchedulesAsyncPollAndWorkerHandoff(t *testing.T) {
 	if cf == nil {
 		t.Fatal("expected creator_forwardings row to be persisted")
 	}
-	if cf.Status != string(store.CFStatusPending) {
+	if cf.Status != string(forwardingcontract.CFStatusPending) {
 		t.Errorf("forwarding status = %q, want PENDING", cf.Status)
 	}
 	if cf.SourceProvider != "remote_engine" {

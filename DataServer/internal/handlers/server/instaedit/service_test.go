@@ -9,6 +9,7 @@ import (
 
 	"velox-shared/contract"
 
+	"velox-server/internal/deliverystore"
 	"velox-server/internal/store"
 )
 
@@ -17,8 +18,8 @@ import (
 type memoryJobGateway struct {
 	jobs                      []map[string]any
 	getByID                   map[string]map[string]any
-	deliveries                []store.JobDelivery
-	destinations              map[string]*store.DeliveryDestination
+	deliveries                []deliverystore.JobDelivery
+	destinations              map[string]*deliverystore.DeliveryDestination
 	cancelled                 []string
 	cancelReason              string
 	cancelRevision            int
@@ -57,21 +58,21 @@ func (m *memoryJobGateway) Cancel(ctx context.Context, jobID string, reason stri
 	return nil
 }
 
-func (m *memoryJobGateway) GetDeliveryDestinationByExternalID(ctx context.Context, externalID string) (*store.DeliveryDestination, error) {
+func (m *memoryJobGateway) GetDeliveryDestinationByExternalID(ctx context.Context, externalID string) (*deliverystore.DeliveryDestination, error) {
 	if m.getDestinationErr != nil {
 		return nil, m.getDestinationErr
 	}
 	return m.destinations[externalID], nil
 }
 
-func (m *memoryJobGateway) ListJobDeliveriesByJob(jobID string) ([]store.JobDelivery, error) {
+func (m *memoryJobGateway) ListJobDeliveriesByJob(jobID string) ([]deliverystore.JobDelivery, error) {
 	if m.listJobDeliveriesErr != nil {
 		return nil, m.listJobDeliveriesErr
 	}
 	return m.deliveries, nil
 }
 
-func (m *memoryJobGateway) GetDeliveryDestination(ctx context.Context, destID string) (*store.DeliveryDestination, error) {
+func (m *memoryJobGateway) GetDeliveryDestination(ctx context.Context, destID string) (*deliverystore.DeliveryDestination, error) {
 	if m.getDeliveryDestinationErr != nil {
 		return nil, m.getDeliveryDestinationErr
 	}
@@ -183,7 +184,7 @@ func TestService_CreateJob_RequiresDestinations(t *testing.T) {
 }
 
 func TestService_CreateJob_UnknownDestination(t *testing.T) {
-	jobs := &memoryJobGateway{destinations: map[string]*store.DeliveryDestination{}}
+	jobs := &memoryJobGateway{destinations: map[string]*deliverystore.DeliveryDestination{}}
 	svc := NewService(jobs, nil, nil, nil)
 	_, err := svc.CreateJob(context.Background(), CreateJobCmd{
 		WorkspaceID:  45,
@@ -196,7 +197,7 @@ func TestService_CreateJob_UnknownDestination(t *testing.T) {
 }
 
 func TestService_CreateJob_StoreMissingDestinationMapsToDomainError(t *testing.T) {
-	jobs := &memoryJobGateway{destinations: map[string]*store.DeliveryDestination{}}
+	jobs := &memoryJobGateway{destinations: map[string]*deliverystore.DeliveryDestination{}}
 	// Use a gateway variant that reproduces SQLite's normalized missing-row error.
 	jobs.getDestinationErr = store.ErrDeliveryNoRow
 	svc := NewService(jobs, nil, nil, nil)
@@ -212,7 +213,7 @@ func TestService_CreateJob_StoreMissingDestinationMapsToDomainError(t *testing.T
 
 func TestService_CreateJob_DisabledDestination(t *testing.T) {
 	jobs := &memoryJobGateway{
-		destinations: map[string]*store.DeliveryDestination{
+		destinations: map[string]*deliverystore.DeliveryDestination{
 			"ext-disabled": {DestinationID: "d-1", ExternalDestinationID: "ext-disabled", Enabled: false},
 		},
 	}
@@ -229,7 +230,7 @@ func TestService_CreateJob_DisabledDestination(t *testing.T) {
 
 func TestService_CreateJob_Success(t *testing.T) {
 	jobs := &memoryJobGateway{
-		destinations: map[string]*store.DeliveryDestination{
+		destinations: map[string]*deliverystore.DeliveryDestination{
 			"ext-1": {DestinationID: "d-1", ExternalDestinationID: "ext-1", Enabled: true},
 		},
 		getByID: map[string]map[string]any{
@@ -276,7 +277,7 @@ func TestService_CreateJob_Success(t *testing.T) {
 
 func TestService_CreateJob_PropagatesScheduleAndPublicationTarget(t *testing.T) {
 	jobs := &memoryJobGateway{
-		destinations: map[string]*store.DeliveryDestination{
+		destinations: map[string]*deliverystore.DeliveryDestination{
 			"ext-1": {DestinationID: "d-1", ExternalDestinationID: "ext-1", Enabled: true},
 		},
 		getByID: map[string]map[string]any{
@@ -316,7 +317,7 @@ func TestService_CreateJob_PropagatesScheduleAndPublicationTarget(t *testing.T) 
 
 func TestService_CreateJob_PropagatesPublicationBundle(t *testing.T) {
 	jobs := &memoryJobGateway{
-		destinations: map[string]*store.DeliveryDestination{
+		destinations: map[string]*deliverystore.DeliveryDestination{
 			"ext-it": {DestinationID: "d-it", ExternalDestinationID: "ext-it", Enabled: true},
 		},
 		getByID: map[string]map[string]any{
@@ -498,7 +499,7 @@ func TestService_GetJob_DestinationLookupFailure_PropagatesError(t *testing.T) {
 	want := errors.New("db: destination lookup failed")
 	jobs := &memoryJobGateway{
 		getByID:                   map[string]map[string]any{"job-1": {"job_id": "job-1", "status": "PENDING", "project_id": "p-1"}},
-		deliveries:                []store.JobDelivery{{DeliveryID: "d-1", DestinationID: "dest-1"}},
+		deliveries:                []deliverystore.JobDelivery{{DeliveryID: "d-1", DestinationID: "dest-1"}},
 		getDeliveryDestinationErr: want,
 	}
 	svc := NewService(jobs, nil, nil, nil)

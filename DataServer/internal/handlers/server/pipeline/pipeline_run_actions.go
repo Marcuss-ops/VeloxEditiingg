@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 
+	"velox-server/internal/forwardingcontract"
+	"velox-server/internal/forwardingstore"
 	"velox-server/internal/pipelineruns"
 	"velox-server/internal/store"
 
@@ -22,7 +24,7 @@ import (
 // Returns (run, forwarding, nil) where forwarding is non-nil only when
 // the row was found via the legacy creator_forwardings path. When
 // neither path finds a row, returns (nil, nil, errNotFound).
-func (h *Handlers) lookupPipelineRun(ctx context.Context, idParam, externalClientID string) (*pipelineruns.PipelineRun, *store.CreatorForwarding, error) {
+func (h *Handlers) lookupPipelineRun(ctx context.Context, idParam, externalClientID string) (*pipelineruns.PipelineRun, *forwardingcontract.CreatorForwarding, error) {
 	clientID := strings.TrimSpace(externalClientID)
 
 	// 1. pipeline_runs by PK. M2M callers use an ownership-scoped
@@ -35,7 +37,7 @@ func (h *Handlers) lookupPipelineRun(ctx context.Context, idParam, externalClien
 				// A forwarding-join miss (e.g. an orphaned run row whose
 				// forwarding row is gone) must be indistinguishable from a
 				// missing run for M2M callers.
-				if errors.Is(fErr, store.ErrCreatorForwardingNoRow) {
+				if errors.Is(fErr, forwardingstore.ErrCreatorForwardingNoRow) {
 					return nil, nil, errPipelineRunNotFound
 				}
 				return nil, nil, fErr
@@ -60,7 +62,7 @@ func (h *Handlers) lookupPipelineRun(ctx context.Context, idParam, externalClien
 		if err == nil && pr != nil {
 			forwarding, fErr := h.store.Forwarding().GetCreatorForwardingByIDForClient(ctx, pr.ForwardingID, clientID)
 			if fErr != nil {
-				if errors.Is(fErr, store.ErrCreatorForwardingNoRow) {
+				if errors.Is(fErr, forwardingstore.ErrCreatorForwardingNoRow) {
 					return nil, nil, errPipelineRunNotFound
 				}
 				return nil, nil, fErr
@@ -82,21 +84,21 @@ func (h *Handlers) lookupPipelineRun(ctx context.Context, idParam, externalClien
 	// 3-4. Legacy: creator_forwardings. The M2M path uses only the
 	// ownership-scoped repository methods; admin callers retain the
 	// existing unscoped legacy lookup.
-	var forwarding *store.CreatorForwarding
+	var forwarding *forwardingcontract.CreatorForwarding
 	var err error
 	if clientID != "" {
 		forwarding, err = h.store.Forwarding().GetCreatorForwardingByIDForClient(ctx, idParam, clientID)
-		if errors.Is(err, store.ErrCreatorForwardingNoRow) {
+		if errors.Is(err, forwardingstore.ErrCreatorForwardingNoRow) {
 			forwarding, err = h.store.Forwarding().GetCreatorForwardingByRemoteJobForClient(ctx, "remote_engine", idParam, clientID)
 		}
 	} else {
 		forwarding, err = h.store.Forwarding().GetCreatorForwarding(ctx, idParam)
-		if errors.Is(err, store.ErrCreatorForwardingNoRow) {
+		if errors.Is(err, forwardingstore.ErrCreatorForwardingNoRow) {
 			forwarding, err = h.store.Forwarding().GetCreatorForwardingByRemoteJob(ctx, "remote_engine", idParam)
 		}
 	}
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) || errors.Is(err, store.ErrCreatorForwardingNoRow) {
+		if errors.Is(err, sql.ErrNoRows) || errors.Is(err, forwardingstore.ErrCreatorForwardingNoRow) {
 			return nil, nil, errPipelineRunNotFound
 		}
 		return nil, nil, err

@@ -50,6 +50,8 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
+
+	"velox-server/internal/stalereconcile"
 )
 
 // ReconciliationReasonStaleAwaitingArtifact is the stable machine reason
@@ -253,8 +255,8 @@ func (r *AwaitingArtifactReconciler) applyCandidate(ctx context.Context, c Await
 
 	// 4. Audit trail (same append-only ledger as the stale-execution
 	// reconciler; the action id is deterministic per finding identity).
-	finding := StaleExecutionFinding{
-		Category: StaleAwaitingArtifact, ResourceType: "job", ResourceID: c.JobID,
+	finding := stalereconcile.StaleExecutionFinding{
+		Category: stalereconcile.StaleAwaitingArtifact, ResourceType: "job", ResourceID: c.JobID,
 		JobID: c.JobID, OldStatus: c.OldStatus, ProposedStatus: "FAILED",
 		Reason: reason, ObservedAt: now.UTC(),
 	}

@@ -99,6 +99,7 @@ import (
 	"time"
 
 	"velox-server/internal/completion"
+	"velox-server/internal/completionstore"
 	"velox-server/internal/config"
 	"velox-server/internal/store"
 	"velox-shared/identity"
@@ -210,7 +211,7 @@ func recoverOutput(ctx context.Context, opts *cliOptions) (int, error) {
 	// var); without it DeclareOutputs cannot derive a
 	// commit_token, and the master will refuse to start (Verdetto
 	// P0 #6).
-	completionStore := store.NewSQLiteCompletionStore(sqliteStore.DB())
+	completionStore := completionstore.NewSQLiteCompletionStore(sqliteStore.DB())
 	coord, err := completion.NewCoordinator(completion.CoordinatorConfig{
 		Store:   completionStore,
 		HMACKey: []byte(opts.HMACKey),

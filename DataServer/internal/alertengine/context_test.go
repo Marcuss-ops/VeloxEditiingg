@@ -5,12 +5,14 @@ import (
 	"errors"
 	"testing"
 
+	runtimealerts "velox-server/internal/alerts"
+
 	"velox-server/internal/supervisor"
 )
 
 func TestEvaluatePreservesContextCancellation(t *testing.T) {
 	engine := New(0, nil)
-	engine.AddRule(func(context.Context) (*Alert, error) {
+	engine.AddRule(func(context.Context) (*runtimealerts.AlertEvent, error) {
 		return nil, context.Canceled
 	})
 

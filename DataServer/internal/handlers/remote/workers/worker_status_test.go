@@ -6,12 +6,12 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
-	"velox-server/internal/store"
+	"velox-server/internal/repository"
 	workersreg "velox-server/internal/workers"
 )
 
 type failingWorkersRepository struct {
-	store.WorkersRepository
+	repository.WorkersRepository
 }
 
 func (failingWorkersRepository) ListWorkers() ([]map[string]any, error) {

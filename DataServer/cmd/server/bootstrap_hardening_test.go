@@ -14,6 +14,7 @@ import (
 
 	"velox-server/internal/app"
 	"velox-server/internal/artifacts"
+	"velox-server/internal/artifactsstore"
 	"velox-server/internal/config"
 	"velox-server/internal/jobs"
 	"velox-server/internal/store"
@@ -161,7 +162,7 @@ func TestBootstrapFailsWhenReconcilerCannotStart(t *testing.T) {
 	defer sqliteStore.Close()
 
 	_, err = artifacts.NewReconciler(
-		store.NewArtifactReconcilerRepository(sqliteStore.DB()),
+		artifactsstore.NewArtifactReconcilerRepository(sqliteStore.DB()),
 		nil, // blobStore = nil → fail
 		nil, // repo
 		nil, // clock

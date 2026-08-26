@@ -13,6 +13,8 @@ import (
 
 	"velox-server/internal/config"
 	"velox-server/internal/creatorflow"
+	"velox-server/internal/forwardingcontract"
+	"velox-server/internal/forwardingstore"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/pipelineruns"
 	"velox-server/internal/store"
@@ -176,13 +178,13 @@ func TestPipelineRunStatus_M2MOwnershipUsesIndistinguishable404(t *testing.T) {
 		t.Fatalf("sqlite store: %v", err)
 	}
 	ctx := context.Background()
-	if _, err := db.Forwarding().InsertCreatorForwarding(ctx, &store.CreatorForwarding{
+	if _, err := db.Forwarding().InsertCreatorForwarding(ctx, &forwardingcontract.CreatorForwarding{
 		ForwardingID:     "cf-pipeline-owned",
 		ExternalClientID: "client-a",
 		SourceProvider:   "remote_engine",
 		SourceJobID:      "remote-owned",
 		TargetExecutorID: JobSubmitTargetExecutorID,
-		Status:           string(store.CFStatusPending),
+		Status:           string(forwardingcontract.CFStatusPending),
 	}); err != nil {
 		t.Fatalf("insert forwarding: %v", err)
 	}
@@ -235,14 +237,14 @@ func TestInsertCreatorForwarding_PersistsExternalClientID(t *testing.T) {
 		t.Fatalf("sqlite store: %v", err)
 	}
 
-	inserted, err := db.Forwarding().InsertCreatorForwarding(context.Background(), &store.CreatorForwarding{
+	inserted, err := db.Forwarding().InsertCreatorForwarding(context.Background(), &forwardingcontract.CreatorForwarding{
 		ForwardingID:     "cf-client-id-persisted",
 		ExternalClientID: "client-persisted",
 		SourceProvider:   ExternalAPISourceProvider,
 		SourceJobID:      "idem-client-id-persisted",
 		TargetExecutorID: JobSubmitTargetExecutorID,
 		TargetJobID:      "job-client-id-persisted",
-		Status:           string(store.CFStatusForwarded),
+		Status:           string(forwardingcontract.CFStatusForwarded),
 	})
 	if err != nil {
 		t.Fatalf("insert forwarding: %v", err)
@@ -261,7 +263,7 @@ func TestInsertCreatorForwarding_PersistsExternalClientID(t *testing.T) {
 	if got == nil || got.ExternalClientID != "client-persisted" {
 		t.Fatalf("owner lookup = %#v, want client-persisted", got)
 	}
-	if _, err := db.Forwarding().GetCreatorForwardingByTargetJobID(context.Background(), "job-client-id-persisted", "another-client"); err != store.ErrCreatorForwardingNoRow {
+	if _, err := db.Forwarding().GetCreatorForwardingByTargetJobID(context.Background(), "job-client-id-persisted", "another-client"); err != forwardingstore.ErrCreatorForwardingNoRow {
 		t.Fatalf("cross-client lookup error = %v, want ErrCreatorForwardingNoRow", err)
 	}
 }

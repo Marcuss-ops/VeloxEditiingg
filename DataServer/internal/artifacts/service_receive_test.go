@@ -11,7 +11,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/require"
 
-	"velox-server/internal/store"
+	"velox-server/internal/repository"
 )
 
 // =====================================================================
@@ -163,7 +163,7 @@ func TestReceive_StateMachineGuards(t *testing.T) {
 
 	// Force upload to FAILED.
 	failed := "FAILED"
-	require.NoError(t, env.repo.UpdateUploadStatus(context.Background(), sess.UploadID, store.UploadFields{Status: &failed}))
+	require.NoError(t, env.repo.UpdateUploadStatus(context.Background(), sess.UploadID, repository.UploadFields{Status: &failed}))
 
 	_, err = env.svc.Receive(context.Background(), sess.UploadID, uploadBytes([]byte("resurrect")))
 	require.Error(t, err)

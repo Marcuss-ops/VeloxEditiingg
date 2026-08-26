@@ -1,5 +1,5 @@
 // Package artifacts / cleanup.go — the four filesystem/application cleanup
-// passes of the Reconciler. SQL persistence is owned by internal/store.
+// passes of the Reconciler. SQL persistence is owned by internal/artifactsstore.
 package artifacts
 
 import (
@@ -13,7 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"velox-server/internal/store"
+	"velox-server/internal/artifactsstore"
+	"velox-server/internal/repository"
 )
 
 // =====================================================================
@@ -40,12 +41,12 @@ func (r *Reconciler) reconcileExpiredUploads(ctx context.Context) (int, error) {
 
 		// Best-effort: flip status. TransitionUploadStatus is CAS;
 		// loser rows are skipped and re-evaluated on the next pass.
-		// The repo returns store.ErrUploadStateInvalid on RowsAffected
+		// The repo returns artifactsstore.ErrUploadStateInvalid on RowsAffected
 		// mismatch; we check via errors.Is so the wrap chain works in
 		// both store-direct callers (post-1/4) and the legacy
 		// in-place-translation callers.
-		if err := r.repo.TransitionUploadStatus(ctx, s.UploadID, s.Status, string(store.UploadExpired)); err != nil {
-			if errors.Is(err, store.ErrUploadStateInvalid) || errors.Is(err, ErrUploadStateInvalid) {
+		if err := r.repo.TransitionUploadStatus(ctx, s.UploadID, s.Status, string(repository.UploadExpired)); err != nil {
+			if errors.Is(err, artifactsstore.ErrUploadStateInvalid) || errors.Is(err, ErrUploadStateInvalid) {
 				continue
 			}
 			log.Printf("[RECONCILER] rule1: upload %s transition failed: %v", s.UploadID, err)

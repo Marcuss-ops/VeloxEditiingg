@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+	"velox-server/internal/deliverystore"
 
 	"velox-server/internal/publicationstate"
 	"velox-server/internal/store"
@@ -51,7 +52,7 @@ func TestDeliveryRunnerSocialGatewayWaitsForRemotePublication(t *testing.T) {
 		deliveryID    = "delivery-social-gateway-async"
 	)
 	now := time.Now().UTC().Format(time.RFC3339)
-	if err := db.Delivery().InsertDeliveryDestination(&store.DeliveryDestination{
+	if err := db.Delivery().InsertDeliveryDestination(&deliverystore.DeliveryDestination{
 		DestinationID:         destinationID,
 		Provider:              "social_gateway",
 		ExternalDestinationID: "external-social-destination",
@@ -74,7 +75,7 @@ func TestDeliveryRunnerSocialGatewayWaitsForRemotePublication(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Delivery().InsertJobDelivery(&store.JobDelivery{
+	if err := db.Delivery().InsertJobDelivery(&deliverystore.JobDelivery{
 		DeliveryID:     deliveryID,
 		ArtifactID:     artifactID,
 		DestinationID:  destinationID,

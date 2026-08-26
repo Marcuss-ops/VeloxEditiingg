@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+	"velox-server/internal/deliverystore"
 
 	"github.com/gin-gonic/gin"
 
@@ -99,7 +100,7 @@ func TestInstaEditBFF_EndToEnd(t *testing.T) {
 
 	// Seed an enabled delivery destination with the external id the BFF will use.
 	externalDestID := "extdst_e2e_01"
-	dest := &store.DeliveryDestination{
+	dest := &deliverystore.DeliveryDestination{
 		DestinationID:         "dest-e2e-01",
 		Provider:              "test_social",
 		ExternalDestinationID: externalDestID,

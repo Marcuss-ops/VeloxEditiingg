@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+	"velox-server/internal/deliverystore"
 
 	"velox-server/internal/store"
 )
@@ -37,7 +38,7 @@ func TestDeliveryRunner_UnavailableExplicitDestinationDoesNotFallback(t *testing
 	)
 	now := time.Now().UTC().Format(time.RFC3339)
 	for _, destinationID := range []string{destinationA, destinationB} {
-		if err := db.Delivery().InsertDeliveryDestination(&store.DeliveryDestination{
+		if err := db.Delivery().InsertDeliveryDestination(&deliverystore.DeliveryDestination{
 			DestinationID:         destinationID,
 			Provider:              "drive",
 			ExternalDestinationID: "external-" + destinationID,
@@ -62,7 +63,7 @@ func TestDeliveryRunner_UnavailableExplicitDestinationDoesNotFallback(t *testing
 	}); err != nil {
 		t.Fatalf("InsertArtifact: %v", err)
 	}
-	if err := db.Delivery().InsertJobDelivery(&store.JobDelivery{
+	if err := db.Delivery().InsertJobDelivery(&deliverystore.JobDelivery{
 		DeliveryID:     deliveryID,
 		ArtifactID:     artifactID,
 		DestinationID:  destinationA,
@@ -141,7 +142,7 @@ func TestDeliveryRunner_UnavailableExplicitDestinationDoesNotFallback(t *testing
 	}); err != nil {
 		t.Fatalf("InsertArtifact transient: %v", err)
 	}
-	if err := db.Delivery().InsertJobDelivery(&store.JobDelivery{
+	if err := db.Delivery().InsertJobDelivery(&deliverystore.JobDelivery{
 		DeliveryID:     transientDeliveryID,
 		ArtifactID:     transientArtifactID,
 		DestinationID:  destinationA,

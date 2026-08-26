@@ -1,17 +1,16 @@
-package store
+package artifactsstore
 
 import (
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+
+	"velox-server/internal/repository"
 )
 
 // SQLiteArtifactReader is the SQLite-backed implementation of the
 // artifacts.ArtifactReader consumer-owned port.
-//
-// Single SELECT projection of the artifacts table; no transaction
-// required (read-only statement on a connection from the pool).
 type SQLiteArtifactReader struct {
 	db *sql.DB
 }
@@ -19,30 +18,18 @@ type SQLiteArtifactReader struct {
 // NewSQLiteArtifactReader wraps an existing *sql.DB.
 func NewSQLiteArtifactReader(db *sql.DB) *SQLiteArtifactReader {
 	if db == nil {
-		panic("store: NewSQLiteArtifactReader requires a non-nil *sql.DB")
+		panic("artifactsstore: NewSQLiteArtifactReader requires a non-nil *sql.DB")
 	}
 	return &SQLiteArtifactReader{db: db}
 }
 
-// NewSQLiteArtifactReaderFromStore binds the read projection to the
-// canonical SQLiteStore and keeps raw database handles inside store.
-func NewSQLiteArtifactReaderFromStore(s *SQLiteStore) *SQLiteArtifactReader {
-	if s == nil || s.db == nil {
-		panic("store: NewSQLiteArtifactReaderFromStore requires a non-nil SQLiteStore")
-	}
-	return &SQLiteArtifactReader{db: s.db}
-}
-
-// Compile-time check that the store adapter satisfies the consumer port.
-// The interface lives in the consumer package (internal/artifacts)
-// so the artifacts domain owns its contract.
 var _ interface {
-	GetByID(ctx context.Context, id string) (*Artifact, error)
+	GetByID(ctx context.Context, id string) (*repository.Artifact, error)
 } = (*SQLiteArtifactReader)(nil)
 
-func (r *SQLiteArtifactReader) GetByID(ctx context.Context, id string) (*Artifact, error) {
+func (r *SQLiteArtifactReader) GetByID(ctx context.Context, id string) (*repository.Artifact, error) {
 	if id == "" {
-		return nil, fmt.Errorf("store: SQLiteArtifactReader.GetByID: empty id")
+		return nil, fmt.Errorf("artifactsstore: SQLiteArtifactReader.GetByID: empty id")
 	}
 	row := r.db.QueryRowContext(ctx, `
 		SELECT id, job_id, COALESCE(attempt_id, 0), type, storage_provider,
@@ -51,7 +38,7 @@ func (r *SQLiteArtifactReader) GetByID(ctx context.Context, id string) (*Artifac
 		       COALESCE(size_bytes, 0), COALESCE(duration_seconds, 0),
 		       status, COALESCE(verified_at, ''), created_at
 		FROM artifacts WHERE id = ?`, id)
-	var a Artifact
+	var a repository.Artifact
 	var verifiedAtStr string
 	if err := row.Scan(&a.ID, &a.JobID, &a.AttemptID, &a.Type, &a.StorageProvider,
 		&a.StorageKey, &a.StorageURL, &a.LocalPath, &a.SHA256,
@@ -60,7 +47,7 @@ func (r *SQLiteArtifactReader) GetByID(ctx context.Context, id string) (*Artifac
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("store: SQLiteArtifactReader.GetByID: %w", err)
+		return nil, fmt.Errorf("artifactsstore: SQLiteArtifactReader.GetByID: %w", err)
 	}
 	return &a, nil
 }

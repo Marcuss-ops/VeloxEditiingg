@@ -3,6 +3,8 @@ package assets
 import (
 	"context"
 	"strings"
+
+	"velox-shared/assetref"
 )
 
 // payload_rewrite.go owns the shared applyRewrite orchestrator plus
@@ -71,9 +73,14 @@ func (s *AssetService) applyRewrite(
 		if trimmed == "" {
 			continue
 		}
-		// Skip already-canonical velox-asset references — nothing to do.
-		if strings.HasPrefix(trimmed, VeloxAssetScheme+"://") {
-			refs = append(refs, trimmed)
+		parsed, err := assetref.Parse(trimmed)
+		if err != nil {
+			return err
+		}
+		// Both canonical wire kinds are already classified and must pass
+		// through unchanged. Bare values still resolve through the registry.
+		if _, wireErr := assetref.ParseCanonicalWire(trimmed); wireErr == nil {
+			refs = append(refs, parsed.Wire())
 			continue
 		}
 		asset, err := s.ResolveAndRegister(ctx, ResolveAssetCommand{

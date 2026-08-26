@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 
+	"velox-server/internal/artifactsstore"
 	"velox-server/internal/store"
 	"velox-shared/contract/domain"
 )
@@ -73,7 +74,7 @@ var (
 // unit tests can also target `errors.Is(err, store.ErrX)` directly.
 //
 // File-1/4 of the migration moved artifact_uploads CRUD to store;
-// Service methods return store.Err{X} from s.repo. We translate at
+// Service methods return artifactsstore.Err{X} from s.repo. We translate at
 // the Service boundary (in every place that previously returned a raw
 // repo error) so the public-facing sentinel is the artifacts one.
 //
@@ -83,16 +84,16 @@ func translateStoreErr(err error) error {
 	if err == nil {
 		return nil
 	}
-	// Mapping: store.Err{X} → artifacts.Err{X}. Order is irrelevant —
+	// Mapping: artifactsstore.Err{X} → artifacts.Err{X}. Order is irrelevant —
 	// each test branch walks the chain independently.
 	switch {
-	case errors.Is(err, store.ErrUploadStateInvalid):
+	case errors.Is(err, artifactsstore.ErrUploadStateInvalid):
 		return fmt.Errorf("%w: %w", ErrUploadStateInvalid, err)
-	case errors.Is(err, store.ErrTransitionConflict):
+	case errors.Is(err, artifactsstore.ErrTransitionConflict):
 		return fmt.Errorf("%w: %w", ErrTransitionConflict, err)
-	case errors.Is(err, store.ErrUploadNotFound):
+	case errors.Is(err, artifactsstore.ErrUploadNotFound):
 		return fmt.Errorf("%w: %w", ErrUploadNotFound, err)
-	case errors.Is(err, store.ErrUploadExpired):
+	case errors.Is(err, artifactsstore.ErrUploadExpired):
 		return fmt.Errorf("%w: %w", ErrUploadExpired, err)
 	}
 	return err

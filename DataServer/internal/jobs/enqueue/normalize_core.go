@@ -15,6 +15,7 @@ import (
 	"velox-shared/contract"
 	"velox-shared/contract/deliveryplan"
 	"velox-shared/contract/rendercompiler"
+	"velox-shared/contract/rendermanifest"
 	"velox-shared/payload"
 )
 
@@ -26,12 +27,12 @@ func normalizeSceneVideoPayload(payloadMap map[string]interface{}) (map[string]i
 // the enqueue path. The compatibility wrapper above keeps existing package
 // callers and tests on the historical signature.
 func normalizeSceneVideoPayloadContext(ctx context.Context, payloadMap map[string]interface{}) (map[string]interface{}, error) {
-	compiledV2Present, strictManifest, strictManifestMap, err := validateSceneVideoInputs(payloadMap)
+	base, err := contract.NewJobPayloadV2Checked(payloadMap)
 	if err != nil {
 		return nil, err
 	}
 
-	base, err := contract.NewJobPayloadV2Checked(payloadMap)
+	compiledV2Present, strictManifest, strictManifestMap, err := validateSceneVideoInputs(payloadMap)
 	if err != nil {
 		return nil, err
 	}
@@ -64,22 +65,14 @@ func validateSceneVideoInputs(payloadMap map[string]interface{}) (bool, bool, ma
 			return false, false, nil, deliveryplan.NewValidationErrorWrapped("compiled_render_plan_v2", "pass-through validation failed", err)
 		}
 	}
-
 	rawManifest, manifestPresent := payloadMap["render_manifest"]
 	strictManifest := manifestPresent
 	var strictManifestMap map[string]interface{}
 	if strictManifest {
-		if rawManifest == nil {
-			return false, false, nil, deliveryplan.NewValidationError("render_manifest", "must be an object")
-		}
-		manifest, ok := rawManifest.(map[string]interface{})
-		if !ok {
-			return false, false, nil, deliveryplan.NewValidationError("render_manifest", "must be an object")
-		}
-		strictManifestMap = manifest
-		if len(manifest) == 0 {
-			return false, false, nil, deliveryplan.NewValidationError("render_manifest", "must not be empty")
-		}
+		// NewJobPayloadV2Checked already performed the canonical strict
+		// render-manifest parse. This assertion only obtains the map needed
+		// by the visual-replacement compiler; it is not a second validator.
+		strictManifestMap, _ = rawManifest.(map[string]interface{})
 	}
 	// visual_replacements[] is only resolvable when the master compiles a
 	// strict render_manifest with a verified final_audio asset into a
@@ -357,27 +350,12 @@ func resolveInternalExecutorID(payloadMap map[string]interface{}) string {
 }
 
 func renderManifestHasFinalAudio(raw map[string]interface{}) bool {
-	assets, ok := raw["assets"].([]interface{})
-	if !ok {
-		if typed, typedOK := raw["assets"].([]map[string]interface{}); typedOK {
-			for _, asset := range typed {
-				if kind, _ := asset["kind"].(string); kind == "final_audio" {
-					return true
-				}
-			}
-		}
+	data, err := json.Marshal(raw)
+	if err != nil {
 		return false
 	}
-	for _, value := range assets {
-		asset, ok := value.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		if kind, _ := asset["kind"].(string); kind == "final_audio" {
-			return true
-		}
-	}
-	return false
+	manifest, err := rendermanifest.Parse(data)
+	return err == nil && manifest.HasAssetKind("final_audio")
 }
 func resolveRequiredCapabilities(executorID string) []string {
 	if strings.HasPrefix(executorID, "scene.composite") {

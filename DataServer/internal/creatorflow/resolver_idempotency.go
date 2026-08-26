@@ -151,7 +151,7 @@ func buildIdempotentResolveResponse(existing *jobs.Job) map[string]interface{} {
 // path (Job did not exist before Resolve ran).
 //
 // Status string-typing consistency: `jobs.StatusPending` is a typed
-// `jobs.Status` constant (alias-shared with `store.JobStatus`). When
+// `jobs.Status` constant. When
 // stored in a `map[string]interface{}`, the value's DYNAMIC TYPE is the
 // typed alias — not an untyped `string`. Downstream consumers that
 // compare to the untyped literal "PENDING" (e.g.

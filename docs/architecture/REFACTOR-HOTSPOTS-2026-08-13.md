@@ -73,7 +73,6 @@ Go — DataServer (soglia 500 righe):
 | `internal/store/store_deployment_records.go` | 585 |
 | `internal/store/store_assets.go` | 532 |
 | `cmd/server/bootstrap_supervisor.go` | 518 |
-| `internal/store/store_creator_forwardings.go` | 515 |
 | `cmd/server/bootstrap_modules.go` | 506 |
 | `internal/store/artifact_finalization.go` | 499 |
 
@@ -98,11 +97,11 @@ Go — worker-agent-go (soglia 500 righe):
 
 1. **`render_engine.cpp` (1888 righe, 34 commit)** — il file più grande e più
    toccato di tutto il repo. Da spezzare per stage (resolution, timeline,
-   mix, mux, finalize) e per decisione di dominio, non per riga.
-2. **`DataServer/internal/store` (834 touches, package più grande)** — ~40 file
-   oltre 400 righe, 283 migration. Un writer per aggregate, estrazione di
-   query helper ripetute, split per dominio (delivery, forwarding, worker,
-   publication) mantenendo `store/contracts` come confine.
+   mix, mux, finalize) e per decisione di dominio, non per riga.2. **`DataServer/internal/store` (834 touches, package più grande)** — ~40 file
+  oltre 400 righe, 283 migration. Gli adapter artifact sono stati estratti in
+  `internal/artifactsstore`; il lavoro residuo riguarda gli aggregate ancora
+  propriamente store (delivery, worker, publication, task) e query helper
+  ripetute, mantenendo `store/contracts` come confine.
 3. **`handlers/server/pipeline` (162 touches, 4 file > 400 righe)** —
    `intake_types.go` (424), `publication_intake_validation.go` (474),
    `worker_payload_projection.go`. Validazione da separare dal projection
@@ -149,7 +148,8 @@ Go — worker-agent-go (soglia 500 righe):
 ## Vincoli operativi
 
 - Un solo hotspot alla volta; commit atomico + push `main` dopo ogni blocco.
-- Split dei package = rimozione/change di contratti cross-package: eseguire
+- Gli adapter artifact sono separati in `internal/artifactsstore`; ulteriori
+  split o rimozioni di contratti cross-package richiedono
   `bash scripts/ci/pre-removal-verify.sh` prima del push.
 - Nessun fallback `nil`/noop/stub nel wiring produttivo; capability solo
   `DISABLED` / `READY` / `MISCONFIGURED` (vedi AGENTS.md §6).

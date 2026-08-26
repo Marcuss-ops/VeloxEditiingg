@@ -2,12 +2,9 @@ package executors
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -29,8 +26,6 @@ const (
 	ComposeID       = "compose"
 	EncodeID        = "encode"
 )
-
-const renderPlanVersion = 1
 
 // CommandPlan is the immutable, deterministic description of one external
 // render operation. Tests assert this value instead of depending on ffmpeg.
@@ -144,33 +139,14 @@ func parseRenderPlanEnvelope(spec executor.TaskSpec) (*plan.RenderPlan, error) {
 	} else {
 		return nil, errors.New("render-plan executor: render_plan or render_plan_json is required")
 	}
-	var p plan.RenderPlan
-	decoder := json.NewDecoder(strings.NewReader(string(raw)))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&p); err != nil {
-		return nil, fmt.Errorf("render-plan executor: strict decode: %w", err)
-	}
-	var trailing interface{}
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		if err == nil {
-			return nil, errors.New("render-plan executor: strict decode: trailing data")
-		}
-		return nil, fmt.Errorf("render-plan executor: strict decode: %w", err)
-	}
-	if err := validateRenderPlan(&p, spec.JobID); err != nil {
-		return nil, err
-	}
-	// Marshal/unmarshal gives callers a detached value. Executors never mutate
-	// the transport map or share plan pointers between tasks.
-	canonical, err := json.Marshal(&p)
+	p, err := plan.DecodeJSON(raw)
 	if err != nil {
-		return nil, fmt.Errorf("render-plan executor: canonicalize: %w", err)
+		return nil, fmt.Errorf("render-plan executor: %w", err)
 	}
-	var detached plan.RenderPlan
-	if err := json.Unmarshal(canonical, &detached); err != nil {
-		return nil, fmt.Errorf("render-plan executor: detach: %w", err)
+	if err := p.ValidateForJob(spec.JobID); err != nil {
+		return nil, fmt.Errorf("render-plan executor: %w", err)
 	}
-	return &detached, nil
+	return p, nil
 }
 
 // parseCompiledRenderPlanEnvelope parses the master-compiled render plan
@@ -182,38 +158,17 @@ func parseCompiledRenderPlanEnvelope(spec executor.TaskSpec) (*renderplan.Compil
 	if err := checkRenderPlanPayloadKeys(spec); err != nil {
 		return nil, err
 	}
-	if err := verifyCompiledPlanSHA(spec); err != nil {
-		return nil, err
-	}
-	rawJSON, ok := spec.Payload[contract.PayloadKeyCompiledRenderPlanJSON].(string)
-	if !ok || strings.TrimSpace(rawJSON) == "" {
-		return nil, errors.New("render-plan executor: compiled_render_plan_json is required")
-	}
-	plan, err := renderplan.DecodeCompiledRenderPlan(rawJSON)
+	plan, err := renderplan.DecodeCompiledRenderPlanPayload(spec.Payload)
 	if err != nil {
 		return nil, fmt.Errorf("render-plan executor: compiled plan: %w", err)
+	}
+	if plan == nil {
+		return nil, errors.New("render-plan executor: compiled_render_plan_json is required")
 	}
 	if spec.JobID != "" && plan.JobID != spec.JobID {
 		return nil, fmt.Errorf("render-plan executor: compiled plan job_id %q must match task job %q", plan.JobID, spec.JobID)
 	}
 	return plan, nil
-}
-
-func verifyCompiledPlanSHA(spec executor.TaskSpec) error {
-	rawJSON, ok := spec.Payload[contract.PayloadKeyCompiledRenderPlanJSON].(string)
-	if !ok || strings.TrimSpace(rawJSON) == "" {
-		return errors.New("render-plan executor: compiled_render_plan_json is required")
-	}
-	rawSHA, ok := spec.Payload[contract.PayloadKeyCompiledRenderPlanSHA].(string)
-	if !ok || strings.TrimSpace(rawSHA) == "" {
-		return errors.New("render-plan executor: compiled_render_plan_sha256 is required when compiled plan is present")
-	}
-	actual := sha256.Sum256([]byte(rawJSON))
-	expected := hex.EncodeToString(actual[:])
-	if !strings.EqualFold(strings.TrimSpace(rawSHA), expected) {
-		return fmt.Errorf("render-plan executor: compiled plan sha256 mismatch (got %q, want %q)", strings.TrimSpace(rawSHA), expected)
-	}
-	return nil
 }
 
 // compiledPlanEvidence returns the sanitized identity of the master-compiled
@@ -234,80 +189,6 @@ func compiledPlanEvidence(spec executor.TaskSpec) map[string]interface{} {
 		evidence["compiled_render_plan_sha256"] = strings.TrimSpace(sha)
 	}
 	return evidence
-}
-
-func validateRenderPlan(p *plan.RenderPlan, taskJobID string) error {
-	if p.Version != renderPlanVersion {
-		return fmt.Errorf("render-plan executor: version must be %d (got %d)", renderPlanVersion, p.Version)
-	}
-	if strings.TrimSpace(p.JobID) == "" || (taskJobID != "" && p.JobID != taskJobID) {
-		return fmt.Errorf("render-plan executor: job_id must match task (%q)", taskJobID)
-	}
-	if p.Canvas.Width <= 0 || p.Canvas.Height <= 0 || p.Canvas.Fps <= 0 {
-		return errors.New("render-plan executor: canvas width, height and fps must be positive")
-	}
-	if len(p.Timeline) == 0 {
-		return errors.New("render-plan executor: timeline must not be empty")
-	}
-	for i, item := range p.Timeline {
-		if item.DurationSeconds <= 0 || strings.TrimSpace(item.Source.Type) == "" {
-			return fmt.Errorf("render-plan executor: timeline[%d] has invalid source or duration", i)
-		}
-	}
-	if err := validateRenderAudioTracks(p); err != nil {
-		return err
-	}
-	return validateRenderSubtitleTracks(p, totalDuration(p))
-}
-
-func validateRenderAudioTracks(p *plan.RenderPlan) error {
-	for i, track := range p.AudioTracks {
-		if strings.TrimSpace(track.SourceURL) == "" {
-			return fmt.Errorf("render-plan executor: audio_tracks[%d].source_url is required", i)
-		}
-		if track.Volume < 0 {
-			return fmt.Errorf("render-plan executor: audio_tracks[%d].volume must not be negative", i)
-		}
-		if track.Loop && track.DurationSeconds < 0 {
-			return fmt.Errorf("render-plan executor: audio_tracks[%d].duration_seconds must be non-negative", i)
-		}
-	}
-	return nil
-}
-
-func validateRenderSubtitleTracks(p *plan.RenderPlan, endOfTimeline float64) error {
-	for i, subtitle := range p.Subtitles {
-		if len(subtitle.Events) == 0 {
-			return fmt.Errorf("render-plan executor: subtitle_tracks[%d] requires aligned events", i)
-		}
-		if err := validateSubtitleEvents(subtitle.Events, i, endOfTimeline); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func validateSubtitleEvents(events []plan.SubtitleEvent, trackIndex int, endOfTimeline float64) error {
-	var previousEnd float64
-	for j, event := range events {
-		if event.EndSeconds <= event.StartSeconds || event.StartSeconds < 0 || strings.TrimSpace(event.Text) == "" {
-			return fmt.Errorf("render-plan executor: subtitle_tracks[%d].events[%d] is invalid", trackIndex, j)
-		}
-		if event.EndSeconds-event.StartSeconds < 0.5 {
-			return fmt.Errorf("render-plan executor: subtitle_tracks[%d].events[%d] is shorter than 500ms", trackIndex, j)
-		}
-		if event.StartSeconds < previousEnd {
-			return fmt.Errorf("render-plan executor: subtitle_tracks[%d].events[%d] overlaps previous event", trackIndex, j)
-		}
-		if event.EndSeconds > endOfTimeline {
-			return fmt.Errorf("render-plan executor: subtitle_tracks[%d].events[%d] exceeds timeline", trackIndex, j)
-		}
-		if strings.Count(event.Text, "\\n") > 1 {
-			return fmt.Errorf("render-plan executor: subtitle_tracks[%d].events[%d] exceeds two lines", trackIndex, j)
-		}
-		previousEnd = event.EndSeconds
-	}
-	return nil
 }
 
 func (e *renderPlanExecutor) outputPath(spec executor.TaskSpec, suffix string) string {
@@ -352,12 +233,12 @@ func (e *subtitleAlignExecutor) Execute(_ context.Context, _ executor.ExecutionC
 	for _, track := range p.Subtitles {
 		for _, event := range track.Events {
 			b.WriteString("Dialogue: 0,")
-				writeASSTime(&b, event.StartSeconds)
-				b.WriteByte(',')
-				writeASSTime(&b, event.EndSeconds)
-				b.WriteString(",Default,")
-				writeASSText(&b, event.Text)
-				b.WriteByte('\n')
+			writeASSTime(&b, event.StartSeconds)
+			b.WriteByte(',')
+			writeASSTime(&b, event.EndSeconds)
+			b.WriteString(",Default,")
+			writeASSText(&b, event.Text)
+			b.WriteByte('\n')
 		}
 	}
 	path := e.outputPath(spec, ".subtitles.ass")

@@ -60,7 +60,7 @@ func validateSubmitScenes(req SubmitJobRequest) []gin.H {
 					"path":  pathPrefix + ".url",
 					"issue": "empty",
 				})
-			} else if !assetURLRegexp.MatchString(trimmed) {
+			} else if !isAcceptedAssetURL(trimmed) {
 				details = append(details, gin.H{
 					"path":     pathPrefix + ".url",
 					"issue":    "unsupported_scheme",
@@ -84,7 +84,7 @@ func validateSubmitScenes(req SubmitJobRequest) []gin.H {
 					"path":  pathPrefix + ".url",
 					"issue": "empty",
 				})
-			} else if !assetURLRegexp.MatchString(trimmed) {
+			} else if !isAcceptedAssetURL(trimmed) {
 				details = append(details, gin.H{
 					"path":     pathPrefix + ".url",
 					"issue":    "unsupported_scheme",
@@ -108,7 +108,7 @@ func validateSubmitScenes(req SubmitJobRequest) []gin.H {
 					"path":  pathPrefix + ".url",
 					"issue": "empty",
 				})
-			} else if !assetURLRegexp.MatchString(trimmed) {
+			} else if !isAcceptedAssetURL(trimmed) {
 				details = append(details, gin.H{
 					"path":     pathPrefix + ".url",
 					"issue":    "unsupported_scheme",

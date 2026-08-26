@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"velox-server/internal/stalereconcile"
 	"velox-server/internal/store/migrations"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -26,6 +27,10 @@ func openStaleReconcilerTestDB(t *testing.T) (*SQLiteStore, *sql.DB) {
 	return &SQLiteStore{db: db, path: dbPath}, db
 }
 
+func newStaleExecutionReconcilerForTest(s *SQLiteStore) *stalereconcile.StaleExecutionReconciler {
+	return stalereconcile.New(s.DB(), NewSQLiteTaskRepository(s), NewSQLiteJobRepository(s))
+}
+
 func seedStaleTask(t *testing.T, db *sql.DB, now time.Time) {
 	t.Helper()
 	old := now.Add(-time.Minute).Format(time.RFC3339Nano)
@@ -43,10 +48,7 @@ func TestStaleExecutionReconciler_DryRunDoesNotMutate(t *testing.T) {
 	store, db := openStaleReconcilerTestDB(t)
 	now := time.Now().UTC()
 	seedStaleTask(t, db, now)
-	reconciler, err := NewStaleExecutionReconciler(store)
-	if err != nil {
-		t.Fatal(err)
-	}
+	reconciler := newStaleExecutionReconcilerForTest(store)
 
 	report, err := reconciler.Reconcile(context.Background(), now, 100, false, "operator-test")
 	if err != nil {
@@ -75,10 +77,7 @@ func TestStaleExecutionReconciler_ApplyIsIdempotent(t *testing.T) {
 	store, db := openStaleReconcilerTestDB(t)
 	now := time.Now().UTC()
 	seedStaleTask(t, db, now)
-	reconciler, err := NewStaleExecutionReconciler(store)
-	if err != nil {
-		t.Fatal(err)
-	}
+	reconciler := newStaleExecutionReconcilerForTest(store)
 
 	first, err := reconciler.Reconcile(context.Background(), now, 100, true, "operator-test")
 	if err != nil {
@@ -131,10 +130,7 @@ func TestStaleExecutionReconciler_ExpiredLeaseIsAuditedAndClosesAttempt(t *testi
 	if _, err := db.Exec(`INSERT INTO task_attempts (id,task_id,job_id,attempt_number,worker_id,lease_id,status,report_version,created_at,updated_at) VALUES ('attempt-lease','task-lease','job-lease',1,'worker-lease','lease-1','RUNNING',0,?,?)`, old, old); err != nil {
 		t.Fatal(err)
 	}
-	reconciler, err := NewStaleExecutionReconciler(store)
-	if err != nil {
-		t.Fatal(err)
-	}
+	reconciler := newStaleExecutionReconcilerForTest(store)
 	report, err := reconciler.Reconcile(context.Background(), now, 100, true, "operator-test")
 	if err != nil {
 		t.Fatal(err)
@@ -168,10 +164,7 @@ func TestStaleExecutionReconciler_OfflineWorkerIsPartitionedIdempotently(t *test
 	if _, err := db.Exec(`INSERT INTO workers (worker_id,worker_name,status,raw_json,migrated_at,connection_state,last_heartbeat_at,last_state_change_at) VALUES ('worker-offline','worker-offline','READY','{}',?,?,?,?)`, old, old, old, old); err != nil {
 		t.Fatal(err)
 	}
-	reconciler, err := NewStaleExecutionReconciler(store)
-	if err != nil {
-		t.Fatal(err)
-	}
+	reconciler := newStaleExecutionReconcilerForTest(store)
 	report, err := reconciler.Reconcile(context.Background(), now, 100, true, "operator-test")
 	if err != nil {
 		t.Fatal(err)
@@ -201,10 +194,7 @@ func TestStaleExecutionReconciler_AuditIsAppendOnly(t *testing.T) {
 	store, db := openStaleReconcilerTestDB(t)
 	now := time.Now().UTC()
 	seedStaleTask(t, db, now)
-	reconciler, err := NewStaleExecutionReconciler(store)
-	if err != nil {
-		t.Fatal(err)
-	}
+	reconciler := newStaleExecutionReconcilerForTest(store)
 	if _, err := reconciler.Reconcile(context.Background(), now, 100, true, "operator-test"); err != nil {
 		t.Fatal(err)
 	}

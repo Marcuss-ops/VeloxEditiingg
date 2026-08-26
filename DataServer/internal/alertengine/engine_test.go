@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"velox-server/internal/jobs"
+	runtimealerts "velox-server/internal/alerts"
 	"velox-server/internal/observability"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
@@ -170,10 +171,10 @@ func defaultsObs() *observability.Service {
 
 type spyNotifier struct {
 	mu     sync.Mutex
-	alerts []Alert
+	alerts []runtimealerts.Alert
 }
 
-func (s *spyNotifier) Send(_ context.Context, alert Alert) error {
+func (s *spyNotifier) Notify(_ context.Context, alert runtimealerts.Alert) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.alerts = append(s.alerts, alert)
@@ -208,8 +209,8 @@ func TestRuleErrorRate_Triggers(t *testing.T) {
 	if alert == nil {
 		t.Fatal("expected alert when error rate exceeds threshold")
 	}
-	if alert.Name != "ErrorRateHigh" {
-		t.Errorf("Name = %q, want ErrorRateHigh", alert.Name)
+	if alert.RuleID != "ErrorRateHigh" {
+		t.Errorf("Name = %q, want ErrorRateHigh", alert.RuleID)
 	}
 	if alert.Severity != "warning" {
 		t.Errorf("Severity = %q, want warning", alert.Severity)
@@ -234,7 +235,7 @@ func TestRuleErrorRate_Healthy(t *testing.T) {
 		t.Fatalf("rule returned error: %v", err)
 	}
 	if alert != nil {
-		t.Errorf("expected no alert when error rate below threshold, got %s", alert.Name)
+		t.Errorf("expected no alert when error rate below threshold, got %s", alert.RuleID)
 	}
 }
 
@@ -249,7 +250,7 @@ func TestRuleErrorRate_NilObs(t *testing.T) {
 		t.Fatalf("rule returned error: %v", err)
 	}
 	if alert != nil {
-		t.Errorf("expected no alert when Obs is nil, got %s", alert.Name)
+		t.Errorf("expected no alert when Obs is nil, got %s", alert.RuleID)
 	}
 }
 
@@ -284,8 +285,8 @@ func TestRuleP95WallMs_Triggers(t *testing.T) {
 	if alert == nil {
 		t.Fatal("expected alert when P95 render exceeds threshold")
 	}
-	if alert.Name != "P95WallMsHigh" {
-		t.Errorf("Name = %q, want P95WallMsHigh", alert.Name)
+	if alert.RuleID != "P95WallMsHigh" {
+		t.Errorf("Name = %q, want P95WallMsHigh", alert.RuleID)
 	}
 }
 
@@ -300,7 +301,7 @@ func TestRuleP95WallMs_NilObs(t *testing.T) {
 		t.Fatalf("rule returned error: %v", err)
 	}
 	if alert != nil {
-		t.Errorf("expected no alert when Obs is nil, got %s", alert.Name)
+		t.Errorf("expected no alert when Obs is nil, got %s", alert.RuleID)
 	}
 }
 
@@ -316,7 +317,7 @@ func TestRuleP95WallMs_Healthy(t *testing.T) {
 		t.Fatalf("rule returned error: %v", err)
 	}
 	if alert != nil {
-		t.Errorf("expected no alert when P95 below threshold, got %s", alert.Name)
+		t.Errorf("expected no alert when P95 below threshold, got %s", alert.RuleID)
 	}
 }
 
@@ -343,8 +344,8 @@ func TestRuleWorkerOffline_Triggers(t *testing.T) {
 	if alert == nil {
 		t.Fatal("expected alert when workers are offline")
 	}
-	if alert.Name != "WorkersOffline" {
-		t.Errorf("Name = %q, want WorkersOffline", alert.Name)
+	if alert.RuleID != "WorkersOffline" {
+		t.Errorf("Name = %q, want WorkersOffline", alert.RuleID)
 	}
 	if alert.Severity != "critical" {
 		t.Errorf("Severity = %q, want critical", alert.Severity)
@@ -362,7 +363,7 @@ func TestRuleWorkerOffline_Healthy(t *testing.T) {
 		t.Fatalf("rule returned error: %v", err)
 	}
 	if alert != nil {
-		t.Errorf("expected no alert when all workers CONNECTED, got %s", alert.Name)
+		t.Errorf("expected no alert when all workers CONNECTED, got %s", alert.RuleID)
 	}
 }
 
@@ -376,7 +377,7 @@ func TestRuleWorkerOffline_NilObs(t *testing.T) {
 		t.Fatalf("rule returned error: %v", err)
 	}
 	if alert != nil {
-		t.Errorf("expected no alert when Obs is nil, got %s", alert.Name)
+		t.Errorf("expected no alert when Obs is nil, got %s", alert.RuleID)
 	}
 }
 
@@ -396,8 +397,8 @@ func TestRuleDiskFree_Triggers(t *testing.T) {
 	if alert == nil {
 		t.Fatal("expected alert when disk free below threshold")
 	}
-	if alert.Name != "DiskFreeLow" {
-		t.Errorf("Name = %q, want DiskFreeLow", alert.Name)
+	if alert.RuleID != "DiskFreeLow" {
+		t.Errorf("Name = %q, want DiskFreeLow", alert.RuleID)
 	}
 	if alert.Severity != "critical" {
 		t.Errorf("Severity = %q, want critical", alert.Severity)
@@ -415,7 +416,7 @@ func TestRuleDiskFree_Healthy(t *testing.T) {
 		t.Fatalf("rule returned error: %v", err)
 	}
 	if alert != nil {
-		t.Errorf("expected no alert when disk free above threshold, got %s", alert.Name)
+		t.Errorf("expected no alert when disk free above threshold, got %s", alert.RuleID)
 	}
 }
 
@@ -429,7 +430,7 @@ func TestRuleDiskFree_NoDir(t *testing.T) {
 		t.Fatalf("rule returned error: %v", err)
 	}
 	if alert != nil {
-		t.Errorf("expected no alert when DataDir is empty, got %s", alert.Name)
+		t.Errorf("expected no alert when DataDir is empty, got %s", alert.RuleID)
 	}
 }
 
@@ -462,8 +463,8 @@ func TestRuleFFmpegSpeedRatio_Triggers(t *testing.T) {
 	if alert == nil {
 		t.Fatal("expected alert when ffmpeg speed ratio below minimum")
 	}
-	if alert.Name != "FFmpegSpeedRatioLow" {
-		t.Errorf("Name = %q, want FFmpegSpeedRatioLow", alert.Name)
+	if alert.RuleID != "FFmpegSpeedRatioLow" {
+		t.Errorf("Name = %q, want FFmpegSpeedRatioLow", alert.RuleID)
 	}
 }
 
@@ -479,7 +480,7 @@ func TestRuleFFmpegSpeedRatio_Healthy(t *testing.T) {
 		t.Fatalf("rule returned error: %v", err)
 	}
 	if alert != nil {
-		t.Errorf("expected no alert when speed ratio above minimum, got %s", alert.Name)
+		t.Errorf("expected no alert when speed ratio above minimum, got %s", alert.RuleID)
 	}
 }
 
@@ -501,7 +502,7 @@ func TestRuleFFmpegSpeedRatio_NoSamples(t *testing.T) {
 		t.Fatalf("rule returned error: %v", err)
 	}
 	if alert != nil {
-		t.Errorf("expected no alert with 0 samples, got %s", alert.Name)
+		t.Errorf("expected no alert with 0 samples, got %s", alert.RuleID)
 	}
 }
 
@@ -516,7 +517,7 @@ func TestRuleFFmpegSpeedRatio_NilObs(t *testing.T) {
 		t.Fatalf("rule returned error: %v", err)
 	}
 	if alert != nil {
-		t.Errorf("expected no alert when Obs is nil, got %s", alert.Name)
+		t.Errorf("expected no alert when Obs is nil, got %s", alert.RuleID)
 	}
 }
 
@@ -528,8 +529,8 @@ func TestCooldown_SuppressesRepeatedAlerts(t *testing.T) {
 	engine.Cooldown = 1 * time.Hour // long cooldown so it persists for the test
 
 	// Register a rule that always fires.
-	engine.AddRule(func(ctx context.Context) (*Alert, error) {
-		return &Alert{Name: "AlwaysOn", Severity: "warning", Summary: "test"}, nil
+	engine.AddRule(func(ctx context.Context) (*runtimealerts.AlertEvent, error) {
+		return &runtimealerts.AlertEvent{RuleID: "AlwaysOn", Severity: "warning", Summary: "test"}, nil
 	})
 
 	ctx := context.Background()
@@ -552,8 +553,8 @@ func TestCooldown_AllowsAfterCooldown(t *testing.T) {
 	engine := New(1*time.Hour, spy)
 	engine.Cooldown = 10 * time.Millisecond // very short cooldown
 
-	engine.AddRule(func(ctx context.Context) (*Alert, error) {
-		return &Alert{Name: "AlwaysOn", Severity: "warning", Summary: "test"}, nil
+	engine.AddRule(func(ctx context.Context) (*runtimealerts.AlertEvent, error) {
+		return &runtimealerts.AlertEvent{RuleID: "AlwaysOn", Severity: "warning", Summary: "test"}, nil
 	})
 
 	ctx := context.Background()
@@ -579,11 +580,11 @@ func TestCooldown_DifferentRulesDontSuppressEachOther(t *testing.T) {
 	engine := New(1*time.Hour, spy)
 	engine.Cooldown = 1 * time.Hour
 
-	engine.AddRule(func(ctx context.Context) (*Alert, error) {
-		return &Alert{Name: "RuleA", Severity: "warning", Summary: "A"}, nil
+	engine.AddRule(func(ctx context.Context) (*runtimealerts.AlertEvent, error) {
+		return &runtimealerts.AlertEvent{RuleID: "RuleA", Severity: "warning", Summary: "A"}, nil
 	})
-	engine.AddRule(func(ctx context.Context) (*Alert, error) {
-		return &Alert{Name: "RuleB", Severity: "warning", Summary: "B"}, nil
+	engine.AddRule(func(ctx context.Context) (*runtimealerts.AlertEvent, error) {
+		return &runtimealerts.AlertEvent{RuleID: "RuleB", Severity: "warning", Summary: "B"}, nil
 	})
 
 	ctx := context.Background()
@@ -621,7 +622,7 @@ func TestMakeRules_ReturnsFiveRules(t *testing.T) {
 		}
 		// With healthy defaults, no rule should fire.
 		if alert != nil {
-			t.Errorf("rule %d fired unexpectedly: %s", i, alert.Name)
+			t.Errorf("rule %d fired unexpectedly: %s", i, alert.RuleID)
 		}
 	}
 }

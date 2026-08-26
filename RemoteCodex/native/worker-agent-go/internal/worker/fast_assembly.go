@@ -118,13 +118,12 @@ func (w *Worker) RunReadyFastAssembly(ctx context.Context, spec executor.TaskSpe
 }
 
 func decodeFastAssemblyPlan(spec executor.TaskSpec) (*videoContract.CompiledRenderPlanV2, error) {
-	raw, ok := spec.Payload[videoContract.PayloadKeyCompiledRenderPlanJSON].(string)
-	if !ok || strings.TrimSpace(raw) == "" {
-		return nil, fmt.Errorf("fast assembly requires a compiled RenderPlanV2 JSON payload")
-	}
-	plan, err := videoContract.DecodeCompiledRenderPlanV2([]byte(raw))
+	plan, err := videoContract.DecodeCompiledRenderPlanV2Payload(spec.Payload)
 	if err != nil {
 		return nil, fmt.Errorf("fast assembly plan decode: %w", err)
+	}
+	if plan == nil {
+		return nil, fmt.Errorf("fast assembly requires a compiled RenderPlanV2 JSON payload")
 	}
 	if plan.Output.ProfileID == "" {
 		return nil, fmt.Errorf("fast assembly profile gate: output.profile_id is required")

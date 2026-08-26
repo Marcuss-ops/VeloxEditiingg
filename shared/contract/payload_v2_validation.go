@@ -33,6 +33,14 @@ func NewJobPayloadV2Checked(raw map[string]any) (*JobPayloadV2, error) {
 			raw = copyPayload
 		}
 	}
+	if raw != nil {
+		if value, present := raw["render_manifest"]; present {
+			manifest, ok := value.(map[string]any)
+			if !ok || len(manifest) == 0 {
+				return nil, fmt.Errorf("contract: render_manifest must be a non-empty object")
+			}
+		}
+	}
 	payload := NewJobPayloadV2(raw)
 	if deliveryPlanInputPresent(raw) && !isRenderOnlyEmptyDeliveryPlan(raw) {
 		entries, err := deliveryplan.Parse(raw)

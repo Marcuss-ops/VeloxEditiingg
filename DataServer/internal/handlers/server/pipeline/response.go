@@ -47,8 +47,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"velox-server/internal/deliverystore"
+	"velox-server/internal/forwardingcontract"
 	"velox-server/internal/pipelineruns"
-	"velox-server/internal/store"
+	"velox-server/internal/repository"
 )
 
 // buildCreateResponse builds the 202 response for an idempotent duplicate
@@ -113,7 +115,7 @@ func (h *Handlers) buildPipelineRunProjection(ctx context.Context, pr *pipeliner
 	}
 	var job map[string]any
 	var jobErr error
-	var artifacts []store.Artifact
+	var artifacts []repository.Artifact
 	if clientID != "" {
 		job, jobErr = h.store.GetJobForClient(ctx, pr.VeloxJobID, clientID)
 		artifacts, _ = h.store.GetArtifactsByJobForClient(ctx, pr.VeloxJobID, clientID, 1)
@@ -126,7 +128,7 @@ func (h *Handlers) buildPipelineRunProjection(ctx context.Context, pr *pipeliner
 		if len(artifacts) > 0 {
 			a := artifacts[0]
 			response["artifact"] = gin.H{"artifact_id": a.ID, "status": a.Status, "sha256": a.SHA256, "storage_url": a.StorageURL}
-			var deliveries []store.JobDelivery
+			var deliveries []deliverystore.JobDelivery
 			if clientID != "" {
 				deliveries, _ = h.store.ListJobDeliveriesByJobForClient(ctx, pr.VeloxJobID, clientID)
 			} else {
@@ -141,13 +143,13 @@ func (h *Handlers) buildPipelineRunProjection(ctx context.Context, pr *pipeliner
 	return response
 }
 
-func forwardingStatus(f *store.CreatorForwarding) string {
+func forwardingStatus(f *forwardingcontract.CreatorForwarding) string {
 	switch f.Status {
-	case string(store.CFStatusForwarded):
+	case string(forwardingcontract.CFStatusForwarded):
 		return "WORKER_QUEUED"
-	case string(store.CFStatusFailed), string(store.CFStatusBlocked):
+	case string(forwardingcontract.CFStatusFailed), string(forwardingcontract.CFStatusBlocked):
 		return "FAILED"
-	case string(store.CFStatusCancelled):
+	case string(forwardingcontract.CFStatusCancelled):
 		return "CANCELLED"
 	default:
 		return "REMOTE_QUEUED"

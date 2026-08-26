@@ -84,7 +84,7 @@ func (e *renderBatchExecutor) Validate(spec executor.TaskSpec) error {
 	if raw, ok := spec.Payload[contract.PayloadKeyCompiledRenderPlanSHA].(string); !ok || strings.TrimSpace(raw) == "" {
 		return fmt.Errorf("render_batch@1: %q is required", contract.PayloadKeyCompiledRenderPlanSHA)
 	}
-	if err := contract.ValidateCompiledRenderPlanV2Payload(spec.Payload); err != nil {
+	if _, err := contract.DecodeCompiledRenderPlanV2Payload(spec.Payload); err != nil {
 		return fmt.Errorf("render_batch@1: invalid CompiledRenderPlanV2: %w", err)
 	}
 	return nil

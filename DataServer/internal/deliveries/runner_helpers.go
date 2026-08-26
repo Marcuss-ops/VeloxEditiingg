@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"velox-server/internal/store"
+	"velox-server/internal/repository"
 	"velox-shared/contract/domain"
 )
 
@@ -135,7 +135,7 @@ func canonicalProviderName(provider string) string {
 }
 
 // hydrateArtifact reads artifacts by id.
-func (r *DeliveryRunner) hydrateArtifact(ctx context.Context, artID string) (*store.Artifact, error) {
+func (r *DeliveryRunner) hydrateArtifact(ctx context.Context, artID string) (*repository.Artifact, error) {
 	a, err := r.store.GetArtifact(artID)
 	if err != nil {
 		return nil, err

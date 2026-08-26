@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+	"velox-server/internal/deliverystore"
 
 	"velox-server/internal/credentials"
 	"velox-server/internal/store"
@@ -51,7 +52,7 @@ func TestDeliveryRunnerPublishedShortCircuitSkipsGoogleWork(t *testing.T) {
 		VALUES (?, 'DELIVERING', 0, 3, ?, ?, ?)`, jobID, now, now, now); err != nil {
 		t.Fatalf("seed job: %v", err)
 	}
-	if err := db.Delivery().InsertDeliveryDestination(&store.DeliveryDestination{
+	if err := db.Delivery().InsertDeliveryDestination(&deliverystore.DeliveryDestination{
 		DestinationID:         destinationID,
 		Provider:              "youtube",
 		ExternalDestinationID: "google-channel-opaque",
@@ -83,7 +84,7 @@ func TestDeliveryRunnerPublishedShortCircuitSkipsGoogleWork(t *testing.T) {
 		now, now); err != nil {
 		t.Fatalf("seed delivery plan: %v", err)
 	}
-	if err := db.Delivery().InsertJobDelivery(&store.JobDelivery{
+	if err := db.Delivery().InsertJobDelivery(&deliverystore.JobDelivery{
 		DeliveryID:     deliveryID,
 		ArtifactID:     artifactID,
 		DestinationID:  destinationID,

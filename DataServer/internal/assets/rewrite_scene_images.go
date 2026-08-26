@@ -3,6 +3,7 @@ package assets
 import (
 	"encoding/json"
 
+	"velox-shared/contract"
 	"velox-shared/payload"
 )
 
@@ -112,8 +113,7 @@ func applySceneImageReferences(payloadMap map[string]interface{}, refs []string)
 		}
 	}
 	if encoded, ok := payloadMap["scenes_json"].(string); ok && encoded != "" {
-		var scenes []map[string]interface{}
-		if json.Unmarshal([]byte(encoded), &scenes) == nil {
+		if scenes, err := contract.ParseSceneMapsJSON([]byte(encoded)); err == nil {
 			for i, scene := range scenes {
 				if i >= len(refs) {
 					break

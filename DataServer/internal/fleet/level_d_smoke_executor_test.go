@@ -60,6 +60,7 @@ import (
 	"testing"
 	"time"
 
+	"velox-server/internal/smokerunstore"
 	"velox-server/internal/store"
 )
 
@@ -212,23 +213,23 @@ func (s stubAsset) ResolveAsset(_ context.Context, _ string) (string, int64, err
 // stubSmokeRuns stores rows in memory.
 type stubSmokeRuns struct {
 	mu       sync.Mutex
-	rows     map[string]store.SmokeRun // by RunID
+	rows     map[string]smokerunstore.SmokeRun // by RunID
 	insertOK bool
 	sucOK    bool
 	failOK   bool
 }
 
 func newStubRuns() *stubSmokeRuns {
-	return &stubSmokeRuns{rows: map[string]store.SmokeRun{}, insertOK: true, sucOK: true, failOK: true}
+	return &stubSmokeRuns{rows: map[string]smokerunstore.SmokeRun{}, insertOK: true, sucOK: true, failOK: true}
 }
 
-func (s *stubSmokeRuns) InsertSmokeRun(_ context.Context, rec store.SmokeRun) error {
+func (s *stubSmokeRuns) InsertSmokeRun(_ context.Context, rec smokerunstore.SmokeRun) error {
 	if !s.insertOK {
 		return errors.New("insert disabled")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rec.Status = store.SmokeStatusPending
+	rec.Status = smokerunstore.SmokeStatusPending
 	s.rows[rec.RunID] = rec
 	return nil
 }
@@ -240,7 +241,7 @@ func (s *stubSmokeRuns) MarkSmokeSucceeded(_ context.Context, runID string, fini
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r := s.rows[runID]
-	r.Status = store.SmokeStatusSucceeded
+	r.Status = smokerunstore.SmokeStatusSucceeded
 	r.ArtifactDriveID = driveID
 	r.FinishedAt = finishedAt
 	r.DurationMs = durationMs
@@ -255,13 +256,13 @@ func (s *stubSmokeRuns) MarkSmokeFailed(_ context.Context, runID string, _ time.
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r := s.rows[runID]
-	r.Status = store.SmokeStatusFailed
+	r.Status = smokerunstore.SmokeStatusFailed
 	r.ErrorMessage = errMsg
 	s.rows[runID] = r
 	return nil
 }
 
-func (s *stubSmokeRuns) GetLatestSmokeForWorker(_ context.Context, workerID string) (*store.SmokeRun, error) {
+func (s *stubSmokeRuns) GetLatestSmokeForWorker(_ context.Context, workerID string) (*smokerunstore.SmokeRun, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, r := range s.rows {
@@ -270,10 +271,10 @@ func (s *stubSmokeRuns) GetLatestSmokeForWorker(_ context.Context, workerID stri
 			return &r, nil
 		}
 	}
-	return nil, store.ErrSmokeRunNotFound
+	return nil, smokerunstore.ErrSmokeRunNotFound
 }
 
-func (s *stubSmokeRuns) ListRecentSmokesForWorker(_ context.Context, _ string, _ int) ([]store.SmokeRun, error) {
+func (s *stubSmokeRuns) ListRecentSmokesForWorker(_ context.Context, _ string, _ int) ([]smokerunstore.SmokeRun, error) {
 	return nil, nil
 }
 
@@ -360,7 +361,7 @@ func TestLevelDSmoke_HappyPath(t *testing.T) {
 		t.Fatalf("want 1 smoke_runs row, got %d", len(runs.rows))
 	}
 	for _, r := range runs.rows {
-		if r.Status != store.SmokeStatusSucceeded {
+		if r.Status != smokerunstore.SmokeStatusSucceeded {
 			t.Errorf("status = %q, want SUCCEEDED", r.Status)
 		}
 		if r.ArtifactDriveID == "" {
@@ -488,7 +489,7 @@ func TestLevelDSmoke_LeaseUnavailable(t *testing.T) {
 		t.Errorf("want 1 smoke_runs row, got %d", len(runs.rows))
 	}
 	for _, r := range runs.rows {
-		if r.Status != store.SmokeStatusFailed {
+		if r.Status != smokerunstore.SmokeStatusFailed {
 			t.Errorf("after lease-unavailable: status = %q, want FAILED", r.Status)
 		}
 	}
@@ -513,7 +514,7 @@ func TestLevelDSmoke_AssetDownloadFail(t *testing.T) {
 		t.Errorf("lease release count = %d, want 1 (acquired before Phase 4 fail)", lease.releaseCount())
 	}
 	for _, r := range runs.rows {
-		if r.Status != store.SmokeStatusFailed {
+		if r.Status != smokerunstore.SmokeStatusFailed {
 			t.Errorf("post-fail status = %q, want FAILED", r.Status)
 		}
 		if !strings.Contains(r.ErrorMessage, "asset_download_failed") {
@@ -531,7 +532,7 @@ func TestLevelDSmoke_FFmpegRenderFail(t *testing.T) {
 		t.Errorf("want ffmpeg_render_failed in err, got %v", err)
 	}
 	for _, r := range runs.rows {
-		if r.Status != store.SmokeStatusFailed {
+		if r.Status != smokerunstore.SmokeStatusFailed {
 			t.Errorf("status = %q, want FAILED", r.Status)
 		}
 	}
@@ -573,7 +574,7 @@ func TestLevelDSmoke_DriveEmptyFileID(t *testing.T) {
 	// proper sentinel so the audit dashboard surfaces it.
 	found := false
 	for _, r := range runs.rows {
-		if r.Status == store.SmokeStatusFailed &&
+		if r.Status == smokerunstore.SmokeStatusFailed &&
 			strings.Contains(r.ErrorMessage, "drive_upload_failed") {
 			found = true
 		}

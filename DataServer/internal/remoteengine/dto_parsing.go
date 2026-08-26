@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"velox-shared/assetref"
 	"velox-shared/contract"
 	"velox-shared/payload"
 )
@@ -179,7 +180,9 @@ func (r *RemotePipelineResult) ToWorkerPayloadChecked() (map[string]interface{},
 			}
 			url := strings.TrimSpace(scene.Clip.URL)
 			if url == "" && strings.TrimSpace(scene.Clip.AssetID) != "" {
-				url = "velox-drive://" + strings.TrimSpace(scene.Clip.AssetID)
+				if ref, err := assetref.NewDeferredDrive(strings.TrimSpace(scene.Clip.AssetID)); err == nil {
+					url = ref.Wire()
+				}
 			}
 			if url == "" {
 				continue

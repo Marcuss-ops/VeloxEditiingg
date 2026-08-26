@@ -19,10 +19,10 @@ import (
 	"github.com/gin-gonic/gin"
 	"net/http"
 	"testing"
+	"velox-server/internal/forwardingcontract"
 	"velox-server/internal/jobs"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/routing"
-	"velox-server/internal/store"
 )
 
 // adminAuthFake short-circuits the bearer-token check the production
@@ -74,7 +74,7 @@ func TestCreatorPushJobsE2E_VoiceoverStockClipScene(t *testing.T) {
 	if forwarding == nil {
 		t.Fatal("creator_forwardings row not persisted (atomic CAS did not write)")
 	}
-	if forwarding.Status != string(store.CFStatusForwarded) {
+	if forwarding.Status != string(forwardingcontract.CFStatusForwarded) {
 		t.Fatalf("forwarding status = %s, want FORWARDED", forwarding.Status)
 	}
 

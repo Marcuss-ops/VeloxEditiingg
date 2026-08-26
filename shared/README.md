@@ -9,7 +9,8 @@ Lo scopo è eliminare la duplicazione di codice tra i due moduli e sincronizzare
 ```
 velox-shared/
 ├── payload/    → Estrazione/normalizzazione valori da mappe JSON-deserializzate
-├── paths/      → Manipolazione path, slug, URL Google Drive
+├── assetref/   → Parsing canonico di asset reference e ID Google Drive
+├── paths/      → Manipolazione path, slug, normalizzazione URL Google Drive
 ├── media/      → Rilevamento metadati multimediali (ffprobe)
 └── contract/   → Tipi contratto Go↔C++ per job video
 ```
@@ -25,7 +26,7 @@ velox-shared/
 ┌─────────────┐   ┌─────────────┐   ┌─────────────┐
 │  contract   │   │    paths    │   │    media    │
 │ Tipi Go↔C++ │   │ Slug, path  │   │ ffprobe     │
-│ Parse/Unmarshal  │ Drive URL   │   │ durata audio│
+│ Parse/Unmarshal  │ URL Drive   │   │ durata audio│
 └─────────────┘   └─────────────┘   └─────────────┘
                                            │
                                            │ (usa exec.Command)
@@ -63,8 +64,11 @@ Funzioni principali:
 | `EnsureRFC3339` | `string, fallback` | `string` | Validazione data RFC3339 |
 | `MapParam` / `SliceParam` | `map, key` | `map/slice` | Estrazione tipizzata |
 
+### `assetref`
+Boundary canonico per il parsing tipizzato delle asset reference e degli ID Google Drive. I consumer devono usare `ParseDriveFileID` per estrarre un ID Drive; non sono ammessi parser locali o string matching equivalente.
+
 ### `paths`
-Utility per path filesystem e URL Google Drive.
+Utility per path filesystem e normalizzazione URL Google Drive.
 
 | Funzione | Descrizione |
 |---|---|
@@ -74,7 +78,6 @@ Utility per path filesystem e URL Google Drive.
 | `VideoNameFromPath` | Nome file senza estensione |
 | `SanitizeDriveFolderName` | Nome cartella Google Drive safe |
 | `NormalizeDriveURL` | URL Drive → download diretto (`/uc?export=download&id=...`) |
-| `ExtractDriveID` | Estrazione file ID da URL Drive |
 
 ### `media`
 Utility per rilevamento metadati multimediali tramite **ffprobe**.
@@ -129,6 +132,7 @@ import (
     "velox-shared/contract"
     "velox-shared/payload"
     "velox-shared/paths"
+    "velox-shared/assetref"
     "velox-shared/media"
 )
 ```

@@ -5,33 +5,33 @@ import (
 	"errors"
 	"strconv"
 	"testing"
+	"velox-server/internal/deliverystore"
 
 	"velox-server/internal/socialclient"
-	"velox-server/internal/store"
 )
 
 type fakeDestinationReader struct {
-	statuses map[string]store.DeliveryDestinationStatus
-	rows     map[string]*store.DeliveryDestination
+	statuses map[string]deliverystore.DeliveryDestinationStatus
+	rows     map[string]*deliverystore.DeliveryDestination
 	err      error
 }
 
-func (f fakeDestinationReader) BatchDeliveryDestinations(_ context.Context, ids []string) (map[string]*store.DeliveryDestination, error) {
+func (f fakeDestinationReader) BatchDeliveryDestinations(_ context.Context, ids []string) (map[string]*deliverystore.DeliveryDestination, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
-	out := make(map[string]*store.DeliveryDestination, len(ids))
+	out := make(map[string]*deliverystore.DeliveryDestination, len(ids))
 	for _, id := range ids {
 		if row := f.rows[id]; row != nil {
 			copy := *row
 			if status, ok := f.statuses[id]; ok {
-				copy.Enabled = status == store.DeliveryDestinationEnabled
+				copy.Enabled = status == deliverystore.DeliveryDestinationEnabled
 			}
 			out[id] = &copy
 			continue
 		}
-		if status, ok := f.statuses[id]; ok && status == store.DeliveryDestinationDisabled {
-			out[id] = &store.DeliveryDestination{DestinationID: id, Enabled: false}
+		if status, ok := f.statuses[id]; ok && status == deliverystore.DeliveryDestinationDisabled {
+			out[id] = &deliverystore.DeliveryDestination{DestinationID: id, Enabled: false}
 		}
 	}
 	return out, nil
@@ -209,8 +209,8 @@ func TestResolveSelectionValidatesLocalDestinationAndDeduplicates(t *testing.T) 
 		t.Fatal(err)
 	}
 	reader := fakeDestinationReader{
-		statuses: map[string]store.DeliveryDestinationStatus{DestinationIDForExternal("ext-a"): store.DeliveryDestinationEnabled},
-		rows: map[string]*store.DeliveryDestination{DestinationIDForExternal("ext-a"): {
+		statuses: map[string]deliverystore.DeliveryDestinationStatus{DestinationIDForExternal("ext-a"): deliverystore.DeliveryDestinationEnabled},
+		rows: map[string]*deliverystore.DeliveryDestination{DestinationIDForExternal("ext-a"): {
 			DestinationID:         DestinationIDForExternal("ext-a"),
 			Provider:              ProviderSocialGateway,
 			ExternalDestinationID: "ext-a",
@@ -243,8 +243,8 @@ func TestResolveSelectionRejectsDestinationAndGroupFailures(t *testing.T) {
 		t.Fatal(err)
 	}
 	resolver := NewTargetResolver(nil, fakeDestinationReader{
-		statuses: map[string]store.DeliveryDestinationStatus{DestinationIDForExternal("ext-a"): store.DeliveryDestinationDisabled},
-		rows:     map[string]*store.DeliveryDestination{},
+		statuses: map[string]deliverystore.DeliveryDestinationStatus{DestinationIDForExternal("ext-a"): deliverystore.DeliveryDestinationDisabled},
+		rows:     map[string]*deliverystore.DeliveryDestination{},
 	})
 	_, err = resolver.ResolveSelection(context.Background(), SelectionRequest{
 		CatalogRequest: CatalogRequest{WorkspaceID: 42, Platform: "youtube"},
@@ -276,11 +276,11 @@ func TestResolveSelectionRejectsGroupWhenAnyMemberIsMissingLocally(t *testing.T)
 
 	memberExternal := group.Members[0].ExternalDestinationID
 	reader := fakeDestinationReader{
-		statuses: map[string]store.DeliveryDestinationStatus{
-			DestinationIDForExternal(memberExternal): store.DeliveryDestinationEnabled,
+		statuses: map[string]deliverystore.DeliveryDestinationStatus{
+			DestinationIDForExternal(memberExternal): deliverystore.DeliveryDestinationEnabled,
 			// Members 2 and 3 are intentionally absent: group resolution is all-or-nothing.
 		},
-		rows: map[string]*store.DeliveryDestination{
+		rows: map[string]*deliverystore.DeliveryDestination{
 			DestinationIDForExternal(memberExternal): {
 				DestinationID:         DestinationIDForExternal(memberExternal),
 				Provider:              ProviderSocialGateway,
@@ -308,12 +308,12 @@ func TestResolveSelectionAcceptsGroupWhenAllMembersAreLocallyEnabled(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	statuses := make(map[string]store.DeliveryDestinationStatus, len(group.Members))
-	rows := make(map[string]*store.DeliveryDestination, len(group.Members))
+	statuses := make(map[string]deliverystore.DeliveryDestinationStatus, len(group.Members))
+	rows := make(map[string]*deliverystore.DeliveryDestination, len(group.Members))
 	for _, member := range group.Members {
 		id := DestinationIDForExternal(member.ExternalDestinationID)
-		statuses[id] = store.DeliveryDestinationEnabled
-		rows[id] = &store.DeliveryDestination{
+		statuses[id] = deliverystore.DeliveryDestinationEnabled
+		rows[id] = &deliverystore.DeliveryDestination{
 			DestinationID:         id,
 			Provider:              ProviderSocialGateway,
 			ExternalDestinationID: member.ExternalDestinationID,

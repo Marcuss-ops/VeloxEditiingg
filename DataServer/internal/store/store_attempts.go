@@ -1,5 +1,10 @@
 package store
 
+// COMPATIBILITY:
+// Owner:        P0.4 store-facade migration
+// Remove after: 2026-09-30
+// Read-only:    yes — Artifact is a repository contract alias; attempt read behavior remains here.
+
 import (
 	"context"
 	"database/sql"

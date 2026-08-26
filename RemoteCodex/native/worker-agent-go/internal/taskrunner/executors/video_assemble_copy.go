@@ -61,7 +61,7 @@ func (e *videoAssembleCopyExecutor) Validate(spec executor.TaskSpec) error {
 	if spec.Payload == nil {
 		return errors.New("video.assemble.copy.v1: payload is required")
 	}
-	if err := contract.ValidateCompiledRenderPlanV2Payload(spec.Payload); err != nil {
+	if _, err := contract.DecodeCompiledRenderPlanV2Payload(spec.Payload); err != nil {
 		return fmt.Errorf("video.assemble.copy.v1: invalid CompiledRenderPlanV2: %w", err)
 	}
 	plan, err := decodeRenderPlanV2(spec)

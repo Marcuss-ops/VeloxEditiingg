@@ -1,5 +1,5 @@
 // Package artifacts / retry.go — idempotent quarantine orchestration.
-// SQL persistence is owned by internal/store.
+// SQL persistence is owned by internal/artifactsstore.
 package artifacts
 
 import (
@@ -7,7 +7,7 @@ import (
 	"errors"
 	"fmt"
 
-	"velox-server/internal/store"
+	"velox-server/internal/artifactsstore"
 )
 
 // ErrArtifactAlreadyQuarantined is returned when a concurrent reconciler
@@ -24,7 +24,7 @@ func (r *Reconciler) quarantineArtifactTx(ctx context.Context, artifactID, reaso
 		return fmt.Errorf("reconciler: quarantineArtifactTx: empty artifactID")
 	}
 	if err := r.artifactRepo.QuarantineReadyArtifact(ctx, artifactID, reason, r.clock.Now()); err != nil {
-		if errors.Is(err, store.ErrArtifactAlreadyQuarantined) {
+		if errors.Is(err, artifactsstore.ErrArtifactAlreadyQuarantined) {
 			return ErrArtifactAlreadyQuarantined
 		}
 		return err

@@ -39,7 +39,7 @@ func (f FenceTuple) Validate() error {
 func (f FenceTuple) Equal(g FenceTuple) bool { return f == g }
 
 // SQLWhere/SQLArgs are retained as pure predicate data for tests and
-// diagnostics; production persistence uses store.CompletionFence directly.
+// diagnostics; production persistence uses repository.CompletionFence directly.
 func (f FenceTuple) SQLWhere() string {
 	return "task_id = ? AND attempt_id = ? AND worker_id = ? AND lease_id = ? AND task_revision = ?"
 }

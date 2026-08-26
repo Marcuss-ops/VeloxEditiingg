@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"velox-server/internal/inputsecurity"
+
+	"velox-shared/assetref"
 )
 
 // Source is what a resolver returns: a reader plus metadata.
@@ -167,7 +169,15 @@ func extractScheme(reference string) string {
 
 // inferScheme classifies a reference by format when no explicit scheme is present.
 func inferScheme(reference string) string {
-	lower := strings.ToLower(strings.TrimSpace(reference))
+	trimmed := strings.TrimSpace(reference)
+	if parsed, err := assetref.ParseCanonicalWire(trimmed); err == nil {
+		if parsed.Kind() == assetref.RefKindDeferredDrive {
+			return assetref.SchemeVeloxDrive
+		}
+		return assetref.SchemeVeloxAsset
+	}
+
+	lower := strings.ToLower(trimmed)
 	switch {
 	case strings.HasPrefix(lower, "https://"):
 		if looksLikeDriveURL(reference) {
@@ -176,8 +186,6 @@ func inferScheme(reference string) string {
 		return "https"
 	case strings.HasPrefix(lower, "http://"):
 		return "http"
-	case strings.HasPrefix(lower, "velox-asset://"):
-		return "velox-asset"
 	case strings.HasPrefix(lower, "file://"):
 		return "file"
 	default:

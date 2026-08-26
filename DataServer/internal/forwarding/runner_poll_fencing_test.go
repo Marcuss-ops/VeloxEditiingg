@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"velox-server/internal/forwardingcontract"
 	"velox-server/internal/remoteengine"
-	"velox-server/internal/store"
 	"velox-server/internal/supervisor"
 )
 
@@ -98,4 +98,4 @@ func TestProcessLease_StalePollStopsWithoutRetryOrTransition(t *testing.T) {
 
 // Keep the store import tied to the forwarding lease contract in this test
 // file; it also documents that the test exercises the typed claim result.
-var _ store.CreatorForwardingLease
+var _ forwardingcontract.CreatorForwardingLease

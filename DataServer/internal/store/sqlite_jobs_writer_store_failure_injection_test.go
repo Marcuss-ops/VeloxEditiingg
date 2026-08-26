@@ -13,6 +13,8 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+
+	"velox-server/internal/jobs"
 )
 
 // closeSchedule is encoded as the relative timing of db.Close vs the
@@ -179,8 +181,8 @@ func runCloseTrial(t *testing.T, dbPath string, closeAt int64) (status string, r
 			defer wg.Done()
 			transErr = repo.Transition(ctx, TransitionParams{
 				JobID:          "job-fail",
-				ExpectedStatus: JobStatusPending,
-				NewStatus:      JobStatusRunning,
+				ExpectedStatus: jobs.StatusPending,
+				NewStatus:      jobs.StatusRunning,
 				Revision:       0,
 			})
 		}()
@@ -193,8 +195,8 @@ func runCloseTrial(t *testing.T, dbPath string, closeAt int64) (status string, r
 			defer wg.Done()
 			transErr = repo.Transition(ctx, TransitionParams{
 				JobID:          "job-fail",
-				ExpectedStatus: JobStatusPending,
-				NewStatus:      JobStatusRunning,
+				ExpectedStatus: jobs.StatusPending,
+				NewStatus:      jobs.StatusRunning,
 				Revision:       0,
 			})
 		}()
@@ -210,8 +212,8 @@ func runCloseTrial(t *testing.T, dbPath string, closeAt int64) (status string, r
 			defer wg.Done()
 			transErr = repo.Transition(ctx, TransitionParams{
 				JobID:          "job-fail",
-				ExpectedStatus: JobStatusPending,
-				NewStatus:      JobStatusRunning,
+				ExpectedStatus: jobs.StatusPending,
+				NewStatus:      jobs.StatusRunning,
 				Revision:       0,
 			})
 		}()

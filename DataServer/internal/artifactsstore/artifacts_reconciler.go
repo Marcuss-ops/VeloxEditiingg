@@ -1,4 +1,4 @@
-package store
+package artifactsstore
 
 import (
 	"context"
@@ -7,11 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"velox-server/internal/storecore"
 )
 
 // ErrArtifactAlreadyQuarantined indicates that a concurrent reconciler or
 // foreground transition already moved the artifact out of READY.
-var ErrArtifactAlreadyQuarantined = errors.New("store: artifact already quarantined")
+var ErrArtifactAlreadyQuarantined = errors.New("artifactsstore: artifact already quarantined")
 
 // ReadyArtifact is the persistence projection used by the artifact reconciler
 // to compare durable READY rows with final blobs on disk.
@@ -31,19 +33,9 @@ type ArtifactReconcilerRepository struct {
 
 func NewArtifactReconcilerRepository(db *sql.DB) *ArtifactReconcilerRepository {
 	if db == nil {
-		panic("store: NewArtifactReconcilerRepository requires a non-nil database")
+		panic("artifactsstore: NewArtifactReconcilerRepository requires a non-nil database")
 	}
 	return &ArtifactReconcilerRepository{db: db, gcStore: NewArtifactGCStore(db)}
-}
-
-// NewArtifactReconcilerRepositoryFromStore binds artifact cleanup queries to
-// the canonical SQLiteStore. The reconciler receives domain-shaped methods,
-// never a raw database handle.
-func NewArtifactReconcilerRepositoryFromStore(s *SQLiteStore) *ArtifactReconcilerRepository {
-	if s == nil || s.db == nil {
-		panic("store: NewArtifactReconcilerRepositoryFromStore requires a non-nil SQLiteStore")
-	}
-	return &ArtifactReconcilerRepository{db: s.db, gcStore: NewArtifactGCStore(s.db)}
 }
 
 // GCStore returns the typed artifact-GC gateway backed by the same database.
@@ -58,7 +50,7 @@ func (r *ArtifactReconcilerRepository) ListReadyArtifacts(ctx context.Context) (
 		  AND storage_key <> ''
 		  AND verified_at IS NOT NULL AND verified_at <> ''`)
 	if err != nil {
-		return nil, fmt.Errorf("store: list ready artifacts: %w", err)
+		return nil, fmt.Errorf("artifactsstore: list ready artifacts: %w", err)
 	}
 	defer rows.Close()
 
@@ -66,20 +58,20 @@ func (r *ArtifactReconcilerRepository) ListReadyArtifacts(ctx context.Context) (
 	for rows.Next() {
 		var key, id, verified string
 		if err := rows.Scan(&key, &id, &verified); err != nil {
-			return nil, fmt.Errorf("store: list ready artifacts scan: %w", err)
+			return nil, fmt.Errorf("artifactsstore: list ready artifacts scan: %w", err)
 		}
 		var verifiedAt time.Time
 		if verified != "" {
 			parsed, err := time.Parse(time.RFC3339, verified)
 			if err != nil {
-				return nil, fmt.Errorf("store: list ready artifacts parse verified_at: %w", err)
+				return nil, fmt.Errorf("artifactsstore: list ready artifacts parse verified_at: %w", err)
 			}
 			verifiedAt = parsed
 		}
 		out[key] = ReadyArtifact{ArtifactID: id, StorageKey: key, VerifiedAt: verifiedAt}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: list ready artifacts rows: %w", err)
+		return nil, fmt.Errorf("artifactsstore: list ready artifacts rows: %w", err)
 	}
 	return out, nil
 }
@@ -96,19 +88,19 @@ func (r *ArtifactReconcilerRepository) ListStuckArtifacts(ctx context.Context, o
 		ORDER BY created_at ASC
 		LIMIT ?`, olderThan.UTC().Format(time.RFC3339), limit)
 	if err != nil {
-		return nil, fmt.Errorf("store: list stuck artifacts: %w", err)
+		return nil, fmt.Errorf("artifactsstore: list stuck artifacts: %w", err)
 	}
 	defer rows.Close()
 	var ids []string
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("store: list stuck artifacts scan: %w", err)
+			return nil, fmt.Errorf("artifactsstore: list stuck artifacts scan: %w", err)
 		}
 		ids = append(ids, id)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: list stuck artifacts rows: %w", err)
+		return nil, fmt.Errorf("artifactsstore: list stuck artifacts rows: %w", err)
 	}
 	return ids, nil
 }
@@ -122,9 +114,9 @@ func (r *ArtifactReconcilerRepository) MarkStuckArtifactFailed(ctx context.Conte
 		UPDATE artifacts SET status = 'FAILED'
 		WHERE id = ? AND status = 'STAGING'`, artifactID)
 	if err != nil {
-		return false, fmt.Errorf("store: mark stuck artifact failed: %w", err)
+		return false, fmt.Errorf("artifactsstore: mark stuck artifact failed: %w", err)
 	}
-	n, err := readRowsAffected(res, "mark stuck artifact failed")
+	n, err := storecore.ReadRowsAffected(res, "mark stuck artifact failed")
 	if err != nil {
 		return false, err
 	}
@@ -138,7 +130,7 @@ func (r *ArtifactReconcilerRepository) MarkStuckArtifactFailed(ctx context.Conte
 func (r *ArtifactReconcilerRepository) QuarantineReadyArtifact(ctx context.Context, artifactID, reason string, now time.Time) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("store: quarantine begin: %w", err)
+		return fmt.Errorf("artifactsstore: quarantine begin: %w", err)
 	}
 	defer tx.Rollback()
 
@@ -146,9 +138,9 @@ func (r *ArtifactReconcilerRepository) QuarantineReadyArtifact(ctx context.Conte
 		UPDATE artifacts SET status = 'QUARANTINED'
 		WHERE id = ? AND status = 'READY'`, artifactID)
 	if err != nil {
-		return fmt.Errorf("store: quarantine update: %w", err)
+		return fmt.Errorf("artifactsstore: quarantine update: %w", err)
 	}
-	n, err := readRowsAffected(res, "quarantine ready artifact")
+	n, err := storecore.ReadRowsAffected(res, "quarantine ready artifact")
 	if err != nil {
 		return err
 	}
@@ -162,7 +154,7 @@ func (r *ArtifactReconcilerRepository) QuarantineReadyArtifact(ctx context.Conte
 		"detected_at": now.UTC().Format(time.RFC3339),
 	})
 	if err != nil {
-		return fmt.Errorf("store: quarantine payload: %w", err)
+		return fmt.Errorf("artifactsstore: quarantine payload: %w", err)
 	}
 	nowStr := now.UTC().Format(time.RFC3339)
 	if _, err := tx.ExecContext(ctx, `
@@ -170,10 +162,10 @@ func (r *ArtifactReconcilerRepository) QuarantineReadyArtifact(ctx context.Conte
 			(aggregate_type, aggregate_id, event_type, payload_json, status, available_at, created_at)
 		VALUES ('artifact', ?, 'ARTIFACT_QUARANTINED', ?, 'PENDING', ?, ?)`,
 		artifactID, payload, nowStr, nowStr); err != nil {
-		return fmt.Errorf("store: quarantine outbox insert: %w", err)
+		return fmt.Errorf("artifactsstore: quarantine outbox insert: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("store: quarantine commit: %w", err)
+		return fmt.Errorf("artifactsstore: quarantine commit: %w", err)
 	}
 	return nil
 }

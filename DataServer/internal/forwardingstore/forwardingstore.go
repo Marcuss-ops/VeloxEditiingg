@@ -20,6 +20,16 @@ import (
 	"velox-server/internal/taskgraph"
 )
 
+// Forwarding persistence errors are exposed at the same boundary as the
+// SQLiteForwardingStore so callers do not need to import the lower-level
+// storecore package merely to classify a forwarding lookup or CAS result.
+var (
+	ErrCreatorForwardingNoRow             = storecore.ErrCreatorForwardingNoRow
+	ErrCreatorForwardingOwnershipConflict = storecore.ErrCreatorForwardingOwnershipConflict
+	ErrTransitionConflict                 = storecore.ErrTransitionConflict
+	ErrLeaseLost                          = storecore.ErrLeaseLost
+)
+
 // JobTaskTxCreator is the cross-domain injection point for the atomic
 // forwarding transaction. AtomicForwardAndEnqueue must create the Job+Task+
 // TaskSpec rows inside the SAME transaction as the forwarding CAS, so this

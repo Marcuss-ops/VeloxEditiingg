@@ -1,10 +1,10 @@
-// Package store / artifact_uploads_sessions.go
+// Package artifactsstore / artifact_uploads_sessions.go
 //
 // Per-session CRUD over artifact_uploads rows: lookup, status updates,
 // CAS transitions, deletion, and the reconciler/worker-bridge queries.
 // All methods share the upload_id primary key and are part of the
 // UploadRepository contract (see artifact_uploads.go).
-package store
+package artifactsstore
 
 import (
 	"context"
@@ -19,7 +19,7 @@ import (
 // GetUploadSession returns a session by ID, or (nil, nil) when missing.
 func (r *SQLiteUploadRepository) GetUploadSession(ctx context.Context, uploadID string) (*UploadSession, error) {
 	if uploadID == "" {
-		return nil, fmt.Errorf("store: GetUploadSession: empty uploadID")
+		return nil, fmt.Errorf("artifactsstore: GetUploadSession: empty uploadID")
 	}
 	row := r.db.QueryRowContext(ctx, `
 		SELECT upload_id, artifact_id, job_id, attempt_number, worker_id, lease_id,
@@ -44,17 +44,17 @@ func (r *SQLiteUploadRepository) GetUploadSession(ctx context.Context, uploadID 
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("store: GetUploadSession: %w", err)
+		return nil, fmt.Errorf("artifactsstore: GetUploadSession: %w", err)
 	}
 	if err := parseTimeRFC3339(&s.CreatedAt, createdAt); err != nil {
-		return nil, fmt.Errorf("store: GetUploadSession: invalid created_at: %w", err)
+		return nil, fmt.Errorf("artifactsstore: GetUploadSession: invalid created_at: %w", err)
 	}
 	if err := parseTimeRFC3339(&s.ExpiresAt, expiresAt); err != nil {
-		return nil, fmt.Errorf("store: GetUploadSession: invalid expires_at: %w", err)
+		return nil, fmt.Errorf("artifactsstore: GetUploadSession: invalid expires_at: %w", err)
 	}
 	if completedAt.Valid {
 		if err := parseTimeRFC3339(&s.CompletedAt, completedAt.String); err != nil {
-			return nil, fmt.Errorf("store: GetUploadSession: invalid completed_at: %w", err)
+			return nil, fmt.Errorf("artifactsstore: GetUploadSession: invalid completed_at: %w", err)
 		}
 	}
 	return &s, nil
@@ -65,20 +65,20 @@ func (r *SQLiteUploadRepository) GetUploadSession(ctx context.Context, uploadID 
 // ErrUploadStateInvalid wraps the actual affected count.
 func (r *SQLiteUploadRepository) UpdateUploadStatus(ctx context.Context, uploadID string, fields UploadFields) error {
 	if uploadID == "" {
-		return fmt.Errorf("store: UpdateUploadStatus: empty uploadID")
+		return fmt.Errorf("artifactsstore: UpdateUploadStatus: empty uploadID")
 	}
 	if fields.Status == nil {
-		return fmt.Errorf("store: UpdateUploadStatus: status is required")
+		return fmt.Errorf("artifactsstore: UpdateUploadStatus: status is required")
 	}
 	var currentStatus string
 	if err := r.db.QueryRowContext(ctx, `SELECT status FROM artifact_uploads WHERE upload_id = ?`, uploadID).Scan(&currentStatus); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("%w: upload=%s", ErrUploadStateInvalid, uploadID)
 		}
-		return fmt.Errorf("store: UpdateUploadStatus: read current status: %w", err)
+		return fmt.Errorf("artifactsstore: UpdateUploadStatus: read current status: %w", err)
 	}
 	if err := statemachine.DefaultRegistry().Validate(statemachine.DomainArtifactUpload, currentStatus, *fields.Status, ""); err != nil {
-		return fmt.Errorf("store: UpdateUploadStatus: %w", err)
+		return fmt.Errorf("artifactsstore: UpdateUploadStatus: %w", err)
 	}
 	res, err := r.db.ExecContext(ctx, `
 		UPDATE artifact_uploads
@@ -94,7 +94,7 @@ func (r *SQLiteUploadRepository) UpdateUploadStatus(ctx context.Context, uploadI
 		uploadID,
 	)
 	if err != nil {
-		return fmt.Errorf("store: UpdateUploadStatus: %w", err)
+		return fmt.Errorf("artifactsstore: UpdateUploadStatus: %w", err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
@@ -113,16 +113,16 @@ func (r *SQLiteUploadRepository) UpdateUploadStatus(ctx context.Context, uploadI
 // finalize callers at the SQL layer.
 func (r *SQLiteUploadRepository) TransitionUploadStatus(ctx context.Context, uploadID, from, to string) error {
 	if err := statemachine.DefaultRegistry().Validate(statemachine.DomainArtifactUpload, from, to, ""); err != nil {
-		return fmt.Errorf("store: TransitionUploadStatus: %w", err)
+		return fmt.Errorf("artifactsstore: TransitionUploadStatus: %w", err)
 	}
 	if uploadID == "" || from == "" || to == "" {
-		return fmt.Errorf("store: TransitionUploadStatus: missing required arg")
+		return fmt.Errorf("artifactsstore: TransitionUploadStatus: missing required arg")
 	}
 	res, err := r.db.ExecContext(ctx,
 		`UPDATE artifact_uploads SET status = ? WHERE upload_id = ? AND status = ?`,
 		to, uploadID, from)
 	if err != nil {
-		return fmt.Errorf("store: TransitionUploadStatus: %w", err)
+		return fmt.Errorf("artifactsstore: TransitionUploadStatus: %w", err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
@@ -139,11 +139,11 @@ func (r *SQLiteUploadRepository) TransitionUploadStatus(ctx context.Context, upl
 // after EXPIRED cleanup or after COMPLETED retention window.
 func (r *SQLiteUploadRepository) DeleteUploadSession(ctx context.Context, uploadID string) error {
 	if uploadID == "" {
-		return fmt.Errorf("store: DeleteUploadSession: empty uploadID")
+		return fmt.Errorf("artifactsstore: DeleteUploadSession: empty uploadID")
 	}
 	if _, err := r.db.ExecContext(ctx,
 		`DELETE FROM artifact_uploads WHERE upload_id = ?`, uploadID); err != nil {
-		return fmt.Errorf("store: DeleteUploadSession: %w", err)
+		return fmt.Errorf("artifactsstore: DeleteUploadSession: %w", err)
 	}
 	return nil
 }
@@ -170,7 +170,7 @@ func (r *SQLiteUploadRepository) FindStuckStaging(ctx context.Context, olderThan
 		ORDER BY created_at ASC
 		LIMIT ?`, olderThan.UTC().Format(time.RFC3339), limit)
 	if err != nil {
-		return nil, fmt.Errorf("store: FindStuckStaging: %w", err)
+		return nil, fmt.Errorf("artifactsstore: FindStuckStaging: %w", err)
 	}
 	defer rows.Close()
 
@@ -187,23 +187,23 @@ func (r *SQLiteUploadRepository) FindStuckStaging(ctx context.Context, olderThan
 			&s.ExpectedRevision,
 			&createdAt, &expiresAt, &completedAt,
 		); err != nil {
-			return nil, fmt.Errorf("store: FindStuckStaging scan: %w", err)
+			return nil, fmt.Errorf("artifactsstore: FindStuckStaging scan: %w", err)
 		}
 		if err := parseTimeRFC3339(&s.CreatedAt, createdAt); err != nil {
-			return nil, fmt.Errorf("store: FindStuckStaging: invalid created_at: %w", err)
+			return nil, fmt.Errorf("artifactsstore: FindStuckStaging: invalid created_at: %w", err)
 		}
 		if err := parseTimeRFC3339(&s.ExpiresAt, expiresAt); err != nil {
-			return nil, fmt.Errorf("store: FindStuckStaging: invalid expires_at: %w", err)
+			return nil, fmt.Errorf("artifactsstore: FindStuckStaging: invalid expires_at: %w", err)
 		}
 		if completedAt.Valid {
 			if err := parseTimeRFC3339(&s.CompletedAt, completedAt.String); err != nil {
-				return nil, fmt.Errorf("store: FindStuckStaging: invalid completed_at: %w", err)
+				return nil, fmt.Errorf("artifactsstore: FindStuckStaging: invalid completed_at: %w", err)
 			}
 		}
 		out = append(out, s)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: FindStuckStaging rows: %w", err)
+		return nil, fmt.Errorf("artifactsstore: FindStuckStaging rows: %w", err)
 	}
 	return out, nil
 }
@@ -214,7 +214,7 @@ func (r *SQLiteUploadRepository) FindStuckStaging(ctx context.Context, olderThan
 // (which use upload_id as primary key).
 func (r *SQLiteUploadRepository) GetActiveUploadByJob(ctx context.Context, jobID string) (*UploadSession, error) {
 	if jobID == "" {
-		return nil, fmt.Errorf("store: GetActiveUploadByJob: empty jobID")
+		return nil, fmt.Errorf("artifactsstore: GetActiveUploadByJob: empty jobID")
 	}
 	row := r.db.QueryRowContext(ctx, `
 		SELECT upload_id, artifact_id, job_id, attempt_number, worker_id, lease_id,
@@ -241,17 +241,17 @@ func (r *SQLiteUploadRepository) GetActiveUploadByJob(ctx context.Context, jobID
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("store: GetActiveUploadByJob: %w", err)
+		return nil, fmt.Errorf("artifactsstore: GetActiveUploadByJob: %w", err)
 	}
 	if err := parseTimeRFC3339(&s.CreatedAt, createdAt); err != nil {
-		return nil, fmt.Errorf("store: GetActiveUploadByJob: invalid created_at: %w", err)
+		return nil, fmt.Errorf("artifactsstore: GetActiveUploadByJob: invalid created_at: %w", err)
 	}
 	if err := parseTimeRFC3339(&s.ExpiresAt, expiresAt); err != nil {
-		return nil, fmt.Errorf("store: GetActiveUploadByJob: invalid expires_at: %w", err)
+		return nil, fmt.Errorf("artifactsstore: GetActiveUploadByJob: invalid expires_at: %w", err)
 	}
 	if completedAt.Valid {
 		if err := parseTimeRFC3339(&s.CompletedAt, completedAt.String); err != nil {
-			return nil, fmt.Errorf("store: GetActiveUploadByJob: invalid completed_at: %w", err)
+			return nil, fmt.Errorf("artifactsstore: GetActiveUploadByJob: invalid completed_at: %w", err)
 		}
 	}
 	return &s, nil

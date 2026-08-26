@@ -7,17 +7,19 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
+	"velox-server/internal/artifactsstore"
+	"velox-server/internal/repository"
 	"velox-server/internal/store"
 )
 
 // ArtifactRepositoryFactory wires a fresh backend (DB, pool) and returns the
 // narrow ArtifactRepository contract plus a cleanup func. Per spec §5,
 // every backend must satisfy the same contract.
-type ArtifactRepositoryFactory func(t *testing.T) (store.ArtifactRepository, func())
+type ArtifactRepositoryFactory func(t *testing.T) (repository.ArtifactRepository, func())
 
 // NewSQLiteArtifactRepositoryFactory returns a factory backed by migrations +
 // SQLiteStore, with a fresh in-test DB for each call.
-func NewSQLiteArtifactRepositoryFactory(t *testing.T) (store.ArtifactRepository, func()) {
+func NewSQLiteArtifactRepositoryFactory(t *testing.T) (repository.ArtifactRepository, func()) {
 	t.Helper()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "contract_artifacts.db")
@@ -26,7 +28,7 @@ func NewSQLiteArtifactRepositoryFactory(t *testing.T) (store.ArtifactRepository,
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
 	cleanup := func() { _ = sqliteStore.Close() }
-	return store.NewSQLiteArtifactRepository(sqliteStore), cleanup
+	return artifactsstore.NewSQLiteArtifactRepository(sqliteStore.DB()), cleanup
 }
 
 // ArtifactRepositoryContract runs the cross-backend test suite for artifacts.
@@ -38,7 +40,7 @@ func ArtifactRepositoryContract(t *testing.T, factory ArtifactRepositoryFactory)
 		defer cleanup()
 		ctx := context.Background()
 		id := "art_test_" + randSuffix()
-		err := repo.Insert(ctx, &store.Artifact{
+		err := repo.Insert(ctx, &repository.Artifact{
 			ID:              id,
 			JobID:           "job_test",
 			Type:            "video",
@@ -81,7 +83,7 @@ func ArtifactRepositoryContract(t *testing.T, factory ArtifactRepositoryFactory)
 		ctx := context.Background()
 		jobID := "job_listtest"
 		for _, sha := range []string{"a", "b", "c"} {
-			if err := repo.Insert(ctx, &store.Artifact{
+			if err := repo.Insert(ctx, &repository.Artifact{
 				ID: "art_" + sha, JobID: jobID, Type: "video",
 				StorageProvider: "local", SHA256: sha, SizeBytes: 1,
 			}); err != nil {

@@ -48,6 +48,7 @@ import (
 	"strings"
 	"time"
 
+	"velox-server/internal/smokerunstore"
 	"velox-server/internal/store"
 )
 
@@ -159,13 +160,13 @@ func (e *LevelDSmokeExecutor) Execute(ctx context.Context, op *store.Operation) 
 	runStart := e.backend.Now()
 	runID := fmt.Sprintf("smoke-%s-%d", op.WorkerID, runStart.UnixNano())
 	insertCtx, cancel := context.WithTimeout(ctx, timeoutSmokeInsert)
-	err = e.backend.SmokeRuns.InsertSmokeRun(insertCtx, store.SmokeRun{
+	err = e.backend.SmokeRuns.InsertSmokeRun(insertCtx, smokerunstore.SmokeRun{
 		RunID:       runID,
 		WorkerID:    op.WorkerID,
 		StartedAt:   runStart,
 		FinishedAt:  runStart, // overwritten on terminal transition
 		AssetID:     payload.AssetID,
-		Status:      store.SmokeStatusPending,
+		Status:      smokerunstore.SmokeStatusPending,
 		RequestedBy: op.RequestedBy,
 	})
 	cancel()

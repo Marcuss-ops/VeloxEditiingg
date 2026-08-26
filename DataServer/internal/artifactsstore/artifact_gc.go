@@ -1,10 +1,12 @@
-package store
+package artifactsstore
 
 import (
 	"context"
 	"database/sql"
 	"fmt"
 	"time"
+
+	"velox-server/internal/storecore"
 )
 
 const (
@@ -35,38 +37,23 @@ type ArtifactGCCandidate struct {
 // shared database handle but not the full SQLiteStore lifecycle.
 type ArtifactGCStore struct{ db *sql.DB }
 
-func NewArtifactGCStore(db *sql.DB) *ArtifactGCStore { return &ArtifactGCStore{db: db} }
-
-// NewArtifactGCStoreFromStore binds artifact GC operations to the canonical
-// SQLiteStore. The raw constructor remains for compatibility and isolated
-// repository tests.
-func NewArtifactGCStoreFromStore(s *SQLiteStore) *ArtifactGCStore {
-	if s == nil || s.db == nil {
-		panic("store: NewArtifactGCStoreFromStore requires a non-nil SQLiteStore")
+func NewArtifactGCStore(db *sql.DB) *ArtifactGCStore {
+	if db == nil {
+		panic("artifactsstore: NewArtifactGCStore requires a non-nil database")
 	}
-	return &ArtifactGCStore{db: s.db}
-}
-
-func (g *ArtifactGCStore) EnqueueArtifactGCCandidate(ctx context.Context, artifactID, reason string, eligibleAt time.Time) error {
-	return (&SQLiteStore{db: g.db}).EnqueueArtifactGCCandidate(ctx, artifactID, reason, eligibleAt)
-}
-func (g *ArtifactGCStore) LeaseArtifactGCCandidates(ctx context.Context, owner string, now time.Time, lease time.Duration, limit int) ([]ArtifactGCCandidate, error) {
-	return (&SQLiteStore{db: g.db}).LeaseArtifactGCCandidates(ctx, owner, now, lease, limit)
-}
-func (g *ArtifactGCStore) CompleteArtifactGC(ctx context.Context, artifactID, owner string, deleted bool, deleteErr string) error {
-	return (&SQLiteStore{db: g.db}).CompleteArtifactGC(ctx, artifactID, owner, deleted, deleteErr)
+	return &ArtifactGCStore{db: db}
 }
 
 // EnqueueArtifactGCCandidate marks an artifact eligible without deleting it.
 // Repeated enqueue calls are harmless and never resurrect a completed delete.
-func (s *SQLiteStore) EnqueueArtifactGCCandidate(ctx context.Context, artifactID, reason string, eligibleAt time.Time) error {
+func (g *ArtifactGCStore) EnqueueArtifactGCCandidate(ctx context.Context, artifactID, reason string, eligibleAt time.Time) error {
 	if artifactID == "" || reason == "" {
 		return fmt.Errorf("artifact gc: artifact_id and reason are required")
 	}
 	if eligibleAt.IsZero() {
 		eligibleAt = time.Now().UTC()
 	}
-	_, err := s.db.ExecContext(ctx, `
+	_, err := g.db.ExecContext(ctx, `
 		INSERT INTO artifact_gc_candidates (artifact_id, reason, eligible_at, status)
 		VALUES (?, ?, ?, 'ELIGIBLE')
 		ON CONFLICT(artifact_id) DO UPDATE SET
@@ -82,7 +69,7 @@ func (s *SQLiteStore) EnqueueArtifactGCCandidate(ctx context.Context, artifactID
 }
 
 // LeaseArtifactGCCandidates claims rows so only one worker removes a file.
-func (s *SQLiteStore) LeaseArtifactGCCandidates(ctx context.Context, owner string, now time.Time, lease time.Duration, limit int) ([]ArtifactGCCandidate, error) {
+func (g *ArtifactGCStore) LeaseArtifactGCCandidates(ctx context.Context, owner string, now time.Time, lease time.Duration, limit int) ([]ArtifactGCCandidate, error) {
 	if owner == "" {
 		return nil, fmt.Errorf("artifact gc: lease owner is required")
 	}
@@ -92,7 +79,7 @@ func (s *SQLiteStore) LeaseArtifactGCCandidates(ctx context.Context, owner strin
 	if limit <= 0 {
 		limit = 100
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := g.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("artifact gc lease begin: %w", err)
 	}
@@ -134,7 +121,7 @@ func (s *SQLiteStore) LeaseArtifactGCCandidates(ctx context.Context, owner strin
 			rows.Close()
 			return nil, fmt.Errorf("artifact gc lease update: %w", err)
 		}
-		n, err := readRowsAffected(res, "artifact gc lease")
+		n, err := storecore.ReadRowsAffected(res, "artifact gc lease")
 		if err != nil {
 			rows.Close()
 			return nil, err
@@ -155,30 +142,30 @@ func (s *SQLiteStore) LeaseArtifactGCCandidates(ctx context.Context, owner strin
 
 // CompleteArtifactGC records the result of an external file deletion. The
 // DB artifact is marked DELETED only after the bytes are gone or absent.
-func (s *SQLiteStore) CompleteArtifactGC(ctx context.Context, artifactID, owner string, deleted bool, deleteErr string) error {
+func (g *ArtifactGCStore) CompleteArtifactGC(ctx context.Context, artifactID, owner string, deleted bool, deleteErr string) error {
 	if artifactID == "" || owner == "" {
 		return fmt.Errorf("artifact gc: artifact_id and owner are required")
 	}
 	if deleted {
-		result, err := s.db.ExecContext(ctx, `UPDATE artifact_gc_candidates SET status='DELETED', lease_owner='', lease_expires_at=NULL, last_error='' WHERE artifact_id=? AND status='DELETING' AND lease_owner=?`, artifactID, owner)
+		result, err := g.db.ExecContext(ctx, `UPDATE artifact_gc_candidates SET status='DELETED', lease_owner='', lease_expires_at=NULL, last_error='' WHERE artifact_id=? AND status='DELETING' AND lease_owner=?`, artifactID, owner)
 		if err != nil {
 			return fmt.Errorf("artifact gc complete: %w", err)
 		}
-		if n, err := readRowsAffected(result, "artifact gc complete"); err != nil {
+		if n, err := storecore.ReadRowsAffected(result, "artifact gc complete"); err != nil {
 			return err
 		} else if n != 1 {
 			return fmt.Errorf("artifact gc complete: lease not owned or already completed")
 		}
-		if _, err := s.db.ExecContext(ctx, `UPDATE artifacts SET status='DELETED' WHERE id=? AND status IN ('FAILED','QUARANTINED','DELETED')`, artifactID); err != nil {
+		if _, err := g.db.ExecContext(ctx, `UPDATE artifacts SET status='DELETED' WHERE id=? AND status IN ('FAILED','QUARANTINED','DELETED')`, artifactID); err != nil {
 			return fmt.Errorf("artifact gc artifact status: %w", err)
 		}
 		return nil
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE artifact_gc_candidates SET status='ELIGIBLE', lease_owner='', lease_expires_at=NULL, delete_attempts=delete_attempts+1, last_error=? WHERE artifact_id=? AND status='DELETING' AND lease_owner=?`, deleteErr, artifactID, owner)
+	result, err := g.db.ExecContext(ctx, `UPDATE artifact_gc_candidates SET status='ELIGIBLE', lease_owner='', lease_expires_at=NULL, delete_attempts=delete_attempts+1, last_error=? WHERE artifact_id=? AND status='DELETING' AND lease_owner=?`, deleteErr, artifactID, owner)
 	if err != nil {
 		return fmt.Errorf("artifact gc failure: %w", err)
 	}
-	if n, err := readRowsAffected(result, "artifact gc failure"); err != nil {
+	if n, err := storecore.ReadRowsAffected(result, "artifact gc failure"); err != nil {
 		return err
 	} else if n != 1 {
 		return fmt.Errorf("artifact gc failure: lease not owned or already completed")

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"velox-server/internal/forwardingcontract"
 )
 
 func setupForwardingTestDB(t *testing.T) *SQLiteStore {
@@ -20,7 +22,7 @@ func setupForwardingTestDB(t *testing.T) *SQLiteStore {
 
 func insertTestForwarding(t *testing.T, db *SQLiteStore, forwardingID, provider, sourceJobID, executorID, status string) {
 	t.Helper()
-	cf := &CreatorForwarding{
+	cf := &forwardingcontract.CreatorForwarding{
 		ForwardingID:     forwardingID,
 		SourceProvider:   provider,
 		SourceJobID:      sourceJobID,
@@ -36,7 +38,7 @@ func insertTestForwarding(t *testing.T, db *SQLiteStore, forwardingID, provider,
 
 func insertTestForwardingWithPayload(t *testing.T, db *SQLiteStore, forwardingID, provider, sourceJobID, executorID, status, payloadJSON, payloadSHA256 string) {
 	t.Helper()
-	cf := &CreatorForwarding{
+	cf := &forwardingcontract.CreatorForwarding{
 		ForwardingID:     forwardingID,
 		SourceProvider:   provider,
 		SourceJobID:      sourceJobID,

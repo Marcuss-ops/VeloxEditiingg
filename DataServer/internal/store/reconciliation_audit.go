@@ -16,11 +16,12 @@ import (
 	"time"
 
 	"velox-server/internal/audittrail"
+	"velox-server/internal/stalereconcile"
 )
 
 // appendReconcileAuditTx appends the deterministic append-only audit row for a
 // finding inside an open transaction.
-func appendReconcileAuditTx(ctx context.Context, tx *sql.Tx, f StaleExecutionFinding, actor string, now time.Time) error {
+func appendReconcileAuditTx(ctx context.Context, tx *sql.Tx, f stalereconcile.StaleExecutionFinding, actor string, now time.Time) error {
 	metadata, err := json.Marshal(map[string]any{"category": f.Category, "reason": f.Reason, "old_status": f.OldStatus, "proposed_status": f.ProposedStatus, "observed_at": f.ObservedAt.UTC().Format(time.RFC3339Nano)})
 	if err != nil {
 		return err

@@ -130,36 +130,54 @@ func DecodeCompiledRenderPlan(data string) (*CompiledRenderPlan, error) {
 	return &plan, nil
 }
 
-// ValidateCompiledRenderPlan is the admission gate for a TaskOffer payload
-// that carries the master-compiled plan. It validates the compiled document
-// when present and returns nil when the payload does not carry one (legacy
-// fleet). The delivered sha is format-checked when present — it is the same
-// SHA256 the master stamped on task_attempts.plan_sha256.
-func ValidateCompiledRenderPlan(raw map[string]interface{}) error {
+// DecodeCompiledRenderPlanPayload is the single admission boundary for the
+// legacy master-compiled V1 envelope. It validates the document and its exact
+// wire SHA, then returns the decoded plan. A payload without the compiled
+// envelope returns (nil, nil) for compatibility with legacy tasks.
+func DecodeCompiledRenderPlanPayload(raw map[string]interface{}) (*CompiledRenderPlan, error) {
 	if raw == nil {
-		return nil
+		return nil, nil
 	}
-	rawJSON, ok := raw[contract.PayloadKeyCompiledRenderPlanJSON].(string)
+	rawValue, hasJSON := raw[contract.PayloadKeyCompiledRenderPlanJSON]
+	shaValue, hasSHA := raw[contract.PayloadKeyCompiledRenderPlanSHA]
+	if !hasJSON && !hasSHA {
+		return nil, nil
+	}
+	if !hasJSON {
+		return nil, planError(ERR_PLAN_REQUIRED_FIELD, "compiled_render_plan_json", "is required when compiled_render_plan_sha256 is present")
+	}
+	if !hasSHA {
+		return nil, planError(ERR_PLAN_REQUIRED_FIELD, "compiled_render_plan_sha256", "is required when compiled_render_plan_json is present")
+	}
+	rawJSON, ok := rawValue.(string)
 	if !ok || strings.TrimSpace(rawJSON) == "" {
-		return nil
+		return nil, planError(ERR_PLAN_REQUIRED_FIELD, "compiled_render_plan_json", "document is required")
 	}
-	if _, err := DecodeCompiledRenderPlan(rawJSON); err != nil {
-		return err
-	}
-	sha, ok := raw[contract.PayloadKeyCompiledRenderPlanSHA].(string)
+	sha, ok := shaValue.(string)
 	if !ok || strings.TrimSpace(sha) == "" {
-		return planError(ERR_PLAN_REQUIRED_FIELD, "compiled_render_plan_sha256", "is required when compiled_render_plan_json is present")
+		return nil, planError(ERR_PLAN_REQUIRED_FIELD, "compiled_render_plan_sha256", "is required when compiled_render_plan_json is present")
 	}
 	trimmed := strings.TrimSpace(sha)
 	if len(trimmed) != 64 {
-		return planError(ERR_PLAN_SCHEMA, "compiled_render_plan_sha256", "must be a 64-char hex SHA256")
+		return nil, planError(ERR_PLAN_SCHEMA, "compiled_render_plan_sha256", "must be a 64-char hex SHA256")
 	}
 	if _, err := hex.DecodeString(trimmed); err != nil {
-		return planError(ERR_PLAN_SCHEMA, "compiled_render_plan_sha256", "must be a 64-char hex SHA256")
+		return nil, planError(ERR_PLAN_SCHEMA, "compiled_render_plan_sha256", "must be a 64-char hex SHA256")
 	}
 	actual := sha256.Sum256([]byte(rawJSON))
 	if !strings.EqualFold(trimmed, hex.EncodeToString(actual[:])) {
-		return planError(ERR_PLAN_SCHEMA, "compiled_render_plan_sha256", "does not match compiled_render_plan_json")
+		return nil, planError(ERR_PLAN_SCHEMA, "compiled_render_plan_sha256", "does not match compiled_render_plan_json")
 	}
-	return nil
+	plan, err := DecodeCompiledRenderPlan(rawJSON)
+	if err != nil {
+		return nil, err
+	}
+	return plan, nil
+}
+
+// ValidateCompiledRenderPlan is the validation-only compatibility wrapper for
+// the same admission boundary. Keep the parsing and hash rules in one place.
+func ValidateCompiledRenderPlan(raw map[string]interface{}) error {
+	_, err := DecodeCompiledRenderPlanPayload(raw)
+	return err
 }

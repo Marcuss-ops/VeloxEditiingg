@@ -129,7 +129,7 @@ func collectAssetPreflightRequirements(payload map[string]interface{}) []voiceov
 					continue
 				}
 				id, ok := assetref.WireAssetID(text)
-				if !ok || !strings.HasPrefix(strings.ToLower(strings.TrimSpace(text)), assetref.SchemeVeloxAsset+"://") {
+				if !ok || !assetref.IsLocalWire(text) {
 					continue
 				}
 				if key == "asset_id" || key == "id" || strings.EqualFold(key, "url") || strings.EqualFold(key, "source_url") || strings.EqualFold(key, "uri") {

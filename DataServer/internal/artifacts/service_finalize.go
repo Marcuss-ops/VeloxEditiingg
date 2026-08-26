@@ -8,13 +8,13 @@ import (
 	"net/http"
 	"path/filepath"
 
-	"velox-server/internal/store"
+	"velox-server/internal/repository"
 )
 
 // Finalize orchestrates verified artifact finalization. See the
 // package doc for the linear pipeline; this method is the single
 // public entry point.
-func (s *Service) Finalize(ctx context.Context, cmd FinalizeArtifactCommand) (*store.Artifact, error) {
+func (s *Service) Finalize(ctx context.Context, cmd FinalizeArtifactCommand) (*repository.Artifact, error) {
 	session, idempotentArtifact, err := s.validateFinalizeSession(ctx, cmd)
 	if err != nil {
 		return nil, err
@@ -68,11 +68,11 @@ func (s *Service) Finalize(ctx context.Context, cmd FinalizeArtifactCommand) (*s
 	// to PromoteToCanonical and run a SECOND os.Rename to the same
 	// canonical path, racing the winner's first promote.
 	switch session.Status {
-	case string(store.UploadReceived):
-		if err := s.repo.TransitionUploadStatus(ctx, cmd.UploadID, string(store.UploadReceived), string(store.UploadFinalizing)); err != nil {
+	case string(repository.UploadReceived):
+		if err := s.repo.TransitionUploadStatus(ctx, cmd.UploadID, string(repository.UploadReceived), string(repository.UploadFinalizing)); err != nil {
 			return nil, fmt.Errorf("%w: %w", ErrTransitionConflict, translateStoreErr(err))
 		}
-	case string(store.UploadFinalizing):
+	case string(repository.UploadFinalizing):
 		return nil, fmt.Errorf("%w: upload=%s peer-mid-flight",
 			ErrTransitionConflict, cmd.UploadID)
 	default:
@@ -105,7 +105,7 @@ func (s *Service) Finalize(ctx context.Context, cmd FinalizeArtifactCommand) (*s
 // The 3-tuple is required so the orchestrator can dispatch the
 // idempotent-vs-finalize decision without re-loading the session
 // (which would be racy).
-func (s *Service) validateFinalizeSession(ctx context.Context, cmd FinalizeArtifactCommand) (*store.UploadSession, *store.Artifact, error) {
+func (s *Service) validateFinalizeSession(ctx context.Context, cmd FinalizeArtifactCommand) (*repository.UploadSession, *repository.Artifact, error) {
 	if cmd.UploadID == "" {
 		return nil, nil, fmt.Errorf("artifacts: Finalize: empty uploadID")
 	}
@@ -193,7 +193,7 @@ func (s *Service) validateFinalizeSession(ctx context.Context, cmd FinalizeArtif
 // before blob promotion in Finalize.
 func (s *Service) buildFinalizeVerifiedCommand(
 	cmd FinalizeArtifactCommand,
-	session *store.UploadSession,
+	session *repository.UploadSession,
 	storageKey, receivedSHA string,
 	receivedSize int64,
 	mimeType string,
@@ -241,7 +241,7 @@ func (s *Service) expectedAudioStreams(ctx context.Context, cmd FinalizeArtifact
 //
 // Any non-conflict error is propagated verbatim so the orchestrator
 // surfaces it unchanged.
-func (s *Service) finalizeWithDuplicateStorageFallback(ctx context.Context, command FinalizeVerifiedCommand) (*store.Artifact, error) {
+func (s *Service) finalizeWithDuplicateStorageFallback(ctx context.Context, command FinalizeVerifiedCommand) (*repository.Artifact, error) {
 	out, err := s.finalizeWriter.FinalizeVerified(ctx, command)
 	if err == nil {
 		return out, nil

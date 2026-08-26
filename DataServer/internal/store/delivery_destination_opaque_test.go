@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"velox-server/internal/deliverystore"
 )
 
 // TestDeliveryDestinationOpaqueStructShape enforces (via the Go
@@ -12,7 +14,7 @@ import (
 // does NOT carry the deprecated ABI-safe alias for the opaque
 // identifier (dropped in Residuo 5 / this commit).
 func TestDeliveryDestinationOpaqueStructShape(t *testing.T) {
-	_ = DeliveryDestination{
+	_ = deliverystore.DeliveryDestination{
 		DestinationID:         "dst_test_opaque",
 		Provider:              "social_gateway",
 		ExternalDestinationID: "external_dest_test",
@@ -39,7 +41,7 @@ func TestDeliveryDestinationOpaqueStructShape(t *testing.T) {
 //     firstStringField), but only the canonical typed field surfaces
 //     it outbound.)
 func TestDeliveryDestinationJSONOpaqueKeys(t *testing.T) {
-	in := DeliveryDestination{
+	in := deliverystore.DeliveryDestination{
 		DestinationID:         "dst_test_opaque",
 		Provider:              "social_gateway",
 		ExternalDestinationID: "external_dest_opaque_42",
@@ -98,7 +100,7 @@ func TestDeliveryDestinationJSONOpaqueKeys(t *testing.T) {
 // TestDeliveryDestinationJSONOpaqueKeys' legacyKeys set; this test
 // focuses on omitempty behaviour of the canonical empty value.
 func TestDeliveryDestinationEmptyExternalDestinationIDOmitEmpty(t *testing.T) {
-	in := DeliveryDestination{
+	in := deliverystore.DeliveryDestination{
 		DestinationID:         "dst_unmapped",
 		Provider:              "social_gateway",
 		ExternalDestinationID: "", // unmapped, canonical empty

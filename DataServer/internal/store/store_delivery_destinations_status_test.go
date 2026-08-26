@@ -13,6 +13,8 @@ package store
 import (
 	"context"
 	"testing"
+
+	"velox-server/internal/deliverystore"
 )
 
 // TestBatchDeliveryDestinationsStatus_AllThreeBuckets seeds one
@@ -34,7 +36,7 @@ func TestBatchDeliveryDestinationsStatus_AllThreeBuckets(t *testing.T) {
 	ctx := context.Background()
 
 	// Seed ENABLED row.
-	if err := s.Delivery().InsertDeliveryDestination(&DeliveryDestination{
+	if err := s.Delivery().InsertDeliveryDestination(&deliverystore.DeliveryDestination{
 		DestinationID:         "dest-enabled",
 		Provider:              "social_gateway",
 		ExternalDestinationID: "dest-enabled-external",
@@ -44,7 +46,7 @@ func TestBatchDeliveryDestinationsStatus_AllThreeBuckets(t *testing.T) {
 	}
 
 	// Seed DISABLED row.
-	if err := s.Delivery().InsertDeliveryDestination(&DeliveryDestination{
+	if err := s.Delivery().InsertDeliveryDestination(&deliverystore.DeliveryDestination{
 		DestinationID:         "dest-disabled",
 		Provider:              "social_gateway",
 		ExternalDestinationID: "dest-disabled-external",
@@ -66,17 +68,17 @@ func TestBatchDeliveryDestinationsStatus_AllThreeBuckets(t *testing.T) {
 		t.Fatalf("map size = %d, want 3 (one per input id)", len(got))
 	}
 
-	if got["dest-enabled"] != DeliveryDestinationEnabled {
+	if got["dest-enabled"] != deliverystore.DeliveryDestinationEnabled {
 		t.Errorf("dest-enabled: got %s, want %s (%d)",
-			got["dest-enabled"], DeliveryDestinationEnabled, DeliveryDestinationEnabled)
+			got["dest-enabled"], deliverystore.DeliveryDestinationEnabled, deliverystore.DeliveryDestinationEnabled)
 	}
-	if got["dest-disabled"] != DeliveryDestinationDisabled {
+	if got["dest-disabled"] != deliverystore.DeliveryDestinationDisabled {
 		t.Errorf("dest-disabled: got %s, want %s (%d)",
-			got["dest-disabled"], DeliveryDestinationDisabled, DeliveryDestinationDisabled)
+			got["dest-disabled"], deliverystore.DeliveryDestinationDisabled, deliverystore.DeliveryDestinationDisabled)
 	}
-	if got["dest-missing"] != DeliveryDestinationNotFound {
+	if got["dest-missing"] != deliverystore.DeliveryDestinationNotFound {
 		t.Errorf("dest-missing: got %s, want %s (%d)",
-			got["dest-missing"], DeliveryDestinationNotFound, DeliveryDestinationNotFound)
+			got["dest-missing"], deliverystore.DeliveryDestinationNotFound, deliverystore.DeliveryDestinationNotFound)
 	}
 }
 
@@ -88,12 +90,12 @@ func TestBatchDeliveryDestinationsStatus_AllThreeBuckets(t *testing.T) {
 // guards against accidental renames.
 func TestBatchDeliveryDestinationsStatus_StringContracts(t *testing.T) {
 	cases := []struct {
-		status DeliveryDestinationStatus
+		status deliverystore.DeliveryDestinationStatus
 		want   string
 	}{
-		{DeliveryDestinationNotFound, "not_found"},
-		{DeliveryDestinationDisabled, "disabled"},
-		{DeliveryDestinationEnabled, "enabled"},
+		{deliverystore.DeliveryDestinationNotFound, "not_found"},
+		{deliverystore.DeliveryDestinationDisabled, "disabled"},
+		{deliverystore.DeliveryDestinationEnabled, "enabled"},
 	}
 	for _, tc := range cases {
 		if got := tc.status.String(); got != tc.want {
@@ -116,7 +118,7 @@ func TestBatchDeliveryDestinationsStatus_DeduplicatesAndTrims(t *testing.T) {
 	defer s.Close()
 
 	ctx := context.Background()
-	if err := s.Delivery().InsertDeliveryDestination(&DeliveryDestination{
+	if err := s.Delivery().InsertDeliveryDestination(&deliverystore.DeliveryDestination{
 		DestinationID:         "dest-x",
 		Provider:              "social_gateway",
 		ExternalDestinationID: "dest-x-external",
@@ -139,7 +141,7 @@ func TestBatchDeliveryDestinationsStatus_DeduplicatesAndTrims(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("map size = %d, want 1 (input collapsed to 1 unique id %q)", len(got), "dest-x")
 	}
-	if got["dest-x"] != DeliveryDestinationEnabled {
+	if got["dest-x"] != deliverystore.DeliveryDestinationEnabled {
 		t.Errorf("dest-x: got %s, want ENABLED (3)", got["dest-x"])
 	}
 }
@@ -159,7 +161,7 @@ func TestValidateDeliveryDestinationTx_ErrDestinationDisabledIs(t *testing.T) {
 	defer s.Close()
 
 	ctx := context.Background()
-	if err := s.Delivery().InsertDeliveryDestination(&DeliveryDestination{
+	if err := s.Delivery().InsertDeliveryDestination(&deliverystore.DeliveryDestination{
 		DestinationID:         "dest-disabled",
 		Provider:              "social_gateway",
 		ExternalDestinationID: "dest-disabled-external",

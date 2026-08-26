@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"testing"
 
+	"velox-server/internal/forwardingstore"
+	"velox-server/internal/storecore"
 	"velox-shared/contract/domain"
 )
 
@@ -83,10 +85,10 @@ func TestWrapDBInfrastructure_ClassifiesSQLConnDone(t *testing.T) {
 
 func TestWrapDBInfrastructure_PreservesStoreSentinels(t *testing.T) {
 	for name, sentinel := range map[string]error{
-		"transition conflict":        ErrTransitionConflict,
-		"lease lost":                 ErrLeaseLost,
+		"transition conflict":        storecore.ErrTransitionConflict,
+		"lease lost":                 storecore.ErrLeaseLost,
 		"delivery missing":           ErrDeliveryNoRow,
-		"forwarding missing":         ErrCreatorForwardingNoRow,
+		"forwarding missing":         forwardingstore.ErrCreatorForwardingNoRow,
 		"publication missing":        ErrPublicationStateNotFound,
 		"publication phase conflict": ErrPublicationPhaseConflict,
 	} {

@@ -37,7 +37,7 @@ followup, not a Becco 1–5 regression.
   `jobs.status='SUCCEEDED'` is the canonical UoW adapter
   `DataServer/internal/store/completion_repository.go` (the canonical SQL
   gateway after the completion store migration). Comment at
-  `DataServer/internal/store/artifact_uploads.go:20–21` memorializes the contract.
+  `DataServer/internal/repository/upload.go` defines the canonical upload contract; its SQLite implementation lives in `DataServer/internal/artifactsstore/`.
 - **Verdict gate**: `CompleteUpload` in `coordinator.go` requires
   `ArtifactReady` (line 527); only then does the UoW transcribe the attempt
   into `attempt_commits`.

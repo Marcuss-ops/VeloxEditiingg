@@ -1,5 +1,14 @@
-// Package audit provides automatic data layer validation.
-// Fails CI or startup if legacy files, duplicate paths, or multiple sources of truth reappear.
+// Package audit owns data-layer integrity auditing for the Velox server.
+//
+// DataLayerAuditor performs read-only structural checks over the configured
+// data directory and SQLite path: duplicate sources of truth, naming
+// consistency, primary-file presence, and basic database availability. Its
+// result is a startup/CI diagnostic, not a durable operator event.
+//
+// Keep this package independent from audittrail: it must not write
+// audit_events, model actors/resources/actions, redact event metadata, or
+// treat log lines as evidence. A caller that needs both checks and durable
+// operator history must invoke the two bounded contexts explicitly.
 package audit
 
 import (

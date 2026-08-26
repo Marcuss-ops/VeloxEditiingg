@@ -18,8 +18,10 @@ import (
 	"fmt"
 	"strings"
 
+	"velox-server/internal/artifactsstore"
 	"velox-server/internal/identity"
-	"velox-server/internal/store"
+	"velox-server/internal/jobs"
+	"velox-server/internal/repository"
 	"velox-server/internal/taskattempts"
 )
 
@@ -39,7 +41,7 @@ import (
 // On success: artifacts + artifact_uploads are inserted ATOMICALLY
 // via UploadSessionWriter (sqlite_upload_session_writer.go); no
 // other code path mutates either table.
-func (s *Service) BeginUpload(ctx context.Context, cmd BeginUploadCommand) (*store.UploadSession, error) {
+func (s *Service) BeginUpload(ctx context.Context, cmd BeginUploadCommand) (*repository.UploadSession, error) {
 	if cmd.JobID == "" || cmd.WorkerID == "" || cmd.LeaseID == "" {
 		return nil, fmt.Errorf("artifacts: BeginUpload: job_id, worker_id and lease_id are required")
 	}
@@ -52,8 +54,8 @@ func (s *Service) BeginUpload(ctx context.Context, cmd BeginUploadCommand) (*sto
 	if job == nil {
 		return nil, fmt.Errorf("%w: job=%s missing", ErrJobNotRunning, cmd.JobID)
 	}
-	if job.Status != string(store.JobStatusRunning) &&
-		job.Status != string(store.JobStatusAwaitingArtifact) {
+	if job.Status != string(jobs.StatusRunning) &&
+		job.Status != string(jobs.StatusAwaitingArtifact) {
 		return nil, fmt.Errorf("%w: job=%s status=%s", ErrJobNotRunning, cmd.JobID, job.Status)
 	}
 	if cmd.ExpectedRevision != 0 && job.Revision != cmd.ExpectedRevision {
@@ -109,7 +111,7 @@ func (s *Service) BeginUpload(ctx context.Context, cmd BeginUploadCommand) (*sto
 	tempKey := stagingTempKey(s.blobStore, uploadID)
 
 	// Atomic insert of artifacts + artifact_uploads via UploadSessionWriter.
-	if err := s.uploadWriter.CreateArtifactAndUploadSession(ctx, store.CreateUploadSessionParams{
+	if err := s.uploadWriter.CreateArtifactAndUploadSession(ctx, artifactsstore.CreateUploadSessionParams{
 		ArtifactID:          artifactID,
 		UploadID:            uploadID,
 		JobID:               cmd.JobID,
@@ -130,7 +132,7 @@ func (s *Service) BeginUpload(ctx context.Context, cmd BeginUploadCommand) (*sto
 		return nil, fmt.Errorf("artifacts: BeginUpload atomic insert: %w", err)
 	}
 
-	session := &store.UploadSession{
+	session := &repository.UploadSession{
 		UploadID:            uploadID,
 		ArtifactID:          artifactID,
 		JobID:               cmd.JobID,
@@ -143,7 +145,7 @@ func (s *Service) BeginUpload(ctx context.Context, cmd BeginUploadCommand) (*sto
 		TemporaryStorageKey: tempKey,
 		ExpectedSizeBytes:   cmd.ExpectedSizeBytes,
 		ExpectedSHA256:      cmd.ExpectedSHA256,
-		Status:              string(store.UploadCreated),
+		Status:              string(repository.UploadCreated),
 		CreatedAt:           now,
 		ExpiresAt:           now.Add(s.uploadTTL),
 	}

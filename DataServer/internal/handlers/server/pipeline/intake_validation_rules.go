@@ -3,8 +3,11 @@ package pipeline
 import (
 	"fmt"
 	"regexp"
+	"strings"
 
 	"github.com/gin-gonic/gin"
+
+	"velox-shared/assetref"
 )
 
 // MaxVideoNameBytes is the byte-length cap on SubmitJobRequest.video_name.
@@ -93,11 +96,16 @@ const MaxManifestRefURLBytes = 2048
 // request.
 var manifestRefURLRegexp = regexp.MustCompile(`^(https?://|velox-asset://).+`)
 
-// assetURLRegexp matches a media asset URL whose scheme is one of
-// http, https, velox-asset (local) or velox-drive (deferred Drive).
-// The wire scheme is self-sufficient: velox-drive://<fileID> declares
-// deferred Drive materialization without any sibling annotation.
-var assetURLRegexp = regexp.MustCompile(`^(https?://|velox-asset://|velox-drive://).+`)
+// isAcceptedAssetURL accepts external HTTP(S) references and canonical
+// self-sufficient asset wires. Canonical wire classification belongs to
+// shared/assetref; this boundary must not grow another scheme parser.
+func isAcceptedAssetURL(raw string) bool {
+	if _, err := assetref.ParseCanonicalWire(raw); err == nil {
+		return true
+	}
+	lower := strings.ToLower(strings.TrimSpace(raw))
+	return strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")
+}
 
 // manifestRefSHA256Regexp matches a 64-character lowercase hex
 // string. The hex-only check is intentionally strict (no

@@ -1,5 +1,10 @@
 package store
 
+// COMPATIBILITY:
+// Owner:        P0.4 store-facade migration
+// Remove after: 2026-09-30
+// Read-only:    yes — error sentinels and classification helpers delegate to storecore.
+
 // db_errors.go — re-export + delegation of the shared error infrastructure
 // promoted into internal/storecore. The sentinels and the
 // ReadRowsAffected/WrapDBInfrastructure classification helpers now live in

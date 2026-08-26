@@ -3,7 +3,6 @@ package enqueue
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
@@ -268,8 +267,8 @@ func NormalizeScenesPayload(payloadMap map[string]interface{}) ([]map[string]int
 	}
 
 	if raw := payload.FirstString(payloadMap, "scenes_json"); raw != "" {
-		var scenes []map[string]interface{}
-		if err := json.Unmarshal([]byte(raw), &scenes); err != nil {
+		scenes, err := contract.ParseSceneMapsJSON([]byte(raw))
+		if err != nil {
 			return nil, nil, fmt.Errorf("invalid scenes_json: %w", err)
 		}
 		return NormalizeScenesPayload(map[string]interface{}{"scenes": scenes})

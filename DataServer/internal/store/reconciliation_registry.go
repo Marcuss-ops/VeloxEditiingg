@@ -7,15 +7,16 @@ import (
 	"time"
 
 	"velox-server/internal/reconcile"
+	"velox-server/internal/stalereconcile"
 )
 
-// staleExecutionRegistryEntry adapts the store's StaleExecutionReconciler
+// staleExecutionRegistryEntry adapts the canonical stalereconcile reconciler
 // (whose Reconcile keeps its dry-run/apply arguments explicit for the admin
 // CLI) to the canonical reconcile.Reconciler surface. Production wiring
 // always uses apply=true and remains bounded/idempotent through the store's
 // CAS transitions.
 type staleExecutionRegistryEntry struct {
-	reconciler *StaleExecutionReconciler
+	reconciler *stalereconcile.StaleExecutionReconciler
 	limit      int
 	actor      string
 }
@@ -58,10 +59,7 @@ func BuildReconciliationRegistry(db *SQLiteStore, staleThresholdSeconds, partiti
 	if err != nil {
 		return nil, fmt.Errorf("worker lost reconciler: %w", err)
 	}
-	staleExecution, err := NewStaleExecutionReconciler(db)
-	if err != nil {
-		return nil, fmt.Errorf("stale execution reconciler: %w", err)
-	}
+	staleExecution := stalereconcile.New(db.DB(), NewSQLiteTaskRepository(db), NewSQLiteJobRepository(db))
 
 	if err := registry.Register(reconcile.NameAwaitingArtifact, awaiting); err != nil {
 		return nil, err

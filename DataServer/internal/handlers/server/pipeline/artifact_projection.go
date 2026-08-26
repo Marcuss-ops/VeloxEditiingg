@@ -3,14 +3,14 @@ package pipeline
 import (
 	"strings"
 
-	"velox-server/internal/store"
+	"velox-server/internal/repository"
 )
 
 // selectPrimaryReadyArtifact returns the deterministic public output for a
 // completed job. Only READY artifacts are eligible; transient or quarantined
 // rows must never leak through the polling projection.
-func selectPrimaryReadyArtifact(artifacts []store.Artifact) *store.Artifact {
-	var best *store.Artifact
+func selectPrimaryReadyArtifact(artifacts []repository.Artifact) *repository.Artifact {
+	var best *repository.Artifact
 	bestRank := 99
 	for i := range artifacts {
 		a := &artifacts[i]

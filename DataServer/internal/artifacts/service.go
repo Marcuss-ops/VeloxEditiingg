@@ -6,7 +6,7 @@
 //   - BeginUpload — validation + atomic insert via UploadSessionWriter.
 //   - Receive     — streaming + master-computed hash on the write path
 //     (incremental io.MultiWriter, no second read) via the typed
-//     store.UploadRepository.
+//     repository.UploadRepository.
 //   - Finalize    — blob promotion + FinalizationWriter atomic tx
 //     (sole jobs.status='SUCCEEDED' writer) +
 //     ArtifactReader post-tx read.
@@ -27,7 +27,7 @@ import (
 	"time"
 
 	"velox-server/internal/platform/clock"
-	"velox-server/internal/store"
+	"velox-server/internal/repository"
 )
 
 // defaultUploadTTL matches the spec's reconciler rule
@@ -43,12 +43,12 @@ const defaultUploadTTL = 24 * time.Hour
 // on nil for each so a misconfigured composition fails fast at
 // startup instead of silently producing no SUCCEEDED.
 type Service struct {
-	repo           store.UploadRepository
+	repo           repository.UploadRepository
 	uploadWriter   UploadSessionWriter
 	finalizeWriter FinalizationWriter
 	artifactReader ArtifactReader
 	auth           AuthReader
-	blobStore      store.BlobStore
+	blobStore      repository.BlobStore
 	clock          clock.Clock
 	// deliveryCounter is the purpose-built typed reader used by
 	// the VELOX_FFPROBE_VERIFY_ON_FINALIZE invariant (see
@@ -61,7 +61,7 @@ type Service struct {
 	ffprobeMode ffprobeInvariantMode
 	// probeQueue is wired by bootstrap. When present, Finalize enqueues
 	// asynchronous media validation instead of shelling out synchronously.
-	probeQueue store.MediaProbeEnqueuer
+	probeQueue repository.MediaProbeEnqueuer
 }
 
 // NewService composes the dependencies Service needs.
@@ -87,11 +87,11 @@ type Service struct {
 // transaction coordinates with concurrent upload-session updates;
 // Service itself never sees the database handle.
 func NewService(
-	repo store.UploadRepository,
+	repo repository.UploadRepository,
 	uploadWriter UploadSessionWriter,
 	finalizeWriter FinalizationWriter,
 	artifactReader ArtifactReader,
-	blobStore store.BlobStore,
+	blobStore repository.BlobStore,
 	auth AuthReader,
 	c clock.Clock,
 	deliveryCounter JobDeliveryCounter,
@@ -138,7 +138,7 @@ func NewService(
 // Production bootstrap always supplies this dependency; leaving it nil keeps
 // the legacy synchronous gate available to older tests/adapters during the
 // migration window.
-func (s *Service) WithMediaProbeQueue(q store.MediaProbeEnqueuer) *Service {
+func (s *Service) WithMediaProbeQueue(q repository.MediaProbeEnqueuer) *Service {
 	s.probeQueue = q
 	return s
 }

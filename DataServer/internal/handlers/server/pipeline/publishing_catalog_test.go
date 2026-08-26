@@ -10,8 +10,8 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"velox-server/internal/config"
+	"velox-server/internal/deliverystore"
 	"velox-server/internal/socialclient"
-	"velox-server/internal/store"
 )
 
 // TestPublishingCatalogAndTargetsRoutesAreRetired verifies that Velox does not
@@ -29,7 +29,7 @@ func TestPublishingCatalogAndTargetsRoutesAreRetired(t *testing.T) {
 
 	db := openHandlerTestDB(t)
 	defer db.Close()
-	if err := db.Delivery().InsertDeliveryDestination(&store.DeliveryDestination{
+	if err := db.Delivery().InsertDeliveryDestination(&deliverystore.DeliveryDestination{
 		DestinationID:         "existing-destination",
 		Provider:              "social_gateway",
 		ExternalDestinationID: "external-destination",

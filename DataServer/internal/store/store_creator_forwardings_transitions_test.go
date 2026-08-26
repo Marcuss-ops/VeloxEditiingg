@@ -5,6 +5,9 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"velox-server/internal/forwardingcontract"
+	"velox-server/internal/forwardingstore"
 )
 
 func TestMarkReadyToForward(t *testing.T) {
@@ -127,8 +130,8 @@ func TestMarkCreatorForwardingReadySyncDoesNotStealLease(t *testing.T) {
 	}
 
 	err := db.Forwarding().MarkCreatorForwardingReadySync(ctx, "cf-sync-fence", `{"complete":true}`, "sha-complete")
-	if err != ErrTransitionConflict {
-		t.Fatalf("ReadySync error=%v, want ErrTransitionConflict", err)
+	if err != forwardingstore.ErrTransitionConflict {
+		t.Fatalf("ReadySync error=%v, want forwardingstore.ErrTransitionConflict", err)
 	}
 	saved, err := db.Forwarding().GetCreatorForwarding(ctx, "cf-sync-fence")
 	if err != nil {
@@ -248,7 +251,7 @@ func TestMarkCreatorForwardingCancelledForClient(t *testing.T) {
 
 	insertClientForwarding := func(forwardingID, clientID, status string) {
 		t.Helper()
-		cf := &CreatorForwarding{
+		cf := &forwardingcontract.CreatorForwarding{
 			ForwardingID:     forwardingID,
 			ExternalClientID: clientID,
 			SourceProvider:   "external_api",
@@ -278,8 +281,8 @@ func TestMarkCreatorForwardingCancelledForClient(t *testing.T) {
 
 	// 2. Wrong client is fenced and leaves the row untouched.
 	insertClientForwarding("cf-client-fence", "client-a", "PENDING")
-	if err := db.Forwarding().MarkCreatorForwardingCancelledForClient(ctx, "cf-client-fence", "client-b", "X", "y"); !errors.Is(err, ErrCreatorForwardingNoRow) {
-		t.Fatalf("wrong client error = %v, want ErrCreatorForwardingNoRow", err)
+	if err := db.Forwarding().MarkCreatorForwardingCancelledForClient(ctx, "cf-client-fence", "client-b", "X", "y"); !errors.Is(err, forwardingstore.ErrCreatorForwardingNoRow) {
+		t.Fatalf("wrong client error = %v, want forwardingstore.ErrCreatorForwardingNoRow", err)
 	}
 	fenced, err := db.Forwarding().GetCreatorForwarding(ctx, "cf-client-fence")
 	if err != nil {
@@ -291,12 +294,12 @@ func TestMarkCreatorForwardingCancelledForClient(t *testing.T) {
 
 	// 3. Terminal rows cannot be cancelled by a client.
 	insertClientForwarding("cf-client-terminal", "client-a", "FORWARDED")
-	if err := db.Forwarding().MarkCreatorForwardingCancelledForClient(ctx, "cf-client-terminal", "client-a", "X", "y"); !errors.Is(err, ErrCreatorForwardingNoRow) {
-		t.Fatalf("terminal cancel error = %v, want ErrCreatorForwardingNoRow", err)
+	if err := db.Forwarding().MarkCreatorForwardingCancelledForClient(ctx, "cf-client-terminal", "client-a", "X", "y"); !errors.Is(err, forwardingstore.ErrCreatorForwardingNoRow) {
+		t.Fatalf("terminal cancel error = %v, want forwardingstore.ErrCreatorForwardingNoRow", err)
 	}
 
 	// 4. Empty client ID is fenced.
-	if err := db.Forwarding().MarkCreatorForwardingCancelledForClient(ctx, "cf-client-cancel", "", "X", "y"); !errors.Is(err, ErrCreatorForwardingNoRow) {
-		t.Fatalf("empty client error = %v, want ErrCreatorForwardingNoRow", err)
+	if err := db.Forwarding().MarkCreatorForwardingCancelledForClient(ctx, "cf-client-cancel", "", "X", "y"); !errors.Is(err, forwardingstore.ErrCreatorForwardingNoRow) {
+		t.Fatalf("empty client error = %v, want forwardingstore.ErrCreatorForwardingNoRow", err)
 	}
 }

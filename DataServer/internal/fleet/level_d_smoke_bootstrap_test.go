@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"velox-server/internal/store"
+	"velox-server/internal/smokerunstore"
 )
 
 func TestConfigureLevelDSmokeCapabilityProductionRejectsMissingAssetResolver(t *testing.T) {
@@ -69,17 +69,19 @@ func (*stubDevelopmentSmokeLease) ReleaseSmokeLease(context.Context, string) err
 
 type stubDevelopmentSmokeRuns struct{}
 
-func (*stubDevelopmentSmokeRuns) InsertSmokeRun(context.Context, store.SmokeRun) error { return nil }
+func (*stubDevelopmentSmokeRuns) InsertSmokeRun(context.Context, smokerunstore.SmokeRun) error {
+	return nil
+}
 func (*stubDevelopmentSmokeRuns) MarkSmokeSucceeded(context.Context, string, time.Time, int64, string) error {
 	return nil
 }
 func (*stubDevelopmentSmokeRuns) MarkSmokeFailed(context.Context, string, time.Time, int64, string) error {
 	return nil
 }
-func (*stubDevelopmentSmokeRuns) GetLatestSmokeForWorker(context.Context, string) (*store.SmokeRun, error) {
-	return nil, store.ErrSmokeRunNotFound
+func (*stubDevelopmentSmokeRuns) GetLatestSmokeForWorker(context.Context, string) (*smokerunstore.SmokeRun, error) {
+	return nil, smokerunstore.ErrSmokeRunNotFound
 }
-func (*stubDevelopmentSmokeRuns) ListRecentSmokesForWorker(context.Context, string, int) ([]store.SmokeRun, error) {
+func (*stubDevelopmentSmokeRuns) ListRecentSmokesForWorker(context.Context, string, int) ([]smokerunstore.SmokeRun, error) {
 	return nil, nil
 }
 

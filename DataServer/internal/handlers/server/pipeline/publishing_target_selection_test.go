@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"velox-server/internal/deliverystore"
 
 	"github.com/gin-gonic/gin"
 
@@ -18,23 +19,23 @@ import (
 )
 
 type publishingTargetDestinationReader struct {
-	statuses map[string]store.DeliveryDestinationStatus
-	rows     map[string]*store.DeliveryDestination
+	statuses map[string]deliverystore.DeliveryDestinationStatus
+	rows     map[string]*deliverystore.DeliveryDestination
 }
 
-func (f publishingTargetDestinationReader) BatchDeliveryDestinations(_ context.Context, ids []string) (map[string]*store.DeliveryDestination, error) {
-	out := make(map[string]*store.DeliveryDestination, len(ids))
+func (f publishingTargetDestinationReader) BatchDeliveryDestinations(_ context.Context, ids []string) (map[string]*deliverystore.DeliveryDestination, error) {
+	out := make(map[string]*deliverystore.DeliveryDestination, len(ids))
 	for _, id := range ids {
 		if row := f.rows[id]; row != nil {
 			copy := *row
 			if status, ok := f.statuses[id]; ok {
-				copy.Enabled = status == store.DeliveryDestinationEnabled
+				copy.Enabled = status == deliverystore.DeliveryDestinationEnabled
 			}
 			out[id] = &copy
 			continue
 		}
-		if status, ok := f.statuses[id]; ok && status == store.DeliveryDestinationDisabled {
-			out[id] = &store.DeliveryDestination{DestinationID: id, Enabled: false}
+		if status, ok := f.statuses[id]; ok && status == deliverystore.DeliveryDestinationDisabled {
+			out[id] = &deliverystore.DeliveryDestination{DestinationID: id, Enabled: false}
 		}
 	}
 	return out, nil
@@ -106,13 +107,13 @@ func TestResolveSelectionExpandsGroupToConcreteDeliveryPlanDeterministically(t *
 		}},
 	}
 	reader := publishingTargetDestinationReader{
-		statuses: map[string]store.DeliveryDestinationStatus{},
-		rows:     map[string]*store.DeliveryDestination{},
+		statuses: map[string]deliverystore.DeliveryDestinationStatus{},
+		rows:     map[string]*deliverystore.DeliveryDestination{},
 	}
 	for _, member := range catalog.Groups[0].Members {
 		id := targetpublishing.DestinationIDForExternal(member.ExternalDestinationID)
-		reader.statuses[id] = store.DeliveryDestinationEnabled
-		reader.rows[id] = &store.DeliveryDestination{
+		reader.statuses[id] = deliverystore.DeliveryDestinationEnabled
+		reader.rows[id] = &deliverystore.DeliveryDestination{
 			DestinationID:         id,
 			Provider:              targetpublishing.ProviderSocialGateway,
 			Enabled:               true,
@@ -163,8 +164,8 @@ func TestResolvePublishingTargetAdapterProjectsConcretePlan(t *testing.T) {
 	}
 	destinationID := targetpublishing.DestinationIDForExternal(channel.ExternalDestinationID)
 	reader := publishingTargetDestinationReader{
-		statuses: map[string]store.DeliveryDestinationStatus{destinationID: store.DeliveryDestinationEnabled},
-		rows: map[string]*store.DeliveryDestination{destinationID: {
+		statuses: map[string]deliverystore.DeliveryDestinationStatus{destinationID: deliverystore.DeliveryDestinationEnabled},
+		rows: map[string]*deliverystore.DeliveryDestination{destinationID: {
 			DestinationID:         destinationID,
 			Provider:              targetpublishing.ProviderSocialGateway,
 			Enabled:               true,

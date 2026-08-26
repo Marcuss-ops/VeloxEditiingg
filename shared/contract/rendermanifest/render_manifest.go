@@ -13,6 +13,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"velox-shared/assetref"
 )
 
 const Schema = "velox.render-manifest.v1"
@@ -381,7 +383,8 @@ func (a Asset) validate(path string) (errs ValidationErrors) {
 	if a.ID == "" {
 		errs.add(path+".id", "required", "non-empty string", "")
 	}
-	if !strings.HasPrefix(a.URI, "velox-asset://") || len(strings.TrimPrefix(a.URI, "velox-asset://")) == 0 {
+	ref, refErr := assetref.ParseCanonicalWire(a.URI)
+	if refErr != nil || ref.Kind() != assetref.RefKindLocal || ref.ID() == "" {
 		errs.add(path+".uri", "invalid_scheme", "velox-asset://<asset-id>", a.URI)
 	}
 	if !validAssetKinds[a.Kind] {
@@ -522,6 +525,18 @@ func (o Output) validate() (errs ValidationErrors) {
 		errs.add("output.audio_channels", "unsupported_value", "1 or 2", fmt.Sprint(o.AudioChannels))
 	}
 	return errs
+}
+
+// HasAssetKind reports whether the validated manifest declares an asset of
+// the requested kind. Callers use this typed view instead of scanning raw
+// manifest maps and duplicating the asset schema.
+func (m Manifest) HasAssetKind(kind string) bool {
+	for _, asset := range m.Assets {
+		if asset.Kind == kind {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *ValidationErrors) add(path, issue, expected, observed string) {

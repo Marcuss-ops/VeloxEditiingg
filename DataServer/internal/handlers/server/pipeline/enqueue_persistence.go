@@ -20,7 +20,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"velox-server/internal/store"
+	"velox-server/internal/forwardingstore"
 )
 
 // The endpoint is M2M-only and fails closed: a missing middleware client
@@ -56,7 +56,7 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 		}
 		forwarding, err := h.store.Forwarding().GetCreatorForwardingByTargetJobID(ctx, jobID, clientID)
 		if err != nil {
-			if errors.Is(err, store.ErrCreatorForwardingNoRow) {
+			if errors.Is(err, forwardingstore.ErrCreatorForwardingNoRow) {
 				c.JSON(http.StatusNotFound, gin.H{
 					"ok":      false,
 					"error":   "job_not_found",

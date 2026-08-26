@@ -9,6 +9,7 @@ import (
 
 	"velox-server/internal/inputsecurity"
 	"velox-shared/assetref"
+	"velox-shared/contract"
 )
 
 // remoteRewriteConcurrency bounds how many remote references a single payload
@@ -48,8 +49,8 @@ func (s *AssetService) RewriteRemoteInputPayload(ctx context.Context, payload ma
 		}
 	}
 	if encoded, ok := payload["scenes_json"].(string); ok && strings.TrimSpace(encoded) != "" {
-		var scenes []map[string]interface{}
-		if err := json.Unmarshal([]byte(encoded), &scenes); err != nil {
+		scenes, err := contract.ParseSceneMapsJSON([]byte(encoded))
+		if err != nil {
 			return fmt.Errorf("scenes_json: %w", err)
 		}
 		if err := rewriteRemoteInputValue(ctx, s, scenes); err != nil {
@@ -178,10 +179,11 @@ func existingDeclaredAssetIDs(payload map[string]interface{}) map[string]bool {
 func collectSFXDeclarations(ctx context.Context, s *AssetService, rewritten []string) (map[string]map[string]interface{}, int, error) {
 	declarations := make(map[string]map[string]interface{})
 	for i, canonical := range rewritten {
-		assetID := strings.TrimPrefix(canonical, VeloxAssetScheme+"://")
-		if assetID == canonical || assetID == "" {
+		ref, parseErr := assetref.ParseCanonicalWire(canonical)
+		if parseErr != nil || ref.Kind() != assetref.RefKindLocal || ref.ID() == "" {
 			continue
 		}
+		assetID := ref.ID()
 		asset, err := s.Get(ctx, assetID)
 		if err != nil {
 			return nil, i, err
@@ -280,10 +282,11 @@ func rewriteCanonicalAssetMap(ctx context.Context, s *AssetService, item map[str
 	// Self-sufficient canonical wire: the scheme carries the kind. The url
 	// is written as-is and the worker classifies by scheme — no sibling
 	// asset_ref_kind annotation and no shape heuristic exist anymore.
-	if assetID, isWire := assetref.WireAssetID(reference); isWire {
+	if parsed, parseErr := assetref.ParseCanonicalWire(reference); parseErr == nil {
+		assetID := parsed.ID()
 		item["asset_id"] = assetID
-		item["url"] = reference
-		if strings.HasPrefix(strings.ToLower(reference), assetref.SchemeVeloxDrive+"://") {
+		item["url"] = parsed.Wire()
+		if parsed.IsDeferredDrive() {
 			// velox-drive:// is explicitly deferred: the worker bridge
 			// materializes the Drive file, no local asset row required.
 			return nil
@@ -430,7 +433,7 @@ func rewriteReference(ctx context.Context, s *AssetService, reference string, ki
 	if reference == "" {
 		return reference, nil
 	}
-	if _, isWire := assetref.WireAssetID(reference); isWire {
+	if _, err := assetref.ParseCanonicalWire(reference); err == nil {
 		return reference, nil
 	}
 	asset, err := s.ResolveAndRegister(ctx, ResolveAssetCommand{Kind: string(kind), Reference: reference})

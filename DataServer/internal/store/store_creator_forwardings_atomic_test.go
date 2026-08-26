@@ -5,6 +5,9 @@ import (
 	"testing"
 	"time"
 	"velox-server/internal/costmodel"
+	"velox-server/internal/deliverystore"
+	"velox-server/internal/forwardingcontract"
+	"velox-server/internal/forwardingstore"
 	"velox-server/internal/jobs"
 	"velox-server/internal/taskgraph"
 )
@@ -13,7 +16,7 @@ func TestAtomicForwardAndEnqueue_CreatesJobAndMarksForwarded(t *testing.T) {
 	db := setupForwardingTestDB(t)
 	ctx := context.Background()
 
-	if err := db.Delivery().InsertDeliveryDestination(&DeliveryDestination{
+	if err := db.Delivery().InsertDeliveryDestination(&deliverystore.DeliveryDestination{
 		DestinationID: "drive",
 		Provider:      "drive",
 		Name:          "drive",
@@ -107,8 +110,8 @@ func TestAtomicForwardAndEnqueue_FencesWrongRunnerLease(t *testing.T) {
 	err := db.Forwarding().AtomicForwardAndEnqueue(ctx, "cf-owner-fence", &jobs.Job{ID: "job-owner-fence", Type: "process_video"},
 		&taskgraph.TaskSpec{Version: taskgraph.SpecVersion, JobID: "job-owner-fence", ExecutorID: "scene.composite.v1@1"},
 		5, "stale-runner", "stale-lease")
-	if err != ErrTransitionConflict {
-		t.Fatalf("wrong runner atomic enqueue error = %v, want ErrTransitionConflict", err)
+	if err != forwardingstore.ErrTransitionConflict {
+		t.Fatalf("wrong runner atomic enqueue error = %v, want forwardingstore.ErrTransitionConflict", err)
 	}
 	cf, err := db.Forwarding().GetCreatorForwarding(ctx, "cf-owner-fence")
 	if err != nil {
@@ -142,8 +145,8 @@ func TestAtomicForwardAndEnqueue_ConflictWhenAlreadyClaimed(t *testing.T) {
 		ExecutorID: "scene.composite.v1@1"}
 
 	err = db.Forwarding().AtomicForwardAndEnqueue(ctx, "cf-conflict", job, spec, 5, "", "")
-	if err != ErrTransitionConflict {
-		t.Errorf("expected ErrTransitionConflict, got %v", err)
+	if err != forwardingstore.ErrTransitionConflict {
+		t.Errorf("expected forwardingstore.ErrTransitionConflict, got %v", err)
 	}
 
 	// Verify forwarding is still FORWARDING (not mutated).
@@ -164,7 +167,7 @@ func TestMarkCreatorForwardingEnqueueRetry_FromForwarding(t *testing.T) {
 	ctx := context.Background()
 
 	// Insert a FORWARDING record (simulating failed atomic enqueue).
-	cf := &CreatorForwarding{
+	cf := &forwardingcontract.CreatorForwarding{
 		ForwardingID:     "cf-enq-retry",
 		SourceProvider:   "openai",
 		SourceJobID:      "creator-enq-retry",

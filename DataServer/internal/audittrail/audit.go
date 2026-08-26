@@ -1,9 +1,21 @@
-// Package audittrail defines the append-only operator audit contract.
+// Package audittrail owns the append-only operator/security audit-trail
+// contract for the Velox server.
+//
+// Event is the durable record of an actor's action or an auditable lifecycle
+// transition on a resource. Repository is the persistence boundary consumed
+// by services; its SQLite implementation lives in internal/store. Metadata is
+// redacted through RedactMetadata before persistence.
+//
+// This package does not inspect filesystem layout, validate migrations, or
+// decide whether the data layer has one source of truth. Those checks belong
+// to internal/audit. Structured audit events must not be replaced with
+// free-form log lines, and a second audit-event model must not be introduced.
 package audittrail
 
 import (
 	"context"
 	"time"
+
 	"velox-server/internal/credentials"
 )
 

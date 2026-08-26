@@ -86,6 +86,23 @@ func WireAssetID(reference string) (id string, ok bool) {
 	return "", false
 }
 
+// ParseCanonicalWire parses only a self-sufficient canonical wire reference.
+// Unlike Parse, it rejects bare paths and external URLs so callers that
+// inspect an already serialized worker value cannot accidentally reinterpret
+// a legacy source reference.
+func ParseCanonicalWire(raw string) (AssetRef, error) {
+	if _, ok := WireAssetID(raw); !ok {
+		return AssetRef{}, fmt.Errorf("assetref: not a canonical wire reference: %q", strings.TrimSpace(raw))
+	}
+	return Parse(raw)
+}
+
+// IsLocalWire reports whether raw is a canonical local asset wire reference.
+func IsLocalWire(raw string) bool {
+	ref, err := ParseCanonicalWire(raw)
+	return err == nil && ref.Kind() == RefKindLocal
+}
+
 // Parse classifies a raw source reference before it is converted to the
 // canonical payload. Canonical wire schemes (velox-asset:// local,
 // velox-drive:// deferred) are authoritative; Google Drive file URLs become

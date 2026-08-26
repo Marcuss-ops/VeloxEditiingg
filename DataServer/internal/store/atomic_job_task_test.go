@@ -38,6 +38,7 @@ import (
 	"strings"
 	"testing"
 
+	"velox-server/internal/deliverystore"
 	"velox-server/internal/jobs"
 	"velox-server/internal/taskgraph"
 )
@@ -53,7 +54,7 @@ func TestValidateDeliveryDestinationTx_AcceptsEnabled(t *testing.T) {
 	s := openTestDB(t)
 	defer s.Close()
 
-	if err := s.Delivery().InsertDeliveryDestination(&DeliveryDestination{
+	if err := s.Delivery().InsertDeliveryDestination(&deliverystore.DeliveryDestination{
 		DestinationID: "drive-main",
 		Provider:      "drive",
 		Name:          "Main Drive",
@@ -106,7 +107,7 @@ func TestValidateDeliveryDestinationTx_RejectsGloballyDisabled(t *testing.T) {
 	s := openTestDB(t)
 	defer s.Close()
 
-	if err := s.Delivery().InsertDeliveryDestination(&DeliveryDestination{
+	if err := s.Delivery().InsertDeliveryDestination(&deliverystore.DeliveryDestination{
 		DestinationID: "drive-disabled",
 		Provider:      "drive",
 		Name:          "Disabled Drive",
@@ -141,7 +142,7 @@ func TestValidateDeliveryDestinationTx_RejectsGloballyDisabled(t *testing.T) {
 func seedDestinations(t *testing.T, s *SQLiteStore, pairs map[string]bool) {
 	t.Helper()
 	for id, enabled := range pairs {
-		if err := s.Delivery().InsertDeliveryDestination(&DeliveryDestination{
+		if err := s.Delivery().InsertDeliveryDestination(&deliverystore.DeliveryDestination{
 			DestinationID: id,
 			Provider:      "drive",
 			Name:          id,

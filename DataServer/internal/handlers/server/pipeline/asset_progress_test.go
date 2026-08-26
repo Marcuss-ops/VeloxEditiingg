@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"velox-server/internal/forwardingcontract"
 	"velox-server/internal/store"
 )
 
@@ -60,11 +61,11 @@ func TestAssetDownloadProgressProjectsByteWeightedLatestState(t *testing.T) {
 		}
 	}
 
-	if _, err := db.Forwarding().InsertCreatorForwarding(context.Background(), &store.CreatorForwarding{
+	if _, err := db.Forwarding().InsertCreatorForwarding(context.Background(), &forwardingcontract.CreatorForwarding{
 		ForwardingID: "forwarding-progress-owner", ExternalClientID: "client-progress",
 		SourceProvider: ExternalAPISourceProvider, SourceJobID: "source-progress",
 		TargetExecutorID: JobSubmitTargetExecutorID, TargetJobID: "job-progress",
-		Status: string(store.CFStatusForwarded),
+		Status: string(forwardingcontract.CFStatusForwarded),
 	}); err != nil {
 		t.Fatalf("seed forwarding: %v", err)
 	}
@@ -124,11 +125,11 @@ func TestAssetDownloadProgressProjectsByteWeightedLatestState(t *testing.T) {
 func TestAssetDownloadProgressReturnsZeroMetricsForKnownJobWithoutAssets(t *testing.T) {
 	db := openHandlerTestDB(t)
 	t.Cleanup(func() { _ = db.Close() })
-	if _, err := db.Forwarding().InsertCreatorForwarding(context.Background(), &store.CreatorForwarding{
+	if _, err := db.Forwarding().InsertCreatorForwarding(context.Background(), &forwardingcontract.CreatorForwarding{
 		ForwardingID: "forwarding-progress-empty", ExternalClientID: "client-empty",
 		SourceProvider: ExternalAPISourceProvider, SourceJobID: "source-empty",
 		TargetExecutorID: JobSubmitTargetExecutorID, TargetJobID: "job-empty",
-		Status: string(store.CFStatusForwarded),
+		Status: string(forwardingcontract.CFStatusForwarded),
 	}); err != nil {
 		t.Fatalf("seed forwarding: %v", err)
 	}
@@ -186,11 +187,11 @@ func TestAssetDownloadProgressRequiresClientIdentity(t *testing.T) {
 func TestAssetDownloadProgressRejectsCrossClientLookupAsIndistinguishable404(t *testing.T) {
 	db := openHandlerTestDB(t)
 	t.Cleanup(func() { _ = db.Close() })
-	if _, err := db.Forwarding().InsertCreatorForwarding(context.Background(), &store.CreatorForwarding{
+	if _, err := db.Forwarding().InsertCreatorForwarding(context.Background(), &forwardingcontract.CreatorForwarding{
 		ForwardingID: "forwarding-progress-owner-2", ExternalClientID: "client-owner",
 		SourceProvider: ExternalAPISourceProvider, SourceJobID: "source-progress-2",
 		TargetExecutorID: JobSubmitTargetExecutorID, TargetJobID: "job-owned",
-		Status: string(store.CFStatusForwarded),
+		Status: string(forwardingcontract.CFStatusForwarded),
 	}); err != nil {
 		t.Fatalf("seed forwarding: %v", err)
 	}

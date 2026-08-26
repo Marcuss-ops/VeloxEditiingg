@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+	"velox-server/internal/deliverystore"
 
 	"velox-server/internal/publicationstate"
 	"velox-server/internal/store"
@@ -120,13 +121,13 @@ func TestProcessLeaseRejectsSynchronousPublishedStatus(t *testing.T) {
 		deliveryID    = "delivery-sync-published"
 	)
 	now := time.Now().UTC().Format(time.RFC3339)
-	if err := db.Delivery().InsertDeliveryDestination(&store.DeliveryDestination{DestinationID: destinationID, Provider: "sync-published", ExternalDestinationID: "external-sync", Enabled: true, ConfigurationJSON: "{}"}); err != nil {
+	if err := db.Delivery().InsertDeliveryDestination(&deliverystore.DeliveryDestination{DestinationID: destinationID, Provider: "sync-published", ExternalDestinationID: "external-sync", Enabled: true, ConfigurationJSON: "{}"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.InsertArtifact(&store.Artifact{ID: artifactID, JobID: "job-sync-published", Type: "video", StorageProvider: "local", StorageKey: filepath.Join(t.TempDir(), "video.mp4"), SHA256: "sync-published-sha", SizeBytes: 1, Status: "READY", VerifiedAt: now, CreatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Delivery().InsertJobDelivery(&store.JobDelivery{DeliveryID: deliveryID, ArtifactID: artifactID, DestinationID: destinationID, Status: "PENDING", IdempotencyKey: deliveryID, MaxAttempts: 3, CreatedAt: now, UpdatedAt: now}); err != nil {
+	if err := db.Delivery().InsertJobDelivery(&deliverystore.JobDelivery{DeliveryID: deliveryID, ArtifactID: artifactID, DestinationID: destinationID, Status: "PENDING", IdempotencyKey: deliveryID, MaxAttempts: 3, CreatedAt: now, UpdatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -163,13 +164,13 @@ func TestProcessLeaseRejectsUnregisteredReconciler(t *testing.T) {
 		deliveryID    = "delivery-unregistered-reconciler"
 	)
 	now := time.Now().UTC().Format(time.RFC3339)
-	if err := db.Delivery().InsertDeliveryDestination(&store.DeliveryDestination{DestinationID: destinationID, Provider: "unregistered-reconciler", ExternalDestinationID: "external-reconciler", Enabled: true, ConfigurationJSON: "{}"}); err != nil {
+	if err := db.Delivery().InsertDeliveryDestination(&deliverystore.DeliveryDestination{DestinationID: destinationID, Provider: "unregistered-reconciler", ExternalDestinationID: "external-reconciler", Enabled: true, ConfigurationJSON: "{}"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.InsertArtifact(&store.Artifact{ID: artifactID, JobID: "job-unregistered-reconciler", Type: "video", StorageProvider: "local", StorageKey: filepath.Join(t.TempDir(), "video.mp4"), SHA256: "unregistered-reconciler-sha", SizeBytes: 1, Status: "READY", VerifiedAt: now, CreatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Delivery().InsertJobDelivery(&store.JobDelivery{DeliveryID: deliveryID, ArtifactID: artifactID, DestinationID: destinationID, Status: "PENDING", IdempotencyKey: deliveryID, MaxAttempts: 3, CreatedAt: now, UpdatedAt: now}); err != nil {
+	if err := db.Delivery().InsertJobDelivery(&deliverystore.JobDelivery{DeliveryID: deliveryID, ArtifactID: artifactID, DestinationID: destinationID, Status: "PENDING", IdempotencyKey: deliveryID, MaxAttempts: 3, CreatedAt: now, UpdatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -206,14 +207,14 @@ func TestLegacyProviderCannotPromoteAcceptedOperationToPublished(t *testing.T) {
 		destinationID = "destination-legacy-accepted"
 		deliveryID    = "delivery-legacy-accepted"
 	)
-	if err := db.Delivery().InsertDeliveryDestination(&store.DeliveryDestination{DestinationID: destinationID, Provider: "legacy-accepted", ExternalDestinationID: "external-legacy", Enabled: true, ConfigurationJSON: "{}"}); err != nil {
+	if err := db.Delivery().InsertDeliveryDestination(&deliverystore.DeliveryDestination{DestinationID: destinationID, Provider: "legacy-accepted", ExternalDestinationID: "external-legacy", Enabled: true, ConfigurationJSON: "{}"}); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	if err := db.InsertArtifact(&store.Artifact{ID: artifactID, JobID: "job-legacy-accepted", Type: "video", StorageProvider: "local", StorageKey: filepath.Join(t.TempDir(), "video.mp4"), SHA256: "legacy-accepted-sha", SizeBytes: 1, Status: "READY", VerifiedAt: now, CreatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Delivery().InsertJobDelivery(&store.JobDelivery{DeliveryID: deliveryID, ArtifactID: artifactID, DestinationID: destinationID, Status: "PENDING", IdempotencyKey: deliveryID, MaxAttempts: 3, CreatedAt: now, UpdatedAt: now}); err != nil {
+	if err := db.Delivery().InsertJobDelivery(&deliverystore.JobDelivery{DeliveryID: deliveryID, ArtifactID: artifactID, DestinationID: destinationID, Status: "PENDING", IdempotencyKey: deliveryID, MaxAttempts: 3, CreatedAt: now, UpdatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.CreatePublicationState(ctx, publicationID); err != nil {
@@ -266,7 +267,7 @@ func TestPublicationPhaseFailureExhaustsDeliveryRetryBudget(t *testing.T) {
 		deliveryID    = "delivery-phase-budget"
 	)
 	now := time.Now().UTC().Format(time.RFC3339)
-	if err := db.Delivery().InsertDeliveryDestination(&store.DeliveryDestination{
+	if err := db.Delivery().InsertDeliveryDestination(&deliverystore.DeliveryDestination{
 		DestinationID: destinationID, Provider: "phase-test", ExternalDestinationID: "external-phase-budget",
 		Enabled: true, ConfigurationJSON: "{}",
 	}); err != nil {
@@ -279,7 +280,7 @@ func TestPublicationPhaseFailureExhaustsDeliveryRetryBudget(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Delivery().InsertJobDelivery(&store.JobDelivery{
+	if err := db.Delivery().InsertJobDelivery(&deliverystore.JobDelivery{
 		DeliveryID: deliveryID, ArtifactID: artifactID, DestinationID: destinationID,
 		Status: "PENDING", IdempotencyKey: deliveryID, MaxAttempts: 1,
 		CreatedAt: now, UpdatedAt: now,
@@ -369,14 +370,14 @@ func TestDeliveryRunnerResumesMetadataWithoutSecondUpload(t *testing.T) {
 	const artifactID = "artifact-phase-resume"
 	const deliveryID = "delivery-phase-resume"
 	const destinationID = "destination-phase-resume"
-	if err := db.Delivery().InsertDeliveryDestination(&store.DeliveryDestination{DestinationID: destinationID, Provider: "phase-test", ExternalDestinationID: "external-phase", Enabled: true, ConfigurationJSON: "{}"}); err != nil {
+	if err := db.Delivery().InsertDeliveryDestination(&deliverystore.DeliveryDestination{DestinationID: destinationID, Provider: "phase-test", ExternalDestinationID: "external-phase", Enabled: true, ConfigurationJSON: "{}"}); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	if err := db.InsertArtifact(&store.Artifact{ID: artifactID, JobID: "job-phase-resume", Type: "video", StorageProvider: "local", StorageKey: filepath.Join(t.TempDir(), "video.mp4"), SHA256: "artifact-sha", SizeBytes: 1, Status: "READY", VerifiedAt: now, CreatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Delivery().InsertJobDelivery(&store.JobDelivery{DeliveryID: deliveryID, ArtifactID: artifactID, DestinationID: destinationID, Status: "PENDING", IdempotencyKey: deliveryID, MaxAttempts: 3, CreatedAt: now, UpdatedAt: now}); err != nil {
+	if err := db.Delivery().InsertJobDelivery(&deliverystore.JobDelivery{DeliveryID: deliveryID, ArtifactID: artifactID, DestinationID: destinationID, Status: "PENDING", IdempotencyKey: deliveryID, MaxAttempts: 3, CreatedAt: now, UpdatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.CreatePublicationState(context.Background(), "publication-phase-resume"); err != nil {

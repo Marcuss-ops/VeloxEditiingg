@@ -274,3 +274,57 @@ func parsePersistedTimestamp(value, field string) (time.Time, error) {
 	}
 	return time.Time{}, fmt.Errorf("worker runtime: invalid %s %q", field, value)
 }
+
+// SQLiteSmokeRunStore adapts the canonical smoke_runs functions to the
+// consumer-owned method interface used by fleet's smoke executor. It lives
+// in this leaf so callers do not need the internal/store compatibility facade.
+type SQLiteSmokeRunStore struct {
+	db *sql.DB
+}
+
+// NewSQLiteSmokeRunStore binds the canonical smoke-run repository to db.
+func NewSQLiteSmokeRunStore(db *sql.DB) *SQLiteSmokeRunStore {
+	if db == nil {
+		panic("smokerunstore: NewSQLiteSmokeRunStore requires a non-nil database")
+	}
+	return &SQLiteSmokeRunStore{db: db}
+}
+
+// CreateSmokeRunsTableIfNotExists creates the smoke_runs table for test/dev
+// databases. Production schemas should use the migration runner instead.
+func (s *SQLiteSmokeRunStore) CreateSmokeRunsTableIfNotExists() error {
+	return CreateSmokeRunsTableIfNotExists(s.db)
+}
+
+// InsertSmokeRun persists a new smoke run row.
+func (s *SQLiteSmokeRunStore) InsertSmokeRun(ctx context.Context, rec SmokeRun) error {
+	return InsertSmokeRun(ctx, s.db, rec)
+}
+
+// MarkSmokeSucceeded atomically transitions a smoke run to SUCCEEDED.
+func (s *SQLiteSmokeRunStore) MarkSmokeSucceeded(ctx context.Context, runID string, finishedAt time.Time, durationMs int64, artifactDriveID string) error {
+	return MarkSmokeSucceeded(ctx, s.db, runID, finishedAt, durationMs, artifactDriveID)
+}
+
+// MarkSmokeFailed atomically transitions a smoke run to FAILED.
+func (s *SQLiteSmokeRunStore) MarkSmokeFailed(ctx context.Context, runID string, finishedAt time.Time, durationMs int64, errMsg string) error {
+	return MarkSmokeFailed(ctx, s.db, runID, finishedAt, durationMs, errMsg)
+}
+
+// GetLatestSmokeForWorker returns the latest smoke run for a worker.
+func (s *SQLiteSmokeRunStore) GetLatestSmokeForWorker(ctx context.Context, workerID string) (*SmokeRun, error) {
+	return GetLatestSmokeForWorker(ctx, s.db, workerID)
+}
+
+// ListRecentSmokesForWorker returns recent smoke runs for a worker.
+func (s *SQLiteSmokeRunStore) ListRecentSmokesForWorker(ctx context.Context, workerID string, limit int) ([]SmokeRun, error) {
+	return ListRecentSmokesForWorker(ctx, s.db, workerID, limit)
+}
+
+var _ interface {
+	InsertSmokeRun(context.Context, SmokeRun) error
+	MarkSmokeSucceeded(context.Context, string, time.Time, int64, string) error
+	MarkSmokeFailed(context.Context, string, time.Time, int64, string) error
+	GetLatestSmokeForWorker(context.Context, string) (*SmokeRun, error)
+	ListRecentSmokesForWorker(context.Context, string, int) ([]SmokeRun, error)
+} = (*SQLiteSmokeRunStore)(nil)

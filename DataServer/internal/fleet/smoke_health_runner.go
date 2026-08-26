@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"velox-server/internal/smokerunstore"
 	"velox-server/internal/store"
 )
 
@@ -95,7 +96,7 @@ func (c *SmokeRunHealthChecker) runLevelD(ctx context.Context, workerID string, 
 	}
 	run, err := c.runs.GetLatestSmokeForWorker(ctx, workerID)
 	if err != nil {
-		if errors.Is(err, store.ErrSmokeRunNotFound) {
+		if errors.Is(err, smokerunstore.ErrSmokeRunNotFound) {
 			return "", fmt.Errorf("no smoke runs recorded for worker %q", workerID)
 		}
 		return "", fmt.Errorf("smoke health checker: query: %w", err)
@@ -104,14 +105,14 @@ func (c *SmokeRunHealthChecker) runLevelD(ctx context.Context, workerID string, 
 		return "", fmt.Errorf("latest smoke predates resume operation (run_id=%s, started_at=%s, queued_at=%s)", run.RunID, run.StartedAt.Format(time.RFC3339), notBefore.Format(time.RFC3339))
 	}
 	switch run.Status {
-	case store.SmokeStatusSucceeded:
+	case smokerunstore.SmokeStatusSucceeded:
 		if run.ArtifactDriveID != "" {
 			return run.ArtifactDriveID, nil
 		}
 		return "", fmt.Errorf("latest smoke SUCCEEDED but artifact_drive_id is empty (run_id=%s)", run.RunID)
-	case store.SmokeStatusPending:
+	case smokerunstore.SmokeStatusPending:
 		return "", fmt.Errorf("latest smoke is still PENDING (run_id=%s, started_at=%s)", run.RunID, run.StartedAt.Format("2006-01-02T15:04:05Z"))
-	case store.SmokeStatusFailed:
+	case smokerunstore.SmokeStatusFailed:
 		return "", fmt.Errorf("latest smoke FAILED (run_id=%s, error=%s)", run.RunID, run.ErrorMessage)
 	default:
 		return "", fmt.Errorf("unknown smoke status %q (run_id=%s)", run.Status, run.RunID)

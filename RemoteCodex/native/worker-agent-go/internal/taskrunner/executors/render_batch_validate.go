@@ -24,13 +24,12 @@ import (
 // output is produced here.
 
 func decodeRenderPlanV2(spec executor.TaskSpec) (*contract.CompiledRenderPlanV2, error) {
-	raw, ok := spec.Payload[contract.PayloadKeyCompiledRenderPlanJSON].(string)
-	if !ok {
-		return nil, errors.New("render_batch@1: compiled plan JSON must be a string")
-	}
-	plan, err := contract.DecodeCompiledRenderPlanV2([]byte(raw))
+	plan, err := contract.DecodeCompiledRenderPlanV2Payload(spec.Payload)
 	if err != nil {
 		return nil, fmt.Errorf("render_batch@1: decode V2 plan: %w", err)
+	}
+	if plan == nil {
+		return nil, errors.New("render_batch@1: compiled plan JSON must be present")
 	}
 	return plan, nil
 }

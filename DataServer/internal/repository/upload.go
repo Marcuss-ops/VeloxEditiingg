@@ -5,6 +5,23 @@ import (
 	"time"
 )
 
+// UploadStatus is the canonical lifecycle state for an artifact upload
+// session. It is kept with the repository projection so persistence and
+// application callers share one vocabulary without importing the store
+// facade.
+type UploadStatus string
+
+const (
+	UploadCreated    UploadStatus = "CREATED"
+	UploadUploading  UploadStatus = "UPLOADING"
+	UploadReceived   UploadStatus = "RECEIVED"
+	UploadVerifying  UploadStatus = "VERIFYING"
+	UploadFinalizing UploadStatus = "FINALIZING"
+	UploadCompleted  UploadStatus = "COMPLETED"
+	UploadFailed     UploadStatus = "FAILED"
+	UploadExpired    UploadStatus = "EXPIRED"
+)
+
 // UploadSession is the persistent state of one upload.
 //
 // Receive / Finalize mutate it through UploadRepository.UpdateUploadStatus.

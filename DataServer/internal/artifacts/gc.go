@@ -8,14 +8,15 @@ import (
 	"strings"
 	"time"
 
-	"velox-server/internal/store"
+	"velox-server/internal/artifactsstore"
+	"velox-server/internal/repository"
 )
 
 // RunArtifactGC leases durable candidates, deletes only local paths within
 // the configured final/staging roots, and acknowledges the DB row afterwards.
 // A missing file is success; an unsafe path or unsupported provider remains
 // eligible for an operator-visible retry.
-func RunArtifactGC(ctx context.Context, db *store.ArtifactGCStore, blobStore store.BlobStore, owner string, now time.Time, lease time.Duration, limit int) (deleted, failed int, err error) {
+func RunArtifactGC(ctx context.Context, db *artifactsstore.ArtifactGCStore, blobStore repository.BlobStore, owner string, now time.Time, lease time.Duration, limit int) (deleted, failed int, err error) {
 	if db == nil || blobStore == nil || owner == "" {
 		return 0, 0, fmt.Errorf("artifact gc: db, blob store and owner are required")
 	}
@@ -44,7 +45,7 @@ func RunArtifactGC(ctx context.Context, db *store.ArtifactGCStore, blobStore sto
 	return deleted, failed, nil
 }
 
-func gcPath(candidate store.ArtifactGCCandidate, blobStore store.BlobStore) (string, error) {
+func gcPath(candidate artifactsstore.ArtifactGCCandidate, blobStore repository.BlobStore) (string, error) {
 	if candidate.StorageProvider != "" && candidate.StorageProvider != "local" {
 		return "", fmt.Errorf("unsupported storage provider %q", candidate.StorageProvider)
 	}

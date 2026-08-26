@@ -6,7 +6,8 @@ import (
 	"net/http"
 	"strings"
 
-	"velox-server/internal/store"
+	"velox-server/internal/deliverystore"
+	"velox-server/internal/repository"
 
 	"github.com/gin-gonic/gin"
 )
@@ -60,7 +61,7 @@ func (h *Handlers) PipelineRunStatus() gin.HandlerFunc {
 			}
 			var job map[string]any
 			var jobErr error
-			var artifacts []store.Artifact
+			var artifacts []repository.Artifact
 			if clientID != "" {
 				job, jobErr = h.store.GetJobForClient(ctx, forwarding.TargetJobID, clientID)
 				artifacts, _ = h.store.GetArtifactsByJobForClient(ctx, forwarding.TargetJobID, clientID, 1)
@@ -73,7 +74,7 @@ func (h *Handlers) PipelineRunStatus() gin.HandlerFunc {
 				if len(artifacts) > 0 {
 					a := artifacts[0]
 					response["artifact"] = gin.H{"artifact_id": a.ID, "status": a.Status, "sha256": a.SHA256, "storage_url": a.StorageURL}
-					var deliveries []store.JobDelivery
+					var deliveries []deliverystore.JobDelivery
 					if clientID != "" {
 						deliveries, _ = h.store.ListJobDeliveriesByJobForClient(ctx, forwarding.TargetJobID, clientID)
 					} else {
