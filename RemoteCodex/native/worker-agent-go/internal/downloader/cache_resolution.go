@@ -83,6 +83,9 @@ type CacheResolution struct {
 	DownloadBytes int64
 	Source        CacheSource
 	SHA256        assetref.ContentHash
+	// Timing carries the observable per-transfer sub-phase breakdown for the
+	// per-attempt asset-preparation aggregator. Zero on hits and legacy paths.
+	Timing AssetSubPhases
 }
 
 // ResolutionSink observes each completed resolution exactly once. It runs on
@@ -179,6 +182,7 @@ func resolutionFromDownloadedAsset(asset DownloadedAsset, req DownloadRequest) C
 		CacheHit:  asset.CacheHit,
 		Source:    CacheSourceMaster,
 		SHA256:    asset.SHA256,
+		Timing:    asset.Timing,
 	}
 	if resolution.AssetID == "" {
 		resolution.AssetID = req.AssetID

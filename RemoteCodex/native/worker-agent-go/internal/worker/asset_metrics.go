@@ -45,11 +45,35 @@ type AttemptCacheMetrics struct {
 	CacheDownloadBytes int64
 }
 
+// AssetPreparationSummary is the per-attempt asset materialization drill-down.
+// Wall-vs-work is kept distinct: WallMS spans a transfer's own window (summed
+// across parallel downloads is NOT the attempt wall), WorkSumMS is the sum of
+// byte-moving work. Both derive from the canonical per-transfer Timing carried
+// on each CacheResolution.
+type AssetPreparationSummary struct {
+	AssetsTotal    int
+	AssetsUnique   int
+	CacheHits      int
+	CacheMisses    int
+	ReadyBefore    int // served from a verified local file (no bytes moved)
+	DownloadedNow  int // bytes transferred during this attempt
+
+	CacheLookupMS    int64
+	RemoteWaitMS     int64
+	RemoteWaitCount  int64
+	DownloadWallMS   int64
+	DownloadWorkSum  int64
+	HashVerifyMS     int64
+	MetadataProbeMS  int64
+	MaterializeLocalMS int64
+}
+
 type assetOperationTracker struct {
 	mu           sync.Mutex
 	records      []AssetOperationRecord
 	cacheEnabled bool
 	cache        AttemptCacheMetrics
+	prep         AssetPreparationSummary
 }
 
 // recordResolution accumulates one canonical cache resolution into the
@@ -70,6 +94,24 @@ func (t *assetOperationTracker) recordResolution(resolution downloader.CacheReso
 	if resolution.Downloaded {
 		t.cache.CacheDownloadCount++
 		t.cache.CacheDownloadBytes += resolution.DownloadBytes
+	}
+	t.prep.AssetsTotal++
+	if resolution.CacheHit {
+		t.prep.ReadyBefore++
+	} else if resolution.Downloaded {
+		t.prep.DownloadedNow++
+	}
+	// Aggregate the observable per-transfer sub-phases onto the attempt-scoped
+	// drill-down. Zero ReviewTiming on hits/legacy paths is safe to add.
+	t.prep.CacheLookupMS += resolution.Timing.CacheLookupMS
+	t.prep.RemoteWaitMS += resolution.Timing.RemoteWaitMS
+	t.prep.DownloadWallMS += resolution.Timing.DownloadWallMS
+	t.prep.DownloadWorkSum += resolution.Timing.DownloadWorkMS
+	t.prep.HashVerifyMS += resolution.Timing.HashVerifyMS
+	t.prep.MetadataProbeMS += resolution.Timing.MetadataProbeMS
+	t.prep.MaterializeLocalMS += resolution.Timing.MaterializeLocalMS
+	if resolution.Timing.RemoteWaitMS > 0 {
+		t.prep.RemoteWaitCount++
 	}
 }
 
@@ -112,6 +154,31 @@ func (t *assetOperationTracker) add(record AssetOperationRecord) {
 	t.mu.Lock()
 	t.records = append(t.records, record)
 	t.mu.Unlock()
+}
+
+// prepSnapshot returns a copy of the per-attempt asset-preparation summary
+// with the unique-asset count computed from the records.
+func (t *assetOperationTracker) prepSnapshot() AssetPreparationSummary {
+	if t == nil {
+		return AssetPreparationSummary{}
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := t.prep
+	out.AssetsUnique = len(t.uniqueAssetsLocked())
+	out.CacheHits = int(t.cache.CacheHits)
+	out.CacheMisses = int(t.cache.CacheMisses)
+	return out
+}
+
+func (t *assetOperationTracker) uniqueAssetsLocked() map[string]struct{} {
+	unique := make(map[string]struct{}, len(t.records))
+	for _, record := range t.records {
+		if assetID := strings.TrimSpace(record.AssetID); assetID != "" {
+			unique[assetID] = struct{}{}
+		}
+	}
+	return unique
 }
 
 func (t *assetOperationTracker) snapshot() []AssetOperationRecord {
@@ -297,6 +364,7 @@ func attachAssetOperations(report *taskrunner.TaskExecutionReport, tracker *asse
 			uniqueAssets[assetID] = struct{}{}
 		}
 	}
+	prep := tracker.prepSnapshot()
 	legacy["cache.enabled"] = tracker.cacheEnabled || len(records) > 0
 	legacy["asset.cache.lookups"] = cache.CacheLookups
 	legacy["cache.lookups"] = cache.CacheLookups
@@ -305,6 +373,25 @@ func attachAssetOperations(report *taskrunner.TaskExecutionReport, tracker *asse
 	legacy["asset.cache.miss.count"] = cache.CacheMisses
 	legacy["asset.cache.download.count"] = cache.CacheDownloadCount
 	legacy["asset.cache.download.bytes"] = cache.CacheDownloadBytes
+	// Per-attempt asset-preparation drill-down. nested under the requested
+	// field names; wall vs work are kept distinct so parallel downloads do not
+	// inflate the attempt wall.
+	legacy["assets_required"] = int64(prep.AssetsTotal)
+	legacy["assets_unique"] = int64(prep.AssetsUnique)
+	legacy["assets_cache_hits"] = int64(prep.CacheHits)
+	legacy["assets_cache_misses"] = int64(prep.CacheMisses)
+	legacy["assets_ready_before_attempt"] = int64(prep.ReadyBefore)
+	legacy["assets_downloaded_during_attempt"] = int64(prep.DownloadedNow)
+	legacy["asset_preparation"] = map[string]int64{
+		"cache_lookup_ms":      prep.CacheLookupMS,
+		"remote_wait_ms":       prep.RemoteWaitMS,
+		"remote_wait_count":    prep.RemoteWaitCount,
+		"network_download_wall_ms":  prep.DownloadWallMS,
+		"network_download_work_sum_ms": prep.DownloadWorkSum,
+		"hash_verify_ms":       prep.HashVerifyMS,
+		"metadata_probe_ms":    prep.MetadataProbeMS,
+		"materialize_local_ms": prep.MaterializeLocalMS,
+	}
 	if len(records) > 0 {
 		// Detailed per-asset records remain a legacy compatibility detail:
 		// RawExecutionMetrics carries the canonical aggregate counters, while

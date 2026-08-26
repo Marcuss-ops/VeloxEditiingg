@@ -244,10 +244,10 @@ func (t *masterAssetTransferer) transferSingleStream(ctx context.Context, report
 			}
 			body = &assetProgressBody{ctx: ctx, src: body, onProgress: onProgress, done: resumeOffset, maxBPS: req.MaxBandwidthBytesPerSecond}
 		}
-		localPath, downloadedBytes, actualSHA, verifyDuration, err := writeVeloxAssetStreamToCacheAtOffset(cacheDir, assetID, string(req.SHA256), req.SizeBytes, body, resumeOffset, meta.MIMEType, meta.SizeBytes, syncAssetDirectory)
+		localPath, downloadedBytes, actualSHA, hashVerifyMS, materializeLocalMS, err := writeVeloxAssetStreamToCacheAtOffset(cacheDir, assetID, string(req.SHA256), req.SizeBytes, body, resumeOffset, meta.MIMEType, meta.SizeBytes, syncAssetDirectory)
 		body.Close()
 		if err != nil {
-			recordCacheProjectionEvent(reportCtx, "hash_verify", verifyDuration, telemetry.StatusFailed, "", 0)
+			recordCacheProjectionEvent(reportCtx, "hash_verify", hashVerifyMS+materializeLocalMS, telemetry.StatusFailed, "", 0)
 			if transferHandle != nil {
 				transferHandle.Abort("asset_transfer", err.Error())
 			}
@@ -257,7 +257,7 @@ func (t *masterAssetTransferer) transferSingleStream(ctx context.Context, report
 			}
 			continue
 		}
-		recordCacheProjectionEvent(reportCtx, "hash_verify", verifyDuration, telemetry.StatusOK, "", 0)
+		recordCacheProjectionEvent(reportCtx, "hash_verify", hashVerifyMS+materializeLocalMS, telemetry.StatusOK, "", 0)
 		if transferHandle != nil {
 			transferHandle.CompleteWith(downloadedBytes, downloadedBytes, 0, telemetry.StatusOK, "", "")
 		}
@@ -275,7 +275,16 @@ func (t *masterAssetTransferer) transferSingleStream(ctx context.Context, report
 				return downloader.TransferResult{}, fmt.Errorf("commit verified asset %s: %w", key, err)
 			}
 		}
-		return downloader.TransferResult{LocalPath: localPath, Bytes: downloadedBytes, SHA256: verifiedHash}, nil
+		return downloader.TransferResult{
+			LocalPath: localPath,
+			Bytes:     downloadedBytes,
+			SHA256:    verifiedHash,
+			Timing: downloader.TransferSubPhases{
+				HashVerifyMS:     hashVerifyMS.Milliseconds(),
+				MaterializeLocalMS: materializeLocalMS.Milliseconds(),
+				DownloadWorkMS:    0, // single-stream work ~ wall; set by caller span
+			},
+		}, nil
 	}
 
 	if lastErr == nil {

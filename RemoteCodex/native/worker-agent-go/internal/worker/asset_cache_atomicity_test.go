@@ -29,7 +29,7 @@ func TestWriteAssetCacheAtOffsetRestoresPreviousFinalOnDirectorySyncFailure(t *t
 		}
 		return syncAssetDirectory(path)
 	}
-	_, _, _, _, err := writeVeloxAssetStreamToCacheAtOffset(cacheDir, assetID, expectedSHA, int64(len(newData)), ioReadCloser{Reader: bytes.NewReader(newData)}, 0, "video/mp4", int64(len(newData)), syncDir)
+	_, _, _, _, _, err := writeVeloxAssetStreamToCacheAtOffset(cacheDir, assetID, expectedSHA, int64(len(newData)), ioReadCloser{Reader: bytes.NewReader(newData)}, 0, "video/mp4", int64(len(newData)), syncDir)
 	if err == nil {
 		t.Fatal("injected fsync failure must fail promotion")
 	}

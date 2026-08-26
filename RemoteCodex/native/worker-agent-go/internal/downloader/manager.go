@@ -221,6 +221,7 @@ func (m *Manager) Resolve(ctx context.Context, req DownloadRequest) (DownloadedA
 				SizeBytes: result.Bytes,
 				CacheHit:  hit,
 				ReadyAt:   readyAt,
+				Timing:    t.timing(),
 				Outcome:   t.resolutionOutcome(),
 			}, nil
 
@@ -424,10 +425,12 @@ func (m *Manager) JobSnapshot(jobID string) JobDownloadSnapshot {
 // run drives one transfer: cache check first (CACHE_HIT fast path), then the
 // bounded, priority-stable byte transfer.
 func (t *Transfer) run(m *Manager) {
+	t.cacheProbeStartedAt = t.now()
 	t.setState(DownloadCacheCheck)
 
 	request := t.requestSnapshot()
 	hit, err := m.transferer.Check(t.transferContext(), t.reportContext(), request)
+	t.cacheProbeCompletedAt = t.now()
 	if err != nil {
 		if t.transferContext().Err() != nil {
 			t.finishCancelled()
@@ -453,7 +456,10 @@ func (t *Transfer) run(m *Manager) {
 		return
 	}
 
-	// Miss: the byte transfer goes through the bounded, stable queue.
+	// Miss: the byte transfer goes through the bounded, stable queue. Record
+	// the enqueue instant so the RemoteWaitMS measurement can bracket the time
+	// spent queued before a download slot was available.
+	t.enqueuedAt = t.now()
 	t.setQueuePos(m.qseq.Add(1))
 	request = t.requestSnapshot()
 	if !m.sched.Enqueue(t.Key, request.Priority, t.queuedAtLocked(), func() { t.scheduled(m) }) {
@@ -470,9 +476,12 @@ func (t *Transfer) scheduled(m *Manager) {
 		t.finishCancelled()
 		return
 	}
+	t.downloadStartedAt = t.now()
 	t.setDownloading()
 	request := t.requestSnapshot()
 	result, err := m.transferer.Transfer(t.transferContext(), t.reportContext(), request, t.reportProgress)
+	t.downloadCompletedAt = t.now()
+	t.captureTransfererTiming(result)
 	if err != nil {
 		if t.transferContext().Err() != nil {
 			t.finishCancelled()

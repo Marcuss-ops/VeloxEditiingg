@@ -58,6 +58,20 @@ type Transfer struct {
 	updatedAt       time.Time
 	completedAt     time.Time
 
+	// Sub-phase wall-clock boundary stamps for the drill-down. Measured in
+	// the transfer's own goroutine via t.now(), so the durations are
+	// internally consistent even under the manager's shared transfers.
+	cacheProbeStartedAt   time.Time
+	cacheProbeCompletedAt time.Time
+	enqueuedAt            time.Time
+	downloadStartedAt     time.Time
+	downloadCompletedAt   time.Time
+	// transfererTiming carries the verify/materialize/probe work reported by
+	// the byte transferer (populated in scheduled via captureTransfererTiming).
+	transfererTiming TransferSubPhases
+	// transferTiming is the computed wall-clock drill-down populated at finish.
+	transferTiming AssetSubPhases
+
 	// Progress tracking (refreshed by reportProgress as bytes land):
 	// throughputBPS is the bytes/sec measured across consecutive progress
 	// samples; the publish/checkpoint baselines drive the throttles.
@@ -195,6 +209,15 @@ func (t *Transfer) resolutionOutcome() CacheOutcome {
 	return t.lookupOutcome
 }
 
+// captureTransfererTiming records the byte-transferer-reported work so the
+// computed drill-down at finish can split wall time into hash_verify and
+// materialize_local without re-instrumenting the transferer.
+func (t *Transfer) captureTransfererTiming(result TransferResult) {
+	t.mu.Lock()
+	t.transfererTiming = result.Timing
+	t.mu.Unlock()
+}
+
 // setDownloading records DOWNLOADING start (attempt bump + startedAt) and
 // resets the progress baselines so each attempt re-baselines its rate sample
 // and publishes its first byte report immediately.
@@ -242,6 +265,7 @@ func (t *Transfer) finish(result TransferResult, err error) {
 	t.err = err
 	t.completedAt = now
 	t.updatedAt = now
+	t.computeTiming()
 	if err != nil {
 		t.state = DownloadFailed
 	} else {
@@ -253,6 +277,48 @@ func (t *Transfer) finish(result TransferResult, err error) {
 	t.emitCheckpoint(now)
 	t.once.Do(func() { close(t.done) })
 	t.notifyOperational()
+}
+
+// computeTiming derives the per-transfer sub-phase wall clock from the
+// boundary stamps recorded by the run loop and the byte transferer's own
+// work-timing. It runs under t.mu (inside finish). Unset stamps yield zero.
+func (t *Transfer) computeTiming() {
+	ms := func(from, to time.Time) int64 {
+		if from.IsZero() || to.IsZero() || to.Before(from) {
+			return 0
+		}
+		return to.Sub(from).Milliseconds()
+	}
+	t.transferTiming.CacheLookupMS = ms(t.cacheProbeStartedAt, t.cacheProbeCompletedAt)
+	// Remote/materialization wait is the queue stretch between enqueue and a
+	// free download slot.
+	t.transferTiming.RemoteWaitMS = ms(t.enqueuedAt, t.downloadStartedAt)
+	t.transferTiming.DownloadWallMS = ms(t.downloadStartedAt, t.downloadCompletedAt)
+	t.transferTiming.MetadataProbeMS = t.transfererTiming.MetadataProbeMS
+	t.transferTiming.HashVerifyMS = t.transfererTiming.HashVerifyMS
+	t.transferTiming.MaterializeLocalMS = t.transfererTiming.MaterializeLocalMS
+	// Byte-work: a transferer that reported its own work uses it; otherwise
+	// approximate it as the download span minus the known technical work so
+	// the aggregator still sees a non-zero download component.
+	if t.transfererTiming.DownloadWorkMS > 0 {
+		t.transferTiming.DownloadWorkMS = t.transfererTiming.DownloadWorkMS
+	} else {
+		work := t.transferTiming.DownloadWallMS -
+			t.transferTiming.HashVerifyMS -
+			t.transferTiming.MaterializeLocalMS -
+			t.transferTiming.MetadataProbeMS
+		if work < 0 {
+			work = 0
+		}
+		t.transferTiming.DownloadWorkMS = work
+	}
+}
+
+// timing returns the computed sub-phase breakdown (safe to call after done).
+func (t *Transfer) timing() AssetSubPhases {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.transferTiming
 }
 
 // finishCancelled settles the transfer into CANCELLED. Used when the transfer

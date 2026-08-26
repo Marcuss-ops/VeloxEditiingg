@@ -159,6 +159,30 @@ type DownloadRequest struct {
 	MaxBandwidthBytesPerSecond int64
 }
 
+// AssetSubPhases carries the per-transfer, sub-phase wall-clock breakdown of
+// one asset materialization. All durations are monotonic milliseconds observed
+// in the OWNING process (the worker) so they can be summed across parallel
+// transfers. Wall vs work is distinguished by the aggregator: WallMS is the
+// transfer's own span, WorkMS names a repeatable unit (summed, not extended).
+type AssetSubPhases struct {
+	// CacheLookupMS is wall time spent probing the local cache (Check).
+	CacheLookupMS int64
+	// RemoteWaitMS is wall time the transfer spent queued before a download
+	// slot was available (the observable remote/materialization wait).
+	RemoteWaitMS int64
+	// DownloadWallMS is wall time spanned by the byte transfer itself.
+	DownloadWallMS int64
+	// Technical overhead of the transfer: metadata probe (Content-Type /
+	// open) plus the compute and filesystem work of the size+SHA verify and
+	// the atomic promotion (materialize local).
+	MetadataProbeMS  int64
+	HashVerifyMS     int64
+	MaterializeLocalMS int64
+	// DownloadWorkMS is the sum of actual byte-moving time across attempts
+	// (parallel downloads aggregate via the aggregator, not here).
+	DownloadWorkMS int64
+}
+
 // DownloadedAsset is the successful outcome of Resolve: a local filesystem
 // path whose bytes were verified (or a previously verified cache hit).
 type DownloadedAsset struct {
@@ -169,6 +193,9 @@ type DownloadedAsset struct {
 	SizeBytes int64
 	CacheHit  bool
 	ReadyAt   time.Time
+	// Timing holds the observable sub-phase durations when the underlying
+	// transferer produced them (zero for legacy/partial producers).
+	Timing AssetSubPhases
 	// Outcome is the canonical classification from the lookup point
 	// (Transferer.Check), carried through the transfer so the resolver
 	// boundary never re-derives hit/miss. Empty only for legacy transferers.

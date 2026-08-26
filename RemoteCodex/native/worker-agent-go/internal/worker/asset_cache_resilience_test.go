@@ -82,7 +82,7 @@ func TestWriteAssetCacheAtOffsetPromotesOnlyCompleteVerifiedPartial(t *testing.T
 		t.Fatal(err)
 	}
 
-	path, size, _, _, err := writeVeloxAssetStreamToCacheAtOffset(cacheDir, assetID, "", int64(len(data)), ioReadCloser{Reader: bytes.NewReader(data[7:])}, 7, "", int64(len(data)), syncAssetDirectory)
+	path, size, _, _, _, err := writeVeloxAssetStreamToCacheAtOffset(cacheDir, assetID, "", int64(len(data)), ioReadCloser{Reader: bytes.NewReader(data[7:])}, 7, "", int64(len(data)), syncAssetDirectory)
 	if err != nil {
 		t.Fatalf("append/promote partial: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestWriteAssetCacheAtOffsetPromotesOnlyCompleteVerifiedPartial(t *testing.T
 func TestWriteAssetCacheAtOffsetRejectsHashAndRemovesPartial(t *testing.T) {
 	cacheDir := t.TempDir()
 	assetID := "asset-hash"
-	_, _, _, _, err := writeVeloxAssetStreamToCacheAtOffset(cacheDir, assetID, "0000000000000000000000000000000000000000000000000000000000000000", 11, ioReadCloser{Reader: bytes.NewReader([]byte("wrong bytes"))}, 0, "", 0, syncAssetDirectory)
+	_, _, _, _, _, err := writeVeloxAssetStreamToCacheAtOffset(cacheDir, assetID, "0000000000000000000000000000000000000000000000000000000000000000", 11, ioReadCloser{Reader: bytes.NewReader([]byte("wrong bytes"))}, 0, "", 0, syncAssetDirectory)
 	if err == nil {
 		t.Fatal("hash mismatch should fail")
 	}

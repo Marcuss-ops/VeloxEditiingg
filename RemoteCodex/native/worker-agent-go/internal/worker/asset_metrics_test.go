@@ -420,6 +420,57 @@ func TestAttachAssetOperationsProjectsResolverCacheCounters(t *testing.T) {
 	}
 }
 
+// TestAssetPreparationSummary_AggregatesPerAttemptDrillDown locks the STEP D
+// contract: the per-attempt asset-preparation summary aggregates the
+// per-transfer sub-phases from the canonical resolver sink and exposes ready-
+// before vs downloaded-during counts, keeping wall and work distinct.
+func TestAssetPreparationSummary_AggregatesPerAttemptDrillDown(t *testing.T) {
+	tracker := &assetOperationTracker{cacheEnabled: true}
+	// One warm (cache-hit) asset and one download with full sub-phase timing.
+	tracker.recordResolution(downloader.CacheResolution{
+		AssetID: "warm.mp4", CacheHit: true, Outcome: downloader.CacheOutcomeHitValid,
+		Source: downloader.CacheSourceLocalDisk,
+		Timing: downloader.AssetSubPhases{CacheLookupMS: 12},
+	})
+	tracker.recordResolution(downloader.CacheResolution{
+		AssetID: "cold.mp4", CacheHit: false, Outcome: downloader.CacheOutcomeMissNotFound,
+		Downloaded: true, DownloadBytes: 8192, Source: downloader.CacheSourceMaster,
+		Timing: downloader.AssetSubPhases{
+			CacheLookupMS: 15, RemoteWaitMS: 9000, DownloadWallMS: 3200,
+			DownloadWorkMS: 3100, HashVerifyMS: 40, MetadataProbeMS: 5, MaterializeLocalMS: 55,
+		},
+	})
+
+	prep := tracker.prepSnapshot()
+	if prep.AssetsTotal != 2 || prep.AssetsUnique != 2 {
+		t.Fatalf("assets total/unique = %d/%d, want 2/2", prep.AssetsTotal, prep.AssetsUnique)
+	}
+	if prep.ReadyBefore != 1 || prep.DownloadedNow != 1 || prep.CacheHits != 1 || prep.CacheMisses != 1 {
+		t.Fatalf("ready/downloaded/hits/misses = %d/%d/%d/%d", prep.ReadyBefore, prep.DownloadedNow, prep.CacheHits, prep.CacheMisses)
+	}
+	if prep.CacheLookupMS != 27 || prep.RemoteWaitMS != 9000 || prep.RemoteWaitCount != 1 {
+		t.Fatalf("lookup/remote = %d/%d/%d, want 27/9000/1", prep.CacheLookupMS, prep.RemoteWaitMS, prep.RemoteWaitCount)
+	}
+	if prep.DownloadWallMS != 3200 || prep.DownloadWorkSum != 3100 || prep.HashVerifyMS != 40 || prep.MetadataProbeMS != 5 || prep.MaterializeLocalMS != 55 {
+		t.Fatalf("download/hash/probe/materialize = %d/%d/%d/%d/%d", prep.DownloadWallMS, prep.DownloadWorkSum, prep.HashVerifyMS, prep.MetadataProbeMS, prep.MaterializeLocalMS)
+	}
+
+	// Projection into the report's legacy (master-bound) metrics keys.
+	report := taskrunner.TaskExecutionReport{}
+	attachAssetOperations(&report, tracker)
+	m := report.Metrics
+	if m["assets_ready_before_attempt"] != int64(1) || m["assets_downloaded_during_attempt"] != int64(1) {
+		t.Fatalf("ready/downloaded projection = %v/%v", m["assets_ready_before_attempt"], m["assets_downloaded_during_attempt"])
+	}
+	prepBlock, ok := m["asset_preparation"].(map[string]int64)
+	if !ok {
+		t.Fatalf("asset_preparation block missing: %#v", m["asset_preparation"])
+	}
+	if prepBlock["cache_lookup_ms"] != 27 || prepBlock["remote_wait_ms"] != 9000 || prepBlock["network_download_wall_ms"] != 3200 || prepBlock["network_download_work_sum_ms"] != 3100 || prepBlock["hash_verify_ms"] != 40 || prepBlock["materialize_local_ms"] != 55 {
+		t.Fatalf("preparation projection = %#v", prepBlock)
+	}
+}
+
 func TestAttachAssetOperationsPreservesAbsentCacheFacts(t *testing.T) {
 	report := taskrunner.TaskExecutionReport{
 		RawMetrics: &telemetry.RawExecutionMetrics{

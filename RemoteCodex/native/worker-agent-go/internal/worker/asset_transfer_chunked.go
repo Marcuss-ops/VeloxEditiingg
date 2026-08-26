@@ -227,13 +227,19 @@ func (t *masterAssetTransferer) transferChunked(ctx context.Context, reportCtx c
 	if ext == "" {
 		ext = sniffAssetExtension(partialPath)
 	}
-	finalPath, written, actualSHA, verifyDuration, err := verifyAndPromoteVeloxAsset(cacheDir, string(req.SHA256), size, partialPath, ext, syncAssetDirectory)
+	finalPath, written, actualSHA, hashVerifyMS, materializeLocalMS, err := verifyAndPromoteVeloxAsset(cacheDir, string(req.SHA256), size, partialPath, ext, syncAssetDirectory)
 	if err != nil {
-		recordCacheProjectionEvent(reportCtx, "hash_verify", verifyDuration, telemetry.StatusFailed, "", 0)
+		recordCacheProjectionEvent(reportCtx, "hash_verify", hashVerifyMS+materializeLocalMS, telemetry.StatusFailed, "", 0)
 		return downloader.TransferResult{}, err
 	}
-	recordCacheProjectionEvent(reportCtx, "hash_verify", verifyDuration, telemetry.StatusOK, "", 0)
-	return downloader.TransferResult{LocalPath: finalPath, Bytes: written, SHA256: assetref.ContentHash(actualSHA)}, nil
+	recordCacheProjectionEvent(reportCtx, "hash_verify", hashVerifyMS+materializeLocalMS, telemetry.StatusOK, "", 0)
+	return downloader.TransferResult{
+		LocalPath: finalPath, Bytes: written, SHA256: assetref.ContentHash(actualSHA),
+		Timing: downloader.TransferSubPhases{
+			HashVerifyMS:       hashVerifyMS.Milliseconds(),
+			MaterializeLocalMS: materializeLocalMS.Milliseconds(),
+		},
+	}, nil
 }
 
 // fetchChunkRange downloads one byte range into the pre-allocated partial at

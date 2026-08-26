@@ -79,6 +79,28 @@ type TransferResult struct {
 	LocalPath string
 	Bytes     int64
 	SHA256    assetref.ContentHash
+	// Timing carries the technical sub-phase breakdown (probe, verify,
+	// materialize, byte-work). The manager copies it onto DownloadedAsset so
+	// the per-attempt aggregator can drill down without re-instrumenting the
+	// transferer. Zero when a legacy transferer produced the result.
+	Timing TransferSubPhases
+}
+
+// TransferSubPhases is the fine-grained wall clock that Transfer owns. It is
+// deliberately small and optional: producers that cannot split the phases
+// (byte fakes, legacy transferers) simply leave it zero.
+type TransferSubPhases struct {
+	// MetadataProbeMS is the time to open the source and read its metadata
+	// (Content-Type / size) before the byte loop.
+	MetadataProbeMS int64
+	// HashVerifyMS is the size+SHA-256 verification wall time.
+	HashVerifyMS int64
+	// MaterializeLocalMS is the atomic-promotion / fsync file work done to
+	// make the verified bytes durably local.
+	MaterializeLocalMS int64
+	// DownloadWorkMS is the sum of byte-moving time (excluding probe and
+	// verify).
+	DownloadWorkMS int64
 }
 
 // Transferer is the byte pipeline used by one Transfer. The manager calls

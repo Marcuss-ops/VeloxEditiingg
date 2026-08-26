@@ -250,25 +250,25 @@ func syncAssetDirectory(path string) error {
 // syncAssetDirectory, tests pass a deterministic stand-in. It is an explicit
 // parameter rather than a package-level variable so the shared state stays
 // immutable and the seam is visible at the call site.
-func writeVeloxAssetStreamToCacheAtOffset(cacheDir, assetID string, expectedSHA256 string, expectedSizeBytes int64, body io.Reader, offset int64, mediaType string, totalSizeBytes int64, syncDir func(string) error) (string, int64, string, time.Duration, error) {
+func writeVeloxAssetStreamToCacheAtOffset(cacheDir, assetID string, expectedSHA256 string, expectedSizeBytes int64, body io.Reader, offset int64, mediaType string, totalSizeBytes int64, syncDir func(string) error) (path string, bytes int64, sha string, hashVerifyMS, materializeLocalMS time.Duration, err error) {
 	if offset < 0 {
-		return "", 0, "", 0, fmt.Errorf("%w: negative resume offset", ErrAssetVerification)
+		return "", 0, "", 0, 0, fmt.Errorf("%w: negative resume offset", ErrAssetVerification)
 	}
 	if err := os.MkdirAll(filepath.Join(cacheDir, "partial"), 0o755); err != nil {
-		return "", 0, "", 0, err
+		return "", 0, "", 0, 0, err
 	}
 	mediaType = strings.TrimSpace(mediaType)
 	if idx := strings.Index(mediaType, ";"); idx >= 0 {
 		mediaType = strings.TrimSpace(mediaType[:idx])
 	}
 	if isHTMLMediaType(mediaType) {
-		return "", 0, "", 0, fmt.Errorf("unexpected HTML response while downloading asset")
+		return "", 0, "", 0, 0, fmt.Errorf("unexpected HTML response while downloading asset")
 	}
 
 	reader := bufio.NewReader(body)
 	peek, _ := reader.Peek(512)
 	if isHTMLPayload(peek) {
-		return "", 0, "", 0, fmt.Errorf("unexpected HTML response while downloading asset")
+		return "", 0, "", 0, 0, fmt.Errorf("unexpected HTML response while downloading asset")
 	}
 	if mediaType == "" {
 		mediaType = http.DetectContentType(peek)
@@ -288,7 +288,7 @@ func writeVeloxAssetStreamToCacheAtOffset(cacheDir, assetID string, expectedSHA2
 		effectiveExpectedSize = totalSizeBytes
 	}
 	if effectiveExpectedSize <= 0 {
-		return "", 0, "", 0, fmt.Errorf("%w: response has no verifiable total size", ErrAssetIncomplete)
+		return "", 0, "", 0, 0, fmt.Errorf("%w: response has no verifiable total size", ErrAssetIncomplete)
 	}
 
 	flags := os.O_CREATE | os.O_WRONLY
@@ -299,7 +299,7 @@ func writeVeloxAssetStreamToCacheAtOffset(cacheDir, assetID string, expectedSHA2
 	}
 	partFile, err := os.OpenFile(partPath, flags, 0o644)
 	if err != nil {
-		return "", 0, "", 0, err
+		return "", 0, "", 0, 0, err
 	}
 
 	// Hash the complete partial after each append. This avoids treating the
@@ -308,14 +308,14 @@ func writeVeloxAssetStreamToCacheAtOffset(cacheDir, assetID string, expectedSHA2
 		_ = partFile.Close()
 		// Preserve the partial on stream errors: a later retry/restart can
 		// request the remaining suffix instead of starting over.
-		return "", 0, "", 0, err
+		return "", 0, "", 0, 0, err
 	}
 	if err := partFile.Sync(); err != nil {
 		_ = partFile.Close()
-		return "", 0, "", 0, err
+		return "", 0, "", 0, 0, err
 	}
 	if err := partFile.Close(); err != nil {
-		return "", 0, "", 0, err
+		return "", 0, "", 0, 0, err
 	}
 
 	return verifyAndPromoteVeloxAsset(cacheDir, expectedSHA256, effectiveExpectedSize, partPath, ext, syncDir)
@@ -328,31 +328,44 @@ func writeVeloxAssetStreamToCacheAtOffset(cacheDir, assetID string, expectedSHA2
 // ErrAssetIncomplete and PRESERVES the partial (a short write is retryable);
 // a hash mismatch deletes it (resuming corrupt bytes can never produce a
 // valid asset).
-func verifyAndPromoteVeloxAsset(cacheDir, expectedSHA256 string, effectiveExpectedSize int64, partPath, ext string, syncDir func(string) error) (string, int64, string, time.Duration, error) {
+func verifyAndPromoteVeloxAsset(cacheDir, expectedSHA256 string, effectiveExpectedSize int64, partPath, ext string, syncDir func(string) error) (path string, bytes int64, sha string, hashVerifyMS, materializeLocalMS time.Duration, err error) {
 	info, err := os.Stat(partPath)
 	if err != nil {
-		return "", 0, "", 0, err
+		return "", 0, "", 0, 0, err
 	}
 	written := info.Size()
 	if written <= 0 {
-		return "", 0, "", 0, fmt.Errorf("%w: downloaded asset is empty", ErrAssetVerification)
+		return "", 0, "", 0, 0, fmt.Errorf("%w: downloaded asset is empty", ErrAssetVerification)
 	}
 
 	verifyStarted := time.Now()
 	if effectiveExpectedSize > 0 && written != effectiveExpectedSize {
 		// A short partial is a retryable interrupted transfer. Preserve it
 		// so a later attempt can request the missing suffix.
-		return "", written, "", time.Since(verifyStarted), fmt.Errorf("%w: downloaded asset size mismatch (got %d, want %d)", ErrAssetIncomplete, written, effectiveExpectedSize)
+		elapsed := time.Since(verifyStarted)
+		return "", written, "", elapsed, 0, fmt.Errorf("%w: downloaded asset size mismatch (got %d, want %d)", ErrAssetIncomplete, written, effectiveExpectedSize)
 	}
 	actualSHA256, err := sha256File(partPath)
 	if err != nil {
 		_ = os.Remove(partPath)
-		return "", 0, "", time.Since(verifyStarted), fmt.Errorf("%w: hash partial: %v", ErrAssetVerification, err)
+		elapsed := time.Since(verifyStarted)
+		return "", 0, "", elapsed, 0, fmt.Errorf("%w: hash partial: %v", ErrAssetVerification, err)
 	}
 	if expectedSHA256 != "" && actualSHA256 != expectedSHA256 {
 		_ = os.Remove(partPath)
-		return "", 0, "", time.Since(verifyStarted), fmt.Errorf("%w: downloaded asset SHA-256 mismatch", ErrAssetVerification)
+		elapsed := time.Since(verifyStarted)
+		return "", 0, "", elapsed, 0, fmt.Errorf("%w: downloaded asset SHA-256 mismatch", ErrAssetVerification)
 	}
+	// The SHA-256 (and size) verification is complete here. Everything after
+	// this point is local materialization: content-address calculation,
+	// atomic rename, directory fsync and the read-only chmod. Track it
+	// separately so the aggregate can distinguish hash_verify from
+	// materialize_local in the asset-preparation drill-down.
+	materializeStarted := time.Now()
+	hashVerifyMS = materializeStarted.Sub(verifyStarted)
+	// materializeLocalMS is computed just before the success return below;
+	// on an error path it is left at zero (the materialization did not
+	// complete).
 
 	// The final blob is content-addressed: the identity is the verified
 	// digest, never the asset ID, so two assets with the same bytes share one
@@ -366,7 +379,7 @@ func verifyAndPromoteVeloxAsset(cacheDir, expectedSHA256 string, effectiveExpect
 	finalPath := assetBlobPath(cacheDir, blobSHA, ext)
 	blobDir := filepath.Dir(finalPath)
 	if err := os.MkdirAll(blobDir, 0o755); err != nil {
-		return "", 0, "", time.Since(verifyStarted), err
+		return "", 0, "", hashVerifyMS, 0, err
 	}
 	// Preserve an existing valid destination until both directory fsyncs have
 	// succeeded. A plain rename-overwrite followed by Remove(finalPath) on
@@ -375,7 +388,7 @@ func verifyAndPromoteVeloxAsset(cacheDir, expectedSHA256 string, effectiveExpect
 	if _, statErr := os.Stat(finalPath); statErr == nil {
 		backupPath = fmt.Sprintf("%s.previous-%d", finalPath, time.Now().UnixNano())
 		if err := os.Rename(finalPath, backupPath); err != nil {
-			return "", 0, "", time.Since(verifyStarted), err
+			return "", 0, "", hashVerifyMS, 0, err
 		}
 	}
 	restorePrevious := func() {
@@ -389,24 +402,24 @@ func verifyAndPromoteVeloxAsset(cacheDir, expectedSHA256 string, effectiveExpect
 	// available for rollback until durability is confirmed.
 	if err := os.Rename(partPath, finalPath); err != nil {
 		restorePrevious()
-		return "", 0, "", time.Since(verifyStarted), err
+		return "", 0, "", hashVerifyMS, 0, err
 	}
 	// Persist both directory entries after the atomic promotion. If fsync is
 	// unavailable on a platform, restore the previous final rather than
 	// claiming the new promotion succeeded.
 	if err := syncDir(filepath.Join(cacheDir, "partial")); err != nil {
 		restorePrevious()
-		return "", 0, "", time.Since(verifyStarted), err
+		return "", 0, "", hashVerifyMS, 0, err
 	}
 	if blobDir != cacheDir {
 		if err := syncDir(blobDir); err != nil {
 			restorePrevious()
-			return "", 0, "", time.Since(verifyStarted), err
+			return "", 0, "", hashVerifyMS, 0, err
 		}
 	}
 	if err := syncDir(cacheDir); err != nil {
 		restorePrevious()
-		return "", 0, "", time.Since(verifyStarted), err
+		return "", 0, "", hashVerifyMS, 0, err
 	}
 	// The promoted blob is now immutable from the normal worker: read-only
 	// (0444) so an accidental write can never corrupt a verified
@@ -416,7 +429,7 @@ func verifyAndPromoteVeloxAsset(cacheDir, expectedSHA256 string, effectiveExpect
 	// not restrict the cache lifecycle.
 	if err := os.Chmod(finalPath, 0o444); err != nil {
 		restorePrevious()
-		return "", 0, "", time.Since(verifyStarted), fmt.Errorf("chmod promoted blob read-only: %w", err)
+		return "", 0, "", hashVerifyMS, 0, fmt.Errorf("chmod promoted blob read-only: %w", err)
 	}
 	if backupPath != "" {
 		_ = os.Remove(backupPath)
@@ -424,7 +437,7 @@ func verifyAndPromoteVeloxAsset(cacheDir, expectedSHA256 string, effectiveExpect
 		// rollback copy is harmless and will be cleaned on a later cache pass.
 		_ = syncDir(cacheDir)
 	}
-	return finalPath, written, actualSHA256, time.Since(verifyStarted), nil
+	return finalPath, written, actualSHA256, hashVerifyMS, time.Since(materializeStarted), nil
 }
 
 // isHTMLMediaType reports whether a Content-Type looks like HTML.
