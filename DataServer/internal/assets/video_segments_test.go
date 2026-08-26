@@ -56,6 +56,10 @@ type segmentTestBlobStore struct {
 	root string
 }
 
+func (b *segmentTestBlobStore) OpenStagedWrite(path string) (*os.File, error) {
+	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+}
+
 func (b *segmentTestBlobStore) StagingPath(_, artifactID, extension string) (string, error) {
 	path := filepath.Join(b.root, "staging", artifactID+extension)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

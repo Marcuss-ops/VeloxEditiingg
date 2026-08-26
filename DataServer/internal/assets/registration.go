@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"time"
 
@@ -53,7 +52,7 @@ func (s *AssetService) ResolveAndRegister(ctx context.Context, cmd ResolveAssetC
 		return nil, fmt.Errorf("staging path: %w", err)
 	}
 
-	stagingFile, err := os.Create(stagingPath)
+	stagingFile, err := s.blobStore.OpenStagedWrite(stagingPath)
 	if err != nil {
 		return nil, fmt.Errorf("create staging file: %w", err)
 	}

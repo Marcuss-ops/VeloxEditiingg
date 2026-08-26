@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"os"
 	"strings"
 
 	"velox-server/internal/inputsecurity"
@@ -56,6 +57,7 @@ type VerifiedAssetRepository interface {
 // satisfies this interface automatically (verified at compile time in store/store_assets.go).
 type BlobStore interface {
 	StagingPath(jobID, artifactID, extension string) (string, error)
+	OpenStagedWrite(path string) (*os.File, error)
 	PromoteToFinal(stagingPath, finalPath string) (string, error)
 	RemoveStaging(path string) error
 	FinalPath(jobID, artifactID, extension string) string
