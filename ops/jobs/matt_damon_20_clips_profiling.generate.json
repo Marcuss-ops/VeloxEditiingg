@@ -1,0 +1,72 @@
+{
+  "audio_mode": "CHUNKED_VOICEOVER",
+  "docs": {
+    "enabled": true,
+    "folder_id": "1unQMyEH_ZqtXHT5D-68dxvcV9KgKA6d4",
+    "languages": ["en"]
+  },
+  "docs_enabled": true,
+  "drive_folder_id": "1unQMyEH_ZqtXHT5D-68dxvcV9KgKA6d4",
+  "extract_entities": "disabled",
+  "generate_timeline": true,
+  "idempotency_key": "matt-damon-20-clips-profiling-20260826-v1",
+  "languages": null,
+  "media_plan": {
+    "cache": {},
+    "extraction": {"entity_images": {}},
+    "materialization": {},
+    "planner": {},
+    "provider_policy": {}
+  },
+  "mix_policy": "VOICEOVER_ONLY",
+  "model": "auto",
+  "output_name": "Matt Damon — 20 short clips with 3 intros",
+  "project": "matt-damon-20-clips",
+  "render": {},
+  "save_to_db": true,
+  "script_params": {
+    "force_refresh": true,
+    "segment_words": 15,
+    "segments": [
+      {"clip_ids":["yt_D0yMBI3Whi4_1740_1780_v1","yt_D0yMBI3Whi4_1800_1895_v1","yt_D0yMBI3Whi4_320_380_v1"],"id":"intro","kind":"intro","topic":"Opening montage"},
+      {"clip_ids":["yt_0ElQTzSx3ec_72_91_v1"],"id":"scene-0","kind":"clip","source_text":"me after the fact, though. Interstellar, the Martian, saving Private Ryan, now the Odyssey, why are you always getting lost in films? I don't know. Somebody else pointed that out to me, but I figure like those movies that you","target_words":15,"topic":"yt_0ElQTzSx3ec_72_91_v1_matt-damon-always-getting-lost-in-space.mp4"},
+      {"clip_ids":["yt_ERzbkt5r5Gg_32_66_v1"],"id":"scene-1","kind":"clip","source_text":"Yeah, I didn't know that I was afraid of heights till I mean I did these stunts like I jumped off a bridge and in the born in the second born movie and I was fine I was wearing a","target_words":15,"topic":"yt_ERzbkt5r5Gg_32_66_v1_matt-damon-s-lizard-brain-height-freeze.mp4"},
+      {"clip_ids":["yt_Gcgdk1gEo8U_285_302_v1"],"id":"scene-2","kind":"clip","source_text":"But it's also like an everything story. Yes. It has horror elements in it. And so I was just so happy that I got to, you know, pretend to be in love with you. I'm sure that was hard for","target_words":15,"topic":"yt_Gcgdk1gEo8U_285_302_v1_pretending-to-love-matt-damon-every-day.mp4"},
+      {"clip_ids":["yt_S6ADB98CR7g_358_425_v1"],"id":"scene-3","kind":"clip","source_text":"Where he can tell what colored underwear a man is wearing just from just from looking at him. All right You do not disappoint. Oh, man. Listen, and this is any scraping the surface, buddy. This is okay Should I","target_words":15,"topic":"yt_S6ADB98CR7g_358_425_v1_guessing-matt-damon-s-underwear-color.mp4"},
+      {"clip_ids":["yt_T6x-kDiQsWM_203_252_v1"],"id":"scene-4","kind":"clip","source_text":"Okay, no. I'm on the go. How does that even work? Huh? I need to get you out of here. I hacked into the system. Oh, yes. It's the motion. I've been here for a really long time, Jimmy. Decades.","target_words":15,"topic":"yt_T6x-kDiQsWM_203_252_v1_matt-damon-hacks-the-control-room-screen.mp4"},
+      {"clip_ids":["yt_T6x-kDiQsWM_65_105_v1"],"id":"scene-5","kind":"clip","source_text":"because this is like work for Mark. Oh yeah, we're really, we're close and I'm actually... Hold on a second. Yes. No, no, no, no. Hold on a second. Let me talk to Tyka. Just get the camera away from","target_words":15,"topic":"yt_T6x-kDiQsWM_65_105_v1_matt-damon-photobombs-mark-ruffalo-and-t.mp4"},
+      {"clip_ids":["yt_ZPT2iPcDZtI_1220_1246_v1"],"id":"scene-6","kind":"clip","source_text":"And how much do you think it's cost to save you over the years? I mean, if you tally up the four born movies, plus the Martian. Yeah, I mean, they spent a fortune on interstellar, too. I mean, I","target_words":15,"topic":"yt_ZPT2iPcDZtI_1220_1246_v1_spending-a-trillion-movie-dollars-to-res.mp4"},
+      {"clip_ids":["yt_arWZf7_ktBs_19_85_v1"],"id":"scene-7","kind":"clip","source_text":"We have, like, the whole, all the great people from the cast on the show this week. You're leaving someone out. What do you mean? No, I mean, there's, you know. Well, I mean, there's this, you know, Matt Damon's","target_words":15,"topic":"yt_arWZf7_ktBs_19_85_v1_ben-affleck-begs-jimmy-for-one-matt-damo.mp4"},
+      {"clip_ids":["yt_arWZf7_ktBs_95_150_v1"],"id":"scene-8","kind":"clip","source_text":"Of course, he's probably available. Hey, guys, what's up, everybody? I'm on the show! Yes! I'm on the show! Yeah! Probably not really. Yeah, Zoom style on the show. Very much on the show. Definitely on the show. He's not","target_words":15,"topic":"yt_arWZf7_ktBs_95_150_v1_matt-damon-celebrates-finally-being-on-k.mp4"},
+      {"clip_ids":["yt_e4Zccf3v7J4_1315_1365_v1"],"id":"scene-9","kind":"clip","source_text":"I went to the bathroom here before I came out. I have never laughed so hard. That is the greatest. That is so good. For everybody at home, he's got a picture of Bill Bellacek above the toilet. So when","target_words":15,"topic":"yt_e4Zccf3v7J4_1315_1365_v1_bill-belichick-do-your-job-bathroom-pict.mp4"},
+      {"clip_ids":["yt_etHNI39Ibgk_144_168_v1"],"id":"scene-10","kind":"clip","source_text":"You've been hunted across Europe and now lost to sea. Why does cinema keep trying to lose Matt Damon? I don't know, but I want them to keep doing it. Because between saving Private Ryan and Interstellar and the Martian","target_words":15,"topic":"yt_etHNI39Ibgk_144_168_v1_cinema-keeps-trying-to-lose-matt-damon.mp4"},
+      {"clip_ids":["yt_stRtOHjh6lY_167_218_v1"],"id":"scene-11","kind":"clip","source_text":"People really appreciated that ponytail on Twitter. I don't know if you were following me. You found some of the tweets that people... So, mmm, Matt Damon with a man bun. Hashtag lady boner. Oh! Oh! They get worse. You","target_words":15,"topic":"yt_stRtOHjh6lY_167_218_v1_reading-thirsty-tweets-about-matt-s-pony.mp4"},
+      {"clip_ids":["yt_stRtOHjh6lY_370_405_v1"],"id":"scene-12","kind":"clip","source_text":"Can I just ask you a really quick one so this is a situation where we're allowed to we if one of us pulls this lever. She flips Okay Hi, hi, I just like to say that I think Matt","target_words":15,"topic":"yt_stRtOHjh6lY_370_405_v1_the-red-chair-fan-flip.mp4"},
+      {"clip_ids":["yt_-AFmYLDxBgY_65_96_v1"],"id":"scene-13","kind":"clip","source_text":"So, that would be my mama, I think, took my brother and me to see Holly near when we were in, and Holly near. This is very kind of hippie stuff. You know, she would sing, we would sing the","target_words":15,"topic":"yt_-AFmYLDxBgY_65_96_v1_first-concert-7-year-old-matt-at-a-hippi.mp4"},
+      {"clip_ids":["yt_0ElQTzSx3ec_150_202_v1"],"id":"scene-14","kind":"clip","source_text":"So you learn how to use the bow and arrow? Yeah, yeah, yeah. That he wanted, you know, Odysseus is an archer and he wanted me to be able to speed load a bow, which is very hard to get","target_words":15,"topic":"yt_0ElQTzSx3ec_150_202_v1_speed-loading-arrows-on-the-couch-with-n.mp4"},
+      {"clip_ids":["yt_0ElQTzSx3ec_203_220_v1"],"id":"scene-15","kind":"clip","source_text":"my math is right that you've worked with Christopher Nolan. Is it at a point now where if he just calls, then you're like, yeah, OK, I mean, yeah, but I mean by by saying that that distinguishes me from","target_words":15,"topic":"yt_0ElQTzSx3ec_203_220_v1_saying-yes-to-christopher-nolan-distingu.mp4"},
+      {"clip_ids":["yt_0ElQTzSx3ec_258_306_v1"],"id":"scene-16","kind":"clip","source_text":"We were shooting Troy and because Chris does everything in camera, if you see 1,000 people in a battle, there are 1,000 people there. There's no computer, there's no CGI. And so we were shooting this scene and there's literally","target_words":15,"topic":"yt_0ElQTzSx3ec_258_306_v1_hoyte-van-hoytema-you-know-this-is-a-fla.mp4"},
+      {"clip_ids":["yt_D0yMBI3Whi4_110_145_v1"],"id":"scene-17","kind":"clip","source_text":"Mike? I mean, that's a great movie. Yes. Yes. And now, with that in mind, a little of the impression, please. Well, in a while since I've done this one, well, I figured if I was going to get nominated","target_words":15,"topic":"yt_D0yMBI3Whi4_110_145_v1_matt-s-matthew-mcconaughey-impression.mp4"},
+      {"clip_ids":["yt_D0yMBI3Whi4_168_195_v1"],"id":"scene-18","kind":"clip","source_text":"Do you, does it? I would get Mark Wahlberg sometimes. Really? Yeah, if my hair is a certain that if I'm in shape. Right. But and I talked to Mark about it a few years ago and we have a","target_words":15,"topic":"yt_D0yMBI3Whi4_168_195_v1_the-mark-wahlberg-mistaken-identity-pact.mp4"},
+      {"clip_ids":["yt_D0yMBI3Whi4_975_1030_v1"],"id":"scene-19","kind":"clip","source_text":"Almost Tourette's thing where I just immediately think of the exact wrong thing to say to try to get people to come see the movie Like like ask me what asked me what Elysium's about. Well tell us a little","target_words":15,"topic":"yt_D0yMBI3Whi4_975_1030_v1_promoting-elysium-as-a-fracking-sci-fi-m.mp4"},
+      {"clip_ids":["yt_-AFmYLDxBgY_390_425_v1","yt_-AFmYLDxBgY_445_520_v1","yt_DKql9c7kq4A_1080_1125_v1"],"id":"outro","kind":"outro","topic":"Closing montage"}
+    ],
+    "target_words": 300
+  },
+  "source": {
+    "cache": {},
+    "clip_ids": [
+      "yt_0ElQTzSx3ec_72_91_v1","yt_ERzbkt5r5Gg_32_66_v1","yt_Gcgdk1gEo8U_285_302_v1","yt_S6ADB98CR7g_358_425_v1","yt_T6x-kDiQsWM_203_252_v1","yt_T6x-kDiQsWM_65_105_v1","yt_ZPT2iPcDZtI_1220_1246_v1","yt_arWZf7_ktBs_19_85_v1","yt_arWZf7_ktBs_95_150_v1","yt_e4Zccf3v7J4_1315_1365_v1","yt_etHNI39Ibgk_144_168_v1","yt_stRtOHjh6lY_167_218_v1","yt_stRtOHjh6lY_370_405_v1","yt_-AFmYLDxBgY_65_96_v1","yt_0ElQTzSx3ec_150_202_v1","yt_0ElQTzSx3ec_203_220_v1","yt_0ElQTzSx3ec_258_306_v1","yt_D0yMBI3Whi4_110_145_v1","yt_D0yMBI3Whi4_168_195_v1","yt_D0yMBI3Whi4_975_1030_v1"
+    ],
+    "fallback_policy": "strict",
+    "intro_clip_ids": ["yt_D0yMBI3Whi4_1740_1780_v1","yt_D0yMBI3Whi4_1800_1895_v1","yt_D0yMBI3Whi4_320_380_v1"],
+    "num_clips": 20,
+    "ordering_strategy": "input_order",
+    "research": {},
+    "transcript_policy": "required",
+    "type": "clips"
+  },
+  "source_language": "en",
+  "title": "Matt Damon — 20 short clips with 3 intros",
+  "voiceover_folder_id": "1wFhLmyyIH5rKSbtQuCuua9a2LKQymA8A"
+}
