@@ -30,8 +30,13 @@ import (
 // pinned to a single-writer pool because concurrent opens on the same
 // file degrade quickly under write contention.
 const (
-	sqliteDefaultMaxOpenConns    = 8
-	sqliteDefaultMaxIdleConns    = 4
+	// SQLite has a single writer. Keeping the default pool to one physical
+	// connection prevents independent pooled connections from racing on the
+	// same write lock during heartbeats, reconciliation, and artifact commits.
+	// Operators can still override this explicitly when they have a different
+	// deployment topology.
+	sqliteDefaultMaxOpenConns    = 1
+	sqliteDefaultMaxIdleConns    = 1
 	sqliteDefaultConnMaxLifetime = time.Hour
 
 	openPingTimeout = 10 * time.Second
@@ -86,7 +91,7 @@ func Open(ctx context.Context, cfg Config) (*Handle, error) {
 // (no WAL durability). Both regression vectors are documented in
 // the engine-history ticket filed when this was extracted from the
 // legacy NewSQLiteStore hard-coded URL string.
-const sqliteDSNParams = "_busy_timeout=10000&_journal_mode=WAL"
+const sqliteDSNParams = "_busy_timeout=30000&_journal_mode=WAL&_synchronous=NORMAL"
 
 // ensureSQLiteDSN normalises a SQLitePath into a fully-qualified DSN
 // with the standard connection-init parameters appended. Empty paths
