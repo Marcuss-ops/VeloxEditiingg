@@ -106,7 +106,9 @@ ARG VELOX_GID=10001
 #                      always fail because `/bin/sh` cannot find curl).
 #   - ffmpeg:          Level-D artifact verification (`ffprobe`) and media
 #                      acceptance gates run inside the Master container.
-RUN apt-get update -qq && apt-get install -y --no-install-recommends \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update -qq && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
         ffmpeg \

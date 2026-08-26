@@ -74,7 +74,9 @@ ARG FFMPEG_VERSION=7:5.1.9-0+deb12u1
 ARG PROCPS_VERSION=2:4.0.2-3
 ARG LIBC_BIN_VERSION=2.36-9+deb12u14
 ARG CCACHE_VERSION=4.8.3-1
-RUN apt-get update -qq && apt-get install -y --no-install-recommends \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update -qq && apt-get install -y --no-install-recommends \
         build-essential=${BUILD_ESSENTIAL_VERSION} \
         cmake=${CMAKE_VERSION} \
         g++=${GXX_VERSION} \
@@ -124,7 +126,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 # golang:1.25.8-bookworm does NOT ship `make`. PR-3 requires it because
 # the go-builder delegates to the host Makefile. Keep the dep set
 # minimal: only what's needed to run the Makefile's agent and evict targets.
-RUN apt-get update -qq && apt-get install -y --no-install-recommends \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update -qq && apt-get install -y --no-install-recommends \
         make \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
@@ -214,7 +218,9 @@ ARG RUNTIME_PROCPS_VERSION=2:4.0.2-3
 ARG RUNTIME_CURL_VERSION=7.88.1-10+deb12u15
 ARG RUNTIME_LIBSTDCPP_VERSION=12.2.0-14+deb12u1
 ARG RUNTIME_LIBC_BIN_VERSION=2.36-9+deb12u14
-RUN apt-get update -qq && apt-get install -y --no-install-recommends \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update -qq && apt-get install -y --no-install-recommends \
         ca-certificates=${RUNTIME_CA_CERTIFICATES_VERSION} \
         ffmpeg=${RUNTIME_FFMPEG_VERSION} \
         procps=${RUNTIME_PROCPS_VERSION} \

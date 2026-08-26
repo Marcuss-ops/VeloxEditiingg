@@ -148,14 +148,13 @@ func TestClaimDeliveries_ZombieReclaim(t *testing.T) {
 	insertTestArtifact(t, db, "art-z", "job-z", "/tmp/z.mp4")
 	insertTestJobDelivery(t, db, "del_art-z_dest-z", "art-z", "dest-z")
 
-	// Claim and let the lease expire
-	leases, err := db.Delivery().ClaimDeliveries(ctx, "runner-old", 1*time.Second, 1)
+	leases, err := db.Delivery().ClaimDeliveries(ctx, "runner-old", 5*time.Minute, 1)
 	if err != nil || len(leases) != 1 {
 		t.Fatalf("initial claim: %v len=%d", err, len(leases))
 	}
-
-	// Wait for lease to expire
-	time.Sleep(1100 * time.Millisecond)
+	if _, err := db.DB().ExecContext(ctx, `UPDATE job_deliveries SET lease_expires_at = ? WHERE delivery_id = ?`, time.Now().UTC().Add(-time.Minute).Format(time.RFC3339), leases[0].DeliveryID); err != nil {
+		t.Fatalf("expire lease: %v", err)
+	}
 
 	// A new runner should reclaim the zombie
 	leases2, err := db.Delivery().ClaimDeliveries(ctx, "runner-new", 5*time.Minute, 1)

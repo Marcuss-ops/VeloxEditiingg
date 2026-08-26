@@ -55,8 +55,11 @@ func TestClient_429_WithRetryAfter(t *testing.T) {
 
 func TestClient_TimeoutBeforeResponse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Sleep longer than the client timeout (500ms).
-		time.Sleep(2 * time.Second)
+		select {
+		case <-r.Context().Done():
+			return
+		case <-time.After(700 * time.Millisecond):
+		}
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"job_id": "job_timeout",
@@ -262,7 +265,11 @@ func TestClient_MalformedPromotedToPermanent(t *testing.T) {
 
 func TestClient_ContextCancelled(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(2 * time.Second)
+		select {
+		case <-r.Context().Done():
+			return
+		case <-time.After(700 * time.Millisecond):
+		}
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()

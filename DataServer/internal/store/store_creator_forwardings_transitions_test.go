@@ -195,14 +195,13 @@ func TestExpiredForwardingLeases(t *testing.T) {
 	insertTestForwarding(t, db, "cf-exp-1", "openai", "creator-exp-1", "scene.composite.v1", "PENDING")
 	insertTestForwarding(t, db, "cf-exp-2", "openai", "creator-exp-2", "scene.composite.v1", "PENDING")
 
-	// Claim both with short lease
-	leases, err := db.Forwarding().ClaimCreatorForwardings(ctx, "runner-exp", "cf", 1*time.Second, 4)
+	leases, err := db.Forwarding().ClaimCreatorForwardings(ctx, "runner-exp", "cf", 5*time.Minute, 4)
 	if err != nil || len(leases) != 2 {
 		t.Fatalf("claim: %v len=%d", err, len(leases))
 	}
-
-	// Wait for lease to expire
-	time.Sleep(1100 * time.Millisecond)
+	if _, err := db.DB().ExecContext(ctx, `UPDATE creator_forwardings SET lease_expires_at = ?`, time.Now().UTC().Add(-time.Minute).Format(time.RFC3339)); err != nil {
+		t.Fatalf("expire leases: %v", err)
+	}
 
 	expired, err := db.Forwarding().ExpiredCreatorForwardingLeases(ctx, time.Now().UTC().Format(time.RFC3339), 10)
 	if err != nil {
