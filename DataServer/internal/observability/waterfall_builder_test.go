@@ -102,6 +102,98 @@ func TestBuildAttemptWaterfall_MissingMilestoneNeverFabricated(t *testing.T) {
 	}
 }
 
+// TestWaterfallAccountsForAttemptWall locks the STEP C(+test) invariant:
+// accounted_ms + unknown_ms ≈ attempt_wall_ms (tolerance ≤100ms or ≤1%),
+// with coverage_pct > 98% on a well-formed attempt. The unknown_ms bucket is
+// the builder's unaccounted_ms, which must always reconcile the wall even when
+// a milestone is missing (never inventing a duration to hide the gap).
+func TestWaterfallAccountsForAttemptWall(t *testing.T) {
+	full := []sharedtelemetry.AttemptMilestoneSample{
+		{Name: sharedtelemetry.MilestoneAttemptAccepted, ElapsedMS: 0},
+		{Name: sharedtelemetry.MilestoneExecutionStarted, ElapsedMS: 10},
+		{Name: sharedtelemetry.MilestoneAssetsRequested, ElapsedMS: 25},
+		{Name: sharedtelemetry.MilestoneAllAssetsReady, ElapsedMS: 125},
+		{Name: sharedtelemetry.MilestonePlanStarted, ElapsedMS: 130},
+		{Name: sharedtelemetry.MilestonePlanCompleted, ElapsedMS: 150},
+		{Name: sharedtelemetry.MilestoneRenderStarted, ElapsedMS: 155},
+		{Name: sharedtelemetry.MilestoneRenderCompleted, ElapsedMS: 255},
+		{Name: sharedtelemetry.MilestoneOutputDurable, ElapsedMS: 270},
+		{Name: sharedtelemetry.MilestonePublishStarted, ElapsedMS: 280},
+		{Name: sharedtelemetry.MilestonePublishCompleted, ElapsedMS: 320},
+		{Name: sharedtelemetry.MilestoneResultSent, ElapsedMS: 325},
+		{Name: sharedtelemetry.MilestoneAttemptCompleted, ElapsedMS: 330},
+	}
+
+	t.Run("complete timeline covers the whole wall", func(t *testing.T) {
+		got := BuildAttemptWaterfall("a", full, 330)
+		assertAccountsWall(t, got, 330)
+		if got.CoveragePct != 100 || got.UnaccountedMS != 0 {
+			t.Fatalf("complete timeline coverage=%f unaccounted=%d, want 100/0", got.CoveragePct, got.UnaccountedMS)
+		}
+	})
+
+	t.Run("small unknown gap stays under 2% (coverage > 98%)", func(t *testing.T) {
+		// Milestones account for 330ms but the attempt wall is 333ms, leaving a
+		// 3ms unknown tail — a realistic cross-machine boundary (master ingest).
+		// The invariant must reconcile that and coverage must exceed 98%.
+		got := BuildAttemptWaterfall("b", full, 333)
+		assertAccountsWall(t, got, 333)
+		if got.CoveragePct <= 98 {
+			t.Fatalf("coverage_pct = %f, want > 98 for a nearly-complete attempt", got.CoveragePct)
+		}
+		if got.UnaccountedMS != 3 {
+			t.Fatalf("unaccounted_ms = %d, want the 3ms trailing gap", got.UnaccountedMS)
+		}
+	})
+
+	t.Run("missing milestone surfaces an honest unaccounted region", func(t *testing.T) {
+		missing := []sharedtelemetry.AttemptMilestoneSample{
+			{Name: sharedtelemetry.MilestoneAttemptAccepted, ElapsedMS: 0},
+			{Name: sharedtelemetry.MilestoneExecutionStarted, ElapsedMS: 10},
+			{Name: sharedtelemetry.MilestoneAssetsRequested, ElapsedMS: 25},
+			{Name: sharedtelemetry.MilestonePlanStarted, ElapsedMS: 130}, // assets.all_ready absent
+			{Name: sharedtelemetry.MilestonePlanCompleted, ElapsedMS: 150},
+			{Name: sharedtelemetry.MilestoneRenderStarted, ElapsedMS: 155},
+			{Name: sharedtelemetry.MilestoneRenderCompleted, ElapsedMS: 255},
+			{Name: sharedtelemetry.MilestoneOutputDurable, ElapsedMS: 270},
+			{Name: sharedtelemetry.MilestonePublishStarted, ElapsedMS: 280},
+			{Name: sharedtelemetry.MilestonePublishCompleted, ElapsedMS: 320},
+			{Name: sharedtelemetry.MilestoneResultSent, ElapsedMS: 325},
+			{Name: sharedtelemetry.MilestoneAttemptCompleted, ElapsedMS: 330},
+		}
+		got := BuildAttemptWaterfall("c", missing, 330)
+		// Even with a missing milestone the sum MUST reconcile the wall (never
+		// invent a phantom bucket); the unknown region is where it lands.
+		assertAccountsWall(t, got, 330)
+		if got.CoveragePct >= 98 {
+			t.Fatalf("coverage_pct = %f, want < 98 when a boundary milestone is missing", got.CoveragePct)
+		}
+		if got.UnaccountedMS == 0 {
+			t.Fatal("missing milestone left zero unaccounted_ms")
+		}
+		if !containsStr(got.MissingMilestones, string(sharedtelemetry.MilestoneAllAssetsReady)) {
+			t.Fatalf("missing_milestones = %v, want assets.all_ready", got.MissingMilestones)
+		}
+	})
+}
+
+// assertAccountsWall checks accounted_ms + unaccounted_ms ≈ wall_ms within
+// both the absolute (≤100ms) and relative (≤1%) tolerances.
+func assertAccountsWall(t *testing.T, got AttemptWaterfall, wallMS int64) {
+	t.Helper()
+	sum := got.AccountedMS + got.UnaccountedMS
+	diff := wallMS - sum
+	if diff < 0 {
+		diff = -diff
+	}
+	if diff > 100 {
+		t.Fatalf("accounted+unaccounted = %d but wall = %d (Δ %dms > 100ms)", sum, wallMS, diff)
+	}
+	if wallMS > 0 && float64(diff)/float64(wallMS)*100 > 1.0 {
+		t.Fatalf("accounted+unaccounted = %d vs wall = %d exceeds 1%% (Δ %dms)", sum, wallMS, diff)
+	}
+}
+
 func containsStr(xs []string, v string) bool {
 	for _, x := range xs {
 		if x == v {
