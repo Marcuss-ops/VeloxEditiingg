@@ -1,3 +1,11 @@
+## [v1.3.4] - 2026-08-27
+
+### Observability timeline
+
+- Expose the durable task execution timeline in `job inspect` and the job
+  events endpoint alongside the legacy lifecycle journal.
+- Preserve compatibility with stores that predate the execution-event table.
+
 ## [v1.3.3] - 2026-08-27
 
 ### Benchmark scorecard validation
