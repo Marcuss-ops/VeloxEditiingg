@@ -6,10 +6,10 @@ package observability
 import (
 	"time"
 
-	sharedtelemetry "velox-shared/telemetry"
 	"velox-server/internal/jobs"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
+	sharedtelemetry "velox-shared/telemetry"
 )
 
 // LiveAttempt is the volatile worker_task_runtime projection used only as
@@ -151,9 +151,16 @@ type ExecutionSummary struct {
 	PeakVRAMBytes       int64                 `json:"peak_vram_bytes"`
 	Cache               CacheSummary          `json:"cache"`
 	Retries             int                   `json:"retries"`
-	Attempts            []AttemptSummary      `json:"attempts"`
-	PhaseTimings        []PhaseSnapshot       `json:"phase_timings,omitempty"`
-	Segments            []SegmentSnapshot     `json:"segments,omitempty"`
+	// Waterfall is the execution-level projection of the attempt waterfall
+	// (wall_ms / accounted_ms / unaccounted_ms / coverage_pct / buckets):
+	// the same *AttemptWaterfall carried by the most recent attempt that has
+	// a durable milestone timeline, falling back to an earlier attempt when
+	// the latest one predates milestone support. omitempty preserves the
+	// legacy ExecutionSummary shape when no attempt has a report.
+	Waterfall    *AttemptWaterfall `json:"waterfall,omitempty"`
+	Attempts     []AttemptSummary  `json:"attempts"`
+	PhaseTimings []PhaseSnapshot   `json:"phase_timings,omitempty"`
+	Segments     []SegmentSnapshot `json:"segments,omitempty"`
 }
 
 // ExecutionProgress is the compact live progress projection exposed by the
@@ -236,45 +243,45 @@ type CacheSummary struct {
 // Durable fields remain authoritative; Live marks a temporary overlay of
 // volatile progress fields and does not change durable status or final metrics.
 type AttemptSummary struct {
-	AttemptID              string                          `json:"attempt_id"`
-	AttemptNumber          int                             `json:"attempt_number"`
-	Status                 taskattempts.AttemptStatus      `json:"status"`
-	WorkerID               string                          `json:"worker_id"`
-	WorkerName             string                          `json:"worker_name,omitempty"`
-	ErrorCode              string                          `json:"error_code,omitempty"`
-	ErrorMessage           string                          `json:"error_message,omitempty"`
-	StartedAt              string                          `json:"started_at,omitempty"`
-	CompletedAt            string                          `json:"completed_at,omitempty"`
-	DurationMS             int64                           `json:"duration_ms"`
-	PhaseBreakdown         map[string]int64                `json:"phase_breakdown"`
-	Metrics                *taskattempts.AttemptMetrics    `json:"metrics,omitempty"`
-	CacheStats             *taskattempts.AttemptCacheStats `json:"cache_stats,omitempty"`
-	Live                   bool                            `json:"live,omitempty"`
-	Phase                  string                          `json:"phase,omitempty"`
-	ProgressPercent        int                             `json:"progress_percent,omitempty"`
-	CurrentScene           int                             `json:"current_scene,omitempty"`
-	TotalScenes            int                             `json:"total_scenes,omitempty"`
-	CurrentSegment         int                             `json:"current_segment,omitempty"`
-	TotalSegments          int                             `json:"total_segments,omitempty"`
-	FramesEncoded          int64                           `json:"frames_encoded,omitempty"`
-	FramesDecoded          int64                           `json:"frames_decoded,omitempty"`
-	FramesComposited       int64                           `json:"frames_composited,omitempty"`
-	FFmpegSpeedX           float64                         `json:"ffmpeg_speed_x,omitempty"`
-	ElapsedMS              int64                           `json:"elapsed_ms,omitempty"`
-	LastProgressAt         string                          `json:"last_progress_at,omitempty"`
-	CumulativeMetrics      map[string]any                  `json:"cumulative_metrics,omitempty"`
-	CanonicalAttemptEvents []map[string]any                `json:"canonical_attempt_events,omitempty"`
+	AttemptID              string                                   `json:"attempt_id"`
+	AttemptNumber          int                                      `json:"attempt_number"`
+	Status                 taskattempts.AttemptStatus               `json:"status"`
+	WorkerID               string                                   `json:"worker_id"`
+	WorkerName             string                                   `json:"worker_name,omitempty"`
+	ErrorCode              string                                   `json:"error_code,omitempty"`
+	ErrorMessage           string                                   `json:"error_message,omitempty"`
+	StartedAt              string                                   `json:"started_at,omitempty"`
+	CompletedAt            string                                   `json:"completed_at,omitempty"`
+	DurationMS             int64                                    `json:"duration_ms"`
+	PhaseBreakdown         map[string]int64                         `json:"phase_breakdown"`
+	Metrics                *taskattempts.AttemptMetrics             `json:"metrics,omitempty"`
+	CacheStats             *taskattempts.AttemptCacheStats          `json:"cache_stats,omitempty"`
+	Live                   bool                                     `json:"live,omitempty"`
+	Phase                  string                                   `json:"phase,omitempty"`
+	ProgressPercent        int                                      `json:"progress_percent,omitempty"`
+	CurrentScene           int                                      `json:"current_scene,omitempty"`
+	TotalScenes            int                                      `json:"total_scenes,omitempty"`
+	CurrentSegment         int                                      `json:"current_segment,omitempty"`
+	TotalSegments          int                                      `json:"total_segments,omitempty"`
+	FramesEncoded          int64                                    `json:"frames_encoded,omitempty"`
+	FramesDecoded          int64                                    `json:"frames_decoded,omitempty"`
+	FramesComposited       int64                                    `json:"frames_composited,omitempty"`
+	FFmpegSpeedX           float64                                  `json:"ffmpeg_speed_x,omitempty"`
+	ElapsedMS              int64                                    `json:"elapsed_ms,omitempty"`
+	LastProgressAt         string                                   `json:"last_progress_at,omitempty"`
+	CumulativeMetrics      map[string]any                           `json:"cumulative_metrics,omitempty"`
+	CanonicalAttemptEvents []map[string]any                         `json:"canonical_attempt_events,omitempty"`
 	AttemptMilestones      []sharedtelemetry.AttemptMilestoneSample `json:"attempt_milestones,omitempty"`
 	// MasterReceivedAt/MasterCommittedAt are the Master-local report timestamps
 	// (task_attempt_reports.received_at/persisted_at). Both are produced by the
 	// Master clock, so receive→commit lag is safe to compute locally; the worker
 	// UTC clock is never subtracted from them. They let the result_ingest
 	// diagnostic separate transport/heartbeat delay from worker runtime.
-	MasterReceivedAt  string `json:"master_received_at,omitempty"`
-	MasterCommittedAt string `json:"master_committed_at,omitempty"`
-	Waterfall         []WaterfallStage                `json:"waterfall,omitempty"`
-	WaterfallValid    bool                            `json:"waterfall_valid,omitempty"`
-	AttemptWaterfall  *AttemptWaterfall               `json:"attempt_waterfall,omitempty"`
+	MasterReceivedAt  string            `json:"master_received_at,omitempty"`
+	MasterCommittedAt string            `json:"master_committed_at,omitempty"`
+	Waterfall         []WaterfallStage  `json:"waterfall,omitempty"`
+	WaterfallValid    bool              `json:"waterfall_valid,omitempty"`
+	AttemptWaterfall  *AttemptWaterfall `json:"attempt_waterfall,omitempty"`
 }
 
 type WaterfallStage struct {

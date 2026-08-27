@@ -1,8 +1,12 @@
 package observability
 
 import (
+	"context"
 	"testing"
+	"time"
 
+	"velox-server/internal/taskattempts"
+	"velox-server/internal/taskgraph"
 	sharedtelemetry "velox-shared/telemetry"
 )
 
@@ -359,6 +363,204 @@ func TestDecodeAttemptWaterfallAccountsForEveryAttemptWall(t *testing.T) {
 		}
 		if got.UnaccountedMS != 59 {
 			t.Fatalf("unaccounted_ms = %d, want the 59ms master/worker boundary gap", got.UnaccountedMS)
+		}
+	})
+}
+
+// missingBoundaryReportJSON is a worker timeline whose assets.all_ready
+// milestone never fired (the drill-down's suspected failure mode). It tiles
+// the same 328041ms wall everywhere else, so the missing boundary must be
+// reported as honest UNKNOWN instead of being fabricated across.
+const missingBoundaryReportJSON = `{"milestones":[
+{"name":"attempt.accepted","sequence":1,"elapsed_ms":0},
+{"name":"execution.started","sequence":2,"elapsed_ms":34},
+{"name":"assets.requested","sequence":3,"elapsed_ms":68},
+{"name":"plan.started","sequence":4,"elapsed_ms":299400},
+{"name":"plan.completed","sequence":5,"elapsed_ms":299847},
+{"name":"render.started","sequence":6,"elapsed_ms":299939},
+{"name":"render.completed","sequence":7,"elapsed_ms":306761},
+{"name":"output.durable","sequence":8,"elapsed_ms":310755},
+{"name":"publish.started","sequence":9,"elapsed_ms":310766},
+{"name":"publish.completed","sequence":10,"elapsed_ms":327510},
+{"name":"result.sent","sequence":11,"elapsed_ms":328039},
+{"name":"attempt.completed","sequence":12,"elapsed_ms":328041}
+]}`
+
+// TestSummarizeTask_AccountsForEveryAttemptWall closes the STEP C(+test)
+// invariant over the operator read model: EVERY attempt surfaced by
+// SummarizeTask — not just hand-built timelines — must carry an
+// AttemptWaterfall whose wall comes from the authoritative attempt
+// lifecycle, reconciles accounted_ms + unknown_ms ≈ wall within ≤100ms
+// (or ≤1%), and holds coverage_pct > 98% whenever the worker timeline is
+// complete. A report missing a boundary milestone stays under 98% and
+// names the gap instead of attributing invented durations.
+func TestSummarizeTask_AccountsForEveryAttemptWall(t *testing.T) {
+	svc, tasks, attempts, _, _ := newTestService()
+	tasks.tasks["T-wall"] = &taskgraph.Task{ID: "T-wall", JobID: "J-wall", Status: taskgraph.StatusSucceeded, AttemptCount: 3}
+
+	start := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	exactEnd := start.Add(328041 * time.Millisecond)    // milestone timeline tiles the wall exactly
+	boundaryEnd := start.Add(328100 * time.Millisecond) // same timeline + 59ms cross-machine tail
+
+	attempts.attempts["T-wall"] = []taskattempts.TaskAttempt{
+		{ID: "A-wall-1", TaskID: "T-wall", JobID: "J-wall", WorkerID: "worker-a",
+			Status: taskattempts.AttemptStatusSucceeded, AttemptNumber: 1,
+			StartedAt: &start, CompletedAt: &exactEnd},
+		{ID: "A-wall-2", TaskID: "T-wall", JobID: "J-wall", WorkerID: "worker-b",
+			Status: taskattempts.AttemptStatusSucceeded, AttemptNumber: 2,
+			StartedAt: &start, CompletedAt: &boundaryEnd},
+		{ID: "A-wall-3", TaskID: "T-wall", JobID: "J-wall", WorkerID: "worker-c",
+			Status: taskattempts.AttemptStatusSucceeded, AttemptNumber: 3,
+			StartedAt: &start, CompletedAt: &exactEnd},
+	}
+	attempts.rawReports = map[string]string{
+		"A-wall-1": realisticAttemptReportJSON,
+		"A-wall-2": realisticAttemptReportJSON,
+		"A-wall-3": missingBoundaryReportJSON,
+	}
+
+	result, err := svc.SummarizeTask(context.Background(), "T-wall")
+	if err != nil {
+		t.Fatalf("SummarizeTask() error: %v", err)
+	}
+	byID := map[string]*AttemptSummary{}
+	for i := range result.Attempts {
+		byID[result.Attempts[i].AttemptID] = &result.Attempts[i]
+	}
+	if len(byID) != 3 {
+		t.Fatalf("attempts = %#v, want 3", result.Attempts)
+	}
+
+	wellFormed := map[string]bool{"A-wall-1": true, "A-wall-2": true}
+	for id, as := range byID {
+		if as.AttemptWaterfall == nil {
+			t.Fatalf("attempt %s has no AttemptWaterfall despite a durable lifecycle + report", id)
+		}
+		wf := *as.AttemptWaterfall
+		// The wall source is the authoritative attempt lifecycle duration,
+		// never phase timings or worker-reported wall clock.
+		if wf.WallMS != as.DurationMS {
+			t.Fatalf("attempt %s waterfall wall = %d, want lifecycle duration %d", id, wf.WallMS, as.DurationMS)
+		}
+		// The core invariant, applied to EVERY attempt: accounted + unknown ≈ wall.
+		assertAccountsWall(t, wf, wf.WallMS)
+		if wellFormed[id] {
+			if wf.CoveragePct <= 98 {
+				t.Fatalf("attempt %s coverage_pct = %f, want > 98 with a complete milestone timeline", id, wf.CoveragePct)
+			}
+			if len(wf.MissingMilestones) != 0 || len(wf.InvertedBuckets) != 0 {
+				t.Fatalf("attempt %s diagnostics missing=%v inverted=%v, want none for a complete timeline", id, wf.MissingMilestones, wf.InvertedBuckets)
+			}
+		}
+	}
+
+	// A-wall-1: perfectly tiled timeline → total coverage, zero unknown.
+	a1 := *byID["A-wall-1"].AttemptWaterfall
+	if a1.CoveragePct != 100 || a1.UnaccountedMS != 0 {
+		t.Fatalf("A-wall-1 coverage=%f unaccounted=%d, want 100/0", a1.CoveragePct, a1.UnaccountedMS)
+	}
+	var assetPrep int64
+	for _, b := range a1.Buckets {
+		if b.Name == "asset_preparation" {
+			assetPrep = b.DurationMS
+		}
+	}
+	if assetPrep != 298246 {
+		t.Fatalf("asset_preparation = %dms, want the dominant 298246ms bucket", assetPrep)
+	}
+
+	// A-wall-2: cross-machine tail stays honest (>98% but <100%).
+	a2 := *byID["A-wall-2"].AttemptWaterfall
+	if a2.UnaccountedMS != 59 {
+		t.Fatalf("A-wall-2 unaccounted_ms = %d, want the 59ms boundary gap", a2.UnaccountedMS)
+	}
+
+	// A-wall-3: missing assets.all_ready → UNKNOWN, never fabrication.
+	a3 := *byID["A-wall-3"].AttemptWaterfall
+	for _, b := range a3.Buckets {
+		if b.Name == "asset_preparation" || b.Name == "pre_plan_wait" {
+			t.Fatalf("A-wall-3 built %q across a missing boundary milestone", b.Name)
+		}
+	}
+	if !containsStr(a3.MissingMilestones, string(sharedtelemetry.MilestoneAllAssetsReady)) {
+		t.Fatalf("A-wall-3 missing_milestones = %v, want assets.all_ready", a3.MissingMilestones)
+	}
+	if a3.CoveragePct >= 98 || a3.UnaccountedMS == 0 {
+		t.Fatalf("A-wall-3 coverage=%f unaccounted=%d, want <98 with positive unknown", a3.CoveragePct, a3.UnaccountedMS)
+	}
+}
+
+// TestSummarizeTask_ExposesTopLevelWaterfall locks the §20 operator surface:
+// ExecutionSummary.Waterfall carries the wall/accounted/coverage/buckets
+// block that `fleetctl job inspect` prints — projected from the most recent
+// attempt holding a durable milestone timeline (earlier attempt as fallback),
+// and absent entirely for jobs predating milestone support.
+func TestSummarizeTask_ExposesTopLevelWaterfall(t *testing.T) {
+	start := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	end := start.Add(328041 * time.Millisecond)
+
+	newFixture := func(attemptsDef []taskattempts.TaskAttempt, reports map[string]string) (*Service, *stubTaskReader, *stubAttemptReader) {
+		svc, tasks, attempts, _, _ := newTestService()
+		tasks.tasks["T-wf"] = &taskgraph.Task{ID: "T-wf", JobID: "J-wf", Status: taskgraph.StatusSucceeded, AttemptCount: len(attemptsDef)}
+		for i := range attemptsDef {
+			if attemptsDef[i].StartedAt == nil {
+				attemptsDef[i].StartedAt = &start
+			}
+			if attemptsDef[i].CompletedAt == nil {
+				attemptsDef[i].CompletedAt = &end
+			}
+		}
+		attempts.attempts["T-wf"] = attemptsDef
+		attempts.rawReports = reports
+		return svc, tasks, attempts
+	}
+
+	latest := taskattempts.TaskAttempt{ID: "A-wf-latest", TaskID: "T-wf", JobID: "J-wf", WorkerID: "worker-b", Status: taskattempts.AttemptStatusSucceeded, AttemptNumber: 2}
+	earlier := taskattempts.TaskAttempt{ID: "A-wf-earlier", TaskID: "T-wf", JobID: "J-wf", WorkerID: "worker-a", Status: taskattempts.AttemptStatusSucceeded, AttemptNumber: 1}
+
+	t.Run("top-level projection is the latest reported attempt", func(t *testing.T) {
+		svc, _, _ := newFixture([]taskattempts.TaskAttempt{earlier, latest}, map[string]string{
+			"A-wf-earlier": realisticAttemptReportJSON,
+			"A-wf-latest":  realisticAttemptReportJSON,
+		})
+		result, err := svc.SummarizeTask(context.Background(), "T-wf")
+		if err != nil {
+			t.Fatalf("SummarizeTask() error: %v", err)
+		}
+		if result.Waterfall == nil {
+			t.Fatal("execution.waterfall missing despite durable milestone timelines")
+		}
+		last := result.Attempts[len(result.Attempts)-1]
+		if result.Waterfall != last.AttemptWaterfall {
+			t.Fatalf("execution.waterfall = %+v, want the latest attempt's own waterfall", result.Waterfall)
+		}
+	})
+
+	t.Run("falls back to an earlier attempt when the latest lacks a report", func(t *testing.T) {
+		svc, _, _ := newFixture([]taskattempts.TaskAttempt{earlier, latest}, map[string]string{
+			"A-wf-earlier": realisticAttemptReportJSON,
+		})
+		result, err := svc.SummarizeTask(context.Background(), "T-wf")
+		if err != nil {
+			t.Fatalf("SummarizeTask() error: %v", err)
+		}
+		if result.Waterfall == nil {
+			t.Fatal("execution.waterfall missing despite an earlier attempt with a report")
+		}
+		first := result.Attempts[0]
+		if result.Waterfall != first.AttemptWaterfall {
+			t.Fatalf("execution.waterfall = %+v, want the earlier attempt's waterfall as fallback", result.Waterfall)
+		}
+	})
+
+	t.Run("stays absent when no attempt has a durable report", func(t *testing.T) {
+		svc, _, _ := newFixture([]taskattempts.TaskAttempt{earlier, latest}, nil)
+		result, err := svc.SummarizeTask(context.Background(), "T-wf")
+		if err != nil {
+			t.Fatalf("SummarizeTask() error: %v", err)
+		}
+		if result.Waterfall != nil {
+			t.Fatalf("execution.waterfall = %+v, want absent (legacy shape) without any report", result.Waterfall)
 		}
 	})
 }

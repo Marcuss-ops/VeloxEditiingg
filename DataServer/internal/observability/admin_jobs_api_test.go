@@ -6,10 +6,81 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 	"velox-server/internal/jobs"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
 )
+
+// TestAdminJobInspectAPI_IncludesExecutionWaterfallBlock locks the §20 JSON
+// contract consumed by `fleetctl job inspect` (the CLI reprints this payload
+// verbatim): execution.waterfall carries wall_ms / accounted_ms /
+// unaccounted_ms / coverage_pct and the ordered bucket list straight from the
+// worker's durable milestone timeline.
+func TestAdminJobInspectAPI_IncludesExecutionWaterfallBlock(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc, tasks, attempts, _, _ := newTestService()
+	tasks.tasks["T-api-wf"] = &taskgraph.Task{
+		ID: "T-api-wf", JobID: "J-api-wf", Status: taskgraph.StatusSucceeded, AttemptCount: 1,
+	}
+	start := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	end := start.Add(328041 * time.Millisecond)
+	attempts.attempts["T-api-wf"] = []taskattempts.TaskAttempt{{
+		ID: "A-api-wf", TaskID: "T-api-wf", JobID: "J-api-wf", AttemptNumber: 1,
+		WorkerID: "worker-api-wf", Status: taskattempts.AttemptStatusSucceeded,
+		StartedAt: &start, CompletedAt: &end,
+	}}
+	attempts.rawReports = map[string]string{"A-api-wf": realisticAttemptReportJSON}
+	svc.WithJobs(&inspectionJobReader{job: &jobs.Job{ID: "J-api-wf", Status: jobs.StatusSucceeded}}).
+		WithJobInspection(inspectionExtras{})
+
+	r := gin.New()
+	NewModule(svc).RegisterRoutes(r)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/admin/jobs/J-api-wf", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET admin job = %d: %s", w.Code, w.Body.String())
+	}
+
+	var response struct {
+		Execution struct {
+			Waterfall *struct {
+				AttemptID     string  `json:"attempt_id"`
+				WallMS        int64   `json:"wall_ms"`
+				AccountedMS   int64   `json:"accounted_ms"`
+				UnaccountedMS int64   `json:"unaccounted_ms"`
+				CoveragePct   float64 `json:"coverage_pct"`
+				Buckets       []struct {
+					Name       string `json:"name"`
+					DurationMS int64  `json:"duration_ms"`
+				} `json:"buckets"`
+			} `json:"waterfall"`
+			Attempts []map[string]any `json:"attempts"`
+		} `json:"execution"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode admin job response: %v", err)
+	}
+	wf := response.Execution.Waterfall
+	if wf == nil {
+		t.Fatal("execution.waterfall missing from the fleetctl job inspect payload")
+	}
+	if wf.WallMS != 328041 || wf.AccountedMS != 328041 || wf.UnaccountedMS != 0 {
+		t.Fatalf("waterfall = %+v, want fully reconciled 328041ms wall", wf)
+	}
+	if wf.CoveragePct <= 98 {
+		t.Fatalf("coverage_pct = %f, want > 98 for a complete timeline", wf.CoveragePct)
+	}
+	var assetPrep *int64
+	for i := range wf.Buckets {
+		if wf.Buckets[i].Name == "asset_preparation" {
+			assetPrep = &wf.Buckets[i].DurationMS
+		}
+	}
+	if assetPrep == nil || *assetPrep != 298246 {
+		t.Fatalf("asset_preparation bucket = %+v, want the dominant 298246ms", assetPrep)
+	}
+}
 
 func TestAdminJobInspectAPI_ExposesCanonicalLiveExecution(t *testing.T) {
 	gin.SetMode(gin.TestMode)

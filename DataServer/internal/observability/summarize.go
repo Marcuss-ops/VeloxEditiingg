@@ -243,6 +243,19 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 			break
 		}
 	}
+	// Execution-level waterfall projection (§20): surface the most recent
+	// attempt's durable milestone timeline at the top of the summary so
+	// `fleetctl job inspect` reads wall_ms / accounted_ms / coverage_pct /
+	// buckets without digging into attempts[]. The reversed scan keeps this
+	// honest: the newest execution truth wins, an earlier attempt with a
+	// durable report is the fallback, and jobs predating milestone support
+	// keep the legacy shape (omitempty → no waterfall field).
+	for i := len(summary.Attempts) - 1; i >= 0; i-- {
+		if summary.Attempts[i].AttemptWaterfall != nil {
+			summary.Waterfall = summary.Attempts[i].AttemptWaterfall
+			break
+		}
+	}
 	if firstStart != nil && lastEnd != nil {
 		summary.TotalWallTimeMS = lastEnd.Sub(*firstStart).Milliseconds()
 	}
