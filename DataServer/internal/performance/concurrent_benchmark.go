@@ -42,9 +42,21 @@ type BenchmarkRenderResult struct {
 	ArtifactSHA256 string                  `json:"artifact_sha256,omitempty"`
 }
 
+// BenchmarkRenderRequest carries the full context for one benchmark render.
+// The workerID is contractually passed so the renderer can target the
+// specific worker; previously workerID was passed to RunConcurrentBenchmark
+// but never reached Render().
+type BenchmarkRenderRequest struct {
+	WorkerID         string           `json:"worker_id"`
+	Fixture          BenchmarkFixture `json:"fixture"`
+	CacheMode        CacheMode        `json:"cache_mode"`
+	RunID            string           `json:"run_id"`
+	ConcurrencyLevel int              `json:"concurrency_level"`
+}
+
 // RenderRunner executes ONE benchmark render of a fixture.
 type RenderRunner interface {
-	Render(ctx context.Context, fixture BenchmarkFixture) (BenchmarkRenderResult, error)
+	Render(ctx context.Context, req BenchmarkRenderRequest) (BenchmarkRenderResult, error)
 }
 
 // ConcurrentBenchmarkConfig configures the concurrent benchmark run.
@@ -155,7 +167,7 @@ func RunConcurrentBenchmark(
 		default:
 		}
 
-		levelResult := runConcurrencyLevel(ctx, renderer, fixture, level, config.RunsPerLevel)
+		levelResult := runConcurrencyLevel(ctx, renderer, fixture, level, config.RunsPerLevel, workerID, config.CacheMode, result.BenchmarkRunID)
 		result.Levels = append(result.Levels, *levelResult)
 
 		// Cooldown between levels (skip after last level)
@@ -190,6 +202,9 @@ func runConcurrencyLevel(
 	renderer RenderRunner,
 	fixture BenchmarkFixture,
 	level, runs int,
+	workerID string,
+	cacheMode CacheMode,
+	runID string,
 ) *ConcurrencyLevelResult {
 	result := &ConcurrencyLevelResult{
 		Level:     level,
@@ -221,7 +236,14 @@ func runConcurrencyLevel(
 			defer func() { <-sem }()
 
 			start := time.Now()
-			result, err := renderer.Render(ctx, fixture)
+			req := BenchmarkRenderRequest{
+				WorkerID:         workerID,
+				Fixture:          fixture,
+				CacheMode:        cacheMode,
+				RunID:            runID,
+				ConcurrencyLevel: level,
+			}
+			result, err := renderer.Render(ctx, req)
 			elapsed := time.Since(start).Milliseconds()
 
 			if err != nil {

@@ -12,7 +12,7 @@ type mockRenderRunner struct {
 	peakRAMBytes int64
 }
 
-func (m *mockRenderRunner) Render(ctx context.Context, fixture BenchmarkFixture) (BenchmarkRenderResult, error) {
+func (m *mockRenderRunner) Render(ctx context.Context, req BenchmarkRenderRequest) (BenchmarkRenderResult, error) {
 	// Simulate render time
 	select {
 	case <-ctx.Done():
