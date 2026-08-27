@@ -292,6 +292,21 @@ func (r *Registry) hydrateBulk(ctx context.Context, ids []string, infos []Worker
 			map[string]interface{}{"err": capacityErr.Error(), "count": len(ids)})
 		capacityMap = map[string]store.WorkerCapacityRow{}
 	}
+	// Load persisted scorecards so per-phase slot limits are available
+	// even when the worker has no active heartbeat session.
+	scorecardMap := map[string]*store.ScorecardRow{}
+	if scErr := (func() error {
+		sc, scErr := r.dbStore.GetScorecardsBulk(ctx, ids)
+		if scErr != nil {
+			return scErr
+		}
+		scorecardMap = sc
+		return nil
+	})(); scErr != nil {
+		registryLog.WarnWithMsg(logging.CodeRegistryLoadSessionsQueryFail,
+			"Workers scorecard query failed; per-phase slots will be empty",
+			map[string]interface{}{"err": scErr.Error(), "count": len(ids)})
+	}
 	for i := range infos {
 		active := sessionMap[infos[i].WorkerID.String()]
 		ConnectionStatusForInfo(&infos[i], active, now)
@@ -301,6 +316,13 @@ func (r *Registry) hydrateBulk(ctx context.Context, ids []string, infos []Worker
 			row.ActiveSlots,
 			capacityErr == nil,
 		)
+		// Overlay persisted scorecard per-phase slot limits.
+		if sc := scorecardMap[infos[i].WorkerID.String()]; sc != nil {
+			infos[i].Capacity.RenderSlots = sc.RenderSlots
+			infos[i].Capacity.PrefetchSlots = sc.PrefetchSlots
+			infos[i].Capacity.PublisherSlots = sc.PublisherSlots
+			infos[i].Capacity.LimitingResource = sc.LimitingResource
+		}
 		if capacityErr == nil {
 			applyLeaseCapacityState(&infos[i], row.ActiveSlots, now)
 		} else {

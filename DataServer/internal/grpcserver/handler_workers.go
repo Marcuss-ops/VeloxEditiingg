@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"velox-server/internal/logging"
+	"velox-server/internal/store"
 	"velox-server/internal/workers"
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
@@ -109,6 +110,38 @@ func (h *Handler) handleHeartbeat(workerID, sessionID string, hb *pb.Heartbeat) 
 			// Push per-phase slot limits to the worker so it enforces
 			// phase-specific admission instead of the flat MaxActiveJobs.
 			h.sendPerPhaseSlotsUpdate(context.Background(), workerID, sess, scorecard)
+			// Persist the scorecard to the store so it survives Master
+			// restarts and is available during registry hydration.
+			if h.dbStore != nil {
+				row := store.ScorecardRow{
+					WorkerID:             workerID,
+					RenderSlots:          scorecard.RenderSlots,
+					PrefetchSlots:        scorecard.PrefetchSlots,
+					PublisherSlots:       scorecard.PublisherSlots,
+					RAMSlots:             scorecard.RAMSlots,
+					CPUSlots:             scorecard.CPUSlots,
+					DiskSlots:            scorecard.DiskSlots,
+					NetworkSlots:         scorecard.NetworkSlots,
+					LimitingResource:     scorecard.LimitingResource,
+					TotalRAMBytes:        scorecard.TotalRAMBytes,
+					AvailableRAMBytes:    scorecard.AvailableRAMBytes,
+					EffectiveCPUCores:    scorecard.EffectiveCPUCores,
+					DiskReadMbps:         scorecard.DiskReadMbps,
+					DiskWriteMbps:        scorecard.DiskWriteMbps,
+					DownloadMbps:         scorecard.DownloadMbps,
+					UploadMbps:           scorecard.UploadMbps,
+					RAMPerJobBytes:       scorecard.RAMPerJobBytes,
+					CPUCoresPerJob:       scorecard.CPUCoresPerJob,
+					DiskMBpsPerJob:       scorecard.DiskMBpsPerJob,
+					NetworkMbpsPerJob:    scorecard.NetworkMbpsPerJob,
+					RenderWallMsPerJob:   scorecard.RenderWallMsPerJob,
+					PrefetchWallMsPerJob: scorecard.PrefetchWallMsPerJob,
+					PublishWallMsPerJob:  scorecard.PublishWallMsPerJob,
+				}
+				if err := h.dbStore.UpsertScorecard(context.Background(), row); err != nil {
+					logGRPCf(context.Background(), logging.LevelWarn, logging.CodeGRPCHeartbeatFailed, "[SCORECARD] failed to persist scorecard for worker %s: %v", workerID, err)
+				}
+			}
 		}
 	}
 
