@@ -4,6 +4,7 @@ set -euo pipefail
 ENGINE_SRC="${VELOX_VIDEO_ENGINE_SRC:-}"
 OUT_BIN="${VELOX_VIDEO_ENGINE_OUT:-/usr/local/bin/velox_video_engine}"
 BUILD_DIR="${VELOX_VIDEO_ENGINE_BUILD_DIR:-/tmp/velox-video-engine-build}"
+BUILD_JOBS="${VELOX_VIDEO_ENGINE_BUILD_JOBS:-2}"
 METADATA_DIR="${VELOX_VIDEO_ENGINE_METADATA_DIR:-/usr/local/share/velox}"
 ENGINE_SHA_FILE="${VELOX_VIDEO_ENGINE_SHA_FILE:-${METADATA_DIR}/video-engine.sha256}"
 
@@ -47,11 +48,11 @@ rm -rf \
     "$ENGINE_SRC/CMakeCache.txt" \
     "$ENGINE_SRC/cmake_install.cmake"
 
-# Ensure a clean out-of-source build directory. When BuildKit mounts the
-# directory as a cache, the mount itself cannot be removed; clear its
-# contents while preserving the mount point.
+# Keep the out-of-source build directory intact when it is backed by a
+# BuildKit cache mount. CMake's dependency tracking plus ccache can then
+# reuse unchanged objects between image builds; deleting this directory here
+# turned the cache mount into an expensive no-op.
 mkdir -p "$BUILD_DIR"
-find "$BUILD_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
 
 if [ -f "$ENGINE_SRC/CMakeLists.txt" ]; then
   echo "Detected CMake project"
@@ -74,9 +75,10 @@ if [ -f "$ENGINE_SRC/CMakeLists.txt" ]; then
       -S "$ENGINE_SRC" \
       -B "$BUILD_DIR" \
       -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
       -DVELOX_ENABLE_LIBAV="${VELOX_VIDEO_ENGINE_LIBAV}"
 
-  cmake --build "$BUILD_DIR" -j"$(nproc)"
+  cmake --build "$BUILD_DIR" --parallel "$BUILD_JOBS"
   ctest --test-dir "$BUILD_DIR" --output-on-failure
 
   if [ -f "$BUILD_DIR/velox_video_engine" ]; then
@@ -91,8 +93,7 @@ if [ -f "$ENGINE_SRC/CMakeLists.txt" ]; then
 
 elif [ -f "$ENGINE_SRC/Makefile" ] || [ -f "$ENGINE_SRC/makefile" ]; then
   echo "Detected Makefile project"
-  make -C "$ENGINE_SRC" clean || true
-  make -C "$ENGINE_SRC" -j"$(nproc)"
+  make -C "$ENGINE_SRC" CC="ccache cc" CXX="ccache c++" -j"$BUILD_JOBS"
 
   if [ -f "$ENGINE_SRC/velox_video_engine" ]; then
     install -m 0755 "$ENGINE_SRC/velox_video_engine" "$OUT_BIN"

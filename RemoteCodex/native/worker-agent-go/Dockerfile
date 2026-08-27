@@ -98,8 +98,8 @@ COPY RemoteCodex/native/video-engine-cpp /app/native/video-engine-cpp
 # Compile and test the engine into /usr/local/bin/velox_video_engine.
 # The builder also writes the canonical binary hash consumed by the runtime
 # verification gate; no host-built or docker-copied binary is accepted.
-RUN --mount=type=cache,target=/root/.ccache \
-    --mount=type=cache,target=/tmp/velox-video-engine-build,sharing=locked \
+RUN --mount=type=cache,id=velox-worker-cpp-ccache,target=/root/.ccache,sharing=locked \
+    --mount=type=cache,id=velox-worker-cpp-build,target=/tmp/velox-video-engine-build,sharing=locked \
     ccache -z 2>/dev/null || true; \
     /usr/local/bin/build-video-engine.sh && \
     test -x /usr/local/bin/velox_video_engine && \
@@ -147,7 +147,7 @@ WORKDIR /src
 #   * source code last (most frequent).
 # This ordering lets a Go-only diff avoid re-downloading dependencies.
 COPY VERSION.txt /src/VERSION.txt
-COPY shared/ /src/shared/
+COPY shared/go.mod shared/go.sum /src/shared/
 COPY RemoteCodex/native/worker-agent-go/go.mod \
      RemoteCodex/native/worker-agent-go/go.sum \
      /src/RemoteCodex/native/worker-agent-go/
@@ -164,6 +164,7 @@ RUN --mount=type=cache,id=velox-worker-go-mod,target=/go/pkg/mod,sharing=locked 
 # via the Makefile's LDFLAGS contract (VERSION.txt + Reproducible-Builds
 # chain), while `evict` builds the cache-admin CLI without version stamping.
 COPY RemoteCodex/native/worker-agent-go/ /src/RemoteCodex/native/worker-agent-go/
+COPY shared/ /src/shared/
 
 # The Makefile is the single source of truth for the LDFLAGS pattern,
 # so the image's main.Version + main.BuildTime match the host `make agent`

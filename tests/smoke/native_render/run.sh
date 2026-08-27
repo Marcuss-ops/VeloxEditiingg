@@ -18,6 +18,7 @@
 # Environment:
 #   VIDEO_SMOKE_BUILD_DIR  CMake build directory (default: /tmp/velox-video-smoke-build)
 #   VIDEO_SMOKE_JOB_DIR    Evidence directory (default: temporary directory)
+#   VIDEO_SMOKE_BUILD_JOBS Maximum concurrent native build jobs (default: 2)
 #   VIDEO_SMOKE_KEEP       Keep temporary evidence when set to 1
 # =============================================================================
 
@@ -29,6 +30,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 readonly REPO_ROOT
 readonly ENGINE_SOURCE="${REPO_ROOT}/RemoteCodex/native/video-engine-cpp"
 readonly BUILD_DIR="${VIDEO_SMOKE_BUILD_DIR:-/tmp/velox-video-smoke-build}"
+readonly BUILD_JOBS="${VIDEO_SMOKE_BUILD_JOBS:-2}"
 JOB_DIR="${VIDEO_SMOKE_JOB_DIR:-}"
 
 fail() {
@@ -66,7 +68,7 @@ cmake -S "${ENGINE_SOURCE}" -B "${BUILD_DIR}" \
     cat "${JOB_DIR}/cmake-configure.log" >&2
     fail "CMake configure failed"
   }
-cmake --build "${BUILD_DIR}" --parallel \
+cmake --build "${BUILD_DIR}" --parallel "${BUILD_JOBS}" \
   >"${JOB_DIR}/cmake-build.log" 2>&1 || {
     cat "${JOB_DIR}/cmake-build.log" >&2
     fail "CMake build failed"
