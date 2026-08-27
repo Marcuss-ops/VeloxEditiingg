@@ -149,15 +149,16 @@ func (s *Service) Receive(ctx context.Context, uploadID string, reader io.Reader
 		_ = s.markFailed(ctx, uploadID, "size mismatch")
 		return nil, fmt.Errorf("%w: expected=%d got=%d",
 			ErrSizeMismatch, session.ExpectedSizeBytes, receivedSize)
-	}	// ----- mark RECEIVED -----
+	} // ----- mark RECEIVED -----
 	now := s.clock.Now()
 
 	received := string(repository.UploadReceived)
 	if err := s.repo.UpdateUploadStatus(ctx, uploadID, repository.UploadFields{
-		Status:            &received,
-		ReceivedSizeBytes: &receivedSize,
-		ReceivedSHA256:    &receivedSHA,
-		CompletedAt:       &now,
+		Status:             &received,
+		ReceivedSizeBytes:  &receivedSize,
+		ReceivedSHA256:     &receivedSHA,
+		LastByteReceivedAt: &lastByte,
+		CompletedAt:        &now,
 	}); err != nil {
 		return nil, translateStoreErr(err)
 	}

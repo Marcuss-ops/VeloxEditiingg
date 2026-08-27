@@ -68,6 +68,9 @@ message WorkerToMasterEnvelope {
     // current per-job references so the master can project one transfer
     // into multiple job_asset_refs rows without duplicating the download.
     AssetDownloadProgress asset_download_progress = 36;
+
+    // Worker declaration that lets the master issue an early upload plan.
+    ArtifactUploadIntent artifact_upload_intent = 37;
   }
 
   reserved 12, 13, 14, 15, 17, 34, 35;
@@ -466,7 +469,6 @@ message MasterToWorkerEnvelope {
 
     // Progressive artifact upload intent/plan. These messages are additive;
     // legacy TaskOutputDeclared/ArtifactUploadPlan remain unchanged.
-    ArtifactUploadIntent artifact_upload_intent = 38;
     ArtifactEarlyUploadPlan artifact_early_upload_plan = 39;
 
     // Phase 3.4 / 3.6 (Artifact Commit Protocol) — typed

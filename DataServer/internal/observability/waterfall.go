@@ -102,7 +102,7 @@ func parseAssetPreparationDrillDown(raw string) *sharedtelemetry.AssetPreparatio
 		return nil
 	}
 	var prep sharedtelemetry.AssetPreparationBreakdown
-	var fields map[string]int64
+	var fields map[string]json.RawMessage
 	if json.Unmarshal(prepRaw, &fields) != nil {
 		return nil
 	}
@@ -112,9 +112,9 @@ func parseAssetPreparationDrillDown(raw string) *sharedtelemetry.AssetPreparatio
 	// type's canonical JSON tags.
 	get := func(snake, camel string) int64 {
 		if value, ok := fields[camel]; ok {
-			return value
+			return parseJSONInt(value)
 		}
-		return fields[snake]
+		return parseJSONInt(fields[snake])
 	}
 	prep = sharedtelemetry.AssetPreparationBreakdown{
 		AssetsRequired:          get("assets_required", "assetsRequired"),
