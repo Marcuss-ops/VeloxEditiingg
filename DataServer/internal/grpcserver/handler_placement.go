@@ -27,6 +27,8 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+const pendingTaskOfferTimeout = 30 * time.Second
+
 // notifyTasksAvailable checks for READY tasks and sends TaskOffers (push mode, PR #4).
 func (h *Handler) notifyTasksAvailable(ctx context.Context, workerID string, trigger <-chan struct{}, done <-chan struct{}) {
 	ticker := time.NewTicker(10 * time.Second)
@@ -63,9 +65,30 @@ func (h *Handler) sendPushTaskOffer(ctx context.Context, workerID string) {
 	sess.claimMu.Lock()
 	defer sess.claimMu.Unlock()
 
-	// If a previous offer is still pending, skip.
+	// Reconcile an offer that can no longer receive an accept/reject. A job
+	// cancellation, lease reaper, or a lost worker message can change the
+	// durable task state without sending a worker response. Leaving the
+	// in-memory offer set forever would make this connected worker look idle
+	// while blocking every subsequent offer.
 	if sess.pendingTaskOffer != nil {
-		return
+		offer := sess.pendingTaskOffer
+		stale := !sess.pendingTaskOfferAt.IsZero() && time.Since(sess.pendingTaskOfferAt) >= pendingTaskOfferTimeout
+		if !stale {
+			if current, err := h.taskRepo.Get(ctx, offer.ID); err == nil && (current == nil || current.Status != taskgraph.StatusLeased || current.WorkerID != workerID || current.LeaseID != offer.LeaseID) {
+				stale = true
+			}
+		}
+		if !stale {
+			return
+		}
+		if err := h.taskRepo.ReleaseLease(ctx, offer.ID, workerID, offer.LeaseID); err != nil {
+			// The lease may already have been released by cancellation/reaping.
+			// Clear the local gate anyway; the durable state is authoritative and
+			// the next tick will select a fresh READY task.
+			logGRPCf(ctx, logging.LevelDebug, logging.CodeGRPCPlacementFailed, "[PLACEMENT] stale pending offer cleanup worker=%s task=%s: %v", workerID, offer.ID, err)
+		}
+		sess.pendingTaskOffer = nil
+		sess.pendingTaskOfferAt = time.Time{}
 	}
 
 	snapshot := sess.placementSnapshot(workerID)
@@ -272,6 +295,7 @@ func (h *Handler) sendClaimedTaskOffer(
 	}
 
 	sess.pendingTaskOffer = tws
+	sess.pendingTaskOfferAt = time.Now().UTC()
 	logGRPCf(ctx, logging.LevelInfo, logging.CodeGRPCPlacement, "[PLACEMENT] TaskOffer queued for worker %s: task=%s job=%s attempt=%s lease=%s executor=%s@%d rev=%d", sess.workerID, tws.ID, tws.JobID, attempt.ID, leaseID, tws.ExecutorID, tws.ExecutorVersion, tws.Revision)
 }
 

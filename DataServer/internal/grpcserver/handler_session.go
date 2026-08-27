@@ -57,8 +57,9 @@ type workerSession struct {
 	// reads writerErr inside its select and triggers a teardown on receipt.
 	writerErr chan error // Job offering synchronization (Issue 4 fix).
 	// PR #4: replaced pendingOffer (job-based) with pendingTaskOffer (task-based).
-	pendingTaskOffer *taskgraph.TaskWithSpec // TaskOffer sent, awaiting TaskAccepted/TaskRejected
-	claimMu          sync.Mutex              // serializes the claim+send+set flow; also guards pendingTaskOffer r/w
+	pendingTaskOffer   *taskgraph.TaskWithSpec // TaskOffer sent, awaiting TaskAccepted/TaskRejected
+	pendingTaskOfferAt time.Time               // when the offer was put on the wire
+	claimMu            sync.Mutex              // serializes the claim+send+set flow; also guards pendingTaskOffer r/w
 
 	// Worker capacity limit from the canonical capability report. Current
 	// occupancy is never stored on the session: placement reads active leases
