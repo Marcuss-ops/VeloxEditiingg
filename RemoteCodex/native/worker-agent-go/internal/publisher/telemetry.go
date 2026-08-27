@@ -7,6 +7,9 @@ import (
 
 // UploadBreakdown records the measured data-plane work for one artifact
 // upload. Durations are wall-clock milliseconds; bytes and counts are totals.
+//
+// The progressive fields are zero on the legacy non-progressive path and on
+// engines/transports that predate the artifact_write_progress stream.
 type UploadBreakdown struct {
 	UploadMS         int64
 	UploadBytes      int64
@@ -14,6 +17,17 @@ type UploadBreakdown struct {
 	ChunkCount       int64
 	RetryCount       int64
 	RemoteFinalizeMS int64
+	// FirstPartStartedMS is the time between the upload run start and the
+	// first part actually sent. Zero when no part was uploaded.
+	FirstPartStartedMS int64
+	// PartsUploadedBeforeRenderEnd/BytesUploadedBeforeRenderEnd count the
+	// parts (and bytes) whose UploadPart completed while the engine was
+	// still rendering (before the output was declared finalized).
+	PartsUploadedBeforeRenderEnd int64
+	BytesUploadedBeforeRenderEnd int64
+	// OverlapMS is the render/upload overlap window: render end minus
+	// first-part start, zero when the upload began after finalization.
+	OverlapMS int64
 }
 
 // UploadTelemetry receives upload progress and terminal measurements.

@@ -34,6 +34,23 @@ func (m *PrometheusMetrics) RecordRenderUploadOverlap(duration time.Duration) {
 		m.renderUploadOverlapSeconds.observe("total", duration.Seconds())
 	}
 }
+
+// RecordProgressiveUploadTiming records the progressive-upload telemetry:
+// firstPartStarted (time to first part), parts/bytes uploaded while the
+// render was still running, and the render/upload overlap window. All values
+// are zero on the legacy non-progressive path and are skipped.
+func (m *PrometheusMetrics) RecordProgressiveUploadTiming(firstPartStarted time.Duration, partsBeforeRenderEnd, bytesBeforeRenderEnd int64, overlap time.Duration) {
+	if firstPartStarted > 0 {
+		m.progressiveFirstPartStartedSeconds.observe("total", firstPartStarted.Seconds())
+	}
+	if partsBeforeRenderEnd > 0 {
+		m.progressivePartsBeforeRenderEnd.observe("total", float64(partsBeforeRenderEnd))
+	}
+	if bytesBeforeRenderEnd > 0 {
+		m.progressiveBytesBeforeRenderEnd.observe("total", float64(bytesBeforeRenderEnd))
+	}
+	m.RecordRenderUploadOverlap(overlap)
+}
 func (m *PrometheusMetrics) RecordTaskResultSubmit(duration time.Duration) {
 	m.taskResultSubmitSeconds.observe("total", duration.Seconds())
 }

@@ -79,6 +79,133 @@ func TestRunProgressiveUploadUsesFourWorkersAndCompletesAfterAllParts(t *testing
 	}
 }
 
+// overlapTestSession completes part 1 immediately, then holds parts 2+
+// until release — so the test can finalize the growing file while the
+// upload is mid-flight and pin the progressive overlap telemetry.
+type overlapTestSession struct {
+	mu        sync.Mutex
+	parts     map[int]int64
+	firstDone chan struct{}
+	release   chan struct{}
+	once      sync.Once
+}
+
+func (s *overlapTestSession) UploadPart(_ context.Context, n int, r io.Reader, size int64) error {
+	if _, err := io.Copy(io.Discard, io.LimitReader(r, size)); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	if s.parts == nil {
+		s.parts = map[int]int64{}
+	}
+	s.parts[n] = size
+	s.mu.Unlock()
+	if n == 1 {
+		s.once.Do(func() { close(s.firstDone) })
+		return nil
+	}
+	select {
+	case <-s.release:
+	case <-time.After(5 * time.Second):
+	}
+	return nil
+}
+func (s *overlapTestSession) Complete(context.Context, FinalArtifactIdentity) (*UploadResult, error) {
+	return &UploadResult{}, nil
+}
+func (s *overlapTestSession) Abort(context.Context) error { return nil }
+
+// TestProgressiveUploadOverlapTelemetry pins the progressive timings when
+// the render finalizes WHILE the upload is running: the first part is
+// uploaded before render end (counted + bytes), and the overlap window is
+// positive. RunProgressiveUpload starts with the full safe prefix but a
+// non-finalized file, exactly the early-intent progressive flow.
+func TestProgressiveUploadOverlapTelemetry(t *testing.T) {
+	payload := bytes.Repeat([]byte("x"), 64*1024)
+	path := t.TempDir() + "/out.bin"
+	if err := writeTestFile(path, payload); err != nil {
+		t.Fatal(err)
+	}
+	file := NewGrowingFile()
+	// First chunk safe, but the render has not finalized yet.
+	file.Update(1024, false, 0)
+	session := &overlapTestSession{firstDone: make(chan struct{}), release: make(chan struct{})}
+	done := make(chan *UploadResult, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		result, err := RunProgressiveUpload(context.Background(), path, 1024, file, session, nil)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		done <- result
+	}()
+	// Part 1 completed while the engine was still rendering.
+	select {
+	case <-session.firstDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first part never started")
+	}
+	// Give the overlap window a measurable (>1ms) duration before the
+	// engine finalizes; the timings are wall-clock milliseconds.
+	time.Sleep(10 * time.Millisecond)
+	file.Update(int64(len(payload)), true, int64(len(payload)))
+	file.MarkDurable(int64(len(payload)))
+	close(session.release)
+
+	select {
+	case result := <-done:
+		if result.Breakdown.PartsUploadedBeforeRenderEnd < 1 {
+			t.Errorf("parts before render end = %d; want >= 1", result.Breakdown.PartsUploadedBeforeRenderEnd)
+		}
+		if result.Breakdown.BytesUploadedBeforeRenderEnd < 1024 {
+			t.Errorf("bytes before render end = %d; want >= 1024", result.Breakdown.BytesUploadedBeforeRenderEnd)
+		}
+		if result.Breakdown.OverlapMS <= 0 {
+			t.Errorf("overlap ms = %d; want > 0 (upload overlapped the render)", result.Breakdown.OverlapMS)
+		}
+	case err := <-errCh:
+		t.Fatal(err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("progressive upload never completed")
+	}
+}
+
+// TestProgressiveUploadTimingZeroWhenRenderEndedFirst pins the legacy
+// post-render flow: the output is already finalized and durable before the
+// upload starts, so nothing was uploaded before render end and the overlap
+// window is zero (the timings degrade to zero instead of being fabricated).
+func TestProgressiveUploadTimingZeroWhenRenderEndedFirst(t *testing.T) {
+	payload := bytes.Repeat([]byte("x"), 4*1024)
+	path := t.TempDir() + "/out.bin"
+	if err := writeTestFile(path, payload); err != nil {
+		t.Fatal(err)
+	}
+	file := NewGrowingFile()
+	file.Update(int64(len(payload)), true, int64(len(payload)))
+	file.MarkDurable(int64(len(payload)))
+	session := &progressiveTestSession{}
+	result, err := RunProgressiveUpload(context.Background(), path, 1024, file, session, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Breakdown.PartsUploadedBeforeRenderEnd != 0 {
+		t.Errorf("parts before render end = %d; want 0", result.Breakdown.PartsUploadedBeforeRenderEnd)
+	}
+	if result.Breakdown.BytesUploadedBeforeRenderEnd != 0 {
+		t.Errorf("bytes before render end = %d; want 0", result.Breakdown.BytesUploadedBeforeRenderEnd)
+	}
+	if result.Breakdown.OverlapMS != 0 {
+		t.Errorf("overlap ms = %d; want 0", result.Breakdown.OverlapMS)
+	}
+	// The time to the first part is a wall-clock duration that can be
+	// legitimately 0 on a fast machine; only the overlap/count semantics
+	// are pinned here.
+	if result.Breakdown.FirstPartStartedMS < 0 {
+		t.Errorf("first part started ms = %d; want >= 0", result.Breakdown.FirstPartStartedMS)
+	}
+}
+
 func TestValidateFinalArtifactIdentityRequiresAllEvidence(t *testing.T) {
 	h := sha256.Sum256([]byte("final"))
 	base := FinalArtifactIdentity{SHA256: hex.EncodeToString(h[:]), SizeBytes: 5, EngineFinalized: true, OutputDurable: true, UploadedParts: 4, ExpectedParts: 4}

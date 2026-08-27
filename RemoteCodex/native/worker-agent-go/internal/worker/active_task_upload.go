@@ -11,6 +11,7 @@ import (
 	"velox-worker-agent/internal/publisher"
 	"velox-worker-agent/internal/spool"
 	"velox-worker-agent/internal/taskrunner"
+	"velox-worker-agent/internal/telemetry"
 )
 
 func (w *Worker) uploadDeclaredArtifacts(ctx context.Context, pte *PendingTaskExecution, report *taskrunner.TaskExecutionReport, plan *pb.ArtifactUploadPlan, entries []spool.SpoolEntry, resumable map[string]bool, started time.Time) ([]*pb.ArtifactUploadCompleted, error) {
@@ -113,6 +114,14 @@ func uploadWithNegotiatedPath(ctx context.Context, transport publisher.Transport
 		_ = session.Abort(ctx)
 		return nil, err
 	}
+	// Progressive overlap telemetry: how much of the upload ran while the
+	// render was still writing, and how long until the first part.
+	telemetry.GetPrometheusMetrics().RecordProgressiveUploadTiming(
+		time.Duration(result.Breakdown.FirstPartStartedMS)*time.Millisecond,
+		result.Breakdown.PartsUploadedBeforeRenderEnd,
+		result.Breakdown.BytesUploadedBeforeRenderEnd,
+		time.Duration(result.Breakdown.OverlapMS)*time.Millisecond,
+	)
 	return result, nil
 }
 

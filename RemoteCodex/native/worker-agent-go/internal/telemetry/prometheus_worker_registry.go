@@ -22,6 +22,9 @@ func initPrometheusWorkerFamily(m *PrometheusMetrics) {
 	m.artifactUploadSeconds = &HistogramVec{Name: "velox_artifact_upload_seconds", Help: "Artifact upload duration", Buckets: []float64{.01, .1, 1, 5, 30, 120, 600}, values: make(map[string]*histogramData)}
 	m.artifactLockWaitSeconds = &HistogramVec{Name: "velox_artifact_lock_wait_seconds", Help: "Publisher and artifact lock wait duration", Buckets: []float64{.0001, .001, .01, .1, 1, 5, 30, 120}, values: make(map[string]*histogramData)}
 	m.renderUploadOverlapSeconds = &HistogramVec{Name: "velox_render_upload_overlap_seconds", Help: "Time during which rendering and artifact upload overlapped", Buckets: []float64{.001, .01, .1, 1, 5, 30, 120, 600}, values: make(map[string]*histogramData)}
+	m.progressiveFirstPartStartedSeconds = &HistogramVec{Name: "velox_progressive_upload_first_part_started_seconds", Help: "Time between the progressive upload run start and the first part sent", Buckets: []float64{.001, .01, .1, 1, 5, 30, 120, 600}, values: make(map[string]*histogramData)}
+	m.progressivePartsBeforeRenderEnd = &HistogramVec{Name: "velox_progressive_upload_parts_before_render_end", Help: "Parts uploaded while the render was still running", Buckets: []float64{1, 2, 4, 8, 16, 32, 64, 128, 256}, values: make(map[string]*histogramData)}
+	m.progressiveBytesBeforeRenderEnd = &HistogramVec{Name: "velox_progressive_upload_bytes_before_render_end", Help: "Bytes uploaded while the render was still running", Buckets: []float64{1 << 20, 8 << 20, 32 << 20, 128 << 20, 512 << 20, 2 << 30, 4 << 30}, values: make(map[string]*histogramData)}
 	m.taskResultSubmitSeconds = &HistogramVec{Name: "velox_task_result_submit_seconds", Help: "TaskResult persistence and send duration", Buckets: []float64{.001, .01, .1, 1, 5, 30, 120}, values: make(map[string]*histogramData)}
 	m.taskResultAckSeconds = &HistogramVec{Name: "velox_task_result_ack_seconds", Help: "TaskResult acknowledgement wait duration", Buckets: []float64{.001, .01, .1, 1, 5, 30, 120}, values: make(map[string]*histogramData)}
 	m.taskResultAcksTotal = &CounterVec{Name: "velox_task_result_acks_total", Help: "TaskResult acknowledgements received", values: make(map[string]float64)}
@@ -50,6 +53,9 @@ func exportPrometheusWorkerFamily(m *PrometheusMetrics) string {
 		m.artifactUploadSeconds.export() +
 		m.artifactLockWaitSeconds.export() +
 		m.renderUploadOverlapSeconds.export() +
+		m.progressiveFirstPartStartedSeconds.export() +
+		m.progressivePartsBeforeRenderEnd.export() +
+		m.progressiveBytesBeforeRenderEnd.export() +
 		m.taskResultSubmitSeconds.export() +
 		m.taskResultAckSeconds.export() +
 		m.taskResultAcksTotal.export() +

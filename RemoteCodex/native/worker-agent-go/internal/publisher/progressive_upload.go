@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"sync"
+	"time"
 )
 
 const progressiveUploadWorkers = 4
@@ -76,8 +77,12 @@ type GrowingFile struct {
 	safeBytes int64
 	finalSize int64
 	finalized bool
-	durable   bool
-	aborted   error
+	// finalizedAt is the wall-clock moment the engine declared the output
+	// finalized (the C++ trailer / final artifact_write_progress event). It
+	// is the render-end reference for the progressive overlap telemetry.
+	finalizedAt time.Time
+	durable     bool
+	aborted     error
 }
 
 func NewGrowingFile() *GrowingFile { g := &GrowingFile{}; g.cond = sync.NewCond(&g.mu); return g }
@@ -88,6 +93,9 @@ func (g *GrowingFile) Update(safeBytes int64, finalized bool, finalSize int64) {
 		g.safeBytes = safeBytes
 	}
 	if finalized {
+		if !g.finalized {
+			g.finalizedAt = time.Now()
+		}
 		g.finalized = true
 		if finalSize > 0 {
 			g.finalSize = finalSize
@@ -95,6 +103,14 @@ func (g *GrowingFile) Update(safeBytes int64, finalized bool, finalSize int64) {
 	}
 	g.cond.Broadcast()
 	g.mu.Unlock()
+}
+
+// FinalizedAt returns the wall-clock moment the output was declared
+// finalized, or the zero time when it has not been finalized yet.
+func (g *GrowingFile) FinalizedAt() time.Time {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.finalizedAt
 }
 
 // MarkDurable records the explicit fsync/rename durability confirmation.
@@ -198,6 +214,13 @@ func runProgressiveUploadWithJournal(ctx context.Context, path string, chunkSize
 	var mu, journalMu sync.Mutex
 	var uploaded int64
 	var uploadedParts int
+	// Progressive telemetry: the render-end reference is the moment the
+	// engine declared the output finalized (GrowingFile.FinalizedAt).
+	// Parts whose UploadPart completed BEFORE that moment were uploaded
+	// while the render was still running — the overlap window.
+	runStartedAt := time.Now()
+	var firstPartStartedAt time.Time
+	var partsBeforeRenderEnd, bytesBeforeRenderEnd int64
 	worker := func() {
 		defer wg.Done()
 		for p := range parts {
@@ -209,6 +232,11 @@ func runProgressiveUploadWithJournal(ctx context.Context, path string, chunkSize
 				}
 				return
 			}
+			mu.Lock()
+			if firstPartStartedAt.IsZero() {
+				firstPartStartedAt = time.Now()
+			}
+			mu.Unlock()
 			if err := session.UploadPart(ctx, p.number, io.NewSectionReader(f, p.start, p.size), p.size); err != nil {
 				select {
 				case errs <- err:
@@ -232,6 +260,13 @@ func runProgressiveUploadWithJournal(ctx context.Context, path string, chunkSize
 			mu.Lock()
 			uploaded += p.size
 			uploadedParts++
+			// Count this part as uploaded before render end when the
+			// engine had not yet finalized the output at completion time.
+			completedAt := time.Now()
+			if renderEnd := file.FinalizedAt(); renderEnd.IsZero() || completedAt.Before(renderEnd) {
+				partsBeforeRenderEnd++
+				bytesBeforeRenderEnd += p.size
+			}
 			n := uploaded
 			mu.Unlock()
 			if onProgress != nil {
@@ -319,6 +354,26 @@ func runProgressiveUploadWithJournal(ctx context.Context, path string, chunkSize
 	if err != nil {
 		return nil, err
 	}
+	if result == nil {
+		result = &UploadResult{}
+	}
+	// Progressive overlap telemetry: how much of the upload ran while the
+	// render was still writing. first_part_started_ms is measured from the
+	// upload run start; overlap_ms is the render/upload overlap window
+	// (render end minus first part start, zero when the upload started
+	// after the render had already finalized).
+	firstPartStartedMS := int64(0)
+	overlapMS := int64(0)
+	if !firstPartStartedAt.IsZero() {
+		firstPartStartedMS = firstPartStartedAt.Sub(runStartedAt).Milliseconds()
+		if renderEnd := file.FinalizedAt(); !renderEnd.IsZero() && renderEnd.After(firstPartStartedAt) {
+			overlapMS = renderEnd.Sub(firstPartStartedAt).Milliseconds()
+		}
+	}
+	result.Breakdown.FirstPartStartedMS = firstPartStartedMS
+	result.Breakdown.PartsUploadedBeforeRenderEnd = partsBeforeRenderEnd
+	result.Breakdown.BytesUploadedBeforeRenderEnd = bytesBeforeRenderEnd
+	result.Breakdown.OverlapMS = overlapMS
 	if markUploaded != nil {
 		if err := markUploaded(ctx); err != nil {
 			return nil, fmt.Errorf("progressive upload: persist UPLOADED state: %w", err)

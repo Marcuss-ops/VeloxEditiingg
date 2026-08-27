@@ -97,7 +97,6 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 	w.recordTaskStart(pte)
 
 	startTime := time.Now()
-	renderStartedAt := startTime
 	milestones := telemetry.NewAttemptMilestoneRecorderAt(startTime)
 	milestones.Mark(sharedtelemetry.MilestoneAttemptAccepted)
 	milestones.Mark(sharedtelemetry.MilestoneExecutionStarted)
@@ -149,7 +148,6 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 	// duration for task outcome accounting.
 
 	if execErr == nil {
-		renderEndedAt := time.Now()
 		if acquired {
 			w.concurrencyLimiter.Release()
 			acquired = false
@@ -169,9 +167,12 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 		}
 		w.UpdateOperationalPhase(taskID, PhasePublishing)
 		waterfall.Transition("upload", time.Now().UTC())
-		uploadStartedAt := time.Now()
-		telemetry.GetPrometheusMetrics().RecordRenderUploadOverlap(renderEndedAt.Sub(renderStartedAt))
-		_ = uploadStartedAt
+		// The render/upload overlap is NOT measured here: the legacy upload
+		// path starts strictly after the render ended, so a naive
+		// renderEndedAt.Sub(uploadStartedAt) would always be negative. The
+		// progressive publisher records the true overlap window (first part
+		// sent while the engine is still finalizing) via
+		// RecordProgressiveUploadTiming -> velox_render_upload_overlap_seconds.
 		if uploadErr := w.uploadTaskOutputs(jobCtx, pte, report); uploadErr != nil {
 			execErr = fmt.Errorf("upload task outputs: %w", uploadErr)
 		}

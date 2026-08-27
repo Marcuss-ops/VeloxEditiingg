@@ -60,31 +60,34 @@ type PrometheusMetrics struct {
 	assemblyAssetsMissingAtExecution *GaugeVec
 	assemblyExecutionDownloadMS      *HistogramVec
 
-	workerErrorsTotal            *CounterVec
-	assetDownloadActive          *GaugeVec
-	assetDownloadQueued          *GaugeVec
-	assetDownloadReady           *GaugeVec
-	assetDownloadFailed          *GaugeVec
-	assetDownloadCacheHits       *GaugeVec
-	assetDownloadBytes           *GaugeVec
-	assetDownloadTotalBytes      *GaugeVec
-	assetDownloadThroughput      *GaugeVec
-	assetDownloadChunksActive    *GaugeVec
-	assetDownloadChunkThroughput *GaugeVec
-	assetDownloadETA             *GaugeVec
-	assetDownloadCoalesced       *CounterVec
-	workerActiveJobs             *GaugeVec
-	workerStatus                 *GaugeVec
-	fallbackCount                *CounterVec
-	pythonEmergencyPath          *CounterVec
-	renderSeconds                *HistogramVec
-	artifactUploadSeconds        *HistogramVec
-	artifactLockWaitSeconds      *HistogramVec
-	renderUploadOverlapSeconds   *HistogramVec
-	taskResultSubmitSeconds      *HistogramVec
-	taskResultAckSeconds         *HistogramVec
-	taskResultAcksTotal          *CounterVec
-	telemetryInvalidEvents       *CounterVec
+	workerErrorsTotal                  *CounterVec
+	assetDownloadActive                *GaugeVec
+	assetDownloadQueued                *GaugeVec
+	assetDownloadReady                 *GaugeVec
+	assetDownloadFailed                *GaugeVec
+	assetDownloadCacheHits             *GaugeVec
+	assetDownloadBytes                 *GaugeVec
+	assetDownloadTotalBytes            *GaugeVec
+	assetDownloadThroughput            *GaugeVec
+	assetDownloadChunksActive          *GaugeVec
+	assetDownloadChunkThroughput       *GaugeVec
+	assetDownloadETA                   *GaugeVec
+	assetDownloadCoalesced             *CounterVec
+	workerActiveJobs                   *GaugeVec
+	workerStatus                       *GaugeVec
+	fallbackCount                      *CounterVec
+	pythonEmergencyPath                *CounterVec
+	renderSeconds                      *HistogramVec
+	artifactUploadSeconds              *HistogramVec
+	artifactLockWaitSeconds            *HistogramVec
+	renderUploadOverlapSeconds         *HistogramVec
+	progressiveFirstPartStartedSeconds *HistogramVec
+	progressivePartsBeforeRenderEnd    *HistogramVec
+	progressiveBytesBeforeRenderEnd    *HistogramVec
+	taskResultSubmitSeconds            *HistogramVec
+	taskResultAckSeconds               *HistogramVec
+	taskResultAcksTotal                *CounterVec
+	telemetryInvalidEvents             *CounterVec
 
 	artifactTmpfsReservedBytes *GaugeVec
 	artifactTmpfsSpillTotal    *CounterVec
