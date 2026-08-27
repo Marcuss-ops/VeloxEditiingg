@@ -58,7 +58,11 @@ bool PacketOutputSink::open(const std::filesystem::path& path, std::string& erro
     return true;
 }
 
+#if LIBAVFORMAT_VERSION_MAJOR >= 62
 int PacketOutputSink::writeCallback(void* opaque, const uint8_t* data, int size) {
+#else
+int PacketOutputSink::writeCallback(void* opaque, uint8_t* data, int size) {
+#endif
     auto& sink = *static_cast<PacketOutputSink*>(opaque);
     if (size <= 0) return 0;
     if (sink.fd_ < 0) return AVERROR(EIO);

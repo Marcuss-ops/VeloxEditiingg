@@ -37,7 +37,11 @@ public:
     void close();
 
 private:
+#if LIBAVFORMAT_VERSION_MAJOR >= 62
     static int writeCallback(void* opaque, const uint8_t* data, int size);
+#else
+    static int writeCallback(void* opaque, uint8_t* data, int size);
+#endif
     static int64_t seekCallback(void* opaque, int64_t offset, int whence);
 
     int fd_{-1};
