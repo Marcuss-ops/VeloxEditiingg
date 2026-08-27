@@ -30,7 +30,9 @@ func (s *SQLiteStore) ListExecutionEventsByJob(ctx context.Context, jobID string
 		limit = 200
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT job_id, event_name, attempt_id, event_index, origin, scope,
+		SELECT job_id,
+		       COALESCE(NULLIF(event_name, ''), NULLIF(action, ''), component),
+		       attempt_id, event_index, origin, scope,
 		       status, metadata_json, started_at, completed_at,
 		       CASE
 		         WHEN completed_at <> '' THEN completed_at

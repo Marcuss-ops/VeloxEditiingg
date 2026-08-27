@@ -1,3 +1,10 @@
+## [v1.3.5] - 2026-08-27
+
+### Observability timeline labels
+
+- Use the canonical event name, action, or component fallback when rendering
+  durable execution events in operator inspection.
+
 ## [v1.3.4] - 2026-08-27
 
 ### Observability timeline
