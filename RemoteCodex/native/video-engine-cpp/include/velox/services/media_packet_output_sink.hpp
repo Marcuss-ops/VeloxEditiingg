@@ -7,6 +7,7 @@ extern "C" {
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <string>
 
 namespace velox::media::packet {
@@ -23,6 +24,12 @@ struct PacketOutputSinkResult {
     int64_t backward_seek_bytes{0};
 };
 
+// Progress callback invoked after each write to the output sink.  The
+// callback receives the file path being written and the cumulative bytes
+// written so far (the safe offset the Go progressive upload can start
+// reading).
+using WriteProgressCallback = std::function<void(const std::filesystem::path& path, int64_t bytes_written)>;
+
 class PacketOutputSink {
 public:
     PacketOutputSink() = default;
@@ -35,6 +42,12 @@ public:
     AVIOContext* avio() const { return avio_; }
     bool finalize(PacketOutputSinkResult& result, std::string& error);
     void close();
+
+    // Set a callback that fires after each write.  The callback receives
+    // the cumulative bytes written so far (the safe offset for the
+    // progressive upload).
+    void setWriteProgressCallback(WriteProgressCallback cb) { writeProgressCb_ = std::move(cb); }
+    const std::filesystem::path& path() const { return path_; }
 
 private:
 #if LIBAVFORMAT_VERSION_MAJOR >= 62
@@ -55,6 +68,7 @@ private:
     int64_t backward_seek_bytes_{0};
     bool finalized_{false};
     void* sha_{nullptr};
+    WriteProgressCallback writeProgressCb_;
 };
 
 } // namespace velox::media::packet

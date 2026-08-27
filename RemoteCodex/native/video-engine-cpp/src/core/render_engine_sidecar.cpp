@@ -147,6 +147,7 @@ std::string RenderEngine::sidecarJson(const std::string& output_path) const {
     s << ",\"bitrate\":" << last.bitrate;
     s << ",\"duration_seconds\":" << duration_seconds_.load();
     s << ",\"output_durable\":" << (output_durable_.load() ? "true" : "false");
+    s << ",\"trailer_to_publish_us\":" << trailer_to_publish_us_.load();
     s << ",\"output_path\":\"" << escapeProgressJsonString(outPath.string()) << "\"";
     s << ",\"artifact_write_progress\":{";
     s << "\"artifact\":\"final_video\"";

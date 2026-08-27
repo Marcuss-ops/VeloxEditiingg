@@ -88,6 +88,13 @@ int PacketOutputSink::writeCallback(void* opaque, uint8_t* data, int size) {
     }
     sink.position_ += size;
     sink.high_watermark_ = std::max(sink.high_watermark_, sink.position_);
+    if (sink.writeProgressCb_) {
+        // Emit high_watermark_ (not position_): the progressive upload
+        // reads the file sequentially, so the safe offset is the maximum
+        // position ever written, not the current write position which can
+        // decrease on libavformat seeks (e.g. moov atom).
+        sink.writeProgressCb_(sink.path_, sink.high_watermark_);
+    }
     return size;
 }
 

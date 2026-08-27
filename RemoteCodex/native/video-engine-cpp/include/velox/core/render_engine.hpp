@@ -201,6 +201,7 @@ private:
     std::atomic<int64_t> transcode_segments_{0};
     std::atomic<double> duration_seconds_{0.0};
     std::atomic<bool> output_durable_{false};
+    std::atomic<int64_t> trailer_to_publish_us_{0};
     std::string concat_mode_{"reencode"};
     services::EngineProgress last_progress_{};
     EngineMetrics metrics_;

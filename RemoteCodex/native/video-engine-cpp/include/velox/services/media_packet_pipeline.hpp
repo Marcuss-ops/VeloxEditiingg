@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -39,6 +40,11 @@ struct CopyOnlyMuxRequest {
     std::vector<CopyOnlyVideoSegment> video_segments;
     std::optional<CopyOnlyAudioTrack> audio;
     std::filesystem::path output_path;
+    // Optional callback invoked after each write to the output sink.
+    // Receives the actual file path being written (the .partial path) and
+    // the cumulative bytes written so far (the safe offset for the
+    // progressive upload).  When nil, no progress is emitted during the mux.
+    std::function<void(const std::filesystem::path& path, int64_t bytes_written)> write_progress_callback;
 };
 
 struct CopyOnlyMuxResult {
@@ -68,6 +74,12 @@ struct CopyOnlyMuxResult {
     int64_t max_buffered_packets{0};
     int64_t packet_heap_allocations{0};
     int64_t global_sort_ms{0};
+    // trailer_to_publish_us measures the time from av_write_trailer
+    // completion to publishAtomic completion (fsync + rename + dir fsync).
+    // This is the latency the Go side incurs between the last mux write
+    // and the final path becoming available — the single number that
+    // captures the mux→publish pipeline cost.
+    int64_t trailer_to_publish_us{0};
 };
 
 // Concatenate compatible local stream-copy inputs and optionally add one

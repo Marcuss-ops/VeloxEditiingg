@@ -79,6 +79,15 @@ RenderResult RenderEngine::renderCopyOnly(
 
     media::CopyOnlyMuxRequest request;
     request.output_path = outPath;
+    // Emit progressive-safe byte ranges during the mux so the Go upload
+    // can start before the mux finishes.  The partial path is reported
+    // because that is where the sink writes; the Go side opens it and
+    // continues reading after publishAtomic renames it.
+    request.write_progress_callback = [this, outPath](const fs::path& path, int64_t bytes_written) {
+        // The mux writes to the .partial path; report that path so the
+        // Go progressive upload can open it before publishAtomic renames.
+        reportArtifactWriteProgress("final_video", path, bytes_written, bytes_written, false);
+    };
     request.video_segments.reserve(plan.timeline.size());
     double total_copy_duration = 0.0;
     int64_t total_copy_duration_us = 0;
@@ -280,6 +289,7 @@ RenderResult RenderEngine::renderCopyOnly(
         return failRender("packet_mux_failed");
     }
     output_durable_.store(muxResult.output_durable);
+    trailer_to_publish_us_.store(muxResult.trailer_to_publish_us);
     if (!muxResult.output_durable) {
         std::cerr << "warning: output was atomically published but directory durability was not confirmed\n";
     }

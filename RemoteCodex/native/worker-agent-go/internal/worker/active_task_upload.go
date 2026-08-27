@@ -98,6 +98,14 @@ func uploadWithNegotiatedPath(ctx context.Context, transport publisher.Transport
 		}
 		return res, err
 	}
+	// Use the path from progress updates (the .partial path during the mux)
+	// when available; fall back to the declared local path.  The .partial
+	// file is the same inode as the final path after publishAtomic renames
+	// it, so the fd remains valid across the rename.
+	openPath := req.LocalPath
+	if progress.Path != "" {
+		openPath = progress.Path
+	}
 	file.Update(progress.SafeOffsetBytes, progress.Finalized, 0)
 	if progress.Finalized {
 		file.MarkDurable(progress.SafeOffsetBytes)
@@ -111,7 +119,7 @@ func uploadWithNegotiatedPath(ctx context.Context, transport publisher.Transport
 	if err != nil {
 		return nil, fmt.Errorf("worker artifact upload: begin progressive %q: %w", transport.ID(), err)
 	}
-	st, err := os.Stat(req.LocalPath)
+	st, err := os.Stat(openPath)
 	if err != nil {
 		_ = session.Abort(ctx)
 		return nil, err
@@ -126,7 +134,7 @@ func uploadWithNegotiatedPath(ctx context.Context, transport publisher.Transport
 		file.Update(st.Size(), true, st.Size())
 		file.MarkDurable(st.Size())
 	}
-	result, err := publisher.RunProgressiveUploadWithJournalAndStoreOptions(ctx, req.LocalPath, req.Target.ChunkSize, file, session, progressiveJournalPath(req), nil, "", publisher.ProgressiveUploadOptions{Workers: progressivePartConcurrency}, req.Progress)
+	result, err := publisher.RunProgressiveUploadWithJournalAndStoreOptions(ctx, openPath, req.Target.ChunkSize, file, session, progressiveJournalPath(req), nil, "", publisher.ProgressiveUploadOptions{Workers: progressivePartConcurrency}, req.Progress)
 	if err != nil {
 		_ = session.Abort(ctx)
 		return nil, err

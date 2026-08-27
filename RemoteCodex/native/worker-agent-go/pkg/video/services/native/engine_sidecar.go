@@ -28,7 +28,8 @@ type engineSidecar struct {
 	SpeedX           float64            `json:"speed_x"`
 	EncodePasses     int64              `json:"encode_passes"`
 	TempBytes        int64              `json:"temp_bytes"`
-	OutputDurable    bool               `json:"output_durable"`
+	OutputDurable       bool               `json:"output_durable"`
+	TrailerToPublishUS  int64              `json:"trailer_to_publish_us"`
 	SHA256           string             `json:"sha256"`
 	SHA256Valid      bool               `json:"sha256_valid"`
 	OutputSizeBytes  int64              `json:"output_size_bytes"`

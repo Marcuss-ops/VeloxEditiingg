@@ -94,6 +94,7 @@ func mapEngineSidecar(sc *engineSidecar, m *pipeline.RenderMetrics) {
 	m.EncodePasses = sc.EncodePasses
 	m.TempBytes = sc.TempBytes
 	m.OutputDurable = sc.OutputDurable
+	m.TrailerToPublishUS = sc.TrailerToPublishUS
 	m.SHA256 = sc.SHA256
 	m.SHA256Valid = sc.SHA256Valid
 	m.OutputSizeBytes = sc.OutputSizeBytes
