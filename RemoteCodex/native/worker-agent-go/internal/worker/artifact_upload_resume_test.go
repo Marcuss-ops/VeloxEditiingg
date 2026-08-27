@@ -7,7 +7,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -421,3 +423,4 @@ func TestResumeArtifactUpload_WorkerRestartPersistsSpoolAndCommits(t *testing.T)
 		t.Fatalf("status = %q; want COMMITTED after worker-restart resume", got.Status)
 	}
 }
+
