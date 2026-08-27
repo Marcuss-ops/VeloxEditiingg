@@ -172,6 +172,19 @@ if(VELOX_ENABLE_LIBAV)
     velox_link_ffmpeg(velox_media_packet_pipeline_tests)
     add_test(NAME media_packet_pipeline_tests COMMAND velox_media_packet_pipeline_tests)
 
+    add_executable(velox_streaming_packet_mux_tests
+        tests/test_streaming_packet_mux.cpp
+        src/services/file_utils.cpp
+        src/services/io_counters.cpp
+        src/services/media_probe.cpp
+        ${VELOX_PACKET_PIPELINE_FACADE_SOURCE}
+        ${VELOX_PACKET_PIPELINE_COMPONENT_SOURCES}
+        ${VELOX_SEGMENT_EXECUTION_LIBAV_SOURCES}
+        src/services/segment_execution.cpp)
+    velox_configure_test(velox_streaming_packet_mux_tests)
+    velox_link_ffmpeg(velox_streaming_packet_mux_tests)
+    add_test(NAME streaming_packet_mux_tests COMMAND velox_streaming_packet_mux_tests)
+
     add_executable(velox_segment_execution_libav_tests
         tests/test_segment_execution_libav.cpp
         src/services/file_utils.cpp
@@ -333,6 +346,7 @@ foreach(velox_target
         velox_media_probe_tests
         velox_media_packet_output_sink_tests
         velox_media_packet_pipeline_tests
+        velox_streaming_packet_mux_tests
         velox_render_copy_only_zero_intermediates_tests
         velox_render_mixed_tests
         velox_render_plan_v2_tests
