@@ -211,6 +211,23 @@ func TestReadEngineSidecar_FullSchemaMapsAllTelemetry(t *testing.T) {
 	}
 }
 
+func TestMapEngineSidecar_MapsOutputIdentity(t *testing.T) {
+	sc := engineSidecar{SHA256: "abc123", SHA256Valid: true, OutputSizeBytes: 9876, BackwardSeekSeen: true, OutputDurable: true}
+	mapped := pipeline.RenderMetrics{}
+	mapEngineSidecar(&sc, &mapped)
+	if mapped.SHA256 != "abc123" || !mapped.SHA256Valid || mapped.OutputSizeBytes != 9876 || !mapped.BackwardSeekSeen || !mapped.OutputDurable {
+		t.Fatalf("mapped output identity = %+v", mapped)
+	}
+}
+
+func TestMapEngineSidecar_LegacyOutputIdentityIsZero(t *testing.T) {
+	mapped := pipeline.RenderMetrics{}
+	mapEngineSidecar(&engineSidecar{}, &mapped)
+	if mapped.SHA256 != "" || mapped.SHA256Valid || mapped.OutputSizeBytes != 0 || mapped.BackwardSeekSeen {
+		t.Fatalf("legacy output identity = %+v", mapped)
+	}
+}
+
 func TestMapEngineSidecar_MapsProcessCounters(t *testing.T) {
 	sc := engineSidecar{
 		ProcessCounters: &engineProcessCounters{
@@ -307,16 +324,21 @@ func TestMapEngineSidecar_MapsFramePipeline(t *testing.T) {
 func TestMapEngineSidecar_MapsIOCounters(t *testing.T) {
 	sc := engineSidecar{
 		IOCounters: &engineIOCounters{
-			FileCopyCount:    2,
-			FileCopyBytes:    1024,
-			AssetBytesCopied: 512,
-			InputOpenCount:   6,
-			InputReopenCount: 1,
+			FirstPacketReadMS:  11,
+			FirstOutputWriteMS: 23,
+			FileFsyncMS:        7,
+			DirectoryFsyncMS:   5,
+			OutputRenameMS:     3,
+			FileCopyCount:      2,
+			FileCopyBytes:      1024,
+			AssetBytesCopied:   512,
+			InputOpenCount:     6,
+			InputReopenCount:   1,
 		},
 	}
 	mapped := pipeline.RenderMetrics{}
 	mapEngineSidecar(&sc, &mapped)
-	if mapped.FileCopyCount != 2 || mapped.FileCopyBytes != 1024 || mapped.AssetBytesCopied != 512 ||
+	if mapped.FirstPacketReadMS != 11 || mapped.FirstOutputWriteMS != 23 || mapped.FileFsyncMS != 7 || mapped.DirectoryFsyncMS != 5 || mapped.OutputRenameMS != 3 || mapped.FileCopyCount != 2 || mapped.FileCopyBytes != 1024 || mapped.AssetBytesCopied != 512 ||
 		mapped.InputOpenCount != 6 || mapped.InputReopenCount != 1 {
 		t.Fatalf("mapped io counters = %+v", mapped)
 	}

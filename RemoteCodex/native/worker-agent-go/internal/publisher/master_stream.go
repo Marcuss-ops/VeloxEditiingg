@@ -1,6 +1,8 @@
 package publisher
 
 import (
+	"velox-shared/controltransport"
+
 	"bytes"
 	"context"
 	"fmt"
@@ -21,6 +23,96 @@ type MasterStreamTransport struct {
 }
 
 func (t *MasterStreamTransport) ID() string { return TransportIDMasterStream }
+
+func (t *MasterStreamTransport) Capabilities() CapabilitySet {
+	return CapabilitySet{controltransport.CapabilityArtifactProgressiveUploadV1}
+}
+
+func (t *MasterStreamTransport) BeginProgressive(ctx context.Context, req ProgressiveUploadRequest) (ProgressiveSession, error) {
+	return t.ResumeProgressive(ctx, req, nil)
+}
+
+func (t *MasterStreamTransport) ResumeProgressive(ctx context.Context, req ProgressiveUploadRequest, completed []int) (ProgressiveSession, error) {
+	if req.Target.UploadURL == "" {
+		return nil, fmt.Errorf("master-stream: progressive UploadURL empty")
+	}
+	return &masterStreamProgressiveSession{transport: t, request: req, completed: append([]int(nil), completed...)}, nil
+}
+
+type masterStreamProgressiveSession struct {
+	transport *MasterStreamTransport
+	request   ProgressiveUploadRequest
+	completed []int
+}
+
+func (s *masterStreamProgressiveSession) UploadPart(ctx context.Context, partNumber int, reader io.Reader, size int64) error {
+	body, err := io.ReadAll(io.LimitReader(reader, size))
+	if err != nil {
+		return err
+	}
+	if int64(len(body)) != size {
+		return fmt.Errorf("master-stream: progressive part size mismatch")
+	}
+	client := s.transport.HTTPClient
+	if client == nil {
+		client = &http.Client{Timeout: 5 * time.Minute}
+	}
+	url := strings.TrimRight(s.request.Target.UploadURL, "/") + "/" + strconv.Itoa(partNumber)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+	req.Header.Set("X-Upload-Id", s.request.Target.UploadID)
+	req.Header.Set("X-Artifact-Commit-Token", s.request.CommitToken)
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("%w: progressive part %d: %v", ErrUploadFailed, partNumber, err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("%w: progressive part %d: HTTP %d", ErrUploadFailed, partNumber, resp.StatusCode)
+	}
+	return nil
+}
+
+func (s *masterStreamProgressiveSession) Complete(ctx context.Context, final FinalArtifactIdentity) (*UploadResult, error) {
+	if err := validateFinalArtifactIdentity(final); err != nil {
+		return nil, err
+	}
+	if !isLowerHex64(final.SHA256) {
+		return nil, fmt.Errorf("master-stream: final SHA-256 is invalid")
+	}
+	client := s.transport.HTTPClient
+	if client == nil {
+		client = &http.Client{Timeout: 5 * time.Minute}
+	}
+	url := strings.TrimRight(s.request.Target.UploadURL, "/") + "/complete"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("X-Upload-Id", s.request.Target.UploadID)
+	req.Header.Set("X-Worker-SHA256", final.SHA256)
+	req.Header.Set("X-Artifact-Commit-Token", s.request.CommitToken)
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("%w: progressive complete: %v", ErrUploadFailed, err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("%w: progressive complete: HTTP %d", ErrUploadFailed, resp.StatusCode)
+	}
+	serverSHA := extractJSONString(body, `"sha256"`)
+	if serverSHA != "" && serverSHA != final.SHA256 {
+		return nil, fmt.Errorf("%w: worker=%s server=%s", ErrChecksumMismatch, final.SHA256, serverSHA)
+	}
+	return &UploadResult{UploadID: s.request.Target.UploadID, UploadedBytes: final.SizeBytes, ServerSHA256: serverSHA}, nil
+}
+
+func (s *masterStreamProgressiveSession) Abort(ctx context.Context) error { return nil }
 
 // chunkSize is the per-request chunk size for the master-stream transport.
 const chunkSize int64 = 8 * 1024 * 1024
@@ -51,6 +143,7 @@ func (t *MasterStreamTransport) Upload(ctx context.Context, req UploadRequest) (
 
 	uploaded := int64(0)
 	chunkIndex := 0
+	measurement := &uploadTelemetry{started: time.Now()}
 	buf := make([]byte, chunkSize)
 	for {
 		n, rerr := io.ReadFull(f, buf)
@@ -78,6 +171,10 @@ func (t *MasterStreamTransport) Upload(ctx context.Context, req UploadRequest) (
 					ErrUploadFailed, chunkIndex, resp.StatusCode)
 			}
 			uploaded += int64(n)
+			measurement.ChunkCompleted(int64(n))
+			if req.Telemetry != nil {
+				req.Telemetry.ChunkCompleted(int64(n))
+			}
 			if req.Progress != nil {
 				req.Progress(uploaded)
 			}
@@ -91,6 +188,7 @@ func (t *MasterStreamTransport) Upload(ctx context.Context, req UploadRequest) (
 		chunkIndex++
 	}
 
+	finalizeStarted := time.Now()
 	completeURL := strings.TrimRight(req.Target.UploadURL, "/") + "/complete"
 	compReq, err := http.NewRequestWithContext(ctx, http.MethodPost, completeURL, nil)
 	if err != nil {
@@ -109,6 +207,10 @@ func (t *MasterStreamTransport) Upload(ctx context.Context, req UploadRequest) (
 		return nil, fmt.Errorf("%w: master-stream complete: HTTP %d body=%s",
 			ErrUploadFailed, resp.StatusCode, string(body))
 	}
+	measurement.FinalizeCompleted(time.Since(finalizeStarted))
+	if req.Telemetry != nil {
+		req.Telemetry.FinalizeCompleted(time.Since(finalizeStarted))
+	}
 
 	// A missing server-side SHA must remain empty. The master must not advance
 	// an artifact to COMPLETED using only a worker self-report.
@@ -123,9 +225,11 @@ func (t *MasterStreamTransport) Upload(ctx context.Context, req UploadRequest) (
 			ErrChecksumMismatch, req.WorkerSHA256, serverSHA)
 	}
 
-	return &UploadResult{
+	result := &UploadResult{
 		UploadID:      req.Target.UploadID,
 		UploadedBytes: uploaded,
 		ServerSHA256:  serverSHA,
-	}, nil
+		Breakdown:     measurement.Snapshot().UploadBreakdown,
+	}
+	return result, nil
 }

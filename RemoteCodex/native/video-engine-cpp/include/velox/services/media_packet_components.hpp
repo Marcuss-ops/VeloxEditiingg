@@ -47,8 +47,29 @@ struct TimestampState {
     int64_t last_pts{AV_NOPTS_VALUE};
 };
 
-// RAII owner of one accepted AVPacket handed to the muxer for interleaved
-// writing. Copied packets are moved in with av_packet_move_ref.
+// One reusable packet slot used by the streaming mux. The packet payload is
+// reference-counted by LibAV; no heap allocation is needed per accepted packet.
+struct PendingPacket {
+    AVPacket packet{};
+    int output_stream_index{-1};
+    int64_t sort_dts{AV_NOPTS_VALUE};
+    bool ready{false};
+
+    PendingPacket() = default;
+    ~PendingPacket() { av_packet_unref(&packet); }
+    PendingPacket(const PendingPacket&) = delete;
+    PendingPacket& operator=(const PendingPacket&) = delete;
+
+    void reset() {
+        av_packet_unref(&packet);
+        output_stream_index = -1;
+        sort_dts = AV_NOPTS_VALUE;
+        ready = false;
+    }
+};
+
+// Legacy collected-packet holder retained for component-test compatibility.
+// The canonical mux path uses PendingPacket cursors instead.
 struct PacketHolder {
     AVPacket packet{};
     int output_stream_index{0};
@@ -180,6 +201,25 @@ bool demuxAndRewrite(const std::filesystem::path& path,
                      int64_t& packet_count,
                      std::string& error,
                      bool extend_video_tail = false);
+
+// Streams one rewritten source window into a reusable packet slot. The
+// callback is invoked immediately for each accepted packet.
+using PacketConsumer = bool (*)(PendingPacket&, void*, std::string&);
+
+bool streamAndRewrite(Demuxer& input,
+                      const std::filesystem::path& path,
+                      AVMediaType type,
+                      int input_stream_index,
+                      AVStream* output_stream,
+                      int64_t timeline_offset,
+                      int64_t source_in_us,
+                      int64_t duration_us,
+                      TimestampState& state,
+                      PacketConsumer consumer,
+                      void* consumer_context,
+                      int64_t& packet_count,
+                      std::string& error,
+                      bool extend_video_tail = false);
 
 bool demuxAndRewrite(Demuxer& input,
                      const std::filesystem::path& path,

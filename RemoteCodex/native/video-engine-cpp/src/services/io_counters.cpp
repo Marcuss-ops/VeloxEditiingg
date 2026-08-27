@@ -4,6 +4,7 @@
 #include <mutex>
 #include <sys/resource.h>
 #include <unordered_set>
+#include <chrono>
 
 namespace velox::services {
 
@@ -11,6 +12,7 @@ namespace {
 IOCounters g_ioCounters;
 std::mutex g_openMutex;
 std::unordered_set<std::string> g_openedPaths;
+std::chrono::steady_clock::time_point g_render_started;
 
 // leadingToken returns the first whitespace-delimited token of a
 // command string (the executable name), lowercased.
@@ -35,11 +37,18 @@ IOCounters& ioCounters() {
 }
 
 void resetIOCounters() {
+	g_render_started = std::chrono::steady_clock::now();
     g_ioCounters.file_copy_count.store(0);
     g_ioCounters.file_copy_bytes.store(0);
     g_ioCounters.asset_bytes_copied.store(0);
     g_ioCounters.input_open_count.store(0);
     g_ioCounters.input_reopen_count.store(0);
+    g_ioCounters.input_seek_count.store(0);
+    g_ioCounters.first_packet_read_ms.store(0);
+    g_ioCounters.first_output_write_ms.store(0);
+    g_ioCounters.file_fsync_ms.store(0);
+    g_ioCounters.directory_fsync_ms.store(0);
+    g_ioCounters.output_rename_ms.store(0);
     g_ioCounters.external_spawn_count.store(0);
     g_ioCounters.ffmpeg_spawn_count.store(0);
     g_ioCounters.ffprobe_spawn_count.store(0);
@@ -71,6 +80,25 @@ void recordInputOpen(const std::string& path) {
         g_ioCounters.input_reopen_count.fetch_add(1);
     }
 }
+
+void recordInputSeek() { g_ioCounters.input_seek_count.fetch_add(1); }
+void recordFirstPacketRead() {
+    int64_t expected = 0;
+    const int64_t now = static_cast<int64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - g_render_started).count());
+    g_ioCounters.first_packet_read_ms.compare_exchange_strong(expected, now);
+}
+void recordFirstOutputWrite() {
+    int64_t expected = 0;
+    const int64_t now = static_cast<int64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - g_render_started).count());
+    g_ioCounters.first_output_write_ms.compare_exchange_strong(expected, now);
+}
+void recordFileFsync(int64_t elapsed_ms) { g_ioCounters.file_fsync_ms.fetch_add(elapsed_ms); }
+void recordDirectoryFsync(int64_t elapsed_ms) { g_ioCounters.directory_fsync_ms.fetch_add(elapsed_ms); }
+void recordOutputRename(int64_t elapsed_ms) { g_ioCounters.output_rename_ms.fetch_add(elapsed_ms); }
 
 void recordExternalSpawn(const std::string& command) {
     g_ioCounters.external_spawn_count.fetch_add(1);

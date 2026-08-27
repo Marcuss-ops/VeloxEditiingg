@@ -20,6 +20,8 @@ func initPrometheusWorkerFamily(m *PrometheusMetrics) {
 	m.pythonEmergencyPath = &CounterVec{Name: "velox_python_emergency_path_total", Help: "Total Python emergency path usages (should be 0 in production)", values: make(map[string]float64)}
 	m.renderSeconds = &HistogramVec{Name: "velox_render_seconds", Help: "Render duration", Buckets: []float64{.1, 1, 5, 10, 30, 60, 300, 900, 1800}, values: make(map[string]*histogramData)}
 	m.artifactUploadSeconds = &HistogramVec{Name: "velox_artifact_upload_seconds", Help: "Artifact upload duration", Buckets: []float64{.01, .1, 1, 5, 30, 120, 600}, values: make(map[string]*histogramData)}
+	m.artifactLockWaitSeconds = &HistogramVec{Name: "velox_artifact_lock_wait_seconds", Help: "Publisher and artifact lock wait duration", Buckets: []float64{.0001, .001, .01, .1, 1, 5, 30, 120}, values: make(map[string]*histogramData)}
+	m.renderUploadOverlapSeconds = &HistogramVec{Name: "velox_render_upload_overlap_seconds", Help: "Time during which rendering and artifact upload overlapped", Buckets: []float64{.001, .01, .1, 1, 5, 30, 120, 600}, values: make(map[string]*histogramData)}
 	m.taskResultSubmitSeconds = &HistogramVec{Name: "velox_task_result_submit_seconds", Help: "TaskResult persistence and send duration", Buckets: []float64{.001, .01, .1, 1, 5, 30, 120}, values: make(map[string]*histogramData)}
 	m.taskResultAckSeconds = &HistogramVec{Name: "velox_task_result_ack_seconds", Help: "TaskResult acknowledgement wait duration", Buckets: []float64{.001, .01, .1, 1, 5, 30, 120}, values: make(map[string]*histogramData)}
 	m.taskResultAcksTotal = &CounterVec{Name: "velox_task_result_acks_total", Help: "TaskResult acknowledgements received", values: make(map[string]float64)}
@@ -46,6 +48,8 @@ func exportPrometheusWorkerFamily(m *PrometheusMetrics) string {
 		m.workerStatus.export() +
 		m.renderSeconds.export() +
 		m.artifactUploadSeconds.export() +
+		m.artifactLockWaitSeconds.export() +
+		m.renderUploadOverlapSeconds.export() +
 		m.taskResultSubmitSeconds.export() +
 		m.taskResultAckSeconds.export() +
 		m.taskResultAcksTotal.export() +

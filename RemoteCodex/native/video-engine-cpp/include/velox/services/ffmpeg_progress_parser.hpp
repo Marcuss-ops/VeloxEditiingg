@@ -67,6 +67,13 @@ struct EngineProgress {
     int64_t frames_decoded{0};
     int64_t frames_composited{0};
     int64_t elapsed_ms{0};
+
+    // Output-file progress for progressive artifact publication.
+    std::string artifact{};
+    std::string artifact_path{};
+    int64_t high_watermark_bytes{0};
+    int64_t safe_offset_bytes{0};
+    bool artifact_finalized{false};
 };
 
 // ProgressCallback is invoked at the end of every parsed block.

@@ -54,6 +54,13 @@ func verifyAndBuildOutputs(ctx context.Context, outputPath string, startedAt tim
 			CompletedAt: time.Now().UTC(),
 		}
 	}
+	// Prefer the native engine identity only for a verified append-only
+	// output. Any backward seek, missing digest, or invalid size forces the
+	// canonical on-disk manifest path; never publish an unverified native SHA.
+	if rm := runMetrics.RenderMetrics; rm.SHA256Valid && !rm.BackwardSeekSeen && rm.SHA256 != "" && rm.OutputSizeBytes > 0 {
+		outputManifest.SHA256Hex = rm.SHA256
+		outputManifest.SizeBytes = rm.OutputSizeBytes
+	}
 	outputHash = outputManifest.SHA256Hex
 	outputSize = outputManifest.SizeBytes
 	// Keep the historical output.hash_ms key, but make it mean exactly the

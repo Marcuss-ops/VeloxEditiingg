@@ -48,7 +48,16 @@ func (h *Handler) dispatchMessage(workerID, sessionID string, env *pb.WorkerToMa
 	case *pb.WorkerToMasterEnvelope_TaskOutputDeclared:
 		h.handleTaskOutputDeclared(workerID, m.TaskOutputDeclared, sess)
 
+	case *pb.WorkerToMasterEnvelope_ArtifactUploadIntent:
+		if gateErr := h.checkArtifactProgressiveCapability(workerID); gateErr != nil {
+			return gateErr
+		}
+		h.handleArtifactUploadIntent(workerID, m.ArtifactUploadIntent, sess)
+
 	case *pb.WorkerToMasterEnvelope_ArtifactUploadCompleted:
+		if gateErr := h.checkArtifactProgressiveCapability(workerID); gateErr != nil {
+			return gateErr
+		}
 		h.handleArtifactUploadCompleted(workerID, m.ArtifactUploadCompleted, sess)
 
 	case *pb.WorkerToMasterEnvelope_AssetDownloadProgress:

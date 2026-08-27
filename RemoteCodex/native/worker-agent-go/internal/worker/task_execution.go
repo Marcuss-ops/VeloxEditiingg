@@ -92,11 +92,12 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 	jobCtx, jobCancel := context.WithCancel(ctx)
 	activeTask.Cancel = jobCancel
 	defer jobCancel()
-	jobCtx = w.withJobProgressCallback(jobCtx, taskID)
+	jobCtx = withProgressTaskID(w.withJobProgressCallback(jobCtx, taskID), taskID)
 
 	w.recordTaskStart(pte)
 
 	startTime := time.Now()
+	renderStartedAt := startTime
 	milestones := telemetry.NewAttemptMilestoneRecorderAt(startTime)
 	milestones.Mark(sharedtelemetry.MilestoneAttemptAccepted)
 	milestones.Mark(sharedtelemetry.MilestoneExecutionStarted)
@@ -148,6 +149,7 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 	// duration for task outcome accounting.
 
 	if execErr == nil {
+		renderEndedAt := time.Now()
 		if acquired {
 			w.concurrencyLimiter.Release()
 			acquired = false
@@ -167,6 +169,9 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 		}
 		w.UpdateOperationalPhase(taskID, PhasePublishing)
 		waterfall.Transition("upload", time.Now().UTC())
+		uploadStartedAt := time.Now()
+		telemetry.GetPrometheusMetrics().RecordRenderUploadOverlap(renderEndedAt.Sub(renderStartedAt))
+		_ = uploadStartedAt
 		if uploadErr := w.uploadTaskOutputs(jobCtx, pte, report); uploadErr != nil {
 			execErr = fmt.Errorf("upload task outputs: %w", uploadErr)
 		}

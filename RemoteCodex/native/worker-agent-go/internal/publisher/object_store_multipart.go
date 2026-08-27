@@ -1,6 +1,8 @@
 package publisher
 
 import (
+	"velox-shared/controltransport"
+
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -60,6 +62,80 @@ type ObjectStoreMultipartTransport struct {
 }
 
 func (t *ObjectStoreMultipartTransport) ID() string { return TransportIDObjectStoreMultipart }
+
+func (t *ObjectStoreMultipartTransport) Capabilities() CapabilitySet {
+	return CapabilitySet{controltransport.CapabilityArtifactProgressiveUploadV1}
+}
+
+func (t *ObjectStoreMultipartTransport) BeginProgressive(ctx context.Context, req ProgressiveUploadRequest) (ProgressiveSession, error) {
+	return t.ResumeProgressive(ctx, req, nil)
+}
+
+func (t *ObjectStoreMultipartTransport) ResumeProgressive(ctx context.Context, req ProgressiveUploadRequest, completed []int) (ProgressiveSession, error) {
+	if t.S3Client == nil {
+		return nil, fmt.Errorf("object-store-multipart: S3Client not configured")
+	}
+	bucket, key, uploadID, err := parseS3URL(req.Target.UploadURL, req.Target.UploadID)
+	if err != nil {
+		return nil, err
+	}
+	if uploadID == "" {
+		created, err := t.S3Client.CreateMultipartUpload(ctx, map[string]interface{}{"bucket": bucket, "key": key})
+		if err != nil {
+			return nil, fmt.Errorf("%w: CreateMultipartUpload: %v", ErrUploadFailed, err)
+		}
+		uploadID = created.UploadID
+	}
+	if uploadID == "" {
+		return nil, fmt.Errorf("object-store-multipart: upload_id missing")
+	}
+	return &objectStoreProgressiveSession{transport: t, bucket: bucket, key: key, uploadID: uploadID, completed: append([]int(nil), completed...)}, nil
+}
+
+type objectStoreProgressiveSession struct {
+	transport             *ObjectStoreMultipartTransport
+	bucket, key, uploadID string
+	parts                 []s3PartSummary
+	completed             []int
+}
+
+func (s *objectStoreProgressiveSession) UploadPart(ctx context.Context, partNumber int, reader io.Reader, size int64) error {
+	body, err := io.ReadAll(io.LimitReader(reader, size))
+	if err != nil {
+		return err
+	}
+	if int64(len(body)) != size {
+		return fmt.Errorf("object-store-multipart: progressive part size mismatch")
+	}
+	sum := sha256.Sum256(body)
+	res, err := s.transport.uploadPartWithRetry(ctx, s.bucket, s.key, s.uploadID, partNumber, body, hex.EncodeToString(sum[:]), 5)
+	if err != nil {
+		return err
+	}
+	s.parts = append(s.parts, s3PartSummary{PartNumber: res.PartNumber, Size: size, ETag: res.ETag})
+	return nil
+}
+
+func (s *objectStoreProgressiveSession) Complete(ctx context.Context, final FinalArtifactIdentity) (*UploadResult, error) {
+	if err := validateFinalArtifactIdentity(final); err != nil {
+		return nil, err
+	}
+	if !isLowerHex64(final.SHA256) {
+		return nil, fmt.Errorf("object-store-multipart: final SHA-256 is invalid")
+	}
+	if len(s.parts) == 0 {
+		return nil, fmt.Errorf("object-store-multipart: no parts uploaded")
+	}
+	sortParts(s.parts)
+	if _, err := s.transport.S3Client.CompleteMultipartUpload(ctx, map[string]interface{}{"bucket": s.bucket, "key": s.key, "upload_id": s.uploadID, "parts": s.parts, "final_sha256": final.SHA256, "final_size": final.SizeBytes}); err != nil {
+		return nil, fmt.Errorf("%w: CompleteMultipartUpload: %v", ErrUploadFailed, err)
+	}
+	return &UploadResult{UploadID: s.uploadID, UploadedBytes: final.SizeBytes}, nil
+}
+
+func (s *objectStoreProgressiveSession) Abort(ctx context.Context) error {
+	return s.transport.S3Client.AbortMultipartUpload(ctx, map[string]interface{}{"bucket": s.bucket, "key": s.key, "upload_id": s.uploadID})
+}
 
 // Upload implements Transport.Upload for ObjectStoreMultipartTransport.
 func (t *ObjectStoreMultipartTransport) Upload(ctx context.Context, req UploadRequest) (*UploadResult, error) {

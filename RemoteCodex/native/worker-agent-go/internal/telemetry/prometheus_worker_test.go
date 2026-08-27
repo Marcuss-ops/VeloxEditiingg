@@ -13,6 +13,8 @@ func TestPrometheusWorkerMetricsExportRequiredSurfaceAndNoAssetIDs(t *testing.T)
 	metrics.RecordCacheDownload(2048, 250*time.Millisecond)
 	metrics.RecordRender(3 * time.Second)
 	metrics.RecordArtifactUpload(120 * time.Millisecond)
+	metrics.RecordArtifactLockWait(15 * time.Millisecond)
+	metrics.RecordRenderUploadOverlap(250 * time.Millisecond)
 	metrics.RecordTaskResultSubmit(40 * time.Millisecond)
 	metrics.RecordTaskResultAck(60 * time.Millisecond)
 	metrics.RecordCacheCleanup(15 * time.Millisecond)
@@ -29,6 +31,8 @@ func TestPrometheusWorkerMetricsExportRequiredSurfaceAndNoAssetIDs(t *testing.T)
 		"velox_asset_download_seconds",
 		"velox_render_seconds",
 		"velox_artifact_upload_seconds",
+		"velox_artifact_lock_wait_seconds",
+		"velox_render_upload_overlap_seconds",
 		"velox_task_result_submit_seconds",
 		"velox_task_result_ack_seconds",
 		"velox_telemetry_invalid_events_total",

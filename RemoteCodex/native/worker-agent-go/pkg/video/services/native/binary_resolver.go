@@ -80,9 +80,9 @@ func preparePlanTemp(p *plan.RenderPlan) (string, string, int64, int64, error) {
 // mapEngineSidecar copies the sidecar-derived fields from a parsed
 // engineSidecar into the supplied pipeline.RenderMetrics. The fields
 // it writes are the same set the original inlined code copy-pasted
-// at the end of RenderWithMetrics — Frames, Fps, SpeedX, EncodePasses,
-// TempBytes, DurationSec, ConcatMode, TotalSize, OutTimeMs, Bitrate,
-// DupFrames, DropFrames, PhaseMS, and Segments (with the segment
+// at the end of RenderWithMetrics — Frames, Fps, SpeedX, EncodePasses,	// TempBytes, DurationSec, ConcatMode, TotalSize, OutTimeMs, Bitrate,
+// DupFrames, DropFrames, output I/O timings, PhaseMS, and Segments (with the segment
+
 // mapping below). Pre-existing fields (PlanMarshalMs, PlanWriteMs,
 // ProcessStartMs, ProcessWaitMs, TotalMs) are untouched.
 func mapEngineSidecar(sc *engineSidecar, m *pipeline.RenderMetrics) {
@@ -94,6 +94,10 @@ func mapEngineSidecar(sc *engineSidecar, m *pipeline.RenderMetrics) {
 	m.EncodePasses = sc.EncodePasses
 	m.TempBytes = sc.TempBytes
 	m.OutputDurable = sc.OutputDurable
+	m.SHA256 = sc.SHA256
+	m.SHA256Valid = sc.SHA256Valid
+	m.OutputSizeBytes = sc.OutputSizeBytes
+	m.BackwardSeekSeen = sc.BackwardSeekSeen
 	m.DurationSec = sc.DurationSec
 	m.ConcatMode = sc.ConcatMode
 	m.TotalSize = sc.TotalSize
@@ -103,6 +107,11 @@ func mapEngineSidecar(sc *engineSidecar, m *pipeline.RenderMetrics) {
 	m.DropFrames = sc.DropFrames
 	m.PhaseMS = sc.PhaseMS
 	if sc.IOCounters != nil {
+		m.FirstPacketReadMS = sc.IOCounters.FirstPacketReadMS
+		m.FirstOutputWriteMS = sc.IOCounters.FirstOutputWriteMS
+		m.FileFsyncMS = sc.IOCounters.FileFsyncMS
+		m.DirectoryFsyncMS = sc.IOCounters.DirectoryFsyncMS
+		m.OutputRenameMS = sc.IOCounters.OutputRenameMS
 		m.FileCopyCount = sc.IOCounters.FileCopyCount
 		m.FileCopyBytes = sc.IOCounters.FileCopyBytes
 		m.AssetBytesCopied = sc.IOCounters.AssetBytesCopied

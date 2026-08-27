@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"velox-shared/controltransport"
@@ -32,7 +33,7 @@ func (w *Worker) uploadDeclaredArtifacts(ctx context.Context, pte *PendingTaskEx
 			return nil, fmt.Errorf("worker artifact upload: resolve %q: %w", target.TransportID, err)
 		}
 		w.logArtifactProtocol("ARTIFACT_TRANSFER_STARTED", pte, started, plan.GetCommitId(), target.ArtifactID, target.UploadID, map[string]interface{}{"artifact_type": ref.Type, "size_bytes": ref.SizeBytes})
-		result, err := transport.Upload(ctx, publisher.UploadRequest{LocalPath: ref.URI, Target: target, WorkerSHA256: ref.Hash, CommitToken: plan.GetCommitToken()})
+		result, err := uploadWithNegotiatedPath(ctx, transport, publisher.UploadRequest{LocalPath: ref.URI, Target: target, WorkerSHA256: ref.Hash, CommitToken: plan.GetCommitToken()})
 		if err != nil {
 			w.logArtifactProtocol("ARTIFACT_TRANSFER_FAILED", pte, started, plan.GetCommitId(), target.ArtifactID, target.UploadID, map[string]interface{}{"artifact_type": ref.Type, "error": err.Error()})
 			w.spillVolatileToNVMe(ctx, entries[i])
@@ -49,14 +50,77 @@ func (w *Worker) uploadDeclaredArtifacts(ctx context.Context, pte *PendingTaskEx
 		if err := w.outputSpool.MarkUploaded(ctx, entries[i].SpoolID); err != nil {
 			return nil, fmt.Errorf("worker artifact upload: mark target %d uploaded: %w", i, err)
 		}
-		w.logArtifactProtocol("ARTIFACT_TRANSFER_COMPLETED", pte, started, plan.GetCommitId(), target.ArtifactID, result.UploadID, map[string]interface{}{"artifact_type": ref.Type, "uploaded_bytes": result.UploadedBytes})
+		w.logArtifactProtocol("ARTIFACT_TRANSFER_COMPLETED", pte, started, plan.GetCommitId(), target.ArtifactID, result.UploadID, map[string]interface{}{"artifact_type": ref.Type, "uploaded_bytes": result.UploadedBytes, "upload_ms": result.Breakdown.UploadMS, "upload_mbps": result.Breakdown.UploadMbps, "chunk_count": result.Breakdown.ChunkCount, "retry_count": result.Breakdown.RetryCount, "remote_finalize_ms": result.Breakdown.RemoteFinalizeMS})
 		uploadedBytes += result.UploadedBytes
 		// Update upload progress in the active task's cumulative metrics
 		// so the heartbeat carries per-artifact upload visibility.
 		w.updateUploadProgress(pte.TaskID, uploadedBytes, totalUploadBytes, i+1, len(report.Outputs), started)
 		completed = append(completed, &pb.ArtifactUploadCompleted{TaskId: pte.TaskID, AttemptId: pte.AttemptID, CommitId: plan.GetCommitId(), LeaseId: pte.LeaseID, UploadId: result.UploadID, UploadedBytes: result.UploadedBytes, WorkerSha256: ref.Hash})
+		if pteReport := report.RawMetrics; pteReport != nil {
+			pteReport.UploadMbpsAvg = result.Breakdown.UploadMbps
+			pteReport.OutputBytes += result.Breakdown.UploadBytes
+		}
 	}
 	return completed, nil
+}
+
+// uploadWithNegotiatedPath keeps the existing V1 publication contract as the
+// compatibility path. Progressive upload is selected only when the resolved
+// transport advertises the capability and implements the optional interface;
+// otherwise the ordinary Upload method is used automatically.
+func uploadWithNegotiatedPath(ctx context.Context, transport publisher.Transport, req publisher.UploadRequest) (*publisher.UploadResult, error) {
+	if !publisher.SupportsProgressive(transport) {
+		return transport.Upload(ctx, req)
+	}
+
+	progressive, ok := transport.(publisher.ProgressiveTransport)
+	if !ok {
+		return nil, fmt.Errorf("worker artifact upload: progressive capability negotiated but transport %q does not implement ProgressiveTransport", transport.ID())
+	}
+	file := publisher.NewGrowingFile()
+	progress := artifactProgressForTask(ctx, req.Target.ArtifactID)
+	if progress.SafeOffsetBytes <= 0 {
+		return transport.Upload(ctx, req)
+	}
+	file.Update(progress.SafeOffsetBytes, progress.Finalized, 0)
+	if progress.Finalized {
+		file.MarkDurable(progress.SafeOffsetBytes)
+	}
+	session, err := progressive.BeginProgressive(ctx, publisher.ProgressiveUploadRequest{
+		Target:       req.Target,
+		Artifact:     req.Target.ArtifactID,
+		ExpectedSize: 0,
+		CommitToken:  req.CommitToken,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("worker artifact upload: begin progressive %q: %w", transport.ID(), err)
+	}
+	// Continue consuming live artifact_write_progress events through the
+	// task callback state; the current invocation snapshots the latest known
+	// safe prefix and finalization evidence before starting the four-worker
+	// journalized uploader.
+	st, err := os.Stat(req.LocalPath)
+	if err != nil {
+		_ = session.Abort(ctx)
+		return nil, err
+	}
+	if progress.Finalized {
+		file.Update(st.Size(), true, st.Size())
+		file.MarkDurable(st.Size())
+	}
+	result, err := publisher.RunProgressiveUploadWithJournalAndStore(ctx, req.LocalPath, req.Target.ChunkSize, file, session, progressiveJournalPath(req), nil, "", req.Progress)
+	if err != nil {
+		_ = session.Abort(ctx)
+		return nil, err
+	}
+	return result, nil
+}
+
+func progressiveJournalPath(req publisher.UploadRequest) string {
+	if req.Target.UploadID == "" || req.LocalPath == "" {
+		return ""
+	}
+	return req.LocalPath + "." + req.Target.UploadID + ".progressive.json"
 }
 
 func (w *Worker) sendArtifactCompletions(ctx context.Context, pte *PendingTaskExecution, plan *pb.ArtifactUploadPlan, completed []*pb.ArtifactUploadCompleted, started time.Time) error {

@@ -137,6 +137,13 @@ add_test(NAME looped_music_tests COMMAND velox_looped_music_tests)
 set_tests_properties(looped_music_tests PROPERTIES ENVIRONMENT "VELOX_LOOPED_MUSIC_TEST=1")
 
 if(VELOX_ENABLE_LIBAV)
+    add_executable(velox_media_packet_output_sink_tests
+        tests/test_media_packet_output_sink.cpp
+        src/services/media_packet_output_sink.cpp)
+    velox_configure_test(velox_media_packet_output_sink_tests)
+    velox_link_ffmpeg(velox_media_packet_output_sink_tests)
+    add_test(NAME media_packet_output_sink_tests COMMAND velox_media_packet_output_sink_tests)
+
     add_executable(velox_media_probe_tests
         tests/test_media_probe.cpp
         src/services/file_utils.cpp
@@ -323,6 +330,7 @@ foreach(velox_target
 endforeach()
 foreach(velox_target
         velox_media_probe_tests
+        velox_media_packet_output_sink_tests
         velox_media_packet_pipeline_tests
         velox_render_copy_only_zero_intermediates_tests
         velox_render_mixed_tests

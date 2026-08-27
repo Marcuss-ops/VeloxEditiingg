@@ -26,6 +26,14 @@ func (m *PrometheusMetrics) RecordRender(duration time.Duration) {
 func (m *PrometheusMetrics) RecordArtifactUpload(duration time.Duration) {
 	m.artifactUploadSeconds.observe("total", duration.Seconds())
 }
+func (m *PrometheusMetrics) RecordArtifactLockWait(duration time.Duration) {
+	m.artifactLockWaitSeconds.observe("total", duration.Seconds())
+}
+func (m *PrometheusMetrics) RecordRenderUploadOverlap(duration time.Duration) {
+	if duration > 0 {
+		m.renderUploadOverlapSeconds.observe("total", duration.Seconds())
+	}
+}
 func (m *PrometheusMetrics) RecordTaskResultSubmit(duration time.Duration) {
 	m.taskResultSubmitSeconds.observe("total", duration.Seconds())
 }

@@ -363,7 +363,7 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 				}
 				w.reporter.HandleAck(ack)
 
-			case controltransport.MsgArtifactUploadPlan, controltransport.MsgTaskCommitAck:
+			case controltransport.MsgArtifactUploadPlan, controltransport.MsgTaskCommitAck, controltransport.MsgArtifactEarlyUploadPlan:
 				// Artifact Commit Protocol v1 (Fase 3.4 / 3.6) —
 				// typed master→worker reply on the declare/complete
 				// pipeline. The receive loop dispatches into a

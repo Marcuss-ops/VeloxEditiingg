@@ -129,6 +129,7 @@ bool Demuxer::seekToTimestampUs(int stream_index, int64_t timestamp_us, std::str
     const int64_t target = av_rescale_q_rnd(
         timestamp_us, kMicrosecondTimeBase, input_stream->time_base,
         static_cast<AVRounding>(AV_ROUND_DOWN | AV_ROUND_PASS_MINMAX)) + source_start;
+    services::recordInputSeek();
     const int seek_result = avformat_seek_file(
         context_, stream_index, std::numeric_limits<int64_t>::min(), target,
         std::numeric_limits<int64_t>::max(), AVSEEK_FLAG_BACKWARD);
@@ -147,6 +148,9 @@ bool Demuxer::readFrame(AVPacket& packet, bool& eof, std::string& error) {
         return false;
     }
     const int read_result = av_read_frame(context_, &packet);
+    if (read_result >= 0) {
+        services::recordFirstPacketRead();
+    }
     if (read_result == AVERROR_EOF) {
         eof = true;
         return true;

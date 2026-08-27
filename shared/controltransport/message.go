@@ -31,6 +31,7 @@ const (
 	MsgTaskOutputDeclared      ControlMessageType = "task_output_declared"
 	MsgArtifactUploadCompleted ControlMessageType = "artifact_upload_completed"
 	MsgAssetDownloadProgress   ControlMessageType = "asset_download_progress"
+	MsgArtifactUploadIntent    ControlMessageType = "artifact_upload_intent"
 )
 
 // --- Master → Worker ---
@@ -49,10 +50,11 @@ const (
 	// Artifact Commit Protocol (Fase 3.4 / 3.6) — typed
 	// upload-plan-and-commit-ack pipeline. Gated by
 	// CapabilityArtifactUploadPlanV1 / CapabilityTaskCommitAckV1.
-	MsgArtifactUploadPlan ControlMessageType = "artifact_upload_plan"
-	MsgTaskCommitAck      ControlMessageType = "task_commit_ack"
-	MsgFutureAssetPlan    ControlMessageType = "future_asset_plan"
-	MsgCancelPrefetch     ControlMessageType = "cancel_prefetch"
+	MsgArtifactUploadPlan      ControlMessageType = "artifact_upload_plan"
+	MsgTaskCommitAck           ControlMessageType = "task_commit_ack"
+	MsgFutureAssetPlan         ControlMessageType = "future_asset_plan"
+	MsgCancelPrefetch          ControlMessageType = "cancel_prefetch"
+	MsgArtifactEarlyUploadPlan ControlMessageType = "artifact_early_upload_plan"
 )
 
 // IsWorkerToMaster returns true for messages sent from worker to master.
@@ -60,7 +62,8 @@ func (t ControlMessageType) IsWorkerToMaster() bool {
 	switch t {
 	case MsgHello, MsgHeartbeat, MsgTaskLeaseRenewal, MsgTaskAccepted, MsgTaskRejected,
 		MsgTaskResult, MsgCommandAck, MsgArtifactUploaded, MsgGoodbye,
-		MsgTaskOutputDeclared, MsgArtifactUploadCompleted, MsgAssetDownloadProgress:
+		MsgTaskOutputDeclared, MsgArtifactUploadCompleted, MsgAssetDownloadProgress,
+		MsgArtifactUploadIntent:
 		return true
 	}
 	return false
@@ -71,7 +74,8 @@ func (t ControlMessageType) IsMasterToWorker() bool {
 	switch t {
 	case MsgHelloAck, MsgTaskOffer, MsgTaskLeaseGranted, MsgCommand, MsgCancelJob,
 		MsgDrain, MsgConfigurationUpdate, MsgLeaseRevoked, MsgPing, MsgTaskResultAck,
-		MsgArtifactUploadPlan, MsgTaskCommitAck, MsgFutureAssetPlan, MsgCancelPrefetch:
+		MsgArtifactUploadPlan, MsgTaskCommitAck, MsgFutureAssetPlan, MsgCancelPrefetch,
+		MsgArtifactEarlyUploadPlan:
 		return true
 	}
 	return false

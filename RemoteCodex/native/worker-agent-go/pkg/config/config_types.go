@@ -70,6 +70,11 @@ type WorkerConfig struct {
 	// VELOX_ASSET_DOWNLOAD_CONCURRENCY; default 4.
 	AssetDownloadConcurrency int `json:"asset_download_concurrency,omitempty"`
 
+	// PublisherConcurrency caps simultaneous artifact publications per worker.
+	// A non-positive value uses the safe default. Binds from
+	// VELOX_PUBLISHER_CONCURRENCY when configuration is loaded.
+	PublisherConcurrency int `json:"publisher_concurrency,omitempty"`
+
 	// AssetChunkedDownloadEnabled opts a worker into per-asset parallel
 	// chunked download: an asset at/above AssetChunkedDownloadThresholdBytes
 	// is split into AssetChunkedDownloadConcurrency Range: bytes=start-end

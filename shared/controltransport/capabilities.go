@@ -115,6 +115,11 @@ const (
 	// imply a second downloader: plans reconcile through the canonical
 	// cache resolver and AssetDownloadManager in a later rollout phase.
 	CapabilityFutureAssetPrefetchV1 = "prefetch.plan.v1"
+
+	// CapabilityArtifactProgressiveUploadV1 indicates that the worker and
+	// selected upload transport can publish immutable file ranges before the
+	// renderer has finalized the artifact.
+	CapabilityArtifactProgressiveUploadV1 = "artifact.progressive-upload.v1"
 )
 
 // allCapabilities is the private canonical closed-set of capabilities the
@@ -129,6 +134,7 @@ var allCapabilities = [...]string{
 	CapabilityTaskCommitAckV1,
 	CapabilityCanonicalPayloadV2,
 	CapabilityFutureAssetPrefetchV1,
+	CapabilityArtifactProgressiveUploadV1,
 }
 
 // KnownCapabilities returns a deterministic snapshot for logs, diagnostics

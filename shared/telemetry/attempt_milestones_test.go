@@ -13,7 +13,14 @@ func TestCanonicalAttemptMilestonesPinsMainWaterfallVocabulary(t *testing.T) {
 		MilestoneFirstAssetStarted, MilestoneAllAssetsReady, MilestonePlanStarted,
 		MilestonePlanCompleted, MilestoneRenderStarted, MilestoneRenderCompleted,
 		MilestoneFinalizeStarted, MilestoneFinalizeCompleted, MilestoneOutputDurable,
-		MilestonePublishQueued, MilestonePublishStarted, MilestonePublishCompleted,
+		MilestonePublishQueued, MilestonePublishStarted,
+		MilestonePublishSlotWaitStarted, MilestonePublishSlotWaitCompleted,
+		MilestonePublishDeclareStarted, MilestonePublishDeclareCompleted,
+		MilestonePublishUploadStarted, MilestonePublishUploadCompleted,
+		MilestonePublishRemoteFinalizeStarted, MilestonePublishRemoteFinalizeCompleted,
+		MilestonePublishCommitWaitStarted, MilestonePublishCommitWaitCompleted,
+		MilestonePublishSpoolCommitStarted, MilestonePublishSpoolCommitCompleted,
+		MilestonePublishCompleted,
 		MilestoneResultSending, MilestoneResultSent, MilestoneAttemptCompleted,
 	}
 	got := CanonicalAttemptMilestones()

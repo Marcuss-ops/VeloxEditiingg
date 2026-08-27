@@ -52,20 +52,20 @@ type AttemptCacheMetrics struct {
 // byte-moving work. Both derive from the canonical per-transfer Timing carried
 // on each CacheResolution.
 type AssetPreparationSummary struct {
-	AssetsTotal    int
-	AssetsUnique   int
-	CacheHits      int
-	CacheMisses    int
-	ReadyBefore    int // served from a verified local file (no bytes moved)
-	DownloadedNow  int // bytes transferred during this attempt
+	AssetsTotal   int
+	AssetsUnique  int
+	CacheHits     int
+	CacheMisses   int
+	ReadyBefore   int // served from a verified local file (no bytes moved)
+	DownloadedNow int // bytes transferred during this attempt
 
-	CacheLookupMS    int64
-	RemoteWaitMS     int64
-	RemoteWaitCount  int64
-	DownloadWallMS   int64
-	DownloadWorkSum  int64
-	HashVerifyMS     int64
-	MetadataProbeMS  int64
+	CacheLookupMS      int64
+	RemoteWaitMS       int64
+	RemoteWaitCount    int64
+	DownloadWallMS     int64
+	DownloadWorkSum    int64
+	HashVerifyMS       int64
+	MetadataProbeMS    int64
 	MaterializeLocalMS int64
 }
 
@@ -406,14 +406,14 @@ func attachAssetOperations(report *taskrunner.TaskExecutionReport, tracker *asse
 	legacy["assets_ready_before_attempt"] = int64(prep.ReadyBefore)
 	legacy["assets_downloaded_during_attempt"] = int64(prep.DownloadedNow)
 	legacy["asset_preparation"] = map[string]int64{
-		"cache_lookup_ms":      prep.CacheLookupMS,
-		"remote_wait_ms":       prep.RemoteWaitMS,
-		"remote_wait_count":    prep.RemoteWaitCount,
-		"network_download_wall_ms":  prep.DownloadWallMS,
+		"cache_lookup_ms":              prep.CacheLookupMS,
+		"remote_wait_ms":               prep.RemoteWaitMS,
+		"remote_wait_count":            prep.RemoteWaitCount,
+		"network_download_wall_ms":     prep.DownloadWallMS,
 		"network_download_work_sum_ms": prep.DownloadWorkSum,
-		"hash_verify_ms":       prep.HashVerifyMS,
-		"metadata_probe_ms":    prep.MetadataProbeMS,
-		"materialize_local_ms": prep.MaterializeLocalMS,
+		"hash_verify_ms":               prep.HashVerifyMS,
+		"metadata_probe_ms":            prep.MetadataProbeMS,
+		"materialize_local_ms":         prep.MaterializeLocalMS,
 	}
 	if len(records) > 0 {
 		// Detailed per-asset records remain a legacy compatibility detail:

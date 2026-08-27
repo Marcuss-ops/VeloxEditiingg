@@ -85,7 +85,7 @@ type ActiveTaskExecution struct {
 	Progress         JobProgress
 	OperationalPhase string // canonical lifecycle phase (prefetching/rendering/publishing/...)
 	AttemptEvents    *telemetry.AttemptEventMachine
-	Milestones *telemetry.AttemptMilestoneRecorder
+	Milestones       *telemetry.AttemptMilestoneRecorder
 	// Fase E2: per-attempt intermediate-file telemetry (AttemptArtifactGraph).
 	// Created in dispatchTaskRunner, threaded through the dispatch context
 	// (artifactgraph.GraphFromContext), and profiled at attempt end. Executors
@@ -205,13 +205,11 @@ type Worker struct {
 	// only: after a restart the next access simply re-downloads once.
 	assetIntegrity   map[string]assetIntegrityRecord
 	assetIntegrityMu sync.Mutex
-	// artifactUploadMu prevents the foreground publisher and the durable
-	// resume loop from driving the same worker spool lifecycle concurrently.
-	// A row becomes UPLOADING before the network transfer starts; without this
-	// gate the resume loop can observe that intermediate state, upload the same
-	// bytes, and win MarkUploaded before the foreground path does.
-	artifactUploadMu sync.Mutex
-	publisherPool    *PublisherPool
+	// publisherPool bounds total publication concurrency. Artifact identity
+	// serialization is handled independently by artifactLocks so unrelated
+	// artifacts can publish concurrently.
+	publisherPool *PublisherPool
+	artifactLocks *ArtifactLockRegistry
 
 	// Status management — error state only; busy/idle derived from activeTasks
 	status Status

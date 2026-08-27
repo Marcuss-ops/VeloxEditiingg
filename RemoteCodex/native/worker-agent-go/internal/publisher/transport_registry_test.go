@@ -118,6 +118,19 @@ func (f *fakeS3Client) ListParts(ctx context.Context, params interface{}) (multi
 // 1. Transport selection: Registry.Resolve by transport_id.
 // ────────────────────────────────────────────────────────────────────────
 
+func TestRegistry_BuiltinsAdvertiseProgressiveUpload(t *testing.T) {
+	r := NewRegistry()
+	for _, id := range []string{TransportIDMasterStream, TransportIDObjectStoreMultipart} {
+		tr, err := r.Resolve(id)
+		if err != nil {
+			t.Fatalf("Resolve(%s): %v", id, err)
+		}
+		if !tr.Capabilities().Supports("artifact.progressive-upload.v1") {
+			t.Fatalf("transport %s does not advertise progressive upload", id)
+		}
+	}
+}
+
 func TestRegistry_ResolvesBuiltins(t *testing.T) {
 	r := NewRegistry()
 
@@ -169,7 +182,8 @@ func TestRegistry_Register_RejectsNilAndEmpty(t *testing.T) {
 
 type emptyIDTransport struct{}
 
-func (emptyIDTransport) ID() string { return "" }
+func (emptyIDTransport) ID() string                  { return "" }
+func (emptyIDTransport) Capabilities() CapabilitySet { return nil }
 func (emptyIDTransport) Upload(_ context.Context, _ UploadRequest) (*UploadResult, error) {
 	return nil, nil
 }
@@ -631,6 +645,12 @@ func TestMasterStreamTransport_Upload_Roundtrip(t *testing.T) {
 	}
 	if res.UploadedBytes != int64(len(payload)) {
 		t.Errorf("UploadedBytes = %d; want %d", res.UploadedBytes, len(payload))
+	}
+	if res.Breakdown.UploadBytes != int64(len(payload)) || res.Breakdown.ChunkCount != 1 {
+		t.Fatalf("upload breakdown = %+v, want bytes=%d chunks=1", res.Breakdown, len(payload))
+	}
+	if res.Breakdown.UploadMS < 0 || res.Breakdown.UploadMbps < 0 || res.Breakdown.RemoteFinalizeMS < 0 {
+		t.Fatalf("upload breakdown contains negative measurement: %+v", res.Breakdown)
 	}
 	if res.ServerSHA256 != wantSHAHex {
 		t.Errorf("ServerSHA256 = %q; want %q", res.ServerSHA256, wantSHAHex)

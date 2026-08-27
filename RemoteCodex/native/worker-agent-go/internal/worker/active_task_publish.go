@@ -8,6 +8,7 @@ import (
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
 	sharedtelemetry "velox-shared/telemetry"
+	"velox-worker-agent/internal/publisher"
 	"velox-worker-agent/internal/spool"
 	"velox-worker-agent/internal/taskrunner"
 	"velox-worker-agent/internal/telemetry"
@@ -25,24 +26,48 @@ func (w *Worker) publishArtifactsV1(ctx context.Context, pte *PendingTaskExecuti
 	if report == nil || w.transport == nil || w.publisherRegistry == nil {
 		return nil
 	}
+	m := telemetry.MilestoneRecorderFromContext(ctx)
+	if m != nil {
+		m.Mark(sharedtelemetry.MilestonePublishSlotWaitStarted)
+	}
+	// The pool bounds total concurrent publications. Artifact-level locking is
+	// acquired after spool identities are known, so unrelated artifacts do not
+	// inherit task-wide serialization.
 	if w.publisherPool != nil {
+		poolWaitStarted := time.Now()
 		if err := w.publisherPool.Acquire(ctx); err != nil {
 			return err
 		}
+		telemetry.GetPrometheusMetrics().RecordArtifactLockWait(time.Since(poolWaitStarted))
 		defer w.publisherPool.Release()
 	}
-	// The pool limits publisher concurrency, but it does not serialize the
-	// foreground publisher with the durable resume loop. Both paths can touch
-	// the same spool row, so the lifecycle mutex is mandatory in either mode.
-	w.artifactUploadMu.Lock()
-	defer w.artifactUploadMu.Unlock()
+	if m != nil {
+		m.Mark(sharedtelemetry.MilestonePublishSlotWaitCompleted)
+	}
 
 	if err := validateArtifactOutputs(report); err != nil {
 		return err
 	}
-	spoolEntries, err := w.registerOutputSpool(ctx, pte, report)
+	spoolEntries, err := w.registerOutputSpoolRendering(ctx, pte, report)
 	if err != nil {
 		return fmt.Errorf("worker artifact upload: register durable spool: %w", err)
+	}
+	keys := make([]string, 0, len(spoolEntries))
+	for _, entry := range spoolEntries {
+		keys = append(keys, entry.SpoolID)
+	}
+	if w.artifactLocks == nil {
+		return fmt.Errorf("worker artifact upload: artifact lock registry is not configured")
+	}
+	lockWaitStarted := time.Now()
+	releaseArtifacts, err := w.artifactLocks.AcquireMany(ctx, keys)
+	telemetry.GetPrometheusMetrics().RecordArtifactLockWait(time.Since(lockWaitStarted))
+	if err != nil {
+		return fmt.Errorf("worker artifact upload: acquire artifact locks: %w", err)
+	}
+	defer releaseArtifacts()
+	if err := w.markOutputSpoolReady(ctx, spoolEntries, report); err != nil {
+		return fmt.Errorf("worker artifact upload: mark spool ready: %w", err)
 	}
 	// The local spool now holds bytes + SHA + size durably: mark output.durable
 	// here so the waterfall publish_queue_wait bucket (output.durable ->
@@ -59,11 +84,33 @@ func (w *Worker) publishArtifactsV1(ctx context.Context, pte *PendingTaskExecuti
 	}()
 
 	manifests := buildOutputManifests(pte, report)
+	// The native mux may return an opportunistic digest, but it is trusted
+	// only when the sink proved append-only output. Otherwise the canonical
+	// manifest path computes the final bytes itself.
+	for i, entry := range spoolEntries {
+		if i >= len(report.Outputs) || entry.LocalPath == "" {
+			continue
+		}
+		if report.Outputs[i].Hash == "" {
+			manifest, manifestErr := publisher.ComputeLocalManifest(ctx, entry.LocalPath)
+			if manifestErr != nil {
+				return fmt.Errorf("worker artifact upload: fallback manifest: %w", manifestErr)
+			}
+			report.Outputs[i].Hash = manifest.SHA256Hex
+			report.Outputs[i].SizeBytes = manifest.SizeBytes
+		}
+	}
+	if m != nil {
+		m.Mark(sharedtelemetry.MilestonePublishDeclareStarted)
+	}
 	ackCh := w.registerPendingArtifactAck(pte.TaskID)
 	defer w.unregisterPendingArtifactAck(pte.TaskID)
 
 	deadline := artifactProtocolDeadline(ctx)
 	plan, err := w.declareArtifactOutputs(ctx, pte, manifests, ackCh, spoolEntries, resumable, publicationStartedAt, deadline)
+	if m != nil {
+		m.Mark(sharedtelemetry.MilestonePublishDeclareCompleted)
+	}
 	if err != nil {
 		return err
 	}
@@ -82,18 +129,38 @@ func (w *Worker) publishArtifactsV1(ctx context.Context, pte *PendingTaskExecuti
 		m.Mark(sharedtelemetry.MilestonePublishStarted)
 	}
 
+	if m != nil {
+		m.Mark(sharedtelemetry.MilestonePublishUploadStarted)
+	}
 	completed, err := w.uploadDeclaredArtifacts(ctx, pte, report, plan, spoolEntries, resumable, publicationStartedAt)
+	if m != nil {
+		m.Mark(sharedtelemetry.MilestonePublishUploadCompleted)
+	}
 	if err != nil {
 		return err
 	}
 	if err := w.sendArtifactCompletions(ctx, pte, plan, completed, publicationStartedAt); err != nil {
 		return err
 	}
+	if m != nil {
+		m.Mark(sharedtelemetry.MilestonePublishRemoteFinalizeStarted)
+		m.Mark(sharedtelemetry.MilestonePublishCommitWaitStarted)
+	}
 	if err := w.awaitArtifactCommit(ctx, pte, plan, ackCh, publicationStartedAt, deadline); err != nil {
 		return err
 	}
+	if m != nil {
+		m.Mark(sharedtelemetry.MilestonePublishRemoteFinalizeCompleted)
+		m.Mark(sharedtelemetry.MilestonePublishCommitWaitCompleted)
+	}
+	if m != nil {
+		m.Mark(sharedtelemetry.MilestonePublishSpoolCommitStarted)
+	}
 	if err := w.commitArtifactSpool(ctx, pte, spoolEntries); err != nil {
 		return err
+	}
+	if m != nil {
+		m.Mark(sharedtelemetry.MilestonePublishSpoolCommitCompleted)
 	}
 	// commitArtifactSpool is the terminal publish boundary (all outputs
 	// uploaded and the commit acknowledged). Mark publish.completed here so

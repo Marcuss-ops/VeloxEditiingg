@@ -11,10 +11,20 @@ type WaterfallBucket struct {
 	DurationMS int64  `json:"duration_ms"`
 }
 
+type PublishWaterfall struct {
+	SlotWaitMS       int64 `json:"slot_wait_ms"`
+	DeclareMS        int64 `json:"declare_ms"`
+	UploadMS         int64 `json:"upload_ms"`
+	RemoteFinalizeMS int64 `json:"remote_finalize_ms"`
+	CommitWaitMS     int64 `json:"commit_wait_ms"`
+	SpoolCommitMS    int64 `json:"spool_commit_ms"`
+}
+
 type AttemptWaterfall struct {
 	AttemptID         string            `json:"attempt_id"`
 	WallMS            int64             `json:"wall_ms"`
 	Buckets           []WaterfallBucket `json:"buckets"`
+	Publish           *PublishWaterfall `json:"publish,omitempty"`
 	AccountedMS       int64             `json:"accounted_ms"`
 	UnaccountedMS     int64             `json:"unaccounted_ms"`
 	CoveragePct       float64           `json:"coverage_pct"`
@@ -92,7 +102,39 @@ func BuildAttemptWaterfall(attemptID string, samples []sharedtelemetry.AttemptMi
 	if missing == nil {
 		missing = []string{}
 	}
-	return AttemptWaterfall{AttemptID: attemptID, WallMS: wallMS, Buckets: buckets, AccountedMS: accounted, UnaccountedMS: unaccounted, CoveragePct: coverage, MissingMilestones: dedupMissing(missing), InvertedBuckets: dedupMissing(inverted)}
+	waterfall := AttemptWaterfall{AttemptID: attemptID, WallMS: wallMS, Buckets: buckets, AccountedMS: accounted, UnaccountedMS: unaccounted, CoveragePct: coverage, MissingMilestones: dedupMissing(missing), InvertedBuckets: dedupMissing(inverted)}
+	publish := publishWaterfall(elapsed)
+	if publish != nil {
+		waterfall.Publish = publish
+	}
+	return waterfall
+}
+
+func publishWaterfall(elapsed map[sharedtelemetry.AttemptMilestone]int64) *PublishWaterfall {
+	values := []struct {
+		out      *int64
+		from, to sharedtelemetry.AttemptMilestone
+	}{
+		{new(int64), sharedtelemetry.MilestonePublishSlotWaitStarted, sharedtelemetry.MilestonePublishSlotWaitCompleted},
+		{new(int64), sharedtelemetry.MilestonePublishDeclareStarted, sharedtelemetry.MilestonePublishDeclareCompleted},
+		{new(int64), sharedtelemetry.MilestonePublishUploadStarted, sharedtelemetry.MilestonePublishUploadCompleted},
+		{new(int64), sharedtelemetry.MilestonePublishRemoteFinalizeStarted, sharedtelemetry.MilestonePublishRemoteFinalizeCompleted},
+		{new(int64), sharedtelemetry.MilestonePublishCommitWaitStarted, sharedtelemetry.MilestonePublishCommitWaitCompleted},
+		{new(int64), sharedtelemetry.MilestonePublishSpoolCommitStarted, sharedtelemetry.MilestonePublishSpoolCommitCompleted},
+	}
+	present := false
+	for _, v := range values {
+		if start, ok := elapsed[v.from]; ok {
+			if end, ok := elapsed[v.to]; ok && end >= start {
+				*v.out = end - start
+				present = true
+			}
+		}
+	}
+	if !present {
+		return nil
+	}
+	return &PublishWaterfall{SlotWaitMS: *values[0].out, DeclareMS: *values[1].out, UploadMS: *values[2].out, RemoteFinalizeMS: *values[3].out, CommitWaitMS: *values[4].out, SpoolCommitMS: *values[5].out}
 }
 
 func dedupMissing(in []string) []string {

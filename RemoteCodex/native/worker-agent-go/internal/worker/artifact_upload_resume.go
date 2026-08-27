@@ -163,16 +163,16 @@ func (w *Worker) resumeDeclaration(ctx context.Context, entries []spool.SpoolEnt
 	if len(entries) == 0 {
 		return
 	}
-	if w.publisherPool != nil {
-		if err := w.publisherPool.Acquire(ctx); err != nil {
-			return
-		}
-		defer w.publisherPool.Release()
+	keys := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		keys = append(keys, entry.SpoolID)
 	}
-	// PublisherPool bounds concurrency, but only this mutex serializes a
-	// foreground publication against the resume loop for the same worker spool.
-	w.artifactUploadMu.Lock()
-	defer w.artifactUploadMu.Unlock()
+	release, err := w.acquireResumePublishers(ctx, keys)
+	if err != nil {
+		w.logger.Warn("[ARTIFACT_RESUME] acquire publisher key=%s: %v", entries[0].TaskID, err)
+		return
+	}
+	defer release()
 
 	taskID := entries[0].TaskID
 	attemptID := entries[0].AttemptID
@@ -311,16 +311,12 @@ func (w *Worker) scheduleDeclarationRetry(ctx context.Context, entries []spool.S
 }
 
 func (w *Worker) resumeArtifactUpload(ctx context.Context, entry spool.SpoolEntry) {
-	if w.publisherPool != nil {
-		if err := w.publisherPool.Acquire(ctx); err != nil {
-			return
-		}
-		defer w.publisherPool.Release()
+	release, err := w.acquireResumePublishers(ctx, []string{entry.SpoolID})
+	if err != nil {
+		w.logger.Warn("[ARTIFACT_RESUME] acquire publisher key=%s: %v", entry.TaskID, err)
+		return
 	}
-	// Keep the spool lifecycle single-writer even when the publisher pool is
-	// enabled; otherwise resume can race the foreground upload and win the CAS.
-	w.artifactUploadMu.Lock()
-	defer w.artifactUploadMu.Unlock()
+	defer release()
 
 	if entry.UploadTargetJSON == "" {
 		// No persisted target (plan never stashed). Nothing to re-drive;
@@ -377,12 +373,35 @@ func (w *Worker) resumeArtifactUpload(ctx context.Context, entry spool.SpoolEntr
 
 		w.logger.Info("[ARTIFACT_RESUME] resuming upload spool=%s attempt=%d path=%q", entry.SpoolID, entry.UploadAttemptCount+1, entry.LocalPath)
 		var uploadErr error
-		result, uploadErr = transport.Upload(ctx, publisher.UploadRequest{
-			LocalPath:    entry.LocalPath,
-			Target:       target,
-			WorkerSHA256: entry.SHA256,
-			CommitToken:  entry.CommitToken,
-		})
+		if publisher.SupportsProgressive(transport) {
+			progressive, ok := transport.(publisher.ProgressiveTransport)
+			if !ok {
+				w.scheduleUploadRetry(ctx, entry, fmt.Errorf("progressive capability negotiated but transport does not implement ProgressiveTransport"))
+				return
+			}
+			journalPath := progressiveJournalPath(publisher.UploadRequest{LocalPath: entry.LocalPath, Target: target})
+			journal, journalErr := publisher.LoadProgressiveResume(journalPath, target.UploadID, target.ChunkSize, entry.SizeBytes)
+			if journalErr != nil {
+				w.scheduleUploadRetry(ctx, entry, journalErr)
+				return
+			}
+			session, beginErr := progressive.ResumeProgressive(ctx, publisher.ProgressiveUploadRequest{Target: target, Artifact: target.ArtifactID, ExpectedSize: entry.SizeBytes, CommitToken: entry.CommitToken}, journal.CompletedParts)
+			if beginErr != nil {
+				w.scheduleUploadRetry(ctx, entry, beginErr)
+				return
+			}
+			growing := publisher.NewGrowingFile()
+			growing.Update(entry.SizeBytes, true, entry.SizeBytes)
+			growing.MarkDurable(entry.SizeBytes)
+			result, uploadErr = publisher.RunProgressiveUploadWithJournalAndStore(ctx, entry.LocalPath, target.ChunkSize, growing, session, journalPath, w.outputSpool, entry.SpoolID, nil)
+		} else {
+			result, uploadErr = transport.Upload(ctx, publisher.UploadRequest{
+				LocalPath:    entry.LocalPath,
+				Target:       target,
+				WorkerSHA256: entry.SHA256,
+				CommitToken:  entry.CommitToken,
+			})
+		}
 		if uploadErr != nil {
 			w.scheduleUploadRetry(ctx, entry, uploadErr)
 			return

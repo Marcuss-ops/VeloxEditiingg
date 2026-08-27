@@ -59,7 +59,7 @@ func (w *Worker) markDeclareResumable(ctx context.Context, entries []spool.Spool
 	}
 }
 
-func (w *Worker) registerOutputSpool(ctx context.Context, pte *PendingTaskExecution, report *taskrunner.TaskExecutionReport) ([]spool.SpoolEntry, error) {
+func (w *Worker) registerOutputSpoolRendering(ctx context.Context, pte *PendingTaskExecution, report *taskrunner.TaskExecutionReport) ([]spool.SpoolEntry, error) {
 	if w.outputSpool == nil {
 		return nil, fmt.Errorf("durable output spool is not configured")
 	}
@@ -70,15 +70,28 @@ func (w *Worker) registerOutputSpool(ctx context.Context, pte *PendingTaskExecut
 		if err != nil {
 			return nil, err
 		}
-		if err := w.outputSpool.MarkReady(ctx, entry.SpoolID, ref.Hash, ref.SizeBytes); err != nil {
-			return nil, err
-		}
-		entry.Status = spool.StatusOutputReady
-		entry.SHA256 = ref.Hash
-		entry.SizeBytes = ref.SizeBytes
 		entries = append(entries, *entry)
 	}
 	return entries, nil
+}
+
+func (w *Worker) markOutputSpoolReady(ctx context.Context, entries []spool.SpoolEntry, report *taskrunner.TaskExecutionReport) error {
+	if w.outputSpool == nil {
+		return fmt.Errorf("durable output spool is not configured")
+	}
+	if len(entries) != len(report.Outputs) {
+		return fmt.Errorf("spool output count changed before ready transition")
+	}
+	for i := range entries {
+		ref := report.Outputs[i]
+		if err := w.outputSpool.MarkReady(ctx, entries[i].SpoolID, ref.Hash, ref.SizeBytes); err != nil {
+			return err
+		}
+		entries[i].Status = spool.StatusOutputReady
+		entries[i].SHA256 = ref.Hash
+		entries[i].SizeBytes = ref.SizeBytes
+	}
+	return nil
 }
 
 func (w *Worker) stashUploadPlan(ctx context.Context, entry spool.SpoolEntry, plan *pb.ArtifactUploadPlan, targetPB *pb.UploadTarget) error {

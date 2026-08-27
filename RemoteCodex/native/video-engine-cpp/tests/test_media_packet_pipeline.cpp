@@ -9,6 +9,8 @@ extern "C" {
 
 #include <chrono>
 #include <cmath>
+#include <algorithm>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -31,6 +33,15 @@ void expect(bool condition, const std::string& message) {
 std::string uniqueStem() {
     return "velox_packet_pipeline_" +
         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+}
+
+bool makeBFrameVideo(const fs::path& output) {
+    std::ostringstream command;
+    command << "ffmpeg -y -hide_banner -loglevel error"
+            << " -f lavfi -i " << velox::file::shellQuote("testsrc=size=64x64:rate=25:duration=2")
+            << " -an -c:v libx264 -preset ultrafast -pix_fmt yuv420p -bf 2 -g 25 "
+            << velox::file::shellQuote(output.string());
+    return velox::file::runCommand(command.str());
 }
 
 bool makeVideo(const fs::path& output, const std::string& size) {
@@ -161,6 +172,8 @@ int main() {
     const fs::path normalized = root / "normalized.mp4";
     const fs::path audio = root / "audio.m4a";
     const fs::path videoWithAudio = root / "video-with-audio.mp4";
+    const fs::path bframeVideo = root / "bframes.mp4";
+    const fs::path manyOutput = root / "many-segments-output.mp4";
     const fs::path output = root / "packet-output.mp4";
     const fs::path failedOutput = root / "failed-output.mp4";
     expect(makeVideo(video, "64x64"), "video fixture can be created");
@@ -169,6 +182,7 @@ int main() {
     expect(makeAudio(audio), "audio fixture can be created");
     expect(makeMuxedVideo(video, audio, videoWithAudio),
            "video-with-audio fixture can be created");
+    expect(makeBFrameVideo(bframeVideo), "B-frame fixture can be created");
 
     // The worker's verified cache contract can arrive either as the source
     // path (the normal resolver output) or as cache_key pointing directly at
@@ -242,6 +256,12 @@ int main() {
     expect(muxResult.output_durable, "packet mux reports durable atomic publication");
     expect(muxResult.video_packets > 0, "packet mux writes video packets");
     expect(muxResult.audio_packets > 0, "packet mux writes audio packets");
+    expect(muxResult.max_buffered_packets >= 1 && muxResult.max_buffered_packets <= 2,
+           "canonical mux reports bounded packet buffering");
+    expect(muxResult.packet_heap_allocations == 0,
+           "canonical mux reports no per-packet PacketHolder allocations");
+    expect(muxResult.global_sort_ms == 0,
+           "canonical mux reports no global packet sort");
     expect(fs::exists(output), "packet mux publishes the output atomically");
     expect(!fs::exists(fs::path(output.string() + ".partial")),
            "packet mux does not leave a fixed partial output");
@@ -264,6 +284,72 @@ int main() {
            "rewritten video timestamps are strictly monotonic");
     expect(packets.audio_dts_monotonic && packets.audio_pts_monotonic,
            "rewritten audio timestamps are strictly monotonic");
+
+    // Determinism: identical requests must produce identical packet counts,
+    // duration and monotonicity regardless of repeated session reuse.
+    const fs::path deterministicOutput = root / "deterministic-output.mp4";
+    auto deterministicRequest = request;
+    deterministicRequest.output_path = deterministicOutput;
+    velox::media::CopyOnlyMuxResult deterministicResult;
+    expect(velox::media::muxCopyOnly(deterministicRequest, &deterministicResult),
+           "repeated bounded mux request succeeds deterministically");
+    const auto deterministicPackets = inspectPackets(deterministicOutput);
+    expect(deterministicResult.max_buffered_packets == muxResult.max_buffered_packets &&
+               deterministicResult.packet_heap_allocations == muxResult.packet_heap_allocations &&
+               deterministicResult.global_sort_ms == muxResult.global_sort_ms &&
+               deterministicResult.video_packets == muxResult.video_packets &&
+               deterministicResult.audio_packets == muxResult.audio_packets &&
+               deterministicResult.duration_us == muxResult.duration_us &&
+               deterministicPackets.video_packets == packets.video_packets &&
+               deterministicPackets.audio_packets == packets.audio_packets,
+           "repeated mux produces identical packet counts and duration");
+
+    // B-frame input must remain decodable and preserve the requested timeline.
+    const fs::path bframeOutput = root / "bframe-output.mp4";
+    velox::media::CopyOnlyMuxRequest bframeRequest;
+    bframeRequest.video_segments = {{bframeVideo, 0, 1'600'000}};
+    bframeRequest.output_path = bframeOutput;
+    velox::media::CopyOnlyMuxResult bframeResult;
+    expect(velox::media::muxCopyOnly(bframeRequest, &bframeResult),
+           "bounded mux accepts B-frame video");
+    const auto bframePackets = inspectPackets(bframeOutput);    expect(bframePackets.video_packets > 0 && bframePackets.video_dts_monotonic &&
+           bframePackets.video_pts_monotonic,
+           "B-frame output has monotonic timestamps");
+    expect(bframeResult.video_packets == bframePackets.video_packets,
+           "B-frame result packet count matches inspected output");
+
+    // Bounded-mux stress case: many repeated segments must not change the
+    // public contract and must produce deterministic packet accounting.
+    velox::media::CopyOnlyMuxRequest manyRequest;
+    manyRequest.video_segments.reserve(1000);
+    for (int i = 0; i < 1000; ++i) {
+        manyRequest.video_segments.push_back({video, 0, 800'000});
+    }
+    manyRequest.output_path = manyOutput;
+    velox::media::CopyOnlyMuxResult manyResult;
+    expect(velox::media::muxCopyOnly(manyRequest, &manyResult),
+           "bounded mux accepts 1000 repeated segments");
+    expect(manyResult.video_packets > 0 && manyResult.duration_us == 1000 * 800'000,
+           "1000-segment mux reports the complete logical timeline");
+    const auto manyPackets = inspectPackets(manyOutput);
+    expect(manyPackets.video_packets == manyResult.video_packets &&
+               manyPackets.video_dts_monotonic && manyPackets.video_pts_monotonic,
+           "many-segment output has deterministic monotonic video packets");
+
+    // A second 1000-segment run must preserve packet accounting and duration.
+    const fs::path manyRepeatOutput = root / "many-segments-repeat-output.mp4";
+    auto manyRepeatRequest = manyRequest;
+    manyRepeatRequest.output_path = manyRepeatOutput;
+    velox::media::CopyOnlyMuxResult manyRepeatResult;
+    expect(velox::media::muxCopyOnly(manyRepeatRequest, &manyRepeatResult),
+           "bounded mux repeats the 1000-segment request");
+    const auto manyRepeatPackets = inspectPackets(manyRepeatOutput);
+    expect(manyRepeatResult.video_packets == manyResult.video_packets &&
+               manyRepeatResult.duration_us == manyResult.duration_us &&
+               manyRepeatPackets.video_packets == manyPackets.video_packets &&
+               manyRepeatPackets.video_dts_monotonic && manyRepeatPackets.video_pts_monotonic,
+           "1000-segment repeated run is deterministic");
+
 
     const fs::path segmentAudioOutput = root / "segment-audio-output.mp4";
     velox::media::CopyOnlyMuxRequest segmentAudioRequest;
@@ -376,6 +462,11 @@ int main() {
            "audio shorter than the requested video timeline fails closed");
     expect(!fs::exists(shortAudioOutput),
            "short-audio failure does not publish a partial output");
+
+    // Exact timebase coverage: the generated fixture uses a non-default
+    // stream timebase and the output must remain decodable with monotonic DTS.
+    expect(packets.video_dts_monotonic && packets.audio_dts_monotonic,
+           "different input timebases remain monotonic after rescaling");
 
     const fs::path trimmedOutput = root / "non-zero-source-output.mp4";
     velox::media::CopyOnlyMuxRequest trimmedRequest;

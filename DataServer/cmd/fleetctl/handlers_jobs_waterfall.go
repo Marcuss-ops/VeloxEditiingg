@@ -34,6 +34,16 @@ type waterfallView struct {
 	CoveragePct       float64               `json:"coverage_pct"`
 	MissingMilestones []string              `json:"missing_milestones,omitempty"`
 	InvertedBuckets   []string              `json:"inverted_buckets,omitempty"`
+	Publish           *publishWaterfallView `json:"publish,omitempty"`
+}
+
+type publishWaterfallView struct {
+	SlotWaitMS       int64 `json:"slot_wait_ms"`
+	DeclareMS        int64 `json:"declare_ms"`
+	UploadMS         int64 `json:"upload_ms"`
+	RemoteFinalizeMS int64 `json:"remote_finalize_ms"`
+	CommitWaitMS     int64 `json:"commit_wait_ms"`
+	SpoolCommitMS    int64 `json:"spool_commit_ms"`
 }
 
 type waterfallAttemptHeaderView struct {
@@ -119,6 +129,14 @@ func printWaterfall(label, status, workerID, stamps string, wf waterfallView) {
 		comma(wf.WallMS), wf.CoveragePct, comma(wf.AccountedMS), comma(wf.UnaccountedMS),
 		stampLine(stamps))
 	fmt.Println("WATERFALL")
+	if wf.Publish != nil {
+		fmt.Printf("  %-24s %13s ms\n", "publish.slot_wait", comma(wf.Publish.SlotWaitMS))
+		fmt.Printf("  %-24s %13s ms\n", "publish.declare", comma(wf.Publish.DeclareMS))
+		fmt.Printf("  %-24s %13s ms\n", "publish.upload", comma(wf.Publish.UploadMS))
+		fmt.Printf("  %-24s %13s ms\n", "publish.remote_finalize", comma(wf.Publish.RemoteFinalizeMS))
+		fmt.Printf("  %-24s %13s ms\n", "publish.commit_wait", comma(wf.Publish.CommitWaitMS))
+		fmt.Printf("  %-24s %13s ms\n", "publish.spool_commit", comma(wf.Publish.SpoolCommitMS))
+	}
 	buckets := append([]waterfallBucketView(nil), wf.Buckets...)
 	sort.SliceStable(buckets, func(i, j int) bool { return buckets[i].StartMS < buckets[j].StartMS })
 	for _, b := range buckets {

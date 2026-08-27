@@ -99,6 +99,7 @@ func resumeTestWorker(t *testing.T, uploader *resumeUploadTransport, leaseID str
 		transport:         transport,
 		publisherRegistry: registry,
 		outputSpool:       store,
+		publisherPool:     NewPublisherPool(2),
 		activeTaskLeases: map[string]*ActiveTaskLease{
 			"task-resume": {TaskID: "task-resume", JobID: "job-resume", AttemptID: "attempt-resume", LeaseID: leaseID, AttemptNumber: 1, Revision: 1},
 		},

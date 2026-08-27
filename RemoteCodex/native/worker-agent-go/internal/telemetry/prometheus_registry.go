@@ -79,6 +79,8 @@ type PrometheusMetrics struct {
 	pythonEmergencyPath          *CounterVec
 	renderSeconds                *HistogramVec
 	artifactUploadSeconds        *HistogramVec
+	artifactLockWaitSeconds      *HistogramVec
+	renderUploadOverlapSeconds   *HistogramVec
 	taskResultSubmitSeconds      *HistogramVec
 	taskResultAckSeconds         *HistogramVec
 	taskResultAcksTotal          *CounterVec

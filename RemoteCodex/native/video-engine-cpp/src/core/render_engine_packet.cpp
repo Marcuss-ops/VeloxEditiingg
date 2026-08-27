@@ -27,6 +27,7 @@ namespace velox::core {
 
 namespace {
     using render_detail::fileSize;
+    using render_detail::reportArtifactWriteProgress;
     using render_detail::reportDetailedProgress;
     using render_detail::reportProgress;
 
@@ -290,6 +291,8 @@ RenderResult RenderEngine::renderCopyOnly(
         0,
         telemetry::kStatusOk);
     last_progress_.total_size = static_cast<int64_t>(fileSize(outPath));
+    reportArtifactWriteProgress("final_video", outPath, last_progress_.total_size,
+                                last_progress_.total_size, true);
     last_progress_.progress_pct = 100.0;
     last_progress_.finished = true;
     reportProgress(100, "completed");
@@ -489,6 +492,8 @@ RenderResult RenderEngine::renderMixed(
     mixedPhase.Complete(0, static_cast<int64_t>(fileSize(outPath)), 0,
                         telemetry::kStatusOk);
     last_progress_.total_size = static_cast<int64_t>(fileSize(outPath));
+    reportArtifactWriteProgress("final_video", outPath, last_progress_.total_size,
+                                last_progress_.total_size, true);
     last_progress_.progress_pct = 100.0;
     last_progress_.finished = true;
     reportProgress(100, "completed");

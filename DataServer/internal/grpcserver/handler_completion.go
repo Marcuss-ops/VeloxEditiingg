@@ -20,6 +20,34 @@ import (
 
 const masterStreamTransportID = "master-stream.v1"
 
+func (h *Handler) handleArtifactUploadIntent(workerID string, msg *pb.ArtifactUploadIntent, sess *workerSession) {
+	ctx := ctxForTaskSession(sess)
+	if msg == nil || msg.GetTaskId() == "" || msg.GetAttemptId() == "" || msg.GetLeaseId() == "" || msg.GetWorkerSpoolKey() == "" || msg.GetOutputKind() == "" {
+		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCCompletionRejected, "[GRPC] ArtifactUploadIntent from worker %s rejected: incomplete identity or artifact metadata", workerID)
+		return
+	}
+	if h.chunkedUploadSvc == nil {
+		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCCompletionRejected, "[GRPC] ArtifactUploadIntent task=%s rejected: upload service is not wired", msg.GetTaskId())
+		return
+	}
+	session, err := h.chunkedUploadSvc.InitChunkedSession(ctx, artifacts.BeginUploadCommand{
+		WorkerID: workerID, LeaseID: msg.GetLeaseId(), Kind: msg.GetOutputKind(), MimeType: msg.GetMimeType(), ExpectedSizeBytes: msg.GetExpectedSizeBytes(),
+	})
+	if err != nil {
+		logGRPCf(ctx, logging.LevelError, logging.CodeGRPCCompletionFailed, "[GRPC] ArtifactUploadIntent task=%s failed: %v", msg.GetTaskId(), err)
+		return
+	}
+	env := &pb.MasterToWorkerEnvelope{
+		MessageId: fmt.Sprintf("artifact-early-plan-%s-%d", msg.GetTaskId(), time.Now().UnixNano()), WorkerId: workerID, SessionId: sess.sessionID, SequenceNumber: time.Now().UnixNano(), SentAt: timestamppb.Now(), ProtocolVersion: controltransport.ProtocolVersionCurrent,
+		Msg: &pb.MasterToWorkerEnvelope_ArtifactEarlyUploadPlan{ArtifactEarlyUploadPlan: &pb.ArtifactEarlyUploadPlan{
+			TaskId: msg.GetTaskId(), AttemptId: msg.GetAttemptId(), ArtifactId: session.ArtifactID, UploadId: session.UploadID, TransportId: masterStreamTransportID, UploadUrl: h.masterURL + "/api/v1/video/master-stream/" + url.PathEscape(session.UploadID), ChunkSize: 8 * 1024 * 1024,
+		}},
+	}
+	if !safeSend(sess.sendCh, &outboundMessage{Envelope: env}) {
+		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCCompletionFailed, "[GRPC] ArtifactUploadIntent task=%s plan send failed", msg.GetTaskId())
+	}
+}
+
 func (h *Handler) handleTaskOutputDeclared(workerID string, msg *pb.TaskOutputDeclared, sess *workerSession) {
 	protocolStartedAt := time.Now()
 	ctx := ctxForTaskSession(sess)

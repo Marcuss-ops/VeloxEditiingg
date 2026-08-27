@@ -10,7 +10,9 @@
 // the components themselves never spawn media processes).
 
 #include "velox/services/file_utils.hpp"
+#include "velox/services/io_counters.hpp"
 #include "velox/services/media_packet_components.hpp"
+#include "velox/services/media_packet_cursors.hpp"
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -19,6 +21,9 @@ extern "C" {
 
 #include <chrono>
 #include <cstdlib>
+#include <algorithm>
+#include <functional>
+#include <vector>
 #include <filesystem>
 #include <iostream>
 #include <sstream>
@@ -321,6 +326,76 @@ void testDemuxer(const fs::path& fixture) {
            "opening a missing file fails with an error");
 }
 
+struct StreamingCapture {
+    std::vector<int64_t> pts;
+    std::vector<int64_t> dts;
+    int max_ready{0};
+};
+
+bool captureStreamingPacket(velox::media::packet::PendingPacket& pending,
+                            void* opaque, std::string&) {
+    auto& capture = *static_cast<StreamingCapture*>(opaque);
+    capture.max_ready = std::max(capture.max_ready, 1);
+    capture.pts.push_back(pending.packet.pts);
+    capture.dts.push_back(pending.packet.dts);
+    return true;
+}
+
+void testBoundedStreamingCursor(const fs::path& fixture) {
+    velox::media::packet::Demuxer demuxer;
+    std::string error;
+    expect(demuxer.open(fixture, error), "streaming cursor opens fixture: " + error);
+    AVFormatContext* outputContext = avformat_alloc_context();
+    AVStream* output = avformat_new_stream(outputContext, nullptr);
+    output->time_base = velox::media::packet::kMicrosecondTimeBase;
+    output->codecpar->codec_id = AV_CODEC_ID_H264;
+    output->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
+    StreamingCapture capture;
+    velox::media::packet::TimestampState state;
+    int64_t packetCount = 0;
+    expect(velox::media::packet::streamAndRewrite(
+               demuxer, fixture, AVMEDIA_TYPE_VIDEO, 0, output, 0, 0,
+               1'000'000, state, captureStreamingPacket, &capture,
+               packetCount, error),
+           "bounded cursor streams packets without collecting them: " + error);
+    expect(packetCount > 0 && static_cast<int64_t>(capture.pts.size()) == packetCount,
+           "stream callback observes every accepted packet");
+    expect(capture.max_ready == 1,
+           "stream callback exposes at most one pending packet");
+    expect(std::is_sorted(capture.dts.begin(), capture.dts.end()),
+           "streamed DTS values are deterministic and ordered");
+    avformat_free_context(outputContext);
+}
+
+void testStreamingBenchmark(const fs::path& fixture) {
+    velox::media::services::resetIOCounters();
+    velox::media::packet::Demuxer demuxer;
+    std::string error;
+    expect(demuxer.open(fixture, error), "benchmark cursor opens fixture: " + error);
+    AVFormatContext* outputContext = avformat_alloc_context();
+    AVStream* output = avformat_new_stream(outputContext, nullptr);
+    output->time_base = velox::media::packet::kMicrosecondTimeBase;
+    output->codecpar->codec_id = AV_CODEC_ID_H264;
+    output->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
+    StreamingCapture capture;
+    velox::media::packet::TimestampState state;
+    int64_t packetCount = 0;
+    const auto started = std::chrono::steady_clock::now();
+    expect(velox::media::packet::streamAndRewrite(
+               demuxer, fixture, AVMEDIA_TYPE_VIDEO, 0, output, 0, 0,
+               1'000'000, state, captureStreamingPacket, &capture,
+               packetCount, error),
+           "benchmark cursor completes: " + error);
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - started).count();
+    expect(packetCount > 0 && elapsed >= 0, "bounded mux benchmark records a valid run");
+    expect(velox::media::services::ioCounters().input_open_count.load() == 1,
+           "bounded benchmark uses one input open");
+    std::cerr << "bounded_mux_benchmark packets=" << packetCount
+              << " elapsed_ms=" << elapsed << " max_pending=1\n";
+    avformat_free_context(outputContext);
+}
+
 void testDemuxAndRewrite(const fs::path& fixture) {
     const fs::path output = fixture.parent_path() / "trimmed.mp4";
     AVFormatContext* rawOutput = nullptr;
@@ -400,6 +475,8 @@ int main() {
     expect(makeMuxedVideo(fixture), "muxed video/audio fixture can be created");
     testDemuxer(fixture);
     testDemuxAndRewrite(fixture);
+    testBoundedStreamingCursor(fixture);
+    testStreamingBenchmark(fixture);
 
     std::cerr << "summary: fail=" << failures << "\n";
     return failures == 0 ? 0 : 1;

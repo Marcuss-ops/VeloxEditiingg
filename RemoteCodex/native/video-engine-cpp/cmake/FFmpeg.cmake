@@ -7,7 +7,9 @@ set(VELOX_PACKET_PIPELINE_COMPONENT_SOURCES
     src/services/media_packet_sessions.cpp
     src/services/media_packet_rewriter.cpp
     src/services/media_packet_copy.cpp
-    src/services/media_packet_muxer.cpp)
+    src/services/media_packet_muxer.cpp
+    src/services/media_packet_output_sink.cpp
+    src/services/media_packet_cursors.cpp)
 set(VELOX_MEDIA_UTILS_SOURCES
     src/services/media_utils_codec.cpp
     src/services/media_utils_stream.cpp

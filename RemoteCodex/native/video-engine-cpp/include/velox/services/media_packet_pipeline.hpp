@@ -51,6 +51,18 @@ struct CopyOnlyMuxResult {
     int64_t video_packets{0};
     int64_t audio_packets{0};
     int64_t duration_us{0};
+    // Opportunistic SHA-256 of final output bytes. Callers must fall back to
+    // their canonical manifest hash when sha256_valid is false.
+    std::string sha256;
+    bool sha256_valid{false};
+    int64_t output_size_bytes{0};
+    bool backward_seek_seen{false};
+    // Certified bounded-path telemetry. The canonical mux uses two reusable
+    // pending slots (video and audio), performs no global sort, and never
+    // allocates a PacketHolder per packet.
+    int64_t max_buffered_packets{0};
+    int64_t packet_heap_allocations{0};
+    int64_t global_sort_ms{0};
 };
 
 // Concatenate compatible local stream-copy inputs and optionally add one

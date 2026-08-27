@@ -76,6 +76,10 @@ func (s *Service) Receive(ctx context.Context, uploadID string, reader io.Reader
 	}
 
 	// ----- stream to a fresh temp file under staging dir -----
+	firstByte := s.clock.Now()
+	if err := s.repo.UpdateUploadStatus(ctx, uploadID, repository.UploadFields{FirstByteReceivedAt: &firstByte, Status: func() *string { v := string(repository.UploadUploading); return &v }()}); err != nil {
+		return nil, translateStoreErr(err)
+	}
 	dst, err := os.OpenFile(filepath.Clean(session.TemporaryStorageKey),
 		os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
@@ -107,6 +111,7 @@ func (s *Service) Receive(ctx context.Context, uploadID string, reader io.Reader
 
 	receivedSHA := fmt.Sprintf("%x", hasher.Sum(nil))
 	receivedSize := counter.n
+	lastByte := s.clock.Now()
 
 	// ----- O(1) disk-size invariant (replaces the full-file re-hash) -----
 	// The hasher and counter observed EXACTLY the bytes accepted by
@@ -144,10 +149,9 @@ func (s *Service) Receive(ctx context.Context, uploadID string, reader io.Reader
 		_ = s.markFailed(ctx, uploadID, "size mismatch")
 		return nil, fmt.Errorf("%w: expected=%d got=%d",
 			ErrSizeMismatch, session.ExpectedSizeBytes, receivedSize)
-	}
-
-	// ----- mark RECEIVED -----
+	}	// ----- mark RECEIVED -----
 	now := s.clock.Now()
+
 	received := string(repository.UploadReceived)
 	if err := s.repo.UpdateUploadStatus(ctx, uploadID, repository.UploadFields{
 		Status:            &received,

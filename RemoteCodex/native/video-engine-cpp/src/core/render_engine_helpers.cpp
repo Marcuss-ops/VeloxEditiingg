@@ -19,6 +19,21 @@ void reportProgress(int percent, const std::string& stage) {
               << ",\"stage\":\"" << stage << "\"}" << std::endl;
 }
 
+void reportArtifactWriteProgress(const std::string& artifact,
+                                 const std::filesystem::path& path,
+                                 int64_t high_watermark_bytes,
+                                 int64_t safe_offset_bytes,
+                                 bool finalized) {
+    std::cerr << "{\"event\":\"artifact_write_progress\",\"artifact\":\""
+              << services::escapeProgressJsonString(artifact)
+              << "\",\"path\":\""
+              << services::escapeProgressJsonString(path.string())
+              << "\",\"high_watermark_bytes\":" << high_watermark_bytes
+              << ",\"safe_offset_bytes\":" << safe_offset_bytes
+              << ",\"finalized\":" << (finalized ? "true" : "false")
+              << "}" << std::endl;
+}
+
 void reportDetailedProgress(const services::EngineProgress& progress,
                             int scene, int total_scenes,
                             int segment, int total_segments,

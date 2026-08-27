@@ -298,7 +298,10 @@ bool publishAtomic(const fs::path& partial, const fs::path& target, std::string*
         fs::remove(partial, ec);
         return fail("open partial for fsync failed: " + partial.string());
     }
+    const auto sync_started = std::chrono::steady_clock::now();
     const bool synced = ::fsync(fd) == 0;
+    services::recordFileFsync(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - sync_started).count());
     const int sync_errno = errno;
     const bool closed = ::close(fd) == 0;
     if (!synced || !closed) {
@@ -310,8 +313,14 @@ bool publishAtomic(const fs::path& partial, const fs::path& target, std::string*
         return fail("close partial failed: " + partial.string());
     }
 
+    const auto rename_started = std::chrono::steady_clock::now();
     std::error_code rename_error;
     fs::rename(partial, target, rename_error);
+    const auto rename_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - rename_started).count();
+    services::recordOutputRename(rename_ms);
+    std::cerr << "{\"metric\":\"engine.output.rename_ms\",\"value\":" << rename_ms
+              << ",\"ok\":" << (!rename_error ? "true" : "false") << "}\n";
     if (rename_error) {
         std::error_code ec;
         fs::remove(partial, ec);
@@ -328,7 +337,10 @@ bool publishAtomic(const fs::path& partial, const fs::path& target, std::string*
                   << parent << "\n";
         return true;
     }
+    const auto dir_sync_started = std::chrono::steady_clock::now();
     const bool dir_synced = ::fsync(dir_fd) == 0;
+    services::recordDirectoryFsync(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - dir_sync_started).count());
     const int dir_errno = errno;
     const bool dir_closed = ::close(dir_fd) == 0;
     if (!dir_synced) {

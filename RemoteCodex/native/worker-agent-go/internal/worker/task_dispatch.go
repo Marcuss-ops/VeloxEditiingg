@@ -14,8 +14,8 @@ import (
 	"fmt"
 	"time"
 
-	sharedtelemetry "velox-shared/telemetry"
 	"velox-shared/contract"
+	sharedtelemetry "velox-shared/telemetry"
 	"velox-worker-agent/internal/artifactgraph"
 	"velox-worker-agent/internal/runtimeassets"
 	"velox-worker-agent/internal/taskrunner"

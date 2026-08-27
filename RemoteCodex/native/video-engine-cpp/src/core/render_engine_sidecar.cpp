@@ -148,6 +148,13 @@ std::string RenderEngine::sidecarJson(const std::string& output_path) const {
     s << ",\"duration_seconds\":" << duration_seconds_.load();
     s << ",\"output_durable\":" << (output_durable_.load() ? "true" : "false");
     s << ",\"output_path\":\"" << escapeProgressJsonString(outPath.string()) << "\"";
+    s << ",\"artifact_write_progress\":{";
+    s << "\"artifact\":\"final_video\"";
+    s << ",\"path\":\"" << escapeProgressJsonString(outPath.string()) << "\"";
+    s << ",\"high_watermark_bytes\":" << last.total_size;
+    s << ",\"safe_offset_bytes\":" << (output_durable_.load() ? last.total_size : 0);
+    s << ",\"finalized\":" << (output_durable_.load() ? "true" : "false");
+    s << "}";
 
     {
         const auto& io = services::ioCounters();
@@ -157,6 +164,12 @@ std::string RenderEngine::sidecarJson(const std::string& output_path) const {
         s << ",\"asset_bytes_copied\":" << io.asset_bytes_copied.load();
         s << ",\"input_open_count\":" << io.input_open_count.load();
         s << ",\"input_reopen_count\":" << io.input_reopen_count.load();
+        s << ",\"input_seek_count\":" << io.input_seek_count.load();
+        s << ",\"first_packet_read_ms\":" << io.first_packet_read_ms.load();
+        s << ",\"first_output_write_ms\":" << io.first_output_write_ms.load();
+        s << ",\"file_fsync_ms\":" << io.file_fsync_ms.load();
+        s << ",\"directory_fsync_ms\":" << io.directory_fsync_ms.load();
+        s << ",\"output_rename_ms\":" << io.output_rename_ms.load();
         s << "}";
     }
 

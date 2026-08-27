@@ -29,6 +29,10 @@ type engineSidecar struct {
 	EncodePasses     int64              `json:"encode_passes"`
 	TempBytes        int64              `json:"temp_bytes"`
 	OutputDurable    bool               `json:"output_durable"`
+	SHA256           string             `json:"sha256"`
+	SHA256Valid      bool               `json:"sha256_valid"`
+	OutputSizeBytes  int64              `json:"output_size_bytes"`
+	BackwardSeekSeen bool               `json:"backward_seek_seen"`
 	DurationSec      float64            `json:"duration_seconds"`
 	ConcatMode       string             `json:"concat_mode"`
 	TotalSize        int64              `json:"total_size"`
@@ -89,11 +93,16 @@ type engineFramePipeline struct {
 // RenderEngine::sidecarJson. All values are zero on engines that predate
 // the block.
 type engineIOCounters struct {
-	FileCopyCount    int64 `json:"file_copy_count"`
-	FileCopyBytes    int64 `json:"file_copy_bytes"`
-	AssetBytesCopied int64 `json:"asset_bytes_copied"`
-	InputOpenCount   int64 `json:"input_open_count"`
-	InputReopenCount int64 `json:"input_reopen_count"`
+	FirstPacketReadMS  int64 `json:"first_packet_read_ms"`
+	FirstOutputWriteMS int64 `json:"first_output_write_ms"`
+	FileFsyncMS        int64 `json:"file_fsync_ms"`
+	DirectoryFsyncMS   int64 `json:"directory_fsync_ms"`
+	OutputRenameMS     int64 `json:"output_rename_ms"`
+	FileCopyCount      int64 `json:"file_copy_count"`
+	FileCopyBytes      int64 `json:"file_copy_bytes"`
+	AssetBytesCopied   int64 `json:"asset_bytes_copied"`
+	InputOpenCount     int64 `json:"input_open_count"`
+	InputReopenCount   int64 `json:"input_reopen_count"`
 }
 
 // engineProcessCounters mirrors the sidecar process_counters block

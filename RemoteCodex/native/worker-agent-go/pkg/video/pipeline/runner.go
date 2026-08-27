@@ -12,6 +12,14 @@ import (
 // ProgressSnapshot is the canonical operator-visible progress emitted by the
 // native renderer. It is carried on the execution context so a shared Runner
 // remains safe when multiple tasks render concurrently.
+type ArtifactWriteProgress struct {
+	Artifact           string
+	Path               string
+	HighWatermarkBytes int64
+	SafeOffsetBytes    int64
+	Finalized          bool
+}
+
 type ProgressSnapshot struct {
 	Percent           int32
 	Scene             int32
@@ -37,9 +45,11 @@ type ProgressFunc func(percent, scene, total int, stage string)
 // The worker stores it in ActiveTaskExecution.Progress; it is not a second
 // progress tracker.
 type DetailedProgressFunc func(ProgressSnapshot)
+type ArtifactWriteProgressFunc func(ArtifactWriteProgress)
 
 type progressContextKey struct{}
 type detailedProgressContextKey struct{}
+type artifactWriteProgressContextKey struct{}
 
 // WithProgressCallback associates a legacy task-local progress sink with ctx.
 func WithProgressCallback(ctx context.Context, fn ProgressFunc) context.Context {
@@ -68,6 +78,21 @@ func ProgressCallback(ctx context.Context) ProgressFunc {
 }
 
 // DetailedProgressCallback returns the canonical detailed progress sink.
+func WithArtifactWriteCallback(ctx context.Context, fn ArtifactWriteProgressFunc) context.Context {
+	if fn == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, artifactWriteProgressContextKey{}, fn)
+}
+
+func ArtifactWriteCallback(ctx context.Context) ArtifactWriteProgressFunc {
+	if ctx == nil {
+		return nil
+	}
+	fn, _ := ctx.Value(artifactWriteProgressContextKey{}).(ArtifactWriteProgressFunc)
+	return fn
+}
+
 func DetailedProgressCallback(ctx context.Context) DetailedProgressFunc {
 	if ctx == nil {
 		return nil
@@ -173,6 +198,11 @@ type RenderMetrics struct {
 	EncodePasses     int64
 	TempBytes        int64
 	OutputDurable    bool
+	// Native output identity is trusted only when SHA256Valid is true.
+	SHA256           string
+	SHA256Valid      bool
+	OutputSizeBytes  int64
+	BackwardSeekSeen bool
 	DurationSec      float64
 	ConcatMode       string
 	TotalSize        int64
@@ -244,6 +274,12 @@ type RenderMetrics struct {
 	EngineInvoluntaryContextSwitches int64
 	EngineMinorPageFaults            int64
 	EngineMajorPageFaults            int64
+	// Native output and durability timings are emitted by the C++ sidecar.
+	FirstPacketReadMS  int64
+	FirstOutputWriteMS int64
+	FileFsyncMS        int64
+	DirectoryFsyncMS   int64
+	OutputRenameMS     int64
 	// PhaseMS carries the per-phase engine timings from the C++ sidecar
 	// (engine.asset_download, engine.segment_build, engine.concat, …).
 	// Nil when no sidecar was read.

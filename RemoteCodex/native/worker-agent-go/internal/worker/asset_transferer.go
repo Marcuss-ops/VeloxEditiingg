@@ -280,9 +280,9 @@ func (t *masterAssetTransferer) transferSingleStream(ctx context.Context, report
 			Bytes:     downloadedBytes,
 			SHA256:    verifiedHash,
 			Timing: downloader.TransferSubPhases{
-				HashVerifyMS:     hashVerifyMS.Milliseconds(),
+				HashVerifyMS:       hashVerifyMS.Milliseconds(),
 				MaterializeLocalMS: materializeLocalMS.Milliseconds(),
-				DownloadWorkMS:    0, // single-stream work ~ wall; set by caller span
+				DownloadWorkMS:     0, // single-stream work ~ wall; set by caller span
 			},
 		}, nil
 	}

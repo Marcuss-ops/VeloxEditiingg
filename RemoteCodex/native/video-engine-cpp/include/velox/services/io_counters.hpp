@@ -31,6 +31,12 @@ struct IOCounters {
     std::atomic<int64_t> asset_bytes_copied{0};
     std::atomic<int64_t> input_open_count{0};
     std::atomic<int64_t> input_reopen_count{0};
+    std::atomic<int64_t> input_seek_count{0};
+    std::atomic<int64_t> first_packet_read_ms{0};
+    std::atomic<int64_t> first_output_write_ms{0};
+    std::atomic<int64_t> file_fsync_ms{0};
+    std::atomic<int64_t> directory_fsync_ms{0};
+    std::atomic<int64_t> output_rename_ms{0};
 
     // External tool spawn counters (engine-declared): every external
     // process the engine launches through the file_utils chokepoints
@@ -103,5 +109,11 @@ void recordAssetCopy(int64_t bytes);
 // already opened counts as a reopen (e.g. the copy-only muxer opening a
 // segment once for stream discovery and again inside readPackets).
 void recordInputOpen(const std::string& path);
+void recordInputSeek();
+void recordFirstPacketRead();
+void recordFirstOutputWrite();
+void recordFileFsync(int64_t elapsed_ms);
+void recordDirectoryFsync(int64_t elapsed_ms);
+void recordOutputRename(int64_t elapsed_ms);
 
 } // namespace velox::services

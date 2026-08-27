@@ -464,6 +464,11 @@ message MasterToWorkerEnvelope {
     LeaseRevoked lease_revoked = 28;
     Ping ping = 29;
 
+    // Progressive artifact upload intent/plan. These messages are additive;
+    // legacy TaskOutputDeclared/ArtifactUploadPlan remain unchanged.
+    ArtifactUploadIntent artifact_upload_intent = 38;
+    ArtifactEarlyUploadPlan artifact_early_upload_plan = 39;
+
     // Phase 3.4 / 3.6 (Artifact Commit Protocol) — typed
     // upload-plan-and-commit-ack pipeline. The UploadPlan
     // (Fase 3.4) carries the per-manifest upload targets plus the
@@ -637,6 +642,35 @@ message CancelPrefetch {
 // worker that has not published capability v1 will be routed
 // to the legacy ArtifactUploaded path by the master's dispatch.
 // ---------------------------------------------------------
+
+// ArtifactUploadIntent announces an artifact before its final SHA/size are
+// available, allowing a negotiated progressive upload to begin while the
+// renderer is still writing the output. It is intentionally separate from
+// TaskOutputDeclared so existing consumers retain their final-identity contract.
+message ArtifactUploadIntent {
+  string task_id = 1;
+  string attempt_id = 2;
+  string lease_id = 3;
+  string worker_spool_key = 4;
+  string output_kind = 5;
+  string logical_name = 6;
+  string mime_type = 7;
+  string profile_id = 8;
+  int64 expected_size_bytes = 9;
+}
+
+// ArtifactEarlyUploadPlan is returned for an ArtifactUploadIntent. The final
+// SHA is deliberately absent and is supplied only during final completion.
+message ArtifactEarlyUploadPlan {
+  string task_id = 1;
+  string attempt_id = 2;
+  string artifact_id = 3;
+  string upload_id = 4;
+  string transport_id = 5;
+  string upload_url = 6;
+  int64 chunk_size = 7;
+  string commit_token = 8;
+}
 
 // OutputManifest is the per-file declaration carried inside
 // TaskOutputDeclared. The shape is the canonical one the master

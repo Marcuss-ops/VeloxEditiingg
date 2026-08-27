@@ -13,6 +13,12 @@ namespace velox::core::render_detail {
 namespace fs = std::filesystem;
 
 void reportProgress(int percent, const std::string& stage);
+void reportArtifactWriteProgress(const std::string& artifact,
+                                 const std::filesystem::path& path,
+                                 int64_t high_watermark_bytes,
+                                 int64_t safe_offset_bytes,
+                                 bool finalized);
+
 void reportDetailedProgress(const services::EngineProgress& progress,
                             int scene, int total_scenes,
                             int segment, int total_segments,
