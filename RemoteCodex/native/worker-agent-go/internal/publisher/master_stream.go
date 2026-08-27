@@ -1,7 +1,6 @@
 package publisher
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -9,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -22,8 +22,15 @@ type MasterStreamTransport struct {
 
 func (t *MasterStreamTransport) ID() string { return TransportIDMasterStream }
 
-// chunkSize is the per-request chunk size for the master-stream transport.
+// chunkSize is the fallback per-request chunk size for the master-stream
+// transport. Uploads are streamed directly from the file; only this many
+// bytes are exposed to a request at a time.
 const chunkSize int64 = 8 * 1024 * 1024
+
+// masterStreamConcurrency bounds in-flight requests. Four 8 MiB readers keep
+// the transfer parallel without buffering the video or putting pressure on
+// the worker's memory budget.
+const masterStreamConcurrency = 4
 
 // Upload implements Transport.Upload for MasterStreamTransport.
 func (t *MasterStreamTransport) Upload(ctx context.Context, req UploadRequest) (*UploadResult, error) {
@@ -49,46 +56,104 @@ func (t *MasterStreamTransport) Upload(ctx context.Context, req UploadRequest) (
 		return nil, fmt.Errorf("master-stream: stat: %w", err)
 	}
 
+	info, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("master-stream: stat: %w", err)
+	}
+	perChunk := req.Target.ChunkSize
+	if perChunk <= 0 {
+		perChunk = chunkSize
+	}
+	chunkCount := (info.Size() + perChunk - 1) / perChunk
+	if info.Size() == 0 {
+		chunkCount = 0
+	}
+
+	// Each request owns a SectionReader, so chunks can be sent out of order
+	// while the master persists them by index. The final /complete request is
+	// intentionally held until every worker has finished.
+	workCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	jobs := make(chan int64)
+	var wg sync.WaitGroup
+	var firstErr error
+	var errMu sync.Mutex
+	var uploadedMu sync.Mutex
 	uploaded := int64(0)
-	chunkIndex := 0
-	buf := make([]byte, chunkSize)
-	for {
-		n, rerr := io.ReadFull(f, buf)
-		if n > 0 {
-			chunkURL := strings.TrimRight(req.Target.UploadURL, "/") +
-				"/" + strconv.Itoa(chunkIndex)
-			httpReq, err := http.NewRequestWithContext(ctx,
-				http.MethodPost, chunkURL, bytes.NewReader(buf[:n]))
-			if err != nil {
-				return nil, fmt.Errorf("master-stream: build chunk request: %w", err)
-			}
-			httpReq.Header.Set("Content-Type", "application/octet-stream")
-			httpReq.Header.Set("X-Upload-Id", req.Target.UploadID)
-			httpReq.Header.Set("X-Worker-SHA256", req.WorkerSHA256)
-			httpReq.Header.Set("X-Artifact-Commit-Token", req.CommitToken)
-			resp, err := client.Do(httpReq)
-			if err != nil {
-				return nil, fmt.Errorf("%w: master-stream chunk %d: %v",
-					ErrUploadFailed, chunkIndex, err)
-			}
-			_, _ = io.Copy(io.Discard, resp.Body)
-			resp.Body.Close()
-			if resp.StatusCode >= 400 {
-				return nil, fmt.Errorf("%w: master-stream chunk %d: HTTP %d",
-					ErrUploadFailed, chunkIndex, resp.StatusCode)
-			}
-			uploaded += int64(n)
-			if req.Progress != nil {
-				req.Progress(uploaded)
-			}
+	workerCount := masterStreamConcurrency
+	if chunkCount < int64(workerCount) {
+		workerCount = int(chunkCount)
+	}
+	uploadChunk := func(index int64) error {
+		start := index * perChunk
+		length := perChunk
+		if remaining := info.Size() - start; remaining < length {
+			length = remaining
 		}
-		if rerr == io.EOF || rerr == io.ErrUnexpectedEOF {
+		chunkURL := strings.TrimRight(req.Target.UploadURL, "/") + "/" + strconv.FormatInt(index, 10)
+		body := io.NewSectionReader(f, start, length)
+		httpReq, err := http.NewRequestWithContext(workCtx, http.MethodPost, chunkURL, body)
+		if err != nil {
+			return fmt.Errorf("master-stream: build chunk request: %w", err)
+		}
+		httpReq.ContentLength = length
+		httpReq.Header.Set("Content-Type", "application/octet-stream")
+		httpReq.Header.Set("X-Upload-Id", req.Target.UploadID)
+		httpReq.Header.Set("X-Worker-SHA256", req.WorkerSHA256)
+		httpReq.Header.Set("X-Artifact-Commit-Token", req.CommitToken)
+		resp, err := client.Do(httpReq)
+		if err != nil {
+			return fmt.Errorf("%w: master-stream chunk %d: %v", ErrUploadFailed, index, err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode >= 400 {
+			return fmt.Errorf("%w: master-stream chunk %d: HTTP %d", ErrUploadFailed, index, resp.StatusCode)
+		}
+		uploadedMu.Lock()
+		uploaded += length
+		current := uploaded
+		uploadedMu.Unlock()
+		if req.Progress != nil {
+			req.Progress(current)
+		}
+		return nil
+	}
+	for i := 0; i < workerCount; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for index := range jobs {
+				if err := uploadChunk(index); err != nil {
+					errMu.Lock()
+					if firstErr == nil {
+						firstErr = err
+						cancel()
+					}
+					errMu.Unlock()
+				}
+			}
+		}()
+	}
+	for index := int64(0); index < chunkCount; index++ {
+		select {
+		case jobs <- index:
+		case <-workCtx.Done():
 			break
 		}
-		if rerr != nil {
-			return nil, fmt.Errorf("master-stream: read chunk %d: %w", chunkIndex, rerr)
+		select {
+		case <-workCtx.Done():
+			index = chunkCount
+		default:
 		}
-		chunkIndex++
+	}
+	close(jobs)
+	wg.Wait()
+	errMu.Lock()
+	uploadErr := firstErr
+	errMu.Unlock()
+	if uploadErr != nil {
+		return nil, uploadErr
 	}
 
 	completeURL := strings.TrimRight(req.Target.UploadURL, "/") + "/complete"
