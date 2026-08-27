@@ -34,7 +34,7 @@ func (w *Worker) uploadDeclaredArtifacts(ctx context.Context, pte *PendingTaskEx
 			return nil, fmt.Errorf("worker artifact upload: resolve %q: %w", target.TransportID, err)
 		}
 		w.logArtifactProtocol("ARTIFACT_TRANSFER_STARTED", pte, started, plan.GetCommitId(), target.ArtifactID, target.UploadID, map[string]interface{}{"artifact_type": ref.Type, "size_bytes": ref.SizeBytes})
-		result, err := uploadWithNegotiatedPath(ctx, transport, publisher.UploadRequest{LocalPath: ref.URI, Target: target, WorkerSHA256: ref.Hash, CommitToken: plan.GetCommitToken()})
+		result, err := uploadWithNegotiatedPath(ctx, transport, publisher.UploadRequest{LocalPath: ref.URI, Target: target, WorkerSHA256: ref.Hash, CommitToken: plan.GetCommitToken()}, w.config.ProgressivePartConcurrency)
 		if err != nil {
 			w.logArtifactProtocol("ARTIFACT_TRANSFER_FAILED", pte, started, plan.GetCommitId(), target.ArtifactID, target.UploadID, map[string]interface{}{"artifact_type": ref.Type, "error": err.Error()})
 			w.spillVolatileToNVMe(ctx, entries[i])
@@ -69,7 +69,7 @@ func (w *Worker) uploadDeclaredArtifacts(ctx context.Context, pte *PendingTaskEx
 // compatibility path. Progressive upload is selected only when the resolved
 // transport advertises the capability and implements the optional interface;
 // otherwise the ordinary Upload method is used automatically.
-func uploadWithNegotiatedPath(ctx context.Context, transport publisher.Transport, req publisher.UploadRequest) (*publisher.UploadResult, error) {
+func uploadWithNegotiatedPath(ctx context.Context, transport publisher.Transport, req publisher.UploadRequest, progressivePartConcurrency int) (*publisher.UploadResult, error) {
 	if !publisher.SupportsProgressive(transport) {
 		return transport.Upload(ctx, req)
 	}
@@ -109,7 +109,7 @@ func uploadWithNegotiatedPath(ctx context.Context, transport publisher.Transport
 		file.Update(st.Size(), true, st.Size())
 		file.MarkDurable(st.Size())
 	}
-	result, err := publisher.RunProgressiveUploadWithJournalAndStore(ctx, req.LocalPath, req.Target.ChunkSize, file, session, progressiveJournalPath(req), nil, "", req.Progress)
+	result, err := publisher.RunProgressiveUploadWithJournalAndStoreOptions(ctx, req.LocalPath, req.Target.ChunkSize, file, session, progressiveJournalPath(req), nil, "", publisher.ProgressiveUploadOptions{Workers: progressivePartConcurrency}, req.Progress)
 	if err != nil {
 		_ = session.Abort(ctx)
 		return nil, err

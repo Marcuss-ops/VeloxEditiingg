@@ -13,6 +13,19 @@ import (
 
 const progressiveUploadWorkers = 4
 
+// ProgressiveUploadOptions tunes concurrent immutable parts within one
+// artifact. Artifact-level concurrency remains owned by worker.PublisherPool.
+type ProgressiveUploadOptions struct {
+	Workers int
+}
+
+func (o ProgressiveUploadOptions) workers() int {
+	if o.Workers <= 0 {
+		return progressiveUploadWorkers
+	}
+	return o.Workers
+}
+
 type ProgressivePublishState string
 
 const (
@@ -175,14 +188,25 @@ func RunProgressiveUpload(ctx context.Context, path string, chunkSize int64, fil
 // The caller must create session against the same remote upload_id stored in
 // the journal; a missing or corrupt journal is handled fail-closed.
 func RunProgressiveUploadWithJournal(ctx context.Context, path string, chunkSize int64, file *GrowingFile, session ProgressiveSession, journalPath string, onProgress func(int64)) (*UploadResult, error) {
-	return runProgressiveUploadWithJournal(ctx, path, chunkSize, file, session, journalPath, nil, onProgress)
+	return runProgressiveUploadWithJournal(ctx, path, chunkSize, file, session, journalPath, nil, ProgressiveUploadOptions{}, onProgress)
 }
 
 func RunProgressiveUploadWithJournalAndStore(ctx context.Context, path string, chunkSize int64, file *GrowingFile, session ProgressiveSession, journalPath string, store ProgressiveStateStore, spoolID string, onProgress func(int64)) (*UploadResult, error) {
-	return runProgressiveUploadWithJournal(ctx, path, chunkSize, file, session, journalPath, func(ctx context.Context) error { return store.MarkUploaded(ctx, spoolID) }, onProgress)
+	return RunProgressiveUploadWithJournalAndStoreOptions(ctx, path, chunkSize, file, session, journalPath, store, spoolID, ProgressiveUploadOptions{}, onProgress)
 }
 
-func runProgressiveUploadWithJournal(ctx context.Context, path string, chunkSize int64, file *GrowingFile, session ProgressiveSession, journalPath string, markUploaded func(context.Context) error, onProgress func(int64)) (*UploadResult, error) {
+// RunProgressiveUploadWithJournalAndStoreOptions is the configurable form of
+// the journalized upload API. Existing callers retain the safe four-worker
+// default through RunProgressiveUploadWithJournalAndStore.
+func RunProgressiveUploadWithJournalAndStoreOptions(ctx context.Context, path string, chunkSize int64, file *GrowingFile, session ProgressiveSession, journalPath string, store ProgressiveStateStore, spoolID string, options ProgressiveUploadOptions, onProgress func(int64)) (*UploadResult, error) {
+	var markUploaded func(context.Context) error
+	if store != nil {
+		markUploaded = func(ctx context.Context) error { return store.MarkUploaded(ctx, spoolID) }
+	}
+	return runProgressiveUploadWithJournal(ctx, path, chunkSize, file, session, journalPath, markUploaded, options, onProgress)
+}
+
+func runProgressiveUploadWithJournal(ctx context.Context, path string, chunkSize int64, file *GrowingFile, session ProgressiveSession, journalPath string, markUploaded func(context.Context) error, options ProgressiveUploadOptions, onProgress func(int64)) (*UploadResult, error) {
 	if path == "" || chunkSize <= 0 || file == nil || session == nil {
 		return nil, fmt.Errorf("progressive upload: invalid configuration")
 	}
@@ -208,7 +232,8 @@ func runProgressiveUploadWithJournal(ctx context.Context, path string, chunkSize
 		number      int
 		start, size int64
 	}
-	parts := make(chan part, progressiveUploadWorkers)
+	workers := options.workers()
+	parts := make(chan part, workers)
 	errs := make(chan error, 1)
 	var wg sync.WaitGroup
 	var mu, journalMu sync.Mutex
@@ -274,7 +299,7 @@ func runProgressiveUploadWithJournal(ctx context.Context, path string, chunkSize
 			}
 		}
 	}
-	for i := 0; i < progressiveUploadWorkers; i++ {
+	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go worker()
 	}

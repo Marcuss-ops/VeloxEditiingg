@@ -74,6 +74,10 @@ type WorkerConfig struct {
 	// A non-positive value uses the safe default. Binds from
 	// VELOX_PUBLISHER_CONCURRENCY when configuration is loaded.
 	PublisherConcurrency int `json:"publisher_concurrency,omitempty"`
+	// ProgressivePartConcurrency controls concurrent immutable parts within a
+	// single progressive artifact upload. It is separate from the worker-wide
+	// PublisherConcurrency artifact limit.
+	ProgressivePartConcurrency int `json:"progressive_part_concurrency,omitempty"`
 
 	// AssetChunkedDownloadEnabled opts a worker into per-asset parallel
 	// chunked download: an asset at/above AssetChunkedDownloadThresholdBytes

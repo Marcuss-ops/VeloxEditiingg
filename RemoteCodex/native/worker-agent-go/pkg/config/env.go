@@ -70,6 +70,7 @@ const (
 	// transfers the canonical download manager runs per worker. Default 4.
 	EnvAssetDownloadConcurrency           = "VELOX_ASSET_DOWNLOAD_CONCURRENCY"
 	EnvPublisherConcurrency               = "VELOX_PUBLISHER_CONCURRENCY"
+	EnvProgressivePartConcurrency         = "VELOX_PROGRESSIVE_PART_CONCURRENCY"
 	EnvAssetChunkedDownloadEnabled        = "VELOX_ASSET_CHUNKED_DOWNLOAD"
 	EnvAssetChunkedDownloadThresholdBytes = "VELOX_ASSET_CHUNKED_DOWNLOAD_THRESHOLD_BYTES"
 	EnvAssetChunkedDownloadConcurrency    = "VELOX_ASSET_CHUNKED_DOWNLOAD_CONCURRENCY"
@@ -151,7 +152,7 @@ var EnvBindings = []string{
 	EnvTelemetryJSONDir,
 	EnvPrometheusPort,
 	EnvAssetDownloadConcurrency,
-	EnvPublisherConcurrency,
+	EnvPublisherConcurrency, EnvProgressivePartConcurrency,
 	EnvAssetChunkedDownloadEnabled, EnvAssetChunkedDownloadThresholdBytes, EnvAssetChunkedDownloadConcurrency,
 	EnvPrefetchHorizonJobs, EnvPrefetchProtectionLookaheadJobs,
 	EnvPrefetchMaxConcurrent, EnvPrefetchByteBudget,
@@ -293,6 +294,11 @@ func applyEnvOverrides(cfg *WorkerConfig) error {
 	if v := strings.TrimSpace(os.Getenv(EnvPublisherConcurrency)); v != "" {
 		if n, perr := strconv.Atoi(v); perr == nil && n > 0 {
 			cfg.PublisherConcurrency = n
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv(EnvProgressivePartConcurrency)); v != "" {
+		if n, perr := strconv.Atoi(v); perr == nil && n > 0 {
+			cfg.ProgressivePartConcurrency = n
 		}
 	}
 	bindPositiveInt := func(name string, dst *int) {

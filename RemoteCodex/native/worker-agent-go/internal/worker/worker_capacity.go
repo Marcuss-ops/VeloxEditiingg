@@ -3,7 +3,25 @@ package worker
 import (
 	"math"
 	"runtime"
+
+	"velox-worker-agent/pkg/video/pipeline"
 )
+
+// countRenderOccupyingTasks is the admission view of activeTasks. Publishing
+// and commit-wait continue to be visible as active lifecycle work, but they
+// no longer consume a render slot: executeTask releases the render limiter
+// before entering publication. Keeping this predicate in one place prevents
+// the claim loop from recreating a worker-wide busy gate around publishers.
+func countRenderOccupyingTasks(tasks map[string]*ActiveTaskExecution) int {
+	count := 0
+	for _, task := range tasks {
+		if task == nil || task.OperationalPhase == pipeline.PhasePublishing || task.OperationalPhase == pipeline.PhaseCommitWait || task.OperationalPhase == pipeline.PhaseDone {
+			continue
+		}
+		count++
+	}
+	return count
+}
 
 // detectMaxParallelJobs calculates the optimal concurrency based on hardware.
 // Formula: clamp(NumCPU / 2, min=1, max=8).

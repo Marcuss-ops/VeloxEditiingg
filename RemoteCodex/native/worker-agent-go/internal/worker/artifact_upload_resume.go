@@ -394,7 +394,7 @@ func (w *Worker) resumeArtifactUpload(ctx context.Context, entry spool.SpoolEntr
 			growing := publisher.NewGrowingFile()
 			growing.Update(entry.SizeBytes, true, entry.SizeBytes)
 			growing.MarkDurable(entry.SizeBytes)
-			result, uploadErr = publisher.RunProgressiveUploadWithJournalAndStore(ctx, entry.LocalPath, target.ChunkSize, growing, session, journalPath, w.outputSpool, entry.SpoolID, nil)
+			result, uploadErr = publisher.RunProgressiveUploadWithJournalAndStoreOptions(ctx, entry.LocalPath, target.ChunkSize, growing, session, journalPath, w.outputSpool, entry.SpoolID, publisher.ProgressiveUploadOptions{Workers: w.config.ProgressivePartConcurrency}, nil)
 			markedUploadedByRunner = true
 		} else {
 			result, uploadErr = transport.Upload(ctx, publisher.UploadRequest{

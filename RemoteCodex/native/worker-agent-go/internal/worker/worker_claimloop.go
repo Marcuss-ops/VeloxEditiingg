@@ -91,7 +91,7 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 				}
 
 				w.activeTasksMu.RLock()
-				activeCount := len(w.activeTasks)
+				activeCount := countRenderOccupyingTasks(w.activeTasks)
 				w.activeTasksMu.RUnlock()
 				// PR-bugfix: also count pendingTasks (offers accepted
 				// but waiting for TaskLeaseGranted). The worker must not

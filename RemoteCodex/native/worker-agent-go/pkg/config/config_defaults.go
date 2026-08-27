@@ -23,6 +23,7 @@ const DefaultTmpfsThresholdBytes int64 = 64 * 1024 * 1024
 const (
 	DefaultAssetDownloadConcurrency                 = 4
 	DefaultPublisherConcurrency                     = 4
+	DefaultProgressivePartConcurrency               = 4
 	DefaultAssetChunkedDownloadThresholdBytes int64 = 64 * 1024 * 1024
 	DefaultAssetChunkedDownloadConcurrency          = 4
 	DefaultPrefetchByteBudget                 int64 = 20 * 1024 * 1024 * 1024
@@ -192,6 +193,9 @@ func (c *WorkerConfig) applyDefaults() {
 	}
 	if c.PublisherConcurrency <= 0 {
 		c.PublisherConcurrency = DefaultPublisherConcurrency
+	}
+	if c.ProgressivePartConcurrency <= 0 {
+		c.ProgressivePartConcurrency = DefaultProgressivePartConcurrency
 	}
 	// Chunked-download tuning is safe-by-default even when the feature is off:
 	// the threshold and concurrency always hold sane values so toggling
