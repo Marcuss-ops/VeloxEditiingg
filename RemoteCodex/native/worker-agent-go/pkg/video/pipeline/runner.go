@@ -18,6 +18,7 @@ type ArtifactWriteProgress struct {
 	HighWatermarkBytes int64
 	SafeOffsetBytes    int64
 	Finalized          bool
+	FinalizedAt        time.Time
 }
 
 type ProgressSnapshot struct {

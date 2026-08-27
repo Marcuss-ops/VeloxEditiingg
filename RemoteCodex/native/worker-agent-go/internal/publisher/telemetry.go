@@ -28,6 +28,9 @@ type UploadBreakdown struct {
 	// OverlapMS is the render/upload overlap window: render end minus
 	// first-part start, zero when the upload began after finalization.
 	OverlapMS int64
+	// TrailerToOpenMS is the time from C++ trailer_finished (artifact
+	// finalized) to Go successfully opening/stat'ing the final file.
+	TrailerToOpenMS int64
 }
 
 // UploadTelemetry receives upload progress and terminal measurements.

@@ -1,7 +1,6 @@
 package publisher
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -46,22 +45,17 @@ type masterStreamProgressiveSession struct {
 }
 
 func (s *masterStreamProgressiveSession) UploadPart(ctx context.Context, partNumber int, reader io.Reader, size int64) error {
-	body, err := io.ReadAll(io.LimitReader(reader, size))
-	if err != nil {
-		return err
-	}
-	if int64(len(body)) != size {
-		return fmt.Errorf("master-stream: progressive part size mismatch")
-	}
 	client := s.transport.HTTPClient
 	if client == nil {
 		client = &http.Client{Timeout: 5 * time.Minute}
 	}
 	url := strings.TrimRight(s.request.Target.UploadURL, "/") + "/" + strconv.Itoa(partNumber)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	limited := io.LimitReader(reader, size)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, limited)
 	if err != nil {
 		return err
 	}
+	req.ContentLength = size
 	req.Header.Set("Content-Type", "application/octet-stream")
 	req.Header.Set("X-Upload-Id", s.request.Target.UploadID)
 	req.Header.Set("X-Artifact-Commit-Token", s.request.CommitToken)

@@ -59,6 +59,9 @@ func (w *Worker) artifactWriteProgressCallback(taskID string) pipeline.ArtifactW
 		if progress.SafeOffsetBytes <= 0 && !progress.Finalized {
 			return
 		}
+		if progress.Finalized && progress.FinalizedAt.IsZero() {
+			progress.FinalizedAt = time.Now()
+		}
 		artifactProgressByContext.Store(taskID+"\x00"+progress.Artifact, progress)
 		w.activeTasksMu.Lock()
 		if current := w.activeTasks[taskID]; current != nil {

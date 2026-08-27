@@ -70,8 +70,20 @@ func (w *Worker) uploadDeclaredArtifacts(ctx context.Context, pte *PendingTaskEx
 // transport advertises the capability and implements the optional interface;
 // otherwise the ordinary Upload method is used automatically.
 func uploadWithNegotiatedPath(ctx context.Context, transport publisher.Transport, req publisher.UploadRequest, progressivePartConcurrency int) (*publisher.UploadResult, error) {
+	progress := artifactProgressForTask(ctx, req.Target.ArtifactID)
+	var trailerToOpenMS int64
+	if !progress.FinalizedAt.IsZero() {
+		trailerToOpenMS = time.Since(progress.FinalizedAt).Milliseconds()
+		if trailerToOpenMS < 0 {
+			trailerToOpenMS = 0
+		}
+	}
 	if !publisher.SupportsProgressive(transport) {
-		return transport.Upload(ctx, req)
+		res, err := transport.Upload(ctx, req)
+		if err == nil && res != nil {
+			res.Breakdown.TrailerToOpenMS = trailerToOpenMS
+		}
+		return res, err
 	}
 
 	progressive, ok := transport.(publisher.ProgressiveTransport)
@@ -79,9 +91,12 @@ func uploadWithNegotiatedPath(ctx context.Context, transport publisher.Transport
 		return nil, fmt.Errorf("worker artifact upload: progressive capability negotiated but transport %q does not implement ProgressiveTransport", transport.ID())
 	}
 	file := publisher.NewGrowingFile()
-	progress := artifactProgressForTask(ctx, req.Target.ArtifactID)
 	if progress.SafeOffsetBytes <= 0 {
-		return transport.Upload(ctx, req)
+		res, err := transport.Upload(ctx, req)
+		if err == nil && res != nil {
+			res.Breakdown.TrailerToOpenMS = trailerToOpenMS
+		}
+		return res, err
 	}
 	file.Update(progress.SafeOffsetBytes, progress.Finalized, 0)
 	if progress.Finalized {
@@ -96,14 +111,16 @@ func uploadWithNegotiatedPath(ctx context.Context, transport publisher.Transport
 	if err != nil {
 		return nil, fmt.Errorf("worker artifact upload: begin progressive %q: %w", transport.ID(), err)
 	}
-	// Continue consuming live artifact_write_progress events through the
-	// task callback state; the current invocation snapshots the latest known
-	// safe prefix and finalization evidence before starting the four-worker
-	// journalized uploader.
 	st, err := os.Stat(req.LocalPath)
 	if err != nil {
 		_ = session.Abort(ctx)
 		return nil, err
+	}
+	if !progress.FinalizedAt.IsZero() {
+		trailerToOpenMS = time.Since(progress.FinalizedAt).Milliseconds()
+		if trailerToOpenMS < 0 {
+			trailerToOpenMS = 0
+		}
 	}
 	if progress.Finalized {
 		file.Update(st.Size(), true, st.Size())
@@ -114,8 +131,7 @@ func uploadWithNegotiatedPath(ctx context.Context, transport publisher.Transport
 		_ = session.Abort(ctx)
 		return nil, err
 	}
-	// Progressive overlap telemetry: how much of the upload ran while the
-	// render was still writing, and how long until the first part.
+	result.Breakdown.TrailerToOpenMS = trailerToOpenMS
 	telemetry.GetPrometheusMetrics().RecordProgressiveUploadTiming(
 		time.Duration(result.Breakdown.FirstPartStartedMS)*time.Millisecond,
 		result.Breakdown.PartsUploadedBeforeRenderEnd,

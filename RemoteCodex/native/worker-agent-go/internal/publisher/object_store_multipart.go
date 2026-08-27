@@ -100,6 +100,27 @@ type objectStoreProgressiveSession struct {
 }
 
 func (s *objectStoreProgressiveSession) UploadPart(ctx context.Context, partNumber int, reader io.Reader, size int64) error {
+	if rs, ok := reader.(io.ReadSeeker); ok {
+		h := sha256.New()
+		n, err := io.CopyN(h, rs, size)
+		if err != nil && err != io.EOF {
+			return err
+		}
+		if n != size {
+			return fmt.Errorf("object-store-multipart: progressive part size mismatch")
+		}
+		sumHex := hex.EncodeToString(h.Sum(nil))
+		if _, err := rs.Seek(0, io.SeekStart); err != nil {
+			return err
+		}
+		limited := io.LimitReader(rs, size)
+		res, err := s.transport.uploadPartWithRetryReader(ctx, s.bucket, s.key, s.uploadID, partNumber, limited, size, sumHex, 5, rs)
+		if err != nil {
+			return err
+		}
+		s.parts = append(s.parts, s3PartSummary{PartNumber: res.PartNumber, Size: size, ETag: res.ETag})
+		return nil
+	}
 	body, err := io.ReadAll(io.LimitReader(reader, size))
 	if err != nil {
 		return err
@@ -213,11 +234,9 @@ func (t *ObjectStoreMultipartTransport) Upload(ctx context.Context, req UploadRe
 		n, rerr := io.ReadFull(f, buf)
 		if n > 0 {
 			if _, already := present[partNumber]; !already {
-				partBytes := make([]byte, n)
-				copy(partBytes, buf[:n])
-				partSHA := sha256.Sum256(partBytes)
+				partSHA := sha256.Sum256(buf[:n])
 				partSHAHex := hex.EncodeToString(partSHA[:])
-				upRes, err := t.uploadPartWithRetry(ctx, bucket, key, s3UploadID, partNumber, partBytes, partSHAHex, maxRetries)
+				upRes, err := t.uploadPartWithRetry(ctx, bucket, key, s3UploadID, partNumber, buf[:n], partSHAHex, maxRetries)
 				if err != nil {
 					_ = t.S3Client.AbortMultipartUpload(ctx, map[string]interface{}{
 						"bucket": bucket, "key": key, "upload_id": s3UploadID,
@@ -226,7 +245,7 @@ func (t *ObjectStoreMultipartTransport) Upload(ctx context.Context, req UploadRe
 				}
 				parts = append(parts, s3PartSummary{
 					PartNumber: upRes.PartNumber,
-					Size:       int64(len(partBytes)),
+					Size:       int64(n),
 					ETag:       upRes.ETag,
 				})
 			}
@@ -272,8 +291,59 @@ func (t *ObjectStoreMultipartTransport) Upload(ctx context.Context, req UploadRe
 	}, nil
 }
 
-// uploadPartWithRetry retries transient per-part failures with exponential
-// backoff.
+func (t *ObjectStoreMultipartTransport) uploadPartWithRetryReader(
+	ctx context.Context,
+	bucket, key, s3UploadID string,
+	partNumber int,
+	body io.Reader,
+	size int64,
+	partSHAHex string,
+	maxRetries int,
+	seeker io.ReadSeeker,
+) (multipartUploadResult, error) {
+	backoff := 200 * time.Millisecond
+	var lastErr error
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if seeker != nil && attempt > 0 {
+			if _, err := seeker.Seek(0, io.SeekStart); err != nil {
+				return multipartUploadResult{}, err
+			}
+			body = io.LimitReader(seeker, size)
+		}
+		res, err := t.S3Client.UploadPart(ctx, map[string]interface{}{
+			"bucket":          bucket,
+			"key":             key,
+			"upload_id":       s3UploadID,
+			"part_number":     partNumber,
+			"body":            body,
+			"size":            size,
+			"checksum_sha256": partSHAHex,
+		})
+		if err == nil {
+			return res, nil
+		}
+		lastErr = err
+		if !isTransientS3Error(err) {
+			return multipartUploadResult{}, fmt.Errorf("%w: part %d: %v", ErrUploadFailed, partNumber, err)
+		}
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return multipartUploadResult{}, ctx.Err()
+		case <-timer.C:
+		}
+		backoff *= 2
+	}
+	return multipartUploadResult{}, fmt.Errorf("%w: part %d after %d retries: %v",
+		ErrUploadFailed, partNumber, maxRetries, lastErr)
+}
+
 func (t *ObjectStoreMultipartTransport) uploadPartWithRetry(
 	ctx context.Context,
 	bucket, key, s3UploadID string,

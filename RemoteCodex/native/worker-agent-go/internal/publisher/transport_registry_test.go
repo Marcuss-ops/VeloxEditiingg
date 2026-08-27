@@ -72,8 +72,14 @@ func (f *fakeS3Client) UploadPart(ctx context.Context, params interface{}) (mult
 	}
 	p, _ := params.(map[string]interface{})
 	pn, _ := p["part_number"].(int)
-	body, _ := p["body"].([]byte)
-	sum := sha256.Sum256(body)
+	var data []byte
+	if b, ok := p["body"].([]byte); ok {
+		data = b
+	} else if r, ok := p["body"].(io.Reader); ok && r != nil {
+		d, _ := io.ReadAll(r)
+		data = d
+	}
+	sum := sha256.Sum256(data)
 	return multipartUploadResult{
 		PartNumber: pn,
 		ETag:       `"` + hex.EncodeToString(sum[:]) + `"`,
