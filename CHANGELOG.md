@@ -1,3 +1,11 @@
+## [v1.3.3] - 2026-08-27
+
+### Benchmark scorecard validation
+
+- Persist worker benchmark results and scorecard validation data.
+- Add the `benchmark-collect` fleetctl command for Matt Damon workload measurements.
+- Keep the worker image release pinned to a new immutable digest for this checkout.
+
 ## [v1.3.2] - 2026-08-27
 
 ### Worker admission and progressive part tuning
