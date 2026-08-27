@@ -1,3 +1,15 @@
+## [v1.3.2] - 2026-08-27
+
+### Worker admission and progressive part tuning
+
+- Publishing and commit-wait no longer consume render admission capacity;
+  active publication remains bounded by the existing `PublisherPool`.
+- Progressive upload part concurrency is configurable through
+  `VELOX_PROGRESSIVE_PART_CONCURRENCY`, defaulting to 4 for compatibility and
+  allowing controlled 4-vs-8 benchmarking.
+- Progressive COMPLETE, artifact locking, resume and the fMP4 disabled gate
+  are unchanged.
+
 ## [v1.3.0] - 2026-08-24
 
 ### Worker image v1.3.0 — warm assembly prefetch + delivery consolidation
