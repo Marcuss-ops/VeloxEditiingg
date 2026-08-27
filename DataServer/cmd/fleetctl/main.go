@@ -40,28 +40,29 @@ import (
 type subCommand string
 
 const (
-	subStatus       subCommand = "status"
-	subInspect      subCommand = "inspect"
-	subDrain        subCommand = "drain"
-	subUpdate       subCommand = "update"
-	subSmoke        subCommand = "smoke"
-	subResume       subCommand = "resume"
-	subRollback     subCommand = "rollback"
-	subOperations   subCommand = "operations"
-	subWaitReady    subCommand = "wait-ready"
-	subRollout      subCommand = "rollout"
-	subSSHCheck     subCommand = "ssh-check"
-	subJob          subCommand = "job"
-	subDoctor       subCommand = "doctor"
-	subQuarantine   subCommand = "quarantine"
-	subRestart      subCommand = "restart"
-	subWorkerConfig subCommand = "worker-config"
-	subBenchmark    subCommand = "benchmark"
+	subStatus           subCommand = "status"
+	subInspect          subCommand = "inspect"
+	subDrain            subCommand = "drain"
+	subUpdate           subCommand = "update"
+	subSmoke            subCommand = "smoke"
+	subResume           subCommand = "resume"
+	subRollback         subCommand = "rollback"
+	subOperations       subCommand = "operations"
+	subWaitReady        subCommand = "wait-ready"
+	subRollout          subCommand = "rollout"
+	subSSHCheck         subCommand = "ssh-check"
+	subJob              subCommand = "job"
+	subDoctor           subCommand = "doctor"
+	subQuarantine       subCommand = "quarantine"
+	subRestart          subCommand = "restart"
+	subWorkerConfig     subCommand = "worker-config"
+	subBenchmark        subCommand = "benchmark"
+	subBenchmarkCollect subCommand = "benchmark-collect"
 )
 
 func (s subCommand) valid() bool {
 	switch s {
-	case subStatus, subInspect, subDrain, subUpdate, subSmoke, subResume, subRollback, subOperations, subWaitReady, subRollout, subSSHCheck, subJob, subDoctor, subQuarantine, subRestart, subWorkerConfig, subBenchmark:
+	case subStatus, subInspect, subDrain, subUpdate, subSmoke, subResume, subRollback, subOperations, subWaitReady, subRollout, subSSHCheck, subJob, subDoctor, subQuarantine, subRestart, subWorkerConfig, subBenchmark, subBenchmarkCollect:
 		return true
 	default:
 		return false
@@ -101,6 +102,8 @@ Sub-commands:
   restart <worker_id>     schedule worker restart
   benchmark <worker_id> [--fixture ID] [--concurrency N] [--runs N]
                           run concurrent benchmark to determine sweet spot
+  benchmark-collect <worker_id> [--fixture ID] [--concurrency N] [--runs N]
+                          run benchmark, validate scorecard, persist results, show tuning
   worker-config set <worker_id> [--audio-mix-strategy legacy|optimized|auto] [--audio-mix-profile 0|1]
                           atomically update allowlisted worker config and wait-ready
   doctor --production     fleet/readiness/digest production checks
@@ -203,6 +206,8 @@ func runMain(args []string) int {
 		return runWorkerConfig(client, rest[1:])
 	case subBenchmark:
 		return runBenchmark(client, rest[1:])
+	case subBenchmarkCollect:
+		return runBenchmarkCollect(client, rest[1:])
 	}
 	return ExitUnexpected
 }

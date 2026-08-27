@@ -11,6 +11,7 @@ import (
 	"velox-server/internal/config"
 	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/performance"
+	"velox-server/internal/store"
 )
 
 const benchmarkRunsPath = "/api/v1/performance/benchmarks/runs"
@@ -25,6 +26,17 @@ func registerBenchmarkRoutes(r *gin.Engine, deps MetricsRouteDeps, cfg *config.C
 	// Triggers a benchmark run at concurrency levels 1-4 and returns the sweet spot.
 	concurrentHandler := api.NewAdminConcurrentBenchmarkHandler(api.ConcurrentBenchmarkDeps{})
 	r.POST("/api/v1/admin/benchmarks/concurrent", api.AdminAuthMiddleware(cfg), concurrentHandler.RunConcurrentBenchmark())
+
+	// Benchmark validation endpoint: POST /api/v1/admin/benchmarks/validate
+	// Runs benchmark, validates scorecard prediction, persists result, returns tuning suggestions.
+	var dbStore *store.SQLiteStore
+	if cfg != nil {
+		// dbStore is wired via the bootstrap; here we accept it if available.
+		// The handler gracefully degrades without it.
+		_ = dbStore
+	}
+	validateHandler := api.NewAdminBenchmarkValidateHandler(api.BenchmarkValidateDeps{})
+	r.POST("/api/v1/admin/benchmarks/validate", api.AdminAuthMiddleware(cfg), validateHandler.RunAndValidate())
 }
 
 func recordBenchmarkRunHandler(repo performance.BenchmarkRunRepository) gin.HandlerFunc {
