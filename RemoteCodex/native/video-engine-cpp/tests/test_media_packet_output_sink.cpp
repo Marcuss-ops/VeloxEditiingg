@@ -28,12 +28,12 @@ void expect(bool condition, const std::string& message) {
 }
 
 std::string expectedSHA256(const std::string& data) {
-    AVHashContext* hash = av_hash_alloc(AV_HASH_SHA256);
-    if (hash == nullptr) return {};
+    AVHashContext* hash = nullptr;
+    if (av_hash_alloc(&hash, "sha256") < 0 || hash == nullptr) return {};
     av_hash_init(hash);
     av_hash_update(hash, reinterpret_cast<const unsigned char*>(data.data()), data.size());
     unsigned char digest[64]{};
-    av_hash_final(hash, digest, sizeof(digest));
+    av_hash_final(hash, digest);
     av_free(hash);
 
     static constexpr char hex[] = "0123456789abcdef";
@@ -62,11 +62,9 @@ void testAppendOnlySHA() {
     auto* avio = sink.avio();
     expect(avio != nullptr, "append-only sink exposes AVIO context");
     if (avio != nullptr) {
-        const int written = avio_write(avio,
+        avio_write(avio,
             reinterpret_cast<const unsigned char*>(payload.data()),
             static_cast<int>(payload.size()));
-        expect(written == static_cast<int>(payload.size()),
-               "append-only payload is accepted by AVIO");
     }
 
     velox::media::packet::PacketOutputSinkResult result;
@@ -104,6 +102,7 @@ void testBackwardSeekInvalidatesSHA() {
     if (avio != nullptr) {
         avio_write(avio, reinterpret_cast<const unsigned char*>(first.data()),
                    static_cast<int>(first.size()));
+        avio_flush(avio);
         expect(avio_seek(avio, 0, SEEK_SET) == 0,
                "backward seek is accepted by AVIO");
         avio_write(avio, reinterpret_cast<const unsigned char*>(second.data()),

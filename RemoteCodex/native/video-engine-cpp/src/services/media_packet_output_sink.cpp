@@ -3,6 +3,7 @@
 #include "velox/services/media_packet_output_sink.hpp"
 
 extern "C" {
+#include <libavutil/error.h>
 #include <libavutil/hash.h>
 #include <libavutil/mem.h>
 }
@@ -11,7 +12,6 @@ extern "C" {
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
-#include <sys/stat.h>
 #include <sstream>
 #include <cstdio>
 #include <sys/stat.h>
@@ -36,12 +36,13 @@ bool PacketOutputSink::open(const std::filesystem::path& path, std::string& erro
         return false;
     }
     path_ = path;
-    sha_ = av_hash_alloc(AV_HASH_SHA256);
-    if (sha_ == nullptr) {
-        error = "av_hash_alloc(SHA256) failed";
+    AVHashContext* hash = nullptr;
+    if (av_hash_alloc(&hash, "sha256") < 0 || hash == nullptr) {
+        error = "av_hash_alloc(sha256) failed";
         close();
         return false;
     }
+    sha_ = hash;
     av_hash_init(static_cast<AVHashContext*>(sha_));
     avio_ = avio_alloc_context(
         static_cast<unsigned char*>(av_malloc(kBufferSize)), kBufferSize, 1,
@@ -105,10 +106,7 @@ bool PacketOutputSink::finalize(PacketOutputSinkResult& result, std::string& err
         error = "packet output sink already finalized";
         return false;
     }
-    if (avio_ != nullptr && avio_flush(avio_) < 0) {
-        error = "avio_flush failed";
-        return false;
-    }
+    if (avio_ != nullptr) avio_flush(avio_);
     if (::fsync(fd_) != 0) {
         error = "fsync packet output sink: " + std::string(std::strerror(errno));
         return false;
@@ -122,7 +120,7 @@ bool PacketOutputSink::finalize(PacketOutputSinkResult& result, std::string& err
     result.backward_seek_seen = !append_only_;
     if (append_only_ && hashed_until_ == result.output_size_bytes) {
         unsigned char digest[64]{};
-        av_hash_final(static_cast<AVHashContext*>(sha_), digest, sizeof(digest));
+        av_hash_final(static_cast<AVHashContext*>(sha_), digest);
         char hex[65]{};
         for (size_t i = 0; i < 32; ++i) {
             std::snprintf(hex + i * 2, 3, "%02x", digest[i]);
