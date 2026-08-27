@@ -265,9 +265,16 @@ type AttemptSummary struct {
 	CumulativeMetrics      map[string]any                  `json:"cumulative_metrics,omitempty"`
 	CanonicalAttemptEvents []map[string]any                `json:"canonical_attempt_events,omitempty"`
 	AttemptMilestones      []sharedtelemetry.AttemptMilestoneSample `json:"attempt_milestones,omitempty"`
-	Waterfall              []WaterfallStage                `json:"waterfall,omitempty"`
-	WaterfallValid         bool                            `json:"waterfall_valid,omitempty"`
-	AttemptWaterfall       *AttemptWaterfall               `json:"attempt_waterfall,omitempty"`
+	// MasterReceivedAt/MasterCommittedAt are the Master-local report timestamps
+	// (task_attempt_reports.received_at/persisted_at). Both are produced by the
+	// Master clock, so receive→commit lag is safe to compute locally; the worker
+	// UTC clock is never subtracted from them. They let the result_ingest
+	// diagnostic separate transport/heartbeat delay from worker runtime.
+	MasterReceivedAt  string `json:"master_received_at,omitempty"`
+	MasterCommittedAt string `json:"master_committed_at,omitempty"`
+	Waterfall         []WaterfallStage                `json:"waterfall,omitempty"`
+	WaterfallValid    bool                            `json:"waterfall_valid,omitempty"`
+	AttemptWaterfall  *AttemptWaterfall               `json:"attempt_waterfall,omitempty"`
 }
 
 type WaterfallStage struct {

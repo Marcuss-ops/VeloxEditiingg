@@ -24,6 +24,53 @@ func (r *SQLiteTaskAttemptRepository) GetRawReportJSON(ctx context.Context, atte
 	return raw, nil
 }
 
+// GetReportReceivedAt returns the Master-local receive timestamp of the
+// attempt's raw report (task_attempt_reports.received_at), or the zero time
+// when no report row exists. It drives the result_ingest diagnostic: the
+// Master receive→commit window contrasted with the worker's result.sent.
+func (r *SQLiteTaskAttemptRepository) GetReportReceivedAt(ctx context.Context, attemptID string) (time.Time, error) {
+	if r == nil || r.store == nil || r.store.db == nil || attemptID == "" {
+		return time.Time{}, nil
+	}
+	var received string
+	err := r.store.db.QueryRowContext(ctx, `SELECT received_at FROM task_attempt_reports WHERE attempt_id = ?`, attemptID).Scan(&received)
+	if err == sql.ErrNoRows {
+		return time.Time{}, nil
+	}
+	if err != nil {
+		return time.Time{}, fmt.Errorf("report received_at get: %w", err)
+	}
+	parsed, err := parsePersistedWorkerTimestamp(received, "task_attempt_reports.received_at")
+	if err != nil {
+		return time.Time{}, err
+	}
+	return parsed.UTC(), nil
+}
+
+// GetReportCommittedAt returns the Master-local commit timestamp of the
+// attempt's raw report (task_attempt_reports.persisted_at — the moment the
+// row was written to the DB), or the zero time when no report row exists.
+// It drives the result_ingest diagnostic: the Master receive→commit window,
+// both Master-local, so subtracting them is safe and never crosses clocks.
+func (r *SQLiteTaskAttemptRepository) GetReportCommittedAt(ctx context.Context, attemptID string) (time.Time, error) {
+	if r == nil || r.store == nil || r.store.db == nil || attemptID == "" {
+		return time.Time{}, nil
+	}
+	var persisted string
+	err := r.store.db.QueryRowContext(ctx, `SELECT persisted_at FROM task_attempt_reports WHERE attempt_id = ?`, attemptID).Scan(&persisted)
+	if err == sql.ErrNoRows {
+		return time.Time{}, nil
+	}
+	if err != nil {
+		return time.Time{}, fmt.Errorf("report persisted_at get: %w", err)
+	}
+	parsed, err := parsePersistedWorkerTimestamp(persisted, "task_attempt_reports.persisted_at")
+	if err != nil {
+		return time.Time{}, err
+	}
+	return parsed.UTC(), nil
+}
+
 // ── Phase Timings ──────────────────────────────────────────────────────────
 
 // PersistPhaseTimings inserts or replaces phase timing rows for an attempt.

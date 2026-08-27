@@ -84,12 +84,70 @@ CREATE TABLE task_attempts (
 	worker_sha256        TEXT NOT NULL DEFAULT '', -- migration 149
 	artifact_sha256_mismatch INTEGER NOT NULL DEFAULT 0 -- migration 149
 );
+CREATE TABLE task_attempt_reports (
+	attempt_id      TEXT PRIMARY KEY,
+	report_schema   INTEGER NOT NULL DEFAULT 1,
+	report_hash     TEXT    NOT NULL,
+	raw_report_json TEXT    NOT NULL,
+	received_at     TEXT    NOT NULL,
+	persisted_at    TEXT    NOT NULL
+);
 `
 	if _, err := db.Exec(schema); err != nil {
 		t.Fatalf("create schema: %v", err)
 	}
 
 	return NewSQLiteTaskAttemptRepository(&SQLiteStore{db: db})
+}
+
+// TestGetReportMasterTimestamps locks the Master-received_at/committed_at
+// followup on the report row: received_at (Master receive) and persisted_at
+// (Master commit) are read back as distinct Master-local timestamps, and a
+// missing row yields zero time (never an error). The receive→commit window
+// is computed from two Master-clock stamps, never crossing into the worker
+// UTC clock.
+func TestGetReportMasterTimestamps(t *testing.T) {
+	repo := openTaskAttemptTestDB(t)
+	ctx := context.Background()
+
+	received := time.Date(2026, 8, 26, 12, 0, 0, int(500*time.Millisecond), time.UTC)
+	committed := time.Date(2026, 8, 26, 12, 0, 0, int(700*time.Millisecond), time.UTC)
+	if _, err := repo.store.db.ExecContext(ctx, `INSERT INTO task_attempt_reports
+		(attempt_id, report_schema, report_hash, raw_report_json, received_at, persisted_at)
+		VALUES ('attempt-ts', 1, 'hash', '{}', ?, ?)`,
+		received.UTC().Format(time.RFC3339Nano), committed.UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatalf("insert report: %v", err)
+	}
+
+	gotReceived, err := repo.GetReportReceivedAt(ctx, "attempt-ts")
+	if err != nil {
+		t.Fatalf("GetReportReceivedAt: %v", err)
+	}
+	if !gotReceived.Equal(received) {
+		t.Fatalf("received_at = %v, want %v", gotReceived, received)
+	}
+	gotCommitted, err := repo.GetReportCommittedAt(ctx, "attempt-ts")
+	if err != nil {
+		t.Fatalf("GetReportCommittedAt: %v", err)
+	}
+	if !gotCommitted.Equal(committed) {
+		t.Fatalf("committed_at = %v, want %v", gotCommitted, committed)
+	}
+	// Both stamps are Master-local: subtracting them is safe and yields the
+	// 200ms Master receive→commit window (the worker clock is not involved).
+	if lag := gotCommitted.Sub(gotReceived); lag != 200*time.Millisecond {
+		t.Fatalf("receive→commit lag = %v, want 200ms", lag)
+	}
+
+	// Missing row → zero time, no error.
+	missingReceived, err := repo.GetReportReceivedAt(ctx, "attempt-missing")
+	if err != nil || !missingReceived.IsZero() {
+		t.Fatalf("missing received_at = %v, err=%v; want zero/nil", missingReceived, err)
+	}
+	missingCommitted, err := repo.GetReportCommittedAt(ctx, "attempt-missing")
+	if err != nil || !missingCommitted.IsZero() {
+		t.Fatalf("missing committed_at = %v, err=%v; want zero/nil", missingCommitted, err)
+	}
 }
 
 func TestPersistPhaseTimingsDetailed_UsesCanonicalIdentity(t *testing.T) {

@@ -3,6 +3,7 @@ package observability
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"velox-server/internal/audittrail"
 	"velox-server/internal/jobs"
@@ -28,6 +29,16 @@ type AttemptReader interface {
 
 type AttemptReportReader interface {
 	GetRawReportJSON(ctx context.Context, attemptID string) (string, error)
+	// GetReportReceivedAt returns the Master-local receive timestamp of the
+	// attempt's raw report (task_attempt_reports.received_at). Zero time when no
+	// report row exists. It drives the result_ingest diagnostic: the Master
+	// receive→commit window, contrasted with the worker's result.sent elapsed.
+	GetReportReceivedAt(ctx context.Context, attemptID string) (time.Time, error)
+	// GetReportCommittedAt returns the Master-local commit timestamp of the
+	// attempt's raw report (task_attempt_reports.persisted_at). Both timestamps
+	// are Master-local, so receive→commit lag is safe to compute; the worker
+	// clock is never subtracted from the Master clock.
+	GetReportCommittedAt(ctx context.Context, attemptID string) (time.Time, error)
 }
 
 // SegmentReader is optional so deployments with older schemas continue to

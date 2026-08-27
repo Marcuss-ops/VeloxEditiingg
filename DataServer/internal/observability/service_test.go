@@ -2,6 +2,8 @@ package observability
 
 import (
 	"context"
+	"time"
+
 	"velox-server/internal/jobs"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
@@ -44,6 +46,8 @@ type stubAttemptReader struct {
 	phaseTimings map[string][]taskattempts.PhaseTiming
 	metrics      map[string]*taskattempts.AttemptMetrics
 	cacheStats   map[string]*taskattempts.AttemptCacheStats
+	rawReports   map[string]string
+	reportTimes  map[string]struct{ received, committed time.Time }
 	listErr      error
 	phaseErr     error
 	cacheErr     error
@@ -81,6 +85,20 @@ func (s *stubAttemptReader) GetCacheStats(_ context.Context, attemptID string) (
 	}
 	return s.cacheStats[attemptID], nil
 }
+
+func (s *stubAttemptReader) GetRawReportJSON(_ context.Context, attemptID string) (string, error) {
+	return s.rawReports[attemptID], nil
+}
+
+func (s *stubAttemptReader) GetReportReceivedAt(_ context.Context, attemptID string) (time.Time, error) {
+	return s.reportTimes[attemptID].received, nil
+}
+
+func (s *stubAttemptReader) GetReportCommittedAt(_ context.Context, attemptID string) (time.Time, error) {
+	return s.reportTimes[attemptID].committed, nil
+}
+
+var _ AttemptReportReader = (*stubAttemptReader)(nil)
 
 type stubJobReader struct {
 	counts jobs.Counts

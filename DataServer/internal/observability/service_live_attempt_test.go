@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	sharedtelemetry "velox-shared/telemetry"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
+	sharedtelemetry "velox-shared/telemetry"
 )
 
 func TestApplyLiveAttemptOverlayPreservesDurableFields(t *testing.T) {
@@ -34,6 +34,7 @@ func TestApplyLiveAttemptOverlayPreservesDurableFields(t *testing.T) {
 		t.Fatalf("overlay did not apply volatile progress: %#v", target)
 	}
 }
+
 // TestService_SummarizeTaskLiveOverlayIncludesAttemptMilestones locks STEP A
 // end-to-end on the read side: the live worker_task_runtime overlay must
 // surface the worker's milestone timeline (attempt_milestones) inside the
@@ -226,6 +227,61 @@ func TestService_SummarizeJobLiveAttemptIdentityIsImmediateAndUnique(t *testing.
 		t.Fatalf("canonical live Attempt = %#v; worker_id, attempt_id and started_at must be immediate and non-empty", live)
 	}
 }
+
+// TestService_SummarizeTaskExposesMasterReportTimestamps locks the
+// Master-received_at/committed_at followup: the summary must expose the
+// Master-local report timestamps (task_attempt_reports received_at +
+// persisted_at) so the result_ingest diagnostic separates transport/heartbeat
+// delay from worker runtime. Both stamps come from the Master clock; the
+// worker's UTC clock is never subtracted from them.
+func TestService_SummarizeTaskExposesMasterReportTimestamps(t *testing.T) {
+	svc, tasks, attempts, _, _ := newTestService()
+	started := time.Date(2026, 8, 26, 10, 0, 0, 0, time.UTC)
+	completed := started.Add(328*time.Second + 41*time.Millisecond)
+	tasks.tasks["T-master-ts"] = &taskgraph.Task{
+		ID: "T-master-ts", JobID: "J-master-ts", Status: taskgraph.StatusSucceeded, AttemptCount: 1,
+	}
+	attempts.attempts["T-master-ts"] = []taskattempts.TaskAttempt{{
+		ID: "A-master-ts", TaskID: "T-master-ts", JobID: "J-master-ts", AttemptNumber: 1,
+		WorkerID: "worker-ts", Status: taskattempts.AttemptStatusSucceeded,
+		StartedAt: &started, CompletedAt: &completed,
+	}}
+	attempts.rawReports = map[string]string{"A-master-ts": realisticAttemptReportJSON}
+	attempts.reportTimes = map[string]struct{ received, committed time.Time }{
+		"A-master-ts": {
+			received:  started.Add(328*time.Second + 500*time.Millisecond),
+			committed: started.Add(328*time.Second + 700*time.Millisecond),
+		},
+	}
+
+	result, err := svc.SummarizeTask(context.Background(), "T-master-ts")
+	if err != nil {
+		t.Fatalf("SummarizeTask() error: %v", err)
+	}
+	if len(result.Attempts) != 1 {
+		t.Fatalf("attempts = %#v, want one", result.Attempts)
+	}
+	got := result.Attempts[0]
+	if got.MasterReceivedAt == "" || got.MasterCommittedAt == "" {
+		t.Fatalf("master timestamps not exposed: received=%q committed=%q", got.MasterReceivedAt, got.MasterCommittedAt)
+	}
+	received, err := time.Parse(time.RFC3339Nano, got.MasterReceivedAt)
+	if err != nil {
+		t.Fatalf("master_received_at parse: %v", err)
+	}
+	committed, err := time.Parse(time.RFC3339Nano, got.MasterCommittedAt)
+	if err != nil {
+		t.Fatalf("master_committed_at parse: %v", err)
+	}
+	// The receive→commit window is Master-local (both stamps from the Master
+	// clock), so the 200ms lag is safe to compute; the worker clock is never
+	// involved in the subtraction.
+	lag := committed.Sub(received)
+	if lag != 200*time.Millisecond {
+		t.Fatalf("receive→commit lag = %v, want 200ms", lag)
+	}
+}
+
 func TestService_SummarizeTaskDropsOlderLiveAttemptAfterRetry(t *testing.T) {
 	svc, tasks, attempts, _, _ := newTestService()
 	tasks.tasks["T-retry-live"] = &taskgraph.Task{

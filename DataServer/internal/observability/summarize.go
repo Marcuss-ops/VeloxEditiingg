@@ -111,6 +111,24 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 			if hasLifecycleDuration {
 				as.AttemptWaterfall = decodeAttemptWaterfall(raw, a.ID, lifecycleDuration)
 			}
+			// Master-local report timestamps for the result_ingest diagnostic.
+			// Both come from the Master clock (received_at / persisted_at), so
+			// receive→commit lag is computed locally; the worker clock is never
+			// subtracted from these. Zero time (no report row) leaves them empty.
+			received, receivedErr := reports.GetReportReceivedAt(ctx, a.ID)
+			if receivedErr != nil {
+				return nil, fmt.Errorf("observability summarize report received_at for attempt %s: %w", a.ID, receivedErr)
+			}
+			committed, committedErr := reports.GetReportCommittedAt(ctx, a.ID)
+			if committedErr != nil {
+				return nil, fmt.Errorf("observability summarize report committed_at for attempt %s: %w", a.ID, committedErr)
+			}
+			if !received.IsZero() {
+				as.MasterReceivedAt = received.UTC().Format(time.RFC3339Nano)
+			}
+			if !committed.IsZero() {
+				as.MasterCommittedAt = committed.UTC().Format(time.RFC3339Nano)
+			}
 		}
 
 		// Metrics
