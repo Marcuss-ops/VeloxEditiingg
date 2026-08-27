@@ -9,7 +9,9 @@ namespace velox::media::packet {
 namespace {
 
 bool fill(PendingPacket& pending, AVPacket& scratch, const CursorSegment& segment,
-          TimestampState& state, AVPacket* lastVideo, bool* haveLast, std::string& error) {
+          TimestampState& state, AVPacket* lastVideo, bool* haveLast,
+          PacketRewriteDecision* decision, std::string& error) {
+    *decision = PacketRewriteDecision::BeforeWindow;
     pending.reset();
     const AVStream* input = segment.session->demuxer().stream(segment.stream_index);
     if (input == nullptr) {
@@ -18,9 +20,12 @@ bool fill(PendingPacket& pending, AVPacket& scratch, const CursorSegment& segmen
     }
     const int64_t sourceStart = validTimestamp(input->start_time) ? input->start_time : 0;
     int64_t sortDts = AV_NOPTS_VALUE;
-    if (!rewritePacket(scratch, input, segment.output_stream, sourceStart,
-                       segment.source_in_us, segment.timeline_offset_us,
-                       segment.duration_us, state, sortDts)) {
+    const PacketRewriteDecision rewrite_decision = rewritePacket(
+        scratch, input, segment.output_stream, sourceStart,
+        segment.source_in_us, segment.timeline_offset_us,
+        segment.duration_us, state, sortDts);
+    *decision = rewrite_decision;
+    if (rewrite_decision != PacketRewriteDecision::Accepted) {
         return false;
     }
     if (lastVideo != nullptr && haveLast != nullptr) {
@@ -54,15 +59,23 @@ bool VideoTimelineCursor::readCurrent(std::string& error) {
     while (segment_index_ < segments_.size()) {
         auto& segment = segments_[segment_index_];
         bool eof = false;
-        while (!eof) {
+        bool after_window = false;
+        while (!eof && !after_window) {
             if (!segment.session->demuxer().readFrame(scratch_, eof, error)) return false;
             if (eof) break;
             if (scratch_.stream_index != segment.stream_index) {
                 av_packet_unref(&scratch_);
                 continue;
             }
-            if (fill(pending_, scratch_, segment, state_, &last_video_packet_, &have_last_video_packet_, error)) return true;
+            PacketRewriteDecision decision = PacketRewriteDecision::BeforeWindow;
+            if (fill(pending_, scratch_, segment, state_, &last_video_packet_, &have_last_video_packet_, &decision, error)) return true;
             av_packet_unref(&scratch_);
+            // B-frame-safe early stop: both clocks past the window end means
+            // no later packet can present inside it, so stop demuxing this
+            // segment instead of scanning to EOF.
+            if (decision == PacketRewriteDecision::AfterWindow) {
+                after_window = true;
+            }
         }
         ++segment_index_;
         if (segment_index_ < segments_.size() && !loadNextSegment(error)) return false;
@@ -95,15 +108,22 @@ bool AudioTimelineCursor::readCurrent(std::string& error) {
     while (segment_index_ < segments_.size()) {
         auto& segment = segments_[segment_index_];
         bool eof = false;
-        while (!eof) {
+        bool after_window = false;
+        while (!eof && !after_window) {
             if (!segment.session->demuxer().readFrame(scratch_, eof, error)) return false;
             if (eof) break;
             if (scratch_.stream_index != segment.stream_index) {
                 av_packet_unref(&scratch_);
                 continue;
             }
-            if (fill(pending_, scratch_, segment, state_, nullptr, nullptr, error)) return true;
+            PacketRewriteDecision decision = PacketRewriteDecision::BeforeWindow;
+            if (fill(pending_, scratch_, segment, state_, nullptr, nullptr, &decision, error)) return true;
             av_packet_unref(&scratch_);
+            // Audio has no decode/presentation reorder (pts == dts), so the
+            // first packet past the window on both clocks ends the segment.
+            if (decision == PacketRewriteDecision::AfterWindow) {
+                after_window = true;
+            }
         }
         ++segment_index_;
         if (segment_index_ < segments_.size() && !loadNextSegment(error)) return false;

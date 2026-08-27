@@ -15,25 +15,39 @@ namespace fs = std::filesystem;
 
 namespace velox::media::packet {
 
-bool rewritePacket(AVPacket& packet,
-                   const AVStream* input_stream,
-                   const AVStream* output_stream,
-                   int64_t source_start,
-                   int64_t source_in_us,
-                   int64_t timeline_offset,
-                   int64_t segment_duration,
-                   TimestampState& state,
-                   int64_t& sort_dts) {
-    const int64_t reference = validTimestamp(packet.pts) ? packet.pts : packet.dts;
-    int64_t relative_reference = relativeTimestamp(
-        reference, source_start, input_stream->time_base);
-    if (validTimestamp(relative_reference)) {
-        relative_reference -= source_in_us;
-    }
-    if (!validTimestamp(relative_reference) ||
-        (source_in_us > 0 && relative_reference < 0) ||
-        relative_reference >= segment_duration) {
-        return false;
+PacketRewriteDecision rewritePacket(AVPacket& packet,
+                                     const AVStream* input_stream,
+                                     const AVStream* output_stream,
+                                     int64_t source_start,
+                                     int64_t source_in_us,
+                                     int64_t timeline_offset,
+                                     int64_t segment_duration,
+                                     TimestampState& state,
+                                     int64_t& sort_dts) {
+    // Relative (source-window) references for both clocks. The decision is
+    // classified on the pre-rewrite values so a rejected packet stays
+    // untouched.
+    const int64_t relative_pts = validTimestamp(packet.pts)
+        ? relativeTimestamp(packet.pts, source_start, input_stream->time_base) - source_in_us
+        : AV_NOPTS_VALUE;
+    const int64_t relative_dts = validTimestamp(packet.dts)
+        ? relativeTimestamp(packet.dts, source_start, input_stream->time_base) - source_in_us
+        : AV_NOPTS_VALUE;
+
+    const int64_t reference = validTimestamp(relative_pts) ? relative_pts : relative_dts;
+    if (!validTimestamp(reference) ||
+        (source_in_us > 0 && reference < 0) ||
+        reference >= segment_duration) {
+        // B-frame safe AfterWindow: only when BOTH clocks are past the
+        // window end can no later packet present inside it. A packet with
+        // pts past the end but dts inside is an anchor/B-frame interleave
+        // that later packets still depend on, so it keeps the demux
+        // scanning.
+        if (validTimestamp(relative_pts) && validTimestamp(relative_dts) &&
+            relative_pts >= segment_duration && relative_dts >= segment_duration) {
+            return PacketRewriteDecision::AfterWindow;
+        }
+        return PacketRewriteDecision::BeforeWindow;
     }
 
     packet.pts = relativeTimestamp(packet.pts, source_start, input_stream->time_base);
@@ -55,7 +69,11 @@ bool rewritePacket(AVPacket& packet,
     const int64_t end = timeline_offset + segment_duration;
     const int64_t packet_timestamp = validTimestamp(packet.pts) ? packet.pts : packet.dts;
     if (!validTimestamp(packet_timestamp) || packet_timestamp >= end) {
-        return false;
+        if (validTimestamp(packet.pts) && validTimestamp(packet.dts) &&
+            packet.pts >= end && packet.dts >= end) {
+            return PacketRewriteDecision::AfterWindow;
+        }
+        return PacketRewriteDecision::BeforeWindow;
     }
     if (packet.duration > 0 && packet_timestamp + packet.duration > end) {
         packet.duration = end - packet_timestamp;
@@ -79,7 +97,7 @@ bool rewritePacket(AVPacket& packet,
     }
     packet.stream_index = output_stream->index;
     sort_dts = validTimestamp(packet.dts) ? packet.dts : packet.pts;
-    return true;
+    return PacketRewriteDecision::Accepted;
 }
 
 } // namespace velox::media::packet

@@ -152,20 +152,40 @@ private:
 // clamps negative prefixes, enforces per-stream monotonic ordering and
 // clamps the last accepted packet's duration to the segment end.
 //
-// Returns true when the packet is accepted, mutating it in place and
-// advancing `state`; a packet outside the window is rejected WITHOUT
-// touching `state` (so a packet just past a segment boundary cannot move
-// the next segment's baseline). `sort_dts` receives the packet's rewrite
-// dts (or pts when dts is absent) for interleaved ordering.
-bool rewritePacket(AVPacket& packet,
-                   const AVStream* input_stream,
-                   const AVStream* output_stream,
-                   int64_t source_start,
-                   int64_t source_in_us,
-                   int64_t timeline_offset,
-                   int64_t segment_duration,
-                   TimestampState& state,
-                   int64_t& sort_dts);
+// Window classification for rewritePacket. The decision lets the demux
+// stop reading a source window as soon as no later packet can land inside
+// it, instead of scanning to EOF.
+enum class PacketRewriteDecision {
+    // Packet precedes the window (or cannot be placed): keep reading.
+    BeforeWindow,
+    // Packet is inside the window and was accepted (mutated in place).
+    Accepted,
+    // Packet is past the window on BOTH clocks (decode dts AND
+    // presentation pts). B-frame safety: pts-only or dts-only progress is
+    // never enough, because in decode order a B-frame can present inside
+    // the window while decoding past it (dts >= end, pts < end) or arrive
+    // before the anchor that presents past it (pts >= end, dts < end).
+    // Once both clocks are past the end, every later packet has dts >= end
+    // and pts >= its anchor >= end, so the demux may stop.
+    AfterWindow,
+};
+
+// Rewrites one packet to the common microsecond timeline and returns its
+// window classification. An Accepted packet is mutated in place and
+// advances `state`; a rejected packet (BeforeWindow/AfterWindow) is NOT
+// mutated and does NOT touch `state` (so a packet just past a segment
+// boundary cannot move the next segment's baseline). `sort_dts` receives
+// the accepted packet's rewrite dts (or pts when dts is absent) for
+// interleaved ordering.
+PacketRewriteDecision rewritePacket(AVPacket& packet,
+                                    const AVStream* input_stream,
+                                    const AVStream* output_stream,
+                                    int64_t source_start,
+                                    int64_t source_in_us,
+                                    int64_t timeline_offset,
+                                    int64_t segment_duration,
+                                    TimestampState& state,
+                                    int64_t& sort_dts);
 
 // Streams one rewritten source window into a reusable packet slot. The
 // callback is invoked immediately for each accepted packet.

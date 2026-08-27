@@ -91,7 +91,8 @@ void testRewriteSourceStartRemoval() {
     const int64_t duration = 10'000'000;
     expect(velox::media::packet::rewritePacket(
                pkt, h.input_stream, h.output_stream, h.input_stream->start_time,
-               0, offset, duration, state, sort),
+               0, offset, duration, state, sort) ==
+               velox::media::packet::PacketRewriteDecision::Accepted,
            "packet inside the window is accepted");
     expect(pkt.pts == 6'000'000,
            "pts is (1.5s - 0.5s) + 5s = 6s in microseconds (actual " + std::to_string(pkt.pts) + ")");
@@ -111,9 +112,10 @@ void testRewriteBoundaryExclusion() {
     pkt.pts = 10'000;  // 10 s relative = exactly the segment end
     pkt.dts = 10'000;
     int64_t sort = AV_NOPTS_VALUE;
-    expect(!velox::media::packet::rewritePacket(
-               pkt, h.input_stream, h.output_stream, 0, 0, 0, 10'000'000, state, sort),
-           "packet exactly at the trim boundary is rejected");
+    expect(velox::media::packet::rewritePacket(
+               pkt, h.input_stream, h.output_stream, 0, 0, 0, 10'000'000, state, sort) ==
+               velox::media::packet::PacketRewriteDecision::AfterWindow,
+           "packet exactly at the trim boundary is AfterWindow on both clocks");
     expect(state.last_pts == AV_NOPTS_VALUE && state.last_dts == AV_NOPTS_VALUE,
            "rejected packet does not advance the monotonic state");
 }
@@ -126,7 +128,8 @@ void testRewriteNegativePrefixClamp() {
     pkt.dts = -200;
     int64_t sort = AV_NOPTS_VALUE;
     expect(velox::media::packet::rewritePacket(
-               pkt, h.input_stream, h.output_stream, 0, 0, 0, 10'000'000, state, sort),
+               pkt, h.input_stream, h.output_stream, 0, 0, 0, 10'000'000, state, sort) ==
+               velox::media::packet::PacketRewriteDecision::Accepted,
            "negative-prefix packet inside the window is accepted");
     expect(pkt.pts == 0 && pkt.dts == 0,
            "negative timestamps are clamped to the timeline origin");
@@ -140,7 +143,8 @@ void testRewriteBFrameOrdering() {
     pkt.dts = 3500;
     int64_t sort = AV_NOPTS_VALUE;
     expect(velox::media::packet::rewritePacket(
-               pkt, h.input_stream, h.output_stream, 0, 0, 0, 10'000'000, state, sort),
+               pkt, h.input_stream, h.output_stream, 0, 0, 0, 10'000'000, state, sort) ==
+               velox::media::packet::PacketRewriteDecision::Accepted,
            "reordered packet inside the window is accepted");
     expect(pkt.pts == 3'500'000 && pkt.dts == 3'500'000,
            "pts below dts is clamped to dts (B-frame ordering preserved for the muxer)");
@@ -154,14 +158,16 @@ void testRewriteMonotonicDuplicates() {
     first.dts = 1000;
     int64_t firstSort = AV_NOPTS_VALUE;
     expect(velox::media::packet::rewritePacket(
-               first, h.input_stream, h.output_stream, 0, 0, 0, 10'000'000, state, firstSort),
+               first, h.input_stream, h.output_stream, 0, 0, 0, 10'000'000, state, firstSort) ==
+               velox::media::packet::PacketRewriteDecision::Accepted,
            "first packet is accepted");
     AVPacket duplicate{};
     duplicate.pts = 1000;  // same dts/pts as the accepted packet
     duplicate.dts = 1000;
     int64_t duplicateSort = AV_NOPTS_VALUE;
     expect(velox::media::packet::rewritePacket(
-               duplicate, h.input_stream, h.output_stream, 0, 0, 0, 10'000'000, state, duplicateSort),
+               duplicate, h.input_stream, h.output_stream, 0, 0, 0, 10'000'000, state, duplicateSort) ==
+               velox::media::packet::PacketRewriteDecision::Accepted,
            "duplicate-timestamp packet is accepted");
     expect(duplicate.pts == 1'000'001 && duplicate.dts == 1'000'001,
            "duplicate timestamps are bumped to keep the stream strictly monotonic");
@@ -176,7 +182,8 @@ void testRewriteDurationClampAtEnd() {
     pkt.duration = 200;  // 200 ms would cross the 10 s end
     int64_t sort = AV_NOPTS_VALUE;
     expect(velox::media::packet::rewritePacket(
-               pkt, h.input_stream, h.output_stream, 0, 0, 0, 10'000'000, state, sort),
+               pkt, h.input_stream, h.output_stream, 0, 0, 0, 10'000'000, state, sort) ==
+               velox::media::packet::PacketRewriteDecision::Accepted,
            "packet crossing the end is accepted with a clamped duration");
     expect(pkt.pts == 9'990'000 && pkt.duration == 10'000,
            "last packet duration is clamped to the segment end (actual duration " +
@@ -193,7 +200,8 @@ void testRewriteTimelineOffsetAccumulation() {
     const int64_t secondOffset = 800'000;  // segments are 0.8 s each
     expect(velox::media::packet::rewritePacket(
                segmentTwo, h.input_stream, h.output_stream, 0, 0,
-               secondOffset, 800'000, state, sort),
+               secondOffset, 800'000, state, sort) ==
+               velox::media::packet::PacketRewriteDecision::Accepted,
            "second-segment packet inside its window is accepted");
     expect(segmentTwo.pts == 1'000'000,
            "second-segment packet lands at 0.8s + 0.2s = 1s on the shared timeline");
@@ -209,7 +217,8 @@ void testRewriteMissingTimestamps() {
     int64_t ptsOnlySort = AV_NOPTS_VALUE;
     expect(velox::media::packet::rewritePacket(
                ptsOnly, h.input_stream, h.output_stream, 0, 0, 0,
-               10'000'000, state, ptsOnlySort),
+               10'000'000, state, ptsOnlySort) ==
+               velox::media::packet::PacketRewriteDecision::Accepted,
            "pts-only packet uses pts as its trim reference");
     expect(ptsOnly.pts == 250'000 && ptsOnly.dts == AV_NOPTS_VALUE,
            "pts-only packet preserves missing dts and rescales pts");
@@ -224,7 +233,8 @@ void testRewriteMissingTimestamps() {
     int64_t sort = AV_NOPTS_VALUE;
     expect(velox::media::packet::rewritePacket(
                dtsOnly, h.input_stream, h.output_stream, 0, 0, 0,
-               10'000'000, state, sort),
+               10'000'000, state, sort) ==
+               velox::media::packet::PacketRewriteDecision::Accepted,
            "dts-only packet uses dts as its trim reference");
     expect(dtsOnly.pts == AV_NOPTS_VALUE && dtsOnly.dts == 500'000,
            "dts-only packet preserves missing pts and rescales dts");
@@ -234,10 +244,11 @@ void testRewriteMissingTimestamps() {
     noTimestamp.pts = AV_NOPTS_VALUE;
     noTimestamp.dts = AV_NOPTS_VALUE;
     int64_t noTimestampSort = AV_NOPTS_VALUE;
-    expect(!velox::media::packet::rewritePacket(
+    expect(velox::media::packet::rewritePacket(
                noTimestamp, h.input_stream, h.output_stream, 0, 0, 0,
-               10'000'000, state, noTimestampSort),
-           "packet without pts and dts is rejected");
+               10'000'000, state, noTimestampSort) ==
+               velox::media::packet::PacketRewriteDecision::BeforeWindow,
+           "packet without pts and dts is rejected as BeforeWindow");
 }
 
 void testRewriteCombinedSourceAndTimelineOffsets() {
@@ -249,7 +260,8 @@ void testRewriteCombinedSourceAndTimelineOffsets() {
     int64_t sort = AV_NOPTS_VALUE;
     expect(velox::media::packet::rewritePacket(
                packet, h.input_stream, h.output_stream, 500, 300'000,
-               2'000'000, 1'000'000, state, sort),
+               2'000'000, 1'000'000, state, sort) ==
+               velox::media::packet::PacketRewriteDecision::Accepted,
            "packet with source and timeline offsets is accepted");
     expect(packet.pts == 2'900'000 && packet.dts == 2'800'000,
            "source start and trim are removed before timeline offset is added");
@@ -260,10 +272,11 @@ void testRewriteCombinedSourceAndTimelineOffsets() {
     outside.pts = 700;
     outside.dts = 700;
     int64_t outsideSort = AV_NOPTS_VALUE;
-    expect(!velox::media::packet::rewritePacket(
+    expect(velox::media::packet::rewritePacket(
                outside, h.input_stream, h.output_stream, 500, 300'000,
-               2'000'000, 1'000'000, state, outsideSort),
-           "packet before the trimmed source window is rejected");
+               2'000'000, 1'000'000, state, outsideSort) ==
+               velox::media::packet::PacketRewriteDecision::BeforeWindow,
+           "packet before the trimmed source window is rejected as BeforeWindow");
     expect(outsideSort == AV_NOPTS_VALUE,
            "rejected offset packet does not receive a sort key");
 }
@@ -275,12 +288,90 @@ void testRewriteSourceWindowBeforeStart() {
     beforeWindow.pts = 100;
     beforeWindow.dts = 100;
     int64_t sort = AV_NOPTS_VALUE;
-    expect(!velox::media::packet::rewritePacket(
+    expect(velox::media::packet::rewritePacket(
                beforeWindow, h.input_stream, h.output_stream, 0,
-               200'000, 0, 800'000, state, sort),
-           "packet before a positive source window is rejected");
+               200'000, 0, 800'000, state, sort) ==
+               velox::media::packet::PacketRewriteDecision::BeforeWindow,
+           "packet before a positive source window is rejected as BeforeWindow");
     expect(state.last_pts == AV_NOPTS_VALUE && state.last_dts == AV_NOPTS_VALUE,
            "packet before a source window does not update monotonic state");
+}
+
+// rewritePacket window classification: AfterWindow must fire ONLY when both
+// the decode (dts) and presentation (pts) clocks are past the window end,
+// so the demux can stop without dropping B-frame interleaves.
+void testRewriteDecisionClassification() {
+    RewriteHarness h;
+    velox::media::packet::TimestampState state;
+
+    // Both clocks past the window end -> the demux may stop.
+    AVPacket past{};
+    past.pts = 12'000;
+    past.dts = 12'000;
+    int64_t pastSort = AV_NOPTS_VALUE;
+    expect(velox::media::packet::rewritePacket(
+               past, h.input_stream, h.output_stream, 0, 0, 0,
+               10'000'000, state, pastSort) ==
+               velox::media::packet::PacketRewriteDecision::AfterWindow,
+           "packet past the window on both clocks is AfterWindow");
+    expect(state.last_pts == AV_NOPTS_VALUE && state.last_dts == AV_NOPTS_VALUE,
+           "AfterWindow packet does not advance the monotonic state");
+
+    // B-frame safety (anchor): presenting past the window (PTS >= end) while
+    // decoding inside it (DTS < end). In decode order the B-frames that
+    // present inside the window come AFTER this anchor, so the demux must
+    // keep scanning: never AfterWindow on pts alone.
+    AVPacket anchorPast{};
+    anchorPast.pts = 3'000;
+    anchorPast.dts = 1'000;
+    int64_t anchorSort = AV_NOPTS_VALUE;
+    expect(velox::media::packet::rewritePacket(
+               anchorPast, h.input_stream, h.output_stream, 0, 0, 0,
+               3'000'000, state, anchorSort) ==
+               velox::media::packet::PacketRewriteDecision::BeforeWindow,
+           "anchor past on pts but inside on dts stays BeforeWindow");
+
+    // B-frame fully inside the window on both clocks is accepted (the
+    // pts<dts clamp raises pts to the decode clock, still inside).
+    AVPacket bframeInside{};
+    bframeInside.pts = 1'000;
+    bframeInside.dts = 2'000;
+    int64_t bframeSort = AV_NOPTS_VALUE;
+    expect(velox::media::packet::rewritePacket(
+               bframeInside, h.input_stream, h.output_stream, 0, 0, 0,
+               3'000'000, state, bframeSort) ==
+               velox::media::packet::PacketRewriteDecision::Accepted,
+           "B-frame inside on both clocks is accepted");
+    expect(state.last_dts == 2'000'000 && state.last_pts == 2'000'000,
+           "accepted B-frame advances the monotonic state to its clamped dts");
+
+    // Trailing B-frame whose dts reaches the window end: the existing
+    // pts<dts clamp raises pts to the end, so the packet is dropped and
+    // classified AfterWindow — safe to stop because every later packet
+    // presents at or past the end.
+    AVPacket bframeTrailing{};
+    bframeTrailing.pts = 2'000;
+    bframeTrailing.dts = 3'000;
+    int64_t trailingSort = AV_NOPTS_VALUE;
+    expect(velox::media::packet::rewritePacket(
+               bframeTrailing, h.input_stream, h.output_stream, 0, 0, 0,
+               3'000'000, state, trailingSort) ==
+               velox::media::packet::PacketRewriteDecision::AfterWindow,
+           "trailing B-frame clamped to the window end is AfterWindow");
+    expect(state.last_dts == 2'000'000,
+           "AfterWindow rejection does not advance the monotonic state");
+
+    // A pts-only packet past the window cannot prove the decode clock is
+    // past it, so it stays BeforeWindow (conservative, keeps scanning).
+    AVPacket ptsOnlyPast{};
+    ptsOnlyPast.pts = 4'000;
+    ptsOnlyPast.dts = AV_NOPTS_VALUE;
+    int64_t ptsOnlySort = AV_NOPTS_VALUE;
+    expect(velox::media::packet::rewritePacket(
+               ptsOnlyPast, h.input_stream, h.output_stream, 0, 0, 0,
+               3'000'000, state, ptsOnlySort) ==
+               velox::media::packet::PacketRewriteDecision::BeforeWindow,
+           "pts-only packet past the window stays BeforeWindow");
 }
 
 // ── Demuxer + streaming reader against a real fixture ────────────────────
@@ -423,6 +514,7 @@ int main() {
     testRewriteMissingTimestamps();
     testRewriteCombinedSourceAndTimelineOffsets();
     testRewriteSourceWindowBeforeStart();
+    testRewriteDecisionClassification();
 
     const fs::path fixture = root / "fixture.mp4";
     expect(makeMuxedVideo(fixture), "muxed video/audio fixture can be created");

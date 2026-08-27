@@ -48,7 +48,8 @@ bool streamAndRewrite(Demuxer& input,
     AVPacket last_video_packet{};
     bool have_last_video_packet = false;
     bool eof = false;
-    while (!eof) {
+    bool after_window = false;
+    while (!eof && !after_window) {
         std::string read_error;
         if (!input.readFrame(scratch, eof, read_error)) {
             error = "av_read_frame(" + path.string() + "): " + read_error;
@@ -58,8 +59,12 @@ bool streamAndRewrite(Demuxer& input,
         if (eof) break;
         if (scratch.stream_index == input_stream_index) {
             int64_t sort_dts = AV_NOPTS_VALUE;
-            if (rewritePacket(scratch, input_stream, output_stream, source_start,
-                              source_in_us, timeline_offset, duration_us, state, sort_dts)) {
+            const PacketRewriteDecision decision = rewritePacket(
+                scratch, input_stream, output_stream, source_start,
+                source_in_us, timeline_offset, duration_us, state, sort_dts);
+            if (decision == PacketRewriteDecision::AfterWindow) {
+                after_window = true;
+            } else if (decision == PacketRewriteDecision::Accepted) {
                 if (extend_video_tail && type == AVMEDIA_TYPE_VIDEO) {
                     av_packet_unref(&last_video_packet);
                     if (av_packet_ref(&last_video_packet, &scratch) < 0) {
@@ -85,7 +90,11 @@ bool streamAndRewrite(Demuxer& input,
         av_packet_unref(&scratch);
     }
 
-    if (extend_video_tail && type == AVMEDIA_TYPE_VIDEO && have_last_video_packet) {
+    // Tail extension only applies when the SOURCE ends before the window;
+    // an AfterWindow stop means the source actually continues past it, so
+    // freezing the last frame would duplicate packets that exist upstream.
+    if (extend_video_tail && type == AVMEDIA_TYPE_VIDEO && have_last_video_packet &&
+        !after_window) {
         const int64_t timeline_end = timeline_offset + duration_us;
         AVRational frame_rate = input_stream->avg_frame_rate;
         if (frame_rate.num <= 0 || frame_rate.den <= 0) frame_rate = input_stream->r_frame_rate;
