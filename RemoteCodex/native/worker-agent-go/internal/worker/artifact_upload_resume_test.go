@@ -31,6 +31,8 @@ type resumeUploadTransport struct {
 
 func (t *resumeUploadTransport) ID() string { return "resume-test.v1" }
 
+func (t *resumeUploadTransport) Capabilities() publisher.CapabilitySet { return nil }
+
 func (t *resumeUploadTransport) Upload(_ context.Context, req publisher.UploadRequest) (*publisher.UploadResult, error) {
 	t.calls++
 	if t.fail {

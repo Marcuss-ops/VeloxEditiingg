@@ -205,6 +205,8 @@ type protocolUploadTransport struct{}
 
 func (protocolUploadTransport) ID() string { return "protocol-test.v1" }
 
+func (protocolUploadTransport) Capabilities() publisher.CapabilitySet { return nil }
+
 func (protocolUploadTransport) Upload(context.Context, publisher.UploadRequest) (*publisher.UploadResult, error) {
 	return &publisher.UploadResult{UploadID: "upload-protocol-test", UploadedBytes: int64(len("rendered"))}, nil
 }

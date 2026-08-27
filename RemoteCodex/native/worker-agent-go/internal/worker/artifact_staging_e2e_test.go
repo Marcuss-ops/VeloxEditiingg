@@ -121,6 +121,8 @@ type recordingUploadTransport struct {
 
 func (t *recordingUploadTransport) ID() string { return "staging-e2e.v1" }
 
+func (t *recordingUploadTransport) Capabilities() publisher.CapabilitySet { return nil }
+
 func (t *recordingUploadTransport) Upload(_ context.Context, req publisher.UploadRequest) (*publisher.UploadResult, error) {
 	data, err := os.ReadFile(req.LocalPath)
 	if err != nil {

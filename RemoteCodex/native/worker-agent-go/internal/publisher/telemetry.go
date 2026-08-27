@@ -1,6 +1,9 @@
 package publisher
 
-import "time"
+import (
+	"sync"
+	"time"
+)
 
 // UploadBreakdown records the measured data-plane work for one artifact
 // upload. Durations are wall-clock milliseconds; bytes and counts are totals.
@@ -26,6 +29,7 @@ type UploadTelemetrySnapshot struct {
 }
 
 type uploadTelemetry struct {
+	mu         sync.Mutex
 	started    time.Time
 	bytes      int64
 	chunks     int64
@@ -34,23 +38,35 @@ type uploadTelemetry struct {
 }
 
 func (t *uploadTelemetry) ChunkCompleted(bytes int64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.bytes += bytes
 	t.chunks++
 }
 
-func (t *uploadTelemetry) Retry() { t.retries++ }
+func (t *uploadTelemetry) Retry() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.retries++
+}
 
 func (t *uploadTelemetry) FinalizeCompleted(duration time.Duration) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.finalizeMS = duration.Milliseconds()
 }
 
 func NewUploadTelemetry(started time.Time) UploadTelemetrySnapshot {
-	if started.IsZero() { started = time.Now() }
+	if started.IsZero() {
+		started = time.Now()
+	}
 	m := &uploadTelemetry{started: started}
 	return m.Snapshot()
 }
 
 func (t *uploadTelemetry) Snapshot() UploadTelemetrySnapshot {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	ms := time.Since(t.started).Milliseconds()
 	mbps := 0.0
 	if ms > 0 {

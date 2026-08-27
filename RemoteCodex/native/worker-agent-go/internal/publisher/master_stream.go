@@ -172,83 +172,7 @@ func (t *MasterStreamTransport) Upload(ctx context.Context, req UploadRequest) (
 	var errMu sync.Mutex
 	var uploadedMu sync.Mutex
 	uploaded := int64(0)
-	chunkIndex := 0
 	measurement := &uploadTelemetry{started: time.Now()}
-	buf := make([]byte, chunkSize)
-	for {
-		n, rerr := io.ReadFull(f, buf)
-		if n > 0 {
-			chunkURL := strings.TrimRight(req.Target.UploadURL, "/") +
-				"/" + strconv.Itoa(chunkIndex)
-			httpReq, err := http.NewRequestWithContext(ctx,
-				http.MethodPost, chunkURL, bytes.NewReader(buf[:n]))
-			if err != nil {
-				return nil, fmt.Errorf("master-stream: build chunk request: %w", err)
-			}
-			httpReq.Header.Set("Content-Type", "application/octet-stream")
-			httpReq.Header.Set("X-Upload-Id", req.Target.UploadID)
-			httpReq.Header.Set("X-Worker-SHA256", req.WorkerSHA256)
-			httpReq.Header.Set("X-Artifact-Commit-Token", req.CommitToken)
-			resp, err := client.Do(httpReq)
-			if err != nil {
-				return nil, fmt.Errorf("%w: master-stream chunk %d: %v",
-					ErrUploadFailed, chunkIndex, err)
-			}
-			_, _ = io.Copy(io.Discard, resp.Body)
-			resp.Body.Close()
-			if resp.StatusCode >= 400 {
-				return nil, fmt.Errorf("%w: master-stream chunk %d: HTTP %d",
-					ErrUploadFailed, chunkIndex, resp.StatusCode)
-			}
-			uploaded += int64(n)
-			measurement.ChunkCompleted(int64(n))
-			if req.Telemetry != nil {
-				req.Telemetry.ChunkCompleted(int64(n))
-			}
-			if req.Progress != nil {
-				req.Progress(uploaded)
-			}
-		}
-		if rerr == io.EOF || rerr == io.ErrUnexpectedEOF {
-			break
-		}
-		if rerr != nil {
-			return nil, fmt.Errorf("master-stream: read chunk %d: %w", chunkIndex, rerr)
-		}
-		chunkIndex++
-	}
-	finalizeStarted := time.Now()
-	completeURL := strings.TrimRight(req.Target.UploadURL, "/") + "/complete"
-	compReq, err := http.NewRequestWithContext(ctx, http.MethodPost, completeURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("master-stream: build complete request: %w", err)
-	}
-	compReq.Header.Set("X-Upload-Id", req.Target.UploadID)
-	compReq.Header.Set("X-Worker-SHA256", req.WorkerSHA256)
-	compReq.Header.Set("X-Artifact-Commit-Token", req.CommitToken)
-	resp, err := client.Do(compReq)
-	if err != nil {
-		return nil, fmt.Errorf("%w: master-stream complete: %v", ErrUploadFailed, err)
-	}
-	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("%w: master-stream complete: HTTP %d body=%s", ErrUploadFailed, resp.StatusCode, string(body))
-	}
-	measurement.FinalizeCompleted(time.Since(finalizeStarted))
-	if req.Telemetry != nil {
-		req.Telemetry.FinalizeCompleted(time.Since(finalizeStarted))
-	}
-	serverSHA := ""
-	if s := extractJSONString(body, `\"sha256\"`); s != "" && isLowerHex64(s) {
-		serverSHA = s
-	} else if s := extractJSONString(body, `\"output_sha256\"`); s != "" && isLowerHex64(s) {
-		serverSHA = s
-	}
-	if serverSHA != "" && serverSHA != req.WorkerSHA256 {
-		return nil, fmt.Errorf("%w: worker=%s server=%s", ErrChecksumMismatch, req.WorkerSHA256, serverSHA)
-	}
-	return &UploadResult{UploadID: req.Target.UploadID, UploadedBytes: uploaded, ServerSHA256: serverSHA, Breakdown: measurement.Snapshot().UploadBreakdown}, nil
 	workerCount := masterStreamConcurrency
 	if chunkCount < int64(workerCount) {
 		workerCount = int(chunkCount)
@@ -283,6 +207,10 @@ func (t *MasterStreamTransport) Upload(ctx context.Context, req UploadRequest) (
 		uploaded += length
 		current := uploaded
 		uploadedMu.Unlock()
+		measurement.ChunkCompleted(length)
+		if req.Telemetry != nil {
+			req.Telemetry.ChunkCompleted(length)
+		}
 		if req.Progress != nil {
 			req.Progress(current)
 		}
