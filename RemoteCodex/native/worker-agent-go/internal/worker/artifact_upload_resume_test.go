@@ -424,3 +424,265 @@ func TestResumeArtifactUpload_WorkerRestartPersistsSpoolAndCommits(t *testing.T)
 	}
 }
 
+// progressiveResumeUploadTransport is the publisher-transport double for the
+// progressive crash/restart test. It implements publisher.ProgressiveTransport:
+// ResumeProgressive returns a session that already considers the journaled
+// parts accepted, so the upload runner must skip them and send only the
+// missing parts over the wire.
+type progressiveResumeUploadTransport struct {
+	session *progressiveResumeTestSession
+}
+
+func (t *progressiveResumeUploadTransport) ID() string { return "progressive-resume-test.v1" }
+
+func (t *progressiveResumeUploadTransport) Capabilities() publisher.CapabilitySet {
+	return publisher.CapabilitySet{controltransport.CapabilityArtifactProgressiveUploadV1}
+}
+
+func (t *progressiveResumeUploadTransport) Upload(context.Context, publisher.UploadRequest) (*publisher.UploadResult, error) {
+	return nil, errors.New("progressive-resume-test: plain Upload is not used on the progressive path")
+}
+
+func (t *progressiveResumeUploadTransport) BeginProgressive(_ context.Context, req publisher.ProgressiveUploadRequest) (publisher.ProgressiveSession, error) {
+	t.session = &progressiveResumeTestSession{uploadID: req.Target.UploadID, parts: map[int]struct{}{}}
+	return t.session, nil
+}
+
+func (t *progressiveResumeUploadTransport) ResumeProgressive(_ context.Context, req publisher.ProgressiveUploadRequest, completed []int) (publisher.ProgressiveSession, error) {
+	s := &progressiveResumeTestSession{uploadID: req.Target.UploadID, parts: map[int]struct{}{}}
+	for _, n := range completed {
+		s.parts[n] = struct{}{}
+	}
+	t.session = s
+	return s, nil
+}
+
+// progressiveResumeTestSession records which part numbers were actually sent
+// through UploadPart (uploaded) versus merely known to the remote session
+// (parts — includes the resumed ones). Complete echoes the upload_id the
+// worker must report back in ArtifactUploadCompleted.
+type progressiveResumeTestSession struct {
+	uploadID  string
+	mu        sync.Mutex
+	parts     map[int]struct{}
+	uploaded  []int
+	completes int
+	aborts    int
+}
+
+func (s *progressiveResumeTestSession) UploadPart(_ context.Context, number int, r io.Reader, size int64) error {
+	b, err := io.ReadAll(r)
+	if err != nil {
+		return err
+	}
+	if int64(len(b)) != size {
+		return io.ErrUnexpectedEOF
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.parts[number] = struct{}{}
+	s.uploaded = append(s.uploaded, number)
+	return nil
+}
+
+func (s *progressiveResumeTestSession) Complete(_ context.Context, final publisher.FinalArtifactIdentity) (*publisher.UploadResult, error) {
+	s.mu.Lock()
+	s.completes++
+	s.mu.Unlock()
+	return &publisher.UploadResult{UploadID: s.uploadID, UploadedBytes: final.SizeBytes}, nil
+}
+
+func (s *progressiveResumeTestSession) Abort(context.Context) error {
+	s.mu.Lock()
+	s.aborts++
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *progressiveResumeTestSession) uploadedNumbers() []int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := append([]int(nil), s.uploaded...)
+	sort.Ints(out)
+	return out
+}
+
+func (s *progressiveResumeTestSession) hasPart(number int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.parts[number]
+	return ok
+}
+
+// seedProgressiveResumeRow drives one row into UPLOADING with a persisted
+// progressive-capable upload target (upload_id + chunk_size) and spills it to
+// the durable path, mirroring seedResumeRow with a size that matches the real
+// payload (the progressive COMPLETE boundary counts bytes, so the spool size
+// must equal the on-disk file length).
+func seedProgressiveResumeRow(t *testing.T, store *spool.Store, durablePath string, payload []byte) *spool.SpoolEntry {
+	t.Helper()
+	ctx := context.Background()
+	entry, err := store.Insert(ctx, spool.SpoolEntry{
+		TaskID: "task-resume", AttemptID: "attempt-resume", WorkerSpoolKey: "task-resume:output:0",
+		LocalPath:   "/tmp/volatile/render.mp4",
+		Status:      spool.StatusRendering,
+		StorageTier: spool.StorageTierTmpfsVolatile,
+	})
+	if err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	if err := store.MarkReady(ctx, entry.SpoolID, strings.Repeat("a", 64), int64(len(payload))); err != nil {
+		t.Fatalf("MarkReady: %v", err)
+	}
+	targetJSON, err := json.Marshal(publisher.UploadTarget{
+		DeclarationID: "decl-resume", ArtifactID: "artifact-resume", UploadID: "up-resume",
+		TransportID: "progressive-resume-test.v1", UploadURL: "http://master.test/upload", ChunkSize: 4,
+	})
+	if err != nil {
+		t.Fatalf("marshal target: %v", err)
+	}
+	if err := store.StashUploadPlan(ctx, entry.SpoolID, "commit-resume", "up-resume", string(targetJSON), "commit-token"); err != nil {
+		t.Fatalf("StashUploadPlan: %v", err)
+	}
+	if err := store.MarkUploadPending(ctx, entry.SpoolID, "up-resume"); err != nil {
+		t.Fatalf("MarkUploadPending: %v", err)
+	}
+	if err := store.MarkUploading(ctx, entry.SpoolID, 0); err != nil {
+		t.Fatalf("MarkUploading: %v", err)
+	}
+	if err := store.MarkSpilled(ctx, entry.SpoolID, durablePath); err != nil {
+		t.Fatalf("MarkSpilled: %v", err)
+	}
+	got, err := store.Get(ctx, entry.SpoolID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	return got
+}
+
+// TestResumeArtifactUpload_ProgressiveRestartResumesFromMissingParts certifies
+// the crash/restart contract for the progressive upload path end-to-end: a
+// worker killed mid-upload leaves (a) a file-backed spool row UPLOADING with
+// the upload_id + chunk_size target stashed and (b) a progressive journal on
+// disk confirming the parts already accepted by the transport. A fresh worker
+// over the same spool file + journal must resume the SAME upload_id, skip the
+// journaled parts, upload only the missing ones, and drive the row to
+// COMMITTED.
+func TestResumeArtifactUpload_ProgressiveRestartResumesFromMissingParts(t *testing.T) {
+	spoolPath := filepath.Join(t.TempDir(), "spool.db")
+	durablePath := filepath.Join(t.TempDir(), "spilled.mp4")
+	// 10 bytes at 4-byte chunks → parts 1(4), 2(4), 3(2). Part 1 was already
+	// accepted by the transport before the crash.
+	payload := []byte("abcdefghij")
+	if err := os.WriteFile(durablePath, payload, 0o640); err != nil {
+		t.Fatalf("write durable artifact: %v", err)
+	}
+	journalPath := durablePath + ".up-resume.progressive.json"
+	if err := os.WriteFile(journalPath, []byte(`{"upload_id":"up-resume","chunk_size":4,"parts":[{"number":1,"size":4}]}`), 0o600); err != nil {
+		t.Fatalf("write progressive journal: %v", err)
+	}
+
+	// Phase 1 — worker A seeds the mid-upload row and "crashes": the store is
+	// closed without completing anything, exactly like a process kill.
+	store, err := spool.Open(spoolPath)
+	if err != nil {
+		t.Fatalf("spool.Open: %v", err)
+	}
+	entry := seedProgressiveResumeRow(t, store, durablePath, payload)
+	if err := store.Close(); err != nil {
+		t.Fatalf("close spool (crash): %v", err)
+	}
+
+	// Phase 2 — worker B restarts over the same spool file and journal.
+	uploader := &progressiveResumeUploadTransport{}
+	store2, err := spool.Open(spoolPath)
+	if err != nil {
+		t.Fatalf("spool.Open after restart: %v", err)
+	}
+	t.Cleanup(func() { _ = store2.Close() })
+
+	persisted, err := store2.Get(context.Background(), entry.SpoolID)
+	if err != nil {
+		t.Fatalf("Get after restart: %v", err)
+	}
+	if persisted.Status != spool.StatusUploading {
+		t.Fatalf("status after restart = %q; want UPLOADING", persisted.Status)
+	}
+
+	registry := publisher.NewRegistry()
+	if err := registry.Register(uploader); err != nil {
+		t.Fatalf("register progressive transport: %v", err)
+	}
+	transport := &resumeTestTransport{}
+	w := &Worker{
+		config: &config.WorkerConfig{
+			WorkerID:        "worker-resume-test",
+			ProtocolVersion: controltransport.ProtocolVersionCurrent,
+		},
+		logger:            logger.New(logger.InfoLevel, io.Discard),
+		transport:         transport,
+		publisherRegistry: registry,
+		outputSpool:       store2,
+		publisherPool:     NewPublisherPool(2),
+		artifactLocks:     NewArtifactLockRegistry(),
+		activeTaskLeases: map[string]*ActiveTaskLease{
+			"task-resume": {TaskID: "task-resume", JobID: "job-resume", AttemptID: "attempt-resume", LeaseID: "lease-resume", AttemptNumber: 1, Revision: 1},
+		},
+	}
+	transport.worker = w
+
+	w.resumeArtifactUpload(context.Background(), *persisted)
+
+	if uploader.session == nil {
+		t.Fatal("progressive session was never created")
+	}
+	// Only the missing parts (2 and 3) crossed the wire; part 1 was resumed
+	// and must NOT be uploaded a second time.
+	gotUploaded := uploader.session.uploadedNumbers()
+	if len(gotUploaded) != 2 || gotUploaded[0] != 2 || gotUploaded[1] != 3 {
+		t.Fatalf("uploaded parts = %v; want [2 3] (journaled part 1 skipped)", gotUploaded)
+	}
+	for _, n := range []int{1, 2, 3} {
+		if !uploader.session.hasPart(n) {
+			t.Fatalf("session missing part %d — the resumed part must be accounted in the remote session", n)
+		}
+	}
+	if uploader.session.completes != 1 || uploader.session.aborts != 0 {
+		t.Fatalf("session lifecycle = completes=%d aborts=%d; want 1/0", uploader.session.completes, uploader.session.aborts)
+	}
+
+	// The journal now reflects the full upload: finalized with the real SHA
+	// and the complete part list.
+	raw, err := os.ReadFile(journalPath)
+	if err != nil {
+		t.Fatalf("read journal after resume: %v", err)
+	}
+	var j struct {
+		Finalized   bool   `json:"finalized"`
+		FinalSize   int64  `json:"final_size"`
+		FinalSHA256 string `json:"final_sha256"`
+		Parts       []struct {
+			Number int `json:"number"`
+		} `json:"parts"`
+	}
+	if err := json.Unmarshal(raw, &j); err != nil {
+		t.Fatalf("decode journal after resume: %v", err)
+	}
+	if !j.Finalized || j.FinalSize != int64(len(payload)) {
+		t.Fatalf("journal after resume = finalized=%v final_size=%d; want finalized with %d bytes", j.Finalized, j.FinalSize, len(payload))
+	}
+	if len(j.FinalSHA256) != 64 {
+		t.Fatalf("journal final_sha256 = %q; want a 64-hex digest", j.FinalSHA256)
+	}
+	if len(j.Parts) != 3 {
+		t.Fatalf("journal parts = %d; want 3 after resuming part 1", len(j.Parts))
+	}
+
+	got, err := store2.Get(context.Background(), entry.SpoolID)
+	if err != nil {
+		t.Fatalf("Get after resume: %v", err)
+	}
+	if got.Status != spool.StatusCommitted {
+		t.Fatalf("status = %q; want COMMITTED after progressive worker-restart resume", got.Status)
+	}
+}
