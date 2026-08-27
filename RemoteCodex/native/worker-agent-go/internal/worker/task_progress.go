@@ -62,7 +62,22 @@ func (w *Worker) artifactWriteProgressCallback(taskID string) pipeline.ArtifactW
 		if progress.Finalized && progress.FinalizedAt.IsZero() {
 			progress.FinalizedAt = time.Now()
 		}
-		artifactProgressByContext.Store(taskID+"\x00"+progress.Artifact, progress)
+		// Record the wall-clock time of the first progress event that carries
+		// a non-empty path. This is the earliest point the Go side can open
+		// the file for progressive upload.
+		key := taskID + "\x00" + progress.Artifact
+		if progress.Path != "" {
+			if existing, ok := artifactProgressByContext.Load(key); ok {
+				prev := existing.(pipeline.ArtifactWriteProgress)
+				if !prev.FirstProgressAt.IsZero() {
+					progress.FirstProgressAt = prev.FirstProgressAt
+				}
+			}
+			if progress.FirstProgressAt.IsZero() {
+				progress.FirstProgressAt = time.Now()
+			}
+		}
+		artifactProgressByContext.Store(key, progress)
 		w.activeTasksMu.Lock()
 		if current := w.activeTasks[taskID]; current != nil {
 			metrics := current.Progress.CumulativeMetrics

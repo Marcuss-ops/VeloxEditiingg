@@ -16,6 +16,7 @@ func TestPrometheusWorkerMetricsExportRequiredSurfaceAndNoAssetIDs(t *testing.T)
 	metrics.RecordArtifactLockWait(15 * time.Millisecond)
 	metrics.RecordRenderUploadOverlap(250 * time.Millisecond)
 	metrics.RecordProgressiveUploadTiming(1500*time.Millisecond, 12, 96*1024*1024, 800*time.Millisecond)
+	metrics.RecordMuxToOpenUS(42000)
 	metrics.RecordTaskResultSubmit(40 * time.Millisecond)
 	metrics.RecordTaskResultAck(60 * time.Millisecond)
 	metrics.RecordCacheCleanup(15 * time.Millisecond)
@@ -37,6 +38,7 @@ func TestPrometheusWorkerMetricsExportRequiredSurfaceAndNoAssetIDs(t *testing.T)
 		"velox_progressive_upload_first_part_started_seconds",
 		"velox_progressive_upload_parts_before_render_end",
 		"velox_progressive_upload_bytes_before_render_end",
+		"velox_mux_to_open_microseconds",
 		"velox_task_result_submit_seconds",
 		"velox_task_result_ack_seconds",
 		"velox_telemetry_invalid_events_total",
@@ -59,6 +61,10 @@ func TestPrometheusWorkerMetricsExportRequiredSurfaceAndNoAssetIDs(t *testing.T)
 		"velox_asset_download_throughput_bytes_per_second",
 		"velox_asset_download_eta_seconds",
 		"velox_asset_download_coalesced_requests_total",
+		"velox_network_ingress_saturation_ratio",
+		"velox_network_egress_saturation_ratio",
+		"velox_network_consumer_bytes_total",
+		"velox_network_throttle_ms_total",
 	} {
 		if !strings.Contains(export, name) {
 			t.Errorf("Prometheus export missing %s:\n%s", name, export)

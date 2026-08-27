@@ -84,6 +84,7 @@ type PrometheusMetrics struct {
 	progressiveFirstPartStartedSeconds *HistogramVec
 	progressivePartsBeforeRenderEnd    *HistogramVec
 	progressiveBytesBeforeRenderEnd    *HistogramVec
+	muxToOpenMicroseconds              *HistogramVec
 	taskResultSubmitSeconds            *HistogramVec
 	taskResultAckSeconds               *HistogramVec
 	taskResultAcksTotal                *CounterVec
@@ -99,4 +100,48 @@ type PrometheusMetrics struct {
 	attemptIOBytes      *CounterVec
 	attemptFrames       *CounterVec
 	attemptProcesses    *CounterVec
+
+	// Per-job resource attribution.
+	jobPeakRssDeltaBytes *GaugeVec
+	jobCpuCoreSeconds    *CounterVec
+	jobPrefetchBytes     *CounterVec
+	jobPublishBytes      *CounterVec
+	jobOpenFdsPeak       *GaugeVec
+	jobPageFaults        *CounterVec
+	jobIoWaitMs          *CounterVec
+
+	// Pending-offer dedup counters. Static "total" label — no worker/job
+	// identifiers leak into Prometheus series.
+	offerDuplicateTotal       *CounterVec
+	offerReplacedTotal        *CounterVec
+	offerStaleTotal           *CounterVec
+	offerIdentityConflictTotal *CounterVec
+	offerReconciledTotal      *CounterVec
+
+	// Resource admission controller metrics.
+	admissionRejectionsTotal *CounterVec
+	backpressureEventsTotal  *CounterVec
+
+	// Resource admission live diagnostics — gauges updated every heartbeat
+	// cycle so Prometheus /graph can show real-time RSS pressure and
+	// throttle state without querying the worker API.
+	admissionRSSPressurePct   *GaugeVec
+	admissionRSSBytes         *GaugeVec
+	admissionThrottledRender  *GaugeVec
+	admissionThrottledPrefetch *GaugeVec
+	admissionThrottledPublish *GaugeVec
+
+	// File descriptor gauges.
+	workerOpenFds      *GaugeVec
+	workerMaxFds       *GaugeVec
+	workerFdUtilization *GaugeVec
+
+	// Prefetch corruption.
+	prefetchCorruptedTotal *CounterVec
+
+	// Network admission controller metrics.
+	networkSaturationIngress *GaugeVec
+	networkSaturationEgress  *GaugeVec
+	networkConsumerBytes     *GaugeVec
+	networkThrottleMS        *GaugeVec
 }

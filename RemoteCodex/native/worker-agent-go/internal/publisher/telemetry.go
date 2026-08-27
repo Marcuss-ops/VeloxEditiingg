@@ -31,6 +31,12 @@ type UploadBreakdown struct {
 	// TrailerToOpenMS is the time from C++ trailer_finished (artifact
 	// finalized) to Go successfully opening/stat'ing the final file.
 	TrailerToOpenMS int64
+	// MuxToOpenUS is the Go-side latency from the first progress event
+	// with a path received from the C++ engine to when the file was
+	// opened for progressive upload. Together with the C++ side's
+	// trailer_to_publish_us, this closes the full trailer-to-open
+	// visibility gap.
+	MuxToOpenUS int64
 }
 
 // UploadTelemetry receives upload progress and terminal measurements.

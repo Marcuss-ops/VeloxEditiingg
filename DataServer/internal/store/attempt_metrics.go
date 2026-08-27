@@ -92,16 +92,24 @@ func (r *SQLiteTaskAttemptRepository) PersistMetrics(ctx context.Context, metric
 			blob_cache_hit_count, blob_cache_miss_count,
 			render_cache_hit_count,
 			output_sha256,
-			logical_cpu_count, cpu_quota, effective_cpu_count
+			logical_cpu_count, cpu_quota, effective_cpu_count,
+			job_peak_rss_delta_bytes, job_cpu_core_seconds,
+			job_asset_cache_bytes_used, job_prefetch_bytes,
+			job_upload_buffer_peak_bytes,
+			job_render_wall_ms, job_asset_wall_ms, job_publish_wall_ms,
+			progressive_overlap_first_part_ms, progressive_overlap_parts_before_render,
+			progressive_overlap_bytes_before_render, progressive_overlap_ms,
+			trailer_to_open_ms, mux_to_open_us
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-		          ?, ?, ?, ?, ?, ?, ?,
-		          ?, ?, ?, ?, ?, ?,
-		          ?, ?, ?, ?, ?, ?, ?,
-		          ?, ?, ?, ?, ?, ?, ?, ?,
-		          ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-		          ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+		          ?, ?, ?, ?, ?, ?, ?, ?
+		)`,
 		metrics.AttemptID, metrics.InputBytes, metrics.OutputBytes,
 		metrics.BytesFromDrive, metrics.BytesFromBlobstore, metrics.BytesFromLocalCache,
 		metrics.CPUTimeMS, metrics.GPUTimeMS, metrics.PeakRSSBytes, metrics.PeakVRAMBytes,
@@ -138,6 +146,13 @@ func (r *SQLiteTaskAttemptRepository) PersistMetrics(ctx context.Context, metric
 		metrics.RenderCacheHitCount,
 		metrics.OutputSHA256,
 		metrics.LogicalCPUCount, metrics.CPUQuota, metrics.EffectiveCPUCount,
+		metrics.JobPeakRssDeltaBytes, metrics.JobCpuCoreSeconds,
+		metrics.JobAssetCacheBytesUsed, metrics.JobPrefetchBytes,
+		metrics.JobUploadBufferPeakBytes,
+		metrics.JobRenderWallMs, metrics.JobAssetWallMs, metrics.JobPublishWallMs,
+		metrics.ProgressiveOverlapFirstPartMs, metrics.ProgressiveOverlapPartsBeforeRender,
+		metrics.ProgressiveOverlapBytesBeforeRender, metrics.ProgressiveOverlapMs,
+		metrics.TrailerToOpenMs, metrics.MuxToOpenUS,
 	)
 	if err != nil {
 		return fmt.Errorf("metrics persist: %w", err)
@@ -291,7 +306,14 @@ func (r *SQLiteTaskAttemptRepository) GetMetrics(ctx context.Context, attemptID 
 		        blob_cache_hit_count, blob_cache_miss_count,
 		        render_cache_hit_count,
 		        output_sha256,
-		        logical_cpu_count, cpu_quota, effective_cpu_count
+		        logical_cpu_count, cpu_quota, effective_cpu_count,
+		        job_peak_rss_delta_bytes, job_cpu_core_seconds,
+		        job_asset_cache_bytes_used, job_prefetch_bytes,
+		        job_upload_buffer_peak_bytes,
+		        job_render_wall_ms, job_asset_wall_ms, job_publish_wall_ms,
+		        progressive_overlap_first_part_ms, progressive_overlap_parts_before_render,
+		        progressive_overlap_bytes_before_render, progressive_overlap_ms,
+		        trailer_to_open_ms, mux_to_open_us
 		 FROM task_attempt_metrics WHERE attempt_id = ?`,
 		attemptID,
 	)
@@ -336,6 +358,13 @@ func (r *SQLiteTaskAttemptRepository) GetMetrics(ctx context.Context, attemptID 
 		&m.RenderCacheHitCount,
 		&m.OutputSHA256,
 		&m.LogicalCPUCount, &m.CPUQuota, &m.EffectiveCPUCount,
+		&m.JobPeakRssDeltaBytes, &m.JobCpuCoreSeconds,
+		&m.JobAssetCacheBytesUsed, &m.JobPrefetchBytes,
+		&m.JobUploadBufferPeakBytes,
+		&m.JobRenderWallMs, &m.JobAssetWallMs, &m.JobPublishWallMs,
+		&m.ProgressiveOverlapFirstPartMs, &m.ProgressiveOverlapPartsBeforeRender,
+		&m.ProgressiveOverlapBytesBeforeRender, &m.ProgressiveOverlapMs,
+		&m.TrailerToOpenMs, &m.MuxToOpenUS,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil

@@ -179,6 +179,24 @@ type AttemptMetrics struct {
 	FramesUploadedToGPU     int64 `json:"frames_uploaded_to_gpu"`
 	GPUToCPUBytes           int64 `json:"gpu_to_cpu_bytes"`
 	CPUToGPUBytes           int64 `json:"cpu_to_gpu_bytes"`
+
+	// ── Per-job resource attribution (migration 160) ────────────────
+	JobPeakRssDeltaBytes     int64   `json:"job_peak_rss_delta_bytes"`
+	JobCpuCoreSeconds        float64 `json:"job_cpu_core_seconds"`
+	JobAssetCacheBytesUsed   int64   `json:"job_asset_cache_bytes_used"`
+	JobPrefetchBytes         int64   `json:"job_prefetch_bytes"`
+	JobUploadBufferPeakBytes int64   `json:"job_upload_buffer_peak_bytes"`
+	JobRenderWallMs          int64   `json:"job_render_wall_ms"`
+	JobAssetWallMs           int64   `json:"job_asset_wall_ms"`
+	JobPublishWallMs         int64   `json:"job_publish_wall_ms"`
+
+	// ── Progressive upload overlap (migration 161) ───────────────
+	ProgressiveOverlapFirstPartMs       int64 `json:"progressive_overlap_first_part_ms"`
+	ProgressiveOverlapPartsBeforeRender int64 `json:"progressive_overlap_parts_before_render"`
+	ProgressiveOverlapBytesBeforeRender int64 `json:"progressive_overlap_bytes_before_render"`
+	ProgressiveOverlapMs                int64 `json:"progressive_overlap_ms"`
+	TrailerToOpenMs                     int64 `json:"trailer_to_open_ms"`
+	MuxToOpenUS                         int64 `json:"mux_to_open_us"`
 }
 
 // AttemptCacheStats is the per-attempt cache snapshot extracted from the

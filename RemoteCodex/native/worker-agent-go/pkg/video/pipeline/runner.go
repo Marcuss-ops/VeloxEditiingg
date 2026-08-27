@@ -19,6 +19,10 @@ type ArtifactWriteProgress struct {
 	SafeOffsetBytes    int64
 	Finalized          bool
 	FinalizedAt        time.Time
+	// FirstProgressAt records wall-clock time when the first progress event
+	// with a non-empty Path was received from the C++ engine. Used to compute
+	// mux_to_open_us: the Go-side latency from first progress to file open.
+	FirstProgressAt time.Time
 }
 
 type ProgressSnapshot struct {
@@ -202,6 +206,11 @@ type RenderMetrics struct {
 	// TrailerToPublishUS is the C++ mux latency from av_write_trailer
 	// completion to publishAtomic completion (fsync + rename + dir fsync).
 	TrailerToPublishUS int64
+	// MuxToOpenUS is the Go-side latency from the first progress event
+	// received from the C++ engine to when the file was opened for
+	// progressive upload. Together with TrailerToPublishUS, this closes
+	// the full trailer-to-open visibility gap.
+	MuxToOpenUS int64
 	// Native output identity is trusted only when SHA256Valid is true.
 	SHA256           string
 	SHA256Valid      bool

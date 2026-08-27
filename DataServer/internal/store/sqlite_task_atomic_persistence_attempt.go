@@ -208,7 +208,14 @@ func persistAttemptMetrics(ctx context.Context, tx *sql.Tx, cmd taskgraph.Ingest
 			render_cache_hit_count,
 			output_sha256,
 			completed_segments,
-			logical_cpu_count, cpu_quota, effective_cpu_count
+			logical_cpu_count, cpu_quota, effective_cpu_count,
+			job_peak_rss_delta_bytes, job_cpu_core_seconds,
+			job_asset_cache_bytes_used, job_prefetch_bytes,
+			job_upload_buffer_peak_bytes,
+			job_render_wall_ms, job_asset_wall_ms, job_publish_wall_ms,
+			progressive_overlap_first_part_ms, progressive_overlap_parts_before_render,
+			progressive_overlap_bytes_before_render, progressive_overlap_ms,
+			trailer_to_open_ms, mux_to_open_us
 		) VALUES (
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
@@ -217,7 +224,8 @@ func persistAttemptMetrics(ctx context.Context, tx *sql.Tx, cmd taskgraph.Ingest
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?, ?,
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?
 		)`,
 		m.AttemptID, m.InputBytes, m.OutputBytes,
@@ -257,6 +265,13 @@ func persistAttemptMetrics(ctx context.Context, tx *sql.Tx, cmd taskgraph.Ingest
 		m.OutputSHA256,
 		m.CompletedSegments,
 		m.LogicalCPUCount, m.CPUQuota, m.EffectiveCPUCount,
+		m.JobPeakRssDeltaBytes, m.JobCpuCoreSeconds,
+		m.JobAssetCacheBytesUsed, m.JobPrefetchBytes,
+		m.JobUploadBufferPeakBytes,
+		m.JobRenderWallMs, m.JobAssetWallMs, m.JobPublishWallMs,
+		m.ProgressiveOverlapFirstPartMs, m.ProgressiveOverlapPartsBeforeRender,
+		m.ProgressiveOverlapBytesBeforeRender, m.ProgressiveOverlapMs,
+		m.TrailerToOpenMs, m.MuxToOpenUS,
 	)
 	if err != nil {
 		return fmt.Errorf("task ingest atomic metrics: %w", err)

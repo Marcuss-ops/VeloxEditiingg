@@ -60,6 +60,22 @@ func (w *Worker) uploadDeclaredArtifacts(ctx context.Context, pte *PendingTaskEx
 		if pteReport := report.RawMetrics; pteReport != nil {
 			pteReport.UploadMbpsAvg = result.Breakdown.UploadMbps
 			pteReport.OutputBytes += result.Breakdown.UploadBytes
+			// Progressive upload overlap: use the main (first) artifact's values.
+			// For multi-artifact jobs, sum the parts/bytes and take the max overlap.
+			if i == 0 {
+				pteReport.ProgressiveOverlapFirstPartMs = result.Breakdown.FirstPartStartedMS
+				pteReport.ProgressiveOverlapPartsBeforeRender = result.Breakdown.PartsUploadedBeforeRenderEnd
+				pteReport.ProgressiveOverlapBytesBeforeRender = result.Breakdown.BytesUploadedBeforeRenderEnd
+				pteReport.ProgressiveOverlapMs = result.Breakdown.OverlapMS
+				pteReport.TrailerToOpenMs = result.Breakdown.TrailerToOpenMS
+				pteReport.MuxToOpenUS = result.Breakdown.MuxToOpenUS
+			} else {
+				pteReport.ProgressiveOverlapPartsBeforeRender += result.Breakdown.PartsUploadedBeforeRenderEnd
+				pteReport.ProgressiveOverlapBytesBeforeRender += result.Breakdown.BytesUploadedBeforeRenderEnd
+				if result.Breakdown.OverlapMS > pteReport.ProgressiveOverlapMs {
+					pteReport.ProgressiveOverlapMs = result.Breakdown.OverlapMS
+				}
+			}
 		}
 	}
 	return completed, nil
@@ -124,6 +140,17 @@ func uploadWithNegotiatedPath(ctx context.Context, transport publisher.Transport
 		_ = session.Abort(ctx)
 		return nil, err
 	}
+	// mux_to_open_us: latency from when the first progress event with a
+	// path was received from the C++ engine to when the Go side opened the
+	// file for progressive upload. This closes the visibility gap between
+	// trailer_to_publish_us (C++ finalization) and the Go upload start.
+	var muxToOpenUS int64
+	if !progress.FirstProgressAt.IsZero() {
+		muxToOpenUS = time.Since(progress.FirstProgressAt).Microseconds()
+		if muxToOpenUS < 0 {
+			muxToOpenUS = 0
+		}
+	}
 	if !progress.FinalizedAt.IsZero() {
 		trailerToOpenMS = time.Since(progress.FinalizedAt).Milliseconds()
 		if trailerToOpenMS < 0 {
@@ -140,12 +167,14 @@ func uploadWithNegotiatedPath(ctx context.Context, transport publisher.Transport
 		return nil, err
 	}
 	result.Breakdown.TrailerToOpenMS = trailerToOpenMS
+	result.Breakdown.MuxToOpenUS = muxToOpenUS
 	telemetry.GetPrometheusMetrics().RecordProgressiveUploadTiming(
 		time.Duration(result.Breakdown.FirstPartStartedMS)*time.Millisecond,
 		result.Breakdown.PartsUploadedBeforeRenderEnd,
 		result.Breakdown.BytesUploadedBeforeRenderEnd,
 		time.Duration(result.Breakdown.OverlapMS)*time.Millisecond,
 	)
+	telemetry.GetPrometheusMetrics().RecordMuxToOpenUS(muxToOpenUS)
 	return result, nil
 }
 

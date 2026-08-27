@@ -260,6 +260,30 @@ type RawExecutionMetrics struct {
 	CriticalPathComponent string  `json:"critical_path_component,omitempty"`
 	CriticalPathMs        int64   `json:"critical_path_ms"`
 	CriticalPathPercent   float64 `json:"critical_path_percent"`
+
+	// ── Per-job resource attribution (migration 160) ────────────────
+	JobPeakRssDeltaBytes     int64   `json:"job_peak_rss_delta_bytes"`
+	JobCpuCoreSeconds        float64 `json:"job_cpu_core_seconds"`
+	JobAssetCacheBytesUsed   int64   `json:"job_asset_cache_bytes_used"`
+	JobPrefetchBytes         int64   `json:"job_prefetch_bytes"`
+	JobPublishBytes          int64   `json:"job_publish_bytes"`  // bytes uploaded/published to master
+	JobPageFaults            int64   `json:"job_page_faults"`     // major page faults during attempt
+	JobUploadBufferPeakBytes int64   `json:"job_upload_buffer_peak_bytes"`
+	JobRenderWallMs          int64   `json:"job_render_wall_ms"`
+	JobAssetWallMs           int64   `json:"job_asset_wall_ms"`
+	JobPublishWallMs         int64   `json:"job_publish_wall_ms"`
+
+	// ── Progressive upload overlap (migration 161) ───────────────
+	// Render/upload overlap metrics surfaced by the progressive upload
+	// path. These capture how much upload work was completed while the
+	// engine was still rendering, enabling the capacity scorecard to
+	// answer: "Did the mux→upload overlap reduce wall-clock time?"
+	ProgressiveOverlapFirstPartMs       int64 `json:"progressive_overlap_first_part_ms"`         // time from upload run start to first part sent
+	ProgressiveOverlapPartsBeforeRender int64 `json:"progressive_overlap_parts_before_render"`   // parts uploaded while render was still running
+	ProgressiveOverlapBytesBeforeRender int64 `json:"progressive_overlap_bytes_before_render"`   // bytes uploaded while render was still running
+	ProgressiveOverlapMs                int64 `json:"progressive_overlap_ms"`                    // render/upload overlap window (ms)
+	TrailerToOpenMs                     int64 `json:"trailer_to_open_ms"`                        // C++ trailer_finished → Go file open (ms)
+	MuxToOpenUS                         int64 `json:"mux_to_open_us"`                            // first progress event → Go file open (us)
 }
 
 // TypedExecutionMetrics is retained as a source-compatible name for

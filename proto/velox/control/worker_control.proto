@@ -71,6 +71,11 @@ message WorkerToMasterEnvelope {
 
     // Worker declaration that lets the master issue an early upload plan.
     ArtifactUploadIntent artifact_upload_intent = 37;
+
+    // Worker-side prefetch lifecycle event. Emitted for future_plan_received,
+    // future_plan_applied, and prefetch_prepared so the Master can persist
+    // them into the job_events journal for fleetctl job inspect.
+    PrefetchLifecycleEvent prefetch_lifecycle_event = 38;
   }
 
   reserved 12, 13, 14, 15, 17, 34, 35;
@@ -441,6 +446,30 @@ message AssetDownloadProgress {
   repeated AssetJobReference job_refs = 25;
   int64 checkpoint_sequence = 26;
   int64 transfer_generation = 27;
+}
+
+// PrefetchLifecycleEvent is a lightweight worker-to-master event for
+// prefetch lifecycle milestones. The Master persists these into the
+// job_events journal so `fleetctl job inspect` shows the full prefetch
+// timeline (future_plan_received, future_plan_applied, prefetch_prepared).
+// The Master-side events (reservation_created, future_plan_sent) are
+// logged directly by the Master during refreshFutureAssetPlan.
+message PrefetchLifecycleEvent {
+  string event_type = 1;  // "future_plan_received" | "future_plan_applied" | "prefetch_prepared"
+  string job_id = 2;
+  string task_id = 3;
+  string worker_id = 4;
+  string plan_id = 5;
+  int64 plan_version = 6;
+  string reservation_id = 7;
+  int32 distance = 8;
+  // For prefetch_prepared: asset-level details.
+  string asset_id = 9;
+  string asset_sha256 = 10;
+  int64 asset_size_bytes = 11;
+  string local_path = 12;
+  // ISO-8601 timestamp of when this event occurred on the worker.
+  google.protobuf.Timestamp occurred_at = 13;
 }
 
 // ---------------------------------------------------------
@@ -935,6 +964,30 @@ message TaskExecutionMetrics {
   int64 frames_uploaded_to_gpu = 74;
   int64 gpu_to_cpu_bytes = 75;
   int64 cpu_to_gpu_bytes = 76;
+
+  // ── Per-job resource attribution (migration 160) ──────────────────
+  // These attribute resource consumption to the individual job, enabling
+  // the capacity scorecard to answer: "How much does one job cost?"
+  int64 job_peak_rss_delta_bytes = 77;   // peak RSS delta vs pre-job baseline
+  double job_cpu_core_seconds = 78;       // CPU time normalized to core-seconds
+  int64 job_asset_cache_bytes_used = 79;  // asset cache bytes consumed by this job
+  int64 job_prefetch_bytes = 80;          // bytes downloaded during prefetch phase
+  int64 job_upload_buffer_peak_bytes = 81;// peak upload buffer memory during publish
+  int64 job_render_wall_ms = 82;          // wall clock for render phases
+  int64 job_asset_wall_ms = 83;           // wall clock for asset resolve/download/verify
+  int64 job_publish_wall_ms = 84;         // wall clock for publish/upload phases
+
+  // ── Progressive upload overlap (migration 161) ─────────────────
+  // Render/upload overlap metrics surfaced by the progressive upload
+  // path. These capture how much upload work was completed while the
+  // engine was still rendering, enabling the capacity scorecard to
+  // answer: "Did the mux→upload overlap reduce wall-clock time?"
+  int64 progressive_overlap_first_part_ms = 85;          // time from upload run start to first part sent
+  int64 progressive_overlap_parts_before_render = 86;     // parts uploaded while render was still running
+  int64 progressive_overlap_bytes_before_render = 87;     // bytes uploaded while render was still running
+  int64 progressive_overlap_ms = 88;                      // render/upload overlap window (ms)
+  int64 trailer_to_open_ms = 89;                          // C++ trailer_finished → Go file open (ms)
+  int64 mux_to_open_us = 90;                              // first progress event → Go file open (us)
 }
 
 // WorkerResourceCounters is the typed payload of Heartbeat.resources.
@@ -976,4 +1029,32 @@ message WorkerResourceCounters {
 
   // Sampling book-keeping.
   google.protobuf.Timestamp sampled_at = 22;
+
+  // ── Scorecard v2 extensions ──────────────────────────────────────
+  // CPU extended.
+  int32 effective_cpu_cores = 23;       // min(logical, ceil(cpu_quota))
+  double cpu_user_ratio = 24;           // 0.0-1.0, user-space CPU fraction
+  double cpu_system_ratio = 25;         // 0.0-1.0, kernel CPU fraction
+
+  // Memory extended.
+  int64 page_cache_bytes = 26;          // kernel page cache (Buffers + Cached)
+
+  // Disk extended.
+  double disk_read_mbps = 27;           // instantaneous MB/s read throughput
+  double disk_write_mbps = 28;          // instantaneous MB/s write throughput
+  int64 disk_io_wait_ms = 29;           // cumulative ms spent in I/O wait
+
+  // Network extended.
+  double download_mbps = 30;            // instantaneous Mbit/s receive throughput
+  double upload_mbps = 31;              // instantaneous Mbit/s transmit throughput
+
+  // Concurrency — per-job-type slot occupancy.
+  int32 render_jobs_active = 32;
+  int32 prefetch_jobs_active = 33;
+  int32 publisher_jobs_active = 34;
+
+  // File descriptor accounting — Linux /proc/self/fd + getrlimit(RLIMIT_NOFILE).
+  int64 open_file_descriptors = 35;
+  int64 max_file_descriptors = 36;
+  double file_descriptor_utilization_ratio = 37;
 }

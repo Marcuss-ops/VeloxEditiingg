@@ -51,6 +51,14 @@ func (m *PrometheusMetrics) RecordProgressiveUploadTiming(firstPartStarted time.
 	}
 	m.RecordRenderUploadOverlap(overlap)
 }
+// RecordMuxToOpenUS records the Go-side latency from the first C++ progress
+// event with a path to when the file was opened for progressive upload.
+func (m *PrometheusMetrics) RecordMuxToOpenUS(microseconds int64) {
+	if microseconds > 0 {
+		m.muxToOpenMicroseconds.observe("total", float64(microseconds))
+	}
+}
+
 func (m *PrometheusMetrics) RecordTaskResultSubmit(duration time.Duration) {
 	m.taskResultSubmitSeconds.observe("total", duration.Seconds())
 }
@@ -76,4 +84,68 @@ func (m *PrometheusMetrics) RecordPythonEmergencyPath(reason string) {
 func (m *PrometheusMetrics) GetFallbackCount() float64 { return m.fallbackCount.total() }
 func (m *PrometheusMetrics) GetPythonEmergencyPathCount() float64 {
 	return m.pythonEmergencyPath.total()
+}
+
+// Pending-offer dedup counters.
+func (m *PrometheusMetrics) RecordOfferDuplicate()           { m.offerDuplicateTotal.inc("total") }
+func (m *PrometheusMetrics) RecordOfferReplaced()            { m.offerReplacedTotal.inc("total") }
+func (m *PrometheusMetrics) RecordOfferStale()               { m.offerStaleTotal.inc("total") }
+func (m *PrometheusMetrics) RecordOfferIdentityConflict()    { m.offerIdentityConflictTotal.inc("total") }
+func (m *PrometheusMetrics) RecordOfferReconciled()            { m.offerReconciledTotal.inc("total") }
+
+// Resource admission controller metrics.
+func (m *PrometheusMetrics) RecordAdmissionRejection() { m.admissionRejectionsTotal.inc("total") }
+func (m *PrometheusMetrics) RecordBackpressureEvent(kind string) { m.backpressureEventsTotal.inc(kind) }
+
+// SetAdmissionDiagnostics updates the live RSS pressure and throttle-state
+// gauges from the admission controller. Called once per heartbeat cycle so
+// Prometheus /graph shows real-time memory pressure without worker API queries.
+func (m *PrometheusMetrics) SetAdmissionDiagnostics(rssPressurePct float64, rssBytes int64, throttledRender, throttledPrefetch, throttledPublish bool) {
+	m.admissionRSSPressurePct.set("total", rssPressurePct)
+	m.admissionRSSBytes.set("total", float64(rssBytes))
+	renderVal := 0.0
+	if throttledRender {
+		renderVal = 1.0
+	}
+	prefetchVal := 0.0
+	if throttledPrefetch {
+		prefetchVal = 1.0
+	}
+	publishVal := 0.0
+	if throttledPublish {
+		publishVal = 1.0
+	}
+	m.admissionThrottledRender.set("total", renderVal)
+	m.admissionThrottledPrefetch.set("total", prefetchVal)
+	m.admissionThrottledPublish.set("total", publishVal)
+}
+
+// SetFileDescriptorMetrics updates the FD gauges from the latest resource sample.
+func (m *PrometheusMetrics) SetFileDescriptorMetrics(open, max int64, ratio float64) {
+	m.workerOpenFds.set("total", float64(open))
+	m.workerMaxFds.set("total", float64(max))
+	m.workerFdUtilization.set("total", ratio)
+}
+
+// RecordPrefetchCorrupted increments the prefetch corruption counter.
+// reason should be "size_mismatch" or "hash_mismatch".
+func (m *PrometheusMetrics) RecordPrefetchCorrupted(reason string) {
+	m.prefetchCorruptedTotal.inc(reason)
+}
+
+// SetNetworkSaturation updates the NIC ingress/egress saturation gauges.
+// Ratio is 0.0–1.0+ where >1.0 means the observed throughput exceeds budget.
+func (m *PrometheusMetrics) SetNetworkSaturation(ingress, egress float64) {
+	m.networkSaturationIngress.set("total", ingress)
+	m.networkSaturationEgress.set("total", egress)
+}
+
+// SetNetworkConsumerBytes updates the per-consumer bytes-transferred gauge.
+func (m *PrometheusMetrics) SetNetworkConsumerBytes(consumer string, bytes int64) {
+	m.networkConsumerBytes.set(consumer, float64(bytes))
+}
+
+// SetNetworkThrottleMS updates the per-consumer cumulative throttle wait.
+func (m *PrometheusMetrics) SetNetworkThrottleMS(consumer string, ms int64) {
+	m.networkThrottleMS.set(consumer, float64(ms))
 }

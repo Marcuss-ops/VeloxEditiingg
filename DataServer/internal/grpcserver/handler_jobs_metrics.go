@@ -186,6 +186,14 @@ func executionMetricsToAttemptMetrics(attemptID string, em *pb.TaskExecutionMetr
 	am.GPUToCPUBytes = em.GetGpuToCpuBytes()
 	am.CPUToGPUBytes = em.GetCpuToGpuBytes()
 
+	// ── Progressive upload overlap (migration 161) ────────────────
+	am.ProgressiveOverlapFirstPartMs = em.GetProgressiveOverlapFirstPartMs()
+	am.ProgressiveOverlapPartsBeforeRender = em.GetProgressiveOverlapPartsBeforeRender()
+	am.ProgressiveOverlapBytesBeforeRender = em.GetProgressiveOverlapBytesBeforeRender()
+	am.ProgressiveOverlapMs = em.GetProgressiveOverlapMs()
+	am.TrailerToOpenMs = em.GetTrailerToOpenMs()
+	am.MuxToOpenUS = em.GetMuxToOpenUs()
+
 	return am
 }
 
