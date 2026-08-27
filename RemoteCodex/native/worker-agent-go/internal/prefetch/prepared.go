@@ -39,18 +39,22 @@ type PreparedAssetMetadata struct {
 	// warm_cache, prefetch, or runtime_download. It is set at prefetch-time
 	// when the asset is materialized by a FutureAssetPlan and propagated
 	// through to runtimeassets.Binding for fast-assembly certification.
-	Origin       downloader.ResolutionOrigin `json:"origin,omitempty"`
+	Origin downloader.ResolutionOrigin `json:"origin,omitempty"`
 }
 
 // PreparedJob is the local worker read model. PREPARED is emitted only after
 // every declared asset has passed the integrity/metadata phase. A preparation
 // job never consumes an execution slot.
 type PreparedJob struct {
-	JobID      string                           `json:"job_id"`
-	TaskID     string                           `json:"task_id"`
-	State      string                           `json:"state"`
-	PreparedAt time.Time                        `json:"prepared_at"`
-	Assets     map[string]PreparedAssetMetadata `json:"assets"`
+	JobID         string                           `json:"job_id"`
+	TaskID        string                           `json:"task_id"`
+	ReservationID string                           `json:"reservation_id,omitempty"`
+	PlanID        string                           `json:"plan_id,omitempty"`
+	PlanVersion   uint64                           `json:"plan_version,omitempty"`
+	Distance      int                              `json:"distance,omitempty"`
+	State         string                           `json:"state"`
+	PreparedAt    time.Time                        `json:"prepared_at"`
+	Assets        map[string]PreparedAssetMetadata `json:"assets"`
 }
 
 const PreparationStatePrepared = "PREPARED"
@@ -119,7 +123,16 @@ func (s *Scheduler) preparedForJob(job futureasset.Job, metadata PreparedAssetMe
 	}
 	prepared := s.prepared[job.JobID]
 	if prepared.Assets == nil {
-		prepared = PreparedJob{JobID: job.JobID, TaskID: job.TaskID, State: "PREPARING", Assets: make(map[string]PreparedAssetMetadata)}
+		prepared = PreparedJob{
+			JobID:         job.JobID,
+			TaskID:        job.TaskID,
+			ReservationID: job.ReservationID,
+			PlanID:        s.currentPlanID,
+			PlanVersion:   s.currentPlanVersion,
+			Distance:      job.Distance,
+			State:         "PREPARING",
+			Assets:        make(map[string]PreparedAssetMetadata),
+		}
 	}
 	prepared.Assets[metadata.AssetKey] = metadata
 	if len(prepared.Assets) != len(job.Assets) {

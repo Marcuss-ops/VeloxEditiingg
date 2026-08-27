@@ -231,83 +231,36 @@ func (t *RawExecutionMetrics) PopulateFromGPUTransfers(g GPUTransferMetrics) {
 	t.CpuToGpuBytes = g.CPUToGPUBytes
 }
 
-// ResourceSnapshot is a point-in-time resource counter snapshot captured
-// at attempt start. The delta between start and end snapshots provides
-// per-attempt resource attribution.
-type ResourceSnapshot struct {
-	RSSPeakBytes   int64
-	CPUClockMS     int64
-	DiskReadBytes  int64
-	DiskWriteBytes int64
-	NetworkRxBytes int64
-	NetworkTxBytes int64
-	IOWaitMS       int64
-	OpenFDs        int64
-	PageFaults     int64
-	PrefetchBytes  int64
-	PublishBytes   int64
-}
-
-// PopulateJobResourceAttribution fills the per-job resource attribution
-// fields from a start snapshot and end metrics. The start snapshot was
-// captured before the attempt began; the end metrics come from the
-// resource sampler or the attempt telemetry session at completion.
+// DeriveJobResourceAttribution computes per-job resource attribution
+// fields from the session-produced metrics. The AttemptTelemetrySession
+// already produces per-attempt deltas (disk, network, CPU) and per-attempt
+// peaks (RSS, FDs); no host-level baseline subtraction is needed.
 //
-// For cumulative counters (disk, network, page faults), the attribution
-// is end - start. For peak counters (RSS, FDs), the attribution is the
-// end peak value. For cumulative CPU, the attribution is end clock - start clock.
-func (t *RawExecutionMetrics) PopulateJobResourceAttribution(start ResourceSnapshot) {
+// This function derives only the fields that are not directly produced
+// by the session: JobCpuCoreSeconds (normalized from CpuTimeMs) and
+// JobPeakRssDeltaBytes (the session's peak RSS is the per-attempt peak).
+func (t *RawExecutionMetrics) DeriveJobResourceAttribution() {
 	if t == nil {
 		return
 	}
-	// Peak RSS delta: current peak minus pre-job baseline.
-	t.JobPeakRssDeltaBytes = t.PeakRssBytes - start.RSSPeakBytes
-	if t.JobPeakRssDeltaBytes < 0 {
-		t.JobPeakRssDeltaBytes = 0
+	// CPU core-seconds: accumulated CPU time normalized to single-core
+	// seconds. CpuTimeMs is already a per-attempt delta from the session;
+	// no host baseline subtraction is needed.
+	if t.CpuTimeMs > 0 {
+		t.JobCpuCoreSeconds = float64(t.CpuTimeMs) / 1000.0
 	}
 
-	// CPU core-seconds: accumulated CPU time normalized to single-core seconds.
-	cpuDeltaMS := t.CpuTimeMs - start.CPUClockMS
-	if cpuDeltaMS > 0 {
-		t.JobCpuCoreSeconds = float64(cpuDeltaMS) / 1000.0
-	}
+	// Peak RSS: the session already tracks the per-attempt peak via
+	// periodic sampling; PeakRssBytes IS the per-attempt value.
+	t.JobPeakRssDeltaBytes = t.PeakRssBytes
 
-	// Disk I/O attribution.
-	diskReadDelta := t.DiskReadBytes - start.DiskReadBytes
-	if diskReadDelta > 0 {
-		t.DiskReadBytes = diskReadDelta
-	}
-	diskWriteDelta := t.DiskWriteBytes - start.DiskWriteBytes
-	if diskWriteDelta > 0 {
-		t.DiskWriteBytes = diskWriteDelta
-	}
-
-	// Network I/O attribution.
-	networkRxDelta := t.NetworkRxBytes - start.NetworkRxBytes
-	if networkRxDelta > 0 {
-		t.NetworkRxBytes = networkRxDelta
-	}
-	networkTxDelta := t.NetworkTxBytes - start.NetworkTxBytes
-	if networkTxDelta > 0 {
-		t.NetworkTxBytes = networkTxDelta
-	}
-
-	// I/O wait attribution.
-	iowaitDelta := t.IowaitMs - start.IOWaitMS
-	if iowaitDelta > 0 {
-		t.IowaitMs = iowaitDelta
-	}
-
-	// Open FDs: peak during attempt.
-	// t.OpenFdsPeak is already set by the sampler; no delta needed.
-
-	// Major page faults attribution.
-	faultsDelta := t.JobPageFaults - start.PageFaults
-	if faultsDelta > 0 {
-		t.JobPageFaults = faultsDelta
-	}
-
-	// Prefetch and publish bytes are set externally by the caller.
-	// t.JobPrefetchBytes and t.JobPublishBytes are already populated
-	// by the cache resolution sink and upload path respectively.
+	// DiskReadBytes, DiskWriteBytes, NetworkRxBytes, NetworkTxBytes,
+	// IowaitMs, OpenFdsPeak are already per-attempt values from the
+	// session; no further adjustment is needed.
+	//
+	// JobPageFaults is not populated by the session (host-level page
+	// faults are not attributed to individual attempts); it stays zero.
+	//
+	// JobPrefetchBytes and JobPublishBytes are set externally by the
+	// cache resolution sink and upload path respectively.
 }

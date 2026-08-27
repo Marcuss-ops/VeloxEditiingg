@@ -245,9 +245,19 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 		summary.Attempts = append(summary.Attempts, pending)
 	}
 
+	// Project the latest durable attempt's identity onto the top-level
+	// fields. This ensures AttemptID/WorkerID/WorkerName are never null
+	// after job completion, even when the live runtime row has been cleaned
+	// up (Live=false → no overlay applied).
+	if latest := latestAttemptSummary(summary.Attempts); latest != nil {
+		summary.AttemptID = latest.AttemptID
+		summary.WorkerID = latest.WorkerID
+		summary.WorkerName = latest.WorkerName
+	}
 	// Derive the top-level live projection from the reconciled attempt row,
 	// never directly from the volatile reader. This keeps the endpoint's
-	// compact fields and Attempts slice on one authority.
+	// compact fields and Attempts slice on one authority. The live overlay
+	// overrides the durable projection while the job is RUNNING.
 	for i := range summary.Attempts {
 		if summary.Attempts[i].Live {
 			applyExecutionLiveOverlay(summary, &summary.Attempts[i])
@@ -363,4 +373,19 @@ func (s *Service) SummarizeJob(ctx context.Context, jobID string) (*ExecutionSum
 		return nil, fmt.Errorf("observability: no task for job %s", jobID)
 	}
 	return s.SummarizeTask(ctx, task.ID)
+}
+
+// latestAttemptSummary returns the AttemptSummary with the highest
+// AttemptNumber. It is the durable identity authority for the top-level
+// ExecutionSummary fields: when the live overlay does not apply (job
+// completed, runtime row cleaned up), the latest attempt's
+// AttemptID/WorkerID/WorkerName are projected so they are never null.
+func latestAttemptSummary(attempts []AttemptSummary) *AttemptSummary {
+	var best *AttemptSummary
+	for i := range attempts {
+		if best == nil || attempts[i].AttemptNumber > best.AttemptNumber {
+			best = &attempts[i]
+		}
+	}
+	return best
 }

@@ -155,7 +155,10 @@ func TestService_SummarizeTaskTerminalAttemptWinsOverStaleLiveProjection(t *test
 	if got.Metrics == nil || got.Metrics.FramesEncoded != 10 || result.TotalOutputBytes != 80 {
 		t.Fatalf("final durable metrics did not converge: attempt=%#v summary=%#v", got, result)
 	}
-	if result.AttemptID != "" || result.WorkerID != "" || result.Phase != "" || result.Progress != nil || result.LiveMetrics != nil || result.LastProgressAt != "" {
+	if result.AttemptID != "A-converged" || result.WorkerID != "worker-final" {
+		t.Fatalf("top-level identity not projected from durable attempt: AttemptID=%q WorkerID=%q", result.AttemptID, result.WorkerID)
+	}
+	if result.Phase != "" || result.Progress != nil || result.LiveMetrics != nil || result.LastProgressAt != "" {
 		t.Fatalf("stale live execution leaked into top-level summary: %#v", result)
 	}
 }
@@ -304,7 +307,10 @@ func TestService_SummarizeTaskDropsOlderLiveAttemptAfterRetry(t *testing.T) {
 	if len(result.Attempts) != 1 || result.Attempts[0].AttemptID != "A-retry-new" {
 		t.Fatalf("older live attempt was appended after retry: %#v", result.Attempts)
 	}
-	if result.AttemptID != "" || result.WorkerID != "" || result.Progress != nil || result.LastProgressAt != "" {
+	if result.AttemptID != "A-retry-new" || result.WorkerID != "worker-new" {
+		t.Fatalf("top-level identity not projected from durable attempt: AttemptID=%q WorkerID=%q", result.AttemptID, result.WorkerID)
+	}
+	if result.Progress != nil || result.LastProgressAt != "" {
 		t.Fatalf("older live attempt shadowed the retry at top level: %#v", result)
 	}
 }

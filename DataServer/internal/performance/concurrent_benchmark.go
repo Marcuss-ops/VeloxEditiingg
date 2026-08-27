@@ -2,6 +2,7 @@ package performance
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -28,11 +29,11 @@ type BenchmarkFixture struct {
 
 // BenchmarkRenderReceipt captures the resource metrics from one render.
 type BenchmarkRenderReceipt struct {
-	PeakRAMBytes   int64   `json:"peak_ram_bytes"`
-	RenderWallMS   int64   `json:"render_wall_ms"`
-	UploadWallMS   int64   `json:"upload_wall_ms"`
-	ArtifactSHA256 string  `json:"artifact_sha256"`
-	WallMS         int64   `json:"wall_ms"`
+	PeakRAMBytes   int64  `json:"peak_ram_bytes"`
+	RenderWallMS   int64  `json:"render_wall_ms"`
+	UploadWallMS   int64  `json:"upload_wall_ms"`
+	ArtifactSHA256 string `json:"artifact_sha256"`
+	WallMS         int64  `json:"wall_ms"`
 }
 
 // BenchmarkRenderResult is the outcome of one render.
@@ -126,6 +127,9 @@ func RunConcurrentBenchmark(
 	config ConcurrentBenchmarkConfig,
 	workerID string,
 ) (*ConcurrentBenchmarkResult, error) {
+	if renderer == nil {
+		return nil, errors.New("benchmark renderer is not configured")
+	}
 	if config.MaxConcurrency <= 0 {
 		config.MaxConcurrency = 4
 	}
@@ -188,8 +192,8 @@ func runConcurrencyLevel(
 	level, runs int,
 ) *ConcurrencyLevelResult {
 	result := &ConcurrencyLevelResult{
-		Level:      level,
-		TotalRuns:  runs,
+		Level:     level,
+		TotalRuns: runs,
 	}
 
 	var (

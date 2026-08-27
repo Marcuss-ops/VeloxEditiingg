@@ -131,6 +131,12 @@ func parseAssetPreparationDrillDown(raw string) *sharedtelemetry.AssetPreparatio
 		HashVerifyMS:            get("hash_verify_ms", "hashVerifyMs"),
 		MetadataProbeMS:         get("metadata_probe_ms", "metadataProbeMs"),
 		MaterializeLocalMS:      get("materialize_local_ms", "materializeLocalMs"),
+		CacheHitBytes:           get("cache_hit_bytes", "cacheHitBytes"),
+		CacheMissBytes:          get("cache_miss_bytes", "cacheMissBytes"),
+		PrefetchHitBytes:        get("prefetch_hit_bytes", "prefetchHitBytes"),
+		PrefetchHits:            get("prefetch_hits", "prefetchHits"),
+		WarmCacheHits:           get("warm_cache_hits", "warmCacheHits"),
+		RuntimeDownloads:        get("runtime_downloads", "runtimeDownloads"),
 	}
 	return &prep
 }

@@ -73,6 +73,8 @@ func (s *Scheduler) Reconcile(plan futureasset.Plan) error {
 	s.protects = newProtects
 	s.pendingProtects = pendingProtects
 	s.protectExpiries = protectExpiries
+	s.currentPlanID = plan.PlanID
+	s.currentPlanVersion = plan.Version
 	var events []Event
 	for _, job := range plan.PrefetchJobs {
 		if runtime, exists := s.jobs[job.JobID]; exists {

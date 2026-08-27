@@ -424,6 +424,11 @@ func (r *TaskRunner) run(parent context.Context, spec executor.TaskSpec) (TaskEx
 	// Build and log the performance report at job completion.
 	perfReport := telemetry.BuildPerformanceReport(phaseTimer, report.RawMetrics, gpuSampler.Stats())
 	r.callerLog.Info("%s", perfReport.Format())
+	// Propagate the declared scene count from the timer into the typed
+	// metrics envelope so the master can verify it against segment timings.
+	if report.RawMetrics != nil && perfReport.SceneCount > 0 {
+		report.RawMetrics.SceneCount = int32(perfReport.SceneCount)
+	}
 
 	return *report, nil
 }

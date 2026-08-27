@@ -28,6 +28,7 @@ import (
 	"velox-shared/futureasset"
 	"velox-worker-agent/internal/downloader"
 	"velox-worker-agent/internal/prefetch"
+	"velox-worker-agent/internal/taskrunner"
 )
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -39,10 +40,10 @@ func sha256hex(data []byte) string {
 
 // certScenario is the reusable setup for all three certification scenarios.
 type certScenario struct {
-	name       string
-	payloadB   []byte
-	shaB       string
-	pathB      string
+	name     string
+	payloadB []byte
+	shaB     string
+	pathB    string
 	// preparedJobsFn returns the PreparedJob list for origin classification.
 	// nil means no prefetch happened → warm_cache or runtime_download.
 	preparedJobsFn func() []prefetch.PreparedJob
@@ -70,13 +71,13 @@ func runCertScenario(t *testing.T, sc certScenario) {
 	// Build a CacheResolution that simulates the outcome of resolving
 	// asset-B in this scenario.
 	resolution := downloader.CacheResolution{
-		AssetID:    "asset-B",
-		Outcome:    downloader.CacheOutcomeHitValid,
-		LocalPath:  sc.pathB,
-		CacheHit:   sc.wantCacheHit,
-		SHA256:     assetref.ContentHash(sc.shaB),
-		SizeBytes:  int64(len(sc.payloadB)),
-		Source:     downloader.CacheSourceLocalDisk,
+		AssetID:   "asset-B",
+		Outcome:   downloader.CacheOutcomeHitValid,
+		LocalPath: sc.pathB,
+		CacheHit:  sc.wantCacheHit,
+		SHA256:    assetref.ContentHash(sc.shaB),
+		SizeBytes: int64(len(sc.payloadB)),
+		Source:    downloader.CacheSourceLocalDisk,
 	}
 	if !sc.wantCacheHit {
 		resolution.Downloaded = true
@@ -195,12 +196,13 @@ func runCertScenario(t *testing.T, sc certScenario) {
 // Asset was NOT in cache, NOT prefetched. Downloaded during attempt.
 //
 // Expected signature:
-//   origin = runtime_download
-//   cache_hit = false
-//   downloaded_during_attempt = 1
-//   cache_hit_bytes = 0
-//   cache_miss_bytes = asset_size
-//   prefetch_hit_bytes = 0
+//
+//	origin = runtime_download
+//	cache_hit = false
+//	downloaded_during_attempt = 1
+//	cache_hit_bytes = 0
+//	cache_miss_bytes = asset_size
+//	prefetch_hit_bytes = 0
 func TestCertification_COLD_RuntimeDownload(t *testing.T) {
 	payloadB := []byte("COLD-payload-for-asset-B-unique-content")
 	shaB := sha256hex(payloadB)
@@ -226,12 +228,13 @@ func TestCertification_COLD_RuntimeDownload(t *testing.T) {
 // pre-downloaded it. No PreparedJob entry matches.
 //
 // Expected signature:
-//   origin = warm_cache
-//   cache_hit = true
-//   downloaded_during_attempt = 0
-//   cache_hit_bytes = asset_size
-//   cache_miss_bytes = 0
-//   prefetch_hit_bytes = 0  (subset of cache_hit_bytes that was prefetch)
+//
+//	origin = warm_cache
+//	cache_hit = true
+//	downloaded_during_attempt = 0
+//	cache_hit_bytes = asset_size
+//	cache_miss_bytes = 0
+//	prefetch_hit_bytes = 0  (subset of cache_hit_bytes that was prefetch)
 func TestCertification_WARM_WarmCache(t *testing.T) {
 	payloadB := []byte("WARM-payload-for-asset-B-from-previous-job")
 	shaB := sha256hex(payloadB)
@@ -259,12 +262,13 @@ func TestCertification_WARM_WarmCache(t *testing.T) {
 // SHA256 and size.
 //
 // Expected signature:
-//   origin = prefetch
-//   cache_hit = true
-//   downloaded_during_attempt = 0
-//   cache_hit_bytes = asset_size
-//   cache_miss_bytes = 0
-//   prefetch_hit_bytes = asset_size  (ALL cache_hit_bytes are prefetch)
+//
+//	origin = prefetch
+//	cache_hit = true
+//	downloaded_during_attempt = 0
+//	cache_hit_bytes = asset_size
+//	cache_miss_bytes = 0
+//	prefetch_hit_bytes = asset_size  (ALL cache_hit_bytes are prefetch)
 func TestCertification_PREFETCH_FutureAssetPlan(t *testing.T) {
 	payloadB := []byte("PREFETCH-payload-for-asset-B-pre-downloaded")
 	shaB := sha256hex(payloadB)
@@ -656,5 +660,261 @@ func TestCertification_ColdCacheDownloadDuringAttempt(t *testing.T) {
 	}
 	if cache.PrefetchHitBytes != 0 {
 		t.Fatalf("PrefetchHitBytes = %d, want 0", cache.PrefetchHitBytes)
+	}
+}
+
+// ── Cross-job SHA collision certification ───────────────────────────────────
+// This test proves that when two different jobs share the same SHA256
+// (identical content), the origin classification is scoped to the job.
+//
+// Scenario:
+//   - Job B was prefetched, asset-S has SHA=shared-sha
+//   - Job C also needs asset-S with the same SHA=shared-sha
+//   - When resolving asset-S for Job C, the origin must be warm_cache
+//     (not prefetch) because the PreparedJob entry belongs to Job B.
+//
+// Expected signature for Job C's resolution:
+//
+//	origin = warm_cache (despite SHA match with Job B's prefetch)
+//	cache_hit = true
+//	prefetch_hit_bytes = 0
+func TestCertification_CrossJobSHACollision(t *testing.T) {
+	payload := []byte("shared-content-for-collision-test")
+	sharedSHA := sha256hex(payload)
+
+	// Job B was prefetched with this asset.
+	preparedJobs := []prefetch.PreparedJob{
+		{
+			JobID:      "job-B",
+			TaskID:     "task-B",
+			State:      prefetch.PreparationStatePrepared,
+			PreparedAt: time.Now().UTC().Add(-10 * time.Second),
+			Assets: map[string]prefetch.PreparedAssetMetadata{
+				"asset-S": {
+					AssetKey:  "asset-S",
+					AssetID:   "asset-S",
+					SHA256:    sharedSHA,
+					SizeBytes: int64(len(payload)),
+				},
+			},
+		},
+	}
+
+	sink := cacheResolutionSink{
+		preparedJobs: func() []prefetch.PreparedJob {
+			return preparedJobs
+		},
+	}
+
+	// ── Resolving asset-S for Job B → should be OriginPrefetch ───────
+	trackerB := &assetOperationTracker{cacheEnabled: true}
+	ctxB := withAssetOperationTracker(context.Background(), trackerB)
+	sink.RecordResolution(ctxB, downloader.CacheResolution{
+		AssetID:   "asset-S",
+		Outcome:   downloader.CacheOutcomeHitValid,
+		CacheHit:  true,
+		SHA256:    assetref.ContentHash(sharedSHA),
+		SizeBytes: int64(len(payload)),
+		Source:    downloader.CacheSourceLocalDisk,
+		JobID:     "job-B",
+		TaskID:    "task-B",
+		AssetKey:  "asset-S",
+	})
+	cacheB := trackerB.cacheSnapshot()
+	if cacheB.OriginPrefetchCount != 1 {
+		t.Fatalf("Job B OriginPrefetchCount = %d, want 1 (prefetched)", cacheB.OriginPrefetchCount)
+	}
+	if cacheB.OriginWarmCacheCount != 0 {
+		t.Fatalf("Job B OriginWarmCacheCount = %d, want 0", cacheB.OriginWarmCacheCount)
+	}
+
+	// ── Resolving asset-S for Job C → must be OriginWarmCache ───────
+	// Same SHA, same size, but JobID/TaskID don't match the PreparedJob.
+	trackerC := &assetOperationTracker{cacheEnabled: true}
+	ctxC := withAssetOperationTracker(context.Background(), trackerC)
+	sink.RecordResolution(ctxC, downloader.CacheResolution{
+		AssetID:   "asset-S",
+		Outcome:   downloader.CacheOutcomeHitValid,
+		CacheHit:  true,
+		SHA256:    assetref.ContentHash(sharedSHA),
+		SizeBytes: int64(len(payload)),
+		Source:    downloader.CacheSourceLocalDisk,
+		JobID:     "job-C",
+		TaskID:    "task-C",
+		AssetKey:  "asset-S",
+	})
+	cacheC := trackerC.cacheSnapshot()
+	if cacheC.OriginWarmCacheCount != 1 {
+		t.Fatalf("Job C OriginWarmCacheCount = %d, want 1 (same SHA but different job)", cacheC.OriginWarmCacheCount)
+	}
+	if cacheC.OriginPrefetchCount != 0 {
+		t.Fatalf("Job C OriginPrefetchCount = %d, want 0 (not prefetched for this job)", cacheC.OriginPrefetchCount)
+	}
+	if cacheC.PrefetchHitBytes != 0 {
+		t.Fatalf("Job C PrefetchHitBytes = %d, want 0", cacheC.PrefetchHitBytes)
+	}
+}
+
+// ── Cross-job SHA collision: same job, different task → warm_cache ──────────
+// Even within the same JobID, if the TaskID doesn't match the PreparedJob,
+// the resolution must be classified as warm_cache.
+func TestCertification_CrossTaskSHACollision(t *testing.T) {
+	payload := []byte("shared-content-cross-task-test")
+	sharedSHA := sha256hex(payload)
+
+	// PreparedJob for task-A within job-A.
+	preparedJobs := []prefetch.PreparedJob{
+		{
+			JobID:      "job-A",
+			TaskID:     "task-A",
+			State:      prefetch.PreparationStatePrepared,
+			PreparedAt: time.Now().UTC().Add(-10 * time.Second),
+			Assets: map[string]prefetch.PreparedAssetMetadata{
+				"asset-X": {
+					AssetKey:  "asset-X",
+					AssetID:   "asset-X",
+					SHA256:    sharedSHA,
+					SizeBytes: int64(len(payload)),
+				},
+			},
+		},
+	}
+
+	sink := cacheResolutionSink{
+		preparedJobs: func() []prefetch.PreparedJob {
+			return preparedJobs
+		},
+	}
+
+	// Resolving the same SHA for task-B within the same job → warm_cache
+	tracker := &assetOperationTracker{cacheEnabled: true}
+	ctx := withAssetOperationTracker(context.Background(), tracker)
+	sink.RecordResolution(ctx, downloader.CacheResolution{
+		AssetID:   "asset-X",
+		Outcome:   downloader.CacheOutcomeHitValid,
+		CacheHit:  true,
+		SHA256:    assetref.ContentHash(sharedSHA),
+		SizeBytes: int64(len(payload)),
+		Source:    downloader.CacheSourceLocalDisk,
+		JobID:     "job-A",
+		TaskID:    "task-B",
+		AssetKey:  "asset-X",
+	})
+	cache := tracker.cacheSnapshot()
+	if cache.OriginWarmCacheCount != 1 {
+		t.Fatalf("OriginWarmCacheCount = %d, want 1 (same job, different task)", cache.OriginWarmCacheCount)
+	}
+	if cache.OriginPrefetchCount != 0 {
+		t.Fatalf("OriginPrefetchCount = %d, want 0", cache.OriginPrefetchCount)
+	}
+}
+
+// ── Wire breakdown bytes/origin certification ──────────────────────────────
+// This test proves that AssetPreparationBreakdown on the wire carries the
+// correct byte-level attribution and origin counters when the cacheResolutionSink
+// classifies resolutions with Origin set.
+//
+// The breakdown must carry:
+//   - cache_hit_bytes = sum of SizeBytes for cache hits
+//   - cache_miss_bytes = sum of DownloadBytes for cache misses
+//   - prefetch_hit_bytes = subset of cache_hit_bytes where origin == prefetch
+//   - prefetch_hits / warm_cache_hits / runtime_downloads counts
+func TestCertification_WireBreakdownBytesAndOrigin(t *testing.T) {
+	payloadWarm := []byte("warm-asset-payload")
+	payloadPrefetch := []byte("prefetch-asset-payload")
+	payloadCold := []byte("cold-asset-payload")
+
+	shaWarm := sha256hex(payloadWarm)
+	preparedJobs := []prefetch.PreparedJob{
+		{
+			JobID:      "job-prefetch",
+			TaskID:     "task-prefetch",
+			State:      prefetch.PreparationStatePrepared,
+			PreparedAt: time.Now().UTC().Add(-10 * time.Second),
+			Assets: map[string]prefetch.PreparedAssetMetadata{
+				"asset-prefetch": {
+					AssetKey:  "asset-prefetch",
+					AssetID:   "asset-prefetch",
+					SHA256:    sha256hex(payloadPrefetch),
+					SizeBytes: int64(len(payloadPrefetch)),
+				},
+			},
+		},
+	}
+
+	sink := cacheResolutionSink{
+		preparedJobs: func() []prefetch.PreparedJob {
+			return preparedJobs
+		},
+	}
+
+	tracker := &assetOperationTracker{cacheEnabled: true}
+	ctx := withAssetOperationTracker(context.Background(), tracker)
+
+	// 1. Warm cache hit
+	sink.RecordResolution(ctx, downloader.CacheResolution{
+		AssetID: "asset-warm", Outcome: downloader.CacheOutcomeHitValid,
+		CacheHit: true, SizeBytes: int64(len(payloadWarm)),
+		SHA256: assetref.ContentHash(shaWarm), Source: downloader.CacheSourceLocalDisk,
+	})
+	// 2. Prefetch hit
+	sink.RecordResolution(ctx, downloader.CacheResolution{
+		AssetID: "asset-prefetch", Outcome: downloader.CacheOutcomeHitValid,
+		CacheHit: true, SizeBytes: int64(len(payloadPrefetch)),
+		SHA256: assetref.ContentHash(sha256hex(payloadPrefetch)),
+		Source: downloader.CacheSourceLocalDisk,
+	})
+	// 3. Cold download
+	sink.RecordResolution(ctx, downloader.CacheResolution{
+		AssetID: "asset-cold", Outcome: downloader.CacheOutcomeMissNotFound,
+		Downloaded: true, DownloadBytes: int64(len(payloadCold)),
+		SizeBytes: int64(len(payloadCold)),
+		SHA256:    assetref.ContentHash(sha256hex(payloadCold)),
+		Source:    downloader.CacheSourceMaster,
+	})
+
+	// Project onto wire breakdown.
+	report := taskrunner.TaskExecutionReport{}
+	attachAssetOperations(&report, tracker)
+
+	if report.AssetPreparation == nil {
+		t.Fatal("AssetPreparation breakdown missing")
+	}
+	bd := *report.AssetPreparation
+
+	// Byte attribution
+	wantHitBytes := int64(len(payloadWarm) + len(payloadPrefetch))
+	if bd.CacheHitBytes != wantHitBytes {
+		t.Fatalf("CacheHitBytes = %d, want %d", bd.CacheHitBytes, wantHitBytes)
+	}
+	wantMissBytes := int64(len(payloadCold))
+	if bd.CacheMissBytes != wantMissBytes {
+		t.Fatalf("CacheMissBytes = %d, want %d", bd.CacheMissBytes, wantMissBytes)
+	}
+	wantPrefetchBytes := int64(len(payloadPrefetch))
+	if bd.PrefetchHitBytes != wantPrefetchBytes {
+		t.Fatalf("PrefetchHitBytes = %d, want %d", bd.PrefetchHitBytes, wantPrefetchBytes)
+	}
+
+	// Origin counters
+	if bd.PrefetchHits != 1 {
+		t.Fatalf("PrefetchHits = %d, want 1", bd.PrefetchHits)
+	}
+	if bd.WarmCacheHits != 1 {
+		t.Fatalf("WarmCacheHits = %d, want 1", bd.WarmCacheHits)
+	}
+	if bd.RuntimeDownloads != 1 {
+		t.Fatalf("RuntimeDownloads = %d, want 1", bd.RuntimeDownloads)
+	}
+
+	// Count fields
+	if bd.AssetsRequired != 3 {
+		t.Fatalf("AssetsRequired = %d, want 3", bd.AssetsRequired)
+	}
+	if bd.CacheHits != 2 {
+		t.Fatalf("CacheHits = %d, want 2", bd.CacheHits)
+	}
+	if bd.CacheMisses != 1 {
+		t.Fatalf("CacheMisses = %d, want 1", bd.CacheMisses)
 	}
 }

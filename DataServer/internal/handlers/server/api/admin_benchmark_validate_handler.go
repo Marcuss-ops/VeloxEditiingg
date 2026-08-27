@@ -63,6 +63,15 @@ func (h *AdminBenchmarkValidateHandler) RunAndValidate() gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "fixture_id and worker_id are required"})
 			return
 		}
+		// Fail-closed: nil renderer means the benchmark capability is
+		// not configured. Return 503 instead of panicking.
+		if h.deps.Renderer == nil {
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{
+				"code":  "BENCHMARK_MISCONFIGURED",
+				"error": "benchmark renderer is not configured",
+			})
+			return
+		}
 		if req.MaxConcurrency <= 0 {
 			req.MaxConcurrency = 4
 		}

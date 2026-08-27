@@ -270,6 +270,18 @@ message AssetPreparationBreakdown {
   int64 hash_verify_ms = 12;
   int64 metadata_probe_ms = 13;
   int64 materialize_local_ms = 14;
+  // Byte-level attribution: derived from the single cacheResolutionSink.
+  // cache_hit_bytes counts bytes served from verified local cache;
+  // cache_miss_bytes counts bytes downloaded from remote; prefetch_hit_bytes
+  // is the subset of cache_hit_bytes where origin == prefetch.
+  int64 cache_hit_bytes = 15;
+  int64 cache_miss_bytes = 16;
+  int64 prefetch_hit_bytes = 17;
+  // Origin counters: exactly one of {prefetch_hits, warm_cache_hits,
+  // runtime_downloads} is incremented per resolution.
+  int64 prefetch_hits = 18;
+  int64 warm_cache_hits = 19;
+  int64 runtime_downloads = 20;
 }
 
 message AttemptWaterfallStage {
@@ -988,6 +1000,11 @@ message TaskExecutionMetrics {
   int64 progressive_overlap_ms = 88;                      // render/upload overlap window (ms)
   int64 trailer_to_open_ms = 89;                          // C++ trailer_finished → Go file open (ms)
   int64 mux_to_open_us = 90;                              // first progress event → Go file open (us)
+
+  // Declared scene count from the worker's RenderPlan Timeline length.
+  // The master verifies this against COUNT(DISTINCT scene_id) from
+  // segment_timings; a mismatch is logged as a warning.
+  int32 scene_count = 91;
 }
 
 // WorkerResourceCounters is the typed payload of Heartbeat.resources.

@@ -69,12 +69,14 @@ func (h *Handler) refreshFutureAssetPlan(ctx context.Context, workerID, currentJ
 		protectionLimit = prefetchLimit
 	}
 	desired := make([]taskgraph.FutureReservation, 0, prefetchLimit)
+	skipCounts := newPrefetchSkipCounter()
 	jobs := make([]futureasset.Job, 0, protectionLimit)
 	for _, candidate := range candidates {
 		if len(jobs) >= protectionLimit {
 			break
 		}
 		if _, blocked := reservedByOther[candidate.TaskID]; blocked {
+			skipCounts.add(SkipReservedByOther)
 			continue
 		}
 		if existing, exists := owned[candidate.TaskID]; exists {
@@ -90,15 +92,18 @@ func (h *Handler) refreshFutureAssetPlan(ctx context.Context, workerID, currentJ
 
 		payload, err := store.FutureTaskPayload(ctx, candidate.TaskID)
 		if err != nil {
+			skipCounts.add(SkipPayloadUnavailable)
 			continue
 		}
 		assets := futureAssetManifests(payload)
 		decision, err := selectWarmPlacement(warmSnapshots, assets)
 		if err != nil || decision.WorkerID != workerID {
+			skipCounts.add(SkipDifferentWarmWorker)
 			continue
 		}
 		match := h.placementMatcher.Select(snapshot, []placement.TaskCandidate{candidate})
 		if match.Candidate == nil {
+			skipCounts.add(SkipPlacementRejected)
 			continue
 		}
 		reservation := taskgraph.FutureReservation{TaskID: candidate.TaskID, JobID: candidate.JobID, WorkerID: workerID, ReservationID: fmt.Sprintf("future:%s:%s", workerID, candidate.TaskID), TaskRevision: candidate.Revision, Distance: len(jobs) + 1, ExpiresAt: time.Now().UTC().Add(h.futureAssetPlanTTL())}
@@ -109,16 +114,19 @@ func (h *Handler) refreshFutureAssetPlan(ctx context.Context, workerID, currentJ
 				continue
 			}
 			if !acquired {
+				skipCounts.add(SkipReservationConflict)
 				continue
 			}
 			logGRPCf(ctx, logging.LevelInfo, logging.CodeGRPCPrefetch, "[PREFETCH_TIMING] event=reservation_created worker=%s task=%s at=%s", workerID, candidate.TaskID, time.Now().UTC().Format(time.RFC3339Nano))
 			if h.dbStore != nil {
-				_ = h.dbStore.LogJobEvent(candidate.JobID, "prefetch.reservation_created", map[string]interface{}{
+				if err := h.dbStore.LogJobEvent(candidate.JobID, "prefetch.reservation_created", map[string]interface{}{
 					"worker_id":      workerID,
 					"task_id":        candidate.TaskID,
 					"reservation_id": reservation.ReservationID,
 					"distance":       reservation.Distance,
-				})
+				}); err != nil {
+					logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCPrefetchFailed, "[PREFETCH] persist reservation_created failed job=%s event=prefetch.reservation_created err=%v", candidate.JobID, err)
+				}
 			}
 		} else {
 			// N+4..N+10 are retention forecasts only. They must be
@@ -145,6 +153,7 @@ func (h *Handler) refreshFutureAssetPlan(ctx context.Context, workerID, currentJ
 	planBuiltAt = time.Now().UTC()
 	plan.Limits = limits
 	logGRPCf(ctx, logging.LevelInfo, logging.CodeGRPCPrefetch, "[PREFETCH] plan worker=%s version=%d current_job=%s hard_reservations=%d protection_jobs=%d protected_assets=%d", workerID, plan.Version, currentJobID, len(desired), len(jobs), len(plan.Protect))
+	logGRPCf(ctx, logging.LevelInfo, logging.CodeGRPCPrefetch, "[PREFETCH] plan_decision worker=%s ready_candidates=%d reserved=%d skipped=%d skip_reasons=%s", workerID, len(candidates), len(desired), skipCounts.total(), skipCounts.summary())
 	if err := h.SendFutureAssetPlan(ctx, plan); err != nil {
 		logGRPCf(ctx, logging.LevelError, logging.CodeGRPCPrefetchFailed, "[PREFETCH] send worker=%s: %v", workerID, err)
 	} else {
@@ -161,7 +170,7 @@ func (h *Handler) refreshFutureAssetPlan(ctx context.Context, workerID, currentJ
 			for _, a := range job.Assets {
 				assetKeys = append(assetKeys, a.AssetKey)
 			}
-			_ = h.dbStore.LogJobEvent(job.JobID, "prefetch.future_plan_sent", map[string]interface{}{
+			if err := h.dbStore.LogJobEvent(job.JobID, "prefetch.future_plan_sent", map[string]interface{}{
 				"worker_id":      workerID,
 				"task_id":        job.TaskID,
 				"reservation_id": job.ReservationID,
@@ -170,7 +179,9 @@ func (h *Handler) refreshFutureAssetPlan(ctx context.Context, workerID, currentJ
 				"distance":       job.Distance,
 				"asset_count":    len(job.Assets),
 				"asset_keys":     assetKeys,
-			})
+			}); err != nil {
+				logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCPrefetchFailed, "[PREFETCH] persist future_plan_sent failed job=%s event=prefetch.future_plan_sent err=%v", job.JobID, err)
+			}
 		}
 	}
 }

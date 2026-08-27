@@ -78,13 +78,13 @@ type AssetPreparationSummary struct {
 	DownloadedNow int // bytes transferred during this attempt
 
 	// Origin counts: how many assets were resolved via each path.
-	PrefetchHits  int // assets resolved from prefetch (PreparedJob match)
-	WarmCacheHits int // assets resolved from warm cache (no PreparedJob)
+	PrefetchHits     int // assets resolved from prefetch (PreparedJob match)
+	WarmCacheHits    int // assets resolved from warm cache (no PreparedJob)
 	RuntimeDownloads int // bytes downloaded during this attempt (count)
 
 	// Byte-level attribution: derived from the single cacheResolutionSink.
-	CacheHitBytes   int64 // total bytes served from verified local cache
-	CacheMissBytes  int64 // total bytes downloaded from remote
+	CacheHitBytes    int64 // total bytes served from verified local cache
+	CacheMissBytes   int64 // total bytes downloaded from remote
 	PrefetchHitBytes int64 // bytes served from prefetch (subset of CacheHitBytes)
 
 	CacheLookupMS      int64
@@ -319,6 +319,9 @@ func (s cacheResolutionSink) RecordResolution(ctx context.Context, resolution do
 // to a prepared asset and invalidates the stale entry. This is called when
 // the transferer classifies a cache entry as invalid (SHA/size mismatch),
 // meaning the prefetch's preparation evidence is no longer trustworthy.
+// The match is job-scoped: when the resolution carries identity fields,
+// only the matching PreparedJob entry is invalidated, preventing
+// cross-job corruption of unrelated prefetch evidence.
 func (s cacheResolutionSink) invalidateCorruptPreparedAsset(resolution downloader.CacheResolution) {
 	if s.preparedJobs == nil || s.invalidatePreparedAsset == nil {
 		return
@@ -326,28 +329,60 @@ func (s cacheResolutionSink) invalidateCorruptPreparedAsset(resolution downloade
 	jobs := s.preparedJobs()
 	for _, job := range jobs {
 		for assetKey, asset := range job.Assets {
-			// Match by SHA256 — the prepared asset's identity.
-			if asset.SHA256 == string(resolution.SHA256) {
-				s.invalidatePreparedAsset(job.JobID, assetKey)
-				// Emit corruption metric.
-				switch resolution.Outcome {
-				case downloader.CacheOutcomeMissInvalid:
-					telemetry.GetPrometheusMetrics().RecordPrefetchCorrupted("size_mismatch")
-				case downloader.CacheOutcomeMissHashMismatch:
-					telemetry.GetPrometheusMetrics().RecordPrefetchCorrupted("hash_mismatch")
-				}
-				return
+			if !resolutionCorruptionMatch(resolution, job, asset) {
+				continue
 			}
+			s.invalidatePreparedAsset(job.JobID, assetKey)
+			// Emit corruption metric.
+			switch resolution.Outcome {
+			case downloader.CacheOutcomeMissInvalid:
+				telemetry.GetPrometheusMetrics().RecordPrefetchCorrupted("size_mismatch")
+			case downloader.CacheOutcomeMissHashMismatch:
+				telemetry.GetPrometheusMetrics().RecordPrefetchCorrupted("hash_mismatch")
+			}
+			return
 		}
 	}
 }
 
+// resolutionCorruptionMatch checks if a corrupt cache resolution corresponds
+// to a prepared asset. Unlike resolutionPrefetchMatch, this does NOT require
+// SizeBytes to match (corrupt entries may have zero/incorrect sizes) and does
+// NOT require the SHA to match the file (that's exactly why it's corrupt).
+// It matches on SHA256 (the EXPECTED hash from the request) and optionally
+// scopes to the job/task/asset identity when available.
+func resolutionCorruptionMatch(resolution downloader.CacheResolution, job prefetch.PreparedJob, asset prefetch.PreparedAssetMetadata) bool {
+	if resolution.SHA256 == "" || asset.SHA256 == "" {
+		return false
+	}
+	if string(resolution.SHA256) != asset.SHA256 {
+		return false
+	}
+	// Job-scoped match: when the resolution carries identity fields,
+	// require them to align with the PreparedJob entry.
+	if resolution.JobID != "" && job.JobID != "" && resolution.JobID != job.JobID {
+		return false
+	}
+	if resolution.TaskID != "" && job.TaskID != "" && resolution.TaskID != job.TaskID {
+		return false
+	}
+	if resolution.AssetKey != "" && asset.AssetKey != "" && string(resolution.AssetKey) != asset.AssetKey {
+		return false
+	}
+	return true
+}
+
 // classifyOrigin determines the ResolutionOrigin for a cache hit by checking
 // whether the asset has a matching PreparedJob entry. A PreparedJob with
-// matching SHA256 and size proves the asset was materialized by a
-// FutureAssetPlan before the current attempt — this is OriginPrefetch. A
-// cache hit without a PreparedJob entry is OriginWarmCache (the asset was
-// already local from a prior job or session).
+// matching JobID, TaskID, AssetKey, SHA256, and SizeBytes proves the asset
+// was materialized by a FutureAssetPlan for the specific job — this is
+// OriginPrefetch. A cache hit without a matching PreparedJob entry is
+// OriginWarmCache (the asset was already local from a prior job or session).
+//
+// The multi-field match prevents cross-job SHA collisions: if Job C has the
+// same SHA as an asset prefetched for Job B, the resolution for Job C is
+// correctly classified as OriginWarmCache because the JobID/TaskID/AssetKey
+// don't match the PreparedJob entry for Job B.
 func (s cacheResolutionSink) classifyOrigin(resolution downloader.CacheResolution) downloader.ResolutionOrigin {
 	if s.preparedJobs == nil {
 		return downloader.OriginWarmCache
@@ -355,18 +390,57 @@ func (s cacheResolutionSink) classifyOrigin(resolution downloader.CacheResolutio
 	jobs := s.preparedJobs()
 	for _, job := range jobs {
 		for _, asset := range job.Assets {
-			if asset.SHA256 == string(resolution.SHA256) && asset.SizeBytes > 0 {
-				// Prefer the origin carried on the PreparedAssetMetadata when
-				// available. The scheduler tags each prepared asset at prefetch
-				// time; this avoids re-deriving the origin from scratch.
-				if asset.Origin != "" {
-					return asset.Origin
-				}
-				return downloader.OriginPrefetch
+			if !resolutionPrefetchMatch(resolution, job, asset) {
+				continue
 			}
+			// Prefer the origin carried on the PreparedAssetMetadata when
+			// available. The scheduler tags each prepared asset at prefetch
+			// time; this avoids re-deriving the origin from scratch.
+			if asset.Origin != "" {
+				return asset.Origin
+			}
+			return downloader.OriginPrefetch
 		}
 	}
 	return downloader.OriginWarmCache
+}
+
+// resolutionPrefetchMatch reports whether the cache resolution matches a
+// prepared asset entry. The match requires all five identity fields to align:
+// JobID, TaskID, AssetKey, SHA256, and SizeBytes. This prevents cross-job
+// SHA collisions where two different jobs happen to share the same content
+// hash.
+func resolutionPrefetchMatch(resolution downloader.CacheResolution, job prefetch.PreparedJob, asset prefetch.PreparedAssetMetadata) bool {
+	if resolution.SHA256 == "" || asset.SHA256 == "" {
+		return false
+	}
+	if string(resolution.SHA256) != asset.SHA256 {
+		return false
+	}
+	if asset.SizeBytes <= 0 {
+		return false
+	}
+	// Size match: validate when the resolution carries a known size.
+	// A zero SizeBytes on the resolution means the caller did not supply
+	// a size contract (legacy/test path); only reject mismatches when both
+	// sides have a positive value.
+	if resolution.SizeBytes > 0 && resolution.SizeBytes != asset.SizeBytes {
+		return false
+	}
+	// Job-scoped match: when the resolution carries identity fields,
+	// require them to align with the PreparedJob entry. This prevents
+	// a cache hit for Job C from being classified as prefetch based on
+	// a PreparedJob entry belonging to Job B.
+	if resolution.JobID != "" && job.JobID != "" && resolution.JobID != job.JobID {
+		return false
+	}
+	if resolution.TaskID != "" && job.TaskID != "" && resolution.TaskID != job.TaskID {
+		return false
+	}
+	if resolution.AssetKey != "" && asset.AssetKey != "" && string(resolution.AssetKey) != asset.AssetKey {
+		return false
+	}
+	return true
 }
 
 func cacheAssetKey(assetID, expectedSHA256 string) string {
@@ -520,6 +594,12 @@ func attachAssetOperations(report *taskrunner.TaskExecutionReport, tracker *asse
 			HashVerifyMS:            prep.HashVerifyMS,
 			MetadataProbeMS:         prep.MetadataProbeMS,
 			MaterializeLocalMS:      prep.MaterializeLocalMS,
+			CacheHitBytes:           prep.CacheHitBytes,
+			CacheMissBytes:          prep.CacheMissBytes,
+			PrefetchHitBytes:        prep.PrefetchHitBytes,
+			PrefetchHits:            int64(prep.PrefetchHits),
+			WarmCacheHits:           int64(prep.WarmCacheHits),
+			RuntimeDownloads:        int64(prep.RuntimeDownloads),
 		}
 	}
 	legacy["cache.enabled"] = tracker.cacheEnabled || len(records) > 0

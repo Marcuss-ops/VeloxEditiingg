@@ -134,6 +134,7 @@ type ExecutionSummary struct {
 	// Attempt exists (including jobs whose runtime row was cleaned up).
 	AttemptID           string                `json:"attempt_id,omitempty"`
 	WorkerID            string                `json:"worker_id,omitempty"`
+	WorkerName          string                `json:"worker_name,omitempty"`
 	Phase               string                `json:"phase,omitempty"`
 	Progress            *ExecutionProgress    `json:"progress,omitempty"`
 	LiveMetrics         *ExecutionLiveMetrics `json:"live_metrics,omitempty"`

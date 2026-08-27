@@ -128,6 +128,7 @@ func applyExecutionLiveOverlay(summary *ExecutionSummary, attempt *AttemptSummar
 	}
 	summary.AttemptID = attempt.AttemptID
 	summary.WorkerID = attempt.WorkerID
+	summary.WorkerName = attempt.WorkerName
 	summary.Phase = attempt.Phase
 	summary.Progress = &ExecutionProgress{
 		Percent: attempt.ProgressPercent, Scene: attempt.CurrentScene, ScenesTotal: attempt.TotalScenes,

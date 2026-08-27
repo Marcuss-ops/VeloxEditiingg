@@ -29,11 +29,11 @@ type ConcurrentBenchmarkDeps struct {
 // ConcurrentBenchmarkRequest is the request body for the concurrent benchmark
 // endpoint.
 type ConcurrentBenchmarkRequest struct {
-	FixtureID           string `json:"fixture_id"`
-	MaxConcurrency      int    `json:"max_concurrency"`
-	RunsPerLevel        int    `json:"runs_per_level"`
-	WorkerID            string `json:"worker_id"`
-	CacheMode           string `json:"cache_mode"`
+	FixtureID      string `json:"fixture_id"`
+	MaxConcurrency int    `json:"max_concurrency"`
+	RunsPerLevel   int    `json:"runs_per_level"`
+	WorkerID       string `json:"worker_id"`
+	CacheMode      string `json:"cache_mode"`
 }
 
 // AdminConcurrentBenchmarkHandler serves POST /api/v1/admin/benchmarks/concurrent.
@@ -63,6 +63,16 @@ func (h *AdminConcurrentBenchmarkHandler) RunConcurrentBenchmark() gin.HandlerFu
 		}
 		if req.WorkerID == "" {
 			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "worker_id is required"})
+			return
+		}
+
+		// Fail-closed: nil renderer means the benchmark capability is
+		// not configured. Return 503 instead of panicking.
+		if h.deps.Renderer == nil {
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{
+				"code":  "BENCHMARK_MISCONFIGURED",
+				"error": "benchmark renderer is not configured",
+			})
 			return
 		}
 

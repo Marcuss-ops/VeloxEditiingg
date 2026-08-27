@@ -130,6 +130,15 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *wor
 		}
 	}
 	typedMetrics.SceneCount = len(seenScenes)
+	// Consistency check: verify the worker's declared scene count matches
+	// the Master's observed count from segment timings. A mismatch indicates
+	// the worker's timer didn't capture all scenes or the RenderPlan
+	// Timeline length diverged from actual segment execution.
+	if declaredSceneCount := tr.GetExecutionMetrics().GetSceneCount(); declaredSceneCount > 0 && int(declaredSceneCount) != len(seenScenes) {
+		logGRPCf(ctxForTaskSession(sess), logging.LevelWarn, logging.CodeGRPCTaskResult,
+			"[SCENE_COUNT] worker declared %d scenes but master observed %d from segment_timings for task=%s attempt=%s",
+			declaredSceneCount, len(seenScenes), taskID, attemptID)
+	}
 	phaseTimings := phaseTimingsFromProto(attemptID, taskID, jobID, workerID, canonicalExecutorID, canonicalExecutorVersion, tr.GetPhaseTimings())
 	partialPhaseTimings := partialPhaseTimingsFromProto(attemptID, taskID, jobID, workerID, canonicalExecutorID, canonicalExecutorVersion, tr.GetPartialPhaseMetrics())
 

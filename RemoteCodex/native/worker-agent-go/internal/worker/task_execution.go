@@ -115,24 +115,6 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 		}
 	}
 
-	// Capture a resource snapshot before the attempt begins so we can
-	// attribute per-job resource consumption via delta computation.
-	var resourceStart telemetry.ResourceSnapshot
-	if w.sampler != nil {
-		if snap := w.sampler.Latest(); snap != nil {
-			resourceStart = telemetry.ResourceSnapshot{
-				RSSPeakBytes:   snap.ProcessRSSPeakBytes,
-				CPUClockMS:     int64(snap.CPUUtilRatio * 1000), // placeholder: sampler gives ratio, not clock
-				DiskReadBytes:  snap.DiskReadBytesTotal,
-				DiskWriteBytes: snap.DiskWriteBytesTotal,
-				NetworkRxBytes: snap.NetworkReceiveBytesTotal,
-				NetworkTxBytes: snap.NetworkTransmitBytesTotal,
-				IOWaitMS:       snap.DiskIoWaitMs,
-				PageFaults:     snap.MajorPageFaultsTotal,
-			}
-		}
-	}
-
 	startTime := time.Now()
 	milestones := telemetry.NewAttemptMilestoneRecorderAt(startTime)
 	milestones.Mark(sharedtelemetry.MilestoneAttemptAccepted)
@@ -268,8 +250,10 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 			raw = *report.TypedMetrics
 		}
 		telemetry.MergeAttemptResourceFactsInto(&raw, result.Metrics)
-		// Populate per-job resource attribution from the start/end delta.
-		raw.PopulateJobResourceAttribution(resourceStart)
+		// Derive per-job resource attribution from session-produced deltas.
+		// The AttemptTelemetrySession already produces per-attempt values;
+		// no host-level baseline subtraction is needed.
+		raw.DeriveJobResourceAttribution()
 		report.RawMetrics = &raw
 		report.TypedMetrics = report.RawMetrics
 	}

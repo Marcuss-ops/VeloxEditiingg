@@ -51,15 +51,17 @@ func (w *Worker) sendPrefetchLifecycleEvent(ctx context.Context, eventType, jobI
 // reference via closure; call it after the worker is fully initialized.
 func (w *Worker) prefetchPreparedHook() func(prefetch.PreparedJob) {
 	return func(job prefetch.PreparedJob) {
-		w.logger.Info("[PREFETCH] state=PREPARED job=%s task=%s assets=%d prepared_at=%s", job.JobID, job.TaskID, len(job.Assets), job.PreparedAt.UTC().Format(time.RFC3339Nano))
+		w.logger.Info("[PREFETCH] state=PREPARED job=%s task=%s reservation=%s plan=%s@v%d distance=%d assets=%d prepared_at=%s", job.JobID, job.TaskID, job.ReservationID, job.PlanID, job.PlanVersion, job.Distance, len(job.Assets), job.PreparedAt.UTC().Format(time.RFC3339Nano))
 		// Send lifecycle events for each prepared asset.
 		for _, asset := range job.Assets {
 			asset := asset
-			w.sendPrefetchLifecycleEvent(context.Background(), "prefetch_prepared", job.JobID, job.TaskID, futureasset.Plan{}, func(e *pb.PrefetchLifecycleEvent) {
+			w.sendPrefetchLifecycleEvent(context.Background(), "prefetch_prepared", job.JobID, job.TaskID, futureasset.Plan{PlanID: job.PlanID, Version: job.PlanVersion}, func(e *pb.PrefetchLifecycleEvent) {
 				e.AssetId = asset.AssetID
 				e.AssetSha256 = asset.SHA256
 				e.AssetSizeBytes = asset.SizeBytes
 				e.LocalPath = asset.LocalPath
+				e.ReservationId = job.ReservationID
+				e.Distance = int32(job.Distance)
 				e.OccurredAt = timestamppb.New(asset.PreparedAt)
 			})
 		}

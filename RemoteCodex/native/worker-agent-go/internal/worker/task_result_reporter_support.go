@@ -105,6 +105,12 @@ func buildTaskResult(r *taskResultReporter, pte *PendingTaskExecution, taskID, a
 			HashVerifyMs:            p.HashVerifyMS,
 			MetadataProbeMs:         p.MetadataProbeMS,
 			MaterializeLocalMs:      p.MaterializeLocalMS,
+			CacheHitBytes:           p.CacheHitBytes,
+			CacheMissBytes:          p.CacheMissBytes,
+			PrefetchHitBytes:        p.PrefetchHitBytes,
+			PrefetchHits:            p.PrefetchHits,
+			WarmCacheHits:           p.WarmCacheHits,
+			RuntimeDownloads:        p.RuntimeDownloads,
 		}
 	}
 	for _, segment := range report.Segments {

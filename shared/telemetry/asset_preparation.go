@@ -53,6 +53,20 @@ type AssetPreparationBreakdown struct {
 	HashVerifyMS       int64 `json:"hash_verify_ms"`
 	MetadataProbeMS    int64 `json:"metadata_probe_ms"`
 	MaterializeLocalMS int64 `json:"materialize_local_ms"`
+
+	// Byte-level attribution: derived from the single cacheResolutionSink.
+	// CacheHitBytes counts bytes served from verified local cache;
+	// CacheMissBytes counts bytes downloaded from remote; PrefetchHitBytes
+	// is the subset of CacheHitBytes where origin == prefetch.
+	CacheHitBytes    int64 `json:"cache_hit_bytes"`
+	CacheMissBytes   int64 `json:"cache_miss_bytes"`
+	PrefetchHitBytes int64 `json:"prefetch_hit_bytes"`
+
+	// Origin counters: exactly one of {PrefetchHits, WarmCacheHits,
+	// RuntimeDownloads} is incremented per resolution.
+	PrefetchHits     int64 `json:"prefetch_hits"`
+	WarmCacheHits    int64 `json:"warm_cache_hits"`
+	RuntimeDownloads int64 `json:"runtime_downloads"`
 }
 
 // Wire contract: the durable payload is the Master's protojson.Marshal of the
@@ -105,5 +119,11 @@ func (b *AssetPreparationBreakdown) UnmarshalJSON(data []byte) error {
 	b.HashVerifyMS = pick("hash_verify_ms", "hashVerifyMs")
 	b.MetadataProbeMS = pick("metadata_probe_ms", "metadataProbeMs")
 	b.MaterializeLocalMS = pick("materialize_local_ms", "materializeLocalMs")
+	b.CacheHitBytes = pick("cache_hit_bytes", "cacheHitBytes")
+	b.CacheMissBytes = pick("cache_miss_bytes", "cacheMissBytes")
+	b.PrefetchHitBytes = pick("prefetch_hit_bytes", "prefetchHitBytes")
+	b.PrefetchHits = pick("prefetch_hits", "prefetchHits")
+	b.WarmCacheHits = pick("warm_cache_hits", "warmCacheHits")
+	b.RuntimeDownloads = pick("runtime_downloads", "runtimeDownloads")
 	return nil
 }

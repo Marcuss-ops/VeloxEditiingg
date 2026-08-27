@@ -125,6 +125,14 @@ type CacheResolution struct {
 	// where the origin is inherently prefetch (memory cache is populated
 	// exclusively by the prefetch path).
 	Origin ResolutionOrigin
+
+	// JobID, TaskID and AssetKey carry the request identity so that
+	// classifyOrigin can scope the PreparedJob lookup to the specific
+	// job/task/asset, preventing cross-job SHA collisions from producing
+	// false OriginPrefetch classifications.
+	JobID    string
+	TaskID   string
+	AssetKey assetref.AssetKey
 }
 
 // ResolutionSink observes each completed resolution exactly once. It runs on
@@ -183,7 +191,7 @@ func (r *CacheResolver) Resolve(ctx context.Context, req DownloadRequest) (Cache
 		if asset, ok, err := r.l1.Find(ctx, req); err != nil {
 			return CacheResolution{}, err
 		} else if ok {
-			resolution := CacheResolution{AssetID: req.AssetID, Outcome: CacheOutcomeHitValid, LocalPath: asset.LocalPath, CacheHit: true, Source: CacheSourceLocalDisk, SHA256: asset.SHA256, SizeBytes: req.SizeBytes}
+			resolution := CacheResolution{AssetID: req.AssetID, Outcome: CacheOutcomeHitValid, LocalPath: asset.LocalPath, CacheHit: true, Source: CacheSourceLocalDisk, SHA256: asset.SHA256, SizeBytes: req.SizeBytes, JobID: req.JobID, TaskID: req.TaskID, AssetKey: req.AssetKey}
 			if r.sink != nil {
 				r.sink.RecordResolution(ctx, resolution)
 			}
@@ -195,9 +203,12 @@ func (r *CacheResolver) Resolve(ctx context.Context, req DownloadRequest) (Cache
 		if r.sink != nil && !errors.Is(err, ErrEmptyKey) &&
 			!errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 			r.sink.RecordResolution(ctx, CacheResolution{
-				AssetID: req.AssetID,
-				Outcome: CacheOutcomeMissNotFound,
-				Source:  CacheSourceMaster,
+				AssetID:  req.AssetID,
+				Outcome:  CacheOutcomeMissNotFound,
+				Source:   CacheSourceMaster,
+				JobID:    req.JobID,
+				TaskID:   req.TaskID,
+				AssetKey: req.AssetKey,
 			})
 		}
 		return CacheResolution{}, err
@@ -222,6 +233,9 @@ func resolutionFromDownloadedAsset(asset DownloadedAsset, req DownloadRequest) C
 		Source:    CacheSourceMaster,
 		SHA256:    asset.SHA256,
 		Timing:    asset.Timing,
+		JobID:     req.JobID,
+		TaskID:    req.TaskID,
+		AssetKey:  req.AssetKey,
 	}
 	if resolution.AssetID == "" {
 		resolution.AssetID = req.AssetID

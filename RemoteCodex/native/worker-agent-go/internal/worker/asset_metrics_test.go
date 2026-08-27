@@ -485,6 +485,8 @@ func TestAssetPreparationSummary_AggregatesPerAttemptDrillDown(t *testing.T) {
 		CacheLookupMS: 27, RemoteWaitMS: 9000, RemoteWaitCount: 1,
 		DownloadWallMS: 3200, DownloadWorkMS: 3100,
 		HashVerifyMS: 40, MetadataProbeMS: 5, MaterializeLocalMS: 55,
+		// Bytes/origin are zero: this test records resolutions without
+		// Origin set (tracker.recordResolution, not via cacheResolutionSink).
 	}
 	if tp != want {
 		t.Fatalf("typed breakdown = %+v, want %+v", tp, want)
@@ -1107,7 +1109,7 @@ func TestCacheResolutionSink_ClassifyOriginPrefersMetadataOrigin(t *testing.T) {
 					Origin: downloader.OriginPrefetch,
 				},
 			},
-			},
+		},
 	}
 	sink := cacheResolutionSink{
 		preparedJobs: func() []prefetch.PreparedJob { return preparedJobs },
@@ -1291,15 +1293,15 @@ func TestProjectAttemptCacheFacts_ByteCounters(t *testing.T) {
 // provider's total cache size.
 func TestProjectAttemptCacheFacts_BytesFromLocalCacheDerivation(t *testing.T) {
 	cache := AttemptCacheMetrics{
-		CacheLookups:       5,
-		CacheHits:          3,
-		CacheMisses:        2,
-		CacheDownloadCount: 2,
-		CacheDownloadBytes: 8000,
-		CacheHitBytes:      12000,
-		CacheMissBytes:     8000,
-		PrefetchHitBytes:   5000,
-		PrefetchHitCount:   1,
+		CacheLookups:         5,
+		CacheHits:            3,
+		CacheMisses:          2,
+		CacheDownloadCount:   2,
+		CacheDownloadBytes:   8000,
+		CacheHitBytes:        12000,
+		CacheMissBytes:       8000,
+		PrefetchHitBytes:     5000,
+		PrefetchHitCount:     1,
 		OriginPrefetchCount:  1,
 		OriginWarmCacheCount: 2,
 		OriginDownloadCount:  2,

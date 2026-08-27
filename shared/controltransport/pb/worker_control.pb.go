@@ -1298,8 +1298,20 @@ type AssetPreparationBreakdown struct {
 	HashVerifyMs       int64 `protobuf:"varint,12,opt,name=hash_verify_ms,json=hashVerifyMs,proto3" json:"hash_verify_ms,omitempty"`
 	MetadataProbeMs    int64 `protobuf:"varint,13,opt,name=metadata_probe_ms,json=metadataProbeMs,proto3" json:"metadata_probe_ms,omitempty"`
 	MaterializeLocalMs int64 `protobuf:"varint,14,opt,name=materialize_local_ms,json=materializeLocalMs,proto3" json:"materialize_local_ms,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// Byte-level attribution: derived from the single cacheResolutionSink.
+	// cache_hit_bytes counts bytes served from verified local cache;
+	// cache_miss_bytes counts bytes downloaded from remote; prefetch_hit_bytes
+	// is the subset of cache_hit_bytes where origin == prefetch.
+	CacheHitBytes    int64 `protobuf:"varint,15,opt,name=cache_hit_bytes,json=cacheHitBytes,proto3" json:"cache_hit_bytes,omitempty"`
+	CacheMissBytes   int64 `protobuf:"varint,16,opt,name=cache_miss_bytes,json=cacheMissBytes,proto3" json:"cache_miss_bytes,omitempty"`
+	PrefetchHitBytes int64 `protobuf:"varint,17,opt,name=prefetch_hit_bytes,json=prefetchHitBytes,proto3" json:"prefetch_hit_bytes,omitempty"`
+	// Origin counters: exactly one of {prefetch_hits, warm_cache_hits,
+	// runtime_downloads} is incremented per resolution.
+	PrefetchHits     int64 `protobuf:"varint,18,opt,name=prefetch_hits,json=prefetchHits,proto3" json:"prefetch_hits,omitempty"`
+	WarmCacheHits    int64 `protobuf:"varint,19,opt,name=warm_cache_hits,json=warmCacheHits,proto3" json:"warm_cache_hits,omitempty"`
+	RuntimeDownloads int64 `protobuf:"varint,20,opt,name=runtime_downloads,json=runtimeDownloads,proto3" json:"runtime_downloads,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *AssetPreparationBreakdown) Reset() {
@@ -1426,6 +1438,48 @@ func (x *AssetPreparationBreakdown) GetMetadataProbeMs() int64 {
 func (x *AssetPreparationBreakdown) GetMaterializeLocalMs() int64 {
 	if x != nil {
 		return x.MaterializeLocalMs
+	}
+	return 0
+}
+
+func (x *AssetPreparationBreakdown) GetCacheHitBytes() int64 {
+	if x != nil {
+		return x.CacheHitBytes
+	}
+	return 0
+}
+
+func (x *AssetPreparationBreakdown) GetCacheMissBytes() int64 {
+	if x != nil {
+		return x.CacheMissBytes
+	}
+	return 0
+}
+
+func (x *AssetPreparationBreakdown) GetPrefetchHitBytes() int64 {
+	if x != nil {
+		return x.PrefetchHitBytes
+	}
+	return 0
+}
+
+func (x *AssetPreparationBreakdown) GetPrefetchHits() int64 {
+	if x != nil {
+		return x.PrefetchHits
+	}
+	return 0
+}
+
+func (x *AssetPreparationBreakdown) GetWarmCacheHits() int64 {
+	if x != nil {
+		return x.WarmCacheHits
+	}
+	return 0
+}
+
+func (x *AssetPreparationBreakdown) GetRuntimeDownloads() int64 {
+	if x != nil {
+		return x.RuntimeDownloads
 	}
 	return 0
 }
@@ -5260,8 +5314,12 @@ type TaskExecutionMetrics struct {
 	ProgressiveOverlapMs                int64 `protobuf:"varint,88,opt,name=progressive_overlap_ms,json=progressiveOverlapMs,proto3" json:"progressive_overlap_ms,omitempty"`                                                  // render/upload overlap window (ms)
 	TrailerToOpenMs                     int64 `protobuf:"varint,89,opt,name=trailer_to_open_ms,json=trailerToOpenMs,proto3" json:"trailer_to_open_ms,omitempty"`                                                               // C++ trailer_finished → Go file open (ms)
 	MuxToOpenUs                         int64 `protobuf:"varint,90,opt,name=mux_to_open_us,json=muxToOpenUs,proto3" json:"mux_to_open_us,omitempty"`                                                                           // first progress event → Go file open (us)
-	unknownFields                       protoimpl.UnknownFields
-	sizeCache                           protoimpl.SizeCache
+	// Declared scene count from the worker's RenderPlan Timeline length.
+	// The master verifies this against COUNT(DISTINCT scene_id) from
+	// segment_timings; a mismatch is logged as a warning.
+	SceneCount    int32 `protobuf:"varint,91,opt,name=scene_count,json=sceneCount,proto3" json:"scene_count,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TaskExecutionMetrics) Reset() {
@@ -5924,6 +5982,13 @@ func (x *TaskExecutionMetrics) GetMuxToOpenUs() int64 {
 	return 0
 }
 
+func (x *TaskExecutionMetrics) GetSceneCount() int32 {
+	if x != nil {
+		return x.SceneCount
+	}
+	return 0
+}
+
 // WorkerResourceCounters is the typed payload of Heartbeat.resources.
 // All values are PEAK-of-WINDOW snapshots: the worker samples the
 // underlying counters every 5 s and reports the peak observed between
@@ -6415,7 +6480,7 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\n" +
 	"milestones\x18\x17 \x03(\v2\x1f.velox.control.AttemptMilestoneR\n" +
 	"milestones\x12U\n" +
-	"\x11asset_preparation\x18\x18 \x01(\v2(.velox.control.AssetPreparationBreakdownR\x10assetPreparation\"\xeb\x04\n" +
+	"\x11asset_preparation\x18\x18 \x01(\v2(.velox.control.AssetPreparationBreakdownR\x10assetPreparation\"\xe5\x06\n" +
 	"\x19AssetPreparationBreakdown\x12'\n" +
 	"\x0fassets_required\x18\x01 \x01(\x03R\x0eassetsRequired\x12#\n" +
 	"\rassets_unique\x18\x02 \x01(\x03R\fassetsUnique\x12\x1d\n" +
@@ -6432,7 +6497,13 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\x10download_work_ms\x18\v \x01(\x03R\x0edownloadWorkMs\x12$\n" +
 	"\x0ehash_verify_ms\x18\f \x01(\x03R\fhashVerifyMs\x12*\n" +
 	"\x11metadata_probe_ms\x18\r \x01(\x03R\x0fmetadataProbeMs\x120\n" +
-	"\x14materialize_local_ms\x18\x0e \x01(\x03R\x12materializeLocalMs\"\xde\x01\n" +
+	"\x14materialize_local_ms\x18\x0e \x01(\x03R\x12materializeLocalMs\x12&\n" +
+	"\x0fcache_hit_bytes\x18\x0f \x01(\x03R\rcacheHitBytes\x12(\n" +
+	"\x10cache_miss_bytes\x18\x10 \x01(\x03R\x0ecacheMissBytes\x12,\n" +
+	"\x12prefetch_hit_bytes\x18\x11 \x01(\x03R\x10prefetchHitBytes\x12#\n" +
+	"\rprefetch_hits\x18\x12 \x01(\x03R\fprefetchHits\x12&\n" +
+	"\x0fwarm_cache_hits\x18\x13 \x01(\x03R\rwarmCacheHits\x12+\n" +
+	"\x11runtime_downloads\x18\x14 \x01(\x03R\x10runtimeDownloads\"\xde\x01\n" +
 	"\x15AttemptWaterfallStage\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x129\n" +
 	"\n" +
@@ -6797,7 +6868,7 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\x06job_id\x18\x02 \x01(\tR\x05jobId\x12\x1d\n" +
 	"\n" +
 	"attempt_id\x18\x03 \x01(\tR\tattemptId\x12\x14\n" +
-	"\x05error\x18\x04 \x01(\tR\x05error\"\x99!\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error\"\xba!\n" +
 	"\x14TaskExecutionMetrics\x12\x1f\n" +
 	"\vinput_bytes\x18\x01 \x01(\x03R\n" +
 	"inputBytes\x12!\n" +
@@ -6892,7 +6963,9 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"'progressive_overlap_bytes_before_render\x18W \x01(\x03R#progressiveOverlapBytesBeforeRender\x124\n" +
 	"\x16progressive_overlap_ms\x18X \x01(\x03R\x14progressiveOverlapMs\x12+\n" +
 	"\x12trailer_to_open_ms\x18Y \x01(\x03R\x0ftrailerToOpenMs\x12#\n" +
-	"\x0emux_to_open_us\x18Z \x01(\x03R\vmuxToOpenUs\"\xbc\r\n" +
+	"\x0emux_to_open_us\x18Z \x01(\x03R\vmuxToOpenUs\x12\x1f\n" +
+	"\vscene_count\x18[ \x01(\x05R\n" +
+	"sceneCount\"\xbc\r\n" +
 	"\x16WorkerResourceCounters\x122\n" +
 	"\x15cpu_utilization_ratio\x18\x01 \x01(\x01R\x13cpuUtilizationRatio\x12(\n" +
 	"\x10cpu_iowait_ratio\x18\x02 \x01(\x01R\x0ecpuIowaitRatio\x12&\n" +

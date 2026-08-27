@@ -26,6 +26,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -120,9 +121,11 @@ func (s *SQLiteStore) ClaimNextPendingJob(workerID string, allowedJobTypes []str
 			return nil, zeroReq, false, err
 		}
 
-		_ = s.LogJobEvent(jobID.String, "job_claimed", map[string]interface{}{
+		if err := s.LogJobEvent(jobID.String, "job_claimed", map[string]interface{}{
 			"worker_id": workerID, "lease_id": outcome.LeaseID, "attempt": outcome.NewRetry,
-		})
+		}); err != nil {
+			log.Printf("[STORE] persist job_claimed event failed job=%s worker=%s err=%v", jobID.String, workerID, err)
+		}
 		return outcome.ResultJSON, outcome.Requirements, true, nil
 	}
 

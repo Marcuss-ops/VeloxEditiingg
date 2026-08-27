@@ -57,7 +57,7 @@ const (
 type AdmissionDecision int
 
 const (
-	AdmissionAdmit      AdmissionDecision = iota
+	AdmissionAdmit AdmissionDecision = iota
 	AdmissionRejectMemory
 	AdmissionRejectStopped
 )
@@ -79,8 +79,8 @@ type ResourceAdmissionController interface {
 // worker.NetPriority* values. Defined here to avoid a circular import
 // between the prefetch and worker packages.
 const (
-	NetDirIngress  = 0 // download
-	NetDirEgress   = 1 // upload
+	NetDirIngress       = 0 // download
+	NetDirEgress        = 1 // upload
 	NetPriorityPublish  = 0
 	NetPriorityRuntime  = 1
 	NetPriorityPrefetch = 2
@@ -221,16 +221,21 @@ type Scheduler struct {
 	// ("execution:<attemptID>:<assetKey>"). These survive past future pin
 	// release and are cleaned up by ReleaseExecutionReservations.
 	executionReservations map[string]string
-	bytes                int64
-	state                diskPressureState
-	queue                workQueue
-	nextSequence         uint64
-	wake                 chan struct{}
-	workerCtx            context.Context
-	workerCancel         context.CancelFunc
-	activePrefetch       int
-	readyAtByJob         map[string]map[string]readyRecord
-	prepared             map[string]PreparedJob
+	bytes                 int64
+	state                 diskPressureState
+	queue                 workQueue
+	nextSequence          uint64
+	wake                  chan struct{}
+	workerCtx             context.Context
+	workerCancel          context.CancelFunc
+	activePrefetch        int
+	readyAtByJob          map[string]map[string]readyRecord
+	prepared              map[string]PreparedJob
+	// currentPlanID and currentPlanVersion track the most recently
+	// reconciled plan so PreparedJob entries can carry the plan identity
+	// for complete lifecycle event correlation.
+	currentPlanID      string
+	currentPlanVersion uint64
 }
 
 type diskPressureState uint8
