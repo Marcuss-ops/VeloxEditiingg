@@ -160,6 +160,7 @@ func stagingE2EWorker(t *testing.T, resolver *storage.Resolver, artifactDir stri
 		publisherRegistry: registry,
 		outputSpool:       store,
 		storageResolver:   resolver,
+		artifactLocks:     NewArtifactLockRegistry(),
 	}
 	transport.worker = w
 	return w, store, transport, uploader

@@ -102,6 +102,7 @@ func resumeTestWorker(t *testing.T, uploader *resumeUploadTransport, leaseID str
 		publisherRegistry: registry,
 		outputSpool:       store,
 		publisherPool:     NewPublisherPool(2),
+		artifactLocks:     NewArtifactLockRegistry(),
 		activeTaskLeases: map[string]*ActiveTaskLease{
 			"task-resume": {TaskID: "task-resume", JobID: "job-resume", AttemptID: "attempt-resume", LeaseID: leaseID, AttemptNumber: 1, Revision: 1},
 		},
@@ -395,6 +396,8 @@ func TestResumeArtifactUpload_WorkerRestartPersistsSpoolAndCommits(t *testing.T)
 		transport:         transport,
 		publisherRegistry: registry,
 		outputSpool:       store2,
+		publisherPool:     NewPublisherPool(2),
+		artifactLocks:     NewArtifactLockRegistry(),
 		activeTaskLeases: map[string]*ActiveTaskLease{
 			"task-resume": {TaskID: "task-resume", JobID: "job-resume", AttemptID: "attempt-resume", LeaseID: "lease-resume", AttemptNumber: 1, Revision: 1},
 		},

@@ -87,6 +87,7 @@ func TestPublishArtifactsV1_LogsProtocolBoundariesInOrder(t *testing.T) {
 		transport:         transport,
 		publisherRegistry: publisherRegistry,
 		outputSpool:       spoolStore,
+		artifactLocks:     NewArtifactLockRegistry(),
 	}
 	transport.worker = w
 

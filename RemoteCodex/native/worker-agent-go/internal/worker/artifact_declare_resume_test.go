@@ -108,6 +108,7 @@ func declareResumeTestWorker(t *testing.T, transport controltransport.ControlTra
 		publisherRegistry: registry,
 		outputSpool:       store,
 		publisherPool:     NewPublisherPool(2),
+		artifactLocks:     NewArtifactLockRegistry(),
 		activeTaskLeases: map[string]*ActiveTaskLease{
 			"task-declare": {TaskID: "task-declare", JobID: "job-declare", AttemptID: "attempt-declare", LeaseID: "lease-declare", AttemptNumber: 1, Revision: 1},
 		},
