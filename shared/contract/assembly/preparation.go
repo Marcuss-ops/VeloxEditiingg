@@ -8,11 +8,20 @@ import (
 )
 
 const (
-	CanonicalAssemblyProfileIDV1     = videoContract.CanonicalVideoProfileIDV1
-	CanonicalAssemblyProfileLegacyV1 = "velox-h264-copy-v1"
+	CanonicalAssemblyProfileIDV1         = videoContract.CanonicalVideoProfileIDV1
+	CanonicalAssemblyProfileLegacyV1     = "velox-h264-copy-v1"
+	CanonicalAssemblyProfileFMP4StreamV1 = videoContract.CanonicalVideoProfileFMP4StreamV1
 )
 
+// validEarlyAssemblyProfileID admits only registered canonical profiles. The
+// fragmented-MP4 streaming profile is registered in the media-profile registry
+// but stays DISABLED (and therefore rejected here) until the 100-job
+// benchmark confirms the progressive-upload gains — see
+// contract.FMP4StreamProfileEnabled.
 func validEarlyAssemblyProfileID(profileID string) bool {
+	if profileID == CanonicalAssemblyProfileFMP4StreamV1 {
+		return videoContract.FMP4StreamProfileEnabled()
+	}
 	return profileID == CanonicalAssemblyProfileIDV1 || profileID == CanonicalAssemblyProfileLegacyV1
 }
 

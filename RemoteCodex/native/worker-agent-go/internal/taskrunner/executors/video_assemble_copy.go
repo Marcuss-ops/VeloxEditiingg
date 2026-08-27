@@ -209,6 +209,16 @@ func validateCopyOnlyProfile(plan *contract.CompiledRenderPlanV2) (contract.Cano
 	if err != nil {
 		return contract.CanonicalVideoProfileV1{}, fmt.Errorf("%w: %v", ErrCopyOnlyProfileMismatch, err)
 	}
+	// Fail closed on the fragmented-MP4 streaming profile: the native mux only
+	// emits progressive MP4 today, so admitting a fragmented-layout profile
+	// would certify an output whose container layout does not match the
+	// profile identity (and whose progressive-upload guarantees would be a
+	// lie). The profile is registered-but-DISABLED; when the 100-job
+	// benchmark confirms the gains, this guard is replaced by real fragmented
+	// output from the engine mux (never by silently writing progressive MP4).
+	if profile.ContainerLayout == contract.ContainerLayoutFragmented {
+		return contract.CanonicalVideoProfileV1{}, fmt.Errorf("%w: profile %q requires fragmented (fMP4) output which the native mux does not produce yet", ErrCopyOnlyProfileMismatch, profile.ProfileID)
+	}
 	if err := profile.MatchesOutput(plan.Output); err != nil {
 		return contract.CanonicalVideoProfileV1{}, fmt.Errorf("%w: %v", ErrCopyOnlyProfileMismatch, err)
 	}

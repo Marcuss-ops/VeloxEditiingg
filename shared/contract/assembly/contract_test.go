@@ -140,6 +140,42 @@ func TestEarlyAssemblyManifestRevisionsAreIdempotent(t *testing.T) {
 	}
 }
 
+// TestEarlyAssemblyManifest_FMP4StreamProfileGate pins the registered-but-
+// DISABLED fMP4 streaming profile in the early-assembly registry: while the
+// 100-job benchmark gate is closed the profile is REJECTED, and it becomes
+// admissible only after the gate opens.
+func TestEarlyAssemblyManifest_FMP4StreamProfileGate(t *testing.T) {
+	profile := videoContract.CanonicalVideoProfileFMP4StreamV1Default
+	manifest := EarlyAssemblyManifest{
+		ContractVersion: CanonicalAssemblyContractVersionV1,
+		JobID:           "early-fmp4", Revision: 1,
+		Dispatch:        NormalizeDispatch(ExternalDispatch{SendToVelox: true}),
+		ExpectedProfile: videoContract.CanonicalVideoProfileFMP4StreamV1, Profile: &profile,
+		Assets: []AssetRequirement{{
+			AssetID: "clip-1", Kind: KindSourceClip, Availability: AvailabilityKnown,
+			URL: "https://example.test/clip", SHA256: strings.Repeat("a", 64), SizeBytes: 42,
+			Required: true, State: AssetDeclared,
+		}},
+	}
+	manifest.PreparationHash = manifest.ComputePreparationHash()
+
+	t.Setenv("VELOX_FMP4_STREAM_PROFILE", "")
+	if err := manifest.Validate(); err == nil || !strings.Contains(err.Error(), "not a registered canonical profile") {
+		t.Fatalf("closed gate error = %v; want registered-profile rejection", err)
+	}
+	if validEarlyAssemblyProfileID(videoContract.CanonicalVideoProfileFMP4StreamV1) {
+		t.Fatal("closed gate must not admit the fMP4 profile")
+	}
+
+	t.Setenv("VELOX_FMP4_STREAM_PROFILE", "1")
+	if err := manifest.Validate(); err != nil {
+		t.Fatalf("open gate Validate() error = %v", err)
+	}
+	if !validEarlyAssemblyProfileID(videoContract.CanonicalVideoProfileFMP4StreamV1) {
+		t.Fatal("open gate must admit the fMP4 profile")
+	}
+}
+
 func TestEarlyAssemblyManifestRejectsRevisionAliasDriftAndMissingHash(t *testing.T) {
 	manifest := earlyAssemblyManifestFixture()
 	manifest.TimelineRevision = 2

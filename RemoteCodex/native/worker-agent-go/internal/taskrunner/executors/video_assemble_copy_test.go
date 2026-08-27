@@ -210,6 +210,32 @@ func TestVideoAssembleCopy_RejectsNonKeyframeSafeCut(t *testing.T) {
 	}
 }
 
+// TestVideoAssembleCopy_RefusesFragmentedProfileEvenWhenGateOpen pins the
+// fail-closed fragmented-MP4 guard: even with the VELOX_FMP4_STREAM_PROFILE
+// benchmark gate open, the executor must REFUSE the fMP4 streaming profile
+// because the native mux only emits progressive MP4 today. Admitting it would
+// certify a container layout the engine does not produce (and whose
+// progressive-upload guarantees would be a lie).
+func TestVideoAssembleCopy_RefusesFragmentedProfileEvenWhenGateOpen(t *testing.T) {
+	t.Setenv("VELOX_FMP4_STREAM_PROFILE", "1")
+	video := []byte("prepared-video")
+	audio := []byte("final-audio")
+	videoSHA, audioSHA := copyOnlySHA(video), copyOnlySHA(audio)
+	plan := copyOnlyPlan(videoSHA, audioSHA, int64(len(video)), int64(len(audio)))
+	plan.Output.ProfileID = contract.CanonicalVideoProfileFMP4StreamV1
+	canonical, err := plan.CanonicalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &copyOnlyRenderClient{}
+	runner := pipeline.NewRunner(nil, client, logger.New(logger.WarnLevel, os.Stderr))
+	exec := NewVideoAssembleCopy(runner, t.TempDir())
+	spec := executorTaskSpec(VideoAssembleCopyID, "job-fmp4", canonical, plan)
+	if err := exec.Validate(spec); err == nil || !strings.Contains(err.Error(), "fragmented (fMP4) output") {
+		t.Fatalf("Validate error = %v; want the fragmented-output fail-closed guard", err)
+	}
+}
+
 func TestCopyOnlyRenderErrorCode(t *testing.T) {
 	cases := []struct {
 		name string
