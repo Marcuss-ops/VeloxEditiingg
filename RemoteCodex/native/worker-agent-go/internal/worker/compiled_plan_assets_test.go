@@ -98,6 +98,9 @@ func TestResolveCompiledRenderPlanAssets_UsesBoundedConcurrency(t *testing.T) {
 	}
 	var mu sync.Mutex
 	active, maxActive := 0, 0
+	ready := make(chan struct{})
+	release := make(chan struct{})
+	var readyOnce sync.Once
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assetID := strings.TrimPrefix(r.URL.Path, "/api/v1/agent/assets/")
 		mu.Lock()
@@ -111,7 +114,27 @@ func TestResolveCompiledRenderPlanAssets_UsesBoundedConcurrency(t *testing.T) {
 			active--
 			mu.Unlock()
 		}()
-		time.Sleep(100 * time.Millisecond)
+		mu.Lock()
+		concurrent := active >= 2
+		mu.Unlock()
+		if concurrent {
+			readyOnce.Do(func() {
+				close(ready)
+				close(release)
+			})
+		}
+		select {
+		case <-ready:
+		case <-time.After(2 * time.Second):
+			http.Error(w, "requests were not concurrent", http.StatusGatewayTimeout)
+			return
+		}
+		select {
+		case <-release:
+		case <-time.After(2 * time.Second):
+			http.Error(w, "test release timed out", http.StatusGatewayTimeout)
+			return
+		}
 		body, ok := assets[assetID]
 		if !ok {
 			http.NotFound(w, r)
@@ -125,7 +148,6 @@ func TestResolveCompiledRenderPlanAssets_UsesBoundedConcurrency(t *testing.T) {
 		config:    &config.WorkerConfig{WorkerID: "worker-v2-concurrency", MasterURL: server.URL, WorkDir: t.TempDir()},
 		apiClient: api.NewClient(server.URL),
 	}
-	started := time.Now()
 	bindings, err := w.resolveCompiledRenderPlanAssets(context.Background(), compiledPlanAssetPayload(t, assets))
 	if err != nil {
 		t.Fatalf("resolve V2 assets: %v", err)
@@ -138,9 +160,6 @@ func TestResolveCompiledRenderPlanAssets_UsesBoundedConcurrency(t *testing.T) {
 	mu.Unlock()
 	if gotMaxActive < 2 {
 		t.Fatalf("maximum concurrent asset requests = %d, want at least 2", gotMaxActive)
-	}
-	if elapsed := time.Since(started); elapsed >= 180*time.Millisecond {
-		t.Fatalf("asset resolution took %s; expected bounded parallel resolution", elapsed)
 	}
 }
 
