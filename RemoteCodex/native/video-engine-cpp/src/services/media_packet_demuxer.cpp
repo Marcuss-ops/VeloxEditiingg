@@ -17,12 +17,6 @@ namespace fs = std::filesystem;
 
 namespace velox::media::packet {
 
-PacketHolder::PacketHolder() = default;
-
-PacketHolder::~PacketHolder() {
-    av_packet_unref(&packet);
-}
-
 bool validTimestamp(int64_t value) {
     return value != AV_NOPTS_VALUE;
 }

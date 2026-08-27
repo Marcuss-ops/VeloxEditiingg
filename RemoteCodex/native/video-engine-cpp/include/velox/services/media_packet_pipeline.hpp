@@ -59,7 +59,7 @@ struct CopyOnlyMuxResult {
     bool backward_seek_seen{false};
     // Certified bounded-path telemetry. The canonical mux uses two reusable
     // pending slots (video and audio), performs no global sort, and never
-    // allocates a PacketHolder per packet.
+    // allocates a heap packet slot per packet.
     int64_t max_buffered_packets{0};
     int64_t packet_heap_allocations{0};
     int64_t global_sort_ms{0};

@@ -259,7 +259,7 @@ int main() {
     expect(muxResult.max_buffered_packets >= 1 && muxResult.max_buffered_packets <= 2,
            "canonical mux reports bounded packet buffering");
     expect(muxResult.packet_heap_allocations == 0,
-           "canonical mux reports no per-packet PacketHolder allocations");
+           "canonical mux reports no per-packet heap slot allocations");
     expect(muxResult.global_sort_ms == 0,
            "canonical mux reports no global packet sort");
     expect(fs::exists(output), "packet mux publishes the output atomically");

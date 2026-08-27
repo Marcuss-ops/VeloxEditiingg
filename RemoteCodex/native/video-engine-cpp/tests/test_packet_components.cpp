@@ -5,7 +5,7 @@
 //
 // The rewrite pass is exercised with pure synthetic AVPackets against
 // minimal in-memory AVStreams (no media files), so every edge case is
-// deterministic. The Demuxer and demuxAndRewrite are exercised against one
+// deterministic. The Demuxer and streamAndRewrite are exercised against one
 // real ffmpeg-generated fixture (generated BEFORE the component test runs;
 // the components themselves never spawn media processes).
 
@@ -283,7 +283,7 @@ void testRewriteSourceWindowBeforeStart() {
            "packet before a source window does not update monotonic state");
 }
 
-// ── Demuxer + demuxAndRewrite against a real fixture ─────────────────────
+// ── Demuxer + streaming reader against a real fixture ────────────────────
 
 void testDemuxer(const fs::path& fixture) {
     velox::media::packet::Demuxer demuxer;
@@ -396,53 +396,6 @@ void testStreamingBenchmark(const fs::path& fixture) {
     avformat_free_context(outputContext);
 }
 
-void testDemuxAndRewrite(const fs::path& fixture) {
-    const fs::path output = fixture.parent_path() / "trimmed.mp4";
-    AVFormatContext* rawOutput = nullptr;
-    expect(avformat_alloc_output_context2(&rawOutput, nullptr, "mp4", output.c_str()) >= 0 &&
-               rawOutput != nullptr,
-           "test output context can be allocated");
-    AVStream* outVideo = avformat_new_stream(rawOutput, nullptr);
-    outVideo->time_base = velox::media::packet::kMicrosecondTimeBase;
-    outVideo->codecpar->codec_id = AV_CODEC_ID_H264;
-    outVideo->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
-
-    velox::media::packet::TimestampState state;
-    std::vector<std::unique_ptr<velox::media::packet::PacketHolder>> packets;
-    int64_t packetCount = 0;
-    std::string error;
-    expect(velox::media::packet::demuxAndRewrite(
-               fixture, AVMEDIA_TYPE_VIDEO, 0, outVideo, 0, 0, 500'000, state,
-               packets, packetCount, error),
-           "demuxAndRewrite reads the video stream in-process: " + error);
-    expect(packetCount > 0, "demuxAndRewrite accepts video packets");
-    expect(static_cast<int64_t>(packets.size()) == packetCount,
-           "accepted packet count matches the collected packet vector");
-    bool monotonic = true;
-    int64_t lastPts = AV_NOPTS_VALUE;
-    for (const auto& holder : packets) {
-        if (lastPts != AV_NOPTS_VALUE && holder->packet.pts <= lastPts) {
-            monotonic = false;
-        }
-        lastPts = holder->packet.pts;
-        expect(holder->packet.pts >= 0 && holder->packet.pts < 500'000,
-               "accepted packet stays inside the 500ms trim window (pts=" +
-                   std::to_string(holder->packet.pts) + ")");
-    }
-    expect(monotonic, "rewritten packets are strictly monotonic");
-
-    velox::media::packet::Demuxer wrongType;
-    std::vector<std::unique_ptr<velox::media::packet::PacketHolder>> emptyPackets;
-    int64_t emptyCount = 0;
-    std::string typeError;
-    expect(!velox::media::packet::demuxAndRewrite(
-               fixture, AVMEDIA_TYPE_AUDIO, 0, outVideo, 0, 0, 500'000, state,
-               emptyPackets, emptyCount, typeError) && !typeError.empty(),
-           "demuxing the audio type from the video stream index fails closed");
-
-    avformat_free_context(rawOutput);
-}
-
 } // namespace
 
 int main() {
@@ -474,7 +427,6 @@ int main() {
     const fs::path fixture = root / "fixture.mp4";
     expect(makeMuxedVideo(fixture), "muxed video/audio fixture can be created");
     testDemuxer(fixture);
-    testDemuxAndRewrite(fixture);
     testBoundedStreamingCursor(fixture);
     testStreamingBenchmark(fixture);
 

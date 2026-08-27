@@ -6,7 +6,6 @@
 //   Demuxer            in-process AVPacket source (avformat demux)
 //   TimestampState     per-stream monotonic timestamp state
 //   rewritePacket      PacketTrimmer + TimestampRewriter in one pass
-//   demuxAndRewrite    the per-segment reader the ConcatMuxer drives
 //
 // This header is LibAV-aware by design: it is included only by
 // media_packet_demuxer.cpp, media_packet_rewriter.cpp and the libav-only component tests, both of
@@ -66,19 +65,6 @@ struct PendingPacket {
         sort_dts = AV_NOPTS_VALUE;
         ready = false;
     }
-};
-
-// Legacy collected-packet holder retained for component-test compatibility.
-// The canonical mux path uses PendingPacket cursors instead.
-struct PacketHolder {
-    AVPacket packet{};
-    int output_stream_index{0};
-    int64_t sort_dts{AV_NOPTS_VALUE};
-
-    PacketHolder();
-    ~PacketHolder();
-    PacketHolder(const PacketHolder&) = delete;
-    PacketHolder& operator=(const PacketHolder&) = delete;
 };
 
 // Demuxer — in-process AVPacket source. Opens one immutable local file
@@ -181,27 +167,6 @@ bool rewritePacket(AVPacket& packet,
                    TimestampState& state,
                    int64_t& sort_dts);
 
-// Demuxes `path` through a fresh Demuxer and rewrites every accepted packet
-// through rewritePacket into `packets`, counting accepted packets into
-// `packet_count`. This is the per-segment zero-spawn reader the ConcatMuxer
-// drives: one avformat open, one packet pass, no child process. When
-// `extend_video_tail` is true for a video segment whose source ends before
-// the requested window, the last encoded packet is repeated at successive
-// frame timestamps until the requested end. This is a decode-free freeze of
-// the last frame; it is intentionally opt-in and never applies to audio.
-bool demuxAndRewrite(const std::filesystem::path& path,
-                     AVMediaType type,
-                     int input_stream_index,
-                     AVStream* output_stream,
-                     int64_t timeline_offset,
-                     int64_t source_in_us,
-                     int64_t duration_us,
-                     TimestampState& state,
-                     std::vector<std::unique_ptr<PacketHolder>>& packets,
-                     int64_t& packet_count,
-                     std::string& error,
-                     bool extend_video_tail = false);
-
 // Streams one rewritten source window into a reusable packet slot. The
 // callback is invoked immediately for each accepted packet.
 using PacketConsumer = bool (*)(PendingPacket&, void*, std::string&);
@@ -220,20 +185,6 @@ bool streamAndRewrite(Demuxer& input,
                       int64_t& packet_count,
                       std::string& error,
                       bool extend_video_tail = false);
-
-bool demuxAndRewrite(Demuxer& input,
-                     const std::filesystem::path& path,
-                     AVMediaType type,
-                     int input_stream_index,
-                     AVStream* output_stream,
-                     int64_t timeline_offset,
-                     int64_t source_in_us,
-                     int64_t duration_us,
-                     TimestampState& state,
-                     std::vector<std::unique_ptr<PacketHolder>>& packets,
-                     int64_t& packet_count,
-                     std::string& error,
-                     bool extend_video_tail = false);
 
 // Returns true only when source_in_us identifies an exact video keyframe.
 // Packet-copy never guesses for a non-keyframe cut: callers must route that
