@@ -62,7 +62,7 @@ std::string uniqueStem() {
         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
 }
 
-// makeSolidVideo encodes a solid-color, video-only canonical clip: 1080p30,
+// makeSolidVideo encodes a solid-color, video-only canonical clip: 1080p24,
 // H.264 high/4.0, yuv420p, GOP 150 (5 s), no B-frames, closed GOP. The 5 s
 // keyframe interval is what makes the 60 s and 65 s trim points
 // keyframe-safe for the packet copy path.
@@ -70,10 +70,10 @@ bool makeSolidVideo(const fs::path& output, const std::string& colorHex, double 
     std::ostringstream command;
     command << "ffmpeg -y -hide_banner -loglevel error"
             << " -f lavfi -i " << velox::file::shellQuote(
-                "color=0x" + colorHex + ":s=1920x1080:r=30:d=" + std::to_string(durationSec))
+                "color=0x" + colorHex + ":s=1920x1080:r=24:d=" + std::to_string(durationSec))
             << " -an -c:v libx264 -preset ultrafast -profile:v high -level:v 4.0"
-            << " -pix_fmt yuv420p -r 30"
-            << " -g 150 -keyint_min 150 -sc_threshold 0 -bf 0"
+            << " -pix_fmt yuv420p -r 24"
+            << " -g 120 -keyint_min 120 -sc_threshold 0 -bf 0"
             << " " << velox::file::shellQuote(output.string());
     return velox::file::runCommand(command.str());
 }
@@ -206,25 +206,25 @@ int main() {
                     fs::perm_options::replace, ec);
 
     // ── Copy-only V2 plan: BASE/PREPARED/BASE + final audio. ───────────
-    // Timeline (frames @30 fps):
-    //   red 0→60      source 0,  duration 60 s (frames 0..1800)
-    //   green 60→65   source 0,  duration  5 s (frames 1800..1950)
-    //   red 65→120    source 65 s, duration 55 s (frames 1950..3600)
+    // Timeline (frames @24 fps):
+    //   red 0→60      source 0,  duration 60 s (frames 0..1440)
+    //   green 60→65   source 0,  duration  5 s (frames 1440..1560)
+    //   red 65→120    source 65 s, duration 55 s (frames 1560..2880)
     // The 65 s source trim is keyframe-safe because the red base was encoded
     // with a 5 s GOP (keyframes at 0, 5, ..., 60, 65, ...).
     velox::plan::RenderPlan plan;
     plan.version = velox::plan::kRenderPlanVersionV2;
     plan.job_id = "visual-replacement-golden";
-    plan.canvas = {1920, 1080, 30};
+    plan.canvas = {1920, 1080, 24};
     plan.copy_only = true;
     plan.output_path = output.string();
     plan.timeline = {
         {velox::plan::VideoSource{baseRed.string(), ""}, 0.0, false, {}, "base-prefix",
-         60'000'000, 0, 60'000'000, 0, 1800},
+         60'000'000, 0, 60'000'000, 0, 1440},
         {velox::plan::VideoSource{preparedGreen.string(), ""}, 0.0, false, {}, "replacement",
-         5'000'000, 0, 5'000'000, 1800, 150},
+         5'000'000, 0, 5'000'000, 1440, 120},
         {velox::plan::VideoSource{baseRed.string(), ""}, 0.0, false, {}, "base-suffix",
-         55'000'000, 65'000'000, 55'000'000, 1950, 1650},
+         55'000'000, 65'000'000, 55'000'000, 1560, 1320},
     };
     plan.audio_tracks = {
         {finalAudio.string(), 1.0, 0.0, 120.0, "music", false, 0, 120'000'000},
@@ -365,7 +365,7 @@ int main() {
         }
     }
 
-    // ── ffprobe signature: canonical H.264 + AAC, 1080p, 30 fps. ───────
+    // ── ffprobe signature: canonical H.264 + AAC, 1080p, 24 fps. ───────
     {
         const std::string signature = ffprobeSignature(output);
         expect(!signature.empty(), "ffprobe produced a readable signature");
@@ -374,7 +374,7 @@ int main() {
         expect(contains(signature, "width=1920"), "video width is 1920");
         expect(contains(signature, "height=1080"), "video height is 1080");
         expect(contains(signature, "pix_fmt=yuv420p"), "pixel format is yuv420p");
-        expect(contains(signature, "r_frame_rate=30/1"), "frame rate is 30/1");
+        expect(contains(signature, "r_frame_rate=24/1"), "frame rate is 24/1");
         if (!signature.empty()) {
             std::cerr << "[golden] ffprobe signature:\n" << signature;
         }

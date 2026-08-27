@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace velox::media {
@@ -67,6 +68,28 @@ struct SegmentExecutionRequest {
     bool transform_required{false};
     bool source_window_keyframe_safe{false};
     bool legacy_required{false};
+
+    SegmentExecutionRequest() = default;
+
+    // Keep the short form unambiguous for packet-mux callers: its third
+    // argument is the keyframe-safety result, never a transform request.
+    SegmentExecutionRequest(MediaSignature source_signature,
+                            MediaSignature target_signature,
+                            bool keyframe_safe)
+        : source(std::move(source_signature)),
+          target(std::move(target_signature)),
+          source_window_keyframe_safe(keyframe_safe) {}
+
+    SegmentExecutionRequest(MediaSignature source_signature,
+                            MediaSignature target_signature,
+                            bool transform,
+                            bool keyframe_safe,
+                            bool legacy)
+        : source(std::move(source_signature)),
+          target(std::move(target_signature)),
+          transform_required(transform),
+          source_window_keyframe_safe(keyframe_safe),
+          legacy_required(legacy) {}
 };
 
 struct SegmentExecutionDecision {

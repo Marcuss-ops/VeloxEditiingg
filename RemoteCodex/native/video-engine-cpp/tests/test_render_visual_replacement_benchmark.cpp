@@ -62,7 +62,7 @@ std::string uniqueStem() {
         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
 }
 
-// makeSolidVideo encodes a solid-color, video-only canonical clip: 1080p30,
+// makeSolidVideo encodes a solid-color, video-only canonical clip: 1080p24,
 // H.264 high/4.0, yuv420p, GOP 150 (5 s), no B-frames, closed GOP. The 5 s
 // keyframe interval is what makes the 10 s / 15 s trim points keyframe-safe
 // for the packet copy path.
@@ -70,10 +70,10 @@ bool makeSolidVideo(const fs::path& output, const std::string& colorHex, double 
     std::ostringstream command;
     command << "ffmpeg -y -hide_banner -loglevel error"
             << " -f lavfi -i " << velox::file::shellQuote(
-                "color=0x" + colorHex + ":s=1920x1080:r=30:d=" + std::to_string(durationSec))
+                "color=0x" + colorHex + ":s=1920x1080:r=24:d=" + std::to_string(durationSec))
             << " -an -c:v libx264 -preset ultrafast -profile:v high -level:v 4.0"
-            << " -pix_fmt yuv420p -r 30"
-            << " -g 150 -keyint_min 150 -sc_threshold 0 -bf 0"
+            << " -pix_fmt yuv420p -r 24"
+            << " -g 120 -keyint_min 120 -sc_threshold 0 -bf 0"
             << " " << velox::file::shellQuote(output.string());
     return velox::file::runCommand(command.str());
 }
@@ -269,16 +269,16 @@ int main() {
     velox::plan::RenderPlan copyPlan;
     copyPlan.version = velox::plan::kRenderPlanVersionV2;
     copyPlan.job_id = "visual-replacement-benchmark-copy";
-    copyPlan.canvas = {1920, 1080, 30};
+    copyPlan.canvas = {1920, 1080, 24};
     copyPlan.copy_only = true;
     copyPlan.output_path = copyOut.string();
     copyPlan.timeline = {
         {velox::plan::VideoSource{baseRed.string(), ""}, 0.0, false, {}, "base-prefix",
-         10'000'000, 0, 10'000'000, 0, 300},
+         10'000'000, 0, 10'000'000, 0, 240},
         {velox::plan::VideoSource{preparedGreen.string(), ""}, 0.0, false, {}, "replacement",
-         5'000'000, 0, 5'000'000, 300, 150},
+         5'000'000, 0, 5'000'000, 240, 120},
         {velox::plan::VideoSource{baseRed.string(), ""}, 0.0, false, {}, "base-suffix",
-         15'000'000, 15'000'000, 15'000'000, 450, 450},
+         15'000'000, 15'000'000, 15'000'000, 360, 360},
     };
     copyPlan.audio_tracks = {
         {finalAudio.string(), 1.0, 0.0, 30.0, "music", false, 0, 30'000'000},
@@ -290,7 +290,7 @@ int main() {
     velox::plan::RenderPlan encodePlan;
     encodePlan.version = velox::plan::kRenderPlanVersionV1;
     encodePlan.job_id = "visual-replacement-benchmark-encode";
-    encodePlan.canvas = {1920, 1080, 30};
+    encodePlan.canvas = {1920, 1080, 24};
     encodePlan.copy_only = false;
     encodePlan.mixed = false;
     encodePlan.output_path = encodeOut.string();

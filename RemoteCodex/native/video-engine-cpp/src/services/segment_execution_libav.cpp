@@ -44,8 +44,16 @@ MediaSignature mediaSignatureFromStream(const AVStream* stream) {
         signature.width = parameters->width;
         signature.height = parameters->height;
         signature.pixel_format = parameters->format;
-        signature.frame_rate_num = stream->avg_frame_rate.num;
-        signature.frame_rate_den = stream->avg_frame_rate.den;
+        // Matroska and some MP4 producers leave avg_frame_rate unset while
+        // still publishing the authoritative stream rate in r_frame_rate.
+        // Never turn that valid source into 0/1: packet-copy compatibility
+        // must use the same fallback as the media probe path.
+        AVRational frame_rate = stream->avg_frame_rate;
+        if (frame_rate.num <= 0 || frame_rate.den <= 0) {
+            frame_rate = stream->r_frame_rate;
+        }
+        signature.frame_rate_num = frame_rate.num;
+        signature.frame_rate_den = frame_rate.den;
     } else {
         signature.sample_rate = parameters->sample_rate;
         signature.pixel_format = parameters->format;
