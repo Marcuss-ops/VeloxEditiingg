@@ -459,7 +459,7 @@ void testBoundedStreamingCursor(const fs::path& fixture) {
 }
 
 void testStreamingBenchmark(const fs::path& fixture) {
-    velox::media::services::resetIOCounters();
+    velox::services::resetIOCounters();
     velox::media::packet::Demuxer demuxer;
     std::string error;
     expect(demuxer.open(fixture, error), "benchmark cursor opens fixture: " + error);
@@ -480,7 +480,7 @@ void testStreamingBenchmark(const fs::path& fixture) {
     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - started).count();
     expect(packetCount > 0 && elapsed >= 0, "bounded mux benchmark records a valid run");
-    expect(velox::media::services::ioCounters().input_open_count.load() == 1,
+    expect(velox::services::ioCounters().input_open_count.load() == 1,
            "bounded benchmark uses one input open");
     std::cerr << "bounded_mux_benchmark packets=" << packetCount
               << " elapsed_ms=" << elapsed << " max_pending=1\n";
