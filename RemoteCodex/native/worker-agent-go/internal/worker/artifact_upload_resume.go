@@ -373,6 +373,7 @@ func (w *Worker) resumeArtifactUpload(ctx context.Context, entry spool.SpoolEntr
 
 		w.logger.Info("[ARTIFACT_RESUME] resuming upload spool=%s attempt=%d path=%q", entry.SpoolID, entry.UploadAttemptCount+1, entry.LocalPath)
 		var uploadErr error
+		markedUploadedByRunner := false
 		if publisher.SupportsProgressive(transport) {
 			progressive, ok := transport.(publisher.ProgressiveTransport)
 			if !ok {
@@ -394,6 +395,7 @@ func (w *Worker) resumeArtifactUpload(ctx context.Context, entry spool.SpoolEntr
 			growing.Update(entry.SizeBytes, true, entry.SizeBytes)
 			growing.MarkDurable(entry.SizeBytes)
 			result, uploadErr = publisher.RunProgressiveUploadWithJournalAndStore(ctx, entry.LocalPath, target.ChunkSize, growing, session, journalPath, w.outputSpool, entry.SpoolID, nil)
+			markedUploadedByRunner = true
 		} else {
 			result, uploadErr = transport.Upload(ctx, publisher.UploadRequest{
 				LocalPath:    entry.LocalPath,
@@ -410,11 +412,13 @@ func (w *Worker) resumeArtifactUpload(ctx context.Context, entry spool.SpoolEntr
 			w.scheduleUploadRetry(ctx, entry, errors.New("upload transport returned empty result"))
 			return
 		}
-		if err := w.outputSpool.MarkUploaded(ctx, entry.SpoolID); err != nil {
-			if !errors.Is(err, spool.ErrCASConflict) {
-				w.logger.Warn("[ARTIFACT_RESUME] mark uploaded spool=%s: %v", entry.SpoolID, err)
+		if !markedUploadedByRunner {
+			if err := w.outputSpool.MarkUploaded(ctx, entry.SpoolID); err != nil {
+				if !errors.Is(err, spool.ErrCASConflict) {
+					w.logger.Warn("[ARTIFACT_RESUME] mark uploaded spool=%s: %v", entry.SpoolID, err)
+				}
+				return
 			}
-			return
 		}
 		w.logger.Info("[ARTIFACT_RESUME] upload resumed spool=%s upload=%s bytes=%d", entry.SpoolID, result.UploadID, result.UploadedBytes)
 	}
@@ -483,14 +487,16 @@ func (w *Worker) completeResumedArtifactCommit(ctx context.Context, entry spool.
 	}
 	msg, err := w.waitForRegisteredArtifactAck(ctx, ackCh, deadline)
 	if err != nil {
+		w.logger.Warn("[ARTIFACT_RESUME] commit ack wait failed spool=%s: %v", entry.SpoolID, err)
 		return false // leave UPLOADED; retry on a later tick
 	}
 	commitAck, ok := msg.TypedPayload.(*pb.TaskCommitAck)
 	if msg.Type != controltransport.MsgTaskCommitAck || !ok || commitAck == nil {
+		w.logger.Warn("[ARTIFACT_RESUME] unexpected commit ack spool=%s type=%s payload=%T", entry.SpoolID, msg.Type, msg.TypedPayload)
 		return false
 	}
 	if commitAck.GetTaskId() != entry.TaskID || commitAck.GetAttemptId() != entry.AttemptID || commitAck.GetCommitId() != entry.CommitID {
-		w.logger.Warn("[ARTIFACT_RESUME] commit ack fence mismatch spool=%s", entry.SpoolID)
+		w.logger.Warn("[ARTIFACT_RESUME] commit ack fence mismatch spool=%s got task=%s attempt=%s commit=%s want task=%s attempt=%s commit=%s", entry.SpoolID, commitAck.GetTaskId(), commitAck.GetAttemptId(), commitAck.GetCommitId(), entry.TaskID, entry.AttemptID, entry.CommitID)
 		return false
 	}
 	if err := w.outputSpool.MarkCommitted(ctx, entry.SpoolID); err != nil {
