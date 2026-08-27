@@ -214,7 +214,7 @@ func reconcileWorkerRuntime(ctx context.Context, tx *sql.Tx, workerID, sessionID
 			int64Value(task["frames_encoded"]), int64Value(task["frames_decoded"]),
 			int64Value(task["frames_composited"]), floatValue(task["ffmpeg_speed_x"]),
 			int64Value(task["elapsed_ms"]), jsonString(mergeOperationalPhaseIntoMetrics(task)),
-			jsonString(mergeCanonicalEventsAndMilestones(task)),
+			jsonString(mergeCanonicalEventsAndMilestones(task, now)),
 			defaultString(task["started_at"], now), defaultString(task["last_progress_at"], now), now)
 		if err != nil {
 			return fmt.Errorf("upsert worker task runtime %s: %w", taskID, err)
@@ -338,7 +338,13 @@ func bulkEmitTaskRuntimeDisappearedOnPartition(ctx context.Context, tx *sql.Tx, 
 // the milestone timeline without a schema change (STEP A: no migration).
 // Milestone samples are distinguishable from canonical events by the
 // absence of an event_id key; the reader splits them back out.
-func mergeCanonicalEventsAndMilestones(task map[string]interface{}) interface{} {
+//
+// Each milestone is stamped with the Master-local receive/commit timestamps
+// (now, the heartbeat transaction time) so the live projection separates
+// worker runtime (elapsed_ms, monotonic from attempt start) from transport/
+// heartbeat delay (master_received_at deltas). The two clocks are never
+// subtracted from each other; consumers compare deltas per side.
+func mergeCanonicalEventsAndMilestones(task map[string]interface{}, now string) interface{} {
 	milestones, _ := task["attempt_milestones"].([]interface{})
 	if len(milestones) == 0 {
 		return task["canonical_attempt_events"]
@@ -346,7 +352,35 @@ func mergeCanonicalEventsAndMilestones(task map[string]interface{}) interface{} 
 	events, _ := task["canonical_attempt_events"].([]interface{})
 	merged := make([]interface{}, 0, len(events)+len(milestones))
 	merged = append(merged, events...)
-	merged = append(merged, milestones...)
+
+	// Heartbeats repeat the current milestone snapshot. Keep one entry per
+	// worker milestone identity so the live projection cannot grow duplicate
+	// samples on every heartbeat. The latest Master-local timestamps are kept
+	// because they describe the most recent receipt of that sample.
+	seen := make(map[string]int, len(milestones))
+	for _, raw := range milestones {
+		milestone, ok := raw.(map[string]interface{})
+		if !ok {
+			merged = append(merged, raw)
+			continue
+		}
+		stamped := make(map[string]interface{}, len(milestone)+2)
+		for k, v := range milestone {
+			stamped[k] = v
+		}
+		stamped["master_received_at"] = now
+		stamped["master_committed_at"] = now
+
+		name := asString(stamped["name"])
+		sequence := int64OrDefault(stamped["sequence"], 0)
+		identity := fmt.Sprintf("%s\x00%d", name, sequence)
+		if previous, ok := seen[identity]; ok {
+			merged[previous] = stamped
+			continue
+		}
+		seen[identity] = len(merged)
+		merged = append(merged, stamped)
+	}
 	return merged
 }
 

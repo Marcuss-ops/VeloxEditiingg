@@ -125,5 +125,66 @@ func TestPersistWorkerHeartbeat_FoldsAttemptMilestonesIntoLiveProjection(t *test
 		if string(got.Name) != w.name || got.Sequence != w.sequence || got.ElapsedMS != w.elapsedMS {
 			t.Fatalf("milestone[%d]=%+v, want name=%s sequence=%d elapsed_ms=%d", i, got, w.name, w.sequence, w.elapsedMS)
 		}
+		if got.MasterReceivedAt == "" || got.MasterCommittedAt == "" {
+			t.Fatalf("milestone[%d]=%+v, want master timestamps", i, got)
+		}
+		if got.MasterReceivedAt != got.MasterCommittedAt {
+			t.Fatalf("milestone[%d] master timestamps differ: received=%q committed=%q", i, got.MasterReceivedAt, got.MasterCommittedAt)
+		}
+	}
+}
+
+func TestPersistWorkerHeartbeat_DeduplicatesRepeatedAttemptMilestones(t *testing.T) {
+	s, err := NewSQLiteStore(t.TempDir() + "/worker-milestone-dedup.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	if _, err := s.DB().Exec(`INSERT INTO workers(worker_id,worker_name,node_role,raw_json,migrated_at) VALUES(?,?,?,?,?)`,
+		"worker-milestone-dedup", "worker-milestone-dedup", "worker", "{}", "2026-08-26T12:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB().Exec(`INSERT INTO task_attempts
+		(id, task_id, job_id, attempt_number, worker_id, lease_id, status, report_version, created_at, updated_at)
+		VALUES (?, ?, ?, 1, ?, ?, 'RUNNING', 0, ?, ?)`,
+		"attempt-milestone-dedup", "task-milestone-dedup", "job-milestone-dedup", "worker-milestone-dedup", "lease-milestone-dedup",
+		"2026-08-26T12:00:00Z", "2026-08-26T12:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	heartbeat := func() []byte {
+		raw, err := json.Marshal(map[string]any{
+			"worker_id": "worker-milestone-dedup", "status": "busy", "current_job": "job-milestone-dedup",
+			"metrics": map[string]any{"active_jobs": []any{map[string]any{
+				"job_id": "job-milestone-dedup", "task_id": "task-milestone-dedup", "attempt_id": "attempt-milestone-dedup",
+				"attempt": 1, "lease_id": "lease-milestone-dedup", "job_type": "render",
+				"status": "RUNNING", "started_at": "2026-08-26T12:00:00Z",
+				"attempt_milestones": []any{
+					map[string]any{"name": "execution.started", "sequence": 1, "elapsed_ms": 0, "occurred_at": "2026-08-26T12:00:00Z"},
+					map[string]any{"name": "assets.all_ready", "sequence": 2, "elapsed_ms": 298421, "occurred_at": "2026-08-26T12:04:58Z"},
+				},
+			}}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	if err := s.PersistWorkerHeartbeat(context.Background(), heartbeat(), ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PersistWorkerHeartbeat(context.Background(), heartbeat(), ""); err != nil {
+		t.Fatal(err)
+	}
+
+	runtime, err := s.GetWorkerTaskRuntimeByJob(context.Background(), "job-milestone-dedup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime == nil {
+		t.Fatal("runtime projection is nil")
+	}
+	if len(runtime.AttemptMilestones) != 2 {
+		t.Fatalf("milestones=%+v, want exactly 2 unique samples after repeated heartbeat", runtime.AttemptMilestones)
 	}
 }
