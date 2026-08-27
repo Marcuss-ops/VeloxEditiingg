@@ -55,6 +55,12 @@ bool PacketOutputSink::open(const std::filesystem::path& path, std::string& erro
         return false;
     }
     avio_->seekable = AVIO_SEEKABLE_NORMAL;
+    // Keep the sink's logical position synchronized with every caller write.
+    // With libavformat's default AVIO buffering, an explicit seek can arrive
+    // before the buffered prefix reaches writeCallback, making backward-seek
+    // telemetry undercount rewinds and invalidate the incremental hash at the
+    // wrong boundary.
+    avio_->direct = 1;
     return true;
 }
 
