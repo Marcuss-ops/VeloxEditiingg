@@ -10,11 +10,9 @@ import (
 type mockRenderRunner struct {
 	renderTimeMS int64
 	peakRAMBytes int64
-	renderCount  int
 }
 
 func (m *mockRenderRunner) Render(ctx context.Context, fixture BenchmarkFixture) (BenchmarkRenderResult, error) {
-	m.renderCount++
 	// Simulate render time
 	select {
 	case <-ctx.Done():
@@ -35,7 +33,7 @@ func (m *mockRenderRunner) Render(ctx context.Context, fixture BenchmarkFixture)
 
 func TestRunConcurrentBenchmark_BasicFlow(t *testing.T) {
 	renderer := &mockRenderRunner{
-		renderTimeMS: 50, // fast renders for testing
+		renderTimeMS: 50,                // fast renders for testing
 		peakRAMBytes: 1024 * 1024 * 500, // 500 MB
 	}
 
