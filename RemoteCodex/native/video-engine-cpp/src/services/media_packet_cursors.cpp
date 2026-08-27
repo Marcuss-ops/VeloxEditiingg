@@ -48,6 +48,31 @@ bool fill(PendingPacket& pending, AVPacket& scratch, const CursorSegment& segmen
 VideoTimelineCursor::VideoTimelineCursor(std::vector<CursorSegment> segments, TimestampState& state)
     : segments_(std::move(segments)), state_(state) {}
 
+bool VideoTimelineCursor::emitTailPacket(std::string& error) {
+    if (!tail_extension_active_ || !have_last_video_packet_) return false;
+    if (tail_extension_next_us_ >= tail_extension_end_us_) {
+        tail_extension_active_ = false;
+        return false;
+    }
+    const int64_t step = last_video_packet_.duration > 0
+        ? last_video_packet_.duration
+        : 1;
+    if (av_packet_ref(&pending_.packet, &last_video_packet_) < 0) {
+        error = "cursor failed to duplicate the last video packet for tail extension";
+        return false;
+    }
+    pending_.packet.pts = tail_extension_next_us_;
+    pending_.packet.dts = tail_extension_next_us_;
+    pending_.packet.duration = std::min(step, tail_extension_end_us_ - tail_extension_next_us_);
+    pending_.output_stream_index = last_video_packet_.stream_index;
+    pending_.sort_dts = tail_extension_next_us_;
+    pending_.ready = true;
+    state_.last_pts = tail_extension_next_us_;
+    state_.last_dts = tail_extension_next_us_;
+    tail_extension_next_us_ += step;
+    return true;
+}
+
 bool VideoTimelineCursor::loadNextSegment(std::string& error) {
     if (segment_index_ >= segments_.size()) return false;
     auto& segment = segments_[segment_index_];
@@ -58,6 +83,12 @@ bool VideoTimelineCursor::loadNextSegment(std::string& error) {
 bool VideoTimelineCursor::readCurrent(std::string& error) {
     while (segment_index_ < segments_.size()) {
         auto& segment = segments_[segment_index_];
+        if (tail_extension_active_) {
+            if (emitTailPacket(error)) return true;
+            ++segment_index_;
+            if (segment_index_ < segments_.size() && !loadNextSegment(error)) return false;
+            continue;
+        }
         bool eof = false;
         bool after_window = false;
         while (!eof && !after_window) {
@@ -75,6 +106,20 @@ bool VideoTimelineCursor::readCurrent(std::string& error) {
             // segment instead of scanning to EOF.
             if (decision == PacketRewriteDecision::AfterWindow) {
                 after_window = true;
+            }
+        }
+        if (segment.extend_video_tail && have_last_video_packet_ &&
+            validTimestamp(state_.last_pts)) {
+            const int64_t step = last_video_packet_.duration > 0
+                ? last_video_packet_.duration
+                : 1;
+            const int64_t end = segment.timeline_offset_us + segment.duration_us;
+            const int64_t next = state_.last_pts + step;
+            if (next < end) {
+                tail_extension_active_ = true;
+                tail_extension_next_us_ = next;
+                tail_extension_end_us_ = end;
+                if (emitTailPacket(error)) return true;
             }
         }
         ++segment_index_;

@@ -41,8 +41,8 @@ int main() {
     auto request = velox::media::SegmentExecutionRequest{
         .source = target,
         .target = target,
-        .transform_required = false,
         .source_window_keyframe_safe = true,
+        .transform_required = false,
         .legacy_required = false,
     };
 

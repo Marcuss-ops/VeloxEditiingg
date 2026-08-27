@@ -30,6 +30,7 @@ public:
 private:
     bool readCurrent(std::string& error);
     bool loadNextSegment(std::string& error);
+    bool emitTailPacket(std::string& error);
 
     std::vector<CursorSegment> segments_;
     TimestampState& state_;
@@ -37,6 +38,9 @@ private:
     AVPacket scratch_{};
     AVPacket last_video_packet_{};
     bool have_last_video_packet_{false};
+    bool tail_extension_active_{false};
+    int64_t tail_extension_next_us_{0};
+    int64_t tail_extension_end_us_{0};
     bool primed_{false};
     PendingPacket pending_;
 };
