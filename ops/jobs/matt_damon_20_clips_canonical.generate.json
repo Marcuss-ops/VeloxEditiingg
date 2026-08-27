@@ -5,8 +5,6 @@
   "template_version": 1,
   "video_name": "Matt Damon — 20 short clips with 3 intros",
   "copy_only": true,
-  "render_video": true,
-  "save_to_db": true,
   "output": {"width": 1920, "height": 1080, "fps": 30, "format": "mp4"},
   "script_text": "Matt Damon — 20 short clips with 3 intros",
   "scenes": [
