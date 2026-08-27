@@ -30,11 +30,11 @@ type rawAttemptMilestoneReport struct {
 	Milestones []rawAttemptMilestone `json:"milestones"`
 }
 
-// decodeAttemptWaterfall reads the worker's monotonic milestone timeline from
-// the durable raw report. It deliberately returns no waterfall when the
-// report predates milestone support; callers must expose that as unknown.
-func decodeAttemptWaterfall(raw string, attemptID string, wallMS int64) *AttemptWaterfall {
-	if raw == "" || wallMS < 0 {
+// parseAttemptMilestoneSamples decodes the worker's monotonic milestone
+// timeline from any raw report payload. It accepts both wire spellings of
+// elapsed_ms (snake_case heartbeat JSON, camelCase protojson TaskResult).
+func parseAttemptMilestoneSamples(raw string) []sharedtelemetry.AttemptMilestoneSample {
+	if raw == "" {
 		return nil
 	}
 	var report rawAttemptMilestoneReport
@@ -43,6 +43,9 @@ func decodeAttemptWaterfall(raw string, attemptID string, wallMS int64) *Attempt
 	}
 	samples := make([]sharedtelemetry.AttemptMilestoneSample, 0, len(report.Milestones))
 	for _, milestone := range report.Milestones {
+		if milestone.Name == "" {
+			continue
+		}
 		elapsed := parseJSONInt(milestone.ElapsedMS)
 		if elapsed == 0 {
 			elapsed = parseJSONInt(milestone.ElapsedMs)
@@ -51,6 +54,20 @@ func decodeAttemptWaterfall(raw string, attemptID string, wallMS int64) *Attempt
 			Name: sharedtelemetry.AttemptMilestone(milestone.Name), Sequence: parseJSONUint(milestone.Sequence),
 			ElapsedMS: elapsed, OccurredAt: milestone.OccurredAt,
 		})
+	}
+	return samples
+}
+
+// decodeAttemptWaterfall reads the worker's monotonic milestone timeline from
+// the durable raw report. It deliberately returns no waterfall when the
+// report predates milestone support; callers must expose that as unknown.
+func decodeAttemptWaterfall(raw string, attemptID string, wallMS int64) *AttemptWaterfall {
+	if raw == "" || wallMS < 0 {
+		return nil
+	}
+	samples := parseAttemptMilestoneSamples(raw)
+	if len(samples) == 0 {
+		return nil
 	}
 	waterfall := BuildAttemptWaterfall(attemptID, samples, wallMS)
 	return &waterfall

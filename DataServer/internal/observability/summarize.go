@@ -111,6 +111,17 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 			if hasLifecycleDuration {
 				as.AttemptWaterfall = decodeAttemptWaterfall(raw, a.ID, lifecycleDuration)
 			}
+			// Durable milestone timeline. The volatile worker_task_runtime row
+			// is deleted right after the canonical TaskResult transaction
+			// closes the attempt, so once that happened the raw report in the
+			// canonical attempt-event store is the ONLY queryable source of
+			// the milestone samples (not just their waterfall buckets). The
+			// live overlay keeps precedence while it exists because the
+			// recorder snapshot can be richer than the report built at
+			// result.sending.
+			if len(as.AttemptMilestones) == 0 {
+				as.AttemptMilestones = parseAttemptMilestoneSamples(raw)
+			}
 			// Master-local report timestamps for the result_ingest diagnostic.
 			// Both come from the Master clock (received_at / persisted_at), so
 			// receive→commit lag is computed locally; the worker clock is never
