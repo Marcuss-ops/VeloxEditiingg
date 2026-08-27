@@ -157,6 +157,11 @@ VELOX_GRPC_PORT="${VELOX_GRPC_PORT:-9000}"
 VELOX_RUNTIME_DIR="${VELOX_RUNTIME_DIR:-/var/lib/velox}"
 VELOX_DATA_DIR="${VELOX_DATA_DIR:-/var/lib/velox/data}"
 VELOX_DB_PATH="${VELOX_DB_PATH:-/var/lib/velox/data/velox.db}"
+# SQLite keeps writes serialized through WAL, while four pooled connections
+# prevent background metrics/aggregator reads from starving admin and job
+# endpoints during production activity.
+VELOX_DB_MAX_OPEN_CONNS="${VELOX_DB_MAX_OPEN_CONNS:-4}"
+VELOX_DB_MAX_IDLE_CONNS="${VELOX_DB_MAX_IDLE_CONNS:-4}"
 VELOX_VIDEOS_DIR="${VELOX_VIDEOS_DIR:-/var/lib/velox/videos}"
 VELOX_SECRETS_DIR="${VELOX_SECRETS_DIR:-/etc/velox/secrets}"
 VELOX_MAX_JOB_ATTEMPTS="${VELOX_MAX_JOB_ATTEMPTS:-3}"
@@ -255,6 +260,8 @@ render() { printf '%s=%s\n' "$1" "${2:-}"; }
     render VELOX_RUNTIME_DIR "$VELOX_RUNTIME_DIR"
     render VELOX_DATA_DIR "$VELOX_DATA_DIR"
     render VELOX_DB_PATH "$VELOX_DB_PATH"
+    render VELOX_DB_MAX_OPEN_CONNS "$VELOX_DB_MAX_OPEN_CONNS"
+    render VELOX_DB_MAX_IDLE_CONNS "$VELOX_DB_MAX_IDLE_CONNS"
     render VELOX_VIDEOS_DIR "$VELOX_VIDEOS_DIR"
     render VELOX_SECRETS_DIR "$VELOX_SECRETS_DIR"
     printf '\n# ── Security ───────────────────────────────────────────────────\n'
