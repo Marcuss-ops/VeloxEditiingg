@@ -21,6 +21,11 @@ type fakeRenderer struct {
 	failAt  map[int]bool
 	decode  int64
 	process int64
+	// fsync/rename/dirFsync cycle per call like walls; used to pin the
+	// output-durability p95 summary aggregation.
+	fsync    []int64
+	rename   []int64
+	dirFsync []int64
 }
 
 func (f *fakeRenderer) Render(_ context.Context, fixture BenchmarkFixture) (BenchmarkRenderResult, error) {
@@ -46,6 +51,15 @@ func (f *fakeRenderer) Render(_ context.Context, fixture BenchmarkFixture) (Benc
 	receipt.Derived.AccountedRatio = 0.96
 	receipt.Derived.WriteAmplification = 1.2
 	receipt.Derived.ProcessesPerClip = 0
+	if len(f.fsync) > 0 {
+		receipt.IO.FileFsyncMS = f.fsync[idx%len(f.fsync)]
+	}
+	if len(f.rename) > 0 {
+		receipt.IO.OutputRenameMS = f.rename[idx%len(f.rename)]
+	}
+	if len(f.dirFsync) > 0 {
+		receipt.IO.DirectoryFsyncMS = f.dirFsync[idx%len(f.dirFsync)]
+	}
 	return BenchmarkRenderResult{
 		Receipt:        receipt,
 		ArtifactSHA256: sha,
@@ -130,6 +144,33 @@ func TestBenchmarkRunner_Percentiles(t *testing.T) {
 	require.InDelta(t, 1.2, run.Summary.WriteAmplificationP50, 1e-9)
 	require.Zero(t, run.Summary.GateFailures)
 	require.Zero(t, run.Summary.FailedRuns)
+}
+
+// TestBenchmarkRunner_OutputDurabilityP95 pins the p95 aggregation of
+// the publishAtomic timings (file fsync / rename / directory fsync)
+// over the five runs [10,20,30,40,50]: p95=50 (nearest-rank), and a
+// run without the engine-side io_counters block yields 0 (never NaN).
+func TestBenchmarkRunner_OutputDurabilityP95(t *testing.T) {
+	f := &fakeRenderer{
+		walls:    []int64{1000},
+		fsync:    []int64{10, 20, 30, 40, 50},
+		rename:   []int64{1, 2, 3, 4, 5},
+		dirFsync: []int64{5, 6, 7, 8, 9},
+	}
+	run, err := newRunnerForTest(f).Run(context.Background())
+	require.NoError(t, err)
+
+	require.InDelta(t, 50, run.Summary.FileFsyncMSP95, 1e-9)
+	require.InDelta(t, 5, run.Summary.OutputRenameMSP95, 1e-9)
+	require.InDelta(t, 9, run.Summary.DirectoryFsyncMSP95, 1e-9)
+
+	// Legacy engines (no io_counters block) → all-zero sample → 0.
+	legacy := &fakeRenderer{walls: []int64{1000}}
+	run, err = newRunnerForTest(legacy).Run(context.Background())
+	require.NoError(t, err)
+	require.Zero(t, run.Summary.FileFsyncMSP95)
+	require.Zero(t, run.Summary.OutputRenameMSP95)
+	require.Zero(t, run.Summary.DirectoryFsyncMSP95)
 }
 
 // TestBenchmarkRunner_GateViolationsReported pins that each observation

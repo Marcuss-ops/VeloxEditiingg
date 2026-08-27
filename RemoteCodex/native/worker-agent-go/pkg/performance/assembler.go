@@ -362,6 +362,13 @@ func assembleIO(rm pipeline.RenderMetrics) IOMetrics {
 		FileCopyBytes:     rm.FileCopyBytes,
 		InputOpenCount:    rm.InputOpenCount,
 		InputReopenCount:  rm.InputReopenCount,
+		// Output durability timings measured inside publishAtomic
+		// (sidecar io_counters block): fsync of the partial file, the
+		// atomic rename and the parent-directory fsync. Zero on engines
+		// that predate the block.
+		FileFsyncMS:      rm.FileFsyncMS,
+		OutputRenameMS:   rm.OutputRenameMS,
+		DirectoryFsyncMS: rm.DirectoryFsyncMS,
 	}
 }
 

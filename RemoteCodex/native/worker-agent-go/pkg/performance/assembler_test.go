@@ -57,6 +57,9 @@ func sampleRun() pipeline.RunMetrics {
 			AssetBytesCopied:     4_194_304,
 			InputOpenCount:       5,
 			InputReopenCount:     2,
+			FileFsyncMS:          19,
+			OutputRenameMS:       4,
+			DirectoryFsyncMS:     7,
 			CPUUserMs:            1500,
 			CPUSystemMs:          300,
 			PeakRSSBytes:         320_000_000,
@@ -221,6 +224,10 @@ func TestAssembler_MapsIO(t *testing.T) {
 	require.Equal(t, int64(4_194_304), io.FileCopyBytes)
 	require.Equal(t, int64(5), io.InputOpenCount)
 	require.Equal(t, int64(2), io.InputReopenCount)
+	// Output durability timings from the sidecar io_counters block.
+	require.Equal(t, int64(19), io.FileFsyncMS)
+	require.Equal(t, int64(4), io.OutputRenameMS)
+	require.Equal(t, int64(7), io.DirectoryFsyncMS)
 }
 
 func TestAssembler_EngineSidecarIOCountersAbsent(t *testing.T) {
@@ -232,12 +239,18 @@ func TestAssembler_EngineSidecarIOCountersAbsent(t *testing.T) {
 	run.RenderMetrics.AssetBytesCopied = 0
 	run.RenderMetrics.InputOpenCount = 0
 	run.RenderMetrics.InputReopenCount = 0
+	run.RenderMetrics.FileFsyncMS = 0
+	run.RenderMetrics.OutputRenameMS = 0
+	run.RenderMetrics.DirectoryFsyncMS = 0
 
 	io := NewAssembler().Assemble(run, AssemblyContext{}).IO
 	require.Zero(t, io.AssetBytesCopied)
 	require.Zero(t, io.FileCopyCount)
 	require.Zero(t, io.InputOpenCount)
 	require.Zero(t, io.InputReopenCount)
+	require.Zero(t, io.FileFsyncMS)
+	require.Zero(t, io.OutputRenameMS)
+	require.Zero(t, io.DirectoryFsyncMS)
 }
 
 func TestDeriveIO_MatchesReceiptSection(t *testing.T) {

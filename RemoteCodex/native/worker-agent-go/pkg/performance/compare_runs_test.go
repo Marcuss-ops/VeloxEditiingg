@@ -20,6 +20,11 @@ func testRun(id BenchmarkFixtureID, commit string, walls []float64, execve, enco
 		r.Media.EncodePasses = int64(encode)
 		r.Derived.ReadAmplification = readAmp
 		r.Derived.WriteAmplification = readAmp * 0.8
+		// Deterministic output-durability timings derived from the wall
+		// so the p95 rows are exercised by the summary aggregation.
+		r.IO.FileFsyncMS = int64(w) / 1000
+		r.IO.OutputRenameMS = int64(w) / 2000
+		r.IO.DirectoryFsyncMS = int64(w) / 500
 		obs = append(obs, BenchmarkRunObservation{RunIndex: i, WallMS: int64(w), Receipt: r})
 	}
 	return &BenchmarkRun{
@@ -77,6 +82,18 @@ func TestCompareBenchmarkRuns_DeltaMath(t *testing.T) {
 	// write amplification from the summary p50
 	require.InDelta(t, 4.08, c.KPIs.WriteAmplification.Baseline, 1e-9)
 	require.InDelta(t, 1.12, c.KPIs.WriteAmplification.Candidate, 1e-9)
+
+	// output durability p95s (publishAtomic timings): fsync = wall/1000
+	// → base [9,10,11] p95=11, cand [2,4,4] p95=4; rename = wall/2000
+	// → base [4,5,5] p95=5, cand [1,2,2] p95=2; dir-fsync = wall/500
+	// → base [18,20,22] p95=22, cand [4,8,9] p95=9.
+	require.Equal(t, float64(11), c.KPIs.FileFsyncMSP95.Baseline)
+	require.Equal(t, float64(4), c.KPIs.FileFsyncMSP95.Candidate)
+	require.InDelta(t, -63.64, *c.KPIs.FileFsyncMSP95.DeltaPercent, 1e-2)
+	require.Equal(t, float64(5), c.KPIs.OutputRenameMSP95.Baseline)
+	require.Equal(t, float64(2), c.KPIs.OutputRenameMSP95.Candidate)
+	require.Equal(t, float64(22), c.KPIs.DirectoryFsyncMSP95.Baseline)
+	require.Equal(t, float64(9), c.KPIs.DirectoryFsyncMSP95.Candidate)
 
 	require.True(t, c.AnyRegression == false)
 	require.Zero(t, c.CandidateGateFailures)

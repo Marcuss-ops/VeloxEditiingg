@@ -37,7 +37,7 @@ type MetricPoint struct {
 	Improved     bool     `json:"improved"`                // candidate < baseline
 }
 
-// KPIComparison carries the six KPIs of the §22 report.
+// KPIComparison carries the KPIs of the §22 report.
 type KPIComparison struct {
 	WallP50            MetricPoint `json:"wall_p50_ms"`
 	WallP95            MetricPoint `json:"wall_p95_ms"`
@@ -45,6 +45,13 @@ type KPIComparison struct {
 	ReadAmplification  MetricPoint `json:"read_amplification"`
 	WriteAmplification MetricPoint `json:"write_amplification"`
 	AudioEncodePasses  MetricPoint `json:"audio_encode_passes"`
+	// Output durability p95s (publishAtomic): fsync of the partial
+	// output file, the atomic rename, and the parent-directory fsync.
+	// A p95 fsync in the low tens of ms is fine; a seconds-range p95
+	// justifies durability work.
+	FileFsyncMSP95      MetricPoint `json:"file_fsync_ms_p95"`
+	OutputRenameMSP95   MetricPoint `json:"output_rename_ms_p95"`
+	DirectoryFsyncMSP95 MetricPoint `json:"directory_fsync_ms_p95"`
 }
 
 // RunRef identifies one side of the comparison for the report header.
@@ -98,12 +105,15 @@ func CompareBenchmarkRuns(base, candidate *BenchmarkRun) (*BenchmarkComparison, 
 		Baseline:  runRef(base),
 		Candidate: runRef(candidate),
 		KPIs: KPIComparison{
-			WallP50:            lowerIsBetter(base.Summary.WallMSP50, candidate.Summary.WallMSP50),
-			WallP95:            lowerIsBetter(base.Summary.WallMSP95, candidate.Summary.WallMSP95),
-			ExecveCount:        lowerIsBetter(maxInvariantMetric(base.Receipts, externalExecveOf), maxInvariantMetric(candidate.Receipts, externalExecveOf)),
-			ReadAmplification:  lowerIsBetter(p50RatioMetric(base.Receipts, readAmpOf), p50RatioMetric(candidate.Receipts, readAmpOf)),
-			WriteAmplification: lowerIsBetter(base.Summary.WriteAmplificationP50, candidate.Summary.WriteAmplificationP50),
-			AudioEncodePasses:  lowerIsBetter(maxInvariantMetric(base.Receipts, audioEncodePassesOf), maxInvariantMetric(candidate.Receipts, audioEncodePassesOf)),
+			WallP50:             lowerIsBetter(base.Summary.WallMSP50, candidate.Summary.WallMSP50),
+			WallP95:             lowerIsBetter(base.Summary.WallMSP95, candidate.Summary.WallMSP95),
+			ExecveCount:         lowerIsBetter(maxInvariantMetric(base.Receipts, externalExecveOf), maxInvariantMetric(candidate.Receipts, externalExecveOf)),
+			ReadAmplification:   lowerIsBetter(p50RatioMetric(base.Receipts, readAmpOf), p50RatioMetric(candidate.Receipts, readAmpOf)),
+			WriteAmplification:  lowerIsBetter(base.Summary.WriteAmplificationP50, candidate.Summary.WriteAmplificationP50),
+			AudioEncodePasses:   lowerIsBetter(maxInvariantMetric(base.Receipts, audioEncodePassesOf), maxInvariantMetric(candidate.Receipts, audioEncodePassesOf)),
+			FileFsyncMSP95:      lowerIsBetter(base.Summary.FileFsyncMSP95, candidate.Summary.FileFsyncMSP95),
+			OutputRenameMSP95:   lowerIsBetter(base.Summary.OutputRenameMSP95, candidate.Summary.OutputRenameMSP95),
+			DirectoryFsyncMSP95: lowerIsBetter(base.Summary.DirectoryFsyncMSP95, candidate.Summary.DirectoryFsyncMSP95),
 		},
 	}
 	c.CandidateGateFailures = candidate.Summary.GateFailures
@@ -111,7 +121,9 @@ func CompareBenchmarkRuns(base, candidate *BenchmarkRun) (*BenchmarkComparison, 
 		base.ArtifactSHA256 != candidate.ArtifactSHA256
 	c.AnyRegression = c.KPIs.WallP50.Regressed() || c.KPIs.WallP95.Regressed() ||
 		c.KPIs.ExecveCount.Regressed() || c.KPIs.ReadAmplification.Regressed() ||
-		c.KPIs.WriteAmplification.Regressed() || c.KPIs.AudioEncodePasses.Regressed()
+		c.KPIs.WriteAmplification.Regressed() || c.KPIs.AudioEncodePasses.Regressed() ||
+		c.KPIs.FileFsyncMSP95.Regressed() || c.KPIs.OutputRenameMSP95.Regressed() ||
+		c.KPIs.DirectoryFsyncMSP95.Regressed()
 	return c, nil
 }
 
@@ -209,6 +221,9 @@ func (c *BenchmarkComparison) FormatTable() string {
 	row("read amplification", c.KPIs.ReadAmplification)
 	row("write amplification", c.KPIs.WriteAmplification)
 	row("audio encode passes", c.KPIs.AudioEncodePasses)
+	row("fsync p95 (ms)", c.KPIs.FileFsyncMSP95)
+	row("rename p95 (ms)", c.KPIs.OutputRenameMSP95)
+	row("dir-fsync p95 (ms)", c.KPIs.DirectoryFsyncMSP95)
 	if c.CandidateGateFailures > 0 {
 		fmt.Fprintf(&b, "\nWARNING: candidate has %d gate failure(s) — timing numbers are NOT trustworthy (invariants violated)\n", c.CandidateGateFailures)
 	}

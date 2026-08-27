@@ -293,6 +293,18 @@ type IOMetrics struct {
 	// stream-discovery open followed by the readPackets reopen).
 	InputOpenCount   int64 `json:"input_open_count"`
 	InputReopenCount int64 `json:"input_reopen_count"`
+
+	// Output durability timings from the engine's io_counters sidecar
+	// block, measured inside publishAtomic: the fsync of the partial
+	// output file (file_fsync_ms), the atomic rename (output_rename_ms)
+	// and the parent-directory fsync (directory_fsync_ms). All zero on
+	// engines that predate the block. These drive the "does fsync
+	// justify intervention" decision: after ~100 jobs, a p95
+	// file_fsync_ms in the low tens of ms is fine, a p95 in the seconds
+	// range justifies durability work.
+	FileFsyncMS      int64 `json:"file_fsync_ms"`
+	OutputRenameMS   int64 `json:"output_rename_ms"`
+	DirectoryFsyncMS int64 `json:"directory_fsync_ms"`
 }
 
 // MediaMetrics mirrors the C++ engine sidecar counters already mapped by

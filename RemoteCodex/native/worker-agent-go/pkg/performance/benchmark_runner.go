@@ -59,8 +59,16 @@ type RunSummary struct {
 	AccountedRatioP50     float64 `json:"accounted_ratio_p50"`
 	WriteAmplificationP50 float64 `json:"write_amplification_p50"`
 	ProcessesPerClipP50   float64 `json:"processes_per_clip_p50"`
-	GateFailures          int     `json:"gate_failures"`
-	FailedRuns            int     `json:"failed_runs"`
+	// Output durability p95s (engine sidecar io_counters block,
+	// publishAtomic): fsync of the partial output file, the atomic
+	// rename, and the parent-directory fsync. After ~100 jobs the
+	// file_fsync p95 decides whether durability work is justified
+	// (low tens of ms → fine; seconds-range → intervene).
+	FileFsyncMSP95      float64 `json:"file_fsync_ms_p95"`
+	OutputRenameMSP95   float64 `json:"output_rename_ms_p95"`
+	DirectoryFsyncMSP95 float64 `json:"directory_fsync_ms_p95"`
+	GateFailures        int     `json:"gate_failures"`
+	FailedRuns          int     `json:"failed_runs"`
 }
 
 // BenchmarkRun is the machine-readable report of one benchmark run
@@ -258,6 +266,7 @@ func totalRAMBytes() int64 {
 // successful observations.
 func summarizeObservations(obs []BenchmarkRunObservation) RunSummary {
 	var walls, accounted, writeAmp, ppc []float64
+	var fsync, rename, dirFsync []float64
 	var gateFailures, failed int
 	for _, o := range obs {
 		if o.Error != "" {
@@ -271,6 +280,11 @@ func summarizeObservations(obs []BenchmarkRunObservation) RunSummary {
 		accounted = append(accounted, o.Receipt.Derived.AccountedRatio)
 		writeAmp = append(writeAmp, o.Receipt.Derived.WriteAmplification)
 		ppc = append(ppc, o.Receipt.Derived.ProcessesPerClip)
+		// Output durability timings (sidecar io_counters block); zero on
+		// engines that predate the block.
+		fsync = append(fsync, float64(o.Receipt.IO.FileFsyncMS))
+		rename = append(rename, float64(o.Receipt.IO.OutputRenameMS))
+		dirFsync = append(dirFsync, float64(o.Receipt.IO.DirectoryFsyncMS))
 		gateFailures += len(o.GateViolations)
 	}
 	return RunSummary{
@@ -279,6 +293,9 @@ func summarizeObservations(obs []BenchmarkRunObservation) RunSummary {
 		AccountedRatioP50:     percentile(accounted, 0.50),
 		WriteAmplificationP50: percentile(writeAmp, 0.50),
 		ProcessesPerClipP50:   percentile(ppc, 0.50),
+		FileFsyncMSP95:        percentile(fsync, 0.95),
+		OutputRenameMSP95:     percentile(rename, 0.95),
+		DirectoryFsyncMSP95:   percentile(dirFsync, 0.95),
 		GateFailures:          gateFailures,
 		FailedRuns:            failed,
 	}
