@@ -8,6 +8,8 @@ package providers
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strings"
 
 	"velox-server/internal/deliveries"
@@ -55,7 +57,7 @@ func (d *DriveProvider) Deliver(ctx context.Context, artifact *repository.Artifa
 	}
 	uploadRes, err := d.service.UploadVideo(ctx, filePath, artifact.ID, driveFolderReference(destination), marker)
 	if err != nil {
-		return nil, err
+		return nil, classifyDriveError(err)
 	}
 	return &deliveries.Result{
 		Success:   uploadRes.Success,
@@ -69,6 +71,23 @@ func (d *DriveProvider) Deliver(ctx context.Context, artifact *repository.Artifa
 			"upload_local_buffer_ms": uploadRes.LocalBufferMS,
 		},
 	}, nil
+}
+
+// classifyDriveError projects Drive authentication failures into the
+// deliveries contract. Missing/expired credentials must become BLOCKED_AUTH;
+// retrying them with exponential backoff cannot repair the operator state.
+func classifyDriveError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, integrationsDrive.ErrNotAuthenticated) {
+		return fmt.Errorf("%w: %w", deliveries.ErrProviderAuth, err)
+	}
+	var apiErr *integrationsDrive.APIError
+	if errors.As(err, &apiErr) && (apiErr.StatusCode == 401 || apiErr.StatusCode == 403) {
+		return fmt.Errorf("%w: %w", deliveries.ErrProviderAuth, err)
+	}
+	return err
 }
 
 func driveFolderReference(destination *deliveries.Destination) string {

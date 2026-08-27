@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -16,6 +17,10 @@ import (
 
 	"velox-server/internal/credentials"
 )
+
+// ErrNotAuthenticated means the service has no usable access token. Callers
+// must surface this as an operator action, not as a transient network retry.
+var ErrNotAuthenticated = errors.New("drive: authentication required")
 
 type accessTokenContextKey struct{}
 
@@ -86,7 +91,7 @@ func (s *Service) getToken(ctx context.Context) (*Token, error) {
 	s.mu.RUnlock()
 
 	if token == nil {
-		return nil, fmt.Errorf("no token set - authenticate first")
+		return nil, fmt.Errorf("%w: no token set - authenticate first", ErrNotAuthenticated)
 	}
 
 	// Check if token needs refresh (5 minutes before expiry)
@@ -95,7 +100,7 @@ func (s *Service) getToken(ctx context.Context) (*Token, error) {
 		newToken, err := RefreshToken(ctx, s.oauthCfg, token.RefreshToken)
 		if err != nil {
 			log.Printf("[AUTH] Token refresh failed: %v", err)
-			return nil, fmt.Errorf("failed to refresh token: %w", err)
+			return nil, fmt.Errorf("%w: failed to refresh token: %w", ErrNotAuthenticated, err)
 		}
 		newToken.AccountEmail = token.AccountEmail
 		s.SetToken(newToken)
