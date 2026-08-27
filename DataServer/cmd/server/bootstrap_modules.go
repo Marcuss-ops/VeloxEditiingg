@@ -122,7 +122,7 @@ func liveAttemptFromRuntimeRow(row *store.WorkerTaskRuntimeRow, err error) (*obs
 var _ observability.LiveAttemptReader = (*sqliteLiveAttemptAdapter)(nil)
 var _ observability.LiveAttemptTaskReader = (*sqliteLiveAttemptAdapter)(nil)
 
-func (a *sqliteJobInspectionAdapter) ListJobEvents(_ context.Context, jobID string, limit int) ([]observability.JobEvent, error) {
+func (a *sqliteJobInspectionAdapter) ListJobEvents(ctx context.Context, jobID string, limit int) ([]observability.JobEvent, error) {
 	rows, err := a.store.ListJobEvents(jobID, limit)
 	if err != nil {
 		return nil, err
@@ -135,6 +135,32 @@ func (a *sqliteJobInspectionAdapter) ListJobEvents(_ context.Context, jobID stri
 			Event:     row.Event,
 			Payload:   observability.DecodeJobEventPayload(row.RawJSON),
 		})
+	}
+	// job_events contains the legacy/operator lifecycle journal. The detailed
+	// worker/master timeline is canonical in task_execution_events; expose both
+	// projections through the same inspect response so operators do not need to
+	// correlate a second endpoint or inspect worker logs.
+	executionRows, err := a.store.ListExecutionEventsByJob(ctx, jobID, limit)
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range executionRows {
+		payload := observability.DecodeJobEventPayload(row.Metadata)
+		if payload == nil {
+			payload = map[string]any{}
+		}
+		payload["attempt_id"] = row.AttemptID
+		payload["event_index"] = row.EventIndex
+		payload["origin"] = row.Origin
+		payload["scope"] = row.Scope
+		payload["status"] = row.Status
+		if row.StartedAt != "" {
+			payload["started_at"] = row.StartedAt
+		}
+		if row.CompletedAt != "" {
+			payload["completed_at"] = row.CompletedAt
+		}
+		out = append(out, observability.JobEvent{Timestamp: row.Timestamp, JobID: row.JobID, Event: row.Event, Payload: payload})
 	}
 	return out, nil
 }
