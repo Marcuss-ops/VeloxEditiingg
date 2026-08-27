@@ -234,6 +234,34 @@ message TaskResult {
   // millisecond belongs to at most one waterfall bucket; this timeline is
   // the source for the bucket builder and the unaccounted gap calculation.
   repeated AttemptMilestone milestones = 23;
+  // STEP D drill-down INSIDE the asset_preparation waterfall bucket: the
+  // per-attempt asset accounting plus sub-phase wall/work sums as measured
+  // by the worker runtime. Sub-phases may overlap (parallel downloads), so
+  // they are never re-combined into a coverage number master-side; an absent
+  // message means the worker predates this field — no fabricated zeros.
+  AssetPreparationBreakdown asset_preparation = 24;
+}
+
+message AssetPreparationBreakdown {
+  // Per-attempt asset accounting.
+  int64 assets_required = 1;
+  int64 assets_unique = 2;
+  int64 cache_hits = 3;
+  int64 cache_misses = 4;
+  // Served from a verified local file without moving bytes / bytes moved now.
+  int64 ready_before_attempt = 5;
+  int64 downloaded_during_attempt = 6;
+  // Sub-phase durations, summed across per-asset resolutions. Wall vs work:
+  // download_wall_ms is Σ per-transfer windows, download_work_ms is Σ
+  // byte-moving time; with parallel downloads work_sum < wall_sum is normal.
+  int64 cache_lookup_ms = 7;
+  int64 remote_wait_ms = 8;
+  int64 remote_wait_count = 9;
+  int64 download_wall_ms = 10;
+  int64 download_work_ms = 11;
+  int64 hash_verify_ms = 12;
+  int64 metadata_probe_ms = 13;
+  int64 materialize_local_ms = 14;
 }
 
 message AttemptWaterfallStage {

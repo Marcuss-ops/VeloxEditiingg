@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	sharedtelemetry "velox-shared/telemetry"
 	"velox-worker-agent/internal/downloader"
 	"velox-worker-agent/internal/taskrunner"
 	"velox-worker-agent/internal/telemetry"
@@ -366,6 +367,27 @@ func attachAssetOperations(report *taskrunner.TaskExecutionReport, tracker *asse
 		}
 	}
 	prep := tracker.prepSnapshot()
+	// STEP D drill-down: only attach when the resolver observed at least one
+	// resolution. An attempt with no lookups carries NO breakdown rather than
+	// a zero-filled fake — absence is the honest signal on the wire too.
+	if cache.CacheLookups > 0 {
+		report.AssetPreparation = &sharedtelemetry.AssetPreparationBreakdown{
+			AssetsRequired:          int64(prep.AssetsTotal),
+			AssetsUnique:            int64(prep.AssetsUnique),
+			CacheHits:               int64(prep.CacheHits),
+			CacheMisses:             int64(prep.CacheMisses),
+			ReadyBeforeAttempt:      int64(prep.ReadyBefore),
+			DownloadedDuringAttempt: int64(prep.DownloadedNow),
+			CacheLookupMS:           prep.CacheLookupMS,
+			RemoteWaitMS:            prep.RemoteWaitMS,
+			RemoteWaitCount:         prep.RemoteWaitCount,
+			DownloadWallMS:          prep.DownloadWallMS,
+			DownloadWorkMS:          prep.DownloadWorkSum,
+			HashVerifyMS:            prep.HashVerifyMS,
+			MetadataProbeMS:         prep.MetadataProbeMS,
+			MaterializeLocalMS:      prep.MaterializeLocalMS,
+		}
+	}
 	legacy["cache.enabled"] = tracker.cacheEnabled || len(records) > 0
 	legacy["asset.cache.lookups"] = cache.CacheLookups
 	legacy["cache.lookups"] = cache.CacheLookups

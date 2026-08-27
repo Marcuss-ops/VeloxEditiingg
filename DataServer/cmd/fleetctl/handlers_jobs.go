@@ -27,12 +27,12 @@ func runJob(client *fleetClient, args []string) int {
 	case "cancel":
 		return runJobCancel(client, args[1:])
 	case "inspect":
-		jobID, jsonOutput, err := parseJobReadArgs(args[1:], "inspect")
+		jobID, jsonOutput, waterfallOnly, err := parseJobInspectArgs(args[1:])
 		if err != nil {
 			fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "%v", err))
 			return ExitMisuse
 		}
-		return runJobInspect(client, jobID, jsonOutput)
+		return runJobInspect(client, jobID, jsonOutput, waterfallOnly)
 	case "metrics":
 		jobID, _, err := parseJobReadArgs(args[1:], "metrics")
 		if err != nil {
@@ -137,6 +137,40 @@ func parseJobReadArgs(args []string, command string) (string, bool, error) {
 	return jobID, jsonOutput, nil
 }
 
+// parseJobInspectArgs parses `job inspect` flags. Beyond the shared
+// --json passthrough it accepts --waterfall, which renders only the
+// attempt waterfall block (buckets / wall / accounted-unaccounted /
+// coverage_pct / missing_milestones) instead of the raw snapshot JSON.
+func parseJobInspectArgs(args []string) (string, bool, bool, error) {
+	var jobID string
+	jsonOutput, waterfallOnly := false, false
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--json":
+			jsonOutput = true
+		case args[i] == "--waterfall":
+			waterfallOnly = true
+		case strings.HasPrefix(args[i], "--master=") || strings.HasPrefix(args[i], "--token-file=") || args[i] == "--verbose":
+		case args[i] == "--master" || args[i] == "--token-file":
+			if i+1 >= len(args) {
+				return "", false, false, fmt.Errorf("%s requires a value", args[i])
+			}
+			i++
+		case strings.HasPrefix(args[i], "-"):
+			return "", false, false, fmt.Errorf("unknown job inspect option %q", args[i])
+		default:
+			if jobID != "" {
+				return "", false, false, fmt.Errorf("job inspect accepts exactly one job_id")
+			}
+			jobID = args[i]
+		}
+	}
+	if jobID == "" {
+		return "", false, false, fmt.Errorf("job inspect requires a job_id")
+	}
+	return jobID, jsonOutput, waterfallOnly, nil
+}
+
 func parseJobWatchArgs(args []string) (jobID string, timeout, interval time.Duration, jsonOutput bool, err error) {
 	timeout = envSeconds("FLEETCTL_JOB_TIMEOUT_SECONDS", 3600)
 	interval = envSeconds("FLEETCTL_JOB_POLL_SECONDS", 2)
@@ -195,7 +229,7 @@ func parseJobWatchArgs(args []string) (jobID string, timeout, interval time.Dura
 	return jobID, timeout, interval, jsonOutput, nil
 }
 
-func runJobInspect(client *fleetClient, jobID string, jsonOutput bool) int {
+func runJobInspect(client *fleetClient, jobID string, jsonOutput, waterfallOnly bool) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	var response map[string]any
@@ -208,6 +242,10 @@ func runJobInspect(client *fleetClient, jobID string, jsonOutput bool) int {
 		ec := MapHTTPStatusToOpExit(status)
 		fmt.Fprintln(os.Stderr, fmtExit(ec, "GET /api/v1/admin/jobs/%s status=%d", jobID, status))
 		return ec
+	}
+	if waterfallOnly {
+		renderJobInspectWaterfall(response)
+		return ExitOK
 	}
 	if jsonOutput {
 		bs, _ := json.Marshal(response)

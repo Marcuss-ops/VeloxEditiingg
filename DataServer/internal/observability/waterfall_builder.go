@@ -20,6 +20,13 @@ type AttemptWaterfall struct {
 	CoveragePct       float64           `json:"coverage_pct"`
 	MissingMilestones []string          `json:"missing_milestones,omitempty"`
 	InvertedBuckets   []string          `json:"inverted_buckets,omitempty"`
+	// AssetPreparation is the STEP D drill-down INSIDE the asset_preparation
+	// bucket, exactly as measured by the worker resolver sink and carried on
+	// the durable TaskResult. Nil when the worker predates the field or no
+	// resolution was observed — absence stays honest, never zero-filled, and
+	// sub-phase sums may overlap (parallel downloads), so they are NOT re-
+	// combined into a coverage number here.
+	AssetPreparation *sharedtelemetry.AssetPreparationBreakdown `json:"asset_preparation,omitempty"`
 }
 
 var bucketDefs = []struct {

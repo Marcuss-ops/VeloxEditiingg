@@ -10,10 +10,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	sharedtelemetry "velox-shared/telemetry"
 	"velox-server/internal/jobs"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
+	sharedtelemetry "velox-shared/telemetry"
 )
 
 func TestJobLive_ReturnsLiveStatusWithWorkerAndExecution(t *testing.T) {
@@ -34,7 +34,7 @@ func TestJobLive_ReturnsLiveStatusWithWorkerAndExecution(t *testing.T) {
 			TaskID: "T-live-1", JobID: "J-live-1", AttemptID: "A-live-1", AttemptNumber: 1,
 			WorkerID: "worker-live", RuntimeStatus: "RUNNING",
 			WorkerConnectionState: "CONNECTED",
-			ProgressPercent: 55, ProgressPhase: "video_encode",
+			ProgressPercent:       55, ProgressPhase: "video_encode",
 			CurrentScene: 10, TotalScenes: 20,
 			CurrentSegment: 10, TotalSegments: 20,
 			FramesEncoded: 5000, FramesDecoded: 5100, FramesComposited: 5000,
@@ -113,7 +113,7 @@ func TestJobLive_ExposesAttemptMilestones(t *testing.T) {
 			TaskID: "T-live-ms", JobID: "J-live-ms", AttemptID: "A-live-ms", AttemptNumber: 1,
 			WorkerID: "worker-live-ms", RuntimeStatus: "RUNNING",
 			WorkerConnectionState: "CONNECTED",
-			ProgressPercent: 40, ProgressPhase: "prefetching",
+			ProgressPercent:       40, ProgressPhase: "prefetching",
 			LastProgressAt: time.Now().Add(-2 * time.Second).UTC().Format(time.RFC3339Nano),
 			UpdatedAt:      time.Now().Add(-500 * time.Millisecond).UTC().Format(time.RFC3339Nano),
 			AttemptMilestones: []sharedtelemetry.AttemptMilestoneSample{
@@ -166,7 +166,7 @@ func TestJobLive_StallNoProgress_WorkerAlive(t *testing.T) {
 			TaskID: "T-np", JobID: "J-np", AttemptID: "A-np", AttemptNumber: 1,
 			WorkerID: "worker-np", RuntimeStatus: "RUNNING",
 			WorkerConnectionState: "CONNECTED",
-			ProgressPercent: 42, ProgressPhase: "video_encode",
+			ProgressPercent:       42, ProgressPhase: "video_encode",
 			LastProgressAt: time.Now().Add(-45 * time.Second).UTC().Format(time.RFC3339Nano),
 			UpdatedAt:      time.Now().Add(-1 * time.Second).UTC().Format(time.RFC3339Nano),
 		}})
@@ -223,7 +223,7 @@ func TestJobLive_StallWorkerOffline(t *testing.T) {
 			TaskID: "T-off", JobID: "J-off", AttemptID: "A-off", AttemptNumber: 1,
 			WorkerID: "worker-off", RuntimeStatus: "RUNNING",
 			WorkerConnectionState: "DISCONNECTED",
-			ProgressPercent: 42, ProgressPhase: "video_encode",
+			ProgressPercent:       42, ProgressPhase: "video_encode",
 			LastProgressAt: time.Now().Add(-45 * time.Second).UTC().Format(time.RFC3339Nano),
 			UpdatedAt:      time.Now().Add(-30 * time.Second).UTC().Format(time.RFC3339Nano),
 		}})
@@ -271,7 +271,7 @@ func TestJobLive_StallStagnation(t *testing.T) {
 			TaskID: "T-stag", JobID: "J-stag", AttemptID: "A-stag", AttemptNumber: 1,
 			WorkerID: "worker-stag", RuntimeStatus: "RUNNING",
 			WorkerConnectionState: "CONNECTED",
-			ProgressPercent: 50, ProgressPhase: "video_encode",
+			ProgressPercent:       50, ProgressPhase: "video_encode",
 			// Progress is 3 minutes old — exceeds stagnation watermark (120s default)
 			// but NOT the no_progress threshold (30s) would fire first...
 			// Actually, no_progress fires at 30s, so we need progress_age < 30s
@@ -325,7 +325,7 @@ func TestJobLive_NoStallWhenProgressRecent(t *testing.T) {
 			TaskID: "T-ok", JobID: "J-ok", AttemptID: "A-ok", AttemptNumber: 1,
 			WorkerID: "worker-ok", RuntimeStatus: "RUNNING",
 			WorkerConnectionState: "CONNECTED",
-			ProgressPercent: 42, ProgressPhase: "video_encode",
+			ProgressPercent:       42, ProgressPhase: "video_encode",
 			LastProgressAt: time.Now().Add(-5 * time.Second).UTC().Format(time.RFC3339Nano),
 			UpdatedAt:      time.Now().Add(-1 * time.Second).UTC().Format(time.RFC3339Nano),
 		}})
@@ -424,13 +424,13 @@ func TestJobLive_PopulatesPublicationFromCumulativeMetrics(t *testing.T) {
 			WorkerID: "worker-pub", RuntimeStatus: "RUNNING",
 			ProgressPercent: 100, ProgressPhase: "publishing",
 			CumulativeMetrics: map[string]any{
-				"upload_bytes":              float64(420000000),
-				"upload_total_bytes":        float64(678000000),
-				"upload_percent":            float64(61.9),
-				"upload_bytes_per_second":   float64(62000000),
-				"upload_eta_seconds":        float64(4.2),
-				"upload_artifact_index":     float64(1),
-				"upload_artifact_total":     float64(2),
+				"upload_bytes":            float64(420000000),
+				"upload_total_bytes":      float64(678000000),
+				"upload_percent":          float64(61.9),
+				"upload_bytes_per_second": float64(62000000),
+				"upload_eta_seconds":      float64(4.2),
+				"upload_artifact_index":   float64(1),
+				"upload_artifact_total":   float64(2),
 			},
 		}})
 

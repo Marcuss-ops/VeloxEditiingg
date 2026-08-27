@@ -210,17 +210,17 @@ func (s *Service) JobLive(ctx context.Context, jobID string) (*JobLiveStatus, er
 
 	// Execution progress.
 	result.Execution = &JobLiveExecution{
-		Phase:            live.ProgressPhase,
-		Percent:          live.ProgressPercent,
-		Scene:            live.CurrentScene,
-		ScenesTotal:      live.TotalScenes,
-		Segment:          live.CurrentSegment,
-		SegmentsTotal:    live.TotalSegments,
-		ElapsedMS:        live.ElapsedMS,
-		FramesDecoded:    live.FramesDecoded,
-		FramesComposited: live.FramesComposited,
-		FramesEncoded:    live.FramesEncoded,
-		SpeedX:           live.FFmpegSpeedX,
+		Phase:             live.ProgressPhase,
+		Percent:           live.ProgressPercent,
+		Scene:             live.CurrentScene,
+		ScenesTotal:       live.TotalScenes,
+		Segment:           live.CurrentSegment,
+		SegmentsTotal:     live.TotalSegments,
+		ElapsedMS:         live.ElapsedMS,
+		FramesDecoded:     live.FramesDecoded,
+		FramesComposited:  live.FramesComposited,
+		FramesEncoded:     live.FramesEncoded,
+		SpeedX:            live.FFmpegSpeedX,
 		AttemptMilestones: live.AttemptMilestones,
 	}
 

@@ -92,7 +92,8 @@ Sub-commands:
                           serial image rollout across selected workers
   ssh-check               per-worker SSH connectivity (ssh/hostkey/sudo -n)
   job cancel <job_id> [--reason R]  cancel a direct job through the canonical lifecycle
-  job inspect <job_id>    complete job diagnostics (waterfall/metrics/cache/artifact/delivery)
+  job inspect <job_id> [--waterfall]  complete job diagnostics; --waterfall renders only
+                          the attempt waterfall block (buckets/coverage/missing)
   job metrics <job_id>    execution and cache metrics for one job
   job watch <job_id>      follow the persisted job event timeline
   quarantine <worker_id>  exclude worker from placement

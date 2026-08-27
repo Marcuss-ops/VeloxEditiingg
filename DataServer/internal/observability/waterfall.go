@@ -28,6 +28,11 @@ type rawAttemptMilestone struct {
 
 type rawAttemptMilestoneReport struct {
 	Milestones []rawAttemptMilestone `json:"milestones"`
+	// AssetPreparation is the STEP D drill-down inside the asset_preparation
+	// bucket, carried on the durable TaskResult. protojson emits camelCase
+	// (assetPreparation); the snake_case alias accepts hand-written reports.
+	AssetPreparationCamel json.RawMessage `json:"assetPreparation"`
+	AssetPreparationSnake json.RawMessage `json:"asset_preparation"`
 }
 
 // parseAttemptMilestoneSamples decodes the worker's monotonic milestone
@@ -70,7 +75,37 @@ func decodeAttemptWaterfall(raw string, attemptID string, wallMS int64) *Attempt
 		return nil
 	}
 	waterfall := BuildAttemptWaterfall(attemptID, samples, wallMS)
+	// Attach the worker's measured asset-preparation drill-down verbatim when
+	// present; a malformed/absent block stays nil rather than becoming zeros.
+	waterfall.AssetPreparation = parseAssetPreparationDrillDown(raw)
 	return &waterfall
+}
+
+// parseAssetPreparationDrillDown extracts the STEP D asset-preparation
+// breakdown from a raw TaskResult payload. protojson emits camelCase
+// (assetPreparation); the snake_case alias accepts hand-written reports. A
+// missing or malformed block stays nil — absence is observable, a silent
+// zero is not.
+func parseAssetPreparationDrillDown(raw string) *sharedtelemetry.AssetPreparationBreakdown {
+	if raw == "" {
+		return nil
+	}
+	var report rawAttemptMilestoneReport
+	if json.Unmarshal([]byte(raw), &report) != nil {
+		return nil
+	}
+	prepRaw := report.AssetPreparationCamel
+	if len(prepRaw) == 0 || string(prepRaw) == "null" {
+		prepRaw = report.AssetPreparationSnake
+	}
+	if len(prepRaw) == 0 || string(prepRaw) == "null" {
+		return nil
+	}
+	var prep sharedtelemetry.AssetPreparationBreakdown
+	if json.Unmarshal(prepRaw, &prep) != nil {
+		return nil
+	}
+	return &prep
 }
 
 func parseJSONInt(raw json.RawMessage) int64 {

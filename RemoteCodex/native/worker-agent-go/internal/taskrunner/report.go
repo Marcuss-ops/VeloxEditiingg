@@ -53,6 +53,10 @@ type TaskExecutionReport struct {
 	PhaseMarkers []PhaseMarker                    `json:"phase_markers,omitempty"`
 	Waterfall  []WaterfallStage                         `json:"waterfall,omitempty"`
 	Milestones []sharedtelemetry.AttemptMilestoneSample `json:"milestones,omitempty"`
+	// AssetPreparation is the STEP D drill-down inside the asset_preparation
+	// waterfall bucket, measured by the canonical resolver sink. Nil means no
+	// resolution was observed; it is never zero-filled to fake measurements.
+	AssetPreparation *sharedtelemetry.AssetPreparationBreakdown `json:"asset_preparation,omitempty"`
 	// DetailedPhases is the full, ordered, event-taxonomy phase list for
 	// the attempt, snapshotted from the append-only recorder at Run completion.
 	// Serialized to TaskResult.phase_timings (proto field 20); the

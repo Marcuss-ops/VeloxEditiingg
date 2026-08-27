@@ -88,6 +88,25 @@ func buildTaskResult(r *taskResultReporter, pte *PendingTaskExecution, taskID, a
 			Name: string(ms.Name), Sequence: ms.Sequence, ElapsedMs: ms.ElapsedMS, OccurredAt: ms.OccurredAt,
 		})
 	}
+	if report.AssetPreparation != nil {
+		p := report.AssetPreparation
+		result.AssetPreparation = &pb.AssetPreparationBreakdown{
+			AssetsRequired:          p.AssetsRequired,
+			AssetsUnique:            p.AssetsUnique,
+			CacheHits:               p.CacheHits,
+			CacheMisses:             p.CacheMisses,
+			ReadyBeforeAttempt:      p.ReadyBeforeAttempt,
+			DownloadedDuringAttempt: p.DownloadedDuringAttempt,
+			CacheLookupMs:           p.CacheLookupMS,
+			RemoteWaitMs:            p.RemoteWaitMS,
+			RemoteWaitCount:         p.RemoteWaitCount,
+			DownloadWallMs:          p.DownloadWallMS,
+			DownloadWorkMs:          p.DownloadWorkMS,
+			HashVerifyMs:            p.HashVerifyMS,
+			MetadataProbeMs:         p.MetadataProbeMS,
+			MaterializeLocalMs:      p.MaterializeLocalMS,
+		}
+	}
 	for _, segment := range report.Segments {
 		result.SegmentTimings = append(result.SegmentTimings, &pb.SegmentTiming{
 			SegmentIndex: int32(segment.SegmentIndex), SceneWorkerIndex: int32(segment.SceneWorkerIndex),

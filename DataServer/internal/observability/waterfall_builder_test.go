@@ -367,6 +367,70 @@ func TestDecodeAttemptWaterfallAccountsForEveryAttemptWall(t *testing.T) {
 	})
 }
 
+// realisticAttemptReportJSONWithPrep is the same canonical 328s timeline
+// plus the worker's asset_preparation drill-down as buildTaskResult actually
+// puts it on the wire (protojson camelCase). The remote_wait wall dominates —
+// the suspected ~300s culprit the drill-down exists to prove.
+const realisticAttemptReportJSONWithPrep = `{"milestones":[
+{"name":"attempt.accepted","sequence":1,"elapsed_ms":0},
+{"name":"execution.started","sequence":2,"elapsed_ms":34},
+{"name":"assets.requested","sequence":3,"elapsed_ms":68},
+{"name":"assets.all_ready","sequence":4,"elapsed_ms":298314},
+{"name":"plan.started","sequence":5,"elapsed_ms":298406},
+{"name":"plan.completed","sequence":6,"elapsed_ms":299847},
+{"name":"render.started","sequence":7,"elapsed_ms":299939},
+{"name":"render.completed","sequence":8,"elapsed_ms":306761},
+{"name":"output.durable","sequence":9,"elapsed_ms":310755},
+{"name":"publish.started","sequence":10,"elapsed_ms":310766},
+{"name":"publish.completed","sequence":11,"elapsed_ms":327510},
+{"name":"result.sent","sequence":12,"elapsed_ms":328039},
+{"name":"attempt.completed","sequence":13,"elapsed_ms":328041}
+],
+"assetPreparation":{"assetsRequired":26,"assetsUnique":26,"cacheHits":0,"cacheMisses":26,
+"readyBeforeAttempt":0,"downloadedDuringAttempt":26,
+"cacheLookupMs":41,"remoteWaitMs":282110,"remoteWaitCount":24,
+"downloadWallMs":11611,"downloadWorkMs":11204,"hashVerifyMs":2891,
+"metadataProbeMs":801,"materializeLocalMs":959}}`
+
+// TestDecodeAttemptWaterfall_CarriesAssetPreparationDrillDown locks STEP D on
+// the read model: the worker-measured drill-down rides AttemptWaterfall
+// verbatim (wall vs work sums kept distinct, never recomputed into coverage),
+// and an absent block stays nil instead of becoming fabricated zeros.
+func TestDecodeAttemptWaterfall_CarriesAssetPreparationDrillDown(t *testing.T) {
+	got := decodeAttemptWaterfall(realisticAttemptReportJSONWithPrep, "attempt-328s-prep", 328041)
+	if got == nil {
+		t.Fatal("decode returned nil for a report with drill-down")
+	}
+	prep := got.AssetPreparation
+	if prep == nil {
+		t.Fatal("asset_preparation drill-down missing from decoded waterfall")
+	}
+	want := sharedtelemetry.AssetPreparationBreakdown{
+		AssetsRequired: 26, AssetsUnique: 26, CacheHits: 0, CacheMisses: 26,
+		ReadyBeforeAttempt: 0, DownloadedDuringAttempt: 26,
+		CacheLookupMS: 41, RemoteWaitMS: 282110, RemoteWaitCount: 24,
+		DownloadWallMS: 11611, DownloadWorkMS: 11204,
+		HashVerifyMS: 2891, MetadataProbeMS: 801, MaterializeLocalMS: 959,
+	}
+	if *prep != want {
+		t.Fatalf("drill-down = %+v, want %+v", *prep, want)
+	}
+
+	// The main waterfall is unchanged by the presence of the drill-down.
+	assertAccountsWall(t, *got, 328041)
+	for _, b := range got.Buckets {
+		if b.Name == "asset_preparation" && b.DurationMS != 298246 {
+			t.Fatalf("asset_preparation = %dms, want 298246ms", b.DurationMS)
+		}
+	}
+
+	// Legacy reports without the field keep it honestly absent.
+	legacy := decodeAttemptWaterfall(realisticAttemptReportJSON, "attempt-328s-legacy", 328041)
+	if legacy == nil || legacy.AssetPreparation != nil {
+		t.Fatalf("legacy waterfall carried a fabricated drill-down: %+v", legacy)
+	}
+}
+
 // missingBoundaryReportJSON is a worker timeline whose assets.all_ready
 // milestone never fired (the drill-down's suspected failure mode). It tiles
 // the same 328041ms wall everywhere else, so the missing boundary must be

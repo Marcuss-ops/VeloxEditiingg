@@ -19,6 +19,7 @@ import (
 
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
+	sharedtelemetry "velox-shared/telemetry"
 	"velox-worker-agent/internal/downloader"
 	"velox-worker-agent/internal/taskrunner"
 	"velox-worker-agent/internal/telemetry"
@@ -469,6 +470,24 @@ func TestAssetPreparationSummary_AggregatesPerAttemptDrillDown(t *testing.T) {
 	if prepBlock["cache_lookup_ms"] != 27 || prepBlock["remote_wait_ms"] != 9000 || prepBlock["network_download_wall_ms"] != 3200 || prepBlock["network_download_work_sum_ms"] != 3100 || prepBlock["hash_verify_ms"] != 40 || prepBlock["materialize_local_ms"] != 55 {
 		t.Fatalf("preparation projection = %#v", prepBlock)
 	}
+
+	// Typed wire drill-down: buildTaskResult maps this struct 1:1 onto
+	// pb.AssetPreparationBreakdown so the Master decodes the same measured
+	// values from raw_report_json.
+	if report.AssetPreparation == nil {
+		t.Fatal("typed asset_preparation drill-down missing after resolver observations")
+	}
+	tp := *report.AssetPreparation
+	want := sharedtelemetry.AssetPreparationBreakdown{
+		AssetsRequired: 2, AssetsUnique: 2, CacheHits: 1, CacheMisses: 1,
+		ReadyBeforeAttempt: 1, DownloadedDuringAttempt: 1,
+		CacheLookupMS: 27, RemoteWaitMS: 9000, RemoteWaitCount: 1,
+		DownloadWallMS: 3200, DownloadWorkMS: 3100,
+		HashVerifyMS: 40, MetadataProbeMS: 5, MaterializeLocalMS: 55,
+	}
+	if tp != want {
+		t.Fatalf("typed breakdown = %+v, want %+v", tp, want)
+	}
 }
 
 func TestAttachAssetOperationsPreservesAbsentCacheFacts(t *testing.T) {
@@ -491,6 +510,11 @@ func TestAttachAssetOperationsPreservesAbsentCacheFacts(t *testing.T) {
 	got := report.RawMetrics
 	if got == nil || got.CacheLookups != 12 || got.AssetCacheHitCount != 12 || got.CacheDownloadCount != 2 || got.CacheDownloadBytes != 1024 || got.UniqueAssetsRequested != 4 {
 		t.Fatalf("absent resolver facts changed raw metrics: %+v", got)
+	}
+	// Same honesty for the typed drill-down: an idle attempt carries NO
+	// breakdown instead of a zero-filled fake measurement.
+	if report.AssetPreparation != nil {
+		t.Fatalf("idle tracker produced a fabricated breakdown: %+v", *report.AssetPreparation)
 	}
 }
 
