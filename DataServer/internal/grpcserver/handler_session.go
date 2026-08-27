@@ -104,6 +104,16 @@ type workerSession struct {
 	networkMbpsBits       atomic.Uint64
 	loadRatioBits         atomic.Uint64
 
+	// Per-phase slot limits from the CapacityScorecard. When non-zero the
+	// placement matcher uses these instead of the flat maxParallelJobs.
+	renderSlots    atomic.Int32
+	prefetchSlots  atomic.Int32
+	publisherSlots atomic.Int32
+	// Per-phase active counts from the lease store (phase-aware hydration).
+	activeRender    atomic.Int32
+	activePrefetch  atomic.Int32
+	activePublisher atomic.Int32
+
 	// Version correlation (Step 4 / Velox Metrics Center): software
 	// versions reported by the worker via heartbeat, stored on the
 	// session so they can be stamped on task_attempts at report time.
@@ -159,6 +169,14 @@ func (s *workerSession) placementSnapshot(workerID string) placement.WorkerSnaps
 		// lease-store projection before Matcher.Select. Warm placement uses
 		// the latest accepted worker telemetry as its availability estimate.
 		ActiveJobs:            int(s.activeExecutionSlots.Load()),
+		// Per-phase slots from the CapacityScorecard. When non-zero the
+		// matcher uses these instead of the flat MaxParallelJobs limit.
+		RenderSlots:    int(s.renderSlots.Load()),
+		PrefetchSlots:  int(s.prefetchSlots.Load()),
+		PublisherSlots: int(s.publisherSlots.Load()),
+		ActiveRender:    int(s.activeRender.Load()),
+		ActivePrefetch:  int(s.activePrefetch.Load()),
+		ActivePublisher: int(s.activePublisher.Load()),
 		CapacityAuthoritative: s.capacityAuthoritative.Load(),
 		DiskAuthoritative:     s.diskAuthoritative.Load(),
 		FreeDiskBytes:         s.freeDiskBytes.Load(),
@@ -208,6 +226,21 @@ func (s *workerSession) updatePlacementResources(freeDiskBytes int64, diskAuthor
 	s.estimatedAvailableMS.Store(estimatedAvailableMS)
 	s.networkMbpsBits.Store(math.Float64bits(networkMbps))
 	s.loadRatioBits.Store(math.Float64bits(loadRatio))
+}
+
+// setPerPhaseSlots updates the per-phase slot limits from the CapacityScorecard.
+// Zero values mean "not computed" — the matcher falls back to flat FreeSlots.
+func (s *workerSession) setPerPhaseSlots(renderSlots, prefetchSlots, publisherSlots int) {
+	s.renderSlots.Store(int32(renderSlots))
+	s.prefetchSlots.Store(int32(prefetchSlots))
+	s.publisherSlots.Store(int32(publisherSlots))
+}
+
+// setActivePhaseCounts updates the per-phase active counts from the lease store.
+func (s *workerSession) setActivePhaseCounts(activeRender, activePrefetch, activePublisher int) {
+	s.activeRender.Store(int32(activeRender))
+	s.activePrefetch.Store(int32(activePrefetch))
+	s.activePublisher.Store(int32(activePublisher))
 }
 
 func (s *workerSession) replaceAssetCacheKeys(keys []string) {

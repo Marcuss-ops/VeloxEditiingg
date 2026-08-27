@@ -1,4 +1,5 @@
 #include "velox/services/media_packet_output_sink.hpp"
+#include "velox/services/file_utils.hpp"
 #include "velox/services/io_counters.hpp"
 
 #ifdef VELOX_ENABLE_LIBAV
@@ -169,12 +170,73 @@ void testMultipleBackwardSeeksAccumulate() {
     std::error_code ec;
     fs::remove(path, ec);
 }
+} // namespace
+
+// DurabilityEvidence test: finalize() sets file_data_synced=true, and
+// publishAtomic with evidence.file_data_synced=true skips the redundant
+// file-level fsync while still performing the rename + directory fsync.
+void testDurabilityEvidenceSkipsRedundantFsync() {
+    const fs::path root = fs::temp_directory_path() /
+        ("velox_durability_" + std::to_string(
+            std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::error_code ec;
+    fs::create_directories(root, ec);
+    expect(!ec, "durability test directory can be created");
+    if (ec) return;
+
+    const fs::path partial = root / "output.partial.mp4";
+    const fs::path target = root / "output.mp4";
+    const std::string payload = "durability evidence test payload";
+
+    // Write through the sink and finalize.
+    velox::media::packet::PacketOutputSink sink;
+    std::string error;
+    expect(sink.open(partial, error), "durability sink opens: " + error);
+    auto* avio = sink.avio();
+    expect(avio != nullptr, "durability sink exposes AVIO context");
+    if (avio != nullptr) {
+        avio_write(avio, reinterpret_cast<const unsigned char*>(payload.data()),
+                   static_cast<int>(payload.size()));
+    }
+    velox::media::packet::PacketOutputSinkResult result;
+    expect(sink.finalize(result, error), "durability sink finalizes: " + error);
+    expect(result.file_data_synced, "finalize signals file_data_synced=true");
+    sink.close();
+
+    // publishAtomic with evidence should skip the file fsync.
+    velox::file::DurabilityEvidence evidence;
+    evidence.file_data_synced = result.file_data_synced;
+    bool durable = false;
+    expect(velox::file::publishAtomic(partial, target, evidence, &error, &durable),
+           "publishAtomic with evidence succeeds: " + error);
+    expect(durable, "publishAtomic with evidence reports durable output");
+    expect(fs::exists(target), "target exists after publishAtomic with evidence");
+    expect(!fs::exists(partial), "partial removed after publishAtomic with evidence");
+    expect(fs::file_size(target) == static_cast<uintmax_t>(payload.size()),
+           "published file size matches payload");
+
+    // publishAtomic WITHOUT evidence should still work (backward compat).
+    // Create a new partial for this path.
+    const fs::path partial2 = root / "output2.partial.mp4";
+    const fs::path target2 = root / "output2.mp4";
+    {
+        std::ofstream ofs(partial2);
+        ofs << payload;
+    }
+    expect(velox::file::publishAtomic(partial2, target2, &error, &durable),
+           "publishAtomic without evidence still works: " + error);
+    expect(durable, "publishAtomic without evidence reports durable output");
+    expect(fs::exists(target2), "target2 exists after publishAtomic without evidence");
+
+    // Cleanup.
+    fs::remove_all(root, ec);
 }
 
 int main() {
     testAppendOnlySHA();
     testBackwardSeekInvalidatesSHA();
     testMultipleBackwardSeeksAccumulate();
+    testDurabilityEvidenceSkipsRedundantFsync();
     std::cerr << "summary: fail=" << failures << "\n";
     return failures == 0 ? 0 : 1;
 }

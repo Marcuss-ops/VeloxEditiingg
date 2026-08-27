@@ -117,6 +117,14 @@ type WorkerCard struct {
 	ActiveSlots            int32                 `json:"active_slots"`
 	MaxSlots               int32                 `json:"max_slots"`
 	AvailableSlots         int32                 `json:"available_slots"`
+	// Per-phase slot limits from the CapacityScorecard.
+	RenderSlots      int32  `json:"render_slots,omitempty"`
+	PrefetchSlots    int32  `json:"prefetch_slots,omitempty"`
+	PublisherSlots   int32  `json:"publisher_slots,omitempty"`
+	ActiveRender     int32  `json:"active_render,omitempty"`
+	ActivePrefetch   int32  `json:"active_prefetch,omitempty"`
+	ActivePublisher  int32  `json:"active_publisher,omitempty"`
+	LimitingResource string `json:"limiting_resource,omitempty"`
 	CPUUtilizationRatio    float64               `json:"cpu_utilization_ratio,omitempty"`
 	MemoryUsedBytes        int64                 `json:"memory_used_bytes,omitempty"`
 	DiskFreeBytes          int64                 `json:"disk_free_bytes,omitempty"`

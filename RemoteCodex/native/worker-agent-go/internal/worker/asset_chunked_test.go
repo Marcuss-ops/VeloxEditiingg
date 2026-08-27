@@ -191,7 +191,7 @@ func TestFetchChunkRangeRejectsHTMLOnFirstChunk(t *testing.T) {
 	}
 	defer f.Close()
 
-	err = fetchChunkRange(context.Background(), srv.Client(), srv.URL, func() string { return "" }, chunkRange{start: 0, end: int64(len(html) - 1)}, f, nil, nil, nil, true)
+	err = fetchChunkRange(context.Background(), srv.Client(), srv.URL, func() string { return "" }, chunkRange{start: 0, end: int64(len(html) - 1)}, f, nil, nil, nil, nil, true)
 	if err == nil || !strings.Contains(err.Error(), "unexpected HTML response") {
 		t.Fatalf("err = %v, want unexpected HTML response", err)
 	}

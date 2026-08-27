@@ -228,6 +228,13 @@ type Worker struct {
 	activeTasksMu sync.RWMutex
 	taskIDsByJob  map[string][]string // jobID → []taskID
 
+	// Per-phase occupancy counters. Updated under activeTasksMu when tasks
+	// transition phases (start/render/publish/done). These replace the flat
+	// activeCount check for admission when per-phase slots are configured.
+	activeRender    atomic.Int32
+	activePrefetch  atomic.Int32
+	activePublisher atomic.Int32
+
 	// Connection state machine
 	connState        ConnectionState
 	connStateMu      sync.RWMutex
@@ -381,6 +388,20 @@ type Worker struct {
 	// session. nil-safe read paths in hostInfo / sendHeartbeat tolerate
 	// a sampler that hasn't yet sampled.
 	sampler *telemetry.Sampler
+
+	// admissionController provides RSS-based admission control for the three
+	// resource categories: RENDER, PREFETCH, and PUBLISH. Created in New()
+	// from the resource sampler's RSS + total-RAM readings. Checked before
+	// render start (reject above 93%), prefetch download (reject above 80%),
+	// and publish concurrency (backpressure above 88%). Nil-safe: tests that
+	// construct Worker literals without New() skip admission checks.
+	admissionController *ResourceAdmissionController
+
+	// networkAdmissionController provides shared bandwidth admission for all
+	// byte-transfer consumers (publish=P0, runtime=P1, prefetch=P2) with
+	// separate ingress/egress budgets and work-conserving priority. Created
+	// in New(); nil on tests that construct Worker literals without New().
+	networkAdmissionController *NetworkAdmissionController
 
 	// Fase E1 StorageResolver: the single placement abstraction over the
 	// worker's storage classes (CACHE_PERSISTENT / ATTEMPT_TEMP /

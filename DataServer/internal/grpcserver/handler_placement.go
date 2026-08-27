@@ -100,7 +100,7 @@ func (h *Handler) sendPushTaskOffer(ctx context.Context, workerID string) {
 		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCPlacementFailed, "[PLACEMENT] worker has no declared max slots worker=%s", workerID)
 		return
 	}
-	capacity, err := h.dbStore.GetWorkerCapacity(ctx, workerID, time.Now().UTC().Format(time.RFC3339))
+	capacity, err := h.dbStore.GetWorkerPhaseCapacity(ctx, workerID, time.Now().UTC().Format(time.RFC3339))
 	if err != nil {
 		logGRPCf(ctx, logging.LevelError, logging.CodeGRPCPlacementFailed, "[PLACEMENT] authoritative lease capacity query failed worker=%s: %v", workerID, err)
 		return
@@ -108,6 +108,9 @@ func (h *Handler) sendPushTaskOffer(ctx context.Context, workerID string) {
 	// Lease store is the sole occupancy source. The session only owns
 	// the declared max slot limit; heartbeat active_jobs is telemetry.
 	snapshot.ActiveJobs = capacity.ActiveSlots
+	snapshot.ActiveRender = capacity.ActiveRender
+	snapshot.ActivePrefetch = capacity.ActivePrefetch
+	snapshot.ActivePublisher = capacity.ActivePublisher
 
 	candidates, err := h.taskRepo.ListReadyCandidates(ctx, 64)
 	if err != nil {

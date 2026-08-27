@@ -133,6 +133,24 @@ CREATE TABLE task_attempts (
   span_id              TEXT NOT NULL DEFAULT ''
 );
 -- This fixture records migrations through 136 as applied below, so it must
+-- also provide the pre-160 task_attempt_metrics table that migrations 160
+-- and 161 extend. The production chain creates this table in 043 and adds
+-- the historical metric columns through 099; the upgrade test only needs
+-- the pre-160 base table because no later migration alters it before 160.
+CREATE TABLE task_attempt_metrics (
+  attempt_id             TEXT PRIMARY KEY,
+  input_bytes            INTEGER NOT NULL DEFAULT 0,
+  output_bytes           INTEGER NOT NULL DEFAULT 0,
+  bytes_from_drive       INTEGER NOT NULL DEFAULT 0,
+  bytes_from_blobstore   INTEGER NOT NULL DEFAULT 0,
+  bytes_from_local_cache INTEGER NOT NULL DEFAULT 0,
+  cpu_time_ms            INTEGER NOT NULL DEFAULT 0,
+  gpu_time_ms            INTEGER NOT NULL DEFAULT 0,
+  peak_rss_bytes         INTEGER NOT NULL DEFAULT 0,
+  peak_vram_bytes        INTEGER NOT NULL DEFAULT 0,
+  debug_json             TEXT NOT NULL DEFAULT '{}'
+);
+-- This fixture records migrations through 136 as applied below, so it must
 -- also provide the pre-146 jobs table that migration 146 extends (plain
 -- ADD COLUMN + index). The production chain creates this table in 001 and
 -- ALTERs it through 145; the fixture mirrors a compatible shape so 146

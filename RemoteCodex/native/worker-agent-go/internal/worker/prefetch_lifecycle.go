@@ -1,0 +1,67 @@
+package worker
+
+import (
+	"context"
+	"time"
+
+	"google.golang.org/protobuf/types/known/timestamppb"
+	"velox-shared/controltransport"
+	pb "velox-shared/controltransport/pb"
+	"velox-shared/futureasset"
+	"velox-worker-agent/internal/prefetch"
+)
+
+// sendPrefetchLifecycleEvent sends a lightweight lifecycle event to the
+// Master so it can persist it into the job_events journal. The Master
+// then shows the full prefetch timeline in fleetctl job inspect.
+//
+// Fire-and-forget: errors are logged but never block the receive loop.
+func (w *Worker) sendPrefetchLifecycleEvent(ctx context.Context, eventType, jobID, taskID string, plan futureasset.Plan, extra ...func(*pb.PrefetchLifecycleEvent)) {
+	w.transportMu.RLock()
+	t := w.transport
+	w.transportMu.RUnlock()
+	if t == nil {
+		return
+	}
+	event := &pb.PrefetchLifecycleEvent{
+		EventType:   eventType,
+		JobId:       jobID,
+		TaskId:      taskID,
+		WorkerId:    w.config.WorkerID,
+		PlanId:      plan.PlanID,
+		PlanVersion: int64(plan.Version),
+		OccurredAt:  timestamppb.New(time.Now().UTC()),
+	}
+	for _, fn := range extra {
+		fn(event)
+	}
+	msg := controltransport.NewTypedMessage(
+		controltransport.MsgPrefetchLifecycleEvent,
+		w.config.WorkerID,
+		w.config.ProtocolVersion,
+		event,
+	)
+	if err := t.Send(ctx, msg); err != nil {
+		w.logger.Warn("[PREFETCH] failed to send lifecycle event %s for job=%s: %v", eventType, jobID, err)
+	}
+}
+
+// prefetchPreparedHook returns an OnPrepared callback that sends
+// prefetch_prepared events to the Master. It captures the worker
+// reference via closure; call it after the worker is fully initialized.
+func (w *Worker) prefetchPreparedHook() func(prefetch.PreparedJob) {
+	return func(job prefetch.PreparedJob) {
+		w.logger.Info("[PREFETCH] state=PREPARED job=%s task=%s assets=%d prepared_at=%s", job.JobID, job.TaskID, len(job.Assets), job.PreparedAt.UTC().Format(time.RFC3339Nano))
+		// Send lifecycle events for each prepared asset.
+		for _, asset := range job.Assets {
+			asset := asset
+			w.sendPrefetchLifecycleEvent(context.Background(), "prefetch_prepared", job.JobID, job.TaskID, futureasset.Plan{}, func(e *pb.PrefetchLifecycleEvent) {
+				e.AssetId = asset.AssetID
+				e.AssetSha256 = asset.SHA256
+				e.AssetSizeBytes = asset.SizeBytes
+				e.LocalPath = asset.LocalPath
+				e.OccurredAt = timestamppb.New(asset.PreparedAt)
+			})
+		}
+	}
+}

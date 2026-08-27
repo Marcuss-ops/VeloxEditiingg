@@ -88,7 +88,7 @@ func (r *Registry) HeartbeatWithSession(ctx context.Context, sessionID, workerID
 			}
 			info.Metrics["active_jobs"] = v
 		}
-		for _, key := range []string{"resource_sample_present", "sampled_at", "ffmpeg_processes", "active_task_count", "active_jobs_count", "active_tasks", "task_slots", "cpu_utilization_ratio", "cpu_iowait_ratio", "cpu_steal_ratio", "memory_used_bytes", "memory_available_bytes", "disk_free_bytes", "disk_read_bytes_total", "disk_write_bytes_total", "load_average", "load1", "process_rss_bytes", "network_rx_bytes", "network_receive_bytes_total", "network_tx_bytes", "network_transmit_bytes_total"} {
+		for _, key := range []string{"resource_sample_present", "sampled_at", "ffmpeg_processes", "active_task_count", "active_jobs_count", "active_tasks", "task_slots", "cpu_utilization_ratio", "cpu_iowait_ratio", "cpu_steal_ratio", "cpu_user_ratio", "cpu_system_ratio", "effective_cpu_cores", "memory_used_bytes", "memory_available_bytes", "disk_free_bytes", "disk_read_bytes_total", "disk_write_bytes_total", "page_cache_bytes", "disk_read_mbps", "disk_write_mbps", "disk_io_wait_ms", "load_average", "load1", "process_rss_bytes", "network_rx_bytes", "network_receive_bytes_total", "network_tx_bytes", "network_transmit_bytes_total", "download_mbps", "upload_mbps", "render_jobs_active", "prefetch_jobs_active", "publisher_jobs_active"} {
 			if v, ok := extra[key]; ok {
 				if info.Metrics == nil {
 					info.Metrics = make(map[string]interface{})

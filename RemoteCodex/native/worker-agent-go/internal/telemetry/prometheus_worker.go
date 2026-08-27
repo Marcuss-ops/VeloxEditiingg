@@ -149,3 +149,9 @@ func (m *PrometheusMetrics) SetNetworkConsumerBytes(consumer string, bytes int64
 func (m *PrometheusMetrics) SetNetworkThrottleMS(consumer string, ms int64) {
 	m.networkThrottleMS.set(consumer, float64(ms))
 }
+
+// SetNetworkSaturationAlertLevel sets the saturation alert gauge to the
+// numeric level (0=normal, 1=warn, 2=throttle, 3=critical).
+func (m *PrometheusMetrics) SetNetworkSaturationAlertLevel(level int) {
+	m.networkSaturationAlert.set("total", float64(level))
+}

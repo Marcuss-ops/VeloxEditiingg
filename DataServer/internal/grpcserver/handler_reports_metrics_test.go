@@ -2,6 +2,7 @@ package grpcserver
 
 import (
 	"testing"
+	"time"
 
 	"velox-server/internal/forwardingstore"
 	"velox-server/internal/ingest"
@@ -72,7 +73,7 @@ func TestHandleTaskResult_PersistTypedMetrics_F1(t *testing.T) {
 		OutputArtifacts:  []*structpb.Struct{artItem},
 	}
 
-	handler.handleTaskResult(fx.workerID, tr, nil)
+	handler.handleTaskResult(fx.workerID, tr, nil, time.Time{})
 
 	if taskRepo.persistMetricsCalls != 1 {
 		t.Errorf("IngestTaskResultAtomic metrics-fanout calls = %d; want 1 (F1 typed-wiring)", taskRepo.persistMetricsCalls)
@@ -169,7 +170,7 @@ func TestHandleTaskResult_PersistTypedMetrics_NilExecutionMetrics(t *testing.T) 
 		OutputArtifacts:  []*structpb.Struct{artItem},
 	}
 
-	handler.handleTaskResult(fx.workerID, tr, nil)
+	handler.handleTaskResult(fx.workerID, tr, nil, time.Time{})
 
 	if taskRepo.persistMetricsCalls != 1 {
 		t.Errorf("IngestTaskResultAtomic metrics-fanout calls = %d; want 1 (legacy-em must persist zero-row)", taskRepo.persistMetricsCalls)
@@ -214,7 +215,7 @@ func TestHandleTaskResult_PersistTypedMetrics_StaleReplaySkipsMetrics(t *testing
 	handler := NewHandler(nil, nil, jobsRepo, taskRepo, attempts, nil, nil, &HandlerConfig{PushMode: true})
 	handler.SetIngestionSvc(svc)
 	tr := &pb.TaskResult{TaskId: fx.taskID, AttemptId: fx.wireAttemptID, AttemptNumber: 1, LeaseId: fx.canonicalLease, JobId: fx.wireJobID, Status: "succeeded", ExecutionMetrics: &pb.TaskExecutionMetrics{InputBytes: 999}}
-	handler.handleTaskResult(fx.workerID, tr, nil)
+	handler.handleTaskResult(fx.workerID, tr, nil, time.Time{})
 	if got := taskRepo.persistMetricsCalls; got != 0 {
 		t.Errorf("IngestTaskResultAtomic metrics-fanout calls = %d; want 0 (stale replay must skip step 2.5)", got)
 	}

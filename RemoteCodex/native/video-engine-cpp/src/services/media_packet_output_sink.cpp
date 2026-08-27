@@ -135,6 +135,7 @@ bool PacketOutputSink::finalize(PacketOutputSinkResult& result, std::string& err
         error = "fsync packet output sink: " + std::string(std::strerror(errno));
         return false;
     }
+    result.file_data_synced = true;
     struct stat st{};
     if (::fstat(fd_, &st) != 0) {
         error = "fstat packet output sink: " + std::string(std::strerror(errno));

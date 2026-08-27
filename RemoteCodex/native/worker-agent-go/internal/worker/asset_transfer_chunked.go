@@ -15,6 +15,7 @@ import (
 
 	"velox-shared/assetref"
 	"velox-worker-agent/internal/downloader"
+	"velox-worker-agent/internal/prefetch"
 	"velox-worker-agent/internal/telemetry"
 )
 
@@ -182,10 +183,17 @@ func (t *masterAssetTransferer) transferChunked(ctx context.Context, reportCtx c
 		progressMu.Unlock()
 	}
 
-	// One shared token-bucket paces every chunk against a single virtual
-	// clock, so the aggregate transfer stays exactly at/under the prefetch
-	// QoS cap instead of dividing it (approximately) per connection.
-	limiter := newSharedBandwidthLimiter(req.MaxBandwidthBytesPerSecond)
+	// When the shared NetworkAdmissionController is available, delegate
+	// byte pacing to it (work-conserving priority across publish/runtime/
+	// prefetch). Otherwise, fall back to the per-transfer local limiter.
+	var networkPacer prefetch.NetworkPacer
+	if t.w != nil && t.w.networkAdmissionController != nil {
+		networkPacer = t.w.networkAdmissionController
+	}
+	var limiter *sharedBandwidthLimiter
+	if networkPacer == nil {
+		limiter = newSharedBandwidthLimiter(req.MaxBandwidthBytesPerSecond)
+	}
 
 	chunkCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -196,7 +204,7 @@ func (t *masterAssetTransferer) transferChunked(ctx context.Context, reportCtx c
 		wg.Add(1)
 		go func(c chunkRange) {
 			defer wg.Done()
-			if err := fetchChunkRange(chunkCtx, client, downloadURL, authToken, c, f, &downloaded, report, limiter, c.start == 0); err != nil {
+				if err := fetchChunkRange(chunkCtx, client, downloadURL, authToken, c, f, &downloaded, report, limiter, networkPacer, c.start == 0); err != nil {
 				primaryOnce.Do(func() {
 					primaryErr <- err
 					cancel()
@@ -250,7 +258,7 @@ func (t *masterAssetTransferer) transferChunked(ctx context.Context, reportCtx c
 // error. shared/report aggregate progress across all chunk goroutines. The
 // authToken getter is re-read per attempt so a retry after a master restart
 // uses the freshly re-issued session token.
-func fetchChunkRange(ctx context.Context, client *http.Client, downloadURL string, authToken func() string, c chunkRange, w io.WriterAt, shared *atomic.Int64, report func(), limiter *sharedBandwidthLimiter, sniffHTML bool) error {
+func fetchChunkRange(ctx context.Context, client *http.Client, downloadURL string, authToken func() string, c chunkRange, w io.WriterAt, shared *atomic.Int64, report func(), limiter *sharedBandwidthLimiter, networkPacer prefetch.NetworkPacer, sniffHTML bool) error {
 	backoffs := downloader.BackoffSchedule(downloader.DefaultMaxAttempts, downloader.DefaultBaseBackoff, downloader.DefaultJitter)
 	var lastErr error
 	for attempt := 0; attempt < downloader.DefaultMaxAttempts; attempt++ {
@@ -303,7 +311,7 @@ func fetchChunkRange(ctx context.Context, client *http.Client, downloadURL strin
 				body = br
 			}
 			if shared != nil && report != nil {
-				body = &chunkProgressReader{ctx: ctx, src: body, shared: shared, report: report, limiter: limiter}
+				body = &chunkProgressReader{ctx: ctx, src: body, shared: shared, report: report, limiter: limiter, networkPacer: networkPacer}
 			}
 			_, copyErr := io.Copy(section, body)
 			resp.Body.Close()
@@ -366,14 +374,17 @@ func (s *sectionWriter) Write(p []byte) (int, error) {
 
 // chunkProgressReader reports bytes landed by one chunk into a shared atomic
 // counter so the manager sees aggregate progress across all chunk goroutines.
-// maxBPS is the per-chunk bandwidth cap (the aggregate QoS cap already divided
-// by the chunk count).
+// When a networkPacer is provided, byte pacing is delegated to the shared
+// NetworkAdmissionController (work-conserving priority across consumers).
+// Otherwise, the local sharedBandwidthLimiter paces each transfer independently.
 type chunkProgressReader struct {
 	ctx     context.Context
 	src     io.Reader
+
 	shared  *atomic.Int64
 	report  func()
 	limiter *sharedBandwidthLimiter
+	networkPacer prefetch.NetworkPacer
 }
 
 func (r *chunkProgressReader) Read(b []byte) (int, error) {
@@ -381,7 +392,12 @@ func (r *chunkProgressReader) Read(b []byte) (int, error) {
 	if n > 0 {
 		r.shared.Add(int64(n))
 		r.report()
-		if waitErr := r.limiter.pace(r.ctx, int64(n)); waitErr != nil {
+		// Prefer the shared NetworkAdmissionController over the local limiter.
+		if r.networkPacer != nil {
+			if waitErr := r.networkPacer.AcquireBytes(r.ctx, prefetch.NetDirIngress, prefetch.NetPriorityPrefetch, int64(n)); waitErr != nil {
+				return n, waitErr
+			}
+		} else if waitErr := r.limiter.pace(r.ctx, int64(n)); waitErr != nil {
 			return n, waitErr
 		}
 	}

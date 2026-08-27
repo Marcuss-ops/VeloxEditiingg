@@ -90,13 +90,24 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 					continue
 				}
 
+				executorID := normalizeOfferedExecutorID(taskOffer.GetExecutorId())
+				executorVersion := int(taskOffer.GetExecutorVersion())
+
+				// Per-phase capacity check: classify the executor and enforce
+				// phase-specific slot limits when configured. The flat
+				// activeCount+pendingCount check remains as the fallback.
+				taskPhase := classifyExecutor(executorID)
+				if !w.canAcceptPhase(taskPhase) {
+					if err := w.sendTaskReject(ctx, taskID, jobID, attemptID, leaseID, "capacity_full", attemptNumber, revision); err != nil {
+						w.logger.Warn("[RECEIVE] Failed to send TaskRejected (phase capacity %s): %v", taskPhase, err)
+					}
+					continue
+				}
+
+				// Flat fallback: also check total active + pending against MaxActiveJobs
 				w.activeTasksMu.RLock()
 				activeCount := countRenderOccupyingTasks(w.activeTasks)
 				w.activeTasksMu.RUnlock()
-				// PR-bugfix: also count pendingTasks (offers accepted
-				// but waiting for TaskLeaseGranted). The worker must not
-				// accept more offers than MaxActiveJobs including tasks
-				// that will soon become active but haven't yet started.
 				w.pendingTasksMu.Lock()
 				pendingCount := len(w.pendingTasks)
 				w.pendingTasksMu.Unlock()
@@ -107,8 +118,6 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 					continue
 				}
 
-				executorID := normalizeOfferedExecutorID(taskOffer.GetExecutorId())
-				executorVersion := int(taskOffer.GetExecutorVersion())
 				if !w.executorRegistry.Has(executorID, executorVersion) {
 					if err := w.sendTaskReject(ctx, taskID, jobID, attemptID, leaseID, "unsupported_executor", attemptNumber, revision); err != nil {
 						w.logger.Warn("[RECEIVE] Failed to send TaskRejected (unsupported executor): %v", err)
@@ -173,7 +182,25 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 				}
 
 				// PR-2: defer dispatch to MsgTaskLeaseGranted via pendingTasks map.
-				w.storePendingTask(taskID, pte)
+				decision := w.storePendingTask(taskID, pte)
+				switch decision {
+				case OfferDuplicate:
+					w.logger.Warn("[RECEIVE] TaskOffer for task=%s is a duplicate of pending entry — re-sending TaskAccepted", taskID)
+					if err := w.sendTaskAccepted(ctx, taskOffer); err != nil {
+						w.logger.Warn("[RECEIVE] Failed to re-send TaskAccepted for duplicate: %v", err)
+					}
+				case OfferReplaced:
+					w.logger.Info("[RECEIVE] TaskOffer for task=%s replaced stale pending entry (newer attempt)", taskID)
+				case OfferStale:
+					w.logger.Warn("[RECEIVE] TaskOffer for task=%s rejected — older than existing pending entry", taskID)
+					if err := w.sendTaskReject(ctx, taskID, jobID, attemptID, leaseID, "stale_offer", attemptNumber, revision); err != nil {
+						w.logger.Warn("[RECEIVE] Failed to send TaskRejected (stale): %v", err)
+					}
+				case OfferIdentityConflict:
+					w.logger.Warn("[RECEIVE] TaskOffer for task=%s identity conflict (same attempt_number, different lease/revision)", taskID)
+				case OfferInserted:
+					// Happy path — already stored.
+				}
 
 			case controltransport.MsgFutureAssetPlan:
 				wirePlan, ok := msg.TypedPayload.(*pb.FutureAssetPlan)
@@ -187,6 +214,15 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 					continue
 				}
 				w.futureAssetScheduler().RecordPlanEvent("future_plan_received", plan.Version, plan.PlanID)
+				// Send future_plan_received per-job so the Master persists it
+				// into each job's journal (fleetctl job inspect shows the timeline).
+				for _, j := range plan.PrefetchJobs {
+					j := j
+					w.sendPrefetchLifecycleEvent(ctx, "future_plan_received", j.JobID, j.TaskID, plan, func(e *pb.PrefetchLifecycleEvent) {
+						e.ReservationId = j.ReservationID
+						e.Distance = int32(j.Distance)
+					})
+				}
 				result, err := w.futureAssetController().Apply(plan)
 				if err != nil {
 					w.logger.Warn("[PREFETCH] rejected FutureAssetPlan version=%d: %v", plan.Version, err)
@@ -198,6 +234,13 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 						continue
 					}
 					w.futureAssetScheduler().RecordPlanEvent("future_plan_applied", plan.Version, plan.PlanID)
+					for _, job := range plan.PrefetchJobs {
+						j := job
+						w.sendPrefetchLifecycleEvent(ctx, "future_plan_applied", j.JobID, j.TaskID, plan, func(e *pb.PrefetchLifecycleEvent) {
+							e.ReservationId = j.ReservationID
+							e.Distance = int32(j.Distance)
+						})
+					}
 				}
 				w.logger.Info("[PREFETCH] reconciled plan=%s version=%d added=%d removed=%d reprioritized=%d protected=%d expired=%t stale=%t", plan.PlanID, plan.Version, len(result.Added), len(result.Removed), len(result.Reprioritized), len(plan.Protect), result.Expired, result.Stale)
 
@@ -316,6 +359,19 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 							w.concurrencyLimiter.SetMaxActiveJobs(v)
 							w.logger.Info("[CONFIG] MaxActiveJobs updated to %d", v)
 						}
+					}
+					// Per-phase slot limits from the CapacityScorecard.
+					if v, ok := cfgMap["render_slots"].(float64); ok && v > 0 {
+						w.config.RenderSlots = int(v)
+						w.logger.Info("[CONFIG] RenderSlots updated to %d", int(v))
+					}
+					if v, ok := cfgMap["prefetch_slots"].(float64); ok && v > 0 {
+						w.config.PrefetchSlots = int(v)
+						w.logger.Info("[CONFIG] PrefetchSlots updated to %d", int(v))
+					}
+					if v, ok := cfgMap["publisher_slots"].(float64); ok && v > 0 {
+						w.config.PublisherSlots = int(v)
+						w.logger.Info("[CONFIG] PublisherSlots updated to %d", int(v))
 					}
 					if newLogLevel, ok := cfgMap["log_level"].(string); ok && newLogLevel != "" {
 						w.config.LogLevel = newLogLevel

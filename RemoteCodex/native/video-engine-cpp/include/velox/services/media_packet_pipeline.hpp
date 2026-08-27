@@ -7,6 +7,8 @@
 #include <string>
 #include <vector>
 
+#include "velox/services/file_utils.hpp"
+
 // This header is the value-types-only public surface (the OFF-build
 // fallback and RenderEngine include it). The LibAV-aware named components
 // behind the copy-only path — Demuxer, PacketTrimmer, TimestampRewriter —
@@ -80,6 +82,10 @@ struct CopyOnlyMuxResult {
     // and the final path becoming available — the single number that
     // captures the mux→publish pipeline cost.
     int64_t trailer_to_publish_us{0};
+    // file_data_synced is true when the output sink fsynced the file
+    // data during finalize(), allowing publishAtomic to skip the
+    // redundant file-level fsync and only perform rename + dir fsync.
+    bool file_data_synced{false};
 };
 
 // Concatenate compatible local stream-copy inputs and optionally add one

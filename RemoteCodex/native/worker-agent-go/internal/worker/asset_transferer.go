@@ -12,6 +12,7 @@ import (
 
 	"velox-shared/assetref"
 	"velox-worker-agent/internal/downloader"
+	"velox-worker-agent/internal/prefetch"
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/internal/workercache"
 	"velox-worker-agent/pkg/config"
@@ -242,7 +243,11 @@ func (t *masterAssetTransferer) transferSingleStream(ctx context.Context, report
 			if attempt > 0 {
 				onProgress(resumeOffset)
 			}
-			body = &assetProgressBody{ctx: ctx, src: body, onProgress: onProgress, done: resumeOffset, maxBPS: req.MaxBandwidthBytesPerSecond}
+			var np prefetch.NetworkPacer
+			if t.w != nil && t.w.networkAdmissionController != nil {
+				np = t.w.networkAdmissionController
+			}
+			body = &assetProgressBody{ctx: ctx, src: body, onProgress: onProgress, done: resumeOffset, maxBPS: req.MaxBandwidthBytesPerSecond, networkPacer: np}
 		}
 		localPath, downloadedBytes, actualSHA, hashVerifyMS, materializeLocalMS, err := writeVeloxAssetStreamToCacheAtOffset(cacheDir, assetID, string(req.SHA256), req.SizeBytes, body, resumeOffset, meta.MIMEType, meta.SizeBytes, syncAssetDirectory)
 		body.Close()

@@ -7,9 +7,11 @@ package prefetch
 import (
 	"container/heap"
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
+	"velox-shared/assetref"
 	"velox-shared/futureasset"
 	"velox-worker-agent/internal/downloader"
 	"velox-worker-agent/internal/workercache"
@@ -20,6 +22,68 @@ const (
 	PriorityPrefetchD1 = 300
 	PriorityPrefetchD2 = 200
 	PriorityPrefetchD3 = 100
+)
+
+// NetworkPacer is the interface for shared bandwidth admission. The prefetch
+// scheduler delegates byte pacing to this interface when available, replacing
+// the local MaxBandwidthBytesPerSecond per-request cap. The implementation
+// (worker.NetworkAdmissionController) handles work-conserving priority across
+// publish (P0), runtime (P1), and prefetch (P2) consumers.
+type NetworkPacer interface {
+	// AcquireBytes blocks until the controller permits n bytes to transfer
+	// in the given direction and priority. Returns ctx.Err() on cancellation.
+	AcquireBytes(ctx context.Context, dir int, priority int, n int64) error
+	// BeginTransfer increments the active-transfer counter.
+	BeginTransfer(priority int)
+	// ReleaseBytes decrements the active-transfer counter and records consumed bytes.
+	ReleaseBytes(priority int)
+	// RecordBytes records consumed bytes for metrics.
+	RecordBytes(priority int, dir int, n int64)
+	// IsPrefetchThrottled returns true when NIC saturation exceeds the
+	// throttle threshold and prefetch admission should be rejected.
+	IsPrefetchThrottled() bool
+}
+
+// AdmissionCategory identifies the resource category for admission control.
+type AdmissionCategory int
+
+const (
+	AdmissionPrefetch AdmissionCategory = iota
+	AdmissionPublish
+	AdmissionRender
+)
+
+// AdmissionDecision is the result of an admission check.
+type AdmissionDecision int
+
+const (
+	AdmissionAdmit      AdmissionDecision = iota
+	AdmissionRejectMemory
+	AdmissionRejectStopped
+)
+
+// ResourceAdmissionController is the interface for RSS-based admission control.
+// The prefetch scheduler checks this before each download to prevent OOM
+// under memory pressure. The implementation lives in the worker package
+// (ResourceAdmissionController) to avoid circular imports.
+type ResourceAdmissionController interface {
+	// CanAdmit checks whether a resource claim can be admitted given current
+	// RSS pressure. Returns Admit or RejectMemory/RejectStopped.
+	CanAdmit(category AdmissionCategory) AdmissionDecision
+	// RecordAdmissionResult updates hysteresis state after an operation
+	// completes (success or failure).
+	RecordAdmissionResult(category AdmissionCategory, admitted bool)
+}
+
+// Network direction and priority constants matching worker.NetDir* and
+// worker.NetPriority* values. Defined here to avoid a circular import
+// between the prefetch and worker packages.
+const (
+	NetDirIngress  = 0 // download
+	NetDirEgress   = 1 // upload
+	NetPriorityPublish  = 0
+	NetPriorityRuntime  = 1
+	NetPriorityPrefetch = 2
 )
 
 type Config struct {
@@ -42,6 +106,19 @@ type Config struct {
 	RAMMinFutureRefs      int
 	RAMMaxNextUseDistance int
 	OnEvent               func(Event)
+
+	// NetworkPacer is the optional shared bandwidth admission controller.
+	// When non-nil, the scheduler delegates byte pacing to the shared
+	// controller instead of using the local MaxBandwidthBytesPerSecond
+	// per-request cap. The controller handles work-conserving priority
+	// across publish (P0), runtime (P1), and prefetch (P2) consumers.
+	NetworkPacer NetworkPacer
+
+	// AdmissionController is the optional RSS-based admission controller.
+	// When non-nil, the scheduler checks CanAdmit(AdmissionPrefetch)
+	// before each download and calls RecordAdmissionResult after.
+	// This prevents OOM when RSS exceeds 80% of total RAM.
+	AdmissionController ResourceAdmissionController
 }
 
 type jobRuntime struct {
@@ -139,16 +216,21 @@ type Scheduler struct {
 	protects        map[string]string
 	pendingProtects map[string]struct{}
 	protectExpiries map[string]time.Time
-	bytes           int64
-	state           diskPressureState
-	queue           workQueue
-	nextSequence    uint64
-	wake            chan struct{}
-	workerCtx       context.Context
-	workerCancel    context.CancelFunc
-	activePrefetch  int
-	readyAtByJob    map[string]map[string]readyRecord
-	prepared        map[string]PreparedJob
+	// executionReservations tracks the execution-phase pins installed by
+	// HandoffToExecution. Key: assetKey, Value: execution reservation ID
+	// ("execution:<attemptID>:<assetKey>"). These survive past future pin
+	// release and are cleaned up by ReleaseExecutionReservations.
+	executionReservations map[string]string
+	bytes                int64
+	state                diskPressureState
+	queue                workQueue
+	nextSequence         uint64
+	wake                 chan struct{}
+	workerCtx            context.Context
+	workerCancel         context.CancelFunc
+	activePrefetch       int
+	readyAtByJob         map[string]map[string]readyRecord
+	prepared             map[string]PreparedJob
 }
 
 type diskPressureState uint8
@@ -188,7 +270,7 @@ func NewScheduler(cfg Config) *Scheduler {
 		cfg.MetadataResolver = defaultMetadataResolver
 	}
 	workerCtx, workerCancel := context.WithCancel(context.Background())
-	s := &Scheduler{cfg: cfg, ram: cfg.RAM, jobs: make(map[string]*jobRuntime), protects: make(map[string]string), pendingProtects: make(map[string]struct{}), protectExpiries: make(map[string]time.Time), hints: make(map[string]futureasset.ProtectedAsset), prefetched: make(map[string]int64), useful: make(map[string]bool), assetJobs: make(map[string]map[string]struct{}), wake: make(chan struct{}, 1), workerCtx: workerCtx, workerCancel: workerCancel, readyAtByJob: make(map[string]map[string]readyRecord), prepared: make(map[string]PreparedJob)}
+	s := &Scheduler{cfg: cfg, ram: cfg.RAM, jobs: make(map[string]*jobRuntime), protects: make(map[string]string), pendingProtects: make(map[string]struct{}), protectExpiries: make(map[string]time.Time), executionReservations: make(map[string]string), hints: make(map[string]futureasset.ProtectedAsset), prefetched: make(map[string]int64), useful: make(map[string]bool), assetJobs: make(map[string]map[string]struct{}), wake: make(chan struct{}, 1), workerCtx: workerCtx, workerCancel: workerCancel, readyAtByJob: make(map[string]map[string]readyRecord), prepared: make(map[string]PreparedJob)}
 	heap.Init(&s.queue)
 	for i := 0; i < cfg.MaxConcurrent; i++ {
 		go s.runWorker()
@@ -221,6 +303,26 @@ func (s *Scheduler) Close() {
 	s.signalWork()
 }
 
+// ReleaseAllExecutionReservations releases every execution-phase pin.
+// Intended for graceful shutdown; production callers should prefer
+// ReleaseExecutionReservations(jobID) for targeted cleanup.
+func (s *Scheduler) ReleaseAllExecutionReservations() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	store := s.protect
+	execs := s.executionReservations
+	s.executionReservations = make(map[string]string)
+	s.mu.Unlock()
+	if store == nil {
+		return
+	}
+	for assetKey, execID := range execs {
+		_ = store.ReleaseReservation(context.Background(), assetref.AssetKey(assetKey), execID)
+	}
+}
+
 func (s *Scheduler) RAMCache() *RAMCache {
 	if s == nil {
 		return nil
@@ -243,6 +345,17 @@ func (s *Scheduler) SetDiskUsagePercent(fn func() int) {
 	}
 }
 
+// SetOnPrepared replaces the OnPrepared callback after construction.
+// Used by the worker to wire the lifecycle event sender after the
+// Worker struct is fully initialized.
+func (s *Scheduler) SetOnPrepared(fn func(PreparedJob)) {
+	if s != nil {
+		s.mu.Lock()
+		s.cfg.OnPrepared = fn
+		s.mu.Unlock()
+	}
+}
+
 // RecordPlanEvent lets the receive path put control-plane timestamps in the
 // same structured event stream as queue, download, and READY timestamps.
 func (s *Scheduler) RecordPlanEvent(name string, planVersion uint64, planID string) {
@@ -254,7 +367,10 @@ func (s *Scheduler) RecordPlanEvent(name string, planVersion uint64, planID stri
 
 // MarkJobStarted closes the READY -> job-start interval for assets that were
 // prefetched for this job. Positive lead means READY happened first; a
-// negative lead identifies a foreground catch-up.
+// negative lead identifies a foreground catch-up. It also triggers the
+// atomic handoff from future reservation to execution reservation for
+// every prefetched asset, ensuring eviction cannot reclaim an asset
+// between PREPARED and render.
 func (s *Scheduler) MarkJobStarted(jobID string) {
 	if s == nil || jobID == "" {
 		return
@@ -263,9 +379,129 @@ func (s *Scheduler) MarkJobStarted(jobID string) {
 	s.mu.Lock()
 	ready := s.readyAtByJob[jobID]
 	delete(s.readyAtByJob, jobID)
+	job, hasJob := s.jobs[jobID]
+	prepared := s.prepared[jobID]
 	s.mu.Unlock()
 	for assetKey, record := range ready {
 		s.emit(Event{Name: "prefetch_ready_lead", At: startedAt, JobID: jobID, AssetKey: assetKey, Distance: record.distance, StartedAt: startedAt, ReadyAt: record.at})
+	}
+	// Handoff: for each prepared asset, install an execution reservation
+	// BEFORE releasing the future reservation. The rule is strict:
+	//   reserve execution pin → confirm → release future pin
+	//   never the reverse.
+	if hasJob && prepared.State == PreparationStatePrepared {
+		s.handoffToExecutionLocked(job, prepared)
+	}
+}
+
+// HandoffToExecution installs execution-phase reservation pins for a job's
+// prefetched assets and releases the corresponding future pins atomically.
+// The handoff rule is: reserve execution → confirm → release future.
+// This ensures eviction never sees a protection gap between the future
+// plan expiry and the render's lease acquisition.
+func (s *Scheduler) HandoffToExecution(jobID, attemptID string) {
+	if s == nil || jobID == "" || attemptID == "" {
+		return
+	}
+	s.mu.Lock()
+	job, hasJob := s.jobs[jobID]
+	prepared := s.prepared[jobID]
+	s.mu.Unlock()
+	if hasJob && prepared.State == PreparationStatePrepared {
+		s.handoffToExecutionLocked(job, prepared)
+	}
+}
+
+// handoffToExecutionLocked performs the atomic reservation handoff for every
+// prepared asset in the job. It reserves the execution pin first, confirms
+// success, then releases the future pin. Caller holds s.mu or has snapshot.
+// The store I/O happens outside the lock so SQLite writes never stall the
+// control loop.
+func (s *Scheduler) handoffToExecutionLocked(job *jobRuntime, prepared PreparedJob) {
+	store := s.protect
+	if store == nil {
+		return
+	}
+	// Snapshot the future reservations and prepared assets outside the lock
+	// for durable I/O.
+	assetKeys := make([]string, 0, len(prepared.Assets))
+	futureReservationIDs := make(map[string]string, len(prepared.Assets))
+	futureExpiries := make(map[string]time.Time, len(prepared.Assets))
+	s.mu.Lock()
+	for assetKey := range prepared.Assets {
+		if futureResID, ok := s.protects[assetKey]; ok {
+			assetKeys = append(assetKeys, assetKey)
+			futureReservationIDs[assetKey] = futureResID
+			futureExpiries[assetKey] = s.protectExpiries[assetKey]
+		}
+	}
+	attemptID := job.job.ReservationID
+	if attemptID == "" {
+		attemptID = job.job.JobID
+	}
+	s.mu.Unlock()
+	if len(assetKeys) == 0 {
+		return
+	}
+	// Phase 1: install execution reservations for all prepared assets.
+	executionReservationIDs := make(map[string]string, len(assetKeys))
+	for _, assetKey := range assetKeys {
+		execID := fmt.Sprintf("execution:%s:%s", attemptID, assetKey)
+		expiresAt := futureExpiries[assetKey]
+		if expiresAt.IsZero() {
+			expiresAt = s.cfg.Now().Add(time.Hour)
+		}
+		if err := store.Reserve(context.Background(), assetref.AssetKey(assetKey), execID, expiresAt); err != nil {
+			s.emit(Event{Name: "execution_reservation_failed", At: s.cfg.Now(), JobID: job.job.JobID, AssetKey: assetKey, ErrorMessage: err.Error()})
+			continue
+		}
+		executionReservationIDs[assetKey] = execID
+	}
+	// Phase 2: install execution reservations in the projection and release
+	// future reservations for assets that were successfully pinned.
+	s.mu.Lock()
+	for assetKey, execID := range executionReservationIDs {
+		s.executionReservations[assetKey] = execID
+	}
+	for _, assetKey := range assetKeys {
+		execID, ok := executionReservationIDs[assetKey]
+		if !ok {
+			continue
+		}
+		futureID := futureReservationIDs[assetKey]
+		if futureID == "" {
+			continue
+		}
+		// Release future reservation outside the lock.
+		s.mu.Unlock()
+		_ = store.ReleaseReservation(context.Background(), assetref.AssetKey(assetKey), futureID)
+		s.mu.Lock()
+		// Remove from the future projection so cleanup doesn't double-release.
+		if s.protects[assetKey] == futureID {
+			delete(s.protects, assetKey)
+		}
+		_ = execID // already installed
+	}
+	s.mu.Unlock()
+	s.emit(Event{Name: "execution_reservation_handoff", At: s.cfg.Now(), JobID: job.job.JobID, TaskID: job.job.TaskID})
+}
+
+// ReleaseExecutionReservations removes execution-phase pins for a job's assets
+// after the render completes. This should be called during task cleanup.
+func (s *Scheduler) ReleaseExecutionReservations(jobID string) {
+	if s == nil || jobID == "" {
+		return
+	}
+	s.mu.Lock()
+	store := s.protect
+	execs := s.executionReservations
+	s.executionReservations = make(map[string]string)
+	s.mu.Unlock()
+	if store == nil {
+		return
+	}
+	for assetKey, execID := range execs {
+		_ = store.ReleaseReservation(context.Background(), assetref.AssetKey(assetKey), execID)
 	}
 }
 

@@ -32,6 +32,7 @@ const (
 	MsgArtifactUploadCompleted ControlMessageType = "artifact_upload_completed"
 	MsgAssetDownloadProgress   ControlMessageType = "asset_download_progress"
 	MsgArtifactUploadIntent    ControlMessageType = "artifact_upload_intent"
+	MsgPrefetchLifecycleEvent  ControlMessageType = "prefetch_lifecycle_event"
 )
 
 // --- Master → Worker ---
@@ -63,7 +64,7 @@ func (t ControlMessageType) IsWorkerToMaster() bool {
 	case MsgHello, MsgHeartbeat, MsgTaskLeaseRenewal, MsgTaskAccepted, MsgTaskRejected,
 		MsgTaskResult, MsgCommandAck, MsgArtifactUploaded, MsgGoodbye,
 		MsgTaskOutputDeclared, MsgArtifactUploadCompleted, MsgAssetDownloadProgress,
-		MsgArtifactUploadIntent:
+		MsgArtifactUploadIntent, MsgPrefetchLifecycleEvent:
 		return true
 	}
 	return false

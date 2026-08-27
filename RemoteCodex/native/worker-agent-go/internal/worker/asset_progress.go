@@ -12,6 +12,7 @@ import (
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
 	"velox-worker-agent/internal/downloader"
+	"velox-worker-agent/internal/prefetch"
 	"velox-worker-agent/internal/telemetry"
 )
 
@@ -151,6 +152,7 @@ type assetProgressBody struct {
 	done       int64
 	maxBPS     int64
 	lastRead   time.Time
+	networkPacer prefetch.NetworkPacer
 }
 
 func (p *assetProgressBody) Read(b []byte) (int, error) {
@@ -159,7 +161,12 @@ func (p *assetProgressBody) Read(b []byte) (int, error) {
 	}
 	n, err := p.src.Read(b)
 	if n > 0 {
-		if p.maxBPS > 0 {
+		// Prefer the shared NetworkAdmissionController over the local maxBPS cap.
+		if p.networkPacer != nil {
+			if waitErr := p.networkPacer.AcquireBytes(p.ctx, prefetch.NetDirIngress, prefetch.NetPriorityRuntime, int64(n)); waitErr != nil {
+				return 0, waitErr
+			}
+		} else if p.maxBPS > 0 {
 			delay := time.Duration(float64(n) / float64(p.maxBPS) * float64(time.Second))
 			if err := waitForAssetDuration(p.ctx, delay); err != nil {
 				return 0, err

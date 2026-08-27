@@ -92,20 +92,32 @@ type Collector struct {
 	cacheCorruptions   *Family // velox_cache_corruption_total
 
 	// Worker resource counters (from heartbeat.resources).
-	workerCPUUtil     *Family // velox_worker_cpu_utilization_ratio
-	workerIOWait      *Family // velox_worker_cpu_iowait_ratio
-	workerSteal       *Family // velox_worker_cpu_steal_ratio
-	workerRSSBytes    *Family // velox_worker_process_rss_bytes
-	workerRSSPeak     *Family // velox_worker_process_rss_peak_bytes
-	workerMemoryUsed  *Family // velox_worker_memory_used_bytes
-	workerDiskFree    *Family // velox_worker_disk_free_bytes
-	workerTempBytes   *Family // velox_worker_temp_bytes
-	workerActiveTasks *Family // velox_worker_active_tasks
-	workerTaskSlots   *Family // velox_worker_task_slots
-	workerLoad1       *Family // velox_worker_load1
-	workerRunQueue    *Family // velox_worker_run_queue
-	workerNetRxBytes  *Family
-	workerNetTxBytes  *Family
+	workerCPUUtil          *Family // velox_worker_cpu_utilization_ratio
+	workerIOWait           *Family // velox_worker_cpu_iowait_ratio
+	workerSteal            *Family // velox_worker_cpu_steal_ratio
+	workerCPUUser          *Family // velox_worker_cpu_user_ratio
+	workerCPUSystem        *Family // velox_worker_cpu_system_ratio
+	workerEffectiveCpu     *Family // velox_worker_effective_cpu_cores
+	workerRSSBytes         *Family // velox_worker_process_rss_bytes
+	workerRSSPeak          *Family // velox_worker_process_rss_peak_bytes
+	workerMemoryUsed       *Family // velox_worker_memory_used_bytes
+	workerPageCache        *Family // velox_worker_page_cache_bytes
+	workerDiskFree         *Family // velox_worker_disk_free_bytes
+	workerTempBytes        *Family // velox_worker_temp_bytes
+	workerDiskReadMbps     *Family // velox_worker_disk_read_mbps
+	workerDiskWriteMbps    *Family // velox_worker_disk_write_mbps
+	workerDiskIoWaitMs     *Family // velox_worker_disk_io_wait_ms
+	workerActiveTasks      *Family // velox_worker_active_tasks
+	workerTaskSlots        *Family // velox_worker_task_slots
+	workerRenderActive     *Family // velox_worker_render_jobs_active
+	workerPrefetchActive   *Family // velox_worker_prefetch_jobs_active
+	workerPublisherActive  *Family // velox_worker_publisher_jobs_active
+	workerLoad1            *Family // velox_worker_load1
+	workerRunQueue         *Family // velox_worker_run_queue
+	workerNetRxBytes       *Family
+	workerNetTxBytes       *Family
+	workerDownloadMbps     *Family // velox_worker_download_mbps
+	workerUploadMbps       *Family // velox_worker_upload_mbps
 
 	// Master-side health.
 	masterRssBytes      *Family

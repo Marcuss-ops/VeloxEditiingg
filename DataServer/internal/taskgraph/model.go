@@ -128,6 +128,10 @@ type IngestResultCommand struct {
 	// Step 16: raw worker report payload (JSON) for audit and replay.
 	RawReportJSON       string
 	RawReportReceivedAt time.Time
+	// EnvelopeSentAt is the WorkerToMasterEnvelope.sent_at timestamp — the
+	// exact moment the envelope was serialized by the worker's transport.
+	// Used as the authoritative result.sent milestone on the Master side.
+	EnvelopeSentAt time.Time
 	// PerformanceReport metadata supplied by the worker for idempotency
 	// and conflict detection in task_attempt_reports.
 	ReportSchemaVersion    int32

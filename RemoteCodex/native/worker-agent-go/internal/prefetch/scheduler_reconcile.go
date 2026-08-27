@@ -116,6 +116,10 @@ func (s *Scheduler) resetForExpiredLocked() (store workercache.LeaseReservationS
 	s.hints = make(map[string]futureasset.ProtectedAsset)
 	s.readyAtByJob = make(map[string]map[string]readyRecord)
 	s.prepared = make(map[string]PreparedJob)
+	// NOTE: executionReservations intentionally NOT cleared here.
+	// They outlive the future plan and are the sole protection barrier
+	// during the execution phase. Only HandoffToExecution and
+	// ReleaseExecutionReservations manage this map.
 	return store, oldProtects
 }
 
@@ -167,16 +171,28 @@ func releaseProtections(store workercache.LeaseReservationStore, oldProtects, ne
 // owner of shared transfers and cancels a transfer only after its last waiter.
 func (s *Scheduler) Cancel(jobID string) bool {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	runtime, ok := s.jobs[jobID]
 	if !ok {
+		s.mu.Unlock()
 		return false
 	}
 	runtime.cancel()
 	delete(s.jobs, jobID)
 	delete(s.prepared, jobID)
+	// Release execution reservations for this job's assets.
+	for _, asset := range runtime.job.Assets {
+		if execID, exists := s.executionReservations[asset.AssetKey]; exists {
+			delete(s.executionReservations, asset.AssetKey)
+			s.mu.Unlock()
+			if s.protect != nil {
+				_ = s.protect.ReleaseReservation(context.Background(), assetref.AssetKey(asset.AssetKey), execID)
+			}
+			s.mu.Lock()
+		}
+	}
 	s.detachJobLocked(runtime.job)
 	s.signalWork()
+	s.mu.Unlock()
 	return true
 }
 

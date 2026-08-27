@@ -151,6 +151,29 @@ func (r *SQLiteTaskRepository) IngestTaskResultAtomic(ctx context.Context, cmd t
 		return err
 	}
 
+	// Persist result.sent and attempt.completed milestones derived from
+	// Master-side timestamps. result.sent comes from the envelope's sent_at
+	// (the exact wire boundary); attempt.completed is the commit timestamp
+	// of this transaction.
+	if !cmd.EnvelopeSentAt.IsZero() {
+		if err := persistMasterExecutionEventTx(ctx, tx, masterExecutionEvent{
+			EventID:   fmt.Sprintf("master-%s-result-sent", cmd.AttemptID),
+			AttemptID: cmd.AttemptID, TaskID: cmd.TaskID,
+			Scope: sharedtelemetry.ScopeAttempt, Component: "master.ingest", Action: "result_sent", Phase: "finalize",
+			StartedAt: cmd.EnvelopeSentAt, CompletedAt: cmd.EnvelopeSentAt,
+		}); err != nil {
+			return fmt.Errorf("task ingest result.sent milestone: %w", err)
+		}
+	}
+	if err := persistMasterExecutionEventTx(ctx, tx, masterExecutionEvent{
+		EventID:   fmt.Sprintf("master-%s-attempt-completed", cmd.AttemptID),
+		AttemptID: cmd.AttemptID, TaskID: cmd.TaskID,
+		Scope: sharedtelemetry.ScopeAttempt, Component: "master.ingest", Action: "attempt_completed", Phase: "finalize",
+		StartedAt: time.Now().UTC(), CompletedAt: time.Now().UTC(),
+	}); err != nil {
+		return fmt.Errorf("task ingest attempt.completed milestone: %w", err)
+	}
+
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("task ingest atomic commit: %w", err)
 	}

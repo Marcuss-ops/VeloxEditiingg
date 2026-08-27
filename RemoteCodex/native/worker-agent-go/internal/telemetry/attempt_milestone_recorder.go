@@ -60,6 +60,41 @@ func (r *AttemptMilestoneRecorder) Mark(name sharedtelemetry.AttemptMilestone) {
 	r.samples = append(r.samples, sample)
 }
 
+// MarkAt records a milestone at the given timestamp instead of the wall
+// clock. Use this when the caller has a more precise timestamp than
+// time.Now() — e.g. the WorkerToMasterEnvelope.sent_at timestamp for
+// result.sent, which captures the exact wire boundary rather than the
+// wall clock after Submit() returns.
+func (r *AttemptMilestoneRecorder) MarkAt(name sharedtelemetry.AttemptMilestone, at time.Time) {
+	if r == nil || name == "" {
+		return
+	}
+	if !sharedtelemetry.IsCanonicalAttemptMilestone(name) {
+		return
+	}
+	if at.IsZero() {
+		at = time.Now()
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, exists := r.index[name]; exists {
+		return
+	}
+	elapsed := at.Sub(r.startedAt).Milliseconds()
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	r.sequence++
+	sample := sharedtelemetry.AttemptMilestoneSample{
+		Name:       name,
+		Sequence:   r.sequence,
+		ElapsedMS:  elapsed,
+		OccurredAt: at.UTC().Format(time.RFC3339Nano),
+	}
+	r.index[name] = len(r.samples)
+	r.samples = append(r.samples, sample)
+}
+
 func (r *AttemptMilestoneRecorder) Snapshot() []sharedtelemetry.AttemptMilestoneSample {
 	if r == nil {
 		return nil

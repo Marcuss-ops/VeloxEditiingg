@@ -85,6 +85,10 @@ const (
 	EnvPrefetchRAMEnabled                 = "VELOX_PREFETCH_RAM_ENABLED"
 	EnvPrefetchRAMBudgetBytes             = "VELOX_PREFETCH_RAM_BUDGET_BYTES"
 	EnvPrefetchRAMMaxAssetBytes           = "VELOX_PREFETCH_RAM_MAX_ASSET_BYTES"
+
+	// Network admission controller env vars.
+	EnvNetworkIngressBudgetBytesPerSecond = "VELOX_NETWORK_INGRESS_BUDGET_BPS"
+	EnvNetworkEgressBudgetBytesPerSecond  = "VELOX_NETWORK_EGRESS_BUDGET_BPS"
 	EnvPrefetchRAMMinFutureRefs           = "VELOX_PREFETCH_RAM_MIN_FUTURE_REFS"
 	EnvPrefetchRAMMaxNextUseDistance      = "VELOX_PREFETCH_RAM_MAX_NEXT_USE_DISTANCE"
 	// EnvTmpfsDir selects the memory-backed scratch directory for small
@@ -328,6 +332,10 @@ func applyEnvOverrides(cfg *WorkerConfig) error {
 	bindPositiveInt(EnvPrefetchDiskRestrictedPercent, &cfg.PrefetchDiskRestrictedPercent)
 	bindPositiveInt(EnvPrefetchDiskCriticalPercent, &cfg.PrefetchDiskCriticalPercent)
 	bindPositiveInt(EnvPrefetchDiskRecoveryPercent, &cfg.PrefetchDiskRecoveryPercent)
+
+	// Network admission controller.
+	bindPositiveInt64(EnvNetworkIngressBudgetBytesPerSecond, &cfg.NetworkIngressBudgetBytesPerSecond)
+	bindPositiveInt64(EnvNetworkEgressBudgetBytesPerSecond, &cfg.NetworkEgressBudgetBytesPerSecond)
 	if v := strings.TrimSpace(os.Getenv(EnvPrefetchRAMEnabled)); v != "" {
 		cfg.PrefetchRAMEnabled = envTruthy(v)
 	}

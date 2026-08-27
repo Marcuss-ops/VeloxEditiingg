@@ -69,6 +69,10 @@ type TaskCandidate struct {
 
 	Executor ExecutorKey
 
+	// Phase classifies the task for per-phase slot accounting.
+	// Empty means "unknown" and falls back to flat FreeSlots.
+	Phase TaskPhase
+
 	RequiredCapabilities []string
 	// RequiredAssetKeys are canonical input assets referenced by the task.
 	// They are advisory for placement; leases remain the correctness gate.
@@ -93,8 +97,18 @@ type WorkerSnapshot struct {
 	Draining     bool
 	SessionAlive bool
 
+	// Flat slot accounting (legacy, fallback).
 	MaxParallelJobs int
 	ActiveJobs      int
+
+	// Per-phase slot accounting from the CapacityScorecard. When non-zero,
+	// the matcher uses these instead of the flat MaxParallelJobs limit.
+	RenderSlots    int
+	PrefetchSlots  int
+	PublisherSlots int
+	ActiveRender    int
+	ActivePrefetch  int
+	ActivePublisher int
 
 	// CapacityAuthoritative and DiskAuthoritative are fail-closed resource
 	// facts used by warm placement. A zero/unknown value is never treated as
@@ -124,10 +138,54 @@ func (w WorkerSnapshot) HasExecutor(key ExecutorKey) bool {
 }
 
 // FreeSlots returns the number of additional tasks the worker can accept.
+// For phase-aware callers, use FreeSlotsForPhase instead.
 func (w WorkerSnapshot) FreeSlots() int {
 	free := w.MaxParallelJobs - w.ActiveJobs
 	if free < 0 {
 		return 0
 	}
 	return free
+}
+
+// TaskPhase classifies a task candidate for per-phase slot accounting.
+type TaskPhase string
+
+const (
+	TaskPhaseRender    TaskPhase = "render"
+	TaskPhasePrefetch  TaskPhase = "prefetch"
+	TaskPhasePublisher TaskPhase = "publisher"
+	TaskPhaseUnknown   TaskPhase = ""
+)
+
+// FreeSlotsForPhase returns the number of free slots for a specific task
+// phase. When per-phase slots are configured (RenderSlots > 0), it uses
+// the phase-specific limit. Otherwise it falls back to the flat FreeSlots.
+func (w WorkerSnapshot) FreeSlotsForPhase(phase TaskPhase) int {
+	switch phase {
+	case TaskPhaseRender:
+		if w.RenderSlots > 0 {
+			free := w.RenderSlots - w.ActiveRender
+			if free < 0 {
+				return 0
+			}
+			return free
+		}
+	case TaskPhasePrefetch:
+		if w.PrefetchSlots > 0 {
+			free := w.PrefetchSlots - w.ActivePrefetch
+			if free < 0 {
+				return 0
+			}
+			return free
+		}
+	case TaskPhasePublisher:
+		if w.PublisherSlots > 0 {
+			free := w.PublisherSlots - w.ActivePublisher
+			if free < 0 {
+				return 0
+			}
+			return free
+		}
+	}
+	return w.FreeSlots()
 }

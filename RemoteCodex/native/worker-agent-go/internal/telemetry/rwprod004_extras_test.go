@@ -120,6 +120,7 @@ func TestReady_AllCanonicalReasonsReachable(t *testing.T) {
 		MarkDrainMode(false)
 		SetExecutorsCount(1)
 		SetDiskState(1<<30, 256*1024*1024)
+		MarkNetworkSaturationCritical(false)
 	}
 	for _, target := range CanonicalReasons {
 		t.Run(target, func(t *testing.T) {
@@ -143,6 +144,8 @@ func TestReady_AllCanonicalReasonsReachable(t *testing.T) {
 				MarkBlobReady(false)
 			case "disk.critical":
 				SetDiskState(1, 1<<20)
+			case "network_saturation.critical":
+				MarkNetworkSaturationCritical(true)
 			default:
 				t.Fatalf("test missing inverse mapping for canonical reason %q", target)
 			}

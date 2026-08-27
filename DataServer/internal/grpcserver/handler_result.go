@@ -39,7 +39,7 @@ import (
 // as a misconfiguration and surfaces as a structured error log rather
 // than a silent no-op — better to fail loud than to leak TaskResults
 // without ever closing the Attempt.
-func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *workerSession) {
+func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *workerSession, envelopeSentAt time.Time) {
 	protocolStartedAt := time.Now()
 	taskID := tr.GetTaskId()
 	jobID := tr.GetJobId()
@@ -226,6 +226,7 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *wor
 		ReportVersion:          tr.GetReportVersion(),
 		ReportHash:             tr.GetReportHash(),
 		TelemetrySchemaVersion: tr.GetTelemetrySchemaVersion(),
+		EnvelopeSentAt:         envelopeSentAt,
 	})
 
 	// Build and send the TaskResultAck. We ACK both successful ingests

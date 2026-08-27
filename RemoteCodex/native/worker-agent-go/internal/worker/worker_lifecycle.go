@@ -424,6 +424,11 @@ func (w *Worker) Stop() {
 		// for stragglers (e.g. dispatcher registered but the
 		// pipeline never read it).
 		w.drainPendingArtifactAcks()
+		// Stop the admission controller so all pending CanAdmit calls
+		// return RejectStopped and new admission checks are refused.
+		if w.admissionController != nil {
+			w.admissionController.Stop()
+		}
 		// Shut down the canonical asset download manager: cancel every
 		// in-flight transfer and join the bounded pool's dispatchers so
 		// no goroutine outlives the worker.

@@ -63,6 +63,7 @@ func initPrometheusWorkerFamily(m *PrometheusMetrics) {
 	m.networkSaturationEgress = &GaugeVec{Name: "velox_network_egress_saturation_ratio", Help: "NIC egress utilization ratio (0.0-1.0+)", values: map[string]float64{"total": 0}}
 	m.networkConsumerBytes = &GaugeVec{Name: "velox_network_consumer_bytes_total", Help: "Bytes transferred per consumer (publish/runtime/prefetch)", Label: "consumer", values: map[string]float64{"publish": 0, "runtime": 0, "prefetch": 0}}
 	m.networkThrottleMS = &GaugeVec{Name: "velox_network_throttle_ms_total", Help: "Cumulative time (ms) each consumer waited for bandwidth admission", Label: "consumer", values: map[string]float64{"publish": 0, "runtime": 0, "prefetch": 0}}
+	m.networkSaturationAlert = &GaugeVec{Name: "velox_network_saturation_alert_level", Help: "NIC saturation alert level (0=normal, 1=warn, 2=throttle, 3=critical)", values: map[string]float64{"total": 0}}
 }
 
 func exportPrometheusWorkerFamily(m *PrometheusMetrics) string {
@@ -114,5 +115,6 @@ func exportPrometheusWorkerFamily(m *PrometheusMetrics) string {
 		m.networkSaturationIngress.export() +
 		m.networkSaturationEgress.export() +
 		m.networkConsumerBytes.export() +
-		m.networkThrottleMS.export()
+		m.networkThrottleMS.export() +
+		m.networkSaturationAlert.export()
 }

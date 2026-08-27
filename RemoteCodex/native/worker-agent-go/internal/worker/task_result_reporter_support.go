@@ -156,45 +156,54 @@ func appendDetailedPhaseTimings(dst []*pb.PhaseTimingDetailed, phases []taskrunn
 	return dst
 }
 
-func (r *taskResultReporter) publishTaskResult(ctx context.Context, pte *PendingTaskExecution, taskID, attemptID string, report *taskrunner.TaskExecutionReport, result *pb.TaskResult, status string, startedAt time.Time) {
+// publishTaskResult builds the wire envelope, sends it, and returns the
+// WorkerToMasterEnvelope.sent_at timestamp. The caller uses this to stamp
+// result.sent with the exact transport boundary rather than the wall clock
+// after Submit() returns.
+func (r *taskResultReporter) publishTaskResult(ctx context.Context, pte *PendingTaskExecution, taskID, attemptID string, report *taskrunner.TaskExecutionReport, result *pb.TaskResult, status string, startedAt time.Time) time.Time {
+	sentAt := time.Now().UTC()
 	if r.spool == nil {
 		transport := r.transport()
 		if transport == nil {
 			r.logger.Error("[TASK] TaskResult transport unavailable for %s", taskID)
-			return
+			return sentAt
 		}
-		if err := transport.Send(ctx, controltransport.NewTypedMessage(controltransport.MsgTaskResult, r.workerID, r.protocol, result)); err != nil {
+		msg := controltransport.NewTypedMessage(controltransport.MsgTaskResult, r.workerID, r.protocol, result)
+		if err := transport.Send(ctx, msg); err != nil {
 			r.logger.Error("[TASK] Failed to submit TaskResult for %s: %v", taskID, err)
-			return
+			return sentAt
 		}
-		r.logger.Info("[TASK] TaskResult submitted for %s (status: %s, artifacts: %d)", taskID, status, artifactReportOutputCount(report))
+		// The message's SentAt is the true wire timestamp — it was set when
+		// NewTypedMessage created the envelope, before Send() serialized it.
+		sentAt = msg.SentAt
+		r.logger.Info("[TASK] TaskResult submitted for %s (status: %s, artifacts: %d, sent_at: %s)", taskID, status, artifactReportOutputCount(report), sentAt.Format(time.RFC3339Nano))
 		if r.logArtifact != nil {
-			r.logArtifact("TASK_RESULT_SENT", pte, startedAt, "", "", "", map[string]interface{}{"status": status, "report_hash": result.GetReportHash(), "artifact_count": artifactReportOutputCount(report)})
+			r.logArtifact("TASK_RESULT_SENT", pte, startedAt, "", "", "", map[string]interface{}{"status": status, "report_hash": result.GetReportHash(), "artifact_count": artifactReportOutputCount(report), "sent_at": sentAt.Format(time.RFC3339Nano)})
 		}
-		return
+		return sentAt
 	}
 	if err := r.persistTaskResult(ctx, result); err != nil {
 		r.logger.Error("[TASK_RESULT_OUTBOX] Failed to persist TaskResult for %s: %v", taskID, err)
-		return
+		return sentAt
 	}
 	payload, err := proto.Marshal(result)
 	if err != nil {
 		r.logger.Error("[TASK_RESULT_OUTBOX] Failed to marshal TaskResult for %s: %v", taskID, err)
-		return
+		return sentAt
 	}
 	entry := spool.TaskResultOutboxEntry{TaskID: taskID, AttemptID: attemptID, ReportHash: result.GetReportHash(), Payload: payload}
 	ackCh := r.registerTaskResultAck(pte.JobID, taskID, attemptID)
 	defer r.unregisterTaskResultAck(pte.JobID, taskID, attemptID)
 	if err := r.sendTaskResultAttempt(ctx, entry); err != nil {
 		r.logger.Error("[TASK_RESULT_OUTBOX] Failed to submit TaskResult for %s: %v", taskID, err)
-		return
+		return sentAt
 	}
 	wait := taskResultAckWait
 	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < wait {
 		wait = time.Until(deadline)
 	}
 	if wait <= 0 {
-		return
+		return sentAt
 	}
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
@@ -204,7 +213,8 @@ func (r *taskResultReporter) publishTaskResult(ctx context.Context, pte *Pending
 		r.logger.Warn("[TASK_RESULT_OUTBOX] TaskResultAck not received before wait window task=%s attempt=%s", taskID, attemptID)
 	case <-ctx.Done():
 	}
-	r.logger.Info("[TASK] TaskResult submitted for %s (status: %s, artifacts: %d)", taskID, status, artifactReportOutputCount(report))
+	r.logger.Info("[TASK] TaskResult submitted for %s (status: %s, artifacts: %d, sent_at: %s)", taskID, status, artifactReportOutputCount(report), sentAt.Format(time.RFC3339Nano))
+	return sentAt
 }
 
 func (r *taskResultReporter) persistTaskResult(ctx context.Context, result *pb.TaskResult) error {

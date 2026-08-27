@@ -155,10 +155,46 @@ extract_report() {
       concurrency: ($concurrency|tonumber),
       requested_jobs: ($jobs|length),
       delivery_mode: (if (env.VELOX_DELIVERY_DISABLED // "") == "1" then "DISABLED_PROCESSING_ONLY" else "ENABLED" end),
+      # delivery_outcome classifies the delivery result independently of
+      # processing success. When delivery is disabled (benchmark mode),
+      # the outcome is explicitly DISABLED so operators never mistake it
+      # for a real delivery failure (e.g. BLOCKED_AUTH from a misconfigured
+      # Drive). In production ENABLED mode, the outcome is derived from
+      # the actual delivery rows.
+      delivery_outcome: (
+        if (env.VELOX_DELIVERY_DISABLED // "") == "1" then "DISABLED"
+        else
+          ($deliveries | length) as $count |
+          if $count == 0 then "NO_DELIVERIES"
+          elif ($deliveries | map(select(.status == "SUCCEEDED" or .status == "COMPLETED")) | length) == $count then "SUCCEEDED"
+          elif ($deliveries | map(select(.status == "FAILED")) | length) > 0 then "FAILED"
+          elif ($deliveries | map(select(.status == "BLOCKED_AUTH")) | length) > 0 then "AUTH_REQUIRED"
+          else "PARTIAL"
+          end
+        end
+      ),
       succeeded: ($jobs | map(select(.status == "SUCCEEDED" or .status == "COMPLETED")) | length),
       sha_values: ($jobs | map(.output_sha256) | map(select(. != null)) | unique),
       sha_identical: (($jobs | map(.output_sha256) | map(select(. != null)) | unique | length) <= 1),
       transcode_passes: ($jobs | map(.transcode_passes) | add // 0),
+      # delivery_outcome is the per-job classification aggregated to the
+      # report level. DISABLED means the benchmark explicitly opted out
+      # of delivery (VELOX_DELIVERY_DISABLED=1); ENABLED paths show the
+      # actual delivery result so misconfiguration never pollutes the
+      # benchmark score.
+      # Aggregate delivery outcomes: worst-case wins when mixed.
+      # Order: AUTH_REQUIRED > FAILED > PARTIAL > SUCCEEDED > NO_DELIVERIES > DISABLED
+      delivery_outcome: (
+        ($jobs | map(.delivery_outcome) | unique) as $outcomes |
+        if ($outcomes | length) == 1 then $outcomes[0]
+        elif ($outcomes | index("AUTH_REQUIRED")) != null then "AUTH_REQUIRED"
+        elif ($outcomes | index("FAILED")) != null then "FAILED"
+        elif ($outcomes | index("PARTIAL")) != null then "PARTIAL"
+        elif ($outcomes | index("SUCCEEDED")) != null then "SUCCEEDED"
+        elif ($outcomes | index("NO_DELIVERIES")) != null then "NO_DELIVERIES"
+        else "DISABLED"
+        end
+      ),
       delivery: {
         queue_ms: ($jobs | map(.delivery_queue_ms) | add // 0),
         upload_ms: ($jobs | map(.delivery_upload_ms) | add // 0),

@@ -140,6 +140,7 @@ if(VELOX_ENABLE_LIBAV)
     add_executable(velox_media_packet_output_sink_tests
         tests/test_media_packet_output_sink.cpp
         src/services/media_packet_output_sink.cpp
+        src/services/file_utils.cpp
         src/services/io_counters.cpp)
     velox_configure_test(velox_media_packet_output_sink_tests)
     velox_link_ffmpeg(velox_media_packet_output_sink_tests)

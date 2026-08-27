@@ -56,11 +56,12 @@ const (
 	subQuarantine   subCommand = "quarantine"
 	subRestart      subCommand = "restart"
 	subWorkerConfig subCommand = "worker-config"
+	subBenchmark    subCommand = "benchmark"
 )
 
 func (s subCommand) valid() bool {
 	switch s {
-	case subStatus, subInspect, subDrain, subUpdate, subSmoke, subResume, subRollback, subOperations, subWaitReady, subRollout, subSSHCheck, subJob, subDoctor, subQuarantine, subRestart, subWorkerConfig:
+	case subStatus, subInspect, subDrain, subUpdate, subSmoke, subResume, subRollback, subOperations, subWaitReady, subRollout, subSSHCheck, subJob, subDoctor, subQuarantine, subRestart, subWorkerConfig, subBenchmark:
 		return true
 	default:
 		return false
@@ -98,6 +99,8 @@ Sub-commands:
   job watch <job_id>      follow the persisted job event timeline
   quarantine <worker_id>  exclude worker from placement
   restart <worker_id>     schedule worker restart
+  benchmark <worker_id> [--fixture ID] [--concurrency N] [--runs N]
+                          run concurrent benchmark to determine sweet spot
   worker-config set <worker_id> [--audio-mix-strategy legacy|optimized|auto] [--audio-mix-profile 0|1]
                           atomically update allowlisted worker config and wait-ready
   doctor --production     fleet/readiness/digest production checks
@@ -198,6 +201,8 @@ func runMain(args []string) int {
 		return runRestart(client, rest[1:])
 	case subWorkerConfig:
 		return runWorkerConfig(client, rest[1:])
+	case subBenchmark:
+		return runBenchmark(client, rest[1:])
 	}
 	return ExitUnexpected
 }

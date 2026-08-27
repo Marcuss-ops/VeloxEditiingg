@@ -144,4 +144,5 @@ type PrometheusMetrics struct {
 	networkSaturationEgress  *GaugeVec
 	networkConsumerBytes     *GaugeVec
 	networkThrottleMS        *GaugeVec
+	networkSaturationAlert   *GaugeVec
 }

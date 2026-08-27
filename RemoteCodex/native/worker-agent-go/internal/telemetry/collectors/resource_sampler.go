@@ -65,11 +65,19 @@ type SampledResources struct {
 	CPUIOWaitRatio float64
 	CPUStealRatio  float64
 
+	// CPU user/system ratios — derived from per-domain /proc/stat deltas.
+	CPUUserRatio   float64
+	CPUSystemRatio float64
+
+	// Effective CPU cores — min(logical, ceil(cgroup_cpu_quota)).
+	EffectiveCpuCores int32
+
 	// Memory snapshot — instant from /proc/meminfo.
 	MemoryTotalBytes     int64
 	MemoryAvailableBytes int64
 	MemoryUsedBytes      int64
 	SwapUsedBytes        int64
+	PageCacheBytes       int64 // Buffers + Cached from /proc/meminfo
 
 	// Worker-local temp disk accounting. TempBytesWritten is cumulative
 	// observed growth in the configured worker scratch tree; TempFilesOpen
@@ -93,6 +101,13 @@ type SampledResources struct {
 	DiskWriteLatencySeconds int64
 	DiskIOUtilizationRatio  float64
 
+	// Disk throughput — instantaneous MB/s computed from cumulative deltas.
+	DiskReadMbps  float64
+	DiskWriteMbps float64
+
+	// Disk I/O wait — cumulative ms.
+	DiskIoWaitMs int64
+
 	// Filesystem free bytes from statvfs.
 	DiskFreeBytes int64
 
@@ -101,10 +116,25 @@ type SampledResources struct {
 	NetworkTransmitBytesTotal int64
 	NetworkRetransmitsTotal   int64
 
+
+	// Network throughput — instantaneous Mbit/s computed from cumulative deltas.
+	DownloadMbps float64
+	UploadMbps   float64
+
 	// Active tasks / slots — populated by the worker at ingest hook
 	// (sampler does not own concurrency state).
 	ActiveTasks int32
 	TaskSlots   int32
+
+	// Per-job-type slot occupancy — populated by the worker ingest hook.
+	RenderJobsActive    int32
+	PrefetchJobsActive  int32
+	PublisherJobsActive int32
+
+	// File descriptor accounting — Linux /proc/self/fd + getrlimit.
+	OpenFileDescriptors   int64
+	MaxFileDescriptors    int64
+	FDUtilizationRatio    float64
 
 	// FFmpeg process count visible in this worker's PID namespace.
 	FFmpegProcesses int32
@@ -133,6 +163,17 @@ type Sampler struct {
 	lastTempBytes    int64
 	tempBytesWritten int64
 	tempInitialized  bool
+
+	// Disk throughput delta tracking.
+	lastDiskReadBytes  int64
+	lastDiskWriteBytes int64
+	lastDiskIoWaitMs   int64
+	lastDiskSampleAt   time.Time
+
+	// Network throughput delta tracking.
+	lastNetRxBytes int64
+	lastNetTxBytes int64
+	lastNetSampleAt time.Time
 
 	slot atomic.Pointer[SampledResources]
 	host atomic.Pointer[SampledHost]
@@ -256,6 +297,8 @@ func (s *Sampler) Sample(ctx context.Context) (*SampledResources, error) {
 				out.CPUUtilRatio = clampRatio(float64(du) / float64(dtot))
 				out.CPUIOWaitRatio = clampRatio(float64(diow) / float64(dtot))
 				out.CPUStealRatio = clampRatio(float64(dsteal) / float64(dtot))
+				out.CPUUserRatio = clampRatio(float64(cpu.userJ-s.lastCPU.userJ) / float64(dtot))
+				out.CPUSystemRatio = clampRatio(float64(cpu.systemJ-s.lastCPU.systemJ) / float64(dtot))
 			}
 		}
 		s.lastCPU = cpu
@@ -270,6 +313,7 @@ func (s *Sampler) Sample(ctx context.Context) (*SampledResources, error) {
 		out.MemoryTotalBytes = mem.total
 		out.MemoryAvailableBytes = mem.available
 		out.MemoryUsedBytes = mem.total - mem.available
+		out.PageCacheBytes = mem.buffers + mem.cached
 		if mem.swapTotal >= 0 && mem.swapFree >= 0 {
 			out.SwapUsedBytes = mem.swapTotal - mem.swapFree
 		}
@@ -290,9 +334,30 @@ func (s *Sampler) Sample(ctx context.Context) (*SampledResources, error) {
 		out.DiskWriteBytesTotal = disk.writeBytes
 		out.DiskReadLatencySeconds = disk.readLatencyMs / 1000
 		out.DiskWriteLatencySeconds = disk.writeLatencyMs / 1000
+		out.DiskIoWaitMs = disk.ioMsTotal
 		if disk.ioMsTotal > 0 && disk.sampleMs > 0 {
 			out.DiskIOUtilizationRatio = clampRatio(float64(disk.ioMsTotal) / float64(disk.sampleMs))
 		}
+		// Compute instantaneous MB/s from cumulative byte deltas.
+		s.mu.Lock()
+		if !s.lastDiskSampleAt.IsZero() {
+			dt := out.SampledAt.Sub(s.lastDiskSampleAt).Seconds()
+			if dt > 0 {
+				dRd := disk.readBytes - s.lastDiskReadBytes
+				dWr := disk.writeBytes - s.lastDiskWriteBytes
+				if dRd > 0 {
+					out.DiskReadMbps = float64(dRd) / dt / 1_000_000
+				}
+				if dWr > 0 {
+					out.DiskWriteMbps = float64(dWr) / dt / 1_000_000
+				}
+			}
+		}
+		s.lastDiskReadBytes = disk.readBytes
+		s.lastDiskWriteBytes = disk.writeBytes
+		s.lastDiskIoWaitMs = disk.ioMsTotal
+		s.lastDiskSampleAt = out.SampledAt
+		s.mu.Unlock()
 	}
 
 	// statvfs — instant free disk bytes.
@@ -309,6 +374,25 @@ func (s *Sampler) Sample(ctx context.Context) (*SampledResources, error) {
 		out.NetworkReceiveBytesTotal = net.rxBytes
 		out.NetworkTransmitBytesTotal = net.txBytes
 		out.NetworkRetransmitsTotal = net.retransmits
+		// Compute instantaneous Mbit/s from cumulative byte deltas.
+		s.mu.Lock()
+		if !s.lastNetSampleAt.IsZero() {
+			dt := out.SampledAt.Sub(s.lastNetSampleAt).Seconds()
+			if dt > 0 {
+				dRx := net.rxBytes - s.lastNetRxBytes
+				dTx := net.txBytes - s.lastNetTxBytes
+				if dRx > 0 {
+					out.DownloadMbps = float64(dRx) * 8 / dt / 1_000_000
+				}
+				if dTx > 0 {
+					out.UploadMbps = float64(dTx) * 8 / dt / 1_000_000
+				}
+			}
+		}
+		s.lastNetRxBytes = net.rxBytes
+		s.lastNetTxBytes = net.txBytes
+		s.lastNetSampleAt = out.SampledAt
+		s.mu.Unlock()
 	}
 
 	// /proc/self/statm — instant per-process RSS.
@@ -318,6 +402,17 @@ func (s *Sampler) Sample(ctx context.Context) (*SampledResources, error) {
 		out.ProcessRSSBytes = rssKib * 1024
 		if peakKib > 0 {
 			out.ProcessRSSPeakBytes = peakKib * 1024
+		}
+	}
+
+	// File descriptors — /proc/self/fd count + getrlimit(RLIMIT_NOFILE).
+	openFDs, maxFDs, fdErr := s.readFDCount()
+	addErr(fdErr, "fd_count")
+	if fdErr == nil {
+		out.OpenFileDescriptors = openFDs
+		out.MaxFileDescriptors = maxFDs
+		if maxFDs > 0 {
+			out.FDUtilizationRatio = clampRatio(float64(openFDs) / float64(maxFDs))
 		}
 	}
 

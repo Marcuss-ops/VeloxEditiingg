@@ -43,7 +43,7 @@ func (h *Handler) dispatchMessage(workerID, sessionID string, env *pb.WorkerToMa
 		h.handleTaskRejected(workerID, m.TaskRejected, sess)
 
 	case *pb.WorkerToMasterEnvelope_TaskResult:
-		h.handleTaskResult(workerID, m.TaskResult, sess)
+		h.handleTaskResult(workerID, m.TaskResult, sess, env.GetSentAt().AsTime())
 
 	case *pb.WorkerToMasterEnvelope_TaskOutputDeclared:
 		h.handleTaskOutputDeclared(workerID, m.TaskOutputDeclared, sess)
@@ -83,6 +83,9 @@ func (h *Handler) dispatchMessage(workerID, sessionID string, env *pb.WorkerToMa
 
 	case *pb.WorkerToMasterEnvelope_Goodbye:
 		return errStreamGoodbye
+
+	case *pb.WorkerToMasterEnvelope_PrefetchLifecycleEvent:
+		h.handlePrefetchLifecycleEvent(workerID, m.PrefetchLifecycleEvent)
 
 	default:
 		logGRPCf(ctxForTaskSession(sess), logging.LevelWarn, logging.CodeGRPCStreamUnknownMessage, "[GRPC] Unknown message type from worker %s: %T", workerID, env.Msg)

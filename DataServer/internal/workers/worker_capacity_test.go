@@ -65,3 +65,77 @@ func maxInt(v, min int) int {
 	}
 	return v
 }
+
+func TestDeriveWorkerCapacityWithPhaseScores(t *testing.T) {
+	cap := deriveWorkerCapacityWithPhaseScores(
+		4, 2, // flat: max=4, active=2
+		3, 1, // render: slots=3, active=1
+		4, 2, // prefetch: slots=4, active=2
+		2, 2, // publisher: slots=2, active=2 (full)
+		"NETWORK",
+	)
+	if cap.MaxSlots != 4 || cap.ActiveSlots != 2 || cap.AvailableSlots != 2 {
+		t.Fatalf("flat capacity = %v, want max=4 active=2 available=2", cap)
+	}
+	if cap.RenderSlots != 3 || cap.ActiveRender != 1 {
+		t.Fatalf("render = %d/%d, want 3/1", cap.RenderSlots, cap.ActiveRender)
+	}
+	if cap.PrefetchSlots != 4 || cap.ActivePrefetch != 2 {
+		t.Fatalf("prefetch = %d/%d, want 4/2", cap.PrefetchSlots, cap.ActivePrefetch)
+	}
+	if cap.PublisherSlots != 2 || cap.ActivePublisher != 2 {
+		t.Fatalf("publisher = %d/%d, want 2/2", cap.PublisherSlots, cap.ActivePublisher)
+	}
+	if cap.LimitingResource != "NETWORK" {
+		t.Fatalf("limiting = %q, want NETWORK", cap.LimitingResource)
+	}
+}
+
+func TestAvailableRenderSlots_WithPerPhaseLimits(t *testing.T) {
+	cap := WorkerCapacity{
+		MaxSlots: 10, ActiveSlots: 2, AvailableSlots: 8,
+		RenderSlots: 3, ActiveRender: 1,
+	}
+	if got := cap.AvailableRenderSlots(); got != 2 {
+		t.Fatalf("AvailableRenderSlots = %d, want 2", got)
+	}
+}
+
+func TestAvailableRenderSlots_FlatFallback(t *testing.T) {
+	cap := WorkerCapacity{
+		MaxSlots: 4, ActiveSlots: 1, AvailableSlots: 3,
+	}
+	if got := cap.AvailableRenderSlots(); got != 3 {
+		t.Fatalf("AvailableRenderSlots = %d, want 3 (flat fallback)", got)
+	}
+}
+
+func TestAvailablePrefetchSlots_WithPerPhaseLimits(t *testing.T) {
+	cap := WorkerCapacity{
+		MaxSlots: 10, ActiveSlots: 2, AvailableSlots: 8,
+		PrefetchSlots: 5, ActivePrefetch: 4,
+	}
+	if got := cap.AvailablePrefetchSlots(); got != 1 {
+		t.Fatalf("AvailablePrefetchSlots = %d, want 1", got)
+	}
+}
+
+func TestAvailablePublisherSlots_Full(t *testing.T) {
+	cap := WorkerCapacity{
+		MaxSlots: 10, ActiveSlots: 2, AvailableSlots: 8,
+		PublisherSlots: 2, ActivePublisher: 2,
+	}
+	if got := cap.AvailablePublisherSlots(); got != 0 {
+		t.Fatalf("AvailablePublisherSlots = %d, want 0", got)
+	}
+}
+
+func TestAvailablePublisherSlots_NegativeClamps(t *testing.T) {
+	cap := WorkerCapacity{
+		MaxSlots: 10, ActiveSlots: 2, AvailableSlots: 8,
+		PublisherSlots: 2, ActivePublisher: 3, // over-committed
+	}
+	if got := cap.AvailablePublisherSlots(); got != 0 {
+		t.Fatalf("AvailablePublisherSlots = %d, want 0 (clamped)", got)
+	}
+}

@@ -35,6 +35,11 @@ type PreparedAssetMetadata struct {
 	FfprobeError string    `json:"ffprobe_error,omitempty"`
 	LocalPath    string    `json:"-"`
 	PreparedAt   time.Time `json:"prepared_at"`
+	// Origin is the AssetResolutionOrigin for this prepared asset:
+	// warm_cache, prefetch, or runtime_download. It is set at prefetch-time
+	// when the asset is materialized by a FutureAssetPlan and propagated
+	// through to runtimeassets.Binding for fast-assembly certification.
+	Origin       downloader.ResolutionOrigin `json:"origin,omitempty"`
 }
 
 // PreparedJob is the local worker read model. PREPARED is emitted only after
@@ -157,4 +162,28 @@ func (s *Scheduler) PreparedJobs() []PreparedJob {
 		out = append(out, copyJob)
 	}
 	return out
+}
+
+// InvalidatePreparedAsset removes a single asset from the PreparedJob read
+// model when its integrity check fails at runtime (SHA/size mismatch after
+// prefetch). This prevents stale PreparedJob metadata from misclassifying
+// future cache resolutions as OriginPrefetch when the asset was actually
+// re-downloaded. If the job has no remaining prepared assets, the entire
+// job entry is removed.
+func (s *Scheduler) InvalidatePreparedAsset(jobID, assetKey string) {
+	if s == nil || jobID == "" || assetKey == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	job, ok := s.prepared[jobID]
+	if !ok || job.Assets == nil {
+		return
+	}
+	delete(job.Assets, assetKey)
+	if len(job.Assets) == 0 {
+		delete(s.prepared, jobID)
+	} else {
+		s.prepared[jobID] = job
+	}
 }

@@ -9,6 +9,7 @@ import (
 
 	"velox-shared/assetref"
 	"velox-worker-agent/internal/downloader"
+	"velox-worker-agent/internal/prefetch"
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/internal/workercache"
 )
@@ -116,7 +117,19 @@ func (w *Worker) assetCacheResolver() *downloader.CacheResolver {
 	w.cacheResolverMu.Lock()
 	defer w.cacheResolverMu.Unlock()
 	if w.cacheResolver == nil {
-		w.cacheResolver = downloader.NewCacheResolver(w.assetDownloadManager(), cacheResolutionSink{})
+		w.cacheResolver = downloader.NewCacheResolver(w.assetDownloadManager(), cacheResolutionSink{
+			preparedJobs: func() []prefetch.PreparedJob {
+				if w.prefetchScheduler == nil {
+					return nil
+				}
+				return w.prefetchScheduler.PreparedJobs()
+			},
+			invalidatePreparedAsset: func(jobID, assetKey string) {
+				if w.prefetchScheduler != nil {
+					w.prefetchScheduler.InvalidatePreparedAsset(jobID, assetKey)
+				}
+			},
+		})
 	}
 	return w.cacheResolver
 }

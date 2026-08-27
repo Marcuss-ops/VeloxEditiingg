@@ -130,6 +130,11 @@ func (m *Matcher) Select(
 		return result
 	}
 
+	// Per-phase capacity gate: when the worker has per-phase slot limits from
+	// the CapacityScorecard, a candidate is rejected only if its specific phase
+	// has no free slots. This is a per-candidate check applied inside the loop
+	// below (see phaseCapacityCheck).
+
 	// Stable-sort candidates: priority DESC, then created_at ASC (FIFO).
 	ordered := append([]TaskCandidate(nil), candidates...)
 
@@ -216,11 +221,44 @@ func (m *Matcher) Select(
 			continue
 		}
 
+		// Per-phase capacity check: when per-phase slots are configured,
+		// reject candidates whose specific phase is at capacity.
+		if pc := phaseCapacityCheck(worker, candidate); pc != "" {
+			result.Rejections = append(result.Rejections, Rejection{
+				TaskID: candidate.TaskID,
+				Code:   RejectCapacityFull,
+				Detail: pc,
+			})
+			continue
+		}
+
 		result.Candidate = &candidate
 		return result
 	}
 
 	return result
+}
+
+// phaseCapacityCheck returns a non-empty rejection detail string when the
+// candidate's specific phase has no free slots on this worker. Returns empty
+// when per-phase limits are not configured (flat mode: the terminal FreeSlots
+// gate above is sufficient).
+func phaseCapacityCheck(worker WorkerSnapshot, candidate TaskCandidate) string {
+	switch candidate.Phase {
+	case TaskPhaseRender:
+		if worker.RenderSlots > 0 && worker.FreeSlotsForPhase(TaskPhaseRender) <= 0 {
+			return fmt.Sprintf("render phase at capacity (%d/%d)", worker.ActiveRender, worker.RenderSlots)
+		}
+	case TaskPhasePrefetch:
+		if worker.PrefetchSlots > 0 && worker.FreeSlotsForPhase(TaskPhasePrefetch) <= 0 {
+			return fmt.Sprintf("prefetch phase at capacity (%d/%d)", worker.ActivePrefetch, worker.PrefetchSlots)
+		}
+	case TaskPhasePublisher:
+		if worker.PublisherSlots > 0 && worker.FreeSlotsForPhase(TaskPhasePublisher) <= 0 {
+			return fmt.Sprintf("publisher phase at capacity (%d/%d)", worker.ActivePublisher, worker.PublisherSlots)
+		}
+	}
+	return ""
 }
 
 func cachedAssetCount(worker WorkerSnapshot, candidate TaskCandidate) int {

@@ -140,6 +140,90 @@ func TestMatcherRejectsWorkerWithoutFreeSlots(t *testing.T) {
 	}
 }
 
+func TestMatcherRejectsPhaseFull_ButAllowsOtherPhases(t *testing.T) {
+	m := NewMatcher()
+
+	// Worker has render_slots=1, publisher_slots=2. Render is full.
+	worker := WorkerSnapshot{
+		WorkerID:         "w-1",
+		SessionID:        "s-1",
+		Ready:            true,
+		SessionAlive:     true,
+		MaxParallelJobs:  10,
+		ActiveJobs:       0,
+		RenderSlots:      1,
+		ActiveRender:     1, // full
+		PublisherSlots:   2,
+		ActivePublisher:  0,
+		ExecutorRegistry: registryFromExecutorKeys(executorKeys(ExecutorKey{ID: "scene.composite.v1", Version: 1})),
+	}
+
+	renderCandidate := TaskCandidate{
+		TaskID:   "t-render",
+		Priority: 10,
+		Phase:    TaskPhaseRender,
+		Executor: ExecutorKey{ID: "scene.composite.v1", Version: 1},
+	}
+	// Render candidate should be rejected — render phase is full.
+	result := m.Select(worker, []TaskCandidate{renderCandidate})
+	if result.Candidate != nil {
+		t.Fatalf("expected nil candidate for full render phase, got %s", result.Candidate.TaskID)
+	}
+	found := false
+	for _, r := range result.Rejections {
+		if r.Code == RejectCapacityFull {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected RejectCapacityFull for render phase, rejections=%v", result.Rejections)
+	}
+
+	// Publisher candidate should still be accepted — publisher has free slots.
+	pubCandidate := TaskCandidate{
+		TaskID:   "t-pub",
+		Priority: 10,
+		Phase:    TaskPhasePublisher,
+		Executor: ExecutorKey{ID: "scene.composite.v1", Version: 1},
+	}
+	result = m.Select(worker, []TaskCandidate{pubCandidate})
+	if result.Candidate == nil {
+		t.Fatalf("expected publisher candidate to be accepted")
+	}
+	if result.Candidate.TaskID != "t-pub" {
+		t.Fatalf("expected t-pub, got %s", result.Candidate.TaskID)
+	}
+}
+
+func TestMatcherPhaseUnknown_FallsBackToFlat(t *testing.T) {
+	m := NewMatcher()
+
+	// Worker has per-phase render_slots=1 full, but flat MaxParallelJobs has room.
+	worker := WorkerSnapshot{
+		WorkerID:         "w-1",
+		SessionID:        "s-1",
+		Ready:            true,
+		SessionAlive:     true,
+		MaxParallelJobs:  10,
+		ActiveJobs:       0,
+		RenderSlots:      1,
+		ActiveRender:     1,
+		ExecutorRegistry: registryFromExecutorKeys(executorKeys(ExecutorKey{ID: "scene.composite.v1", Version: 1})),
+	}
+
+	candidate := TaskCandidate{
+		TaskID:   "t-1",
+		Priority: 10,
+		Phase:    TaskPhaseUnknown, // unknown phase → flat fallback
+		Executor: ExecutorKey{ID: "scene.composite.v1", Version: 1},
+	}
+	result := m.Select(worker, []TaskCandidate{candidate})
+	if result.Candidate == nil {
+		t.Fatalf("expected unknown-phase candidate to be accepted via flat fallback")
+	}
+}
+
 func TestMatcherRejectsDrainingWorker(t *testing.T) {
 	m := NewMatcher()
 

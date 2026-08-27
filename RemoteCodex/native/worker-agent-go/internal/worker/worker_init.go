@@ -221,6 +221,35 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 
 	sampler := telemetry.NewResourceSampler("", "", cfg.WorkDir, 0, 0)
 	sampler.SetTempDir(cfg.TempDir)
+
+	// Build the RSS-based admission controller. The sampler reads
+	// /proc/self/statm for process RSS and /proc/meminfo for total RAM.
+	// Both samplers are closure-captured so the controller always sees
+	// the latest sampled values without polling.
+	admissionCtrl := NewResourceAdmissionController(
+		func() int64 {
+			if snap := sampler.Latest(); snap != nil {
+				return snap.ProcessRSSBytes
+			}
+			return 0
+		},
+		func() int64 {
+			if snap := sampler.Latest(); snap != nil {
+				return snap.MemoryTotalBytes
+			}
+			return 0
+		},
+	)
+
+	// Build the shared network admission controller. Ingress budget comes
+	// from the prefetch bandwidth cap (or 0 for unlimited); egress budget
+	// from a separate publish config or 0 for unlimited. Both are 0 by
+	// default, meaning no pacing until the operator sets them.
+	netAdmissionCtrl := NewNetworkAdmissionController(NetworkAdmissionConfig{
+		IngressBudgetBytesPerSecond: cfg.NetworkIngressBudgetBytesPerSecond,
+		EgressBudgetBytesPerSecond:  cfg.NetworkEgressBudgetBytesPerSecond,
+	})
+
 	var ramCache *prefetch.RAMCache
 	if cfg.PrefetchRAMEnabled {
 		ramCache = prefetch.NewRAMCache(cfg.TmpfsDir, cfg.PrefetchRAMBudgetBytes, cfg.PrefetchRAMMaxAssetBytes)
@@ -262,9 +291,7 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 			case "wasted":
 				metrics.RecordPrefetchWastedBytes(asset.SizeBytes)
 			}
-		}, OnPrepared: func(job prefetch.PreparedJob) {
-			log.Info("[PREFETCH] state=PREPARED job=%s task=%s assets=%d prepared_at=%s", job.JobID, job.TaskID, len(job.Assets), job.PreparedAt.UTC().Format(time.RFC3339Nano))
-		}, OnEvent: recordPrefetchEvent}),
+		}, OnEvent: recordPrefetchEvent, AdmissionController: newAdmissionAdapter(admissionCtrl), NetworkPacer: netAdmissionCtrl}),
 		// PR-2: TaskOffer-accepted tasks awaiting TaskLeaseGranted before
 		// executeTask dispatch. Keyed by task_id — one canonical entry per
 		// outstanding offer per session.
@@ -276,6 +303,8 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		connState:           ConnDisconnected,
 		concurrencyLimiter:  concurrency.NewConcurrencyLimiter(detectedConcurrency),
 		publisherPool:       NewPublisherPool(cfg.PublisherConcurrency),
+		// admissionCtrl is wired into the pool after construction via
+		// SetAdmissionController below (same pattern as the scheduler).
 		artifactLocks:       NewArtifactLockRegistry(),
 		stageExecutor:       stageExecutor,
 		executorRegistry:    wo.registry,
@@ -298,9 +327,11 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		// (statvfs + resolveWorkDirDevice degrade to best-effort).
 		// 5s tick + 3-tick emit cadence is the default from
 		// NewResourceSampler.
-		sampler:         sampler,
-		storageResolver: storageResolver,
-		exitFunc:        os.Exit,
+		sampler:                   sampler,
+		storageResolver:           storageResolver,
+		admissionController:       admissionCtrl,
+		networkAdmissionController: netAdmissionCtrl,
+		exitFunc:                  os.Exit,
 	}
 
 	// Compose the reporting subsystem behind its small interface. The
@@ -339,6 +370,16 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 	if _, err := cleanupOrphanedAssetPartials(w.assetCacheDir(), 24*time.Hour); err != nil {
 		log.Warn("[ASSET] startup partial cleanup failed: %v", err)
 	}
+
+	// Wire the OnPrepared callback for prefetch lifecycle events now that
+	// the worker is fully initialized and has transport access.
+	w.prefetchScheduler.SetOnPrepared(w.prefetchPreparedHook())
+
+	// Wire the RSS-based admission controller into the publisher pool.
+	// The pool checks IsThrottled(ResourcePublish) before each Acquire:
+	// when RSS exceeds 88% of total RAM, new uploads block until RSS
+	// drops below 78% (hysteresis recovery).
+	w.publisherPool.SetAdmissionController(admissionCtrl)
 
 	return w, nil
 }

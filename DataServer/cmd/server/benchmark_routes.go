@@ -20,6 +20,11 @@ func registerBenchmarkRoutes(r *gin.Engine, deps MetricsRouteDeps, cfg *config.C
 		return
 	}
 	r.POST(benchmarkRunsPath, api.AdminAuthMiddleware(cfg), recordBenchmarkRunHandler(deps.BenchmarkRuns))
+
+	// Concurrent benchmark endpoint: POST /api/v1/admin/benchmarks/concurrent
+	// Triggers a benchmark run at concurrency levels 1-4 and returns the sweet spot.
+	concurrentHandler := api.NewAdminConcurrentBenchmarkHandler(api.ConcurrentBenchmarkDeps{})
+	r.POST("/api/v1/admin/benchmarks/concurrent", api.AdminAuthMiddleware(cfg), concurrentHandler.RunConcurrentBenchmark())
 }
 
 func recordBenchmarkRunHandler(repo performance.BenchmarkRunRepository) gin.HandlerFunc {

@@ -258,9 +258,12 @@ fs::path makePartialPath(const fs::path& target) {
     return parent / (stem + ".partial." +
                      std::to_string(static_cast<long long>(::getpid())) + "." +
                      std::to_string(nonce) + extension);
+}bool publishAtomic(const fs::path& partial, const fs::path& target, std::string* error, bool* durable) {
+    // Delegate to the evidence-aware overload with no pre-sync evidence.
+    return publishAtomic(partial, target, DurabilityEvidence{}, error, durable);
 }
 
-bool publishAtomic(const fs::path& partial, const fs::path& target, std::string* error, bool* durable) {
+bool publishAtomic(const fs::path& partial, const fs::path& target, const DurabilityEvidence& evidence, std::string* error, bool* durable) {
     if (durable != nullptr) {
         *durable = false;
     }
@@ -292,25 +295,29 @@ bool publishAtomic(const fs::path& partial, const fs::path& target, std::string*
         return failBeforeRename("partial output is not a regular file: " + partial.string());
     }
 
-    const int fd = ::open(partial.c_str(), O_RDONLY);
-    if (fd < 0) {
-        std::error_code ec;
-        fs::remove(partial, ec);
-        return fail("open partial for fsync failed: " + partial.string());
-    }
-    const auto sync_started = std::chrono::steady_clock::now();
-    const bool synced = ::fsync(fd) == 0;
-    services::recordFileFsync(std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now() - sync_started).count());
-    const int sync_errno = errno;
-    const bool closed = ::close(fd) == 0;
-    if (!synced || !closed) {
-        std::error_code ec;
-        fs::remove(partial, ec);
-        if (!synced) {
-            return fail("fsync partial failed: " + std::string(std::strerror(sync_errno)));
+    // File-data fsync: skip when the caller already performed it
+    // (e.g. PacketOutputSink::finalize sets evidence.file_data_synced).
+    if (!evidence.file_data_synced) {
+        const int fd = ::open(partial.c_str(), O_RDONLY);
+        if (fd < 0) {
+            std::error_code ec;
+            fs::remove(partial, ec);
+            return fail("open partial for fsync failed: " + partial.string());
         }
-        return fail("close partial failed: " + partial.string());
+        const auto sync_started = std::chrono::steady_clock::now();
+        const bool synced = ::fsync(fd) == 0;
+        services::recordFileFsync(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - sync_started).count());
+        const int sync_errno = errno;
+        const bool closed = ::close(fd) == 0;
+        if (!synced || !closed) {
+            std::error_code ec;
+            fs::remove(partial, ec);
+            if (!synced) {
+                return fail("fsync partial failed: " + std::string(std::strerror(sync_errno)));
+            }
+            return fail("close partial failed: " + partial.string());
+        }
     }
 
     const auto rename_started = std::chrono::steady_clock::now();
@@ -347,8 +354,7 @@ bool publishAtomic(const fs::path& partial, const fs::path& target, std::string*
         std::cerr << "warning: atomic output committed but output directory fsync failed: "
                   << std::strerror(dir_errno) << "\n";
     } else if (!dir_closed) {
-        std::cerr << "warning: atomic output committed but output directory close failed: "
-                  << parent << "\n";
+        std::cerr << "warning: atomic output committed but output directory close failed: " << parent << "\n";
     } else if (durable != nullptr) {
         *durable = true;
     }

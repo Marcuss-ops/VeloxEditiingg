@@ -35,6 +35,22 @@ func (m *PrometheusMetrics) RecordAttemptRawMetrics(raw CompleteRawEnvelope) {
 	m.attemptProcesses.add("curl_spawn", nonNegativeMetric(raw.Process.EngineCurlSpawnCount))
 }
 
+// RecordJobResourceAttribution projects per-job resource attribution
+// counters from one completed attempt. These are the per-job cost basis
+// for capacity planning (MaxActiveJobs sweet spot).
+func (m *PrometheusMetrics) RecordJobResourceAttribution(raw *RawExecutionMetrics) {
+	if raw == nil {
+		return
+	}
+	m.jobPeakRssDeltaBytes.set("total", float64(nonNegativeMetric(raw.JobPeakRssDeltaBytes)))
+	m.jobCpuCoreSeconds.add("total", raw.JobCpuCoreSeconds)
+	m.jobPrefetchBytes.add("total", nonNegativeMetric(raw.JobPrefetchBytes))
+	m.jobPublishBytes.add("total", nonNegativeMetric(raw.JobPublishBytes))
+	m.jobOpenFdsPeak.set("total", float64(nonNegativeMetric(raw.OpenFdsPeak)))
+	m.jobPageFaults.add("total", nonNegativeMetric(raw.JobPageFaults))
+	m.jobIoWaitMs.add("total", nonNegativeMetric(raw.IowaitMs))
+}
+
 func nonNegativeMetric(value int64) float64 {
 	if value < 0 {
 		return 0

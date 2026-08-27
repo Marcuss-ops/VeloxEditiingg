@@ -41,6 +41,23 @@ func (s *Scheduler) nextWorkItem() (*workItem, *downloader.CacheResolver) {
 			heap.Push(&s.queue, item)
 			continue
 		}
+		// RSS admission gate: when RSS exceeds 80% of total RAM, defer
+		// all prefetch downloads to prevent OOM. Distance-1 items are
+		// still deferred — the admission controller applies uniformly.
+		if s.cfg.AdmissionController != nil {
+			if s.cfg.AdmissionController.CanAdmit(AdmissionPrefetch) != AdmissionAdmit {
+				heap.Push(&s.queue, item)
+				s.emit(Event{Name: "admission_deferred", At: s.cfg.Now(), JobID: item.job.JobID, TaskID: item.job.TaskID, AssetKey: item.asset.AssetKey, Distance: item.job.Distance})
+				return nil, nil
+			}
+		}
+		// NIC saturation gate: when ingress/egress exceeds 85%, defer
+		// prefetch downloads to avoid saturating the link.
+		if s.cfg.NetworkPacer != nil && s.cfg.NetworkPacer.IsPrefetchThrottled() {
+			heap.Push(&s.queue, item)
+			s.emit(Event{Name: "saturation_deferred", At: s.cfg.Now(), JobID: item.job.JobID, TaskID: item.job.TaskID, AssetKey: item.asset.AssetKey, Distance: item.job.Distance})
+			return nil, nil
+		}
 		if s.resolver == nil {
 			heap.Push(&s.queue, item)
 			return nil, nil
@@ -62,11 +79,18 @@ func (s *Scheduler) nextWorkItem() (*workItem, *downloader.CacheResolver) {
 func (s *Scheduler) runWorkItem(item *workItem, resolver *downloader.CacheResolver) {
 	job, asset := item.job, item.asset
 	startedAt := s.cfg.Now()
-	bandwidth := s.cfg.MaxBandwidthBytesPerSecond
-	if bandwidth > 0 {
-		bandwidth /= int64(s.cfg.MaxConcurrent)
-		if bandwidth == 0 {
-			bandwidth = 1
+	// When the shared NetworkPacer is available, skip the local per-request
+	// bandwidth cap so the chunked transfer path delegates pacing to the
+	// shared controller (work-conserving priority across publish/runtime/prefetch).
+	// The local cap is retained as the fallback when no shared controller exists.
+	var bandwidth int64
+	if s.cfg.NetworkPacer == nil {
+		bandwidth = s.cfg.MaxBandwidthBytesPerSecond
+		if bandwidth > 0 {
+			bandwidth /= int64(s.cfg.MaxConcurrent)
+			if bandwidth == 0 {
+				bandwidth = 1
+			}
 		}
 	}
 	request := downloader.DownloadRequest{
@@ -88,6 +112,13 @@ func (s *Scheduler) runWorkItem(item *workItem, resolver *downloader.CacheResolv
 	var metadataErr error
 	if err == nil {
 		metadata, metadataErr = s.cfg.MetadataResolver(item.ctx, asset, resolved)
+		// Tag the prepared asset with its resolution origin. All assets
+		// materialized by the FutureAssetPlan are OriginPrefetch; attempt-time
+		// re-resolution via cacheResolutionSink.classifyOrigin() may later
+		// override this for warm-cache hits that lack a PreparedJob entry.
+		if metadataErr == nil {
+			metadata.Origin = downloader.OriginPrefetch
+		}
 	}
 	var protectionErr error
 	if err == nil {
@@ -115,6 +146,11 @@ func (s *Scheduler) runWorkItem(item *workItem, resolver *downloader.CacheResolv
 		if hinted && hint.FutureRefCount >= s.cfg.RAMMinFutureRefs && hint.NextUseDistance <= s.cfg.RAMMaxNextUseDistance {
 			_ = s.ram.Put(item.ctx, request, downloader.DownloadedAsset{AssetKey: request.AssetKey, AssetID: request.AssetID, LocalPath: resolved.LocalPath, SHA256: resolved.SHA256, SizeBytes: asset.SizeBytes})
 		}
+	}
+	// Record admission result so hysteresis state can recover when RSS
+	// drops below the recovery threshold (70% for prefetch).
+	if s.cfg.AdmissionController != nil {
+		s.cfg.AdmissionController.RecordAdmissionResult(AdmissionPrefetch, err == nil)
 	}
 	s.releaseWork(asset.SizeBytes)
 	readyAt := s.cfg.Now()

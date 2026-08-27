@@ -141,6 +141,19 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 	// the lease for legacy clip jobs — the FASE 6 bug (0 lease acquires).
 	leaseAssetKeys := extractAssetKeysFromJSON(spec.Payload)
 
+	// Admission gate for asset downloads (prefetch category). When RSS is
+	// above 80% of total RAM, new downloads are blocked to prevent OOM.
+	// The task itself is not rejected — it waits until RSS drops below the
+	// recovery threshold (70%) or the admission check passes on retry.
+	if w.admissionController != nil {
+		if decision := w.admissionController.CanAdmit(ResourceClaim{Kind: ResourcePrefetch}); decision != Admit {
+			w.logger.Warn("[ADMISSION] Asset download deferred for task %s: %s (RSS %.0f%%)", pte.TaskID, decision, w.admissionController.RSSPressurePercent())
+			w.admissionController.RecordAdmissionResult(ResourceClaim{Kind: ResourcePrefetch}, false)
+			// Return a partial report so the caller can report the rejection.
+			return failBeforeRun("admission_rejected", fmt.Errorf("resource admission: %s at %.0f%% RSS", decision, w.admissionController.RSSPressurePercent()))
+		}
+	}
+
 	// Operational lifecycle: prefetching assets.
 	w.UpdateOperationalPhase(pte.TaskID, PhasePrefetching)
 	if m := telemetry.MilestoneRecorderFromContext(ctx); m != nil {

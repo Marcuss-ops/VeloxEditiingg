@@ -1,13 +1,16 @@
 // Package collectors provides host-level resource collectors.
 package collectors
 
+import "runtime"
+
 // SampledHost is the boot-time / one-shot host layer used by the worker
 // registration and capability surfaces. It is refreshed independently from
 // per-beat resource samples.
 type SampledHost struct {
-	RAMBytes      int64
-	DiskFreeBytes int64
-	HasGPU        bool
+	RAMBytes          int64
+	DiskFreeBytes     int64
+	HasGPU            bool
+	EffectiveCpuCores int32 // min(logical CPUs, cgroup quota)
 }
 
 // SampleHost reads the host capability layer. RAM and disk values use the
@@ -27,5 +30,6 @@ func (s *Sampler) SampleHost() (*SampledHost, error) {
 	}
 
 	out.HasGPU = detectGPU()
+	out.EffectiveCpuCores = int32(runtime.NumCPU())
 	return out, nil
 }

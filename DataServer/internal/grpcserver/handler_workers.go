@@ -14,10 +14,15 @@ package grpcserver
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"velox-server/internal/logging"
+	"velox-server/internal/workers"
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
+
+	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // handleHeartbeat processes a typed Heartbeat received via gRPC stream.
@@ -93,6 +98,17 @@ func (h *Handler) handleHeartbeat(workerID, sessionID string, hb *pb.Heartbeat) 
 					sess.replaceExecutorRegistry(registry)
 				}
 			}
+		}
+	}
+
+	// Compute CapacityScorecard from resource metrics and set per-phase slots
+	// on the session so the placement matcher can use them.
+	if sess != nil {
+		if scorecard := computeScorecardFromHeartbeat(workerID, extra); scorecard != nil {
+			sess.setPerPhaseSlots(scorecard.RenderSlots, scorecard.PrefetchSlots, scorecard.PublisherSlots)
+			// Push per-phase slot limits to the worker so it enforces
+			// phase-specific admission instead of the flat MaxActiveJobs.
+			h.sendPerPhaseSlotsUpdate(context.Background(), workerID, sess, scorecard)
 		}
 	}
 
@@ -255,5 +271,105 @@ func (h *Handler) handleCommandAck(workerID string, ca *pb.CommandAck) {
 		if err := h.cmdMgr.AckCommandByID(workerID, ca.GetCommandId()); err != nil {
 			logGRPCf(context.Background(), logging.LevelWarn, logging.CodeGRPCCommandFailed, "[GRPC] Command ACK failed for %s (worker %s): %v", ca.GetCommandId(), workerID, err)
 		}
+	}
+}
+
+// computeScorecardFromHeartbeat extracts resource metrics from the heartbeat
+// extra map and computes a CapacityScorecard. Returns nil when insufficient
+// data is available (caller should keep previous scorecard).
+func computeScorecardFromHeartbeat(workerID string, extra map[string]interface{}) *workers.CapacityScorecard {
+	if extra == nil {
+		return nil
+	}
+
+	// Extract resource metrics from the extra map. The heartbeat merges
+	// ResourcesToExtra output into the extra map.
+	input := workers.ScorecardInput{WorkerID: workerID}
+
+	if v, ok := extra["total_ram_bytes"].(float64); ok {
+		input.TotalRAMBytes = int64(v)
+	}
+	if v, ok := extra["memory_available_bytes"].(float64); ok {
+		input.AvailableRAMBytes = int64(v)
+	}
+	if v, ok := extra["effective_cpu_cores"].(float64); ok {
+		input.EffectiveCPUCores = int32(v)
+	}
+	if v, ok := extra["disk_read_mbps"].(float64); ok {
+		input.DiskReadMbps = v
+	}
+	if v, ok := extra["disk_write_mbps"].(float64); ok {
+		input.DiskWriteMbps = v
+	}
+	if v, ok := extra["download_mbps"].(float64); ok {
+		input.DownloadMbps = v
+	}
+	if v, ok := extra["upload_mbps"].(float64); ok {
+		input.UploadMbps = v
+	}
+
+	// Use default per-job cost estimates when no historical data is available.
+	// TODO: feed real per-job costs from task_attempt_metrics when available.
+	if input.RAMPerJobBytes == 0 {
+		input.RAMPerJobBytes = 512 * 1024 * 1024 // 512 MB default
+	}
+	if input.CPUCoresPerJob == 0 {
+		input.CPUCoresPerJob = 1.0
+	}
+	if input.DiskMBpsPerJob == 0 {
+		input.DiskMBpsPerJob = 100.0 // 100 Mbit/s
+	}
+	if input.NetworkMbpsPerJob == 0 {
+		input.NetworkMbpsPerJob = 50.0 // 50 Mbit/s
+	}
+
+	// Only compute when we have at least RAM data
+	if input.AvailableRAMBytes <= 0 {
+		return nil
+	}
+
+	sc := workers.ComputeCapacityScorecard(input)
+	return &sc
+}
+
+// sendPerPhaseSlotsUpdate sends a ConfigurationUpdate with per-phase slot
+// limits to the worker. This is called after the CapacityScorecard is computed
+// so the worker enforces phase-specific admission instead of the flat limit.
+func (h *Handler) sendPerPhaseSlotsUpdate(ctx context.Context, workerID string, sess *workerSession, sc *workers.CapacityScorecard) {
+	if sc == nil || sess == nil {
+		return
+	}
+	// Only send when per-phase slots are actually different from zero.
+	if sc.RenderSlots <= 0 && sc.PrefetchSlots <= 0 && sc.PublisherSlots <= 0 {
+		return
+	}
+
+	cfgMap := map[string]interface{}{
+		"max_parallel_jobs": float64(sc.RenderSlots),
+		"render_slots":      float64(sc.RenderSlots),
+		"prefetch_slots":    float64(sc.PrefetchSlots),
+		"publisher_slots":   float64(sc.PublisherSlots),
+	}
+	cfgStruct, err := structpb.NewStruct(cfgMap)
+	if err != nil {
+		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCPlacement, "[CAPACITY] failed to encode per-phase slots for worker %s: %v", workerID, err)
+		return
+	}
+
+	env := &pb.MasterToWorkerEnvelope{
+		MessageId:       fmt.Sprintf("config-phase-slots-%s-%d", workerID, time.Now().UnixNano()),
+		WorkerId:        workerID,
+		SessionId:       sess.sessionID,
+		SentAt:          timestamppb.Now(),
+		ProtocolVersion: controltransport.ProtocolVersionCurrent,
+		Msg: &pb.MasterToWorkerEnvelope_ConfigurationUpdate{
+			ConfigurationUpdate: &pb.ConfigurationUpdate{
+				Configuration: cfgStruct,
+			},
+		},
+	}
+
+	if !safeSend(sess.sendCh, &outboundMessage{Envelope: env}) {
+		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCPlacement, "[CAPACITY] sendCh full for per-phase slots to worker %s", workerID)
 	}
 }

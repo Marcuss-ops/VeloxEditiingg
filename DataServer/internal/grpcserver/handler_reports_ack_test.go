@@ -47,7 +47,7 @@ func TestHandleTaskResult_SendsTaskResultAckOnSuccess(t *testing.T) {
 	sendCh := make(chan *outboundMessage, 1)
 	sess := &workerSession{sendCh: sendCh}
 
-	handler.handleTaskResult(fx.workerID, tr, sess)
+	handler.handleTaskResult(fx.workerID, tr, sess, time.Time{})
 
 	select {
 	case out := <-sendCh:
@@ -118,7 +118,7 @@ func TestHandleTaskResult_SendsTaskResultAckOnReportConflict(t *testing.T) {
 	}
 	sendCh := make(chan *outboundMessage, 1)
 	sess := &workerSession{sendCh: sendCh}
-	handler.handleTaskResult(fx.workerID, tr, sess)
+	handler.handleTaskResult(fx.workerID, tr, sess, time.Time{})
 
 	select {
 	case out := <-sendCh:
@@ -184,7 +184,7 @@ func TestHandleTaskResult_NoAckOnInternalError(t *testing.T) {
 	}
 	sendCh := make(chan *outboundMessage, 1)
 	sess := &workerSession{sendCh: sendCh}
-	handler.handleTaskResult(fx.workerID, tr, sess)
+	handler.handleTaskResult(fx.workerID, tr, sess, time.Time{})
 
 	select {
 	case out := <-sendCh:

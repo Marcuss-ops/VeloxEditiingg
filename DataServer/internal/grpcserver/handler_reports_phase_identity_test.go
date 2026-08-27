@@ -2,6 +2,7 @@ package grpcserver
 
 import (
 	"testing"
+	"time"
 
 	pb "velox-shared/controltransport/pb"
 )
@@ -47,7 +48,7 @@ func TestHandleTaskResult_DetailedPhaseIdentityUsesMasterCanonicalValues(t *test
 		},
 	}
 
-	handler.handleTaskResult(fx.workerID, tr, nil)
+	handler.handleTaskResult(fx.workerID, tr, nil, time.Time{})
 
 	if len(taskRepo.lastPhaseTimings) != 1 {
 		t.Fatalf("persisted phase timings = %d; want 1", len(taskRepo.lastPhaseTimings))

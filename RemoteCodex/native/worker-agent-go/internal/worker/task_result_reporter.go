@@ -35,7 +35,12 @@ const (
 // this interface; the composition root (New) builds the concrete
 // implementation and wires its dependencies.
 type TaskResultReporter interface {
-	Submit(ctx context.Context, pte *PendingTaskExecution, taskID, attemptID string, report *taskrunner.TaskExecutionReport, execErr error)
+	// Submit builds, hashes, and publishes the TaskResult. It returns the
+	// WorkerToMasterEnvelope.sent_at timestamp (the real transport boundary
+	// when the envelope was serialized) so the caller can stamp
+	// result.sent with the exact wire timestamp rather than the wall clock
+	// after Submit() returns.
+	Submit(ctx context.Context, pte *PendingTaskExecution, taskID, attemptID string, report *taskrunner.TaskExecutionReport, execErr error) time.Time
 	HandleAck(ack *pb.TaskResultAck)
 	StartReplayLoop(ctx context.Context)
 }
@@ -101,7 +106,9 @@ type taskResultReporterConfig struct {
 
 // Submit coordinates classification, construction, hashing, and publication.
 // Terminal cleanup remains gated on HandleAck in the publication module.
-func (r *taskResultReporter) Submit(ctx context.Context, pte *PendingTaskExecution, taskID, attemptID string, report *taskrunner.TaskExecutionReport, execErr error) {
+// Returns the WorkerToMasterEnvelope.sent_at timestamp so the caller can
+// stamp result.sent with the exact wire boundary.
+func (r *taskResultReporter) Submit(ctx context.Context, pte *PendingTaskExecution, taskID, attemptID string, report *taskrunner.TaskExecutionReport, execErr error) time.Time {
 	resultStartedAt := time.Now()
 	status, errorCode, errorDetail := classifyTaskResultOutcome(report, execErr)
 	tr := buildTaskResult(r, pte, taskID, attemptID, report, status, errorCode, errorDetail)
@@ -116,5 +123,6 @@ func (r *taskResultReporter) Submit(ctx context.Context, pte *PendingTaskExecuti
 		tr.ReportHash = fmt.Sprintf("%x", sha256.Sum256(reportJSON))
 	}
 
-	r.publishTaskResult(ctx, pte, taskID, attemptID, report, tr, status, resultStartedAt)
+	sentAt := r.publishTaskResult(ctx, pte, taskID, attemptID, report, tr, status, resultStartedAt)
+	return sentAt
 }

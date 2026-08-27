@@ -13,6 +13,7 @@ package collectors
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -52,4 +53,39 @@ func (s *Sampler) readSelfStatm() (rssPages, peakPages int64, err error) {
 		}
 	}
 	return rssPages, peakPages, nil
+}
+
+// readFDCount reads the current process's open file descriptor count from
+// /proc/self/fd and the soft limit from getrlimit(RLIMIT_NOFILE).
+// Falls back to zero values on non-Linux or when /proc is unavailable.
+func (s *Sampler) readFDCount() (open, max int64, err error) {
+	// Count entries in /proc/self/fd — this is the standard Linux way
+	// to get the current open FD count.
+	entries, readErr := os.ReadDir(filepath.Join(s.procRoot, "self", "fd"))
+	if readErr != nil {
+		// Tolerant: non-Linux, containers, or chroots without /proc/self/fd.
+		return 0, 0, nil
+	}
+	open = int64(len(entries))
+
+	// Read the soft limit from /proc/self/limits.
+	limitsData, limErr := readFile(filepath.Join(s.procRoot, "self", "limits"))
+	if limErr != nil {
+		// Non-fatal: some containers restrict /proc/self/limits.
+		return open, 0, nil
+	}
+	for _, ln := range strings.Split(string(limitsData), "\n") {
+		if strings.HasPrefix(ln, "Max open files") {
+			fields := strings.Fields(ln)
+			if len(fields) >= 5 {
+				// Layout: "Max open files <soft> <hard> <units>"
+				soft, parseErr := strconv.ParseInt(fields[2], 10, 64)
+				if parseErr == nil && soft > 0 {
+					max = soft
+				}
+			}
+			break
+		}
+	}
+	return open, max, nil
 }

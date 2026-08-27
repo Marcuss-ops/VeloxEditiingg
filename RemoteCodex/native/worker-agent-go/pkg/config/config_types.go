@@ -65,6 +65,13 @@ type WorkerConfig struct {
 	PrometheusPort int `json:"prometheus_port,omitempty"` // Prometheus metrics port (default: 9090; set via VELOX_PROMETHEUS_PORT=0 to disable)
 	HealthPort     int `json:"health_port"`               // Health HTTP port (default: 8081, 0=disabled)
 
+	// Per-phase slot limits from the Master CapacityScorecard. When > 0,
+	// these override the flat MaxActiveJobs for admission of tasks in that
+	// phase. Zero means "not configured" — fall back to flat limit.
+	RenderSlots    int `json:"render_slots,omitempty"`    // max concurrent render tasks
+	PrefetchSlots  int `json:"prefetch_slots,omitempty"`  // max concurrent prefetch tasks
+	PublisherSlots int `json:"publisher_slots,omitempty"` // max concurrent publisher tasks
+
 	// AssetDownloadConcurrency caps the number of simultaneous asset byte
 	// transfers the canonical download manager runs per worker. Binds from
 	// VELOX_ASSET_DOWNLOAD_CONCURRENCY; default 4.
@@ -110,6 +117,12 @@ type WorkerConfig struct {
 	PrefetchRAMMaxAssetBytes           int64 `json:"prefetch_ram_max_asset_bytes,omitempty"`
 	PrefetchRAMMinFutureRefs           int   `json:"prefetch_ram_min_future_refs,omitempty"`
 	PrefetchRAMMaxNextUseDistance      int   `json:"prefetch_ram_max_next_use_distance,omitempty"`
+
+	// Network admission controller: shared bandwidth budgets for
+	// publish (P0), runtime (P1), and prefetch (P2) consumers.
+	// 0 means unlimited (no pacing).
+	NetworkIngressBudgetBytesPerSecond int64 `json:"network_ingress_budget_bytes_per_second,omitempty"`
+	NetworkEgressBudgetBytesPerSecond  int64 `json:"network_egress_budget_bytes_per_second,omitempty"`
 
 	// ControlGRPCURL is the gRPC endpoint for the persistent worker control stream.
 	// Velox exclusively uses a gRPC-push architecture; this field is mandatory.

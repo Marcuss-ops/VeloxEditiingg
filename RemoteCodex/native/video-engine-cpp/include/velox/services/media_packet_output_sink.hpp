@@ -10,6 +10,8 @@ extern "C" {
 #include <functional>
 #include <string>
 
+#include "velox/services/file_utils.hpp"
+
 namespace velox::media::packet {
 
 struct PacketOutputSinkResult {
@@ -22,6 +24,10 @@ struct PacketOutputSinkResult {
     // Both are zero on a clean append-only write.
     int64_t backward_seek_count{0};
     int64_t backward_seek_bytes{0};
+    // Durability evidence: set to true when finalize() successfully
+    // fsynced the file data. The caller (publishAtomic) can use this to
+    // skip the redundant file-level fsync.
+    bool file_data_synced{false};
 };
 
 // Progress callback invoked after each write to the output sink.  The

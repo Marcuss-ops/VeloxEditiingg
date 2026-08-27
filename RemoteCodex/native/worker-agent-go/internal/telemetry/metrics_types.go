@@ -36,6 +36,7 @@ type CounterVec struct {
 type GaugeVec struct {
 	Name   string
 	Help   string
+	Label  string
 	mu     sync.RWMutex
 	values map[string]float64
 }
@@ -210,8 +211,12 @@ func (g *GaugeVec) export() string {
 	var output string
 	output += fmt.Sprintf("# HELP %s %s\n", g.Name, g.Help)
 	output += fmt.Sprintf("# TYPE %s gauge\n", g.Name)
+	labelName := g.Label
+	if labelName == "" {
+		labelName = "label"
+	}
 	for label, value := range g.values {
-		output += fmt.Sprintf("%s{label=\"%s\"} %g\n", g.Name, label, value)
+		output += fmt.Sprintf("%s{%s=\"%s\"} %g\n", g.Name, labelName, label, value)
 	}
 	return output
 }

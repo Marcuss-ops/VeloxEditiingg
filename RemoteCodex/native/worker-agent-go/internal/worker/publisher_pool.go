@@ -9,14 +9,26 @@ import (
 
 const defaultPublisherConcurrency = 4
 
+// PublisherAdmissionController is the subset of ResourceAdmissionController
+// needed by the publisher pool. Defined as an interface to keep the pool
+// testable without importing the full controller.
+type PublisherAdmissionController interface {
+	IsThrottled(kind ResourceKind) bool
+}
+
 // PublisherPool bounds concurrent publication work while serializing the
 // lifecycle of one artifact/spool ID. Different artifacts may publish in
 // parallel; foreground publish and resume for the same key cannot overlap.
+// When an AdmissionController is wired, the pool applies publish-category
+// backpressure: new acquisitions block when RSS exceeds 88% of total RAM,
+// reducing effective concurrency until RSS drops below 78%.
 type PublisherPool struct {
 	sem chan struct{}
 
 	mu    sync.Mutex
 	locks map[string]*publisherKeyLock
+
+	admissionCtrl PublisherAdmissionController
 }
 
 type publisherKeyLock struct {
@@ -34,6 +46,16 @@ func NewPublisherPool(concurrency int) *PublisherPool {
 	}
 }
 
+// SetAdmissionController wires the RSS-based admission controller into
+// the pool. When non-nil, Acquire blocks under publish-category
+// backpressure (RSS > 88%) and records admission results so hysteresis
+// state can recover.
+func (p *PublisherPool) SetAdmissionController(ctrl PublisherAdmissionController) {
+	if p != nil {
+		p.admissionCtrl = ctrl
+	}
+}
+
 // Concurrency returns the configured maximum number of simultaneous
 // publishers. It is useful for diagnostics and tests.
 func (p *PublisherPool) Concurrency() int {
@@ -46,6 +68,23 @@ func (p *PublisherPool) Concurrency() int {
 func (p *PublisherPool) Acquire(ctx context.Context) error {
 	if p == nil || p.sem == nil {
 		return fmt.Errorf("publisher pool is not configured")
+	}
+	// When the admission controller is wired, apply publish-category
+	// backpressure: block until RSS drops below the recovery threshold
+	// (78%) or the context is cancelled. This reduces effective
+	// concurrency under memory pressure without rejecting uploads.
+	if p.admissionCtrl != nil {
+		for p.admissionCtrl.IsThrottled(ResourcePublish) {
+			timer := time.NewTimer(250 * time.Millisecond)
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				if !timer.Stop() {
+					<-timer.C
+				}
+				return ctx.Err()
+			}
+		}
 	}
 	select {
 	case p.sem <- struct{}{}:
@@ -63,6 +102,7 @@ func (p *PublisherPool) Release() {
 	case <-p.sem:
 	default:
 	}
+
 }
 
 func (p *PublisherPool) TryAcquire() bool {

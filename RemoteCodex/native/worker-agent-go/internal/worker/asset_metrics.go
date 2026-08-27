@@ -11,6 +11,7 @@ import (
 
 	sharedtelemetry "velox-shared/telemetry"
 	"velox-worker-agent/internal/downloader"
+	"velox-worker-agent/internal/prefetch"
 	"velox-worker-agent/internal/taskrunner"
 	"velox-worker-agent/internal/telemetry"
 )
@@ -44,6 +45,23 @@ type AttemptCacheMetrics struct {
 	CacheMisses        int64
 	CacheDownloadCount int64
 	CacheDownloadBytes int64
+	// Byte-level attribution: the single cacheResolutionSink is the ONLY
+	// authority for these counters. They are derived from CacheResolution
+	// fields at the single resolution point — never re-derived by report
+	// builders or metric adapters.
+	CacheHitBytes  int64 // total bytes served from verified local cache
+	CacheMissBytes int64 // total bytes downloaded from remote
+	// PrefetchHitBytes is the subset of CacheHitBytes where Origin == prefetch.
+	// The remainder (CacheHitBytes - PrefetchHitBytes) is warm_cache bytes.
+	PrefetchHitBytes int64
+	// PrefetchHitCount is the number of resolutions served from prefetch
+	// (Origin == prefetch). Paired with PrefetchHitBytes for count+byte
+	// attribution from the single cacheResolutionSink authority.
+	PrefetchHitCount int64
+	// Origin counters: exactly one of these is incremented per resolution.
+	OriginPrefetchCount  int64
+	OriginWarmCacheCount int64
+	OriginDownloadCount  int64
 }
 
 // AssetPreparationSummary is the per-attempt asset materialization drill-down.
@@ -58,6 +76,16 @@ type AssetPreparationSummary struct {
 	CacheMisses   int
 	ReadyBefore   int // served from a verified local file (no bytes moved)
 	DownloadedNow int // bytes transferred during this attempt
+
+	// Origin counts: how many assets were resolved via each path.
+	PrefetchHits  int // assets resolved from prefetch (PreparedJob match)
+	WarmCacheHits int // assets resolved from warm cache (no PreparedJob)
+	RuntimeDownloads int // bytes downloaded during this attempt (count)
+
+	// Byte-level attribution: derived from the single cacheResolutionSink.
+	CacheHitBytes   int64 // total bytes served from verified local cache
+	CacheMissBytes  int64 // total bytes downloaded from remote
+	PrefetchHitBytes int64 // bytes served from prefetch (subset of CacheHitBytes)
 
 	CacheLookupMS      int64
 	RemoteWaitMS       int64
@@ -100,6 +128,19 @@ func (t *assetOperationTracker) recordResolution(resolution downloader.CacheReso
 	if resolution.Downloaded {
 		t.cache.CacheDownloadCount++
 		t.cache.CacheDownloadBytes += resolution.DownloadBytes
+	}
+	switch resolution.Origin {
+	case downloader.OriginPrefetch:
+		t.cache.OriginPrefetchCount++
+		t.cache.PrefetchHitCount++
+		t.cache.CacheHitBytes += resolution.SizeBytes
+		t.cache.PrefetchHitBytes += resolution.SizeBytes
+	case downloader.OriginWarmCache:
+		t.cache.OriginWarmCacheCount++
+		t.cache.CacheHitBytes += resolution.SizeBytes
+	case downloader.OriginRuntimeDownload:
+		t.cache.OriginDownloadCount++
+		t.cache.CacheMissBytes += resolution.DownloadBytes
 	}
 	t.prep.AssetsTotal++
 	if assetID := strings.TrimSpace(resolution.AssetID); assetID != "" {
@@ -180,6 +221,12 @@ func (t *assetOperationTracker) prepSnapshot() AssetPreparationSummary {
 	out.AssetsUnique = len(t.uniqueAssets)
 	out.CacheHits = int(t.cache.CacheHits)
 	out.CacheMisses = int(t.cache.CacheMisses)
+	out.PrefetchHits = int(t.cache.OriginPrefetchCount)
+	out.WarmCacheHits = int(t.cache.OriginWarmCacheCount)
+	out.RuntimeDownloads = int(t.cache.OriginDownloadCount)
+	out.CacheHitBytes = t.cache.CacheHitBytes
+	out.CacheMissBytes = t.cache.CacheMissBytes
+	out.PrefetchHitBytes = t.cache.PrefetchHitBytes
 	return out
 }
 
@@ -208,9 +255,41 @@ func recordAssetOperation(ctx context.Context, record AssetOperationRecord) {
 //
 // It also emits the structured per-attempt cache event (hit_read/miss),
 // replacing the previous transfer-scoped emissions inside the transferer.
-type cacheResolutionSink struct{}
+//
+// The sink classifies ResolutionOrigin by consulting the PreparedJob
+// read model: a cache hit with a matching PreparedJob entry is
+// OriginPrefetch; a cache hit without one is OriginWarmCache; a cache
+// miss is always OriginRuntimeDownload.
+type cacheResolutionSink struct {
+	// preparedJobs returns the current PreparedJob read model from the
+	// prefetch scheduler. The callback is invoked once per cache hit to
+	// classify the origin; it must be non-blocking.
+	preparedJobs func() []prefetch.PreparedJob
 
-func (cacheResolutionSink) RecordResolution(ctx context.Context, resolution downloader.CacheResolution) {
+	// invalidatePreparedAsset removes a prepared asset entry when its
+	// integrity check fails at runtime (SHA/size mismatch after prefetch).
+	// This prevents stale PreparedJob metadata from misclassifying future
+	// resolutions. The callback must be non-blocking.
+	invalidatePreparedAsset func(jobID, assetKey string)
+}
+
+func (s cacheResolutionSink) RecordResolution(ctx context.Context, resolution downloader.CacheResolution) {
+	// Classify origin for cache hits.
+	if resolution.CacheHit && resolution.Origin == "" {
+		resolution.Origin = s.classifyOrigin(resolution)
+	} else if !resolution.CacheHit && resolution.Origin == "" {
+		resolution.Origin = downloader.OriginRuntimeDownload
+	}
+	// Invalidate corrupt prepared assets: when a cache miss is classified as
+	// MISS_INVALID or MISS_HASH_MISMATCH and there's a matching PreparedJob
+	// entry, the prefetch's preparation evidence is stale. Remove it so
+	// future resolutions don't misclassify the origin.
+	if !resolution.CacheHit && s.invalidatePreparedAsset != nil {
+		switch resolution.Outcome {
+		case downloader.CacheOutcomeMissInvalid, downloader.CacheOutcomeMissHashMismatch:
+			s.invalidateCorruptPreparedAsset(resolution)
+		}
+	}
 	// Attempt view: zero-based per-attempt counters.
 	if tracker := assetOperationTrackerFromContext(ctx); tracker != nil {
 		tracker.recordResolution(resolution)
@@ -228,11 +307,66 @@ func (cacheResolutionSink) RecordResolution(ctx context.Context, resolution down
 		h := rec.Begin(telemetry.EventSpec{Origin: telemetry.OriginWorker, Scope: telemetry.ScopeTask, Component: "worker.cache", Action: action})
 		h.SetMetadata("asset_id", resolution.AssetID)
 		h.SetMetadata("outcome", string(resolution.Outcome))
+		h.SetMetadata("origin", string(resolution.Origin))
 		if resolution.Downloaded {
 			h.SetMetadata("downloaded_bytes", resolution.DownloadBytes)
 		}
 		h.Complete()
 	}
+}
+
+// invalidateCorruptPreparedAsset checks if a failed resolution corresponds
+// to a prepared asset and invalidates the stale entry. This is called when
+// the transferer classifies a cache entry as invalid (SHA/size mismatch),
+// meaning the prefetch's preparation evidence is no longer trustworthy.
+func (s cacheResolutionSink) invalidateCorruptPreparedAsset(resolution downloader.CacheResolution) {
+	if s.preparedJobs == nil || s.invalidatePreparedAsset == nil {
+		return
+	}
+	jobs := s.preparedJobs()
+	for _, job := range jobs {
+		for assetKey, asset := range job.Assets {
+			// Match by SHA256 — the prepared asset's identity.
+			if asset.SHA256 == string(resolution.SHA256) {
+				s.invalidatePreparedAsset(job.JobID, assetKey)
+				// Emit corruption metric.
+				switch resolution.Outcome {
+				case downloader.CacheOutcomeMissInvalid:
+					telemetry.GetPrometheusMetrics().RecordPrefetchCorrupted("size_mismatch")
+				case downloader.CacheOutcomeMissHashMismatch:
+					telemetry.GetPrometheusMetrics().RecordPrefetchCorrupted("hash_mismatch")
+				}
+				return
+			}
+		}
+	}
+}
+
+// classifyOrigin determines the ResolutionOrigin for a cache hit by checking
+// whether the asset has a matching PreparedJob entry. A PreparedJob with
+// matching SHA256 and size proves the asset was materialized by a
+// FutureAssetPlan before the current attempt — this is OriginPrefetch. A
+// cache hit without a PreparedJob entry is OriginWarmCache (the asset was
+// already local from a prior job or session).
+func (s cacheResolutionSink) classifyOrigin(resolution downloader.CacheResolution) downloader.ResolutionOrigin {
+	if s.preparedJobs == nil {
+		return downloader.OriginWarmCache
+	}
+	jobs := s.preparedJobs()
+	for _, job := range jobs {
+		for _, asset := range job.Assets {
+			if asset.SHA256 == string(resolution.SHA256) && asset.SizeBytes > 0 {
+				// Prefer the origin carried on the PreparedAssetMetadata when
+				// available. The scheduler tags each prepared asset at prefetch
+				// time; this avoids re-deriving the origin from scratch.
+				if asset.Origin != "" {
+					return asset.Origin
+				}
+				return downloader.OriginPrefetch
+			}
+		}
+	}
+	return downloader.OriginWarmCache
 }
 
 func cacheAssetKey(assetID, expectedSHA256 string) string {
@@ -396,6 +530,9 @@ func attachAssetOperations(report *taskrunner.TaskExecutionReport, tracker *asse
 	legacy["asset.cache.miss.count"] = cache.CacheMisses
 	legacy["asset.cache.download.count"] = cache.CacheDownloadCount
 	legacy["asset.cache.download.bytes"] = cache.CacheDownloadBytes
+	legacy["asset.cache.hit.bytes"] = cache.CacheHitBytes
+	legacy["asset.cache.miss.bytes"] = cache.CacheMissBytes
+	legacy["asset.cache.prefetch.hit.bytes"] = cache.PrefetchHitBytes
 	// Per-attempt asset-preparation drill-down. nested under the requested
 	// field names; wall vs work are kept distinct so parallel downloads do not
 	// inflate the attempt wall.
@@ -451,6 +588,14 @@ func projectAttemptCacheFacts(report *taskrunner.TaskExecutionReport, cache Atte
 		raw.AssetCacheMissCount = cache.CacheMisses
 		raw.CacheDownloadCount = cache.CacheDownloadCount
 		raw.CacheDownloadBytes = cache.CacheDownloadBytes
+		raw.CacheHitBytes = cache.CacheHitBytes
+		raw.CacheMissBytes = cache.CacheMissBytes
+		// Single-chain projection: BytesFromLocalCache is the attempt-scoped
+		// cache hit volume from the resolver sink, NOT the provider's total
+		// cache size. The sink is the sole authority for this value.
+		raw.BytesFromLocalCache = cache.CacheHitBytes
+		// Per-job resource attribution (migration 160): prefetch bytes.
+		raw.JobPrefetchBytes = cache.PrefetchHitBytes
 	}
 	if len(records) > 0 {
 		uniqueAssets := make(map[string]struct{}, len(records))

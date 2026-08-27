@@ -99,12 +99,60 @@ func resourcesMetricDefinitions() []MetricDefinition {
 			Description: "Total task slots available on the worker",
 		},
 		{
+			Name: "worker.cpu_user_ratio", Unit: "ratio", Component: CompWorker, Kind: KindGauge,
+			Description: "Worker CPU user-space ratio (0-1)",
+		},
+		{
+			Name: "worker.cpu_system_ratio", Unit: "ratio", Component: CompWorker, Kind: KindGauge,
+			Description: "Worker CPU kernel-space ratio (0-1)",
+		},
+		{
+			Name: "worker.effective_cpu_cores", Unit: "count", Component: CompWorker, Kind: KindGauge,
+			Description: "Worker effective CPU cores (min logical, cgroup quota)",
+		},
+		{
+			Name: "worker.page_cache_bytes", Unit: "bytes", Component: CompWorker, Kind: KindGauge,
+			Description: "Worker kernel page cache (Buffers+Cached)",
+		},
+		{
+			Name: "worker.disk_read_mbps", Unit: "megabytes_per_second", Component: CompWorker, Kind: KindGauge,
+			Description: "Worker disk read throughput (MB/s)",
+		},
+		{
+			Name: "worker.disk_write_mbps", Unit: "megabytes_per_second", Component: CompWorker, Kind: KindGauge,
+			Description: "Worker disk write throughput (MB/s)",
+		},
+		{
+			Name: "worker.disk_io_wait_ms", Unit: "milliseconds", Component: CompWorker, Kind: KindGauge,
+			Description: "Worker disk I/O wait (cumulative ms)",
+		},
+		{
+			Name: "worker.render_jobs_active", Unit: "count", Component: CompWorker, Kind: KindGauge,
+			Description: "Worker active render jobs",
+		},
+		{
+			Name: "worker.prefetch_jobs_active", Unit: "count", Component: CompWorker, Kind: KindGauge,
+			Description: "Worker active prefetch jobs",
+		},
+		{
+			Name: "worker.publisher_jobs_active", Unit: "count", Component: CompWorker, Kind: KindGauge,
+			Description: "Worker active publisher jobs",
+		},
+		{
 			Name: "worker.network_receive_bytes", Unit: "bytes", Component: CompWorker, Kind: KindCounter,
 			Description: "Worker total network bytes received (cumulative delta per heartbeat)",
 		},
 		{
 			Name: "worker.network_transmit_bytes", Unit: "bytes", Component: CompWorker, Kind: KindCounter,
 			Description: "Worker total network bytes transmitted (cumulative delta per heartbeat)",
+		},
+		{
+			Name: "worker.download_mbps", Unit: "megabits_per_second", Component: CompWorker, Kind: KindGauge,
+			Description: "Worker network download throughput (Mbit/s)",
+		},
+		{
+			Name: "worker.upload_mbps", Unit: "megabits_per_second", Component: CompWorker, Kind: KindGauge,
+			Description: "Worker network upload throughput (Mbit/s)",
 		},
 		{
 			Name: "worker.heartbeat_age_seconds", Unit: "seconds", Component: CompWorker, Kind: KindGauge,

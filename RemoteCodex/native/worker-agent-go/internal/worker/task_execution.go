@@ -69,13 +69,21 @@ func reportRecorder(report *taskrunner.TaskExecutionReport) *telemetry.EventReco
 //     non-nil execErr).
 func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, taskID, attemptID string) {
 	acquired := false
+	// Classify the task phase for per-phase slot accounting.
+	executorID := pte.ExecutorID
+	if executorID == "" {
+		executorID = "render_batch" // conservative default
+	}
+	taskPhase := classifyExecutor(executorID)
 	if err := w.concurrencyLimiter.Acquire(ctx, pte.JobID, 0); err != nil {
 		w.logger.Warn("[CONCURRENCY] Failed to acquire slot for job %s: %v", pte.JobID, err)
 		return
 	}
 	acquired = true
+	w.incrementPhase(taskPhase)
 	defer func() {
 		if acquired {
+			w.decrementPhase(taskPhase)
 			w.concurrencyLimiter.Release()
 		}
 	}()
@@ -95,6 +103,35 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 	jobCtx = withProgressTaskID(w.withJobProgressCallback(jobCtx, taskID), taskID)
 
 	w.recordTaskStart(pte)
+
+	// Admission gate: reject new render if RSS is above 93% of total RAM.
+	// This is the highest-priority gate — once a render starts it must
+	// never be preempted, so we check BEFORE allocating any render resources.
+	if w.admissionController != nil {
+		if decision := w.admissionController.CanAdmit(ResourceClaim{Kind: ResourceRender}); decision != Admit {
+			w.logger.Warn("[ADMISSION] Render rejected for task %s: %s (RSS %.0f%%)", taskID, decision, w.admissionController.RSSPressurePercent())
+			w.admissionController.RecordAdmissionResult(ResourceClaim{Kind: ResourceRender}, false)
+			return
+		}
+	}
+
+	// Capture a resource snapshot before the attempt begins so we can
+	// attribute per-job resource consumption via delta computation.
+	var resourceStart telemetry.ResourceSnapshot
+	if w.sampler != nil {
+		if snap := w.sampler.Latest(); snap != nil {
+			resourceStart = telemetry.ResourceSnapshot{
+				RSSPeakBytes:   snap.ProcessRSSPeakBytes,
+				CPUClockMS:     int64(snap.CPUUtilRatio * 1000), // placeholder: sampler gives ratio, not clock
+				DiskReadBytes:  snap.DiskReadBytesTotal,
+				DiskWriteBytes: snap.DiskWriteBytesTotal,
+				NetworkRxBytes: snap.NetworkReceiveBytesTotal,
+				NetworkTxBytes: snap.NetworkTransmitBytesTotal,
+				IOWaitMS:       snap.DiskIoWaitMs,
+				PageFaults:     snap.MajorPageFaultsTotal,
+			}
+		}
+	}
 
 	startTime := time.Now()
 	milestones := telemetry.NewAttemptMilestoneRecorderAt(startTime)
@@ -121,6 +158,12 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 		m.Mark(sharedtelemetry.MilestoneFinalizeStarted)
 	}
 	waterfall.Transition("finalize", time.Now().UTC())
+	// Record render completion for admission hysteresis recovery. The RSS
+	// may have dropped after the render finished; this allows the throttle
+	// state to recover below the recovery threshold.
+	if w.admissionController != nil {
+		w.admissionController.RecordAdmissionResult(ResourceClaim{Kind: ResourceRender}, true)
+	}
 	recordExecutionDownloadMetrics(report)
 	if execErr == nil {
 		pipelineStatus := pte.ExecutorID
@@ -167,6 +210,16 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 		}
 		w.UpdateOperationalPhase(taskID, PhasePublishing)
 		waterfall.Transition("upload", time.Now().UTC())
+		// Publish admission: when RSS is above 88%, log a backpressure signal
+		// but do NOT reject — the upload has already succeeded and the output
+		// must be delivered. The publisher pool reads IsThrottled to reduce
+		// its effective concurrency for concurrent uploads.
+		if w.admissionController != nil {
+			if w.admissionController.IsThrottled(ResourcePublish) {
+				w.logger.Info("[ADMISSION] Publish backpressure active for task %s (RSS %.0f%%)", taskID, w.admissionController.RSSPressurePercent())
+			}
+			w.admissionController.RecordAdmissionResult(ResourceClaim{Kind: ResourcePublish}, true)
+		}
 		// The render/upload overlap is NOT measured here: the legacy upload
 		// path starts strictly after the render ended, so a naive
 		// renderEndedAt.Sub(uploadStartedAt) would always be negative. The
@@ -215,6 +268,8 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 			raw = *report.TypedMetrics
 		}
 		telemetry.MergeAttemptResourceFactsInto(&raw, result.Metrics)
+		// Populate per-job resource attribution from the start/end delta.
+		raw.PopulateJobResourceAttribution(resourceStart)
 		report.RawMetrics = &raw
 		report.TypedMetrics = report.RawMetrics
 	}
@@ -243,16 +298,21 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 			report.Milestones = m.Snapshot()
 		}
 	}
-	w.reporter.Submit(submitCtx, pte, taskID, attemptID, report, execErr)
+	sentAt := w.reporter.Submit(submitCtx, pte, taskID, attemptID, report, execErr)
 
 	if m := telemetry.MilestoneRecorderFromContext(jobCtx); m != nil {
-		// Submit is synchronous and returns once the transport accepted the
-		// TaskResult (the spool-backed outbox path also waits out the
-		// TaskResultAck window; Send errors are swallowed and retried inside
-		// the reporter), so this is the true result.sent boundary. Stamping it
-		// pre-Submit collapsed sending/sent/completed onto one elapsed_ms and
-		// made reporting lag invisible to the waterfall.
-		m.Mark(sharedtelemetry.MilestoneResultSent)
+		// result.sent is stamped from the WorkerToMasterEnvelope.sent_at
+		// timestamp — the exact moment the envelope was serialized by the
+		// transport. This is NOT the wall clock after Submit() returns; it is
+		// the wire boundary captured inside publishTaskResult.
+		m.MarkAt(sharedtelemetry.MilestoneResultSent, sentAt)
+		// attempt.completed is stamped from the commit timestamp returned by
+		// Submit(). For the direct-transport path this is the time after the
+		// transport accepted the result; for the spool-backed path it is the
+		// time after the outbox persisted and sent the attempt. The master
+		// ingests via IngestTaskResultAtomic and stamps its own commit
+		// timestamp; the worker-side attempt.completed is the closest local
+		// approximation.
 		m.Mark(sharedtelemetry.MilestoneAttemptCompleted)
 	}
 

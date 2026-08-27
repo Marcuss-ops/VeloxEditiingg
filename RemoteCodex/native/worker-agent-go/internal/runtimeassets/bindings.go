@@ -1,6 +1,10 @@
 package runtimeassets
 
-import "context"
+import (
+	"context"
+
+	"velox-worker-agent/internal/downloader"
+)
 
 // Binding is a worker-local materialization of one canonical asset identity.
 // Paths never belong in CompiledRenderPlanV2; they exist only for execution.
@@ -14,6 +18,11 @@ type Binding struct {
 	// binding. Executors still stat the file, but do not reread a warm cache
 	// blob solely to repeat the same integrity scan for every job.
 	Verified bool
+	// Origin records how this asset was materialized: warm_cache, prefetch,
+	// or runtime_download. Propagated from PreparedAssetMetadata by the
+	// fast-assembly binding path so certification tests can assert the
+	// resolution origin without re-deriving it.
+	Origin downloader.ResolutionOrigin
 }
 
 // Bindings maps canonical asset IDs to verified local files.

@@ -46,6 +46,16 @@ std::filesystem::path makeTempDir(const std::filesystem::path& base, const std::
 // partial beside the target guarantees that publishAtomic can rename without
 // crossing filesystems.
 std::filesystem::path makePartialPath(const std::filesystem::path& target);
+// DurabilityEvidence carries proof that the file data was already synced
+// to stable storage before publishAtomic was called. When
+// file_data_synced is true, publishAtomic skips the redundant
+// fsync(file) and only performs the atomic rename + directory fsync.
+// The zero value (file_data_synced=false) preserves the original
+// behavior: publishAtomic opens the file, fsyncs it, renames, and
+// fsyncs the directory.
+struct DurabilityEvidence {
+    bool file_data_synced{false};
+};
 // Publishes an already-complete partial: fsync(file), atomic rename, then
 // fsync(parent directory). The partial and target must share a directory.
 // Returns false only before the rename commit; after a successful rename the
@@ -54,6 +64,16 @@ std::filesystem::path makePartialPath(const std::filesystem::path& target);
 // explicitly represents the published-but-not-durable state.
 bool publishAtomic(const std::filesystem::path& partial,
                    const std::filesystem::path& target,
+                   std::string* error = nullptr,
+                   bool* durable = nullptr);
+// Overload that accepts DurabilityEvidence. When evidence.file_data_synced
+// is true the file-level fsync is skipped (the caller already performed
+// it); only the atomic rename + directory fsync are executed. This
+// eliminates the double-flush in the packet mux path where
+// PacketOutputSink::finalize() already fsyncs the file.
+bool publishAtomic(const std::filesystem::path& partial,
+                   const std::filesystem::path& target,
+                   const DurabilityEvidence& evidence,
                    std::string* error = nullptr,
                    bool* durable = nullptr);
 bool downloadAsset(const std::string& source, const std::filesystem::path& dest, const std::string& cacheDir = "");

@@ -21,6 +21,7 @@ import (
 	pb "velox-shared/controltransport/pb"
 	sharedtelemetry "velox-shared/telemetry"
 	"velox-worker-agent/internal/downloader"
+	"velox-worker-agent/internal/prefetch"
 	"velox-worker-agent/internal/taskrunner"
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/api"
@@ -1005,5 +1006,380 @@ func TestSubmitTaskResult_FailedReportWithoutExecutionErrorPreservesFailure(t *t
 	}
 	if len(result.PhaseTimings) != 1 || result.PhaseTimings[0].Status != "failed" {
 		t.Fatalf("phase timings = %+v, want one failed phase", result.PhaseTimings)
+	}
+}
+
+// TestCacheResolutionSink_OriginClassification verifies that the
+// cacheResolutionSink correctly classifies ResolutionOrigin for cache hits:
+// - OriginPrefetch when a matching PreparedJob entry exists
+// - OriginWarmCache when no PreparedJob entry exists
+// - OriginRuntimeDownload for cache misses
+func TestCacheResolutionSink_OriginClassification(t *testing.T) {
+	// Prepare a sink with a PreparedJob that has asset-SHA matching
+	preparedJobs := []prefetch.PreparedJob{
+		{
+			JobID:  "job-B",
+			TaskID: "task-B",
+			State:  "PREPARED",
+			Assets: map[string]prefetch.PreparedAssetMetadata{
+				"asset-B": {SHA256: "sha-prefetch-A", SizeBytes: 1024},
+			},
+		},
+	}
+	sink := cacheResolutionSink{
+		preparedJobs: func() []prefetch.PreparedJob { return preparedJobs },
+	}
+
+	// Test 1: cache hit with matching PreparedJob → OriginPrefetch
+	tracker1 := &assetOperationTracker{cacheEnabled: true}
+	ctx1 := withAssetOperationTracker(context.Background(), tracker1)
+	sink.RecordResolution(ctx1, downloader.CacheResolution{
+		AssetID: "asset-B", CacheHit: true, Outcome: downloader.CacheOutcomeHitValid,
+		SHA256: "sha-prefetch-A",
+	})
+	snap1 := tracker1.cacheSnapshot()
+	if snap1.OriginPrefetchCount != 1 {
+		t.Fatalf("OriginPrefetchCount = %d, want 1", snap1.OriginPrefetchCount)
+	}
+	if snap1.OriginWarmCacheCount != 0 {
+		t.Fatalf("OriginWarmCacheCount = %d, want 0", snap1.OriginWarmCacheCount)
+	}
+
+	// Test 2: cache hit without matching PreparedJob → OriginWarmCache
+	tracker2 := &assetOperationTracker{cacheEnabled: true}
+	ctx2 := withAssetOperationTracker(context.Background(), tracker2)
+	sink.RecordResolution(ctx2, downloader.CacheResolution{
+		AssetID: "asset-C", CacheHit: true, Outcome: downloader.CacheOutcomeHitValid,
+		SHA256: "sha-warm-cache",
+	})
+	snap2 := tracker2.cacheSnapshot()
+	if snap2.OriginWarmCacheCount != 1 {
+		t.Fatalf("OriginWarmCacheCount = %d, want 1", snap2.OriginWarmCacheCount)
+	}
+	if snap2.OriginPrefetchCount != 0 {
+		t.Fatalf("OriginPrefetchCount = %d, want 0", snap2.OriginPrefetchCount)
+	}
+
+	// Test 3: cache miss → OriginRuntimeDownload
+	tracker3 := &assetOperationTracker{cacheEnabled: true}
+	ctx3 := withAssetOperationTracker(context.Background(), tracker3)
+	sink.RecordResolution(ctx3, downloader.CacheResolution{
+		AssetID: "asset-D", CacheHit: false, Outcome: downloader.CacheOutcomeMissNotFound,
+		Downloaded: true, DownloadBytes: 4096,
+	})
+	snap3 := tracker3.cacheSnapshot()
+	if snap3.OriginDownloadCount != 1 {
+		t.Fatalf("OriginDownloadCount = %d, want 1", snap3.OriginDownloadCount)
+	}
+}
+
+// TestCacheResolutionSink_NilPreparedJobsClassifiesAsWarmCache verifies that
+// when no PreparedJobs callback is wired (nil), all cache hits are classified
+// as OriginWarmCache. This is the safe default for tests that don't set up
+// the prefetch scheduler.
+func TestCacheResolutionSink_NilPreparedJobsClassifiesAsWarmCache(t *testing.T) {
+	sink := cacheResolutionSink{preparedJobs: nil}
+	tracker := &assetOperationTracker{cacheEnabled: true}
+	ctx := withAssetOperationTracker(context.Background(), tracker)
+	sink.RecordResolution(ctx, downloader.CacheResolution{
+		AssetID: "asset-E", CacheHit: true, Outcome: downloader.CacheOutcomeHitValid,
+		SHA256: "sha-any",
+	})
+	snap := tracker.cacheSnapshot()
+	if snap.OriginWarmCacheCount != 1 {
+		t.Fatalf("OriginWarmCacheCount = %d, want 1 (nil preparedJobs defaults to warm_cache)", snap.OriginWarmCacheCount)
+	}
+}
+
+// TestCacheResolutionSink_ClassifyOriginPrefersMetadataOrigin verifies that
+// classifyOrigin prefers the Origin field from PreparedAssetMetadata when
+// available, falling back to the SHA-based heuristic.
+func TestCacheResolutionSink_ClassifyOriginPrefersMetadataOrigin(t *testing.T) {
+	// PreparedJob with an asset that has Origin explicitly set to prefetch.
+	preparedJobs := []prefetch.PreparedJob{
+		{
+			JobID:  "job-X",
+			TaskID: "task-X",
+			State:  "PREPARED",
+			Assets: map[string]prefetch.PreparedAssetMetadata{
+				"asset-X": {
+					SHA256: "sha-x", SizeBytes: 2048,
+					Origin: downloader.OriginPrefetch,
+				},
+			},
+			},
+	}
+	sink := cacheResolutionSink{
+		preparedJobs: func() []prefetch.PreparedJob { return preparedJobs },
+	}
+
+	// Cache hit with matching SHA → should use the metadata's Origin.
+	tracker := &assetOperationTracker{cacheEnabled: true}
+	ctx := withAssetOperationTracker(context.Background(), tracker)
+	sink.RecordResolution(ctx, downloader.CacheResolution{
+		AssetID: "asset-X", CacheHit: true, Outcome: downloader.CacheOutcomeHitValid,
+		SHA256: "sha-x",
+	})
+	snap := tracker.cacheSnapshot()
+	if snap.OriginPrefetchCount != 1 {
+		t.Fatalf("OriginPrefetchCount = %d, want 1 (metadata.Origin= prefetch)", snap.OriginPrefetchCount)
+	}
+
+	// PreparedJob with Origin set to warm_cache (edge case: asset was in cache
+	// when plan arrived but not downloaded by the plan itself).
+	preparedJobs2 := []prefetch.PreparedJob{
+		{
+			JobID:  "job-Y",
+			TaskID: "task-Y",
+			State:  "PREPARED",
+			Assets: map[string]prefetch.PreparedAssetMetadata{
+				"asset-Y": {
+					SHA256: "sha-y", SizeBytes: 4096,
+					Origin: downloader.OriginWarmCache,
+				},
+			},
+		},
+	}
+	sink2 := cacheResolutionSink{
+		preparedJobs: func() []prefetch.PreparedJob { return preparedJobs2 },
+	}
+	tracker2 := &assetOperationTracker{cacheEnabled: true}
+	ctx2 := withAssetOperationTracker(context.Background(), tracker2)
+	sink2.RecordResolution(ctx2, downloader.CacheResolution{
+		AssetID: "asset-Y", CacheHit: true, Outcome: downloader.CacheOutcomeHitValid,
+		SHA256: "sha-y",
+	})
+	snap2 := tracker2.cacheSnapshot()
+	if snap2.OriginWarmCacheCount != 1 {
+		t.Fatalf("OriginWarmCacheCount = %d, want 1 (metadata.Origin = warm_cache)", snap2.OriginWarmCacheCount)
+	}
+	if snap2.OriginPrefetchCount != 0 {
+		t.Fatalf("OriginPrefetchCount = %d, want 0", snap2.OriginPrefetchCount)
+	}
+}
+
+// TestAssetPreparationSummary_OriginCounts verifies that the prepSnapshot
+// propagates origin counters from AttemptCacheMetrics.
+func TestAssetPreparationSummary_OriginCounts(t *testing.T) {
+	tracker := &assetOperationTracker{cacheEnabled: true}
+	tracker.recordResolution(downloader.CacheResolution{
+		AssetID: "prefetch-1", CacheHit: true, Outcome: downloader.CacheOutcomeHitValid,
+		Origin: downloader.OriginPrefetch,
+	})
+	tracker.recordResolution(downloader.CacheResolution{
+		AssetID: "warm-1", CacheHit: true, Outcome: downloader.CacheOutcomeHitValid,
+		Origin: downloader.OriginWarmCache,
+	})
+	tracker.recordResolution(downloader.CacheResolution{
+		AssetID: "download-1", CacheHit: false, Outcome: downloader.CacheOutcomeMissNotFound,
+		Downloaded: true, Origin: downloader.OriginRuntimeDownload,
+	})
+	prep := tracker.prepSnapshot()
+	if prep.PrefetchHits != 1 {
+		t.Fatalf("PrefetchHits = %d, want 1", prep.PrefetchHits)
+	}
+	if prep.WarmCacheHits != 1 {
+		t.Fatalf("WarmCacheHits = %d, want 1", prep.WarmCacheHits)
+	}
+	if prep.RuntimeDownloads != 1 {
+		t.Fatalf("RuntimeDownloads = %d, want 1", prep.RuntimeDownloads)
+	}
+}
+
+// TestAttemptCacheMetrics_ByteCounters verifies that CacheHitBytes,
+// CacheMissBytes, and PrefetchHitBytes are correctly accumulated from
+// CacheResolution.SizeBytes and CacheResolution.DownloadBytes by the
+// single cacheResolutionSink authority.
+func TestAttemptCacheMetrics_ByteCounters(t *testing.T) {
+	tracker := &assetOperationTracker{cacheEnabled: true}
+
+	// Prefetch hit: 4096 bytes served from prefetch
+	tracker.recordResolution(downloader.CacheResolution{
+		AssetID: "prefetch-A", CacheHit: true, Outcome: downloader.CacheOutcomeHitValid,
+		SizeBytes: 4096, Origin: downloader.OriginPrefetch,
+	})
+	// Warm cache hit: 8192 bytes served from warm cache
+	tracker.recordResolution(downloader.CacheResolution{
+		AssetID: "warm-B", CacheHit: true, Outcome: downloader.CacheOutcomeHitValid,
+		SizeBytes: 8192, Origin: downloader.OriginWarmCache,
+	})
+	// Runtime download: 16384 bytes downloaded
+	tracker.recordResolution(downloader.CacheResolution{
+		AssetID: "cold-C", CacheHit: false, Outcome: downloader.CacheOutcomeMissNotFound,
+		Downloaded: true, DownloadBytes: 16384, SizeBytes: 16384,
+		Origin: downloader.OriginRuntimeDownload,
+	})
+
+	snap := tracker.cacheSnapshot()
+
+	// CacheHitBytes = prefetch hit bytes + warm cache hit bytes
+	if snap.CacheHitBytes != 4096+8192 {
+		t.Fatalf("CacheHitBytes = %d, want %d", snap.CacheHitBytes, 4096+8192)
+	}
+	// CacheMissBytes = runtime download bytes
+	if snap.CacheMissBytes != 16384 {
+		t.Fatalf("CacheMissBytes = %d, want 16384", snap.CacheMissBytes)
+	}
+	// PrefetchHitBytes = only prefetch hit bytes
+	if snap.PrefetchHitBytes != 4096 {
+		t.Fatalf("PrefetchHitBytes = %d, want 4096", snap.PrefetchHitBytes)
+	}
+}
+
+// TestAssetPreparationSummary_ByteCounters verifies that byte counters
+// propagate from AttemptCacheMetrics into the preparation summary.
+func TestAssetPreparationSummary_ByteCounters(t *testing.T) {
+	tracker := &assetOperationTracker{cacheEnabled: true}
+	tracker.recordResolution(downloader.CacheResolution{
+		AssetID: "p1", CacheHit: true, Outcome: downloader.CacheOutcomeHitValid,
+		SizeBytes: 1000, Origin: downloader.OriginPrefetch,
+	})
+	tracker.recordResolution(downloader.CacheResolution{
+		AssetID: "w1", CacheHit: true, Outcome: downloader.CacheOutcomeHitValid,
+		SizeBytes: 2000, Origin: downloader.OriginWarmCache,
+	})
+	tracker.recordResolution(downloader.CacheResolution{
+		AssetID: "d1", CacheHit: false, Outcome: downloader.CacheOutcomeMissNotFound,
+		Downloaded: true, DownloadBytes: 3000, SizeBytes: 3000,
+		Origin: downloader.OriginRuntimeDownload,
+	})
+	prep := tracker.prepSnapshot()
+	if prep.CacheHitBytes != 3000 {
+		t.Fatalf("prep.CacheHitBytes = %d, want 3000", prep.CacheHitBytes)
+	}
+	if prep.CacheMissBytes != 3000 {
+		t.Fatalf("prep.CacheMissBytes = %d, want 3000", prep.CacheMissBytes)
+	}
+	if prep.PrefetchHitBytes != 1000 {
+		t.Fatalf("prep.PrefetchHitBytes = %d, want 1000", prep.PrefetchHitBytes)
+	}
+}
+
+// TestProjectAttemptCacheFacts_ByteCounters verifies that byte counters
+// are projected into RawExecutionMetrics.
+func TestProjectAttemptCacheFacts_ByteCounters(t *testing.T) {
+	cache := AttemptCacheMetrics{
+		CacheLookups:       3,
+		CacheHits:          2,
+		CacheMisses:        1,
+		CacheDownloadCount: 1,
+		CacheDownloadBytes: 5000,
+		CacheHitBytes:      3000,
+		CacheMissBytes:     5000,
+		PrefetchHitBytes:   2000,
+	}
+	report := &taskrunner.TaskExecutionReport{}
+	projectAttemptCacheFacts(report, cache, nil)
+	if report.RawMetrics == nil {
+		t.Fatal("RawMetrics is nil after projection")
+	}
+	if report.RawMetrics.CacheHitBytes != 3000 {
+		t.Fatalf("CacheHitBytes = %d, want 3000", report.RawMetrics.CacheHitBytes)
+	}
+	if report.RawMetrics.CacheMissBytes != 5000 {
+		t.Fatalf("CacheMissBytes = %d, want 5000", report.RawMetrics.CacheMissBytes)
+	}
+	// BytesFromLocalCache must be derived from CacheHitBytes (single chain).
+	if report.RawMetrics.BytesFromLocalCache != 3000 {
+		t.Fatalf("BytesFromLocalCache = %d, want 3000 (CacheHitBytes)", report.RawMetrics.BytesFromLocalCache)
+	}
+}
+
+// TestProjectAttemptCacheFacts_BytesFromLocalCacheDerivation verifies the
+// single-chain projection: BytesFromLocalCache is derived from CacheHitBytes
+// (the resolver sink's attempt-scoped cache hit volume), NOT from the
+// provider's total cache size.
+func TestProjectAttemptCacheFacts_BytesFromLocalCacheDerivation(t *testing.T) {
+	cache := AttemptCacheMetrics{
+		CacheLookups:       5,
+		CacheHits:          3,
+		CacheMisses:        2,
+		CacheDownloadCount: 2,
+		CacheDownloadBytes: 8000,
+		CacheHitBytes:      12000,
+		CacheMissBytes:     8000,
+		PrefetchHitBytes:   5000,
+		PrefetchHitCount:   1,
+		OriginPrefetchCount:  1,
+		OriginWarmCacheCount: 2,
+		OriginDownloadCount:  2,
+	}
+
+	// Pre-set BytesFromLocalCache to a stale provider value (total cache
+	// size) to verify the projection overwrites it with the sink's
+	// attempt-scoped CacheHitBytes.
+	report := &taskrunner.TaskExecutionReport{
+		RawMetrics: &telemetry.RawExecutionMetrics{
+			BytesFromLocalCache: 999999, // stale provider total
+		},
+	}
+	projectAttemptCacheFacts(report, cache, nil)
+	if report.RawMetrics == nil {
+		t.Fatal("RawMetrics is nil after projection")
+	}
+	// BytesFromLocalCache must equal CacheHitBytes (single-chain derivation).
+	if report.RawMetrics.BytesFromLocalCache != 12000 {
+		t.Fatalf("BytesFromLocalCache = %d, want 12000 (CacheHitBytes)", report.RawMetrics.BytesFromLocalCache)
+	}
+	if report.RawMetrics.CacheHitBytes != 12000 {
+		t.Fatalf("CacheHitBytes = %d, want 12000", report.RawMetrics.CacheHitBytes)
+	}
+	if report.RawMetrics.JobPrefetchBytes != 5000 {
+		t.Fatalf("JobPrefetchBytes = %d, want 5000 (PrefetchHitBytes)", report.RawMetrics.JobPrefetchBytes)
+	}
+}
+
+// TestProjectAttemptCacheFacts_ZeroLookupsPreservesExisting verifies that
+// when the resolver observes zero lookups, the projection does NOT touch
+// BytesFromLocalCache (preserving any legacy value set by mergeStatsInto).
+func TestProjectAttemptCacheFacts_ZeroLookupsPreservesExisting(t *testing.T) {
+	report := &taskrunner.TaskExecutionReport{
+		RawMetrics: &telemetry.RawExecutionMetrics{
+			BytesFromLocalCache: 42000,
+		},
+	}
+	projectAttemptCacheFacts(report, AttemptCacheMetrics{}, nil)
+	// Zero lookups = no resolver observation → preserve existing value.
+	if report.RawMetrics.BytesFromLocalCache != 42000 {
+		t.Fatalf("BytesFromLocalCache = %d, want 42000 (preserved)", report.RawMetrics.BytesFromLocalCache)
+	}
+}
+
+// TestAttemptCacheMetrics_PrefetchHitCount verifies that PrefetchHitCount
+// is incremented only for prefetch-origin resolutions.
+func TestAttemptCacheMetrics_PrefetchHitCount(t *testing.T) {
+	tracker := &assetOperationTracker{cacheEnabled: true}
+
+	// Prefetch hit: count should increment
+	tracker.recordResolution(downloader.CacheResolution{
+		AssetID: "prefetch-A", CacheHit: true, Outcome: downloader.CacheOutcomeHitValid,
+		SizeBytes: 4096, Origin: downloader.OriginPrefetch,
+	})
+	// Warm cache hit: count should NOT increment
+	tracker.recordResolution(downloader.CacheResolution{
+		AssetID: "warm-B", CacheHit: true, Outcome: downloader.CacheOutcomeHitValid,
+		SizeBytes: 8192, Origin: downloader.OriginWarmCache,
+	})
+	// Runtime download: count should NOT increment
+	tracker.recordResolution(downloader.CacheResolution{
+		AssetID: "cold-C", CacheHit: false, Outcome: downloader.CacheOutcomeMissNotFound,
+		Downloaded: true, DownloadBytes: 16384, SizeBytes: 16384,
+		Origin: downloader.OriginRuntimeDownload,
+	})
+	// Another prefetch hit
+	tracker.recordResolution(downloader.CacheResolution{
+		AssetID: "prefetch-D", CacheHit: true, Outcome: downloader.CacheOutcomeHitValid,
+		SizeBytes: 2048, Origin: downloader.OriginPrefetch,
+	})
+
+	snap := tracker.cacheSnapshot()
+	if snap.PrefetchHitCount != 2 {
+		t.Fatalf("PrefetchHitCount = %d, want 2", snap.PrefetchHitCount)
+	}
+	if snap.OriginPrefetchCount != 2 {
+		t.Fatalf("OriginPrefetchCount = %d, want 2", snap.OriginPrefetchCount)
+	}
+	if snap.PrefetchHitBytes != 4096+2048 {
+		t.Fatalf("PrefetchHitBytes = %d, want %d", snap.PrefetchHitBytes, 4096+2048)
 	}
 }

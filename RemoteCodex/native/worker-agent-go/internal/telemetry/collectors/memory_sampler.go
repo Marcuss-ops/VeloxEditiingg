@@ -30,6 +30,8 @@ type meminfoSnapshot struct {
 	available int64
 	swapTotal int64
 	swapFree  int64
+	buffers   int64 // Buffers (page cache)
+	cached    int64 // Cached (page cache)
 }
 
 func (s *Sampler) readProcMeminfo() (meminfoSnapshot, error) {
@@ -56,16 +58,20 @@ func (s *Sampler) readProcMeminfo() (meminfoSnapshot, error) {
 		}
 		valKB, _ := strconv.ParseInt(fields[0], 10, 64)
 		valBytes := valKB * 1024
-		switch key {
-		case "MemTotal":
-			out.total = valBytes
-		case "MemAvailable":
-			out.available = valBytes
-		case "SwapTotal":
-			out.swapTotal = valBytes
-		case "SwapFree":
-			out.swapFree = valBytes
-		}
+	switch key {
+	case "MemTotal":
+		out.total = valBytes
+	case "MemAvailable":
+		out.available = valBytes
+	case "SwapTotal":
+		out.swapTotal = valBytes
+	case "SwapFree":
+		out.swapFree = valBytes
+	case "Buffers":
+		out.buffers = valBytes
+	case "Cached":
+		out.cached = valBytes
+	}
 	}
 	if out.total <= 0 {
 		return out, errors.New("proc/meminfo: MemTotal missing")

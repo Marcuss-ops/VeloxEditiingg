@@ -12,6 +12,7 @@ import (
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/prefetch"
 	"velox-worker-agent/internal/taskrunner"
+	"velox-worker-agent/pkg/config"
 	"velox-worker-agent/pkg/logger"
 )
 
@@ -111,6 +112,7 @@ func TestFinalManifestReadyFastAssemblyIntegration(t *testing.T) {
 	w := &Worker{logger: logger.New(logger.InfoLevel, io.Discard),
 		taskRunner:              taskrunner.NewTaskRunner(registry, nil),
 		finalManifestReconciler: reconciler,
+		config:                  &config.WorkerConfig{WorkerID: "test-worker-fast-assembly"},
 	}
 
 	delta := assembly.FinalManifestDelta{

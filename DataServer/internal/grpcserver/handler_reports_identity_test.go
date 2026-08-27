@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"velox-server/internal/ingest"
 	"velox-server/internal/taskattempts"
@@ -33,7 +34,7 @@ func TestHandleTaskResult_RejectsIdentitySpoofing_HandlerLayerDrop(t *testing.T)
 		Status:        "succeeded",
 	}
 
-	handler.handleTaskResult(fx.workerID, tr, nil)
+	handler.handleTaskResult(fx.workerID, tr, nil, time.Time{})
 
 	// The handler dropped the spoof — close-write + roll-up +
 	// artifact register MUST stay zero regardless of which validator

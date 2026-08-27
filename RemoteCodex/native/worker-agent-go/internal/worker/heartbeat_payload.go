@@ -86,6 +86,7 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 	w.activeTasksMu.RLock()
 	activeJobList := make([]map[string]interface{}, 0, len(w.activeTasks))
 	var primaryJobID string
+	var renderActive, prefetchActive, publisherActive int32
 	for _, at := range w.activeTasks {
 		if at == nil || at.Task == nil {
 			continue
@@ -140,6 +141,15 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 			jobInfo["progress_metrics"] = at.Progress.CumulativeMetrics
 		}
 		activeJobList = append(activeJobList, jobInfo)
+		// Per-job-type slot occupancy (under the same RLock).
+		switch at.OperationalPhase {
+		case PhasePrefetching, PhaseVerifyingAssets, PhaseWaitingRuntimeAssets, PhaseMaterializing, PhaseBuildingPlan:
+			prefetchActive++
+		case PhaseRendering, PhaseFinalizing, PhaseOutputReady:
+			renderActive++
+		case PhasePublishing, PhaseCommitWait, PhaseDone:
+			publisherActive++
+		}
 	}
 	w.activeTasksMu.RUnlock()
 
@@ -163,13 +173,27 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 		if snap := w.sampler.Latest(); snap != nil {
 			snapCopy := *snap
 			snapCopy.ActiveTasks = int32(len(activeJobList))
-			if w.concurrencyLimiter != nil {
-				snapCopy.TaskSlots = int32(w.concurrencyLimiter.MaxActiveJobs())
-			}
+				if w.concurrencyLimiter != nil {
+					snapCopy.TaskSlots = int32(w.concurrencyLimiter.MaxActiveJobs())
+				}
+				// EffectiveCpuCores from host snapshot.
+				if host := w.sampler.Host(); host != nil {
+					snapCopy.EffectiveCpuCores = host.EffectiveCpuCores
+				}
+				// Per-job-type slot occupancy (computed under RLock above).
+				snapCopy.RenderJobsActive = renderActive
+				snapCopy.PrefetchJobsActive = prefetchActive
+				snapCopy.PublisherJobsActive = publisherActive
 			hb.Resources = snapCopy.ToProto()
 			if m := snapCopy.ToWireMap(); m != nil {
 				extraMap["resources"] = m
 			}
+			// Prometheus FD gauges — updated every heartbeat cycle.
+			telemetry.GetPrometheusMetrics().SetFileDescriptorMetrics(
+				snapCopy.OpenFileDescriptors,
+				snapCopy.MaxFileDescriptors,
+				snapCopy.FDUtilizationRatio,
+			)
 			// ffmpeg_processes is intentionally carried in the dynamic
 			// Extra map for compatibility with the existing protobuf
 			// schema; the master registry/store already preserves it.
@@ -178,6 +202,28 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 	}
 	hb.CurrentJob = primaryJobID
 	hb.ActiveJobsCount = int32(len(activeJobList))
+
+	// Admission controller diagnostics — surfaced in the Extra map so the
+	// master can display RSS pressure and throttle state per worker.
+	if w.admissionController != nil {
+		rssPct := w.admissionController.RSSPressurePercent()
+		rssBytes := w.admissionController.CurrentRSSBytes()
+		throttledRender := w.admissionController.IsThrottled(ResourceRender)
+		throttledPrefetch := w.admissionController.IsThrottled(ResourcePrefetch)
+		throttledPublish := w.admissionController.IsThrottled(ResourcePublish)
+		extraMap["admission_rss_pressure_pct"] = rssPct
+		extraMap["admission_peak_rss_bytes"] = w.admissionController.PeakRSSBytes()
+		extraMap["admission_rejections"] = w.admissionController.AdmissionRejections()
+		extraMap["admission_backpressure_events"] = w.admissionController.BackpressureEvents()
+		extraMap["admission_throttled_render"] = throttledRender
+		extraMap["admission_throttled_prefetch"] = throttledPrefetch
+		extraMap["admission_throttled_publish"] = throttledPublish
+		// Prometheus gauges — updated every heartbeat so /metrics shows
+		// real-time RSS pressure and throttle state.
+		telemetry.GetPrometheusMetrics().SetAdmissionDiagnostics(
+			rssPct, rssBytes, throttledRender, throttledPrefetch, throttledPublish,
+		)
+	}
 
 	// Canonical typed telemetry snapshot: sequence, leases, cache, download
 	// queue, render active, disk free and the release certificate. The master

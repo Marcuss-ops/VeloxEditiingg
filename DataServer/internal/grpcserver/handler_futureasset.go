@@ -112,6 +112,14 @@ func (h *Handler) refreshFutureAssetPlan(ctx context.Context, workerID, currentJ
 				continue
 			}
 			logGRPCf(ctx, logging.LevelInfo, logging.CodeGRPCPrefetch, "[PREFETCH_TIMING] event=reservation_created worker=%s task=%s at=%s", workerID, candidate.TaskID, time.Now().UTC().Format(time.RFC3339Nano))
+			if h.dbStore != nil {
+				_ = h.dbStore.LogJobEvent(candidate.JobID, "prefetch.reservation_created", map[string]interface{}{
+					"worker_id":      workerID,
+					"task_id":        candidate.TaskID,
+					"reservation_id": reservation.ReservationID,
+					"distance":       reservation.Distance,
+				})
+			}
 		} else {
 			// N+4..N+10 are retention forecasts only. They must be
 			// represented in the worker snapshot, but must not acquire a
@@ -141,6 +149,29 @@ func (h *Handler) refreshFutureAssetPlan(ctx context.Context, workerID, currentJ
 		logGRPCf(ctx, logging.LevelError, logging.CodeGRPCPrefetchFailed, "[PREFETCH] send worker=%s: %v", workerID, err)
 	} else {
 		planSentAt = time.Now().UTC()
+	}
+	// Persist prefetch lifecycle events into the job journal so fleetctl
+	// job inspect shows the full prefetch timeline.
+	if h.dbStore != nil && planSentAt.IsZero() == false {
+		for _, job := range jobs {
+			if job.JobID == "" {
+				continue
+			}
+			assetKeys := make([]string, 0, len(job.Assets))
+			for _, a := range job.Assets {
+				assetKeys = append(assetKeys, a.AssetKey)
+			}
+			_ = h.dbStore.LogJobEvent(job.JobID, "prefetch.future_plan_sent", map[string]interface{}{
+				"worker_id":      workerID,
+				"task_id":        job.TaskID,
+				"reservation_id": job.ReservationID,
+				"plan_id":        plan.PlanID,
+				"plan_version":   plan.Version,
+				"distance":       job.Distance,
+				"asset_count":    len(job.Assets),
+				"asset_keys":     assetKeys,
+			})
+		}
 	}
 }
 

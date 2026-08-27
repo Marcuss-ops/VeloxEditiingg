@@ -93,6 +93,30 @@ func (t *RawExecutionMetrics) PopulateFromJobPhaseTimer(timer *JobPhaseTimer) {
 	// Total = sum of all phases (wall-clock may differ due to parallelism).
 	t.JobTotalMs = timer.TotalDuration().Milliseconds()
 
+	// ── Aggregated wall times per resource category (migration 160) ──
+	// Render: plan build + video decode/subtitle/watermark/blur/filter/
+	//         composite/encode/concat + audio mux + output finalize + hash/probe.
+	t.JobRenderWallMs = t.RenderPlanBuildMs + t.VideoDecodeMs +
+		t.VideoSubtitleMs + t.VideoSubtitleRasterMs + t.VideoSubtitleCompositeMs +
+		t.VideoWatermarkMs + t.VideoWatermarkUploadMs + t.VideoWatermarkCompositeMs +
+		t.VideoBlurMs + t.VideoFilterMs + t.VideoCompositeMs +
+		t.VideoEncodeMs + t.VideoConcatMs +
+		t.AudioMuxMs + t.OutputFinalizeMs +
+		t.Sha256Ms + t.FfprobeMs + t.ArtifactVerifyMs
+	// Asset: resolve + download + verify + materialize + audio prepare/build.
+	t.JobAssetWallMs = t.AssetResolveMs + t.AssetDownloadMs +
+		t.AssetVerifyMs + t.AssetMaterializeMs +
+		t.AudioPrepareMs + t.AudioTimelineBuildMs +
+		t.DriveDownloadMs + t.BlobstoreDownloadMs +
+		t.LocalCacheReadMs + t.AssetDownloadWaitMs
+	// Publish: drive upload + verify + cleanup.
+	t.JobPublishWallMs = t.DriveUploadMs + t.DriveVerifyMs + t.CleanupMs
+
+	// CPU core-seconds from accumulated CPU milliseconds.
+	if t.CpuTimeMs > 0 {
+		t.JobCpuCoreSeconds = float64(t.CpuTimeMs) / 1000.0
+	}
+
 	// ── Download / cache byte attribution ────────────────────────────
 	// Accumulate per-source byte counters from phase-level data.
 	timer.cacheMut.Lock()
@@ -205,4 +229,85 @@ func (t *RawExecutionMetrics) PopulateFromGPUTransfers(g GPUTransferMetrics) {
 	t.CpuToGpuTransferMs = g.CPUToGPUMs
 	t.GpuToCpuBytes = g.GPUToCPUBytes
 	t.CpuToGpuBytes = g.CPUToGPUBytes
+}
+
+// ResourceSnapshot is a point-in-time resource counter snapshot captured
+// at attempt start. The delta between start and end snapshots provides
+// per-attempt resource attribution.
+type ResourceSnapshot struct {
+	RSSPeakBytes   int64
+	CPUClockMS     int64
+	DiskReadBytes  int64
+	DiskWriteBytes int64
+	NetworkRxBytes int64
+	NetworkTxBytes int64
+	IOWaitMS       int64
+	OpenFDs        int64
+	PageFaults     int64
+	PrefetchBytes  int64
+	PublishBytes   int64
+}
+
+// PopulateJobResourceAttribution fills the per-job resource attribution
+// fields from a start snapshot and end metrics. The start snapshot was
+// captured before the attempt began; the end metrics come from the
+// resource sampler or the attempt telemetry session at completion.
+//
+// For cumulative counters (disk, network, page faults), the attribution
+// is end - start. For peak counters (RSS, FDs), the attribution is the
+// end peak value. For cumulative CPU, the attribution is end clock - start clock.
+func (t *RawExecutionMetrics) PopulateJobResourceAttribution(start ResourceSnapshot) {
+	if t == nil {
+		return
+	}
+	// Peak RSS delta: current peak minus pre-job baseline.
+	t.JobPeakRssDeltaBytes = t.PeakRssBytes - start.RSSPeakBytes
+	if t.JobPeakRssDeltaBytes < 0 {
+		t.JobPeakRssDeltaBytes = 0
+	}
+
+	// CPU core-seconds: accumulated CPU time normalized to single-core seconds.
+	cpuDeltaMS := t.CpuTimeMs - start.CPUClockMS
+	if cpuDeltaMS > 0 {
+		t.JobCpuCoreSeconds = float64(cpuDeltaMS) / 1000.0
+	}
+
+	// Disk I/O attribution.
+	diskReadDelta := t.DiskReadBytes - start.DiskReadBytes
+	if diskReadDelta > 0 {
+		t.DiskReadBytes = diskReadDelta
+	}
+	diskWriteDelta := t.DiskWriteBytes - start.DiskWriteBytes
+	if diskWriteDelta > 0 {
+		t.DiskWriteBytes = diskWriteDelta
+	}
+
+	// Network I/O attribution.
+	networkRxDelta := t.NetworkRxBytes - start.NetworkRxBytes
+	if networkRxDelta > 0 {
+		t.NetworkRxBytes = networkRxDelta
+	}
+	networkTxDelta := t.NetworkTxBytes - start.NetworkTxBytes
+	if networkTxDelta > 0 {
+		t.NetworkTxBytes = networkTxDelta
+	}
+
+	// I/O wait attribution.
+	iowaitDelta := t.IowaitMs - start.IOWaitMS
+	if iowaitDelta > 0 {
+		t.IowaitMs = iowaitDelta
+	}
+
+	// Open FDs: peak during attempt.
+	// t.OpenFdsPeak is already set by the sampler; no delta needed.
+
+	// Major page faults attribution.
+	faultsDelta := t.JobPageFaults - start.PageFaults
+	if faultsDelta > 0 {
+		t.JobPageFaults = faultsDelta
+	}
+
+	// Prefetch and publish bytes are set externally by the caller.
+	// t.JobPrefetchBytes and t.JobPublishBytes are already populated
+	// by the cache resolution sink and upload path respectively.
 }

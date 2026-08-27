@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/logger"
 )
 
@@ -109,6 +110,11 @@ func (w *Worker) heartbeatLoopWithInterval(ctx context.Context, forcedInterval t
 				consecutiveErrors = 0
 			}
 		case <-ticker.C:
+			// Update NIC saturation EWMA and alert state before each heartbeat.
+			if w.networkAdmissionController != nil {
+				w.networkAdmissionController.UpdateSaturation()
+				telemetry.MarkNetworkSaturationCritical(w.networkAdmissionController.IsCritical())
+			}
 			currentStatus := w.Status()
 			if currentStatus != lastStatus {
 				newInterval := w.getHeartbeatInterval()

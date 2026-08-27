@@ -273,6 +273,7 @@ func (s *TaskReportIngestionService) IngestTaskResult(ctx context.Context, cmd I
 		// Scorecard v2 / Step 18: phase timeline for successful and failed attempts.
 		PartialPhaseMetrics: cmd.PartialPhaseMetrics,
 		PhaseTimings:        cmd.PhaseTimings,
+		EnvelopeSentAt:      cmd.EnvelopeSentAt,
 	})
 
 	// fix/atomic-ingestion: IngestTaskResultAtomic succeeded — the Task +

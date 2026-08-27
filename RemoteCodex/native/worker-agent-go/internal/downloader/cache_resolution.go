@@ -65,6 +65,35 @@ const (
 	CacheSourceMaster CacheSource = "master_bridge"
 )
 
+// ResolutionOrigin classifies WHY an asset was already local at resolution
+// time. The three cases are mutually exclusive and cover every resolution
+// outcome:
+//
+//   - OriginPrefetch: the asset was downloaded by a FutureAssetPlan before
+//     the current attempt started. A PreparedJob entry with matching SHA256
+//     and size exists.
+//   - OriginWarmCache: the asset was already local from a previous job or
+//     session (cache hit without a PreparedJob entry).
+//   - OriginRuntimeDownload: the asset was not local and was downloaded
+//     during the current attempt (cache miss).
+//
+// The origin eliminates the ambiguity "was B fast because of prefetch or
+// because A happened to fill the cache?" — the definitive answer comes from
+// the PreparedJob evidence, not from the cache hit flag alone.
+type ResolutionOrigin string
+
+const (
+	// OriginWarmCache: cache hit without a PreparedJob entry. The asset was
+	// already local from a prior job, session, or manual seeding.
+	OriginWarmCache ResolutionOrigin = "warm_cache"
+	// OriginPrefetch: cache hit with a matching PreparedJob entry. The asset
+	// was materialized by a FutureAssetPlan before the attempt started.
+	OriginPrefetch ResolutionOrigin = "prefetch"
+	// OriginRuntimeDownload: cache miss; bytes were transferred during the
+	// current attempt.
+	OriginRuntimeDownload ResolutionOrigin = "runtime_download"
+)
+
 // CacheResolution is the structured, telemetry-ready outcome of one asset
 // resolution. It is the ONLY shape consumers read for cache accounting: the
 // per-attempt counters (AttemptCacheMetrics) and the worker-lifetime
@@ -81,11 +110,21 @@ type CacheResolution struct {
 	// DownloadBytes is the number of bytes transferred on the miss path
 	// (0 on a verified hit).
 	DownloadBytes int64
-	Source        CacheSource
-	SHA256        assetref.ContentHash
+	// SizeBytes is the total size of the asset. On hits it comes from the
+	// request contract (req.SizeBytes); on downloads it comes from the
+	// transfer result. It is the authoritative byte count for cache_hit_bytes
+	// and cache_miss_bytes attribution.
+	SizeBytes int64
+	Source    CacheSource
+	SHA256    assetref.ContentHash
 	// Timing carries the observable per-transfer sub-phase breakdown for the
 	// per-attempt asset-preparation aggregator. Zero on hits and legacy paths.
 	Timing AssetSubPhases
+	// Origin classifies WHY the asset was local. Set by the resolution sink
+	// after consulting the PreparedJob read model. Empty on L1-cache hits
+	// where the origin is inherently prefetch (memory cache is populated
+	// exclusively by the prefetch path).
+	Origin ResolutionOrigin
 }
 
 // ResolutionSink observes each completed resolution exactly once. It runs on
@@ -144,7 +183,7 @@ func (r *CacheResolver) Resolve(ctx context.Context, req DownloadRequest) (Cache
 		if asset, ok, err := r.l1.Find(ctx, req); err != nil {
 			return CacheResolution{}, err
 		} else if ok {
-			resolution := CacheResolution{AssetID: req.AssetID, Outcome: CacheOutcomeHitValid, LocalPath: asset.LocalPath, CacheHit: true, Source: CacheSourceLocalDisk, SHA256: asset.SHA256}
+			resolution := CacheResolution{AssetID: req.AssetID, Outcome: CacheOutcomeHitValid, LocalPath: asset.LocalPath, CacheHit: true, Source: CacheSourceLocalDisk, SHA256: asset.SHA256, SizeBytes: req.SizeBytes}
 			if r.sink != nil {
 				r.sink.RecordResolution(ctx, resolution)
 			}
@@ -189,11 +228,13 @@ func resolutionFromDownloadedAsset(asset DownloadedAsset, req DownloadRequest) C
 	}
 	if asset.CacheHit {
 		resolution.Source = CacheSourceLocalDisk
+		resolution.SizeBytes = req.SizeBytes
 	} else {
 		// The manager reports zero downloaded bytes on the hit path; a
 		// positive size therefore means bytes actually transferred.
 		resolution.Downloaded = asset.SizeBytes > 0
 		resolution.DownloadBytes = asset.SizeBytes
+		resolution.SizeBytes = asset.SizeBytes
 	}
 	// Defensive fallback for legacy transferers (and byte fakes) that do not
 	// classify: the CacheHit flag is still an honest outcome.

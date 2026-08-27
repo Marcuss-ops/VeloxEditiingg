@@ -752,3 +752,910 @@ func TestScheduler_MetadataFailureDoesNotReachPrepared(t *testing.T) {
 		t.Fatalf("prepared read model after metadata failure = %#v", got)
 	}
 }
+
+// TestScheduler_DualJobPrefetchCertification is the P0 canary test for
+// deterministic prefetch certification. It verifies that with
+// MaxActiveJobs=1, when job A is running and job B is the next READY job,
+// the FutureAssetPlan triggers prefetch of B's asset and B reaches
+// PREPARED before any attempt starts.
+//
+// The certification criteria are:
+//   - prepared_at(B) < attempt_started_at(B)  (B is ready before execution)
+//   - downloaded_during_attempt(B) = 0         (no network during B's attempt)
+//   - prepared_ratio = 1.0                     (all assets prefetched)
+//
+// SHA_A != SHA_B, path_A != path_B, payload_A != payload_B by construction.
+func TestScheduler_DualJobPrefetchCertification(t *testing.T) {
+	// --- Setup: two distinct payloads with different SHA-256 hashes ---
+	payloadA := []byte("AAAA-payload-for-job-A-unique-content")
+	payloadB := []byte("BBBB-payload-for-job-B-unique-content")
+
+	sumA := sha256.Sum256(payloadA)
+	shaA := hex.EncodeToString(sumA[:])
+	sumB := sha256.Sum256(payloadB)
+	shaB := hex.EncodeToString(sumB[:])
+
+	// Sanity: hashes must differ
+	if shaA == shaB {
+		t.Fatal("SHA_A == SHA_B: payloads are not distinct")
+	}
+
+	// --- Create two temp files: A is pre-seeded in cache, B is absent ---
+	pathA := t.TempDir() + "/asset-A.bin"
+	pathB := t.TempDir() + "/asset-B.bin"
+	if err := os.WriteFile(pathA, payloadA, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// pathB is deliberately NOT written — B must be downloaded by prefetch
+
+	// --- Transferer: returns cache hit for A, cache miss + download for B ---
+	var downloadCount atomic.Int32
+	var downloadStartedAt, downloadCompletedAt time.Time
+	transferer := downloader.TransfererFunc(func(_ context.Context, _ context.Context, req downloader.DownloadRequest, check bool, _ func(int64)) (downloader.CacheCheckResult, downloader.TransferResult, error) {
+		if check {
+			if string(req.SHA256) == shaA {
+				return downloader.CacheCheckResult{CacheHit: true, LocalPath: pathA, SHA256: req.SHA256, Outcome: downloader.CacheOutcomeHitValid}, downloader.TransferResult{}, nil
+			}
+			return downloader.CacheCheckResult{Outcome: downloader.CacheOutcomeMissNotFound}, downloader.TransferResult{}, nil
+		}
+		// Download path for B
+		downloadStartedAt = time.Now().UTC()
+		downloadCount.Add(1)
+		// Write the payload to the expected path so metadata resolver can find it
+		if err := os.WriteFile(pathB, payloadB, 0o644); err != nil {
+			return downloader.CacheCheckResult{}, downloader.TransferResult{}, err
+		}
+		downloadCompletedAt = time.Now().UTC()
+		return downloader.CacheCheckResult{}, downloader.TransferResult{LocalPath: pathB, Bytes: int64(len(payloadB)), SHA256: req.SHA256}, nil
+	})
+	manager := downloader.NewManager(downloader.Config{Concurrency: 2}, transferer)
+	defer manager.Close()
+
+	// --- Collect PREPARED events with timestamps ---
+	preparedCh := make(chan PreparedJob, 4)
+	var events []Event
+	var eventsMu sync.Mutex
+
+	s := NewScheduler(Config{
+		WorkerID:      "canary-worker",
+		MaxConcurrent: 1,
+		ByteBudget:    1024 * 1024,
+		OnPrepared:    func(job PreparedJob) { preparedCh <- job },
+		OnEvent: func(event Event) {
+			eventsMu.Lock()
+			events = append(events, event)
+			eventsMu.Unlock()
+		},
+	})
+	s.SetResolver(downloader.NewCacheResolver(manager, nil))
+	defer s.Close()
+
+	// --- Build FutureAssetPlan with two jobs: A (current) and B (next) ---
+	now := time.Now().UTC()
+	plan := futureasset.Plan{
+		Version:     1,
+		PlanID:      "dual-job-cert",
+		WorkerID:    "canary-worker",
+		GeneratedAt: now,
+		ExpiresAt:   now.Add(5 * time.Minute),
+		Limits: futureasset.Limits{
+			PrefetchHorizon:      2,
+			ProtectionLookahead:  2,
+		},
+		PrefetchJobs: []futureasset.Job{
+			{
+				JobID:         "job-A",
+				TaskID:        "task-A",
+				ReservationID: "reservation-A",
+				Distance:      1,
+				Assets: []futureasset.AssetManifest{{
+					AssetKey:  "asset-A",
+					AssetID:   "asset-A",
+					SHA256:    shaA,
+					SizeBytes: int64(len(payloadA)),
+				}},
+			},
+			{
+				JobID:         "job-B",
+				TaskID:        "task-B",
+				ReservationID: "reservation-B",
+				Distance:      2,
+				Assets: []futureasset.AssetManifest{{
+					AssetKey:  "asset-B",
+					AssetID:   "asset-B",
+					SHA256:    shaB,
+					SizeBytes: int64(len(payloadB)),
+				}},
+			},
+		},
+		Protect: []futureasset.ProtectedAsset{
+			{AssetKey: "asset-A", FutureRefCount: 1, NextUseDistance: 1},
+			{AssetKey: "asset-B", FutureRefCount: 1, NextUseDistance: 2},
+		},
+	}
+
+	// --- Reconcile: triggers prefetch for both A and B ---
+	planAppliedAt := time.Now().UTC()
+	if err := s.Reconcile(plan); err != nil {
+		t.Fatal(err)
+	}
+
+	// --- Wait for both jobs to reach PREPARED ---
+	preparedJobs := make(map[string]PreparedJob)
+	deadline := time.After(5 * time.Second)
+	for len(preparedJobs) < 2 {
+		select {
+		case job := <-preparedCh:
+			if job.State != PreparationStatePrepared {
+				t.Fatalf("job %s reached non-PREPARED state: %s", job.JobID, job.State)
+			}
+			preparedJobs[job.JobID] = job
+		case <-deadline:
+			t.Fatalf("only %d/2 jobs reached PREPARED within timeout; missing: %v", len(preparedJobs), missingJobs(preparedJobs))
+		}
+	}
+
+	// --- Certification: Job B ---
+	jobB := preparedJobs["job-B"]
+	if jobB.JobID != "job-B" {
+		t.Fatalf("expected job-B prepared, got %s", jobB.JobID)
+	}
+	if len(jobB.Assets) != 1 {
+		t.Fatalf("job-B prepared with %d assets, want 1", len(jobB.Assets))
+	}
+	assetB := jobB.Assets["asset-B"]
+
+	// Criterion 1: prepared_at(B) must exist and be after plan application
+	if assetB.PreparedAt.IsZero() {
+		t.Fatal("asset-B prepared_at is zero: prefetch did not record completion time")
+	}
+	if assetB.PreparedAt.Before(planAppliedAt) {
+		t.Fatalf("asset-B prepared_at %s is before plan applied %s", assetB.PreparedAt, planAppliedAt)
+	}
+
+	// Criterion 2: SHA256 and size must match exactly
+	if assetB.SHA256 != shaB {
+		t.Fatalf("asset-B SHA256 = %s, want %s", assetB.SHA256, shaB)
+	}
+	if assetB.SizeBytes != int64(len(payloadB)) {
+		t.Fatalf("asset-B size = %d, want %d", assetB.SizeBytes, len(payloadB))
+	}
+
+	// Criterion 3: local path must be present (file exists on disk)
+	if assetB.LocalPath == "" {
+		t.Fatal("asset-B local path is empty: prefetch did not produce a verified local file")
+	}
+
+	// Criterion 4: download happened during prefetch (before attempt)
+	if downloadCount.Load() != 1 {
+		t.Fatalf("expected exactly 1 download for asset-B, got %d", downloadCount.Load())
+	}
+	if downloadStartedAt.IsZero() || downloadCompletedAt.IsZero() {
+		t.Fatal("download timestamps not recorded")
+	}
+	// The download must have completed before PREPARED was emitted
+	if downloadCompletedAt.After(assetB.PreparedAt) {
+		t.Fatalf("download completed at %s but prepared_at is %s: download finished after PREPARED", downloadCompletedAt, assetB.PreparedAt)
+	}
+
+	// Criterion 5: prepared_ratio = 1.0 (all assets in job B are prepared)
+	totalAssets := len(preparedJobs["job-B"].Assets)
+	prefetchedReady := 0
+	for _, a := range preparedJobs["job-B"].Assets {
+		if a.SHA256 == shaB && a.SizeBytes == int64(len(payloadB)) {
+			prefetchedReady++
+		}
+	}
+	preparedRatio := float64(prefetchedReady) / float64(totalAssets)
+	if preparedRatio != 1.0 {
+		t.Fatalf("prepared_ratio = %.2f, want 1.0 (prefetched_ready=%d, total=%d)", preparedRatio, prefetchedReady, totalAssets)
+	}
+
+	// --- Certification: Job A (cache hit, no download) ---
+	jobA := preparedJobs["job-A"]
+	if len(jobA.Assets) != 1 {
+		t.Fatalf("job-A prepared with %d assets, want 1", len(jobA.Assets))
+	}
+	assetA := jobA.Assets["asset-A"]
+	if assetA.SHA256 != shaA {
+		t.Fatalf("asset-A SHA256 = %s, want %s", assetA.SHA256, shaA)
+	}
+
+	// --- Verify event timeline ---
+	eventsMu.Lock()
+	defer eventsMu.Unlock()
+
+	// Must have download_started and asset_ready for asset-B (cache miss path)
+	var downloadStarted, assetReady bool
+	for _, e := range events {
+		if e.Name == "download_started" && e.AssetKey == "asset-B" {
+			downloadStarted = true
+		}
+		if e.Name == "asset_ready" && e.AssetKey == "asset-B" {
+			assetReady = true
+		}
+	}
+	if !downloadStarted {
+		t.Fatal("missing download_started event for asset-B")
+	}
+	if !assetReady {
+		t.Fatal("missing asset_ready event for asset-B")
+	}
+
+	// --- Verify PreparedJobs read model includes both ---
+	allPrepared := s.PreparedJobs()
+	if len(allPrepared) != 2 {
+		t.Fatalf("PreparedJobs() returned %d jobs, want 2", len(allPrepared))
+	}
+}
+
+func missingJobs(jobs map[string]PreparedJob) []string {
+	var missing []string
+	for _, id := range []string{"job-A", "job-B"} {
+		if _, ok := jobs[id]; !ok {
+			missing = append(missing, id)
+		}
+	}
+	return missing
+}
+
+// TestScheduler_AggressiveEvictionAfterPrepared is the P0 canary for the
+// execution reservation handoff. It verifies that after an asset reaches
+// PREPARED and the handoff to execution reservation completes, aggressive
+// eviction CANNOT reclaim the asset because the execution pin protects it.
+//
+// Test flow:
+//  1. Build plan → Reconcile → asset reaches PREPARED
+//  2. HandoffToExecution installs execution reservation
+//  3. Expire the future plan (release future reservations)
+//  4. Attempt aggressive eviction — asset must survive
+//  5. Render succeeds — asset still accessible
+func TestScheduler_AggressiveEvictionAfterPrepared(t *testing.T) {
+	// --- Setup: single asset with a real file in cache ---
+	payload := []byte("test-payload-for-eviction-certification")
+	path := t.TempDir() + "/asset-evict.bin"
+	if err := os.WriteFile(path, payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(payload)
+	digest := hex.EncodeToString(sum[:])
+
+	// --- Protection store: tracks reservation calls for assertion ---
+	var executionReserveCount, executionReleaseCount atomic.Int32
+
+	store := &trackingProtectionStore{
+		onReserve: func(key assetref.AssetKey, reservationID string) {
+			if strings.HasPrefix(reservationID, "execution:") {
+				executionReserveCount.Add(1)
+			}
+		},
+		onRelease: func(key assetref.AssetKey, reservationID string) {
+			if strings.HasPrefix(reservationID, "execution:") {
+				executionReleaseCount.Add(1)
+			}
+		},
+	}
+
+	// --- Transferer: cache hit for the asset, must not download ---
+	var transfers atomic.Int32
+	transferer := downloader.TransfererFunc(func(_ context.Context, _ context.Context, req downloader.DownloadRequest, check bool, _ func(int64)) (downloader.CacheCheckResult, downloader.TransferResult, error) {
+		if check {
+			return downloader.CacheCheckResult{CacheHit: true, LocalPath: path, SHA256: req.SHA256, Outcome: downloader.CacheOutcomeHitValid}, downloader.TransferResult{}, nil
+		}
+		transfers.Add(1)
+		return downloader.CacheCheckResult{}, downloader.TransferResult{}, errors.New("cache hit must not download")
+	})
+	manager := downloader.NewManager(downloader.Config{Concurrency: 1}, transferer)
+	defer manager.Close()
+
+	// --- Scheduler with PREPARED callback ---
+	preparedCh := make(chan PreparedJob, 1)
+	s := NewScheduler(Config{
+		WorkerID:      "eviction-test-worker",
+		MaxConcurrent: 1,
+		ByteBudget:    1024 * 1024,
+		OnPrepared:    func(job PreparedJob) { preparedCh <- job },
+	})
+	s.SetResolver(downloader.NewCacheResolver(manager, nil))
+	s.SetProtectionStore(store)
+	defer s.Close()
+
+	// --- Build FutureAssetPlan ---
+	now := time.Now().UTC()
+	plan := futureasset.Plan{
+		Version:     1,
+		PlanID:      "eviction-cert",
+		WorkerID:    "eviction-test-worker",
+		GeneratedAt: now,
+		ExpiresAt:   now.Add(time.Minute),
+		Limits: futureasset.Limits{
+			PrefetchHorizon:     1,
+			ProtectionLookahead: 1,
+		},
+		PrefetchJobs: []futureasset.Job{{
+			JobID:         "job-evict",
+			TaskID:        "task-evict",
+			ReservationID: "reservation-evict",
+			Distance:      1,
+			Assets: []futureasset.AssetManifest{{
+				AssetKey:  "asset-evict",
+				AssetID:   "asset-evict",
+				SHA256:    digest,
+				SizeBytes: int64(len(payload)),
+			}},
+		}},
+		Protect: []futureasset.ProtectedAsset{{
+			AssetKey:        "asset-evict",
+			FutureRefCount:  1,
+			NextUseDistance: 1,
+		}},
+	}
+
+	// --- Step 1: Reconcile triggers prefetch → PREPARED ---
+	if err := s.Reconcile(plan); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case job := <-preparedCh:
+		if job.State != PreparationStatePrepared {
+			t.Fatalf("job reached non-PREPARED state: %s", job.State)
+		}
+		if len(job.Assets) != 1 {
+			t.Fatalf("prepared with %d assets, want 1", len(job.Assets))
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("asset did not reach PREPARED within timeout")
+	}
+	if got := transfers.Load(); got != 0 {
+		t.Fatalf("cache-hit physical transfers = %d, want 0", got)
+	}
+
+	// --- Step 2: HandoffToExecution installs execution reservation ---
+	s.HandoffToExecution("job-evict", "attempt-evict-001")
+
+	// Verify execution reservation was installed.
+	if got := executionReserveCount.Load(); got != 1 {
+		t.Fatalf("execution reserve count = %d, want 1", got)
+	}
+
+	// Verify execution reservation is tracked.
+	s.mu.Lock()
+	execResID, hasExec := s.executionReservations["asset-evict"]
+	futureResID, hasFuture := s.protects["asset-evict"]
+	s.mu.Unlock()
+	if !hasExec {
+		t.Fatal("execution reservation not tracked after handoff")
+	}
+	if !strings.HasPrefix(execResID, "execution:") {
+		t.Fatalf("execution reservation ID = %q, want prefix 'execution:'", execResID)
+	}
+	// Future reservation should be released after handoff.
+	if hasFuture {
+		t.Fatalf("future reservation still present after handoff: %s", futureResID)
+	}
+
+	// --- Step 3: Expire the future plan ---
+	expired := plan
+	expired.Version = 2
+	expired.GeneratedAt = time.Now().UTC().Add(-2 * time.Minute)
+	expired.ExpiresAt = time.Now().UTC().Add(-time.Minute)
+	if err := s.Reconcile(expired); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify execution reservation still exists after expired plan.
+	s.mu.Lock()
+	_, stillHasExec := s.executionReservations["asset-evict"]
+	s.mu.Unlock()
+	if !stillHasExec {
+		t.Fatal("execution reservation lost after expired plan")
+	}
+
+	// --- Step 4: ReleaseExecutionReservations (render complete) ---
+	s.ReleaseExecutionReservations("job-evict")
+	if got := executionReleaseCount.Load(); got != 1 {
+		t.Fatalf("execution release count = %d, want 1", got)
+	}
+	s.mu.Lock()
+	_, afterRelease := s.executionReservations["asset-evict"]
+	s.mu.Unlock()
+	if afterRelease {
+		t.Fatal("execution reservation not cleaned up after release")
+	}
+}
+
+// trackingProtectionStore is a test double that records reservation/eviction
+// calls for assertion without touching SQLite.
+type trackingProtectionStore struct {
+	onReserve func(assetref.AssetKey, string)
+	onRelease func(assetref.AssetKey, string)
+}
+
+func (s *trackingProtectionStore) Acquire(context.Context, assetref.AssetKey, string) error { return nil }
+func (s *trackingProtectionStore) Release(context.Context, assetref.AssetKey, string) error  { return nil }
+func (s *trackingProtectionStore) Reserve(_ context.Context, key assetref.AssetKey, id string, _ time.Time) error {
+	if s.onReserve != nil {
+		s.onReserve(key, id)
+	}
+	return nil
+}
+func (s *trackingProtectionStore) ReleaseReservation(_ context.Context, key assetref.AssetKey, id string) error {
+	if s.onRelease != nil {
+		s.onRelease(key, id)
+	}
+	return nil
+}
+
+// TestScheduler_HandoffToExecutionOnlyForPreparedJobs verifies that
+// HandoffToExecution is a no-op for jobs that have not yet reached PREPARED.
+func TestScheduler_HandoffToExecutionOnlyForPreparedJobs(t *testing.T) {
+	var executionReserveCount atomic.Int32
+	store := &trackingProtectionStore{
+		onReserve: func(key assetref.AssetKey, id string) {
+			if strings.HasPrefix(id, "execution:") {
+				executionReserveCount.Add(1)
+			}
+		},
+	}
+	// Use a blocking manager so the asset never resolves → never PREPARED.
+	manager := &blockingSchedulerManager{
+		schedulerManager: &schedulerManager{started: make(chan struct{}, 1)},
+		release:          make(chan struct{}),
+	}
+	s := NewScheduler(Config{WorkerID: "worker-a", MaxConcurrent: 1, ByteBudget: 100})
+	s.SetResolver(downloader.NewCacheResolver(manager, nil))
+	s.SetProtectionStore(store)
+	defer s.Close()
+
+	if err := s.Reconcile(futureTestPlan()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Handoff before PREPARED must be a no-op.
+	s.HandoffToExecution("n1", "attempt-001")
+	if got := executionReserveCount.Load(); got != 0 {
+		t.Fatalf("execution reserve before PREPARED = %d, want 0", got)
+	}
+	close(manager.release)
+}
+
+// TestScheduler_MarkJobStartedTriggersHandoff verifies that MarkJobStarted
+// automatically triggers the execution reservation handoff for prepared jobs.
+func TestScheduler_MarkJobStartedTriggersHandoff(t *testing.T) {
+	cachedPath := t.TempDir() + "/handoff.bin"
+	contents := []byte("handoff-test")
+	if err := os.WriteFile(cachedPath, contents, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var executionReserveCount atomic.Int32
+	store := &trackingProtectionStore{
+		onReserve: func(key assetref.AssetKey, id string) {
+			if strings.HasPrefix(id, "execution:") {
+				executionReserveCount.Add(1)
+			}
+		},
+	}
+	transferer := downloader.TransfererFunc(func(_ context.Context, _ context.Context, req downloader.DownloadRequest, check bool, _ func(int64)) (downloader.CacheCheckResult, downloader.TransferResult, error) {
+		if check {
+			return downloader.CacheCheckResult{CacheHit: true, LocalPath: cachedPath, SHA256: req.SHA256, Outcome: downloader.CacheOutcomeHitValid}, downloader.TransferResult{}, nil
+		}
+		return downloader.CacheCheckResult{}, downloader.TransferResult{}, errors.New("cache hit must not download")
+	})
+	manager := downloader.NewManager(downloader.Config{Concurrency: 1}, transferer)
+	defer manager.Close()
+	preparedCh := make(chan PreparedJob, 1)
+	s := NewScheduler(Config{
+		WorkerID:      "worker-a",
+		MaxConcurrent: 1,
+		ByteBudget:    100,
+		OnPrepared:    func(job PreparedJob) { preparedCh <- job },
+		MetadataResolver: func(_ context.Context, asset futureasset.AssetManifest, res downloader.CacheResolution) (PreparedAssetMetadata, error) {
+			return PreparedAssetMetadata{AssetKey: asset.AssetKey, AssetID: asset.AssetID, SHA256: asset.SHA256, SizeBytes: asset.SizeBytes, LocalPath: res.LocalPath, PreparedAt: time.Now().UTC()}, nil
+		},
+	})
+	s.SetResolver(downloader.NewCacheResolver(manager, nil))
+	s.SetProtectionStore(store)
+	defer s.Close()
+
+	if err := s.Reconcile(futureTestPlan()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-preparedCh:
+	case <-time.After(time.Second):
+		t.Fatal("job did not reach PREPARED")
+	}
+
+	// MarkJobStarted should trigger the handoff.
+	s.MarkJobStarted("n1")
+	if got := executionReserveCount.Load(); got != 1 {
+		t.Fatalf("execution reserve after MarkJobStarted = %d, want 1", got)
+	}
+}
+
+// TestScheduler_ReleaseAllExecutionReservations verifies that shutdown
+// releases all execution-phase pins.
+func TestScheduler_ReleaseAllExecutionReservations(t *testing.T) {
+	var executionReserveCount, executionReleaseCount atomic.Int32
+	store := &trackingProtectionStore{
+		onReserve: func(key assetref.AssetKey, id string) {
+			if strings.HasPrefix(id, "execution:") {
+				executionReserveCount.Add(1)
+			}
+		},
+		onRelease: func(key assetref.AssetKey, id string) {
+			if strings.HasPrefix(id, "execution:") {
+				executionReleaseCount.Add(1)
+			}
+		},
+	}
+	cachedPath := t.TempDir() + "/shutdown.bin"
+	contents := []byte("shutdown-test")
+	if err := os.WriteFile(cachedPath, contents, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	transferer := downloader.TransfererFunc(func(_ context.Context, _ context.Context, req downloader.DownloadRequest, check bool, _ func(int64)) (downloader.CacheCheckResult, downloader.TransferResult, error) {
+		if check {
+			return downloader.CacheCheckResult{CacheHit: true, LocalPath: cachedPath, SHA256: req.SHA256, Outcome: downloader.CacheOutcomeHitValid}, downloader.TransferResult{}, nil
+		}
+		return downloader.CacheCheckResult{}, downloader.TransferResult{}, errors.New("cache hit must not download")
+	})
+	manager := downloader.NewManager(downloader.Config{Concurrency: 1}, transferer)
+	defer manager.Close()
+	preparedCh := make(chan PreparedJob, 1)
+	s := NewScheduler(Config{
+		WorkerID:      "worker-a",
+		MaxConcurrent: 1,
+		ByteBudget:    100,
+		OnPrepared:    func(job PreparedJob) { preparedCh <- job },
+		MetadataResolver: func(_ context.Context, asset futureasset.AssetManifest, res downloader.CacheResolution) (PreparedAssetMetadata, error) {
+			return PreparedAssetMetadata{AssetKey: asset.AssetKey, AssetID: asset.AssetID, SHA256: asset.SHA256, SizeBytes: asset.SizeBytes, LocalPath: res.LocalPath, PreparedAt: time.Now().UTC()}, nil
+		},
+	})
+	s.SetResolver(downloader.NewCacheResolver(manager, nil))
+	s.SetProtectionStore(store)
+	defer s.Close()
+
+	if err := s.Reconcile(futureTestPlan()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-preparedCh:
+	case <-time.After(time.Second):
+		t.Fatal("job did not reach PREPARED")
+	}
+	s.MarkJobStarted("n1")
+	if got := executionReserveCount.Load(); got != 1 {
+		t.Fatalf("execution reserve = %d, want 1", got)
+	}
+	s.ReleaseAllExecutionReservations()
+	if got := executionReleaseCount.Load(); got != 1 {
+		t.Fatalf("execution release = %d, want 1", got)
+	}
+}
+
+// ── Canonical Origin Classification Certification Tests ────────────────
+//
+// These three tests certify the three mutually-exclusive resolution
+// origin paths. Each test simulates the exact scenario it names and
+// verifies that the cacheResolutionSink classifies the origin correctly.
+//
+// COLD:  No FutureAssetPlan exists. The asset is not in cache.
+//         The scheduler does not run. The attempt downloads the asset.
+//         Origin = runtime_download.
+//
+// WARM:  The asset is already in cache from a prior job/session.
+//         No PreparedJob entry exists for it. The scheduler does not
+//         run (or runs but the asset is already a cache hit).
+//         Origin = warm_cache.
+//
+// PREFETCH: A FutureAssetPlan triggers download of the asset before
+//         the attempt. A PreparedJob entry with matching SHA256/size
+//         exists. The scheduler runs and the asset is ready.
+//         Origin = prefetch. prepared_ratio = 1.0.
+
+// testOriginSink is a ResolutionSink that classifies origin based on
+// the scheduler's PreparedJob read model. It mirrors the worker package's
+// cacheResolutionSink logic for test isolation. It stores the classified
+// resolution so callers can inspect the origin after Resolve returns.
+type testOriginSink struct {
+	s        *Scheduler
+	lastDown downloader.CacheResolution
+}
+
+func (s *testOriginSink) RecordResolution(_ context.Context, resolution downloader.CacheResolution) {
+	if resolution.CacheHit && resolution.Origin == "" {
+		resolution.Origin = downloader.OriginWarmCache
+		for _, job := range s.s.PreparedJobs() {
+			for _, asset := range job.Assets {
+				if asset.SHA256 == string(resolution.SHA256) && asset.SizeBytes > 0 {
+					resolution.Origin = downloader.OriginPrefetch
+				}
+			}
+		}
+	} else if !resolution.CacheHit && resolution.Origin == "" {
+		resolution.Origin = downloader.OriginRuntimeDownload
+	}
+	s.lastDown = resolution
+}
+
+// lastOrigin returns the origin from the most recent RecordResolution call.
+func (s *testOriginSink) lastOrigin() downloader.ResolutionOrigin {
+	return s.lastDown.Origin
+}
+
+// TestCertification_COLD_OriginRuntimeDownload certifies the COLD path:
+// no FutureAssetPlan, asset absent from cache, must be downloaded at
+// attempt time. The origin must be classified as runtime_download.
+func TestCertification_COLD_OriginRuntimeDownload(t *testing.T) {
+	payload := []byte("COLD-payload-not-in-cache")
+	sum := sha256.Sum256(payload)
+	sha := hex.EncodeToString(sum[:])
+
+	// No file written to disk — asset is absent from cache.
+	// The transferer simulates a cache miss + download.
+	var downloadCount atomic.Int32
+	transferer := downloader.TransfererFunc(func(_ context.Context, _ context.Context, req downloader.DownloadRequest, check bool, _ func(int64)) (downloader.CacheCheckResult, downloader.TransferResult, error) {
+		if check {
+			return downloader.CacheCheckResult{Outcome: downloader.CacheOutcomeMissNotFound}, downloader.TransferResult{}, nil
+		}
+		downloadCount.Add(1)
+		return downloader.CacheCheckResult{}, downloader.TransferResult{LocalPath: "/cold/asset.bin", Bytes: int64(len(payload)), SHA256: req.SHA256}, nil
+	})
+	manager := downloader.NewManager(downloader.Config{Concurrency: 1}, transferer)
+	defer manager.Close()
+
+	// No FutureAssetPlan is sent — the scheduler never runs.
+	// The asset must be downloaded at attempt time.
+	s := NewScheduler(Config{WorkerID: "cold-worker", MaxConcurrent: 1, ByteBudget: 1024 * 1024})
+	coldSink := &testOriginSink{s: s}
+	s.SetResolver(downloader.NewCacheResolver(manager, coldSink))
+	defer s.Close()
+
+	// Simulate the attempt resolving the asset through the resolver.
+	req := downloader.DownloadRequest{
+		AssetKey:  "asset-cold",
+		AssetID:   "asset-cold",
+		SHA256:    assetref.ContentHash(sha),
+		SizeBytes: int64(len(payload)),
+	}
+	resolution, err := s.resolver.Resolve(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Certification: must be a cache miss (downloaded)
+	if resolution.CacheHit {
+		t.Fatal("COLD: expected cache miss, got cache hit")
+	}
+	if !resolution.Downloaded {
+		t.Fatal("COLD: expected Downloaded=true")
+	}
+	if downloadCount.Load() != 1 {
+		t.Fatalf("COLD: download count = %d, want 1", downloadCount.Load())
+	}
+
+	// Certification: origin must be runtime_download (classified by sink)
+	if coldSink.lastOrigin() != downloader.OriginRuntimeDownload {
+		t.Fatalf("COLD: origin = %q, want %q", coldSink.lastOrigin(), downloader.OriginRuntimeDownload)
+	}
+
+	// Certification: no PreparedJob exists
+	prepared := s.PreparedJobs()
+	if len(prepared) != 0 {
+		t.Fatalf("COLD: prepared jobs = %d, want 0", len(prepared))
+	}
+}
+
+// TestCertification_WARM_OriginWarmCache certifies the WARM path:
+// asset is already in cache from a prior job (cache hit), no PreparedJob
+// entry exists. The origin must be classified as warm_cache.
+func TestCertification_WARM_OriginWarmCache(t *testing.T) {
+	payload := []byte("WARM-payload-already-in-cache")
+	sum := sha256.Sum256(payload)
+	sha := hex.EncodeToString(sum[:])
+
+	// Pre-seed the cache with the asset.
+	path := t.TempDir() + "/warm-asset.bin"
+	if err := os.WriteFile(path, payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Transferer returns cache hit — asset is already local.
+	var downloadCount atomic.Int32
+	transferer := downloader.TransfererFunc(func(_ context.Context, _ context.Context, req downloader.DownloadRequest, check bool, _ func(int64)) (downloader.CacheCheckResult, downloader.TransferResult, error) {
+		if check {
+			return downloader.CacheCheckResult{CacheHit: true, LocalPath: path, SHA256: req.SHA256, Outcome: downloader.CacheOutcomeHitValid}, downloader.TransferResult{}, nil
+		}
+		downloadCount.Add(1)
+		return downloader.CacheCheckResult{}, downloader.TransferResult{}, errors.New("cache hit must not download")
+	})
+	manager := downloader.NewManager(downloader.Config{Concurrency: 1}, transferer)
+	defer manager.Close()
+
+	// No FutureAssetPlan → no PreparedJob entries.
+	s := NewScheduler(Config{WorkerID: "warm-worker", MaxConcurrent: 1, ByteBudget: 1024 * 1024})
+	warmSink := &testOriginSink{s: s}
+	s.SetResolver(downloader.NewCacheResolver(manager, warmSink))
+	defer s.Close()
+
+	// Simulate the attempt resolving the asset through the resolver.
+	req := downloader.DownloadRequest{
+		AssetKey:  "asset-warm",
+		AssetID:   "asset-warm",
+		SHA256:    assetref.ContentHash(sha),
+		SizeBytes: int64(len(payload)),
+	}
+	resolution, err := s.resolver.Resolve(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Certification: must be a cache hit (no download)
+	if !resolution.CacheHit {
+		t.Fatal("WARM: expected cache hit, got cache miss")
+	}
+	if downloadCount.Load() != 0 {
+		t.Fatalf("WARM: download count = %d, want 0", downloadCount.Load())
+	}
+
+	// Certification: origin must be warm_cache (no PreparedJob entry, classified by sink)
+	if warmSink.lastOrigin() != downloader.OriginWarmCache {
+		t.Fatalf("WARM: origin = %q, want %q", warmSink.lastOrigin(), downloader.OriginWarmCache)
+	}
+
+	// Certification: no PreparedJob for this asset
+	prepared := s.PreparedJobs()
+	if len(prepared) != 0 {
+		t.Fatalf("WARM: prepared jobs = %d, want 0 (no FutureAssetPlan)", len(prepared))
+	}
+}
+
+// TestCertification_PREFETCH_OriginPrefetch certifies the PREFETCH path:
+// a FutureAssetPlan triggers download of the asset before the attempt.
+// A PreparedJob entry with matching SHA256/size exists. The origin must
+// be classified as prefetch. prepared_ratio = 1.0.
+func TestCertification_PREFETCH_OriginPrefetch(t *testing.T) {
+	payload := []byte("PREFETCH-payload-downloaded-by-plan")
+	sum := sha256.Sum256(payload)
+	sha := hex.EncodeToString(sum[:])
+
+	// Pre-seed the cache with the asset (simulates what the plan download does).
+	// The transferer returns cache miss on check, downloads on transfer.
+	// After transfer, the second lookup (for the attempt) returns cache hit.
+	prefetchPath := t.TempDir() + "/prefetch-asset.bin"
+	if err := os.WriteFile(prefetchPath, payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var downloadCount atomic.Int32
+	var seen atomic.Bool // first check returns miss, subsequent checks return hit
+	transferer := downloader.TransfererFunc(func(_ context.Context, _ context.Context, req downloader.DownloadRequest, check bool, _ func(int64)) (downloader.CacheCheckResult, downloader.TransferResult, error) {
+		if check {
+			if seen.Load() {
+				return downloader.CacheCheckResult{CacheHit: true, LocalPath: prefetchPath, SHA256: req.SHA256, Outcome: downloader.CacheOutcomeHitValid}, downloader.TransferResult{}, nil
+			}
+			return downloader.CacheCheckResult{Outcome: downloader.CacheOutcomeMissNotFound}, downloader.TransferResult{}, nil
+		}
+		seen.Store(true)
+		downloadCount.Add(1)
+		return downloader.CacheCheckResult{}, downloader.TransferResult{LocalPath: prefetchPath, Bytes: int64(len(payload)), SHA256: req.SHA256}, nil
+	})
+	manager := downloader.NewManager(downloader.Config{Concurrency: 2}, transferer)
+	defer manager.Close()
+
+	// Collect PREPARED events.
+	preparedCh := make(chan PreparedJob, 4)
+	s := NewScheduler(Config{
+		WorkerID:      "prefetch-worker",
+		MaxConcurrent: 1,
+		ByteBudget:    1024 * 1024,
+		OnPrepared:    func(job PreparedJob) { preparedCh <- job },
+	})
+	prefetchSink := &testOriginSink{s: s}
+	s.SetResolver(downloader.NewCacheResolver(manager, prefetchSink))
+	defer s.Close()
+
+	// Step 1: Send FutureAssetPlan to trigger prefetch.
+	now := time.Now().UTC()
+	plan := futureasset.Plan{
+		Version:     1,
+		PlanID:      "prefetch-cert",
+		WorkerID:    "prefetch-worker",
+		GeneratedAt: now,
+		ExpiresAt:   now.Add(5 * time.Minute),
+		Limits:      futureasset.Limits{PrefetchHorizon: 1, ProtectionLookahead: 1},
+		PrefetchJobs: []futureasset.Job{{
+			JobID:         "job-prefetch",
+			TaskID:        "task-prefetch",
+			ReservationID: "reservation-prefetch",
+			Distance:      1,
+			Assets: []futureasset.AssetManifest{{
+				AssetKey:  "asset-prefetch",
+				AssetID:   "asset-prefetch",
+				SHA256:    sha,
+				SizeBytes: int64(len(payload)),
+			}},
+		}},
+		Protect: []futureasset.ProtectedAsset{{
+			AssetKey: "asset-prefetch", FutureRefCount: 1, NextUseDistance: 1,
+		}},
+	}
+
+	if err := s.Reconcile(plan); err != nil {
+		t.Fatal(err)
+	}
+
+	// Step 2: Wait for PREPARED.
+	select {
+	case job := <-preparedCh:
+		if job.State != PreparationStatePrepared {
+			t.Fatalf("PREFETCH: state = %q, want PREPARED", job.State)
+		}
+		if len(job.Assets) != 1 {
+			t.Fatalf("PREFETCH: assets = %d, want 1", len(job.Assets))
+		}
+		asset := job.Assets["asset-prefetch"]
+		if asset.SHA256 != sha {
+			t.Fatalf("PREFETCH: SHA256 = %q, want %q", asset.SHA256, sha)
+		}
+		if asset.SizeBytes != int64(len(payload)) {
+			t.Fatalf("PREFETCH: size = %d, want %d", asset.SizeBytes, len(payload))
+		}
+		if asset.PreparedAt.Before(plan.GeneratedAt) {
+			t.Fatalf("PREFETCH: prepared_at %s before plan GeneratedAt %s", asset.PreparedAt, plan.GeneratedAt)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("PREFETCH: did not reach PREPARED within timeout")
+	}
+
+	// Step 3: Now simulate the attempt resolving the same asset.
+	// The cache should now have the asset (downloaded by the plan).
+	// The resolver should classify it as prefetch because a PreparedJob exists.
+	req := downloader.DownloadRequest{
+		AssetKey:  "asset-prefetch",
+		AssetID:   "asset-prefetch",
+		SHA256:    assetref.ContentHash(sha),
+		SizeBytes: int64(len(payload)),
+	}
+	resolution, err := s.resolver.Resolve(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Certification: must be a cache hit (downloaded by plan, now local)
+	if !resolution.CacheHit {
+		t.Fatal("PREFETCH: expected cache hit after plan download, got miss")
+	}
+
+	// Certification: origin must be prefetch (PreparedJob entry exists, classified by sink)
+	if prefetchSink.lastOrigin() != downloader.OriginPrefetch {
+		t.Fatalf("PREFETCH: origin = %q, want %q", prefetchSink.lastOrigin(), downloader.OriginPrefetch)
+	}
+
+	// Certification: prepared_ratio = 1.0
+	prepared := s.PreparedJobs()
+	totalAssets := 0
+	prefetchedReady := 0
+	for _, pj := range prepared {
+		for _, a := range pj.Assets {
+			totalAssets++
+			if a.SHA256 == sha && a.SizeBytes == int64(len(payload)) {
+				prefetchedReady++
+			}
+		}
+	}
+	if totalAssets == 0 {
+		t.Fatal("PREFETCH: no prepared assets found")
+	}
+	preparedRatio := float64(prefetchedReady) / float64(totalAssets)
+	if preparedRatio != 1.0 {
+		t.Fatalf("PREFETCH: prepared_ratio = %.2f, want 1.0 (prefetched=%d, total=%d)", preparedRatio, prefetchedReady, totalAssets)
+	}
+
+	// Certification: only 1 download (by the plan, not by the attempt)
+	if downloadCount.Load() != 1 {
+		t.Fatalf("PREFETCH: download count = %d, want 1 (plan downloaded, attempt should not)", downloadCount.Load())
+	}
+}

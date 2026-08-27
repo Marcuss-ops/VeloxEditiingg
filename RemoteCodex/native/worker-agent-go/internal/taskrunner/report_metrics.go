@@ -349,7 +349,14 @@ func (r *TaskRunner) mergeStatsInto(report *TaskExecutionReport) {
 			cacheHits = maxInt64(0, cs.Hits-report.CacheBaseline["hits"])
 			cacheMisses = maxInt64(0, cs.Misses-report.CacheBaseline["misses"])
 		}
-		raw.BytesFromLocalCache = maxInt64(raw.BytesFromLocalCache, cs.BytesUsed)
+		// Single-chain: when the resolver sink has already derived
+		// BytesFromLocalCache from CacheHitBytes, do NOT overwrite it with
+		// the provider's total cache size (cs.BytesUsed). The sink value is
+		// attempt-scoped and authoritative; the provider value is a lifetime
+		// gauge that includes evicted and shared entries.
+		if raw.BytesFromLocalCache == 0 {
+			raw.BytesFromLocalCache = cs.BytesUsed
+		}
 		// Wire the per-provider cache counters. The attempt-scoped
 		// resolver counters (asset.cache.hit.count etc.) are authoritative
 		// when present; the generic cache provider fills gaps.
@@ -368,6 +375,8 @@ func (r *TaskRunner) mergeStatsInto(report *TaskExecutionReport) {
 		report.Metrics["cache.entries"] = cs.Entries
 		report.Metrics["cache.bytes"] = cs.BytesUsed
 		report.Metrics["cache.pinned"] = cs.PinnedEntries
+		// Per-job resource attribution (migration 160).
+		raw.JobAssetCacheBytesUsed = cs.BytesUsed
 	}
 
 	// ── Blob store provider ─────────────────────────────────────────

@@ -70,6 +70,9 @@ type ReadySnapshot struct {
 	// DiskThresholdBytes is the operator-tunable floor; /health/ready
 	// signals `disk.critical` when DiskFreeBytes < DiskThresholdBytes.
 	DiskThresholdBytes int64
+	// NetworkSaturationCritical is true when NIC saturation exceeds 95%
+	// and the worker is NOT READY for new work.
+	NetworkSaturationCritical bool
 	// GeneratedAt is the monotonic-clock timestamp of the latest
 	// state mutation. Useful only for /health/ready callers that
 	// want to spot stale snapshots (likely zero in tests that
@@ -178,6 +181,7 @@ var CanonicalReasons = []string{
 	"cache.protection_not_ready",
 	"blob.not_initialized",
 	"disk.critical",
+	"network_saturation.critical",
 }
 
 func (s *ReadySnapshot) NotReadyReasons() []string {
@@ -215,6 +219,9 @@ func (s *ReadySnapshot) NotReadyReasons() []string {
 	if s.DiskThresholdBytes > 0 && s.DiskFreeBytes > 0 && s.DiskFreeBytes < s.DiskThresholdBytes {
 		reasons = append(reasons, "disk.critical")
 	}
+	if s.NetworkSaturationCritical {
+		reasons = append(reasons, "network_saturation.critical")
+	}
 	return reasons
 }
 
@@ -245,6 +252,7 @@ func (s *ReadySnapshot) DetailMap() map[string]interface{} {
 		d["disk_free_bytes"] = s.DiskFreeBytes
 		d["disk_threshold_bytes"] = s.DiskThresholdBytes
 	}
+	d["network_saturation_critical"] = s.NetworkSaturationCritical
 	return d
 }
 
@@ -364,6 +372,15 @@ func SetDiskState(freeBytes, thresholdBytes int64) {
 	GlobalReady().UpdateReady(func(s *ReadySnapshot) {
 		s.DiskFreeBytes = freeBytes
 		s.DiskThresholdBytes = thresholdBytes
+	})
+}
+
+// MarkNetworkSaturationCritical records the NIC saturation critical state.
+// Called from the worker heartbeat loop after UpdateSaturation() detects
+// ingress or egress utilization above 95%.
+func MarkNetworkSaturationCritical(b bool) {
+	GlobalReady().UpdateReady(func(s *ReadySnapshot) {
+		s.NetworkSaturationCritical = b
 	})
 }
 
