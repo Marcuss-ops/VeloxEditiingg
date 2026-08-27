@@ -69,6 +69,14 @@ esac
 [[ -x "$FLEETCTL" ]] || die "fleetctl is not executable: $FLEETCTL"
 need jq
 
+# Renderer-only certification must never create a live Drive/social delivery
+# attempt. The server already supports VELOX_DELIVERY_DISABLED=1; require the
+# explicit operator acknowledgement here so a benchmark cannot silently
+# produce BLOCKED_AUTH rows or contact an external destination.
+if [[ "$MODE" == "render" && "${VELOX_DELIVERY_DISABLED:-}" != "1" ]]; then
+  die 'render benchmark requires VELOX_DELIVERY_DISABLED=1 (processing-only mode)'
+fi
+
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 run_dir="${OUT_ROOT}/${MODE}-${timestamp}"
 mkdir -p "$run_dir/jobs"
@@ -146,6 +154,7 @@ extract_report() {
       mode: $mode,
       concurrency: ($concurrency|tonumber),
       requested_jobs: ($jobs|length),
+      delivery_mode: (if (env.VELOX_DELIVERY_DISABLED // "") == "1" then "DISABLED_PROCESSING_ONLY" else "ENABLED" end),
       succeeded: ($jobs | map(select(.status == "SUCCEEDED" or .status == "COMPLETED")) | length),
       sha_values: ($jobs | map(.output_sha256) | map(select(. != null)) | unique),
       sha_identical: (($jobs | map(.output_sha256) | map(select(. != null)) | unique | length) <= 1),

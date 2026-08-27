@@ -76,8 +76,59 @@ func runRollout(client *fleetClient, args []string) int {
 			}
 		}
 	}
+	if err := verifyRolloutDigest(client, workers, imageRef); err != nil {
+		fmt.Fprintln(os.Stderr, fmtExit(ExitUnexpected, "rollout post-check: %v", err))
+		return ExitUnexpected
+	}
 	fmt.Fprintf(os.Stderr, "fleetctl: rollout complete — %d worker(s) updated to %s\n", len(workers), imageRef)
 	return ExitOK
+}
+
+// verifyRolloutDigest is the non-optional post-mutation observation for a
+// rollout. The operation ledger proves that the requested update completed;
+// this read proves that the worker card converged to the same immutable
+// digest. It deliberately reports worker_name next to the immutable worker_id
+// so operators cannot mistake the display name for the mTLS identity.
+func verifyRolloutDigest(client *fleetClient, workers []string, expected string) error {
+	expectedDigest := digestFromRef(expected)
+	if expectedDigest == "" {
+		return errors.New("expected rollout image is not immutable")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	for _, workerID := range workers {
+		card := workerCardResponse{}
+		status, err := client.doJSON(ctx, "GET", workerReadPath(workerID), nil, &card)
+		if err != nil {
+			return fmt.Errorf("worker=%s read: %w", workerID, err)
+		}
+		if status != 200 {
+			return fmt.Errorf("worker=%s read status=%d", workerID, status)
+		}
+		actual := ""
+		if value, ok := cardImageField(card, "image_digest").(string); ok {
+			actual = value
+		}
+		if actual == "" {
+			if value, ok := cardImageField(card, "running_digest").(string); ok {
+				actual = value
+			}
+		}
+		name, _ := card["worker_name"].(string)
+		if name == "" {
+			name, _ = card["hostname"].(string)
+		}
+		connection, _ := card["connection_state"].(string)
+		health, _ := card["health"].(string)
+		readiness, _, _, _ := workerReadyState(card)
+		match := digestFromRef(actual) == expectedDigest
+		fmt.Fprintf(os.Stderr, "fleetctl: post-check worker_id=%s worker_name=%s digest_match=%t connection=%s health=%s readiness=%s running_digest=%s\n",
+			workerID, displayValue(name), match, displayValue(connection), displayValue(health), displayValue(readiness), displayValue(actual))
+		if !match {
+			return fmt.Errorf("worker=%s running digest %s does not match target %s", workerID, displayValue(actual), expectedDigest)
+		}
+	}
+	return nil
 }
 
 // parseRolloutArgs mirrors the legacy Bash argument surface:

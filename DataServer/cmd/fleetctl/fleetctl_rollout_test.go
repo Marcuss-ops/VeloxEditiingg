@@ -66,6 +66,11 @@ func TestRunRollout_SerialUpdateStopsAtFailure(t *testing.T) {
 		case "GET /api/v1/admin/operations/op-ok":
 			pollCalls++
 			_ = json.NewEncoder(w).Encode(polledOperationRow{OperationID: "op-ok", Status: "SUCCEEDED"})
+		case "GET /api/v1/admin/workers/worker-ok":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"worker_id": "worker-ok", "worker_name": "velox-worker-01",
+				"image_digest": pinned, "connection_state": "CONNECTED", "health": "HEALTHY",
+			})
 		case "POST /api/v1/admin/workers/worker-fail/update":
 			updateCalls++
 			w.WriteHeader(http.StatusAccepted)
