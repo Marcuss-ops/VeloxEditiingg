@@ -386,11 +386,11 @@ const realisticAttemptReportJSONWithPrep = `{"milestones":[
 {"name":"result.sent","sequence":12,"elapsed_ms":328039},
 {"name":"attempt.completed","sequence":13,"elapsed_ms":328041}
 ],
-"assetPreparation":{"assetsRequired":26,"assetsUnique":26,"cacheHits":0,"cacheMisses":26,
-"readyBeforeAttempt":0,"downloadedDuringAttempt":26,
-"cacheLookupMs":41,"remoteWaitMs":282110,"remoteWaitCount":24,
-"downloadWallMs":11611,"downloadWorkMs":11204,"hashVerifyMs":2891,
-"metadataProbeMs":801,"materializeLocalMs":959}}`
+"assetPreparation":{"assetsRequired":"26","assetsUnique":"26","cacheHits":"0","cacheMisses":"26",
+"readyBeforeAttempt":"0","downloadedDuringAttempt":"26",
+"cacheLookupMs":"41","remoteWaitMs":"282110","remoteWaitCount":"24",
+"downloadWallMs":"11611","downloadWorkMs":"11204","hashVerifyMs":"2891",
+"metadataProbeMs":"801","materializeLocalMs":"959"}}`
 
 // TestDecodeAttemptWaterfall_CarriesAssetPreparationDrillDown locks STEP D on
 // the read model: the worker-measured drill-down rides AttemptWaterfall

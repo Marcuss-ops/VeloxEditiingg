@@ -31,6 +31,39 @@ canary rollout. Image digest: `sha256:ca617b2ef22344cd64ebc428501217973f8cfc0b65
 - CI build pipeline (`worker-image.yml`) triggered and certified all steps
   (build, sign, verify, baseline, real-bootstrap) in 8m44s.
 
+## [Unreleased] - 2026-08-27
+
+### STEP D — asset_preparation drill-down on the wire (wall vs work)
+
+The waterfall STEP A–C chain (canonical attempt milestones, durable reports,
+`WaterfallBuilder` with `coverage_pct`/`unaccounted_ms`, execution-level
+waterfall block for `fleetctl job inspect`) is closed by the drill-down INSIDE
+the dominant bucket. Wire→ingest→read model, one atomic tranche:
+
+- `proto/velox/control/worker_control.proto` — new `AssetPreparationBreakdown`
+  message + `TaskResult.asset_preparation = 24`; descriptor regenerated via
+  `scripts/gen-proto.sh` (`shared/controltransport/pb`).
+- Worker — the resolver-sink accumulator already measured the per-attempt
+  drill-down (cache lookup / remote wait / download wall-vs-work / hash verify /
+  metadata probe / local materialize); it now rides the typed report field and
+  `buildTaskResult` maps it 1:1 onto the pb message. An idle resolver attaches
+  NO breakdown: absence stays honest, never zero-filled.
+- Master — `raw_report_json` decode accepts protojson camelCase string-int64
+  AND snake_case number spellings; the breakdown rides `AttemptWaterfall` and
+  therefore the §20 execution `waterfall` block verbatim. Sub-phase sums may
+  overlap (parallel downloads) and are deliberately never re-combined into a
+  coverage number master-side.
+- Pins — worker: `TestAssetPreparationSummary_AggregatesPerAttemptDrillDown`
+  extends to the typed field; idle-tracker absence locked in
+  `TestAttachAssetOperationsPreservesAbsentCacheFacts`. Master:
+  `TestDecodeAttemptWaterfall_CarriesAssetPreparationDrillDown` locks the exact
+  protojson wire shape end-to-end from raw report to read model.
+
+Verification given the Windows host: cross-compiled linux/amd64 build+vet of
+the touched worker packages and the regenerated pb, full `velox-shared`
+telemetry vet/test, DataServer observability package green (`go vet` +
+`go test -count=1`).
+
 ## [Unreleased] - 2026-08-16
 
 ### Content-addressed asset cache + pressure LRU + volatile artifact staging

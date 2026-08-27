@@ -1,5 +1,10 @@
 package telemetry
 
+import (
+	"encoding/json"
+	"strconv"
+)
+
 // AssetPreparationBreakdown is the STEP D drill-down INSIDE the
 // asset_preparation waterfall bucket: where did the prepare window actually
 // go. It is carried on the worker's durable TaskResult and decoded by the
@@ -48,4 +53,57 @@ type AssetPreparationBreakdown struct {
 	HashVerifyMS       int64 `json:"hash_verify_ms"`
 	MetadataProbeMS    int64 `json:"metadata_probe_ms"`
 	MaterializeLocalMS int64 `json:"materialize_local_ms"`
+}
+
+// Wire contract: the durable payload is the Master's protojson.Marshal of the
+// TaskResult, which renders every int64 as a STRING and the field names in
+// camelCase (e.g. "remoteWaitMs":"282110"). Hand-written reports may instead
+// use the snake_case/spelled-out-number shape. UnmarshalJSON accepts both;
+// MarshalJSON always emits the snake_case read-model shape.
+type assetPreparationAlias AssetPreparationBreakdown
+
+func (b AssetPreparationBreakdown) MarshalJSON() ([]byte, error) {
+	return json.Marshal(assetPreparationAlias(b))
+}
+
+func (b *AssetPreparationBreakdown) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	pick := func(snake, camel string) int64 {
+		value, ok := fields[snake]
+		if !ok || len(value) == 0 {
+			value, ok = fields[camel]
+		}
+		if !ok || len(value) == 0 {
+			return 0
+		}
+		// protojson renders int64 as a quoted decimal string; plain JSON
+		// writers emit numbers. Accept both.
+		var number int64
+		if json.Unmarshal(value, &number) == nil {
+			return number
+		}
+		var text string
+		if json.Unmarshal(value, &text) == nil {
+			number, _ = strconv.ParseInt(text, 10, 64)
+		}
+		return number
+	}
+	b.AssetsRequired = pick("assets_required", "assetsRequired")
+	b.AssetsUnique = pick("assets_unique", "assetsUnique")
+	b.CacheHits = pick("cache_hits", "cacheHits")
+	b.CacheMisses = pick("cache_misses", "cacheMisses")
+	b.ReadyBeforeAttempt = pick("ready_before_attempt", "readyBeforeAttempt")
+	b.DownloadedDuringAttempt = pick("downloaded_during_attempt", "downloadedDuringAttempt")
+	b.CacheLookupMS = pick("cache_lookup_ms", "cacheLookupMs")
+	b.RemoteWaitMS = pick("remote_wait_ms", "remoteWaitMs")
+	b.RemoteWaitCount = pick("remote_wait_count", "remoteWaitCount")
+	b.DownloadWallMS = pick("download_wall_ms", "downloadWallMs")
+	b.DownloadWorkMS = pick("download_work_ms", "downloadWorkMs")
+	b.HashVerifyMS = pick("hash_verify_ms", "hashVerifyMs")
+	b.MetadataProbeMS = pick("metadata_probe_ms", "metadataProbeMs")
+	b.MaterializeLocalMS = pick("materialize_local_ms", "materializeLocalMs")
+	return nil
 }
