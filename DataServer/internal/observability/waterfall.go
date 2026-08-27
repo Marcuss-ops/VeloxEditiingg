@@ -102,8 +102,35 @@ func parseAssetPreparationDrillDown(raw string) *sharedtelemetry.AssetPreparatio
 		return nil
 	}
 	var prep sharedtelemetry.AssetPreparationBreakdown
-	if json.Unmarshal(prepRaw, &prep) != nil {
+	var fields map[string]int64
+	if json.Unmarshal(prepRaw, &fields) != nil {
 		return nil
+	}
+	// TaskResult is encoded with protojson camelCase, while hand-written
+	// heartbeat/durable fixtures use the shared telemetry snake_case names.
+	// Accept both spellings at this boundary without changing the shared wire
+	// type's canonical JSON tags.
+	get := func(snake, camel string) int64 {
+		if value, ok := fields[camel]; ok {
+			return value
+		}
+		return fields[snake]
+	}
+	prep = sharedtelemetry.AssetPreparationBreakdown{
+		AssetsRequired:          get("assets_required", "assetsRequired"),
+		AssetsUnique:            get("assets_unique", "assetsUnique"),
+		CacheHits:               get("cache_hits", "cacheHits"),
+		CacheMisses:             get("cache_misses", "cacheMisses"),
+		ReadyBeforeAttempt:      get("ready_before_attempt", "readyBeforeAttempt"),
+		DownloadedDuringAttempt: get("downloaded_during_attempt", "downloadedDuringAttempt"),
+		CacheLookupMS:           get("cache_lookup_ms", "cacheLookupMs"),
+		RemoteWaitMS:            get("remote_wait_ms", "remoteWaitMs"),
+		RemoteWaitCount:         get("remote_wait_count", "remoteWaitCount"),
+		DownloadWallMS:          get("download_wall_ms", "downloadWallMs"),
+		DownloadWorkMS:          get("download_work_ms", "downloadWorkMs"),
+		HashVerifyMS:            get("hash_verify_ms", "hashVerifyMs"),
+		MetadataProbeMS:         get("metadata_probe_ms", "metadataProbeMs"),
+		MaterializeLocalMS:      get("materialize_local_ms", "materializeLocalMs"),
 	}
 	return &prep
 }
