@@ -165,6 +165,8 @@ std::string RenderEngine::sidecarJson(const std::string& output_path) const {
         s << ",\"input_open_count\":" << io.input_open_count.load();
         s << ",\"input_reopen_count\":" << io.input_reopen_count.load();
         s << ",\"input_seek_count\":" << io.input_seek_count.load();
+        s << ",\"output_backward_seek_count\":" << io.output_backward_seek_count.load();
+        s << ",\"output_backward_seek_bytes\":" << io.output_backward_seek_bytes.load();
         s << ",\"first_packet_read_ms\":" << io.first_packet_read_ms.load();
         s << ",\"first_output_write_ms\":" << io.first_output_write_ms.load();
         s << ",\"file_fsync_ms\":" << io.file_fsync_ms.load();

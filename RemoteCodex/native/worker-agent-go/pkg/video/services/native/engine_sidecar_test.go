@@ -85,7 +85,9 @@ func TestReadEngineSidecar_FullSchemaMapsAllTelemetry(t *testing.T) {
 			"file_copy_bytes": 4194304,
 			"asset_bytes_copied": 4194304,
 			"input_open_count": 5,
-			"input_reopen_count": 2
+			"input_reopen_count": 2,
+			"output_backward_seek_count": 4,
+			"output_backward_seek_bytes": 65536
 		},
 		"process_counters": {
 			"external_spawn_count": 2,
@@ -162,7 +164,9 @@ func TestReadEngineSidecar_FullSchemaMapsAllTelemetry(t *testing.T) {
 	}
 	if sc.IOCounters.FileCopyCount != 3 || sc.IOCounters.FileCopyBytes != 4194304 ||
 		sc.IOCounters.AssetBytesCopied != 4194304 || sc.IOCounters.InputOpenCount != 5 ||
-		sc.IOCounters.InputReopenCount != 2 {
+		sc.IOCounters.InputReopenCount != 2 ||
+		sc.IOCounters.OutputBackwardSeekCount != 4 ||
+		sc.IOCounters.OutputBackwardSeekBytes != 65536 {
 		t.Fatalf("io_counters = %+v", sc.IOCounters)
 	}
 	if sc.FramePipeline == nil {
@@ -324,29 +328,33 @@ func TestMapEngineSidecar_MapsFramePipeline(t *testing.T) {
 func TestMapEngineSidecar_MapsIOCounters(t *testing.T) {
 	sc := engineSidecar{
 		IOCounters: &engineIOCounters{
-			FirstPacketReadMS:  11,
-			FirstOutputWriteMS: 23,
-			FileFsyncMS:        7,
-			DirectoryFsyncMS:   5,
-			OutputRenameMS:     3,
-			FileCopyCount:      2,
-			FileCopyBytes:      1024,
-			AssetBytesCopied:   512,
-			InputOpenCount:     6,
-			InputReopenCount:   1,
+			FirstPacketReadMS:       11,
+			FirstOutputWriteMS:      23,
+			FileFsyncMS:             7,
+			DirectoryFsyncMS:        5,
+			OutputRenameMS:          3,
+			FileCopyCount:           2,
+			FileCopyBytes:           1024,
+			AssetBytesCopied:        512,
+			InputOpenCount:          6,
+			InputReopenCount:        1,
+			OutputBackwardSeekCount: 4,
+			OutputBackwardSeekBytes: 65536,
 		},
 	}
 	mapped := pipeline.RenderMetrics{}
 	mapEngineSidecar(&sc, &mapped)
 	if mapped.FirstPacketReadMS != 11 || mapped.FirstOutputWriteMS != 23 || mapped.FileFsyncMS != 7 || mapped.DirectoryFsyncMS != 5 || mapped.OutputRenameMS != 3 || mapped.FileCopyCount != 2 || mapped.FileCopyBytes != 1024 || mapped.AssetBytesCopied != 512 ||
-		mapped.InputOpenCount != 6 || mapped.InputReopenCount != 1 {
+		mapped.InputOpenCount != 6 || mapped.InputReopenCount != 1 ||
+		mapped.OutputBackwardSeekCount != 4 || mapped.OutputBackwardSeekBytes != 65536 {
 		t.Fatalf("mapped io counters = %+v", mapped)
 	}
 
 	// Nil block must leave the metrics fields zero (legacy engines).
 	legacy := pipeline.RenderMetrics{}
 	mapEngineSidecar(&engineSidecar{}, &legacy)
-	if legacy.FileCopyCount != 0 || legacy.InputOpenCount != 0 {
+	if legacy.FileCopyCount != 0 || legacy.InputOpenCount != 0 ||
+		legacy.OutputBackwardSeekCount != 0 || legacy.OutputBackwardSeekBytes != 0 {
 		t.Fatalf("legacy sidecar must not populate io counters: %+v", legacy)
 	}
 }

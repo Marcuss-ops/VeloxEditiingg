@@ -234,6 +234,8 @@ void checkOutput(const fs::path& output,
            label + ": bounded mux performs no global packet sort");
     expect(!result.backward_seek_seen || !result.sha256_valid,
            label + ": backward seek and valid incremental SHA are mutually exclusive");
+    expect((result.backward_seek_count == 0) == (result.backward_seek_bytes == 0),
+           label + ": backward seek count and rewound bytes are consistent");
     if (result.backward_seek_seen) {
         expect(result.sha256.empty(),
                label + ": backward seek disables the opportunistic SHA");

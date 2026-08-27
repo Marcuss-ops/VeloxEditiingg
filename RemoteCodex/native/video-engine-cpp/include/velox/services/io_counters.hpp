@@ -32,6 +32,12 @@ struct IOCounters {
     std::atomic<int64_t> input_open_count{0};
     std::atomic<int64_t> input_reopen_count{0};
     std::atomic<int64_t> input_seek_count{0};
+    // Packet output sink backward seeks (PacketOutputSink): how many times
+    // LibAV moved the write position below the incremental-SHA prefix and
+    // how many bytes were rewound in total. Any backward seek invalidates
+    // the opportunistic SHA (the output was rewritten after hashing).
+    std::atomic<int64_t> output_backward_seek_count{0};
+    std::atomic<int64_t> output_backward_seek_bytes{0};
     std::atomic<int64_t> first_packet_read_ms{0};
     std::atomic<int64_t> first_output_write_ms{0};
     std::atomic<int64_t> file_fsync_ms{0};
@@ -110,6 +116,10 @@ void recordAssetCopy(int64_t bytes);
 // segment once for stream discovery and again inside readPackets).
 void recordInputOpen(const std::string& path);
 void recordInputSeek();
+// Records one backward seek on the packet output sink of `rewound_bytes`
+// (the distance the write position moved below the hashed prefix). The
+// sink also invalidates its opportunistic SHA whenever this fires.
+void recordOutputBackwardSeek(int64_t rewound_bytes);
 void recordFirstPacketRead();
 void recordFirstOutputWrite();
 void recordFileFsync(int64_t elapsed_ms);

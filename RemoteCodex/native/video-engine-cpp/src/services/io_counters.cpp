@@ -44,6 +44,8 @@ void resetIOCounters() {
     g_ioCounters.input_open_count.store(0);
     g_ioCounters.input_reopen_count.store(0);
     g_ioCounters.input_seek_count.store(0);
+    g_ioCounters.output_backward_seek_count.store(0);
+    g_ioCounters.output_backward_seek_bytes.store(0);
     g_ioCounters.first_packet_read_ms.store(0);
     g_ioCounters.first_output_write_ms.store(0);
     g_ioCounters.file_fsync_ms.store(0);
@@ -82,6 +84,12 @@ void recordInputOpen(const std::string& path) {
 }
 
 void recordInputSeek() { g_ioCounters.input_seek_count.fetch_add(1); }
+void recordOutputBackwardSeek(int64_t rewound_bytes) {
+    g_ioCounters.output_backward_seek_count.fetch_add(1);
+    if (rewound_bytes > 0) {
+        g_ioCounters.output_backward_seek_bytes.fetch_add(rewound_bytes);
+    }
+}
 void recordFirstPacketRead() {
     int64_t expected = 0;
     const int64_t now = static_cast<int64_t>(

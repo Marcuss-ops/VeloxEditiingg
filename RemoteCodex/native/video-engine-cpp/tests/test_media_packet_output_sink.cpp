@@ -72,6 +72,8 @@ void testAppendOnlySHA() {
     expect(result.output_size_bytes == static_cast<int64_t>(payload.size()),
            "append-only size matches payload");
     expect(!result.backward_seek_seen, "append-only output has no backward seek");
+    expect(result.backward_seek_count == 0 && result.backward_seek_bytes == 0,
+           "append-only output reports zero backward seek telemetry");
     expect(result.sha256_valid, "append-only SHA is valid");
     expect(result.sha256 == expectedSHA256(payload), "append-only SHA matches final bytes");
     velox::services::resetIOCounters();
@@ -84,6 +86,11 @@ void testAppendOnlySHA() {
            "rename timing is recorded");
     expect(velox::services::ioCounters().directory_fsync_ms.load() == 4,
            "directory fsync timing is recorded");
+    velox::services::recordOutputBackwardSeek(5);
+    velox::services::recordOutputBackwardSeek(7);
+    expect(velox::services::ioCounters().output_backward_seek_count.load() == 2 &&
+               velox::services::ioCounters().output_backward_seek_bytes.load() == 12,
+           "output backward seek count and bytes are recorded");
     sink.close();
     std::error_code ec;
     fs::remove(path, ec);
@@ -112,8 +119,52 @@ void testBackwardSeekInvalidatesSHA() {
     velox::media::packet::PacketOutputSinkResult result;
     expect(sink.finalize(result, error), "backward-seek sink finalizes: " + error);
     expect(result.backward_seek_seen, "backward seek is reported");
+    expect(result.backward_seek_count == 1 &&
+               result.backward_seek_bytes == static_cast<int64_t>(first.size()),
+           "one backward seek rewinds exactly the hashed prefix (count=" +
+               std::to_string(result.backward_seek_count) + ", bytes=" +
+               std::to_string(result.backward_seek_bytes) + ")");
     expect(!result.sha256_valid, "backward seek disables incremental SHA");
     expect(result.sha256.empty(), "invalid incremental SHA is not returned");
+    sink.close();
+    std::error_code ec;
+    fs::remove(path, ec);
+}
+
+void testMultipleBackwardSeeksAccumulate() {
+    const fs::path path = uniquePath();
+    const std::string first = "first block";
+    const std::string second = "bb";
+    const std::string third = "cc";
+    velox::media::packet::PacketOutputSink sink;
+    std::string error;
+    expect(sink.open(path, error), "multi-seek sink opens: " + error);
+
+    auto* avio = sink.avio();
+    expect(avio != nullptr, "multi-seek sink exposes AVIO context");
+    if (avio != nullptr) {
+        avio_write(avio, reinterpret_cast<const unsigned char*>(first.data()),
+                   static_cast<int>(first.size()));
+        expect(avio_seek(avio, 0, SEEK_SET) == 0,
+               "first backward seek is accepted by AVIO");
+        avio_write(avio, reinterpret_cast<const unsigned char*>(second.data()),
+                   static_cast<int>(second.size()));
+        expect(avio_seek(avio, 0, SEEK_SET) == 0,
+               "second backward seek is accepted by AVIO");
+        avio_write(avio, reinterpret_cast<const unsigned char*>(third.data()),
+                   static_cast<int>(third.size()));
+    }
+
+    velox::media::packet::PacketOutputSinkResult result;
+    expect(sink.finalize(result, error), "multi-seek sink finalizes: " + error);
+    expect(result.backward_seek_seen, "multi-seek output reports backward seeks");
+    expect(!result.sha256_valid, "multi-seek output disables incremental SHA");
+    expect(result.backward_seek_count == 2,
+           "every backward seek is counted (actual=" +
+               std::to_string(result.backward_seek_count) + ")");
+    expect(result.backward_seek_bytes == static_cast<int64_t>(2 * first.size()),
+           "backward seek bytes accumulate the rewind distance (actual=" +
+               std::to_string(result.backward_seek_bytes) + ")");
     sink.close();
     std::error_code ec;
     fs::remove(path, ec);
@@ -123,6 +174,7 @@ void testBackwardSeekInvalidatesSHA() {
 int main() {
     testAppendOnlySHA();
     testBackwardSeekInvalidatesSHA();
+    testMultipleBackwardSeeksAccumulate();
     std::cerr << "summary: fail=" << failures << "\n";
     return failures == 0 ? 0 : 1;
 }

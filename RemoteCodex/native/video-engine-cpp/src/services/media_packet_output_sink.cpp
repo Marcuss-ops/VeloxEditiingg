@@ -1,6 +1,7 @@
 #ifdef VELOX_ENABLE_LIBAV
 
 #include "velox/services/media_packet_output_sink.hpp"
+#include "velox/services/io_counters.hpp"
 
 extern "C" {
 #include <libavutil/error.h>
@@ -91,7 +92,13 @@ int64_t PacketOutputSink::seekCallback(void* opaque, int64_t offset, int whence)
     else if (whence == SEEK_END) next = sink.high_watermark_ + offset;
     else return AVERROR(EINVAL);
     if (next < 0) return AVERROR(EINVAL);
-    if (next < sink.hashed_until_) sink.append_only_ = false;
+    if (next < sink.hashed_until_) {
+        const int64_t rewound = sink.hashed_until_ - next;
+        sink.append_only_ = false;
+        ++sink.backward_seek_count_;
+        sink.backward_seek_bytes_ += rewound;
+        services::recordOutputBackwardSeek(rewound);
+    }
     sink.position_ = next;
     return next;
 }
@@ -118,6 +125,8 @@ bool PacketOutputSink::finalize(PacketOutputSinkResult& result, std::string& err
     }
     result.output_size_bytes = static_cast<int64_t>(st.st_size);
     result.backward_seek_seen = !append_only_;
+    result.backward_seek_count = backward_seek_count_;
+    result.backward_seek_bytes = backward_seek_bytes_;
     if (append_only_ && hashed_until_ == result.output_size_bytes) {
         unsigned char digest[64]{};
         av_hash_final(static_cast<AVHashContext*>(sha_), digest);
@@ -150,6 +159,8 @@ void PacketOutputSink::close() {
     high_watermark_ = 0;
     hashed_until_ = 0;
     append_only_ = true;
+    backward_seek_count_ = 0;
+    backward_seek_bytes_ = 0;
     finalized_ = false;
 }
 

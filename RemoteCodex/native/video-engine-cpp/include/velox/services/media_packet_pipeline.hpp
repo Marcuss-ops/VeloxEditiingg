@@ -57,6 +57,11 @@ struct CopyOnlyMuxResult {
     bool sha256_valid{false};
     int64_t output_size_bytes{0};
     bool backward_seek_seen{false};
+    // Telemetry for the opportunistic-SHA fallback: number of backward
+    // seeks the output sink took below its hashed prefix and total rewound
+    // bytes. Both are zero on a clean append-only write.
+    int64_t backward_seek_count{0};
+    int64_t backward_seek_bytes{0};
     // Certified bounded-path telemetry. The canonical mux uses two reusable
     // pending slots (video and audio), performs no global sort, and never
     // allocates a heap packet slot per packet.

@@ -254,6 +254,11 @@ type RenderMetrics struct {
 	AssetBytesCopied int64
 	InputOpenCount   int64
 	InputReopenCount int64
+	// OutputBackwardSeekCount/Bytes report how many times the C++ packet
+	// output sink moved the write position below its hashed prefix (each
+	// invalidates the opportunistic SHA) and the total rewound bytes.
+	OutputBackwardSeekCount int64
+	OutputBackwardSeekBytes int64
 	// Engine-declared process counters reported by the C++ engine in the
 	// sidecar process_counters block. They are DISJOINT facts from the
 	// /proc sampler above: the engine counts the external tool processes

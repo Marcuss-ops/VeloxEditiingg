@@ -103,6 +103,12 @@ type engineIOCounters struct {
 	AssetBytesCopied   int64 `json:"asset_bytes_copied"`
 	InputOpenCount     int64 `json:"input_open_count"`
 	InputReopenCount   int64 `json:"input_reopen_count"`
+	// OutputBackwardSeekCount/Bytes report how many times the C++ packet
+	// output sink moved the write position below its hashed prefix (each
+	// backward seek invalidates the opportunistic SHA) and the total
+	// rewound bytes. Zero on a clean append-only write.
+	OutputBackwardSeekCount int64 `json:"output_backward_seek_count"`
+	OutputBackwardSeekBytes int64 `json:"output_backward_seek_bytes"`
 }
 
 // engineProcessCounters mirrors the sidecar process_counters block

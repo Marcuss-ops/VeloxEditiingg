@@ -117,6 +117,8 @@ func mapEngineSidecar(sc *engineSidecar, m *pipeline.RenderMetrics) {
 		m.AssetBytesCopied = sc.IOCounters.AssetBytesCopied
 		m.InputOpenCount = sc.IOCounters.InputOpenCount
 		m.InputReopenCount = sc.IOCounters.InputReopenCount
+		m.OutputBackwardSeekCount = sc.IOCounters.OutputBackwardSeekCount
+		m.OutputBackwardSeekBytes = sc.IOCounters.OutputBackwardSeekBytes
 	}
 	if sc.ProcessCounters != nil {
 		m.EngineExternalSpawnCount = sc.ProcessCounters.ExternalSpawnCount

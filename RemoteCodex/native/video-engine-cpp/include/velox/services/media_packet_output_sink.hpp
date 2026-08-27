@@ -16,6 +16,11 @@ struct PacketOutputSinkResult {
     bool sha256_valid{false};
     int64_t output_size_bytes{0};
     bool backward_seek_seen{false};
+    // Telemetry for the opportunistic-SHA fallback: number of backward
+    // seeks below the hashed prefix and total rewound bytes across them.
+    // Both are zero on a clean append-only write.
+    int64_t backward_seek_count{0};
+    int64_t backward_seek_bytes{0};
 };
 
 class PacketOutputSink {
@@ -42,6 +47,8 @@ private:
     int64_t high_watermark_{0};
     int64_t hashed_until_{0};
     bool append_only_{true};
+    int64_t backward_seek_count_{0};
+    int64_t backward_seek_bytes_{0};
     bool finalized_{false};
     void* sha_{nullptr};
 };
