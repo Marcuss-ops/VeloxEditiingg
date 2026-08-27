@@ -229,15 +229,26 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 	if report != nil {
 		report.Waterfall = waterfall.Snapshot()
 		if m := telemetry.MilestoneRecorderFromContext(jobCtx); m != nil {
-			m.Mark(sharedtelemetry.MilestoneResultSent)
-			m.Mark(sharedtelemetry.MilestoneAttemptCompleted)
+			// The durable report can only carry milestones up to result.sending:
+			// it must be fully built before Submit serialises and hashes it.
+			// result.sent / attempt.completed are stamped post-Submit below, at
+			// the real transport boundary, and reach consumers through the live
+			// heartbeat projection.
 			report.Milestones = m.Snapshot()
 		}
-	} else if m := telemetry.MilestoneRecorderFromContext(jobCtx); m != nil {
+	}
+	w.reporter.Submit(submitCtx, pte, taskID, attemptID, report, execErr)
+
+	if m := telemetry.MilestoneRecorderFromContext(jobCtx); m != nil {
+		// Submit is synchronous and returns once the transport accepted the
+		// TaskResult (the spool-backed outbox path also waits out the
+		// TaskResultAck window; Send errors are swallowed and retried inside
+		// the reporter), so this is the true result.sent boundary. Stamping it
+		// pre-Submit collapsed sending/sent/completed onto one elapsed_ms and
+		// made reporting lag invisible to the waterfall.
 		m.Mark(sharedtelemetry.MilestoneResultSent)
 		m.Mark(sharedtelemetry.MilestoneAttemptCompleted)
 	}
-	w.reporter.Submit(submitCtx, pte, taskID, attemptID, report, execErr)
 
 	// Operational lifecycle: task completed.
 	w.UpdateOperationalPhase(taskID, PhaseDone)

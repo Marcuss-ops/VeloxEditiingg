@@ -68,10 +68,17 @@ func (w *Worker) publishArtifactsV1(ctx context.Context, pte *PendingTaskExecuti
 		return err
 	}
 	// The artifacts are declared/queued for publication. Mark publish.queued
-	// now; the actual transfer boundary is publish.started just before the
-	// first upload call.
+	// now.
 	if m := telemetry.MilestoneRecorderFromContext(ctx); m != nil {
 		m.Mark(sharedtelemetry.MilestonePublishQueued)
+	}
+
+	// publish.started deliberately does NOT fire beside publish.queued: the
+	// two stamps bracket the declaration→transfer handoff, which is exactly
+	// the waterfall publish_queue_wait window. Firing them together would
+	// collapse that bucket to zero forever and hide publisher-pool contention
+	// once render slots and the publisher pool are separated.
+	if m := telemetry.MilestoneRecorderFromContext(ctx); m != nil {
 		m.Mark(sharedtelemetry.MilestonePublishStarted)
 	}
 
