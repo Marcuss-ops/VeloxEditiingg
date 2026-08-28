@@ -1,3 +1,10 @@
+## [v1.3.8] - 2026-08-28
+
+### Release metadata
+
+- Refresh canonical worker build metadata so the image version and checkout
+  remain aligned during certification.
+
 ## [v1.3.7] - 2026-08-28
 
 ### Release verification
