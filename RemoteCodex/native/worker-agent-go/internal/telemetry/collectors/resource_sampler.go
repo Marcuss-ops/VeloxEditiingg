@@ -123,7 +123,6 @@ type SampledResources struct {
 	NetworkTransmitBytesTotal int64
 	NetworkRetransmitsTotal   int64
 
-
 	// Network throughput — instantaneous Mbit/s computed from cumulative deltas.
 	DownloadMbps float64
 	UploadMbps   float64
@@ -139,9 +138,9 @@ type SampledResources struct {
 	PublisherJobsActive int32
 
 	// File descriptor accounting — Linux /proc/self/fd + getrlimit.
-	OpenFileDescriptors   int64
-	MaxFileDescriptors    int64
-	FDUtilizationRatio    float64
+	OpenFileDescriptors int64
+	MaxFileDescriptors  int64
+	FDUtilizationRatio  float64
 
 	// FFmpeg process count visible in this worker's PID namespace.
 	FFmpegProcesses int32
@@ -179,8 +178,8 @@ type Sampler struct {
 	lastDiskSampleAt   time.Time
 
 	// Network throughput delta tracking.
-	lastNetRxBytes int64
-	lastNetTxBytes int64
+	lastNetRxBytes  int64
+	lastNetTxBytes  int64
 	lastNetSampleAt time.Time
 
 	slot atomic.Pointer[SampledResources]
@@ -268,6 +267,17 @@ func (s *Sampler) Latest() *SampledResources {
 // Host returns the most recent host snapshot (or nil).
 func (s *Sampler) Host() *SampledHost {
 	return s.host.Load()
+}
+
+// PrimeHost samples the static host capability layer synchronously. Workers
+// call this before sending Hello so the master's immutable runtime snapshot
+// never records a pre-sampler all-zero hardware profile.
+func (s *Sampler) PrimeHost() error {
+	h, err := s.SampleHost()
+	if h != nil {
+		s.host.Store(h)
+	}
+	return err
 }
 
 // Sample reads every /proc source, accumulates cumulative deltas,

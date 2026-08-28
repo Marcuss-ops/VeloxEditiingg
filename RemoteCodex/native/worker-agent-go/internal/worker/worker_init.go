@@ -221,6 +221,13 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 
 	sampler := telemetry.NewResourceSampler("", "", cfg.WorkDir, 0, 0)
 	sampler.SetTempDir(cfg.TempDir)
+	// Prime static capabilities before the first Hello. The Master persists
+	// the Hello payload as the immutable runtime snapshot for the session;
+	// waiting for the background sampler would permanently lose hardware,
+	// storage and ulimit facts for that session.
+	if err := sampler.PrimeHost(); err != nil {
+		log.Warn("[TELEMETRY] initial host capability sample degraded: %v", err)
+	}
 
 	// Build the RSS-based admission controller. The sampler reads
 	// /proc/self/statm for process RSS and /proc/meminfo for total RAM.
@@ -299,10 +306,10 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		// PR-2 followup: per-task-native lease-state registry. Threaded
 		// by MsgTaskLeaseGranted handler (separate PR) so leaseRenewLoop
 		// can fire MsgTaskLeaseRenewal.
-		activeTaskLeases:    make(map[string]*ActiveTaskLease),
-		connState:           ConnDisconnected,
-		concurrencyLimiter:  concurrency.NewConcurrencyLimiter(detectedConcurrency),
-		publisherPool:       NewPublisherPool(cfg.PublisherConcurrency),
+		activeTaskLeases:   make(map[string]*ActiveTaskLease),
+		connState:          ConnDisconnected,
+		concurrencyLimiter: concurrency.NewConcurrencyLimiter(detectedConcurrency),
+		publisherPool:      NewPublisherPool(cfg.PublisherConcurrency),
 		// admissionCtrl is wired into the pool after construction via
 		// SetAdmissionController below (same pattern as the scheduler).
 		artifactLocks:       NewArtifactLockRegistry(),
@@ -327,11 +334,11 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		// (statvfs + resolveWorkDirDevice degrade to best-effort).
 		// 5s tick + 3-tick emit cadence is the default from
 		// NewResourceSampler.
-		sampler:                   sampler,
-		storageResolver:           storageResolver,
-		admissionController:       admissionCtrl,
+		sampler:                    sampler,
+		storageResolver:            storageResolver,
+		admissionController:        admissionCtrl,
 		networkAdmissionController: netAdmissionCtrl,
-		exitFunc:                  os.Exit,
+		exitFunc:                   os.Exit,
 	}
 
 	// Compose the reporting subsystem behind its small interface. The
