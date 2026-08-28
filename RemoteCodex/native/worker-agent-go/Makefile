@@ -48,6 +48,9 @@ GOMOD := $(GOCMD) mod
 AGENT_BINARY := velox-worker-agent
 INSTALLER_BINARY := velox-installer
 EVICT_BINARY := velox-cache-evict
+BENCHMARK_BINARY := velox-benchmark
+FIXTURE_GEN_BINARY := velox-fixture-gen
+FIXTURE_GATE_BINARY := velox-fixture-gate
 
 PREFIX ?= /usr/local
 BINDIR := $(PREFIX)/bin
@@ -55,14 +58,14 @@ BINDIR := $(PREFIX)/bin
 BUILD_DIR := build
 BIN_DIR := bin
 
-.PHONY: all build clean test install uninstall agent installer evict release
+.PHONY: all build clean test install uninstall agent installer evict benchmark-tools release
 .PHONY: release-linux release-darwin release-windows test-coverage
 .PHONY: fmt lint deps verify-deps docs run-agent docker help
 .PHONY: bootstrap-smoke bootstrap-selftest-regenerate
 
 all: build
 
-build: agent installer evict
+build: agent installer evict benchmark-tools
 
 agent:
 	@echo "Building $(AGENT_BINARY)..."
@@ -78,6 +81,13 @@ evict:
 	@echo "Building $(EVICT_BINARY)..."
 	@mkdir -p $(BIN_DIR)
 	$(GOBUILD) -o $(BIN_DIR)/$(EVICT_BINARY) ./cmd/velox-cache-evict
+
+benchmark-tools:
+	@echo "Building benchmark tools..."
+	@mkdir -p $(BIN_DIR)
+	$(GOBUILD) $(LDFLAGS) -o $(BIN_DIR)/$(BENCHMARK_BINARY) ./cmd/velox-benchmark
+	$(GOBUILD) $(LDFLAGS) -o $(BIN_DIR)/$(FIXTURE_GEN_BINARY) ./cmd/velox-fixture-gen
+	$(GOBUILD) $(LDFLAGS) -o $(BIN_DIR)/$(FIXTURE_GATE_BINARY) ./cmd/velox-fixture-gate
 
 release: release-linux release-darwin release-windows
 
@@ -121,6 +131,9 @@ install: build
 	install -m 755 $(BIN_DIR)/$(AGENT_BINARY) $(BINDIR)/
 	install -m 755 $(BIN_DIR)/$(INSTALLER_BINARY) $(BINDIR)/
 	install -m 755 $(BIN_DIR)/$(EVICT_BINARY) $(BINDIR)/
+	install -m 755 $(BIN_DIR)/$(BENCHMARK_BINARY) $(BINDIR)/
+	install -m 755 $(BIN_DIR)/$(FIXTURE_GEN_BINARY) $(BINDIR)/
+	install -m 755 $(BIN_DIR)/$(FIXTURE_GATE_BINARY) $(BINDIR)/
 	@echo "Installation complete"
 
 uninstall:

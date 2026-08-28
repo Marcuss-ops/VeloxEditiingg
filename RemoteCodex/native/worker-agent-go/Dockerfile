@@ -17,7 +17,7 @@
 #   builder has no ambient go.work lookup path.
 #
 # The go-builder stage delegates the worker-agent build to the project's
-# own Makefile (`make BIN_DIR=/out agent evict`) so that:
+# own Makefile (`make BIN_DIR=/out agent evict benchmark-tools`) so that:
 #   1. VERSION.txt is enforced (Makefile FATALs when missing — the
 #      Dockerfile would otherwise silently fall back to "dev").
 #   2. Reproducible Builds BUILD_TIME chain (SOURCE_DATE_EPOCH → git
@@ -172,9 +172,12 @@ COPY shared/ /src/shared/
 # COPYed in stage 3.
 RUN --mount=type=cache,id=velox-worker-go-mod,target=/go/pkg/mod,sharing=locked \
     --mount=type=cache,id=velox-worker-go-build,target=/root/.cache/go-build,sharing=locked \
-    make BIN_DIR=/out agent evict && \
+    make BIN_DIR=/out agent evict benchmark-tools && \
     test -x /out/velox-worker-agent && \
-    test -x /out/velox-cache-evict
+    test -x /out/velox-cache-evict && \
+    test -x /out/velox-benchmark && \
+    test -x /out/velox-fixture-gen && \
+    test -x /out/velox-fixture-gate
 
 
 # ─── Stage 3: runtime — NO compilers, NO cmake, NO binutils ─────────────────
@@ -238,12 +241,16 @@ COPY --from=cpp-builder /usr/local/share/velox/video-engine.sha256 /usr/local/sh
 # pre-built bin/ from the build context is required.
 COPY --from=go-builder /out/velox-worker-agent /usr/local/bin/velox-worker-agent
 COPY --from=go-builder /out/velox-cache-evict /usr/local/bin/velox-cache-evict
+COPY --from=go-builder /out/velox-benchmark /usr/local/bin/velox-benchmark
+COPY --from=go-builder /out/velox-fixture-gen /usr/local/bin/velox-fixture-gen
+COPY --from=go-builder /out/velox-fixture-gate /usr/local/bin/velox-fixture-gate
 
 # Derive the runtime bundle identity from the exact binaries that crossed
 # the builder/runtime boundary. The source-tree BUNDLE_HASH.txt is not used
 # as an assertion because it can describe a different host build; this hash
 # is the value operators and the release manifest can actually verify.
 RUN sha256sum /usr/local/bin/velox-worker-agent /usr/local/bin/velox_video_engine /usr/local/bin/velox-cache-evict \
+      /usr/local/bin/velox-benchmark /usr/local/bin/velox-fixture-gen /usr/local/bin/velox-fixture-gate \
       | sha256sum | awk '{print $1}' > /app/RemoteCodex/BUNDLE_HASH.txt && \
     test "$(wc -c < /app/RemoteCodex/BUNDLE_HASH.txt)" -eq 65
 
@@ -257,7 +264,8 @@ LABEL org.veloxproject.engine.path="/usr/local/bin/velox_video_engine" \
       org.veloxproject.engine.runtime="debian:bookworm-slim" \
       org.veloxproject.engine.sha256-file="/usr/local/share/velox/video-engine.sha256"
 
-# Create non-root runtime user with UID pinned at ${VELOX_UID}. The three
+# Create non-root runtime user with UID pinned at ${VELOX_UID}. The runtime
+# binaries
 # binaries are chowned individually (no `chown -R`) because they live in
 # /usr/local/bin/ and must only be readable+executable by velox (mode 0755).
 RUN groupadd --system --gid "${VELOX_GID}" velox && \
@@ -272,11 +280,17 @@ RUN groupadd --system --gid "${VELOX_GID}" velox && \
         /usr/local/bin/velox_video_engine \
         /usr/local/bin/velox-worker-agent \
         /usr/local/bin/velox-cache-evict \
+        /usr/local/bin/velox-benchmark \
+        /usr/local/bin/velox-fixture-gen \
+        /usr/local/bin/velox-fixture-gate \
         /usr/local/bin/worker-entrypoint.sh && \
     chmod 0755 \
         /usr/local/bin/velox_video_engine \
         /usr/local/bin/velox-worker-agent \
         /usr/local/bin/velox-cache-evict \
+        /usr/local/bin/velox-benchmark \
+        /usr/local/bin/velox-fixture-gen \
+        /usr/local/bin/velox-fixture-gate \
         /usr/local/bin/worker-entrypoint.sh
 
 ENV HOME=/home/velox
