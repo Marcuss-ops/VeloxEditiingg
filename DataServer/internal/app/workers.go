@@ -49,6 +49,7 @@ type WorkersModule struct {
 	adminWorkersMetricsAggregatorHandler *api.AdminWorkersMetricsAggregatorHandler
 	adminWorkersSSHCheckHandler          *api.AdminWorkersSSHCheckHandler
 	adminWorkersAlertsHandler            *api.AdminWorkersAlertsHandler
+	adminWorkerCapacityHandler           *api.AdminWorkerCapacityHandler
 	validationHandler                    *validationhandlers.Handler
 	protectedAssetsHandler               *api.ProtectedAssetsHandler
 	protectedAssetsAuth                  gin.HandlerFunc
@@ -241,6 +242,13 @@ func (m *WorkersModule) SetAlertsHandler(h *api.AdminWorkersAlertsHandler) {
 	m.adminWorkersAlertsHandler = h
 }
 
+// SetCapacityHandler wires the admin worker capacity report endpoint
+// (GET /api/v1/admin/workers/:worker_id/capacity). Idempotent;
+// safe to call before RegisterRoutes; passing nil disables the route.
+func (m *WorkersModule) SetCapacityHandler(h *api.AdminWorkerCapacityHandler) {
+	m.adminWorkerCapacityHandler = h
+}
+
 // SetValidationHandler wires the persistent worker-validation endpoints.
 // The handler is injected at the composition root so no route can silently
 // fall back to an in-memory or permissive validation state.
@@ -418,6 +426,14 @@ func (m *WorkersModule) RegisterRoutes(r *gin.Engine) {
 		// guard (silent skip when the registry isn't wired).
 		if m.adminWorkersSSHCheckHandler != nil {
 			adminWorkers.GET("/ssh-check", m.adminWorkersSSHCheckHandler.RunSSHCheck())
+		}
+		// Canonical worker capacity report
+		// (GET /api/v1/admin/workers/:worker_id/capacity).
+		// Reads from Master SQL (worker_resource_samples +
+		// task_attempt_metrics + capacity_benchmark_runs) —
+		// no Prometheus dependency. Nil-tolerant.
+		if m.adminWorkerCapacityHandler != nil {
+			adminWorkers.GET("/:worker_id/capacity", m.adminWorkerCapacityHandler.GetWorkerCapacity())
 		}
 	}
 	// ── Canonical /api/v1/fleet namespace (Phase 6) ───────────────

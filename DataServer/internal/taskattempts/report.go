@@ -189,6 +189,9 @@ type AttemptMetrics struct {
 	JobRenderWallMs          int64   `json:"job_render_wall_ms"`
 	JobAssetWallMs           int64   `json:"job_asset_wall_ms"`
 	JobPublishWallMs         int64   `json:"job_publish_wall_ms"`
+	JobPublishBytes          int64   `json:"job_publish_bytes"`
+	JobPageFaults            int64   `json:"job_page_faults"`
+	JobScratchPeakBytes      int64   `json:"job_scratch_peak_bytes"`
 
 	// ── Progressive upload overlap (migration 161) ───────────────
 	ProgressiveOverlapFirstPartMs       int64 `json:"progressive_overlap_first_part_ms"`

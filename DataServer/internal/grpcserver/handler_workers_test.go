@@ -155,6 +155,8 @@ func TestHandleHeartbeat_F2_DecodesTypedResources(t *testing.T) {
 			DiskFreeBytes:             53687091200,
 			TempBytesWritten:          4194304,
 			TempFilesOpen:             2,
+			ScratchCurrentBytes:       104857600,  // 100 MiB
+			ScratchPeakBytes:          209715200,  // 200 MiB
 			NetworkReceiveBytesTotal:  20971520, // 20 MiB received cumulatively
 			NetworkTransmitBytesTotal: 4194304,  // 4 MiB transmitted cumulatively
 			NetworkRetransmitsTotal:   12,
@@ -198,6 +200,10 @@ func TestHandleHeartbeat_F2_DecodesTypedResources(t *testing.T) {
 		t.Errorf("ResourceSnapshot disk/temp mismatch: got free=%d temp=%d want free=%d temp=%d",
 			got.DiskFreeBytes, got.TempBytesWritten,
 			int64(53687091200), int64(4194304))
+	}
+	if got.ScratchCurrentBytes != 104857600 || got.ScratchPeakBytes != 209715200 {
+		t.Errorf("ResourceSnapshot scratch mismatch: got current=%d peak=%d; want 104857600 / 209715200",
+			got.ScratchCurrentBytes, got.ScratchPeakBytes)
 	}
 	if got.MemoryUsedBytes != 1677721600 || got.MemoryAvailableBytes != 4294967296 {
 		t.Errorf("ResourceSnapshot memory: used=%d avail=%d; want 1677721600 / 4294967296",

@@ -216,6 +216,7 @@ func persistAttemptMetrics(ctx context.Context, tx *sql.Tx, cmd taskgraph.Ingest
 			progressive_overlap_first_part_ms, progressive_overlap_parts_before_render,
 			progressive_overlap_bytes_before_render, progressive_overlap_ms,
 			trailer_to_open_ms, mux_to_open_us
+			, job_publish_bytes, job_page_faults, job_scratch_peak_bytes
 		) VALUES (
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
@@ -226,7 +227,7 @@ func persistAttemptMetrics(ctx context.Context, tx *sql.Tx, cmd taskgraph.Ingest
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?
+			?, ?, ?, ?, ?, ?, ?, ?
 		)`,
 		m.AttemptID, m.InputBytes, m.OutputBytes,
 		m.BytesFromDrive, m.BytesFromBlobstore, m.BytesFromLocalCache,
@@ -272,6 +273,7 @@ func persistAttemptMetrics(ctx context.Context, tx *sql.Tx, cmd taskgraph.Ingest
 		m.ProgressiveOverlapFirstPartMs, m.ProgressiveOverlapPartsBeforeRender,
 		m.ProgressiveOverlapBytesBeforeRender, m.ProgressiveOverlapMs,
 		m.TrailerToOpenMs, m.MuxToOpenUS,
+		m.JobPublishBytes, m.JobPageFaults, m.JobScratchPeakBytes,
 	)
 	if err != nil {
 		return fmt.Errorf("task ingest atomic metrics: %w", err)

@@ -260,6 +260,18 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 		logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] Admin workers health handler wired (SSH=%d targets from WorkerNodeRegistry + Registry + Deployments; level=D smoke pending)", workerNodeRegistry.Len())
 	}
 
+	// Worker capacity report endpoint
+	// (GET /api/v1/admin/workers/:worker_id/capacity).
+	// Reads from Master SQL (worker_resource_samples +
+	// task_attempt_metrics + capacity_benchmark_runs).
+	if m != nil && m.Workers != nil && p != nil && p.SQLite != nil {
+		capacityHandler := api.NewAdminWorkerCapacityHandler(api.WorkerCapacityReportDeps{
+			Store: p.SQLite,
+		})
+		m.Workers.SetCapacityHandler(capacityHandler)
+		logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] Admin workers capacity report handler wired (GET /api/v1/admin/workers/:worker_id/capacity)")
+	}
+
 	// Step 12/15 fleet-operator: register the concrete LevelDSmokeExecutor
 	// for the OperationKindSmoke kind (the production registry has no
 	// noop fallback), AND wire the on-demand POST

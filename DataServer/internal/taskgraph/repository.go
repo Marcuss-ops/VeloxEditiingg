@@ -85,6 +85,10 @@ type FutureReservationStore interface {
 	// expected worker ID is a CAS fence; worker identity itself is never
 	// rewritten, only reservation ownership is changed.
 	TransferFutureTask(context.Context, string, string, FutureReservation) (bool, error)
+	// UpdateReservationState advances the reservation lifecycle state.
+	// The transition must be valid (see ReservationState docs). A no-op
+	// when the reservation does not exist.
+	UpdateReservationState(ctx context.Context, reservationID string, state ReservationState) error
 }
 
 // Reader is the read-only task query surface.

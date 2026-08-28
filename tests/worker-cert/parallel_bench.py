@@ -1,10 +1,18 @@
 #!/usr/bin/env python3
-"""Certify the existing worker concurrency limiter at MaxActiveJobs 1, 2, 3.
+"""Certify the maximum safe worker concurrency for a given worker.
 
 This harness deliberately owns no placement, lease, download, or cleanup logic.
 It only changes the operator-selected worker cap through an explicit command,
 submits the canonical real-asset jobs concurrently, polls their lifecycle, and
 samples already-exported Prometheus metrics.
+
+The primary safety gate is **host memory**: peak_ram_ratio =
+peak(host_memory_used) / (peak(host_memory_used) +
+min(host_memory_available)) must stay below --max-peak-memory-ratio
+(default 0.80).  Process-level RSS (velox_worker_process_rss_bytes) is
+collected for diagnostics only and does NOT drive the certification
+decision — it underestimates real memory consumption because it does not
+include the concurrent C++ engine process trees.
 
 A live run requires:
   VELOX_MASTER_URL, VELOX_ADMIN_TOKEN (or TOKEN_FILE),
@@ -43,10 +51,11 @@ from typing import Any
 DEFAULT_MAX_CAP = 8
 REQUIRED_METRICS = (
     "cpu_utilization_ratio",
-    "rss_bytes",
     "host_memory_used_bytes",
+    "host_memory_available_bytes",
     "disk_wait_ratio",
     "disk_free_bytes",
+    "scratch_current_bytes",
     "scratch_peak_bytes",
     "cache_hits",
     "cache_misses",
@@ -172,12 +181,15 @@ def normalize_ratio(value: float | None) -> float | None:
 def extract_observations(values: dict[str, float]) -> dict[str, float | None]:
     return {
         "cpu_utilization_ratio": normalize_ratio(metric(values, "velox_worker_cpu_utilization_ratio", "velox_cpu_utilization_ratio")),
+        # Diagnostic only — process RSS does NOT include concurrent C++ engines;
+        # host_memory_* is the authoritative metric for the safety gate.
         "rss_bytes": metric(values, "velox_worker_process_rss_bytes", "velox_worker_process_rss_peak_bytes", "process_resident_memory_bytes"),
         "host_memory_used_bytes": metric(values, "velox_worker_memory_used_bytes", "velox_memory_used_bytes"),
         "host_memory_available_bytes": metric(values, "velox_worker_memory_available_bytes", "velox_memory_available_bytes"),
         "disk_wait_ratio": normalize_ratio(metric(values, "velox_worker_cpu_iowait_ratio", "velox_cpu_iowait_ratio", "velox_disk_wait_ratio")),
         "fd_util": normalize_ratio(metric(values, "velox_worker_fd_utilization_ratio", "velox_fd_utilization_ratio")),
         "disk_free_bytes": metric(values, "velox_worker_disk_free_bytes", "velox_disk_free_bytes"),
+        "scratch_current_bytes": metric(values, "velox_worker_scratch_current_bytes", "velox_scratch_current_bytes"),
         "scratch_peak_bytes": metric(values, "velox_worker_scratch_peak_bytes", "velox_scratch_peak_bytes"),
         "cache_hits": metric(values, "velox_cache_requests_total{result=\"hit\"}", "velox_asset_cache_hits_total", "velox_asset_cache_hit_total"),
         "cache_misses": metric(values, "velox_cache_requests_total{result=\"miss\"}", "velox_asset_cache_misses_total", "velox_asset_cache_miss_total"),
@@ -195,6 +207,11 @@ def extract_observations(values: dict[str, float]) -> dict[str, float | None]:
             "velox_task_duplicate_download_bytes_total",
         ),
         "errors": metric(values, "velox_worker_errors_total", "velox_compute_failure_reasons_total", "velox_task_errors_total"),
+        # GPU utilization — N/A on CPU-only workers; not yet exposed as
+        # Prometheus gauges on the heartbeat path (attempt-level only).
+        # When gauges land, the classifier will pick them up automatically.
+        "gpu_util_avg_ratio": normalize_ratio(metric(values, "velox_worker_gpu_util_avg_percent", "velox_gpu_util_avg_percent")),
+        "gpu_util_peak_ratio": normalize_ratio(metric(values, "velox_worker_gpu_util_peak_percent", "velox_gpu_util_peak_percent")),
     }
 
 
@@ -247,8 +264,8 @@ class CapResult:
     latency_p95_ms: float | None
     cpu_avg_ratio: float | None
     cpu_peak_ratio: float | None
-    rss_avg_bytes: float | None
-    rss_peak_bytes: float | None
+    rss_avg_bytes: float | None  # diagnostic only — host memory is authoritative
+    rss_peak_bytes: float | None  # diagnostic only — host memory is authoritative
     host_memory_used_avg_bytes: float | None
     host_memory_used_peak_bytes: float | None
     host_memory_available_bytes: float | None
@@ -266,7 +283,11 @@ class CapResult:
     errors: float | None
     missing_metrics: list[str]
     jobs: list[JobResult]
+    scratch_current_bytes: float | None = None
     scratch_peak_bytes: float | None = None
+    gpu_util_avg_ratio: float | None = None
+    gpu_util_peak_ratio: float | None = None
+    hard_stop_gates: dict[str, dict[str, object]] | None = None
     efficient: bool | None = None
     decision: str = ""
     limiting_resource: str = "UNKNOWN"
@@ -279,13 +300,226 @@ def cap_matrix(max_cap: int) -> tuple[int, ...]:
     return tuple(range(1, max_cap + 1))
 
 
+# ── Hard-stop gates ──────────────────────────────────────────────────────
+#
+# Three resource gates that IMMEDIATELY disqualify a cap cell — no
+# throughput-gain argument can override them.  A cell that exceeds any
+# of these thresholds is unsafe for production regardless of how many
+# correct videos it produced.
+#
+# The gates are evaluated both by _passes_safety_gates() (used by the
+# dynamic search to stop probing) and by choose_limit() (used for the
+# final certification decision).
+#
+# Unknown metrics (None) are treated as PASS — the certification refuses
+# to declare a limit rather than silently ignoring the resource.  This
+# is the correct fail-closed behavior: if we can't measure it, we can't
+# certify it, but we also don't fail a cell that otherwise looks safe.
+
+HARD_STOP_GATES: dict[str, dict[str, str]] = {
+    "peak_ram": {
+        "metric": "host_memory_peak_ratio",
+        "threshold": "<= 0.85",
+        "description": "Peak host memory used / total must stay at or below 85%",
+    },
+    "fd_util": {
+        "metric": "fd_util_peak_ratio",
+        "threshold": "< 0.80",
+        "description": "FD utilization peak must stay below 80%",
+    },
+    "disk_free": {
+        "metric": "disk_free_min_bytes",
+        "threshold": "> 10 GiB",
+        "description": "Minimum disk free bytes must stay above the safety margin",
+    },
+}
+
+
+def _check_hard_stop_gates(
+    result: CapResult,
+    max_peak_memory_ratio: float,
+    max_fd_util_ratio: float,
+    min_disk_free_bytes: float,
+) -> dict[str, dict[str, object]]:
+    """Evaluate the three hard-stop gates against a single CapResult.
+
+    Returns a dict keyed by gate name.  Each value has:
+      - passed: bool
+      - value: the observed metric value (or None if unavailable)
+      - threshold: the configured limit
+      - reason: human-readable failure reason (empty when passed)
+    """
+    gates: dict[str, dict[str, object]] = {}
+
+    # Gate 1: Peak RAM
+    ram_val = result.host_memory_peak_ratio
+    ram_pass = ram_val is None or ram_val <= max_peak_memory_ratio
+    gates["peak_ram"] = {
+        "passed": ram_pass,
+        "value": ram_val,
+        "threshold": max_peak_memory_ratio,
+        "reason": "" if ram_pass else f"peak_ram={ram_val:.3f} > {max_peak_memory_ratio}",
+    }
+
+    # Gate 2: FD utilization
+    fd_val = result.fd_util_peak_ratio
+    fd_pass = fd_val is None or fd_val < max_fd_util_ratio
+    gates["fd_util"] = {
+        "passed": fd_pass,
+        "value": fd_val,
+        "threshold": max_fd_util_ratio,
+        "reason": "" if fd_pass else f"fd_util={fd_val:.3f} >= {max_fd_util_ratio}",
+    }
+
+    # Gate 3: Disk free space
+    disk_val = result.disk_free_min_bytes
+    disk_pass = disk_val is None or disk_val > min_disk_free_bytes
+    gates["disk_free"] = {
+        "passed": disk_pass,
+        "value": disk_val,
+        "threshold": min_disk_free_bytes,
+        "reason": "" if disk_pass else f"disk_free={int(disk_val)} < {int(min_disk_free_bytes)}",
+    }
+
+    return gates
+
+
+def _hard_stops_passed(gates: dict[str, dict[str, object]]) -> bool:
+    """Return True only if every hard-stop gate passed."""
+    return all(g["passed"] for g in gates.values())
+
+
+def _passes_safety_gates(
+    result: CapResult,
+    max_error_rate: float,
+    max_iowait: float,
+    max_peak_memory_ratio: float,
+    max_fd_util_ratio: float,
+    min_disk_free_bytes: float,
+) -> bool:
+    """Hard safety-gate check used by the dynamic search to decide
+    whether to continue probing higher caps.
+
+    This is intentionally separate from choose_limit() which also
+    evaluates throughput gain — the search needs a per-result go/no-go
+    that does not depend on the previous eligible result.
+
+    The three hard-stop gates (RAM, FD, disk) are evaluated via
+    _check_hard_stop_gates(); additional checks (status, errors, iowait)
+    are evaluated inline.
+    """
+    if result.status != "PASS":
+        return False
+    if result.correct_videos < result.succeeded:
+        return False
+    if result.error_rate > max_error_rate:
+        return False
+    if result.disk_wait_avg_ratio is not None and result.disk_wait_avg_ratio > max_iowait:
+        return False
+    gates = _check_hard_stop_gates(result, max_peak_memory_ratio, max_fd_util_ratio, min_disk_free_bytes)
+    return _hard_stops_passed(gates)
+
+
+def dynamic_cap_search(
+    test_fn: Any,
+    max_cap: int,
+    max_error_rate: float = 0.0,
+    max_iowait: float = 0.25,
+    max_peak_memory_ratio: float = 0.85,
+    max_fd_util_ratio: float = 0.80,
+    min_disk_free_bytes: float = 10_000_000_000,
+) -> tuple[list[CapResult], list[int], list[int]]:
+    """Find the true certified max via exponential sweep + binary search.
+
+    Phase 1 (exponential): test 1, 2, 4, 8, ... until a safety gate
+    fails or max_cap is reached.
+    Phase 2 (binary): narrow between last safe and first unsafe cap.
+
+    The safety-gate check is a hard per-result go/no-go (status, errors,
+    memory, FD, iowait, disk).  The full choose_limit() evaluation
+    (including throughput-gain comparison) runs AFTER the search on the
+    complete result set.
+
+    Returns (results, exponential_caps, binary_caps) where results is
+    sorted by cap for choose_limit() consumption.
+    """
+    if max_cap < 1:
+        raise ValueError("max cap must be at least 1")
+
+    all_results: dict[int, CapResult] = {}
+    exponential_caps: list[int] = []
+    binary_caps: list[int] = []
+
+    # ── Phase 1: Exponential sweep ──────────────────────────────────────
+    cap = 1
+    while cap <= max_cap:
+        exponential_caps.append(cap)
+        result = test_fn(cap)
+        all_results[cap] = result
+        if not _passes_safety_gates(result, max_error_rate, max_iowait,
+                                    max_peak_memory_ratio, max_fd_util_ratio,
+                                    min_disk_free_bytes):
+            break
+        cap *= 2
+
+    # ── Phase 2: Binary search (only if sweep found a failure) ──────────
+    tested = sorted(all_results.keys())
+    last_ok = None
+    first_fail = None
+    for c in tested:
+        r = all_results[c]
+        if _passes_safety_gates(r, max_error_rate, max_iowait,
+                                max_peak_memory_ratio, max_fd_util_ratio,
+                                min_disk_free_bytes):
+            last_ok = c
+        elif first_fail is None:
+            first_fail = c
+
+    if last_ok is not None and first_fail is not None and first_fail - last_ok > 1:
+        lo, hi = last_ok + 1, first_fail - 1
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            if mid in all_results:
+                result = all_results[mid]
+            else:
+                binary_caps.append(mid)
+                result = test_fn(mid)
+                all_results[mid] = result
+            if _passes_safety_gates(result, max_error_rate, max_iowait,
+                                    max_peak_memory_ratio, max_fd_util_ratio,
+                                    min_disk_free_bytes):
+                last_ok = mid
+                lo = mid + 1
+            else:
+                first_fail = mid
+                hi = mid - 1
+
+    results = [all_results[c] for c in sorted(all_results.keys())]
+    return results, exponential_caps, binary_caps
+
+
 def classify_bottleneck(result: CapResult) -> str:
-    """Classify the dominant observed resource using one canonical policy."""
+    """Classify the dominant observed resource using one canonical policy.
+
+    Precedence is chosen so that the tightest / hardest-to-resolve bound
+    wins: FD exhaustion is a hard crash, memory pressure triggers OOM
+    kills, GPU saturation stalls NVENC pipelines, I/O wait starves CPU,
+    and only last does raw CPU saturation dominate.
+
+    Thresholds (derived from the capacity certification plan):
+      FD_BOUND:       fd_util_peak >= 0.80
+      MEMORY_BOUND:   host_memory_peak_ratio >= 0.85
+      GPU_BOUND:      gpu_util_peak >= 0.90  (N/A when metrics absent)
+      IO_BOUND:       iowait_avg >= 0.25
+      CPU_BOUND:      cpu_peak >= 0.90
+    """
     if result.fd_util_peak_ratio is not None and result.fd_util_peak_ratio >= 0.80:
         return "FD_BOUND"
     if result.host_memory_peak_ratio is not None and result.host_memory_peak_ratio >= 0.85:
         return "MEMORY_BOUND"
-    if result.disk_wait_avg_ratio is not None and result.disk_wait_avg_ratio >= 0.35:
+    if result.gpu_util_peak_ratio is not None and result.gpu_util_peak_ratio >= 0.90:
+        return "GPU_BOUND"
+    if result.disk_wait_avg_ratio is not None and result.disk_wait_avg_ratio >= 0.25:
         return "IO_BOUND"
     if result.cpu_peak_ratio is not None and result.cpu_peak_ratio >= 0.90:
         return "CPU_BOUND"
@@ -546,7 +780,10 @@ def run_one_cap(args: argparse.Namespace, cap: int, admin_token: str, m2m_token:
         fd_util_peak_ratio=aggregate_gauge(samples, "fd_util", "max"),
         disk_wait_avg_ratio=aggregate_gauge(samples, "disk_wait_ratio", "avg"),
         disk_free_min_bytes=aggregate_gauge(samples, "disk_free_bytes", "min"),
+        scratch_current_bytes=aggregate_gauge(samples, "scratch_current_bytes", "max"),
         scratch_peak_bytes=aggregate_gauge(samples, "scratch_peak_bytes", "max"),
+        gpu_util_avg_ratio=normalize_ratio(aggregate_gauge(samples, "gpu_util_avg_ratio", "avg")),
+        gpu_util_peak_ratio=normalize_ratio(aggregate_gauge(samples, "gpu_util_peak_ratio", "max")),
         cache_hits=hits,
         cache_misses=misses,
         cache_hit_ratio=hit_ratio,
@@ -560,6 +797,12 @@ def run_one_cap(args: argparse.Namespace, cap: int, admin_token: str, m2m_token:
 
 
 def choose_limit(results: list[CapResult], min_gain_pct: float, max_p95_ms: float | None, max_error_rate: float, max_iowait: float, max_peak_memory_ratio: float, max_fd_util_ratio: float, min_disk_free_bytes: float) -> None:
+    """Evaluate every cap result and set efficient/decision/limiting_resource.
+
+    Hard-stop gates (RAM, FD, disk) are evaluated FIRST via
+    _check_hard_stop_gates().  If any gate fails, the cell is immediately
+    disqualified — no throughput-gain argument can override it.
+    """
     # Cap 1 is the measured baseline. Compare higher caps only with the last
     # eligible result, so an incomplete/intermittently bad cell cannot poison
     # every later comparison. If cap 1 is not valid, no higher cap can become
@@ -567,7 +810,16 @@ def choose_limit(results: list[CapResult], min_gain_pct: float, max_p95_ms: floa
     previous_eligible: CapResult | None = None
     baseline_valid = bool(results) and results[0].max_active_jobs == 1
     for index, result in enumerate(results):
+        # ── Hard-stop gates (evaluated first, override everything) ──────
+        gates = _check_hard_stop_gates(result, max_peak_memory_ratio, max_fd_util_ratio, min_disk_free_bytes)
+        result.hard_stop_gates = gates
+        failed_gates = [name for name, g in gates.items() if not g["passed"]]
+
         checks: list[str] = []
+        if failed_gates:
+            checks.extend(f"hard_stop:{name}" for name in failed_gates)
+
+        # ── Soft checks (can be overridden by throughput gain) ─────────
         if result.status != "PASS":
             checks.append(result.status.lower())
         if result.correct_videos < result.succeeded:
@@ -578,12 +830,6 @@ def choose_limit(results: list[CapResult], min_gain_pct: float, max_p95_ms: floa
             checks.append("p95_limit")
         if result.disk_wait_avg_ratio is not None and result.disk_wait_avg_ratio > max_iowait:
             checks.append("iowait_limit")
-        if result.host_memory_peak_ratio is not None and result.host_memory_peak_ratio > max_peak_memory_ratio:
-            checks.append(f"peak_memory>{max_peak_memory_ratio}")
-        if result.fd_util_peak_ratio is not None and result.fd_util_peak_ratio > max_fd_util_ratio:
-            checks.append(f"fd_util>{max_fd_util_ratio}")
-        if result.disk_free_min_bytes is not None and result.disk_free_min_bytes < min_disk_free_bytes:
-            checks.append(f"disk_free<{int(min_disk_free_bytes)}")
         gain = None
         if index > 0 and previous_eligible is None:
             checks.append("baseline_unavailable")
@@ -621,7 +867,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-throughput-gain-pct", type=float, default=5.0)
     parser.add_argument("--max-p95-ms", type=float, default=None)
     parser.add_argument("--max-error-rate", type=float, default=0.0)
-    parser.add_argument("--max-iowait-ratio", type=float, default=0.35)
+    parser.add_argument("--max-iowait-ratio", type=float, default=0.25)
     parser.add_argument("--max-peak-memory-ratio", type=float, default=0.85,
                         help="reject caps where peak host memory used/total exceeds this ratio (0-1)")
     parser.add_argument("--max-fd-util-ratio", type=float, default=0.80,
@@ -635,7 +881,6 @@ def parse_args() -> argparse.Namespace:
         help="operator-owned verifier command; placeholders: {job_id}, {worker_id}, {master_url}; exit 0 means correct video",
     )
     parser.add_argument("--response-dir", type=Path, default=None, help="directory for terminal job JSON responses passed to the correctness hook")
-    parser.add_argument("--output", type=Path, default=Path("parallelism-certification.json"))
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--leave-cap", action="store_true", help="Do not restore MaxActiveJobs=1 after the matrix")
     args = parser.parse_args()
@@ -655,12 +900,19 @@ def main() -> int:
         print("canonical payload builder or assets fixture is missing", file=sys.stderr)
         return 2
     if args.dry_run:
-        caps = cap_matrix(args.max_cap)
+        # Show the exponential sweep sequence (what would actually be tested).
+        sweep: list[int] = []
+        cap = 1
+        while cap <= args.max_cap:
+            sweep.append(cap)
+            cap *= 2
         print(json.dumps({
-            "caps": caps,
+            "search_strategy": "exponential_sweep_then_binary_search",
+            "max_cap": args.max_cap,
+            "exponential_sweep": sweep,
             "worker_id": args.worker_id,
             "jobs": args.jobs,
-            "set_cap_commands": [command_for(args.set_cap_command, c, args.worker_id, args.master_url) for c in caps],
+            "set_cap_command": args.set_cap_command,
             "correctness_command": args.correctness_command,
             "response_dir": str(args.response_dir) if args.response_dir else "",
             "decision_metric": "correct_videos_per_hour",
@@ -677,13 +929,20 @@ def main() -> int:
         print(f"prerequisite failure: {exc}", file=sys.stderr)
         return 2
 
-    results: list[CapResult] = []
-    caps = cap_matrix(args.max_cap)
+    def run_cap(cap: int) -> CapResult:
+        run_cap_command(args.set_cap_command, cap, args.worker_id, args.master_url, False)
+        wait_cap(args.master_url, admin_token, args.worker_id, cap, args.wait_cap_timeout_s)
+        return run_one_cap(args, cap, admin_token, m2m_token)
+
     try:
-        for cap in caps:
-            run_cap_command(args.set_cap_command, cap, args.worker_id, args.master_url, False)
-            wait_cap(args.master_url, admin_token, args.worker_id, cap, args.wait_cap_timeout_s)
-            results.append(run_one_cap(args, cap, admin_token, m2m_token))
+        results, exp_caps, bin_caps = dynamic_cap_search(
+            run_cap, args.max_cap,
+            max_error_rate=args.max_error_rate,
+            max_iowait=args.max_iowait_ratio,
+            max_peak_memory_ratio=args.max_peak_memory_ratio,
+            max_fd_util_ratio=args.max_fd_util_ratio,
+            min_disk_free_bytes=args.min_disk_free_bytes,
+        )
     except Exception as exc:
         print(f"certification failed: {exc}", file=sys.stderr)
         return 3
@@ -695,6 +954,7 @@ def main() -> int:
                 print(f"WARNING: failed to restore MaxActiveJobs=1: {exc}", file=sys.stderr)
         delete_m2m(args.master_url, admin_token, client_id)
 
+    tested_caps = [r.max_active_jobs for r in results]
     choose_limit(results, args.min_throughput_gain_pct, args.max_p95_ms, args.max_error_rate, args.max_iowait_ratio, args.max_peak_memory_ratio, args.max_fd_util_ratio, args.min_disk_free_bytes)
     eligible = [r.max_active_jobs for r in results if r.efficient]
     efficient_limit = max(eligible) if eligible else None
@@ -704,7 +964,14 @@ def main() -> int:
         "schema": "velox.parallelism-certification.v1",
         "worker_id": args.worker_id,
         "master_url": args.master_url,
-        "caps": list(caps),
+        "search_strategy": {
+            "method": "exponential_sweep_then_binary_search",
+            "max_cap": args.max_cap,
+            "exponential_sweep": exp_caps,
+            "binary_search": bin_caps,
+            "total_tests": len(results),
+        },
+        "tested_caps": tested_caps,
         "jobs_per_cap": args.jobs,
         "metrics_urls": args.metrics_url,
         "correctness_command_configured": bool(args.correctness_command.strip()),
@@ -716,6 +983,12 @@ def main() -> int:
         "recommended_production_jobs": recommended_limit,
         "limiting_resource": (next((r.limiting_resource for r in reversed(results) if r.efficient and r.limiting_resource != "UNKNOWN"), "UNKNOWN")),
         "boundary_rejection": ({"jobs": boundary.max_active_jobs, "reason": boundary.decision} if boundary else None),
+        "hard_stop_gates": HARD_STOP_GATES,
+        "hard_stop_gate_thresholds": {
+            "peak_ram": args.max_peak_memory_ratio,
+            "fd_util": args.max_fd_util_ratio,
+            "disk_free_bytes": args.min_disk_free_bytes,
+        },
         "max_peak_memory_ratio": args.max_peak_memory_ratio,
         "max_fd_util_ratio": args.max_fd_util_ratio,
         "min_disk_free_bytes": args.min_disk_free_bytes,
@@ -727,9 +1000,9 @@ def main() -> int:
         ),
         "results": [{**asdict(r), "jobs": [asdict(j) for j in r.jobs]} for r in results],
     }
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(report, indent=2), encoding="utf-8")
-    print(json.dumps({"certified": report["certified"], "certified_max_jobs": efficient_limit, "recommended_production_jobs": recommended_limit, "output": str(args.output)}, indent=2))
+    # The report is persisted by the Master through capacity_benchmark_runs
+    # and its normalized child tables. Do not create a competing JSON file.
+    print(json.dumps({"certified": report["certified"], "certified_max_jobs": efficient_limit, "recommended_production_jobs": recommended_limit, "total_tests": len(results)}, indent=2))
     return 0 if report["certified"] else 4
 
 

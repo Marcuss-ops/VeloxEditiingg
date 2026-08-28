@@ -58,11 +58,12 @@ const (
 	subWorkerConfig     subCommand = "worker-config"
 	subBenchmark        subCommand = "benchmark"
 	subBenchmarkCollect subCommand = "benchmark-collect"
+	subWorkerCapacity  subCommand = "worker-capacity"
 )
 
 func (s subCommand) valid() bool {
 	switch s {
-	case subStatus, subInspect, subDrain, subUpdate, subSmoke, subResume, subRollback, subOperations, subWaitReady, subRollout, subSSHCheck, subJob, subDoctor, subQuarantine, subRestart, subWorkerConfig, subBenchmark, subBenchmarkCollect:
+	case subStatus, subInspect, subDrain, subUpdate, subSmoke, subResume, subRollback, subOperations, subWaitReady, subRollout, subSSHCheck, subJob, subDoctor, subQuarantine, subRestart, subWorkerConfig, subBenchmark, subBenchmarkCollect, subWorkerCapacity:
 		return true
 	default:
 		return false
@@ -104,6 +105,8 @@ Sub-commands:
                           run concurrent benchmark to determine sweet spot
   benchmark-collect <worker_id> [--fixture ID] [--concurrency N] [--runs N]
                           run benchmark, validate scorecard, persist results, show tuning
+  worker-capacity <worker_id> [--json]
+                          canonical capacity report from Master SQL (no Prometheus)
   worker-config set <worker_id> [--audio-mix-strategy legacy|optimized|auto] [--audio-mix-profile 0|1]
                           atomically update allowlisted worker config and wait-ready
   doctor --production     fleet/readiness/digest production checks
@@ -208,6 +211,8 @@ func runMain(args []string) int {
 		return runBenchmark(client, rest[1:])
 	case subBenchmarkCollect:
 		return runBenchmarkCollect(client, rest[1:])
+	case subWorkerCapacity:
+		return runWorkerCapacity(client, rest[1:])
 	}
 	return ExitUnexpected
 }

@@ -72,6 +72,10 @@ type ResourceSnapshot struct {
 	NetworkTxBytesDelta   uint64
 	DownloadMbps          float64
 	UploadMbps            float64
+	NetworkRetransmits    int64
+	OpenFileDescriptors   int64
+	MaxFileDescriptors    int64
+	FDUtilizationRatio    float64
 	CacheEntries          int
 	CacheBytesUsed        int64
 	CacheEvictionsDelta   uint64
@@ -199,7 +203,7 @@ func (c *Collector) workerFamilies() []*Family {
 		c.workerCPUUtil, c.workerIOWait, c.workerSteal,
 		c.workerCPUUser, c.workerCPUSystem, c.workerEffectiveCpu,
 		c.workerRSSBytes, c.workerRSSPeak, c.workerMemoryUsed, c.workerMemoryAvail, c.workerPageCache,
-		c.workerDiskFree,		c.workerTempBytes, c.workerScratchCurrent, c.workerScratchPeak, c.workerDiskReadMbps, c.workerDiskWriteMbps, c.workerDiskIoWaitMs,
+		c.workerDiskFree, c.workerTempBytes, c.workerScratchCurrent, c.workerScratchPeak, c.workerDiskReadMbps, c.workerDiskWriteMbps, c.workerDiskIoWaitMs,
 		c.workerActiveTasks, c.workerTaskSlots,
 		c.workerRenderActive, c.workerPrefetchActive, c.workerPublisherActive,
 		c.workerLoad1, c.workerRunQueue,

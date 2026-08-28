@@ -28,8 +28,8 @@ func (r *SQLiteTaskRepository) TryReserveFutureTask(ctx context.Context, reserva
 	if _, err := tx.ExecContext(ctx, `DELETE FROM future_task_reservations WHERE expires_at <= ?`, now.Format(time.RFC3339)); err != nil {
 		return false, err
 	}
-	res, err := tx.ExecContext(ctx, `INSERT INTO future_task_reservations(task_id,job_id,worker_id,reservation_id,task_revision,distance,expires_at,created_at,updated_at)
-VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(task_id) DO NOTHING`, reservation.TaskID, reservation.JobID, reservation.WorkerID, reservation.ReservationID, reservation.TaskRevision, reservation.Distance, reservation.ExpiresAt.UTC().Format(time.RFC3339), now.Format(time.RFC3339), now.Format(time.RFC3339))
+	res, err := tx.ExecContext(ctx, `INSERT INTO future_task_reservations(task_id,job_id,worker_id,reservation_id,task_revision,distance,state,expires_at,created_at,updated_at)
+VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(task_id) DO NOTHING`, reservation.TaskID, reservation.JobID, reservation.WorkerID, reservation.ReservationID, reservation.TaskRevision, reservation.Distance, string(reservation.State), reservation.ExpiresAt.UTC().Format(time.RFC3339), now.Format(time.RFC3339), now.Format(time.RFC3339))
 	if err != nil {
 		return false, err
 	}
@@ -94,8 +94,8 @@ func (r *SQLiteTaskRepository) ReconcileFutureReservations(ctx context.Context, 
 		if item.WorkerID != workerID || item.ExpiresAt.IsZero() {
 			return fmt.Errorf("future reservation: invalid desired item %s", item.TaskID)
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO future_task_reservations(task_id,job_id,worker_id,reservation_id,task_revision,distance,expires_at,created_at,updated_at)
-VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET job_id=excluded.job_id,worker_id=excluded.worker_id,reservation_id=excluded.reservation_id,task_revision=excluded.task_revision,distance=excluded.distance,expires_at=excluded.expires_at,updated_at=excluded.updated_at`, item.TaskID, item.JobID, item.WorkerID, item.ReservationID, item.TaskRevision, item.Distance, item.ExpiresAt.UTC().Format(time.RFC3339), nowRFC3339(), nowRFC3339()); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO future_task_reservations(task_id,job_id,worker_id,reservation_id,task_revision,distance,state,expires_at,created_at,updated_at)
+VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET job_id=excluded.job_id,worker_id=excluded.worker_id,reservation_id=excluded.reservation_id,task_revision=excluded.task_revision,distance=excluded.distance,state=excluded.state,expires_at=excluded.expires_at,updated_at=excluded.updated_at`, item.TaskID, item.JobID, item.WorkerID, item.ReservationID, item.TaskRevision, item.Distance, string(item.State), item.ExpiresAt.UTC().Format(time.RFC3339), nowRFC3339(), nowRFC3339()); err != nil {
 			return err
 		}
 	}
@@ -106,7 +106,7 @@ func (r *SQLiteTaskRepository) ListFutureReservations(ctx context.Context, worke
 	if r == nil || r.store == nil || r.store.db == nil {
 		return nil, fmt.Errorf("future reservation store: not initialized")
 	}
-	query := `SELECT r.task_id,r.job_id,r.worker_id,r.reservation_id,r.task_revision,r.distance,r.expires_at,COALESCE(s.payload_json,'')
+	query := `SELECT r.task_id,r.job_id,r.worker_id,r.reservation_id,r.task_revision,r.distance,r.expires_at,COALESCE(s.payload_json,''),COALESCE(r.state,'')
 FROM future_task_reservations r LEFT JOIN task_specs s ON s.task_id=r.task_id WHERE r.expires_at > ?`
 	args := []interface{}{nowRFC3339()}
 	if workerID != "" {
@@ -123,7 +123,7 @@ FROM future_task_reservations r LEFT JOIN task_specs s ON s.task_id=r.task_id WH
 	for rows.Next() {
 		var item taskgraph.FutureReservationWithPayload
 		var expires, payload string
-		if err := rows.Scan(&item.TaskID, &item.JobID, &item.WorkerID, &item.ReservationID, &item.TaskRevision, &item.Distance, &expires, &payload); err != nil {
+		if err := rows.Scan(&item.TaskID, &item.JobID, &item.WorkerID, &item.ReservationID, &item.TaskRevision, &item.Distance, &expires, &payload, &item.State); err != nil {
 			return nil, err
 		}
 		item.ExpiresAt, err = time.Parse(time.RFC3339, expires)
@@ -176,4 +176,26 @@ func (r *SQLiteTaskRepository) FutureTaskPayload(ctx context.Context, taskID str
 		return nil, nil
 	}
 	return []byte(payload), err
+}
+
+// UpdateReservationState advances the reservation lifecycle state.
+// The state column was added in migration 164; older databases without
+// the column will return an error that the caller treats as a no-op.
+func (r *SQLiteTaskRepository) UpdateReservationState(ctx context.Context, reservationID string, state taskgraph.ReservationState) error {
+	if r == nil || r.store == nil || r.store.db == nil {
+		return fmt.Errorf("future reservation store: not initialized")
+	}
+	if reservationID == "" || state == "" {
+		return nil
+	}
+	res, err := r.store.db.ExecContext(ctx,
+		`UPDATE future_task_reservations SET state = ?, updated_at = ? WHERE reservation_id = ?`,
+		string(state), nowRFC3339(), reservationID)
+	if err != nil {
+		return wrapDBInfrastructure("future reservation state update", err)
+	}
+	// It is valid for zero rows to be updated: the reservation may have
+	// already been reclaimed by expiry/reconciliation.
+	_, _ = res.RowsAffected()
+	return nil
 }

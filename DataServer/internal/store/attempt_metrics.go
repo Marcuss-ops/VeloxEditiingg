@@ -100,6 +100,7 @@ func (r *SQLiteTaskAttemptRepository) PersistMetrics(ctx context.Context, metric
 			progressive_overlap_first_part_ms, progressive_overlap_parts_before_render,
 			progressive_overlap_bytes_before_render, progressive_overlap_ms,
 			trailer_to_open_ms, mux_to_open_us
+			, job_publish_bytes, job_page_faults, job_scratch_peak_bytes
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
@@ -153,6 +154,7 @@ func (r *SQLiteTaskAttemptRepository) PersistMetrics(ctx context.Context, metric
 		metrics.ProgressiveOverlapFirstPartMs, metrics.ProgressiveOverlapPartsBeforeRender,
 		metrics.ProgressiveOverlapBytesBeforeRender, metrics.ProgressiveOverlapMs,
 		metrics.TrailerToOpenMs, metrics.MuxToOpenUS,
+		metrics.JobPublishBytes, metrics.JobPageFaults, metrics.JobScratchPeakBytes,
 	)
 	if err != nil {
 		return fmt.Errorf("metrics persist: %w", err)
@@ -313,7 +315,8 @@ func (r *SQLiteTaskAttemptRepository) GetMetrics(ctx context.Context, attemptID 
 		        job_render_wall_ms, job_asset_wall_ms, job_publish_wall_ms,
 		        progressive_overlap_first_part_ms, progressive_overlap_parts_before_render,
 		        progressive_overlap_bytes_before_render, progressive_overlap_ms,
-		        trailer_to_open_ms, mux_to_open_us
+		        trailer_to_open_ms, mux_to_open_us,
+		        job_publish_bytes, job_page_faults, job_scratch_peak_bytes
 		 FROM task_attempt_metrics WHERE attempt_id = ?`,
 		attemptID,
 	)
@@ -365,6 +368,7 @@ func (r *SQLiteTaskAttemptRepository) GetMetrics(ctx context.Context, attemptID 
 		&m.ProgressiveOverlapFirstPartMs, &m.ProgressiveOverlapPartsBeforeRender,
 		&m.ProgressiveOverlapBytesBeforeRender, &m.ProgressiveOverlapMs,
 		&m.TrailerToOpenMs, &m.MuxToOpenUS,
+		&m.JobPublishBytes, &m.JobPageFaults, &m.JobScratchPeakBytes,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
