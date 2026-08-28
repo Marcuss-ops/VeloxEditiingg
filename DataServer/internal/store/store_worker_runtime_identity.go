@@ -33,6 +33,7 @@ type WorkerRuntimeSnapshot struct {
 	DockerImageDigest string
 	CPUModel          string
 	LogicalCPUCount   int
+	PhysicalCPUCount  int
 	EffectiveCPUCount int
 	CPUQuota          float64
 	TotalMemoryBytes  int64
@@ -41,6 +42,13 @@ type WorkerRuntimeSnapshot struct {
 	KernelVersion     string
 	OSRelease         string
 	StorageClass      string
+	StorageDevice     string
+	GPUVRAMBytes      int64
+	NVENCAvailable    bool
+	NVDECAvailable    bool
+	QSVAvailable      bool
+	UlimitNofileSoft  int64
+	UlimitNofileHard  int64
 	CapabilitiesJSON  string
 	ConnectedAt       time.Time
 }
@@ -78,8 +86,10 @@ func (s *SQLiteStore) GetOrCreateWorkerRuntimeSnapshot(snapshot WorkerRuntimeSna
 			config_hash, docker_image_digest, cpu_model,
 			logical_cpu_count, effective_cpu_count, cpu_quota,
 			total_memory_bytes, gpu_model, gpu_driver, kernel_version,
-			os_release, storage_class, capabilities_json, connected_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			os_release, storage_class, physical_cpu_count, storage_device,
+			gpu_vram_bytes, nvenc_available, nvdec_available, qsv_available,
+			ulimit_nofile_soft, ulimit_nofile_hard, capabilities_json, connected_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		snapshot.SnapshotID, snapshot.WorkerID, snapshot.SessionID,
 		snapshot.Hostname, snapshot.NodeID, snapshot.WorkerName,
 		snapshot.WorkerClass, snapshot.RolloutGroup,
@@ -89,7 +99,10 @@ func (s *SQLiteStore) GetOrCreateWorkerRuntimeSnapshot(snapshot WorkerRuntimeSna
 		snapshot.CPUModel, snapshot.LogicalCPUCount, snapshot.EffectiveCPUCount,
 		snapshot.CPUQuota, snapshot.TotalMemoryBytes, snapshot.GPUModel,
 		snapshot.GPUDriver, snapshot.KernelVersion, snapshot.OSRelease,
-		snapshot.StorageClass, snapshot.CapabilitiesJSON, connectedAt,
+		snapshot.StorageClass, snapshot.PhysicalCPUCount, snapshot.StorageDevice,
+		snapshot.GPUVRAMBytes, boolInt(snapshot.NVENCAvailable), boolInt(snapshot.NVDECAvailable),
+		boolInt(snapshot.QSVAvailable), snapshot.UlimitNofileSoft, snapshot.UlimitNofileHard,
+		snapshot.CapabilitiesJSON, connectedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("worker runtime snapshot insert: %w", err)
@@ -110,7 +123,7 @@ func (s *SQLiteStore) GetWorkerRuntimeSnapshotBySession(workerID, sessionID stri
 	var gitSHA, workerVersion, bundleVersion, bundleHash sql.NullString
 	var engineVersion, ffmpegVersion, protocolVersion sql.NullString
 	var configHash, dockerImageDigest, cpuModel sql.NullString
-	var gpuModel, gpuDriver, kernelVersion, osRelease, storageClass sql.NullString
+	var gpuModel, gpuDriver, kernelVersion, osRelease, storageClass, storageDevice sql.NullString
 	var capabilitiesJSON sql.NullString
 
 	err := s.db.QueryRow(`
@@ -121,7 +134,9 @@ func (s *SQLiteStore) GetWorkerRuntimeSnapshotBySession(workerID, sessionID stri
 		       config_hash, docker_image_digest, cpu_model,
 		       logical_cpu_count, effective_cpu_count, cpu_quota,
 		       total_memory_bytes, gpu_model, gpu_driver, kernel_version,
-		       os_release, storage_class, capabilities_json, connected_at
+		       os_release, storage_class, physical_cpu_count, storage_device,
+		       gpu_vram_bytes, nvenc_available, nvdec_available, qsv_available,
+		       ulimit_nofile_soft, ulimit_nofile_hard, capabilities_json, connected_at
 		  FROM worker_runtime_snapshots
 		 WHERE worker_id = ? AND session_id = ?`, workerID, sessionID).Scan(
 		&snapshot.SnapshotID, &snapshot.WorkerID, &snapshot.SessionID,
@@ -131,7 +146,10 @@ func (s *SQLiteStore) GetWorkerRuntimeSnapshotBySession(workerID, sessionID stri
 		&configHash, &dockerImageDigest, &cpuModel,
 		&snapshot.LogicalCPUCount, &snapshot.EffectiveCPUCount, &snapshot.CPUQuota,
 		&snapshot.TotalMemoryBytes, &gpuModel, &gpuDriver, &kernelVersion,
-		&osRelease, &storageClass, &capabilitiesJSON, &connectedAt,
+		&osRelease, &storageClass, &snapshot.PhysicalCPUCount, &storageDevice,
+		&snapshot.GPUVRAMBytes, &snapshot.NVENCAvailable, &snapshot.NVDECAvailable,
+		&snapshot.QSVAvailable, &snapshot.UlimitNofileSoft, &snapshot.UlimitNofileHard,
+		&capabilitiesJSON, &connectedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -159,6 +177,7 @@ func (s *SQLiteStore) GetWorkerRuntimeSnapshotBySession(workerID, sessionID stri
 	snapshot.KernelVersion = kernelVersion.String
 	snapshot.OSRelease = osRelease.String
 	snapshot.StorageClass = storageClass.String
+	snapshot.StorageDevice = storageDevice.String
 	snapshot.CapabilitiesJSON = capabilitiesJSON.String
 	snapshot.ConnectedAt, err = parsePersistedWorkerTimestamp(connectedAt, "connected_at")
 	if err != nil {
@@ -185,7 +204,7 @@ func (s *SQLiteStore) GetAuthenticatedWorkerRuntimeSnapshot(ctx context.Context,
 	var gitSHA, workerVersion, bundleVersion, bundleHash sql.NullString
 	var engineVersion, ffmpegVersion, protocolVersion sql.NullString
 	var configHash, dockerImageDigest, cpuModel sql.NullString
-	var gpuModel, gpuDriver, kernelVersion, osRelease, storageClass sql.NullString
+	var gpuModel, gpuDriver, kernelVersion, osRelease, storageClass, storageDevice sql.NullString
 	var capabilitiesJSON sql.NullString
 
 	err := s.db.QueryRowContext(ctx, `
@@ -197,6 +216,9 @@ func (s *SQLiteStore) GetAuthenticatedWorkerRuntimeSnapshot(ctx context.Context,
 		       snap.logical_cpu_count, snap.effective_cpu_count, snap.cpu_quota,
 		       snap.total_memory_bytes, snap.gpu_model, snap.gpu_driver,
 		       snap.kernel_version, snap.os_release, snap.storage_class,
+		       snap.physical_cpu_count, snap.storage_device, snap.gpu_vram_bytes,
+		       snap.nvenc_available, snap.nvdec_available, snap.qsv_available,
+		       snap.ulimit_nofile_soft, snap.ulimit_nofile_hard,
 		       snap.capabilities_json, snap.connected_at
 		  FROM worker_runtime_snapshots AS snap
 		  JOIN worker_sessions AS sess
@@ -215,7 +237,10 @@ func (s *SQLiteStore) GetAuthenticatedWorkerRuntimeSnapshot(ctx context.Context,
 		&configHash, &dockerImageDigest, &cpuModel,
 		&snapshot.LogicalCPUCount, &snapshot.EffectiveCPUCount, &snapshot.CPUQuota,
 		&snapshot.TotalMemoryBytes, &gpuModel, &gpuDriver, &kernelVersion,
-		&osRelease, &storageClass, &capabilitiesJSON, &connectedAt,
+		&osRelease, &storageClass, &snapshot.PhysicalCPUCount, &storageDevice,
+		&snapshot.GPUVRAMBytes, &snapshot.NVENCAvailable, &snapshot.NVDECAvailable,
+		&snapshot.QSVAvailable, &snapshot.UlimitNofileSoft, &snapshot.UlimitNofileHard,
+		&capabilitiesJSON, &connectedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -243,6 +268,7 @@ func (s *SQLiteStore) GetAuthenticatedWorkerRuntimeSnapshot(ctx context.Context,
 	snapshot.KernelVersion = kernelVersion.String
 	snapshot.OSRelease = osRelease.String
 	snapshot.StorageClass = storageClass.String
+	snapshot.StorageDevice = storageDevice.String
 	snapshot.CapabilitiesJSON = capabilitiesJSON.String
 	snapshot.ConnectedAt, err = parsePersistedWorkerTimestamp(connectedAt, "connected_at")
 	if err != nil {
