@@ -11,16 +11,15 @@
 #     required_conversation_resolution
 #
 # Used by:
-#   * Operators before re-running enable-branch-protection.sh (verify state
-#     before re-applying).
-#   * Auditors checking whether the four Phase-0 required checks are wired.
+#   * Operators before re-running enable-branch-protection.sh.
+#   * Auditors checking whether the canonical required checks are wired.
 #
 # Exit codes:
 #   0   branch protection present, all seven canonical checks are required
 #   1   branch protection present, but one or more required checks missing
 #   2   usage error
 #   3   gh not authenticated
-#   4   branch has no protection configured at all (or not on default branch)
+#   4   branch has no protection configured at all
 #
 # Usage:
 #   ./scripts/ci/inspect-branch-protection.sh
@@ -31,21 +30,21 @@ set -uo pipefail
 
 BRANCH="${BRANCH:-main}"
 
-# ─── Pre-flight ───────────────────────────────────────────────────────────
 if ! command -v gh >/dev/null 2>&1; then
-  printf '::error::gh CLI missing\n' >&2; exit 2
+  printf '::error::gh CLI missing\n' >&2
+  exit 2
 fi
 if ! gh auth status >/dev/null 2>&1; then
-  printf '::error::gh not authenticated — run "gh auth login"\n' >&2; exit 3
+  printf '::error::gh not authenticated — run "gh auth login"\n' >&2
+  exit 3
 fi
 
 REMOTE_URL="$(gh repo view --json url -q .url 2>/dev/null || true)"
 OWNER="$(printf '%s' "$REMOTE_URL" | sed -E 's#https?://github.com/([^/]+)/.*#\1#')"
-REPO="$(printf  '%s' "$REMOTE_URL" | sed -E 's#https?://github.com/[^/]+/([^/.]+)(\.git)?/?$#\1#')"
+REPO="$(printf '%s' "$REMOTE_URL" | sed -E 's#https?://github.com/[^/]+/([^/.]+)(\.git)?/?$#\1#')"
 
 PROTECT_PATH="/repos/${OWNER}/${REPO}/branches/${BRANCH}/protection"
 
-# ─── Fetch ────────────────────────────────────────────────────────────────
 RAW="$(gh api \
   -H "Accept: application/vnd.github+json" \
   -H "X-GitHub-Api-Version: 2022-11-28" \
@@ -59,17 +58,13 @@ if [[ -z "$RAW" ]]; then
 fi
 
 printf '→ target: %s/%s  branch: %s\n\n' "$OWNER" "$REPO" "$BRANCH"
-
-# ─── Pretty-print ────────────────────────────────────────────────────────
 printf '%s' "$RAW" | python3 -m json.tool
 
-# ─── Audit ────────────────────────────────────────────────────────────────
 CANONICAL_REQUIRED=(
   "CI / make verify"
   "E2E gRPC control plane / make e2e-grpc (6-case matrix)"
   "E2E workload (real) / make e2e-workload (Hello→Artifact→SUCCEEDED)"
   "E2E workload-mTLS (PR 7) / make e2e-workload-mtls (mTLS, channel=staging)"
-  "Pre-existing Test Watchlist / Pre-existing Test Watchlist"
   "no-youtube-regression / YouTube regression guard"
   "check-canonical-names / Canonical names guard"
   "loc-thresholds / LOC threshold gate"
@@ -94,7 +89,7 @@ for c in "${CANONICAL_REQUIRED[@]}"; do
 done
 
 if (( missing == 0 )); then
-  printf '\n✓ all four Phase-0 required checks present.\n'
+  printf '\n✓ all seven canonical required checks present.\n'
   exit 0
 else
   printf '\n::error::%d canonical check(s) missing — re-run enable-branch-protection.sh\n' \
