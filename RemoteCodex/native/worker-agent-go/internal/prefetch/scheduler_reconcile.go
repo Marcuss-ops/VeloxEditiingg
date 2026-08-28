@@ -199,8 +199,9 @@ func (s *Scheduler) Cancel(jobID string) bool {
 }
 
 func (s *Scheduler) enqueueJobLocked(planVersion uint64, runtime *jobRuntime) []Event {
-	events := make([]Event, 0, len(runtime.job.Assets))
-	for _, asset := range runtime.job.Assets {
+	assets := orderedAssets(runtime.job)
+	events := make([]Event, 0, len(assets))
+	for _, asset := range assets {
 		enqueuedAt := s.cfg.Now()
 		s.nextSequence++
 		heap.Push(&s.queue, &workItem{
