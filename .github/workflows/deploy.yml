@@ -166,7 +166,7 @@ jobs:
                 return 0
               fi
               if [ $attempt -lt $max_attempts ]; then
-                echo "::notice::${label}: attempt ${attempt}/${max_attempts} — image not yet available, retrying in ${wait}s…"
+                echo "::notice::${label}: attempt ${attempt}/${max_attempts} — image not yet available, retrying in ${wait}s…" >&2
                 sleep $wait
               fi
               attempt=$((attempt + 1))
