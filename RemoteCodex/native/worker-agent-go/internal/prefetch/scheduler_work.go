@@ -97,7 +97,7 @@ func (s *Scheduler) runWorkItem(item *workItem, resolver *downloader.CacheResolv
 		JobID: job.JobID, TaskID: job.TaskID, AssetKey: assetref.AssetKey(asset.AssetKey), AssetID: asset.AssetID,
 		Role: downloader.RoleFromString(asset.Role), Source: "master_asset_bridge",
 		SHA256: assetref.ContentHash(asset.SHA256), SizeBytes: asset.SizeBytes, MIMEType: asset.MIMEType,
-		Priority:                   priorityForDistance(job.Distance),
+		Priority:                   assetPriorityScore(job, asset),
 		MaxBandwidthBytesPerSecond: bandwidth,
 	}
 	s.mu.Lock()
