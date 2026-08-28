@@ -182,7 +182,8 @@ post_admin_issue() {
   curl -sS -m 15 -X POST -H "Authorization: Bearer ${ADMIN_TOKEN}" \
     -H "Content-Type: application/json" \
     --data-raw "$ISSUE_REQ" \
-    -D "$TMP_HDRS" -o "$TMP_BODY" 2>"$TMP_TRACE" || rc=$?
+    -D "$TMP_HDRS" -o "$TMP_BODY" 2>"$TMP_TRACE" \
+    "$ADMIN_KEYS_URL" || rc=$?
   return $rc
 }
 
