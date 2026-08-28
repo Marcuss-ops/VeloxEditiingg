@@ -1,3 +1,12 @@
+## [v1.3.6] - 2026-08-28
+
+### Prefetch certification and benchmark context
+
+- Certify asset preparation, cache binding, prefetch origin, and durable
+  worker telemetry for execution inspection.
+- Pass worker context and benchmark identity through the render runner so
+  scorecards measure the actual worker/cache/concurrency configuration.
+
 ## [v1.3.5] - 2026-08-27
 
 ### Observability timeline labels
