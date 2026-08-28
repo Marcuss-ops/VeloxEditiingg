@@ -101,5 +101,9 @@ func (h *Handler) ensurePreparedBeforeClaim(ctx context.Context, workerID string
 		}
 		return h.reservationPrepared(ctx, workerID, reservation)
 	}
-	return false, nil
+	// A task without a preparation reservation is not governed by the
+	// strict gate. The placement path creates/refreshes the reservation
+	// before retrying the claim; returning true here preserves the normal
+	// claim path for tasks that do not require assets.
+	return true, nil
 }
