@@ -51,6 +51,17 @@ func (p *ProtectedAssetsPoller) IsReady() bool {
 	if p == nil {
 		return false
 	}
+	// Readiness is also queried by admission/cleanup callers, which may
+	// observe a registration loss before the periodic poller tick runs.
+	// Revalidate the session here so an old successful snapshot can never
+	// remain usable during a disconnected/auth-invalid session.
+	p.mu.RLock()
+	sessionGated := p.sessionGated
+	p.mu.RUnlock()
+	if sessionGated && !p.sessionAuthenticated() {
+		p.invalidateReadiness()
+		return false
+	}
 	p.readyMu.Lock()
 	defer p.readyMu.Unlock()
 	return p.ready

@@ -25,7 +25,10 @@ func simulateTaskPipeline(rac *ResourceAdmissionController, cl *concurrency.Conc
 	}
 
 	// Step 2: Concurrency slot
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	// The limiter is intentionally exercised with a small cap and a queue.
+	// Keep enough time for the queued goroutines under -race and aggregate CI
+	// load; this timeout tests cancellation paths elsewhere.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	if err := cl.Acquire(ctx, "test-job", 0); err != nil {
 		return true, false, err
@@ -339,7 +342,10 @@ func TestIntegration_ConcurrentAdmissionAndConcurrency(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			admitted, _, _ := simulateTaskPipeline(rac, cl, ResourceRender, 1)
+			admitted, _, err := simulateTaskPipeline(rac, cl, ResourceRender, 1)
+			if err != nil {
+				t.Errorf("pipeline error: %v", err)
+			}
 			if admitted {
 				admittedCount.Add(1)
 			} else {

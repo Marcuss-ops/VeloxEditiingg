@@ -218,6 +218,19 @@ func (cl *ConcurrencyLimiter) awaitWaiter(w *jobWaiter) {
 		if _, ok := cl.waitList[w]; !ok {
 			return
 		}
+		// Re-check before sleeping. A Release may have broadcast between
+		// enqueue and acquiring cl.mu; waiting in that case would miss the
+		// notification and unnecessarily time out a waiter.
+		current := atomic.LoadInt32(&cl.activeJobs)
+		cap := atomic.LoadInt64(&cl.maxActiveJobs)
+		if int64(current) < cap {
+			if atomic.CompareAndSwapInt32(&cl.activeJobs, current, current+1) {
+				delete(cl.waitList, w)
+				close(w.ready)
+				return
+			}
+			continue
+		}
 		cl.cond.Wait()
 
 		// After wakeup: if outer cancelled/removed us, exit without
@@ -226,13 +239,13 @@ func (cl *ConcurrencyLimiter) awaitWaiter(w *jobWaiter) {
 			return
 		}
 
-		current := atomic.LoadInt32(&cl.activeJobs)
-		cap := atomic.LoadInt64(&cl.maxActiveJobs)
+		current = atomic.LoadInt32(&cl.activeJobs)
+		cap = atomic.LoadInt64(&cl.maxActiveJobs)
 		if int64(current) < cap {
-			delete(cl.waitList, w)
 			if !atomic.CompareAndSwapInt32(&cl.activeJobs, current, current+1) {
 				continue
 			}
+			delete(cl.waitList, w)
 			close(w.ready)
 			return
 		}
