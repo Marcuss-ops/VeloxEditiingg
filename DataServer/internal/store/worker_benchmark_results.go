@@ -60,7 +60,7 @@ func (s *SQLiteStore) UpsertBenchmarkResult(ctx context.Context, row BenchmarkRe
 		cache_mode, sweet_spot, limiting_factor, summary,
 		snapshot_ram_bytes, snapshot_cpu_cores, snapshot_disk_read_mbps, snapshot_upload_mbps,
 		started_at, completed_at
-	) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 	ON CONFLICT(benchmark_run_id) DO UPDATE SET
 		sweet_spot=excluded.sweet_spot,
 		limiting_factor=excluded.limiting_factor,
