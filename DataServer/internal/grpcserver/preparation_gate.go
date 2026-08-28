@@ -387,8 +387,15 @@ func (pg *PreparationGate) EnsurePrepared(ctx context.Context, workerID string, 
 		return PreparationExpired, nil
 	}
 
-	// State machine gate: only PREPARED reservations permit a claim.
-	if reservation.State != "" && !reservation.State.CanClaim() {
+	// A PLANNING reservation must be evaluated against its preparation
+	// evidence before it can transition to PREPARED. RESERVED and PREPARING
+	// remain blocked until their explicit state transition; this preserves
+	// the state machine's partial-evidence boundary.
+	if reservation.State == taskgraph.ReservationExpired {
+		logGRPCf(ctx, logging.LevelDebug, logging.CodeGRPCPlacementFailed, "[PLACEMENT] preparation gate BLOCKED state=%s worker=%s task=%s reservation=%s", reservation.State, workerID, candidate.TaskID, reservation.ReservationID)
+		return PreparationExpired, nil
+	}
+	if reservation.State == taskgraph.ReservationReserved || reservation.State == taskgraph.ReservationPreparing {
 		logGRPCf(ctx, logging.LevelDebug, logging.CodeGRPCPlacementFailed, "[PLACEMENT] preparation gate BLOCKED state=%s worker=%s task=%s reservation=%s", reservation.State, workerID, candidate.TaskID, reservation.ReservationID)
 		return PreparationWaiting, nil
 	}
