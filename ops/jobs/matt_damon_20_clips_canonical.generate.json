@@ -35,5 +35,5 @@
     {"scene_id":"scene-21-b","index":24,"kind":"outro","duration_seconds":75,"text":"Closing montage 2","clip":{"asset_id":"1PVOR0rDTHJWJRhIdpMIzg9sfn9OC_9WS","url":"velox-drive://1PVOR0rDTHJWJRhIdpMIzg9sfn9OC_9WS","duration_ms":75000}},
     {"scene_id":"scene-21-c","index":25,"kind":"outro","duration_seconds":45,"text":"Closing montage 3","clip":{"asset_id":"1J60OGd4WjPBpSs5K2i9l9wW1yW3CCzWR","url":"velox-drive://1J60OGd4WjPBpSs5K2i9l9wW1yW3CCzWR","duration_ms":45000}}
   ],
-  "delivery_plan": [{"destination_id":"drive-smoke","priority":1,"retry_budget":3,"metadata":{"profiling":true,"drive_output_folder":"1unQMyEH_ZqtXHT5D-68dxvcV9KgKA6d4"}}]
+  "delivery_plan": [{"destination_id":"drive-smoke","priority":1,"retry_budget":3,"metadata":{"profiling":true,"local_fallback":true,"drive_output_folder":"1unQMyEH_ZqtXHT5D-68dxvcV9KgKA6d4"}}]
 }

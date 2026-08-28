@@ -213,8 +213,10 @@ func mergeAssetPreflightRequirement(dst map[string]voiceoverassets.AssetPrefligh
 // Returns true when the handler must return early because a response
 // was already written (500 store_failure or 422 invalid_payload);
 // false when the plan is empty or all destinations resolved to ENABLED.
-func checkDeliveryPlanDestinations(c *gin.Context, h *Handlers, req SubmitJobRequest) bool {
-	if len(req.DeliveryPlan) == 0 {
+const localFallbackDestinationID = "local-fallback"
+
+func checkDeliveryPlanDestinations(c *gin.Context, h *Handlers, req *SubmitJobRequest) bool {
+	if req == nil || len(req.DeliveryPlan) == 0 {
 		return false
 	}
 	if h.store == nil {
@@ -254,6 +256,10 @@ func checkDeliveryPlanDestinations(c *gin.Context, h *Handlers, req SubmitJobReq
 		}
 		switch statuses[tid] {
 		case deliverystore.DeliveryDestinationNotFound:
+			if deliveryPlanRequestsLocalFallback(d.Metadata) {
+				req.DeliveryPlan[i].DestinationID = localFallbackDestinationID
+				continue
+			}
 			destDetails = append(destDetails, gin.H{
 				"path":              fmt.Sprintf("delivery_plan.%d.destination_id", i),
 				"issue":             "destination_not_found",
@@ -261,6 +267,10 @@ func checkDeliveryPlanDestinations(c *gin.Context, h *Handlers, req SubmitJobReq
 				"status":            deliverystore.DeliveryDestinationNotFound.String(),
 			})
 		case deliverystore.DeliveryDestinationDisabled:
+			if deliveryPlanRequestsLocalFallback(d.Metadata) {
+				req.DeliveryPlan[i].DestinationID = localFallbackDestinationID
+				continue
+			}
 			destDetails = append(destDetails, gin.H{
 				"path":              fmt.Sprintf("delivery_plan.%d.destination_id", i),
 				"issue":             "destination_disabled",
@@ -279,4 +289,17 @@ func checkDeliveryPlanDestinations(c *gin.Context, h *Handlers, req SubmitJobReq
 		return true
 	}
 	return false
+}
+
+// deliveryPlanRequestsLocalFallback is opt-in per delivery entry. This keeps
+// ordinary publishing fail-closed while allowing benchmark/smoke jobs to
+// retain a verified local artifact when an external Drive destination is not
+// provisioned.
+func deliveryPlanRequestsLocalFallback(metadata any) bool {
+	m, ok := metadata.(map[string]interface{})
+	if !ok {
+		return false
+	}
+	v, ok := m["local_fallback"].(bool)
+	return ok && v
 }

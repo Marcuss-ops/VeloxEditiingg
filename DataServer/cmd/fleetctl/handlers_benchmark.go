@@ -88,13 +88,22 @@ func runBenchmark(client *fleetClient, args []string) int {
 		StartedAt      string `json:"started_at"`
 		CompletedAt    string `json:"completed_at"`
 		Levels         []struct {
-			Level           int     `json:"level"`
-			SuccessfulRuns  int     `json:"successful_runs"`
-			FailedRuns      int     `json:"failed_runs"`
-			Throughput      float64 `json:"throughput"`
-			AvgRenderWallMS float64 `json:"avg_render_wall_ms"`
-			AvgUploadWallMS float64 `json:"avg_upload_wall_ms"`
-			PeakRAMBytes    int64   `json:"peak_ram_bytes"`
+			Level              int     `json:"level"`
+			SuccessfulRuns     int     `json:"successful_runs"`
+			FailedRuns         int     `json:"failed_runs"`
+			Throughput         float64 `json:"throughput"`
+			AvgRenderWallMS    float64 `json:"avg_render_wall_ms"`
+			AvgUploadWallMS    float64 `json:"avg_upload_wall_ms"`
+			PeakRAMBytes       int64   `json:"peak_ram_bytes"`
+			AvgCPUWallRatio    float64 `json:"avg_cpu_wall_ratio"`
+			PeakCPUWallRatio   float64 `json:"peak_cpu_wall_ratio"`
+			AvgCPUUserMS       float64 `json:"avg_cpu_user_ms"`
+			AvgCPUSystemMS     float64 `json:"avg_cpu_system_ms"`
+			AvgBytesRead       float64 `json:"avg_bytes_read"`
+			AvgBytesWritten    float64 `json:"avg_bytes_written"`
+			PeakScratchBytes   int64   `json:"peak_scratch_bytes"`
+			AvgMinorPageFaults float64 `json:"avg_minor_page_faults"`
+			AvgMajorPageFaults float64 `json:"avg_major_page_faults"`
 		} `json:"levels"`
 		Gains []struct {
 			FromLevel   int     `json:"from_level"`
@@ -204,13 +213,22 @@ func runBenchmarkCollect(client *fleetClient, args []string) int {
 		StartedAt      string `json:"started_at"`
 		CompletedAt    string `json:"completed_at"`
 		Levels         []struct {
-			Level           int     `json:"level"`
-			SuccessfulRuns  int     `json:"successful_runs"`
-			FailedRuns      int     `json:"failed_runs"`
-			Throughput      float64 `json:"throughput"`
-			AvgRenderWallMS float64 `json:"avg_render_wall_ms"`
-			AvgUploadWallMS float64 `json:"avg_upload_wall_ms"`
-			PeakRAMBytes    int64   `json:"peak_ram_bytes"`
+			Level              int     `json:"level"`
+			SuccessfulRuns     int     `json:"successful_runs"`
+			FailedRuns         int     `json:"failed_runs"`
+			Throughput         float64 `json:"throughput"`
+			AvgRenderWallMS    float64 `json:"avg_render_wall_ms"`
+			AvgUploadWallMS    float64 `json:"avg_upload_wall_ms"`
+			PeakRAMBytes       int64   `json:"peak_ram_bytes"`
+			AvgCPUWallRatio    float64 `json:"avg_cpu_wall_ratio"`
+			PeakCPUWallRatio   float64 `json:"peak_cpu_wall_ratio"`
+			AvgCPUUserMS       float64 `json:"avg_cpu_user_ms"`
+			AvgCPUSystemMS     float64 `json:"avg_cpu_system_ms"`
+			AvgBytesRead       float64 `json:"avg_bytes_read"`
+			AvgBytesWritten    float64 `json:"avg_bytes_written"`
+			PeakScratchBytes   int64   `json:"peak_scratch_bytes"`
+			AvgMinorPageFaults float64 `json:"avg_minor_page_faults"`
+			AvgMajorPageFaults float64 `json:"avg_major_page_faults"`
 		} `json:"levels"`
 		Gains []struct {
 			FromLevel   int     `json:"from_level"`
@@ -245,6 +263,18 @@ func runBenchmarkCollect(client *fleetClient, args []string) int {
 	// Print sweet spot
 	fmt.Printf("\nSweet Spot: %d concurrent jobs\n", result.SweetSpot)
 	fmt.Printf("Limiting Factor: %s\n", result.LimitingFactor)
+
+	// Print throughput curve
+	if len(result.Levels) > 0 {
+		fmt.Println("\nResource saturation by level:")
+		for _, level := range result.Levels {
+			fmt.Printf("  L%d: CPU %.2fx (user %.0fms sys %.0fms; peak %.2fx) RAM %s scratch %s I/O R/W %s/%s faults %.0f/%.0f\n",
+				level.Level, level.AvgCPUWallRatio, level.AvgCPUUserMS, level.AvgCPUSystemMS,
+				level.PeakCPUWallRatio, formatBytes(level.PeakRAMBytes), formatBytes(level.PeakScratchBytes),
+				formatBytes(int64(level.AvgBytesRead)), formatBytes(int64(level.AvgBytesWritten)),
+				level.AvgMinorPageFaults, level.AvgMajorPageFaults)
+		}
+	}
 
 	// Print throughput curve
 	if len(result.Gains) > 0 {

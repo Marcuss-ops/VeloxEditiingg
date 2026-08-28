@@ -80,6 +80,23 @@ func (r *RemoteWorkerRenderer) Render(ctx context.Context, req BenchmarkRenderRe
 				Memory struct {
 					PeakRSSBytes int64 `json:"peak_rss_bytes"`
 				} `json:"memory"`
+				CPU struct {
+					CPUUserMS    int64   `json:"cpu_user_ms"`
+					CPUSystemMS  int64   `json:"cpu_system_ms"`
+					CPUTotalMS   int64   `json:"cpu_total_ms"`
+					CPUWallRatio float64 `json:"cpu_wall_ratio"`
+				} `json:"cpu"`
+				IO struct {
+					TotalBytesRead    int64 `json:"total_bytes_read"`
+					TotalBytesWritten int64 `json:"total_bytes_written"`
+					ScratchPeakBytes  int64 `json:"scratch_peak_bytes"`
+				} `json:"io"`
+				Scheduling struct {
+					VoluntaryContextSwitches   int64 `json:"voluntary_context_switches"`
+					InvoluntaryContextSwitches int64 `json:"involuntary_context_switches"`
+					MinorPageFaults            int64 `json:"minor_page_faults"`
+					MajorPageFaults            int64 `json:"major_page_faults"`
+				} `json:"scheduling"`
 			} `json:"receipt"`
 		} `json:"receipts"`
 	}
@@ -106,10 +123,21 @@ func (r *RemoteWorkerRenderer) Render(ctx context.Context, req BenchmarkRenderRe
 		renderWall = wall
 	}
 	return BenchmarkRenderResult{Receipt: &BenchmarkRenderReceipt{
-		PeakRAMBytes:   obs.Receipt.Memory.PeakRSSBytes,
-		RenderWallMS:   renderWall,
-		WallMS:         wall,
-		ArtifactSHA256: run.ArtifactSHA256,
+		PeakRAMBytes:               obs.Receipt.Memory.PeakRSSBytes,
+		RenderWallMS:               renderWall,
+		WallMS:                     wall,
+		ArtifactSHA256:             run.ArtifactSHA256,
+		CPUUserMS:                  obs.Receipt.CPU.CPUUserMS,
+		CPUSystemMS:                obs.Receipt.CPU.CPUSystemMS,
+		CPUTotalMS:                 obs.Receipt.CPU.CPUTotalMS,
+		CPUWallRatio:               obs.Receipt.CPU.CPUWallRatio,
+		BytesRead:                  obs.Receipt.IO.TotalBytesRead,
+		BytesWritten:               obs.Receipt.IO.TotalBytesWritten,
+		ScratchPeakBytes:           obs.Receipt.IO.ScratchPeakBytes,
+		MinorPageFaults:            obs.Receipt.Scheduling.MinorPageFaults,
+		MajorPageFaults:            obs.Receipt.Scheduling.MajorPageFaults,
+		VoluntaryContextSwitches:   obs.Receipt.Scheduling.VoluntaryContextSwitches,
+		InvoluntaryContextSwitches: obs.Receipt.Scheduling.InvoluntaryContextSwitches,
 	}, ArtifactSHA256: run.ArtifactSHA256}, nil
 }
 

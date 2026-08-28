@@ -29,11 +29,22 @@ type BenchmarkFixture struct {
 
 // BenchmarkRenderReceipt captures the resource metrics from one render.
 type BenchmarkRenderReceipt struct {
-	PeakRAMBytes   int64  `json:"peak_ram_bytes"`
-	RenderWallMS   int64  `json:"render_wall_ms"`
-	UploadWallMS   int64  `json:"upload_wall_ms"`
-	ArtifactSHA256 string `json:"artifact_sha256"`
-	WallMS         int64  `json:"wall_ms"`
+	PeakRAMBytes               int64   `json:"peak_ram_bytes"`
+	RenderWallMS               int64   `json:"render_wall_ms"`
+	UploadWallMS               int64   `json:"upload_wall_ms"`
+	ArtifactSHA256             string  `json:"artifact_sha256"`
+	WallMS                     int64   `json:"wall_ms"`
+	CPUUserMS                  int64   `json:"cpu_user_ms"`
+	CPUSystemMS                int64   `json:"cpu_system_ms"`
+	CPUTotalMS                 int64   `json:"cpu_total_ms"`
+	CPUWallRatio               float64 `json:"cpu_wall_ratio"`
+	BytesRead                  int64   `json:"total_bytes_read"`
+	BytesWritten               int64   `json:"total_bytes_written"`
+	ScratchPeakBytes           int64   `json:"scratch_peak_bytes"`
+	MinorPageFaults            int64   `json:"minor_page_faults"`
+	MajorPageFaults            int64   `json:"major_page_faults"`
+	VoluntaryContextSwitches   int64   `json:"voluntary_context_switches"`
+	InvoluntaryContextSwitches int64   `json:"involuntary_context_switches"`
 }
 
 // BenchmarkRenderResult is the outcome of one render.
@@ -87,20 +98,32 @@ type ConcurrencyLevelResult struct {
 	// LevelWallMS is the elapsed wall clock for the whole concurrent cohort.
 	// It is the denominator for Throughput; TotalWallMS remains the sum of
 	// individual job durations for per-job accounting only.
-	LevelWallMS      int64   `json:"level_wall_ms"`
-	AvgWallMS        float64 `json:"avg_wall_ms"`
-	P50WallMS        float64 `json:"p50_wall_ms"`
-	P95WallMS        float64 `json:"p95_wall_ms"`
-	Throughput       float64 `json:"throughput"` // jobs per second
-	PeakRAMBytes     int64   `json:"peak_ram_bytes"`
-	AvgRAMBytes      int64   `json:"avg_ram_bytes"`
-	RenderWallMS     float64 `json:"avg_render_wall_ms"`
-	UploadWallMS     float64 `json:"avg_upload_wall_ms"`
-	RenderPerJobMS   float64 `json:"render_per_job_ms"`
-	UploadPerJobMS   float64 `json:"upload_per_job_ms"`
-	RenderJobsActive int32   `json:"avg_render_jobs_active"`
-	PrefetchActive   int32   `json:"avg_prefetch_jobs_active"`
-	PublisherActive  int32   `json:"avg_publisher_jobs_active"`
+	LevelWallMS                   int64   `json:"level_wall_ms"`
+	AvgWallMS                     float64 `json:"avg_wall_ms"`
+	P50WallMS                     float64 `json:"p50_wall_ms"`
+	P95WallMS                     float64 `json:"p95_wall_ms"`
+	Throughput                    float64 `json:"throughput"` // jobs per second
+	PeakRAMBytes                  int64   `json:"peak_ram_bytes"`
+	AvgRAMBytes                   int64   `json:"avg_ram_bytes"`
+	RenderWallMS                  float64 `json:"avg_render_wall_ms"`
+	UploadWallMS                  float64 `json:"avg_upload_wall_ms"`
+	RenderPerJobMS                float64 `json:"render_per_job_ms"`
+	UploadPerJobMS                float64 `json:"upload_per_job_ms"`
+	RenderJobsActive              int32   `json:"avg_render_jobs_active"`
+	PrefetchActive                int32   `json:"avg_prefetch_jobs_active"`
+	PublisherActive               int32   `json:"avg_publisher_jobs_active"`
+	AvgCPUUserMS                  float64 `json:"avg_cpu_user_ms"`
+	AvgCPUSystemMS                float64 `json:"avg_cpu_system_ms"`
+	AvgCPUTotalMS                 float64 `json:"avg_cpu_total_ms"`
+	AvgCPUWallRatio               float64 `json:"avg_cpu_wall_ratio"`
+	PeakCPUWallRatio              float64 `json:"peak_cpu_wall_ratio"`
+	AvgBytesRead                  float64 `json:"avg_bytes_read"`
+	AvgBytesWritten               float64 `json:"avg_bytes_written"`
+	PeakScratchBytes              int64   `json:"peak_scratch_bytes"`
+	AvgMinorPageFaults            float64 `json:"avg_minor_page_faults"`
+	AvgMajorPageFaults            float64 `json:"avg_major_page_faults"`
+	AvgVoluntaryContextSwitches   float64 `json:"avg_voluntary_context_switches"`
+	AvgInvoluntaryContextSwitches float64 `json:"avg_involuntary_context_switches"`
 }
 
 // ThroughputGain measures the marginal throughput gain from adding one more
@@ -223,19 +246,24 @@ func runConcurrencyLevel(
 
 	levelStart := time.Now()
 	var (
-		wallMSValues []int64
-		peakRAM      int64
-		totalRAM     int64
-		ramSamples   int64
-		totalRender  float64
-		totalUpload  float64
-		renderCount  int
-		uploadCount  int
-		mu           sync.Mutex
-		wg           sync.WaitGroup
-		sem          = make(chan struct{}, level)
-		successCount atomic.Int64
-		failCount    atomic.Int64
+		wallMSValues                                                                  []int64
+		peakRAM                                                                       int64
+		totalRAM                                                                      int64
+		ramSamples                                                                    int64
+		totalRender                                                                   float64
+		totalUpload                                                                   float64
+		renderCount                                                                   int
+		uploadCount                                                                   int
+		cpuUser, cpuSystem, cpuTotal, cpuRatio                                        float64
+		bytesRead, bytesWritten, minorFaults, majorFaults, voluntaryCS, involuntaryCS float64
+		cpuSamples                                                                    int
+		peakCPUWallRatio                                                              float64
+		peakScratchBytes                                                              int64
+		mu                                                                            sync.Mutex
+		wg                                                                            sync.WaitGroup
+		sem                                                                           = make(chan struct{}, level)
+		successCount                                                                  atomic.Int64
+		failCount                                                                     atomic.Int64
 	)
 
 	for i := 0; i < runs; i++ {
@@ -286,6 +314,23 @@ func runConcurrencyLevel(
 					totalUpload += float64(result.Receipt.UploadWallMS)
 					uploadCount++
 				}
+				cpuUser += float64(result.Receipt.CPUUserMS)
+				cpuSystem += float64(result.Receipt.CPUSystemMS)
+				cpuTotal += float64(result.Receipt.CPUTotalMS)
+				cpuRatio += result.Receipt.CPUWallRatio
+				bytesRead += float64(result.Receipt.BytesRead)
+				bytesWritten += float64(result.Receipt.BytesWritten)
+				minorFaults += float64(result.Receipt.MinorPageFaults)
+				majorFaults += float64(result.Receipt.MajorPageFaults)
+				voluntaryCS += float64(result.Receipt.VoluntaryContextSwitches)
+				involuntaryCS += float64(result.Receipt.InvoluntaryContextSwitches)
+				cpuSamples++
+				if result.Receipt.CPUWallRatio > peakCPUWallRatio {
+					peakCPUWallRatio = result.Receipt.CPUWallRatio
+				}
+				if result.Receipt.ScratchPeakBytes > peakScratchBytes {
+					peakScratchBytes = result.Receipt.ScratchPeakBytes
+				}
 			}
 			mu.Unlock()
 		}(i)
@@ -297,6 +342,21 @@ func runConcurrencyLevel(
 	result.FailedRuns = int(failCount.Load())
 	result.PeakRAMBytes = peakRAM
 	result.LevelWallMS = time.Since(levelStart).Milliseconds()
+	result.PeakCPUWallRatio = peakCPUWallRatio
+	result.PeakScratchBytes = peakScratchBytes
+	if cpuSamples > 0 {
+		div := float64(cpuSamples)
+		result.AvgCPUUserMS = cpuUser / div
+		result.AvgCPUSystemMS = cpuSystem / div
+		result.AvgCPUTotalMS = cpuTotal / div
+		result.AvgCPUWallRatio = cpuRatio / div
+		result.AvgBytesRead = bytesRead / div
+		result.AvgBytesWritten = bytesWritten / div
+		result.AvgMinorPageFaults = minorFaults / div
+		result.AvgMajorPageFaults = majorFaults / div
+		result.AvgVoluntaryContextSwitches = voluntaryCS / div
+		result.AvgInvoluntaryContextSwitches = involuntaryCS / div
+	}
 
 	if ramSamples > 0 {
 		result.AvgRAMBytes = totalRAM / ramSamples

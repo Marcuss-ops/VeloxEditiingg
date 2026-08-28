@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"velox-server/internal/app"
@@ -474,6 +475,18 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 		deliveryReg.Register(driveProvider)
 		logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] Delivery provider registered: drive")
 	}
+	// Explicitly opted-in jobs can fall back to a verified local artifact when
+	// Drive is not provisioned. Keep the row in the runtime registry rather
+	// than a migration so test/legacy databases are not mutated merely by
+	// upgrading; this provider is a real filesystem export, never a noop.
+	if _, err := p.SQLite.DB().Exec(`INSERT OR IGNORE INTO delivery_destinations
+		(destination_id, provider, name, enabled, configuration_json, created_at, updated_at)
+		VALUES ('local-fallback', 'local_export', 'Local fallback export', 1, '{}', datetime('now'), datetime('now'))`); err != nil {
+		return nil, fmt.Errorf("bootstrap: ensure local fallback destination: %w", err)
+	}
+	localExportRoot := filepath.Join(cfg.Runtime.StorageDir, "local-deliveries")
+	deliveryReg.Register(deliveryProviders.NewLocalExportProvider(localExportRoot))
+	logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] Delivery provider registered: local_export root=%s", localExportRoot)
 
 	// The social_gateway provider is platform-agnostic — it talks to the
 	// external Social API through socialclient (HTTP). Registration is

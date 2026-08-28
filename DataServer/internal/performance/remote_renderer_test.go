@@ -11,7 +11,7 @@ type remoteCommandStub struct{ calls []string }
 func (s *remoteCommandStub) Run(_ context.Context, _ string, command string) (string, error) {
 	s.calls = append(s.calls, command)
 	if strings.Contains(command, " /bin/cat ") {
-		return `{"artifact_sha":"abc","receipts":[{"wall_ms":42,"receipt":{"timing":{"wall_ms":42,"render_ms":40},"memory":{"peak_rss_bytes":123}}}]}`, nil
+		return `{"artifact_sha":"abc","receipts":[{"wall_ms":42,"receipt":{"timing":{"wall_ms":42,"render_ms":40},"memory":{"peak_rss_bytes":123},"cpu":{"cpu_user_ms":30,"cpu_system_ms":4,"cpu_total_ms":34,"cpu_wall_ratio":0.81},"io":{"total_bytes_read":1000,"total_bytes_written":2000,"scratch_peak_bytes":3000},"scheduling":{"minor_page_faults":7,"major_page_faults":1,"voluntary_context_switches":8,"involuntary_context_switches":2}}}]}`, nil
 	}
 	return "prepared", nil
 }
@@ -24,7 +24,7 @@ func TestRemoteWorkerRendererUsesRealToolchainAndReusesFixture(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render() error: %v", err)
 	}
-	if got.Receipt == nil || got.Receipt.WallMS != 42 || got.Receipt.PeakRAMBytes != 123 {
+	if got.Receipt == nil || got.Receipt.WallMS != 42 || got.Receipt.PeakRAMBytes != 123 || got.Receipt.CPUTotalMS != 34 || got.Receipt.BytesRead != 1000 || got.Receipt.ScratchPeakBytes != 3000 {
 		t.Fatalf("unexpected receipt: %+v", got.Receipt)
 	}
 	if got.ArtifactSHA256 != "abc" {

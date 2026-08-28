@@ -153,7 +153,7 @@ func (h *Handlers) SubmitJob() gin.HandlerFunc {
 		// Extracted into checkDeliveryPlanDestinations (job_submit_preflight.go);
 		// returns true when a 500 store_failure or 422 invalid_payload
 		// response was already written.
-		if checkDeliveryPlanDestinations(c, h, req) {
+		if checkDeliveryPlanDestinations(c, h, &req) {
 			return
 		}
 
