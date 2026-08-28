@@ -66,6 +66,7 @@ func (w *Worker) prefetchPreparedHook() func(prefetch.PreparedJob) {
 			return
 		}
 		w.logger.Info("[PREFETCH] pre-job finalized job=%s task=%s evidence=%s output=%s publisher=%s warmed_bytes=%d disk_free_bytes=%d finalize_ms=%d output_ready_ms=%d warm_ms=%d evidence_ms=%d", job.JobID, job.TaskID, prejob.EvidencePath, prejob.OutputDir, prejob.PublisherDir, prejob.WarmAdvisedBytes, prejob.DiskFreeBytes, prejob.FinalizeMS, prejob.OutputReadyMS, prejob.WarmMS, prejob.EvidenceMS)
+		w.rememberPreparedEvidence(job)
 		w.logger.Info("[PREFETCH] state=PREPARED job=%s task=%s reservation=%s plan=%s@v%d distance=%d assets=%d prepared_at=%s", job.JobID, job.TaskID, job.ReservationID, job.PlanID, job.PlanVersion, job.Distance, len(job.Assets), job.PreparedAt.UTC().Format(time.RFC3339Nano))
 		// Send lifecycle events for each prepared asset.
 		for _, asset := range job.Assets {
@@ -82,6 +83,32 @@ func (w *Worker) prefetchPreparedHook() func(prefetch.PreparedJob) {
 			})
 		}
 	}
+}
+
+func (w *Worker) rememberPreparedEvidence(job prefetch.PreparedJob) {
+	if w == nil || job.JobID == "" {
+		return
+	}
+	w.preparedEvidenceMu.Lock()
+	defer w.preparedEvidenceMu.Unlock()
+	for i := range w.preparedEvidence {
+		if w.preparedEvidence[i].JobID == job.JobID && w.preparedEvidence[i].TaskID == job.TaskID {
+			w.preparedEvidence[i] = job
+			return
+		}
+	}
+	w.preparedEvidence = append(w.preparedEvidence, job)
+}
+
+func (w *Worker) preparedEvidenceSnapshot() []prefetch.PreparedJob {
+	if w == nil {
+		return nil
+	}
+	w.preparedEvidenceMu.Lock()
+	defer w.preparedEvidenceMu.Unlock()
+	out := make([]prefetch.PreparedJob, len(w.preparedEvidence))
+	copy(out, w.preparedEvidence)
+	return out
 }
 
 func prejobErrorReason(err error) string {

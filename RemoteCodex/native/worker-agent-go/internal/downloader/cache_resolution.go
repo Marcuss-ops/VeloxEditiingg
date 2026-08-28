@@ -144,6 +144,8 @@ type CacheResolution struct {
 	// the asset must have been materialized before the current resolution
 	// to prove it was prefetched rather than coincidentally warm.
 	ResolvedAt time.Time
+	// PreparedAt carries the temporal proof for a prefetched resolution.
+	PreparedAt time.Time
 }
 
 // ResolutionSink observes each completed resolution exactly once. It runs on

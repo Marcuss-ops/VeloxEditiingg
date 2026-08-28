@@ -121,10 +121,11 @@ func (w *Worker) assetCacheResolver() *downloader.CacheResolver {
 	if w.cacheResolver == nil {
 		w.cacheResolver = downloader.NewCacheResolver(w.assetDownloadManager(), cacheResolutionSink{
 			preparedJobs: func() []prefetch.PreparedJob {
-				if w.prefetchScheduler == nil {
-					return nil
+				jobs := w.preparedEvidenceSnapshot()
+				if w.prefetchScheduler != nil {
+					jobs = append(jobs, w.prefetchScheduler.PreparedJobs()...)
 				}
-				return w.prefetchScheduler.PreparedJobs()
+				return jobs
 			},
 			invalidatePreparedAsset: func(jobID, assetKey string) {
 				if w.prefetchScheduler != nil {

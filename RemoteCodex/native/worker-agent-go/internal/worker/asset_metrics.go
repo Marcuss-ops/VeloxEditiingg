@@ -328,6 +328,9 @@ func (s cacheResolutionSink) RecordResolution(ctx context.Context, resolution do
 	} else if !resolution.CacheHit && resolution.Origin == "" {
 		resolution.Origin = downloader.OriginRuntimeDownload
 	}
+	if resolution.Origin == downloader.OriginPrefetch && resolution.PreparedAt.IsZero() {
+		resolution.PreparedAt = s.preparedAtForResolution(resolution)
+	}
 	// A miss for an asset that is still covered by a certified PREPARED job is
 	// an explicit zero-network invariant violation. Keep this event on the
 	// canonical resolution path so it cannot be hidden by a lower-level
@@ -361,9 +364,13 @@ func (s cacheResolutionSink) RecordResolution(ctx context.Context, resolution do
 		tracker.recordResolution(resolution)
 		// Track the latest prefetch preparation time for
 		// prefetch_ready_lead_ms derivation.
-		if resolution.Origin == downloader.OriginPrefetch && s.latestPreparedAtMs != nil {
-			if ms := s.latestPreparedAtMs(); ms > 0 {
-				tracker.setLatestPreparedAtMs(ms)
+		if resolution.Origin == downloader.OriginPrefetch {
+			if !resolution.PreparedAt.IsZero() {
+				tracker.setLatestPreparedAtMs(resolution.PreparedAt.UnixMilli())
+			} else if s.latestPreparedAtMs != nil {
+				if ms := s.latestPreparedAtMs(); ms > 0 {
+					tracker.setLatestPreparedAtMs(ms)
+				}
 			}
 		}
 	}
@@ -512,6 +519,20 @@ func (s cacheResolutionSink) classifyOrigin(resolution downloader.CacheResolutio
 		}
 	}
 	return downloader.OriginWarmCache
+}
+
+func (s cacheResolutionSink) preparedAtForResolution(resolution downloader.CacheResolution) time.Time {
+	if s.preparedJobs == nil {
+		return time.Time{}
+	}
+	for _, job := range s.preparedJobs() {
+		for _, asset := range job.Assets {
+			if resolutionPrefetchMatch(resolution, job, asset) && asset.Origin != downloader.OriginWarmCache {
+				return asset.PreparedAt
+			}
+		}
+	}
+	return time.Time{}
 }
 
 // resolutionPrefetchMatch reports whether the cache resolution matches a

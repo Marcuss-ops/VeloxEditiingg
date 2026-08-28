@@ -1097,6 +1097,7 @@ func TestCacheResolutionSink_NilPreparedJobsClassifiesAsWarmCache(t *testing.T) 
 // classifyOrigin prefers the Origin field from PreparedAssetMetadata when
 // available, falling back to the SHA-based heuristic.
 func TestCacheResolutionSink_ClassifyOriginPrefersMetadataOrigin(t *testing.T) {
+	preparedAt := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
 	// PreparedJob with an asset that has Origin explicitly set to prefetch.
 	preparedJobs := []prefetch.PreparedJob{
 		{
@@ -1106,7 +1107,8 @@ func TestCacheResolutionSink_ClassifyOriginPrefersMetadataOrigin(t *testing.T) {
 			Assets: map[string]prefetch.PreparedAssetMetadata{
 				"asset-X": {
 					SHA256: "sha-x", SizeBytes: 2048,
-					Origin: downloader.OriginPrefetch,
+					Origin:     downloader.OriginPrefetch,
+					PreparedAt: preparedAt,
 				},
 			},
 		},
@@ -1125,6 +1127,9 @@ func TestCacheResolutionSink_ClassifyOriginPrefersMetadataOrigin(t *testing.T) {
 	snap := tracker.cacheSnapshot()
 	if snap.OriginPrefetchCount != 1 {
 		t.Fatalf("OriginPrefetchCount = %d, want 1 (metadata.Origin= prefetch)", snap.OriginPrefetchCount)
+	}
+	if got := tracker.prepSnapshot().LatestPreparedAtMs; got != preparedAt.UnixMilli() {
+		t.Fatalf("LatestPreparedAtMs = %d, want %d", got, preparedAt.UnixMilli())
 	}
 
 	// PreparedJob with Origin set to warm_cache (edge case: asset was in cache

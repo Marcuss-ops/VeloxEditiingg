@@ -190,6 +190,8 @@ type Worker struct {
 	// after reservation/budget gates are wired.
 	prefetchController *prefetch.Controller
 	prefetchScheduler  *prefetch.Scheduler
+	preparedEvidenceMu sync.Mutex
+	preparedEvidence   []prefetch.PreparedJob
 
 	// finalManifestReconciler applies late-bound FinalManifestDelta updates
 	// (including Chronon artifacts) through the same cache resolver used by
