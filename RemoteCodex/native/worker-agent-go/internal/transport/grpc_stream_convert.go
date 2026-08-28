@@ -110,6 +110,9 @@ func (t *GRPCStreamTransport) messageToEnvelope(msg controltransport.ControlMess
 
 	case *pb.AssetDownloadProgress:
 		env.Msg = &pb.WorkerToMasterEnvelope_AssetDownloadProgress{AssetDownloadProgress: tp}
+
+	case *pb.PrefetchLifecycleEvent:
+		env.Msg = &pb.WorkerToMasterEnvelope_PrefetchLifecycleEvent{PrefetchLifecycleEvent: tp}
 	}
 
 	return env
