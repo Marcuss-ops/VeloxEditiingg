@@ -137,6 +137,11 @@ func parseAssetPreparationDrillDown(raw string) *sharedtelemetry.AssetPreparatio
 		PrefetchHits:            get("prefetch_hits", "prefetchHits"),
 		WarmCacheHits:           get("warm_cache_hits", "warmCacheHits"),
 		RuntimeDownloads:        get("runtime_downloads", "runtimeDownloads"),
+		WarmCacheBytes:          get("warm_cache_bytes", "warmCacheBytes"),
+		RuntimeDownloadBytes:    get("runtime_download_bytes", "runtimeDownloadBytes"),
+		RequiredAssetBytes:      get("required_asset_bytes", "requiredAssetBytes"),
+		LatestPreparedAtMs:      get("latest_prepared_at_ms", "latestPreparedAtMs"),
+		AttemptStartedAtMs:      get("attempt_started_at_ms", "attemptStartedAtMs"),
 	}
 	return &prep
 }

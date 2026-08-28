@@ -111,6 +111,11 @@ func buildTaskResult(r *taskResultReporter, pte *PendingTaskExecution, taskID, a
 			PrefetchHits:            p.PrefetchHits,
 			WarmCacheHits:           p.WarmCacheHits,
 			RuntimeDownloads:        p.RuntimeDownloads,
+			WarmCacheBytes:          p.WarmCacheBytes,
+			RuntimeDownloadBytes:    p.RuntimeDownloadBytes,
+			RequiredAssetBytes:      p.RequiredAssetBytes,
+			LatestPreparedAtMs:      p.LatestPreparedAtMs,
+			AttemptStartedAtMs:      p.AttemptStartedAtMs,
 		}
 	}
 	for _, segment := range report.Segments {

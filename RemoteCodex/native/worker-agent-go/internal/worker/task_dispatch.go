@@ -111,6 +111,9 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 	if attemptEvents != nil {
 		attemptEvents.AttemptStarted()
 	}
+	// Record the attempt start wall-clock time for
+	// prefetch_ready_lead_ms derivation in the asset preparation breakdown.
+	assetTracker.setAttemptStartedAtMs(time.Now().UTC().UnixMilli())
 	ctx = telemetry.WithRecorder(ctx, rec)
 	ctx = telemetry.WithAttemptEventMachine(ctx, attemptEvents)
 	ctx = telemetry.WithMilestoneRecorder(ctx, milestones)

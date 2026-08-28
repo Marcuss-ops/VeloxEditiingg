@@ -159,6 +159,17 @@ func (h *Handler) refreshFutureAssetPlan(ctx context.Context, workerID, currentJ
 	} else {
 		planSentAt = time.Now().UTC()
 	}
+	// Drive reservation lifecycle: transition RESERVED → PLANNING for all
+	// reservations whose plan was just sent. This tells the preparation gate
+	// that the plan has been dispatched but no prefetch evidence has arrived yet.
+	if planSentAt.IsZero() == false {
+		for _, r := range desired {
+			if r.ReservationID == "" {
+				continue
+			}
+			_ = store.UpdateReservationState(ctx, r.ReservationID, taskgraph.ReservationPlanning)
+		}
+	}
 	// Persist prefetch lifecycle events into the job journal so fleetctl
 	// job inspect shows the full prefetch timeline.
 	if h.dbStore != nil && planSentAt.IsZero() == false {

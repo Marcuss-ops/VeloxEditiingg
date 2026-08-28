@@ -3,12 +3,23 @@ package grpcserver
 import (
 	"context"
 	"testing"
+	"time"
 
 	"velox-server/internal/taskgraph"
 )
 
 func TestReservationPreparedRequiresMatchingLineage(t *testing.T) {
-	h := &Handler{}
+	// Wire a minimal handler with a FutureReservationStore so getPrepGate
+	// can lazily create the gate. The mock's UpdateReservationState is
+	// a no-op; we only need the evidence map to be functional.
+	frs := &mockFutureReservationStore{}
+	h := NewHandler(nil, nil, nil, nil, nil, nil, nil, &HandlerConfig{
+		PushMode:            true,
+		StrictPrefetchClaim: true,
+		FutureAssetPlanTTL:  2 * time.Minute,
+	})
+	h.taskRepo = &compositeRepo{frs: frs}
+
 	reservation := taskgraph.FutureReservationWithPayload{
 		FutureReservation: taskgraph.FutureReservation{
 			TaskID: "task-b", WorkerID: "worker-b", ReservationID: "future:worker-b:task-b", TaskRevision: 7,

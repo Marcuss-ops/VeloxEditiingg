@@ -97,6 +97,7 @@ type Handler struct {
 	workerSessions map[string]string         // workerID → sessionID (for lookup)
 	preparedMu     sync.RWMutex
 	prepared       map[string]map[string]preparedAssetEvidence // reservation_id → asset key/id
+	prepGate       *PreparationGate
 }
 
 // NewHandler creates a new gRPC WorkerControl handler.
@@ -124,7 +125,7 @@ func NewHandler(
 	if config == nil {
 		config = &HandlerConfig{PushMode: true}
 	}
-	return &Handler{
+	h := &Handler{
 		registry:           registry,
 		cmdMgr:             cmdMgr,
 		jobsRepo:           jobsRepo,
@@ -140,4 +141,9 @@ func NewHandler(
 		workerSessions:     make(map[string]string),
 		prepared:           make(map[string]map[string]preparedAssetEvidence),
 	}
+	// Wire the preparation gate if the repository supports future reservations.
+	if frs, ok := taskRepo.(taskgraph.FutureReservationStore); ok {
+		h.prepGate = NewPreparationGate(frs, h, dbStore)
+	}
+	return h
 }

@@ -146,16 +146,36 @@ func (h *Handler) sendPushTaskOffer(ctx context.Context, workerID string) {
 		// owner/next placement tick claim it.
 		return
 	}
-	if h.config.StrictPrefetchClaim {
+	if h.config.StrictPrefetchClaim && h.prepGate != nil {
+		decision, err := h.prepGate.EnsurePrepared(ctx, workerID, candidate)
+		if err != nil {
+			logGRPCf(ctx, logging.LevelError, logging.CodeGRPCPlacementFailed, "[PLACEMENT] preparation gate check failed worker=%s task=%s: %v", workerID, candidate.TaskID, err)
+			return
+		}
+		switch decision {
+		case PreparationReady:
+			// All assets prepared — proceed to claim.
+		case PreparationNotRequired:
+			// No assets needed — proceed to claim.
+		case PreparationWaiting:
+			// Gate blocks. The EnsurePrepared call already sent the plan
+			// if needed (first-job path). The next placement tick retries.
+			return
+		case PreparationExpired:
+			// Stale reservation. Leave task READY for re-dispatch.
+			return
+		default:
+			logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCPlacementFailed, "[PLACEMENT] preparation gate UNKNOWN decision=%s worker=%s task=%s", decision, workerID, candidate.TaskID)
+			return
+		}
+	} else if h.config.StrictPrefetchClaim {
+		// Fallback: gate not wired (test/legacy path).
 		prepared, err := h.ensurePreparedBeforeClaim(ctx, workerID, candidate)
 		if err != nil {
 			logGRPCf(ctx, logging.LevelError, logging.CodeGRPCPlacementFailed, "[PLACEMENT] preparation gate check failed worker=%s task=%s: %v", workerID, candidate.TaskID, err)
 			return
 		}
 		if !prepared {
-			// Establish/send the preparation plan while the task is still READY.
-			// The next placement tick may claim only after the worker reports the
-			// reservation-scoped PREPARED evidence.
 			h.refreshFutureAssetPlan(ctx, workerID, "")
 			return
 		}

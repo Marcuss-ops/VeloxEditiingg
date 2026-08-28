@@ -107,6 +107,10 @@ type assetOperationTracker struct {
 	cacheEnabled bool
 	cache        AttemptCacheMetrics
 	prep         AssetPreparationSummary
+	// attemptStartedAtMs is set once when the attempt begins. It is the
+	// epoch-millisecond wall-clock timestamp used to derive
+	// prefetch_ready_lead_ms = attempt_started_at − latest_prepared_at.
+	attemptStartedAtMs int64
 	// uniqueAssets is the sink-fed unique-asset identity set. It is populated
 	// by recordResolution (the canonical single emission point) so the
 	// preparation summary never depends on the per-asset record list, which is
@@ -263,6 +267,18 @@ func (t *assetOperationTracker) setLatestPreparedAtMs(ms int64) {
 	if ms > t.prep.LatestPreparedAtMs {
 		t.prep.LatestPreparedAtMs = ms
 	}
+}
+
+// setAttemptStartedAtMs records the epoch-millisecond timestamp when the
+// attempt began. This is set exactly once at attempt start and is used to
+// derive prefetch_ready_lead_ms = attempt_started_at − latest_prepared_at.
+func (t *assetOperationTracker) setAttemptStartedAtMs(ms int64) {
+	if t == nil || ms <= 0 {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.attemptStartedAtMs = ms
 }
 
 func recordAssetOperation(ctx context.Context, record AssetOperationRecord) {
@@ -665,6 +681,7 @@ func attachAssetOperations(report *taskrunner.TaskExecutionReport, tracker *asse
 			RuntimeDownloadBytes:    prep.RuntimeDownloadBytes,
 			RequiredAssetBytes:      prep.RequiredAssetBytes,
 			LatestPreparedAtMs:      prep.LatestPreparedAtMs,
+			AttemptStartedAtMs:      tracker.attemptStartedAtMs,
 		}
 	}
 	legacy["cache.enabled"] = tracker.cacheEnabled || len(records) > 0
