@@ -35,7 +35,7 @@ runs:
         docker pull "$IMAGE_REF" >/dev/null
         ENGINE_SHA="$(docker run --rm --entrypoint /bin/sh "$IMAGE_REF" -c 'awk "length(\$1)==64 && \$1 ~ /^[0-9a-fA-F]+$/ {print tolower(\$1); exit}" /usr/local/share/velox/video-engine.sha256' 2>/dev/null || true)"
         BUNDLE_HASH="$(docker run --rm --entrypoint /bin/sh "$IMAGE_REF" -c 'awk "length(\$1)==64 && \$1 ~ /^[0-9a-fA-F]+$/ {print tolower(\$1); exit}" /app/RemoteCodex/BUNDLE_HASH.txt' 2>/dev/null || true)"
-        IMAGE_BUNDLE_HASH="$(docker run --rm --entrypoint /bin/sh "$IMAGE_REF" -c 'set -eu; sha256sum /usr/local/bin/velox-worker-agent /usr/local/bin/velox_video_engine /usr/local/bin/velox-cache-evict | sha256sum | awk "{print \$1}"' 2>/dev/null || true)"
+        IMAGE_BUNDLE_HASH="$(docker run --rm --entrypoint /bin/sh "$IMAGE_REF" -c 'set -eu; sha256sum /usr/local/bin/velox-worker-agent /usr/local/bin/velox_video_engine /usr/local/bin/velox-cache-evict /usr/local/bin/velox-benchmark /usr/local/bin/velox-fixture-gen /usr/local/bin/velox-fixture-gate | sha256sum | awk "{print \$1}"' 2>/dev/null || true)"
         [[ "$IMAGE_BUNDLE_HASH" == "$BUNDLE_HASH" ]] || {
           echo "::error::image bundle hash mismatch: embedded=$BUNDLE_HASH actual=$IMAGE_BUNDLE_HASH" >&2
           exit 1
