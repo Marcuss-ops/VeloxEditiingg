@@ -132,7 +132,7 @@ func (s *SQLiteStore) queryHardwareProfile(ctx context.Context, workerID string,
 		       gpu_model, gpu_vram_bytes, nvenc_available, nvdec_available,
 		       qsv_available, ulimit_nofile_soft, ulimit_nofile_hard
 		FROM worker_runtime_snapshots
-		WHERE worker_id = ? ORDER BY created_at DESC LIMIT 1`, workerID).Scan(
+		WHERE worker_id = ? ORDER BY connected_at DESC, rowid DESC LIMIT 1`, workerID).Scan(
 		&report.LogicalCPUCount, &report.PhysicalCPUCount, &report.EffectiveCPUCount,
 		&report.TotalMemoryBytes, &report.CPUModel, &report.StorageDevice,
 		&report.StorageClass, &report.GPUModel, &report.GPUVRAMBytes,
