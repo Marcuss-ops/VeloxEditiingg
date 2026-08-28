@@ -1,3 +1,11 @@
+## [v1.3.9] - 2026-08-28
+
+### Strict preparation gate
+
+- Add reservation-scoped prepared-asset lineage and an opt-in claim gate so
+  strict workers do not create an Attempt before required assets are ready.
+- Carry the task revision fence through worker prefetch lifecycle events.
+
 ## [v1.3.8] - 2026-08-28
 
 ### Release metadata
