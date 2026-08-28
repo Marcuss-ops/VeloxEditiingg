@@ -24,20 +24,24 @@ func registerBenchmarkRoutes(r *gin.Engine, deps MetricsRouteDeps, cfg *config.C
 
 	// Concurrent benchmark endpoint: POST /api/v1/admin/benchmarks/concurrent
 	// Triggers a benchmark run at concurrency levels 1-4 and returns the sweet spot.
-	concurrentHandler := api.NewAdminConcurrentBenchmarkHandler(api.ConcurrentBenchmarkDeps{})
+	concurrentHandler := api.NewAdminConcurrentBenchmarkHandler(api.ConcurrentBenchmarkDeps{
+		Renderer: deps.BenchmarkRenderer,
+	})
 	r.POST("/api/v1/admin/benchmarks/concurrent", api.AdminAuthMiddleware(cfg), concurrentHandler.RunConcurrentBenchmark())
 
 	// Benchmark validation endpoint: POST /api/v1/admin/benchmarks/validate
 	// Runs benchmark, validates scorecard prediction, persists result, returns tuning suggestions.
-	var dbStore *store.SQLiteStore
-	if cfg != nil {
-		// dbStore is wired via the bootstrap; here we accept it if available.
-		// The handler gracefully degrades without it.
-		_ = dbStore
-	}
-	validateHandler := api.NewAdminBenchmarkValidateHandler(api.BenchmarkValidateDeps{})
+	validateHandler := api.NewAdminBenchmarkValidateHandler(api.BenchmarkValidateDeps{
+		Renderer: deps.BenchmarkRenderer,
+		Store:    benchmarkStoreFromDeps(deps),
+	})
 	r.POST("/api/v1/admin/benchmarks/validate", api.AdminAuthMiddleware(cfg), validateHandler.RunAndValidate())
 }
+
+// benchmarkStoreFromDeps keeps the route registration seam typed. The
+// performance repository and capacity store are both owned by SQLite; the
+// concrete store is supplied by the composition root for validation.
+func benchmarkStoreFromDeps(deps MetricsRouteDeps) *store.SQLiteStore { return deps.BenchmarkStore }
 
 func recordBenchmarkRunHandler(repo performance.BenchmarkRunRepository) gin.HandlerFunc {
 	return func(c *gin.Context) {

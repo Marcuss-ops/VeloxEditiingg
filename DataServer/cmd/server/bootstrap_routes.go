@@ -7,6 +7,7 @@ import (
 	instaedithandler "velox-server/internal/handlers/server/instaedit"
 	scripthandlers "velox-server/internal/handlers/server/script"
 	velmetrics "velox-server/internal/metrics"
+	"velox-server/internal/performance"
 	"velox-server/internal/store"
 )
 
@@ -16,6 +17,10 @@ import (
 // per-route dep, the only place to wire it is in this method.
 func (c *appComponents) routerBundle() RouterBundle {
 	chunkedHandler := workerhandlersuploads.NewChunkedUploadHandler(c.assets.ChunkedUploadSvc)
+	var benchmarkRenderer performance.RenderRunner
+	if c.fleet != nil {
+		benchmarkRenderer = c.fleet.BenchmarkRenderer
+	}
 	return RouterBundle{
 		Fleet: FleetRouteDeps{
 			// The Handler wraps FleetDep.Controller via the
@@ -58,8 +63,10 @@ func (c *appComponents) routerBundle() RouterBundle {
 			CompletionTokenVerifier: c.assets.CompletionStore,
 		},
 		Metrics: MetricsRouteDeps{
-			Registry:      c.metricsRegistry,
-			BenchmarkRuns: store.NewSQLitePerformanceRepository(c.persistence.SQLite),
+			Registry:          c.metricsRegistry,
+			BenchmarkRuns:     store.NewSQLitePerformanceRepository(c.persistence.SQLite),
+			BenchmarkRenderer: benchmarkRenderer,
+			BenchmarkStore:    c.persistence.SQLite,
 			// Phase 6 route-usage counting: the collector implements the
 			// HTTPRouteUsageSink contract and stamps every request's
 			// (surface, route template) onto velox_master_http_route_requests_total.

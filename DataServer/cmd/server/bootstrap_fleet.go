@@ -14,6 +14,7 @@ import (
 	"velox-server/internal/handlers/server/api"
 	integrationsDrive "velox-server/internal/integrations/drive"
 	"velox-server/internal/logging"
+	"velox-server/internal/performance"
 	"velox-server/internal/store"
 	"velox-server/internal/supervisor"
 	workersreg "velox-server/internal/workers"
@@ -122,11 +123,12 @@ func (a *driveUploaderAdapter) UploadArtifact(ctx context.Context, runID, srcPat
 // composition; production boot must set it to true so published
 // operations cannot remain QUEUED indefinitely.
 type FleetDep struct {
-	Controller       *fleet.FleetController
-	Registry         *fleet.ExecutorRegistry
-	Update           *fleet.UpdateExecutor
-	SSHMaterialCheck func() error
-	tickWiredAtBoot  bool
+	Controller        *fleet.FleetController
+	Registry          *fleet.ExecutorRegistry
+	Update            *fleet.UpdateExecutor
+	SSHMaterialCheck  func() error
+	BenchmarkRenderer performance.RenderRunner
+	tickWiredAtBoot   bool
 }
 
 // getHandler returns the api.AdminOperationsHandler wrapping
@@ -223,7 +225,8 @@ func buildFleet(p *persistenceDeps, workerRegistry *workersreg.Registry, sharedS
 		SSHMaterialCheck: func() error {
 			return fleet.ValidateSSHMaterial(fleet.DefaultSSHKeyPath, fleet.DefaultKnownHostsPath)
 		},
-		tickWiredAtBoot: false,
+		BenchmarkRenderer: performance.NewRemoteWorkerRenderer(sharedSSH),
+		tickWiredAtBoot:   false,
 	}, nil
 }
 

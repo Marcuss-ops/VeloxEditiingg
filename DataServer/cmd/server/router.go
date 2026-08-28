@@ -104,7 +104,11 @@ type UploadRouteDeps struct {
 type MetricsRouteDeps struct {
 	Registry      *velmetrics.Registry
 	BenchmarkRuns performance.BenchmarkRunRepository
-	RouteUsage    velmetrics.HTTPRouteUsageSink
+	// BenchmarkRenderer is the real worker-backed renderer. Nil is an
+	// intentional MISCONFIGURED state; benchmark routes fail closed.
+	BenchmarkRenderer performance.RenderRunner
+	BenchmarkStore    *store.SQLiteStore
+	RouteUsage        velmetrics.HTTPRouteUsageSink
 }
 
 // InstaEditRouteDeps carries the deps for the /api/v1/instaedit route
