@@ -19,13 +19,24 @@ type CapabilityReport struct {
 
 // HostInfo is the typed host metadata carried alongside executor capabilities.
 type HostInfo struct {
-	WorkerID        string `json:"worker_id"`
-	Hostname        string `json:"hostname"`
-	CPUCount        int    `json:"cpu_count"`
-	MaxParallelJobs int    `json:"max_parallel_jobs"`
-	HasGPU          bool   `json:"has_gpu"`
-	RAMBytes        int64  `json:"ram_bytes"`
-	DiskFreeBytes   int64  `json:"disk_free_bytes"`
+	WorkerID          string `json:"worker_id"`
+	Hostname          string `json:"hostname"`
+	CPUCount          int    `json:"cpu_count"`
+	PhysicalCPUCount  int    `json:"physical_cpu_count,omitempty"`
+	EffectiveCPUCount int    `json:"effective_cpu_count,omitempty"`
+	MaxParallelJobs   int    `json:"max_parallel_jobs"`
+	HasGPU            bool   `json:"has_gpu"`
+	GPUModel          string `json:"gpu_model,omitempty"`
+	GPUVRAMBytes      int64  `json:"gpu_vram_bytes,omitempty"`
+	NVENCAvailable    bool   `json:"nvenc_available,omitempty"`
+	NVDECAvailable    bool   `json:"nvdec_available,omitempty"`
+	QSVAvailable      bool   `json:"qsv_available,omitempty"`
+	RAMBytes          int64  `json:"ram_bytes"`
+	DiskFreeBytes     int64  `json:"disk_free_bytes"`
+	StorageDevice     string `json:"storage_device,omitempty"`
+	StorageClass      string `json:"storage_class,omitempty"`
+	NofileSoft        uint64 `json:"ulimit_nofile_soft,omitempty"`
+	NofileHard        uint64 `json:"ulimit_nofile_hard,omitempty"`
 }
 
 // CapabilitySet is the typed set of named protocol capabilities used by
@@ -80,13 +91,26 @@ func (r CapabilityReport) AsMap() map[string]interface{} {
 		executors = append(executors, item)
 	}
 	host := map[string]interface{}{
-		"worker_id":         r.Host.WorkerID,
-		"hostname":          r.Host.Hostname,
-		"cpu_count":         r.Host.CPUCount,
-		"max_parallel_jobs": r.Host.MaxParallelJobs,
-		"has_gpu":           r.Host.HasGPU,
-		"ram_bytes":         r.Host.RAMBytes,
-		"disk_free_bytes":   r.Host.DiskFreeBytes,
+		"worker_id":           r.Host.WorkerID,
+		"hostname":            r.Host.Hostname,
+		"cpu_count":           r.Host.CPUCount,
+		"logical_cpu_count":   r.Host.CPUCount,
+		"physical_cpu_count":  r.Host.PhysicalCPUCount,
+		"effective_cpu_count": r.Host.EffectiveCPUCount,
+		"max_parallel_jobs":   r.Host.MaxParallelJobs,
+		"has_gpu":             r.Host.HasGPU,
+		"gpu_model":           r.Host.GPUModel,
+		"gpu_vram_bytes":      r.Host.GPUVRAMBytes,
+		"nvenc_available":     r.Host.NVENCAvailable,
+		"nvdec_available":     r.Host.NVDECAvailable,
+		"qsv_available":       r.Host.QSVAvailable,
+		"ram_bytes":           r.Host.RAMBytes,
+		"total_memory_bytes":  r.Host.RAMBytes,
+		"disk_free_bytes":     r.Host.DiskFreeBytes,
+		"storage_device":      r.Host.StorageDevice,
+		"storage_class":       r.Host.StorageClass,
+		"ulimit_nofile_soft":  r.Host.NofileSoft,
+		"ulimit_nofile_hard":  r.Host.NofileHard,
 	}
 	out := map[string]interface{}{
 		"schema_version": r.SchemaVersion,

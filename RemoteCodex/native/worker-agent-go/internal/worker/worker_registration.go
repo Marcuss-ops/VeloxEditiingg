@@ -215,16 +215,28 @@ func normalizeOfferedExecutorID(id string) string {
 // master has handled for years (zero == "not yet sampled").
 func (w *Worker) hostInfo(hostname string, maxParallel int) controltransport.HostInfo {
 	host := controltransport.HostInfo{
-		WorkerID:        w.config.WorkerID,
-		Hostname:        hostname,
-		CPUCount:        runtime.NumCPU(),
-		MaxParallelJobs: maxParallel,
+		WorkerID:          w.config.WorkerID,
+		Hostname:          hostname,
+		CPUCount:          runtime.NumCPU(),
+		MaxParallelJobs:   maxParallel,
+		EffectiveCPUCount: runtime.NumCPU(),
 	}
 	if w.sampler != nil {
 		if h := w.sampler.Host(); h != nil {
 			host.HasGPU = h.HasGPU
 			host.RAMBytes = h.RAMBytes
 			host.DiskFreeBytes = h.DiskFreeBytes
+			host.PhysicalCPUCount = int(h.PhysicalCPUCount)
+			host.EffectiveCPUCount = int(h.EffectiveCpuCores)
+			host.StorageDevice = h.StorageDevice
+			host.StorageClass = h.StorageClass
+			host.GPUModel = h.GPUModel
+			host.GPUVRAMBytes = h.GPUVRAMBytes
+			host.NVENCAvailable = h.NVENCAvailable
+			host.NVDECAvailable = h.NVDECAvailable
+			host.QSVAvailable = h.QSVAvailable
+			host.NofileSoft = h.NofileSoft
+			host.NofileHard = h.NofileHard
 		}
 	}
 	return host
