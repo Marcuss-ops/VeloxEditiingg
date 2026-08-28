@@ -229,7 +229,7 @@ func runBenchmarkCollect(client *fleetClient, args []string) int {
 		} `json:"validation"`
 	}
 
-	status, err := client.doJSON(ctx, "POST", "/api/v1/admin/benchmarks/validate", reqBody, &result)
+	status, err := client.doLongJSON(ctx, "POST", "/api/v1/admin/benchmarks/validate", reqBody, &result)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "fleetctl benchmark-collect: request failed: %v\n", err)
 		return ExitUnexpected

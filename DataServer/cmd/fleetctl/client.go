@@ -144,6 +144,20 @@ func newFleetClient(cfg *clientConfig) (*fleetClient, error) {
 //
 // Callers map non-2xx to canonical exit codes per exit_codes.go.
 func (c *fleetClient) doJSON(ctx context.Context, method, path string, body any, out any) (int, error) {
+	return c.doJSONWithHTTP(c.http, ctx, method, path, body, out)
+}
+
+// doLongJSON is reserved for deliberately long-running, server-side
+// certification operations such as benchmark-collect. Ordinary fleet
+// commands keep the 30s transport budget; benchmark runs get the explicit
+// bounded budget requested by their caller.
+func (c *fleetClient) doLongJSON(ctx context.Context, method, path string, body any, out any) (int, error) {
+	longClient := *c.http
+	longClient.Timeout = 20 * time.Minute
+	return c.doJSONWithHTTP(&longClient, ctx, method, path, body, out)
+}
+
+func (c *fleetClient) doJSONWithHTTP(httpClient *http.Client, ctx context.Context, method, path string, body any, out any) (int, error) {
 	var reqBody io.Reader
 	if body != nil {
 		bs, err := json.Marshal(body)
@@ -164,7 +178,7 @@ func (c *fleetClient) doJSON(ctx context.Context, method, path string, body any,
 	if c.verbose {
 		fmt.Fprintf(os.Stderr, "[fleetctl] -> %s %s\n", method, path)
 	}
-	resp, err := c.http.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return 0, fmt.Errorf("transport: %w", err)
 	}
