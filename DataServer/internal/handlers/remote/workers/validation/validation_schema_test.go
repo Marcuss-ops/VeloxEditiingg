@@ -245,6 +245,33 @@ CREATE TABLE creator_forwardings (
   last_error_class   TEXT NOT NULL DEFAULT '',
   external_client_id TEXT
 );
+-- Migration 171 adds the dedicated hardware columns to this snapshot. The
+-- legacy fixture has migration 112 recorded, so provide its pre-171 shape.
+CREATE TABLE worker_runtime_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  snapshot_id TEXT NOT NULL UNIQUE,
+  worker_id TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  hostname TEXT NOT NULL DEFAULT '',
+  node_id TEXT NOT NULL DEFAULT '',
+  worker_version TEXT NOT NULL DEFAULT '',
+  bundle_version TEXT NOT NULL DEFAULT '',
+  bundle_hash TEXT NOT NULL DEFAULT '',
+  engine_version TEXT NOT NULL DEFAULT '',
+  git_sha TEXT NOT NULL DEFAULT '',
+  protocol_version TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT '',
+  worker_name TEXT NOT NULL DEFAULT '', worker_class TEXT NOT NULL DEFAULT '',
+  rollout_group TEXT NOT NULL DEFAULT '', ffmpeg_version TEXT NOT NULL DEFAULT '',
+  config_hash TEXT NOT NULL DEFAULT '', docker_image_digest TEXT NOT NULL DEFAULT '',
+  capabilities_json TEXT NOT NULL DEFAULT '{}', cpu_model TEXT NOT NULL DEFAULT '',
+  logical_cpu_count INTEGER NOT NULL DEFAULT 0, effective_cpu_count INTEGER NOT NULL DEFAULT 0,
+  cpu_quota REAL NOT NULL DEFAULT 0, total_memory_bytes INTEGER NOT NULL DEFAULT 0,
+  gpu_model TEXT NOT NULL DEFAULT '', gpu_driver TEXT NOT NULL DEFAULT '',
+  kernel_version TEXT NOT NULL DEFAULT '', os_release TEXT NOT NULL DEFAULT '',
+  storage_class TEXT NOT NULL DEFAULT '', connected_at TEXT NOT NULL DEFAULT '',
+  disconnected_at TEXT
+);
 `)
 	require.NoError(t, err)
 	seedMigrationHistory(t, legacy, 136)
