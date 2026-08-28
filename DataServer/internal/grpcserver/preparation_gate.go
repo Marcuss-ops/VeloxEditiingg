@@ -207,7 +207,7 @@ func verifyAttempt(cert preparedJobCertificate, workerID string, taskRevision in
 		return false, fmt.Sprintf("attempt: assets_prepared=%d < assets_required=%d", cert.AssetsPrepared, cert.AssetsRequired)
 	}
 	return true, ""
-}// MarkPreparedAsset records authenticated, reservation-scoped evidence
+} // MarkPreparedAsset records authenticated, reservation-scoped evidence
 // in the gate's read model. The journal remains the operator history;
 // this map is the placement gate's fast authority.
 //
@@ -323,6 +323,8 @@ func (h *Handler) getPrepGate() *PreparationGate {
 	if h == nil {
 		return nil
 	}
+	h.prepGateMu.Lock()
+	defer h.prepGateMu.Unlock()
 	if h.prepGate != nil {
 		return h.prepGate
 	}

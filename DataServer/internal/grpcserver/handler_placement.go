@@ -146,8 +146,8 @@ func (h *Handler) sendPushTaskOffer(ctx context.Context, workerID string) {
 		// owner/next placement tick claim it.
 		return
 	}
-	if h.config.StrictPrefetchClaim && h.prepGate != nil {
-		decision, err := h.prepGate.EnsurePrepared(ctx, workerID, candidate)
+	if gate := h.getPrepGate(); h.config.StrictPrefetchClaim && gate != nil {
+		decision, err := gate.EnsurePrepared(ctx, workerID, candidate)
 		if err != nil {
 			logGRPCf(ctx, logging.LevelError, logging.CodeGRPCPlacementFailed, "[PLACEMENT] preparation gate check failed worker=%s task=%s: %v", workerID, candidate.TaskID, err)
 			return

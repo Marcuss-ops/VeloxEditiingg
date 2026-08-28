@@ -97,6 +97,7 @@ type Handler struct {
 	workerSessions map[string]string         // workerID → sessionID (for lookup)
 	preparedMu     sync.RWMutex
 	prepared       map[string]map[string]preparedAssetEvidence // reservation_id → asset key/id
+	prepGateMu     sync.Mutex
 	prepGate       *PreparationGate
 }
 
