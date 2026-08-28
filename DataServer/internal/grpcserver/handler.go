@@ -95,6 +95,8 @@ type Handler struct {
 	mu             sync.RWMutex
 	sessions       map[string]*workerSession // sessionID → active stream session
 	workerSessions map[string]string         // workerID → sessionID (for lookup)
+	preparedMu     sync.RWMutex
+	prepared       map[string]map[string]preparedAssetEvidence // reservation_id → asset key/id
 }
 
 // NewHandler creates a new gRPC WorkerControl handler.
@@ -136,5 +138,6 @@ func NewHandler(
 		futureAssetPlanner: futureassetmaster.NewPlanner(sharedfutureasset.Limits{PrefetchHorizon: config.FutureAssetPrefetchHorizon, ProtectionLookahead: config.FutureAssetProtectionLookahead}),
 		sessions:           make(map[string]*workerSession),
 		workerSessions:     make(map[string]string),
+		prepared:           make(map[string]map[string]preparedAssetEvidence),
 	}
 }

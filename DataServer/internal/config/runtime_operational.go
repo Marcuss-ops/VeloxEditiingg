@@ -20,6 +20,7 @@ type CacheConfig struct {
 	FutureAssetPrefetchHorizon     int
 	FutureAssetProtectionLookahead int
 	FutureAssetPlanTTL             time.Duration
+	StrictPrefetchClaim            bool
 }
 
 // SchedulerConfig controls periodic master scheduling/reconciliation loops.
@@ -66,6 +67,7 @@ func loadOperationalRuntimeConfig(raw RawConfig) (SupervisorConfig, CacheConfig,
 		FutureAssetPrefetchHorizon:     raw.Int("VELOX_PREFETCH_HORIZON_JOBS", 3, 1),
 		FutureAssetProtectionLookahead: raw.Int("VELOX_PREFETCH_PROTECTION_LOOKAHEAD_JOBS", 10, 1),
 		FutureAssetPlanTTL:             raw.Duration("VELOX_PREFETCH_PLAN_TTL", 2*time.Minute),
+		StrictPrefetchClaim:            raw.Bool("VELOX_PREFETCH_STRICT_CLAIM", false),
 	}
 	scheduler := SchedulerConfig{
 		TaskGraphTick:             raw.Duration("VELOX_TASKGRAPH_TICK", 2*time.Second),

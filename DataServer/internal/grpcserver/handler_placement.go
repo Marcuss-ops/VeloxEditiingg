@@ -146,6 +146,20 @@ func (h *Handler) sendPushTaskOffer(ctx context.Context, workerID string) {
 		// owner/next placement tick claim it.
 		return
 	}
+	if h.config.StrictPrefetchClaim {
+		prepared, err := h.ensurePreparedBeforeClaim(ctx, workerID, candidate)
+		if err != nil {
+			logGRPCf(ctx, logging.LevelError, logging.CodeGRPCPlacementFailed, "[PLACEMENT] preparation gate check failed worker=%s task=%s: %v", workerID, candidate.TaskID, err)
+			return
+		}
+		if !prepared {
+			// Establish/send the preparation plan while the task is still READY.
+			// The next placement tick may claim only after the worker reports the
+			// reservation-scoped PREPARED evidence.
+			h.refreshFutureAssetPlan(ctx, workerID, "")
+			return
+		}
+	}
 	leaseID := fmt.Sprintf("l-%s-%s", workerID, uuid.NewString()[:8])
 
 	tws, attempt, err := h.taskRepo.ClaimTaskForWorkerAtomic(ctx, taskgraph.ClaimTaskForWorkerCommand{

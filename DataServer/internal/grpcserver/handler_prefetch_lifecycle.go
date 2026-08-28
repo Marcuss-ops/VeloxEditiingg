@@ -19,6 +19,15 @@ func (h *Handler) handlePrefetchLifecycleEvent(workerID string, event *pb.Prefet
 		logGRPCf(context.Background(), logging.LevelWarn, logging.CodeGRPCPrefetchFailed, "[GRPC] prefetch lifecycle event from worker %s rejected: worker_id=%s mismatch", workerID, declared)
 		return
 	}
+	if event.GetEventType() == "prefetch_prepared" && event.GetReservationId() != "" {
+		h.markPreparedAsset(workerID, &preparedAssetEvidence{
+			TaskID:       event.GetTaskId(),
+			TaskRevision: int(event.GetTaskRevision()),
+			AssetID:      event.GetAssetId(),
+			SHA256:       event.GetAssetSha256(),
+			SizeBytes:    event.GetAssetSizeBytes(),
+		}, event.GetReservationId())
+	}
 	jobID := event.GetJobId()
 	if jobID == "" {
 		// Lifecycle events without a job ID (e.g. plan-scoped events that

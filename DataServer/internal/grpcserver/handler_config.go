@@ -30,6 +30,7 @@ type HandlerConfig struct {
 	FutureAssetPrefetchHorizon     int
 	FutureAssetProtectionLookahead int
 	FutureAssetPlanTTL             time.Duration
+	StrictPrefetchClaim            bool
 }
 
 // SetIngestionSvc installs the canonical TaskReportIngestionService so

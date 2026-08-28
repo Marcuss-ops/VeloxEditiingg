@@ -2666,7 +2666,9 @@ type PrefetchLifecycleEvent struct {
 	AssetSizeBytes int64  `protobuf:"varint,11,opt,name=asset_size_bytes,json=assetSizeBytes,proto3" json:"asset_size_bytes,omitempty"`
 	LocalPath      string `protobuf:"bytes,12,opt,name=local_path,json=localPath,proto3" json:"local_path,omitempty"`
 	// ISO-8601 timestamp of when this event occurred on the worker.
-	OccurredAt    *timestamppb.Timestamp `protobuf:"bytes,13,opt,name=occurred_at,json=occurredAt,proto3" json:"occurred_at,omitempty"`
+	OccurredAt *timestamppb.Timestamp `protobuf:"bytes,13,opt,name=occurred_at,json=occurredAt,proto3" json:"occurred_at,omitempty"`
+	// Task revision fence for reservation-scoped PREPARED evidence.
+	TaskRevision  int32 `protobuf:"varint,14,opt,name=task_revision,json=taskRevision,proto3" json:"task_revision,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2790,6 +2792,13 @@ func (x *PrefetchLifecycleEvent) GetOccurredAt() *timestamppb.Timestamp {
 		return x.OccurredAt
 	}
 	return nil
+}
+
+func (x *PrefetchLifecycleEvent) GetTaskRevision() int32 {
+	if x != nil {
+		return x.TaskRevision
+	}
+	return 0
 }
 
 // ---------------------------------------------------------
@@ -6637,7 +6646,7 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\ferror_detail\x18\x18 \x01(\tR\verrorDetail\x12;\n" +
 	"\bjob_refs\x18\x19 \x03(\v2 .velox.control.AssetJobReferenceR\ajobRefs\x12/\n" +
 	"\x13checkpoint_sequence\x18\x1a \x01(\x03R\x12checkpointSequence\x12/\n" +
-	"\x13transfer_generation\x18\x1b \x01(\x03R\x12transferGeneration\"\xc7\x03\n" +
+	"\x13transfer_generation\x18\x1b \x01(\x03R\x12transferGeneration\"\xec\x03\n" +
 	"\x16PrefetchLifecycleEvent\x12\x1d\n" +
 	"\n" +
 	"event_type\x18\x01 \x01(\tR\teventType\x12\x15\n" +
@@ -6655,7 +6664,8 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\n" +
 	"local_path\x18\f \x01(\tR\tlocalPath\x12;\n" +
 	"\voccurred_at\x18\r \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"occurredAt\"\xaa\n" +
+	"occurredAt\x12#\n" +
+	"\rtask_revision\x18\x0e \x01(\x05R\ftaskRevision\"\xaa\n" +
 	"\n" +
 	"\x16MasterToWorkerEnvelope\x12\x1d\n" +
 	"\n" +

@@ -482,6 +482,8 @@ message PrefetchLifecycleEvent {
   string local_path = 12;
   // ISO-8601 timestamp of when this event occurred on the worker.
   google.protobuf.Timestamp occurred_at = 13;
+  // Task revision fence for reservation-scoped PREPARED evidence.
+  int32 task_revision = 14;
 }
 
 // ---------------------------------------------------------

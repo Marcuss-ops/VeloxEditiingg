@@ -48,6 +48,7 @@ type PreparedAssetMetadata struct {
 type PreparedJob struct {
 	JobID         string                           `json:"job_id"`
 	TaskID        string                           `json:"task_id"`
+	TaskRevision  int                              `json:"task_revision"`
 	ReservationID string                           `json:"reservation_id,omitempty"`
 	PlanID        string                           `json:"plan_id,omitempty"`
 	PlanVersion   uint64                           `json:"plan_version,omitempty"`
@@ -126,6 +127,7 @@ func (s *Scheduler) preparedForJob(job futureasset.Job, metadata PreparedAssetMe
 		prepared = PreparedJob{
 			JobID:         job.JobID,
 			TaskID:        job.TaskID,
+			TaskRevision:  job.TaskRevision,
 			ReservationID: job.ReservationID,
 			PlanID:        s.currentPlanID,
 			PlanVersion:   s.currentPlanVersion,
