@@ -79,11 +79,15 @@ type ConcurrentBenchmarkConfig struct {
 
 // ConcurrencyLevelResult holds the aggregated results for one concurrency level.
 type ConcurrencyLevelResult struct {
-	Level            int     `json:"level"`
-	TotalRuns        int     `json:"total_runs"`
-	SuccessfulRuns   int     `json:"successful_runs"`
-	FailedRuns       int     `json:"failed_runs"`
-	TotalWallMS      int64   `json:"total_wall_ms"`
+	Level          int   `json:"level"`
+	TotalRuns      int   `json:"total_runs"`
+	SuccessfulRuns int   `json:"successful_runs"`
+	FailedRuns     int   `json:"failed_runs"`
+	TotalWallMS    int64 `json:"total_wall_ms"`
+	// LevelWallMS is the elapsed wall clock for the whole concurrent cohort.
+	// It is the denominator for Throughput; TotalWallMS remains the sum of
+	// individual job durations for per-job accounting only.
+	LevelWallMS      int64   `json:"level_wall_ms"`
 	AvgWallMS        float64 `json:"avg_wall_ms"`
 	P50WallMS        float64 `json:"p50_wall_ms"`
 	P95WallMS        float64 `json:"p95_wall_ms"`
@@ -206,11 +210,18 @@ func runConcurrencyLevel(
 	cacheMode CacheMode,
 	runID string,
 ) *ConcurrencyLevelResult {
+	// A concurrency level must actually be able to fill its cohort.  With
+	// runs=3, testing level 8 with only three goroutines would never exercise
+	// eight simultaneous jobs and could falsely certify the worker.
+	if runs < level {
+		runs = level
+	}
 	result := &ConcurrencyLevelResult{
 		Level:     level,
 		TotalRuns: runs,
 	}
 
+	levelStart := time.Now()
 	var (
 		wallMSValues []int64
 		peakRAM      int64
@@ -285,6 +296,7 @@ func runConcurrencyLevel(
 	result.SuccessfulRuns = int(successCount.Load())
 	result.FailedRuns = int(failCount.Load())
 	result.PeakRAMBytes = peakRAM
+	result.LevelWallMS = time.Since(levelStart).Milliseconds()
 
 	if ramSamples > 0 {
 		result.AvgRAMBytes = totalRAM / ramSamples
@@ -303,9 +315,11 @@ func runConcurrencyLevel(
 		result.P50WallMS = percentile(wallMSValues, 50)
 		result.P95WallMS = percentile(wallMSValues, 95)
 
-		// Throughput = successful runs / total wall time (in seconds)
-		if result.TotalWallMS > 0 {
-			result.Throughput = float64(result.SuccessfulRuns) / (float64(result.TotalWallMS) / 1000.0)
+		// Throughput for a concurrent cohort uses the cohort wall clock, not
+		// the sum of individual durations (which would undercount throughput
+		// whenever jobs overlap).
+		if result.LevelWallMS > 0 {
+			result.Throughput = float64(result.SuccessfulRuns) / (float64(result.LevelWallMS) / 1000.0)
 		}
 	}
 

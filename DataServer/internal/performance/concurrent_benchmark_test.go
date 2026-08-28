@@ -74,11 +74,18 @@ func TestRunConcurrentBenchmark_BasicFlow(t *testing.T) {
 
 	// Verify each level has results
 	for _, level := range result.Levels {
-		if level.SuccessfulRuns != 2 {
-			t.Errorf("Level %d: SuccessfulRuns = %d, want 2", level.Level, level.SuccessfulRuns)
+		wantRuns := level.Level
+		if wantRuns < 2 {
+			wantRuns = 2
+		}
+		if level.SuccessfulRuns != wantRuns {
+			t.Errorf("Level %d: SuccessfulRuns = %d, want %d", level.Level, level.SuccessfulRuns, wantRuns)
 		}
 		if level.Throughput <= 0 {
 			t.Errorf("Level %d: Throughput = %f, want > 0", level.Level, level.Throughput)
+		}
+		if level.LevelWallMS <= 0 {
+			t.Errorf("Level %d: LevelWallMS = %d, want > 0", level.Level, level.LevelWallMS)
 		}
 	}
 
@@ -125,6 +132,23 @@ func TestRunConcurrentBenchmark_ContextCanceled(t *testing.T) {
 
 	if err == nil {
 		t.Fatal("expected error from canceled context")
+	}
+}
+
+func TestRunConcurrencyLevel_UsesCohortWallForThroughput(t *testing.T) {
+	renderer := &mockRenderRunner{renderTimeMS: 60}
+	level := runConcurrencyLevel(
+		context.Background(), renderer, BenchmarkFixture{ID: "test-fixture"},
+		2, 2, "worker", CacheModeWarm, "run",
+	)
+	if level.SuccessfulRuns != 2 {
+		t.Fatalf("SuccessfulRuns = %d, want 2", level.SuccessfulRuns)
+	}
+	if level.LevelWallMS >= level.TotalWallMS {
+		t.Fatalf("LevelWallMS = %d, TotalWallMS = %d; concurrent wall must be lower", level.LevelWallMS, level.TotalWallMS)
+	}
+	if level.Throughput < 20 {
+		t.Fatalf("Throughput = %f jobs/s, want cohort throughput near 2/0.06", level.Throughput)
 	}
 }
 
