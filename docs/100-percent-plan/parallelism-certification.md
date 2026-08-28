@@ -3,7 +3,7 @@
 ## Scope
 
 This runbook certifies the existing worker concurrency limiter at
-`MaxActiveJobs=1`, `2`, and `3`. It does **not** implement or replace leases,
+`MaxActiveJobs=1..N` (default `N=8`). It does **not** implement or replace leases,
 placement, cache leases, or download singleflight:
 
 - lease ownership remains the master;
@@ -15,13 +15,13 @@ The harness is `tests/worker-cert/parallel_bench.py`.
 ## Reproducible protocol
 
 Use the same worker, image digest, canonical asset fixture, destination,
-number of jobs, poll timeout, and metric endpoint for all three cells. Run the
-cells sequentially in this order:
+number of jobs, poll timeout, and metric endpoint for every cell. By default
+the harness tests every cap from 1 through 8; use `--max-cap N` to extend the
+matrix. Run the cells sequentially in this order:
 
 ```text
 1 → wait for cap convergence and active_jobs=0 → submit the batch → collect evidence
-2 → wait for cap convergence and active_jobs=0 → submit the batch → collect evidence
-3 → wait for cap convergence and active_jobs=0 → submit the batch → collect evidence
+2 → … → N → wait for cap convergence and active_jobs=0 → submit the batch → collect evidence
 ```
 
 The harness requires an explicit operator-owned cap command. This is
@@ -42,6 +42,7 @@ python3 tests/worker-cert/parallel_bench.py \
   --metrics-url "$PARALLEL_BENCH_METRICS_URL" \
   --set-cap-command "$PARALLEL_BENCH_SET_CAP_CMD" \
   --jobs 6 \
+  --max-cap 8 \
   --output /var/lib/velox/evidence/parallelism-certification.json
 ```
 
@@ -72,6 +73,10 @@ The report schema is `velox.parallelism-certification.v1` and includes:
 | p95 latency | interpolated p95 of successful job latencies |
 | CPU average/peak | worker Prometheus CPU utilization gauge samples |
 | RAM average/peak | worker Prometheus process RSS gauge samples |
+| host RAM average/peak | worker host memory used/available gauges; peak ratio is a safety gate |
+| file descriptors | worker FD utilization peak |
+| disk free | minimum worker free-disk gauge |
+| scratch peak | maximum worker scratch occupancy gauge |
 | disk wait | worker Prometheus iowait ratio samples |
 | cache hit/miss | delta of existing cache request counters |
 | downloads | delta of existing cache download counter |
@@ -126,13 +131,20 @@ A cap is eligible when:
 2. error rate is within the configured limit (default `0`);
 3. p95 is within `--max-p95-ms` when an SLA is supplied;
 4. disk wait is at or below `--max-iowait-ratio` (default `0.35`);
-5. correct-videos/hour improves by at least `--min-throughput-gain-pct` versus the
+5. peak host memory is at or below `--max-peak-memory-ratio` (default `0.85`);
+6. FD utilization is at or below `--max-fd-util-ratio` (default `0.80`);
+7. free disk never drops below `--min-disk-free-bytes` (default 10 GB);
+8. correct-videos/hour improves by at least `--min-throughput-gain-pct` versus the
    previous cell (default `5%`). A lifecycle success without a verified output
    is never counted as a correct video.
 
 The efficient limit is the highest eligible cap. A higher cap is rejected when
-correct-videos/hour flattens while p95, iowait, RSS, errors, or duplicate
-downloads worsen. A missing duplicate-download metric or correctness hook
+correct-videos/hour flattens while p95, iowait, host memory, FD usage, disk
+space, errors, or duplicate downloads worsen. The report exposes this as
+`certified_max_jobs`; `recommended_production_jobs` is one step lower (floor 1)
+to leave operational headroom. Each cell also receives one canonical
+`limiting_resource` classification: `CPU_BOUND`, `MEMORY_BOUND`, `IO_BOUND`,
+`FD_BOUND`, or `UNKNOWN`. A missing duplicate-download metric or correctness hook
 prevents certification rather than being interpreted as “zero duplicates” or
 “correct”.
 

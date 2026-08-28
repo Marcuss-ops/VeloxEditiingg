@@ -55,6 +55,7 @@ WORKER_UNLABEL_FAMILIES = {
     "velox_cache_duplicate_downloads_total",
     "velox_cache_duplicate_download_bytes_total",
     "velox_worker_errors_total",
+    "velox_worker_fd_utilization_ratio",
 }
 
 # Families scraped from the MASTER, selected by worker_id=..., with the
@@ -65,6 +66,8 @@ MASTER_SELECT_FAMILIES = {
     "velox_worker_process_rss_bytes": None,        # raw bytes
     "velox_worker_memory_used_bytes": None,        # raw bytes
     "velox_worker_memory_available_bytes": None,   # raw bytes
+    "velox_worker_disk_free_bytes": None,          # raw bytes
+    "velox_worker_scratch_peak_bytes": None,        # raw bytes
 }
 
 

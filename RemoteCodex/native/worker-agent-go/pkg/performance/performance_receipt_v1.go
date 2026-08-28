@@ -277,6 +277,8 @@ type IOMetrics struct {
 	// copy-only target is exactly 0 copies.
 	AssetBytesCopied  int64 `json:"asset_bytes_copied"`
 	TempBytesWritten  int64 `json:"temp_bytes_written"`
+	ScratchCurrentBytes int64 `json:"scratch_current_bytes"`
+	ScratchPeakBytes    int64 `json:"scratch_peak_bytes"`
 	MuxBytesRead      int64 `json:"mux_bytes_read"`
 	MuxBytesWritten   int64 `json:"mux_bytes_written"`
 	FinalBytesWritten int64 `json:"final_bytes_written"`

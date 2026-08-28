@@ -40,12 +40,14 @@ from pathlib import Path
 from typing import Any
 
 
-CAPS = (1, 2, 3)
+DEFAULT_MAX_CAP = 8
 REQUIRED_METRICS = (
     "cpu_utilization_ratio",
     "rss_bytes",
     "host_memory_used_bytes",
     "disk_wait_ratio",
+    "disk_free_bytes",
+    "scratch_peak_bytes",
     "cache_hits",
     "cache_misses",
     "downloads",
@@ -174,6 +176,9 @@ def extract_observations(values: dict[str, float]) -> dict[str, float | None]:
         "host_memory_used_bytes": metric(values, "velox_worker_memory_used_bytes", "velox_memory_used_bytes"),
         "host_memory_available_bytes": metric(values, "velox_worker_memory_available_bytes", "velox_memory_available_bytes"),
         "disk_wait_ratio": normalize_ratio(metric(values, "velox_worker_cpu_iowait_ratio", "velox_cpu_iowait_ratio", "velox_disk_wait_ratio")),
+        "fd_util": normalize_ratio(metric(values, "velox_worker_fd_utilization_ratio", "velox_fd_utilization_ratio")),
+        "disk_free_bytes": metric(values, "velox_worker_disk_free_bytes", "velox_disk_free_bytes"),
+        "scratch_peak_bytes": metric(values, "velox_worker_scratch_peak_bytes", "velox_scratch_peak_bytes"),
         "cache_hits": metric(values, "velox_cache_requests_total{result=\"hit\"}", "velox_asset_cache_hits_total", "velox_asset_cache_hit_total"),
         "cache_misses": metric(values, "velox_cache_requests_total{result=\"miss\"}", "velox_asset_cache_misses_total", "velox_asset_cache_miss_total"),
         "downloads": metric(values, "velox_cache_downloads_total", "velox_asset_cache_download_total"),
@@ -248,7 +253,10 @@ class CapResult:
     host_memory_used_peak_bytes: float | None
     host_memory_available_bytes: float | None
     host_memory_peak_ratio: float | None
+    fd_util_avg_ratio: float | None
+    fd_util_peak_ratio: float | None
     disk_wait_avg_ratio: float | None
+    disk_free_min_bytes: float | None
     cache_hits: float | None
     cache_misses: float | None
     cache_hit_ratio: float | None
@@ -258,8 +266,30 @@ class CapResult:
     errors: float | None
     missing_metrics: list[str]
     jobs: list[JobResult]
+    scratch_peak_bytes: float | None = None
     efficient: bool | None = None
     decision: str = ""
+    limiting_resource: str = "UNKNOWN"
+
+
+def cap_matrix(max_cap: int) -> tuple[int, ...]:
+    """Return every cap so the certified boundary is actually measured."""
+    if max_cap < 1:
+        raise ValueError("max cap must be at least 1")
+    return tuple(range(1, max_cap + 1))
+
+
+def classify_bottleneck(result: CapResult) -> str:
+    """Classify the dominant observed resource using one canonical policy."""
+    if result.fd_util_peak_ratio is not None and result.fd_util_peak_ratio >= 0.80:
+        return "FD_BOUND"
+    if result.host_memory_peak_ratio is not None and result.host_memory_peak_ratio >= 0.85:
+        return "MEMORY_BOUND"
+    if result.disk_wait_avg_ratio is not None and result.disk_wait_avg_ratio >= 0.35:
+        return "IO_BOUND"
+    if result.cpu_peak_ratio is not None and result.cpu_peak_ratio >= 0.90:
+        return "CPU_BOUND"
+    return "UNKNOWN"
 
 
 def render_command(template: str, **values: str | int) -> str:
@@ -512,7 +542,11 @@ def run_one_cap(args: argparse.Namespace, cap: int, admin_token: str, m2m_token:
             aggregate_gauge(samples, "host_memory_used_bytes", "max"),
             aggregate_gauge(samples, "host_memory_available_bytes", "min"),
         ),
+        fd_util_avg_ratio=aggregate_gauge(samples, "fd_util", "avg"),
+        fd_util_peak_ratio=aggregate_gauge(samples, "fd_util", "max"),
         disk_wait_avg_ratio=aggregate_gauge(samples, "disk_wait_ratio", "avg"),
+        disk_free_min_bytes=aggregate_gauge(samples, "disk_free_bytes", "min"),
+        scratch_peak_bytes=aggregate_gauge(samples, "scratch_peak_bytes", "max"),
         cache_hits=hits,
         cache_misses=misses,
         cache_hit_ratio=hit_ratio,
@@ -525,7 +559,7 @@ def run_one_cap(args: argparse.Namespace, cap: int, admin_token: str, m2m_token:
     )
 
 
-def choose_limit(results: list[CapResult], min_gain_pct: float, max_p95_ms: float | None, max_error_rate: float, max_iowait: float, max_peak_memory_ratio: float) -> None:
+def choose_limit(results: list[CapResult], min_gain_pct: float, max_p95_ms: float | None, max_error_rate: float, max_iowait: float, max_peak_memory_ratio: float, max_fd_util_ratio: float, min_disk_free_bytes: float) -> None:
     # Cap 1 is the measured baseline. Compare higher caps only with the last
     # eligible result, so an incomplete/intermittently bad cell cannot poison
     # every later comparison. If cap 1 is not valid, no higher cap can become
@@ -546,6 +580,10 @@ def choose_limit(results: list[CapResult], min_gain_pct: float, max_p95_ms: floa
             checks.append("iowait_limit")
         if result.host_memory_peak_ratio is not None and result.host_memory_peak_ratio > max_peak_memory_ratio:
             checks.append(f"peak_memory>{max_peak_memory_ratio}")
+        if result.fd_util_peak_ratio is not None and result.fd_util_peak_ratio > max_fd_util_ratio:
+            checks.append(f"fd_util>{max_fd_util_ratio}")
+        if result.disk_free_min_bytes is not None and result.disk_free_min_bytes < min_disk_free_bytes:
+            checks.append(f"disk_free<{int(min_disk_free_bytes)}")
         gain = None
         if index > 0 and previous_eligible is None:
             checks.append("baseline_unavailable")
@@ -557,6 +595,7 @@ def choose_limit(results: list[CapResult], min_gain_pct: float, max_p95_ms: floa
             checks.append("missing_cap_1_baseline")
         result.efficient = not checks
         result.decision = "baseline" if previous_eligible is None and result.efficient else "eligible" if result.efficient else "; ".join(checks)
+        result.limiting_resource = classify_bottleneck(result)
         if result.efficient:
             previous_eligible = result
 
@@ -585,6 +624,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-iowait-ratio", type=float, default=0.35)
     parser.add_argument("--max-peak-memory-ratio", type=float, default=0.85,
                         help="reject caps where peak host memory used/total exceeds this ratio (0-1)")
+    parser.add_argument("--max-fd-util-ratio", type=float, default=0.80,
+                        help="reject caps where FD utilization exceeds this ratio (0-1)")
+    parser.add_argument("--min-disk-free-bytes", type=float, default=10_000_000_000,
+                        help="reject caps where minimum disk free bytes falls below this threshold")
+    parser.add_argument("--max-cap", type=int, default=DEFAULT_MAX_CAP,
+                        help="highest concurrency cap to test (every cap 1..N is measured)")
     parser.add_argument(
         "--correctness-command", default=os.getenv("PARALLEL_BENCH_CORRECTNESS_CMD", ""),
         help="operator-owned verifier command; placeholders: {job_id}, {worker_id}, {master_url}; exit 0 means correct video",
@@ -603,18 +648,19 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    if args.jobs < 1 or not args.worker_id or not args.set_cap_command or not args.metrics_url:
+    if args.jobs < 1 or args.max_cap < 1 or not args.worker_id or not args.set_cap_command or not args.metrics_url:
         print("live certification requires --worker-id, --set-cap-command, and --metrics-url", file=sys.stderr)
         return 2
     if not args.builder.is_file() or not args.fixtures.is_file():
         print("canonical payload builder or assets fixture is missing", file=sys.stderr)
         return 2
     if args.dry_run:
+        caps = cap_matrix(args.max_cap)
         print(json.dumps({
-            "caps": CAPS,
+            "caps": caps,
             "worker_id": args.worker_id,
             "jobs": args.jobs,
-            "set_cap_commands": [command_for(args.set_cap_command, c, args.worker_id, args.master_url) for c in CAPS],
+            "set_cap_commands": [command_for(args.set_cap_command, c, args.worker_id, args.master_url) for c in caps],
             "correctness_command": args.correctness_command,
             "response_dir": str(args.response_dir) if args.response_dir else "",
             "decision_metric": "correct_videos_per_hour",
@@ -632,8 +678,9 @@ def main() -> int:
         return 2
 
     results: list[CapResult] = []
+    caps = cap_matrix(args.max_cap)
     try:
-        for cap in CAPS:
+        for cap in caps:
             run_cap_command(args.set_cap_command, cap, args.worker_id, args.master_url, False)
             wait_cap(args.master_url, admin_token, args.worker_id, cap, args.wait_cap_timeout_s)
             results.append(run_one_cap(args, cap, admin_token, m2m_token))
@@ -648,14 +695,16 @@ def main() -> int:
                 print(f"WARNING: failed to restore MaxActiveJobs=1: {exc}", file=sys.stderr)
         delete_m2m(args.master_url, admin_token, client_id)
 
-    choose_limit(results, args.min_throughput_gain_pct, args.max_p95_ms, args.max_error_rate, args.max_iowait_ratio, args.max_peak_memory_ratio)
+    choose_limit(results, args.min_throughput_gain_pct, args.max_p95_ms, args.max_error_rate, args.max_iowait_ratio, args.max_peak_memory_ratio, args.max_fd_util_ratio, args.min_disk_free_bytes)
     eligible = [r.max_active_jobs for r in results if r.efficient]
     efficient_limit = max(eligible) if eligible else None
+    recommended_limit = max(1, efficient_limit - 1) if efficient_limit is not None else None
+    boundary = next((r for r in results if not r.efficient), None)
     report = {
         "schema": "velox.parallelism-certification.v1",
         "worker_id": args.worker_id,
         "master_url": args.master_url,
-        "caps": list(CAPS),
+        "caps": list(caps),
         "jobs_per_cap": args.jobs,
         "metrics_urls": args.metrics_url,
         "correctness_command_configured": bool(args.correctness_command.strip()),
@@ -663,13 +712,24 @@ def main() -> int:
         "decision_metric": "correct_videos_per_hour",
         "protocol": {"lease_owner": "master", "singleflight_owner": "worker-cache", "cap_selection": "operator command hook"},
         "efficient_limit": efficient_limit,
+        "certified_max_jobs": efficient_limit,
+        "recommended_production_jobs": recommended_limit,
+        "limiting_resource": (next((r.limiting_resource for r in reversed(results) if r.efficient and r.limiting_resource != "UNKNOWN"), "UNKNOWN")),
+        "boundary_rejection": ({"jobs": boundary.max_active_jobs, "reason": boundary.decision} if boundary else None),
         "max_peak_memory_ratio": args.max_peak_memory_ratio,
-        "certified": efficient_limit is not None and all(r.status == "PASS" for r in results),
+        "max_fd_util_ratio": args.max_fd_util_ratio,
+        "min_disk_free_bytes": args.min_disk_free_bytes,
+        "certified": (
+            efficient_limit is not None
+            and all(r.status == "PASS" for r in results if r.efficient)
+            and results[0].max_active_jobs == 1
+            and results[0].efficient is True
+        ),
         "results": [{**asdict(r), "jobs": [asdict(j) for j in r.jobs]} for r in results],
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2), encoding="utf-8")
-    print(json.dumps({"certified": report["certified"], "efficient_limit": efficient_limit, "output": str(args.output)}, indent=2))
+    print(json.dumps({"certified": report["certified"], "certified_max_jobs": efficient_limit, "recommended_production_jobs": recommended_limit, "output": str(args.output)}, indent=2))
     return 0 if report["certified"] else 4
 
 

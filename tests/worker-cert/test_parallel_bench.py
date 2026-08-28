@@ -67,7 +67,10 @@ velox_worker_cpu_iowait_ratio 0.25
                 host_memory_used_peak_bytes=1_200_000_000,
                 host_memory_available_bytes=6_800_000_000,
                 host_memory_peak_ratio=0.15,
+                fd_util_avg_ratio=0.2,
+                fd_util_peak_ratio=0.3,
                 disk_wait_avg_ratio=0.1,
+                disk_free_min_bytes=50_000_000_000,
                 cache_hits=5,
                 cache_misses=1,
                 cache_hit_ratio=5 / 6,
@@ -80,7 +83,7 @@ velox_worker_cpu_iowait_ratio 0.25
             )
 
         results = [result(1, 10), result(2, 10.4), result(3, 13)]
-        bench.choose_limit(results, min_gain_pct=5, max_p95_ms=None, max_error_rate=0, max_iowait=0.35, max_peak_memory_ratio=0.85)
+        bench.choose_limit(results, min_gain_pct=5, max_p95_ms=None, max_error_rate=0, max_iowait=0.35, max_peak_memory_ratio=0.85, max_fd_util_ratio=0.80, min_disk_free_bytes=10_000_000_000)
         self.assertTrue(results[0].efficient)  # cap 1 is the baseline
         self.assertIn("correct_video_gain<5%", results[1].decision)
         self.assertTrue(results[2].efficient)
@@ -132,7 +135,10 @@ velox_worker_cpu_iowait_ratio 0.25
                 host_memory_used_peak_bytes=1_000_000_000,
                 host_memory_available_bytes=2_000_000_000,
                 host_memory_peak_ratio=peak_ratio,
+                fd_util_avg_ratio=0.2,
+                fd_util_peak_ratio=0.3,
                 disk_wait_avg_ratio=0.1,
+                disk_free_min_bytes=50_000_000_000,
                 cache_hits=5,
                 cache_misses=1,
                 cache_hit_ratio=5 / 6,
@@ -146,7 +152,7 @@ velox_worker_cpu_iowait_ratio 0.25
 
         # cap 1: 75% memory — eligible;  cap 2: 90% memory — rejected
         results = [result(1, 0.75), result(2, 0.90)]
-        bench.choose_limit(results, min_gain_pct=5, max_p95_ms=None, max_error_rate=0, max_iowait=0.35, max_peak_memory_ratio=0.85)
+        bench.choose_limit(results, min_gain_pct=5, max_p95_ms=None, max_error_rate=0, max_iowait=0.35, max_peak_memory_ratio=0.85, max_fd_util_ratio=0.80, min_disk_free_bytes=10_000_000_000)
         self.assertTrue(results[0].efficient)
         self.assertFalse(results[1].efficient)
         self.assertIn("peak_memory>0.85", results[1].decision)
@@ -174,7 +180,10 @@ velox_worker_cpu_iowait_ratio 0.25
                 host_memory_used_peak_bytes=None,
                 host_memory_available_bytes=None,
                 host_memory_peak_ratio=None,
+                fd_util_avg_ratio=None,
+                fd_util_peak_ratio=None,
                 disk_wait_avg_ratio=0.1,
+                disk_free_min_bytes=None,
                 cache_hits=5,
                 cache_misses=1,
                 cache_hit_ratio=5 / 6,
@@ -187,7 +196,7 @@ velox_worker_cpu_iowait_ratio 0.25
             )
 
         results = [result(1, 10), result(2, 12)]
-        bench.choose_limit(results, min_gain_pct=5, max_p95_ms=None, max_error_rate=0, max_iowait=0.35, max_peak_memory_ratio=0.85)
+        bench.choose_limit(results, min_gain_pct=5, max_p95_ms=None, max_error_rate=0, max_iowait=0.35, max_peak_memory_ratio=0.85, max_fd_util_ratio=0.80, min_disk_free_bytes=10_000_000_000)
         self.assertTrue(results[0].efficient)
         self.assertTrue(results[1].efficient)  # not blocked by unknown memory
 
@@ -214,7 +223,10 @@ velox_worker_cpu_iowait_ratio 0.25
                 host_memory_used_peak_bytes=2_000_000_000,
                 host_memory_available_bytes=14_000_000_000,
                 host_memory_peak_ratio=0.125,
+                fd_util_avg_ratio=0.2,
+                fd_util_peak_ratio=0.3,
                 disk_wait_avg_ratio=0.1,
+                disk_free_min_bytes=50_000_000_000,
                 cache_hits=5,
                 cache_misses=1,
                 cache_hit_ratio=5 / 6,
@@ -227,7 +239,7 @@ velox_worker_cpu_iowait_ratio 0.25
             )
 
         results = [result(1, 10), result(2, 12), result(3, 14)]
-        bench.choose_limit(results, min_gain_pct=5, max_p95_ms=None, max_error_rate=0, max_iowait=0.35, max_peak_memory_ratio=0.85)
+        bench.choose_limit(results, min_gain_pct=5, max_p95_ms=None, max_error_rate=0, max_iowait=0.35, max_peak_memory_ratio=0.85, max_fd_util_ratio=0.80, min_disk_free_bytes=10_000_000_000)
         for r in results:
             self.assertTrue(r.efficient, f"cap {r.max_active_jobs} should be efficient: {r.decision}")
 
@@ -237,6 +249,127 @@ velox_worker_cpu_iowait_ratio 0.25
         self.assertIsNone(bench._peak_memory_ratio(None, 5_000_000_000))
         self.assertIsNone(bench._peak_memory_ratio(3_000_000_000, None))
         self.assertIsNone(bench._peak_memory_ratio(0, 0))
+
+    def _make_cap_result(self, cap: int, correct_per_hour: float, **overrides: object) -> bench.CapResult:
+        """Helper to build a CapResult with safe defaults for all new fields."""
+        defaults = dict(
+            max_active_jobs=cap, status="PASS", wall_time_ms=1000,
+            throughput_jobs_per_hour=correct_per_hour, correct_videos=6,
+            correct_videos_per_hour=correct_per_hour, succeeded=6, failed=0,
+            error_rate=0, latency_mean_ms=100, latency_p95_ms=120,
+            cpu_avg_ratio=0.5, cpu_peak_ratio=0.7, rss_avg_bytes=100,
+            rss_peak_bytes=120,
+            host_memory_used_avg_bytes=2_000_000_000,
+            host_memory_used_peak_bytes=2_000_000_000,
+            host_memory_available_bytes=14_000_000_000,
+            host_memory_peak_ratio=0.125,
+            fd_util_avg_ratio=0.2, fd_util_peak_ratio=0.3,
+            disk_wait_avg_ratio=0.1, disk_free_min_bytes=50_000_000_000,
+            cache_hits=5, cache_misses=1, cache_hit_ratio=5 / 6,
+            downloads=1, duplicate_downloads=0, duplicate_download_bytes=0,
+            errors=0, missing_metrics=[], jobs=[],
+        )
+        defaults.update(overrides)
+        return bench.CapResult(**defaults)  # type: ignore[arg-type]
+
+    def test_fd_util_rejects_high_usage(self) -> None:
+        """A cap with FD utilization above the threshold must be rejected."""
+        results = [
+            self._make_cap_result(1, 10, fd_util_peak_ratio=0.60),
+            self._make_cap_result(2, 12, fd_util_peak_ratio=0.85),
+        ]
+        bench.choose_limit(results, min_gain_pct=5, max_p95_ms=None, max_error_rate=0,
+                           max_iowait=0.35, max_peak_memory_ratio=0.85,
+                           max_fd_util_ratio=0.80, min_disk_free_bytes=10_000_000_000)
+        self.assertTrue(results[0].efficient)
+        self.assertFalse(results[1].efficient)
+        self.assertIn("fd_util>0.8", results[1].decision)
+
+    def test_fd_util_unknown_does_not_block(self) -> None:
+        """When FD util is None, the gate must not reject."""
+        results = [
+            self._make_cap_result(1, 10, fd_util_peak_ratio=None),
+            self._make_cap_result(2, 12, fd_util_peak_ratio=None),
+        ]
+        bench.choose_limit(results, min_gain_pct=5, max_p95_ms=None, max_error_rate=0,
+                           max_iowait=0.35, max_peak_memory_ratio=0.85,
+                           max_fd_util_ratio=0.80, min_disk_free_bytes=10_000_000_000)
+        self.assertTrue(results[0].efficient)
+        self.assertTrue(results[1].efficient)
+
+    def test_disk_free_rejects_below_threshold(self) -> None:
+        """A cap with disk free below threshold must be rejected."""
+        results = [
+            self._make_cap_result(1, 10, disk_free_min_bytes=50_000_000_000),
+            self._make_cap_result(2, 12, disk_free_min_bytes=5_000_000_000),
+        ]
+        bench.choose_limit(results, min_gain_pct=5, max_p95_ms=None, max_error_rate=0,
+                           max_iowait=0.35, max_peak_memory_ratio=0.85,
+                           max_fd_util_ratio=0.80, min_disk_free_bytes=10_000_000_000)
+        self.assertTrue(results[0].efficient)
+        self.assertFalse(results[1].efficient)
+        self.assertIn("disk_free<", results[1].decision)
+
+    def test_disk_free_unknown_does_not_block(self) -> None:
+        """When disk_free is None, the gate must not reject."""
+        results = [
+            self._make_cap_result(1, 10, disk_free_min_bytes=None),
+            self._make_cap_result(2, 12, disk_free_min_bytes=None),
+        ]
+        bench.choose_limit(results, min_gain_pct=5, max_p95_ms=None, max_error_rate=0,
+                           max_iowait=0.35, max_peak_memory_ratio=0.85,
+                           max_fd_util_ratio=0.80, min_disk_free_bytes=10_000_000_000)
+        self.assertTrue(results[0].efficient)
+        self.assertTrue(results[1].efficient)
+
+    def test_all_gates_pass_when_below_thresholds(self) -> None:
+        """All safety gates pass when all metrics are below thresholds."""
+        results = [
+            self._make_cap_result(1, 10),
+            self._make_cap_result(2, 12),
+            self._make_cap_result(3, 14),
+        ]
+        bench.choose_limit(results, min_gain_pct=5, max_p95_ms=None, max_error_rate=0,
+                           max_iowait=0.35, max_peak_memory_ratio=0.85,
+                           max_fd_util_ratio=0.80, min_disk_free_bytes=10_000_000_000)
+        for r in results:
+            self.assertTrue(r.efficient, f"cap {r.max_active_jobs} should be efficient: {r.decision}")
+
+    def test_multiple_gates_can_reject_simultaneously(self) -> None:
+        """Multiple safety gates can fire on the same cap."""
+        results = [
+            self._make_cap_result(1, 10),
+            self._make_cap_result(2, 12,
+                                  host_memory_peak_ratio=0.90,
+                                  fd_util_peak_ratio=0.95,
+                                  disk_free_min_bytes=3_000_000_000),
+        ]
+        bench.choose_limit(results, min_gain_pct=5, max_p95_ms=None, max_error_rate=0,
+                           max_iowait=0.35, max_peak_memory_ratio=0.85,
+                           max_fd_util_ratio=0.80, min_disk_free_bytes=10_000_000_000)
+        self.assertTrue(results[0].efficient)
+        self.assertFalse(results[1].efficient)
+        self.assertIn("peak_memory", results[1].decision)
+        self.assertIn("fd_util", results[1].decision)
+        self.assertIn("disk_free", results[1].decision)
+
+    def test_cap_matrix_measures_every_cap_through_configured_limit(self) -> None:
+        self.assertEqual(bench.cap_matrix(6), (1, 2, 3, 4, 5, 6))
+        with self.assertRaises(ValueError):
+            bench.cap_matrix(0)
+
+    def test_bottleneck_classifier_uses_canonical_precedence(self) -> None:
+        base = self._make_cap_result(4, 20)
+        self.assertEqual(bench.classify_bottleneck(base), "UNKNOWN")
+        self.assertEqual(bench.classify_bottleneck(
+            self._make_cap_result(4, 20, cpu_peak_ratio=0.95)), "CPU_BOUND")
+        self.assertEqual(bench.classify_bottleneck(
+            self._make_cap_result(4, 20, host_memory_peak_ratio=0.90)), "MEMORY_BOUND")
+        self.assertEqual(bench.classify_bottleneck(
+            self._make_cap_result(4, 20, disk_wait_avg_ratio=0.40)), "IO_BOUND")
+        self.assertEqual(bench.classify_bottleneck(
+            self._make_cap_result(4, 20, fd_util_peak_ratio=0.90,
+                                  host_memory_peak_ratio=0.90)), "FD_BOUND")
 
 
 if __name__ == "__main__":

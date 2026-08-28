@@ -329,6 +329,12 @@ func TestSample_TempActivityTracksGrowthAndOpenDescriptors(t *testing.T) {
 	if first.TempFilesOpen != 1 {
 		t.Fatalf("open temp files = %d, want 1", first.TempFilesOpen)
 	}
+	if first.ScratchCurrentBytes != 10 {
+		t.Fatalf("first scratch_current_bytes = %d, want 10", first.ScratchCurrentBytes)
+	}
+	if first.ScratchPeakBytes != 10 {
+		t.Fatalf("first scratch_peak_bytes = %d, want 10", first.ScratchPeakBytes)
+	}
 	if err := os.WriteFile(tempFile, []byte("12345678901234567890"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -336,12 +342,24 @@ func TestSample_TempActivityTracksGrowthAndOpenDescriptors(t *testing.T) {
 	if second.TempBytesWritten != 10 {
 		t.Fatalf("temp bytes written = %d, want 10", second.TempBytesWritten)
 	}
+	if second.ScratchCurrentBytes != 20 {
+		t.Fatalf("second scratch_current_bytes = %d, want 20", second.ScratchCurrentBytes)
+	}
+	if second.ScratchPeakBytes != 20 {
+		t.Fatalf("second scratch_peak_bytes = %d, want 20", second.ScratchPeakBytes)
+	}
 	if err := os.Remove(tempFile); err != nil {
 		t.Fatal(err)
 	}
 	third, _ := s.Sample(context.Background())
 	if third.TempBytesWritten != 10 {
 		t.Fatalf("deletion reduced cumulative temp bytes to %d", third.TempBytesWritten)
+	}
+	if third.ScratchCurrentBytes != 0 {
+		t.Fatalf("third scratch_current_bytes = %d, want 0 after deletion", third.ScratchCurrentBytes)
+	}
+	if third.ScratchPeakBytes != 20 {
+		t.Fatalf("third scratch_peak_bytes = %d, want 20 (peak preserved)", third.ScratchPeakBytes)
 	}
 }
 

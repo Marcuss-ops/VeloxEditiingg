@@ -172,6 +172,8 @@ by `1e3`. Cost gauges are micro-EUR and are divided by `1e6`.
 | 35a| `velox_worker_memory_available_bytes`          | G    | Worker system memory available                   | bytes     | `worker_id` | Heartbeat `resources.memory_avail`| 90d  | N  |
 | 36 | `velox_worker_disk_free_bytes`                 | G    | Worker disk free bytes                           | bytes     | `worker_id` | Heartbeat `resources.disk_free`   | 90d  | N  |
 | 37 | `velox_worker_temp_bytes`                      | G    | Worker temp bytes snapshot                       | bytes     | `worker_id` | Heartbeat `resources.temp_bytes`  | 90d  | N  |
+| 37a| `velox_worker_scratch_current_bytes`           | G    | Worker scratch dir current occupancy             | bytes     | `worker_id` | Heartbeat `resources.scratch_current` | 90d | N |
+| 37b| `velox_worker_scratch_peak_bytes`              | G    | Worker scratch dir peak occupancy                | bytes     | `worker_id` | Heartbeat `resources.scratch_peak` | 90d  | N  |
 | 38 | `velox_worker_active_tasks`                    | G    | Active tasks on this worker                      | count     | `worker_id` | Heartbeat `resources.active_tasks` | 90d | N |
 | 39 | `velox_worker_task_slots`                      | G    | Total task slots on this worker                  | count     | `worker_id` | Heartbeat `resources.task_slots`  | 90d  | N  |
 | 40 | `velox_worker_load1`                           | G    | Worker 1-min loadavg (×1000 encoded)             | load      | `worker_id` | Heartbeat `resources.load1`       | 90d  | N  |
