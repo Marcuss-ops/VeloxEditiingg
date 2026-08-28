@@ -62,6 +62,8 @@ type RawExecutionMetrics struct {
 	GpuTimeMs              int64   `json:"gpu_time_ms"`
 	PeakVramBytes          int64   `json:"peak_vram_bytes"`
 	TempBytesWritten       int64   `json:"temp_bytes_written"`
+	ScratchCurrentBytes    int64   `json:"scratch_current_bytes"`
+	ScratchPeakBytes       int64   `json:"scratch_peak_bytes"`
 	DuplicateDownloadBytes int64   `json:"duplicate_download_bytes"`
 	MediaDurationSeconds   float64 `json:"media_duration_seconds"`
 	WallClockSeconds       float64 `json:"wall_clock_seconds"`

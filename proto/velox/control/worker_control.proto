@@ -1085,4 +1085,8 @@ message WorkerResourceCounters {
   int64 open_file_descriptors = 35;
   int64 max_file_descriptors = 36;
   double file_descriptor_utilization_ratio = 37;
+
+  // Scratch disk occupancy — real-time scratch dir size and high-water mark.
+  int64 scratch_current_bytes = 38;   // gauge: sum of file sizes in scratch dir
+  int64 scratch_peak_bytes = 39;      // high-water mark since worker start
 }

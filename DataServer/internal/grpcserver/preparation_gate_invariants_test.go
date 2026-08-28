@@ -32,9 +32,6 @@ func (m *expiryMockStore) TryReserveFutureTask(_ context.Context, r taskgraph.Fu
 	if m.reserved {
 		return false, nil
 	}
-	if r.State == "" {
-		r.State = taskgraph.ReservationReserved
-	}
 	m.reservation = &taskgraph.FutureReservationWithPayload{FutureReservation: r, Payload: m.payload}
 	m.reserved = true
 	return true, nil
@@ -156,12 +153,12 @@ func TestInvariant_GateBlocksWithoutEvidence(t *testing.T) {
 	h := buildExpiryHandler(t, frs)
 
 	_, _ = frs.TryReserveFutureTask(context.Background(), taskgraph.FutureReservation{
-		TaskID:       taskID,
-		JobID:        jobID,
-		WorkerID:     workerID,
+		TaskID:        taskID,
+		JobID:         jobID,
+		WorkerID:      workerID,
 		ReservationID: "future:" + workerID + ":" + taskID,
-		TaskRevision: 1,
-		ExpiresAt:    time.Now().UTC().Add(time.Minute),
+		TaskRevision:  1,
+		ExpiresAt:     time.Now().UTC().Add(time.Minute),
 	})
 
 	candidate := expiryCandidate(taskID, jobID, 1)
@@ -208,12 +205,12 @@ func TestInvariant_ExpiryClearsGate(t *testing.T) {
 
 	// Create reservation that expires in 10 seconds.
 	_, _ = frs.TryReserveFutureTask(context.Background(), taskgraph.FutureReservation{
-		TaskID:       taskID,
-		JobID:        jobID,
-		WorkerID:     workerID,
+		TaskID:        taskID,
+		JobID:         jobID,
+		WorkerID:      workerID,
 		ReservationID: "future:" + workerID + ":" + taskID,
-		TaskRevision: 1,
-		ExpiresAt:    now.Add(10 * time.Second),
+		TaskRevision:  1,
+		ExpiresAt:     now.Add(10 * time.Second),
 	})
 
 	candidate := expiryCandidate(taskID, jobID, 1)
@@ -260,12 +257,12 @@ func TestInvariant_RevisionDriftInvalidatesPreparedState(t *testing.T) {
 
 	// Reservation at revision 1.
 	_, _ = frs.TryReserveFutureTask(context.Background(), taskgraph.FutureReservation{
-		TaskID:       taskID,
-		JobID:        jobID,
-		WorkerID:     workerID,
+		TaskID:        taskID,
+		JobID:         jobID,
+		WorkerID:      workerID,
 		ReservationID: "future:" + workerID + ":" + taskID,
-		TaskRevision: 1,
-		ExpiresAt:    time.Now().UTC().Add(time.Minute),
+		TaskRevision:  1,
+		ExpiresAt:     time.Now().UTC().Add(time.Minute),
 	})
 
 	// Worker prepares at revision 1.
@@ -276,6 +273,7 @@ func TestInvariant_RevisionDriftInvalidatesPreparedState(t *testing.T) {
 		SHA256:       sha256,
 		SizeBytes:    size,
 	}, "future:"+workerID+":"+taskID)
+	frs.SetState(taskgraph.ReservationPrepared)
 
 	// Gate passes at revision 1.
 	candidateR1 := expiryCandidate(taskID, jobID, 1)
@@ -298,12 +296,12 @@ func TestInvariant_RevisionDriftInvalidatesPreparedState(t *testing.T) {
 	frs.mu.Lock()
 	frs.reservation = &taskgraph.FutureReservationWithPayload{
 		FutureReservation: taskgraph.FutureReservation{
-			TaskID:       taskID,
-			JobID:        jobID,
-			WorkerID:     workerID,
+			TaskID:        taskID,
+			JobID:         jobID,
+			WorkerID:      workerID,
 			ReservationID: "future:" + workerID + ":" + taskID,
-			TaskRevision: 2, // bumped
-			ExpiresAt:    time.Now().UTC().Add(time.Minute),
+			TaskRevision:  2, // bumped
+			ExpiresAt:     time.Now().UTC().Add(time.Minute),
 		},
 		Payload: reservationPayload(sha256, size),
 	}
@@ -342,12 +340,12 @@ func TestInvariant_ConcurrentClaimsRespectGate(t *testing.T) {
 	h := buildExpiryHandler(t, frs)
 
 	_, _ = frs.TryReserveFutureTask(context.Background(), taskgraph.FutureReservation{
-		TaskID:       taskID,
-		JobID:        jobID,
-		WorkerID:     workerID,
+		TaskID:        taskID,
+		JobID:         jobID,
+		WorkerID:      workerID,
 		ReservationID: "future:" + workerID + ":" + taskID,
-		TaskRevision: 1,
-		ExpiresAt:    time.Now().UTC().Add(time.Minute),
+		TaskRevision:  1,
+		ExpiresAt:     time.Now().UTC().Add(time.Minute),
 	})
 
 	candidate := expiryCandidate(taskID, jobID, 1)
@@ -380,7 +378,7 @@ func TestInvariant_ConcurrentClaimsRespectGate(t *testing.T) {
 			concurrency, blockedCount.Load(), passCount.Load())
 	}
 
-	// ── Phase B: Add evidence → all goroutines must see PASS ──────────
+	// ── Phase B: Add evidence + advance to PREPARED → all must PASS ──
 	h.markPreparedAsset(workerID, &preparedAssetEvidence{
 		TaskID:       taskID,
 		TaskRevision: 1,
@@ -388,6 +386,7 @@ func TestInvariant_ConcurrentClaimsRespectGate(t *testing.T) {
 		SHA256:       sha256,
 		SizeBytes:    size,
 	}, "future:"+workerID+":"+taskID)
+	frs.SetState(taskgraph.ReservationPrepared)
 
 	blockedCount.Store(0)
 	passCount.Store(0)
@@ -446,18 +445,12 @@ func TestInvariant_EmptyAssetListSkipsGate(t *testing.T) {
 			frs := &expiryMockStore{payload: tt.payload}
 			h := buildExpiryHandler(t, frs)
 
-			_, _ = frs.TryReserveFutureTask(context.Background(), taskgraph.FutureReservation{
-				TaskID:       taskID,
-				JobID:        jobID,
-				WorkerID:     workerID,
-				ReservationID: "future:" + workerID + ":" + taskID,
-				TaskRevision: 1,
-				ExpiresAt:    time.Now().UTC().Add(time.Minute),
-			})
+			// Do NOT create a reservation — the invariant is that an empty asset
+			// list causes the gate to pass even without a reservation.
 
 			candidate := expiryCandidate(taskID, jobID, 1)
 
-			// No evidence, but empty asset list → gate must pass.
+			// No reservation, no evidence, empty asset list → gate must pass.
 			prepared, err := h.ensurePreparedBeforeClaim(context.Background(), workerID, candidate)
 			if err != nil {
 				t.Fatalf("error = %v", err)
@@ -489,12 +482,12 @@ func TestInvariant_EvidenceStateTransition(t *testing.T) {
 	h := buildExpiryHandler(t, frs)
 
 	_, _ = frs.TryReserveFutureTask(context.Background(), taskgraph.FutureReservation{
-		TaskID:       taskID,
-		JobID:        jobID,
-		WorkerID:     workerID,
+		TaskID:        taskID,
+		JobID:         jobID,
+		WorkerID:      workerID,
 		ReservationID: "future:" + workerID + ":" + taskID,
-		TaskRevision: 1,
-		ExpiresAt:    time.Now().UTC().Add(time.Minute),
+		TaskRevision:  1,
+		ExpiresAt:     time.Now().UTC().Add(time.Minute),
 	})
 
 	candidate := expiryCandidate(taskID, jobID, 1)
@@ -508,7 +501,7 @@ func TestInvariant_EvidenceStateTransition(t *testing.T) {
 		t.Fatal("step 1: must be BLOCKED")
 	}
 
-	// Step 2: Add evidence → PASS.
+	// Step 2: Add evidence + advance to PREPARED → PASS.
 	h.markPreparedAsset(workerID, &preparedAssetEvidence{
 		TaskID:       taskID,
 		TaskRevision: 1,
@@ -516,6 +509,7 @@ func TestInvariant_EvidenceStateTransition(t *testing.T) {
 		SHA256:       sha256,
 		SizeBytes:    size,
 	}, "future:"+workerID+":"+taskID)
+	frs.SetState(taskgraph.ReservationPrepared)
 
 	prepared, err = h.ensurePreparedBeforeClaim(context.Background(), workerID, candidate)
 	if err != nil {
@@ -549,12 +543,12 @@ func TestInvariant_EvidenceStateTransition(t *testing.T) {
 
 func TestInvariant_WrongWorkerCannotClaim(t *testing.T) {
 	const (
-		ownerWorker   = "host_57_131_20_173"
+		ownerWorker    = "host_57_131_20_173"
 		intruderWorker = "host_57_129_132_133"
-		taskID        = "task-B"
-		jobID         = "job-B"
-		sha256        = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233"
-		size          = int64(1024 * 1024)
+		taskID         = "task-B"
+		jobID          = "job-B"
+		sha256         = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233"
+		size           = int64(1024 * 1024)
 	)
 
 	frs := &expiryMockStore{payload: reservationPayload(sha256, size)}
@@ -562,12 +556,12 @@ func TestInvariant_WrongWorkerCannotClaim(t *testing.T) {
 
 	// Reservation belongs to ownerWorker.
 	_, _ = frs.TryReserveFutureTask(context.Background(), taskgraph.FutureReservation{
-		TaskID:       taskID,
-		JobID:        jobID,
-		WorkerID:     ownerWorker,
+		TaskID:        taskID,
+		JobID:         jobID,
+		WorkerID:      ownerWorker,
 		ReservationID: "future:" + ownerWorker + ":" + taskID,
-		TaskRevision: 1,
-		ExpiresAt:    time.Now().UTC().Add(time.Minute),
+		TaskRevision:  1,
+		ExpiresAt:     time.Now().UTC().Add(time.Minute),
 	})
 
 	// Owner prepares the asset.
@@ -578,6 +572,7 @@ func TestInvariant_WrongWorkerCannotClaim(t *testing.T) {
 		SHA256:       sha256,
 		SizeBytes:    size,
 	}, "future:"+ownerWorker+":"+taskID)
+	frs.SetState(taskgraph.ReservationPrepared)
 
 	// Owner can claim.
 	candidate := expiryCandidate(taskID, jobID, 1)
@@ -628,12 +623,12 @@ func TestInvariant_WrongWorkerCannotClaim(t *testing.T) {
 
 func TestInvariant_SHA256CorruptionAfterPreparation(t *testing.T) {
 	const (
-		workerID       = "host_57_131_20_173"
-		taskID         = "task-B"
-		jobID          = "job-B"
-		originalSHA    = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233"
-		corruptedSHA   = "ffff0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff0000"
-		size           = int64(1024 * 1024)
+		workerID     = "host_57_131_20_173"
+		taskID       = "task-B"
+		jobID        = "job-B"
+		originalSHA  = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233"
+		corruptedSHA = "ffff0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff0000"
+		size         = int64(1024 * 1024)
 	)
 
 	// Reservation manifest has the original SHA.
@@ -641,12 +636,12 @@ func TestInvariant_SHA256CorruptionAfterPreparation(t *testing.T) {
 	h := buildExpiryHandler(t, frs)
 
 	_, _ = frs.TryReserveFutureTask(context.Background(), taskgraph.FutureReservation{
-		TaskID:       taskID,
-		JobID:        jobID,
-		WorkerID:     workerID,
+		TaskID:        taskID,
+		JobID:         jobID,
+		WorkerID:      workerID,
 		ReservationID: "future:" + workerID + ":" + taskID,
-		TaskRevision: 1,
-		ExpiresAt:    time.Now().UTC().Add(time.Minute),
+		TaskRevision:  1,
+		ExpiresAt:     time.Now().UTC().Add(time.Minute),
 	})
 
 	// Worker reports prepared evidence with CORRUPTED SHA.
@@ -695,21 +690,22 @@ func TestInvariant_PartialPreparationBlocksFullPasses(t *testing.T) {
 	h := buildExpiryHandler(t, frs)
 
 	_, _ = frs.TryReserveFutureTask(context.Background(), taskgraph.FutureReservation{
-		TaskID:       taskID,
-		JobID:        jobID,
-		WorkerID:     workerID,
+		TaskID:        taskID,
+		JobID:         jobID,
+		WorkerID:      workerID,
 		ReservationID: "future:" + workerID + ":" + taskID,
-		TaskRevision: 1,
-		ExpiresAt:    time.Now().UTC().Add(time.Minute),
+		TaskRevision:  1,
+		ExpiresAt:     time.Now().UTC().Add(time.Minute),
 	})
 
 	candidate := expiryCandidate(taskID, jobID, 1)
 	resID := "future:" + workerID + ":" + taskID
 
-	// Prepare 1 of 3 → BLOCKED.
+	// Prepare 1 of 3 → BLOCKED (partial evidence).
 	h.markPreparedAsset(workerID, &preparedAssetEvidence{
 		TaskID: taskID, TaskRevision: 1, AssetID: "video", SHA256: sha1, SizeBytes: 100,
 	}, resID)
+	frs.SetState(taskgraph.ReservationPreparing)
 
 	prepared, err := h.ensurePreparedBeforeClaim(context.Background(), workerID, candidate)
 	if err != nil {
@@ -719,7 +715,7 @@ func TestInvariant_PartialPreparationBlocksFullPasses(t *testing.T) {
 		t.Fatal("1/3: must BLOCK")
 	}
 
-	// Prepare 2 of 3 → BLOCKED.
+	// Prepare 2 of 3 → BLOCKED (still partial).
 	h.markPreparedAsset(workerID, &preparedAssetEvidence{
 		TaskID: taskID, TaskRevision: 1, AssetID: "audio", SHA256: sha2, SizeBytes: 200,
 	}, resID)
@@ -736,6 +732,7 @@ func TestInvariant_PartialPreparationBlocksFullPasses(t *testing.T) {
 	h.markPreparedAsset(workerID, &preparedAssetEvidence{
 		TaskID: taskID, TaskRevision: 1, AssetID: "subtitle", SHA256: sha3, SizeBytes: 50,
 	}, resID)
+	frs.SetState(taskgraph.ReservationPrepared)
 
 	prepared, err = h.ensurePreparedBeforeClaim(context.Background(), workerID, candidate)
 	if err != nil {
@@ -744,4 +741,317 @@ func TestInvariant_PartialPreparationBlocksFullPasses(t *testing.T) {
 	if !prepared {
 		t.Fatal("3/3: must PASS when all assets prepared")
 	}
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// LIFECYCLE 1: Full RESERVED → PLANNING → PREPARING → PREPARED lifecycle
+// Verifies the gate blocks at every intermediate state and passes only
+// when the reservation reaches PREPARED.
+// ──────────────────────────────────────────────────────────────────────────
+
+func TestLifecycle_FullReservedToPrepared(t *testing.T) {
+	const (
+		workerID = "host_57_131_20_173"
+		taskID   = "task-B"
+		jobID    = "job-B"
+		sha256   = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233"
+		size     = int64(1024 * 1024)
+	)
+
+	frs := &expiryMockStore{payload: reservationPayload(sha256, size)}
+	h := buildExpiryHandler(t, frs)
+
+	_, _ = frs.TryReserveFutureTask(context.Background(), taskgraph.FutureReservation{
+		TaskID:        taskID,
+		JobID:         jobID,
+		WorkerID:      workerID,
+		ReservationID: "future:" + workerID + ":" + taskID,
+		TaskRevision:  1,
+		ExpiresAt:     time.Now().UTC().Add(time.Minute),
+	})
+
+	candidate := expiryCandidate(taskID, jobID, 1)
+
+	// ── RESERVED: gate blocks (no evidence yet) ──────────────────────
+	prepared, err := h.ensurePreparedBeforeClaim(context.Background(), workerID, candidate)
+	if err != nil {
+		t.Fatalf("RESERVED: error = %v", err)
+	}
+	if prepared {
+		t.Fatal("RESERVED: gate must block")
+	}
+
+	// ── PLANNING: gate blocks (plan sent, no evidence) ───────────────
+	frs.SetState(taskgraph.ReservationPlanning)
+	prepared, err = h.ensurePreparedBeforeClaim(context.Background(), workerID, candidate)
+	if err != nil {
+		t.Fatalf("PLANNING: error = %v", err)
+	}
+	if prepared {
+		t.Fatal("PLANNING: gate must block")
+	}
+
+	// ── PREPARING: gate blocks (partial evidence) ────────────────────
+	frs.SetState(taskgraph.ReservationPreparing)
+	// Add partial evidence (not all assets).
+	h.markPreparedAsset(workerID, &preparedAssetEvidence{
+		TaskID:       taskID,
+		TaskRevision: 1,
+		AssetID:      "video-fragment",
+		SHA256:       sha256,
+		SizeBytes:    size,
+	}, "future:"+workerID+":"+taskID)
+	prepared, err = h.ensurePreparedBeforeClaim(context.Background(), workerID, candidate)
+	if err != nil {
+		t.Fatalf("PREPARING: error = %v", err)
+	}
+	if prepared {
+		t.Fatal("PREPARING: gate must block")
+	}
+
+	// ── PREPARED: gate passes ────────────────────────────────────────
+	frs.SetState(taskgraph.ReservationPrepared)
+	prepared, err = h.ensurePreparedBeforeClaim(context.Background(), workerID, candidate)
+	if err != nil {
+		t.Fatalf("PREPARED: error = %v", err)
+	}
+	if !prepared {
+		t.Fatal("PREPARED: gate must pass")
+	}
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// LIFECYCLE 2: EXPIRED state blocks claim
+// Once a reservation expires, the gate must block even if evidence exists.
+// ──────────────────────────────────────────────────────────────────────────
+
+func TestLifecycle_ExpiredBlocksClaim(t *testing.T) {
+	const (
+		workerID = "host_57_131_20_173"
+		taskID   = "task-B"
+		jobID    = "job-B"
+		sha256   = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233"
+		size     = int64(1024 * 1024)
+	)
+
+	frs := &expiryMockStore{payload: reservationPayload(sha256, size)}
+	h := buildExpiryHandler(t, frs)
+
+	_, _ = frs.TryReserveFutureTask(context.Background(), taskgraph.FutureReservation{
+		TaskID:        taskID,
+		JobID:         jobID,
+		WorkerID:      workerID,
+		ReservationID: "future:" + workerID + ":" + taskID,
+		TaskRevision:  1,
+		ExpiresAt:     time.Now().UTC().Add(time.Minute),
+	})
+
+	// Prepare evidence and advance to PREPARED.
+	h.markPreparedAsset(workerID, &preparedAssetEvidence{
+		TaskID:       taskID,
+		TaskRevision: 1,
+		AssetID:      "video-fragment",
+		SHA256:       sha256,
+		SizeBytes:    size,
+	}, "future:"+workerID+":"+taskID)
+	frs.SetState(taskgraph.ReservationPrepared)
+
+	candidate := expiryCandidate(taskID, jobID, 1)
+
+	// Gate passes at PREPARED.
+	prepared, err := h.ensurePreparedBeforeClaim(context.Background(), workerID, candidate)
+	if err != nil {
+		t.Fatalf("PREPARED: error = %v", err)
+	}
+	if !prepared {
+		t.Fatal("PREPARED: gate must pass")
+	}
+
+	// Advance to EXPIRED.
+	frs.SetState(taskgraph.ReservationExpired)
+
+	// Gate must block even though evidence exists.
+	prepared, err = h.ensurePreparedBeforeClaim(context.Background(), workerID, candidate)
+	if err != nil {
+		t.Fatalf("EXPIRED: error = %v", err)
+	}
+	if prepared {
+		t.Fatal("EXPIRED: gate must block")
+	}
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// LIFECYCLE 3: State constants satisfy invariants
+// IsTerminal and CanClaim must be correct for every state.
+// ──────────────────────────────────────────────────────────────────────────
+
+func TestLifecycle_StateConstants(t *testing.T) {
+	tests := []struct {
+		state      taskgraph.ReservationState
+		canClaim   bool
+		isTerminal bool
+	}{
+		{taskgraph.ReservationReserved, false, false},
+		{taskgraph.ReservationPlanning, false, false},
+		{taskgraph.ReservationPreparing, false, false},
+		{taskgraph.ReservationPrepared, true, false},
+		{taskgraph.ReservationExpired, false, true},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.state), func(t *testing.T) {
+			if got := tt.state.CanClaim(); got != tt.canClaim {
+				t.Fatalf("CanClaim() = %v, want %v", got, tt.canClaim)
+			}
+			if got := tt.state.IsTerminal(); got != tt.isTerminal {
+				t.Fatalf("IsTerminal() = %v, want %v", got, tt.isTerminal)
+			}
+		})
+	}
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// LIFECYCLE 4: Backward compatibility — empty state is not blocked
+// Reservations without an explicit state (legacy) must not be blocked
+// by the state machine gate. This preserves the existing behavior.
+// ──────────────────────────────────────────────────────────────────────────
+
+func TestLifecycle_EmptyStateNotBlocked(t *testing.T) {
+	const (
+		workerID = "host_57_131_20_173"
+		taskID   = "task-B"
+		jobID    = "job-B"
+		sha256   = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233"
+		size     = int64(1024 * 1024)
+	)
+
+	frs := &expiryMockStore{payload: reservationPayload(sha256, size)}
+	h := buildExpiryHandler(t, frs)
+
+	// Create reservation with explicit empty state (legacy path).
+	// We bypass TryReserveFutureTask to keep state empty.
+	frs.mu.Lock()
+	frs.reservation = &taskgraph.FutureReservationWithPayload{
+		FutureReservation: taskgraph.FutureReservation{
+			TaskID:        taskID,
+			JobID:         jobID,
+			WorkerID:      workerID,
+			ReservationID: "future:" + workerID + ":" + taskID,
+			TaskRevision:  1,
+			ExpiresAt:     time.Now().UTC().Add(time.Minute),
+			// State is zero-value (empty string)
+		},
+		Payload: reservationPayload(sha256, size),
+	}
+	frs.reserved = true
+	frs.mu.Unlock()
+
+	// Add evidence so reservationPrepared passes.
+	h.markPreparedAsset(workerID, &preparedAssetEvidence{
+		TaskID:       taskID,
+		TaskRevision: 1,
+		AssetID:      "video-fragment",
+		SHA256:       sha256,
+		SizeBytes:    size,
+	}, "future:"+workerID+":"+taskID)
+
+	candidate := expiryCandidate(taskID, jobID, 1)
+
+	// Empty state → gate must NOT block (backward compat).
+	prepared, err := h.ensurePreparedBeforeClaim(context.Background(), workerID, candidate)
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if !prepared {
+		t.Fatal("empty state reservation must not be blocked by state gate")
+	}
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// LIFECYCLE 5: N+1 lifecycle with state tracking
+// Verifies the full N+1 flow with explicit state transitions:
+// A claimed → refreshFutureAssetPlan creates B (RESERVED) →
+// plan sent (PLANNING) → worker prefetches (PREPARING) →
+// all assets ready (PREPARED) → B claimable.
+// ──────────────────────────────────────────────────────────────────────────
+
+func TestLifecycle_N1WithStateTracking(t *testing.T) {
+	const (
+		workerID = "host_57_131_20_173"
+		taskB    = "task-B"
+		jobB     = "job-B"
+		sha256B  = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233"
+		sizeB    = int64(677_000_000)
+	)
+
+	frs := &expiryMockStore{payload: reservationPayload(sha256B, sizeB)}
+	h := buildExpiryHandler(t, frs)
+
+	candidateB := expiryCandidate(taskB, jobB, 1)
+
+	// ── Step 1: Create reservation for B (RESERVED) ──────────────────
+	_, _ = frs.TryReserveFutureTask(context.Background(), taskgraph.FutureReservation{
+		TaskID:        taskB,
+		JobID:         jobB,
+		WorkerID:      workerID,
+		ReservationID: "future:" + workerID + ":" + taskB,
+		TaskRevision:  1,
+		State:         taskgraph.ReservationReserved,
+		ExpiresAt:     time.Now().UTC().Add(2 * time.Minute),
+	})
+
+	// Gate blocks at RESERVED.
+	prepared, err := h.ensurePreparedBeforeClaim(context.Background(), workerID, candidateB)
+	if err != nil {
+		t.Fatalf("step 1: error = %v", err)
+	}
+	if prepared {
+		t.Fatal("step 1 (RESERVED): gate must block")
+	}
+
+	// ── Step 2: Plan sent (PLANNING) ────────────────────────────────
+	frs.SetState(taskgraph.ReservationPlanning)
+	prepared, err = h.ensurePreparedBeforeClaim(context.Background(), workerID, candidateB)
+	if err != nil {
+		t.Fatalf("step 2: error = %v", err)
+	}
+	if prepared {
+		t.Fatal("step 2 (PLANNING): gate must block")
+	}
+
+	// ── Step 3: Worker starts prefetching (PREPARING) ────────────────
+	frs.SetState(taskgraph.ReservationPreparing)
+	prepared, err = h.ensurePreparedBeforeClaim(context.Background(), workerID, candidateB)
+	if err != nil {
+		t.Fatalf("step 3: error = %v", err)
+	}
+	if prepared {
+		t.Fatal("step 3 (PREPARING): gate must block")
+	}
+
+	// ── Step 4: All assets ready (PREPARED) ─────────────────────────
+	h.markPreparedAsset(workerID, &preparedAssetEvidence{
+		TaskID:       taskB,
+		TaskRevision: 1,
+		AssetID:      "video-fragment",
+		SHA256:       sha256B,
+		SizeBytes:    sizeB,
+	}, "future:"+workerID+":"+taskB)
+	frs.SetState(taskgraph.ReservationPrepared)
+
+	preparedAt := time.Now().UTC()
+	prepared, err = h.ensurePreparedBeforeClaim(context.Background(), workerID, candidateB)
+	if err != nil {
+		t.Fatalf("step 4: error = %v", err)
+	}
+	if !prepared {
+		t.Fatal("step 4 (PREPARED): gate must pass")
+	}
+
+	// Core invariant: prepared_at < attempt_started_at.
+	attemptStartedAt := time.Now().UTC()
+	leadMS := attemptStartedAt.Sub(preparedAt).Milliseconds()
+	if leadMS < 0 {
+		t.Fatalf("invariant violated: prepared_at >= attempt_started_at, lead=%dms", leadMS)
+	}
+	t.Logf("N+1 lifecycle with state: RESERVED→PLANNING→PREPARING→PREPARED lead=%dms", leadMS)
 }

@@ -1310,8 +1310,17 @@ type AssetPreparationBreakdown struct {
 	PrefetchHits     int64 `protobuf:"varint,18,opt,name=prefetch_hits,json=prefetchHits,proto3" json:"prefetch_hits,omitempty"`
 	WarmCacheHits    int64 `protobuf:"varint,19,opt,name=warm_cache_hits,json=warmCacheHits,proto3" json:"warm_cache_hits,omitempty"`
 	RuntimeDownloads int64 `protobuf:"varint,20,opt,name=runtime_downloads,json=runtimeDownloads,proto3" json:"runtime_downloads,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Byte-level origin attribution.
+	WarmCacheBytes       int64 `protobuf:"varint,21,opt,name=warm_cache_bytes,json=warmCacheBytes,proto3" json:"warm_cache_bytes,omitempty"`
+	RuntimeDownloadBytes int64 `protobuf:"varint,22,opt,name=runtime_download_bytes,json=runtimeDownloadBytes,proto3" json:"runtime_download_bytes,omitempty"`
+	// Total SizeBytes across all required asset resolutions.
+	RequiredAssetBytes int64 `protobuf:"varint,23,opt,name=required_asset_bytes,json=requiredAssetBytes,proto3" json:"required_asset_bytes,omitempty"`
+	// Epoch ms of the most recent prefetch preparation.
+	LatestPreparedAtMs int64 `protobuf:"varint,24,opt,name=latest_prepared_at_ms,json=latestPreparedAtMs,proto3" json:"latest_prepared_at_ms,omitempty"`
+	// Epoch ms when the attempt started.
+	AttemptStartedAtMs int64 `protobuf:"varint,25,opt,name=attempt_started_at_ms,json=attemptStartedAtMs,proto3" json:"attempt_started_at_ms,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *AssetPreparationBreakdown) Reset() {
@@ -1480,6 +1489,41 @@ func (x *AssetPreparationBreakdown) GetWarmCacheHits() int64 {
 func (x *AssetPreparationBreakdown) GetRuntimeDownloads() int64 {
 	if x != nil {
 		return x.RuntimeDownloads
+	}
+	return 0
+}
+
+func (x *AssetPreparationBreakdown) GetWarmCacheBytes() int64 {
+	if x != nil {
+		return x.WarmCacheBytes
+	}
+	return 0
+}
+
+func (x *AssetPreparationBreakdown) GetRuntimeDownloadBytes() int64 {
+	if x != nil {
+		return x.RuntimeDownloadBytes
+	}
+	return 0
+}
+
+func (x *AssetPreparationBreakdown) GetRequiredAssetBytes() int64 {
+	if x != nil {
+		return x.RequiredAssetBytes
+	}
+	return 0
+}
+
+func (x *AssetPreparationBreakdown) GetLatestPreparedAtMs() int64 {
+	if x != nil {
+		return x.LatestPreparedAtMs
+	}
+	return 0
+}
+
+func (x *AssetPreparationBreakdown) GetAttemptStartedAtMs() int64 {
+	if x != nil {
+		return x.AttemptStartedAtMs
 	}
 	return 0
 }
@@ -6055,8 +6099,11 @@ type WorkerResourceCounters struct {
 	OpenFileDescriptors            int64   `protobuf:"varint,35,opt,name=open_file_descriptors,json=openFileDescriptors,proto3" json:"open_file_descriptors,omitempty"`
 	MaxFileDescriptors             int64   `protobuf:"varint,36,opt,name=max_file_descriptors,json=maxFileDescriptors,proto3" json:"max_file_descriptors,omitempty"`
 	FileDescriptorUtilizationRatio float64 `protobuf:"fixed64,37,opt,name=file_descriptor_utilization_ratio,json=fileDescriptorUtilizationRatio,proto3" json:"file_descriptor_utilization_ratio,omitempty"`
-	unknownFields                  protoimpl.UnknownFields
-	sizeCache                      protoimpl.SizeCache
+	// Scratch disk occupancy — real-time scratch dir size and high-water mark.
+	ScratchCurrentBytes int64 `protobuf:"varint,38,opt,name=scratch_current_bytes,json=scratchCurrentBytes,proto3" json:"scratch_current_bytes,omitempty"` // gauge: sum of file sizes in scratch dir
+	ScratchPeakBytes    int64 `protobuf:"varint,39,opt,name=scratch_peak_bytes,json=scratchPeakBytes,proto3" json:"scratch_peak_bytes,omitempty"`          // high-water mark since worker start
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *WorkerResourceCounters) Reset() {
@@ -6348,6 +6395,20 @@ func (x *WorkerResourceCounters) GetFileDescriptorUtilizationRatio() float64 {
 	return 0
 }
 
+func (x *WorkerResourceCounters) GetScratchCurrentBytes() int64 {
+	if x != nil {
+		return x.ScratchCurrentBytes
+	}
+	return 0
+}
+
+func (x *WorkerResourceCounters) GetScratchPeakBytes() int64 {
+	if x != nil {
+		return x.ScratchPeakBytes
+	}
+	return 0
+}
+
 var File_velox_control_worker_control_proto protoreflect.FileDescriptor
 
 const file_velox_control_worker_control_proto_rawDesc = "" +
@@ -6489,7 +6550,7 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\n" +
 	"milestones\x18\x17 \x03(\v2\x1f.velox.control.AttemptMilestoneR\n" +
 	"milestones\x12U\n" +
-	"\x11asset_preparation\x18\x18 \x01(\v2(.velox.control.AssetPreparationBreakdownR\x10assetPreparation\"\xe5\x06\n" +
+	"\x11asset_preparation\x18\x18 \x01(\v2(.velox.control.AssetPreparationBreakdownR\x10assetPreparation\"\xdd\b\n" +
 	"\x19AssetPreparationBreakdown\x12'\n" +
 	"\x0fassets_required\x18\x01 \x01(\x03R\x0eassetsRequired\x12#\n" +
 	"\rassets_unique\x18\x02 \x01(\x03R\fassetsUnique\x12\x1d\n" +
@@ -6512,7 +6573,12 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\x12prefetch_hit_bytes\x18\x11 \x01(\x03R\x10prefetchHitBytes\x12#\n" +
 	"\rprefetch_hits\x18\x12 \x01(\x03R\fprefetchHits\x12&\n" +
 	"\x0fwarm_cache_hits\x18\x13 \x01(\x03R\rwarmCacheHits\x12+\n" +
-	"\x11runtime_downloads\x18\x14 \x01(\x03R\x10runtimeDownloads\"\xde\x01\n" +
+	"\x11runtime_downloads\x18\x14 \x01(\x03R\x10runtimeDownloads\x12(\n" +
+	"\x10warm_cache_bytes\x18\x15 \x01(\x03R\x0ewarmCacheBytes\x124\n" +
+	"\x16runtime_download_bytes\x18\x16 \x01(\x03R\x14runtimeDownloadBytes\x120\n" +
+	"\x14required_asset_bytes\x18\x17 \x01(\x03R\x12requiredAssetBytes\x121\n" +
+	"\x15latest_prepared_at_ms\x18\x18 \x01(\x03R\x12latestPreparedAtMs\x121\n" +
+	"\x15attempt_started_at_ms\x18\x19 \x01(\x03R\x12attemptStartedAtMs\"\xde\x01\n" +
 	"\x15AttemptWaterfallStage\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x129\n" +
 	"\n" +
@@ -6975,7 +7041,7 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\x12trailer_to_open_ms\x18Y \x01(\x03R\x0ftrailerToOpenMs\x12#\n" +
 	"\x0emux_to_open_us\x18Z \x01(\x03R\vmuxToOpenUs\x12\x1f\n" +
 	"\vscene_count\x18[ \x01(\x05R\n" +
-	"sceneCount\"\xbc\r\n" +
+	"sceneCount\"\x9e\x0e\n" +
 	"\x16WorkerResourceCounters\x122\n" +
 	"\x15cpu_utilization_ratio\x18\x01 \x01(\x01R\x13cpuUtilizationRatio\x12(\n" +
 	"\x10cpu_iowait_ratio\x18\x02 \x01(\x01R\x0ecpuIowaitRatio\x12&\n" +
@@ -7017,7 +7083,9 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\x15publisher_jobs_active\x18\" \x01(\x05R\x13publisherJobsActive\x122\n" +
 	"\x15open_file_descriptors\x18# \x01(\x03R\x13openFileDescriptors\x120\n" +
 	"\x14max_file_descriptors\x18$ \x01(\x03R\x12maxFileDescriptors\x12I\n" +
-	"!file_descriptor_utilization_ratio\x18% \x01(\x01R\x1efileDescriptorUtilizationRatioB\"Z velox-shared/controltransport/pbb\x06proto3"
+	"!file_descriptor_utilization_ratio\x18% \x01(\x01R\x1efileDescriptorUtilizationRatio\x122\n" +
+	"\x15scratch_current_bytes\x18& \x01(\x03R\x13scratchCurrentBytes\x12,\n" +
+	"\x12scratch_peak_bytes\x18' \x01(\x03R\x10scratchPeakBytesB\"Z velox-shared/controltransport/pbb\x06proto3"
 
 var (
 	file_velox_control_worker_control_proto_rawDescOnce sync.Once

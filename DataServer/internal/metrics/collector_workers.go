@@ -56,6 +56,8 @@ type ResourceSnapshot struct {
 	PageCacheBytes        int64
 	DiskFreeBytes         int64
 	TempBytesWritten      int64
+	ScratchCurrentBytes   int64
+	ScratchPeakBytes      int64
 	DiskReadMbps          float64
 	DiskWriteMbps         float64
 	DiskIoWaitMs          int64
@@ -98,6 +100,8 @@ func (c *Collector) RecordWorker(workerID string, rs *ResourceSnapshot) {
 	c.workerPageCache.GaugeSet(wl, rs.PageCacheBytes)
 	c.workerDiskFree.GaugeSet(wl, rs.DiskFreeBytes)
 	c.workerTempBytes.GaugeSet(wl, rs.TempBytesWritten)
+	c.workerScratchCurrent.GaugeSet(wl, rs.ScratchCurrentBytes)
+	c.workerScratchPeak.GaugeSet(wl, rs.ScratchPeakBytes)
 	c.workerDiskReadMbps.GaugeSet(wl, int64(rs.DiskReadMbps*1000))
 	c.workerDiskWriteMbps.GaugeSet(wl, int64(rs.DiskWriteMbps*1000))
 	c.workerDiskIoWaitMs.GaugeSet(wl, rs.DiskIoWaitMs)
@@ -154,6 +158,10 @@ func (c *Collector) initWorkerFamilies() {
 		"Worker disk free bytes", []string{"worker_id"})
 	c.workerTempBytes = NewGaugeFamily("velox_worker_temp_bytes",
 		"Worker temp bytes (gauge at heartbeat time)", []string{"worker_id"})
+	c.workerScratchCurrent = NewGaugeFamily("velox_worker_scratch_current_bytes",
+		"Worker scratch directory current occupancy", []string{"worker_id"})
+	c.workerScratchPeak = NewGaugeFamily("velox_worker_scratch_peak_bytes",
+		"Worker scratch directory peak occupancy", []string{"worker_id"})
 	c.workerDiskReadMbps = NewGaugeFamily("velox_worker_disk_read_mbps",
 		"Worker disk read throughput (MB/s)", []string{"worker_id"})
 	c.workerDiskWriteMbps = NewGaugeFamily("velox_worker_disk_write_mbps",
@@ -191,8 +199,7 @@ func (c *Collector) workerFamilies() []*Family {
 		c.workerCPUUtil, c.workerIOWait, c.workerSteal,
 		c.workerCPUUser, c.workerCPUSystem, c.workerEffectiveCpu,
 		c.workerRSSBytes, c.workerRSSPeak, c.workerMemoryUsed, c.workerMemoryAvail, c.workerPageCache,
-		c.workerDiskFree, c.workerTempBytes,
-		c.workerDiskReadMbps, c.workerDiskWriteMbps, c.workerDiskIoWaitMs,
+		c.workerDiskFree,		c.workerTempBytes, c.workerScratchCurrent, c.workerScratchPeak, c.workerDiskReadMbps, c.workerDiskWriteMbps, c.workerDiskIoWaitMs,
 		c.workerActiveTasks, c.workerTaskSlots,
 		c.workerRenderActive, c.workerPrefetchActive, c.workerPublisherActive,
 		c.workerLoad1, c.workerRunQueue,

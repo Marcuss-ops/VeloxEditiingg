@@ -31,9 +31,6 @@ func (m *mockFutureReservationStore) TryReserveFutureTask(_ context.Context, r t
 	if m.reserved {
 		return false, nil
 	}
-	if r.State == "" {
-		r.State = taskgraph.ReservationReserved
-	}
 	m.reservation = &taskgraph.FutureReservationWithPayload{FutureReservation: r, Payload: m.payload}
 	m.reserved = true
 	return true, nil
@@ -235,10 +232,11 @@ func TestPreparationGate_PassesWhenEvidenceMatchesReservation(t *testing.T) {
 		SHA256:       sha256,
 		SizeBytes:    size,
 	}, "future:"+workerID+":"+taskID)
+	frs.SetState(taskgraph.ReservationPrepared)
 
 	candidate := taskCandidate(taskID, jobID, 1)
 
-	// Gate MUST pass: reservation exists AND evidence matches.
+	// Gate MUST pass: reservation exists AND evidence matches AND state is PREPARED.
 	prepared, err := h.ensurePreparedBeforeClaim(context.Background(), workerID, candidate)
 	if err != nil {
 		t.Fatalf("ensurePreparedBeforeClaim error = %v", err)
@@ -446,6 +444,7 @@ func TestPreparationGate_PassesWhenNoAssetsInReservation(t *testing.T) {
 		TaskRevision:  1,
 		ExpiresAt:     time.Now().UTC().Add(time.Minute),
 	})
+	frs.SetState(taskgraph.ReservationPrepared)
 
 	candidate := taskCandidate(taskID, jobID, 1)
 
@@ -575,6 +574,7 @@ func TestPreparationGate_N1LifecycleReservePrepareClaim(t *testing.T) {
 		SHA256:       sha256B,
 		SizeBytes:    sizeB,
 	}, "future:"+workerID+":"+taskB)
+	frs.SetState(taskgraph.ReservationPrepared)
 
 	// ─── Phase 5: Gate passes B (evidence matches reservation) ────────
 	preparedB, err = h.ensurePreparedBeforeClaim(context.Background(), workerID, candidateB)
@@ -656,6 +656,7 @@ func TestPreparationGate_MultiAssetRequiresAllPrepared(t *testing.T) {
 		SHA256:       sha2,
 		SizeBytes:    200,
 	}, "future:"+workerID+":"+taskID)
+	frs.SetState(taskgraph.ReservationPrepared)
 
 	// Gate MUST pass: both assets prepared.
 	prepared, err = h.ensurePreparedBeforeClaim(context.Background(), workerID, candidate)
@@ -721,6 +722,7 @@ func TestPreparationGate_EvidenceRecordedBeforeReservationIsIgnored(t *testing.T
 		TaskRevision:  1,
 		ExpiresAt:     time.Now().UTC().Add(time.Minute),
 	})
+	frs.SetState(taskgraph.ReservationPrepared)
 
 	candidate := taskCandidate(taskID, jobID, 1)
 

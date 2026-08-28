@@ -11,20 +11,21 @@ import (
 // descriptors pointing into it. The rest of the sampler lives in
 // resource_sampler.go.
 
-// sampleTempActivity returns cumulative observed growth and the number of
-// worker-process descriptors currently pointing into TempDir. Deletions never
-// reduce the cumulative counter. This is deliberately scoped to the worker's
-// own temp tree; counting the entire OS temp directory would mix unrelated
-// processes into the render telemetry.
-func (s *Sampler) sampleTempActivity() (int64, int) {
+// sampleTempActivity returns cumulative observed growth, the number of
+// worker-process descriptors currently pointing into TempDir, the current
+// scratch dir occupancy (sum of file sizes), and the peak occupancy since
+// worker start. Deletions never reduce the cumulative counter. This is
+// deliberately scoped to the worker's own temp tree; counting the entire
+// OS temp directory would mix unrelated processes into the render telemetry.
+func (s *Sampler) sampleTempActivity() (int64, int, int64, int64) {
 	if s == nil {
-		return -1, 0
+		return -1, 0, 0, 0
 	}
 	s.mu.Lock()
 	tempDir := s.tempDir
 	if tempDir == "" {
 		s.mu.Unlock()
-		return 0, 0
+		return 0, 0, 0, 0
 	}
 	var current int64
 	_ = filepath.WalkDir(tempDir, func(path string, entry os.DirEntry, err error) error {
@@ -47,17 +48,21 @@ func (s *Sampler) sampleTempActivity() (int64, int) {
 	} else {
 		s.lastTempBytes = current
 	}
+	if current > s.scratchPeakBytes {
+		s.scratchPeakBytes = current
+	}
 	cumulative := s.tempBytesWritten
+	peak := s.scratchPeakBytes
 	s.mu.Unlock()
 
 	open := 0
 	entries, err := os.ReadDir(filepath.Join(s.procRoot, "self", "fd"))
 	if err != nil {
-		return cumulative, 0
+		return cumulative, 0, current, peak
 	}
 	root, err := filepath.Abs(tempDir)
 	if err != nil {
-		return cumulative, 0
+		return cumulative, 0, current, peak
 	}
 	for _, entry := range entries {
 		target, linkErr := os.Readlink(filepath.Join(s.procRoot, "self", "fd", entry.Name()))
@@ -68,5 +73,5 @@ func (s *Sampler) sampleTempActivity() (int64, int) {
 			open++
 		}
 	}
-	return cumulative, open
+	return cumulative, open, current, peak
 }

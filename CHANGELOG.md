@@ -1,3 +1,10 @@
+## [v1.4.2] - 2026-08-28
+
+### Preparation gate test correction
+
+- Preserve explicit legacy empty reservation state in test fixtures while
+  retaining the strict `PREPARED` claim fence in production.
+
 ## [v1.4.1] - 2026-08-28
 
 ### Strict preparation claim fence

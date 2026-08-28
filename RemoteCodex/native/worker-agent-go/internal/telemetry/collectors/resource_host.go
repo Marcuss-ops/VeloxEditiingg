@@ -65,6 +65,8 @@ func (s *SampledResources) ToWireMap() map[string]interface{} {
 	addI64("disk_free_bytes", s.DiskFreeBytes)
 	addI64("temp_bytes_written", s.TempBytesWritten)
 	addI32("temp_files_open", s.TempFilesOpen)
+	addI64("scratch_current_bytes", s.ScratchCurrentBytes)
+	addI64("scratch_peak_bytes", s.ScratchPeakBytes)
 	addFloat("disk_read_mbps", s.DiskReadMbps)
 	addFloat("disk_write_mbps", s.DiskWriteMbps)
 	addI64("disk_io_wait_ms", s.DiskIoWaitMs)
@@ -116,6 +118,8 @@ func (s *SampledResources) ToProto() *pb.WorkerResourceCounters {
 		DiskFreeBytes:             s.DiskFreeBytes,
 		TempBytesWritten:          s.TempBytesWritten,
 		TempFilesOpen:             s.TempFilesOpen,
+		ScratchCurrentBytes:       s.ScratchCurrentBytes,
+		ScratchPeakBytes:          s.ScratchPeakBytes,
 		DiskReadMbps:              s.DiskReadMbps,
 		DiskWriteMbps:             s.DiskWriteMbps,
 		DiskIoWaitMs:              s.DiskIoWaitMs,

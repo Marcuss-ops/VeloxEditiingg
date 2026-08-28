@@ -105,6 +105,8 @@ type Collector struct {
 	workerPageCache        *Family // velox_worker_page_cache_bytes
 	workerDiskFree         *Family // velox_worker_disk_free_bytes
 	workerTempBytes        *Family // velox_worker_temp_bytes
+	workerScratchCurrent   *Family // velox_worker_scratch_current_bytes
+	workerScratchPeak      *Family // velox_worker_scratch_peak_bytes
 	workerDiskReadMbps     *Family // velox_worker_disk_read_mbps
 	workerDiskWriteMbps    *Family // velox_worker_disk_write_mbps
 	workerDiskIoWaitMs     *Family // velox_worker_disk_io_wait_ms

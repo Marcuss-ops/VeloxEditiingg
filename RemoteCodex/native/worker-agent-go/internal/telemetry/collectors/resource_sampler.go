@@ -85,6 +85,13 @@ type SampledResources struct {
 	TempBytesWritten int64
 	TempFilesOpen    int32
 
+	// Scratch disk occupancy — real-time scratch dir size and high-water
+	// mark since worker start. ScratchCurrentBytes is the sum of all
+	// regular file sizes in the scratch tree at sample time; ScratchPeakBytes
+	// is the maximum ScratchCurrentBytes observed across all samples.
+	ScratchCurrentBytes int64
+	ScratchPeakBytes    int64
+
 	// Process RSS — read from /proc/self/statm (per-process).
 	ProcessRSSBytes     int64
 	ProcessRSSPeakBytes int64
@@ -163,6 +170,7 @@ type Sampler struct {
 	lastTempBytes    int64
 	tempBytesWritten int64
 	tempInitialized  bool
+	scratchPeakBytes int64
 
 	// Disk throughput delta tracking.
 	lastDiskReadBytes  int64
@@ -278,9 +286,11 @@ func (s *Sampler) Sample(ctx context.Context) (*SampledResources, error) {
 	}
 
 	out := &SampledResources{SampledAt: time.Now().UTC()}
-	if tempBytes, tempFiles := s.sampleTempActivity(); tempBytes >= 0 {
+	if tempBytes, tempFiles, current, peak := s.sampleTempActivity(); tempBytes >= 0 {
 		out.TempBytesWritten = tempBytes
 		out.TempFilesOpen = int32(tempFiles)
+		out.ScratchCurrentBytes = current
+		out.ScratchPeakBytes = peak
 	}
 
 	// CPU ratio computation (delta-based).

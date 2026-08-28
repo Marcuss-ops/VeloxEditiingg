@@ -69,15 +69,15 @@ func (h *Handler) buildCertificate(reservationID string, assets []futureasset.As
 	}
 
 	for _, asset := range assets {
-		var key string
-		if asset.AssetID != "" {
-			key = asset.AssetID
-		} else {
-			key = asset.AssetKey
-		}
-		if evidence, ok := prepared[key]; ok {
-			cert.AssetsPrepared++
-			cert.PreparedBytes += evidence.SizeBytes
+		for _, key := range []string{asset.AssetID, asset.AssetKey} {
+			if key == "" {
+				continue
+			}
+			if evidence, ok := prepared[key]; ok {
+				cert.AssetsPrepared++
+				cert.PreparedBytes += evidence.SizeBytes
+				break
+			}
 		}
 	}
 	return cert
