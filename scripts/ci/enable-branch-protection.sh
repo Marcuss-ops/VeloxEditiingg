@@ -12,6 +12,7 @@
 #       4. E2E workload-mTLS (PR 7) / make e2e-workload-mtls (mTLS, channel=staging)
 #       5. no-youtube-regression / YouTube regression guard
 #       6. check-canonical-names / Canonical names guard
+#       7. loc-thresholds / LOC threshold gate
 #   * strict=true         — branches MUST be green-up-to-date with main
 #   * enforce_admins=true — even admins cannot bypass
 #   * required_linear_history=true — no merge commits on main
@@ -105,7 +106,8 @@ read -r -d '' PAYLOAD <<'JSON' || true
       "E2E workload (real) / make e2e-workload (Hello→Artifact→SUCCEEDED)",
       "E2E workload-mTLS (PR 7) / make e2e-workload-mtls (mTLS, channel=staging)",
       "no-youtube-regression / YouTube regression guard",
-      "check-canonical-names / Canonical names guard"
+      "check-canonical-names / Canonical names guard",
+      "loc-thresholds / LOC threshold gate"
     ]
   },
   "required_pull_request_reviews": {
