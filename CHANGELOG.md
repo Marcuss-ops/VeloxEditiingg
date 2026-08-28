@@ -1,3 +1,10 @@
+## [v1.3.7] - 2026-08-28
+
+### Release verification
+
+- Accept indented Buildx digest output when verifying the published worker
+  image against the immutable digest emitted by the build.
+
 ## [v1.3.6] - 2026-08-28
 
 ### Prefetch certification and benchmark context

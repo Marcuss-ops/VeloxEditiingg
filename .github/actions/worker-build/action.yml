@@ -100,7 +100,7 @@ runs:
         IMAGE="${{ inputs.image-repo }}"
         EXPECTED="${{ steps.digest.outputs.digest }}"
         ACTUAL="$(docker buildx imagetools inspect "${IMAGE}:${{ inputs.tag }}" \
-          | awk '/^Digest:/ {print $2; exit}')"
+          | awk '/Digest:/ {print $2; exit}')"
         if [ "$ACTUAL" != "$EXPECTED" ]; then
           echo "::error::published digest mismatch: expected=${EXPECTED} actual=${ACTUAL}" >&2
           exit 1
