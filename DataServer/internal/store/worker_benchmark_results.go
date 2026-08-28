@@ -175,7 +175,7 @@ func (s *SQLiteStore) GetBenchmarkResults(ctx context.Context, workerID string, 
 		}
 		levelRows, err := s.db.QueryContext(ctx, `SELECT
 			level, total_runs, successful_runs, failed_runs, total_wall_ms,
-			avg_wall_ms, p50_wall_ms, p95_wall_ms, throughput, peak_ram_bytes,
+			level_wall_ms, avg_wall_ms, p50_wall_ms, p95_wall_ms, throughput, peak_ram_bytes,
 			avg_ram_bytes, render_wall_ms, upload_wall_ms, render_per_job_ms,
 			upload_per_job_ms, render_jobs_active, prefetch_jobs_active, publisher_active
 			FROM capacity_benchmark_levels WHERE benchmark_run_id=? ORDER BY level`, r.BenchmarkRunID)
@@ -185,7 +185,7 @@ func (s *SQLiteStore) GetBenchmarkResults(ctx context.Context, workerID string, 
 		for levelRows.Next() {
 			var level performance.ConcurrencyLevelResult
 			if err := levelRows.Scan(&level.Level, &level.TotalRuns, &level.SuccessfulRuns,
-				&level.FailedRuns, &level.TotalWallMS, &level.AvgWallMS, &level.P50WallMS,
+				&level.FailedRuns, &level.TotalWallMS, &level.LevelWallMS, &level.AvgWallMS, &level.P50WallMS,
 				&level.P95WallMS, &level.Throughput, &level.PeakRAMBytes, &level.AvgRAMBytes,
 				&level.RenderWallMS, &level.UploadWallMS, &level.RenderPerJobMS,
 				&level.UploadPerJobMS, &level.RenderJobsActive, &level.PrefetchActive,

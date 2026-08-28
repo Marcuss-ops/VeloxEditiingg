@@ -96,9 +96,17 @@ func (r *RemoteWorkerRenderer) Render(ctx context.Context, req BenchmarkRenderRe
 	if wall == 0 {
 		wall = time.Since(started).Milliseconds()
 	}
+	renderWall := obs.Receipt.Timing.RenderMS
+	// COPY_ONLY_CANONICAL_5M_V1 uses packet-copy: there is no separate
+	// encoder/render phase, so render_ms is legitimately zero.  Expose the
+	// measured attempt wall as the useful per-job render duration instead of
+	// making the capacity report look like it measured no work.
+	if renderWall == 0 {
+		renderWall = wall
+	}
 	return BenchmarkRenderResult{Receipt: &BenchmarkRenderReceipt{
 		PeakRAMBytes:   obs.Receipt.Memory.PeakRSSBytes,
-		RenderWallMS:   obs.Receipt.Timing.RenderMS,
+		RenderWallMS:   renderWall,
 		WallMS:         wall,
 		ArtifactSHA256: run.ArtifactSHA256,
 	}, ArtifactSHA256: run.ArtifactSHA256}, nil
