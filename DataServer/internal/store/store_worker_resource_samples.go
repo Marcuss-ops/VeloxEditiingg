@@ -36,6 +36,7 @@ type WorkerResourceSample struct {
 	EffectiveCPUCores    int64
 	ProcessRSSPeakBytes  int64
 	MemoryAvailableBytes int64
+	MemoryTotalBytes     int64
 	SwapUsedBytes        int64
 	PageCacheBytes       int64
 	TempBytesWritten     int64
@@ -76,7 +77,7 @@ func (s *SQLiteStore) ListWorkerResourceSamples(ctx context.Context, workerID, s
 		disk_read_bytes, disk_write_bytes, disk_free_bytes,
 		network_rx_bytes, network_tx_bytes, active_tasks, ffmpeg_processes
 		, effective_cpu_cores, process_rss_peak_bytes, memory_available_bytes,
-		swap_used_bytes, page_cache_bytes, temp_bytes_written, temp_files_open,
+		swap_used_bytes, memory_total_bytes, page_cache_bytes, temp_bytes_written, temp_files_open,
 		scratch_current_bytes, scratch_peak_bytes, disk_read_mbps,
 		disk_write_mbps, disk_io_wait_ms, network_retransmits, download_mbps,
 		upload_mbps, task_slots, render_jobs_active, prefetch_jobs_active,
@@ -127,7 +128,7 @@ func maybeInsertWorkerResourceSample(ctx context.Context, tx *sql.Tx, m map[stri
 		disk_read_bytes, disk_write_bytes, disk_free_bytes,
 		network_rx_bytes, network_tx_bytes, active_tasks, ffmpeg_processes,
 		effective_cpu_cores, process_rss_peak_bytes, memory_available_bytes,
-		swap_used_bytes, page_cache_bytes, temp_bytes_written, temp_files_open,
+		swap_used_bytes, memory_total_bytes, page_cache_bytes, temp_bytes_written, temp_files_open,
 		scratch_current_bytes, scratch_peak_bytes, disk_read_mbps,
 		disk_write_mbps, disk_io_wait_ms, network_retransmits, download_mbps,
 		upload_mbps, task_slots, render_jobs_active, prefetch_jobs_active,
@@ -137,7 +138,7 @@ func maybeInsertWorkerResourceSample(ctx context.Context, tx *sql.Tx, m map[stri
 		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-		          ?)
+		          ?, ?)
 	ON CONFLICT(worker_id, session_id, sampled_at) DO NOTHING`,
 		workerID, sessionID, sampledAt, ingestedAt,
 		floatValue(metricValue(m, "cpu_utilization_ratio"))*100,
@@ -159,6 +160,7 @@ func maybeInsertWorkerResourceSample(ctx context.Context, tx *sql.Tx, m map[stri
 		int64Value(metricValue(m, "process_rss_peak_bytes")),
 		int64Value(metricValue(m, "memory_available_bytes")),
 		int64Value(metricValue(m, "swap_used_bytes")),
+		int64Value(metricValue(m, "memory_total_bytes")),
 		int64Value(metricValue(m, "page_cache_bytes")),
 		int64Value(metricValue(m, "temp_bytes_written")),
 		int64Value(metricValue(m, "temp_files_open")),
@@ -235,7 +237,7 @@ func scanWorkerResourceSample(scanner interface{ Scan(...any) error }) (WorkerRe
 		&row.DiskFreeBytes, &row.NetworkRxBytes, &row.NetworkTxBytes,
 		&row.ActiveTasks, &row.FFmpegProcesses,
 		&row.EffectiveCPUCores, &row.ProcessRSSPeakBytes, &row.MemoryAvailableBytes,
-		&row.SwapUsedBytes, &row.PageCacheBytes, &row.TempBytesWritten,
+		&row.SwapUsedBytes, &row.MemoryTotalBytes, &row.PageCacheBytes, &row.TempBytesWritten,
 		&row.TempFilesOpen, &row.ScratchCurrentBytes, &row.ScratchPeakBytes,
 		&row.DiskReadMbps, &row.DiskWriteMbps, &row.DiskIOWaitMs,
 		&row.NetworkRetransmits, &row.DownloadMbps, &row.UploadMbps,

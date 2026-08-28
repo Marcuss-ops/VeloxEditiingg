@@ -55,6 +55,7 @@ func (s *SampledResources) ToWireMap() map[string]interface{} {
 	addI32("effective_cpu_cores", s.EffectiveCpuCores)
 	addI64("memory_used_bytes", s.MemoryUsedBytes)
 	addI64("memory_available_bytes", s.MemoryAvailableBytes)
+	addI64("memory_total_bytes", s.MemoryTotalBytes)
 	addI64("process_rss_bytes", s.ProcessRSSBytes)
 	addI64("process_rss_peak_bytes", s.ProcessRSSPeakBytes)
 	addI64("swap_used_bytes", s.SwapUsedBytes)
@@ -108,6 +109,7 @@ func (s *SampledResources) ToProto() *pb.WorkerResourceCounters {
 		EffectiveCpuCores:         s.EffectiveCpuCores,
 		MemoryUsedBytes:           s.MemoryUsedBytes,
 		MemoryAvailableBytes:      s.MemoryAvailableBytes,
+		MemoryTotalBytes:          s.MemoryTotalBytes,
 		ProcessRssBytes:           s.ProcessRSSBytes,
 		ProcessRssPeakBytes:       s.ProcessRSSPeakBytes,
 		SwapUsedBytes:             s.SwapUsedBytes,

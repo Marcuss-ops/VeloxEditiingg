@@ -115,7 +115,9 @@ func (s *SQLiteStore) queryResourceSamples(ctx context.Context, workerID string,
 		SELECT
 			COALESCE(MAX(cpu_percent), 0),
 			COALESCE(MAX(cpu_iowait_percent), 0),
-			COALESCE(MAX(rss_bytes * 100.0 / NULLIF(memory_used_bytes + rss_bytes, 0)), 0),
+			COALESCE(MAX(CASE WHEN memory_total_bytes > 0
+				THEN memory_used_bytes * 100.0 / memory_total_bytes
+				ELSE rss_bytes * 100.0 / NULLIF(memory_used_bytes + rss_bytes, 0) END), 0),
 			COALESCE(MIN(memory_available_bytes), 0),
 			COALESCE(MIN(disk_free_bytes), 0),
 			COALESCE(MAX(scratch_peak_bytes), 0),

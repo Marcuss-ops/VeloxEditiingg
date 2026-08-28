@@ -1032,6 +1032,7 @@ message WorkerResourceCounters {
   // Memory.
   int64 memory_used_bytes = 4;
   int64 memory_available_bytes = 5;
+  int64 memory_total_bytes = 40;       // host/cgroup memory ceiling
   int64 process_rss_bytes = 6;
   int64 process_rss_peak_bytes = 7;
   int64 swap_used_bytes = 8;

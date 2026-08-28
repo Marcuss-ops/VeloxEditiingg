@@ -6056,6 +6056,7 @@ type WorkerResourceCounters struct {
 	// Memory.
 	MemoryUsedBytes      int64 `protobuf:"varint,4,opt,name=memory_used_bytes,json=memoryUsedBytes,proto3" json:"memory_used_bytes,omitempty"`
 	MemoryAvailableBytes int64 `protobuf:"varint,5,opt,name=memory_available_bytes,json=memoryAvailableBytes,proto3" json:"memory_available_bytes,omitempty"`
+	MemoryTotalBytes     int64 `protobuf:"varint,40,opt,name=memory_total_bytes,json=memoryTotalBytes,proto3" json:"memory_total_bytes,omitempty"` // host/cgroup memory ceiling
 	ProcessRssBytes      int64 `protobuf:"varint,6,opt,name=process_rss_bytes,json=processRssBytes,proto3" json:"process_rss_bytes,omitempty"`
 	ProcessRssPeakBytes  int64 `protobuf:"varint,7,opt,name=process_rss_peak_bytes,json=processRssPeakBytes,proto3" json:"process_rss_peak_bytes,omitempty"`
 	SwapUsedBytes        int64 `protobuf:"varint,8,opt,name=swap_used_bytes,json=swapUsedBytes,proto3" json:"swap_used_bytes,omitempty"`
@@ -6167,6 +6168,13 @@ func (x *WorkerResourceCounters) GetMemoryUsedBytes() int64 {
 func (x *WorkerResourceCounters) GetMemoryAvailableBytes() int64 {
 	if x != nil {
 		return x.MemoryAvailableBytes
+	}
+	return 0
+}
+
+func (x *WorkerResourceCounters) GetMemoryTotalBytes() int64 {
+	if x != nil {
+		return x.MemoryTotalBytes
 	}
 	return 0
 }
@@ -7041,13 +7049,14 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\x12trailer_to_open_ms\x18Y \x01(\x03R\x0ftrailerToOpenMs\x12#\n" +
 	"\x0emux_to_open_us\x18Z \x01(\x03R\vmuxToOpenUs\x12\x1f\n" +
 	"\vscene_count\x18[ \x01(\x05R\n" +
-	"sceneCount\"\x9e\x0e\n" +
+	"sceneCount\"\xcc\x0e\n" +
 	"\x16WorkerResourceCounters\x122\n" +
 	"\x15cpu_utilization_ratio\x18\x01 \x01(\x01R\x13cpuUtilizationRatio\x12(\n" +
 	"\x10cpu_iowait_ratio\x18\x02 \x01(\x01R\x0ecpuIowaitRatio\x12&\n" +
 	"\x0fcpu_steal_ratio\x18\x03 \x01(\x01R\rcpuStealRatio\x12*\n" +
 	"\x11memory_used_bytes\x18\x04 \x01(\x03R\x0fmemoryUsedBytes\x124\n" +
-	"\x16memory_available_bytes\x18\x05 \x01(\x03R\x14memoryAvailableBytes\x12*\n" +
+	"\x16memory_available_bytes\x18\x05 \x01(\x03R\x14memoryAvailableBytes\x12,\n" +
+	"\x12memory_total_bytes\x18( \x01(\x03R\x10memoryTotalBytes\x12*\n" +
 	"\x11process_rss_bytes\x18\x06 \x01(\x03R\x0fprocessRssBytes\x123\n" +
 	"\x16process_rss_peak_bytes\x18\a \x01(\x03R\x13processRssPeakBytes\x12&\n" +
 	"\x0fswap_used_bytes\x18\b \x01(\x03R\rswapUsedBytes\x125\n" +

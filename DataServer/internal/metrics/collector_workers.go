@@ -53,6 +53,7 @@ type ResourceSnapshot struct {
 	ProcessRSSPeakBytes   int64
 	MemoryUsedBytes       int64
 	MemoryAvailableBytes  int64
+	MemoryTotalBytes      int64
 	PageCacheBytes        int64
 	DiskFreeBytes         int64
 	TempBytesWritten      int64
