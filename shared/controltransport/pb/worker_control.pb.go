@@ -2712,7 +2712,9 @@ type PrefetchLifecycleEvent struct {
 	// ISO-8601 timestamp of when this event occurred on the worker.
 	OccurredAt *timestamppb.Timestamp `protobuf:"bytes,13,opt,name=occurred_at,json=occurredAt,proto3" json:"occurred_at,omitempty"`
 	// Task revision fence for reservation-scoped PREPARED evidence.
-	TaskRevision  int32 `protobuf:"varint,14,opt,name=task_revision,json=taskRevision,proto3" json:"task_revision,omitempty"`
+	TaskRevision int32 `protobuf:"varint,14,opt,name=task_revision,json=taskRevision,proto3" json:"task_revision,omitempty"`
+	// Stable failure detail for prejob_prepare_failed events.
+	ErrorReason   string `protobuf:"bytes,15,opt,name=error_reason,json=errorReason,proto3" json:"error_reason,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2843,6 +2845,13 @@ func (x *PrefetchLifecycleEvent) GetTaskRevision() int32 {
 		return x.TaskRevision
 	}
 	return 0
+}
+
+func (x *PrefetchLifecycleEvent) GetErrorReason() string {
+	if x != nil {
+		return x.ErrorReason
+	}
+	return ""
 }
 
 // ---------------------------------------------------------
@@ -6720,7 +6729,7 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\ferror_detail\x18\x18 \x01(\tR\verrorDetail\x12;\n" +
 	"\bjob_refs\x18\x19 \x03(\v2 .velox.control.AssetJobReferenceR\ajobRefs\x12/\n" +
 	"\x13checkpoint_sequence\x18\x1a \x01(\x03R\x12checkpointSequence\x12/\n" +
-	"\x13transfer_generation\x18\x1b \x01(\x03R\x12transferGeneration\"\xec\x03\n" +
+	"\x13transfer_generation\x18\x1b \x01(\x03R\x12transferGeneration\"\x8f\x04\n" +
 	"\x16PrefetchLifecycleEvent\x12\x1d\n" +
 	"\n" +
 	"event_type\x18\x01 \x01(\tR\teventType\x12\x15\n" +
@@ -6739,7 +6748,8 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"local_path\x18\f \x01(\tR\tlocalPath\x12;\n" +
 	"\voccurred_at\x18\r \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"occurredAt\x12#\n" +
-	"\rtask_revision\x18\x0e \x01(\x05R\ftaskRevision\"\xaa\n" +
+	"\rtask_revision\x18\x0e \x01(\x05R\ftaskRevision\x12!\n" +
+	"\ferror_reason\x18\x0f \x01(\tR\verrorReason\"\xaa\n" +
 	"\n" +
 	"\x16MasterToWorkerEnvelope\x12\x1d\n" +
 	"\n" +

@@ -216,11 +216,10 @@ type Scheduler struct {
 	protects        map[string]string
 	pendingProtects map[string]struct{}
 	protectExpiries map[string]time.Time
-	// executionReservations tracks the execution-phase pins installed by
-	// HandoffToExecution. Key: assetKey, Value: execution reservation ID
-	// ("execution:<attemptID>:<assetKey>"). These survive past future pin
-	// release and are cleaned up by ReleaseExecutionReservations.
-	executionReservations map[string]string
+	// executionReservations tracks execution-phase pins by asset and owning
+	// job. Multiple concurrent jobs may share one cached asset; cleanup must
+	// release only the caller's reservation, never another job's pin.
+	executionReservations map[string]map[string]string
 	bytes                 int64
 	state                 diskPressureState
 	queue                 workQueue
@@ -275,7 +274,7 @@ func NewScheduler(cfg Config) *Scheduler {
 		cfg.MetadataResolver = defaultMetadataResolver
 	}
 	workerCtx, workerCancel := context.WithCancel(context.Background())
-	s := &Scheduler{cfg: cfg, ram: cfg.RAM, jobs: make(map[string]*jobRuntime), protects: make(map[string]string), pendingProtects: make(map[string]struct{}), protectExpiries: make(map[string]time.Time), executionReservations: make(map[string]string), hints: make(map[string]futureasset.ProtectedAsset), prefetched: make(map[string]int64), useful: make(map[string]bool), assetJobs: make(map[string]map[string]struct{}), wake: make(chan struct{}, 1), workerCtx: workerCtx, workerCancel: workerCancel, readyAtByJob: make(map[string]map[string]readyRecord), prepared: make(map[string]PreparedJob)}
+	s := &Scheduler{cfg: cfg, ram: cfg.RAM, jobs: make(map[string]*jobRuntime), protects: make(map[string]string), pendingProtects: make(map[string]struct{}), protectExpiries: make(map[string]time.Time), executionReservations: make(map[string]map[string]string), hints: make(map[string]futureasset.ProtectedAsset), prefetched: make(map[string]int64), useful: make(map[string]bool), assetJobs: make(map[string]map[string]struct{}), wake: make(chan struct{}, 1), workerCtx: workerCtx, workerCancel: workerCancel, readyAtByJob: make(map[string]map[string]readyRecord), prepared: make(map[string]PreparedJob)}
 	heap.Init(&s.queue)
 	for i := 0; i < cfg.MaxConcurrent; i++ {
 		go s.runWorker()
@@ -318,13 +317,15 @@ func (s *Scheduler) ReleaseAllExecutionReservations() {
 	s.mu.Lock()
 	store := s.protect
 	execs := s.executionReservations
-	s.executionReservations = make(map[string]string)
+	s.executionReservations = make(map[string]map[string]string)
 	s.mu.Unlock()
 	if store == nil {
 		return
 	}
-	for assetKey, execID := range execs {
-		_ = store.ReleaseReservation(context.Background(), assetref.AssetKey(assetKey), execID)
+	for assetKey, reservations := range execs {
+		for _, execID := range reservations {
+			_ = store.ReleaseReservation(context.Background(), assetref.AssetKey(assetKey), execID)
+		}
 	}
 }
 
@@ -466,7 +467,10 @@ func (s *Scheduler) handoffToExecutionLocked(job *jobRuntime, prepared PreparedJ
 	// future reservations for assets that were successfully pinned.
 	s.mu.Lock()
 	for assetKey, execID := range executionReservationIDs {
-		s.executionReservations[assetKey] = execID
+		if s.executionReservations[assetKey] == nil {
+			s.executionReservations[assetKey] = make(map[string]string)
+		}
+		s.executionReservations[assetKey][job.job.JobID] = execID
 	}
 	for _, assetKey := range assetKeys {
 		execID, ok := executionReservationIDs[assetKey]
@@ -499,8 +503,16 @@ func (s *Scheduler) ReleaseExecutionReservations(jobID string) {
 	}
 	s.mu.Lock()
 	store := s.protect
-	execs := s.executionReservations
-	s.executionReservations = make(map[string]string)
+	execs := make(map[string]string)
+	for assetKey, reservations := range s.executionReservations {
+		if execID, ok := reservations[jobID]; ok {
+			execs[assetKey] = execID
+			delete(reservations, jobID)
+			if len(reservations) == 0 {
+				delete(s.executionReservations, assetKey)
+			}
+		}
+	}
 	s.mu.Unlock()
 	if store == nil {
 		return

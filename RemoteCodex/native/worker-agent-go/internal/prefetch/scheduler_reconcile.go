@@ -183,13 +183,18 @@ func (s *Scheduler) Cancel(jobID string) bool {
 	delete(s.prepared, jobID)
 	// Release execution reservations for this job's assets.
 	for _, asset := range runtime.job.Assets {
-		if execID, exists := s.executionReservations[asset.AssetKey]; exists {
-			delete(s.executionReservations, asset.AssetKey)
-			s.mu.Unlock()
-			if s.protect != nil {
-				_ = s.protect.ReleaseReservation(context.Background(), assetref.AssetKey(asset.AssetKey), execID)
+		if reservations, exists := s.executionReservations[asset.AssetKey]; exists {
+			if execID, owns := reservations[runtime.job.JobID]; owns {
+				delete(reservations, runtime.job.JobID)
+				if len(reservations) == 0 {
+					delete(s.executionReservations, asset.AssetKey)
+				}
+				s.mu.Unlock()
+				if s.protect != nil {
+					_ = s.protect.ReleaseReservation(context.Background(), assetref.AssetKey(asset.AssetKey), execID)
+				}
+				s.mu.Lock()
 			}
-			s.mu.Lock()
 		}
 	}
 	s.detachJobLocked(runtime.job)

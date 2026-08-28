@@ -83,10 +83,10 @@ type AssetPreparationSummary struct {
 	RuntimeDownloads int // bytes downloaded during this attempt (count)
 
 	// Byte-level attribution: derived from the single cacheResolutionSink.
-	CacheHitBytes    int64 // total bytes served from verified local cache
-	CacheMissBytes   int64 // total bytes downloaded from remote
-	PrefetchHitBytes int64 // bytes served from prefetch (subset of CacheHitBytes)
-	WarmCacheBytes   int64 // bytes served from warm cache (CacheHitBytes - PrefetchHitBytes)
+	CacheHitBytes        int64 // total bytes served from verified local cache
+	CacheMissBytes       int64 // total bytes downloaded from remote
+	PrefetchHitBytes     int64 // bytes served from prefetch (subset of CacheHitBytes)
+	WarmCacheBytes       int64 // bytes served from warm cache (CacheHitBytes - PrefetchHitBytes)
 	RuntimeDownloadBytes int64 // bytes downloaded at runtime (same as CacheMissBytes)
 	RequiredAssetBytes   int64 // total SizeBytes across all resolutions
 	LatestPreparedAtMs   int64 // epoch ms of the most recent prefetch preparation
@@ -328,6 +328,24 @@ func (s cacheResolutionSink) RecordResolution(ctx context.Context, resolution do
 	} else if !resolution.CacheHit && resolution.Origin == "" {
 		resolution.Origin = downloader.OriginRuntimeDownload
 	}
+	// A miss for an asset that is still covered by a certified PREPARED job is
+	// an explicit zero-network invariant violation. Keep this event on the
+	// canonical resolution path so it cannot be hidden by a lower-level
+	// transferer or duplicated by report builders.
+	if !resolution.CacheHit {
+		if job, asset, ok := s.preparedResolutionMatch(resolution); ok {
+			if rec := telemetry.RecorderFromContext(ctx); rec != nil {
+				h := rec.Begin(telemetry.EventSpec{Origin: telemetry.OriginWorker, Scope: telemetry.ScopeTask, Component: "worker.prejob", Action: "prejob_runtime_download_violation"})
+				h.SetMetadata("job_id", job.JobID)
+				h.SetMetadata("task_id", job.TaskID)
+				h.SetMetadata("asset_id", resolution.AssetID)
+				h.SetMetadata("asset_key", asset.AssetKey)
+				h.SetMetadata("outcome", string(resolution.Outcome))
+				h.Abort("PREJOB_RUNTIME_DOWNLOAD", "certified PREPARED asset was not available locally")
+			}
+			telemetry.GetPrometheusMetrics().RecordPrefetchCorrupted("runtime_download_violation")
+		}
+	}
 	// Invalidate corrupt prepared assets: when a cache miss is classified as
 	// MISS_INVALID or MISS_HASH_MISMATCH and there's a matching PreparedJob
 	// entry, the prefetch's preparation evidence is stale. Remove it so
@@ -368,6 +386,27 @@ func (s cacheResolutionSink) RecordResolution(ctx context.Context, resolution do
 		}
 		h.Complete()
 	}
+}
+
+// preparedResolutionMatch finds a certified PREPARED job whose asset identity
+// matches a runtime miss. It intentionally uses the same full identity proof
+// as prefetch-origin classification, but does not require CacheHit: the miss
+// is precisely the violation being reported.
+func (s cacheResolutionSink) preparedResolutionMatch(resolution downloader.CacheResolution) (prefetch.PreparedJob, prefetch.PreparedAssetMetadata, bool) {
+	if s.preparedJobs == nil {
+		return prefetch.PreparedJob{}, prefetch.PreparedAssetMetadata{}, false
+	}
+	for _, job := range s.preparedJobs() {
+		if job.State != prefetch.PreparationStatePrepared {
+			continue
+		}
+		for _, asset := range job.Assets {
+			if resolutionPrefetchMatch(resolution, job, asset) {
+				return job, asset, true
+			}
+		}
+	}
+	return prefetch.PreparedJob{}, prefetch.PreparedAssetMetadata{}, false
 }
 
 // invalidateCorruptPreparedAsset checks if a failed resolution corresponds

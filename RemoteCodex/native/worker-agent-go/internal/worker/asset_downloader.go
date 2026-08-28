@@ -45,6 +45,8 @@ func (w *Worker) downloadVeloxAssetWithMetadata(ctx context.Context, assetID, ex
 	}
 	resolution, err := w.assetCacheResolver().Resolve(ctx, downloader.DownloadRequest{
 		JobID:     jobID,
+		TaskID:    taskID,
+		WorkerID:  w.config.WorkerID,
 		AssetKey:  assetref.AssetKey(assetID),
 		AssetID:   assetID,
 		Role:      downloader.RoleFromString(role),
@@ -139,8 +141,8 @@ func (w *Worker) assetCacheResolver() *downloader.CacheResolver {
 						ms := job.PreparedAt.UnixMilli()
 						if ms > latestMs {
 							latestMs = ms
+						}
 					}
-				}
 				}
 				return latestMs
 			},

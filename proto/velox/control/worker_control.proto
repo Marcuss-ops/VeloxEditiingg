@@ -493,6 +493,8 @@ message PrefetchLifecycleEvent {
   google.protobuf.Timestamp occurred_at = 13;
   // Task revision fence for reservation-scoped PREPARED evidence.
   int32 task_revision = 14;
+  // Stable failure detail for prejob_prepare_failed events.
+  string error_reason = 15;
 }
 
 // ---------------------------------------------------------

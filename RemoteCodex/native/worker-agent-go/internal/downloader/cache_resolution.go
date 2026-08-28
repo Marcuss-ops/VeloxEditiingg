@@ -17,6 +17,7 @@ package downloader
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"velox-shared/assetref"
@@ -166,14 +167,23 @@ type L1Cache interface {
 // cache telemetry exactly once per completed resolution. This is the single
 // point where cache lookups are counted.
 type CacheResolver struct {
-	manager AssetDownloadManager
-	sink    ResolutionSink
-	l1      L1Cache
+	manager    AssetDownloadManager
+	sink       ResolutionSink
+	l1         L1Cache
+	negativeMu sync.Mutex
+	negative   map[string]negativeCacheEntry
+}
+
+const negativeCacheTTL = 30 * time.Second
+
+type negativeCacheEntry struct {
+	err     error
+	expires time.Time
 }
 
 // NewCacheResolver wraps a manager with the optional telemetry sink.
 func NewCacheResolver(manager AssetDownloadManager, sink ResolutionSink) *CacheResolver {
-	return &CacheResolver{manager: manager, sink: sink}
+	return &CacheResolver{manager: manager, sink: sink, negative: make(map[string]negativeCacheEntry)}
 }
 
 func (r *CacheResolver) SetL1Cache(l1 L1Cache) {
@@ -197,6 +207,20 @@ func (r *CacheResolver) Resolve(ctx context.Context, req DownloadRequest) (Cache
 	if r == nil || r.manager == nil {
 		return CacheResolution{}, ErrEmptyKey
 	}
+	key := string(req.AssetKey)
+	if key == "" {
+		key = req.AssetID
+	}
+	if err := r.negativeError(key); err != nil {
+		if r.sink != nil {
+			r.sink.RecordResolution(ctx, CacheResolution{
+				AssetID: req.AssetID, Outcome: CacheOutcomeMissNotFound,
+				Source: CacheSourceMaster, JobID: req.JobID, TaskID: req.TaskID,
+				WorkerID: req.WorkerID, AssetKey: req.AssetKey, ResolvedAt: time.Now().UTC(),
+			})
+		}
+		return CacheResolution{}, err
+	}
 	if r.l1 != nil {
 		if asset, ok, err := r.l1.Find(ctx, req); err != nil {
 			return CacheResolution{}, err
@@ -210,6 +234,9 @@ func (r *CacheResolver) Resolve(ctx context.Context, req DownloadRequest) (Cache
 	}
 	asset, err := r.manager.Resolve(ctx, req)
 	if err != nil {
+		if errors.Is(err, ErrPermanent) {
+			r.rememberNegative(key, err)
+		}
 		if r.sink != nil && !errors.Is(err, ErrEmptyKey) &&
 			!errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 			r.sink.RecordResolution(ctx, CacheResolution{
@@ -230,6 +257,35 @@ func (r *CacheResolver) Resolve(ctx context.Context, req DownloadRequest) (Cache
 		r.sink.RecordResolution(ctx, resolution)
 	}
 	return resolution, nil
+}
+
+func (r *CacheResolver) negativeError(key string) error {
+	if r == nil || key == "" {
+		return nil
+	}
+	r.negativeMu.Lock()
+	defer r.negativeMu.Unlock()
+	entry, ok := r.negative[key]
+	if !ok {
+		return nil
+	}
+	if time.Now().After(entry.expires) {
+		delete(r.negative, key)
+		return nil
+	}
+	return entry.err
+}
+
+func (r *CacheResolver) rememberNegative(key string, err error) {
+	if r == nil || key == "" || err == nil {
+		return
+	}
+	r.negativeMu.Lock()
+	defer r.negativeMu.Unlock()
+	if r.negative == nil {
+		r.negative = make(map[string]negativeCacheEntry)
+	}
+	r.negative[key] = negativeCacheEntry{err: err, expires: time.Now().Add(negativeCacheTTL)}
 }
 
 // resolutionFromDownloadedAsset projects the manager result onto the

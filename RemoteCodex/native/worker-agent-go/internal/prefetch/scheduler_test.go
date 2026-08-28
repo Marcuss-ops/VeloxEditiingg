@@ -1120,10 +1120,11 @@ func TestScheduler_AggressiveEvictionAfterPrepared(t *testing.T) {
 
 	// Verify execution reservation is tracked.
 	s.mu.Lock()
-	execResID, hasExec := s.executionReservations["asset-evict"]
+	jobExecs, hasExec := s.executionReservations["asset-evict"]
+	execResID, hasJobExec := jobExecs["job-evict"]
 	futureResID, hasFuture := s.protects["asset-evict"]
 	s.mu.Unlock()
-	if !hasExec {
+	if !hasExec || !hasJobExec {
 		t.Fatal("execution reservation not tracked after handoff")
 	}
 	if !strings.HasPrefix(execResID, "execution:") {
@@ -1145,7 +1146,8 @@ func TestScheduler_AggressiveEvictionAfterPrepared(t *testing.T) {
 
 	// Verify execution reservation still exists after expired plan.
 	s.mu.Lock()
-	_, stillHasExec := s.executionReservations["asset-evict"]
+	stillJobExecs, stillHasExec := s.executionReservations["asset-evict"]
+	stillHasExec = stillHasExec && stillJobExecs["job-evict"] != ""
 	s.mu.Unlock()
 	if !stillHasExec {
 		t.Fatal("execution reservation lost after expired plan")
@@ -1157,7 +1159,11 @@ func TestScheduler_AggressiveEvictionAfterPrepared(t *testing.T) {
 		t.Fatalf("execution release count = %d, want 1", got)
 	}
 	s.mu.Lock()
-	_, afterRelease := s.executionReservations["asset-evict"]
+	afterJobExecs, hasAssetAfterRelease := s.executionReservations["asset-evict"]
+	_, afterRelease := afterJobExecs["job-evict"]
+	if !hasAssetAfterRelease {
+		afterRelease = false
+	}
 	s.mu.Unlock()
 	if afterRelease {
 		t.Fatal("execution reservation not cleaned up after release")
@@ -1184,6 +1190,31 @@ func (s *trackingProtectionStore) ReleaseReservation(_ context.Context, key asse
 		s.onRelease(key, id)
 	}
 	return nil
+}
+
+func TestScheduler_ReleaseExecutionReservationsIsScopedToJob(t *testing.T) {
+	var released []string
+	store := &trackingProtectionStore{onRelease: func(_ assetref.AssetKey, id string) {
+		released = append(released, id)
+	}}
+	s := &Scheduler{
+		protect: store,
+		executionReservations: map[string]map[string]string{
+			"shared": {"job-a": "execution:a:shared", "job-b": "execution:b:shared"},
+		},
+	}
+
+	s.ReleaseExecutionReservations("job-a")
+	if len(released) != 1 || released[0] != "execution:a:shared" {
+		t.Fatalf("released reservations = %v, want only job-a", released)
+	}
+	s.mu.Lock()
+	remaining := s.executionReservations["shared"]["job-b"]
+	_, removed := s.executionReservations["shared"]["job-a"]
+	s.mu.Unlock()
+	if remaining != "execution:b:shared" || removed {
+		t.Fatalf("execution projection after job-a cleanup = %+v, want job-b only", s.executionReservations["shared"])
+	}
 }
 
 // TestScheduler_HandoffToExecutionOnlyForPreparedJobs verifies that

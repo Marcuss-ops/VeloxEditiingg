@@ -26,6 +26,10 @@ type prejobPreparationResult struct {
 	Distance         int       `json:"distance"`
 	PreparedAt       time.Time `json:"prepared_at"`
 	FinalizedAt      time.Time `json:"finalized_at"`
+	FinalizeMS       int64     `json:"finalize_ms"`
+	OutputReadyMS    int64     `json:"output_ready_ms"`
+	WarmMS           int64     `json:"warm_ms"`
+	EvidenceMS       int64     `json:"evidence_ms"`
 	AssetsPrepared   int       `json:"assets_prepared"`
 	PreparedBytes    int64     `json:"prepared_bytes"`
 	WarmAdvisedBytes int64     `json:"warm_advised_bytes"`
@@ -47,6 +51,7 @@ type prejobPreparationResult struct {
 // prepared now so BeginProgressive can start immediately when the real plan
 // arrives.
 func (w *Worker) prepareLocalPreJob(ctx context.Context, job prefetch.PreparedJob) (prejobPreparationResult, error) {
+	startedAt := time.Now()
 	if w == nil || w.config == nil {
 		return prejobPreparationResult{}, fmt.Errorf("prejob: worker config unavailable")
 	}
@@ -69,6 +74,7 @@ func (w *Worker) prepareLocalPreJob(ctx context.Context, job prefetch.PreparedJo
 			return prejobPreparationResult{}, fmt.Errorf("prejob: mkdir %s: %w", dir, err)
 		}
 	}
+	outputReadyAt := time.Now()
 
 	diskFree, err := prejobDiskFreeBytes(outputDir)
 	if err != nil {
@@ -84,23 +90,31 @@ func (w *Worker) prepareLocalPreJob(ctx context.Context, job prefetch.PreparedJo
 	// N+2/N+3 assets stay verified and pinned but do not consume page cache
 	// speculatively. Only the next job receives a bounded warmup.
 	var warmed int64
+	var warmMS int64
 	if job.Distance <= 1 {
+		warmStarted := time.Now()
 		warmed, err = prefetch.WarmPreparedJob(ctx, job, prejobWarmBudgetBytes)
 		if err != nil {
 			return prejobPreparationResult{}, fmt.Errorf("prejob: warm prepared assets: %w", err)
 		}
+		warmMS = time.Since(warmStarted).Milliseconds()
 	}
 
+	evidenceStarted := time.Now()
 	evidenceRoot := filepath.Join(root, "prejobs", "evidence")
 	evidencePath, err := prefetch.PersistPreparedEvidence(evidenceRoot, job)
 	if err != nil {
 		return prejobPreparationResult{}, fmt.Errorf("prejob: persist prepared evidence: %w", err)
 	}
+	evidenceMS := time.Since(evidenceStarted).Milliseconds()
 	cert := job.Certificate()
+	finalizedAt := time.Now().UTC()
 	result := prejobPreparationResult{
 		JobID: job.JobID, TaskID: job.TaskID, TaskRevision: job.TaskRevision,
 		ReservationID: job.ReservationID, PlanID: job.PlanID, PlanVersion: job.PlanVersion,
-		Distance: job.Distance, PreparedAt: job.PreparedAt, FinalizedAt: time.Now().UTC(),
+		Distance: job.Distance, PreparedAt: job.PreparedAt, FinalizedAt: finalizedAt,
+		FinalizeMS:    finalizedAt.Sub(startedAt.UTC()).Milliseconds(),
+		OutputReadyMS: outputReadyAt.Sub(startedAt).Milliseconds(), WarmMS: warmMS, EvidenceMS: evidenceMS,
 		AssetsPrepared: cert.AssetsPrepared, PreparedBytes: cert.PreparedBytes,
 		WarmAdvisedBytes: warmed, DiskFreeBytes: diskFree, EvidencePath: evidencePath,
 		OutputDir: outputDir, PublisherDir: publisherDir,

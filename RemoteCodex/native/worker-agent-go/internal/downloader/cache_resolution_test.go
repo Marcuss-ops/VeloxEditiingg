@@ -7,8 +7,10 @@ package downloader
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"velox-shared/assetref"
 )
@@ -163,6 +165,43 @@ func TestCacheResolver_NonCancellationFailureIsAClassifiedMiss(t *testing.T) {
 	// resolution that obtained no verified local file is a miss.
 	if sink.last.Outcome != CacheOutcomeMissNotFound || sink.last.CacheHit || sink.last.Downloaded {
 		t.Fatalf("failure resolution = %+v, want MISS_NOT_FOUND miss with no download", sink.last)
+	}
+}
+
+func TestCacheResolver_NegativeCachesPermanentFailure(t *testing.T) {
+	sink := &recordingSink{}
+	var calls atomic.Int32
+	permanent := fmt.Errorf("%w: remote 404", ErrPermanent)
+	manager := fakeManager{resolve: func(context.Context, DownloadRequest) (DownloadedAsset, error) {
+		calls.Add(1)
+		return DownloadedAsset{}, permanent
+	}}
+	resolver := NewCacheResolver(manager, sink)
+	req := DownloadRequest{AssetID: "missing", AssetKey: "missing"}
+
+	if _, err := resolver.Resolve(context.Background(), req); !errors.Is(err, ErrPermanent) {
+		t.Fatalf("first Resolve err = %v, want ErrPermanent", err)
+	}
+	if _, err := resolver.Resolve(context.Background(), req); !errors.Is(err, ErrPermanent) {
+		t.Fatalf("cached Resolve err = %v, want ErrPermanent", err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("manager calls = %d, want 1 while negative entry is fresh", got)
+	}
+	if got := atomic.LoadInt32(&sink.calls); got != 2 {
+		t.Fatalf("sink calls = %d, want one accounting event per lookup", got)
+	}
+
+	// Exercise expiry without a wall-clock sleep: an expired entry must be
+	// removed and the canonical manager must be consulted again.
+	resolver.negativeMu.Lock()
+	resolver.negative["missing"] = negativeCacheEntry{err: permanent, expires: time.Now().Add(-time.Second)}
+	resolver.negativeMu.Unlock()
+	if _, err := resolver.Resolve(context.Background(), req); !errors.Is(err, ErrPermanent) {
+		t.Fatalf("expired Resolve err = %v, want ErrPermanent", err)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("manager calls after expiry = %d, want 2", got)
 	}
 }
 

@@ -2,6 +2,8 @@ package worker
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -51,6 +53,19 @@ func (w *Worker) sendPrefetchLifecycleEvent(ctx context.Context, eventType, jobI
 // reference via closure; call it after the worker is fully initialized.
 func (w *Worker) prefetchPreparedHook() func(prefetch.PreparedJob) {
 	return func(job prefetch.PreparedJob) {
+		prejob, err := w.prepareLocalPreJob(context.Background(), job)
+		if err != nil {
+			w.prefetchScheduler.InvalidatePreparedJob(job.JobID)
+			w.logger.Error("[PREFETCH] pre-job finalization failed job=%s task=%s: %v", job.JobID, job.TaskID, err)
+			w.sendPrefetchLifecycleEvent(context.Background(), "prejob_prepare_failed", job.JobID, job.TaskID, futureasset.Plan{PlanID: job.PlanID, Version: job.PlanVersion}, func(e *pb.PrefetchLifecycleEvent) {
+				e.TaskRevision = int32(job.TaskRevision)
+				e.ReservationId = job.ReservationID
+				e.Distance = int32(job.Distance)
+				e.ErrorReason = prejobErrorReason(err)
+			})
+			return
+		}
+		w.logger.Info("[PREFETCH] pre-job finalized job=%s task=%s evidence=%s output=%s publisher=%s warmed_bytes=%d disk_free_bytes=%d finalize_ms=%d output_ready_ms=%d warm_ms=%d evidence_ms=%d", job.JobID, job.TaskID, prejob.EvidencePath, prejob.OutputDir, prejob.PublisherDir, prejob.WarmAdvisedBytes, prejob.DiskFreeBytes, prejob.FinalizeMS, prejob.OutputReadyMS, prejob.WarmMS, prejob.EvidenceMS)
 		w.logger.Info("[PREFETCH] state=PREPARED job=%s task=%s reservation=%s plan=%s@v%d distance=%d assets=%d prepared_at=%s", job.JobID, job.TaskID, job.ReservationID, job.PlanID, job.PlanVersion, job.Distance, len(job.Assets), job.PreparedAt.UTC().Format(time.RFC3339Nano))
 		// Send lifecycle events for each prepared asset.
 		for _, asset := range job.Assets {
@@ -67,4 +82,15 @@ func (w *Worker) prefetchPreparedHook() func(prefetch.PreparedJob) {
 			})
 		}
 	}
+}
+
+func prejobErrorReason(err error) string {
+	if err == nil {
+		return ""
+	}
+	reason := strings.TrimSpace(fmt.Sprint(err))
+	if len(reason) > 512 {
+		return reason[:512]
+	}
+	return reason
 }

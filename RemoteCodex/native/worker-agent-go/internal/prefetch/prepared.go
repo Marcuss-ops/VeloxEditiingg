@@ -140,9 +140,9 @@ func defaultMetadataResolver(ctx context.Context, asset futureasset.AssetManifes
 		return PreparedAssetMetadata{}, fmt.Errorf("prefetch: asset %q has no local path", asset.AssetKey)
 	}
 	verifiedSHA := string(resolved.SHA256)
-	if strings.TrimSpace(verifiedSHA) == "" {
-		verifiedSHA = asset.SHA256
-	}
+	// asset.SHA256 is only a client-declared expectation. It is not a trust
+	// anchor unless the canonical CacheResolver returned it in resolved.SHA256
+	// after cache/download verification.
 	verifiedSize := resolved.SizeBytes
 	if verifiedSize <= 0 {
 		verifiedSize = asset.SizeBytes
@@ -279,4 +279,17 @@ func (s *Scheduler) InvalidatePreparedAsset(jobID, assetKey string) {
 		job.PreparedAt = time.Time{}
 		s.prepared[jobID] = job
 	}
+}
+
+// InvalidatePreparedJob removes the aggregate PREPARED evidence after a
+// downstream finalization barrier fails. The scheduler may have reached its
+// asset-complete transition, but that is not sufficient for claim until the
+// worker-local pre-job journal/output/evidence setup also succeeds.
+func (s *Scheduler) InvalidatePreparedJob(jobID string) {
+	if s == nil || jobID == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.prepared, jobID)
 }
