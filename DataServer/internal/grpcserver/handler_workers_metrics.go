@@ -133,6 +133,7 @@ func decodeWorkerResources(workerID string, r *pb.WorkerResourceCounters) *velme
 		ProcessRSSBytes:     r.GetProcessRssBytes(),
 		ProcessRSSPeakBytes: r.GetProcessRssPeakBytes(),
 		MemoryUsedBytes:     r.GetMemoryUsedBytes(),
+		MemoryAvailableBytes: r.GetMemoryAvailableBytes(),
 		PageCacheBytes:      r.GetPageCacheBytes(),
 		DiskFreeBytes:       r.GetDiskFreeBytes(),
 		TempBytesWritten:    r.GetTempBytesWritten(),

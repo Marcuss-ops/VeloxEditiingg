@@ -17,6 +17,43 @@ type Filter struct {
 	Limit    int      // 0 = all
 }
 
+// ReservationState is the lifecycle of a prefetch reservation. The state
+// machine governs when a placement claim is permitted under StrictPrefetchClaim:
+//
+//	RESERVED → PLANNING → PREPARING → PREPARED → (consumed by claim)
+//	                        ↓
+//	                      EXPIRED
+//
+// Only PREPARED permits ClaimTaskForWorkerAtomic. Any other state blocks
+// the claim and the task remains READY for the next placement tick.
+type ReservationState string
+
+const (
+	// ReservationReserved is the initial state after TryReserveFutureTask.
+	ReservationReserved ReservationState = "RESERVED"
+	// ReservationPlanning means the FutureAssetPlan has been built and sent
+	// to the worker but no prefetch_prepared evidence has arrived yet.
+	ReservationPlanning ReservationState = "PLANNING"
+	// ReservationPreparing means at least one asset has been reported
+	// prepared but not all required assets are complete.
+	ReservationPreparing ReservationState = "PREPARING"
+	// ReservationPrepared means every declared asset has verified evidence.
+	// This is the ONLY state that permits a strict claim.
+	ReservationPrepared ReservationState = "PREPARED"
+	// ReservationExpired means the TTL elapsed without reaching PREPARED.
+	ReservationExpired ReservationState = "EXPIRED"
+)
+
+// IsTerminal reports whether the reservation has reached a final state.
+func (s ReservationState) IsTerminal() bool {
+	return s == ReservationExpired
+}
+
+// CanClaim reports whether the reservation state permits execution claim.
+func (s ReservationState) CanClaim() bool {
+	return s == ReservationPrepared
+}
+
 // FutureReservation is placement metadata for the prefetch window. It must
 // never be represented as a Task status.
 type FutureReservation struct {
@@ -26,6 +63,7 @@ type FutureReservation struct {
 	ReservationID string
 	TaskRevision  int
 	Distance      int
+	State         ReservationState
 	ExpiresAt     time.Time
 }
 

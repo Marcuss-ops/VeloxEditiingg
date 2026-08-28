@@ -86,6 +86,10 @@ type AssetPreparationSummary struct {
 	CacheHitBytes    int64 // total bytes served from verified local cache
 	CacheMissBytes   int64 // total bytes downloaded from remote
 	PrefetchHitBytes int64 // bytes served from prefetch (subset of CacheHitBytes)
+	WarmCacheBytes   int64 // bytes served from warm cache (CacheHitBytes - PrefetchHitBytes)
+	RuntimeDownloadBytes int64 // bytes downloaded at runtime (same as CacheMissBytes)
+	RequiredAssetBytes   int64 // total SizeBytes across all resolutions
+	LatestPreparedAtMs   int64 // epoch ms of the most recent prefetch preparation
 
 	CacheLookupMS      int64
 	RemoteWaitMS       int64
@@ -141,6 +145,10 @@ func (t *assetOperationTracker) recordResolution(resolution downloader.CacheReso
 	case downloader.OriginRuntimeDownload:
 		t.cache.OriginDownloadCount++
 		t.cache.CacheMissBytes += resolution.DownloadBytes
+	}
+	// Track required asset bytes (all resolutions contribute).
+	if resolution.SizeBytes > 0 {
+		t.prep.RequiredAssetBytes += resolution.SizeBytes
 	}
 	t.prep.AssetsTotal++
 	if assetID := strings.TrimSpace(resolution.AssetID); assetID != "" {
@@ -227,6 +235,10 @@ func (t *assetOperationTracker) prepSnapshot() AssetPreparationSummary {
 	out.CacheHitBytes = t.cache.CacheHitBytes
 	out.CacheMissBytes = t.cache.CacheMissBytes
 	out.PrefetchHitBytes = t.cache.PrefetchHitBytes
+	out.WarmCacheBytes = t.cache.CacheHitBytes - t.cache.PrefetchHitBytes
+	out.RuntimeDownloadBytes = t.cache.CacheMissBytes
+	out.RequiredAssetBytes = t.prep.RequiredAssetBytes
+	out.LatestPreparedAtMs = t.prep.LatestPreparedAtMs
 	return out
 }
 
@@ -237,6 +249,20 @@ func (t *assetOperationTracker) snapshot() []AssetOperationRecord {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return append([]AssetOperationRecord(nil), t.records...)
+}
+
+// setLatestPreparedAtMs updates the latest prefetch preparation timestamp
+// when a higher value is observed. The max ensures we track the most
+// recently prepared asset across all resolutions in this attempt.
+func (t *assetOperationTracker) setLatestPreparedAtMs(ms int64) {
+	if t == nil || ms <= 0 {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if ms > t.prep.LatestPreparedAtMs {
+		t.prep.LatestPreparedAtMs = ms
+	}
 }
 
 func recordAssetOperation(ctx context.Context, record AssetOperationRecord) {
@@ -271,6 +297,12 @@ type cacheResolutionSink struct {
 	// This prevents stale PreparedJob metadata from misclassifying future
 	// resolutions. The callback must be non-blocking.
 	invalidatePreparedAsset func(jobID, assetKey string)
+
+	// latestPreparedAtMs returns the epoch-millisecond timestamp of the
+	// most recently prepared asset across all PreparedJobs. The callback
+	// is invoked once per OriginPrefetch resolution to track the latest
+	// preparation time for prefetch_ready_lead_ms derivation.
+	latestPreparedAtMs func() int64
 }
 
 func (s cacheResolutionSink) RecordResolution(ctx context.Context, resolution downloader.CacheResolution) {
@@ -293,6 +325,13 @@ func (s cacheResolutionSink) RecordResolution(ctx context.Context, resolution do
 	// Attempt view: zero-based per-attempt counters.
 	if tracker := assetOperationTrackerFromContext(ctx); tracker != nil {
 		tracker.recordResolution(resolution)
+		// Track the latest prefetch preparation time for
+		// prefetch_ready_lead_ms derivation.
+		if resolution.Origin == downloader.OriginPrefetch && s.latestPreparedAtMs != nil {
+			if ms := s.latestPreparedAtMs(); ms > 0 {
+				tracker.setLatestPreparedAtMs(ms)
+			}
+		}
 	}
 	// Worker view is projected from the canonical AttemptSnapshot at
 	// attempt Stop. This producer records only the typed cache fact and
@@ -350,7 +389,7 @@ func (s cacheResolutionSink) invalidateCorruptPreparedAsset(resolution downloade
 // SizeBytes to match (corrupt entries may have zero/incorrect sizes) and does
 // NOT require the SHA to match the file (that's exactly why it's corrupt).
 // It matches on SHA256 (the EXPECTED hash from the request) and optionally
-// scopes to the job/task/asset identity when available.
+// scopes to the job/task/worker/asset identity when available.
 func resolutionCorruptionMatch(resolution downloader.CacheResolution, job prefetch.PreparedJob, asset prefetch.PreparedAssetMetadata) bool {
 	if resolution.SHA256 == "" || asset.SHA256 == "" {
 		return false
@@ -364,6 +403,9 @@ func resolutionCorruptionMatch(resolution downloader.CacheResolution, job prefet
 		return false
 	}
 	if resolution.TaskID != "" && job.TaskID != "" && resolution.TaskID != job.TaskID {
+		return false
+	}
+	if resolution.WorkerID != "" && job.WorkerID != "" && resolution.WorkerID != job.WorkerID {
 		return false
 	}
 	if resolution.AssetKey != "" && asset.AssetKey != "" && string(resolution.AssetKey) != asset.AssetKey {
@@ -450,6 +492,13 @@ func resolutionPrefetchMatch(resolution downloader.CacheResolution, job prefetch
 		return false
 	}
 	if resolution.AssetKey != "" && asset.AssetKey != "" && string(resolution.AssetKey) != asset.AssetKey {
+		return false
+	}
+	// Worker-scoped match: when the resolution carries a WorkerID, require
+	// it to match the PreparedJob's WorkerID. This prevents a prepared
+	// asset from Worker X from classifying a resolution on Worker Y as
+	// OriginPrefetch (e.g. after a worker swap or cache migration).
+	if resolution.WorkerID != "" && job.WorkerID != "" && resolution.WorkerID != job.WorkerID {
 		return false
 	}
 	return true
@@ -612,6 +661,10 @@ func attachAssetOperations(report *taskrunner.TaskExecutionReport, tracker *asse
 			PrefetchHits:            int64(prep.PrefetchHits),
 			WarmCacheHits:           int64(prep.WarmCacheHits),
 			RuntimeDownloads:        int64(prep.RuntimeDownloads),
+			WarmCacheBytes:          prep.WarmCacheBytes,
+			RuntimeDownloadBytes:    prep.RuntimeDownloadBytes,
+			RequiredAssetBytes:      prep.RequiredAssetBytes,
+			LatestPreparedAtMs:      prep.LatestPreparedAtMs,
 		}
 	}
 	legacy["cache.enabled"] = tracker.cacheEnabled || len(records) > 0

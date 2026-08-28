@@ -49,6 +49,7 @@ type PreparedJob struct {
 	JobID         string                           `json:"job_id"`
 	TaskID        string                           `json:"task_id"`
 	TaskRevision  int                              `json:"task_revision"`
+	WorkerID      string                           `json:"worker_id,omitempty"`
 	ReservationID string                           `json:"reservation_id,omitempty"`
 	PlanID        string                           `json:"plan_id,omitempty"`
 	PlanVersion   uint64                           `json:"plan_version,omitempty"`
@@ -56,6 +57,69 @@ type PreparedJob struct {
 	State         string                           `json:"state"`
 	PreparedAt    time.Time                        `json:"prepared_at"`
 	Assets        map[string]PreparedAssetMetadata `json:"assets"`
+}
+
+// PreparedJobCertificate is the immutable lineage fingerprint of a prepared
+// job. It captures every field needed to prove, at claim time, that the
+// preparation was performed by the correct worker for the correct task
+// revision under the correct reservation. The master verifies this
+// certificate before allowing a strict claim; any field mismatch means
+// the preparation is stale or belongs to a different execution lineage.
+type PreparedJobCertificate struct {
+	WorkerID      string    `json:"worker_id"`
+	ReservationID string    `json:"reservation_id"`
+	PlanID        string    `json:"plan_id"`
+	PlanVersion   uint64    `json:"plan_version"`
+	TaskRevision  int       `json:"task_revision"`
+	PreparedAt    time.Time `json:"prepared_at"`
+	AssetsRequired int      `json:"assets_required"`
+	AssetsPrepared int      `json:"assets_prepared"`
+	PreparedBytes  int64    `json:"prepared_bytes"`
+}
+
+// Certificate builds the immutable lineage fingerprint from the PreparedJob.
+// The certificate is safe to send on the wire: it carries no mutable state
+// and no local filesystem paths.
+func (pj PreparedJob) Certificate() PreparedJobCertificate {
+	var preparedBytes int64
+	for _, asset := range pj.Assets {
+		preparedBytes += asset.SizeBytes
+	}
+	return PreparedJobCertificate{
+		WorkerID:       pj.WorkerID,
+		ReservationID:  pj.ReservationID,
+		PlanID:         pj.PlanID,
+		PlanVersion:    pj.PlanVersion,
+		TaskRevision:   pj.TaskRevision,
+		PreparedAt:     pj.PreparedAt,
+		AssetsRequired: len(pj.Assets),
+		AssetsPrepared: len(pj.Assets),
+		PreparedBytes:  preparedBytes,
+	}
+}
+
+// VerifyClaim checks whether a certificate is still valid for a claim at
+// the given worker and task revision. The claim is rejected when:
+//   - the worker identity does not match (wrong worker)
+//   - the task revision has drifted (task was re-enqueued or modified)
+//   - assets are incomplete (prepared < required)
+//   - the certificate is zero-value (no preparation observed)
+//
+// Returns (true, "") on success; (false, reason) on rejection.
+func (c PreparedJobCertificate) VerifyClaim(workerID string, taskRevision int) (bool, string) {
+	if c.WorkerID == "" && c.ReservationID == "" && c.AssetsRequired == 0 {
+		return false, "certificate: no preparation evidence"
+	}
+	if c.AssetsRequired > 0 && c.AssetsPrepared < c.AssetsRequired {
+		return false, fmt.Sprintf("certificate: assets_prepared=%d < assets_required=%d", c.AssetsPrepared, c.AssetsRequired)
+	}
+	if c.WorkerID != "" && workerID != "" && c.WorkerID != workerID {
+		return false, fmt.Sprintf("certificate: worker_id mismatch cert=%s claim=%s", c.WorkerID, workerID)
+	}
+	if c.TaskRevision != 0 && taskRevision != 0 && c.TaskRevision != taskRevision {
+		return false, fmt.Sprintf("certificate: task_revision mismatch cert=%d claim=%d", c.TaskRevision, taskRevision)
+	}
+	return true, ""
 }
 
 const PreparationStatePrepared = "PREPARED"
@@ -128,6 +192,7 @@ func (s *Scheduler) preparedForJob(job futureasset.Job, metadata PreparedAssetMe
 			JobID:         job.JobID,
 			TaskID:        job.TaskID,
 			TaskRevision:  job.TaskRevision,
+			WorkerID:      s.cfg.WorkerID,
 			ReservationID: job.ReservationID,
 			PlanID:        s.currentPlanID,
 			PlanVersion:   s.currentPlanVersion,

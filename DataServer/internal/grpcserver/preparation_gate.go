@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"strings"
 
+	"velox-server/internal/logging"
 	"velox-server/internal/placement"
 	"velox-server/internal/taskgraph"
+	"velox-shared/futureasset"
 )
 
 // preparedAssetEvidence is the worker-signed (by the authenticated stream)
@@ -18,6 +20,86 @@ type preparedAssetEvidence struct {
 	AssetID      string
 	SHA256       string
 	SizeBytes    int64
+}
+
+// preparedJobCertificate is the master-side aggregate of all prepared asset
+// evidence for a reservation. It captures the full lineage needed to verify
+// that the preparation was performed by the correct worker for the correct
+// task revision under the correct reservation.
+type preparedJobCertificate struct {
+	WorkerID       string
+	ReservationID  string
+	TaskRevision   int
+	AssetsRequired int
+	AssetsPrepared int
+	PreparedBytes  int64
+}
+
+// buildCertificate aggregates per-asset evidence into a job-level
+// certificate. The certificate is built from the authenticated evidence
+// stored in the handler's prepared map.
+func (h *Handler) buildCertificate(reservationID string, assets []futureasset.AssetManifest) preparedJobCertificate {
+	if h == nil {
+		return preparedJobCertificate{}
+	}
+	h.preparedMu.RLock()
+	prepared := h.prepared[reservationID]
+	h.preparedMu.RUnlock()
+
+	cert := preparedJobCertificate{
+		ReservationID:  reservationID,
+		AssetsRequired: len(assets),
+	}
+	if len(prepared) == 0 {
+		return cert
+	}
+
+	// Use the first evidence entry to extract worker/revision identity.
+	// All evidence in a reservation must share the same worker and revision
+	// (enforced by markPreparedAsset and reservationPrepared).
+	var firstEvidence *preparedAssetEvidence
+	for _, e := range prepared {
+		cp := e
+		firstEvidence = &cp
+		break
+	}
+	if firstEvidence != nil {
+		cert.WorkerID = firstEvidence.WorkerID
+		cert.TaskRevision = firstEvidence.TaskRevision
+	}
+
+	for _, asset := range assets {
+		var key string
+		if asset.AssetID != "" {
+			key = asset.AssetID
+		} else {
+			key = asset.AssetKey
+		}
+		if evidence, ok := prepared[key]; ok {
+			cert.AssetsPrepared++
+			cert.PreparedBytes += evidence.SizeBytes
+		}
+	}
+	return cert
+}
+
+// verifyCertificate checks whether a certificate matches the expected worker
+// and task revision for a claim. Returns (true, "") on success;
+// (false, reason) on rejection.
+func verifyCertificate(cert preparedJobCertificate, workerID string, taskRevision int) (bool, string) {
+	if cert.AssetsRequired == 0 {
+		return true, ""
+	}
+	if cert.AssetsPrepared < cert.AssetsRequired {
+		return false, fmt.Sprintf("certificate: assets_prepared=%d < assets_required=%d", cert.AssetsPrepared, cert.AssetsRequired)
+	}
+	if cert.WorkerID != "" && workerID != "" && cert.WorkerID != workerID {
+		return false, fmt.Sprintf("certificate: worker_id mismatch cert=%s claim=%s", cert.WorkerID, workerID)
+	}
+	if cert.TaskRevision != 0 && taskRevision != 0 && cert.TaskRevision != taskRevision {
+		return false, fmt.Sprintf("certificate: task_revision mismatch cert=%d claim=%d", cert.TaskRevision, taskRevision)
+	}
+	return true, ""
 }
 
 // markPreparedAsset records only authenticated, reservation-scoped evidence.
@@ -52,6 +134,9 @@ func (h *Handler) reservationPrepared(ctx context.Context, workerID string, rese
 	if len(assets) == 0 {
 		return true, nil
 	}
+
+	// Per-asset verification: every declared asset must have matching
+	// evidence from the authenticated worker.
 	h.preparedMu.RLock()
 	prepared := h.prepared[reservation.ReservationID]
 	h.preparedMu.RUnlock()
@@ -80,6 +165,15 @@ func (h *Handler) reservationPrepared(ctx context.Context, workerID string, rese
 			return false, nil
 		}
 	}
+
+	// Structured certificate verification: aggregate the per-asset evidence
+	// into a job-level certificate and verify the full lineage.
+	cert := h.buildCertificate(reservation.ReservationID, assets)
+	if ok, reason := verifyCertificate(cert, workerID, reservation.TaskRevision); !ok {
+		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCPrefetchFailed, "[PREFETCH] certificate rejected reservation=%s worker=%s reason=%s", reservation.ReservationID, workerID, reason)
+		return false, nil
+	}
+
 	return true, nil
 }
 
@@ -91,19 +185,57 @@ func (h *Handler) ensurePreparedBeforeClaim(ctx context.Context, workerID string
 	if !ok {
 		return true, nil
 	}
-	reservations, err := store.ListFutureReservations(ctx, workerID)
+	findReservation := func() (taskgraph.FutureReservationWithPayload, bool, error) {
+		reservations, err := store.ListFutureReservations(ctx, workerID)
+		if err != nil {
+			return taskgraph.FutureReservationWithPayload{}, false, err
+		}
+		for _, reservation := range reservations {
+			if reservation.TaskID == candidate.TaskID && reservation.WorkerID == workerID {
+				return reservation, true, nil
+			}
+		}
+		return taskgraph.FutureReservationWithPayload{}, false, nil
+	}
+
+	reservation, found, err := findReservation()
 	if err != nil {
 		return false, err
 	}
-	for _, reservation := range reservations {
-		if reservation.TaskID != candidate.TaskID || reservation.WorkerID != workerID {
-			continue
+	if !found {
+		// Tasks with no declared assets do not need a preparation reservation.
+		// For asset-bearing tasks, however, a missing reservation is itself a
+		// preparation miss: strict mode must establish the reservation and keep
+		// the task READY until the worker reports matching evidence.
+		if len(candidate.RequiredAssetKeys) == 0 {
+			return true, nil
 		}
-		return h.reservationPrepared(ctx, workerID, reservation)
+		// This call uses the same reservation authority and worker plan path
+		// as N+1 prefetch. It runs while the task is still READY; no Attempt
+		// can be created until a subsequent tick observes PREPARED evidence.
+		h.refreshFutureAssetPlan(ctx, workerID, candidate.JobID)
+		reservation, found, err = findReservation()
+		if err != nil {
+			return false, err
+		}
+		if !found {
+			logGRPCf(ctx, logging.LevelDebug, logging.CodeGRPCPlacementFailed, "[PLACEMENT] preparation gate BLOCKED worker=%s task=%s reason=reservation_pending", workerID, candidate.TaskID)
+			return false, nil
+		}
 	}
-	// A task without a preparation reservation is not governed by the
-	// strict gate. The placement path creates/refreshes the reservation
-	// before retrying the claim; returning true here preserves the normal
-	// claim path for tasks that do not require assets.
-	return true, nil
+
+	// State machine gate: only PREPARED reservations permit a claim.
+	if reservation.State != "" && !reservation.State.CanClaim() {
+		logGRPCf(ctx, logging.LevelDebug, logging.CodeGRPCPlacementFailed, "[PLACEMENT] preparation gate BLOCKED state=%s worker=%s task=%s reservation=%s", reservation.State, workerID, candidate.TaskID, reservation.ReservationID)
+		return false, nil
+	}
+
+	prepared, err := h.reservationPrepared(ctx, workerID, reservation)
+	if err != nil {
+		return false, err
+	}
+	if !prepared {
+		logGRPCf(ctx, logging.LevelDebug, logging.CodeGRPCPlacementFailed, "[PLACEMENT] preparation gate BLOCKED worker=%s task=%s reservation=%s", workerID, candidate.TaskID, reservation.ReservationID)
+	}
+	return prepared, nil
 }

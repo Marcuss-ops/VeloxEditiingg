@@ -52,6 +52,7 @@ type ResourceSnapshot struct {
 	ProcessRSSBytes       int64
 	ProcessRSSPeakBytes   int64
 	MemoryUsedBytes       int64
+	MemoryAvailableBytes  int64
 	PageCacheBytes        int64
 	DiskFreeBytes         int64
 	TempBytesWritten      int64
@@ -93,6 +94,7 @@ func (c *Collector) RecordWorker(workerID string, rs *ResourceSnapshot) {
 	c.workerRSSBytes.GaugeSet(wl, rs.ProcessRSSBytes)
 	c.workerRSSPeak.GaugeSet(wl, rs.ProcessRSSPeakBytes)
 	c.workerMemoryUsed.GaugeSet(wl, rs.MemoryUsedBytes)
+	c.workerMemoryAvail.GaugeSet(wl, rs.MemoryAvailableBytes)
 	c.workerPageCache.GaugeSet(wl, rs.PageCacheBytes)
 	c.workerDiskFree.GaugeSet(wl, rs.DiskFreeBytes)
 	c.workerTempBytes.GaugeSet(wl, rs.TempBytesWritten)
@@ -144,6 +146,8 @@ func (c *Collector) initWorkerFamilies() {
 		"Worker peak RSS", []string{"worker_id"})
 	c.workerMemoryUsed = NewGaugeFamily("velox_worker_memory_used_bytes",
 		"Worker system memory used", []string{"worker_id"})
+	c.workerMemoryAvail = NewGaugeFamily("velox_worker_memory_available_bytes",
+		"Worker system memory available", []string{"worker_id"})
 	c.workerPageCache = NewGaugeFamily("velox_worker_page_cache_bytes",
 		"Worker kernel page cache (Buffers+Cached)", []string{"worker_id"})
 	c.workerDiskFree = NewGaugeFamily("velox_worker_disk_free_bytes",
@@ -186,7 +190,7 @@ func (c *Collector) workerFamilies() []*Family {
 	return []*Family{
 		c.workerCPUUtil, c.workerIOWait, c.workerSteal,
 		c.workerCPUUser, c.workerCPUSystem, c.workerEffectiveCpu,
-		c.workerRSSBytes, c.workerRSSPeak, c.workerMemoryUsed, c.workerPageCache,
+		c.workerRSSBytes, c.workerRSSPeak, c.workerMemoryUsed, c.workerMemoryAvail, c.workerPageCache,
 		c.workerDiskFree, c.workerTempBytes,
 		c.workerDiskReadMbps, c.workerDiskWriteMbps, c.workerDiskIoWaitMs,
 		c.workerActiveTasks, c.workerTaskSlots,

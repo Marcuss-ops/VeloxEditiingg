@@ -63,6 +63,8 @@ MASTER_SELECT_FAMILIES = {
     "velox_worker_cpu_utilization_ratio": "1e-6",  # micro-units -> ratio
     "velox_worker_cpu_iowait_ratio": "1e-3",       # milli-units -> ratio
     "velox_worker_process_rss_bytes": None,        # raw bytes
+    "velox_worker_memory_used_bytes": None,        # raw bytes
+    "velox_worker_memory_available_bytes": None,   # raw bytes
 }
 
 

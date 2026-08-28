@@ -44,11 +44,15 @@ class MetricsProjectionTest(unittest.TestCase):
             'velox_worker_cpu_utilization_ratio{worker_id="velox-worker-local"} 965952\n'
             'velox_worker_cpu_iowait_ratio{worker_id="velox-worker-local"} 252\n'
             'velox_worker_process_rss_bytes{worker_id="velox-worker-local"} 6982656\n'
+            'velox_worker_memory_used_bytes{worker_id="velox-worker-local"} 8589934592\n'
+            'velox_worker_memory_available_bytes{worker_id="velox-worker-local"} 7516192768\n'
         )
         out = proj.project("", master, "velox-worker-local")
         self.assertIn("velox_worker_cpu_utilization_ratio 0.965952", out)
         self.assertIn("velox_worker_cpu_iowait_ratio 0.252", out)
         self.assertIn("velox_worker_process_rss_bytes 6982656", out)
+        self.assertIn("velox_worker_memory_used_bytes 8589934592", out)
+        self.assertIn("velox_worker_memory_available_bytes 7516192768", out)
         self.assertNotIn('worker_id="host_1"', out)
 
     def test_ratio_values_already_in_range_pass_through(self) -> None:

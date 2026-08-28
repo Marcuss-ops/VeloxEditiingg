@@ -129,6 +129,21 @@ func (w *Worker) assetCacheResolver() *downloader.CacheResolver {
 					w.prefetchScheduler.InvalidatePreparedAsset(jobID, assetKey)
 				}
 			},
+			latestPreparedAtMs: func() int64 {
+				if w.prefetchScheduler == nil {
+					return 0
+				}
+				var latestMs int64
+				for _, job := range w.prefetchScheduler.PreparedJobs() {
+					if !job.PreparedAt.IsZero() {
+						ms := job.PreparedAt.UnixMilli()
+						if ms > latestMs {
+							latestMs = ms
+					}
+				}
+				}
+				return latestMs
+			},
 		})
 	}
 	return w.cacheResolver

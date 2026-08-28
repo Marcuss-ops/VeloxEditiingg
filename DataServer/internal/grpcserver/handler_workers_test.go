@@ -199,6 +199,10 @@ func TestHandleHeartbeat_F2_DecodesTypedResources(t *testing.T) {
 			got.DiskFreeBytes, got.TempBytesWritten,
 			int64(53687091200), int64(4194304))
 	}
+	if got.MemoryUsedBytes != 1677721600 || got.MemoryAvailableBytes != 4294967296 {
+		t.Errorf("ResourceSnapshot memory: used=%d avail=%d; want 1677721600 / 4294967296",
+			got.MemoryUsedBytes, got.MemoryAvailableBytes)
+	}
 	if got.ActiveTasks != 1 || got.TaskSlots != 4 {
 		t.Errorf("ResourceSnapshot active/slots = %d / %d; want 1 / 4", got.ActiveTasks, got.TaskSlots)
 	}

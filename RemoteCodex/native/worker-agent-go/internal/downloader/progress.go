@@ -136,6 +136,7 @@ const DefaultAssetConcurrency = 4
 type DownloadRequest struct {
 	JobID    string
 	TaskID   string
+	WorkerID string
 	AssetKey assetref.AssetKey
 	// AssetID is retained only as a legacy transport/read-model field; it
 	// must not be used for transfer identity or cache ownership.

@@ -282,6 +282,15 @@ message AssetPreparationBreakdown {
   int64 prefetch_hits = 18;
   int64 warm_cache_hits = 19;
   int64 runtime_downloads = 20;
+  // Byte-level origin attribution.
+  int64 warm_cache_bytes = 21;
+  int64 runtime_download_bytes = 22;
+  // Total SizeBytes across all required asset resolutions.
+  int64 required_asset_bytes = 23;
+  // Epoch ms of the most recent prefetch preparation.
+  int64 latest_prepared_at_ms = 24;
+  // Epoch ms when the attempt started.
+  int64 attempt_started_at_ms = 25;
 }
 
 message AttemptWaterfallStage {

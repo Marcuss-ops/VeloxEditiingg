@@ -63,6 +63,10 @@ velox_worker_cpu_iowait_ratio 0.25
                 cpu_peak_ratio=0.7,
                 rss_avg_bytes=100,
                 rss_peak_bytes=120,
+                host_memory_used_avg_bytes=1_000_000_000,
+                host_memory_used_peak_bytes=1_200_000_000,
+                host_memory_available_bytes=6_800_000_000,
+                host_memory_peak_ratio=0.15,
                 disk_wait_avg_ratio=0.1,
                 cache_hits=5,
                 cache_misses=1,
@@ -76,7 +80,7 @@ velox_worker_cpu_iowait_ratio 0.25
             )
 
         results = [result(1, 10), result(2, 10.4), result(3, 13)]
-        bench.choose_limit(results, min_gain_pct=5, max_p95_ms=None, max_error_rate=0, max_iowait=0.35)
+        bench.choose_limit(results, min_gain_pct=5, max_p95_ms=None, max_error_rate=0, max_iowait=0.35, max_peak_memory_ratio=0.85)
         self.assertTrue(results[0].efficient)  # cap 1 is the baseline
         self.assertIn("correct_video_gain<5%", results[1].decision)
         self.assertTrue(results[2].efficient)
@@ -104,6 +108,135 @@ velox_worker_cpu_iowait_ratio 0.25
             "job-1", "worker-1", "https://master.example", "/api/v1/artifacts/job-1", "/tmp/job.json",
         )
         self.assertTrue(correct, detail)
+
+    def test_peak_memory_ratio_rejects_high_usage(self) -> None:
+        """A cap with peak host memory above the threshold must be rejected."""
+        def result(cap: int, peak_ratio: float | None) -> bench.CapResult:
+            return bench.CapResult(
+                max_active_jobs=cap,
+                status="PASS",
+                wall_time_ms=1000,
+                throughput_jobs_per_hour=20,
+                correct_videos=6,
+                correct_videos_per_hour=20,
+                succeeded=6,
+                failed=0,
+                error_rate=0,
+                latency_mean_ms=100,
+                latency_p95_ms=120,
+                cpu_avg_ratio=0.5,
+                cpu_peak_ratio=0.7,
+                rss_avg_bytes=100,
+                rss_peak_bytes=120,
+                host_memory_used_avg_bytes=1_000_000_000,
+                host_memory_used_peak_bytes=1_000_000_000,
+                host_memory_available_bytes=2_000_000_000,
+                host_memory_peak_ratio=peak_ratio,
+                disk_wait_avg_ratio=0.1,
+                cache_hits=5,
+                cache_misses=1,
+                cache_hit_ratio=5 / 6,
+                downloads=1,
+                duplicate_downloads=0,
+                duplicate_download_bytes=0,
+                errors=0,
+                missing_metrics=[],
+                jobs=[],
+            )
+
+        # cap 1: 75% memory — eligible;  cap 2: 90% memory — rejected
+        results = [result(1, 0.75), result(2, 0.90)]
+        bench.choose_limit(results, min_gain_pct=5, max_p95_ms=None, max_error_rate=0, max_iowait=0.35, max_peak_memory_ratio=0.85)
+        self.assertTrue(results[0].efficient)
+        self.assertFalse(results[1].efficient)
+        self.assertIn("peak_memory>0.85", results[1].decision)
+
+    def test_peak_memory_ratio_unknown_does_not_block(self) -> None:
+        """When memory ratio is None (metrics unavailable), the gate must not reject."""
+        def result(cap: int, correct_per_hour: float) -> bench.CapResult:
+            return bench.CapResult(
+                max_active_jobs=cap,
+                status="PASS",
+                wall_time_ms=1000,
+                throughput_jobs_per_hour=correct_per_hour,
+                correct_videos=6,
+                correct_videos_per_hour=correct_per_hour,
+                succeeded=6,
+                failed=0,
+                error_rate=0,
+                latency_mean_ms=100,
+                latency_p95_ms=120,
+                cpu_avg_ratio=0.5,
+                cpu_peak_ratio=0.7,
+                rss_avg_bytes=100,
+                rss_peak_bytes=120,
+                host_memory_used_avg_bytes=None,
+                host_memory_used_peak_bytes=None,
+                host_memory_available_bytes=None,
+                host_memory_peak_ratio=None,
+                disk_wait_avg_ratio=0.1,
+                cache_hits=5,
+                cache_misses=1,
+                cache_hit_ratio=5 / 6,
+                downloads=1,
+                duplicate_downloads=0,
+                duplicate_download_bytes=0,
+                errors=0,
+                missing_metrics=[],
+                jobs=[],
+            )
+
+        results = [result(1, 10), result(2, 12)]
+        bench.choose_limit(results, min_gain_pct=5, max_p95_ms=None, max_error_rate=0, max_iowait=0.35, max_peak_memory_ratio=0.85)
+        self.assertTrue(results[0].efficient)
+        self.assertTrue(results[1].efficient)  # not blocked by unknown memory
+
+    def test_peak_memory_ratio_passes_below_threshold(self) -> None:
+        """A cap well below the memory threshold must pass."""
+        def result(cap: int, correct_per_hour: float) -> bench.CapResult:
+            return bench.CapResult(
+                max_active_jobs=cap,
+                status="PASS",
+                wall_time_ms=1000,
+                throughput_jobs_per_hour=correct_per_hour,
+                correct_videos=6,
+                correct_videos_per_hour=correct_per_hour,
+                succeeded=6,
+                failed=0,
+                error_rate=0,
+                latency_mean_ms=100,
+                latency_p95_ms=120,
+                cpu_avg_ratio=0.5,
+                cpu_peak_ratio=0.7,
+                rss_avg_bytes=100,
+                rss_peak_bytes=120,
+                host_memory_used_avg_bytes=2_000_000_000,
+                host_memory_used_peak_bytes=2_000_000_000,
+                host_memory_available_bytes=14_000_000_000,
+                host_memory_peak_ratio=0.125,
+                disk_wait_avg_ratio=0.1,
+                cache_hits=5,
+                cache_misses=1,
+                cache_hit_ratio=5 / 6,
+                downloads=1,
+                duplicate_downloads=0,
+                duplicate_download_bytes=0,
+                errors=0,
+                missing_metrics=[],
+                jobs=[],
+            )
+
+        results = [result(1, 10), result(2, 12), result(3, 14)]
+        bench.choose_limit(results, min_gain_pct=5, max_p95_ms=None, max_error_rate=0, max_iowait=0.35, max_peak_memory_ratio=0.85)
+        for r in results:
+            self.assertTrue(r.efficient, f"cap {r.max_active_jobs} should be efficient: {r.decision}")
+
+    def test_compute_peak_memory_ratio(self) -> None:
+        """_peak_memory_ratio returns used/(used+available) or None."""
+        self.assertAlmostEqual(bench._peak_memory_ratio(3_000_000_000, 5_000_000_000), 0.375)
+        self.assertIsNone(bench._peak_memory_ratio(None, 5_000_000_000))
+        self.assertIsNone(bench._peak_memory_ratio(3_000_000_000, None))
+        self.assertIsNone(bench._peak_memory_ratio(0, 0))
 
 
 if __name__ == "__main__":

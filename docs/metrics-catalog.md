@@ -169,6 +169,7 @@ by `1e3`. Cost gauges are micro-EUR and are divided by `1e6`.
 | 33 | `velox_worker_process_rss_bytes`               | G    | Worker process RSS                               | bytes     | `worker_id` | Heartbeat `resources.rss`         | 90d  | N  |
 | 34 | `velox_worker_process_rss_peak_bytes`          | G    | Worker peak RSS (since start)                    | bytes     | `worker_id` | Heartbeat `resources.rss_peak`    | 90d  | N  |
 | 35 | `velox_worker_memory_used_bytes`               | G    | Worker system memory used                        | bytes     | `worker_id` | Heartbeat `resources.memory_used` | 90d  | N  |
+| 35a| `velox_worker_memory_available_bytes`          | G    | Worker system memory available                   | bytes     | `worker_id` | Heartbeat `resources.memory_avail`| 90d  | N  |
 | 36 | `velox_worker_disk_free_bytes`                 | G    | Worker disk free bytes                           | bytes     | `worker_id` | Heartbeat `resources.disk_free`   | 90d  | N  |
 | 37 | `velox_worker_temp_bytes`                      | G    | Worker temp bytes snapshot                       | bytes     | `worker_id` | Heartbeat `resources.temp_bytes`  | 90d  | N  |
 | 38 | `velox_worker_active_tasks`                    | G    | Active tasks on this worker                      | count     | `worker_id` | Heartbeat `resources.active_tasks` | 90d | N |

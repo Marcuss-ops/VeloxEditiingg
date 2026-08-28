@@ -101,6 +101,7 @@ type Collector struct {
 	workerRSSBytes         *Family // velox_worker_process_rss_bytes
 	workerRSSPeak          *Family // velox_worker_process_rss_peak_bytes
 	workerMemoryUsed       *Family // velox_worker_memory_used_bytes
+	workerMemoryAvail      *Family // velox_worker_memory_available_bytes
 	workerPageCache        *Family // velox_worker_page_cache_bytes
 	workerDiskFree         *Family // velox_worker_disk_free_bytes
 	workerTempBytes        *Family // velox_worker_temp_bytes

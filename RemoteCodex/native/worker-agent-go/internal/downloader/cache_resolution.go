@@ -127,12 +127,14 @@ type CacheResolution struct {
 	// exclusively by the prefetch path).
 	Origin ResolutionOrigin
 
-	// JobID, TaskID and AssetKey carry the request identity so that
-	// classifyOrigin can scope the PreparedJob lookup to the specific
-	// job/task/asset, preventing cross-job SHA collisions from producing
-	// false OriginPrefetch classifications.
+	// JobID, TaskID, WorkerID and AssetKey carry the request identity so
+	// that classifyOrigin can scope the PreparedJob lookup to the specific
+	// job/task/worker/asset, preventing cross-job SHA collisions and
+	// stale-worker preparations from producing false OriginPrefetch
+	// classifications.
 	JobID    string
 	TaskID   string
+	WorkerID string
 	AssetKey assetref.AssetKey
 
 	// ResolvedAt records the wall-clock time when the asset was resolved
@@ -199,7 +201,7 @@ func (r *CacheResolver) Resolve(ctx context.Context, req DownloadRequest) (Cache
 		if asset, ok, err := r.l1.Find(ctx, req); err != nil {
 			return CacheResolution{}, err
 		} else if ok {
-			resolution := CacheResolution{AssetID: req.AssetID, Outcome: CacheOutcomeHitValid, LocalPath: asset.LocalPath, CacheHit: true, Source: CacheSourceLocalDisk, SHA256: asset.SHA256, SizeBytes: req.SizeBytes, JobID: req.JobID, TaskID: req.TaskID, AssetKey: req.AssetKey, ResolvedAt: time.Now().UTC()}
+			resolution := CacheResolution{AssetID: req.AssetID, Outcome: CacheOutcomeHitValid, LocalPath: asset.LocalPath, CacheHit: true, Source: CacheSourceLocalDisk, SHA256: asset.SHA256, SizeBytes: req.SizeBytes, JobID: req.JobID, TaskID: req.TaskID, WorkerID: req.WorkerID, AssetKey: req.AssetKey, ResolvedAt: time.Now().UTC()}
 			if r.sink != nil {
 				r.sink.RecordResolution(ctx, resolution)
 			}
@@ -216,6 +218,7 @@ func (r *CacheResolver) Resolve(ctx context.Context, req DownloadRequest) (Cache
 				Source:     CacheSourceMaster,
 				JobID:      req.JobID,
 				TaskID:     req.TaskID,
+				WorkerID:   req.WorkerID,
 				AssetKey:   req.AssetKey,
 				ResolvedAt: time.Now().UTC(),
 			})
@@ -244,6 +247,7 @@ func resolutionFromDownloadedAsset(asset DownloadedAsset, req DownloadRequest) C
 		Timing:     asset.Timing,
 		JobID:      req.JobID,
 		TaskID:     req.TaskID,
+		WorkerID:   req.WorkerID,
 		AssetKey:   req.AssetKey,
 		ResolvedAt: asset.ReadyAt,
 	}

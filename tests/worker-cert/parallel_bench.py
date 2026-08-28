@@ -44,6 +44,7 @@ CAPS = (1, 2, 3)
 REQUIRED_METRICS = (
     "cpu_utilization_ratio",
     "rss_bytes",
+    "host_memory_used_bytes",
     "disk_wait_ratio",
     "cache_hits",
     "cache_misses",
@@ -170,6 +171,8 @@ def extract_observations(values: dict[str, float]) -> dict[str, float | None]:
     return {
         "cpu_utilization_ratio": normalize_ratio(metric(values, "velox_worker_cpu_utilization_ratio", "velox_cpu_utilization_ratio")),
         "rss_bytes": metric(values, "velox_worker_process_rss_bytes", "velox_worker_process_rss_peak_bytes", "process_resident_memory_bytes"),
+        "host_memory_used_bytes": metric(values, "velox_worker_memory_used_bytes", "velox_memory_used_bytes"),
+        "host_memory_available_bytes": metric(values, "velox_worker_memory_available_bytes", "velox_memory_available_bytes"),
         "disk_wait_ratio": normalize_ratio(metric(values, "velox_worker_cpu_iowait_ratio", "velox_cpu_iowait_ratio", "velox_disk_wait_ratio")),
         "cache_hits": metric(values, "velox_cache_requests_total{result=\"hit\"}", "velox_asset_cache_hits_total", "velox_asset_cache_hit_total"),
         "cache_misses": metric(values, "velox_cache_requests_total{result=\"miss\"}", "velox_asset_cache_misses_total", "velox_asset_cache_miss_total"),
@@ -194,6 +197,22 @@ def delta(before: float | None, after: float | None) -> float | None:
     if before is None or after is None:
         return None
     return max(0.0, after - before)
+
+
+def _peak_memory_ratio(used_peak: float | None, available_min: float | None) -> float | None:
+    """Compute peak host memory ratio (used / total) from observed peaks.
+
+    The total is reconstructed as used_peak + available_min at the moment
+    of lowest headroom.  When either operand is missing the ratio is
+    unknown and the safety gate cannot fire — the certification will
+    refuse to declare a limit rather than silently ignoring memory.
+    """
+    if used_peak is None or available_min is None:
+        return None
+    total = used_peak + available_min
+    if total <= 0:
+        return None
+    return used_peak / total
 
 
 @dataclass
@@ -225,6 +244,10 @@ class CapResult:
     cpu_peak_ratio: float | None
     rss_avg_bytes: float | None
     rss_peak_bytes: float | None
+    host_memory_used_avg_bytes: float | None
+    host_memory_used_peak_bytes: float | None
+    host_memory_available_bytes: float | None
+    host_memory_peak_ratio: float | None
     disk_wait_avg_ratio: float | None
     cache_hits: float | None
     cache_misses: float | None
@@ -482,6 +505,13 @@ def run_one_cap(args: argparse.Namespace, cap: int, admin_token: str, m2m_token:
         cpu_peak_ratio=aggregate_gauge(samples, "cpu_utilization_ratio", "max"),
         rss_avg_bytes=aggregate_gauge(samples, "rss_bytes", "avg"),
         rss_peak_bytes=aggregate_gauge(samples, "rss_bytes", "max"),
+        host_memory_used_avg_bytes=aggregate_gauge(samples, "host_memory_used_bytes", "avg"),
+        host_memory_used_peak_bytes=aggregate_gauge(samples, "host_memory_used_bytes", "max"),
+        host_memory_available_bytes=aggregate_gauge(samples, "host_memory_available_bytes", "min"),
+        host_memory_peak_ratio=_peak_memory_ratio(
+            aggregate_gauge(samples, "host_memory_used_bytes", "max"),
+            aggregate_gauge(samples, "host_memory_available_bytes", "min"),
+        ),
         disk_wait_avg_ratio=aggregate_gauge(samples, "disk_wait_ratio", "avg"),
         cache_hits=hits,
         cache_misses=misses,
@@ -495,7 +525,7 @@ def run_one_cap(args: argparse.Namespace, cap: int, admin_token: str, m2m_token:
     )
 
 
-def choose_limit(results: list[CapResult], min_gain_pct: float, max_p95_ms: float | None, max_error_rate: float, max_iowait: float) -> None:
+def choose_limit(results: list[CapResult], min_gain_pct: float, max_p95_ms: float | None, max_error_rate: float, max_iowait: float, max_peak_memory_ratio: float) -> None:
     # Cap 1 is the measured baseline. Compare higher caps only with the last
     # eligible result, so an incomplete/intermittently bad cell cannot poison
     # every later comparison. If cap 1 is not valid, no higher cap can become
@@ -514,6 +544,8 @@ def choose_limit(results: list[CapResult], min_gain_pct: float, max_p95_ms: floa
             checks.append("p95_limit")
         if result.disk_wait_avg_ratio is not None and result.disk_wait_avg_ratio > max_iowait:
             checks.append("iowait_limit")
+        if result.host_memory_peak_ratio is not None and result.host_memory_peak_ratio > max_peak_memory_ratio:
+            checks.append(f"peak_memory>{max_peak_memory_ratio}")
         gain = None
         if index > 0 and previous_eligible is None:
             checks.append("baseline_unavailable")
@@ -551,6 +583,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-p95-ms", type=float, default=None)
     parser.add_argument("--max-error-rate", type=float, default=0.0)
     parser.add_argument("--max-iowait-ratio", type=float, default=0.35)
+    parser.add_argument("--max-peak-memory-ratio", type=float, default=0.85,
+                        help="reject caps where peak host memory used/total exceeds this ratio (0-1)")
     parser.add_argument(
         "--correctness-command", default=os.getenv("PARALLEL_BENCH_CORRECTNESS_CMD", ""),
         help="operator-owned verifier command; placeholders: {job_id}, {worker_id}, {master_url}; exit 0 means correct video",
@@ -614,7 +648,7 @@ def main() -> int:
                 print(f"WARNING: failed to restore MaxActiveJobs=1: {exc}", file=sys.stderr)
         delete_m2m(args.master_url, admin_token, client_id)
 
-    choose_limit(results, args.min_throughput_gain_pct, args.max_p95_ms, args.max_error_rate, args.max_iowait_ratio)
+    choose_limit(results, args.min_throughput_gain_pct, args.max_p95_ms, args.max_error_rate, args.max_iowait_ratio, args.max_peak_memory_ratio)
     eligible = [r.max_active_jobs for r in results if r.efficient]
     efficient_limit = max(eligible) if eligible else None
     report = {
@@ -629,6 +663,7 @@ def main() -> int:
         "decision_metric": "correct_videos_per_hour",
         "protocol": {"lease_owner": "master", "singleflight_owner": "worker-cache", "cap_selection": "operator command hook"},
         "efficient_limit": efficient_limit,
+        "max_peak_memory_ratio": args.max_peak_memory_ratio,
         "certified": efficient_limit is not None and all(r.status == "PASS" for r in results),
         "results": [{**asdict(r), "jobs": [asdict(j) for j in r.jobs]} for r in results],
     }

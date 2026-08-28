@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"encoding/json"
+	"math"
 	"strconv"
 )
 
@@ -67,6 +68,28 @@ type AssetPreparationBreakdown struct {
 	PrefetchHits     int64 `json:"prefetch_hits"`
 	WarmCacheHits    int64 `json:"warm_cache_hits"`
 	RuntimeDownloads int64 `json:"runtime_downloads"`
+
+	// Byte-level origin attribution: the complement pairs for the count
+	// counters above. WarmCacheBytes is the subset of CacheHitBytes where
+	// origin == warm_cache; RuntimeDownloadBytes is the subset of
+	// CacheMissBytes where origin == runtime_download.
+	WarmCacheBytes     int64 `json:"warm_cache_bytes"`
+	RuntimeDownloadBytes int64 `json:"runtime_download_bytes"`
+
+	// RequiredAssetBytes is the sum of SizeBytes across all required asset
+	// resolutions. Used as the denominator for prepared_byte_ratio.
+	RequiredAssetBytes int64 `json:"required_asset_bytes"`
+
+	// LatestPreparedAtMs is the monotonic wall-clock millisecond timestamp
+	// (epoch) of the most recently prepared asset in the prefetch scheduler.
+	// Zero when no prefetch was observed. Used as the numerator for
+	// prefetch_ready_lead_ms = attempt_started_at_ms - LatestPreparedAtMs.
+	LatestPreparedAtMs int64 `json:"latest_prepared_at_ms"`
+
+	// AttemptStartedAtMs is the monotonic wall-clock millisecond timestamp
+	// (epoch) when the attempt started. Zero when not set. Used together
+	// with LatestPreparedAtMs to derive prefetch_ready_lead_ms.
+	AttemptStartedAtMs int64 `json:"attempt_started_at_ms"`
 }
 
 // Wire contract: the durable payload is the Master's protojson.Marshal of the
@@ -125,5 +148,45 @@ func (b *AssetPreparationBreakdown) UnmarshalJSON(data []byte) error {
 	b.PrefetchHits = pick("prefetch_hits", "prefetchHits")
 	b.WarmCacheHits = pick("warm_cache_hits", "warmCacheHits")
 	b.RuntimeDownloads = pick("runtime_downloads", "runtimeDownloads")
+	b.WarmCacheBytes = pick("warm_cache_bytes", "warmCacheBytes")
+	b.RuntimeDownloadBytes = pick("runtime_download_bytes", "runtimeDownloadBytes")
+	b.RequiredAssetBytes = pick("required_asset_bytes", "requiredAssetBytes")
+	b.LatestPreparedAtMs = pick("latest_prepared_at_ms", "latestPreparedAtMs")
+	b.AttemptStartedAtMs = pick("attempt_started_at_ms", "attemptStartedAtMs")
 	return nil
+}
+
+// PreparedAssetRatio returns the fraction of required assets that were
+// prefetched before the attempt started. A value of 1.0 means every
+// required asset was materialized by a FutureAssetPlan; 0.0 means none
+// were. Returns NaN when no assets were required (division by zero).
+func (b AssetPreparationBreakdown) PreparedAssetRatio() float64 {
+	if b.AssetsRequired <= 0 {
+		return math.NaN()
+	}
+	return float64(b.PrefetchHits) / float64(b.AssetsRequired)
+}
+
+// PreparedByteRatio returns the fraction of required asset bytes that
+// were prefetched before the attempt started. This corrects for the
+// pathologically misleading case where 25 small assets are prefetched
+// (96% by count) but a 600 MB video arrives at runtime (>99% by bytes).
+// Returns NaN when no asset bytes were required.
+func (b AssetPreparationBreakdown) PreparedByteRatio() float64 {
+	if b.RequiredAssetBytes <= 0 {
+		return math.NaN()
+	}
+	return float64(b.PrefetchHitBytes) / float64(b.RequiredAssetBytes)
+}
+
+// PrefetchReadyLeadMS returns the millisecond gap between when the
+// last required asset was prepared and when the attempt started. A
+// positive value proves the prefetch completed before execution; zero
+// or negative means the attempt started before preparation finished.
+// Returns 0 when either timestamp is unset (missing telemetry).
+func (b AssetPreparationBreakdown) PrefetchReadyLeadMS() int64 {
+	if b.AttemptStartedAtMs <= 0 || b.LatestPreparedAtMs <= 0 {
+		return 0
+	}
+	return b.AttemptStartedAtMs - b.LatestPreparedAtMs
 }

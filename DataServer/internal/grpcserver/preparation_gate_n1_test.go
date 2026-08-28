@@ -31,6 +31,9 @@ func (m *mockFutureReservationStore) TryReserveFutureTask(_ context.Context, r t
 	if m.reserved {
 		return false, nil
 	}
+	if r.State == "" {
+		r.State = taskgraph.ReservationReserved
+	}
 	m.reservation = &taskgraph.FutureReservationWithPayload{FutureReservation: r, Payload: m.payload}
 	m.reserved = true
 	return true, nil
@@ -66,6 +69,16 @@ func (m *mockFutureReservationStore) TransferFutureTask(_ context.Context, _, _ 
 }
 
 var _ taskgraph.FutureReservationStore = (*mockFutureReservationStore)(nil)
+
+// SetState advances the reservation to the given state for testing
+// lifecycle transitions.
+func (m *mockFutureReservationStore) SetState(state taskgraph.ReservationState) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.reservation != nil {
+		m.reservation.State = state
+	}
+}
 
 // ── Minimal asset progress sink ────────────────────────────────────────────
 

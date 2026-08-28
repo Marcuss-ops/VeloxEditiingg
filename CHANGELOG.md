@@ -1,3 +1,11 @@
+## [v1.4.1] - 2026-08-28
+
+### Strict preparation claim fence
+
+- Keep asset-bearing READY tasks out of `ClaimTaskForWorkerAtomic` until the
+  worker has a matching reservation-scoped prepared certificate.
+- Preserve the normal claim path for tasks without required assets.
+
 ## [v1.3.9] - 2026-08-28
 
 ### Strict preparation gate
