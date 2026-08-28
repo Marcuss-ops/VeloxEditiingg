@@ -809,6 +809,294 @@ func TestCertification_CrossTaskSHACollision(t *testing.T) {
 	}
 }
 
+// ── Temporal proof: PreparedAt must precede ResolvedAt ─────────────────────
+// The origin proof requires that the asset was prepared (materialized by
+// FutureAssetPlan) BEFORE the current resolution. When PreparedAt >= ResolvedAt,
+// the classification falls back to OriginWarmCache.
+func TestCertification_TemporalProof_PreparedAtMustPrecedeResolvedAt(t *testing.T) {
+	payload := []byte("temporal-proof-asset")
+	sha := sha256hex(payload)
+
+	now := time.Now().UTC()
+
+	// PreparedJob with PreparedAt 10 seconds ago.
+	preparedJobs := []prefetch.PreparedJob{
+		{
+			JobID:      "job-T",
+			TaskID:     "task-T",
+			State:      prefetch.PreparationStatePrepared,
+			PreparedAt: now.Add(-10 * time.Second),
+			Assets: map[string]prefetch.PreparedAssetMetadata{
+				"asset-T": {
+					AssetKey:   "asset-T",
+					AssetID:    "asset-T",
+					SHA256:     sha,
+					SizeBytes:  int64(len(payload)),
+					PreparedAt: now.Add(-10 * time.Second),
+				},
+			},
+		},
+	}
+
+	sink := cacheResolutionSink{
+		preparedJobs: func() []prefetch.PreparedJob { return preparedJobs },
+	}
+
+	// Case 1: ResolvedAt is AFTER PreparedAt → OriginPrefetch.
+	tracker1 := &assetOperationTracker{cacheEnabled: true}
+	ctx1 := withAssetOperationTracker(context.Background(), tracker1)
+	sink.RecordResolution(ctx1, downloader.CacheResolution{
+		AssetID:    "asset-T",
+		Outcome:    downloader.CacheOutcomeHitValid,
+		CacheHit:   true,
+		SHA256:     assetref.ContentHash(sha),
+		SizeBytes:  int64(len(payload)),
+		Source:     downloader.CacheSourceLocalDisk,
+		JobID:      "job-T",
+		TaskID:     "task-T",
+		AssetKey:   "asset-T",
+		ResolvedAt: now, // after PreparedAt (-10s)
+	})
+	cache1 := tracker1.cacheSnapshot()
+	if cache1.OriginPrefetchCount != 1 {
+		t.Fatalf("ResolvedAt after PreparedAt: OriginPrefetchCount = %d, want 1", cache1.OriginPrefetchCount)
+	}
+
+	// Case 2: ResolvedAt is BEFORE PreparedAt → OriginWarmCache (temporal proof fails).
+	tracker2 := &assetOperationTracker{cacheEnabled: true}
+	ctx2 := withAssetOperationTracker(context.Background(), tracker2)
+	sink.RecordResolution(ctx2, downloader.CacheResolution{
+		AssetID:    "asset-T",
+		Outcome:    downloader.CacheOutcomeHitValid,
+		CacheHit:   true,
+		SHA256:     assetref.ContentHash(sha),
+		SizeBytes:  int64(len(payload)),
+		Source:     downloader.CacheSourceLocalDisk,
+		JobID:      "job-T",
+		TaskID:     "task-T",
+		AssetKey:   "asset-T",
+		ResolvedAt: now.Add(-20 * time.Second), // before PreparedAt (-10s)
+	})
+	cache2 := tracker2.cacheSnapshot()
+	if cache2.OriginWarmCacheCount != 1 {
+		t.Fatalf("ResolvedAt before PreparedAt: OriginWarmCacheCount = %d, want 1", cache2.OriginWarmCacheCount)
+	}
+	if cache2.OriginPrefetchCount != 0 {
+		t.Fatalf("ResolvedAt before PreparedAt: OriginPrefetchCount = %d, want 0", cache2.OriginPrefetchCount)
+	}
+
+	// Case 3: ResolvedAt equals PreparedAt → OriginWarmCache (not strictly before).
+	tracker3 := &assetOperationTracker{cacheEnabled: true}
+	ctx3 := withAssetOperationTracker(context.Background(), tracker3)
+	sink.RecordResolution(ctx3, downloader.CacheResolution{
+		AssetID:    "asset-T",
+		Outcome:    downloader.CacheOutcomeHitValid,
+		CacheHit:   true,
+		SHA256:     assetref.ContentHash(sha),
+		SizeBytes:  int64(len(payload)),
+		Source:     downloader.CacheSourceLocalDisk,
+		JobID:      "job-T",
+		TaskID:     "task-T",
+		AssetKey:   "asset-T",
+		ResolvedAt: now.Add(-10 * time.Second), // exactly equals PreparedAt
+	})
+	cache3 := tracker3.cacheSnapshot()
+	if cache3.OriginWarmCacheCount != 1 {
+		t.Fatalf("ResolvedAt equals PreparedAt: OriginWarmCacheCount = %d, want 1", cache3.OriginWarmCacheCount)
+	}
+}
+
+// ── Temporal proof: zero ResolvedAt skips temporal check (backward compat) ──
+// When ResolvedAt is zero (legacy/test paths), the temporal check is skipped
+// and the identity match alone determines the origin.
+func TestCertification_TemporalProof_ZeroResolvedAtSkipsCheck(t *testing.T) {
+	payload := []byte("zero-resolvedat-asset")
+	sha := sha256hex(payload)
+
+	preparedJobs := []prefetch.PreparedJob{
+		{
+			JobID:      "job-Z",
+			TaskID:     "task-Z",
+			State:      prefetch.PreparationStatePrepared,
+			PreparedAt: time.Now().UTC(),
+			Assets: map[string]prefetch.PreparedAssetMetadata{
+				"asset-Z": {
+					AssetKey:  "asset-Z",
+					AssetID:   "asset-Z",
+					SHA256:    sha,
+					SizeBytes: int64(len(payload)),
+				},
+			},
+		},
+	}
+
+	sink := cacheResolutionSink{
+		preparedJobs: func() []prefetch.PreparedJob { return preparedJobs },
+	}
+
+	// ResolvedAt is zero → temporal check skipped → OriginPrefetch.
+	tracker := &assetOperationTracker{cacheEnabled: true}
+	ctx := withAssetOperationTracker(context.Background(), tracker)
+	sink.RecordResolution(ctx, downloader.CacheResolution{
+		AssetID:   "asset-Z",
+		Outcome:   downloader.CacheOutcomeHitValid,
+		CacheHit:  true,
+		SHA256:    assetref.ContentHash(sha),
+		SizeBytes: int64(len(payload)),
+		Source:    downloader.CacheSourceLocalDisk,
+		JobID:     "job-Z",
+		TaskID:    "task-Z",
+		AssetKey:  "asset-Z",
+		// ResolvedAt is zero value → temporal check skipped
+	})
+	cache := tracker.cacheSnapshot()
+	if cache.OriginPrefetchCount != 1 {
+		t.Fatalf("zero ResolvedAt: OriginPrefetchCount = %d, want 1 (temporal check skipped)", cache.OriginPrefetchCount)
+	}
+}
+
+// ── Temporal proof: zero PreparedAt skips temporal check (backward compat) ──
+// When PreparedAt on the PreparedAssetMetadata is zero (legacy/test paths),
+// the temporal check is skipped and the identity match alone determines the origin.
+func TestCertification_TemporalProof_ZeroPreparedAtSkipsCheck(t *testing.T) {
+	payload := []byte("zero-preparedat-asset")
+	sha := sha256hex(payload)
+
+	preparedJobs := []prefetch.PreparedJob{
+		{
+			JobID:      "job-Z",
+			TaskID:     "task-Z",
+			State:      prefetch.PreparationStatePrepared,
+			PreparedAt: time.Now().UTC(),
+			Assets: map[string]prefetch.PreparedAssetMetadata{
+				"asset-Z": {
+					AssetKey:  "asset-Z",
+					AssetID:   "asset-Z",
+					SHA256:    sha,
+					SizeBytes: int64(len(payload)),
+					// PreparedAt is zero → temporal check skipped
+				},
+			},
+		},
+	}
+
+	sink := cacheResolutionSink{
+		preparedJobs: func() []prefetch.PreparedJob { return preparedJobs },
+	}
+
+	// ResolvedAt is in the past, but PreparedAt is zero → skip → OriginPrefetch.
+	tracker := &assetOperationTracker{cacheEnabled: true}
+	ctx := withAssetOperationTracker(context.Background(), tracker)
+	sink.RecordResolution(ctx, downloader.CacheResolution{
+		AssetID:    "asset-Z",
+		Outcome:    downloader.CacheOutcomeHitValid,
+		CacheHit:   true,
+		SHA256:     assetref.ContentHash(sha),
+		SizeBytes:  int64(len(payload)),
+		Source:     downloader.CacheSourceLocalDisk,
+		JobID:      "job-Z",
+		TaskID:     "task-Z",
+		AssetKey:   "asset-Z",
+		ResolvedAt: time.Now().UTC(),
+	})
+	cache := tracker.cacheSnapshot()
+	if cache.OriginPrefetchCount != 1 {
+		t.Fatalf("zero PreparedAt: OriginPrefetchCount = %d, want 1 (temporal check skipped)", cache.OriginPrefetchCount)
+	}
+}
+
+// ── Identity fields propagated to CacheResolution ──────────────────────────
+// Verifies that JobID, TaskID, AssetKey, and ResolvedAt are carried on the
+// CacheResolution through the CacheResolver.Resolve path.
+func TestCertification_CacheResolutionIdentityFields(t *testing.T) {
+	payload := []byte("identity-fields-asset")
+	sha := sha256hex(payload)
+
+	var capturedResolution downloader.CacheResolution
+	sink := &captureResolverSink{fn: func(_ context.Context, r downloader.CacheResolution) {
+		capturedResolution = r
+	}}
+
+	manager := &fakedDownloadManager{
+		asset: downloader.DownloadedAsset{
+			AssetID:   "asset-ID",
+			LocalPath: "/cache/asset-ID.bin",
+			SHA256:    assetref.ContentHash(sha),
+			SizeBytes: int64(len(payload)),
+			CacheHit:  true,
+			ReadyAt:   time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC),
+		},
+	}
+
+	resolver := downloader.NewCacheResolver(manager, sink)
+	_, err := resolver.Resolve(context.Background(), downloader.DownloadRequest{
+		JobID:     "job-IDENTITY",
+		TaskID:    "task-IDENTITY",
+		AssetKey:  assetref.AssetKey("asset-ID-key"),
+		AssetID:   "asset-ID",
+		SHA256:    assetref.ContentHash(sha),
+		SizeBytes: int64(len(payload)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if capturedResolution.JobID != "job-IDENTITY" {
+		t.Fatalf("JobID = %q, want job-IDENTITY", capturedResolution.JobID)
+	}
+	if capturedResolution.TaskID != "task-IDENTITY" {
+		t.Fatalf("TaskID = %q, want task-IDENTITY", capturedResolution.TaskID)
+	}
+	if string(capturedResolution.AssetKey) != "asset-ID-key" {
+		t.Fatalf("AssetKey = %q, want asset-ID-key", capturedResolution.AssetKey)
+	}
+	if capturedResolution.ResolvedAt.IsZero() {
+		t.Fatal("ResolvedAt must be set from DownloadedAsset.ReadyAt")
+	}
+	if !capturedResolution.ResolvedAt.Equal(time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)) {
+		t.Fatalf("ResolvedAt = %v, want 2026-08-28T12:00:00Z", capturedResolution.ResolvedAt)
+	}
+}
+
+// captureResolverSink records resolutions for assertion.
+type captureResolverSink struct {
+	fn func(ctx context.Context, r downloader.CacheResolution)
+}
+
+func (c *captureResolverSink) RecordResolution(ctx context.Context, r downloader.CacheResolution) {
+	if c.fn != nil {
+		c.fn(ctx, r)
+	}
+}
+
+// fakedDownloadManager returns a fixed DownloadedAsset.
+type fakedDownloadManager struct {
+	asset downloader.DownloadedAsset
+	err   error
+}
+
+func (f *fakedDownloadManager) Resolve(_ context.Context, _ downloader.DownloadRequest) (downloader.DownloadedAsset, error) {
+	return f.asset, f.err
+}
+
+func (f *fakedDownloadManager) Snapshot(_ assetref.AssetKey) (downloader.DownloadSnapshot, bool) {
+	return downloader.DownloadSnapshot{}, false
+}
+
+func (f *fakedDownloadManager) Subscribe(_ assetref.AssetKey) (<-chan downloader.DownloadSnapshot, func()) {
+	return nil, func() {}
+}
+
+func (f *fakedDownloadManager) JobSnapshot(_ string) downloader.JobDownloadSnapshot {
+	return downloader.JobDownloadSnapshot{}
+}
+
+func (f *fakedDownloadManager) LatestOperational() downloader.OperationalSnapshot {
+	return downloader.OperationalSnapshot{}
+}
+
+var _ downloader.AssetDownloadManager = (*fakedDownloadManager)(nil)
+
 // ── Wire breakdown bytes/origin certification ──────────────────────────────
 // This test proves that AssetPreparationBreakdown on the wire carries the
 // correct byte-level attribution and origin counters when the cacheResolutionSink

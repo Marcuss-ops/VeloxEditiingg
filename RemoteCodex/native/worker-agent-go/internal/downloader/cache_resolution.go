@@ -17,6 +17,7 @@ package downloader
 import (
 	"context"
 	"errors"
+	"time"
 
 	"velox-shared/assetref"
 )
@@ -133,6 +134,13 @@ type CacheResolution struct {
 	JobID    string
 	TaskID   string
 	AssetKey assetref.AssetKey
+
+	// ResolvedAt records the wall-clock time when the asset was resolved
+	// (cache hit verified or download completed). For OriginPrefetch
+	// classification the temporal proof requires PreparedAt < ResolvedAt:
+	// the asset must have been materialized before the current resolution
+	// to prove it was prefetched rather than coincidentally warm.
+	ResolvedAt time.Time
 }
 
 // ResolutionSink observes each completed resolution exactly once. It runs on
@@ -191,7 +199,7 @@ func (r *CacheResolver) Resolve(ctx context.Context, req DownloadRequest) (Cache
 		if asset, ok, err := r.l1.Find(ctx, req); err != nil {
 			return CacheResolution{}, err
 		} else if ok {
-			resolution := CacheResolution{AssetID: req.AssetID, Outcome: CacheOutcomeHitValid, LocalPath: asset.LocalPath, CacheHit: true, Source: CacheSourceLocalDisk, SHA256: asset.SHA256, SizeBytes: req.SizeBytes, JobID: req.JobID, TaskID: req.TaskID, AssetKey: req.AssetKey}
+			resolution := CacheResolution{AssetID: req.AssetID, Outcome: CacheOutcomeHitValid, LocalPath: asset.LocalPath, CacheHit: true, Source: CacheSourceLocalDisk, SHA256: asset.SHA256, SizeBytes: req.SizeBytes, JobID: req.JobID, TaskID: req.TaskID, AssetKey: req.AssetKey, ResolvedAt: time.Now().UTC()}
 			if r.sink != nil {
 				r.sink.RecordResolution(ctx, resolution)
 			}
@@ -203,12 +211,13 @@ func (r *CacheResolver) Resolve(ctx context.Context, req DownloadRequest) (Cache
 		if r.sink != nil && !errors.Is(err, ErrEmptyKey) &&
 			!errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 			r.sink.RecordResolution(ctx, CacheResolution{
-				AssetID:  req.AssetID,
-				Outcome:  CacheOutcomeMissNotFound,
-				Source:   CacheSourceMaster,
-				JobID:    req.JobID,
-				TaskID:   req.TaskID,
-				AssetKey: req.AssetKey,
+				AssetID:    req.AssetID,
+				Outcome:    CacheOutcomeMissNotFound,
+				Source:     CacheSourceMaster,
+				JobID:      req.JobID,
+				TaskID:     req.TaskID,
+				AssetKey:   req.AssetKey,
+				ResolvedAt: time.Now().UTC(),
 			})
 		}
 		return CacheResolution{}, err
@@ -226,16 +235,17 @@ func (r *CacheResolver) Resolve(ctx context.Context, req DownloadRequest) (Cache
 // re-derives hit/miss.
 func resolutionFromDownloadedAsset(asset DownloadedAsset, req DownloadRequest) CacheResolution {
 	resolution := CacheResolution{
-		AssetID:   asset.AssetID,
-		Outcome:   asset.Outcome,
-		LocalPath: asset.LocalPath,
-		CacheHit:  asset.CacheHit,
-		Source:    CacheSourceMaster,
-		SHA256:    asset.SHA256,
-		Timing:    asset.Timing,
-		JobID:     req.JobID,
-		TaskID:    req.TaskID,
-		AssetKey:  req.AssetKey,
+		AssetID:    asset.AssetID,
+		Outcome:    asset.Outcome,
+		LocalPath:  asset.LocalPath,
+		CacheHit:   asset.CacheHit,
+		Source:     CacheSourceMaster,
+		SHA256:     asset.SHA256,
+		Timing:     asset.Timing,
+		JobID:      req.JobID,
+		TaskID:     req.TaskID,
+		AssetKey:   req.AssetKey,
+		ResolvedAt: asset.ReadyAt,
 	}
 	if resolution.AssetID == "" {
 		resolution.AssetID = req.AssetID

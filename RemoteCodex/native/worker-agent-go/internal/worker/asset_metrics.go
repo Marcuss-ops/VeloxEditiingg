@@ -383,6 +383,11 @@ func resolutionCorruptionMatch(resolution downloader.CacheResolution, job prefet
 // same SHA as an asset prefetched for Job B, the resolution for Job C is
 // correctly classified as OriginWarmCache because the JobID/TaskID/AssetKey
 // don't match the PreparedJob entry for Job B.
+//
+// Temporal proof: when the resolution carries a non-zero ResolvedAt, the
+// PreparedJob entry's PreparedAt must precede it. This prevents stale
+// PreparedJob entries from misclassifying re-downloads as prefetch when the
+// asset was actually materialized after the original preparation.
 func (s cacheResolutionSink) classifyOrigin(resolution downloader.CacheResolution) downloader.ResolutionOrigin {
 	if s.preparedJobs == nil {
 		return downloader.OriginWarmCache
@@ -392,6 +397,13 @@ func (s cacheResolutionSink) classifyOrigin(resolution downloader.CacheResolutio
 		for _, asset := range job.Assets {
 			if !resolutionPrefetchMatch(resolution, job, asset) {
 				continue
+			}
+			// Temporal proof: the asset must have been prepared before the
+			// current resolution to prove it was prefetched. When ResolvedAt
+			// is zero (legacy/test path), skip the temporal check.
+			if !resolution.ResolvedAt.IsZero() && !asset.PreparedAt.IsZero() &&
+				!asset.PreparedAt.Before(resolution.ResolvedAt) {
+				return downloader.OriginWarmCache
 			}
 			// Prefer the origin carried on the PreparedAssetMetadata when
 			// available. The scheduler tags each prepared asset at prefetch
