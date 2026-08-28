@@ -30,11 +30,12 @@ type RemoteWorkerRenderer struct {
 
 	mu       sync.Mutex
 	prepared map[string]bool
+	prepLock map[string]*sync.Mutex
 	seq      uint64
 }
 
 func NewRemoteWorkerRenderer(ssh RemoteCommandRunner) *RemoteWorkerRenderer {
-	return &RemoteWorkerRenderer{SSH: ssh, Container: "velox-worker", Root: "/var/lib/velox-worker/benchmark-tracks", prepared: make(map[string]bool)}
+	return &RemoteWorkerRenderer{SSH: ssh, Container: "velox-worker", Root: "/var/lib/velox-worker/benchmark-tracks", prepared: make(map[string]bool), prepLock: make(map[string]*sync.Mutex)}
 }
 
 func (r *RemoteWorkerRenderer) Render(ctx context.Context, req BenchmarkRenderRequest) (BenchmarkRenderResult, error) {
@@ -115,10 +116,27 @@ func (r *RemoteWorkerRenderer) Render(ctx context.Context, req BenchmarkRenderRe
 func (r *RemoteWorkerRenderer) prepare(ctx context.Context, workerID, fixture string) error {
 	key := workerID + "\x00" + fixture
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if r.prepared[key] {
+		r.mu.Unlock()
 		return nil
 	}
+	lock := r.prepLock[key]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		r.prepLock[key] = lock
+	}
+	r.mu.Unlock()
+
+	// Serialize preparation only for the same worker/fixture. A global lock
+	// would let one slow SSH/docker fixture generation stall the entire fleet.
+	lock.Lock()
+	defer lock.Unlock()
+	r.mu.Lock()
+	if r.prepared[key] {
+		r.mu.Unlock()
+		return nil
+	}
+	r.mu.Unlock()
 	trackDir := filepath.Join(r.Root, fixture)
 	if _, err := r.SSH.Run(ctx, workerID, r.exec("/usr/local/bin/velox-fixture-gen", "-out-dir", trackDir)); err != nil {
 		return fmt.Errorf("prepare fixture %s: %w", fixture, err)
@@ -127,7 +145,9 @@ func (r *RemoteWorkerRenderer) prepare(ctx context.Context, workerID, fixture st
 	if _, err := r.SSH.Run(ctx, workerID, r.exec("/usr/local/bin/velox-fixture-gen", "-verify-manifest", manifest)); err != nil {
 		return fmt.Errorf("verify fixture %s: %w", fixture, err)
 	}
+	r.mu.Lock()
 	r.prepared[key] = true
+	r.mu.Unlock()
 	return nil
 }
 
