@@ -1338,3 +1338,10 @@ point into the parent document:
 
 <a id="files-intentionally-not-split"></a>
 - [Files intentionally **not** split](docs/history/CHANGELOG-2026-07-27-and-earlier.md#files-intentionally-not-split)
+## [v1.4.0] - 2026-08-28
+
+### Asset origin certification
+
+- Record resolution timestamps and enforce temporal proof for prefetch-origin
+  classification.
+- Add worker tests covering identity, timing, and byte-level attribution.
