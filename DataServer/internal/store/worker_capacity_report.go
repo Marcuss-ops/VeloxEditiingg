@@ -25,44 +25,44 @@ type WorkerCapacityReport struct {
 
 	// Host resource peaks/floors from worker_resource_samples over the
 	// configurable lookback window (default: 24h).
-	CPUPeakRatio          float64 `json:"cpu_peak_ratio"`
-	CPUIOWaitPeakRatio    float64 `json:"cpu_iowait_peak_ratio"`
-	MemoryPeakRatio       float64 `json:"memory_peak_ratio"`
-	MemoryAvailableMinMB  float64 `json:"memory_available_min_mb"`
-	DiskFreeMinBytes      int64   `json:"disk_free_min_bytes"`
-	ScratchPeakBytes      int64   `json:"scratch_peak_bytes"`
-	FDPeak                int64   `json:"fd_peak"`
-	FDLimit               int64   `json:"fd_limit"`
-	FDUtillizationPeak    float64 `json:"fd_utilization_peak"`
-	NetworkRxMBPS         float64 `json:"network_rx_mbps"`
-	NetworkTxMBPS         float64 `json:"network_tx_mbps"`
-	Load1Peak             float64 `json:"load_1_peak"`
-	RunQueuePeak          int64   `json:"run_queue_peak"`
-	DiskIOWaitMSMax       int64   `json:"disk_io_wait_ms_max"`
-	NetworkRetransmitsMax int64   `json:"network_retransmits_max"`
-	RenderJobsActiveAvg   float64 `json:"render_jobs_active_avg"`
-	PrefetchJobsActiveAvg float64 `json:"prefetch_jobs_active_avg"`
+	CPUPeakRatio           float64 `json:"cpu_peak_ratio"`
+	CPUIOWaitPeakRatio     float64 `json:"cpu_iowait_peak_ratio"`
+	MemoryPeakRatio        float64 `json:"memory_peak_ratio"`
+	MemoryAvailableMinMB   float64 `json:"memory_available_min_mb"`
+	DiskFreeMinBytes       int64   `json:"disk_free_min_bytes"`
+	ScratchPeakBytes       int64   `json:"scratch_peak_bytes"`
+	FDPeak                 int64   `json:"fd_peak"`
+	FDLimit                int64   `json:"fd_limit"`
+	FDUtillizationPeak     float64 `json:"fd_utilization_peak"`
+	NetworkRxMBPS          float64 `json:"network_rx_mbps"`
+	NetworkTxMBPS          float64 `json:"network_tx_mbps"`
+	Load1Peak              float64 `json:"load_1_peak"`
+	RunQueuePeak           int64   `json:"run_queue_peak"`
+	DiskIOWaitMSMax        int64   `json:"disk_io_wait_ms_max"`
+	NetworkRetransmitsMax  int64   `json:"network_retransmits_max"`
+	RenderJobsActiveAvg    float64 `json:"render_jobs_active_avg"`
+	PrefetchJobsActiveAvg  float64 `json:"prefetch_jobs_active_avg"`
 	PublisherJobsActiveAvg float64 `json:"publisher_jobs_active_avg"`
-	TaskSlotsAvg          float64 `json:"task_slots_avg"`
-	SampleCount           int     `json:"sample_count"`
-	WindowStart           string  `json:"window_start"`
-	WindowEnd             string  `json:"window_end"`
+	TaskSlotsAvg           float64 `json:"task_slots_avg"`
+	SampleCount            int     `json:"sample_count"`
+	WindowStart            string  `json:"window_start"`
+	WindowEnd              string  `json:"window_end"`
 
 	// Per-job capacity facts from task_attempt_metrics (most recent N succeeded attempts).
-	AvgJobScratchPeakBytes int64   `json:"avg_job_scratch_peak_bytes"`
-	MaxJobScratchPeakBytes int64   `json:"max_job_scratch_peak_bytes"`
-	AvgJobPublishBytes     int64   `json:"avg_job_publish_bytes"`
-	AvgJobPageFaults       int64   `json:"avg_job_page_faults"`
-	AvgJobPeakRSSDelta     int64   `json:"avg_job_peak_rss_delta_bytes"`
-	AttemptCount           int     `json:"attempt_count"`
+	AvgJobScratchPeakBytes int64 `json:"avg_job_scratch_peak_bytes"`
+	MaxJobScratchPeakBytes int64 `json:"max_job_scratch_peak_bytes"`
+	AvgJobPublishBytes     int64 `json:"avg_job_publish_bytes"`
+	AvgJobPageFaults       int64 `json:"avg_job_page_faults"`
+	AvgJobPeakRSSDelta     int64 `json:"avg_job_peak_rss_delta_bytes"`
+	AttemptCount           int   `json:"attempt_count"`
 
 	// Latest benchmark result from capacity_benchmark_runs.
-	BenchmarkRunID  string  `json:"benchmark_run_id,omitempty"`
-	SweetSpot       int     `json:"sweet_spot,omitempty"`
-	LimitingFactor  string  `json:"limiting_factor,omitempty"`
-	PredictedSlots  *int    `json:"predicted_render_slots,omitempty"`
-	PredictionAcc   *string `json:"prediction_accuracy,omitempty"`
-	BenchmarkRunAt  string  `json:"benchmark_run_at,omitempty"`
+	BenchmarkRunID string  `json:"benchmark_run_id,omitempty"`
+	SweetSpot      int     `json:"sweet_spot,omitempty"`
+	LimitingFactor string  `json:"limiting_factor,omitempty"`
+	PredictedSlots *int    `json:"predicted_render_slots,omitempty"`
+	PredictionAcc  *string `json:"prediction_accuracy,omitempty"`
+	BenchmarkRunAt string  `json:"benchmark_run_at,omitempty"`
 
 	// Derived recommendation.
 	MaxRecommendedJobs int    `json:"max_recommended_jobs"`
@@ -185,11 +185,11 @@ func (s *SQLiteStore) queryResourceSamples(ctx context.Context, workerID string,
 func (s *SQLiteStore) queryAttemptMetrics(ctx context.Context, workerID string, report *WorkerCapacityReport) error {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT
-			COALESCE(AVG(m.job_scratch_peak_bytes), 0),
+			ROUND(COALESCE(AVG(m.job_scratch_peak_bytes), 0)),
 			COALESCE(MAX(m.job_scratch_peak_bytes), 0),
-			COALESCE(AVG(m.job_publish_bytes), 0),
-			COALESCE(AVG(m.job_page_faults), 0),
-			COALESCE(AVG(m.job_peak_rss_delta_bytes), 0),
+			ROUND(COALESCE(AVG(m.job_publish_bytes), 0)),
+			ROUND(COALESCE(AVG(m.job_page_faults), 0)),
+			ROUND(COALESCE(AVG(m.job_peak_rss_delta_bytes), 0)),
 			COUNT(*)
 		FROM task_attempt_metrics m
 		JOIN task_attempts a ON a.id = m.attempt_id
@@ -198,14 +198,27 @@ func (s *SQLiteStore) queryAttemptMetrics(ctx context.Context, workerID string, 
 		LIMIT 100
 	`, workerID)
 
-	return row.Scan(
-		&report.AvgJobScratchPeakBytes,
-		&report.MaxJobScratchPeakBytes,
-		&report.AvgJobPublishBytes,
-		&report.AvgJobPageFaults,
-		&report.AvgJobPeakRSSDelta,
+	// SQLite AVG()/ROUND() return float64 to the Go driver even after
+	// CAST(... AS INTEGER). Scan into float64 intermediates and convert
+	// in Go to avoid the "converting driver.Value type float64 to int64"
+	// scan error that appears under aggregate load.
+	var avgScratch, maxScratch, avgPublish, avgPageFaults, avgPeakRSS float64
+	if err := row.Scan(
+		&avgScratch,
+		&maxScratch,
+		&avgPublish,
+		&avgPageFaults,
+		&avgPeakRSS,
 		&report.AttemptCount,
-	)
+	); err != nil {
+		return fmt.Errorf("capacity report attempt metrics: %w", err)
+	}
+	report.AvgJobScratchPeakBytes = int64(avgScratch)
+	report.MaxJobScratchPeakBytes = int64(maxScratch)
+	report.AvgJobPublishBytes = int64(avgPublish)
+	report.AvgJobPageFaults = int64(avgPageFaults)
+	report.AvgJobPeakRSSDelta = int64(avgPeakRSS)
+	return nil
 }
 
 // queryBenchmarkResult reads the most recent benchmark result for the worker.

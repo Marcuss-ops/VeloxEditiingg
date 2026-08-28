@@ -8,7 +8,6 @@ namespace velox::plan {
 
 std::optional<RenderPlan> parseRenderPlan(const std::string& jsonStr) {
     namespace ju = velox::json;
-
     RenderPlan plan;
     plan.version = static_cast<int>(ju::extractJsonNumberValue(jsonStr, "plan_version", 0.0));
     if (plan.version == 0) {
@@ -25,7 +24,6 @@ std::optional<RenderPlan> parseRenderPlan(const std::string& jsonStr) {
         std::cerr << "errore: job_id o output_path mancanti nel RenderPlan\n";
         return std::nullopt;
     }
-
     if (plan.version == kRenderPlanVersionV2) {
         return detail::parseRenderPlanV2(jsonStr, std::move(plan));
     }

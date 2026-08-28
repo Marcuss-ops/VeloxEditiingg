@@ -93,7 +93,10 @@ Threshold policy used in this baseline:
 | Generated C/C++ (`generated/`, `gen/`, `*_generated.*`, `*.generated.*`) | n/a (exempt) | n/a |
 | Shell scripts (`.sh`, `.bash`) | 400 | 700 |
 | Documentation (`.md`) | 800 | 1 200 |
-| CI / Ansible (`.yml`, `.yaml`) | 400 | 800 |The hard gate uses the refactor-required boundary; warning thresholds remain documented for review visibility. The LOC gate applies the C/C++ rule to non-generated source/header files and excludes CMake build trees, vendored code, and generated naming/path conventions.
+| CI / Ansible (`.yml`, `.yaml`) | 400 | 800 |
+| Python (`.py`) | 500 | 800 |
+
+The hard gate uses the refactor-required boundary; warning thresholds remain documented for review visibility. The LOC gate applies the C/C++ rule to non-generated source/header files and excludes CMake build trees, vendored code, and generated naming/path conventions. Python excludes `venv/`, `__pycache__/`, `.eggs/`, `build/`, `dist/`, `.tox/`, `.mypy_cache/`, `.pytest_cache/`, `.ruff_cache/`.
  The policy is covered by `scripts/ci/test-loc-thresholds.sh` and wired into `.github/workflows/loc-thresholds.yml`.
 
 ---

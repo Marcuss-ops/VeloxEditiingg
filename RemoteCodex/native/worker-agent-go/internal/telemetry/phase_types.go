@@ -1,10 +1,119 @@
 package telemetry
 
-import "time"
+// phase_types.go holds the type definitions, constants, and pure helpers
+// shared by the EventRecorder, EventHandle, and C++ import files.
+// EventRecorder remains the single truth source; these types are its
+// vocabulary.
 
-// ── Phase timing accumulator ───────────────────────────────────────────────
+import (
+	"time"
 
-// PhaseTiming holds accumulated timing and data metrics for one phase.
+	sharedtelemetry "velox-shared/telemetry"
+)
+
+const (
+	// StatusOK / StatusFailed are aliases to the shared canonical status
+	// vocabulary (velox-shared/telemetry) — this package owns no second
+	// literal list.
+	StatusOK     = sharedtelemetry.StatusOK
+	StatusFailed = sharedtelemetry.StatusFailed
+
+	// MaxAttemptEvents bounds the in-memory attempt journal. Once full,
+	// new observations are dropped and counted on the final snapshot. This
+	// explicit best-effort policy prevents pathological attempts from growing
+	// memory without limit.
+	MaxAttemptEvents = 4096
+)
+
+// RecordedPhase is one immutable execution event stored in an EventRecorder.
+type RecordedPhase struct {
+	Origin           string
+	Scope            string
+	Component        string
+	Action           string
+	Phase            string
+	EventType        string
+	EventName        string
+	SchemaVersion    int32
+	EventIndex       int64
+	ArtifactID       string
+	StartedAt        time.Time
+	CompletedAt      time.Time
+	DurationMS       int64
+	Status           string
+	ErrorCode        string
+	ErrorMessage     string
+	BytesIn          int64
+	BytesOut         int64
+	Frames           int64
+	MetadataJSON     string
+	SegmentIndex     int32
+	TrackKind        string
+	TrackIndex       int32
+	StartedOffsetMS  float64
+	FinishedOffsetMS float64
+	CPUMS            float64
+	QueueWaitMS      float64
+	FramesIn         int64
+	FramesOut        int64
+}
+
+// EventSpec describes an event. Origin, scope, and component/action should be
+// registered in phase_registry.go. Invalid specs are retained and sent to the
+// master for quarantine rather than being silently dropped at the worker.
+type EventSpec struct {
+	Origin           string
+	Scope            string
+	Component        string
+	Action           string
+	Phase            string
+	EventType        string
+	EventName        string
+	SchemaVersion    int32
+	ArtifactID       string
+	MetadataJSON     string
+	SegmentIndex     int32
+	TrackKind        string
+	TrackIndex       int32
+	StartedOffsetMS  float64
+	FinishedOffsetMS float64
+	CPUMS            float64
+	QueueWaitMS      float64
+	FramesIn         int64
+	FramesOut        int64
+}
+
+type eventIdentity struct {
+	origin string
+	index  int64
+}
+
+// ── Pure helpers ──────────────────────────────────────────────────────────
+
+func eventTypeFor(explicit, status string) string {
+	if explicit != "" {
+		return explicit
+	}
+	if status == StatusFailed {
+		return sharedtelemetry.EventTypeFailed
+	}
+	return sharedtelemetry.EventTypeCompleted
+}
+
+func normalizeEventSpec(spec *EventSpec) bool {
+	return spec != nil && CanonicalizeEventSpec(spec)
+}
+
+func firstNonEmpty(value, fallback string) string {
+	if value != "" {
+		return value
+	}
+	return fallback
+}
+
+// ── JobPhaseTimer vocabulary ──────────────────────────────────────────────
+
+// PhaseTiming accumulates timing and data volume for one fine-grained phase.
 type PhaseTiming struct {
 	Duration    time.Duration
 	Count       int64
@@ -66,9 +175,7 @@ func (s ScenePhaseTiming) RenderSpeed() float64 {
 	return float64(s.OutputDurationMs) / float64(total)
 }
 
-// ── Named containers for ordered output ────────────────────────────────────
-
-// PhaseTimingWithName pairs a phase name with its accumulated timing.
+// PhaseTimingWithName pairs a phase name with its timing.
 type PhaseTimingWithName struct {
 	Name   string
 	Timing PhaseTiming
@@ -80,7 +187,7 @@ type SceneTimingWithName struct {
 	Timing  ScenePhaseTiming
 }
 
-// ── GPU transfer metrics ───────────────────────────────────────────────────
+// ── GPU transfer metrics ──────────────────────────────────────────────────
 
 // GPUTransferMetrics tracks VRAM ↔ RAM data movement.
 type GPUTransferMetrics struct {

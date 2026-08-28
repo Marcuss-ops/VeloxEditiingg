@@ -13,6 +13,9 @@
 #   shell (.sh)                         >  700 LOC
 #   docs (.md)                      > 1200 LOC
 #   yaml (.yml, excl. workflows/)       >  800 LOC
+#   python (.py) — two-tier:
+#     warning                           >  500 LOC (informational, no gate)
+#     hard refactor                     >  800 LOC (CI fails)
 #
 # Generated code (e.g. *.pb.go, *_generated.cpp, *_generated.hpp), CMake
 # build trees, and CI workflows themselves are exempt per §10 / §11 policy
@@ -35,6 +38,8 @@ THRESH_TEST_GO=1200
 THRESH_SH=700
 THRESH_MD=1200
 THRESH_YML=800
+THRESH_PYTHON=800
+THRESH_PYTHON_WARN=500
 
 # KNOWN_VIOLATIONS_BASELINE — pre-existing baseline carry-over
 # (loc-baseline.md §10c). These three files predated the gate by years
@@ -127,16 +132,10 @@ KNOWN_VIOLATIONS_ROUND2=(
   "DataServer/api/openapi.yaml|Round-4 yaml carry-over (1235 LOC); STRUCTURAL — OpenAPI single-source-of-truth spec, refactor requires spec redesign (Round-5+); see STRUCTURAL_LONG_FILES"
 )
 
-# KNOWN_VIOLATIONS_ROUND3 — Round-5 carry-over (snapshot 2026-08-08).
-# tests/e2e/workload/run.sh exceeded the §11 shell threshold (700) when
-# the e2e workload orchestration grew (video-counter label cardinality,
-# semaphore fast-fail, artifact gate promotion — commit d182ce8e). It is
-# a single-purpose operator E2E orchestrator; a refactor split is
-# tracked under loc-baseline.md §10c (Round-5). Remove the entry when
-# the split lands.
-KNOWN_VIOLATIONS_ROUND3=(
-  "tests/e2e/workload/run.sh|Round-5 shell carry-over (705 LOC); e2e workload orchestration (video-counter / artifact-gate E2E) — refactor split tracked in loc-baseline.md §10c"
-)
+# KNOWN_VIOLATIONS_ROUND3 — RESOLVED (2026-08-28).
+# tests/e2e/workload/run.sh split into lib/ phase scripts; run.sh is now
+# 109 LOC (well under the 700 shell threshold). Entry retired.
+KNOWN_VIOLATIONS_ROUND3=()
 
 # KNOWN_VIOLATIONS_ROUND4 — deployment-state test carry-over (snapshot
 # 2026-08-13). Split by domain after the concurrent store error-leaf
@@ -289,6 +288,65 @@ scan_dir yaml "$THRESH_YML" \
   "${BUILD_NOISE_EXCLUDES[@]}" \
   -type f \( -name '*.yml' -o -name '*.yaml' \) \
   -not -path './.github/workflows/*'
+
+# scan_dir_python — two-tier scan for Python production/test utilities.
+# Tier 1 (WARNING): files exceeding THRESH_PYTHON_WARN emit a ::warning
+# annotation so the trend is visible in PR UI; no gate, purely informational.
+# Tier 2 (HARD GATE): files exceeding THRESH_PYTHON emit ::error and
+# increment VIOLATIONS, failing CI. The intent is to catch utility scripts
+# (bench, test helpers, deploy scripts) before they become god files —
+# Python LOC is not currently covered by any other gate.
+PYTHON_FIND_EXCLUDES=(
+  -not -path '*/.git'
+  -not -path '*/.git/*'
+  -not -path '*/node_modules'
+  -not -path '*/node_modules/*'
+  -not -path '*/venv'
+  -not -path '*/venv/*'
+  -not -path '*/.venv'
+  -not -path '*/.venv/*'
+  -not -path '*/__pycache__'
+  -not -path '*/__pycache__/*'
+  -not -path '*/.eggs'
+  -not -path '*/.eggs/*'
+  -not -path '*/build'
+  -not -path '*/build/*'
+  -not -path '*/dist'
+  -not -path '*/dist/*'
+  -not -path '*/.tox'
+  -not -path '*/.tox/*'
+  -not -path '*/.mypy_cache'
+  -not -path '*/.mypy_cache/*'
+  -not -path '*/.pytest_cache'
+  -not -path '*/.pytest_cache/*'
+  -not -path '*/.ruff_cache'
+  -not -path '*/.ruff_cache/*'
+)
+
+scan_dir_python() {
+  while IFS= read -r f; do
+    [ -z "$f" ] && continue
+    loc=$(wc -l < "$f" | tr -d ' ')
+    if [ "$loc" -gt "$THRESH_PYTHON" ]; then
+      if is_known "$f"; then
+        printf '::warning file=%s::python LOC %d exceeds %d (KNOWN carry-over, tracked in loc-baseline.md §10c)\n' \
+          "$f" "$loc" "$THRESH_PYTHON"
+        KNOWN_HITS=$((KNOWN_HITS + 1))
+      else
+        printf '::error file=%s::python LOC %d exceeds refactor-required threshold %d\n' \
+          "$f" "$loc" "$THRESH_PYTHON"
+        VIOLATIONS=$((VIOLATIONS + 1))
+      fi
+    elif [ "$loc" -gt "$THRESH_PYTHON_WARN" ]; then
+      printf '::warning file=%s::python LOC %d exceeds warning threshold %d (consider splitting)\n' \
+        "$f" "$loc" "$THRESH_PYTHON_WARN"
+    fi
+  done < <(find . "$@" 2>/dev/null)
+}
+
+scan_dir_python \
+  "${PYTHON_FIND_EXCLUDES[@]}" \
+  -type f -name '*.py'
 
 # scan_structural — WARNING-only visibility for the STRUCTURAL_LONG_FILES
 # set (see comment block above). Emits `::warning` annotations on every

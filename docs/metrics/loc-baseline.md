@@ -399,17 +399,18 @@ entry MUST be removed when the corresponding refactor lands, per §13.
   pre-existing operational E2E verifier, tracked for Round-4 dedup with
   `tests/e2e/grpc-control-plane/run.sh` into `tests/_lib/sh/` helpers.
 
-### Round-5 carry-over (snapshot 2026-08-08)
+### Round-5 carry-over (snapshot 2026-08-08) — **RESOLVED 2026-08-28**
 
 | File | LOC | Category | Refactor target | Status |
 | --- | ---: | --- | --- | --- |
-| `tests/e2e/workload/run.sh` | 705 | shell | AGENTS plan step — split workload E2E orchestrator into `tests/_lib/sh/` phase helpers | real refactor target, tracked |
+| `tests/e2e/workload/run.sh` | 705 → **109** | shell | Split workload E2E orchestrator into `lib/` phase scripts | **✅ SPLIT** — run.sh is 109 LOC orchestrator; 6 new phase scripts in `lib/` |
 
 `tests/e2e/workload/run.sh` exceeded the §11 shell threshold (700) when
-the workload E2E orchestration grew (video-counter label cardinality,
-semaphore fast-fail, artifact gate promotion). It is a single-purpose
-operator E2E orchestrator; the refactor split is tracked above and in
-`KNOWN_VIOLATIONS_ROUND3` of `scripts/ci/check-loc-thresholds.sh`.
+the workload E2E orchestration grew. It was split into a thin orchestrator
+(run.sh, 109 LOC) + 6 phase scripts in `tests/e2e/workload/lib/`:
+`process.sh` (55), `build.sh` (31), `fixtures.sh` (44), `master.sh` (76),
+`worker.sh` (62), `verify.sh` (97). The `KNOWN_VIOLATIONS_ROUND3` entry
+in `scripts/ci/check-loc-thresholds.sh` was retired.
 
 ### Round-6 carry-over (snapshot 2026-08-13)
 
@@ -417,6 +418,30 @@ The deployment-record test split has landed. The former monolith is now a
 small package anchor, with CRUD, state, and recovery scenarios in focused
 companion files under `DataServer/internal/store/`; its carry-over entry was
 removed from the LOC gate.
+
+### Round-7 refactor (2026-08-28)
+
+Multi-file refactor session. All splits verified with `go vet` + `go build`
++ `go test` (full-module gate). No regressions.
+
+| Original file | Before | After (facade) | New files | Status |
+| --- | ---: | ---: | --- | --- |
+| `tests/e2e/workload/run.sh` | 466 LOC | 109 LOC | 6 `lib/` phase scripts (365 LOC) | ✅ Split |
+| `DataServer/internal/store/attempt_metrics.go` | merged | 16 LOC | `attempt_metrics_read.go` (234), `attempt_metrics_write.go` (160), `attempt_metrics_scan.go` (72), `attempt_cache_stats.go` (67), `attempt_cost_basis.go` (56) | ✅ Split + canonical column order |
+| `tests/worker-cert/parallel_bench.py` | merged | 256 LOC | 10 `bench/` modules (1118 LOC) | ✅ Split |
+| `RemoteCodex/.../telemetry/attempt_session.go` | merged | 264 LOC | `attempt_session_types.go` (118), `attempt_session_sampling.go` (174), `attempt_session_finalize.go` (96) | ✅ Split |
+| `DataServer/internal/store/worker_capacity_report.go` | flake | same | — | ✅ Fixed AVG() float64→int64 scan flake |
+| `scripts/ci/check-loc-thresholds.sh` | no Python | same | — | ✅ Added Python LOC gate (warn >500, gate >800) |
+
+**New CI gate:** Python (`.py`) files now have a two-tier LOC check:
+- **Warning** (>500 LOC): `::warning` annotation, no gate
+- **Hard refactor** (>800 LOC): `::error` annotation, CI fails
+
+Excludes: `venv/`, `__pycache__/`, `.eggs/`, `build/`, `dist/`, `.tox/`,
+`.mypy_cache/`, `.pytest_cache/`, `.ruff_cache/`.
+
+Current Python warnings: `test_parallel_bench.py` (627),
+`generate_complete_report.py` (530). No Python files exceed the 800 gate.
 
 ### C/C++ gate (added 2026-08-23)
 
