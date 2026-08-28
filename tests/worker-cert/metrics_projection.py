@@ -67,6 +67,7 @@ MASTER_SELECT_FAMILIES = {
     "velox_worker_memory_used_bytes": None,        # raw bytes
     "velox_worker_memory_available_bytes": None,   # raw bytes
     "velox_worker_disk_free_bytes": None,          # raw bytes
+    "velox_worker_scratch_current_bytes": None,     # raw bytes
     "velox_worker_scratch_peak_bytes": None,        # raw bytes
 }
 
