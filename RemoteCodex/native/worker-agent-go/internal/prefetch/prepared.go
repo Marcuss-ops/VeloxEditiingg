@@ -66,15 +66,15 @@ type PreparedJob struct {
 // certificate before allowing a strict claim; any field mismatch means
 // the preparation is stale or belongs to a different execution lineage.
 type PreparedJobCertificate struct {
-	WorkerID      string    `json:"worker_id"`
-	ReservationID string    `json:"reservation_id"`
-	PlanID        string    `json:"plan_id"`
-	PlanVersion   uint64    `json:"plan_version"`
-	TaskRevision  int       `json:"task_revision"`
-	PreparedAt    time.Time `json:"prepared_at"`
-	AssetsRequired int      `json:"assets_required"`
-	AssetsPrepared int      `json:"assets_prepared"`
-	PreparedBytes  int64    `json:"prepared_bytes"`
+	WorkerID       string    `json:"worker_id"`
+	ReservationID  string    `json:"reservation_id"`
+	PlanID         string    `json:"plan_id"`
+	PlanVersion    uint64    `json:"plan_version"`
+	TaskRevision   int       `json:"task_revision"`
+	PreparedAt     time.Time `json:"prepared_at"`
+	AssetsRequired int       `json:"assets_required"`
+	AssetsPrepared int       `json:"assets_prepared"`
+	PreparedBytes  int64     `json:"prepared_bytes"`
 }
 
 // Certificate builds the immutable lineage fingerprint from the PreparedJob.
@@ -125,18 +125,29 @@ func (c PreparedJobCertificate) VerifyClaim(workerID string, taskRevision int) (
 const PreparationStatePrepared = "PREPARED"
 
 // MetadataResolver is injectable for tests and for deployments that provide
-// a platform-specific media probe. Production defaults to ComputeLocalManifest
-// and therefore uses the worker's ffprobe integration.
+// a platform-specific media probe. Production defaults to the verified
+// metadata cache backed by the worker's canonical cache integrity evidence.
 type MetadataResolver func(context.Context, futureasset.AssetManifest, downloader.CacheResolution) (PreparedAssetMetadata, error)
 
-// defaultMetadataResolver recomputes the verified local manifest after the
-// cache/download phase. This gives cache hits the same evidence as downloads:
-// SHA256, byte size, MIME/container metadata and ffprobe details.
+// defaultMetadataResolver resolves metadata after the canonical cache/download
+// phase. The cache resolver has already verified the content identity, so this
+// path deliberately reuses that SHA and the durable media-metadata sidecar
+// instead of hashing/probing the same blob on every future plan. Missing
+// verification evidence falls back to the full strict manifest computation in
+// publisher.ComputeVerifiedLocalManifest.
 func defaultMetadataResolver(ctx context.Context, asset futureasset.AssetManifest, resolved downloader.CacheResolution) (PreparedAssetMetadata, error) {
 	if strings.TrimSpace(resolved.LocalPath) == "" {
 		return PreparedAssetMetadata{}, fmt.Errorf("prefetch: asset %q has no local path", asset.AssetKey)
 	}
-	manifest, err := publisher.ComputeLocalManifest(ctx, resolved.LocalPath)
+	verifiedSHA := string(resolved.SHA256)
+	if strings.TrimSpace(verifiedSHA) == "" {
+		verifiedSHA = asset.SHA256
+	}
+	verifiedSize := resolved.SizeBytes
+	if verifiedSize <= 0 {
+		verifiedSize = asset.SizeBytes
+	}
+	manifest, err := publisher.ComputeVerifiedLocalManifest(ctx, resolved.LocalPath, verifiedSHA, verifiedSize)
 	if err != nil {
 		return PreparedAssetMetadata{}, fmt.Errorf("prefetch: asset %q metadata: %w", asset.AssetKey, err)
 	}
@@ -264,6 +275,8 @@ func (s *Scheduler) InvalidatePreparedAsset(jobID, assetKey string) {
 	if len(job.Assets) == 0 {
 		delete(s.prepared, jobID)
 	} else {
+		job.State = "PREPARING"
+		job.PreparedAt = time.Time{}
 		s.prepared[jobID] = job
 	}
 }
