@@ -247,3 +247,4 @@ tests/smoke/full_payload/evidence/*
 /end_scenario
 /.finalize-requested-split-trigger
 /dist/
+DataServer/fleetctl
