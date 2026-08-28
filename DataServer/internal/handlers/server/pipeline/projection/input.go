@@ -50,6 +50,7 @@ type ClipInput struct {
 	DriveFileID string
 	URL         string
 	SHA256      string
+	SizeBytes   int64
 	StartMS     int64
 	EndMS       int64
 	DurationMS  int64
@@ -249,6 +250,9 @@ func clipToMap(input *ClipInput) map[string]interface{} {
 	}
 	if input.SHA256 != "" {
 		out["sha256"] = input.SHA256
+	}
+	if input.SizeBytes > 0 {
+		out["size_bytes"] = input.SizeBytes
 	}
 	if input.StartMS > 0 {
 		out["start_ms"] = input.StartMS

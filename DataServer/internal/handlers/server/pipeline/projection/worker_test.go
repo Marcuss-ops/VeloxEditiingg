@@ -1,6 +1,7 @@
 package projection
 
 import (
+	"encoding/json"
 	"testing"
 )
 
@@ -86,6 +87,42 @@ func TestProjectWorkerPayload_MapsClipStockToRegisteredClipsPipeline(t *testing.
 	clips, ok := got["clips"].([]interface{})
 	if !ok || len(clips) != 1 {
 		t.Fatalf("clips = %#v, want one normalized clip", got["clips"])
+	}
+}
+
+func TestProjectWorkerPayload_PreservesClipIntegrityMetadata(t *testing.T) {
+	raw := map[string]interface{}{
+		"status":     "completed",
+		"job_id":     "projection-clip-integrity",
+		"job_type":   "clip.stock.v1",
+		"video_name": "Clip integrity",
+		"scenes": []interface{}{map[string]interface{}{
+			"text":             "A verified clip",
+			"duration_seconds": float64(5),
+			"clip": map[string]interface{}{
+				"asset_id":   "drive-file-1",
+				"url":        "velox-drive://drive-file-1",
+				"sha256":     "abc123",
+				"size_bytes": int64(42),
+			},
+		}},
+	}
+
+	got, err := ProjectWorkerPayload(raw, "clip_stock")
+	if err != nil {
+		t.Fatalf("ProjectWorkerPayload() error: %v", err)
+	}
+	encoded, ok := got["scenes_json"].(string)
+	if !ok {
+		t.Fatalf("scenes_json missing: %#v", got)
+	}
+	var scenes []map[string]interface{}
+	if err := json.Unmarshal([]byte(encoded), &scenes); err != nil {
+		t.Fatalf("decode scenes_json: %v", err)
+	}
+	clip, ok := scenes[0]["clip"].(map[string]interface{})
+	if !ok || clip["sha256"] != "abc123" || clip["size_bytes"] != float64(42) {
+		t.Fatalf("clip integrity metadata = %#v", scenes[0]["clip"])
 	}
 }
 

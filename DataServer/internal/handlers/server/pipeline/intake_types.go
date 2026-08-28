@@ -203,6 +203,7 @@ type SubmitClip struct {
 	DriveFileID string `json:"drive_file_id,omitempty"`
 	URL         string `json:"url,omitempty"`
 	SHA256      string `json:"sha256,omitempty"`
+	SizeBytes   int64  `json:"size_bytes,omitempty"`
 	StartMS     int64  `json:"start_ms,omitempty"`
 	EndMS       int64  `json:"end_ms,omitempty"`
 	DurationMS  int64  `json:"duration_ms,omitempty"`

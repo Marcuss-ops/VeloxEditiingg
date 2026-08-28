@@ -16,6 +16,7 @@ func convertClipAsset(m map[string]interface{}) *ClipAsset {
 		DriveFileID: payload.FirstString(m, "drive_file_id"),
 		URL:         payload.FirstString(m, "url"),
 		SHA256:      payload.FirstString(m, "sha256"),
+		SizeBytes:   intFromAnyMap(m["size_bytes"]),
 		StartMS:     intFromAnyMap(m["start_ms"]),
 		EndMS:       intFromAnyMap(m["end_ms"]),
 		DurationMS:  intFromAnyMap(m["duration_ms"]),

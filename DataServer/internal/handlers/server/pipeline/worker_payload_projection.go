@@ -98,7 +98,7 @@ func projectionClip(input *SubmitClip) *projection.ClipInput {
 
 func projectionClipValue(input *SubmitClip) projection.ClipInput {
 	return projection.ClipInput{
-		AssetID: input.AssetID, DriveFileID: input.DriveFileID, URL: input.URL, SHA256: input.SHA256,
+		AssetID: input.AssetID, DriveFileID: input.DriveFileID, URL: input.URL, SHA256: input.SHA256, SizeBytes: input.SizeBytes,
 		StartMS: input.StartMS, EndMS: input.EndMS, DurationMS: input.DurationMS,
 	}
 }
