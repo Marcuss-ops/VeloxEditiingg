@@ -19,8 +19,6 @@
 package worker
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"testing"
 
@@ -175,13 +173,19 @@ func TestBuildHello_DeterministicAcrossRegistrations(t *testing.T) {
 	}
 	a := buildSame()
 	b := buildSame()
-	ab, _ := json.Marshal(a)
-	bb, _ := json.Marshal(b)
-	hash := func(s string) string {
-		h := sha256.Sum256([]byte(s))
-		return hex.EncodeToString(h[:])
+	// Host capability values are sampled from the live machine before Hello
+	// (RAM/free disk can legitimately change between constructions). The
+	// deterministic contract applies to the schema and executor descriptors,
+	// not to volatile resource observations.
+	for _, key := range []string{"schema_version", "executors", "features"} {
+		require.Equal(t, a[key], b[key], "hello field %q must be deterministic across boots", key)
 	}
-	require.Equal(t, hash(string(ab)), hash(string(bb)), "hello JSON must be byte-identical across boots")
+	hostA, ok := a["host"].(map[string]interface{})
+	require.True(t, ok)
+	hostB, ok := b["host"].(map[string]interface{})
+	require.True(t, ok)
+	require.Equal(t, hostA["worker_id"], hostB["worker_id"])
+	require.Equal(t, hostA["max_parallel_jobs"], hostB["max_parallel_jobs"])
 }
 
 func TestBuildHello_UsesLimiterNotDetectForMaxParallel(t *testing.T) {
