@@ -72,6 +72,15 @@ func (h *AdminBenchmarkValidateHandler) RunAndValidate() gin.HandlerFunc {
 			})
 			return
 		}
+		// A capacity result is a certification only when its evidence is
+		// durably recorded. Do not run a benchmark that cannot be persisted.
+		if h.deps.Store == nil {
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{
+				"code":  "BENCHMARK_STORE_MISCONFIGURED",
+				"error": "benchmark store is not configured",
+			})
+			return
+		}
 		if req.MaxConcurrency <= 0 {
 			req.MaxConcurrency = 4
 		}
@@ -104,40 +113,48 @@ func (h *AdminBenchmarkValidateHandler) RunAndValidate() gin.HandlerFunc {
 		}
 
 		// 2. Persist the benchmark result
-		if h.deps.Store != nil {
-			row := store.BenchmarkResultRow{
-				WorkerID:       req.WorkerID,
-				BenchmarkRunID: result.BenchmarkRunID,
-				FixtureID:      req.FixtureID,
-				MaxConcurrency: req.MaxConcurrency,
-				RunsPerLevel:   req.RunsPerLevel,
-				CacheMode:      req.CacheMode,
-				SweetSpot:      result.SweetSpot,
-				LimitingFactor: result.LimitingFactor,
-				Levels:         result.Levels,
-				Gains:          result.Gains,
-				Summary:        result.Summary,
-				StartedAt:      result.StartedAt.Format(time.RFC3339),
-				CompletedAt:    result.CompletedAt.Format(time.RFC3339),
-			}
-			_ = h.deps.Store.UpsertBenchmarkResult(ctx, row)
+		row := store.BenchmarkResultRow{
+			WorkerID:       req.WorkerID,
+			BenchmarkRunID: result.BenchmarkRunID,
+			FixtureID:      req.FixtureID,
+			MaxConcurrency: req.MaxConcurrency,
+			RunsPerLevel:   req.RunsPerLevel,
+			CacheMode:      req.CacheMode,
+			SweetSpot:      result.SweetSpot,
+			LimitingFactor: result.LimitingFactor,
+			Levels:         result.Levels,
+			Gains:          result.Gains,
+			Summary:        result.Summary,
+			StartedAt:      result.StartedAt.Format(time.RFC3339),
+			CompletedAt:    result.CompletedAt.Format(time.RFC3339),
+		}
+		if err := h.deps.Store.UpsertBenchmarkResult(ctx, row); err != nil {
+			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+				"code":  "BENCHMARK_PERSISTENCE_FAILED",
+				"error": "benchmark result persistence failed: " + err.Error(),
+			})
+			return
 		}
 
 		// 3. Validate against the scorecard prediction
 		validation := h.validateScorecard(req.WorkerID, result)
 
 		// 4. Persist validation results
-		if h.deps.Store != nil {
-			_ = h.deps.Store.UpdateBenchmarkValidation(ctx,
-				result.BenchmarkRunID,
-				&validation.PredictedSweetSpot,
-				&validation.ObservedSweetSpot,
-				&validation.Accuracy,
-				&validation.SuggestedRAMSafety,
-				&validation.SuggestedDiskSafety,
-				&validation.SuggestedNetworkSafety,
-				&validation.Rationale,
-			)
+		if err := h.deps.Store.UpdateBenchmarkValidation(ctx,
+			result.BenchmarkRunID,
+			&validation.PredictedSweetSpot,
+			&validation.ObservedSweetSpot,
+			&validation.Accuracy,
+			&validation.SuggestedRAMSafety,
+			&validation.SuggestedDiskSafety,
+			&validation.SuggestedNetworkSafety,
+			&validation.Rationale,
+		); err != nil {
+			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+				"code":  "BENCHMARK_VALIDATION_PERSISTENCE_FAILED",
+				"error": "benchmark validation persistence failed: " + err.Error(),
+			})
+			return
 		}
 
 		resp := BenchmarkValidateResponse{
