@@ -285,6 +285,7 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 	if fleetDep != nil && fleetDep.Registry != nil && m != nil && m.Workers != nil && p != nil && p.SQLite != nil {
 		environment := strings.ToLower(strings.TrimSpace(cfg.Runtime.Environment))
 		isDev := strings.EqualFold(strings.TrimSpace(cfg.Fleet.SmokeMode), "development") && environment == "development"
+		isLocalArtifact := strings.EqualFold(strings.TrimSpace(cfg.Fleet.SmokeMode), "local")
 
 		smokeBackend := fleet.LevelDSmokeBackend{
 			Lease:     fleet.NewRegistryDrainLease(m.Workers.Registry()),
@@ -307,9 +308,13 @@ func wireFleetOperatorHandlers(cfg *config.Config, fleetDep *FleetDep, m *module
 			smokeBackend.Asset = fleet.NewStubAssetResolver("asset://e2e/smoke/canary.mp4", 0)
 			logServerf(context.Background(), logging.LevelInfo, logging.CodeServerSmoke, "[BOOTSTRAP] LevelDSmokeExecutor: DEV MODE (VELOX_SMOKE_MODE=development) — LocalShellWorker + LocalFileDriveUploader + StubAssetResolver")
 		} else {
-			// Production mode: real SSH worker + real Drive adapter.
+			// Production mode: real SSH worker plus either the explicit local
+			// artifact sink or the optional Google Drive adapter.
 			smokeBackend.Worker = fleet.NewSSHWorkerExec(sharedSSH)
-			if m.Drive != nil {
+			if isLocalArtifact {
+				smokeBackend.Drive = fleet.NewLocalArtifactUploader()
+				logServerf(context.Background(), logging.LevelInfo, logging.CodeServerSmoke, "[BOOTSTRAP] LevelDSmokeExecutor: LOCAL ARTIFACT mode (VELOX_SMOKE_MODE=local) — Google Drive disabled")
+			} else if m.Drive != nil {
 				if svc := m.Drive.Service(); svc != nil {
 					smokeBackend.Drive = &driveUploaderAdapter{svc: svc, folderID: cfg.Fleet.SmokeDriveFolderID}
 					logServerf(context.Background(), logging.LevelInfo, logging.CodeServerSmoke, "[BOOTSTRAP] LevelDSmokeExecutor: production Drive adapter wired (integrations/drive.Service)")

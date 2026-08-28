@@ -141,30 +141,30 @@ func (w *LocalShellWorker) CleanupWorkerTemp(_ context.Context, runID, _ string)
 	return nil
 }
 
-// ── LocalFileDriveUploader (BackendDriveUploader via local fs) ──────
+// ── LocalArtifactUploader (BackendDriveUploader via local fs) ──────
 //
 // Writes the artifact to a local directory instead of uploading
-// to Google Drive. Returns a fake driveFileID so the smoke
-// pipeline can complete end-to-end. Production swaps in a real
-// Drive-backed adapter once credentials are configured.
+// to Google Drive. In explicit VELOX_SMOKE_MODE=local this is the
+// production smoke sink: the artifact is verified and retained locally,
+// with no Google Drive call or credential required.
 
 // LocalDriveRoot is the parent directory for smoke artifact "uploads".
-const LocalDriveRoot = "/tmp/velox-smoke-drive"
+const LocalArtifactRoot = "/var/lib/velox/smoke-artifacts"
 
 // LocalFileDriveUploader implements BackendDriveUploader by copying
 // the artifact to a local directory.
-type LocalFileDriveUploader struct{}
+type LocalArtifactUploader struct{}
 
 // NewLocalFileDriveUploader returns a LocalFileDriveUploader.
 func NewLocalFileDriveUploader() *LocalFileDriveUploader {
-	return &LocalFileDriveUploader{}
+	return &LocalArtifactUploader{}
 }
 
 // UploadArtifact copies srcPath to LocalDriveRoot/<runID>.mp4 and
 // returns a fake Drive file ID.
-func (d *LocalFileDriveUploader) UploadArtifact(_ context.Context, runID, srcPath string, expectedBytes int64, expectedSHA256 string) (string, error) {
-	if err := os.MkdirAll(LocalDriveRoot, 0755); err != nil {
-		return "", fmt.Errorf("smoke: mkdir drive root: %w", err)
+func (d *LocalArtifactUploader) UploadArtifact(_ context.Context, runID, srcPath string, expectedBytes int64, expectedSHA256 string) (string, error) {
+	if err := os.MkdirAll(LocalArtifactRoot, 0755); err != nil {
+		return "", fmt.Errorf("smoke: mkdir local artifact root: %w", err)
 	}
 	src, err := os.ReadFile(srcPath)
 	if err != nil {
@@ -178,10 +178,17 @@ func (d *LocalFileDriveUploader) UploadArtifact(_ context.Context, runID, srcPat
 	if expectedSHA256 != "" && gotSHA256 != expectedSHA256 {
 		return "", fmt.Errorf("%w: sha256=%s want=%s", ErrDriveUploadFail, gotSHA256, expectedSHA256)
 	}
-	dst := filepath.Join(LocalDriveRoot, runID+".mp4")
+	dst := filepath.Join(LocalArtifactRoot, runID+".mp4")
 	if err := os.WriteFile(dst, src, 0644); err != nil {
-		return "", fmt.Errorf("%w: write local drive: %v", ErrDriveUploadFail, err)
+		return "", fmt.Errorf("%w: write local artifact: %v", ErrDriveUploadFail, err)
 	}
-	fakeID := "local-drive-" + runID
-	return fakeID, nil
+	return "local-artifact-" + runID, nil
 }
+
+// NewLocalArtifactUploader constructs the Drive-independent smoke sink.
+func NewLocalArtifactUploader() *LocalArtifactUploader {
+	return &LocalArtifactUploader{}
+}
+
+// LocalFileDriveUploader remains a source-compatible alias for tests.
+type LocalFileDriveUploader = LocalArtifactUploader
