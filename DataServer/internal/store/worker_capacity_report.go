@@ -23,6 +23,21 @@ import (
 type WorkerCapacityReport struct {
 	WorkerID string `json:"worker_id"`
 
+	LogicalCPUCount   int    `json:"logical_cpu_count"`
+	PhysicalCPUCount  int    `json:"physical_cpu_count"`
+	EffectiveCPUCount int    `json:"effective_cpu_count"`
+	TotalMemoryBytes  int64  `json:"total_memory_bytes"`
+	CPUModel          string `json:"cpu_model"`
+	StorageDevice     string `json:"storage_device"`
+	StorageClass      string `json:"storage_class"`
+	GPUModel          string `json:"gpu_model"`
+	GPUVRAMBytes      int64  `json:"gpu_vram_bytes"`
+	NVENCAvailable    bool   `json:"nvenc_available"`
+	NVDECAvailable    bool   `json:"nvdec_available"`
+	QSVAvailable      bool   `json:"qsv_available"`
+	NofileSoft        int64  `json:"ulimit_nofile_soft"`
+	NofileHard        int64  `json:"ulimit_nofile_hard"`
+
 	// Host resource peaks/floors from worker_resource_samples over the
 	// configurable lookback window (default: 24h).
 	CPUPeakRatio           float64 `json:"cpu_peak_ratio"`
@@ -84,6 +99,10 @@ func (s *SQLiteStore) GetWorkerCapacityReport(ctx context.Context, workerID stri
 		DataSource: "master_sql",
 	}
 
+	if err := s.queryHardwareProfile(ctx, workerID, report); err != nil {
+		return nil, fmt.Errorf("capacity report hardware profile: %w", err)
+	}
+
 	// 1. Host resource peaks/floors from worker_resource_samples (last 24h).
 	if err := s.queryResourceSamples(ctx, workerID, report); err != nil {
 		return nil, fmt.Errorf("capacity report resource samples: %w", err)
@@ -103,6 +122,31 @@ func (s *SQLiteStore) GetWorkerCapacityReport(ctx context.Context, workerID stri
 	report.MaxRecommendedJobs = deriveMaxRecommendedJobs(report)
 
 	return report, nil
+}
+
+func (s *SQLiteStore) queryHardwareProfile(ctx context.Context, workerID string, report *WorkerCapacityReport) error {
+	var nvenc, nvdec, qsv int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT logical_cpu_count, physical_cpu_count, effective_cpu_count,
+		       total_memory_bytes, cpu_model, storage_device, storage_class,
+		       gpu_model, gpu_vram_bytes, nvenc_available, nvdec_available,
+		       qsv_available, ulimit_nofile_soft, ulimit_nofile_hard
+		FROM worker_runtime_snapshots
+		WHERE worker_id = ? ORDER BY created_at DESC LIMIT 1`, workerID).Scan(
+		&report.LogicalCPUCount, &report.PhysicalCPUCount, &report.EffectiveCPUCount,
+		&report.TotalMemoryBytes, &report.CPUModel, &report.StorageDevice,
+		&report.StorageClass, &report.GPUModel, &report.GPUVRAMBytes,
+		&nvenc, &nvdec, &qsv, &report.NofileSoft, &report.NofileHard)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	report.NVENCAvailable = nvenc != 0
+	report.NVDECAvailable = nvdec != 0
+	report.QSVAvailable = qsv != 0
+	return nil
 }
 
 // queryResourceSamples computes peaks/floors over the last 24h window.
