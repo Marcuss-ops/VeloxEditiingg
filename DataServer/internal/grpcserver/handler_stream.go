@@ -328,6 +328,7 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 		notifyCtx, cancel := context.WithCancel(sessionCtx)
 		notifyStop = cancel
 		notifyCh = make(chan struct{}, 1)
+		sess.placementNotify = notifyCh
 		go h.notifyTasksAvailable(notifyCtx, workerID, notifyCh, sess.done)
 	}
 

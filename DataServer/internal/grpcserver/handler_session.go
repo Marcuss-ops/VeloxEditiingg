@@ -56,6 +56,10 @@ type workerSession struct {
 	// otherwise pending offers can be left orphaned silently. The main loop
 	// reads writerErr inside its select and triggers a teardown on receipt.
 	writerErr chan error // Job offering synchronization (Issue 4 fix).
+	// placementNotify is the coalescing wake-up channel for push placement.
+	// It is installed when the session starts and is deliberately never closed;
+	// session teardown cancels the notifier context instead.
+	placementNotify chan struct{}
 	// PR #4: replaced pendingOffer (job-based) with pendingTaskOffer (task-based).
 	pendingTaskOffer   *taskgraph.TaskWithSpec // TaskOffer sent, awaiting TaskAccepted/TaskRejected
 	pendingTaskOfferAt time.Time               // when the offer was put on the wire
@@ -192,6 +196,17 @@ func (s *workerSession) placementSnapshot(workerID string) placement.WorkerSnaps
 			0,
 		).UTC(),
 	}
+}
+
+// signalPlacement wakes the session's push placer after a lifecycle change
+// may have made a READY task dispatchable. The wake-up is coalesced and does
+// not perform placement inline, preserving the single claimMu-serialized
+// check/select/claim/send path.
+func (s *workerSession) signalPlacement() {
+	if s == nil {
+		return
+	}
+	signalTaskOffers(s.placementNotify)
 }
 
 func (s *workerSession) setActiveExecutionSlots(value int) {

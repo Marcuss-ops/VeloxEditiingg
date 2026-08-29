@@ -33,12 +33,20 @@ func (h *Handler) dispatchMessage(workerID, sessionID string, env *pb.WorkerToMa
 
 	case *pb.WorkerToMasterEnvelope_TaskAccepted:
 		h.handleTaskAccepted(workerID, m.TaskAccepted, sess)
+		// Accept completes the offer handshake; re-evaluate placement in case
+		// another READY task can now use a different phase slot.
+		sess.signalPlacement()
 
 	case *pb.WorkerToMasterEnvelope_TaskRejected:
 		h.handleTaskRejected(workerID, m.TaskRejected, sess)
+		// Rejection releases the lease and returns the task to READY.
+		sess.signalPlacement()
 
 	case *pb.WorkerToMasterEnvelope_TaskResult:
 		h.handleTaskResult(workerID, m.TaskResult, sess, env.GetSentAt().AsTime())
+		// A terminal result releases the authoritative lease. Do not wait for
+		// the next heartbeat/ticker before offering the next READY task.
+		sess.signalPlacement()
 
 	case *pb.WorkerToMasterEnvelope_TaskOutputDeclared:
 		h.handleTaskOutputDeclared(workerID, m.TaskOutputDeclared, sess)
