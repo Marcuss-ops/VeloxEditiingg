@@ -26,12 +26,7 @@ func (h *Handler) dispatchMessage(workerID, sessionID string, env *pb.WorkerToMa
 	case *pb.WorkerToMasterEnvelope_Heartbeat:
 		h.handleHeartbeat(workerID, sessionID, m.Heartbeat)
 		h.dispatchCommands(workerID, sess)
-		if notifyCh != nil {
-			select {
-			case notifyCh <- struct{}{}:
-			default:
-			}
-		}
+		signalTaskOffers(notifyCh)
 
 	case *pb.WorkerToMasterEnvelope_TaskLeaseRenewal:
 		h.handleTaskRenewal(workerID, m.TaskLeaseRenewal, sess)
@@ -86,9 +81,26 @@ func (h *Handler) dispatchMessage(workerID, sessionID string, env *pb.WorkerToMa
 
 	case *pb.WorkerToMasterEnvelope_PrefetchLifecycleEvent:
 		h.handlePrefetchLifecycleEvent(workerID, m.PrefetchLifecycleEvent)
+		// Preparation evidence changes placement eligibility. Wake the
+		// push placer immediately instead of waiting for the next heartbeat
+		// or its 10-second ticker; otherwise a prepared READY task can sit
+		// indefinitely behind an execution slot that has just been released.
+		signalTaskOffers(notifyCh)
 
 	default:
 		logGRPCf(ctxForTaskSession(sess), logging.LevelWarn, logging.CodeGRPCStreamUnknownMessage, "[GRPC] Unknown message type from worker %s: %T", workerID, env.Msg)
 	}
 	return nil
+}
+
+// signalTaskOffers coalesces placement wake-ups. The channel is deliberately
+// non-blocking: a pending wake-up already guarantees another placement pass.
+func signalTaskOffers(notifyCh chan struct{}) {
+	if notifyCh == nil {
+		return
+	}
+	select {
+	case notifyCh <- struct{}{}:
+	default:
+	}
 }
