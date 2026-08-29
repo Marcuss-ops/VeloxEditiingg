@@ -67,7 +67,10 @@ func loadOperationalRuntimeConfig(raw RawConfig) (SupervisorConfig, CacheConfig,
 		FutureAssetPrefetchHorizon:     raw.Int("VELOX_PREFETCH_HORIZON_JOBS", 3, 1),
 		FutureAssetProtectionLookahead: raw.Int("VELOX_PREFETCH_PROTECTION_LOOKAHEAD_JOBS", 10, 1),
 		FutureAssetPlanTTL:             raw.Duration("VELOX_PREFETCH_PLAN_TTL", 2*time.Minute),
-		StrictPrefetchClaim:            raw.Bool("VELOX_PREFETCH_STRICT_CLAIM", false),
+		// Asset-bearing tasks must not enter an attempt until their verified
+		// prefetch evidence is present. Operators may explicitly disable this
+		// only for legacy/dev deployments via the environment.
+		StrictPrefetchClaim: raw.Bool("VELOX_PREFETCH_STRICT_CLAIM", true),
 	}
 	scheduler := SchedulerConfig{
 		TaskGraphTick:             raw.Duration("VELOX_TASKGRAPH_TICK", 2*time.Second),

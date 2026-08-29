@@ -34,6 +34,9 @@ func TestLoadOperationalRuntimeDefaults(t *testing.T) {
 	if cfg.Runtime.Cache.SnapshotInterval != 30*time.Second {
 		t.Fatalf("cache interval = %s", cfg.Runtime.Cache.SnapshotInterval)
 	}
+	if !cfg.Runtime.Cache.StrictPrefetchClaim {
+		t.Fatal("strict prefetch claim default is disabled")
+	}
 	if cfg.Runtime.Scheduler.CalendarInterval != 30*time.Second {
 		t.Fatalf("calendar interval = %s", cfg.Runtime.Scheduler.CalendarInterval)
 	}
