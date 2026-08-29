@@ -485,7 +485,7 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 		return nil, fmt.Errorf("bootstrap: ensure local fallback destination: %w", err)
 	}
 	localExportRoot := filepath.Join(cfg.Runtime.StorageDir, "local-deliveries")
-	deliveryReg.Register(deliveryProviders.NewLocalExportProvider(localExportRoot))
+	deliveryReg.Register(deliveryProviders.NewLocalExportProvider(localExportRoot, p.BlobStore))
 	logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] Delivery provider registered: local_export root=%s", localExportRoot)
 
 	// The social_gateway provider is platform-agnostic — it talks to the

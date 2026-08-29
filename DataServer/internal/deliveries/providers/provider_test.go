@@ -67,18 +67,21 @@ func TestDeliveryRegistryDoesNotAdvertiseS3WithoutProvider(t *testing.T) {
 
 func TestLocalExportProvider_Success(t *testing.T) {
 	outDir := t.TempDir()
-	p := NewLocalExportProvider(outDir)
 
-	// Create a source file
-	srcDir := t.TempDir()
-	srcFile := filepath.Join(srcDir, "video.mp4")
+	root := t.TempDir()
+	blobStore, err := store.NewFilesystemBlobStore(filepath.Join(root, "staging"), filepath.Join(root, "final"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srcFile := filepath.Join(blobStore.FinalDir(), "video.mp4")
 	if err := os.WriteFile(srcFile, []byte("fake video content"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	p := NewLocalExportProvider(outDir, blobStore)
 
 	artifact := &store.Artifact{
-		ID:        "art-001",
-		LocalPath: srcFile,
+		ID:         "art-001",
+		StorageKey: "video.mp4",
 	}
 
 	result, err := p.Deliver(context.Background(), artifact, &deliveries.Destination{}, "", "")
