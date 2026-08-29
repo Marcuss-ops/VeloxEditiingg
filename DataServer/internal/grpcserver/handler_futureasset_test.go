@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 
 	"velox-shared/contract"
@@ -22,6 +23,20 @@ func TestMattDamonCanonicalFixtureProvidesPrefetchIntegrityManifests(t *testing.
 	payload, err := os.ReadFile(fixturePath)
 	if err != nil {
 		t.Fatalf("read Matt Damon fixture: %v", err)
+	}
+	var fixture struct {
+		DeliveryPlan []struct {
+			DestinationID string `json:"destination_id"`
+		} `json:"delivery_plan"`
+	}
+	if err := json.Unmarshal(payload, &fixture); err != nil {
+		t.Fatalf("decode Matt Damon fixture: %v", err)
+	}
+	if len(fixture.DeliveryPlan) != 1 || fixture.DeliveryPlan[0].DestinationID != "local-fallback" {
+		t.Fatalf("Matt Damon delivery plan=%+v, want one local-fallback destination", fixture.DeliveryPlan)
+	}
+	if strings.Contains(string(payload), "drive-upload") || strings.Contains(string(payload), "google-drive") {
+		t.Fatal("Matt Damon canonical fixture must not select a Drive delivery")
 	}
 	assets := futureAssetManifests(payload)
 	if len(assets) != 26 {
