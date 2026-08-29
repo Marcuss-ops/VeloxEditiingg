@@ -555,12 +555,12 @@ func TestInvariant_EvidenceStateTransition(t *testing.T) {
 
 func TestInvariant_WrongWorkerCannotClaim(t *testing.T) {
 	const (
-		ownerWorker    = "host_57_131_20_173"
+		ownerWorker   = "host_57_131_20_173"
 		intruderWorker = "host_57_129_132_133"
-		taskID         = "task-B"
-		jobID          = "job-B"
-		sha256         = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233"
-		size           = int64(1024 * 1024)
+		taskID        = "task-B"
+		jobID         = "job-B"
+		sha256        = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233"
+		size          = int64(1024 * 1024)
 	)
 
 	frs := &expiryMockStore{payload: reservationPayload(sha256, size)}
@@ -744,14 +744,12 @@ func TestInvariant_PartialPreparationBlocksFullPasses(t *testing.T) {
 	h.markPreparedAsset(workerID, &preparedAssetEvidence{
 		TaskID: taskID, TaskRevision: 1, AssetID: "subtitle", SHA256: sha3, SizeBytes: 50,
 	}, resID)
-	frs.SetState(taskgraph.ReservationPrepared)
-
 	prepared, err = h.ensurePreparedBeforeClaim(context.Background(), workerID, candidate)
 	if err != nil {
 		t.Fatalf("3/3: error = %v", err)
 	}
 	if !prepared {
-		t.Fatal("3/3: must PASS when all assets prepared")
+		t.Fatal("3/3: must transition PREPARING to PREPARED and pass when all assets are prepared")
 	}
 }
 
@@ -803,16 +801,8 @@ func TestLifecycle_FullReservedToPrepared(t *testing.T) {
 		t.Fatal("PLANNING: gate must block")
 	}
 
-	// ── PREPARING: gate blocks (partial evidence) ────────────────────
+	// ── PREPARING: gate blocks (no complete evidence) ────────────────
 	frs.SetState(taskgraph.ReservationPreparing)
-	// Add partial evidence (not all assets).
-	h.markPreparedAsset(workerID, &preparedAssetEvidence{
-		TaskID:       taskID,
-		TaskRevision: 1,
-		AssetID:      "video-fragment",
-		SHA256:       sha256,
-		SizeBytes:    size,
-	}, "future:"+workerID+":"+taskID)
 	prepared, err = h.ensurePreparedBeforeClaim(context.Background(), workerID, candidate)
 	if err != nil {
 		t.Fatalf("PREPARING: error = %v", err)
@@ -822,6 +812,9 @@ func TestLifecycle_FullReservedToPrepared(t *testing.T) {
 	}
 
 	// ── PREPARED: gate passes ────────────────────────────────────────
+	h.markPreparedAsset(workerID, &preparedAssetEvidence{
+		TaskID: taskID, TaskRevision: 1, AssetID: "video-fragment", SHA256: sha256, SizeBytes: size,
+	}, "future:"+workerID+":"+taskID)
 	frs.SetState(taskgraph.ReservationPrepared)
 	prepared, err = h.ensurePreparedBeforeClaim(context.Background(), workerID, candidate)
 	if err != nil {
@@ -1220,7 +1213,7 @@ func TestVerifyAttempt_GateBlocksOnCertificateWorkerMismatch(t *testing.T) {
 		taskID        = "task-B"
 		jobID         = "job-B"
 		sha256        = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233"
-		size          = int64(1024 * 1024)
+		size           = int64(1024 * 1024)
 	)
 
 	frs := &expiryMockStore{payload: reservationPayload(sha256, size)}

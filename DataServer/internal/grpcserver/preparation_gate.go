@@ -387,15 +387,17 @@ func (pg *PreparationGate) EnsurePrepared(ctx context.Context, workerID string, 
 		return PreparationExpired, nil
 	}
 
-	// A PLANNING reservation must be evaluated against its preparation
-	// evidence before it can transition to PREPARED. RESERVED and PREPARING
-	// remain blocked until their explicit state transition; this preserves
-	// the state machine's partial-evidence boundary.
+	// A PLANNING or PREPARING reservation must be evaluated against its
+	// preparation evidence before it can transition to PREPARED. RESERVED
+	// remains blocked until the plan has been sent. PREPARING is deliberately
+	// not an early-return state: the worker's evidence is what advances the
+	// reservation out of PREPARING. Returning here would strand every
+	// reservation after its first prepared-asset event.
 	if reservation.State == taskgraph.ReservationExpired {
 		logGRPCf(ctx, logging.LevelDebug, logging.CodeGRPCPlacementFailed, "[PLACEMENT] preparation gate BLOCKED state=%s worker=%s task=%s reservation=%s", reservation.State, workerID, candidate.TaskID, reservation.ReservationID)
 		return PreparationExpired, nil
 	}
-	if reservation.State == taskgraph.ReservationReserved || reservation.State == taskgraph.ReservationPreparing {
+	if reservation.State == taskgraph.ReservationReserved {
 		logGRPCf(ctx, logging.LevelDebug, logging.CodeGRPCPlacementFailed, "[PLACEMENT] preparation gate BLOCKED state=%s worker=%s task=%s reservation=%s", reservation.State, workerID, candidate.TaskID, reservation.ReservationID)
 		return PreparationWaiting, nil
 	}
