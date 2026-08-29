@@ -2,13 +2,42 @@ package grpcserver
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 
 	"velox-shared/contract"
 	"velox-shared/contract/assembly"
 	"velox-shared/futureasset"
 )
+
+func TestMattDamonCanonicalFixtureProvidesPrefetchIntegrityManifests(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	fixturePath := filepath.Join(filepath.Dir(thisFile), "..", "..", "..", "ops", "jobs", "matt_damon_20_clips_canonical.generate.json")
+	payload, err := os.ReadFile(fixturePath)
+	if err != nil {
+		t.Fatalf("read Matt Damon fixture: %v", err)
+	}
+	assets := futureAssetManifests(payload)
+	if len(assets) != 26 {
+		t.Fatalf("Matt Damon manifests=%d, want 26", len(assets))
+	}
+	var total int64
+	for _, asset := range assets {
+		if asset.AssetKey == "" || asset.SHA256 == "" || asset.SizeBytes <= 0 {
+			t.Fatalf("incomplete Matt Damon manifest: %+v", asset)
+		}
+		total += asset.SizeBytes
+	}
+	if total != 677541256 {
+		t.Fatalf("Matt Damon manifest bytes=%d, want 677541256", total)
+	}
+}
 
 func TestFutureAssetManifestsIsDeterministicallyOrdered(t *testing.T) {
 	payload := []byte(`{
