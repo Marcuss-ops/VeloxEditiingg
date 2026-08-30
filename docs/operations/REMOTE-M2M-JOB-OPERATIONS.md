@@ -42,6 +42,16 @@ Il test è stato inviato dalla macchina remota stessa e seguito fino alla fine s
 
 > Nota: il payload aveva `assemble_final: false`. Ha verificato submit, autenticazione, coda, rendering, documentazione e upload dei 5 clip singoli. Non ha prodotto un unico video finale assemblato.
 
+Il successivo job da 40 clip (`job_1788116640302762695_f27a4b0d`) è terminato con successo, ma fu eseguito prima della correzione del routing: `RENDERINGGEN_QUEUE_URL` era vuoto e il render finale venne eseguito localmente dal Master. Quel job non è una certificazione del routing verso worker.
+
+Il routing è stato corretto sul Master il 30 agosto 2026. Ora è configurato:
+
+```text
+RENDERINGGEN_QUEUE_URL=http://127.0.0.1:8000
+```
+
+Il Master prepara e accoda; il video finale deve essere renderizzato da un worker che consuma la coda. Un nuovo job di certificazione worker è necessario prima di considerare il percorso completamente verificato.
+
 ## Architettura
 
 ```
@@ -52,7 +62,7 @@ Computer client / PipelineGen
 Master Velox: 77.93.152.122:8000
           |
           v
-Worker / PipelineGen
+Worker remoto / RenderingGen
           |
           v
 Google Drive / Social Editor
@@ -244,7 +254,7 @@ La configurazione di rete persistente del servizio è nel drop-in systemd:
 /etc/systemd/system/pipelinegen.service.d/network.conf
 ```
 
-Il servizio è configurato per ascoltare su tutte le interfacce e con M2M abilitato. Dopo una modifica alla configurazione o al binario:
+Il servizio è configurato per ascoltare su tutte le interfacce, con M2M abilitato e con la coda RenderingGen attiva. Dopo una modifica alla configurazione o al binario:
 
 ```bash
 sudo systemctl daemon-reload
@@ -281,10 +291,11 @@ Il primo comando deve rispondere con stato healthy. Il secondo deve rispondere `
 - [x] Polling M2M verificato fino a `SUCCEEDED`.
 - [x] Job test 5 clip completato: 5/5, 0 errori.
 - [x] Upload dei 5 clip verificato.
-- [ ] Job assemblato finale verificato con `assemble_final: true`.
+- [x] Coda RenderingGen attivata sul Master.
+- [ ] Job assemblato finale verificato con `assemble_final: true` su un worker remoto.
+- [ ] Receipt con `worker_id` del worker di rendering verificato.
 - [ ] Trasporto HTTPS o VPN/Tailscale configurato al posto dell'HTTP pubblico.
 
 ## Sicurezza
 
 La password SSH/sudo usata durante il setup è stata condivisa nella conversazione. Deve essere cambiata appena possibile. Anche il secret M2M va ruotato se viene accidentalmente esposto o inserito in un log.
-
