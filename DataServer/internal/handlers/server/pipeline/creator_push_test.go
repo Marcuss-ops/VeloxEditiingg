@@ -97,6 +97,30 @@ func TestNormalizeCreatorPushRequestUsesPayloadIdentityAndDefaults(t *testing.T)
 	}
 }
 
+func TestNormalizeCreatorPushRequestPreservesRendererRouting(t *testing.T) {
+	normalized, err := normalizeCreatorPushRequest(creatorPushRequest{
+		Payload: map[string]interface{}{
+			"job_id":      "creator-routing-123",
+			"status":      "completed",
+			"script_text": "A complete script",
+			"pipeline_id": "clips.v1",
+			"copy_only":   true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("normalizeCreatorPushRequest() error = %v", err)
+	}
+	if normalized.TargetExecutorID != "clips.v1" {
+		t.Fatalf("TargetExecutorID = %q, want clips.v1", normalized.TargetExecutorID)
+	}
+	if got := normalized.WorkerPayload["pipeline_id"]; got != "clips.v1" {
+		t.Fatalf("WorkerPayload pipeline_id = %v, want clips.v1", got)
+	}
+	if got := normalized.WorkerPayload["copy_only"]; got != true {
+		t.Fatalf("WorkerPayload copy_only = %v, want true", got)
+	}
+}
+
 func TestNormalizeCreatorPushRequestEnvelopeOverridesPayloadIdentity(t *testing.T) {
 	normalized, err := normalizeCreatorPushRequest(creatorPushRequest{
 		SourceProvider:   "creator_pc_2",

@@ -135,6 +135,16 @@ func normalizeCreatorPushRequest(req creatorPushRequest) (*normalizedCreatorPush
 	if projectionErr != nil {
 		return nil, fmt.Errorf("project creator payload: %w", projectionErr)
 	}
+	// The Creator handoff may explicitly select the renderer pipeline. The
+	// typed DTO projection intentionally keeps only renderer fields, so carry
+	// this routing decision across the boundary instead of using it only for
+	// target-executor fallback. Without this, scene.composite receives an
+	// empty pipeline_id and fails after assets have already been prefetched.
+	for _, key := range []string{"pipeline_id", "executor_id", "audio_url", "copy_only"} {
+		if value, ok := payload[key]; ok && value != nil {
+			workerPayload[key] = value
+		}
+	}
 
 	sourceProvider := strings.TrimSpace(req.SourceProvider)
 	if sourceProvider == "" {
