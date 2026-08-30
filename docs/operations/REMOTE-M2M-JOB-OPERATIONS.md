@@ -2,13 +2,13 @@
 
 ## Stato verificato
 
-Il Master operativo è la macchina:
+Il Creator operativo è la macchina:
 
 ```
 pierone@77.93.152.122
 ```
 
-Il servizio PipelineGen è attivo come `pipelinegen.service` e ascolta su:
+Il servizio PipelineGen/Creator è attivo come `pipelinegen.service` e ascolta su:
 
 ```
 http://77.93.152.122:8000
@@ -19,8 +19,8 @@ Verifiche completate:
 - `GET /health` risponde `200`;
 - `GET /ready` risponde `200`;
 - `POST /api/v1/jobs` senza credenziali risponde `401`;
-- un client M2M autenticato può creare e leggere i propri job;
-- il polling M2M ha completato con successo un job reale da 5 clip Matt Damon.
+- il Creator può inviare il payload completato al render master;
+- il render master può assegnare il task a un subworker.
 
 Job di prova verificato:
 
@@ -44,31 +44,32 @@ Il test è stato inviato dalla macchina remota stessa e seguito fino alla fine s
 
 Il successivo job da 40 clip (`job_1788116640302762695_f27a4b0d`) è terminato con successo, ma fu eseguito prima della correzione del routing: `RENDERINGGEN_QUEUE_URL` era vuoto e il render finale venne eseguito localmente dal Master. Quel job non è una certificazione del routing verso worker.
 
-Il routing è stato corretto sul Master il 30 agosto 2026. Ora è configurato:
+Il routing è stato corretto il 30 agosto 2026. Ora è configurato:
 
 ```text
-RENDERINGGEN_QUEUE_URL=http://127.0.0.1:8000
+RENDERINGGEN_QUEUE_URL=http://51.91.11.36:8000
 ```
 
-Il Master prepara e accoda; il video finale deve essere renderizzato da un worker che consuma la coda. Un nuovo job di certificazione worker è necessario prima di considerare il percorso completamente verificato.
+Il `77` crea e trasferisce clip, audio e scene. Il `51.91.11.36` è il render master/orchestrator: riceve il Creator push, prepara il task e lo assegna ai subworker video registrati al `51`. Il `77` non deve assemblare né renderizzare il video finale.
 
 ## Architettura
 
 ```
-Computer client / PipelineGen
+Creator / PipelineGen — 77.93.152.122
           |
-          | HTTP + Bearer M2M
+          | Creator push
           v
-Master Velox: 77.93.152.122:8000
+Render master/orchestrator: 51.91.11.36:8000
           |
+          | gRPC task placement + asset prefetch
           v
-Worker remoto / RenderingGen
+Subworker video del render master
           |
           v
 Google Drive / Social Editor
 ```
 
-Il client deve conoscere soltanto:
+Il Creator deve conoscere soltanto:
 
 ```
 VELOX_MASTER_URL
@@ -102,11 +103,10 @@ VELOX_CLIENT_ID=computer-editor-77-01
 VELOX_M2M_SECRET=<secret-privato>
 ```
 
-Il client dispone esclusivamente degli scope:
+Il client M2M di polling dispone dello scope:
 
 ```
 jobs.submit
-jobs.read
 ```
 
 ## Invio di un job
@@ -282,18 +282,18 @@ Il primo comando deve rispondere con stato healthy. Il secondo deve rispondere `
 
 ## Checklist di accettazione
 
-- [x] Master raggiungibile su `77.93.152.122:8000`.
+- [x] Creator raggiungibile su `77.93.152.122:8000`.
+- [x] Render master raggiungibile su `51.91.11.36:8000`.
 - [x] Health e readiness verificati.
 - [x] M2M abilitato sul servizio persistente.
 - [x] Client `computer-editor-77-01` creato.
 - [x] Secret non esposto nei log o nel repository.
 - [x] Submit M2M verificato con risposta `202`.
-- [x] Polling M2M verificato fino a `SUCCEEDED`.
-- [x] Job test 5 clip completato: 5/5, 0 errori.
-- [x] Upload dei 5 clip verificato.
-- [x] Coda RenderingGen attivata sul Master.
-- [ ] Job assemblato finale verificato con `assemble_final: true` su un worker remoto.
-- [ ] Receipt con `worker_id` del worker di rendering verificato.
+- [x] Creator push dal `77` accettato dal render master `51`.
+- [x] Task assegnato a un subworker del `51`.
+- [x] Prefetch verificato sul subworker: 5 download, 10 cache hit.
+- [ ] Job assemblato finale verificato con `pipeline_id: clips.v1` sull'immagine aggiornata.
+- [ ] Receipt finale con artifact Drive verificato.
 - [ ] Trasporto HTTPS o VPN/Tailscale configurato al posto dell'HTTP pubblico.
 
 ## Sicurezza
