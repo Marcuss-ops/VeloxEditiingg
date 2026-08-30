@@ -104,7 +104,7 @@ func TestNetworkAdmission_IngressAndEgressAreIndependent(t *testing.T) {
 	// throttle prefetch at 1 MB/s.
 	ctrl := NewNetworkAdmissionController(NetworkAdmissionConfig{
 		IngressBudgetBytesPerSecond: 1_000_000,
-		EgressBudgetBytesPerSecond: 1_000_000,
+		EgressBudgetBytesPerSecond:  1_000_000,
 	})
 	defer ctrl.Stop()
 
@@ -302,7 +302,7 @@ func TestNetworkAdmission_WorkConservingPrefetchGetsFullBudgetWhenNoPublish(t *t
 func TestNetworkAdmission_PublishHasSeparateEgressBudget(t *testing.T) {
 	// Publish uses egress, prefetch uses ingress — independent budgets.
 	ctrl := NewNetworkAdmissionController(NetworkAdmissionConfig{
-		IngressBudgetBytesPerSecond: 1_000_000, // 1 MB/s ingress
+		IngressBudgetBytesPerSecond: 1_000_000,  // 1 MB/s ingress
 		EgressBudgetBytesPerSecond:  10_000_000, // 10 MB/s egress
 	})
 	defer ctrl.Stop()
@@ -435,7 +435,6 @@ func TestNetworkAdmission_SaturationCritical(t *testing.T) {
 		t.Fatal("prefetch should be throttled when critical")
 	}
 }
-
 
 func TestNetworkAdmission_SaturationRecovery(t *testing.T) {
 	// Simulate recovery: manually transition from THROTTLE to NORMAL.

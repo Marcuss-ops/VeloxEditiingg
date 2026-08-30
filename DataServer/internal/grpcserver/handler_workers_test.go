@@ -155,10 +155,10 @@ func TestHandleHeartbeat_F2_DecodesTypedResources(t *testing.T) {
 			DiskFreeBytes:             53687091200,
 			TempBytesWritten:          4194304,
 			TempFilesOpen:             2,
-			ScratchCurrentBytes:       104857600,  // 100 MiB
-			ScratchPeakBytes:          209715200,  // 200 MiB
-			NetworkReceiveBytesTotal:  20971520, // 20 MiB received cumulatively
-			NetworkTransmitBytesTotal: 4194304,  // 4 MiB transmitted cumulatively
+			ScratchCurrentBytes:       104857600, // 100 MiB
+			ScratchPeakBytes:          209715200, // 200 MiB
+			NetworkReceiveBytesTotal:  20971520,  // 20 MiB received cumulatively
+			NetworkTransmitBytesTotal: 4194304,   // 4 MiB transmitted cumulatively
 			NetworkRetransmitsTotal:   12,
 			ActiveTasks:               1,
 			TaskSlots:                 4,

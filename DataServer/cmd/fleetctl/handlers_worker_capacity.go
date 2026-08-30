@@ -25,28 +25,28 @@ type capacityReport struct {
 	WorkerID string `json:"worker_id"`
 
 	// Host resource peaks/floors from worker_resource_samples.
-	CPUPeakRatio          float64 `json:"cpu_peak_ratio"`
-	CPUIOWaitPeakRatio    float64 `json:"cpu_iowait_peak_ratio"`
-	MemoryPeakRatio       float64 `json:"memory_peak_ratio"`
-	MemoryAvailableMinMB  float64 `json:"memory_available_min_mb"`
-	DiskFreeMinBytes      int64   `json:"disk_free_min_bytes"`
-	ScratchPeakBytes      int64   `json:"scratch_peak_bytes"`
-	FDPeak                int64   `json:"fd_peak"`
-	FDLimit               int64   `json:"fd_limit"`
-	FDUtillizationPeak    float64 `json:"fd_utilization_peak"`
-	NetworkRxMBPS         float64 `json:"network_rx_mbps"`
-	NetworkTxMBPS         float64 `json:"network_tx_mbps"`
-	Load1Peak             float64 `json:"load_1_peak"`
-	RunQueuePeak          int64   `json:"run_queue_peak"`
-	DiskIOWaitMSMax       int64   `json:"disk_io_wait_ms_max"`
-	NetworkRetransmitsMax int64   `json:"network_retransmits_max"`
-	RenderJobsActiveAvg   float64 `json:"render_jobs_active_avg"`
-	PrefetchJobsActiveAvg float64 `json:"prefetch_jobs_active_avg"`
+	CPUPeakRatio           float64 `json:"cpu_peak_ratio"`
+	CPUIOWaitPeakRatio     float64 `json:"cpu_iowait_peak_ratio"`
+	MemoryPeakRatio        float64 `json:"memory_peak_ratio"`
+	MemoryAvailableMinMB   float64 `json:"memory_available_min_mb"`
+	DiskFreeMinBytes       int64   `json:"disk_free_min_bytes"`
+	ScratchPeakBytes       int64   `json:"scratch_peak_bytes"`
+	FDPeak                 int64   `json:"fd_peak"`
+	FDLimit                int64   `json:"fd_limit"`
+	FDUtillizationPeak     float64 `json:"fd_utilization_peak"`
+	NetworkRxMBPS          float64 `json:"network_rx_mbps"`
+	NetworkTxMBPS          float64 `json:"network_tx_mbps"`
+	Load1Peak              float64 `json:"load_1_peak"`
+	RunQueuePeak           int64   `json:"run_queue_peak"`
+	DiskIOWaitMSMax        int64   `json:"disk_io_wait_ms_max"`
+	NetworkRetransmitsMax  int64   `json:"network_retransmits_max"`
+	RenderJobsActiveAvg    float64 `json:"render_jobs_active_avg"`
+	PrefetchJobsActiveAvg  float64 `json:"prefetch_jobs_active_avg"`
 	PublisherJobsActiveAvg float64 `json:"publisher_jobs_active_avg"`
-	TaskSlotsAvg          float64 `json:"task_slots_avg"`
-	SampleCount           int     `json:"sample_count"`
-	WindowStart           string  `json:"window_start"`
-	WindowEnd             string  `json:"window_end"`
+	TaskSlotsAvg           float64 `json:"task_slots_avg"`
+	SampleCount            int     `json:"sample_count"`
+	WindowStart            string  `json:"window_start"`
+	WindowEnd              string  `json:"window_end"`
 
 	// Per-job capacity facts from task_attempt_metrics.
 	AvgJobScratchPeakBytes int64 `json:"avg_job_scratch_peak_bytes"`
@@ -57,12 +57,12 @@ type capacityReport struct {
 	AttemptCount           int   `json:"attempt_count"`
 
 	// Latest benchmark result.
-	BenchmarkRunID  string  `json:"benchmark_run_id,omitempty"`
-	SweetSpot       int     `json:"sweet_spot,omitempty"`
-	LimitingFactor  string  `json:"limiting_factor,omitempty"`
-	PredictedSlots  *int    `json:"predicted_render_slots,omitempty"`
-	PredictionAcc   *string `json:"prediction_accuracy,omitempty"`
-	BenchmarkRunAt  string  `json:"benchmark_run_at,omitempty"`
+	BenchmarkRunID string  `json:"benchmark_run_id,omitempty"`
+	SweetSpot      int     `json:"sweet_spot,omitempty"`
+	LimitingFactor string  `json:"limiting_factor,omitempty"`
+	PredictedSlots *int    `json:"predicted_render_slots,omitempty"`
+	PredictionAcc  *string `json:"prediction_accuracy,omitempty"`
+	BenchmarkRunAt string  `json:"benchmark_run_at,omitempty"`
 
 	// Derived recommendation.
 	MaxRecommendedJobs int    `json:"max_recommended_jobs"`

@@ -202,7 +202,7 @@ type RenderMetrics struct {
 	SpeedX           float64
 	EncodePasses     int64
 	TempBytes        int64
-	OutputDurable       bool
+	OutputDurable    bool
 	// TrailerToPublishUS is the C++ mux latency from av_write_trailer
 	// completion to publishAtomic completion (fsync + rename + dir fsync).
 	TrailerToPublishUS int64

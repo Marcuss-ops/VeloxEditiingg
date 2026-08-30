@@ -143,23 +143,23 @@ func TestPrefetchReadyLeadMS_ZeroWhenEqual(t *testing.T) {
 
 func TestAssetPreparationBreakdown_JSONRoundTrip(t *testing.T) {
 	original := AssetPreparationBreakdown{
-		AssetsRequired:        26,
-		AssetsUnique:          20,
-		CacheHits:             25,
-		CacheMisses:           1,
-		ReadyBeforeAttempt:    25,
+		AssetsRequired:          26,
+		AssetsUnique:            20,
+		CacheHits:               25,
+		CacheMisses:             1,
+		ReadyBeforeAttempt:      25,
 		DownloadedDuringAttempt: 1,
-		CacheHitBytes:         25 * 1024,
-		CacheMissBytes:        600_000_000,
-		PrefetchHitBytes:      25 * 1024,
-		PrefetchHits:          25,
-		WarmCacheHits:         0,
-		RuntimeDownloads:      1,
-		WarmCacheBytes:        0,
-		RuntimeDownloadBytes:  600_000_000,
-		RequiredAssetBytes:    600_000_000 + 25*1024,
-		LatestPreparedAtMs:    1000,
-		AttemptStartedAtMs:    76000,
+		CacheHitBytes:           25 * 1024,
+		CacheMissBytes:          600_000_000,
+		PrefetchHitBytes:        25 * 1024,
+		PrefetchHits:            25,
+		WarmCacheHits:           0,
+		RuntimeDownloads:        1,
+		WarmCacheBytes:          0,
+		RuntimeDownloadBytes:    600_000_000,
+		RequiredAssetBytes:      600_000_000 + 25*1024,
+		LatestPreparedAtMs:      1000,
+		AttemptStartedAtMs:      76000,
 	}
 
 	data, err := json.Marshal(original)
@@ -222,15 +222,15 @@ func TestN1Certification_AllRatiosAndLead(t *testing.T) {
 	// Job B was fully prefetched before its attempt.
 	// All 26 assets prepared, 677 MB total, prepared 5s before attempt.
 	bd := AssetPreparationBreakdown{
-		AssetsRequired:        26,
-		PrefetchHits:          26,
-		RuntimeDownloads:      0,
-		CacheHitBytes:         677_000_000,
-		PrefetchHitBytes:      677_000_000,
-		RuntimeDownloadBytes:  0,
-		RequiredAssetBytes:    677_000_000,
-		LatestPreparedAtMs:    1000,
-		AttemptStartedAtMs:    6000, // 5s lead
+		AssetsRequired:       26,
+		PrefetchHits:         26,
+		RuntimeDownloads:     0,
+		CacheHitBytes:        677_000_000,
+		PrefetchHitBytes:     677_000_000,
+		RuntimeDownloadBytes: 0,
+		RequiredAssetBytes:   677_000_000,
+		LatestPreparedAtMs:   1000,
+		AttemptStartedAtMs:   6000, // 5s lead
 	}
 
 	// All assertions the certification must satisfy:

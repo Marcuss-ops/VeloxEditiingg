@@ -756,11 +756,11 @@ func TestPreparationGate_EvidenceRecordedBeforeReservationIsIgnored(t *testing.T
 // Enqueue A and B pinned to the same worker. B uses different assets from
 // A (cold cache). Verify the full N+1 lifecycle:
 //
-//   1. A has no reservation → gate skips (A can claim)
-//   2. B gets a future reservation via refreshFutureAssetPlan
-//   3. Gate blocks B (reservation exists, no evidence)
-//   4. Worker prefetches all B assets → reports prefetch_prepared
-//   5. Gate passes B with certificate verified
+//  1. A has no reservation → gate skips (A can claim)
+//  2. B gets a future reservation via refreshFutureAssetPlan
+//  3. Gate blocks B (reservation exists, no evidence)
+//  4. Worker prefetches all B assets → reports prefetch_prepared
+//  5. Gate passes B with certificate verified
 //
 // Certification assertions:
 //   - prepared_ratio = 1.0 (all assets prefetched)
@@ -768,6 +768,7 @@ func TestPreparationGate_EvidenceRecordedBeforeReservationIsIgnored(t *testing.T
 //   - all assets_required == assets_prepared
 //   - worker_id matches reservation owner
 //   - task_revision matches reservation
+//
 // ──────────────────────────────────────────────────────────────────────────
 func TestPreparationGate_N1Certification_AB(t *testing.T) {
 	const (
@@ -785,9 +786,12 @@ func TestPreparationGate_N1Certification_AB(t *testing.T) {
 
 	sizeB_video := int64(500_000_000) // 500 MB
 	sizeB_audio := int64(120_000_000) // 120 MB
-	sizeB_sub   := int64(50_000)     // 50 KB
+	sizeB_sub := int64(50_000)        // 50 KB
 
-	payloadB := multiAssetPayload([]struct{ key, sha string; size int64 }{
+	payloadB := multiAssetPayload([]struct {
+		key, sha string
+		size     int64
+	}{
 		{"video", shaB_video, sizeB_video},
 		{"audio", shaB_audio, sizeB_audio},
 		{"subtitle", shaB_subtitle, sizeB_sub},
@@ -840,7 +844,10 @@ func TestPreparationGate_N1Certification_AB(t *testing.T) {
 	// prefetch_prepared for each one. Record the wall-clock time of
 	// the last prepared event for lead-time assertion.
 	var lastPreparedAt time.Time
-	for _, asset := range []struct{ key, sha string; size int64 }{
+	for _, asset := range []struct {
+		key, sha string
+		size     int64
+	}{
 		{"video", shaB_video, sizeB_video},
 		{"audio", shaB_audio, sizeB_audio},
 		{"subtitle", shaB_subtitle, sizeB_sub},
@@ -939,7 +946,10 @@ func TestPreparationGate_N1Certification_AB(t *testing.T) {
 }
 
 // multiAssetPayload builds a JSON payload with multiple asset manifests.
-func multiAssetPayload(assets []struct{ key, sha string; size int64 }) []byte {
+func multiAssetPayload(assets []struct {
+	key, sha string
+	size     int64
+}) []byte {
 	items := make([]string, 0, len(assets))
 	for _, a := range assets {
 		items = append(items, fmt.Sprintf(`{"asset_key":"%s","asset_id":"%s","sha256":"%s","size_bytes":%d}`, a.key, a.key, a.sha, a.size))

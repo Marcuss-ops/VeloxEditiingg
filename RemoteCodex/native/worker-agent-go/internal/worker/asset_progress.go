@@ -146,12 +146,12 @@ func (w *Worker) assetProgressSender() {
 // throttles its own publishes). Counts bytes actually read, so a partial or
 // aborted stream reports exactly the bytes received.
 type assetProgressBody struct {
-	ctx        context.Context
-	src        io.ReadCloser
-	onProgress func(downloadedBytes int64)
-	done       int64
-	maxBPS     int64
-	lastRead   time.Time
+	ctx          context.Context
+	src          io.ReadCloser
+	onProgress   func(downloadedBytes int64)
+	done         int64
+	maxBPS       int64
+	lastRead     time.Time
 	networkPacer prefetch.NetworkPacer
 }
 

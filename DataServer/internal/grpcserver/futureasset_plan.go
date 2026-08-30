@@ -22,7 +22,7 @@ func (h *Handler) buildFuturePlan(
 		return futureasset.Plan{}, false
 	}
 	plan.Limits = futureasset.Limits{
-		PrefetchHorizon:    h.config.FutureAssetPrefetchHorizon,
+		PrefetchHorizon:     h.config.FutureAssetPrefetchHorizon,
 		ProtectionLookahead: h.config.FutureAssetProtectionLookahead,
 	}
 	return plan, true

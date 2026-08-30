@@ -46,13 +46,13 @@ type TaskExecutionReport struct {
 	// TypedMetrics is the source-compatible wire alias retained during the
 	// migration window. It points at the same raw envelope and is used by
 	// the protobuf builder. New code must prefer RawMetrics.
-	TypedMetrics *telemetry.TypedExecutionMetrics `json:"typed_metrics,omitempty"`
-	Attempts     int                              `json:"attempts"`
-	StartedAt    time.Time                        `json:"started_at"`
-	CompletedAt  time.Time                        `json:"completed_at"`
-	PhaseMarkers []PhaseMarker                    `json:"phase_markers,omitempty"`
-	Waterfall  []WaterfallStage                         `json:"waterfall,omitempty"`
-	Milestones []sharedtelemetry.AttemptMilestoneSample `json:"milestones,omitempty"`
+	TypedMetrics *telemetry.TypedExecutionMetrics         `json:"typed_metrics,omitempty"`
+	Attempts     int                                      `json:"attempts"`
+	StartedAt    time.Time                                `json:"started_at"`
+	CompletedAt  time.Time                                `json:"completed_at"`
+	PhaseMarkers []PhaseMarker                            `json:"phase_markers,omitempty"`
+	Waterfall    []WaterfallStage                         `json:"waterfall,omitempty"`
+	Milestones   []sharedtelemetry.AttemptMilestoneSample `json:"milestones,omitempty"`
 	// AssetPreparation is the STEP D drill-down inside the asset_preparation
 	// waterfall bucket, measured by the canonical resolver sink. Nil means no
 	// resolution was observed; it is never zero-filled to fake measurements.

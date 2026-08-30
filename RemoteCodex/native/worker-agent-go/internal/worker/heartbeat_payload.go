@@ -173,17 +173,17 @@ func (w *Worker) sendHeartbeat(ctx context.Context) error {
 		if snap := w.sampler.Latest(); snap != nil {
 			snapCopy := *snap
 			snapCopy.ActiveTasks = int32(len(activeJobList))
-				if w.concurrencyLimiter != nil {
-					snapCopy.TaskSlots = int32(w.concurrencyLimiter.MaxActiveJobs())
-				}
-				// EffectiveCpuCores from host snapshot.
-				if host := w.sampler.Host(); host != nil {
-					snapCopy.EffectiveCpuCores = host.EffectiveCpuCores
-				}
-				// Per-job-type slot occupancy (computed under RLock above).
-				snapCopy.RenderJobsActive = renderActive
-				snapCopy.PrefetchJobsActive = prefetchActive
-				snapCopy.PublisherJobsActive = publisherActive
+			if w.concurrencyLimiter != nil {
+				snapCopy.TaskSlots = int32(w.concurrencyLimiter.MaxActiveJobs())
+			}
+			// EffectiveCpuCores from host snapshot.
+			if host := w.sampler.Host(); host != nil {
+				snapCopy.EffectiveCpuCores = host.EffectiveCpuCores
+			}
+			// Per-job-type slot occupancy (computed under RLock above).
+			snapCopy.RenderJobsActive = renderActive
+			snapCopy.PrefetchJobsActive = prefetchActive
+			snapCopy.PublisherJobsActive = publisherActive
 			hb.Resources = snapCopy.ToProto()
 			if m := snapCopy.ToWireMap(); m != nil {
 				extraMap["resources"] = m

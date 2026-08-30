@@ -23,7 +23,7 @@ required_consumers=(
   "DataServer/internal/jobs/enqueue/normalize_media.go"
   "DataServer/internal/remoteengine/dto_assets.go"
   "DataServer/internal/handlers/server/pipeline/worker_payload_projection.go"
-  "DataServer/cmd/server/bootstrap_composition.go"
+  "DataServer/cmd/server/bootstrap_telemetry.go"
   "RemoteCodex/native/worker-agent-go/pkg/api/renderplan/validation.go"
 )
 for file in "${required_consumers[@]}"; do

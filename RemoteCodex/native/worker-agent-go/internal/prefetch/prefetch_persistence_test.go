@@ -61,7 +61,7 @@ func TestScheduler_PrefetchPersistence_CorruptAssetInvalidatesPrepared(t *testin
 	plan := futureasset.Plan{
 		Version: 1, PlanID: "persist-cert", WorkerID: "persist-test-worker",
 		GeneratedAt: now, ExpiresAt: now.Add(time.Minute),
-		Limits:      futureasset.Limits{PrefetchHorizon: 1, ProtectionLookahead: 1},
+		Limits: futureasset.Limits{PrefetchHorizon: 1, ProtectionLookahead: 1},
 		PrefetchJobs: []futureasset.Job{{
 			JobID: "job-persist", TaskID: "task-persist", ReservationID: "res-persist",
 			Distance: 1,
@@ -152,7 +152,7 @@ func TestScheduler_PrefetchPersistence_SharedCachePath(t *testing.T) {
 	plan := futureasset.Plan{
 		Version: 1, PlanID: "shared", WorkerID: "shared-path-worker",
 		GeneratedAt: now, ExpiresAt: now.Add(time.Minute),
-		Limits:      futureasset.Limits{PrefetchHorizon: 1, ProtectionLookahead: 1},
+		Limits: futureasset.Limits{PrefetchHorizon: 1, ProtectionLookahead: 1},
 		PrefetchJobs: []futureasset.Job{{
 			JobID: "job-shared", TaskID: "task-shared", ReservationID: "res-shared",
 			Distance: 1,

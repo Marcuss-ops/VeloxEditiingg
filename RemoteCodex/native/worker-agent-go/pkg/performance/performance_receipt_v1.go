@@ -275,13 +275,13 @@ type IOMetrics struct {
 	// AssetBytesCopied comes from the engine's io_counters sidecar block
 	// (asset materialization copies); 0 on older engines. The Phase-1
 	// copy-only target is exactly 0 copies.
-	AssetBytesCopied  int64 `json:"asset_bytes_copied"`
-	TempBytesWritten  int64 `json:"temp_bytes_written"`
+	AssetBytesCopied    int64 `json:"asset_bytes_copied"`
+	TempBytesWritten    int64 `json:"temp_bytes_written"`
 	ScratchCurrentBytes int64 `json:"scratch_current_bytes"`
 	ScratchPeakBytes    int64 `json:"scratch_peak_bytes"`
-	MuxBytesRead      int64 `json:"mux_bytes_read"`
-	MuxBytesWritten   int64 `json:"mux_bytes_written"`
-	FinalBytesWritten int64 `json:"final_bytes_written"`
+	MuxBytesRead        int64 `json:"mux_bytes_read"`
+	MuxBytesWritten     int64 `json:"mux_bytes_written"`
+	FinalBytesWritten   int64 `json:"final_bytes_written"`
 
 	// FileCopyCount/FileCopyBytes come from the engine's io_counters
 	// sidecar block; 0 on older engines. The Phase-1 copy-only target is

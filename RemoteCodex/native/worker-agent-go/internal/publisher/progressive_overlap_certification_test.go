@@ -46,10 +46,10 @@ func sha256hex(data []byte) string {
 
 // ── Certification test: progressive overlap with append-only writes ──────────
 // This certifies the core overlap scenario:
-//   1. File starts writing (safe_offset > 0, finalized = false)
-//   2. Upload starts and sends first part BEFORE render finalizes
-//   3. Render finalizes (finalized = true)
-//   4. Upload completes
+//  1. File starts writing (safe_offset > 0, finalized = false)
+//  2. Upload starts and sends first part BEFORE render finalizes
+//  3. Render finalizes (finalized = true)
+//  4. Upload completes
 //
 // PASS criteria:
 //   - first_part_started_ms < render_completed_at (upload started during render)
@@ -126,8 +126,8 @@ func TestCertification_ProgressiveOverlap_AppendOnly(t *testing.T) {
 
 // ── Certification test: zero overlap when render ends first ──────────────────
 // This certifies the legacy post-render path:
-//   1. File is already finalized and durable before upload starts
-//   2. Upload starts with no overlap
+//  1. File is already finalized and durable before upload starts
+//  2. Upload starts with no overlap
 //
 // PASS criteria:
 //   - parts_before_render_end = 0

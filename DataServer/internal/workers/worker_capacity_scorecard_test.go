@@ -8,16 +8,16 @@ func TestComputeCapacityScorecard_NetworkLimited(t *testing.T) {
 	input := ScorecardInput{
 		WorkerID:          "worker-1",
 		TotalRAMBytes:     16 * 1024 * 1024 * 1024, // 16 GB
-		AvailableRAMBytes: 12 * 1024 * 1024 * 1024,  // 12 GB available
+		AvailableRAMBytes: 12 * 1024 * 1024 * 1024, // 12 GB available
 		EffectiveCPUCores: 8,
 		DiskReadMbps:      1500, // 1.5 Gbit/s NVMe
 		DiskWriteMbps:     1200,
-		DownloadMbps:      100,  // 100 Mbit/s network
+		DownloadMbps:      100, // 100 Mbit/s network
 		UploadMbps:        90,
 		RAMPerJobBytes:    500 * 1024 * 1024, // 500 MB per job
 		CPUCoresPerJob:    0.8,
 		DiskMBpsPerJob:    100,
-		NetworkMbpsPerJob: 50,  // 50 Mbit/s per job (upload-heavy)
+		NetworkMbpsPerJob: 50, // 50 Mbit/s per job (upload-heavy)
 	}
 
 	sc := ComputeCapacityScorecard(input)
@@ -61,7 +61,7 @@ func TestComputeCapacityScorecard_RAMLimited(t *testing.T) {
 	input := ScorecardInput{
 		WorkerID:          "worker-2",
 		TotalRAMBytes:     8 * 1024 * 1024 * 1024, // 8 GB
-		AvailableRAMBytes: 6 * 1024 * 1024 * 1024,  // 6 GB
+		AvailableRAMBytes: 6 * 1024 * 1024 * 1024, // 6 GB
 		EffectiveCPUCores: 4,
 		DiskReadMbps:      1500,
 		DiskWriteMbps:     1200,
@@ -144,7 +144,7 @@ func TestComputeCapacityScorecard_DiskLimited(t *testing.T) {
 		TotalRAMBytes:     16 * 1024 * 1024 * 1024,
 		AvailableRAMBytes: 12 * 1024 * 1024 * 1024,
 		EffectiveCPUCores: 8,
-		DiskReadMbps:      500,  // slow disk
+		DiskReadMbps:      500, // slow disk
 		DiskWriteMbps:     400,
 		DownloadMbps:      1000,
 		UploadMbps:        900,
@@ -171,13 +171,13 @@ func TestComputeCapacityScorecard_DiskLimited(t *testing.T) {
 
 func TestNormalizeResourceSample(t *testing.T) {
 	metrics := map[string]interface{}{
-		"total_ram_bytes":       int64(16 * 1024 * 1024 * 1024),
+		"total_ram_bytes":        int64(16 * 1024 * 1024 * 1024),
 		"memory_available_bytes": int64(12 * 1024 * 1024 * 1024),
-		"effective_cpu_cores":   float64(8),
-		"disk_read_mbps":        float64(1500),
-		"disk_write_mbps":       float64(1200),
-		"download_mbps":         float64(100),
-		"upload_mbps":           float64(90),
+		"effective_cpu_cores":    float64(8),
+		"disk_read_mbps":         float64(1500),
+		"disk_write_mbps":        float64(1200),
+		"download_mbps":          float64(100),
+		"upload_mbps":            float64(90),
 	}
 
 	jobCost := ScorecardInput{

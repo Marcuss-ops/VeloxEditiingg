@@ -22,9 +22,9 @@ type CapacityScorecard struct {
 	PublisherSlots int `json:"publisher_slots"`
 
 	// Raw slot estimates per resource dimension (for diagnostics).
-	RAMSlots    int `json:"ram_slots"`
-	CPUSlots    int `json:"cpu_slots"`
-	DiskSlots   int `json:"disk_slots"`
+	RAMSlots     int `json:"ram_slots"`
+	CPUSlots     int `json:"cpu_slots"`
+	DiskSlots    int `json:"disk_slots"`
 	NetworkSlots int `json:"network_slots"`
 
 	// The bottleneck resource.
@@ -102,18 +102,18 @@ var DefaultScorecardThresholds = struct {
 // The overall safe_slots = min(all non-zero dimensions).
 func ComputeCapacityScorecard(input ScorecardInput) CapacityScorecard {
 	sc := CapacityScorecard{
-		WorkerID:          input.WorkerID,
-		TotalRAMBytes:     input.TotalRAMBytes,
-		AvailableRAMBytes: input.AvailableRAMBytes,
-		EffectiveCPUCores: input.EffectiveCPUCores,
-		DiskReadMbps:      input.DiskReadMbps,
-		DiskWriteMbps:     input.DiskWriteMbps,
-		DownloadMbps:      input.DownloadMbps,
-		UploadMbps:        input.UploadMbps,
-		RAMPerJobBytes:    input.RAMPerJobBytes,
-		CPUCoresPerJob:    input.CPUCoresPerJob,
-		DiskMBpsPerJob:    input.DiskMBpsPerJob,
-		NetworkMbpsPerJob: input.NetworkMbpsPerJob,
+		WorkerID:             input.WorkerID,
+		TotalRAMBytes:        input.TotalRAMBytes,
+		AvailableRAMBytes:    input.AvailableRAMBytes,
+		EffectiveCPUCores:    input.EffectiveCPUCores,
+		DiskReadMbps:         input.DiskReadMbps,
+		DiskWriteMbps:        input.DiskWriteMbps,
+		DownloadMbps:         input.DownloadMbps,
+		UploadMbps:           input.UploadMbps,
+		RAMPerJobBytes:       input.RAMPerJobBytes,
+		CPUCoresPerJob:       input.CPUCoresPerJob,
+		DiskMBpsPerJob:       input.DiskMBpsPerJob,
+		NetworkMbpsPerJob:    input.NetworkMbpsPerJob,
 		RenderWallMsPerJob:   input.RenderWallMsPerJob,
 		PrefetchWallMsPerJob: input.PrefetchWallMsPerJob,
 		PublishWallMsPerJob:  input.PublishWallMsPerJob,

@@ -86,13 +86,13 @@ func (w *Worker) uploadDeclaredArtifacts(ctx context.Context, pte *PendingTaskEx
 		w.updateUploadProgress(pte.TaskID, uploadedBytes, totalUploadBytes, i+1, len(report.Outputs), started)
 
 		completed = append(completed, &pb.ArtifactUploadCompleted{
-			TaskId:         pte.TaskID,
-			AttemptId:      pte.AttemptID,
-			CommitId:       plan.GetCommitId(),
-			LeaseId:        pte.LeaseID,
-			UploadId:       result.UploadID,
-			UploadedBytes:  result.UploadedBytes,
-			WorkerSha256:   ref.Hash,
+			TaskId:        pte.TaskID,
+			AttemptId:     pte.AttemptID,
+			CommitId:      plan.GetCommitId(),
+			LeaseId:       pte.LeaseID,
+			UploadId:      result.UploadID,
+			UploadedBytes: result.UploadedBytes,
+			WorkerSha256:  ref.Hash,
 		})
 
 		// ── Accumulate progressive upload metrics ────────────────────────

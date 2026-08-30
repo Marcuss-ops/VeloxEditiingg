@@ -29,13 +29,16 @@ cd "$REPO_ROOT"
 log()  { printf '\u2192 %s\n' "$*"; }
 fail() { printf '\u2717 %s\n' "$*" >&2; exit 1; }
 
-VIOLATIONS=$(grep -RnE 'velox-worker-console' . \
-  --exclude-dir='.git' \
-  --exclude='cleanup_worker.yml' \
-  --exclude='normalize_worker_systemd.yml' \
-  --exclude='cleanup-worker.sh' \
-  --exclude='check-no-console-service.sh' \
-  --exclude='README.md' \
+# Scan the Git tree rather than the whole checkout. Worker-cert runs can leave
+# root-owned mode-0600 evidence files in the working tree; those artifacts are
+# not repository inputs and must not make this invariant noisy or unreadable.
+VIOLATIONS=$(git grep -nE 'velox-worker-console' -- \
+  . \
+  ':(exclude)**/cleanup_worker.yml' \
+  ':(exclude)**/normalize_worker_systemd.yml' \
+  ':(exclude)**/cleanup-worker.sh' \
+  ':(exclude)scripts/ci/check-no-console-service.sh' \
+  ':(exclude)README.md' \
   || true)
 
 if [[ -n "$VIOLATIONS" ]]; then

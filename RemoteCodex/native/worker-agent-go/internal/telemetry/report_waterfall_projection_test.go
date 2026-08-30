@@ -33,15 +33,15 @@ func TestPhaseBreakdownFromWaterfall_AllStages(t *testing.T) {
 	}
 
 	expected := []struct {
-		name  string
-		ms    int64
-		pct   float64
+		name string
+		ms   int64
+		pct  float64
 	}{
-		{"asset", 3000, 21.43},    // 3/14
-		{"render", 7000, 50.00},   // 7/14
-		{"finalize", 1000, 7.14},  // 1/14
-		{"upload", 2000, 14.29},   // 2/14
-		{"commit", 1000, 7.14},    // 1/14
+		{"asset", 3000, 21.43},   // 3/14
+		{"render", 7000, 50.00},  // 7/14
+		{"finalize", 1000, 7.14}, // 1/14
+		{"upload", 2000, 14.29},  // 2/14
+		{"commit", 1000, 7.14},   // 1/14
 	}
 
 	for i, exp := range expected {

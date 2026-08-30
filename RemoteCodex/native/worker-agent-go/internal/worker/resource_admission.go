@@ -119,10 +119,10 @@ const (
 // ResourceAdmissionController evaluates admission decisions based on
 // the process RSS relative to total physical RAM.
 type ResourceAdmissionController struct {
-	sampleRSS     RSSSampler
-	totalRAM      TotalRAMBytesFunc
-	isStopped     atomic.Bool
-	stopCh        chan struct{}
+	sampleRSS RSSSampler
+	totalRAM  TotalRAMBytesFunc
+	isStopped atomic.Bool
+	stopCh    chan struct{}
 
 	// Hysteresis state: once a category is throttled, it stays throttled
 	// until the RSS drops below the recovery threshold.
@@ -131,9 +131,9 @@ type ResourceAdmissionController struct {
 	publishThrottled  atomic.Bool
 
 	// Metrics (atomic counters).
-	peakRSSBytes          atomic.Int64
-	admissionRejections   atomic.Int64
-	backpressureEvents    atomic.Int64
+	peakRSSBytes        atomic.Int64
+	admissionRejections atomic.Int64
+	backpressureEvents  atomic.Int64
 
 	// mu protects the throttle state transitions (read-modify-write on
 	// the atomic bools happens under this to prevent double-counting

@@ -118,22 +118,22 @@ type WorkerCard struct {
 	MaxSlots               int32                 `json:"max_slots"`
 	AvailableSlots         int32                 `json:"available_slots"`
 	// Per-phase slot limits from the CapacityScorecard.
-	RenderSlots      int32  `json:"render_slots,omitempty"`
-	PrefetchSlots    int32  `json:"prefetch_slots,omitempty"`
-	PublisherSlots   int32  `json:"publisher_slots,omitempty"`
-	ActiveRender     int32  `json:"active_render,omitempty"`
-	ActivePrefetch   int32  `json:"active_prefetch,omitempty"`
-	ActivePublisher  int32  `json:"active_publisher,omitempty"`
-	LimitingResource string `json:"limiting_resource,omitempty"`
-	CPUUtilizationRatio    float64               `json:"cpu_utilization_ratio,omitempty"`
-	MemoryUsedBytes        int64                 `json:"memory_used_bytes,omitempty"`
-	DiskFreeBytes          int64                 `json:"disk_free_bytes,omitempty"`
-	Load1                  float64               `json:"load1,omitempty"`
-	CurrentJob             string                `json:"current_job,omitempty"`
-	Health                 string                `json:"health,omitempty"`
-	LastSmokeStatus        string                `json:"last_smoke_status,omitempty"`
-	LastSmokeAt            string                `json:"last_smoke_at,omitempty"`
-	LastRestartAt          string                `json:"last_restart_at,omitempty"`
+	RenderSlots         int32   `json:"render_slots,omitempty"`
+	PrefetchSlots       int32   `json:"prefetch_slots,omitempty"`
+	PublisherSlots      int32   `json:"publisher_slots,omitempty"`
+	ActiveRender        int32   `json:"active_render,omitempty"`
+	ActivePrefetch      int32   `json:"active_prefetch,omitempty"`
+	ActivePublisher     int32   `json:"active_publisher,omitempty"`
+	LimitingResource    string  `json:"limiting_resource,omitempty"`
+	CPUUtilizationRatio float64 `json:"cpu_utilization_ratio,omitempty"`
+	MemoryUsedBytes     int64   `json:"memory_used_bytes,omitempty"`
+	DiskFreeBytes       int64   `json:"disk_free_bytes,omitempty"`
+	Load1               float64 `json:"load1,omitempty"`
+	CurrentJob          string  `json:"current_job,omitempty"`
+	Health              string  `json:"health,omitempty"`
+	LastSmokeStatus     string  `json:"last_smoke_status,omitempty"`
+	LastSmokeAt         string  `json:"last_smoke_at,omitempty"`
+	LastRestartAt       string  `json:"last_restart_at,omitempty"`
 	// Readiness and Runtime are worker-reported diagnostic snapshots. They
 	// are optional because older agents do not publish these dimensions yet;
 	// absence is explicit and must not be interpreted as PASS.

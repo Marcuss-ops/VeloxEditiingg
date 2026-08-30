@@ -112,11 +112,11 @@ type PrometheusMetrics struct {
 
 	// Pending-offer dedup counters. Static "total" label — no worker/job
 	// identifiers leak into Prometheus series.
-	offerDuplicateTotal       *CounterVec
-	offerReplacedTotal        *CounterVec
-	offerStaleTotal           *CounterVec
+	offerDuplicateTotal        *CounterVec
+	offerReplacedTotal         *CounterVec
+	offerStaleTotal            *CounterVec
 	offerIdentityConflictTotal *CounterVec
-	offerReconciledTotal      *CounterVec
+	offerReconciledTotal       *CounterVec
 
 	// Resource admission controller metrics.
 	admissionRejectionsTotal *CounterVec
@@ -125,15 +125,15 @@ type PrometheusMetrics struct {
 	// Resource admission live diagnostics — gauges updated every heartbeat
 	// cycle so Prometheus /graph can show real-time RSS pressure and
 	// throttle state without querying the worker API.
-	admissionRSSPressurePct   *GaugeVec
-	admissionRSSBytes         *GaugeVec
-	admissionThrottledRender  *GaugeVec
+	admissionRSSPressurePct    *GaugeVec
+	admissionRSSBytes          *GaugeVec
+	admissionThrottledRender   *GaugeVec
 	admissionThrottledPrefetch *GaugeVec
-	admissionThrottledPublish *GaugeVec
+	admissionThrottledPublish  *GaugeVec
 
 	// File descriptor gauges.
-	workerOpenFds      *GaugeVec
-	workerMaxFds       *GaugeVec
+	workerOpenFds       *GaugeVec
+	workerMaxFds        *GaugeVec
 	workerFdUtilization *GaugeVec
 
 	// Prefetch corruption.

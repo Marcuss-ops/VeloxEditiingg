@@ -282,14 +282,14 @@ func TestSIGTERM_ConcurrentStopAndRender(t *testing.T) {
 // activeTaskLeases so the next session starts empty.
 func TestSIGTERM_StopDrainsPendingTaskLeases(t *testing.T) {
 	w := &Worker{
-		config:          &config.WorkerConfig{WorkerID: "sigterm-lease-drain-test"},
-		logger:          logger.New(logger.InfoLevel, io.Discard),
-		stopChan:        make(chan struct{}),
-		activeTasks:     make(map[string]*ActiveTaskExecution),
-		pendingTasks:    make(map[string]*PendingTaskExecution),
+		config:           &config.WorkerConfig{WorkerID: "sigterm-lease-drain-test"},
+		logger:           logger.New(logger.InfoLevel, io.Discard),
+		stopChan:         make(chan struct{}),
+		activeTasks:      make(map[string]*ActiveTaskExecution),
+		pendingTasks:     make(map[string]*PendingTaskExecution),
 		activeTaskLeases: make(map[string]*ActiveTaskLease),
-		activeTasksMu:   sync.RWMutex{},
-		pendingTasksMu:  sync.Mutex{},
+		activeTasksMu:    sync.RWMutex{},
+		pendingTasksMu:   sync.Mutex{},
 	}
 
 	// Add some pending tasks and active task leases.

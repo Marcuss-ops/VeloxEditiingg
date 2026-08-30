@@ -19,12 +19,12 @@ type WorkerCapacity struct {
 
 	// Per-phase slots from the capacity scorecard. Zero means "not yet
 	// computed" — callers fall back to the flat MaxSlots limit.
-	RenderSlots      int `json:"render_slots"`
-	PrefetchSlots    int `json:"prefetch_slots"`
-	PublisherSlots   int `json:"publisher_slots"`
-	ActiveRender     int `json:"active_render"`     // current render-occupying leases
-	ActivePrefetch   int `json:"active_prefetch"`   // current prefetch-occupying leases
-	ActivePublisher  int `json:"active_publisher"`  // current publisher-occupying leases
+	RenderSlots      int    `json:"render_slots"`
+	PrefetchSlots    int    `json:"prefetch_slots"`
+	PublisherSlots   int    `json:"publisher_slots"`
+	ActiveRender     int    `json:"active_render"`    // current render-occupying leases
+	ActivePrefetch   int    `json:"active_prefetch"`  // current prefetch-occupying leases
+	ActivePublisher  int    `json:"active_publisher"` // current publisher-occupying leases
 	LimitingResource string `json:"limiting_resource,omitempty"`
 
 	// Authoritative is internal read-path metadata. It is false only for

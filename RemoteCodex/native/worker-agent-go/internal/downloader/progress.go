@@ -176,8 +176,8 @@ type AssetSubPhases struct {
 	// Technical overhead of the transfer: metadata probe (Content-Type /
 	// open) plus the compute and filesystem work of the size+SHA verify and
 	// the atomic promotion (materialize local).
-	MetadataProbeMS  int64
-	HashVerifyMS     int64
+	MetadataProbeMS    int64
+	HashVerifyMS       int64
 	MaterializeLocalMS int64
 	// DownloadWorkMS is the sum of actual byte-moving time across attempts
 	// (parallel downloads aggregate via the aggregator, not here).

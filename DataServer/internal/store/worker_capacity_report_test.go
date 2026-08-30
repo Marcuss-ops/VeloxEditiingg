@@ -112,9 +112,9 @@ func TestGetWorkerCapacityReport_FullAssembly(t *testing.T) {
 			) VALUES (?, 1024, 512, 1000, 500, 200000000, 10.5, 'abc',
 			          ?, ?, ?, ?)`,
 			attemptID,
-			int64(1000000*(i+1)),  // job_publish_bytes: 1000000, 2000000
-			int64(20*(i+1)),       // job_page_faults: 20, 40
-			scratchPeak,           // job_scratch_peak_bytes: 1500000000, 2500000000
+			int64(1000000*(i+1)),   // job_publish_bytes: 1000000, 2000000
+			int64(20*(i+1)),        // job_page_faults: 20, 40
+			scratchPeak,            // job_scratch_peak_bytes: 1500000000, 2500000000
 			int64(300000000*(i+1)), // job_peak_rss_delta_bytes
 		)
 	}

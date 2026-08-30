@@ -41,16 +41,16 @@ type FastAssemblyCertificate struct {
 // prove the renderer consumed exactly the prefetched file — not a stale
 // cache hit or a runtime download.
 type AssetBindingEvidence struct {
-	AssetID       string    `json:"asset_id"`
-	ExpectedSHA256 string   `json:"expected_sha256"`
-	VerifiedSHA256 string   `json:"verified_sha256"`
-	ExpectedSize  int64     `json:"expected_size"`
-	ActualSize    int64     `json:"actual_size"`
-	LocalPath     string    `json:"local_path"`
-	PreparedAt    time.Time `json:"prepared_at,omitempty"`
-	Origin        string    `json:"origin"` // prefetch | warm_cache | runtime_download
-	ReadyBeforeAttempt bool  `json:"ready_before_attempt"`
-	DownloadedDuringAttempt bool `json:"downloaded_during_attempt"`
+	AssetID                 string    `json:"asset_id"`
+	ExpectedSHA256          string    `json:"expected_sha256"`
+	VerifiedSHA256          string    `json:"verified_sha256"`
+	ExpectedSize            int64     `json:"expected_size"`
+	ActualSize              int64     `json:"actual_size"`
+	LocalPath               string    `json:"local_path"`
+	PreparedAt              time.Time `json:"prepared_at,omitempty"`
+	Origin                  string    `json:"origin"` // prefetch | warm_cache | runtime_download
+	ReadyBeforeAttempt      bool      `json:"ready_before_attempt"`
+	DownloadedDuringAttempt bool      `json:"downloaded_during_attempt"`
 }
 
 // FastAssemblyOutcome combines the task report and the copy-only certificate.
@@ -310,12 +310,12 @@ func (w *Worker) recordBindingEvidence(ctx context.Context, jobID string, plan *
 		}
 
 		evidence := AssetBindingEvidence{
-			AssetID:        asset.AssetID,
-			ExpectedSHA256: asset.SHA256,
-			VerifiedSHA256: binding.SHA256,
-			ExpectedSize:   asset.SizeBytes,
-			ActualSize:     binding.Size,
-			LocalPath:      binding.Path,
+			AssetID:            asset.AssetID,
+			ExpectedSHA256:     asset.SHA256,
+			VerifiedSHA256:     binding.SHA256,
+			ExpectedSize:       asset.SizeBytes,
+			ActualSize:         binding.Size,
+			LocalPath:          binding.Path,
 			ReadyBeforeAttempt: true, // bindings only exist when assets are ready
 		}
 

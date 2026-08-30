@@ -73,7 +73,7 @@ type AssetPreparationBreakdown struct {
 	// counters above. WarmCacheBytes is the subset of CacheHitBytes where
 	// origin == warm_cache; RuntimeDownloadBytes is the subset of
 	// CacheMissBytes where origin == runtime_download.
-	WarmCacheBytes     int64 `json:"warm_cache_bytes"`
+	WarmCacheBytes       int64 `json:"warm_cache_bytes"`
 	RuntimeDownloadBytes int64 `json:"runtime_download_bytes"`
 
 	// RequiredAssetBytes is the sum of SizeBytes across all required asset

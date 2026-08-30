@@ -58,7 +58,7 @@ const (
 	subWorkerConfig     subCommand = "worker-config"
 	subBenchmark        subCommand = "benchmark"
 	subBenchmarkCollect subCommand = "benchmark-collect"
-	subWorkerCapacity  subCommand = "worker-capacity"
+	subWorkerCapacity   subCommand = "worker-capacity"
 )
 
 func (s subCommand) valid() bool {

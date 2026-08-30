@@ -8,65 +8,65 @@ import (
 type UploadStatus string
 
 const (
-	UploadCreated UploadStatus = "CREATED"
-	UploadUploading UploadStatus = "UPLOADING"
-	UploadReceived UploadStatus = "RECEIVED"
-	UploadVerifying UploadStatus = "VERIFYING"
+	UploadCreated    UploadStatus = "CREATED"
+	UploadUploading  UploadStatus = "UPLOADING"
+	UploadReceived   UploadStatus = "RECEIVED"
+	UploadVerifying  UploadStatus = "VERIFYING"
 	UploadFinalizing UploadStatus = "FINALIZING"
-	UploadCompleted UploadStatus = "COMPLETED"
-	UploadFailed UploadStatus = "FAILED"
-	UploadExpired UploadStatus = "EXPIRED"
+	UploadCompleted  UploadStatus = "COMPLETED"
+	UploadFailed     UploadStatus = "FAILED"
+	UploadExpired    UploadStatus = "EXPIRED"
 )
 
 type UploadSession struct {
-	UploadID string
-	ArtifactID string
-	JobID string
-	WorkerID string
-	LeaseID string
-	AttemptNumber int
-	ExpectedRevision int
-	Kind string
-	ExpectedMIME string
+	UploadID            string
+	ArtifactID          string
+	JobID               string
+	WorkerID            string
+	LeaseID             string
+	AttemptNumber       int
+	ExpectedRevision    int
+	Kind                string
+	ExpectedMIME        string
 	TemporaryStorageKey string
-	ExpectedSizeBytes int64
-	ExpectedSHA256 string
-	ReceivedSizeBytes int64
-	ReceivedSHA256 string
-	Status string
-	CreatedAt time.Time
-	ExpiresAt time.Time
-	CompletedAt time.Time
+	ExpectedSizeBytes   int64
+	ExpectedSHA256      string
+	ReceivedSizeBytes   int64
+	ReceivedSHA256      string
+	Status              string
+	CreatedAt           time.Time
+	ExpiresAt           time.Time
+	CompletedAt         time.Time
 	FirstByteReceivedAt time.Time
-	LastByteReceivedAt time.Time
-	VerifyStartedAt time.Time
-	VerifyCompletedAt time.Time
-	PromoteStartedAt time.Time
-	PromoteCompletedAt time.Time
-	CommitStartedAt time.Time
-	CommitCompletedAt time.Time
+	LastByteReceivedAt  time.Time
+	VerifyStartedAt     time.Time
+	VerifyCompletedAt   time.Time
+	PromoteStartedAt    time.Time
+	PromoteCompletedAt  time.Time
+	CommitStartedAt     time.Time
+	CommitCompletedAt   time.Time
 }
 
 type UploadFields struct {
-	Status *string
-	ReceivedSizeBytes *int64
-	ReceivedSHA256 *string
-	CompletedAt *time.Time
+	Status              *string
+	ReceivedSizeBytes   *int64
+	ReceivedSHA256      *string
+	CompletedAt         *time.Time
 	FirstByteReceivedAt *time.Time
-	LastByteReceivedAt *time.Time
-	VerifyStartedAt *time.Time
-	VerifyCompletedAt *time.Time
-	PromoteStartedAt *time.Time
-	PromoteCompletedAt *time.Time
-	CommitStartedAt *time.Time
-	CommitCompletedAt *time.Time
+	LastByteReceivedAt  *time.Time
+	VerifyStartedAt     *time.Time
+	VerifyCompletedAt   *time.Time
+	PromoteStartedAt    *time.Time
+	PromoteCompletedAt  *time.Time
+	CommitStartedAt     *time.Time
+	CommitCompletedAt   *time.Time
 }
 
 type ChunkRecord struct {
-	UploadID string
+	UploadID   string
 	ChunkIndex int
-	SizeBytes int64
-	SHA256 string
+	SizeBytes  int64
+	SHA256     string
 	StorageKey string
 	ReceivedAt time.Time
 }

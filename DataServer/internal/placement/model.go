@@ -103,9 +103,9 @@ type WorkerSnapshot struct {
 
 	// Per-phase slot accounting from the CapacityScorecard. When non-zero,
 	// the matcher uses these instead of the flat MaxParallelJobs limit.
-	RenderSlots    int
-	PrefetchSlots  int
-	PublisherSlots int
+	RenderSlots     int
+	PrefetchSlots   int
+	PublisherSlots  int
 	ActiveRender    int
 	ActivePrefetch  int
 	ActivePublisher int

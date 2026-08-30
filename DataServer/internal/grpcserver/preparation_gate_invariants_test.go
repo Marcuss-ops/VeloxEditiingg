@@ -555,12 +555,12 @@ func TestInvariant_EvidenceStateTransition(t *testing.T) {
 
 func TestInvariant_WrongWorkerCannotClaim(t *testing.T) {
 	const (
-		ownerWorker   = "host_57_131_20_173"
+		ownerWorker    = "host_57_131_20_173"
 		intruderWorker = "host_57_129_132_133"
-		taskID        = "task-B"
-		jobID         = "job-B"
-		sha256        = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233"
-		size          = int64(1024 * 1024)
+		taskID         = "task-B"
+		jobID          = "job-B"
+		sha256         = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233"
+		size           = int64(1024 * 1024)
 	)
 
 	frs := &expiryMockStore{payload: reservationPayload(sha256, size)}
@@ -1208,11 +1208,11 @@ func TestVerifyAttempt_SkipsRevisionCheckWhenZero(t *testing.T) {
 
 func TestVerifyAttempt_GateBlocksOnCertificateWorkerMismatch(t *testing.T) {
 	const (
-		ownerWorker   = "host_57_131_20_173"
+		ownerWorker    = "host_57_131_20_173"
 		intruderWorker = "host_57_129_132_133"
-		taskID        = "task-B"
-		jobID         = "job-B"
-		sha256        = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233"
+		taskID         = "task-B"
+		jobID          = "job-B"
+		sha256         = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233"
 		size           = int64(1024 * 1024)
 	)
 
@@ -1221,12 +1221,12 @@ func TestVerifyAttempt_GateBlocksOnCertificateWorkerMismatch(t *testing.T) {
 
 	// Owner creates reservation and prepares assets.
 	_, _ = frs.TryReserveFutureTask(context.Background(), taskgraph.FutureReservation{
-		TaskID:       taskID,
-		JobID:        jobID,
-		WorkerID:     ownerWorker,
+		TaskID:        taskID,
+		JobID:         jobID,
+		WorkerID:      ownerWorker,
 		ReservationID: "future:" + ownerWorker + ":" + taskID,
-		TaskRevision: 1,
-		ExpiresAt:    time.Now().UTC().Add(time.Minute),
+		TaskRevision:  1,
+		ExpiresAt:     time.Now().UTC().Add(time.Minute),
 	})
 	h.markPreparedAsset(ownerWorker, &preparedAssetEvidence{
 		TaskID:       taskID,

@@ -169,7 +169,7 @@ type NetworkAdmissionController struct {
 	ewmaAlpha float64
 
 	// Alert state (protected by mu, read atomically for hot path).
-	saturationLevel atomic.Int32 // NetworkSaturationLevel as int32
+	saturationLevel   atomic.Int32 // NetworkSaturationLevel as int32
 	prefetchThrottled atomic.Bool
 
 	// Latency tracking for slow-path waits.
@@ -182,8 +182,8 @@ type NetworkAdmissionController struct {
 // NewNetworkAdmissionController creates a new controller with the given budget.
 func NewNetworkAdmissionController(cfg NetworkAdmissionConfig) *NetworkAdmissionController {
 	c := &NetworkAdmissionController{
-		cfg:      cfg,
-		stopCh:   make(chan struct{}),
+		cfg:       cfg,
+		stopCh:    make(chan struct{}),
 		ewmaAlpha: 0.3, // 3-sample convergence
 	}
 	if cfg.IngressBudgetBytesPerSecond > 0 {

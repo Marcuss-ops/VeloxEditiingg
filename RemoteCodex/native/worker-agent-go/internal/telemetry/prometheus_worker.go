@@ -51,6 +51,7 @@ func (m *PrometheusMetrics) RecordProgressiveUploadTiming(firstPartStarted time.
 	}
 	m.RecordRenderUploadOverlap(overlap)
 }
+
 // RecordMuxToOpenUS records the Go-side latency from the first C++ progress
 // event with a path to when the file was opened for progressive upload.
 func (m *PrometheusMetrics) RecordMuxToOpenUS(microseconds int64) {
@@ -87,14 +88,14 @@ func (m *PrometheusMetrics) GetPythonEmergencyPathCount() float64 {
 }
 
 // Pending-offer dedup counters.
-func (m *PrometheusMetrics) RecordOfferDuplicate()           { m.offerDuplicateTotal.inc("total") }
-func (m *PrometheusMetrics) RecordOfferReplaced()            { m.offerReplacedTotal.inc("total") }
-func (m *PrometheusMetrics) RecordOfferStale()               { m.offerStaleTotal.inc("total") }
-func (m *PrometheusMetrics) RecordOfferIdentityConflict()    { m.offerIdentityConflictTotal.inc("total") }
-func (m *PrometheusMetrics) RecordOfferReconciled()            { m.offerReconciledTotal.inc("total") }
+func (m *PrometheusMetrics) RecordOfferDuplicate()        { m.offerDuplicateTotal.inc("total") }
+func (m *PrometheusMetrics) RecordOfferReplaced()         { m.offerReplacedTotal.inc("total") }
+func (m *PrometheusMetrics) RecordOfferStale()            { m.offerStaleTotal.inc("total") }
+func (m *PrometheusMetrics) RecordOfferIdentityConflict() { m.offerIdentityConflictTotal.inc("total") }
+func (m *PrometheusMetrics) RecordOfferReconciled()       { m.offerReconciledTotal.inc("total") }
 
 // Resource admission controller metrics.
-func (m *PrometheusMetrics) RecordAdmissionRejection() { m.admissionRejectionsTotal.inc("total") }
+func (m *PrometheusMetrics) RecordAdmissionRejection()           { m.admissionRejectionsTotal.inc("total") }
 func (m *PrometheusMetrics) RecordBackpressureEvent(kind string) { m.backpressureEventsTotal.inc(kind) }
 
 // SetAdmissionDiagnostics updates the live RSS pressure and throttle-state

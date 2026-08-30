@@ -12,22 +12,22 @@ import (
 
 // ScorecardRow is the persisted projection of a CapacityScorecard.
 type ScorecardRow struct {
-	WorkerID    string
-	RenderSlots int
-	PrefetchSlots int
-	PublisherSlots int
-	RAMSlots    int
-	CPUSlots    int
-	DiskSlots   int
-	NetworkSlots int
-	LimitingResource string
-	TotalRAMBytes     int64
-	AvailableRAMBytes int64
-	EffectiveCPUCores int32
-	DiskReadMbps      float64
-	DiskWriteMbps     float64
-	DownloadMbps      float64
-	UploadMbps        float64
+	WorkerID             string
+	RenderSlots          int
+	PrefetchSlots        int
+	PublisherSlots       int
+	RAMSlots             int
+	CPUSlots             int
+	DiskSlots            int
+	NetworkSlots         int
+	LimitingResource     string
+	TotalRAMBytes        int64
+	AvailableRAMBytes    int64
+	EffectiveCPUCores    int32
+	DiskReadMbps         float64
+	DiskWriteMbps        float64
+	DownloadMbps         float64
+	UploadMbps           float64
 	RAMPerJobBytes       int64
 	CPUCoresPerJob       float64
 	DiskMBpsPerJob       float64
@@ -35,7 +35,7 @@ type ScorecardRow struct {
 	RenderWallMsPerJob   int64
 	PrefetchWallMsPerJob int64
 	PublishWallMsPerJob  int64
-	ComputedAt string
+	ComputedAt           string
 }
 
 // UpsertScorecard persists a computed CapacityScorecard for a worker.

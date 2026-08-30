@@ -204,7 +204,7 @@ func (t *masterAssetTransferer) transferChunked(ctx context.Context, reportCtx c
 		wg.Add(1)
 		go func(c chunkRange) {
 			defer wg.Done()
-				if err := fetchChunkRange(chunkCtx, client, downloadURL, authToken, c, f, &downloaded, report, limiter, networkPacer, c.start == 0); err != nil {
+			if err := fetchChunkRange(chunkCtx, client, downloadURL, authToken, c, f, &downloaded, report, limiter, networkPacer, c.start == 0); err != nil {
 				primaryOnce.Do(func() {
 					primaryErr <- err
 					cancel()
@@ -378,12 +378,12 @@ func (s *sectionWriter) Write(p []byte) (int, error) {
 // NetworkAdmissionController (work-conserving priority across consumers).
 // Otherwise, the local sharedBandwidthLimiter paces each transfer independently.
 type chunkProgressReader struct {
-	ctx     context.Context
-	src     io.Reader
+	ctx context.Context
+	src io.Reader
 
-	shared  *atomic.Int64
-	report  func()
-	limiter *sharedBandwidthLimiter
+	shared       *atomic.Int64
+	report       func()
+	limiter      *sharedBandwidthLimiter
 	networkPacer prefetch.NetworkPacer
 }
 

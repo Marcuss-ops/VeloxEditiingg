@@ -51,11 +51,11 @@ func TestHandlePrefetchLifecycleEvent_PersistsToJobEvents(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			event := &pb.PrefetchLifecycleEvent{
-				EventType:  tt.eventType,
-				JobId:      tt.jobID,
-				TaskId:     tt.taskID,
-				WorkerId:   "test-worker",
-				PlanId:     "plan-001",
+				EventType:   tt.eventType,
+				JobId:       tt.jobID,
+				TaskId:      tt.taskID,
+				WorkerId:    "test-worker",
+				PlanId:      "plan-001",
 				PlanVersion: 1,
 			}
 
@@ -91,11 +91,11 @@ func TestHandlePrefetchLifecycleEvent_PersistsToJobEvents(t *testing.T) {
 // from a mismatched worker_id are rejected.
 func TestHandlePrefetchLifecycleEvent_WorkerIDMismatch(t *testing.T) {
 	event := &pb.PrefetchLifecycleEvent{
-		EventType:  "future_plan_received",
-		JobId:      "job-001",
-		TaskId:     "task-001",
-		WorkerId:   "worker-A",
-		PlanId:     "plan-001",
+		EventType:   "future_plan_received",
+		JobId:       "job-001",
+		TaskId:      "task-001",
+		WorkerId:    "worker-A",
+		PlanId:      "plan-001",
 		PlanVersion: 1,
 	}
 
@@ -110,18 +110,18 @@ func TestHandlePrefetchLifecycleEvent_WorkerIDMismatch(t *testing.T) {
 // are correctly included in the event.
 func TestPrefetchEventMetadataFields(t *testing.T) {
 	event := &pb.PrefetchLifecycleEvent{
-		EventType:     "prefetch_prepared",
-		JobId:         "job-001",
-		TaskId:        "task-001",
-		WorkerId:      "test-worker",
-		PlanId:        "plan-001",
-		PlanVersion:   1,
-		ReservationId: "future:test-worker:task-001",
-		Distance:      2,
-		AssetId:       "asset-001",
-		AssetSha256:   "abc123def456",
+		EventType:      "prefetch_prepared",
+		JobId:          "job-001",
+		TaskId:         "task-001",
+		WorkerId:       "test-worker",
+		PlanId:         "plan-001",
+		PlanVersion:    1,
+		ReservationId:  "future:test-worker:task-001",
+		Distance:       2,
+		AssetId:        "asset-001",
+		AssetSha256:    "abc123def456",
 		AssetSizeBytes: 1024,
-		LocalPath:     "/tmp/asset-001.mp4",
+		LocalPath:      "/tmp/asset-001.mp4",
 	}
 
 	// Verify all optional fields are present.

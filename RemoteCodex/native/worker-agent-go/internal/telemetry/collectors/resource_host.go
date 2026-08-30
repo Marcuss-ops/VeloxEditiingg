@@ -131,15 +131,15 @@ func (s *SampledResources) ToProto() *pb.WorkerResourceCounters {
 		DownloadMbps:              s.DownloadMbps,
 		UploadMbps:                s.UploadMbps,
 		ActiveTasks:               s.ActiveTasks, TaskSlots: s.TaskSlots,
-		RenderJobsActive:          s.RenderJobsActive,
-		PrefetchJobsActive:        s.PrefetchJobsActive,
-		PublisherJobsActive:       s.PublisherJobsActive,
-		OpenFileDescriptors:         s.OpenFileDescriptors,
-		MaxFileDescriptors:          s.MaxFileDescriptors,
+		RenderJobsActive:               s.RenderJobsActive,
+		PrefetchJobsActive:             s.PrefetchJobsActive,
+		PublisherJobsActive:            s.PublisherJobsActive,
+		OpenFileDescriptors:            s.OpenFileDescriptors,
+		MaxFileDescriptors:             s.MaxFileDescriptors,
 		FileDescriptorUtilizationRatio: s.FDUtilizationRatio,
-		Load1:     s.Load1,
-		RunQueue:  s.RunQueue,
-		SampledAt: s.TimestampProto(),
+		Load1:                          s.Load1,
+		RunQueue:                       s.RunQueue,
+		SampledAt:                      s.TimestampProto(),
 	}
 }
 

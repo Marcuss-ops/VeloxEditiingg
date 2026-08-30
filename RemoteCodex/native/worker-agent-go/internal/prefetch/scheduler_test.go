@@ -839,8 +839,8 @@ func TestScheduler_DualJobPrefetchCertification(t *testing.T) {
 		GeneratedAt: now,
 		ExpiresAt:   now.Add(5 * time.Minute),
 		Limits: futureasset.Limits{
-			PrefetchHorizon:      2,
-			ProtectionLookahead:  2,
+			PrefetchHorizon:     2,
+			ProtectionLookahead: 2,
 		},
 		PrefetchJobs: []futureasset.Job{
 			{
@@ -1177,8 +1177,12 @@ type trackingProtectionStore struct {
 	onRelease func(assetref.AssetKey, string)
 }
 
-func (s *trackingProtectionStore) Acquire(context.Context, assetref.AssetKey, string) error { return nil }
-func (s *trackingProtectionStore) Release(context.Context, assetref.AssetKey, string) error  { return nil }
+func (s *trackingProtectionStore) Acquire(context.Context, assetref.AssetKey, string) error {
+	return nil
+}
+func (s *trackingProtectionStore) Release(context.Context, assetref.AssetKey, string) error {
+	return nil
+}
 func (s *trackingProtectionStore) Reserve(_ context.Context, key assetref.AssetKey, id string, _ time.Time) error {
 	if s.onReserve != nil {
 		s.onReserve(key, id)

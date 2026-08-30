@@ -172,15 +172,15 @@ func (s *workerSession) placementSnapshot(workerID string) placement.WorkerSnaps
 		// The normal dispatch path replaces ActiveJobs with the authoritative
 		// lease-store projection before Matcher.Select. Warm placement uses
 		// the latest accepted worker telemetry as its availability estimate.
-		ActiveJobs:            int(s.activeExecutionSlots.Load()),
+		ActiveJobs: int(s.activeExecutionSlots.Load()),
 		// Per-phase slots from the CapacityScorecard. When non-zero the
 		// matcher uses these instead of the flat MaxParallelJobs limit.
-		RenderSlots:    int(s.renderSlots.Load()),
-		PrefetchSlots:  int(s.prefetchSlots.Load()),
-		PublisherSlots: int(s.publisherSlots.Load()),
-		ActiveRender:    int(s.activeRender.Load()),
-		ActivePrefetch:  int(s.activePrefetch.Load()),
-		ActivePublisher: int(s.activePublisher.Load()),
+		RenderSlots:           int(s.renderSlots.Load()),
+		PrefetchSlots:         int(s.prefetchSlots.Load()),
+		PublisherSlots:        int(s.publisherSlots.Load()),
+		ActiveRender:          int(s.activeRender.Load()),
+		ActivePrefetch:        int(s.activePrefetch.Load()),
+		ActivePublisher:       int(s.activePublisher.Load()),
 		CapacityAuthoritative: s.capacityAuthoritative.Load(),
 		DiskAuthoritative:     s.diskAuthoritative.Load(),
 		FreeDiskBytes:         s.freeDiskBytes.Load(),

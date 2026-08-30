@@ -31,16 +31,16 @@ type LocalPreparedEvidence struct {
 }
 
 type LocalPreparedAsset struct {
-	AssetKey    string                      `json:"asset_key"`
-	AssetID     string                      `json:"asset_id"`
-	SHA256      string                      `json:"sha256"`
-	SizeBytes   int64                       `json:"size_bytes"`
-	LocalPath   string                      `json:"local_path"`
-	PreparedAt  time.Time                   `json:"prepared_at"`
-	MIMEType    string                      `json:"mime_type,omitempty"`
-	Codec       string                      `json:"codec,omitempty"`
-	AudioCodec  string                      `json:"audio_codec,omitempty"`
-	DurationSec float64                     `json:"duration_sec,omitempty"`
+	AssetKey    string                     `json:"asset_key"`
+	AssetID     string                     `json:"asset_id"`
+	SHA256      string                     `json:"sha256"`
+	SizeBytes   int64                      `json:"size_bytes"`
+	LocalPath   string                     `json:"local_path"`
+	PreparedAt  time.Time                  `json:"prepared_at"`
+	MIMEType    string                     `json:"mime_type,omitempty"`
+	Codec       string                     `json:"codec,omitempty"`
+	AudioCodec  string                     `json:"audio_codec,omitempty"`
+	DurationSec float64                    `json:"duration_sec,omitempty"`
 	Origin      downloaderResolutionOrigin `json:"origin,omitempty"`
 }
 
@@ -73,8 +73,8 @@ func PersistPreparedEvidence(root string, job PreparedJob) (string, error) {
 	sort.Slice(assets, func(i, j int) bool { return assets[i].AssetKey < assets[j].AssetKey })
 	evidence := LocalPreparedEvidence{
 		SchemaVersion: preparedEvidenceSchema,
-		Certificate: job.Certificate(),
-		JobID: job.JobID, TaskID: job.TaskID, TaskRevision: job.TaskRevision,
+		Certificate:   job.Certificate(),
+		JobID:         job.JobID, TaskID: job.TaskID, TaskRevision: job.TaskRevision,
 		State: job.State, PreparedAt: job.PreparedAt, Assets: assets,
 	}
 	data, err := json.MarshalIndent(evidence, "", "  ")

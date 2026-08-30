@@ -7,8 +7,8 @@ package main
 
 import (
 	"velox-server/internal/config"
-	velmetrics "velox-server/internal/metrics"
 	"velox-server/internal/logging"
+	velmetrics "velox-server/internal/metrics"
 	"velox-shared/compatibility"
 )
 
