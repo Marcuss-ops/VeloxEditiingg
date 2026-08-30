@@ -89,6 +89,19 @@ func TestForwardingKey_InjectIntoPayload_HappyPath(t *testing.T) {
 	}
 }
 
+func TestFromPayload_AcceptsPublicRoutingKeys(t *testing.T) {
+	meta := FromPayload(map[string]interface{}{
+		"pipeline_id": "clips.v1",
+		"executor_id": "scene.composite.v1",
+	})
+	if meta.PipelineID != PipelineID("clips.v1") {
+		t.Fatalf("pipeline_id = %q, want clips.v1", meta.PipelineID)
+	}
+	if meta.Executor.ID != "scene.composite.v1" {
+		t.Fatalf("executor_id = %q, want scene.composite.v1", meta.Executor.ID)
+	}
+}
+
 // TestForwardingKey_InjectIntoPayload_FormatForwardingKey_RoundTrip
 // locks the canonical producer/consumer chain used by creatorflow:
 // FormatForwardingKey(provider, sourceJobID, executorID) builds the

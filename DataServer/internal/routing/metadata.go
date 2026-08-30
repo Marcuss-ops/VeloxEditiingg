@@ -57,8 +57,21 @@ func FromPayload(m map[string]interface{}) InternalRoutingMetadata {
 	if v, ok := m[KeyPipelineID].(string); ok {
 		meta.PipelineID = PipelineID(strings.TrimSpace(v))
 	}
+	// Creator/external payloads use the public wire spelling. Accept it at
+	// this boundary and canonicalize it to the internal routing key so the
+	// resolver cannot drop an explicitly selected renderer pipeline.
+	if meta.PipelineID == "" {
+		if v, ok := m["pipeline_id"].(string); ok {
+			meta.PipelineID = PipelineID(strings.TrimSpace(v))
+		}
+	}
 	if v, ok := m[KeyExecutorID].(string); ok {
 		meta.Executor.ID = strings.TrimSpace(v)
+	}
+	if meta.Executor.ID == "" {
+		if v, ok := m["executor_id"].(string); ok {
+			meta.Executor.ID = strings.TrimSpace(v)
+		}
 	}
 	if v, ok := m[KeyExecutorVersion].(float64); ok {
 		meta.Executor.Version = int(v)
