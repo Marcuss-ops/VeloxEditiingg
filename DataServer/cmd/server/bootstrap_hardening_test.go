@@ -477,5 +477,42 @@ func TestInternalSecurityGuard_PrivateNetworkEnforcement(t *testing.T) {
 	}
 }
 
+func TestInternalSecurityGuard_AllowsCredentialedJobIntakeFromPublicNetworks(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+	cfg := &config.Config{Server: config.ServerConfig{GinMode: "release"}}
+
+	for _, path := range []string{"/api/v1/jobs", "/api/v1/jobs/job-1", "/api/v1/creator/jobs"} {
+		r := gin.New()
+		r.Use(internalSecurityGuard(cfg))
+		r.Any("/*path", func(c *gin.Context) { c.Status(http.StatusTeapot) })
+
+		method := http.MethodPost
+		if strings.HasPrefix(path, "/api/v1/jobs/") {
+			method = http.MethodGet
+		}
+		req := httptest.NewRequest(method, path, nil)
+		req.RemoteAddr = "8.8.8.8:12345"
+		req.Header.Set("Authorization", "Bearer credential-present")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusTeapot {
+			t.Fatalf("credentialed job request %s was blocked at network guard: got %d, want %d", path, w.Code, http.StatusTeapot)
+		}
+	}
+
+	r := gin.New()
+	r.Use(internalSecurityGuard(cfg))
+	r.GET("/health", func(c *gin.Context) { c.Status(http.StatusOK) })
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req.RemoteAddr = "8.8.8.8:12345"
+	req.Header.Set("Authorization", "Bearer credential-present")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("credentialed non-job request bypassed network guard: got %d, want %d", w.Code, http.StatusForbidden)
+	}
+}
+
 // newTestConfig is already defined in bootstrap_test.go (same package).
 // It is not duplicated here — both files share package main.

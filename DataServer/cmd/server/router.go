@@ -186,6 +186,17 @@ func internalSecurityGuard(cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 
+		// Job intake is a service-to-service surface. Let a request carrying
+		// an Authorization header reach the route-level M2M/admin middleware
+		// even when it originates outside the private network. Invalid or
+		// missing credentials are rejected by that middleware; the network
+		// guard must not turn the worker master into an IP allowlist. Other
+		// HTTP surfaces remain private-network-only below.
+		if isCredentialedJobRequest(c) {
+			c.Next()
+			return
+		}
+
 		// Allow loopback unconditionally; side-cars and local tooling
 		// run in the same pod / network namespace.
 		if ip != nil && ip.IsLoopback() {
@@ -219,6 +230,17 @@ func internalSecurityGuard(cfg *config.Config) gin.HandlerFunc {
 
 		c.Next()
 	}
+}
+
+func isCredentialedJobRequest(c *gin.Context) bool {
+	if c == nil || strings.TrimSpace(c.GetHeader("Authorization")) == "" {
+		return false
+	}
+	path := strings.TrimRight(c.Request.URL.Path, "/")
+	if c.Request.Method == http.MethodPost && (path == "/api/v1/jobs" || path == "/api/v1/creator/jobs") {
+		return true
+	}
+	return c.Request.Method == http.MethodGet && strings.HasPrefix(path, "/api/v1/jobs/")
 }
 
 // isNetworkEnforced reports whether the private-network access
