@@ -368,7 +368,10 @@ func (pg *PreparationGate) EnsurePrepared(ctx context.Context, workerID string, 
 			return PreparationNotRequired, nil
 		}
 		// First-job path: create the reservation while the task is still READY.
-		if pg.handler != nil {
+		// A live session is required to deliver a plan. Besides avoiding a
+		// pointless refresh, this keeps lightweight gate tests (which have a
+		// reservation store but no placement session) on the pure WAITING path.
+		if pg.handler != nil && pg.handler.getSession(workerID) != nil {
 			pg.handler.refreshFutureAssetPlan(ctx, workerID, candidate.JobID)
 		}
 		reservation, found, err = findReservation()
@@ -398,6 +401,15 @@ func (pg *PreparationGate) EnsurePrepared(ctx context.Context, workerID string, 
 		return PreparationExpired, nil
 	}
 	if reservation.State == taskgraph.ReservationReserved {
+		// RESERVED means ownership exists but the worker has not yet been
+		// given a plan that can start the downloads. This state can survive a
+		// lost send or a reconnect between reservation creation and plan
+		// delivery. Re-drive the worker-scoped snapshot before returning
+		// WAITING; the operation is idempotent and preserves the fail-closed
+		// claim gate until matching PREPARED evidence arrives.
+		if pg.handler != nil && pg.handler.getSession(workerID) != nil {
+			pg.handler.refreshFutureAssetPlan(ctx, workerID, candidate.JobID)
+		}
 		logGRPCf(ctx, logging.LevelDebug, logging.CodeGRPCPlacementFailed, "[PLACEMENT] preparation gate BLOCKED state=%s worker=%s task=%s reservation=%s", reservation.State, workerID, candidate.TaskID, reservation.ReservationID)
 		return PreparationWaiting, nil
 	}
