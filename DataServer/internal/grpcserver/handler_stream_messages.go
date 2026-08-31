@@ -39,8 +39,15 @@ func (h *Handler) dispatchMessage(workerID, sessionID string, env *pb.WorkerToMa
 
 	case *pb.WorkerToMasterEnvelope_TaskRejected:
 		h.handleTaskRejected(workerID, m.TaskRejected, sess)
-		// Rejection releases the lease and returns the task to READY.
-		sess.signalPlacement()
+		// Rejection releases the lease and returns the task to READY. A
+		// capacity_full response is deliberately not an immediate wake-up:
+		// the worker has just stated that its phase pool is full, so waking
+		// placement synchronously would create a reject/reoffer storm. The
+		// heartbeat and the 10s placement safety ticker retry after capacity
+		// can have changed; all other rejection reasons remain event-driven.
+		if m.TaskRejected.GetReason() != "capacity_full" {
+			sess.signalPlacement()
+		}
 
 	case *pb.WorkerToMasterEnvelope_TaskResult:
 		h.handleTaskResult(workerID, m.TaskResult, sess, env.GetSentAt().AsTime())

@@ -338,16 +338,20 @@ func computeScorecardFromHeartbeat(workerID string, extra map[string]interface{}
 	if v, ok := extra["effective_cpu_cores"].(float64); ok {
 		input.EffectiveCPUCores = int32(v)
 	}
-	if v, ok := extra["disk_read_mbps"].(float64); ok {
+	// *_mbps in a heartbeat are live utilization samples, not certified
+	// host capacity. Only an explicitly certified capacity may participate
+	// in slot computation; otherwise a busy host would appear to gain
+	// capacity exactly when its measured throughput rises.
+	if v, ok := extra["disk_read_capacity_mbps"].(float64); ok {
 		input.DiskReadMbps = v
 	}
-	if v, ok := extra["disk_write_mbps"].(float64); ok {
+	if v, ok := extra["disk_write_capacity_mbps"].(float64); ok {
 		input.DiskWriteMbps = v
 	}
-	if v, ok := extra["download_mbps"].(float64); ok {
+	if v, ok := extra["network_rx_capacity_mbps"].(float64); ok {
 		input.DownloadMbps = v
 	}
-	if v, ok := extra["upload_mbps"].(float64); ok {
+	if v, ok := extra["network_tx_capacity_mbps"].(float64); ok {
 		input.UploadMbps = v
 	}
 
