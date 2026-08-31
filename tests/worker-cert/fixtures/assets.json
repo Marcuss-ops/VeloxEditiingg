@@ -5,13 +5,13 @@
     {"asset_id": "8a2ce0f04ca265e4ddf9c9dc6f888e5069b3e0928eac4a6d3592e372d163436e", "note": "READY voiceover blob, audio/mpeg, storage_provider=local"}
   ],
   "clips": [
-    {"asset_id": "4bed94dde8728261b708781c5ae7b31886ab30f48bf8a0a0f4981fc7a0e78ed6", "note": "clip, READY, video/mp4, storage_provider=local"},
-    {"asset_id": "c47cfe5faa00bca469590b32177b2608cbad49e212ca82bca6a70b47af07e75b", "note": "clip, READY, video/mp4, storage_provider=local"},
-    {"asset_id": "1a250498df0474534833b9d60b05578ebc45cc7ba87d16a682e4f3f3020981e5", "note": "clip, READY, video/mp4, storage_provider=local"}
+    {"asset_id": "e0ce02babe47d47efe1f4eada0371efc4cc10a18862f135bc3bfde60e025ee21", "note": "clip, READY, video/mp4, storage_provider=local, refreshed from Master 2026-08-31"},
+    {"asset_id": "25c06b681e8653658aa0852932f27db36f8d14709636519e6f072b77235510b5", "note": "clip, READY, video/mp4, storage_provider=local, refreshed from Master 2026-08-31"},
+    {"asset_id": "93d2069de78c6cbd73bf445d33a2586c13730355bb3f5eed4d027124c303ba26", "note": "clip, READY, video/mp4, storage_provider=local, refreshed from Master 2026-08-31"}
   ],
   "subtitles": [
-    {"asset_id": "subtitle-001", "note": "placeholder — no READY subtitle assets in production DB yet"},
-    {"asset_id": "subtitle-002", "note": "placeholder"}
+    {"asset_id": "b8048af328778e963c4041301ee051dab9933e50476b490fd71d3e937782515c", "note": "subtitle, READY, text/plain, storage_provider=local, refreshed from Master 2026-08-31"},
+    {"asset_id": "c76bbaa313afaa70cd77cab6f80252b3150eb41a39f15dacd3c0cb6990fbc319", "note": "subtitle, READY, text/plain, storage_provider=local, refreshed from Master 2026-08-31"}
   ],
   "images": [
     {"asset_id": "scene-image-001", "note": "placeholder — 16 scene_image READY assets available; pick one when needed"}
