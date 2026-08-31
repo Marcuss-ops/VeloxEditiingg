@@ -60,6 +60,7 @@ jobs:
           OWNER="$(printf '%s' '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
           echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
           echo "image=${{ env.REGISTRY }}/${OWNER}/${{ env.IMAGE_NAME }}:bench-${SHA}" >> "$GITHUB_OUTPUT"
+          echo "cache=${{ env.REGISTRY }}/${OWNER}/${{ env.IMAGE_NAME }}:bench-buildcache" >> "$GITHUB_OUTPUT"
 
       - name: Build fast benchmark image
         id: build
@@ -72,11 +73,17 @@ jobs:
           build-args: |
             VERSION=bench-${{ steps.meta.outputs.sha }}
             BUILD_COMMIT=${{ steps.meta.outputs.sha }}
-          # The cache is useful here; attestations are intentionally release-only.
-          cache-from: type=gha,scope=velox-master-fast
-          # Export the complete graph so the next benchmark iteration can
-          # reuse compiler/dependency layers, not only the final image layer.
-          cache-to: type=gha,mode=max,scope=velox-master-fast
+          # Keep a registry-backed cache because GitHub-hosted runners are
+          # ephemeral.  The GHA cache remains a fallback for an empty/new
+          # registry cache; attestations are intentionally release-only.
+          cache-from: |
+            type=registry,ref=${{ steps.meta.outputs.cache }}
+            type=gha,scope=velox-master-fast
+          # Export the complete graph so compiler/dependency layers survive
+          # runner replacement and can be reused by the next fast build.
+          cache-to: |
+            type=registry,ref=${{ steps.meta.outputs.cache }},mode=max
+            type=gha,mode=max,scope=velox-master-fast
           provenance: false
           sbom: false
 
