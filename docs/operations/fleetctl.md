@@ -71,8 +71,12 @@ The smoke command delegates to `tests/worker-cert/smoke_one.sh`, which submits
 a real asset job, waits for `SUCCEEDED`, and verifies the lease worker:
 
 ```bash
-scripts/fleetctl smoke worker-id
+VELOX_SMOKE_ASSET_ID=<ready-asset-id> scripts/fleetctl smoke worker-id
 ```
+
+The smoke command no longer uses a hardcoded asset. It reads the configured
+`VELOX_SMOKE_ASSET_ID`; `--asset-id <ready-asset-id>` may be used for an
+explicit one-off override.
 
 ## Digest rollout — canonical Master API
 

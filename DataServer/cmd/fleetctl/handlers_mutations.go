@@ -54,17 +54,48 @@ func runUpdate(client *fleetClient, args []string) int {
 // runSmoke — POST /api/v1/admin/workers/{id}/smoke;
 // polls /admin/operations/{op_id}; on terminal FAILED, exit 6.
 func runSmoke(client *fleetClient, args []string) int {
-	workerID, ok := oneArg(args)
-	if !ok {
+	workerID := ""
+	assetID := strings.TrimSpace(os.Getenv("VELOX_SMOKE_ASSET_ID"))
+	reason := "fleetctl smoke"
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--asset-id":
+			if i+1 >= len(args) {
+				fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "--asset-id requires a value"))
+				return ExitMisuse
+			}
+			assetID = strings.TrimSpace(args[i+1])
+			i++
+		case "--reason":
+			if i+1 >= len(args) {
+				fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "--reason requires a value"))
+				return ExitMisuse
+			}
+			reason = args[i+1]
+			i++
+		default:
+			if strings.HasPrefix(args[i], "--reason=") {
+				reason = strings.TrimPrefix(args[i], "--reason=")
+				continue
+			}
+			if strings.HasPrefix(args[i], "-") {
+				continue
+			}
+			if workerID == "" {
+				workerID = args[i]
+			}
+		}
+	}
+	if workerID == "" {
 		fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "smoke requires a worker_id"))
 		return ExitMisuse
 	}
-	assetID := "asset-canary-001"
+	if assetID == "" {
+		fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "smoke requires VELOX_SMOKE_ASSET_ID or --asset-id"))
+		return ExitMisuse
+	}
 	renderPlan := "ffmpeg -i {{ pickup_url }} -c:v libx264 -t 5 /tmp/smoke-{{ worker_id }}.mp4"
 	timeoutSec := 600
-	reason := "fleetctl smoke"
-	// Allow --asset-id etc. override in future; today's atomic
-	// surface uses the defaults.
 	return runMutation(client, "smoke", workerID,
 		workerPath(workerID, "smoke"),
 		map[string]any{"asset_id": assetID, "render_plan": renderPlan, "timeout_sec": timeoutSec, "reason": reason})
