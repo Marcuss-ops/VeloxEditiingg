@@ -19,6 +19,9 @@ func (r *SQLiteTaskRepository) TryReserveFutureTask(ctx context.Context, reserva
 	if reservation.TaskID == "" || reservation.WorkerID == "" || reservation.ReservationID == "" || reservation.Distance <= 0 {
 		return false, fmt.Errorf("future reservation: incomplete identity")
 	}
+	if reservation.State == "" {
+		reservation.State = taskgraph.ReservationReserved
+	}
 	now := time.Now().UTC()
 	tx, err := r.store.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -94,8 +97,11 @@ func (r *SQLiteTaskRepository) ReconcileFutureReservations(ctx context.Context, 
 		if item.WorkerID != workerID || item.ExpiresAt.IsZero() {
 			return fmt.Errorf("future reservation: invalid desired item %s", item.TaskID)
 		}
+		if item.State == "" {
+			item.State = taskgraph.ReservationReserved
+		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO future_task_reservations(task_id,job_id,worker_id,reservation_id,task_revision,distance,state,expires_at,created_at,updated_at)
-VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET job_id=excluded.job_id,worker_id=excluded.worker_id,reservation_id=excluded.reservation_id,task_revision=excluded.task_revision,distance=excluded.distance,state=excluded.state,expires_at=excluded.expires_at,updated_at=excluded.updated_at`, item.TaskID, item.JobID, item.WorkerID, item.ReservationID, item.TaskRevision, item.Distance, string(item.State), item.ExpiresAt.UTC().Format(time.RFC3339), nowRFC3339(), nowRFC3339()); err != nil {
+VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET job_id=excluded.job_id,worker_id=excluded.worker_id,reservation_id=excluded.reservation_id,task_revision=excluded.task_revision,distance=excluded.distance,state=CASE WHEN future_task_reservations.reservation_id=excluded.reservation_id THEN future_task_reservations.state ELSE excluded.state END,expires_at=excluded.expires_at,updated_at=excluded.updated_at`, item.TaskID, item.JobID, item.WorkerID, item.ReservationID, item.TaskRevision, item.Distance, string(item.State), item.ExpiresAt.UTC().Format(time.RFC3339), nowRFC3339(), nowRFC3339()); err != nil {
 			return err
 		}
 	}
@@ -151,10 +157,10 @@ func (r *SQLiteTaskRepository) TransferFutureTask(ctx context.Context, taskID, e
 		return false, fmt.Errorf("future reservation: transfer target must differ from current worker")
 	}
 	res, err := r.store.db.ExecContext(ctx, `UPDATE future_task_reservations
-SET job_id = ?, worker_id = ?, reservation_id = ?, task_revision = ?, distance = ?, expires_at = ?, updated_at = ?
+SET job_id = ?, worker_id = ?, reservation_id = ?, task_revision = ?, distance = ?, state = ?, expires_at = ?, updated_at = ?
 WHERE task_id = ? AND worker_id = ? AND expires_at > ?`,
 		reservation.JobID, reservation.WorkerID, reservation.ReservationID, reservation.TaskRevision,
-		reservation.Distance, reservation.ExpiresAt.UTC().Format(time.RFC3339), nowRFC3339(),
+		reservation.Distance, string(taskgraph.ReservationReserved), reservation.ExpiresAt.UTC().Format(time.RFC3339), nowRFC3339(),
 		taskID, expectedWorkerID, nowRFC3339())
 	if err != nil {
 		return false, wrapDBInfrastructure("future reservation transfer", err)
@@ -178,9 +184,34 @@ func (r *SQLiteTaskRepository) FutureTaskPayload(ctx context.Context, taskID str
 	return []byte(payload), err
 }
 
+func reservationStateTransitionAllowed(from, to taskgraph.ReservationState) bool {
+	if to == "" {
+		return false
+	}
+	if from == to {
+		return true
+	}
+	if from == "" {
+		return true
+	}
+	switch from {
+	case taskgraph.ReservationReserved:
+		return to == taskgraph.ReservationPlanning || to == taskgraph.ReservationPreparing || to == taskgraph.ReservationPrepared || to == taskgraph.ReservationExpired
+	case taskgraph.ReservationPlanning:
+		return to == taskgraph.ReservationPreparing || to == taskgraph.ReservationPrepared || to == taskgraph.ReservationExpired
+	case taskgraph.ReservationPreparing:
+		return to == taskgraph.ReservationPrepared || to == taskgraph.ReservationExpired
+	case taskgraph.ReservationPrepared, taskgraph.ReservationExpired:
+		return false
+	default:
+		return false
+	}
+}
+
 // UpdateReservationState advances the reservation lifecycle state.
 // The state column was added in migration 164; older databases without
-// the column will return an error that the caller treats as a no-op.
+// the column return an error. State transitions are monotonic: a refresh may
+// never downgrade PREPARING/PREPARED evidence back to PLANNING/RESERVED.
 func (r *SQLiteTaskRepository) UpdateReservationState(ctx context.Context, reservationID string, state taskgraph.ReservationState) error {
 	if r == nil || r.store == nil || r.store.db == nil {
 		return fmt.Errorf("future reservation store: not initialized")
@@ -188,14 +219,29 @@ func (r *SQLiteTaskRepository) UpdateReservationState(ctx context.Context, reser
 	if reservationID == "" || state == "" {
 		return nil
 	}
+	var currentRaw string
+	err := r.store.db.QueryRowContext(ctx,
+		`SELECT COALESCE(state,'') FROM future_task_reservations WHERE reservation_id = ?`,
+		reservationID).Scan(&currentRaw)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return wrapDBInfrastructure("future reservation state read", err)
+	}
+	current := taskgraph.ReservationState(currentRaw)
+	if !reservationStateTransitionAllowed(current, state) {
+		return fmt.Errorf("future reservation: invalid state transition %s -> %s", current, state)
+	}
 	res, err := r.store.db.ExecContext(ctx,
-		`UPDATE future_task_reservations SET state = ?, updated_at = ? WHERE reservation_id = ?`,
-		string(state), nowRFC3339(), reservationID)
+		`UPDATE future_task_reservations SET state = ?, updated_at = ? WHERE reservation_id = ? AND COALESCE(state,'') = ?`,
+		string(state), nowRFC3339(), reservationID, currentRaw)
 	if err != nil {
 		return wrapDBInfrastructure("future reservation state update", err)
 	}
-	// It is valid for zero rows to be updated: the reservation may have
-	// already been reclaimed by expiry/reconciliation.
+	// A zero-row CAS means another event advanced the reservation between the
+	// read and write. Treat that as a replay-safe no-op rather than forcing a
+	// stale transition over newer evidence.
 	_, _ = res.RowsAffected()
 	return nil
 }
