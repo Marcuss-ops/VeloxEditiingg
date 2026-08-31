@@ -50,6 +50,9 @@ type creatorPushRequest struct {
 	SourceJobID      string                 `json:"source_job_id"`
 	TargetExecutorID string                 `json:"target_executor_id"`
 	Payload          map[string]interface{} `json:"payload"`
+	// Assembly is control-plane metadata for eager preparation. It is kept
+	// outside Payload so it can never leak into the renderer task body.
+	Assembly *assembly.ExternalAssemblyRequest `json:"assembly,omitempty"`
 }
 
 type normalizedCreatorPush struct {
@@ -162,6 +165,14 @@ func normalizeCreatorPushRequest(req creatorPushRequest) (*normalizedCreatorPush
 		return nil, domain.NewInvalidPayload("source_job_id", "required", "source_job_id is required (set it in the envelope or payload.job_id)")
 	}
 
+	var assemblyJob *assembly.AssemblyJobV1
+	if req.Assembly != nil {
+		assemblyJob, err = req.Assembly.Normalize(sourceJobID)
+		if err != nil {
+			return nil, fmt.Errorf("normalize creator assembly: %w", err)
+		}
+	}
+
 	targetExecutorID := strings.TrimSpace(req.TargetExecutorID)
 	if targetExecutorID == "" {
 		targetExecutorID = firstStringResolver(workerPayload, "executor_id", "pipeline_id")
@@ -178,6 +189,7 @@ func normalizeCreatorPushRequest(req creatorPushRequest) (*normalizedCreatorPush
 		DeliveryPlan:     deliveryPlan,
 		PublicationSpecs: nil,
 		StatusDomains:    inputAssemblyStatusDomain(workerPayload),
+		Assembly:         assemblyJob,
 	}, nil
 }
 
@@ -280,7 +292,7 @@ func (h *Handlers) resolveCompletedPayload(
 		Payload:          result,
 		DeliveryPlan:     deliveryPlan,
 		PublicationSpecs: publicationSpecs,
-		Assembly:         nil,
+		Assembly:         assemblyJob,
 		ExternalClientID: externalClientID,
 	})
 	if err != nil {
@@ -356,7 +368,7 @@ func (h *Handlers) CreatorPush() gin.HandlerFunc {
 			normalized.WorkerPayload,
 			normalized.DeliveryPlan,
 			normalized.PublicationSpecs,
-			nil,
+			normalized.Assembly,
 			ClientIDFromContext(c),
 			creatorflow.IntakeSourceCreator,
 		)

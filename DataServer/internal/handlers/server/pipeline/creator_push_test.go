@@ -1,9 +1,11 @@
 package pipeline
 
 import (
+	"strings"
 	"testing"
 
 	"velox-shared/contract"
+	"velox-shared/contract/assembly"
 )
 
 func TestNormalizeCreatorInputAssemblyPayloadPreservesWireValue(t *testing.T) {
@@ -94,6 +96,38 @@ func TestNormalizeCreatorPushRequestUsesPayloadIdentityAndDefaults(t *testing.T)
 	}
 	if normalized.StatusDomains.Job != nil || normalized.StatusDomains.Delivery != nil || normalized.StatusDomains.Publication != nil {
 		t.Fatalf("CreatorPush inferred unrelated status domains: %#v", normalized.StatusDomains)
+	}
+}
+
+func TestNormalizeCreatorPushRequestCarriesEarlyAssemblyManifest(t *testing.T) {
+	const jobID = "creator-prefetch-001"
+	manifest := &assembly.EarlyAssemblyManifest{
+		ContractVersion: assembly.ContractVersion,
+		JobID:           jobID,
+		Revision:        1,
+		Dispatch:        assembly.NormalizeDispatch(assembly.ExternalDispatch{SendToVelox: true}),
+		ExpectedProfile: assembly.CanonicalAssemblyProfileLegacyV1,
+		Assets: []assembly.AssetRequirement{{
+			AssetID: "clip-0", Kind: assembly.KindSourceClip,
+			Availability: assembly.AvailabilityKnown, URL: "https://drive.google.com/clip-0",
+			SHA256: strings.Repeat("a", 64), SizeBytes: 123, Required: true, State: assembly.AssetReady,
+		}},
+		Timeline: []assembly.TimelineItem{{SceneID: "scene-0", AssetID: "clip-0"}},
+	}
+	manifest.PreparationHash = manifest.ComputePreparationHash()
+
+	normalized, err := normalizeCreatorPushRequest(creatorPushRequest{
+		SourceJobID: jobID,
+		Assembly:    &assembly.ExternalAssemblyRequest{EarlyManifest: manifest},
+		Payload: map[string]interface{}{
+			"job_id": jobID, "status": "completed", "pipeline_id": "clips.v1", "copy_only": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("normalizeCreatorPushRequest() error = %v", err)
+	}
+	if normalized.Assembly == nil || normalized.Assembly.PreparationHash != manifest.PreparationHash {
+		t.Fatalf("assembly manifest was not carried through: %#v", normalized.Assembly)
 	}
 }
 
