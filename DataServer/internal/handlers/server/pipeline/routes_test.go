@@ -34,12 +34,23 @@ func TestRegisterRoutesRetiresLegacyPipelineSurfaces(t *testing.T) {
 	for _, canonical := range []string{
 		http.MethodPost + " /api/v1/jobs",
 		http.MethodPost + " /api/v1/jobs/batch",
-		http.MethodPost + " /api/v1/pipeline-runs",
-		http.MethodGet + " /api/v1/pipeline-runs/:id",
-		http.MethodPost + " /api/v1/pipeline-runs/:id/cancel",
 	} {
 		if !registered[canonical] {
 			t.Errorf("canonical route is not registered: %s", canonical)
+		}
+	}
+
+	for _, retired := range []string{
+		http.MethodPost + " /api/v1/pipeline-runs",
+		http.MethodGet + " /api/v1/pipeline-runs/:id",
+		http.MethodPost + " /api/v1/pipeline-runs/:id/cancel",
+		http.MethodPost + " /api/v1/pipeline-runs/:id/retry",
+		http.MethodGet + " /api/v1/pipeline-runs/:id/timeline",
+		http.MethodGet + " /api/v1/pipeline-runs/:id/artifacts",
+		http.MethodGet + " /api/v1/pipeline-runs/:id/deliveries",
+	} {
+		if registered[retired] {
+			t.Errorf("retired pipeline-run route remains registered: %s", retired)
 		}
 	}
 }

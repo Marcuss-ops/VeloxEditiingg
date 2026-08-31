@@ -48,20 +48,6 @@ func (h *Handlers) RegisterRoutes(r *gin.Engine, adminAuth, m2mJobsAuth gin.Hand
 	publications.Use(m2mJobsAuth)
 	publications.POST("/preview", h.PreviewPublication())
 
-	pipelineRuns := r.Group("/api/v1/pipeline-runs")
-	if len(pipelineAuth) > 0 && pipelineAuth[0] != nil {
-		// Production composition may explicitly provide the combined
-		// admin-or-M2M middleware. Keeping this injectable preserves the
-		// historical admin-only test mounts without weakening production.
-		pipelineRuns.Use(pipelineAuth[0])
-	} else if adminAuth != nil {
-		pipelineRuns.Use(adminAuth)
-	}
-	pipelineRuns.POST("", h.CreatePipelineRun())
-	pipelineRuns.GET("/:id", h.PipelineRunStatus())
-	pipelineRuns.POST("/:id/cancel", h.CancelPipelineRun())
-	pipelineRuns.POST("/:id/retry", h.RetryPipelineRun())
-	pipelineRuns.GET("/:id/timeline", h.PipelineRunTimeline())
-	pipelineRuns.GET("/:id/artifacts", h.PipelineRunArtifacts())
-	pipelineRuns.GET("/:id/deliveries", h.PipelineRunDeliveries())
+	// The former /api/v1/pipeline-runs surface is retired. Job submission and
+	// polling use the canonical /api/v1/jobs endpoints above.
 }

@@ -19,11 +19,11 @@ It distinguishes these routes from the `remoteengine.Client` outbound adapter. T
 
 | Legacy route | In-repository caller | Last request evidence | Payload observed in source | Canonical equivalent |
 |---|---|---|---|---|
-| `POST /api/script-simple` | No standalone PipelineGen, script, calendar, benchmark, or workstation client found. Route handler calls configured upstream `remoteengine.Client.GenerateSimpleScript`. | No persisted per-route last-request metric/table. Generic access logs exist only while the process is running. | `SimpleScriptRequest`: `topic`, optional `language`, `style`, `duration`, `variables`. | No equivalent local Velox job producer is present. A caller needing a render submits `POST /api/v1/jobs`; a caller needing a durable pipeline submits `POST /api/v1/pipeline-runs`. |
-| `POST /api/script-multiple` | No standalone in-repository producer found. Route handler calls configured upstream `remoteengine.Client.GenerateBatchScripts`. | Same limitation: no persisted last-request evidence. | `BatchScriptRequest`: `topics`, optional `language`, `style`, `variables`. | `POST /api/v1/jobs/batch` for independent render jobs, or multiple `generation` requests through `POST /api/v1/pipeline-runs` when each item requires a durable remote generation run. |
-| `POST /api/remote/pipeline/generate` | No standalone PipelineGen/workstation/script caller found. It is an inbound compatibility handler. | Handler logs topic/language/style and generated run/job IDs; no durable route-usage counter or last-payload store. | Untyped map: topic/title/source_text, language, style, scene_count, idempotency_key; handler creates a `pipeline_run`, calls upstream `/api/script/generate-with-images`, then persists forwarding. | `POST /api/v1/pipeline-runs` with typed `CreatePipelineRunRequest` (`idempotency_key`, `generation`, `output`, `video_metadata`, `delivery_plan`), then `GET /api/v1/pipeline-runs/{id}`. |
-| `GET /api/remote/pipeline/status/:trace_id` | No in-repository caller found. | No persisted route-usage evidence. | Path `trace_id`; response was upstream `PipelineStatusResponse`. | `GET /api/v1/pipeline-runs/{id}`. |
-| `DELETE /api/remote/pipeline/cancel/:trace_id` | No in-repository caller found. | No persisted route-usage evidence. | Path `trace_id`; remote cancellation plus local job/worker cancellation. | `POST /api/v1/pipeline-runs/{id}/cancel`. |
+| `POST /api/script-simple` | No standalone PipelineGen, script, calendar, benchmark, or workstation client found. Route handler calls configured upstream `remoteengine.Client.GenerateSimpleScript`. | No persisted per-route last-request metric/table. Generic access logs exist only while the process is running. | `SimpleScriptRequest`: `topic`, optional `language`, `style`, `duration`, `variables`. | No equivalent local Velox job producer is present. A caller needing a render submits `POST /api/v1/jobs`. |
+| `POST /api/script-multiple` | No standalone in-repository producer found. Route handler calls configured upstream `remoteengine.Client.GenerateBatchScripts`. | Same limitation: no persisted last-request evidence. | `BatchScriptRequest`: `topics`, optional `language`, `style`, `variables`. | `POST /api/v1/jobs/batch` for independent render jobs. |
+| `POST /api/remote/pipeline/generate` | No standalone PipelineGen/workstation/script caller found. It is an inbound compatibility handler. | Handler logs topic/language/style and generated run/job IDs; no durable route-usage counter or last-payload store. | Untyped map: topic/title/source_text, language, style, scene_count, idempotency_key. | `POST /api/v1/jobs` with the canonical typed job payload. |
+| `GET /api/remote/pipeline/status/:trace_id` | No in-repository caller found. | No persisted route-usage evidence. | Path `trace_id`; response was upstream `PipelineStatusResponse`. | `GET /api/v1/jobs/{job_id}`. |
+| `DELETE /api/remote/pipeline/cancel/:trace_id` | No in-repository caller found. | No persisted route-usage evidence. | Path `trace_id`; remote cancellation plus local job/worker cancellation. | Use the canonical job action surface documented in `docs/API-JOBS.md`. |
 
 ## Producers already canonical
 
@@ -44,9 +44,6 @@ The legacy inbound routes have now been removed from the Velox router. The audit
 ```text
 POST   /api/v1/jobs
 POST   /api/v1/jobs/batch
-POST   /api/v1/pipeline-runs
-GET    /api/v1/pipeline-runs/{id}
-POST   /api/v1/pipeline-runs/{id}/cancel
 POST   /api/v1/creator/jobs
 POST   /api/v1/script/generate-with-images
 ```

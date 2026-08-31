@@ -107,7 +107,7 @@ Il percorso video usa `shared/contract.JobPayloadV2`.
 
 L'Enqueuer riceve il payload da uno dei tre percorsi di intake canonici:
 
-1. un handler HTTP del flusso master (`POST /api/v1/pipeline-runs/*`);
+1. l'intake HTTP canonico del flusso master (`POST /api/v1/jobs`);
 2. il polling asincrono del `CreatorForwardingRunner` (vedi §12);
 3. l'intake HTTP diretto `POST /api/v1/creator/jobs` (handler `creator_push`, autenticato via bearer `VELOX_ADMIN_TOKEN` nello stesso gruppo di route della pipeline) — vedi §12 per il dettaglio dei due percorsi creator.
 
@@ -128,7 +128,7 @@ Tutti i percorsi di intake creator (asincrono via `CreatorForwardingRunner` e si
 
 ```mermaid
 flowchart TD
-    A1[HTTP handler master: POST /pipeline-runs/*] --> B[Enqueuer]
+    A1[HTTP handler master: POST /api/v1/jobs] --> B[Enqueuer]
     A2[HTTP creator_push: POST /api/v1/creator/jobs] --> B
     A3[Async: CreatorForwardingRunner] --> B
     B --> C[Asset resolution]
