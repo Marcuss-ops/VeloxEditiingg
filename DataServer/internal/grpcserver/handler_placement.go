@@ -31,7 +31,7 @@ const (
 	pendingTaskOfferTimeout = 30 * time.Second
 	// A capacity_full rejection is authoritative for a short interval. This
 	// prevents the safety ticker from repeatedly offering the same worker.
-	capacityFullCooldown = 15 * time.Second
+	capacityFullCooldown = 30 * time.Second
 )
 
 // notifyTasksAvailable checks for READY tasks and sends TaskOffers (push mode, PR #4).
