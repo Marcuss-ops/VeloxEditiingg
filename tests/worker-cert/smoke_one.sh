@@ -151,7 +151,9 @@ ASSET_CLIP_B=$(jq -er '.clips[1].asset_id' "$ASSETS_FILE")
 ASSET_SUB=$(jq -er '.subtitles[0].asset_id' "$ASSETS_FILE")
 log_info "assets: vo=$ASSET_VO clip_a=$ASSET_CLIP_A clip_b=$ASSET_CLIP_B sub=$ASSET_SUB"
 
-EPOCH=$(date +%s)
+# Include nanoseconds so concurrent certifications never collide on the
+# idempotency key when they start within the same second.
+EPOCH=$(date +%s%N)
 IDEM_KEY="smoke-one-${TARGET_WORKER_ID}-${EPOCH}"
 # Build the strict canonical SubmitJobRequest shape. The shared builder
 # attaches clip + voiceover to each scene and emits the technical envelope;
