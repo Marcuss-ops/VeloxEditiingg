@@ -35,7 +35,18 @@
 #     BUILD_TIME: <now-U>
 # ============================================================================
 
-# ─── Stage 1: builder ──────────────────────────────────────────────────────
+# ─── Stage 1: tools ────────────────────────────────────────────────────────
+# Keep operator tooling in a source-independent stage.  Otherwise every
+# application source edit invalidates the cosign installation layer and the
+# fast benchmark build spends time rebuilding a large Go tool dependency tree.
+FROM golang:1.25.8-bookworm@sha256:4557cf171e3cdf5053a298d5171b1a5f5734d920260c25f22c79e94760eb2084 AS tools
+
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOBIN=/out/bin \
+    go install github.com/sigstore/cosign/v2/cmd/cosign@v2.4.1
+
+# ─── Stage 2: builder ──────────────────────────────────────────────────────
 FROM golang:1.25.8-bookworm@sha256:4557cf171e3cdf5053a298d5171b1a5f5734d920260c25f22c79e94760eb2084 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -86,11 +97,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # dependencies in the image rather than relying on incidental host binaries.
 # The version is pinned to the same cosign release used by the CI signing
 # workflows; the worker digest is still verified at operation time.
-RUN mkdir -p /out/bin && \
-    CGO_ENABLED=0 GOBIN=/out/bin \
-    go install github.com/sigstore/cosign/v2/cmd/cosign@v2.4.1
 
-# ─── Stage 2: runtime ──────────────────────────────────────────────────────
+# ─── Stage 3: runtime ──────────────────────────────────────────────────────
 FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -120,7 +128,7 @@ WORKDIR /app
 
 # Copy the compiled binary straight into /usr/local/bin.
 COPY --from=builder /out/velox-server /usr/local/bin/velox-server
-COPY --from=builder /out/bin/cosign /usr/local/bin/cosign
+COPY --from=tools /out/bin/cosign /usr/local/bin/cosign
 
 # Pinned runtime identity so bind-mounted state on the host can be
 # chowned deterministically by the install/deploy scripts.
