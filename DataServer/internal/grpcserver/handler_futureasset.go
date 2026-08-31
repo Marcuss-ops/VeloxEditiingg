@@ -72,6 +72,7 @@ func (h *Handler) refreshFutureAssetPlan(ctx context.Context, workerID, currentJ
 	desired, jobs := h.buildDesiredReservations(
 		ctx, workerID, candidates, owned, reservedByOther,
 		snapshot, warmSnapshots, store, prefetchLimit, protectionLimit, skipCounts,
+		currentJobID,
 	)
 
 	// ── Stage 4: Reconcile reservations ─────────────────────────────────

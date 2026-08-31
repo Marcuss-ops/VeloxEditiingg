@@ -32,6 +32,7 @@ func (h *Handler) buildDesiredReservations(
 	prefetchLimit int,
 	protectionLimit int,
 	skipCounts *prefetchSkipCounter,
+	currentJobID string,
 ) (
 	desired []taskgraph.FutureReservation,
 	jobs []futureasset.Job,
@@ -69,7 +70,13 @@ func (h *Handler) buildDesiredReservations(
 		}
 		assets := futureAssetManifests(payload)
 		decision, err := selectWarmPlacement(warmSnapshots, assets)
-		if err != nil || decision.WorkerID != workerID {
+		// The task currently being dispatched is already owned by the normal
+		// placement decision.  It must be allowed to establish its own
+		// preparation reservation on that worker; applying warm-cache affinity
+		// here can make every worker reject the same first job and strand it in
+		// reservation_pending forever.  Cache affinity remains authoritative for
+		// lookahead tasks.
+		if candidate.JobID != currentJobID && (err != nil || decision.WorkerID != workerID) {
 			skipCounts.add(SkipDifferentWarmWorker)
 			continue
 		}
