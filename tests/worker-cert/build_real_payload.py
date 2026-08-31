@@ -166,6 +166,7 @@ def build_payload(
         "video_name": f"Real-asset smoke for {worker_id}@{now_epoch} (scenes={scenes_count})",
         "script_text": f"Real-asset worker certification for {worker_id}.",
         "output": {"width": 1280, "height": 720, "fps": 30, "format": "mp4"},
+        "copy_only": True,
         "scenes": scenes,
         "delivery_plan": [
             {
