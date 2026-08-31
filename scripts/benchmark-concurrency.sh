@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Run the real Matt Damon fleet benchmark at controlled concurrency levels.
 # Results are printed to stdout; no payloads or reports are persisted.
+#
+# Acceptance goals are intentionally strict and are part of the operational
+# Definition of Done. A requested level fails the script unless every job is
+# SUCCEEDED and all latency/throughput gates pass.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -42,10 +46,19 @@ cleanup() {
 }
 trap cleanup EXIT
 
-printf 'level\tjobs\tterminal\tpending_p50_ms\tpending_max_ms\twall_ms\tthroughput_video_h\n'
+printf 'level\tjobs\tterminal\tpending_p50_ms\tpending_max_ms\twall_ms\tthroughput_video_h\ttarget_pending_max_ms\ttarget_wall_max_ms\ttarget_throughput_min_h\tresult\n'
 IFS=',' read -r -a levels <<< "$LEVELS"
+overall_failed=0
 for level in "${levels[@]}"; do
   [[ "$level" =~ ^[1-9][0-9]*$ ]] || { echo "invalid level: $level" >&2; exit 4; }
+  case "$level" in
+    1) target_pending=100; target_wall=13000; target_throughput=400 ;;
+    2) target_pending=150; target_wall=14000; target_throughput=700 ;;
+    4) target_pending=250; target_wall=16000; target_throughput=1200 ;;
+    8) target_pending=500; target_wall=18000; target_throughput=2000 ;;
+    *) echo "unsupported acceptance level: $level (allowed: 1,2,4,8)" >&2; exit 4 ;;
+  esac
+
   ids=()
   submitted=()
   level_start="$(now_ms)"
@@ -92,7 +105,21 @@ for level in "${levels[@]}"; do
   wall="$(( $(now_ms) - level_start ))"
   terminal="$(printf '%s,' "${statuses[@]}" | sed 's/,$//')"
   throughput="$(awk -v n="$level" -v ms="$wall" 'BEGIN { if (ms > 0) printf "%.2f", n*3600000/ms; else print "0.00" }')"
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$level" "$level" "$terminal" "$p50" "$pmax" "$wall" "$throughput"
+
+  all_succeeded=1
+  for status in "${statuses[@]}"; do
+    [[ "$status" == "SUCCEEDED" ]] || all_succeeded=0
+  done
+  throughput_ok="$(awk -v actual="$throughput" -v target="$target_throughput" 'BEGIN { print (actual >= target) ? 1 : 0 }')"
+  result=PASS
+  if (( all_succeeded == 0 || pmax >= target_pending || wall > target_wall || throughput_ok == 0 )); then
+    result=FAIL
+    overall_failed=1
+  fi
+
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$level" "$level" "$terminal" "$p50" "$pmax" "$wall" "$throughput" \
+    "$target_pending" "$target_wall" "$target_throughput" "$result"
 
   for i in "${!ids[@]}"; do
     case "${statuses[$i]}" in SUCCEEDED|FAILED|CANCELLED) ;; *)
@@ -100,3 +127,8 @@ for level in "${levels[@]}"; do
     esac
   done
 done
+
+if (( overall_failed != 0 )); then
+  echo "concurrency benchmark acceptance goals not met" >&2
+  exit 5
+fi
