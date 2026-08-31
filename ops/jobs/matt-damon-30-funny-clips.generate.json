@@ -2,7 +2,7 @@
   "job_type": "scene.composite.v1",
   "template_id": "matt.damon.30.funny.clips",
   "template_version": 1,
-  "idempotency_key": "matt-damon-30-funny-clips-20260831-r2",
+  "idempotency_key": "matt-damon-30-funny-clips-20260831-r3",
   "video_name": "Matt Damon — 30 Funny Clips Anthology",
   "script_text": "Matt Damon — 30 Funny Clips Anthology",
   "audio_url": "velox-drive://1NJtDkwdqdRM49w98OYakarQcaPixYVJt",
