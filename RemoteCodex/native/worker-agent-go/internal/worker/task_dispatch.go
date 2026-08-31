@@ -220,6 +220,17 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 	if isCompiledPlan && w.clipCache == nil {
 		return failBeforeRun("clip_lease_failed", fmt.Errorf("compiled render plan v2 requires a configured clip cache for asset leases"))
 	}
+	// Keep a job-scoped terminal sweep after the normal per-asset cleanup. The
+	// resolver can discover more asset keys than the legacy extractor projects;
+	// without this fence those rows survive a terminal task and keep readiness
+	// in cache.protection_not_ready indefinitely.
+	if w.clipCache != nil {
+		defer func() {
+			if err := w.clipCache.ReleaseJob(leaseCleanupContext(ctx), pte.JobID); err != nil && w.logger != nil {
+				w.logger.Warn("[LEASE] job cleanup failed for job=%s: %v", pte.JobID, err)
+			}
+		}()
+	}
 	reservationStore := w.canonicalAssetCache
 	if reservationStore == nil && w.clipCache != nil {
 		// Headless tests and legacy worker literals may only provide the

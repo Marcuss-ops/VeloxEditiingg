@@ -94,6 +94,21 @@ func (c *Cache) Release(ctx context.Context, assetKey, jobID string) error {
 	return mustHaveAffected(res, assetKey, "Release")
 }
 
+// ReleaseJob removes every active asset lease owned by jobID. It is the
+// terminal cleanup fence for a task: the per-asset ClipLease remains the
+// normal path, while this job-scoped sweep closes gaps caused by a stale or
+// incomplete asset-key projection during cancellation/retry.
+func (c *Cache) ReleaseJob(ctx context.Context, jobID string) error {
+	if jobID == "" {
+		return fmt.Errorf("workercache.ReleaseJob: jobID is required")
+	}
+	_, err := c.db.ExecContext(ctx, `DELETE FROM cached_asset_leases WHERE job_id = ?`, jobID)
+	if err != nil {
+		return fmt.Errorf("workercache.ReleaseJob(%q): lease delete: %w", jobID, err)
+	}
+	return nil
+}
+
 // Reserve protects an asset for an imminent job until expiresAt. Reservations
 // are durable and participate in the same cleanup protection barrier as leases.
 func (c *Cache) Reserve(ctx context.Context, assetKey, reservationID string, expiresAt time.Time) error {

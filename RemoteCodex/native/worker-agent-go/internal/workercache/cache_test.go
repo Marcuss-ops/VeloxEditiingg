@@ -426,6 +426,29 @@ func TestCache_MultipleLeasesProtectUntilLastRelease(t *testing.T) {
 	}
 }
 
+func TestCache_ReleaseJobClearsAllOwnedLeases(t *testing.T) {
+	t.Parallel()
+	c := newTestCache(t)
+	ctx := context.Background()
+	for _, key := range []string{"A", "B"} {
+		if err := c.Store(ctx, Entry{AssetKey: assetref.AssetKey(key), LocalPath: "/tmp/" + key}); err != nil {
+			t.Fatalf("Store %s: %v", key, err)
+		}
+		if err := c.Acquire(ctx, key, "job-terminal"); err != nil {
+			t.Fatalf("Acquire %s: %v", key, err)
+		}
+	}
+	if err := c.ReleaseJob(ctx, "job-terminal"); err != nil {
+		t.Fatalf("ReleaseJob: %v", err)
+	}
+	for _, key := range []string{"A", "B"} {
+		got, _, err := c.Find(ctx, key)
+		if err != nil || got.ActiveJobID != "" {
+			t.Fatalf("lease %s after ReleaseJob = %q, err=%v; want empty", key, got.ActiveJobID, err)
+		}
+	}
+}
+
 func TestCache_Release_OnMissingRowReturnsErrNotFound(t *testing.T) {
 	t.Parallel()
 	c := newTestCache(t)
