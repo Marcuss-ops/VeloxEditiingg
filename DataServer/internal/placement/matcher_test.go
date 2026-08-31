@@ -196,6 +196,31 @@ func TestMatcherRejectsPhaseFull_ButAllowsOtherPhases(t *testing.T) {
 	}
 }
 
+func TestMatcherPhaseAwareIgnoresGlobalCapacity(t *testing.T) {
+	m := NewMatcher()
+	worker := WorkerSnapshot{
+		WorkerID:         "w-1",
+		SessionID:        "s-1",
+		Ready:            true,
+		SessionAlive:     true,
+		MaxParallelJobs:  1,
+		ActiveJobs:       1, // publisher work occupies the legacy global view
+		RenderSlots:      2,
+		ActiveRender:     0,
+		PublisherSlots:   2,
+		ActivePublisher:  1,
+		ExecutorRegistry: registryFromExecutorKeys(executorKeys(ExecutorKey{ID: "scene.composite.v1", Version: 1})),
+	}
+	result := m.Select(worker, []TaskCandidate{{
+		TaskID:   "t-render",
+		Phase:    TaskPhaseRender,
+		Executor: ExecutorKey{ID: "scene.composite.v1", Version: 1},
+	}})
+	if result.Candidate == nil || result.Candidate.TaskID != "t-render" {
+		t.Fatalf("phase-aware render should bypass global capacity gate: %#v", result)
+	}
+}
+
 func TestMatcherPhaseUnknown_FallsBackToFlat(t *testing.T) {
 	m := NewMatcher()
 

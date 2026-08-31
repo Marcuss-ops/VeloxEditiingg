@@ -114,9 +114,10 @@ type workerSession struct {
 	prefetchSlots  atomic.Int32
 	publisherSlots atomic.Int32
 	// Per-phase active counts from the lease store (phase-aware hydration).
-	activeRender    atomic.Int32
-	activePrefetch  atomic.Int32
-	activePublisher atomic.Int32
+	activeRender                atomic.Int32
+	activePrefetch              atomic.Int32
+	activePublisher             atomic.Int32
+	phaseOccupancyAuthoritative atomic.Bool
 
 	// Version correlation (Step 4 / Velox Metrics Center): software
 	// versions reported by the worker via heartbeat, stored on the
@@ -256,6 +257,7 @@ func (s *workerSession) setActivePhaseCounts(activeRender, activePrefetch, activ
 	s.activeRender.Store(int32(activeRender))
 	s.activePrefetch.Store(int32(activePrefetch))
 	s.activePublisher.Store(int32(activePublisher))
+	s.phaseOccupancyAuthoritative.Store(true)
 }
 
 func (s *workerSession) replaceAssetCacheKeys(keys []string) {

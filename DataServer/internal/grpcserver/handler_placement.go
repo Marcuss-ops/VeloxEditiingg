@@ -108,9 +108,11 @@ func (h *Handler) sendPushTaskOffer(ctx context.Context, workerID string) {
 	// Lease store is the sole occupancy source. The session only owns
 	// the declared max slot limit; heartbeat active_jobs is telemetry.
 	snapshot.ActiveJobs = capacity.ActiveSlots
-	snapshot.ActiveRender = capacity.ActiveRender
-	snapshot.ActivePrefetch = capacity.ActivePrefetch
-	snapshot.ActivePublisher = capacity.ActivePublisher
+	if !sess.phaseOccupancyAuthoritative.Load() {
+		snapshot.ActiveRender = capacity.ActiveRender
+		snapshot.ActivePrefetch = capacity.ActivePrefetch
+		snapshot.ActivePublisher = capacity.ActivePublisher
+	}
 
 	candidates, err := h.taskRepo.ListReadyCandidates(ctx, 64)
 	if err != nil {

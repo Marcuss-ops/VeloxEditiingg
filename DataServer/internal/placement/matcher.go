@@ -122,19 +122,6 @@ func (m *Matcher) Select(
 		return result
 	}
 
-	if worker.FreeSlots() <= 0 {
-		result.Rejections = append(result.Rejections, Rejection{
-			Code:   RejectCapacityFull,
-			Detail: "worker has no free task slots",
-		})
-		return result
-	}
-
-	// Per-phase capacity gate: when the worker has per-phase slot limits from
-	// the CapacityScorecard, a candidate is rejected only if its specific phase
-	// has no free slots. This is a per-candidate check applied inside the loop
-	// below (see phaseCapacityCheck).
-
 	// Stable-sort candidates: priority DESC, then created_at ASC (FIFO).
 	ordered := append([]TaskCandidate(nil), candidates...)
 
@@ -217,6 +204,19 @@ func (m *Matcher) Select(
 				TaskID: candidate.TaskID,
 				Code:   RejectMissingCapability,
 				Detail: "missing capability: " + missing,
+			})
+			continue
+		}
+
+		// A phase-aware worker is governed by the candidate's phase pool. The
+		// legacy worker-wide gate must not run first: publishing work can be
+		// active while a render slot is already free, and vice versa. Unknown
+		// phases retain the flat fallback for compatibility.
+		if candidate.Phase == TaskPhaseUnknown && worker.FreeSlots() <= 0 {
+			result.Rejections = append(result.Rejections, Rejection{
+				TaskID: candidate.TaskID,
+				Code:   RejectCapacityFull,
+				Detail: "worker has no free task slots",
 			})
 			continue
 		}

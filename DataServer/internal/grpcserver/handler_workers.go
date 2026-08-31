@@ -75,6 +75,16 @@ func (h *Handler) handleHeartbeat(workerID, sessionID string, hb *pb.Heartbeat) 
 	// Update capacity tracking on the session (for max_parallel_jobs check).
 	sess := h.getSession(workerID)
 	if sess != nil {
+		if resources := hb.GetResources(); resources != nil {
+			// The worker releases its render limiter before publication. Use
+			// these phase counters for placement instead of inferring the
+			// current resource from the task's executor/lifecycle status.
+			sess.setActivePhaseCounts(
+				int(resources.GetRenderJobsActive()),
+				int(resources.GetPrefetchJobsActive()),
+				int(resources.GetPublisherJobsActive()),
+			)
+		}
 		if hb.GetExtra() != nil {
 			extraMap := hb.GetExtra().AsMap()
 			if caps, ok := extraMap["capabilities"].(map[string]interface{}); ok {
