@@ -63,6 +63,7 @@ CREATE TABLE task_attempts (
 	task_id         TEXT NOT NULL,
 	job_id          TEXT NOT NULL,
 	worker_id       TEXT NOT NULL,
+	worker_session_id TEXT NOT NULL DEFAULT '',
 	attempt_number  INTEGER NOT NULL,
 	lease_id        TEXT NOT NULL,
 	status          TEXT NOT NULL,
@@ -89,6 +90,32 @@ func openTaskReaperTestDB(t *testing.T) (*SQLiteStore, *SQLiteTaskRepository) {
 	s := &SQLiteStore{db: db}
 	t.Cleanup(func() { _ = db.Close() })
 	return s, NewSQLiteTaskRepository(s)
+}
+
+func TestShortenSessionLeases_FencesDisconnectedSession(t *testing.T) {
+	s, repo := openTaskReaperTestDB(t)
+	expiry := time.Now().UTC().Add(30 * time.Minute).Format(time.RFC3339)
+	seedLeasedTaskAt(t, s.db, "task-disconnect", "worker-1", "lease-1", expiry, "RUNNING", 4, 1)
+	if _, err := s.db.Exec(`INSERT INTO task_attempts
+		(id, task_id, job_id, worker_id, worker_session_id, attempt_number, lease_id, status, created_at, updated_at)
+		VALUES ('attempt-disconnect', 'task-disconnect', 'job-task-disconnect', 'worker-1', 'session-1', 1, 'lease-1', 'RUNNING', datetime('now'), datetime('now'))`); err != nil {
+		t.Fatalf("seed session attempt: %v", err)
+	}
+	deadline := time.Now().UTC().Add(45 * time.Second)
+	n, err := repo.ShortenSessionLeases(context.Background(), "worker-1", "session-1", deadline)
+	if err != nil {
+		t.Fatalf("ShortenSessionLeases: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("shortened rows=%d, want 1", n)
+	}
+	var got string
+	if err := s.db.QueryRow(`SELECT lease_expires_at FROM tasks WHERE task_id='task-disconnect'`).Scan(&got); err != nil {
+		t.Fatalf("read shortened lease: %v", err)
+	}
+	if got != deadline.Format(time.RFC3339) {
+		t.Fatalf("lease expiry=%q, want %q", got, deadline.Format(time.RFC3339))
+	}
 }
 
 func seedLeasedTaskAt(t *testing.T, db *sql.DB,
