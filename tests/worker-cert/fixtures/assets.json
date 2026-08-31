@@ -5,9 +5,9 @@
     {"asset_id": "8a2ce0f04ca265e4ddf9c9dc6f888e5069b3e0928eac4a6d3592e372d163436e", "note": "READY voiceover blob, audio/mpeg, storage_provider=local"}
   ],
   "clips": [
-    {"asset_id": "e0ce02babe47d47efe1f4eada0371efc4cc10a18862f135bc3bfde60e025ee21", "note": "clip, READY, video/mp4, storage_provider=local, refreshed from Master 2026-08-31"},
-    {"asset_id": "25c06b681e8653658aa0852932f27db36f8d14709636519e6f072b77235510b5", "note": "clip, READY, video/mp4, storage_provider=local, refreshed from Master 2026-08-31"},
-    {"asset_id": "93d2069de78c6cbd73bf445d33a2586c13730355bb3f5eed4d027124c303ba26", "note": "clip, READY, video/mp4, storage_provider=local, refreshed from Master 2026-08-31"}
+    {"asset_id": "7b4ee6ed0362a35f06ef0beed50b90854adb2f28d3c86ea79d153e100a309ca3", "note": "clip, READY, verified H.264/AAC media metadata, storage_provider=local, refreshed from Master 2026-08-31"},
+    {"asset_id": "44f8ae4c34cc71d106fd7138200fdb3a323b9674b2e25c399b10cd58aa1fdcb2", "note": "clip, READY, verified H.264/AAC media metadata, storage_provider=local, refreshed from Master 2026-08-31"},
+    {"asset_id": "0311b5ef0d38f06962f00917b5a7a264852f703661d1e7b35dbafbce5125332d", "note": "clip, READY, verified H.264/AAC media metadata, storage_provider=local, refreshed from Master 2026-08-31"}
   ],
   "subtitles": [
     {"asset_id": "b8048af328778e963c4041301ee051dab9933e50476b490fd71d3e937782515c", "note": "subtitle, READY, text/plain, storage_provider=local, refreshed from Master 2026-08-31"},
