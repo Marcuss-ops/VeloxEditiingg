@@ -69,6 +69,7 @@ func reportRecorder(report *taskrunner.TaskExecutionReport) *telemetry.EventReco
 //     non-nil execErr).
 func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, taskID, attemptID string) {
 	acquired := false
+	phaseAccounted := false
 	// Classify the task phase for per-phase slot accounting.
 	executorID := pte.ExecutorID
 	if executorID == "" {
@@ -81,9 +82,12 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 	}
 	acquired = true
 	w.incrementPhase(taskPhase)
+	phaseAccounted = true
 	defer func() {
-		if acquired {
+		if phaseAccounted {
 			w.decrementPhase(taskPhase)
+		}
+		if acquired {
 			w.concurrencyLimiter.Release()
 		}
 	}()
