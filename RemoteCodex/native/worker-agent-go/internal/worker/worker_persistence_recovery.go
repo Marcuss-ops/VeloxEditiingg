@@ -128,23 +128,11 @@ func (w *Worker) applyRecoverySnapshot(snap RecoverySnapshot) (int, int, int, er
 	// the task was cancelled while the worker was disconnected.
 	pendingReplayed := 0
 
+	// A process restart cannot safely restore a lease: the execution goroutine
+	// and TaskSpec are gone, so renewing it would create a RUNNING zombie.
+	// The Master shortens leases on session disconnect and reaps them through
+	// the canonical TaskLeaseReaper. Keep the snapshot for audit only.
 	leaseReplayed := 0
-	w.activeTaskLeasesMu.Lock()
-	for _, al := range snap.ActiveLeases {
-		if _, exists := w.activeTaskLeases[al.TaskID]; exists {
-			continue
-		}
-		w.activeTaskLeases[al.TaskID] = &ActiveTaskLease{
-			TaskID:        al.TaskID,
-			JobID:         al.JobID,
-			AttemptID:     al.AttemptID,
-			LeaseID:       al.LeaseID,
-			AttemptNumber: al.AttemptNumber,
-			Revision:      al.Revision,
-		}
-		leaseReplayed++
-	}
-	w.activeTaskLeasesMu.Unlock()
 
 	// Active tasks: intentionally NOT restored (Cancel + goroutine
 	// are dead). Returning 0 across the active-task bucket.

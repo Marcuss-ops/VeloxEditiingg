@@ -34,6 +34,42 @@ import (
 // matches the Job-side renewal idiom in handleLeaseRenewal.
 const defaultTaskLeaseTTL = 30 * time.Minute
 
+// ShortenSessionLeases fences active work from a disconnected gRPC session.
+// The lease remains briefly recoverable so a transient reconnect can settle,
+// then the canonical TaskLeaseReaper requeues it. This avoids leaving a
+// RUNNING task alive for the full 30-minute TTL when its worker process died.
+func (r *SQLiteTaskRepository) ShortenSessionLeases(ctx context.Context, workerID, sessionID string, deadline time.Time) (int, error) {
+	if r == nil || r.store == nil || r.store.db == nil {
+		return 0, fmt.Errorf("task repository: shorten session leases store not initialized")
+	}
+	if workerID == "" || sessionID == "" {
+		return 0, fmt.Errorf("task repository: shorten session leases requires workerID + sessionID")
+	}
+	res, err := r.store.db.ExecContext(ctx, `
+		UPDATE tasks
+		SET lease_expires_at = ?, updated_at = ?
+		WHERE worker_id = ?
+		  AND status IN ('LEASED', 'RUNNING')
+		  AND lease_id <> ''
+		  AND EXISTS (
+			SELECT 1 FROM task_attempts a
+			WHERE a.task_id = tasks.task_id
+			  AND a.worker_id = tasks.worker_id
+			  AND a.lease_id = tasks.lease_id
+			  AND a.worker_session_id = ?
+			  AND a.status NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT')
+		  )`,
+		deadline.UTC().Format(time.RFC3339), nowRFC3339(), workerID, sessionID)
+	if err != nil {
+		return 0, wrapDBInfrastructure("task shorten session leases", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, wrapDBInfrastructure("task shorten session leases rows", err)
+	}
+	return int(n), nil
+}
+
 // ClaimNextReadyTask atomically claims the next READY task for a worker.
 // CAS: READY → LEASED with workerID + leaseID. Returns the task with its
 // spec payload from task_specs, or (nil, nil) if no READY task is available.

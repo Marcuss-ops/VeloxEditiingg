@@ -9,7 +9,7 @@
 //
 //	worker_state.json     — seen_command dedup state (PR-1 baseline).
 //	                        Cadence: 30s ticker + on ctx/stop.
-//	worker_recovery.json  — master-restart recovery snapshot:
+//	worker_recovery.json  — recovery/audit snapshot:
 //	                        activeTaskLeases + pendingTasks + an
 //	                        audit-only ActiveTasks list. Cadence:
 //	                        control-plane disconnect event + Stop.
@@ -214,7 +214,8 @@ func writeFileDurable(path string, data []byte, perm os.FileMode) error {
 // files:
 //  1. worker_state.json — seen_commands (PR-1 baseline).
 //  2. worker_recovery.json — activeTaskLeases + pendingTasks
-//     (master-restart recovery). Loaded only IF the snap is
+//     (audit snapshot; active leases are not restored after process restart).
+//     Loaded only IF the snap is
 //     non-empty (CapturedAt zero means it was never written).
 //
 // Called once at worker startup (after New) to recover command-dedup

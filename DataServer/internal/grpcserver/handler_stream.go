@@ -255,6 +255,7 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 		close(sendCh)
 
 		// PR #4: release any pending task offer on session teardown.
+		h.shortenSessionLeases(sess)
 		sess.claimMu.Lock()
 		if sess.pendingTaskOffer != nil {
 			if releaseErr := h.taskRepo.ReleaseLease(context.Background(), sess.pendingTaskOffer.ID, sess.workerID, sess.pendingTaskOffer.LeaseID); releaseErr != nil {

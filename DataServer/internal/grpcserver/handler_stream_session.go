@@ -7,10 +7,35 @@ package grpcserver
 
 import (
 	"context"
+	"time"
 
 	"velox-server/internal/logging"
 	pb "velox-shared/controltransport/pb"
 )
+
+const disconnectedLeaseRecoveryGrace = 45 * time.Second
+
+type sessionLeaseShortener interface {
+	ShortenSessionLeases(context.Context, string, string, time.Time) (int, error)
+}
+
+func (h *Handler) shortenSessionLeases(sess *workerSession) {
+	if sess == nil || h.taskRepo == nil {
+		return
+	}
+	shortener, ok := h.taskRepo.(sessionLeaseShortener)
+	if !ok {
+		return
+	}
+	count, err := shortener.ShortenSessionLeases(context.Background(), sess.workerID, sess.sessionID, time.Now().UTC().Add(disconnectedLeaseRecoveryGrace))
+	if err != nil {
+		logGRPCf(context.Background(), logging.LevelWarn, logging.CodeGRPCSessionCleanupFailed, "[GRPC] Failed to shorten leases for disconnected worker %s session %s: %v", sess.workerID, sess.sessionID, err)
+		return
+	}
+	if count > 0 {
+		logGRPCf(context.Background(), logging.LevelInfo, logging.CodeGRPCSessionCleanupFailed, "[GRPC] Shortened %d active lease(s) for disconnected worker %s session %s; recovery grace=%s", count, sess.workerID, sess.sessionID, disconnectedLeaseRecoveryGrace)
+	}
+}
 
 // closeOldSessionLocked removes any existing session for the given workerID
 // and signals its notifier goroutine to stop. Must be called with h.mu held.
@@ -31,6 +56,7 @@ func (h *Handler) closeOldSessionLocked(workerID string) {
 		if oldSess.cancel != nil {
 			oldSess.cancel()
 		}
+		h.shortenSessionLeases(oldSess)
 		// PR #4: release any pendingTaskOffer held by the old session
 		// so the claim is returned promptly on reconnect.
 		oldSess.claimMu.Lock()

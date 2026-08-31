@@ -76,7 +76,8 @@ func newMinimalWorker(testID, stateDir string) *Worker {
 //     loadRecoveryState path replays the snapshot into the in-memory
 //     maps. Asserts:
 //     - pendingTasks are intentionally NOT restored; the master remints them
-//     - activeTaskLeases restored with the right identity tuple
+//     - activeTaskLeases are not restored: a restarted process cannot renew
+//     a lease without its old execution goroutine
 //     - activeTasks intentionally NOT restored (Cancel funcs
 //     are dead; master will remint).
 //  4. applyRecoverySnapshot is called a second time on Worker B
@@ -193,15 +194,10 @@ func TestMasterRestartRecovery_RoundtripAndIdempotence(t *testing.T) {
 		t.Fatalf("Worker B pendingTasks count=%d, want 0 after reconnect", len(wB.pendingTasks))
 	}
 
-	// Assert: activeTaskLeases restored.
-	if len(wB.activeTaskLeases) != 2 {
-		t.Fatalf("Worker B activeTaskLeases count=%d, want 2", len(wB.activeTaskLeases))
-	}
-	if al := wB.activeTaskLeases["task-lease-1"]; al == nil || al.AttemptNumber != 1 || al.Revision != 1 {
-		t.Fatalf("Worker B activeTaskLeases[task-lease-1] reconstructed badly: %+v", al)
-	}
-	if al := wB.activeTaskLeases["task-lease-2"]; al == nil || al.AttemptNumber != 2 || al.Revision != 3 {
-		t.Fatalf("Worker B activeTaskLeases[task-lease-2] reconstructed badly: %+v", al)
+	// Assert: activeTaskLeases are not restored. The Master shortens the old
+	// session's lease and reaps it; restoring it here would renew a zombie.
+	if len(wB.activeTaskLeases) != 0 {
+		t.Fatalf("Worker B activeTaskLeases count=%d, want 0 after restart", len(wB.activeTaskLeases))
 	}
 
 	// Assert: activeTasks NOT restored (Cancel funcs + goroutines
@@ -219,7 +215,7 @@ func TestMasterRestartRecovery_RoundtripAndIdempotence(t *testing.T) {
 		t.Fatalf("idempotent re-apply restored something (tasks=%d leases=%d pending=%d), want all zero",
 			tasks2, leases2, pending2)
 	}
-	if len(wB.pendingTasks) != 0 || len(wB.activeTaskLeases) != 2 {
+	if len(wB.pendingTasks) != 0 || len(wB.activeTaskLeases) != 0 {
 		t.Fatalf("idempotent re-apply grew maps: pending=%d leases=%d",
 			len(wB.pendingTasks), len(wB.activeTaskLeases))
 	}
