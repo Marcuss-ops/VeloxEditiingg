@@ -135,7 +135,6 @@ def build_payload(
     # Every asset is attached to its scene so the request has no positional
     # top-level arrays and remains valid when scenes are reordered.
     scenes = []
-    audio_tracks = []
     for i in range(scenes_count):
         clip_id = pick_asset_id(fixtures, "clips", i % n_clips)
         vo_id = pick_asset_id(fixtures, "voiceover", i % n_vo)
@@ -158,13 +157,6 @@ def build_payload(
                 "duration_ms": duration_per_scene * 1000,
             },
         })
-        audio_tracks.append({
-            "source_url": voiceover_url,
-            "role": "voiceover",
-            "start_time_offset": i * duration_per_scene,
-            "duration_seconds": duration_per_scene,
-            "volume": 1.0,
-        })
     idem_suffix = f"-{idempotency_key_suffix}" if idempotency_key_suffix else ""
     payload = {
         "idempotency_key": f"smoke-one-{worker_id}-{now_epoch}{idem_suffix}",
@@ -175,7 +167,6 @@ def build_payload(
         "script_text": f"Real-asset worker certification for {worker_id}.",
         "output": {"width": 1280, "height": 720, "fps": 30, "format": "mp4"},
         "scenes": scenes,
-        "audio_tracks": audio_tracks,
         "delivery_plan": [
             {
                 "destination_id": destination_id,
