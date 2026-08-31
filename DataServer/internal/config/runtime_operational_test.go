@@ -22,7 +22,7 @@ func TestLoadOperationalRuntimeDefaults(t *testing.T) {
 		t.Setenv(key, "")
 	}
 	cfg := FromRaw(RawConfigFromEnv())
-	if cfg.Runtime.Scheduler.TaskGraphTick != 2*time.Second {
+	if cfg.Runtime.Scheduler.TaskGraphTick != 100*time.Millisecond {
 		t.Fatalf("taskgraph tick = %s", cfg.Runtime.Scheduler.TaskGraphTick)
 	}
 	if cfg.Runtime.Scheduler.ArtifactReconcileInterval != 15*time.Minute {

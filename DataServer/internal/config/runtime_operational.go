@@ -73,7 +73,11 @@ func loadOperationalRuntimeConfig(raw RawConfig) (SupervisorConfig, CacheConfig,
 		StrictPrefetchClaim: raw.Bool("VELOX_PREFETCH_STRICT_CLAIM", true),
 	}
 	scheduler := SchedulerConfig{
-		TaskGraphTick:             raw.Duration("VELOX_TASKGRAPH_TICK", 2*time.Second),
+		// Readiness is a dispatch boundary, not a background maintenance job.
+		// Keep the fallback short so a newly accepted task does not wait for a
+		// multi-second scheduler tick before placement can see it. Deployments
+		// may still tune this explicitly with VELOX_TASKGRAPH_TICK.
+		TaskGraphTick:             raw.Duration("VELOX_TASKGRAPH_TICK", 100*time.Millisecond),
 		ArtifactReconcileInterval: raw.Duration("VELOX_ARTIFACT_RECONCILE_INTERVAL", 15*time.Minute),
 		MetricsSnapshotInterval:   raw.Duration("VELOX_METRICS_SNAPSHOT_INTERVAL", 5*time.Minute),
 		CalendarInterval:          time.Duration(raw.Int("VELOX_CALENDAR_SCHEDULER_INTERVAL_SECONDS", 30, 1)) * time.Second,
