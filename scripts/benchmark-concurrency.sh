@@ -9,6 +9,10 @@ MASTER_URL="${VELOX_MASTER_URL:-http://127.0.0.1:8000}"
 LEVELS="1,2,4,8"
 POLL_TIMEOUT_S="${VELOX_BENCHMARK_POLL_TIMEOUT_S:-300}"
 
+now_ms() {
+	printf '%s\n' "$(( $(date +%s%N) / 1000000 ))"
+}
+
 if [[ "${1:-}" == "--levels" ]]; then
   LEVELS="${2:?missing value for --levels}"
   shift 2
@@ -44,7 +48,7 @@ for level in "${levels[@]}"; do
   [[ "$level" =~ ^[1-9][0-9]*$ ]] || { echo "invalid level: $level" >&2; exit 4; }
   ids=()
   submitted=()
-  level_start="$(date +%s%3N)"
+  level_start="$(now_ms)"
   for ((i=1; i<=level; i++)); do
     nonce="matt-damon-concurrency-${level}-$(date +%s%N)-${i}"
     body="$(jq --arg key "$nonce" --arg name "Matt Damon concurrency L${level} #${i}" \
@@ -52,7 +56,7 @@ for level in "${levels[@]}"; do
     response="$(curl -fsS -X POST -H "Authorization: Bearer ${m2m_token}" -H 'Content-Type: application/json' \
       --data-binary "$body" "${MASTER_URL}/api/v1/jobs")"
     ids+=("$(jq -er '.job_id' <<< "$response")")
-    submitted+=("$(date +%s%3N)")
+    submitted+=("$(now_ms)")
   done
 
   statuses=()
@@ -76,16 +80,16 @@ for level in "${levels[@]}"; do
     detail="$(curl -fsS "${admin_header[@]}" "${MASTER_URL}/api/v1/admin/jobs/${ids[$i]}")"
     started="$(jq -r '.job.started_at // ""' <<< "$detail")"
     if [[ -n "$started" && "$started" != 0001-* ]]; then
-      start_epoch="$(date -d "$started" +%s%3N 2>/dev/null || printf '%s' "${submitted[$i]}")"
+      start_epoch="$(( $(date -d "$started" +%s 2>/dev/null || printf '%s' "$(( submitted[i] / 1000 ))") * 1000 ))"
       pending_values+=("$((start_epoch - submitted[i]))")
     else
-      pending_values+=("$(( $(date +%s%3N) - submitted[i] ))")
+      pending_values+=("$(( $(now_ms) - submitted[i] ))")
     fi
   done
   IFS=$'\n' read -r -d '' -a sorted_pending < <(printf '%s\n' "${pending_values[@]}" | sort -n && printf '\0') || true
   p50="${sorted_pending[$(( ${#sorted_pending[@]} / 2 ))]:-0}"
   pmax="${sorted_pending[$(( ${#sorted_pending[@]} - 1 ))]:-0}"
-  wall="$(( $(date +%s%3N) - level_start ))"
+  wall="$(( $(now_ms) - level_start ))"
   terminal="$(printf '%s,' "${statuses[@]}" | sed 's/,$//')"
   throughput="$(awk -v n="$level" -v ms="$wall" 'BEGIN { if (ms > 0) printf "%.2f", n*3600000/ms; else print "0.00" }')"
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$level" "$level" "$terminal" "$p50" "$pmax" "$wall" "$throughput"
