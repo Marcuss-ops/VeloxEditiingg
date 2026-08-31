@@ -97,7 +97,9 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 				// phase-specific slot limits when configured. The flat
 				// activeCount+pendingCount check remains as the fallback.
 				taskPhase := classifyExecutor(executorID)
-				if !w.canAcceptPhase(taskPhase) {
+				capacity := w.capacitySnapshot(taskPhase)
+				if !capacity.PhaseAvailable {
+					w.logCapacityFull(capacity, "phase_gate")
 					if err := w.sendTaskReject(ctx, taskID, jobID, attemptID, leaseID, "capacity_full", attemptNumber, revision); err != nil {
 						w.logger.Warn("[RECEIVE] Failed to send TaskRejected (phase capacity %s): %v", taskPhase, err)
 					}
@@ -105,13 +107,8 @@ func (w *Worker) receiveLoop(ctx context.Context, recvCh <-chan controltransport
 				}
 
 				// Flat fallback: also check total active + pending against MaxActiveJobs
-				w.activeTasksMu.RLock()
-				activeCount := countRenderOccupyingTasks(w.activeTasks)
-				w.activeTasksMu.RUnlock()
-				w.pendingTasksMu.Lock()
-				pendingCount := len(w.pendingTasks)
-				w.pendingTasksMu.Unlock()
-				if activeCount+pendingCount >= w.config.MaxActiveJobs {
+				if !capacity.FlatAvailable {
+					w.logCapacityFull(capacity, "flat_gate")
 					if err := w.sendTaskReject(ctx, taskID, jobID, attemptID, leaseID, "capacity_full", attemptNumber, revision); err != nil {
 						w.logger.Warn("[RECEIVE] Failed to send TaskRejected (capacity): %v", err)
 					}

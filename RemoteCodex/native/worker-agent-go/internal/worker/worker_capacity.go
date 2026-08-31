@@ -7,6 +7,28 @@ import (
 	"velox-worker-agent/pkg/video/pipeline"
 )
 
+// CapacitySnapshot is the point-in-time diagnostic view used when a task is
+// refused by admission. The fields intentionally include both phase gates
+// and the legacy flat gate: until they are replaced by one resolver, a
+// capacity_full log must make disagreements between them observable.
+type CapacitySnapshot struct {
+	Phase                TaskPhase
+	ActiveRender         int32
+	RenderSlots          int
+	ActivePrefetch       int32
+	PrefetchSlots        int
+	ActivePublisher      int32
+	PublisherSlots       int
+	ActiveTasks          int
+	RenderOccupyingTasks int
+	PendingTasks         int
+	MaxActiveJobs        int
+	LimiterActive        int32
+	LimiterMax           int
+	PhaseAvailable       bool
+	FlatAvailable        bool
+}
+
 // countRenderOccupyingTasks is the admission view of activeTasks. Publishing
 // and commit-wait continue to be visible as active lifecycle work, but they
 // no longer consume a render slot: executeTask releases the render limiter
@@ -71,22 +93,74 @@ func classifyExecutor(executorID string) TaskPhase {
 // given phase. Uses per-phase slot limits when configured; falls back to
 // the flat maxActiveJobs limit when per-phase slots are zero.
 func (w *Worker) canAcceptPhase(phase TaskPhase) bool {
+	return w.capacitySnapshot(phase).PhaseAvailable
+}
+
+// capacitySnapshot captures all currently competing admission authorities.
+// It is diagnostic rather than a reservation: values can change immediately
+// after the snapshot is taken, as they can for any non-blocking admission
+// check.
+func (w *Worker) capacitySnapshot(phase TaskPhase) CapacitySnapshot {
+	s := CapacitySnapshot{
+		Phase:           phase,
+		ActiveRender:    w.activeRender.Load(),
+		RenderSlots:     w.config.RenderSlots,
+		ActivePrefetch:  w.activePrefetch.Load(),
+		PrefetchSlots:   w.config.PrefetchSlots,
+		ActivePublisher: w.activePublisher.Load(),
+		PublisherSlots:  w.config.PublisherSlots,
+		MaxActiveJobs:   w.config.MaxActiveJobs,
+	}
+
+	w.activeTasksMu.RLock()
+	s.ActiveTasks = len(w.activeTasks)
+	s.RenderOccupyingTasks = countRenderOccupyingTasks(w.activeTasks)
+	w.activeTasksMu.RUnlock()
+	w.pendingTasksMu.Lock()
+	s.PendingTasks = len(w.pendingTasks)
+	w.pendingTasksMu.Unlock()
+
+	if w.concurrencyLimiter != nil {
+		stats := w.concurrencyLimiter.Stats()
+		s.LimiterActive = stats.ActiveJobs
+		s.LimiterMax = stats.MaxActiveJobs
+	}
+
 	switch phase {
 	case PhaseRender:
-		if w.config.RenderSlots > 0 {
-			return int(w.activeRender.Load()) < w.config.RenderSlots
+		if s.RenderSlots > 0 {
+			s.PhaseAvailable = s.ActiveRender < int32(s.RenderSlots)
+		} else {
+			s.PhaseAvailable = s.ActiveRender+s.ActivePrefetch+s.ActivePublisher < int32(s.MaxActiveJobs)
 		}
 	case PhasePrefetch:
-		if w.config.PrefetchSlots > 0 {
-			return int(w.activePrefetch.Load()) < w.config.PrefetchSlots
+		if s.PrefetchSlots > 0 {
+			s.PhaseAvailable = s.ActivePrefetch < int32(s.PrefetchSlots)
+		} else {
+			s.PhaseAvailable = s.ActiveRender+s.ActivePrefetch+s.ActivePublisher < int32(s.MaxActiveJobs)
 		}
 	case PhasePublisher:
-		if w.config.PublisherSlots > 0 {
-			return int(w.activePublisher.Load()) < w.config.PublisherSlots
+		if s.PublisherSlots > 0 {
+			s.PhaseAvailable = s.ActivePublisher < int32(s.PublisherSlots)
+		} else {
+			s.PhaseAvailable = s.ActiveRender+s.ActivePrefetch+s.ActivePublisher < int32(s.MaxActiveJobs)
 		}
+	default:
+		s.PhaseAvailable = s.ActiveRender+s.ActivePrefetch+s.ActivePublisher < int32(s.MaxActiveJobs)
 	}
-	// Fallback: flat limit
-	return int(w.activeRender.Load()+w.activePrefetch.Load()+w.activePublisher.Load()) < w.config.MaxActiveJobs
+	s.FlatAvailable = s.RenderOccupyingTasks+s.PendingTasks < s.MaxActiveJobs
+	return s
+}
+
+func (w *Worker) logCapacityFull(s CapacitySnapshot, gate string) {
+	w.logger.Info("[ADMISSION] capacity_full gate=%s phase=%s active_render=%d/render_slots=%d active_prefetch=%d/prefetch_slots=%d active_publisher=%d/publisher_slots=%d active_tasks=%d render_occupying_tasks=%d pending_tasks=%d max_active_jobs=%d limiter_active=%d/limiter_max=%d phase_available=%t flat_available=%t",
+		gate, s.Phase,
+		s.ActiveRender, s.RenderSlots,
+		s.ActivePrefetch, s.PrefetchSlots,
+		s.ActivePublisher, s.PublisherSlots,
+		s.ActiveTasks, s.RenderOccupyingTasks, s.PendingTasks,
+		s.MaxActiveJobs, s.LimiterActive, s.LimiterMax,
+		s.PhaseAvailable, s.FlatAvailable)
 }
 
 // incrementPhase increments the per-phase active counter.
