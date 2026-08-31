@@ -27,7 +27,12 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-const pendingTaskOfferTimeout = 30 * time.Second
+const (
+	pendingTaskOfferTimeout = 30 * time.Second
+	// A capacity_full rejection is authoritative for a short interval. This
+	// prevents the safety ticker from repeatedly offering the same worker.
+	capacityFullCooldown = 15 * time.Second
+)
 
 // notifyTasksAvailable checks for READY tasks and sends TaskOffers (push mode, PR #4).
 func (h *Handler) notifyTasksAvailable(ctx context.Context, workerID string, trigger <-chan struct{}, done <-chan struct{}) {
@@ -58,6 +63,9 @@ func (h *Handler) notifyTasksAvailable(ctx context.Context, workerID string, tri
 func (h *Handler) sendPushTaskOffer(ctx context.Context, workerID string) {
 	sess := h.getSession(workerID)
 	if sess == nil {
+		return
+	}
+	if sess.capacityCooldownActive(time.Now().UTC()) {
 		return
 	}
 

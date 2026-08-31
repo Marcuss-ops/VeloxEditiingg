@@ -6,6 +6,7 @@ package grpcserver
 
 import (
 	"context"
+	"time"
 
 	"velox-server/internal/logging"
 	"velox-server/internal/placement"
@@ -98,6 +99,10 @@ func (h *Handler) handleTaskRejected(workerID string, tr *pb.TaskRejected, sess 
 
 	// Clear pending offer only after the lease release committed.
 	h.clearPendingOfferForTask(sess, taskID)
+	if reason == "capacity_full" {
+		sess.setCapacityCooldown(time.Now().UTC().Add(capacityFullCooldown))
+		logGRPCf(ctx, logging.LevelInfo, logging.CodeGRPCPlacement, "[PLACEMENT] Worker %s capacity cooldown active for %s after capacity_full", workerID, capacityFullCooldown)
+	}
 }
 
 // handleUnsupportedExecutorRejection handles a task rejected with

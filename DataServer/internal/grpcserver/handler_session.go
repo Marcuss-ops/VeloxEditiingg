@@ -118,6 +118,9 @@ type workerSession struct {
 	activePrefetch              atomic.Int32
 	activePublisher             atomic.Int32
 	phaseOccupancyAuthoritative atomic.Bool
+	// capacityCooldownUntilUnixNano suppresses re-offers after the worker
+	// explicitly reports capacity_full.
+	capacityCooldownUntilUnixNano atomic.Int64
 
 	// Version correlation (Step 4 / Velox Metrics Center): software
 	// versions reported by the worker via heartbeat, stored on the
@@ -215,6 +218,20 @@ func (s *workerSession) setActiveExecutionSlots(value int) {
 		value = 0
 	}
 	s.activeExecutionSlots.Store(int32(value))
+}
+
+func (s *workerSession) setCapacityCooldown(until time.Time) {
+	if s == nil {
+		return
+	}
+	s.capacityCooldownUntilUnixNano.Store(until.UnixNano())
+}
+
+func (s *workerSession) capacityCooldownActive(now time.Time) bool {
+	if s == nil {
+		return false
+	}
+	return s.capacityCooldownUntilUnixNano.Load() > now.UnixNano()
 }
 
 func (s *workerSession) setCapacityAuthoritative(value bool) {
