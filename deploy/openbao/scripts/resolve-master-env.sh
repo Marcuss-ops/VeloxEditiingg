@@ -167,6 +167,10 @@ VELOX_VIDEOS_DIR="${VELOX_VIDEOS_DIR:-/var/lib/velox/videos}"
 VELOX_SECRETS_DIR="${VELOX_SECRETS_DIR:-/etc/velox/secrets}"
 VELOX_MAX_JOB_ATTEMPTS="${VELOX_MAX_JOB_ATTEMPTS:-3}"
 VELOX_WORKER_HEARTBEAT_TIMEOUT="${VELOX_WORKER_HEARTBEAT_TIMEOUT:-120}"
+# Keep the readiness-to-placement handoff below the benchmark latency gate.
+# This is explicit in the materialized production env so deploys do not rely
+# on an image default being silently preserved across upgrades.
+VELOX_TASKGRAPH_TICK="${VELOX_TASKGRAPH_TICK:-100ms}"
 VELOX_COMPATIBILITY_MODE="${VELOX_COMPATIBILITY_MODE:-strict}"
 VELOX_SOCIAL_API_TIMEOUT_MS="${VELOX_SOCIAL_API_TIMEOUT_MS:-30000}"
 VELOX_SOCIAL_API_URL="${VELOX_SOCIAL_API_URL:-}"
@@ -274,6 +278,7 @@ render() { printf '%s=%s\n' "$1" "${2:-}"; }
     render VELOX_SMOKE_ASSET_ID "$VELOX_SMOKE_ASSET_ID"
     render VELOX_MAX_JOB_ATTEMPTS "$VELOX_MAX_JOB_ATTEMPTS"
     render VELOX_WORKER_HEARTBEAT_TIMEOUT "$VELOX_WORKER_HEARTBEAT_TIMEOUT"
+    render VELOX_TASKGRAPH_TICK "$VELOX_TASKGRAPH_TICK"
     printf '\n# ── Compatibility migration policy ─────────────────────────────\n'
     render VELOX_COMPATIBILITY_MODE "$VELOX_COMPATIBILITY_MODE"
     printf '\n# ── InstaEdit Control JWT (InstaEdit→Velox identity) ────────────\n'
