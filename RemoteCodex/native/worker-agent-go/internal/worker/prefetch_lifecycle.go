@@ -68,7 +68,10 @@ func (w *Worker) prefetchPreparedHook() func(prefetch.PreparedJob) {
 		w.logger.Info("[PREFETCH] pre-job finalized job=%s task=%s evidence=%s output=%s publisher=%s warmed_bytes=%d disk_free_bytes=%d finalize_ms=%d output_ready_ms=%d warm_ms=%d evidence_ms=%d", job.JobID, job.TaskID, prejob.EvidencePath, prejob.OutputDir, prejob.PublisherDir, prejob.WarmAdvisedBytes, prejob.DiskFreeBytes, prejob.FinalizeMS, prejob.OutputReadyMS, prejob.WarmMS, prejob.EvidenceMS)
 		w.rememberPreparedEvidence(job)
 		w.logger.Info("[PREFETCH] state=PREPARED job=%s task=%s reservation=%s plan=%s@v%d distance=%d assets=%d prepared_at=%s", job.JobID, job.TaskID, job.ReservationID, job.PlanID, job.PlanVersion, job.Distance, len(job.Assets), job.PreparedAt.UTC().Format(time.RFC3339Nano))
-		// Send lifecycle events for each prepared asset.
+
+		// Asset-scoped PREPARED messages are correctness evidence for the
+		// Master's strict preparation gate. They intentionally stay lightweight:
+		// the Master consumes them in-memory and does not journal every asset.
 		for _, asset := range job.Assets {
 			asset := asset
 			w.sendPrefetchLifecycleEvent(context.Background(), "prefetch_prepared", job.JobID, job.TaskID, futureasset.Plan{PlanID: job.PlanID, Version: job.PlanVersion}, func(e *pb.PrefetchLifecycleEvent) {
@@ -82,6 +85,16 @@ func (w *Worker) prefetchPreparedHook() func(prefetch.PreparedJob) {
 				e.OccurredAt = timestamppb.New(asset.PreparedAt)
 			})
 		}
+
+		// Emit one aggregate PREPARED marker after every per-asset evidence
+		// message. It deliberately carries no asset identity, allowing the
+		// Master to persist one operator-facing journal row without putting N
+		// synchronous SQLite writes on the placement critical path.
+		w.sendPrefetchLifecycleEvent(context.Background(), "prefetch_prepared", job.JobID, job.TaskID, futureasset.Plan{PlanID: job.PlanID, Version: job.PlanVersion}, func(e *pb.PrefetchLifecycleEvent) {
+			e.TaskRevision = int32(job.TaskRevision)
+			e.ReservationId = job.ReservationID
+			e.Distance = int32(job.Distance)
+		})
 	}
 }
 
