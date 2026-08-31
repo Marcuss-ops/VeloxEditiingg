@@ -2,7 +2,7 @@
   "job_type": "scene.composite.v1",
   "template_id": "matt.damon.30.funny.clips",
   "template_version": 1,
-  "idempotency_key": "matt-damon-30-funny-clips-20260831",
+  "idempotency_key": "matt-damon-30-funny-clips-20260831-r2",
   "video_name": "Matt Damon — 30 Funny Clips Anthology",
   "script_text": "Matt Damon — 30 Funny Clips Anthology",
   "audio_url": "https://drive.google.com/file/d/1NJtDkwdqdRM49w98OYakarQcaPixYVJt/view?usp=drivesdk",
@@ -45,6 +45,6 @@
     {"scene_id":"scene-29","index":29,"kind":"clip","text":"The energy was electric as Matt and Wahlberg got too close to Phil Jackson during a timeout. Jackson reportedly turned around and sharply commanded them to sit down and shut up. The speaker compared this intense moment to legendary sports rivalries.","duration_seconds":16.176,"clip":{"url":"https://drive.google.com/file/d/1t34hYV53-MPYDS_DZukzRXHhNWfJFZIg/view?usp=drivesdk"}}
   ],
   "delivery_plan": [
-    {"destination_id":"drive","priority":1,"retry_budget":3}
+    {"destination_id":"drive-production","priority":1,"retry_budget":3}
   ]
 }
