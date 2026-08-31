@@ -92,6 +92,7 @@ func (h *Handler) buildDesiredReservations(
 			ReservationID: fmt.Sprintf("future:%s:%s", workerID, candidate.TaskID),
 			TaskRevision:  candidate.Revision,
 			Distance:      len(jobs) + 1,
+			State:         taskgraph.ReservationReserved,
 			ExpiresAt:     time.Now().UTC().Add(h.futureAssetPlanTTL()),
 		}
 		if len(jobs) < prefetchLimit {
@@ -143,8 +144,10 @@ func (h *Handler) reconcileReservations(
 	return time.Now().UTC(), true
 }
 
-// updateReservationStates transitions all non-empty reservations from
-// RESERVED to PLANNING after the plan has been sent.
+// updateReservationStates advances only freshly-created RESERVED reservations
+// to PLANNING after the plan has been sent. Existing PLANNING/PREPARING/
+// PREPARED reservations are deliberately left untouched: a refresh is not a
+// lifecycle reset and must never downgrade already-prepared evidence.
 func (h *Handler) updateReservationStates(
 	ctx context.Context,
 	store taskgraph.FutureReservationStore,
@@ -152,6 +155,9 @@ func (h *Handler) updateReservationStates(
 ) {
 	for _, r := range desired {
 		if r.ReservationID == "" {
+			continue
+		}
+		if r.State != "" && r.State != taskgraph.ReservationReserved {
 			continue
 		}
 		_ = store.UpdateReservationState(ctx, r.ReservationID, taskgraph.ReservationPlanning)
