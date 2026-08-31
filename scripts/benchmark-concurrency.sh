@@ -65,7 +65,7 @@ for level in "${levels[@]}"; do
   while :; do
     done_count=0
     for i in "${!ids[@]}"; do
-      detail="$(curl -fsS "${admin_header[@]}" "${MASTER_URL}/api/v1/admin/jobs/${ids[$i]}")"
+      detail="$(curl -fsS "${admin_header[@]}" "${MASTER_URL}/api/v1/admin/jobs/${ids[$i]}" || printf '{}')"
       status="$(jq -r '.job.status // "UNKNOWN"' <<< "$detail")"
       statuses[$i]="$status"
       case "$status" in SUCCEEDED|FAILED|CANCELLED) ((done_count+=1)) ;; esac
@@ -77,7 +77,7 @@ for level in "${levels[@]}"; do
 
   pending_values=()
   for i in "${!ids[@]}"; do
-    detail="$(curl -fsS "${admin_header[@]}" "${MASTER_URL}/api/v1/admin/jobs/${ids[$i]}")"
+    detail="$(curl -fsS "${admin_header[@]}" "${MASTER_URL}/api/v1/admin/jobs/${ids[$i]}" || printf '{}')"
     started="$(jq -r '.job.started_at // ""' <<< "$detail")"
     if [[ -n "$started" && "$started" != 0001-* ]]; then
       start_epoch="$(( $(date -d "$started" +%s 2>/dev/null || printf '%s' "$(( submitted[i] / 1000 ))") * 1000 ))"
