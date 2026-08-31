@@ -1,5 +1,6 @@
 {
   "job_type": "scene.composite.v1",
+  "pipeline_id": "clips.v1",
   "template_id": "matt.damon.30.funny.clips",
   "template_version": 1,
   "idempotency_key": "matt-damon-30-funny-clips-20260831-r3",
