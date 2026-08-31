@@ -74,7 +74,9 @@ jobs:
             BUILD_COMMIT=${{ steps.meta.outputs.sha }}
           # The cache is useful here; attestations are intentionally release-only.
           cache-from: type=gha,scope=velox-master-fast
-          cache-to: type=gha,mode=min,scope=velox-master-fast
+          # Export the complete graph so the next benchmark iteration can
+          # reuse compiler/dependency layers, not only the final image layer.
+          cache-to: type=gha,mode=max,scope=velox-master-fast
           provenance: false
           sbom: false
 
