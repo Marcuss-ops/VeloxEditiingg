@@ -8,8 +8,11 @@ import (
 )
 
 // handlePrefetchLifecycleEvent validates the worker identity and persists
-// the prefetch lifecycle event into the job_events journal so fleetctl
-// job inspect shows the full prefetch timeline.
+// operator-facing prefetch lifecycle events into the job_events journal.
+// Asset-scoped prefetch_prepared messages are correctness evidence for the
+// strict preparation gate and stay off the synchronous SQLite hot path; the
+// worker follows them with one aggregate prefetch_prepared marker that is
+// journaled normally.
 func (h *Handler) handlePrefetchLifecycleEvent(workerID string, event *pb.PrefetchLifecycleEvent) {
 	if event == nil || event.GetEventType() == "" {
 		logGRPCf(context.Background(), logging.LevelWarn, logging.CodeGRPCPrefetchFailed, "[GRPC] prefetch lifecycle event from worker %s rejected: missing event_type", workerID)
@@ -20,13 +23,24 @@ func (h *Handler) handlePrefetchLifecycleEvent(workerID string, event *pb.Prefet
 		return
 	}
 	if event.GetEventType() == "prefetch_prepared" && event.GetReservationId() != "" {
-		h.markPreparedAsset(workerID, &preparedAssetEvidence{
-			TaskID:       event.GetTaskId(),
-			TaskRevision: int(event.GetTaskRevision()),
-			AssetID:      event.GetAssetId(),
-			SHA256:       event.GetAssetSha256(),
-			SizeBytes:    event.GetAssetSizeBytes(),
-		}, event.GetReservationId())
+		// Per-asset messages carry the gate evidence. The aggregate marker sent
+		// after all assets deliberately has no asset identity and therefore does
+		// not mutate the evidence map.
+		if event.GetAssetId() != "" || event.GetAssetSha256() != "" {
+			h.markPreparedAsset(workerID, &preparedAssetEvidence{
+				TaskID:       event.GetTaskId(),
+				TaskRevision: int(event.GetTaskRevision()),
+				AssetID:      event.GetAssetId(),
+				SHA256:       event.GetAssetSha256(),
+				SizeBytes:    event.GetAssetSizeBytes(),
+			}, event.GetReservationId())
+
+			// Correctness evidence must become visible to placement immediately.
+			// Do not serialize it behind one SQLite job_events write per asset;
+			// the following aggregate marker preserves the operator timeline with
+			// a single durable row per prepared job.
+			return
+		}
 	}
 	jobID := event.GetJobId()
 	if jobID == "" {
