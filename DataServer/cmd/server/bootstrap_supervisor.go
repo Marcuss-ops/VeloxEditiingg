@@ -23,6 +23,8 @@ import (
 	"velox-shared/dispatchable"
 )
 
+const workerSessionCleanupInterval = 5 * time.Minute
+
 // registerOpsAlertsSupervisor constructs the fleet alert engine before
 // registering its runner. A missing datasource is an explicit DISABLED
 // capability: no runner is registered and no error is hidden as a healthy
@@ -206,6 +208,47 @@ func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDep
 			},
 		}); err != nil {
 			return nil, fmt.Errorf("supervisor register artifact-reconciler: %w", err)
+		}
+	}
+	if p != nil && p.SQLite != nil {
+		if err := sup.Register(supervisor.Runner{
+			Name:   "worker-session-cleanup",
+			Class:  supervisor.ClassRestartable,
+			Policy: restartablePolicy,
+			Run: func(ctx context.Context) error {
+				cleanup := func() error {
+					cleanupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+					defer cancel()
+					// CleanupExpiredSessions is deliberately isolated from task and
+					// lease reconciliation: it only removes expired/revoked session
+					// rows and never changes task state.
+					n, err := p.SQLite.CleanupExpiredSessionsContext(cleanupCtx)
+					if err != nil {
+						return err
+					}
+					if n > 0 {
+						logServerf(ctx, logging.LevelInfo, logging.CodeServerSupervisor, "[SESSION-CLEANUP] removed %d expired/revoked worker sessions", n)
+					}
+					return nil
+				}
+				if err := cleanup(); err != nil {
+					logServerf(ctx, logging.LevelError, logging.CodeServerSupervisor, "[SESSION-CLEANUP] initial cleanup failed: %v", err)
+				}
+				ticker := time.NewTicker(workerSessionCleanupInterval)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					case <-ticker.C:
+						if err := cleanup(); err != nil {
+							logServerf(ctx, logging.LevelError, logging.CodeServerSupervisor, "[SESSION-CLEANUP] cleanup failed: %v", err)
+						}
+					}
+				}
+			},
+		}); err != nil {
+			return nil, fmt.Errorf("supervisor register worker-session-cleanup: %w", err)
 		}
 	}
 	if t.TaskLifecycle != nil {

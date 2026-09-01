@@ -10,6 +10,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -398,8 +399,15 @@ func (s *SQLiteStore) RevokeSession(sessionID string) error {
 
 // CleanupExpiredSessions deletes sessions that are expired or revoked for more than 24h.
 func (s *SQLiteStore) CleanupExpiredSessions() (int64, error) {
+	return s.CleanupExpiredSessionsContext(context.Background())
+}
+
+// CleanupExpiredSessionsContext is the cancellable form used by the
+// supervisor. It keeps session garbage collection bounded independently from
+// task/lease reconciliation and is safe to call repeatedly.
+func (s *SQLiteStore) CleanupExpiredSessionsContext(ctx context.Context) (int64, error) {
 	cutoff := time.Now().UTC().Add(-24 * time.Hour).Format(time.RFC3339)
-	result, err := s.db.Exec(
+	result, err := s.db.ExecContext(ctx,
 		`DELETE FROM worker_sessions WHERE expires_at < ? OR (revoked = 1 AND last_seen < ?)`,
 		nowRFC3339(), cutoff,
 	)
