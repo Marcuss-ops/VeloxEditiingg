@@ -2714,9 +2714,17 @@ type PrefetchLifecycleEvent struct {
 	// Task revision fence for reservation-scoped PREPARED evidence.
 	TaskRevision int32 `protobuf:"varint,14,opt,name=task_revision,json=taskRevision,proto3" json:"task_revision,omitempty"`
 	// Stable failure detail for prejob_prepare_failed events.
-	ErrorReason   string `protobuf:"bytes,15,opt,name=error_reason,json=errorReason,proto3" json:"error_reason,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	ErrorReason string `protobuf:"bytes,15,opt,name=error_reason,json=errorReason,proto3" json:"error_reason,omitempty"`
+	// Canonical timing/provenance fields for asset-level prefetch evidence.
+	DownloadStartedAt   *timestamppb.Timestamp `protobuf:"bytes,16,opt,name=download_started_at,json=downloadStartedAt,proto3" json:"download_started_at,omitempty"`
+	AssetReadyAt        *timestamppb.Timestamp `protobuf:"bytes,17,opt,name=asset_ready_at,json=assetReadyAt,proto3" json:"asset_ready_at,omitempty"`
+	JobStartedAt        *timestamppb.Timestamp `protobuf:"bytes,18,opt,name=job_started_at,json=jobStartedAt,proto3" json:"job_started_at,omitempty"`
+	PrefetchReadyLeadMs int64                  `protobuf:"varint,19,opt,name=prefetch_ready_lead_ms,json=prefetchReadyLeadMs,proto3" json:"prefetch_ready_lead_ms,omitempty"`
+	CacheHit            bool                   `protobuf:"varint,20,opt,name=cache_hit,json=cacheHit,proto3" json:"cache_hit,omitempty"`
+	Origin              string                 `protobuf:"bytes,21,opt,name=origin,proto3" json:"origin,omitempty"` // prefetch | runtime_download | warm_cache
+	AssetKey            string                 `protobuf:"bytes,22,opt,name=asset_key,json=assetKey,proto3" json:"asset_key,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *PrefetchLifecycleEvent) Reset() {
@@ -2850,6 +2858,55 @@ func (x *PrefetchLifecycleEvent) GetTaskRevision() int32 {
 func (x *PrefetchLifecycleEvent) GetErrorReason() string {
 	if x != nil {
 		return x.ErrorReason
+	}
+	return ""
+}
+
+func (x *PrefetchLifecycleEvent) GetDownloadStartedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.DownloadStartedAt
+	}
+	return nil
+}
+
+func (x *PrefetchLifecycleEvent) GetAssetReadyAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.AssetReadyAt
+	}
+	return nil
+}
+
+func (x *PrefetchLifecycleEvent) GetJobStartedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.JobStartedAt
+	}
+	return nil
+}
+
+func (x *PrefetchLifecycleEvent) GetPrefetchReadyLeadMs() int64 {
+	if x != nil {
+		return x.PrefetchReadyLeadMs
+	}
+	return 0
+}
+
+func (x *PrefetchLifecycleEvent) GetCacheHit() bool {
+	if x != nil {
+		return x.CacheHit
+	}
+	return false
+}
+
+func (x *PrefetchLifecycleEvent) GetOrigin() string {
+	if x != nil {
+		return x.Origin
+	}
+	return ""
+}
+
+func (x *PrefetchLifecycleEvent) GetAssetKey() string {
+	if x != nil {
+		return x.AssetKey
 	}
 	return ""
 }
@@ -6729,7 +6786,7 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\ferror_detail\x18\x18 \x01(\tR\verrorDetail\x12;\n" +
 	"\bjob_refs\x18\x19 \x03(\v2 .velox.control.AssetJobReferenceR\ajobRefs\x12/\n" +
 	"\x13checkpoint_sequence\x18\x1a \x01(\x03R\x12checkpointSequence\x12/\n" +
-	"\x13transfer_generation\x18\x1b \x01(\x03R\x12transferGeneration\"\x8f\x04\n" +
+	"\x13transfer_generation\x18\x1b \x01(\x03R\x12transferGeneration\"\xe6\x06\n" +
 	"\x16PrefetchLifecycleEvent\x12\x1d\n" +
 	"\n" +
 	"event_type\x18\x01 \x01(\tR\teventType\x12\x15\n" +
@@ -6749,7 +6806,14 @@ const file_velox_control_worker_control_proto_rawDesc = "" +
 	"\voccurred_at\x18\r \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"occurredAt\x12#\n" +
 	"\rtask_revision\x18\x0e \x01(\x05R\ftaskRevision\x12!\n" +
-	"\ferror_reason\x18\x0f \x01(\tR\verrorReason\"\xaa\n" +
+	"\ferror_reason\x18\x0f \x01(\tR\verrorReason\x12J\n" +
+	"\x13download_started_at\x18\x10 \x01(\v2\x1a.google.protobuf.TimestampR\x11downloadStartedAt\x12@\n" +
+	"\x0easset_ready_at\x18\x11 \x01(\v2\x1a.google.protobuf.TimestampR\fassetReadyAt\x12@\n" +
+	"\x0ejob_started_at\x18\x12 \x01(\v2\x1a.google.protobuf.TimestampR\fjobStartedAt\x123\n" +
+	"\x16prefetch_ready_lead_ms\x18\x13 \x01(\x03R\x13prefetchReadyLeadMs\x12\x1b\n" +
+	"\tcache_hit\x18\x14 \x01(\bR\bcacheHit\x12\x16\n" +
+	"\x06origin\x18\x15 \x01(\tR\x06origin\x12\x1b\n" +
+	"\tasset_key\x18\x16 \x01(\tR\bassetKey\"\xaa\n" +
 	"\n" +
 	"\x16MasterToWorkerEnvelope\x12\x1d\n" +
 	"\n" +
@@ -7205,43 +7269,46 @@ var file_velox_control_worker_control_proto_depIdxs = []int32{
 	45, // 33: velox.control.PhaseTimingDetailed.completed_at:type_name -> google.protobuf.Timestamp
 	14, // 34: velox.control.AssetDownloadProgress.job_refs:type_name -> velox.control.AssetJobReference
 	45, // 35: velox.control.PrefetchLifecycleEvent.occurred_at:type_name -> google.protobuf.Timestamp
-	45, // 36: velox.control.MasterToWorkerEnvelope.sent_at:type_name -> google.protobuf.Timestamp
-	18, // 37: velox.control.MasterToWorkerEnvelope.hello_ack:type_name -> velox.control.HelloAck
-	19, // 38: velox.control.MasterToWorkerEnvelope.task_offer:type_name -> velox.control.TaskOffer
-	22, // 39: velox.control.MasterToWorkerEnvelope.task_lease_granted:type_name -> velox.control.TaskLeaseGranted
-	23, // 40: velox.control.MasterToWorkerEnvelope.command:type_name -> velox.control.Command
-	24, // 41: velox.control.MasterToWorkerEnvelope.cancel_job:type_name -> velox.control.CancelJob
-	25, // 42: velox.control.MasterToWorkerEnvelope.drain:type_name -> velox.control.Drain
-	26, // 43: velox.control.MasterToWorkerEnvelope.configuration_update:type_name -> velox.control.ConfigurationUpdate
-	27, // 44: velox.control.MasterToWorkerEnvelope.lease_revoked:type_name -> velox.control.LeaseRevoked
-	28, // 45: velox.control.MasterToWorkerEnvelope.ping:type_name -> velox.control.Ping
-	35, // 46: velox.control.MasterToWorkerEnvelope.artifact_early_upload_plan:type_name -> velox.control.ArtifactEarlyUploadPlan
-	39, // 47: velox.control.MasterToWorkerEnvelope.artifact_upload_plan:type_name -> velox.control.ArtifactUploadPlan
-	41, // 48: velox.control.MasterToWorkerEnvelope.task_commit_ack:type_name -> velox.control.TaskCommitAck
-	42, // 49: velox.control.MasterToWorkerEnvelope.task_result_ack:type_name -> velox.control.TaskResultAck
-	29, // 50: velox.control.MasterToWorkerEnvelope.future_asset_plan:type_name -> velox.control.FutureAssetPlan
-	33, // 51: velox.control.MasterToWorkerEnvelope.cancel_prefetch:type_name -> velox.control.CancelPrefetch
-	46, // 52: velox.control.TaskOffer.task_spec:type_name -> google.protobuf.Struct
-	45, // 53: velox.control.TaskOffer.lease_deadline:type_name -> google.protobuf.Timestamp
-	46, // 54: velox.control.TaskOffer.requirements:type_name -> google.protobuf.Struct
-	46, // 55: velox.control.TaskOffer.output_contract:type_name -> google.protobuf.Struct
-	45, // 56: velox.control.Command.timestamp:type_name -> google.protobuf.Timestamp
-	46, // 57: velox.control.Command.params:type_name -> google.protobuf.Struct
-	46, // 58: velox.control.ConfigurationUpdate.configuration:type_name -> google.protobuf.Struct
-	45, // 59: velox.control.FutureAssetPlan.generated_at:type_name -> google.protobuf.Timestamp
-	45, // 60: velox.control.FutureAssetPlan.expires_at:type_name -> google.protobuf.Timestamp
-	30, // 61: velox.control.FutureAssetPlan.prefetch_jobs:type_name -> velox.control.PrefetchJob
-	32, // 62: velox.control.FutureAssetPlan.protect_assets:type_name -> velox.control.ProtectedFutureAsset
-	31, // 63: velox.control.PrefetchJob.assets:type_name -> velox.control.PrefetchAsset
-	36, // 64: velox.control.TaskOutputDeclared.manifests:type_name -> velox.control.OutputManifest
-	37, // 65: velox.control.ArtifactUploadPlan.targets:type_name -> velox.control.UploadTarget
-	45, // 66: velox.control.TaskCommitAck.committed_at:type_name -> google.protobuf.Timestamp
-	45, // 67: velox.control.WorkerResourceCounters.sampled_at:type_name -> google.protobuf.Timestamp
-	68, // [68:68] is the sub-list for method output_type
-	68, // [68:68] is the sub-list for method input_type
-	68, // [68:68] is the sub-list for extension type_name
-	68, // [68:68] is the sub-list for extension extendee
-	0,  // [0:68] is the sub-list for field type_name
+	45, // 36: velox.control.PrefetchLifecycleEvent.download_started_at:type_name -> google.protobuf.Timestamp
+	45, // 37: velox.control.PrefetchLifecycleEvent.asset_ready_at:type_name -> google.protobuf.Timestamp
+	45, // 38: velox.control.PrefetchLifecycleEvent.job_started_at:type_name -> google.protobuf.Timestamp
+	45, // 39: velox.control.MasterToWorkerEnvelope.sent_at:type_name -> google.protobuf.Timestamp
+	18, // 40: velox.control.MasterToWorkerEnvelope.hello_ack:type_name -> velox.control.HelloAck
+	19, // 41: velox.control.MasterToWorkerEnvelope.task_offer:type_name -> velox.control.TaskOffer
+	22, // 42: velox.control.MasterToWorkerEnvelope.task_lease_granted:type_name -> velox.control.TaskLeaseGranted
+	23, // 43: velox.control.MasterToWorkerEnvelope.command:type_name -> velox.control.Command
+	24, // 44: velox.control.MasterToWorkerEnvelope.cancel_job:type_name -> velox.control.CancelJob
+	25, // 45: velox.control.MasterToWorkerEnvelope.drain:type_name -> velox.control.Drain
+	26, // 46: velox.control.MasterToWorkerEnvelope.configuration_update:type_name -> velox.control.ConfigurationUpdate
+	27, // 47: velox.control.MasterToWorkerEnvelope.lease_revoked:type_name -> velox.control.LeaseRevoked
+	28, // 48: velox.control.MasterToWorkerEnvelope.ping:type_name -> velox.control.Ping
+	35, // 49: velox.control.MasterToWorkerEnvelope.artifact_early_upload_plan:type_name -> velox.control.ArtifactEarlyUploadPlan
+	39, // 50: velox.control.MasterToWorkerEnvelope.artifact_upload_plan:type_name -> velox.control.ArtifactUploadPlan
+	41, // 51: velox.control.MasterToWorkerEnvelope.task_commit_ack:type_name -> velox.control.TaskCommitAck
+	42, // 52: velox.control.MasterToWorkerEnvelope.task_result_ack:type_name -> velox.control.TaskResultAck
+	29, // 53: velox.control.MasterToWorkerEnvelope.future_asset_plan:type_name -> velox.control.FutureAssetPlan
+	33, // 54: velox.control.MasterToWorkerEnvelope.cancel_prefetch:type_name -> velox.control.CancelPrefetch
+	46, // 55: velox.control.TaskOffer.task_spec:type_name -> google.protobuf.Struct
+	45, // 56: velox.control.TaskOffer.lease_deadline:type_name -> google.protobuf.Timestamp
+	46, // 57: velox.control.TaskOffer.requirements:type_name -> google.protobuf.Struct
+	46, // 58: velox.control.TaskOffer.output_contract:type_name -> google.protobuf.Struct
+	45, // 59: velox.control.Command.timestamp:type_name -> google.protobuf.Timestamp
+	46, // 60: velox.control.Command.params:type_name -> google.protobuf.Struct
+	46, // 61: velox.control.ConfigurationUpdate.configuration:type_name -> google.protobuf.Struct
+	45, // 62: velox.control.FutureAssetPlan.generated_at:type_name -> google.protobuf.Timestamp
+	45, // 63: velox.control.FutureAssetPlan.expires_at:type_name -> google.protobuf.Timestamp
+	30, // 64: velox.control.FutureAssetPlan.prefetch_jobs:type_name -> velox.control.PrefetchJob
+	32, // 65: velox.control.FutureAssetPlan.protect_assets:type_name -> velox.control.ProtectedFutureAsset
+	31, // 66: velox.control.PrefetchJob.assets:type_name -> velox.control.PrefetchAsset
+	36, // 67: velox.control.TaskOutputDeclared.manifests:type_name -> velox.control.OutputManifest
+	37, // 68: velox.control.ArtifactUploadPlan.targets:type_name -> velox.control.UploadTarget
+	45, // 69: velox.control.TaskCommitAck.committed_at:type_name -> google.protobuf.Timestamp
+	45, // 70: velox.control.WorkerResourceCounters.sampled_at:type_name -> google.protobuf.Timestamp
+	71, // [71:71] is the sub-list for method output_type
+	71, // [71:71] is the sub-list for method input_type
+	71, // [71:71] is the sub-list for extension type_name
+	71, // [71:71] is the sub-list for extension extendee
+	0,  // [0:71] is the sub-list for field type_name
 }
 
 func init() { file_velox_control_worker_control_proto_init() }

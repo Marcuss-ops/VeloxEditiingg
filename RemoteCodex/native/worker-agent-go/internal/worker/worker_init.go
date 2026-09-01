@@ -261,6 +261,7 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 	if cfg.PrefetchRAMEnabled {
 		ramCache = prefetch.NewRAMCache(cfg.TmpfsDir, cfg.PrefetchRAMBudgetBytes, cfg.PrefetchRAMMaxAssetBytes)
 	}
+	var workerRef *Worker
 	w := &Worker{
 		config:           cfg,
 		apiClient:        apiClient,
@@ -298,7 +299,10 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 			case "wasted":
 				metrics.RecordPrefetchWastedBytes(asset.SizeBytes)
 			}
-		}, OnEvent: recordPrefetchEvent, AdmissionController: newAdmissionAdapter(admissionCtrl), NetworkPacer: netAdmissionCtrl}),
+		}, OnEvent: func(event prefetch.Event) {
+			recordPrefetchEvent(event)
+			workerRef.sendPrefetchSchedulerEvent(event)
+		}, AdmissionController: newAdmissionAdapter(admissionCtrl), NetworkPacer: netAdmissionCtrl}),
 		// PR-2: TaskOffer-accepted tasks awaiting TaskLeaseGranted before
 		// executeTask dispatch. Keyed by task_id — one canonical entry per
 		// outstanding offer per session.
@@ -340,6 +344,7 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		networkAdmissionController: netAdmissionCtrl,
 		exitFunc:                   os.Exit,
 	}
+	workerRef = w
 
 	// Compose the reporting subsystem behind its small interface. The
 	// reporter owns the durable TaskResult outbox, the ACK waiter registry,

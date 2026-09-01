@@ -76,6 +76,27 @@ func (h *Handler) handlePrefetchLifecycleEvent(workerID string, event *pb.Prefet
 	if event.GetLocalPath() != "" {
 		extra["local_path"] = event.GetLocalPath()
 	}
+	if event.GetAssetKey() != "" {
+		extra["asset_key"] = event.GetAssetKey()
+	}
+	if event.GetOrigin() != "" {
+		extra["origin"] = event.GetOrigin()
+	}
+	if event.GetCacheHit() {
+		extra["cache_hit"] = true
+	}
+	if event.GetDownloadStartedAt() != nil {
+		extra["download_started_at"] = event.GetDownloadStartedAt().AsTime().UTC()
+	}
+	if event.GetAssetReadyAt() != nil {
+		extra["asset_ready_at"] = event.GetAssetReadyAt().AsTime().UTC()
+	}
+	if event.GetJobStartedAt() != nil {
+		extra["job_started_at"] = event.GetJobStartedAt().AsTime().UTC()
+	}
+	if event.GetPrefetchReadyLeadMs() != 0 {
+		extra["prefetch_ready_lead_ms"] = event.GetPrefetchReadyLeadMs()
+	}
 	if err := h.dbStore.LogJobEvent(jobID, "prefetch."+event.GetEventType(), extra); err != nil {
 		logGRPCf(context.Background(), logging.LevelWarn, logging.CodeGRPCPrefetchFailed, "[GRPC] failed to persist prefetch event %s for job=%s: %v", event.GetEventType(), jobID, err)
 	}

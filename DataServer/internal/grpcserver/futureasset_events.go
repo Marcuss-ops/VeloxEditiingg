@@ -5,6 +5,7 @@ package grpcserver
 
 import (
 	"context"
+	"time"
 
 	"velox-server/internal/logging"
 	"velox-shared/futureasset"
@@ -63,6 +64,7 @@ func (h *Handler) persistPlanSent(
 			"distance":       job.Distance,
 			"asset_count":    len(job.Assets),
 			"asset_keys":     assetKeys,
+			"plan_sent_at":   time.Now().UTC(),
 		}); err != nil {
 			logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCPrefetchFailed,
 				"[PREFETCH] persist future_plan_sent failed job=%s event=prefetch.future_plan_sent err=%v",

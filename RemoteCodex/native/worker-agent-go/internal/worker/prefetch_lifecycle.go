@@ -48,6 +48,32 @@ func (w *Worker) sendPrefetchLifecycleEvent(ctx context.Context, eventType, jobI
 	}
 }
 
+// sendPrefetchSchedulerEvent projects the scheduler's canonical timing event
+// into the durable Master journal. Metrics remain handled by recordPrefetchEvent;
+// this function is the sole production bridge for the linked operator timeline.
+func (w *Worker) sendPrefetchSchedulerEvent(event prefetch.Event) {
+	if w == nil || event.JobID == "" {
+		return
+	}
+	plan := futureasset.Plan{PlanID: event.PlanID, Version: event.PlanVersion}
+	w.sendPrefetchLifecycleEvent(context.Background(), event.Name, event.JobID, event.TaskID, plan, func(e *pb.PrefetchLifecycleEvent) {
+		e.Distance = int32(event.Distance)
+		e.AssetKey = event.AssetKey
+		e.CacheHit = event.CacheHit
+		e.Origin = "prefetch"
+		if !event.StartedAt.IsZero() {
+			e.DownloadStartedAt = timestamppb.New(event.StartedAt)
+		}
+		if !event.ReadyAt.IsZero() {
+			e.AssetReadyAt = timestamppb.New(event.ReadyAt)
+		}
+		if event.Name == "prefetch_ready_lead" && !event.StartedAt.IsZero() && !event.ReadyAt.IsZero() {
+			e.JobStartedAt = timestamppb.New(event.StartedAt)
+			e.PrefetchReadyLeadMs = event.StartedAt.Sub(event.ReadyAt).Milliseconds()
+		}
+	})
+}
+
 // prefetchPreparedHook returns an OnPrepared callback that sends
 // prefetch_prepared events to the Master. It captures the worker
 // reference via closure; call it after the worker is fully initialized.
