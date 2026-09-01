@@ -37,6 +37,13 @@ struct FinalAudioDecision {
 
 FinalAudioMetadata probeFinalAudioMetadata(const std::filesystem::path& audioPath);
 
+// Returns a bounded, operator-facing explanation for a failed final-audio
+// probe. This is diagnostic only; callers must continue to use the resolver
+// below as the source of truth for the copy/encode decision.
+std::string describeFinalAudioProbe(
+    const std::filesystem::path& audioPath,
+    const FinalAudioMetadata& metadata);
+
 FinalAudioDecision resolveFinalAudioMode(
     const FinalAudioMetadata& metadata,
     bool isFinalMix,

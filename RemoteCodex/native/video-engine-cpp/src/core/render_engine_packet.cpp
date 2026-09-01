@@ -201,13 +201,15 @@ RenderResult RenderEngine::renderCopyOnly(
         const auto boundAudio = bindOrStage(
             track.source_url, "", workDir / "copy_input_audio.m4a");
         if (boundAudio.first.empty()) {
-            result.error = "failed to resolve valid copy-only audio track";
+            result.error = "copy_only_audio_invalid " +
+                media::describeFinalAudioProbe(boundAudio.first, {});
             return failRender("copy_only_audio_invalid");
         }
         const media::FinalAudioMetadata finalAudioMetadata =
             media::probeFinalAudioMetadata(boundAudio.first);
-        if (finalAudioMetadata.codec.empty()) {
-            result.error = "failed to resolve valid copy-only audio track";
+        if (finalAudioMetadata.codec.empty() || !finalAudioMetadata.metadata_verified) {
+            result.error = "copy_only_audio_invalid " +
+                media::describeFinalAudioProbe(boundAudio.first, finalAudioMetadata);
             return failRender("copy_only_audio_invalid");
         }
         finalAudioDecision = media::resolveFinalAudioModePacket(

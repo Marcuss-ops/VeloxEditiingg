@@ -130,6 +130,11 @@ int main() {
     expect(audioMetadata.container_verified, "AAC container is safe for MP4 stream copy");
     expect(audioMetadata.duration_verified && audioMetadata.duration_seconds > 1.0,
            "audio duration is verified in-process");
+    const auto audioDiagnostic = velox::media::describeFinalAudioProbe(audio, audioMetadata);
+    expect(audioDiagnostic.find("reason=valid") != std::string::npos,
+           "valid audio diagnostic reports reason=valid");
+    expect(audioDiagnostic.find("codec=\"aac\"") != std::string::npos,
+           "valid audio diagnostic includes codec");
 
     // FINAL_AUDIO_COPY integration: a verified AAC/M4A track with neutral
     // timing must reach the muxer as -c:a copy, not an AAC encode fallback.
@@ -184,6 +189,13 @@ int main() {
     expect(!missingProbe.has_value(), "missing media fails closed");
     expect(!velox::media::hasAudioStream(root / "missing.m4a"),
            "missing audio fails closed");
+    const auto missingDiagnostic = velox::media::describeFinalAudioProbe(
+        root / "missing.m4a", {});
+    expect(missingDiagnostic.find("reason=file_not_found") != std::string::npos,
+           "missing audio diagnostic reports file_not_found");
+    const auto bindingDiagnostic = velox::media::describeFinalAudioProbe({}, {});
+    expect(bindingDiagnostic.find("reason=binding_missing") != std::string::npos,
+           "empty audio binding diagnostic reports binding_missing");
 
     if (hadPath) {
         setenv("PATH", previousPathValue.c_str(), 1);
