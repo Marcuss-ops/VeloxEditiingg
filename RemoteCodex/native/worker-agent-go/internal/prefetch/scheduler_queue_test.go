@@ -1,0 +1,275 @@
+package prefetch
+
+import (
+	"context"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"velox-shared/assetref"
+	"velox-shared/futureasset"
+	"velox-worker-agent/internal/downloader"
+)
+
+func TestScheduler_AssetQueuePrioritizesNearerJobAcrossAssets(t *testing.T) {
+	manager := &blockingSchedulerManager{
+		schedulerManager: &schedulerManager{started: make(chan struct{}, 8)},
+		release:          make(chan struct{}),
+	}
+	s := NewScheduler(Config{WorkerID: "worker-a", MaxConcurrent: 2, ByteBudget: 100})
+	s.SetResolver(downloader.NewCacheResolver(manager, nil))
+	now := time.Now().UTC()
+	plan := futureasset.Plan{
+		Version: 1, PlanID: "p", WorkerID: "worker-a", GeneratedAt: now, ExpiresAt: now.Add(time.Minute),
+		Limits: futureasset.Limits{PrefetchHorizon: 3, ProtectionLookahead: 10},
+		PrefetchJobs: []futureasset.Job{
+			{JobID: "n1", TaskID: "t1", ReservationID: "r1", Distance: 1, Assets: []futureasset.AssetManifest{
+				{AssetKey: "near-a", SHA256: "s-near-a", SizeBytes: 10},
+				{AssetKey: "near-b", SHA256: "s-near-b", SizeBytes: 10},
+			}},
+			{JobID: "n2", TaskID: "t2", ReservationID: "r2", Distance: 2, Assets: []futureasset.AssetManifest{{AssetKey: "far", SHA256: "s-far", SizeBytes: 10}}},
+		},
+	}
+	if err := s.Reconcile(plan); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-manager.started:
+	case <-time.After(time.Second):
+		t.Fatal("prefetch did not resolve an asset")
+	}
+	select {
+	case <-manager.started:
+	case <-time.After(time.Second):
+		t.Fatal("prefetch did not fill the second bounded slot")
+	}
+	manager.mu.Lock()
+	got := append([]assetref.AssetKey(nil), manager.keys...)
+	manager.mu.Unlock()
+	close(manager.release)
+	if len(got) != 2 || (got[0] != "near-a" && got[1] != "near-a") || (got[0] != "near-b" && got[1] != "near-b") {
+		t.Fatalf("started resolved keys=%v, want [near-a near-b]", got)
+	}
+}
+
+func TestScheduler_ReprioritizationInvalidatesQueuedGeneration(t *testing.T) {
+	manager := &blockingSchedulerManager{
+		schedulerManager: &schedulerManager{started: make(chan struct{}, 8)},
+		release:          make(chan struct{}),
+	}
+	s := NewScheduler(Config{WorkerID: "worker-a", MaxConcurrent: 1, ByteBudget: 100})
+	s.SetResolver(downloader.NewCacheResolver(manager, nil))
+	now := time.Now().UTC()
+	plan := futureasset.Plan{
+		Version: 1, PlanID: "p1", WorkerID: "worker-a", GeneratedAt: now, ExpiresAt: now.Add(time.Minute),
+		Limits: futureasset.Limits{PrefetchHorizon: 3, ProtectionLookahead: 10},
+		PrefetchJobs: []futureasset.Job{
+			{JobID: "blocker", TaskID: "tb", ReservationID: "rb", Distance: 1},
+			{JobID: "n1", TaskID: "t1", ReservationID: "r1", Distance: 2, Assets: []futureasset.AssetManifest{
+				{AssetKey: "a", SHA256: "s-a", SizeBytes: 10},
+				{AssetKey: "b", SHA256: "s-b", SizeBytes: 10},
+			}},
+		},
+	}
+	if err := s.Reconcile(plan); err != nil {
+		t.Fatal(err)
+	}
+	plan.Version = 2
+	plan.PlanID = "p2"
+	plan.PrefetchJobs = []futureasset.Job{plan.PrefetchJobs[1]}
+	plan.PrefetchJobs[0].Distance = 1
+	if err := s.Reconcile(plan); err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	for _, item := range s.queue {
+		if item.job.JobID == "n1" && item.generation == 1 && s.currentItemLocked(item) {
+			s.mu.Unlock()
+			t.Fatal("stale generation remained eligible after reprioritization")
+		}
+	}
+	s.mu.Unlock()
+	s.SetResolver(downloader.NewCacheResolver(manager, nil))
+	close(manager.release)
+	deadline := time.After(time.Second)
+	for {
+		manager.mu.Lock()
+		count := len(manager.keys)
+		manager.mu.Unlock()
+		if count >= 2 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("reprioritized generation did not drain")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	manager.mu.Lock()
+	got := append([]assetref.AssetKey(nil), manager.keys...)
+	manager.mu.Unlock()
+	counts := make(map[assetref.AssetKey]int)
+	for _, key := range got {
+		counts[key]++
+	}
+	if len(got) < 2 || counts["a"] < 1 || counts["b"] != 1 {
+		t.Fatalf("resolved keys=%v, want current generation [a b] plus at most an active old a", got)
+	}
+}
+
+func BenchmarkScheduler_AssetQueueEndToEnd(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		manager := &schedulerManager{started: make(chan struct{}, 4)}
+		s := NewScheduler(Config{WorkerID: "worker-a", MaxConcurrent: 2, ByteBudget: 1024})
+		s.SetResolver(downloader.NewCacheResolver(manager, nil))
+		now := time.Now().UTC()
+		plan := futureasset.Plan{
+			Version: 1, PlanID: "benchmark", WorkerID: "worker-a", GeneratedAt: now, ExpiresAt: now.Add(time.Minute),
+			Limits: futureasset.Limits{PrefetchHorizon: 3, ProtectionLookahead: 10},
+			PrefetchJobs: []futureasset.Job{{JobID: "n1", TaskID: "t1", ReservationID: "r1", Distance: 1, Assets: []futureasset.AssetManifest{
+				{AssetKey: "a", SHA256: "s-a", SizeBytes: 10},
+				{AssetKey: "b", SHA256: "s-b", SizeBytes: 10},
+				{AssetKey: "c", SHA256: "s-c", SizeBytes: 10},
+				{AssetKey: "d", SHA256: "s-d", SizeBytes: 10},
+			}}},
+		}
+		b.StartTimer()
+		if err := s.Reconcile(plan); err != nil {
+			b.Fatal(err)
+		}
+		deadline := time.Now().Add(time.Second)
+		for {
+			manager.mu.Lock()
+			resolved := len(manager.keys)
+			manager.mu.Unlock()
+			if resolved == 4 {
+				break
+			}
+			if time.Now().After(deadline) {
+				b.Fatalf("resolved %d assets, want 4", resolved)
+			}
+			time.Sleep(time.Microsecond)
+		}
+		b.StopTimer()
+		s.Close()
+	}
+}
+
+func TestScheduler_DiskPressureUsesRestrictedCriticalAndRecoveryHysteresis(t *testing.T) {
+	manager := &schedulerManager{started: make(chan struct{}, 8)}
+	var usage atomic.Int32
+	usage.Store(78)
+	s := NewScheduler(Config{WorkerID: "worker-a", MaxConcurrent: 3, ByteBudget: 100, DiskRestrictedPercent: 70, DiskCriticalPercent: 85, DiskRecoveryPercent: 75, DiskUsagePercent: func() int { return int(usage.Load()) }})
+	s.SetResolver(downloader.NewCacheResolver(manager, nil))
+	now := time.Now().UTC()
+	plan := futureasset.Plan{Version: 1, PlanID: "p", WorkerID: "worker-a", GeneratedAt: now, ExpiresAt: now.Add(time.Minute), Limits: futureasset.Limits{PrefetchHorizon: 3, ProtectionLookahead: 10}, PrefetchJobs: []futureasset.Job{
+		{JobID: "n1", TaskID: "t1", ReservationID: "r1", Distance: 1, Assets: []futureasset.AssetManifest{{AssetKey: "D1", SHA256: "s1", SizeBytes: 10}}},
+		{JobID: "n2", TaskID: "t2", ReservationID: "r2", Distance: 2, Assets: []futureasset.AssetManifest{{AssetKey: "D2", SHA256: "s2", SizeBytes: 10}}},
+		{JobID: "n3", TaskID: "t3", ReservationID: "r3", Distance: 3, Assets: []futureasset.AssetManifest{{AssetKey: "D3", SHA256: "s3", SizeBytes: 10}}},
+	}}
+	if err := s.Reconcile(plan); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.After(time.Second)
+	for {
+		manager.mu.Lock()
+		n := len(manager.keys)
+		manager.mu.Unlock()
+		if n >= 1 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("restricted N+1 did not start")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	manager.mu.Lock()
+	got := append([]assetref.AssetKey(nil), manager.keys...)
+	manager.mu.Unlock()
+	if len(got) != 1 || got[0] != "D1" {
+		t.Fatalf("restricted prefetch keys=%v, want [D1]", got)
+	}
+	usage.Store(90)
+	plan.Version = 2
+	plan.PrefetchJobs = []futureasset.Job{{JobID: "n4", TaskID: "t4", ReservationID: "r4", Distance: 1, Assets: []futureasset.AssetManifest{{AssetKey: "D4", SHA256: "s4", SizeBytes: 10}}}}
+	if err := s.Reconcile(plan); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	manager.mu.Lock()
+	if len(manager.keys) != 1 {
+		t.Fatalf("critical disk started new prefetch: %v", manager.keys)
+	}
+	manager.mu.Unlock()
+	usage.Store(74)
+	plan.Version = 3
+	plan.PrefetchJobs = []futureasset.Job{{JobID: "n5", TaskID: "t5", ReservationID: "r5", Distance: 1, Assets: []futureasset.AssetManifest{{AssetKey: "D5", SHA256: "s5", SizeBytes: 10}}}}
+	if err := s.Reconcile(plan); err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.After(time.Second)
+	for {
+		manager.mu.Lock()
+		n := len(manager.keys)
+		manager.mu.Unlock()
+		if n >= 2 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("prefetch did not recover below hysteresis threshold")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+}
+
+type blockingReserveStore struct {
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *blockingReserveStore) Acquire(context.Context, assetref.AssetKey, string) error { return nil }
+func (s *blockingReserveStore) Release(context.Context, assetref.AssetKey, string) error { return nil }
+func (s *blockingReserveStore) Reserve(context.Context, assetref.AssetKey, string, time.Time) error {
+	s.once.Do(func() { close(s.entered) })
+	<-s.release
+	return nil
+}
+func (s *blockingReserveStore) ReleaseReservation(context.Context, assetref.AssetKey, string) error {
+	return nil
+}
+
+func TestScheduler_ReconcileDoesNotHoldLockDuringProtectionIO(t *testing.T) {
+	store := &blockingReserveStore{entered: make(chan struct{}), release: make(chan struct{})}
+	s := NewScheduler(Config{WorkerID: "worker-a", MaxConcurrent: 1, ByteBudget: 100})
+	s.SetProtectionStore(store)
+	defer s.Close()
+	done := make(chan error, 1)
+	go func() { done <- s.Reconcile(futureTestPlan()) }()
+	select {
+	case <-store.entered:
+	case <-time.After(time.Second):
+		t.Fatal("Reserve never entered")
+	}
+	acquired := make(chan struct{})
+	go func() {
+		s.mu.Lock()
+		close(acquired)
+		s.mu.Unlock()
+	}()
+	select {
+	case <-acquired:
+	case <-time.After(time.Second):
+		t.Fatal("s.mu held during blocking protection I/O")
+	}
+	close(store.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
