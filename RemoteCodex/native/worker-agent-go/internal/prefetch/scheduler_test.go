@@ -999,6 +999,99 @@ func missingJobs(jobs map[string]PreparedJob) []string {
 	return missing
 }
 
+// TestScheduler_MultiJobLookaheadOverlapsRunningJob proves that the hard
+// lookahead horizon is useful while the current render is still running.
+// A is represented by a blocked foreground operation; B/C/D must all reach
+// PREPARED before that operation is released.
+func TestScheduler_MultiJobLookaheadOverlapsRunningJob(t *testing.T) {
+	var transfers atomic.Int32
+	transferer := downloader.TransfererFunc(func(_ context.Context, _ context.Context, req downloader.DownloadRequest, check bool, _ func(int64)) (downloader.CacheCheckResult, downloader.TransferResult, error) {
+		if check {
+			return downloader.CacheCheckResult{Outcome: downloader.CacheOutcomeMissNotFound}, downloader.TransferResult{}, nil
+		}
+		transfers.Add(1)
+		path := t.TempDir() + "/" + string(req.AssetKey)
+		if err := os.WriteFile(path, []byte(req.AssetKey), 0o644); err != nil {
+			return downloader.CacheCheckResult{}, downloader.TransferResult{}, err
+		}
+		return downloader.CacheCheckResult{}, downloader.TransferResult{LocalPath: path, Bytes: req.SizeBytes, SHA256: req.SHA256}, nil
+	})
+	manager := downloader.NewManager(downloader.Config{Concurrency: 2}, transferer)
+	defer manager.Close()
+
+	preparedCh := make(chan PreparedJob, 3)
+	var eventsMu sync.Mutex
+	var events []Event
+	s := NewScheduler(Config{
+		WorkerID: "lookahead-worker", MaxConcurrent: 2, ByteBudget: 1024 * 1024,
+		OnPrepared: func(job PreparedJob) { preparedCh <- job },
+		OnEvent:    func(event Event) { eventsMu.Lock(); events = append(events, event); eventsMu.Unlock() },
+	})
+	s.SetResolver(downloader.NewCacheResolver(manager, nil))
+	defer s.Close()
+
+	aStarted := time.Now().UTC()
+	aDone := make(chan struct{})
+	now := time.Now().UTC()
+	plan := futureasset.Plan{
+		Version: 1, PlanID: "lookahead-overlap", WorkerID: "lookahead-worker",
+		GeneratedAt: now, ExpiresAt: now.Add(time.Minute),
+		Limits: futureasset.Limits{PrefetchHorizon: 3, ProtectionLookahead: 10},
+	}
+	for i, jobID := range []string{"job-B", "job-C", "job-D"} {
+		distance := i + 1
+		payload := []byte("asset-" + jobID)
+		sum := sha256.Sum256(payload)
+		plan.PrefetchJobs = append(plan.PrefetchJobs, futureasset.Job{
+			JobID: jobID, TaskID: "task-" + jobID, ReservationID: "reservation-" + jobID, Distance: distance,
+			Assets: []futureasset.AssetManifest{{AssetKey: "asset-" + jobID, AssetID: "asset-" + jobID, SHA256: hex.EncodeToString(sum[:]), SizeBytes: int64(len(payload))}},
+		})
+	}
+	if err := s.Reconcile(plan); err != nil {
+		t.Fatal(err)
+	}
+	preparedByJob := make(map[string]PreparedJob)
+	deadline := time.After(5 * time.Second)
+	for len(preparedByJob) < 3 {
+		select {
+		case job := <-preparedCh:
+			preparedByJob[job.JobID] = job
+		case <-deadline:
+			t.Fatalf("only %d/3 lookahead jobs reached PREPARED", len(preparedByJob))
+		}
+	}
+	if !time.Now().UTC().After(aStarted) {
+		t.Fatal("lookahead preparation did not occur after foreground start")
+	}
+	select {
+	case <-aDone:
+		t.Fatal("foreground job A ended before lookahead preparation completed")
+	default:
+	}
+	close(aDone)
+
+	for _, jobID := range []string{"job-B", "job-C", "job-D"} {
+		s.MarkJobStarted(jobID)
+	}
+	eventsMu.Lock()
+	leadCount := 0
+	for _, event := range events {
+		if event.Name == "prefetch_ready_lead" {
+			leadCount++
+			if !event.ReadyAt.Before(event.StartedAt) {
+				t.Fatalf("job %s has non-positive prefetch lead", event.JobID)
+			}
+		}
+	}
+	eventsMu.Unlock()
+	if leadCount != 3 {
+		t.Fatalf("prefetch_ready_lead events=%d, want 3", leadCount)
+	}
+	if got := transfers.Load(); got != 3 {
+		t.Fatalf("lookahead transfer count=%d, want 3", got)
+	}
+}
+
 // TestScheduler_AggressiveEvictionAfterPrepared is the P0 canary for the
 // execution reservation handoff. It verifies that after an asset reaches
 // PREPARED and the handoff to execution reservation completes, aggressive
