@@ -81,10 +81,23 @@ func (h *Handler) sendPushTaskOffer(ctx context.Context, workerID string) {
 	if sess.pendingTaskOffer != nil {
 		offer := sess.pendingTaskOffer
 		stale := !sess.pendingTaskOfferAt.IsZero() && time.Since(sess.pendingTaskOfferAt) >= pendingTaskOfferTimeout
-		if !stale {
-			if current, err := h.taskRepo.Get(ctx, offer.ID); err == nil && (current == nil || current.Status != taskgraph.StatusLeased || current.WorkerID != workerID || current.LeaseID != offer.LeaseID) {
-				stale = true
-			}
+		// Always read the durable row, including after the offer timeout. A
+		// successful accept may have promoted the task to RUNNING just before
+		// this placement tick, and the timeout alone must not revoke it.
+		current, err := h.taskRepo.Get(ctx, offer.ID)
+		if err == nil && (current == nil || (current.Status != taskgraph.StatusLeased && current.Status != taskgraph.StatusRunning) || current.WorkerID != workerID || current.LeaseID != offer.LeaseID) {
+			stale = true
+		}
+		// TaskAccepted promotes the task to RUNNING before the handler clears
+		// pendingTaskOffer. A placement wake-up can arrive in that narrow
+		// interval. RUNNING with the same worker/lease is a valid in-flight
+		// offer, never a stale lease: releasing it here would requeue a task
+		// that the worker is already executing and allow a second attempt to
+		// be claimed concurrently.
+		if current != nil && current.Status == taskgraph.StatusRunning && current.WorkerID == workerID && current.LeaseID == offer.LeaseID {
+			sess.pendingTaskOffer = nil
+			sess.pendingTaskOfferAt = time.Time{}
+			return
 		}
 		if !stale {
 			return
