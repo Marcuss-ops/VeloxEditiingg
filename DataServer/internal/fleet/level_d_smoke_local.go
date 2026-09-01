@@ -59,7 +59,7 @@ func (w *LocalShellWorker) DownloadAsset(_ context.Context, runID, _, pickupURL,
 	// asset:// URLs are synthetic and are accepted only by the explicit
 	// development smoke backend; production resolves a real pickup URL.
 	if pickupURL != "" && !strings.HasPrefix(pickupURL, "asset://") {
-		cmd := exec.Command("curl", "-sSL", "-o", destPath, pickupURL)
+		cmd := exec.Command("curl", "--fail-with-body", "-sSL", "-o", destPath, pickupURL)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("smoke: curl download asset from %s: %w (output: %s)", pickupURL, err, string(out))

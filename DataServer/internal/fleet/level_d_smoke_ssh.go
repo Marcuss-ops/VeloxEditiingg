@@ -137,7 +137,7 @@ func (e *SSHWorkerExec) DownloadAsset(ctx context.Context, runID, workerID, pick
 	// development mode; production must provide a real pickup URL.
 	if pickupURL != "" && !strings.HasPrefix(pickupURL, "asset://") {
 		cmd := fmt.Sprintf(
-			"mkdir -p %s && curl -sSL -o %s '%s'",
+			"mkdir -p %s && curl --fail-with-body -sSL -o %s '%s'",
 			filepath.Dir(destPath), destPath, pickupURL,
 		)
 		_, err := e.ssh.Run(ctx, workerID, cmd)
@@ -170,12 +170,12 @@ func (e *SSHWorkerExec) RunFFmpegRender(ctx context.Context, runID, workerID, re
 	if renderPlan != "" {
 		inputPath := filepath.Join(filepath.Dir(outputPath), runID+".in")
 		cmd = fmt.Sprintf(
-			"mkdir -p %s && ffmpeg -y -i %s -map 0:v:0 -map 0:a:0? -c:v libx264 -c:a aac -ar 48000 -ac 2 -shortest -t 2 %s 2>/dev/null && stat -c%%s %s",
+			"mkdir -p %s && ffmpeg -y -i %s -map 0:v:0 -map 0:a:0? -c:v libx264 -c:a aac -ar 48000 -ac 2 -shortest -t 2 %s 2>&1 && stat -c%%s %s",
 			filepath.Dir(outputPath), inputPath, outputPath, outputPath,
 		)
 	} else {
 		cmd = fmt.Sprintf(
-			"mkdir -p %s && ffmpeg -y -f lavfi -i color=c=red:size=320x240:d=2 -f lavfi -i anullsrc=r=48000:cl=stereo -map 0:v:0 -map 1:a:0 -c:v libx264 -c:a aac -ar 48000 -ac 2 -shortest -t 2 %s 2>/dev/null && stat -c%%s %s",
+			"mkdir -p %s && ffmpeg -y -f lavfi -i color=c=red:size=320x240:d=2 -f lavfi -i anullsrc=r=48000:cl=stereo -map 0:v:0 -map 1:a:0 -c:v libx264 -c:a aac -ar 48000 -ac 2 -shortest -t 2 %s 2>&1 && stat -c%%s %s",
 			filepath.Dir(outputPath), outputPath, outputPath,
 		)
 	}
