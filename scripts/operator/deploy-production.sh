@@ -70,6 +70,19 @@ done
 : "${VELOX_ALLOWED_WORKERS:?impostare VELOX_ALLOWED_WORKERS CSV}"
 : "${VELOX_SOCIAL_API_URL:?impostare VELOX_SOCIAL_API_URL}"
 : "${VELOX_SOCIAL_CALLBACK_BASE_URL:?impostare VELOX_SOCIAL_CALLBACK_BASE_URL}"
+# These values are deliberately required at the production boundary.  The
+# resolver has safe installation defaults for standalone installs, but using
+# those defaults here can boot a perfectly valid server against the wrong
+# SQLite database or without the Drive capability after a deploy.
+: "${VELOX_RUNTIME_DIR:?impostare VELOX_RUNTIME_DIR (production path)}"
+: "${VELOX_DATA_DIR:?impostare VELOX_DATA_DIR (production path)}"
+: "${VELOX_DB_PATH:?impostare VELOX_DB_PATH (production path)}"
+: "${VELOX_VIDEOS_DIR:?impostare VELOX_VIDEOS_DIR (production path)}"
+: "${VELOX_SECRETS_DIR:?impostare VELOX_SECRETS_DIR (production path)}"
+: "${VELOX_DRIVE_CLIENT_ID:?impostare VELOX_DRIVE_CLIENT_ID}"
+: "${VELOX_DRIVE_CLIENT_SECRET:?impostare VELOX_DRIVE_CLIENT_SECRET}"
+: "${VELOX_SMOKE_DRIVE_FOLDER_ID:?impostare VELOX_SMOKE_DRIVE_FOLDER_ID}"
+: "${VELOX_SMOKE_ASSET_ID:?impostare VELOX_SMOKE_ASSET_ID}"
 [[ "$VELOX_SERVER_IMAGE" == *'@sha256:'* ]] || fail "VELOX_SERVER_IMAGE deve essere un riferimento pinned @sha256"
 
 # Input opzionali del resolver (TLS gate) — pass-through, mai obbligatori qui:
