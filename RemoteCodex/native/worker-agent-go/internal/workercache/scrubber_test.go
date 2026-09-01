@@ -187,6 +187,39 @@ func TestScrubPass_SkipsLeasedAndReservedBlobs(t *testing.T) {
 	}
 }
 
+// TestInvalidateCorruptBlob_ProtectionFence closes the selection-to-delete
+// race: a scrubber may have selected a blob just before a job lease or future
+// reservation was installed, but it must not unlink the physical bytes.
+func TestInvalidateCorruptBlob_ProtectionFence(t *testing.T) {
+	cache, dir := newScrubFixture(t)
+	ctx := context.Background()
+	T0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	leasedHash := seedScrubBlob(t, cache, dir, "LEASED-RACE", []byte("leased race bytes"), T0)
+	leasedPath := filepath.Join(dir, "LEASED-RACE.bin")
+	if err := cache.Acquire(ctx, "LEASED-RACE", "job-race"); err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	if err := cache.InvalidateCorruptBlob(ctx, leasedHash); !errors.Is(err, ErrBlobProtected) {
+		t.Fatalf("leased invalidation error = %v, want ErrBlobProtected", err)
+	}
+	if _, err := os.Stat(leasedPath); err != nil {
+		t.Fatalf("leased blob was removed: %v", err)
+	}
+
+	reservedHash := seedScrubBlob(t, cache, dir, "RESERVED-RACE", []byte("reserved race bytes"), T0)
+	reservedPath := filepath.Join(dir, "RESERVED-RACE.bin")
+	if err := cache.Reserve(ctx, "RESERVED-RACE", "reservation-race", time.Now().UTC().Add(time.Hour)); err != nil {
+		t.Fatalf("Reserve: %v", err)
+	}
+	if err := cache.InvalidateCorruptBlob(ctx, reservedHash); !errors.Is(err, ErrBlobProtected) {
+		t.Fatalf("reserved invalidation error = %v, want ErrBlobProtected", err)
+	}
+	if _, err := os.Stat(reservedPath); err != nil {
+		t.Fatalf("reserved blob was removed: %v", err)
+	}
+}
+
 // TestScrubPass_ExcludesLegacyBlobs: a legacy blob (no verified digest, keyed
 // by the synthetic legacy:<asset> identity) has nothing to compare against and
 // must never be re-hashed into a false "corrupt".

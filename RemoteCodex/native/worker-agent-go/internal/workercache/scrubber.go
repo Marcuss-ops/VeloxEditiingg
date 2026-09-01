@@ -189,12 +189,11 @@ func (c *Cache) MarkBlobVerified(ctx context.Context, contentHash assetref.Conte
 // cached_blobs row under one SQLite write fence. The referencing
 // asset_key → content_hash mappings are intentionally RETAINED so a later
 // resolve of any of them sees a MISS and re-downloads the bytes (the same
-// mapping-retention rule as pressure eviction). It is NOT gated on the
-// lease/reservation barrier: corrupt bytes must never be served, so a leased
-// blob that failed verification is still removed — the running render already
-// holds an open file descriptor (unlink is safe on Linux) and any later
-// access re-downloads. Returns ErrNotFound when the blob is already gone and
-// ErrBlobInFlight when it is still mid-download.
+// mapping-retention rule as pressure eviction). It is gated by the
+// lease/reservation barrier because a scrub pass can select a blob immediately
+// before a job acquires it. Returns ErrNotFound when the blob is already gone,
+// ErrBlobInFlight when it is still mid-download, and ErrBlobProtected when a
+// lease or reservation owns it.
 func (c *Cache) InvalidateCorruptBlob(ctx context.Context, contentHash assetref.ContentHash) error {
 	if contentHash == "" {
 		return ErrInvalidContentHash
@@ -241,6 +240,26 @@ func (c *Cache) invalidateStoredBlob(ctx context.Context, storedHash string) err
 	}
 	if dlInt == 0 {
 		return rollback(fmt.Errorf("%w: content_hash=%s", ErrBlobInFlight, storedHash))
+	}
+	var protected int
+	if err := conn.QueryRowContext(ctx, `
+SELECT EXISTS (
+  SELECT 1
+    FROM cached_assets a
+   WHERE a.content_hash = ?
+     AND (
+       EXISTS (SELECT 1 FROM cached_asset_leases l WHERE l.asset_key = a.asset_key)
+       OR EXISTS (
+         SELECT 1 FROM cached_asset_reservations r
+          WHERE r.asset_key = a.asset_key
+            AND julianday(r.expires_at) > julianday('now')
+       )
+     )
+)`, storedHash).Scan(&protected); err != nil {
+		return rollback(fmt.Errorf("workercache.invalidateStoredBlob(%q): protection probe: %w", storedHash, err))
+	}
+	if protected != 0 {
+		return rollback(fmt.Errorf("%w: content_hash=%s", ErrBlobProtected, storedHash))
 	}
 
 	if blobPath != "" && (c.root == "" || pathWithinRoot(c.root, blobPath)) {
@@ -304,6 +323,9 @@ func (s *IntegrityScrubber) ScrubPass(ctx context.Context, c *Cache, cfg ScrubCo
 					if errors.Is(invErr, ErrNotFound) {
 						continue // concurrent eviction already removed it
 					}
+					if errors.Is(invErr, ErrBlobProtected) {
+						continue // a job/reservation won the selection race
+					}
 					return stats, invErr
 				}
 				stats.Scanned++
@@ -332,6 +354,9 @@ func (s *IntegrityScrubber) ScrubPass(ctx context.Context, c *Cache, cfg ScrubCo
 		// SHA mismatch: bit-rot or out-of-band corruption.
 		if invErr := c.InvalidateCorruptBlob(ctx, blob.ContentHash); invErr != nil {
 			if errors.Is(invErr, ErrNotFound) {
+				continue
+			}
+			if errors.Is(invErr, ErrBlobProtected) {
 				continue
 			}
 			return stats, invErr

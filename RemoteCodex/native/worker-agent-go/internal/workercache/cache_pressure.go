@@ -29,11 +29,11 @@ import (
 	"velox-shared/assetref"
 )
 
-// ErrBlobProtected is returned by EvictBlobIfUnprotected when a blob is still
-// referenced by at least one asset holding an active lease, an unexpired
-// reservation, or a key present in the caller's protected snapshot. It is a
-// policy outcome, not a hard failure: the pressure loop counts it and moves
-// on.
+// ErrBlobProtected is returned when a blob is still referenced by at least one
+// asset holding an active lease, an unexpired reservation, or a key present in
+// the caller's protected snapshot. It is also returned by scrub invalidation
+// when a job/reservation wins the selection race. It is a policy outcome, not
+// a hard failure: the caller counts it or skips the blob.
 var ErrBlobProtected = errors.New("workercache: blob is protected")
 
 // BlobCandidate is a blob eligible for LRU pressure eviction at query time:

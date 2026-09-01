@@ -25,7 +25,7 @@ func (c *Cache) Find(ctx context.Context, assetKey string) (Entry, bool, error) 
 	}
 	if e.DownloadComplete {
 		if !validStoredContentHash(e.storedContentHash) {
-			if invalidateErr := c.invalidateStoredBlob(ctx, e.storedContentHash); invalidateErr != nil && !errors.Is(invalidateErr, ErrNotFound) && !errors.Is(invalidateErr, ErrBlobInFlight) {
+			if invalidateErr := c.invalidateStoredBlob(ctx, e.storedContentHash); invalidateErr != nil && !errors.Is(invalidateErr, ErrNotFound) && !errors.Is(invalidateErr, ErrBlobInFlight) && !errors.Is(invalidateErr, ErrBlobProtected) {
 				return Entry{}, false, fmt.Errorf("workercache.Find(%q): invalidate invalid hash: %w", assetKey, invalidateErr)
 			}
 			e.LocalPath = ""
@@ -38,7 +38,7 @@ func (c *Cache) Find(ctx context.Context, assetKey string) (Entry, bool, error) 
 			return Entry{}, false, fmt.Errorf("workercache.Find(%q): validate blob: %w", assetKey, validationErr)
 		}
 		if !valid {
-			if invalidateErr := c.invalidateStoredBlob(ctx, e.storedContentHash); invalidateErr != nil && !errors.Is(invalidateErr, ErrNotFound) && !errors.Is(invalidateErr, ErrBlobInFlight) {
+			if invalidateErr := c.invalidateStoredBlob(ctx, e.storedContentHash); invalidateErr != nil && !errors.Is(invalidateErr, ErrNotFound) && !errors.Is(invalidateErr, ErrBlobInFlight) && !errors.Is(invalidateErr, ErrBlobProtected) {
 				return Entry{}, false, fmt.Errorf("workercache.Find(%q): invalidate blob: %w", assetKey, invalidateErr)
 			}
 			// Keep asset_key → content_hash metadata, but turn this lookup into
@@ -93,7 +93,7 @@ func (c *Cache) FindBlob(ctx context.Context, contentHash assetref.ContentHash) 
 		return Blob{}, false, fmt.Errorf("workercache.FindBlob(%q): validate blob: %w", contentHash, validationErr)
 	}
 	if !b.DownloadComplete || !valid {
-		if invalidateErr := c.InvalidateCorruptBlob(ctx, contentHash); invalidateErr != nil && !errors.Is(invalidateErr, ErrNotFound) && !errors.Is(invalidateErr, ErrBlobInFlight) {
+		if invalidateErr := c.InvalidateCorruptBlob(ctx, contentHash); invalidateErr != nil && !errors.Is(invalidateErr, ErrNotFound) && !errors.Is(invalidateErr, ErrBlobInFlight) && !errors.Is(invalidateErr, ErrBlobProtected) {
 			return Blob{}, false, fmt.Errorf("workercache.FindBlob(%q): invalidate blob: %w", contentHash, invalidateErr)
 		}
 		return Blob{}, false, nil
