@@ -208,7 +208,8 @@ RenderResult RenderEngine::renderCopyOnly(
         const media::FinalAudioMetadata finalAudioMetadata =
             media::probeFinalAudioMetadata(boundAudio.first);
         if (finalAudioMetadata.codec.empty() || !finalAudioMetadata.metadata_verified) {
-            result.error = "copy_only_audio_invalid " +
+            result.error = "copy_only final audio is not FINAL_AUDIO_COPY: " +
+                std::string("audio_metadata_unverified copy_only_audio_invalid ") +
                 media::describeFinalAudioProbe(boundAudio.first, finalAudioMetadata);
             return failRender("copy_only_audio_invalid");
         }
