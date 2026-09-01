@@ -136,7 +136,7 @@ func (c *RenderClient) RenderWithMetrics(ctx context.Context, p *plan.RenderPlan
 		}
 	}
 
-	if err := c.executeEngine(ctx, planPath, p.OutputPath, start, &metrics); err != nil {
+	if err := c.executeEngine(ctx, planPath, p.JobID, p.OutputPath, start, &metrics); err != nil {
 		return metrics, err
 	}
 	return metrics, nil
@@ -171,7 +171,7 @@ func (c *RenderClient) RenderCompiledPlanV2(ctx context.Context, planJSON []byte
 	}
 	metrics.PlanWriteMs = time.Since(writeStart).Milliseconds()
 
-	if err := c.executeEngine(ctx, planPath, outputPath, start, &metrics); err != nil {
+	if err := c.executeEngine(ctx, planPath, "", outputPath, start, &metrics); err != nil {
 		return metrics, err
 	}
 	return metrics, nil
@@ -182,7 +182,7 @@ func (c *RenderClient) RenderCompiledPlanV2(ctx context.Context, planJSON []byte
 // map the lifecycle + sidecar telemetry onto metrics, verify the
 // output exists and stamp TotalMs. The safety-critical subprocess
 // lifecycle itself lives in engine_process.go.
-func (c *RenderClient) executeEngine(ctx context.Context, planPath, outputPath string, start time.Time, metrics *pipeline.RenderMetrics) error {
+func (c *RenderClient) executeEngine(ctx context.Context, planPath, jobID, outputPath string, start time.Time, metrics *pipeline.RenderMetrics) error {
 	c.logger.Info("[NATIVE] Launching: %s --render --plan %s", c.binaryPath, planPath)
 	// SAFETY-CRITICAL subprocess lifecycle lives in engine_process.go.
 	engineStarted, processStartMs, processWaitMs, stderrBuf, stdoutBuf, processTelemetry, err := runEngineProcess(ctx, c.binaryPath, planPath, c.onProgress, c.legacyProgress)
@@ -205,8 +205,10 @@ func (c *RenderClient) executeEngine(ctx context.Context, planPath, outputPath s
 		if sidecar, sidecarErr := readEngineSidecar(outputPath); sidecarErr == nil {
 			mapEngineSidecar(&sidecar, metrics)
 		}
-		return fmt.Errorf("engine failed: %w (stderr=%s stdout=%s)",
+		renderErr := fmt.Errorf("engine failed: %w (stderr=%s stdout=%s)",
 			err, strings.TrimSpace(stderrBuf.String()), strings.TrimSpace(stdoutBuf.String()))
+		captureFailedRenderEvidence(jobID, planPath, outputPath, renderErr.Error(), stderrBuf.String(), stdoutBuf.String(), c.logger.Info)
+		return renderErr
 	}
 	applyProcessTelemetry(metrics, engineStarted, processStartMs, processWaitMs, processTelemetry)
 
