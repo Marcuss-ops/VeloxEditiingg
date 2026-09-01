@@ -99,7 +99,18 @@ var (
 	ErrEmptyID            = errors.New("workercache: asset_key is required")
 	ErrInvalidContentHash = errors.New("workercache: content_hash must be a SHA-256 digest")
 	ErrLeaseNotFound      = errors.New("workercache: lease not found")
+	ErrAssetNotReady      = errors.New("workercache: cached asset is not materialized")
 )
+
+// LeaseBinding is the physical binding validated while acquiring an asset
+// lease. Callers that pass a cached asset to an executor should use this path
+// rather than trusting a path resolved before protection was installed.
+type LeaseBinding struct {
+	AssetKey    assetref.AssetKey
+	ContentHash assetref.ContentHash
+	LocalPath   string
+	SizeBytes   int64
+}
 
 // Cache is the SQLite-backed index over cached worker assets.
 type Cache struct {

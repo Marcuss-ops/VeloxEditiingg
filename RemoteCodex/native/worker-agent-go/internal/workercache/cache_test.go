@@ -3,8 +3,11 @@ package workercache
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -366,6 +369,113 @@ func TestCache_AcquireRelease_HappyPath(t *testing.T) {
 	got, _, _ = c.Find(ctx, "JOB")
 	if got.ActiveJobID != "" {
 		t.Fatalf("ActiveJobID after Release = %q, want empty", got.ActiveJobID)
+	}
+}
+
+func TestCache_AcquireReadyRejectsRetainedMappingWithoutBlob(t *testing.T) {
+	ctx := context.Background()
+	c := newTestCache(t)
+	dir := t.TempDir()
+	data := []byte("ready asset bytes")
+	path := filepath.Join(dir, "ready.mp4")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write asset: %v", err)
+	}
+	hash := acceptanceContentHash(data)
+	if err := c.Store(ctx, Entry{
+		AssetKey: "READY-ASSET", ContentHash: hash, LocalPath: path,
+		SizeBytes: int64(len(data)), DownloadComplete: true,
+	}); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	if err := c.InvalidateCorruptBlob(ctx, hash); err != nil {
+		t.Fatalf("InvalidateCorruptBlob: %v", err)
+	}
+	if _, err := c.AcquireReady(ctx, "READY-ASSET", "job-not-ready"); !errors.Is(err, ErrAssetNotReady) {
+		t.Fatalf("AcquireReady error = %v, want ErrAssetNotReady", err)
+	}
+}
+
+func TestCache_AcquireReadyReturnsValidatedBindingAndLease(t *testing.T) {
+	ctx := context.Background()
+	c := newTestCache(t)
+	dir := t.TempDir()
+	data := []byte("validated asset bytes")
+	path := filepath.Join(dir, "validated.mp4")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write asset: %v", err)
+	}
+	if err := c.Store(ctx, Entry{
+		AssetKey: "VALIDATED-ASSET", ContentHash: acceptanceContentHash(data),
+		LocalPath: path, SizeBytes: int64(len(data)), DownloadComplete: true,
+	}); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	binding, err := c.AcquireReady(ctx, "VALIDATED-ASSET", "job-ready")
+	if err != nil {
+		t.Fatalf("AcquireReady: %v", err)
+	}
+	if binding.AssetKey != "VALIDATED-ASSET" || binding.LocalPath != path || binding.SizeBytes != int64(len(data)) {
+		t.Fatalf("binding = %+v, want asset/path/size from cache", binding)
+	}
+	entry, found, err := c.Find(ctx, "VALIDATED-ASSET")
+	if err != nil || !found || entry.ActiveJobID != "job-ready" {
+		t.Fatalf("lease after AcquireReady = %+v found=%v err=%v", entry, found, err)
+	}
+}
+
+func TestCache_AcquireReadyFencesConcurrentInvalidation(t *testing.T) {
+	ctx := context.Background()
+	c := newTestCache(t)
+	dir := t.TempDir()
+	for i := 0; i < 25; i++ {
+		key := fmt.Sprintf("CONCURRENT-%d", i)
+		data := []byte(key + " bytes")
+		path := filepath.Join(dir, key+".mp4")
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatalf("write asset %s: %v", key, err)
+		}
+		hash := acceptanceContentHash(data)
+		if err := c.Store(ctx, Entry{AssetKey: assetref.AssetKey(key), ContentHash: hash, LocalPath: path, SizeBytes: int64(len(data)), DownloadComplete: true}); err != nil {
+			t.Fatalf("Store %s: %v", key, err)
+		}
+
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		var acquireBinding LeaseBinding
+		var acquireErr, invalidateErr error
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			acquireBinding, acquireErr = c.AcquireReady(ctx, key, key+"-job")
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			invalidateErr = c.InvalidateCorruptBlob(ctx, hash)
+		}()
+		close(start)
+		wg.Wait()
+
+		switch {
+		case acquireErr == nil:
+			if acquireBinding.LocalPath != path {
+				t.Fatalf("iteration %d binding path=%q, want %q", i, acquireBinding.LocalPath, path)
+			}
+			if !errors.Is(invalidateErr, ErrBlobProtected) {
+				t.Fatalf("iteration %d invalidate error=%v, want ErrBlobProtected after lease", i, invalidateErr)
+			}
+			if err := c.Release(ctx, key, key+"-job"); err != nil {
+				t.Fatalf("iteration %d release: %v", i, err)
+			}
+		case errors.Is(acquireErr, ErrAssetNotReady):
+			if invalidateErr != nil {
+				t.Fatalf("iteration %d invalidate error=%v, want nil when invalidation wins", i, invalidateErr)
+			}
+		default:
+			t.Fatalf("iteration %d acquire error=%v, invalidate error=%v", i, acquireErr, invalidateErr)
+		}
 	}
 }
 

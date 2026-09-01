@@ -26,6 +26,7 @@ type AssetRegistry interface {
 type ContentAddressedCache interface {
 	AssetRegistry
 	LeaseReservationStore
+	AcquireReady(context.Context, assetref.AssetKey, string) (LeaseBinding, error)
 	MarkDownloadCompleteWithHash(context.Context, assetref.AssetKey, string, int64, assetref.ContentHash) error
 	PreserveContentHash(context.Context, assetref.AssetKey, string, int64, assetref.ContentHash) error
 	EvictIfUnleased(context.Context, assetref.AssetKey, string) error
@@ -124,6 +125,10 @@ func (s *CanonicalAssetStore) StoreDerived(ctx context.Context, sourceHash asset
 
 func (s *CanonicalAssetStore) Acquire(ctx context.Context, key assetref.AssetKey, jobID string) error {
 	return s.cache.Acquire(ctx, string(key), jobID)
+}
+
+func (s *CanonicalAssetStore) AcquireReady(ctx context.Context, key assetref.AssetKey, jobID string) (LeaseBinding, error) {
+	return s.cache.AcquireReady(ctx, string(key), jobID)
 }
 
 func (s *CanonicalAssetStore) Release(ctx context.Context, key assetref.AssetKey, jobID string) error {

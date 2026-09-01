@@ -54,6 +54,7 @@ type ClipLease struct {
 	cache     *workercache.Cache
 	jobID     string
 	assetKeys []string
+	bindings  []workercache.LeaseBinding
 }
 
 // AssetKeys returns a copy of the asset-key slice in the order they
@@ -66,6 +67,35 @@ func (l *ClipLease) AssetKeys() []string {
 	out := make([]string, len(l.assetKeys))
 	copy(out, l.assetKeys)
 	return out
+}
+
+// Bindings returns the validated physical bindings captured at acquisition.
+func (l *ClipLease) Bindings() []workercache.LeaseBinding {
+	if l == nil {
+		return nil
+	}
+	out := make([]workercache.LeaseBinding, len(l.bindings))
+	copy(out, l.bindings)
+	return out
+}
+
+// ValidateReady is the last cache boundary before an executor starts. It
+// rechecks the lease-owned mapping and physical file, and rejects any change
+// from the binding captured during acquisition.
+func (l *ClipLease) ValidateReady(ctx context.Context) error {
+	if l == nil || l.cache == nil {
+		return nil
+	}
+	for i, key := range l.assetKeys {
+		binding, err := l.cache.AcquireReady(ctx, key, l.jobID)
+		if err != nil {
+			return fmt.Errorf("worker.ClipLease.ValidateReady(%s): %w", key, err)
+		}
+		if i >= len(l.bindings) || binding != l.bindings[i] {
+			return fmt.Errorf("worker.ClipLease.ValidateReady(%s): binding changed", key)
+		}
+	}
+	return nil
 }
 
 // ReleaseAll releases every acquired asset. Idempotent under
@@ -133,16 +163,15 @@ type v2AssetReservation struct {
 	assetKeys     []string
 }
 
-// reserveV2AssetProtection installs a durable reservation for every resolved
-// V2 asset before its active lease is acquired. The reservation uses the same
-// workercache table consumed by the prefetch scheduler, so a future-plan
-// reservation and the current render's reservation coexist safely.
-func reserveV2AssetProtection(ctx context.Context, store workercache.LeaseReservationStore, workerID, jobID, attemptID string, assetKeys []string, expiresAt time.Time) (*v2AssetReservation, error) {
+// reserveJobAssetProtection installs a durable reservation for every resolved
+// asset before its active lease is acquired. The same barrier protects legacy
+// and compiled-plan inputs and is shared with the prefetch scheduler.
+func reserveJobAssetProtection(ctx context.Context, store workercache.LeaseReservationStore, workerID, jobID, attemptID string, assetKeys []string, expiresAt time.Time) (*v2AssetReservation, error) {
 	if store == nil {
-		return nil, fmt.Errorf("worker.reserveV2AssetProtection: nil reservation store")
+		return nil, fmt.Errorf("worker.reserveJobAssetProtection: nil reservation store")
 	}
 	if workerID == "" || jobID == "" || attemptID == "" {
-		return nil, fmt.Errorf("worker.reserveV2AssetProtection: workerID, jobID, and attemptID are required")
+		return nil, fmt.Errorf("worker.reserveJobAssetProtection: workerID, jobID, and attemptID are required")
 	}
 	if expiresAt.IsZero() {
 		expiresAt = time.Now().UTC().Add(compiledPlanReservationTTL)
@@ -156,12 +185,18 @@ func reserveV2AssetProtection(ctx context.Context, store workercache.LeaseReserv
 		if err := store.Reserve(ctx, assetref.AssetKey(key), reservation.reservationID, expiresAt); err != nil {
 			rollbackErr := reservation.ReleaseAll(leaseCleanupContext(ctx))
 			if rollbackErr != nil {
-				return nil, errors.Join(fmt.Errorf("worker.reserveV2AssetProtection(%s): %w", key, err), fmt.Errorf("rollback V2 reservations: %w", rollbackErr))
+				return nil, errors.Join(fmt.Errorf("worker.reserveJobAssetProtection(%s): %w", key, err), fmt.Errorf("rollback reservations: %w", rollbackErr))
 			}
-			return nil, fmt.Errorf("worker.reserveV2AssetProtection(%s): %w", key, err)
+			return nil, fmt.Errorf("worker.reserveJobAssetProtection(%s): %w", key, err)
 		}
 	}
 	return reservation, nil
+}
+
+// reserveV2AssetProtection remains as a compatibility wrapper for tests and
+// callers that use the historical V2-specific helper name.
+func reserveV2AssetProtection(ctx context.Context, store workercache.LeaseReservationStore, workerID, jobID, attemptID string, assetKeys []string, expiresAt time.Time) (*v2AssetReservation, error) {
+	return reserveJobAssetProtection(ctx, store, workerID, jobID, attemptID, assetKeys, expiresAt)
 }
 
 // ReleaseAll removes only this V2 render's reservation. It is intentionally
@@ -274,7 +309,8 @@ func AcquireJobClips(ctx context.Context, cache *workercache.Cache, jobID string
 	}
 
 	for _, id := range assetKeys {
-		if err := cache.Acquire(ctx, id, jobID); err != nil {
+		binding, err := cache.AcquireReady(ctx, id, jobID)
+		if err != nil {
 			telemetry.GetPrometheusMetrics().RecordLeaseAcquire("failure")
 			// Roll back through the same durable ReleaseAll path used by
 			// normal dispatch cleanup. If SQLite is transiently unavailable,
@@ -286,6 +322,7 @@ func AcquireJobClips(ctx context.Context, cache *workercache.Cache, jobID string
 		// Track only successful acquisitions so rollback never attempts
 		// to release rows this call did not own.
 		lease.assetKeys = append(lease.assetKeys, id)
+		lease.bindings = append(lease.bindings, binding)
 	}
 	return lease, nil
 }

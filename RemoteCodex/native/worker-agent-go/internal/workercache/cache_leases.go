@@ -2,9 +2,74 @@ package workercache
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
+	"os"
 	"time"
 )
+
+// AcquireReady atomically validates the durable mapping and its physical
+// bytes, then installs the lease before releasing the SQLite writer fence.
+// Eviction, scrub invalidation and this method therefore have a total order:
+// either the lease is visible before cleanup selects the blob, or the caller
+// observes a missing/unready blob and must re-materialize it.
+func (c *Cache) AcquireReady(ctx context.Context, assetKey, jobID string) (LeaseBinding, error) {
+	if assetKey == "" {
+		return LeaseBinding{}, ErrEmptyID
+	}
+	if jobID == "" {
+		return LeaseBinding{}, fmt.Errorf("workercache.AcquireReady: jobID is required")
+	}
+	conn, err := c.db.Conn(ctx)
+	if err != nil {
+		return LeaseBinding{}, fmt.Errorf("workercache.AcquireReady(%q, %q): connection: %w", assetKey, jobID, err)
+	}
+	defer conn.Close()
+	rollback := func(cause error) (LeaseBinding, error) {
+		_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
+		return LeaseBinding{}, cause
+	}
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return LeaseBinding{}, fmt.Errorf("workercache.AcquireReady(%q, %q): begin: %w", assetKey, jobID, err)
+	}
+
+	var binding LeaseBinding
+	var downloadComplete int
+	err = conn.QueryRowContext(ctx, `
+SELECT a.asset_key, a.content_hash, b.local_path, b.size_bytes, b.download_complete
+  FROM cached_assets a
+  JOIN cached_blobs b ON b.content_hash = a.content_hash
+ WHERE a.asset_key = ?`, assetKey).Scan(
+		&binding.AssetKey, &binding.ContentHash, &binding.LocalPath,
+		&binding.SizeBytes, &downloadComplete)
+	if errors.Is(err, sql.ErrNoRows) {
+		return rollback(fmt.Errorf("%w: asset_key=%s", ErrAssetNotReady, assetKey))
+	}
+	if err != nil {
+		return rollback(fmt.Errorf("workercache.AcquireReady(%q, %q): probe: %w", assetKey, jobID, err))
+	}
+	if downloadComplete == 0 || binding.LocalPath == "" || binding.SizeBytes <= 0 {
+		return rollback(fmt.Errorf("%w: asset_key=%s", ErrAssetNotReady, assetKey))
+	}
+	info, err := os.Stat(binding.LocalPath)
+	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 {
+		if err == nil {
+			err = fmt.Errorf("file is empty or not regular")
+		}
+		return rollback(fmt.Errorf("%w: asset_key=%s path=%s: %v", ErrAssetNotReady, assetKey, binding.LocalPath, err))
+	}
+
+	if _, err := conn.ExecContext(ctx, `
+INSERT OR IGNORE INTO cached_asset_leases (asset_key, job_id, acquired_at)
+VALUES (?, ?, ?)`, assetKey, jobID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		return rollback(fmt.Errorf("workercache.AcquireReady(%q, %q): lease insert: %w", assetKey, jobID, err))
+	}
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return LeaseBinding{}, fmt.Errorf("workercache.AcquireReady(%q, %q): commit: %w", assetKey, jobID, err)
+	}
+	return binding, nil
+}
 
 // ErrNotFound when no cached asset row matches.
 func (c *Cache) Acquire(ctx context.Context, assetKey, jobID string) error {

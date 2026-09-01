@@ -143,6 +143,21 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 	// post-resolve extraction yields an empty key set and silently skips
 	// the lease for legacy clip jobs — the FASE 6 bug (0 lease acquires).
 	leaseAssetKeys := extractAssetKeysFromJSON(spec.Payload)
+	// Keep the immutable wire payload for the final protected materialization
+	// pass. The first resolve can race cache cleanup before protection exists;
+	// the second pass below must be able to re-download from the original refs.
+	var originalPayload map[string]interface{}
+	if spec.Payload != nil {
+		copied, copyErr := deepCopyAssetValue(spec.Payload)
+		if copyErr != nil {
+			return failBeforeRun("asset_resolution_failed", fmt.Errorf("copy original asset payload: %w", copyErr))
+		}
+		var ok bool
+		originalPayload, ok = copied.(map[string]interface{})
+		if !ok {
+			return failBeforeRun("asset_resolution_failed", fmt.Errorf("copy original asset payload: object expected"))
+		}
+	}
 
 	// Admission gate for asset downloads (prefetch category). When RSS is
 	// above 80% of total RAM, new downloads are blocked to prevent OOM.
@@ -243,15 +258,15 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 		if len(assetKeys) > 0 {
 			var v2Reservation *v2AssetReservation
 			var leaseReleaseErr error
-			if isCompiledPlan {
+			if isCompiledPlan || len(assetKeys) > 0 {
 				var reservationErr error
 				workerID := ""
 				if w.config != nil {
 					workerID = w.config.WorkerID
 				}
-				v2Reservation, reservationErr = reserveV2AssetProtection(ctx, reservationStore, workerID, pte.JobID, pte.AttemptID, assetKeys, time.Now().UTC().Add(compiledPlanReservationTTL))
+				v2Reservation, reservationErr = reserveJobAssetProtection(ctx, reservationStore, workerID, pte.JobID, pte.AttemptID, assetKeys, time.Now().UTC().Add(compiledPlanReservationTTL))
 				if reservationErr != nil {
-					return failBeforeRun("clip_reservation_failed", fmt.Errorf("reserve V2 asset protection: %w", reservationErr))
+					return failBeforeRun("clip_reservation_failed", fmt.Errorf("reserve job asset protection: %w", reservationErr))
 				}
 				// Register before the lease cleanup defer. Go's LIFO ordering
 				// then releases the active lease first and this reservation second.
@@ -269,6 +284,22 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 						w.logger.Warn("[LEASE] V2 reservation release failed for job=%s: %v", pte.JobID, releaseErr)
 					}
 				}()
+			}
+			// Re-materialize from the immutable wire payload after reservation.
+			// This repairs a blob evicted between the initial resolve and the
+			// protection handoff, and ensures runtime bindings are never stale.
+			if isCompiledPlan {
+				bindings, resolveErr := w.resolveCompiledRenderPlanAssets(ctx, originalPayload)
+				if resolveErr != nil {
+					return failBeforeRun("compiled_plan_asset_resolution_failed", resolveErr)
+				}
+				ctx = runtimeassets.WithBindings(ctx, bindings)
+			} else if originalPayload != nil {
+				resolvedPayload, resolveErr := w.resolveTaskAssets(ContextWithTaskID(ctx, pte.TaskID), originalPayload)
+				if resolveErr != nil {
+					return failBeforeRun("asset_resolution_failed", resolveErr)
+				}
+				spec.Payload = resolvedPayload
 			}
 			leased, leaseErr := AcquireJobClips(ctx, w.clipCache, pte.JobID, assetKeys)
 			if leaseErr != nil {
@@ -308,6 +339,11 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 		}
 	}
 
+	if clipLease != nil {
+		if err := clipLease.ValidateReady(ctx); err != nil {
+			return failBeforeRun("asset_binding_not_ready", err)
+		}
+	}
 	if m := telemetry.MilestoneRecorderFromContext(ctx); m != nil {
 		m.Mark(sharedtelemetry.MilestonePlanCompleted)
 		m.Mark(sharedtelemetry.MilestoneRenderStarted)
