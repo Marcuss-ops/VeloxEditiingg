@@ -48,6 +48,7 @@ func (s *Service) InspectJob(ctx context.Context, jobID string) (*JobInspection,
 		sort.SliceStable(result.Events, func(i, j int) bool {
 			return result.Events[i].Timestamp < result.Events[j].Timestamp
 		})
+		result.Prefetch = BuildPrefetchTimeline(result.Events)
 	} else {
 		return nil, fmt.Errorf("observability: list job events: %w", eventErr)
 	}

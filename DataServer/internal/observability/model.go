@@ -91,6 +91,7 @@ type DeliverySnapshot struct {
 type JobInspection struct {
 	Job        *jobs.Job          `json:"job,omitempty"`
 	Execution  *ExecutionSummary  `json:"execution,omitempty"`
+	Prefetch   []PrefetchTimeline `json:"prefetch,omitempty"`
 	Events     []JobEvent         `json:"events"`
 	Artifacts  []ArtifactSnapshot `json:"artifacts"`
 	Deliveries []DeliverySnapshot `json:"deliveries"`
