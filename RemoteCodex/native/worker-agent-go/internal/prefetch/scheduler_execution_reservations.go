@@ -171,6 +171,7 @@ func (s *Scheduler) ReleaseExecutionReservations(jobID string) {
 				delete(s.executionReservations, assetKey)
 			}
 		}
+	}
 	s.mu.Unlock()
 	if store == nil {
 		return
