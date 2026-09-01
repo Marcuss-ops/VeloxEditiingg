@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 )
 
@@ -46,6 +47,7 @@ func (w *Worker) resolveTaskAssets(ctx context.Context, payload map[string]inter
 			resolved[nestedKey] = decoded
 		}
 	}
+	originalAudioRef, _ := resolved["audio_url"].(string)
 	resolved, err = w.resolveCommonAssetPayload(ctx, resolved)
 	if err != nil {
 		return nil, err
@@ -61,6 +63,24 @@ func (w *Worker) resolveTaskAssets(ctx context.Context, payload map[string]inter
 			return nil, fmt.Errorf("resolve audio_url: %w", err)
 		}
 		resolved["audio_url"] = localPath
+	} else if strings.HasPrefix(strings.TrimSpace(originalAudioRef), "velox-") && !regularFile(resolved["audio_url"]) {
+		// A cache index can outlive an evicted blob. Re-resolve from the
+		// original immutable reference so the renderer never receives a
+		// stale local path from a cache-hit projection.
+		localPath, err := w.resolveVoiceoverAudioPath(ctx, originalAudioRef, resolved)
+		if err != nil {
+			return nil, fmt.Errorf("re-resolve audio_url: %w", err)
+		}
+		resolved["audio_url"] = localPath
 	}
 	return resolved, nil
+}
+
+func regularFile(value interface{}) bool {
+	path, ok := value.(string)
+	if !ok || strings.TrimSpace(path) == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
 }
