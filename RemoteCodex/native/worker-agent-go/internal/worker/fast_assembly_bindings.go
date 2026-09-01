@@ -31,6 +31,32 @@ type AssetBindingEvidence struct {
 	DownloadedDuringAttempt bool      `json:"downloaded_during_attempt"`
 }
 
+// fastAssemblyPlanAssets returns the complete set of files needed by the
+// executor. Older producers may keep FinalAudio only in its dedicated
+// contract field instead of repeating it in Assets; the executor still
+// resolves it through the same verified binding map.
+func fastAssemblyPlanAssets(plan *videoContract.CompiledRenderPlanV2) []videoContract.AssetRefV2 {
+	if plan == nil {
+		return nil
+	}
+	assets := append([]videoContract.AssetRefV2(nil), plan.Assets...)
+	if strings.TrimSpace(plan.FinalAudio.AssetID) == "" {
+		return assets
+	}
+	for _, asset := range assets {
+		if asset.AssetID == plan.FinalAudio.AssetID {
+			return assets
+		}
+	}
+	return append(assets, videoContract.AssetRefV2{
+		AssetID:    plan.FinalAudio.AssetID,
+		SHA256:     plan.FinalAudio.SHA256,
+		SizeBytes:  plan.FinalAudio.SizeBytes,
+		Kind:       "final_audio",
+		DurationUS: plan.FinalAudio.DurationUS,
+	})
+}
+
 func (w *Worker) fastAssemblyAssetAvailability(plan *videoContract.CompiledRenderPlanV2, manifest prefetch.FinalManifestResult) (ready, missing int) {
 	byID := make(map[string]prefetch.FinalArtifactEvidence, len(manifest.PreparedArtifacts))
 	for _, evidence := range manifest.PreparedArtifacts {
@@ -47,7 +73,7 @@ func (w *Worker) fastAssemblyAssetAvailability(plan *videoContract.CompiledRende
 			}
 		}
 	}
-	for _, asset := range plan.Assets {
+	for _, asset := range fastAssemblyPlanAssets(plan) {
 		path, digest, size := "", "", int64(0)
 		if evidence, ok := byID[asset.AssetID]; ok {
 			path, digest, size = evidence.LocalPath, evidence.Artifact.SHA256, evidence.Artifact.SizeBytes
@@ -85,8 +111,9 @@ func (w *Worker) fastAssemblyBindings(plan *videoContract.CompiledRenderPlanV2, 
 		}
 	}
 
-	bindings := make(runtimeassets.Bindings, len(plan.Assets))
-	for _, asset := range plan.Assets {
+	assets := fastAssemblyPlanAssets(plan)
+	bindings := make(runtimeassets.Bindings, len(assets))
+	for _, asset := range assets {
 		path := ""
 		digest := ""
 		size := int64(0)
@@ -146,7 +173,7 @@ func (w *Worker) recordBindingEvidence(ctx context.Context, jobID string, plan *
 		manifestByID[evidence.Artifact.AssetID] = evidence
 	}
 
-	for _, asset := range plan.Assets {
+	for _, asset := range fastAssemblyPlanAssets(plan) {
 		binding, ok := bindings[asset.AssetID]
 		if !ok {
 			continue

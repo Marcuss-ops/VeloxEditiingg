@@ -55,6 +55,31 @@ func TestFastAssemblyBindingsRequireEveryPlanAssetAndMatchingIntegrity(t *testin
 	}
 }
 
+func TestFastAssemblyBindingsIncludeFinalAudioOutsideAssetsList(t *testing.T) {
+	const audioID = "audio-master"
+	audioSHA := strings.Repeat("b", 64)
+	w := &Worker{}
+	manifest := prefetch.FinalManifestResult{
+		Manifest: assembly.FinalAssemblyManifest{JobID: "job", Revision: 2, TimelineRevision: 3},
+		PreparedArtifacts: []prefetch.FinalArtifactEvidence{{
+			Artifact:  assembly.PublishedArtifact{JobID: "job", AssetID: audioID, SHA256: audioSHA, SizeBytes: 8},
+			LocalPath: "/cache/final-audio.m4a",
+		}},
+	}
+	plan := &videoContract.CompiledRenderPlanV2{FinalAudio: videoContract.FinalAudioV2{
+		Mode: videoContract.AudioModeFinalAudioCopy, AssetID: audioID, SHA256: audioSHA, SizeBytes: 8,
+	}}
+
+	bindings, err := w.fastAssemblyBindings(plan, manifest)
+	if err != nil {
+		t.Fatalf("fastAssemblyBindings() error = %v", err)
+	}
+	binding, ok := bindings[audioID]
+	if !ok || binding.Path != "/cache/final-audio.m4a" || !binding.Verified {
+		t.Fatalf("final audio binding = %#v, want verified prepared path", binding)
+	}
+}
+
 func TestCertifyFastAssemblyRequiresPacketCopyAndVerifiedOutput(t *testing.T) {
 	manifest := assembly.FinalAssemblyManifest{JobID: "job", Revision: 2, PreparationHash: "sha256:" + strings.Repeat("0", 64), TimelineRevision: 3}
 	plan := &videoContract.CompiledRenderPlanV2{Output: videoContract.OutputContractV2{ProfileID: videoContract.CanonicalVideoProfileIDV1}}
