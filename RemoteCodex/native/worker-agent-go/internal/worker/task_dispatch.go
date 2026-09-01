@@ -1,7 +1,7 @@
 // Package worker — task dispatch to TaskRunner.
 //
 // task_dispatch.go owns the dispatch path invoked by executeTask:
-// runJobTask (per-job timeout budget) and dispatchTaskRunner (asset
+// runJobTask and dispatchTaskRunner (asset
 // resolution, lease protection, TaskRunner.Run and the canonical
 // error/report mapping). The active-task registration/cleanup helpers
 // live in task_lifecycle.go and the detailed-progress callback in
@@ -24,24 +24,14 @@ import (
 
 // runJobTask executes the actual task via the TaskRunner.
 //
-// Job timeout is 30 minutes; this matches the worker-side budget
-// defined for the canonical task-native dispatch path. The deadline
-// cancels the dispatch context but does NOT short-circuit the
-// telemetry/result reporting on the caller side (executeTask records
-// outcome via recordTaskOutcome regardless).
+// The task lease, rather than a local wall-clock deadline, bounds the job.
+// The caller's context still carries explicit worker-stop/task-cancel
+// cancellation through the complete dispatch path.
 func (w *Worker) runJobTask(ctx context.Context, pte *PendingTaskExecution) (*taskrunner.TaskExecutionReport, error) {
 	w.logger.Info("[JOB] Starting execution: id=%s executor=%s", pte.JobID, pte.ExecutorID)
 
-	jobTimeout := 30 * time.Minute
-	jobCtx, cancel := context.WithTimeout(ctx, jobTimeout)
-	defer cancel()
-
 	w.logger.Info("[JOB] Phase: registry dispatch for executor=%s", pte.ExecutorID)
-	report, err := w.dispatchTaskRunner(jobCtx, pte)
-	if err != nil {
-		return report, err
-	}
-	return report, nil
+	return w.dispatchTaskRunner(ctx, pte)
 }
 
 // dispatchTaskRunner runs the TaskRunner with the pre-compiled TaskSpec

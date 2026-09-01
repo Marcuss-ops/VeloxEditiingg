@@ -66,10 +66,10 @@ type Job struct {
 	RequiredCapabilities []string
 	Payload              json.RawMessage
 
-	// PlacementPinWorkerID is extracted from the task spec payload
-	// (_placement_pin_worker_id). When non-empty, the placement
-	// matcher uses it for the initial dispatch; retries may fail over
-	// to another compatible worker after lease expiry.
+	// PlacementPinWorkerID is a hard per-task placement constraint.
+	// When non-empty it applies to every attempt, including retries.
+	// Retry/failover affinity must use a separate policy and must never
+	// overload the semantics of a placement pin.
 	PlacementPinWorkerID string
 }
 

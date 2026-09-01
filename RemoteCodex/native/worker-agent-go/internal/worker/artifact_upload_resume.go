@@ -167,9 +167,10 @@ func (w *Worker) resumeDeclaration(ctx context.Context, entries []spool.SpoolEnt
 	for _, entry := range entries {
 		keys = append(keys, entry.SpoolID)
 	}
-	release, err := w.acquireResumePublishers(ctx, keys)
-	if err != nil {
-		w.logger.Warn("[ARTIFACT_RESUME] acquire publisher key=%s: %v", entries[0].TaskID, err)
+	release, ok := w.tryAcquireResumePublishers(keys)
+	if !ok {
+		// Foreground publication or another resume owns the artifact; retry on
+		// the next tick without consuming the persisted retry budget.
 		return
 	}
 	defer release()
@@ -311,9 +312,9 @@ func (w *Worker) scheduleDeclarationRetry(ctx context.Context, entries []spool.S
 }
 
 func (w *Worker) resumeArtifactUpload(ctx context.Context, entry spool.SpoolEntry) {
-	release, err := w.acquireResumePublishers(ctx, []string{entry.SpoolID})
-	if err != nil {
-		w.logger.Warn("[ARTIFACT_RESUME] acquire publisher key=%s: %v", entry.TaskID, err)
+	release, ok := w.tryAcquireResumePublishers([]string{entry.SpoolID})
+	if !ok {
+		// Local contention is expected while foreground publication is active.
 		return
 	}
 	defer release()

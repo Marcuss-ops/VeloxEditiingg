@@ -547,10 +547,10 @@ func TestMatcherAllowsPinnedWorker(t *testing.T) {
 	}
 }
 
-// TestMatcherAllowsPinnedTaskToFailOverAfterFirstAttempt ensures an
-// operator-selected initial worker does not make a retried task permanently
-// unavailable after that worker loses its lease.
-func TestMatcherAllowsPinnedTaskToFailOverAfterFirstAttempt(t *testing.T) {
+// TestMatcherPlacementPinPersistsAcrossRetry ensures a hard placement pin
+// remains effective after the first attempt and still permits the pinned
+// worker to claim a later retry.
+func TestMatcherPlacementPinPersistsAcrossRetry(t *testing.T) {
 	m := NewMatcher()
 
 	worker := newWorkerSnapshot(
@@ -571,8 +571,18 @@ func TestMatcherAllowsPinnedTaskToFailOverAfterFirstAttempt(t *testing.T) {
 	}
 
 	result := m.Select(worker, []TaskCandidate{candidate})
+	if result.Candidate != nil {
+		t.Fatal("retry escaped hard placement pin")
+	}
+	if len(result.Rejections) == 0 || result.Rejections[0].Code != RejectPlacementPinMismatch {
+		t.Fatalf("expected placement pin mismatch rejection, got %+v", result.Rejections)
+	}
+
+	worker.WorkerID = "w-target"
+	candidate.AttemptCount = 2
+	result = m.Select(worker, []TaskCandidate{candidate})
 	if result.Candidate == nil {
-		t.Fatalf("retry should fail over to a compatible backup worker; rejections: %+v", result.Rejections)
+		t.Fatalf("pinned worker should remain eligible on retry; rejections: %+v", result.Rejections)
 	}
 	if result.Candidate.TaskID != "t-retry" {
 		t.Fatalf("expected t-retry selected, got %s", result.Candidate.TaskID)

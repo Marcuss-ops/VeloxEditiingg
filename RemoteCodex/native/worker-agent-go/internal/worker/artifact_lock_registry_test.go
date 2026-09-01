@@ -81,6 +81,26 @@ func TestArtifactLockRegistryAcquireManyDeduplicatesAndReleases(t *testing.T) {
 	}
 }
 
+func TestArtifactLockRegistryTryAcquireManySkipsContention(t *testing.T) {
+	r := NewArtifactLockRegistry()
+	release, err := r.Acquire(context.Background(), "artifact-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	if got, ok := r.TryAcquireMany([]string{"artifact-1"}); ok || got != nil {
+		t.Fatal("TryAcquireMany acquired a lock already owned by foreground publication")
+	}
+
+	release()
+	got, ok := r.TryAcquireMany([]string{"artifact-1", "artifact-1"})
+	if !ok || got == nil {
+		t.Fatal("TryAcquireMany did not acquire a released lock")
+	}
+	got()
+}
+
 func TestArtifactLockRegistryCancellation(t *testing.T) {
 	r := NewArtifactLockRegistry()
 	release, err := r.Acquire(context.Background(), "a")
