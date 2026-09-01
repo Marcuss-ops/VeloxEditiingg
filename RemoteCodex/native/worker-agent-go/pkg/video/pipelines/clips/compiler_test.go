@@ -28,3 +28,18 @@ func TestCompileCopyOnlyDoesNotAddWatermarkComposition(t *testing.T) {
 		t.Fatal("copy-only clip unexpectedly carries a transform")
 	}
 }
+
+func TestCompileUsesNormalizedAudioPathWhenAudioURLIsAbsent(t *testing.T) {
+	input := map[string]interface{}{
+		"copy_only":  true,
+		"audio_path": "/var/cache/final-audio.m4a",
+		"clips":      []interface{}{map[string]interface{}{"url": "clip.mp4", "duration": 1.0}},
+	}
+	got, err := Compile(context.Background(), "job", input, "/tmp/out.mp4", nil)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	if len(got.AudioTracks) != 1 || got.AudioTracks[0].SourceURL != "/var/cache/final-audio.m4a" {
+		t.Fatalf("audio tracks = %#v, want normalized audio path", got.AudioTracks)
+	}
+}

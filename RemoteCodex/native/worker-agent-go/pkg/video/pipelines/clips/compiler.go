@@ -94,7 +94,7 @@ func Compile(ctx context.Context, jobID string, input map[string]interface{}, ou
 
 func parseRequest(input map[string]interface{}) *Request {
 	req := &Request{
-		AudioURL: toString(input["audio_url"]),
+		AudioURL: firstNonEmptyString(input, "audio_url", "audio_path", "voiceover_path", "voiceover"),
 		Fit:      toStringDefault(input["fit"], "contain"),
 		CopyOnly: toBoolDefault(input["copy_only"], false),
 	}
@@ -117,6 +117,15 @@ func parseRequest(input map[string]interface{}) *Request {
 	}
 
 	return req
+}
+
+func firstNonEmptyString(input map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(toString(input[key])); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func toBoolDefault(v interface{}, fallback bool) bool {
