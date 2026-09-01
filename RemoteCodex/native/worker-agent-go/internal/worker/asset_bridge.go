@@ -46,5 +46,21 @@ func (w *Worker) resolveTaskAssets(ctx context.Context, payload map[string]inter
 			resolved[nestedKey] = decoded
 		}
 	}
-	return w.resolveCommonAssetPayload(ctx, resolved)
+	resolved, err = w.resolveCommonAssetPayload(ctx, resolved)
+	if err != nil {
+		return nil, err
+	}
+	// Legacy clips.v1 consumes audio_url directly. Keep an explicit
+	// post-condition at this boundary: a transport reference must never reach
+	// the pipeline compiler even if a legacy envelope shape bypassed the
+	// generic recursive field classifier. Reuse the verified bridge so this is
+	// idempotent for already-local paths and preserves cache accounting.
+	if audioRef, ok := resolved["audio_url"].(string); ok && strings.HasPrefix(strings.TrimSpace(audioRef), "velox-") {
+		localPath, err := w.resolveVoiceoverAudioPath(ctx, audioRef, resolved)
+		if err != nil {
+			return nil, fmt.Errorf("resolve audio_url: %w", err)
+		}
+		resolved["audio_url"] = localPath
+	}
+	return resolved, nil
 }
