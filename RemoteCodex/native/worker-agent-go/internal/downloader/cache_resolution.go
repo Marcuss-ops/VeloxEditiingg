@@ -17,6 +17,7 @@ package downloader
 import (
 	"context"
 	"errors"
+	"os"
 	"sync"
 	"time"
 
@@ -226,7 +227,7 @@ func (r *CacheResolver) Resolve(ctx context.Context, req DownloadRequest) (Cache
 	if r.l1 != nil {
 		if asset, ok, err := r.l1.Find(ctx, req); err != nil {
 			return CacheResolution{}, err
-		} else if ok {
+		} else if ok && verifiedLocalPath(asset.LocalPath) {
 			resolution := CacheResolution{AssetID: req.AssetID, Outcome: CacheOutcomeHitValid, LocalPath: asset.LocalPath, CacheHit: true, Source: CacheSourceLocalDisk, SHA256: asset.SHA256, SizeBytes: req.SizeBytes, JobID: req.JobID, TaskID: req.TaskID, WorkerID: req.WorkerID, AssetKey: req.AssetKey, ResolvedAt: time.Now().UTC()}
 			if r.sink != nil {
 				r.sink.RecordResolution(ctx, resolution)
@@ -259,6 +260,19 @@ func (r *CacheResolver) Resolve(ctx context.Context, req DownloadRequest) (Cache
 		r.sink.RecordResolution(ctx, resolution)
 	}
 	return resolution, nil
+}
+
+// verifiedLocalPath keeps the L1 fast path honest. The RAM cache is only an
+// index above the durable cache; a concurrent eviction or restart may make
+// its path stale between Put and Find. Such an entry must fall through to
+// the canonical manager instead of being reported as a hit and handed to the
+// renderer as a missing file.
+func verifiedLocalPath(path string) bool {
+	if path == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
 }
 
 func (r *CacheResolver) negativeError(key string) error {
