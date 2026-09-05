@@ -1,6 +1,7 @@
 package drive
 
 import (
+	"context"
 	"net/http"
 	"sync"
 
@@ -57,6 +58,15 @@ type Service struct {
 	httpClient   *http.Client
 	mu           sync.RWMutex
 	currentToken *Token
+
+	// refreshTokenFn performs the OAuth refresh-token grant. Production
+	// wiring (NewService) sets it to the package-level RefreshToken; tests
+	// override it to count or distort refresh calls without a real OAuth
+	// round-trip (the production implementation hardcodes the Google token
+	// endpoint and builds its own HTTP client, so it is not interceptable
+	// otherwise). getToken treats a nil value as the production function,
+	// keeping zero-value Service constructions (used by tests) safe.
+	refreshTokenFn func(ctx context.Context, cfg *OAuth2Config, refreshToken string) (*Token, error)
 }
 
 // ServiceConfig holds configuration for Drive service

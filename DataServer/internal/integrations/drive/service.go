@@ -69,8 +69,9 @@ func NewService(cfg *ServiceConfig) (*Service, error) {
 			RedirectURI:  cfg.RedirectURI,
 			Scopes:       scopes,
 		},
-		tokenManager: tokenManager,
-		httpClient:   &http.Client{Timeout: 120 * time.Second},
+		tokenManager:   tokenManager,
+		httpClient:     &http.Client{Timeout: 120 * time.Second},
+		refreshTokenFn: RefreshToken,
 	}, nil
 }
 
@@ -79,6 +80,17 @@ func (s *Service) SetToken(token *Token) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.currentToken = token
+}
+
+// refreshToken performs the OAuth refresh-token grant, honoring the
+// injectable test seam (refreshTokenFn) and falling back to the package-level
+// RefreshToken for zero-value Service constructions. See the field doc in
+// service_types.go.
+func (s *Service) refreshToken(ctx context.Context, refreshToken string) (*Token, error) {
+	if s.refreshTokenFn != nil {
+		return s.refreshTokenFn(ctx, s.oauthCfg, refreshToken)
+	}
+	return RefreshToken(ctx, s.oauthCfg, refreshToken)
 }
 
 // getToken returns the current token, refreshing if necessary.
@@ -90,7 +102,8 @@ func (s *Service) SetToken(token *Token) {
 // window see the winner's fresh token and return it without a second OAuth
 // round-trip. This prevents the thundering-herd refresh (N parallel
 // refresh-token grants, last-writer-wins) when several uploads hit the
-// 5-minute window simultaneously.
+// 5-minute window simultaneously. Pinned by
+// TestGetToken_ConcurrentRefreshHappensOnce in service_refresh_test.go.
 func (s *Service) getToken(ctx context.Context) (*Token, error) {
 	if accessToken, ok := ctx.Value(accessTokenContextKey{}).(string); ok && accessToken != "" {
 		return &Token{AccessToken: accessToken, TokenType: "Bearer"}, nil
@@ -122,7 +135,7 @@ func (s *Service) getToken(ctx context.Context) (*Token, error) {
 	}
 
 	log.Printf("[AUTH] Token expired or expiring soon, refreshing...")
-	newToken, err := RefreshToken(ctx, s.oauthCfg, current.RefreshToken)
+	newToken, err := s.refreshToken(ctx, current.RefreshToken)
 	if err != nil {
 		s.mu.Unlock()
 		log.Printf("[AUTH] Token refresh failed: %v", err)
