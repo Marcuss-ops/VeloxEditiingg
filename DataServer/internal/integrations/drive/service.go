@@ -81,7 +81,16 @@ func (s *Service) SetToken(token *Token) {
 	s.currentToken = token
 }
 
-// getToken returns the current token, refreshing if necessary
+// getToken returns the current token, refreshing if necessary.
+//
+// Refresh is serialized under s.mu with a double-check: the fast path reads
+// the token under RLock, and only a caller whose token is inside the refresh
+// window upgrades to the full Lock. Under the write lock the expiry is
+// re-checked against s.currentToken — concurrent callers that raced into the
+// window see the winner's fresh token and return it without a second OAuth
+// round-trip. This prevents the thundering-herd refresh (N parallel
+// refresh-token grants, last-writer-wins) when several uploads hit the
+// 5-minute window simultaneously.
 func (s *Service) getToken(ctx context.Context) (*Token, error) {
 	if accessToken, ok := ctx.Value(accessTokenContextKey{}).(string); ok && accessToken != "" {
 		return &Token{AccessToken: accessToken, TokenType: "Bearer"}, nil
@@ -94,21 +103,36 @@ func (s *Service) getToken(ctx context.Context) (*Token, error) {
 		return nil, fmt.Errorf("%w: no token set - authenticate first", ErrNotAuthenticated)
 	}
 
-	// Check if token needs refresh (5 minutes before expiry)
-	if time.Until(token.Expiry) < 5*time.Minute {
-		log.Printf("[AUTH] Token expired or expiring soon, refreshing...")
-		newToken, err := RefreshToken(ctx, s.oauthCfg, token.RefreshToken)
-		if err != nil {
-			log.Printf("[AUTH] Token refresh failed: %v", err)
-			return nil, fmt.Errorf("%w: failed to refresh token: %w", ErrNotAuthenticated, err)
-		}
-		newToken.AccountEmail = token.AccountEmail
-		s.SetToken(newToken)
-		log.Printf("[AUTH] Token refreshed successfully, expires: %v", newToken.Expiry)
-		return newToken, nil
+	// Fast path: token still comfortably inside its validity window.
+	if time.Until(token.Expiry) >= 5*time.Minute {
+		return token, nil
 	}
 
-	return token, nil
+	// Slow path: upgrade to the write lock and re-check — another caller
+	// may have already refreshed while we waited.
+	s.mu.Lock()
+	current := s.currentToken
+	if current != nil && time.Until(current.Expiry) >= 5*time.Minute {
+		s.mu.Unlock()
+		return current, nil
+	}
+	if current == nil {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("%w: no token set - authenticate first", ErrNotAuthenticated)
+	}
+
+	log.Printf("[AUTH] Token expired or expiring soon, refreshing...")
+	newToken, err := RefreshToken(ctx, s.oauthCfg, current.RefreshToken)
+	if err != nil {
+		s.mu.Unlock()
+		log.Printf("[AUTH] Token refresh failed: %v", err)
+		return nil, fmt.Errorf("%w: failed to refresh token: %w", ErrNotAuthenticated, err)
+	}
+	newToken.AccountEmail = current.AccountEmail
+	s.currentToken = newToken
+	s.mu.Unlock()
+	log.Printf("[AUTH] Token refreshed successfully, expires: %v", newToken.Expiry)
+	return newToken, nil
 }
 
 // doAPIRequest performs an authenticated API request

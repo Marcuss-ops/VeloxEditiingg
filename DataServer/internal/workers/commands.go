@@ -39,11 +39,38 @@ type WorkerCommand struct {
 // "deadlock-free" assumptions.
 type CommandManager struct {
 	store *store.SQLiteStore
+	// wakeHook, when set via SetWakeHook, is invoked after a command is
+	// durably persisted so the master's gRPC handler can dispatch it to a
+	// connected worker immediately (Handler.NotifyCommand) instead of
+	// waiting for the heartbeat cadence or the 1s dispatch ticker. The hook
+	// must be non-blocking; a panic is recovered here so command production
+	// never breaks.
+	wakeHook func(workerID string)
 }
 
 // NewCommandManager creates a SQLite-backed command manager.
 func NewCommandManager(dbStore *store.SQLiteStore) *CommandManager {
 	return &CommandManager{store: dbStore}
+}
+
+// SetWakeHook installs the post-persist notification callback (see the
+// wakeHook field doc). Bootstrap wires it to grpcserver.Handler.NotifyCommand.
+// Nil clears the hook.
+func (cm *CommandManager) SetWakeHook(hook func(workerID string)) {
+	if cm == nil {
+		return
+	}
+	cm.wakeHook = hook
+}
+
+// notifyWake invokes the wake hook best-effort (never panics, never blocks
+// command production on a misbehaving hook).
+func (cm *CommandManager) notifyWake(workerID string) {
+	if cm == nil || cm.wakeHook == nil {
+		return
+	}
+	defer func() { _ = recover() }()
+	cm.wakeHook(workerID)
 }
 
 // PushCommand adds a command for a worker. Returns the command_id.
@@ -96,6 +123,11 @@ func (cm *CommandManager) PushCommandWithError(workerID string, cmdType string, 
 	if _, err := cm.store.InsertCommand(cmd); err != nil {
 		return "", fmt.Errorf("persist command: %w", err)
 	}
+
+	// Wake dispatch immediately now that the row is durable; the gRPC
+	// handler falls back to its heartbeat/ticker paths when the worker is
+	// disconnected (the command stays PENDING until then).
+	cm.notifyWake(workerID)
 
 	return commandID, nil
 }

@@ -307,6 +307,14 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 	// reliable delivery clock, so poll the outbox independently while this
 	// session is alive. The initial dispatch above handles reconnects; this
 	// loop closes the connected-session delivery gap.
+	//
+	// Wake-first: the session registers a command-wake channel and
+	// NotifyCommand (wired to the persistent-command producer at bootstrap)
+	// signals it the moment a worker_commands row lands. The 1s ticker
+	// remains as a loss-recovery backstop for missed wakes (channel is
+	// lossy-by-design; see registerCommandWake).
+	wakeCh, deregisterWake := h.registerCommandWake(workerID)
+	defer deregisterWake()
 	go func() {
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
@@ -314,6 +322,8 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 			select {
 			case <-sessionCtx.Done():
 				return
+			case <-wakeCh:
+				h.dispatchCommands(workerID, sess)
 			case <-ticker.C:
 				h.dispatchCommands(workerID, sess)
 			}

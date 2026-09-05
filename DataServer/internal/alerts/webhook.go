@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -101,7 +102,16 @@ func (n *TelegramNotifier) Notify(ctx context.Context, alert Alert) error {
 	return postWebhook(ctx, n.client, n.url, body, "Telegram")
 }
 
+// ErrTelegramChatIDMissing is returned when the configured Telegram webhook
+// URL carries no chat_id parameter. Sending without one is a guaranteed
+// Telegram 400 ("chat_id must be non-empty"), so the notifier fails loudly
+// at call time instead of emitting a misleading provider-side error.
+var ErrTelegramChatIDMissing = errors.New("telegram webhook URL has no chat_id parameter")
+
 func postWebhook(ctx context.Context, client *http.Client, rawURL string, body []byte, provider string) error {
+	if provider == "Telegram" && extractTelegramChatID(rawURL) == "" {
+		return fmt.Errorf("%s post: %w", provider, ErrTelegramChatIDMissing)
+	}
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
 	}

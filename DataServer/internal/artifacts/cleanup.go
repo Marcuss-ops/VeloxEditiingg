@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -151,6 +152,34 @@ func (r *Reconciler) reconcileBlobs(ctx context.Context) (orphans, quarantinedWi
 	return orphans, quarantinedWithEvent, quarantinedStatusOnly, nil
 }
 
+// isBlobstoreTempName reports whether a FinalDir entry is a leftover temp
+// file from PromoteToCanonical. The temp pattern is `<base>.tmp.<random>`
+// (os.CreateTemp with pattern `*.tmp.*`); Go renders the random suffix in
+// DECIMAL (runtime_rand as a uint32 — variable length, empirically pinned by
+// cleanup_tmpname_test.go against the toolchain's real output). The canonical
+// name is the temp name minus that suffix. Matching the marker + decimal
+// suffix (instead of a bare substring) keeps legitimate artifacts whose names
+// merely contain ".tmp" (e.g. render.tmp-cut.mp4) in the DB-diff set so rule
+// 2 can still sweep them as orphans.
+//
+// Collision note: a real artifact whose name ends in `.tmp.<decimal>` is
+// indistinguishable from a temp file — the `.tmp.*` namespace is owned by the
+// blobstore's CreateTemp convention, so callers must not mint canonical names
+// in that shape.
+func isBlobstoreTempName(name string) bool {
+	const marker = ".tmp."
+	idx := strings.LastIndex(name, marker)
+	if idx < 0 {
+		return false
+	}
+	suffix := name[idx+len(marker):]
+	if suffix == "" {
+		return false
+	}
+	_, err := strconv.ParseUint(suffix, 10, 64)
+	return err == nil
+}
+
 func (r *Reconciler) walkFinalDir() (map[string]fs.FileInfo, error) {
 	finalDir := r.blobStore.FinalDir()
 	if finalDir == "" {
@@ -164,11 +193,9 @@ func (r *Reconciler) walkFinalDir() (map[string]fs.FileInfo, error) {
 		if d.IsDir() {
 			return nil
 		}
-		// Skip leftover temp files from prior PromoteToCanonical calls.
-		// The temp suffix is `.tmp.XXXXXXXX` (8 hex chars); the post-rename
-		// canonical name has no `.tmp` substring. Using strings.Contains
-		// (stdlib) — the inline helper was reinventing it pointlessly.
-		if strings.Contains(d.Name(), ".tmp") {
+		// Skip leftover temp files from prior PromoteToCanonical calls;
+		// see isBlobstoreTempName for the precise pattern.
+		if isBlobstoreTempName(d.Name()) {
 			return nil
 		}
 		rel, rerr := filepath.Rel(finalDir, path)

@@ -27,6 +27,59 @@ import (
 	pb "velox-shared/controltransport/pb"
 )
 
+// registerCommandWake attaches a wake channel for the given worker. The
+// channel is buffered (cap 1) and non-blocking: a notify while a wake is
+// already pending collapses into one dispatch. Sessions call this on stream
+// start and must call the returned deregister func on teardown.
+func (h *Handler) registerCommandWake(workerID string) (<-chan struct{}, func()) {
+	ch := make(chan struct{}, 1)
+	h.mu.Lock()
+	if h.commandWake == nil {
+		h.commandWake = make(map[string]map[chan struct{}]struct{})
+	}
+	if h.commandWake[workerID] == nil {
+		h.commandWake[workerID] = make(map[chan struct{}]struct{})
+	}
+	h.commandWake[workerID][ch] = struct{}{}
+	h.mu.Unlock()
+	return ch, func() {
+		h.mu.Lock()
+		if set, ok := h.commandWake[workerID]; ok {
+			delete(set, ch)
+			if len(set) == 0 {
+				delete(h.commandWake, workerID)
+			}
+		}
+		h.mu.Unlock()
+	}
+}
+
+// NotifyCommand wakes command dispatch for every live session of workerID.
+// Called by command producers (bootstrap wires workersreg.CommandManager's
+// wake hook to this) immediately after a worker_commands row is persisted,
+// so the command reaches a connected worker within milliseconds instead of
+// waiting for the heartbeat cadence or the 1-second dispatch ticker (which
+// remains purely as a loss-recovery backstop).
+//
+// Notify is non-blocking and lossy by design: a wake while a dispatch is
+// already pending collapses into one dispatch, and a session that misses the
+// wake still picks the command up on its next ticker/heartbeat cycle.
+func (h *Handler) NotifyCommand(workerID string) {
+	h.mu.RLock()
+	set := h.commandWake[workerID]
+	channels := make([]chan struct{}, 0, len(set))
+	for ch := range set {
+		channels = append(channels, ch)
+	}
+	h.mu.RUnlock()
+	for _, ch := range channels {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
+}
+
 // dispatchCommands reads pending commands from SQLite for the worker,
 // sends each as a typed Command via sendCh, and marks only successfully
 // sent commands as delivered. Commands that fail to send remain in pending

@@ -76,6 +76,14 @@ type Handler struct {
 	placementMatcher   *placement.Matcher
 	futureAssetPlanner *futureassetmaster.FutureAssetPlanner
 
+	// commandWake is the per-worker command-dispatch notification channel
+	// registry (lazily created; guarded by mu). Sessions register on stream
+	// start and deregister on teardown; NotifyCommand signals every live
+	// channel for the worker so a freshly persisted worker_commands row
+	// dispatches immediately instead of riding the heartbeat cadence or the
+	// 1s backstop ticker.
+	commandWake map[string]map[chan struct{}]struct{} // workerID → wake channels
+
 	// capabilityRegistry gates ArtifactUploaded (the on-the-wire
 	// "artifact.commit.v1" commit path) against the readiness state
 	// of the master subsystems the commit depends on (coordinator,

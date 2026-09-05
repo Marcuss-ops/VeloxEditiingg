@@ -206,6 +206,16 @@ func (e *Enqueuer) Enqueue(ctx context.Context, payloadMap map[string]interface{
 // rolled back before this helper is reached, so a successful lookup is a
 // safe idempotent retry confirmation. Other constraint failures must not be
 // converted into success.
+//
+// Classification is TYPED ONLY: mattn reports constraint violations as
+// sqlite3.Error with a UNIQUE/PK extended code and the offending
+// "jobs.job_id" column in the message text. The previous untyped
+// `strings.Contains(err.Error(), "jobs.job_id")` fallback was removed —
+// it could misclassify any unrelated wrapped error that merely MENTIONED
+// the table (e.g. a query/validation failure whose text embeds the table
+// name) as an idempotent-conflict success. If a future code path ever
+// wraps the raw driver error in a type that loses sqlite3.Error, the
+// correct fix is to unwrap there — not to reintroduce substring matching.
 func isJobIDUniqueConflict(err error) bool {
 	if err == nil {
 		return false
@@ -218,7 +228,7 @@ func isJobIDUniqueConflict(err error) bool {
 	if errors.As(err, &sqliteErrPtr) && sqliteErrPtr != nil {
 		return isJobIdentityConstraint(sqliteErrPtr.ExtendedCode) && strings.Contains(sqliteErrPtr.Error(), "jobs.job_id")
 	}
-	return strings.Contains(err.Error(), "jobs.job_id")
+	return false
 }
 
 func isJobIdentityConstraint(code sqlite3.ErrNoExtended) bool {

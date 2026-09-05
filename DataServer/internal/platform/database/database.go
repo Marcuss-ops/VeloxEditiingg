@@ -91,7 +91,12 @@ func Open(ctx context.Context, cfg Config) (*Handle, error) {
 // (no WAL durability). Both regression vectors are documented in
 // the engine-history ticket filed when this was extracted from the
 // legacy NewSQLiteStore hard-coded URL string.
-const sqliteDSNParams = "_busy_timeout=30000&_journal_mode=WAL&_synchronous=NORMAL"
+// _foreign_keys=true makes FK enforcement a per-connection init pragma so
+// EVERY pooled connection enforces referential integrity — runtime db.Exec
+// PRAGMAs (see store.sqliteTunePragmas) only affect the single connection
+// that ran them, never the others in the pool. Migration 103
+// (deployment_records FK) documents this DSN as the enforcement point.
+const sqliteDSNParams = "_busy_timeout=30000&_journal_mode=WAL&_synchronous=NORMAL&_foreign_keys=true"
 
 // ensureSQLiteDSN normalises a SQLitePath into a fully-qualified DSN
 // with the standard connection-init parameters appended. Empty paths
@@ -112,11 +117,13 @@ func ensureSQLiteDSN(path string) string {
 
 // openSQLite opens the SQLite file via the mattn driver and pings. The
 // pool is pinned to one connection so concurrent app writers serialise
-// cleanly through the storage engine. Tunable runtime PRAGMAs
-// (synchronous, cache_size, mmap_size, foreign_keys, ...) are applied
-// by the store layer post-init via db.Exec — see
-// store.NewSQLiteStoreFromHandle for the rationale and per-connection
-// caveats.
+// cleanly through the storage engine. Per-connection guarantees
+// (busy_timeout, journal_mode, synchronous, foreign_keys) live on the
+// DSN (sqliteDSNParams) and fire on every spawned connection; the
+// remaining best-effort tuning PRAGMAs (cache_size, temp_store,
+// mmap_size, page_size, wal_autocheckpoint) are applied by the store
+// layer post-init via db.Exec — see store.NewSQLiteStoreFromHandle for
+// the rationale and per-connection caveats.
 func openSQLite(ctx context.Context, cfg Config) (*Handle, error) {
 	if cfg.SQLitePath == "" {
 		return nil, fmt.Errorf("%w: SQLitePath is required for Driver=sqlite", ErrDatabaseNotConfigured)

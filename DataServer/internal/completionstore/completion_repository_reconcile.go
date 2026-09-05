@@ -6,6 +6,13 @@ import (
 )
 
 func (s *SQLiteCompletionStore) ScanCompletionCandidates(ctx context.Context, now, deadlineCutoff, progressCutoff, outboxCutoff string, limit int) ([]CompletionReconcileCandidate, int64, error) {
+	// "outbox_pending_too_long": the committed outbox payload embeds the
+	// commit_id verbatim (see internal/completion/coordinator_commit.go:
+	// payload = {"commit_id":..., "attempt_id":..., "job_id":...}), so the
+	// like-pattern `'%' || ac.commit_id || '%'` is an exact containment
+	// match — not a heuristic. The LIKE is per-candidate against the
+	// (aggregate_type, aggregate_id, event_type) subset, so cost scales with
+	// PENDING commit events per task, not with the whole outbox.
 	q := `SELECT commit_id,case_label FROM (
 SELECT commit_id,'deadline_expired' AS case_label FROM attempt_commits WHERE status IN ('DECLARED','UPLOADING','RECEIVED','VERIFYING') AND commit_deadline_at<?
 UNION ALL SELECT ac.commit_id,'orphan_terminal_task' FROM attempt_commits ac JOIN task_attempts ta ON ta.id=ac.attempt_id WHERE ta.status IN ('FAILED','CANCELLED','TIMED_OUT') AND ac.status NOT IN ('COMMITTED','EXPIRED','CLEANED')

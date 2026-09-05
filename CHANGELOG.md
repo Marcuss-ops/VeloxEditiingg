@@ -1,3 +1,48 @@
+## [Unreleased] - 2026-09-05
+
+### Audit-driven correctness sweep (OAuth, SQLite FK, blobstore temp matcher, news fetcher, command dispatch)
+
+- **Drive OAuth** — token refresh is now serialized under the service mutex
+  with a double-checked expiry window: concurrent callers inside the
+  5-minute refresh window wait for the winner and reuse its token instead
+  of issuing N parallel refresh-token grants (last-writer-wins).
+- **SQLite foreign_keys** — FK enforcement moved to the DSN parameter
+  `_foreign_keys=true` (platform/database `sqliteDSNParams`), so EVERY
+  pooled connection enforces referential integrity on connect; runtime
+  `db.Exec` PRAGMAs only affect the connection that ran them. Migration 103
+  now documents the DSN as the enforcement point, and the stale
+  `sqliteTunePragmas` FK/synchronous entries were dropped.
+- **Blobstore reconciler** — `walkFinalDir` now skips leftover
+  `PromoteToCanonical` temp files with a suffix-precise matcher
+  (`isBlobstoreTempName`: `<base>.tmp.<decimal>` CreateTemp pattern)
+  instead of a bare `.tmp` substring, so legitimate artifacts whose names
+  merely contain `.tmp` stay in the DB-diff orphan-sweep set.
+- **gRPC worker metrics** — `lastSeenByWorker` growth is bounded: a lazy
+  sweep (stale-entry eviction + hard cap, oldest-first fallback) runs when
+  a NEW worker first contacts the master, never on session teardown or
+  heartbeat rate.
+- **News fetcher** — cache map is mutex-guarded and bounded (cap + expiry
+  eviction), outbound requests use a shared bounded client and limited body
+  reads, per-source failures are joined into one diagnostic error, and
+  `parsePublishedAt` never silently zeroes a timestamp (RFC3339/1123/date
+  ladder, error on garbage).
+- **Alerts** — the Telegram notifier refuses to send when the configured
+  webhook URL carries no `chat_id` parameter (`ErrTelegramChatIDMissing`)
+  instead of failing with a misleading provider-side 400.
+- **Enqueue** — unique-conflict classification no longer falls back to
+  untyped `strings.Contains(err.Error(), "jobs.job_id")`; only a typed
+  mattn `sqlite3.Error` with the jobs.job_id constraint is treated as an
+  idempotent-conflict success.
+- **Command dispatch (poll → wake)** — a persisted `worker_commands` row
+  now immediately wakes connected sessions via `Handler.NotifyCommand`
+  (wired through `CommandManager.SetWakeHook`); the in-stream 1s ticker
+  remains purely as a loss-recovery backstop.
+- **Render-performance rollup** — migration 172 adds an expression index on
+  the day filter
+  (`substr(COALESCE(NULLIF(completed_at,''), updated_at),1,10)`) so the
+  daily rollup seeks instead of scanning; test pins the query plan uses it
+  (both `=`/`<`) and source-pins the live rollup expression.
+
 ## [v1.4.2] - 2026-08-28
 
 ### Preparation gate test correction

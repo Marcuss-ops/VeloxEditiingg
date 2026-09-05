@@ -2,7 +2,7 @@
 
 **Priorità:** P0
 **Dipendenze:** RW-PROD-005, RW-PROD-006
-**Stato attuale:** `RemoteCodex/.../internal/telemetry/metrics_types.go:151` espone `velox_fallback_count_total` + `velox_python_emergency_path_total`. `DataServer/internal/metrics/collector.go` ha metriche per worker ma unità miste (alcuni ms interpretati come s). `alerts/spec-14-compute-outcomes.yml` alert parziali. `docs/operations/PR-6-pki-rotation-runbook.md:215` `alert-cert-expiry.sh` **TODO non versionato**. **Gap**: unit test conversione unità, alert cert expiry e fallback/emergency paths, correlazione `worker_id + job_id + task_id + attempt_id + session_id` su ogni log, protezione porte Prometheus/health.
+**Stato attuale:** `RemoteCodex/.../internal/telemetry/metrics_types.go:151` espone `velox_fallback_count_total` + `velox_python_emergency_path_total`. `DataServer/internal/metrics/collector.go` ha metriche per worker ma unità miste (alcuni ms interpretati come s). `alerts/spec-14-compute-outcomes.yml` alert parziali. `docs/operations/PR-6-pki-rotation-runbook.md:179` — `alert-cert-expiry.sh` **è deliberatamente NON un percorso canonical versionato** (non deve essere installato come cron del Master); il monitoraggio scadenza è coperto da `doctor --production`, stato del timer e OpenBao `--check`. **Gap**: unit test conversione unità, alert cert expiry e fallback/emergency paths, correlazione `worker_id + job_id + task_id + attempt_id + session_id` su ogni log, protezione porte Prometheus/health.
 
 ---
 

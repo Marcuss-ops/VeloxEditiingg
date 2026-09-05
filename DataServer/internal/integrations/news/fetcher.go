@@ -4,13 +4,28 @@ package news
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
+
+// defaultFetchTimeout bounds every outbound request. http.DefaultClient has
+// no timeout: a stalled upstream would pin the calling handler goroutine
+// indefinitely, so all fetchers share this bounded client instead.
+const defaultFetchTimeout = 30 * time.Second
+
+// cacheTTL is how long a successful result set is served from cache.
+const cacheTTL = 2 * time.Hour
+
+// maxCacheEntries bounds the per-query cache. Distinct queries arrive from
+// operator input; without a cap the map grows without bound. On overflow the
+// oldest-expiring entry is evicted (approximates LRU without extra bookkeeping).
+const maxCacheEntries = 256
 
 // NewsItem represents a news article from external sources
 type NewsItem struct {
@@ -30,11 +45,15 @@ type TrendingResponse struct {
 	Count int        `json:"count"`
 }
 
-// Fetcher fetches trending news from external APIs
+// Fetcher fetches trending news from external APIs. Safe for concurrent use:
+// the cache map and its TTL bookkeeping are guarded by mu.
 type Fetcher struct {
 	apiKeys   map[string]string // e.g., "newsapi": "key"
 	userAgent string
-	cache     map[string]*cachedResult
+	client    *http.Client
+
+	mu    sync.Mutex
+	cache map[string]*cachedResult
 }
 
 type cachedResult struct {
@@ -47,6 +66,7 @@ func NewFetcher(apiKeys map[string]string) *Fetcher {
 	return &Fetcher{
 		apiKeys:   apiKeys,
 		userAgent: "VeloxBot/1.0",
+		client:    &http.Client{Timeout: defaultFetchTimeout},
 		cache:     make(map[string]*cachedResult),
 	}
 }
@@ -58,32 +78,95 @@ func (f *Fetcher) SetUserAgent(ua string) {
 	}
 }
 
-// FetchTrendingNews fetches trending news for a niche/query
-// Uses multiple free sources with fallback logic
+// parsePublishedAt parses a source timestamp without silently zeroing it.
+// RFC3339 is the canonical wire format for both NewsAPI and GNews, but a few
+// feeds emit RFC1123 or date-only values; those are tried before giving up so
+// a valid article is never persisted with a zero PublishedAt just because the
+// upstream chose a friendlier format. An empty string yields the zero time
+// ("unknown"), which is distinct from "present but unparseable".
+func parsePublishedAt(raw string) (time.Time, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, nil
+	}
+	for _, layout := range []string{time.RFC3339, time.RFC3339Nano, time.RFC1123Z, time.RFC1123, "2006-01-02"} {
+		if t, err := time.Parse(layout, raw); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("unparseable published_at %q", raw)
+}
+
+// cachedNews returns the cached result for key if present and unexpired.
+// Expired entries are dropped on sight so the map never accumulates stale rows.
+func (f *Fetcher) cachedNews(key string) ([]NewsItem, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cached, ok := f.cache[key]
+	if !ok {
+		return nil, false
+	}
+	if time.Now().After(cached.expiresAt) {
+		delete(f.cache, key)
+		return nil, false
+	}
+	return cached.data, true
+}
+
+// storeNews caches the result set and enforces the entry cap.
+func (f *Fetcher) storeNews(key string, data []NewsItem) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.cache) >= maxCacheEntries {
+		var oldestKey string
+		var oldest time.Time
+		first := true
+		for k, v := range f.cache {
+			if first || v.expiresAt.Before(oldest) {
+				oldestKey, oldest, first = k, v.expiresAt, false
+			}
+		}
+		delete(f.cache, oldestKey)
+	}
+	f.cache[key] = &cachedResult{data: data, expiresAt: time.Now().Add(cacheTTL)}
+}
+
+// FetchTrendingNews fetches trending news for a niche/query.
+// Uses multiple free sources with fallback logic. When every source fails
+// the returned error joins all underlying causes so operators see why each
+// source was rejected instead of a generic "no sources" message.
 func (f *Fetcher) FetchTrendingNews(ctx context.Context, query string, limit int) ([]NewsItem, error) {
-	// Check cache first
 	cacheKey := strings.ToLower(query)
-	if cached, ok := f.cache[cacheKey]; ok && time.Now().Before(cached.expiresAt) {
-		return cached.data, nil
+	if news, ok := f.cachedNews(cacheKey); ok {
+		return news, nil
 	}
 
-	// Try sources in order of preference
-	var news []NewsItem
-	var err error
+	// Try sources in order of preference, collecting failures.
+	var errs []error
 
 	// Source 1: Google News RSS (free, no API key needed)
-	news, err = f.fetchFromGoogleNews(ctx, query, limit)
+	news, err := f.fetchFromGoogleNews(ctx, query, limit)
 	if err == nil && len(news) > 0 {
-		f.cache[cacheKey] = &cachedResult{data: news, expiresAt: time.Now().Add(2 * time.Hour)}
+		f.storeNews(cacheKey, news)
 		return news, nil
+	}
+	if err != nil {
+		errs = append(errs, fmt.Errorf("google news: %w", err))
+	} else {
+		errs = append(errs, errors.New("google news: no items returned"))
 	}
 
 	// Source 2: NewsAPI.org (free tier, needs API key)
 	if apiKey, ok := f.apiKeys["newsapi"]; ok {
 		news, err = f.fetchFromNewsAPI(ctx, query, apiKey, limit)
 		if err == nil && len(news) > 0 {
-			f.cache[cacheKey] = &cachedResult{data: news, expiresAt: time.Now().Add(2 * time.Hour)}
+			f.storeNews(cacheKey, news)
 			return news, nil
+		}
+		if err != nil {
+			errs = append(errs, fmt.Errorf("newsapi: %w", err))
+		} else {
+			errs = append(errs, errors.New("newsapi: no items returned"))
 		}
 	}
 
@@ -91,12 +174,17 @@ func (f *Fetcher) FetchTrendingNews(ctx context.Context, query string, limit int
 	if apiKey, ok := f.apiKeys["gnews"]; ok {
 		news, err = f.fetchFromGNews(ctx, query, apiKey, limit)
 		if err == nil && len(news) > 0 {
-			f.cache[cacheKey] = &cachedResult{data: news, expiresAt: time.Now().Add(2 * time.Hour)}
+			f.storeNews(cacheKey, news)
 			return news, nil
+		}
+		if err != nil {
+			errs = append(errs, fmt.Errorf("gnews: %w", err))
+		} else {
+			errs = append(errs, errors.New("gnews: no items returned"))
 		}
 	}
 
-	return nil, fmt.Errorf("no news sources available for query: %s", query)
+	return nil, fmt.Errorf("no news sources available for query %q: %w", query, errors.Join(errs...))
 }
 
 // fetchFromGoogleNews fetches from Google News RSS (no API key needed)
@@ -110,17 +198,18 @@ func (f *Fetcher) fetchFromGoogleNews(ctx context.Context, query string, limit i
 	}
 	req.Header.Set("User-Agent", f.userAgent)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := f.client.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("google news http %d", resp.StatusCode)
+		return nil, fmt.Errorf("http %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	// Bound the read: a hostile or broken upstream must not balloon memory.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
 		return nil, err
 	}
@@ -139,16 +228,17 @@ func (f *Fetcher) fetchFromNewsAPI(ctx context.Context, query string, apiKey str
 		return nil, err
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := f.client.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("newsapi http %d", resp.StatusCode)
+		return nil, fmt.Errorf("http %d", resp.StatusCode)
 	}
 
+	// Bound the read: a hostile or broken upstream must not balloon memory.
 	var result struct {
 		Status       string `json:"status"`
 		TotalResults int    `json:"totalResults"`
@@ -163,18 +253,20 @@ func (f *Fetcher) fetchFromNewsAPI(ctx context.Context, query string, apiKey str
 			URLToImage  string `json:"urlToImage"`
 		} `json:"articles"`
 	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&result); err != nil {
 		return nil, err
 	}
 
 	if result.Status != "ok" {
-		return nil, fmt.Errorf("newsapi status: %s", result.Status)
+		return nil, fmt.Errorf("status: %s", result.Status)
 	}
 
 	var news []NewsItem
 	for _, article := range result.Articles {
-		pubTime, _ := time.Parse(time.RFC3339, article.PublishedAt)
+		pubTime, perr := parsePublishedAt(article.PublishedAt)
+		if perr != nil {
+			return nil, fmt.Errorf("newsapi article %q: %w", article.URL, perr)
+		}
 		news = append(news, NewsItem{
 			Title:       article.Title,
 			URL:         article.URL,
@@ -198,16 +290,17 @@ func (f *Fetcher) fetchFromGNews(ctx context.Context, query string, apiKey strin
 		return nil, err
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := f.client.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("gnews http %d", resp.StatusCode)
+		return nil, fmt.Errorf("http %d", resp.StatusCode)
 	}
 
+	// Bound the read: a hostile or broken upstream must not balloon memory.
 	var result struct {
 		TotalArticles int `json:"totalArticles"`
 		Articles      []struct {
@@ -221,14 +314,16 @@ func (f *Fetcher) fetchFromGNews(ctx context.Context, query string, apiKey strin
 			Image       string `json:"image"`
 		} `json:"articles"`
 	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&result); err != nil {
 		return nil, err
 	}
 
 	var news []NewsItem
 	for _, article := range result.Articles {
-		pubTime, _ := time.Parse(time.RFC3339, article.PublishedAt)
+		pubTime, perr := parsePublishedAt(article.PublishedAt)
+		if perr != nil {
+			return nil, fmt.Errorf("gnews article %q: %w", article.URL, perr)
+		}
 		news = append(news, NewsItem{
 			Title:       article.Title,
 			URL:         article.URL,

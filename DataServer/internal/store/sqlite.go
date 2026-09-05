@@ -92,13 +92,13 @@ func (s *SQLiteStore) emitOutbox(ctx context.Context, txn outbox.Executor, p out
 	return nil
 }
 
-// sqliteTunePragmas lists the runtime PRAGMAs applied post-init to
-// each pooled connection. Connection-init-level PRAGMAs (_busy_timeout
-// and _journal_mode) are appended to the SQLite DSN inside
-// platform/database.openSQLite so they fire on every spawned
-// connection — runtime db.Exec PRAGMAs only affect the single
-// connection that ran them, never the others in the pool. The
-// distinction is non-trivial for MaxOpenConns>=2 deployments where
+// sqliteTunePragmas lists the runtime PRAGMAs applied post-init. These are
+// BEST-EFFORT tuning only: db.Exec PRAGMAs affect the single connection that
+// ran them, never the others in the pool. Every per-connection guarantee
+// (busy_timeout, journal_mode, synchronous, foreign_keys) is enforced via
+// connection-init DSN params in platform/database (sqliteDSNParams) so all
+// pooled connections behave identically — see the sqliteDSNParams comment.
+// The distinction is non-trivial for MaxOpenConns>=2 deployments where
 // concurrent writers from different connections would otherwise get
 // busy_timeout=0 and immediately throw SQLITE_BUSY.
 //
@@ -106,12 +106,10 @@ func (s *SQLiteStore) emitOutbox(ctx context.Context, txn outbox.Executor, p out
 // NewSQLiteStore call sequence; it is a no-op at runtime once the
 // database is created and stays here only for diff minimisation.
 var sqliteTunePragmas = []string{
-	"PRAGMA synchronous = NORMAL",      // Faster writes, safe with WAL
 	"PRAGMA cache_size = -32000",       // 32MB cache (negative = KB)
 	"PRAGMA temp_store = MEMORY",       // In-memory temp tables
 	"PRAGMA mmap_size = 268435456",     // 256MB memory-mapped I/O
 	"PRAGMA page_size = 4096",          // Larger pages for better I/O (no-op at runtime)
-	"PRAGMA foreign_keys = ON",         // Enforce referential integrity
 	"PRAGMA wal_autocheckpoint = 2000", // Checkpoint every 2000 pages
 }
 
@@ -168,10 +166,11 @@ func NewSQLiteStoreFromHandle(handle *database.Handle, path string, migrateOnSta
 	}
 	db := handle.DB
 
-	// Apply runtime tuning PRAGMAs. Connection-init PRAGMAs
-	// (_busy_timeout, _journal_mode) are already on the DSN. We DO
-	// NOT apply any BEGIN IMMEDIATE-style lock here because the
-	// Mattn driver + MaxOpenConns=4 retains pooled connections; a
+	// Apply best-effort runtime tuning PRAGMAs. Every per-connection
+	// guarantee (busy_timeout, journal_mode, synchronous, foreign_keys)
+	// lives on the DSN (see sqliteDSNParams) and fires on every spawned
+	// connection. We DO NOT apply any BEGIN IMMEDIATE-style lock here
+	// because the Mattn driver + pooled connections retain state; a
 	// silent exclusivity upgrade would break concurrent reads.
 	for _, pragma := range sqliteTunePragmas {
 		if _, err := db.Exec(pragma); err != nil {

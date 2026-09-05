@@ -120,6 +120,13 @@ func startTransports(cfg *config.Config, c *appComponents) (*transportBundle, er
 			if c.assets != nil {
 				grpcHandler.SetCompletionProtocol(c.assets.Completion, c.assets.CompletionStore, c.assets.ChunkedUploadSvc, string(cfg.ControlPlane.RESTPublic))
 			}
+			// Command wake fanout: a freshly persisted worker_commands row
+			// dispatches to a connected worker immediately via NotifyCommand;
+			// the in-stream 1s ticker remains only as a loss-recovery backstop.
+			// The hook is invoked post-persist on the producer goroutine, so
+			// NotifyCommand's non-blocking fanout keeps production latency O(µs).
+			c.workers.CommandManager.SetWakeHook(grpcHandler.NotifyCommand)
+			logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] wired command wake fanout (persisted worker_commands → immediate gRPC dispatch)")
 			// feat/task-report-ingestion: install the canonical
 			// TaskReportIngestionService so handleTaskResult delegates
 			// to the audit-mandated sequence (atomic close + artifact

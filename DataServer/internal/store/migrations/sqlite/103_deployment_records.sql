@@ -25,8 +25,14 @@
 --     deploys ("PENDING" + no finished_at) from completed ones
 --     (terminal status + finished_at) at the dashboard query.
 --   * FK(worker_id) -> workers(worker_id) — no orphan deploy rows.
---     PRAGMA foreign_keys=ON is applied in sqliteTunePragmas so
---     the FK is enforced end-to-end on production boot.
+--     PRAGMA foreign_keys=ON is enforced on EVERY pooled connection via
+--     the DSN param _foreign_keys=true (sqliteDSNParams in
+--     platform/database), not via a post-init db.Exec (which only
+--     affects the single connection that ran it). This holds for both
+--     the production bootstrap and the legacy NewSQLiteStoreFromPath
+--     pool (both flow through platform/database.Open), so the FK is
+--     enforced end-to-end on production boot regardless of
+--     MaxOpenConns.
 --   * is_rollback INTEGER (SQLite has no native BOOL; 0/1). Step 6's
 --     rollback path sets this flag; the dashboard's "forward vs
 --     rollback" view filters on it. Meaningful only with terminal

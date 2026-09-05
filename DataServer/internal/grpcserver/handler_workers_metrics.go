@@ -28,6 +28,8 @@
 package grpcserver
 
 import (
+	"log"
+	"sort"
 	"sync"
 	"time"
 
@@ -45,6 +47,7 @@ import (
 type LastSeenResources struct {
 	mu                                                           sync.Mutex
 	rxBytesTotal, txBytesTotal, evictionsTotal, corruptionsTotal uint64
+	lastUpdate                                                   time.Time // UTC; maintained by Snapshot for stale eviction
 }
 
 // Snapshot records the cumulative values seen this beat and returns
@@ -55,6 +58,7 @@ type LastSeenResources struct {
 func (l *LastSeenResources) Snapshot(rx, tx, evictions, corruptions uint64) (rxDelta, txDelta, evDelta, corDelta uint64) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.lastUpdate = time.Now().UTC()
 	rxDelta = rx - l.rxBytesTotal
 	txDelta = tx - l.txBytesTotal
 	evDelta = evictions - l.evictionsTotal
@@ -85,6 +89,85 @@ func (l *LastSeenResources) Snapshot(rx, tx, evictions, corruptions uint64) (rxD
 // worker" so we never silently reset the cumulative baseline.
 var lastSeenByWorker sync.Map // worker_id string → *LastSeenResources
 
+// lastSeenByWorker growth bounds. Entries are NOT deleted on session
+// teardown: presence is what prevents a counter-baseline reset (and a
+// spurious Prometheus spike) on worker reconnect. Instead the map is swept
+// lazily when a NEW worker entry appears, evicting entries that have not
+// observed a heartbeat for lastSeenStaleAfter (evicted / decommissioned
+// workers) and, if still over lastSeenMaxEntries, the oldest entries.
+// A worker resurrected after eviction re-baselines via the documented
+// "first contact reports totals as deltas" fallback.
+const (
+	lastSeenMaxEntries = 4096
+	lastSeenStaleAfter = 24 * time.Hour
+)
+
+// sweepLastSeenByWorker bounds the lastSeenByWorker map. Called only when a
+// new worker entry is created (worker first contact), so the O(n) Range walk
+// runs at connection rate, not heartbeat rate.
+func sweepLastSeenByWorker() {
+	now := time.Now().UTC()
+	size := 0
+	type agedEntry struct {
+		id      string
+		last    time.Time
+		current bool
+	}
+	entries := make([]agedEntry, 0, 64)
+	lastSeenByWorker.Range(func(key, value any) bool {
+		size++
+		ls, ok := value.(*LastSeenResources)
+		if !ok {
+			entries = append(entries, agedEntry{id: key.(string), current: false})
+			return true
+		}
+		ls.mu.Lock()
+		last := ls.lastUpdate
+		ls.mu.Unlock()
+		entries = append(entries, agedEntry{id: key.(string), last: last, current: now.Sub(last) <= lastSeenStaleAfter})
+		return true
+	})
+	if size <= lastSeenMaxEntries {
+		return
+	}
+	evicted := 0
+	// Pass 1: drop stale entries (no heartbeat within the staleness window).
+	for _, e := range entries {
+		if e.current {
+			continue
+		}
+		lastSeenByWorker.Delete(e.id)
+		evicted++
+	}
+	if size-evicted <= lastSeenMaxEntries {
+		return
+	}
+	// Pass 2: still over cap — evict oldest-first regardless of staleness.
+	oldest := make([]agedEntry, 0, len(entries))
+	for _, e := range entries {
+		if lastSeenByWorkerHas(e.id) {
+			oldest = append(oldest, e)
+		}
+	}
+	sort.Slice(oldest, func(i, j int) bool { return oldest[i].last.Before(oldest[j].last) })
+	for _, e := range oldest {
+		if size-evicted <= lastSeenMaxEntries {
+			break
+		}
+		lastSeenByWorker.Delete(e.id)
+		evicted++
+	}
+	if evicted > 0 {
+		log.Printf("[GRPC] lastSeenByWorker sweep: evicted %d stale resource-baseline entries (size was %d, cap %d)", evicted, size, lastSeenMaxEntries)
+	}
+}
+
+// lastSeenByWorkerHas reports whether the map still holds the given worker id.
+func lastSeenByWorkerHas(id string) bool {
+	_, ok := lastSeenByWorker.Load(id)
+	return ok
+}
+
 // decodeWorkerResources converts the typed Heartbeat.resources into the
 // ResourceSnapshot the metrics sink expects. The returned snapshot's
 // counter-delta fields are byte-/event-counts INCR'd by Prometheus in
@@ -98,7 +181,10 @@ func decodeWorkerResources(workerID string, r *pb.WorkerResourceCounters) *velme
 		return nil
 	}
 
-	lsIface, _ := lastSeenByWorker.LoadOrStore(workerID, &LastSeenResources{})
+	lsIface, loaded := lastSeenByWorker.LoadOrStore(workerID, &LastSeenResources{})
+	if !loaded {
+		sweepLastSeenByWorker()
+	}
 	ls := lsIface.(*LastSeenResources)
 	// PR-2 / F2 — cumulative→delta discipline:
 	//   * NetworkRx/Tx: typed proto carries cumulative bytes — track
