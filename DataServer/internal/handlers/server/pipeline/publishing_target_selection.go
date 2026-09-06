@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -118,6 +120,20 @@ func writePublishingTargetError(c *gin.Context, err error) {
 			status = http.StatusServiceUnavailable
 		} else if errors.Is(err, socialclient.ErrRateLimit) {
 			status = http.StatusTooManyRequests
+			// Forward the upstream provider's Retry-After instruction when
+			// the rate-limit error carries one, so clients honoring the
+			// header (e.g. the unified web client) back off for exactly as
+			// long as the provider demands instead of guessing.
+			var rle *socialclient.RateLimitError
+			if errors.As(err, &rle) && !rle.RetryAfter.IsZero() {
+				if d := time.Until(rle.RetryAfter); d > 0 {
+					secs := int64(d.Seconds())
+					if secs < 1 {
+						secs = 1
+					}
+					c.Header("Retry-After", strconv.FormatInt(secs, 10))
+				}
+			}
 		} else {
 			status = http.StatusBadGateway
 		}
