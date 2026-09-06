@@ -184,10 +184,16 @@ func (h *ScriptHandlers) GenerateWithImagesHandler(cfg *config.Config) gin.Handl
 		// back to the direct enqueuer and records the source explicitly.
 		var response map[string]interface{}
 		if h.submission != nil {
-			response, err = h.submission.SubmitScratch(c.Request.Context(), creatorflow.CanonicalJobSubmission{
+			// A2-2 adapter-boundary canonicalization: Prepare() stamps the
+			// identity/execution-metadata keys at intake. SubmitScratch's enqueuer
+			// derives its own job identity for scratch payloads; Prepare() is the
+			// boundary contract and a no-op when payload identity keys are absent
+			// (scratch payloads without source_provider/source_job_id).
+			submission := (&creatorflow.CanonicalJobSubmission{
 				IntakeSource: creatorflow.IntakeSourceScriptGenerate,
 				Payload:      normalized,
-			}, costmodel.DefaultRequirements())
+			}).Prepare()
+			response, err = h.submission.SubmitScratch(c.Request.Context(), *submission, costmodel.DefaultRequirements())
 		} else {
 			response, err = h.enqueuer.Enqueue(c.Request.Context(), normalized, costmodel.DefaultRequirements())
 			if err == nil {

@@ -19,7 +19,11 @@ func (s *Service) submitCreateJob(ctx context.Context, cmd CreateJobCmd, payload
 			return nil, false, fmt.Errorf("%w: idempotency_key is required", ErrInvalidPayload)
 		}
 		sourceID := fmt.Sprintf("workspace:%d:%s", cmd.WorkspaceID, strings.TrimSpace(cmd.IdempotencyKey))
-		resolved, submitErr := s.submission.Submit(ctx, creatorflow.CanonicalJobSubmission{
+		// A2-2 adapter-boundary canonicalization: Prepare() stamps the
+		// identity/execution-metadata keys HERE, at intake, so the resolver
+		// receives an already-canonical payload. Submit() still re-normalizes
+		// defensively (idempotent), but the boundary call is the contract.
+		submission := (&creatorflow.CanonicalJobSubmission{
 			ContractVersion:  cmd.ContractVersion,
 			WorkspaceID:      cmd.WorkspaceID,
 			IntakeSource:     creatorflow.IntakeSourceInstaedit,
@@ -27,7 +31,8 @@ func (s *Service) submitCreateJob(ctx context.Context, cmd CreateJobCmd, payload
 			SourceJobID:      sourceID,
 			TargetExecutorID: "scene.composite.v1",
 			Payload:          payload,
-		})
+		}).Prepare()
+		resolved, submitErr := s.submission.Submit(ctx, *submission)
 		if submitErr != nil {
 			return nil, false, submitErr
 		}

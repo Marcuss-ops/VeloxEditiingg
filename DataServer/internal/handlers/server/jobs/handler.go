@@ -81,12 +81,17 @@ func (h *Handler) submit(c *gin.Context, kind string) {
 	}
 	applyDefinition(canonicalPayload, definition)
 
+	// A2-2 adapter-boundary canonicalization: Prepare() stamps identity/
+	// execution metadata at intake (no-op for scratch payloads without
+	// source_provider/source_job_id; the enqueuer derives its own identity
+	// for these).
+	submission := (&creatorflow.CanonicalJobSubmission{
+		IntakeSource: scriptIntakeSourceForKind(kind),
+		Payload:      canonicalPayload,
+	}).Prepare()
 	result, err := h.submission.SubmitScratch(
 		c.Request.Context(),
-		creatorflow.CanonicalJobSubmission{
-			IntakeSource: scriptIntakeSourceForKind(kind),
-			Payload:      canonicalPayload,
-		},
+		*submission,
 		definition.Requirements,
 	)
 	if err != nil {

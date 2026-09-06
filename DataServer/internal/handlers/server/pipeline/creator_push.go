@@ -248,6 +248,25 @@ func (h *Handlers) resolveCompletedPayload(
 	externalClientID string,
 	intakeSource string,
 ) (map[string]interface{}, error) {
+	// A2-2 adapter-boundary canonicalization: stamp the identity/execution
+	// metadata into the payload HERE, before either submission branch, so
+	// every producer routed through this adapter (canonical /api/v1/jobs,
+	// batch items, creator push) arrives pre-canonicalized. Prepare() is
+	// a no-op for incomplete submissions and is idempotent (Submit still
+	// re-normalizes defensively, byte-identically). This also fixes the
+	// h.submission == nil fallback below, which hands the payload straight
+	// to Resolver.Resolve and previously SKIPPED identity stamping entirely
+	// — the one intake path where normalizeIdentityPayload never ran.
+	canonicalSubmission := (&creatorflow.CanonicalJobSubmission{
+		SourceProvider:   sourceProvider,
+		SourceJobID:      sourceJobID,
+		TargetExecutorID: targetExecutorID,
+		Payload:          result,
+		DeliveryPlan:     deliveryPlan,
+	}).Prepare()
+	sourceProvider, sourceJobID = canonicalSubmission.SourceProvider, canonicalSubmission.SourceJobID
+	result, deliveryPlan = canonicalSubmission.Payload, canonicalSubmission.DeliveryPlan
+
 	if h.submission != nil {
 		out, err := h.submission.Submit(ctx, creatorflow.CanonicalJobSubmission{
 			ExternalClientID: externalClientID,
