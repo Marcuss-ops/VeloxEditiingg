@@ -49,21 +49,3 @@ type WorkerPerformance struct {
 	P95MS         int64   `json:"p95_ms"`
 	LastHeartbeat string  `json:"last_heartbeat"`
 }
-
-// PhaseTrendResult is the phase timing trend data.
-type PhaseTrendResult struct {
-	Phase       string               `json:"phase"`
-	AvgMS       int64                `json:"avg_ms"`
-	P95MS       int64                `json:"p95_ms"`
-	Samples     int                  `json:"samples"`
-	Trend       string               `json:"trend"`
-	DailyPoints []PhaseTrendDayPoint `json:"daily_points,omitempty"`
-}
-
-// PhaseTrendDayPoint is a single day's aggregate for phase trends.
-type PhaseTrendDayPoint struct {
-	Date    string `json:"date"`
-	AvgMS   int64  `json:"avg_ms"`
-	P95MS   int64  `json:"p95_ms"`
-	Samples int    `json:"samples"`
-}

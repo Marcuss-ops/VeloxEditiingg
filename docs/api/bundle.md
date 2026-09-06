@@ -16,9 +16,14 @@ POST /workers/update_all_latest_bundle
 POST /worker/request_update
 ```
 
-The handler implementations may remain in the repository for internal
-migration tooling and focused unit tests, but they are not public HTTP
-surfaces. Do not re-register them in `internal/app.WorkersModule`.
+The handler implementations have been DELETED from the repository (the
+2026-09 dead-handler sweep found the entire surface compiled but never
+mounted). Do not re-create them: route re-registration is additionally
+blocked by `scripts/ci/check-no-legacy.sh`, and `cmd/server`'s golden
+route-table test fails if any retired route reappears. Outbox-driven
+bundle rebuilds remain available at the store level
+(`BundleRebuildHandler` + `WORKER_BUNDLE_REBUILD_REQUESTED`) for
+deployment tooling.
 
 ## Canonical replacements
 

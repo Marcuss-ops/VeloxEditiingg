@@ -145,4 +145,3 @@ func (h *WorkerUpdateHandler) CommandManager() *workersreg.CommandManager {
 func (h *WorkerUpdateHandler) Config() *config.Config {
 	return h.cfg
 }
-

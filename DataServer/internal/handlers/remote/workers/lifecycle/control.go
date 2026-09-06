@@ -4,7 +4,6 @@ import (
 	"log"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -93,52 +92,6 @@ func (h *Handler) UnrevokeWorkerHandler() gin.HandlerFunc {
 		})
 	}
 }
-
-func (h *Handler) GetWorkerDetailsHandler() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		workerID := c.Param("id")
-		if workerID == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "worker_id required"})
-			return
-		}
-
-		ctx := c.Request.Context()
-		worker := h.reg.GetWorker(ctx, workerID)
-		if worker == nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "worker not found"})
-			return
-		}
-
-		c.JSON(http.StatusOK, worker)
-	}
-}
-
-func (h *Handler) CleanupStaleWorkersHandler() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		var body struct {
-			MaxAgeMinutes int `json:"max_age_minutes"`
-		}
-		if err := c.ShouldBindJSON(&body); err != nil {
-			body.MaxAgeMinutes = 30
-		}
-
-		maxAge := time.Duration(body.MaxAgeMinutes) * time.Minute
-		if maxAge <= 0 {
-			maxAge = 30 * time.Minute
-		}
-
-		ctx := c.Request.Context()
-		count := h.reg.CleanupStaleWorkers(ctx, maxAge)
-
-		c.JSON(http.StatusOK, gin.H{
-			"ok":      true,
-			"removed": count,
-			"message": "Stale workers cleaned up",
-		})
-	}
-}
-
-// ListRevokedWorkersHandler returns a list of all revoked worker IDs and their details.
 func (h *Handler) ListRevokedWorkersHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		revokedIDs := h.reg.ListRevoked()

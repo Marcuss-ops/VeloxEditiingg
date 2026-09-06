@@ -26,21 +26,21 @@ import (
 //     sister files in the package access h.cmdMgr
 //     directly.
 type Handler struct {
-	cfg         *config.Config
-	reg         *workersreg.Registry
-	cmdMgr      *workersreg.CommandManager
-	tokenMgr    *workersreg.TokenManager
-	dbStore     *store.SQLiteStore // credential persistence + session store
+	cfg      *config.Config
+	reg      *workersreg.Registry
+	cmdMgr   *workersreg.CommandManager
+	tokenMgr *workersreg.TokenManager
+	dbStore  *store.SQLiteStore // credential persistence + session store
 }
 
 // NewHandler creates a new lifecycle Handler with SQLite-backed managers.
 func NewHandler(cfg *config.Config, reg *workersreg.Registry, dbStore *store.SQLiteStore) *Handler {
 	return &Handler{
-		cfg:         cfg,
-		reg:         reg,
-		cmdMgr:      workersreg.NewCommandManager(dbStore),
-		tokenMgr:    workersreg.NewTokenManager(dbStore),
-		dbStore:     dbStore,
+		cfg:      cfg,
+		reg:      reg,
+		cmdMgr:   workersreg.NewCommandManager(dbStore),
+		tokenMgr: workersreg.NewTokenManager(dbStore),
+		dbStore:  dbStore,
 	}
 }
 

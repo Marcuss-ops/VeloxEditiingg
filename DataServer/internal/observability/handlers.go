@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -222,75 +221,6 @@ func (h *Handlers) ProductionDoctorHandler() gin.HandlerFunc {
 		result, err := h.svc.ProductionDoctor(c.Request.Context())
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "doctor_failed", "message": err.Error()})
-			return
-		}
-		c.JSON(http.StatusOK, result)
-	}
-}
-
-// PhaseTrendsHandler returns phase timing trends, optionally filtered.
-//
-//	GET /api/observability/phases/trends?phase=engine.segment_build&executor=scene.composite.v1
-func (h *Handlers) PhaseTrendsHandler() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		phase := c.Query("phase")
-		executor := c.Query("executor")
-
-		if phase == "" {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error":   "missing_phase",
-				"message": "phase query parameter is required (e.g. ?phase=engine.segment_build)",
-			})
-			return
-		}
-
-		result, err := h.svc.PhaseTrends(c.Request.Context(), phase, executor)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error":   "phase_trends_failed",
-				"message": err.Error(),
-			})
-			return
-		}
-		c.JSON(http.StatusOK, result)
-	}
-}
-
-// RegressionsHandler compares task_attempt_metrics between two git SHAs.
-//
-//	GET /api/observability/regressions?before=SHA1&after=SHA2&threshold=5
-func (h *Handlers) RegressionsHandler() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		before := c.Query("before")
-		after := c.Query("after")
-
-		if before == "" || after == "" {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error":   "missing_params",
-				"message": "before and after query params are required (git SHAs)",
-			})
-			return
-		}
-
-		threshold := 5.0 // default 5% threshold
-		if t := c.Query("threshold"); t != "" {
-			parsed, err := strconv.ParseFloat(t, 64)
-			if err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{
-					"error":   "invalid_threshold",
-					"message": "threshold must be a number (e.g. 5)",
-				})
-				return
-			}
-			threshold = parsed
-		}
-
-		result, err := h.svc.CompareVersions(c.Request.Context(), before, after, threshold)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error":   "regressions_failed",
-				"message": err.Error(),
-			})
 			return
 		}
 		c.JSON(http.StatusOK, result)
