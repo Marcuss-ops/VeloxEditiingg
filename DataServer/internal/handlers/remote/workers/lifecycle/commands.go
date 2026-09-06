@@ -53,6 +53,15 @@ func (h *Handler) RequestUpdateHandler() gin.HandlerFunc {
 // The response includes command_id, command type, timestamp, payload, and
 // sequence_num — the worker uses command_id to ack individual commands
 // via AckCommandHandler (or the gRPC CommandAck path).
+//
+// Delivery-contract note (V2 alignment): this handler only READS pending
+// commands. It does NOT mark them delivered at fetch time — a fetch is not
+// a delivery. The mark-after-send contract lives where the transport write
+// actually succeeds (the gRPC path marks delivered in the OnSent callback
+// after Stream.Send; an HTTP transport would mark after its equivalent
+// send). AckCommandHandler remains the worker-receipt proof: ack transitions
+// the command pending/delivered → acked, which is the state the retry and
+// expiry sweeps key on.
 func (h *Handler) GetCommandsHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		workerID := c.Query("worker_id")
@@ -61,7 +70,8 @@ func (h *Handler) GetCommandsHandler() gin.HandlerFunc {
 			return
 		}
 
-		cmds := h.cmdMgr.GetPendingCommandsAndMarkDelivered(workerID)
+		// Pure read: no delivery marking at fetch time (see the V2 note above).
+		cmds := h.cmdMgr.GetPendingCommands(workerID)
 
 		type commandResponse struct {
 			CommandID   string                 `json:"command_id"`

@@ -159,36 +159,12 @@ func (cm *CommandManager) GetPendingCommands(workerID string) []WorkerCommand {
 	return result
 }
 
-// GetPendingCommandsAndMarkDelivered fetches all pending commands for a
-// worker and marks each one as delivered (pending → delivered, delivered_at
-// populated, attempt_count incremented). The returned commands reflect their
-// pre-delivery state (the worker still needs to process them).
-//
-// This is the preferred method for HTTP command polling — it closes the
-// visibility gap between "the master fetched the command" and "the worker
-// received it", making the command lifecycle observable:
-//
-//	pending → delivered → acked
-//	pending → delivered → expired (timeout)
-func (cm *CommandManager) GetPendingCommandsAndMarkDelivered(workerID string) []WorkerCommand {
-	cmds := cm.GetPendingCommands(workerID)
-
-	for _, cmd := range cmds {
-		if cmd.CommandID != "" {
-			if err := cm.MarkCommandDelivered(cmd.CommandID); err != nil {
-				registryLog.ErrorWithMsg("cmd.markdelivered.fail",
-					"Failed to mark command delivered",
-					map[string]interface{}{
-						"command_id": cmd.CommandID,
-						"worker_id":  workerID,
-						"err":        err.Error(),
-					})
-			}
-		}
-	}
-
-	return cmds
-}
+// [RETIRED 2026-09] GetPendingCommandsAndMarkDelivered was removed: it
+// marked commands delivered at HTTP-fetch time, contradicting the gRPC
+// mark-after-send contract (the delivered mark must follow the transport
+// write, not the read). Fetching is a read, not a delivery — use
+// GetPendingCommands for polling and MarkCommandDelivered only after a
+// confirmed transport send; the worker-receipt proof stays AckCommandByID.
 
 // AckCommandByID marks a specific command as acknowledged, scoped to its owning worker.
 // The workerID prevents workers from ACKing commands owned by other workers.
