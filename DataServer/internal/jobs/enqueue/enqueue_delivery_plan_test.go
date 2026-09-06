@@ -436,6 +436,67 @@ func TestEnqueue_NoPreinsertDeliveryPlan_PropagatesMaxRetriesFromPayload(t *test
 	}
 }
 
+// TestExtractPlanMaxRetry_MatchesValidatePlanPayloadWriter is the SSOT
+// parity pin for jobs.max_retries. The column has exactly two writers and
+// they must agree:
+//
+//  1. extractPlanMaxRetry(normalized) — the INSERT-path writer
+//     (prepareJobAndTask → job.MaxRetries → CreateJobWithTask).
+//  2. validatePlanPayload(plan, job) — the post-create precondition
+//     writer (enforceDeliveryPlanPrecondition), which reads the durable
+//     job_delivery_plans rows.
+//
+// Both must derive "max(retry_budget) across destinations" from the same
+// plan. If one copy changes semantics (e.g. clamping, summing, ignoring
+// zero-budget entries), the INSERT column and the post-create mutation
+// drift apart and retry behavior diverges depending on which path a job
+// took — the exact semantic-drift failure mode this pin exists to catch.
+func TestExtractPlanMaxRetry_MatchesValidatePlanPayloadWriter(t *testing.T) {
+	t.Parallel()
+
+	// Same underlying destinations expressed both ways: as a
+	// normalized payload (path 1) and as a ResolvedPlan (path 2).
+	payload := map[string]interface{}{
+		"delivery_plan": []interface{}{
+			map[string]interface{}{"destination_id": "d1", "retry_budget": 3},
+			map[string]interface{}{"destination_id": "d2", "retry_budget": float64(7)},
+			map[string]interface{}{"destination_id": "d3", "retry_budget": 5},
+		},
+	}
+	plan := &ResolvedPlan{
+		JobID: "parity",
+		Destinations: []PlanDestination{
+			{DestinationID: "d1", RetryBudget: 3},
+			{DestinationID: "d2", RetryBudget: 7},
+			{DestinationID: "d3", RetryBudget: 5},
+		},
+	}
+
+	fromPayload := extractPlanMaxRetry(payload)
+	job := &jobs.Job{ID: "parity"}
+	if err := validatePlanPayload(plan, job); err != nil {
+		t.Fatalf("validatePlanPayload: %v", err)
+	}
+	fromPlan := job.MaxRetries
+
+	if fromPayload != fromPlan {
+		t.Errorf("max-retry writers disagree: extractPlanMaxRetry=%d validatePlanPayload=%d (semantic drift)", fromPayload, fromPlan)
+	}
+	if fromPayload != 7 {
+		t.Errorf("max(retry_budget) = %d, want 7", fromPayload)
+	}
+
+	// Negative budgets must be rejected by the validating writer and
+	// never leak into the payload writer's max.
+	if got := extractPlanMaxRetry(map[string]interface{}{
+		"delivery_plan": []interface{}{
+			map[string]interface{}{"destination_id": "d1", "retry_budget": -4},
+		},
+	}); got != 0 {
+		t.Errorf("extractPlanMaxRetry ignored negative budget but returned %d; want 0 (negatives are validation errors, not values)", got)
+	}
+}
+
 // assertNoJobDeliveryPlansSeeded pins the fresh-DB invariant: zero
 // rows in job_delivery_plans. Pinning this assertion (instead of
 // trusting the test fixture's silence) makes the test a P0.2
