@@ -28,11 +28,16 @@ import (
 // check and preserve legacy idempotency semantics (no false 409s).
 //
 // TODO(p0-hash-migration): when the post-055 forwarding population has
-// fully aged out (operator-visible metric or a cutoff date), backfill
-// payload_sha256 from payload_json for ANY row still carrying the
-// empty default, then drop the `cf.PayloadSHA256 != ""` shortcut here.
-// Until that migration finishes, the bypass is necessary to keep
-// pre-migration duplicates behaving as they did at HEAD.
+// fully aged out, backfill payload_sha256 from payload_json for ANY row
+// still carrying the empty default, then drop the `cf.PayloadSHA256 != ""`
+// shortcut here. Until that migration finishes, the bypass is necessary
+// to keep pre-migration duplicates behaving as they did at HEAD.
+//
+// The migration backlog is observable: the forwarding runner projects
+// velox_forwarding_legacy_sha_rows (count of rows with the empty default)
+// on its periodic refreshMetrics cadence — see
+// forwardingstore.GetForwardingQueueMetrics. Backfill becomes safe when
+// that gauge reaches 0.
 //
 // EnsureForwarded uses the bySource canonical row id when available
 // and falls back to req.ForwardingID only when the lookup did not

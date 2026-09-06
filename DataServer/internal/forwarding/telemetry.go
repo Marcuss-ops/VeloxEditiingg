@@ -12,4 +12,5 @@ type Telemetry interface {
 	RecordFailed()
 	RecordRetried()
 	ObserveQueue(depth, oldestPendingAgeSeconds int64)
+	ObserveLegacyShaRows(count int64)
 }

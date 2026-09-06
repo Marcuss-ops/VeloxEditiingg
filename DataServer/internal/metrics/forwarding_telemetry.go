@@ -12,6 +12,7 @@ type ForwardingTelemetry struct {
 	retried       *Family
 	queueDepth    *Family
 	oldestPending *Family
+	legacyShaRows *Family
 }
 
 // NewForwardingTelemetry registers the forwarding families on reg. A nil reg
@@ -28,8 +29,9 @@ func NewForwardingTelemetry(reg *Registry) *ForwardingTelemetry {
 	t.retried = NewCounterFamily("velox_forwarding_retried_total", "Creator forwardings that scheduled a retry", []string{})
 	t.queueDepth = NewGaugeFamily("velox_forwarding_queue_depth", "Approximate PENDING + RETRY_WAIT forwarding count", []string{})
 	t.oldestPending = NewGaugeFamily("velox_forwarding_oldest_pending_seconds", "Approximate age of the oldest pending forwarding in seconds", []string{})
+	t.legacyShaRows = NewGaugeFamily("velox_forwarding_legacy_sha_rows", "Creator forwardings still carrying the pre-055 empty payload_sha256 (idempotency-hash migration backlog)", []string{})
 
-	for _, f := range []*Family{t.claimed, t.forwarded, t.failed, t.retried, t.queueDepth, t.oldestPending} {
+	for _, f := range []*Family{t.claimed, t.forwarded, t.failed, t.retried, t.queueDepth, t.oldestPending, t.legacyShaRows} {
 		reg.Register(f)
 	}
 	return t
@@ -77,4 +79,15 @@ func (t *ForwardingTelemetry) ObserveQueue(depth, oldestPendingAgeSeconds int64)
 	if t.oldestPending != nil {
 		t.oldestPending.GaugeSet([]string{}, oldestPendingAgeSeconds)
 	}
+}
+
+// ObserveLegacyShaRows projects the pre-055 migration-backlog gauge: rows
+// whose payload_sha256 is still the empty default. When this reaches 0 the
+// TODO(p0-hash-migration) backfill can run and the bypass in
+// creatorflow/resolver_idempotency.go can be dropped.
+func (t *ForwardingTelemetry) ObserveLegacyShaRows(count int64) {
+	if t == nil || t.legacyShaRows == nil {
+		return
+	}
+	t.legacyShaRows.GaugeSet([]string{}, count)
 }

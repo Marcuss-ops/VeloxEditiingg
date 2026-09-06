@@ -18,6 +18,10 @@ type ForwardingQueueMetrics struct {
 	QueueDepth int64
 	// OldestPendingAge is the age of the oldest PENDING row.
 	OldestPendingAge time.Duration
+	// LegacyShaRows is the count of rows still carrying the pre-055
+	// empty payload_sha256 default — the operator-visible backlog gauge
+	// for the TODO(p0-hash-migration) backfill in creatorflow.
+	LegacyShaRows int64
 }
 
 // GetForwardingQueueMetrics returns the current queue depth and oldest
@@ -52,6 +56,14 @@ func (s *SQLiteForwardingStore) GetForwardingQueueMetrics(ctx context.Context) (
 	}
 	if ageSeconds.Valid && ageSeconds.Int64 > 0 {
 		m.OldestPendingAge = time.Duration(ageSeconds.Int64) * time.Second
+	}
+
+	err = s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM creator_forwardings
+		 WHERE payload_sha256 = ''`,
+	).Scan(&m.LegacyShaRows)
+	if err != nil {
+		return m, storecore.WrapDBInfrastructure("GetForwardingQueueMetrics legacy sha", err)
 	}
 	return m, nil
 }
