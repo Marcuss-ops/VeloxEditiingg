@@ -123,6 +123,14 @@ type WorkerSnapshot struct {
 	ExecutorRegistry controltransport.ExecutorRegistry
 	// Capabilities contains only typed named admission features. Executor
 	// metadata is exclusively represented by ExecutorRegistry.
+	//
+	// NOTE (ADR 0009): WorkerSnapshot deliberately carries NO hardware
+	// fields (GPU model, NVENC/NVDEC/QSV, VRAM). Accelerator facts are
+	// persisted in worker_runtime_snapshots and exposed through the admin
+	// capacity read model; hardware-aware placement is explicitly deferred
+	// until the executor-contract decision documented in
+	// docs/adr/0009-gpu-facts-persist-vs-consume.md. Do not add hardware
+	// fields here without re-opening that ADR.
 	Capabilities controltransport.CapabilitySet
 	// CachedAssetKeys is the worker's last heartbeat projection of completed
 	// local assets. It is a placement hint, never a reservation.

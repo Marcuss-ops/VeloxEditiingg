@@ -25,7 +25,7 @@ SHELL := /usr/bin/env bash
 EVIDENCE_ROOT_CAP9      ?= /tmp/velox-cap9-evidence
 EVIDENCE_ROOT_CAP10     ?= /tmp/velox-cap10-evidence
 
-.PHONY: verify verify-fast verify-heavy refactor-metrics telemetry-done test-certify-fleet test-canary-worker-rollout canary-worker-rollout certify-fleet fmt fmt-check vet pilot api-docs api-docs-apply \
+.PHONY: verify verify-fast verify-heavy refactor-metrics telemetry-done test-certify-fleet test-canary-worker-rollout canary-worker-rollout certify-fleet fmt fmt-check vet clean pilot api-docs api-docs-apply \
         jobs-smoke publishing-flow-smoke video-smoke media-smoke \
         e2e-grpc e2e-workload e2e-workload-mtls e2e-master-worker \
         enable-branch-protection disable-branch-protection inspect-branch-protection \
@@ -109,6 +109,18 @@ fmt:           ## gofmt -w on every Go module
 	  echo "-> gofmt -w $$mod"; \
 	  (cd $$mod && gofmt -w .) || exit 1; \
 	done
+
+# Remove regenerable local build artifacts. Everything deleted here is
+# git-ignored (binaries + codegen output) and rebuilt by `make build`,
+# `make api-docs-apply`, or the deploy scripts. DataServer/bin/velox-server
+# is the deploy-time server binary; DataServer/bin/fleetctl is what
+# scripts/fleetctl resolves by default (FLEETCTL_GO_BIN) — scripts that
+# need it rebuild it via `go build ./cmd/fleetctl`.
+clean:         ## Delete git-ignored build binaries + codegen residue
+	@echo "-> removing git-ignored build artifacts"
+	rm -f DataServer/server DataServer/api-docs-gen DataServer/api-schema-gen DataServer/api-docs-gen.out
+	rm -rf DataServer/bin
+	@echo "clean done"
 
 fmt-check:     ## gofmt -d on every Go module (CI-style dry run; fails on dirty)
 	@status=0; \

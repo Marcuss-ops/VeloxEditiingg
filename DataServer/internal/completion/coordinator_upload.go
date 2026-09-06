@@ -17,6 +17,7 @@ import (
 	"velox-server/internal/repository"
 	"velox-server/internal/telemetry"
 	"velox-shared/contract/domain"
+	"velox-shared/iopool"
 
 	"go.opentelemetry.io/otel/attribute"
 )
@@ -140,7 +141,11 @@ func materializeCanonicalDuplicate(blobStore interface{ FinalDir() string }, sou
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(out, in); err != nil {
+	// A4-3: pooled 1 MiB copy buffer (velox-shared/iopool) — duplicate
+	// copies run per-artifact on the completion path.
+	pooled := iopool.Get()
+	defer iopool.Put(pooled)
+	if _, err := io.CopyBuffer(out, in, pooled[:]); err != nil {
 		_ = out.Close()
 		_ = os.Remove(target)
 		return err

@@ -11,7 +11,9 @@
 // Future: swap the implementation for S3/MinIO/R2 without changing callers.
 // COMPATIBILITY:
 // Owner:        P0.4 store-facade migration
-// Remove after: 2026-09-30
+// Remove after: 2026-12-31 (sunset extended by the 2026-09 facade-migration audit: these
+// shims are pure delegation with zero logic drift risk; re-audit at the
+// 2026-Q4 sweep — see docs/adr/0008-soft-deprecate-vs-remove-pivot.md)
 // Read-only:    yes
 
 package store
@@ -30,6 +32,7 @@ import (
 	"time"
 
 	"velox-server/internal/repository"
+	"velox-shared/iopool"
 )
 
 // ErrPromoteDurableFailed marks the atomic rename / staging-removal
@@ -161,7 +164,12 @@ func (b *FilesystemBlobStore) PromoteDurable(stagingPath, finalPath string) (str
 
 	cleanupTemp := func() { _ = os.Remove(tempPath) }
 
-	if _, err := io.Copy(dst, src); err != nil {
+	// A4-3: pooled 1 MiB copy buffer — PromoteDurable runs per-artifact on
+	// the finalize path, where io.Copy's 32 KiB internal buffer means 32×
+	// the syscalls of a pooled 1 MiB buffer.
+	pooled := iopool.Get()
+	defer iopool.Put(pooled)
+	if _, err := io.CopyBuffer(dst, src, pooled[:]); err != nil {
 		_ = dst.Close()
 		cleanupTemp()
 		return "", fmt.Errorf("blobstore: promote copy: %w", err)
@@ -353,6 +361,8 @@ func CopyFile(dst, src string) error {
 	}
 	defer out.Close()
 
-	_, err = io.Copy(out, in)
+	pooled := iopool.Get()
+	defer iopool.Put(pooled)
+	_, err = io.CopyBuffer(out, in, pooled[:])
 	return err
 }

@@ -103,6 +103,7 @@ import (
 	"velox-server/internal/config"
 	"velox-server/internal/store"
 	"velox-shared/identity"
+	"velox-shared/iopool"
 )
 
 // cliOptions captures the parsed CLI flags. All fields are
@@ -328,8 +329,8 @@ func recoverOutput(ctx context.Context, opts *cliOptions) (int, error) {
 }
 
 // hashFile streams the file through SHA-256. The file is read in
-// 1 MiB chunks so a multi-GB MP4 does NOT load entirely in
-// memory. Returns size + lowercase hex SHA-256.
+// 1 MiB chunks (pooled via velox-shared/iopool) so a multi-GB MP4 does
+// NOT load entirely in memory. Returns size + lowercase hex SHA-256.
 func hashFile(path string) (int64, string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -337,8 +338,9 @@ func hashFile(path string) (int64, string, error) {
 	}
 	defer f.Close()
 	h := sha256.New()
-	buf := make([]byte, 1<<20) // 1 MiB
-	n, err := io.CopyBuffer(h, f, buf)
+	pooled := iopool.Get()
+	defer iopool.Put(pooled)
+	n, err := io.CopyBuffer(h, f, pooled[:])
 	if err != nil {
 		return 0, "", err
 	}

@@ -274,7 +274,7 @@ Matrix of the 2026-08-10 fail-open audit surfaces, all verified on `main`
 | AssetRef wire | self-sufficient | `{kind,id}` wire via `MarshalJSON`; `IsLikelyDriveFileID` and `asset_ref_kind` removed (only a documenting comment remains in `assets/rewrite_remote_inputs.go`) |
 | `internal/backup` | removed | package deleted (`b0f0d209`) — no imports, callers, bootstrap or routes |
 | Postgres backend | removed | `DriverPostgres`/`openPostgres`/`PostgresMigrationsFS` gone; `cfg.Validate()` rejects postgres before any I/O (`886f8e32`) |
-| fleetctl Bash helpers | removed / scheduled | `run_digest_update`/`post_update_mutation`/`wait_ready`/`poll_operation` removed (`a222bd4e`); `post_mutation` in `fleetctl-legacy` is currently DEAD (no callers) and is scheduled for removal with the pending fleetctl migration plan |
+| fleetctl Bash helpers | removed | `run_digest_update`/`post_update_mutation`/`wait_ready`/`poll_operation` removed (`a222bd4e`); the dead `post_mutation` helper and the `fleetctl-legacy` wrapper itself were removed by the fleetctl migration plan (`9c6a2b26`, then `286ecfab` deleted the wrapper) — `scripts/fleetctl` is now a pure Go-exec launcher |
 
 Rule of thumb for future changes: a capability wired through the
 bootstrap MUST land in exactly one of the three states above; any
