@@ -110,15 +110,12 @@ func (c *Collector) recordAttemptSnapshot(snapshot *attemptSnapshot, execID, exe
 // RecordAttempt ingests one AttemptMetrics + CacheStats + CostBasis row
 // into the registry. Gauges are set-to-current-value (idempotent on
 // repeat calls with the same input). Counters are NOT idempotent —
-// each call increments iff the input has fresh totals; the supervisor
-// poll path must either deliver deltas or dedup on attempt-id to
-// avoid double-counting in steady state. (TODO pre-existing; see the
-// package-header "Idempotent violated" caveat.)
-//
-// For the master to be fully incremental we rely on the aggregator
-// reading deltas from a previous snapshot via the AttemptReader
-// interface; this method is the SIMPLE set-to-current-value path used
-// when Scan is wired to load the latest attempt rows.
+// each call increments by the input's fresh totals. The contract with
+// the supervisor poll path (supervisor_tick.go) is dedup-on-attempt-id:
+// the supervisor's seenIDs set guarantees each newly-terminal attempt
+// is fed through here at most once per process, which is what bounds
+// the double-counting exposure to a seen-entry GC + reader-outage
+// retry racing in the same process window.
 func (c *Collector) RecordAttempt(am taskattempts.AttemptMetrics, cache taskattempts.AttemptCacheStats, cost *taskattempts.AttemptCostBasis, execID, execVersion, workerClass string) {
 	if c.operational != nil {
 		lookups := cache.CacheLookups
@@ -140,7 +137,8 @@ func (c *Collector) RecordAttempt(am taskattempts.AttemptMetrics, cache taskatte
 
 	// Cache hit/miss/eviction counters (per worker, not global; we
 	// pass worker_id through worker_class label when caller knows it).
-	_ = cache // cache counters go through the cache.* histograms below.
+	// The hit/miss counters come from the CacheStats row; the byte
+	// split comes from the AttemptMetrics byte totals.
 	if am.BytesFromLocalCache > 0 || am.BytesFromDrive > 0 || am.BytesFromBlobstore > 0 {
 		c.cacheBytes.Inc([]string{"hit"}, uint64(am.BytesFromLocalCache))
 		c.cacheBytes.Inc([]string{"miss"}, uint64(am.BytesFromDrive+am.BytesFromBlobstore))
