@@ -20,6 +20,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"velox-server/internal/persistedtime"
 )
 
 const (
@@ -264,15 +266,14 @@ func scanSmokeRun(rows *sql.Rows) (*SmokeRun, error) {
 }
 
 // parsePersistedTimestamp parses a persisted smoke_runs timestamp
-// (RFC3339Nano / RFC3339 / bare space-separated). Local copy of the
-// store helper so this leaf stays free of internal/store.
+// (RFC3339Nano / RFC3339 / bare space-separated) through the shared
+// persistedtime leaf, keeping this leaf free of internal/store.
 func parsePersistedTimestamp(value, field string) (time.Time, error) {
-	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02 15:04:05"} {
-		if parsed, err := time.Parse(layout, value); err == nil {
-			return parsed, nil
-		}
+	parsed, err := persistedtime.Parse(value, field)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("smoke_runs: %w", err)
 	}
-	return time.Time{}, fmt.Errorf("worker runtime: invalid %s %q", field, value)
+	return parsed, nil
 }
 
 // SQLiteSmokeRunStore adapts the canonical smoke_runs functions to the

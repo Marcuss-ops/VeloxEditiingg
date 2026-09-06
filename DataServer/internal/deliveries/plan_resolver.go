@@ -125,7 +125,6 @@ func (r *SQLiteDeliveryPlanResolver) ResolvePlan(ctx context.Context, jobID, art
 	if r == nil || r.db == nil {
 		return nil, deliverycontract.ErrResolverNotConfigured
 	}
-	_ = artifactID // available for future per-artifact routing
 
 	// Step 1: check for per-job plans.
 	telemetry.RecordEnqueueResolverQuery(ctx, "plans")

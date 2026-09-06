@@ -396,13 +396,12 @@ func buildSpoofHandler(t *testing.T) (*Handler, *spoofStubTaskRepo, *spoofStubJo
 		nowTask:   taskgraph.Task{ID: fx.taskID, JobID: fx.wireJobID, ExecutorID: "executor.master", ExecutorVersion: 7},
 	}
 	jobsRepo := &spoofStubJobsRepo{getJob: &jobs.Job{ID: fx.wireJobID, Status: jobs.StatusRunning, MaxRetries: 3, Revision: 0}}
-	outputArts := newSpoofStubOutputArts()
-	svc, err := ingest.NewTaskReportIngestionService(taskRepo, jobsRepo, attempts, outputArts)
+	svc, err := ingest.NewTaskReportIngestionService(taskRepo, jobsRepo, attempts)
 	if err != nil {
 		t.Fatalf("NewTaskReportIngestionService: %v", err)
 	}
 	handler := NewHandler(nil, nil, jobsRepo, taskRepo, attempts, nil, nil, &HandlerConfig{PushMode: true})
 	handler.SetIngestionSvc(svc)
 	handler.SetCostFactors(velmetrics.DefaultCostFactors())
-	return handler, taskRepo, jobsRepo, outputArts
+	return handler, taskRepo, jobsRepo, newSpoofStubOutputArts()
 }

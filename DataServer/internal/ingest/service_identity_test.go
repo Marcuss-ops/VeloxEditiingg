@@ -11,7 +11,7 @@ import (
 
 func newIdentitySvc(t *testing.T, attempts *stubIngestAttemptRepo) *TaskReportIngestionService {
 	t.Helper()
-	svc, err := NewTaskReportIngestionService(&stubIngestTaskRepo{}, &stubIngestJobsRepo{}, attempts, newStubIngestOutputArtifacts())
+	svc, err := NewTaskReportIngestionService(&stubIngestTaskRepo{}, &stubIngestJobsRepo{}, attempts)
 	if err != nil {
 		t.Fatal(err)
 	}

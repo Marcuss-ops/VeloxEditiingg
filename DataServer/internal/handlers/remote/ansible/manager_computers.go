@@ -372,14 +372,13 @@ func (m *AnsibleComputerManager) GenerateInventory(opts GenerateInventoryOptions
 			return "", fmt.Errorf("host=%s: missing SSH auth (secret_ref or ssh_key_path)", h.Host)
 		}
 
-		// (2) When present, SecretRef must resolve. The resolved password is passed
-		// to hostINI as ansible_ssh_pass fallback (it appears ONLY in
-		// the temp inventory file, never in any log line).
-		sshPass := ""
+		// (2) When present, SecretRef must resolve. Resolution here is a
+		// fail-closed secret existence check: the resolved value is never
+		// rendered into the inventory (the inventory relies on SSH keys as
+		// the primary auth method — see hostINI). If a future password-only
+		// fallback mode is ever added, this is the seam to thread it through.
 		if strings.TrimSpace(h.SecretRef) != "" {
-			var err error
-			sshPass, err = m.secretResolver.Resolve(h.SecretRef)
-			if err != nil {
+			if _, err := m.secretResolver.Resolve(h.SecretRef); err != nil {
 				secretStatus = "missing"
 				log.Printf("[ANSIBLE_INV] host=%s user=%s unit=%s source=db secret_ref=%s secret_status=%s",
 					h.Host, h.AnsibleUser, unit, h.SecretRef, secretStatus)
@@ -399,7 +398,7 @@ func (m *AnsibleComputerManager) GenerateInventory(opts GenerateInventoryOptions
 		if _, ok := sections[group]; !ok {
 			groupOrder = append(groupOrder, group)
 		}
-		sections[group] = append(sections[group], hostINI(h, sshPass))
+		sections[group] = append(sections[group], hostINI(h))
 	}
 
 	// Stable group order (alphabetical) so the INI is diff-friendly.
@@ -434,12 +433,11 @@ func canonicalUnitName(host, group string) string {
 }
 
 // hostINI renders one INI host line for the canonical Ansible vars.
-// sshPass is resolved from the secret_ref; it is intentionally NOT
-// injected as ansible_ssh_pass because sshpass overrides key-based
-// auth and breaks passwordless sudo. The temp inventory relies on
-// SSH keys (configured on the master) as the primary auth method.
-func hostINI(h store.AnsibleHostFields, sshPass string) string {
-	_ = sshPass // reserved for future password-only fallback mode
+// The temp inventory relies on SSH keys (configured on the master) as
+// the primary auth method; password-based auth is intentionally not
+// injected even when a secret_ref resolves (sshpass would override
+// key-based auth and break passwordless sudo).
+func hostINI(h store.AnsibleHostFields) string {
 	workerID := h.WorkerID
 	if workerID == "" {
 		workerID = h.Host

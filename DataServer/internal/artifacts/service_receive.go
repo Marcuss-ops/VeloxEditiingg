@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -184,7 +185,9 @@ func receiveResultFromSession(session *repository.UploadSession) (*ReceiveResult
 }
 
 // markFailed flips an upload to FAILED on Receive errors so the
-// reconciler can clean up the staging blob later.
+// reconciler can clean up the staging blob later. The caller-supplied
+// reason is logged: the FAILED row carries no cause column, so this log
+// line is the only durable record of why the upload failed.
 func (s *Service) markFailed(ctx context.Context, uploadID, reason string) error {
 	now := s.clock.Now()
 	failed := string(repository.UploadFailed)
@@ -195,6 +198,6 @@ func (s *Service) markFailed(ctx context.Context, uploadID, reason string) error
 	if err != nil {
 		return translateStoreErr(err)
 	}
-	_ = reason // future hook for log enrichment
+	log.Printf("[ARTIFACTS] upload %s marked FAILED: %s", uploadID, reason)
 	return nil
 }

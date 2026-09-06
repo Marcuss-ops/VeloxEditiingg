@@ -89,7 +89,6 @@ func TestHandleTaskResult_ValidateIdentityTuple_CanonicalSentinel_WireLeaseIDMis
 		&spoofStubTaskRepo{},
 		&spoofStubJobsRepo{},
 		attempts,
-		newSpoofStubOutputArts(),
 	)
 	if err != nil {
 		t.Fatalf("NewTaskReportIngestionService: %v", err)

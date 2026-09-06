@@ -28,8 +28,6 @@
 package grpcserver
 
 import (
-	"context"
-	"sync"
 	"time"
 
 	"velox-server/internal/logging"
@@ -293,34 +291,30 @@ func deriveCacheStats(attemptID string, am taskattempts.AttemptMetrics, em *pb.T
 	if cs.CacheLookups == 0 {
 		cs.CacheLookups = cs.CacheHits + cs.CacheMisses
 	}
-	if am.BytesFromDrive > 0 || am.BytesFromBlobstore > 0 {
-		// Cold-warm heuristic on misses: any byte drawn from BlobStore
-		// or Drive is by definition a cache miss for the worker's
-		// perspective, but mapping that to CacheMisses here would be
-		// over-claimed (we don't know how many cache-miss events
-		// produced those bytes — could be one big download). Emit the
-		// WARN ONCE per process so test runs don't get spammed; the
-		// signal an operator wants is "this is still the derivation
-		// fallback path during the PR-3 rollout", not "this attempt
-		// hit a cache miss 1800 times".
-		cacheStatsDerivationWarn.Do(func() {
-			logGRPCf(context.Background(),
-				logging.LevelWarn, logging.CodeGRPCMetricsDerivation,
-				"[GRPC-METRICS] AttemptCacheStats:CannotDeriveHitsMissesEvictions "+
-					"bytes_from_drive=%d bytes_from_blobstore=%d — leaving counters 0; "+
-					"PR-3 worker-side resource sampler will surface typed counters",
-				am.BytesFromDrive, am.BytesFromBlobstore,
-			)
-		})
+	if am.BytesFromDrive > 0 || am.BytesFromBlobstore > 0 {			// Cold-warm heuristic on misses: any byte drawn from BlobStore
+			// or Drive is by definition a cache miss for the worker's
+			// perspective, but mapping that to CacheMisses here would be
+			// over-claimed (we don't know how many cache-miss events
+			// produced those bytes — could be one big download). Emit the
+			// WARN time-throttled (not sync.Once: a process that runs for
+			// weeks must re-raise the signal, or an operator who misses the
+			// single shot never sees it again) so test runs don't get
+			// spammed but production keeps a periodic heartbeat on the
+			// derivation fallback path during the PR-3 rollout.
+			grpcLog.WarnThrottled(logging.CodeGRPCMetricsDerivation,
+				"cache-stats-derivation-fallback",
+				map[string]interface{}{
+					"message":              "AttemptCacheStats: cannot derive hits/misses/evictions from byte totals; counters left 0 (PR-3 worker-side resource sampler will surface typed counters)",
+					"bytes_from_drive":     am.BytesFromDrive,
+					"bytes_from_blobstore": am.BytesFromBlobstore,
+				})
 	}
 	return cs
 }
 
-// cacheStatsDerivationWarn fires at most once per process to avoid
-// spamming test fixtures that exercise cold-cache paths hundreds of
-// times. Operators retain the signal in production logs because the
-// derivation policy fires per cold-start.
-var cacheStatsDerivationWarn sync.Once
+// The WarnThrottled call above dedups on the "cache-stats-derivation-fallback"
+// key with the package-default 5-minute interval: periodic heartbeat in
+// production, no spam in test fixtures that exercise cold-cache paths.
 
 // executionMetricsToCostBasis builds the cost envelope the persistence
 // layer expects. The proto carries the per-pricing-unit price snapshot;

@@ -74,7 +74,15 @@ func (s *Service) loadFromDisk() error {
 // saveToDisk persists folders to SQLite.
 func (s *Service) saveToDisk(folders []DriveFolder) error {
 	if s.store != nil {
-		rawList, _ := json.Marshal(folders)
+		rawList, err := json.Marshal(folders)
+		if err != nil {
+			// Cannot happen for the current []DriveFolder type, but this
+			// branch MUST be loud if the type ever grows a marshal-failing
+			// field: silently persisting nothing while the in-memory cache
+			// looks updated is a corruption recipe.
+			log.Printf("[ERROR] Drive links marshal failed (SQLite NOT updated): %v", err)
+			return fmt.Errorf("drive: marshal links: %w", err)
+		}
 		if err := s.store.ReplaceDriveLinks(rawList); err != nil {
 			log.Printf("[WARN] Drive links SQLite save failed: %v", err)
 			return err

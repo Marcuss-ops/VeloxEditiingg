@@ -67,6 +67,36 @@ func TestValidationStorePersistsPASSAndFailure(t *testing.T) {
 	require.Equal(t, "Canonical unit does not exist", failureStatus.FailureReason)
 }
 
+// Pin: a non-empty but malformed timestamp is rejected at ingress with 400
+// instead of being silently replaced by the server clock (which would make a
+// worker clock bug invisible: validated_at would look fresh regardless).
+func TestValidationRejectsMalformedTimestamp(t *testing.T) {
+	t.Parallel()
+
+	db := newMigratedValidationStore(t)
+	repository := NewValidationStore(db)
+	handler := NewHandler(repository)
+
+	response := newValidationRequest(t, http.MethodPost, "/api/workers/validation", "/api/workers/validation",
+		`{"worker_id":"worker-badts","validation_code":"PASS","timestamp":"yesterday"}`,
+		handler.HandleValidationReport())
+	require.Equal(t, http.StatusBadRequest, response.Code)
+
+	// Rejected at the gate → nothing persisted.
+	status, err := repository.GetValidation("worker-badts")
+	require.NoError(t, err)
+	require.Nil(t, status)
+
+	// Empty timestamp is still accepted (documented fallback → server clock).
+	emptyResponse := newValidationRequest(t, http.MethodPost, "/api/workers/validation", "/api/workers/validation",
+		`{"worker_id":"worker-nots","validation_code":"PASS"}`,
+		handler.HandleValidationReport())
+	require.Equal(t, http.StatusOK, emptyResponse.Code)
+	noTSStatus, err := repository.GetValidation("worker-nots")
+	require.NoError(t, err)
+	require.NotNil(t, noTSStatus)
+}
+
 func TestUnknownWorkerReturnsNotValidated(t *testing.T) {
 	t.Parallel()
 

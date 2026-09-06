@@ -90,9 +90,8 @@ func TestHandleTaskResult_SendsTaskResultAckOnReportConflict(t *testing.T) {
 	jobsRepo := &spoofStubJobsRepo{
 		getJob: &jobs.Job{ID: fx.wireJobID, Status: jobs.StatusRunning, MaxRetries: 3, Revision: 0},
 	}
-	outputArts := newSpoofStubOutputArts()
 
-	svc, err := ingest.NewTaskReportIngestionService(taskRepo, jobsRepo, attempts, outputArts)
+	svc, err := ingest.NewTaskReportIngestionService(taskRepo, jobsRepo, attempts)
 	if err != nil {
 		t.Fatalf("NewTaskReportIngestionService: %v", err)
 	}
@@ -157,9 +156,8 @@ func TestHandleTaskResult_NoAckOnInternalError(t *testing.T) {
 	jobsRepo := &spoofStubJobsRepo{
 		getJob: &jobs.Job{ID: fx.wireJobID, Status: jobs.StatusRunning, MaxRetries: 3, Revision: 0},
 	}
-	outputArts := newSpoofStubOutputArts()
 
-	svc, err := ingest.NewTaskReportIngestionService(taskRepo, jobsRepo, attempts, outputArts)
+	svc, err := ingest.NewTaskReportIngestionService(taskRepo, jobsRepo, attempts)
 	if err != nil {
 		t.Fatalf("NewTaskReportIngestionService: %v", err)
 	}

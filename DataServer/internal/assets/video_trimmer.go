@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -412,7 +413,7 @@ func matchesNormalization(probe VideoProbe, spec VideoNormalization) bool {
 func isKeyframeBoundary(value float64, keyframes []float64) bool {
 	const tolerance = 0.0005
 	for _, keyframe := range keyframes {
-		if abs(value-keyframe) <= tolerance {
+		if math.Abs(value-keyframe) <= tolerance {
 			return true
 		}
 	}
@@ -443,11 +444,4 @@ func firstPositive(values ...float64) float64 {
 
 func formatSeconds(value float64) string {
 	return strconv.FormatFloat(value, 'f', 6, 64)
-}
-
-func abs(value float64) float64 {
-	if value < 0 {
-		return -value
-	}
-	return value
 }

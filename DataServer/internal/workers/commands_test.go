@@ -54,18 +54,6 @@ func TestTokenManagerExpired(t *testing.T) {
 	}
 }
 
-func TestTokenManagerRevoke(t *testing.T) {
-	tm := NewTokenManager(nil)
-
-	token := tm.GenerateToken("w1")
-	tm.RevokeToken(token)
-
-	_, ok := tm.ValidateWorkerCommandToken(token)
-	if ok {
-		t.Error("expected revoked token to be invalid")
-	}
-}
-
 func TestTokenManagerInvalidToken(t *testing.T) {
 	tm := NewTokenManager(nil)
 

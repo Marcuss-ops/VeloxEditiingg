@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"regexp"
 	"sort"
 	"strings"
@@ -131,16 +132,27 @@ func (v *Vault) IssueAccessLease(ctx context.Context, ref, workerID, publication
 	}
 	now := v.now().UTC()
 	scopes := normalizeScopes(requestedScopes)
+	// A failed audit write on a DENIAL path is logged, never swallowed
+	// silently: the usage row is the only durable record of WHY a lease
+	// was refused (revoked / expired / scope-denied). The denial itself
+	// is still returned to the caller — the log is additional
+	// observability, not an error change.
 	if record.RevokedAt != nil {
-		_ = v.recordUse(ctx, ref, workerID, publicationID, scopes, now, false, "CREDENTIAL_REVOKED")
+		if err := v.recordUse(ctx, ref, workerID, publicationID, scopes, now, false, "CREDENTIAL_REVOKED"); err != nil {
+			log.Printf("[CREDENTIALS] audit write failed (credential_ref=%s worker=%s outcome=CREDENTIAL_REVOKED): %v", ref, workerID, err)
+		}
 		return nil, ErrRevoked
 	}
 	if !record.ExpiresAt.IsZero() && !record.ExpiresAt.After(now) {
-		_ = v.recordUse(ctx, ref, workerID, publicationID, nil, now, false, "CREDENTIAL_EXPIRED")
+		if err := v.recordUse(ctx, ref, workerID, publicationID, nil, now, false, "CREDENTIAL_EXPIRED"); err != nil {
+			log.Printf("[CREDENTIALS] audit write failed (credential_ref=%s worker=%s outcome=CREDENTIAL_EXPIRED): %v", ref, workerID, err)
+		}
 		return nil, ErrExpired
 	}
 	if !scopesWithin(scopes, record.Scopes) {
-		_ = v.recordUse(ctx, ref, workerID, publicationID, scopes, now, false, "CREDENTIAL_SCOPE_DENIED")
+		if err := v.recordUse(ctx, ref, workerID, publicationID, scopes, now, false, "CREDENTIAL_SCOPE_DENIED"); err != nil {
+			log.Printf("[CREDENTIALS] audit write failed (credential_ref=%s worker=%s outcome=CREDENTIAL_SCOPE_DENIED): %v", ref, workerID, err)
+		}
 		return nil, ErrScope
 	}
 	if err := v.recordUse(ctx, ref, workerID, publicationID, scopes, now, true, ""); err != nil {

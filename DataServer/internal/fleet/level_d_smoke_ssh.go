@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -227,9 +228,15 @@ func (e *SSHWorkerExec) CleanupWorkerTemp(ctx context.Context, runID, workerID s
 		"rm -f /var/lib/velox-worker/smoke/%s.* /tmp/velox-smoke/%s/* 2>/dev/null; true",
 		runID, runID,
 	)
-	// Best-effort: ignore errors (worker may be unreachable or files already gone).
-	_, _ = e.ssh.Run(ctx, workerID, cmd)
+	// Best-effort (worker may be unreachable or files already gone), but
+	// the failure is logged: repeated silent cleanup misses leak disk on
+	// the worker under /var/lib/velox-worker/smoke/.
+	if _, err := e.ssh.Run(ctx, workerID, cmd); err != nil {
+		log.Printf("[SMOKE] cleanup: worker=%s run=%s remote temp cleanup failed (best-effort): %v", workerID, runID, err)
+	}
 	// Also clean local temp files written by RunFFmpegRender.
-	_ = os.RemoveAll(filepath.Join(SmokeTempRoot, runID))
+	if err := os.RemoveAll(filepath.Join(SmokeTempRoot, runID)); err != nil {
+		log.Printf("[SMOKE] cleanup: run=%s local temp cleanup failed (best-effort): %v", runID, err)
+	}
 	return nil
 }

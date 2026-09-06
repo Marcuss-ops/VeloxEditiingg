@@ -293,18 +293,6 @@ func (tm *TokenManager) ValidateWorkerCredentialToken(workerID, credentialHash s
 	return tm.store.ValidateWorkerCredential(workerID, credentialHash)
 }
 
-// RevokeToken revokes a token by revoking its session.
-func (tm *TokenManager) RevokeToken(token string) {
-	if tm.store == nil || token == "" {
-		return
-	}
-	tokenHash := store.HashCredential(token)
-	sess, err := tm.store.ValidateSession(tokenHash)
-	if err == nil && sess != nil {
-		_ = tm.store.RevokeSession(sess.SessionID)
-	}
-}
-
 // RevokeWorkerTokens revokes all tokens for a worker. A configured store is
 // authoritative: callers must not report a completed revoke when the session
 // rows could not be updated.

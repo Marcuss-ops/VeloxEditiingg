@@ -4,6 +4,7 @@ package drive
 
 import (
 	"errors"
+	"log"
 
 	"velox-server/internal/integrations/drive"
 	"velox-server/internal/store"
@@ -101,7 +102,12 @@ func New(tokensDir, dataDir string, driveService *drive.Service, sqliteStore *st
 		tokensDir:    tokensDir,
 		dataDir:      dataDir,
 	}
-	_ = s.loadFromDisk()
+	// A failed initial cache load must be observable: the service keeps
+	// running (the first request would repopulate the cache), but a
+	// silent empty cache made "folders are missing" the first symptom.
+	if err := s.loadFromDisk(); err != nil {
+		log.Printf("[DRIVE] initial folder cache load failed (service starts with an empty cache): %v", err)
+	}
 	return s
 }
 
@@ -111,7 +117,9 @@ func (s *Service) DriveService() *drive.Service {
 
 func (s *Service) SetStore(st *store.SQLiteStore) {
 	s.store = st
-	_ = s.loadFromDisk()
+	if err := s.loadFromDisk(); err != nil {
+		log.Printf("[DRIVE] folder cache reload after SetStore failed: %v", err)
+	}
 }
 
 func (s *Service) Store() *store.SQLiteStore {

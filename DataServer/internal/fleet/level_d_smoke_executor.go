@@ -148,7 +148,11 @@ func (e *LevelDSmokeExecutor) Execute(ctx context.Context, op *store.Operation) 
 	}
 	// ── Phase 1: resolve asset ───────────────────────────────────
 	resolveCtx, cancel := context.WithTimeout(ctx, timeoutAssetResolve)
-	pickupURL, expectedBytes, err := e.backend.Asset.ResolveAsset(resolveCtx, payload.AssetID)
+	// expectedBytes (the resolver's view of the input asset) is discarded:
+	// the output's authoritative byte count is verified by the artifact
+	// verifier and uploader at the upload boundary, not derived from the
+	// input's size.
+	pickupURL, _, err := e.backend.Asset.ResolveAsset(resolveCtx, payload.AssetID)
 	cancel()
 	if err != nil {
 		return fmt.Errorf("smoke: asset resolve: %w", err)
@@ -185,7 +189,12 @@ func (e *LevelDSmokeExecutor) Execute(ctx context.Context, op *store.Operation) 
 	if err != nil {
 		finishedAt := e.backend.Now()
 		durationMs := finishedAt.Sub(runStart).Milliseconds()
-		_ = e.markFailed(ctx, runID, finishedAt, durationMs, fmt.Sprintf("%s: %v", ErrSmokeLeaseUnavailable.Error(), err))
+		// Best-effort status persist: if THIS fails too, the run row stays
+		// PENDING until TTL. That second-order failure must be observable —
+		// an invisible PENDING row is undebuggable from fleet_operations alone.
+		if mkErr := e.markFailed(ctx, runID, finishedAt, durationMs, fmt.Sprintf("%s: %v", ErrSmokeLeaseUnavailable.Error(), err)); mkErr != nil {
+			log.Printf("[SMOKE] worker=%s run=%s lease unavailable AND mark-failed failed: %v (underlying: %v)", op.WorkerID, runID, mkErr, err)
+		}
 		return fmt.Errorf("%w: %v", ErrSmokeLeaseUnavailable, err)
 	}
 	// Cleanup on every return path: lease release (mandatory)
@@ -208,11 +217,7 @@ func (e *LevelDSmokeExecutor) Execute(ctx context.Context, op *store.Operation) 
 		return e.runCleanupAndFail(ctx, runID, op.WorkerID, runStart,
 			fmt.Sprintf("%s: %v (after %s)", ErrAssetDownloadFail.Error(), err, "lease_acquired"))
 	}
-	// The resolver's expectedBytes describes the downloaded input asset;
-	// the rendered output has independent size semantics. The output's
-	// authoritative byte count is verified by the artifact verifier and
-	// uploader at the upload boundary.
-	_ = expectedBytes
+
 	// ── Phase 5: ffmpeg render via worker exec ───────────────────
 	outputPath := fmt.Sprintf("/var/lib/velox-worker/smoke/%s.mp4", runID)
 	renderCtx, cancel := context.WithTimeout(ctx, timeoutFFmpegRender)

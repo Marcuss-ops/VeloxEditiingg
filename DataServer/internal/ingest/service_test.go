@@ -307,7 +307,7 @@ func newWiredSvc(t *testing.T, taskRepo *stubIngestTaskRepo, jobsRepo *stubInges
 	t.Helper()
 	attemptRepo.seedAttempt("T1", "w-1", "L1")
 	taskRepo.allCommitsCommitted = true
-	svc, err := NewTaskReportIngestionService(taskRepo, jobsRepo, attemptRepo, out)
+	svc, err := NewTaskReportIngestionService(taskRepo, jobsRepo, attemptRepo)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -155,9 +155,9 @@ func wirePostBuild(j *jobsDeps, t *taskDeps) error {
 	// TaskReportIngestionService now that all upstream deps
 	// (tasks + attempts + jobs + task_output_artifacts) are
 	// constructed.
-	if j != nil && j.Repository != nil && t != nil && t.TaskRepository != nil && t.OutputArtifacts != nil {
+	if j != nil && j.Repository != nil && t != nil && t.TaskRepository != nil {
 		ingestionSvc, ingErr := ingest.NewTaskReportIngestionService(
-			t.TaskRepository, j.Repository, t.AttemptRepository, t.OutputArtifacts,
+			t.TaskRepository, j.Repository, t.AttemptRepository,
 		)
 		if ingErr != nil {
 			return fmt.Errorf("bootstrap: task report ingestion service: %w", ingErr)

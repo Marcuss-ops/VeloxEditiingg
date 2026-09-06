@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"velox-server/internal/persistedtime"
 )
 
 // WorkerRuntimeSnapshot is the canonical runtime identity captured by the
@@ -278,10 +280,9 @@ func (s *SQLiteStore) GetAuthenticatedWorkerRuntimeSnapshot(ctx context.Context,
 }
 
 func parsePersistedWorkerTimestamp(value, field string) (time.Time, error) {
-	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02 15:04:05"} {
-		if parsed, err := time.Parse(layout, value); err == nil {
-			return parsed, nil
-		}
+	parsed, err := persistedtime.Parse(value, field)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("worker runtime: %w", err)
 	}
-	return time.Time{}, fmt.Errorf("worker runtime: invalid %s %q", field, value)
+	return parsed, nil
 }

@@ -44,10 +44,10 @@ import (
 // worker TaskResult messages. Wired in cmd/server/bootstrap.go and called
 // from grpcserver.handleTaskResult (one-line delegate).
 //
-// fix/atomic-ingestion: outputArtRepo is no longer called directly from
-// IngestTaskResult (artifact registration now happens inside the
-// taskRepo.IngestTaskResultAtomic transaction). The field is kept for
-// API compatibility and may be used by future methods.
+// fix/atomic-ingestion: artifact registration happens inside the
+// taskRepo.IngestTaskResultAtomic transaction; the service holds no
+// separate output-artifact repository (the former required-but-unused
+// outputArtRepo DI edge was removed).
 //
 // Concurrency: handleTaskResult calls IngestTaskResult synchronously
 // (no goroutine fan-out). Cross-session concurrency is serialized by
@@ -60,7 +60,6 @@ type TaskReportIngestionService struct {
 	jobsRepo       jobs.Repository
 	jobTransitions *jobs.TransitionService
 	attemptRepo    taskattempts.Repository
-	outputArtRepo  taskoutput_artifacts.Repository
 	logger         *log.Logger
 }
 
@@ -76,16 +75,10 @@ type TaskReportIngestionService struct {
 //     time (PR-02 / canonical attempt identity). A nil
 //     attemptRepo is rejected so the contract cannot be
 //     silently weakened by a future bootstrap mistake.
-//   - outputArtRepo : persistent target for worker-declared artifacts.
-//     Registered in step (3) of the audit sequence; the
-//     artifact upload pipeline's FinalizeVerified later
-//     joins to these declarations to validate that
-//     bytes uploaded match what the worker promised.
 func NewTaskReportIngestionService(
 	taskRepo taskgraph.Repository,
 	jobsRepo jobs.Repository,
 	attemptRepo taskattempts.Repository,
-	outputArtRepo taskoutput_artifacts.Repository,
 ) (*TaskReportIngestionService, error) {
 	if taskRepo == nil {
 		return nil, fmt.Errorf("ingest.NewTaskReportIngestionService: taskRepo is required")
@@ -96,9 +89,6 @@ func NewTaskReportIngestionService(
 	if attemptRepo == nil {
 		return nil, fmt.Errorf("ingest.NewTaskReportIngestionService: attemptRepo is required (wire-fallback identity tuple validation needs it)")
 	}
-	if outputArtRepo == nil {
-		return nil, fmt.Errorf("ingest.NewTaskReportIngestionService: outputArtRepo is required")
-	}
 	jobTransitions, err := jobs.NewTransitionService(jobsRepo, jobArtifactContractReader{jobs: jobsRepo})
 	if err != nil {
 		return nil, fmt.Errorf("ingest.NewTaskReportIngestionService: job transition service: %w", err)
@@ -108,7 +98,6 @@ func NewTaskReportIngestionService(
 		jobsRepo:       jobsRepo,
 		jobTransitions: jobTransitions,
 		attemptRepo:    attemptRepo,
-		outputArtRepo:  outputArtRepo,
 		logger:         log.Default(),
 	}, nil
 }

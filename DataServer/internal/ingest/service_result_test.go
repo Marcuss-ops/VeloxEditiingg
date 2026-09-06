@@ -56,7 +56,7 @@ func TestIngestionService_CanonicalizesDetailedPhaseIdentityBeforeAtomicIngest(t
 	attempts.seedAttempt("T1", "w-1", "L1")
 	attempts.attempts["T1|w-1|L1"].WorkerSnapshotID = "snapshot.master"
 	taskRepo.allCommitsCommitted = true
-	svc, err := NewTaskReportIngestionService(taskRepo, jobsRepo, attempts, newStubIngestOutputArtifacts())
+	svc, err := NewTaskReportIngestionService(taskRepo, jobsRepo, attempts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestIngestionService_CanonicalizesDetailedPhaseIdentityBeforeAtomicIngest_L
 	attempts := &stubIngestAttemptRepo{}
 	attempts.seedAttempt("T1", "w-1", "L1")
 	taskRepo.allCommitsCommitted = true
-	svc, err := NewTaskReportIngestionService(taskRepo, jobsRepo, attempts, newStubIngestOutputArtifacts())
+	svc, err := NewTaskReportIngestionService(taskRepo, jobsRepo, attempts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,19 +170,15 @@ func TestIngestionService_StampsRenderIdentityFromReport(t *testing.T) {
 }
 
 func TestIngestionService_RequiresAllDeps(t *testing.T) {
-	out := newStubIngestOutputArtifacts()
 	attempts := &stubIngestAttemptRepo{}
 	cases := []struct {
 		name, want string
 		build      func() error
-	}{{"task", "taskRepo", func() error { _, e := NewTaskReportIngestionService(nil, nil, attempts, out); return e }}, {"jobs", "jobsRepo", func() error {
-		_, e := NewTaskReportIngestionService(&stubIngestTaskRepo{}, nil, attempts, out)
+	}{{"task", "taskRepo", func() error { _, e := NewTaskReportIngestionService(nil, nil, attempts); return e }}, {"jobs", "jobsRepo", func() error {
+		_, e := NewTaskReportIngestionService(&stubIngestTaskRepo{}, nil, attempts)
 		return e
 	}}, {"attempt", "attemptRepo", func() error {
-		_, e := NewTaskReportIngestionService(&stubIngestTaskRepo{}, &stubIngestJobsRepo{}, nil, out)
-		return e
-	}}, {"output", "outputArtRepo", func() error {
-		_, e := NewTaskReportIngestionService(&stubIngestTaskRepo{}, &stubIngestJobsRepo{}, attempts, nil)
+		_, e := NewTaskReportIngestionService(&stubIngestTaskRepo{}, &stubIngestJobsRepo{}, nil)
 		return e
 	}}}
 	for _, tc := range cases {

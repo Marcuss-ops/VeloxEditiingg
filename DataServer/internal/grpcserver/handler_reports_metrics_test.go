@@ -207,8 +207,7 @@ func TestHandleTaskResult_PersistTypedMetrics_StaleReplaySkipsMetrics(t *testing
 		listTasks:     []taskgraph.Task{{ID: fx.taskID, JobID: fx.wireJobID, Status: taskgraph.StatusSucceeded}},
 	}
 	jobsRepo := &spoofStubJobsRepo{getJob: &jobs.Job{ID: fx.wireJobID, Status: jobs.StatusAwaitingArtifact, Revision: 0}}
-	outputArts := newSpoofStubOutputArts()
-	svc, err := ingest.NewTaskReportIngestionService(taskRepo, jobsRepo, attempts, outputArts)
+	svc, err := ingest.NewTaskReportIngestionService(taskRepo, jobsRepo, attempts)
 	if err != nil {
 		t.Fatalf("NewTaskReportIngestionService: %v", err)
 	}

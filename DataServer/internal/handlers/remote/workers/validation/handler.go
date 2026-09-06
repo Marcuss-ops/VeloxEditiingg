@@ -75,6 +75,12 @@ func (vs *ValidationStore) SaveValidation(report *ValidationReport) error {
 		return errValidationStoreNotConfigured
 	}
 
+	// Empty timestamp → server clock (documented fallback for non-HTTP
+	// callers; the HTTP handler rejects malformed non-empty timestamps with
+	// 400 before reaching this point). A non-empty but malformed timestamp
+	// also falls back to the server clock here, which is intentional: this
+	// method is the persistence boundary and must not drop a report because
+	// its clock string is off — the ingress gate is the contract enforcer.
 	var validatedAt time.Time
 	if report.Timestamp != "" {
 		if t, err := time.Parse(time.RFC3339, report.Timestamp); err == nil {
@@ -137,6 +143,21 @@ func (h *Handler) HandleValidationReport() gin.HandlerFunc {
 				"error": "missing validation_code",
 			})
 			return
+		}
+
+		// Timestamp contract: a non-empty timestamp MUST be RFC3339. Rejecting
+		// here (at ingress) instead of letting the store silently fall back to
+		// the server clock prevents a client clock bug from being masked as
+		// "validated just now" — validated_at would look fresh even though the
+		// worker reported a different moment.
+		if report.Timestamp != "" {
+			if _, err := time.Parse(time.RFC3339, report.Timestamp); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"ok":    false,
+					"error": "invalid timestamp: must be RFC3339 (e.g. 2026-08-10T00:00:00Z)",
+				})
+				return
+			}
 		}
 
 		if !h.repositoryReady() {

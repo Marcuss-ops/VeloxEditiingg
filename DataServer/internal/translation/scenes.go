@@ -38,10 +38,15 @@ func TranslateScenes(ctx context.Context, raw map[string]interface{}, client Cli
 		errs = make([]error, len(input)) // indexed; nil = ok
 	)
 	for i, value := range input {
+		// Acquire the slot BEFORE spawning: goroutines are the unbounded
+		// resource, the semaphore is the bound. Spawning first and acquiring
+		// inside the goroutine parks every goroutine in memory even when the
+		// limit is 4, so a huge scenes array materializes len(input)
+		// goroutines up front for no benefit.
+		sem <- struct{}{}
 		wg.Add(1)
 		go func(i int, scene map[string]interface{}) {
 			defer wg.Done()
-			sem <- struct{}{}
 			defer func() { <-sem }()
 
 			text, _ := scene["text"].(string)

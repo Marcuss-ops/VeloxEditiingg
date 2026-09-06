@@ -74,9 +74,8 @@ func TestE2E_PerformanceReport_IngestService(t *testing.T) {
 	taskRepo := NewSQLiteTaskRepository(store)
 	jobsRepo := NewSQLiteJobRepository(store)
 	attemptRepo := NewSQLiteTaskAttemptRepository(store)
-	outputArtRepo := NewSQLiteTaskOutputArtifactsRepository(store)
 
-	ingestSvc, err := ingest.NewTaskReportIngestionService(taskRepo, jobsRepo, attemptRepo, outputArtRepo)
+	ingestSvc, err := ingest.NewTaskReportIngestionService(taskRepo, jobsRepo, attemptRepo)
 	if err != nil {
 		t.Fatalf("NewTaskReportIngestionService: %v", err)
 	}
@@ -266,8 +265,9 @@ func TestE2E_PerformanceReport_IngestService(t *testing.T) {
 		t.Errorf("CostPerOutputMinute should be > 0")
 	}
 
-	// Output artifact persisted.
-	artifacts, err := outputArtRepo.ListByTask(ctx, taskID)
+	// Output artifact persisted (test-side handle; the service itself no
+	// longer takes an output-artifact dependency).
+	artifacts, err := NewSQLiteTaskOutputArtifactsRepository(store).ListByTask(ctx, taskID)
 	if err != nil {
 		t.Fatalf("ListByTask: %v", err)
 	}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"velox-server/internal/persistedtime"
 	"velox-server/internal/sqliteerr"
 	"velox-server/internal/statemachine"
 	"velox-server/internal/storecore"
@@ -191,10 +192,10 @@ func (w *SQLiteDeliveryStore) ClaimDeliveries(ctx context.Context, runnerID stri
 			return nil, storecore.WrapDBInfrastructure("ClaimDeliveries: attempts INSERT", err)
 		}
 
-		queuedAt, _ := time.Parse(time.RFC3339Nano, c.createdAt)
-		if queuedAt.IsZero() {
-			queuedAt, _ = time.Parse(time.RFC3339, c.createdAt)
-		}
+		// queuedAt is a monotonic-relevance hint (scheduling telemetry),
+		// not an integrity field: parse through the canonical persisted-time
+		// ladder and leave zero on garbage rather than failing the claim.
+		queuedAt, _ := persistedtime.Parse(c.createdAt, "job_deliveries.created_at")
 		out = append(out, DeliveryLease{
 			DeliveryID:    c.deliveryID,
 			RunnerID:      runnerID,
