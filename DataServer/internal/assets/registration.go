@@ -11,6 +11,8 @@ import (
 
 	"velox-server/internal/identity"
 	"velox-server/internal/inputsecurity"
+
+	"velox-shared/iopool"
 )
 
 // registration.go owns the asset-registration pipeline: the unique
@@ -66,7 +68,12 @@ func (s *AssetService) ResolveAndRegister(ctx context.Context, cmd ResolveAssetC
 	if maxBytes <= 0 {
 		maxBytes = 256 * 1024 * 1024
 	}
-	sizeBytes, err := io.Copy(stagingFile, io.LimitReader(tee, maxBytes+1))
+	// A4-3: pooled 1 MiB copy buffer (velox-shared/iopool) — asset staging
+	// streams hundreds of MB per registration; a fresh buffer per call
+	// churns GC under concurrent intake.
+	pooled := iopool.Get()
+	defer iopool.Put(pooled)
+	sizeBytes, err := io.CopyBuffer(stagingFile, io.LimitReader(tee, maxBytes+1), pooled[:])
 	if err != nil {
 		_ = stagingFile.Close()
 		_ = s.blobStore.RemoveStaging(stagingPath)

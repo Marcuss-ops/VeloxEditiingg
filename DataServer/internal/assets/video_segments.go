@@ -16,6 +16,7 @@ import (
 	"velox-server/internal/inputsecurity"
 
 	"velox-shared/assetref"
+	"velox-shared/iopool"
 )
 
 // RewriteVideoClipSegments trims local master-side clip sources and rewrites
@@ -280,7 +281,12 @@ func (s *AssetService) materializeVideoSource(ctx context.Context, sourceRef str
 		_ = os.Remove(path)
 		return "", func() {}, fmt.Errorf("video source security byte limit unavailable")
 	}
-	written, err := io.Copy(tmp, io.LimitReader(source.Reader, maxBytes+1))
+	// A4-3: pooled 1 MiB copy buffer (velox-shared/iopool) — the
+	// materialization copy can stream hundreds of MB; a fresh buffer per
+	// source churns GC under concurrent intake.
+	pooled := iopool.Get()
+	defer iopool.Put(pooled)
+	written, err := io.CopyBuffer(tmp, io.LimitReader(source.Reader, maxBytes+1), pooled[:])
 	if err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(path)
@@ -330,7 +336,12 @@ func (s *AssetService) registerPreparedVideoFile(ctx context.Context, preparedPa
 	if maxBytes <= 0 {
 		maxBytes = 256 * 1024 * 1024
 	}
-	written, copyErr := io.Copy(io.MultiWriter(staging, hasher), io.LimitReader(input, maxBytes+1))
+	// A4-3: pooled 1 MiB copy buffer (velox-shared/iopool) — the staging
+	// copy runs per segment; a fresh buffer per segment churns GC under
+	// batch segmenting.
+	pooled := iopool.Get()
+	defer iopool.Put(pooled)
+	written, copyErr := io.CopyBuffer(io.MultiWriter(staging, hasher), io.LimitReader(input, maxBytes+1), pooled[:])
 	closeInputErr := input.Close()
 	closeStagingErr := staging.Close()
 	if copyErr != nil || closeInputErr != nil || closeStagingErr != nil {
