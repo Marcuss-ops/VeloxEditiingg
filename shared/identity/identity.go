@@ -35,6 +35,9 @@ func GenerateWorkerID() string {
 // the (theoretical) crypto/rand failure. This sentinel variant must not be
 // adopted by new code — silent ID generation failure is exactly the class
 // of swallow the fail-closed audit forbids.
+//
+// Sunset (ADR 0008 soft-deprecate contract): REMOVE AFTER 2027-01-01 if
+// the zero-caller status still holds at the scheduled audit sweep.
 func GenerateSecureWorkerID() string {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
