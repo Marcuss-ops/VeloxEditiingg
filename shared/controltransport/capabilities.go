@@ -104,6 +104,13 @@ const (
 	// attempt_commits.status.
 	CapabilityTaskCommitAckV1 = "task.commit.ack.v1"
 
+	// CapabilityAssetCacheKeysTruncated — wire flag emitted by
+	// CapabilityReport.AsMap when the worker's asset_cache_keys list was
+	// truncated for transport. It is transport bookkeeping, NOT an admission
+	// feature: it must never enter a CapabilitySet or influence placement.
+	// session_capabilities.capabilitiesBoolMap filters it out explicitly.
+	CapabilityAssetCacheKeysTruncated = "asset_cache_keys_truncated"
+
 	// CapabilityCanonicalPayloadV2 — the worker accepts the canonical
 	// renderer payload contract (payload_contract_version=2). This is an
 	// admission capability, not an executor version: executorVersion stays

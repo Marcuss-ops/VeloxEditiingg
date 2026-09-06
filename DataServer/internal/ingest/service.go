@@ -158,6 +158,15 @@ func (s *TaskReportIngestionService) IngestTaskResult(ctx context.Context, cmd I
 	)
 	status := cmd.Status
 	if status != "succeeded" && status != "failed" && status != "cancelled" {
+		// A2-1 observability: unknown wire statuses are coerced to "failed"
+		// (defensive mapping per IngestCommand.Status contract), but the
+		// coercion must be visible. A silent normalization here converts a
+		// future worker enum value (or a casing drift like "SUCCEEDED") into
+		// an indistinguishable failure. Log the raw value so protocol drift
+		// surfaces instead of disappearing into the attempt row.
+		if s.logger != nil {
+			s.logger.Printf("[INGEST] unknown TaskResult status %q for task=%s attempt=%s worker=%s — coercing to failed", cmd.Status, cmd.TaskID, cmd.AttemptID, cmd.WorkerID)
+		}
 		status = "failed"
 	}
 	if status == "succeeded" {

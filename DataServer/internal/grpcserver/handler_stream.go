@@ -274,7 +274,9 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 
 		// Issue 7 fix: revoke the session in SQLite on disconnect.
 		if h.dbStore != nil {
-			_ = h.dbStore.RevokeSession(sessionID)
+			if revokeErr := h.dbStore.RevokeSession(sessionID); revokeErr != nil {
+				logGRPCf(stream.Context(), logging.LevelWarn, logging.CodeGRPCSessionCleanupFailed, "[GRPC] Failed to revoke session %s on disconnect: %v", sessionID, revokeErr)
+			}
 		}
 
 		// P0 #6: use doneOnce to avoid double-close when closeOldSessionLocked
@@ -382,7 +384,9 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 			logGRPCf(stream.Context(), logging.LevelError, logging.CodeGRPCStreamWriterFailure, "[GRPC] sessionWriter failure for worker %s (session %s): %v — tearing down", workerID, sessionID, err)
 			sess.cancel()
 			if h.dbStore != nil {
-				_ = h.dbStore.RevokeSession(sessionID)
+				if revokeErr := h.dbStore.RevokeSession(sessionID); revokeErr != nil {
+					logGRPCf(stream.Context(), logging.LevelWarn, logging.CodeGRPCSessionCleanupFailed, "[GRPC] Failed to revoke session %s after writer failure: %v", sessionID, revokeErr)
+				}
 			}
 			// PR #4: release pending task offer on writer failure.
 			sess.claimMu.Lock()

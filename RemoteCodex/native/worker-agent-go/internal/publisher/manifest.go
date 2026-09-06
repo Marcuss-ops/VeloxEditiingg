@@ -33,6 +33,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"velox-worker-agent/pkg/cache"
 )
 
 // OutputManifest is the worker-side representation of an encoder
@@ -247,9 +249,12 @@ func streamSHAAndSize(path string, m *OutputManifest) error {
 	sha := sha256.New()
 	cw := &countingWriter{}
 
-	// 1 MiB buffer; well below the kernel page cache, well above the
-	// syscall overhead for huge files.
-	buf := make([]byte, 1<<20)
+	// 1 MiB pooled copy buffer (see pkg/cache/pool.go); the hashing path
+	// runs per-artifact, so a fresh allocation here used to add GC churn on
+	// every finalize.
+	pooled := cache.GetCopyBuffer()
+	defer cache.PutCopyBuffer(pooled)
+	buf := pooled[:]
 	if _, err := io.CopyBuffer(io.MultiWriter(sha, cw), f, buf); err != nil {
 		return fmt.Errorf("publisher.streamSHAAndSize: copy: %w", err)
 	}

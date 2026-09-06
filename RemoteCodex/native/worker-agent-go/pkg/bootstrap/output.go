@@ -117,8 +117,9 @@ func runDirSmokeTest(ctx context.Context, name, dir string) StepResult {
 	return res
 }
 
-// runOutputDirSmokeTest is the legacy wrapper around runDirSmokeTest
-// for the engine output directory.
+// runOutputDirSmokeTest checks the engine output directory through the
+// shared runDirSmokeTest flow (A1-3 audit triage: live caller in
+// bootstrap.go, so the wrapper stays as the named per-directory facade).
 func runOutputDirSmokeTest(ctx context.Context, dir string) StepResult {
 	return runDirSmokeTest(ctx, "output_dir", dir)
 }

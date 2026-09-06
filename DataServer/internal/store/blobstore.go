@@ -22,6 +22,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -105,11 +107,21 @@ func (b *FilesystemBlobStore) PromoteToFinal(stagingPath, finalPath string) (str
 
 // syncDirBestEffort fsyncs a directory entry so a rename/link/copy that
 // precedes a DB commit survives a crash (POSIX best-effort; no-op elsewhere).
+// A6-3 audit note: best-effort by design (Windows finalize paths), but an
+// Open/Sync failure is surfaced on the standard logger so a silently
+// non-durable rename is at least observable.
 func syncDirBestEffort(path string) {
-	if dir, err := os.Open(path); err == nil {
-		_ = dir.Sync()
-		_ = dir.Close()
+	dir, err := os.Open(path)
+	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			log.Printf("[BLOBSTORE] directory fsync unavailable for %s: %v", path, err)
+		}
+		return
 	}
+	if err := dir.Sync(); err != nil {
+		log.Printf("[BLOBSTORE] directory fsync failed for %s: %v", path, err)
+	}
+	_ = dir.Close()
 }
 
 // PromoteDurable streams a staged blob to finalPath with the durability

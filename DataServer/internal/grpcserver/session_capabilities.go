@@ -98,13 +98,36 @@ func extractAssetCacheKeys(raw map[string]interface{}) []string {
 // protobuf decoder, but returns the typed feature set. Executor metadata and
 // host capacity are deliberately excluded because they have dedicated typed
 // projections.
+//
+// A2-3 audit note: the top-level bool-key namespace here is implicitly the
+// union of (a) the master's typed capability registry
+// (controltransport.KnownCapabilities) and (b) transport bookkeeping flags
+// that CapabilityReport.AsMap emits as booleans but that are NOT admission
+// features. (b) is filtered below so a transport flag can never widen or
+// alter the placement gate. New non-admission bool keys must be added to
+// this filter — an unknown bool key still passes through per the
+// forward-only negotiation contract (see IsKnownCapability).
 func capabilitiesBoolMap(raw map[string]interface{}) controltransport.CapabilitySet {
 	result := make(controltransport.CapabilitySet, 0, len(raw))
 	for key, val := range raw {
 		if enabled, ok := val.(bool); ok && enabled {
+			if isNonAdmissionCapabilityKey(key) {
+				continue
+			}
 			result = append(result, key)
 		}
 	}
 	sort.Strings(result)
 	return result
+}
+
+// isNonAdmissionCapabilityKey reports whether a top-level capability-map key
+// is transport bookkeeping rather than a typed admission feature.
+func isNonAdmissionCapabilityKey(key string) bool {
+	switch key {
+	case controltransport.CapabilityAssetCacheKeysTruncated:
+		return true
+	default:
+		return false
+	}
 }

@@ -166,8 +166,10 @@ func unpackZip(srcZip, dstDir string) error {
 		if err := out.Close(); err != nil {
 			return err
 		}
+		// A6-1/A1-2 audit fix: a failed chmod must not be swallowed — the
+		// installed artifact would carry wrong permissions with zero signal.
 		if err := os.Chmod(targetPath, f.Mode()); err != nil {
-			_ = err
+			return fmt.Errorf("chmod %s: %w", targetPath, err)
 		}
 	}
 	return nil

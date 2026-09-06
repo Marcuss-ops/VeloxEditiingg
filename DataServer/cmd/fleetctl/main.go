@@ -29,7 +29,6 @@
 package main
 
 import (
-	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -220,7 +219,3 @@ func runMain(args []string) int {
 func main() {
 	os.Exit(runMain(os.Args[1:]))
 }
-
-// Sentinel guard so future routings fail loud at compile time
-// if a sub-command enum value is added without a handler.
-var _ = errors.New

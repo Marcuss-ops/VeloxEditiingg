@@ -244,7 +244,6 @@ func setTypeFromGo(t reflect.Type, out map[string]any, reg map[string]bool) {
 		}
 		out["type"] = "object"
 		nested, _, err := structSchema(t, reg)
-		_ = err
 		if err == nil {
 			if props, ok := nested["properties"].(map[string]any); ok {
 				out["properties"] = props

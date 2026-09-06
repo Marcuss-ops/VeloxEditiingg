@@ -69,7 +69,9 @@ func (h *Handler) closeOldSessionLocked(workerID string) {
 		oldSess.claimMu.Unlock()
 		// Issue 7 fix: revoke the old session in SQLite.
 		if h.dbStore != nil {
-			_ = h.dbStore.RevokeSession(oldSID)
+			if revokeErr := h.dbStore.RevokeSession(oldSID); revokeErr != nil {
+				logGRPCf(context.Background(), logging.LevelWarn, logging.CodeGRPCSessionCleanupFailed, "[GRPC] Failed to revoke old session %s during reconnect: %v", oldSID, revokeErr)
+			}
 		}
 	}
 	delete(h.sessions, oldSID)

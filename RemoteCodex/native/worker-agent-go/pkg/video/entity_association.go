@@ -19,7 +19,6 @@ import (
 // - Date: dates → regex extraction with semantic validation (day 1-31, month 1-12, year 1900-2100)
 // - Numeri: numbers → direct extraction (skips segments containing dates)
 func PerformFullAssociation(ctx context.Context,
-	_ string, // audioFilePath: kept for backward compatibility, not used internally
 	entitaInputStr string, // JSON string: {"Nome Utente 1": {}, ...}
 	nomiSpecialiInputStr string, // JSON string: ["Nome Speciale da Qwen 1", ...]
 	entitaSenzaTestoInputStr string, // JSON string: {"Nome Trovato da Qwen 1": "url1", ...}
@@ -142,7 +141,6 @@ func PerformFullAssociation(ctx context.Context,
 // 4. Return empty result if all entities are "None"
 func ResolveEntities(
 	ctx context.Context,
-	_ string, // audioFilePath: kept for backward compatibility, not used internally
 	entitaInputStr string,
 	nomiSpecialiInputStr string,
 	entitaSenzaTestoInputStr string,
@@ -190,7 +188,6 @@ func ResolveEntities(
 	statusCallback("No pre-associated entities found, performing fuzzy matching...", false)
 	associations, err := PerformFullAssociation(
 		ctx,
-		"", // audioFilePath not used by PerformFullAssociation
 		entitaInputStr,
 		nomiSpecialiInputStr,
 		entitaSenzaTestoInputStr,

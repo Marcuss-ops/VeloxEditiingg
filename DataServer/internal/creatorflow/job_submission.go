@@ -119,25 +119,7 @@ func (s *CanonicalJobSubmitter) Submit(ctx context.Context, req CanonicalJobSubm
 	if req.Payload == nil {
 		return nil, domain.NewInvalidPayload("payload", "required", "payload is required")
 	}
-	// These fields are generated at ingress by older adapters. They are
-	// execution metadata, not request content; retaining them in the
-	// resolver hash would turn an identical retry into a false idempotency
-	// conflict because timestamps/UUIDs change between attempts.
-	identityHash := sha256.Sum256([]byte(req.SourceProvider + ":" + req.SourceJobID + ":" + req.TargetExecutorID))
-	stableIdentity := "submission_" + hex.EncodeToString(identityHash[:8])
-	req.Payload["job_id"] = stableIdentity
-	req.Payload["job_run_id"] = "run_" + stableIdentity
-	req.Payload["correlation_id"] = "corr_" + stableIdentity
-	// Fixed timestamps keep the payload hash a function of the canonical
-	// request, never of the wall clock at which a retry arrived.
-	req.Payload["created_at"] = "1970-01-01T00:00:00Z"
-	req.Payload["updated_at"] = "1970-01-01T00:00:00Z"
-	if req.DeliveryPlan != nil {
-		req.Payload["delivery_plan"] = req.DeliveryPlan["delivery_plan"]
-		if req.DeliveryPlan["delivery_plan"] == nil {
-			req.Payload["delivery_plan"] = req.DeliveryPlan
-		}
-	}
+	normalizeIdentityPayload(req.Payload, req.DeliveryPlan, stableIdentity(req.SourceProvider, req.SourceJobID, req.TargetExecutorID))
 	out, err := s.resolver.Resolve(ctx, ResolveRequest{
 		WorkspaceID:      req.WorkspaceID,
 		ExternalClientID: req.ExternalClientID,
@@ -254,4 +236,44 @@ func sanitizedErrorSummary(err error) string {
 		}
 	}
 	return strings.Join(words, " ")
+}
+
+// stableIdentity derives the retry-stable submission identity stamped into
+// the payload. The identity is a function of the canonical request tuple
+// (source_provider, source_job_id, target_executor_id) ONLY: an identical
+// retry must hash to the same resolver payload hash or the durable
+// idempotency check turns the retry into a false conflict.
+func stableIdentity(sourceProvider, sourceJobID, targetExecutorID string) string {
+	identityHash := sha256.Sum256([]byte(sourceProvider + ":" + sourceJobID + ":" + targetExecutorID))
+	return "submission_" + hex.EncodeToString(identityHash[:8])
+}
+
+// normalizeIdentityPayload stamps the execution-metadata keys into the
+// payload before the resolver hash. A2-2 audit note: these keys are
+// generated at ingress by older adapters and are execution metadata, not
+// request content — client-supplied values are OVERWRITTEN (not merged)
+// because retaining them in the resolver hash would turn an identical
+// retry into a false idempotency conflict (timestamps/UUIDs change between
+// attempts). Fixed epoch timestamps keep the payload hash a function of
+// the canonical request, never of the wall clock at which a retry arrived.
+// The delivery_plan mirror uses the nested key when present and falls back
+// to the whole envelope otherwise, matching the two wire shapes older
+// adapters emit.
+//
+// Keep this the SINGLE place where these rules live: every intake adapter
+// (canonical, creator, instaedit, batch, script, calendar, pipeline-runs)
+// routes through CanonicalJobSubmitter.Submit, so changing the identity
+// stamp or the delivery-plan mirror here is the only edit needed.
+func normalizeIdentityPayload(payload map[string]interface{}, deliveryPlan map[string]interface{}, identity string) {
+	payload["job_id"] = identity
+	payload["job_run_id"] = "run_" + identity
+	payload["correlation_id"] = "corr_" + identity
+	payload["created_at"] = "1970-01-01T00:00:00Z"
+	payload["updated_at"] = "1970-01-01T00:00:00Z"
+	if deliveryPlan != nil {
+		payload["delivery_plan"] = deliveryPlan["delivery_plan"]
+		if deliveryPlan["delivery_plan"] == nil {
+			payload["delivery_plan"] = deliveryPlan
+		}
+	}
 }

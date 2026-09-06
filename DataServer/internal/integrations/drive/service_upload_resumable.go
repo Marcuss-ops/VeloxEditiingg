@@ -102,6 +102,11 @@ func (s *Service) uploadResumable(
 	}
 
 	var offset int64
+	// One buffer is reused across every chunk and every retry attempt of
+	// this upload session (see uploadResumableChunk). Sized for the full
+	// resumableChunkSize so the resume path (which can advance offset and
+	// reset length back to the full chunk size) never reallocates.
+	chunkBuf := make([]byte, resumableChunkSize)
 	for offset < size {
 		length := resumableChunkSize
 		if remaining := size - offset; remaining < length {
@@ -116,7 +121,7 @@ func (s *Service) uploadResumable(
 			lastErr      error
 		)
 		for attempt := 0; attempt < maxResumableChunkAttempts; attempt++ {
-			result, complete, chunkLocal, chunkNetwork, lastErr = s.uploadResumableChunk(ctx, file, sessionURI, offset, length, size, token)
+			result, complete, chunkLocal, chunkNetwork, lastErr = s.uploadResumableChunk(ctx, file, sessionURI, offset, length, size, token, chunkBuf)
 			networkMS += chunkNetwork
 			localMS += chunkLocal
 			if lastErr == nil {
@@ -192,16 +197,22 @@ func (s *Service) initiateResumableUpload(ctx context.Context, metaJSON []byte, 
 // a non-nil error on a transport failure or a non-308/200 HTTP status. The
 // HTTP-status errors are *chunkUploadError so the caller can distinguish a
 // permanent 4xx from a transient 5xx.
+//
+// A4-2 audit note: buf is caller-owned and fully overwritten by ReadAt on
+// every call (ReadAt fills exactly `length` bytes or returns an error), so
+// the upload loop reuses ONE buffer across chunks and retry attempts
+// instead of re-allocating up to 8 MiB per iteration.
 func (s *Service) uploadResumableChunk(
 	ctx context.Context,
 	file *os.File,
 	sessionURI string,
 	offset, length, total int64,
 	token *Token,
+	buf []byte,
 ) (*UploadResult, bool, time.Duration, time.Duration, error) {
-	buf := make([]byte, length)
+	chunk := buf[:length]
 	localStart := time.Now()
-	n, readErr := file.ReadAt(buf, offset)
+	n, readErr := file.ReadAt(chunk, offset)
 	localMS := time.Since(localStart)
 	if readErr != nil && readErr != io.EOF {
 		return nil, false, localMS, 0, fmt.Errorf("read upload chunk at %d: %w", offset, readErr)
@@ -210,7 +221,7 @@ func (s *Service) uploadResumableChunk(
 		return nil, false, localMS, 0, fmt.Errorf("short read at %d: got %d bytes, want %d", offset, n, length)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, sessionURI, bytes.NewReader(buf))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, sessionURI, bytes.NewReader(chunk))
 	if err != nil {
 		return nil, false, localMS, 0, fmt.Errorf("failed to create chunk request: %w", err)
 	}

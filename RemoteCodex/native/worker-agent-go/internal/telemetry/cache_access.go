@@ -10,6 +10,12 @@ import (
 
 type cacheAccessContextKey struct{}
 
+// cacheAccessLogMu serializes whole-line writes to the shared log writer.
+// A3-2 audit triage: unlike the asset HTTP counters (converted to atomics),
+// this lock is irreducible — fmt.Fprintln(log.Writer()) bypasses
+// log.Logger's internal mutex, so an explicit lock is the only way to keep
+// each JSON line atomic for structured collectors. Hold time is a single
+// write syscall per cache-access event, not a compute section.
 var cacheAccessLogMu sync.Mutex
 
 type cacheAccessContext struct {

@@ -28,11 +28,13 @@ func GenerateWorkerID() string {
 	return "worker-" + hex.EncodeToString(b)
 }
 
-// GenerateSecureWorkerID returns a more entropy-rich worker identifier —
-// 16 random bytes encoded as 32 lowercase hex chars (no prefix).
-//
-// Use this when the ID must be globally unique across long-running clusters.
-// Use GenerateWorkerID for compact human-readable IDs.
+// Deprecated: GenerateSecureWorkerID is retained for source compatibility
+// but is ZERO-CALLER as of the A5-2 audit: the canonical 128-bit random hex
+// ID generator is DataServer/internal/identity.NewHex128, which fails loud
+// (returns an error) instead of silently returning an all-zero sentinel on
+// the (theoretical) crypto/rand failure. This sentinel variant must not be
+// adopted by new code — silent ID generation failure is exactly the class
+// of swallow the fail-closed audit forbids.
 func GenerateSecureWorkerID() string {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {

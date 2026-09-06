@@ -4,7 +4,7 @@ import (
 	"crypto/tls"
 	"net/http"
 	"net/http/httptrace"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"velox-worker-agent/internal/telemetry"
@@ -17,42 +17,54 @@ var assetTransport = &http.Transport{
 	ForceAttemptHTTP2:   true,
 }
 
-var assetHTTPMetricsMu sync.Mutex
+// A3-2 audit fix: the process-wide HTTP transfer metrics are atomic counters
+// instead of a struct guarded by one global mutex. Parallel asset downloads
+// previously serialized on assetHTTPMetricsMu for every DNS/TCP/TLS/TTFB
+// trace event, so contention grew with download parallelism — the exact
+// concurrency the transfer pipeline is designed for. Counters are monotonic
+// sums (same semantics as before), so the lock-free read in
+// snapshotAssetHTTPMetrics yields a per-counter-consistent snapshot instead
+// of a strictly point-in-time one; every consumer treats the snapshot as
+// aggregate telemetry, so that is sufficient.
 var assetHTTPMetrics struct {
-	requests int64
-	reused   int64
-	newConns int64
-	dnsMs    int64
-	tcpMs    int64
-	tlsMs    int64
-	ttfbMs   int64
-	http2    int64
+	requests atomic.Int64
+	reused   atomic.Int64
+	newConns atomic.Int64
+	dnsMs    atomic.Int64
+	tcpMs    atomic.Int64
+	tlsMs    atomic.Int64
+	ttfbMs   atomic.Int64
+	http2    atomic.Int64
 }
 
 func recordAssetHTTPTrace(reused bool, dns, tcp, tls, ttfb time.Duration, isHTTP2 bool) {
-	assetHTTPMetricsMu.Lock()
-	assetHTTPMetrics.requests++
+	assetHTTPMetrics.requests.Add(1)
 	if reused {
-		assetHTTPMetrics.reused++
+		assetHTTPMetrics.reused.Add(1)
 	} else {
-		assetHTTPMetrics.newConns++
+		assetHTTPMetrics.newConns.Add(1)
 	}
-	assetHTTPMetrics.dnsMs += dns.Milliseconds()
-	assetHTTPMetrics.tcpMs += tcp.Milliseconds()
-	assetHTTPMetrics.tlsMs += tls.Milliseconds()
-	assetHTTPMetrics.ttfbMs += ttfb.Milliseconds()
+	assetHTTPMetrics.dnsMs.Add(dns.Milliseconds())
+	assetHTTPMetrics.tcpMs.Add(tcp.Milliseconds())
+	assetHTTPMetrics.tlsMs.Add(tls.Milliseconds())
+	assetHTTPMetrics.ttfbMs.Add(ttfb.Milliseconds())
 	if isHTTP2 {
-		assetHTTPMetrics.http2++
+		assetHTTPMetrics.http2.Add(1)
 	}
-	assetHTTPMetricsMu.Unlock()
 }
 
 func snapshotAssetHTTPMetrics() telemetry.RawExecutionMetrics {
-	assetHTTPMetricsMu.Lock()
-	m := assetHTTPMetrics
-	assetHTTPMetricsMu.Unlock()
 	var out telemetry.RawExecutionMetrics
-	out.PopulateHTTPMetrics(m.requests, m.reused, m.newConns, m.dnsMs, m.tcpMs, m.tlsMs, m.ttfbMs, m.http2)
+	out.PopulateHTTPMetrics(
+		assetHTTPMetrics.requests.Load(),
+		assetHTTPMetrics.reused.Load(),
+		assetHTTPMetrics.newConns.Load(),
+		assetHTTPMetrics.dnsMs.Load(),
+		assetHTTPMetrics.tcpMs.Load(),
+		assetHTTPMetrics.tlsMs.Load(),
+		assetHTTPMetrics.ttfbMs.Load(),
+		assetHTTPMetrics.http2.Load(),
+	)
 	return out
 }
 

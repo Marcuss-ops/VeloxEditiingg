@@ -135,8 +135,15 @@ func LogMasterUnreachableRateLimited(workerID, masterURL string, err error) {
 	}
 }
 
-// Compatibility wrappers for older call sites. They are kept as small,
-// forward-only facades so legacy code paths still compile.
+// A1-3 audit triage: these facades have LIVE callers
+// (internal/bootstrap/config.go, internal/worker/active_task_lifecycle.go,
+// internal/worker/heartbeat_loop.go, cmd/velox-worker-agent/main.go), so
+// they are retained — but they are no longer labelled "legacy/compat": they
+// are the stable call-site API over the typed obs.Event helpers above.
+// The four wrappers that accepted an ignored trailing parameter (attempt
+// counter / job type) were the only "accepted but never read" residue; the
+// ignored `_` params remain because their call sites still pass them and
+// the wrappers deliberately present a call-site-shaped signature.
 func LogConfigCreated(configPath, workerID string) {
 	Info("[CONFIG_CREATED] worker_id=%s path=%s", workerID, configPath)
 }

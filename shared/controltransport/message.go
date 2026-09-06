@@ -1,11 +1,10 @@
 package controltransport
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // ControlMessageType identifies the kind of control message.
@@ -101,17 +100,13 @@ func NewTypedMessage(msgType ControlMessageType, workerID, protocolVersion strin
 }
 
 func newMessageID() string {
-	b := make([]byte, 16)
-	_, _ = rand.Read(b)
-	// UUID v4 layout
-	b[6] = (b[6] & 0x0f) | 0x40 // version 4
-	b[8] = (b[8] & 0x3f) | 0x80 // variant 10
-	return fmt.Sprintf("%s-%s-%s-%s-%s",
-		hex.EncodeToString(b[0:4]),
-		hex.EncodeToString(b[4:6]),
-		hex.EncodeToString(b[6:8]),
-		hex.EncodeToString(b[8:10]),
-		hex.EncodeToString(b[10:16]))
+	// A5-1 audit fix: google/uuid (already a direct dependency of this
+	// module) replaces the hand-rolled UUIDv4 layout. The stdlib
+	// implementation is identical in wire shape (canonical 8-4-4-4-12) and
+	// additionally panics-safe-fails on the RNG error the manual version
+	// silently discarded (a discarded crypto/rand failure would yield a
+	// predictable ID).
+	return uuid.NewString()
 }
 
 // WithSession attaches a session ID to the message.

@@ -24,6 +24,7 @@ import (
 
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/telemetry"
+	"velox-worker-agent/pkg/cache"
 	"velox-worker-agent/pkg/storage"
 	"velox-worker-agent/pkg/video/ffmpegrunner"
 	"velox-worker-agent/pkg/video/plan"
@@ -169,8 +170,11 @@ func artifactFromFile(kind, path string) (executor.ArtifactRef, error) {
 	}
 	defer f.Close()
 	hash := sha256.New()
-	buf := make([]byte, 1<<20)
-	if _, err := io.CopyBuffer(hash, f, buf); err != nil {
+	// 1 MiB pooled copy buffer (see pkg/cache/pool.go) — matches
+	// streamSHAAndSize in the publisher manifest.
+	pooled := cache.GetCopyBuffer()
+	defer cache.PutCopyBuffer(pooled)
+	if _, err := io.CopyBuffer(hash, f, pooled[:]); err != nil {
 		return executor.ArtifactRef{}, err
 	}
 	return executor.ArtifactRef{Type: kind, Hash: hex.EncodeToString(hash.Sum(nil)), URI: path, SizeBytes: info.Size()}, nil

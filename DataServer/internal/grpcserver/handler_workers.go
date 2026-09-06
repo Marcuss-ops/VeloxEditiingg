@@ -98,7 +98,11 @@ func (h *Handler) handleHeartbeat(workerID, sessionID string, hb *pb.Heartbeat) 
 				}
 				diskFreeBytes := snapshotHostInt64(caps, "disk_free_bytes")
 				_, diskPresent := snapshotHostValue(caps, "disk_free_bytes")
-				sess.updatePlacementResources(diskFreeBytes, diskPresent && diskFreeBytes >= 0, sess.placementSnapshot(workerID).EstimatedAvailableMS, sess.placementSnapshot(workerID).NetworkMbps, sess.placementSnapshot(workerID).LoadRatio)
+				// One immutable snapshot serves all three scalar reads below;
+				// each placementSnapshot() call takes 4 RLocks and copies the
+				// capability + asset-key state, so this stays O(1) per heartbeat.
+				currentSnapshot := sess.placementSnapshot(workerID)
+				sess.updatePlacementResources(diskFreeBytes, diskPresent && diskFreeBytes >= 0, currentSnapshot.EstimatedAvailableMS, currentSnapshot.NetworkMbps, currentSnapshot.LoadRatio)
 				registry, err := parseExecutorCapabilities(caps)
 				if err != nil {
 					// A malformed re-advertisement must not leave stale

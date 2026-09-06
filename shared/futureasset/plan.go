@@ -202,13 +202,6 @@ func canonicalAssets(in []AssetManifest) ([]AssetManifest, error) {
 	return out, nil
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 // Validate checks a received snapshot without compiling it. Expiry is
 // intentionally not treated as a malformed plan; callers stop new work when
 // it is expired and retain verified cache files.
