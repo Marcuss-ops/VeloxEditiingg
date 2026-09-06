@@ -43,6 +43,58 @@
   daily rollup seeks instead of scanning; test pins the query plan uses it
   (both `=`/`<`) and source-pins the live rollup expression.
 
+### 6-area audit remediation (dead code, contracts, concurrency, hot path, duplication, error handling)
+
+Findings from the 2026-09-06 targeted audit (report in session history;
+disposition brief for the remaining orphaned packages in
+`docs/audit/orphaned-packages-mount-or-delete.md`). All changes verified by
+the full-module gate (`scripts/ci/pre-removal-verify.sh`: vet/build/test
+all green).
+
+- **Dead code removed** — unused `TokenManager.RevokeToken` (zero callers;
+  the revoke path remains `RevokeWorkerTokens`), the dead `outputArtRepo`
+  DI edge on `ingest.NewTaskReportIngestionService` (required-but-never-read
+  dependency; constructor and all bootstrap/test callers updated), the
+  dead `sshPass` parameter on the Ansible `hostINI` helper (accepted and
+  discarded secret-derived arg), stale `_ =` suppressions in the smoke
+  executor and deliveries plan resolver, and the hand-rolled `abs()` in
+  the video trimmer (replaced with `math.Abs`).
+- **Validation contract at ingress** — `POST /api/v1/agent/validation` now
+  rejects a non-empty malformed `timestamp` with 400 instead of letting
+  the store silently substitute the server clock (which masked worker
+  clock bugs as fresh `validated_at`); the empty-timestamp fallback is
+  documented at the store boundary and pinned by a regression test.
+- **Concurrency** — `translation.TranslateScenes` acquires its bounded
+  semaphore BEFORE spawning each goroutine (a huge scenes array no longer
+  materializes len(input) parked goroutines for a limit of 4);
+  `drive/folders` getLinks re-checks TTL inside the write lock so a
+  concurrent refresher cannot trigger redundant DB reloads.
+- **Metrics observability** — the cache-stats derivation fallback WARN in
+  the gRPC metrics handler is time-throttled (`logging.WarnThrottled`,
+  5-min interval) instead of one-shot `sync.Once`, so a long-running
+  process re-raises the signal periodically instead of logging it exactly
+  once per process lifetime; the stale `RecordAttempt` idempotence comment
+  now documents the actual supervisor dedup-on-attempt-id contract.
+- **Timestamp parsing SSOT** — new dependency-free leaf
+  `internal/persistedtime` is the single parser for the three persisted
+  timestamp layouts (RFC3339Nano / RFC3339 / bare SQLite datetime);
+  duplicated ladders in `smokerunstore`, `store`, `artifactsstore`, and
+  the inline `deliverystore` ladder now route through it (4 copies → 1).
+- **Max-retry SSOT parity pin** —
+  `TestExtractPlanMaxRetry_MatchesValidatePlanPayloadWriter` binds the
+  INSERT-path writer (`extractPlanMaxRetry`) and the post-create
+  precondition writer (`validatePlanPayload`) to identical semantics, so
+  the two `jobs.max_retries` writers cannot drift.
+- **Error handling** — swallowed errors surfaced on the credential-vault
+  audit writes, drive-service startup load, Level-D smoke `markFailed`,
+  drive folder saveToDisk, and smoke-ssh cleanup paths: best-effort
+  cleanup failures now log at warn/error with the failing operation
+  instead of vanishing.
+- **Repo hygiene** — resolved the 9 files left in unresolved stash-pop
+  conflict state (`UU`) since the pre-`f0c734b0` era by restoring current
+  `HEAD` (the stash side predates the JobStatus alias consolidation and
+  the publication-evidence boundary; stashes remain in `stash@{0..4}`).
+
 ## [v1.4.2] - 2026-08-28
 
 ### Preparation gate test correction
