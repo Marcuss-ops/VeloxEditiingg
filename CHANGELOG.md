@@ -43,6 +43,22 @@
   daily rollup seeks instead of scanning; test pins the query plan uses it
   (both `=`/`<`) and source-pins the live rollup expression.
 
+### Removal — 11 orphaned internal packages (~2,600 LOC)
+
+Full removal per ADR 0008 (C2 fails: unreachable from outside the repo;
+C1 fails: zero importers verified via `go list -deps` over every `cmd/*`
+entrypoint + module-wide grep, incl. scripts/CI). Decision record in
+`docs/audit/orphaned-packages-mount-or-delete.md`.
+
+Deleted: `internal/handlers/server/calendar`, `internal/integrations/news`,
+`internal/translation`, `internal/handlers/remote/install`,
+`internal/handlers/remote/workers/management`, `internal/handlers/server/smoke`,
+`internal/preparedassets`, `internal/store/contracts`, `internal/slo`,
+`internal/metricscenter`, `internal/handlers/server/health` — 34 files,
+none of them reachable from any binary. `go.mod` has no orphaned require
+entries (the packages used only already-shared deps). Gate evidence:
+full-module vet/build/test green on the deletion tree.
+
 ### 6-area audit remediation (dead code, contracts, concurrency, hot path, duplication, error handling)
 
 Findings from the 2026-09-06 targeted audit (report in session history;

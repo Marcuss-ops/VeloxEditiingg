@@ -1,6 +1,11 @@
 # Mount-or-delete decision brief — orphaned `internal` packages (2026-09-06)
 
-- **Status**: Awaiting operator decision (decision required before any deletion commit)
+- **Status**: ✅ EXECUTED — 2026-09-06, all 11 packages deleted in one atomic
+  removal commit after `scripts/ci/pre-removal-verify.sh` passed on the
+  deletion tree (full-module `go vet` 0 / `go build` 0 / `go test -count=1` 0,
+  zero fallout: no orphan `_test.go` references, no unused imports). The
+  table below is preserved as the decision record; restore anything from
+  git history if a product need resurfaces.
 - **Author**: Audit remediation run (6-area technical audit)
 - **Verification**: every row re-verified on `main` (8b3ca0b1) via
   `go list -deps ./cmd/...` over all 9 `cmd/*` entrypoints — zero references —
