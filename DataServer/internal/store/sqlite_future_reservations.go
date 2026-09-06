@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -241,7 +242,12 @@ func (r *SQLiteTaskRepository) UpdateReservationState(ctx context.Context, reser
 	}
 	// A zero-row CAS means another event advanced the reservation between the
 	// read and write. Treat that as a replay-safe no-op rather than forcing a
-	// stale transition over newer evidence.
-	_, _ = res.RowsAffected()
+	// stale transition over newer evidence — but keep the race observable:
+	// a silent swallow here is indistinguishable from a successful
+	// transition for callers debugging reservation state.
+	if rows, rErr := res.RowsAffected(); rErr == nil && rows == 0 {
+		log.Printf("[FUTURE_RESERVATION] CAS advanced concurrently — replay no-op reservation=%s observed=%s requested=%s",
+			reservationID, string(current), string(state))
+	}
 	return nil
 }
