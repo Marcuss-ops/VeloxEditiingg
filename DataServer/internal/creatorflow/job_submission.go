@@ -45,6 +45,12 @@ type CanonicalJobSubmission struct {
 // Canonical intake-source vocabulary. Each value is a bounded label on
 // `pipeline.intake_source_accepted_total`; do NOT add free-form strings
 // (job ids, client ids) here — they belong in structured logs.
+//
+// Sunset policy (ADR 0008 soft-deprecate contract): an entry whose
+// `pipeline_intake_source_accepted_total{intake_source="…"}` series is
+// ZERO for two consecutive quarterly audit sweeps is a removal candidate;
+// the audit sweep removes it through the pre-removal verification gate
+// (scripts/ci/pre-removal-verify.sh). Next scheduled sweep: 2027-01-01.
 const (
 	// IntakeSourceCanonical is POST /api/v1/jobs (and /api/v1/jobs/batch
 	// items, which route through the same single-job path).
@@ -103,6 +109,40 @@ func (s *CanonicalJobSubmitter) WithIntakeSourceRecorder(r IntakeSourceRecorder)
 	return s
 }
 
+// Prepare normalizes the submission AT THE ADAPTER BOUNDARY (A2-2 long-term
+// fix): it validates the shared contract fields and stamps the
+// execution-metadata keys (identity, fixed timestamps, delivery-plan
+// mirror) into the payload so the resolver receives an already-canonical
+// value. After Prepare, an identical retry yields a byte-identical
+// submission — the property the durable idempotency check relies on.
+//
+// The HTTP adapter layer (pipeline handlers, script ingress, calendar
+// enqueue, …) should call Prepare on the wire-shaped submission BEFORE
+// handing it to Submit, so the canonicalization rules in
+// normalizeIdentityPayload run at intake rather than inside the submitter.
+// Submit still calls Prepare defensively (idempotent: stamping the same
+// keys twice with the same identity produces the same payload), so legacy
+// callers that skip it remain correct.
+//
+// Returns the receiver for chaining; a nil *CanonicalJobSubmission is left
+// untouched (the caller's required-field validation handles it).
+func (req *CanonicalJobSubmission) Prepare() *CanonicalJobSubmission {
+	if req == nil {
+		return req
+	}
+	if req.ContractVersion != "" && req.ContractVersion != "velox.job.v1" {
+		return req
+	}
+	if strings.TrimSpace(req.SourceProvider) == "" ||
+		strings.TrimSpace(req.SourceJobID) == "" ||
+		req.Payload == nil {
+		return req
+	}
+	normalizeIdentityPayload(req.Payload, req.DeliveryPlan,
+		stableIdentity(req.SourceProvider, req.SourceJobID, req.TargetExecutorID))
+	return req
+}
+
 func (s *CanonicalJobSubmitter) Submit(ctx context.Context, req CanonicalJobSubmission) (*ResolveOutput, error) {
 	if s == nil || s.resolver == nil {
 		return nil, fmt.Errorf("job submission service is not configured")
@@ -119,6 +159,8 @@ func (s *CanonicalJobSubmitter) Submit(ctx context.Context, req CanonicalJobSubm
 	if req.Payload == nil {
 		return nil, domain.NewInvalidPayload("payload", "required", "payload is required")
 	}
+	// Defensive re-normalization: idempotent if the adapter already called
+	// Prepare() at the boundary (see Prepare doc).
 	normalizeIdentityPayload(req.Payload, req.DeliveryPlan, stableIdentity(req.SourceProvider, req.SourceJobID, req.TargetExecutorID))
 	out, err := s.resolver.Resolve(ctx, ResolveRequest{
 		WorkspaceID:      req.WorkspaceID,

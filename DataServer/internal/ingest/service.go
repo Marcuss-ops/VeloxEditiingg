@@ -34,6 +34,7 @@ import (
 
 	"velox-server/internal/credentials"
 	"velox-server/internal/jobs"
+	"velox-server/internal/metrics"
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
 	"velox-server/internal/taskoutput_artifacts"
@@ -162,11 +163,14 @@ func (s *TaskReportIngestionService) IngestTaskResult(ctx context.Context, cmd I
 		// (defensive mapping per IngestCommand.Status contract), but the
 		// coercion must be visible. A silent normalization here converts a
 		// future worker enum value (or a casing drift like "SUCCEEDED") into
-		// an indistinguishable failure. Log the raw value so protocol drift
-		// surfaces instead of disappearing into the attempt row.
+		// an indistinguishable failure. Log the raw value and bump the
+		// coercion counter (velox_ingest_status_coerced_total, sanitized to
+		// a bounded label value) so protocol drift is measurable and the
+		// strict-rejection decision can be made from data.
 		if s.logger != nil {
 			s.logger.Printf("[INGEST] unknown TaskResult status %q for task=%s attempt=%s worker=%s — coercing to failed", cmd.Status, cmd.TaskID, cmd.AttemptID, cmd.WorkerID)
 		}
+		metrics.RecordStatusCoercion(cmd.Status)
 		status = "failed"
 	}
 	if status == "succeeded" {

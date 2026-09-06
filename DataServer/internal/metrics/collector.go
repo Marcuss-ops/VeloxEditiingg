@@ -275,6 +275,11 @@ func NewCollector(reg *Registry) *Collector {
 	for _, f := range packageIntakeFamilies() {
 		reg.Register(f)
 	}
+	// Package-level ingestion-coercion family (same singleton pattern).
+	// See ingest_coercion.go.
+	for _, f := range packageIngestCoercionFamilies() {
+		reg.Register(f)
+	}
 	return c
 }
 
