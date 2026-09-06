@@ -135,15 +135,9 @@ func LogMasterUnreachableRateLimited(workerID, masterURL string, err error) {
 	}
 }
 
-// A1-3 audit triage: these facades have LIVE callers
-// (internal/bootstrap/config.go, internal/worker/active_task_lifecycle.go,
-// internal/worker/heartbeat_loop.go, cmd/velox-worker-agent/main.go), so
-// they are retained — but they are no longer labelled "legacy/compat": they
-// are the stable call-site API over the typed obs.Event helpers above.
-// The four wrappers that accepted an ignored trailing parameter (attempt
-// counter / job type) were the only "accepted but never read" residue; the
-// ignored `_` params remain because their call sites still pass them and
-// the wrappers deliberately present a call-site-shaped signature.
+// Direct (non-typed-Event) log helpers. These have live callers and are
+// the stable call-site API for plain key=value lines that do not warrant
+// an obs.Event envelope.
 func LogConfigCreated(configPath, workerID string) {
 	Info("[CONFIG_CREATED] worker_id=%s path=%s", workerID, configPath)
 }
@@ -162,20 +156,4 @@ func LogConfigError(err error) {
 
 func LogSignalReceived(workerID, signalName string) {
 	Info("[SIGNAL] worker_id=%s signal=%s", workerID, signalName)
-}
-
-func LogHeartbeatRecover(workerID string, _ int) {
-	LogMasterReachable(workerID, "")
-}
-
-func LogJobStart(workerID, jobID, jobType string, _ int) {
-	LogJobStarted(workerID, jobID, jobType)
-}
-
-func LogJobSuccess(workerID, jobID, _ string, duration time.Duration) {
-	LogJobCompleted(workerID, jobID, duration)
-}
-
-func LogJobFailedWithType(workerID, jobID, _ string, err error, duration time.Duration) {
-	LogJobFailed(workerID, jobID, err, duration)
 }

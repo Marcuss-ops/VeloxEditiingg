@@ -112,6 +112,12 @@ func workerDisplayName(hostname string) string {
 	return fmt.Sprintf("velox_worker_%s", strings.NewReplacer(".", "_", ":", "_").Replace(ip))
 }
 
+// MaxAdvertisedCacheKeys bounds the asset_cache_keys list the worker
+// advertises in its capability report (Hello + heartbeat). The list is a
+// placement hint, not a reservation; 2048 keys is ample for warm-cache
+// matching while keeping the envelope payload bounded.
+const MaxAdvertisedCacheKeys = 2048
+
 // capabilityReport is the typed single source of truth for worker
 // capabilities. The map conversion happens only when the protobuf Struct
 // transport requires it.
@@ -136,10 +142,15 @@ func (w *Worker) capabilityReport(hostname string) controltransport.CapabilityRe
 	}
 	if w.clipCache != nil {
 		if keys, err := w.clipCache.ReadyKeys(context.Background()); err == nil {
-			const maxAdvertisedCacheKeys = 2048
-			if len(keys) > maxAdvertisedCacheKeys {
+			// Bounded advertised-key list: the master treats the list as a
+			// placement hint only, but an unbounded fleet of keys would bloat
+			// every Hello/heartbeat envelope. Cap at MaxAdvertisedCacheKeys
+			// and set the transport flag so operators can see truncation in
+			// diagnostics (the flag is classified non-admission on the
+			// master side and never enters the placement gate).
+			if len(keys) > MaxAdvertisedCacheKeys {
 				report.AssetCacheTruncated = true
-				keys = keys[:maxAdvertisedCacheKeys]
+				keys = keys[:MaxAdvertisedCacheKeys]
 			}
 			report.AssetCacheKeys = keys
 		}

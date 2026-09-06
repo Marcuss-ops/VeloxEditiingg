@@ -52,23 +52,23 @@ import (
 
 // recordTaskStart seeds the start-side telemetry counters: worker
 // status is bumped to busy (2) and the active-jobs gauge tracks the
-// concurrency limiter snapshot. LogJobStart fires once per task.
+// concurrency limiter snapshot. LogJobStarted fires once per task.
 func (w *Worker) recordTaskStart(pte *PendingTaskExecution) {
 	telemetry.GetPrometheusMetrics().SetWorkerStatus(w.config.WorkerID, 2)
 	telemetry.GetPrometheusMetrics().SetWorkerActiveJobs(w.config.WorkerID, float64(w.concurrencyLimiter.ActiveJobCount()))
 	if w.prefetchScheduler != nil {
 		w.prefetchScheduler.MarkJobStarted(pte.JobID)
 	}
-	logger.LogJobStart(w.config.WorkerID, pte.JobID, pte.ExecutorID, 0)
+	logger.LogJobStarted(w.config.WorkerID, pte.JobID, pte.ExecutorID)
 }
 
 // recordTaskOutcome captures the 3-branch outcome telemetry
 // matching the original nested if/else in executeTask:
 //
 //  1. execErr is context.Canceled → LogJobCancelled only.
-//  2. execErr is any other error   → LogJobFailedWithType +
+//  2. execErr is any other error   → LogJobFailed +
 //     setStatus(StatusError) + tasksFailed.Add + RecordJobFailure.
-//  3. execErr is nil               → LogJobSuccess +
+//  3. execErr is nil               → LogJobCompleted +
 //     tasksCompleted.Add + RecordJobSuccess.
 //
 // RecordJobRuntime fires in every branch (job-runtime is observed
@@ -82,7 +82,7 @@ func (w *Worker) recordTaskOutcome(pte *PendingTaskExecution, execErr error, dur
 		if errors.Is(execErr, context.Canceled) {
 			logger.LogJobCancelled(w.config.WorkerID, pte.JobID, duration)
 		} else {
-			logger.LogJobFailedWithType(w.config.WorkerID, pte.JobID, pte.ExecutorID, execErr, duration)
+			logger.LogJobFailed(w.config.WorkerID, pte.JobID, execErr, duration)
 			w.setStatus(StatusError)
 			w.tasksFailed.Add(1)
 			metrics.RecordJobFailure(duration.Milliseconds())
@@ -90,7 +90,7 @@ func (w *Worker) recordTaskOutcome(pte *PendingTaskExecution, execErr error, dur
 		}
 		telemetry.GetPrometheusMetrics().RecordJobRuntime(pte.ExecutorID, float64(duration.Milliseconds()))
 	} else {
-		logger.LogJobSuccess(w.config.WorkerID, pte.JobID, pte.ExecutorID, duration)
+		logger.LogJobCompleted(w.config.WorkerID, pte.JobID, duration)
 		w.tasksCompleted.Add(1)
 		metrics.RecordJobSuccess(duration.Milliseconds())
 		telemetry.GetPrometheusMetrics().RecordJobRuntime(pte.ExecutorID, float64(duration.Milliseconds()))

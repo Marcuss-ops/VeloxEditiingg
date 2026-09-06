@@ -146,7 +146,7 @@ func (w *Worker) heartbeatLoopWithInterval(ctx context.Context, forcedInterval t
 				}
 			} else {
 				if consecutiveErrors > 0 {
-					logger.LogHeartbeatRecover(w.config.WorkerID, consecutiveErrors)
+					logger.LogMasterReachable(w.config.WorkerID, w.config.MasterURL)
 				}
 				consecutiveErrors = 0
 

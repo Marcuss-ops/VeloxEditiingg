@@ -22,9 +22,9 @@ import (
 	"strings"
 	"time"
 
+	"velox-shared/iopool"
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/telemetry"
-	"velox-worker-agent/pkg/cache"
 	"velox-worker-agent/pkg/storage"
 	"velox-worker-agent/pkg/video/ffmpegrunner"
 	"velox-worker-agent/pkg/video/plan"
@@ -170,10 +170,10 @@ func artifactFromFile(kind, path string) (executor.ArtifactRef, error) {
 	}
 	defer f.Close()
 	hash := sha256.New()
-	// 1 MiB pooled copy buffer (see pkg/cache/pool.go) — matches
+	// 1 MiB pooled copy buffer (velox-shared/iopool) — matches
 	// streamSHAAndSize in the publisher manifest.
-	pooled := cache.GetCopyBuffer()
-	defer cache.PutCopyBuffer(pooled)
+	pooled := iopool.Get()
+	defer iopool.Put(pooled)
 	if _, err := io.CopyBuffer(hash, f, pooled[:]); err != nil {
 		return executor.ArtifactRef{}, err
 	}
