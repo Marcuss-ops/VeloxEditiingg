@@ -31,7 +31,7 @@ func wiredWorkersModule(t *testing.T) *WorkersModule {
 	gin.SetMode(gin.TestMode)
 	cfg := &config.Config{}
 	reg := workers.New(nil)
-	updateHandler := workersapi.NewWorkerUpdateHandler(cfg, nil, nil, nil, t.TempDir(), nil)
+	updateHandler := workersapi.NewWorkerUpdateHandler(cfg, nil, nil, t.TempDir())
 	workerLifecycle := lifecycle.NewHandler(cfg, nil, nil)
 	adminAuth := func(c *gin.Context) { c.Next() }
 

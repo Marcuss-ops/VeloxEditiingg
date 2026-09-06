@@ -16,7 +16,7 @@ func TestWorkersModule_RetiredBundleAndUpdateRoutesReturn404(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	cfg := &config.Config{}
-	updateHandler := workersapi.NewWorkerUpdateHandler(cfg, nil, nil, nil, t.TempDir(), nil)
+	updateHandler := workersapi.NewWorkerUpdateHandler(cfg, nil, nil, t.TempDir())
 	workerLifecycle := lifecycle.NewHandler(cfg, nil, nil)
 	m := NewWorkersModule(cfg, nil, workerLifecycle, updateHandler, nil, nil, nil)
 	m.RegisterRoutes(r)

@@ -1,66 +1,28 @@
 package workers
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
-	"time"
 
 	"velox-server/internal/config"
-	"velox-server/internal/outbox"
 	workersreg "velox-server/internal/workers"
-
-	"github.com/gin-gonic/gin"
 )
 
-// WorkerUpdateHandler handles worker update pipeline operations
-// (Phase 4.4: updateMgr removed — the persistent `update_code` command
-// in worker_commands is the single source of truth. The in-memory
-// UpdateManager was a duplicate write path).
-//
-// outbox is the wired `*outbox.Store` for the
-// ForceRegenerateZipHandler async path. Nil indicates a bootstrap
-// miss; the handler fails loud (500) in that case instead of
-// silently dropping the rebuild request behind a 202 ACK.
+// WorkerUpdateHandler handles worker bundle lifecycle operations:
+// manifest generation (called by the supervisor at boot) and the
+// bundle-hash surface consumed by worker status reporting. The former
+// HTTP update/rollout/ack surface was removed as dead code — workers
+// are updated via the mounted admin command routes and the gRPC
+// command stream (worker_commands is the single source of truth).
 type WorkerUpdateHandler struct {
 	cfg         *config.Config
 	reg         *workersreg.Registry
 	cmdMgr      *workersreg.CommandManager
-	tokenMgr    *workersreg.TokenManager
-	outbox      *outbox.Store
 	dataDir     string
 	bundleDir   string
 	codeVersion string
-}
-
-func (h *WorkerUpdateHandler) authorizeWorkerRequest(c *gin.Context, workerID string) bool {
-	token := workersreg.ExtractBearerToken(
-		c.GetHeader("Authorization"),
-		c.GetHeader("X-Admin-Token"),
-		c.Query("token"),
-	)
-	if !workersreg.AuthorizeWorkerToken(h.tokenMgr, token, workerID, c.ClientIP()) {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid worker token"})
-		return false
-	}
-	return true
-}
-
-// PendingUpdateState tracks the state of a pending update
-type PendingUpdateState struct {
-	WorkerID          string               `json:"worker_id"`
-	TargetVersion     string               `json:"target_version"`
-	TargetArtifactSHA string               `json:"target_artifact_sha256,omitempty"`
-	RequestedAt       time.Time            `json:"requested_at"`
-	UpdateState       string               `json:"update_state,omitempty"`
-	UpdateStateTime   map[string]time.Time `json:"update_state_time,omitempty"`
-	ArtifactSHA256    string               `json:"artifact_sha256,omitempty"`
-	AckVersion        string               `json:"ack_version,omitempty"`
-	Error             string               `json:"error,omitempty"`
 }
 
 func bundleDirCandidates(dataDir string) []string {
@@ -139,20 +101,11 @@ func findRepoRootFrom(start string) string {
 	return ""
 }
 
-// NewWorkerUpdateHandler creates a new worker update handler.
-// Phase 4.4: the UpdateManager argument was dropped — the persistent
-// update_code command is the single source of truth. Phase 5: a new
-// trailing `outboxStore` parameter was appended at the END of the
-// argument list (rather than mid-list) to keep existing call sites
-// compiling with a mechanical one-line edit.
-//
-// outboxStore powers the ForceRegenerateZipHandler async path
-// (bundled rebuild via WORKER_BUNDLE_REBUILD_REQUESTED outbox
-// events). Passing nil is unsupported in production; the handler
-// fails loud rather than accepting a request it cannot durably
-// enqueue. The composition root wires `p.Outbox` (cmd/server/
-// bootstrap_persistence.go) here.
-func NewWorkerUpdateHandler(cfg *config.Config, reg *workersreg.Registry, cmdMgr *workersreg.CommandManager, tokenMgr *workersreg.TokenManager, dataDir string, outboxStore *outbox.Store) *WorkerUpdateHandler {
+// NewWorkerUpdateHandler creates the worker bundle handler. The
+// former tokenMgr/outboxStore parameters were removed with the dead
+// HTTP update/ack/rebuild surface; CommandManager still holds the
+// process-wide singleton (asserted by cmd/server/bootstrap_test.go).
+func NewWorkerUpdateHandler(cfg *config.Config, reg *workersreg.Registry, cmdMgr *workersreg.CommandManager, dataDir string) *WorkerUpdateHandler {
 	bundleDir := cfg.Workers.BundleDir
 	if bundleDir != "" {
 		if _, err := os.Stat(filepath.Join(bundleDir, "worker_code.zip")); err != nil {
@@ -177,8 +130,6 @@ func NewWorkerUpdateHandler(cfg *config.Config, reg *workersreg.Registry, cmdMgr
 		cfg:         cfg,
 		reg:         reg,
 		cmdMgr:      cmdMgr,
-		tokenMgr:    tokenMgr,
-		outbox:      outboxStore,
 		dataDir:     dataDir,
 		bundleDir:   bundleDir,
 		codeVersion: cfg.Workers.CodeVersion,
@@ -195,148 +146,3 @@ func (h *WorkerUpdateHandler) Config() *config.Config {
 	return h.cfg
 }
 
-type updateAllRequest struct {
-	ExcludeLocal *bool `json:"exclude_local"`
-	DryRun       *bool `json:"dry_run"`
-}
-
-type bundleTargetInfo struct {
-	Version   string
-	Hash      string
-	Filename  string
-	UpdatedAt string
-	Available bool
-}
-
-func (h *WorkerUpdateHandler) readUpdateAllOptions(c *gin.Context) (excludeLocal bool, dryRun bool) {
-	excludeLocal = c.Query("exclude_local") != "false"
-	dryRun = c.Query("dry_run") == "true"
-
-	if c.Request != nil && c.Request.ContentLength != 0 {
-		var body updateAllRequest
-		if err := c.ShouldBindJSON(&body); err == nil {
-			if body.ExcludeLocal != nil {
-				excludeLocal = *body.ExcludeLocal
-			}
-			if body.DryRun != nil {
-				dryRun = *body.DryRun
-			}
-		}
-	}
-
-	return excludeLocal, dryRun
-}
-
-func (h *WorkerUpdateHandler) latestBundleTarget() bundleTargetInfo {
-	info := bundleTargetInfo{
-		Available: false,
-	}
-	if h == nil {
-		return info
-	}
-	info.Version = h.codeVersion
-
-	if bundlePath, stat, err := resolveBundlePath(h.bundleDir, "linux", "x86_64"); err == nil {
-		info.Hash = computeFileSHA256(bundlePath)
-		info.Filename = filepath.Base(bundlePath)
-		info.UpdatedAt = stat.ModTime().UTC().Format(time.RFC3339)
-		info.Available = true
-	}
-
-	manifestPaths := []string{
-		filepath.Join(h.bundleDir, "manifest_v2.json"),
-		filepath.Join(h.bundleDir, "release.json"),
-		filepath.Join(h.bundleDir, "VERSION.txt"),
-	}
-	for _, manifestPath := range manifestPaths {
-		raw, err := os.ReadFile(manifestPath)
-		if err != nil {
-			continue
-		}
-		trimmed := strings.TrimSpace(string(raw))
-		if trimmed == "" {
-			continue
-		}
-		if strings.HasSuffix(manifestPath, "VERSION.txt") {
-			info.Version = trimmed
-			break
-		}
-		var payload map[string]interface{}
-		if err := json.Unmarshal(raw, &payload); err != nil {
-			continue
-		}
-		if v, ok := payload["version"].(string); ok && strings.TrimSpace(v) != "" {
-			info.Version = strings.TrimSpace(v)
-		}
-		if info.Version == "" {
-			if v, ok := payload["code_version"].(string); ok && strings.TrimSpace(v) != "" {
-				info.Version = strings.TrimSpace(v)
-			}
-		}
-		if info.Hash == "" {
-			if v, ok := payload["build_hash"].(string); ok && strings.TrimSpace(v) != "" {
-				info.Hash = strings.TrimSpace(v)
-			}
-		}
-		break
-	}
-
-	if info.Version == "" {
-		info.Version = h.cfg.Workers.VersionNumber
-	}
-	if info.Version == "" {
-		info.Version = h.codeVersion
-	}
-	return info
-}
-
-func (h *WorkerUpdateHandler) queueBundleUpdateForWorkers(workerIDs []string, target bundleTargetInfo, dryRun bool, maintenanceID string) (int, []string, []string) {
-	commandsQueued := 0
-	queuedWorkers := make([]string, 0, len(workerIDs))
-	failedWorkers := make([]string, 0)
-	for _, wid := range workerIDs {
-		workerFailed := false
-		if _, err := h.cmdMgr.PushCommandWithError(wid, "maintenance_full_update_linux", map[string]interface{}{
-			"id":        maintenanceID,
-			"dry_run":   dryRun,
-			"requested": time.Now().Unix(),
-		}); err != nil {
-			workerFailed = true
-		} else {
-			commandsQueued++
-		}
-
-		// Phase 4.4: the persistent `update_code` command is the single
-		// source of truth. The component acks via AckCommandByID once the
-		// worker reports readiness; there is no longer an in-memory
-		// UpdateManager write to mirror.
-		if _, err := h.cmdMgr.PushCommandWithError(wid, "update_code", map[string]interface{}{
-			"version":                target.Version,
-			"bundle_version":         target.Version,
-			"bundle_hash":            target.Hash,
-			"target_artifact_sha256": target.Hash,
-		}); err != nil {
-			workerFailed = true
-		} else {
-			commandsQueued++
-		}
-
-		if _, err := h.cmdMgr.PushCommandWithError(wid, "restart_worker", nil); err != nil {
-			workerFailed = true
-		} else {
-			commandsQueued++
-		}
-
-		if _, err := h.cmdMgr.PushCommandWithError(wid, "run_smoke_job", buildSmokeJobPayload(wid)); err != nil {
-			workerFailed = true
-		} else {
-			commandsQueued++
-		}
-		if workerFailed {
-			failedWorkers = append(failedWorkers, wid)
-		} else {
-			queuedWorkers = append(queuedWorkers, wid)
-		}
-	}
-	return commandsQueued, queuedWorkers, failedWorkers
-}

@@ -210,3 +210,25 @@ func RegisterBundleRebuildOutboxHandler(reg *outbox.Registry) {
 func init() {
 	outbox.RegisterHandlerFactory(RegisterBundleRebuildOutboxHandler)
 }
+
+// ensureWorkerBundleRuntime runs the production post-processor
+// (scripts/ops/ensure-worker-bundle-runtime.sh) against a freshly
+// rebuilt bundle. Missing script (test fixtures, older checkouts) is
+// a no-op so the bundler contract is preserved there.
+func ensureWorkerBundleRuntime(repoRoot, bundleDir string) error {
+	script := filepath.Join(repoRoot, "scripts", "ops", "ensure-worker-bundle-runtime.sh")
+	if _, err := os.Stat(script); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	cmd := exec.Command(script, bundleDir)
+	cmd.Dir = repoRoot
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("normalize worker bundle runtime: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	log.Printf("[OK] worker bundle runtime normalized: %s", strings.TrimSpace(string(out)))
+	return nil
+}

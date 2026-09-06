@@ -11,8 +11,7 @@ import (
 
 // Handler manages worker lifecycle operations (registration, heartbeat,
 // commands, control). The fields below are consumed by the sibling files
-// in this package (commands.go: RequestUpdateHandler — h.cmdMgr,
-// h.codeVersion; control.go: RestartWorkerHandler/RevokeWorkerHandler/
+// in this package (control.go: RestartWorkerHandler/RevokeWorkerHandler/
 // DrainWorkerHandler/GetWorkerDetailsHandler/CleanupStaleWorkersHandler/
 // ListRevokedWorkersHandler — h.cmdMgr, h.reg, h.tokenMgr) and by router.go
 // + internal/app.WorkersModule via the GetTokenManager getter.
@@ -32,7 +31,6 @@ type Handler struct {
 	cmdMgr      *workersreg.CommandManager
 	tokenMgr    *workersreg.TokenManager
 	dbStore     *store.SQLiteStore // credential persistence + session store
-	codeVersion string
 }
 
 // NewHandler creates a new lifecycle Handler with SQLite-backed managers.
@@ -43,7 +41,6 @@ func NewHandler(cfg *config.Config, reg *workersreg.Registry, dbStore *store.SQL
 		cmdMgr:      workersreg.NewCommandManager(dbStore),
 		tokenMgr:    workersreg.NewTokenManager(dbStore),
 		dbStore:     dbStore,
-		codeVersion: cfg.Workers.CodeVersion,
 	}
 }
 

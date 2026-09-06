@@ -53,19 +53,7 @@ func buildWorkers(cfg *config.Config, p *persistenceDeps) (*workerDeps, error) {
 	cmdMgr := workersreg.NewCommandManager(p.SQLite)
 	tokenMgr := workersreg.NewTokenManager(p.SQLite)
 
-	// BundleRebuildHandler is wired into the canonical
-	// outbox.ProductionRegistry() at workers package init() via
-	// outbox.RegisterHandlerFactory. BuildPersistence already
-	// triggered the production-registry cache build, so by the
-	// time we get here the handler is in p.OutboxRegistry without
-	// any work from this layer. Sanity-check the assumption —
-	// writing the handler here would now PANIC on duplicate
-	// registration.
-	if p.OutboxRegistry == nil {
-		return nil, fmt.Errorf("bootstrap: buildWorkers: OutboxRegistry missing on persistenceDeps — composition wiring bug")
-	}
-
-	updateHandler := workerhandlers.NewWorkerUpdateHandler(cfg, reg, cmdMgr, tokenMgr, cfg.Runtime.DataDir, p.Outbox)
+	updateHandler := workerhandlers.NewWorkerUpdateHandler(cfg, reg, cmdMgr, cfg.Runtime.DataDir)
 	workerLifecycle := lifecycle.NewHandler(cfg, reg, p.SQLite)
 
 	return &workerDeps{
