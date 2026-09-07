@@ -95,17 +95,12 @@ func (w *diskWatcher) start(ctx context.Context, cfg *config.WorkerConfig, watch
 var Version = "dev"
 
 // registerCanonicalRenderExecutors is the composition-root registration
-// boundary for the render executor family. The native V2 executors are the
-// default advertised capability. The FFmpeg-command V1 executors are a
-// temporary, explicit compatibility capability: callers must opt in with
-// VELOX_ALLOW_LEGACY_FFMPEG_EXECUTORS=true while old task producers are
-// drained. This prevents a hidden fallback from reintroducing external ffmpeg
-// spawns on newly deployed workers.
-func registerCanonicalRenderExecutors(reg *executor.Registry, outputRoot string, allowLegacyFFmpeg bool, runners ...*pipeline.Runner) error {
-	if allowLegacyFFmpeg {
-		if err := executors.RegisterRenderPlanExecutors(reg, outputRoot); err != nil {
-			return err
-		}
+// boundary for the render executor family. V1 remains registered first and
+// unchanged; V2 is additive and uses the same registry advertised by worker
+// capabilities and used by dispatch.
+func registerCanonicalRenderExecutors(reg *executor.Registry, outputRoot string, runners ...*pipeline.Runner) error {
+	if err := executors.RegisterRenderPlanExecutors(reg, outputRoot); err != nil {
+		return err
 	}
 	if err := executors.RegisterRenderBatchExecutor(reg, nil, outputRoot); err != nil {
 		return err

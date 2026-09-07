@@ -264,19 +264,13 @@ func main() {
 	} else {
 		logger.Info("[BOOT] Worker profile is 'creator'; scene.composite.v1 disabled")
 	}
-	// Native V2 is the default. The command-based V1 executors require an
-	// explicit compatibility opt-in while historical task producers are
-	// retired; their disabled state is visible in the boot log and registry.
-	allowLegacyFFmpeg := boot.EnvBool("VELOX_ALLOW_LEGACY_FFMPEG_EXECUTORS", false)
-	if err := registerCanonicalRenderExecutors(registry, cfg.OutputDir, allowLegacyFFmpeg, pipelineRunner); err != nil {
+	// Register V1 and V2 render executors in the single canonical registry.
+	// V2 is additive and never replaces the four legacy entries.
+	if err := registerCanonicalRenderExecutors(registry, cfg.OutputDir, pipelineRunner); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: failed to register render executors: %v\n", err)
 		os.Exit(1)
 	}
-	if allowLegacyFFmpeg {
-		logger.Warn("[BOOT] Legacy FFmpeg render executors enabled: %s@1, %s@1, %s@1, %s@1", executors.SubtitleAlignID, executors.AudioMixID, executors.ComposeID, executors.EncodeID)
-	} else {
-		logger.Info("[BOOT] Legacy FFmpeg render executors disabled; set VELOX_ALLOW_LEGACY_FFMPEG_EXECUTORS=true only for an approved migration")
-	}
+	logger.Info("[BOOT] Registered RenderPlan executors: %s@1, %s@1, %s@1, %s@1", executors.SubtitleAlignID, executors.AudioMixID, executors.ComposeID, executors.EncodeID)
 	logger.Info("[BOOT] Registered V2 executor: %s@%d", executors.RenderBatchID, executors.RenderBatchVersion)
 	logger.Info("[BOOT] Registered packet-copy executor: %s@%d", executors.VideoAssembleCopyID, executors.VideoAssembleCopyVersion)
 	// RW-PROD-004 §3 A4: surface the live executor count on the read
