@@ -21,6 +21,16 @@ extern "C" {
 namespace velox::media::packet {
 namespace {
 constexpr int kBufferSize = 32 * 1024;
+
+// Write-progress callback throttle. The progressive-upload consumer only
+// needs periodic safe-offset updates; emitting one JSON line per 32 KiB AVIO
+// write chunk produced a stderr write+flush syscall per chunk and per-call
+// string temporaries. The callback still fires immediately on the first
+// write so the Go side can open the partial file early, then at most once
+// per kProgressEmitMinBytes of new bytes or kProgressEmitMinInterval of
+// wall time, whichever comes first.
+constexpr int64_t kProgressEmitMinBytes = 16 * 1024 * 1024;
+constexpr auto kProgressEmitMinInterval = std::chrono::milliseconds(250);
 }
 
 PacketOutputSink::~PacketOutputSink() { close(); }
@@ -93,7 +103,19 @@ int PacketOutputSink::writeCallback(void* opaque, uint8_t* data, int size) {
         // reads the file sequentially, so the safe offset is the maximum
         // position ever written, not the current write position which can
         // decrease on libavformat seeks (e.g. moov atom).
-        sink.writeProgressCb_(sink.path_, sink.high_watermark_);
+        const auto now = std::chrono::steady_clock::now();
+        const bool bytes_threshold =
+            sink.high_watermark_ - sink.progress_emitted_bytes_ >=
+            kProgressEmitMinBytes;
+        const bool time_threshold =
+            sink.progress_emitted_once_ &&
+            now - sink.last_progress_emit_ >= kProgressEmitMinInterval;
+        if (!sink.progress_emitted_once_ || bytes_threshold || time_threshold) {
+            sink.progress_emitted_bytes_ = sink.high_watermark_;
+            sink.last_progress_emit_ = now;
+            sink.progress_emitted_once_ = true;
+            sink.writeProgressCb_(sink.path_, sink.high_watermark_);
+        }
     }
     return size;
 }
@@ -131,6 +153,15 @@ bool PacketOutputSink::finalize(PacketOutputSinkResult& result, std::string& err
         return false;
     }
     if (avio_ != nullptr) avio_flush(avio_);
+    // A small final write can fall below both throttle thresholds. Publish it
+    // before reporting success so the progressive consumer always observes
+    // the finalized safe offset.
+    if (writeProgressCb_ && high_watermark_ > progress_emitted_bytes_) {
+        writeProgressCb_(path_, high_watermark_);
+        progress_emitted_bytes_ = high_watermark_;
+        last_progress_emit_ = std::chrono::steady_clock::now();
+        progress_emitted_once_ = true;
+    }
     if (::fsync(fd_) != 0) {
         error = "fsync packet output sink: " + std::string(std::strerror(errno));
         return false;
@@ -180,6 +211,9 @@ void PacketOutputSink::close() {
     backward_seek_count_ = 0;
     backward_seek_bytes_ = 0;
     finalized_ = false;
+    progress_emitted_bytes_ = 0;
+    last_progress_emit_ = {};
+    progress_emitted_once_ = false;
 }
 
 } // namespace velox::media::packet

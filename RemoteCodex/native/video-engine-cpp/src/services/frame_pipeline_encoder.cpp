@@ -6,16 +6,10 @@ extern "C" {
 #include <libavutil/error.h>
 }
 
-#include <memory>
 #include <string>
 
 namespace velox::media::pipeline_detail {
 namespace {
-
-struct PacketDeleter {
-    void operator()(AVPacket* packet) const { av_packet_free(&packet); }
-};
-using UniquePacket = std::unique_ptr<AVPacket, PacketDeleter>;
 
 std::string ffmpegErrorText(int error) {
     char buffer[AV_ERROR_MAX_STRING_SIZE]{};
@@ -25,7 +19,20 @@ std::string ffmpegErrorText(int error) {
 
 } // namespace
 
+EncoderStage::~EncoderStage() {
+    if (packet_ != nullptr) {
+        av_packet_free(&packet_);
+    }
+}
+
 bool EncoderStage::sendFrame(AVFrame* frame, std::string& error) {
+    if (packet_ == nullptr) {
+        packet_ = av_packet_alloc();
+        if (packet_ == nullptr) {
+            error = "av_packet_alloc failed";
+            return false;
+        }
+    }
     const int result = avcodec_send_frame(config_.encoder, frame);
     if (result < 0) {
         error = "avcodec_send_frame failed: " + ffmpegErrorText(result);
@@ -35,6 +42,13 @@ bool EncoderStage::sendFrame(AVFrame* frame, std::string& error) {
 }
 
 bool EncoderStage::flush(std::string& error) {
+    if (packet_ == nullptr) {
+        packet_ = av_packet_alloc();
+        if (packet_ == nullptr) {
+            error = "av_packet_alloc failed";
+            return false;
+        }
+    }
     const int result = avcodec_send_frame(config_.encoder, nullptr);
     if (result < 0 && result != AVERROR_EOF) {
         error = "encoder flush failed: " + ffmpegErrorText(result);
@@ -44,13 +58,11 @@ bool EncoderStage::flush(std::string& error) {
 }
 
 bool EncoderStage::drain(std::string& error) {
-    UniquePacket packet(av_packet_alloc());
-    if (!packet) {
-        error = "av_packet_alloc failed";
-        return false;
-    }
+    // packet_ is allocated lazily by sendFrame/flush before drain runs; the
+    // same scratch packet is reused for every received packet of the segment.
     while (true) {
-        const int result = avcodec_receive_packet(config_.encoder, packet.get());
+        av_packet_unref(packet_);
+        const int result = avcodec_receive_packet(config_.encoder, packet_);
         if (result == AVERROR(EAGAIN) || result == AVERROR_EOF) {
             return true;
         }
@@ -58,15 +70,14 @@ bool EncoderStage::drain(std::string& error) {
             error = "avcodec_receive_packet failed: " + ffmpegErrorText(result);
             return false;
         }
-        packet->stream_index = config_.output_stream->index;
-        av_packet_rescale_ts(packet.get(), config_.encoder->time_base,
+        packet_->stream_index = config_.output_stream->index;
+        av_packet_rescale_ts(packet_, config_.encoder->time_base,
                              config_.output_stream->time_base);
-        packet->time_base = config_.output_stream->time_base;
-        if (av_interleaved_write_frame(config_.muxer, packet.get()) < 0) {
+        packet_->time_base = config_.output_stream->time_base;
+        if (av_interleaved_write_frame(config_.muxer, packet_) < 0) {
             error = "av_interleaved_write_frame failed";
             return false;
         }
-        av_packet_unref(packet.get());
         config_.encoded_packets->fetch_add(1);
     }
 }

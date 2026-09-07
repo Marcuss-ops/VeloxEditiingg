@@ -53,6 +53,105 @@ fs::path uniquePath() {
             std::chrono::steady_clock::now().time_since_epoch().count()) + ".bin");
 }
 
+void removePath(const fs::path& path) {
+    std::error_code ec;
+    fs::remove(path, ec);
+}
+
+void testProgressIsThrottled() {
+    const fs::path path = uniquePath();
+    velox::media::packet::PacketOutputSink sink;
+    std::string error;
+    std::vector<int64_t> progress;
+    sink.setWriteProgressCallback([&](const fs::path&, int64_t bytes) {
+        progress.push_back(bytes);
+    });
+    expect(sink.open(path, error), "progress throttle sink opens: " + error);
+
+    auto* avio = sink.avio();
+    const std::string chunk(32 * 1024, 'p');
+    if (avio != nullptr) {
+        // 32 MiB in 32 KiB writes: without throttling this invokes the
+        // callback 1024 times. The 16 MiB byte threshold permits only the
+        // first write, each threshold crossing, and at most the final value.
+        for (int i = 0; i < 1024; ++i) {
+            avio_write(avio, reinterpret_cast<const unsigned char*>(chunk.data()),
+                       static_cast<int>(chunk.size()));
+        }
+    }
+    velox::media::packet::PacketOutputSinkResult result;
+    expect(sink.finalize(result, error), "progress throttle sink finalizes: " + error);
+    expect(progress.size() <= 3,
+           "progress callback is throttled (actual=" + std::to_string(progress.size()) + ")");
+    expect(!progress.empty(), "progress callback emits at least one value");
+    expect(progress.back() == result.output_size_bytes,
+           "progress callback reports final output size");
+    sink.close();
+    removePath(path);
+}
+
+void testProgressFinalOffsetAlwaysEmitted() {
+    const fs::path path = uniquePath();
+    velox::media::packet::PacketOutputSink sink;
+    std::string error;
+    std::vector<int64_t> progress;
+    sink.setWriteProgressCallback([&](const fs::path&, int64_t bytes) {
+        progress.push_back(bytes);
+    });
+    expect(sink.open(path, error), "final progress sink opens: " + error);
+
+    const std::string chunk(1024 * 1024, 'f');
+    if (auto* avio = sink.avio(); avio != nullptr) {
+        avio_write(avio, reinterpret_cast<const unsigned char*>(chunk.data()),
+                   static_cast<int>(chunk.size()));
+        avio_write(avio, reinterpret_cast<const unsigned char*>(chunk.data()),
+                   static_cast<int>(chunk.size()));
+    }
+    velox::media::packet::PacketOutputSinkResult result;
+    expect(sink.finalize(result, error), "final progress sink finalizes: " + error);
+    expect(progress.size() == 2,
+           "finalize emits the sub-threshold final offset exactly once");
+    expect(!progress.empty() && progress.back() == result.output_size_bytes,
+           "final progress offset equals finalized size");
+    sink.close();
+    removePath(path);
+}
+
+void testProgressHighWatermarkNeverRegresses() {
+    const fs::path path = uniquePath();
+    velox::media::packet::PacketOutputSink sink;
+    std::string error;
+    std::vector<int64_t> progress;
+    sink.setWriteProgressCallback([&](const fs::path&, int64_t bytes) {
+        progress.push_back(bytes);
+    });
+    expect(sink.open(path, error), "monotonic progress sink opens: " + error);
+
+    const std::string megabyte(1024 * 1024, 'm');
+    if (auto* avio = sink.avio(); avio != nullptr) {
+        avio_write(avio, reinterpret_cast<const unsigned char*>(megabyte.data()),
+                   static_cast<int>(megabyte.size()));
+        for (int i = 0; i < 16; ++i) {
+            avio_write(avio, reinterpret_cast<const unsigned char*>(megabyte.data()),
+                       static_cast<int>(megabyte.size()));
+        }
+        expect(avio_seek(avio, 0, SEEK_SET) == 0,
+               "progress monotonic test accepts backward seek");
+        avio_write(avio, reinterpret_cast<const unsigned char*>(megabyte.data()),
+                   static_cast<int>(megabyte.size()));
+    }
+    velox::media::packet::PacketOutputSinkResult result;
+    expect(sink.finalize(result, error), "monotonic progress sink finalizes: " + error);
+    for (size_t i = 1; i < progress.size(); ++i) {
+        expect(progress[i - 1] <= progress[i],
+               "progress high-watermark never regresses");
+    }
+    expect(!progress.empty() && progress.back() == result.output_size_bytes,
+           "monotonic progress finishes at high-watermark");
+    sink.close();
+    removePath(path);
+}
+
 void testAppendOnlySHA() {
     const fs::path path = uniquePath();
     const std::string payload = "append-only packet output sink payload\n";
@@ -233,6 +332,9 @@ void testDurabilityEvidenceSkipsRedundantFsync() {
 }
 
 int main() {
+    testProgressIsThrottled();
+    testProgressFinalOffsetAlwaysEmitted();
+    testProgressHighWatermarkNeverRegresses();
     testAppendOnlySHA();
     testBackwardSeekInvalidatesSHA();
     testMultipleBackwardSeeksAccumulate();

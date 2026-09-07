@@ -22,12 +22,13 @@ void FrameDeleter::operator()(AVFrame* frame) const {
 bool FramePool::init(int capacity, int in_width, int in_height,
                      int out_width, int out_height, bool allocate_scaled,
                      std::string& error) {
-    if (capacity < 2) {
-        error = "frame pool capacity must be >= 2";
+    if (capacity < 2 || capacity > 64) {
+        error = "frame pool capacity must be between 2 and 64";
         return false;
     }
     capacity_ = capacity;
     scaled_enabled_ = allocate_scaled;
+    uint64_t initial_mask = 0;
     decoded_.resize(static_cast<size_t>(capacity));
     if (scaled_enabled_) {
         scaled_.resize(static_cast<size_t>(capacity));
@@ -52,36 +53,68 @@ bool FramePool::init(int capacity, int in_width, int in_height,
                 return false;
             }
         }
-        free_.push_back(i);
+        initial_mask |= (uint64_t{1} << i);
     }
+    free_mask_.store(initial_mask, std::memory_order_release);
     in_width_ = in_width;
     in_height_ = in_height;
     return true;
 }
 
 int FramePool::acquire() {
-    std::unique_lock<std::mutex> lock(mutex_);
-    available_.wait(lock, [&] { return shutdown_ || !free_.empty(); });
-    if (free_.empty()) {
-        return -1;
+    // Fast path: clear the lowest set bit of the free mask in one CAS loop.
+    // No mutex, no deque, no heap traffic per frame.
+    uint64_t mask = free_mask_.load(std::memory_order_acquire);
+    for (;;) {
+        if (mask == 0) {
+            if (shutdown_.load(std::memory_order_acquire)) {
+                return -1;
+            }
+            // Pool exhausted and not shutting down: block on the slow-path
+            // CV. release() and shutdown() both notify, preserving bounded
+            // backpressure without consuming a CPU core while waiting.
+            std::unique_lock<std::mutex> lock(wait_mutex_);
+            available_.wait(lock, [&] {
+                return shutdown_.load(std::memory_order_acquire) ||
+                       free_mask_.load(std::memory_order_acquire) != 0;
+            });
+            mask = free_mask_.load(std::memory_order_acquire);
+            continue;
+        }
+        const int index = __builtin_ctzll(mask);
+        const uint64_t without_slot = mask & (mask - 1);
+        if (free_mask_.compare_exchange_weak(mask, without_slot,
+                                             std::memory_order_acq_rel,
+                                             std::memory_order_acquire)) {
+            const int in_use = in_use_.fetch_add(1, std::memory_order_acq_rel) + 1;
+            // fetch_max is C++26; use a CAS loop for the C++20 peak update.
+            int64_t peak = peak_usage_.load(std::memory_order_acquire);
+            while (static_cast<int64_t>(in_use) > peak &&
+                   !peak_usage_.compare_exchange_weak(
+                       peak, static_cast<int64_t>(in_use),
+                       std::memory_order_acq_rel,
+                       std::memory_order_acquire)) {
+            }
+            return index;
+        }
     }
-    const int index = free_.front();
-    free_.pop_front();
-    ++in_use_;
-    peak_usage_ = std::max<int64_t>(peak_usage_, in_use_);
-    return index;
 }
 
 void FramePool::release(int index) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    free_.push_back(index);
-    --in_use_;
+    // Return the slot: set its bit, drop in_use, wake one waiter. A plain
+    // OR is race-free here because each slot is owned by exactly one thread
+    // between its acquire and its release, so no two threads ever set the
+    // same bit concurrently.
+    free_mask_.fetch_or(uint64_t{1} << index, std::memory_order_acq_rel);
+    in_use_.fetch_sub(1, std::memory_order_release);
     available_.notify_one();
 }
 
 void FramePool::shutdown() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    shutdown_ = true;
+    {
+        std::lock_guard<std::mutex> lock(wait_mutex_);
+        shutdown_.store(true, std::memory_order_release);
+    }
     available_.notify_all();
 }
 

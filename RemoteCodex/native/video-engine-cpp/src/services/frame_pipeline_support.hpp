@@ -9,9 +9,12 @@ extern "C" {
 #include <chrono>
 #include "frame_pipeline_queue.hpp"
 
+#include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -43,12 +46,18 @@ private:
     int in_height_{0};
     std::vector<UniqueFrame> decoded_;
     std::vector<UniqueFrame> scaled_;
-    std::deque<int> free_;
-    int64_t in_use_{0};
-    int64_t peak_usage_{0};
-    std::mutex mutex_;
+
+    // Free-slot bitmask (bit i set = slot i free). Capacity is validated to
+    // [2, 64], so one uint64_t covers every slot. acquire/release on the
+    // fast path are a single CAS each — no mutex, no heap, no deque nodes.
+    // The mutex/condition_variable below serve only the blocking slow path
+    // (pool exhausted) and shutdown wakeup.
+    std::atomic<uint64_t> free_mask_{0};
+    std::atomic<int> in_use_{0};
+    std::atomic<int64_t> peak_usage_{0};
+    std::atomic<bool> shutdown_{false};
+    std::mutex wait_mutex_;
     std::condition_variable available_;
-    bool shutdown_{false};
 };
 
 bool publishProbedOutput(const std::filesystem::path& partial,

@@ -20,6 +20,12 @@ std::string ffmpegErrorText(int error) {
 
 } // namespace
 
+DecoderStage::~DecoderStage() {
+    if (scratch_ != nullptr) {
+        av_frame_free(&scratch_);
+    }
+}
+
 bool DecoderStage::sendPacket(AVPacket* packet, std::string& error) {
     const int result = avcodec_send_packet(config_.decoder, packet);
     if (result < 0) {
@@ -39,32 +45,45 @@ bool DecoderStage::flush(std::string& error) {
 }
 
 bool DecoderStage::receiveFrames(std::string& error) {
-    while (true) {
-        const int index = config_.pool->acquire();
-        if (index < 0) {
-            error = "frame pool stopped while decoder was receiving frames";
+    if (scratch_ == nullptr) {
+        scratch_ = av_frame_alloc();
+        if (scratch_ == nullptr) {
+            error = "av_frame_alloc failed (decoder scratch)";
             return false;
         }
-        AVFrame* decoded = config_.pool->decoded(index);
-        av_frame_unref(decoded);
-        const int result = avcodec_receive_frame(config_.decoder, decoded);
+    }
+    while (true) {
+        // Drain into the stage-owned scratch frame first: a pool slot is
+        // acquired only when the decoder actually produced a frame and the
+        // window filter accepted it. This removes the acquire/release churn
+        // on EAGAIN/EOF poll iterations.
+        av_frame_unref(scratch_);
+        const int result = avcodec_receive_frame(config_.decoder, scratch_);
         if (result == AVERROR(EAGAIN) || result == AVERROR_EOF) {
-            config_.pool->release(index);
             return true;
         }
         if (result < 0) {
-            config_.pool->release(index);
             error = "avcodec_receive_frame failed: " + ffmpegErrorText(result);
             return false;
         }
-        if (!acceptFrame(decoded, index)) {
-            config_.pool->release(index);
+        if (!acceptFrame(scratch_, -1)) {
             if (config_.source_window_complete != nullptr &&
                 config_.source_window_complete->load()) {
                 return true;
             }
             continue;
         }
+        const int index = config_.pool->acquire();
+        if (index < 0) {
+            error = "frame pool stopped while decoder was receiving frames";
+            return false;
+        }
+        AVFrame* decoded = config_.pool->decoded(index);
+        // Move the scratch frame's buffer reference into the pooled slot
+        // (refcount bump on the same AVBufferRefs, no pixel copy) and hand
+        // the slot to the render stage.
+        av_frame_move_ref(decoded, scratch_);
+        av_frame_unref(scratch_);
         config_.decoded_frames->fetch_add(1);
         if (!config_.render_queue->push(index)) {
             config_.pool->release(index);

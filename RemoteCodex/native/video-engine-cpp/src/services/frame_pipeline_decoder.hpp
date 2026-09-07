@@ -34,6 +34,11 @@ class DecoderStage {
 public:
     explicit DecoderStage(const DecoderStageConfig& config) : config_(config) {}
 
+    ~DecoderStage();
+
+    DecoderStage(const DecoderStage&) = delete;
+    DecoderStage& operator=(const DecoderStage&) = delete;
+
     bool sendPacket(AVPacket* packet, std::string& error);
     bool flush(std::string& error);
 
@@ -42,6 +47,11 @@ private:
     bool acceptFrame(AVFrame* frame, int index);
 
     DecoderStageConfig config_;
+    // Scratch frame reused for every avcodec_receive_frame call: the decoder
+    // drains into it first and a pool slot is acquired only when a frame is
+    // actually produced and accepted. One av_frame_alloc for the stage
+    // lifetime instead of one acquire/release pair per poll iteration.
+    AVFrame* scratch_{nullptr};
 };
 
 } // namespace velox::media::pipeline_detail

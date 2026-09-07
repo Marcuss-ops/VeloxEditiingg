@@ -5,6 +5,7 @@ extern "C" {
 #include <libavformat/avio.h>
 }
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -30,10 +31,10 @@ struct PacketOutputSinkResult {
     bool file_data_synced{false};
 };
 
-// Progress callback invoked after each write to the output sink.  The
-// callback receives the file path being written and the cumulative bytes
-// written so far (the safe offset the Go progressive upload can start
-// reading).
+// Progress callback invoked periodically while writing and once more at
+// finalization when bytes have not yet been reported. The callback receives
+// the file path being written and the cumulative safe offset the Go
+// progressive upload can start reading.
 using WriteProgressCallback = std::function<void(const std::filesystem::path& path, int64_t bytes_written)>;
 
 class PacketOutputSink {
@@ -49,9 +50,8 @@ public:
     bool finalize(PacketOutputSinkResult& result, std::string& error);
     void close();
 
-    // Set a callback that fires after each write.  The callback receives
-    // the cumulative bytes written so far (the safe offset for the
-    // progressive upload).
+    // Set a throttled progress callback. finalize() guarantees that the
+    // final high-watermark is emitted when it differs from the last value.
     void setWriteProgressCallback(WriteProgressCallback cb) { writeProgressCb_ = std::move(cb); }
     const std::filesystem::path& path() const { return path_; }
 
@@ -75,6 +75,14 @@ private:
     bool finalized_{false};
     void* sha_{nullptr};
     WriteProgressCallback writeProgressCb_;
+
+    // Write-progress throttling state. The Go progressive upload only needs
+    // periodic safe-offset updates, not one event per AVIO write chunk; the
+    // callback fires on the first write and then at most once per
+    // kProgressEmitMinBytes delta or kProgressEmitMinInterval wall tick.
+    int64_t progress_emitted_bytes_{0};
+    std::chrono::steady_clock::time_point last_progress_emit_{};
+    bool progress_emitted_once_{false};
 };
 
 } // namespace velox::media::packet
