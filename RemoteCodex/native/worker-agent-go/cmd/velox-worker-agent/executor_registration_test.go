@@ -7,17 +7,13 @@ import (
 	"velox-worker-agent/internal/taskrunner/executors"
 )
 
-func TestRegisterCanonicalRenderExecutors_PreservesV1AndAddsV2(t *testing.T) {
+func TestRegisterCanonicalRenderExecutors_DefaultsToNativeV2(t *testing.T) {
 	reg := executor.NewRegistry()
-	if err := registerCanonicalRenderExecutors(reg, t.TempDir()); err != nil {
+	if err := registerCanonicalRenderExecutors(reg, t.TempDir(), false); err != nil {
 		t.Fatalf("register canonical render executors: %v", err)
 	}
 
 	for _, id := range []string{
-		executors.SubtitleAlignID,
-		executors.AudioMixID,
-		executors.ComposeID,
-		executors.EncodeID,
 		executors.RenderBatchID,
 	} {
 		version := 1
@@ -28,8 +24,8 @@ func TestRegisterCanonicalRenderExecutors_PreservesV1AndAddsV2(t *testing.T) {
 			t.Errorf("registry missing %s@%d", id, version)
 		}
 	}
-	if got := reg.Len(); got != 5 {
-		t.Fatalf("registry length = %d, want 5", got)
+	if got := reg.Len(); got != 1 {
+		t.Fatalf("registry length = %d, want 1", got)
 	}
 
 	descs := reg.Descriptors()
@@ -46,4 +42,26 @@ func TestRegisterCanonicalRenderExecutors_PreservesV1AndAddsV2(t *testing.T) {
 		return
 	}
 	t.Fatal("render_batch descriptor not found")
+}
+
+func TestRegisterCanonicalRenderExecutors_LegacyRequiresExplicitOptIn(t *testing.T) {
+	reg := executor.NewRegistry()
+	if err := registerCanonicalRenderExecutors(reg, t.TempDir(), true); err != nil {
+		t.Fatalf("register canonical render executors: %v", err)
+	}
+
+	for _, id := range []string{
+		executors.SubtitleAlignID,
+		executors.AudioMixID,
+		executors.ComposeID,
+		executors.EncodeID,
+		executors.RenderBatchID,
+	} {
+		if !reg.Has(id, 1) {
+			t.Errorf("registry missing %s@1", id)
+		}
+	}
+	if got := reg.Len(); got != 5 {
+		t.Fatalf("registry length = %d, want 5", got)
+	}
 }

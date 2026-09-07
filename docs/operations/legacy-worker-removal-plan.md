@@ -35,6 +35,16 @@ The legacy bundle remains only as a migration/recovery compatibility path until
 Phase 4 below is complete; this policy prevents that compatibility path from
 turning into a second, unreviewed binary distribution mechanism.
 
+## Legacy FFmpeg executor compatibility
+
+New worker images advertise only the native V2 render executors by default.
+The four command-based executors (`subtitle.align.v1`, `audio.mix.v1`,
+`video.compose.v1`, and `video.encode-h264.v1`) invoke external `ffmpeg` and
+are disabled unless an approved migration explicitly sets
+`VELOX_ALLOW_LEGACY_FFMPEG_EXECUTORS=true`. This is a temporary compatibility
+switch, not a fallback: a worker with it unset refuses those task types rather
+than silently spawning `ffmpeg`.
+
 The current paths are:
 
 | Path | Current role | Removal condition |
