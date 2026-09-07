@@ -79,11 +79,14 @@ bool DecoderStage::receiveFrames(std::string& error) {
             return false;
         }
         AVFrame* decoded = config_.pool->decoded(index);
-        // Move the scratch frame's buffer reference into the pooled slot
-        // (refcount bump on the same AVBufferRefs, no pixel copy) and hand
-        // the slot to the render stage.
+        // A released pool slot retains the AVBufferRefs from its previous
+        // frame. av_frame_move_ref deliberately does not unref its
+        // destination, so clear it before overwriting the wrapper; otherwise
+        // every slot reuse would leak the old decoded buffers.
+        av_frame_unref(decoded);
+        // Move ownership of the scratch frame's AVBufferRefs into the pooled
+        // wrapper. This transfers references without copying pixel data.
         av_frame_move_ref(decoded, scratch_);
-        av_frame_unref(scratch_);
         config_.decoded_frames->fetch_add(1);
         if (!config_.render_queue->push(index)) {
             config_.pool->release(index);
