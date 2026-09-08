@@ -1,11 +1,11 @@
 {
   "version": "v1.4.20",
-  "git_commit": "097f9c57",
+  "git_commit": "431bf8a8",
   "source_hash": "0601d0dcbd15b38bff9d752184d43fbe5b4f8654dee907ff25936670aab15961",
   "protocol_version": "v3",
   "capability_schema": 1,
   "engine_version": "v1.4.20",
   "platform": "linux",
   "arch": "x86_64",
-  "built_at": "2026-09-08T09:03:01Z"
+  "built_at": "2026-09-08T09:04:47Z"
 }
