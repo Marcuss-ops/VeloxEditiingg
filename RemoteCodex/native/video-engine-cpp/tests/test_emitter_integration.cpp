@@ -34,7 +34,8 @@ void testRenderEngineIntegration() {
     EXPECT(fs::exists(sidecar), "SidecarGuard must write the progress sidecar");
     EXPECT(engine.framesEncoded() > 0, "FFmpeg progress must report encoded frames");
     EXPECT(engine.framesDecoded() > 0, "showinfo must report decoded frames");
-    EXPECT(engine.framesComposited() > 0, "FFmpeg progress must report composited frames");
+    EXPECT(engine.framesComposited() == 0,
+           "a render without a frame graph must report zero composited frames");
 
     const std::string json = velox::file::readFile(sidecar.string());
     EXPECT(!json.empty(), "integration sidecar must not be empty");
