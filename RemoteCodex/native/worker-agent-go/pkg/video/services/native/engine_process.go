@@ -8,6 +8,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"velox-worker-agent/pkg/video/pipeline"
 )
 
 // engine_process.go owns the subprocess lifecycle of the C++ engine:
@@ -53,7 +55,14 @@ func runEngineProcess(ctx context.Context, binaryPath, planPath string, onProgre
 	// The worker path enables exact decoded-frame telemetry in the native
 	// engine. The CLI keeps the probe opt-in so standalone renders are not
 	// burdened with showinfo diagnostics unless explicitly requested.
-	cmd.Env = append(os.Environ(), "VELOX_FFMPEG_DECODE_TELEMETRY=1")
+	cmd.Env = setEnvValue(os.Environ(), "VELOX_FFMPEG_DECODE_TELEMETRY", "1")
+	if budget, ok := pipeline.NativeRenderBudgetFromContext(ctx); ok {
+		// Explicit operator environment remains authoritative; computed values
+		// only fill absent native knobs.
+		cmd.Env = setEnvIfAbsent(cmd.Env, "VELOX_NATIVE_DECODER_THREADS", budget.DecoderThreads)
+		cmd.Env = setEnvIfAbsent(cmd.Env, "VELOX_NATIVE_ENCODER_THREADS", budget.EncoderThreads)
+		cmd.Env = setEnvIfAbsent(cmd.Env, "VELOX_NATIVE_SEGMENT_WORKERS", budget.SegmentWorkers)
+	}
 	// Every Attempt owns an isolated process group. Pdeathsig is the
 	// crash-safety backstop: if the worker agent is SIGKILLed, the
 	// native engine receives SIGKILL from the kernel without
@@ -135,4 +144,26 @@ func runEngineProcess(ctx context.Context, binaryPath, planPath string, onProgre
 		processWaitMs = time.Since(waitStart).Milliseconds()
 		return engineStarted, processStartMs, processWaitMs, stderrBuf, stdoutBuf, telemetry, execErr
 	}
+}
+
+func setEnvValue(env []string, key, value string) []string {
+	prefix := key + "="
+	filtered := make([]string, 0, len(env)+1)
+	for _, item := range env {
+		if strings.HasPrefix(item, prefix) {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return append(filtered, prefix+value)
+}
+
+func setEnvIfAbsent(env []string, key string, value int) []string {
+	prefix := key + "="
+	for _, item := range env {
+		if strings.HasPrefix(item, prefix) {
+			return env
+		}
+	}
+	return append(env, fmt.Sprintf("%s%d", prefix, value))
 }

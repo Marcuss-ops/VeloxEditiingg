@@ -52,7 +52,7 @@
 # Keep one explicit base reference for both builder and runtime. Release
 # automation may override it with a fully pinned @sha256 digest; using the
 # same reference in both stages prevents an ABI drift between stages.
-ARG VELOX_DEBIAN_BASE=debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818
+ARG VELOX_DEBIAN_BASE=debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171
 ARG SOURCE_DATE_EPOCH=0
 FROM ${VELOX_DEBIAN_BASE} AS cpp-builder
 ARG SOURCE_DATE_EPOCH

@@ -195,14 +195,20 @@ type CompiledPlanV2Renderer interface {
 // counters. The zero value is safe — executors that don't use native
 // rendering return it unpopulated.
 type RenderMetrics struct {
-	Frames           int64
-	FramesDecoded    int64
-	FramesComposited int64
-	Fps              float64
-	SpeedX           float64
-	EncodePasses     int64
-	TempBytes        int64
-	OutputDurable    bool
+	// Native CPU budget selected by the worker for this attempt.
+	EffectiveCPUCores int
+	RenderCPUBudget   int
+	DecoderThreads    int
+	EncoderThreads    int
+	SegmentWorkers    int
+	Frames            int64
+	FramesDecoded     int64
+	FramesComposited  int64
+	Fps               float64
+	SpeedX            float64
+	EncodePasses      int64
+	TempBytes         int64
+	OutputDurable     bool
 	// TrailerToPublishUS is the C++ mux latency from av_write_trailer
 	// completion to publishAtomic completion (fsync + rename + dir fsync).
 	TrailerToPublishUS int64

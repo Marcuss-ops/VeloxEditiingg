@@ -48,7 +48,7 @@ func (w *Worker) resolveTaskAssets(ctx context.Context, payload map[string]inter
 		}
 	}
 	originalAudioRef, _ := resolved["audio_url"].(string)
-	resolved, err = w.resolveCommonAssetPayload(ctx, resolved)
+	resolved, err = w.resolveCommonAssetPayloadMutable(ctx, resolved)
 	if err != nil {
 		return nil, err
 	}

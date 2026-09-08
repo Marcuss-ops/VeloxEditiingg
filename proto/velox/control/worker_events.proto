@@ -1,0 +1,107 @@
+syntax = "proto3";
+
+// Worker event messages for the Velox Worker-Control stream (split from
+// worker_control.proto). Imported by worker_to_master.proto.
+
+package velox.control;
+
+option go_package = "velox-shared/controltransport/pb";
+
+import "google/protobuf/timestamp.proto";
+
+message ArtifactUploaded {
+  string job_id = 1;
+  string artifact_id = 2;
+  string artifact_type = 3;
+  string artifact_path = 4;
+  int64 artifact_size = 5;
+  string upload_status = 6;
+  string error = 7;
+  string upload_id = 8;
+  string lease_id = 9;
+  int32 attempt = 10;
+  int32 expected_revision = 11;
+  // Canonical attempt ID (UUID). Enables the master to stamp the
+  // authoritative artifact_sha256 on the winning attempt row
+  // (migration 148). Pre-v1 workers send empty; the master resolves
+  // it from the tasks table when missing.
+  string attempt_id = 12;
+}
+
+message Goodbye {}
+
+// AssetDownloadProgress is emitted by the worker's canonical
+// DownloadManager checkpoint hook. It is a latest-state message, not an
+// append-only byte event: the master upserts the worker/transfer row and
+// replaces the job references for that physical transfer.
+message AssetJobReference {
+  string job_id = 1;
+  string task_id = 2;
+  repeated string scene_ids = 3;
+}
+
+message AssetDownloadProgress {
+  string worker_id = 1;
+  string transfer_id = 2;
+  string asset_key = 3;
+  string asset_id = 4;
+  string role = 5;
+  string state = 6;
+  int64 bytes_downloaded = 7;
+  int64 bytes_total = 8;
+  double bytes_per_second = 9;
+  int64 eta_seconds = 10;
+  int32 attempt = 11;
+  int32 shared_waiters = 12;
+  bool cache_hit = 13;
+  int64 queued_at_unix_ms = 14;
+  int64 started_at_unix_ms = 15;
+  int64 updated_at_unix_ms = 16;
+  int64 completed_at_unix_ms = 17;
+  repeated string job_ids = 18;
+  string task_id = 19;
+  repeated string scene_ids = 20;
+  string mime_type = 21;
+  string sha256 = 22;
+  string error_code = 23;
+  string error_detail = 24;
+  repeated AssetJobReference job_refs = 25;
+  int64 checkpoint_sequence = 26;
+  int64 transfer_generation = 27;
+}
+
+// PrefetchLifecycleEvent is a lightweight worker-to-master event for
+// prefetch lifecycle milestones. The Master persists these into the
+// job_events journal so `fleetctl job inspect` shows the full prefetch
+// timeline (future_plan_received, future_plan_applied, prefetch_prepared).
+// The Master-side events (reservation_created, future_plan_sent) are
+// logged directly by the Master during refreshFutureAssetPlan.
+message PrefetchLifecycleEvent {
+  string event_type = 1;  // "future_plan_received" | "future_plan_applied" | "prefetch_prepared"
+  string job_id = 2;
+  string task_id = 3;
+  string worker_id = 4;
+  string plan_id = 5;
+  int64 plan_version = 6;
+  string reservation_id = 7;
+  int32 distance = 8;
+  // For prefetch_prepared: asset-level details.
+  string asset_id = 9;
+  string asset_sha256 = 10;
+  int64 asset_size_bytes = 11;
+  string local_path = 12;
+  // ISO-8601 timestamp of when this event occurred on the worker.
+  google.protobuf.Timestamp occurred_at = 13;
+  // Task revision fence for reservation-scoped PREPARED evidence.
+  int32 task_revision = 14;
+  // Stable failure detail for prejob_prepare_failed events.
+  string error_reason = 15;
+  // Canonical timing/provenance fields for asset-level prefetch evidence.
+  google.protobuf.Timestamp download_started_at = 16;
+  google.protobuf.Timestamp asset_ready_at = 17;
+  google.protobuf.Timestamp job_started_at = 18;
+  int64 prefetch_ready_lead_ms = 19;
+  bool cache_hit = 20;
+  string origin = 21; // prefetch | runtime_download | warm_cache
+  string asset_key = 22;
+}

@@ -11,6 +11,27 @@ func (m *PrometheusMetrics) RecordAssetCacheMiss(_ string) {
 	m.assetCacheMiss.inc("asset")
 	m.assetCacheMissesCanonical.inc("total")
 }
+
+// RecordAssetResolvePass counts one logical worker materialization pass. The
+// dispatcher records the initial pass once; repair passes are recorded by
+// RecordAssetResolveRepair so normal jobs remain visibly one-pass.
+func (m *PrometheusMetrics) RecordAssetResolvePass() {
+	m.assetResolvePasses.inc("total")
+}
+
+func normalizeAssetResolveRepairReason(reason string) string {
+	switch reason {
+	case "reservation_missing", "asset_not_ready", "binding_changed":
+		return reason
+	default:
+		return "other"
+	}
+}
+
+func (m *PrometheusMetrics) RecordAssetResolveRepair(reason string) {
+	m.assetResolveRepairs.inc(normalizeAssetResolveRepairReason(reason))
+	m.assetResolvePasses.inc("total")
+}
 func normalizeCacheResult(result string) string {
 	switch result {
 	case "hit", "miss":

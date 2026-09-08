@@ -157,3 +157,65 @@ func TestExtractAssetKeys_DeferredDriveWireScheme(t *testing.T) {
 		t.Errorf("missing deferred drive key %q in %v", "drive-file-123456", got)
 	}
 }
+
+func TestExtractAssetKeysJSONAndValueAreEquivalent(t *testing.T) {
+	payload := map[string]interface{}{
+		"scenes": []map[string]interface{}{
+			{"clip_links": []string{
+				"https://drive.google.com/file/d/legacy-a/view",
+				"velox-drive://drive-b",
+			}},
+			{"clip": map[string]interface{}{"url": "velox-asset://local-c"}},
+		},
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	var decoded interface{}
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if got, want := ExtractAssetKeysValue(payload), ExtractAssetKeys(raw); !reflect.DeepEqual(got, want) {
+		t.Fatalf("value extraction = %v, JSON extraction = %v", got, want)
+	}
+	if got, want := ExtractAssetKeysValue(decoded), ExtractAssetKeys(raw); !reflect.DeepEqual(got, want) {
+		t.Fatalf("decoded value extraction = %v, JSON extraction = %v", got, want)
+	}
+}
+
+func BenchmarkExtractAssetKeysValue(b *testing.B) {
+	payload := map[string]interface{}{
+		"scenes": []interface{}{
+			map[string]interface{}{"clip": map[string]interface{}{"url": "velox-drive://drive-a"}},
+			map[string]interface{}{"clip_links": []interface{}{
+				"https://drive.google.com/file/d/legacy-b/view",
+				"https://drive.google.com/file/d/legacy-c/view",
+			}},
+		},
+	}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = ExtractAssetKeysValue(payload)
+	}
+}
+
+func BenchmarkExtractAssetKeysMarshalRoundTrip(b *testing.B) {
+	payload := map[string]interface{}{
+		"scenes": []interface{}{
+			map[string]interface{}{"clip": map[string]interface{}{"url": "velox-drive://drive-a"}},
+			map[string]interface{}{"clip_links": []interface{}{
+				"https://drive.google.com/file/d/legacy-b/view",
+				"https://drive.google.com/file/d/legacy-c/view",
+			}},
+		},
+	}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			b.Fatal(err)
+		}
+		_ = ExtractAssetKeys(raw)
+	}
+}

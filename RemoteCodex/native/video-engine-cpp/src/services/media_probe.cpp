@@ -17,6 +17,7 @@ extern "C" {
 }
 
 #include <cmath>
+#include <list>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -34,23 +35,50 @@ struct ProbeCacheEntry {
     std::filesystem::file_time_type mtime{};
 };
 
-std::unordered_map<std::string, ProbeCacheEntry> g_probeCache;
+struct ProbeCacheRecord {
+    ProbeCacheEntry entry;
+    std::list<fs::path>::iterator lru_position;
+};
+
+constexpr std::size_t kProbeCacheMaxEntries = 512;
+
+std::unordered_map<fs::path, ProbeCacheRecord> g_probeCache;
+std::list<fs::path> g_probeCacheOrder;
 std::mutex g_probeCacheMu;
 
-std::optional<ProbeCacheEntry> probeCacheLookup(const fs::path& mediaPath) {
+std::optional<ProbeCacheEntry> probeCacheSnapshot(const fs::path& mediaPath) {
     std::lock_guard<std::mutex> lock(g_probeCacheMu);
-    auto it = g_probeCache.find(mediaPath.string());
+    auto it = g_probeCache.find(mediaPath);
     if (it == g_probeCache.end()) return std::nullopt;
+    return it->second.entry;
+}
+
+std::optional<ProbeCacheEntry> probeCacheLookup(const fs::path& mediaPath) {
+    auto cached = probeCacheSnapshot(mediaPath);
+    if (!cached) return std::nullopt;
+
     std::error_code ec;
     auto sz = fs::file_size(mediaPath, ec);
     if (ec) return std::nullopt;
     auto mt = fs::last_write_time(mediaPath, ec);
     if (ec) return std::nullopt;
-    if (it->second.file_size != sz || it->second.mtime != mt) {
-        g_probeCache.erase(it);
-        return std::nullopt;
+
+    if (cached->file_size == sz && cached->mtime == mt) {
+        return cached;
     }
-    return it->second;
+
+    // Only invalidate the snapshot we observed. A concurrent probe may have
+    // installed a newer entry while the filesystem calls were outside the
+    // mutex; never erase that newer result.
+    std::lock_guard<std::mutex> lock(g_probeCacheMu);
+    auto it = g_probeCache.find(mediaPath);
+    if (it != g_probeCache.end() &&
+        it->second.entry.file_size == cached->file_size &&
+        it->second.entry.mtime == cached->mtime) {
+        g_probeCacheOrder.erase(it->second.lru_position);
+        g_probeCache.erase(it);
+    }
+    return std::nullopt;
 }
 
 void probeCacheStore(const fs::path& mediaPath, const MediaProbeResult& result) {
@@ -60,7 +88,22 @@ void probeCacheStore(const fs::path& mediaPath, const MediaProbeResult& result) 
     auto mt = fs::last_write_time(mediaPath, ec);
     if (ec) return;
     std::lock_guard<std::mutex> lock(g_probeCacheMu);
-    g_probeCache[mediaPath.string()] = ProbeCacheEntry{result, sz, mt};
+    auto it = g_probeCache.find(mediaPath);
+    if (it != g_probeCache.end()) {
+        it->second.entry = ProbeCacheEntry{result, sz, mt};
+        g_probeCacheOrder.splice(g_probeCacheOrder.end(), g_probeCacheOrder,
+                                 it->second.lru_position);
+        return;
+    }
+    while (g_probeCache.size() >= kProbeCacheMaxEntries && !g_probeCacheOrder.empty()) {
+        const fs::path oldest = g_probeCacheOrder.front();
+        g_probeCacheOrder.pop_front();
+        g_probeCache.erase(oldest);
+    }
+    g_probeCacheOrder.push_back(mediaPath);
+    auto position = std::prev(g_probeCacheOrder.end());
+    g_probeCache.emplace(mediaPath, ProbeCacheRecord{
+        ProbeCacheEntry{result, sz, mt}, position});
 }
 
 struct FormatContextDeleter {

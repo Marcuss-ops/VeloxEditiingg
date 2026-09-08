@@ -282,6 +282,8 @@ int main() {
                "same-size path also keeps decoded frames zero-copy");
         expect(passResult.transform_bypass_frames == passResult.frames_encoded,
                "same-size compatible path bypasses sws_scale for every frame");
+        expect(passResult.frames_composited == 0,
+               "frame pipeline without a graph reports zero composited frames");
     }
 
     // ── Explicit decoder/encoder thread budgets. ──────────────────────────
@@ -344,6 +346,8 @@ int main() {
                "frame graph apply() runs once per encoded frame, got calls=" +
                    std::to_string(compositor_calls.load()) + " encoded=" +
                    std::to_string(compositedResult.frames_encoded));
+        expect(compositedResult.frames_composited == compositedResult.frames_encoded,
+               "compositor telemetry counts frames with applied operations");
         expect(observed_width == 32 && observed_height == 32,
                "pixel frame carries the output geometry, got " +
                    std::to_string(observed_width) + "x" +

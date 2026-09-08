@@ -183,6 +183,13 @@ func (c *RenderClient) RenderCompiledPlanV2(ctx context.Context, planJSON []byte
 // output exists and stamp TotalMs. The safety-critical subprocess
 // lifecycle itself lives in engine_process.go.
 func (c *RenderClient) executeEngine(ctx context.Context, planPath, jobID, outputPath string, start time.Time, metrics *pipeline.RenderMetrics) error {
+	if budget, ok := pipeline.NativeRenderBudgetFromContext(ctx); ok {
+		metrics.EffectiveCPUCores = budget.EffectiveCPUCores
+		metrics.RenderCPUBudget = budget.RenderCPUBudget
+		metrics.DecoderThreads = budget.DecoderThreads
+		metrics.EncoderThreads = budget.EncoderThreads
+		metrics.SegmentWorkers = budget.SegmentWorkers
+	}
 	c.logger.Info("[NATIVE] Launching: %s --render --plan %s", c.binaryPath, planPath)
 	// SAFETY-CRITICAL subprocess lifecycle lives in engine_process.go.
 	engineStarted, processStartMs, processWaitMs, stderrBuf, stdoutBuf, processTelemetry, err := runEngineProcess(ctx, c.binaryPath, planPath, c.onProgress, c.legacyProgress)

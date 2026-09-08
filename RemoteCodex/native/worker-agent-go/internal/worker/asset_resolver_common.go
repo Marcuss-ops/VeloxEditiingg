@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"velox-shared/assetref"
@@ -32,15 +33,31 @@ func (w *Worker) resolveCommonAssetPayload(ctx context.Context, payload map[stri
 	if payload == nil {
 		return nil, nil
 	}
-	index := make(assetMetadataIndex)
-	if err := collectAssetMetadata(payload, index); err != nil {
-		return nil, err
-	}
 	copyPayload, err := deepCopyAssetValue(payload)
 	if err != nil {
 		return nil, fmt.Errorf("common asset resolver: deep copy payload: %w", err)
 	}
-	resolved, err := w.resolveCommonAssetValue(ctx, copyPayload, index, "", false)
+	object, ok := copyPayload.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("common asset resolver: payload is not an object")
+	}
+	return w.resolveCommonAssetPayloadMutable(ctx, object)
+}
+
+// resolveCommonAssetPayloadMutable resolves a payload in place. Callers must
+// provide an owned, mutable object. Keeping this core separate lets an
+// orchestrator perform one defensive copy at its boundary while adapters
+// that already built an isolated payload avoid a second marshal/unmarshal
+// round-trip.
+func (w *Worker) resolveCommonAssetPayloadMutable(ctx context.Context, payload map[string]interface{}) (map[string]interface{}, error) {
+	if payload == nil {
+		return nil, nil
+	}
+	index := make(assetMetadataIndex)
+	if err := collectAssetMetadata(payload, index); err != nil {
+		return nil, err
+	}
+	resolved, err := w.resolveCommonAssetValue(ctx, payload, index, &assetPath{}, false)
 	if err != nil {
 		return nil, err
 	}
@@ -51,13 +68,74 @@ func (w *Worker) resolveCommonAssetPayload(ctx context.Context, payload map[stri
 	return result, nil
 }
 
-func (w *Worker) resolveCommonAssetValue(ctx context.Context, value interface{}, index assetMetadataIndex, field string, mediaContext bool) (interface{}, error) {
+type assetPathPart struct {
+	field   string
+	index   int
+	isIndex bool
+}
+
+type assetPath struct {
+	parts []assetPathPart
+}
+
+func (p *assetPath) pushField(field string) {
+	p.parts = append(p.parts, assetPathPart{field: field})
+}
+
+func (p *assetPath) pushIndex(index int) {
+	p.parts = append(p.parts, assetPathPart{index: index, isIndex: true})
+}
+
+func (p *assetPath) pop() {
+	if len(p.parts) > 0 {
+		p.parts = p.parts[:len(p.parts)-1]
+	}
+}
+
+func (p *assetPath) empty() bool {
+	return p == nil || len(p.parts) == 0
+}
+
+func (p *assetPath) currentField() string {
+	if p == nil {
+		return ""
+	}
+	for i := len(p.parts) - 1; i >= 0; i-- {
+		if !p.parts[i].isIndex {
+			return p.parts[i].field
+		}
+	}
+	return ""
+}
+
+func (p *assetPath) String() string {
+	if p == nil || len(p.parts) == 0 {
+		return ""
+	}
+	var builder strings.Builder
+	for i, part := range p.parts {
+		if part.isIndex {
+			builder.WriteByte('[')
+			builder.WriteString(strconv.Itoa(part.index))
+			builder.WriteByte(']')
+			continue
+		}
+		if i > 0 && !part.isIndex {
+			builder.WriteByte('.')
+		}
+		builder.WriteString(part.field)
+	}
+	return builder.String()
+}
+
+func (w *Worker) resolveCommonAssetValue(ctx context.Context, value interface{}, index assetMetadataIndex, path *assetPath, mediaContext bool) (interface{}, error) {
 	switch typed := value.(type) {
 	case string:
 		ref := strings.TrimSpace(typed)
 		if ref == "" || !mediaContext {
 			return value, nil
 		}
+		field := path.String()
 		return w.resolveVerifiedAssetReference(withCacheAccessContext(ctx, "", cacheRole(field)), ref, index, field)
 	case map[string]interface{}:
 		assetContext := mediaContext || isAssetEnvelope(typed)
@@ -67,30 +145,38 @@ func (w *Worker) resolveCommonAssetValue(ctx context.Context, value interface{},
 			// reference only inside a media envelope/context; treating the
 			// provenance value as a file makes every canonical job fail before
 			// rendering with "raw URL or local path rejected".
-			if field == "" && strings.EqualFold(key, "source") {
+			if path.empty() && strings.EqualFold(key, "source") {
 				continue
 			}
+			path.pushField(key)
 			if strings.EqualFold(key, "scenes_json") {
 				encoded, ok := item.(string)
 				if ok && strings.TrimSpace(encoded) != "" {
 					var decoded interface{}
 					if err := json.Unmarshal([]byte(encoded), &decoded); err != nil {
-						return nil, fmt.Errorf("common asset resolver: %s: invalid JSON: %w", fieldPath(field, key), err)
+						pathString := path.String()
+						path.pop()
+						return nil, fmt.Errorf("common asset resolver: %s: invalid JSON: %w", pathString, err)
 					}
-					resolved, err := w.resolveCommonAssetValue(ctx, decoded, index, fieldPath(field, key), false)
+					resolved, err := w.resolveCommonAssetValue(ctx, decoded, index, path, false)
 					if err != nil {
+						path.pop()
 						return nil, err
 					}
 					encodedResolved, err := json.Marshal(resolved)
 					if err != nil {
-						return nil, fmt.Errorf("common asset resolver: %s: encode JSON: %w", fieldPath(field, key), err)
+						pathString := path.String()
+						path.pop()
+						return nil, fmt.Errorf("common asset resolver: %s: encode JSON: %w", pathString, err)
 					}
 					typed[key] = string(encodedResolved)
+					path.pop()
 					continue
 				}
 			}
 			childMedia := (assetContext && isMediaValueField(key)) || isMediaContainerField(key) || isMediaReferenceField(key)
-			resolved, err := w.resolveCommonAssetValue(ctx, item, index, fieldPath(field, key), childMedia)
+			resolved, err := w.resolveCommonAssetValue(ctx, item, index, path, childMedia)
+			path.pop()
 			if err != nil {
 				return nil, err
 			}
@@ -102,9 +188,11 @@ func (w *Worker) resolveCommonAssetValue(ctx context.Context, value interface{},
 		// whose field itself denotes media references are URI lists. Maps
 		// inside scenes/tracks are still traversed and their media fields
 		// are classified individually.
-		listMedia := isMediaReferenceField(field)
+		listMedia := isMediaReferenceField(path.currentField())
 		for i, item := range typed {
-			resolved, err := w.resolveCommonAssetValue(ctx, item, index, fmt.Sprintf("%s[%d]", field, i), listMedia)
+			path.pushIndex(i)
+			resolved, err := w.resolveCommonAssetValue(ctx, item, index, path, listMedia)
+			path.pop()
 			if err != nil {
 				return nil, err
 			}
@@ -112,9 +200,11 @@ func (w *Worker) resolveCommonAssetValue(ctx context.Context, value interface{},
 		}
 		return typed, nil
 	case []string:
-		listMedia := isMediaReferenceField(field)
+		listMedia := isMediaReferenceField(path.currentField())
 		for i, item := range typed {
-			resolved, err := w.resolveCommonAssetValue(ctx, item, index, fmt.Sprintf("%s[%d]", field, i), listMedia)
+			path.pushIndex(i)
+			resolved, err := w.resolveCommonAssetValue(ctx, item, index, path, listMedia)
+			path.pop()
 			if err != nil {
 				return nil, err
 			}
@@ -123,13 +213,16 @@ func (w *Worker) resolveCommonAssetValue(ctx context.Context, value interface{},
 		return typed, nil
 	case []map[string]interface{}:
 		for i, item := range typed {
-			resolved, err := w.resolveCommonAssetValue(ctx, item, index, fmt.Sprintf("%s[%d]", field, i), mediaContext)
+			path.pushIndex(i)
+			resolved, err := w.resolveCommonAssetValue(ctx, item, index, path, mediaContext)
+			pathString := path.String()
+			path.pop()
 			if err != nil {
 				return nil, err
 			}
 			mapValue, ok := resolved.(map[string]interface{})
 			if !ok {
-				return nil, fmt.Errorf("common asset resolver: %s[%d] is not an object", field, i)
+				return nil, fmt.Errorf("common asset resolver: %s is not an object", pathString)
 			}
 			typed[i] = mapValue
 		}
@@ -323,13 +416,6 @@ func isAssetReferenceField(field string) bool {
 	default:
 		return false
 	}
-}
-
-func fieldPath(parent, child string) string {
-	if parent == "" {
-		return child
-	}
-	return parent + "." + child
 }
 
 // parseVeloxAssetReference classifies a self-sufficient wire reference.

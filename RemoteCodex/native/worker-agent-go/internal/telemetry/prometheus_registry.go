@@ -35,6 +35,8 @@ type PrometheusMetrics struct {
 	assetCacheEntries                *GaugeVec
 	assetCacheDuplicateDownloads     *CounterVec
 	assetCacheDuplicateDownloadBytes *CounterVec
+	assetResolvePasses               *CounterVec
+	assetResolveRepairs              *CounterVec
 	leaseAcquires                    *CounterVec
 	leaseReleases                    *CounterVec
 	leaseRenewals                    *CounterVec

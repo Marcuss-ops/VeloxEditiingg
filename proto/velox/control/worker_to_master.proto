@@ -1,0 +1,412 @@
+syntax = "proto3";
+
+// Proto definition for Velox Worker-Control bidirectional stream.
+// Both master (DataServer) and worker (worker-agent-go) use this contract
+// for typed, versioned control-plane communication.
+//
+// Phase 2 (typed protobuf): message types are strongly typed with oneof
+// instead of the legacy TransportMessage { string type; Struct payload; }.
+// google.protobuf.Struct is retained only for genuinely dynamic fields
+// (extra, job_payload, params, configuration) — TaskResult.metrics is now
+// fully typed (TaskExecutionMetrics) per the scorecard-of-efficiency
+// design (taskattempts.report.go + observability.service.go).
+//
+// ProtocolVersion bumped to "v3" — old v2 workers (TaskResult.metrics as
+// google.protobuf.Struct) are no longer accepted at the gRPC handshake.
+// The PR-5 cutover is forward-only: drain the fleet before deploy.
+//
+// Phase E cutover (May 2026): the MasterToWorkerEnvelope oneof no longer
+// emits a forward-only JobAvailable notification. Wire-level field
+// number 21 is reserved-but-unused to preserve field-number compatibility
+// with previously-deployed workers/masters.
+
+package velox.control;
+
+option go_package = "velox-shared/controltransport/pb";
+
+import "google/protobuf/timestamp.proto";
+
+import "google/protobuf/struct.proto";
+import "velox/control/control_common.proto";
+import "velox/control/worker_events.proto";
+
+// ---------------------------------------------------------
+// Worker -> Master
+// ---------------------------------------------------------
+message WorkerToMasterEnvelope {
+  string message_id = 1;
+  string worker_id = 2;
+  string session_id = 3;
+  int64 sequence_number = 4;
+  google.protobuf.Timestamp sent_at = 5;
+  string protocol_version = 6;
+
+  oneof msg {
+    Hello hello = 10;
+    Heartbeat heartbeat = 11;
+    // 12 (LeaseRenewal) — superseded by TaskLeaseRenewal (23). Reserved.
+    // 13 (JobAccepted)  — superseded by TaskAccepted (20). Reserved.
+    // 14 (JobRejected)  — superseded by TaskRejected (21). Reserved.
+    // 15 (JobProgress)  — informational only; new workers use heartbeat extra.
+    TaskAccepted task_accepted = 20;
+    TaskRejected task_rejected = 21;
+    TaskResult task_result = 22;
+    TaskLeaseRenewal task_lease_renewal = 23;
+    CommandAck command_ack = 16;
+    // 17 (JobResult) — job-keyed execution report; superseded by TaskResult.
+    ArtifactUploaded artifact_uploaded = 18;
+    Goodbye goodbye = 19;
+
+    // Phase 3.3 / 3.5 (Artifact Commit Protocol) — typed
+    // declared-and-completed pipeline. The legacy ArtifactUploaded
+    // message (18) remains in place for backward compatibility with
+    // pre-v1-capability workers; the new TaskOutputDeclared /
+    // ArtifactUploadCompleted pair is the typed, fencing-aware
+    // successor and is the one referenced by CapabilityArtifactCommitV1.
+    TaskOutputDeclared task_output_declared = 32;
+    ArtifactUploadCompleted artifact_upload_completed = 33;
+
+    // Worker-side canonical asset download read-model checkpoint.
+    // The physical transfer is shared across jobs; job_ids carries the
+    // current per-job references so the master can project one transfer
+    // into multiple job_asset_refs rows without duplicating the download.
+    AssetDownloadProgress asset_download_progress = 36;
+
+    // Worker declaration that lets the master issue an early upload plan.
+    ArtifactUploadIntent artifact_upload_intent = 37;
+
+    // Worker-side prefetch lifecycle event. Emitted for future_plan_received,
+    // future_plan_applied, and prefetch_prepared so the Master can persist
+    // them into the job_events journal for fleetctl job inspect.
+    PrefetchLifecycleEvent prefetch_lifecycle_event = 38;
+  }
+
+  reserved 12, 13, 14, 15, 17, 34, 35;
+}
+
+message Hello {
+  string worker_name = 1;
+  string hostname = 2;
+  string version = 3;
+  string bundle_version = 4;
+  string bundle_hash = 5;
+  string engine_version = 6;
+  string credential_hash = 7;
+  // Capability string literals (constants, not enum, so old workers
+  // can advertise older caps without rebuilding the proto).
+  //   "artifact.commit.v1"
+  //   "task.output.declared.v1"
+  //   "artifact.upload.plan.v1"
+  //   "artifact.upload.completed.v1"
+  //   "task.commit.ack.v1"
+  //
+  // The Struct field is intentionally opaque (json-shaped map) so
+  // new capability strings ride in the wire without a regen. The
+  // canonical Go-side constants live in
+  // shared/controltransport/capabilities.go and are the wire surface
+  // — see the design note in that file for the proto-vs-impl
+  // divergence rationale.
+  google.protobuf.Struct capabilities = 8;
+  string worker_class = 9;
+  string rollout_group = 10;
+}
+
+// Heartbeat carries typed resource counters plus the typed FFmpeg
+// counters and per-attempt metrics that the master aggregates for the
+// Project Performance Scorecard. `extra` is retained ONLY for free-form
+// worker logs; canonical metrics live on the typed sub-messages.
+message Heartbeat {
+  string worker_name = 1;
+  string worker_status = 2;
+  string status = 3;
+  string current_job = 4;
+  string code_version = 5;
+  string bundle_version = 6;
+  string bundle_hash = 7;
+  string protocol_version = 8;
+  string engine_version = 9;
+  int64 jobs_completed = 10;
+  int64 jobs_failed = 11;
+  int32 active_jobs_count = 12;
+  google.protobuf.Struct extra = 13;
+  // resources: typed counters (Linux /proc reads; sampled every 5s and
+  // averaged over the heartbeat period). Empty on builds that don't ship
+  // the resource sampler (macOS dev / unit tests); missing = "unknown"
+  // on the master side, not a falsy zero.
+  WorkerResourceCounters resources = 14;
+}
+
+message CommandAck {
+  string command_id = 1;
+  string command = 2;
+  string error = 3;
+}
+
+// TaskResult is the task-native execution report.
+//
+// PR-5 (typed metrics, scorecard v1): metrics is now the typed
+// TaskExecutionMetrics message. Legacy v2 clients sent a
+// google.protobuf.Struct here; v3 master rejects v2 TaskResults at the
+// typed-field check inside handler_jobs.go (an unmarshal of the
+// structpb-shaped wire payload into TaskExecutionMetrics will produce
+// a zero-value metrics — the master surfaces a WARN log and falls back
+// to scalar counters only). See migration 054 for the canonical schema
+// on `task_attempt_metrics`.
+message SegmentTiming {
+  int32 segment_index = 1;
+  int32 scene_worker_index = 2;
+  string source_type = 3;
+  double duration_ms = 4;
+  double asset_download_ms = 5;
+  double ffmpeg_encode_ms = 6;
+  int64 source_bytes = 7;
+  int64 output_bytes = 8;
+  int64 frames_encoded = 9;
+  string codec = 10;
+  string preset = 11;
+  int32 ffmpeg_threads = 12;
+  string status = 13;
+  string error_code = 14;
+  string error_message = 15;
+  string source_url_hash = 16;
+  string cache_key = 17;
+  string metadata_json = 18;
+  double input_duration_ms = 19;
+  double output_duration_ms = 20;
+
+  // Parallelism telemetry (migration 098).
+  double started_offset_ms = 21;   // monotonic offset from attempt start to segment start
+  double finished_offset_ms = 22;  // monotonic offset from attempt start to segment end
+  int32 worker_slot = 23;          // concurrency slot that executed this segment
+  int32 cpu_threads = 24;          // FFmpeg threads allocated to this segment
+  string parallel_group = 25;      // logical grouping (e.g. "scene_0", "concat")
+  string scene_id = 26;
+  int64 frames_decoded = 27;
+  int64 frames_composited = 28;
+  double ffmpeg_speed_x = 29;
+}
+
+message TaskResult {
+  string task_id = 1;
+  string job_id = 2;
+  string attempt_id = 3;
+  string status = 4; // "succeeded" or "failed"
+  string error_code = 5;
+  string error_detail = 6;
+  TaskExecutionMetrics execution_metrics = 7;
+  repeated PhaseMarker phase_markers = 8;
+  string executor_id = 9;
+  string executor_key = 10;
+  repeated google.protobuf.Struct output_artifacts = 11;
+  string lease_id = 12;
+  int32 attempt_number = 13;
+  int32 revision = 14;
+  repeated SegmentTiming segment_timings = 15;
+
+  // PerformanceReport metadata: the worker emits exactly one report per
+  // attempt and stamps it with schema/version and a SHA-256 hash over the
+  // canonical raw report JSON. The master uses these fields for idempotency
+  // and conflict detection in task_attempt_reports.
+  int32 report_schema_version = 16;
+  int32 report_version = 17;
+  string report_hash = 18;
+
+  // Partial phase metrics captured when an attempt fails before all phases
+  // complete. Stored in task_phase_timings with status='PARTIAL' or
+  // 'FAILED' so the master can diagnose which phase/component caused the
+  // failure without losing the timings of the work already done.
+  //
+  // Observability chain / block 1: this field is LEGACY. New workers
+  // populate `phase_timings` (20) with the FULL phase list on every
+  // report (success AND failure) and mirror the failure subset here so
+  // older masters that predate field 20 keep receiving partial-phase
+  // data for failed attempts.
+  repeated PhaseTimingDetailed partial_phase_metrics = 19;
+
+  // Observability chain / block 1: the FULL ordered phase list for the
+  // attempt. The worker compiles this on every report (success and
+  // failure) via the telemetry phase recorder. The master persists the
+  // rows into task_phase_timings AND projects the event-carrying
+  // entries into the append-only task_execution_events table. The
+  // identity tuple (job/task/worker/session/snapshot/lease/executor)
+  // on each entry is stamped by the MASTER from the canonical identity
+  // tuple at ingest; worker-supplied identity fields are informational.
+  repeated PhaseTimingDetailed phase_timings = 20;
+
+  // Version of the shared TelemetryEventCatalog used to produce the
+  // detailed phase stream. Zero means a legacy worker that predates this
+  // field; the master accepts it through the compatibility path.
+  int32 telemetry_schema_version = 21;
+  // Non-overlapping worker lifecycle waterfall. Unlike phase_timings, these
+  // segments are a partition of the worker-side attempt interval and are
+  // intended for gap attribution rather than aggregate diagnostics.
+  repeated AttemptWaterfallStage waterfall = 22;
+  // Monotonic milestone timeline (elapsed_ms from attempt start). Each
+  // millisecond belongs to at most one waterfall bucket; this timeline is
+  // the source for the bucket builder and the unaccounted gap calculation.
+  repeated AttemptMilestone milestones = 23;
+  // STEP D drill-down INSIDE the asset_preparation waterfall bucket: the
+  // per-attempt asset accounting plus sub-phase wall/work sums as measured
+  // by the worker runtime. Sub-phases may overlap (parallel downloads), so
+  // they are never re-combined into a coverage number master-side; an absent
+  // message means the worker predates this field — no fabricated zeros.
+  AssetPreparationBreakdown asset_preparation = 24;
+}
+
+message AssetPreparationBreakdown {
+  // Per-attempt asset accounting.
+  int64 assets_required = 1;
+  int64 assets_unique = 2;
+  int64 cache_hits = 3;
+  int64 cache_misses = 4;
+  // Served from a verified local file without moving bytes / bytes moved now.
+  int64 ready_before_attempt = 5;
+  int64 downloaded_during_attempt = 6;
+  // Sub-phase durations, summed across per-asset resolutions. Wall vs work:
+  // download_wall_ms is Σ per-transfer windows, download_work_ms is Σ
+  // byte-moving time; with parallel downloads work_sum < wall_sum is normal.
+  int64 cache_lookup_ms = 7;
+  int64 remote_wait_ms = 8;
+  int64 remote_wait_count = 9;
+  int64 download_wall_ms = 10;
+  int64 download_work_ms = 11;
+  int64 hash_verify_ms = 12;
+  int64 metadata_probe_ms = 13;
+  int64 materialize_local_ms = 14;
+  // Byte-level attribution: derived from the single cacheResolutionSink.
+  // cache_hit_bytes counts bytes served from verified local cache;
+  // cache_miss_bytes counts bytes downloaded from remote; prefetch_hit_bytes
+  // is the subset of cache_hit_bytes where origin == prefetch.
+  int64 cache_hit_bytes = 15;
+  int64 cache_miss_bytes = 16;
+  int64 prefetch_hit_bytes = 17;
+  // Origin counters: exactly one of {prefetch_hits, warm_cache_hits,
+  // runtime_downloads} is incremented per resolution.
+  int64 prefetch_hits = 18;
+  int64 warm_cache_hits = 19;
+  int64 runtime_downloads = 20;
+  // Byte-level origin attribution.
+  int64 warm_cache_bytes = 21;
+  int64 runtime_download_bytes = 22;
+  // Total SizeBytes across all required asset resolutions.
+  int64 required_asset_bytes = 23;
+  // Epoch ms of the most recent prefetch preparation.
+  int64 latest_prepared_at_ms = 24;
+  // Epoch ms when the attempt started.
+  int64 attempt_started_at_ms = 25;
+}
+
+message AttemptWaterfallStage {
+  string name = 1;
+  google.protobuf.Timestamp started_at = 2;
+  google.protobuf.Timestamp completed_at = 3;
+  int64 duration_ms = 4;
+  string status = 5;
+}
+
+message AttemptMilestone {
+  string name = 1;
+  uint64 sequence = 2;
+  int64 elapsed_ms = 3;
+  string occurred_at = 4;
+}
+
+message TaskLeaseRenewal {
+  string task_id = 1;
+  string attempt_id = 2;
+  string lease_id = 3;
+  google.protobuf.Timestamp requested_expiry = 4;
+  string job_id = 5;
+  int32 attempt_number = 6;
+  int32 revision = 7;
+}
+
+// PhaseMarker records one canonical phase timing.
+//
+// Canonical names (load-bearing for observability.aggregate scoring):
+//   queue, asset_wait, cache_lookup, download, decode, compile,
+//   simulate, render, composite, encode, upload, finalize.
+// Workers MUST emit only these names; free-form identifiers are
+// rejected by the master's IsCanonicalPhase() guard rail at ingest.
+message PhaseMarker {
+  string name = 1;
+  google.protobuf.Timestamp started_at = 2;
+  google.protobuf.Timestamp completed_at = 3;
+  string status = 4;
+  string notes = 5;
+}
+
+// PhaseTimingDetailed is the rich, per-phase record emitted when an
+// attempt terminates before all phases complete. It carries enough
+// context (component, action, byte/frame counters, error code) to
+// diagnose failures while reusing the same task_phase_timings storage
+// as successful attempts.
+//
+// Observability chain / block 1: PhaseTimingDetailed is ALSO the unit
+// of the append-only task_execution_events timeline. Fields 14-24 add
+// the event taxonomy (origin, scope, event_type, event_name,
+// event_index) plus an echo of the executor/lease/worker identity.
+// Fields 25-34 carry repeated-event context, resource timing and an
+// optional artifact identity. The master stamps canonical identity
+// values at ingest; worker-supplied identity echoes are informational
+// and overridden from the canonical attempt tuple.
+message PhaseTimingDetailed {
+  int32 phase_order = 1;
+  string component = 2;
+  string action = 3;
+  google.protobuf.Timestamp started_at = 4;
+  google.protobuf.Timestamp completed_at = 5;
+  int64 duration_ms = 6;
+  string status = 7;
+  string error_code = 8;
+  string error_message = 9;
+  int64 bytes_in = 10;
+  int64 bytes_out = 11;
+  int64 frames = 12;
+  string metadata_json = 13;
+
+  // ── Observability chain / block 1: event taxonomy ────────────────
+  // Closed enums (constants, not enum types, so older workers can send
+  // unknown origins/scopes without a wire break):
+  //   origin: master | worker | engine | ffmpeg | upload | validation
+  //   scope:  job | task | attempt | segment | audio_track |
+  //           subtitle_track | artifact
+  string origin = 14;
+  string scope = 15;
+  // event_type: "started" | "completed" | "failed" | "progress" | ...
+  // event_name: free-form short label (e.g. "encode_segment_4").
+  string event_type = 16;
+  string event_name = 17;
+  // Monotonic per-(attempt, origin) sequence number. Combined with the
+  // master's UNIQUE(attempt_id, origin, event_index) index it makes
+  // report replays idempotent.
+  int64 event_index = 18;
+  // Canonical phase name (queue, asset_wait, cache_lookup, download,
+  // decode, compile, simulate, render, composite, encode, upload,
+  // finalize) when this event belongs to one.
+  string phase = 19;
+
+  // ── Identity echo (informational; master overrides at ingest) ────
+  string executor_id = 20;
+  int32 executor_version = 21;
+  string lease_id = 22;
+  string worker_snapshot_id = 23;
+  string worker_session_id = 24;
+
+  // Repeated-event context and resource timing. These fields are appended
+  // so fields 1-24 remain wire-compatible with existing workers/masters.
+  int32 segment_index = 25;
+  string track_kind = 26;
+  int32 track_index = 27;
+  double started_offset_ms = 28;
+  double finished_offset_ms = 29;
+  double cpu_ms = 30;
+  double queue_wait_ms = 31;
+  int64 frames_in = 32;
+  int64 frames_out = 33;
+  // Optional artifact identity for artifact-scoped events. The master
+  // still overrides identity fields from canonical database rows.
+  string artifact_id = 34;
+  // Version of the shared TelemetryEventCatalog for this event.
+  int32 telemetry_schema_version = 35;
+}

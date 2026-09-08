@@ -222,7 +222,7 @@ bool RenderEngine::renderLegacyTimeline(
             segment.output_bytes = output_bytes;
             segment.frames_encoded = outcome.pipeline.frames_encoded;
             segment.frames_decoded = outcome.pipeline.frames_decoded;
-            segment.frames_composited = outcome.pipeline.frames_encoded;
+            segment.frames_composited = outcome.pipeline.frames_composited;
             segment.status = telemetry::kStatusOk;
             segment.started_offset_ms = outcome.started_offset_ms;
             segment.finished_offset_ms = outcome.finished_offset_ms;
@@ -231,7 +231,7 @@ bool RenderEngine::renderLegacyTimeline(
             metrics_.addSegment(segment);
             frames_encoded_.fetch_add(outcome.pipeline.frames_encoded);
             frames_decoded_.fetch_add(outcome.pipeline.frames_decoded);
-            frames_composited_.fetch_add(outcome.pipeline.frames_encoded);
+            frames_composited_.fetch_add(outcome.pipeline.frames_composited);
             encode_passes_.fetch_add(1);
             temp_bytes_written_.fetch_add(output_bytes);
             segmentPaths.push_back(job.output_path);
@@ -279,7 +279,7 @@ bool RenderEngine::renderLegacyTimeline(
                         p, static_cast<int>(i + 1), static_cast<int>(totalSegments),
                         static_cast<int>(i + 1), static_cast<int>(totalSegments),
                         "building_segments", frames_encoded_.load() + reportedSegmentFrames,
-                        frames_decoded_.load(), frames_composited_.load() + reportedSegmentFrames,
+                        frames_decoded_.load(), frames_composited_.load(),
                         std::chrono::duration_cast<std::chrono::milliseconds>(
                             std::chrono::steady_clock::now() - renderStart).count());
                 };
@@ -409,6 +409,7 @@ bool RenderEngine::renderLegacyTimeline(
                     recordFramePipeline(nativeResult);
                     segmentFrames = nativeResult.frames_encoded;
                     segmentDecodedFrames = nativeResult.frames_decoded;
+                    seg.frames_composited = nativeResult.frames_composited;
                     if (!built) {
                         seg.error_message = nativeResult.error.empty()
                             ? "native frame pipeline failed" : nativeResult.error;
@@ -437,11 +438,13 @@ bool RenderEngine::renderLegacyTimeline(
                 seg.ffmpeg_encode_ms = params.copy_only ? 0.0 : ffmpegWallMs;
                 seg.frames_encoded = params.copy_only ? 0 : segmentFrames;
                 seg.frames_decoded = segmentDecodedFrames;
-                seg.frames_composited = params.copy_only ? 0 : segmentFrames;
+                if (params.copy_only) {
+                    seg.frames_composited = 0;
+                }
                 seg.ffmpeg_speed_x = segmentProgress.speed_x;
                 if (!params.copy_only) frames_encoded_.fetch_add(segmentFrames);
                 frames_decoded_.fetch_add(segmentDecodedFrames);
-                if (!params.copy_only) frames_composited_.fetch_add(segmentFrames);
+                frames_composited_.fetch_add(seg.frames_composited);
                 seg.status = telemetry::kStatusOk;
                 seg.ffmpeg_threads = 0;
                 if (encodePhase) {

@@ -97,6 +97,9 @@ add_test(NAME audio_timeline_tests COMMAND velox_audio_timeline_tests)
 
 add_executable(velox_emitter_tests
     tests/test_emitter.cpp
+    tests/test_emitter_core.cpp
+    tests/test_emitter_json.cpp
+    tests/test_emitter_integration.cpp
     src/audio/audio_plan.cpp
     src/audio/audio_benchmark.cpp
     src/telemetry/emitter.cpp

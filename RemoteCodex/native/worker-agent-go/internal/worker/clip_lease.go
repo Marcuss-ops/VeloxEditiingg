@@ -44,6 +44,8 @@ import (
 	"velox-worker-agent/internal/workercache"
 )
 
+var errLeaseBindingChanged = errors.New("worker clip lease binding changed")
+
 // ClipLease holds the set of (asset key, jobID) pairs acquired against
 // a workercache.Cache for one job. ReleaseAll releases every entry.
 // Safe to call ReleaseAll more than once — subsequent calls become
@@ -92,7 +94,7 @@ func (l *ClipLease) ValidateReady(ctx context.Context) error {
 			return fmt.Errorf("worker.ClipLease.ValidateReady(%s): %w", key, err)
 		}
 		if i >= len(l.bindings) || binding != l.bindings[i] {
-			return fmt.Errorf("worker.ClipLease.ValidateReady(%s): binding changed", key)
+			return fmt.Errorf("worker.ClipLease.ValidateReady(%s): %w", key, errLeaseBindingChanged)
 		}
 	}
 	return nil
@@ -344,8 +346,6 @@ func leaseCleanupContext(ctx context.Context) context.Context {
 // identities are bare asset_id fields, so they are not visible to the legacy
 // URL/velox-reference walker. The two sets are unioned before sorting.
 //
-// Re-marshaling cost is O(|payload|) per dispatch; for typical job
-// payloads (≤ a few kB) this is negligible relative to render-time work.
 // The lease path deliberately reads the canonical plan but never mutates it
 // or adds local paths to it.
 //
@@ -356,11 +356,7 @@ func extractAssetKeysFromJSON(payload map[string]interface{}) []string {
 	if payload == nil {
 		return nil
 	}
-	raw, err := json.Marshal(payload)
-	if err != nil {
-		return nil
-	}
-	idSet := assetref.ExtractAssetKeys(raw)
+	idSet := assetref.ExtractAssetKeysValue(payload)
 
 	// V2 is transported as a canonical JSON string inside the task payload.
 	// Walk only that document and collect exact asset_id fields; this covers

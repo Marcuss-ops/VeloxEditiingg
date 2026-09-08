@@ -16,6 +16,14 @@
 namespace fs = std::filesystem;
 
 namespace velox::file {
+namespace {
+
+const std::regex kDriveFilePathPattern(R"(/file/d/([^/]+))");
+const std::regex kDriveFileViewPattern(R"(https://drive\.google\.com/file/d/([^"/?]+))");
+const std::regex kDriveFileIDPattern(R"(/file/d/([^"/?]+))");
+const std::regex kDriveOpenIDPattern(R"(open\?id=([^"&]+))");
+
+} // namespace
 
 std::string readFile(const fs::path& path) {
     std::ifstream in(path);
@@ -151,7 +159,7 @@ std::string captureCommandOutput(const std::string& cmd) {
 
 std::string normalizeDriveUrl(const std::string& url) {
     std::smatch match;
-    if (std::regex_search(url, match, std::regex(R"(/file/d/([^/]+))"))) {
+    if (std::regex_search(url, match, kDriveFilePathPattern)) {
         return "https://drive.usercontent.google.com/download?id=" + match[1].str() + "&export=download&authuser=0";
     }
     return url;
@@ -171,19 +179,16 @@ std::string resolveDriveFolderToFileUrl(const std::string& folderUrl) {
         return {};
     }
 
-    const std::regex fileViewRe(R"(https://drive\.google\.com/file/d/([^"/?]+))");
     std::smatch match;
-    if (std::regex_search(html, match, fileViewRe) && match.size() > 1) {
+    if (std::regex_search(html, match, kDriveFileViewPattern) && match.size() > 1) {
         return normalizeDriveUrl(match[0].str());
     }
 
-    const std::regex fileIdRe(R"(/file/d/([^"/?]+))");
-    if (std::regex_search(html, match, fileIdRe) && match.size() > 1) {
+    if (std::regex_search(html, match, kDriveFileIDPattern) && match.size() > 1) {
         return "https://drive.google.com/uc?export=download&id=" + match[1].str();
     }
 
-    const std::regex openIdRe(R"(open\?id=([^"&]+))");
-    if (std::regex_search(html, match, openIdRe) && match.size() > 1) {
+    if (std::regex_search(html, match, kDriveOpenIDPattern) && match.size() > 1) {
         return "https://drive.google.com/uc?export=download&id=" + match[1].str();
     }
 

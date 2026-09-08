@@ -11,6 +11,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -20,6 +21,8 @@ import (
 	"velox-worker-agent/internal/runtimeassets"
 	"velox-worker-agent/internal/taskrunner"
 	"velox-worker-agent/internal/telemetry"
+	"velox-worker-agent/internal/workercache"
+	"velox-worker-agent/pkg/video/pipeline"
 )
 
 // runJobTask executes the actual task via the TaskRunner.
@@ -111,6 +114,7 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 	ctx = withAssetOperationTracker(ctx, assetTracker)
 	ctx = withCacheAccessContext(ctx, pte.JobID, "asset")
 	ctx = telemetry.WithCacheAccessWorkerID(ctx, w.config.WorkerID)
+	ctx = pipeline.WithNativeRenderBudget(ctx, w.nativeRenderBudget())
 	partialReport := &taskrunner.TaskExecutionReport{
 		JobID:           pte.JobID,
 		ExecutorID:      pte.ExecutorID,
@@ -133,20 +137,25 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 	// post-resolve extraction yields an empty key set and silently skips
 	// the lease for legacy clip jobs — the FASE 6 bug (0 lease acquires).
 	leaseAssetKeys := extractAssetKeysFromJSON(spec.Payload)
-	// Keep the immutable wire payload for the final protected materialization
-	// pass. The first resolve can race cache cleanup before protection exists;
-	// the second pass below must be able to re-download from the original refs.
+	// Keep the immutable wire payload available for the rare repair path. The
+	// normal path does not need another deep copy: resolveTaskAssets already
+	// returns a copy and AcquireReady validates the resulting cache binding
+	// before installing the lease.
 	var originalPayload map[string]interface{}
-	if spec.Payload != nil {
-		copied, copyErr := deepCopyAssetValue(spec.Payload)
+	loadOriginalPayload := func() error {
+		if originalPayload != nil || pte.Spec.Payload == nil {
+			return nil
+		}
+		copied, copyErr := deepCopyAssetValue(pte.Spec.Payload)
 		if copyErr != nil {
-			return failBeforeRun("asset_resolution_failed", fmt.Errorf("copy original asset payload: %w", copyErr))
+			return fmt.Errorf("copy original asset payload: %w", copyErr)
 		}
 		var ok bool
 		originalPayload, ok = copied.(map[string]interface{})
 		if !ok {
-			return failBeforeRun("asset_resolution_failed", fmt.Errorf("copy original asset payload: object expected"))
+			return fmt.Errorf("copy original asset payload: object expected")
 		}
+		return nil
 	}
 
 	// Admission gate for asset downloads (prefetch category). When RSS is
@@ -168,6 +177,7 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 		m.Mark(sharedtelemetry.MilestoneFirstAssetStarted)
 	}
 	if spec.Payload != nil {
+		telemetry.GetPrometheusMetrics().RecordAssetResolvePass()
 		assetCtx := ContextWithTaskID(ctx, pte.TaskID)
 		resolvedPayload, err := w.resolveTaskAssets(assetCtx, spec.Payload)
 		if err != nil {
@@ -204,6 +214,32 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 			return failBeforeRun("compiled_plan_asset_resolution_failed", err)
 		}
 		ctx = runtimeassets.WithBindings(ctx, bindings)
+	}
+	// Re-materialize only after the protection handoff reports that the
+	// initial resolution lost its ready binding. This preserves the TOCTOU
+	// repair without paying for a second tree walk and deep copy on every job.
+	repairAssetResolution := func(reason string) error {
+		telemetry.GetPrometheusMetrics().RecordAssetResolveRepair(reason)
+		if err := loadOriginalPayload(); err != nil {
+			return err
+		}
+		if isCompiledPlan {
+			bindings, err := w.resolveCompiledRenderPlanAssets(ctx, originalPayload)
+			if err != nil {
+				return err
+			}
+			ctx = runtimeassets.WithBindings(ctx, bindings)
+			return nil
+		}
+		if originalPayload == nil {
+			return nil
+		}
+		resolvedPayload, err := w.resolveTaskAssets(ContextWithTaskID(ctx, pte.TaskID), originalPayload)
+		if err != nil {
+			return err
+		}
+		spec.Payload = resolvedPayload
+		return nil
 	}
 
 	// Operational lifecycle: render plan built (V2) or legacy payload ready.
@@ -254,7 +290,21 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 				if w.config != nil {
 					workerID = w.config.WorkerID
 				}
-				v2Reservation, reservationErr = reserveJobAssetProtection(ctx, reservationStore, workerID, pte.JobID, pte.AttemptID, assetKeys, time.Now().UTC().Add(compiledPlanReservationTTL))
+				for attempt := 0; attempt < 2; attempt++ {
+					v2Reservation, reservationErr = reserveJobAssetProtection(ctx, reservationStore, workerID, pte.JobID, pte.AttemptID, assetKeys, time.Now().UTC().Add(compiledPlanReservationTTL))
+					if reservationErr == nil {
+						break
+					}
+					if !errors.Is(reservationErr, workercache.ErrNotFound) || attempt == 1 {
+						break
+					}
+					if resolveErr := repairAssetResolution("reservation_missing"); resolveErr != nil {
+						if isCompiledPlan {
+							return failBeforeRun("compiled_plan_asset_resolution_failed", resolveErr)
+						}
+						return failBeforeRun("asset_resolution_failed", resolveErr)
+					}
+				}
 				if reservationErr != nil {
 					return failBeforeRun("clip_reservation_failed", fmt.Errorf("reserve job asset protection: %w", reservationErr))
 				}
@@ -275,23 +325,16 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 					}
 				}()
 			}
-			// Re-materialize from the immutable wire payload after reservation.
-			// This repairs a blob evicted between the initial resolve and the
-			// protection handoff, and ensures runtime bindings are never stale.
-			if isCompiledPlan {
-				bindings, resolveErr := w.resolveCompiledRenderPlanAssets(ctx, originalPayload)
-				if resolveErr != nil {
-					return failBeforeRun("compiled_plan_asset_resolution_failed", resolveErr)
-				}
-				ctx = runtimeassets.WithBindings(ctx, bindings)
-			} else if originalPayload != nil {
-				resolvedPayload, resolveErr := w.resolveTaskAssets(ContextWithTaskID(ctx, pte.TaskID), originalPayload)
-				if resolveErr != nil {
+			leased, leaseErr := AcquireJobClips(ctx, w.clipCache, pte.JobID, assetKeys)
+			if leaseErr != nil && (errors.Is(leaseErr, workercache.ErrAssetNotReady) || errors.Is(leaseErr, workercache.ErrNotFound)) {
+				if resolveErr := repairAssetResolution("asset_not_ready"); resolveErr != nil {
+					if isCompiledPlan {
+						return failBeforeRun("compiled_plan_asset_resolution_failed", resolveErr)
+					}
 					return failBeforeRun("asset_resolution_failed", resolveErr)
 				}
-				spec.Payload = resolvedPayload
+				leased, leaseErr = AcquireJobClips(ctx, w.clipCache, pte.JobID, assetKeys)
 			}
-			leased, leaseErr := AcquireJobClips(ctx, w.clipCache, pte.JobID, assetKeys)
 			if leaseErr != nil {
 				return failBeforeRun("clip_lease_failed", fmt.Errorf("acquire clip lease: %w", leaseErr))
 			}
@@ -331,7 +374,27 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 
 	if clipLease != nil {
 		if err := clipLease.ValidateReady(ctx); err != nil {
-			return failBeforeRun("asset_binding_not_ready", err)
+			if !errors.Is(err, errLeaseBindingChanged) && !errors.Is(err, workercache.ErrAssetNotReady) {
+				return failBeforeRun("asset_binding_not_ready", err)
+			}
+			if releaseErr := clipLease.ReleaseAll(leaseCleanupContext(ctx)); releaseErr != nil {
+				return failBeforeRun("clip_lease_failed", fmt.Errorf("release stale clip lease: %w", releaseErr))
+			}
+			clipLease = nil
+			if resolveErr := repairAssetResolution("binding_changed"); resolveErr != nil {
+				if isCompiledPlan {
+					return failBeforeRun("compiled_plan_asset_resolution_failed", resolveErr)
+				}
+				return failBeforeRun("asset_resolution_failed", resolveErr)
+			}
+			repairedLease, acquireErr := AcquireJobClips(ctx, w.clipCache, pte.JobID, leaseAssetKeys)
+			if acquireErr != nil {
+				return failBeforeRun("clip_lease_failed", fmt.Errorf("acquire repaired clip lease: %w", acquireErr))
+			}
+			clipLease = repairedLease
+			if err := clipLease.ValidateReady(ctx); err != nil {
+				return failBeforeRun("asset_binding_not_ready", err)
+			}
 		}
 	}
 	if m := telemetry.MilestoneRecorderFromContext(ctx); m != nil {

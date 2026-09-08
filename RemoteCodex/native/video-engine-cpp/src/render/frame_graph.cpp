@@ -79,7 +79,15 @@ std::vector<FrameOp> FrameGraph::opsActiveAt(int64_t frame_number) const {
 
 bool FrameGraph::apply(PixelFrame& frame, int64_t frame_number,
                        std::string* error) const {
-    if (ops_.empty()) {
+	return apply(frame, frame_number, nullptr, error);
+}
+
+bool FrameGraph::apply(PixelFrame& frame, int64_t frame_number,
+                       int* applied_ops, std::string* error) const {
+	if (applied_ops != nullptr) {
+		*applied_ops = 0;
+	}
+	if (ops_.empty()) {
         return true;
     }
     if (kernels_ == nullptr) {
@@ -110,6 +118,9 @@ bool FrameGraph::apply(PixelFrame& frame, int64_t frame_number,
             }
             return false;
         }
+		if (applied_ops != nullptr) {
+			++*applied_ops;
+		}
     }
     return true;
 }

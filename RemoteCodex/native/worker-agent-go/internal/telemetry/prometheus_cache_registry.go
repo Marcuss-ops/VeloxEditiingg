@@ -21,6 +21,8 @@ func initPrometheusCacheFamily(m *PrometheusMetrics) {
 	m.assetCacheEntries = &GaugeVec{Name: "velox_cache_entries", Help: "Current local asset cache entries", values: make(map[string]float64)}
 	m.assetCacheDuplicateDownloads = &CounterVec{Name: "velox_cache_duplicate_downloads_total", Help: "Concurrent duplicate asset downloads coalesced by AssetDownloadManager", values: map[string]float64{"asset": 0}}
 	m.assetCacheDuplicateDownloadBytes = &CounterVec{Name: "velox_cache_duplicate_download_bytes_total", Help: "Expected bytes a duplicate request would have consumed when coalesced by AssetDownloadManager", values: map[string]float64{"asset": 0}}
+	m.assetResolvePasses = &CounterVec{Name: "velox_asset_resolve_passes_total", Help: "Worker asset materialization passes", values: map[string]float64{"total": 0}}
+	m.assetResolveRepairs = &CounterVec{Name: "velox_asset_resolve_repairs_total", Help: "Worker asset materialization repairs by bounded reason", Label: "reason", values: map[string]float64{"reservation_missing": 0, "asset_not_ready": 0, "binding_changed": 0, "other": 0}}
 
 	m.leaseAcquires = &CounterVec{Name: "velox_cache_lease_acquires_total", Help: "Cache lease acquisition attempts by result", Label: "result", values: map[string]float64{"success": 0, "failure": 0}}
 	m.leaseReleases = &CounterVec{Name: "velox_cache_lease_releases_total", Help: "Cache lease release attempts by result", Label: "result", values: map[string]float64{"success": 0, "failure": 0, "not_found": 0}}
@@ -71,6 +73,8 @@ func exportPrometheusCacheFamily(m *PrometheusMetrics) string {
 		m.assetCacheEntries.export() +
 		m.assetCacheDuplicateDownloads.export() +
 		m.assetCacheDuplicateDownloadBytes.export() +
+		m.assetResolvePasses.export() +
+		m.assetResolveRepairs.export() +
 		m.leaseAcquires.export() +
 		m.leaseReleases.export() +
 		m.leaseRenewals.export() +

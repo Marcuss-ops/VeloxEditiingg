@@ -115,6 +115,9 @@ public:
     bool apply(PixelFrame& frame, int64_t frame_number,
                std::string* error = nullptr) const;
 
+    bool apply(PixelFrame& frame, int64_t frame_number, int* applied_ops,
+               std::string* error) const;
+
 private:
     std::vector<FrameOp> ops_;
     const PixelKernelRegistry* kernels_;

@@ -69,7 +69,7 @@ func (w *Worker) resolveCompiledRenderPlanAssets(ctx context.Context, payload ma
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			resolvedPayload, resolveErr := w.resolveCommonAssetPayload(ctx, map[string]interface{}{
+			resolvedPayload, resolveErr := w.resolveCommonAssetPayloadMutable(ctx, map[string]interface{}{
 				"assets": []interface{}{envelope},
 			})
 			if resolveErr != nil {

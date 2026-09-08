@@ -61,16 +61,22 @@ echo "[gen-proto] protoc-gen-go = $(protoc-gen-go --version 2>/dev/null || echo 
 # `--go_opt=module=velox-shared` redirection below is the canonical fix.
 rm -rf shared/controltransport/pb/velox-shared shared/velox-shared
 
-# --- Regenerate the worker_control descriptor pair --------------------------
+# --- Regenerate the worker-control descriptor files -------------------------
 # --go_opt=module=velox-shared strips the `velox-shared` module prefix from
-# the output path so the file lands at the canonical location
-# shared/controltransport/pb/worker_control.pb.go (and ..._grpc.pb.go if the
-# grpc plugin is installed).
+# the output path so the files land at the canonical location
+# shared/controltransport/pb/*.pb.go (and ..._grpc.pb.go if the grpc plugin
+# is installed). The original single worker_control.proto was split into
+# three files (worker_to_master / master_to_worker / control_common); all
+# three share the same go_package, so protoc emits one pb.go per proto file
+# into the same Go package.
 GEN_FLAGS=(
   --proto_path=proto
   --go_out=shared
   --go_opt=module=velox-shared
-  proto/velox/control/worker_control.proto
+  proto/velox/control/worker_to_master.proto
+  proto/velox/control/master_to_worker.proto
+  proto/velox/control/control_common.proto
+  proto/velox/control/worker_events.proto
 )
 
 if command -v protoc-gen-go-grpc >/dev/null 2>&1; then
@@ -112,14 +118,16 @@ for f in $generated; do
   echo "  - $f ($size bytes)"
 done
 
-# Sanity check: surface if the canonical file is missing despite the regen
+# Sanity check: surface if the canonical pb.go files are missing despite the regen
 # succeeding — typically points to a go_package / module mismatch.
-if [ ! -f shared/controltransport/pb/worker_control.pb.go ]; then
-  echo "[gen-proto] FATAL: worker_control.pb.go did NOT land at the canonical path." >&2
-  echo "Listed above are the actual landing paths. Investigate go_package" >&2
-  echo "vs --go_opt=module mapping before committing." >&2
-  exit 1
-fi
+for pb in worker_to_master master_to_worker control_common worker_events; do
+  if [ ! -f "shared/controltransport/pb/${pb}.pb.go" ]; then
+    echo "[gen-proto] FATAL: ${pb}.pb.go did NOT land at the canonical path." >&2
+    echo "Listed above are the actual landing paths. Investigate go_package" >&2
+    echo "vs --go_opt=module mapping before committing." >&2
+    exit 1
+  fi
+done
 
-echo "[gen-proto] OK: worker_control.pb.go landed at the canonical path."
+echo "[gen-proto] OK: worker-control pb.go files landed at the canonical path."
 echo "[gen-proto] next step: git diff shared/controltransport/pb/ to review changes."

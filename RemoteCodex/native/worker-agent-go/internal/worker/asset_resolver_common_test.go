@@ -151,6 +151,29 @@ func TestCommonAssetResolverColdWarmCacheAcrossMediaKinds(t *testing.T) {
 	}
 }
 
+func TestResolveTaskAssetsDoesNotMutateInput(t *testing.T) {
+	w := &Worker{}
+	payload := map[string]interface{}{
+		"title":      "immutable",
+		"parameters": `{"nested":{"value":42}}`,
+		"scenes": []interface{}{map[string]interface{}{
+			"title": "plain text",
+		}},
+	}
+	before := mustJSON(t, payload)
+	resolved, err := w.resolveTaskAssets(context.Background(), payload)
+	if err != nil {
+		t.Fatalf("resolve task assets: %v", err)
+	}
+	if got := mustJSON(t, payload); got != before {
+		t.Fatalf("resolveTaskAssets mutated input: before=%s after=%s", before, got)
+	}
+	parameters, ok := resolved["parameters"].(map[string]interface{})
+	if !ok || parameters["nested"].(map[string]interface{})["value"] != float64(42) {
+		t.Fatalf("nested JSON payload was not decoded: %#v", resolved["parameters"])
+	}
+}
+
 func TestCommonAssetResolverSchemeIsKindAuthorityOverLegacyAnnotation(t *testing.T) {
 	body := []byte("deferred-drive-bytes")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -37,6 +37,7 @@ struct StageResult {
     std::string error;
     int64_t frames_decoded{0};
     int64_t frames_encoded{0};
+    int64_t frames_composited{0};
     int64_t transform_bypass_frames{0};
     int64_t peak_pool_usage{0};
     int64_t peak_render_queue{0};

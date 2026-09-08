@@ -40,6 +40,7 @@ StageResult runStages(const StageConfig& config) {
     std::string stage_error;
     std::atomic<int64_t> decoded_frames{0};
     std::atomic<int64_t> encoded_packets{0};
+    std::atomic<int64_t> composited_frames{0};
     std::atomic<int64_t> bypass_frames{0};
     std::atomic<int64_t> producer_busy_ns{0};
     std::atomic<int64_t> consumer_elapsed_ns{0};
@@ -148,10 +149,14 @@ StageResult runStages(const StageConfig& config) {
             if (filter_chain.bypass()) {
                 bypass_frames.fetch_add(1);
             }
-            if (!compositor.apply(rendered, frame_index, config.frame_graph, render_error)) {
+            int applied_ops = 0;
+            if (!compositor.apply(rendered, frame_index, config.frame_graph, render_error, &applied_ops)) {
                 fail_stage("frame graph apply failed: " + render_error);
                 pool.release(index);
                 break;
+            }
+            if (applied_ops > 0) {
+                composited_frames.fetch_add(1);
             }
             rendered->pts = frame_index++;
             rendered->pict_type = AV_PICTURE_TYPE_NONE;
@@ -204,6 +209,7 @@ StageResult runStages(const StageConfig& config) {
     result.success = true;
     result.frames_decoded = decoded_frames.load();
     result.frames_encoded = encoded_packets.load();
+    result.frames_composited = composited_frames.load();
     result.transform_bypass_frames = bypass_frames.load();
     result.peak_pool_usage = pool.peakUsage();
     result.peak_render_queue = render_queue.highWater();

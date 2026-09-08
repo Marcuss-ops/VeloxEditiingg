@@ -82,7 +82,7 @@ void emitFramePipelineSidecar(const velox::media::FramePipelineConfig& config,
     s << ",\"frames_decoded\":" << pipeline.frames_decoded;
     s << ",\"zero_copy_decoded_frames\":" << pipeline.zero_copy_decoded_frames;
     s << ",\"transform_bypass_frames\":" << pipeline.transform_bypass_frames;
-    s << ",\"frames_composited\":" << pipeline.frames_encoded;
+    s << ",\"frames_composited\":" << pipeline.frames_composited;
     s << ",\"encode_passes\":1";
     s << ",\"concat_mode\":\"frame_pipeline\"";
     s << ",\"temp_bytes\":0";
@@ -150,6 +150,7 @@ int cmdRenderFrames(int argc, char** argv) {
               << config.output_path.string()
               << "\",\"frames_decoded\":" << pipeline.frames_decoded
               << ",\"frames_encoded\":" << pipeline.frames_encoded
+              << ",\"frames_composited\":" << pipeline.frames_composited
               << ",\"zero_copy_decoded_frames\":" << pipeline.zero_copy_decoded_frames
               << ",\"transform_bypass_frames\":" << pipeline.transform_bypass_frames
               << ",\"encode_contexts\":" << pipeline.encode_contexts_created

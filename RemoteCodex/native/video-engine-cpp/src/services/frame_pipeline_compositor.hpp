@@ -25,7 +25,7 @@ public:
 
     bool apply(AVFrame* frame, int64_t frame_index,
                const velox::render::FrameGraph* graph,
-               std::string& error) const;
+               std::string& error, int* applied_ops = nullptr) const;
     CompositorBackend backend() const { return backend_; }
 
 private:

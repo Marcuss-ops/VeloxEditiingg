@@ -3,6 +3,7 @@
 #include "velox/services/media_utils.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -10,6 +11,8 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <thread>
+#include <vector>
 
 extern "C" {
 #include <libavcodec/codec_id.h>
@@ -116,6 +119,25 @@ int main() {
                    "video frame rate is preserved");
         }
     }
+
+    // Cache hits and misses must remain safe when probes for the same file
+    // and independent files arrive concurrently. In particular, filesystem
+    // metadata syscalls must not serialize under the cache mutex.
+    std::atomic<int> probeFailures{0};
+    std::vector<std::thread> probeThreads;
+    for (int threadIndex = 0; threadIndex < 8; ++threadIndex) {
+        probeThreads.emplace_back([&, threadIndex] {
+            const fs::path& target = (threadIndex % 2 == 0) ? video : audio;
+            for (int iteration = 0; iteration < 50; ++iteration) {
+                if (!velox::media::probeMediaInProcess(target).has_value()) {
+                    probeFailures.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+        });
+    }
+    for (auto& thread : probeThreads) thread.join();
+    expect(probeFailures.load(std::memory_order_relaxed) == 0,
+           "concurrent media probes remain valid");
 
     expect(velox::media::probeMediaDurationSeconds(video) > 1.0,
            "duration helper uses LibAV without ffprobe");

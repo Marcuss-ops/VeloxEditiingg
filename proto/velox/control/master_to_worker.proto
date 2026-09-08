@@ -1,0 +1,185 @@
+syntax = "proto3";
+
+// Proto definition for Velox Worker-Control bidirectional stream.
+// Both master (DataServer) and worker (worker-agent-go) use this contract
+// for typed, versioned control-plane communication.
+//
+// Phase 2 (typed protobuf): message types are strongly typed with oneof
+// instead of the legacy TransportMessage { string type; Struct payload; }.
+// google.protobuf.Struct is retained only for genuinely dynamic fields
+// (extra, job_payload, params, configuration) — TaskResult.metrics is now
+// fully typed (TaskExecutionMetrics) per the scorecard-of-efficiency
+// design (taskattempts.report.go + observability.service.go).
+//
+// ProtocolVersion bumped to "v3" — old v2 workers (TaskResult.metrics as
+// google.protobuf.Struct) are no longer accepted at the gRPC handshake.
+// The PR-5 cutover is forward-only: drain the fleet before deploy.
+//
+// Phase E cutover (May 2026): the MasterToWorkerEnvelope oneof no longer
+// emits a forward-only JobAvailable notification. Wire-level field
+// number 21 is reserved-but-unused to preserve field-number compatibility
+// with previously-deployed workers/masters.
+
+package velox.control;
+
+option go_package = "velox-shared/controltransport/pb";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
+import "velox/control/control_common.proto";
+
+// ---------------------------------------------------------
+// Master -> Worker
+// ---------------------------------------------------------
+message MasterToWorkerEnvelope {
+  string message_id = 1;
+  string worker_id = 2;
+  string session_id = 3;
+  int64 sequence_number = 4;
+  google.protobuf.Timestamp sent_at = 5;
+  string protocol_version = 6;
+
+  oneof msg {
+    HelloAck hello_ack = 20;
+    // 22 (JobOffer) — superseded by TaskOffer (30). Reserved.
+    TaskOffer task_offer = 30;
+    // 23 (JobLeaseGranted) — superseded by TaskLeaseGranted (31). Reserved.
+    TaskLeaseGranted task_lease_granted = 31;
+    Command command = 24;
+    CancelJob cancel_job = 25;
+    Drain drain = 26;
+    ConfigurationUpdate configuration_update = 27;
+    LeaseRevoked lease_revoked = 28;
+    Ping ping = 29;
+
+    // Progressive artifact upload intent/plan. These messages are additive;
+    // legacy TaskOutputDeclared/ArtifactUploadPlan remain unchanged.
+    ArtifactEarlyUploadPlan artifact_early_upload_plan = 39;
+
+    // Phase 3.4 / 3.6 (Artifact Commit Protocol) — typed
+    // upload-plan-and-commit-ack pipeline. The UploadPlan
+    // (Fase 3.4) carries the per-manifest upload targets plus the
+    // master's canonical commit_id; TaskCommitAck (Fase 3.6) is
+    // the master's terminal signal that the attempt is durable
+    // and the worker can clean up the local spool row.
+    ArtifactUploadPlan artifact_upload_plan = 32;
+    TaskCommitAck task_commit_ack = 33;
+    // Acknowledgement sent by the master after processing a TaskResult.
+    // Carries the attempt_id and an optional error (e.g. "report_conflict").
+    TaskResultAck task_result_ack = 35;
+
+    // Versioned full snapshot of the worker-scoped future asset plan.
+    // The worker reconciles this snapshot; it is not a second download
+    // protocol. Physical transfers remain owned by the canonical cache
+    // resolver / AssetDownloadManager.
+    FutureAssetPlan future_asset_plan = 36;
+    // Low-latency cancellation hint. The next FutureAssetPlan remains the
+    // reconciliation source of truth when this message is lost.
+    CancelPrefetch cancel_prefetch = 37;
+  }
+
+  reserved 21, 22, 23, 34;
+}
+
+message HelloAck {}
+
+message TaskOffer {
+  string task_id = 1;
+  string job_id = 2;
+  string attempt_id = 3;
+  string executor_id = 4;
+  int32 executor_version = 5;
+  google.protobuf.Struct task_spec = 6;
+  string lease_id = 7;
+  google.protobuf.Timestamp lease_deadline = 8;
+  google.protobuf.Struct requirements = 9;
+  google.protobuf.Struct output_contract = 10;
+  int32 attempt_number = 11;
+  int32 revision = 12;
+  int32 job_revision = 13;
+}
+
+
+message TaskLeaseGranted {
+  string task_id = 1;
+  string lease_id = 2;
+  string attempt_id = 3;
+  string job_id = 4;
+  int32 attempt_number = 5;
+  int32 revision = 6;
+  int32 job_revision = 7;
+}
+
+message Command {
+  string command_id = 1;
+  string command = 2;
+  google.protobuf.Timestamp timestamp = 3;
+  google.protobuf.Struct params = 4;
+}
+
+message CancelJob {
+  string job_id = 1;
+}
+
+message Drain {
+  string reason = 1;
+}
+
+message ConfigurationUpdate {
+  google.protobuf.Struct configuration = 1;
+}
+
+message LeaseRevoked {
+  string job_id = 1;
+  string reason = 2;
+}
+
+message Ping {}
+
+// FutureAssetPlan is a complete, versioned worker-scoped snapshot. The
+// planner keeps prefetch eligibility (distance <= 3) separate from cache
+// retention protection (lookahead <= 10). No TaskState is changed by this
+// message.
+message FutureAssetPlan {
+  uint64 version = 1;
+  string plan_id = 2;
+  string worker_id = 3;
+  google.protobuf.Timestamp generated_at = 4;
+  google.protobuf.Timestamp expires_at = 5;
+  string current_job_id = 6;
+  repeated PrefetchJob prefetch_jobs = 7;
+  repeated ProtectedFutureAsset protect_assets = 8;
+  int32 prefetch_horizon = 9;
+  int32 protection_lookahead = 10;
+}
+
+message PrefetchJob {
+  string job_id = 1;
+  string task_id = 2;
+  string reservation_id = 3;
+  int32 task_revision = 4;
+  int32 distance = 5;
+  repeated PrefetchAsset assets = 6;
+}
+
+message PrefetchAsset {
+  string asset_key = 1;
+  string asset_id = 2;
+  string sha256 = 3;
+  int64 size_bytes = 4;
+  string mime_type = 5;
+  string role = 6;
+}
+
+message ProtectedFutureAsset {
+  string asset_key = 1;
+  int32 future_ref_count = 2;
+  int32 next_use_distance = 3;
+}
+
+message CancelPrefetch {
+  string job_id = 1;
+  string reservation_id = 2;
+  uint64 plan_version = 3;
+  string reason = 4;
+}

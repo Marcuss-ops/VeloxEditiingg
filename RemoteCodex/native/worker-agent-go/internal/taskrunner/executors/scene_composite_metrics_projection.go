@@ -30,6 +30,11 @@ func projectRunMetrics(metrics map[string]interface{}, pipelineID string, pipeli
 	metrics["pipeline.timeline_items"] = int64(run.TimelineItems)
 	metrics["pipeline.audio_tracks"] = int64(run.AudioTracks)
 	metrics["native.total_ms"] = run.RenderMetrics.TotalMs
+	metrics["native.effective_cpu_cores"] = run.RenderMetrics.EffectiveCPUCores
+	metrics["native.render_cpu_budget"] = run.RenderMetrics.RenderCPUBudget
+	metrics["native.decoder_threads"] = run.RenderMetrics.DecoderThreads
+	metrics["native.encoder_threads"] = run.RenderMetrics.EncoderThreads
+	metrics["native.segment_workers"] = run.RenderMetrics.SegmentWorkers
 	metrics["native.plan_write_ms"] = run.RenderMetrics.PlanWriteMs
 	metrics["native.process_wait_ms"] = run.RenderMetrics.ProcessWaitMs
 	metrics["process.engine_spawn_count"] = run.RenderMetrics.EngineSpawnCount

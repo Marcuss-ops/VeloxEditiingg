@@ -4,6 +4,7 @@ import (
 	"math"
 	"runtime"
 
+	"velox-worker-agent/internal/telemetry/collectors"
 	"velox-worker-agent/pkg/video/pipeline"
 )
 
@@ -63,6 +64,21 @@ func detectMaxParallelJobs() int {
 	}
 	parallel := int(math.Max(1, math.Min(8, float64(cpuCount/2))))
 	return parallel
+}
+
+func (w *Worker) nativeRenderBudget() pipeline.NativeRenderBudget {
+	concurrent := 1
+	if w != nil && w.concurrencyLimiter != nil && w.concurrencyLimiter.MaxActiveJobs() > 0 {
+		concurrent = w.concurrencyLimiter.MaxActiveJobs()
+	}
+	if w != nil && w.config != nil {
+		if w.config.RenderSlots > 0 {
+			concurrent = w.config.RenderSlots
+		} else if w.config.MaxActiveJobs > 0 {
+			concurrent = w.config.MaxActiveJobs
+		}
+	}
+	return pipeline.ComputeNativeRenderBudget(collectors.DetectCPUCapacity().EffectiveCPUCount, concurrent)
 }
 
 // TaskPhase classifies a task's executor into a concurrency pool.

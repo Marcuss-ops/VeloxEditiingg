@@ -312,6 +312,7 @@ bool renderFrames(const FramePipelineConfig& config, FramePipelineResult* result
     result->output_durable = durable;
     result->frames_decoded = stages.frames_decoded;
     result->frames_encoded = stages.frames_encoded;
+    result->frames_composited = stages.frames_composited;
     result->zero_copy_decoded_frames = stages.frames_decoded;
     result->transform_bypass_frames = stages.transform_bypass_frames;
     result->peak_pool_usage = stages.peak_pool_usage;

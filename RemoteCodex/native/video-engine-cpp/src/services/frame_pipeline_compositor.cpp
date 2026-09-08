@@ -6,7 +6,10 @@ namespace velox::media::pipeline_detail {
 
 bool CompositorStage::apply(AVFrame* frame, int64_t frame_index,
                             const velox::render::FrameGraph* graph,
-                            std::string& error) const {
+                            std::string& error, int* applied_ops) const {
+	if (applied_ops != nullptr) {
+		*applied_ops = 0;
+	}
     if (backend_ == CompositorBackend::Cuda) {
         error = "CUDA frame compositor backend is not implemented";
         return false;
@@ -22,7 +25,7 @@ bool CompositorStage::apply(AVFrame* frame, int64_t frame_index,
         pixel_frame.planes[plane].data = frame->data[plane];
         pixel_frame.planes[plane].stride = frame->linesize[plane];
     }
-    return graph->apply(pixel_frame, frame_index, &error);
+    return graph->apply(pixel_frame, frame_index, applied_ops, &error);
 }
 
 } // namespace velox::media::pipeline_detail

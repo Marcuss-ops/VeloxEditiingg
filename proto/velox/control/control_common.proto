@@ -1,0 +1,459 @@
+syntax = "proto3";
+
+// Shared message definitions for the Velox Worker-Control bidirectional
+// stream (split from worker_control.proto). Both the worker-to-master and
+// master-to-worker envelope files import this file.
+//
+// Contains: task acceptance/rejection receipts, the Artifact Commit
+// Protocol (Fase 3.3-3.6) messages, and the typed worker metrics
+// (PR-5 / scorecard v1).
+
+package velox.control;
+
+option go_package = "velox-shared/controltransport/pb";
+
+import "google/protobuf/timestamp.proto";
+
+message TaskAccepted {
+  string task_id = 1;
+  string job_id = 2;
+  string attempt_id = 3;
+  string lease_id = 4;
+  int32 attempt_number = 5;
+  int32 revision = 6;
+}
+
+message TaskRejected {
+  string task_id = 1;
+  string reason = 2;
+  string attempt_id = 3;
+  string lease_id = 4;
+  int32 revision = 5;
+  string job_id = 6;
+  int32 attempt_number = 7;
+}
+
+// ---------------------------------------------------------
+// Artifact Commit Protocol (Fase 3.3-3.6) — typed
+// declare / plan / complete / ack pipeline.
+//
+// Wire flow (per docs/completion-protocol.md):
+//
+//   1. worker → TaskOutputDeclared (32): after RENDERING the
+//      worker-side spool row is in OUTPUT_READY; the worker
+//      publishes the per-file manifest to the master.
+//   2. master → ArtifactUploadPlan (32): the master stamps
+//      attempt_commits with a canonical commit_id and replies
+//      with the per-manifest upload targets (URLs, chunk size,
+//      bearer token, expiry). The worker stores commit_id +
+//      upload_id on the spool row.
+//   3. worker → ArtifactUploadCompleted (33): the worker has
+//      finished the multipart transfer and reports the
+//      uploaded_bytes + worker_sha256 for the master's
+//      verification pass.
+//   4. master → TaskCommitAck (33): the master has durably
+//      committed the attempt; the worker can CLEAN the local
+//      spool row + delete the on-disk file.
+//
+// All four messages are gated by their respective capability
+// strings in shared/controltransport/capabilities.go; a v2
+// worker that has not published capability v1 will be routed
+// to the legacy ArtifactUploaded path by the master's dispatch.
+// ---------------------------------------------------------
+
+// ArtifactUploadIntent announces an artifact before its final SHA/size are
+// available, allowing a negotiated progressive upload to begin while the
+// renderer is still writing the output. It is intentionally separate from
+// TaskOutputDeclared so existing consumers retain their final-identity contract.
+message ArtifactUploadIntent {
+  string task_id = 1;
+  string attempt_id = 2;
+  string lease_id = 3;
+  string worker_spool_key = 4;
+  string output_kind = 5;
+  string logical_name = 6;
+  string mime_type = 7;
+  string profile_id = 8;
+  int64 expected_size_bytes = 9;
+}
+
+// ArtifactEarlyUploadPlan is returned for an ArtifactUploadIntent. The final
+// SHA is deliberately absent and is supplied only during final completion.
+message ArtifactEarlyUploadPlan {
+  string task_id = 1;
+  string attempt_id = 2;
+  string artifact_id = 3;
+  string upload_id = 4;
+  string transport_id = 5;
+  string upload_url = 6;
+  int64 chunk_size = 7;
+  string commit_token = 8;
+}
+
+// OutputManifest is the per-file declaration carried inside
+// TaskOutputDeclared. The shape is the canonical one the master
+// stores on attempt_declarations: a logical output identity
+// (OutputKind, LogicalName, MimeType) + content hash (SHA256,
+// SizeBytes) + the worker-side identity (WorkerSpoolKey) the
+// master returns verbatim in the matching UploadTarget.
+//
+// proto3 field-number convention: most-frequently-set fields
+// get the lowest numbers (1-15 pack into one byte on the wire).
+// The master needs OutputKind+LogicalName for every row of every
+// attempt, so they lead.
+message OutputManifest {
+  string output_kind = 1;       // "final_video" | "thumbnail" | ...
+  string logical_name = 2;      // "out.mp4" — also the on-disk filename
+  string mime_type = 3;         // "video/mp4" | "image/png" | ...
+  int64 size_bytes = 4;         // total file size in bytes
+  string sha256 = 5;            // lowercase hex (64 chars)
+  string worker_spool_key = 6;  // worker's per-attempt UUID; carries
+                                // through to the UploadTarget so the
+                                // worker can correlate the plan back
+                                // to its local spool row
+}
+
+// UploadTarget is the per-manifest upload instructions carried
+// inside ArtifactUploadPlan. The transport_id is opaque to the
+// worker; it resolves to a transport plugin via the master's
+// transport registry (Fase 3.7) and is reported back verbatim
+// on the ArtifactUploadCompleted call.
+message UploadTarget {
+  string declaration_id = 1;    // master's attempt_declarations.id
+  string artifact_id = 2;       // master's attempt_artifacts.id (post-commit)
+  string upload_id = 3;         // worker's row key for the upload window
+  string transport_id = 4;      // "s3" | "gcs" | "azblob" | ...
+  string upload_url = 5;        // signed URL the worker PUTs to
+  int64 chunk_size = 6;         // recommended multipart chunk size
+  int64 expires_at_unix = 7;    // unix-seconds; upload window deadline
+}
+
+// TaskOutputDeclared is the worker's first message post-render.
+// The master replies with ArtifactUploadPlan (32). FenceTuple
+// (worker_id, lease_id, attempt_id, task_id, revision) is carried
+// verbatim across the four messages so the master can CAS-gate
+// every transition without an extra roundtrip.
+message TaskOutputDeclared {
+  string task_id = 1;
+  string job_id = 2;
+  string attempt_id = 3;
+  string lease_id = 4;
+  int32 attempt_number = 5;
+  int32 revision = 6;
+  repeated OutputManifest manifests = 7;
+}
+
+// ArtifactUploadPlan is the master's reply to TaskOutputDeclared.
+// The master stamps attempt_commits with a canonical commit_id
+// and returns the per-manifest upload targets. The worker stores
+// commit_id + upload_id on the local spool row and proceeds with
+// the multipart upload.
+message ArtifactUploadPlan {
+  string task_id = 1;
+  string attempt_id = 2;
+  string commit_id = 3;          // master's canonical DB key
+  string commit_token = 4;       // opaque bearer token (sha256-hashed
+                                 // on the attempt_commits row; plain
+                                 // form never persisted on master)
+  string lease_id = 5;
+  repeated UploadTarget targets = 6;
+}
+
+// ArtifactUploadCompleted is the worker's "bytes transferred"
+// signal. The master runs the verification pass
+// (CompleteUploadCommand equivalent on the DataServer side):
+// SHA-256 of the received bytes vs worker_sha256; on match,
+// transitions attempt_commits.status from UPLOADING to RECEIVED
+// and queues the canonical SUCCEEDED write.
+message ArtifactUploadCompleted {
+  string task_id = 1;
+  string attempt_id = 2;
+  string commit_id = 3;
+  string lease_id = 4;
+  string upload_id = 5;
+  int64 uploaded_bytes = 6;
+  string worker_sha256 = 7;
+}
+
+// TaskCommitAck is the master's terminal signal that the attempt
+// is durable: jobs.status='SUCCEEDED', attempt_commits.status=
+// 'COMMITTED', attempt_artifacts rows exist. The worker
+// transitions the local spool row from UPLOADED to COMMITTED and
+// can safely unlink the on-disk file (then mark the row CLEANED).
+//
+// FenceTuple is repeated so the master can fence late acks: a
+// worker that re-connects after lease-revocation MUST NOT see a
+// stale TaskCommitAck applied to a re-claimed attempt.
+message TaskCommitAck {
+  string task_id = 1;
+  string attempt_id = 2;
+  string commit_id = 3;
+  string job_id = 4;
+  string lease_id = 5;
+  int32 revision = 6;
+  google.protobuf.Timestamp committed_at = 7;
+}
+
+// TaskResultAck is the master's acknowledgement of a TaskResult.
+// It is sent after the master has processed the report, whether the
+// attempt was ingested for the first time, was an idempotent replay,
+// or collided with an existing immutable report.
+message TaskResultAck {
+  string task_id = 1;
+  string job_id = 2;
+  string attempt_id = 3;
+  // Empty on success/idempotent acceptance. Populated with a stable
+  // machine-readable token when the master rejects the report, e.g.
+  // "report_conflict" when the same attempt already has a different
+  // report hash.
+  string error = 4;
+}
+
+
+
+// ---------------------------------------------------------
+// Typed metrics (PR-5 / scorecard v1)
+// ---------------------------------------------------------
+
+// TaskExecutionMetrics replaces the legacy google.protobuf.Struct at
+// TaskResult.execution_metrics. All 12 Scorecard metrics derive from
+// this struct + a PhaseMarker list + a worker Counter/Histogram set.
+//
+// Cardinality discipline: this struct carries 1:1 fields (per-attempt
+// scalar counters). The Prometheus exporter on the master side adds
+// the SAFE labels (executor_id, executor_version, worker_class,
+// codec, preset, resolution_bucket, cache_source, phase). The UNSAFE
+// labels (job_id, task_id, artifact_id, hash, video_title) belong in
+// the structured log + DB, NOT here.
+message TaskExecutionMetrics {
+  // Legacy carry-over (7 base fields — present in v2 / migration 043).
+  int64 input_bytes = 1;
+  int64 output_bytes = 2;
+  int64 bytes_from_drive = 3;
+  int64 bytes_from_blobstore = 4;
+  int64 bytes_from_local_cache = 5;
+  int64 cpu_time_ms = 6;
+  int64 peak_rss_bytes = 7;
+
+  // Frame and FFmpeg counters (PR-2: scene.composite.v1 emits; the
+  // C++ engine parses -progress pipe:1 once PR-2 wires the bridge).
+  int64 frames_decoded = 8;
+  int64 frames_composited = 9;
+  int64 frames_encoded = 10;
+  double ffmpeg_speed_ratio = 11;
+
+  // Re-encode / amplification (PR-2 + final concat).
+  int32 encode_passes = 12;
+  bool final_concat_stream_copy = 13;
+  // concat_mode: "stream_copy" | "reencode" | "n/a".
+  string concat_mode = 14;
+
+  // Cost basis (PR-4 / costmodel integration; emitted by the worker
+  // so the master can compute cost_per_output_minute without
+  // re-asking for CPU pricing config).
+  double cpu_price_per_second = 15;
+  double storage_price_per_gb = 16;
+  double network_price_per_gb = 17;
+
+  // Scorecard v2 / Step 7-8: extra resource counters (migrations
+  // 054, 073). GPU time/VRAM, temp writes, duplicate downloads and
+  // timing context needed for normalization.
+  int64 gpu_time_ms = 18;
+  int64 peak_vram_bytes = 19;
+  int64 temp_bytes_written = 20;
+  int64 duplicate_download_bytes = 21;
+  double media_duration_seconds = 22;
+  double wall_clock_seconds = 23;
+
+  // Scorecard v2 / Step 9: output quality validation (migration 072).
+  int32 ffprobe_valid = 24;
+  double duration_diff_sec = 25;
+  bool has_video_stream = 26;
+  bool has_audio_stream = 27;
+  int64 output_file_size = 28;
+  double black_frame_ratio = 29;
+  int64 audio_sync_offset_ms = 30;
+  string output_sha256 = 31;
+
+  // Scorecard v2 / Step 10: per-attempt resource snapshot (migration 073).
+  double cpu_percent_peak = 32;
+  int64 disk_read_bytes = 33;
+  int64 disk_write_bytes = 34;
+  int64 network_rx_bytes = 35;
+  int64 network_tx_bytes = 36;
+  int64 iowait_ms = 37;
+  int64 open_fds_peak = 38;
+
+  // Scorecard v2 / Step 16: granular cache hit/miss counters (migration 077).
+  int64 asset_cache_hit_count = 39;
+  int64 asset_cache_miss_count = 40;
+  int64 blob_cache_hit_count = 41;
+  int64 blob_cache_miss_count = 42;
+  int64 render_cache_hit_count = 43;
+
+  // Scorecard v2 / Step 18: failure attribution and partial-progress
+  // counters for FAILED attempts. wasted_cpu_ms and wasted_download_bytes
+  // capture resources consumed before failure; completed_segments reports
+  // how many segments finished before the attempt stopped;
+  // error_component/error_phase classify the failure root cause.
+  int64 wasted_cpu_ms = 44;
+  int64 wasted_download_bytes = 45;
+  int32 completed_segments = 46;
+  string error_component = 47;
+  string error_phase = 48;
+
+  // CPU capacity telemetry (migration 099). Sent by the worker so the
+  // master can compute accurate oversubscription ratios per attempt.
+  int32 logical_cpu_count = 49;      // runtime.NumCPU() on the worker host
+  double cpu_quota = 50;            // cgroup CPU quota in cores (0 = unknown/unlimited)
+  int32 effective_cpu_count = 51;  // min(logical, ceil(cpu_quota))
+
+  // Attempt telemetry provenance. Coverage is JSON so missing domains are
+  // distinguishable from a measured numeric zero without another migration.
+  string telemetry_coverage_json = 52;
+  bool telemetry_complete = 53;
+  string telemetry_cpu_source = 54; // cgroup_v2, proc, or missing
+  int32 audio_track_count = 55; // final artifact track count from ArtifactVerifier
+
+  // Cache accounting invariant: cache_lookups equals cache hits plus misses.
+  // unique_assets_requested counts distinct asset identities requested.
+  int64 cache_lookups = 56;
+  int64 unique_assets_requested = 57;
+
+  // Per-attempt asset download volume surfaced by the CacheResolver (Phase A1):
+  // cache_download_count is the number of cache MISSes that were satisfied by a
+  // real download, and cache_download_bytes the total bytes transferred. Both
+  // are attempt-scoped (start from zero on every attempt) so a job certification
+  // query never mixes in worker-lifetime counters. The master persists them on
+  // task_attempt_cache_stats (migration 147) alongside cache_lookups.
+  int64 cache_download_count = 58;
+  int64 cache_download_bytes = 59;
+
+  // ── Scorecard v3 / observability pipeline completion ──────────────
+  // Derived throughput ratios computed from wall/phase timings.
+  double throughput_x = 60;       // media_duration / wall_clock (>1 = faster than realtime)
+  double critical_path_percent = 61; // critical path as % of wall clock
+  int64 critical_path_ms = 62;    // longest blocking path duration
+  string critical_path_component = 63; // human-readable bottleneck label
+  double packet_copy_ratio = 64;  // % segments stream-copied vs re-encoded
+
+  // GPU utilization per-second sampled averages over the job window.
+  double gpu_util_avg_percent = 65;
+  double gpu_util_peak_percent = 66;
+  double nvdec_util_avg_percent = 67;
+  double nvdec_util_peak_percent = 68;
+  double nvenc_util_avg_percent = 69;
+  double nvenc_util_peak_percent = 70;
+  int64 vram_used_avg_bytes = 71;
+  int64 gpu_idle_during_render_ms = 72;
+
+  // GPU ↔ CPU transfer estimates (inferred from engine phase analysis;
+  // zero until real hwupload/hwdownload instrumentation).
+  int64 frames_downloaded_from_gpu = 73;
+  int64 frames_uploaded_to_gpu = 74;
+  int64 gpu_to_cpu_bytes = 75;
+  int64 cpu_to_gpu_bytes = 76;
+
+  // ── Per-job resource attribution (migration 160) ──────────────────
+  // These attribute resource consumption to the individual job, enabling
+  // the capacity scorecard to answer: "How much does one job cost?"
+  int64 job_peak_rss_delta_bytes = 77;   // peak RSS delta vs pre-job baseline
+  double job_cpu_core_seconds = 78;       // CPU time normalized to core-seconds
+  int64 job_asset_cache_bytes_used = 79;  // asset cache bytes consumed by this job
+  int64 job_prefetch_bytes = 80;          // bytes downloaded during prefetch phase
+  int64 job_upload_buffer_peak_bytes = 81;// peak upload buffer memory during publish
+  int64 job_render_wall_ms = 82;          // wall clock for render phases
+  int64 job_asset_wall_ms = 83;           // wall clock for asset resolve/download/verify
+  int64 job_publish_wall_ms = 84;         // wall clock for publish/upload phases
+
+  // ── Progressive upload overlap (migration 161) ─────────────────
+  // Render/upload overlap metrics surfaced by the progressive upload
+  // path. These capture how much upload work was completed while the
+  // engine was still rendering, enabling the capacity scorecard to
+  // answer: "Did the mux→upload overlap reduce wall-clock time?"
+  int64 progressive_overlap_first_part_ms = 85;          // time from upload run start to first part sent
+  int64 progressive_overlap_parts_before_render = 86;     // parts uploaded while render was still running
+  int64 progressive_overlap_bytes_before_render = 87;     // bytes uploaded while render was still running
+  int64 progressive_overlap_ms = 88;                      // render/upload overlap window (ms)
+  int64 trailer_to_open_ms = 89;                          // C++ trailer_finished → Go file open (ms)
+  int64 mux_to_open_us = 90;                              // first progress event → Go file open (us)
+
+  // Declared scene count from the worker's RenderPlan Timeline length.
+  // The master verifies this against COUNT(DISTINCT scene_id) from
+  // segment_timings; a mismatch is logged as a warning.
+  int32 scene_count = 91;
+}
+
+// WorkerResourceCounters is the typed payload of Heartbeat.resources.
+// All values are PEAK-of-WINDOW snapshots: the worker samples the
+// underlying counters every 5 s and reports the peak observed between
+// successive heartbeats. Zero values are valid (report-the-truth for
+// idle workers).
+message WorkerResourceCounters {
+  // CPU.
+  double cpu_utilization_ratio = 1;     // 0.0-1.0
+  double cpu_iowait_ratio = 2;          // 0.0-1.0
+  double cpu_steal_ratio = 3;           // 0.0-1.0
+
+  // Memory.
+  int64 memory_used_bytes = 4;
+  int64 memory_available_bytes = 5;
+  int64 memory_total_bytes = 40;       // host/cgroup memory ceiling
+  int64 process_rss_bytes = 6;
+  int64 process_rss_peak_bytes = 7;
+  int64 swap_used_bytes = 8;
+  int64 major_page_faults_total = 9;
+
+  // Disk (worker-local mount: /opt/velox by default).
+  int64 disk_read_bytes_total = 10;
+  int64 disk_write_bytes_total = 11;
+  int64 disk_free_bytes = 12;
+  int64 temp_bytes_written = 13;        // sum since worker start
+  int32 temp_files_open = 14;           // gauge at heartbeat time
+
+  // Network.
+  int64 network_receive_bytes_total = 15;
+  int64 network_transmit_bytes_total = 16;
+  int64 network_retransmits_total = 17;
+
+  // Scheduler.
+  int32 active_tasks = 18;
+  int32 task_slots = 19;
+  double load1 = 20;                    // unix-style 1-minute loadavg
+  int32 run_queue = 21;                 // processes waiting on CPU
+
+  // Sampling book-keeping.
+  google.protobuf.Timestamp sampled_at = 22;
+
+  // ── Scorecard v2 extensions ──────────────────────────────────────
+  // CPU extended.
+  int32 effective_cpu_cores = 23;       // min(logical, ceil(cpu_quota))
+  double cpu_user_ratio = 24;           // 0.0-1.0, user-space CPU fraction
+  double cpu_system_ratio = 25;         // 0.0-1.0, kernel CPU fraction
+
+  // Memory extended.
+  int64 page_cache_bytes = 26;          // kernel page cache (Buffers + Cached)
+
+  // Disk extended.
+  double disk_read_mbps = 27;           // instantaneous MB/s read throughput
+  double disk_write_mbps = 28;          // instantaneous MB/s write throughput
+  int64 disk_io_wait_ms = 29;           // cumulative ms spent in I/O wait
+
+  // Network extended.
+  double download_mbps = 30;            // instantaneous Mbit/s receive throughput
+  double upload_mbps = 31;              // instantaneous Mbit/s transmit throughput
+
+  // Concurrency — per-job-type slot occupancy.
+  int32 render_jobs_active = 32;
+  int32 prefetch_jobs_active = 33;
+  int32 publisher_jobs_active = 34;
+
+  // File descriptor accounting — Linux /proc/self/fd + getrlimit(RLIMIT_NOFILE).
+  int64 open_file_descriptors = 35;
+  int64 max_file_descriptors = 36;
+  double file_descriptor_utilization_ratio = 37;
+
+  // Scratch disk occupancy — real-time scratch dir size and high-water mark.
+  int64 scratch_current_bytes = 38;   // gauge: sum of file sizes in scratch dir
+  int64 scratch_peak_bytes = 39;      // high-water mark since worker start
+}
