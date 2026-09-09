@@ -17,7 +17,6 @@
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
-#include <libavutil/error.h>
 #include <libavutil/opt.h>
 }
 
@@ -48,12 +47,6 @@ struct FormatContextDeleter {
     }
 };
 using UniqueOutputContext = std::unique_ptr<AVFormatContext, FormatContextDeleter>;
-
-std::string ffmpegErrorText(int error) {
-    char buffer[AV_ERROR_MAX_STRING_SIZE]{};
-    av_strerror(error, buffer, sizeof(buffer));
-    return buffer;
-}
 
 void setError(FramePipelineResult* result, const std::string& error) {
     result->success = false;

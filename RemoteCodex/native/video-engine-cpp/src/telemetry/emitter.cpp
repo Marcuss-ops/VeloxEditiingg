@@ -1,5 +1,6 @@
 // emitter.cpp — C++ engine-side event recorder implementation.
 #include "velox/telemetry/emitter.hpp"
+#include "json_utils.hpp"
 
 #include <cctype>
 #include <chrono>
@@ -137,32 +138,9 @@ bool isValidJsonObjectShape(const std::string& value) {
     return !value.empty() && JsonValidator(value).validObject();
 }
 
-std::string escapeJsonString(const std::string& value) {
-    std::string out;
-    out.reserve(value.size() + 4);
-    const char hex[] = "0123456789abcdef";
-    for (unsigned char c : value) {
-        switch (c) {
-            case '"':  out += "\\\""; break;
-            case '\\': out += "\\\\"; break;
-            case '\b':  out += "\\b"; break;
-            case '\f':  out += "\\f"; break;
-            case '\n': out += "\\n"; break;
-            case '\r': out += "\\r"; break;
-            case '\t': out += "\\t"; break;
-            default:
-                if (c < 0x20) {
-                    out += "\\u00";
-                    out += hex[(c >> 4) & 0x0f];
-                    out += hex[c & 0x0f];
-                } else {
-                    out += static_cast<char>(c);
-                }
-                break;
-        }
-    }
-    return out;
-}
+// The canonical escaper lives in json_utils.hpp; all engine emission sites
+// share one definition (audit P2 consolidation).
+using velox::json::escapeJsonString;
 } // namespace
 
 namespace velox::telemetry {

@@ -64,6 +64,17 @@ bool publishProbedOutput(const std::filesystem::path& partial,
                          const std::filesystem::path& target,
                          std::string& error, bool* durable_out);
 
+// Single av_strerror wrapper for the frame-pipeline implementation units
+// (decoder, encoder, filter, public lifecycle). The packet pipeline keeps
+// its identical packet::ffmpegError in media_packet_demuxer.cpp; both exist
+// so error text formatting has one definition per pipeline family instead
+// of one per translation unit.
+inline std::string ffmpegErrorText(int error) {
+    char buffer[AV_ERROR_MAX_STRING_SIZE]{};
+    av_strerror(error, buffer, sizeof(buffer));
+    return buffer;
+}
+
 } // namespace velox::media::pipeline_detail
 
 #endif // VELOX_ENABLE_LIBAV

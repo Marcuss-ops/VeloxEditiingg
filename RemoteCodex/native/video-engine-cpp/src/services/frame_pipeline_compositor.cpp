@@ -10,8 +10,8 @@ bool CompositorStage::apply(AVFrame* frame, int64_t frame_index,
 	if (applied_ops != nullptr) {
 		*applied_ops = 0;
 	}
-    if (backend_ == CompositorBackend::Cuda) {
-        error = "CUDA frame compositor backend is not implemented";
+    if (backend_ != CompositorBackend::Cpu) {
+        error = "compositor backend is not implemented";
         return false;
     }
     if (graph == nullptr || graph->empty()) {

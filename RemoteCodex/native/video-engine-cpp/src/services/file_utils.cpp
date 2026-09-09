@@ -426,7 +426,6 @@ bool downloadAsset(const std::string& source, const fs::path& dest, const std::s
         std::error_code ec;
         fs::remove(tempDest, ec);
     }
-    if (ok) services::recordAssetCopy(downloaded_bytes);
 
     if (!cacheDir.empty() && ok) {
         auto cachedPath = cacheAssetPath(cacheDir, source);
@@ -437,12 +436,12 @@ bool downloadAsset(const std::string& source, const fs::path& dest, const std::s
                 copyFile(dest, cachedPath);
             }
         }
-        services::recordAssetCopy(downloaded_bytes);
     } else if (!ok) {
         std::error_code ec;
         fs::remove(tempDest, ec);
     }
 
+    if (ok) services::recordAssetCopy(downloaded_bytes);
     return ok;
 }
 

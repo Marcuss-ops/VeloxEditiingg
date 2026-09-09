@@ -2,23 +2,9 @@
 
 #include "frame_pipeline_decoder.hpp"
 
-extern "C" {
-#include <libavutil/error.h>
-#include <libavutil/mathematics.h>
-}
-
 #include <string>
 
 namespace velox::media::pipeline_detail {
-namespace {
-
-std::string ffmpegErrorText(int error) {
-    char buffer[AV_ERROR_MAX_STRING_SIZE]{};
-    av_strerror(error, buffer, sizeof(buffer));
-    return buffer;
-}
-
-} // namespace
 
 DecoderStage::~DecoderStage() {
     if (scratch_ != nullptr) {

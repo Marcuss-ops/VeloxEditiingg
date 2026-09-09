@@ -3,6 +3,7 @@
 #include "velox/audio/audio_plan.hpp"
 #include "velox/services/file_utils.hpp"
 #include "velox/services/media_utils.hpp"
+#include "json_utils.hpp"
 
 #include <chrono>
 #include <cmath>
@@ -19,21 +20,7 @@ namespace velox::core {
 
 namespace {
 
-std::string escapeJsonString(const std::string& value) {
-    std::string out;
-    out.reserve(value.size() + 8);
-    for (char c : value) {
-        switch (c) {
-        case '"': out += "\\\""; break;
-        case '\\': out += "\\\\"; break;
-        case '\n': out += "\\n"; break;
-        case '\r': out += "\\r"; break;
-        case '\t': out += "\\t"; break;
-        default: out += c; break;
-        }
-    }
-    return out;
-}
+using velox::json::escapeJsonString;
 
 std::string optimizedAudioFilter(
     const std::vector<std::pair<fs::path, const plan::AudioTrack*>>& tracks,

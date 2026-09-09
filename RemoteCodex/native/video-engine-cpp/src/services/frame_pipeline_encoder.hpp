@@ -2,6 +2,8 @@
 
 #ifdef VELOX_ENABLE_LIBAV
 
+#include "frame_pipeline_support.hpp"
+
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>

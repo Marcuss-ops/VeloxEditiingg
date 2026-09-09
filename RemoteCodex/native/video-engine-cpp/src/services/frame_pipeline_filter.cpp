@@ -20,9 +20,11 @@ FilterChain::~FilterChain() {
 bool FilterChain::init(FilterBackend backend, const AVCodecContext& decoder,
                        const AVCodecContext& encoder, FramePool& pool,
                        std::string& error) {
-    backend_ = backend;
-    if (backend_ == FilterBackend::Cuda) {
-        error = "CUDA frame filter backend is not implemented";
+    // CPU is the only implemented filter backend; reject anything else so a
+    // future mis-wiring fails closed instead of silently passing frames
+    // through untransformed.
+    if (backend != FilterBackend::Cpu) {
+        error = "frame filter backend is not implemented";
         return false;
     }
     if (decoder.width == encoder.width && decoder.height == encoder.height &&
@@ -44,10 +46,6 @@ bool FilterChain::init(FilterBackend backend, const AVCodecContext& decoder,
 AVFrame* FilterChain::apply(AVFrame* source, int pool_index, FramePool& pool,
                             int source_height, int64_t& cpu_busy_ns,
                             std::string& error) {
-    if (backend_ == FilterBackend::Cuda) {
-        error = "CUDA frame filter backend is not implemented";
-        return nullptr;
-    }
     if (scaler_ == nullptr) {
         return source;
     }

@@ -87,6 +87,11 @@ int64_t fileSize(const fs::path& path) {
     return ec ? 0 : static_cast<int64_t>(size);
 }
 
+fs::path numberedWorkPath(const fs::path& work_dir, const char* prefix,
+                          const char* suffix, std::size_t index) {
+    return work_dir / (std::string(prefix) + std::to_string(index) + suffix);
+}
+
 int64_t decodedFramesFromShowInfo(const std::string& stderr_out) {
     int64_t max_frame = -1;
     size_t cursor = 0;

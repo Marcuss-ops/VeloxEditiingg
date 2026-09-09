@@ -36,6 +36,13 @@ media::SceneSegmentParams makeParams(
 
 std::string extractColorHex(const plan::MediaSource& source);
 int64_t fileSize(const fs::path& path);
+
+// Canonical numbered work-dir path builder ("<prefix><index><suffix>").
+// The render engine TUs previously carried two divergent private copies
+// (snprintf vs std::to_string); both now route through this one.
+fs::path numberedWorkPath(const fs::path& work_dir, const char* prefix,
+                          const char* suffix, std::size_t index);
+
 int64_t decodedFramesFromShowInfo(const std::string& stderr_out);
 
 bool runFfmpegSegmentWithProgress(

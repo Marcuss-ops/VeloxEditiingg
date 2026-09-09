@@ -22,6 +22,7 @@
 //     only `progress=end` sets `finished=true`.
 
 #include "velox/services/ffmpeg_progress_parser.hpp"
+#include "json_utils.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -51,20 +52,10 @@ static constexpr size_t kMaxStderrBufferBytes = 256 * 1024;
 
 // ─── escape ───────────────────────────────────────────────────────────
 
+// Delegates to the canonical velox::json::escapeJsonString (json_utils.hpp)
+// so progress lines and engine metadata share one escaping definition.
 std::string escapeProgressJsonString(const std::string& s) {
-    std::string out;
-    out.reserve(s.size() + 4);
-    for (char c : s) {
-        switch (c) {
-            case '"':  out += "\\\""; break;
-            case '\\': out += "\\\\"; break;
-            case '\n': out += "\\n";  break;
-            case '\t': out += "\\t";  break;
-            case '\r': out += "\\r";  break;
-            default:   out += c;      break;
-        }
-    }
-    return out;
+    return velox::json::escapeJsonString(s);
 }
 
 // ─── trim helper ──────────────────────────────────────────────────────

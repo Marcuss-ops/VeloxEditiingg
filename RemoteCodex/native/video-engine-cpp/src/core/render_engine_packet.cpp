@@ -1,6 +1,7 @@
 #include "velox/core/render_engine.hpp"
 #include "render_engine_helpers.hpp"
 #include "velox/core/canonical_video_profile.hpp"
+#include "json_utils.hpp"
 #include "velox/services/file_utils.hpp"
 #include "velox/services/media_packet_pipeline.hpp"
 #include "velox/services/media_utils.hpp"
@@ -27,32 +28,12 @@ namespace velox::core {
 
 namespace {
     using render_detail::fileSize;
+    using render_detail::numberedWorkPath;
     using render_detail::reportArtifactWriteProgress;
     using render_detail::reportDetailedProgress;
     using render_detail::reportProgress;
 
-    std::string escapeJsonString(const std::string& value) {
-        std::string out;
-        out.reserve(value.size() + 8);
-        for (char c : value) {
-            switch (c) {
-            case '"': out += "\\\""; break;
-            case '\\': out += "\\\\"; break;
-            case '\n': out += "\\n"; break;
-            case '\r': out += "\\r"; break;
-            case '\t': out += "\\t"; break;
-            default: out += c; break;
-            }
-        }
-        return out;
-    }
-
-    fs::path numberedWorkPath(const fs::path& workDir, const char* prefix,
-                              const char* suffix, std::size_t index) {
-        char name[64];
-        std::snprintf(name, sizeof(name), "%s%zu%s", prefix, index, suffix);
-        return workDir / name;
-    }
+    using velox::json::escapeJsonString;
 }
 
 #ifdef VELOX_ENABLE_LIBAV

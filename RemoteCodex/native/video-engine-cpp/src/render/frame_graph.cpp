@@ -96,6 +96,11 @@ bool FrameGraph::apply(PixelFrame& frame, int64_t frame_number,
         }
         return false;
     }
+    // One reusable error sink for the whole apply pass (audit B.3 — the
+    // previous code constructed a fresh std::string per active op, at frame
+    // rate). Kernels only ever format into it on failure, and the capacity
+    // carries over so steady-state success introduces no allocation.
+    std::string kernel_error;
     for (const auto& op : ops_) {
         if (!op.activeAt(frame_number)) {
             continue;
@@ -108,7 +113,7 @@ bool FrameGraph::apply(PixelFrame& frame, int64_t frame_number,
             }
             return false;
         }
-        std::string kernel_error;
+        kernel_error.clear();
         if (!kernel->apply(frame, op, &kernel_error)) {
             if (error != nullptr) {
                 *error = kernel_error.empty()

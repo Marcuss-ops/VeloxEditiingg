@@ -180,8 +180,10 @@ type ExitFunc func(int)
 //
 // ActiveTasksMu is the most contended leaf for dispatch; keep
 // critical sections short and never nest it inside transportMu
-// or asset locks. See docs/adr/0009-worker-lock-order.md for
-// rationale (audit finding: unenumerated lock-order graph).
+// or asset locks. This comment block is the canonical lock-order
+// documentation (audit finding: unenumerated lock-order graph);
+// worker_persistence_recovery.go documents the capture/apply
+// pairing against this order.
 //
 // Worker represents a Velox worker agent.
 type Worker struct {

@@ -1,5 +1,6 @@
 #include "velox/services/media_utils.hpp"
 #include "velox/services/file_utils.hpp"
+#include "json_utils.hpp"
 
 #include <cmath>
 #include <filesystem>
@@ -11,21 +12,7 @@ namespace fs = std::filesystem;
 namespace velox::media {
 namespace {
 
-std::string escapeJsonString(const std::string& value) {
-    std::string output;
-    output.reserve(value.size() + 8);
-    for (char value_char : value) {
-        switch (value_char) {
-        case '"': output += "\\\""; break;
-        case '\\': output += "\\\\"; break;
-        case '\n': output += "\\n"; break;
-        case '\r': output += "\\r"; break;
-        case '\t': output += "\\t"; break;
-        default: output += value_char; break;
-        }
-    }
-    return output;
-}
+using velox::json::escapeJsonString;
 
 } // namespace
 

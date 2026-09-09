@@ -28,14 +28,10 @@ namespace {
     using render_detail::extractColorHex;
     using render_detail::fileSize;
     using render_detail::makeParams;
+    using render_detail::numberedWorkPath;
     using render_detail::reportDetailedProgress;
     using render_detail::reportProgress;
     using render_detail::runFfmpegSegmentWithProgress;
-
-    fs::path numberedWorkPath(const fs::path& workDir, const char* prefix,
-                              const char* suffix, std::size_t index) {
-        return workDir / (std::string(prefix) + std::to_string(index) + suffix);
-    }
 
 #ifdef VELOX_ENABLE_LIBAV
     struct NativeThreadConfig {

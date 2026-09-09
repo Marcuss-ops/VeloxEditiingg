@@ -20,6 +20,39 @@
 namespace velox {
 namespace json {
 
+// Canonical JSON string escaper for the C++ engine. Every emission site
+// (telemetry emitter, render engine metadata, mux metrics, media utils)
+// must route through this single definition (audit P2: four divergent
+// copies were a semantic-drift risk). Escapes quotes, backslashes, and
+// every control character below 0x20 (short-form for the named escapes,
+// \u00XX for the rest).
+inline std::string escapeJsonString(const std::string& value) {
+    std::string out;
+    out.reserve(value.size() + 4);
+    static const char hex[] = "0123456789abcdef";
+    for (unsigned char c : value) {
+        switch (c) {
+            case '"':  out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\b':  out += "\\b"; break;
+            case '\f':  out += "\\f"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default:
+                if (c < 0x20) {
+                    out += "\\u00";
+                    out += hex[(c >> 4) & 0x0f];
+                    out += hex[c & 0x0f];
+                } else {
+                    out += static_cast<char>(c);
+                }
+                break;
+        }
+    }
+    return out;
+}
+
 inline std::string trim(std::string s) {
     auto notSpace = [](unsigned char c) { return !std::isspace(c); };
     s.erase(s.begin(), std::find_if(s.begin(), s.end(), notSpace));

@@ -4,7 +4,6 @@
 #include "velox/services/io_counters.hpp"
 #include "velox/services/media_utils.hpp"
 
-#include <cstdio>
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -15,14 +14,8 @@ namespace velox::core {
 
 namespace {
 
-fs::path numberedWorkPath(const fs::path& work_dir, const char* prefix,
-                          const char* suffix, std::size_t index) {
-    char name[64];
-    std::snprintf(name, sizeof(name), "%s%zu%s", prefix, index, suffix);
-    return work_dir / name;
-}
-
 using render_detail::fileSize;
+using render_detail::numberedWorkPath;
 
 } // namespace
 

@@ -13,9 +13,13 @@ extern "C" {
 
 namespace velox::media::pipeline_detail {
 
+// CompositorBackend names the compositing implementation. CPU is the only
+// implemented backend: the never-built CUDA branch was removed from the
+// per-frame apply() path (audit P2: dead compare executed at frame rate).
+// A future GPU compositor must be re-introduced as a separate, explicit
+// implementation — not a never-taken runtime compare.
 enum class CompositorBackend {
     Cpu,
-    Cuda,
 };
 
 class CompositorStage {
