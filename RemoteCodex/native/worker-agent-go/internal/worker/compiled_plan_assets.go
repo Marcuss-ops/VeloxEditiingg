@@ -64,11 +64,15 @@ func (w *Worker) resolveCompiledRenderPlanAssets(ctx context.Context, payload ma
 	var wg sync.WaitGroup
 	var errMu sync.Mutex
 	var firstErr error
+	const maxConcurrentResolves = 8
+	sem := make(chan struct{}, maxConcurrentResolves)
 	for index, envelope := range assetEnvelopes {
 		index, envelope := index, envelope
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
 			resolvedPayload, resolveErr := w.resolveCommonAssetPayloadMutable(ctx, map[string]interface{}{
 				"assets": []interface{}{envelope},
 			})

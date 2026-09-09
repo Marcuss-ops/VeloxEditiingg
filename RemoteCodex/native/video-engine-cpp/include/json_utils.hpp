@@ -28,10 +28,34 @@ inline std::string trim(std::string s) {
 }
 
 inline std::string extractJsonString(const std::string& json, const std::string& key) {
-    const std::regex re("\"" + key + "\"\\s*:\\s*\"((?:\\\\.|[^\"])*)\"");
-    std::smatch match;
-    if (std::regex_search(json, match, re) && match.size() > 1) {
-        return match[1].str();
+    const std::string needle = "\"" + key + "\"";
+    auto pos = json.find(needle);
+    if (pos == std::string::npos) return {};
+    pos += needle.size();
+    while (pos < json.size() && std::isspace(static_cast<unsigned char>(json[pos]))) ++pos;
+    if (pos >= json.size() || json[pos] != ':') {
+        // allow spaces before colon: find colon after needle
+        pos = json.find(':', pos - needle.size());
+        if (pos == std::string::npos) return {};
+    }
+    ++pos;
+    while (pos < json.size() && std::isspace(static_cast<unsigned char>(json[pos]))) ++pos;
+    if (pos >= json.size() || json[pos] != '"') return {};
+    ++pos;
+    std::string raw;
+    raw.reserve(64);
+    bool escape = false;
+    for (; pos < json.size(); ++pos) {
+        char c = json[pos];
+        if (escape) {
+            raw.push_back('\\');
+            raw.push_back(c);
+            escape = false;
+            continue;
+        }
+        if (c == '\\') { escape = true; continue; }
+        if (c == '"') return raw;
+        raw.push_back(c);
     }
     return {};
 }
@@ -67,24 +91,38 @@ inline std::string extractJsonStringValue(const std::string& json, const std::st
 }
 
 inline double extractJsonNumberValue(const std::string& json, const std::string& key, double fallback = 0.0) {
-    const std::regex re("\"" + key + "\"\\s*:\\s*([-+]?[0-9]*\\.?[0-9]+)");
-    std::smatch match;
-    if (std::regex_search(json, match, re) && match.size() > 1) {
-        try {
-            return std::stod(match[1].str());
-        } catch (...) {
-            return fallback;
-        }
+    const std::string needle = "\"" + key + "\"";
+    auto pos = json.find(needle);
+    if (pos == std::string::npos) return fallback;
+    pos = json.find(':', pos + needle.size());
+    if (pos == std::string::npos) return fallback;
+    ++pos;
+    while (pos < json.size() && std::isspace(static_cast<unsigned char>(json[pos]))) ++pos;
+    size_t start = pos;
+    if (pos < json.size() && (json[pos] == '-' || json[pos] == '+')) ++pos;
+    bool has_digit = false;
+    while (pos < json.size() && (std::isdigit(static_cast<unsigned char>(json[pos])) || json[pos] == '.')) {
+        if (std::isdigit(static_cast<unsigned char>(json[pos]))) has_digit = true;
+        ++pos;
     }
-    return fallback;
+    if (!has_digit) return fallback;
+    try {
+        return std::stod(json.substr(start, pos - start));
+    } catch (...) {
+        return fallback;
+    }
 }
 
 inline bool extractJsonBoolValue(const std::string& json, const std::string& key, bool fallback = false) {
-    const std::regex re("\"" + key + "\"\\s*:\\s*(true|false)");
-    std::smatch match;
-    if (std::regex_search(json, match, re) && match.size() > 1) {
-        return match[1].str() == "true";
-    }
+    const std::string needle = "\"" + key + "\"";
+    auto pos = json.find(needle);
+    if (pos == std::string::npos) return fallback;
+    pos = json.find(':', pos + needle.size());
+    if (pos == std::string::npos) return fallback;
+    ++pos;
+    while (pos < json.size() && std::isspace(static_cast<unsigned char>(json[pos]))) ++pos;
+    if (json.compare(pos, 4, "true") == 0) return true;
+    if (json.compare(pos, 5, "false") == 0) return false;
     return fallback;
 }
 
@@ -138,11 +176,22 @@ inline std::vector<std::string> extractArrayStrings(const std::string& json, con
     if (block.empty()) {
         return values;
     }
-    const std::regex re("\"((?:\\\\.|[^\"])*)\"");
-    for (std::sregex_iterator it(block.begin(), block.end(), re), end; it != end; ++it) {
-        if (it->size() > 1) {
-            values.push_back(unescapeJsonString((*it)[1].str()));
+    // Manual scan: extract quoted strings without per-element regex.
+    bool in_string = false;
+    bool escape = false;
+    size_t start = 0;
+    for (size_t i = 0; i < block.size(); ++i) {
+        char c = block[i];
+        if (in_string) {
+            if (escape) { escape = false; continue; }
+            if (c == '\\') { escape = true; continue; }
+            if (c == '"') {
+                values.push_back(unescapeJsonString(block.substr(start, i - start)));
+                in_string = false;
+            }
+            continue;
         }
+        if (c == '"') { in_string = true; start = i + 1; }
     }
     return values;
 }

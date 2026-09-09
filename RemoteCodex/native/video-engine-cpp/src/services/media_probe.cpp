@@ -41,15 +41,26 @@ struct ProbeCacheRecord {
 };
 
 constexpr std::size_t kProbeCacheMaxEntries = 512;
+constexpr std::size_t kProbeCacheShards = 16;
 
-std::unordered_map<fs::path, ProbeCacheRecord> g_probeCache;
-std::list<fs::path> g_probeCacheOrder;
-std::mutex g_probeCacheMu;
+struct ProbeCacheShard {
+    std::unordered_map<fs::path, ProbeCacheRecord> cache;
+    std::list<fs::path> order;
+    std::mutex mu;
+};
+
+ProbeCacheShard g_probeCacheShards[kProbeCacheShards];
+
+inline ProbeCacheShard& shardFor(const fs::path& mediaPath) {
+    const std::size_t h = std::hash<std::string>{}(mediaPath.string());
+    return g_probeCacheShards[h % kProbeCacheShards];
+}
 
 std::optional<ProbeCacheEntry> probeCacheSnapshot(const fs::path& mediaPath) {
-    std::lock_guard<std::mutex> lock(g_probeCacheMu);
-    auto it = g_probeCache.find(mediaPath);
-    if (it == g_probeCache.end()) return std::nullopt;
+    auto& shard = shardFor(mediaPath);
+    std::lock_guard<std::mutex> lock(shard.mu);
+    auto it = shard.cache.find(mediaPath);
+    if (it == shard.cache.end()) return std::nullopt;
     return it->second.entry;
 }
 
@@ -70,13 +81,14 @@ std::optional<ProbeCacheEntry> probeCacheLookup(const fs::path& mediaPath) {
     // Only invalidate the snapshot we observed. A concurrent probe may have
     // installed a newer entry while the filesystem calls were outside the
     // mutex; never erase that newer result.
-    std::lock_guard<std::mutex> lock(g_probeCacheMu);
-    auto it = g_probeCache.find(mediaPath);
-    if (it != g_probeCache.end() &&
+    auto& shard = shardFor(mediaPath);
+    std::lock_guard<std::mutex> lock(shard.mu);
+    auto it = shard.cache.find(mediaPath);
+    if (it != shard.cache.end() &&
         it->second.entry.file_size == cached->file_size &&
         it->second.entry.mtime == cached->mtime) {
-        g_probeCacheOrder.erase(it->second.lru_position);
-        g_probeCache.erase(it);
+        shard.order.erase(it->second.lru_position);
+        shard.cache.erase(it);
     }
     return std::nullopt;
 }
@@ -87,22 +99,24 @@ void probeCacheStore(const fs::path& mediaPath, const MediaProbeResult& result) 
     if (ec) return;
     auto mt = fs::last_write_time(mediaPath, ec);
     if (ec) return;
-    std::lock_guard<std::mutex> lock(g_probeCacheMu);
-    auto it = g_probeCache.find(mediaPath);
-    if (it != g_probeCache.end()) {
+    auto& shard = shardFor(mediaPath);
+    std::lock_guard<std::mutex> lock(shard.mu);
+    auto it = shard.cache.find(mediaPath);
+    if (it != shard.cache.end()) {
         it->second.entry = ProbeCacheEntry{result, sz, mt};
-        g_probeCacheOrder.splice(g_probeCacheOrder.end(), g_probeCacheOrder,
+        shard.order.splice(shard.order.end(), shard.order,
                                  it->second.lru_position);
         return;
     }
-    while (g_probeCache.size() >= kProbeCacheMaxEntries && !g_probeCacheOrder.empty()) {
-        const fs::path oldest = g_probeCacheOrder.front();
-        g_probeCacheOrder.pop_front();
-        g_probeCache.erase(oldest);
+    const std::size_t per_shard_limit = kProbeCacheMaxEntries / kProbeCacheShards;
+    while (shard.cache.size() >= per_shard_limit && !shard.order.empty()) {
+        const fs::path oldest = shard.order.front();
+        shard.order.pop_front();
+        shard.cache.erase(oldest);
     }
-    g_probeCacheOrder.push_back(mediaPath);
-    auto position = std::prev(g_probeCacheOrder.end());
-    g_probeCache.emplace(mediaPath, ProbeCacheRecord{
+    shard.order.push_back(mediaPath);
+    auto position = std::prev(shard.order.end());
+    shard.cache.emplace(mediaPath, ProbeCacheRecord{
         ProbeCacheEntry{result, sz, mt}, position});
 }
 

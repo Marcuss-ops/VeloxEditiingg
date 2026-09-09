@@ -181,9 +181,10 @@ bool RenderEngine::finalizeAudioTracks(
         "engine.audio", "mix", "composite");
     const auto downloaded_tracks = downloadAudioTracks(plan, work_dir);
     if (downloaded_tracks.empty()) {
-        std::cerr << "warning: no audio tracks downloaded, exporting video without audio\n";
-        return publishVideoWithoutAudio(video_for_mux, publish_output, result,
-                                        "no audio", fail_render);
+        audio_phase.Abort("audio_download_failed", "no audio tracks downloaded; requested audio unavailable");
+        result.error = "failed to download any audio tracks";
+        fail_render("audio_download_failed");
+        return false;
     }
 
     if (downloaded_tracks.size() == 1 && !downloaded_tracks[0].second->loop) {
@@ -330,9 +331,10 @@ bool RenderEngine::finalizeAudioTracks(
 
     if (!mix_ok) {
         encode_phase.Abort("audio_mix_failed", "failed to mix audio tracks");
-        std::cerr << "warning: audio mix failed, exporting video without audio\n";
-        return publishVideoWithoutAudio(video_for_mux, publish_output, result,
-                                        "mix failed", fail_render);
+        audio_phase.Abort("audio_mix_failed", "failed to mix audio tracks");
+        result.error = "failed to mix audio tracks";
+        fail_render("audio_mix_failed");
+        return false;
     }
     encode_phase.Complete();
 

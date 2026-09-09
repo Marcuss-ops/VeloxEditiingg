@@ -417,17 +417,31 @@ bool downloadAsset(const std::string& source, const fs::path& dest, const std::s
         return false;
     }
 
-    bool ok = copyFile(tempDest, dest);
-    services::recordAssetCopy(assetCopyBytes(tempDest));
+    const int64_t downloaded_bytes = assetCopyBytes(tempDest);
+    std::error_code rename_ec;
+    fs::rename(tempDest, dest, rename_ec);
+    bool ok = !rename_ec;
+    if (rename_ec) {
+        ok = copyFile(tempDest, dest);
+        std::error_code ec;
+        fs::remove(tempDest, ec);
+    }
+    if (ok) services::recordAssetCopy(downloaded_bytes);
 
     if (!cacheDir.empty() && ok) {
         auto cachedPath = cacheAssetPath(cacheDir, source);
-        copyFile(tempDest, cachedPath);
-        services::recordAssetCopy(assetCopyBytes(tempDest));
+        if (!fs::exists(cachedPath)) {
+            std::error_code link_ec;
+            fs::create_hard_link(dest, cachedPath, link_ec);
+            if (link_ec) {
+                copyFile(dest, cachedPath);
+            }
+        }
+        services::recordAssetCopy(downloaded_bytes);
+    } else if (!ok) {
+        std::error_code ec;
+        fs::remove(tempDest, ec);
     }
-
-    std::error_code ec;
-    fs::remove(tempDest, ec);
 
     return ok;
 }

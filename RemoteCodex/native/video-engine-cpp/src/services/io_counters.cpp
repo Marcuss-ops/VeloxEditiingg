@@ -91,6 +91,7 @@ void recordOutputBackwardSeek(int64_t rewound_bytes) {
     }
 }
 void recordFirstPacketRead() {
+    if (g_ioCounters.first_packet_read_ms.load(std::memory_order_relaxed) != 0) return;
     int64_t expected = 0;
     const int64_t now = static_cast<int64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -98,6 +99,7 @@ void recordFirstPacketRead() {
     g_ioCounters.first_packet_read_ms.compare_exchange_strong(expected, now);
 }
 void recordFirstOutputWrite() {
+    if (g_ioCounters.first_output_write_ms.load(std::memory_order_relaxed) != 0) return;
     int64_t expected = 0;
     const int64_t now = static_cast<int64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(

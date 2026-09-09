@@ -154,6 +154,35 @@ type backoffConfig struct {
 // ExitFunc is the function type for worker exit (used for testing).
 type ExitFunc func(int)
 
+// Worker lock-ordering invariant (deadlock prevention):
+//
+// The Worker struct carries ~15 distinct mutexes. To prevent
+// lock-order inversion, all code MUST acquire them in the
+// following global order (lowest → highest). Never hold a
+// higher-ranked lock while acquiring a lower-ranked one without
+// first releasing the higher lock.
+//
+//  1. assetManagerMu
+//  2. cacheResolverMu
+//  3. transportMu
+//  4. assetProgressSendMu
+//  5. preparedEvidenceMu
+//  6. finalManifestMu
+//  7. assetIntegrityMu
+//  8. mu (status / heartbeatWake / jobDone)
+//  9. connStateMu
+// 10. commandMu
+// 11. pendingTasksMu
+// 12. activeTaskLeasesMu
+// 13. pendingArtifactAcksMu
+// 14. activeTasksMu (also guards taskIDsByJob / activeRender counters)
+// 15. recentLogBuffer.mu (leaf, never held with Worker locks)
+//
+// ActiveTasksMu is the most contended leaf for dispatch; keep
+// critical sections short and never nest it inside transportMu
+// or asset locks. See docs/adr/0009-worker-lock-order.md for
+// rationale (audit finding: unenumerated lock-order graph).
+//
 // Worker represents a Velox worker agent.
 type Worker struct {
 	config           *config.WorkerConfig

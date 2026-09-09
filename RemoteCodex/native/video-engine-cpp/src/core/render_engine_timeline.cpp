@@ -304,16 +304,16 @@ bool RenderEngine::renderLegacyTimeline(
                     gotImage = file::downloadAsset(src.url, localImg, src.cache_key);
                 }
                 if (gotImage) assetPhase.Complete();
-                else assetPhase.Abort("asset_download_failed", "image download failed; using fallback");
+                else assetPhase.Abort("asset_download_failed", "image download failed");
                 seg.asset_download_ms = std::chrono::duration<double, std::milli>(
                     std::chrono::steady_clock::now() - dlStart).count();
-                if (gotImage) {
-                    seg.source_bytes = fileSize(localImg);
-                    args_only = media::buildSceneSegmentArgs(localImg, segmentOut, item.duration_seconds, params);
-                } else {
-                    args_only = media::buildColorSegmentArgs(
-                        segmentOut, item.duration_seconds, params, extractColorHex(item.source));
+                if (!gotImage) {
+                    result.error = "failed to download image source for segment " + std::to_string(i);
+                    failRender("asset_download_failed");
+                    return false;
                 }
+                seg.source_bytes = fileSize(localImg);
+                args_only = media::buildSceneSegmentArgs(localImg, segmentOut, item.duration_seconds, params);
             } else if (std::holds_alternative<plan::VideoSource>(item.source)) {
                 seg.source_type = "video";
                 auto src = std::get<plan::VideoSource>(item.source);
