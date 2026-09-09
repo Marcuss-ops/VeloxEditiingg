@@ -39,6 +39,16 @@ func firstVoiceoverReference(params map[string]interface{}) string {
 // resolveVoiceoverAudioPath resolves a voiceover reference only through the
 // common verified bridge. Raw URLs and local paths are rejected, and the
 // params map must carry SHA-256 and size_bytes for the referenced asset.
+//
+// Single-asset path: the metadata index is built read-only from params
+// (collectAssetMetadata never mutates) and the one reference is resolved
+// directly through resolveVerifiedAssetReference. This avoids the full
+// payload deep-copy + tree walk of resolveCommonAssetPayload, which would
+// re-resolve every other media field in the payload for a single reference
+// (audit: worker resolver second-pass/deep-copy). Resolution semantics —
+// scheme-is-kind authority, integrity verification, cache accounting — are
+// byte-identical to the generic walk because both funnel into the same
+// resolveVerifiedAssetReference with the same field-derived cache role.
 func (w *Worker) resolveVoiceoverAudioPath(ctx context.Context, ref string, params map[string]interface{}) (string, error) {
 	reference := strings.TrimSpace(ref)
 	if reference == "" {
@@ -47,17 +57,17 @@ func (w *Worker) resolveVoiceoverAudioPath(ctx context.Context, ref string, para
 	if reference == "" {
 		return "", fmt.Errorf("missing voiceover audio path")
 	}
-	payload := make(map[string]interface{}, len(params)+1)
-	for key, value := range params {
-		payload[key] = value
+	index := make(assetMetadataIndex)
+	if err := collectAssetMetadata(params, index); err != nil {
+		return "", err
 	}
-	payload["audio_path"] = reference
-	resolved, err := w.resolveCommonAssetPayload(ctx, payload)
+	const field = "audio_path"
+	path, err := w.resolveVerifiedAssetReference(
+		withCacheAccessContext(ctx, "", cacheRole(field)), reference, index, field)
 	if err != nil {
 		return "", err
 	}
-	path, ok := resolved["audio_path"].(string)
-	if !ok || path == reference {
+	if path == reference {
 		return "", fmt.Errorf("voiceover reference was not materialized")
 	}
 	return path, nil
