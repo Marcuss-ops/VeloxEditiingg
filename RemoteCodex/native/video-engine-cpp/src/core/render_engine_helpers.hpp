@@ -53,9 +53,4 @@ bool runFfmpegSegmentWithProgress(
 
 std::string composeSegmentCmd(const std::string& args_only);
 
-bool burnSubtitleTrack(
-    const fs::path& input_video,
-    const fs::path& subtitle_file,
-    const fs::path& output_video);
-
 } // namespace velox::core::render_detail

@@ -152,25 +152,4 @@ std::string composeSegmentCmd(const std::string& args_only) {
         (enabled ? "info" : "error") + " -progress pipe:1 -nostats " + args_only;
 }
 
-bool burnSubtitleTrack(
-    const fs::path& input_video,
-    const fs::path& subtitle_file,
-    const fs::path& output_video) {
-    std::ostringstream filter;
-    filter << "subtitles=" << file::shellQuote(subtitle_file.string());
-
-    std::ostringstream cmd;
-    cmd << "ffmpeg -y -hide_banner -loglevel error"
-        << " -i " << file::shellQuote(input_video.string())
-        << " -vf " << file::shellQuote(filter.str())
-        << " -c:v libx264 -preset veryfast -crf 20"
-        << " -pix_fmt yuv420p -map 0:v:0 -map 0:a? -c:a aac -ar 48000 -ac 2 "
-        << file::shellQuote(output_video.string());
-    file::CommandResult result = file::runCommandTimed(cmd.str());
-    std::cerr << "{\"metric\":\"ffmpeg.subtitle_burn_ms\",\"value\":" << result.wall_ms
-              << ",\"ok\":" << (result.ok ? "true" : "false")
-              << ",\"exit_code\":" << result.exit_code << "}" << std::endl;
-    return result.ok;
-}
-
 } // namespace velox::core::render_detail

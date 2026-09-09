@@ -25,7 +25,6 @@ set(VELOX_RENDER_ENGINE_SOURCES
     src/core/render_engine_audio.cpp
     src/core/render_engine_timeline.cpp
     src/core/render_engine_sidecar.cpp
-    src/core/render_engine_subtitles.cpp
     src/core/render_engine_packet.cpp
     src/core/canonical_video_profile.cpp
     src/core/render_engine_helpers.cpp)

@@ -49,10 +49,6 @@ RenderResult RenderEngine::renderCopyOnly(
         result.error = "copy_only requires at least one timeline video";
         return failRender("copy_only_empty_timeline");
     }
-    if (!plan.subtitle_tracks.empty()) {
-        result.error = "copy_only does not support subtitle burn-in";
-        return failRender("copy_only_subtitles_unsupported");
-    }
     if (plan.watermark_requested && !plan.watermark_already_applied) {
         result.error = "copy_only watermark would require composition; source must already contain the watermark";
         return failRender("copy_only_watermark_composition_required");
@@ -354,10 +350,6 @@ RenderResult RenderEngine::renderMixed(
     if (plan.timeline.empty()) {
         result.error = "mixed render requires at least one timeline video";
         return failRender("mixed_empty_timeline");
-    }
-    if (!plan.subtitle_tracks.empty()) {
-        result.error = "mixed render does not support subtitle burn-in";
-        return failRender("mixed_subtitles_unsupported");
     }
     if (plan.audio_tracks.size() > 1) {
         result.error = "mixed render supports at most one final audio track";

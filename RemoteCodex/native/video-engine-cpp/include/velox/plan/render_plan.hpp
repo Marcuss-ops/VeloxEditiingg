@@ -66,12 +66,6 @@ struct AudioTrack {
 constexpr int kRenderPlanVersionV2 = 2;
 constexpr int kRenderPlanVersionV1 = 1;
 
-struct SubtitleTrack {
-    std::string source;
-    std::string preset;
-    std::string font;
-};
-
 struct CanvasSpec {
     int width{1920};
     int height{1080};
@@ -98,7 +92,6 @@ struct RenderPlan {
     bool mixed{false};
     std::vector<TimelineItem> timeline;
     std::vector<AudioTrack> audio_tracks;
-    std::vector<SubtitleTrack> subtitle_tracks;
     std::string output_path;
 };
 

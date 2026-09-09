@@ -47,6 +47,15 @@ std::optional<RenderPlan> parseRenderPlanV2(
     }
     plan.copy_only = true;
 
+    // Fail-closed backstop (same contract as the V1 parser): subtitle
+    // burn-in is retired; a plan carrying subtitle_tracks is rejected.
+    if (!ju::extractArrayBlock(jsonStr, "subtitle_tracks").empty()) {
+        std::cerr
+            << "subtitle_tracks are not supported by the video renderer: "
+            << "rejecting RenderPlan\n";
+        return std::nullopt;
+    }
+
     const std::string tracksBlock = ju::extractArrayBlock(jsonStr, "video_tracks");
     if (tracksBlock.empty()) {
         std::cerr << "errore: CompiledRenderPlanV2 requires video_tracks\n";

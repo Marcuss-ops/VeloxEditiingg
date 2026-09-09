@@ -81,15 +81,16 @@ std::optional<RenderPlan> parseRenderPlanV1(
         }
     }
 
+    // Fail-closed backstop: subtitle burn-in is retired from the video
+    // renderer contract. A plan that still carries subtitle_tracks must be
+    // REJECTED, never silently ignored and never re-encoded.
     const std::string subtitleBlock = ju::extractArrayBlock(jsonStr, "subtitle_tracks");
     if (!subtitleBlock.empty()) {
-        for (const auto& subtitleStr : ju::splitTopLevelObjects(subtitleBlock)) {
-            SubtitleTrack track;
-            track.source = ju::extractJsonStringValue(subtitleStr, "source");
-            track.preset = ju::extractJsonStringValue(subtitleStr, "preset");
-            track.font = ju::extractJsonStringValue(subtitleStr, "font");
-            if (!track.source.empty()) plan.subtitle_tracks.push_back(std::move(track));
-        }
+        std::cerr
+            << "subtitle_tracks are not supported by the video renderer: "
+            << "use the separate subtitles artifact capability; "
+            << "rejecting RenderPlan\n";
+        return std::nullopt;
     }
 
     return plan;

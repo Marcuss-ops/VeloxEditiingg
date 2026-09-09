@@ -72,7 +72,7 @@ bool RenderEngine::renderLegacyTimeline(
 
 #ifdef VELOX_ENABLE_LIBAV
     bool nativeBatchEligible = plan.version == plan::kRenderPlanVersionV1 &&
-        plan.subtitle_tracks.empty() && !plan.timeline.empty();
+        !plan.timeline.empty();
     for (const auto& item : plan.timeline) {
         if (!std::holds_alternative<plan::VideoSource>(item.source) ||
             item.include_audio || item.transform.slow_zoom) {
@@ -335,7 +335,7 @@ bool RenderEngine::renderLegacyTimeline(
                 seg.source_bytes = fileSize(localVid);
 #ifdef VELOX_ENABLE_LIBAV
                 const bool legacyNeedsFfmpeg = item.include_audio ||
-                    item.transform.slow_zoom || !plan.subtitle_tracks.empty();
+                    item.transform.slow_zoom;
                 if (legacyNeedsFfmpeg) {
                     args_only = media::buildVideoSegmentArgs(
                         localVid, segmentOut, item.duration_seconds, params, item.include_audio);

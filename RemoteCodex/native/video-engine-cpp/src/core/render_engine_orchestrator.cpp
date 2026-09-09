@@ -106,14 +106,14 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
         return result;
     }
 
-    fs::path videoForMux;
+    // Subtitle burn-in was removed from the video renderer contract: the
+    // engine renders the video; subtitles remain a separate artifact
+    // capability and never trigger a second re-encode here. Plans carrying
+    // subtitle_tracks are rejected at the parse boundary (fail-closed).
+    const fs::path& videoForMux = videoOnly;
     const auto trackPartial = [&partialOutputs](const fs::path& path) {
         partialOutputs.track(path);
     };
-    if (!burnSubtitles(plan, workDir, outPath, videoOnly, renderStart,
-                       result, failRender, trackPartial, videoForMux)) {
-        return result;
-    }
 
     render_detail::reportProgress(85, "muxing_audio");
     render_detail::reportDetailedProgress(

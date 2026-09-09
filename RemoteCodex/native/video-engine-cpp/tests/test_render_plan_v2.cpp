@@ -195,6 +195,16 @@ void testParserUnit(const fs::path& clipA, const fs::path& clipB,
     expect(!parseRenderPlan(mixedAudio).has_value(),
            "final_audio mode other than FINAL_AUDIO_COPY fails closed");
 
+    std::cerr << "── parser unit: retired subtitle_tracks rejected ──\n";
+    const std::string v2Subtitles = v2Envelope(
+        "v2-subtitles", "/tmp/v2-subtitles.mp4", clipA.string(),
+        clipB.string(), audio.string());
+    const std::string v2SubtitlesWithLegacyField =
+        v2Subtitles.substr(0, v2Subtitles.size() - 1) +
+        ",\"subtitle_tracks\":[]}";
+    expect(!parseRenderPlan(v2SubtitlesWithLegacyField).has_value(),
+           "V2 subtitle_tracks field is rejected even when empty");
+
     std::cerr << "── parser unit: V1 regression ──\n";
     std::ostringstream v1;
     v1 << "{\"version\":1,\"job_id\":\"v1-reg\",\"output_path\":\"/tmp/v1.mp4\","
@@ -211,6 +221,12 @@ void testParserUnit(const fs::path& clipA, const fs::path& clipB,
                    v1Plan->timeline[0].duration_seconds == 0.8,
                "V1 float duration preserved for the legacy path");
     }
+    const std::string v1Document = v1.str();
+    const std::string v1Subtitles =
+        v1Document.substr(0, v1Document.size() - 1) +
+        ",\"subtitle_tracks\":[]}";
+    expect(!parseRenderPlan(v1Subtitles).has_value(),
+           "V1 subtitle_tracks field is rejected even when empty");
 }
 
 void testMissingLocalSourceDoesNotSpawnCurl(const fs::path& root) {
