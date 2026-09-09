@@ -198,16 +198,13 @@ std::string resolveDriveFolderToFileUrl(const std::string& folderUrl) {
 bool copyFile(const fs::path& src, const fs::path& dst) {
     std::error_code ec;
     fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec);
-    std::error_code sizeEc;
-    const auto bytes = fs::file_size(src, sizeEc);
-    services::recordFileCopy((!ec && !sizeEc) ? static_cast<int64_t>(bytes) : 0);
+    const auto bytes = fs::file_size(src, ec);
+    services::recordFileCopy(ec ? 0 : static_cast<int64_t>(bytes));
     const char* diskMetrics = std::getenv("VELOX_BENCH_DISK_COPY_METRICS");
     if (diskMetrics != nullptr && std::string(diskMetrics) != "0" &&
         std::string(diskMetrics) != "false") {
-        std::error_code sizeEc;
-        const auto bytes = fs::file_size(src, sizeEc);
         std::cerr << "{\"metric\":\"disk.copy\",\"bytes\":"
-                  << ((!ec && !sizeEc) ? bytes : 0)
+                  << (ec ? 0 : bytes)
                   << ",\"ok\":" << (!ec ? "true" : "false") << "}\n";
     }
     return !ec;
@@ -375,6 +372,18 @@ bool downloadAsset(const std::string& source, const fs::path& dest, const std::s
     }
 
     if (fs::exists(source)) {
+        // Staged inputs are read-only render inputs (the engine only writes
+        // segment/output paths), so a hard link materializes the asset with
+        // zero byte copies when source and dest share a filesystem. Cross-
+        // device or pre-existing destinations fall back to the full copy.
+        if (!fs::exists(dest)) {
+            std::error_code link_ec;
+            fs::create_hard_link(source, dest, link_ec);
+            if (!link_ec) {
+                services::recordAssetCopy(0);
+                return true;
+            }
+        }
         const bool ok = copyFile(source, dest);
         services::recordAssetCopy(assetCopyBytes(source));
         return ok;
@@ -384,6 +393,18 @@ bool downloadAsset(const std::string& source, const fs::path& dest, const std::s
         fs::create_directories(cacheDir);
         auto cachedPath = cacheAssetPath(cacheDir, source);
         if (fs::exists(cachedPath)) {
+            // Cache hit: the download path already shares the inode between
+            // dest and cache (hard link), so linking in the reverse direction
+            // is the same established invariant — repeated staging of a warm
+            // asset costs a metadata operation instead of a full copy.
+            if (!fs::exists(dest)) {
+                std::error_code link_ec;
+                fs::create_hard_link(cachedPath, dest, link_ec);
+                if (!link_ec) {
+                    services::recordAssetCopy(0);
+                    return true;
+                }
+            }
             const bool ok = copyFile(cachedPath, dest);
             services::recordAssetCopy(assetCopyBytes(cachedPath));
             return ok;
@@ -410,7 +431,12 @@ bool downloadAsset(const std::string& source, const fs::path& dest, const std::s
     const auto url = normalizeDriveUrl(resolvedSource);
 
     auto tempDest = fs::path(dest.string() + ".download_tmp");
-    std::string cmd = "curl -L --fail --silent --show-error -o " + shellQuote(tempDest.string()) + " " + shellQuote(url);
+    // Stall detection without a hard wall-clock cap: abort when the transfer
+    // falls under 1 KB/s for 60s (hung connection) or the connect phase
+    // exceeds 15s. A slow-but-progressing download is never killed.
+    std::string cmd = "curl -L --fail --silent --show-error "
+                      "--connect-timeout 15 --speed-limit 1024 --speed-time 60 -o "
+                      + shellQuote(tempDest.string()) + " " + shellQuote(url);
     if (!runCommand(cmd)) {
         std::error_code ec;
         fs::remove(tempDest, ec);

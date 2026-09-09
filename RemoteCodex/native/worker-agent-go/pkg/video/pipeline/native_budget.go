@@ -37,7 +37,16 @@ func ComputeNativeRenderBudget(effectiveCores, maxConcurrentRenders int) NativeR
 	if threadsPerSegment < 1 {
 		threadsPerSegment = 1
 	}
+	// Split the per-segment budget across decode and encode. Decode stays at
+	// 1 thread only while the budget is small; once threadsPerSegment grows,
+	// one extra decoder thread prevents decode from starving the encode
+	// pipeline on high-resolution sources (4K HEVC), where a single decode
+	// thread cannot feed many encoder threads. Keep the encoder majority so
+	// x264 stays the primary consumer.
 	decoderThreads := 1
+	if threadsPerSegment >= 6 {
+		decoderThreads = 2
+	}
 	encoderThreads := threadsPerSegment - decoderThreads
 	if encoderThreads < 1 {
 		encoderThreads = 1

@@ -370,17 +370,25 @@ int main() {
                ") < encode wall_ms (" + std::to_string(encode.wall_ms) + ")");
 
     // ── Download/staging: the copy path reads assets in place through the
-    //    in-process LibAV muxer (zero file copies / zero bytes staged), while
-    //    the encode path materializes each source into the workdir. ──────
+    //    in-process LibAV muxer (zero file copies / zero bytes staged). The
+    //    encode path materializes each source into the workdir, and since
+    //    hard-link staging landed, that materialization is zero-byte too
+    //    (inode shared with the fixture). Real staging is proven by the
+    //    frames_encoded/transcode assertions above, not by a copy counter:
+    //    both paths must report zero byte copies here (fixture and workdir
+    //    share /tmp, so the cross-device copy fallback never fires). ─────
     expect(copy.file_copy_count == 0,
            "copy path stages zero files (in-place packet mux), actual=" +
                std::to_string(copy.file_copy_count));
     expect(copy.asset_bytes_copied == 0,
            "copy path copies zero asset bytes, actual=" +
                std::to_string(copy.asset_bytes_copied));
-    expect(encode.file_copy_count > 0,
-           "encode path materializes assets (download/staging), actual=" +
+    expect(encode.file_copy_count == 0,
+           "encode path stages via inode sharing (hard link, no byte copies), actual=" +
                std::to_string(encode.file_copy_count));
+    expect(encode.asset_bytes_copied == 0,
+           "encode path copies zero asset bytes (hard-link staging), actual=" +
+               std::to_string(encode.asset_bytes_copied));
 
     // ── Warm cache: the second copy render stays zero-copy (a warm asset
     //    cache would behave identically — no re-materialization). ────────
