@@ -247,9 +247,10 @@ inline double extractJsonNumberValue(const std::string& json, const std::string&
     size_t end = 0;
     if (!detail::findMemberValue(json, key, start, end)) return fallback;
     try {
+        const std::string raw = trim(json.substr(start, end - start));
         size_t consumed = 0;
-        const double value = std::stod(json.substr(start, end - start), &consumed);
-        return consumed == end - start ? value : fallback;
+        const double value = std::stod(raw, &consumed);
+        return consumed == raw.size() ? value : fallback;
     } catch (...) {
         return fallback;
     }
@@ -259,8 +260,9 @@ inline bool extractJsonBoolValue(const std::string& json, const std::string& key
     size_t start = 0;
     size_t end = 0;
     if (!detail::findMemberValue(json, key, start, end)) return fallback;
-    if (json.compare(start, end - start, "true") == 0) return true;
-    if (json.compare(start, end - start, "false") == 0) return false;
+    const std::string raw = trim(json.substr(start, end - start));
+    if (raw == "true") return true;
+    if (raw == "false") return false;
     return fallback;
 }
 

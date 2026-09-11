@@ -278,6 +278,42 @@ void testParserUnit(const fs::path& clipA, const fs::path& clipB,
                "V1 float duration preserved for the legacy path");
     }
 
+    const std::string v1Pretty = R"JSON(
+{
+  "version": 1,
+  "job_id": "v1-pretty",
+  "output_path": "/tmp/v1-pretty.mp4",
+  "canvas": {
+    "width": 2,
+    "height": 2,
+    "fps": 1
+  },
+  "copy_only": true,
+  "timeline": [
+    {
+      "source": {
+        "type": "color",
+        "color_hex": "#000000"
+      },
+      "duration_seconds": 0.1
+    }
+  ],
+  "audio_tracks": null
+}
+)JSON";
+    const auto prettyPlan = parseRenderPlan(v1Pretty);
+    expect(prettyPlan.has_value(), "pretty-printed V1 plan parses");
+    if (prettyPlan) {
+        expect(prettyPlan->canvas.width == 2 && prettyPlan->canvas.height == 2 &&
+                   prettyPlan->canvas.fps == 1,
+               "pretty-printed V1 canvas numbers preserve their values");
+        expect(prettyPlan->copy_only,
+               "pretty-printed V1 boolean preserves its value");
+        expect(prettyPlan->timeline.size() == 1 &&
+                   prettyPlan->timeline[0].duration_seconds == 0.1,
+               "pretty-printed V1 duration preserves its value");
+    }
+
     std::cerr << "── parser unit: V1 rejects malformed entries instead of dropping them ──\n";
     const std::string v1Unknown =
         "{\"version\":1,\"job_id\":\"v1-unknown\",\"output_path\":\"/tmp/v1.mp4\","
