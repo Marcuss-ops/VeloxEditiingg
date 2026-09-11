@@ -24,10 +24,10 @@ struct SegmentResourceClaim {
 // The host-level execution budget the scheduler must respect. cpu_tokens and
 // memory_bytes are the shared pools; 0 means "unbounded" for that dimension
 // (only max_parallel_segments applies). encoder_threads_per_segment records
-// how many internal encoder threads each segment is configured to use so the
-// operator can coordinate segment parallelism with x264 internal threads
-// instead of oversubscribing the host (e.g. 6 vCPU = 2 segments × 2 encoder
-// threads, never 4 segments × 6 encoder threads).
+// how many internal encoder threads each segment is configured to use. The
+// scheduler treats this as a minimum CPU claim, so callers cannot accidentally
+// pass a small claim while enabling a larger encoder (e.g. 6 vCPU = 2
+// segments × 2 encoder threads, never 4 segments × 6 encoder threads).
 struct ExecutionBudget {
     int cpu_tokens{0};
     int64_t memory_bytes{0};
@@ -52,8 +52,9 @@ public:
     using Task = std::function<SegmentTaskResult(std::size_t segment_index)>;
     using Claim = std::function<SegmentResourceClaim(std::size_t segment_index)>;
 
-    // Every segment claims the default 1 cpu token and no memory, so this
-    // overload degrades to the historical bounded-worker-pool behavior.
+    // Every segment claims one CPU token and no memory. If the budget carries
+    // encoder_threads_per_segment, that value is applied as the minimum CPU
+    // claim by the scheduler.
     std::vector<SegmentTaskResult> run(std::size_t segment_count, const Task& task) const;
 
     // Resource-aware execution: before a segment starts, its declared claim

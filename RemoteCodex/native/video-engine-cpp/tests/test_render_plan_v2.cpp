@@ -254,6 +254,14 @@ void testParserUnit(const fs::path& clipA, const fs::path& clipB,
         ",\"subtitle_tracks\":[]}";
     expect(!parseRenderPlan(v1Subtitles).has_value(),
            "V1 subtitle_tracks field is rejected even when empty");
+
+    const std::string v1Layers =
+        "{\"version\":1,\"job_id\":\"v1-layers\",\"output_path\":\"/tmp/v1.mp4\","
+        "\"timeline\":[{\"source\":{\"type\":\"video\",\"url\":\"/tmp/a.mp4\"},"
+        "\"duration_seconds\":1.0}],\"layers\":[{\"id\":\"title\","
+        "\"type\":\"text\",\"text\":\"hello\"}]}";
+    expect(!parseRenderPlan(v1Layers).has_value(),
+           "V1 Layers are rejected instead of being silently ignored");
 }
 
 void testMissingLocalSourceDoesNotSpawnCurl(const fs::path& root) {

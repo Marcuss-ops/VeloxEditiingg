@@ -18,6 +18,16 @@ std::optional<RenderPlan> parseRenderPlanV1(
     plan.watermark_requested = ju::extractJsonBoolValue(jsonStr, "watermark_requested", false);
     plan.mixed = ju::extractJsonBoolValue(jsonStr, "mixed", false);
 
+    // The V1 Go contract can represent editorial Layers, but this native
+    // renderer has no production compositor wired into its frame pipeline.
+    // Reject the field at the parser boundary instead of accepting a plan
+    // whose overlays would disappear from the output.
+    if (!ju::extractArrayBlock(jsonStr, "layers").empty()) {
+        std::cerr << "layers are not supported by the native video renderer: "
+                     "use the Chronon compositor backend; rejecting RenderPlan\n";
+        return std::nullopt;
+    }
+
     const std::string timelineBlock = ju::extractArrayBlock(jsonStr, "timeline");
     if (!timelineBlock.empty()) {
         for (const auto& itemStr : ju::splitTopLevelObjects(timelineBlock)) {

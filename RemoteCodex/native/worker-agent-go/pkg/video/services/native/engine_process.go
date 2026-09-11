@@ -62,6 +62,7 @@ func runEngineProcess(ctx context.Context, binaryPath, planPath string, onProgre
 		cmd.Env = setEnvIfAbsent(cmd.Env, "VELOX_NATIVE_DECODER_THREADS", budget.DecoderThreads)
 		cmd.Env = setEnvIfAbsent(cmd.Env, "VELOX_NATIVE_ENCODER_THREADS", budget.EncoderThreads)
 		cmd.Env = setEnvIfAbsent(cmd.Env, "VELOX_NATIVE_SEGMENT_WORKERS", budget.SegmentWorkers)
+		cmd.Env = setEnvIfAbsent(cmd.Env, "VELOX_NATIVE_CPU_BUDGET", budget.RenderCPUBudget)
 	}
 	// Every Attempt owns an isolated process group. Pdeathsig is the
 	// crash-safety backstop: if the worker agent is SIGKILLed, the

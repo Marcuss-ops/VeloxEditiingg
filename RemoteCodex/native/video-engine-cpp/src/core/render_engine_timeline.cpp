@@ -10,13 +10,17 @@
 #endif
 
 #include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <system_error>
 #include <string>
+#include <string_view>
+#include <thread>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -37,22 +41,44 @@ namespace {
     struct NativeThreadConfig {
         int decoder_threads{0};
         int encoder_threads{0};
+        int cpu_budget{0};
     };
 
-    NativeThreadConfig nativeThreadConfig() {
-        NativeThreadConfig config;
-        if (const char* value = std::getenv("VELOX_NATIVE_DECODER_THREADS")) {
-            try {
-                const int parsed = std::stoi(value);
-                if (parsed > 0) config.decoder_threads = parsed;
-            } catch (...) {
-            }
+    bool parseNonNegativeEnv(const char* name, int& output, std::string& error) {
+        const char* value = std::getenv(name);
+        if (value == nullptr) return true;
+        const std::string_view raw(value);
+        if (raw.empty()) {
+            error = std::string(name) + " must be a non-negative integer";
+            return false;
         }
-        if (const char* value = std::getenv("VELOX_NATIVE_ENCODER_THREADS")) {
-            try {
-                const int parsed = std::stoi(value);
-                if (parsed > 0) config.encoder_threads = parsed;
-            } catch (...) {
+        int parsed = 0;
+        const auto [end, status] = std::from_chars(
+            raw.data(), raw.data() + raw.size(), parsed);
+        if (status != std::errc{} || end != raw.data() + raw.size() || parsed < 0) {
+            error = std::string(name) + " must be a non-negative integer";
+            return false;
+        }
+        output = parsed;
+        return true;
+    }
+
+    NativeThreadConfig nativeThreadConfig(std::string& error) {
+        NativeThreadConfig config;
+        if (!parseNonNegativeEnv("VELOX_NATIVE_DECODER_THREADS",
+                                 config.decoder_threads, error) ||
+            !parseNonNegativeEnv("VELOX_NATIVE_ENCODER_THREADS",
+                                 config.encoder_threads, error)) {
+            return config;
+        }
+        config.cpu_budget = static_cast<int>(std::thread::hardware_concurrency());
+        if (config.cpu_budget <= 0) config.cpu_budget = 1;
+        if (const char* value = std::getenv("VELOX_NATIVE_CPU_BUDGET")) {
+            if (!parseNonNegativeEnv("VELOX_NATIVE_CPU_BUDGET",
+                                     config.cpu_budget, error) ||
+                config.cpu_budget <= 0) {
+                error = "VELOX_NATIVE_CPU_BUDGET must be a positive integer";
+                return config;
             }
         }
         return config;
@@ -91,6 +117,7 @@ bool RenderEngine::renderLegacyTimeline(
         };
         struct NativeSegmentOutcome {
             media::FramePipelineResult pipeline;
+            double asset_download_ms{0.0};
             double started_offset_ms{0.0};
             double finished_offset_ms{0.0};
             double wall_ms{0.0};
@@ -113,19 +140,6 @@ bool RenderEngine::renderLegacyTimeline(
                 return false;
             }
             const fs::path local_video = numberedWorkPath(workDir, "native_video_", ".mp4", i);
-            telemetry::ScopedPhase assetPhase(
-                recorder_, telemetry::kOriginWorker, telemetry::kScopeTask,
-                "worker.asset", "transfer", "download");
-            const auto download_start = std::chrono::steady_clock::now();
-            if (!file::downloadAsset(source.url, local_video, source.cache_key)) {
-                assetPhase.Abort("asset_download_failed", "failed to download native video source");
-                result.error = "failed to download video source for segment " + std::to_string(i);
-                failRender("asset_download_failed");
-                return false;
-            }
-            assetPhase.Complete();
-            metrics_.addMs("asset_download_ms", std::chrono::duration<double, std::milli>(
-                std::chrono::steady_clock::now() - download_start).count());
             total_duration_seconds += static_cast<double>(duration_us) / 1'000'000.0;
             jobs.push_back(NativeSegmentJob{
                 i,
@@ -139,24 +153,69 @@ bool RenderEngine::renderLegacyTimeline(
 
         std::size_t parallelism = 1;
         if (const char* configured = std::getenv("VELOX_NATIVE_SEGMENT_WORKERS")) {
-            try {
-                const auto parsed = std::stoull(configured);
-                if (parsed > 0) parallelism = std::min<std::size_t>(parsed, 8);
-            } catch (...) {
-                parallelism = 1;
+            const std::string_view raw(configured);
+            std::size_t parsed = 0;
+            const auto [end, status] = std::from_chars(
+                raw.data(), raw.data() + raw.size(), parsed);
+            if (status != std::errc{} || end != raw.data() + raw.size() || parsed == 0) {
+                result.error = "VELOX_NATIVE_SEGMENT_WORKERS must be a positive integer";
+                failRender("native_thread_configuration_invalid");
+                return false;
             }
+            parallelism = std::min<std::size_t>(parsed, 8);
         }
-        const NativeThreadConfig thread_config = nativeThreadConfig();
+        std::string thread_error;
+        NativeThreadConfig thread_config = nativeThreadConfig(thread_error);
+        if (!thread_error.empty()) {
+            result.error = thread_error;
+            failRender("native_thread_configuration_invalid");
+            return false;
+        }
+        // An unset codec-thread knob used to delegate to LibAV's automatic
+        // policy, which could multiply the outer worker count. Resolve it to
+        // a bounded value for the native batch; explicit values remain the
+        // operator's contract and are admitted only when they fit the budget.
+        if (thread_config.decoder_threads == 0) {
+            thread_config.decoder_threads = 1;
+        }
+        if (thread_config.encoder_threads == 0) {
+            const int per_segment_budget = std::max<int>(
+                1, thread_config.cpu_budget / static_cast<int>(parallelism));
+            thread_config.encoder_threads = per_segment_budget;
+        }
         media::SegmentScheduler scheduler(media::SegmentSchedulerConfig{
-            media::ExecutionBudget{/*cpu_tokens*/0, /*memory_bytes*/0,
+            media::ExecutionBudget{thread_config.cpu_budget, /*memory_bytes*/0,
                                    parallelism, thread_config.encoder_threads}});
         std::vector<NativeSegmentOutcome> outcomes(jobs.size());
-        const auto scheduled = scheduler.run(jobs.size(), [&](std::size_t index) {
+        const auto scheduled = scheduler.run(
+            jobs.size(),
+            [&](std::size_t) {
+                return media::SegmentResourceClaim{
+                    std::max(thread_config.decoder_threads, thread_config.encoder_threads), 0};
+            },
+            [&](std::size_t index) {
             const auto& job = jobs[index];
+            const auto& source = std::get<plan::VideoSource>(plan.timeline[index].source);
             auto& outcome = outcomes[index];
             const auto start = std::chrono::steady_clock::now();
             outcome.started_offset_ms = std::chrono::duration<double, std::milli>(
                 start - renderStart).count();
+            telemetry::ScopedPhase assetPhase(
+                recorder_, telemetry::kOriginWorker, telemetry::kScopeTask,
+                "worker.asset", "transfer", "download");
+            const auto download_start = std::chrono::steady_clock::now();
+            const bool downloaded = file::downloadAsset(
+                source.url, job.input_path, source.cache_key);
+            outcome.asset_download_ms = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - download_start).count();
+            metrics_.addMs("asset_download_ms", outcome.asset_download_ms);
+            if (!downloaded) {
+                assetPhase.Abort("asset_download_failed", "failed to download native video source");
+                outcome.pipeline.error = "failed to download video source for segment " +
+                    std::to_string(index);
+                return media::SegmentTaskResult{false, outcome.pipeline.error};
+            }
+            assetPhase.Complete();
             telemetry::ScopedPhase encodePhase(
                 recorder_, telemetry::kOriginEngine, telemetry::kScopeSegment,
                 "engine.frame_pipeline", "encode_segment", "encode", "",
@@ -213,7 +272,9 @@ bool RenderEngine::renderLegacyTimeline(
             segment.scene_id = job.scene_id;
             segment.source_type = "video";
             segment.total_ms = outcome.wall_ms;
-            segment.ffmpeg_encode_ms = outcome.wall_ms;
+            segment.asset_download_ms = outcome.asset_download_ms;
+            segment.ffmpeg_encode_ms = std::max(0.0,
+                outcome.wall_ms - outcome.asset_download_ms);
             segment.source_bytes = fileSize(job.input_path);
             segment.output_bytes = output_bytes;
             segment.frames_encoded = outcome.pipeline.frames_encoded;
@@ -397,11 +458,17 @@ bool RenderEngine::renderLegacyTimeline(
                     nativeConfig.source_duration_us = expected_us;
                     nativeConfig.codec = "libx264";
                     nativeConfig.preset = "medium";
-                    const NativeThreadConfig fallback_threads = nativeThreadConfig();
-                    nativeConfig.decoder_threads = fallback_threads.decoder_threads;
-                    nativeConfig.encoder_threads = fallback_threads.encoder_threads;
+                    std::string fallback_thread_error;
+                    const NativeThreadConfig fallback_threads = nativeThreadConfig(fallback_thread_error);
                     media::FramePipelineResult nativeResult;
-                    built = media::renderFrames(nativeConfig, &nativeResult);
+                    if (!fallback_thread_error.empty()) {
+                        nativeResult.error = fallback_thread_error;
+                        built = false;
+                    } else {
+                        nativeConfig.decoder_threads = fallback_threads.decoder_threads;
+                        nativeConfig.encoder_threads = fallback_threads.encoder_threads;
+                        built = media::renderFrames(nativeConfig, &nativeResult);
+                    }
                     recordFramePipeline(nativeResult);
                     segmentFrames = nativeResult.frames_encoded;
                     segmentDecodedFrames = nativeResult.frames_decoded;

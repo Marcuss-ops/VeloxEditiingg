@@ -119,5 +119,23 @@ int main() {
            "over-budget claim keeps a deterministic error");
     expect(over_results[2].success, "segments after an over-budget claim still complete");
 
+    // The encoder-thread contract is part of admission, even when a caller
+    // uses the convenience overload with its historical one-token claim.
+    velox::media::SegmentScheduler encoder_scheduler(
+        velox::media::SegmentSchedulerConfig{
+            velox::media::ExecutionBudget{4, 0, 8, 3}});
+    std::atomic<int> encoder_peak{0};
+    encoder_scheduler.run(8, [&](std::size_t) {
+        const int now = active.fetch_add(1) + 1;
+        int observed = encoder_peak.load();
+        while (now > observed && !encoder_peak.compare_exchange_weak(observed, now)) {
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        active.fetch_sub(1);
+        return SegmentTaskResult{true, {}};
+    });
+    expect(encoder_peak.load() <= 1,
+           "encoder_threads_per_segment participates in CPU admission");
+
     return failures == 0 ? 0 : 1;
 }

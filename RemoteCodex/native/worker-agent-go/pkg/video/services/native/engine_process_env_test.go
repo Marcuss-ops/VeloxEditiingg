@@ -25,3 +25,11 @@ func TestSetEnvIfAbsentPreservesExplicitOverride(t *testing.T) {
 		t.Fatalf("setEnvIfAbsent() = %#v, want %#v", got, want)
 	}
 }
+
+func TestSetEnvIfAbsentAddsNativeCPUBudget(t *testing.T) {
+	got := setEnvIfAbsent(nil, "VELOX_NATIVE_CPU_BUDGET", 7)
+	want := []string{"VELOX_NATIVE_CPU_BUDGET=7"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("setEnvIfAbsent() = %#v, want %#v", got, want)
+	}
+}

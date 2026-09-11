@@ -12,6 +12,16 @@ namespace velox::media {
 
 namespace {
 
+SegmentResourceClaim effectiveClaim(const SegmentResourceClaim& claim,
+                                    const ExecutionBudget& budget) {
+    SegmentResourceClaim effective = claim;
+    if (budget.encoder_threads_per_segment > 0) {
+        effective.cpu_tokens = std::max(
+            effective.cpu_tokens, budget.encoder_threads_per_segment);
+    }
+    return effective;
+}
+
 SegmentTaskResult claimExceedsBudget(const SegmentResourceClaim& claim,
                                      const ExecutionBudget& budget) {
     const bool cpu_oversubscribed =
@@ -87,6 +97,7 @@ std::vector<SegmentTaskResult> SegmentScheduler::run(
                     continue;
                 }
 
+                segment_claim = effectiveClaim(segment_claim, budget_);
                 const SegmentTaskResult over = claimExceedsBudget(segment_claim, budget_);
                 if (!over.success) {
                     results[index] = over;

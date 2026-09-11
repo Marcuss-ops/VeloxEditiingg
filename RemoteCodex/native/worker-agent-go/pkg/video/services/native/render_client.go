@@ -115,6 +115,9 @@ func (c *RenderClient) Render(ctx context.Context, p *plan.RenderPlan) error {
 func (c *RenderClient) RenderWithMetrics(ctx context.Context, p *plan.RenderPlan) (pipeline.RenderMetrics, error) {
 	metrics := pipeline.RenderMetrics{}
 	start := time.Now()
+	if !chrononBackendEnabled() && p != nil && len(p.Layers) > 0 {
+		return metrics, errors.New("native renderer: layers are unsupported; use the Chronon compositor backend")
+	}
 
 	tempDir, planPath, marshalMs, writeMs, err := preparePlanTemp(p)
 	if err != nil {
