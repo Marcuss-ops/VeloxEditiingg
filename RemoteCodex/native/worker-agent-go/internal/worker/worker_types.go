@@ -171,6 +171,7 @@ type ExitFunc func(int)
 //  7. assetIntegrityMu
 //  8. mu (status / heartbeatWake / jobDone)
 //  9. connStateMu
+//
 // 10. commandMu
 // 11. pendingTasksMu
 // 12. activeTaskLeasesMu
@@ -243,6 +244,10 @@ type Worker struct {
 	// artifacts can publish concurrently.
 	publisherPool *PublisherPool
 	artifactLocks *ArtifactLockRegistry
+	// cpuTokens is the worker-wide weighted admission gate for native render
+	// work. Job slots limit attempts; these tokens limit the actual CPU budget
+	// claimed by concurrent renders.
+	cpuTokens *CPUTokenPool
 
 	// Status management — error state only; busy/idle derived from activeTasks
 	status Status

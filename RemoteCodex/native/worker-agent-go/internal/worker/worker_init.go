@@ -27,6 +27,7 @@ import (
 	"velox-worker-agent/internal/spool"
 	"velox-worker-agent/internal/taskrunner"
 	"velox-worker-agent/internal/telemetry"
+	"velox-worker-agent/internal/telemetry/collectors"
 	"velox-worker-agent/internal/worker/concurrency"
 	"velox-worker-agent/internal/worker/stageexec"
 	"velox-worker-agent/internal/workercache"
@@ -110,6 +111,10 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		StageTimeout:        15 * time.Minute,
 	}
 	stageExecutor := stageexec.NewStageExecutor(stageExecCfg)
+	usableCPUs := collectors.DetectCPUCapacity().EffectiveCPUCount - 1
+	if usableCPUs < 1 {
+		usableCPUs = 1
+	}
 
 	// Store a transport factory that creates fresh instances per session.
 	// After Close(), transports are not reusable (channels + sync.Once),
@@ -314,6 +319,7 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		connState:          ConnDisconnected,
 		concurrencyLimiter: concurrency.NewConcurrencyLimiter(detectedConcurrency),
 		publisherPool:      NewPublisherPool(cfg.PublisherConcurrency),
+		cpuTokens:          NewCPUTokenPool(usableCPUs),
 		// admissionCtrl is wired into the pool after construction via
 		// SetAdmissionController below (same pattern as the scheduler).
 		artifactLocks:       NewArtifactLockRegistry(),

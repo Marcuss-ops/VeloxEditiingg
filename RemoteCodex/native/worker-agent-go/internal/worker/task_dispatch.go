@@ -406,6 +406,23 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 	if waterfall != nil {
 		waterfall.Transition("render", time.Now().UTC())
 	}
+	// The native budget is now a real weighted admission gate. Without this
+	// acquire, the values injected into the engine environment would merely
+	// describe an intended budget while concurrent renderers could still all
+	// consume the full host. Hold the tokens only for executor work; the job
+	// limiter and publisher pool cover the surrounding lifecycle separately.
+	var cpuTokenCount int
+	if w.cpuTokens != nil {
+		budget, ok := pipeline.NativeRenderBudgetFromContext(ctx)
+		if !ok {
+			budget = w.nativeRenderBudget()
+		}
+		cpuTokenCount = budget.RenderCPUBudget
+		if err := w.cpuTokens.Acquire(ctx, cpuTokenCount); err != nil {
+			return failBeforeRun("cpu_budget_unavailable", fmt.Errorf("acquire %d cpu tokens: %w", cpuTokenCount, err))
+		}
+		defer w.cpuTokens.Release(cpuTokenCount)
+	}
 	report, runErr := w.taskRunner.Run(ctx, spec)
 	if m := telemetry.MilestoneRecorderFromContext(ctx); m != nil {
 		m.Mark(sharedtelemetry.MilestoneRenderCompleted)

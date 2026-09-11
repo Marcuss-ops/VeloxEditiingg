@@ -39,14 +39,14 @@ import (
 //
 // telemetry reports the external processes the engine spawned in its
 // own process group and the tree's byte counters, sampled from /proc
-// while it ran. It is populated on every exit path once the engine was
-// started (the monitor is stopped by the deferred cleanup below before
-// this function returns).
+// while it ran when sampleProcessTree is true. It is populated on every
+// exit path once the engine was started (the monitor is stopped by the
+// deferred cleanup below before this function returns).
 //
 // SAFETY-CRITICAL: Setpgid + Pdeathsig + 10s SIGTERM grace + SIGKILL
 // hard-kill + <-done reaping are preserved verbatim from the original
 // render_client.go. Do not modify these.
-func runEngineProcess(ctx context.Context, binaryPath, planPath string, onProgress DetailedProgressFunc, legacyProgress ProgressFunc) (engineStarted bool, processStartMs int64, processWaitMs int64, stderrBuf strings.Builder, stdoutBuf strings.Builder, telemetry ProcessTelemetry, err error) {
+func runEngineProcess(ctx context.Context, binaryPath, planPath string, onProgress DetailedProgressFunc, legacyProgress ProgressFunc, sampleProcessTree bool) (engineStarted bool, processStartMs int64, processWaitMs int64, stderrBuf strings.Builder, stdoutBuf strings.Builder, telemetry ProcessTelemetry, err error) {
 	args := []string{"--render", "--plan", planPath}
 	if chrononBackendEnabled() {
 		args = []string{"render-plan", "--input", planPath}
@@ -92,14 +92,15 @@ func runEngineProcess(ctx context.Context, binaryPath, planPath string, onProgre
 	processStartMs = time.Since(processStart).Milliseconds()
 
 	// Start the external-process sampler as soon as the engine PID is
-	// known. The engine owns its process group (Setpgid below), so the
-	// /proc group scan sees the whole ffmpeg/ffprobe/shell/curl tree it
-	// spawns. The deferred cleanup stops the monitor on EVERY exit path
-	// (success, cancellation, subprocess failure) and collects the final
-	// counts into the named return value before this function returns.
+	// known when this render opts into full process telemetry. The engine
+	// owns its process group (Setpgid below), so the /proc group scan sees
+	// the whole ffmpeg/ffprobe/shell/curl tree it spawns. The deferred
+	// cleanup stops the monitor on EVERY exit path (success, cancellation,
+	// subprocess failure) and collects the final counts into the named
+	// return value before this function returns.
 	var monitorStop chan struct{}
 	var monitorDone chan struct{}
-	if cmd.Process != nil {
+	if sampleProcessTree && cmd.Process != nil {
 		monitorStop = make(chan struct{})
 		monitorDone = make(chan struct{})
 		go func() {

@@ -239,7 +239,9 @@ type RenderMetrics struct {
 	// succeeded) — never inferred from a timing value. The exec counts
 	// cover the external tool processes the engine spawned in its own
 	// process group, sampled from /proc by the native client while the
-	// engine ran. They are zero when no native render occurred.
+	// engine ran when full process telemetry is enabled. The V2 zero-spawn
+	// fast path leaves these Go-side counters zero and relies on the exact
+	// engine-declared ledger. They are also zero when no native render occurred.
 	EngineSpawnCount     int64
 	EngineSpawnMs        int64
 	ExternalProcessCount int64

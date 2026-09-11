@@ -139,7 +139,7 @@ func (c *RenderClient) RenderWithMetrics(ctx context.Context, p *plan.RenderPlan
 		}
 	}
 
-	if err := c.executeEngine(ctx, planPath, p.JobID, p.OutputPath, start, &metrics); err != nil {
+	if err := c.executeEngine(ctx, planPath, p.JobID, p.OutputPath, start, &metrics, true); err != nil {
 		return metrics, err
 	}
 	return metrics, nil
@@ -174,7 +174,7 @@ func (c *RenderClient) RenderCompiledPlanV2(ctx context.Context, planJSON []byte
 	}
 	metrics.PlanWriteMs = time.Since(writeStart).Milliseconds()
 
-	if err := c.executeEngine(ctx, planPath, "", outputPath, start, &metrics); err != nil {
+	if err := c.executeEngine(ctx, planPath, "", outputPath, start, &metrics, false); err != nil {
 		return metrics, err
 	}
 	return metrics, nil
@@ -185,7 +185,7 @@ func (c *RenderClient) RenderCompiledPlanV2(ctx context.Context, planJSON []byte
 // map the lifecycle + sidecar telemetry onto metrics, verify the
 // output exists and stamp TotalMs. The safety-critical subprocess
 // lifecycle itself lives in engine_process.go.
-func (c *RenderClient) executeEngine(ctx context.Context, planPath, jobID, outputPath string, start time.Time, metrics *pipeline.RenderMetrics) error {
+func (c *RenderClient) executeEngine(ctx context.Context, planPath, jobID, outputPath string, start time.Time, metrics *pipeline.RenderMetrics, sampleProcessTree bool) error {
 	if budget, ok := pipeline.NativeRenderBudgetFromContext(ctx); ok {
 		metrics.EffectiveCPUCores = budget.EffectiveCPUCores
 		metrics.RenderCPUBudget = budget.RenderCPUBudget
@@ -195,7 +195,7 @@ func (c *RenderClient) executeEngine(ctx context.Context, planPath, jobID, outpu
 	}
 	c.logger.Info("[NATIVE] Launching: %s --render --plan %s", c.binaryPath, planPath)
 	// SAFETY-CRITICAL subprocess lifecycle lives in engine_process.go.
-	engineStarted, processStartMs, processWaitMs, stderrBuf, stdoutBuf, processTelemetry, err := runEngineProcess(ctx, c.binaryPath, planPath, c.onProgress, c.legacyProgress)
+	engineStarted, processStartMs, processWaitMs, stderrBuf, stdoutBuf, processTelemetry, err := runEngineProcess(ctx, c.binaryPath, planPath, c.onProgress, c.legacyProgress, sampleProcessTree)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			// Cancellation path — preserve any sidecar phases already
