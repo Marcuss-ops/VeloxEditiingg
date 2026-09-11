@@ -1,8 +1,12 @@
 package renderplan
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"strings"
 	"testing"
+
+	"velox-shared/contract"
 )
 
 func validV2Payload() map[string]interface{} {
@@ -85,5 +89,65 @@ func TestValidateTaskPayload_AllowsOnlyExplicitLegacyAdapter(t *testing.T) {
 	delete(currentMasterPayload, "payload_contract_version")
 	if err := ValidateTaskPayload(currentMasterPayload); err == nil {
 		t.Fatal("unversioned current payload was accepted")
+	}
+}
+
+func nativePacketCopyPayload(t *testing.T) map[string]interface{} {
+	t.Helper()
+	const timelineSHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const videoSHA = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	const audioSHA = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	plan := &contract.CompiledRenderPlanV2{
+		PlanVersion:      contract.CompiledPlanVersionV2,
+		TimelineRevision: 1,
+		TimelineSHA256:   timelineSHA,
+		DurationUS:       1_000_000,
+		Output: contract.OutputContractV2{
+			Container: "mp4", VideoCodec: "h264", Width: 1920, Height: 1080,
+			FPSNum: 30, FPSDen: 1, PixelFormat: "yuv420p",
+		},
+		FinalAudio: contract.FinalAudioV2{
+			Mode: contract.AudioModeFinalAudioCopy, AssetID: "audio", SHA256: audioSHA,
+			SizeBytes: 1, Codec: "aac", SampleRateHz: 48_000, Channels: 2,
+			DurationUS: 1_000_000, TimelineRevision: 1, TimelineSHA256: timelineSHA,
+		},
+		VideoTracks: []contract.VideoTrackV2{{TrackID: "main", Segments: []contract.VideoSegmentV2{{
+			SegmentID: "segment-0", AssetID: "video", SHA256: videoSHA,
+			TimelineStartFrame: 0, FrameCount: 30, SourceInUS: 0, SourceDurationUS: 1_000_000,
+		}}}},
+		Assets: []contract.AssetRefV2{
+			{AssetID: "audio", SHA256: audioSHA, SizeBytes: 1, Kind: "final_audio", DurationUS: 1_000_000},
+			{AssetID: "video", SHA256: videoSHA, SizeBytes: 1, Kind: "video", DurationUS: 1_000_000},
+		},
+	}
+	data, err := plan.CanonicalJSON()
+	if err != nil {
+		t.Fatalf("canonical native plan: %v", err)
+	}
+	digest := sha256.Sum256(data)
+	return map[string]interface{}{
+		"executor_id":                             "video.assemble.copy.v1",
+		"executor_version":                        1,
+		"payload_contract_version":                2,
+		contract.PayloadKeyCompiledRenderPlanJSON: string(data),
+		contract.PayloadKeyCompiledRenderPlanSHA:  hex.EncodeToString(digest[:]),
+	}
+}
+
+func TestValidateTaskPayload_NativePacketCopyUsesStrictV2Contract(t *testing.T) {
+	if err := ValidateTaskPayload(nativePacketCopyPayload(t)); err != nil {
+		t.Fatalf("native packet-copy V2 payload rejected: %v", err)
+	}
+
+	legacy := nativePacketCopyPayload(t)
+	legacy["render_plan_version"] = "v2"
+	if err := ValidateTaskPayload(legacy); err == nil {
+		t.Fatal("native packet-copy payload with a parallel render_plan envelope was accepted")
+	}
+
+	missing := nativePacketCopyPayload(t)
+	delete(missing, contract.PayloadKeyCompiledRenderPlanJSON)
+	if err := ValidateTaskPayload(missing); err == nil {
+		t.Fatal("native packet-copy payload without CompiledRenderPlanV2 was accepted")
 	}
 }

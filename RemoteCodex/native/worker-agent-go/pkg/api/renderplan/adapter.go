@@ -1,6 +1,11 @@
 package renderplan
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+
+	"velox-shared/contract"
+)
 
 // ValidateTaskPayload is the worker admission router. New tasks must carry
 // render_plan_version=v2. The only compatibility path is an explicitly
@@ -9,6 +14,27 @@ import "fmt"
 func ValidateTaskPayload(raw map[string]interface{}) error {
 	if raw == nil {
 		return planError(ERR_PLAN_REQUIRED_FIELD, "render_plan_version", "payload is required")
+	}
+	// The native packet-copy executor has its own strict, producer-compiled
+	// contract. Keep it out of the legacy RenderPlan adapter: otherwise the
+	// shared CompiledRenderPlanV2 document can be misread as the older mirror
+	// and rejected (or, worse, interpreted through a second timeline shape).
+	if isNativePacketCopyExecutor(raw["executor_id"]) {
+		for _, legacyKey := range []string{"render_plan_version", "render_plan", "render_plan_json"} {
+			if _, present := raw[legacyKey]; present {
+				return planError(ERR_PLAN_SCHEMA, legacyKey, "legacy render-plan envelope is not allowed for the native packet-copy executor")
+			}
+		}
+		if _, present := raw[contract.PayloadKeyCompiledRenderPlanJSON]; !present {
+			return planError(ERR_PLAN_REQUIRED_FIELD, contract.PayloadKeyCompiledRenderPlanJSON, "is required for the native packet-copy executor")
+		}
+		if _, present := raw[contract.PayloadKeyCompiledRenderPlanSHA]; !present {
+			return planError(ERR_PLAN_REQUIRED_FIELD, contract.PayloadKeyCompiledRenderPlanSHA, "is required for the native packet-copy executor")
+		}
+		if err := contract.ValidateCompiledRenderPlanV2Payload(raw); err != nil {
+			return fmt.Errorf("native packet-copy render plan v2: %w", err)
+		}
+		return nil
 	}
 	if _, present := raw["render_plan_version"]; present {
 		return ValidateVersionedRenderPlan(raw)
@@ -33,6 +59,14 @@ func ValidateTaskPayload(raw map[string]interface{}) error {
 		return planError(ERR_PLAN_UNSUPPORTED_VERSION, "version", fmt.Sprintf("unsupported legacy version %q", version))
 	}
 	return planError(ERR_PLAN_REQUIRED_FIELD, "render_plan_version", "must be declared; legacy payloads require an explicit version")
+}
+
+func isNativePacketCopyExecutor(value interface{}) bool {
+	id, ok := value.(string)
+	if !ok {
+		return false
+	}
+	return id == "video.assemble.copy.v1" || strings.HasPrefix(id, "video.assemble.copy.v1@")
 }
 
 // validateLegacyV1Payload is the temporary, versioned compatibility adapter.
