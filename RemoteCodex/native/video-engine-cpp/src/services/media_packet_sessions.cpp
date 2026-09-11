@@ -15,7 +15,6 @@ extern "C" {
 #include <cmath>
 #include <filesystem>
 #include <memory>
-#include <set>
 #include <string>
 #include <thread>
 #include <utility>
@@ -64,7 +63,8 @@ InputSession* InputSessionRegistry::resolve(const fs::path& path, std::string& e
     return result;
 }
 
-bool InputSession::open(const fs::path& path, std::string& error) {
+bool InputSession::open(const fs::path& path, std::string& error,
+                        bool metadata_certified) {
     if (demuxer_.isOpen()) {
         if (path_ == path) {
             return true;
@@ -72,7 +72,7 @@ bool InputSession::open(const fs::path& path, std::string& error) {
         demuxer_.close();
         keyframe_decisions_.clear();
     }
-    if (!demuxer_.open(path, error)) {
+    if (!demuxer_.open(path, error, metadata_certified)) {
         return false;
     }
     path_ = path;
@@ -220,19 +220,28 @@ bool InputSession::sourceWindowStartsOnKeyframe(int input_stream_index,
     return found;
 }
 
-bool InputSessionRegistry::preopen(const std::vector<fs::path>& paths,
+bool InputSessionRegistry::preopen(const std::vector<InputSessionRegistry::OpenRequest>& requests,
                                    std::string& error) {
-    std::vector<fs::path> unique;
+    std::vector<OpenRequest> unique;
     std::vector<InputSession*> sessions;
-    std::set<std::string> seen;
-    unique.reserve(paths.size());
-    sessions.reserve(paths.size());
-    for (const auto& path : paths) {
-        const std::string key = path.lexically_normal().string();
-        if (!seen.insert(key).second || sessions_.find(key) != sessions_.end()) {
+    std::map<std::string, std::size_t> indices;
+    unique.reserve(requests.size());
+    sessions.reserve(requests.size());
+    for (const auto& request : requests) {
+        const std::string key = request.path.lexically_normal().string();
+        if (sessions_.find(key) != sessions_.end()) continue;
+        const auto [it, inserted] = indices.emplace(key, unique.size());
+        if (!inserted) {
+            // One path may be reused by a certified video and an
+            // uncertified audio use. The conservative result is a full probe.
+            unique[it->second].metadata_certified =
+                unique[it->second].metadata_certified && request.metadata_certified;
             continue;
         }
-        unique.push_back(path);
+        unique.push_back(request);
+    }
+    for (const auto& request : unique) {
+        const std::string key = request.path.lexically_normal().string();
         auto session = std::make_unique<InputSession>();
         sessions.push_back(session.get());
         sessions_.emplace(key, std::move(session));
@@ -255,7 +264,9 @@ bool InputSessionRegistry::preopen(const std::vector<fs::path>& paths,
             while (true) {
                 const std::size_t index = next.fetch_add(1, std::memory_order_relaxed);
                 if (index >= unique.size()) return;
-                ok[index] = sessions[index]->open(unique[index], errors[index]) ? 1 : 0;
+                ok[index] = sessions[index]->open(
+                    unique[index].path, errors[index],
+                    unique[index].metadata_certified) ? 1 : 0;
             }
         });
     }
@@ -269,6 +280,14 @@ bool InputSessionRegistry::preopen(const std::vector<fs::path>& paths,
         }
     }
     return true;
+}
+
+bool InputSessionRegistry::preopen(const std::vector<fs::path>& paths,
+                                   std::string& error) {
+    std::vector<OpenRequest> requests;
+    requests.reserve(paths.size());
+    for (const auto& path : paths) requests.push_back(OpenRequest{path, false});
+    return preopen(requests, error);
 }
 
 } // namespace velox::media::packet

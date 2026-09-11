@@ -53,6 +53,7 @@ void resetIOCounters() {
     g_ioCounters.asset_bytes_copied.store(0);
     g_ioCounters.input_open_count.store(0);
     g_ioCounters.input_reopen_count.store(0);
+    g_ioCounters.input_stream_info_count.store(0);
     g_ioCounters.input_seek_count.store(0);
     g_ioCounters.output_backward_seek_count.store(0);
     g_ioCounters.output_backward_seek_bytes.store(0);
@@ -94,6 +95,8 @@ void recordInputOpen(const std::string& path) {
         g_ioCounters.input_reopen_count.fetch_add(1);
     }
 }
+
+void recordInputStreamInfo() { g_ioCounters.input_stream_info_count.fetch_add(1); }
 
 void recordInputSeek() { g_ioCounters.input_seek_count.fetch_add(1); }
 void recordOutputBackwardSeek(int64_t rewound_bytes) {

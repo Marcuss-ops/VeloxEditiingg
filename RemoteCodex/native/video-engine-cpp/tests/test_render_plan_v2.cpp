@@ -107,6 +107,43 @@ std::string v2Envelope(const std::string& jobId,
     return json.str();
 }
 
+std::string certifiedV2Envelope(const std::string& videoPath,
+                               const std::string& audioPath) {
+    std::ostringstream json;
+    json << "{\"plan_version\":2,\"job_id\":\"certified\","
+         << "\"output_path\":\"/tmp/certified.mp4\","
+         << "\"timeline_revision\":7,"
+         << "\"timeline_sha256\":\"timeline-sha\",\"duration_us\":1000000,"
+         << "\"output\":{\"container\":\"mp4\",\"video_codec\":\"h264\","
+         << "\"width\":1920,\"height\":1080,\"fps_num\":24,\"fps_den\":1,"
+         << "\"pixel_format\":\"yuv420p\",\"profile_id\":\"VELOX_ASSEMBLY_READY_V1\","
+         << "\"codec_profile\":\"high\",\"codec_level\":\"4.0\","
+         << "\"gop_size\":48,\"b_frames\":0,\"closed_gop\":true,"
+         << "\"time_base_num\":1,\"time_base_den\":90000},"
+         << "\"final_audio\":{\"mode\":\"FINAL_AUDIO_COPY\","
+         << "\"asset_id\":\"audio\",\"sha256\":\"audio-sha\","
+         << "\"codec\":\"aac\",\"sample_rate_hz\":48000,\"channels\":2,"
+         << "\"duration_us\":1000000,\"timeline_revision\":7,"
+         << "\"timeline_sha256\":\"timeline-sha\"},"
+         << "\"video_tracks\":[{\"track_id\":\"main\",\"segments\":[{"
+         << "\"segment_id\":\"segment\",\"asset_id\":\"video\","
+         << "\"sha256\":\"video-sha\",\"timeline_start_frame\":0,"
+         << "\"frame_count\":24,\"source_in_us\":0,"
+         << "\"source_duration_us\":1000000}]}],"
+         << "\"assets\":[{\"asset_id\":\"audio\",\"sha256\":\"audio-sha\","
+         << "\"size_bytes\":100,\"kind\":\"final_audio\",\"mime\":\"audio/mp4\","
+         << "\"duration_us\":1000000},{\"asset_id\":\"video\","
+         << "\"sha256\":\"video-sha\",\"size_bytes\":100,\"kind\":\"video\","
+         << "\"mime\":\"video/mp4\",\"duration_us\":1000000,"
+         << "\"profile_id\":\"VELOX_ASSEMBLY_READY_V1\",\"frame_count\":24,"
+         << "\"timeline_revision\":7,\"timeline_sha256\":\"timeline-sha\","
+         << "\"timeline_start_frame\":0,\"first_frame_keyframe\":true,"
+         << "\"closed_gop\":true}],"
+         << "\"bindings\":{\"video\":\"" << videoPath
+         << "\",\"audio\":\"" << audioPath << "\"}}";
+    return json.str();
+}
+
 void testParserUnit(const fs::path& clipA, const fs::path& clipB,
                     const fs::path& audio) {
     std::cerr << "── parser unit: int64 frames/us are the source of truth ──\n";
@@ -154,6 +191,18 @@ void testParserUnit(const fs::path& clipA, const fs::path& clipB,
                "final audio duration in microseconds");
         expect(track.start_offset_us == 0 && track.start_time_offset == 0.0,
                "final audio starts at zero, no float offset");
+    }
+
+    const auto certified = parseRenderPlan(certifiedV2Envelope(
+        clipA.string(), audio.string()));
+    expect(certified.has_value(), "fully certified V2 envelope parses");
+    if (certified.has_value()) {
+        expect(certified->timeline.size() == 1 &&
+                   certified->timeline[0].metadata_certified,
+               "canonical asset/profile binding reaches the video input hint");
+        expect(certified->audio_tracks.size() == 1 &&
+                   certified->audio_tracks[0].metadata_certified,
+               "canonical final-audio binding reaches the audio input hint");
     }
 
     std::cerr << "── parser unit: float seconds rejected in V2 ──\n";

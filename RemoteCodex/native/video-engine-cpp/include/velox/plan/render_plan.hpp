@@ -44,6 +44,11 @@ struct TimelineItem {
     int64_t source_duration_us{0};
     int64_t timeline_start_frame{0};
     int64_t frame_count{0};
+    // V2-only admission hint. This is true only when the producer supplied
+    // the complete canonical asset/profile binding; the demuxer still
+    // validates the opened container header and falls back to stream-info
+    // discovery when anything needed by packet muxing is absent.
+    bool metadata_certified{false};
 };
 
 struct AudioTrack {
@@ -58,6 +63,8 @@ struct AudioTrack {
     // CompiledRenderPlanV2 integer timing in microseconds.
     int64_t start_offset_us{0};
     int64_t duration_us{0};
+    // V2-only admission hint for already-certified final audio metadata.
+    bool metadata_certified{false};
 };
 
 // Indicates the plan arrived as a CompiledRenderPlanV2 document

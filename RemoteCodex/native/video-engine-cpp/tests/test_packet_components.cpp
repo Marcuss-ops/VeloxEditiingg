@@ -377,15 +377,27 @@ void testRewriteDecisionClassification() {
 // ── Demuxer + streaming reader against a real fixture ────────────────────
 
 void testDemuxer(const fs::path& fixture) {
+    velox::services::resetIOCounters();
     velox::media::packet::Demuxer demuxer;
     std::string error;
     expect(demuxer.open(fixture, error), "demuxer opens the fixture: " + error);
+    expect(velox::services::ioCounters().input_stream_info_count.load() == 1,
+           "uncertified input uses the full stream-info fallback");
     expect(demuxer.isOpen(), "demuxer reports open after successful open");
 
     const int videoIndex = demuxer.firstStream(AVMEDIA_TYPE_VIDEO);
     const int audioIndex = demuxer.firstStream(AVMEDIA_TYPE_AUDIO);
     expect(videoIndex == 0, "first video stream is stream 0");
     expect(audioIndex == 1, "first audio stream is stream 1");
+
+    velox::services::resetIOCounters();
+    velox::media::packet::Demuxer certified;
+    error.clear();
+    expect(certified.open(fixture, error, true),
+           "certified input opens through the metadata fast path: " + error);
+    expect(velox::services::ioCounters().input_stream_info_count.load() == 0,
+           "complete certified container metadata skips stream-info discovery");
+    certified.close();
     expect(demuxer.stream(videoIndex) != nullptr &&
                demuxer.stream(videoIndex)->codecpar->codec_type == AVMEDIA_TYPE_VIDEO,
            "stream() resolves the video stream descriptor");

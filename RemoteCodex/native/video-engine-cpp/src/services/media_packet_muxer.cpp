@@ -205,11 +205,15 @@ bool consume(packet::PendingPacket& pending, void* opaque, std::string& error) {
 bool preparePlan(const CopyOnlyMuxRequest& request, packet::InputSessionRegistry& sessions,
                  AVFormatContext* output, PreparedCopyMuxPlan& plan,
                  CopyOnlyMuxResult* result, std::string& error) {
-    std::vector<fs::path> paths;
-    paths.reserve(request.video_segments.size() + (request.audio ? 1 : 0));
-    for (const auto& segment : request.video_segments) paths.push_back(segment.path);
-    if (request.audio) paths.push_back(request.audio->path);
-    if (!sessions.preopen(paths, error)) return fail(result, error);
+    std::vector<packet::InputSessionRegistry::OpenRequest> open_requests;
+    open_requests.reserve(request.video_segments.size() + (request.audio ? 1 : 0));
+    for (const auto& segment : request.video_segments) {
+        open_requests.push_back({segment.path, segment.metadata_certified});
+    }
+    if (request.audio) {
+        open_requests.push_back({request.audio->path, request.audio->metadata_certified});
+    }
+    if (!sessions.preopen(open_requests, error)) return fail(result, error);
 
     std::vector<VideoCandidate> videos;
     std::vector<AudioCandidate> audios;

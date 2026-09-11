@@ -31,6 +31,7 @@ struct IOCounters {
     std::atomic<int64_t> asset_bytes_copied{0};
     std::atomic<int64_t> input_open_count{0};
     std::atomic<int64_t> input_reopen_count{0};
+    std::atomic<int64_t> input_stream_info_count{0};
     std::atomic<int64_t> input_seek_count{0};
     // Packet output sink backward seeks (PacketOutputSink): how many times
     // LibAV moved the write position below the incremental-SHA prefix and
@@ -119,6 +120,7 @@ void recordAssetCopy(int64_t bytes);
 // already opened counts as a reopen (e.g. the copy-only muxer opening a
 // segment once for stream discovery and again inside readPackets).
 void recordInputOpen(const std::string& path);
+void recordInputStreamInfo();
 void recordInputSeek();
 // Records one backward seek on the packet output sink of `rewound_bytes`
 // (the distance the write position moved below the hashed prefix). The

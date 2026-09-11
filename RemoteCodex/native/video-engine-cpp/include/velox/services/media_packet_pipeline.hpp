@@ -34,12 +34,17 @@ struct CopyOnlyVideoSegment {
     bool normalized{false};
     bool transform_required{false};
     bool legacy_required{false};
+    // Producer-certified canonical metadata allows the demuxer to use the
+    // container header fast path. It remains an optimization hint only:
+    // incomplete headers fall back to avformat_find_stream_info.
+    bool metadata_certified{false};
 };
 
 struct CopyOnlyAudioTrack {
     std::filesystem::path path;
     int64_t start_offset_us{0};
     int64_t duration_us{0};
+    bool metadata_certified{false};
 };
 
 struct CopyOnlyMuxRequest {

@@ -17,6 +17,50 @@ namespace fs = std::filesystem;
 
 namespace velox::media::packet {
 
+namespace {
+
+bool hasCompleteContainerMetadata(const AVFormatContext* context) {
+    if (context == nullptr || context->nb_streams == 0) return false;
+    for (unsigned int i = 0; i < context->nb_streams; ++i) {
+        const AVStream* stream = context->streams[i];
+        const AVCodecParameters* parameters = stream != nullptr ? stream->codecpar : nullptr;
+        if (stream == nullptr || parameters == nullptr ||
+            parameters->codec_id == AV_CODEC_ID_NONE ||
+            stream->time_base.num <= 0 || stream->time_base.den <= 0 ||
+            parameters->extradata == nullptr || parameters->extradata_size <= 0) {
+            return false;
+        }
+        if (parameters->codec_type == AVMEDIA_TYPE_VIDEO) {
+            AVRational frame_rate = stream->avg_frame_rate;
+            if (frame_rate.num <= 0 || frame_rate.den <= 0) {
+                frame_rate = stream->r_frame_rate;
+            }
+            // Pixel format/profile/level may be decoder-derived rather than
+            // container-header fields. The producer certificate supplies
+            // those identities; packet muxing needs the stream shape and a
+            // usable rate, while later compatibility checks remain the
+            // fail-closed authority for actual stream copying.
+            if (parameters->width <= 0 || parameters->height <= 0 ||
+                frame_rate.num <= 0 || frame_rate.den <= 0) {
+                return false;
+            }
+        } else if (parameters->codec_type == AVMEDIA_TYPE_AUDIO) {
+#if LIBAVUTIL_VERSION_MAJOR >= 57
+            if (parameters->sample_rate <= 0 || parameters->ch_layout.nb_channels <= 0) {
+                return false;
+            }
+#else
+            if (parameters->sample_rate <= 0 || parameters->channels <= 0) {
+                return false;
+            }
+#endif
+        }
+    }
+    return true;
+}
+
+} // namespace
+
 bool validTimestamp(int64_t value) {
     return value != AV_NOPTS_VALUE;
 }
@@ -51,7 +95,8 @@ Demuxer::~Demuxer() {
     close();
 }
 
-bool Demuxer::open(const fs::path& path, std::string& error) {
+bool Demuxer::open(const fs::path& path, std::string& error,
+                   bool metadata_certified) {
     close();
     if (path.empty() || !fs::is_regular_file(path)) {
         error = "input is not a regular local file: " + path.string();
@@ -69,11 +114,14 @@ bool Demuxer::open(const fs::path& path, std::string& error) {
     }
     services::recordInputOpen(path.string());
     context_ = raw;
-    const int info_result = avformat_find_stream_info(context_, nullptr);
-    if (info_result < 0) {
-        error = "avformat_find_stream_info(" + path.string() + "): " + ffmpegError(info_result);
-        close();
-        return false;
+    if (!metadata_certified || !hasCompleteContainerMetadata(context_)) {
+        services::recordInputStreamInfo();
+        const int info_result = avformat_find_stream_info(context_, nullptr);
+        if (info_result < 0) {
+            error = "avformat_find_stream_info(" + path.string() + "): " + ffmpegError(info_result);
+            close();
+            return false;
+        }
     }
     return true;
 }

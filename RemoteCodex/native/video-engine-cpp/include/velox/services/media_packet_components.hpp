@@ -74,11 +74,13 @@ struct PendingPacket {
 // yields raw packets. No ffprobe or shell is involved.
 class Demuxer {
 public:
-    // Opens `path` and runs stream discovery. Records the open in the
+    // Opens `path`. Certified container metadata may take the header fast
+    // path; all other inputs run stream discovery. Records the open in the
     // process-scoped I/O counters (a second open of the same path counts as
     // a reopen). Returns false with `error` set on failure; the instance
     // stays closed.
-    bool open(const std::filesystem::path& path, std::string& error);
+    bool open(const std::filesystem::path& path, std::string& error,
+              bool metadata_certified = false);
 
     // Index of the first stream of `type`, or -1 when absent.
     int firstStream(AVMediaType type) const;
@@ -114,7 +116,8 @@ private:
 // input without changing packet ordering or timestamp semantics.
 class InputSession {
 public:
-    bool open(const std::filesystem::path& path, std::string& error);
+    bool open(const std::filesystem::path& path, std::string& error,
+              bool metadata_certified = false);
     bool seekToTimestampUs(int stream_index, int64_t timestamp_us, std::string& error);
     bool sourceWindowStartsOnKeyframe(int input_stream_index,
                                       int64_t source_in_us,
@@ -135,15 +138,26 @@ private:
 // complete; the registry is intentionally attempt-scoped, not process-global.
 class InputSessionRegistry {
 public:
+    struct OpenRequest {
+        std::filesystem::path path;
+        bool metadata_certified{false};
+    };
+
     InputSession* resolve(const std::filesystem::path& path, std::string& error);
 
     // Opens every distinct path concurrently. Each open is an independent
-    // libav context setup (avformat_open_input + avformat_find_stream_info),
-    // so driving them from multiple threads is safe and turns the
-    // sequential per-segment open cost into roughly one parallel round.
+    // libav context setup; uncertified or incomplete inputs use
+    // avformat_find_stream_info. Driving them from multiple threads is safe
+    // and turns the sequential per-segment open cost into roughly one
+    // parallel round.
     // Returns false and sets error on the first failing path. Paths that
     // are already registered are skipped. After a successful preopen,
     // resolve() returns the pre-opened sessions without further I/O.
+    bool preopen(const std::vector<OpenRequest>& requests,
+                 std::string& error);
+
+    // Compatibility facade for callers that do not have producer
+    // certification. Such inputs always use the fail-closed full probe.
     bool preopen(const std::vector<std::filesystem::path>& paths,
                  std::string& error);
 
