@@ -196,7 +196,7 @@ func TestDispatchTaskRunner_AttachesV2BindingsToExecutionContext(t *testing.T) {
 	defer server.Close()
 
 	probe := &contextBindingProbeExecutor{descriptor: executor.Descriptor{
-		ID: "render_batch", Version: 1, ResourceClass: executor.ResourceCPU, TemporalMode: executor.TemporalGlobal,
+		ID: "video.assemble.copy.v1", Version: 1, ResourceClass: executor.ResourceCPU, TemporalMode: executor.TemporalGlobal,
 	}}
 	registry := executor.NewRegistry()
 	registry.MustRegister(probe)
@@ -231,8 +231,8 @@ func TestDispatchTaskRunner_AttachesV2BindingsToExecutionContext(t *testing.T) {
 	canonicalBefore := payload[contract.PayloadKeyCompiledRenderPlanJSON].(string)
 	shaBefore := payload[contract.PayloadKeyCompiledRenderPlanSHA].(string)
 	pte := &PendingTaskExecution{
-		TaskID: "task-bindings", JobID: "job-bindings", AttemptID: "attempt-bindings", ExecutorID: "render_batch", ExecutorVersion: 1,
-		Spec: executor.TaskSpec{Version: 1, JobID: "job-bindings", ExecutorID: "render_batch", Payload: payload},
+		TaskID: "task-bindings", JobID: "job-bindings", AttemptID: "attempt-bindings", ExecutorID: "video.assemble.copy.v1", ExecutorVersion: 1,
+		Spec: executor.TaskSpec{Version: 1, JobID: "job-bindings", ExecutorID: "video.assemble.copy.v1", Payload: payload},
 	}
 	result, err := w.dispatchTaskRunner(context.Background(), pte)
 	if err != nil {

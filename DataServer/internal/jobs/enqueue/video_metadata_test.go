@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"velox-server/internal/costmodel"
-	"velox-server/internal/routing"
 	"velox-shared/contract"
 	"velox-shared/contract/rendermanifest"
 )
@@ -174,13 +173,6 @@ func TestNormalizeSceneVideoPayloadPassesThroughCompiledV2WithoutRecompiling(t *
 	}
 	if got := resolveInternalExecutorID(out); got != "video.assemble.copy.v1@1" {
 		t.Fatalf("executor = %q, want video.assemble.copy.v1@1", got)
-	}
-	// An explicit legacy route must not be able to select the retired V2
-	// implementation once the payload is already compiled.
-	out[routing.KeyExecutorID] = "render_batch"
-	out[routing.KeyExecutorVersion] = 1
-	if got := resolveInternalExecutorID(out); got != "video.assemble.copy.v1@1" {
-		t.Fatalf("explicit legacy executor = %q, want video.assemble.copy.v1@1", got)
 	}
 	if _, present := out["render_plan_json"]; present {
 		t.Fatal("V2 pass-through unexpectedly produced a legacy V1 render_plan_json")

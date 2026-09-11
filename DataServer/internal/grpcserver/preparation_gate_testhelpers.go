@@ -141,7 +141,7 @@ func expiryCandidate(taskID, jobID string, revision int) *placement.TaskCandidat
 		TaskID:    taskID,
 		JobID:     jobID,
 		Revision:  revision,
-		Executor:  placement.ExecutorKey{ID: "render_batch", Version: 3},
+		Executor:  placement.ExecutorKey{ID: "video.assemble.copy.v1", Version: 1},
 		Priority:  1,
 		CreatedAt: time.Now().UTC(),
 	}
@@ -242,7 +242,7 @@ func taskCandidate(taskID, jobID string, revision int) *placement.TaskCandidate 
 		TaskID:    taskID,
 		JobID:     jobID,
 		Revision:  revision,
-		Executor:  placement.ExecutorKey{ID: "render_batch", Version: 3},
+		Executor:  placement.ExecutorKey{ID: "video.assemble.copy.v1", Version: 1},
 		Priority:  1,
 		CreatedAt: time.Now().UTC(),
 	}

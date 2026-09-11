@@ -265,8 +265,7 @@ func main() {
 		logger.Info("[BOOT] Worker profile is 'creator'; scene.composite.v1 disabled")
 	}
 	// Register the render executor family in the single canonical registry.
-	// CompiledRenderPlanV2 is served only by the native packet-copy executor;
-	// render_batch is deliberately not registered on new workers.
+	// CompiledRenderPlanV2 is served only by the native packet-copy executor.
 	if err := registerCanonicalRenderExecutors(registry, cfg.OutputDir, pipelineRunner); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: failed to register render executors: %v\n", err)
 		os.Exit(1)

@@ -17,8 +17,8 @@ import (
 // involved.
 //
 // V2 admission is intentionally narrower than the legacy manifest contract:
-// it requires exactly one verified final_audio asset so render_batch@1 can
-// perform FINAL_AUDIO_COPY without choosing an audio mix or AAC encode.
+// it requires exactly one verified final_audio asset so the native assembler
+// can perform FINAL_AUDIO_COPY without choosing an audio mix or AAC encode.
 func CompileRenderPlanV2FromManifest(raw map[string]any) (*CompiledRenderPlanV2, error) {
 	return CompileRenderPlanV2FromManifestWithReplacements(raw, nil)
 }

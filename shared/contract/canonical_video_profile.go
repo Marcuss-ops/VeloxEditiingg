@@ -160,8 +160,7 @@ func KnownCanonicalVideoProfileV1(profileID string) (CanonicalVideoProfileV1, er
 }
 
 // MatchesOutput checks the legacy V2 output fields as well as the strengthened
-// profile fields. Empty optional fields are accepted for legacy render_batch;
-// the prepared copy-only executor requires a complete profile separately.
+// profile fields. The prepared copy-only executor requires a complete profile.
 func (p CanonicalVideoProfileV1) MatchesOutput(output OutputContractV2) error {
 	if err := p.Validate(); err != nil {
 		return err

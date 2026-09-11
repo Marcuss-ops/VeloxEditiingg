@@ -118,6 +118,8 @@ full_tree_patterns=(
   'TypedMetricsFromMap'                 # Removed: map-to-typed adapter
   'legacyMapToTyped'                    # Removed: map-to-typed adapter
   'FFmpegProfiles'                      # Removed: dead aggregate side channel
+  'render_batch'                        # Removed: superseded by native packet-copy executor
+  'RenderBatch'                         # Removed: superseded by native packet-copy executor
   # Item 11 (duplicate roll-up): removed Handler-level Job helpers.
   'verifyJobOwnership'                # Removed: dead Job-era ownership check (PR #11)
   'lookupJobCASFields'                # Removed: dead Job-era CAS helper (PR #11)
@@ -212,6 +214,7 @@ for pattern in "${full_tree_patterns[@]}"; do
     git grep -nE "$pattern" -- \
       :!ROADMAP.md \
       :!DEPLOY-CHECKLIST.md \
+      ':!AGENTS.md' \
       ':!docs/**' \
       ':!.github/**' \
       ':!deploy/**' \

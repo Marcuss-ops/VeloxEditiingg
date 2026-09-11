@@ -97,8 +97,6 @@ func classifyExecutor(executorID string) TaskPhase {
 	switch {
 	case executorID == "video.assemble.copy.v1" || strings.HasPrefix(executorID, "video.assemble.copy.v1@"):
 		return PhaseRender
-	case executorID == "render_batch" || len(executorID) > 12 && executorID[:12] == "render_batch@":
-		return PhaseRender
 	case executorID == "asset_prefetch" || len(executorID) > 14 && executorID[:14] == "asset_prefetch@":
 		return PhasePrefetch
 	case executorID == "artifact_publish" || len(executorID) > 16 && executorID[:16] == "artifact_publish@":

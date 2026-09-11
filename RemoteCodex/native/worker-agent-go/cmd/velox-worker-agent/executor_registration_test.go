@@ -28,10 +28,6 @@ func TestRegisterCanonicalRenderExecutorsRegistersSingleCompiledPlanExecutor(t *
 	if got := reg.Len(); got != 5 {
 		t.Fatalf("registry length = %d, want 5", got)
 	}
-	if reg.Has(executors.RenderBatchID, executors.RenderBatchVersion) {
-		t.Fatal("legacy render_batch executor must not be registered")
-	}
-
 	descs := reg.Descriptors()
 	for _, desc := range descs {
 		if desc.ID != executors.VideoAssembleCopyID {

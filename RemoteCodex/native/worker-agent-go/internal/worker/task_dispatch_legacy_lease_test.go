@@ -84,9 +84,9 @@ func TestDispatchTaskRunner_LegacyClipPayloadAcquiresLease(t *testing.T) {
 	const jobID = "job-legacy-lease"
 	pte := &PendingTaskExecution{
 		TaskID: "task-" + jobID, JobID: jobID, AttemptID: "attempt-" + jobID,
-		ExecutorID: "render_batch", ExecutorVersion: 1,
+		ExecutorID: "test.legacy.lease", ExecutorVersion: 1,
 		Spec: executor.TaskSpec{
-			Version: 1, JobID: jobID, ExecutorID: "render_batch", Payload: payload,
+			Version: 1, JobID: jobID, ExecutorID: "test.legacy.lease", Payload: payload,
 		},
 	}
 
@@ -187,9 +187,9 @@ func TestDispatchTaskRunner_LegacyClipPayloadReleasesLeaseOnExecutorError(t *tes
 	const jobID = "job-legacy-lease-err"
 	pte := &PendingTaskExecution{
 		TaskID: "task-" + jobID, JobID: jobID, AttemptID: "attempt-" + jobID,
-		ExecutorID: "render_batch", ExecutorVersion: 1,
+		ExecutorID: "test.legacy.lease", ExecutorVersion: 1,
 		Spec: executor.TaskSpec{
-			Version: 1, JobID: jobID, ExecutorID: "render_batch", Payload: payload,
+			Version: 1, JobID: jobID, ExecutorID: "test.legacy.lease", Payload: payload,
 		},
 	}
 

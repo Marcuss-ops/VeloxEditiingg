@@ -27,7 +27,7 @@ type dispatchLeaseProbeExecutor struct {
 
 func (e *dispatchLeaseProbeExecutor) Descriptor() executor.Descriptor {
 	return executor.Descriptor{
-		ID: "render_batch", Version: 1,
+		ID: "video.assemble.copy.v1", Version: 1,
 		ResourceClass: executor.ResourceCPU, TemporalMode: executor.TemporalGlobal,
 		Deterministic: true, Cacheable: true,
 	}
@@ -102,9 +102,9 @@ func newDispatchV2LeaseFixture(t *testing.T, probe *dispatchLeaseProbeExecutor) 
 func dispatchV2LeaseTask(payload map[string]interface{}, jobID string) *PendingTaskExecution {
 	return &PendingTaskExecution{
 		TaskID: "task-" + jobID, JobID: jobID, AttemptID: "attempt-" + jobID,
-		ExecutorID: "render_batch", ExecutorVersion: 1,
+		ExecutorID: "video.assemble.copy.v1", ExecutorVersion: 1,
 		Spec: executor.TaskSpec{
-			Version: 1, JobID: jobID, ExecutorID: "render_batch", Payload: payload,
+			Version: 1, JobID: jobID, ExecutorID: "video.assemble.copy.v1", Payload: payload,
 		},
 	}
 }

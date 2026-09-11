@@ -2,12 +2,9 @@ package executors
 
 import (
 	"strconv"
-	"strings"
 	"testing"
 
-	"velox-shared/contract"
 	"velox-worker-agent/internal/executor"
-	"velox-worker-agent/internal/runtimeassets"
 	"velox-worker-agent/pkg/video/plan"
 )
 
@@ -72,48 +69,6 @@ func benchmarkComposePlan(nSegments int) *plan.RenderPlan {
 	return p
 }
 
-// benchmarkVideoPlan builds a V2 video-only plan with nSegments one-second
-// segments (30fps) and matching runtime bindings. FrameCount/SourceDurationUS
-// are chosen so the frame-duration consistency check always passes.
-func benchmarkVideoPlan(nSegments int) (*contract.CompiledRenderPlanV2, runtimeassets.Bindings) {
-	segments := make([]contract.VideoSegmentV2, 0, nSegments)
-	assets := make([]contract.AssetRefV2, 0, nSegments)
-	bindings := make(runtimeassets.Bindings, nSegments)
-	for i := 0; i < nSegments; i++ {
-		id := strconv.Itoa(i)
-		assetID := "video-" + id
-		sha := strings.Repeat("a", 64)
-		segments = append(segments, contract.VideoSegmentV2{
-			SegmentID:          "segment-" + id,
-			AssetID:            assetID,
-			SHA256:             sha,
-			TimelineStartFrame: int64(i) * 30,
-			FrameCount:         30,
-			SourceInUS:         int64(i) * 1_000_000,
-			SourceDurationUS:   1_000_000,
-		})
-		assets = append(assets, contract.AssetRefV2{
-			AssetID: assetID, SHA256: sha, SizeBytes: 1_000_000,
-			Kind: "video", DurationUS: 1_000_000, Width: 1920, Height: 1080,
-		})
-		bindings[assetID] = runtimeassets.Binding{
-			AssetID: assetID, Path: "/cache/" + assetID + ".mp4", SHA256: sha, Size: 1_000_000,
-		}
-	}
-	p := &contract.CompiledRenderPlanV2{
-		PlanVersion:      contract.CompiledPlanVersionV2,
-		TimelineRevision: 1,
-		DurationUS:       int64(nSegments) * 1_000_000,
-		Output: contract.OutputContractV2{
-			Container: "mp4", VideoCodec: "libx264", Width: 1920, Height: 1080,
-			FPSNum: 30, FPSDen: 1, PixelFormat: "yuv420p",
-		},
-		VideoTracks: []contract.VideoTrackV2{{TrackID: "main", Segments: segments}},
-		Assets:      assets,
-	}
-	return p, bindings
-}
-
 func BenchmarkBuildAudioMixPlan_14Tracks(b *testing.B) {
 	p := benchmarkAudioMixPlan(14)
 	b.ReportAllocs()
@@ -131,28 +86,6 @@ func BenchmarkBuildComposePlan_30Segments(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if _, err := buildComposePlan(executor.TaskSpec{}, p, "/tmp/bench-compose.mp4"); err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-func BenchmarkBuildVideoOnlyArgs_30Segments(b *testing.B) {
-	p, bindings := benchmarkVideoPlan(30)
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		if _, err := buildVideoOnlyArgs(p, bindings, "/tmp/bench-video.mp4"); err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-func BenchmarkBuildVideoOnlyArgs_100Segments(b *testing.B) {
-	p, bindings := benchmarkVideoPlan(100)
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		if _, err := buildVideoOnlyArgs(p, bindings, "/tmp/bench-video.mp4"); err != nil {
 			b.Fatal(err)
 		}
 	}

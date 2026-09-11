@@ -20,8 +20,8 @@ const (
 
 // AssetRoles are the canonical roles a job can bind to an asset.
 const (
-	// KindFinalAudio identifies an already-mixed AAC master that must be
-	// muxed with FINAL_AUDIO_COPY by the render_batch executor.
+	// KindFinalAudio identifies an already-mixed AAC master that the native
+	// packet-copy assembler muxes with FINAL_AUDIO_COPY.
 	KindFinalAudio = "final_audio"
 
 	RoleVoiceover   = "voiceover"

@@ -65,7 +65,7 @@ func (e *videoAssembleCopyExecutor) Validate(spec executor.TaskSpec) error {
 	if _, err := contract.DecodeCompiledRenderPlanV2Payload(spec.Payload); err != nil {
 		return fmt.Errorf("video.assemble.copy.v1: invalid CompiledRenderPlanV2: %w", err)
 	}
-	plan, err := decodeRenderPlanV2(spec)
+	plan, err := decodeCompiledPlanV2(spec)
 	if err != nil {
 		return err
 	}
@@ -83,7 +83,7 @@ func (e *videoAssembleCopyExecutor) Execute(ctx context.Context, execCtx executo
 	if err := e.Validate(spec); err != nil {
 		return fail("COPY_ONLY_PLAN_INVALID", err)
 	}
-	plan, err := decodeRenderPlanV2(spec)
+	plan, err := decodeCompiledPlanV2(spec)
 	if err != nil {
 		return fail("COPY_ONLY_PLAN_INVALID", err)
 	}
@@ -103,7 +103,7 @@ func (e *videoAssembleCopyExecutor) Execute(ctx context.Context, execCtx executo
 		return fail("INVALID_JOB_ID", err)
 	}
 	// The packet-copy output is the final upload artifact too. Route it through
-	// the same canonical staging resolver as render_batch/encode/scene.composite
+	// the same canonical staging resolver as encode/scene.composite
 	// so this executor cannot silently bypass tmpfs reservations.
 	outputPath := filepath.Join(e.outputRoot, jobID+".mp4")
 	if resolver := storageResolverFromExecutionContext(execCtx); resolver != nil {

@@ -87,7 +87,7 @@ func TestGetWorkerCapacityReport_FullAssembly(t *testing.T) {
 			 (task_id, job_id, project_id, render_plan_id, executor_id, executor_version,
 			  status, priority, revision, attempt_count, attempt_number,
 			  worker_id, lease_id, attempt_id, started_at, created_at, updated_at)
-			 VALUES (?, ?, '', '', 'render_batch', 3,
+			 VALUES (?, ?, '', '', 'video.assemble.copy.v1', 1,
 			         'RUNNING', 0, 0, 1, 1,
 			         ?, ?, ?, ?, ?, ?)`,
 			taskID, jobID, workerID, "lease-"+attemptID, attemptID, nowStr, nowStr, nowStr)

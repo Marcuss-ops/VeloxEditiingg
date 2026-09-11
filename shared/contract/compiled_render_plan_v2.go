@@ -50,9 +50,8 @@ type OutputContractV2 struct {
 	FPSDen      int    `json:"fps_den"`
 	PixelFormat string `json:"pixel_format,omitempty"`
 
-	// Strengthened canonical-profile fields. They are optional on legacy V2
-	// documents so existing render_batch plans remain wire-compatible; the
-	// packet-copy executor requires ProfileID and validates the full profile.
+	// Strengthened canonical-profile fields. The native packet-copy executor
+	// validates the complete profile before execution.
 	ProfileID    string `json:"profile_id,omitempty"`
 	CodecProfile string `json:"codec_profile,omitempty"`
 	CodecLevel   string `json:"codec_level,omitempty"`

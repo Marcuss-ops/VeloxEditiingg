@@ -23,9 +23,6 @@ func TestFFmpegBuildersAllocCeiling(t *testing.T) {
 	// not be mixed in with the builder under test.
 	audioPlan := benchmarkAudioMixPlan(14)
 	composePlan := benchmarkComposePlan(30)
-	videoPlan30, videoBind30 := benchmarkVideoPlan(30)
-	videoPlan100, videoBind100 := benchmarkVideoPlan(100)
-
 	cases := []struct {
 		name      string
 		build     func() error
@@ -47,22 +44,6 @@ func TestFFmpegBuildersAllocCeiling(t *testing.T) {
 			},
 			maxAllocs: 20, // baseline 9
 		},
-		{
-			name: "video_only_30segments",
-			build: func() error {
-				_, err := buildVideoOnlyArgs(videoPlan30, videoBind30, "/tmp/alloc-video.mp4")
-				return err
-			},
-			maxAllocs: 32, // baseline 17
-		},
-		{
-			name: "video_only_100segments",
-			build: func() error {
-				_, err := buildVideoOnlyArgs(videoPlan100, videoBind100, "/tmp/alloc-video.mp4")
-				return err
-			},
-			maxAllocs: 32, // baseline 18 (flat regardless of segment count)
-		},
 	}
 
 	for _, tc := range cases {
@@ -78,27 +59,5 @@ func TestFFmpegBuildersAllocCeiling(t *testing.T) {
 				t.Fatalf("%s allocs/op = %.1f, want <= %.1f (allocation regression)", tc.name, allocs, tc.maxAllocs)
 			}
 		})
-	}
-}
-
-// TestBuildVideoOnlyArgsAllocsFlatAcrossSegments is the flatness guard: the
-// filter-graph builder must not allocate per segment. A 100-segment timeline
-// should cost only the one extra final-string allocation over a 30-segment
-// timeline — never a linear per-segment cost. This is what catches a
-// reintroduced strconv.Itoa/fmt.Sprintf in the segment loop even when the
-// absolute ceiling above still passes.
-func TestBuildVideoOnlyArgsAllocsFlatAcrossSegments(t *testing.T) {
-	measure := func(nSegments int) float64 {
-		p, b := benchmarkVideoPlan(nSegments)
-		return testing.AllocsPerRun(100, func() {
-			if _, err := buildVideoOnlyArgs(p, b, "/tmp/alloc-video.mp4"); err != nil {
-				t.Fatal(err)
-			}
-		})
-	}
-	small := measure(30)
-	large := measure(100)
-	if large > small+8 {
-		t.Fatalf("allocs/op grew with segment count: 30 segments=%.1f, 100 segments=%.1f (per-segment allocation regression)", small, large)
 	}
 }
