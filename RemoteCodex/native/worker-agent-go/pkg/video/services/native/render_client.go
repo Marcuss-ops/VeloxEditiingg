@@ -31,18 +31,15 @@ import (
 // (the Setpgid+Pdeathsig+grace-10s+SIGKILL block) and is not touched
 // here — this file only composes it.
 
-// ProgressFunc is the legacy callback contract retained for source
-// compatibility. DetailedProgressFunc is the canonical render telemetry
-// callback used by the worker Attempt projection.
-type ProgressFunc = pipeline.ProgressFunc
+// DetailedProgressFunc is the canonical render telemetry callback used by
+// the worker Attempt projection.
 type DetailedProgressFunc = pipeline.DetailedProgressFunc
 
 // RenderClient executes RenderPlans via the C++ video engine.
 type RenderClient struct {
-	binaryPath     string
-	logger         *logger.Logger
-	onProgress     DetailedProgressFunc
-	legacyProgress ProgressFunc
+	binaryPath string
+	logger     *logger.Logger
+	onProgress DetailedProgressFunc
 }
 
 // NewRenderClient creates a new native render client.
@@ -87,13 +84,6 @@ func (c *RenderClient) BinaryPath() string {
 		return ""
 	}
 	return c.binaryPath
-}
-
-// SetProgressCallback retains the legacy callback API. Legacy callbacks
-// are delivered by the engine stream parser without replacing detailed
-// Attempt telemetry.
-func (c *RenderClient) SetProgressCallback(fn ProgressFunc) {
-	c.legacyProgress = fn
 }
 
 // SetDetailedProgressCallback sets the canonical detailed render callback.
@@ -195,7 +185,7 @@ func (c *RenderClient) executeEngine(ctx context.Context, planPath, jobID, outpu
 	}
 	c.logger.Info("[NATIVE] Launching: %s --render --plan %s", c.binaryPath, planPath)
 	// SAFETY-CRITICAL subprocess lifecycle lives in engine_process.go.
-	engineStarted, processStartMs, processWaitMs, stderrBuf, stdoutBuf, processTelemetry, err := runEngineProcess(ctx, c.binaryPath, planPath, c.onProgress, c.legacyProgress, sampleProcessTree)
+	engineStarted, processStartMs, processWaitMs, stderrBuf, stdoutBuf, processTelemetry, err := runEngineProcess(ctx, c.binaryPath, planPath, c.onProgress, sampleProcessTree)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			// Cancellation path — preserve any sidecar phases already

@@ -264,14 +264,14 @@ func main() {
 	} else {
 		logger.Info("[BOOT] Worker profile is 'creator'; scene.composite.v1 disabled")
 	}
-	// Register V1 and V2 render executors in the single canonical registry.
-	// V2 is additive and never replaces the four legacy entries.
+	// Register the render executor family in the single canonical registry.
+	// CompiledRenderPlanV2 is served only by the native packet-copy executor;
+	// render_batch is deliberately not registered on new workers.
 	if err := registerCanonicalRenderExecutors(registry, cfg.OutputDir, pipelineRunner); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: failed to register render executors: %v\n", err)
 		os.Exit(1)
 	}
 	logger.Info("[BOOT] Registered RenderPlan executors: %s@1, %s@1, %s@1, %s@1", executors.SubtitleAlignID, executors.AudioMixID, executors.ComposeID, executors.EncodeID)
-	logger.Info("[BOOT] Registered V2 executor: %s@%d", executors.RenderBatchID, executors.RenderBatchVersion)
 	logger.Info("[BOOT] Registered packet-copy executor: %s@%d", executors.VideoAssembleCopyID, executors.VideoAssembleCopyVersion)
 	// RW-PROD-004 §3 A4: surface the live executor count on the read
 	// snapshot so /health/ready has a non-zero Executors reason.

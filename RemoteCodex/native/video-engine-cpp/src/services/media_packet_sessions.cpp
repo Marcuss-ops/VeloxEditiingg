@@ -328,25 +328,6 @@ bool InputSessionRegistry::preopenAsync(
     return true;
 }
 
-bool InputSessionRegistry::preopen(const std::vector<OpenRequest>& requests,
-                                   std::string& error) {
-    if (!preopenAsync(requests, error)) return false;
-    bool success = true;
-    for (const auto& request : requests) {
-        if (resolve(request.path, error) == nullptr) success = false;
-    }
-    joinOpenWorkers();
-    return success;
-}
-
-bool InputSessionRegistry::preopen(const std::vector<fs::path>& paths,
-                                   std::string& error) {
-    std::vector<OpenRequest> requests;
-    requests.reserve(paths.size());
-    for (const auto& path : paths) requests.push_back(OpenRequest{path, false});
-    return preopen(requests, error);
-}
-
 } // namespace velox::media::packet
 
 #endif // VELOX_ENABLE_LIBAV

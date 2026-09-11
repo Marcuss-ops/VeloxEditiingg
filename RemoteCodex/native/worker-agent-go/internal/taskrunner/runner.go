@@ -25,7 +25,7 @@
 //   - upload_lifecycle.go: runUpload — the upload hand-off marker.
 //   - error_mapping.go   : isPanicErr, isPanicContained, mapCtxErr —
 //     the error-classification helpers (pre-existing).
-//   - report_metrics.go  : mergeStatsInto + the type-coercion helpers
+//   - report_metrics.go  : typed metric enrichment + type-coercion helpers
 //     (pre-existing).
 //
 // PR-3.7: mergeStatsInto reads cache.CacheStats / blob.BlobStats values

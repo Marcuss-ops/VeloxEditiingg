@@ -19,6 +19,8 @@ import (
 	"velox-shared/payload"
 )
 
+const canonicalCompiledPlanExecutor = "video.assemble.copy.v1@1"
+
 func normalizeSceneVideoPayload(payloadMap map[string]interface{}) (map[string]interface{}, error) {
 	return normalizeSceneVideoPayloadContext(context.Background(), payloadMap)
 }
@@ -334,13 +336,14 @@ func resolveInternalExecutorID(payloadMap map[string]interface{}) string {
 	if payloadMap == nil {
 		return ""
 	}
+	// A compiled plan is already the master's authoritative renderer input.
+	// Do not let an explicit legacy or alternate executor route it back into a
+	// parallel V2 implementation.
+	if compiledRenderPlanV2Present(payloadMap) {
+		return canonicalCompiledPlanExecutor
+	}
 	meta := routing.FromPayload(payloadMap)
 	if meta.Executor.ID == "" {
-		if _, hasJSON := payloadMap[contract.PayloadKeyCompiledRenderPlanJSON]; hasJSON {
-			if _, hasSHA := payloadMap[contract.PayloadKeyCompiledRenderPlanSHA]; hasSHA {
-				return "render_batch@1"
-			}
-		}
 		return ""
 	}
 	if meta.Executor.Version > 0 && !strings.Contains(meta.Executor.ID, "@") {

@@ -287,14 +287,16 @@ func (h *Handler) sendClaimedTaskOffer(
 			workerPayload[contract.PayloadKeyCompiledRenderPlanSHA] = planSHA
 		}
 	}
-	// render_batch@1 has no safe legacy fallback: a missing or malformed V2
+	// CompiledRenderPlanV2 has no safe legacy fallback: a missing or malformed
 	// envelope must release the claim instead of offering a task that the
-	// worker can only reject after lease acquisition.
-	if isRenderBatchExecutor(tws.ExecutorID) {
+	// worker can only reject after lease acquisition. Keep the old executor in
+	// this guard while persisted render_batch tasks drain, but never create new
+	// ones; the canonical producer is video.assemble.copy.v1.
+	if isCompiledPlanExecutor(tws.ExecutorID) {
 		if err := contract.ValidateCompiledRenderPlanV2Payload(workerPayload); err != nil {
-			logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCPlacementFailed, "[PLACEMENT] refusing render_batch task=%s: invalid CompiledRenderPlanV2: %v", tws.ID, err)
+			logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCPlacementFailed, "[PLACEMENT] refusing compiled-plan task=%s executor=%s: invalid CompiledRenderPlanV2: %v", tws.ID, tws.ExecutorID, err)
 			if releaseErr := h.taskRepo.ReleaseLease(ctx, tws.ID, sess.workerID, leaseID); releaseErr != nil {
-				logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCPlacementFailed, "[PLACEMENT] failed to release render_batch claim task=%s: %v", tws.ID, releaseErr)
+				logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCPlacementFailed, "[PLACEMENT] failed to release compiled-plan claim task=%s: %v", tws.ID, releaseErr)
 			}
 			return
 		}
@@ -408,8 +410,11 @@ func compiledV2Payload(payload map[string]interface{}) (string, string, bool) {
 	return rawJSON, rawSHA, true
 }
 
-func isRenderBatchExecutor(executorID string) bool {
-	return executorID == "render_batch" || strings.HasPrefix(executorID, "render_batch@")
+func isCompiledPlanExecutor(executorID string) bool {
+	return executorID == "render_batch" ||
+		strings.HasPrefix(executorID, "render_batch@") ||
+		executorID == "video.assemble.copy.v1" ||
+		strings.HasPrefix(executorID, "video.assemble.copy.v1@")
 }
 
 // recordPlacementRejections logs the rejection reasons produced by the

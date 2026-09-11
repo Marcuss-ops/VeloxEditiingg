@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"velox-server/internal/costmodel"
+	"velox-server/internal/routing"
 	"velox-shared/contract"
 	"velox-shared/contract/rendermanifest"
 )
@@ -136,8 +137,8 @@ func TestNormalizeSceneVideoPayloadCompilesStrictCompiledRenderPlanV2(t *testing
 	if err := contract.ValidateCompiledRenderPlanV2Payload(out); err != nil {
 		t.Fatalf("generated V2 envelope rejected: %v", err)
 	}
-	if got := resolveInternalExecutorID(out); got != "render_batch@1" {
-		t.Fatalf("V2 executor = %q, want render_batch@1", got)
+	if got := resolveInternalExecutorID(out); got != "video.assemble.copy.v1@1" {
+		t.Fatalf("V2 executor = %q, want video.assemble.copy.v1@1", got)
 	}
 }
 
@@ -171,8 +172,15 @@ func TestNormalizeSceneVideoPayloadPassesThroughCompiledV2WithoutRecompiling(t *
 	if got := out[contract.PayloadKeyCompiledRenderPlanSHA]; got != expectedSHA {
 		t.Fatalf("compiled plan SHA changed: got %v, want %s", got, expectedSHA)
 	}
-	if got := resolveInternalExecutorID(out); got != "render_batch@1" {
-		t.Fatalf("executor = %q, want render_batch@1", got)
+	if got := resolveInternalExecutorID(out); got != "video.assemble.copy.v1@1" {
+		t.Fatalf("executor = %q, want video.assemble.copy.v1@1", got)
+	}
+	// An explicit legacy route must not be able to select the retired V2
+	// implementation once the payload is already compiled.
+	out[routing.KeyExecutorID] = "render_batch"
+	out[routing.KeyExecutorVersion] = 1
+	if got := resolveInternalExecutorID(out); got != "video.assemble.copy.v1@1" {
+		t.Fatalf("explicit legacy executor = %q, want video.assemble.copy.v1@1", got)
 	}
 	if _, present := out["render_plan_json"]; present {
 		t.Fatal("V2 pass-through unexpectedly produced a legacy V1 render_plan_json")
@@ -250,8 +258,8 @@ func TestProjectEnqueueJobPreservesCompiledV2InTaskSpec(t *testing.T) {
 	if err != nil {
 		t.Fatalf("projectEnqueueJobContext: %v", err)
 	}
-	if spec.ExecutorID != "render_batch@1" {
-		t.Fatalf("TaskSpec executor = %q, want render_batch@1", spec.ExecutorID)
+	if spec.ExecutorID != "video.assemble.copy.v1@1" {
+		t.Fatalf("TaskSpec executor = %q, want video.assemble.copy.v1@1", spec.ExecutorID)
 	}
 	if got := spec.Payload[contract.PayloadKeyCompiledRenderPlanJSON]; got != string(canonical) {
 		t.Fatalf("TaskSpec plan bytes changed: got %v", got)

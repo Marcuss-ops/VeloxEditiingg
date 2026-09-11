@@ -73,7 +73,7 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 	// Classify the task phase for per-phase slot accounting.
 	executorID := pte.ExecutorID
 	if executorID == "" {
-		executorID = "render_batch" // conservative default
+		executorID = "video.assemble.copy.v1" // conservative render default
 	}
 	taskPhase := classifyExecutor(executorID)
 	if err := w.concurrencyLimiter.Acquire(ctx, pte.JobID, 0); err != nil {

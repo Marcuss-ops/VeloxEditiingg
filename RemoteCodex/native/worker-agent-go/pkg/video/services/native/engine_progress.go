@@ -12,7 +12,7 @@ import (
 
 // streamEngineOutput starts two goroutines (stderr + stdout readers) and
 // forwards structured native progress through the task-local pipeline callback.
-func streamEngineOutput(stdout, stderr io.ReadCloser, ctx context.Context, onProgress DetailedProgressFunc, legacyProgress ProgressFunc, stderrBuf, stdoutBuf *strings.Builder) chan struct{} {
+func streamEngineOutput(stdout, stderr io.ReadCloser, ctx context.Context, onProgress DetailedProgressFunc, stderrBuf, stdoutBuf *strings.Builder) chan struct{} {
 	progressDone := make(chan struct{})
 
 	stderrReader := bufio.NewReader(stderr)
@@ -71,11 +71,8 @@ func streamEngineOutput(stdout, stderr io.ReadCloser, ctx context.Context, onPro
 						prog.FramesEncoded != 0 || prog.FramesDecoded != 0 ||
 						prog.FramesComposited != 0 || prog.ElapsedMS != 0
 					if !detailed {
-						if legacy := pipeline.ProgressCallback(ctx); legacy != nil {
-							legacy(prog.Percent, prog.Scene, prog.Total, prog.Stage)
-						} else if legacyProgress != nil {
-							legacyProgress(prog.Percent, prog.Scene, prog.Total, prog.Stage)
-						}
+						// Lifecycle-only lines are intentionally ignored: the
+						// canonical detailed snapshot is the sole progress contract.
 						continue
 					}
 					phase := prog.Phase
@@ -103,11 +100,6 @@ func streamEngineOutput(stdout, stderr io.ReadCloser, ctx context.Context, onPro
 						FfmpegSpeedX:      prog.FfmpegSpeedX,
 						ElapsedMS:         prog.ElapsedMS,
 						CumulativeMetrics: metrics,
-					}
-					if legacy := pipeline.ProgressCallback(ctx); legacy != nil {
-						legacy(int(snapshot.Percent), int(snapshot.Scene), int(snapshot.TotalScenes), snapshot.Phase)
-					} else if legacyProgress != nil {
-						legacyProgress(int(snapshot.Percent), int(snapshot.Scene), int(snapshot.TotalScenes), snapshot.Phase)
 					}
 					if fn := pipeline.DetailedProgressCallback(ctx); fn != nil {
 						fn(snapshot)

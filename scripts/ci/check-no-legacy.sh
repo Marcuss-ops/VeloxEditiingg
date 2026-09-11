@@ -108,6 +108,10 @@ full_tree_patterns=(
   # Item 8 (renderer cleanup): removed legacy engine + fallback paths.
   'CompileLegacyRenderJobParams'      # Removed: legacy render-plan adapter (PR #8)
   'runNativeCxxEngine'                # Removed: --full-video engine launcher (PR #8)
+  'WithProgressCallback'              # Removed: legacy progress sink
+  'SetProgressCallback'               # Removed: legacy RenderClient callback
+  'legacyProgress'                     # Removed: dual progress plumbing
+  'preopen\('                          # Removed: synchronous open barrier
   # Item 11 (duplicate roll-up): removed Handler-level Job helpers.
   'verifyJobOwnership'                # Removed: dead Job-era ownership check (PR #11)
   'lookupJobCASFields'                # Removed: dead Job-era CAS helper (PR #11)

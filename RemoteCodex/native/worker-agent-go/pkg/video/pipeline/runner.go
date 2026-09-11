@@ -41,45 +41,22 @@ type ProgressSnapshot struct {
 	CumulativeMetrics map[string]float64
 }
 
-// ProgressFunc is the legacy operator-visible callback contract. Keep this
-// signature source-compatible for existing clients; detailed progress uses
-// DetailedProgressFunc below.
-type ProgressFunc func(percent, scene, total int, stage string)
-
 // DetailedProgressFunc receives the canonical incremental Attempt snapshot.
 // The worker stores it in ActiveTaskExecution.Progress; it is not a second
 // progress tracker.
 type DetailedProgressFunc func(ProgressSnapshot)
 type ArtifactWriteProgressFunc func(ArtifactWriteProgress)
 
-type progressContextKey struct{}
 type detailedProgressContextKey struct{}
 type artifactWriteProgressContextKey struct{}
 
-// WithProgressCallback associates a legacy task-local progress sink with ctx.
-func WithProgressCallback(ctx context.Context, fn ProgressFunc) context.Context {
-	if fn == nil {
-		return ctx
-	}
-	return context.WithValue(ctx, progressContextKey{}, fn)
-}
-
-// WithDetailedProgressCallback associates the canonical detailed progress
-// sink with ctx without changing the legacy callback API.
+// WithDetailedProgressCallback associates the canonical detailed progress sink
+// with ctx.
 func WithDetailedProgressCallback(ctx context.Context, fn DetailedProgressFunc) context.Context {
 	if fn == nil {
 		return ctx
 	}
 	return context.WithValue(ctx, detailedProgressContextKey{}, fn)
-}
-
-// ProgressCallback returns the legacy task-local progress sink, if any.
-func ProgressCallback(ctx context.Context) ProgressFunc {
-	if ctx == nil {
-		return nil
-	}
-	fn, _ := ctx.Value(progressContextKey{}).(ProgressFunc)
-	return fn
 }
 
 // DetailedProgressCallback returns the canonical detailed progress sink.

@@ -17,7 +17,7 @@ func TestStreamEngineOutputPropagatesArtifactWriteProgress(t *testing.T) {
 	var stderrBuf, stdoutBuf strings.Builder
 	done := streamEngineOutput(
 		io.NopCloser(strings.NewReader("")),
-		io.NopCloser(strings.NewReader(progress)), ctx, nil, nil, &stderrBuf, &stdoutBuf)
+		io.NopCloser(strings.NewReader(progress)), ctx, nil, &stderrBuf, &stdoutBuf)
 	<-done
 	select {
 	case p := <-got:
@@ -39,7 +39,6 @@ func TestStreamEngineOutputPropagatesSegmentCompleted(t *testing.T) {
 		io.NopCloser(strings.NewReader(progress)),
 		context.Background(),
 		func(snapshot pipeline.ProgressSnapshot) { got <- snapshot },
-		nil,
 		&stderrBuf,
 		&stdoutBuf,
 	)

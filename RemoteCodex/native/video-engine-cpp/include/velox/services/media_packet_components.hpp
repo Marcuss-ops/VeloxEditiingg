@@ -152,26 +152,9 @@ public:
 
     // Starts bounded background opens and returns without waiting for the
     // batch. resolve() waits only for the requested path. This is the
-    // open-ahead half of the streaming open->mux pipeline; callers that need
-    // the old batch semantics should use preopen().
+    // open-ahead half of the streaming open->mux pipeline.
     bool preopenAsync(const std::vector<OpenRequest>& requests,
                       std::string& error);
-
-    // Opens every distinct path concurrently. Each open is an independent
-    // libav context setup; uncertified or incomplete inputs use
-    // avformat_find_stream_info. Driving them from multiple threads is safe
-    // and turns the sequential per-segment open cost into roughly one
-    // parallel round.
-    // Returns false and sets error on the first failing path. Paths that
-    // are already registered are skipped. After a successful preopen,
-    // resolve() returns the pre-opened sessions without further I/O.
-    bool preopen(const std::vector<OpenRequest>& requests,
-                 std::string& error);
-
-    // Compatibility facade for callers that do not have producer
-    // certification. Such inputs always use the fail-closed full probe.
-    bool preopen(const std::vector<std::filesystem::path>& paths,
-                 std::string& error);
 
 private:
     struct OpenState {
