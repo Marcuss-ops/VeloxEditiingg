@@ -51,6 +51,7 @@ void resetIOCounters() {
     g_ioCounters.file_fsync_ms.store(0);
     g_ioCounters.directory_fsync_ms.store(0);
     g_ioCounters.output_rename_ms.store(0);
+    g_ioCounters.durability_degraded_count.store(0);
     g_ioCounters.external_spawn_count.store(0);
     g_ioCounters.ffmpeg_spawn_count.store(0);
     g_ioCounters.ffprobe_spawn_count.store(0);
@@ -109,6 +110,7 @@ void recordFirstOutputWrite() {
 void recordFileFsync(int64_t elapsed_ms) { g_ioCounters.file_fsync_ms.fetch_add(elapsed_ms); }
 void recordDirectoryFsync(int64_t elapsed_ms) { g_ioCounters.directory_fsync_ms.fetch_add(elapsed_ms); }
 void recordOutputRename(int64_t elapsed_ms) { g_ioCounters.output_rename_ms.fetch_add(elapsed_ms); }
+void recordDurabilityDegraded() { g_ioCounters.durability_degraded_count.fetch_add(1); }
 
 void recordExternalSpawn(const std::string& command) {
     g_ioCounters.external_spawn_count.fetch_add(1);

@@ -3,6 +3,7 @@
 #include "velox/services/file_utils.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <cctype>
 #include <chrono>
 #include <cstdlib>
@@ -107,11 +108,11 @@ int64_t decodedFramesFromShowInfo(const std::string& stderr_out) {
             ++end;
         }
         if (end > cursor) {
-            try {
-                max_frame = std::max(
-                    max_frame,
-                    static_cast<int64_t>(std::stoll(stderr_out.substr(cursor, end - cursor))));
-            } catch (...) {
+            int64_t frame = 0;
+            const auto parsed = std::from_chars(
+                stderr_out.data() + cursor, stderr_out.data() + end, frame);
+            if (parsed.ec == std::errc{} && parsed.ptr == stderr_out.data() + end) {
+                max_frame = std::max(max_frame, frame);
             }
         }
         cursor = end;

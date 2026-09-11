@@ -36,7 +36,7 @@ struct ProbeCacheEntry {
 };
 
 struct ProbeCacheRecord {
-    ProbeCacheEntry entry;
+    std::shared_ptr<const ProbeCacheEntry> entry;
     std::list<fs::path>::iterator lru_position;
 };
 
@@ -56,23 +56,23 @@ inline ProbeCacheShard& shardFor(const fs::path& mediaPath) {
     return g_probeCacheShards[h % kProbeCacheShards];
 }
 
-std::optional<ProbeCacheEntry> probeCacheSnapshot(const fs::path& mediaPath) {
+std::shared_ptr<const ProbeCacheEntry> probeCacheSnapshot(const fs::path& mediaPath) {
     auto& shard = shardFor(mediaPath);
     std::lock_guard<std::mutex> lock(shard.mu);
     auto it = shard.cache.find(mediaPath);
-    if (it == shard.cache.end()) return std::nullopt;
+    if (it == shard.cache.end()) return {};
     return it->second.entry;
 }
 
-std::optional<ProbeCacheEntry> probeCacheLookup(const fs::path& mediaPath) {
+std::shared_ptr<const ProbeCacheEntry> probeCacheLookup(const fs::path& mediaPath) {
     auto cached = probeCacheSnapshot(mediaPath);
-    if (!cached) return std::nullopt;
+    if (!cached) return {};
 
     std::error_code ec;
     auto sz = fs::file_size(mediaPath, ec);
-    if (ec) return std::nullopt;
+    if (ec) return {};
     auto mt = fs::last_write_time(mediaPath, ec);
-    if (ec) return std::nullopt;
+    if (ec) return {};
 
     if (cached->file_size == sz && cached->mtime == mt) {
         return cached;
@@ -85,12 +85,11 @@ std::optional<ProbeCacheEntry> probeCacheLookup(const fs::path& mediaPath) {
     std::lock_guard<std::mutex> lock(shard.mu);
     auto it = shard.cache.find(mediaPath);
     if (it != shard.cache.end() &&
-        it->second.entry.file_size == cached->file_size &&
-        it->second.entry.mtime == cached->mtime) {
+        it->second.entry == cached) {
         shard.order.erase(it->second.lru_position);
         shard.cache.erase(it);
     }
-    return std::nullopt;
+    return {};
 }
 
 void probeCacheStore(const fs::path& mediaPath, const MediaProbeResult& result) {
@@ -103,7 +102,8 @@ void probeCacheStore(const fs::path& mediaPath, const MediaProbeResult& result) 
     std::lock_guard<std::mutex> lock(shard.mu);
     auto it = shard.cache.find(mediaPath);
     if (it != shard.cache.end()) {
-        it->second.entry = ProbeCacheEntry{result, sz, mt};
+        it->second.entry = std::make_shared<const ProbeCacheEntry>(
+            ProbeCacheEntry{result, sz, mt});
         shard.order.splice(shard.order.end(), shard.order,
                                  it->second.lru_position);
         return;
@@ -117,7 +117,8 @@ void probeCacheStore(const fs::path& mediaPath, const MediaProbeResult& result) 
     shard.order.push_back(mediaPath);
     auto position = std::prev(shard.order.end());
     shard.cache.emplace(mediaPath, ProbeCacheRecord{
-        ProbeCacheEntry{result, sz, mt}, position});
+        std::make_shared<const ProbeCacheEntry>(ProbeCacheEntry{result, sz, mt}),
+        position});
 }
 
 struct FormatContextDeleter {

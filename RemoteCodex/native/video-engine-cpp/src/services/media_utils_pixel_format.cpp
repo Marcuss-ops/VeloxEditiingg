@@ -10,8 +10,7 @@ void canvasDims(const SceneSegmentParams& params, int& width, int& height, int& 
 
 std::string scaleFilterString(
     const std::string& scale_mode,
-    const std::string& size,
-    const std::string& resolution) {
+    const std::string& size) {
     std::string filter;
     if (scale_mode == "contain") {
         filter = "scale=" + size + ":force_original_aspect_ratio=decrease,pad=" +
@@ -22,7 +21,6 @@ std::string scaleFilterString(
         filter = "scale=" + size + ":force_original_aspect_ratio=increase,crop=" +
             size + ",format=yuv420p";
     }
-    (void)resolution;
     return withDecodeTelemetry(filter);
 }
 

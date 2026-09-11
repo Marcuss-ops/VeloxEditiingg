@@ -39,7 +39,6 @@ CommandResult runCommandTimed(const std::string& cmd);
 std::string captureCommandOutput(const std::string& cmd);
 std::string normalizeDriveUrl(const std::string& url);
 bool isDriveFolderUrl(const std::string& url);
-std::string resolveDriveFolderToFileUrl(const std::string& folderUrl);
 bool copyFile(const std::filesystem::path& src, const std::filesystem::path& dst);
 std::filesystem::path makeTempDir(const std::filesystem::path& base, const std::string& prefix);
 // Returns a unique partial path in the target's parent directory. Keeping the

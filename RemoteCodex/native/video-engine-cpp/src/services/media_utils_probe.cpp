@@ -10,6 +10,7 @@ extern "C" {
 #endif
 
 #include <algorithm>
+#include <charconv>
 #include <cctype>
 #include <cmath>
 #include <sstream>
@@ -80,12 +81,10 @@ double probeMediaDurationSeconds(const fs::path& media_path) {
             << file::shellQuote(media_path.string());
     const std::string output = json::trim(file::captureCommandOutput(command.str()));
     if (output.empty() || output == "N/A") return 0.0;
-    try {
-        const double duration = std::stod(output);
-        return duration > 0.0 ? duration : 0.0;
-    } catch (...) {
-        return 0.0;
-    }
+    char* end = nullptr;
+    const double duration = std::strtod(output.c_str(), &end);
+    if (end == output.c_str() || *end != '\0') return 0.0;
+    return duration > 0.0 && std::isfinite(duration) ? duration : 0.0;
 }
 
 FinalAudioMetadata probeFinalAudioMetadata(const fs::path& audio_path) {
@@ -105,20 +104,34 @@ FinalAudioMetadata probeFinalAudioMetadata(const fs::path& audio_path) {
         if (separator == std::string::npos) continue;
         const std::string key = line.substr(0, separator);
         const std::string value = json::trim(line.substr(separator + 1));
-        try {
-            if (key == "codec_name") metadata.codec = value;
-            else if (key == "sample_rate") metadata.sample_rate = std::stoi(value);
-            else if (key == "channels") metadata.channels = std::stoi(value);
-            else if (key == "channel_layout") metadata.channel_layout = value;
-            else if (key == "duration" && value != "N/A") {
-                metadata.duration_seconds = std::stod(value);
+        if (key == "codec_name") metadata.codec = value;
+        else if (key == "sample_rate") {
+            int parsed = 0;
+            const auto result = std::from_chars(value.data(), value.data() + value.size(), parsed);
+            if (result.ec == std::errc{} && result.ptr == value.data() + value.size()) {
+                metadata.sample_rate = parsed;
+            }
+        } else if (key == "channels") {
+            int parsed = 0;
+            const auto result = std::from_chars(value.data(), value.data() + value.size(), parsed);
+            if (result.ec == std::errc{} && result.ptr == value.data() + value.size()) {
+                metadata.channels = parsed;
+            }
+        } else if (key == "channel_layout") metadata.channel_layout = value;
+        else if (key == "duration" && value != "N/A") {
+            char* end = nullptr;
+            const double parsed = std::strtod(value.c_str(), &end);
+            if (end != value.c_str() && *end == '\0') {
+                metadata.duration_seconds = parsed;
                 metadata.duration_verified = true;
-            } else if (key == "start_time" && value != "N/A") {
-                metadata.start_time_seconds = std::stod(value);
+            }
+        } else if (key == "start_time" && value != "N/A") {
+            char* end = nullptr;
+            const double parsed = std::strtod(value.c_str(), &end);
+            if (end != value.c_str() && *end == '\0') {
+                metadata.start_time_seconds = parsed;
                 metadata.start_time_verified = true;
             }
-        } catch (...) {
-            return FinalAudioMetadata{};
         }
     }
     metadata.metadata_verified =

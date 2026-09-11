@@ -63,7 +63,7 @@ StageResult runStages(const StageConfig& config) {
     FilterChain filter_chain;
     std::string stage_error_detail;
     if (!filter_chain.init(FilterBackend::Cpu, *config.decoder, *config.encoder,
-                           pool, stage_error_detail)) {
+                           stage_error_detail)) {
         result.error = stage_error_detail;
         return result;
     }
@@ -131,6 +131,16 @@ StageResult runStages(const StageConfig& config) {
     std::thread render_thread([&]() {
         int64_t frame_index = 0;
         int index = 0;
+        int64_t pending_busy_ns = 0;
+        int64_t pending_bypass_frames = 0;
+        int pending_metric_frames = 0;
+        const auto flush_metrics = [&]() {
+            producer_busy_ns.value.fetch_add(pending_busy_ns, std::memory_order_relaxed);
+            bypass_frames.value.fetch_add(pending_bypass_frames, std::memory_order_relaxed);
+            pending_busy_ns = 0;
+            pending_bypass_frames = 0;
+            pending_metric_frames = 0;
+        };
         std::string render_error;
         while (!failed.load() && render_queue.pop(index)) {
             if (index < 0) {
@@ -142,14 +152,15 @@ StageResult runStages(const StageConfig& config) {
             AVFrame* rendered = filter_chain.apply(
                 source, index, pool, config.source_height,
                 frame_cpu_busy_ns, render_error);
-            producer_busy_ns.value.fetch_add(frame_cpu_busy_ns, std::memory_order_relaxed);
+            pending_busy_ns += frame_cpu_busy_ns;
+            ++pending_metric_frames;
             if (rendered == nullptr) {
                 fail_stage(render_error);
                 pool.release(index);
                 break;
             }
             if (filter_chain.bypass()) {
-                bypass_frames.value.fetch_add(1, std::memory_order_relaxed);
+                ++pending_bypass_frames;
             }
             rendered->pts = frame_index++;
             rendered->pict_type = AV_PICTURE_TYPE_NONE;
@@ -157,7 +168,11 @@ StageResult runStages(const StageConfig& config) {
                 pool.release(index);
                 break;
             }
+            if (pending_metric_frames >= 32) {
+                flush_metrics();
+            }
         }
+        flush_metrics();
     });
 
     std::thread encode_thread([&]() {

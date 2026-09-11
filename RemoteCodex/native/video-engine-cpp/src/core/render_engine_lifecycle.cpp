@@ -121,11 +121,13 @@ RenderEngine::downloadAudioTracks(
             if (media::hasAudioStream(local_audio)) {
                 tracks.emplace_back(local_audio, &track);
             } else {
-                std::cerr << "warning: audio track " << index
-                          << " contains no audio stream, skipping\n";
+                std::cerr << "error: audio track " << index
+                          << " contains no audio stream\n";
+                return {};
             }
         } else {
-            std::cerr << "warning: failed to download audio track " << index << "\n";
+            std::cerr << "error: failed to download audio track " << index << "\n";
+            return {};
         }
     }
     return tracks;

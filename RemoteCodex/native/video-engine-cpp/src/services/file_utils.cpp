@@ -19,9 +19,6 @@ namespace velox::file {
 namespace {
 
 const std::regex kDriveFilePathPattern(R"(/file/d/([^/]+))");
-const std::regex kDriveFileViewPattern(R"(https://drive\.google\.com/file/d/([^"/?]+))");
-const std::regex kDriveFileIDPattern(R"(/file/d/([^"/?]+))");
-const std::regex kDriveOpenIDPattern(R"(open\?id=([^"&]+))");
 
 } // namespace
 
@@ -167,32 +164,6 @@ std::string normalizeDriveUrl(const std::string& url) {
 
 bool isDriveFolderUrl(const std::string& url) {
     return url.find("/drive/folders/") != std::string::npos;
-}
-
-std::string resolveDriveFolderToFileUrl(const std::string& folderUrl) {
-    if (!isDriveFolderUrl(folderUrl)) {
-        return folderUrl;
-    }
-
-    const std::string html = captureCommandOutput("curl -L --silent --show-error " + shellQuote(folderUrl));
-    if (html.empty()) {
-        return {};
-    }
-
-    std::smatch match;
-    if (std::regex_search(html, match, kDriveFileViewPattern) && match.size() > 1) {
-        return normalizeDriveUrl(match[0].str());
-    }
-
-    if (std::regex_search(html, match, kDriveFileIDPattern) && match.size() > 1) {
-        return "https://drive.google.com/uc?export=download&id=" + match[1].str();
-    }
-
-    if (std::regex_search(html, match, kDriveOpenIDPattern) && match.size() > 1) {
-        return "https://drive.google.com/uc?export=download&id=" + match[1].str();
-    }
-
-    return {};
 }
 
 bool copyFile(const fs::path& src, const fs::path& dst) {
@@ -342,6 +313,7 @@ bool publishAtomic(const fs::path& partial, const fs::path& target, const Durabi
     }
     const int dir_fd = ::open(parent.c_str(), O_RDONLY | O_DIRECTORY);
     if (dir_fd < 0) {
+        services::recordDurabilityDegraded();
         std::cerr << "warning: atomic output committed but output directory could not be opened for fsync: "
                   << parent << "\n";
         return true;
@@ -353,9 +325,11 @@ bool publishAtomic(const fs::path& partial, const fs::path& target, const Durabi
     const int dir_errno = errno;
     const bool dir_closed = ::close(dir_fd) == 0;
     if (!dir_synced) {
+        services::recordDurabilityDegraded();
         std::cerr << "warning: atomic output committed but output directory fsync failed: "
                   << std::strerror(dir_errno) << "\n";
     } else if (!dir_closed) {
+        services::recordDurabilityDegraded();
         std::cerr << "warning: atomic output committed but output directory close failed: " << parent << "\n";
     } else if (durable != nullptr) {
         *durable = true;
@@ -413,10 +387,10 @@ bool downloadAsset(const std::string& source, const fs::path& dest, const std::s
 
     std::string resolvedSource = source;
     if (isDriveFolderUrl(source)) {
-        resolvedSource = resolveDriveFolderToFileUrl(source);
-        if (resolvedSource.empty()) {
-            return false;
-        }
+        // Folder resolution belongs to the authenticated worker ingest layer.
+        // HTML scraping here was an unauthenticated, non-deterministic legacy
+        // fallback and could also spawn curl from the render boundary.
+        return false;
     }
     // A missing local path must not be handed to curl: curl interprets an
     // arbitrary cache/path string as a URL and reports the misleading

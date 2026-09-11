@@ -18,7 +18,7 @@ FilterChain::~FilterChain() {
 }
 
 bool FilterChain::init(FilterBackend backend, const AVCodecContext& decoder,
-                       const AVCodecContext& encoder, FramePool& pool,
+                       const AVCodecContext& encoder,
                        std::string& error) {
     // CPU is the only implemented filter backend; reject anything else so a
     // future mis-wiring fails closed instead of silently passing frames
@@ -39,7 +39,6 @@ bool FilterChain::init(FilterBackend backend, const AVCodecContext& decoder,
         error = "sws_getContext failed";
         return false;
     }
-    (void)pool;
     return true;
 }
 

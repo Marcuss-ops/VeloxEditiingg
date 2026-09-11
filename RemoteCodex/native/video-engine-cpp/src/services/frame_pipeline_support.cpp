@@ -74,10 +74,12 @@ int FramePool::acquire() {
             // CV. release() and shutdown() both notify, preserving bounded
             // backpressure without consuming a CPU core while waiting.
             std::unique_lock<std::mutex> lock(wait_mutex_);
+            waiters_.fetch_add(1, std::memory_order_relaxed);
             available_.wait(lock, [&] {
                 return shutdown_.load(std::memory_order_acquire) ||
                        free_mask_.load(std::memory_order_acquire) != 0;
             });
+            waiters_.fetch_sub(1, std::memory_order_relaxed);
             mask = free_mask_.load(std::memory_order_acquire);
             continue;
         }
@@ -107,7 +109,9 @@ void FramePool::release(int index) {
     // same bit concurrently.
     free_mask_.fetch_or(uint64_t{1} << index, std::memory_order_acq_rel);
     in_use_.fetch_sub(1, std::memory_order_release);
-    available_.notify_one();
+    if (waiters_.load(std::memory_order_relaxed) > 0) {
+        available_.notify_one();
+    }
 }
 
 void FramePool::shutdown() {

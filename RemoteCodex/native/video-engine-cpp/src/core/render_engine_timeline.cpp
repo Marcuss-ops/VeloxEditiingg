@@ -442,7 +442,6 @@ bool RenderEngine::renderLegacyTimeline(
                 frames_decoded_.fetch_add(segmentDecodedFrames);
                 frames_composited_.fetch_add(seg.frames_composited);
                 seg.status = telemetry::kStatusOk;
-                seg.ffmpeg_threads = 0;
                 if (encodePhase) {
                     encodePhase->SetDetailedMetrics(
                         static_cast<int32_t>(i), "video", -1,

@@ -43,6 +43,10 @@ struct IOCounters {
     std::atomic<int64_t> file_fsync_ms{0};
     std::atomic<int64_t> directory_fsync_ms{0};
     std::atomic<int64_t> output_rename_ms{0};
+    // Successful atomic publication for which the post-rename directory
+    // fsync could not be confirmed. The output remains available, but is
+    // explicitly not crash-durable.
+    std::atomic<int64_t> durability_degraded_count{0};
 
     // External tool spawn counters (engine-declared): every external
     // process the engine launches through the file_utils chokepoints
@@ -125,5 +129,6 @@ void recordFirstOutputWrite();
 void recordFileFsync(int64_t elapsed_ms);
 void recordDirectoryFsync(int64_t elapsed_ms);
 void recordOutputRename(int64_t elapsed_ms);
+void recordDurabilityDegraded();
 
 } // namespace velox::services

@@ -67,6 +67,7 @@ private:
     std::mutex wait_mutex_;
     std::condition_variable wait_cv_;
     std::atomic<bool> done_{false};
+    std::atomic<int> waiters_{0};
 
     // Producer-private metrics.
     int64_t high_water_{0};

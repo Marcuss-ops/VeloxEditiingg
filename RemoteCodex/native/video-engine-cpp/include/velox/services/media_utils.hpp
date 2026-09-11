@@ -114,21 +114,6 @@ std::string buildColorSegmentArgs(
     const SceneSegmentParams& params,
     const std::string& color_hex);
 
-// ─── Existing execution wrappers (shell-prepend "ffmpeg" + runCommand) ──
-//
-// These preserve the legacy surface used by `cmd_full_video.cpp`. They
-// internally delegate to the *Args builders and add the canonical
-// global flags.
-bool buildSceneSegment(const std::filesystem::path& imagePath,
-                       const std::filesystem::path& segmentPath,
-                       double duration,
-                       const SceneSegmentParams& params = {});
-
-bool buildVideoSegment(const std::filesystem::path& clipPath,
-                       const std::filesystem::path& segmentPath,
-                       double duration,
-                       const SceneSegmentParams& params = {});
-
 bool concatSegments(const std::vector<std::filesystem::path>& segments,
                     const std::filesystem::path& outputPath,
                     const std::filesystem::path& workDir);

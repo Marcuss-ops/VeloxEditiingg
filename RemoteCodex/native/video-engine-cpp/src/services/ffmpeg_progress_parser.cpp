@@ -26,6 +26,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <charconv>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
@@ -36,6 +37,7 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <thread>
@@ -60,12 +62,14 @@ std::string escapeProgressJsonString(const std::string& s) {
 
 // ─── trim helper ──────────────────────────────────────────────────────
 
-static std::string trimCopy(const std::string& s) {
-    auto isSp = [](unsigned char c) { return std::isspace(c); };
-    auto b = std::find_if_not(s.begin(), s.end(), isSp);
-    auto e = std::find_if_not(s.rbegin(), s.rend(), isSp).base();
-    if (b >= e) return {};
-    return std::string(b, e);
+static std::string_view trimView(std::string_view value) {
+    while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front()))) {
+        value.remove_prefix(1);
+    }
+    while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back()))) {
+        value.remove_suffix(1);
+    }
+    return value;
 }
 
 // ─── ProgressParser ───────────────────────────────────────────────────
@@ -81,38 +85,24 @@ void ProgressParser::setExpectedDurationUs(int64_t us) {
     expected_duration_us_.store(us);
 }
 
-static bool tryParseInt64(const std::string& v, int64_t& out) {
+static bool tryParseInt64(std::string_view v, int64_t& out) {
     if (v.empty()) return false;
-    try {
-        size_t end = 0;
-        long long parsed = std::stoll(v, &end);
-        if (end != v.size()) return false;
-        out = static_cast<int64_t>(parsed);
-        return true;
-    } catch (...) {
-        return false;
-    }
+    const auto result = std::from_chars(v.data(), v.data() + v.size(), out);
+    return result.ec == std::errc{} && result.ptr == v.data() + v.size();
 }
 
-static bool tryParseDouble(const std::string& v, double& out) {
+static bool tryParseDouble(std::string_view v, double& out) {
     if (v.empty()) return false;
-    try {
-        size_t end = 0;
-        double parsed = std::stod(v, &end);
-        if (end != v.size()) return false;
-        out = parsed;
-        return true;
-    } catch (...) {
-        return false;
-    }
+    const auto result = std::from_chars(v.data(), v.data() + v.size(), out);
+    return result.ec == std::errc{} && result.ptr == v.data() + v.size();
 }
 
-static double parseSpeedX(const std::string& v) {
+static double parseSpeedX(std::string_view v) {
     // ffmpeg emits "1.5x" or "0.95x" or "N/A" on indeterminate speed.
     if (v.empty() || v == "N/A") return 0.0;
-    std::string trimmed = trimCopy(v);
+    std::string_view trimmed = trimView(v);
     if (trimmed.empty()) return 0.0;
-    if (trimmed.back() == 'x') trimmed.pop_back();
+    if (trimmed.back() == 'x') trimmed.remove_suffix(1);
     double x = 0.0;
     if (tryParseDouble(trimmed, x)) {
         return x;
@@ -120,7 +110,7 @@ static double parseSpeedX(const std::string& v) {
     return 0.0;
 }
 
-static void applyKeyToProgress(const std::string& key, const std::string& value, EngineProgress& cur) {
+static void applyKeyToProgress(std::string_view key, std::string_view value, EngineProgress& cur) {
     int64_t iv = 0;
     double dv = 0.0;
     if (key == "frame") {
@@ -129,7 +119,7 @@ static void applyKeyToProgress(const std::string& key, const std::string& value,
         if (tryParseDouble(value, dv)) cur.fps = dv;
     } else if (key == "speed") {
         if (!value.empty() && value != "N/A") {
-            cur.speed = value;
+            cur.speed.assign(value);
             cur.speed_x = parseSpeedX(value);
         }
     } else if (key == "out_time_us") {
@@ -146,7 +136,7 @@ static void applyKeyToProgress(const std::string& key, const std::string& value,
             if (cur.out_time_us == 0) cur.out_time_us = iv * 1000;
         }
     } else if (key == "out_time") {
-        cur.out_time = value;
+        cur.out_time.assign(value);
     } else if (key == "total_size") {
         if (tryParseInt64(value, iv)) cur.total_size = iv;
     } else if (key == "dup_frames") {
@@ -155,17 +145,19 @@ static void applyKeyToProgress(const std::string& key, const std::string& value,
         if (tryParseInt64(value, iv)) cur.drop_frames = iv;
     } else if (key == "bitrate") {
         // ffmpeg emits "2048kbits/s" — strip units, keep bits/s.
-        std::string num;
+        std::size_t num_size = 0;
         for (char c : value) {
             if (std::isdigit(static_cast<unsigned char>(c)) || c == '.') {
-                num.push_back(c);
+                ++num_size;
             } else {
                 break;
             }
         }
-        if (!num.empty()) {
+        if (num_size > 0) {
             double bps = 0.0;
-            if (tryParseDouble(num, bps)) cur.bitrate = static_cast<int64_t>(bps);
+            if (tryParseDouble(value.substr(0, num_size), bps)) {
+                cur.bitrate = static_cast<int64_t>(bps);
+            }
         }
     } else if (key == "progress") {
         // Block boundary — caller treats this via onBlockBoundary.
@@ -198,7 +190,8 @@ size_t ProgressParser::feed(const std::string& chunk) {
     while (true) {
         size_t nl = buffer_.find('\n', pos);
         if (nl == std::string::npos) break;
-        std::string line = trimCopy(buffer_.substr(pos, nl - pos));
+        const std::string_view line = trimView(
+            std::string_view(buffer_).substr(pos, nl - pos));
         pos = nl + 1;
 
         if (line.empty()) continue;
@@ -206,8 +199,8 @@ size_t ProgressParser::feed(const std::string& chunk) {
         size_t eq = line.find('=');
         if (eq == std::string::npos) continue;
 
-        std::string key = trimCopy(line.substr(0, eq));
-        std::string value = trimCopy(line.substr(eq + 1));
+        const std::string_view key = trimView(line.substr(0, eq));
+        const std::string_view value = trimView(line.substr(eq + 1));
         applyKeyToProgress(key, value, cur_);
 
         if (key == "progress") {
@@ -233,14 +226,19 @@ size_t ProgressParser::feed(const std::string& chunk) {
 
 void ProgressParser::finish() {
     if (buffer_.empty()) return;
-    std::string tail = trimCopy(buffer_);
-    buffer_.clear();
-    if (tail.empty()) return;
+    const std::string_view tail = trimView(buffer_);
+    if (tail.empty()) {
+        buffer_.clear();
+        return;
+    }
 
     size_t eq = tail.find('=');
-    if (eq == std::string::npos) return;
-    std::string key = trimCopy(tail.substr(0, eq));
-    std::string value = trimCopy(tail.substr(eq + 1));
+    if (eq == std::string::npos) {
+        buffer_.clear();
+        return;
+    }
+    const std::string_view key = trimView(tail.substr(0, eq));
+    const std::string_view value = trimView(tail.substr(eq + 1));
     applyKeyToProgress(key, value, cur_);
 
     if (key == "progress") {
@@ -250,6 +248,7 @@ void ProgressParser::finish() {
         observed_count_.fetch_add(1);
         cur_ = EngineProgress{};
     }
+    buffer_.clear();
 }
 
 // ─── runFfmpegCapturingProgress ────────────────────────────────────────
@@ -437,9 +436,11 @@ bool runFfmpegCapturingProgress(
 bool SidecarWriter::writeAtomic(const fs::path& final_path, const std::string& json_content) noexcept {
     try {
         fs::path parent = final_path.parent_path();
-        if (!parent.empty()) {
+        if (parent.empty()) parent = ".";
+        {
             std::error_code ec;
             fs::create_directories(parent, ec);
+            if (ec) return false;
         }
         fs::path tmp = final_path;
         tmp += ".tmp";
@@ -458,24 +459,36 @@ bool SidecarWriter::writeAtomic(const fs::path& final_path, const std::string& j
         }
         // fsync to durably land the sidecar content before rename.
         int fd = ::open(tmp.string().c_str(), O_RDONLY);
-        if (fd >= 0) {
-            ::fsync(fd);
-            ::close(fd);
+        if (fd < 0) {
+            std::error_code cleanup_ec;
+            fs::remove(tmp, cleanup_ec);
+            return false;
+        }
+        const bool file_synced = ::fsync(fd) == 0;
+        const bool file_closed = ::close(fd) == 0;
+        if (!file_synced || !file_closed) {
+            std::error_code cleanup_ec;
+            fs::remove(tmp, cleanup_ec);
+            return false;
         }
         std::error_code ec;
         fs::rename(tmp, final_path, ec);
-        if (ec) return false;
+        if (ec) {
+            std::error_code cleanup_ec;
+            fs::remove(tmp, cleanup_ec);
+            return false;
+        }
         // POSIX-correct durability: fsync the parent directory so
         // the rename's directory entry itself is durable. Without
         // this, a crash between rename and dirfsync could lose the
         // directory entry even though the file content is durable.
-        if (!parent.empty()) {
-            int dir_fd = ::open(parent.string().c_str(), O_RDONLY | O_DIRECTORY);
-            if (dir_fd >= 0) {
-                ::fsync(dir_fd);
-                ::close(dir_fd);
-            }
+        int dir_fd = ::open(parent.string().c_str(), O_RDONLY | O_DIRECTORY);
+        if (dir_fd < 0) {
+            return false;
         }
+        const bool dir_synced = ::fsync(dir_fd) == 0;
+        const bool dir_closed = ::close(dir_fd) == 0;
+        if (!dir_synced || !dir_closed) return false;
         return true;
     } catch (...) {
         return false;

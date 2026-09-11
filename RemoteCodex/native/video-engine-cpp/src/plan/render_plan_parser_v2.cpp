@@ -1,6 +1,7 @@
 #include "render_plan_parser_internal.hpp"
 #include "json_utils.hpp"
 
+#include <cmath>
 #include <cstdint>
 #include <iostream>
 
@@ -26,11 +27,13 @@ std::optional<RenderPlan> parseRenderPlanV2(
                      "width/height/fps_num/fps_den\n";
         return std::nullopt;
     }
-    plan.canvas.fps = plan.canvas.fps_den == 1
-        ? plan.canvas.fps_num
-        : (plan.canvas.fps_num % plan.canvas.fps_den == 0
-               ? plan.canvas.fps_num / plan.canvas.fps_den
-               : plan.canvas.fps_num);
+    plan.canvas.fps = static_cast<int>(std::lround(
+        static_cast<double>(plan.canvas.fps_num) /
+        static_cast<double>(plan.canvas.fps_den)));
+    if (plan.canvas.fps <= 0) {
+        std::cerr << "errore: CompiledRenderPlanV2 output frame rate is invalid\n";
+        return std::nullopt;
+    }
 
     const int64_t duration_us = static_cast<int64_t>(
         ju::extractJsonNumberValue(jsonStr, "duration_us", 0.0));

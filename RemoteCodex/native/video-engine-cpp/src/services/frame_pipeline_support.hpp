@@ -56,6 +56,7 @@ private:
     std::atomic<int> in_use_{0};
     std::atomic<int64_t> peak_usage_{0};
     std::atomic<bool> shutdown_{false};
+    std::atomic<int> waiters_{0};
     std::mutex wait_mutex_;
     std::condition_variable available_;
 };

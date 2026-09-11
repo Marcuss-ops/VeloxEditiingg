@@ -101,7 +101,6 @@ struct FramePipelineResult {
     int64_t frames_decoded{0};
     int64_t frames_encoded{0};
     int64_t frames_composited{0};
-    int64_t zero_copy_decoded_frames{0};
     int64_t transform_bypass_frames{0};
 
     // The pipeline must create exactly one encoder context for the whole

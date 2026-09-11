@@ -92,13 +92,9 @@ void testCompleteSidecarSchema() {
     segment.source_type = "video";
     segment.total_ms = 20.0;
     segment.codec = "h264";
-    segment.preset = "fast";
     segment.status = vt::kStatusOk;
     segment.started_offset_ms = 1.5;
     segment.finished_offset_ms = 21.5;
-    segment.worker_slot = 3;
-    segment.cpu_threads = 4;
-    segment.parallel_group = "scene-2";
     engine.metrics().addSegment(segment);
 
     int64_t token = engine.recorder().Begin(
@@ -143,8 +139,6 @@ void testCompleteSidecarSchema() {
            "segments array emitted");
     EXPECT(std::strstr(json.c_str(), "\"codec\":\"h264\"") != nullptr,
            "segment codec emitted");
-    EXPECT(std::strstr(json.c_str(), "\"parallel_group\":\"scene-2\"") != nullptr,
-           "segment parallelism emitted");
     EXPECT(std::strstr(json.c_str(), "\"phases\":[") != nullptr,
            "phases array emitted");
     EXPECT(std::strstr(json.c_str(), "\"component\":\"engine.encode\"") != nullptr,

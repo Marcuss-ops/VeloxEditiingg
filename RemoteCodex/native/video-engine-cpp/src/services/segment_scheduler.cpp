@@ -59,6 +59,8 @@ std::vector<SegmentTaskResult> SegmentScheduler::run(
     std::condition_variable admission_cv;
     int64_t remaining_cpu = budget_.cpu_tokens;
     int64_t remaining_memory = budget_.memory_bytes;
+    const bool admission_unbounded = budget_.cpu_tokens <= 0 &&
+                                     budget_.memory_bytes <= 0;
 
     std::vector<std::thread> threads;
     threads.reserve(workers);
@@ -68,7 +70,7 @@ std::vector<SegmentTaskResult> SegmentScheduler::run(
                 const std::size_t index = next_index.fetch_add(1);
                 if (index >= segment_count) {
                     // No more segments will be admitted; release any waiter.
-                    admission_cv.notify_all();
+                    if (!admission_unbounded) admission_cv.notify_all();
                     return;
                 }
 
@@ -91,7 +93,7 @@ std::vector<SegmentTaskResult> SegmentScheduler::run(
                     continue;
                 }
 
-                {
+                if (!admission_unbounded) {
                     std::unique_lock<std::mutex> lock(admission_mutex);
                     admission_cv.wait(lock, [&] {
                         const bool cpu_ok = budget_.cpu_tokens <= 0 ||
@@ -114,12 +116,12 @@ std::vector<SegmentTaskResult> SegmentScheduler::run(
                         false, "segment task threw an unknown exception"};
                 }
 
-                {
+                if (!admission_unbounded) {
                     std::lock_guard<std::mutex> lock(admission_mutex);
                     remaining_cpu += segment_claim.cpu_tokens;
                     remaining_memory += segment_claim.estimated_memory_bytes;
+                    admission_cv.notify_all();
                 }
-                admission_cv.notify_all();
             }
         });
     }

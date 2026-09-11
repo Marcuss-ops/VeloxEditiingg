@@ -164,8 +164,6 @@ int main() {
     expect(result.frames_encoded >= 8,
            "encoded frame count is sane, got " +
                std::to_string(result.frames_encoded));
-    expect(result.zero_copy_decoded_frames == result.frames_decoded,
-           "decoder hands off every decoded frame without a full-frame copy");
     expect(result.transform_bypass_frames == 0,
            "scaled render does not report transform bypass frames");
     // 10 frames through a 4-slot pool: the producer must have blocked and
@@ -245,8 +243,6 @@ int main() {
                "default 8-slot queue bound respected, got " +
                    std::to_string(passResult.pipeline_metrics.queue_depth_max));
         expect(hasVideoStream(passthrough), "passthrough output is probeable");
-        expect(passResult.zero_copy_decoded_frames == passResult.frames_decoded,
-               "same-size path also keeps decoded frames zero-copy");
         expect(passResult.transform_bypass_frames == passResult.frames_encoded,
                "same-size compatible path bypasses sws_scale for every frame");
         expect(passResult.frames_composited == 0,

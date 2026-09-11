@@ -34,7 +34,7 @@ public:
     // `backend` exists so call sites state their intent explicitly; only
     // FilterBackend::Cpu is accepted (fail closed on anything else).
     bool init(FilterBackend backend, const AVCodecContext& decoder,
-              const AVCodecContext& encoder, FramePool& pool,
+              const AVCodecContext& encoder,
               std::string& error);
     AVFrame* apply(AVFrame* source, int pool_index, FramePool& pool,
                    int source_height, int64_t& cpu_busy_ns,

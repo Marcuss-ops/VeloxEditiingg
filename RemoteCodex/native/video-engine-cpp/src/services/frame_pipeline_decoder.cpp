@@ -52,7 +52,7 @@ bool DecoderStage::receiveFrames(std::string& error) {
             error = "avcodec_receive_frame failed: " + ffmpegErrorText(result);
             return false;
         }
-        if (!acceptFrame(scratch_, -1)) {
+        if (!acceptFrame(scratch_)) {
             if (config_.source_window_complete != nullptr &&
                 config_.source_window_complete->load()) {
                 return true;
@@ -82,8 +82,7 @@ bool DecoderStage::receiveFrames(std::string& error) {
     }
 }
 
-bool DecoderStage::acceptFrame(AVFrame* frame, int index) {
-    (void)index;
+bool DecoderStage::acceptFrame(AVFrame* frame) {
     if (config_.source_start_us <= 0 && config_.source_end_us <= 0) {
         return true;
     }

@@ -44,7 +44,7 @@ public:
 
 private:
     bool receiveFrames(std::string& error);
-    bool acceptFrame(AVFrame* frame, int index);
+    bool acceptFrame(AVFrame* frame);
 
     DecoderStageConfig config_;
     // Scratch frame reused for every avcodec_receive_frame call: the decoder

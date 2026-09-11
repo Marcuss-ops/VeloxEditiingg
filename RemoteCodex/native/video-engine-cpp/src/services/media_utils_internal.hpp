@@ -26,8 +26,7 @@ void appendFfmpegVideoEncodingArgs(
 void canvasDims(const SceneSegmentParams& params, int& width, int& height, int& fps);
 std::string scaleFilterString(
     const std::string& scale_mode,
-    const std::string& size,
-    const std::string& resolution);
+    const std::string& size);
 int frameCountForDuration(double duration, int fps);
 
 bool nativeVideoStreamCopyCompatible(

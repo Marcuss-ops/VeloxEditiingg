@@ -16,52 +16,6 @@ using velox::json::escapeJsonString;
 
 } // namespace
 
-bool buildSceneSegment(
-    const fs::path& image_path,
-    const fs::path& segment_path,
-    double duration,
-    const SceneSegmentParams& params) {
-    if (!image_path.empty() && fs::exists(image_path)) {
-        const std::string args = buildSceneSegmentArgs(
-            image_path, segment_path, duration, params);
-        const file::CommandResult result = file::runCommandTimed(
-            "ffmpeg -y -hide_banner -loglevel error " + args);
-        std::cerr << "{\"metric\":\"ffmpeg.scene_segment_ms\",\"value\":"
-                  << result.wall_ms << ",\"ok\":" << (result.ok ? "true" : "false")
-                  << ",\"exit_code\":" << result.exit_code << "}" << std::endl;
-        return result.ok;
-    }
-    const std::string args = buildColorSegmentArgs(
-        segment_path, duration, params, params.color_hex);
-    const file::CommandResult result = file::runCommandTimed(
-        "ffmpeg -y -hide_banner -loglevel error " + args);
-    std::cerr << "{\"metric\":\"ffmpeg.color_segment_ms\",\"value\":"
-              << result.wall_ms << ",\"ok\":" << (result.ok ? "true" : "false")
-              << ",\"exit_code\":" << result.exit_code << "}" << std::endl;
-    return result.ok;
-}
-
-bool buildVideoSegment(
-    const fs::path& clip_path,
-    const fs::path& segment_path,
-    double duration,
-    const SceneSegmentParams& params) {
-    if (clip_path.empty() || !fs::exists(clip_path)) return false;
-    const std::string args = buildVideoSegmentArgs(
-        clip_path, segment_path, duration, params);
-    if (args.empty()) {
-        std::cerr << "copy-only media contract rejected video segment: "
-                  << clip_path << "\n";
-        return false;
-    }
-    const file::CommandResult result = file::runCommandTimed(
-        "ffmpeg -y -hide_banner -loglevel error " + args);
-    std::cerr << "{\"metric\":\"ffmpeg.clip_segment_ms\",\"value\":"
-              << result.wall_ms << ",\"ok\":" << (result.ok ? "true" : "false")
-              << ",\"exit_code\":" << result.exit_code << "}" << std::endl;
-    return result.ok;
-}
-
 bool concatSegments(
     const std::vector<fs::path>& segments,
     const fs::path& output_path,

@@ -173,6 +173,7 @@ std::string RenderEngine::sidecarJson(const std::string& output_path) const {
         s << ",\"file_fsync_ms\":" << io.file_fsync_ms.load();
         s << ",\"directory_fsync_ms\":" << io.directory_fsync_ms.load();
         s << ",\"output_rename_ms\":" << io.output_rename_ms.load();
+        s << ",\"durability_degraded_count\":" << io.durability_degraded_count.load();
         s << "}";
     }
 
@@ -245,16 +246,11 @@ std::string RenderEngine::sidecarJson(const std::string& output_path) const {
             s << ",\"frames_composited\":" << seg.frames_composited;
             s << ",\"ffmpeg_speed_x\":" << seg.ffmpeg_speed_x;
             s << ",\"codec\":\"" << escapeProgressJsonString(seg.codec) << "\"";
-            s << ",\"preset\":\"" << escapeProgressJsonString(seg.preset) << "\"";
-            s << ",\"ffmpeg_threads\":" << seg.ffmpeg_threads;
             s << ",\"status\":\"" << escapeProgressJsonString(seg.status) << "\"";
             s << ",\"error_code\":\"" << escapeProgressJsonString(seg.error_code) << "\"";
             s << ",\"error_message\":\"" << escapeProgressJsonString(seg.error_message) << "\"";
             s << ",\"started_offset_ms\":" << seg.started_offset_ms;
             s << ",\"finished_offset_ms\":" << seg.finished_offset_ms;
-            s << ",\"worker_slot\":" << seg.worker_slot;
-            s << ",\"cpu_threads\":" << seg.cpu_threads;
-            s << ",\"parallel_group\":\"" << escapeProgressJsonString(seg.parallel_group) << "\"";
             s << "}";
         }
     }

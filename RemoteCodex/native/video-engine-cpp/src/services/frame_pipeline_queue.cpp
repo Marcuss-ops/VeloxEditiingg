@@ -30,12 +30,14 @@ bool BoundedQueue::push(int value) {
         // Ring full and not shutting down: block on the slow-path CV. A pop
         // notifies the waiter; the predicate closes the check-to-sleep race.
         std::unique_lock<std::mutex> lock(wait_mutex_);
+        waiters_.fetch_add(1, std::memory_order_relaxed);
         wait_cv_.wait(lock, [&] {
             return done_.load(std::memory_order_acquire) ||
                    tail_.load(std::memory_order_relaxed) -
                            head_.load(std::memory_order_acquire) <
                        static_cast<std::size_t>(capacity_);
         });
+        waiters_.fetch_sub(1, std::memory_order_relaxed);
     }
     full_wait_ns_ += elapsedNs(wait_start);
 
@@ -46,7 +48,9 @@ bool BoundedQueue::push(int value) {
     high_water_ = std::max<int64_t>(high_water_,
                                     static_cast<int64_t>(depth));
     sampleDepthProducer(depth);
-    wait_cv_.notify_one();
+    if (waiters_.load(std::memory_order_relaxed) > 0) {
+        wait_cv_.notify_one();
+    }
     return true;
 }
 
@@ -70,11 +74,13 @@ bool BoundedQueue::pop(int& value) {
         // push notifies the waiter; the predicate closes the check-to-sleep
         // race.
         std::unique_lock<std::mutex> lock(wait_mutex_);
+        waiters_.fetch_add(1, std::memory_order_relaxed);
         wait_cv_.wait(lock, [&] {
             return done_.load(std::memory_order_acquire) ||
                    head_.load(std::memory_order_relaxed) !=
                        tail_.load(std::memory_order_acquire);
         });
+        waiters_.fetch_sub(1, std::memory_order_relaxed);
     }
     empty_wait_ns_ += elapsedNs(wait_start);
 
@@ -83,7 +89,9 @@ bool BoundedQueue::pop(int& value) {
         tail_.load(std::memory_order_acquire) -
         head_.load(std::memory_order_relaxed);
     sampleDepthConsumer(depth);
-    wait_cv_.notify_one();
+    if (waiters_.load(std::memory_order_relaxed) > 0) {
+        wait_cv_.notify_one();
+    }
     return true;
 }
 

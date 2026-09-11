@@ -46,7 +46,7 @@ std::string buildSceneSegmentArgs(
     const std::string resolution = std::to_string(width) + "x" + std::to_string(height);
     const std::string size = std::to_string(width) + ":" + std::to_string(height);
     const int frames = detail::frameCountForDuration(duration, fps);
-    std::string filter = detail::scaleFilterString(params.scale_mode, size, resolution);
+    std::string filter = detail::scaleFilterString(params.scale_mode, size);
     if (params.slow_zoom) {
         filter += ",zoompan=z='1+0.08*on/(" + std::to_string(frames) + ")'"
                   ":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"

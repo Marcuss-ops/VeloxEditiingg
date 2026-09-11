@@ -295,7 +295,8 @@ bool blendYuvOverlay(PixelFrame& dst, const PreparedOverlay& overlay,
                      const Rect& placement, float opacity,
                      std::string* error) {
 #if defined(__GNUC__) || defined(__clang__)
-    if (__builtin_cpu_supports("avx2")) {
+    static const bool avx2_supported = __builtin_cpu_supports("avx2") != 0;
+    if (avx2_supported) {
         return blendYuvOverlayAVX2(dst, overlay, placement, opacity, error);
     }
 #endif
