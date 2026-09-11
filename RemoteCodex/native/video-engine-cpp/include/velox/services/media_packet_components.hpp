@@ -32,6 +32,8 @@ extern "C" {
 #include <string>
 #include <vector>
 
+#include "velox/services/media_utils.hpp"
+
 namespace velox::media::packet {
 
 // Common microsecond time base shared by every rewritten packet.
@@ -117,6 +119,7 @@ public:
     bool sourceWindowStartsOnKeyframe(int input_stream_index,
                                       int64_t source_in_us,
                                       std::string& error);
+    FinalAudioMetadata finalAudioMetadata(int stream_index) const;
 
     Demuxer& demuxer() { return demuxer_; }
     const std::filesystem::path& path() const { return path_; }

@@ -223,6 +223,8 @@ int main() {
     // the cache contract, not about whichever render happened last.
     const int64_t cacheInputOpenCount =
         velox::services::ioCounters().input_open_count.load();
+    const int64_t cacheInputReopenCount =
+        velox::services::ioCounters().input_reopen_count.load();
 
     // ── V2 non-zero source window proof. ───────────────────────────────
     // The parser stores source_in_us/source_duration_us on TimelineItem and
@@ -266,6 +268,9 @@ int main() {
         expect(cacheInputOpenCount >= 3,
                "cache assets opened directly by libavformat (video x2 + audio), actual=" +
                    std::to_string(cacheInputOpenCount));
+        expect(cacheInputReopenCount == 0,
+               "cache assets are each opened once (zero input reopens), actual=" +
+                   std::to_string(cacheInputReopenCount));
     }
     expect(fs::exists(cacheOutput), "cache-contract output is published");
     expect(!fs::exists(ffmpegTouched), "cache-contract render never executed ffmpeg");

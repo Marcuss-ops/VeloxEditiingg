@@ -172,7 +172,8 @@ if(VELOX_ENABLE_LIBAV)
         ${VELOX_PACKET_PIPELINE_FACADE_SOURCE}
         ${VELOX_PACKET_PIPELINE_COMPONENT_SOURCES}
         ${VELOX_SEGMENT_EXECUTION_LIBAV_SOURCES}
-        src/services/segment_execution.cpp)
+        src/services/segment_execution.cpp
+        src/services/media_utils_audio.cpp)
     velox_configure_test(velox_media_packet_pipeline_tests)
     velox_link_ffmpeg(velox_media_packet_pipeline_tests)
     add_test(NAME media_packet_pipeline_tests COMMAND velox_media_packet_pipeline_tests)
@@ -185,7 +186,8 @@ if(VELOX_ENABLE_LIBAV)
         ${VELOX_PACKET_PIPELINE_FACADE_SOURCE}
         ${VELOX_PACKET_PIPELINE_COMPONENT_SOURCES}
         ${VELOX_SEGMENT_EXECUTION_LIBAV_SOURCES}
-        src/services/segment_execution.cpp)
+        src/services/segment_execution.cpp
+        src/services/media_utils_audio.cpp)
     velox_configure_test(velox_streaming_packet_mux_tests)
     velox_link_ffmpeg(velox_streaming_packet_mux_tests)
     add_test(NAME streaming_packet_mux_tests COMMAND velox_streaming_packet_mux_tests)
@@ -198,7 +200,8 @@ if(VELOX_ENABLE_LIBAV)
         ${VELOX_PACKET_PIPELINE_FACADE_SOURCE}
         ${VELOX_PACKET_PIPELINE_COMPONENT_SOURCES}
         ${VELOX_SEGMENT_EXECUTION_LIBAV_SOURCES}
-        src/services/segment_execution.cpp)
+        src/services/segment_execution.cpp
+        src/services/media_utils_audio.cpp)
     velox_configure_test(velox_segment_execution_libav_tests)
     velox_link_ffmpeg(velox_segment_execution_libav_tests)
     add_test(NAME segment_execution_libav_tests COMMAND velox_segment_execution_libav_tests)
@@ -211,7 +214,8 @@ if(VELOX_ENABLE_LIBAV)
         ${VELOX_PACKET_PIPELINE_FACADE_SOURCE}
         ${VELOX_PACKET_PIPELINE_COMPONENT_SOURCES}
         ${VELOX_SEGMENT_EXECUTION_LIBAV_SOURCES}
-        src/services/segment_execution.cpp)
+        src/services/segment_execution.cpp
+        src/services/media_utils_audio.cpp)
     velox_configure_test(velox_packet_components_tests)
     velox_link_ffmpeg(velox_packet_components_tests)
     add_test(NAME packet_components_tests COMMAND velox_packet_components_tests)

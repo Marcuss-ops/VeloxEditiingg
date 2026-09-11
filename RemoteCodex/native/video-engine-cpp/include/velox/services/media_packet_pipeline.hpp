@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "velox/services/file_utils.hpp"
+#include "velox/services/media_utils.hpp"
 #include "velox/services/segment_execution.hpp"
 
 // This header is the value-types-only public surface (the OFF-build
@@ -95,6 +96,9 @@ struct CopyOnlyMuxResult {
     // data during finalize(), allowing publishAtomic to skip the
     // redundant file-level fsync and only perform rename + dir fsync.
     bool file_data_synced{false};
+    // Final-audio validation is performed from the already-open InputSession
+    // so callers do not need to probe the same path before muxing it.
+    std::optional<FinalAudioDecision> final_audio_decision;
 };
 
 // Concatenate compatible local stream-copy inputs and optionally add one

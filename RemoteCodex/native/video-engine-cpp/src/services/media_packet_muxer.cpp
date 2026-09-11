@@ -295,7 +295,21 @@ bool preparePlan(const CopyOnlyMuxRequest& request, packet::InputSessionRegistry
         if (session == nullptr) return fail(result, error);
         auto& demuxer = session->demuxer();
         const int streamIndex = demuxer.firstStream(AVMEDIA_TYPE_AUDIO);
-        if (streamIndex < 0) return fail(result, "audio stream missing from " + audio.path.string());
+        if (streamIndex < 0) {
+            FinalAudioDecision decision;
+            decision.reason = "audio_metadata_unverified";
+            if (result != nullptr) result->final_audio_decision = decision;
+            return fail(result, "copy_only final audio is not FINAL_AUDIO_COPY: " +
+                decision.reason + " " + describeFinalAudioProbe(audio.path, decision.metadata));
+        }
+        const FinalAudioMetadata metadata = session->finalAudioMetadata(streamIndex);
+        const FinalAudioDecision decision = resolveFinalAudioModePacket(
+            metadata, true, static_cast<double>(timeline) / 1'000'000.0);
+        if (result != nullptr) result->final_audio_decision = decision;
+        if (decision.mode != FinalAudioMode::Copy) {
+            return fail(result, "copy_only final audio is not FINAL_AUDIO_COPY: " +
+                decision.reason + " " + describeFinalAudioProbe(audio.path, metadata));
+        }
         const MediaSignature signature = mediaSignatureFromStream(demuxer.stream(streamIndex));
         const std::size_t executionIndex = inputs.size();
         inputs.push_back(core::SegmentExecutionInput{

@@ -3,11 +3,16 @@
 #include "media_packet_pipeline_internal.hpp"
 
 extern "C" {
+#include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
+#include <libavutil/channel_layout.h>
+#include <libavutil/version.h>
 }
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
+#include <cmath>
 #include <filesystem>
 #include <memory>
 #include <set>
@@ -19,6 +24,30 @@ extern "C" {
 namespace fs = std::filesystem;
 
 namespace velox::media::packet {
+
+namespace {
+
+std::string channelLayoutName(const AVChannelLayout& layout) {
+    char buffer[256]{};
+    if (av_channel_layout_describe(&layout, buffer, sizeof(buffer)) >= 0) {
+        return buffer;
+    }
+    return {};
+}
+
+bool rawAacContainer(const std::string& format_name) {
+    std::string normalized;
+    normalized.reserve(format_name.size());
+    for (const char value : format_name) {
+        normalized.push_back(static_cast<char>(
+            std::tolower(static_cast<unsigned char>(value))));
+    }
+    return normalized == "aac" || normalized.find("adts") != std::string::npos ||
+           normalized.find("latm") != std::string::npos ||
+           normalized.find("loas") != std::string::npos;
+}
+
+} // namespace
 
 InputSession* InputSessionRegistry::resolve(const fs::path& path, std::string& error) {
     const std::string key = path.lexically_normal().string();
@@ -48,6 +77,65 @@ bool InputSession::open(const fs::path& path, std::string& error) {
     }
     path_ = path;
     return true;
+}
+
+FinalAudioMetadata InputSession::finalAudioMetadata(int stream_index) const {
+    FinalAudioMetadata metadata;
+    if (!demuxer_.isOpen()) return metadata;
+    const AVStream* stream = demuxer_.stream(stream_index);
+    if (stream == nullptr || stream->codecpar == nullptr ||
+        stream->codecpar->codec_type != AVMEDIA_TYPE_AUDIO) {
+        return metadata;
+    }
+
+    const AVCodecParameters* parameters = stream->codecpar;
+    metadata.codec = avcodec_get_name(parameters->codec_id);
+    metadata.sample_rate = parameters->sample_rate;
+#if LIBAVUTIL_VERSION_MAJOR >= 57
+    metadata.channels = parameters->ch_layout.nb_channels;
+    if (parameters->ch_layout.nb_channels > 0 &&
+        parameters->ch_layout.order != AV_CHANNEL_ORDER_UNSPEC) {
+        metadata.channel_layout = channelLayoutName(parameters->ch_layout);
+    }
+#else
+    metadata.channels = parameters->channels;
+    if (parameters->channel_layout != 0) {
+        char buffer[64]{};
+        av_get_channel_layout_string(
+            buffer, sizeof(buffer), parameters->channels, parameters->channel_layout);
+        metadata.channel_layout = buffer;
+    }
+#endif
+    if (const AVFormatContext* context = demuxer_.raw();
+        context != nullptr && context->iformat != nullptr &&
+        context->iformat->name != nullptr) {
+        metadata.format_name = context->iformat->name;
+    }
+    if (validTimestamp(stream->duration)) {
+        const double duration = static_cast<double>(stream->duration) *
+            av_q2d(stream->time_base);
+        if (std::isfinite(duration) && duration > 0.0) {
+            metadata.duration_seconds = duration;
+            metadata.duration_verified = true;
+        }
+    }
+    if (validTimestamp(stream->start_time)) {
+        const double start_time = static_cast<double>(stream->start_time) *
+            av_q2d(stream->time_base);
+        if (std::isfinite(start_time)) {
+            metadata.start_time_seconds = start_time;
+            metadata.start_time_verified = true;
+        }
+    }
+    metadata.extradata_verified = parameters->extradata_size > 0 &&
+        parameters->extradata != nullptr;
+    metadata.container_verified = !rawAacContainer(metadata.format_name);
+    metadata.metadata_verified =
+        !metadata.codec.empty() && metadata.sample_rate > 0 && metadata.channels > 0 &&
+        !metadata.channel_layout.empty() && metadata.duration_verified &&
+        std::isfinite(metadata.duration_seconds) && metadata.duration_seconds > 0.0 &&
+        metadata.start_time_verified && std::isfinite(metadata.start_time_seconds);
+    return metadata;
 }
 
 bool InputSession::seekToTimestampUs(int stream_index, int64_t timestamp_us,

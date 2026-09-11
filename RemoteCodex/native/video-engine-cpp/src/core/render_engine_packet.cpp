@@ -160,7 +160,6 @@ RenderResult RenderEngine::renderCopyOnly(
         result.error = "copy_only supports at most one final audio track";
         return failRender("copy_only_audio_mix_unsupported");
     }
-    media::FinalAudioDecision finalAudioDecision;
     if (!plan.audio_tracks.empty()) {
         const auto& track = plan.audio_tracks.front();
         if (track.loop || track.volume != 1.0 || track.start_time_offset < 0.0) {
@@ -173,21 +172,6 @@ RenderResult RenderEngine::renderCopyOnly(
             result.error = "copy_only_audio_invalid " +
                 media::describeFinalAudioProbe(boundAudio.first, {});
             return failRender("copy_only_audio_invalid");
-        }
-        const media::FinalAudioMetadata finalAudioMetadata =
-            media::probeFinalAudioMetadata(boundAudio.first);
-        if (finalAudioMetadata.codec.empty() || !finalAudioMetadata.metadata_verified) {
-            result.error = "copy_only final audio is not FINAL_AUDIO_COPY: " +
-                std::string("audio_metadata_unverified copy_only_audio_invalid ") +
-                media::describeFinalAudioProbe(boundAudio.first, finalAudioMetadata);
-            return failRender("copy_only_audio_invalid");
-        }
-        finalAudioDecision = media::resolveFinalAudioModePacket(
-            finalAudioMetadata, true, total_copy_duration);
-        if (finalAudioDecision.mode != media::FinalAudioMode::Copy) {
-            result.error = "copy_only final audio is not FINAL_AUDIO_COPY: " +
-                finalAudioDecision.reason;
-            return failRender("copy_only_audio_not_final_copy");
         }
         {
             telemetry::ScopedPhase assetPhase(
@@ -223,7 +207,25 @@ RenderResult RenderEngine::renderCopyOnly(
     telemetry::ScopedPhase packetPhase(
         recorder_, telemetry::kOriginEngine, telemetry::kScopeAttempt,
         "engine", "packet_mux", "finalize");
-    if (!plan.audio_tracks.empty()) {
+    media::CopyOnlyMuxResult muxResult;
+    bool muxOk;
+    {
+        ScopedTimer timer(metrics_, "packet_mux_ms");
+        muxOk = media::muxCopyOnly(request, &muxResult);
+    }
+    if (!muxOk) {
+        packetPhase.Abort("packet_mux_failed", muxResult.error);
+        result.error = "copy-only packet mux failed: " + muxResult.error;
+        if (!plan.audio_tracks.empty() && muxResult.final_audio_decision) {
+            return failRender(
+                muxResult.final_audio_decision->reason == "audio_metadata_unverified"
+                    ? "copy_only_audio_invalid"
+                    : "copy_only_audio_not_final_copy");
+        }
+        return failRender("packet_mux_failed");
+    }
+    if (!plan.audio_tracks.empty() && muxResult.final_audio_decision) {
+        const auto& finalAudioDecision = *muxResult.final_audio_decision;
         packetPhase.SetMetadataJSON(
             std::string("{\"final_mux_audio_mode\":\"") +
             media::finalAudioModeName(finalAudioDecision.mode) +
@@ -248,17 +250,6 @@ RenderResult RenderEngine::renderCopyOnly(
             (finalAudioDecision.metadata.container_verified ? "true" : "false") +
             ",\"decision_reason\":\"" +
             escapeJsonString(finalAudioDecision.reason) + "\"}");
-    }
-    media::CopyOnlyMuxResult muxResult;
-    bool muxOk;
-    {
-        ScopedTimer timer(metrics_, "packet_mux_ms");
-        muxOk = media::muxCopyOnly(request, &muxResult);
-    }
-    if (!muxOk) {
-        packetPhase.Abort("packet_mux_failed", muxResult.error);
-        result.error = "copy-only packet mux failed: " + muxResult.error;
-        return failRender("packet_mux_failed");
     }
     output_durable_.store(muxResult.output_durable);
     trailer_to_publish_us_.store(muxResult.trailer_to_publish_us);
@@ -285,7 +276,6 @@ RenderResult RenderEngine::renderCopyOnly(
 bool RenderEngine::resolveMixedFinalAudio(
     const plan::RenderPlan& plan,
     const std::filesystem::path& workDir,
-    double total_duration,
     media::CopyOnlyMuxRequest& request,
     RenderResult& result,
     std::string& error_code) {
@@ -302,19 +292,6 @@ bool RenderEngine::resolveMixedFinalAudio(
     if (!file::downloadAsset(track.source_url, local_audio)) {
         error_code = "mixed_audio_download_failed";
         result.error = "failed to resolve mixed audio track";
-        return false;
-    }
-    if (!media::hasAudioStream(local_audio)) {
-        error_code = "mixed_audio_invalid";
-        result.error = "failed to resolve valid mixed audio track";
-        return false;
-    }
-    const media::FinalAudioDecision audio_decision = media::resolveFinalAudioModePacket(
-        media::probeFinalAudioMetadata(local_audio), true, total_duration);
-    if (audio_decision.mode != media::FinalAudioMode::Copy) {
-        error_code = "mixed_audio_not_final_copy";
-        result.error = "mixed render final audio is not FINAL_AUDIO_COPY: " +
-            audio_decision.reason;
         return false;
     }
     const int64_t declared_audio_duration = track.duration_us > 0
@@ -413,7 +390,7 @@ RenderResult RenderEngine::renderMixed(
 
     const double total_duration = static_cast<double>(total_duration_us) / 1'000'000.0;
     std::string error_code;
-    if (!resolveMixedFinalAudio(plan, workDir, total_duration, request, result, error_code)) {
+    if (!resolveMixedFinalAudio(plan, workDir, request, result, error_code)) {
         return failRender(error_code);
     }
     duration_seconds_.store(total_duration);
@@ -438,6 +415,12 @@ RenderResult RenderEngine::renderMixed(
         result.error = "mixed packet mux failed: " + muxResult.error;
         const bool executionRejected = muxResult.error.rfind(
             "segment_execution_rejected:", 0) == 0;
+        if (!executionRejected && muxResult.final_audio_decision) {
+            return failRender(
+                muxResult.final_audio_decision->reason == "audio_metadata_unverified"
+                    ? "mixed_audio_invalid"
+                    : "mixed_audio_not_final_copy");
+        }
         return failRender(executionRejected
             ? "segment_execution_rejected" : "mixed_packet_mux_failed");
     }

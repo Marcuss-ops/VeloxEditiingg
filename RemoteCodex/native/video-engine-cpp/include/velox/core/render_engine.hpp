@@ -148,14 +148,12 @@ private:
         RenderResult& result,
         const std::function<RenderResult(const std::string&)>& failRender);
 
-    // Mixed renderer helper: stages the single final audio track and enforces
-    // the FINAL_AUDIO_COPY contract (audio stays copy-only; anything that
-    // would need a re-encode fails closed). Returns false on failure with
-    // result.error and error_code populated for failRender.
+    // Mixed renderer helper: stages the single final audio track. The
+    // FINAL_AUDIO_COPY contract is validated by the packet mux from the
+    // already-open InputSession, so the audio is not probed twice.
     bool resolveMixedFinalAudio(
         const plan::RenderPlan& plan,
         const std::filesystem::path& workDir,
-        double total_duration,
         media::CopyOnlyMuxRequest& request,
         RenderResult& result,
         std::string& error_code);
