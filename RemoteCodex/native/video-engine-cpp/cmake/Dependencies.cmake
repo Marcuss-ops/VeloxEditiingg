@@ -5,15 +5,8 @@ set(VELOX_FRAME_PIPELINE_SOURCES
     src/services/frame_pipeline_support.cpp
     src/services/frame_pipeline_decoder.cpp
     src/services/frame_pipeline_filter.cpp
-    src/services/frame_pipeline_compositor.cpp
     src/services/frame_pipeline_encoder.cpp
-    src/services/frame_pipeline_stages.cpp
-    src/render/frame_graph.cpp
-    src/render/kernel_registry.cpp)
-set(VELOX_FRAME_GRAPH_TEST_SOURCES
-    src/render/frame_backend.cpp
-    src/render/frame_graph.cpp
-    src/render/kernel_registry.cpp)
+    src/services/frame_pipeline_stages.cpp)
 set(VELOX_FRAME_OVERLAY_TEST_SOURCES
     src/render/frame_overlay.cpp
     src/render/frame_graph.cpp)

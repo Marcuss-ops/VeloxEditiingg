@@ -66,17 +66,6 @@ bool FrameGraph::add(const FrameOp& op) {
     return true;
 }
 
-std::vector<FrameOp> FrameGraph::opsActiveAt(int64_t frame_number) const {
-    std::vector<FrameOp> active;
-    active.reserve(ops_.size());
-    for (const auto& op : ops_) {
-        if (op.activeAt(frame_number)) {
-            active.push_back(op);
-        }
-    }
-    return active;
-}
-
 bool FrameGraph::apply(PixelFrame& frame, int64_t frame_number,
                        std::string* error) const {
 	return apply(frame, frame_number, nullptr, error);

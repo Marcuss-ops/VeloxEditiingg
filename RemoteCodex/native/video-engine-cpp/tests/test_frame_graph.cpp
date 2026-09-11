@@ -1,4 +1,3 @@
-#include "velox/render/frame_backend.hpp"
 #include "velox/render/frame_graph.hpp"
 #include "velox/render/kernel_registry.hpp"
 
@@ -79,13 +78,13 @@ int main() {
            "disjoint intersection is empty");
 
     // ── FrameOp range semantics ───────────────────────────────────────
-    const FrameOp ranged{FrameOpType::ImageOverlay, 3000, 3300, {}, "logo", 1.0f};
+    const FrameOp ranged{FrameOpType::ImageOverlay, 3000, 3300, {}, 1.0f};
     expect(!ranged.activeAt(2999), "op inactive before start");
     expect(ranged.activeAt(3000), "op active at inclusive start");
     expect(ranged.activeAt(3300), "op active at inclusive end");
     expect(!ranged.activeAt(3301), "op inactive after end");
 
-    const FrameOp open_ended{FrameOpType::Rectangle, 100, -1, {}, "", 1.0f};
+    const FrameOp open_ended{FrameOpType::Rectangle, 100, -1, {}, 1.0f};
     expect(open_ended.activeAt(100), "open-ended op active at start");
     expect(open_ended.activeAt(9'000'000'000LL), "negative end means to the end");
 
@@ -99,25 +98,12 @@ int main() {
     // ── FrameGraph.add validation ─────────────────────────────────────
     FrameGraph graph;
     expect(graph.empty(), "new graph is empty");
-    expect(!graph.add(FrameOp{FrameOpType::Rectangle, -1, 10, {}, "", 1.0f}),
+    expect(!graph.add(FrameOp{FrameOpType::Rectangle, -1, 10, {}, 1.0f}),
            "negative start frame is rejected");
-    expect(!graph.add(FrameOp{FrameOpType::Rectangle, 10, 5, {}, "", 1.0f}),
+    expect(!graph.add(FrameOp{FrameOpType::Rectangle, 10, 5, {}, 1.0f}),
            "end frame before start is rejected");
-    expect(graph.add(FrameOp{FrameOpType::Rectangle, 0, -1, {}, "", 1.0f}),
+    expect(graph.add(FrameOp{FrameOpType::Rectangle, 0, -1, {}, 1.0f}),
            "valid op is accepted");
-
-    // ── opsActiveAt ordering + filtering ──────────────────────────────
-    FrameGraph ordered;
-    ordered.add(FrameOp{FrameOpType::ImageOverlay, 0, 10, {}, "a", 1.0f});
-    ordered.add(FrameOp{FrameOpType::Rectangle, 5, 15, {}, "b", 1.0f});
-    ordered.add(FrameOp{FrameOpType::AlphaBlend, 20, -1, {}, "c", 1.0f});
-    auto at3 = ordered.opsActiveAt(3);
-    expect(at3.size() == 1 && at3[0].asset_id == "a",
-           "frame 3 activates only the first op");
-    auto at7 = ordered.opsActiveAt(7);
-    expect(at7.size() == 2 && at7[0].asset_id == "a" && at7[1].asset_id == "b",
-           "frame 7 activates ops in insertion order");
-    expect(ordered.opsActiveAt(16).empty(), "frame 16 activates no ops");
 
     // ── apply: empty graph is a pass-through without a registry ───────
     FrameGraph empty_graph;
@@ -144,8 +130,8 @@ int main() {
            "resolve returns a registered kernel");
 
     FrameGraph applied(&registry);
-    applied.add(FrameOp{FrameOpType::ImageOverlay, 0, 10, {}, "a", 1.0f});
-    applied.add(FrameOp{FrameOpType::Rectangle, 5, 15, {}, "b", 1.0f});
+    applied.add(FrameOp{FrameOpType::ImageOverlay, 0, 10, {}, 1.0f});
+    applied.add(FrameOp{FrameOpType::Rectangle, 5, 15, {}, 1.0f});
     expect(applied.apply(frame, 3, &error), "apply dispatches active ops");
     expect(tags == std::vector<int>({1}), "frame 3 dispatched only the image overlay");
     tags.clear();
@@ -160,7 +146,7 @@ int main() {
     roi_frame.planes[0].data = buffer.data();
     roi_frame.planes[0].stride = 10;
     FrameGraph roi_graph(&registry);
-    roi_graph.add(FrameOp{FrameOpType::ImageOverlay, 0, -1, Rect{2, 3, 4, 5}, "roi", 1.0f});
+    roi_graph.add(FrameOp{FrameOpType::ImageOverlay, 0, -1, Rect{2, 3, 4, 5}, 1.0f});
     tags.clear();
     expect(roi_graph.apply(roi_frame, 0, &error), "roi op applies");
     bool roi_correct = true;
@@ -178,7 +164,7 @@ int main() {
 
     // ── apply: fail-closed on a missing kernel ────────────────────────
     FrameGraph missing_kernel(&registry);
-    missing_kernel.add(FrameOp{FrameOpType::TextOverlay, 0, -1, {}, "t", 1.0f});
+    missing_kernel.add(FrameOp{FrameOpType::TextOverlay, 0, -1, {}, 1.0f});
     expect(!missing_kernel.apply(frame, 0, &error),
            "unregistered op type fails closed");
     expect(error.find("text_overlay") != std::string::npos,
@@ -186,7 +172,7 @@ int main() {
 
     // ── apply: fail-closed with no registry but active ops ────────────
     FrameGraph no_registry;
-    no_registry.add(FrameOp{FrameOpType::ImageOverlay, 0, -1, {}, "x", 1.0f});
+    no_registry.add(FrameOp{FrameOpType::ImageOverlay, 0, -1, {}, 1.0f});
     expect(!no_registry.apply(frame, 0, &error),
            "ops without a registry fail closed");
     expect(error.find("kernel registry") != std::string::npos,
@@ -205,19 +191,6 @@ int main() {
                std::make_unique<TaggedKernel>(&tags, 10)),
            "duplicate registration is rejected");
     expect(strict.size() == 1, "duplicate rejection keeps a single kernel");
-
-    // ── FrameBackendRegistry ──────────────────────────────────────────
-    FrameBackendRegistry backends;
-    expect(backends.cpu().empty(), "new CPU backend starts empty");
-    expect(backends.gpu() == nullptr, "GPU backend is not implemented yet");
-    expect(backends.cpu().registerKernel(
-               FrameOpType::AlphaBlend,
-               std::make_unique<TaggedKernel>(&tags, 3)),
-           "CPU backend accepts a kernel");
-    expect(std::string(frameBackendKindName(FrameBackendKind::Cpu)) == "cpu",
-           "cpu backend has a stable wire name");
-    expect(std::string(frameBackendKindName(FrameBackendKind::Gpu)) == "gpu",
-           "gpu backend has a stable wire name");
 
     return failures == 0 ? 0 : 1;
 }

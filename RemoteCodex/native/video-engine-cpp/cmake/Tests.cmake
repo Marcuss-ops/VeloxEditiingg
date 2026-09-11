@@ -53,7 +53,8 @@ add_test(NAME render_engine_helpers_tests COMMAND velox_render_engine_helpers_te
 
 add_executable(velox_frame_graph_tests
     tests/test_frame_graph.cpp
-    ${VELOX_FRAME_GRAPH_TEST_SOURCES})
+    src/render/frame_graph.cpp
+    src/render/kernel_registry.cpp)
 velox_configure_test(velox_frame_graph_tests)
 add_test(NAME frame_graph_tests COMMAND velox_frame_graph_tests)
 

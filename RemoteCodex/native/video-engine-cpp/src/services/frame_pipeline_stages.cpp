@@ -2,7 +2,6 @@
 
 #include "frame_pipeline_stages.hpp"
 
-#include "frame_pipeline_compositor.hpp"
 #include "frame_pipeline_decoder.hpp"
 #include "frame_pipeline_encoder.hpp"
 #include "frame_pipeline_filter.hpp"
@@ -46,7 +45,6 @@ StageResult runStages(const StageConfig& config) {
     std::string stage_error;
     AlignedAtomicInt64 decoded_frames;
     AlignedAtomicInt64 encoded_packets;
-    AlignedAtomicInt64 composited_frames;
     AlignedAtomicInt64 bypass_frames;
     AlignedAtomicInt64 producer_busy_ns;
     AlignedAtomicInt64 consumer_elapsed_ns;
@@ -69,7 +67,6 @@ StageResult runStages(const StageConfig& config) {
         result.error = stage_error_detail;
         return result;
     }
-    CompositorStage compositor(CompositorBackend::Cpu);
     EncoderStage encoder_stage(EncoderStageConfig{
         config.encoder, config.output_stream, config.muxer, &encoded_packets.value});
     DecoderStage decoder_stage(DecoderStageConfig{
@@ -154,15 +151,6 @@ StageResult runStages(const StageConfig& config) {
             if (filter_chain.bypass()) {
                 bypass_frames.value.fetch_add(1, std::memory_order_relaxed);
             }
-            int applied_ops = 0;
-            if (!compositor.apply(rendered, frame_index, config.frame_graph, render_error, &applied_ops)) {
-                fail_stage("frame graph apply failed: " + render_error);
-                pool.release(index);
-                break;
-            }
-            if (applied_ops > 0) {
-                composited_frames.value.fetch_add(1, std::memory_order_relaxed);
-            }
             rendered->pts = frame_index++;
             rendered->pict_type = AV_PICTURE_TYPE_NONE;
             if (!encode_queue.push(index)) {
@@ -214,7 +202,7 @@ StageResult runStages(const StageConfig& config) {
     result.success = true;
     result.frames_decoded = decoded_frames.value.load(std::memory_order_relaxed);
     result.frames_encoded = encoded_packets.value.load(std::memory_order_relaxed);
-    result.frames_composited = composited_frames.value.load(std::memory_order_relaxed);
+    result.frames_composited = 0;
     result.transform_bypass_frames = bypass_frames.value.load(std::memory_order_relaxed);
     result.peak_pool_usage = pool.peakUsage();
     result.peak_render_queue = render_queue.highWater();

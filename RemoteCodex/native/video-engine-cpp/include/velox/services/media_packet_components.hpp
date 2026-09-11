@@ -191,27 +191,4 @@ PacketRewriteDecision rewritePacket(AVPacket& packet,
 // callback is invoked immediately for each accepted packet.
 using PacketConsumer = bool (*)(PendingPacket&, void*, std::string&);
 
-bool streamAndRewrite(Demuxer& input,
-                      const std::filesystem::path& path,
-                      AVMediaType type,
-                      int input_stream_index,
-                      AVStream* output_stream,
-                      int64_t timeline_offset,
-                      int64_t source_in_us,
-                      int64_t duration_us,
-                      TimestampState& state,
-                      PacketConsumer consumer,
-                      void* consumer_context,
-                      int64_t& packet_count,
-                      std::string& error,
-                      bool extend_video_tail = false);
-
-// Returns true only when source_in_us identifies an exact video keyframe.
-// Packet-copy never guesses for a non-keyframe cut: callers must route that
-// segment to a decoder/transcoder or reject it.
-bool sourceWindowStartsOnKeyframe(const std::filesystem::path& path,
-                                  int input_stream_index,
-                                  int64_t source_in_us,
-                                  std::string& error);
-
 } // namespace velox::media::packet

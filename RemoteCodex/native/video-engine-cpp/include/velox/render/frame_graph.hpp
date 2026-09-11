@@ -56,7 +56,6 @@ struct FrameOp {
     // the timeline" (mirrors the DirtySpanResolver CLEAN/DIRTY/CLEAN spans).
     int64_t end_frame{-1};
     Rect roi;               // empty roi = whole frame
-    std::string asset_id;   // the overlay/composite source asset
     float opacity{1.0f};
 
     // Active when frame_number >= start_frame AND (end_frame < 0 OR
@@ -106,9 +105,6 @@ public:
 
     bool empty() const { return ops_.empty(); }
     const std::vector<FrameOp>& ops() const { return ops_; }
-
-    // The active ops at frame_number, in insertion order.
-    std::vector<FrameOp> opsActiveAt(int64_t frame_number) const;
 
     // Applies every op active at frame_number in insertion order. Returns
     // false (and sets *error) when a kernel is missing or a kernel fails.

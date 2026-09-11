@@ -29,7 +29,6 @@ struct StageConfig {
     int64_t source_start_us{0};
     int64_t source_end_us{0};
     int64_t stream_start_us{0};
-    const velox::render::FrameGraph* frame_graph{nullptr};
 };
 
 struct StageResult {

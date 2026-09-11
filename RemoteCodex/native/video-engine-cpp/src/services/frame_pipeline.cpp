@@ -268,7 +268,6 @@ bool renderFrames(const FramePipelineConfig& config, FramePipelineResult* result
             source_start_us,
             source_end_us,
             stream_start_us,
-            config.frame_graph,
         });
 
     if (!stages.success) {

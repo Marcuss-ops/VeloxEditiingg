@@ -5,7 +5,7 @@
 //
 // The rewrite pass is exercised with pure synthetic AVPackets against
 // minimal in-memory AVStreams (no media files), so every edge case is
-// deterministic. The Demuxer and streamAndRewrite are exercised against one
+// deterministic. The Demuxer and production VideoTimelineCursor are exercised against one
 // real ffmpeg-generated fixture (generated BEFORE the component test runs;
 // the components themselves never spawn media processes).
 
@@ -432,22 +432,33 @@ bool captureStreamingPacket(velox::media::packet::PendingPacket& pending,
     return true;
 }
 
+bool captureVideoCursor(velox::media::packet::InputSession& session,
+                        AVStream* output, StreamingCapture& capture,
+                        int64_t& packetCount, std::string& error) {
+    velox::media::packet::TimestampState state;
+    velox::media::packet::VideoTimelineCursor cursor({
+        {&session, "fixture", 0, output, 0, 0, 1'000'000, false}}, state);
+    if (!cursor.prime(error)) return false;
+    while (cursor.hasPacket()) {
+        ++packetCount;
+        if (!captureStreamingPacket(cursor.current(), &capture, error)) return false;
+        if (!cursor.advance(error)) return false;
+    }
+    return true;
+}
+
 void testBoundedStreamingCursor(const fs::path& fixture) {
-    velox::media::packet::Demuxer demuxer;
+    velox::media::packet::InputSession session;
     std::string error;
-    expect(demuxer.open(fixture, error), "streaming cursor opens fixture: " + error);
+    expect(session.open(fixture, error), "streaming cursor opens fixture: " + error);
     AVFormatContext* outputContext = avformat_alloc_context();
     AVStream* output = avformat_new_stream(outputContext, nullptr);
     output->time_base = velox::media::packet::kMicrosecondTimeBase;
     output->codecpar->codec_id = AV_CODEC_ID_H264;
     output->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
     StreamingCapture capture;
-    velox::media::packet::TimestampState state;
     int64_t packetCount = 0;
-    expect(velox::media::packet::streamAndRewrite(
-               demuxer, fixture, AVMEDIA_TYPE_VIDEO, 0, output, 0, 0,
-               1'000'000, state, captureStreamingPacket, &capture,
-               packetCount, error),
+    expect(captureVideoCursor(session, output, capture, packetCount, error),
            "bounded cursor streams packets without collecting them: " + error);
     expect(packetCount > 0 && static_cast<int64_t>(capture.pts.size()) == packetCount,
            "stream callback observes every accepted packet");
@@ -460,22 +471,18 @@ void testBoundedStreamingCursor(const fs::path& fixture) {
 
 void testStreamingBenchmark(const fs::path& fixture) {
     velox::services::resetIOCounters();
-    velox::media::packet::Demuxer demuxer;
+    velox::media::packet::InputSession session;
     std::string error;
-    expect(demuxer.open(fixture, error), "benchmark cursor opens fixture: " + error);
+    expect(session.open(fixture, error), "benchmark cursor opens fixture: " + error);
     AVFormatContext* outputContext = avformat_alloc_context();
     AVStream* output = avformat_new_stream(outputContext, nullptr);
     output->time_base = velox::media::packet::kMicrosecondTimeBase;
     output->codecpar->codec_id = AV_CODEC_ID_H264;
     output->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
     StreamingCapture capture;
-    velox::media::packet::TimestampState state;
     int64_t packetCount = 0;
     const auto started = std::chrono::steady_clock::now();
-    expect(velox::media::packet::streamAndRewrite(
-               demuxer, fixture, AVMEDIA_TYPE_VIDEO, 0, output, 0, 0,
-               1'000'000, state, captureStreamingPacket, &capture,
-               packetCount, error),
+    expect(captureVideoCursor(session, output, capture, packetCount, error),
            "benchmark cursor completes: " + error);
     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - started).count();
