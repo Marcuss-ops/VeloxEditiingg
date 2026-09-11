@@ -58,6 +58,11 @@ std::optional<RenderPlan> parseRenderPlanV2(
             << "rejecting RenderPlan\n";
         return std::nullopt;
     }
+    if (ju::hasJsonKey(jsonStr, "layers")) {
+        std::cerr << "layers are not supported by the native video renderer: "
+                     "use the Chronon compositor backend; rejecting RenderPlan\n";
+        return std::nullopt;
+    }
 
     const std::string tracksBlock = ju::extractArrayBlock(jsonStr, "video_tracks");
     if (tracksBlock.empty()) {

@@ -22,7 +22,7 @@ std::optional<RenderPlan> parseRenderPlanV1(
     // renderer has no production compositor wired into its frame pipeline.
     // Reject the field at the parser boundary instead of accepting a plan
     // whose overlays would disappear from the output.
-    if (!ju::extractArrayBlock(jsonStr, "layers").empty()) {
+    if (ju::hasJsonKey(jsonStr, "layers")) {
         std::cerr << "layers are not supported by the native video renderer: "
                      "use the Chronon compositor backend; rejecting RenderPlan\n";
         return std::nullopt;

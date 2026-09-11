@@ -204,6 +204,13 @@ void testParserUnit(const fs::path& clipA, const fs::path& clipB,
         ",\"subtitle_tracks\":[]}";
     expect(!parseRenderPlan(v2SubtitlesWithLegacyField).has_value(),
            "V2 subtitle_tracks field is rejected even when empty");
+    const std::string v2Layers =
+        v2Envelope("v2-layers", "/tmp/v2-layers.mp4", clipA.string(),
+                   clipB.string(), audio.string());
+    const std::string v2LayersWithField =
+        v2Layers.substr(0, v2Layers.size() - 1) + ",\"layers\":[]}";
+    expect(!parseRenderPlan(v2LayersWithField).has_value(),
+           "V2 Layers are rejected instead of being silently ignored");
 
     std::cerr << "── parser unit: V1 regression ──\n";
     std::ostringstream v1;
