@@ -1,4 +1,5 @@
 #include "velox/services/file_utils.hpp"
+#include "velox/services/io_counters.hpp"
 #include "velox/services/media_packet_pipeline.hpp"
 #include "velox/services/media_probe.hpp"
 
@@ -321,16 +322,36 @@ int main() {
     // Bounded-mux stress case: many repeated segments must not change the
     // public contract and must produce deterministic packet accounting.
     velox::media::CopyOnlyMuxRequest manyRequest;
+    std::vector<fs::path> manyInputs;
+    constexpr int kManyDistinctInputs = 32;
+    manyInputs.reserve(kManyDistinctInputs);
+    for (int i = 0; i < kManyDistinctInputs; ++i) {
+        const fs::path alias = root / ("many-input-" + std::to_string(i) + ".mp4");
+        std::error_code linkError;
+        fs::create_hard_link(video, alias, linkError);
+        expect(!linkError, "bounded mux input alias can be created");
+        manyInputs.push_back(linkError ? video : alias);
+    }
     manyRequest.video_segments.reserve(1000);
     for (int i = 0; i < 1000; ++i) {
-        manyRequest.video_segments.push_back({video, 0, 800'000});
+        manyRequest.video_segments.push_back({manyInputs[i % manyInputs.size()], 0, 800'000});
     }
     manyRequest.output_path = manyOutput;
+    int64_t opensAtFirstWrite = -1;
+    manyRequest.write_progress_callback = [&](const fs::path&, int64_t) {
+        if (opensAtFirstWrite < 0) {
+            opensAtFirstWrite = velox::services::ioCounters().input_open_count.load();
+        }
+    };
+    velox::services::resetIOCounters();
     velox::media::CopyOnlyMuxResult manyResult;
     expect(velox::media::muxCopyOnly(manyRequest, &manyResult),
            "bounded mux accepts 1000 repeated segments");
     expect(manyResult.video_packets > 0 && manyResult.duration_us == 1000 * 800'000,
            "1000-segment mux reports the complete logical timeline");
+    expect(opensAtFirstWrite > 0 && opensAtFirstWrite < kManyDistinctInputs,
+           "mux starts writing before all repeated inputs are opened (opens_at_first_write=" +
+               std::to_string(opensAtFirstWrite) + ")");
     const auto manyPackets = inspectPackets(manyOutput);
     expect(manyPackets.video_packets == manyResult.video_packets &&
                manyPackets.video_dts_monotonic && manyPackets.video_pts_monotonic,

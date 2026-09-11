@@ -1,6 +1,7 @@
 #pragma once
 
 #include "velox/services/media_packet_components.hpp"
+#include "velox/services/segment_execution.hpp"
 
 #include <cstddef>
 #include <string>
@@ -17,6 +18,15 @@ struct CursorSegment {
     int64_t source_in_us{0};
     int64_t duration_us{0};
     bool extend_video_tail{false};
+    InputSessionRegistry* registry{nullptr};
+    AVMediaType media_type{AVMEDIA_TYPE_UNKNOWN};
+    bool metadata_certified{false};
+    bool normalized{false};
+    bool transform_required{false};
+    bool legacy_required{false};
+    MediaSignature target_signature{};
+    bool has_target_signature{false};
+    bool validated{false};
 };
 
 class VideoTimelineCursor {

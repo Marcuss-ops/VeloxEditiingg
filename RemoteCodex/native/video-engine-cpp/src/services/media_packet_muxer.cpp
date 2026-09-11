@@ -2,7 +2,6 @@
 
 #include "media_packet_pipeline_internal.hpp"
 
-#include "velox/core/execution_plan.hpp"
 #include "velox/services/file_utils.hpp"
 #include "velox/services/io_counters.hpp"
 #include "velox/services/media_packet_cursors.hpp"
@@ -40,6 +39,7 @@ struct OutputStreams { AVStream* video{nullptr}; AVStream* audio{nullptr}; };
 
 struct PreparedVideoSegment {
     packet::InputSession* session{};
+    packet::InputSessionRegistry* registry{};
     fs::path path;
     int video_stream_index{-1};
     int audio_stream_index{-1};
@@ -48,40 +48,32 @@ struct PreparedVideoSegment {
     int64_t timeline_offset_us{};
     bool include_audio{};
     bool extend_video_tail{};
+    bool metadata_certified{};
+    bool normalized{};
+    bool transform_required{};
+    bool legacy_required{};
+    MediaSignature target_signature{};
+    bool has_target_signature{};
 };
 
 struct PreparedAudioTrack {
     packet::InputSession* session{};
+    packet::InputSessionRegistry* registry{};
     fs::path path;
     int stream_index{-1};
     int64_t start_offset_us{};
     int64_t duration_us{};
+    bool metadata_certified{};
+    MediaSignature target_signature{};
+    bool has_target_signature{};
 };
 
 struct PreparedCopyMuxPlan {
     std::vector<PreparedVideoSegment> segments;
     std::optional<PreparedAudioTrack> audio;
+    std::optional<MediaSignature> audio_target_signature;
     OutputStreams streams;
     int64_t expected_duration_us{};
-};
-
-struct VideoCandidate {
-    packet::InputSession* session{};
-    fs::path path;
-    int video_stream_index{-1};
-    int audio_stream_index{-1};
-    int64_t source_in_us{};
-    int64_t source_duration_us{};
-    int64_t timeline_offset_us{};
-    bool include_audio{};
-    bool extend_video_tail{};
-};
-
-struct AudioCandidate {
-    packet::InputSession* session{};
-    fs::path path;
-    int stream_index{-1};
-    std::size_t execution_index{};
 };
 
 bool initializeOutputStream(AVFormatContext* output, const AVStream* input,
@@ -205,32 +197,83 @@ bool consume(packet::PendingPacket& pending, void* opaque, std::string& error) {
 bool preparePlan(const CopyOnlyMuxRequest& request, packet::InputSessionRegistry& sessions,
                  AVFormatContext* output, PreparedCopyMuxPlan& plan,
                  CopyOnlyMuxResult* result, std::string& error) {
-    std::vector<packet::InputSessionRegistry::OpenRequest> open_requests;
-    open_requests.reserve(request.video_segments.size() + (request.audio ? 1 : 0));
-    for (const auto& segment : request.video_segments) {
-        open_requests.push_back({segment.path, segment.metadata_certified});
-    }
-    if (request.audio) {
-        open_requests.push_back({request.audio->path, request.audio->metadata_certified});
-    }
-    if (!sessions.preopen(open_requests, error)) return fail(result, error);
-
-    std::vector<VideoCandidate> videos;
-    std::vector<AudioCandidate> audios;
-    std::vector<core::SegmentExecutionInput> inputs;
-    videos.reserve(request.video_segments.size());
-    std::size_t input_reserve = request.video_segments.size() +
-        (request.audio ? 1 : 0);
-    for (const auto& segment : request.video_segments) {
-        if (segment.include_audio && input_reserve <
-            std::numeric_limits<std::size_t>::max()) {
-            ++input_reserve;
-        }
-    }
-    inputs.reserve(input_reserve);
     std::optional<MediaSignature> videoTarget = request.target_video_signature;
     std::optional<MediaSignature> audioTarget;
     int64_t timeline = 0;
+    if (request.video_segments.empty()) {
+        return fail(result, "copy-only packet mux requires at least one video segment");
+    }
+
+    const auto& firstSegment = request.video_segments.front();
+    if (firstSegment.source_duration_us <= 0 || firstSegment.source_in_us < 0) {
+        return fail(result, "copy-only packet mux rejects invalid source video window");
+    }
+    if (firstSegment.source_in_us >
+        std::numeric_limits<int64_t>::max() - firstSegment.source_duration_us) {
+        return fail(result, "copy-only source video window overflows int64");
+    }
+    if (firstSegment.normalized && firstSegment.source_in_us != 0) {
+        return fail(result, "copy-only normalized segment must start at source_in_us 0");
+    }
+    if (firstSegment.transform_required) {
+        return fail(result, "segment_execution_rejected: media transform required for " +
+            firstSegment.path.string());
+    }
+    if (firstSegment.legacy_required) {
+        return fail(result, "segment_execution_rejected: legacy renderer required for " +
+            firstSegment.path.string());
+    }
+    auto* firstSession = sessions.resolve(firstSegment.path, error);
+    if (firstSession == nullptr) return fail(result, error);
+    auto& firstDemuxer = firstSession->demuxer();
+    const int firstVideoIndex = firstDemuxer.firstStream(AVMEDIA_TYPE_VIDEO);
+    if (firstVideoIndex < 0) {
+        return fail(result, "video stream missing from " + firstSegment.path.string());
+    }
+    const AVStream* firstVideo = firstDemuxer.stream(firstVideoIndex);
+    const MediaSignature firstVideoSignature = mediaSignatureFromStream(firstVideo);
+    if (!videoTarget) videoTarget = firstVideoSignature;
+    std::string compatibilityReason;
+    if (!mediaSignaturesCompatible(firstVideoSignature, *videoTarget, &compatibilityReason)) {
+        return fail(result, "segment_execution_rejected: copy-only segment execution rejected at " +
+            firstSegment.path.string() + ": " + compatibilityReason);
+    }
+    const bool firstKeyframeSafe = firstSegment.normalized ||
+        firstSession->sourceWindowStartsOnKeyframe(
+            firstVideoIndex, firstSegment.source_in_us, error);
+    if (!firstKeyframeSafe) {
+        return fail(result, "segment_execution_rejected: source window is not keyframe-safe for packet copy: " + error);
+    }
+    if (!initializeOutputStream(output, firstVideo, plan.streams.video, error)) {
+        return fail(result, error);
+    }
+
+    int firstAudioIndex = -1;
+    packet::InputSession* firstAudioSession = nullptr;
+    if (firstSegment.include_audio) {
+        firstAudioSession = firstSession;
+        firstAudioIndex = firstDemuxer.firstStream(AVMEDIA_TYPE_AUDIO);
+    } else {
+        for (std::size_t index = 1; index < request.video_segments.size(); ++index) {
+            if (!request.video_segments[index].include_audio) continue;
+            firstAudioSession = sessions.resolve(request.video_segments[index].path, error);
+            if (firstAudioSession != nullptr) {
+                firstAudioIndex = firstAudioSession->demuxer().firstStream(AVMEDIA_TYPE_AUDIO);
+            }
+            break;
+        }
+    }
+    if (firstAudioSession != nullptr) {
+        if (firstAudioIndex < 0) {
+            return fail(result, "copy-only segment requests audio but the source has no audio stream");
+        }
+        audioTarget = mediaSignatureFromStream(
+            firstAudioSession->demuxer().stream(firstAudioIndex));
+        plan.audio_target_signature = audioTarget;
+        if (!initializeOutputStream(output,
+                firstAudioSession->demuxer().stream(firstAudioIndex),
+                plan.streams.audio, error)) return fail(result, error);
+    }
 
     for (std::size_t index = 0; index < request.video_segments.size(); ++index) {
         const auto& segment = request.video_segments[index];
@@ -244,55 +287,28 @@ bool preparePlan(const CopyOnlyMuxRequest& request, packet::InputSessionRegistry
         if (segment.normalized && segment.source_in_us != 0) {
             return fail(result, "copy-only normalized segment must start at source_in_us 0");
         }
-        auto* session = sessions.resolve(segment.path, error);
-        if (session == nullptr) return fail(result, error);
-        auto& demuxer = session->demuxer();
-        const int videoStreamIndex = demuxer.firstStream(AVMEDIA_TYPE_VIDEO);
-        if (videoStreamIndex < 0) return fail(result, "video stream missing from " + segment.path.string());
-        const AVStream* videoStream = demuxer.stream(videoStreamIndex);
-        const MediaSignature signature = mediaSignatureFromStream(videoStream);
-        if (!videoTarget) videoTarget = signature;
-        const bool keyframeSafe = segment.normalized ||
-            session->sourceWindowStartsOnKeyframe(videoStreamIndex, segment.source_in_us, error);
-        if (!keyframeSafe) {
-            return fail(result, "segment_execution_rejected: source window is not keyframe-safe for packet copy: " + error);
-        }
-        inputs.push_back(core::SegmentExecutionInput{
-            index, segment.path, segment.source_in_us, segment.source_duration_us,
-            signature, *videoTarget, segment.transform_required, keyframeSafe,
-            segment.legacy_required});
-
-        int audioStreamIndex = -1;
-        if (segment.include_audio) {
-            audioStreamIndex = demuxer.firstStream(AVMEDIA_TYPE_AUDIO);
-            if (audioStreamIndex < 0) {
-                return fail(result, "copy-only segment requests audio but the source has no audio stream");
-            }
-            const MediaSignature audioSignature = mediaSignatureFromStream(
-                demuxer.stream(audioStreamIndex));
-            if (!audioTarget) audioTarget = audioSignature;
-            const std::size_t audioExecutionIndex = inputs.size();
-            inputs.push_back(core::SegmentExecutionInput{
-                index, segment.path, 0, segment.source_duration_us, audioSignature,
-                *audioTarget, false, true, false});
-            audios.push_back(AudioCandidate{session, segment.path, audioStreamIndex,
-                                            audioExecutionIndex});
-        }
-        const int64_t sourceDuration = streamDurationUs(demuxer.raw(), videoStream);
-        const bool extendTail = !segment.normalized && sourceDuration > 0 &&
-            sourceDuration + 50000 < segment.source_in_us + segment.source_duration_us;
-        videos.push_back(VideoCandidate{session, segment.path, videoStreamIndex,
-                                        audioStreamIndex, segment.source_in_us,
-                                        segment.source_duration_us, timeline,
-                                        segment.include_audio, extendTail});
-        if (timeline > std::numeric_limits<int64_t>::max() -
-            segment.source_duration_us) {
+        const bool first = index == 0;
+        int videoIndex = first ? firstVideoIndex : -1;
+        int audioIndex = first && segment.include_audio ? firstAudioIndex : -1;
+        packet::InputSession* session = first ? firstSession : nullptr;
+        const int64_t sourceDuration = first
+            ? streamDurationUs(firstDemuxer.raw(), firstVideo)
+            : 0;
+        const bool extendTail = !segment.normalized &&
+            (first ? sourceDuration > 0 && sourceDuration + 50000 <
+                segment.source_in_us + segment.source_duration_us : true);
+        plan.segments.push_back(PreparedVideoSegment{
+            session, &sessions, segment.path, videoIndex, audioIndex,
+            segment.source_in_us, segment.source_duration_us, timeline,
+            segment.include_audio, extendTail, segment.metadata_certified,
+            segment.normalized, segment.transform_required, segment.legacy_required,
+            *videoTarget, true});
+        if (timeline > std::numeric_limits<int64_t>::max() - segment.source_duration_us) {
             return fail(result, "copy-only packet mux timeline overflows int64");
         }
         timeline += segment.source_duration_us;
     }
 
-    std::optional<AudioCandidate> finalAudio;
     if (request.audio) {
         const auto& audio = *request.audio;
         auto* session = sessions.resolve(audio.path, error);
@@ -315,59 +331,32 @@ bool preparePlan(const CopyOnlyMuxRequest& request, packet::InputSessionRegistry
                 decision.reason + " " + describeFinalAudioProbe(audio.path, metadata));
         }
         const MediaSignature signature = mediaSignatureFromStream(demuxer.stream(streamIndex));
-        const std::size_t executionIndex = inputs.size();
-        inputs.push_back(core::SegmentExecutionInput{
-            request.video_segments.size(), audio.path, 0, audio.duration_us,
-            signature, signature, false, true, false});
-        finalAudio = AudioCandidate{session, audio.path, streamIndex, executionIndex};
-    }
-
-    core::RuntimeExecutionPlanCompiler compiler;
-    const auto executionPlan = compiler.compile(inputs, videoTarget.value_or(MediaSignature{}));
-    for (const auto& executable : executionPlan.segments) {
-        if (executable.execution.mode == SegmentExecutionMode::PacketCopy) continue;
-        const std::string label = executable.index < request.video_segments.size()
-            ? request.video_segments[executable.index].path.string() : "audio";
-        return fail(result, "segment_execution_rejected: copy-only segment execution rejected at " +
-            label + ": " + executable.execution.reason);
-    }
-
-    const AVStream* firstVideo = videos.front().session->demuxer().stream(
-        videos.front().video_stream_index);
-    if (!initializeOutputStream(output, firstVideo, plan.streams.video, error)) {
-        return fail(result, error);
-    }
-    for (const auto& candidate : audios) {
+        if (audioTarget && !mediaSignaturesCompatible(signature, *audioTarget, &compatibilityReason)) {
+            return fail(result, "segment_execution_rejected: copy-only final audio rejected: " + compatibilityReason);
+        }
+        if (!audioTarget) audioTarget = signature;
+        plan.audio_target_signature = audioTarget;
         if (plan.streams.audio == nullptr && !initializeOutputStream(
-                output, candidate.session->demuxer().stream(candidate.stream_index),
-                plan.streams.audio, error)) return fail(result, error);
-    }
-    if (finalAudio && plan.streams.audio == nullptr && !initializeOutputStream(
-            output, finalAudio->session->demuxer().stream(finalAudio->stream_index),
-            plan.streams.audio, error)) return fail(result, error);
-
-    for (const auto& candidate : videos) {
-        plan.segments.push_back(PreparedVideoSegment{
-            candidate.session, candidate.path, candidate.video_stream_index,
-            candidate.audio_stream_index, candidate.source_in_us,
-            candidate.source_duration_us, candidate.timeline_offset_us,
-            candidate.include_audio, candidate.extend_video_tail});
-    }
-    plan.expected_duration_us = timeline;
-    if (finalAudio) {
+                output, demuxer.stream(streamIndex), plan.streams.audio, error)) {
+            return fail(result, error);
+        }
         const int64_t available = std::max<int64_t>(0, timeline - request.audio->start_offset_us);
         const int64_t duration = request.audio->duration_us > 0
             ? std::min(request.audio->duration_us, available) : available;
         const int64_t actual = streamDurationUs(
-            finalAudio->session->demuxer().raw(),
-            finalAudio->session->demuxer().stream(finalAudio->stream_index));
+            session->demuxer().raw(), session->demuxer().stream(streamIndex));
         if (duration <= 0 || (actual > 0 && actual + 50000 < duration)) {
             return fail(result, "copy-only audio is shorter than the video timeline");
         }
         plan.audio = PreparedAudioTrack{
-            finalAudio->session, finalAudio->path, finalAudio->stream_index,
-            request.audio->start_offset_us, duration};
+            session, &sessions, audio.path, streamIndex,
+            request.audio->start_offset_us, duration, audio.metadata_certified,
+            *audioTarget, true};
     }
+    if (plan.audio_target_signature == std::nullopt && plan.streams.audio != nullptr) {
+        return fail(result, "copy-only packet mux could not establish an audio target signature");
+    }
+    plan.expected_duration_us = timeline;
     return true;
 }
 
@@ -393,7 +382,11 @@ bool writeStreamingOutput(UniqueOutputContext& output, const PreparedCopyMuxPlan
     for (const auto& segment : plan.segments) {
         videoSegments.push_back({segment.session, segment.path.string(),
             segment.video_stream_index, plan.streams.video, segment.timeline_offset_us,
-            segment.source_in_us, segment.source_duration_us, segment.extend_video_tail});
+            segment.source_in_us, segment.source_duration_us, segment.extend_video_tail,
+            segment.registry, AVMEDIA_TYPE_VIDEO, segment.metadata_certified,
+            segment.normalized, segment.transform_required, segment.legacy_required,
+            segment.target_signature, segment.has_target_signature,
+            segment.session != nullptr});
     }
     packet::TimestampState videoState;
     packet::VideoTimelineCursor video(std::move(videoSegments), videoState);
@@ -402,13 +395,19 @@ bool writeStreamingOutput(UniqueOutputContext& output, const PreparedCopyMuxPlan
         if (segment.include_audio) {
             audioSegments.push_back({segment.session, segment.path.string(),
                 segment.audio_stream_index, plan.streams.audio, segment.timeline_offset_us,
-                segment.source_in_us, segment.source_duration_us, false});
+                segment.source_in_us, segment.source_duration_us, false,
+                segment.registry, AVMEDIA_TYPE_AUDIO, segment.metadata_certified,
+                false, false, false,
+                plan.audio_target_signature.value_or(MediaSignature{}),
+                plan.audio_target_signature.has_value(), segment.session != nullptr});
         }
     }
     if (plan.audio) {
         audioSegments.push_back({plan.audio->session, plan.audio->path.string(),
             plan.audio->stream_index, plan.streams.audio, 0, plan.audio->start_offset_us,
-            plan.audio->duration_us, false});
+            plan.audio->duration_us, false, plan.audio->registry, AVMEDIA_TYPE_AUDIO,
+            plan.audio->metadata_certified, false, false, false,
+            plan.audio->target_signature, plan.audio->has_target_signature, true});
     }
     packet::TimestampState audioState;
     packet::AudioTimelineCursor audio(std::move(audioSegments), audioState);

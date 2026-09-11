@@ -50,6 +50,9 @@ bool rawAacContainer(const std::string& format_name) {
 
 InputSession* InputSessionRegistry::resolve(const fs::path& path, std::string& error) {
     const std::string key = path.lexically_normal().string();
+    if (pending_opens_.find(key) != pending_opens_.end()) {
+        return waitForPending(key, error);
+    }
     auto existing = sessions_.find(key);
     if (existing != sessions_.end()) {
         return existing->second.get();
@@ -61,6 +64,41 @@ InputSession* InputSessionRegistry::resolve(const fs::path& path, std::string& e
     InputSession* result = session.get();
     sessions_.emplace(key, std::move(session));
     return result;
+}
+
+InputSession* InputSessionRegistry::waitForPending(const std::string& key,
+                                                    std::string& error) {
+    const auto pending = pending_opens_.find(key);
+    if (pending == pending_opens_.end()) {
+        const auto existing = sessions_.find(key);
+        return existing == sessions_.end() ? nullptr : existing->second.get();
+    }
+    const auto& state = pending->second;
+    {
+        std::unique_lock<std::mutex> lock(state->mutex);
+        state->ready.wait(lock, [&]() { return state->done; });
+        if (!state->success) {
+            error = state->error;
+            return nullptr;
+        }
+    }
+    const auto existing = sessions_.find(key);
+    if (existing == sessions_.end()) {
+        error = "input session disappeared after background open: " + key;
+        return nullptr;
+    }
+    return existing->second.get();
+}
+
+void InputSessionRegistry::joinOpenWorkers() {
+    for (auto& worker : open_workers_) {
+        if (worker.joinable()) worker.join();
+    }
+    open_workers_.clear();
+}
+
+InputSessionRegistry::~InputSessionRegistry() {
+    joinOpenWorkers();
 }
 
 bool InputSession::open(const fs::path& path, std::string& error,
@@ -220,16 +258,22 @@ bool InputSession::sourceWindowStartsOnKeyframe(int input_stream_index,
     return found;
 }
 
-bool InputSessionRegistry::preopen(const std::vector<InputSessionRegistry::OpenRequest>& requests,
-                                   std::string& error) {
+bool InputSessionRegistry::preopenAsync(
+    const std::vector<InputSessionRegistry::OpenRequest>& requests,
+    std::string& error) {
+    constexpr std::size_t k_max_concurrent_opens = 8;
+    struct OpenTask {
+        OpenRequest request;
+        InputSession* session{nullptr};
+        std::shared_ptr<OpenState> state;
+    };
     std::vector<OpenRequest> unique;
-    std::vector<InputSession*> sessions;
     std::map<std::string, std::size_t> indices;
     unique.reserve(requests.size());
-    sessions.reserve(requests.size());
     for (const auto& request : requests) {
         const std::string key = request.path.lexically_normal().string();
-        if (sessions_.find(key) != sessions_.end()) continue;
+        if (pending_opens_.find(key) != pending_opens_.end() ||
+            sessions_.find(key) != sessions_.end()) continue;
         const auto [it, inserted] = indices.emplace(key, unique.size());
         if (!inserted) {
             // One path may be reused by a certified video and an
@@ -240,46 +284,59 @@ bool InputSessionRegistry::preopen(const std::vector<InputSessionRegistry::OpenR
         }
         unique.push_back(request);
     }
+    if (unique.empty()) return true;
+    // Cursor look-ahead normally adds one short-lived worker at a time. Keep
+    // completed joinable workers bounded too; this permits video and audio
+    // look-ahead to overlap without ever growing an unbounded thread pool.
+    if (open_workers_.size() + unique.size() > k_max_concurrent_opens) {
+        joinOpenWorkers();
+    }
+
+    auto tasks = std::make_shared<std::vector<OpenTask>>();
+    tasks->reserve(unique.size());
     for (const auto& request : unique) {
         const std::string key = request.path.lexically_normal().string();
         auto session = std::make_unique<InputSession>();
-        sessions.push_back(session.get());
+        InputSession* session_ptr = session.get();
         sessions_.emplace(key, std::move(session));
+        auto state = std::make_shared<OpenState>();
+        pending_opens_.emplace(key, state);
+        tasks->push_back(OpenTask{request, session_ptr, std::move(state)});
     }
-    if (unique.empty()) {
-        return true;
-    }
-
-    std::vector<std::string> errors(unique.size());
-    // vector<bool> packs bits and would make independent worker writes race;
-    // one byte per result keeps each completion independently addressable.
-    std::vector<unsigned char> ok(unique.size(), 0);
-    constexpr std::size_t k_max_concurrent_opens = 8;
-    const std::size_t worker_count = std::min(k_max_concurrent_opens, unique.size());
-    std::atomic<std::size_t> next{0};
-    std::vector<std::thread> workers;
-    workers.reserve(worker_count);
+    const std::size_t worker_count = std::min(k_max_concurrent_opens, tasks->size());
+    auto next = std::make_shared<std::atomic<std::size_t>>(0);
     for (std::size_t worker_index = 0; worker_index < worker_count; ++worker_index) {
-        workers.emplace_back([&]() {
+        open_workers_.emplace_back([tasks, next]() {
             while (true) {
-                const std::size_t index = next.fetch_add(1, std::memory_order_relaxed);
-                if (index >= unique.size()) return;
-                ok[index] = sessions[index]->open(
-                    unique[index].path, errors[index],
-                    unique[index].metadata_certified) ? 1 : 0;
+                const std::size_t index = next->fetch_add(1, std::memory_order_relaxed);
+                if (index >= tasks->size()) return;
+                auto& task = (*tasks)[index];
+                std::string task_error;
+                const bool success = task.session->open(
+                    task.request.path, task_error,
+                    task.request.metadata_certified);
+                {
+                    std::lock_guard<std::mutex> lock(task.state->mutex);
+                    task.state->success = success;
+                    task.state->error = std::move(task_error);
+                    task.state->done = true;
+                }
+                task.state->ready.notify_all();
             }
         });
     }
-    for (auto& worker : workers) {
-        worker.join();
-    }
-    for (std::size_t index = 0; index < unique.size(); ++index) {
-        if (!ok[index]) {
-            error = errors[index];
-            return false;
-        }
-    }
     return true;
+}
+
+bool InputSessionRegistry::preopen(const std::vector<OpenRequest>& requests,
+                                   std::string& error) {
+    if (!preopenAsync(requests, error)) return false;
+    bool success = true;
+    for (const auto& request : requests) {
+        if (resolve(request.path, error) == nullptr) success = false;
+    }
+    joinOpenWorkers();
+    return success;
 }
 
 bool InputSessionRegistry::preopen(const std::vector<fs::path>& paths,

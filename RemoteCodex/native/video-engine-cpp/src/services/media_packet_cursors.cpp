@@ -1,12 +1,60 @@
 #ifdef VELOX_ENABLE_LIBAV
 
 #include "velox/services/media_packet_cursors.hpp"
+#include "velox/services/segment_execution_libav.hpp"
 
 #include <algorithm>
 #include <utility>
 
 namespace velox::media::packet {
 namespace {
+
+bool prepareSegment(CursorSegment& segment, std::string& error) {
+    if (segment.validated) return true;
+    if (segment.session == nullptr) {
+        if (segment.registry == nullptr) {
+            error = "cursor has no input session for " + segment.path;
+            return false;
+        }
+        segment.session = segment.registry->resolve(segment.path, error);
+        if (segment.session == nullptr) return false;
+    }
+    if (segment.stream_index < 0) {
+        if (segment.media_type == AVMEDIA_TYPE_UNKNOWN) {
+            error = "cursor has no media type for " + segment.path;
+            return false;
+        }
+        segment.stream_index = segment.session->demuxer().firstStream(segment.media_type);
+        if (segment.stream_index < 0) {
+            error = "cursor input stream is unavailable: " + segment.path;
+            return false;
+        }
+    }
+    if (segment.transform_required) {
+        error = "segment_execution_rejected: media transform required for " + segment.path;
+        return false;
+    }
+    if (segment.legacy_required) {
+        error = "segment_execution_rejected: legacy renderer required for " + segment.path;
+        return false;
+    }
+    if (segment.media_type == AVMEDIA_TYPE_VIDEO && !segment.normalized &&
+        !segment.session->sourceWindowStartsOnKeyframe(
+            segment.stream_index, segment.source_in_us, error)) {
+        return false;
+    }
+    if (segment.has_target_signature) {
+        const MediaSignature source = mediaSignatureFromStream(
+            segment.session->demuxer().stream(segment.stream_index));
+        std::string reason;
+        if (!mediaSignaturesCompatible(source, segment.target_signature, &reason)) {
+            error = "segment_execution_rejected: " + reason + " for " + segment.path;
+            return false;
+        }
+    }
+    segment.validated = true;
+    return true;
+}
 
 bool fill(PendingPacket& pending, AVPacket& scratch, const CursorSegment& segment,
           TimestampState& state, AVPacket* lastVideo, bool* haveLast,
@@ -76,6 +124,13 @@ bool VideoTimelineCursor::emitTailPacket(std::string& error) {
 bool VideoTimelineCursor::loadNextSegment(std::string& error) {
     if (segment_index_ >= segments_.size()) return false;
     auto& segment = segments_[segment_index_];
+    if (segment.registry != nullptr && segment_index_ + 1 < segments_.size()) {
+        const auto& next = segments_[segment_index_ + 1];
+        std::string prefetch_error;
+        segment.registry->preopenAsync(
+            {{next.path, next.metadata_certified}}, prefetch_error);
+    }
+    if (!prepareSegment(segment, error)) return false;
     if (!segment.session->demuxer().seekToTimestampUs(segment.stream_index, segment.source_in_us, error)) return false;
     return true;
 }
@@ -146,6 +201,13 @@ AudioTimelineCursor::AudioTimelineCursor(std::vector<CursorSegment> segments, Ti
 bool AudioTimelineCursor::loadNextSegment(std::string& error) {
     if (segment_index_ >= segments_.size()) return false;
     auto& segment = segments_[segment_index_];
+    if (segment.registry != nullptr && segment_index_ + 1 < segments_.size()) {
+        const auto& next = segments_[segment_index_ + 1];
+        std::string prefetch_error;
+        segment.registry->preopenAsync(
+            {{next.path, next.metadata_certified}}, prefetch_error);
+    }
+    if (!prepareSegment(segment, error)) return false;
     return segment.session->demuxer().seekToTimestampUs(segment.stream_index, segment.source_in_us, error);
 }
 

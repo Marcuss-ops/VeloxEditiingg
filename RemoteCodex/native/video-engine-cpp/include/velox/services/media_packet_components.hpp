@@ -26,10 +26,13 @@ extern "C" {
 }
 
 #include <cstdint>
+#include <condition_variable>
 #include <filesystem>
+#include <mutex>
 #include <memory>
 #include <map>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "velox/services/media_utils.hpp"
@@ -145,6 +148,15 @@ public:
 
     InputSession* resolve(const std::filesystem::path& path, std::string& error);
 
+    ~InputSessionRegistry();
+
+    // Starts bounded background opens and returns without waiting for the
+    // batch. resolve() waits only for the requested path. This is the
+    // open-ahead half of the streaming open->mux pipeline; callers that need
+    // the old batch semantics should use preopen().
+    bool preopenAsync(const std::vector<OpenRequest>& requests,
+                      std::string& error);
+
     // Opens every distinct path concurrently. Each open is an independent
     // libav context setup; uncertified or incomplete inputs use
     // avformat_find_stream_info. Driving them from multiple threads is safe
@@ -162,7 +174,21 @@ public:
                  std::string& error);
 
 private:
+    struct OpenState {
+        std::mutex mutex;
+        std::condition_variable ready;
+        bool done{false};
+        bool success{false};
+        std::string error;
+    };
+
+    InputSession* waitForPending(const std::string& key,
+                                 std::string& error);
+    void joinOpenWorkers();
+
     std::map<std::string, std::unique_ptr<InputSession>> sessions_;
+    std::map<std::string, std::shared_ptr<OpenState>> pending_opens_;
+    std::vector<std::thread> open_workers_;
 };
 
 // PacketTrimmer + TimestampRewriter — one AVPacket -> AVPacket pass:
