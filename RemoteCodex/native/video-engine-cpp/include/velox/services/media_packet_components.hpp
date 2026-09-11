@@ -100,6 +100,9 @@ public:
 
 private:
     AVFormatContext* context_{nullptr};
+    // The process-wide first-packet metric is a one-shot event. Keep the
+    // guard local so steady-state packet reads never touch its atomic.
+    bool first_packet_seen_{false};
 };
 
 // InputSession owns one reusable AVFormatContext for one local asset. The

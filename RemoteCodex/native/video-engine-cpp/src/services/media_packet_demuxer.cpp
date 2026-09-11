@@ -142,7 +142,8 @@ bool Demuxer::readFrame(AVPacket& packet, bool& eof, std::string& error) {
         return false;
     }
     const int read_result = av_read_frame(context_, &packet);
-    if (read_result >= 0) {
+    if (read_result >= 0 && !first_packet_seen_) {
+        first_packet_seen_ = true;
         services::recordFirstPacketRead();
     }
     if (read_result == AVERROR_EOF) {
@@ -161,6 +162,7 @@ void Demuxer::close() {
         avformat_close_input(&context_);
         context_ = nullptr;
     }
+    first_packet_seen_ = false;
 }
 
 } // namespace velox::media::packet

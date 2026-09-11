@@ -161,6 +161,7 @@ struct Writer {
     packet::TimestampState video_state;
     packet::TimestampState audio_state;
     int64_t video_end_us{AV_NOPTS_VALUE};
+    bool first_output_recorded{false};
 };
 
 bool consume(packet::PendingPacket& pending, void* opaque, std::string& error) {
@@ -189,7 +190,10 @@ bool consume(packet::PendingPacket& pending, void* opaque, std::string& error) {
     av_packet_rescale_ts(&pending.packet, packet::kMicrosecondTimeBase, stream->time_base);
     normalizeFinalPacket(pending.packet,
                          stream == writer.streams.video ? writer.video_state : writer.audio_state);
-    services::recordFirstOutputWrite();
+    if (!writer.first_output_recorded) {
+        writer.first_output_recorded = true;
+        services::recordFirstOutputWrite();
+    }
     const int rc = av_interleaved_write_frame(writer.output, &pending.packet);
     if (rc < 0) {
         error = "av_interleaved_write_frame: " + packet::ffmpegError(rc);
