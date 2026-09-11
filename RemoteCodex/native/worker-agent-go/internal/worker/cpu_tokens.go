@@ -38,6 +38,9 @@ func (p *CPUTokenPool) Acquire(ctx context.Context, count int) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	acquired := 0
 	for acquired < count {
 		select {
