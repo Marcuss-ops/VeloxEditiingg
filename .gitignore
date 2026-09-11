@@ -191,8 +191,15 @@ RemoteCodex/native/worker-agent-go/installer.exe
 # run. They are throwaway operator-facing outputs, exactly like the other
 # "never commit" blocks above; the certification scripts themselves stay
 # versioned under tests/worker-cert/.
+#
+# NOTE: tests/worker-cert/workers/benchmark.json is tracked and MUST stay
+# tracked: it is the INPUT fixture for perf_matrix.sh (--input
+# workers/benchmark.json), not a run output. The dir-level ignore below is
+# evaluated before the negation, so the negation is what keeps the fixture
+# in git; deleting the negation would silently untrack the fixture.
 tests/worker-cert/artifacts/
-tests/worker-cert/workers/
+tests/worker-cert/workers/*
+!tests/worker-cert/workers/benchmark.json
 
 # ── External Courser repo (standalone — developed in Courser/courserpierone/) ────
 Courser/
@@ -224,8 +231,15 @@ DataServer/api-docs-gen
 # per-run diagnostic evidence that belongs in the operator's working tree,
 # not git. The .gitkeep marker is re-included via the negation rule below
 # so the directory itself stays tracked even when empty.
-tests/smoke/full_payload/evidence/*
-!tests/smoke/full_payload/evidence/.gitkeep
+#
+# multi_scene_concat/evidence/ follows the same contract (run.sh writes
+# run-*.json, payload-*.json, before/after-*.json and temp artifact MP4s
+# there via MULTISCENE_EVIDENCE_DIR); it was missed by the original rule
+# and three payload-*.json files leaked into a commit before being
+# removed in the 2026-09-11 cleanup. Same re-include contract as above
+# so the directory itself stays tracked even when empty.
+tests/smoke/full_payload/multi_scene_concat/evidence/*
+!tests/smoke/full_payload/multi_scene_concat/evidence/.gitkeep
 
 # ── Local infrastructure experiments (operator-local; not versioned yet) ──
 # `infra/` holds operator-local infrastructure scratch (e.g. infra/openbao —
