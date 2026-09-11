@@ -28,40 +28,26 @@ std::optional<RenderPlan> parseRenderPlanV1(
             item.transform.scale_mode = ju::extractJsonStringValue(itemStr, "scale_mode");
             if (item.transform.scale_mode.empty()) item.transform.scale_mode = "cover";
             item.transform.explicit_request =
-                itemStr.find("\"slow_zoom\"") != std::string::npos ||
-                itemStr.find("\"scale_mode\"") != std::string::npos;
+                ju::hasJsonKey(itemStr, "slow_zoom") ||
+                ju::hasJsonKey(itemStr, "scale_mode");
             item.transform.slow_zoom = ju::extractJsonBoolValue(
                 itemStr, "slow_zoom", !plan.copy_only);
 
-            std::string sourceBlock = ju::extractArrayBlock(itemStr, "source");
-            if (sourceBlock.empty()) {
-                const size_t sourcePos = itemStr.find("\"source\"");
-                if (sourcePos != std::string::npos) {
-                    const size_t startBrace = itemStr.find('{', sourcePos);
-                    if (startBrace != std::string::npos) {
-                        int depth = 0;
-                        for (size_t k = startBrace; k < itemStr.size(); ++k) {
-                            if (itemStr[k] == '{') ++depth;
-                            else if (itemStr[k] == '}' && --depth == 0) {
-                                sourceBlock = itemStr.substr(startBrace, k - startBrace + 1);
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
+            const std::string sourceBlock = detail::extractObjectBlock(itemStr, "source");
 
             const std::string& sourceJson = sourceBlock.empty() ? itemStr : sourceBlock;
             const std::string sourceType = ju::extractJsonStringValue(sourceJson, "type");
             const std::string url = ju::extractJsonStringValue(sourceJson, "url");
             const std::string cacheKey = ju::extractJsonStringValue(sourceJson, "cache_key");
             const std::string colorHex = ju::extractJsonStringValue(sourceJson, "color_hex");
-            if (sourceType == "image") item.source = ImageSource{url, cacheKey};
-            else if (sourceType == "video") item.source = VideoSource{url, cacheKey};
-            else if (sourceType == "color") item.source = ColorSource{colorHex};
+            if (sourceType == "image" && !url.empty()) item.source = ImageSource{url, cacheKey};
+            else if (sourceType == "video" && !url.empty()) item.source = VideoSource{url, cacheKey};
+            else if (sourceType == "color" && !colorHex.empty()) item.source = ColorSource{colorHex};
             else {
-                std::cerr << "warning: tipo sorgente sconosciuto: " << sourceType << "\n";
-                continue;
+                recordV1RejectedEntry();
+                std::cerr << "errore: source item " << item.scene_id
+                          << " has an unknown type or missing source value; rejecting RenderPlan\n";
+                return std::nullopt;
             }
             plan.timeline.push_back(std::move(item));
         }
@@ -77,7 +63,13 @@ std::optional<RenderPlan> parseRenderPlanV1(
             track.duration_seconds = ju::extractJsonNumberValue(audioStr, "duration_seconds", 0.0);
             track.role = ju::extractJsonStringValue(audioStr, "role");
             track.loop = ju::extractJsonBoolValue(audioStr, "loop", false);
-            if (!track.source_url.empty()) plan.audio_tracks.push_back(std::move(track));
+            if (track.source_url.empty()) {
+                recordV1RejectedEntry();
+                std::cerr << "errore: audio_tracks entry has an empty source_url; "
+                             "rejecting RenderPlan\n";
+                return std::nullopt;
+            }
+            plan.audio_tracks.push_back(std::move(track));
         }
     }
 

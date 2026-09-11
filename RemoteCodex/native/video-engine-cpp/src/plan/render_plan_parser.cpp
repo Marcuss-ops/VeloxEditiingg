@@ -2,9 +2,14 @@
 #include "json_utils.hpp"
 #include "render_plan_parser_internal.hpp"
 
+#include <atomic>
 #include <iostream>
 
 namespace velox::plan {
+
+namespace {
+std::atomic<std::uint64_t> g_v1RejectedEntryCount{0};
+}
 
 std::optional<RenderPlan> parseRenderPlan(const std::string& jsonStr) {
     namespace ju = velox::json;
@@ -28,6 +33,14 @@ std::optional<RenderPlan> parseRenderPlan(const std::string& jsonStr) {
         return detail::parseRenderPlanV2(jsonStr, std::move(plan));
     }
     return detail::parseRenderPlanV1(jsonStr, std::move(plan));
+}
+
+std::uint64_t v1RejectedEntryCount() {
+    return g_v1RejectedEntryCount.load(std::memory_order_relaxed);
+}
+
+void recordV1RejectedEntry() {
+    g_v1RejectedEntryCount.fetch_add(1, std::memory_order_relaxed);
 }
 
 } // namespace velox::plan

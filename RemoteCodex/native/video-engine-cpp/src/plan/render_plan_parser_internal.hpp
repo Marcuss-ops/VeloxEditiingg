@@ -5,6 +5,10 @@
 #include <optional>
 #include <string>
 
+namespace velox::plan {
+void recordV1RejectedEntry();
+}
+
 namespace velox::plan::detail {
 
 std::string extractObjectBlock(const std::string& json, const std::string& key);

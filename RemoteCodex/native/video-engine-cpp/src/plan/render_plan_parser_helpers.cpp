@@ -33,36 +33,11 @@ std::string unescapeJsonString(std::string value) {
 } // namespace
 
 std::string extractObjectBlock(const std::string& json, const std::string& key) {
-    const std::string needle = "\"" + key + "\"";
-    auto pos = json.find(needle);
-    if (pos == std::string::npos) return {};
-    pos = json.find('{', pos);
-    if (pos == std::string::npos) return {};
-
-    int depth = 0;
-    bool inString = false;
-    bool escape = false;
-    for (size_t i = pos; i < json.size(); ++i) {
-        const char c = json[i];
-        if (inString) {
-            if (escape) {
-                escape = false;
-            } else if (c == '\\') {
-                escape = true;
-            } else if (c == '"') {
-                inString = false;
-            }
-            continue;
-        }
-        if (c == '"') {
-            inString = true;
-        } else if (c == '{') {
-            ++depth;
-        } else if (c == '}' && --depth == 0) {
-            return json.substr(pos, i - pos + 1);
-        }
-    }
-    return {};
+    size_t start = 0;
+    size_t end = 0;
+    if (!velox::json::detail::findMemberValue(json, key, start, end) ||
+        start >= end || json[start] != '{') return {};
+    return json.substr(start, end - start);
 }
 
 // bindingPathFor looks up "<assetId>" : "<path>" in a flat bindings object.

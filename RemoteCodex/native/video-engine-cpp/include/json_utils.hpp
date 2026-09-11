@@ -1,24 +1,166 @@
 #ifndef VELOX_JSON_UTILS_HPP
 #define VELOX_JSON_UTILS_HPP
 
-// Utility per parsing JSON via regex, usate dal C++ video engine.
-// Poiché il C++ engine non usa una libreria JSON completa (es. nlohmann),
-// queste funzioni estraggono valori da JSON serializzato usando regex e
-// scanning manuale di array/oggetti annidati.
-//
-// Limitazioni note:
-//   - Non gestisce JSON annidato oltre un livello di array/oggetti
-//   - Le regex non sono conformi allo standard JSON (non gestiscono escape
-//     complessi, Unicode, etc.)
-//   - Adeguato per il subset JSON prodotto dal Go serialization del progetto
+// Small dependency-free JSON structural scanner used by the C++ video engine.
+// It is intentionally not a general-purpose DOM: callers only need the byte
+// span of a named value and can then decode the scalar or copy the object /
+// array block. Unlike the old string::find helpers, keys are recognized only
+// as object members, never when they occur inside a URL or another string.
 
 #include <cctype>
+#include <algorithm>
 #include <regex>
 #include <string>
 #include <vector>
 
 namespace velox {
 namespace json {
+
+namespace detail {
+
+inline void skipWhitespace(const std::string& json, size_t& pos, size_t end) {
+    while (pos < end && std::isspace(static_cast<unsigned char>(json[pos]))) ++pos;
+}
+
+inline bool skipString(const std::string& json, size_t& pos, size_t end) {
+    if (pos >= end || json[pos] != '"') return false;
+    ++pos;
+    bool escaped = false;
+    for (; pos < end; ++pos) {
+        const char c = json[pos];
+        if (escaped) {
+            escaped = false;
+            continue;
+        }
+        if (c == '\\') {
+            escaped = true;
+        } else if (c == '"') {
+            ++pos;
+            return true;
+        }
+    }
+    return false;
+}
+
+inline bool skipValue(const std::string& json, size_t& pos, size_t end) {
+    skipWhitespace(json, pos, end);
+    if (pos >= end) return false;
+    if (json[pos] == '"') return skipString(json, pos, end);
+
+    if (json[pos] == '{' || json[pos] == '[') {
+        const char open = json[pos];
+        const char close = open == '{' ? '}' : ']';
+        int depth = 0;
+        bool inString = false;
+        bool escaped = false;
+        for (; pos < end; ++pos) {
+            const char c = json[pos];
+            if (inString) {
+                if (escaped) escaped = false;
+                else if (c == '\\') escaped = true;
+                else if (c == '"') inString = false;
+                continue;
+            }
+            if (c == '"') {
+                inString = true;
+            } else if (c == open) {
+                ++depth;
+            } else if (c == close && --depth == 0) {
+                ++pos;
+                return true;
+            } else if ((open == '{' && c == '[') || (open == '[' && c == '{')) {
+                // The outer scan has to account for both container kinds.
+                size_t nested = pos;
+                if (!skipValue(json, nested, end)) return false;
+                pos = nested - 1;
+            }
+        }
+        return false;
+    }
+
+    const size_t start = pos;
+    while (pos < end && json[pos] != ',' && json[pos] != '}' && json[pos] != ']') ++pos;
+    return pos > start;
+}
+
+inline bool decodeRawString(const std::string& json, size_t start, size_t end,
+                            std::string& raw) {
+    if (start >= end || json[start] != '"') return false;
+    size_t pos = start;
+    if (!skipString(json, pos, end) || pos == 0 || pos > end) return false;
+    raw.assign(json, start + 1, pos - start - 2);
+    return true;
+}
+
+inline bool findMemberValueIn(const std::string& json, size_t start, size_t end,
+                              const std::string& key,
+                              size_t& valueStart, size_t& valueEnd) {
+    size_t pos = start;
+    skipWhitespace(json, pos, end);
+    if (pos >= end) return false;
+
+    if (json[pos] == '{') {
+        ++pos;
+        while (true) {
+            skipWhitespace(json, pos, end);
+            if (pos >= end) return false;
+            if (json[pos] == '}') return false;
+            const size_t keyStart = pos;
+            std::string memberKey;
+            if (!decodeRawString(json, keyStart, end, memberKey)) return false;
+            if (!skipString(json, pos, end)) return false;
+            skipWhitespace(json, pos, end);
+            if (pos >= end || json[pos++] != ':') return false;
+            skipWhitespace(json, pos, end);
+            const size_t candidateStart = pos;
+            if (!skipValue(json, pos, end)) return false;
+            if (memberKey == key) {
+                valueStart = candidateStart;
+                valueEnd = pos;
+                return true;
+            }
+            size_t nestedStart = candidateStart;
+            size_t nestedEnd = pos;
+            if (findMemberValueIn(json, nestedStart, nestedEnd, key,
+                                  valueStart, valueEnd)) return true;
+            skipWhitespace(json, pos, end);
+            if (pos >= end) return false;
+            if (json[pos] == ',') {
+                ++pos;
+                continue;
+            }
+            return false;
+        }
+    }
+
+    if (json[pos] == '[') {
+        ++pos;
+        while (true) {
+            skipWhitespace(json, pos, end);
+            if (pos >= end) return false;
+            if (json[pos] == ']') return false;
+            const size_t candidateStart = pos;
+            if (!skipValue(json, pos, end)) return false;
+            if (findMemberValueIn(json, candidateStart, pos, key,
+                                  valueStart, valueEnd)) return true;
+            skipWhitespace(json, pos, end);
+            if (pos >= end) return false;
+            if (json[pos] == ',') {
+                ++pos;
+                continue;
+            }
+            return false;
+        }
+    }
+    return false;
+}
+
+inline bool findMemberValue(const std::string& json, const std::string& key,
+                            size_t& valueStart, size_t& valueEnd) {
+    return findMemberValueIn(json, 0, json.size(), key, valueStart, valueEnd);
+}
+
+} // namespace detail
 
 // Canonical JSON string escaper for the C++ engine. Every emission site
 // (telemetry emitter, render engine metadata, mux metrics, media utils)
@@ -61,36 +203,13 @@ inline std::string trim(std::string s) {
 }
 
 inline std::string extractJsonString(const std::string& json, const std::string& key) {
-    const std::string needle = "\"" + key + "\"";
-    auto pos = json.find(needle);
-    if (pos == std::string::npos) return {};
-    pos += needle.size();
-    while (pos < json.size() && std::isspace(static_cast<unsigned char>(json[pos]))) ++pos;
-    if (pos >= json.size() || json[pos] != ':') {
-        // allow spaces before colon: find colon after needle
-        pos = json.find(':', pos - needle.size());
-        if (pos == std::string::npos) return {};
-    }
-    ++pos;
-    while (pos < json.size() && std::isspace(static_cast<unsigned char>(json[pos]))) ++pos;
-    if (pos >= json.size() || json[pos] != '"') return {};
-    ++pos;
+    size_t start = 0;
+    size_t end = 0;
+    if (!detail::findMemberValue(json, key, start, end) ||
+        start >= end || json[start] != '"') return {};
     std::string raw;
-    raw.reserve(64);
-    bool escape = false;
-    for (; pos < json.size(); ++pos) {
-        char c = json[pos];
-        if (escape) {
-            raw.push_back('\\');
-            raw.push_back(c);
-            escape = false;
-            continue;
-        }
-        if (c == '\\') { escape = true; continue; }
-        if (c == '"') return raw;
-        raw.push_back(c);
-    }
-    return {};
+    if (!detail::decodeRawString(json, start, end, raw)) return {};
+    return raw;
 }
 
 inline std::string unescapeJsonString(std::string s) {
@@ -124,83 +243,39 @@ inline std::string extractJsonStringValue(const std::string& json, const std::st
 }
 
 inline double extractJsonNumberValue(const std::string& json, const std::string& key, double fallback = 0.0) {
-    const std::string needle = "\"" + key + "\"";
-    auto pos = json.find(needle);
-    if (pos == std::string::npos) return fallback;
-    pos = json.find(':', pos + needle.size());
-    if (pos == std::string::npos) return fallback;
-    ++pos;
-    while (pos < json.size() && std::isspace(static_cast<unsigned char>(json[pos]))) ++pos;
-    size_t start = pos;
-    if (pos < json.size() && (json[pos] == '-' || json[pos] == '+')) ++pos;
-    bool has_digit = false;
-    while (pos < json.size() && (std::isdigit(static_cast<unsigned char>(json[pos])) || json[pos] == '.')) {
-        if (std::isdigit(static_cast<unsigned char>(json[pos]))) has_digit = true;
-        ++pos;
-    }
-    if (!has_digit) return fallback;
+    size_t start = 0;
+    size_t end = 0;
+    if (!detail::findMemberValue(json, key, start, end)) return fallback;
     try {
-        return std::stod(json.substr(start, pos - start));
+        size_t consumed = 0;
+        const double value = std::stod(json.substr(start, end - start), &consumed);
+        return consumed == end - start ? value : fallback;
     } catch (...) {
         return fallback;
     }
 }
 
 inline bool extractJsonBoolValue(const std::string& json, const std::string& key, bool fallback = false) {
-    const std::string needle = "\"" + key + "\"";
-    auto pos = json.find(needle);
-    if (pos == std::string::npos) return fallback;
-    pos = json.find(':', pos + needle.size());
-    if (pos == std::string::npos) return fallback;
-    ++pos;
-    while (pos < json.size() && std::isspace(static_cast<unsigned char>(json[pos]))) ++pos;
-    if (json.compare(pos, 4, "true") == 0) return true;
-    if (json.compare(pos, 5, "false") == 0) return false;
+    size_t start = 0;
+    size_t end = 0;
+    if (!detail::findMemberValue(json, key, start, end)) return fallback;
+    if (json.compare(start, end - start, "true") == 0) return true;
+    if (json.compare(start, end - start, "false") == 0) return false;
     return fallback;
 }
 
+inline bool hasJsonKey(const std::string& json, const std::string& key) {
+    size_t start = 0;
+    size_t end = 0;
+    return detail::findMemberValue(json, key, start, end);
+}
+
 inline std::string extractArrayBlock(const std::string& json, const std::string& key) {
-    const std::string needle = "\"" + key + "\"";
-    auto pos = json.find(needle);
-    if (pos == std::string::npos) {
-        return {};
-    }
-    pos = json.find('[', pos);
-    if (pos == std::string::npos) {
-        return {};
-    }
-    int depth = 0;
-    for (size_t i = pos; i < json.size(); ++i) {
-        char c = json[i];
-        if (c == '"') {
-            ++i;
-            bool escape = false;
-            for (; i < json.size(); ++i) {
-                char cc = json[i];
-                if (escape) {
-                    escape = false;
-                    continue;
-                }
-                if (cc == '\\') {
-                    escape = true;
-                    continue;
-                }
-                if (cc == '"') {
-                    break;
-                }
-            }
-            continue;
-        }
-        if (c == '[') {
-            ++depth;
-        } else if (c == ']') {
-            --depth;
-            if (depth == 0) {
-                return json.substr(pos, i - pos + 1);
-            }
-        }
-    }
-    return {};
+    size_t start = 0;
+    size_t end = 0;
+    if (!detail::findMemberValue(json, key, start, end) ||
+        start >= end || json[start] != '[') return {};
+    return json.substr(start, end - start);
 }
 
 inline std::vector<std::string> extractArrayStrings(const std::string& json, const std::string& key) {

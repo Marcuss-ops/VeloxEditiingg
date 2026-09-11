@@ -221,6 +221,33 @@ void testParserUnit(const fs::path& clipA, const fs::path& clipB,
                    v1Plan->timeline[0].duration_seconds == 0.8,
                "V1 float duration preserved for the legacy path");
     }
+
+    std::cerr << "── parser unit: V1 rejects malformed entries instead of dropping them ──\n";
+    const std::string v1Unknown =
+        "{\"version\":1,\"job_id\":\"v1-unknown\",\"output_path\":\"/tmp/v1.mp4\","
+        "\"timeline\":[{\"source\":{\"type\":\"future\",\"url\":\"x\"},"
+        "\"duration_seconds\":1.0}]}";
+    const auto rejectedBefore = velox::plan::v1RejectedEntryCount();
+    expect(!parseRenderPlan(v1Unknown).has_value(),
+           "V1 unknown source type rejects the whole plan");
+    expect(velox::plan::v1RejectedEntryCount() == rejectedBefore + 1,
+           "V1 rejection counter records the malformed source entry");
+
+    const std::string v1EmptyAudio =
+        "{\"version\":1,\"job_id\":\"v1-audio\",\"output_path\":\"/tmp/v1.mp4\","
+        "\"timeline\":[{\"source\":{\"type\":\"video\",\"url\":\"/tmp/a.mp4\"},"
+        "\"duration_seconds\":1.0}],\"audio_tracks\":[{\"source_url\":\"\"}]}";
+    expect(!parseRenderPlan(v1EmptyAudio).has_value(),
+           "V1 empty audio source rejects the whole plan");
+
+    const std::string v1KeyInUrl =
+        "{\"version\":1,\"job_id\":\"v1-url\",\"output_path\":\"/tmp/output-key.mp4\","
+        "\"timeline\":[{\"source\":{\"type\":\"video\","
+        "\"url\":\"https://example.test/slow_zoom/scale_mode/output\"},"
+        "\"duration_seconds\":1.0}]}";
+    const auto urlPlan = parseRenderPlan(v1KeyInUrl);
+    expect(urlPlan.has_value() && !urlPlan->timeline.front().transform.explicit_request,
+           "keys embedded in a URL do not trigger transform explicit_request");
     const std::string v1Document = v1.str();
     const std::string v1Subtitles =
         v1Document.substr(0, v1Document.size() - 1) +
