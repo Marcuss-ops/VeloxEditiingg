@@ -98,7 +98,9 @@ bool DecoderStage::acceptFrame(AVFrame* frame, int index) {
         return false;
     }
     if (config_.source_end_us > 0 && frame_us >= config_.source_end_us) {
-        config_.source_window_complete->store(true);
+        if (config_.source_window_complete != nullptr) {
+            config_.source_window_complete->store(true);
+        }
         return false;
     }
     return true;

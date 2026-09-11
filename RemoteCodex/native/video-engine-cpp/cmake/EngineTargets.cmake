@@ -19,7 +19,6 @@ add_executable(velox_video_engine
     src/audio/audio_benchmark.cpp
     src/services/ffmpeg_progress_parser.cpp
     ${VELOX_RENDER_ENGINE_SOURCES}
-    src/core/execution_plan.cpp
     src/telemetry/emitter.cpp
 )
 

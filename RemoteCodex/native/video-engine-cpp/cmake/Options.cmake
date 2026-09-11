@@ -3,11 +3,11 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Optional in-process LibAV backend. OFF preserves the ffprobe/legacy path;
-# ON enables the in-process MediaProbe and packet-copy pipeline.
+# In-process LibAV is the shipped backend. OFF remains available for the
+# portable legacy compatibility build and is exercised explicitly in CI.
 option(VELOX_ENABLE_LIBAV
     "Build with in-process libavformat/libavcodec/libavutil (MediaProbe + packet mux)"
-    OFF)
+    ON)
 
 # Propagate the build flag to every engine/test target.
 add_compile_definitions($<$<BOOL:${VELOX_ENABLE_LIBAV}>:VELOX_ENABLE_LIBAV>)

@@ -6,9 +6,6 @@
 #include "velox/services/media_packet_pipeline.hpp"
 #include "velox/services/media_utils.hpp"
 #include "velox/services/segment_execution.hpp"
-#ifdef VELOX_ENABLE_LIBAV
-#include "velox/services/segment_execution_libav.hpp"
-#endif
 
 #include <chrono>
 #include <cmath>
@@ -60,14 +57,13 @@ RenderResult RenderEngine::renderCopyOnly(
     // can start before the mux finishes.  The partial path is reported
     // because that is where the sink writes; the Go side opens it and
     // continues reading after publishAtomic renames it.
-    request.write_progress_callback = [this, outPath](const fs::path& path, int64_t bytes_written) {
+    request.write_progress_callback = [this](const fs::path& path, int64_t bytes_written) {
         // The mux writes to the .partial path; report that path so the
         // Go progressive upload can open it before publishAtomic renames.
         reportArtifactWriteProgress("final_video", path, bytes_written, bytes_written, false);
     };
     request.video_segments.reserve(plan.timeline.size());
     double total_copy_duration = 0.0;
-    int64_t total_copy_duration_us = 0;
 
     const auto bindOrStage = [&](const std::string& source,
                                  const std::string& cache_reference,
@@ -144,11 +140,9 @@ RenderResult RenderEngine::renderCopyOnly(
                   std::llround(item.duration_seconds * 1'000'000.0));
         request.video_segments.push_back({
             localVideo, item.source_in_us, duration_us, item.include_audio});
-        if (item.duration_us > 0) {
-            total_copy_duration_us += item.duration_us;
-        } else {
-            total_copy_duration += item.duration_seconds;
-        }
+        total_copy_duration += item.duration_us > 0
+            ? static_cast<double>(item.duration_us) / 1'000'000.0
+            : item.duration_seconds;
         const int progress = 10 + static_cast<int>(
             (static_cast<double>(i + 1) / plan.timeline.size()) * 55.0);
         reportProgress(progress, "staging_copy_inputs");
@@ -160,9 +154,6 @@ RenderResult RenderEngine::renderCopyOnly(
                 std::chrono::steady_clock::now() - renderStart).count(), true);
     }
 
-    if (total_copy_duration_us > 0) {
-        total_copy_duration = static_cast<double>(total_copy_duration_us) / 1'000'000.0;
-    }
 
     if (plan.audio_tracks.size() > 1) {
         result.error = "copy_only supports at most one final audio track";
@@ -365,7 +356,7 @@ RenderResult RenderEngine::renderMixed(
     int64_t total_duration_us = 0;
     int64_t packet_copy_segments = 0;
     int64_t rejected_segments = 0;
-    std::optional<media::MediaSignature> mixed_canonical_source;
+    request.target_video_signature = canonical;
     for (std::size_t i = 0; i < plan.timeline.size(); ++i) {
         const auto& item = plan.timeline[i];
         if (!std::holds_alternative<plan::VideoSource>(item.source)) {
@@ -405,45 +396,17 @@ RenderResult RenderEngine::renderMixed(
             std::chrono::steady_clock::now() - downloadStart).count();
         segment.source_bytes = fileSize(local_video);
 
-        media::SegmentProbe probe;
-        std::string probe_error;
-        {
-            ScopedTimer timer(metrics_, "mixed_probe_ms");
-            if (!media::probeSegmentForExecution(local_video, item.source_in_us,
-                                                 media::MediaKind::Video, &probe, &probe_error)) {
-                result.error = "failed to probe segment " + std::to_string(i) + ": " + probe_error;
-                return failRender("mixed_probe_failed");
-            }
-        }
-        media::SegmentExecutionRequest execution_request;
-        execution_request.source = probe.signature;
-        if (!mixed_canonical_source.has_value()) {
-            mixed_canonical_source = canonical;
-            mixed_canonical_source->time_base_num = probe.signature.time_base_num;
-            mixed_canonical_source->time_base_den = probe.signature.time_base_den;
-        }
-        execution_request.target = *mixed_canonical_source;
-        execution_request.transform_required = item.transform.slow_zoom;
-        execution_request.source_window_keyframe_safe = probe.source_window_keyframe_safe;
-        execution_request.legacy_required = item.include_audio;
-        const media::SegmentExecutionDecision decision =
-            media::resolveSegmentExecution(execution_request);
-        if (decision.mode != media::SegmentExecutionMode::PacketCopy) {
-            ++rejected_segments;
-            result.error = "segment_execution_rejected: " + decision.reason +
-                " (segment " + std::to_string(i) + ")";
-            return failRender("segment_execution_rejected");
-        }
         segment.codec = "packet_copy";
-        ++packet_copy_segments;
         request.video_segments.push_back({
-            local_video, item.source_in_us, duration_us, false, false});
+            local_video, item.source_in_us, duration_us, false, false,
+            item.transform.slow_zoom, item.include_audio});
         segment.total_ms = std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - segmentStart).count();
         segment.status = telemetry::kStatusOk;
         metrics_.addSegment(segment);
         total_duration_us += duration_us;
     }
+    packet_copy_segments = static_cast<int64_t>(request.video_segments.size());
     copy_segments_.store(packet_copy_segments);
     transcode_segments_.store(0);
 
@@ -472,7 +435,10 @@ RenderResult RenderEngine::renderMixed(
     if (!muxOk) {
         mixedPhase.Abort("mixed_packet_mux_failed", muxResult.error);
         result.error = "mixed packet mux failed: " + muxResult.error;
-        return failRender("mixed_packet_mux_failed");
+        const bool executionRejected = muxResult.error.rfind(
+            "segment_execution_rejected:", 0) == 0;
+        return failRender(executionRejected
+            ? "segment_execution_rejected" : "mixed_packet_mux_failed");
     }
     output_durable_.store(muxResult.output_durable);
     mixedPhase.Complete(0, static_cast<int64_t>(fileSize(outPath)), 0,

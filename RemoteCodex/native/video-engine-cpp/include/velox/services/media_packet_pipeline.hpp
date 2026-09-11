@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "velox/services/file_utils.hpp"
+#include "velox/services/segment_execution.hpp"
 
 // This header is the value-types-only public surface (the OFF-build
 // fallback and RenderEngine include it). The LibAV-aware named components
@@ -30,6 +31,8 @@ struct CopyOnlyVideoSegment {
     // re-encoding), but the flag is retained for the mux's fail-closed
     // handling of pre-normalized inputs.
     bool normalized{false};
+    bool transform_required{false};
+    bool legacy_required{false};
 };
 
 struct CopyOnlyAudioTrack {
@@ -41,6 +44,9 @@ struct CopyOnlyAudioTrack {
 struct CopyOnlyMuxRequest {
     std::vector<CopyOnlyVideoSegment> video_segments;
     std::optional<CopyOnlyAudioTrack> audio;
+    // Mixed renders pin this to the canonical profile. Plain V2 copy-only
+    // plans leave it unset and use the first input's concrete profile.
+    std::optional<MediaSignature> target_video_signature;
     std::filesystem::path output_path;
     // Optional callback invoked after each write to the output sink.
     // Receives the actual file path being written (the .partial path) and

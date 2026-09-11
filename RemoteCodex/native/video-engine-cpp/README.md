@@ -73,6 +73,8 @@ sudo apt-get install cmake pkg-config libavformat-dev libavcodec-dev libavutil-d
 
 ```bash
 mkdir -p build && cd build
+# LibAV is ON by default; pass -DVELOX_ENABLE_LIBAV=OFF only for the
+# compatibility build of the legacy ffmpeg/ffprobe path.
 cmake .. -DCMAKE_BUILD_TYPE=Release
 cmake --build . -j$(nproc)
 ctest --output-on-failure

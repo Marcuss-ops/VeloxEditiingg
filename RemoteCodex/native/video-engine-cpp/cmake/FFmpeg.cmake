@@ -3,6 +3,7 @@
 set(VELOX_PACKET_PIPELINE_FACADE_SOURCE
     src/services/media_packet_pipeline.cpp)
 set(VELOX_PACKET_PIPELINE_COMPONENT_SOURCES
+    src/core/execution_plan.cpp
     src/services/media_packet_demuxer.cpp
     src/services/media_packet_sessions.cpp
     src/services/media_packet_rewriter.cpp
