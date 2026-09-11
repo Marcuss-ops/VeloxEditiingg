@@ -29,6 +29,7 @@ class FramePool {
 public:
     bool init(int capacity, int in_width, int in_height,
               int out_width, int out_height, bool allocate_scaled,
+              AVPixelFormat scaled_format,
               std::string& error);
     int acquire();
     void release(int index);
@@ -47,16 +48,20 @@ private:
     std::vector<UniqueFrame> decoded_;
     std::vector<UniqueFrame> scaled_;
 
-    // Free-slot bitmask (bit i set = slot i free). Capacity is validated to
-    // [2, 64], so one uint64_t covers every slot. acquire/release on the
-    // fast path are a single CAS each — no mutex, no heap, no deque nodes.
-    // The mutex/condition_variable below serve only the blocking slow path
-    // (pool exhausted) and shutdown wakeup.
-    std::atomic<uint64_t> free_mask_{0};
-    std::atomic<int> in_use_{0};
-    std::atomic<int64_t> peak_usage_{0};
+    // Free-slot ring. The decoder is the sole consumer and the encoder is
+    // the sole producer, so slot admission/release uses the same SPSC
+    // acquire/release discipline as the frame queues: no per-frame CAS/RMW
+    // crosses cores and no heap node is created.
+    std::vector<int> free_slots_;
+    alignas(64) std::atomic<std::size_t> free_head_{0};
+    alignas(64) std::atomic<std::size_t> free_tail_{0};
+    int64_t peak_usage_{0};
     std::atomic<bool> shutdown_{false};
     std::atomic<int> waiters_{0};
+    // Only the exceptional shutdown/error path can release from a second
+    // stage thread. Normal encoder releases stay lock-free; shutdown turns
+    // this mutex into the multi-producer safety fence.
+    std::mutex release_mutex_;
     std::mutex wait_mutex_;
     std::condition_variable available_;
 };

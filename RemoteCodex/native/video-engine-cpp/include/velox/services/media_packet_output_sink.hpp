@@ -53,6 +53,9 @@ public:
     // Set a throttled progress callback. finalize() guarantees that the
     // final high-watermark is emitted when it differs from the last value.
     void setWriteProgressCallback(WriteProgressCallback cb) { writeProgressCb_ = std::move(cb); }
+    // Standalone callers may retain the opportunistic digest; the worker
+    // disables it when the final artifact manifest owns hashing.
+    void setComputeSHA256(bool enabled) { compute_sha256_ = enabled; }
     const std::filesystem::path& path() const { return path_; }
 
 private:
@@ -74,6 +77,8 @@ private:
     int64_t backward_seek_bytes_{0};
     bool finalized_{false};
     void* sha_{nullptr};
+    bool compute_sha256_{true};
+    bool backward_seek_seen_{false};
     WriteProgressCallback writeProgressCb_;
 
     // Write-progress throttling state. The Go progressive upload only needs

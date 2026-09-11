@@ -47,14 +47,16 @@ bool PacketOutputSink::open(const std::filesystem::path& path, std::string& erro
         return false;
     }
     path_ = path;
-    AVHashContext* hash = nullptr;
-    if (av_hash_alloc(&hash, "sha256") < 0 || hash == nullptr) {
-        error = "av_hash_alloc(sha256) failed";
-        close();
-        return false;
+    if (compute_sha256_) {
+        AVHashContext* hash = nullptr;
+        if (av_hash_alloc(&hash, "sha256") < 0 || hash == nullptr) {
+            error = "av_hash_alloc(sha256) failed";
+            close();
+            return false;
+        }
+        sha_ = hash;
+        av_hash_init(static_cast<AVHashContext*>(sha_));
     }
-    sha_ = hash;
-    av_hash_init(static_cast<AVHashContext*>(sha_));
     avio_ = avio_alloc_context(
         static_cast<unsigned char*>(av_malloc(kBufferSize)), kBufferSize, 1,
         this, nullptr, &PacketOutputSink::writeCallback,
@@ -65,12 +67,11 @@ bool PacketOutputSink::open(const std::filesystem::path& path, std::string& erro
         return false;
     }
     avio_->seekable = AVIO_SEEKABLE_NORMAL;
-    // Keep the sink's logical position synchronized with every caller write.
-    // With libavformat's default AVIO buffering, an explicit seek can arrive
-    // before the buffered prefix reaches writeCallback, making backward-seek
-    // telemetry undercount rewinds and invalidate the incremental hash at the
-    // wrong boundary.
-    avio_->direct = 1;
+    // The production packet-copy path disables the duplicate hash and can
+    // safely let AVIO coalesce small writes. Hash-enabled standalone callers
+    // retain direct mode because exact backward-seek telemetry depends on the
+    // callback seeing every logical write before a seek.
+    avio_->direct = compute_sha256_ ? 1 : 0;
     return true;
 }
 
@@ -87,10 +88,11 @@ int PacketOutputSink::writeCallback(void* opaque, uint8_t* data, int size) {
     if (written < 0) return AVERROR(errno);
     if (written != size) return AVERROR(EIO);
 
-    if (sink.append_only_ && sink.position_ == sink.hashed_until_) {
+    if (sink.sha_ != nullptr && sink.append_only_ &&
+        sink.position_ == sink.hashed_until_) {
         av_hash_update(static_cast<AVHashContext*>(sink.sha_), data, size);
         sink.hashed_until_ += size;
-    } else {
+    } else if (sink.sha_ != nullptr) {
         // A rewrite makes the incremental digest invalid; finalization will
         // deliberately return sha256_valid=false and callers use the normal
         // canonical manifest hashing path.
@@ -131,9 +133,17 @@ int64_t PacketOutputSink::seekCallback(void* opaque, int64_t offset, int whence)
     else if (whence == SEEK_END) next = sink.high_watermark_ + offset;
     else return AVERROR(EINVAL);
     if (next < 0) return AVERROR(EINVAL);
-    if (next < sink.hashed_until_) {
-        const int64_t rewound = sink.hashed_until_ - next;
-        sink.append_only_ = false;
+    if (next < sink.position_) {
+        // Once hashing is invalidated, keep reporting the rewind against the
+        // last hashed prefix for compatibility with the sink's historical
+        // telemetry contract; otherwise use the current logical position.
+        const int64_t rewind_base = sink.sha_ != nullptr &&
+            next < sink.hashed_until_ ? sink.hashed_until_ : sink.position_;
+        const int64_t rewound = rewind_base - next;
+        sink.backward_seek_seen_ = true;
+        if (sink.sha_ != nullptr && next < sink.hashed_until_) {
+            sink.append_only_ = false;
+        }
         ++sink.backward_seek_count_;
         sink.backward_seek_bytes_ += rewound;
         services::recordOutputBackwardSeek(rewound);
@@ -144,7 +154,7 @@ int64_t PacketOutputSink::seekCallback(void* opaque, int64_t offset, int whence)
 
 bool PacketOutputSink::finalize(PacketOutputSinkResult& result, std::string& error) {
     result = PacketOutputSinkResult{};
-    if (fd_ < 0 || sha_ == nullptr) {
+    if (fd_ < 0) {
         error = "packet output sink is not open";
         return false;
     }
@@ -173,17 +183,13 @@ bool PacketOutputSink::finalize(PacketOutputSinkResult& result, std::string& err
         return false;
     }
     result.output_size_bytes = static_cast<int64_t>(st.st_size);
-    result.backward_seek_seen = !append_only_;
+    result.backward_seek_seen = backward_seek_seen_;
     result.backward_seek_count = backward_seek_count_;
     result.backward_seek_bytes = backward_seek_bytes_;
-    if (append_only_ && hashed_until_ == result.output_size_bytes) {
-        unsigned char digest[64]{};
-        av_hash_final(static_cast<AVHashContext*>(sha_), digest);
-        char hex[65]{};
-        for (size_t i = 0; i < 32; ++i) {
-            std::snprintf(hex + i * 2, 3, "%02x", digest[i]);
-        }
-        result.sha256 = hex;
+    if (sha_ != nullptr && append_only_ && hashed_until_ == result.output_size_bytes) {
+        uint8_t hex[65]{};
+        av_hash_final_hex(static_cast<AVHashContext*>(sha_), hex, sizeof(hex));
+        result.sha256 = reinterpret_cast<const char*>(hex);
         result.sha256_valid = true;
     }
     finalized_ = true;
@@ -208,6 +214,7 @@ void PacketOutputSink::close() {
     high_watermark_ = 0;
     hashed_until_ = 0;
     append_only_ = true;
+    backward_seek_seen_ = false;
     backward_seek_count_ = 0;
     backward_seek_bytes_ = 0;
     finalized_ = false;

@@ -54,7 +54,7 @@ bool DecoderStage::receiveFrames(std::string& error) {
         }
         if (!acceptFrame(scratch_)) {
             if (config_.source_window_complete != nullptr &&
-                config_.source_window_complete->load()) {
+                *config_.source_window_complete) {
                 return true;
             }
             continue;
@@ -73,7 +73,7 @@ bool DecoderStage::receiveFrames(std::string& error) {
         // Move ownership of the scratch frame's AVBufferRefs into the pooled
         // wrapper. This transfers references without copying pixel data.
         av_frame_move_ref(decoded, scratch_);
-        config_.decoded_frames->fetch_add(1);
+        ++*config_.decoded_frames;
         if (!config_.render_queue->push(index)) {
             config_.pool->release(index);
             error = "decoder render queue stopped";
@@ -98,7 +98,7 @@ bool DecoderStage::acceptFrame(AVFrame* frame) {
     }
     if (config_.source_end_us > 0 && frame_us >= config_.source_end_us) {
         if (config_.source_window_complete != nullptr) {
-            config_.source_window_complete->store(true);
+            *config_.source_window_complete = true;
         }
         return false;
     }

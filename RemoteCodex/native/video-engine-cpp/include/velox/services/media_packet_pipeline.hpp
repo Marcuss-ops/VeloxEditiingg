@@ -48,6 +48,9 @@ struct CopyOnlyMuxRequest {
     // plans leave it unset and use the first input's concrete profile.
     std::optional<MediaSignature> target_video_signature;
     std::filesystem::path output_path;
+    // The worker computes the authoritative artifact manifest after render,
+    // so packet-copy assembly skips a duplicate full-file hash by default.
+    bool compute_sha256{false};
     // Optional callback invoked after each write to the output sink.
     // Receives the actual file path being written (the .partial path) and
     // the cumulative bytes written so far (the safe offset for the

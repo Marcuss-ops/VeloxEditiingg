@@ -10,6 +10,7 @@ extern "C" {
 }
 
 #include <memory>
+#include <cstdint>
 #include <string>
 
 namespace velox::media::pipeline_detail {
@@ -44,6 +45,7 @@ public:
 
 private:
     SwsContext* scaler_{nullptr};
+    std::uint32_t apply_count_{0};
 };
 
 } // namespace velox::media::pipeline_detail

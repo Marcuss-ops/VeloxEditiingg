@@ -211,7 +211,15 @@ bool preparePlan(const CopyOnlyMuxRequest& request, packet::InputSessionRegistry
     std::vector<AudioCandidate> audios;
     std::vector<core::SegmentExecutionInput> inputs;
     videos.reserve(request.video_segments.size());
-    inputs.reserve(request.video_segments.size());
+    std::size_t input_reserve = request.video_segments.size() +
+        (request.audio ? 1 : 0);
+    for (const auto& segment : request.video_segments) {
+        if (segment.include_audio && input_reserve <
+            std::numeric_limits<std::size_t>::max()) {
+            ++input_reserve;
+        }
+    }
+    inputs.reserve(input_reserve);
     std::optional<MediaSignature> videoTarget = request.target_video_signature;
     std::optional<MediaSignature> audioTarget;
     int64_t timeline = 0;
@@ -269,6 +277,10 @@ bool preparePlan(const CopyOnlyMuxRequest& request, packet::InputSessionRegistry
                                         audioStreamIndex, segment.source_in_us,
                                         segment.source_duration_us, timeline,
                                         segment.include_audio, extendTail});
+        if (timeline > std::numeric_limits<int64_t>::max() -
+            segment.source_duration_us) {
+            return fail(result, "copy-only packet mux timeline overflows int64");
+        }
         timeline += segment.source_duration_us;
     }
 
@@ -340,9 +352,11 @@ bool preparePlan(const CopyOnlyMuxRequest& request, packet::InputSessionRegistry
 bool writeStreamingOutput(UniqueOutputContext& output, const PreparedCopyMuxPlan& plan,
                           const fs::path& partial, const fs::path& target,
                           CopyOnlyMuxResult* result, std::string& error,
+                          bool compute_sha256,
                           packet::WriteProgressCallback progressCallback = nullptr) {
     packet::PacketOutputSink sink;
     if ((output->oformat->flags & AVFMT_NOFILE) == 0) {
+        sink.setComputeSHA256(compute_sha256);
         if (!sink.open(partial, error)) return fail(result, error);
         if (progressCallback) sink.setWriteProgressCallback(std::move(progressCallback));
         output->pb = sink.avio();
@@ -485,6 +499,7 @@ bool runCopyOnlyMux(const CopyOnlyMuxRequest& request, CopyOnlyMuxResult* result
     }
     result->duration_us = plan.expected_duration_us;
     if (!writeStreamingOutput(output, plan, partial, request.output_path, result, error,
+                              request.compute_sha256,
                               request.write_progress_callback)) {
         cleanup();
         return false;

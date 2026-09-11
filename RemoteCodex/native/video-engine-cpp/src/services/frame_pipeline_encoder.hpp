@@ -9,7 +9,6 @@ extern "C" {
 #include <libavformat/avformat.h>
 }
 
-#include <atomic>
 #include <cstdint>
 #include <string>
 
@@ -19,7 +18,7 @@ struct EncoderStageConfig {
     AVCodecContext* encoder{nullptr};
     AVStream* output_stream{nullptr};
     AVFormatContext* muxer{nullptr};
-    std::atomic<int64_t>* encoded_packets{nullptr};
+    int64_t* encoded_packets{nullptr};
 };
 
 class EncoderStage {

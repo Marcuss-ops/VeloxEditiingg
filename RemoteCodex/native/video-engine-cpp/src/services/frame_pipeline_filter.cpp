@@ -49,12 +49,19 @@ AVFrame* FilterChain::apply(AVFrame* source, int pool_index, FramePool& pool,
         return source;
     }
     AVFrame* scaled = pool.scaled(pool_index);
-    const auto start = std::chrono::steady_clock::now();
+    const bool sample = (++apply_count_ % 32) == 0;
+    const auto start = sample ? std::chrono::steady_clock::now()
+                              : std::chrono::steady_clock::time_point{};
     const int result = sws_scale(
         scaler_, source->data, source->linesize, 0, source_height,
         scaled->data, scaled->linesize);
-    cpu_busy_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::steady_clock::now() - start).count();
+    if (sample) {
+        const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - start).count();
+        // The filter metric is sampled to keep clock reads off the normal
+        // per-frame path; scale the sample to retain an inexpensive estimate.
+        cpu_busy_ns += elapsed * 32;
+    }
     if (result <= 0) {
         error = "sws_scale failed";
         return nullptr;

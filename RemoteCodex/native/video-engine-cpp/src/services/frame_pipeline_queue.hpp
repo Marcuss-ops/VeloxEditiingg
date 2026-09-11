@@ -17,8 +17,8 @@ namespace velox::media::pipeline_detail {
 // producer publishes a slot with a release store on its cursor, the consumer
 // reads it with an acquire load on the same cursor. A mutex/condition-variable
 // pair exists only for the blocking slow path (queue full/empty) and for
-// shutdown wakeup; the fast path never touches it and never reads the clock
-// more than once (depth sampling).
+// shutdown wakeup. Depth telemetry is sampled in batches so the healthy fast
+// path does not read the clock for every hand-off.
 //
 // Each side integrates its own depth/time samples so the averageDepth metric
 // stays single-writer per field (no shared cache line between the two stage
@@ -39,18 +39,40 @@ public:
     int64_t emptyWaitMs() const;
     int64_t fullWaitNs() const;
     int64_t emptyWaitNs() const;
-    int64_t averageDepth() const;
+    int64_t averageDepth();
 
 private:
     using Clock = std::chrono::steady_clock;
 
-    static int64_t elapsedNs(const Clock::time_point& start);
+    static int64_t elapsedNs(const Clock::time_point& start,
+                             const Clock::time_point& end);
     static int64_t nsToMs(int64_t ns);
 
     // Per-side depth/time integral. Each is called only by its owning stage
     // thread, so the fields below need no synchronization.
-    void sampleDepthProducer(std::size_t depth);
-    void sampleDepthConsumer(std::size_t depth);
+    void sampleDepthProducer(std::size_t depth, Clock::time_point now);
+    void sampleDepthConsumer(std::size_t depth, Clock::time_point now);
+
+    static constexpr std::size_t kDepthSampleInterval = 32;
+
+    struct alignas(64) ProducerMetrics {
+        int64_t high_water{0};
+        int64_t full_wait_ns{0};
+        Clock::time_point last_sample{Clock::now()};
+        int64_t last_depth{0};
+        int64_t depth_ns{0};
+        int64_t window_ns{0};
+        std::size_t operations{0};
+    };
+
+    struct alignas(64) ConsumerMetrics {
+        int64_t empty_wait_ns{0};
+        Clock::time_point last_sample{Clock::now()};
+        int64_t last_depth{0};
+        int64_t depth_ns{0};
+        int64_t window_ns{0};
+        std::size_t operations{0};
+    };
 
     int capacity_;
     std::vector<int> slots_;
@@ -69,20 +91,11 @@ private:
     std::atomic<bool> done_{false};
     std::atomic<int> waiters_{0};
 
-    // Producer-private metrics.
-    int64_t high_water_{0};
-    int64_t full_wait_ns_{0};
-    Clock::time_point last_sample_producer_{Clock::now()};
-    int64_t last_depth_producer_{0};
-    int64_t depth_ns_producer_{0};
-    int64_t window_ns_producer_{0};
-
-    // Consumer-private metrics.
-    int64_t empty_wait_ns_{0};
-    Clock::time_point last_sample_consumer_{Clock::now()};
-    int64_t last_depth_consumer_{0};
-    int64_t depth_ns_consumer_{0};
-    int64_t window_ns_consumer_{0};
+    // Explicit cache-line separation is part of the SPSC telemetry contract:
+    // producer and consumer update disjoint lines while the data cursors are
+    // being handed off.
+    ProducerMetrics producer_metrics_;
+    ConsumerMetrics consumer_metrics_;
 };
 
 } // namespace velox::media::pipeline_detail

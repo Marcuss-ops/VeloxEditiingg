@@ -52,7 +52,7 @@ struct ProbeCacheShard {
 ProbeCacheShard g_probeCacheShards[kProbeCacheShards];
 
 inline ProbeCacheShard& shardFor(const fs::path& mediaPath) {
-    const std::size_t h = std::hash<std::string>{}(mediaPath.string());
+    const std::size_t h = fs::hash_value(mediaPath);
     return g_probeCacheShards[h % kProbeCacheShards];
 }
 
@@ -252,7 +252,7 @@ std::optional<MediaProbeResult> probeOpenContext(const fs::path& mediaPath) {
 } // namespace
 
 std::optional<MediaProbeResult> probeMediaInProcess(const fs::path& mediaPath) {
-    if (mediaPath.empty() || !fs::is_regular_file(mediaPath)) {
+    if (mediaPath.empty()) {
         return std::nullopt;
     }
     if (auto cached = probeCacheLookup(mediaPath)) {

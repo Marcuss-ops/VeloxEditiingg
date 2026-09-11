@@ -65,7 +65,7 @@ bool EncoderStage::drain(std::string& error) {
             error = "av_interleaved_write_frame failed";
             return false;
         }
-        config_.encoded_packets->fetch_add(1);
+        ++*config_.encoded_packets;
     }
 }
 

@@ -10,7 +10,6 @@ extern "C" {
 #include <libavformat/avformat.h>
 }
 
-#include <atomic>
 #include <cstdint>
 #include <string>
 
@@ -26,8 +25,8 @@ struct DecoderStageConfig {
     int64_t source_start_us{0};
     int64_t source_end_us{0};
     int64_t stream_start_us{0};
-    std::atomic<int64_t>* decoded_frames{nullptr};
-    std::atomic<bool>* source_window_complete{nullptr};
+    int64_t* decoded_frames{nullptr};
+    bool* source_window_complete{nullptr};
 };
 
 class DecoderStage {

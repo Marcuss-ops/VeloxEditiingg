@@ -14,7 +14,8 @@ bool BoundedQueue::push(int value) {
     // Fast path is lock-free: one acquire load of the consumer cursor, one
     // release store of the producer cursor. The mutex is touched only when
     // the ring is full (blocking wait) or after shutdown.
-    const auto wait_start = Clock::now();
+    bool blocked = false;
+    Clock::time_point wait_start{};
     while (true) {
         const std::size_t tail = tail_.load(std::memory_order_relaxed);
         const std::size_t head = head_.load(std::memory_order_acquire);
@@ -24,12 +25,18 @@ bool BoundedQueue::push(int value) {
             break;
         }
         if (done_.load(std::memory_order_acquire)) {
-            full_wait_ns_ += elapsedNs(wait_start);
+            if (blocked) {
+                producer_metrics_.full_wait_ns += elapsedNs(wait_start, Clock::now());
+            }
             return false;
         }
         // Ring full and not shutting down: block on the slow-path CV. A pop
         // notifies the waiter; the predicate closes the check-to-sleep race.
         std::unique_lock<std::mutex> lock(wait_mutex_);
+        if (!blocked) {
+            wait_start = Clock::now();
+            blocked = true;
+        }
         waiters_.fetch_add(1, std::memory_order_relaxed);
         wait_cv_.wait(lock, [&] {
             return done_.load(std::memory_order_acquire) ||
@@ -39,15 +46,21 @@ bool BoundedQueue::push(int value) {
         });
         waiters_.fetch_sub(1, std::memory_order_relaxed);
     }
-    full_wait_ns_ += elapsedNs(wait_start);
+    const auto now = blocked ? Clock::now() : Clock::time_point{};
+    if (blocked) {
+        producer_metrics_.full_wait_ns += elapsedNs(wait_start, now);
+    }
 
     // Producer-private depth sample: no shared cache line with the consumer.
     const std::size_t depth =
         tail_.load(std::memory_order_relaxed) -
         head_.load(std::memory_order_acquire);
-    high_water_ = std::max<int64_t>(high_water_,
-                                    static_cast<int64_t>(depth));
-    sampleDepthProducer(depth);
+    producer_metrics_.high_water = std::max<int64_t>(
+        producer_metrics_.high_water, static_cast<int64_t>(depth));
+    ++producer_metrics_.operations;
+    if (blocked || producer_metrics_.operations % kDepthSampleInterval == 0) {
+        sampleDepthProducer(depth, blocked ? now : Clock::now());
+    }
     if (waiters_.load(std::memory_order_relaxed) > 0) {
         wait_cv_.notify_one();
     }
@@ -57,7 +70,8 @@ bool BoundedQueue::push(int value) {
 bool BoundedQueue::pop(int& value) {
     // Symmetric lock-free fast path: one acquire load of the producer cursor,
     // one release store of the consumer cursor.
-    const auto wait_start = Clock::now();
+    bool blocked = false;
+    Clock::time_point wait_start{};
     while (true) {
         const std::size_t head = head_.load(std::memory_order_relaxed);
         const std::size_t tail = tail_.load(std::memory_order_acquire);
@@ -67,13 +81,19 @@ bool BoundedQueue::pop(int& value) {
             break;
         }
         if (done_.load(std::memory_order_acquire)) {
-            empty_wait_ns_ += elapsedNs(wait_start);
+            if (blocked) {
+                consumer_metrics_.empty_wait_ns += elapsedNs(wait_start, Clock::now());
+            }
             return false;
         }
         // Ring empty and not shutting down: block on the slow-path CV. A
         // push notifies the waiter; the predicate closes the check-to-sleep
         // race.
         std::unique_lock<std::mutex> lock(wait_mutex_);
+        if (!blocked) {
+            wait_start = Clock::now();
+            blocked = true;
+        }
         waiters_.fetch_add(1, std::memory_order_relaxed);
         wait_cv_.wait(lock, [&] {
             return done_.load(std::memory_order_acquire) ||
@@ -82,13 +102,19 @@ bool BoundedQueue::pop(int& value) {
         });
         waiters_.fetch_sub(1, std::memory_order_relaxed);
     }
-    empty_wait_ns_ += elapsedNs(wait_start);
+    const auto now = blocked ? Clock::now() : Clock::time_point{};
+    if (blocked) {
+        consumer_metrics_.empty_wait_ns += elapsedNs(wait_start, now);
+    }
 
     // Consumer-private depth sample.
     const std::size_t depth =
         tail_.load(std::memory_order_acquire) -
         head_.load(std::memory_order_relaxed);
-    sampleDepthConsumer(depth);
+    ++consumer_metrics_.operations;
+    if (blocked || consumer_metrics_.operations % kDepthSampleInterval == 0) {
+        sampleDepthConsumer(depth, blocked ? now : Clock::now());
+    }
     if (waiters_.load(std::memory_order_relaxed) > 0) {
         wait_cv_.notify_one();
     }
@@ -107,52 +133,56 @@ void BoundedQueue::shutdown() {
     wait_cv_.notify_all();
 }
 
-int64_t BoundedQueue::highWater() const { return high_water_; }
-int64_t BoundedQueue::fullWaitMs() const { return nsToMs(full_wait_ns_); }
-int64_t BoundedQueue::emptyWaitMs() const { return nsToMs(empty_wait_ns_); }
-int64_t BoundedQueue::fullWaitNs() const { return full_wait_ns_; }
-int64_t BoundedQueue::emptyWaitNs() const { return empty_wait_ns_; }
+int64_t BoundedQueue::highWater() const { return producer_metrics_.high_water; }
+int64_t BoundedQueue::fullWaitMs() const { return nsToMs(producer_metrics_.full_wait_ns); }
+int64_t BoundedQueue::emptyWaitMs() const { return nsToMs(consumer_metrics_.empty_wait_ns); }
+int64_t BoundedQueue::fullWaitNs() const { return producer_metrics_.full_wait_ns; }
+int64_t BoundedQueue::emptyWaitNs() const { return consumer_metrics_.empty_wait_ns; }
 
-int64_t BoundedQueue::averageDepth() const {
+int64_t BoundedQueue::averageDepth() {
     // Each side integrated depth over its own observed window; the union of
     // the two windows covers the queue's lifetime, so the sum of the two
     // integrals divided by the sum of the two windows is the time-weighted
     // average depth (same semantics as the previous single-sampled version).
-    const int64_t window = window_ns_producer_ + window_ns_consumer_;
+    const auto now = Clock::now();
+    const std::size_t depth = tail_.load(std::memory_order_relaxed) -
+        head_.load(std::memory_order_acquire);
+    sampleDepthProducer(depth, now);
+    sampleDepthConsumer(depth, now);
+    const int64_t window = producer_metrics_.window_ns + consumer_metrics_.window_ns;
     if (window <= 0) {
         return 0;
     }
-    const double average = static_cast<double>(depth_ns_producer_ +
-                                               depth_ns_consumer_) /
+    const double average = static_cast<double>(producer_metrics_.depth_ns +
+                                               consumer_metrics_.depth_ns) /
                            static_cast<double>(window);
     return static_cast<int64_t>(average + 0.5);
 }
 
-int64_t BoundedQueue::elapsedNs(const Clock::time_point& start) {
+int64_t BoundedQueue::elapsedNs(const Clock::time_point& start,
+                                const Clock::time_point& end) {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(
-               Clock::now() - start).count();
+               end - start).count();
 }
 
 int64_t BoundedQueue::nsToMs(int64_t ns) {
     return (ns + 500'000) / 1'000'000;
 }
 
-void BoundedQueue::sampleDepthProducer(std::size_t depth) {
-    const auto now = Clock::now();
-    const int64_t delta = elapsedNs(last_sample_producer_);
-    depth_ns_producer_ += last_depth_producer_ * delta;
-    window_ns_producer_ += delta;
-    last_sample_producer_ = now;
-    last_depth_producer_ = static_cast<int64_t>(depth);
+void BoundedQueue::sampleDepthProducer(std::size_t depth, Clock::time_point now) {
+    const int64_t delta = elapsedNs(producer_metrics_.last_sample, now);
+    producer_metrics_.depth_ns += producer_metrics_.last_depth * delta;
+    producer_metrics_.window_ns += delta;
+    producer_metrics_.last_sample = now;
+    producer_metrics_.last_depth = static_cast<int64_t>(depth);
 }
 
-void BoundedQueue::sampleDepthConsumer(std::size_t depth) {
-    const auto now = Clock::now();
-    const int64_t delta = elapsedNs(last_sample_consumer_);
-    depth_ns_consumer_ += last_depth_consumer_ * delta;
-    window_ns_consumer_ += delta;
-    last_sample_consumer_ = now;
-    last_depth_consumer_ = static_cast<int64_t>(depth);
+void BoundedQueue::sampleDepthConsumer(std::size_t depth, Clock::time_point now) {
+    const int64_t delta = elapsedNs(consumer_metrics_.last_sample, now);
+    consumer_metrics_.depth_ns += consumer_metrics_.last_depth * delta;
+    consumer_metrics_.window_ns += delta;
+    consumer_metrics_.last_sample = now;
+    consumer_metrics_.last_depth = static_cast<int64_t>(depth);
 }
 
 } // namespace velox::media::pipeline_detail

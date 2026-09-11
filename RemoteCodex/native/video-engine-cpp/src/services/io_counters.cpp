@@ -5,14 +5,24 @@
 #include <sys/resource.h>
 #include <unordered_set>
 #include <chrono>
+#include <array>
+#include <string_view>
 
 namespace velox::services {
 
 namespace {
 IOCounters g_ioCounters;
-std::mutex g_openMutex;
-std::unordered_set<std::string> g_openedPaths;
+struct OpenPathShard {
+    std::mutex mu;
+    std::unordered_set<std::string> paths;
+};
+constexpr std::size_t kOpenPathShards = 16;
+std::array<OpenPathShard, kOpenPathShards> g_openedPathShards;
 std::chrono::steady_clock::time_point g_render_started;
+
+OpenPathShard& openPathShard(std::string_view path) {
+    return g_openedPathShards[std::hash<std::string_view>{}(path) % kOpenPathShards];
+}
 
 // leadingToken returns the first whitespace-delimited token of a
 // command string (the executable name), lowercased.
@@ -57,9 +67,9 @@ void resetIOCounters() {
     g_ioCounters.ffprobe_spawn_count.store(0);
     g_ioCounters.shell_spawn_count.store(0);
     g_ioCounters.curl_spawn_count.store(0);
-    {
-        std::lock_guard<std::mutex> lock(g_openMutex);
-        g_openedPaths.clear();
+    for (auto& shard : g_openedPathShards) {
+        std::lock_guard<std::mutex> lock(shard.mu);
+        shard.paths.clear();
     }
 }
 
@@ -78,8 +88,9 @@ void recordAssetCopy(int64_t bytes) {
 
 void recordInputOpen(const std::string& path) {
     g_ioCounters.input_open_count.fetch_add(1);
-    std::lock_guard<std::mutex> lock(g_openMutex);
-    if (g_openedPaths.insert(path).second == false) {
+    auto& shard = openPathShard(path);
+    std::lock_guard<std::mutex> lock(shard.mu);
+    if (!shard.paths.insert(path).second) {
         g_ioCounters.input_reopen_count.fetch_add(1);
     }
 }

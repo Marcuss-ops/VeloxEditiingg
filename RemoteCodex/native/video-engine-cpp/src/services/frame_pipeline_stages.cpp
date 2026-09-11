@@ -34,21 +34,15 @@ StageResult runStages(const StageConfig& config) {
     BoundedQueue& encode_queue = *config.encode_queue;
     FramePool& pool = *config.pool;
 
-    struct alignas(64) AlignedAtomicInt64 {
-        std::atomic<int64_t> value{0};
-    };
-    struct alignas(64) AlignedAtomicBool {
-        std::atomic<bool> value{false};
-    };
     std::atomic<bool> failed{false};
     std::mutex error_mutex;
     std::string stage_error;
-    AlignedAtomicInt64 decoded_frames;
-    AlignedAtomicInt64 encoded_packets;
-    AlignedAtomicInt64 bypass_frames;
-    AlignedAtomicInt64 producer_busy_ns;
-    AlignedAtomicInt64 consumer_elapsed_ns;
-    AlignedAtomicBool source_window_complete;
+    int64_t decoded_frames = 0;
+    int64_t encoded_packets = 0;
+    int64_t bypass_frames = 0;
+    int64_t producer_busy_ns = 0;
+    int64_t consumer_elapsed_ns = 0;
+    bool source_window_complete = false;
 
     const auto fail_stage = [&](const std::string& message) {
         std::lock_guard<std::mutex> lock(error_mutex);
@@ -68,7 +62,7 @@ StageResult runStages(const StageConfig& config) {
         return result;
     }
     EncoderStage encoder_stage(EncoderStageConfig{
-        config.encoder, config.output_stream, config.muxer, &encoded_packets.value});
+        config.encoder, config.output_stream, config.muxer, &encoded_packets});
     DecoderStage decoder_stage(DecoderStageConfig{
         config.demuxer,
         config.input_stream,
@@ -79,8 +73,8 @@ StageResult runStages(const StageConfig& config) {
         config.source_start_us,
         config.source_end_us,
         config.stream_start_us,
-        &decoded_frames.value,
-        &source_window_complete.value,
+        &decoded_frames,
+        &source_window_complete,
     });
 
     std::unique_ptr<AVPacket, void (*)(AVPacket*)> input_packet(
@@ -113,7 +107,7 @@ StageResult runStages(const StageConfig& config) {
                     av_packet_unref(input_packet.get());
                 }
             }
-            if (source_window_complete.value.load() || eof) {
+            if (source_window_complete || eof) {
                 if (eof && !failed.load()) {
                     std::string decoder_error;
                     if (!decoder_stage.flush(decoder_error)) {
@@ -131,16 +125,6 @@ StageResult runStages(const StageConfig& config) {
     std::thread render_thread([&]() {
         int64_t frame_index = 0;
         int index = 0;
-        int64_t pending_busy_ns = 0;
-        int64_t pending_bypass_frames = 0;
-        int pending_metric_frames = 0;
-        const auto flush_metrics = [&]() {
-            producer_busy_ns.value.fetch_add(pending_busy_ns, std::memory_order_relaxed);
-            bypass_frames.value.fetch_add(pending_bypass_frames, std::memory_order_relaxed);
-            pending_busy_ns = 0;
-            pending_bypass_frames = 0;
-            pending_metric_frames = 0;
-        };
         std::string render_error;
         while (!failed.load() && render_queue.pop(index)) {
             if (index < 0) {
@@ -152,15 +136,14 @@ StageResult runStages(const StageConfig& config) {
             AVFrame* rendered = filter_chain.apply(
                 source, index, pool, config.source_height,
                 frame_cpu_busy_ns, render_error);
-            pending_busy_ns += frame_cpu_busy_ns;
-            ++pending_metric_frames;
+            producer_busy_ns += frame_cpu_busy_ns;
             if (rendered == nullptr) {
                 fail_stage(render_error);
                 pool.release(index);
                 break;
             }
             if (filter_chain.bypass()) {
-                ++pending_bypass_frames;
+                ++bypass_frames;
             }
             rendered->pts = frame_index++;
             rendered->pict_type = AV_PICTURE_TYPE_NONE;
@@ -168,11 +151,7 @@ StageResult runStages(const StageConfig& config) {
                 pool.release(index);
                 break;
             }
-            if (pending_metric_frames >= 32) {
-                flush_metrics();
-            }
         }
-        flush_metrics();
     });
 
     std::thread encode_thread([&]() {
@@ -199,10 +178,9 @@ StageResult runStages(const StageConfig& config) {
                 fail_stage(encoder_error);
             }
         }
-        consumer_elapsed_ns.value.store(
+        consumer_elapsed_ns =
             std::chrono::duration_cast<std::chrono::nanoseconds>(
-                std::chrono::steady_clock::now() - thread_start).count(),
-            std::memory_order_relaxed);
+                std::chrono::steady_clock::now() - thread_start).count();
     });
 
     decode_thread.join();
@@ -215,19 +193,19 @@ StageResult runStages(const StageConfig& config) {
     }
 
     result.success = true;
-    result.frames_decoded = decoded_frames.value.load(std::memory_order_relaxed);
-    result.frames_encoded = encoded_packets.value.load(std::memory_order_relaxed);
+    result.frames_decoded = decoded_frames;
+    result.frames_encoded = encoded_packets;
     result.frames_composited = 0;
-    result.transform_bypass_frames = bypass_frames.value.load(std::memory_order_relaxed);
+    result.transform_bypass_frames = bypass_frames;
     result.peak_pool_usage = pool.peakUsage();
     result.peak_render_queue = render_queue.highWater();
     result.peak_encode_queue = encode_queue.highWater();
 
-    const int64_t producer_busy_ns_value = producer_busy_ns.value.load(std::memory_order_relaxed);
+    const int64_t producer_busy_ns_value = producer_busy_ns;
     const int64_t producer_wait_ns =
         render_queue.emptyWaitNs() + encode_queue.fullWaitNs();
     const int64_t consumer_wait_ns = encode_queue.emptyWaitNs();
-    const int64_t consumer_elapsed_ns_value = consumer_elapsed_ns.value.load(std::memory_order_relaxed);
+    const int64_t consumer_elapsed_ns_value = consumer_elapsed_ns;
     int64_t consumer_busy_ns = consumer_elapsed_ns_value - consumer_wait_ns;
     if (consumer_busy_ns < 0) {
         consumer_busy_ns = 0;

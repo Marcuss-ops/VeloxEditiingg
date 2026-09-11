@@ -53,6 +53,7 @@ RenderResult RenderEngine::renderCopyOnly(
 
     media::CopyOnlyMuxRequest request;
     request.output_path = outPath;
+    request.compute_sha256 = false;
     // Emit progressive-safe byte ranges during the mux so the Go upload
     // can start before the mux finishes.  The partial path is reported
     // because that is where the sink writes; the Go side opens it and

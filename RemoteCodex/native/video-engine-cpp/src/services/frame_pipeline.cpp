@@ -83,6 +83,14 @@ bool renderFrames(const FramePipelineConfig& config, FramePipelineResult* result
         setError(result, "frame pipeline requires a codec name");
         return false;
     }
+    if (config.width < 0 || config.height < 0) {
+        setError(result, "frame pipeline dimensions must be zero or positive");
+        return false;
+    }
+    if (config.decoder_threads < 0 || config.encoder_threads < 0) {
+        setError(result, "frame pipeline thread counts must be zero or positive");
+        return false;
+    }
 
     fs::path parent = config.output_path.parent_path();
     std::error_code ec;
@@ -184,7 +192,16 @@ bool renderFrames(const FramePipelineConfig& config, FramePipelineResult* result
     encoder_context->height = out_height;
     encoder_context->pix_fmt = AV_PIX_FMT_YUV420P;
     if (encoder->pix_fmts != nullptr && encoder->pix_fmts[0] != AV_PIX_FMT_NONE) {
-        encoder_context->pix_fmt = encoder->pix_fmts[0];
+        bool source_format_supported = false;
+        for (const AVPixelFormat* format = encoder->pix_fmts;
+             *format != AV_PIX_FMT_NONE; ++format) {
+            if (*format == decoder_context->pix_fmt) {
+                source_format_supported = true;
+                break;
+            }
+        }
+        encoder_context->pix_fmt = source_format_supported
+            ? decoder_context->pix_fmt : encoder->pix_fmts[0];
     }
     encoder_context->time_base = AVRational{config.fps_den, config.fps_num};
     encoder_context->framerate = AVRational{config.fps_num, config.fps_den};
@@ -193,9 +210,16 @@ bool renderFrames(const FramePipelineConfig& config, FramePipelineResult* result
     encoder_context->bit_rate = 0;
     if (config.codec == "libx264") {
         if (!config.preset.empty()) {
-            av_opt_set(encoder_context->priv_data, "preset", config.preset.c_str(), 0);
+            if (av_opt_set(encoder_context->priv_data, "preset",
+                           config.preset.c_str(), 0) < 0) {
+                setError(result, "failed to set encoder preset");
+                return false;
+            }
         }
-        av_opt_set_int(encoder_context->priv_data, "crf", 23, 0);
+        if (av_opt_set_int(encoder_context->priv_data, "crf", 23, 0) < 0) {
+            setError(result, "failed to set encoder crf");
+            return false;
+        }
     }
     if (config.encoder_threads > 0) {
         encoder_context->thread_count = config.encoder_threads;
@@ -211,7 +235,8 @@ bool renderFrames(const FramePipelineConfig& config, FramePipelineResult* result
     pipeline_detail::FramePool pool;
     std::string pool_error;
     if (!pool.init(config.pool_capacity, src_width, src_height,
-                   out_width, out_height, !transform_bypass, pool_error)) {
+                   out_width, out_height, !transform_bypass,
+                   encoder_context->pix_fmt, pool_error)) {
         setError(result, pool_error);
         return false;
     }
