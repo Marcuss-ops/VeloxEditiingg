@@ -166,8 +166,7 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 	duration := time.Since(startTime)
 	if report != nil {
 		// The execute phase marker is the canonical lifecycle timing. Do not
-		// read pipeline.render_ms from the deprecated report map: that map is
-		// only a compatibility projection for unmigrated consumers.
+		// reconstruct it from executor-specific metric fields.
 		if renderDuration, ok := report.RenderDuration(); ok {
 			duration = renderDuration
 		}

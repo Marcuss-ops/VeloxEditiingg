@@ -9,7 +9,6 @@ import (
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/publisher"
 	"velox-worker-agent/internal/telemetry"
-	"velox-worker-agent/pkg/performance"
 	"velox-worker-agent/pkg/video/pipeline"
 )
 
@@ -27,7 +26,7 @@ import (
 // verbatim (outputs and outputManifest are nil). On success it returns the
 // artifact references and the primary manifest for the caller's final
 // quality telemetry and plan completion.
-func verifyAndBuildOutputs(ctx context.Context, outputPath string, startedAt time.Time, metrics map[string]interface{}, rawMetrics *telemetry.RawExecutionMetrics, runMetrics pipeline.RunMetrics, clipCount int, planHandle *telemetry.EventHandle, rec *telemetry.EventRecorder) (outputs []executor.ArtifactRef, outputManifest *publisher.OutputManifest, failResult *executor.ExecutionResult) {
+func verifyAndBuildOutputs(ctx context.Context, outputPath string, startedAt time.Time, rawMetrics *telemetry.RawExecutionMetrics, runMetrics pipeline.RunMetrics, planHandle *telemetry.EventHandle, rec *telemetry.EventRecorder) (outputs []executor.ArtifactRef, outputManifest *publisher.OutputManifest, failResult *executor.ExecutionResult) {
 	// Compute output file hash and size for artifact metadata. The artifact
 	// clock starts only after rendering has completed: it must not include
 	// compile/render time, otherwise artifact_total_ms is mislabeled.
@@ -36,20 +35,17 @@ func verifyAndBuildOutputs(ctx context.Context, outputPath string, startedAt tim
 	// real manifest before this executor can report success.
 	var outputHash string
 	var outputSize int64
-	artifactStarted := time.Now()
 	if rec != nil {
 		rec.Emit(telemetry.EventSpec{Origin: telemetry.OriginValidation, Scope: telemetry.ScopeAttempt, Component: "quality", Action: "sha256"}, telemetry.StatusOK, "", "")
 	}
 	outputManifest, manifestErr := publisher.ComputeLocalManifest(ctx, outputPath)
 	if manifestErr != nil {
 		planHandle.Abort("quality_manifest", manifestErr.Error())
-		metrics["output.manifest_error"] = manifestErr.Error()
 		return nil, nil, &executor.ExecutionResult{
 			Status:      "failed",
 			ErrorCode:   "output_manifest_missing",
 			ErrorDetail: fmt.Sprintf("render output manifest: %v", manifestErr),
 			RawMetrics:  rawMetrics,
-			Metrics:     metrics,
 			StartedAt:   startedAt,
 			CompletedAt: time.Now().UTC(),
 		}
@@ -65,21 +61,19 @@ func verifyAndBuildOutputs(ctx context.Context, outputPath string, startedAt tim
 	outputSize = outputManifest.SizeBytes
 	// Keep the historical output.hash_ms key, but make it mean exactly the
 	// streaming SHA phase rather than the complete manifest operation.
-	metrics["output.hash_ms"] = outputManifest.Timings.SHA256MS
+	rawMetrics.Sha256Ms = outputManifest.Timings.SHA256MS
+	rawMetrics.FfprobeMs = outputManifest.Timings.FfprobeMS
 	if outputSize <= 0 {
 		planHandle.Abort("quality_empty", "render output manifest has zero bytes")
-		metrics["output.manifest_error"] = "render output is empty"
 		return nil, nil, &executor.ExecutionResult{
 			Status:      "failed",
 			ErrorCode:   "output_manifest_empty",
 			ErrorDetail: "render output manifest has zero bytes",
 			RawMetrics:  rawMetrics,
-			Metrics:     metrics,
 			StartedAt:   startedAt,
 			CompletedAt: time.Now().UTC(),
 		}
 	}
-	metrics["output.bytes"] = outputSize
 	rawMetrics.OutputBytes = outputSize
 	rawMetrics.OutputFileSize = outputSize
 	rawMetrics.OutputSha256 = outputHash
@@ -87,30 +81,14 @@ func verifyAndBuildOutputs(ctx context.Context, outputPath string, startedAt tim
 	rawMetrics.HasVideoStream = outputManifest.HasVideoStream
 	rawMetrics.HasAudioStream = outputManifest.HasAudioStream
 	rawMetrics.AudioTrackCount = int32(outputManifest.AudioTrackCount)
-	// Re-project amplification with the VERIFIED artifact size (the
-	// manifest is the publisher's authoritative byte count). The other
-	// derived KPIs do not depend on the output size and are already
-	// final.
-	derivedVerified := performance.DerivedFromRenderMetrics(runMetrics.RenderMetrics, runMetrics.TotalMs, clipCount, outputSize)
-	metrics["derived.read_amplification"] = derivedVerified.ReadAmplification
-	metrics["derived.write_amplification"] = derivedVerified.WriteAmplification
 	// Quality telemetry must describe the artifact that was actually
 	// produced. ComputeLocalManifest has already hashed and ffprobed this
 	// final file; do not infer these values from the render plan or emit a
 	// synthetic success flag.
-	metrics["quality.ffprobe.valid"] = int64(boolToInt(outputManifest.FfprobeValid))
-	metrics["quality.ffprobe.ok"] = int64(boolToInt(outputManifest.FfprobeOK))
-	metrics["quality.has.video.stream"] = outputManifest.HasVideoStream
-	metrics["quality.has.audio.stream"] = outputManifest.HasAudioStream
-	metrics["quality.audio.track.count"] = int64(outputManifest.AudioTrackCount)
-	metrics["quality.video.codec"] = outputManifest.Codec
-	metrics["quality.audio.codec"] = outputManifest.AudioCodec
-	metrics["quality.output.file.size"] = outputManifest.SizeBytes
-	metrics["output.file.size"] = outputManifest.SizeBytes
-	if outputManifest.FfprobeErr != "" {
-		metrics["quality.ffprobe.error"] = outputManifest.FfprobeErr
+	if !outputManifest.FfprobeValid {
+		rawMetrics.ErrorComponent = "quality"
+		rawMetrics.ErrorPhase = "ffprobe"
 	}
-	metrics["executor.total_ms"] = time.Since(startedAt).Milliseconds()
 
 	outputs = []executor.ArtifactRef{{Type: "render.output", Hash: outputHash, URI: outputPath, SizeBytes: outputSize}}
 	sidecarPath := outputPath + ".progress.json"
@@ -127,24 +105,20 @@ func verifyAndBuildOutputs(ctx context.Context, outputPath string, startedAt tim
 			URI:       sidecarPath,
 			SizeBytes: sidecarManifest.SizeBytes,
 		})
-		metrics["sidecar.present"] = true
-		metrics["sidecar.bytes"] = sidecarManifest.SizeBytes
-		projectRenderProfile(metrics, runMetrics, outputManifest.Timings.SHA256MS, outputManifest.Timings.FfprobeMS, sidecarManifest.Timings.TotalMS, time.Since(artifactStarted).Milliseconds())
+		rawMetrics.OutputFinalizeMs = sidecarManifest.Timings.TotalMS
+		rawMetrics.JobTotalMs = time.Since(startedAt).Milliseconds()
 	} else {
 		// The sidecar is the renderer's progress receipt and is part of
 		// the artifact contract. Do not silently report success without
 		// it: the worker cannot register a complete operation receipt.
-		metrics["sidecar.present"] = false
 		if sidecarErr == nil {
 			sidecarErr = errors.New("render progress sidecar is empty")
 		}
-		metrics["sidecar.error"] = sidecarErr.Error()
 		return nil, nil, &executor.ExecutionResult{
 			Status:      "failed",
 			ErrorCode:   "progress_sidecar_missing",
 			ErrorDetail: fmt.Sprintf("render progress sidecar manifest: %v", sidecarErr),
 			RawMetrics:  rawMetrics,
-			Metrics:     metrics,
 			StartedAt:   startedAt,
 			CompletedAt: time.Now().UTC(),
 		}

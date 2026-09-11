@@ -91,16 +91,6 @@ func runCommandExecutor(ctx context.Context, e *renderPlanExecutor, spec executo
 		Operation: operationForOutputType(outputType),
 		Args:      cp.Args,
 	})
-	// Attempt-scoped aggregation: when the execution context exposes the
-	// per-attempt sink, fold this process into it so the report can answer
-	// "N processes → total spawn/setup vs total processing" per attempt.
-	if sink, ok := execCtx.(interface {
-		FFmpegProfiles() *ffmpegrunner.Aggregator
-	}); ok {
-		if sink.FFmpegProfiles() != nil {
-			sink.FFmpegProfiles().Add(result)
-		}
-	}
 	profile := ffmpegProfileMetadata(result)
 	rawMetrics := rawMetricsFromFFmpegResult(result)
 	commandHandle.SetMetadata("executor_id", cp.ExecutorID)
@@ -111,12 +101,8 @@ func runCommandExecutor(ctx context.Context, e *renderPlanExecutor, spec executo
 		detail := fmt.Errorf("%w (exit_code=%d signal=%v)", runErr, result.ExitCode, result.TerminatedBySignal)
 		return executor.ExecutionResult{
 			Status: "failed", ErrorCode: "command_failed", ErrorDetail: detail.Error(),
-			RawMetrics: rawMetrics, Metrics: func() map[string]interface{} {
-				projection := make(map[string]interface{})
-				projection["ffmpeg_profile"] = profile
-				return projection
-			}(),
-			StartedAt: started, CompletedAt: time.Now().UTC(),
+			RawMetrics: rawMetrics,
+			StartedAt:  started, CompletedAt: time.Now().UTC(),
 		}, nil
 	}
 	commandHandle.CompleteWith(0, 0, 0, telemetry.StatusOK, "", "")
@@ -124,26 +110,24 @@ func runCommandExecutor(ctx context.Context, e *renderPlanExecutor, spec executo
 	if err != nil {
 		return executor.ExecutionResult{
 			Status: "failed", ErrorCode: "artifact_invalid", ErrorDetail: err.Error(),
-			RawMetrics: rawMetrics, Metrics: map[string]interface{}{"ffmpeg_profile": profile},
-			StartedAt: started, CompletedAt: time.Now().UTC(),
+			RawMetrics: rawMetrics,
+			StartedAt:  started, CompletedAt: time.Now().UTC(),
 		}, nil
 	}
-	metrics := make(map[string]interface{})
-	metrics["command_plan"] = cp.Canonical()
-	metrics["render_plan_sha256"] = cp.PlanSHA256
-	metrics["ffmpeg_profile"] = profile
 	// Determinism chain on the wire: when the master delivered the compiled
-	// plan (Fase D), surface its identity so the attempt report shows which
-	// compiled plan drove this command. Additive — absent payloads emit none.
+	// plan (Fase D), attach its identity to the canonical engine event. This
+	// avoids a second metrics transport for command diagnostics.
+	commandHandle.SetMetadata("command_plan", cp.Canonical())
+	commandHandle.SetMetadata("render_plan_sha256", cp.PlanSHA256)
 	if compiled := compiledPlanEvidence(spec); compiled != nil {
 		for key, value := range compiled {
-			metrics[key] = value
+			commandHandle.SetMetadata(key, value)
 		}
 	}
 	return executor.ExecutionResult{
 		Status: "succeeded", Outputs: []executor.ArtifactRef{artifact},
-		RawMetrics: rawMetrics, Metrics: metrics,
-		StartedAt: started, CompletedAt: time.Now().UTC(),
+		RawMetrics: rawMetrics,
+		StartedAt:  started, CompletedAt: time.Now().UTC(),
 	}, nil
 }
 
@@ -227,32 +211,7 @@ func (e *audioMixExecutor) Execute(ctx context.Context, execCtx executor.Executi
 		return failedResult(started, "validation_failed", err), nil
 	}
 	result, runErr := runCommandExecutor(ctx, e.renderPlanExecutor, spec, cp, "audio.mix", execCtx)
-	if result.Metrics == nil {
-		result.Metrics = map[string]interface{}{}
-	}
-	sfxOffsets := make([]float64, 0, len(p.AudioTracks))
-	for _, track := range p.AudioTracks {
-		if strings.EqualFold(track.Role, "sfx") || strings.EqualFold(track.Role, "whoosh") {
-			sfxOffsets = append(sfxOffsets, track.StartTimeOffset)
-		}
-	}
-	result.Metrics["audio_mix_evidence"] = map[string]interface{}{
-		"voiceover_events": countRole(p.AudioTracks, "voiceover"),
-		"music_events":     countRole(p.AudioTracks, "music"),
-		"sfx_events":       len(sfxOffsets),
-		"sfx_timestamps":   sfxOffsets,
-	}
 	return result, runErr
-}
-
-func countRole(tracks []plan.AudioTrack, role string) int {
-	count := 0
-	for _, track := range tracks {
-		if strings.EqualFold(track.Role, role) {
-			count++
-		}
-	}
-	return count
 }
 
 func buildAudioMixPlan(spec executor.TaskSpec, p *plan.RenderPlan, output string) (CommandPlan, error) {

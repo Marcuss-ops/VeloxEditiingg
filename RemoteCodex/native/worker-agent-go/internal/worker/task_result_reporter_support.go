@@ -58,9 +58,6 @@ func buildTaskResult(r *taskResultReporter, pte *PendingTaskExecution, taskID, a
 	if metrics == nil {
 		metrics = report.TypedMetrics
 	}
-	if metrics == nil && len(report.Metrics) > 0 {
-		metrics = taskrunner.TypedMetricsFromMap(report.Metrics)
-	}
 	if metrics != nil {
 		copyMetrics := *metrics
 		if copyMetrics.OutputSha256 == "" && len(report.Outputs) > 0 {

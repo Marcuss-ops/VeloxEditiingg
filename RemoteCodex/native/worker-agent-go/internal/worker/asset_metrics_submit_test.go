@@ -11,6 +11,7 @@ import (
 	pb "velox-shared/controltransport/pb"
 
 	"velox-worker-agent/internal/taskrunner"
+	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/config"
 	"velox-worker-agent/pkg/logger"
 )
@@ -202,19 +203,11 @@ func TestSubmitTaskResult_FailedRenderPreservesDetailedPhases(t *testing.T) {
 		Status:      "failed",
 		ErrorCode:   "EXECUTE_FAILED",
 		ErrorDetail: "encoder crashed",
-		Metrics: map[string]interface{}{
-			"engine.frames":             int64(144),
-			"engine.speed_x":            float64(1.75),
-			"engine.encode_passes":      int64(2),
-			"native.total_ms":           int64(2500),
-			"quality.ffprobe.valid":     int64(1),
-			"quality.black.frame.ratio": float64(0.02),
-			"io.disk.read.bytes":        int64(4096),
-			"wasted.cpu.ms":             int64(88),
-			"wasted.download.bytes":     int64(512),
-			"completed.segments":        int64(2),
-			"error.component":           "engine",
-			"error.phase":               "encode",
+		RawMetrics: &telemetry.RawExecutionMetrics{
+			FramesEncoded: 144, FfmpegSpeedRatio: 1.75, EncodePasses: 2,
+			WallClockSeconds: 2.5, FfprobeValid: 1, BlackFrameRatio: 0.02,
+			DiskReadBytes: 4096, WastedCpuMs: 88, WastedDownloadBytes: 512,
+			CompletedSegments: 2, ErrorComponent: "engine", ErrorPhase: "encode",
 		},
 		Segments: []taskrunner.SegmentTiming{{
 			SegmentIndex: 3, StartedOffsetMS: 1.5, FinishedOffsetMS: 7.25,

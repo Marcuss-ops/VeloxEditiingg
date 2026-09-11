@@ -165,14 +165,9 @@ func TestRunCommandExecutor_SurfacesCompiledPlanEvidence(t *testing.T) {
 		t.Fatalf("Status = %q, want succeeded (%s)", result.Status, result.ErrorDetail)
 	}
 	wantSHA := compiledPlanSHAForTest(validCompiledPlanForTest(t, jobID, "attempt-evidence"))
-	if got, _ := result.Metrics["compiled_render_plan_sha256"].(string); got != wantSHA {
-		t.Errorf("compiled_render_plan_sha256 = %v, want delivered sha %s", result.Metrics["compiled_render_plan_sha256"], wantSHA)
-	}
-	if got, _ := result.Metrics["compiled_render_plan_segments"].(int); got != 1 {
-		t.Errorf("compiled_render_plan_segments = %v, want 1", result.Metrics["compiled_render_plan_segments"])
-	}
-	if got, _ := result.Metrics["compiled_render_plan_version"].(int); got != renderplan.CompiledPlanVersion {
-		t.Errorf("compiled_render_plan_version = %v, want %d", result.Metrics["compiled_render_plan_version"], renderplan.CompiledPlanVersion)
+	evidence := compiledPlanEvidence(spec)
+	if evidence == nil || evidence["compiled_render_plan_sha256"] != wantSHA || evidence["compiled_render_plan_segments"] != 1 || evidence["compiled_render_plan_version"] != renderplan.CompiledPlanVersion {
+		t.Errorf("compiled plan evidence = %#v", evidence)
 	}
 }
 

@@ -45,7 +45,6 @@ func (f *fakeExec) Execute(ctx context.Context, ec executor.ExecutionContext, s 
 	return executor.ExecutionResult{
 		Status:      "succeeded",
 		Outputs:     []executor.ArtifactRef{{Type: "render.output", Hash: "deadbeef"}},
-		Metrics:     map[string]interface{}{"queue_ms": int64(42)},
 		StartedAt:   started,
 		CompletedAt: time.Now().UTC(),
 	}, nil
@@ -101,7 +100,6 @@ func TestRunner_Success(t *testing.T) {
 			return executor.ExecutionResult{
 				Status:      "succeeded",
 				Outputs:     []executor.ArtifactRef{{Type: "render.output", Hash: "deadbeef"}},
-				Metrics:     map[string]interface{}{"queue_ms": int64(42)},
 				StartedAt:   time.Now().UTC(),
 				CompletedAt: time.Now().UTC(),
 			}, nil
@@ -121,9 +119,6 @@ func TestRunner_Success(t *testing.T) {
 	}
 	if len(rep.Outputs) != 1 || rep.Outputs[0].Hash != "deadbeef" {
 		t.Errorf("Outputs mismatch: %+v", rep.Outputs)
-	}
-	if v, ok := rep.Metrics["queue_ms"]; !ok || v != int64(42) {
-		t.Errorf("Metrics[queue_ms] = %v, want int64(42)", v)
 	}
 	if rep.PhaseCount() < 5 {
 		t.Errorf("PhaseCount = %d, want >= 5 (all 5 phases should record on success)", rep.PhaseCount())
@@ -462,7 +457,6 @@ func TestRunner_Failure_DetailedPhases(t *testing.T) {
 			return executor.ExecutionResult{
 				Status:      "failed",
 				ErrorDetail: "boom",
-				Metrics:     map[string]interface{}{"engine.encode": float64(42)},
 				Segments: []executor.SegmentTiming{{
 					SegmentIndex: 3, StartedOffsetMS: 1.5, FinishedOffsetMS: 7.25,
 				}},
@@ -480,9 +474,6 @@ func TestRunner_Failure_DetailedPhases(t *testing.T) {
 	}
 	if rep.Succeeded() {
 		t.Fatal("expected failed")
-	}
-	if rep.Metrics["engine.encode"] != float64(42) {
-		t.Errorf("partial metrics = %#v, want engine.encode=42", rep.Metrics)
 	}
 	if len(rep.Segments) != 1 || rep.Segments[0].SegmentIndex != 3 || rep.Segments[0].FinishedOffsetMS != 7.25 {
 		t.Fatalf("partial segment timings = %#v", rep.Segments)

@@ -54,7 +54,6 @@ func (fakeSceneComposite) Execute(
 	return executor.ExecutionResult{
 		Status:      "succeeded",
 		Outputs:     nil,
-		Metrics:     map[string]interface{}{"fake_marker": "ok"},
 		StartedAt:   time.Now().UTC(),
 		CompletedAt: time.Now().UTC(),
 	}, nil

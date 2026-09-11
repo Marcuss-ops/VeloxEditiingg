@@ -110,8 +110,8 @@ func TestVideoAssembleCopy_UsesNativeV2WithoutFFmpegFallback(t *testing.T) {
 	if strings.Contains(string(client.planJSON), "ffmpeg") || !strings.Contains(string(client.planJSON), "bindings") {
 		t.Fatalf("native wire document does not reflect copy-only boundary: %s", client.planJSON)
 	}
-	if got := result.Metrics["frames_encoded"]; got != int64(0) {
-		t.Fatalf("frames_encoded = %v, want 0", got)
+	if result.RawMetrics == nil || result.RawMetrics.FramesEncoded != 0 {
+		t.Fatalf("raw frames_encoded = %#v, want 0", result.RawMetrics)
 	}
 }
 

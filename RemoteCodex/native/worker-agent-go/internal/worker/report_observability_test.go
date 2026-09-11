@@ -1,10 +1,13 @@
 package worker
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
 	"velox-worker-agent/internal/taskrunner"
+	"velox-worker-agent/internal/telemetry"
 )
 
 func TestAttachWorkerIdentityAndTimingsSplitsAudioWithoutFabrication(t *testing.T) {
@@ -12,26 +15,37 @@ func TestAttachWorkerIdentityAndTimingsSplitsAudioWithoutFabrication(t *testing.
 	report := &taskrunner.TaskExecutionReport{
 		StartedAt:   start,
 		CompletedAt: start.Add(2 * time.Second),
-		Metrics: map[string]interface{}{
-			"engine.audio_download_ms":                 float64(120),
-			"engine.audio_prepare_ms":                  float64(180),
-			"render_profile.compile_plan_ms":           int64(2400),
-			"render_profile.audio_timeline_compile_ms": int64(300),
-			"render_profile.artifact_sha_ms":           int64(800),
-			"render_profile.artifact_finalize_ms":      int64(120),
-			"render_profile.artifact_total_ms":         int64(920),
+		RawMetrics: &telemetry.RawExecutionMetrics{
+			AudioPrepareMs: 180, AudioTimelineBuildMs: 300,
+			Sha256Ms: 800, OutputFinalizeMs: 120,
 		},
 		DetailedPhases: []taskrunner.DetailedPhaseTiming{
+			{Component: "engine.audio", Action: "download", Phase: "audio_download", DurationMS: 120},
 			{Component: "engine.audio", Action: "mix", Phase: "audio", DurationMS: 1500},
 			{Component: "engine.audio", Action: "encode", Phase: "audio_encode", DurationMS: 900},
 			{Component: "engine.mux", Action: "audio", Phase: "encode", DurationMS: 300},
 		},
 	}
 	attachWorkerIdentityAndTimings("worker-01", report)
-	timings, ok := report.Metrics["timings_ms"].(map[string]float64)
-	if !ok {
-		t.Fatalf("timings_ms = %#v, want canonical timing map", report.Metrics["timings_ms"])
+	if len(report.PhaseMarkers) != 0 {
+		t.Fatal("test report unexpectedly contains phase markers")
 	}
+	// The summary is deliberately kept only in the existing phase-note
+	// channel; no report metrics map is required.
+	report.PhaseMarkers = []taskrunner.PhaseMarker{{Name: taskrunner.PhaseReport}}
+	attachWorkerIdentityAndTimings("worker-01", report)
+	const prefix = "worker_observability="
+	note := report.PhaseMarkers[0].Notes
+	if !strings.HasPrefix(note, prefix) {
+		t.Fatalf("phase note = %q, want worker observability prefix", note)
+	}
+	var envelope struct {
+		Timings map[string]float64 `json:"timings_ms"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(note, prefix)), &envelope); err != nil {
+		t.Fatalf("decode timing note: %v", err)
+	}
+	timings := envelope.Timings
 	if timings["audio_total_ms"] != 1500 {
 		t.Fatalf("audio_total_ms = %v, want 1500", timings["audio_total_ms"])
 	}
@@ -50,10 +64,10 @@ func TestAttachWorkerIdentityAndTimingsSplitsAudioWithoutFabrication(t *testing.
 	if timings["audio_encode_ms"] != 0 {
 		t.Fatalf("audio_encode_ms = %v, want zero because mix+AAC is one measured command", timings["audio_encode_ms"])
 	}
-	if timings["compile_plan_ms"] != 2400 || timings["audio_timeline_compile_ms"] != 300 {
-		t.Fatalf("render plan timings = %v/%v, want 2400/300", timings["compile_plan_ms"], timings["audio_timeline_compile_ms"])
+	if timings["compile_plan_ms"] != 0 || timings["audio_timeline_compile_ms"] != 300 {
+		t.Fatalf("render plan timings = %v/%v, want 0/300", timings["compile_plan_ms"], timings["audio_timeline_compile_ms"])
 	}
-	if timings["artifact_sha_ms"] != 800 || timings["artifact_finalize_ms"] != 120 || timings["artifact_total_ms"] != 920 {
-		t.Fatalf("artifact timings = %v/%v/%v, want 800/120/920", timings["artifact_sha_ms"], timings["artifact_finalize_ms"], timings["artifact_total_ms"])
+	if timings["artifact_sha_ms"] != 800 || timings["artifact_finalize_ms"] != 120 {
+		t.Fatalf("artifact timings = %v/%v, want 800/120", timings["artifact_sha_ms"], timings["artifact_finalize_ms"])
 	}
 }

@@ -136,13 +136,15 @@ func decodeFastAssemblyPlan(spec executor.TaskSpec) (*videoContract.CompiledRend
 }
 
 func certifyFastAssembly(jobID string, manifest assembly.FinalAssemblyManifest, plan *videoContract.CompiledRenderPlanV2, report taskrunner.TaskExecutionReport) (FastAssemblyCertificate, error) {
-	concatMode, ok := report.Metrics["concat_mode"].(string)
-	if !ok || concatMode != "packet_copy" {
-		return FastAssemblyCertificate{}, fmt.Errorf("fast assembly certificate rejected: concat_mode=%v, want packet_copy", report.Metrics["concat_mode"])
+	if report.RawMetrics == nil {
+		return FastAssemblyCertificate{}, fmt.Errorf("fast assembly certificate rejected: raw metrics are missing")
 	}
-	packetCopy, ok := report.Metrics["packet_copy"].(int64)
-	if !ok || packetCopy != 1 {
-		return FastAssemblyCertificate{}, fmt.Errorf("fast assembly certificate rejected: packet_copy=%v, want 1", report.Metrics["packet_copy"])
+	concatMode := report.RawMetrics.ConcatMode
+	if concatMode != "packet_copy" {
+		return FastAssemblyCertificate{}, fmt.Errorf("fast assembly certificate rejected: concat_mode=%q, want packet_copy", concatMode)
+	}
+	if !report.RawMetrics.FinalConcatStreamCopy {
+		return FastAssemblyCertificate{}, fmt.Errorf("fast assembly certificate rejected: packet_copy=false, want true")
 	}
 	if len(report.Outputs) != 1 || strings.TrimSpace(report.Outputs[0].Hash) == "" || report.Outputs[0].SizeBytes <= 0 {
 		return FastAssemblyCertificate{}, fmt.Errorf("fast assembly certificate rejected: final output lacks verified hash/size")
@@ -150,16 +152,9 @@ func certifyFastAssembly(jobID string, manifest assembly.FinalAssemblyManifest, 
 	return FastAssemblyCertificate{
 		JobID: jobID, ProfileID: plan.Output.ProfileID, TimelineRevision: manifest.TimelineRevision,
 		PreparationHash: manifest.PreparationHash, AssetCount: len(plan.Assets), ConcatMode: concatMode,
-		PacketCopy: true, FramesDecoded: metricInt64(report.Metrics, "frames_decoded"),
-		FramesEncoded: metricInt64(report.Metrics, "frames_encoded"), CertifiedAt: time.Now().UTC(),
+		PacketCopy: true, FramesDecoded: report.RawMetrics.FramesDecoded,
+		FramesEncoded: report.RawMetrics.FramesEncoded, CertifiedAt: time.Now().UTC(),
 	}, nil
-}
-
-func metricInt64(metrics map[string]interface{}, key string) int64 {
-	if value, ok := metrics[key].(int64); ok {
-		return value
-	}
-	return 0
 }
 
 func sameFastDigest(left, right string) bool {

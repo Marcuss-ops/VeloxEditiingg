@@ -26,15 +26,6 @@ func TestAttachAssetOperationsProjectsResolverCacheCounters(t *testing.T) {
 		},
 	}
 	attachAssetOperations(&report, tracker)
-	if report.Metrics["cache.enabled"] != true || report.Metrics["asset.cache.lookups"] != int64(2) || report.Metrics["cache.lookups"] != int64(2) {
-		t.Fatalf("cache summary = %#v", report.Metrics)
-	}
-	if report.Metrics["asset.cache.hit.count"] != int64(1) || report.Metrics["asset.cache.miss.count"] != int64(1) {
-		t.Fatalf("cache hit/miss counters = %#v", report.Metrics)
-	}
-	if report.Metrics["asset.cache.download.count"] != int64(1) || report.Metrics["asset.cache.download.bytes"] != int64(4096) {
-		t.Fatalf("cache download counters = %#v", report.Metrics)
-	}
 	if report.RawMetrics == nil {
 		t.Fatal("raw metrics are nil after resolver projection")
 	}
@@ -43,6 +34,9 @@ func TestAttachAssetOperationsProjectsResolverCacheCounters(t *testing.T) {
 	}
 	if report.TypedMetrics != report.RawMetrics {
 		t.Fatal("typed metrics must alias the canonical raw envelope")
+	}
+	if len(report.AssetOperations) != 2 {
+		t.Fatalf("asset operation records = %d, want 2", len(report.AssetOperations))
 	}
 }
 
@@ -81,20 +75,9 @@ func TestAssetPreparationSummary_AggregatesPerAttemptDrillDown(t *testing.T) {
 		t.Fatalf("download/hash/probe/materialize = %d/%d/%d/%d/%d", prep.DownloadWallMS, prep.DownloadWorkSum, prep.HashVerifyMS, prep.MetadataProbeMS, prep.MaterializeLocalMS)
 	}
 
-	// Projection into the report's legacy (master-bound) metrics keys.
+	// The report carries the drill-down through its structured field.
 	report := taskrunner.TaskExecutionReport{}
 	attachAssetOperations(&report, tracker)
-	m := report.Metrics
-	if m["assets_ready_before_attempt"] != int64(1) || m["assets_downloaded_during_attempt"] != int64(1) {
-		t.Fatalf("ready/downloaded projection = %v/%v", m["assets_ready_before_attempt"], m["assets_downloaded_during_attempt"])
-	}
-	prepBlock, ok := m["asset_preparation"].(map[string]int64)
-	if !ok {
-		t.Fatalf("asset_preparation block missing: %#v", m["asset_preparation"])
-	}
-	if prepBlock["cache_lookup_ms"] != 27 || prepBlock["remote_wait_ms"] != 9000 || prepBlock["network_download_wall_ms"] != 3200 || prepBlock["network_download_work_sum_ms"] != 3100 || prepBlock["hash_verify_ms"] != 40 || prepBlock["materialize_local_ms"] != 55 {
-		t.Fatalf("preparation projection = %#v", prepBlock)
-	}
 
 	// Typed wire drill-down: buildTaskResult maps this struct 1:1 onto
 	// pb.AssetPreparationBreakdown so the Master decodes the same measured
@@ -183,21 +166,19 @@ func TestAttachAssetOperationsToPhaseMarkersMakesRecordsReportable(t *testing.T)
 	start := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
 	end := start.Add(250 * time.Millisecond)
 	report := taskrunner.TaskExecutionReport{
-		Metrics: map[string]interface{}{
-			"asset_operations": []AssetOperationRecord{{
-				AssetID:             "asset-1",
-				CacheStatus:         "miss",
-				DownloadStartedAt:   start,
-				DownloadCompletedAt: end,
-				DownloadMS:          250,
-				DownloadedBytes:     42,
-				SHA256Verified:      true,
-				IntegrityCheck:      "sha256",
-				IntegrityValid:      true,
-				LocalPath:           "/worker/cache/asset-1.mp3",
-				Source:              "master_asset_bridge",
-			}},
-		},
+		AssetOperations: []AssetOperationRecord{{
+			AssetID:             "asset-1",
+			CacheStatus:         "miss",
+			DownloadStartedAt:   start,
+			DownloadCompletedAt: end,
+			DownloadMS:          250,
+			DownloadedBytes:     42,
+			SHA256Verified:      true,
+			IntegrityCheck:      "sha256",
+			IntegrityValid:      true,
+			LocalPath:           "/worker/cache/asset-1.mp3",
+			Source:              "master_asset_bridge",
+		}},
 		PhaseMarkers: []taskrunner.PhaseMarker{{
 			Name:        taskrunner.PhasePrefetch,
 			StartedAt:   start,

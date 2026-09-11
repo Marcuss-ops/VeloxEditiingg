@@ -11,7 +11,6 @@ import (
 	"velox-worker-agent/pkg/blob"
 	"velox-worker-agent/pkg/cache"
 	"velox-worker-agent/pkg/storage"
-	"velox-worker-agent/pkg/video/ffmpegrunner"
 )
 
 // CacheStatsProvider surfaces cache counters into the taskrunner for
@@ -56,13 +55,9 @@ type ContextOptions struct {
 	Artifacts  executor.ArtifactAccess
 
 	// PR-3.7: stats providers for surfacing cache + blob counters into
-	// TaskExecutionReport.Metrics. Optional; nil falls back to noop.
+	// RawMetrics provider enrichment. Optional; nil falls back to noop.
 	CacheStats CacheStatsProvider
 	BlobStats  BlobStatsProvider
-
-	// FFmpegProfiles is the attempt-scoped accumulator executors push
-	// every canonical FFmpegResult into. Optional; nil skips aggregation.
-	FFmpegProfiles *ffmpegrunner.Aggregator
 
 	// StorageResolver is the canonical Fase E1 placement resolver threaded
 	// from the worker. Optional; nil means executors fall back to their
@@ -89,18 +84,17 @@ type runnerContext struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	logger         executor.Logger
-	clock          executor.Clock
-	telemetry      executor.Telemetry
-	resources      executor.ResourceLimits
-	cache          executor.LocalCache
-	artifacts      executor.ArtifactAccess
-	cacheStats     CacheStatsProvider
-	blobStats      BlobStatsProvider
-	ffmpegProfiles *ffmpegrunner.Aggregator
-	storage        *storage.Resolver
-	phaseTimer     *telemetry.JobPhaseTimer
-	gpuTransfer    *telemetry.GPUTransferTracker
+	logger      executor.Logger
+	clock       executor.Clock
+	telemetry   executor.Telemetry
+	resources   executor.ResourceLimits
+	cache       executor.LocalCache
+	artifacts   executor.ArtifactAccess
+	cacheStats  CacheStatsProvider
+	blobStats   BlobStatsProvider
+	storage     *storage.Resolver
+	phaseTimer  *telemetry.JobPhaseTimer
+	gpuTransfer *telemetry.GPUTransferTracker
 }
 
 func newRunnerContext(opts ContextOptions) (*runnerContext, error) {
@@ -133,18 +127,18 @@ func newRunnerContext(opts ContextOptions) (*runnerContext, error) {
 	}
 	derived, cancel := context.WithCancel(opts.ParentCtx)
 	return &runnerContext{
-		spec:           opts.Spec,
-		ctx:            derived,
-		cancel:         cancel,
-		logger:         opts.Logger,
-		clock:          opts.Clock,
-		telemetry:      opts.Telemetry,
-		resources:      opts.Resources,
-		cache:          opts.LocalCache,
-		artifacts:      opts.Artifacts,
-		cacheStats:     opts.CacheStats,
-		blobStats:      opts.BlobStats,
-		ffmpegProfiles: opts.FFmpegProfiles, storage: opts.StorageResolver,
+		spec:        opts.Spec,
+		ctx:         derived,
+		cancel:      cancel,
+		logger:      opts.Logger,
+		clock:       opts.Clock,
+		telemetry:   opts.Telemetry,
+		resources:   opts.Resources,
+		cache:       opts.LocalCache,
+		artifacts:   opts.Artifacts,
+		cacheStats:  opts.CacheStats,
+		blobStats:   opts.BlobStats,
+		storage:     opts.StorageResolver,
 		phaseTimer:  opts.PhaseTimer,
 		gpuTransfer: opts.GPUTransferTracker,
 	}, nil
@@ -175,19 +169,10 @@ func (c *runnerContext) Recorder() *telemetry.EventRecorder {
 	return telemetry.RecorderFromContext(c.ctx)
 }
 
-// FFmpegProfiles exposes the attempt-scoped FFmpeg profile accumulator.
-// Executors detect it through the same optional-interface pattern as
-// Recorder and push every FFmpegResult into it; the report finalization
-// stamps the aggregate into the metrics. Nil when no accumulator was
-// wired (safe to skip).
-func (c *runnerContext) FFmpegProfiles() *ffmpegrunner.Aggregator {
-	return c.ffmpegProfiles
-}
-
 // StorageResolver exposes the canonical Fase E1 placement resolver to
 // executors that produce a final artifact. Deliberately NOT part of the
 // public executor.ExecutionContext interface — executors detect it through
-// the optional-interface pattern (same as Recorder/FFmpegProfiles) so
+// the optional-interface pattern (same as Recorder) so
 // third-party executors and test stubs remain untouched. Nil when the
 // runner was not wired with a resolver.
 func (c *runnerContext) StorageResolver() *storage.Resolver {
@@ -252,7 +237,7 @@ func (noopArtifacts) Put(_ context.Context, hash string, _ []byte) error {
 }
 
 // noopCacheStats and noopBlobStats are zero-value fallbacks for the
-// stats providers (PR-3.7). They keep report.Metrics merge safe when
+// stats providers (PR-3.7). They keep typed report enrichment safe when
 // no persistent backend is wired; tests that don't pass providers
 // still get a zero-valued metrics surface.
 type noopCacheStats struct{}

@@ -25,8 +25,7 @@
 //   - upload_lifecycle.go: runUpload — the upload hand-off marker.
 //   - error_mapping.go   : isPanicErr, isPanicContained, mapCtxErr —
 //     the error-classification helpers (pre-existing).
-//   - report_metrics.go  : typed metric enrichment + type-coercion helpers
-//     (pre-existing).
+//   - report_metrics.go  : typed metric enrichment.
 //
 // PR-3.7: mergeStatsInto reads cache.CacheStats / blob.BlobStats values
 // through the CacheStatsProvider / BlobStatsProvider interfaces declared
@@ -50,7 +49,6 @@ import (
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/logger"
 	"velox-worker-agent/pkg/storage"
-	"velox-worker-agent/pkg/video/ffmpegrunner"
 )
 
 // TaskRunner is the generic per-task lifecycle orchestrator.
@@ -62,8 +60,7 @@ type TaskRunner struct {
 	resources executor.ResourceLimits
 	clock     executor.Clock
 
-	// PR-3.7: stats providers for surfacing cache + blob counters into
-	// TaskExecutionReport.Metrics as dotted-key entries.
+	// PR-3.7: stats providers for enriching the canonical RawMetrics envelope.
 	cacheStats CacheStatsProvider
 	blobStats  BlobStatsProvider
 
@@ -120,18 +117,14 @@ func (r *TaskRunner) WithCache(c executor.LocalCache) *TaskRunner {
 }
 
 // WithCacheStats installs a PR-3.7 stats provider. After each Run, the
-// provider's Stats() snapshot is merged into the report metrics as
-// dotted-key entries (cache.hits, cache.misses, cache.evictions,
-// cache.corruptions, cache.entries, cache.bytes, cache.pinned).
+// provider's Stats() snapshot is merged into the typed RawMetrics envelope.
 func (r *TaskRunner) WithCacheStats(p CacheStatsProvider) *TaskRunner {
 	r.cacheStats = p
 	return r
 }
 
 // WithBlobStats installs a PR-3.7 blob stats provider. After each Run,
-// the provider's Stats() snapshot is merged into the report metrics as
-// dotted-key entries (blob.publish, blob.publish_failed, blob.fetch,
-// blob.fetch_miss, blob.fetch_corruption, blob.entries, blob.bytes).
+// the provider's Stats() snapshot is merged into the typed RawMetrics envelope.
 func (r *TaskRunner) WithBlobStats(p BlobStatsProvider) *TaskRunner {
 	r.blobStats = p
 	return r
@@ -233,10 +226,6 @@ func (r *TaskRunner) run(parent context.Context, spec executor.TaskSpec) (TaskEx
 	}
 	report.AttemptRecorder = rec
 	report.AttemptEvents = telemetry.AttemptEventMachineFromContext(parent)
-	// Attempt-scoped FFmpeg profile accumulator: executors push every
-	// canonical FFmpegResult; the report finalization stamps the aggregate
-	// (mergeStatsInto) on success AND failure paths.
-	report.FFmpegProfiles = ffmpegrunner.NewAggregator()
 	// appendPhase writes directly to report.PhaseMarkers so the
 	// returned TaskExecutionReport always carries the recorded phases.
 	// Run is single-goroutine; no mutex needed.
@@ -295,7 +284,6 @@ func (r *TaskRunner) run(parent context.Context, spec executor.TaskSpec) (TaskEx
 		Artifacts:          r.artifacts,
 		CacheStats:         r.cacheStats,
 		BlobStats:          r.blobStats,
-		FFmpegProfiles:     report.FFmpegProfiles,
 		StorageResolver:    r.storage,
 		PhaseTimer:         phaseTimer,
 		GPUTransferTracker: gpuTransferTracker,
@@ -330,24 +318,13 @@ func (r *TaskRunner) run(parent context.Context, spec executor.TaskSpec) (TaskEx
 		gpuSampler.Stop()
 	}
 
-	// Preserve executor telemetry before classifying the outcome.
-	// Executors provide RawMetrics directly as the canonical typed
-	// envelope. The executor's projection map (pipeline.*, native.*,
-	// render_profile.*, ffmpeg_profile, command_plan, etc.) is merged
-	// into the display map for dashboard consumers. mergeStatsInto
-	// enriches RawMetrics with cache/blob/FFmpeg facts.
+	// Preserve executor telemetry before classifying the outcome. Executors
+	// provide RawMetrics directly as the canonical typed envelope.
 	report.RawMetrics = result.RawMetrics
 	report.TypedMetrics = result.RawMetrics
-	// Build the display map from RawMetrics + executor projection keys.
-	report.Metrics = rawMetricsToLegacyMap(result.RawMetrics)
-	for k, v := range result.Metrics {
-		if _, exists := report.Metrics[k]; !exists {
-			report.Metrics[k] = v
-		}
-	}
 	report.Segments = result.Segments
 	if importErr := importExecutorDetailedPhases(rec, result.DetailedPhases); importErr != nil {
-		report.Metrics["telemetry.cpp_import_error"] = importErr.Error()
+		r.callerLog.Warn("taskrunner: failed to import executor detailed phases: %v", importErr)
 	}
 
 	// Map internal err into a stable Code for the report.
@@ -415,9 +392,9 @@ func (r *TaskRunner) run(parent context.Context, spec executor.TaskSpec) (TaskEx
 		report.Waterfall = waterfall.Snapshot()
 	}
 	report.TypedMetrics = report.RawMetrics
-	// Project both legacy dotted metrics and the typed wire mirror on every
-	// outcome. This must not depend on cache/blob providers because native
-	// engine metrics are executor-provided.
+	// Finalize the typed metrics envelope on every outcome. This must not
+	// depend on cache/blob providers because native engine metrics are
+	// executor-provided.
 	r.mergeStatsInto(report)
 	r.attachDetailedPhases(rec, report)
 

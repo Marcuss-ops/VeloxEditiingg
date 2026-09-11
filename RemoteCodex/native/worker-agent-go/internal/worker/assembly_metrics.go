@@ -15,15 +15,11 @@ func recordExecutionDownloadMetrics(report *taskrunner.TaskExecutionReport) {
 }
 
 func recordExecutionDownloadMetricsWith(metrics *telemetry.PrometheusMetrics, report *taskrunner.TaskExecutionReport) {
-	if metrics == nil || report == nil || report.Metrics == nil {
-		return
-	}
-	records, ok := report.Metrics["asset_operations"].([]AssetOperationRecord)
-	if !ok {
+	if metrics == nil || report == nil {
 		return
 	}
 	var downloadMS int64
-	for _, record := range records {
+	for _, record := range report.AssetOperations {
 		if record.DownloadMS > 0 && record.CacheStatus == "miss" {
 			downloadMS += record.DownloadMS
 		}

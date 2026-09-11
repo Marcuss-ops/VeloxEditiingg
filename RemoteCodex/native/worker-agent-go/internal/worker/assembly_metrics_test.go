@@ -11,12 +11,10 @@ import (
 func TestRecordExecutionDownloadMetricsUsesForegroundMissesOnly(t *testing.T) {
 	metrics := telemetry.NewPrometheusMetrics()
 
-	report := &taskrunner.TaskExecutionReport{Metrics: map[string]interface{}{
-		"asset_operations": []AssetOperationRecord{
-			{CacheStatus: "hit", DownloadMS: 900},
-			{CacheStatus: "miss", DownloadMS: 120},
-			{CacheStatus: "miss", DownloadMS: 80},
-		},
+	report := &taskrunner.TaskExecutionReport{AssetOperations: []AssetOperationRecord{
+		{CacheStatus: "hit", DownloadMS: 900},
+		{CacheStatus: "miss", DownloadMS: 120},
+		{CacheStatus: "miss", DownloadMS: 80},
 	}}
 	recordExecutionDownloadMetricsWith(metrics, report)
 

@@ -1,7 +1,5 @@
 package taskrunner
 
 // TestNoDirectTaskExecutionReportMetricsAccess has been removed in Phase 2b.
-// With mergeStatsInto now operating directly on RawMetrics, the report.Metrics
-// map is the supported legacy display projection and direct access is correct.
-// The methods LegacyMetrics/AdoptLegacyMetrics/HasLegacyMetrics/LegacyMetric/
-// SetLegacyMetric have been removed from TaskExecutionReport.
+// The task report has one metrics contract: RawMetrics. A separate display
+// projection must not be reintroduced as a second source of truth.

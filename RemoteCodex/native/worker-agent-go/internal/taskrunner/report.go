@@ -6,7 +6,6 @@ import (
 	sharedtelemetry "velox-shared/telemetry"
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/telemetry"
-	"velox-worker-agent/pkg/video/ffmpegrunner"
 )
 
 // SegmentTiming re-exports executor.SegmentTiming so consumers of the
@@ -34,12 +33,11 @@ type TaskExecutionReport struct {
 	ErrorCode   string                 `json:"error_code,omitempty"`
 	ErrorDetail string                 `json:"error_detail,omitempty"`
 	Outputs     []executor.ArtifactRef `json:"outputs,omitempty"`
-	// Metrics is a display-only projection map. It carries executor
-	// projection keys (pipeline.*, native.*, render_profile.*) and
-	// provider display facts (cache.*, blob.*, ffmpeg.aggregate) for
-	// dashboard compatibility. RawMetrics is the canonical typed envelope.
-	Metrics  map[string]interface{}   `json:"metrics,omitempty"`
-	Segments []executor.SegmentTiming `json:"segments,omitempty"`
+	// AssetOperations is the structured per-asset materialization detail.
+	// Aggregate counters belong in RawMetrics; this repeated field preserves
+	// the drill-down without using a string-keyed metrics projection.
+	AssetOperations []executor.AssetOperationRecord `json:"asset_operations,omitempty"`
+	Segments        []executor.SegmentTiming        `json:"segments,omitempty"`
 	// RawMetrics is the canonical typed raw metric envelope. Migrated
 	// producers write this value directly; no map round-trip is involved.
 	RawMetrics *telemetry.RawExecutionMetrics `json:"-"`
@@ -73,11 +71,6 @@ type TaskExecutionReport struct {
 	// carries per-attempt deltas rather than worker lifetime totals.
 	CacheBaseline    map[string]int64 `json:"-"`
 	CacheBaselineSet bool             `json:"-"`
-	// FFmpegProfiles is the attempt-scoped ffmpeg profile accumulator
-	// (B2). Executors push every FFmpegResult into it; mergeStatsInto
-	// stamps the JSON-safe aggregate into Metrics as "ffmpeg.aggregate"
-	// on every outcome. Transport-local, never serialized directly.
-	FFmpegProfiles *ffmpegrunner.Aggregator `json:"-"`
 }
 
 // DetailedPhaseTiming is the worker-side mirror of

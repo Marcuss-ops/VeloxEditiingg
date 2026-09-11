@@ -13,6 +13,7 @@ import (
 	"velox-shared/contract"
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/runtimeassets"
+	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/storage"
 	"velox-worker-agent/pkg/video/pipeline"
 )
@@ -127,12 +128,14 @@ func (e *videoAssembleCopyExecutor) Execute(ctx context.Context, execCtx executo
 	}
 	return executor.ExecutionResult{
 		Status: "succeeded", Outputs: []executor.ArtifactRef{artifact},
-		Metrics: map[string]interface{}{
-			"concat_mode": "packet_copy", "frames_decoded": int64(0),
-			"frames_encoded": int64(0), "frames_composited": int64(0),
-			"ffmpeg_exec": int64(0), "ffprobe_exec": int64(0),
-			"final_audio_copy": int64(1), "packet_copy": int64(1),
-			"native_render_ms": metrics.TotalMs,
+		RawMetrics: &telemetry.RawExecutionMetrics{
+			ConcatMode: "packet_copy", FinalConcatStreamCopy: true,
+			FramesDecoded: metrics.FramesDecoded, FramesEncoded: metrics.Frames,
+			FramesComposited: metrics.FramesComposited,
+			FfmpegExecCount:  metrics.FfmpegExecCount,
+			FfprobeExecCount: metrics.FfprobeExecCount,
+			AudioPacketCopy:  1, VideoConcatMs: metrics.TotalMs,
+			OutputFileSize: artifact.SizeBytes, OutputSha256: artifact.Hash,
 		},
 		StartedAt: started, CompletedAt: time.Now().UTC(),
 	}, nil

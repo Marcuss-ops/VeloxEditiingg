@@ -31,33 +31,6 @@ func TestDetailedPhaseTimingToProtoRoundTripPreservesTelemetryContract(t *testin
 	}
 }
 
-func TestTypedMetricsFromMapDerivesFinalStreamCopyFromConcatMode(t *testing.T) {
-	metrics := TypedMetricsFromMap(map[string]interface{}{
-		"engine.concat_mode": "stream_copy",
-	})
-	if metrics == nil || !metrics.FinalConcatStreamCopy || metrics.ConcatMode != "stream_copy" {
-		t.Fatalf("stream-copy projection = %#v, want final_concat_stream_copy=true and concat_mode=stream_copy", metrics)
-	}
-}
-
-func TestTypedMetricsFromMapDerivesFinalStreamCopyFromPacketCopy(t *testing.T) {
-	metrics := TypedMetricsFromMap(map[string]interface{}{
-		"engine.concat_mode": "packet_copy",
-	})
-	if metrics == nil || !metrics.FinalConcatStreamCopy || metrics.ConcatMode != "packet_copy" {
-		t.Fatalf("packet-copy projection = %#v, want final_concat_stream_copy=true and concat_mode=packet_copy", metrics)
-	}
-}
-
-func TestTypedMetricsFromMapDerivesFinalStreamCopyFromMixedPacket(t *testing.T) {
-	metrics := TypedMetricsFromMap(map[string]interface{}{
-		"engine.concat_mode": "mixed_packet",
-	})
-	if metrics == nil || !metrics.FinalConcatStreamCopy || metrics.ConcatMode != "mixed_packet" {
-		t.Fatalf("mixed-packet projection = %#v, want final_concat_stream_copy=true and concat_mode=mixed_packet", metrics)
-	}
-}
-
 func TestDetailedPhaseTimingToProtoMapsExtendedFields(t *testing.T) {
 	input := DetailedPhaseTiming{
 		PhaseOrder:             4,

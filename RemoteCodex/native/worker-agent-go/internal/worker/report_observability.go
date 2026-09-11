@@ -10,32 +10,19 @@ import (
 )
 
 // attachWorkerIdentityAndTimings adds the operator-facing identity and a
-// complete timing ledger to the report metrics. PhaseMarkers and native
-// DetailedPhases remain the authoritative event stream; this summary makes
-// the common dashboard queries cheap and keeps every operation visible.
+// complete timing ledger to the report phase note. PhaseMarkers,
+// DetailedPhases, and RawMetrics remain the authoritative typed sources; no
+// legacy metrics projection is built.
 func attachWorkerIdentityAndTimings(workerID string, report *taskrunner.TaskExecutionReport) {
 	if report == nil {
 		return
 	}
-	// Worker identity and the compact timing ledger are still emitted for
-	// compatibility with existing dashboards. Keep this entire surface at
-	// the explicit legacy projection boundary; RawMetrics remains canonical
-	// for raw facts.
-	if report.Metrics == nil {
-		report.Metrics = make(map[string]interface{})
-	}
-	legacy := report.Metrics
 	hostname, _ := os.Hostname()
 	display := workerDisplayName(hostname)
 	workerIP := "unknown-ip"
 	if parts := strings.Split(display, "_"); len(parts) >= 3 {
 		workerIP = strings.Join(parts[2:], "_")
 	}
-	legacy["worker_identity"] = map[string]interface{}{
-		"worker_id": workerID, "worker_name": display,
-		"hostname": hostname, "ip": workerIP,
-	}
-
 	timings := map[string]float64{
 		"queue_wait_ms": 0, "claim_ms": 0, "worker_start_delay_ms": 0,
 		"asset_resolution_ms": 0, "cache_lookup_ms": 0, "asset_download_ms": 0,
@@ -98,76 +85,51 @@ func attachWorkerIdentityAndTimings(workerID string, report *taskrunner.TaskExec
 			timings["compile_ms"] += ms
 		}
 	}
-	// Native phase_ms counters are the authoritative engine timers for the
-	// actual ffmpeg/file operations. The detailed phase stream carries the
-	// same boundaries to the Master; these values make the worker report's
-	// compact timing ledger useful to local diagnostics as well.
-	if value, ok := legacy["engine.audio_download_ms"]; ok {
-		timings["audio_download_ms"] = metricFloat(value)
-	}
-	if value, ok := legacy["engine.audio_prepare_ms"]; ok {
-		timings["audio_prepare_ms"] = metricFloat(value)
-	}
-	if value, ok := legacy["engine.mix_audio_ms"]; ok {
-		timings["audio_mix_ms"] = metricFloat(value)
-		// The multi-track command performs filtering and AAC encoding in one
-		// ffmpeg invocation, so expose the combined cost honestly instead of
-		// fabricating an independent encode duration.
-		timings["audio_mix_encode_ms"] = metricFloat(value)
-	}
-	if value, ok := legacy["engine.mux_audio_ms"]; ok {
-		timings["audio_mux_ms"] = metricFloat(value)
-		timings["final_mux_ms"] = metricFloat(value)
-	}
-	if value, ok := legacy["engine.copy_final_ms"]; ok {
-		timings["final_copy_ms"] = metricFloat(value)
-	}
-	// render_profile is the executor's canonical low-cardinality timing
-	// surface. Copy only fields that are actually present: zero remains a
-	// truthful "not measured", not a fabricated phase duration.
-	for _, name := range []string{
-		"compile_plan_ms", "asset_resolution_ms", "audio_timeline_compile_ms",
-		"audio_prepare_ms", "audio_mix_ms", "aac_encode_ms", "mux_ms",
-		"artifact_finalize_ms", "artifact_sha_ms", "artifact_total_ms",
-	} {
-		if value, ok := legacy["render_profile."+name]; ok {
-			timings[name] = metricFloat(value)
+	// RawMetrics is the authoritative engine/output timing source. The
+	// detailed phase stream above remains the source for phase-specific
+	// attribution; these typed fields fill the compact ledger where the
+	// engine reports a direct aggregate.
+	if raw := report.RawMetrics; raw != nil {
+		if raw.AudioPrepareMs > 0 {
+			timings["audio_prepare_ms"] = float64(raw.AudioPrepareMs)
+		}
+		if raw.AudioTimelineBuildMs > 0 {
+			timings["audio_timeline_compile_ms"] = float64(raw.AudioTimelineBuildMs)
+		}
+		if raw.AudioEncodeMs > 0 {
+			timings["audio_mix_encode_ms"] = float64(raw.AudioEncodeMs)
+		}
+		if raw.AudioMuxMs > 0 {
+			timings["audio_mux_ms"] = float64(raw.AudioMuxMs)
+			timings["final_mux_ms"] = float64(raw.AudioMuxMs)
+		}
+		if raw.AudioCopyMs > 0 {
+			timings["final_copy_ms"] = float64(raw.AudioCopyMs)
+		}
+		if raw.Sha256Ms > 0 {
+			timings["artifact_sha_ms"] = float64(raw.Sha256Ms)
+		}
+		if raw.FfprobeMs > 0 {
+			timings["probe_ms"] = float64(raw.FfprobeMs)
+		}
+		if raw.OutputFinalizeMs > 0 {
+			timings["artifact_finalize_ms"] = float64(raw.OutputFinalizeMs)
 		}
 	}
-	if records, ok := legacy["asset_operations"].([]AssetOperationRecord); ok {
-		for _, record := range records {
-			timings["asset_download_ms"] += float64(record.DownloadMS)
-		}
+	for _, record := range report.AssetOperations {
+		timings["asset_download_ms"] += float64(record.DownloadMS)
 	}
-	legacy["timings_ms"] = timings
-	if encoded, err := json.Marshal(map[string]interface{}{"worker": display, "timings_ms": timings}); err == nil {
+	if encoded, err := json.Marshal(struct {
+		WorkerID   string             `json:"worker_id"`
+		WorkerName string             `json:"worker_name"`
+		Hostname   string             `json:"hostname"`
+		IP         string             `json:"ip"`
+		Timings    map[string]float64 `json:"timings_ms"`
+	}{workerID, display, hostname, workerIP, timings}); err == nil {
 		for i := range report.PhaseMarkers {
 			if report.PhaseMarkers[i].Name == taskrunner.PhaseReport {
 				report.PhaseMarkers[i].Notes = fmt.Sprintf("worker_observability=%s", encoded)
 			}
 		}
-	}
-}
-
-func metricFloat(value interface{}) float64 {
-	switch v := value.(type) {
-	case float64:
-		return v
-	case float32:
-		return float64(v)
-	case int:
-		return float64(v)
-	case int32:
-		return float64(v)
-	case int64:
-		return float64(v)
-	case uint:
-		return float64(v)
-	case uint32:
-		return float64(v)
-	case uint64:
-		return float64(v)
-	default:
-		return 0
 	}
 }

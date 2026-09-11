@@ -112,6 +112,12 @@ full_tree_patterns=(
   'SetProgressCallback'               # Removed: legacy RenderClient callback
   'legacyProgress'                     # Removed: dual progress plumbing
   'preopen\('                          # Removed: synchronous open barrier
+  'TaskExecutionReport\.Metrics'       # Removed: dotted report projection
+  'ExecutionResult\.Metrics'            # Removed: executor result projection
+  'rawMetricsToLegacyMap'               # Removed: typed-to-map adapter
+  'TypedMetricsFromMap'                 # Removed: map-to-typed adapter
+  'legacyMapToTyped'                    # Removed: map-to-typed adapter
+  'FFmpegProfiles'                      # Removed: dead aggregate side channel
   # Item 11 (duplicate roll-up): removed Handler-level Job helpers.
   'verifyJobOwnership'                # Removed: dead Job-era ownership check (PR #11)
   'lookupJobCASFields'                # Removed: dead Job-era CAS helper (PR #11)

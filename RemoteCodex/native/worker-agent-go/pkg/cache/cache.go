@@ -17,8 +17,8 @@
 //     outside the mutex to avoid blocking concurrent Gets.
 //
 // The cache satisfies executor.LocalCache (Get/Put) and exposes a
-// StatsProvider surface used by the taskrunner for surfacing metrics
-// into TaskExecutionReport.Metrics.
+// StatsProvider surface used by the taskrunner for enriching typed
+// TaskExecutionReport.RawMetrics.
 package cache
 
 import (

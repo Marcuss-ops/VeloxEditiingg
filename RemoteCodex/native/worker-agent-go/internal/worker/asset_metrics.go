@@ -4,28 +4,15 @@ import (
 	"context"
 	"strings"
 	"sync"
-	"time"
 
 	"velox-worker-agent/internal/downloader"
+	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/telemetry"
 )
 
-// AssetOperationRecord is the report shape for one asset materialization.
-// It intentionally contains only JSON-compatible scalar fields so it can be
-// embedded in TaskExecutionReport.Metrics without a new wire schema.
-type AssetOperationRecord struct {
-	AssetID             string    `json:"asset_id"`
-	CacheStatus         string    `json:"cache_status"`
-	DownloadStartedAt   time.Time `json:"download_started_at"`
-	DownloadCompletedAt time.Time `json:"download_completed_at"`
-	DownloadMS          int64     `json:"download_ms"`
-	DownloadedBytes     int64     `json:"downloaded_bytes"`
-	SHA256Verified      bool      `json:"sha256_verified"`
-	IntegrityCheck      string    `json:"integrity_check"`
-	IntegrityValid      bool      `json:"integrity_valid"`
-	LocalPath           string    `json:"local_path"`
-	Source              string    `json:"source"`
-}
+// AssetOperationRecord remains a worker-local alias while callers migrate to
+// the structured executor contract field on TaskExecutionReport.
+type AssetOperationRecord = executor.AssetOperationRecord
 
 // AttemptCacheMetrics is the per-attempt, zero-based cache accounting
 // projection (Phase A1). It is fed ONLY by the canonical resolver sink

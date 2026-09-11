@@ -12,6 +12,7 @@ import (
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/prefetch"
 	"velox-worker-agent/internal/taskrunner"
+	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/logger"
 )
 
@@ -84,8 +85,8 @@ func TestCertifyFastAssemblyRequiresPacketCopyAndVerifiedOutput(t *testing.T) {
 	manifest := assembly.FinalAssemblyManifest{JobID: "job", Revision: 2, PreparationHash: "sha256:" + strings.Repeat("0", 64), TimelineRevision: 3}
 	plan := &videoContract.CompiledRenderPlanV2{Output: videoContract.OutputContractV2{ProfileID: videoContract.CanonicalVideoProfileIDV1}}
 	report := taskrunner.TaskExecutionReport{
-		Metrics: map[string]interface{}{"concat_mode": "packet_copy", "packet_copy": int64(1), "frames_decoded": int64(0), "frames_encoded": int64(0)},
-		Outputs: []executor.ArtifactRef{{Hash: "sha256:output", SizeBytes: 100}},
+		RawMetrics: &telemetry.RawExecutionMetrics{ConcatMode: "packet_copy", FinalConcatStreamCopy: true},
+		Outputs:    []executor.ArtifactRef{{Hash: "sha256:output", SizeBytes: 100}},
 	}
 	certificate, err := certifyFastAssembly("job", manifest, plan, report)
 	if err != nil {
@@ -94,7 +95,7 @@ func TestCertifyFastAssemblyRequiresPacketCopyAndVerifiedOutput(t *testing.T) {
 	if !certificate.PacketCopy || certificate.ConcatMode != "packet_copy" || certificate.AssetCount != 0 {
 		t.Fatalf("certificate = %#v", certificate)
 	}
-	report.Metrics["concat_mode"] = "stream_copy"
+	report.RawMetrics.ConcatMode = "stream_copy"
 	if _, err := certifyFastAssembly("job", manifest, plan, report); err == nil {
 		t.Fatal("certificate must reject non packet-copy concat")
 	}

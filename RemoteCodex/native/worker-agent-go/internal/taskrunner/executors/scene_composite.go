@@ -7,9 +7,9 @@
 //   - scene_composite.go                 : type, constructor, Descriptor, Validate.
 //   - scene_composite_execute.go         : Execute + orchestration helpers.
 //   - scene_composite_metrics.go         : observability/metrics helpers
-//     (appendObservabilitySummaryPhases, flattenObservabilityMetric, resolvePipelineID).
+//     (appendObservabilitySummaryPhases, resolvePipelineID).
 //   - scene_composite_metrics_projection.go : pure RunMetrics projections
-//     (projectRunMetrics, emitEngineProcessTelemetry, projectSegments, projectDetailedPhases).
+//     (emitEngineProcessTelemetry, projectSegments, projectDetailedPhases).
 //   - scene_composite_output.go          : fail-closed artifact/sidecar
 //     verification (verifyAndBuildOutputs).
 package executors

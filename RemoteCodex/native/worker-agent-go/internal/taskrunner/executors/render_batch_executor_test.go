@@ -320,15 +320,6 @@ func TestRenderBatch_VideoOnlyThenFinalAudioCopyMux(t *testing.T) {
 	if strings.Contains(muxArgs, "-shortest") {
 		t.Error("mux must not use -shortest as a duration fix")
 	}
-	if got := result.Metrics["audio_mix_count"]; got != int64(0) {
-		t.Errorf("audio_mix_count = %v, want 0", got)
-	}
-	if got := result.Metrics["audio_encode_count"]; got != int64(0) {
-		t.Errorf("audio_encode_count = %v, want 0", got)
-	}
-	if got := result.Metrics["final_audio_copy"]; got != int64(1) {
-		t.Errorf("final_audio_copy = %v, want 1", got)
-	}
 	if result.RawMetrics == nil {
 		t.Fatal("render_batch omitted typed raw metrics")
 	}
@@ -362,16 +353,8 @@ func TestRenderBatch_EmitsPhaseMetricsAndStructuredIdentity(t *testing.T) {
 	if result.Status != "succeeded" {
 		t.Fatalf("result = %+v", result)
 	}
-	for _, key := range []string{"render_plan_validate_ms", "compiled_asset_resolve_ms", "final_audio_resolve_ms", "visual_execute_ms", "final_mux_ms"} {
-		value, ok := result.Metrics[key].(int64)
-		if !ok || value < 0 {
-			t.Errorf("metric %q = %#v, want non-negative int64", key, result.Metrics[key])
-		}
-	}
-	for _, forbidden := range []string{"plan_sha256", "timeline_sha256", "timeline_revision", "final_audio_asset_id"} {
-		if _, ok := result.Metrics[forbidden]; ok {
-			t.Errorf("high-cardinality identity %q leaked into metrics: %#v", forbidden, result.Metrics[forbidden])
-		}
+	if result.RawMetrics == nil {
+		t.Fatal("render_batch omitted canonical raw metrics")
 	}
 
 	planSHA := compiledPlanSHA(batchTaskSpec(t, "job-observability"))
@@ -437,8 +420,8 @@ func TestRenderBatch_ValidationFailureStillRecordsIdentityWithoutPaths(t *testin
 	if result.Status != "failed" || result.ErrorCode != "validation_failed" {
 		t.Fatalf("result = %+v, want validation_failed", result)
 	}
-	if _, ok := result.Metrics["render_plan_validate_ms"]; !ok {
-		t.Fatalf("validation failure omitted render_plan_validate_ms: %#v", result.Metrics)
+	if result.RawMetrics == nil {
+		t.Fatal("validation failure omitted canonical raw metrics")
 	}
 	events := recorder.Snapshot()
 	if len(events) != 1 || events[0].Status != telemetry.StatusFailed {

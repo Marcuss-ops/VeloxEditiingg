@@ -266,14 +266,9 @@ type ExecutionResult struct {
 	// Outputs lists the canonical artifact references produced by this task.
 	Outputs []ArtifactRef `json:"outputs,omitempty"`
 	// RawMetrics is the canonical typed raw metric envelope. All
-	// executors produce this directly; the legacy dotted map is derived
-	// from it at the report boundary for remaining display consumers.
+	// executors produce this directly; it is the only metrics contract
+	// consumed by the task report and transport boundary.
 	RawMetrics *telemetry.RawExecutionMetrics `json:"raw_metrics,omitempty"`
-	// Metrics is an executor-scoped legacy projection map. Executors
-	// populate it with pipeline/native/projection-specific dotted keys
-	// that have no RawMetrics equivalent. The runner merges it into the
-	// report's legacy map alongside cache/blob/FFmpeg facts.
-	Metrics map[string]interface{} `json:"metrics,omitempty"`
 	// Segments holds per-segment C++ sidecar timings.
 	Segments []SegmentTiming `json:"segments,omitempty"`
 	// DetailedPhases holds the optional native C++ sidecar phases[] stream.
@@ -286,6 +281,23 @@ type ExecutionResult struct {
 	// StartedAt / CompletedAt bracket the actual execution work.
 	StartedAt   time.Time `json:"started_at"`
 	CompletedAt time.Time `json:"completed_at"`
+}
+
+// AssetOperationRecord is the structured per-asset materialization detail
+// attached to a task report. It lives in the executor contract so the worker
+// can carry it without routing the record through a string-keyed metrics map.
+type AssetOperationRecord struct {
+	AssetID             string    `json:"asset_id"`
+	CacheStatus         string    `json:"cache_status"`
+	DownloadStartedAt   time.Time `json:"download_started_at"`
+	DownloadCompletedAt time.Time `json:"download_completed_at"`
+	DownloadMS          int64     `json:"download_ms"`
+	DownloadedBytes     int64     `json:"downloaded_bytes"`
+	SHA256Verified      bool      `json:"sha256_verified"`
+	IntegrityCheck      string    `json:"integrity_check"`
+	IntegrityValid      bool      `json:"integrity_valid"`
+	LocalPath           string    `json:"local_path"`
+	Source              string    `json:"source"`
 }
 
 // ArtifactRef is the canonical pointer to one published artifact.

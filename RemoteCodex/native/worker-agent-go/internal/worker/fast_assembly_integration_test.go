@@ -12,6 +12,7 @@ import (
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/prefetch"
 	"velox-worker-agent/internal/taskrunner"
+	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/config"
 	"velox-worker-agent/pkg/logger"
 )
@@ -39,12 +40,9 @@ func (fastAssemblyIntegrationExecutor) Validate(executor.TaskSpec) error { retur
 
 func (fastAssemblyIntegrationExecutor) Execute(context.Context, executor.ExecutionContext, executor.TaskSpec) (executor.ExecutionResult, error) {
 	return executor.ExecutionResult{
-		Status:  "succeeded",
-		Outputs: []executor.ArtifactRef{{Hash: strings.Repeat("f", 64), SizeBytes: 123}},
-		Metrics: map[string]interface{}{
-			"concat_mode": "packet_copy", "packet_copy": int64(1),
-			"frames_decoded": int64(0), "frames_encoded": int64(0),
-		},
+		Status:     "succeeded",
+		Outputs:    []executor.ArtifactRef{{Hash: strings.Repeat("f", 64), SizeBytes: 123}},
+		RawMetrics: &telemetry.RawExecutionMetrics{ConcatMode: "packet_copy", FinalConcatStreamCopy: true},
 	}, nil
 }
 

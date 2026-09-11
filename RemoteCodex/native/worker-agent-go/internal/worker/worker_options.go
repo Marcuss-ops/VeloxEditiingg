@@ -46,7 +46,7 @@ func WithRegistry(reg *executor.Registry) Option {
 // WithCache wires a persistent local cache into the worker.
 // The same instance is exposed via Worker.cache and is threaded into
 // the TaskRunner built by New() so cache hits/misses/evictions/
-// corruptions appear in TaskExecutionReport.Metrics.
+// corruptions are folded into the canonical typed RawMetrics envelope.
 //
 // Passing nil panics loudly; omit WithCache to fall back to noop
 // defaults (useful only for unit tests that don't exercise the

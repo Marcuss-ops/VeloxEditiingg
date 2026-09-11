@@ -241,55 +241,8 @@ func TestSceneComposite_Execute_Success(t *testing.T) {
 			t.Errorf("missing %s summary phase: %#v", category, res.DetailedPhases)
 		}
 	}
-	if res.Metrics["audio.events"] != float64(2) || res.Metrics["subtitle.events"] != float64(1) || res.Metrics["io.bytes_in"] != float64(4096) || res.Metrics["quality.events"] != float64(3) || res.Metrics["retry.count"] != float64(2) || res.Metrics["waste.wasted_cpu_ms"] != float64(88) {
-		t.Fatalf("category observability not propagated: %#v", res.Metrics)
-	}
-	// CPU/RSS counters share the receipt's derivation: cpu.total_ms is
-	// user + system, the memory keys carry the sampler values verbatim.
-	if res.Metrics["cpu.user_ms"] != int64(1500) ||
-		res.Metrics["cpu.system_ms"] != int64(300) ||
-		res.Metrics["cpu.total_ms"] != int64(1800) ||
-		res.Metrics["memory.peak_rss_bytes"] != int64(320_000_000) ||
-		res.Metrics["memory.current_rss_bytes"] != int64(300_000_000) {
-		t.Fatalf("cpu/memory telemetry not propagated: %#v", res.Metrics)
-	}
-	wallMs, hasWall := res.Metrics["cpu.wall_ms"].(int64)
-	if !hasWall {
-		t.Fatalf("cpu.wall_ms must be an int64, got %#v", res.Metrics["cpu.wall_ms"])
-	}
-	ratio, ok := res.Metrics["cpu.wall_ratio"].(float64)
-	if !ok || ratio < 0 {
-		t.Fatalf("cpu.wall_ratio must be a non-negative float, got %#v", res.Metrics["cpu.wall_ratio"])
-	}
-	// The fake render is instantaneous, so the wall clock can round to
-	// zero and the ratio legitimately stays zero; whenever wall_ms > 0
-	// the ratio must be positive.
-	if wallMs > 0 && ratio <= 0 {
-		t.Fatalf("cpu.wall_ratio must be positive when wall_ms > 0, got %v (wall=%d)", ratio, wallMs)
-	}
-	// Derived KPIs share the receipt's single Deriver. With the fake's
-	// only detailed phase being a span_child (engine.video.decode) and
-	// no process/IO byte counts, accounted, amplification,
-	// processes_per_clip and useful_work_ratio are all zero while the
-	// whole wall clock is unaccounted; cpu_wall_ratio mirrors the
-	// cpu.* projection exactly (same Deriver, same wall clock).
-	if res.Metrics["derived.unaccounted_ms"] != wallMs {
-		t.Fatalf("derived.unaccounted_ms = %v, want cpu.wall_ms (%d): with no exclusive phases the whole wall clock is unaccounted", res.Metrics["derived.unaccounted_ms"], wallMs)
-	}
-	if res.Metrics["derived.accounted_ratio"] != float64(0) ||
-		res.Metrics["derived.read_amplification"] != float64(0) ||
-		res.Metrics["derived.write_amplification"] != float64(0) ||
-		res.Metrics["derived.processes_per_clip"] != float64(0) ||
-		res.Metrics["derived.useful_work_ratio"] != float64(0) {
-		t.Fatalf("derived KPIs must be zero for a span-child-only fake: %#v", res.Metrics)
-	}
-	if res.Metrics["derived.cpu_wall_ratio"] != res.Metrics["cpu.wall_ratio"] {
-		t.Fatalf("derived.cpu_wall_ratio = %v, cpu.wall_ratio = %v; the two projections must agree", res.Metrics["derived.cpu_wall_ratio"], res.Metrics["cpu.wall_ratio"])
-	}
-	// The accounted_ratio budget flag: "not measured" (ratio 0) is never
-	// a violation, so the flag must be true for the span-child-only fake.
-	if ok, isBool := res.Metrics["derived.accounted_ratio_budget_ok"].(bool); !isBool || !ok {
-		t.Fatalf("derived.accounted_ratio_budget_ok = %#v, want true (not-measured is not a violation)", res.Metrics["derived.accounted_ratio_budget_ok"])
+	if res.RawMetrics == nil || res.RawMetrics.CpuUserMs != 1500 || res.RawMetrics.CpuSystemMs != 300 || res.RawMetrics.PeakRssBytes != 320_000_000 {
+		t.Fatalf("typed cpu/memory telemetry not propagated: %+v", res.RawMetrics)
 	}
 }
 
@@ -324,8 +277,8 @@ func TestSceneComposite_Execute_RenderErrorMapsToFailure(t *testing.T) {
 	if !strings.Contains(res.ErrorDetail, "ffmpeg crashed") {
 		t.Errorf("res.ErrorDetail should carry ffmpeg error, got %q", res.ErrorDetail)
 	}
-	if res.Metrics["engine.decode"] != float64(12) {
-		t.Errorf("partial phase metrics = %#v, want engine.decode=12", res.Metrics)
+	if res.RawMetrics == nil {
+		t.Error("partial raw metrics are missing")
 	}
 	if len(res.Segments) != 1 || res.Segments[0].SegmentIndex != 2 || res.Segments[0].FinishedOffsetMS != 8.25 {
 		t.Fatalf("partial segment timings = %#v", res.Segments)
@@ -368,8 +321,8 @@ func TestSceneComposite_Execute_CancellationPreservesPartialTelemetry(t *testing
 	if res.ErrorCode != "cancelled" {
 		t.Fatalf("error code = %q, want cancelled", res.ErrorCode)
 	}
-	if res.Metrics["engine.decode"] != float64(7) || len(res.Segments) != 1 || len(res.DetailedPhases) != 1 {
-		t.Fatalf("partial cancellation telemetry = metrics:%#v segments:%#v phases:%#v", res.Metrics, res.Segments, res.DetailedPhases)
+	if res.RawMetrics == nil || len(res.Segments) != 1 || len(res.DetailedPhases) != 1 {
+		t.Fatalf("partial cancellation telemetry = raw:%+v segments:%#v phases:%#v", res.RawMetrics, res.Segments, res.DetailedPhases)
 	}
 	if !rclient.called {
 		t.Fatal("render client was not invoked")

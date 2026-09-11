@@ -211,7 +211,7 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 
 	// Build the TaskRunner from registry + cache + blobs. The
 	// runner is shared by future executeTask routes and is also
-	// where cache + blob counters get surfaced as report.Metrics entries.
+	// where cache + blob counters enrich the canonical typed report envelope.
 	tr := taskrunner.NewTaskRunner(wo.registry, log)
 	if wo.cache != nil {
 		tr = tr.WithCache(wo.cache).WithCacheStats(wo.cache)

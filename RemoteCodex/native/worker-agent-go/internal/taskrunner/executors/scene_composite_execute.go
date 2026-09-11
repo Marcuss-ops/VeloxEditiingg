@@ -15,6 +15,7 @@ import (
 
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/telemetry"
+	"velox-worker-agent/pkg/performance"
 )
 
 // Execute performs the canonical work. It delegates to the existing
@@ -30,10 +31,6 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 	startedAt := time.Now().UTC()
 	timer := jobPhaseTimerFromExecutionContext(execCtx)
 	gpuTracker := gpuTransferTrackerFromExecutionContext(execCtx)
-	// Legacy compatibility projection for pre-typed report consumers. The
-	// canonical producer output is rawMetrics below; this map is retired
-	// incrementally as downstream consumers adopt RawMetrics.
-	metrics := make(map[string]interface{})
 	rec := recorderFromExecutionContext(execCtx)
 	planHandle := rec.Begin(telemetry.EventSpec{Origin: telemetry.OriginWorker, Scope: telemetry.ScopeTask, Component: "worker.plan", Action: "compile"})
 	if planHandle != nil {
@@ -65,9 +62,8 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 	// Phase: pipeline run. We use RunWithMetrics so callers get
 	// per-phase pipeline timings AND the native C++ engine sidecar
 	// counters (frames, speed_x, encode_passes, temp_bytes,
-	// duration_seconds) merged into the final task-scoped metrics map.
+	// duration_seconds) merged into the final typed envelope.
 	pipelineID := resolvePipelineID(spec.Payload)
-	pipelineStart := time.Now()
 
 	// Fine-grained phase timer: wrap the pipeline run for the top-level video
 	// phases. Sub-phase timings are populated from the engine's own sidecar
@@ -110,8 +106,8 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 	// Materialize native telemetry before handling the render error. The
 	// engine may have emitted useful completed phases and segment timings
 	// even when the process fails or is cancelled.
-	clipCount := compiledPlanClipCount(spec.Payload)
-	derivedIO, derivedCPU := projectRunMetrics(metrics, pipelineID, pipelineStart, runMetrics, clipCount)
+	derivedIO := performance.DeriveIO(runMetrics.RenderMetrics)
+	derivedCPU := performance.DeriveCPU(runMetrics.RenderMetrics, runMetrics.TotalMs)
 	emitEngineProcessTelemetry(rec, runMetrics)
 	segments := projectSegments(runMetrics.RenderMetrics)
 	detailedPhases := projectDetailedPhases(runMetrics.RenderMetrics)
@@ -128,7 +124,6 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 				Status:    "failed",
 				ErrorCode: "cancelled", ErrorDetail: err.Error(),
 				RawMetrics:     rawMetrics,
-				Metrics:        metrics,
 				Segments:       segments,
 				DetailedPhases: detailedPhases,
 				StartedAt:      startedAt,
@@ -140,7 +135,6 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 			ErrorCode:      renderErrorCode(err),
 			ErrorDetail:    fmt.Sprintf("pipeline.Runner.RunWithMetrics(%s): %v", pipelineID, err),
 			RawMetrics:     rawMetrics,
-			Metrics:        metrics,
 			Segments:       segments,
 			DetailedPhases: detailedPhases,
 			StartedAt:      startedAt,
@@ -149,7 +143,7 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 	}
 	// Fail-closed artifact boundary: the primary output and its progress
 	// receipt must both exist and have a real manifest before success.
-	outputs, outputManifest, failResult := verifyAndBuildOutputs(ctx, outputPath, startedAt, metrics, rawMetrics, runMetrics, clipCount, planHandle, rec)
+	outputs, outputManifest, failResult := verifyAndBuildOutputs(ctx, outputPath, startedAt, rawMetrics, runMetrics, planHandle, rec)
 	if failResult != nil {
 		return *failResult, nil
 	}
@@ -167,7 +161,6 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 		Status:         "succeeded",
 		Outputs:        outputs,
 		RawMetrics:     rawMetrics,
-		Metrics:        metrics,
 		Segments:       segments,
 		DetailedPhases: detailedPhases,
 		StartedAt:      startedAt,

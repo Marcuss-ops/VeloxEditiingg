@@ -245,9 +245,8 @@ func (e *subtitleAlignExecutor) Execute(_ context.Context, _ executor.ExecutionC
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return failedResult(started, "output_directory", err), nil
 	}
-	// Materialize the .ass document once: b.String() copies the builder's
-	// buffer, so calling it twice (once for the write, once for caption_count)
-	// would pay a second full-document allocation per render.
+	// Materialize the .ass document once; b.String() copies the builder's
+	// buffer and the canonical artifact manifest supplies its identity.
 	ass := b.String()
 	if err := os.WriteFile(path, []byte(ass), 0o640); err != nil {
 		return failedResult(started, "artifact_write", err), nil
@@ -256,7 +255,7 @@ func (e *subtitleAlignExecutor) Execute(_ context.Context, _ executor.ExecutionC
 	if err != nil {
 		return failedResult(started, "artifact_invalid", err), nil
 	}
-	return executor.ExecutionResult{Status: "succeeded", Outputs: []executor.ArtifactRef{artifact}, Metrics: map[string]interface{}{"caption_count": strings.Count(ass, "Dialogue: "), "render_plan_sha256": planDigest(p)}, StartedAt: started, CompletedAt: time.Now().UTC()}, nil
+	return executor.ExecutionResult{Status: "succeeded", Outputs: []executor.ArtifactRef{artifact}, StartedAt: started, CompletedAt: time.Now().UTC()}, nil
 }
 
 // writeASSTime writes an h:mm:ss.cc ASS timestamp directly into b, avoiding

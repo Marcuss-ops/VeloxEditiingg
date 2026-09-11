@@ -191,8 +191,8 @@ func TestRenderBatchReceiverOnly_ManualPlanLeaseRenderMuxDeterministic(t *testin
 		if result.Status != "succeeded" || len(result.Outputs) != 1 {
 			t.Fatalf("run %d result = %+v", runNumber, result)
 		}
-		if result.Metrics["audio_mix_count"] != int64(0) || result.Metrics["audio_encode_count"] != int64(0) || result.Metrics["final_audio_copy"] != int64(1) {
-			t.Fatalf("run %d audio metrics = %#v", runNumber, result.Metrics)
+		if result.RawMetrics == nil || !result.RawMetrics.FinalConcatStreamCopy || result.RawMetrics.AudioPacketCopy != 1 {
+			t.Fatalf("run %d typed audio/video copy metrics = %+v", runNumber, result.RawMetrics)
 		}
 		if err := lease.ReleaseAll(ctx); err != nil {
 			t.Fatalf("run %d release asset lease: %v", runNumber, err)

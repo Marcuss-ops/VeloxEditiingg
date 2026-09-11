@@ -28,14 +28,12 @@ type renderBatchObservability struct {
 	planSHA          string
 	timelineSHA      string
 	timelineRevision int64
-	metrics          map[string]interface{}
 	rawMetrics       *telemetry.RawExecutionMetrics
 }
 
 func newRenderBatchObservability(execCtx executor.ExecutionContext, planSHA string) *renderBatchObservability {
 	obs := &renderBatchObservability{
 		planSHA: planSHA,
-		metrics: make(map[string]interface{}),
 	}
 	if execCtx != nil {
 		obs.logger = execCtx.Logger()
@@ -156,16 +154,6 @@ func (o *renderBatchObservability) finish(phase *renderBatchPhase, status, code 
 	} else {
 		o.info("render_batch."+phase.stage+".completed", fields)
 	}
-	switch phase.stage {
-	case "validation":
-		o.metrics["render_plan_validate_ms"] = duration
-	case "asset_resolution":
-		o.metrics["compiled_asset_resolve_ms"] = duration
-	case "visual_render":
-		o.metrics["visual_execute_ms"] = duration
-	case "final_mux":
-		o.metrics["final_mux_ms"] = duration
-	}
 	if phase.handle == nil {
 		return
 	}
@@ -187,16 +175,15 @@ func (o *renderBatchObservability) finish(phase *renderBatchPhase, status, code 
 func (o *renderBatchObservability) failure(started time.Time, code string, err error) executor.ExecutionResult {
 	detail := safeRenderBatchErrorDetail(code, err)
 	if o == nil {
-		return executor.ExecutionResult{Status: "failed", ErrorCode: code, ErrorDetail: detail, StartedAt: started, CompletedAt: time.Now().UTC()}
+		return executor.ExecutionResult{Status: "failed", ErrorCode: code, ErrorDetail: detail, RawMetrics: &telemetry.RawExecutionMetrics{}, StartedAt: started, CompletedAt: time.Now().UTC()}
 	}
+	o.ensureRawMetrics()
 	o.logFailure("execution", code, err)
-	if o.rawMetrics != nil {
-		o.rawMetrics.WallClockSeconds = time.Since(started).Seconds()
-	}
+	o.rawMetrics.WallClockSeconds = time.Since(started).Seconds()
 	return executor.ExecutionResult{
 		Status: "failed", ErrorCode: code, ErrorDetail: detail,
-		RawMetrics: o.rawMetrics, Metrics: o.metrics,
-		StartedAt: started, CompletedAt: time.Now().UTC(),
+		RawMetrics: o.rawMetrics,
+		StartedAt:  started, CompletedAt: time.Now().UTC(),
 	}
 }
 

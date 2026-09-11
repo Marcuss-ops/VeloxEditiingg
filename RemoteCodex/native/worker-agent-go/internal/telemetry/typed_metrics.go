@@ -26,8 +26,8 @@
 // proto wire format does not distinguish uint vs int for varint).
 // We mirror that with Go int64 / int32 so ToProto() is a direct
 // field-by-field setter — no conversion at the boundary. Workers
-// must treat the values as non-negative; negative-looking ints are
-// rejected upstream by the dotted-key parser before they reach here.
+// must treat the values as non-negative; producers validate that contract
+// before the envelope reaches the transport boundary.
 package telemetry
 
 type RawExecutionMetrics struct {
