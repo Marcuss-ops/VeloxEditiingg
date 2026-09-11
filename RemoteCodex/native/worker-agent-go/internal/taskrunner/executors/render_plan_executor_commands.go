@@ -114,16 +114,10 @@ func runCommandExecutor(ctx context.Context, e *renderPlanExecutor, spec executo
 			StartedAt:  started, CompletedAt: time.Now().UTC(),
 		}, nil
 	}
-	// Determinism chain on the wire: when the master delivered the compiled
-	// plan (Fase D), attach its identity to the canonical engine event. This
-	// avoids a second metrics transport for command diagnostics.
+	// Keep the canonical command identity on the engine event so diagnostics
+	// remain tied to the exact V1 command that ran.
 	commandHandle.SetMetadata("command_plan", cp.Canonical())
 	commandHandle.SetMetadata("render_plan_sha256", cp.PlanSHA256)
-	if compiled := compiledPlanEvidence(spec); compiled != nil {
-		for key, value := range compiled {
-			commandHandle.SetMetadata(key, value)
-		}
-	}
 	return executor.ExecutionResult{
 		Status: "succeeded", Outputs: []executor.ArtifactRef{artifact},
 		RawMetrics: rawMetrics,

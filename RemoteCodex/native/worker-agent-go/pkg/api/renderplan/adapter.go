@@ -36,19 +36,19 @@ func ValidateTaskPayload(raw map[string]interface{}) error {
 		}
 		return nil
 	}
+	if _, present := raw[contract.PayloadKeyCompiledRenderPlanJSON]; present {
+		return planError(ERR_PLAN_SCHEMA, contract.PayloadKeyCompiledRenderPlanJSON, "CompiledRenderPlanV2 requires the native packet-copy executor")
+	}
+	if _, present := raw[contract.PayloadKeyCompiledRenderPlanSHA]; present {
+		return planError(ERR_PLAN_SCHEMA, contract.PayloadKeyCompiledRenderPlanSHA, "CompiledRenderPlanV2 requires the native packet-copy executor")
+	}
 	if _, present := raw["render_plan_version"]; present {
 		return ValidateVersionedRenderPlan(raw)
 	}
-	// Master-compiled render plan (Fase D): when the TaskOffer payload
-	// carries the canonical CompiledRenderPlan document, validate it
-	// strictly. Additive to the legacy payload_contract_version envelope
-	// below — payloads without the compiled plan are untouched.
-	if err := ValidateCompiledRenderPlan(raw); err != nil {
-		return err
-	}
-	// The current master emits payload_contract_version while the fleet
-	// migrates to the compiled RenderPlan envelope. This is still an
-	// explicitly versioned compatibility path and is temporary by design.
+	// The current master emits payload_contract_version for the remaining V1
+	// scene/mixed executors. This is explicitly versioned compatibility input;
+	// it cannot carry a compiled plan because that contract belongs only to the
+	// native packet-copy executor above.
 	if version, ok := numericInt(raw["payload_contract_version"]); ok && version > 0 {
 		return validateLegacyPayloadContract(raw, version)
 	}

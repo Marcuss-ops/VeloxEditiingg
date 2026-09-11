@@ -120,6 +120,8 @@ full_tree_patterns=(
   'FFmpegProfiles'                      # Removed: dead aggregate side channel
   'render_batch'                        # Removed: superseded by native packet-copy executor
   'RenderBatch'                         # Removed: superseded by native packet-copy executor
+  'DecodeCompiledRenderPlanPayload'     # Removed: superseded by shared V2 envelope
+  'ValidateCompiledRenderPlan\('       # Removed: superseded by shared V2 envelope
   # Item 11 (duplicate roll-up): removed Handler-level Job helpers.
   'verifyJobOwnership'                # Removed: dead Job-era ownership check (PR #11)
   'lookupJobCASFields'                # Removed: dead Job-era CAS helper (PR #11)
