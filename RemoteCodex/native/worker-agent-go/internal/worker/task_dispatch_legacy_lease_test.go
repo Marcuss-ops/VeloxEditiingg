@@ -49,7 +49,7 @@ func TestDispatchTaskRunner_LegacyClipPayloadAcquiresLease(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = cache.Close() })
 
-	probe := &dispatchLeaseProbeExecutor{wait: true, started: make(chan struct{}), release: make(chan struct{})}
+	probe := &dispatchLeaseProbeExecutor{id: "test.legacy.lease", wait: true, started: make(chan struct{}), release: make(chan struct{})}
 	registry := executor.NewRegistry()
 	if err := registry.Register(probe); err != nil {
 		t.Fatalf("register probe executor: %v", err)
@@ -158,7 +158,7 @@ func TestDispatchTaskRunner_LegacyClipPayloadReleasesLeaseOnExecutorError(t *tes
 	}
 	t.Cleanup(func() { _ = cache.Close() })
 
-	probe := &dispatchLeaseProbeExecutor{fail: true, started: make(chan struct{}), release: make(chan struct{})}
+	probe := &dispatchLeaseProbeExecutor{id: "test.legacy.lease", fail: true, started: make(chan struct{}), release: make(chan struct{})}
 	registry := executor.NewRegistry()
 	if err := registry.Register(probe); err != nil {
 		t.Fatalf("register probe executor: %v", err)

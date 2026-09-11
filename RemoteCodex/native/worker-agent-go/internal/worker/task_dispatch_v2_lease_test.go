@@ -18,6 +18,7 @@ import (
 )
 
 type dispatchLeaseProbeExecutor struct {
+	id      string
 	wait    bool
 	fail    bool
 	started chan struct{}
@@ -26,8 +27,12 @@ type dispatchLeaseProbeExecutor struct {
 }
 
 func (e *dispatchLeaseProbeExecutor) Descriptor() executor.Descriptor {
+	id := e.id
+	if id == "" {
+		id = "video.assemble.copy.v1"
+	}
 	return executor.Descriptor{
-		ID: "video.assemble.copy.v1", Version: 1,
+		ID: id, Version: 1,
 		ResourceClass: executor.ResourceCPU, TemporalMode: executor.TemporalGlobal,
 		Deterministic: true, Cacheable: true,
 	}
