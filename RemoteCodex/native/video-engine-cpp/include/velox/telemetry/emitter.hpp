@@ -175,10 +175,13 @@ private:
         bool active{false};
     };
 
-    void record(PhaseEvent ev);
     static std::string UtcNowIso8601();
 
-    mutable std::mutex mu_;
+    // In-flight mutations are independent from the finalized event vector.
+    // Keeping those locks separate prevents concurrent worker completions
+    // from serializing behind metadata updates on unrelated phases.
+    mutable std::mutex inflight_mu_;
+    mutable std::mutex events_mu_;
     std::vector<PhaseEvent> events_;
     std::map<int64_t, Inflight> inflight_;
     std::map<std::string, int64_t> indexes_;

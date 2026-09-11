@@ -215,7 +215,7 @@ void PhaseEvent::AppendJson(std::ostringstream& out) const {
 }
 
 void PhaseRecorder::SetMetadataJSON(int64_t token, std::string metadata_json) {
-    std::lock_guard<std::mutex> lock(mu_);
+    std::lock_guard<std::mutex> lock(inflight_mu_);
     auto it = inflight_.find(token);
     if (it == inflight_.end() || !it->second.active) return;
     if (!isValidJsonObjectShape(metadata_json)) return;
@@ -227,7 +227,7 @@ void PhaseRecorder::SetDetailedMetrics(int64_t token, int32_t segment_index,
                                        double started_offset_ms, double finished_offset_ms,
                                        double cpu_ms, double queue_wait_ms,
                                        int64_t frames_in, int64_t frames_out) {
-    std::lock_guard<std::mutex> lock(mu_);
+    std::lock_guard<std::mutex> lock(inflight_mu_);
     auto it = inflight_.find(token);
     if (it == inflight_.end() || !it->second.active) return;
     auto& event = it->second.partial;
@@ -243,7 +243,8 @@ void PhaseRecorder::SetDetailedMetrics(int64_t token, int32_t segment_index,
 }
 
 void PhaseRecorder::Reset() {
-    std::lock_guard<std::mutex> lock(mu_);
+    std::lock_guard<std::mutex> inflight_lock(inflight_mu_);
+    std::lock_guard<std::mutex> events_lock(events_mu_);
     events_.clear();
     inflight_.clear();
     indexes_.clear();
@@ -264,7 +265,8 @@ int64_t PhaseRecorder::Begin(std::string origin, std::string scope,
         return -1;
     }
 
-    std::lock_guard<std::mutex> lock(mu_);
+    std::lock_guard<std::mutex> inflight_lock(inflight_mu_);
+    std::lock_guard<std::mutex> events_lock(events_mu_);
     PhaseEvent ev;
     ev.origin = std::move(origin);
     ev.scope = std::move(scope);
@@ -290,7 +292,7 @@ void PhaseRecorder::Complete(int64_t token, int64_t bytes_in, int64_t bytes_out,
                              int64_t frames, const std::string& status,
                              const std::string& error_code,
                              const std::string& error_message) {
-    std::lock_guard<std::mutex> lock(mu_);
+    std::unique_lock<std::mutex> lock(inflight_mu_);
     auto it = inflight_.find(token);
     if (it == inflight_.end() || !it->second.active) return;
 
@@ -310,8 +312,10 @@ void PhaseRecorder::Complete(int64_t token, int64_t bytes_in, int64_t bytes_out,
         ev.event_type = (status == kStatusFailed) ? kEventTypeFailed : kEventTypeCompleted;
     }
     it->second.active = false;
-    events_.push_back(std::move(ev));
     inflight_.erase(it);
+    lock.unlock();
+    std::lock_guard<std::mutex> events_lock(events_mu_);
+    events_.push_back(std::move(ev));
 }
 
 void PhaseRecorder::Abort(int64_t token, const std::string& error_code,
@@ -330,7 +334,7 @@ void PhaseRecorder::Emit(std::string origin, std::string scope, std::string comp
         return; // fail-closed: unknown component/action is never recorded
     }
 
-    std::lock_guard<std::mutex> lock(mu_);
+    std::lock_guard<std::mutex> lock(events_mu_);
     PhaseEvent ev;
     ev.origin = std::move(origin);
     ev.scope = std::move(scope);
@@ -350,12 +354,12 @@ void PhaseRecorder::Emit(std::string origin, std::string scope, std::string comp
 }
 
 std::vector<PhaseEvent> PhaseRecorder::Snapshot() const {
-    std::lock_guard<std::mutex> lock(mu_);
+    std::lock_guard<std::mutex> lock(events_mu_);
     return events_;
 }
 
 size_t PhaseRecorder::Count() const {
-    std::lock_guard<std::mutex> lock(mu_);
+    std::lock_guard<std::mutex> lock(events_mu_);
     return events_.size();
 }
 

@@ -7,6 +7,7 @@ extern "C" {
 }
 
 #include <algorithm>
+#include <atomic>
 #include <filesystem>
 #include <memory>
 #include <set>
@@ -152,21 +153,26 @@ bool InputSessionRegistry::preopen(const std::vector<fs::path>& paths,
         return true;
     }
 
-    constexpr std::size_t k_max_concurrent_opens = 8;
     std::vector<std::string> errors(unique.size());
-    std::vector<bool> ok(unique.size(), false);
-    for (std::size_t begin = 0; begin < unique.size(); begin += k_max_concurrent_opens) {
-        const std::size_t end = std::min(unique.size(), begin + k_max_concurrent_opens);
-        std::vector<std::thread> workers;
-        workers.reserve(end - begin);
-        for (std::size_t index = begin; index < end; ++index) {
-            workers.emplace_back([&, index]() {
-                ok[index] = sessions[index]->open(unique[index], errors[index]);
-            });
-        }
-        for (auto& worker : workers) {
-            worker.join();
-        }
+    // vector<bool> packs bits and would make independent worker writes race;
+    // one byte per result keeps each completion independently addressable.
+    std::vector<unsigned char> ok(unique.size(), 0);
+    constexpr std::size_t k_max_concurrent_opens = 8;
+    const std::size_t worker_count = std::min(k_max_concurrent_opens, unique.size());
+    std::atomic<std::size_t> next{0};
+    std::vector<std::thread> workers;
+    workers.reserve(worker_count);
+    for (std::size_t worker_index = 0; worker_index < worker_count; ++worker_index) {
+        workers.emplace_back([&]() {
+            while (true) {
+                const std::size_t index = next.fetch_add(1, std::memory_order_relaxed);
+                if (index >= unique.size()) return;
+                ok[index] = sessions[index]->open(unique[index], errors[index]) ? 1 : 0;
+            }
+        });
+    }
+    for (auto& worker : workers) {
+        worker.join();
     }
     for (std::size_t index = 0; index < unique.size(); ++index) {
         if (!ok[index]) {
