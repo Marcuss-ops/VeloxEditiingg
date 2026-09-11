@@ -26,7 +26,7 @@
 7 DataServer/internal/forwardingstore/forwardingstore.go
 3 DataServer/internal/forwardingstore/forwardingstore_atomic.go
 4 DataServer/internal/forwardingstore/forwardingstore_lease.go
-3 DataServer/internal/forwardingstore/forwardingstore_metrics.go
+4 DataServer/internal/forwardingstore/forwardingstore_metrics.go
 9 DataServer/internal/forwardingstore/forwardingstore_query.go
 2 DataServer/internal/forwardingstore/forwardingstore_sync.go
 18 DataServer/internal/forwardingstore/forwardingstore_transitions.go
