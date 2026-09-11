@@ -21,10 +21,11 @@ import (
 // pipeline.Runner using the explicit payload `pipeline_id` (the legacy
 // hybrid.v1 fallback was retired).
 //
-// CAVEAT: the C++ engine runs as a synchronous subprocess; context
-// cancellation propagates only AFTER the engine finishes. The
-// descriptor's TemporalMode=global + Deterministic=true advertise this
-// property to the master scheduler.
+// The C++ engine runs as a synchronous subprocess, but the native client
+// propagates context cancellation to its process group, applies the grace
+// period/SIGKILL fallback, and reaps the process before returning. The
+// descriptor's TemporalMode=global + Deterministic=true describe scheduling
+// semantics, not a cancellation limitation.
 func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.ExecutionContext, spec executor.TaskSpec) (executor.ExecutionResult, error) {
 	startedAt := time.Now().UTC()
 	timer := jobPhaseTimerFromExecutionContext(execCtx)

@@ -42,11 +42,11 @@ const (
 // PR-3.4 invariant: no duplicated rendering. Every byte of video
 // produced by this executor comes from the canonical pipeline path.
 //
-// CAVEAT (documented for PR-3.5 hello): pipeline.Runner shells out to
-// the C++ render client synchronously. Parent context cancellation
-// cannot preempt the C++ process once it is running; the executor's
-// TemporalMode=global + Deterministic=true advertise this property to
-// the master scheduler so it can plan around the blocking nature.
+// Cancellation is propagated by the native client to the C++ process group:
+// SIGTERM is sent on ctx.Done, followed by the configured grace period and a
+// SIGKILL fallback, with the process reaped before Execute returns. The
+// executor's TemporalMode=global + Deterministic=true describe render
+// scheduling semantics, not a cancellation limitation.
 type SceneComposite struct {
 	pipelineRunner *pipeline.Runner
 	outputBase     string
