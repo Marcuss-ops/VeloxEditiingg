@@ -532,7 +532,7 @@ Outbox e delivery sono critical perché il server può restare vivo mentre il bu
 Sono presenti:
 
 - `make verify`;
-- workspace tests;
+- module-wide Go verification through `make verify` and `make test`;
 - routing invariants;
 - typed metrics must-pass;
 - pre-existing test watchlist promossa a must-pass;

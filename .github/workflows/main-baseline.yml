@@ -12,7 +12,6 @@
 #     domain gates (compute-outcome labels, conflict-budget call pattern,
 #     sql ownership, dsn busy-timeout); completion-protocol invariants;
 #     LOC thresholds.
-#   - workspace-tests.yml: per-module sequential Go test runner.
 #   - regression-race.yml: weekly scheduled -race regression.
 #   - ci-opaque-wire.yml: prevent legacy opaque-wire fields.
 #   - typed-metrics-must-pass.yml: lock 3 typed-metrics sub-tests.
@@ -96,15 +95,13 @@ jobs:
 
       - name: go vet ./... (workspace)
         # Workspace-aware vet: walks every module declared in go.work
-        # (DataServer, RemoteCodex/native/worker-agent-go, shared,
-        # internal/application/images, cmd/archcheck/scan). Same
+        # (DataServer, RemoteCodex/native/worker-agent-go, shared). Same
         # surface local devs run via `make vet`.
         run: make vet
 
       - name: go build ./... (workspace)
         # Workspace-aware build: walks every module declared in go.work
-        # (DataServer, RemoteCodex/native/worker-agent-go, shared,
-        # internal/application/images, cmd/archcheck/scan). The repo
+        # (DataServer, RemoteCodex/native/worker-agent-go, shared). The repo
         # root itself is NOT a module, so `go build ./...` from the
         # workspace root errors ("directory prefix . does not contain
         # modules listed in go.work"); iterating per-module via make

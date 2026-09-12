@@ -8,14 +8,14 @@ tracked cruft, and redundant execution paths are changed.
 
 ## Dead weight
 
-- [ ] Remove the unused `scripts/verify_attempt_milestones_check.py` and
+- [x] Remove the unused `scripts/verify_attempt_milestones_check.py` and
   `scripts/verify_attempt_milestones_e2e.sh` scripts.
-- [ ] Remove the vestigial `cmd/archcheck/scan/` module.
-- [ ] Remove the orphan `internal/application/images/` module.
-- [ ] Remove the two orphan module entries from `go.work`.
-- [ ] Remove the tracked `Instaedit/README.md` and `Instaedit/.gitignore`
+- [x] Remove the vestigial `cmd/archcheck/scan/` module.
+- [x] Remove the orphan `internal/application/images/` module.
+- [x] Remove the two orphan module entries from `go.work`.
+- [x] Remove the tracked `Instaedit/README.md` and `Instaedit/.gitignore`
   remnants while retaining the root ignore rule.
-- [ ] Update live documentation/comments that enumerate the workspace module
+- [x] Update live documentation/comments that enumerate the workspace module
   set; retain historical references as historical records.
 
 ## CI compute
