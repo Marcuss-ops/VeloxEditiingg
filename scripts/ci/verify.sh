@@ -9,7 +9,7 @@
 #   SKIP_HEAVY=1  skip cmake + docker image builds (fast local feedback)
 #   SKIP_LIGHT=1  skip gofmt/vet/test suite (used for image-only CI jobs)
 #   VERIFY_SKIP_HARNESS_SELF_TESTS=1
-#                  skip the six fixture-based guard self-tests (the CI
+#                  skip the fixture-based guard self-tests (the CI
 #                  workflow runs them only when their guarded surfaces change)
 #
 # Exit non-zero (any failure) bubbles up through `set -euo pipefail`.
@@ -129,6 +129,8 @@ if [[ "${VERIFY_SKIP_HARNESS_SELF_TESTS:-0}" != "1" ]]; then
   ./scripts/ci/test-check-payload-canonical-form.sh
   log "test-validate-canonical-payload (guard self-test)"
   ./scripts/ci/test-validate-canonical-payload.sh
+  log "test-ac-taskresult-convergence (guard self-test)"
+  ./scripts/ci/test-ac-taskresult-convergence.sh
   log "test-certify-fleet (offline certification-runner self-test)"
   ./scripts/cert/test-certify-remote-fleet.sh
   log "test-worker-rollout-offline (Docker activation contract self-test)"

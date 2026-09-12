@@ -14,6 +14,9 @@ on:
       - 'scripts/ci/check-payload-canonical-form.sh'
       - 'scripts/ci/test-check-payload-canonical-form.sh'
       - 'scripts/ci/test-validate-canonical-payload.sh'
+      - 'scripts/ci/check-ac-taskresult-convergence.sh'
+      - 'scripts/ci/test-ac-taskresult-convergence.sh'
+      - 'scripts/e2e/verify-ac-taskresult-convergence.sh'
       - 'scripts/cert/**'
       - 'deploy/runtime/**'
       - 'scripts/ci/test-worker-rollout-offline.sh'
@@ -31,6 +34,9 @@ on:
       - 'scripts/ci/check-payload-canonical-form.sh'
       - 'scripts/ci/test-check-payload-canonical-form.sh'
       - 'scripts/ci/test-validate-canonical-payload.sh'
+      - 'scripts/ci/check-ac-taskresult-convergence.sh'
+      - 'scripts/ci/test-ac-taskresult-convergence.sh'
+      - 'scripts/e2e/verify-ac-taskresult-convergence.sh'
       - 'scripts/cert/**'
       - 'deploy/runtime/**'
       - 'scripts/ci/test-worker-rollout-offline.sh'
@@ -63,6 +69,8 @@ jobs:
             command: ./scripts/ci/test-check-payload-canonical-form.sh
           - name: validate-canonical-payload
             command: ./scripts/ci/test-validate-canonical-payload.sh
+          - name: ac-taskresult-convergence
+            command: ./scripts/ci/test-ac-taskresult-convergence.sh
           - name: certify-fleet
             command: ./scripts/cert/test-certify-remote-fleet.sh
           - name: worker-rollout-offline
