@@ -26,7 +26,6 @@
 #
 # OUT-OF-REQUIREMENT (currently advisory only, see §11 of
 # docs/100-percent-plan/ci-required-checks.md):
-#   - `Workspace Tests / Workspace Tests`       (.github/workflows/workspace-tests.yml)
 #   - `Routing Invariants / Routing Invariants` (.github/workflows/routing-invariants.yml)
 #   - `Typed Metrics Must-Pass / Typed Metrics Must-Pass` (.github/workflows/typed-metrics-must-pass.yml)
 #   - `Deploy / Deploy (resolve digests + verify signatures + Ansible)` (.github/workflows/deploy.yml)

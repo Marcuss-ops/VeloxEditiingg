@@ -67,7 +67,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          # Mirrors ci.yml + workspace-tests.yml. Use go-version-file so the
+          # Mirrors ci.yml + main-baseline.yml. Use go-version-file so the
           # Go toolchain version tracks DataServer/go.mod (single-source-
           # of-truth) rather than a hardcoded "1.x" that drifts.
           go-version-file: DataServer/go.mod
@@ -90,7 +90,7 @@ jobs:
         working-directory: DataServer
         # -count=1 : disable Go test result caching so the gate ALWAYS
         #            physically runs every test, never serves stale PASS
-        #            from cache. Same rationale as workspace-tests.yml +
+        #            from cache. Same rationale as main-baseline.yml +
         #            pre-existing-test-watchlist.yml.
         # -v       : verbose, so the gate's CI log shows the 3 sub-tests
         #            running by name. Avoids the silent-PASS failure mode

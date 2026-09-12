@@ -1,0 +1,88 @@
+# Fixture-based guard self-tests are intentionally isolated from the full
+# verification lane. They run only when a guarded implementation or its
+# self-test changes; local make verify still runs them by default.
+
+name: Guard self-tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/ci/check-no-legacy.sh'
+      - 'scripts/ci/test-check-no-legacy.sh'
+      - 'scripts/ci/lib/diff-scope.sh'
+      - 'scripts/ci/check-payload-canonical-form.sh'
+      - 'scripts/ci/test-check-payload-canonical-form.sh'
+      - 'scripts/ci/test-validate-canonical-payload.sh'
+      - 'scripts/cert/**'
+      - 'deploy/runtime/**'
+      - 'scripts/ci/test-worker-rollout-offline.sh'
+      - 'scripts/ops/canary-worker-rollout.sh'
+      - 'scripts/fleetctl'
+      - 'scripts/ci/test-canary-worker-rollout.sh'
+      - 'shared/contract/**'
+      - '.github/workflows/guard-self-tests.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'scripts/ci/check-no-legacy.sh'
+      - 'scripts/ci/test-check-no-legacy.sh'
+      - 'scripts/ci/lib/diff-scope.sh'
+      - 'scripts/ci/check-payload-canonical-form.sh'
+      - 'scripts/ci/test-check-payload-canonical-form.sh'
+      - 'scripts/ci/test-validate-canonical-payload.sh'
+      - 'scripts/cert/**'
+      - 'deploy/runtime/**'
+      - 'scripts/ci/test-worker-rollout-offline.sh'
+      - 'scripts/ops/canary-worker-rollout.sh'
+      - 'scripts/fleetctl'
+      - 'scripts/ci/test-canary-worker-rollout.sh'
+      - 'shared/contract/**'
+      - '.github/workflows/guard-self-tests.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: guard-self-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  self-test:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: check-no-legacy
+            command: ./scripts/ci/test-check-no-legacy.sh
+          - name: check-payload-canonical-form
+            command: ./scripts/ci/test-check-payload-canonical-form.sh
+          - name: validate-canonical-payload
+            command: ./scripts/ci/test-validate-canonical-payload.sh
+          - name: certify-fleet
+            command: ./scripts/cert/test-certify-remote-fleet.sh
+          - name: worker-rollout-offline
+            command: ./scripts/ci/test-worker-rollout-offline.sh
+          - name: canary-worker-rollout
+            command: ./scripts/ci/test-canary-worker-rollout.sh
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: DataServer/go.mod
+          cache: true
+          cache-dependency-path: |
+            DataServer/go.sum
+            shared/go.sum
+      - name: Install shell-test dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends jq sqlite3
+      - name: Run ${{ matrix.name }}
+        run: ${{ matrix.command }}

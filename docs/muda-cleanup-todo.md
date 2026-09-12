@@ -20,16 +20,16 @@ tracked cruft, and redundant execution paths are changed.
 
 ## CI compute
 
-- [ ] Remove the duplicate advisory `workspace-tests.yml` workflow.
-- [ ] Remove its stale live references from workflow comments and operator
+- [x] Remove the duplicate advisory `workspace-tests.yml` workflow.
+- [x] Remove its stale live references from workflow comments and operator
   tooling.
-- [ ] Remove the standalone CI invocations duplicated by `make verify` for
+- [x] Remove the standalone CI invocations duplicated by `make verify` for
   completion invariants, DSN busy-timeout, and AC/TaskResult convergence.
-- [ ] Remove the duplicate native dependency installation after the apt cache
+- [x] Remove the duplicate native dependency installation after the apt cache
   action, preserving one installation path.
 - [ ] Remove the daily LOC cron.
 - [ ] Remove the weekly drift crons from the three static-text guard workflows.
-- [ ] Move the six expensive guard self-tests out of every `make verify` CI
+- [x] Move the six expensive guard self-tests out of every `make verify` CI
   run into a path-filtered workflow; keep them in local verification.
 
 ## Local-only cruft
