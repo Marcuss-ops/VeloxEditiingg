@@ -174,9 +174,9 @@ func TestCertification_PREFETCH_OriginPrefetch(t *testing.T) {
 	now := time.Now().UTC()
 	plan := futureasset.Plan{
 		Version: 1, PlanID: "prefetch-cert", WorkerID: "prefetch-worker", GeneratedAt: now, ExpiresAt: now.Add(5 * time.Minute),
-		Limits: futureasset.Limits{PrefetchHorizon: 1, ProtectionLookahead: 1},
+		Limits:       futureasset.Limits{PrefetchHorizon: 1, ProtectionLookahead: 1},
 		PrefetchJobs: []futureasset.Job{{JobID: "job-prefetch", TaskID: "task-prefetch", ReservationID: "reservation-prefetch", Distance: 1, Assets: []futureasset.AssetManifest{{AssetKey: "asset-prefetch", AssetID: "asset-prefetch", SHA256: sha, SizeBytes: int64(len(payload))}}}},
-		Protect: []futureasset.ProtectedAsset{{AssetKey: "asset-prefetch", FutureRefCount: 1, NextUseDistance: 1}},
+		Protect:      []futureasset.ProtectedAsset{{AssetKey: "asset-prefetch", FutureRefCount: 1, NextUseDistance: 1}},
 	}
 	if err := s.Reconcile(plan); err != nil {
 		t.Fatal(err)

@@ -66,9 +66,9 @@ func TestScheduler_AggressiveEvictionAfterPrepared(t *testing.T) {
 	now := time.Now().UTC()
 	plan := futureasset.Plan{
 		Version: 1, PlanID: "eviction-cert", WorkerID: "eviction-test-worker", GeneratedAt: now, ExpiresAt: now.Add(time.Minute),
-		Limits: futureasset.Limits{PrefetchHorizon: 1, ProtectionLookahead: 1},
+		Limits:       futureasset.Limits{PrefetchHorizon: 1, ProtectionLookahead: 1},
 		PrefetchJobs: []futureasset.Job{{JobID: "job-evict", TaskID: "task-evict", ReservationID: "reservation-evict", Distance: 1, Assets: []futureasset.AssetManifest{{AssetKey: "asset-evict", AssetID: "asset-evict", SHA256: digest, SizeBytes: int64(len(payload))}}}},
-		Protect: []futureasset.ProtectedAsset{{AssetKey: "asset-evict", FutureRefCount: 1, NextUseDistance: 1}},
+		Protect:      []futureasset.ProtectedAsset{{AssetKey: "asset-evict", FutureRefCount: 1, NextUseDistance: 1}},
 	}
 	if err := s.Reconcile(plan); err != nil {
 		t.Fatal(err)
@@ -140,8 +140,12 @@ type trackingProtectionStore struct {
 	onRelease func(assetref.AssetKey, string)
 }
 
-func (s *trackingProtectionStore) Acquire(context.Context, assetref.AssetKey, string) error { return nil }
-func (s *trackingProtectionStore) Release(context.Context, assetref.AssetKey, string) error { return nil }
+func (s *trackingProtectionStore) Acquire(context.Context, assetref.AssetKey, string) error {
+	return nil
+}
+func (s *trackingProtectionStore) Release(context.Context, assetref.AssetKey, string) error {
+	return nil
+}
 func (s *trackingProtectionStore) Reserve(_ context.Context, key assetref.AssetKey, id string, _ time.Time) error {
 	if s.onReserve != nil {
 		s.onReserve(key, id)
@@ -242,10 +246,14 @@ func TestScheduler_ReleaseAllExecutionReservations(t *testing.T) {
 	var executionReserveCount, executionReleaseCount atomic.Int32
 	store := &trackingProtectionStore{
 		onReserve: func(key assetref.AssetKey, id string) {
-			if strings.HasPrefix(id, "execution:") { executionReserveCount.Add(1) }
+			if strings.HasPrefix(id, "execution:") {
+				executionReserveCount.Add(1)
+			}
 		},
 		onRelease: func(key assetref.AssetKey, id string) {
-			if strings.HasPrefix(id, "execution:") { executionReleaseCount.Add(1) }
+			if strings.HasPrefix(id, "execution:") {
+				executionReleaseCount.Add(1)
+			}
 		},
 	}
 	cachedPath := t.TempDir() + "/shutdown.bin"
