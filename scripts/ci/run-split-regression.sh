@@ -11,7 +11,7 @@
 #   and asserts EXACTLY 2 s.db.BeginTx sites, all in
 #           store_worker_heartbeat.go
 #           store_worker_recovery_tx.go
-#   Records wall-clock via `date +%s%N` deltas and an overall rc
+#   Records wall-clock via date +%s%N deltas in milliseconds and an overall rc
 #   (any group rc != 0 escalates the wrapper exit to 2).
 #
 # Exit codes:
@@ -53,7 +53,7 @@ run_group() {
   local rel_cwd="$2"
   local pkg="$3"
   local cwd="${REPO_ROOT}/${rel_cwd}"
-  local start_ns end_ns elapsed_s rc_go
+  local start_ns end_ns elapsed_ms rc_go
 
   if [[ ! -d "$cwd" ]]; then
     log "SKIP $label (directory missing: $cwd)"
@@ -71,10 +71,10 @@ run_group() {
   rc_go=${PIPESTATUS[0]}
   set -o pipefail
   end_ns=$(date +%s%N)
-  elapsed_s=$(( (end_ns - start_ns) / 1000000000 ))
+  elapsed_ms=$(( (end_ns - start_ns) / 1000000 ))
 
-  log "  rc: ${rc_go}  elapsed_s: ${elapsed_s}"
-  echo "${label}|${cwd}|${pkg}|${rc_go}|${elapsed_s}" >> "$RESULTS_TMP"
+  log "  rc: ${rc_go}  elapsed_ms: ${elapsed_ms}"
+  echo "${label}|${cwd}|${pkg}|${rc_go}|${elapsed_ms}" >> "$RESULTS_TMP"
   if [[ "$rc_go" -ne 0 ]]; then
     OVERALL_RC=2
   fi
@@ -126,7 +126,7 @@ run_audit_single_writer_begin_tx() {
   local allowed1="DataServer/internal/store/store_worker_heartbeat.go"
   local allowed2="DataServer/internal/store/store_worker_recovery_tx.go"
   local allowed3="DataServer/internal/store/store_worker_resource_samples.go"
-  local start_ns end_ns elapsed_s rc_go
+  local start_ns end_ns elapsed_ms rc_go
 
   log "=== $label ==="
   log "  scope: ${cluster_pattern} (excluding _test.go)"
@@ -209,10 +209,10 @@ run_audit_single_writer_begin_tx() {
   } >> "$RESULTS_TMP"
 
   end_ns=$(date +%s%N)
-  elapsed_s=$(( (end_ns - start_ns) / 1000000000 ))
+  elapsed_ms=$(( (end_ns - start_ns) / 1000000 ))
 
-  log "  rc: ${rc_go}  elapsed_s: ${elapsed_s}"
-  echo "${label}|${REPO_ROOT}|${cluster_pattern}|${rc_go}|${elapsed_s}" \
+  log "  rc: ${rc_go}  elapsed_ms: ${elapsed_ms}"
+  echo "${label}|${REPO_ROOT}|${cluster_pattern}|${rc_go}|${elapsed_ms}" \
     >> "$RESULTS_TMP"
   if [[ "$rc_go" -ne 0 ]]; then
     OVERALL_RC=2
@@ -238,8 +238,8 @@ run_group "full-velox-worker-agent" "RemoteCodex/native/worker-agent-go" "./..."
 # store_worker_recovery_tx.go for the recovery-path opener.
 run_audit_single_writer_begin_tx
 
-log "=== summary (label | rc | elapsed_s) ==="
-awk -F'|' 'NF==5 {printf "  %-30s  rc=%-4s  elapsed=%ss\n", $1, $4, $5}' \
+log "=== summary (label | rc | elapsed_ms) ==="
+awk -F'|' 'NF==5 {printf "  %-30s  rc=%-4s  elapsed=%sms\n", $1, $4, $5}' \
   "$RESULTS_TMP"
 
 if [[ "$OVERALL_RC" -ne 0 ]]; then

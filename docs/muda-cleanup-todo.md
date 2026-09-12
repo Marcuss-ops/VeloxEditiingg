@@ -42,7 +42,7 @@ tracked cruft, and redundant execution paths are changed.
 
 - [ ] Remove the artificial 1.5-second native package-test delay and preserve
   useful sub-second timing in the regression report.
-- [ ] Replace fixed process-counter sleeps with condition-driven polling while
+- [x] Replace fixed process-counter sleeps with condition-driven polling while
   preserving the integration assertions and bounded timeouts.
 
 ## Acceptance

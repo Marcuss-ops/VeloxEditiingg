@@ -277,6 +277,9 @@ func monitorProcessGroup(pgid, excludePID int, interval time.Duration, stop <-ch
 	for {
 		select {
 		case <-stop:
+			// Capture one final snapshot so callers can stop as soon as
+			// their condition is observed without losing the last counters.
+			sample()
 			var userTicks, sysTicks int64
 			for _, peak := range cpuPeak {
 				userTicks += peak.userTicks

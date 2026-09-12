@@ -3,13 +3,12 @@
 //
 // Purpose: prior to this stub, the package had no *_test.go files, so
 // `go test -race -count=1 ./pkg/video/services/native/...` returned
-// `ok pkg 0.000s` — wall-clock sub-second and rounded to 0 by the
-// integer-second floor in scripts/ci/run-split-regression.sh. That
-// floor made the regression-race job-summary diff unreadable for this
-// package (the "<1 s" footnote in
-// docs/2026-07-19-post-0d2158d-regression-check.md attested to it).
+// `ok pkg 0.000s`, hiding whether the split files were still in the
+// test compile graph. The package-level references below make a future
+// split-file rename a compile failure, while the regression report now
+// records sub-second durations in milliseconds.
 //
-// This stub gives the package a measurable test roundtrip without
+// This stub gives the package an explicit compile-time wiring check without
 // introducing behavioural coverage:
 //
 //  1. The package-level `_ = …` references below force every split
@@ -17,13 +16,10 @@
 //     engine_progress) to be in the test binary's compile graph. If
 //     a future refactor extracts or renames any of those files,
 //     this test fails to COMPILE — a much louder signal than a
-//     silent floor-round to 0 s.
+//     package that silently reports no test coverage.
 //
-//  2. The single TestSplitWiresExecute function captures the small
-//     wall-clock budget needed to defeat the integer-second floor.
-//     `time.Sleep(1500 * time.Millisecond)` is exactly enough to
-//     guarantee elapsed_s >= 1 on any reasonable host while still
-//     running in well under the race-detector package budget.
+//  2. The single TestSplitWiresExecute function keeps the compile-only
+//     invariant explicit without adding artificial wall-clock delay.
 //
 // The stub is intentionally white-box (`package native`) because the
 // 4 splits carry UNEXPORTED symbols (resolveBinary, runEngineProcess,
@@ -33,7 +29,6 @@ package native
 
 import (
 	"testing"
-	"time"
 )
 
 // Compile-only references: one symbol per split file. Removes the
@@ -46,15 +41,9 @@ var (
 	_ = streamEngineOutput // engine_progress.go
 )
 
-// TestSplitWiresExecute is the only test in this package. Its body
-// runs once, sleeps 1.5 s, and asserts nothing — the package's
-// invariant is "the 4 split files compile together via this stub",
-// which the package-level `var` declarations above already prove.
-//
-// The 1.5 s sleep is the post-split wall-clock floor for the
-// split-worker-video group in scripts/ci/run-split-regression.sh;
-// the alternative (no test body at all) leaves the floor at <1 s
-// and re-introduces the "<1 s" footnote on every regression run.
+// TestSplitWiresExecute is the only test in this package. Its body is
+// intentionally empty: the package-level references above prove that
+// all four split files compile together via this test package.
 func TestSplitWiresExecute(t *testing.T) {
-	time.Sleep(1500 * time.Millisecond)
+	_ = t
 }

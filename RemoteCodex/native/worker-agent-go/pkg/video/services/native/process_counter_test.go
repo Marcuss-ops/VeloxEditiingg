@@ -21,6 +21,13 @@ func readSelfStat(t *testing.T) []byte {
 	return data
 }
 
+func waitForProcessGroup(t *testing.T, pgid int, condition func(map[int]processSample) bool) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		return condition(sampleProcessGroup(pgid))
+	}, time.Second, 10*time.Millisecond)
+}
+
 func TestClassifyComm(t *testing.T) {
 	cases := []struct {
 		comm string
@@ -108,9 +115,21 @@ func TestMonitorProcessGroup_CountsRealTree(t *testing.T) {
 	go func() {
 		telCh <- monitorProcessGroup(cmd.Process.Pid, cmd.Process.Pid, 10*time.Millisecond, stop)
 	}()
-	// The tree spawns within milliseconds and the sleeps live for 2s,
-	// so the sampler has plenty of windows to observe them.
-	time.Sleep(300 * time.Millisecond)
+	waitForProcessGroup(t, cmd.Process.Pid, func(live map[int]processSample) bool {
+		var shell, other int
+		for pid, sample := range live {
+			if pid == cmd.Process.Pid {
+				continue
+			}
+			switch classifyComm(sample.comm) {
+			case KindShell:
+				shell++
+			case KindOther:
+				other++
+			}
+		}
+		return shell >= 1 && other >= 1
+	})
 	close(stop)
 	counts := (<-telCh).Counts
 
@@ -140,7 +159,15 @@ func TestMonitorProcessGroup_ExcludesRoot(t *testing.T) {
 	go func() {
 		telCh <- monitorProcessGroup(cmd.Process.Pid, cmd.Process.Pid, 10*time.Millisecond, stop)
 	}()
-	time.Sleep(300 * time.Millisecond)
+	waitForProcessGroup(t, cmd.Process.Pid, func(live map[int]processSample) bool {
+		external := 0
+		for pid := range live {
+			if pid != cmd.Process.Pid {
+				external++
+			}
+		}
+		return external == 2
+	})
 	close(stop)
 	counts := (<-telCh).Counts
 
@@ -206,7 +233,15 @@ while time.time() < end:
 	go func() {
 		telCh <- monitorProcessGroup(cmd.Process.Pid, cmd.Process.Pid, 10*time.Millisecond, stop)
 	}()
-	time.Sleep(700 * time.Millisecond)
+	waitForProcessGroup(t, cmd.Process.Pid, func(live map[int]processSample) bool {
+		var userTicks, sysTicks, rss int64
+		for _, sample := range live {
+			userTicks += sample.userTicks
+			sysTicks += sample.sysTicks
+			rss += sample.rssBytes
+		}
+		return userTicks+sysTicks >= 20 && rss >= 8*1024*1024
+	})
 	close(stop)
 	cpu := (<-telCh).CPU
 
@@ -263,7 +298,15 @@ func TestMonitorProcessGroup_CollectsTreeIO(t *testing.T) {
 	go func() {
 		telCh <- monitorProcessGroup(cmd.Process.Pid, cmd.Process.Pid, 10*time.Millisecond, stop)
 	}()
-	time.Sleep(300 * time.Millisecond)
+	waitForProcessGroup(t, cmd.Process.Pid, func(live map[int]processSample) bool {
+		var bytesRead, bytesWritten int64
+		for pid := range live {
+			io := sampleProcessIO(pid)
+			bytesRead += io.BytesRead
+			bytesWritten += io.BytesWritten
+		}
+		return bytesRead >= 65536 && bytesWritten >= 65536
+	})
 	close(stop)
 	io := (<-telCh).IO
 
