@@ -76,6 +76,11 @@ func TestManager_OperationalSnapshotProjectsLowCardinalityMetrics(t *testing.T) 
 		snap, ok := m.Snapshot("active")
 		return ok && snap.SharedWaiters == 2
 	})
+	waitFor(t, "coalesced operational snapshot", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return latest.CoalescedRequestsTotal >= 1
+	})
 	mu.Lock()
 	active := latest
 	mu.Unlock()
