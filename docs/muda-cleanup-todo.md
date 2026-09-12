@@ -34,8 +34,8 @@ tracked cruft, and redundant execution paths are changed.
 
 ## Local-only cruft
 
-- [ ] Delete the six stale native CMake build trees and `Testing/` artifacts.
-- [ ] Delete root `.pytest_cache/` and Python cache artifacts.
+- [x] Delete the six stale native CMake build trees and `Testing/` artifacts.
+- [x] Delete root `.pytest_cache/` and Python cache artifacts.
 - [x] Add an explicit root `.pytest_cache/` ignore rule.
 
 ## Slow tests
