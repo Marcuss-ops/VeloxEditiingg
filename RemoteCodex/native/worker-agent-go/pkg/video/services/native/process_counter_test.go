@@ -282,10 +282,19 @@ func TestMonitorProcessGroup_CollectsTreeIO(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("process group sampling requires /proc (Linux)")
 	}
-	// dd streams 1 GiB from /dev/zero to /dev/null so the process stays
-	// alive for the whole sample window; rchar/wchar count every byte
-	// through read()/write() regardless of the device.
-	cmd := exec.Command("sh", "-c", `exec dd if=/dev/zero of=/dev/null bs=1M count=1024 2>/dev/null`)
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 required for the sustained IO fixture")
+	}
+	// Keep the process alive while it performs read()/write() activity.
+	// A fast, finite dd can exit between /proc samples on a busy runner,
+	// so this fixture deliberately paces 64 KiB transfers for 1.5s.
+	cmd := exec.Command("sh", "-c", `exec python3 -c 'import os, time
+src = os.open("/dev/zero", os.O_RDONLY)
+dst = os.open("/dev/null", os.O_WRONLY)
+end = time.time() + 1.5
+while time.time() < end:
+    os.write(dst, os.read(src, 65536))
+    time.sleep(0.01)'`)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	require.NoError(t, cmd.Start())
 	defer func() {
@@ -310,8 +319,8 @@ func TestMonitorProcessGroup_CollectsTreeIO(t *testing.T) {
 	close(stop)
 	io := (<-telCh).IO
 
-	// The dd child has read and written at least 64 KiB by any sample
-	// window (1 MiB blocks stream at GB/s through page cache).
+	// The sustained child has read and written at least 64 KiB by a
+	// qualifying sample window.
 	require.GreaterOrEqual(t, io.BytesRead, int64(65536), "tree rchar must observe the child's reads")
 	require.GreaterOrEqual(t, io.BytesWritten, int64(65536), "tree wchar must observe the child's writes")
 }
