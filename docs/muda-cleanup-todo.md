@@ -27,8 +27,8 @@ tracked cruft, and redundant execution paths are changed.
   completion invariants, DSN busy-timeout, and AC/TaskResult convergence.
 - [x] Remove the duplicate native dependency installation after the apt cache
   action, preserving one installation path.
-- [ ] Remove the daily LOC cron.
-- [ ] Remove the weekly drift crons from the three static-text guard workflows.
+- [x] Remove the daily LOC cron.
+- [x] Remove the weekly drift crons from the three static-text guard workflows.
 - [x] Move the six expensive guard self-tests out of every `make verify` CI
   run into a path-filtered workflow; keep them in local verification.
 
@@ -36,7 +36,7 @@ tracked cruft, and redundant execution paths are changed.
 
 - [ ] Delete the six stale native CMake build trees and `Testing/` artifacts.
 - [ ] Delete root `.pytest_cache/` and Python cache artifacts.
-- [ ] Add an explicit root `.pytest_cache/` ignore rule.
+- [x] Add an explicit root `.pytest_cache/` ignore rule.
 
 ## Slow tests
 

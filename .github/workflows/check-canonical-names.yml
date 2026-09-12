@@ -90,7 +90,6 @@
 #   * pull_request to main          — pre-merge gating
 #     (NO paths-ignore — every PR runs the audit so a doc-only edit
 #      introducing a deprecated pattern cannot slip through silently)
-#   * weekly Monday 06:00 UTC drift — drift detector
 #   * workflow_dispatch             — manual re-run
 #
 # Status check name in PR UI: "Canonical names guard".
@@ -107,8 +106,6 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-  schedule:
-    - cron: '0 6 * * 1'  # weekly Monday 06:00 UTC drift detector
   workflow_dispatch:
 
 concurrency:
