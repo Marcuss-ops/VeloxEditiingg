@@ -64,9 +64,9 @@ func (h *Handler) RegisterV2Handler() gin.HandlerFunc {
 		// — see handler.go::IsWorkerAllowed for the empty-string
 		// guard) and BEFORE credential validation + registry insert
 		// (so we do NOT store credentials for, or register, an
-		// unlisted worker). The IsWorkerAllowed helper mirrors
-		// grpcserver/allowlistAuthorizer::IsAllowed so the two paths
-		// cannot drift at the byte level.
+		// unlisted worker). IsWorkerAllowed delegates the decision to
+		// internal/auth/workerauthz, the same canonical helper used by
+		// the gRPC authorizer, so the two protocol paths cannot drift.
 		if !h.IsWorkerAllowed(body.WorkerID) {
 			log.Printf("[REGISTER] worker %s rejected: not in VELOX_ALLOWED_WORKERS",
 				body.WorkerID[:min(16, len(body.WorkerID))]+"...")
