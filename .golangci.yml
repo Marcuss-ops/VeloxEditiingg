@@ -7,9 +7,10 @@ linters:
     - govet
     - ineffassign
     - unused
+    - errorlint
   settings:
     funlen:
-      lines: 600
+      lines: 200
       statements: -1
   exclusions:
     generated: lax
