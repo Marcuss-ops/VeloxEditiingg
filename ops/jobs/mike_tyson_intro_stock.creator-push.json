@@ -15,8 +15,8 @@
         "text": "From cinema into another world.",
         "duration_seconds": 19,
         "clip": {
-          "asset_id": "yt_0ElQTzSx3ec_72_91_v1",
-          "url": "velox-asset://yt_0ElQTzSx3ec_72_91_v1",
+          "drive_file_id": "1Jjs2IhOtoFuoFzPqYw8IC4lYdouIVs6c",
+          "url": "velox-drive://1Jjs2IhOtoFuoFzPqYw8IC4lYdouIVs6c",
           "duration_ms": 19000
         }
       },
