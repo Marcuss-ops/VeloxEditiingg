@@ -373,6 +373,10 @@ func (h *Handlers) CreatorPush() gin.HandlerFunc {
 			creatorPushError(c, http.StatusBadRequest, "invalid_json", "request body must be valid JSON", nil)
 			return
 		}
+		if err := expandCreatorStockFolders(c.Request.Context(), req.Payload, h.stockFolderLister); err != nil {
+			creatorPushError(c, http.StatusUnprocessableEntity, "invalid_payload", err.Error(), nil)
+			return
+		}
 
 		normalized, err := normalizeCreatorPushRequest(req)
 		if err != nil {

@@ -92,6 +92,49 @@ func (id DriveFileID) String() string { return string(id) }
 // Empty reports whether the ID has no usable value.
 func (id DriveFileID) Empty() bool { return strings.TrimSpace(string(id)) == "" }
 
+// DriveFolderID is the canonical Google Drive folder identifier extracted
+// from a supported folder URL. It is deliberately distinct from DriveFileID:
+// a folder is a collection that must be expanded before a worker can consume
+// its media files.
+type DriveFolderID string
+
+// String returns the canonical string representation.
+func (id DriveFolderID) String() string { return string(id) }
+
+// Empty reports whether the ID has no usable value.
+func (id DriveFolderID) Empty() bool { return strings.TrimSpace(string(id)) == "" }
+
+// ParseDriveFolderID extracts the canonical folder ID from a Google Drive
+// folder URL. File URLs are rejected so callers cannot accidentally treat a
+// single file as a stock pool.
+func ParseDriveFolderID(rawURL string) (DriveFolderID, error) {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return "", ErrEmpty
+	}
+
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "", fmt.Errorf("assetref: parse %q: %w", rawURL, err)
+	}
+	host := strings.ToLower(u.Host)
+	if host != "drive.google.com" && host != "www.drive.google.com" {
+		return "", &NotDriveError{URL: rawURL}
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	for i, part := range parts {
+		if !strings.EqualFold(part, "folders") || i+1 >= len(parts) {
+			continue
+		}
+		id := strings.TrimSpace(parts[i+1])
+		if id != "" {
+			return DriveFolderID(id), nil
+		}
+		break
+	}
+	return "", &NoIDError{URL: rawURL}
+}
+
 // ParseDriveFileID extracts the canonical Google Drive file ID from a
 // supported URL form, preserving the case of the opaque provider ID.
 func ParseDriveFileID(rawURL string) (DriveFileID, error) {

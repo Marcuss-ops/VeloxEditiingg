@@ -15,6 +15,7 @@ import (
 	workerhandlersuploads "velox-server/internal/handlers/remote/workers/uploads"
 	"velox-server/internal/handlers/server/api"
 	instaedithandler "velox-server/internal/handlers/server/instaedit"
+	"velox-server/internal/handlers/server/pipeline"
 	"velox-server/internal/instaeditauth"
 	"velox-server/internal/jobs"
 	"velox-server/internal/jobs/enqueue"
@@ -64,8 +65,9 @@ type PipelineRouteDeps struct {
 	// step #3 — the legacy creatorflow.Service forwarder fallback was
 	// removed. Nil here is a wiring bug; registerPipelineRoutes
 	// refuses to start if Resolver is nil.
-	Resolver     *creatorflow.Resolver
-	AssetService *voiceoverassets.AssetService
+	Resolver          *creatorflow.Resolver
+	AssetService      *voiceoverassets.AssetService
+	StockFolderLister pipeline.StockFolderLister
 }
 
 // UploadRouteDeps carries the deps for upload POST routes

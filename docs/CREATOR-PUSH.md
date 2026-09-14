@@ -85,6 +85,21 @@ Do not send local creator paths such as `C:\clips\video.mp4` or `/home/creator/a
 - a `velox-asset://` reference already resolvable by the master; or
 - an HTTP(S) URL reachable by the master and workers.
 
+For a stock pool, `scenes[].stock` may contain one Drive folder reference:
+
+```json
+"stock": [
+  {"url": "https://drive.google.com/drive/folders/<FOLDER_ID>"}
+]
+```
+
+The master expands that folder (and nested folders) to its video files before
+the payload is persisted. The worker then downloads those file references,
+deterministically shuffles the pool per job and scene, loops it until the
+scene voiceover ends, and trims the final segment to the exact duration. A
+folder with no video files, or a folder job without the Drive listing
+capability, is rejected at intake; it is never treated as one media file.
+
 ### Canonical Creator upload
 
 To transfer a local file from the Creator computer, upload it first:

@@ -164,6 +164,42 @@ func TestDriveFileID_FoldersRejected(t *testing.T) {
 	}
 }
 
+func TestDriveFolderID_FolderLinkForms(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"folder root", "https://drive.google.com/drive/folders/folder-123", "folder-123"},
+		{"folder with sharing query", "https://drive.google.com/drive/folders/folder-123?usp=sharing", "folder-123"},
+		{"folder for user", "https://drive.google.com/drive/u/2/folders/folder-123", "folder-123"},
+		{"www host", "https://www.drive.google.com/drive/folders/folder-123/", "folder-123"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ParseDriveFolderID(tc.in)
+			if err != nil {
+				t.Fatalf("ParseDriveFolderID(%q) unexpected error: %v", tc.in, err)
+			}
+			if got.String() != tc.want {
+				t.Fatalf("ParseDriveFolderID(%q) = %q, want %q", tc.in, got.String(), tc.want)
+			}
+		})
+	}
+}
+
+func TestDriveFolderID_RejectsFileAndNonDriveLinks(t *testing.T) {
+	for _, input := range []string{
+		"https://drive.google.com/file/d/file-123/view",
+		"https://example.com/drive/folders/folder-123",
+		"https://drive.google.com/drive/folders/",
+	} {
+		if _, err := ParseDriveFolderID(input); err == nil {
+			t.Fatalf("ParseDriveFolderID(%q) expected error, got nil", input)
+		}
+	}
+}
+
 func TestDriveFileID_Invalid(t *testing.T) {
 	t.Parallel()
 

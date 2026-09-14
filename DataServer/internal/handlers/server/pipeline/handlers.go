@@ -20,20 +20,21 @@ import (
 // Resolver and socialClient are built once at construction so target discovery
 // and job intake do not create transport clients per request.
 type Handlers struct {
-	cfg             *config.Config
-	enqueuer        *enqueue.Enqueuer
-	client          *remoteengine.Client
-	resolver        *creatorflow.Resolver
-	submission      *creatorflow.CanonicalJobSubmitter
-	socialClient    *socialclient.Client
-	targetResolver  *targetpublishing.TargetResolver
-	jobs            JobsDeps
-	store           *store.SQLiteStore
-	intakeSink      CreatorIntakeSink
-	assetService    *voiceoverassets.AssetService
-	inputPolicy     *inputsecurity.Policy
-	credentialVault *credentials.Vault
-	pipelineRuns    PipelineRunService
+	cfg               *config.Config
+	enqueuer          *enqueue.Enqueuer
+	client            *remoteengine.Client
+	resolver          *creatorflow.Resolver
+	submission        *creatorflow.CanonicalJobSubmitter
+	socialClient      *socialclient.Client
+	targetResolver    *targetpublishing.TargetResolver
+	jobs              JobsDeps
+	store             *store.SQLiteStore
+	intakeSink        CreatorIntakeSink
+	assetService      *voiceoverassets.AssetService
+	stockFolderLister StockFolderLister
+	inputPolicy       *inputsecurity.Policy
+	credentialVault   *credentials.Vault
+	pipelineRuns      PipelineRunService
 }
 
 // JobsDeps bundles the optional jobs-layer dependencies used by
@@ -151,6 +152,13 @@ func (h *Handlers) WithIntakeSourceRecorder(recorder creatorflow.IntakeSourceRec
 
 func (h *Handlers) WithAssetService(svc *voiceoverassets.AssetService) *Handlers {
 	h.assetService = svc
+	return h
+}
+
+// WithStockFolderLister wires the Drive capability used to expand a single
+// folder-backed stock reference into its video files at creator intake.
+func (h *Handlers) WithStockFolderLister(lister StockFolderLister) *Handlers {
+	h.stockFolderLister = lister
 	return h
 }
 

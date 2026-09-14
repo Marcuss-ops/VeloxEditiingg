@@ -5,6 +5,7 @@ package main
 import (
 	workerhandlersuploads "velox-server/internal/handlers/remote/workers/uploads"
 	instaedithandler "velox-server/internal/handlers/server/instaedit"
+	"velox-server/internal/handlers/server/pipeline"
 	velmetrics "velox-server/internal/metrics"
 	"velox-server/internal/performance"
 	"velox-server/internal/store"
@@ -38,6 +39,12 @@ func (c *appComponents) routerBundle() RouterBundle {
 			TaskReader:   c.tasks.TaskRepository,
 			Resolver:     c.resolver,
 			AssetService: c.modules.AssetService,
+			StockFolderLister: func() pipeline.StockFolderLister {
+				if c.modules.Drive != nil {
+					return c.modules.Drive.Service()
+				}
+				return nil
+			}(),
 		},
 		Upload: UploadRouteDeps{
 			Cfg:                     c.cfg,
