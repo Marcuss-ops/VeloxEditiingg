@@ -4,6 +4,7 @@ import (
 	"log"
 	"strings"
 
+	"velox-server/internal/auth/workerauthz"
 	"velox-server/internal/config"
 	"velox-server/internal/store"
 	workersreg "velox-server/internal/workers"
@@ -67,11 +68,9 @@ func (h *Handler) Config() *config.Config {
 // they differ only in the status-code surface (HTTP 403 vs gRPC
 // PermissionDenied).
 //
-// The lookup logic mirrors grpcserver/allowlistAuthorizer::IsAllowed byte-
-// for-byte (including the `*` wildcard semantics) so drift between the
-// HTTP and gRPC paths is impossible at the byte level. A future refactor
-// could move both behind a shared internal/auth/workerauthz package;
-// until then the duplication is intentional and tested.
+// The decision is delegated to internal/auth/workerauthz, which is also used
+// by the gRPC authorizer. Protocol handlers retain only their own logging and
+// status-code behavior around that shared decision.
 //
 // Edge cases:
 //   - empty workerID                       → denied (always)
@@ -82,29 +81,10 @@ func (h *Handler) IsWorkerAllowed(workerID string) bool {
 	if h == nil || h.cfg == nil {
 		return false
 	}
-	workerID = strings.TrimSpace(workerID)
-	if workerID == "" {
-		return false
+	decision := workerauthz.New(h.cfg.Workers.AllowedWorkerIDs, h.cfg.Runtime.GRPCAllowInsecureDev)
+	allowed := decision.IsAllowed(workerID)
+	if decision.IsInsecureDevBypass() && allowed {
+		log.Printf("[WORKERS][REGISTER] VELOX_ALLOWED_WORKERS is empty/\"*\" in dev mode — allowing %q", strings.TrimSpace(workerID))
 	}
-	csv := strings.TrimSpace(strings.Join(h.cfg.Workers.AllowedWorkerIDs, ","))
-	// Mirror grpcserver/allowlistAuthorizer::IsAllowed: an empty CSV
-	// OR a CSV of literal "*" are both treated as "no allowlist"
-	// (the dev-bypass surface). Bootstrap rejects "*" via
-	// ValidateProductionWorkers so the only configuration that
-	// reaches this branch with "*" is dev (or an operator who
-	// hand-crafted a config).
-	if csv == "" || csv == "*" {
-		if h.cfg.Runtime.GRPCAllowInsecureDev {
-			log.Printf("[WORKERS][REGISTER] VELOX_ALLOWED_WORKERS is empty/\"*\" in dev mode — allowing %q (matches gRPC handler behaviour)", workerID)
-			return true
-		}
-		log.Printf("[WORKERS][REGISTER] VELOX_ALLOWED_WORKERS is empty/\"*\" in production mode — denying worker %q", workerID)
-		return false
-	}
-	for _, id := range strings.Split(csv, ",") {
-		if strings.TrimSpace(id) == workerID {
-			return true
-		}
-	}
-	return false
+	return allowed
 }

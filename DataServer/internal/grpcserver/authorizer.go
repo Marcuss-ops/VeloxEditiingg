@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"velox-server/internal/auth/workerauthz"
 	"velox-server/internal/logging"
 )
 
@@ -22,10 +23,8 @@ type WorkerAuthorizer interface {
 
 // allowlistAuthorizer implements WorkerAuthorizer with a static parsed set.
 type allowlistAuthorizer struct {
-	workers    map[string]bool // parsed set of allowed worker IDs
-	emptyList  bool            // true when VELOX_ALLOWED_WORKERS was empty/whitespace
-	insecure   bool            // true when VELOX_GRPC_ALLOW_INSECURE_DEV=true
-	loggedWarn atomic.Bool     // prevent duplicate warning logs (goroutine-safe)
+	decision   *workerauthz.Authorizer
+	loggedWarn atomic.Bool // prevent duplicate warning logs (goroutine-safe)
 }
 
 // NewAllowlistAuthorizer parses the VELOX_ALLOWED_WORKERS string and returns
@@ -39,48 +38,20 @@ type allowlistAuthorizer struct {
 //     must have already fail-fast rejected this configuration)
 func NewAllowlistAuthorizer(allowedWorkerIDs []string, insecureDev bool) WorkerAuthorizer {
 	a := &allowlistAuthorizer{
-		workers:  make(map[string]bool),
-		insecure: insecureDev,
+		decision: workerauthz.New(allowedWorkerIDs, insecureDev),
 	}
-
-	for _, id := range allowedWorkerIDs {
-		id = strings.TrimSpace(id)
-		if id == "" || id == "*" {
-			continue
-		}
-		a.workers[id] = true
-	}
-	if len(a.workers) == 0 {
-		a.emptyList = true
-	}
-
 	return a
 }
 
 // IsAllowed returns true if workerID may connect.
 func (a *allowlistAuthorizer) IsAllowed(workerID string) bool {
-	workerID = strings.TrimSpace(workerID)
-	if workerID == "" {
-		return false
-	}
-
-	// Non-empty allowlist: exact match required.
-	if !a.emptyList {
-		return a.workers[workerID]
-	}
-
-	// Empty allowlist in dev: warn once, then allow.
-	if a.insecure {
+	allowed := a.decision.IsAllowed(workerID)
+	if a.decision.IsInsecureDevBypass() && allowed {
 		if !a.loggedWarn.Swap(true) {
 			logGRPCf(context.Background(), logging.LevelWarn, logging.CodeGRPCAuthz, "[GRPC][AUTHZ] VELOX_ALLOWED_WORKERS is empty — allowing all workers because VELOX_GRPC_ALLOW_INSECURE_DEV=true (NEVER do this in production)")
 		}
-		return true
 	}
-
-	// Empty allowlist in production: deny. Bootstrap should have caught this
-	// before the gRPC server started, but this is defense in depth.
-	logGRPCf(context.Background(), logging.LevelWarn, logging.CodeGRPCAuthz, "[GRPC][AUTHZ] VELOX_ALLOWED_WORKERS is empty in production mode — denying worker %q", workerID)
-	return false
+	return allowed
 }
 
 // ValidateWorkerAllowlist is called at bootstrap time to fail-fast when the
