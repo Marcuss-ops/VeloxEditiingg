@@ -3,9 +3,9 @@ package downloader
 // retry.go — error classification and backoff scheduling for asset
 // transfers. The transfer-level retry lifecycle (RETRY_WAIT loops, Range
 // resume, .part reuse) is hardened in the resilience commit; what lives here
-// today is the classification vocabulary both the worker transferer and the
-// future retry loop share, so the wire-facing semantics (what is retryable,
-// what is permanent, how long to wait) are defined in exactly one place.
+// today is the classification vocabulary and attempt runner shared by the
+// worker transferer and API client, so retry semantics are defined in exactly
+// one place.
 
 import (
 	"context"
@@ -55,7 +55,7 @@ func (e *HTTPStatusError) Error() string {
 	if e.Retryable {
 		return fmt.Sprintf("master returned %d: %s", e.StatusCode, e.Body)
 	}
-	return fmt.Sprintf("asset download failed: %s", e.Body)
+	return fmt.Sprintf("request returned %d: %s", e.StatusCode, e.Body)
 }
 
 // RetryAfter implements the optional delay contract consumed by Retry.
