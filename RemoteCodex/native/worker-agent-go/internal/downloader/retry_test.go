@@ -1,6 +1,8 @@
 package downloader
 
 import (
+	"context"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -42,5 +44,39 @@ func TestRetryAfterParsesHTTPDate(t *testing.T) {
 	got := RetryAfter(resp)
 	if got <= 0 || got > 3*time.Second {
 		t.Fatalf("RetryAfter HTTP-date = %v, want positive duration <= 3s", got)
+	}
+}
+
+func TestHTTPStatusErrorClassificationIsTyped(t *testing.T) {
+	if !IsRetryableError(NewHTTPStatusError(http.StatusUnauthorized, "restart", 0)) {
+		t.Fatal("401 must be retryable")
+	}
+	if IsRetryableError(NewHTTPStatusError(http.StatusForbidden, "denied", 0)) {
+		t.Fatal("403 must be permanent")
+	}
+	if IsRetryableError(fmt.Errorf("wrapped status 500-looking text")) {
+		t.Fatal("retryability must not be inferred from error text")
+	}
+}
+
+func TestRetryOwnsAttemptWaitAndFinalAttempt(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var attempts int
+	err := Retry(ctx, RetryConfig{
+		MaxAttempts: 2,
+		Backoff:     []time.Duration{0},
+	}, func(attempt int) AttemptResult {
+		attempts++
+		if attempt == 0 {
+			return AttemptResult{Err: fmt.Errorf("transient"), Retry: true}
+		}
+		return AttemptResult{Err: fmt.Errorf("terminal")}
+	})
+	if err == nil || err.Error() != "terminal" {
+		t.Fatalf("Retry error = %v, want terminal", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
 	}
 }

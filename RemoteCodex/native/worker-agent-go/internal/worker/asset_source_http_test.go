@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"velox-worker-agent/internal/downloader"
 )
 
 // noToken is a token getter for tests that never inject a bearer token.
@@ -126,13 +128,14 @@ func TestHTTPAssetSourceOpenClassifiesStatuses(t *testing.T) {
 				}
 				return
 			}
-			var re *retryableStatusError
-			var pe *permanentStatusError
+			var statusErr *downloader.HTTPStatusError
 			switch {
-			case tc.wantRetry && !errors.As(err, &re):
-				t.Fatalf("err = %v, want retryableStatusError", err)
-			case tc.wantPerm && !errors.As(err, &pe):
-				t.Fatalf("err = %v, want permanentStatusError", err)
+			case !errors.As(err, &statusErr):
+				t.Fatalf("err = %v, want downloader.HTTPStatusError", err)
+			case tc.wantRetry && !statusErr.Retryable:
+				t.Fatalf("err = %v, want retryable HTTP status", err)
+			case tc.wantPerm && statusErr.Retryable:
+				t.Fatalf("err = %v, want permanent HTTP status", err)
 			}
 		})
 	}

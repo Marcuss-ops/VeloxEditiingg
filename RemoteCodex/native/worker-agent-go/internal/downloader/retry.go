@@ -8,9 +8,14 @@ package downloader
 // what is permanent, how long to wait) are defined in exactly one place.
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"math/rand"
+	"net"
 	"net/http"
+	"os"
+	"syscall"
 	"time"
 )
 
@@ -33,6 +38,77 @@ var (
 	// ErrVerify marks a verification failure (hash or size mismatch).
 	ErrVerify = errors.New("downloader: asset verification failed")
 )
+
+// HTTPStatusError is the shared typed vocabulary for non-success HTTP
+// responses. Callers must use Retryable rather than inspecting Error text.
+type HTTPStatusError struct {
+	StatusCode      int
+	Body            string
+	RetryAfterDelay time.Duration
+	Retryable       bool
+}
+
+func (e *HTTPStatusError) Error() string {
+	if e == nil {
+		return "downloader: nil HTTP status error"
+	}
+	if e.Retryable {
+		return fmt.Sprintf("master returned %d: %s", e.StatusCode, e.Body)
+	}
+	return fmt.Sprintf("asset download failed: %s", e.Body)
+}
+
+// RetryAfter implements the optional delay contract consumed by Retry.
+func (e *HTTPStatusError) RetryAfter() time.Duration {
+	if e == nil {
+		return 0
+	}
+	return e.RetryAfterDelay
+}
+
+// NewHTTPStatusError constructs the canonical typed HTTP failure.
+func NewHTTPStatusError(statusCode int, body string, retryAfter time.Duration) *HTTPStatusError {
+	return &HTTPStatusError{
+		StatusCode:      statusCode,
+		Body:            body,
+		RetryAfterDelay: retryAfter,
+		Retryable:       IsRetryableStatus(statusCode),
+	}
+}
+
+// RetryAfterError returns a server-requested delay carried by an error, or 0
+// when the error has no Retry-After metadata.
+func RetryAfterError(err error) time.Duration {
+	var withDelay interface{ RetryAfter() time.Duration }
+	if errors.As(err, &withDelay) {
+		return withDelay.RetryAfter()
+	}
+	return 0
+}
+
+// IsRetryableError classifies transport and typed HTTP failures. Context
+// cancellation and deadline exhaustion are always terminal.
+func IsRetryableError(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var statusErr *HTTPStatusError
+	if errors.As(err, &statusErr) {
+		return statusErr.Retryable
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+	var sysErr *os.SyscallError
+	if errors.As(err, &sysErr) {
+		switch sysErr.Err {
+		case syscall.ECONNREFUSED, syscall.ECONNRESET, syscall.ETIMEDOUT, syscall.EHOSTUNREACH:
+			return true
+		}
+	}
+	return false
+}
 
 // IsRetryableStatus reports whether an upstream HTTP status is safe to retry.
 // Retryable: 401 (the worker's session token is re-issued on reconnect, so an
@@ -97,6 +173,60 @@ func BackoffSchedule(maxAttempts int, base time.Duration, jitter func() float64)
 		out = append(out, d)
 	}
 	return out
+}
+
+// AttemptResult tells Retry whether a failed attempt may be repeated.
+type AttemptResult struct {
+	Err        error
+	Retry      bool
+	RetryAfter time.Duration
+}
+
+// RetryConfig contains the policy shared by all downloader-facing retry
+// loops. Backoff is indexed by the current attempt (the delay before the next
+// attempt); a Retry-After value on AttemptResult overrides that entry.
+type RetryConfig struct {
+	MaxAttempts int
+	Backoff     []time.Duration
+	BeforeWait  func(attempt int, err error, delay time.Duration)
+}
+
+// Retry executes one logical operation until it succeeds, returns a terminal
+// error, or exhausts MaxAttempts. It owns attempt counting and context-aware
+// waiting so callers cannot diverge on final-attempt or cancellation rules.
+func Retry(ctx context.Context, cfg RetryConfig, attempt func(attempt int) AttemptResult) error {
+	if cfg.MaxAttempts < 1 {
+		cfg.MaxAttempts = 1
+	}
+	var lastErr error
+	for current := 0; current < cfg.MaxAttempts; current++ {
+		result := attempt(current)
+		if result.Err == nil {
+			return nil
+		}
+		lastErr = result.Err
+		if !result.Retry || current+1 >= cfg.MaxAttempts {
+			return result.Err
+		}
+
+		delay := result.RetryAfter
+		if delay <= 0 && current < len(cfg.Backoff) {
+			delay = cfg.Backoff[current]
+		}
+		if cfg.BeforeWait != nil {
+			cfg.BeforeWait(current+1, result.Err, delay)
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return lastErr
 }
 
 // RetryAfter extracts the Retry-After header value as seconds. Returns 0 when

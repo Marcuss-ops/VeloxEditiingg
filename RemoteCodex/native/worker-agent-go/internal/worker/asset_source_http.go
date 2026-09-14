@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
 	"velox-worker-agent/internal/downloader"
 )
@@ -100,18 +99,13 @@ func (s *httpAssetSource) Open(ctx context.Context, offset int64) (io.ReadCloser
 	case downloader.IsPermanentStatus(resp.StatusCode):
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		resp.Body.Close()
-		return nil, downloader.SourceMetadata{}, &permanentStatusError{
-			statusCode: resp.StatusCode,
-			body:       strings.TrimSpace(string(body)),
-		}
+		return nil, downloader.SourceMetadata{}, downloader.NewHTTPStatusError(
+			resp.StatusCode, strings.TrimSpace(string(body)), 0)
 	case downloader.IsRetryableStatus(resp.StatusCode):
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		resp.Body.Close()
-		return nil, downloader.SourceMetadata{}, &retryableStatusError{
-			statusCode: resp.StatusCode,
-			retryAfter: downloader.RetryAfter(resp),
-			body:       strings.TrimSpace(string(body)),
-		}
+		return nil, downloader.SourceMetadata{}, downloader.NewHTTPStatusError(
+			resp.StatusCode, strings.TrimSpace(string(body)), downloader.RetryAfter(resp))
 	default:
 		// Any other status (3xx, unexpected 2xx) cannot safely satisfy the
 		// requested window.
@@ -127,26 +121,3 @@ var (
 	errRangeNotSatisfiable = errors.New("asset source: range offset no longer valid")
 	errAssetNotFound       = errors.New("asset not found")
 )
-
-// retryableStatusError carries a retryable upstream status (401/408/429/5xx)
-// so the retry loop can honour Retry-After and keep its attempt accounting.
-type retryableStatusError struct {
-	statusCode int
-	retryAfter time.Duration
-	body       string
-}
-
-func (e *retryableStatusError) Error() string {
-	return fmt.Sprintf("master returned %d: %s", e.statusCode, e.body)
-}
-
-// permanentStatusError carries a permanent upstream status (forbidden,
-// not-found, and other non-retryable 4xx) that must never be retried.
-type permanentStatusError struct {
-	statusCode int
-	body       string
-}
-
-func (e *permanentStatusError) Error() string {
-	return fmt.Sprintf("asset download failed: %s", e.body)
-}

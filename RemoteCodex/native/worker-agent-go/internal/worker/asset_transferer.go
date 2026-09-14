@@ -162,16 +162,11 @@ func (t *masterAssetTransferer) transferSingleStream(ctx context.Context, report
 		w.logger.Warn("[ASSET] partial cleanup failed: %v", cleanupErr)
 	}
 	backoffs := downloader.BackoffSchedule(downloader.DefaultMaxAttempts, downloader.DefaultBaseBackoff, downloader.DefaultJitter)
-
-	var lastErr error
-	for attempt := 0; attempt < downloader.DefaultMaxAttempts; attempt++ {
-		if attempt > 0 {
-			wait := backoffs[attempt-1]
-			if err := waitForAssetDuration(ctx, wait); err != nil {
-				return downloader.TransferResult{}, err
-			}
-		}
-
+	var result downloader.TransferResult
+	err := downloader.Retry(ctx, downloader.RetryConfig{
+		MaxAttempts: downloader.DefaultMaxAttempts,
+		Backoff:     backoffs,
+	}, func(attempt int) downloader.AttemptResult {
 		resumeOffset := assetPartialSize(cacheDir, assetID, string(req.SHA256))
 		if !source.SupportsRange() {
 			// The byte source cannot satisfy a suffix request: restart the
@@ -181,18 +176,15 @@ func (t *masterAssetTransferer) transferSingleStream(ctx context.Context, report
 
 		body, meta, openErr := source.Open(ctx, resumeOffset)
 		if openErr != nil {
-			lastErr = openErr
-			var re *retryableStatusError
-			var pe *permanentStatusError
 			switch {
 			case errors.Is(openErr, errAssetNotFound):
-				return downloader.TransferResult{}, fmt.Errorf("asset not found")
+				return downloader.AttemptResult{Err: fmt.Errorf("asset not found")}
 			case errors.Is(openErr, errRangeNotSatisfiable):
 				if resumeOffset <= 0 {
-					return downloader.TransferResult{}, openErr
+					return downloader.AttemptResult{Err: openErr}
 				}
 				removeAssetPartial(cacheDir, assetID, string(req.SHA256))
-				continue
+				return downloader.AttemptResult{Err: openErr, Retry: ctx.Err() == nil}
 			case errors.Is(openErr, errRangeIgnored) && resumeOffset > 0:
 				// The upstream ignored the Range header (or returned a
 				// mismatched Content-Range): discard the stale partial and
@@ -200,31 +192,14 @@ func (t *masterAssetTransferer) transferSingleStream(ctx context.Context, report
 				removeAssetPartial(cacheDir, assetID, string(req.SHA256))
 				body, meta, openErr = source.Open(ctx, 0)
 				if openErr != nil {
-					lastErr = openErr
 					if errors.Is(openErr, errAssetNotFound) {
-						return downloader.TransferResult{}, fmt.Errorf("asset not found")
+						return downloader.AttemptResult{Err: fmt.Errorf("asset not found")}
 					}
-					if errors.As(openErr, &re) {
-						if re.retryAfter > 0 && attempt+1 < len(backoffs)+1 {
-							backoffs[attempt] = re.retryAfter
-						}
-						continue
-					}
-					return downloader.TransferResult{}, openErr
+					return assetAttemptResult(ctx, openErr)
 				}
 				resumeOffset = 0
-			case errors.As(openErr, &re):
-				if re.retryAfter > 0 && attempt+1 < len(backoffs)+1 {
-					backoffs[attempt] = re.retryAfter
-				}
-				continue
-			case errors.As(openErr, &pe):
-				// Permanent status (forbidden/not-found/other non-retryable
-				// 4xx): terminal.
-				return downloader.TransferResult{}, openErr
 			default:
-				// Transport error or other transient failure: retry.
-				continue
+				return assetAttemptResult(ctx, openErr)
 			}
 		}
 
@@ -256,11 +231,10 @@ func (t *masterAssetTransferer) transferSingleStream(ctx context.Context, report
 			if transferHandle != nil {
 				transferHandle.Abort("asset_transfer", err.Error())
 			}
-			lastErr = err
 			if errors.Is(err, ErrAssetVerification) {
-				return downloader.TransferResult{}, fmt.Errorf("%w: %v", downloader.ErrVerify, err)
+				return downloader.AttemptResult{Err: fmt.Errorf("%w: %v", downloader.ErrVerify, err)}
 			}
-			continue
+			return downloader.AttemptResult{Err: err, Retry: ctx.Err() == nil}
 		}
 		recordCacheProjectionEvent(reportCtx, "hash_verify", hashVerifyMS+materializeLocalMS, telemetry.StatusOK, "", 0)
 		if transferHandle != nil {
@@ -274,13 +248,13 @@ func (t *masterAssetTransferer) transferSingleStream(ctx context.Context, report
 			key := assetref.AssetKey(req.AssetKey)
 			entry := workercache.Entry{AssetKey: key, LocalPath: localPath}
 			if err := w.canonicalAssetCache.Store(ctx, entry); err != nil && !errors.Is(err, workercache.ErrDuplicate) {
-				return downloader.TransferResult{}, fmt.Errorf("register verified asset %s: %w", key, err)
+				return downloader.AttemptResult{Err: fmt.Errorf("register verified asset %s: %w", key, err)}
 			}
 			if err := w.canonicalAssetCache.MarkDownloadCompleteWithHash(ctx, key, localPath, downloadedBytes, verifiedHash); err != nil {
-				return downloader.TransferResult{}, fmt.Errorf("commit verified asset %s: %w", key, err)
+				return downloader.AttemptResult{Err: fmt.Errorf("commit verified asset %s: %w", key, err)}
 			}
 		}
-		return downloader.TransferResult{
+		result = downloader.TransferResult{
 			LocalPath: localPath,
 			Bytes:     downloadedBytes,
 			SHA256:    verifiedHash,
@@ -289,13 +263,24 @@ func (t *masterAssetTransferer) transferSingleStream(ctx context.Context, report
 				MaterializeLocalMS: materializeLocalMS.Milliseconds(),
 				DownloadWorkMS:     0, // single-stream work ~ wall; set by caller span
 			},
-		}, nil
+		}
+		return downloader.AttemptResult{}
+	})
+	if err != nil {
+		return downloader.TransferResult{}, fmt.Errorf("failed to download velox asset %s: %w", assetID, err)
 	}
+	return result, nil
+}
 
-	if lastErr == nil {
-		lastErr = fmt.Errorf("download failed")
+func assetAttemptResult(ctx context.Context, err error) downloader.AttemptResult {
+	if err == nil {
+		return downloader.AttemptResult{}
 	}
-	return downloader.TransferResult{}, fmt.Errorf("failed to download velox asset %s: %w", assetID, lastErr)
+	var statusErr *downloader.HTTPStatusError
+	if errors.As(err, &statusErr) {
+		return downloader.AttemptResult{Err: err, Retry: statusErr.Retryable, RetryAfter: statusErr.RetryAfter()}
+	}
+	return downloader.AttemptResult{Err: err, Retry: ctx.Err() == nil}
 }
 
 // assetTransferRequest builds the master-bridge download URL, the bearer-token

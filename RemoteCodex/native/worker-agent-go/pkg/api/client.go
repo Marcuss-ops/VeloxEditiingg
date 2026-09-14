@@ -5,20 +5,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
-	"math"
-	"math/rand"
-	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
+	"velox-worker-agent/internal/downloader"
 	"velox-worker-agent/pkg/logger"
 )
 
@@ -140,53 +135,10 @@ func (c *Client) SetAdminAuthToken(token string) {
 	c.authMu.Unlock()
 }
 
-func retryBackoff(attempt int, baseInterval time.Duration) time.Duration {
-	backoff := float64(baseInterval) * math.Pow(2, float64(attempt))
-	maxBackoff := 5 * time.Minute
-	if backoff > float64(maxBackoff) {
-		backoff = float64(maxBackoff)
-	}
-	minJitter := 100 * time.Millisecond
-	jitter := rand.Float64() * backoff
-	if jitter < float64(minJitter) {
-		jitter = float64(minJitter)
-	}
-	return time.Duration(jitter)
-}
-
-// isRetryableError classifies whether an HTTP error qualifies for the
-// retry policy. Network errors, syscall-level connection drops, and 5xx/429
-// responses are retryable; 4xx is not (besides 429 already covered) and
-// context cancellations are not retryable.
+// isRetryableError is retained as the package-local test seam while the
+// classification itself lives in the shared downloader vocabulary.
 func isRetryableError(err error) bool {
-	if err == nil {
-		return false
-	}
-	// Caller cancellation and deadline exhaustion are terminal for this
-	// request. Check them before net.Error because context deadline errors
-	// also implement net.Error and would otherwise be retried accidentally.
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return false
-	}
-	var netErr net.Error
-	if errors.As(err, &netErr) {
-		return true
-	}
-	var sysErr *os.SyscallError
-	if errors.As(err, &sysErr) {
-		switch sysErr.Err {
-		case syscall.ECONNREFUSED, syscall.ECONNRESET, syscall.ETIMEDOUT, syscall.EHOSTUNREACH:
-			return true
-		}
-	}
-	errStr := err.Error()
-	if strings.Contains(errStr, "status 5") || strings.Contains(errStr, "status 429") {
-		return true
-	}
-	if strings.Contains(errStr, "status 4") {
-		return false
-	}
-	return false
+	return downloader.IsRetryableError(err)
 }
 
 func (c *Client) doRequest(ctx context.Context, method, path string, body interface{}) ([]byte, error) {
@@ -195,42 +147,43 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body interf
 		return nil, fmt.Errorf("circuit breaker is open - master unavailable")
 	}
 
+	backoffs := downloader.BackoffSchedule(c.retryCount+1, c.retryInterval, downloader.DefaultJitter)
+	var responseBody []byte
 	var lastErr error
-	for attempt := 0; attempt <= c.retryCount; attempt++ {
-		if attempt > 0 {
-			backoff := retryBackoff(attempt-1, c.retryInterval)
+	var successfulAttempt int
+	err := downloader.Retry(ctx, downloader.RetryConfig{
+		MaxAttempts: c.retryCount + 1,
+		Backoff:     backoffs,
+		BeforeWait: func(attempt int, err error, delay time.Duration) {
 			logger.Warn("[%s] Retrying request (attempt %d/%d, endpoint: %s, backoff: %v, error: %v)",
-				EventAPIRetry, attempt, c.retryCount, path, backoff.Round(time.Millisecond), lastErr)
-			timer := time.NewTimer(backoff)
-			select {
-			case <-ctx.Done():
-				if !timer.Stop() {
-					<-timer.C
-				}
-				return nil, ctx.Err()
-			case <-timer.C:
-			}
-		}
-		respBody, err := c.doSingleRequest(ctx, method, path, body)
-		if err == nil {
+				EventAPIRetry, attempt, c.retryCount, path, delay.Round(time.Millisecond), err)
+		},
+	}, func(attempt int) downloader.AttemptResult {
+		responseBody, lastErr = c.doSingleRequest(ctx, method, path, body)
+		if lastErr == nil {
 			c.circuitBreaker.RecordSuccess()
-			if attempt > 0 {
-				logger.Info("[%s] Request succeeded after %d retries (endpoint: %s)",
-					EventAPISuccess, attempt, path)
-			}
-			return respBody, nil
+			successfulAttempt = attempt
+			return downloader.AttemptResult{}
 		}
-		lastErr = err
 		c.circuitBreaker.RecordFailure()
 		logger.Debug("[%s] Request failed (endpoint: %s, error: %v, circuit: %s)",
-			EventAPIError, path, err, c.circuitBreaker.GetState())
-		if ctx.Err() != nil || !isRetryableError(err) {
-			return nil, err
+			EventAPIError, path, lastErr, c.circuitBreaker.GetState())
+		return downloader.AttemptResult{
+			Err:        lastErr,
+			Retry:      isRetryableError(lastErr),
+			RetryAfter: downloader.RetryAfterError(lastErr),
 		}
+	})
+	if err != nil {
+		logger.Error("[%s] Request failed after %d retries (endpoint: %s, error: %v)",
+			EventAPIError, c.retryCount, path, err)
+		return nil, fmt.Errorf("request failed after %d retries: %w", c.retryCount, err)
 	}
-	logger.Error("[%s] Request failed after %d retries (endpoint: %s, error: %v)",
-		EventAPIError, c.retryCount, path, lastErr)
-	return nil, fmt.Errorf("request failed after %d retries: %w", c.retryCount, lastErr)
+	if successfulAttempt > 0 {
+		logger.Info("[%s] Request succeeded after %d retries (endpoint: %s)",
+			EventAPISuccess, successfulAttempt, path)
+	}
+	return responseBody, nil
 }
 
 func (c *Client) doSingleRequest(ctx context.Context, method, path string, body interface{}) ([]byte, error) {
@@ -281,7 +234,7 @@ func (c *Client) doSingleRequest(ctx context.Context, method, path string, body 
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
+		return nil, downloader.NewHTTPStatusError(resp.StatusCode, string(respBody), downloader.RetryAfter(resp))
 	}
 	return respBody, nil
 }

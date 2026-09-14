@@ -260,16 +260,13 @@ func (t *masterAssetTransferer) transferChunked(ctx context.Context, reportCtx c
 // uses the freshly re-issued session token.
 func fetchChunkRange(ctx context.Context, client *http.Client, downloadURL string, authToken func() string, c chunkRange, w io.WriterAt, shared *atomic.Int64, report func(), limiter *sharedBandwidthLimiter, networkPacer prefetch.NetworkPacer, sniffHTML bool) error {
 	backoffs := downloader.BackoffSchedule(downloader.DefaultMaxAttempts, downloader.DefaultBaseBackoff, downloader.DefaultJitter)
-	var lastErr error
-	for attempt := 0; attempt < downloader.DefaultMaxAttempts; attempt++ {
-		if attempt > 0 {
-			if err := waitForAssetDuration(ctx, backoffs[attempt-1]); err != nil {
-				return err
-			}
-		}
+	return downloader.Retry(ctx, downloader.RetryConfig{
+		MaxAttempts: downloader.DefaultMaxAttempts,
+		Backoff:     backoffs,
+	}, func(attempt int) downloader.AttemptResult {
 		reqHTTP, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
 		if err != nil {
-			return err
+			return downloader.AttemptResult{Err: err}
 		}
 		if token := authToken(); token != "" {
 			reqHTTP.Header.Set("Authorization", "Bearer "+token)
@@ -278,8 +275,7 @@ func fetchChunkRange(ctx context.Context, client *http.Client, downloadURL strin
 
 		resp, err := client.Do(reqHTTP)
 		if err != nil {
-			lastErr = err
-			continue
+			return downloader.AttemptResult{Err: err, Retry: ctx.Err() == nil}
 		}
 
 		switch {
@@ -288,11 +284,11 @@ func fetchChunkRange(ctx context.Context, client *http.Client, downloadURL strin
 			start, end, _, parseErr := parseAssetContentRange(contentRange)
 			if parseErr != nil || start != c.start || end != c.end {
 				resp.Body.Close()
-				return errChunkRangeUnsupported
+				return downloader.AttemptResult{Err: errChunkRangeUnsupported}
 			}
 			if sniffHTML && isHTMLMediaType(resp.Header.Get("Content-Type")) {
 				resp.Body.Close()
-				return fmt.Errorf("unexpected HTML response while downloading asset")
+				return downloader.AttemptResult{Err: fmt.Errorf("unexpected HTML response while downloading asset")}
 			}
 			// A fresh section writer per attempt: a failed mid-stream copy
 			// advances the section offset, so a retry must restart at c.start.
@@ -306,7 +302,7 @@ func fetchChunkRange(ctx context.Context, client *http.Client, downloadURL strin
 				peek, _ := br.Peek(512)
 				if isHTMLPayload(peek) {
 					resp.Body.Close()
-					return fmt.Errorf("unexpected HTML response while downloading asset")
+					return downloader.AttemptResult{Err: fmt.Errorf("unexpected HTML response while downloading asset")}
 				}
 				body = br
 			}
@@ -316,37 +312,32 @@ func fetchChunkRange(ctx context.Context, client *http.Client, downloadURL strin
 			_, copyErr := io.Copy(section, body)
 			resp.Body.Close()
 			if copyErr != nil {
-				lastErr = copyErr
-				continue
+				return downloader.AttemptResult{Err: copyErr, Retry: ctx.Err() == nil}
 			}
-			return nil
+			return downloader.AttemptResult{}
 		case resp.StatusCode == http.StatusNotFound:
 			resp.Body.Close()
-			return fmt.Errorf("asset not found")
+			return downloader.AttemptResult{Err: fmt.Errorf("asset not found")}
 		case downloader.IsPermanentStatus(resp.StatusCode):
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 			resp.Body.Close()
-			return fmt.Errorf("asset download failed: %s", strings.TrimSpace(string(body)))
+			return downloader.AttemptResult{Err: downloader.NewHTTPStatusError(resp.StatusCode, strings.TrimSpace(string(body)), 0)}
 		case downloader.IsRetryableStatus(resp.StatusCode):
 			retryAfter := downloader.RetryAfter(resp)
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 			resp.Body.Close()
-			lastErr = fmt.Errorf("master returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
-			if retryAfter > 0 && attempt+1 < len(backoffs)+1 {
-				backoffs[attempt] = retryAfter
+			return downloader.AttemptResult{
+				Err:        downloader.NewHTTPStatusError(resp.StatusCode, strings.TrimSpace(string(body)), retryAfter),
+				Retry:      true,
+				RetryAfter: retryAfter,
 			}
-			continue
 		default:
 			// 200 (server ignored Range), a 3xx, or an unexpected 2xx: the
 			// upstream cannot safely satisfy the requested window.
 			resp.Body.Close()
-			return errChunkRangeUnsupported
+			return downloader.AttemptResult{Err: errChunkRangeUnsupported}
 		}
-	}
-	if lastErr == nil {
-		lastErr = fmt.Errorf("download failed")
-	}
-	return lastErr
+	})
 }
 
 // sectionWriter adapts an io.WriterAt into an io.Writer bounded to a fixed
