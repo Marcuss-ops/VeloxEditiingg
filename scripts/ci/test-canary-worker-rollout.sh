@@ -30,7 +30,7 @@ case "${1:-}" in
     elif [[ -f "${MOCK_ROLLBACK_MARKER:-}" ]]; then
       jq -n --arg worker "$worker" '{worker_id:$worker,status:"CONNECTED",health:"HEALTHY",active_jobs:0,image_digest:"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",software_version:"v1.2.27"}'
     elif [[ "${MOCK_CANARY_MARKER:-}" && -f "$MOCK_CANARY_MARKER" ]]; then
-      jq -n --arg worker "$worker" '{worker_id:$worker,status:"CONNECTED",health:"HEALTHY",active_jobs:0,image_digest:"sha256:ca617b2ef22344cd64ebc428501217973f8cfc0b656108d7cea810f1e9aaa11a",software_version:"v1.3.0"}'
+      jq -n --arg worker "$worker" '{worker_id:$worker,status:"CONNECTED",health:"HEALTHY",active_jobs:0,image_digest:"sha256:92afcd153ad903c8f5b78aaa96354c45bec165461d937763862704c2fef489cf",software_version:"v1.4.22"}'
     else
       jq -n --arg worker "$worker" '{worker_id:$worker,status:"CONNECTED",health:"HEALTHY",active_jobs:0,image_digest:"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",software_version:"v1.2.27"}'
     fi
@@ -58,8 +58,8 @@ export MOCK_ROLLBACK_MARKER="$TMP_DIR/rolled-back"
 export MOCK_CANARY_MARKER="$TMP_DIR/canary-active"
 PREVIOUS_DIGEST='sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 WORKER='offline-worker'
-IMAGE='ghcr.io/marcuss-ops/velox-worker@sha256:ca617b2ef22344cd64ebc428501217973f8cfc0b656108d7cea810f1e9aaa11a'
-DIGEST='sha256:ca617b2ef22344cd64ebc428501217973f8cfc0b656108d7cea810f1e9aaa11a'
+IMAGE='ghcr.io/marcuss-ops/velox-worker@sha256:92afcd153ad903c8f5b78aaa96354c45bec165461d937763862704c2fef489cf'
+DIGEST='sha256:92afcd153ad903c8f5b78aaa96354c45bec165461d937763862704c2fef489cf'
 
 output="$(bash "$SCRIPT" --worker-id "$WORKER" --dry-run)"
 grep -Fq "target_image:  $IMAGE" <<<"$output"
@@ -74,7 +74,7 @@ grep -Fq "smoke $WORKER" "$LOG" || { echo 'FAIL: smoke was not single-worker' >&
 mapfile -t apply_commands <"$LOG"
 [[ "${#apply_commands[@]}" -eq 5 ]] || { echo "FAIL: expected 5 ordered commands, got ${#apply_commands[@]}" >&2; exit 1; }
 [[ "${apply_commands[0]}" == "inspect --json $WORKER" ]] || { echo 'FAIL: apply did not inspect before update' >&2; exit 1; }
-[[ "${apply_commands[1]}" == "update $WORKER --digest $DIGEST --reason canary v1.3.0" ]] || { echo 'FAIL: apply update command contract drifted' >&2; exit 1; }
+[[ "${apply_commands[1]}" == "update $WORKER --digest $DIGEST --reason canary v1.4.22" ]] || { echo 'FAIL: apply update command contract drifted' >&2; exit 1; }
 [[ "${apply_commands[2]}" == "inspect --json $WORKER" ]] || { echo 'FAIL: apply did not inspect after update' >&2; exit 1; }
 [[ "${apply_commands[3]}" == "smoke $WORKER" ]] || { echo 'FAIL: apply did not smoke the selected worker' >&2; exit 1; }
 [[ "${apply_commands[4]}" == "inspect --json $WORKER" ]] || { echo 'FAIL: apply did not inspect after smoke/reconnect' >&2; exit 1; }
@@ -92,7 +92,7 @@ grep -Fq 'ROLLBACK SUCCEEDED' <<<"$output"
 grep -Fq "rollback $WORKER --digest $PREVIOUS_DIGEST" "$LOG" || { echo 'FAIL: explicit rollback did not receive the previous digest' >&2; exit 1; }
 mapfile -t rollback_commands <"$LOG"
 [[ "${#rollback_commands[@]}" -eq 3 ]] || { echo "FAIL: expected inspect/rollback/inspect, got ${#rollback_commands[@]}" >&2; exit 1; }
-[[ "${rollback_commands[0]}" == "inspect --json $WORKER" && "${rollback_commands[1]}" == "rollback $WORKER --digest $PREVIOUS_DIGEST --reason rollback v1.3.0 canary" && "${rollback_commands[2]}" == "inspect --json $WORKER" ]] || { echo 'FAIL: rollback command order/target drifted' >&2; exit 1; }
+[[ "${rollback_commands[0]}" == "inspect --json $WORKER" && "${rollback_commands[1]}" == "rollback $WORKER --digest $PREVIOUS_DIGEST --reason rollback v1.4.22 canary" && "${rollback_commands[2]}" == "inspect --json $WORKER" ]] || { echo 'FAIL: rollback command order/target drifted' >&2; exit 1; }
 printf 'PASS: rollback is explicit, digest-pinned, and single-worker\n'
 
 if bash "$SCRIPT" --apply >/dev/null 2>&1; then

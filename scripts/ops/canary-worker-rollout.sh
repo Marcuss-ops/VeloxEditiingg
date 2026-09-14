@@ -31,9 +31,9 @@
 
 set -euo pipefail
 
-readonly TARGET_IMAGE='ghcr.io/marcuss-ops/velox-worker@sha256:ca617b2ef22344cd64ebc428501217973f8cfc0b656108d7cea810f1e9aaa11a'
-readonly TARGET_DIGEST='sha256:ca617b2ef22344cd64ebc428501217973f8cfc0b656108d7cea810f1e9aaa11a'
-readonly TARGET_VERSION='v1.3.0'
+readonly TARGET_IMAGE='ghcr.io/marcuss-ops/velox-worker@sha256:92afcd153ad903c8f5b78aaa96354c45bec165461d937763862704c2fef489cf'
+readonly TARGET_DIGEST='sha256:92afcd153ad903c8f5b78aaa96354c45bec165461d937763862704c2fef489cf'
+readonly TARGET_VERSION='v1.4.22'
 readonly SCRIPT_NAME='canary-worker-rollout'
 
 WORKER_ID=''
