@@ -3,6 +3,7 @@ package remoteengine
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -292,6 +293,41 @@ func TestParseRemotePipelineResult_ScenesArray(t *testing.T) {
 	}
 	if dto.Scenes[1].DurationSeconds != 5 {
 		t.Fatalf("Scenes[1].DurationSeconds: got %v, want 5", dto.Scenes[1].DurationSeconds)
+	}
+}
+
+func TestParseRemotePipelineResult_PreservesCanonicalStockPool(t *testing.T) {
+	raw := map[string]interface{}{
+		"job_id": "job_stock_pool",
+		"status": "completed",
+		"scenes": []interface{}{map[string]interface{}{
+			"scene_id":         "scene-0",
+			"duration_seconds": float64(5),
+			"stock": []interface{}{
+				map[string]interface{}{"asset_id": "stock-a", "url": "velox-asset://stock-a", "duration_ms": float64(2000)},
+				map[string]interface{}{"asset_id": "stock-b", "url": "velox-asset://stock-b", "duration_ms": float64(3000)},
+			},
+		}},
+	}
+
+	dto, err := ParseRemotePipelineResult(raw)
+	if err != nil {
+		t.Fatalf("ParseRemotePipelineResult: %v", err)
+	}
+	if len(dto.Scenes) != 1 || len(dto.Scenes[0].Stock) != 2 {
+		t.Fatalf("stock pool = %#v, want two typed assets", dto.Scenes)
+	}
+	if dto.Scenes[0].Stock[0].AssetID != "stock-a" || dto.Scenes[0].Stock[1].DurationMS != 3000 {
+		t.Fatalf("stock pool = %#v, want identity and duration preserved", dto.Scenes[0].Stock)
+	}
+
+	workerPayload, err := dto.ToWorkerPayloadChecked()
+	if err != nil {
+		t.Fatalf("ToWorkerPayloadChecked: %v", err)
+	}
+	encoded, ok := workerPayload["scenes_json"].(string)
+	if !ok || !strings.Contains(encoded, "stock-a") || !strings.Contains(encoded, "stock-b") {
+		t.Fatalf("worker scenes_json = %q, want canonical stock assets", encoded)
 	}
 }
 

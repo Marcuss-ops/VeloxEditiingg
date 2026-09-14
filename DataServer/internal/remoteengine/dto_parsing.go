@@ -172,7 +172,9 @@ func (r *RemotePipelineResult) ToWorkerPayloadChecked() (map[string]interface{},
 		}
 		// clips.v1 consumes an explicit renderer-facing clip list. Derive it
 		// from the same typed scene assets used for scenes_json so creator and
-		// external intake cannot diverge at the projection boundary.
+		// external intake cannot diverge at the projection boundary. The
+		// scene stock pool remains inside scenes_json because its per-asset
+		// durations are needed by the worker timeline compiler.
 		clips := make([]interface{}, 0, len(r.Scenes))
 		for _, scene := range r.Scenes {
 			if scene.Clip == nil {

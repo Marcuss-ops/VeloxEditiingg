@@ -27,6 +27,15 @@ type ClipInput struct {
 
 // Validate checks raw input parameters for the clips.v1 pipeline.
 func Validate(input map[string]interface{}) error {
+	if encoded := toString(input["scenes_json"]); encoded != "" {
+		scenes, err := decodeSceneTimeline(encoded)
+		if err != nil {
+			return fmt.Errorf("clips.v1: invalid scenes_json: %w", err)
+		}
+		if sceneTimelineRequired(scenes) {
+			return validateSceneTimeline(scenes)
+		}
+	}
 	if !toBoolDefault(input["copy_only"], false) {
 		return fmt.Errorf("clips.v1: copy-only policy is required; set copy_only=true")
 	}
@@ -58,6 +67,11 @@ func Validate(input map[string]interface{}) error {
 func Compile(ctx context.Context, jobID string, input map[string]interface{}, outputPath string, probe audio.Probe) (*plan.RenderPlan, error) {
 	if err := Validate(input); err != nil {
 		return nil, err
+	}
+	if encoded := toString(input["scenes_json"]); encoded != "" {
+		if scenes, err := decodeSceneTimeline(encoded); err == nil && sceneTimelineRequired(scenes) {
+			return compileSceneTimeline(ctx, jobID, scenes, outputPath, probe)
+		}
 	}
 
 	req := parseRequest(input)

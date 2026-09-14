@@ -38,6 +38,7 @@ func convertCanonicalScenes(raw []map[string]interface{}) []SceneResult {
 			ImageLink:  payload.FirstString(m, "image_link"),
 			ClipLink:   payload.FirstString(m, "clip_link", "clip_url", "video_link"),
 			StockLinks: nil,
+			Stock:      convertStockAssets(m["stock"], m["stock_links"]),
 		}
 		if fallback, ok := m["stock_fallback"].(bool); ok {
 			scene.StockFallback = fallback
@@ -57,6 +58,41 @@ func convertCanonicalScenes(raw []map[string]interface{}) []SceneResult {
 		scenes = append(scenes, scene)
 	}
 	return scenes
+}
+
+// convertStockAssets keeps the canonical stock pool typed across the remote
+// adapter boundary. stock is the preferred asset-object form; stock_links is
+// accepted as a compatibility input but receives no synthetic duration.
+func convertStockAssets(raw interface{}, legacyLinks interface{}) []ClipAsset {
+	var assets []ClipAsset
+	appendAsset := func(value interface{}) {
+		object, ok := value.(map[string]interface{})
+		if !ok {
+			return
+		}
+		if asset := convertClipAsset(object); asset != nil {
+			assets = append(assets, *asset)
+		}
+	}
+	switch value := raw.(type) {
+	case []interface{}:
+		for _, item := range value {
+			appendAsset(item)
+		}
+	case []map[string]interface{}:
+		for _, item := range value {
+			appendAsset(item)
+		}
+	case map[string]interface{}:
+		appendAsset(value)
+	}
+	if len(assets) > 0 {
+		return assets
+	}
+	for _, link := range payload.ToSliceString(legacyLinks) {
+		assets = append(assets, ClipAsset{URL: link})
+	}
+	return assets
 }
 
 // intFromAnyMap coerces an arbitrary JSON-decoded value (int /
