@@ -51,6 +51,8 @@ import (
 // tests (see bundle_rebuild_outbox_test.go).
 const BundleRebuildRequestedEventType = "WORKER_BUNDLE_REBUILD_REQUESTED"
 
+var errWorkerBundleRuntimeMisconfigured = errors.New("worker bundle runtime post-processor is misconfigured")
+
 // BundleRebuildHandler is the dispatched Handler for the async
 // bundle rebuild event type. It runs the velox-bundler subprocess
 // with --source + --output, identical to the synchronous path in
@@ -135,6 +137,9 @@ func (h *BundleRebuildHandler) Handle(ctx context.Context, e outbox.Event) error
 	}
 	if err := ensureWorkerBundleRuntime(p.RepoRoot, p.BundleDir); err != nil {
 		log.Printf("[OUTBOX] worker bundle runtime normalization failed event_id=%s err=%v", e.EventID, err)
+		if errors.Is(err, errWorkerBundleRuntimeMisconfigured) {
+			return outbox.Permanent(err)
+		}
 		return outbox.Transient(err)
 	}
 	log.Printf("[OUTBOX] bundle rebuild completed event_id=%s out-path=%s combo=%s",
@@ -213,13 +218,14 @@ func init() {
 
 // ensureWorkerBundleRuntime runs the production post-processor
 // (scripts/ops/ensure-worker-bundle-runtime.sh) against a freshly
-// rebuilt bundle. Missing script (test fixtures, older checkouts) is
-// a no-op so the bundler contract is preserved there.
+// rebuilt bundle. The post-processor is part of the success contract:
+// a missing script is a configuration error and must not be reported as
+// successful work.
 func ensureWorkerBundleRuntime(repoRoot, bundleDir string) error {
 	script := filepath.Join(repoRoot, "scripts", "ops", "ensure-worker-bundle-runtime.sh")
 	if _, err := os.Stat(script); err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			return fmt.Errorf("%w: required script missing: %s", errWorkerBundleRuntimeMisconfigured, script)
 		}
 		return err
 	}

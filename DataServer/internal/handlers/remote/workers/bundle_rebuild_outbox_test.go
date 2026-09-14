@@ -131,6 +131,17 @@ func newBundleFixture(t *testing.T) *bundleFixture {
 	if err := os.MkdirAll(bundleDir, 0o755); err != nil {
 		t.Fatalf("mkdir bundleDir: %v", err)
 	}
+	// The production handler requires the post-processor to exist. This
+	// fixture supplies an explicit test-local stand-in instead of relying on
+	// the old fail-open missing-script behavior.
+	runtimeScriptDir := filepath.Join(repoRoot, "scripts", "ops")
+	if err := os.MkdirAll(runtimeScriptDir, 0o755); err != nil {
+		t.Fatalf("mkdir runtimeScriptDir: %v", err)
+	}
+	runtimeScript := filepath.Join(runtimeScriptDir, "ensure-worker-bundle-runtime.sh")
+	if err := os.WriteFile(runtimeScript, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write runtime script: %v", err)
+	}
 	stubPath := stubVeloxBundler(t, stubDir, stubBundleMarker)
 
 	db := newOutboxDB(t)
@@ -301,6 +312,17 @@ func TestBundleRebuildHandler_BinaryMissing_IsPermanent(t *testing.T) {
 	var he *outbox.HandlerError
 	if !errors.As(handleErr, &he) || he.Transient {
 		t.Errorf("error = %T(%v), want a permanent-classified HandlerError", handleErr, handleErr)
+	}
+}
+
+func TestEnsureWorkerBundleRuntime_MissingScriptFailsClosed(t *testing.T) {
+	repoRoot := t.TempDir()
+	bundleDir := filepath.Join(repoRoot, "bundle")
+	if err := os.MkdirAll(bundleDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureWorkerBundleRuntime(repoRoot, bundleDir); err == nil {
+		t.Fatal("missing runtime script returned nil; bundle success must fail closed")
 	}
 }
 
