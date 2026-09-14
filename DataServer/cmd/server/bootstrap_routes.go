@@ -5,7 +5,6 @@ package main
 import (
 	workerhandlersuploads "velox-server/internal/handlers/remote/workers/uploads"
 	instaedithandler "velox-server/internal/handlers/server/instaedit"
-	scripthandlers "velox-server/internal/handlers/server/script"
 	velmetrics "velox-server/internal/metrics"
 	"velox-server/internal/performance"
 	"velox-server/internal/store"
@@ -29,18 +28,6 @@ func (c *appComponents) routerBundle() RouterBundle {
 			// nil-tolerant below (registerFleetOperationsRoutes
 			// logs+skips when handler=nil).
 			Handler: c.fleet.getHandler(),
-		},
-		Script: ScriptRouteDeps{
-			Cfg:         c.cfg,
-			SQLiteStore: c.persistence.SQLite,
-			Enqueuer:    c.modules.Enqueuer,
-			Resolver:    c.resolver,
-			DocCreator: func() scripthandlers.GoogleDocCreator {
-				if c.modules.Drive == nil {
-					return nil
-				}
-				return c.modules.Drive.Service()
-			}(),
 		},
 		Pipeline: PipelineRouteDeps{
 			Cfg:          c.cfg,

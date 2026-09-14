@@ -91,7 +91,7 @@ func (r *Registry) load() error {
 		if loadErr == nil {
 			loadErr = fmt.Errorf("load revoked workers: %w", err)
 		} else {
-			loadErr = fmt.Errorf("%v; load revoked workers: %w", loadErr, err)
+			loadErr = fmt.Errorf("%w; load revoked workers: %w", loadErr, err)
 		}
 	} else {
 		r.mu.Lock()

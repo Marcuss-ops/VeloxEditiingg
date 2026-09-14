@@ -73,11 +73,6 @@ func TestProductionCompositionRegistersRequiredRoutes(t *testing.T) {
 	}
 
 	bundle := RouterBundle{
-		Script: ScriptRouteDeps{
-			Cfg:         cfg,
-			SQLiteStore: p.SQLite,
-			Enqueuer:    m.Enqueuer,
-		},
 		Metrics: MetricsRouteDeps{Registry: metrics.NewRegistry()},
 	}
 

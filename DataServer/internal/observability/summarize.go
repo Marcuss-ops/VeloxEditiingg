@@ -9,6 +9,8 @@ import (
 )
 
 // SummarizeTask returns the aggregated execution diagnostics for a task.
+//
+//nolint:funlen // This read model deliberately joins durable, live, phase, cache, and segment projections.
 func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionSummary, error) {
 	task, err := s.tasks.Get(ctx, taskID)
 	if err != nil {

@@ -73,7 +73,7 @@ func (s *SQLiteStore) CheckActiveSessionCollision(workerID, sessionType string) 
 		workerID, sessionType,
 	)
 	err = row.Scan(&existingTokenHash)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
 	if err != nil {
@@ -118,7 +118,7 @@ func (s *SQLiteStore) InsertSession(sess *PersistedSession) error {
 		 WHERE worker_id = ? AND session_type = ? AND status = 'ACTIVE' AND revoked = 0
 		 ORDER BY last_seen_at DESC, created_at DESC LIMIT 1`,
 		sess.WorkerID, sessionType).Scan(&existingTokenHash)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		existingTokenHash = ""
 	} else if err != nil {
 		return fmt.Errorf("insert session collision probe: %w", err)
@@ -182,7 +182,7 @@ func (s *SQLiteStore) ValidateSession(tokenHash string) (*PersistedSession, erro
 	var createdAt, expiresAt, lastSeen string
 	err := row.Scan(&sess.SessionID, &sess.WorkerID, &sess.TokenHash, &sess.IPAddress,
 		&createdAt, &expiresAt, &lastSeen, &sess.Revoked)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -232,7 +232,7 @@ func (s *SQLiteStore) ValidateSessionByID(sessionID string) (*PersistedSession, 
 	var createdAt, expiresAt, lastSeen string
 	err := row.Scan(&sess.SessionID, &sess.WorkerID, &sess.TokenHash, &sess.IPAddress,
 		&createdAt, &expiresAt, &lastSeen, &sess.Revoked)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {

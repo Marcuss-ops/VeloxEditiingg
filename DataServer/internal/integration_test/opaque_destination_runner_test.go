@@ -3,17 +3,18 @@ package integration_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
 	"time"
-	"velox-server/internal/deliverystore"
 
 	"velox-server/internal/credentials"
 	"velox-server/internal/deliveries"
 	"velox-server/internal/deliveries/providers"
+	"velox-server/internal/deliverystore"
 	"velox-server/internal/jobs"
 	"velox-server/internal/socialclient"
 	"velox-server/internal/store"
@@ -182,7 +183,7 @@ func TestIntegration_DeliveryRunnerForwardsOpaqueDestinationID(t *testing.T) {
 	cancel()
 	select {
 	case err := <-runDone:
-		if err != nil && err != context.Canceled {
+		if err != nil && !errors.Is(err, context.Canceled) {
 			t.Fatalf("runner: %v", err)
 		}
 	case <-time.After(time.Second):

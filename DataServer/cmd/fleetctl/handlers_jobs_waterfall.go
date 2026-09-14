@@ -46,16 +46,6 @@ type publishWaterfallView struct {
 	SpoolCommitMS    int64 `json:"spool_commit_ms"`
 }
 
-type waterfallAttemptHeaderView struct {
-	AttemptID         string `json:"attempt_id"`
-	Status            string `json:"status"`
-	WorkerID          string `json:"worker_id"`
-	MasterReceivedAt  string `json:"master_received_at,omitempty"`
-	MasterCommittedAt string `json:"master_committed_at,omitempty"`
-
-	AttemptWaterfall *waterfallView `json:"attempt_waterfall"`
-}
-
 // renderJobInspectWaterfall prints the waterfall block from the raw inspect
 // snapshot. Exit code stays OK when the job simply has no waterfall yet:
 // a missing timeline is an expected state (pre-milestone reports), not an

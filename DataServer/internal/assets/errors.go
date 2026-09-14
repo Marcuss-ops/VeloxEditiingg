@@ -1,6 +1,7 @@
 package assets
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
@@ -76,28 +77,8 @@ func AsAcquisitionError(err error) (*AcquisitionError, bool) {
 		return nil, false
 	}
 	var assetErr *AcquisitionError
-	if ok := errorAs(err, &assetErr); ok && assetErr != nil {
+	if errors.As(err, &assetErr) && assetErr != nil {
 		return assetErr, true
 	}
 	return nil, false
-}
-
-// errorAs mirrors errors.As without importing the entire package in every file.
-func errorAs(err error, target interface{}) bool {
-	switch t := target.(type) {
-	case **AcquisitionError:
-		for err != nil {
-			if ae, ok := err.(*AcquisitionError); ok {
-				*t = ae
-				return true
-			}
-			type unwrapper interface{ Unwrap() error }
-			if u, ok := err.(unwrapper); ok {
-				err = u.Unwrap()
-				continue
-			}
-			break
-		}
-	}
-	return false
 }

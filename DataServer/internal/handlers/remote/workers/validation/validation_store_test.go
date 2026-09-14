@@ -1,10 +1,11 @@
 package validation
 
 import (
-	"github.com/stretchr/testify/require"
 	"net/http"
 	"sync"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestValidationStoreHandlesConcurrentUpserts(t *testing.T) {

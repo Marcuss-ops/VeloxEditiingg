@@ -35,6 +35,8 @@ import (
 // budget takes effect without a runner restart. A 0
 // MaxAttempts falls back to r.cfg.MaxAttempts (the historical
 // behavior).
+//
+//nolint:funlen // The lease lifecycle must keep provider execution and state finalization ordered.
 func (r *DeliveryRunner) processLease(ctx context.Context, lease deliverystore.DeliveryLease) error {
 	providerName := canonicalProviderName(lease.Provider)
 	ctx, span := telemetry.StartSpan(ctx, "deliver_lease",

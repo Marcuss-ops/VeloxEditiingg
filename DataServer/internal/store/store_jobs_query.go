@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 )
 
@@ -214,7 +215,7 @@ func (s *SQLiteStore) ListJobsByWorkspace(ctx context.Context, workspaceID int64
 func (s *SQLiteStore) GetJobByWorkspace(ctx context.Context, jobID string, workspaceID int64) (map[string]any, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT `+jobColumns+` FROM jobs WHERE job_id = ? AND COALESCE(workspace_id, 0) = ?`, jobID, workspaceID)
 	m, err := scanJobRow(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	return m, err

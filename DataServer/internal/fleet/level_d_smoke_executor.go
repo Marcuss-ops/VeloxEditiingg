@@ -195,7 +195,7 @@ func (e *LevelDSmokeExecutor) Execute(ctx context.Context, op *store.Operation) 
 		if mkErr := e.markFailed(ctx, runID, finishedAt, durationMs, fmt.Sprintf("%s: %v", ErrSmokeLeaseUnavailable.Error(), err)); mkErr != nil {
 			log.Printf("[SMOKE] worker=%s run=%s lease unavailable AND mark-failed failed: %v (underlying: %v)", op.WorkerID, runID, mkErr, err)
 		}
-		return fmt.Errorf("%w: %v", ErrSmokeLeaseUnavailable, err)
+		return fmt.Errorf("%w: %w", ErrSmokeLeaseUnavailable, err)
 	}
 	// Cleanup on every return path: lease release (mandatory)
 	// + worker temp cleanup (best-effort, in runCleanupAndFail).

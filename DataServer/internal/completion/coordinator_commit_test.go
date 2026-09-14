@@ -65,7 +65,7 @@ func TestCoordinator_RecordAttemptCommitsCAS_HappyPath(t *testing.T) {
 
 	// 2. non-CAS err — counter unchanged, pointer-equal passthrough.
 	otherErr := errors.New("some non-CAS infrastructure error")
-	if err := c.recordAttemptCommitsCAS("test", otherErr); err != otherErr {
+	if err := c.recordAttemptCommitsCAS("test", otherErr); !errors.Is(err, otherErr) {
 		t.Errorf("non-CAS err: want pointer-equal passthrough (err=%v), got %v", otherErr, err)
 	}
 	if got := c.budget.Consecutive(); got != 0 {
@@ -76,7 +76,7 @@ func TestCoordinator_RecordAttemptCommitsCAS_HappyPath(t *testing.T) {
 	//    equal passthrough (caller wraps with ErrTransitionConflict
 	//    on its own path).
 	confErr := conflictErr("stale fence (recordAttemptCommitsCAS happy path)")
-	if err := c.recordAttemptCommitsCAS("test", confErr); err != confErr {
+	if err := c.recordAttemptCommitsCAS("test", confErr); !errors.Is(err, confErr) {
 		t.Errorf("under-threshold CAS: want pointer-equal passthrough, got %v", err)
 	}
 	if got := c.budget.Consecutive(); got != 1 {
@@ -197,13 +197,13 @@ func TestCoordinator_RecordAttemptCommitsCAS_NilBudgetBypass(t *testing.T) {
 	// no panic, no counter (because there is no budget to count).
 	for i := 0; i < 5; i++ {
 		err := c.recordAttemptCommitsCAS("test", confErr)
-		if err != confErr {
+		if !errors.Is(err, confErr) {
 			t.Errorf("iteration %d: nil-budget + CAS err want pointer-equal passthrough, got %v", i+1, err)
 		}
 	}
 
 	// Non-CAS err — must pass through pointer-equal.
-	if err := c.recordAttemptCommitsCAS("test", otherErr); err != otherErr {
+	if err := c.recordAttemptCommitsCAS("test", otherErr); !errors.Is(err, otherErr) {
 		t.Errorf("nil-budget + non-CAS err want pointer-equal passthrough, got %v", err)
 	}
 }

@@ -94,7 +94,7 @@ func PromoteToCanonical(blobStore repository.BlobStore, stagingPath, sha256Hex, 
 
 	if _, err := blobStore.PromoteDurable(stagingPath, finalPath); err != nil {
 		if errors.Is(err, store.ErrPromoteDurableFailed) {
-			return "", fmt.Errorf("%w: %v", ErrBlobPromoteFailed, err)
+			return "", fmt.Errorf("%w: %w", ErrBlobPromoteFailed, err)
 		}
 		return "", fmt.Errorf("artifacts: PromoteToCanonical: %w", err)
 	}

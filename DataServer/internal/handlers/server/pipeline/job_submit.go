@@ -21,6 +21,7 @@
 package pipeline
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
@@ -173,20 +174,7 @@ func (h *Handlers) SubmitJob() gin.HandlerFunc {
 		// probe private IP classification on bodies that fail
 		// earlier checks (which would leak validation gaps).
 		if ssrfErrs := ValidateAllExternalURLs(req, h.cfg); len(ssrfErrs) > 0 {
-			details := make([]gin.H, 0, len(ssrfErrs))
-			for _, e := range ssrfErrs {
-				details = append(details, gin.H{
-					"path":   e.Path,
-					"url":    e.URL,
-					"reason": e.Reason,
-				})
-			}
-			c.JSON(http.StatusUnprocessableEntity, gin.H{
-				"ok":      false,
-				"error":   "ssrf_rejected",
-				"message": "one or more external URLs failed the egress policy",
-				"details": details,
-			})
+			writeSSRFValidationError(c, ssrfErrs)
 			return
 		}
 
@@ -199,7 +187,8 @@ func (h *Handlers) SubmitJob() gin.HandlerFunc {
 		// (a misconfigured production deployment where /api/v1/jobs
 		// was wired without M2M auth).
 		if qerr := EnforcePerRequestQuota(c, req, h.cfg); qerr != nil {
-			if qe, ok := qerr.(*QuotaError); ok {
+			var qe *QuotaError
+			if errors.As(qerr, &qe) {
 				c.JSON(http.StatusTooManyRequests, gin.H{
 					"ok":      false,
 					"error":   "m2m_quota_exceeded",
@@ -327,6 +316,18 @@ func (h *Handlers) SubmitJob() gin.HandlerFunc {
 
 		c.JSON(http.StatusAccepted, response)
 	}
+}
+
+func writeSSRFValidationError(c *gin.Context, errs []SSRFValidationError) {
+	details := make([]gin.H, 0, len(errs))
+	for _, e := range errs {
+		details = append(details, gin.H{"path": e.Path, "url": e.URL, "reason": e.Reason})
+	}
+	c.JSON(http.StatusUnprocessableEntity, gin.H{
+		"ok": false, "error": "ssrf_rejected",
+		"message": "one or more external URLs failed the egress policy",
+		"details": details,
+	})
 }
 
 // GetSubmittedJob handles GET /api/v1/jobs/:id.

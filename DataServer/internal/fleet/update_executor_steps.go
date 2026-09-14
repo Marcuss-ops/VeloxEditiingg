@@ -43,7 +43,7 @@ func (e *UpdateExecutor) stepContainerRunning(parent context.Context, workerID s
 	defer cancel()
 	running, err := e.backend.Docker.ContainerRunning(ctx, workerID)
 	if err != nil {
-		return fmt.Errorf("%w: check failed: %v", ErrContainerUnhealthy, err)
+		return fmt.Errorf("%w: check failed: %w", ErrContainerUnhealthy, err)
 	}
 	if !running {
 		return fmt.Errorf("%w: container not running", ErrContainerUnhealthy)
@@ -168,7 +168,7 @@ func (e *UpdateExecutor) stepSmoke(parent context.Context, workerID string) (str
 	defer cancel()
 	artifactID, err := e.backend.Smoke.RunLevelD(ctx, workerID)
 	if err != nil {
-		return "", fmt.Errorf("%w: %v", ErrSmokeFailed, err)
+		return "", fmt.Errorf("%w: %w", ErrSmokeFailed, err)
 	}
 	return artifactID, nil
 }

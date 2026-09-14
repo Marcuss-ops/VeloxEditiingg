@@ -3,10 +3,11 @@ package store
 import (
 	"context"
 	"errors"
-	_ "github.com/mattn/go-sqlite3"
 	"path/filepath"
 	"testing"
 	"time"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 func TestDeploymentRecovery_RestartDuringDeployingNeverAssumesSuccess(t *testing.T) {

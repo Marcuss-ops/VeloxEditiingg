@@ -107,7 +107,8 @@ func (r *CreatorForwardingRunner) processLease(ctx context.Context, lease forwar
 		// CAS failed. The metric increment is owned by handleRetry
 		// (post-CAS).
 		errorClass := ""
-		if re, ok := err.(*remoteengine.RemoteError); ok {
+		var re *remoteengine.RemoteError
+		if errors.As(err, &re) {
 			errorClass = string(re.Class)
 		}
 		if retryErr := r.handleRetry(procCtx, lease, "POLL_ERROR", err.Error(), errorClass); retryErr != nil {

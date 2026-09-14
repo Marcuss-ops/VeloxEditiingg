@@ -141,7 +141,7 @@ func TestRetryPolicy_ShouldStop_Permanent(t *testing.T) {
 			if !stop {
 				t.Fatal("ShouldStop should return true for permanent errors")
 			}
-			if got != err {
+			if !errors.Is(got, err) {
 				t.Fatal("ShouldStop should return the same error for permanent")
 			}
 		})
@@ -155,7 +155,7 @@ func TestRetryPolicy_ShouldStop_Transient(t *testing.T) {
 	if stop {
 		t.Fatal("TRANSIENT should NOT stop")
 	}
-	if got != err {
+	if !errors.Is(got, err) {
 		t.Fatal("ShouldStop should return the same error for transient")
 	}
 }

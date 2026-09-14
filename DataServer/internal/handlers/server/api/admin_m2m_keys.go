@@ -28,6 +28,7 @@ package api
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -153,7 +154,8 @@ func IssueM2MKey(st *store.SQLiteStore) gin.HandlerFunc {
 		}
 		req.ClientID = strings.TrimSpace(req.ClientID)
 		if err := validateIssueM2MKeyRequest(&req); err != nil {
-			if e, ok := err.(*adminBadRequest); ok {
+			var e *adminBadRequest
+			if errors.As(err, &e) {
 				c.JSON(http.StatusBadRequest, gin.H{
 					"error": "invalid_payload", "message": e.Error(),
 				})
@@ -315,7 +317,7 @@ func DisableM2MKey(st *store.SQLiteStore) gin.HandlerFunc {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
 		defer cancel()
 		if err := m2mkeys.DisableM2MAPIKey(ctx, st.DB(), clientID); err != nil {
-			if err == sql.ErrNoRows {
+			if errors.Is(err, sql.ErrNoRows) {
 				c.JSON(http.StatusNotFound, gin.H{"error": "client_id unknown"})
 				return
 			}

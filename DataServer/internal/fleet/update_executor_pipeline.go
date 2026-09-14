@@ -109,7 +109,7 @@ func (e *UpdateExecutor) runRollback(ctx context.Context, op *store.Operation, p
 		AppliedBy:      op.RequestedBy,
 		IsRollback:     true,
 	}); err != nil {
-		return fmt.Errorf("rollback: insert PENDING: %w (forward_err=%v)", err, forwardErr)
+		return fmt.Errorf("rollback: insert PENDING: %w (forward_err=%w)", err, forwardErr)
 	}
 
 	// Execute the rollback steps. Each is non-fatal at the
@@ -133,9 +133,9 @@ func (e *UpdateExecutor) runRollback(ctx context.Context, op *store.Operation, p
 	}
 
 	if rollbackOK {
-		return fmt.Errorf("%w: %v (rollback_ok to %s)", ErrRollbackSucceeded, forwardErr, previousDigest)
+		return fmt.Errorf("%w: %w (rollback_ok to %s)", ErrRollbackSucceeded, forwardErr, previousDigest)
 	}
-	return fmt.Errorf("%w: forward=%v rollback=%v", ErrRollbackFailed, forwardErr, rbErr)
+	return fmt.Errorf("%w: forward=%w rollback=%w", ErrRollbackFailed, forwardErr, rbErr)
 }
 
 // runRollbackSteps executes the four rollback steps. Even

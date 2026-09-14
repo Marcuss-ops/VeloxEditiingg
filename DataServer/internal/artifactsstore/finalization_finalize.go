@@ -20,6 +20,7 @@ import (
 // transaction (FinalizeVerified) and its delivery-insert / post-tx read
 // helpers. The finalizer type and params live in finalization.go.
 
+//nolint:funlen // One transaction intentionally keeps artifact/job/upload CAS ordering atomic.
 func (w *SQLiteArtifactFinalizer) FinalizeVerified(ctx context.Context, p FinalizeVerifiedParams) (*repository.Artifact, error) {
 	if p.UploadID == "" || p.ArtifactID == "" || p.JobID == "" {
 		return nil, fmt.Errorf("artifactsstore: FinalizeVerified: upload/artifact/job ids are required")

@@ -143,7 +143,7 @@ func (e *SSHWorkerExec) DownloadAsset(ctx context.Context, runID, workerID, pick
 		)
 		_, err := e.ssh.Run(ctx, workerID, cmd)
 		if err != nil {
-			return fmt.Errorf("%w: ssh download asset from %s: %v", ErrAssetDownloadFail, pickupURL, err)
+			return fmt.Errorf("%w: ssh download asset from %s: %w", ErrAssetDownloadFail, pickupURL, err)
 		}
 		return nil
 	}
@@ -157,7 +157,7 @@ func (e *SSHWorkerExec) DownloadAsset(ctx context.Context, runID, workerID, pick
 	)
 	_, err := e.ssh.Run(ctx, workerID, cmd)
 	if err != nil {
-		return fmt.Errorf("%w: ssh download asset: %v", ErrAssetDownloadFail, err)
+		return fmt.Errorf("%w: ssh download asset: %w", ErrAssetDownloadFail, err)
 	}
 	return nil
 }
@@ -182,7 +182,7 @@ func (e *SSHWorkerExec) RunFFmpegRender(ctx context.Context, runID, workerID, re
 	}
 	out, err := e.ssh.Run(ctx, workerID, cmd)
 	if err != nil {
-		return "", 0, fmt.Errorf("%w: ssh ffmpeg render: %v", ErrFFmpegRenderFail, err)
+		return "", 0, fmt.Errorf("%w: ssh ffmpeg render: %w", ErrFFmpegRenderFail, err)
 	}
 	// Last line is the stat byte count.
 	out = strings.TrimSpace(out)
@@ -190,7 +190,7 @@ func (e *SSHWorkerExec) RunFFmpegRender(ctx context.Context, runID, workerID, re
 	lastLine := strings.TrimSpace(lines[len(lines)-1])
 	artifactBytes, parseErr := strconv.ParseInt(lastLine, 10, 64)
 	if parseErr != nil {
-		return "", 0, fmt.Errorf("%w: parse stat output %q: %v", ErrArtifactMissing, lastLine, parseErr)
+		return "", 0, fmt.Errorf("%w: parse stat output %q: %w", ErrArtifactMissing, lastLine, parseErr)
 	}
 	if artifactBytes == 0 {
 		return "", 0, fmt.Errorf("%w: artifact is empty (stat returned 0)", ErrArtifactMissing)
@@ -202,20 +202,20 @@ func (e *SSHWorkerExec) RunFFmpegRender(ctx context.Context, runID, workerID, re
 	fetchCmd := fmt.Sprintf("base64 -w0 %s 2>/dev/null", outputPath)
 	b64, err := e.ssh.Run(ctx, workerID, fetchCmd)
 	if err != nil {
-		return "", 0, fmt.Errorf("%w: ssh fetch artifact: %v", ErrArtifactMissing, err)
+		return "", 0, fmt.Errorf("%w: ssh fetch artifact: %w", ErrArtifactMissing, err)
 	}
 	raw, decErr := base64.StdEncoding.DecodeString(strings.TrimSpace(b64))
 	if decErr != nil {
-		return "", 0, fmt.Errorf("%w: base64 decode artifact: %v", ErrArtifactMissing, decErr)
+		return "", 0, fmt.Errorf("%w: base64 decode artifact: %w", ErrArtifactMissing, decErr)
 	}
 
 	// 3. Write to local temp path so LocalFileDriveUploader can read it.
 	localPath := filepath.Join(SmokeTempRoot, runID, runID+".mp4")
 	if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
-		return "", 0, fmt.Errorf("%w: mkdir for local artifact: %v", ErrArtifactMissing, err)
+		return "", 0, fmt.Errorf("%w: mkdir for local artifact: %w", ErrArtifactMissing, err)
 	}
 	if err := os.WriteFile(localPath, raw, 0644); err != nil {
-		return "", 0, fmt.Errorf("%w: write local artifact: %v", ErrArtifactMissing, err)
+		return "", 0, fmt.Errorf("%w: write local artifact: %w", ErrArtifactMissing, err)
 	}
 	return localPath, artifactBytes, nil
 }

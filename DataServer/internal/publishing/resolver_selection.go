@@ -157,14 +157,14 @@ func (r *TargetResolver) ResolveSelection(ctx context.Context, req SelectionRequ
 	// disabled locally.
 	rows, err := r.destinations.BatchDeliveryDestinations(ctx, orderedIDs)
 	if err != nil {
-		return nil, fmt.Errorf("%w: batch destination lookup: %v", ErrTargetDestinationInvalid, err)
+		return nil, fmt.Errorf("%w: batch destination lookup: %w", ErrTargetDestinationInvalid, err)
 	}
 	for _, id := range orderedIDs {
 		channel := candidateByID[id]
 		row := rows[id]
 		if err := validateLocalDestinationSnapshot(req.WorkspaceID, req.Platform, channel, row); err != nil {
 			if groupID := candidateGroupByID[id]; groupID > 0 {
-				return nil, fmt.Errorf("%w: group_id=%d member destination_id=%q: %v", ErrGroupNotPublishable, groupID, id, err)
+				return nil, fmt.Errorf("%w: group_id=%d member destination_id=%q: %w", ErrGroupNotPublishable, groupID, id, err)
 			}
 			return nil, err
 		}
@@ -196,7 +196,7 @@ func validateLocalDestinationSnapshot(workspaceID int64, platform string, channe
 	}
 	metadata, err := parseDestinationConfig(row.ConfigurationJSON)
 	if err != nil {
-		return fmt.Errorf("%w: destination_id=%q configuration: %v", ErrTargetDestinationInvalid, channel.DestinationID, err)
+		return fmt.Errorf("%w: destination_id=%q configuration: %w", ErrTargetDestinationInvalid, channel.DestinationID, err)
 	}
 	if metadata.WorkspaceID != 0 && metadata.WorkspaceID != workspaceID {
 		return fmt.Errorf("%w: destination_id=%q workspace mismatch", ErrTargetDestinationInvalid, channel.DestinationID)
@@ -252,7 +252,7 @@ func (r *TargetResolver) PlatformForDestination(ctx context.Context, destination
 	}
 	rows, err := r.destinations.BatchDeliveryDestinations(ctx, []string{destinationID})
 	if err != nil {
-		return "", fmt.Errorf("%w: platform lookup: %v", ErrTargetDestinationInvalid, err)
+		return "", fmt.Errorf("%w: platform lookup: %w", ErrTargetDestinationInvalid, err)
 	}
 	row := rows[destinationID]
 	if row == nil {
@@ -260,7 +260,7 @@ func (r *TargetResolver) PlatformForDestination(ctx context.Context, destination
 	}
 	meta, err := parseDestinationConfig(row.ConfigurationJSON)
 	if err != nil {
-		return "", fmt.Errorf("%w: destination_id=%q configuration: %v", ErrTargetDestinationInvalid, destinationID, err)
+		return "", fmt.Errorf("%w: destination_id=%q configuration: %w", ErrTargetDestinationInvalid, destinationID, err)
 	}
 	if meta.Platform == "" {
 		return "", fmt.Errorf("%w: destination_id=%q configuration has no platform", ErrTargetDestinationInvalid, destinationID)

@@ -142,7 +142,7 @@ func (e *ExternalCosignVerifier) Verify(ctx context.Context, ref string) error {
 	}
 	path, lookErr := exec.LookPath(binary)
 	if lookErr != nil {
-		return fmt.Errorf("%w: %v (binary=%q)", ErrBinaryMissing, lookErr, binary)
+		return fmt.Errorf("%w: %w (binary=%q)", ErrBinaryMissing, lookErr, binary)
 	}
 
 	timeoutCtx, cancel := context.WithTimeout(ctx, e.VerifyTimeout)
@@ -159,7 +159,7 @@ func (e *ExternalCosignVerifier) Verify(ctx context.Context, ref string) error {
 	cmd.Stdout = &bytes.Buffer{} // discard stdout — only exit code matters
 
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("cosign verify failed for %q (rc=%v): %s", ref, err, strings.TrimSpace(stderr.String()))
+		return fmt.Errorf("cosign verify failed for %q: %w (stderr=%s)", ref, err, strings.TrimSpace(stderr.String()))
 	}
 	return nil
 }

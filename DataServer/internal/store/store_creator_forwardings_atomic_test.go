@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 	"velox-server/internal/costmodel"
@@ -110,7 +111,7 @@ func TestAtomicForwardAndEnqueue_FencesWrongRunnerLease(t *testing.T) {
 	err := db.Forwarding().AtomicForwardAndEnqueue(ctx, "cf-owner-fence", &jobs.Job{ID: "job-owner-fence", Type: "process_video"},
 		&taskgraph.TaskSpec{Version: taskgraph.SpecVersion, JobID: "job-owner-fence", ExecutorID: "scene.composite.v1@1"},
 		5, "stale-runner", "stale-lease")
-	if err != forwardingstore.ErrTransitionConflict {
+	if !errors.Is(err, forwardingstore.ErrTransitionConflict) {
 		t.Fatalf("wrong runner atomic enqueue error = %v, want forwardingstore.ErrTransitionConflict", err)
 	}
 	cf, err := db.Forwarding().GetCreatorForwarding(ctx, "cf-owner-fence")
@@ -145,7 +146,7 @@ func TestAtomicForwardAndEnqueue_ConflictWhenAlreadyClaimed(t *testing.T) {
 		ExecutorID: "scene.composite.v1@1"}
 
 	err = db.Forwarding().AtomicForwardAndEnqueue(ctx, "cf-conflict", job, spec, 5, "", "")
-	if err != forwardingstore.ErrTransitionConflict {
+	if !errors.Is(err, forwardingstore.ErrTransitionConflict) {
 		t.Errorf("expected forwardingstore.ErrTransitionConflict, got %v", err)
 	}
 

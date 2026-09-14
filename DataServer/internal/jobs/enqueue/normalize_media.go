@@ -119,27 +119,6 @@ func hasClipTimelinePayload(payloadMap map[string]interface{}) bool {
 	}
 	return false
 }
-func normalizeMapList(raw interface{}) []map[string]interface{} {
-	var result []map[string]interface{}
-	switch values := raw.(type) {
-	case []map[string]interface{}:
-		for _, value := range values {
-			if len(value) > 0 {
-				result = append(result, value)
-			}
-		}
-	case []interface{}:
-		for _, value := range values {
-			if item, ok := value.(map[string]interface{}); ok && len(item) > 0 {
-				result = append(result, item)
-			}
-		}
-	}
-	return result
-}
-func normalizeSubtitleTracks(raw interface{}) []map[string]interface{} {
-	return normalizeMapList(raw)
-}
 func syncAudioURLFromVoiceover(payloadMap map[string]interface{}) {
 	if payloadMap == nil {
 		return

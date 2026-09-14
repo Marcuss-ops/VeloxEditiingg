@@ -44,6 +44,7 @@
 package pipeline
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -418,7 +419,8 @@ func ValidateAllExternalURLs(req SubmitJobRequest, cfg *config.Config) []SSRFVal
 			defer wg.Done()
 			defer func() { <-sem }()
 			if err := ValidateExternalURL(c.url, domains, allowLoopbackHTTP); err != nil {
-				if se, ok := err.(*SSRFValidationError); ok {
+				var se *SSRFValidationError
+				if errors.As(err, &se) {
 					se.Path = c.path
 					results[i] = se
 				}

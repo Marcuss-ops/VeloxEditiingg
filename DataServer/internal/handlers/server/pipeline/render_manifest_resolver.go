@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"net/url"
 	"os"
 	"strings"
@@ -73,7 +74,8 @@ func (h *Handlers) fetchRenderManifest(ctx context.Context, rawURL string) ([]by
 	testPrivateNetworkPolicy := h != nil && h.inputPolicy != nil && h.inputPolicy.AllowPrivateNetworks
 	if !testPrivateNetworkPolicy {
 		if err := ValidateExternalURL(rawURL, h.configuredAllowedDomains(), h.configuredAllowLoopbackHTTP()); err != nil {
-			if se, ok := err.(*SSRFValidationError); ok {
+			var se *SSRFValidationError
+			if errors.As(err, &se) {
 				return nil, &SubmitJobValidationError{
 					Code:    "ssrf_rejected",
 					Reason:  se.Reason,

@@ -84,7 +84,7 @@ func (s *Service) Receive(ctx context.Context, uploadID string, reader io.Reader
 	dst, err := os.OpenFile(filepath.Clean(session.TemporaryStorageKey),
 		os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
-		return nil, fmt.Errorf("%w: create temp: %v", ErrBlobWriteFailed, err)
+		return nil, fmt.Errorf("%w: create temp: %w", ErrBlobWriteFailed, err)
 	}
 	cleanup := func() {
 		_ = dst.Close()
@@ -98,16 +98,16 @@ func (s *Service) Receive(ctx context.Context, uploadID string, reader io.Reader
 	if _, err := io.Copy(writer, reader); err != nil {
 		cleanup()
 		_ = s.markFailed(ctx, uploadID, "io.Copy error")
-		return nil, fmt.Errorf("%w: io.Copy: %v", ErrBlobWriteFailed, err)
+		return nil, fmt.Errorf("%w: io.Copy: %w", ErrBlobWriteFailed, err)
 	}
 
 	if err := dst.Sync(); err != nil {
 		cleanup()
-		return nil, fmt.Errorf("%w: fsync: %v", ErrBlobWriteFailed, err)
+		return nil, fmt.Errorf("%w: fsync: %w", ErrBlobWriteFailed, err)
 	}
 	if err := dst.Close(); err != nil {
 		_ = os.Remove(session.TemporaryStorageKey)
-		return nil, fmt.Errorf("%w: close: %v", ErrBlobWriteFailed, err)
+		return nil, fmt.Errorf("%w: close: %w", ErrBlobWriteFailed, err)
 	}
 
 	receivedSHA := fmt.Sprintf("%x", hasher.Sum(nil))
@@ -125,7 +125,7 @@ func (s *Service) Receive(ctx context.Context, uploadID string, reader io.Reader
 	info, statErr := os.Stat(session.TemporaryStorageKey)
 	if statErr != nil {
 		_ = os.Remove(session.TemporaryStorageKey)
-		return nil, fmt.Errorf("%w: stat staged blob: %v", ErrBlobWriteFailed, statErr)
+		return nil, fmt.Errorf("%w: stat staged blob: %w", ErrBlobWriteFailed, statErr)
 	}
 	if !info.Mode().IsRegular() || info.Size() != receivedSize {
 		_ = os.Remove(session.TemporaryStorageKey)

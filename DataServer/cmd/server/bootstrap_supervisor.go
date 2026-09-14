@@ -72,6 +72,8 @@ func registerOpsAlertsSupervisor(sup *supervisor.Supervisor, store opsalerts.Ale
 //     removed and the supervisor logs WARN.
 //   - ClassOneShot:     manifest-generator. Run once on startup;
 //     failure is non-fatal (logged WARN).
+//
+//nolint:funlen // Declarative runner wiring is kept together to audit capability coverage.
 func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDeps, p *persistenceDeps, w *workerDeps, t *taskDeps, metricsCollector *velmetrics.Collector, opsAlertsCapability *opsalerts.CapabilityStatus, alertNotifier runtimealerts.Notifier) (*supervisor.Supervisor, error) {
 	sup := supervisor.New()
 	if opsAlertsCapability != nil {

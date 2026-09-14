@@ -40,25 +40,6 @@ type productionAssetResolver struct {
 	tokenProvider func() string
 }
 
-func newProductionAssetResolver(service *voiceoverassets.AssetService, baseURL, token string) (*productionAssetResolver, error) {
-	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
-	if service == nil {
-		return nil, fmt.Errorf("asset service is unavailable")
-	}
-	parsed, err := url.Parse(baseURL)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return nil, fmt.Errorf("invalid asset pickup base URL %q", baseURL)
-	}
-	if strings.TrimSpace(token) == "" {
-		return nil, fmt.Errorf("asset pickup token is unavailable")
-	}
-	return &productionAssetResolver{
-		service:       service,
-		baseURL:       baseURL,
-		tokenProvider: func() string { return token },
-	}, nil
-}
-
 func newRotatingProductionAssetResolver(service *voiceoverassets.AssetService, baseURL string, tokenProvider func() string) (*productionAssetResolver, error) {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if service == nil {

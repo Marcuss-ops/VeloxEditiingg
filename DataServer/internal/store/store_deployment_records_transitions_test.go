@@ -3,9 +3,10 @@ package store
 import (
 	"context"
 	"errors"
-	_ "github.com/mattn/go-sqlite3"
 	"testing"
 	"time"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 func TestDeploymentStore_TerminalStatusIsImmutable(t *testing.T) {

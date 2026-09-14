@@ -24,6 +24,8 @@ import (
 //  3. Re-issuing the remote call with the original requested payload.
 //
 // Only runs in a FAILED state can be retried. Non-failed runs return 409.
+//
+//nolint:funlen // Retry mirrors the durable state machine and must update each client-scoped branch.
 func (h *Handlers) RetryPipelineRun() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if h.store == nil {

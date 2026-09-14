@@ -110,12 +110,12 @@ func (c *Client) ListPublishingCatalog(ctx context.Context, workspaceID int64, p
 	payload.Target.Type = "catalog"
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return nil, fmt.Errorf("%w: marshal target catalog request: %v", ErrPermanent, err)
+		return nil, fmt.Errorf("%w: marshal target catalog request: %w", ErrPermanent, err)
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint("/internal/v1/destinations/resolve-target"), bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("%w: build target catalog request: %v", ErrTransient, err)
+		return nil, fmt.Errorf("%w: build target catalog request: %w", ErrTransient, err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	if c.cfg.APIKey != "" {
@@ -124,7 +124,7 @@ func (c *Client) ListPublishingCatalog(ctx context.Context, workspaceID int64, p
 
 	resp, err := c.client.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("%w: target catalog request failed: %v", ErrTransient, err)
+		return nil, fmt.Errorf("%w: target catalog request failed: %w", ErrTransient, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -134,7 +134,7 @@ func (c *Client) ListPublishingCatalog(ctx context.Context, workspaceID int64, p
 
 	var out PublishingTargetCatalogResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, fmt.Errorf("%w: decode target catalog response: %v", ErrTransient, err)
+		return nil, fmt.Errorf("%w: decode target catalog response: %w", ErrTransient, err)
 	}
 	if !out.Valid {
 		return nil, fmt.Errorf("%w: target catalog invalid: %s %s", ErrPermanent, out.ErrorCode, out.Message)

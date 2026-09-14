@@ -11,6 +11,7 @@ package main
 
 import (
 	"archive/zip"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -177,7 +178,7 @@ func walkDirToZip(zw *zip.Writer, baseDir, dir string) {
 	})
 
 	// filepath.SkipDir is not an error; prevent WalkDir from surfacing it.
-	if err != nil && err != filepath.SkipDir {
+	if err != nil && !errors.Is(err, filepath.SkipDir) {
 		log.Printf("walk %s: %v", dir, err)
 	}
 }

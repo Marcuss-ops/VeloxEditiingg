@@ -240,7 +240,7 @@ func scanBaseline(row interface{ Scan(...interface{}) error }) (*performance.Bas
 		&b.SampleCount, &b.P50WallMs, &b.P95WallMs,
 		&b.P50RenderFactor, &b.P95RenderFactor, &b.ErrorRate, &createdAt,
 	)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {

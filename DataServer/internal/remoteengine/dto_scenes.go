@@ -24,16 +24,6 @@ func extractScenesDTO(flat map[string]interface{}) []SceneResult {
 	return nil
 }
 
-// convertRawScenes remains as a compatibility adapter for package-local
-// callers, but delegates parsing and normalization to the shared contract.
-func convertRawScenes(raw []interface{}) []SceneResult {
-	scenes, err := contract.ParseSceneMaps(raw)
-	if err != nil {
-		return nil
-	}
-	return convertCanonicalScenes(scenes)
-}
-
 // convertCanonicalScenes converts already parsed canonical scene maps into
 // the remote-engine DTO. Asset field conversion belongs to this adapter; JSON
 // parsing, alias normalization and default duration handling do not.

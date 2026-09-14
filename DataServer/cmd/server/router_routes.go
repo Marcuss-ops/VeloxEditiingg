@@ -14,7 +14,6 @@ import (
 	"velox-server/internal/handlers/server/api"
 	instaedithandler "velox-server/internal/handlers/server/instaedit"
 	"velox-server/internal/handlers/server/pipeline"
-	scripthandlers "velox-server/internal/handlers/server/script"
 	"velox-server/internal/logging"
 	velmetrics "velox-server/internal/metrics"
 	"velox-server/internal/repository"
@@ -56,21 +55,6 @@ func registerInstaEditRoutes(r *gin.Engine, deps InstaEditRouteDeps) error {
 		WebhookSecret: deps.WebhookSecret,
 	}).RegisterRoutes(r)
 	return nil
-}
-
-// registerScriptRoutes mounts the /api/v1/script routes. Nil-tolerant:
-// it returns silently when its bundle is empty.
-func registerScriptRoutes(r *gin.Engine, deps ScriptRouteDeps) {
-	if deps.Enqueuer == nil {
-		logServerf(context.Background(), logging.LevelInfo, logging.CodeServerRoutes, "[ROUTES] script routes skipped: enqueuer=false store=%t", deps.SQLiteStore != nil)
-		return
-	}
-
-	v1Group := r.Group("/api/v1/script")
-	v1Group.Use(api.AdminAuthMiddleware(deps.Cfg))
-	// PR15.7a: thread *enqueue.Enqueuer through RegisterRoutes so the
-	// script endpoint can submit jobs without package-level state.
-	scripthandlers.RegisterRoutes(v1Group, deps.Cfg, deps.SQLiteStore, deps.Enqueuer, deps.Resolver, deps.DocCreator)
 }
 
 // registerPipelineRoutes mounts the canonical pipeline/job routes.

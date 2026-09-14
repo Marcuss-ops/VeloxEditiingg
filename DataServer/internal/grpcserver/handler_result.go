@@ -19,6 +19,7 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -79,34 +80,7 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *wor
 		}
 	}
 
-	// Translate protobuf output_artifacts (Struct items) into the typed
-	// DeclaredArtifact slice. Metadata is best-effort JSON.
-	declared := make([]ingest.DeclaredArtifact, 0, len(tr.GetOutputArtifacts()))
-	for _, item := range tr.GetOutputArtifacts() {
-		m := item.AsMap()
-		artID, _ := m["artifact_id"].(string)
-		if artID == "" {
-			continue
-		}
-		artType, _ := m["artifact_type"].(string)
-		path, _ := m["artifact_path"].(string)
-		var size int64
-		if v, ok := m["size_bytes"].(float64); ok {
-			size = int64(v)
-		} else if v, ok := m["artifact_size"].(float64); ok {
-			size = int64(v)
-		}
-		sha, _ := m["sha256"].(string)
-		d := ingest.DeclaredArtifact{
-			ArtifactID:   artID,
-			ArtifactType: artType,
-			Path:         path,
-			Size:         size,
-			SHA256:       sha,
-			Metadata:     m,
-		}
-		declared = append(declared, d)
-	}
+	declared := declaredArtifactsFromProto(tr.GetOutputArtifacts())
 
 	// Scorecard v1 / F1 — typed execution-metrics hoisting. Build the
 	// 3 typed Go structs from the wire payload (see handler_jobs_metrics.go
@@ -297,4 +271,29 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *wor
 			"lease_id": leaseID, "ack_error": ackError,
 		})
 	}
+}
+
+func declaredArtifactsFromProto(items []*structpb.Struct) []ingest.DeclaredArtifact {
+	declared := make([]ingest.DeclaredArtifact, 0, len(items))
+	for _, item := range items {
+		m := item.AsMap()
+		artID, _ := m["artifact_id"].(string)
+		if artID == "" {
+			continue
+		}
+		artType, _ := m["artifact_type"].(string)
+		path, _ := m["artifact_path"].(string)
+		var size int64
+		if v, ok := m["size_bytes"].(float64); ok {
+			size = int64(v)
+		} else if v, ok := m["artifact_size"].(float64); ok {
+			size = int64(v)
+		}
+		sha, _ := m["sha256"].(string)
+		declared = append(declared, ingest.DeclaredArtifact{
+			ArtifactID: artID, ArtifactType: artType, Path: path,
+			Size: size, SHA256: sha, Metadata: m,
+		})
+	}
+	return declared
 }

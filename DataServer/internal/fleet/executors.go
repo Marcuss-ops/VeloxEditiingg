@@ -188,7 +188,7 @@ func (r *ExecutorRegistry) ValidateRequiredExecutors(required ...string) error {
 		}
 		if validator, ok := exec.(interface{ ValidateProductionBackends() error }); ok {
 			if err := validator.ValidateProductionBackends(); err != nil {
-				return fmt.Errorf("%w: %s: %v", ErrExecutorNotConfigured, kind, err)
+				return fmt.Errorf("%w: %s: %w", ErrExecutorNotConfigured, kind, err)
 			}
 		}
 	}

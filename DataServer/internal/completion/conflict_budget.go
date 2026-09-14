@@ -39,12 +39,12 @@ func (b *ConflictBudget) Record(key string, err error) error {
 	b.mu.Unlock()
 
 	wrapErr := func() error {
-		return fmt.Errorf("%w: consecutive=%d (since=%s last=%s) key=%s original=%v",
+		return fmt.Errorf("%w: consecutive=%d (since=%s last=%s) key=%s original=%s",
 			ErrConflictBudgetExhausted, streakSnapshot,
 			firstErrAt.Format(time.RFC3339Nano),
 			lastErrAt.Format(time.RFC3339Nano),
 			key,
-			err)
+			err.Error())
 	}
 	if sink == nil {
 		if escalated {

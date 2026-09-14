@@ -40,7 +40,7 @@ func (s *ChunkedUploadService) ReceiveChunked(ctx context.Context, uploadID stri
 	defer s.blobStore.RemoveStaging(assemblyPath)
 	out, err := s.blobStore.OpenStagedWrite(assemblyPath)
 	if err != nil {
-		return nil, fmt.Errorf("%w: create assembly: %v", ErrBlobWriteFailed, err)
+		return nil, fmt.Errorf("%w: create assembly: %w", ErrBlobWriteFailed, err)
 	}
 	if asmErr := s.assembleChunksVerified(out, chunks); asmErr != nil {
 		_ = out.Close()
@@ -48,10 +48,10 @@ func (s *ChunkedUploadService) ReceiveChunked(ctx context.Context, uploadID stri
 	}
 	if err := out.Sync(); err != nil {
 		_ = out.Close()
-		return nil, fmt.Errorf("%w: sync assembly: %v", ErrBlobWriteFailed, err)
+		return nil, fmt.Errorf("%w: sync assembly: %w", ErrBlobWriteFailed, err)
 	}
 	if err := out.Close(); err != nil {
-		return nil, fmt.Errorf("%w: close assembly: %v", ErrBlobWriteFailed, err)
+		return nil, fmt.Errorf("%w: close assembly: %w", ErrBlobWriteFailed, err)
 	}
 	assembled, err := s.blobStore.OpenStagedRead(assemblyPath)
 	if err != nil {
@@ -121,7 +121,7 @@ func (s *ChunkedUploadService) CompleteChunked(ctx context.Context, cmd ChunkedC
 	defer s.blobStore.RemoveStaging(assemblyPath)
 	out, err := s.blobStore.OpenStagedWrite(assemblyPath)
 	if err != nil {
-		return nil, fmt.Errorf("%w: create assembly file: %v", ErrBlobWriteFailed, err)
+		return nil, fmt.Errorf("%w: create assembly file: %w", ErrBlobWriteFailed, err)
 	}
 	if asmErr := s.assembleChunksVerified(out, chunks); asmErr != nil {
 		_ = out.Close()
@@ -131,7 +131,7 @@ func (s *ChunkedUploadService) CompleteChunked(ctx context.Context, cmd ChunkedC
 	if err := out.Sync(); err != nil {
 		_ = out.Close()
 		_ = s.blobStore.RemoveStaging(assemblyPath)
-		return nil, fmt.Errorf("%w: sync assembly: %v", ErrBlobWriteFailed, err)
+		return nil, fmt.Errorf("%w: sync assembly: %w", ErrBlobWriteFailed, err)
 	}
 	_ = out.Close()
 

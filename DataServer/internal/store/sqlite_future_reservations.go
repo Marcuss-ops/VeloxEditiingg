@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -44,7 +45,7 @@ VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(task_id) DO NOTHING`, reservation.TaskID
 	if rows == 0 {
 		var owner string
 		err = tx.QueryRowContext(ctx, `SELECT worker_id FROM future_task_reservations WHERE task_id = ?`, reservation.TaskID).Scan(&owner)
-		if err != nil && err != sql.ErrNoRows {
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return false, err
 		}
 		if owner != reservation.WorkerID {
@@ -179,7 +180,7 @@ func (r *SQLiteTaskRepository) FutureTaskPayload(ctx context.Context, taskID str
 	}
 	var payload string
 	err := r.store.db.QueryRowContext(ctx, `SELECT COALESCE(payload_json,'') FROM task_specs WHERE task_id = ?`, taskID).Scan(&payload)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	return []byte(payload), err
@@ -224,7 +225,7 @@ func (r *SQLiteTaskRepository) UpdateReservationState(ctx context.Context, reser
 	err := r.store.db.QueryRowContext(ctx,
 		`SELECT COALESCE(state,'') FROM future_task_reservations WHERE reservation_id = ?`,
 		reservationID).Scan(&currentRaw)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
 	if err != nil {

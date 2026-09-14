@@ -9,6 +9,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -61,7 +62,7 @@ func (r *SQLiteTaskRepository) Get(ctx context.Context, id string) (*taskgraph.T
 		id,
 	)
 	t, err := scanTask(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -80,7 +81,7 @@ func (r *SQLiteTaskRepository) GetByJobID(ctx context.Context, jobID string) (*t
 		jobID,
 	)
 	t, err := scanTask(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {

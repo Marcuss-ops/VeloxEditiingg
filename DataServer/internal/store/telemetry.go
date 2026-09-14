@@ -18,13 +18,6 @@ func (s *SQLiteStore) SetDBTelemetry(t DBTelemetry) {
 	}
 }
 
-func (s *SQLiteStore) observeDBOperation(write bool) {
-	if s != nil && s.dbTelemetry != nil {
-		s.dbTelemetry.RecordDBOperation(write)
-		s.observeDBStats()
-	}
-}
-
 func (s *SQLiteStore) observeDBTransaction(waitMS, transactionMS float64, busy, busyTimeout, retried bool, writeOps, readOps uint64) {
 	if s != nil && s.dbTelemetry != nil {
 		s.dbTelemetry.ObserveDBTransaction(waitMS, transactionMS, busy, busyTimeout, retried, writeOps, readOps)

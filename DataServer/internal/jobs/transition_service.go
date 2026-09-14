@@ -79,7 +79,7 @@ func (s *TransitionService) Transition(ctx context.Context, id string, from, to 
 		}
 		requires, err := s.readiness.RequiresArtifact(ctx, id)
 		if err != nil {
-			return fmt.Errorf("%w for %s: %v", ErrArtifactContractCheck, id, err)
+			return fmt.Errorf("%w for %s: %w", ErrArtifactContractCheck, id, err)
 		}
 		if from == StatusRunning && requires {
 			return ErrArtifactContractRequiresAwaiting

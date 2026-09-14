@@ -17,10 +17,7 @@ import (
 // this method only validates the snapshot and queues the typed envelope.
 // Workers without prefetch.plan.v1 are deliberately rejected so an older
 // runtime never receives an unknown optimization message.
-func (h *Handler) SendFutureAssetPlan(ctx context.Context, plan sharedfutureasset.Plan) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+func (h *Handler) SendFutureAssetPlan(_ context.Context, plan sharedfutureasset.Plan) error {
 	if err := plan.Validate(); err != nil {
 		return err
 	}
@@ -49,10 +46,7 @@ func (h *Handler) SendFutureAssetPlan(ctx context.Context, plan sharedfutureasse
 
 // SendCancelPrefetch is the low-latency hint path. The subsequent full plan
 // remains the reconciliation source of truth if this message is lost.
-func (h *Handler) SendCancelPrefetch(ctx context.Context, workerID string, cancel *pb.CancelPrefetch) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+func (h *Handler) SendCancelPrefetch(_ context.Context, workerID string, cancel *pb.CancelPrefetch) error {
 	if cancel == nil || cancel.GetJobId() == "" || cancel.GetReservationId() == "" {
 		return fmt.Errorf("prefetch: cancel requires job_id and reservation_id")
 	}

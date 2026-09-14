@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -205,7 +206,7 @@ func TestRenewForwardingLease_CASGuard(t *testing.T) {
 	l := leases[0]
 	wrongExpiry := time.Now().UTC().Add(10 * time.Minute)
 	err = db.Forwarding().RenewCreatorForwardingLease(ctx, l.ForwardingID, "wrong-runner", l.LeaseID, wrongExpiry)
-	if err != forwardingstore.ErrTransitionConflict {
+	if !errors.Is(err, forwardingstore.ErrTransitionConflict) {
 		t.Errorf("expected forwardingstore.ErrTransitionConflict, got %v", err)
 	}
 }

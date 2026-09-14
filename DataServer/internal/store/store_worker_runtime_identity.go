@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -153,7 +154,7 @@ func (s *SQLiteStore) GetWorkerRuntimeSnapshotBySession(workerID, sessionID stri
 		&snapshot.QSVAvailable, &snapshot.UlimitNofileSoft, &snapshot.UlimitNofileHard,
 		&capabilitiesJSON, &connectedAt,
 	)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -244,7 +245,7 @@ func (s *SQLiteStore) GetAuthenticatedWorkerRuntimeSnapshot(ctx context.Context,
 		&snapshot.QSVAvailable, &snapshot.UlimitNofileSoft, &snapshot.UlimitNofileHard,
 		&capabilitiesJSON, &connectedAt,
 	)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {

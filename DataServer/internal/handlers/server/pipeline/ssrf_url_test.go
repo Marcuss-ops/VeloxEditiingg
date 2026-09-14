@@ -12,6 +12,7 @@
 package pipeline
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -75,8 +76,8 @@ func TestValidateExternalURL_RejectsPrivateIPs(t *testing.T) {
 			if err == nil {
 				t.Fatalf("want error reason=%q, got nil", tc.wantReason)
 			}
-			se, ok := err.(*SSRFValidationError)
-			if !ok {
+			var se *SSRFValidationError
+			if !errors.As(err, &se) {
 				t.Fatalf("want *SSRFValidationError, got %T", err)
 			}
 			if se.Reason != tc.wantReason {
@@ -107,8 +108,8 @@ func TestValidateExternalURL_RejectsSchemes(t *testing.T) {
 			if err == nil {
 				t.Fatalf("want error, got nil for %q", tc.url)
 			}
-			se, ok := err.(*SSRFValidationError)
-			if !ok {
+			var se *SSRFValidationError
+			if !errors.As(err, &se) {
 				t.Fatalf("want *SSRFValidationError, got %T", err)
 			}
 			if se.Reason != "scheme" {
@@ -123,15 +124,21 @@ func TestValidateExternalURL_HTTPOnlyOnLoopback(t *testing.T) {
 	// http://public → http_disallowed.
 	if err := ValidateExternalURL("http://93.184.216.34/x", nil, false); err == nil {
 		t.Fatal("want error, got nil for http://public")
-	} else if se, ok := err.(*SSRFValidationError); !ok || se.Reason != "http_disallowed" {
-		t.Fatalf("want http_disallowed, got %v", err)
+	} else {
+		var se *SSRFValidationError
+		if !errors.As(err, &se) || se.Reason != "http_disallowed" {
+			t.Fatalf("want http_disallowed, got %v", err)
+		}
 	}
 
 	// http://loopback without dev gate → ip_loopback.
 	if err := ValidateExternalURL("http://127.0.0.1/x", nil, false); err == nil {
 		t.Fatal("want error, got nil for http://loopback")
-	} else if se, ok := err.(*SSRFValidationError); !ok || se.Reason != "ip_loopback" {
-		t.Fatalf("want ip_loopback, got %v", err)
+	} else {
+		var se *SSRFValidationError
+		if !errors.As(err, &se) || se.Reason != "ip_loopback" {
+			t.Fatalf("want ip_loopback, got %v", err)
+		}
 	}
 
 	// http://loopback WITH dev gate → still rejected (dev gate does
@@ -180,8 +187,8 @@ func TestValidateExternalURL_AllowlistRequired(t *testing.T) {
 			if err == nil {
 				t.Fatalf("want reject, got nil for %q", tc.url)
 			}
-			se, _ := err.(*SSRFValidationError)
-			if se == nil {
+			var se *SSRFValidationError
+			if !errors.As(err, &se) {
 				t.Fatalf("want *SSRFValidationError, got %T", err)
 			}
 			// The reject reason could be either allowlist_miss or

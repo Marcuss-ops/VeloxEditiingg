@@ -16,7 +16,7 @@ func TestRetryPolicy_ShouldStop_UntypedError(t *testing.T) {
 	if !stop {
 		t.Fatal("untyped error should STOP (treated as permanent)")
 	}
-	if got != err {
+	if !errors.Is(got, err) {
 		t.Fatal("ShouldStop should return the same untyped error")
 	}
 }

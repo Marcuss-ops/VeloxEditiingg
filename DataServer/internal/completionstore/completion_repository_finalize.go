@@ -85,7 +85,7 @@ func (r *sqliteCompletionTx) MarkCompletionJobSucceededIfTasksDone(ctx context.C
 	}
 	var contract map[string]interface{}
 	if err := json.Unmarshal([]byte(requestJSON), &contract); err != nil {
-		return fmt.Errorf("%w: invalid request_json for job %s: %v", ErrCompletionTransitionConflict, jobID, err)
+		return fmt.Errorf("%w: invalid request_json for job %s: %w", ErrCompletionTransitionConflict, jobID, err)
 	}
 	renderOnly, _ := contract["render_only"].(bool)
 	artifactContract := !renderOnly

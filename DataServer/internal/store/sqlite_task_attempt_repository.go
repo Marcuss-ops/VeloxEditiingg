@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -15,7 +16,7 @@ func (r *SQLiteTaskAttemptRepository) GetRawReportJSON(ctx context.Context, atte
 	}
 	var raw string
 	err := r.store.db.QueryRowContext(ctx, `SELECT raw_report_json FROM task_attempt_reports WHERE attempt_id = ?`, attemptID).Scan(&raw)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
 	if err != nil {
@@ -34,7 +35,7 @@ func (r *SQLiteTaskAttemptRepository) GetReportReceivedAt(ctx context.Context, a
 	}
 	var received string
 	err := r.store.db.QueryRowContext(ctx, `SELECT received_at FROM task_attempt_reports WHERE attempt_id = ?`, attemptID).Scan(&received)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return time.Time{}, nil
 	}
 	if err != nil {
@@ -58,7 +59,7 @@ func (r *SQLiteTaskAttemptRepository) GetReportCommittedAt(ctx context.Context, 
 	}
 	var persisted string
 	err := r.store.db.QueryRowContext(ctx, `SELECT persisted_at FROM task_attempt_reports WHERE attempt_id = ?`, attemptID).Scan(&persisted)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return time.Time{}, nil
 	}
 	if err != nil {

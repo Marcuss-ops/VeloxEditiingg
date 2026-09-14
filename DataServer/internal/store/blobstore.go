@@ -187,7 +187,7 @@ func (b *FilesystemBlobStore) PromoteDurable(stagingPath, finalPath string) (str
 
 	if err := os.Rename(tempPath, finalPath); err != nil {
 		cleanupTemp()
-		return "", fmt.Errorf("%w: rename %s → %s: %v", ErrPromoteDurableFailed, tempPath, finalPath, err)
+		return "", fmt.Errorf("%w: rename %s → %s: %w", ErrPromoteDurableFailed, tempPath, finalPath, err)
 	}
 
 	// The canonical copy is durable now; remove the upload staging file so
@@ -195,7 +195,7 @@ func (b *FilesystemBlobStore) PromoteDurable(stagingPath, finalPath string) (str
 	// of the artifact behind. If cleanup fails, surface it rather than
 	// silently claiming the staging area is clean.
 	if err := os.Remove(filepath.Clean(stagingPath)); err != nil && !os.IsNotExist(err) {
-		return "", fmt.Errorf("%w: remove staging %s: %v", ErrPromoteDurableFailed, stagingPath, err)
+		return "", fmt.Errorf("%w: remove staging %s: %w", ErrPromoteDurableFailed, stagingPath, err)
 	}
 
 	// fsync the directory entry (POSIX best-effort).

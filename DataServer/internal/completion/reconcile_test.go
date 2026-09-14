@@ -3,11 +3,13 @@ package completion
 import (
 	"context"
 	"database/sql"
-	_ "github.com/mattn/go-sqlite3"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
+
+	_ "github.com/mattn/go-sqlite3"
+
 	"velox-server/internal/store"
 	"velox-server/internal/store/migrations"
 )

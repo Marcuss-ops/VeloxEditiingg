@@ -49,26 +49,6 @@ func int64Field(m map[string]interface{}, key string) int64 {
 	}
 }
 
-// float64Field extracts a float64 value from a map, handling json.Number.
-func float64Field(m map[string]interface{}, key string) float64 {
-	if m == nil {
-		return 0
-	}
-	switch v := m[key].(type) {
-	case float64:
-		return v
-	case int:
-		return float64(v)
-	case int64:
-		return float64(v)
-	case json.Number:
-		f, _ := v.Float64()
-		return f
-	default:
-		return 0
-	}
-}
-
 func sortedMapKeys(m map[string]interface{}) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {

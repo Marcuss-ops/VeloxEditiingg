@@ -53,7 +53,7 @@ func (e *ResumeExecutor) Execute(ctx context.Context, op *store.Operation) error
 		// exclusion remains in force. Surface cleanup failure rather
 		// than silently leaving the worker stuck in RESUMING.
 		if cleanupErr := e.backend.Registry.ClearWorkerResumingIfOwner(ctx, op.WorkerID, op.OperationID); cleanupErr != nil {
-			return fmt.Errorf("%w: Level D smoke executor not wired; cleanup failed: %v", ErrResumeSmokeFailed, cleanupErr)
+			return fmt.Errorf("%w: Level D smoke executor not wired; cleanup failed: %w", ErrResumeSmokeFailed, cleanupErr)
 		}
 		return fmt.Errorf("%w: Level D smoke executor not wired", ErrResumeSmokeFailed)
 	}
@@ -72,7 +72,7 @@ func (e *ResumeExecutor) Execute(ctx context.Context, op *store.Operation) error
 		Reason:  "resume Level D smoke gate",
 	})
 	if err != nil {
-		return fmt.Errorf("%w: build smoke payload: %v", ErrResumeSmokeFailed, err)
+		return fmt.Errorf("%w: build smoke payload: %w", ErrResumeSmokeFailed, err)
 	}
 	smokeOp := &store.Operation{
 		OperationID: op.OperationID + ":resume-smoke",
@@ -90,9 +90,9 @@ func (e *ResumeExecutor) Execute(ctx context.Context, op *store.Operation) error
 		// excluded after any Level D failure. Surface cleanup failure
 		// because a durable RESUMING gate must never be silent.
 		if cleanupErr := e.backend.Registry.ClearWorkerResumingIfOwner(ctx, op.WorkerID, op.OperationID); cleanupErr != nil {
-			return fmt.Errorf("%w: %v; cleanup failed: %v", ErrResumeSmokeFailed, smokeErr, cleanupErr)
+			return fmt.Errorf("%w: %w; cleanup failed: %w", ErrResumeSmokeFailed, smokeErr, cleanupErr)
 		}
-		return fmt.Errorf("%w: %v", ErrResumeSmokeFailed, smokeErr)
+		return fmt.Errorf("%w: %w", ErrResumeSmokeFailed, smokeErr)
 	}
 	// Clear quarantine first, then drain. If either write fails, retain
 	// RESUMING and the remaining exclusion flag so placement stays

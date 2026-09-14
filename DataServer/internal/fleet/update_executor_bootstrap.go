@@ -36,7 +36,7 @@ func (e *UpdateExecutor) authenticatedRunningDigest(ctx context.Context, workerI
 func (e *UpdateExecutor) bootstrapLedger(ctx context.Context, op *store.Operation, targetDigest string, info *workers.Worker) error {
 	runningDigest, err := e.authenticatedRunningDigest(ctx, op.WorkerID)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrBootstrapUnverifiable, err)
+		return fmt.Errorf("%w: %w", ErrBootstrapUnverifiable, err)
 	}
 	if runningDigest == "" {
 		return fmt.Errorf("%w: authenticated runtime digest missing for worker %s", ErrBootstrapUnverifiable, op.WorkerID)
@@ -67,7 +67,7 @@ func (e *UpdateExecutor) bootstrapLedger(ctx context.Context, op *store.Operatio
 		AppliedBy:      op.RequestedBy,
 		IsRollback:     false,
 	}); err != nil {
-		return fmt.Errorf("%w: insert baseline: %v", ErrBootstrapUnverifiable, err)
+		return fmt.Errorf("%w: insert baseline: %w", ErrBootstrapUnverifiable, err)
 	}
 	log.Printf("[UPDATE] worker=%s target=%s BOOTSTRAPPED (authenticated runtime; no worker mutation)", op.WorkerID, targetDigest)
 	return nil

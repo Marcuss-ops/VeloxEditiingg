@@ -3,10 +3,11 @@ package store
 import (
 	"context"
 	"errors"
-	_ "github.com/mattn/go-sqlite3"
 	"strings"
 	"testing"
 	"time"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 func TestWorkerDeploymentState_ErrorCodeAndMessagePersisted(t *testing.T) {

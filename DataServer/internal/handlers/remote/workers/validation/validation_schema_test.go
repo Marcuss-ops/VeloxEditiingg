@@ -1,9 +1,11 @@
 package validation
 
 import (
-	"github.com/stretchr/testify/require"
 	"path/filepath"
 	"testing"
+
+	"github.com/stretchr/testify/require"
+
 	"velox-server/internal/store"
 )
 

@@ -220,7 +220,7 @@ func TestSupervisorStopsAllRunners(t *testing.T) {
 
 	select {
 	case err := <-done:
-		if err != nil && err != context.Canceled && err != context.DeadlineExceeded {
+		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("unexpected error from supervisor: %v", err)
 		}
 	case <-time.After(3 * time.Second):
@@ -294,7 +294,7 @@ func TestSupervisorPropagatesRunnerFailure(t *testing.T) {
 	select {
 	case err := <-done:
 		// Supervisor.Run returns nil on clean shutdown (all runners handled).
-		if err != nil && err != context.Canceled && err != context.DeadlineExceeded {
+		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 			t.Logf("supervisor exit error (expected after runner failure): %v", err)
 		}
 	case <-time.After(3 * time.Second):

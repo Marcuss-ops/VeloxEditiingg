@@ -15,7 +15,6 @@ import (
 	workerhandlersuploads "velox-server/internal/handlers/remote/workers/uploads"
 	"velox-server/internal/handlers/server/api"
 	instaedithandler "velox-server/internal/handlers/server/instaedit"
-	scripthandlers "velox-server/internal/handlers/server/script"
 	"velox-server/internal/instaeditauth"
 	"velox-server/internal/jobs"
 	"velox-server/internal/jobs/enqueue"
@@ -48,19 +47,6 @@ import (
 // (per-route deps structs, RouterBundle, the network security guard,
 // newRouter). The per-group register* functions live in router_routes.go;
 // the M2M middleware factory lives in router_m2m.go.
-
-// ScriptRouteDeps carries the deps for /api/v1/script routes (script
-// generation endpoint).
-type ScriptRouteDeps struct {
-	Cfg         *config.Config
-	SQLiteStore *store.SQLiteStore
-	Enqueuer    *enqueue.Enqueuer
-	// Resolver backs the canonical submitter the script ingress routes
-	// through (SubmitScratch → enqueuer). Nil here means the script
-	// job-creation path reports unavailable (fail-closed).
-	Resolver   *creatorflow.Resolver
-	DocCreator scripthandlers.GoogleDocCreator
-}
 
 // PipelineRouteDeps carries the deps for the canonical job and
 // pipeline-run routes (creatorflow forwarder).
@@ -141,14 +127,12 @@ type FleetRouteDeps struct {
 
 // RouterBundle is the composition-root input for newRouter. It contains
 // ONLY the per-route dep sets the master actually mounts. Tests can
-// build a partial bundle (e.g. just ScriptRouteDeps) to exercise a
-// single route group in isolation.
+// build a partial bundle to exercise a single route group in isolation.
 //
 // Auth is produced inside newRouter (api.AdminAuthMiddleware) so the
 // bundle never carries it — production and tests must converge on the
 // same auth source.
 type RouterBundle struct {
-	Script    ScriptRouteDeps
 	Pipeline  PipelineRouteDeps
 	Upload    UploadRouteDeps
 	Metrics   MetricsRouteDeps

@@ -24,6 +24,8 @@ import (
 
 // ResolveAndRegister resolves a reference, content-addresses the bytes,
 // deduplicates by SHA-256, stores via BlobStore, and registers in the DB.
+//
+//nolint:funlen // Staging, verification, promotion, and registration share one cleanup lifecycle.
 func (s *AssetService) ResolveAndRegister(ctx context.Context, cmd ResolveAssetCommand) (*Asset, error) {
 	if s == nil || s.repo == nil {
 		return nil, fmt.Errorf("asset service unavailable")
@@ -106,7 +108,7 @@ func (s *AssetService) ResolveAndRegister(ctx context.Context, cmd ResolveAssetC
 	validation, validationErr := s.security.ValidateFile(ctx, stagingPath, inputsecurity.NormalizeKind(cmd.Kind), source.MIMEType)
 	if validationErr != nil {
 		if quarantineErr := s.security.Quarantine(stagingPath, inputsecurity.NormalizeKind(cmd.Kind), inputsecurity.CodeOf(validationErr), validationErr.Error()); quarantineErr != nil {
-			return nil, fmt.Errorf("validate asset: %w; quarantine: %v", validationErr, quarantineErr)
+			return nil, fmt.Errorf("validate asset: %w; quarantine: %w", validationErr, quarantineErr)
 		}
 		return nil, validationErr
 	}

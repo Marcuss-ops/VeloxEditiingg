@@ -12,6 +12,7 @@ package forwardingstore
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"time"
 
 	"velox-server/internal/forwardingcontract"
@@ -99,7 +100,7 @@ func scanCreatorForwarding(row creatorForwardingRowScanner) (*forwardingcontract
 		&cf.LastErrorCode, &cf.LastErrorMessage, &cf.LastErrorClass,
 		&cf.CreatedAt, &cf.UpdatedAt, &cf.ForwardedAt,
 	)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, storecore.ErrCreatorForwardingNoRow
 	}
 	if err != nil {
@@ -125,7 +126,7 @@ func scanCreatorForwardingWithExternalClient(row creatorForwardingRowScanner) (*
 		&cf.LastErrorCode, &cf.LastErrorMessage, &cf.LastErrorClass,
 		&cf.CreatedAt, &cf.UpdatedAt, &cf.ForwardedAt,
 	)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, storecore.ErrCreatorForwardingNoRow
 	}
 	if err != nil {

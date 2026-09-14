@@ -47,7 +47,7 @@ func TestWrapDBInfrastructure_PreservesDomainError(t *testing.T) {
 	original := domain.NewLeaseLost(cause)
 
 	got := wrapDBInfrastructure("store.update", original)
-	if got != original {
+	if !errors.Is(got, original) {
 		t.Fatalf("wrapDBInfrastructure changed an existing DomainError: got %p, want %p", got, original)
 	}
 	if derr, ok := domain.AsDomainError(got); !ok || derr.Code != domain.CodeLeaseLost {
@@ -60,7 +60,7 @@ func TestWrapDBInfrastructure_PreservesWrappedDomainError(t *testing.T) {
 	wrapped := fmt.Errorf("repository operation: %w", original)
 
 	got := wrapDBInfrastructure("store.update", wrapped)
-	if got != wrapped {
+	if !errors.Is(got, wrapped) {
 		t.Fatalf("wrapDBInfrastructure changed a wrapped DomainError: got %p, want %p", got, wrapped)
 	}
 	derr, ok := domain.AsDomainError(got)
@@ -93,7 +93,7 @@ func TestWrapDBInfrastructure_PreservesStoreSentinels(t *testing.T) {
 		"publication phase conflict": ErrPublicationPhaseConflict,
 	} {
 		t.Run(name, func(t *testing.T) {
-			if got := wrapDBInfrastructure("store.operation", sentinel); got != sentinel {
+			if got := wrapDBInfrastructure("store.operation", sentinel); !errors.Is(got, sentinel) {
 				t.Fatalf("wrapDBInfrastructure changed sentinel: got %v, want %v", got, sentinel)
 			}
 		})

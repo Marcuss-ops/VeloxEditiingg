@@ -114,11 +114,11 @@ func (w *LocalShellWorker) RunFFmpegRender(_ context.Context, runID, _, renderPl
 	cmd := exec.Command(ffmpeg, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", 0, fmt.Errorf("%w: %v (output: %s)", ErrFFmpegRenderFail, err, string(out))
+		return "", 0, fmt.Errorf("%w: %w (output: %s)", ErrFFmpegRenderFail, err, string(out))
 	}
 	fi, err := os.Stat(outputPath)
 	if err != nil {
-		return "", 0, fmt.Errorf("%w: stat artifact: %v", ErrArtifactMissing, err)
+		return "", 0, fmt.Errorf("%w: stat artifact: %w", ErrArtifactMissing, err)
 	}
 	return outputPath, fi.Size(), nil
 }
@@ -168,7 +168,7 @@ func (d *LocalArtifactUploader) UploadArtifact(_ context.Context, runID, srcPath
 	}
 	src, err := os.ReadFile(srcPath)
 	if err != nil {
-		return "", fmt.Errorf("%w: read artifact: %v", ErrDriveUploadFail, err)
+		return "", fmt.Errorf("%w: read artifact: %w", ErrDriveUploadFail, err)
 	}
 	if expectedBytes > 0 && int64(len(src)) != expectedBytes {
 		return "", fmt.Errorf("%w: size=%d want=%d", ErrDriveUploadFail, len(src), expectedBytes)
@@ -180,7 +180,7 @@ func (d *LocalArtifactUploader) UploadArtifact(_ context.Context, runID, srcPath
 	}
 	dst := filepath.Join(LocalArtifactRoot, runID+".mp4")
 	if err := os.WriteFile(dst, src, 0644); err != nil {
-		return "", fmt.Errorf("%w: write local artifact: %v", ErrDriveUploadFail, err)
+		return "", fmt.Errorf("%w: write local artifact: %w", ErrDriveUploadFail, err)
 	}
 	return "local-artifact-" + runID, nil
 }

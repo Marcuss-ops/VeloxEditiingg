@@ -142,7 +142,7 @@ func (w *SQLiteDeliveryStore) runInTx(ctx context.Context, fn func(ctx context.C
 			transactionMS := float64(time.Since(started).Microseconds()) / 1000
 			busy, busyTimeout := sqliteBusyFlags(fnErr, transactionMS)
 			w.observeDBTransaction(waitMS, transactionMS, busy, busyTimeout, false, 1, 0)
-			return fmt.Errorf("deliverystore: runInTx: callback returned error (rollback also failed: %v): %w", rbErr, fnErr)
+			return fmt.Errorf("deliverystore: runInTx: callback returned error (rollback also failed: %w): %w", rbErr, fnErr)
 		}
 		transactionMS := float64(time.Since(started).Microseconds()) / 1000
 		busy, busyTimeout := sqliteBusyFlags(fnErr, transactionMS)

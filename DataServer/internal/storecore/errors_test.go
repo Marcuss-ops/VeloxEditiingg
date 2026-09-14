@@ -42,7 +42,7 @@ func TestWrapDBInfrastructure_Nil(t *testing.T) {
 
 func TestWrapDBInfrastructure_PreservesDomainError(t *testing.T) {
 	original := domain.NewLeaseLost(errors.New("lease conflict"))
-	if got := WrapDBInfrastructure("storecore.update", original); got != original {
+	if got := WrapDBInfrastructure("storecore.update", original); !errors.Is(got, original) {
 		t.Fatalf("WrapDBInfrastructure changed an existing DomainError: got %p, want %p", got, original)
 	}
 }
@@ -60,7 +60,7 @@ func TestWrapDBInfrastructure_PreservesSentinels(t *testing.T) {
 		"lease mismatch":             taskgraph.ErrLeaseMismatch,
 	} {
 		t.Run(name, func(t *testing.T) {
-			if got := WrapDBInfrastructure("storecore.operation", sentinel); got != sentinel {
+			if got := WrapDBInfrastructure("storecore.operation", sentinel); !errors.Is(got, sentinel) {
 				t.Fatalf("WrapDBInfrastructure changed sentinel: got %v, want %v", got, sentinel)
 			}
 		})
@@ -105,7 +105,7 @@ func TestWrapDBInfrastructure_PreservesWrappedSentinel(t *testing.T) {
 	// A sentinel wrapped with %w must still be recognized (errors.Is) and
 	// returned unchanged by the classifier.
 	wrapped := fmt.Errorf("repository transition: %w", ErrTransitionConflict)
-	if got := WrapDBInfrastructure("storecore.transition", wrapped); got != wrapped {
+	if got := WrapDBInfrastructure("storecore.transition", wrapped); !errors.Is(got, wrapped) {
 		t.Fatalf("WrapDBInfrastructure changed a wrapped sentinel: got %p, want %p", got, wrapped)
 	}
 }

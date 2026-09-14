@@ -40,7 +40,7 @@ func (s *ChunkedUploadService) UploadChunk(ctx context.Context, cmd ChunkedUploa
 	chunkKey := chunkRetryStagingKey(s.blobStore, cmd.UploadID, cmd.ChunkIndex)
 	dst, err := s.blobStore.OpenStagedWrite(chunkKey)
 	if err != nil {
-		return fmt.Errorf("%w: create chunk file: %v", ErrBlobWriteFailed, err)
+		return fmt.Errorf("%w: create chunk file: %w", ErrBlobWriteFailed, err)
 	}
 
 	hasher := sha256.New()
@@ -48,16 +48,16 @@ func (s *ChunkedUploadService) UploadChunk(ctx context.Context, cmd ChunkedUploa
 	if err != nil {
 		_ = dst.Close()
 		_ = s.blobStore.RemoveStaging(chunkKey)
-		return fmt.Errorf("%w: write chunk: %v", ErrBlobWriteFailed, err)
+		return fmt.Errorf("%w: write chunk: %w", ErrBlobWriteFailed, err)
 	}
 	if err := dst.Sync(); err != nil {
 		_ = dst.Close()
 		_ = s.blobStore.RemoveStaging(chunkKey)
-		return fmt.Errorf("%w: sync chunk: %v", ErrBlobWriteFailed, err)
+		return fmt.Errorf("%w: sync chunk: %w", ErrBlobWriteFailed, err)
 	}
 	if err := dst.Close(); err != nil {
 		_ = s.blobStore.RemoveStaging(chunkKey)
-		return fmt.Errorf("%w: close chunk: %v", ErrBlobWriteFailed, err)
+		return fmt.Errorf("%w: close chunk: %w", ErrBlobWriteFailed, err)
 	}
 	if written <= 0 {
 		_ = s.blobStore.RemoveStaging(chunkKey)

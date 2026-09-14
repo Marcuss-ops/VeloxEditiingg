@@ -3,10 +3,12 @@ package observability
 import (
 	"context"
 	"errors"
-	"github.com/gin-gonic/gin"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/gin-gonic/gin"
+
 	"velox-server/internal/jobs"
 )
 

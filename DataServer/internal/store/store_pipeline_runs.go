@@ -138,7 +138,7 @@ func scanPipelineRun(row pipelineRunRowScanner) (*pipelineruns.PipelineRun, erro
 		&pr.ErrorCode, &pr.ErrorMessage, &pr.FailedStage,
 		&createdAt, &updatedAt, &completedAt,
 	)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrPipelineRunNoRow
 	}
 	if err != nil {

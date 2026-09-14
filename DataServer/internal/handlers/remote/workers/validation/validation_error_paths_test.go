@@ -1,12 +1,14 @@
 package validation
 
 import (
-	"github.com/stretchr/testify/require"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"sync"
 	"testing"
+
+	"github.com/stretchr/testify/require"
+
 	"velox-server/internal/store"
 )
 

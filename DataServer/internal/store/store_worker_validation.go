@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"time"
 )
 
@@ -71,7 +72,7 @@ func (s *SQLiteStore) GetWorkerValidation(workerID string) (*WorkerValidationSta
 		&status.WorkerID, &status.ValidationCode, &status.CanonicalUnit,
 		&status.ExecStart, &validatedAtStr, &status.FailureReason,
 	)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {

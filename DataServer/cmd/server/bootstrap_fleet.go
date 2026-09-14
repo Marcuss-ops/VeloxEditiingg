@@ -62,25 +62,6 @@ type driveUploaderAdapter struct {
 	folderID string
 }
 
-type driveVerifierAdapter struct{ svc *integrationsDrive.Service }
-
-func (a *driveVerifierAdapter) VerifyDelivery(ctx context.Context, driveFileID string, expectedBytes int64) error {
-	if a == nil || a.svc == nil {
-		return fmt.Errorf("drive verifier: service not configured")
-	}
-	file, err := a.svc.GetFileMetadata(ctx, driveFileID)
-	if err != nil {
-		return fmt.Errorf("drive metadata: %w", err)
-	}
-	if file == nil || file.ID == "" {
-		return fmt.Errorf("drive metadata missing file id")
-	}
-	if expectedBytes > 0 && file.Size != expectedBytes {
-		return fmt.Errorf("drive size=%d want=%d", file.Size, expectedBytes)
-	}
-	return nil
-}
-
 // UploadArtifact delegates to the real Drive service's UploadFile.
 // The runID is used as the deliveryID for traceability in Drive properties.
 // A smoke-specific folder can be configured via VELOX_SMOKE_DRIVE_FOLDER_ID;
@@ -90,11 +71,11 @@ func (a *driveUploaderAdapter) UploadArtifact(ctx context.Context, runID, srcPat
 		return "", fmt.Errorf("drive uploader: service not configured")
 	}
 	if err := fleet.VerifyLocalArtifactDigest(srcPath, expectedBytes, expectedSHA256); err != nil {
-		return "", fmt.Errorf("%w: %v", fleet.ErrDriveUploadFail, err)
+		return "", fmt.Errorf("%w: %w", fleet.ErrDriveUploadFail, err)
 	}
 	result, err := a.svc.UploadFile(ctx, srcPath, strings.TrimSpace(a.folderID), runID)
 	if err != nil {
-		return "", fmt.Errorf("%w: %v", fleet.ErrDriveUploadFail, err)
+		return "", fmt.Errorf("%w: %w", fleet.ErrDriveUploadFail, err)
 	}
 	if !result.Success {
 		return "", fmt.Errorf("%w: %s", fleet.ErrDriveUploadFail, result.Error)
@@ -104,7 +85,7 @@ func (a *driveUploaderAdapter) UploadArtifact(ctx context.Context, runID, srcPat
 	}
 	metadata, err := a.svc.GetFileMetadata(ctx, result.FileID)
 	if err != nil {
-		return "", fmt.Errorf("%w: post-upload metadata verification: %v", fleet.ErrDriveUploadFail, err)
+		return "", fmt.Errorf("%w: post-upload metadata verification: %w", fleet.ErrDriveUploadFail, err)
 	}
 	if expectedBytes > 0 && metadata.Size != expectedBytes {
 		return "", fmt.Errorf("%w: post-upload size=%d want=%d", fleet.ErrDriveUploadFail, metadata.Size, expectedBytes)

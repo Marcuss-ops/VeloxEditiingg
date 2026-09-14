@@ -421,7 +421,7 @@ func TestRenewDeliveryLease_CASGuard(t *testing.T) {
 	// Try renewing with wrong runner_id — should fail with conflict.
 	wrongExpiry := time.Now().UTC().Add(10 * time.Minute)
 	err = db.Delivery().RenewDeliveryLease(ctx, l.DeliveryID, "wrong-runner", l.LeaseID, wrongExpiry)
-	if err != ErrTransitionConflict {
+	if !errors.Is(err, ErrTransitionConflict) {
 		t.Errorf("expected ErrTransitionConflict, got %v", err)
 	}
 }

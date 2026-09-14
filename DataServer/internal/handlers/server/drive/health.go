@@ -13,6 +13,8 @@ import (
 
 // DriveHealthCheckHandler verifies Drive token, permissions, and connectivity.
 // GET /api/drive/health
+//
+//nolint:funlen // The response is a deliberately ordered four-check diagnostic contract.
 func (h *DriveHandlers) DriveHealthCheckHandler(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
 	defer cancel()

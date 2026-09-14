@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	_ "github.com/mattn/go-sqlite3"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 func TestDeploymentStore_InsertAndGetLatest(t *testing.T) {

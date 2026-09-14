@@ -78,29 +78,6 @@ func resolveBundlePath(bundleDir, platform, arch string) (string, os.FileInfo, e
 	return bundlePath, info, nil
 }
 
-func findRepoRootFrom(start string) string {
-	dir, err := filepath.Abs(start)
-	if err != nil {
-		dir = start
-	}
-	for i := 0; i < 6; i++ {
-		candidate := filepath.Join(dir, "DataServer")
-		if stat, err := os.Stat(candidate); err == nil && stat.IsDir() {
-			return dir
-		}
-		candidateAlternative := filepath.Join(dir, "refactored", "DataServer")
-		if stat, err := os.Stat(candidateAlternative); err == nil && stat.IsDir() {
-			return filepath.Join(dir, "refactored")
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
-	}
-	return ""
-}
-
 // NewWorkerUpdateHandler creates the worker bundle handler. The
 // former tokenMgr/outboxStore parameters were removed with the dead
 // HTTP update/ack/rebuild surface; CommandManager still holds the

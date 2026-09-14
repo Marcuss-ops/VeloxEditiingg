@@ -18,6 +18,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"velox-server/internal/jobs"
@@ -40,7 +41,7 @@ func (b *baseJobRepository) Get(ctx context.Context, id string) (*jobs.Job, erro
 	row := b.db.QueryRowContext(ctx,
 		`SELECT `+p.ProjectionColumns()+` FROM jobs WHERE job_id = `+p.Placeholder(1), id)
 	j, err := p.ScanJob(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {

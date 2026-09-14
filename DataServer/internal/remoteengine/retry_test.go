@@ -2,6 +2,7 @@ package remoteengine
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -37,8 +38,8 @@ func TestWithRetry_ExactAttemptCount(t *testing.T) {
 		t.Fatalf("call count: got %d, want 2", got)
 	}
 
-	re, ok := err.(*RemoteError)
-	if !ok {
+	var re *RemoteError
+	if !errors.As(err, &re) {
 		t.Fatalf("expected *RemoteError, got %T: %v", err, err)
 	}
 	if re.Class != RemoteErrorTransient {
@@ -215,8 +216,8 @@ func TestShouldStop_MalformedPromotedToPermanent(t *testing.T) {
 	if !stop {
 		t.Fatal("malformed retry limit exceeded should stop")
 	}
-	re, ok := promoted.(*RemoteError)
-	if !ok || re.Class != RemoteErrorPermanent {
+	var re *RemoteError
+	if !errors.As(promoted, &re) || re.Class != RemoteErrorPermanent {
 		t.Fatalf("expected promoted PERMANENT error, got %v", promoted)
 	}
 	if !strings.Contains(re.Code, "_RETRY_EXCEEDED") {

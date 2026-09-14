@@ -12,6 +12,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"velox-server/internal/deliverystore"
@@ -198,7 +199,7 @@ func errorsHelperIs(err, target error) bool {
 	// top of the file (the package already imports context +
 	// testing via NewSQLiteStore + t.Fatalf).
 	for err != nil {
-		if err == target {
+		if errors.Is(err, target) {
 			return true
 		}
 		type unwrap interface{ Unwrap() error }

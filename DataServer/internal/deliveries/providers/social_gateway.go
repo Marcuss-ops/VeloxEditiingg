@@ -202,7 +202,7 @@ func (s *SocialGatewayProvider) buildRequest(artifact *repository.Artifact, dest
 		if err := json.Unmarshal([]byte(destination.DeliveryMetadataJSON), &meta); err != nil {
 			// Same permanent-failure semantic as configuration_json:
 			// retry cannot fix malformed JSON.
-			return socialclient.DeliverArtifactRequest{}, fmt.Errorf("%w: invalid delivery metadata: %v",
+			return socialclient.DeliverArtifactRequest{}, fmt.Errorf("%w: invalid delivery metadata: %w",
 				deliveries.ErrProviderPermanent, err)
 		}
 		delete(meta, "credential_ref")
@@ -242,9 +242,9 @@ func mapSocialClientError(err error) error {
 	case err == nil:
 		return nil
 	case errors.Is(err, socialclient.ErrNotConfigured):
-		return fmt.Errorf("%w: %v", deliveries.ErrProviderNotConfigured, err)
+		return fmt.Errorf("%w: %w", deliveries.ErrProviderNotConfigured, err)
 	case errors.Is(err, socialclient.ErrAuth):
-		return fmt.Errorf("%w: %v", deliveries.ErrProviderAuth, err)
+		return fmt.Errorf("%w: %w", deliveries.ErrProviderAuth, err)
 	case errors.Is(err, socialclient.ErrRateLimit):
 		var rateLimitErr *socialclient.RateLimitError
 		if errors.As(err, &rateLimitErr) && !rateLimitErr.RetryAfter.IsZero() {
@@ -253,15 +253,15 @@ func mapSocialClientError(err error) error {
 				Code:       "RATE_LIMIT",
 				Message:    err.Error(),
 				RetryAfter: rateLimitErr.RetryAfter,
-				Cause:      fmt.Errorf("%w: %v", deliveries.ErrProviderRateLimit, err),
+				Cause:      fmt.Errorf("%w: %w", deliveries.ErrProviderRateLimit, err),
 			}
 		}
-		return fmt.Errorf("%w: %v", deliveries.ErrProviderRateLimit, err)
+		return fmt.Errorf("%w: %w", deliveries.ErrProviderRateLimit, err)
 	case errors.Is(err, socialclient.ErrPermanent):
-		return fmt.Errorf("%w: %v", deliveries.ErrProviderPermanent, err)
+		return fmt.Errorf("%w: %w", deliveries.ErrProviderPermanent, err)
 	case errors.Is(err, socialclient.ErrTransient):
-		return fmt.Errorf("%w: %v", deliveries.ErrProviderTransient, err)
+		return fmt.Errorf("%w: %w", deliveries.ErrProviderTransient, err)
 	default:
-		return fmt.Errorf("%w: %v", deliveries.ErrProviderTransient, err)
+		return fmt.Errorf("%w: %w", deliveries.ErrProviderTransient, err)
 	}
 }

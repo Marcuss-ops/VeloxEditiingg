@@ -61,6 +61,8 @@ func newPipelineRunService(db *store.SQLiteStore, client *remoteengine.Client, r
 // The remote-engine call delegates to client.StartPipeline and the durable
 // forwarding to resolver.PersistPendingRemoteForwarding, converging on the
 // same creator_forwardings row the CreatorForwardingRunner picks up.
+//
+//nolint:funlen // Create owns the durable run -> remote submit -> forwarding state machine.
 func (s *pipelineRunService) Create(ctx context.Context, clientID string, req CreatePipelineRunRequest) CreatePipelineRunResponse {
 	if s.store == nil {
 		return CreatePipelineRunResponse{Status: http.StatusServiceUnavailable, Body: gin.H{

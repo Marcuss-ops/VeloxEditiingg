@@ -18,7 +18,7 @@ func (s *Service) buildCreateJobPayload(ctx context.Context, cmd CreateJobCmd, r
 		if scenes, present := renderSpec["scenes"]; present {
 			encoded, err := json.Marshal(scenes)
 			if err != nil {
-				return nil, fmt.Errorf("%w: invalid scenes: %v", ErrInvalidPayload, err)
+				return nil, fmt.Errorf("%w: invalid scenes: %w", ErrInvalidPayload, err)
 			}
 			renderSpec["scenes_json"] = string(encoded)
 		}
@@ -59,7 +59,7 @@ func (s *Service) buildCreateJobPayload(ctx context.Context, cmd CreateJobCmd, r
 		metadata := map[string]any{}
 		if len(d.Metadata) > 0 {
 			if err := json.Unmarshal(d.Metadata, &metadata); err != nil {
-				return nil, fmt.Errorf("%w: invalid metadata for destination[%d]: %v", ErrInvalidPayload, i, err)
+				return nil, fmt.Errorf("%w: invalid metadata for destination[%d]: %w", ErrInvalidPayload, i, err)
 			}
 		}
 		if cmd.PublishAt != "" {

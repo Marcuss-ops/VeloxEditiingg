@@ -35,42 +35,7 @@ import (
 // cumulative→delta conversion lives in handler_workers_metrics.go so
 // the handler stays purely structural.
 func (h *Handler) handleHeartbeat(workerID, sessionID string, hb *pb.Heartbeat) {
-	extra := make(map[string]interface{})
-	// Populate extra from typed fields for backward compat with registry.
-	// The free-form agent status string (Status/WorkerStatus) is NOT
-	// propagated: worker state is derived master-side (worker_state.go).
-	extra["worker_name"] = hb.GetWorkerName()
-	extra["current_job"] = hb.GetCurrentJob()
-	extra["code_version"] = hb.GetCodeVersion()
-	extra["bundle_version"] = hb.GetBundleVersion()
-	extra["bundle_hash"] = hb.GetBundleHash()
-	extra["protocol_version"] = hb.GetProtocolVersion()
-	extra["engine_version"] = hb.GetEngineVersion()
-	extra["jobs_completed"] = hb.GetJobsCompleted()
-	extra["jobs_failed"] = hb.GetJobsFailed()
-	extra["active_jobs_count"] = hb.GetActiveJobsCount()
-	// Keep the typed count aligned with the structured SQLite projection.
-	// PersistWorkerHeartbeat consumes active_task_count for workers and
-	// worker_metric_samples; without this bridge a busy worker was stored as
-	// idle even though the heartbeat carried ActiveJobsCount correctly.
-	extra["active_task_count"] = hb.GetActiveJobsCount()
-
-	if hb.GetExtra() != nil {
-		for k, v := range hb.GetExtra().AsMap() {
-			extra[k] = v
-		}
-	}
-
-	// F2: merge the typed resource counters into `extra` so the
-	// persistent worker_registry row surfaces the same Prometheus-side
-	// fields via the legacy HTTP /admin/workers path (channelised
-	// worker debugging tools depend on this JSON view).
-	if resExtra := ResourcesToExtra(hb.GetResources()); resExtra != nil {
-		extra["resource_sample_present"] = true
-		for k, v := range resExtra {
-			extra[k] = v
-		}
-	}
+	extra := heartbeatExtra(hb)
 
 	// Update capacity tracking on the session (for max_parallel_jobs check).
 	sess := h.getSession(workerID)
@@ -304,6 +269,29 @@ func (h *Handler) handleHeartbeat(workerID, sessionID string, hb *pb.Heartbeat) 
 			return
 		}
 	}
+}
+
+func heartbeatExtra(hb *pb.Heartbeat) map[string]interface{} {
+	extra := map[string]interface{}{
+		"worker_name": hb.GetWorkerName(), "current_job": hb.GetCurrentJob(),
+		"code_version": hb.GetCodeVersion(), "bundle_version": hb.GetBundleVersion(),
+		"bundle_hash": hb.GetBundleHash(), "protocol_version": hb.GetProtocolVersion(),
+		"engine_version": hb.GetEngineVersion(), "jobs_completed": hb.GetJobsCompleted(),
+		"jobs_failed": hb.GetJobsFailed(), "active_jobs_count": hb.GetActiveJobsCount(),
+		"active_task_count": hb.GetActiveJobsCount(),
+	}
+	if hb.GetExtra() != nil {
+		for k, v := range hb.GetExtra().AsMap() {
+			extra[k] = v
+		}
+	}
+	if resExtra := ResourcesToExtra(hb.GetResources()); resExtra != nil {
+		extra["resource_sample_present"] = true
+		for k, v := range resExtra {
+			extra[k] = v
+		}
+	}
+	return extra
 }
 
 func readinessStatusOK(readiness map[string]interface{}) bool {

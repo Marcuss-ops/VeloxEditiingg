@@ -17,7 +17,7 @@ const commitGraceDefault = 2 * time.Minute
 
 func (c *coordinator) DeclareOutputs(ctx context.Context, cmd DeclareOutputsCommand) (*UploadPlan, error) {
 	if err := cmd.Fence.Validate(); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrFenceMismatch, err)
+		return nil, fmt.Errorf("%w: %w", ErrFenceMismatch, err)
 	}
 	if len(cmd.OutputManifests) == 0 {
 		return nil, fmt.Errorf("completion.DeclareOutputs: at least one OutputManifest required (task_id=%s attempt_id=%s)", cmd.Fence.TaskID, cmd.Fence.AttemptID)
@@ -93,7 +93,7 @@ func (c *coordinator) DeclareOutputs(ctx context.Context, cmd DeclareOutputsComm
 
 func (c *coordinator) RecordUploadProgress(ctx context.Context, cmd RecordUploadProgressCommand) error {
 	if err := cmd.Fence.Validate(); err != nil {
-		return fmt.Errorf("%w: %v", ErrFenceMismatch, err)
+		return fmt.Errorf("%w: %w", ErrFenceMismatch, err)
 	}
 	if cmd.UploadID == "" {
 		return fmt.Errorf("completion.RecordUploadProgress: UploadID empty (task_id=%s attempt_id=%s)", cmd.Fence.TaskID, cmd.Fence.AttemptID)

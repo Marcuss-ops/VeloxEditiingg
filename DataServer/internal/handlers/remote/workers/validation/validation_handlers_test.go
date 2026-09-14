@@ -3,8 +3,6 @@ package validation
 import (
 	"errors"
 	"fmt"
-	"github.com/gin-gonic/gin"
-	"github.com/stretchr/testify/require"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -12,6 +10,10 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/require"
+
 	"velox-server/internal/config"
 	"velox-server/internal/handlers/server/api"
 	"velox-server/internal/store"

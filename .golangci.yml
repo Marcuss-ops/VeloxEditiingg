@@ -12,6 +12,7 @@ linters:
     funlen:
       lines: 200
       statements: -1
+      ignore-comments: true
   exclusions:
     generated: lax
     presets:
@@ -23,6 +24,9 @@ linters:
       - path: .*\.generated\.go
         linters:
           - all
+      - path: .*_test\.go
+        linters:
+          - funlen
       - linters:
           - errcheck
         text: Error return value of .* is not checked

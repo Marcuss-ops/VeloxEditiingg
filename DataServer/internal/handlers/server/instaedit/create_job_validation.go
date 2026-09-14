@@ -41,14 +41,14 @@ func validateCreateJobCommand(cmd CreateJobCmd) (map[string]any, error) {
 	var renderSpec map[string]any
 	if len(cmd.RenderSpec) > 0 {
 		if err := json.Unmarshal(cmd.RenderSpec, &renderSpec); err != nil {
-			return nil, fmt.Errorf("%w: invalid render_spec JSON: %v", ErrBadRequest, err)
+			return nil, fmt.Errorf("%w: invalid render_spec JSON: %w", ErrBadRequest, err)
 		}
 	} else {
 		renderSpec = map[string]any{}
 	}
 
 	if err := contract.StrictValidatePayload(renderSpec); err != nil {
-		return nil, fmt.Errorf("%w: invalid render_spec: %v", ErrInvalidPayload, err)
+		return nil, fmt.Errorf("%w: invalid render_spec: %w", ErrInvalidPayload, err)
 	}
 	return renderSpec, nil
 }

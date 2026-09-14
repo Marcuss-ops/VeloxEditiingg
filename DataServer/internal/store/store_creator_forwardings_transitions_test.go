@@ -130,7 +130,7 @@ func TestMarkCreatorForwardingReadySyncDoesNotStealLease(t *testing.T) {
 	}
 
 	err := db.Forwarding().MarkCreatorForwardingReadySync(ctx, "cf-sync-fence", `{"complete":true}`, "sha-complete")
-	if err != forwardingstore.ErrTransitionConflict {
+	if !errors.Is(err, forwardingstore.ErrTransitionConflict) {
 		t.Fatalf("ReadySync error=%v, want forwardingstore.ErrTransitionConflict", err)
 	}
 	saved, err := db.Forwarding().GetCreatorForwarding(ctx, "cf-sync-fence")

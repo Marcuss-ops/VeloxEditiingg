@@ -6,8 +6,9 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
 	"velox-server/internal/taskgraph"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 func TestFutureReservations_AreExclusiveAndReconciled(t *testing.T) {

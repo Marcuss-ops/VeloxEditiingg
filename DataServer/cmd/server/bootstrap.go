@@ -127,7 +127,7 @@ func runUntilShutdown(c *appComponents, t *transportBundle) error {
 
 	select {
 	case err := <-t.errChan:
-		if err != nil && err != http.ErrServerClosed {
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return err
 		}
 	case supErr := <-supervisorErrCh:

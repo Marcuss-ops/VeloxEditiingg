@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -77,7 +78,7 @@ func (s *SQLiteStore) ApplyInstaEditDeliveryEvent(ctx context.Context, event Ins
 		SELECT COALESCE(MAX(sequence), 0)
 		FROM instaedit_delivery_events
 		WHERE delivery_id = ?`, event.DeliveryID).Scan(&current)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return false, fmt.Errorf("store: read callback sequence: %w", err)
 	}
 	if current != event.Sequence {

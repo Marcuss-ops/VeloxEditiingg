@@ -42,9 +42,6 @@ func TestErrDestinationUnmappedSentinel(t *testing.T) {
 	if ErrDestinationUnmapped.Error() == "" {
 		t.Fatal("ErrDestinationUnmapped.Error() must be non-empty for operator logs")
 	}
-	if ErrDestinationUnmapped != ErrDestinationUnmapped {
-		t.Fatal("ErrDestinationUnmapped identity changed across reads")
-	}
 }
 
 // TestErrDestinationUnmappedErrorsIsChain verifies that

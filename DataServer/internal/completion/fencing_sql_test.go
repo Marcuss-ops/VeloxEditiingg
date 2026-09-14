@@ -23,7 +23,7 @@ func (f FenceTuple) ReadOrMissing(ctx context.Context, tx *sql.Tx) (*AttemptComm
 
 func readFenceForTest(ctx context.Context, tx *sql.Tx, f FenceTuple, allowMissing bool) (*AttemptCommitState, error) {
 	if err := f.Validate(); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrFenceMismatch, err)
+		return nil, fmt.Errorf("%w: %w", ErrFenceMismatch, err)
 	}
 	var commitID, status, worker, lease string
 	var revision int

@@ -249,7 +249,7 @@ func (s *Service) runPreCommitFFProbeInvariant(ctx context.Context, jobID, overr
 //   - 0 audio streams                 → 0 (valid, not an error)
 func probeAudioStreamCount(ctx context.Context, absBlob string) (int, error) {
 	if _, err := exec.LookPath("ffprobe"); err != nil {
-		return 0, fmt.Errorf("%w: %v", ErrFFProbeInvariantMissingBinary, err)
+		return 0, fmt.Errorf("%w: %w", ErrFFProbeInvariantMissingBinary, err)
 	}
 	timeoutCtx, cancel := context.WithTimeout(ctx, ffprobeInvariantTimeout)
 	defer cancel()
@@ -267,7 +267,7 @@ func probeAudioStreamCount(ctx context.Context, absBlob string) (int, error) {
 	cmd.Stdout = &out
 	cmd.Stderr = &errBuf
 	if err := cmd.Run(); err != nil {
-		return 0, fmt.Errorf("%w: ffprobe rc=%v: %s", ErrFFProbeAudioCountMismatch, err, strings.TrimSpace(errBuf.String()))
+		return 0, fmt.Errorf("%w: ffprobe: %w (stderr=%s)", ErrFFProbeAudioCountMismatch, err, strings.TrimSpace(errBuf.String()))
 	}
 	trimmed := strings.TrimSpace(out.String())
 	if trimmed == "" {

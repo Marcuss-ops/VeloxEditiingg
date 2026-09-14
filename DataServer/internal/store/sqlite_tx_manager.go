@@ -131,7 +131,7 @@ func (m *TxManager) RunInTx(ctx context.Context, fn func(ctx context.Context, tx
 			m.store.observeDBTransaction(waitMS, transactionMS, busy, busyTimeout, false, 1, 0)
 			// Preserve the root cause. The cb error wins; rbErr
 			// is appended for operator diagnosis.
-			return fmt.Errorf("TxManager.RunInTx: callback returned error (rollback also failed: %v): %w", rbErr, fnErr)
+			return fmt.Errorf("TxManager.RunInTx: callback returned error (rollback also failed: %w): %w", rbErr, fnErr)
 		}
 		transactionMS := float64(time.Since(started).Microseconds()) / 1000
 		busy, busyTimeout := sqliteBusyFlags(fnErr, transactionMS)

@@ -382,7 +382,7 @@ func (m *AnsibleComputerManager) GenerateInventory(opts GenerateInventoryOptions
 				secretStatus = "missing"
 				log.Printf("[ANSIBLE_INV] host=%s user=%s unit=%s source=db secret_ref=%s secret_status=%s",
 					h.Host, h.AnsibleUser, unit, h.SecretRef, secretStatus)
-				return "", fmt.Errorf("host=%s: invalid secret_ref=%q: %v", h.Host, h.SecretRef, err)
+				return "", fmt.Errorf("host=%s: invalid secret_ref=%q: %w", h.Host, h.SecretRef, err)
 			}
 		} else {
 			secretStatus = "ssh_key"

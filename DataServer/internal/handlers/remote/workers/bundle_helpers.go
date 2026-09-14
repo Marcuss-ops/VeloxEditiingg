@@ -10,11 +10,6 @@ import (
 	"strings"
 )
 
-// computeBundleSHA256 computes SHA256 of the worker bundle
-func (h *WorkerUpdateHandler) computeBundleSHA256() string {
-	return h.ComputeBundleSHA256()
-}
-
 // ComputeBundleSHA256 computes SHA256 of the worker bundle (exported).
 func (h *WorkerUpdateHandler) ComputeBundleSHA256() string {
 	if h == nil {

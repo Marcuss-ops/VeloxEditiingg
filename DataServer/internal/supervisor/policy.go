@@ -316,7 +316,7 @@ func (t *FailureTracker) Record(err error) error {
 		t.lastErrAt = now
 	}
 	if t.consecutive >= t.Policy.ConsecutiveErrorThreshold {
-		return fmt.Errorf("%w: consecutive=%d (since=%s last=%s) original=%v",
+		return fmt.Errorf("%w: consecutive=%d (since=%s last=%s) original=%w",
 			ErrInfrastructure, t.consecutive,
 			t.firstErrAt.Format(time.RFC3339Nano),
 			t.lastErrAt.Format(time.RFC3339Nano),

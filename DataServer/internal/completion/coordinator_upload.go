@@ -30,7 +30,7 @@ func (c *coordinator) CompleteUpload(ctx context.Context, cmd CompleteUploadComm
 	defer span.End()
 
 	if err := cmd.Fence.Validate(); err != nil {
-		return fmt.Errorf("%w: %v", ErrFenceMismatch, err)
+		return fmt.Errorf("%w: %w", ErrFenceMismatch, err)
 	}
 	if cmd.UploadID == "" {
 		return fmt.Errorf("completion.CompleteUpload: UploadID empty (task_id=%s attempt_id=%s)", cmd.Fence.TaskID, cmd.Fence.AttemptID)

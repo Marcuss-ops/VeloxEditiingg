@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -31,7 +32,7 @@ func persistRawReport(ctx context.Context, tx *sql.Tx, cmd taskgraph.IngestResul
 		`SELECT report_hash FROM task_attempt_reports WHERE attempt_id = ?`,
 		cmd.AttemptID,
 	).Scan(&existingHash)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("task ingest atomic raw report conflict check: %w", err)
 	}
 	if existingHash != "" && existingHash != rawHash {

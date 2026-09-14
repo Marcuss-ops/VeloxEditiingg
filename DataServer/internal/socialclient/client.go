@@ -104,14 +104,14 @@ func (c *Client) GetDelivery(ctx context.Context, deliveryID string) (*DeliveryS
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoint("/internal/v1/deliveries/"+url.PathEscape(deliveryID)), nil)
 	if err != nil {
-		return nil, fmt.Errorf("%w: build reconciliation request: %v", ErrTransient, err)
+		return nil, fmt.Errorf("%w: build reconciliation request: %w", ErrTransient, err)
 	}
 	if c.cfg.APIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
 	}
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("%w: reconciliation request failed: %v", ErrTransient, err)
+		return nil, fmt.Errorf("%w: reconciliation request failed: %w", ErrTransient, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -120,7 +120,7 @@ func (c *Client) GetDelivery(ctx context.Context, deliveryID string) (*DeliveryS
 	}
 	var out DeliveryStatusResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, fmt.Errorf("%w: decode reconciliation response: %v", ErrTransient, err)
+		return nil, fmt.Errorf("%w: decode reconciliation response: %w", ErrTransient, err)
 	}
 	if out.DeliveryID == "" {
 		return nil, fmt.Errorf("%w: response missing delivery_id", ErrPermanent)
@@ -136,17 +136,17 @@ func (c *Client) deliverArtifact(ctx context.Context, req DeliverArtifactRequest
 		return nil, ErrNotConfigured
 	}
 	if err := req.Validate(); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrPermanent, err)
+		return nil, fmt.Errorf("%w: %w", ErrPermanent, err)
 	}
 
 	body, err := json.Marshal(req)
 	if err != nil {
-		return nil, fmt.Errorf("%w: marshal request: %v", ErrPermanent, err)
+		return nil, fmt.Errorf("%w: marshal request: %w", ErrPermanent, err)
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint("/internal/v1/deliveries"), bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("%w: build request: %v", ErrTransient, err)
+		return nil, fmt.Errorf("%w: build request: %w", ErrTransient, err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	if bearerToken != "" {
@@ -155,7 +155,7 @@ func (c *Client) deliverArtifact(ctx context.Context, req DeliverArtifactRequest
 
 	resp, err := c.client.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("%w: social api request failed: %v", ErrTransient, err)
+		return nil, fmt.Errorf("%w: social api request failed: %w", ErrTransient, err)
 	}
 	defer resp.Body.Close()
 
@@ -166,7 +166,7 @@ func (c *Client) deliverArtifact(ctx context.Context, req DeliverArtifactRequest
 
 	var out DeliverArtifactResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, fmt.Errorf("%w: decode response: %v", ErrTransient, err)
+		return nil, fmt.Errorf("%w: decode response: %w", ErrTransient, err)
 	}
 	if out.SocialDeliveryID == "" {
 		return nil, fmt.Errorf("%w: response missing social_delivery_id", ErrPermanent)
@@ -238,7 +238,7 @@ func (c *Client) ValidateDestination(ctx context.Context, socialDestID string) e
 	endpoint := c.endpoint("/internal/v1/destinations/" + url.PathEscape(socialDestID) + "/validate")
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
 	if err != nil {
-		return fmt.Errorf("%w: build validate request: %v", ErrTransient, err)
+		return fmt.Errorf("%w: build validate request: %w", ErrTransient, err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	if c.cfg.APIKey != "" {
@@ -247,7 +247,7 @@ func (c *Client) ValidateDestination(ctx context.Context, socialDestID string) e
 
 	resp, err := c.client.Do(httpReq)
 	if err != nil {
-		return fmt.Errorf("%w: validate request failed: %v", ErrTransient, err)
+		return fmt.Errorf("%w: validate request failed: %w", ErrTransient, err)
 	}
 	defer resp.Body.Close()
 

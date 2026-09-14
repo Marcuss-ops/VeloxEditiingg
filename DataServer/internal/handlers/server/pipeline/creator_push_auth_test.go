@@ -16,10 +16,12 @@ package pipeline
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/gin-gonic/gin"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/gin-gonic/gin"
+
 	"velox-server/internal/config"
 	"velox-server/internal/handlers/server/api"
 )

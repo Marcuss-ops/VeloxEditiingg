@@ -5,8 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"github.com/gin-gonic/gin"
-	"github.com/stretchr/testify/require"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +12,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/require"
+
 	"velox-server/internal/store"
 	"velox-server/internal/store/migrations"
 )

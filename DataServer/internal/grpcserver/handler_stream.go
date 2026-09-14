@@ -30,6 +30,8 @@ import (
 
 // Stream handles a bidirectional gRPC stream from a single worker.
 // Receives WorkerToMasterEnvelope, sends MasterToWorkerEnvelope.
+//
+//nolint:funlen // Handshake, session ownership, and teardown are one security-critical lifecycle.
 func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelope, pb.MasterToWorkerEnvelope]) error {
 	// P0 security: extract worker identity from client certificate (mTLS).
 	certWorkerID := h.extractWorkerIDFromStream(stream)
@@ -400,7 +402,7 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 			return fmt.Errorf("stream: writer failure: %w", err)
 
 		case err := <-recvErrCh:
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				return nil
 			}
 			return fmt.Errorf("stream: recv: %w", err)

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -62,7 +63,7 @@ func TestInsertForwarding_Idempotent(t *testing.T) {
 
 	// Second record should NOT exist (ignored by UNIQUE)
 	_, err = db.Forwarding().GetCreatorForwarding(ctx, "cf-idem-2")
-	if err != forwardingstore.ErrCreatorForwardingNoRow {
+	if !errors.Is(err, forwardingstore.ErrCreatorForwardingNoRow) {
 		t.Errorf("expected forwardingstore.ErrCreatorForwardingNoRow, got %v", err)
 	}
 }
@@ -87,7 +88,7 @@ func TestGetForwardingMising(t *testing.T) {
 	ctx := context.Background()
 
 	_, err := db.Forwarding().GetCreatorForwarding(ctx, "nonexistent")
-	if err != forwardingstore.ErrCreatorForwardingNoRow {
+	if !errors.Is(err, forwardingstore.ErrCreatorForwardingNoRow) {
 		t.Errorf("expected forwardingstore.ErrCreatorForwardingNoRow, got %v", err)
 	}
 }

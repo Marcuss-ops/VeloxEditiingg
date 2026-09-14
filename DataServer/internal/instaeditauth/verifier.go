@@ -153,7 +153,7 @@ func (v *Verifier) Verify(token string) (*Claims, error) {
 	expectedSig := v.computeSignature(signingInput)
 	actualSig, err := decodeBase64URL(parts[2])
 	if err != nil {
-		return nil, fmt.Errorf("%w: signature decode: %v", ErrInvalidToken, err)
+		return nil, fmt.Errorf("%w: signature decode: %w", ErrInvalidToken, err)
 	}
 	if !hmac.Equal(expectedSig, actualSig) {
 		return nil, ErrSignatureMismatch
@@ -164,11 +164,11 @@ func (v *Verifier) Verify(token string) (*Claims, error) {
 	// invalid token (not a forgery).
 	payloadBytes, err := decodeBase64URL(parts[1])
 	if err != nil {
-		return nil, fmt.Errorf("%w: payload decode: %v", ErrInvalidToken, err)
+		return nil, fmt.Errorf("%w: payload decode: %w", ErrInvalidToken, err)
 	}
 	var claims Claims
 	if err := json.Unmarshal(payloadBytes, &claims); err != nil {
-		return nil, fmt.Errorf("%w: payload json: %v", ErrInvalidToken, err)
+		return nil, fmt.Errorf("%w: payload json: %w", ErrInvalidToken, err)
 	}
 
 	// Issuer check.

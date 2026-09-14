@@ -289,7 +289,7 @@ func (e *UpdateExecutor) Execute(ctx context.Context, op *store.Operation) error
 	}
 	if err := e.waitForIdle(ctx, op.WorkerID); err != nil {
 		if releaseErr := e.releaseOwnedDrain(ctx, op.WorkerID, drainOwned); releaseErr != nil {
-			return fmt.Errorf("update: drain wait: %w (release drain: %v)", err, releaseErr)
+			return fmt.Errorf("update: drain wait: %w (release drain: %w)", err, releaseErr)
 		}
 		return fmt.Errorf("update: drain wait: %w", err)
 	}
@@ -308,7 +308,7 @@ func (e *UpdateExecutor) Execute(ctx context.Context, op *store.Operation) error
 		IsRollback:     false,
 	}); err != nil {
 		if releaseErr := e.releaseOwnedDrain(ctx, op.WorkerID, drainOwned); releaseErr != nil {
-			return fmt.Errorf("update: insert PENDING: %w (release drain: %v)", err, releaseErr)
+			return fmt.Errorf("update: insert PENDING: %w (release drain: %w)", err, releaseErr)
 		}
 		return fmt.Errorf("update: insert PENDING: %w", err)
 	}
@@ -324,7 +324,7 @@ func (e *UpdateExecutor) Execute(ctx context.Context, op *store.Operation) error
 	preRestartSessionID := ""
 	if snap, snapErr := e.authenticatedRuntimeSnapshot(ctx, op.WorkerID); snapErr != nil {
 		if releaseErr := e.releaseOwnedDrain(ctx, op.WorkerID, drainOwned); releaseErr != nil {
-			return fmt.Errorf("update: pre-restart session snapshot: %w (release drain: %v)", snapErr, releaseErr)
+			return fmt.Errorf("update: pre-restart session snapshot: %w (release drain: %w)", snapErr, releaseErr)
 		}
 		return fmt.Errorf("update: pre-restart session snapshot: %w", snapErr)
 	} else if snap != nil {
@@ -342,7 +342,7 @@ func (e *UpdateExecutor) Execute(ctx context.Context, op *store.Operation) error
 		rollbackErr := e.runRollback(ctx, op, previousDigest, runErr)
 		if errors.Is(rollbackErr, ErrRollbackSucceeded) {
 			if releaseErr := e.releaseOwnedDrain(ctx, op.WorkerID, drainOwned); releaseErr != nil {
-				return fmt.Errorf("%w: rollback completed but release drain failed: %v", ErrRollbackFailed, releaseErr)
+				return fmt.Errorf("%w: rollback completed but release drain failed: %w", ErrRollbackFailed, releaseErr)
 			}
 		}
 		return rollbackErr

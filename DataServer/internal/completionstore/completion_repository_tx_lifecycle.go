@@ -138,7 +138,7 @@ func (r *sqliteCompletionTx) StampCompletionArtifact(ctx context.Context, artifa
 	res, err := r.tx.ExecContext(ctx, `UPDATE artifacts SET storage_provider='local',storage_key=?,sha256=?,size_bytes=? WHERE id=?`, storageKey, sha, size, artifactID)
 	if err != nil {
 		if sqliteerr.IsUniqueConstraint(err) {
-			return fmt.Errorf("%w: %v", ErrCompletionCanonicalConflict, err)
+			return fmt.Errorf("%w: %w", ErrCompletionCanonicalConflict, err)
 		}
 		return fmt.Errorf("store: stamp completion artifact: %w", err)
 	}

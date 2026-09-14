@@ -16,11 +16,13 @@ package pipeline
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/gin-gonic/gin"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+
+	"github.com/gin-gonic/gin"
+
 	"velox-server/internal/config"
 	"velox-server/internal/creatorflow"
 	"velox-server/internal/jobs/enqueue"

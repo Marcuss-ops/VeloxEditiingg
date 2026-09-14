@@ -12,6 +12,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -160,7 +161,7 @@ func (r *SQLiteTaskAttemptRepository) Get(ctx context.Context, id string) (*task
 		id,
 	)
 	a, err := scanAttempt(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -206,7 +207,7 @@ func (r *SQLiteTaskAttemptRepository) GetActiveAttempt(ctx context.Context, task
 		taskID,
 	)
 	a, err := scanAttempt(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -236,7 +237,7 @@ func (r *SQLiteTaskAttemptRepository) GetByTaskIDAndWorkerAndLease(
 		 ORDER BY attempt_number DESC LIMIT 1`,
 		taskID, workerID, leaseID)
 	a, err := scanAttempt(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {

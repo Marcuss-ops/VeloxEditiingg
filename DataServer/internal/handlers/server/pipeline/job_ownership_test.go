@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -263,7 +264,7 @@ func TestInsertCreatorForwarding_PersistsExternalClientID(t *testing.T) {
 	if got == nil || got.ExternalClientID != "client-persisted" {
 		t.Fatalf("owner lookup = %#v, want client-persisted", got)
 	}
-	if _, err := db.Forwarding().GetCreatorForwardingByTargetJobID(context.Background(), "job-client-id-persisted", "another-client"); err != forwardingstore.ErrCreatorForwardingNoRow {
+	if _, err := db.Forwarding().GetCreatorForwardingByTargetJobID(context.Background(), "job-client-id-persisted", "another-client"); !errors.Is(err, forwardingstore.ErrCreatorForwardingNoRow) {
 		t.Fatalf("cross-client lookup error = %v, want ErrCreatorForwardingNoRow", err)
 	}
 }

@@ -45,7 +45,7 @@ func (e *WorkerStateExecutor) ValidateProductionBackends() error {
 // a green Level-D smoke gate.
 func (e *WorkerStateExecutor) Execute(ctx context.Context, op *store.Operation) error {
 	if err := e.ValidateProductionBackends(); err != nil {
-		return fmt.Errorf("%w: %v", ErrExecutorNotConfigured, err)
+		return fmt.Errorf("%w: %w", ErrExecutorNotConfigured, err)
 	}
 	if op == nil || op.WorkerID == "" {
 		return errors.New("worker state: worker_id is required")

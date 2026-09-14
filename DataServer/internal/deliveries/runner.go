@@ -139,15 +139,9 @@ func (r *DeliveryRunner) WithLogger(l *logging.Logger) *DeliveryRunner {
 	return r
 }
 
-// logInfo/logWarn/logError are nil-safe structured emit helpers so a nil
-// injected logger (tests) never panics. They thread ctx so the logger can
-// inject trace_id/span_id when an active span is present (GAP 4).
-func (r *DeliveryRunner) logInfo(ctx context.Context, code string, fields map[string]interface{}) {
-	if r != nil && r.logger != nil {
-		r.logger.InfoContext(ctx, code, fields)
-	}
-}
-
+// logWarn/logError are nil-safe structured emit helpers so a nil injected
+// logger (tests) never panics. They thread ctx so the logger can inject
+// trace_id/span_id when an active span is present (GAP 4).
 func (r *DeliveryRunner) logWarn(ctx context.Context, code string, fields map[string]interface{}) {
 	if r != nil && r.logger != nil {
 		r.logger.WarnContext(ctx, code, fields)

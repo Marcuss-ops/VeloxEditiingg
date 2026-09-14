@@ -226,7 +226,7 @@ func ClassifyDecodeError(cause error, rawBody string) *RemoteError {
 		Body:    truncateBody(rawBody, 4096),
 		// Wrap ErrMalformedResponse so callers can use errors.Is to detect
 		// malformed responses without extracting *RemoteError.
-		Cause: fmt.Errorf("%w: %v", ErrMalformedResponse, cause),
+		Cause: fmt.Errorf("%w: %w", ErrMalformedResponse, cause),
 	}
 }
 

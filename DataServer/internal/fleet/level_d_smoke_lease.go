@@ -73,7 +73,7 @@ func (r *RegistryDrainLease) AcquireSmokeLease(ctx context.Context, runID, worke
 		return nil
 	}
 	if err := r.Reg.SetWorkerDrain(ctx, workerID, true); err != nil {
-		return fmt.Errorf("%w: worker drain or registry error: %v", ErrSmokeLeaseUnavailable, err)
+		return fmt.Errorf("%w: worker drain or registry error: %w", ErrSmokeLeaseUnavailable, err)
 	}
 	return nil
 }
