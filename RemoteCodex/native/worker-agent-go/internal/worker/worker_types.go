@@ -264,6 +264,7 @@ type Worker struct {
 	// taskIDsByJob provides the reverse-lookup needed for CancelJob.
 	activeTasks   map[string]*ActiveTaskExecution
 	activeTasksMu sync.RWMutex
+	earlyUploads  sync.Map            // task_id -> *earlyUploadState; render/upload overlap
 	taskIDsByJob  map[string][]string // jobID → []taskID
 
 	// Per-phase occupancy counters. Updated under activeTasksMu when tasks

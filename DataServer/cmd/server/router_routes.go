@@ -114,6 +114,7 @@ func registerUploadRoutes(r *gin.Engine, deps UploadRouteDeps) {
 	}
 	if deps.ChunkedHandler != nil {
 		deps.ChunkedHandler.SetCommitTokenVerifier(deps.CompletionTokenVerifier)
+		deps.ChunkedHandler.SetEarlyUploadSecret(deps.EarlyUploadSecretHex)
 		r.POST("/api/v1/video/chunked/init", adminAuth, deps.ChunkedHandler.InitChunkedUpload())
 		r.POST("/api/v1/video/chunked/:job_id/:chunk_index", adminAuth, deps.ChunkedHandler.UploadChunk())
 		r.POST("/api/v1/video/chunked/:job_id/complete", adminAuth, deps.ChunkedHandler.CompleteChunkedUpload())

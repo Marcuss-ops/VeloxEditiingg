@@ -84,6 +84,17 @@ func (w *Worker) publishArtifactsV1(ctx context.Context, pte *PendingTaskExecuti
 	}()
 
 	manifests := buildOutputManifests(pte, report)
+	earlyResult := w.waitEarlyUpload(ctx, pte.TaskID)
+	earlyOutputIndex := -1
+	for i, ref := range report.Outputs {
+		if ref.Type == "render.output" {
+			earlyOutputIndex = i
+			break
+		}
+	}
+	if earlyResult != nil && earlyOutputIndex >= 0 && earlyOutputIndex < len(manifests) {
+		manifests[earlyOutputIndex].EarlyUploadId = earlyResult.UploadID
+	}
 	// The native mux may return an opportunistic digest, but it is trusted
 	// only when the sink proved append-only output. Otherwise the canonical
 	// manifest path computes the final bytes itself.
@@ -132,7 +143,11 @@ func (w *Worker) publishArtifactsV1(ctx context.Context, pte *PendingTaskExecuti
 	if m != nil {
 		m.Mark(sharedtelemetry.MilestonePublishUploadStarted)
 	}
-	completed, err := w.uploadDeclaredArtifacts(ctx, pte, report, plan, spoolEntries, resumable, publicationStartedAt)
+	earlyResults := make(map[int]*publisher.UploadResult)
+	if earlyOutputIndex >= 0 {
+		earlyResults[earlyOutputIndex] = earlyResult
+	}
+	completed, err := w.uploadDeclaredArtifacts(ctx, pte, report, plan, spoolEntries, resumable, publicationStartedAt, earlyResults)
 	if m != nil {
 		m.Mark(sharedtelemetry.MilestonePublishUploadCompleted)
 	}

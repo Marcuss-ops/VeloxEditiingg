@@ -75,6 +75,9 @@ message ArtifactUploadIntent {
   string mime_type = 7;
   string profile_id = 8;
   int64 expected_size_bytes = 9;
+  string job_id = 10;
+  int32 attempt_number = 11;
+  int32 revision = 12;
 }
 
 // ArtifactEarlyUploadPlan is returned for an ArtifactUploadIntent. The final
@@ -111,6 +114,7 @@ message OutputManifest {
                                 // through to the UploadTarget so the
                                 // worker can correlate the plan back
                                 // to its local spool row
+  string early_upload_id = 7;   // optional pre-render progressive session
 }
 
 // UploadTarget is the per-manifest upload instructions carried

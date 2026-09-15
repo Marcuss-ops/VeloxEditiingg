@@ -31,6 +31,7 @@ type HandlerConfig struct {
 	FutureAssetProtectionLookahead int
 	FutureAssetPlanTTL             time.Duration
 	StrictPrefetchClaim            bool
+	CommitHMACKey                  string
 }
 
 // SetIngestionSvc installs the canonical TaskReportIngestionService so

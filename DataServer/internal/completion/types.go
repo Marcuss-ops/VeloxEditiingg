@@ -76,6 +76,7 @@ type OutputManifest struct {
 	SizeBytes      int64  `json:"size_bytes"`
 	SHA256         string `json:"sha256"`
 	WorkerSpoolKey string `json:"worker_spool_key"`
+	EarlyUploadID  string `json:"early_upload_id,omitempty"`
 }
 
 // DeclareOutputsCommand is the worker's first message post-render.

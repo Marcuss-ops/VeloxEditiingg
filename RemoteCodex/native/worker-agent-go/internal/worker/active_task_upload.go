@@ -18,7 +18,7 @@ import (
 
 // uploadDeclaredArtifacts uploads every declared output artifact, resolves
 // transport per target, and returns the list of completion messages.
-func (w *Worker) uploadDeclaredArtifacts(ctx context.Context, pte *PendingTaskExecution, report *taskrunner.TaskExecutionReport, plan *pb.ArtifactUploadPlan, entries []spool.SpoolEntry, resumable map[string]bool, started time.Time) ([]*pb.ArtifactUploadCompleted, error) {
+func (w *Worker) uploadDeclaredArtifacts(ctx context.Context, pte *PendingTaskExecution, report *taskrunner.TaskExecutionReport, plan *pb.ArtifactUploadPlan, entries []spool.SpoolEntry, resumable map[string]bool, started time.Time, earlyResults map[int]*publisher.UploadResult) ([]*pb.ArtifactUploadCompleted, error) {
 	completed := make([]*pb.ArtifactUploadCompleted, 0, len(report.Outputs))
 
 	// Compute total upload size for progress tracking.
@@ -52,7 +52,10 @@ func (w *Worker) uploadDeclaredArtifacts(ctx context.Context, pte *PendingTaskEx
 
 		w.logArtifactProtocol("ARTIFACT_TRANSFER_STARTED", pte, started, plan.GetCommitId(), target.ArtifactID, target.UploadID, map[string]interface{}{"artifact_type": ref.Type, "size_bytes": ref.SizeBytes})
 
-		result, err := uploadWithNegotiatedPath(ctx, transport, publisher.UploadRequest{LocalPath: ref.URI, Target: target, WorkerSHA256: ref.Hash, CommitToken: plan.GetCommitToken()}, w.config.ProgressivePartConcurrency)
+		result := earlyResults[i]
+		if result == nil {
+			result, err = uploadWithNegotiatedPath(ctx, transport, publisher.UploadRequest{LocalPath: ref.URI, Target: target, WorkerSHA256: ref.Hash, CommitToken: plan.GetCommitToken()}, w.config.ProgressivePartConcurrency)
+		}
 		if err != nil {
 			w.logArtifactProtocol("ARTIFACT_TRANSFER_FAILED", pte, started, plan.GetCommitId(), target.ArtifactID, target.UploadID, map[string]interface{}{"artifact_type": ref.Type, "error": err.Error()})
 			w.spillVolatileToNVMe(ctx, entries[i])

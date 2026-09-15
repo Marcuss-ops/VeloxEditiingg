@@ -221,6 +221,9 @@ type ArtifactUploadIntent struct {
 	MimeType          string                 `protobuf:"bytes,7,opt,name=mime_type,json=mimeType,proto3" json:"mime_type,omitempty"`
 	ProfileId         string                 `protobuf:"bytes,8,opt,name=profile_id,json=profileId,proto3" json:"profile_id,omitempty"`
 	ExpectedSizeBytes int64                  `protobuf:"varint,9,opt,name=expected_size_bytes,json=expectedSizeBytes,proto3" json:"expected_size_bytes,omitempty"`
+	JobId             string                 `protobuf:"bytes,10,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
+	AttemptNumber     int32                  `protobuf:"varint,11,opt,name=attempt_number,json=attemptNumber,proto3" json:"attempt_number,omitempty"`
+	Revision          int32                  `protobuf:"varint,12,opt,name=revision,proto3" json:"revision,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -314,6 +317,27 @@ func (x *ArtifactUploadIntent) GetProfileId() string {
 func (x *ArtifactUploadIntent) GetExpectedSizeBytes() int64 {
 	if x != nil {
 		return x.ExpectedSizeBytes
+	}
+	return 0
+}
+
+func (x *ArtifactUploadIntent) GetJobId() string {
+	if x != nil {
+		return x.JobId
+	}
+	return ""
+}
+
+func (x *ArtifactUploadIntent) GetAttemptNumber() int32 {
+	if x != nil {
+		return x.AttemptNumber
+	}
+	return 0
+}
+
+func (x *ArtifactUploadIntent) GetRevision() int32 {
+	if x != nil {
+		return x.Revision
 	}
 	return 0
 }
@@ -439,8 +463,12 @@ type OutputManifest struct {
 	SizeBytes      int64                  `protobuf:"varint,4,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`                 // total file size in bytes
 	Sha256         string                 `protobuf:"bytes,5,opt,name=sha256,proto3" json:"sha256,omitempty"`                                         // lowercase hex (64 chars)
 	WorkerSpoolKey string                 `protobuf:"bytes,6,opt,name=worker_spool_key,json=workerSpoolKey,proto3" json:"worker_spool_key,omitempty"` // worker's per-attempt UUID; carries
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// through to the UploadTarget so the
+	// worker can correlate the plan back
+	// to its local spool row
+	EarlyUploadId string `protobuf:"bytes,7,opt,name=early_upload_id,json=earlyUploadId,proto3" json:"early_upload_id,omitempty"` // optional pre-render progressive session
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *OutputManifest) Reset() {
@@ -511,6 +539,13 @@ func (x *OutputManifest) GetSha256() string {
 func (x *OutputManifest) GetWorkerSpoolKey() string {
 	if x != nil {
 		return x.WorkerSpoolKey
+	}
+	return ""
+}
+
+func (x *OutputManifest) GetEarlyUploadId() string {
+	if x != nil {
+		return x.EarlyUploadId
 	}
 	return ""
 }
@@ -2379,7 +2414,7 @@ const file_velox_control_control_common_proto_rawDesc = "" +
 	"\blease_id\x18\x04 \x01(\tR\aleaseId\x12\x1a\n" +
 	"\brevision\x18\x05 \x01(\x05R\brevision\x12\x15\n" +
 	"\x06job_id\x18\x06 \x01(\tR\x05jobId\x12%\n" +
-	"\x0eattempt_number\x18\a \x01(\x05R\rattemptNumber\"\xc3\x02\n" +
+	"\x0eattempt_number\x18\a \x01(\x05R\rattemptNumber\"\x9d\x03\n" +
 	"\x14ArtifactUploadIntent\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x1d\n" +
 	"\n" +
@@ -2392,7 +2427,11 @@ const file_velox_control_control_common_proto_rawDesc = "" +
 	"\tmime_type\x18\a \x01(\tR\bmimeType\x12\x1d\n" +
 	"\n" +
 	"profile_id\x18\b \x01(\tR\tprofileId\x12.\n" +
-	"\x13expected_size_bytes\x18\t \x01(\x03R\x11expectedSizeBytes\"\x93\x02\n" +
+	"\x13expected_size_bytes\x18\t \x01(\x03R\x11expectedSizeBytes\x12\x15\n" +
+	"\x06job_id\x18\n" +
+	" \x01(\tR\x05jobId\x12%\n" +
+	"\x0eattempt_number\x18\v \x01(\x05R\rattemptNumber\x12\x1a\n" +
+	"\brevision\x18\f \x01(\x05R\brevision\"\x93\x02\n" +
 	"\x17ArtifactEarlyUploadPlan\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x1d\n" +
 	"\n" +
@@ -2405,7 +2444,7 @@ const file_velox_control_control_common_proto_rawDesc = "" +
 	"upload_url\x18\x06 \x01(\tR\tuploadUrl\x12\x1d\n" +
 	"\n" +
 	"chunk_size\x18\a \x01(\x03R\tchunkSize\x12!\n" +
-	"\fcommit_token\x18\b \x01(\tR\vcommitToken\"\xd2\x01\n" +
+	"\fcommit_token\x18\b \x01(\tR\vcommitToken\"\xfa\x01\n" +
 	"\x0eOutputManifest\x12\x1f\n" +
 	"\voutput_kind\x18\x01 \x01(\tR\n" +
 	"outputKind\x12!\n" +
@@ -2414,7 +2453,8 @@ const file_velox_control_control_common_proto_rawDesc = "" +
 	"\n" +
 	"size_bytes\x18\x04 \x01(\x03R\tsizeBytes\x12\x16\n" +
 	"\x06sha256\x18\x05 \x01(\tR\x06sha256\x12(\n" +
-	"\x10worker_spool_key\x18\x06 \x01(\tR\x0eworkerSpoolKey\"\xfc\x01\n" +
+	"\x10worker_spool_key\x18\x06 \x01(\tR\x0eworkerSpoolKey\x12&\n" +
+	"\x0fearly_upload_id\x18\a \x01(\tR\rearlyUploadId\"\xfc\x01\n" +
 	"\fUploadTarget\x12%\n" +
 	"\x0edeclaration_id\x18\x01 \x01(\tR\rdeclarationId\x12\x1f\n" +
 	"\vartifact_id\x18\x02 \x01(\tR\n" +

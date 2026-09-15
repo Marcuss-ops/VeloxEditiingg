@@ -12,7 +12,50 @@ import (
 
 	"velox-worker-agent/internal/publisher"
 	"velox-worker-agent/internal/telemetry"
+	"velox-worker-agent/pkg/video/pipeline"
 )
+
+// uploadWithGrowingProgress is the early-upload variant. It is started from
+// the first renderer write-progress event, keeps the same GrowingFile updated
+// by the renderer callback, and uses the normal progressive transport contract
+// for hashing, completion and retries.
+func uploadWithGrowingProgress(ctx context.Context, transport publisher.Transport, req publisher.UploadRequest, progress pipeline.ArtifactWriteProgress, file *publisher.GrowingFile) (*publisher.UploadResult, error) {
+	if !publisher.SupportsProgressive(transport) {
+		return nil, fmt.Errorf("worker artifact upload: early transport %q is not progressive", transport.ID())
+	}
+	progressive, ok := transport.(publisher.ProgressiveTransport)
+	if !ok {
+		return nil, fmt.Errorf("worker artifact upload: early transport %q lacks progressive implementation", transport.ID())
+	}
+	if progress.Path == "" || progress.SafeOffsetBytes <= 0 || file == nil {
+		return nil, fmt.Errorf("worker artifact upload: early progress has no readable path/range")
+	}
+	file.Update(progress.SafeOffsetBytes, progress.Finalized, 0)
+	openPath := progress.Path
+	if progress.Finalized {
+		st, err := os.Stat(openPath)
+		if err != nil {
+			return nil, err
+		}
+		file.Update(st.Size(), true, st.Size())
+		file.MarkDurable(st.Size())
+	}
+	session, err := progressive.BeginProgressive(ctx, publisher.ProgressiveUploadRequest{
+		Target:       req.Target,
+		Artifact:     req.Target.ArtifactID,
+		ExpectedSize: 0,
+		CommitToken:  req.CommitToken,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("worker artifact upload: begin early progressive %q: %w", transport.ID(), err)
+	}
+	result, err := publisher.RunProgressiveUpload(ctx, openPath, req.Target.ChunkSize, file, session, nil)
+	if err != nil {
+		_ = session.Abort(ctx)
+		return nil, err
+	}
+	return result, nil
+}
 
 // uploadWithNegotiatedPath keeps the existing V1 publication contract as the
 // compatibility path. Progressive upload is selected only when the resolved

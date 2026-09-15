@@ -78,5 +78,6 @@ func buildGRPCHandlerConfig(cfg *config.Config, insecureDev bool) *grpcserver.Ha
 		FutureAssetProtectionLookahead: cfg.Runtime.Cache.FutureAssetProtectionLookahead,
 		FutureAssetPlanTTL:             cfg.Runtime.Cache.FutureAssetPlanTTL,
 		StrictPrefetchClaim:            cfg.Runtime.Cache.StrictPrefetchClaim,
+		CommitHMACKey:                  cfg.Runtime.CommitHMACKey,
 	}
 }

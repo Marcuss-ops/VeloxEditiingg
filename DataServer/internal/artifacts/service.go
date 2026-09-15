@@ -24,11 +24,49 @@
 package artifacts
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"strings"
 	"time"
 
 	"velox-server/internal/platform/clock"
 	"velox-server/internal/repository"
 )
+
+// EarlyUploadToken derives the bearer token for a progressive upload session
+// created before the final completion commit exists. The upload ID is random
+// and the token is scoped to that one session; the final TaskOutputDeclared
+// still binds the session to the fenced completion commit.
+func EarlyUploadToken(secretHex, uploadID string) (string, error) {
+	secret, err := hex.DecodeString(strings.TrimSpace(secretHex))
+	if err != nil || len(secret) < 32 {
+		return "", fmt.Errorf("artifacts: early upload secret must decode to at least 32 bytes")
+	}
+	if strings.TrimSpace(uploadID) == "" {
+		return "", fmt.Errorf("artifacts: early upload ID is required")
+	}
+	mac := hmac.New(sha256.New, secret)
+	_, _ = fmt.Fprintf(mac, "velox-early-upload-v1|%s", uploadID)
+	return hex.EncodeToString(mac.Sum(nil)), nil
+}
+
+func VerifyEarlyUploadToken(secretHex, uploadID, token string) bool {
+	want, err := EarlyUploadToken(secretHex, uploadID)
+	if err != nil || strings.TrimSpace(token) == "" {
+		return false
+	}
+	provided, err := hex.DecodeString(strings.TrimSpace(token))
+	if err != nil {
+		return false
+	}
+	wantBytes, err := hex.DecodeString(want)
+	if err != nil {
+		return false
+	}
+	return hmac.Equal(provided, wantBytes)
+}
 
 // defaultUploadTTL matches the spec's reconciler rule
 // ("blob finale senza riga DB dopo 24h → elimina") so the same window

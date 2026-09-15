@@ -108,6 +108,12 @@ func (w *Worker) handleTaskResultAckMessage(msg controltransport.ControlMessage)
 }
 
 func (w *Worker) handleArtifactControlMessage(msg controltransport.ControlMessage) {
+	if msg.Type == controltransport.MsgArtifactEarlyUploadPlan {
+		plan, ok := msg.TypedPayload.(*pb.ArtifactEarlyUploadPlan)
+		if ok && w.dispatchEarlyUploadPlan(plan) {
+			return
+		}
+	}
 	if !w.dispatchTypedPlanOrAck(msg) {
 		w.logger.Warn("[RECEIVE] %s arrived with no pending pipeline (msg=%s) — dropping", msg.Type, msg.MessageID)
 	}

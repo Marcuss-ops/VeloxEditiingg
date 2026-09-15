@@ -81,6 +81,7 @@ type UploadRouteDeps struct {
 	BlobStore               repository.BlobStore
 	ChunkedHandler          *workerhandlersuploads.ChunkedUploadHandler
 	CompletionTokenVerifier workerhandlersuploads.CommitTokenVerifier
+	EarlyUploadSecretHex    string
 }
 
 // MetricsRouteDeps carries the deps for the /metrics route (Prometheus

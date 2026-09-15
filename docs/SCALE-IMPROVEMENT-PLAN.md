@@ -102,12 +102,18 @@ Aggregate CPU at 100k/h: 27.8 × 8.8 s = ~245 core-seconds/s → ~336 cores acro
 - **Evidence:** 0 miss on fresh worker after warm; duplicate_download_bytes → 0.
 
 ### W4 — Zero-disk streaming concat → multipart upload *(Carmack)*
-- Stream the packet-copy concat output directly into the multipart upload —
-  the 178 MB never touches local disk (kills the write + read-back + the
-  `job_scratch_peak_bytes` pressure at N=10).
-- Pairs with migration 161 progressive-overlap: first bytes upload while the
-  tail still muxes.
-- **Evidence:** output write bytes ≈ 0 on attempt metrics; delivery wall < mux wall + tail.
+- LANDED (current tranche): the worker sends an authenticated upload intent on
+  the first safe renderer write, receives a fenced `master-stream.v1` session,
+  and uploads immutable parts while the mux is still writing. The final
+  declaration reuses that upload session, so the upload wait is overlapped with
+  render/finalization instead of starting from zero after render.
+- The strict zero-disk variant is still open: the renderer continues to write
+  its durable local output and the progressive reader consumes that growing
+  file. Removing that write requires a fragmented-container pipe plus a
+  durable retry/spool policy; it is not claimed by this tranche.
+- **Evidence:** one v17 canary with `progressive_overlap_ms > 0`,
+  `progressive_overlap_bytes_before_render > 0`, final SHA/size equality, and
+  `final_concat_stream_copy=true`; fleet delivery wall versus render wall.
 
 ### W5 — Manifest-first delivery *(Kay: change the representation)* — the 100k unlock
 - The job is a template: `{intro, stock pool, voiceover, shuffle seed}`.

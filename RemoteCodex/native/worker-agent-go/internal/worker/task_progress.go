@@ -78,6 +78,7 @@ func (w *Worker) artifactWriteProgressCallback(taskID string) pipeline.ArtifactW
 			}
 		}
 		artifactProgressByContext.Store(key, progress)
+		w.updateEarlyUploadProgress(taskID, progress)
 		w.activeTasksMu.Lock()
 		if current := w.activeTasks[taskID]; current != nil {
 			metrics := current.Progress.CumulativeMetrics

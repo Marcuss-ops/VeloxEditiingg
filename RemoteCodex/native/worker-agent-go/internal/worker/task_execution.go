@@ -108,6 +108,11 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 	activeTask.Cancel = jobCancel
 	defer jobCancel()
 	jobCtx = withProgressTaskID(w.withJobProgressCallback(jobCtx, taskID), taskID)
+	earlyUpload := w.registerEarlyUpload(jobCtx, pte)
+	defer func() {
+		earlyUpload.disable(context.Canceled)
+		w.unregisterEarlyUpload(taskID)
+	}()
 
 	w.recordTaskStart(pte)
 

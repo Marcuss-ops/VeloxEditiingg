@@ -30,17 +30,26 @@ func (h *Handler) handleArtifactUploadIntent(workerID string, msg *pb.ArtifactUp
 		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCCompletionRejected, "[GRPC] ArtifactUploadIntent task=%s rejected: upload service is not wired", msg.GetTaskId())
 		return
 	}
+	if h.config == nil || h.config.CommitHMACKey == "" {
+		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCCompletionRejected, "[GRPC] ArtifactUploadIntent task=%s rejected: progressive upload secret is not configured", msg.GetTaskId())
+		return
+	}
 	session, err := h.chunkedUploadSvc.InitChunkedSession(ctx, artifacts.BeginUploadCommand{
-		WorkerID: workerID, LeaseID: msg.GetLeaseId(), Kind: msg.GetOutputKind(), MimeType: msg.GetMimeType(), ExpectedSizeBytes: msg.GetExpectedSizeBytes(),
+		JobID: msg.GetJobId(), WorkerID: workerID, LeaseID: msg.GetLeaseId(), AttemptNumber: int(msg.GetAttemptNumber()), ExpectedRevision: int(msg.GetRevision()), Kind: msg.GetOutputKind(), MimeType: msg.GetMimeType(), ExpectedSizeBytes: msg.GetExpectedSizeBytes(),
 	})
 	if err != nil {
 		logGRPCf(ctx, logging.LevelError, logging.CodeGRPCCompletionFailed, "[GRPC] ArtifactUploadIntent task=%s failed: %v", msg.GetTaskId(), err)
 		return
 	}
+	token, tokenErr := artifacts.EarlyUploadToken(h.config.CommitHMACKey, session.UploadID)
+	if tokenErr != nil {
+		logGRPCf(ctx, logging.LevelError, logging.CodeGRPCCompletionFailed, "[GRPC] ArtifactUploadIntent task=%s token generation failed: %v", msg.GetTaskId(), tokenErr)
+		return
+	}
 	env := &pb.MasterToWorkerEnvelope{
 		MessageId: fmt.Sprintf("artifact-early-plan-%s-%d", msg.GetTaskId(), time.Now().UnixNano()), WorkerId: workerID, SessionId: sess.sessionID, SequenceNumber: time.Now().UnixNano(), SentAt: timestamppb.Now(), ProtocolVersion: controltransport.ProtocolVersionCurrent,
 		Msg: &pb.MasterToWorkerEnvelope_ArtifactEarlyUploadPlan{ArtifactEarlyUploadPlan: &pb.ArtifactEarlyUploadPlan{
-			TaskId: msg.GetTaskId(), AttemptId: msg.GetAttemptId(), ArtifactId: session.ArtifactID, UploadId: session.UploadID, TransportId: masterStreamTransportID, UploadUrl: h.masterURL + "/api/v1/video/master-stream/" + url.PathEscape(session.UploadID), ChunkSize: 8 * 1024 * 1024,
+			TaskId: msg.GetTaskId(), AttemptId: msg.GetAttemptId(), ArtifactId: session.ArtifactID, UploadId: session.UploadID, TransportId: masterStreamTransportID, UploadUrl: h.masterURL + "/api/v1/video/master-stream/" + url.PathEscape(session.UploadID), ChunkSize: 8 * 1024 * 1024, CommitToken: token,
 		}},
 	}
 	if !safeSend(sess.sendCh, &outboundMessage{Envelope: env}) {
@@ -73,7 +82,7 @@ func (h *Handler) handleTaskOutputDeclared(workerID string, msg *pb.TaskOutputDe
 		}
 		manifests = append(manifests, completion.OutputManifest{
 			OutputKind: m.GetOutputKind(), LogicalName: m.GetLogicalName(), MimeType: m.GetMimeType(),
-			SizeBytes: m.GetSizeBytes(), SHA256: m.GetSha256(), WorkerSpoolKey: m.GetWorkerSpoolKey(),
+			SizeBytes: m.GetSizeBytes(), SHA256: m.GetSha256(), WorkerSpoolKey: m.GetWorkerSpoolKey(), EarlyUploadID: m.GetEarlyUploadId(),
 		})
 	}
 	fence := completion.FenceTuple{
@@ -105,6 +114,30 @@ func (h *Handler) handleTaskOutputDeclared(workerID string, msg *pb.TaskOutputDe
 		// not an established binding and must be completed below.  Treating
 		// declaration presence alone as a binding leaves the worker with an
 		// empty upload target and stalls the task after rendering.
+		if !exists || b.UploadID == "" || b.ArtifactID == "" {
+			if earlyID := m.EarlyUploadID; earlyID != "" {
+				session, getErr := h.chunkedUploadSvc.GetUpload(ctx, earlyID)
+				if getErr != nil || session == nil || session.JobID != msg.GetJobId() || session.WorkerID != workerID || session.LeaseID != msg.GetLeaseId() || session.AttemptNumber != int(msg.GetAttemptNumber()) {
+					logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCCompletionRejected, "[GRPC] TaskOutputDeclared task=%s early upload=%s identity mismatch", msg.GetTaskId(), earlyID)
+					return
+				}
+				if i >= len(plan.Targets) || plan.Targets[i].DeclarationID == "" {
+					logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCCompletionRejected, "[GRPC] TaskOutputDeclared task=%s missing declaration for early output=%s", msg.GetTaskId(), m.LogicalName)
+					return
+				}
+				if bindErr := h.completionStore.BindUpload(ctx, plan.Targets[i].DeclarationID, earlyID, session.ArtifactID); bindErr != nil {
+					logGRPCf(ctx, logging.LevelError, logging.CodeGRPCCompletionFailed, "[GRPC] TaskOutputDeclared task=%s bind early upload=%s failed: %v", msg.GetTaskId(), earlyID, bindErr)
+					return
+				}
+				bound, bindGetErr := h.completionStore.GetUploadBinding(ctx, earlyID)
+				if bindGetErr != nil || bound == nil {
+					logGRPCf(ctx, logging.LevelError, logging.CodeGRPCCompletionFailed, "[GRPC] TaskOutputDeclared task=%s reload early binding failed: %v", msg.GetTaskId(), bindGetErr)
+					return
+				}
+				b = *bound
+				exists = true
+			}
+		}
 		if !exists || b.UploadID == "" || b.ArtifactID == "" {
 			if i >= len(plan.Targets) || plan.Targets[i].DeclarationID == "" {
 				logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCCompletionRejected, "[GRPC] TaskOutputDeclared task=%s missing declaration for output=%s", msg.GetTaskId(), m.LogicalName)

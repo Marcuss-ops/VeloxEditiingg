@@ -55,6 +55,7 @@ func (c *appComponents) routerBundle() RouterBundle {
 			BlobStore:               c.assets.BlobStore,
 			ChunkedHandler:          chunkedHandler,
 			CompletionTokenVerifier: c.assets.CompletionStore,
+			EarlyUploadSecretHex:    c.cfg.Runtime.CommitHMACKey,
 		},
 		Metrics: MetricsRouteDeps{
 			Registry:          c.metricsRegistry,
