@@ -66,6 +66,7 @@ var attemptMetricsColumns = []string{
 	"job_publish_bytes", "job_page_faults", "job_scratch_peak_bytes",
 	"segments_total", "segments_packet_copy", "segments_reencoded",
 	"packet_copy_ratio", "packet_copy_bytes", "reencoded_bytes",
+	"jobs_concurrent_at_start",
 }
 
 // attemptMetricsColCount is the canonical column count. The INSERT

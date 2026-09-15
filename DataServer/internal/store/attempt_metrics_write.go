@@ -98,7 +98,8 @@ func (r *SQLiteTaskAttemptRepository) PersistMetrics(ctx context.Context, metric
 			trailer_to_open_ms, mux_to_open_us,
 			job_publish_bytes, job_page_faults, job_scratch_peak_bytes,
 			segments_total, segments_packet_copy, segments_reencoded,
-			packet_copy_ratio, packet_copy_bytes, reencoded_bytes
+			packet_copy_ratio, packet_copy_bytes, reencoded_bytes,
+			jobs_concurrent_at_start
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
@@ -108,7 +109,7 @@ func (r *SQLiteTaskAttemptRepository) PersistMetrics(ctx context.Context, metric
 		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 		)`,
 		metrics.AttemptID, metrics.InputBytes, metrics.OutputBytes,
 		metrics.BytesFromDrive, metrics.BytesFromBlobstore, metrics.BytesFromLocalCache,
@@ -156,6 +157,7 @@ func (r *SQLiteTaskAttemptRepository) PersistMetrics(ctx context.Context, metric
 		metrics.JobPublishBytes, metrics.JobPageFaults, metrics.JobScratchPeakBytes,
 		metrics.SegmentsTotal, metrics.SegmentsPacketCopy, metrics.SegmentsReencoded,
 		metrics.PacketCopyRatio, metrics.PacketCopyBytes, metrics.ReencodedBytes,
+		metrics.JobsConcurrentAtStart,
 	)
 	if err != nil {
 		return fmt.Errorf("metrics persist: %w", err)

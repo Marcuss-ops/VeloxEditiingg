@@ -60,7 +60,8 @@ func (r *SQLiteTaskAttemptRepository) GetMetrics(ctx context.Context, attemptID 
 		        trailer_to_open_ms, mux_to_open_us,
 		        job_publish_bytes, job_page_faults, job_scratch_peak_bytes,
 		        segments_total, segments_packet_copy, segments_reencoded,
-		        packet_copy_ratio, packet_copy_bytes, reencoded_bytes
+		        packet_copy_ratio, packet_copy_bytes, reencoded_bytes,
+		        jobs_concurrent_at_start
 		 FROM task_attempt_metrics WHERE attempt_id = ?`,
 		attemptID,
 	)
@@ -115,6 +116,7 @@ func (r *SQLiteTaskAttemptRepository) GetMetrics(ctx context.Context, attemptID 
 		&m.JobPublishBytes, &m.JobPageFaults, &m.JobScratchPeakBytes,
 		&m.SegmentsTotal, &m.SegmentsPacketCopy, &m.SegmentsReencoded,
 		&m.PacketCopyRatio, &m.PacketCopyBytes, &m.ReencodedBytes,
+		&m.JobsConcurrentAtStart,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil

@@ -96,6 +96,9 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 		w.logger.Warn("Cannot accept task: invalid state transition from %s to busy", w.Status())
 		return
 	}
+	w.activeTasksMu.RLock()
+	jobsConcurrentAtStart := int32(len(w.activeTasks))
+	w.activeTasksMu.RUnlock()
 
 	activeTask := w.registerActiveTask(taskID, attemptID, pte)
 	w.wakeHeartbeat()
@@ -236,6 +239,10 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 	// append-only journal for every later projection.
 	taskrunner.AppendDetailedPhases(report, reportRecorder(report))
 	if report != nil {
+		if report.RawMetrics == nil {
+			report.RawMetrics = &telemetry.RawExecutionMetrics{}
+		}
+		report.RawMetrics.JobsConcurrentAtStart = jobsConcurrentAtStart
 		// Hand the executor-owned RAW envelope to the canonical attempt
 		// pipeline before Stop. The session collector will merge only its
 		// resource-owned fields, preserving engine/resolver/publisher facts.

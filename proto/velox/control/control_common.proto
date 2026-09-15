@@ -382,6 +382,10 @@ message TaskExecutionMetrics {
   // The master verifies this against COUNT(DISTINCT scene_id) from
   // segment_timings; a mismatch is logged as a warning.
   int32 scene_count = 91;
+
+  // Number of jobs already active on the worker when this attempt acquired
+  // its execution slot. Used to build the observed throughput curve by N.
+  int32 jobs_concurrent_at_start = 92;
 }
 
 // WorkerResourceCounters is the typed payload of Heartbeat.resources.

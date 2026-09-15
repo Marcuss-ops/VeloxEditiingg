@@ -66,7 +66,8 @@ func TestAttemptMetricsColumnOrderConsistency(t *testing.T) {
 			trailer_to_open_ms, mux_to_open_us,
 			job_publish_bytes, job_page_faults, job_scratch_peak_bytes,
 			segments_total, segments_packet_copy, segments_reencoded,
-			packet_copy_ratio, packet_copy_bytes, reencoded_bytes
+			packet_copy_ratio, packet_copy_bytes, reencoded_bytes,
+			jobs_concurrent_at_start
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
@@ -76,7 +77,7 @@ func TestAttemptMetricsColumnOrderConsistency(t *testing.T) {
 		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?`
+		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?`
 
 	// Count ? in the VALUES clause.
 	valsIdx := strings.Index(insertSQL, "VALUES")

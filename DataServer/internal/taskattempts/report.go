@@ -117,11 +117,12 @@ type AttemptMetrics struct {
 	OpenFDsPeak    int64   `json:"open_fds_peak"`
 
 	// Scorecard v2 / Step 11: queue and wait-time metrics.
-	QueueMS              int64 `json:"queue_ms"`
-	LeaseWaitMS          int64 `json:"lease_wait_ms"`
-	TimeToFirstWorkerMS  int64 `json:"time_to_first_worker_ms"`
-	PendingTasksAtStart  int64 `json:"pending_tasks_at_start"`
-	ActiveWorkersAtStart int64 `json:"active_workers_at_start"`
+	QueueMS               int64 `json:"queue_ms"`
+	LeaseWaitMS           int64 `json:"lease_wait_ms"`
+	TimeToFirstWorkerMS   int64 `json:"time_to_first_worker_ms"`
+	PendingTasksAtStart   int64 `json:"pending_tasks_at_start"`
+	ActiveWorkersAtStart  int64 `json:"active_workers_at_start"`
+	JobsConcurrentAtStart int64 `json:"jobs_concurrent_at_start"`
 
 	// Scorecard v2 / migration 099: per-attempt CPU capacity telemetry.
 	LogicalCPUCount   int     `json:"logical_cpu_count"`

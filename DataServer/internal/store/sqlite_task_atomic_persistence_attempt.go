@@ -218,7 +218,8 @@ func persistAttemptMetrics(ctx context.Context, tx *sql.Tx, cmd taskgraph.Ingest
 			trailer_to_open_ms, mux_to_open_us
 			, job_publish_bytes, job_page_faults, job_scratch_peak_bytes,
 			segments_total, segments_packet_copy, segments_reencoded,
-			packet_copy_ratio, packet_copy_bytes, reencoded_bytes
+			packet_copy_ratio, packet_copy_bytes, reencoded_bytes,
+			jobs_concurrent_at_start
 		) VALUES (
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
@@ -229,7 +230,7 @@ func persistAttemptMetrics(ctx context.Context, tx *sql.Tx, cmd taskgraph.Ingest
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 		)`,
 		m.AttemptID, m.InputBytes, m.OutputBytes,
 		m.BytesFromDrive, m.BytesFromBlobstore, m.BytesFromLocalCache,
@@ -278,6 +279,7 @@ func persistAttemptMetrics(ctx context.Context, tx *sql.Tx, cmd taskgraph.Ingest
 		m.JobPublishBytes, m.JobPageFaults, m.JobScratchPeakBytes,
 		m.SegmentsTotal, m.SegmentsPacketCopy, m.SegmentsReencoded,
 		m.PacketCopyRatio, m.PacketCopyBytes, m.ReencodedBytes,
+		m.JobsConcurrentAtStart,
 	)
 	if err != nil {
 		return fmt.Errorf("task ingest atomic metrics: %w", err)

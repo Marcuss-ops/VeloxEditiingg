@@ -106,9 +106,10 @@ type RawExecutionMetrics struct {
 	ErrorPhase          string `json:"error_phase,omitempty"`
 
 	// ── CPU capacity telemetry (migration 099) ──────────────────────────
-	LogicalCpuCount   int32   `json:"logical_cpu_count"`
-	CpuQuota          float64 `json:"cpu_quota"`
-	EffectiveCpuCount int32   `json:"effective_cpu_count"`
+	LogicalCpuCount       int32   `json:"logical_cpu_count"`
+	CpuQuota              float64 `json:"cpu_quota"`
+	EffectiveCpuCount     int32   `json:"effective_cpu_count"`
+	JobsConcurrentAtStart int32   `json:"jobs_concurrent_at_start"`
 
 	TelemetryCoverageJSON string `json:"telemetry_coverage_json,omitempty"`
 	TelemetryComplete     bool   `json:"telemetry_complete"`

@@ -162,6 +162,7 @@ func executionMetricsToAttemptMetrics(attemptID string, em *pb.TaskExecutionMetr
 	am.LogicalCPUCount = int(em.GetLogicalCpuCount())
 	am.CPUQuota = em.GetCpuQuota()
 	am.EffectiveCPUCount = int(em.GetEffectiveCpuCount())
+	am.JobsConcurrentAtStart = int64(em.GetJobsConcurrentAtStart())
 
 	// ── Scorecard v3 / observability pipeline completion ─────────────
 	am.ThroughputX = em.GetThroughputX()

@@ -1224,9 +1224,12 @@ type TaskExecutionMetrics struct {
 	// Declared scene count from the worker's RenderPlan Timeline length.
 	// The master verifies this against COUNT(DISTINCT scene_id) from
 	// segment_timings; a mismatch is logged as a warning.
-	SceneCount    int32 `protobuf:"varint,91,opt,name=scene_count,json=sceneCount,proto3" json:"scene_count,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	SceneCount int32 `protobuf:"varint,91,opt,name=scene_count,json=sceneCount,proto3" json:"scene_count,omitempty"`
+	// Number of jobs already active on the worker when this attempt acquired
+	// its execution slot. Used to build the observed throughput curve by N.
+	JobsConcurrentAtStart int32 `protobuf:"varint,92,opt,name=jobs_concurrent_at_start,json=jobsConcurrentAtStart,proto3" json:"jobs_concurrent_at_start,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *TaskExecutionMetrics) Reset() {
@@ -1896,6 +1899,13 @@ func (x *TaskExecutionMetrics) GetSceneCount() int32 {
 	return 0
 }
 
+func (x *TaskExecutionMetrics) GetJobsConcurrentAtStart() int32 {
+	if x != nil {
+		return x.JobsConcurrentAtStart
+	}
+	return 0
+}
+
 // WorkerResourceCounters is the typed payload of Heartbeat.resources.
 // All values are PEAK-of-WINDOW snapshots: the worker samples the
 // underlying counters every 5 s and reports the peak observed between
@@ -2379,7 +2389,7 @@ const file_velox_control_control_common_proto_rawDesc = "" +
 	"\x06job_id\x18\x02 \x01(\tR\x05jobId\x12\x1d\n" +
 	"\n" +
 	"attempt_id\x18\x03 \x01(\tR\tattemptId\x12\x14\n" +
-	"\x05error\x18\x04 \x01(\tR\x05error\"\xba!\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error\"\xf3!\n" +
 	"\x14TaskExecutionMetrics\x12\x1f\n" +
 	"\vinput_bytes\x18\x01 \x01(\x03R\n" +
 	"inputBytes\x12!\n" +
@@ -2476,7 +2486,8 @@ const file_velox_control_control_common_proto_rawDesc = "" +
 	"\x12trailer_to_open_ms\x18Y \x01(\x03R\x0ftrailerToOpenMs\x12#\n" +
 	"\x0emux_to_open_us\x18Z \x01(\x03R\vmuxToOpenUs\x12\x1f\n" +
 	"\vscene_count\x18[ \x01(\x05R\n" +
-	"sceneCount\"\xcc\x0e\n" +
+	"sceneCount\x127\n" +
+	"\x18jobs_concurrent_at_start\x18\\ \x01(\x05R\x15jobsConcurrentAtStart\"\xcc\x0e\n" +
 	"\x16WorkerResourceCounters\x122\n" +
 	"\x15cpu_utilization_ratio\x18\x01 \x01(\x01R\x13cpuUtilizationRatio\x12(\n" +
 	"\x10cpu_iowait_ratio\x18\x02 \x01(\x01R\x0ecpuIowaitRatio\x12&\n" +
