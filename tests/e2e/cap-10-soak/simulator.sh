@@ -86,7 +86,13 @@ for j in $(seq 1 576); do
       expected="FAILED"
     fi
   fi
-  wid=$(awk -v r="$rand" 'BEGIN{print int(r*5)+1}')
+  # Keep workload class and worker placement independent. Reusing the class
+  # PRNG value made worker-1 (rand < 0.2) receive only large jobs, and the
+  # large-job failure band then manufactured an NR-38 fairness failure before
+  # the scheduler/chaos model was exercised.
+  # Use a disjoint deterministic PRNG stream for placement; using the same
+  # seed/input pair as rm_next_rand would reproduce the class correlation.
+  wid=$(rm_pick_worker "$((j + 1000003))")
   sqlite3 "$DB" <<SQL >/dev/null
 INSERT INTO jobs(id, status, size_class, expected_terminal, worker_id, enqueued_at)
   VALUES ('job-$j', 'PENDING', '$cls', '$expected', 'worker-$wid', $j);
