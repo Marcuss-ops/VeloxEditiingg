@@ -21,6 +21,7 @@ func testCompiledRenderPlanV2() *CompiledRenderPlanV2 {
 			FPSNum:      30,
 			FPSDen:      1,
 			PixelFormat: "yuv420p",
+			BFrames:     0,
 		},
 		FinalAudio: FinalAudioV2{
 			Mode:             AudioModeFinalAudioCopy,
@@ -79,7 +80,7 @@ func TestCompiledRenderPlanV2_CanonicalJSONIsExact(t *testing.T) {
 	}
 
 	want := fmt.Sprintf(
-		`{"plan_version":2,"timeline_revision":7,"timeline_sha256":"timeline-sha","duration_us":60000000,"output":{"container":"mp4","video_codec":"h264","width":1920,"height":1080,"fps_num":30,"fps_den":1,"pixel_format":"yuv420p"},"final_audio":{"mode":"FINAL_AUDIO_COPY","asset_id":"audio-master","sha256":"%s","size_bytes":8123456,"codec":"aac","sample_rate_hz":48000,"channels":2,"duration_us":60000000,"timeline_revision":7,"timeline_sha256":"timeline-sha"},"video_tracks":[{"track_id":"main","segments":[{"segment_id":"comedian_a","asset_id":"video-a","sha256":"%s","timeline_start_frame":372,"frame_count":168,"source_in_us":33200000,"source_duration_us":5600000}]}],"assets":[{"asset_id":"audio-master","sha256":"%s","size_bytes":8123456,"kind":"final_audio","mime":"audio/mp4","duration_us":60000000},{"asset_id":"video-a","sha256":"%s","size_bytes":123,"kind":"video","mime":"video/mp4","duration_us":5600000,"width":1920,"height":1080}]}`,
+		`{"plan_version":2,"timeline_revision":7,"timeline_sha256":"timeline-sha","duration_us":60000000,"output":{"container":"mp4","video_codec":"h264","width":1920,"height":1080,"fps_num":30,"fps_den":1,"pixel_format":"yuv420p","b_frames":0},"final_audio":{"mode":"FINAL_AUDIO_COPY","asset_id":"audio-master","sha256":"%s","size_bytes":8123456,"codec":"aac","sample_rate_hz":48000,"channels":2,"duration_us":60000000,"timeline_revision":7,"timeline_sha256":"timeline-sha"},"video_tracks":[{"track_id":"main","segments":[{"segment_id":"comedian_a","asset_id":"video-a","sha256":"%s","timeline_start_frame":372,"frame_count":168,"source_in_us":33200000,"source_duration_us":5600000}]}],"assets":[{"asset_id":"audio-master","sha256":"%s","size_bytes":8123456,"kind":"final_audio","mime":"audio/mp4","duration_us":60000000},{"asset_id":"video-a","sha256":"%s","size_bytes":123,"kind":"video","mime":"video/mp4","duration_us":5600000,"width":1920,"height":1080}]}`,
 		strings.Repeat("a", 64),
 		strings.Repeat("b", 64),
 		strings.Repeat("a", 64),
