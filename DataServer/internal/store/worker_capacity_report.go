@@ -40,28 +40,37 @@ type WorkerCapacityReport struct {
 
 	// Host resource peaks/floors from worker_resource_samples over the
 	// configurable lookback window (default: 24h).
-	CPUPeakRatio           float64 `json:"cpu_peak_ratio"`
-	CPUIOWaitPeakRatio     float64 `json:"cpu_iowait_peak_ratio"`
-	MemoryPeakRatio        float64 `json:"memory_peak_ratio"`
-	MemoryAvailableMinMB   float64 `json:"memory_available_min_mb"`
-	DiskFreeMinBytes       int64   `json:"disk_free_min_bytes"`
-	ScratchPeakBytes       int64   `json:"scratch_peak_bytes"`
-	FDPeak                 int64   `json:"fd_peak"`
-	FDLimit                int64   `json:"fd_limit"`
-	FDUtillizationPeak     float64 `json:"fd_utilization_peak"`
-	NetworkRxMBPS          float64 `json:"network_rx_mbps"`
-	NetworkTxMBPS          float64 `json:"network_tx_mbps"`
-	Load1Peak              float64 `json:"load_1_peak"`
-	RunQueuePeak           int64   `json:"run_queue_peak"`
-	DiskIOWaitMSMax        int64   `json:"disk_io_wait_ms_max"`
-	NetworkRetransmitsMax  int64   `json:"network_retransmits_max"`
-	RenderJobsActiveAvg    float64 `json:"render_jobs_active_avg"`
-	PrefetchJobsActiveAvg  float64 `json:"prefetch_jobs_active_avg"`
-	PublisherJobsActiveAvg float64 `json:"publisher_jobs_active_avg"`
-	TaskSlotsAvg           float64 `json:"task_slots_avg"`
-	SampleCount            int     `json:"sample_count"`
-	WindowStart            string  `json:"window_start"`
-	WindowEnd              string  `json:"window_end"`
+	CPUPeakRatio         float64 `json:"cpu_peak_ratio"`
+	CPUIOWaitPeakRatio   float64 `json:"cpu_iowait_peak_ratio"`
+	MemoryPeakRatio      float64 `json:"memory_peak_ratio"`
+	MemoryAvailableMinMB float64 `json:"memory_available_min_mb"`
+	DiskFreeMinBytes     int64   `json:"disk_free_min_bytes"`
+	ScratchPeakBytes     int64   `json:"scratch_peak_bytes"`
+	FDPeak               int64   `json:"fd_peak"`
+	FDLimit              int64   `json:"fd_limit"`
+	FDUtillizationPeak   float64 `json:"fd_utilization_peak"`
+	NetworkRxMBPS        float64 `json:"network_rx_mbps"`
+	NetworkTxMBPS        float64 `json:"network_tx_mbps"`
+	// Observed ceilings are maxima recorded by the sampler in the lookback
+	// window. They are production observations, not synthetic benchmarks.
+	DiskReadCeilingMBPS       float64 `json:"disk_read_ceiling_mbps"`
+	DiskWriteCeilingMBPS      float64 `json:"disk_write_ceiling_mbps"`
+	NetworkIngressCeilingMBPS float64 `json:"network_ingress_ceiling_mbps"`
+	NetworkEgressCeilingMBPS  float64 `json:"network_egress_ceiling_mbps"`
+	Load1Peak                 float64 `json:"load_1_peak"`
+	RunQueuePeak              int64   `json:"run_queue_peak"`
+	DiskIOWaitMSMax           int64   `json:"disk_io_wait_ms_max"`
+	NetworkRetransmitsMax     int64   `json:"network_retransmits_max"`
+	RenderJobsActiveAvg       float64 `json:"render_jobs_active_avg"`
+	PrefetchJobsActiveAvg     float64 `json:"prefetch_jobs_active_avg"`
+	PublisherJobsActiveAvg    float64 `json:"publisher_jobs_active_avg"`
+	TaskSlotsAvg              float64 `json:"task_slots_avg"`
+	RenderJobsActivePeak      int64   `json:"render_jobs_active_peak"`
+	MaxObservedConcurrent     int64   `json:"max_observed_concurrent"`
+	SlotUtilizationPeak       float64 `json:"slot_utilization_peak"`
+	SampleCount               int     `json:"sample_count"`
+	WindowStart               string  `json:"window_start"`
+	WindowEnd                 string  `json:"window_end"`
 
 	// Per-job capacity facts from task_attempt_metrics (most recent N succeeded attempts).
 	AvgJobScratchPeakBytes int64 `json:"avg_job_scratch_peak_bytes"`
@@ -170,6 +179,10 @@ func (s *SQLiteStore) queryResourceSamples(ctx context.Context, workerID string,
 			COALESCE(MAX(fd_utilization_ratio), 0),
 			COALESCE(AVG(download_mbps), 0),
 			COALESCE(AVG(upload_mbps), 0),
+			COALESCE(MAX(disk_read_mbps), 0),
+			COALESCE(MAX(disk_write_mbps), 0),
+			COALESCE(MAX(download_mbps), 0),
+			COALESCE(MAX(upload_mbps), 0),
 			COALESCE(MAX(load1), 0),
 			COALESCE(MAX(run_queue), 0),
 			COALESCE(MAX(disk_io_wait_ms), 0),
@@ -178,6 +191,10 @@ func (s *SQLiteStore) queryResourceSamples(ctx context.Context, workerID string,
 			COALESCE(AVG(prefetch_jobs_active), 0),
 			COALESCE(AVG(publisher_jobs_active), 0),
 			COALESCE(AVG(task_slots), 0),
+			COALESCE(MAX(render_jobs_active), 0),
+			COALESCE(MAX(render_jobs_active), 0),
+			COALESCE(MAX(CASE WHEN task_slots > 0
+				THEN render_jobs_active * 1.0 / task_slots ELSE 0 END), 0),
 			COUNT(*)
 		FROM worker_resource_samples
 		WHERE worker_id = ? AND ingested_at >= ? AND ingested_at <= ?
@@ -195,6 +212,10 @@ func (s *SQLiteStore) queryResourceSamples(ctx context.Context, workerID string,
 		&report.FDUtillizationPeak,
 		&report.NetworkRxMBPS,
 		&report.NetworkTxMBPS,
+		&report.DiskReadCeilingMBPS,
+		&report.DiskWriteCeilingMBPS,
+		&report.NetworkIngressCeilingMBPS,
+		&report.NetworkEgressCeilingMBPS,
 		&report.Load1Peak,
 		&report.RunQueuePeak,
 		&report.DiskIOWaitMSMax,
@@ -203,6 +224,9 @@ func (s *SQLiteStore) queryResourceSamples(ctx context.Context, workerID string,
 		&report.PrefetchJobsActiveAvg,
 		&report.PublisherJobsActiveAvg,
 		&report.TaskSlotsAvg,
+		&report.RenderJobsActivePeak,
+		&report.MaxObservedConcurrent,
+		&report.SlotUtilizationPeak,
 		&report.SampleCount,
 	)
 	if err == sql.ErrNoRows {

@@ -183,6 +183,25 @@ func TestGetWorkerCapacityReport_FullAssembly(t *testing.T) {
 	if report.RenderJobsActiveAvg < 3.9 || report.RenderJobsActiveAvg > 4.1 {
 		t.Errorf("RenderJobsActiveAvg = %f; want ~4.0", report.RenderJobsActiveAvg)
 	}
+	// Observed ceilings and concurrency from the three samples.
+	if report.DiskReadCeilingMBPS < 139 || report.DiskReadCeilingMBPS > 141 {
+		t.Errorf("DiskReadCeilingMBPS = %f; want ~140", report.DiskReadCeilingMBPS)
+	}
+	if report.DiskWriteCeilingMBPS < 99 || report.DiskWriteCeilingMBPS > 101 {
+		t.Errorf("DiskWriteCeilingMBPS = %f; want ~100", report.DiskWriteCeilingMBPS)
+	}
+	if report.NetworkIngressCeilingMBPS < 309 || report.NetworkIngressCeilingMBPS > 311 {
+		t.Errorf("NetworkIngressCeilingMBPS = %f; want ~310", report.NetworkIngressCeilingMBPS)
+	}
+	if report.NetworkEgressCeilingMBPS < 429 || report.NetworkEgressCeilingMBPS > 431 {
+		t.Errorf("NetworkEgressCeilingMBPS = %f; want ~430", report.NetworkEgressCeilingMBPS)
+	}
+	if report.RenderJobsActivePeak != 5 || report.MaxObservedConcurrent != 5 {
+		t.Errorf("observed concurrency = (%d, %d); want (5, 5)", report.RenderJobsActivePeak, report.MaxObservedConcurrent)
+	}
+	if report.SlotUtilizationPeak < 0.624 || report.SlotUtilizationPeak > 0.626 {
+		t.Errorf("SlotUtilizationPeak = %f; want ~0.625", report.SlotUtilizationPeak)
+	}
 
 	// ── 6. Verify task_attempt_metrics aggregation ────────────────────────
 	if report.AttemptCount != 2 {
