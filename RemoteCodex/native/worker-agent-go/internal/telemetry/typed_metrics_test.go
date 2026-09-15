@@ -26,6 +26,7 @@ func TestTypedExecutionMetrics_ToProto_AllFields(t *testing.T) {
 		EncodePasses:          1,
 		FinalConcatStreamCopy: true,
 		ConcatMode:            "stream_copy",
+		PacketCopyRatio:       87.5,
 		CpuPricePerSecond:     0.000005,
 		StoragePricePerGb:     0.00012,
 		NetworkPricePerGb:     0.01,
@@ -87,6 +88,7 @@ func TestTypedExecutionMetrics_ToProto_AllFields(t *testing.T) {
 		{"EncodePasses", int64(pb.GetEncodePasses()), int64(in.EncodePasses), 0},
 		{"FinalConcatStreamCopy", pb.GetFinalConcatStreamCopy(), in.FinalConcatStreamCopy, 0}, // bool requires non-default
 		{"ConcatMode", pb.GetConcatMode(), in.ConcatMode, 0},
+		{"PacketCopyRatio", pb.GetPacketCopyRatio(), in.PacketCopyRatio, 1e-9},
 		{"CpuPricePerSecond", pb.GetCpuPricePerSecond(), in.CpuPricePerSecond, 1e-9},
 		{"StoragePricePerGb", pb.GetStoragePricePerGb(), in.StoragePricePerGb, 1e-9},
 		{"NetworkPricePerGb", pb.GetNetworkPricePerGb(), in.NetworkPricePerGb, 1e-9},
