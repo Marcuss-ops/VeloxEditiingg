@@ -17,6 +17,8 @@ set -euo pipefail
 #       ↓
 #   modifica atomica VELOX_WORKER_IMAGE
 #       ↓
+#   aggiorna atomico il baseline self-render dal medesimo image digest
+#       ↓
 #   systemctl restart velox-worker.service
 #       ↓
 #   verifica container velox-worker
@@ -25,8 +27,8 @@ set -euo pipefail
 #       ↓
 #   verifica digest running
 #
-# If any phase AFTER the atomic env swap fails, the helper restores the
-# previous worker.env, restarts the canonical service, and verifies the
+# If any phase AFTER the atomic env/baseline swap fails, the helper restores
+# both release inputs, restarts the canonical service, and verifies the
 # previous digest — so a failed activation converges back to the last
 # known-good image with the exact same primitive used for the forward.
 #
@@ -48,6 +50,7 @@ ENV_FILE="${ENV_FILE:-/etc/velox-worker/worker.env}"
 LOCK_FILE="${LOCK_FILE:-/run/lock/velox-worker-activate.lock}"
 BACKUP_FILE="${BACKUP_FILE:-${ENV_FILE}.prev}"
 POLL_INTERVAL="${POLL_INTERVAL:-2}"
+IMAGE_BASELINE_PATH="/app/RemoteCodex/tests/fixtures/engine_selftest_baseline.sha256"
 
 command -v flock >/dev/null 2>&1 || {
   echo "flock (util-linux) is required for serialized image activation" >&2
@@ -83,13 +86,60 @@ flock 9
 PREV_IMAGE="$(sed -n 's/^VELOX_WORKER_IMAGE=//p' "$ENV_FILE" | tail -n 1)"
 [[ -n "$PREV_IMAGE" ]] || { echo "VELOX_WORKER_IMAGE empty in $ENV_FILE" >&2; exit 1; }
 
+# The self-render baseline is stored in the persistent work volume because
+# VELOX_WORK_DIR is mounted there. It is part of the immutable engine release
+# contract, not host-local mutable state: changing the image without changing
+# this file leaves the new engine rejected by RW-PROD-003 A2. Read only the
+# non-secret paths needed here instead of sourcing worker.env.
+env_value() {
+  sed -n "s/^$1=//p" "$ENV_FILE" | tail -n 1
+}
+WORK_DIR="$(env_value VELOX_WORK_DIR)"
+if [[ -z "$WORK_DIR" ]]; then
+  STATE_DIR="$(env_value VELOX_STATE_DIR)"
+  WORK_DIR="${STATE_DIR%/}/work"
+fi
+[[ "$WORK_DIR" == /* && "$WORK_DIR" != */ ]] || {
+  echo "VELOX_WORK_DIR must be an absolute normalized path in $ENV_FILE" >&2
+  exit 1
+}
+BASELINE_PATH="$WORK_DIR/tests/fixtures/engine_selftest_baseline.sha256"
+BASELINE_DIR="$(dirname "$BASELINE_PATH")"
+[[ -d "$BASELINE_DIR" ]] || {
+  echo "worker baseline directory missing: $BASELINE_DIR" >&2
+  exit 1
+}
+
 # ── 3. Backup worker.env before the pull/swap ───────────────────────────────
 cp -p "$ENV_FILE" "$BACKUP_FILE"
+
+BASELINE_BACKUP_FILE="$(mktemp "$BASELINE_DIR/.engine_selftest_baseline.prev.XXXXXX")"
+BASELINE_WAS_PRESENT=0
+if [[ -e "$BASELINE_PATH" ]]; then
+  [[ -f "$BASELINE_PATH" ]] || {
+    echo "worker baseline path is not a regular file: $BASELINE_PATH" >&2
+    rm -f "$BASELINE_BACKUP_FILE"
+    exit 1
+  }
+  cp -p "$BASELINE_PATH" "$BASELINE_BACKUP_FILE"
+  BASELINE_WAS_PRESENT=1
+fi
+
+TARGET_BASELINE_FILE="$(mktemp "$BASELINE_DIR/.engine_selftest_baseline.target.XXXXXX")"
+cleanup_baseline_files() {
+  rm -f "$TARGET_BASELINE_FILE" "$BASELINE_BACKUP_FILE"
+}
+trap 'cleanup_baseline_files; rm -f "${tmp:-}"' EXIT
 
 # rollback restores the previous env, restarts the canonical service, and
 # verifies the previous digest is running. Same primitive as the forward path.
 rollback() {
   cp -p "$BACKUP_FILE" "$ENV_FILE" 2>/dev/null || return 1
+  if [[ "$BASELINE_WAS_PRESENT" == 1 ]]; then
+    cp -p "$BASELINE_BACKUP_FILE" "$BASELINE_PATH" 2>/dev/null || return 1
+  else
+    rm -f "$BASELINE_PATH" 2>/dev/null || return 1
+  fi
   systemctl restart velox-worker.service || return 1
   for _ in $(seq 1 60); do
     if docker inspect --format '{{.Config.Image}} {{.State.Running}}' velox-worker 2>/dev/null \
@@ -105,9 +155,20 @@ rollback() {
 # ── 4. Pull ─────────────────────────────────────────────────────────────────
 docker pull "$IMAGE" >/dev/null || exit 1
 
+# Extract the certification fixture from the same immutable image that will be
+# activated. The image is already pulled and digest-pinned above.
+docker run --rm --entrypoint /bin/sh "$IMAGE" -c "cat '$IMAGE_BASELINE_PATH'" >"$TARGET_BASELINE_FILE" || {
+  echo "target image does not expose a readable engine selftest baseline" >&2
+  exit 1
+}
+TARGET_BASELINE_SHA="$(awk 'NF {print $1; exit}' "$TARGET_BASELINE_FILE")"
+[[ "$TARGET_BASELINE_SHA" =~ ^[0-9a-fA-F]{64}$ ]] || {
+  echo "target image baseline is not a SHA-256 fixture" >&2
+  exit 1
+}
+
 # ── 5. Atomic VELOX_WORKER_IMAGE replacement ────────────────────────────────
 tmp="$(mktemp "${ENV_FILE}.tmp.XXXXXX")"
-trap 'rm -f "$tmp"' EXIT
 awk -v image="$IMAGE" '
   BEGIN { done=0 }
   /^VELOX_WORKER_IMAGE=/ {
@@ -120,7 +181,6 @@ awk -v image="$IMAGE" '
 chown --reference="$ENV_FILE" "$tmp"
 chmod --reference="$ENV_FILE" "$tmp"
 mv -f "$tmp" "$ENV_FILE"
-trap - EXIT
 
 # Preserve the previous immutable ref as explicit runtime evidence for the
 # production doctor. This is metadata for rollback availability; it never
@@ -138,6 +198,19 @@ awk -v rollback="$PREV_IMAGE" '
 chown --reference="$ENV_FILE" "$tmp"
 chmod --reference="$ENV_FILE" "$tmp"
 mv -f "$tmp" "$ENV_FILE"
+
+# Commit the matching certification fixture immediately after the image ref,
+# before restarting systemd. Both files are restored by rollback if any later
+# convergence or readiness check fails.
+mv -f "$TARGET_BASELINE_FILE" "$BASELINE_PATH"
+if [[ "$BASELINE_WAS_PRESENT" == 1 ]]; then
+  chown --reference="$BASELINE_BACKUP_FILE" "$BASELINE_PATH"
+  chmod --reference="$BASELINE_BACKUP_FILE" "$BASELINE_PATH"
+else
+  chown 10001:10001 "$BASELINE_PATH"
+  chmod 0644 "$BASELINE_PATH"
+fi
+TARGET_BASELINE_FILE=""
 
 # ── 6. Restart the canonical service ────────────────────────────────────────
 systemctl restart velox-worker.service || {
@@ -170,6 +243,7 @@ fi
 for _ in $(seq 1 30); do
   if curl -fsS --max-time 10 http://127.0.0.1:8081/health/ready >/dev/null; then
     rm -f "$BACKUP_FILE"
+    cleanup_baseline_files
     exit 0
   fi
   sleep "$POLL_INTERVAL"
