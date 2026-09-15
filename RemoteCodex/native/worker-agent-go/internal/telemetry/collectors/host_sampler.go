@@ -133,8 +133,12 @@ func runCapacityBenchmark(ctx context.Context, workDir, networkURL string) capac
 	}
 	measured := result.DiskReadMbps > 0 || result.DiskWriteMbps > 0 ||
 		result.DownloadMbps > 0 || result.UploadMbps > 0
-	if measured {
+	allMeasured := result.DiskReadMbps > 0 && result.DiskWriteMbps > 0 &&
+		result.DownloadMbps > 0 && result.UploadMbps > 0
+	if allMeasured {
 		result.Status = "measured"
+	} else if measured {
+		result.Status = "partial"
 	}
 	if result.DiskReadMbps == 0 && result.DiskWriteMbps == 0 &&
 		result.DownloadMbps == 0 && result.UploadMbps == 0 {
@@ -195,7 +199,11 @@ func networkCeilings(ctx context.Context, endpoint string) (float64, float64) {
 	query.Set("bytes", "8388608")
 	probeURL.RawQuery = query.Encode()
 	start := time.Now()
-	resp, err := client.Get(probeURL.String())
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL.String(), nil)
+	if err != nil {
+		return 0, 0
+	}
+	resp, err := client.Do(request)
 	if err != nil {
 		return 0, 0
 	}
@@ -205,7 +213,12 @@ func networkCeilings(ctx context.Context, endpoint string) (float64, float64) {
 
 	payload := bytes.NewReader(make([]byte, 1<<20))
 	start = time.Now()
-	resp, err = client.Post(endpoint, "application/octet-stream", payload)
+	request, err = http.NewRequestWithContext(ctx, http.MethodPost, endpoint, payload)
+	if err != nil {
+		return down, 0
+	}
+	request.Header.Set("Content-Type", "application/octet-stream")
+	resp, err = client.Do(request)
 	if err != nil {
 		return down, 0
 	}
