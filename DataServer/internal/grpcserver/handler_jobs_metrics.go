@@ -170,6 +170,11 @@ func executionMetricsToAttemptMetrics(attemptID string, em *pb.TaskExecutionMetr
 	am.CriticalPathMS = em.GetCriticalPathMs()
 	am.CriticalPathComponent = em.GetCriticalPathComponent()
 	am.PacketCopyRatio = em.GetPacketCopyRatio()
+	am.SegmentsTotal = int64(em.GetSegmentsTotal())
+	am.SegmentsPacketCopy = int64(em.GetSegmentsPacketCopy())
+	am.SegmentsReencoded = int64(em.GetSegmentsReencoded())
+	am.PacketCopyBytes = em.GetPacketCopyBytes()
+	am.ReencodedBytes = em.GetReencodedBytes()
 
 	am.GPUUtilAvgPct = em.GetGpuUtilAvgPercent()
 	am.GPUUtilPeakPct = em.GetGpuUtilPeakPercent()

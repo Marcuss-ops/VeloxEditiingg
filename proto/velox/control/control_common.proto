@@ -383,9 +383,18 @@ message TaskExecutionMetrics {
   // segment_timings; a mismatch is logged as a warning.
   int32 scene_count = 91;
 
-  // Number of jobs already active on the worker when this attempt acquired
-  // its execution slot. Used to build the observed throughput curve by N.
+	// Number of jobs already active on the worker when this attempt acquired
+	// its execution slot. Used to build the observed throughput curve by N.
 	int32 jobs_concurrent_at_start = 92;
+
+	// Worker-side aggregate segment facts. These remain available when a
+	// renderer cannot emit per-segment timing rows; the master uses them as
+	// the fallback for packet-copy persistence and inspection.
+	int32 segments_total = 93;
+	int32 segments_packet_copy = 94;
+	int32 segments_reencoded = 95;
+	int64 packet_copy_bytes = 96;
+	int64 reencoded_bytes = 97;
 }
 
 // WorkerResourceCounters is the typed payload of Heartbeat.resources.

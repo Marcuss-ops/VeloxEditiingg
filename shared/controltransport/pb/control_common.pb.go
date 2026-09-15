@@ -1228,8 +1228,16 @@ type TaskExecutionMetrics struct {
 	// Number of jobs already active on the worker when this attempt acquired
 	// its execution slot. Used to build the observed throughput curve by N.
 	JobsConcurrentAtStart int32 `protobuf:"varint,92,opt,name=jobs_concurrent_at_start,json=jobsConcurrentAtStart,proto3" json:"jobs_concurrent_at_start,omitempty"`
-	unknownFields         protoimpl.UnknownFields
-	sizeCache             protoimpl.SizeCache
+	// Worker-side aggregate segment facts. These remain available when a
+	// renderer cannot emit per-segment timing rows; the master uses them as
+	// the fallback for packet-copy persistence and inspection.
+	SegmentsTotal      int32 `protobuf:"varint,93,opt,name=segments_total,json=segmentsTotal,proto3" json:"segments_total,omitempty"`
+	SegmentsPacketCopy int32 `protobuf:"varint,94,opt,name=segments_packet_copy,json=segmentsPacketCopy,proto3" json:"segments_packet_copy,omitempty"`
+	SegmentsReencoded  int32 `protobuf:"varint,95,opt,name=segments_reencoded,json=segmentsReencoded,proto3" json:"segments_reencoded,omitempty"`
+	PacketCopyBytes    int64 `protobuf:"varint,96,opt,name=packet_copy_bytes,json=packetCopyBytes,proto3" json:"packet_copy_bytes,omitempty"`
+	ReencodedBytes     int64 `protobuf:"varint,97,opt,name=reencoded_bytes,json=reencodedBytes,proto3" json:"reencoded_bytes,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *TaskExecutionMetrics) Reset() {
@@ -1906,6 +1914,41 @@ func (x *TaskExecutionMetrics) GetJobsConcurrentAtStart() int32 {
 	return 0
 }
 
+func (x *TaskExecutionMetrics) GetSegmentsTotal() int32 {
+	if x != nil {
+		return x.SegmentsTotal
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetSegmentsPacketCopy() int32 {
+	if x != nil {
+		return x.SegmentsPacketCopy
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetSegmentsReencoded() int32 {
+	if x != nil {
+		return x.SegmentsReencoded
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetPacketCopyBytes() int64 {
+	if x != nil {
+		return x.PacketCopyBytes
+	}
+	return 0
+}
+
+func (x *TaskExecutionMetrics) GetReencodedBytes() int64 {
+	if x != nil {
+		return x.ReencodedBytes
+	}
+	return 0
+}
+
 // WorkerResourceCounters is the typed payload of Heartbeat.resources.
 // All values are PEAK-of-WINDOW snapshots: the worker samples the
 // underlying counters every 5 s and reports the peak observed between
@@ -2423,7 +2466,7 @@ const file_velox_control_control_common_proto_rawDesc = "" +
 	"\x06job_id\x18\x02 \x01(\tR\x05jobId\x12\x1d\n" +
 	"\n" +
 	"attempt_id\x18\x03 \x01(\tR\tattemptId\x12\x14\n" +
-	"\x05error\x18\x04 \x01(\tR\x05error\"\xf3!\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error\"\xd0#\n" +
 	"\x14TaskExecutionMetrics\x12\x1f\n" +
 	"\vinput_bytes\x18\x01 \x01(\x03R\n" +
 	"inputBytes\x12!\n" +
@@ -2521,7 +2564,12 @@ const file_velox_control_control_common_proto_rawDesc = "" +
 	"\x0emux_to_open_us\x18Z \x01(\x03R\vmuxToOpenUs\x12\x1f\n" +
 	"\vscene_count\x18[ \x01(\x05R\n" +
 	"sceneCount\x127\n" +
-	"\x18jobs_concurrent_at_start\x18\\ \x01(\x05R\x15jobsConcurrentAtStart\"\x9c\x10\n" +
+	"\x18jobs_concurrent_at_start\x18\\ \x01(\x05R\x15jobsConcurrentAtStart\x12%\n" +
+	"\x0esegments_total\x18] \x01(\x05R\rsegmentsTotal\x120\n" +
+	"\x14segments_packet_copy\x18^ \x01(\x05R\x12segmentsPacketCopy\x12-\n" +
+	"\x12segments_reencoded\x18_ \x01(\x05R\x11segmentsReencoded\x12*\n" +
+	"\x11packet_copy_bytes\x18` \x01(\x03R\x0fpacketCopyBytes\x12'\n" +
+	"\x0freencoded_bytes\x18a \x01(\x03R\x0ereencodedBytes\"\x9c\x10\n" +
 	"\x16WorkerResourceCounters\x122\n" +
 	"\x15cpu_utilization_ratio\x18\x01 \x01(\x01R\x13cpuUtilizationRatio\x12(\n" +
 	"\x10cpu_iowait_ratio\x18\x02 \x01(\x01R\x0ecpuIowaitRatio\x12&\n" +

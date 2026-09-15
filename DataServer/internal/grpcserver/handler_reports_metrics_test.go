@@ -56,6 +56,11 @@ func TestHandleTaskResult_PersistTypedMetrics_F1(t *testing.T) {
 		// Phase A1.5: attempt-scoped download volume (proto 58/59).
 		CacheDownloadCount: 4,
 		CacheDownloadBytes: 4 * 262144,
+		SegmentsTotal:      51,
+		SegmentsPacketCopy: 51,
+		SegmentsReencoded:  0,
+		PacketCopyBytes:    137 * 1024 * 1024,
+		ReencodedBytes:     0,
 	}
 
 	artItem, _ := structpb.NewStruct(map[string]interface{}{
@@ -107,6 +112,15 @@ func TestHandleTaskResult_PersistTypedMetrics_F1(t *testing.T) {
 	}
 	if got.AudioTrackCount != int(em.GetAudioTrackCount()) {
 		t.Errorf("AttemptMetrics AudioTrackCount = %d; want %d", got.AudioTrackCount, em.GetAudioTrackCount())
+	}
+	if got.SegmentsTotal != int64(em.GetSegmentsTotal()) ||
+		got.SegmentsPacketCopy != int64(em.GetSegmentsPacketCopy()) ||
+		got.SegmentsReencoded != int64(em.GetSegmentsReencoded()) ||
+		got.PacketCopyBytes != em.GetPacketCopyBytes() ||
+		got.ReencodedBytes != em.GetReencodedBytes() {
+		t.Errorf("AttemptMetrics packet-copy aggregates = total=%d copy=%d reencoded=%d bytes=%d/%d; want %d/%d/%d bytes=%d/%d",
+			got.SegmentsTotal, got.SegmentsPacketCopy, got.SegmentsReencoded, got.PacketCopyBytes, got.ReencodedBytes,
+			em.GetSegmentsTotal(), em.GetSegmentsPacketCopy(), em.GetSegmentsReencoded(), em.GetPacketCopyBytes(), em.GetReencodedBytes())
 	}
 
 	gotCache := taskRepo.lastCacheStats
