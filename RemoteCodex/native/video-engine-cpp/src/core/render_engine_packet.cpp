@@ -63,7 +63,10 @@ RenderResult RenderEngine::renderCopyOnly(
     request.write_progress_callback = [this](const fs::path& path, int64_t bytes_written) {
         // The mux writes to the .partial path; report that path so the
         // Go progressive upload can open it before publishAtomic renames.
-        reportArtifactWriteProgress("final_video", path, bytes_written, bytes_written, false);
+        // The legacy progressive MP4 muxer can seek backward to rewrite its
+        // moov/header. Until the trailer is published, no prefix is safe for
+        // the growing-file uploader even though the high watermark advances.
+        reportArtifactWriteProgress("final_video", path, bytes_written, 0, false);
     };
     request.video_segments.reserve(plan.timeline.size());
     double total_copy_duration = 0.0;
