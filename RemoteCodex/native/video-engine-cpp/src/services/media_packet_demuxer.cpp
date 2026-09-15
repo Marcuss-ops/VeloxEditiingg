@@ -36,21 +36,25 @@ bool hasCompleteContainerMetadata(const AVFormatContext* context) {
                 frame_rate = stream->r_frame_rate;
             }
             // Pixel format/profile/level may be decoder-derived rather than
-            // container-header fields. The producer certificate supplies
-            // those identities; packet muxing needs the stream shape and a
-            // usable rate, while later compatibility checks remain the
-            // fail-closed authority for actual stream copying.
+            // container-header fields. Do not take the certified fast path
+            // until they are populated: packet-copy compatibility compares
+            // the actual stream signature and must not compare -1 sentinel
+            // values against the canonical target.
             if (parameters->width <= 0 || parameters->height <= 0 ||
-                frame_rate.num <= 0 || frame_rate.den <= 0) {
+                frame_rate.num <= 0 || frame_rate.den <= 0 ||
+                parameters->format < 0 || parameters->profile < 0 ||
+                parameters->level < 0) {
                 return false;
             }
         } else if (parameters->codec_type == AVMEDIA_TYPE_AUDIO) {
 #if LIBAVUTIL_VERSION_MAJOR >= 57
-            if (parameters->sample_rate <= 0 || parameters->ch_layout.nb_channels <= 0) {
+            if (parameters->sample_rate <= 0 || parameters->ch_layout.nb_channels <= 0 ||
+                parameters->format < 0) {
                 return false;
             }
 #else
-            if (parameters->sample_rate <= 0 || parameters->channels <= 0) {
+            if (parameters->sample_rate <= 0 || parameters->channels <= 0 ||
+                parameters->format < 0) {
                 return false;
             }
 #endif
