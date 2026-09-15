@@ -62,6 +62,12 @@ func TestDefaultConfigAfterApplyDefaults(t *testing.T) {
 	if cfg.Environment != "production" {
 		t.Errorf("after applyDefaults, expected environment production, got %q", cfg.Environment)
 	}
+	if cfg.PrefetchHorizonJobs != 3 || cfg.PrefetchProtectionLookaheadJobs != 10 {
+		t.Fatalf("prefetch window = horizon=%d lookahead=%d, want 3/10", cfg.PrefetchHorizonJobs, cfg.PrefetchProtectionLookaheadJobs)
+	}
+	if cfg.PrefetchByteBudget != DefaultPrefetchByteBudget {
+		t.Fatalf("prefetch byte budget = %d, want %d", cfg.PrefetchByteBudget, DefaultPrefetchByteBudget)
+	}
 }
 
 func TestDefaultConfigEmptyWorkDir(t *testing.T) {

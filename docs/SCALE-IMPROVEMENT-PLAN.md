@@ -89,10 +89,14 @@ Aggregate CPU at 100k/h: 27.8 × 8.8 s = ~245 core-seconds/s → ~336 cores acro
 - **Evidence:** ladder spec + ffprobe verification + egress/video delta.
 
 ### W3 — Hot-set pinning + out-of-band cache fill *(Cockcroft/OpenConnect; Gray's five-minute rule)*
-- The 12 unique assets (~60 MB) are re-fetched by every cold job: pin them on
-  every worker (they pass the five-minute rule by orders of magnitude).
-- Master triggers cache warm at folder expansion (FutureAssetPlan already
-  exists) → "cold cache" stops being a runtime path.
+- Policy is now pinned in production defaults: Master plans 3 jobs ahead,
+  protects 10 jobs ahead, and expires plans after 2 minutes; Worker reserves a
+  20 GiB prefetch byte budget. The existing FutureAssetPlan + singleflight
+  resolver makes the next job a cache hit when the plan completes in time.
+- Remaining evidence only: run the v17 canary with the hot set, then require
+  `cache_miss_bytes=0`, `downloaded_during_attempt=0`, and
+  `duplicate_download_bytes=0` in inspect JSON. The repository certification
+  tests already cover cold/warm/prefetch origin classification.
 - Dedupe the 25-requests-for-12-assets waste (singleflight per cache key;
   `duplicate_download_bytes` column already exists to prove it).
 - **Evidence:** 0 miss on fresh worker after warm; duplicate_download_bytes → 0.
