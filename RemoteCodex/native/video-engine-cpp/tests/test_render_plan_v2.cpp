@@ -202,7 +202,25 @@ void testParserUnit(const fs::path& clipA, const fs::path& clipB,
                "canonical asset/profile binding reaches the video input hint");
         expect(certified->audio_tracks.size() == 1 &&
                    certified->audio_tracks[0].metadata_certified,
-               "canonical final-audio binding reaches the audio input hint");
+                   "canonical final-audio binding reaches the audio input hint");
+    }
+
+    std::string fmp4Document = certifiedV2Envelope(clipA.string(), audio.string());
+    const std::string progressiveProfile = "VELOX_ASSEMBLY_READY_V1";
+    const std::string fmp4Profile = "velox-h264-fmp4-stream-v1";
+    const auto profileOffset = fmp4Document.find(progressiveProfile);
+    expect(profileOffset != std::string::npos,
+           "certified fixture contains the progressive profile identity");
+    if (profileOffset != std::string::npos) {
+        fmp4Document.replace(profileOffset, progressiveProfile.size(), fmp4Profile);
+    }
+    const auto fmp4 = parseRenderPlan(fmp4Document);
+    expect(fmp4.has_value(), "fMP4 profile resolves in the native V2 parser");
+    if (fmp4.has_value()) {
+        expect(fmp4->output_profile_id == fmp4Profile,
+               "native plan preserves the fMP4 output profile identity");
+        expect(fmp4->timeline[0].metadata_certified,
+               "fMP4 output still certifies a progressive-profile source asset");
     }
 
     std::cerr << "── parser unit: float seconds rejected in V2 ──\n";

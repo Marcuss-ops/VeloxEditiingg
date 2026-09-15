@@ -212,16 +212,6 @@ func validateCopyOnlyProfile(plan *contract.CompiledRenderPlanV2) (contract.Cano
 	if err != nil {
 		return contract.CanonicalVideoProfileV1{}, fmt.Errorf("%w: %v", ErrCopyOnlyProfileMismatch, err)
 	}
-	// Fail closed on the fragmented-MP4 streaming profile: the native mux only
-	// emits progressive MP4 today, so admitting a fragmented-layout profile
-	// would certify an output whose container layout does not match the
-	// profile identity (and whose progressive-upload guarantees would be a
-	// lie). The profile is registered-but-DISABLED; when the 100-job
-	// benchmark confirms the gains, this guard is replaced by real fragmented
-	// output from the engine mux (never by silently writing progressive MP4).
-	if profile.ContainerLayout == contract.ContainerLayoutFragmented {
-		return contract.CanonicalVideoProfileV1{}, fmt.Errorf("%w: profile %q requires fragmented (fMP4) output which the native mux does not produce yet", ErrCopyOnlyProfileMismatch, profile.ProfileID)
-	}
 	if err := profile.MatchesOutput(plan.Output); err != nil {
 		return contract.CanonicalVideoProfileV1{}, fmt.Errorf("%w: %v", ErrCopyOnlyProfileMismatch, err)
 	}
@@ -239,7 +229,7 @@ func validateCopyOnlySegment(plan *contract.CompiledRenderPlanV2, profile contra
 	if !ok || (asset.Kind != "video" && asset.Kind != "prepared_video_fragment") {
 		return fmt.Errorf("%w: segment %q does not reference a prepared video asset", ErrCopyOnlyCertification, segment.SegmentID)
 	}
-	if asset.SHA256 != segment.SHA256 || asset.ProfileID != profile.ProfileID || asset.FrameCount != segment.FrameCount || asset.TimelineRevision != plan.TimelineRevision || asset.TimelineSHA256 != plan.TimelineSHA256 || asset.TimelineStartFrame != segment.TimelineStartFrame || asset.DurationUS != segment.SourceDurationUS || !asset.FirstFrameKeyframe || !asset.ClosedGOP || segment.SourceInUS != 0 {
+	if asset.SHA256 != segment.SHA256 || asset.ProfileID != profile.StreamProfile() || asset.FrameCount != segment.FrameCount || asset.TimelineRevision != plan.TimelineRevision || asset.TimelineSHA256 != plan.TimelineSHA256 || asset.TimelineStartFrame != segment.TimelineStartFrame || asset.DurationUS != segment.SourceDurationUS || !asset.FirstFrameKeyframe || !asset.ClosedGOP || segment.SourceInUS != 0 {
 		return fmt.Errorf("%w: segment %q manifest binding is not exact", ErrCopyOnlyCertification, segment.SegmentID)
 	}
 	return nil

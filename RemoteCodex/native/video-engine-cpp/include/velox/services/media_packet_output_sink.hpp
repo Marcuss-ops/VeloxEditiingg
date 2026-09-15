@@ -15,6 +15,11 @@ extern "C" {
 
 namespace velox::media::packet {
 
+enum class PacketOutputSinkMode {
+    Seekable,
+    AppendOnly,
+};
+
 struct PacketOutputSinkResult {
     std::string sha256;
     bool sha256_valid{false};
@@ -45,7 +50,8 @@ public:
     PacketOutputSink(const PacketOutputSink&) = delete;
     PacketOutputSink& operator=(const PacketOutputSink&) = delete;
 
-    bool open(const std::filesystem::path& path, std::string& error);
+    bool open(const std::filesystem::path& path, std::string& error,
+              PacketOutputSinkMode mode = PacketOutputSinkMode::Seekable);
     AVIOContext* avio() const { return avio_; }
     bool finalize(PacketOutputSinkResult& result, std::string& error);
     void close();
@@ -73,6 +79,7 @@ private:
     int64_t high_watermark_{0};
     int64_t hashed_until_{0};
     bool append_only_{true};
+    PacketOutputSinkMode mode_{PacketOutputSinkMode::Seekable};
     int64_t backward_seek_count_{0};
     int64_t backward_seek_bytes_{0};
     bool finalized_{false};

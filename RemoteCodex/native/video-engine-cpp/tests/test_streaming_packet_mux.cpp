@@ -71,6 +71,56 @@ int main() {
         checkStreams(inspected, result, "video-only");
     }
 
+    // --- fragmented output is append-only ---------------------------------
+    {
+        const fs::path output = root / "video-only-fragmented.mp4";
+        velox::media::CopyOnlyMuxRequest request;
+        request.video_segments = {{video, 0, 800'000}, {video, 0, 800'000}};
+        request.output_path = output;
+        request.layout = velox::core::Mp4Layout::Fragmented;
+        request.compute_sha256 = true;
+        std::vector<int64_t> safeOffsets;
+        request.write_progress_callback = [&](const fs::path&, int64_t bytes) {
+            safeOffsets.push_back(bytes);
+        };
+        velox::media::CopyOnlyMuxResult result;
+        expect(velox::media::muxCopyOnly(request, &result),
+               "fragmented video-only mux succeeds");
+        checkOutput(output, result, "fragmented video-only");
+        expect(result.backward_seek_count == 0 && result.backward_seek_bytes == 0,
+               "fragmented output performs no backward seeks");
+        expect(result.sha256_valid,
+               "fragmented output retains a valid incremental SHA");
+        expect(!safeOffsets.empty() && safeOffsets.front() > 0,
+               "fragmented progress exposes a safe prefix during the mux");
+        for (size_t i = 1; i < safeOffsets.size(); ++i) {
+            expect(safeOffsets[i - 1] <= safeOffsets[i],
+                   "fragmented safe offsets are monotonic");
+        }
+        const std::string bytes = velox::file::readFile(output.string());
+        expect(bytes.find("moof") != std::string::npos,
+               "fragmented output contains a moof fragment");
+    }
+
+    // The final-audio copy path must use the same append-only contract.
+    {
+        const fs::path output = root / "voiceover-fragmented.mp4";
+        velox::media::CopyOnlyMuxRequest request;
+        request.video_segments = {{video, 0, 800'000}, {video, 0, 800'000}};
+        request.audio = velox::media::CopyOnlyAudioTrack{audio, 0, 1'600'000};
+        request.output_path = output;
+        request.layout = velox::core::Mp4Layout::Fragmented;
+        request.compute_sha256 = true;
+        velox::media::CopyOnlyMuxResult result;
+        expect(velox::media::muxCopyOnly(request, &result),
+               "fragmented video+audio mux succeeds");
+        checkOutput(output, result, "fragmented video+audio");
+        expect(result.backward_seek_count == 0 && result.backward_seek_bytes == 0,
+               "fragmented video+audio performs no backward seeks");
+        expect(result.audio_packets > 0,
+               "fragmented video+audio writes final audio packets");
+    }
+
     // --- write progress callback fires with .partial path ------------------
     {
         const fs::path output = root / "progress-callback.mp4";

@@ -1,5 +1,6 @@
 #include "render_plan_parser_internal.hpp"
 #include "json_utils.hpp"
+#include "velox/core/canonical_video_profile.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -28,25 +29,27 @@ struct CertifiedAsset {
     bool closed_gop{false};
 };
 
-bool canonicalPacketCopyOutput(const std::string& output) {
-    return ju::extractJsonStringValue(output, "container") == "mp4" &&
-        ju::extractJsonStringValue(output, "video_codec") == "h264" &&
-        ju::extractJsonNumberValue(output, "width") == 1920 &&
-        ju::extractJsonNumberValue(output, "height") == 1080 &&
-        ju::extractJsonNumberValue(output, "fps_num") == 24 &&
-        ju::extractJsonNumberValue(output, "fps_den") == 1 &&
-        ju::extractJsonStringValue(output, "pixel_format") == "yuv420p" &&
-        ju::extractJsonStringValue(output, "profile_id") == "VELOX_ASSEMBLY_READY_V1" &&
-        ju::extractJsonStringValue(output, "codec_profile") == "high" &&
-        ju::extractJsonStringValue(output, "codec_level") == "4.0" &&
+bool canonicalPacketCopyOutput(
+    const std::string& output,
+    const velox::core::CanonicalVideoProfile& profile) {
+    return ju::extractJsonStringValue(output, "container") == profile.container &&
+        ju::extractJsonStringValue(output, "video_codec") == profile.stream_codec &&
+        ju::extractJsonNumberValue(output, "width") == profile.width &&
+        ju::extractJsonNumberValue(output, "height") == profile.height &&
+        ju::extractJsonNumberValue(output, "fps_num") == profile.fps_num &&
+        ju::extractJsonNumberValue(output, "fps_den") == profile.fps_den &&
+        ju::extractJsonStringValue(output, "pixel_format") == profile.pixel_format_name &&
+        ju::extractJsonStringValue(output, "profile_id") == profile.profile_id &&
+        ju::extractJsonStringValue(output, "codec_profile") == profile.codec_profile_name &&
+        ju::extractJsonStringValue(output, "codec_level") == profile.codec_level_name &&
         ju::hasJsonKey(output, "gop_size") &&
-        ju::extractJsonNumberValue(output, "gop_size") == 48 &&
+        ju::extractJsonNumberValue(output, "gop_size") == profile.gop_size &&
         ju::hasJsonKey(output, "b_frames") &&
-        ju::extractJsonNumberValue(output, "b_frames") == 0 &&
+        ju::extractJsonNumberValue(output, "b_frames") == profile.max_b_frames &&
         ju::hasJsonKey(output, "closed_gop") &&
         ju::extractJsonBoolValue(output, "closed_gop") &&
-        ju::extractJsonNumberValue(output, "time_base_num") == 1 &&
-        ju::extractJsonNumberValue(output, "time_base_den") == 90000;
+        ju::extractJsonNumberValue(output, "time_base_num") == profile.time_base_num &&
+        ju::extractJsonNumberValue(output, "time_base_den") == profile.time_base_den;
 }
 
 std::vector<CertifiedAsset> parseAssetCertificates(const std::string& json) {
@@ -86,6 +89,7 @@ const CertifiedAsset* findAsset(const std::vector<CertifiedAsset>& assets,
 }
 
 bool certifiedVideoAsset(const CertifiedAsset* asset,
+                         const std::string& stream_profile_id,
                          const std::string& segment_sha256,
                          const std::string& timeline_sha256,
                          int64_t timeline_revision,
@@ -96,7 +100,7 @@ bool certifiedVideoAsset(const CertifiedAsset* asset,
     return asset != nullptr &&
         (asset->kind == "video" || asset->kind == "prepared_video_fragment") &&
         asset->sha256 == segment_sha256 &&
-        asset->profile_id == "VELOX_ASSEMBLY_READY_V1" &&
+        asset->profile_id == stream_profile_id &&
         asset->frame_count == frame_count &&
         asset->timeline_revision == timeline_revision &&
         asset->timeline_sha256 == timeline_sha256 &&
@@ -133,7 +137,25 @@ std::optional<RenderPlan> parseRenderPlanV2(
         return std::nullopt;
     }
 
-    const bool canonical_output = canonicalPacketCopyOutput(outputBlock);
+    const std::string output_profile_id = ju::extractJsonStringValue(
+        outputBlock, "profile_id");
+    std::optional<velox::core::CanonicalVideoProfile> output_profile;
+    if (!output_profile_id.empty()) {
+        std::string profile_error;
+        output_profile = velox::core::resolveCanonicalVideoProfile(
+            output_profile_id, profile_error);
+        if (!output_profile) {
+            std::cerr << "errore: " << profile_error << "\n";
+            return std::nullopt;
+        }
+        if (!canonicalPacketCopyOutput(outputBlock, *output_profile)) {
+            std::cerr << "errore: output fields do not match canonical video profile \""
+                      << output_profile_id << "\"\n";
+            return std::nullopt;
+        }
+        plan.output_profile_id = output_profile->profile_id;
+    }
+    const bool canonical_output = output_profile.has_value();
     const std::string timeline_sha256 = ju::extractJsonStringValue(
         jsonStr, "timeline_sha256");
     const int64_t timeline_revision = static_cast<int64_t>(
@@ -263,6 +285,8 @@ std::optional<RenderPlan> parseRenderPlanV2(
             !timeline_sha256.empty() && ju::hasJsonKey(segmentStr, "sha256") &&
             certifiedVideoAsset(
             findAsset(certified_assets, assetId),
+            output_profile ? output_profile->stream_profile_id
+                           : velox::core::canonicalVideoProfileV1().profile_id,
             ju::extractJsonStringValue(segmentStr, "sha256"), timeline_sha256,
             timeline_revision, item.timeline_start_frame, item.frame_count,
             item.source_duration_us, item.source_in_us);

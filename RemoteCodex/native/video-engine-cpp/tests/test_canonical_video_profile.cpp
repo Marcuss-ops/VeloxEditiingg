@@ -18,7 +18,9 @@ void expect(bool condition, const std::string& message) {
 
 int main() {
     using velox::core::canonicalVideoProfileV1;
+    using velox::core::canonicalVideoProfileFmp4StreamV1;
     using velox::core::mediaSignatureFromCanonicalProfile;
+    using velox::core::resolveCanonicalVideoProfile;
     using velox::media::SegmentExecutionMode;
 
     const auto& profile = canonicalVideoProfileV1();
@@ -36,6 +38,18 @@ int main() {
     expect(profile.preset == "medium", "V1 profile uses the medium preset");
     expect(profile.crf == 23, "V1 profile pins CRF 23");
     expect(profile.version == 1, "V1 profile carries version 1");
+
+    const auto& fmp4 = canonicalVideoProfileFmp4StreamV1();
+    expect(fmp4.layout == velox::core::Mp4Layout::Fragmented,
+           "fMP4 profile selects fragmented layout");
+    expect(fmp4.stream_profile_id == profile.profile_id,
+           "fMP4 profile retains the progressive source stream identity");
+    std::string profileError;
+    const auto resolved = resolveCanonicalVideoProfile(fmp4.profile_id, profileError);
+    expect(resolved.has_value() && resolved->layout == velox::core::Mp4Layout::Fragmented,
+           "profile resolver returns the fMP4 profile");
+    expect(!resolveCanonicalVideoProfile("unknown-profile", profileError).has_value(),
+           "profile resolver rejects unknown profiles");
 
     const auto signature = mediaSignatureFromCanonicalProfile(profile);
     expect(signature.kind == velox::media::MediaKind::Video,

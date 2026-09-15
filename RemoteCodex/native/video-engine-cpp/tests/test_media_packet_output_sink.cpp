@@ -269,6 +269,31 @@ void testMultipleBackwardSeeksAccumulate() {
     std::error_code ec;
     fs::remove(path, ec);
 }
+
+void testAppendOnlyRejectsBackwardSeek() {
+    const fs::path path = uniquePath();
+    velox::media::packet::PacketOutputSink sink;
+    std::string error;
+    expect(sink.open(path, error, velox::media::packet::PacketOutputSinkMode::AppendOnly),
+           "append-only enforcement sink opens: " + error);
+    auto* avio = sink.avio();
+    expect(avio != nullptr, "append-only enforcement exposes AVIO context");
+    if (avio != nullptr) {
+        expect(avio->seekable == 0, "append-only enforcement disables AVIO seeking");
+        const std::string payload = "append-only enforcement";
+        avio_write(avio, reinterpret_cast<const unsigned char*>(payload.data()),
+                   static_cast<int>(payload.size()));
+        avio_flush(avio);
+        expect(avio_seek(avio, 0, SEEK_SET) < 0,
+               "append-only enforcement rejects backward seek");
+    }
+    velox::media::packet::PacketOutputSinkResult result;
+    expect(sink.finalize(result, error), "append-only enforcement finalizes: " + error);
+    expect(!result.backward_seek_seen && result.backward_seek_count == 0,
+           "non-seekable AVIO rejects the seek before the sink write path");
+    sink.close();
+    removePath(path);
+}
 } // namespace
 
 // DurabilityEvidence test: finalize() sets file_data_synced=true, and
@@ -338,6 +363,7 @@ int main() {
     testAppendOnlySHA();
     testBackwardSeekInvalidatesSHA();
     testMultipleBackwardSeeksAccumulate();
+    testAppendOnlyRejectsBackwardSeek();
     testDurabilityEvidenceSkipsRedundantFsync();
     std::cerr << "summary: fail=" << failures << "\n";
     return failures == 0 ? 0 : 1;

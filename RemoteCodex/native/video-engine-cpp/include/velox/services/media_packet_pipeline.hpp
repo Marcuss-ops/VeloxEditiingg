@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "velox/core/canonical_video_profile.hpp"
 #include "velox/services/file_utils.hpp"
 #include "velox/services/media_utils.hpp"
 #include "velox/services/segment_execution.hpp"
@@ -53,6 +54,10 @@ struct CopyOnlyMuxRequest {
     // Mixed renders pin this to the canonical profile. Plain V2 copy-only
     // plans leave it unset and use the first input's concrete profile.
     std::optional<MediaSignature> target_video_signature;
+    // The stream profile is independent from the final MP4 byte layout.
+    // Progressive is the legacy default; fragmented enables append-only
+    // fMP4 output.
+    core::Mp4Layout layout{core::Mp4Layout::Progressive};
     std::filesystem::path output_path;
     // The worker computes the authoritative artifact manifest after render,
     // so packet-copy assembly skips a duplicate full-file hash by default.

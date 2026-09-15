@@ -35,7 +35,8 @@ constexpr auto kProgressEmitMinInterval = std::chrono::milliseconds(250);
 
 PacketOutputSink::~PacketOutputSink() { close(); }
 
-bool PacketOutputSink::open(const std::filesystem::path& path, std::string& error) {
+bool PacketOutputSink::open(const std::filesystem::path& path, std::string& error,
+                            PacketOutputSinkMode mode) {
     close();
     if (path.empty()) {
         error = "packet output sink requires a path";
@@ -47,6 +48,7 @@ bool PacketOutputSink::open(const std::filesystem::path& path, std::string& erro
         return false;
     }
     path_ = path;
+    mode_ = mode;
     if (compute_sha256_) {
         AVHashContext* hash = nullptr;
         if (av_hash_alloc(&hash, "sha256") < 0 || hash == nullptr) {
@@ -57,16 +59,20 @@ bool PacketOutputSink::open(const std::filesystem::path& path, std::string& erro
         sha_ = hash;
         av_hash_init(static_cast<AVHashContext*>(sha_));
     }
+    using SeekCallback = int64_t (*)(void*, int64_t, int);
+    const SeekCallback seekCallback = mode_ == PacketOutputSinkMode::AppendOnly
+        ? nullptr : &PacketOutputSink::seekCallback;
     avio_ = avio_alloc_context(
         static_cast<unsigned char*>(av_malloc(kBufferSize)), kBufferSize, 1,
         this, nullptr, &PacketOutputSink::writeCallback,
-        &PacketOutputSink::seekCallback);
+        seekCallback);
     if (avio_ == nullptr) {
         error = "avio_alloc_context failed";
         close();
         return false;
     }
-    avio_->seekable = AVIO_SEEKABLE_NORMAL;
+    avio_->seekable = mode_ == PacketOutputSinkMode::AppendOnly
+        ? 0 : AVIO_SEEKABLE_NORMAL;
     // The production packet-copy path disables the duplicate hash and can
     // safely let AVIO coalesce small writes. Hash-enabled standalone callers
     // retain direct mode because exact backward-seek telemetry depends on the
@@ -134,6 +140,17 @@ int64_t PacketOutputSink::seekCallback(void* opaque, int64_t offset, int whence)
     else return AVERROR(EINVAL);
     if (next < 0) return AVERROR(EINVAL);
     if (next < sink.position_) {
+        if (sink.mode_ == PacketOutputSinkMode::AppendOnly) {
+            // Fragmented MP4 is certified only when the underlying sink
+            // makes rewrites impossible. Count the attempted violation for
+            // diagnostics, then fail the AVIO operation closed.
+            sink.backward_seek_seen_ = true;
+            sink.append_only_ = false;
+            ++sink.backward_seek_count_;
+            sink.backward_seek_bytes_ += sink.position_ - next;
+            services::recordOutputBackwardSeek(sink.position_ - next);
+            return AVERROR(ESPIPE);
+        }
         // Once hashing is invalidated, keep reporting the rewind against the
         // last hashed prefix for compatibility with the sink's historical
         // telemetry contract; otherwise use the current logical position.
@@ -214,6 +231,7 @@ void PacketOutputSink::close() {
     high_watermark_ = 0;
     hashed_until_ = 0;
     append_only_ = true;
+    mode_ = PacketOutputSinkMode::Seekable;
     backward_seek_seen_ = false;
     backward_seek_count_ = 0;
     backward_seek_bytes_ = 0;

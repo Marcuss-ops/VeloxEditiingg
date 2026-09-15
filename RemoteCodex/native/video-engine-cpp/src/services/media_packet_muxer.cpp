@@ -21,6 +21,7 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/avutil.h>
+#include <libavutil/dict.h>
 }
 
 namespace fs = std::filesystem;
@@ -393,17 +394,28 @@ bool writeStreamingOutput(UniqueOutputContext& output, const PreparedCopyMuxPlan
                           const fs::path& partial, const fs::path& target,
                           CopyOnlyMuxResult* result, std::string& error,
                           bool compute_sha256,
+                          core::Mp4Layout layout,
                           packet::WriteProgressCallback progressCallback = nullptr) {
     packet::PacketOutputSink sink;
     if ((output->oformat->flags & AVFMT_NOFILE) == 0) {
         sink.setComputeSHA256(compute_sha256);
-        if (!sink.open(partial, error)) return fail(result, error);
+        const auto sinkMode = layout == core::Mp4Layout::Fragmented
+            ? packet::PacketOutputSinkMode::AppendOnly
+            : packet::PacketOutputSinkMode::Seekable;
+        if (!sink.open(partial, error, sinkMode)) return fail(result, error);
         if (progressCallback) sink.setWriteProgressCallback(std::move(progressCallback));
         output->pb = sink.avio();
         output->flags |= AVFMT_FLAG_CUSTOM_IO;
     }
-    if (avformat_write_header(output.get(), nullptr) < 0) {
-        return fail(result, "avformat_write_header failed");
+    AVDictionary* muxOptions = nullptr;
+    if (layout == core::Mp4Layout::Fragmented) {
+        av_dict_set(&muxOptions, "movflags",
+                    "+frag_keyframe+empty_moov+default_base_moof", 0);
+    }
+    const int headerRc = avformat_write_header(output.get(), &muxOptions);
+    av_dict_free(&muxOptions);
+    if (headerRc < 0) {
+        return fail(result, "avformat_write_header: " + packet::ffmpegError(headerRc));
     }
     Writer writer{
         .output = output.get(),
@@ -582,6 +594,7 @@ bool runCopyOnlyMux(const CopyOnlyMuxRequest& request, CopyOnlyMuxResult* result
     result->duration_us = plan.expected_duration_us;
     if (!writeStreamingOutput(output, plan, partial, request.output_path, result, error,
                               request.compute_sha256,
+                              request.layout,
                               request.write_progress_callback)) {
         cleanup();
         return false;

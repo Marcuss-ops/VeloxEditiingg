@@ -33,6 +33,16 @@ namespace {
     using render_detail::reportProgress;
 
     using velox::json::escapeJsonString;
+
+    bool resolvePlanOutputProfile(
+        const plan::RenderPlan& plan,
+        std::optional<CanonicalVideoProfile>& profile,
+        std::string& error) {
+        profile.reset();
+        if (plan.output_profile_id.empty()) return true;
+        profile = resolveCanonicalVideoProfile(plan.output_profile_id, error);
+        return profile.has_value();
+    }
 }
 
 #ifdef VELOX_ENABLE_LIBAV
@@ -55,18 +65,33 @@ RenderResult RenderEngine::renderCopyOnly(
 
     media::CopyOnlyMuxRequest request;
     request.output_path = outPath;
+    std::optional<CanonicalVideoProfile> outputProfile;
+    std::string outputProfileError;
+    if (!resolvePlanOutputProfile(plan, outputProfile, outputProfileError)) {
+        result.error = outputProfileError;
+        return failRender("output_profile_invalid");
+    }
+    if (outputProfile) {
+        request.layout = outputProfile->layout;
+        request.target_video_signature =
+            mediaSignatureFromCanonicalProfile(*outputProfile);
+    }
     request.compute_sha256 = false;
     // Emit progressive-safe byte ranges during the mux so the Go upload
     // can start before the mux finishes.  The partial path is reported
     // because that is where the sink writes; the Go side opens it and
     // continues reading after publishAtomic renames it.
-    request.write_progress_callback = [this](const fs::path& path, int64_t bytes_written) {
+    const bool appendOnlyOutput = request.layout == Mp4Layout::Fragmented;
+    request.write_progress_callback = [this, appendOnlyOutput](
+        const fs::path& path, int64_t bytes_written) {
         // The mux writes to the .partial path; report that path so the
         // Go progressive upload can open it before publishAtomic renames.
         // The legacy progressive MP4 muxer can seek backward to rewrite its
         // moov/header. Until the trailer is published, no prefix is safe for
         // the growing-file uploader even though the high watermark advances.
-        reportArtifactWriteProgress("final_video", path, bytes_written, 0, false);
+        reportArtifactWriteProgress(
+            "final_video", path, bytes_written,
+            appendOnlyOutput ? bytes_written : 0, false);
     };
     request.video_segments.reserve(plan.timeline.size());
     double total_copy_duration = 0.0;
@@ -424,12 +449,26 @@ RenderResult RenderEngine::renderMixed(
     mixedAdmissionProfile.level = -1;
     media::CopyOnlyMuxRequest request;
     request.output_path = outPath;
+    std::optional<CanonicalVideoProfile> outputProfile;
+    std::string outputProfileError;
+    if (!resolvePlanOutputProfile(plan, outputProfile, outputProfileError)) {
+        result.error = outputProfileError;
+        return failRender("output_profile_invalid");
+    }
+    if (outputProfile) request.layout = outputProfile->layout;
     request.video_segments.reserve(plan.timeline.size());
 
     int64_t total_duration_us = 0;
     int64_t packet_copy_segments = 0;
     int64_t rejected_segments = 0;
     request.target_video_signature = mixedAdmissionProfile;
+    const bool appendOnlyOutput = request.layout == Mp4Layout::Fragmented;
+    request.write_progress_callback = [this, appendOnlyOutput](
+        const fs::path& path, int64_t bytes_written) {
+        reportArtifactWriteProgress(
+            "final_video", path, bytes_written,
+            appendOnlyOutput ? bytes_written : 0, false);
+    };
     for (std::size_t i = 0; i < plan.timeline.size(); ++i) {
         const auto& item = plan.timeline[i];
         if (!std::holds_alternative<plan::VideoSource>(item.source)) {

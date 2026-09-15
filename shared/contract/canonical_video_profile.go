@@ -16,6 +16,10 @@ const CanonicalVideoProfileVersionV1 = 1
 // implementation, but they must publish this exact stream contract.
 type CanonicalVideoProfileV1 struct {
 	ProfileID string `json:"profile_id"`
+	// StreamProfileID identifies the encoded H.264 stream carried by prepared
+	// source assets. A final output profile may change only the MP4 container
+	// layout while retaining this source stream identity.
+	StreamProfileID string `json:"-"`
 
 	Container string `json:"container"`
 	Codec     string `json:"codec"`
@@ -54,7 +58,7 @@ const CanonicalVideoProfileIDV1 = "VELOX_ASSEMBLY_READY_V1"
 
 // CanonicalVideoProfileV1Default is the first profile admitted by Velox.
 var CanonicalVideoProfileV1Default = CanonicalVideoProfileV1{
-	ProfileID: CanonicalVideoProfileIDV1,
+	ProfileID: CanonicalVideoProfileIDV1, StreamProfileID: CanonicalVideoProfileIDV1,
 	Container: "mp4", Codec: "h264", Width: 1920, Height: 1080,
 	FPSNum: 24, FPSDen: 1, PixelFormat: "yuv420p",
 	CodecProfile: "high", CodecLevel: "4.0", GOPSize: 48,
@@ -89,13 +93,23 @@ const (
 // container layout — that difference is what makes the byte stream
 // append-only and unlocks progressive upload.
 var CanonicalVideoProfileFMP4StreamV1Default = CanonicalVideoProfileV1{
-	ProfileID: CanonicalVideoProfileFMP4StreamV1,
+	ProfileID: CanonicalVideoProfileFMP4StreamV1, StreamProfileID: CanonicalVideoProfileIDV1,
 	Container: "mp4", Codec: "h264", Width: 1920, Height: 1080,
 	FPSNum: 24, FPSDen: 1, PixelFormat: "yuv420p",
 	CodecProfile: "high", CodecLevel: "4.0", GOPSize: 48,
 	BFrames: 0, ClosedGOP: true, TimeBaseNum: 1, TimeBaseDen: 90000,
 	ContainerLayout: ContainerLayoutFragmented,
 	Version:         CanonicalVideoProfileVersionV1,
+}
+
+// StreamProfile returns the profile identity expected on prepared source
+// assets. Legacy/custom literals that omit StreamProfileID retain the
+// canonical stream identity by default.
+func (p CanonicalVideoProfileV1) StreamProfile() string {
+	if strings.TrimSpace(p.StreamProfileID) != "" {
+		return p.StreamProfileID
+	}
+	return CanonicalVideoProfileIDV1
 }
 
 // FMP4StreamProfileEnabled reports whether the fragmented-MP4 streaming

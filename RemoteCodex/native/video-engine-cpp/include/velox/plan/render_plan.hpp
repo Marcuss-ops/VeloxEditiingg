@@ -4,6 +4,8 @@
 #include <variant>
 #include <optional>
 
+#include "velox/core/canonical_video_profile.hpp"
+
 namespace velox::plan {
 
 struct ImageSource {
@@ -97,6 +99,9 @@ struct RenderPlan {
     // packet-copy compatible up front; mixed resolves per-segment against
     // the canonical profile at render time.
     bool mixed{false};
+    // Output profile identity. The final mux derives its container layout
+    // from this ID; source assets keep their stream profile identity.
+    std::string output_profile_id;
     std::vector<TimelineItem> timeline;
     std::vector<AudioTrack> audio_tracks;
     std::string output_path;
