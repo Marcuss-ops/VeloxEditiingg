@@ -14,8 +14,10 @@
 #include <functional>
 #include <iostream>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -283,31 +285,108 @@ bool RenderEngine::resolveMixedFinalAudio(
     if (plan.audio_tracks.empty()) {
         return true;
     }
-    const auto& track = plan.audio_tracks.front();
-    if (track.loop || track.volume != 1.0 || track.start_time_offset < 0.0) {
-        error_code = "mixed_audio_transform_unsupported";
-        result.error = "mixed render final audio requires finite, neutral-volume audio";
-        return false;
+    double timeline_duration = 0.0;
+    for (const auto& item : plan.timeline) {
+        timeline_duration += item.duration_us > 0
+            ? static_cast<double>(item.duration_us) / 1'000'000.0
+            : item.duration_seconds;
     }
+
     const fs::path local_audio = workDir / "mixed_final_audio.m4a";
-    if (!file::downloadAsset(track.source_url, local_audio)) {
-        error_code = "mixed_audio_download_failed";
-        result.error = "failed to resolve mixed audio track";
-        return false;
+    if (plan.audio_tracks.size() == 1) {
+        const auto& track = plan.audio_tracks.front();
+        if (track.loop || track.volume != 1.0 || track.start_time_offset < 0.0) {
+            error_code = "mixed_audio_transform_unsupported";
+            result.error = "mixed render final audio requires finite, neutral-volume audio";
+            return false;
+        }
+        if (!file::downloadAsset(track.source_url, local_audio)) {
+            error_code = "mixed_audio_download_failed";
+            result.error = "failed to resolve mixed audio track";
+            return false;
+        }
+    } else {
+        // The packet mux accepts one FINAL_AUDIO_COPY input. Scene timelines
+        // can legitimately have several timed sources (for example intro
+        // clip audio followed by narration), so prepare that one final track
+        // once here. This is the only audio encode in the mixed path; video
+        // remains packet-copied and never falls back to per-segment encoding.
+        const auto mix_start = std::chrono::steady_clock::now();
+        std::ostringstream inputs;
+        std::ostringstream filter;
+        int input_count = 0;
+        for (const auto& track : plan.audio_tracks) {
+            const fs::path input_path = workDir /
+                ("mixed_audio_input_" + std::to_string(input_count) + ".media");
+            if (!file::downloadAsset(track.source_url, input_path)) {
+                error_code = "mixed_audio_download_failed";
+                result.error = "failed to resolve mixed audio track " +
+                    std::to_string(input_count);
+                return false;
+            }
+            if (track.loop) inputs << " -stream_loop -1";
+            inputs << " -i " << file::shellQuote(input_path.string());
+            if (input_count > 0) filter << ";";
+            filter << "[" << input_count << ":a:0]";
+            if (track.duration_seconds > 0.0) {
+                filter << "atrim=duration=" << track.duration_seconds
+                       << ",asetpts=PTS-STARTPTS,";
+            }
+            filter << "volume=" << track.volume;
+            if (track.start_time_offset > 0.0) {
+                const auto delay_ms = static_cast<int>(std::llround(
+                    track.start_time_offset * 1000.0));
+                filter << ",adelay=" << delay_ms << "|" << delay_ms;
+            }
+            filter << "[a" << input_count << "]";
+            ++input_count;
+        }
+        filter << ";";
+        for (int index = 0; index < input_count; ++index) {
+            filter << "[a" << index << "]";
+        }
+        filter << "amix=inputs=" << input_count
+               << ":duration=longest:dropout_transition=0[aout]";
+
+        std::ostringstream command;
+        command << "ffmpeg -y -hide_banner -loglevel error"
+                << inputs.str()
+                << " -filter_complex " << file::shellQuote(filter.str())
+                << " -map " << file::shellQuote("[aout]")
+                << " -t " << timeline_duration
+                << " -c:a aac -b:a 192k "
+                << file::shellQuote(local_audio.string());
+        const auto profile = file::runCommandTimed(command.str());
+        metrics_.addMs("mixed_audio_encode_ms", profile.wall_ms);
+        if (!profile.ok) {
+            error_code = "mixed_audio_mix_failed";
+            result.error = "failed to mix final audio tracks";
+            return false;
+        }
+        metrics_.addMs("mixed_audio_prepare_ms",
+                       std::chrono::duration<double, std::milli>(
+                           std::chrono::steady_clock::now() - mix_start).count());
     }
-    const int64_t declared_audio_duration = track.duration_us > 0
-        ? track.duration_us
-        : (track.duration_seconds > 0.0
-               ? static_cast<int64_t>(
-                     std::llround(track.duration_seconds * 1'000'000.0))
-               : 0);
-    request.audio = media::CopyOnlyAudioTrack{
-        local_audio,
-        track.start_offset_us > 0
-            ? track.start_offset_us
-            : static_cast<int64_t>(
-                  std::llround(track.start_time_offset * 1'000'000.0)),
-        declared_audio_duration, track.metadata_certified};
+    if (plan.audio_tracks.size() == 1) {
+        const auto& track = plan.audio_tracks.front();
+        const int64_t declared_audio_duration = track.duration_us > 0
+            ? track.duration_us
+            : (track.duration_seconds > 0.0
+                   ? static_cast<int64_t>(
+                         std::llround(track.duration_seconds * 1'000'000.0))
+                   : 0);
+        request.audio = media::CopyOnlyAudioTrack{
+            local_audio,
+            track.start_offset_us > 0
+                ? track.start_offset_us
+                : static_cast<int64_t>(
+                      std::llround(track.start_time_offset * 1'000'000.0)),
+            declared_audio_duration, track.metadata_certified};
+    } else {
+        request.audio = media::CopyOnlyAudioTrack{
+            local_audio, 0,
+            static_cast<int64_t>(std::llround(timeline_duration * 1'000'000.0)), false};
+    }
     return true;
 }
 
@@ -321,11 +400,6 @@ RenderResult RenderEngine::renderMixed(
         result.error = "mixed render requires at least one timeline video";
         return failRender("mixed_empty_timeline");
     }
-    if (plan.audio_tracks.size() > 1) {
-        result.error = "mixed render supports at most one final audio track";
-        return failRender("mixed_audio_mix_unsupported");
-    }
-
     const media::MediaSignature canonical =
         mediaSignatureFromCanonicalProfile(canonicalVideoProfileV1());
     media::CopyOnlyMuxRequest request;

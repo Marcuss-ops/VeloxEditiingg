@@ -6,10 +6,15 @@ package plan
 // RenderPlan is the V1 contract for video rendering.
 // All pipeline compilers produce this; the C++ engine consumes it.
 type RenderPlan struct {
-	Version                 int             `json:"version"`
-	JobID                   string          `json:"job_id"`
-	Canvas                  CanvasSpec      `json:"canvas"`
-	CopyOnly                bool            `json:"copy_only,omitempty"`
+	Version  int        `json:"version"`
+	JobID    string     `json:"job_id"`
+	Canvas   CanvasSpec `json:"canvas"`
+	CopyOnly bool       `json:"copy_only,omitempty"`
+	// Mixed selects the fail-closed packet-copy assembly path for scene
+	// timelines. Unlike CopyOnly, it resolves each source against the
+	// canonical profile at render time and rejects incompatible media rather
+	// than silently re-encoding it.
+	Mixed                   bool            `json:"mixed,omitempty"`
 	WatermarkAlreadyApplied bool            `json:"watermark_already_applied,omitempty"`
 	WatermarkRequested      bool            `json:"watermark_requested,omitempty"`
 	Timeline                []TimelineItem  `json:"timeline"`

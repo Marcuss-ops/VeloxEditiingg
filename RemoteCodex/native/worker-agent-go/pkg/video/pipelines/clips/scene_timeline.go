@@ -148,8 +148,7 @@ func compileSceneTimeline(ctx context.Context, jobID string, scenes []sceneTimel
 			stock = []sceneTimelineAsset{*scene.Clip}
 		}
 		if len(stock) > 0 {
-			ordered := shuffleStockPool(stock, jobID, sceneIndex)
-			segments, loopErr := loopStockToDuration(ordered, targetDuration, probe)
+			segments, loopErr := loopStockToDuration(stock, targetDuration, probe, jobID, sceneIndex)
 			if loopErr != nil {
 				return nil, fmt.Errorf("clips.v1: scene %d stock: %w", sceneIndex, loopErr)
 			}
@@ -229,6 +228,7 @@ func compileSceneTimeline(ctx context.Context, jobID string, scenes []sceneTimel
 		JobID:       jobID,
 		Canvas:      plan.DefaultCanvas(),
 		CopyOnly:    false,
+		Mixed:       sceneTimelineHasStock(scenes),
 		Timeline:    timeline,
 		AudioTracks: audioTracks,
 		OutputPath:  outputPath,
@@ -240,17 +240,32 @@ type stockSegment struct {
 	Duration float64
 }
 
-func loopStockToDuration(pool []sceneTimelineAsset, target float64, probe audio.Probe) ([]stockSegment, error) {
+func sceneTimelineHasStock(scenes []sceneTimelineScene) bool {
+	for _, scene := range scenes {
+		stock, _ := sceneStockPool(scene)
+		if len(stock) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func loopStockToDuration(pool []sceneTimelineAsset, target float64, probe audio.Probe, jobID string, sceneIndex int) ([]stockSegment, error) {
 	if len(pool) == 0 || target <= 0 {
 		return nil, nil
 	}
 	segments := make([]stockSegment, 0, len(pool))
 	remaining := target
+	ordered := []sceneTimelineAsset(nil)
 	for index := 0; remaining > 1e-9; index++ {
 		if index > 10000 {
 			return nil, fmt.Errorf("stock loop exceeded safety limit")
 		}
-		asset := pool[index%len(pool)]
+		cycle := index / len(pool)
+		if index%len(pool) == 0 {
+			ordered = shuffleStockPool(pool, jobID, sceneIndex, cycle)
+		}
+		asset := ordered[index%len(ordered)]
 		duration, err := resolveSceneAssetDuration(&asset, 0, probe)
 		if err != nil || duration <= 0 {
 			if err != nil {
@@ -267,13 +282,17 @@ func loopStockToDuration(pool []sceneTimelineAsset, target float64, probe audio.
 	return segments, nil
 }
 
-func shuffleStockPool(pool []sceneTimelineAsset, jobID string, sceneIndex int) []sceneTimelineAsset {
+func shuffleStockPool(pool []sceneTimelineAsset, jobID string, sceneIndex int, cycle ...int) []sceneTimelineAsset {
 	ordered := append([]sceneTimelineAsset(nil), pool...)
 	if len(ordered) < 2 {
 		return ordered
 	}
 	hash := fnv.New64a()
-	_, _ = hash.Write([]byte(fmt.Sprintf("%s:stock:%d", jobID, sceneIndex)))
+	cycleIndex := 0
+	if len(cycle) > 0 {
+		cycleIndex = cycle[0]
+	}
+	_, _ = hash.Write([]byte(fmt.Sprintf("%s:stock:%d:%d", jobID, sceneIndex, cycleIndex)))
 	rng := rand.New(rand.NewSource(int64(hash.Sum64())))
 	rng.Shuffle(len(ordered), func(i, j int) { ordered[i], ordered[j] = ordered[j], ordered[i] })
 	return ordered

@@ -63,6 +63,9 @@ func TestCompileSceneTimelineLoopsAndTrimsShortStock(t *testing.T) {
 	if got.CopyOnly {
 		t.Fatal("stock scene timeline must use the mixed renderer")
 	}
+	if !got.Mixed {
+		t.Fatal("stock scene timeline must emit mixed=true")
+	}
 	if len(got.Timeline) != 4 {
 		t.Fatalf("timeline segments = %d, want 3 stock segments plus final clip", len(got.Timeline))
 	}
@@ -139,4 +142,20 @@ func TestShuffleStockPoolIsDeterministicButJobSeeded(t *testing.T) {
 	if !different {
 		t.Fatal("different job seeds never changed stock order")
 	}
+}
+
+func TestShuffleStockPoolChangesOrderPerCycle(t *testing.T) {
+	pool := []sceneTimelineAsset{
+		{URL: "stock-a.mp4", DurationMS: 1000},
+		{URL: "stock-b.mp4", DurationMS: 1000},
+		{URL: "stock-c.mp4", DurationMS: 1000},
+	}
+	first := shuffleStockPool(pool, "job-cycle", 0, 0)
+	second := shuffleStockPool(pool, "job-cycle", 0, 1)
+	for index := range first {
+		if first[index].URL != second[index].URL {
+			return
+		}
+	}
+	t.Fatalf("cycle shuffle repeated the same order: %v", first)
 }
