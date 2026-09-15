@@ -81,6 +81,19 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
     }
 #endif
 
+    // A video timeline without an explicit packet renderer used to fall
+    // through to renderLegacyTimeline(), which silently re-encoded every
+    // segment.  That is forbidden for the current video contract: clips must
+    // arrive as copy_only or mixed plans, and incompatibility must be rejected
+    // by the packet resolver instead of reopening the 51-encode path.
+    for (const auto& item : plan.timeline) {
+        if (std::holds_alternative<plan::VideoSource>(item.source)) {
+            result.error = "video_renderer_mode_required: video timeline requires an explicit "
+                           "copy_only or mixed renderer";
+            return failRender("video_renderer_mode_required");
+        }
+    }
+
     render_detail::reportProgress(10, "resolving_assets");
     std::vector<fs::path> segmentPaths;
     segmentPaths.reserve(plan.timeline.size());

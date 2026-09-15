@@ -463,12 +463,12 @@ func TestEstimateOutputBytes(t *testing.T) {
 	}{
 		{"nil payload", nil, -1},
 		{"empty payload", map[string]interface{}{}, -1},
-		{"top-level duration_seconds", map[string]interface{}{"duration_seconds": 10.0}, int64(10 * 12_000_000 / 8 * 1.2)},
+		{"top-level duration_seconds", map[string]interface{}{"duration_seconds": 10.0}, int64(10 * 4_200_000 / 8 * 1.2)},
 		{"items durations sum", map[string]interface{}{"items": []interface{}{
 			map[string]interface{}{"duration": 4.0},
 			map[string]interface{}{"duration_seconds": 6.0},
-		}}, int64(10 * 12_000_000 / 8 * 1.2)},
-		{"scenes_json durations sum", map[string]interface{}{"scenes_json": `[{"duration_seconds":5},{"duration_seconds":3}]`}, int64(8 * 12_000_000 / 8 * 1.2)},
+		}}, int64(10 * 4_200_000 / 8 * 1.2)},
+		{"scenes_json durations sum", map[string]interface{}{"scenes_json": `[{"duration_seconds":5},{"duration_seconds":3}]`}, int64(8 * 4_200_000 / 8 * 1.2)},
 		{"unknown duration → -1", map[string]interface{}{"script_text": "no media"}, -1},
 	}
 	for _, tc := range cases {

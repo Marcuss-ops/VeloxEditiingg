@@ -82,7 +82,11 @@ std::string ffmpegRateControlArgsForCodec(const std::string& codec) {
     if (codecContains(codec, "nvenc")) return " -rc constqp -qp 23";
     if (codecContains(codec, "vaapi")) return " -qp 23";
     if (codecContains(codec, "qsv")) return " -global_quality 23";
-    return " -crf 20";
+    // Explicit transcode is a bounded compatibility path, not the packet
+    // renderer. Keep its video ceiling at 4 Mbps so image/color jobs do not
+    // reserve or write the old ~6 Mbps stream. Packet-copy/mixed plans never
+    // call this function and therefore remain bit-for-bit source-driven.
+    return " -b:v 4M -maxrate 4M -bufsize 8M";
 }
 
 void appendFfmpegVideoEncodingArgs(

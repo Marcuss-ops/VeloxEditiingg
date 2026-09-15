@@ -1,6 +1,8 @@
 package observability
 
 import (
+	"sort"
+
 	sharedtelemetry "velox-shared/telemetry"
 )
 
@@ -89,6 +91,37 @@ func BuildAttemptWaterfall(attemptID string, samples []sharedtelemetry.AttemptMi
 		dur := end - start
 		buckets = append(buckets, WaterfallBucket{Name: def.Name, StartMS: start, EndMS: end, DurationMS: dur})
 		accounted += dur
+	}
+	// Close every normal gap with an explicit UNKNOWN bucket. This makes the
+	// operator waterfall additive (named work + unclassified = wall) without
+	// fabricating a phase or changing the diagnostic unaccounted_ms value.
+	// Missing milestone boundaries remain visible in missing_milestones.
+	if wallMS > 0 && len(buckets) > 0 {
+		ordered := append([]WaterfallBucket(nil), buckets...)
+		sort.SliceStable(ordered, func(i, j int) bool {
+			return ordered[i].StartMS < ordered[j].StartMS
+		})
+		var cursor int64
+		for _, bucket := range ordered {
+			if bucket.StartMS > cursor {
+				buckets = append(buckets, WaterfallBucket{
+					Name: "unclassified", StartMS: cursor, EndMS: bucket.StartMS,
+					DurationMS: bucket.StartMS - cursor,
+				})
+			}
+			if bucket.EndMS > cursor {
+				cursor = bucket.EndMS
+			}
+		}
+		if cursor < wallMS {
+			buckets = append(buckets, WaterfallBucket{
+				Name: "unclassified", StartMS: cursor, EndMS: wallMS,
+				DurationMS: wallMS - cursor,
+			})
+		}
+		sort.SliceStable(buckets, func(i, j int) bool {
+			return buckets[i].StartMS < buckets[j].StartMS
+		})
 	}
 	// Deliberately NOT clamped: when the milestone timeline over-covers the wall
 	// (overlapping buckets, duplicate/late milestones, or worker/master clock skew

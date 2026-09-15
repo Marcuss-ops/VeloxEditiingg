@@ -271,15 +271,15 @@ func storageResolverFromExecutionContext(execCtx executor.ExecutionContext) *sto
 	return nil
 }
 
-// Estimate the final artifact size for the tmpfs reservation. Over-reserving
-// only costs a spurious NVMe fallback; under-reserving risks ENOSPC at 98%
-// of the render. We therefore use a generous composite bitrate and a 20%
-// margin. Unknown durations return -1, the resolver's "unknown size → NVMe"
-// sentinel.
+// Estimate the final artifact size for the tmpfs reservation. The explicit
+// transcode ceiling is 4 Mbps video plus a small audio/container allowance;
+// packet-copy jobs remain source-sized and are already certified before they
+// reach this reservation path. Unknown durations return -1, the resolver's
+// "unknown size → NVMe" sentinel.
 const (
-	// outputEstimateConservativeBps is the assumed video+audio composite
-	// bitrate for the reservation estimate.
-	outputEstimateConservativeBps = 12_000_000
+	// outputEstimateConservativeBps is the bounded video+audio composite
+	// bitrate for explicit transcode reservation estimates.
+	outputEstimateConservativeBps = 4_200_000
 	// outputEstimateMargin inflates the byte estimate for container/mux
 	// overhead.
 	outputEstimateMargin = 1.20

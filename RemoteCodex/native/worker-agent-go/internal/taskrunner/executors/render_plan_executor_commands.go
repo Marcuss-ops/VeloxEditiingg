@@ -395,7 +395,7 @@ func buildComposePlan(spec executor.TaskSpec, p *plan.RenderPlan, output string)
 	filter.WriteString(":v=1:a=0[vout]")
 
 	filterGraph := filter.String()
-	args := append(inputArgs(inputs), "-filter_complex", filterGraph, "-map", "[vout]", "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", strconv.Itoa(canvas.Fps), "-y", output)
+	args := append(inputArgs(inputs), "-filter_complex", filterGraph, "-map", "[vout]", "-an", "-c:v", "libx264", "-preset", "medium", "-b:v", "4M", "-maxrate", "4M", "-bufsize", "8M", "-pix_fmt", "yuv420p", "-r", strconv.Itoa(canvas.Fps), "-y", output)
 	return CommandPlan{ExecutorID: ComposeID, Inputs: sortedInputs(inputs), FilterComplex: filterGraph, Args: args, OutputPath: output, PlanSHA256: planDigest(p)}, nil
 }
 
@@ -446,7 +446,7 @@ func (e *encodeExecutor) Execute(ctx context.Context, execCtx executor.Execution
 	if subtitlePath, _ := spec.Payload["subtitle_path"].(string); strings.TrimSpace(subtitlePath) != "" {
 		args = append(args, "-vf", "ass="+subtitlePath)
 	}
-	args = append(args, "-c:v", "libx264", "-preset", "medium", "-pix_fmt", "yuv420p", "-c:a", "aac", "-ar", "48000", "-ac", "2", "-movflags", "+faststart", "-y", output)
+	args = append(args, "-c:v", "libx264", "-preset", "medium", "-b:v", "4M", "-maxrate", "4M", "-bufsize", "8M", "-pix_fmt", "yuv420p", "-c:a", "aac", "-ar", "48000", "-ac", "2", "-movflags", "+faststart", "-y", output)
 	cp := CommandPlan{ExecutorID: EncodeID, Inputs: sortedInputs(inputs), Args: args, OutputPath: output, PlanSHA256: planDigest(p)}
 	return runCommandExecutor(ctx, e.renderPlanExecutor, spec, cp, "video.output", execCtx)
 }

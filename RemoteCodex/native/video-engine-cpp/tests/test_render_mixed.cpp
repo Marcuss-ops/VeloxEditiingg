@@ -146,6 +146,7 @@ int main() {
     const fs::path rejectedOutput = root / "mixed-rejected.mp4";
     const fs::path hevcRejectedOutput = root / "mixed-hevc-rejected.mp4";
     const fs::path keyframeRejectedOutput = root / "mixed-keyframe-rejected.mp4";
+    const fs::path implicitLegacyOutput = root / "implicit-legacy-rejected.mp4";
     const auto& canonicalProfile = velox::core::canonicalVideoProfileV1();
     const int canonicalFps = canonicalProfile.fps_num / canonicalProfile.fps_den;
     expect(makeVideo(nonCanonicalClip, "1280x720", canonicalFps),
@@ -245,6 +246,19 @@ int main() {
          TransformSpec{"cover", false}, "", 0, 500000},
     };
 
+    // A video plan without an explicit packet mode must fail before the old
+    // timeline renderer can turn it into a silent full encode.
+    RenderPlan implicitLegacyPlan;
+    implicitLegacyPlan.version = 1;
+    implicitLegacyPlan.job_id = "implicit-legacy-rejected";
+    implicitLegacyPlan.canvas = {canonicalProfile.width, canonicalProfile.height,
+                                 canonicalProfile.fps_num / canonicalProfile.fps_den};
+    implicitLegacyPlan.output_path = implicitLegacyOutput.string();
+    implicitLegacyPlan.timeline = {
+        {VideoSource{canonicalClip.string(), ""}, segmentDuration, false,
+         TransformSpec{"cover", false}, ""},
+    };
+
     const char* previousPath = std::getenv("PATH");
     const bool hadPath = previousPath != nullptr;
     const std::string previousPathValue = hadPath ? previousPath : "";
@@ -258,6 +272,9 @@ int main() {
     const velox::core::RenderResult hevcRejected = hevcEngine.render(hevcPlan);
     velox::core::RenderEngine keyframeEngine;
     const velox::core::RenderResult keyframeRejected = keyframeEngine.render(keyframePlan);
+    velox::core::RenderEngine implicitLegacyEngine;
+    const velox::core::RenderResult implicitLegacyRejected =
+        implicitLegacyEngine.render(implicitLegacyPlan);
 
     if (hadPath) {
         setenv("PATH", previousPathValue.c_str(), 1);
@@ -408,6 +425,16 @@ int main() {
         expect(!leftoverPartial,
                "keyframe-mismatch mixed render cleans up its atomic partial");
     }
+
+    expect(!implicitLegacyRejected.success,
+           "video plan without an explicit packet mode fails closed");
+    expect(contains(implicitLegacyRejected.error, "video_renderer_mode_required"),
+           "implicit legacy plan reports the explicit renderer-mode error, actual=\"" +
+               implicitLegacyRejected.error + "\"");
+    expect(implicitLegacyEngine.encodePasses() == 0,
+           "implicit legacy plan runs zero encode passes");
+    expect(!fs::exists(implicitLegacyOutput),
+           "implicit legacy plan does not publish output");
 
     return failures == 0 ? 0 : 1;
 }
