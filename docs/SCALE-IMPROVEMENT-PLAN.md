@@ -27,7 +27,7 @@ Baseline evidence: jobs v14–v16 (2026-09-15), worker v1.4.31, commits
 | Drive upload | ~10 s; full delivery 13.174 s |
 | Output size | 178.142.188 B |
 | CPU per job | 8.8 s CPU over 19.8 s wall, peak ~123% of one core |
-| Known open bug | Persistence RESOLVED (`fb4cc081`: migration `173_packet_copy_metrics.sql` + canonical columns + read/write + pin test); master derives the breakdown from `segment_timings` (`applySegmentMetrics`). Residual: worker aggregates `segments_*`/`packet_copy_bytes`/`reencoded_bytes` have NO proto fields on `TaskExecutionMetrics` (only `packet_copy_ratio=64`) and are dropped on the typed path — plus reflect round-trip contract test and Master-side capability alert (W7/W9 below) |
+| Known open bug | Persistence RESOLVED (`fb4cc081`: migration `173_packet_copy_metrics.sql` + canonical columns + read/write + pin test); typed-path aggregates RESOLVED (`fa79aa7f`: proto tags 93–97, regenerated pb, worker/Master mapping, reflect contract test); runtime guard RESOLVED (`9e8989df`: `PacketCopyContractViolated`). Remaining item is v17 fleet evidence: inspect JSON 51/51 and 100%. |
 
 Per-video budget today: ~36% cold download, ~66% upload+delivery, ~0% encode.
 CPU is no longer a constraint; every remaining wall is I/O or policy.
@@ -84,8 +84,9 @@ Aggregate CPU at 100k/h: 27.8 × 8.8 s = ~245 core-seconds/s → ~336 cores acro
   (`-b:v 4M -maxrate 4M -bufsize 8M` in `video_trimmer.go`) → ~137 MB for the
   266 s output at ratio 100 (stream-copy inherits the cap). Still open: confirm
   the ladder owner accepts ~4.1 Mbps / 137 MB vs the 60–83 MB target
-  (~2–2.5 Mbps); pin audio `-b:a`; ffprobe-verify one delivered output;
-  measure the egress/delivery delta on the fleet.
+  (~2–2.5 Mbps); audio is now pinned at 128 kbps (`b3259299`:
+  `-b:a 128k`). Still open: ffprobe-verify one delivered output and measure
+  the egress/delivery delta on the fleet.
 - **Evidence:** ladder spec + ffprobe verification + egress/video delta.
 
 ### W3 — Hot-set pinning + out-of-band cache fill *(Cockcroft/OpenConnect; Gray's five-minute rule)*
@@ -131,14 +132,15 @@ Aggregate CPU at 100k/h: 27.8 × 8.8 s = ~245 core-seconds/s → ~336 cores acro
   are in `attemptMetricsColumns` + read/write + pin test; master derives the
   breakdown from `segment_timings` (`applySegmentMetrics`) with the worker
   aggregate as legacy fallback.
-- Add the missing proto fields on `TaskExecutionMetrics` (`segments_total`,
+- LANDED (`fa79aa7f`): add the missing proto fields on `TaskExecutionMetrics` (`segments_total`,
   `segments_packet_copy`, `segments_reencoded`, `packet_copy_bytes`,
   `reencoded_bytes`; next free tags after 92), regenerate pb, and map them in
   `typed_metrics_proto.go` + `executionMetricsToAttemptMetrics` so worker
   aggregates survive when a renderer emits no per-segment timing rows.
-- Reflect-based test (still open): every `RawExecutionMetrics` field round-trips `ToProto`
-  **and** appears in the canonical column list — the v1.4.28/v1.4.29 class
-  of silent metric loss becomes structurally impossible.
+- LANDED (`fa79aa7f`): reflect-based transport contract test covers every
+  proto-backed `RawExecutionMetrics` field across `ToProto`/`FromProto`; the
+  existing canonical column pin covers persistence order. The v1.4.28/v1.4.29
+  class of silent metric loss is now structurally caught.
 - Close the waterfall: `unaccounted_ms = wall − Σ(phases)` must → ~0.
 - **Evidence:** inspect JSON shows 51/51, 100%; contract test in CI.
 
@@ -157,12 +159,12 @@ Aggregate CPU at 100k/h: 27.8 × 8.8 s = ~245 core-seconds/s → ~336 cores acro
   `scripts/ci/check-mixed-render-gate.sh`).
 - Engine binary split from worker image: engine fix = minutes, not a fleet
   rollout.
-- Pin the capability contract (STILL OPEN, Master side): add a 6th alertengine
-  rule firing `PacketCopyContractViolated` (critical) when an attempt reports
+- LANDED (`9e8989df`, Master side): the 6th alertengine rule fires
+  `PacketCopyContractViolated` (critical) when an attempt reports
   `concat_mode=mixed_packet` but `encode_passes>0` or `packet_copy_ratio<100`
-  (AGENTS.md §6 pattern), so the original 51-encode anomaly can never silently
-  return at runtime. CI pin exists (`worker-mixed-canary.sh`); the runtime
-  alert does not.
+  (AGENTS.md §6 pattern), so the original 51-encode anomaly cannot silently
+  return at runtime. CI pin and runtime alert are both present; only v17 fleet
+  evidence remains.
 
 ## 5. Economics at 100k/h (why W5 is not optional)
 
