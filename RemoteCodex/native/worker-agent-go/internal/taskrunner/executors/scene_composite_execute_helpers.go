@@ -109,6 +109,16 @@ func computePipelineSegmentStats(m *telemetry.RawExecutionMetrics, run pipeline.
 	segments := rm.Segments
 	m.SegmentsTotal = int32(len(segments))
 	if m.SegmentsTotal == 0 {
+		// Packet-copy and mixed renderers can emit aggregate counters without
+		// materializing one timing record per segment. Preserve those exact
+		// engine facts instead of reporting a misleading 0% copy ratio.
+		total := rm.CopySegments + rm.TranscodeSegments
+		if total > 0 {
+			m.SegmentsTotal = int32(total)
+			m.SegmentsPacketCopy = int32(rm.CopySegments)
+			m.SegmentsReencoded = int32(rm.TranscodeSegments)
+			m.PacketCopyRatio = float64(rm.CopySegments) / float64(total) * 100
+		}
 		return
 	}
 

@@ -101,6 +101,8 @@ func mapEngineSidecar(sc *engineSidecar, m *pipeline.RenderMetrics) {
 	m.BackwardSeekSeen = sc.BackwardSeekSeen
 	m.DurationSec = sc.DurationSec
 	m.ConcatMode = sc.ConcatMode
+	m.CopySegments = sc.CopySegments
+	m.TranscodeSegments = sc.TranscodeSegments
 	m.TotalSize = sc.TotalSize
 	m.OutTimeMs = sc.OutTimeMs
 	m.Bitrate = sc.Bitrate

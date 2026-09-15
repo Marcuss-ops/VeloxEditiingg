@@ -38,3 +38,17 @@ func TestRawMetricsFromPipelineUsesTypedRawFacts(t *testing.T) {
 		t.Fatalf("raw engine/timing facts = %+v", *got)
 	}
 }
+
+func TestRawMetricsFromPipelineUsesAggregatePacketCopyCounters(t *testing.T) {
+	run := pipeline.RunMetrics{RenderMetrics: pipeline.RenderMetrics{
+		ConcatMode:        "mixed_packet",
+		CopySegments:      51,
+		TranscodeSegments: 0,
+	}}
+
+	got := rawMetricsFromPipeline(run, performance.IOMetrics{}, performance.CPUMetrics{})
+	if got.SegmentsTotal != 51 || got.SegmentsPacketCopy != 51 ||
+		got.SegmentsReencoded != 0 || got.PacketCopyRatio != 100 {
+		t.Fatalf("aggregate packet-copy facts = %+v", *got)
+	}
+}

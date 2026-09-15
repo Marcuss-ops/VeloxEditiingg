@@ -36,6 +36,8 @@ type engineSidecar struct {
 	BackwardSeekSeen   bool               `json:"backward_seek_seen"`
 	DurationSec        float64            `json:"duration_seconds"`
 	ConcatMode         string             `json:"concat_mode"`
+	CopySegments       int64              `json:"copy_segments"`
+	TranscodeSegments  int64              `json:"transcode_segments"`
 	TotalSize          int64              `json:"total_size"`
 	OutTimeUs          int64              `json:"out_time_us"`
 	OutTimeMs          int64              `json:"out_time_ms"`
