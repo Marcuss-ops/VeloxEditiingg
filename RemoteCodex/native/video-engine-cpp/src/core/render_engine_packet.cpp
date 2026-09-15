@@ -450,10 +450,11 @@ RenderResult RenderEngine::renderMixed(
         segment.source_bytes = fileSize(local_video);
 
         segment.codec = "packet_copy";
+        const bool transform_required = item.transform.explicit_request &&
+            (item.transform.slow_zoom || item.transform.scale_mode != "cover");
         request.video_segments.push_back({
             local_video, item.source_in_us, duration_us, false, false,
-            item.transform.slow_zoom, item.include_audio,
-            item.metadata_certified});
+            transform_required, false, item.metadata_certified});
         segment.total_ms = std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - segmentStart).count();
         segment.status = telemetry::kStatusOk;
