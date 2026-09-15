@@ -85,6 +85,50 @@ func TestHandleHeartbeat_ResourcesPersistThroughRegistryToSQLite(t *testing.T) {
 	}
 }
 
+func TestComputeScorecardFromHeartbeat_UsesMeasuredHostCeilings(t *testing.T) {
+	scorecard := computeScorecardFromHeartbeat("worker-capacity", map[string]interface{}{
+		"total_ram_bytes":        float64(16 << 30),
+		"memory_available_bytes": float64(8 << 30),
+		"effective_cpu_cores":    float64(4),
+		"capabilities": map[string]interface{}{
+			"host": map[string]interface{}{
+				"capacity_benchmark_status": "measured",
+				"disk_read_benchmark_mbps":  900.0,
+				"disk_write_benchmark_mbps": 700.0,
+				"download_benchmark_mbps":   1200.0,
+				"upload_benchmark_mbps":     800.0,
+			},
+		},
+	})
+	if scorecard == nil {
+		t.Fatal("measured host ceilings should produce a scorecard")
+	}
+	if scorecard.DiskReadMbps != 900 || scorecard.DiskWriteMbps != 700 ||
+		scorecard.DownloadMbps != 1200 || scorecard.UploadMbps != 800 {
+		t.Fatalf("scorecard ceilings = %+v", scorecard)
+	}
+}
+
+func TestComputeScorecardFromHeartbeat_RejectsPartialHostCeilings(t *testing.T) {
+	scorecard := computeScorecardFromHeartbeat("worker-partial", map[string]interface{}{
+		"total_ram_bytes":        float64(16 << 30),
+		"memory_available_bytes": float64(8 << 30),
+		"effective_cpu_cores":    float64(4),
+		"capabilities": map[string]interface{}{
+			"host": map[string]interface{}{
+				"capacity_benchmark_status": "partial",
+				"disk_read_benchmark_mbps":  900.0,
+			},
+		},
+	})
+	if scorecard == nil {
+		t.Fatal("RAM/CPU data should still produce a diagnostic scorecard")
+	}
+	if scorecard.DiskReadMbps != 0 {
+		t.Fatalf("partial ceiling entered scheduler: %+v", scorecard)
+	}
+}
+
 // recordableSink counts RecordWorker invocations AND captures the
 // typed ResourceSnapshot for spot-check assertions. Single-threaded by
 // the gRPC stream consumer so a plain mutex is sufficient.

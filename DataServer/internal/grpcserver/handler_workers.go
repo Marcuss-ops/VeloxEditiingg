@@ -346,6 +346,27 @@ func computeScorecardFromHeartbeat(workerID string, extra map[string]interface{}
 	if v, ok := extra["network_tx_capacity_mbps"].(float64); ok {
 		input.UploadMbps = v
 	}
+	// Bootstrap ceilings are carried in capabilities.host, separately from
+	// live *_mbps samples. Only a complete, explicitly measured report is
+	// admitted into the scheduler; partial/unavailable reports remain
+	// diagnostic telemetry and cannot fabricate slot capacity.
+	if caps, ok := extra["capabilities"].(map[string]interface{}); ok {
+		if host, ok := caps["host"].(map[string]interface{}); ok &&
+			host["capacity_benchmark_status"] == "measured" {
+			if v, ok := hostFloat64(host, "disk_read_benchmark_mbps"); ok {
+				input.DiskReadMbps = v
+			}
+			if v, ok := hostFloat64(host, "disk_write_benchmark_mbps"); ok {
+				input.DiskWriteMbps = v
+			}
+			if v, ok := hostFloat64(host, "download_benchmark_mbps"); ok {
+				input.DownloadMbps = v
+			}
+			if v, ok := hostFloat64(host, "upload_benchmark_mbps"); ok {
+				input.UploadMbps = v
+			}
+		}
+	}
 
 	// Use default per-job cost estimates when no historical data is available.
 	// TODO: feed real per-job costs from task_attempt_metrics when available.
@@ -369,6 +390,27 @@ func computeScorecardFromHeartbeat(workerID string, extra map[string]interface{}
 
 	sc := workers.ComputeCapacityScorecard(input)
 	return &sc
+}
+
+func hostFloat64(host map[string]interface{}, key string) (float64, bool) {
+	v, ok := host[key]
+	if !ok {
+		return 0, false
+	}
+	switch n := v.(type) {
+	case float64:
+		return n, n > 0
+	case float32:
+		return float64(n), n > 0
+	case int:
+		return float64(n), n > 0
+	case int64:
+		return float64(n), n > 0
+	case int32:
+		return float64(n), n > 0
+	default:
+		return 0, false
+	}
 }
 
 // sendPerPhaseSlotsUpdate sends a ConfigurationUpdate with per-phase slot
