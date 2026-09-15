@@ -324,9 +324,10 @@ func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDep
 	// /metrics but skips the supervisor projection — pre-PR-3
 	// deploys without the metrics surface fall through cleanly).
 	// ── Alert Engine (Step 6 / Velox Metrics Center) ────────────────
-	// Evaluates 5 rules every 30s: error_rate, p95_wall_ms, worker
-	// offline, disk_free, ffmpeg_speed_ratio. Logs structured alerts
-	// and optionally calls Slack/Telegram webhook via env vars.
+	// Evaluates 6 rules every 30s: error_rate, p95_wall_ms, worker
+	// offline, disk_free, ffmpeg_speed_ratio, and the mixed-packet
+	// capability contract. Logs structured alerts and optionally calls
+	// Slack/Telegram webhook via env vars.
 	if t.Observability != nil {
 		alertDeps := alertengine.DefaultRuleDeps()
 		alertDeps.Obs = t.Observability
