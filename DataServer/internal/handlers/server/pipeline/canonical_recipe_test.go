@@ -97,3 +97,38 @@ func TestNormalizeCanonicalRecipe_ProjectsMultipleBindingStocks(t *testing.T) {
 		t.Fatal("multiple stocks must enable stock fallback mode")
 	}
 }
+
+func TestNormalizeCanonicalRecipe_AllowsCompiledPlanWithoutInlineScenes(t *testing.T) {
+	req := SubmitJobRequest{
+		JobType:                  "scene.composite.v1",
+		CompiledRenderPlanJSON:   `{"plan_version":2}`,
+		CompiledRenderPlanSHA256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+	}
+
+	if err := NormalizeCanonicalRecipe(&req); err != nil {
+		t.Fatalf("NormalizeCanonicalRecipe: %v", err)
+	}
+	if len(req.Scenes) != 0 {
+		t.Fatalf("scenes = %d, want no inline scenes for compiled plan", len(req.Scenes))
+	}
+	if verr, bad := ValidateSubmitJobRequest(req); bad || verr != nil {
+		t.Fatalf("compiled plan without scenes rejected: %#v", verr)
+	}
+}
+
+func TestValidateSubmitJobRequestRejectsPartialCompiledPlan(t *testing.T) {
+	req := SubmitJobRequest{
+		Scenes:                 nil,
+		CompiledRenderPlanJSON: `{"plan_version":2}`,
+	}
+	verr, bad := ValidateSubmitJobRequest(req)
+	if !bad || verr == nil {
+		t.Fatal("partial compiled plan must be rejected")
+	}
+	for _, detail := range verr.Details {
+		if detail["path"] == "compiled_render_plan_sha256" && detail["issue"] == "required_with_compiled_render_plan_json" {
+			return
+		}
+	}
+	t.Fatalf("missing compiled plan SHA detail: %#v", verr.Details)
+}

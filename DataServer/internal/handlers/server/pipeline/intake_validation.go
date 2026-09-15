@@ -58,7 +58,7 @@ func ValidateSubmitJobRequest(req SubmitJobRequest) (*SubmitJobValidationError, 
 	// manifest_ref it is still validated here; the resolver later replaces
 	// it with the manifest as the source of truth.
 	if len(req.Scenes) == 0 {
-		if req.ManifestRef == nil {
+		if req.ManifestRef == nil && !hasCompiledRenderPlan(req) {
 			details = append(details, gin.H{
 				"path":  "scenes",
 				"issue": "empty",
@@ -84,6 +84,7 @@ func ValidateSubmitJobRequest(req SubmitJobRequest) (*SubmitJobValidationError, 
 	details = append(details, validateSubmitPublications(req.Publications)...)
 
 	details = append(details, validateSubmitManifestRef(req)...)
+	details = append(details, validateSubmitCompiledPlan(req)...)
 
 	if len(details) == 0 {
 		return nil, false
@@ -95,6 +96,40 @@ func ValidateSubmitJobRequest(req SubmitJobRequest) (*SubmitJobValidationError, 
 		Message: fmt.Sprintf("request body has %d validation failure(s) (see details)", len(details)),
 		Details: details,
 	}, true
+}
+
+func hasCompiledRenderPlan(req SubmitJobRequest) bool {
+	return strings.TrimSpace(req.CompiledRenderPlanJSON) != "" || strings.TrimSpace(req.CompiledRenderPlanSHA256) != ""
+}
+
+func validateSubmitCompiledPlan(req SubmitJobRequest) []gin.H {
+	jsonPresent := strings.TrimSpace(req.CompiledRenderPlanJSON) != ""
+	shaPresent := strings.TrimSpace(req.CompiledRenderPlanSHA256) != ""
+	if !jsonPresent && !shaPresent {
+		return nil
+	}
+
+	var details []gin.H
+	if !jsonPresent {
+		details = append(details, gin.H{
+			"path":  "compiled_render_plan_json",
+			"issue": "required_with_compiled_render_plan_sha256",
+		})
+	}
+	if !shaPresent {
+		details = append(details, gin.H{
+			"path":  "compiled_render_plan_sha256",
+			"issue": "required_with_compiled_render_plan_json",
+		})
+	} else if !manifestRefSHA256Regexp.MatchString(strings.TrimSpace(req.CompiledRenderPlanSHA256)) {
+		details = append(details, gin.H{
+			"path":     "compiled_render_plan_sha256",
+			"issue":    "malformed",
+			"observed": req.CompiledRenderPlanSHA256,
+			"expected": "64 lowercase hex characters ([0-9a-f]{64})",
+		})
+	}
+	return details
 }
 
 // SubmitJob handles POST /api/v1/jobs.

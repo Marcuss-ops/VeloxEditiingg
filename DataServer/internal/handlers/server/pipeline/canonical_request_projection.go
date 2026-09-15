@@ -13,6 +13,8 @@ const ExternalAPISourceProvider = "external_api"
 // JobSubmitTargetExecutorID is the canonical executor for POST /api/v1/jobs.
 const JobSubmitTargetExecutorID = "scene.composite.v1"
 
+const compiledPlanTargetExecutorID = "video.assemble.copy.v1"
+
 func (h *Handlers) NormalizeExternalJobSubmission(req SubmitJobRequest) *CanonicalCompletedPayload {
 	rawPayload := submitRequestToRawPayload(&req)
 	workerPayload, err := projectWorkerPayload(&req)
@@ -24,10 +26,14 @@ func (h *Handlers) NormalizeExternalJobSubmission(req SubmitJobRequest) *Canonic
 	if req.Assembly != nil {
 		assemblyJob, _ = req.Assembly.Normalize(req.IdempotencyKey)
 	}
+	targetExecutorID := targetExecutorForJobType(req.JobType)
+	if hasCompiledRenderPlan(req) {
+		targetExecutorID = compiledPlanTargetExecutorID
+	}
 	return &CanonicalCompletedPayload{
 		SourceProvider:   ExternalAPISourceProvider,
 		SourceJobID:      req.IdempotencyKey,
-		TargetExecutorID: targetExecutorForJobType(req.JobType),
+		TargetExecutorID: targetExecutorID,
 		WorkerPayload:    workerPayload,
 		DeliveryPlan:     deliveryplan.ExtractEnvelope(rawPayload),
 		PublicationSpecs: projectPublicationSpecs(req.Publications),

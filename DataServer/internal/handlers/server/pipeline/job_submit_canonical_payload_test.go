@@ -147,6 +147,32 @@ func TestNormalizeExternalJobSubmissionCarriesAssemblyOutsideRendererPayload(t *
 	}
 }
 
+func TestNormalizeExternalJobSubmissionRoutesProducerOwnedCompiledPlan(t *testing.T) {
+	planJSON := `{"plan_version":2,"output":{"profile_id":"velox-h264-fmp4-stream-v1"}}`
+	planSHA := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	req := SubmitJobRequest{
+		IdempotencyKey:           "compiled-job-1",
+		VideoName:                "Compiled fMP4 job",
+		ScriptText:               "Producer-owned compiled plan",
+		CompiledRenderPlanJSON:   planJSON,
+		CompiledRenderPlanSHA256: planSHA,
+	}
+
+	canonical := (&Handlers{}).NormalizeExternalJobSubmission(req)
+	if canonical == nil {
+		t.Fatal("NormalizeExternalJobSubmission returned nil canonical")
+	}
+	if canonical.TargetExecutorID != "video.assemble.copy.v1" {
+		t.Fatalf("target executor = %q, want video.assemble.copy.v1", canonical.TargetExecutorID)
+	}
+	if got := canonical.WorkerPayload[contract.PayloadKeyCompiledRenderPlanJSON]; got != planJSON {
+		t.Fatalf("worker compiled plan JSON = %#v, want exact producer bytes", got)
+	}
+	if got := canonical.WorkerPayload[contract.PayloadKeyCompiledRenderPlanSHA]; got != planSHA {
+		t.Fatalf("worker compiled plan SHA = %#v, want %q", got, planSHA)
+	}
+}
+
 // TestCanonicalPayloadParity_PipelinePreservesCanonicalKeys verifies the
 // fourth contract surface: keys emitted by the external pipeline intake must
 // survive the DTO → worker-payload projection. The raw request projection

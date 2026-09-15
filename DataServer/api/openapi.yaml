@@ -697,6 +697,13 @@ components:
             properties:
                 assembly:
                     $ref: '#/components/schemas/ExternalAssemblyRequest'
+                compiled_render_plan_json:
+                    description: Producer-owned canonical CompiledRenderPlanV2 JSON. When supplied, the Master passes these bytes through to the packet-copy executor without recompiling or inferring the output profile.
+                    type: string
+                compiled_render_plan_sha256:
+                    description: SHA-256 of compiled_render_plan_json.
+                    pattern: '^[0-9a-fA-F]{64}$'
+                    type: string
                 delivery_plan:
                     items:
                         $ref: '#/components/schemas/SubmitDeliveryPlanEntry'

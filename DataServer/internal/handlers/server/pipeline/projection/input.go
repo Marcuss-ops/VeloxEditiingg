@@ -10,25 +10,27 @@ import (
 // renderer payload. It contains no HTTP, Gin, publishing, security, or
 // pipeline-package types.
 type SubmissionInput struct {
-	JobID              string
-	JobType            string
-	TemplateID         string
-	TemplateVersion    int
-	VideoMode          string
-	VideoName          string
-	ScriptText         string
-	AudioURL           string
-	CopyOnly           bool
-	RenderManifest     map[string]interface{}
-	ManifestRef        map[string]interface{}
-	ManifestSHA256     string
-	PlacementPin       string
-	LegacyVoiceovers   []string
-	Scenes             []SceneInput
-	Layers             []LayerInput
-	VisualReplacements []VisualReplacementInput
-	DeliveryPlan       []RawDeliveryPlanEntry
-	RetryBudgetDefault int
+	JobID                    string
+	JobType                  string
+	TemplateID               string
+	TemplateVersion          int
+	VideoMode                string
+	VideoName                string
+	ScriptText               string
+	AudioURL                 string
+	CopyOnly                 bool
+	CompiledRenderPlanJSON   string
+	CompiledRenderPlanSHA256 string
+	RenderManifest           map[string]interface{}
+	ManifestRef              map[string]interface{}
+	ManifestSHA256           string
+	PlacementPin             string
+	LegacyVoiceovers         []string
+	Scenes                   []SceneInput
+	Layers                   []LayerInput
+	VisualReplacements       []VisualReplacementInput
+	DeliveryPlan             []RawDeliveryPlanEntry
+	RetryBudgetDefault       int
 }
 
 type SceneInput struct {
@@ -109,22 +111,24 @@ type VisualReplacementInput struct {
 // one pure projection boundary so HTTP handlers only adapt request DTOs.
 func BuildRawPayload(input SubmissionInput) map[string]interface{} {
 	payload := BuildRawPayloadEnvelope(RawPayloadInput{
-		JobID:              input.JobID,
-		JobType:            input.JobType,
-		TemplateID:         input.TemplateID,
-		TemplateVersion:    input.TemplateVersion,
-		VideoMode:          input.VideoMode,
-		VideoName:          input.VideoName,
-		ScriptText:         input.ScriptText,
-		AudioURL:           input.AudioURL,
-		CopyOnly:           input.CopyOnly,
-		RenderManifest:     input.RenderManifest,
-		ManifestRef:        input.ManifestRef,
-		ManifestSHA256:     input.ManifestSHA256,
-		PlacementPin:       input.PlacementPin,
-		LegacyVoiceovers:   input.LegacyVoiceovers,
-		DeliveryPlan:       input.DeliveryPlan,
-		RetryBudgetDefault: input.RetryBudgetDefault,
+		JobID:                    input.JobID,
+		JobType:                  input.JobType,
+		TemplateID:               input.TemplateID,
+		TemplateVersion:          input.TemplateVersion,
+		VideoMode:                input.VideoMode,
+		VideoName:                input.VideoName,
+		ScriptText:               input.ScriptText,
+		AudioURL:                 input.AudioURL,
+		CopyOnly:                 input.CopyOnly,
+		CompiledRenderPlanJSON:   input.CompiledRenderPlanJSON,
+		CompiledRenderPlanSHA256: input.CompiledRenderPlanSHA256,
+		RenderManifest:           input.RenderManifest,
+		ManifestRef:              input.ManifestRef,
+		ManifestSHA256:           input.ManifestSHA256,
+		PlacementPin:             input.PlacementPin,
+		LegacyVoiceovers:         input.LegacyVoiceovers,
+		DeliveryPlan:             input.DeliveryPlan,
+		RetryBudgetDefault:       input.RetryBudgetDefault,
 	})
 
 	if len(input.Scenes) > 0 {

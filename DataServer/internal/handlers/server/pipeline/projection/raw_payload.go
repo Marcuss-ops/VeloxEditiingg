@@ -12,22 +12,24 @@ const defaultRetryBudgetValue = 3
 // top-level canonical payload envelope. Nested render timeline values remain
 // owned by the pipeline adapter until their own boundary is extracted.
 type RawPayloadInput struct {
-	JobID              string
-	JobType            string
-	TemplateID         string
-	TemplateVersion    int
-	VideoMode          string
-	VideoName          string
-	ScriptText         string
-	AudioURL           string
-	CopyOnly           bool
-	RenderManifest     map[string]interface{}
-	ManifestRef        map[string]interface{}
-	ManifestSHA256     string
-	PlacementPin       string
-	LegacyVoiceovers   []string
-	DeliveryPlan       []RawDeliveryPlanEntry
-	RetryBudgetDefault int
+	JobID                    string
+	JobType                  string
+	TemplateID               string
+	TemplateVersion          int
+	VideoMode                string
+	VideoName                string
+	ScriptText               string
+	AudioURL                 string
+	CopyOnly                 bool
+	CompiledRenderPlanJSON   string
+	CompiledRenderPlanSHA256 string
+	RenderManifest           map[string]interface{}
+	ManifestRef              map[string]interface{}
+	ManifestSHA256           string
+	PlacementPin             string
+	LegacyVoiceovers         []string
+	DeliveryPlan             []RawDeliveryPlanEntry
+	RetryBudgetDefault       int
 }
 
 // RawDeliveryPlanEntry is the projection-neutral delivery-plan input. The
@@ -72,6 +74,12 @@ func BuildRawPayloadEnvelope(input RawPayloadInput) map[string]interface{} {
 	}
 	if input.CopyOnly {
 		payload["copy_only"] = true
+	}
+	if strings.TrimSpace(input.CompiledRenderPlanJSON) != "" {
+		payload[contract.PayloadKeyCompiledRenderPlanJSON] = input.CompiledRenderPlanJSON
+	}
+	if strings.TrimSpace(input.CompiledRenderPlanSHA256) != "" {
+		payload[contract.PayloadKeyCompiledRenderPlanSHA] = input.CompiledRenderPlanSHA256
 	}
 	if input.RenderManifest != nil {
 		payload["render_manifest"] = input.RenderManifest

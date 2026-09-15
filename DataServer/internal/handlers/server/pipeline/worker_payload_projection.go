@@ -18,21 +18,23 @@ func projectWorkerPayload(req *SubmitJobRequest) (map[string]interface{}, error)
 // belongs here.
 func submitRequestToRawPayload(req *SubmitJobRequest) map[string]interface{} {
 	input := projection.SubmissionInput{
-		JobID:              req.IdempotencyKey,
-		JobType:            req.JobType,
-		TemplateID:         req.TemplateID,
-		TemplateVersion:    req.TemplateVersion,
-		VideoMode:          rendererModeForJobType(req.JobType),
-		VideoName:          req.VideoName,
-		ScriptText:         req.ScriptText,
-		AudioURL:           req.AudioURL,
-		CopyOnly:           req.CopyOnly,
-		RenderManifest:     req.ResolvedManifest,
-		ManifestRef:        req.ResolvedManifestRef,
-		ManifestSHA256:     req.ResolvedManifestSHA256,
-		PlacementPin:       req.PlacementPinWorkerID,
-		LegacyVoiceovers:   compatibility.ReadStringList(req.Spec, compatibility.VoiceoverPathsKey),
-		RetryBudgetDefault: DefaultRetryBudget,
+		JobID:                    req.IdempotencyKey,
+		JobType:                  req.JobType,
+		TemplateID:               req.TemplateID,
+		TemplateVersion:          req.TemplateVersion,
+		VideoMode:                rendererModeForJobType(req.JobType),
+		VideoName:                req.VideoName,
+		ScriptText:               req.ScriptText,
+		AudioURL:                 req.AudioURL,
+		CopyOnly:                 req.CopyOnly,
+		CompiledRenderPlanJSON:   req.CompiledRenderPlanJSON,
+		CompiledRenderPlanSHA256: req.CompiledRenderPlanSHA256,
+		RenderManifest:           req.ResolvedManifest,
+		ManifestRef:              req.ResolvedManifestRef,
+		ManifestSHA256:           req.ResolvedManifestSHA256,
+		PlacementPin:             req.PlacementPinWorkerID,
+		LegacyVoiceovers:         compatibility.ReadStringList(req.Spec, compatibility.VoiceoverPathsKey),
+		RetryBudgetDefault:       DefaultRetryBudget,
 	}
 	input.DeliveryPlan = make([]projection.RawDeliveryPlanEntry, 0, len(req.DeliveryPlan))
 	for _, entry := range req.DeliveryPlan {

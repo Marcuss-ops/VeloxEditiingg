@@ -35,9 +35,16 @@ type SubmitJobRequest struct {
 	ScriptText string `json:"script_text,omitempty"`
 	AudioURL   string `json:"audio_url,omitempty"`
 	CopyOnly   bool   `json:"copy_only,omitempty"`
+	// CompiledRenderPlanJSON/SHA256 are producer-owned V2 bytes. When present,
+	// the Master passes them through byte-for-byte and routes the task to the
+	// canonical packet-copy executor; it never recompiles or infers the plan.
+	CompiledRenderPlanJSON   string `json:"compiled_render_plan_json,omitempty"`
+	CompiledRenderPlanSHA256 string `json:"compiled_render_plan_sha256,omitempty"`
 
-	// Scenes is the scene list. Each scene drives one composited
-	// segment. At least one scene is required; max MaxScenes (10k).
+	// Scenes is the inline scene list. Each scene drives one composited
+	// segment. At least one scene is required unless the producer supplies
+	// both compiled_render_plan_json and compiled_render_plan_sha256; max
+	// MaxScenes (10k).
 	Scenes []SubmitScene `json:"scenes"`
 
 	// Layers are independent overlays: title, name, important phrase or

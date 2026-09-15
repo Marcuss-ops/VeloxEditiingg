@@ -76,6 +76,9 @@ func NormalizeCanonicalRecipe(req *SubmitJobRequest) error {
 		}
 	}
 	if len(req.Scenes) == 0 {
+		if hasCompiledRenderPlan(*req) {
+			return nil
+		}
 		rawScenes, ok := req.Spec["scenes"].([]interface{})
 		if !ok {
 			return fmt.Errorf("spec.scenes must be an array")

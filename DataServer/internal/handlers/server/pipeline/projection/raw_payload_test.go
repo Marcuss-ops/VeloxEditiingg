@@ -108,3 +108,21 @@ func TestBuildRawPayloadEnvelopePreservesControlPlaneEnvelopeFields(t *testing.T
 		}
 	}
 }
+
+func TestBuildRawPayloadEnvelopePreservesProducerOwnedCompiledPlan(t *testing.T) {
+	planJSON := `{"plan_version":2,"output":{"profile_id":"velox-h264-fmp4-stream-v1"}}`
+	planSHA := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+	got := BuildRawPayloadEnvelope(RawPayloadInput{
+		JobID:                    "compiled-job",
+		CompiledRenderPlanJSON:   planJSON,
+		CompiledRenderPlanSHA256: planSHA,
+	})
+
+	if got[contract.PayloadKeyCompiledRenderPlanJSON] != planJSON {
+		t.Fatalf("compiled plan JSON = %#v, want exact producer bytes", got[contract.PayloadKeyCompiledRenderPlanJSON])
+	}
+	if got[contract.PayloadKeyCompiledRenderPlanSHA] != planSHA {
+		t.Fatalf("compiled plan SHA = %#v, want %q", got[contract.PayloadKeyCompiledRenderPlanSHA], planSHA)
+	}
+}
