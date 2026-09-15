@@ -77,12 +77,14 @@ type WorkerCapacityReport struct {
 	WindowEnd                 string  `json:"window_end"`
 
 	// Per-job capacity facts from task_attempt_metrics (most recent N succeeded attempts).
-	AvgJobScratchPeakBytes int64 `json:"avg_job_scratch_peak_bytes"`
-	MaxJobScratchPeakBytes int64 `json:"max_job_scratch_peak_bytes"`
-	AvgJobPublishBytes     int64 `json:"avg_job_publish_bytes"`
-	AvgJobPageFaults       int64 `json:"avg_job_page_faults"`
-	AvgJobPeakRSSDelta     int64 `json:"avg_job_peak_rss_delta_bytes"`
-	AttemptCount           int   `json:"attempt_count"`
+	AvgJobScratchPeakBytes int64   `json:"avg_job_scratch_peak_bytes"`
+	MaxJobScratchPeakBytes int64   `json:"max_job_scratch_peak_bytes"`
+	AvgJobPublishBytes     int64   `json:"avg_job_publish_bytes"`
+	AvgJobPageFaults       int64   `json:"avg_job_page_faults"`
+	AvgJobPeakRSSDelta     int64   `json:"avg_job_peak_rss_delta_bytes"`
+	AttemptCount           int     `json:"attempt_count"`
+	AvgAttemptWallSeconds  float64 `json:"avg_attempt_wall_seconds"`
+	ObservedVideosPerHour  float64 `json:"observed_videos_per_hour"`
 
 	// Latest benchmark result from capacity_benchmark_runs.
 	BenchmarkRunID string  `json:"benchmark_run_id,omitempty"`
@@ -272,25 +274,32 @@ func (s *SQLiteStore) queryAttemptMetrics(ctx context.Context, workerID string, 
 			ROUND(COALESCE(AVG(m.job_publish_bytes), 0)),
 			ROUND(COALESCE(AVG(m.job_page_faults), 0)),
 			ROUND(COALESCE(AVG(m.job_peak_rss_delta_bytes), 0)),
+			COALESCE(AVG(m.wall_clock_seconds), 0),
 			COUNT(*)
-		FROM task_attempt_metrics m
-		JOIN task_attempts a ON a.id = m.attempt_id
-		WHERE a.worker_id = ? AND a.status = 'SUCCEEDED'
-		ORDER BY a.updated_at DESC
-		LIMIT 100
+		FROM (
+			SELECT m.job_scratch_peak_bytes, m.job_publish_bytes,
+			       m.job_page_faults, m.job_peak_rss_delta_bytes,
+			       m.wall_clock_seconds
+			FROM task_attempt_metrics m
+			JOIN task_attempts a ON a.id = m.attempt_id
+			WHERE a.worker_id = ? AND a.status = 'SUCCEEDED'
+			ORDER BY a.updated_at DESC
+			LIMIT 100
+		) m
 	`, workerID)
 
 	// SQLite AVG()/ROUND() return float64 to the Go driver even after
 	// CAST(... AS INTEGER). Scan into float64 intermediates and convert
 	// in Go to avoid the "converting driver.Value type float64 to int64"
 	// scan error that appears under aggregate load.
-	var avgScratch, maxScratch, avgPublish, avgPageFaults, avgPeakRSS float64
+	var avgScratch, maxScratch, avgPublish, avgPageFaults, avgPeakRSS, avgWall float64
 	if err := row.Scan(
 		&avgScratch,
 		&maxScratch,
 		&avgPublish,
 		&avgPageFaults,
 		&avgPeakRSS,
+		&avgWall,
 		&report.AttemptCount,
 	); err != nil {
 		return fmt.Errorf("capacity report attempt metrics: %w", err)
@@ -300,6 +309,18 @@ func (s *SQLiteStore) queryAttemptMetrics(ctx context.Context, workerID string, 
 	report.AvgJobPublishBytes = int64(avgPublish)
 	report.AvgJobPageFaults = int64(avgPageFaults)
 	report.AvgJobPeakRSSDelta = int64(avgPeakRSS)
+	report.AvgAttemptWallSeconds = avgWall
+	if report.WindowStart != "" && report.WindowEnd != "" {
+		var completed int64
+		if err := s.db.QueryRowContext(ctx, `
+			SELECT COUNT(*) FROM task_attempts
+			WHERE worker_id = ? AND status = 'SUCCEEDED'
+			  AND updated_at >= ? AND updated_at <= ?
+		`, workerID, report.WindowStart, report.WindowEnd).Scan(&completed); err != nil {
+			return fmt.Errorf("capacity report throughput: %w", err)
+		}
+		report.ObservedVideosPerHour = float64(completed) / 24.0
+	}
 	return nil
 }
 

@@ -223,6 +223,12 @@ func TestGetWorkerCapacityReport_FullAssembly(t *testing.T) {
 	if report.AvgJobPageFaults != 30 {
 		t.Errorf("AvgJobPageFaults = %d; want 30", report.AvgJobPageFaults)
 	}
+	if report.AvgAttemptWallSeconds < 10.4 || report.AvgAttemptWallSeconds > 10.6 {
+		t.Errorf("AvgAttemptWallSeconds = %f; want ~10.5", report.AvgAttemptWallSeconds)
+	}
+	if report.ObservedVideosPerHour < 0.08 || report.ObservedVideosPerHour > 0.09 {
+		t.Errorf("ObservedVideosPerHour = %f; want ~0.083", report.ObservedVideosPerHour)
+	}
 
 	// ── 7. Verify capacity_benchmark_runs ────────────────────────────────
 	if report.BenchmarkRunID != "bench-run-001" {
