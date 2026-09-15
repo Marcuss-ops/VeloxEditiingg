@@ -1,6 +1,6 @@
 // Package alertengine / engine_test.go
 //
-// Unit tests for all 5 alert rules + cooldown mechanism.
+// Unit tests for all 6 alert rules + cooldown mechanism.
 // Uses stub readers to construct a real observability.Service for
 // rule evaluation, avoiding any database dependency.
 
@@ -603,15 +603,15 @@ func TestCooldown_DifferentRulesDontSuppressEachOther(t *testing.T) {
 
 // ── Tests: MakeRules Integration ──────────────────────────────────────────
 
-func TestMakeRules_ReturnsFiveRules(t *testing.T) {
+func TestMakeRules_ReturnsSixRules(t *testing.T) {
 	deps := DefaultRuleDeps()
 	deps.Obs = defaultsObs()
 	deps.DataDir = os.TempDir()
 	deps.DiskFreeGB = 0.0 // avoid flaky failure if /tmp has < 10 GB free
 
 	rules := MakeRules(deps)
-	if len(rules) != 5 {
-		t.Fatalf("MakeRules returned %d rules, want 5", len(rules))
+	if len(rules) != 6 {
+		t.Fatalf("MakeRules returned %d rules, want 6", len(rules))
 	}
 
 	ctx := context.Background()
@@ -624,5 +624,30 @@ func TestMakeRules_ReturnsFiveRules(t *testing.T) {
 		if alert != nil {
 			t.Errorf("rule %d fired unexpectedly: %s", i, alert.RuleID)
 		}
+	}
+}
+
+func TestRulePacketCopyContractViolation(t *testing.T) {
+	obs := newTestObs(
+		jobs.Counts{},
+		nil,
+		[]taskgraph.Task{{ID: "T-mixed"}},
+		map[string][]taskattempts.TaskAttempt{
+			"T-mixed": {{ID: "A-mixed", TaskID: "T-mixed"}},
+		},
+		nil,
+		map[string]*taskattempts.AttemptMetrics{
+			"A-mixed": {AttemptID: "A-mixed", ConcatMode: "mixed_packet", EncodePasses: 1, PacketCopyRatio: 98},
+		},
+	)
+	deps := DefaultRuleDeps()
+	deps.Obs = obs
+
+	alert, err := rulePacketCopyContract(deps)(context.Background())
+	if err != nil {
+		t.Fatalf("rule returned error: %v", err)
+	}
+	if alert == nil || alert.RuleID != "PacketCopyContractViolated" || alert.Severity != "critical" {
+		t.Fatalf("alert = %#v, want critical PacketCopyContractViolated", alert)
 	}
 }

@@ -23,6 +23,56 @@ type ScalarMetricResult struct {
 	Samples int     `json:"samples"`
 }
 
+// PacketCopyContractResult summarizes recent mixed-packet attempts for the
+// runtime capability alert. A violation is strictly an attempt whose
+// concat_mode is mixed_packet and whose encode passes or packet-copy ratio
+// contradicts the packet-copy contract.
+type PacketCopyContractResult struct {
+	Samples         int
+	Violations      int
+	AttemptID       string
+	EncodePasses    int32
+	PacketCopyRatio float64
+}
+
+// RecentPacketCopyContract returns the recent mixed-packet attempts and the
+// first contract violation. It reads the same canonical AttemptMetrics path
+// used by inspect JSON, so the runtime alert observes persisted truth.
+func (s *Service) RecentPacketCopyContract(ctx context.Context) (*PacketCopyContractResult, error) {
+	recentTasks, err := s.tasks.List(ctx, taskgraph.Filter{Limit: 500})
+	if err != nil {
+		return nil, fmt.Errorf("observability: list tasks: %w", err)
+	}
+
+	result := &PacketCopyContractResult{}
+	for _, task := range recentTasks {
+		attempts, err := s.attempts.ListByTaskID(ctx, task.ID)
+		if err != nil {
+			return nil, fmt.Errorf("observability: list attempts for task %s: %w", task.ID, err)
+		}
+		for _, attempt := range attempts {
+			metrics, err := s.attempts.GetMetrics(ctx, attempt.ID)
+			if err != nil {
+				return nil, fmt.Errorf("observability: get metrics for attempt %s: %w", attempt.ID, err)
+			}
+			if metrics == nil || metrics.ConcatMode != "mixed_packet" {
+				continue
+			}
+			result.Samples++
+			if metrics.EncodePasses <= 0 && metrics.PacketCopyRatio >= 100 {
+				continue
+			}
+			result.Violations++
+			if result.AttemptID == "" {
+				result.AttemptID = attempt.ID
+				result.EncodePasses = metrics.EncodePasses
+				result.PacketCopyRatio = metrics.PacketCopyRatio
+			}
+		}
+	}
+	return result, nil
+}
+
 // RecentScalarMetric reads recent attempt_metrics rows and extracts a
 // named scalar field (e.g. "ffmpeg_speed_ratio"). Supported names:
 // ffmpeg_speed_ratio, cache_byte_hit_ratio, duplicate_download_ratio,

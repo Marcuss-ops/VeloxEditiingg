@@ -34,7 +34,7 @@ func DefaultRuleDeps() RuleDeps {
 	}
 }
 
-// MakeRules creates the standard set of 5 alert rules.
+// MakeRules creates the standard set of 6 alert rules.
 func MakeRules(deps RuleDeps) []RuleFunc {
 	return []RuleFunc{
 		ruleErrorRate(deps),
@@ -42,6 +42,7 @@ func MakeRules(deps RuleDeps) []RuleFunc {
 		ruleWorkerOffline(deps),
 		ruleDiskFree(deps),
 		ruleFFmpegSpeedRatio(deps),
+		rulePacketCopyContract(deps),
 	}
 }
 
@@ -174,5 +175,38 @@ func ruleFFmpegSpeedRatio(deps RuleDeps) RuleFunc {
 			}, nil
 		}
 		return nil, nil
+	}
+}
+
+func rulePacketCopyContract(deps RuleDeps) RuleFunc {
+	return func(ctx context.Context) (*runtimealerts.AlertEvent, error) {
+		if deps.Obs == nil {
+			return nil, nil
+		}
+		result, err := deps.Obs.RecentPacketCopyContract(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("alert rule PacketCopyContractViolated: recent metrics: %w", err)
+		}
+		if result == nil || result.Violations == 0 {
+			return nil, nil
+		}
+
+		return &runtimealerts.AlertEvent{
+			RuleID:   "PacketCopyContractViolated",
+			Severity: "critical",
+			Summary: fmt.Sprintf("mixed-packet contract violated in %d attempt(s)",
+				result.Violations),
+			Description: fmt.Sprintf(
+				"concat_mode=mixed_packet requires encode_passes=0 and packet_copy_ratio=100. First violating attempt %s reported encode_passes=%d and packet_copy_ratio=%.1f.",
+				result.AttemptID, result.EncodePasses, result.PacketCopyRatio,
+			),
+			Labels: map[string]string{
+				"domain":            "performance",
+				"concat_mode":       "mixed_packet",
+				"violations":        fmt.Sprintf("%d", result.Violations),
+				"attempt_id":        result.AttemptID,
+				"packet_copy_ratio": fmt.Sprintf("%.1f", result.PacketCopyRatio),
+			},
+		}, nil
 	}
 }
