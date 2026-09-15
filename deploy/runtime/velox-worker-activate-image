@@ -51,6 +51,7 @@ LOCK_FILE="${LOCK_FILE:-/run/lock/velox-worker-activate.lock}"
 BACKUP_FILE="${BACKUP_FILE:-${ENV_FILE}.prev}"
 POLL_INTERVAL="${POLL_INTERVAL:-2}"
 IMAGE_BASELINE_PATH="/app/RemoteCodex/tests/fixtures/engine_selftest_baseline.sha256"
+IMAGE_BUNDLE_HASH_PATH="/app/RemoteCodex/BUNDLE_HASH.txt"
 
 command -v flock >/dev/null 2>&1 || {
   echo "flock (util-linux) is required for serialized image activation" >&2
@@ -167,6 +168,20 @@ TARGET_BASELINE_SHA="$(awk 'NF {print $1; exit}' "$TARGET_BASELINE_FILE")"
   exit 1
 }
 
+# The worker's bootstrap gate compares VELOX_BUNDLE_HASH from worker.env with
+# the immutable BUNDLE_HASH.txt embedded in the image. Keep that identity
+# coupled to the image activation transaction; otherwise every legitimate
+# release would restart with the previous release's hash and fail closed.
+TARGET_BUNDLE_HASH="$(docker run --rm --entrypoint /bin/sh "$IMAGE" -c "cat '$IMAGE_BUNDLE_HASH_PATH'")" || {
+  echo "target image does not expose a readable bundle hash" >&2
+  exit 1
+}
+TARGET_BUNDLE_HASH="$(printf '%s' "$TARGET_BUNDLE_HASH" | tr -d '[:space:]')"
+[[ "$TARGET_BUNDLE_HASH" =~ ^[0-9a-fA-F]{64}$ ]] || {
+  echo "target image bundle hash is not a SHA-256 digest" >&2
+  exit 1
+}
+
 # ── 5. Atomic VELOX_WORKER_IMAGE replacement ────────────────────────────────
 tmp="$(mktemp "${ENV_FILE}.tmp.XXXXXX")"
 awk -v image="$IMAGE" '
@@ -177,6 +192,23 @@ awk -v image="$IMAGE" '
   }
   { print }
   END { if (!done) exit 1 }
+' "$ENV_FILE" >"$tmp"
+chown --reference="$ENV_FILE" "$tmp"
+chmod --reference="$ENV_FILE" "$tmp"
+mv -f "$tmp" "$ENV_FILE"
+
+# Atomically select the bundle identity produced by the exact target image.
+# The pre-activation worker.env backup restores the previous value on every
+# failed forward or rollback path, alongside VELOX_WORKER_IMAGE.
+tmp="$(mktemp "${ENV_FILE}.tmp.XXXXXX")"
+awk -v bundle_hash="$TARGET_BUNDLE_HASH" '
+  BEGIN { done=0 }
+  /^VELOX_BUNDLE_HASH=/ {
+    if (!done) { print "VELOX_BUNDLE_HASH=" bundle_hash; done=1 }
+    next
+  }
+  { print }
+  END { if (!done) print "VELOX_BUNDLE_HASH=" bundle_hash }
 ' "$ENV_FILE" >"$tmp"
 chown --reference="$ENV_FILE" "$tmp"
 chmod --reference="$ENV_FILE" "$tmp"

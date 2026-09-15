@@ -31,6 +31,7 @@ reset_env() {
   cat >"$ENV_FILE" <<EOF
 VELOX_WORKER_ID=offline-worker
 VELOX_WORKER_IMAGE=$PREV
+VELOX_BUNDLE_HASH=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 VELOX_MASTER_URL=https://master.invalid
 VELOX_WORK_DIR=$TMP/work
 OTHER_SETTING=preserve-me
@@ -42,6 +43,7 @@ EOF
 mkdir -p "$TMP/work/tests/fixtures"
 BASELINE_FILE="$TMP/work/tests/fixtures/engine_selftest_baseline.sha256"
 TARGET_BASELINE='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+TARGET_BUNDLE_HASH='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 reset_env
 
 cat >"$BIN/docker" <<'MOCK'
@@ -54,7 +56,11 @@ case "${1:-}" in
     exit 0
     ;;
   run)
-    printf '%s    tests/fixtures/frame.mp4\n' "${MOCK_BASELINE_SHA:?}"
+    if [[ "$*" == *BUNDLE_HASH.txt* ]]; then
+      printf '%s\n' "${MOCK_BUNDLE_HASH:?}"
+    else
+      printf '%s    tests/fixtures/frame.mp4\n' "${MOCK_BASELINE_SHA:?}"
+    fi
     ;;
   inspect)
     [[ "${MOCK_DOCKER_INSPECT_FAIL:-0}" == 1 ]] && exit 42
@@ -88,7 +94,7 @@ printf '{"status":"ready"}\n'
 MOCK
 
 chmod 0755 "$BIN/docker" "$BIN/systemctl" "$BIN/curl"
-export MOCK_LOG="$LOG" MOCK_INSPECT_IMAGE="$IMAGE" MOCK_BASELINE_SHA="$TARGET_BASELINE"
+export MOCK_LOG="$LOG" MOCK_INSPECT_IMAGE="$IMAGE" MOCK_BASELINE_SHA="$TARGET_BASELINE" MOCK_BUNDLE_HASH="$TARGET_BUNDLE_HASH"
 
 run_helper() {
   local inspect_image="${MOCK_INSPECT_IMAGE:-$IMAGE}"
@@ -101,6 +107,7 @@ run_helper() {
     "MOCK_LOG=$LOG" \
     "MOCK_INSPECT_IMAGE=$inspect_image" \
     "MOCK_BASELINE_SHA=$TARGET_BASELINE" \
+    "MOCK_BUNDLE_HASH=$TARGET_BUNDLE_HASH" \
     bash "$HELPER" "$IMAGE"
 }
 
@@ -115,6 +122,7 @@ grep -Fxq 'systemctl is-active --quiet velox-worker.service' "$LOG" || fail "sys
 grep -Fxq "docker inspect --format {{.Config.Image}} {{.State.Running}} velox-worker" "$LOG" || fail "container digest/running check was not requested"
 grep -Fq 'curl -fsS --max-time 10 http://127.0.0.1:8081/health/ready' "$LOG" || fail "health/ready was not requested"
 grep -Fxq "VELOX_WORKER_IMAGE=$IMAGE" "$ENV_FILE" || fail "worker.env does not contain the target digest"
+grep -Fxq "VELOX_BUNDLE_HASH=$TARGET_BUNDLE_HASH" "$ENV_FILE" || fail "worker.env does not contain the target bundle hash"
 grep -Fxq 'VELOX_WORKER_ID=offline-worker' "$ENV_FILE" || fail "worker.env lost worker identity"
 grep -Fxq 'OTHER_SETTING=preserve-me' "$ENV_FILE" || fail "worker.env lost unrelated settings"
 [[ ! -e "$BACKUP_FILE" ]] || fail "happy-path backup not cleaned up"
@@ -155,6 +163,7 @@ if MOCK_INSPECT_IMAGE='ghcr.io/marcuss-ops/velox-worker@sha256:ccccccccccccccccc
 fi
 grep -q '^docker inspect ' "$LOG" || fail 'container digest was not inspected'
 grep -Fxq "VELOX_WORKER_IMAGE=$PREV" "$ENV_FILE" || fail 'rollback did not restore previous worker.env after digest mismatch'
+grep -Fxq 'VELOX_BUNDLE_HASH=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' "$ENV_FILE" || fail 'rollback did not restore previous bundle hash after digest mismatch'
 grep -Fxq 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb    tests/fixtures/frame.mp4' "$BASELINE_FILE" || fail 'digest rollback did not restore baseline'
 restart_count="$(grep -c '^systemctl restart velox-worker.service$' "$LOG" || true)"
 [[ "$restart_count" == 2 ]] || fail "expected 2 restarts (forward + rollback), got $restart_count"
@@ -180,6 +189,7 @@ if MOCK_CURL_FAIL=1 MOCK_INSPECT_IMAGE="$IMAGE" run_helper >/dev/null 2>&1; then
 fi
 grep -Fxq "systemctl restart velox-worker.service" "$LOG" || fail "restart was not reached before health failure"
 grep -Fxq "VELOX_WORKER_IMAGE=$PREV" "$ENV_FILE" || fail 'rollback did not restore previous worker.env after health failure'
+grep -Fxq 'VELOX_BUNDLE_HASH=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' "$ENV_FILE" || fail 'rollback did not restore previous bundle hash after health failure'
 grep -Fxq 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb    tests/fixtures/frame.mp4' "$BASELINE_FILE" || fail 'health rollback did not restore baseline'
 restart_count="$(grep -c '^systemctl restart velox-worker.service$' "$LOG" || true)"
 [[ "$restart_count" == 2 ]] || fail "expected 2 restarts (forward + rollback), got $restart_count"
@@ -193,6 +203,7 @@ if MOCK_INSPECT_IMAGE="$PREV" run_helper >/dev/null 2>&1; then
   fail 'non-convergent forward activation was accepted'
 fi
 grep -Fxq "VELOX_WORKER_IMAGE=$PREV" "$ENV_FILE" || fail 'rollback restore lost after non-convergent activation'
+grep -Fxq 'VELOX_BUNDLE_HASH=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' "$ENV_FILE" || fail 'rollback restore lost previous bundle hash'
 grep -Fxq 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb    tests/fixtures/frame.mp4' "$BASELINE_FILE" || fail 'non-convergent rollback did not restore baseline'
 grep -Fxq "docker inspect --format {{.Config.Image}} {{.State.Running}} velox-worker" "$LOG" || fail 'rollback did not verify container digest'
 restart_count="$(grep -c '^systemctl restart velox-worker.service$' "$LOG" || true)"
