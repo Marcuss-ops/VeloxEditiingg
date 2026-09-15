@@ -17,6 +17,8 @@ set -euo pipefail
 #       ↓
 #   modifica atomica VELOX_WORKER_IMAGE
 #       ↓
+#   aggiorna atomico l'identità BUNDLE_HASH nel volume persistente
+#       ↓
 #   aggiorna atomico il baseline self-render dal medesimo image digest
 #       ↓
 #   systemctl restart velox-worker.service
@@ -110,6 +112,7 @@ BASELINE_DIR="$(dirname "$BASELINE_PATH")"
   echo "worker baseline directory missing: $BASELINE_DIR" >&2
   exit 1
 }
+BUNDLE_HASH_PATH="$WORK_DIR/BUNDLE_HASH.txt"
 
 # ── 3. Backup worker.env before the pull/swap ───────────────────────────────
 cp -p "$ENV_FILE" "$BACKUP_FILE"
@@ -126,9 +129,21 @@ if [[ -e "$BASELINE_PATH" ]]; then
   BASELINE_WAS_PRESENT=1
 fi
 
+BUNDLE_HASH_BACKUP_FILE="$(mktemp "$WORK_DIR/.BUNDLE_HASH.prev.XXXXXX")"
+BUNDLE_HASH_WAS_PRESENT=0
+if [[ -e "$BUNDLE_HASH_PATH" ]]; then
+  [[ -f "$BUNDLE_HASH_PATH" ]] || {
+    echo "worker bundle hash path is not a regular file: $BUNDLE_HASH_PATH" >&2
+    rm -f "$BUNDLE_HASH_BACKUP_FILE"
+    exit 1
+  }
+  cp -p "$BUNDLE_HASH_PATH" "$BUNDLE_HASH_BACKUP_FILE"
+  BUNDLE_HASH_WAS_PRESENT=1
+fi
+
 TARGET_BASELINE_FILE="$(mktemp "$BASELINE_DIR/.engine_selftest_baseline.target.XXXXXX")"
 cleanup_baseline_files() {
-  rm -f "$TARGET_BASELINE_FILE" "$BASELINE_BACKUP_FILE"
+  rm -f "$TARGET_BASELINE_FILE" "$BASELINE_BACKUP_FILE" "$BUNDLE_HASH_BACKUP_FILE" "${TARGET_BUNDLE_FILE:-}"
 }
 trap 'cleanup_baseline_files; rm -f "${tmp:-}"' EXIT
 
@@ -140,6 +155,11 @@ rollback() {
     cp -p "$BASELINE_BACKUP_FILE" "$BASELINE_PATH" 2>/dev/null || return 1
   else
     rm -f "$BASELINE_PATH" 2>/dev/null || return 1
+  fi
+  if [[ "$BUNDLE_HASH_WAS_PRESENT" == 1 ]]; then
+    cp -p "$BUNDLE_HASH_BACKUP_FILE" "$BUNDLE_HASH_PATH" 2>/dev/null || return 1
+  else
+    rm -f "$BUNDLE_HASH_PATH" 2>/dev/null || return 1
   fi
   systemctl restart velox-worker.service || return 1
   for _ in $(seq 1 60); do
@@ -181,6 +201,15 @@ TARGET_BUNDLE_HASH="$(printf '%s' "$TARGET_BUNDLE_HASH" | tr -d '[:space:]')"
   echo "target image bundle hash is not a SHA-256 digest" >&2
   exit 1
 }
+TARGET_BUNDLE_FILE="$(mktemp "$WORK_DIR/.BUNDLE_HASH.target.XXXXXX")"
+printf '%s\n' "$TARGET_BUNDLE_HASH" >"$TARGET_BUNDLE_FILE"
+if [[ "$BUNDLE_HASH_WAS_PRESENT" == 1 ]]; then
+  chown --reference="$BUNDLE_HASH_PATH" "$TARGET_BUNDLE_FILE"
+  chmod --reference="$BUNDLE_HASH_PATH" "$TARGET_BUNDLE_FILE"
+else
+  chown 10001:10001 "$TARGET_BUNDLE_FILE"
+  chmod 0644 "$TARGET_BUNDLE_FILE"
+fi
 
 # ── 5. Atomic VELOX_WORKER_IMAGE replacement ────────────────────────────────
 tmp="$(mktemp "${ENV_FILE}.tmp.XXXXXX")"
@@ -213,6 +242,13 @@ awk -v bundle_hash="$TARGET_BUNDLE_HASH" '
 chown --reference="$ENV_FILE" "$tmp"
 chmod --reference="$ENV_FILE" "$tmp"
 mv -f "$tmp" "$ENV_FILE"
+
+# Atomically select the bundle hash file produced by the exact target image.
+# The worker compares this persistent file with VELOX_BUNDLE_HASH during
+# bootstrap; updating only worker.env would make every valid new image fail
+# RW-PROD-003 A8.
+mv -f "$TARGET_BUNDLE_FILE" "$BUNDLE_HASH_PATH"
+TARGET_BUNDLE_FILE=""
 
 # Preserve the previous immutable ref as explicit runtime evidence for the
 # production doctor. This is metadata for rollback availability; it never
