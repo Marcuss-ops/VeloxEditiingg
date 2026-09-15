@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -32,6 +33,7 @@ import (
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/routing"
 	"velox-server/internal/store"
+	"velox-shared/contract"
 )
 
 func m2mJobsAuthFake(c *gin.Context) { c.Next() }
@@ -94,6 +96,80 @@ func validSubmitJobBody(idemKey string) SubmitJobRequest {
 			{DestinationID: "drive", Priority: 1, RetryBudget: &rb},
 		},
 	}
+}
+
+func validProducerOwnedFMP4Plan(t *testing.T) (string, string) {
+	t.Helper()
+	const durationUS int64 = 1_000_000
+	const timelineRevision int64 = 1
+	timelineSHA := strings.Repeat("c", 64)
+	videoSHA := strings.Repeat("b", 64)
+	audioSHA := strings.Repeat("a", 64)
+	profile := contract.CanonicalVideoProfileFMP4StreamV1Default
+
+	plan := &contract.CompiledRenderPlanV2{
+		PlanVersion:      contract.CompiledPlanVersionV2,
+		TimelineRevision: timelineRevision,
+		TimelineSHA256:   timelineSHA,
+		DurationUS:       durationUS,
+		Output: contract.OutputContractV2{
+			Container:    profile.Container,
+			VideoCodec:   profile.Codec,
+			Width:        profile.Width,
+			Height:       profile.Height,
+			FPSNum:       profile.FPSNum,
+			FPSDen:       profile.FPSDen,
+			PixelFormat:  profile.PixelFormat,
+			ProfileID:    profile.ProfileID,
+			CodecProfile: profile.CodecProfile,
+			CodecLevel:   profile.CodecLevel,
+			GOPSize:      profile.GOPSize,
+			BFrames:      profile.BFrames,
+			ClosedGOP:    profile.ClosedGOP,
+			TimeBaseNum:  profile.TimeBaseNum,
+			TimeBaseDen:  profile.TimeBaseDen,
+		},
+		FinalAudio: contract.FinalAudioV2{
+			Mode:             contract.AudioModeFinalAudioCopy,
+			AssetID:          "audio-final",
+			SHA256:           audioSHA,
+			SizeBytes:        200,
+			Codec:            "aac",
+			SampleRateHz:     48_000,
+			Channels:         2,
+			DurationUS:       durationUS,
+			TimelineRevision: timelineRevision,
+			TimelineSHA256:   timelineSHA,
+		},
+		VideoTracks: []contract.VideoTrackV2{{
+			TrackID: "main",
+			Segments: []contract.VideoSegmentV2{{
+				SegmentID:          "segment-0",
+				AssetID:            "video-source",
+				SHA256:             videoSHA,
+				TimelineStartFrame: 0,
+				FrameCount:         24,
+				SourceInUS:         0,
+				SourceDurationUS:   durationUS,
+			}},
+		}},
+		Assets: []contract.AssetRefV2{
+			{AssetID: "video-source", SHA256: videoSHA, SizeBytes: 100, Kind: "video", DurationUS: durationUS, Width: profile.Width, Height: profile.Height},
+			{AssetID: "audio-final", SHA256: audioSHA, SizeBytes: 200, Kind: "final_audio", MIME: "audio/mp4", DurationUS: durationUS},
+		},
+	}
+	if err := contract.ValidateCompiledRenderPlanV2(plan); err != nil {
+		t.Fatalf("test fMP4 plan failed contract validation: %v", err)
+	}
+	canonical, err := plan.CanonicalJSON()
+	if err != nil {
+		t.Fatalf("canonical fMP4 plan: %v", err)
+	}
+	sha, err := plan.PlanSHA256()
+	if err != nil {
+		t.Fatalf("fMP4 plan SHA: %v", err)
+	}
+	return string(canonical), sha
 }
 
 // expectedSubmitJobID derives the canonical job_id the Resolver
@@ -326,6 +402,73 @@ func TestSubmitJobE2E_SuccessAndReplay(t *testing.T) {
 	}
 	if got := countRowsByJobID(t, db, "jobs", "job_id", wantJobID); got != 1 {
 		t.Fatalf("after 409 jobs = %d, want 1", got)
+	}
+}
+
+func TestSubmitJobE2E_ProducerOwnedFMP4PlanRoutesAndPersistsCanonically(t *testing.T) {
+	t.Setenv("VELOX_FMP4_STREAM_PROFILE", "1")
+	h, db := newSubmitJobE2EStack(t)
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	h.RegisterRoutes(r, adminAuthFake, m2mJobsAuthFake)
+
+	planJSON, planSHA := validProducerOwnedFMP4Plan(t)
+	const idem = "e2e-producer-owned-fmp4-001"
+	rb := 3
+	body := SubmitJobRequest{
+		IdempotencyKey:           idem,
+		VideoName:                "Producer-owned fMP4 test",
+		ScriptText:               "The producer supplies the canonical fMP4 plan.",
+		CompiledRenderPlanJSON:   planJSON,
+		CompiledRenderPlanSHA256: planSHA,
+		DeliveryPlan: []SubmitDeliveryPlanEntry{{
+			DestinationID: "drive", Priority: 1, RetryBudget: &rb,
+		}},
+	}
+
+	w := postSubmitJob(t, r, body)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("producer-owned fMP4 POST: want 202, got %d body=%s", w.Code, w.Body.String())
+	}
+	var response map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode fMP4 response: %v", err)
+	}
+	jobID, ok := response["job_id"].(string)
+	if !ok || jobID == "" {
+		t.Fatalf("fMP4 response missing job_id: %s", w.Body.String())
+	}
+
+	var target string
+	if err := db.DB().QueryRow(
+		`SELECT target_executor_id FROM creator_forwardings WHERE source_provider = ? AND source_job_id = ?`,
+		ExternalAPISourceProvider, idem,
+	).Scan(&target); err != nil {
+		t.Fatalf("read fMP4 forwarding: %v", err)
+	}
+	if target != compiledPlanTargetExecutorID {
+		t.Fatalf("forwarding target = %q, want %q", target, compiledPlanTargetExecutorID)
+	}
+
+	var taskSpecJSON string
+	if err := db.DB().QueryRow(
+		`SELECT s.payload_json FROM tasks t JOIN task_specs s ON s.task_id = t.task_id WHERE t.job_id = ?`,
+		jobID,
+	).Scan(&taskSpecJSON); err != nil {
+		t.Fatalf("read fMP4 TaskSpec: %v", err)
+	}
+	var taskSpec map[string]interface{}
+	if err := json.Unmarshal([]byte(taskSpecJSON), &taskSpec); err != nil {
+		t.Fatalf("decode fMP4 TaskSpec: %v", err)
+	}
+	if got := taskSpec[contract.PayloadKeyCompiledRenderPlanJSON]; got != planJSON {
+		t.Fatalf("TaskSpec compiled plan changed: got %#v, want producer bytes", got)
+	}
+	if got := taskSpec[contract.PayloadKeyCompiledRenderPlanSHA]; got != planSHA {
+		t.Fatalf("TaskSpec compiled plan SHA = %#v, want %q", got, planSHA)
+	}
+	if err := contract.ValidateCompiledRenderPlanV2Payload(taskSpec); err != nil {
+		t.Fatalf("persisted fMP4 TaskSpec failed contract validation: %v", err)
 	}
 }
 

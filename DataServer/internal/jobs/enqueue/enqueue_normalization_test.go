@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"velox-shared/contract"
@@ -386,6 +387,21 @@ func TestShouldForwardPipelineResult(t *testing.T) {
 	}
 	if !ShouldForwardPipelineResult(map[string]interface{}{"status": "completed", "result": map[string]interface{}{"scenes_json": sceneJSON}}) {
 		t.Error("want true for renderable scenes without voiceover")
+	}
+	// A complete producer-owned V2 plan is independently forwardable: its
+	// video segments and FINAL_AUDIO_COPY asset replace the legacy scenes and
+	// positional voiceover fields.
+	compiledPlan := map[string]interface{}{
+		"status": "completed",
+		contract.PayloadKeyCompiledRenderPlanJSON: `{"plan_version":2}`,
+		contract.PayloadKeyCompiledRenderPlanSHA:  strings.Repeat("a", 64),
+	}
+	if !ShouldForwardPipelineResult(compiledPlan) {
+		t.Error("want true for a complete producer-owned compiled plan without legacy scenes/audio")
+	}
+	compiledPlan[contract.PayloadKeyCompiledRenderPlanSHA] = ""
+	if ShouldForwardPipelineResult(compiledPlan) {
+		t.Error("want false for a partial producer-owned compiled-plan envelope")
 	}
 	// audio_tracks-only payload is no longer forwardable: top-level
 	// audio_tracks was retired and does not count as a renderable audio

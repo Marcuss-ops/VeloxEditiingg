@@ -57,7 +57,9 @@ func BuildPipelinePayload(result map[string]interface{}) (map[string]interface{}
 	}
 
 	voiceovers := extractVoiceoverPaths(flat)
-	if len(voiceovers) == 0 && !hasRenderableMedia(flat) {
+	compiledPlanPresent := strings.TrimSpace(payload.FirstString(flat, contract.PayloadKeyCompiledRenderPlanJSON)) != "" &&
+		strings.TrimSpace(payload.FirstString(flat, contract.PayloadKeyCompiledRenderPlanSHA)) != ""
+	if len(voiceovers) == 0 && !hasRenderableMedia(flat) && !compiledPlanPresent {
 		// A render job with no voiceover AND no renderable scene media
 		// has nothing the worker can mux. surfaced here so the resolve
 		// path fails fast with an actionable message rather than letting
@@ -71,7 +73,7 @@ func BuildPipelinePayload(result map[string]interface{}) (map[string]interface{}
 	if scriptText == "" {
 		return nil, fmt.Errorf("script text missing from pipeline result")
 	}
-	if scenesJSON == "" {
+	if scenesJSON == "" && !compiledPlanPresent {
 		return nil, fmt.Errorf("scenes payload missing from pipeline result")
 	}
 
@@ -221,6 +223,16 @@ func ShouldForwardPipelineResult(result map[string]interface{}) bool {
 	// for a producer-side completed input handoff.
 	if status != "" && status != string(contract.InputAssemblyCompleted) {
 		return false
+	}
+	// A producer-owned CompiledRenderPlanV2 is already the complete renderer
+	// input. It intentionally has no legacy scenes_json or positional audio
+	// fields: the plan binds the video segments and the finalized audio asset
+	// by identity. Keep the envelope check here deliberately narrow; the
+	// strict V2 decoder and SHA verifier remain the authoritative semantic
+	// validation later in the normalization path.
+	if strings.TrimSpace(payload.FirstString(flat, contract.PayloadKeyCompiledRenderPlanJSON)) != "" &&
+		strings.TrimSpace(payload.FirstString(flat, contract.PayloadKeyCompiledRenderPlanSHA)) != "" {
+		return true
 	}
 	if payload.FirstString(flat, "scenes_json", "json_path") == "" && payload.FirstString(flat, "scenes") == "" {
 		return false
