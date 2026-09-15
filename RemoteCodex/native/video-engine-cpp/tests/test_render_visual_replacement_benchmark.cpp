@@ -2,8 +2,9 @@
 //
 // Performance comparison (plan §17): the SAME visual timeline is rendered
 // twice — once through the copy-only packet path (BASE/PREPARED/BASE stream
-// copy, zero decode/encode) and once through the legacy full-encode path
-// (decode → scale → encode every segment). The benchmark records, per path:
+// copy, zero decode/encode) and once through an explicit external FFmpeg
+// decode→encode baseline. The production legacy video fallback is not used
+// by this benchmark and cannot be silently re-enabled by the test.
 //
 //   wall_ms            steady_clock around RenderEngine::render()
 //   cpu_ms             getrusage user+system delta (engine process itself
@@ -159,6 +160,47 @@ Sample runSample(const velox::plan::RenderPlan& plan, const std::string& label) 
     return s;
 }
 
+Sample runExternalEncodeSample(const fs::path& input, const fs::path& output,
+                               const std::string& label) {
+    Sample s;
+    s.label = label;
+    struct rusage selfBefore{}, selfAfter{}, childBefore{}, childAfter{};
+    getrusage(RUSAGE_SELF, &selfBefore);
+    getrusage(RUSAGE_CHILDREN, &childBefore);
+    const auto t0 = std::chrono::steady_clock::now();
+    std::ostringstream command;
+    command << "ffmpeg -y -hide_banner -loglevel error"
+            << " -i " << velox::file::shellQuote(input.string())
+            << " -t 30 -an -c:v libx264 -preset ultrafast"
+            << " -profile:v high -level:v 4.0 -pix_fmt yuv420p"
+            << " " << velox::file::shellQuote(output.string());
+    s.success = velox::file::runCommand(command.str());
+    const auto t1 = std::chrono::steady_clock::now();
+    getrusage(RUSAGE_SELF, &selfAfter);
+    getrusage(RUSAGE_CHILDREN, &childAfter);
+    s.wall_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    s.cpu_user_ms = timevalToMs(selfAfter.ru_utime) - timevalToMs(selfBefore.ru_utime)
+                  + timevalToMs(childAfter.ru_utime) - timevalToMs(childBefore.ru_utime);
+    s.cpu_system_ms = timevalToMs(selfAfter.ru_stime) - timevalToMs(selfBefore.ru_stime)
+                    + timevalToMs(childAfter.ru_stime) - timevalToMs(childBefore.ru_stime);
+    s.encode_passes = s.success ? 1 : 0;
+    s.concat_mode = "external_ffmpeg_encode";
+    if (s.success) {
+        const std::string frameCount = velox::file::captureCommandOutput(
+            "ffprobe -v error -count_frames -select_streams v:0 "
+            "-show_entries stream=nb_read_frames -of default=nw=1:nk=1 " +
+            velox::file::shellQuote(output.string()));
+        try {
+            s.frames_encoded = std::stoll(frameCount);
+            s.frames_decoded = s.frames_encoded;
+        } catch (...) {
+            s.success = false;
+            s.error = "ffprobe did not return a numeric encoded-frame count";
+        }
+    }
+    return s;
+}
+
 void printSample(const Sample& s) {
     std::cerr << "[benchmark][" << s.label << "]"
               << " wall_ms=" << s.wall_ms
@@ -284,25 +326,6 @@ int main() {
         {finalAudio.string(), 1.0, 0.0, 30.0, "music", false, 0, 30'000'000},
     };
 
-    // ── Encode plan (V1 float timing): the SAME timeline, but the legacy
-    //    loop decodes, scales and re-encodes every segment (TransformSpec
-    //    default slow_zoom=true routes it to the FFmpeg encode path). ────
-    velox::plan::RenderPlan encodePlan;
-    encodePlan.version = velox::plan::kRenderPlanVersionV1;
-    encodePlan.job_id = "visual-replacement-benchmark-encode";
-    encodePlan.canvas = {1920, 1080, 24};
-    encodePlan.copy_only = false;
-    encodePlan.mixed = false;
-    encodePlan.output_path = encodeOut.string();
-    encodePlan.timeline = {
-        {velox::plan::VideoSource{baseRed.string(), ""}, 10.0, false, {}, "base-prefix", 0, 0, 0, 0, 0},
-        {velox::plan::VideoSource{preparedGreen.string(), ""}, 5.0, false, {}, "replacement", 0, 0, 0, 0, 0},
-        {velox::plan::VideoSource{baseRed.string(), ""}, 15.0, false, {}, "base-suffix", 0, 0, 0, 0, 0},
-    };
-    encodePlan.audio_tracks = {
-        {finalAudio.string(), 1.0, 0.0, 30.0, "music", false, 0, 30'000'000},
-    };
-
     // ── Copy path (cold + warm) under the sentinel PATH. ────────────────
     const char* previousPath = std::getenv("PATH");
     const bool hadPath = previousPath != nullptr;
@@ -315,7 +338,7 @@ int main() {
     warmPlan.output_path = warmOut.string();
     const Sample warm = runSample(warmPlan, "copy_warm");
 
-    // ── Encode path under the real PATH (it legitimately spawns ffmpeg).
+    // ── Encode baseline under the real PATH (it legitimately spawns ffmpeg).
     //    An ultrafast preset keeps the comparison CI-fast; the preset only
     //    affects encode wall time, never the zero-encode copy invariant. ──
     if (hadPath) {
@@ -324,7 +347,7 @@ int main() {
         unsetenv("PATH");
     }
     setenv("VELOX_FFMPEG_PRESET", "ultrafast", 1);
-    const Sample encode = runSample(encodePlan, "full_encode");
+    const Sample encode = runExternalEncodeSample(baseRed, encodeOut, "full_encode");
     unsetenv("VELOX_FFMPEG_PRESET");
 
     printSample(copy);
@@ -349,7 +372,7 @@ int main() {
     expect(copy.transcode_segments == 0,
            "copy transcode_segments=0, actual=" + std::to_string(copy.transcode_segments));
 
-    // ── Encode path must actually do decode→encode work. ────────────────
+    // ── Encode baseline must actually do decode→encode work. ───────────
     expect(encode.success, "encode render succeeds");
     if (!encode.success) {
         std::cerr << "encode render error: " << encode.error << "\n";
