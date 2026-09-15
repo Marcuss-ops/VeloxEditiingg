@@ -8,13 +8,20 @@ import (
 )
 
 type stockFolderListerStub struct {
-	files map[string][]driveapi.File
-	calls []string
+	files         map[string][]driveapi.File
+	calls         []string
+	metadata      map[string]*driveapi.File
+	metadataCalls []string
 }
 
 func (s *stockFolderListerStub) ListFiles(_ context.Context, folderID string, _ int) ([]driveapi.File, error) {
 	s.calls = append(s.calls, folderID)
 	return append([]driveapi.File(nil), s.files[folderID]...), nil
+}
+
+func (s *stockFolderListerStub) GetFileMetadata(_ context.Context, fileID string) (*driveapi.File, error) {
+	s.metadataCalls = append(s.metadataCalls, fileID)
+	return s.metadata[fileID], nil
 }
 
 func TestExpandCreatorStockFoldersExpandsVideoFilesRecursively(t *testing.T) {
@@ -60,6 +67,37 @@ func TestExpandCreatorStockFoldersExpandsVideoFilesRecursively(t *testing.T) {
 	}
 	if len(lister.calls) != 2 || lister.calls[0] != "root-folder" || lister.calls[1] != "nested-folder" {
 		t.Fatalf("folder calls = %#v, want root then nested", lister.calls)
+	}
+}
+
+func TestExpandCreatorStockFoldersUsesCachedMetadataFallback(t *testing.T) {
+	lister := &stockFolderListerStub{
+		files: map[string][]driveapi.File{
+			"root-folder": {
+				{ID: "a", Name: "clip-a.mp4", MimeType: "video/mp4"},
+				{ID: "a", Name: "clip-a-copy.mp4", MimeType: "video/mp4"},
+			},
+		},
+		metadata: map[string]*driveapi.File{
+			"a": {ID: "a", VideoMediaMetadata: struct {
+				DurationMillis int64 `json:"durationMillis,omitempty,string"`
+			}{DurationMillis: 2300}},
+		},
+	}
+	payload := map[string]interface{}{"scenes": []interface{}{map[string]interface{}{
+		"stock": []interface{}{map[string]interface{}{"url": "https://drive.google.com/drive/folders/root-folder"}},
+	}}}
+
+	if err := expandCreatorStockFolders(context.Background(), payload, lister); err != nil {
+		t.Fatalf("expandCreatorStockFolders: %v", err)
+	}
+	stock := payload["scenes"].([]interface{})[0].(map[string]interface{})["stock"].([]interface{})
+	if len(stock) != 2 || stock[0].(map[string]interface{})["duration_ms"] != int64(2300) ||
+		stock[1].(map[string]interface{})["duration_ms"] != int64(2300) {
+		t.Fatalf("expanded stock metadata = %#v", stock)
+	}
+	if len(lister.metadataCalls) != 1 || lister.metadataCalls[0] != "a" {
+		t.Fatalf("metadata calls = %#v, want one lookup for asset a", lister.metadataCalls)
 	}
 }
 

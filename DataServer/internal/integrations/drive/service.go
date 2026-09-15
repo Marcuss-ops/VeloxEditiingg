@@ -354,9 +354,10 @@ func (s *Service) GetFileLink(ctx context.Context, fileID string) (string, error
 	return result.WebViewLink, nil
 }
 
-// GetFileMetadata returns the basic metadata needed to validate and stage a Drive file.
+// GetFileMetadata returns the metadata needed to validate, stage, and compile
+// a Drive media reference without making the worker probe it again.
 func (s *Service) GetFileMetadata(ctx context.Context, fileID string) (*File, error) {
-	endpoint := fmt.Sprintf("/files/%s?fields=id,name,mimeType,size,trashed", fileID)
+	endpoint := fmt.Sprintf("/files/%s?fields=id,name,mimeType,size,videoMediaMetadata(durationMillis),trashed", fileID)
 
 	var result File
 	if err := s.doAPIRequest(ctx, "GET", endpoint, nil, &result); err != nil {

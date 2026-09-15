@@ -23,6 +23,14 @@ type StockFolderLister interface {
 	ListFiles(ctx context.Context, folderID string, pageSize int) ([]driveapi.File, error)
 }
 
+// StockFileMetadataGetter is the optional Drive metadata fallback used when
+// files.list returns a video without videoMediaMetadata.durationMillis. The
+// folder expansion keeps a per-expansion cache so the same asset ID is never
+// fetched more than once.
+type StockFileMetadataGetter interface {
+	GetFileMetadata(ctx context.Context, fileID string) (*driveapi.File, error)
+}
+
 // expandCreatorStockFolders replaces every Drive folder reference inside
 // payload.scenes[].stock with the video files found in that folder (including
 // nested folders). A folder is an input collection, never a renderable media
@@ -68,6 +76,7 @@ func expandStockValue(ctx context.Context, raw interface{}, lister StockFolderLi
 	}
 
 	var expanded []interface{}
+	durationCache := make(map[string]int64)
 	changed := false
 	for _, entry := range entries {
 		folderURL := stockEntryFolderURL(entry)
@@ -95,7 +104,24 @@ func expandStockValue(ctx context.Context, raw interface{}, lister StockFolderLi
 				"drive_file_id": file.ID,
 				"url":           "velox-drive://" + file.ID,
 			}
-			if duration := file.VideoMediaMetadata.DurationMillis; duration > 0 {
+			duration := file.VideoMediaMetadata.DurationMillis
+			if duration > 0 {
+				durationCache[file.ID] = duration
+			} else {
+				if cached, ok := durationCache[file.ID]; ok {
+					duration = cached
+				} else if getter, ok := lister.(StockFileMetadataGetter); ok {
+					metadata, err := getter.GetFileMetadata(ctx, file.ID)
+					if err != nil {
+						return nil, false, fmt.Errorf("read metadata for stock file %q: %w", file.ID, err)
+					}
+					if metadata != nil {
+						duration = metadata.VideoMediaMetadata.DurationMillis
+					}
+					durationCache[file.ID] = duration
+				}
+			}
+			if duration > 0 {
 				asset["duration_ms"] = duration
 			}
 			expanded = append(expanded, asset)
