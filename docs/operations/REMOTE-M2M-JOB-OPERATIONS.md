@@ -111,7 +111,13 @@ jobs.submit
 
 ## Invio di un job
 
-Il contratto attualmente attivo usa l'envelope `EnqueueRequest`. Il client deve inviare `type`, `project`, `video_name`, `payload` e `idempotency_key`.
+Il contratto canonico attualmente attivo per `POST /api/v1/jobs` è
+`SubmitJobRequest`: il client invia i campi tipizzati direttamente nel body.
+Per l'assemblaggio packet-copy il producer deve inviare il
+`CompiledRenderPlanV2` completo nei due campi top-level
+`compiled_render_plan_json` e `compiled_render_plan_sha256`. Il Master conserva
+quei byte, li valida e instrada il task a `video.assemble.copy.v1`; non compila
+un piano alternativo e non deduce il profilo dal flag del worker.
 
 Esempio:
 
@@ -121,21 +127,23 @@ set -a
 set +a
 
 IDEMPOTENCY_KEY="matt-damon-5-$(date -u +%Y%m%dT%H%M%SZ)"
+PLAN_JSON=/path/to/compiled-render-plan-v2.json
+PLAN_SHA256="$(sha256sum "$PLAN_JSON" | awk '{print $1}')"
 
 jq -n \
-  --arg type "script.generate" \
-  --arg project "matt-damon-5-clips-docs-true" \
-  --arg video_name "Matt Damon — 5 clip verification" \
+  --rawfile plan "$PLAN_JSON" \
+  --arg plan_sha256 "$PLAN_SHA256" \
+  --arg job_type "scene.composite.v1" \
+  --arg video_name "Matt Damon — fMP4 verification" \
+  --arg script_text "Producer-owned compiled render plan" \
   --arg idem "$IDEMPOTENCY_KEY" \
-  --slurpfile payload /path/to/job-payload.json \
   '{
-    type: $type,
-    project: $project,
+    job_type: $job_type,
     video_name: $video_name,
-    payload: $payload[0],
-    priority: 1,
-    max_retries: 3,
-    correlation_id: $idem,
+    script_text: $script_text,
+    compiled_render_plan_json: $plan,
+    compiled_render_plan_sha256: $plan_sha256,
+    delivery_plan: [{destination_id: "local-fallback"}],
     idempotency_key: $idem
   }' > /tmp/velox-job.json
 
