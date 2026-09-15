@@ -25,36 +25,49 @@ type capacityReport struct {
 	WorkerID string `json:"worker_id"`
 
 	// Host resource peaks/floors from worker_resource_samples.
-	CPUPeakRatio           float64 `json:"cpu_peak_ratio"`
-	CPUIOWaitPeakRatio     float64 `json:"cpu_iowait_peak_ratio"`
-	MemoryPeakRatio        float64 `json:"memory_peak_ratio"`
-	MemoryAvailableMinMB   float64 `json:"memory_available_min_mb"`
-	DiskFreeMinBytes       int64   `json:"disk_free_min_bytes"`
-	ScratchPeakBytes       int64   `json:"scratch_peak_bytes"`
-	FDPeak                 int64   `json:"fd_peak"`
-	FDLimit                int64   `json:"fd_limit"`
-	FDUtillizationPeak     float64 `json:"fd_utilization_peak"`
-	NetworkRxMBPS          float64 `json:"network_rx_mbps"`
-	NetworkTxMBPS          float64 `json:"network_tx_mbps"`
-	Load1Peak              float64 `json:"load_1_peak"`
-	RunQueuePeak           int64   `json:"run_queue_peak"`
-	DiskIOWaitMSMax        int64   `json:"disk_io_wait_ms_max"`
-	NetworkRetransmitsMax  int64   `json:"network_retransmits_max"`
-	RenderJobsActiveAvg    float64 `json:"render_jobs_active_avg"`
-	PrefetchJobsActiveAvg  float64 `json:"prefetch_jobs_active_avg"`
-	PublisherJobsActiveAvg float64 `json:"publisher_jobs_active_avg"`
-	TaskSlotsAvg           float64 `json:"task_slots_avg"`
-	SampleCount            int     `json:"sample_count"`
-	WindowStart            string  `json:"window_start"`
-	WindowEnd              string  `json:"window_end"`
+	CPUPeakRatio              float64 `json:"cpu_peak_ratio"`
+	CPUIOWaitPeakRatio        float64 `json:"cpu_iowait_peak_ratio"`
+	MemoryPeakRatio           float64 `json:"memory_peak_ratio"`
+	MemoryAvailableMinMB      float64 `json:"memory_available_min_mb"`
+	DiskFreeMinBytes          int64   `json:"disk_free_min_bytes"`
+	ScratchPeakBytes          int64   `json:"scratch_peak_bytes"`
+	FDPeak                    int64   `json:"fd_peak"`
+	FDLimit                   int64   `json:"fd_limit"`
+	FDUtillizationPeak        float64 `json:"fd_utilization_peak"`
+	NetworkRxMBPS             float64 `json:"network_rx_mbps"`
+	NetworkTxMBPS             float64 `json:"network_tx_mbps"`
+	DiskReadCeilingMBPS       float64 `json:"disk_read_ceiling_mbps"`
+	DiskWriteCeilingMBPS      float64 `json:"disk_write_ceiling_mbps"`
+	NetworkIngressCeilingMBPS float64 `json:"network_ingress_ceiling_mbps"`
+	NetworkEgressCeilingMBPS  float64 `json:"network_egress_ceiling_mbps"`
+	Load1Peak                 float64 `json:"load_1_peak"`
+	RunQueuePeak              int64   `json:"run_queue_peak"`
+	DiskIOWaitMSMax           int64   `json:"disk_io_wait_ms_max"`
+	NetworkRetransmitsMax     int64   `json:"network_retransmits_max"`
+	RenderJobsActiveAvg       float64 `json:"render_jobs_active_avg"`
+	PrefetchJobsActiveAvg     float64 `json:"prefetch_jobs_active_avg"`
+	PublisherJobsActiveAvg    float64 `json:"publisher_jobs_active_avg"`
+	TaskSlotsAvg              float64 `json:"task_slots_avg"`
+	RenderJobsActivePeak      int64   `json:"render_jobs_active_peak"`
+	MaxObservedConcurrent     int64   `json:"max_observed_concurrent"`
+	SlotUtilizationPeak       float64 `json:"slot_utilization_peak"`
+	CgroupThrottledCountMax   int64   `json:"cgroup_throttled_count_max"`
+	CgroupThrottledUsecMax    int64   `json:"cgroup_throttled_usec_max"`
+	CPUSomePressurePeak       float64 `json:"cpu_some_pressure_peak_avg10"`
+	IOSomePressurePeak        float64 `json:"io_some_pressure_peak_avg10"`
+	SampleCount               int     `json:"sample_count"`
+	WindowStart               string  `json:"window_start"`
+	WindowEnd                 string  `json:"window_end"`
 
 	// Per-job capacity facts from task_attempt_metrics.
-	AvgJobScratchPeakBytes int64 `json:"avg_job_scratch_peak_bytes"`
-	MaxJobScratchPeakBytes int64 `json:"max_job_scratch_peak_bytes"`
-	AvgJobPublishBytes     int64 `json:"avg_job_publish_bytes"`
-	AvgJobPageFaults       int64 `json:"avg_job_page_faults"`
-	AvgJobPeakRSSDelta     int64 `json:"avg_job_peak_rss_delta_bytes"`
-	AttemptCount           int   `json:"attempt_count"`
+	AvgJobScratchPeakBytes int64   `json:"avg_job_scratch_peak_bytes"`
+	MaxJobScratchPeakBytes int64   `json:"max_job_scratch_peak_bytes"`
+	AvgJobPublishBytes     int64   `json:"avg_job_publish_bytes"`
+	AvgJobPageFaults       int64   `json:"avg_job_page_faults"`
+	AvgJobPeakRSSDelta     int64   `json:"avg_job_peak_rss_delta_bytes"`
+	AttemptCount           int     `json:"attempt_count"`
+	AvgAttemptWallSeconds  float64 `json:"avg_attempt_wall_seconds"`
+	ObservedVideosPerHour  float64 `json:"observed_videos_per_hour"`
 
 	// Latest benchmark result.
 	BenchmarkRunID string  `json:"benchmark_run_id,omitempty"`
@@ -141,6 +154,11 @@ func printCapacityReport(r *capacityReport) {
 	fmt.Printf("  FD peak:         %d / %d (%.1f%%)\n", r.FDPeak, r.FDLimit, r.FDUtillizationPeak*100)
 	fmt.Printf("  Network rx:      %.1f Mbps (avg)\n", r.NetworkRxMBPS)
 	fmt.Printf("  Network tx:      %.1f Mbps (avg)\n", r.NetworkTxMBPS)
+	fmt.Printf("  Disk ceiling:    %.1f / %.1f MB/s (read/write observed max)\n", r.DiskReadCeilingMBPS, r.DiskWriteCeilingMBPS)
+	fmt.Printf("  Network ceiling: %.1f / %.1f Mbps (in/out observed max)\n", r.NetworkIngressCeilingMBPS, r.NetworkEgressCeilingMBPS)
+	fmt.Printf("  Slots:           %d max concurrent, %.1f%% peak utilization\n", r.MaxObservedConcurrent, r.SlotUtilizationPeak*100)
+	fmt.Printf("  CFS throttling:  %d events / %d usec max\n", r.CgroupThrottledCountMax, r.CgroupThrottledUsecMax)
+	fmt.Printf("  PSI some.avg10:  CPU %.2f%% / IO %.2f%% peak\n", r.CPUSomePressurePeak, r.IOSomePressurePeak)
 	fmt.Printf("  Load1 peak:      %.1f\n", r.Load1Peak)
 	fmt.Printf("  Run queue peak:  %d\n", r.RunQueuePeak)
 	fmt.Printf("  IO wait max:     %d ms\n", r.DiskIOWaitMSMax)
@@ -154,6 +172,8 @@ func printCapacityReport(r *capacityReport) {
 		fmt.Printf("  Publish bytes/avg:   %s\n", formatBytes(r.AvgJobPublishBytes))
 		fmt.Printf("  Page faults/avg:     %d\n", r.AvgJobPageFaults)
 		fmt.Printf("  RSS delta/avg:       %s\n", formatBytes(r.AvgJobPeakRSSDelta))
+		fmt.Printf("  Wall time avg:       %.2fs\n", r.AvgAttemptWallSeconds)
+		fmt.Printf("  Observed throughput: %.2f videos/hour (24h)\n", r.ObservedVideosPerHour)
 	} else {
 		fmt.Println("  No succeeded attempts yet")
 	}
