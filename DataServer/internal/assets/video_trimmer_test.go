@@ -70,6 +70,20 @@ func TestVideoTrimmerPlanUsesFrameAccurateReencodeForMidGOPSegment(t *testing.T)
 	}
 }
 
+func TestVideoTrimmerReencodesCanonicalSourceAboveBitrateCap(t *testing.T) {
+	trimmer := newVideoTrimmerForTest(&recordingVideoRunner{}, defaultVideoNormalization)
+	probe := normalizedVideoProbe(10, []float64{0, 2, 4, 6, 8, 10})
+	probe.VideoBitrateBPS = 4_000_000
+
+	plan, err := trimmer.Plan(probe, VideoSegment{StartSeconds: 2, EndSeconds: 6}, "/source.mp4", "/segment.mp4")
+	if err != nil {
+		t.Fatalf("Plan() error: %v", err)
+	}
+	if plan.Mode != TrimModeFrameAccurateReencode || !plan.RequiresNormalization {
+		t.Fatalf("plan = %+v, want bitrate-cap normalization", plan)
+	}
+}
+
 func TestVideoTrimmerNormalizesBeforeTrimming(t *testing.T) {
 	runner := &recordingVideoRunner{probeOutput: probeJSON(t, VideoProbe{
 		DurationSeconds: 12,
@@ -109,8 +123,8 @@ func TestVideoTrimmerNormalizesBeforeTrimming(t *testing.T) {
 	if runner.commands[0].name != "ffprobe" || runner.commands[1].name != "ffmpeg" || runner.commands[2].name != "ffmpeg" {
 		t.Fatalf("command sequence = %#v", runner.commands)
 	}
-	assertContainsSequence(t, runner.commands[1].args, "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,fps=30/1", "-c:v", "libx264", "-b:v", "4M", "-maxrate", "4M", "-bufsize", "8M", "-video_track_timescale", "90000", "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2")
-	assertContainsSequence(t, runner.commands[2].args, "-ss", "1.250000", "-t", "3.500000", "-c:v", "libx264", "-b:v", "4M", "-maxrate", "4M", "-bufsize", "8M", "-pix_fmt", "yuv420p", "-video_track_timescale", "90000", "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2")
+	assertContainsSequence(t, runner.commands[1].args, "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,fps=30/1", "-c:v", "libx264", "-b:v", "2.25M", "-maxrate", "2.25M", "-bufsize", "4.5M", "-video_track_timescale", "90000", "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2")
+	assertContainsSequence(t, runner.commands[2].args, "-ss", "1.250000", "-t", "3.500000", "-c:v", "libx264", "-b:v", "2.25M", "-maxrate", "2.25M", "-bufsize", "4.5M", "-pix_fmt", "yuv420p", "-video_track_timescale", "90000", "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2")
 }
 
 func TestVideoTrimmerRejectsInvalidOrOutOfBoundsSegments(t *testing.T) {

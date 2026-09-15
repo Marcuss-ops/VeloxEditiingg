@@ -22,6 +22,8 @@ type VideoNormalization struct {
 	FPSNum             int
 	FPSDen             int
 	VideoCodec         string
+	VideoBitrate       string
+	VideoBufferSize    string
 	AudioCodec         string
 	AudioBitrate       string
 	PixelFormat        string
@@ -37,6 +39,8 @@ var defaultVideoNormalization = VideoNormalization{
 	FPSNum:             30,
 	FPSDen:             1,
 	VideoCodec:         "h264",
+	VideoBitrate:       "2.25M",
+	VideoBufferSize:    "4.5M",
 	AudioCodec:         "aac",
 	AudioBitrate:       "128k",
 	PixelFormat:        "yuv420p",
@@ -62,6 +66,7 @@ type VideoProbe struct {
 	TimebaseNum     int
 	TimebaseDen     int
 	VideoCodec      string
+	VideoBitrateBPS int64
 	AudioCodec      string
 	AudioSampleRate int
 	AudioChannels   int
@@ -120,6 +125,12 @@ func NewVideoTrimmer(spec VideoNormalization) *VideoTrimmer {
 	}
 	if strings.TrimSpace(spec.AudioBitrate) == "" {
 		spec.AudioBitrate = defaultVideoNormalization.AudioBitrate
+	}
+	if strings.TrimSpace(spec.VideoBitrate) == "" {
+		spec.VideoBitrate = defaultVideoNormalization.VideoBitrate
+	}
+	if strings.TrimSpace(spec.VideoBufferSize) == "" {
+		spec.VideoBufferSize = defaultVideoNormalization.VideoBufferSize
 	}
 	return &VideoTrimmer{runner: execVideoCommandRunner{}, spec: spec}
 }
@@ -182,6 +193,7 @@ func (t *VideoTrimmer) Probe(ctx context.Context, inputPath string) (VideoProbe,
 	probe.Width = videoStream.Width
 	probe.Height = videoStream.Height
 	probe.VideoCodec = strings.ToLower(strings.TrimSpace(videoStream.CodecName))
+	probe.VideoBitrateBPS = jsonInt64(videoStream.BitRate)
 	probe.PixelFormat = strings.ToLower(strings.TrimSpace(videoStream.PixelFormat))
 	probe.FPSNum, probe.FPSDen = parseRatio(videoStream.FrameRate)
 	probe.TimebaseNum, probe.TimebaseDen = parseRatio(videoStream.TimeBase)
@@ -337,6 +349,7 @@ type ffprobeStream struct {
 	FrameRate   string          `json:"r_frame_rate"`
 	TimeBase    string          `json:"time_base"`
 	PixelFormat string          `json:"pix_fmt"`
+	BitRate     json.RawMessage `json:"bit_rate"`
 	Duration    json.RawMessage `json:"duration"`
 	SampleRate  json.RawMessage `json:"sample_rate"`
 	Channels    json.RawMessage `json:"channels"`
@@ -370,13 +383,22 @@ func jsonInt(raw json.RawMessage) int {
 	return parsed
 }
 
+func jsonInt64(raw json.RawMessage) int64 {
+	value := strings.Trim(strings.TrimSpace(string(raw)), `"`)
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return parsed
+}
+
 func normalizationArgs(spec VideoNormalization, inputPath, outputPath string) []string {
 	return []string{
 		"-hide_banner", "-loglevel", "error", "-y",
 		"-i", inputPath,
 		"-map", "0:v:0", "-map", "0:a?",
 		"-vf", fmt.Sprintf("scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,fps=%d/%d", spec.Width, spec.Height, spec.Width, spec.Height, spec.FPSNum, spec.FPSDen),
-		"-c:v", "libx264", "-b:v", "4M", "-maxrate", "4M", "-bufsize", "8M", "-pix_fmt", spec.PixelFormat,
+		"-c:v", "libx264", "-b:v", spec.VideoBitrate, "-maxrate", spec.VideoBitrate, "-bufsize", spec.VideoBufferSize, "-pix_fmt", spec.PixelFormat,
 		"-video_track_timescale", strconv.Itoa(spec.VideoTrackTimebase),
 		"-c:a", spec.AudioCodec, "-b:a", spec.AudioBitrate, "-ar", strconv.Itoa(spec.AudioSampleRate), "-ac", strconv.Itoa(spec.AudioChannels),
 		"-movflags", "+faststart", outputPath,
@@ -388,7 +410,7 @@ func trimArgs(mode TrimMode, segment VideoSegment, duration float64, inputPath, 
 	if mode == TrimModeStreamCopy {
 		return append(common, "-ss", formatSeconds(segment.StartSeconds), "-i", inputPath, "-t", formatSeconds(duration), "-map", "0:v:0", "-map", "0:a?", "-c", "copy", "-avoid_negative_ts", "make_zero", "-reset_timestamps", "1", outputPath)
 	}
-	return append(common, "-i", inputPath, "-ss", formatSeconds(segment.StartSeconds), "-t", formatSeconds(duration), "-map", "0:v:0", "-map", "0:a?", "-vf", fmt.Sprintf("fps=%d/%d", spec.FPSNum, spec.FPSDen), "-c:v", "libx264", "-b:v", "4M", "-maxrate", "4M", "-bufsize", "8M", "-pix_fmt", spec.PixelFormat, "-video_track_timescale", strconv.Itoa(spec.VideoTrackTimebase), "-c:a", spec.AudioCodec, "-b:a", spec.AudioBitrate, "-ar", strconv.Itoa(spec.AudioSampleRate), "-ac", strconv.Itoa(spec.AudioChannels), "-avoid_negative_ts", "make_zero", "-reset_timestamps", "1", outputPath)
+	return append(common, "-i", inputPath, "-ss", formatSeconds(segment.StartSeconds), "-t", formatSeconds(duration), "-map", "0:v:0", "-map", "0:a?", "-vf", fmt.Sprintf("fps=%d/%d", spec.FPSNum, spec.FPSDen), "-c:v", "libx264", "-b:v", spec.VideoBitrate, "-maxrate", spec.VideoBitrate, "-bufsize", spec.VideoBufferSize, "-pix_fmt", spec.PixelFormat, "-video_track_timescale", strconv.Itoa(spec.VideoTrackTimebase), "-c:a", spec.AudioCodec, "-b:a", spec.AudioBitrate, "-ar", strconv.Itoa(spec.AudioSampleRate), "-ac", strconv.Itoa(spec.AudioChannels), "-avoid_negative_ts", "make_zero", "-reset_timestamps", "1", outputPath)
 }
 
 func validateSegment(total float64, segment VideoSegment) error {
@@ -405,6 +427,11 @@ func validateSegment(total float64, segment VideoSegment) error {
 }
 
 func matchesNormalization(probe VideoProbe, spec VideoNormalization) bool {
+	bitrateMatches := true
+	if probe.VideoBitrateBPS > 0 {
+		targetBPS := parseBitrateBPS(spec.VideoBitrate)
+		bitrateMatches = targetBPS > 0 && probe.VideoBitrateBPS <= targetBPS
+	}
 	return probe.Width == spec.Width && probe.Height == spec.Height &&
 		probe.FPSNum == spec.FPSNum && probe.FPSDen == spec.FPSDen &&
 		probe.VideoCodec == strings.ToLower(spec.VideoCodec) &&
@@ -412,7 +439,28 @@ func matchesNormalization(probe VideoProbe, spec VideoNormalization) bool {
 		probe.AudioSampleRate == spec.AudioSampleRate &&
 		probe.AudioChannels == spec.AudioChannels &&
 		probe.PixelFormat == strings.ToLower(spec.PixelFormat) &&
-		probe.TimebaseNum == 1 && probe.TimebaseDen == spec.VideoTrackTimebase
+		probe.TimebaseNum == 1 && probe.TimebaseDen == spec.VideoTrackTimebase && bitrateMatches
+}
+
+func parseBitrateBPS(value string) int64 {
+	value = strings.TrimSpace(strings.ToUpper(value))
+	if value == "" {
+		return 0
+	}
+	multiplier := float64(1)
+	switch value[len(value)-1] {
+	case 'K':
+		multiplier = 1000
+		value = value[:len(value)-1]
+	case 'M':
+		multiplier = 1000 * 1000
+		value = value[:len(value)-1]
+	}
+	number, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+	if err != nil || number <= 0 {
+		return 0
+	}
+	return int64(number * multiplier)
 }
 
 func isKeyframeBoundary(value float64, keyframes []float64) bool {
