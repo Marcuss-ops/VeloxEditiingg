@@ -38,6 +38,10 @@ type engineSidecar struct {
 	ConcatMode         string             `json:"concat_mode"`
 	CopySegments       int64              `json:"copy_segments"`
 	TranscodeSegments  int64              `json:"transcode_segments"`
+	SegmentsTotal      int64              `json:"segments_total"`
+	SegmentsPacketCopy int64              `json:"segments_packet_copy"`
+	SegmentsReencoded  int64              `json:"segments_reencoded"`
+	PacketCopyRatio    float64            `json:"packet_copy_ratio"`
 	TotalSize          int64              `json:"total_size"`
 	OutTimeUs          int64              `json:"out_time_us"`
 	OutTimeMs          int64              `json:"out_time_ms"`

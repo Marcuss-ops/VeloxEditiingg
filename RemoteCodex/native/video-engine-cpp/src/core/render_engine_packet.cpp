@@ -141,9 +141,13 @@ RenderResult RenderEngine::renderCopyOnly(
             ? item.duration_us
             : static_cast<int64_t>(
                   std::llround(item.duration_seconds * 1'000'000.0));
-        request.video_segments.push_back({
-            localVideo, item.source_in_us, duration_us, item.include_audio,
-            false, false, false, item.metadata_certified});
+        request.video_segments.push_back(media::CopyOnlyVideoSegment{
+            .path = localVideo,
+            .source_in_us = item.source_in_us,
+            .source_duration_us = duration_us,
+            .include_audio = item.include_audio,
+            .metadata_certified = item.metadata_certified,
+        });
         total_copy_duration += item.duration_us > 0
             ? static_cast<double>(item.duration_us) / 1'000'000.0
             : item.duration_seconds;
@@ -190,12 +194,14 @@ RenderResult RenderEngine::renderCopyOnly(
                          std::llround(track.duration_seconds * 1'000'000.0))
                    : 0);
         request.audio = media::CopyOnlyAudioTrack{
-            boundAudio.first,
-            track.start_offset_us > 0
+            .path = boundAudio.first,
+            .start_offset_us = track.start_offset_us > 0
                 ? track.start_offset_us
                 : static_cast<int64_t>(
                       std::llround(track.start_time_offset * 1'000'000.0)),
-            declared_audio_duration, track.metadata_certified};
+            .duration_us = declared_audio_duration,
+            .metadata_certified = track.metadata_certified,
+        };
     }
 
     duration_seconds_.store(total_copy_duration);
@@ -376,16 +382,20 @@ bool RenderEngine::resolveMixedFinalAudio(
                          std::llround(track.duration_seconds * 1'000'000.0))
                    : 0);
         request.audio = media::CopyOnlyAudioTrack{
-            local_audio,
-            track.start_offset_us > 0
+            .path = local_audio,
+            .start_offset_us = track.start_offset_us > 0
                 ? track.start_offset_us
                 : static_cast<int64_t>(
                       std::llround(track.start_time_offset * 1'000'000.0)),
-            declared_audio_duration, track.metadata_certified};
+            .duration_us = declared_audio_duration,
+            .metadata_certified = track.metadata_certified,
+        };
     } else {
         request.audio = media::CopyOnlyAudioTrack{
-            local_audio, 0,
-            static_cast<int64_t>(std::llround(timeline_duration * 1'000'000.0)), false};
+            .path = local_audio,
+            .duration_us = static_cast<int64_t>(
+                std::llround(timeline_duration * 1'000'000.0)),
+        };
     }
     return true;
 }
@@ -459,9 +469,13 @@ RenderResult RenderEngine::renderMixed(
         segment.codec = "packet_copy";
         const bool transform_required = item.transform.explicit_request &&
             (item.transform.slow_zoom || item.transform.scale_mode != "cover");
-        request.video_segments.push_back({
-            local_video, item.source_in_us, duration_us, false, false,
-            transform_required, false, item.metadata_certified});
+        request.video_segments.push_back(media::CopyOnlyVideoSegment{
+            .path = local_video,
+            .source_in_us = item.source_in_us,
+            .source_duration_us = duration_us,
+            .transform_required = transform_required,
+            .metadata_certified = item.metadata_certified,
+        });
         segment.total_ms = std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - segmentStart).count();
         segment.status = telemetry::kStatusOk;

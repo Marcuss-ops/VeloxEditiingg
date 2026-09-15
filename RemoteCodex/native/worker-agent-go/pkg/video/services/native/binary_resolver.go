@@ -103,6 +103,14 @@ func mapEngineSidecar(sc *engineSidecar, m *pipeline.RenderMetrics) {
 	m.ConcatMode = sc.ConcatMode
 	m.CopySegments = sc.CopySegments
 	m.TranscodeSegments = sc.TranscodeSegments
+	// New engines emit the aggregate packet-copy breakdown directly. Keep
+	// the legacy copy/transcode counters as a fallback for older sidecars.
+	if sc.SegmentsTotal > 0 || sc.SegmentsPacketCopy > 0 || sc.SegmentsReencoded > 0 {
+		m.SegmentsTotal = sc.SegmentsTotal
+		m.SegmentsPacketCopy = sc.SegmentsPacketCopy
+		m.SegmentsReencoded = sc.SegmentsReencoded
+		m.PacketCopyRatio = sc.PacketCopyRatio
+	}
 	m.TotalSize = sc.TotalSize
 	m.OutTimeMs = sc.OutTimeMs
 	m.Bitrate = sc.Bitrate

@@ -315,11 +315,23 @@ bool preparePlan(const CopyOnlyMuxRequest& request, packet::InputSessionRegistry
             (first ? sourceDuration > 0 && sourceDuration + 50000 <
                 segment.source_in_us + segment.source_duration_us : true);
         plan.segments.push_back(PreparedVideoSegment{
-            session, &sessions, segment.path, videoIndex, audioIndex,
-            segment.source_in_us, segment.source_duration_us, timeline,
-            segment.include_audio, extendTail, segment.metadata_certified,
-            segment.normalized, segment.transform_required, segment.legacy_required,
-            *videoTarget, true});
+            .session = session,
+            .registry = &sessions,
+            .path = segment.path,
+            .video_stream_index = videoIndex,
+            .audio_stream_index = audioIndex,
+            .source_in_us = segment.source_in_us,
+            .source_duration_us = segment.source_duration_us,
+            .timeline_offset_us = timeline,
+            .include_audio = segment.include_audio,
+            .extend_video_tail = extendTail,
+            .metadata_certified = segment.metadata_certified,
+            .normalized = segment.normalized,
+            .transform_required = segment.transform_required,
+            .legacy_required = segment.legacy_required,
+            .target_signature = *videoTarget,
+            .has_target_signature = true,
+        });
         if (timeline > std::numeric_limits<int64_t>::max() - segment.source_duration_us) {
             return fail(result, "copy-only packet mux timeline overflows int64");
         }
@@ -393,38 +405,70 @@ bool writeStreamingOutput(UniqueOutputContext& output, const PreparedCopyMuxPlan
     if (avformat_write_header(output.get(), nullptr) < 0) {
         return fail(result, "avformat_write_header failed");
     }
-    Writer writer{output.get(), plan.streams};
+    Writer writer{
+        .output = output.get(),
+        .streams = plan.streams,
+    };
     std::vector<packet::CursorSegment> videoSegments;
     videoSegments.reserve(plan.segments.size());
     for (const auto& segment : plan.segments) {
-        videoSegments.push_back({segment.session, segment.path.string(),
-            segment.video_stream_index, plan.streams.video, segment.timeline_offset_us,
-            segment.source_in_us, segment.source_duration_us, segment.extend_video_tail,
-            segment.registry, AVMEDIA_TYPE_VIDEO, segment.metadata_certified,
-            segment.normalized, segment.transform_required, segment.legacy_required,
-            segment.target_signature, segment.has_target_signature,
-            segment.session != nullptr});
+        videoSegments.push_back(packet::CursorSegment{
+            .session = segment.session,
+            .path = segment.path.string(),
+            .stream_index = segment.video_stream_index,
+            .output_stream = plan.streams.video,
+            .timeline_offset_us = segment.timeline_offset_us,
+            .source_in_us = segment.source_in_us,
+            .duration_us = segment.source_duration_us,
+            .extend_video_tail = segment.extend_video_tail,
+            .registry = segment.registry,
+            .media_type = AVMEDIA_TYPE_VIDEO,
+            .metadata_certified = segment.metadata_certified,
+            .normalized = segment.normalized,
+            .transform_required = segment.transform_required,
+            .legacy_required = segment.legacy_required,
+            .target_signature = segment.target_signature,
+            .has_target_signature = segment.has_target_signature,
+            .validated = segment.session != nullptr,
+        });
     }
     packet::TimestampState videoState;
     packet::VideoTimelineCursor video(std::move(videoSegments), videoState);
     std::vector<packet::CursorSegment> audioSegments;
     for (const auto& segment : plan.segments) {
         if (segment.include_audio) {
-            audioSegments.push_back({segment.session, segment.path.string(),
-                segment.audio_stream_index, plan.streams.audio, segment.timeline_offset_us,
-                segment.source_in_us, segment.source_duration_us, false,
-                segment.registry, AVMEDIA_TYPE_AUDIO, segment.metadata_certified,
-                false, false, false,
-                plan.audio_target_signature.value_or(MediaSignature{}),
-                plan.audio_target_signature.has_value(), segment.session != nullptr});
+            audioSegments.push_back(packet::CursorSegment{
+                .session = segment.session,
+                .path = segment.path.string(),
+                .stream_index = segment.audio_stream_index,
+                .output_stream = plan.streams.audio,
+                .timeline_offset_us = segment.timeline_offset_us,
+                .source_in_us = segment.source_in_us,
+                .duration_us = segment.source_duration_us,
+                .registry = segment.registry,
+                .media_type = AVMEDIA_TYPE_AUDIO,
+                .metadata_certified = segment.metadata_certified,
+                .target_signature = plan.audio_target_signature.value_or(MediaSignature{}),
+                .has_target_signature = plan.audio_target_signature.has_value(),
+                .validated = segment.session != nullptr,
+            });
         }
     }
     if (plan.audio) {
-        audioSegments.push_back({plan.audio->session, plan.audio->path.string(),
-            plan.audio->stream_index, plan.streams.audio, 0, plan.audio->start_offset_us,
-            plan.audio->duration_us, false, plan.audio->registry, AVMEDIA_TYPE_AUDIO,
-            plan.audio->metadata_certified, false, false, false,
-            plan.audio->target_signature, plan.audio->has_target_signature, true});
+        audioSegments.push_back(packet::CursorSegment{
+            .session = plan.audio->session,
+            .path = plan.audio->path.string(),
+            .stream_index = plan.audio->stream_index,
+            .output_stream = plan.streams.audio,
+            .source_in_us = plan.audio->start_offset_us,
+            .duration_us = plan.audio->duration_us,
+            .registry = plan.audio->registry,
+            .media_type = AVMEDIA_TYPE_AUDIO,
+            .metadata_certified = plan.audio->metadata_certified,
+            .target_signature = plan.audio->target_signature,
+            .has_target_signature = plan.audio->has_target_signature,
+            .validated = true,
+        });
     }
     packet::TimestampState audioState;
     packet::AudioTimelineCursor audio(std::move(audioSegments), audioState);

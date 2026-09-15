@@ -314,6 +314,14 @@ int main() {
            "mixed sidecar records all compatible packet-copy segments");
     expect(contains(sidecar, "\"transcode_segments\":0"),
            "mixed sidecar records zero transcoded segments");
+    expect(contains(sidecar, "\"segments_total\":3"),
+           "mixed sidecar records total segment count");
+    expect(contains(sidecar, "\"segments_packet_copy\":3"),
+           "mixed sidecar records packet-copy segment count");
+    expect(contains(sidecar, "\"segments_reencoded\":0"),
+           "mixed sidecar records zero re-encoded segments");
+    expect(contains(sidecar, "\"packet_copy_ratio\":100"),
+           "mixed sidecar pins packet-copy ratio at 100 percent");
     expect(contains(sidecar, "\"output_durable\":true"),
            "mixed sidecar confirms durable atomic publication");
     expect(contains(sidecar, "\"packet_copy_segments\":3"),

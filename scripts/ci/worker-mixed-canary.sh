@@ -89,9 +89,17 @@ test -f "$root/out-ok.mp4.progress.json"
 frames=$(grep -o '"frames":[0-9]*' "$root/out-ok.mp4.progress.json" | head -1 | cut -d: -f2)
 passes=$(grep -o '"encode_passes":[0-9]*' "$root/out-ok.mp4.progress.json" | head -1 | cut -d: -f2)
 concat_mode=$(grep -o '"concat_mode":"[^"]*"' "$root/out-ok.mp4.progress.json" | head -1 | cut -d: -f2 | tr -d '"')
+segments_total=$(grep -o '"segments_total":[0-9]*' "$root/out-ok.mp4.progress.json" | head -1 | cut -d: -f2)
+segments_copy=$(grep -o '"segments_packet_copy":[0-9]*' "$root/out-ok.mp4.progress.json" | head -1 | cut -d: -f2)
+segments_reencoded=$(grep -o '"segments_reencoded":[0-9]*' "$root/out-ok.mp4.progress.json" | head -1 | cut -d: -f2)
+packet_copy_ratio=$(grep -o '"packet_copy_ratio":[0-9.]*' "$root/out-ok.mp4.progress.json" | head -1 | cut -d: -f2)
 test "$frames" = "0"   || { echo "invariant violated: frames_encoded=$frames (want 0)" >&2; exit 1; }
 test "$passes" = "0"   || { echo "invariant violated: encode_passes=$passes (want 0)" >&2; exit 1; }
 test "$concat_mode" = "mixed_packet" || { echo "unexpected concat_mode=$concat_mode (want mixed_packet)" >&2; exit 1; }
+test "$segments_total" = "3" || { echo "invariant violated: segments_total=$segments_total (want 3)" >&2; exit 1; }
+test "$segments_copy" = "3" || { echo "invariant violated: segments_packet_copy=$segments_copy (want 3)" >&2; exit 1; }
+test "$segments_reencoded" = "0" || { echo "invariant violated: segments_reencoded=$segments_reencoded (want 0)" >&2; exit 1; }
+test "$packet_copy_ratio" = "100" || { echo "invariant violated: packet_copy_ratio=$packet_copy_ratio (want 100)" >&2; exit 1; }
 
 # ── 2. Mixed plan with one non-canonical scene: the JOB fails, the worker
 #    process stays alive. The engine must reject deterministically with
@@ -109,7 +117,7 @@ grep -q "segment_execution_rejected" "$root/reject.stdout"
 reject_frames=$(grep -o '"frames":[0-9]*' "$root/out-reject.mp4.progress.json" | head -1 | cut -d: -f2)
 test "$reject_frames" = "0" || { echo "rejected segment was re-encoded: frames=$reject_frames" >&2; exit 1; }
 
-printf 'image_id=%s\nengine_sha256=%s\ncopy_only_invariant=frames_encoded=0 encode_passes=0 (mixed_packet)\nreject=segment_execution_rejected rc=1 frames_encoded=0\n' "$image_id" "$actual_sha"
+printf 'image_id=%s\nengine_sha256=%s\ncopy_only_invariant=frames_encoded=0 encode_passes=0 segments=3/3 packet_copy_ratio=100 (mixed_packet)\nreject=segment_execution_rejected rc=1 frames_encoded=0\n' "$image_id" "$actual_sha"
 CONTAINER_SCRIPT
 )" || fail "container canary failed"
 

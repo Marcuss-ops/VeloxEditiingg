@@ -205,16 +205,23 @@ type RenderMetrics struct {
 	// when a renderer does not emit one sidecar timing object per segment.
 	CopySegments      int64
 	TranscodeSegments int64
-	TotalSize         int64
-	OutTimeMs         int64
-	Bitrate           float64
-	DupFrames         int64
-	DropFrames        int64
-	PlanMarshalMs     int64
-	PlanWriteMs       int64
-	ProcessStartMs    int64
-	ProcessWaitMs     int64
-	TotalMs           int64
+	// SegmentsTotal/SegmentsPacketCopy/SegmentsReencoded and PacketCopyRatio
+	// are the native aggregate breakdown. They are populated by newer
+	// sidecars and remain zero for legacy engines without the fields.
+	SegmentsTotal      int64
+	SegmentsPacketCopy int64
+	SegmentsReencoded  int64
+	PacketCopyRatio    float64
+	TotalSize          int64
+	OutTimeMs          int64
+	Bitrate            float64
+	DupFrames          int64
+	DropFrames         int64
+	PlanMarshalMs      int64
+	PlanWriteMs        int64
+	ProcessStartMs     int64
+	ProcessWaitMs      int64
+	TotalMs            int64
 	// Process lifecycle counters. EngineSpawnCount is mapped from the
 	// EXPLICIT spawn fact reported by runEngineProcess (cmd.Start()
 	// succeeded) — never inferred from a timing value. The exec counts

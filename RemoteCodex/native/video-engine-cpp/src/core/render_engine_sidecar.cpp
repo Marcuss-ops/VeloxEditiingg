@@ -137,6 +137,16 @@ std::string RenderEngine::sidecarJson(const std::string& output_path) const {
     s << ",\"concat_mode\":\"" << concat_mode_ << "\"";
     s << ",\"copy_segments\":" << copy_segments_.load();
     s << ",\"transcode_segments\":" << transcode_segments_.load();
+    const int64_t segments_total = copy_segments_.load() + transcode_segments_.load();
+    const int64_t segments_packet_copy = copy_segments_.load();
+    const double packet_copy_ratio = segments_total > 0
+        ? static_cast<double>(segments_packet_copy) * 100.0 /
+            static_cast<double>(segments_total)
+        : 0.0;
+    s << ",\"segments_total\":" << segments_total;
+    s << ",\"segments_packet_copy\":" << segments_packet_copy;
+    s << ",\"segments_reencoded\":" << transcode_segments_.load();
+    s << ",\"packet_copy_ratio\":" << packet_copy_ratio;
     s << ",\"temp_bytes\":" << temp_bytes_written_.load();
     s << ",\"out_time_us\":" << last.out_time_us;
     s << ",\"out_time_ms\":" << last.out_time_ms;

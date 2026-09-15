@@ -116,6 +116,18 @@ jobs:
         with:
           build-dir: ${{ env.BUILD_DIR }}
 
+      # Run the native mixed golden before Buildx. This is deliberately an
+      # image-independent source gate: a legacy video fallback or a broken
+      # designated initializer must fail before build/sign/certification.
+      - name: Mixed packet-copy golden gate
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ffmpeg pkg-config libavformat-dev libavcodec-dev libavutil-dev libswscale-dev
+          VIDEO_MIXED_BUILD_DIR="${RUNNER_TEMP}/velox-mixed-render-build" \
+            bash scripts/ci/check-mixed-render-gate.sh
+
       # This action owns Buildx, GHCR login, explicit non-latest tags, image
       # publication, digest extraction, registry digest verification, and the
       # worker-image-digest artifact. It keeps the digest in the same job so
