@@ -151,7 +151,10 @@ bool RenderEngine::renderLegacyTimeline(
             });
         }
 
-        std::size_t parallelism = 1;
+        // The Go worker normally supplies this through the render budget. Keep
+        // the native fallback parallel as well for bootstrap/smoke callers that
+        // invoke the engine without a worker context.
+        std::size_t parallelism = 2;
         if (const char* configured = std::getenv("VELOX_NATIVE_SEGMENT_WORKERS")) {
             const std::string_view raw(configured);
             std::size_t parsed = 0;

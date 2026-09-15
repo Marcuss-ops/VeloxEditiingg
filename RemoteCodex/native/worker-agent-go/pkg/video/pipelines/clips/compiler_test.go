@@ -80,6 +80,40 @@ func TestCompileSceneTimelineLoopsAndTrimsShortStock(t *testing.T) {
 	}
 }
 
+func TestCompileSceneTimelineKeepsClipOnlyAudioAtSceneBoundary(t *testing.T) {
+	input := map[string]interface{}{
+		"scenes_json": `[{
+			"scene_id":"intro",
+			"duration_seconds":19,
+			"clip":{"url":"intro.mp4","duration_ms":19000}
+		},{
+			"scene_id":"narrated",
+			"duration_seconds":247.224,
+			"stock":[{"url":"stock.mp4","duration_ms":1000}],
+			"voiceover":{"url":"voice.mp3","duration_ms":247224}
+		}]`,
+	}
+
+	got, err := Compile(context.Background(), "job-boundary", input, "/tmp/out.mp4", nil)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	if len(got.AudioTracks) != 2 {
+		t.Fatalf("audio tracks = %#v, want intro audio plus voiceover", got.AudioTracks)
+	}
+	if got.AudioTracks[0].StartTimeOffset != 0 || got.AudioTracks[0].DurationSeconds != 19 {
+		t.Fatalf("intro audio track = %#v, want offset 0 and duration 19", got.AudioTracks[0])
+	}
+	if got.AudioTracks[1].StartTimeOffset != 19 {
+		t.Fatalf("voiceover offset = %v, want 19", got.AudioTracks[1].StartTimeOffset)
+	}
+	for index, item := range got.Timeline {
+		if item.IncludeAudio {
+			t.Fatalf("timeline[%d] unexpectedly carries embedded audio", index)
+		}
+	}
+}
+
 func TestShuffleStockPoolIsDeterministicButJobSeeded(t *testing.T) {
 	pool := []sceneTimelineAsset{
 		{URL: "stock-a.mp4", DurationMS: 1000},

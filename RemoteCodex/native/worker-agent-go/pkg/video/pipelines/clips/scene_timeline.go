@@ -169,12 +169,15 @@ func compileSceneTimeline(ctx context.Context, jobID string, scenes []sceneTimel
 			if err != nil {
 				return nil, fmt.Errorf("clips.v1: scene %d clip: %w", sceneIndex, err)
 			}
-			includeClipAudio := scene.Voiceover == nil
 			timeline = append(timeline, plan.TimelineItem{
 				Source:          plan.MediaSource{Type: "video", URL: scene.Clip.URL},
 				SceneID:         scene.SceneID,
 				DurationSeconds: clipDuration,
-				IncludeAudio:    includeClipAudio,
+				// Keep every video segment silent in the timeline. Clip audio is
+				// represented as an explicit audio track below so the native batch
+				// renderer can process all video segments in parallel, including a
+				// leading intro clip.
+				IncludeAudio: false,
 			})
 			if scene.Voiceover != nil {
 				audioTracks = append(audioTracks, plan.AudioTrack{
@@ -191,6 +194,14 @@ func compileSceneTimeline(ctx context.Context, jobID string, scenes []sceneTimel
 					DurationSeconds: clipDuration,
 					Role:            "scene_clip_audio",
 				})
+			} else {
+				audioTracks = append(audioTracks, plan.AudioTrack{
+					SourceURL:       scene.Clip.URL,
+					Volume:          1,
+					StartTimeOffset: offset,
+					DurationSeconds: clipDuration,
+					Role:            "scene_clip_audio",
+				})
 			}
 		} else if scene.Voiceover != nil {
 			audioTracks = append(audioTracks, plan.AudioTrack{
@@ -201,7 +212,16 @@ func compileSceneTimeline(ctx context.Context, jobID string, scenes []sceneTimel
 				Role:            "voiceover",
 			})
 		}
-		offset += targetDuration + clipDuration
+		// targetDuration belongs to the stock portion only. A clip-only scene
+		// occupies clipDuration, not targetDuration plus clipDuration; counting
+		// both shifts every following voiceover by the intro length.
+		if len(stock) > 0 {
+			offset += targetDuration + clipDuration
+		} else if scene.Clip != nil {
+			offset += clipDuration
+		} else {
+			offset += targetDuration
+		}
 	}
 
 	return &plan.RenderPlan{

@@ -10,7 +10,7 @@ func TestComputeNativeRenderBudget(t *testing.T) {
 		cores, renders int
 		want           NativeRenderBudget
 	}{
-		{8, 2, NativeRenderBudget{EffectiveCPUCores: 8, RenderCPUBudget: 3, DecoderThreads: 1, EncoderThreads: 2, SegmentWorkers: 1}},
+		{8, 2, NativeRenderBudget{EffectiveCPUCores: 8, RenderCPUBudget: 3, DecoderThreads: 1, EncoderThreads: 1, SegmentWorkers: 2}},
 		// 16 cores / 2 renders: 7 cores per render, 2 segment workers,
 		// 3 threads per segment — below the decoder bump, so decode stays
 		// at 1 and the encoder keeps the majority.

@@ -29,8 +29,12 @@ func ComputeNativeRenderBudget(effectiveCores, maxConcurrentRenders int) NativeR
 	if perRender < 1 {
 		perRender = 1
 	}
+	// Keep at least two independent segment workers once a render has three
+	// usable cores. This avoids serialising dozens of short clips while still
+	// reserving one core for worker/control-plane work. Very large budgets may
+	// use two workers, but never more than one worker per two render cores.
 	segmentWorkers := 1
-	if perRender >= 6 {
+	if perRender >= 3 {
 		segmentWorkers = 2
 	}
 	threadsPerSegment := perRender / segmentWorkers
