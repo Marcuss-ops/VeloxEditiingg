@@ -192,6 +192,13 @@ func projectNormalizedSceneVideoPayload(
 	if !strictManifest && !compiledV2Present {
 		copyTimelinePayloadFields(out, payloadMap)
 	}
+	// A producer-owned V2 plan bypasses the legacy timeline copy above, but
+	// the operator placement pin is still control-plane input required by the
+	// scheduler. Preserve it explicitly so a pinned compiled-plan job cannot
+	// fall back to an arbitrary worker.
+	if pin, ok := payloadMap["_placement_pin_worker_id"].(string); ok && strings.TrimSpace(pin) != "" {
+		out["_placement_pin_worker_id"] = strings.TrimSpace(pin)
+	}
 	if err := compileStrictScenePlan(ctx, payloadMap, base, out, strictManifest, compiledV2Present, strictManifestMap); err != nil {
 		return nil, err
 	}

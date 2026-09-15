@@ -156,8 +156,9 @@ func TestNormalizeSceneVideoPayloadPassesThroughCompiledV2WithoutRecompiling(t *
 	// is the producer-owned receiver envelope, not an input for the V1
 	// compiler. The plan bytes must survive normalization byte-for-byte.
 	input := map[string]interface{}{
-		"video_name":  "V2 pass-through",
-		"script_text": "Already compiled by PipelineGen",
+		"video_name":               "V2 pass-through",
+		"script_text":              "Already compiled by PipelineGen",
+		"_placement_pin_worker_id": " worker-fmp4 ",
 		contract.PayloadKeyCompiledRenderPlanJSON: string(canonical),
 		contract.PayloadKeyCompiledRenderPlanSHA:  expectedSHA,
 	}
@@ -176,6 +177,9 @@ func TestNormalizeSceneVideoPayloadPassesThroughCompiledV2WithoutRecompiling(t *
 	}
 	if _, present := out["render_plan_json"]; present {
 		t.Fatal("V2 pass-through unexpectedly produced a legacy V1 render_plan_json")
+	}
+	if got := out["_placement_pin_worker_id"]; got != "worker-fmp4" {
+		t.Fatalf("compiled V2 placement pin = %#v, want worker-fmp4", got)
 	}
 	if err := contract.ValidateCompiledRenderPlanV2Payload(out); err != nil {
 		t.Fatalf("normalized V2 envelope rejected: %v", err)
