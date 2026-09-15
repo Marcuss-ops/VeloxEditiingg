@@ -101,20 +101,41 @@ func compileRenderPlanV2Manifest(manifest *rendermanifest.Manifest, replacements
 	if err != nil {
 		return nil, err
 	}
+	output := OutputContractV2{
+		Container:   manifest.Output.Container,
+		VideoCodec:  manifest.Output.VideoCodec,
+		Width:       manifest.Canvas.Width,
+		Height:      manifest.Canvas.Height,
+		FPSNum:      manifest.Canvas.FPSNum,
+		FPSDen:      manifest.Canvas.FPSDen,
+		PixelFormat: manifest.Canvas.PixelFormat,
+	}
+	if profileID := strings.TrimSpace(manifest.Output.ProfileID); profileID != "" {
+		profile, profileErr := KnownCanonicalVideoProfileV1(profileID)
+		if profileErr != nil {
+			return nil, fmt.Errorf("compiled render plan v2: output.profile_id: %w", profileErr)
+		}
+		if err := profile.MatchesOutput(output); err != nil {
+			return nil, fmt.Errorf("compiled render plan v2: output.profile_id: %w", err)
+		}
+		// The profile selection is the sole source for the strengthened
+		// stream-identity fields. Do not infer these values from a flag or
+		// from the generic manifest geometry.
+		output.ProfileID = profile.ProfileID
+		output.CodecProfile = profile.CodecProfile
+		output.CodecLevel = profile.CodecLevel
+		output.GOPSize = profile.GOPSize
+		output.BFrames = profile.BFrames
+		output.ClosedGOP = profile.ClosedGOP
+		output.TimeBaseNum = profile.TimeBaseNum
+		output.TimeBaseDen = profile.TimeBaseDen
+	}
 	plan := &CompiledRenderPlanV2{
 		PlanVersion:      CompiledPlanVersionV2,
 		TimelineRevision: 1,
 		TimelineSHA256:   timelineSHA,
 		DurationUS:       finalAudioDurationUS,
-		Output: OutputContractV2{
-			Container:   manifest.Output.Container,
-			VideoCodec:  manifest.Output.VideoCodec,
-			Width:       manifest.Canvas.Width,
-			Height:      manifest.Canvas.Height,
-			FPSNum:      manifest.Canvas.FPSNum,
-			FPSDen:      manifest.Canvas.FPSDen,
-			PixelFormat: manifest.Canvas.PixelFormat,
-		},
+		Output:           output,
 		FinalAudio: FinalAudioV2{
 			Mode:             AudioModeFinalAudioCopy,
 			AssetID:          finalAudio.ID,

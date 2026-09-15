@@ -214,6 +214,12 @@ type Output struct {
 	AudioCodec      string `json:"audio_codec"`
 	AudioSampleRate int    `json:"audio_sample_rate"`
 	AudioChannels   int    `json:"audio_channels"`
+	// ProfileID is an explicit producer selection for the final video
+	// container/stream contract. It is intentionally optional for legacy
+	// manifests: omission keeps the generic manifest compiler from selecting
+	// fMP4 implicitly. When present, the compiler resolves it through the
+	// canonical profile registry and copies the complete profile into V2.
+	ProfileID string `json:"profile_id,omitempty"`
 }
 
 // ValidationError is a machine-readable semantic contract violation.

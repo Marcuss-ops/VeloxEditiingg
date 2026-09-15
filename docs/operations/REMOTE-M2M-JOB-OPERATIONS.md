@@ -226,6 +226,25 @@ AAC-LC
 MP4 faststart
 ```
 
+Per l’output fMP4 il producer deve selezionare esplicitamente il profilo nel
+piano compilato:
+
+```json
+{
+  "output": {
+    "profile_id": "velox-h264-fmp4-stream-v1"
+  }
+}
+```
+
+`VELOX_FMP4_STREAM_PROFILE=1` sul worker è soltanto il gate di ammissione: non
+trasforma automaticamente i job legacy e non sostituisce
+`output.profile_id`. Il producer deve quindi inviare un
+`CompiledRenderPlanV2` completo con quel valore; il Master non deve inferire
+il layout dal flag del worker. Il profilo fMP4 mantiene sugli asset sorgente
+la stream identity `VELOX_ASSEMBLY_READY_V1` e cambia soltanto il layout del
+mux finale.
+
 Prima di usare `copy_only=true`, tutti i clip devono avere la stessa firma media, compresi codec, profilo, risoluzione, pixel format, frame rate, timebase, extradata, audio e layout canale. Se una firma non coincide, il Master deve normalizzare il clip e ripetere il preflight.
 
 Il client non deve decidere manualmente quali clip transcodificare: deve inviare il job e lasciare preflight e normalizzazione al Master.

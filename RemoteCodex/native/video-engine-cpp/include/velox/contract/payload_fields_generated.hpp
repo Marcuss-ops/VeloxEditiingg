@@ -91,6 +91,7 @@ inline constexpr std::string_view RENDER_MANIFEST_OUTPUT_AUDIO_CHANNELS = "audio
 inline constexpr std::string_view RENDER_MANIFEST_OUTPUT_AUDIO_CODEC = "audio_codec";
 inline constexpr std::string_view RENDER_MANIFEST_OUTPUT_AUDIO_SAMPLE_RATE = "audio_sample_rate";
 inline constexpr std::string_view RENDER_MANIFEST_OUTPUT_CONTAINER = "container";
+inline constexpr std::string_view RENDER_MANIFEST_OUTPUT_PROFILE_ID = "profile_id";
 inline constexpr std::string_view RENDER_MANIFEST_OUTPUT_VIDEO_CODEC = "video_codec";
 inline constexpr std::string_view RENDER_MANIFEST_SCHEMA = "schema";
 inline constexpr std::string_view RENDER_MANIFEST_TRACKS = "tracks";

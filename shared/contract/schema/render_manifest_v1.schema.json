@@ -99,7 +99,8 @@
         "video_codec": { "type": "string" },
         "audio_codec": { "type": "string" },
         "audio_sample_rate": { "type": "integer" },
-        "audio_channels": { "type": "integer" }
+        "audio_channels": { "type": "integer" },
+        "profile_id": { "type": "string" }
       },
       "required": ["container", "video_codec", "audio_codec", "audio_sample_rate", "audio_channels"]
     }

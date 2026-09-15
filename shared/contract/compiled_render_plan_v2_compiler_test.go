@@ -88,3 +88,59 @@ func TestCompileRenderPlanV2FromManifest_RequiresFinalAudio(t *testing.T) {
 		t.Fatalf("missing final_audio error = %v", err)
 	}
 }
+
+func TestCompileRenderPlanV2FromManifest_ExplicitProfilePopulatesOutputContract(t *testing.T) {
+	t.Setenv("VELOX_FMP4_STREAM_PROFILE", "1")
+	const videoSHA = "1111111111111111111111111111111111111111111111111111111111111111"
+	const audioSHA = "2222222222222222222222222222222222222222222222222222222222222222"
+	manifest := map[string]any{
+		"schema": "velox.render-manifest.v1",
+		"canvas": map[string]any{"width": 1920, "height": 1080, "fps_num": 24, "fps_den": 1, "pixel_format": "yuv420p"},
+		"assets": []map[string]any{
+			{"id": "video", "uri": "velox-asset://video", "kind": "video", "sha256": videoSHA, "size_bytes": 100, "duration_ms": 1000},
+			{"id": "voice", "uri": "velox-asset://voice", "kind": "audio", "sha256": audioSHA, "size_bytes": 100, "duration_ms": 1000},
+			{"id": "audio-final", "uri": "velox-asset://audio-final", "kind": "final_audio", "format": "audio/mp4", "sha256": audioSHA, "size_bytes": 200, "duration_ms": 1000},
+		},
+		"tracks": []map[string]any{
+			{"id": "main", "kind": "video", "events": []map[string]any{{"asset_id": "video", "timeline_start_ms": 0, "duration_ms": 1000}}},
+			{"id": "voice", "kind": "voiceover", "events": []map[string]any{{"asset_id": "voice", "timeline_start_ms": 0, "duration_ms": 1000}}},
+		},
+		"output": map[string]any{
+			"container": "mp4", "video_codec": "h264", "audio_codec": "aac", "audio_sample_rate": 48000, "audio_channels": 2,
+			"profile_id": CanonicalVideoProfileFMP4StreamV1,
+		},
+	}
+	plan, err := CompileRenderPlanV2FromManifest(manifest)
+	if err != nil {
+		t.Fatalf("CompileRenderPlanV2FromManifest: %v", err)
+	}
+	if got := plan.Output; got.ProfileID != CanonicalVideoProfileFMP4StreamV1 || got.CodecProfile != "high" || got.CodecLevel != "4.0" || got.GOPSize != 48 || got.BFrames != 0 || !got.ClosedGOP || got.TimeBaseNum != 1 || got.TimeBaseDen != 90000 {
+		t.Fatalf("output profile fields = %+v", got)
+	}
+}
+
+func TestCompileRenderPlanV2FromManifest_DoesNotSelectProfileImplicitly(t *testing.T) {
+	const videoSHA = "1111111111111111111111111111111111111111111111111111111111111111"
+	const audioSHA = "2222222222222222222222222222222222222222222222222222222222222222"
+	manifest := map[string]any{
+		"schema": "velox.render-manifest.v1",
+		"canvas": map[string]any{"width": 1920, "height": 1080, "fps_num": 24, "fps_den": 1, "pixel_format": "yuv420p"},
+		"assets": []map[string]any{
+			{"id": "video", "uri": "velox-asset://video", "kind": "video", "sha256": videoSHA, "size_bytes": 100, "duration_ms": 1000},
+			{"id": "voice", "uri": "velox-asset://voice", "kind": "audio", "sha256": audioSHA, "size_bytes": 100, "duration_ms": 1000},
+			{"id": "audio-final", "uri": "velox-asset://audio-final", "kind": "final_audio", "format": "audio/mp4", "sha256": audioSHA, "size_bytes": 200, "duration_ms": 1000},
+		},
+		"tracks": []map[string]any{
+			{"id": "main", "kind": "video", "events": []map[string]any{{"asset_id": "video", "timeline_start_ms": 0, "duration_ms": 1000}}},
+			{"id": "voice", "kind": "voiceover", "events": []map[string]any{{"asset_id": "voice", "timeline_start_ms": 0, "duration_ms": 1000}}},
+		},
+		"output": map[string]any{"container": "mp4", "video_codec": "h264", "audio_codec": "aac", "audio_sample_rate": 48000, "audio_channels": 2},
+	}
+	plan, err := CompileRenderPlanV2FromManifest(manifest)
+	if err != nil {
+		t.Fatalf("CompileRenderPlanV2FromManifest: %v", err)
+	}
+	if plan.Output.ProfileID != "" || plan.Output.CodecProfile != "" || plan.Output.GOPSize != 0 {
+		t.Fatalf("profile was selected implicitly: %+v", plan.Output)
+	}
+}
