@@ -197,7 +197,13 @@ bool consume(packet::PendingPacket& pending, void* opaque, std::string& error) {
 bool preparePlan(const CopyOnlyMuxRequest& request, packet::InputSessionRegistry& sessions,
                  AVFormatContext* output, PreparedCopyMuxPlan& plan,
                  CopyOnlyMuxResult* result, std::string& error) {
-    std::optional<MediaSignature> videoTarget = request.target_video_signature;
+    // A requested target is the admission profile for the first source. Once
+    // that source is accepted, use its concrete stream signature as the mux
+    // target so later packet-copied segments cannot silently change profile,
+    // level or another stream parameter within one output.
+    const std::optional<MediaSignature> requestedVideoTarget =
+        request.target_video_signature;
+    std::optional<MediaSignature> videoTarget;
     std::optional<MediaSignature> audioTarget;
     int64_t timeline = 0;
     if (request.video_segments.empty()) {
@@ -232,12 +238,17 @@ bool preparePlan(const CopyOnlyMuxRequest& request, packet::InputSessionRegistry
     }
     const AVStream* firstVideo = firstDemuxer.stream(firstVideoIndex);
     const MediaSignature firstVideoSignature = mediaSignatureFromStream(firstVideo);
-    if (!videoTarget) videoTarget = firstVideoSignature;
     std::string compatibilityReason;
-    if (!mediaSignaturesCompatible(firstVideoSignature, *videoTarget, &compatibilityReason)) {
+    if (requestedVideoTarget && !mediaSignaturesCompatible(
+            firstVideoSignature, *requestedVideoTarget, &compatibilityReason)) {
         return fail(result, "segment_execution_rejected: copy-only segment execution rejected at " +
             firstSegment.path.string() + ": " + compatibilityReason);
     }
+    videoTarget = firstVideoSignature;
+    // SPS/PPS extradata is intentionally not part of the cross-segment
+    // identity; packet rewriting validates the concrete stream as needed,
+    // while dimensions/profile/level/fps remain pinned to the first input.
+    videoTarget->extradata.clear();
     const bool firstKeyframeSafe = firstSegment.normalized ||
         firstSession->sourceWindowStartsOnKeyframe(
             firstVideoIndex, firstSegment.source_in_us, error);

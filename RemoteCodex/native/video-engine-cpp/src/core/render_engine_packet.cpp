@@ -402,6 +402,13 @@ RenderResult RenderEngine::renderMixed(
     }
     const media::MediaSignature canonical =
         mediaSignatureFromCanonicalProfile(canonicalVideoProfileV1());
+    // Source assets may use a compatible H.264 profile/level while still
+    // being packet-safe. The muxer validates the first concrete source
+    // against this admission profile, then pins all following segments to
+    // that first source signature.
+    auto mixedAdmissionProfile = canonical;
+    mixedAdmissionProfile.profile = -1;
+    mixedAdmissionProfile.level = -1;
     media::CopyOnlyMuxRequest request;
     request.output_path = outPath;
     request.video_segments.reserve(plan.timeline.size());
@@ -409,7 +416,7 @@ RenderResult RenderEngine::renderMixed(
     int64_t total_duration_us = 0;
     int64_t packet_copy_segments = 0;
     int64_t rejected_segments = 0;
-    request.target_video_signature = canonical;
+    request.target_video_signature = mixedAdmissionProfile;
     for (std::size_t i = 0; i < plan.timeline.size(); ++i) {
         const auto& item = plan.timeline[i];
         if (!std::holds_alternative<plan::VideoSource>(item.source)) {
