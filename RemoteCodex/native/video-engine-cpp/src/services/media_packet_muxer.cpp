@@ -246,9 +246,15 @@ bool preparePlan(const CopyOnlyMuxRequest& request, packet::InputSessionRegistry
     }
     videoTarget = firstVideoSignature;
     // SPS/PPS extradata is intentionally not part of the cross-segment
-    // identity; packet rewriting validates the concrete stream as needed,
-    // while dimensions/profile/level/fps remain pinned to the first input.
+    // identity. Profile and level are decoder-advertised H.264 metadata and
+    // may differ between otherwise packet-compatible assets produced by
+    // different encoders. Keep the hard packet-safety checks (codec,
+    // dimensions, pixel format and frame rate), but do not reject a later
+    // segment solely because its profile/level differs from the first one.
+    // The output stream remains initialized from the first concrete source.
     videoTarget->extradata.clear();
+    videoTarget->profile = -1;
+    videoTarget->level = -1;
     const bool firstKeyframeSafe = firstSegment.normalized ||
         firstSession->sourceWindowStartsOnKeyframe(
             firstVideoIndex, firstSegment.source_in_us, error);

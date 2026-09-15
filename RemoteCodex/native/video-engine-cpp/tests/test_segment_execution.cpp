@@ -111,6 +111,17 @@ int main() {
     expect(decision.reason == "media signature mismatch: profile",
            "profile mismatch identifies profile");
 
+    auto compatibleTarget = target;
+    compatibleTarget.profile = -1;
+    compatibleTarget.level = -1;
+    request.target = compatibleTarget;
+    request.source.profile = 66; // compatible H.264 asset from another encoder
+    request.source.level = 31;
+    decision = velox::media::resolveSegmentExecution(request);
+    expect(decision.mode == SegmentExecutionMode::PacketCopy,
+           "wildcard H.264 profile and level remain packet-copy compatible");
+    request.target = target;
+
     request.source = target;
     request.source.level = 31;
     decision = velox::media::resolveSegmentExecution(request);
