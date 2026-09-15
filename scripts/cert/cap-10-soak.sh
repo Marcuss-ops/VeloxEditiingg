@@ -41,6 +41,17 @@ need jq
 need openssl
 need curl
 
+# W8 safety gate: this runbook performs real SIGKILL, iptables and systemd
+# operations. Never allow a missing/ambiguous environment to turn a staging
+# recipe into production chaos. The acknowledgement is intentionally exact so
+# automation cannot satisfy it with a generic truthy value.
+if [[ "${VELOX_ENV:-}" != "staging" && "${VELOX_ENV:-}" != "canary" ]]; then
+  fail "W8 chaos requires VELOX_ENV=staging or VELOX_ENV=canary" 2
+fi
+if [[ "${VELOX_CHAOS_ACK:-}" != "STAGING_ONLY" ]]; then
+  fail "set VELOX_CHAOS_ACK=STAGING_ONLY to acknowledge destructive staging chaos" 2
+fi
+
 EVIDENCE_ROOT="${EVIDENCE_ROOT_CAP10:-/var/lib/velox/cap10-evidence/$(date +%Y%m%d-%H%M%S)}"
 mkdir -p "$EVIDENCE_ROOT"/{pre,events,post}
 

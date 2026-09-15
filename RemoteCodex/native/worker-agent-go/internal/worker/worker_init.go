@@ -11,6 +11,7 @@
 package worker
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -230,7 +231,10 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 	// the Hello payload as the immutable runtime snapshot for the session;
 	// waiting for the background sampler would permanently lose hardware,
 	// storage and ulimit facts for that session.
-	if err := sampler.PrimeHost(); err != nil {
+	if err := sampler.PrimeHostWithBenchmark(context.Background(), telemetry.CapacityBenchmarkConfig{
+		Enabled:    cfg.CapacityBenchmarkEnabled,
+		NetworkURL: cfg.CapacityBenchmarkURL,
+	}); err != nil {
 		log.Warn("[TELEMETRY] initial host capability sample degraded: %v", err)
 	}
 

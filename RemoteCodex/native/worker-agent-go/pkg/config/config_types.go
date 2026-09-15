@@ -81,6 +81,13 @@ type WorkerConfig struct {
 	// A non-positive value uses the safe default. Binds from
 	// VELOX_PUBLISHER_CONCURRENCY when configuration is loaded.
 	PublisherConcurrency int `json:"publisher_concurrency,omitempty"`
+	// CapacityBenchmarkEnabled runs the opt-in bootstrap fio/network ceiling
+	// measurement. It is disabled by default because it deliberately performs
+	// controlled I/O and traffic on the configured worker host.
+	CapacityBenchmarkEnabled bool `json:"capacity_benchmark_enabled,omitempty"`
+	// CapacityBenchmarkURL is a controlled staging/measurement endpoint that
+	// serves GET bytes and accepts the POST probe used for network ceilings.
+	CapacityBenchmarkURL string `json:"capacity_benchmark_url,omitempty"`
 	// ProgressivePartConcurrency controls concurrent immutable parts within a
 	// single progressive artifact upload. It is separate from the worker-wide
 	// PublisherConcurrency artifact limit.

@@ -248,6 +248,12 @@ func (w *Worker) hostInfo(hostname string, maxParallel int) controltransport.Hos
 			host.QSVAvailable = h.QSVAvailable
 			host.NofileSoft = h.NofileSoft
 			host.NofileHard = h.NofileHard
+			host.CapacityBenchmarkStatus = h.CapacityBenchmarkStatus
+			host.DiskReadBenchmarkMbps = h.DiskReadBenchmarkMbps
+			host.DiskWriteBenchmarkMbps = h.DiskWriteBenchmarkMbps
+			host.DownloadBenchmarkMbps = h.DownloadBenchmarkMbps
+			host.UploadBenchmarkMbps = h.UploadBenchmarkMbps
+			host.CapacityBenchmarkDurationMS = h.CapacityBenchmarkDurationMS
 		}
 	}
 	return host

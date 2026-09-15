@@ -20,12 +20,13 @@ import (
 
 // Type aliases preserve the full method set and exported fields.
 type (
-	Sampler          = collectors.Sampler
-	SampledResources = collectors.SampledResources
-	SampledHost      = collectors.SampledHost
-	CPUCapacity      = collectors.CPUCapacity
-	DiskGC           = collectors.DiskGC
-	GPUProbe         = collectors.GPUProbe
+	Sampler                 = collectors.Sampler
+	SampledResources        = collectors.SampledResources
+	SampledHost             = collectors.SampledHost
+	CapacityBenchmarkConfig = collectors.CapacityBenchmarkConfig
+	CPUCapacity             = collectors.CPUCapacity
+	DiskGC                  = collectors.DiskGC
+	GPUProbe                = collectors.GPUProbe
 )
 
 // Constructor/function wrappers keep the root package's public API

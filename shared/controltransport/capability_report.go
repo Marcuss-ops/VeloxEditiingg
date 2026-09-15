@@ -37,6 +37,14 @@ type HostInfo struct {
 	StorageClass      string `json:"storage_class,omitempty"`
 	NofileSoft        uint64 `json:"ulimit_nofile_soft,omitempty"`
 	NofileHard        uint64 `json:"ulimit_nofile_hard,omitempty"`
+	// Capacity ceilings are measured at bootstrap when explicitly enabled.
+	// A zero value means "not measured", never zero throughput.
+	CapacityBenchmarkStatus     string  `json:"capacity_benchmark_status,omitempty"`
+	DiskReadBenchmarkMbps       float64 `json:"disk_read_benchmark_mbps,omitempty"`
+	DiskWriteBenchmarkMbps      float64 `json:"disk_write_benchmark_mbps,omitempty"`
+	DownloadBenchmarkMbps       float64 `json:"download_benchmark_mbps,omitempty"`
+	UploadBenchmarkMbps         float64 `json:"upload_benchmark_mbps,omitempty"`
+	CapacityBenchmarkDurationMS int64   `json:"capacity_benchmark_duration_ms,omitempty"`
 }
 
 // CapabilitySet is the typed set of named protocol capabilities used by
@@ -91,26 +99,32 @@ func (r CapabilityReport) AsMap() map[string]interface{} {
 		executors = append(executors, item)
 	}
 	host := map[string]interface{}{
-		"worker_id":           r.Host.WorkerID,
-		"hostname":            r.Host.Hostname,
-		"cpu_count":           r.Host.CPUCount,
-		"logical_cpu_count":   r.Host.CPUCount,
-		"physical_cpu_count":  r.Host.PhysicalCPUCount,
-		"effective_cpu_count": r.Host.EffectiveCPUCount,
-		"max_parallel_jobs":   r.Host.MaxParallelJobs,
-		"has_gpu":             r.Host.HasGPU,
-		"gpu_model":           r.Host.GPUModel,
-		"gpu_vram_bytes":      r.Host.GPUVRAMBytes,
-		"nvenc_available":     r.Host.NVENCAvailable,
-		"nvdec_available":     r.Host.NVDECAvailable,
-		"qsv_available":       r.Host.QSVAvailable,
-		"ram_bytes":           r.Host.RAMBytes,
-		"total_memory_bytes":  r.Host.RAMBytes,
-		"disk_free_bytes":     r.Host.DiskFreeBytes,
-		"storage_device":      r.Host.StorageDevice,
-		"storage_class":       r.Host.StorageClass,
-		"ulimit_nofile_soft":  r.Host.NofileSoft,
-		"ulimit_nofile_hard":  r.Host.NofileHard,
+		"worker_id":                      r.Host.WorkerID,
+		"hostname":                       r.Host.Hostname,
+		"cpu_count":                      r.Host.CPUCount,
+		"logical_cpu_count":              r.Host.CPUCount,
+		"physical_cpu_count":             r.Host.PhysicalCPUCount,
+		"effective_cpu_count":            r.Host.EffectiveCPUCount,
+		"max_parallel_jobs":              r.Host.MaxParallelJobs,
+		"has_gpu":                        r.Host.HasGPU,
+		"gpu_model":                      r.Host.GPUModel,
+		"gpu_vram_bytes":                 r.Host.GPUVRAMBytes,
+		"nvenc_available":                r.Host.NVENCAvailable,
+		"nvdec_available":                r.Host.NVDECAvailable,
+		"qsv_available":                  r.Host.QSVAvailable,
+		"ram_bytes":                      r.Host.RAMBytes,
+		"total_memory_bytes":             r.Host.RAMBytes,
+		"disk_free_bytes":                r.Host.DiskFreeBytes,
+		"storage_device":                 r.Host.StorageDevice,
+		"storage_class":                  r.Host.StorageClass,
+		"ulimit_nofile_soft":             r.Host.NofileSoft,
+		"ulimit_nofile_hard":             r.Host.NofileHard,
+		"capacity_benchmark_status":      r.Host.CapacityBenchmarkStatus,
+		"disk_read_benchmark_mbps":       r.Host.DiskReadBenchmarkMbps,
+		"disk_write_benchmark_mbps":      r.Host.DiskWriteBenchmarkMbps,
+		"download_benchmark_mbps":        r.Host.DownloadBenchmarkMbps,
+		"upload_benchmark_mbps":          r.Host.UploadBenchmarkMbps,
+		"capacity_benchmark_duration_ms": r.Host.CapacityBenchmarkDurationMS,
 	}
 	out := map[string]interface{}{
 		"schema_version": r.SchemaVersion,

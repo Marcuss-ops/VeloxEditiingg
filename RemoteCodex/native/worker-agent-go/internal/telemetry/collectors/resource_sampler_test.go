@@ -390,6 +390,30 @@ func TestSampleHost_BasicSanity(t *testing.T) {
 	}
 }
 
+func TestPrimeHostWithBenchmark_DisabledIsExplicit(t *testing.T) {
+	proc, sys := stubProc(t, defaultStubOpts())
+	s := NewResourceSampler(proc, sys, t.TempDir(), 0, 0)
+	if err := s.PrimeHostWithBenchmark(context.Background(), CapacityBenchmarkConfig{}); err != nil {
+		t.Fatalf("disabled benchmark should not fail startup: %v", err)
+	}
+	host := s.Host()
+	if host == nil || host.CapacityBenchmarkStatus != "disabled" {
+		t.Fatalf("host benchmark status = %+v, want disabled", host)
+	}
+}
+
+func TestMbpsRejectsEmptyOrZeroIntervals(t *testing.T) {
+	if got := mbps(0, time.Second); got != 0 {
+		t.Fatalf("mbps zero bytes = %v, want 0", got)
+	}
+	if got := mbps(1<<20, 0); got != 0 {
+		t.Fatalf("mbps zero duration = %v, want 0", got)
+	}
+	if got := mbps(1<<20, time.Second); got <= 8 {
+		t.Fatalf("mbps = %v, want more than 8 Mbit/s", got)
+	}
+}
+
 // TestHasGPU_DetectsNVidiaDevice: hand-place a fake /dev/nvidia0
 // file via a temp dir + symlink shim. Since detectGPU() inspects hard-
 // coded /dev paths, use a temporary OS_PATH overlay is not feasible
