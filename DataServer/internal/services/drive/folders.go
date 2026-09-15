@@ -298,6 +298,15 @@ func (s *Service) ListFiles(ctx context.Context, folderID string, pageSize int) 
 	return s.driveService.ListFiles(ctx, folderID, pageSize)
 }
 
+// GetFileMetadata forwards the media metadata lookup used by pipeline stock
+// expansion when files.list omitted videoMediaMetadata.durationMillis.
+func (s *Service) GetFileMetadata(ctx context.Context, fileID string) (*drive.File, error) {
+	if s.driveService == nil {
+		return nil, fmt.Errorf("drive service not configured")
+	}
+	return s.driveService.GetFileMetadata(ctx, fileID)
+}
+
 // Helpers
 func resolveDriveFolderID(folders []DriveFolder, folderID string) string {
 	if len(folderID) > 15 {
