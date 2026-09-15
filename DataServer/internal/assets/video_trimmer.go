@@ -371,7 +371,7 @@ func normalizationArgs(spec VideoNormalization, inputPath, outputPath string) []
 		"-i", inputPath,
 		"-map", "0:v:0", "-map", "0:a?",
 		"-vf", fmt.Sprintf("scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,fps=%d/%d", spec.Width, spec.Height, spec.Width, spec.Height, spec.FPSNum, spec.FPSDen),
-		"-c:v", "libx264", "-pix_fmt", spec.PixelFormat,
+		"-c:v", "libx264", "-b:v", "4M", "-maxrate", "4M", "-bufsize", "8M", "-pix_fmt", spec.PixelFormat,
 		"-video_track_timescale", strconv.Itoa(spec.VideoTrackTimebase),
 		"-c:a", spec.AudioCodec, "-ar", strconv.Itoa(spec.AudioSampleRate), "-ac", strconv.Itoa(spec.AudioChannels),
 		"-movflags", "+faststart", outputPath,
@@ -383,7 +383,7 @@ func trimArgs(mode TrimMode, segment VideoSegment, duration float64, inputPath, 
 	if mode == TrimModeStreamCopy {
 		return append(common, "-ss", formatSeconds(segment.StartSeconds), "-i", inputPath, "-t", formatSeconds(duration), "-map", "0:v:0", "-map", "0:a?", "-c", "copy", "-avoid_negative_ts", "make_zero", "-reset_timestamps", "1", outputPath)
 	}
-	return append(common, "-i", inputPath, "-ss", formatSeconds(segment.StartSeconds), "-t", formatSeconds(duration), "-map", "0:v:0", "-map", "0:a?", "-vf", fmt.Sprintf("fps=%d/%d", spec.FPSNum, spec.FPSDen), "-c:v", "libx264", "-pix_fmt", spec.PixelFormat, "-video_track_timescale", strconv.Itoa(spec.VideoTrackTimebase), "-c:a", spec.AudioCodec, "-ar", strconv.Itoa(spec.AudioSampleRate), "-ac", strconv.Itoa(spec.AudioChannels), "-avoid_negative_ts", "make_zero", "-reset_timestamps", "1", outputPath)
+	return append(common, "-i", inputPath, "-ss", formatSeconds(segment.StartSeconds), "-t", formatSeconds(duration), "-map", "0:v:0", "-map", "0:a?", "-vf", fmt.Sprintf("fps=%d/%d", spec.FPSNum, spec.FPSDen), "-c:v", "libx264", "-b:v", "4M", "-maxrate", "4M", "-bufsize", "8M", "-pix_fmt", spec.PixelFormat, "-video_track_timescale", strconv.Itoa(spec.VideoTrackTimebase), "-c:a", spec.AudioCodec, "-ar", strconv.Itoa(spec.AudioSampleRate), "-ac", strconv.Itoa(spec.AudioChannels), "-avoid_negative_ts", "make_zero", "-reset_timestamps", "1", outputPath)
 }
 
 func validateSegment(total float64, segment VideoSegment) error {
