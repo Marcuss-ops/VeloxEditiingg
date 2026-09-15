@@ -18,6 +18,25 @@ type fakeRenderClient struct {
 	payload []byte
 }
 
+type hookTestCompiler struct{}
+
+func (hookTestCompiler) ID() string { return "hook-test.v1" }
+
+func (hookTestCompiler) Validate(map[string]interface{}) error { return nil }
+
+func (hookTestCompiler) Compile(_ context.Context, jobID string, _ map[string]interface{}, outputPath string) (*plan.RenderPlan, error) {
+	return &plan.RenderPlan{
+		Version: 1,
+		JobID:   jobID,
+		Canvas:  plan.CanvasSpec{Width: 1, Height: 1, Fps: 1},
+		Timeline: []plan.TimelineItem{{
+			Source:          plan.MediaSource{Type: "color", ColorHex: "#000000"},
+			DurationSeconds: 0.1,
+		}},
+		OutputPath: outputPath,
+	}, nil
+}
+
 func (f *fakeRenderClient) Render(_ context.Context, p *plan.RenderPlan) error {
 	_, err := f.RenderWithMetrics(context.Background(), p)
 	return err
@@ -83,5 +102,29 @@ func TestRunner_RenderClient_NilRunner(t *testing.T) {
 	var r *Runner
 	if got := r.RenderClient(); got != nil {
 		t.Fatalf("RenderClient on nil Runner should return nil; got %v", got)
+	}
+}
+
+func TestRunnerCompileCompletedHookRunsBeforeRender(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(hookTestCompiler{})
+	rc := &fakeRenderClient{payload: []byte("hook-test-bytes")}
+	runner := NewRunner(reg, rc, logger.New(logger.InfoLevel, os.Stderr))
+	hookCalled := false
+	hookSawRender := false
+	ctx := WithCompileCompletedHook(context.Background(), func() {
+		hookCalled = true
+		hookSawRender = rc.called
+	})
+
+	_, err := runner.RunWithMetrics(ctx, "hook-test.v1", "hook-test", nil, filepath.Join(t.TempDir(), "out.mp4"))
+	if err != nil {
+		t.Fatalf("RunWithMetrics failed: %v", err)
+	}
+	if !hookCalled {
+		t.Fatal("compile-completed hook was not called")
+	}
+	if hookSawRender {
+		t.Fatal("compile-completed hook ran after render started")
 	}
 }

@@ -438,6 +438,9 @@ func (r *Runner) RunWithMetrics(ctx context.Context, pipelineID string, jobID st
 	}
 	m.TimelineItems = len(p.Timeline)
 	m.AudioTracks = len(p.AudioTracks)
+	if hook := compileCompletedHookFromContext(ctx); hook != nil {
+		hook()
+	}
 
 	// Phase: render via native client (with metrics)
 	r.logger.Info("[PIPELINE] Rendering %s for job %s (%d timeline items)", pipelineID, jobID, len(p.Timeline))

@@ -16,6 +16,7 @@ import (
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/performance"
+	"velox-worker-agent/pkg/video/pipeline"
 )
 
 // Execute performs the canonical work. It delegates to the existing
@@ -79,6 +80,13 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 		spanEncode = timer.Begin(telemetry.PhaseVideoEncode)
 	}
 
+	ctx = pipeline.WithCompileCompletedHook(ctx, func() {
+		if planHandle == nil || planCompleted {
+			return
+		}
+		planHandle.CompleteWith(0, 0, 0, telemetry.StatusOK, "", "")
+		planCompleted = true
+	})
 	runMetrics, err := s.pipelineRunner.RunWithMetrics(ctx, pipelineID, spec.JobID, spec.Payload, outputPath)
 
 	// Populate fine-grained phase timings from the C++ engine's detailed
@@ -148,8 +156,6 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 		return *failResult, nil
 	}
 
-	planHandle.CompleteWith(0, outputManifest.SizeBytes, runMetrics.RenderMetrics.Frames, telemetry.StatusOK, "", "")
-	planCompleted = true
 	if rec != nil {
 		status := telemetry.StatusOK
 		if !outputManifest.FfprobeValid {
