@@ -385,7 +385,7 @@ message TaskExecutionMetrics {
 
   // Number of jobs already active on the worker when this attempt acquired
   // its execution slot. Used to build the observed throughput curve by N.
-  int32 jobs_concurrent_at_start = 92;
+	int32 jobs_concurrent_at_start = 92;
 }
 
 // WorkerResourceCounters is the typed payload of Heartbeat.resources.
@@ -459,5 +459,12 @@ message WorkerResourceCounters {
 
   // Scratch disk occupancy — real-time scratch dir size and high-water mark.
   int64 scratch_current_bytes = 38;   // gauge: sum of file sizes in scratch dir
-  int64 scratch_peak_bytes = 39;      // high-water mark since worker start
+	int64 scratch_peak_bytes = 39;      // high-water mark since worker start
+
+	// Scheduler pressure and CFS throttling. Counters are cumulative within
+	// the worker cgroup; PSI values are the current some.avg10 percentage.
+	int64 cgroup_nr_throttled = 41;
+	int64 cgroup_throttled_usec = 42;
+	double cpu_some_pressure_avg10 = 43;
+	double io_some_pressure_avg10 = 44;
 }

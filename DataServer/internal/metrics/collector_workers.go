@@ -69,6 +69,10 @@ type ResourceSnapshot struct {
 	PublisherJobsActive   int32
 	Load1                 float64
 	RunQueue              int32
+	CgroupNrThrottled     int64
+	CgroupThrottledUsec   int64
+	CPUSomePressureAvg10  float64
+	IOSomePressureAvg10   float64
 	NetworkRxBytesDelta   uint64
 	NetworkTxBytesDelta   uint64
 	DownloadMbps          float64

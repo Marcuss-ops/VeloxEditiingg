@@ -87,6 +87,10 @@ func (s *SampledResources) ToWireMap() map[string]interface{} {
 	addI32("ffmpeg_processes", s.FFmpegProcesses)
 	addFloat("load1", s.Load1)
 	addI32("run_queue", s.RunQueue)
+	addI64("cgroup_nr_throttled", s.CgroupNrThrottled)
+	addI64("cgroup_throttled_usec", s.CgroupThrottledUsec)
+	addFloat("cpu_some_pressure_avg10", s.CPUSomePressureAvg10)
+	addFloat("io_some_pressure_avg10", s.IOSomePressureAvg10)
 	if !s.SampledAt.IsZero() {
 		out["sampled_at"] = s.SampledAt.UTC().Format(time.RFC3339Nano)
 	}
@@ -139,6 +143,10 @@ func (s *SampledResources) ToProto() *pb.WorkerResourceCounters {
 		FileDescriptorUtilizationRatio: s.FDUtilizationRatio,
 		Load1:                          s.Load1,
 		RunQueue:                       s.RunQueue,
+		CgroupNrThrottled:              s.CgroupNrThrottled,
+		CgroupThrottledUsec:            s.CgroupThrottledUsec,
+		CpuSomePressureAvg10:           s.CPUSomePressureAvg10,
+		IoSomePressureAvg10:            s.IOSomePressureAvg10,
 		SampledAt:                      s.TimestampProto(),
 	}
 }

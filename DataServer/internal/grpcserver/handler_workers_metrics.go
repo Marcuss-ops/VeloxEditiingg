@@ -236,6 +236,10 @@ func decodeWorkerResources(workerID string, r *pb.WorkerResourceCounters) *velme
 		PublisherJobsActive:  r.GetPublisherJobsActive(),
 		Load1:                r.GetLoad1(),
 		RunQueue:             r.GetRunQueue(),
+		CgroupNrThrottled:    r.GetCgroupNrThrottled(),
+		CgroupThrottledUsec:  r.GetCgroupThrottledUsec(),
+		CPUSomePressureAvg10: r.GetCpuSomePressureAvg10(),
+		IOSomePressureAvg10:  r.GetIoSomePressureAvg10(),
 		// NetworkRxBytesDelta / TxBytesDelta MUST stay under uint64 +
 		// use lastSeen.Snapshot to convert cumulative→delta.
 		NetworkRxBytesDelta: rxDelta,
@@ -321,6 +325,10 @@ func ResourcesToExtra(r *pb.WorkerResourceCounters) map[string]interface{} {
 		"publisher_jobs_active":        r.GetPublisherJobsActive(),
 		"load1":                        r.GetLoad1(),
 		"run_queue":                    r.GetRunQueue(),
+		"cgroup_nr_throttled":          r.GetCgroupNrThrottled(),
+		"cgroup_throttled_usec":        r.GetCgroupThrottledUsec(),
+		"cpu_some_pressure_avg10":      r.GetCpuSomePressureAvg10(),
+		"io_some_pressure_avg10":       r.GetIoSomePressureAvg10(),
 		"sampled_at":                   timeOrZero(r.GetSampledAt()),
 	}
 }

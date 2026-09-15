@@ -149,6 +149,12 @@ type SampledResources struct {
 	Load1    float64
 	RunQueue int32
 
+	// Scheduler pressure — cgroup v2 CFS counters and PSI some.avg10.
+	CgroupNrThrottled    int64
+	CgroupThrottledUsec  int64
+	CPUSomePressureAvg10 float64
+	IOSomePressureAvg10  float64
+
 	// SampledAt is wall-clock UTC when the snapshot was finalized.
 	SampledAt time.Time
 }
@@ -446,6 +452,12 @@ func (s *Sampler) Sample(ctx context.Context) (*SampledResources, error) {
 		out.Load1 = load1
 		out.RunQueue = int32(runQ)
 	}
+
+	pressure := readCgroupPressure(s.procRoot, s.sysRoot)
+	out.CgroupNrThrottled = pressure.NrThrottled
+	out.CgroupThrottledUsec = pressure.ThrottledUsec
+	out.CPUSomePressureAvg10 = pressure.CPUSomeAvg10
+	out.IOSomePressureAvg10 = pressure.IOSomeAvg10
 
 	return out, firstErr
 }

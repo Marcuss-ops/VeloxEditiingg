@@ -446,14 +446,50 @@ func TestToProto_PopulatedSnapshot(t *testing.T) {
 	s := &SampledResources{
 		CPUUtilRatio: 0.5, CPUIOWaitRatio: 0.1, CPUStealRatio: 0.02,
 		MemoryUsedBytes: 100, ProcessRSSBytes: 200, ActiveTasks: 2,
+		CgroupNrThrottled: 3, CgroupThrottledUsec: 400,
+		CPUSomePressureAvg10: 1.5, IOSomePressureAvg10: 2.5,
 		TaskSlots: 4, SampledAt: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
 	}
 	p := s.ToProto()
-	if p == nil || p.GetCpuUtilizationRatio() != 0.5 || p.GetActiveTasks() != 2 {
+	if p == nil || p.GetCpuUtilizationRatio() != 0.5 || p.GetActiveTasks() != 2 ||
+		p.GetCgroupNrThrottled() != 3 || p.GetCgroupThrottledUsec() != 400 ||
+		p.GetCpuSomePressureAvg10() != 1.5 || p.GetIoSomePressureAvg10() != 2.5 {
 		t.Fatalf("typed resource conversion lost values: %+v", p)
 	}
 	if p.GetSampledAt() == nil || !p.GetSampledAt().AsTime().Equal(s.SampledAt) {
 		t.Fatalf("typed sampled_at=%v, want %v", p.GetSampledAt(), s.SampledAt)
+	}
+}
+
+func TestReadCgroupPressure(t *testing.T) {
+	proc := t.TempDir()
+	sys := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(proc, "self"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(sys, "fs", "cgroup", "worker"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(path, contents string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(proc, "self", "cgroup"), "0::/worker\n")
+	write(filepath.Join(sys, "fs", "cgroup", "worker", "cpu.stat"),
+		"usage_usec 100\nnr_throttled 7\nthrottled_usec 900\n")
+	write(filepath.Join(sys, "fs", "cgroup", "worker", "cpu.pressure"),
+		"some avg10=3.50 avg60=1.00 avg300=0.10 total=42\n")
+	write(filepath.Join(sys, "fs", "cgroup", "worker", "io.pressure"),
+		"some avg10=0.75 avg60=0.20 avg300=0.05 total=9\n")
+
+	got := readCgroupPressure(proc, sys)
+	if got.NrThrottled != 7 || got.ThrottledUsec != 900 {
+		t.Fatalf("cgroup counters = %+v; want nr=7 throttled_usec=900", got)
+	}
+	if got.CPUSomeAvg10 != 3.5 || got.IOSomeAvg10 != 0.75 {
+		t.Fatalf("PSI = %+v; want cpu=3.5 io=0.75", got)
 	}
 }
 

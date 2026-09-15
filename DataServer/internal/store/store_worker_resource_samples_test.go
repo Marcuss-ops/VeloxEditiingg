@@ -211,6 +211,10 @@ func TestWorkerResourceSamples_CapacityColumnsRoundTrip(t *testing.T) {
 			"open_file_descriptors":     143,
 			"max_file_descriptors":      65535,
 			"fd_utilization_ratio":      0.0022,
+			"cgroup_nr_throttled":       17,
+			"cgroup_throttled_usec":     230000,
+			"cpu_some_pressure_avg10":   4.25,
+			"io_some_pressure_avg10":    1.75,
 			"resource_sample_present":   true,
 		},
 	})
@@ -256,6 +260,10 @@ func TestWorkerResourceSamples_CapacityColumnsRoundTrip(t *testing.T) {
 	assertInt64(t, "open_file_descriptors", row.OpenFileDescriptors, 143)
 	assertInt64(t, "max_file_descriptors", row.MaxFileDescriptors, 65535)
 	assertFloat64(t, "fd_utilization_ratio", row.FDUtilizationRatio, 0.0022)
+	assertInt64(t, "cgroup_nr_throttled", row.CgroupNrThrottled, 17)
+	assertInt64(t, "cgroup_throttled_usec", row.CgroupThrottledUsec, 230000)
+	assertFloat64(t, "cpu_some_pressure_avg10", row.CPUSomePressureAvg10, 4.25)
+	assertFloat64(t, "io_some_pressure_avg10", row.IOSomePressureAvg10, 1.75)
 }
 
 func assertInt64(t *testing.T, field string, got, want int64) {

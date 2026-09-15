@@ -1967,8 +1967,14 @@ type WorkerResourceCounters struct {
 	// Scratch disk occupancy — real-time scratch dir size and high-water mark.
 	ScratchCurrentBytes int64 `protobuf:"varint,38,opt,name=scratch_current_bytes,json=scratchCurrentBytes,proto3" json:"scratch_current_bytes,omitempty"` // gauge: sum of file sizes in scratch dir
 	ScratchPeakBytes    int64 `protobuf:"varint,39,opt,name=scratch_peak_bytes,json=scratchPeakBytes,proto3" json:"scratch_peak_bytes,omitempty"`          // high-water mark since worker start
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// Scheduler pressure and CFS throttling. Counters are cumulative within
+	// the worker cgroup; PSI values are the current some.avg10 percentage.
+	CgroupNrThrottled    int64   `protobuf:"varint,41,opt,name=cgroup_nr_throttled,json=cgroupNrThrottled,proto3" json:"cgroup_nr_throttled,omitempty"`
+	CgroupThrottledUsec  int64   `protobuf:"varint,42,opt,name=cgroup_throttled_usec,json=cgroupThrottledUsec,proto3" json:"cgroup_throttled_usec,omitempty"`
+	CpuSomePressureAvg10 float64 `protobuf:"fixed64,43,opt,name=cpu_some_pressure_avg10,json=cpuSomePressureAvg10,proto3" json:"cpu_some_pressure_avg10,omitempty"`
+	IoSomePressureAvg10  float64 `protobuf:"fixed64,44,opt,name=io_some_pressure_avg10,json=ioSomePressureAvg10,proto3" json:"io_some_pressure_avg10,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *WorkerResourceCounters) Reset() {
@@ -2281,6 +2287,34 @@ func (x *WorkerResourceCounters) GetScratchPeakBytes() int64 {
 	return 0
 }
 
+func (x *WorkerResourceCounters) GetCgroupNrThrottled() int64 {
+	if x != nil {
+		return x.CgroupNrThrottled
+	}
+	return 0
+}
+
+func (x *WorkerResourceCounters) GetCgroupThrottledUsec() int64 {
+	if x != nil {
+		return x.CgroupThrottledUsec
+	}
+	return 0
+}
+
+func (x *WorkerResourceCounters) GetCpuSomePressureAvg10() float64 {
+	if x != nil {
+		return x.CpuSomePressureAvg10
+	}
+	return 0
+}
+
+func (x *WorkerResourceCounters) GetIoSomePressureAvg10() float64 {
+	if x != nil {
+		return x.IoSomePressureAvg10
+	}
+	return 0
+}
+
 var File_velox_control_control_common_proto protoreflect.FileDescriptor
 
 const file_velox_control_control_common_proto_rawDesc = "" +
@@ -2487,7 +2521,7 @@ const file_velox_control_control_common_proto_rawDesc = "" +
 	"\x0emux_to_open_us\x18Z \x01(\x03R\vmuxToOpenUs\x12\x1f\n" +
 	"\vscene_count\x18[ \x01(\x05R\n" +
 	"sceneCount\x127\n" +
-	"\x18jobs_concurrent_at_start\x18\\ \x01(\x05R\x15jobsConcurrentAtStart\"\xcc\x0e\n" +
+	"\x18jobs_concurrent_at_start\x18\\ \x01(\x05R\x15jobsConcurrentAtStart\"\x9c\x10\n" +
 	"\x16WorkerResourceCounters\x122\n" +
 	"\x15cpu_utilization_ratio\x18\x01 \x01(\x01R\x13cpuUtilizationRatio\x12(\n" +
 	"\x10cpu_iowait_ratio\x18\x02 \x01(\x01R\x0ecpuIowaitRatio\x12&\n" +
@@ -2532,7 +2566,11 @@ const file_velox_control_control_common_proto_rawDesc = "" +
 	"\x14max_file_descriptors\x18$ \x01(\x03R\x12maxFileDescriptors\x12I\n" +
 	"!file_descriptor_utilization_ratio\x18% \x01(\x01R\x1efileDescriptorUtilizationRatio\x122\n" +
 	"\x15scratch_current_bytes\x18& \x01(\x03R\x13scratchCurrentBytes\x12,\n" +
-	"\x12scratch_peak_bytes\x18' \x01(\x03R\x10scratchPeakBytesB\"Z velox-shared/controltransport/pbb\x06proto3"
+	"\x12scratch_peak_bytes\x18' \x01(\x03R\x10scratchPeakBytes\x12.\n" +
+	"\x13cgroup_nr_throttled\x18) \x01(\x03R\x11cgroupNrThrottled\x122\n" +
+	"\x15cgroup_throttled_usec\x18* \x01(\x03R\x13cgroupThrottledUsec\x125\n" +
+	"\x17cpu_some_pressure_avg10\x18+ \x01(\x01R\x14cpuSomePressureAvg10\x123\n" +
+	"\x16io_some_pressure_avg10\x18, \x01(\x01R\x13ioSomePressureAvg10B\"Z velox-shared/controltransport/pbb\x06proto3"
 
 var (
 	file_velox_control_control_common_proto_rawDescOnce sync.Once

@@ -68,6 +68,10 @@ type WorkerCapacityReport struct {
 	RenderJobsActivePeak      int64   `json:"render_jobs_active_peak"`
 	MaxObservedConcurrent     int64   `json:"max_observed_concurrent"`
 	SlotUtilizationPeak       float64 `json:"slot_utilization_peak"`
+	CgroupThrottledCountMax   int64   `json:"cgroup_throttled_count_max"`
+	CgroupThrottledUsecMax    int64   `json:"cgroup_throttled_usec_max"`
+	CPUSomePressurePeak       float64 `json:"cpu_some_pressure_peak_avg10"`
+	IOSomePressurePeak        float64 `json:"io_some_pressure_peak_avg10"`
 	SampleCount               int     `json:"sample_count"`
 	WindowStart               string  `json:"window_start"`
 	WindowEnd                 string  `json:"window_end"`
@@ -195,6 +199,10 @@ func (s *SQLiteStore) queryResourceSamples(ctx context.Context, workerID string,
 			COALESCE(MAX(render_jobs_active), 0),
 			COALESCE(MAX(CASE WHEN task_slots > 0
 				THEN render_jobs_active * 1.0 / task_slots ELSE 0 END), 0),
+			COALESCE(MAX(cgroup_nr_throttled), 0),
+			COALESCE(MAX(cgroup_throttled_usec), 0),
+			COALESCE(MAX(cpu_some_pressure_avg10), 0),
+			COALESCE(MAX(io_some_pressure_avg10), 0),
 			COUNT(*)
 		FROM worker_resource_samples
 		WHERE worker_id = ? AND ingested_at >= ? AND ingested_at <= ?
@@ -227,6 +235,10 @@ func (s *SQLiteStore) queryResourceSamples(ctx context.Context, workerID string,
 		&report.RenderJobsActivePeak,
 		&report.MaxObservedConcurrent,
 		&report.SlotUtilizationPeak,
+		&report.CgroupThrottledCountMax,
+		&report.CgroupThrottledUsecMax,
+		&report.CPUSomePressurePeak,
+		&report.IOSomePressurePeak,
 		&report.SampleCount,
 	)
 	if err == sql.ErrNoRows {

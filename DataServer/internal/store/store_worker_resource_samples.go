@@ -56,6 +56,10 @@ type WorkerResourceSample struct {
 	OpenFileDescriptors  int64
 	MaxFileDescriptors   int64
 	FDUtilizationRatio   float64
+	CgroupNrThrottled    int64
+	CgroupThrottledUsec  int64
+	CPUSomePressureAvg10 float64
+	IOSomePressureAvg10  float64
 }
 
 // ListWorkerResourceSamples returns samples for one worker, newest observed
@@ -82,7 +86,8 @@ func (s *SQLiteStore) ListWorkerResourceSamples(ctx context.Context, workerID, s
 		disk_write_mbps, disk_io_wait_ms, network_retransmits, download_mbps,
 		upload_mbps, task_slots, render_jobs_active, prefetch_jobs_active,
 		publisher_jobs_active, open_file_descriptors, max_file_descriptors,
-		fd_utilization_ratio
+		fd_utilization_ratio, cgroup_nr_throttled, cgroup_throttled_usec,
+		cpu_some_pressure_avg10, io_some_pressure_avg10
 		FROM worker_resource_samples WHERE worker_id=?`
 	args := []any{workerID}
 	if sessionID != "" {
@@ -133,12 +138,13 @@ func maybeInsertWorkerResourceSample(ctx context.Context, tx *sql.Tx, m map[stri
 		disk_write_mbps, disk_io_wait_ms, network_retransmits, download_mbps,
 		upload_mbps, task_slots, render_jobs_active, prefetch_jobs_active,
 		publisher_jobs_active, open_file_descriptors, max_file_descriptors,
-		fd_utilization_ratio
+		fd_utilization_ratio, cgroup_nr_throttled, cgroup_throttled_usec,
+		cpu_some_pressure_avg10, io_some_pressure_avg10
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-		          ?, ?)
+		          ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(worker_id, session_id, sampled_at) DO NOTHING`,
 		workerID, sessionID, sampledAt, ingestedAt,
 		floatValue(metricValue(m, "cpu_utilization_ratio"))*100,
@@ -179,6 +185,10 @@ func maybeInsertWorkerResourceSample(ctx context.Context, tx *sql.Tx, m map[stri
 		int64Value(metricValue(m, "open_file_descriptors")),
 		int64Value(metricValue(m, "max_file_descriptors")),
 		floatValue(metricValue(m, "fd_utilization_ratio")),
+		int64Value(metricValue(m, "cgroup_nr_throttled")),
+		int64Value(metricValue(m, "cgroup_throttled_usec")),
+		floatValue(metricValue(m, "cpu_some_pressure_avg10")),
+		floatValue(metricValue(m, "io_some_pressure_avg10")),
 	)
 	if err != nil {
 		return fmt.Errorf("insert worker resource sample: %w", err)
@@ -244,6 +254,8 @@ func scanWorkerResourceSample(scanner interface{ Scan(...any) error }) (WorkerRe
 		&row.TaskSlots, &row.RenderJobsActive, &row.PrefetchJobsActive,
 		&row.PublisherJobsActive, &row.OpenFileDescriptors, &row.MaxFileDescriptors,
 		&row.FDUtilizationRatio,
+		&row.CgroupNrThrottled, &row.CgroupThrottledUsec,
+		&row.CPUSomePressureAvg10, &row.IOSomePressureAvg10,
 	)
 	if err != nil {
 		return row, fmt.Errorf("scan worker resource sample: %w", err)
