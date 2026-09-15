@@ -164,7 +164,12 @@ type AttemptMetrics struct {
 	CriticalPathPercent   float64 `json:"critical_path_percent"`
 	CriticalPathMS        int64   `json:"critical_path_ms"`
 	CriticalPathComponent string  `json:"critical_path_component,omitempty"`
+	SegmentsTotal         int64   `json:"segments_total"`
+	SegmentsPacketCopy    int64   `json:"segments_packet_copy"`
+	SegmentsReencoded     int64   `json:"segments_reencoded"`
 	PacketCopyRatio       float64 `json:"packet_copy_ratio"`
+	PacketCopyBytes       int64   `json:"packet_copy_bytes"`
+	ReencodedBytes        int64   `json:"reencoded_bytes"`
 
 	GPUUtilAvgPct         float64 `json:"gpu_util_avg_percent"`
 	GPUUtilPeakPct        float64 `json:"gpu_util_peak_percent"`

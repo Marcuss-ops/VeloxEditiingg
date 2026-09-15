@@ -7,6 +7,7 @@ import (
 	"velox-server/internal/forwardingstore"
 	"velox-server/internal/ingest"
 	"velox-server/internal/jobs"
+	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
 
 	pb "velox-shared/controltransport/pb"
@@ -148,6 +149,28 @@ func TestHandleTaskResult_PersistTypedMetrics_F1(t *testing.T) {
 	}
 	if got := taskRepo.registerCalls; got != 1 {
 		t.Errorf("IngestTaskResultAtomic artifact-fanout calls = %d; want 1 (artifact declare must fire)", got)
+	}
+}
+
+func TestApplySegmentMetrics_DerivesPacketCopyBreakdown(t *testing.T) {
+	metrics := taskattempts.AttemptMetrics{PacketCopyRatio: 12}
+	segments := []taskattempts.SegmentTiming{
+		{FfmpegEncodeMS: 0, FramesComposited: 0, SourceBytes: 100},
+		{FfmpegEncodeMS: 0, FramesComposited: 0, SourceBytes: 200},
+		{FfmpegEncodeMS: 40, FramesComposited: 0, SourceBytes: 300},
+		{FfmpegEncodeMS: 20, FramesComposited: 1, SourceBytes: 400},
+	}
+
+	applySegmentMetrics(&metrics, segments)
+
+	if metrics.SegmentsTotal != 4 || metrics.SegmentsPacketCopy != 2 || metrics.SegmentsReencoded != 2 {
+		t.Fatalf("segment counts = total=%d copy=%d reencoded=%d; want 4/2/2", metrics.SegmentsTotal, metrics.SegmentsPacketCopy, metrics.SegmentsReencoded)
+	}
+	if metrics.PacketCopyRatio != 50 {
+		t.Fatalf("packet_copy_ratio = %v; want 50", metrics.PacketCopyRatio)
+	}
+	if metrics.PacketCopyBytes != 300 || metrics.ReencodedBytes != 700 {
+		t.Fatalf("segment bytes = copy=%d reencoded=%d; want 300/700", metrics.PacketCopyBytes, metrics.ReencodedBytes)
 	}
 }
 

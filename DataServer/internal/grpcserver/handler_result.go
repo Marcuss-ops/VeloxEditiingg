@@ -92,6 +92,7 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *wor
 	typedCost := executionMetricsToCostBasis(attemptID, tr.GetExecutionMetrics(), h.costFactors)
 	segmentTimings := segmentTimingsFromProto(attemptID, taskID, jobID, workerID, tr.GetSegmentTimings())
 	typedMetrics.SegmentCount = len(segmentTimings)
+	applySegmentMetrics(&typedMetrics, segmentTimings)
 	for _, segment := range segmentTimings {
 		if segment.Status == "ok" || segment.Status == "succeeded" {
 			typedMetrics.CompletedSegments++

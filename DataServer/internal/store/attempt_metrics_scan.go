@@ -64,6 +64,8 @@ var attemptMetricsColumns = []string{
 	"progressive_overlap_bytes_before_render", "progressive_overlap_ms",
 	"trailer_to_open_ms", "mux_to_open_us",
 	"job_publish_bytes", "job_page_faults", "job_scratch_peak_bytes",
+	"segments_total", "segments_packet_copy", "segments_reencoded",
+	"packet_copy_ratio", "packet_copy_bytes", "reencoded_bytes",
 }
 
 // attemptMetricsColCount is the canonical column count. The INSERT

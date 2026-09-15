@@ -96,7 +96,9 @@ func (r *SQLiteTaskAttemptRepository) PersistMetrics(ctx context.Context, metric
 			progressive_overlap_first_part_ms, progressive_overlap_parts_before_render,
 			progressive_overlap_bytes_before_render, progressive_overlap_ms,
 			trailer_to_open_ms, mux_to_open_us,
-			job_publish_bytes, job_page_faults, job_scratch_peak_bytes
+			job_publish_bytes, job_page_faults, job_scratch_peak_bytes,
+			segments_total, segments_packet_copy, segments_reencoded,
+			packet_copy_ratio, packet_copy_bytes, reencoded_bytes
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
@@ -106,7 +108,7 @@ func (r *SQLiteTaskAttemptRepository) PersistMetrics(ctx context.Context, metric
 		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-		          ?, ?, ?, ?, ?, ?, ?
+		          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 		)`,
 		metrics.AttemptID, metrics.InputBytes, metrics.OutputBytes,
 		metrics.BytesFromDrive, metrics.BytesFromBlobstore, metrics.BytesFromLocalCache,
@@ -152,6 +154,8 @@ func (r *SQLiteTaskAttemptRepository) PersistMetrics(ctx context.Context, metric
 		metrics.ProgressiveOverlapBytesBeforeRender, metrics.ProgressiveOverlapMs,
 		metrics.TrailerToOpenMs, metrics.MuxToOpenUS,
 		metrics.JobPublishBytes, metrics.JobPageFaults, metrics.JobScratchPeakBytes,
+		metrics.SegmentsTotal, metrics.SegmentsPacketCopy, metrics.SegmentsReencoded,
+		metrics.PacketCopyRatio, metrics.PacketCopyBytes, metrics.ReencodedBytes,
 	)
 	if err != nil {
 		return fmt.Errorf("metrics persist: %w", err)

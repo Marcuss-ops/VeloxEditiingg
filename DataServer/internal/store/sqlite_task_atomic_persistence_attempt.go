@@ -216,7 +216,9 @@ func persistAttemptMetrics(ctx context.Context, tx *sql.Tx, cmd taskgraph.Ingest
 			progressive_overlap_first_part_ms, progressive_overlap_parts_before_render,
 			progressive_overlap_bytes_before_render, progressive_overlap_ms,
 			trailer_to_open_ms, mux_to_open_us
-			, job_publish_bytes, job_page_faults, job_scratch_peak_bytes
+			, job_publish_bytes, job_page_faults, job_scratch_peak_bytes,
+			segments_total, segments_packet_copy, segments_reencoded,
+			packet_copy_ratio, packet_copy_bytes, reencoded_bytes
 		) VALUES (
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
@@ -227,7 +229,7 @@ func persistAttemptMetrics(ctx context.Context, tx *sql.Tx, cmd taskgraph.Ingest
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?, ?
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 		)`,
 		m.AttemptID, m.InputBytes, m.OutputBytes,
 		m.BytesFromDrive, m.BytesFromBlobstore, m.BytesFromLocalCache,
@@ -274,6 +276,8 @@ func persistAttemptMetrics(ctx context.Context, tx *sql.Tx, cmd taskgraph.Ingest
 		m.ProgressiveOverlapBytesBeforeRender, m.ProgressiveOverlapMs,
 		m.TrailerToOpenMs, m.MuxToOpenUS,
 		m.JobPublishBytes, m.JobPageFaults, m.JobScratchPeakBytes,
+		m.SegmentsTotal, m.SegmentsPacketCopy, m.SegmentsReencoded,
+		m.PacketCopyRatio, m.PacketCopyBytes, m.ReencodedBytes,
 	)
 	if err != nil {
 		return fmt.Errorf("task ingest atomic metrics: %w", err)

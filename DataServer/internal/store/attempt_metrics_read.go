@@ -58,7 +58,9 @@ func (r *SQLiteTaskAttemptRepository) GetMetrics(ctx context.Context, attemptID 
 		        progressive_overlap_first_part_ms, progressive_overlap_parts_before_render,
 		        progressive_overlap_bytes_before_render, progressive_overlap_ms,
 		        trailer_to_open_ms, mux_to_open_us,
-		        job_publish_bytes, job_page_faults, job_scratch_peak_bytes
+		        job_publish_bytes, job_page_faults, job_scratch_peak_bytes,
+		        segments_total, segments_packet_copy, segments_reencoded,
+		        packet_copy_ratio, packet_copy_bytes, reencoded_bytes
 		 FROM task_attempt_metrics WHERE attempt_id = ?`,
 		attemptID,
 	)
@@ -111,6 +113,8 @@ func (r *SQLiteTaskAttemptRepository) GetMetrics(ctx context.Context, attemptID 
 		&m.ProgressiveOverlapBytesBeforeRender, &m.ProgressiveOverlapMs,
 		&m.TrailerToOpenMs, &m.MuxToOpenUS,
 		&m.JobPublishBytes, &m.JobPageFaults, &m.JobScratchPeakBytes,
+		&m.SegmentsTotal, &m.SegmentsPacketCopy, &m.SegmentsReencoded,
+		&m.PacketCopyRatio, &m.PacketCopyBytes, &m.ReencodedBytes,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil

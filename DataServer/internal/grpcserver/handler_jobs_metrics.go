@@ -195,6 +195,29 @@ func executionMetricsToAttemptMetrics(attemptID string, em *pb.TaskExecutionMetr
 	return am
 }
 
+// applySegmentMetrics derives the durable packet-copy breakdown from the
+// segment timings already carried by TaskResult. The worker's aggregate
+// packet_copy_ratio remains the fallback when a legacy report has no timing
+// rows; when rows are present, the Master-side counts and byte totals are the
+// authoritative inspect/read-model values.
+func applySegmentMetrics(metrics *taskattempts.AttemptMetrics, segments []taskattempts.SegmentTiming) {
+	if metrics == nil || len(segments) == 0 {
+		return
+	}
+	metrics.SegmentsTotal = int64(len(segments))
+	for _, segment := range segments {
+		packetCopy := segment.FfmpegEncodeMS == 0 && segment.FramesComposited == 0
+		if packetCopy {
+			metrics.SegmentsPacketCopy++
+			metrics.PacketCopyBytes += segment.SourceBytes
+			continue
+		}
+		metrics.SegmentsReencoded++
+		metrics.ReencodedBytes += segment.SourceBytes
+	}
+	metrics.PacketCopyRatio = float64(metrics.SegmentsPacketCopy) / float64(metrics.SegmentsTotal) * 100
+}
+
 // phaseTimingsFromProto maps the complete worker event timeline onto the
 // master-side canonical shape. Every identity argument is resolved and
 // verified by the master before this function is called; all identity echoes
