@@ -52,3 +52,15 @@ func TestRawMetricsFromPipelineUsesAggregatePacketCopyCounters(t *testing.T) {
 		t.Fatalf("aggregate packet-copy facts = %+v", *got)
 	}
 }
+
+func TestRawMetricsFromPipelineUsesMixedPacketInvariant(t *testing.T) {
+	run := pipeline.RunMetrics{RenderMetrics: pipeline.RenderMetrics{
+		ConcatMode:   "mixed_packet",
+		EncodePasses: 0,
+	}}
+
+	got := rawMetricsFromPipeline(run, performance.IOMetrics{}, performance.CPUMetrics{})
+	if got.PacketCopyRatio != 100 {
+		t.Fatalf("mixed packet invariant ratio = %v, want 100", got.PacketCopyRatio)
+	}
+}

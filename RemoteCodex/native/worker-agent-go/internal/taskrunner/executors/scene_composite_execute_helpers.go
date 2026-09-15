@@ -118,6 +118,12 @@ func computePipelineSegmentStats(m *telemetry.RawExecutionMetrics, run pipeline.
 			m.SegmentsPacketCopy = int32(rm.CopySegments)
 			m.SegmentsReencoded = int32(rm.TranscodeSegments)
 			m.PacketCopyRatio = float64(rm.CopySegments) / float64(total) * 100
+		} else if rm.ConcatMode == "mixed_packet" && rm.EncodePasses == 0 {
+			// mixed_packet is an all-packet-copy renderer by contract. Some
+			// older native sidecars omit both aggregate and per-segment counts;
+			// use the stronger engine invariants rather than exposing a false
+			// zero ratio to the Master.
+			m.PacketCopyRatio = 100
 		}
 		return
 	}
