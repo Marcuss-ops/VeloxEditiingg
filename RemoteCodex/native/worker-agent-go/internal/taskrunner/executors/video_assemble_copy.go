@@ -122,23 +122,96 @@ func (e *videoAssembleCopyExecutor) Execute(ctx context.Context, execCtx executo
 	if err != nil {
 		return fail(copyOnlyRenderErrorCode(err), err)
 	}
+	profile, err := validateCopyOnlyProfile(plan)
+	if err != nil {
+		return fail("COPY_ONLY_PLAN_INVALID", err)
+	}
+	// The profile is the producer's explicit request, but the bytes are the
+	// final authority. Never publish a progressive-looking job when the native
+	// mux emitted a classic MP4 or performed a backward seek.
+	if profile.ContainerLayout == contract.ContainerLayoutFragmented {
+		if err := validateFragmentedMP4Output(outputPath, metrics); err != nil {
+			return fail("FMP4_OUTPUT_INVALID", err)
+		}
+	}
 	artifact, err := artifactFromFile("video/mp4", outputPath)
 	if err != nil {
 		return fail("FINAL_OUTPUT_INVALID", err)
 	}
 	return executor.ExecutionResult{
 		Status: "succeeded", Outputs: []executor.ArtifactRef{artifact},
-		RawMetrics: &telemetry.RawExecutionMetrics{
-			ConcatMode: "packet_copy", FinalConcatStreamCopy: true,
-			FramesDecoded: metrics.FramesDecoded, FramesEncoded: metrics.Frames,
-			FramesComposited: metrics.FramesComposited,
-			FfmpegExecCount:  metrics.FfmpegExecCount,
-			FfprobeExecCount: metrics.FfprobeExecCount,
-			AudioPacketCopy:  1, VideoConcatMs: metrics.TotalMs,
-			OutputFileSize: artifact.SizeBytes, OutputSha256: artifact.Hash,
-		},
-		StartedAt: started, CompletedAt: time.Now().UTC(),
+		RawMetrics: copyOnlyRawMetrics(plan, metrics, artifact),
+		StartedAt:  started, CompletedAt: time.Now().UTC(),
 	}, nil
+}
+
+// copyOnlyRawMetrics is the canonical worker projection for the native V2
+// packet-copy path. Keep native facts intact here so the TaskResult exposes
+// the actual work done by the remote worker: no encode, packet-copy ratio,
+// engine I/O, output identity, and mux/finalization timings.
+func copyOnlyRawMetrics(plan *contract.CompiledRenderPlanV2, native pipeline.RenderMetrics, artifact executor.ArtifactRef) *telemetry.RawExecutionMetrics {
+	segmentsTotal := native.SegmentsTotal
+	segmentsPacketCopy := native.SegmentsPacketCopy
+	segmentsReencoded := native.SegmentsReencoded
+	if segmentsTotal == 0 && plan != nil && len(plan.VideoTracks) == 1 {
+		segmentsTotal = int64(len(plan.VideoTracks[0].Segments))
+		segmentsPacketCopy = segmentsTotal
+	}
+	packetCopyRatio := native.PacketCopyRatio
+	if packetCopyRatio == 0 && segmentsTotal > 0 {
+		packetCopyRatio = float64(segmentsPacketCopy) / float64(segmentsTotal) * 100
+	}
+	concatMode := native.ConcatMode
+	if concatMode == "" {
+		concatMode = "packet_copy"
+	}
+	audioCopied := int64(0)
+	var audioInputBytes int64
+	if plan != nil && plan.FinalAudio.AssetID != "" {
+		audioCopied = 1
+		for _, asset := range plan.Assets {
+			if asset.AssetID == plan.FinalAudio.AssetID {
+				audioInputBytes = asset.SizeBytes
+				break
+			}
+		}
+	}
+	return &telemetry.RawExecutionMetrics{
+		InputBytes:                native.TotalBytesRead,
+		OutputBytes:               artifact.SizeBytes,
+		CpuTimeMs:                 native.CPUUserMs + native.CPUSystemMs,
+		CpuUserMs:                 native.CPUUserMs,
+		CpuSystemMs:               native.CPUSystemMs,
+		FramesDecoded:             native.FramesDecoded,
+		FramesEncoded:             native.Frames,
+		FramesComposited:          native.FramesComposited,
+		FfmpegSpeedRatio:          native.SpeedX,
+		EncodePasses:              int32(native.EncodePasses),
+		FinalConcatStreamCopy:     true,
+		ConcatMode:                concatMode,
+		TempBytesWritten:          native.TempBytes,
+		MediaDurationSeconds:      native.DurationSec,
+		WallClockSeconds:          float64(native.TotalMs) / 1000,
+		OutputFileSize:            artifact.SizeBytes,
+		OutputSha256:              artifact.Hash,
+		DiskReadBytes:             native.StorageBytesRead,
+		DiskWriteBytes:            native.StorageBytesWritten,
+		OutputWriteMs:             native.FirstOutputWriteMS,
+		OutputFinalizeMs:          native.TrailerToPublishUS / 1000,
+		VideoConcatMs:             native.TotalMs,
+		SegmentsTotal:             int32(segmentsTotal),
+		SegmentsPacketCopy:        int32(segmentsPacketCopy),
+		SegmentsReencoded:         int32(segmentsReencoded),
+		PacketCopyRatio:           packetCopyRatio,
+		AudioPacketCopy:           audioCopied,
+		AudioInputBytes:           audioInputBytes,
+		FfmpegExecCount:           native.FfmpegExecCount,
+		FfprobeExecCount:          native.FfprobeExecCount,
+		ProcessSpawnCount:         native.EngineSpawnCount,
+		ProcessStartupMs:          native.EngineSpawnMs,
+		ExternalProcessSpawnExact: native.EngineExternalSpawnCount,
+		JobRenderWallMs:           native.TotalMs,
+	}
 }
 
 type copyOnlyPlanWire struct {

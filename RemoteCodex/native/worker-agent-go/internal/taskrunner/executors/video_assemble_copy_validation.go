@@ -2,6 +2,7 @@ package executors
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"velox-shared/contract"
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/runtimeassets"
+	"velox-worker-agent/pkg/video/pipeline"
 )
 
 var (
@@ -98,4 +100,68 @@ func safeOutputJobID(jobID string) (string, error) {
 		return "", errors.New("job_id must be a non-empty path-free identifier")
 	}
 	return jobID, nil
+}
+
+// validateFragmentedMP4Output is the worker-side byte certificate for the
+// fMP4 profile. It walks top-level ISO BMFF boxes instead of grepping for the
+// text "moof", so an arbitrary payload cannot satisfy the rollout gate.
+func validateFragmentedMP4Output(path string, metrics pipeline.RenderMetrics) error {
+	if metrics.ConcatMode != "packet_copy" {
+		return fmt.Errorf("fMP4 requires native packet_copy mux, got concat_mode=%q", metrics.ConcatMode)
+	}
+	if metrics.EncodePasses != 0 {
+		return fmt.Errorf("fMP4 packet-copy mux reported encode_passes=%d", metrics.EncodePasses)
+	}
+	if metrics.BackwardSeekSeen || metrics.OutputBackwardSeekCount != 0 {
+		return fmt.Errorf("fMP4 output is not append-only: backward seeks observed=%t count=%d", metrics.BackwardSeekSeen, metrics.OutputBackwardSeekCount)
+	}
+	if !metrics.OutputDurable {
+		return errors.New("fMP4 output was published without native durability confirmation")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open fMP4 output: %w", err)
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("stat fMP4 output: %w", err)
+	}
+	if info.Size() <= 0 {
+		return errors.New("fMP4 output is empty")
+	}
+
+	var header [8]byte
+	var offset int64
+	for offset < info.Size() {
+		if info.Size()-offset < int64(len(header)) {
+			return fmt.Errorf("truncated ISO BMFF box header at offset %d", offset)
+		}
+		if _, err := io.ReadFull(f, header[:]); err != nil {
+			return fmt.Errorf("read ISO BMFF box header at offset %d: %w", offset, err)
+		}
+		headerSize := int64(8)
+		boxSize := int64(binary.BigEndian.Uint32(header[:4]))
+		if boxSize == 1 {
+			var extended [8]byte
+			if _, err := io.ReadFull(f, extended[:]); err != nil {
+				return fmt.Errorf("read extended ISO BMFF box size at offset %d: %w", offset, err)
+			}
+			boxSize = int64(binary.BigEndian.Uint64(extended[:]))
+			headerSize = 16
+		} else if boxSize == 0 {
+			boxSize = info.Size() - offset
+		}
+		if boxSize < headerSize || boxSize > info.Size()-offset {
+			return fmt.Errorf("invalid ISO BMFF box size=%d at offset=%d", boxSize, offset)
+		}
+		if string(header[4:8]) == "moof" {
+			return nil
+		}
+		if _, err := f.Seek(boxSize-headerSize, io.SeekCurrent); err != nil {
+			return fmt.Errorf("skip ISO BMFF box at offset %d: %w", offset, err)
+		}
+		offset += boxSize
+	}
+	return errors.New("fMP4 output contains no moof box")
 }

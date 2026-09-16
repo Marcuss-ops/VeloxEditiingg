@@ -1,8 +1,10 @@
 package executors
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"os"
@@ -230,6 +232,56 @@ func TestVideoAssembleCopy_AcceptsFragmentedProfileWhenGateOpen(t *testing.T) {
 	spec := executorTaskSpec(VideoAssembleCopyID, "job-fmp4", canonical, plan)
 	if err := exec.Validate(spec); err != nil {
 		t.Fatalf("Validate error = %v; want fragmented profile admission", err)
+	}
+}
+
+func TestValidateFragmentedMP4OutputRequiresNativeEvidenceAndMoof(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "output.mp4")
+	boxBytes := func(kind string, payload []byte) []byte {
+		var header [8]byte
+		binary.BigEndian.PutUint32(header[:4], uint32(8+len(payload)))
+		copy(header[4:], kind)
+		return append(header[:], payload...)
+	}
+	if err := os.WriteFile(path, bytes.Join([][]byte{
+		boxBytes("ftyp", []byte("isom")),
+		boxBytes("moov", []byte("init")),
+		boxBytes("moof", []byte("fragment")),
+	}, nil), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	native := pipeline.RenderMetrics{ConcatMode: "packet_copy", OutputDurable: true}
+	if err := validateFragmentedMP4Output(path, native); err != nil {
+		t.Fatalf("valid fMP4 rejected: %v", err)
+	}
+
+	if err := os.WriteFile(path, boxBytes("moov", []byte("progressive")), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateFragmentedMP4Output(path, native); err == nil || !strings.Contains(err.Error(), "no moof") {
+		t.Fatalf("missing moof error = %v; want explicit moof rejection", err)
+	}
+
+	native.BackwardSeekSeen = true
+	if err := validateFragmentedMP4Output(path, native); err == nil || !strings.Contains(err.Error(), "append-only") {
+		t.Fatalf("backward seek error = %v; want append-only rejection", err)
+	}
+}
+
+func TestCopyOnlyRawMetricsProjectsNativePacketCopyFacts(t *testing.T) {
+	plan := &contract.CompiledRenderPlanV2{VideoTracks: []contract.VideoTrackV2{{Segments: []contract.VideoSegmentV2{{}, {}}}}}
+	metrics := copyOnlyRawMetrics(plan, pipeline.RenderMetrics{
+		TotalBytesRead: 1234, StorageBytesRead: 1000, StorageBytesWritten: 2000,
+		CPUUserMs: 7, CPUSystemMs: 3, TotalMs: 250, DurationSec: 2.5,
+		SpeedX: 9, EncodePasses: 0, SegmentsTotal: 2, SegmentsPacketCopy: 2,
+		PacketCopyRatio: 100, EngineSpawnCount: 1, EngineExternalSpawnCount: 0,
+		FirstOutputWriteMS: 4, TrailerToPublishUS: 6000,
+	}, executor.ArtifactRef{SizeBytes: 4096, Hash: "sha"})
+	if metrics.InputBytes != 1234 || metrics.OutputFileSize != 4096 || metrics.CpuTimeMs != 10 ||
+		metrics.DiskReadBytes != 1000 || metrics.DiskWriteBytes != 2000 || metrics.VideoConcatMs != 250 ||
+		metrics.SegmentsPacketCopy != 2 || metrics.PacketCopyRatio != 100 || !metrics.FinalConcatStreamCopy ||
+		metrics.ProcessSpawnCount != 1 || metrics.OutputFinalizeMs != 6 {
+		t.Fatalf("native packet-copy metrics projection = %+v", metrics)
 	}
 }
 
