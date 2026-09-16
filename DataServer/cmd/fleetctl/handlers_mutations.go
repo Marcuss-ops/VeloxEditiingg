@@ -145,6 +145,8 @@ func runWorkerConfig(client *fleetClient, args []string) int {
 	profile := (*int)(nil)
 	fmp4 := (*int)(nil)
 	reason := "fleetctl worker-config set"
+	reasonSet := false
+	var positional []string
 	// parseToggle renders the shared 0|1 knob contract so the audio-mix and
 	// fMP4 gates fail closed with the same message shape.
 	parseToggle := func(flag, value string) (*int, bool) {
@@ -184,6 +186,7 @@ func runWorkerConfig(client *fleetClient, args []string) int {
 				fmp4 = parsed
 			case "--reason":
 				reason = value
+				reasonSet = true
 			}
 			i++
 		case strings.HasPrefix(arg, "--audio-mix-strategy="):
@@ -202,10 +205,33 @@ func runWorkerConfig(client *fleetClient, args []string) int {
 			fmp4 = parsed
 		case strings.HasPrefix(arg, "--reason="):
 			reason = strings.TrimPrefix(arg, "--reason=")
+			reasonSet = true
+		case arg == "--master" || arg == "--token-file":
+			if i+1 >= len(args) {
+				fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "%s requires a value", arg))
+				return ExitMisuse
+			}
+			i++
+		case strings.HasPrefix(arg, "--master=") || strings.HasPrefix(arg, "--token-file=") || arg == "--verbose":
+			// Global client flags are resolved by loadClientConfig before dispatch.
 		default:
-			fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "unknown worker-config option %q", arg))
+			if strings.HasPrefix(arg, "-") {
+				fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "unknown worker-config option %q", arg))
+				return ExitMisuse
+			}
+			positional = append(positional, arg)
+		}
+	}
+	if len(positional) > 1 {
+		fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "worker-config accepts at most one positional reason"))
+		return ExitMisuse
+	}
+	if len(positional) == 1 {
+		if reasonSet {
+			fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "reason specified more than once"))
 			return ExitMisuse
 		}
+		reason = positional[0]
 	}
 	if strategy != "" && strategy != "legacy" && strategy != "optimized" && strategy != "auto" {
 		fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "audio-mix-strategy must be legacy, optimized, or auto"))

@@ -76,6 +76,35 @@ func TestRunWorkerConfig_FMP4ToggleAcceptsEqualsFormAndSharedKnobs(t *testing.T)
 	}
 }
 
+// TestRunWorkerConfig_AcceptsDocumentedPositionalReason keeps the documented
+// operator form compatible with the explicit --reason form.
+func TestRunWorkerConfig_AcceptsDocumentedPositionalReason(t *testing.T) {
+	var postBody map[string]any
+	c, srv := newMockClient(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "POST /api/v1/admin/workers/worker-1/config":
+			if err := json.NewDecoder(r.Body).Decode(&postBody); err != nil {
+				t.Errorf("decode config body: %v", err)
+			}
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{"operation_id":"op-config-reason","worker_id":"worker-1"}`))
+		case "GET /api/v1/admin/operations/op-config-reason":
+			_ = json.NewEncoder(w).Encode(polledOperationRow{OperationID: "op-config-reason", Status: "SUCCEEDED"})
+		default:
+			http.Error(w, "unexpected request", http.StatusNotFound)
+		}
+	})
+	defer srv.Close()
+
+	ec := runWorkerConfig(c, []string{"set", "worker-1", "--fmp4-stream-profile", "1", "fMP4 final-mux rollout (canary)"})
+	if ec != ExitOK {
+		t.Fatalf("worker-config exit code = %d, want %d", ec, ExitOK)
+	}
+	if got, _ := postBody["reason"].(string); got != "fMP4 final-mux rollout (canary)" {
+		t.Fatalf("reason = %q, want documented positional reason", got)
+	}
+}
+
 // TestRunWorkerConfig_RejectsInvalidFMP4Toggle keeps a bad toggle from ever
 // reaching the Master.
 func TestRunWorkerConfig_RejectsInvalidFMP4Toggle(t *testing.T) {
