@@ -177,7 +177,11 @@ func (s *earlyUploadState) followProgress(file *publisher.GrowingFile) {
 		p := s.progress
 		s.mu.Unlock()
 		if p.SafeOffsetBytes > 0 {
-			file.Update(p.SafeOffsetBytes, p.Finalized, 0)
+			finalSize := int64(0)
+			if p.Finalized {
+				finalSize = p.SafeOffsetBytes
+			}
+			file.Update(p.SafeOffsetBytes, p.Finalized, finalSize)
 			if p.Finalized && p.Path != "" {
 				file.MarkDurable(p.SafeOffsetBytes)
 			}

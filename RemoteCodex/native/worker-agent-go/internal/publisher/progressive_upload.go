@@ -338,13 +338,38 @@ func runProgressiveUploadWithJournal(ctx context.Context, path string, chunkSize
 	var number int
 	var start int64
 	expectedParts := 0
+	var producerErr error
 	for {
-		_, finalSize, finalized, _, _ := file.snapshot()
+		_, finalSize, finalized, _, aborted := file.snapshot()
+		if aborted != nil {
+			producerErr = aborted
+			break
+		}
 		if finalized && start >= finalSize {
 			break
 		}
 		size := chunkSize
-		if finalized && start+size > finalSize {
+		if finalized {
+			if start+size > finalSize {
+				size = finalSize - start
+			}
+		} else if err := file.WaitForRange(ctx, start, size); err != nil {
+			// Do not speculate past the final byte count. While rendering,
+			// queue only complete ranges that the native safe watermark has
+			// actually published. If finalization races this wait, convert
+			// the last speculative full chunk into the real short tail.
+			_, finalSize, finalized, _, aborted = file.snapshot()
+			if aborted != nil {
+				producerErr = aborted
+				break
+			}
+			if !finalized {
+				producerErr = err
+				break
+			}
+			if start >= finalSize {
+				break
+			}
 			size = finalSize - start
 		}
 		if size <= 0 {
@@ -361,8 +386,22 @@ func runProgressiveUploadWithJournal(ctx context.Context, path string, chunkSize
 			start += size
 			continue
 		}
-		parts <- part{number: number, start: start, size: size}
+		select {
+		case parts <- part{number: number, start: start, size: size}:
+		case <-ctx.Done():
+			producerErr = ctx.Err()
+		}
+		if producerErr != nil {
+			break
+		}
 		start += size
+	}
+	if producerErr != nil {
+		select {
+		case errs <- producerErr:
+		default:
+		}
+		cancel()
 	}
 	close(parts)
 	wg.Wait()
