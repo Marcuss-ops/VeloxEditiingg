@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -226,10 +227,11 @@ func (w *Worker) registerEarlyUpload(ctx context.Context, pte *PendingTaskExecut
 	w.earlyUploads.Store(pte.TaskID, s)
 	// A fast packet-copy render can emit its first safe fMP4 bytes and
 	// finalize before an intent sent from the first write callback can make
-	// the round trip through the Master. Pre-negotiate only for the explicit
-	// fMP4 producer profile; the upload itself still waits for a positive
-	// safe offset from the native append-only sink.
-	if pte.ExecutorID == "video.assemble.copy.v1" {
+	// the round trip through the Master. Executor IDs are versioned on the
+	// wire (for example, video.assemble.copy.v1@1), so accept both the
+	// canonical ID and its versioned form. The upload itself still waits for
+	// a positive safe offset from the native append-only sink.
+	if pte.ExecutorID == "video.assemble.copy.v1" || strings.HasPrefix(pte.ExecutorID, "video.assemble.copy.v1@") {
 		s.intentOnce.Do(func() { go s.sendIntent() })
 	}
 	return s
