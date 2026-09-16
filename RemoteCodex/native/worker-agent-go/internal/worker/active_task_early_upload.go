@@ -69,11 +69,15 @@ func (s *earlyUploadState) updateProgress(progress pipeline.ArtifactWriteProgres
 }
 
 func (s *earlyUploadState) sendIntent() {
-	if s == nil || s.worker == nil || s.pte == nil || s.worker.transport == nil {
+	if s == nil || s.worker == nil || s.pte == nil {
+		if s != nil && s.worker != nil {
+			s.worker.logger.Warn("[ARTIFACT] early upload intent skipped: worker/task/transport unavailable")
+		}
 		s.disable(fmt.Errorf("early upload: control transport unavailable"))
 		return
 	}
 	if s.worker.config == nil || s.worker.publisherRegistry == nil {
+		s.worker.logger.Warn("[ARTIFACT] early upload intent skipped task=%s attempt=%s: publisher is not configured", s.pte.TaskID, s.pte.AttemptID)
 		s.disable(fmt.Errorf("early upload: worker publisher is not configured"))
 		return
 	}
@@ -95,10 +99,12 @@ func (s *earlyUploadState) sendIntent() {
 			AttemptNumber:  int32(s.pte.AttemptNumber),
 			Revision:       int32(s.pte.Revision),
 		})
-	if err := s.worker.transport.Send(ctx, msg); err != nil {
+	if err := s.worker.transportSend(ctx, msg); err != nil {
 		s.worker.logger.Warn("[ARTIFACT] early upload intent failed task=%s attempt=%s: %v", s.pte.TaskID, s.pte.AttemptID, err)
 		s.disable(fmt.Errorf("early upload: send intent: %w", err))
+		return
 	}
+	s.worker.logger.Info("[ARTIFACT] early upload intent sent task=%s attempt=%s", s.pte.TaskID, s.pte.AttemptID)
 }
 
 func (s *earlyUploadState) receivePlan(plan *pb.ArtifactEarlyUploadPlan) {
@@ -232,7 +238,7 @@ func (w *Worker) registerEarlyUpload(ctx context.Context, pte *PendingTaskExecut
 	// canonical ID and its versioned form. The upload itself still waits for
 	// a positive safe offset from the native append-only sink.
 	if pte.ExecutorID == "video.assemble.copy.v1" || strings.HasPrefix(pte.ExecutorID, "video.assemble.copy.v1@") {
-		s.intentOnce.Do(func() { go s.sendIntent() })
+		s.intentOnce.Do(s.sendIntent)
 	}
 	return s
 }
