@@ -159,6 +159,36 @@ VELOX_WORKER_IMAGE=ghcr.io/marcuss-ops/velox-worker@sha256:<full-digest>
 The image carries BuildKit-generated SBOM + provenance attestations and is
 cosign-signed (keyless OIDC).
 
+## Capability flags after the first install
+
+`worker.env.example` is a **first-install seeding template**: copying it sets
+the flags on a fresh host, but editing it in the repo does not change workers
+that are already running. The fMP4 final-mux gate is the current example:
+
+```text
+VELOX_FMP4_STREAM_PROFILE=1   # seeded by this template on fresh hosts
+```
+
+On an already-installed worker, apply the gate through the audited
+configuration operation (never by hand-editing `/etc/velox-worker/worker.env`,
+which `docs/operations/worker-rollout-paths.md` §5 forbids):
+
+```bash
+scripts/fleetctl worker-config set <worker_id> \
+  --fmp4-stream-profile 1 "fMP4 final-mux rollout"
+```
+
+Then verify the value is live in BOTH `/etc/velox-worker/worker.env` and the
+running container (the container only sees the env file as of its creation):
+
+```bash
+scripts/ops/verify-fmp4-rollout.sh --worker <worker_id> <host> <ssh_user>
+# exit 0 = READY, 1 = DISABLED/MISCONFIGURED (drift = restart not completed)
+```
+
+Remember the gate only admits the profile; jobs must still be submitted with
+`output.profile_id=velox-h264-fmp4-stream-v1`.
+
 ## Rollout order (rolling deploy)
 
 1. Build & publish a new image by pushing tag `worker-vX.Y.Z` (or via

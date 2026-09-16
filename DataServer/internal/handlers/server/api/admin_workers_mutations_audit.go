@@ -17,8 +17,9 @@ func newMutationOperation(workerID, kind string, req MutationRequest, now time.T
 		payload, _ = json.Marshal(map[string]string{"target_digest": req.TargetDigest})
 	} else if kind == fleet.OperationKindRestart {
 		payload, _ = json.Marshal(map[string]any{
-			"audio_mix_strategy": req.AudioMixStrategy,
-			"audio_mix_profile":  req.AudioMixProfile,
+			"audio_mix_strategy":  req.AudioMixStrategy,
+			"audio_mix_profile":   req.AudioMixProfile,
+			"fmp4_stream_profile": req.FMP4StreamProfile,
 		})
 	}
 	return &store.Operation{

@@ -173,6 +173,30 @@ helper updates `worker.env` atomically, restarts the canonical service, waits
 for `/health/ready`, and rolls back the file if readiness does not recover.
 Operators must not edit `worker.env` or run direct SSH mutation commands.
 
+Allowlisted knobs:
+
+| Knob | Flag | Values |
+|------|------|--------|
+| `VELOX_AUDIO_MIX_STRATEGY` | `--audio-mix-strategy` | `legacy` / `optimized` / `auto` |
+| `VELOX_AUDIO_MIX_PROFILE` | `--audio-mix-profile` | `0` / `1` |
+| `VELOX_FMP4_STREAM_PROFILE` | `--fmp4-stream-profile` | `0` / `1` |
+
+Only the knobs named on the invocation are rewritten; every other managed and
+unmanaged key is preserved byte-for-byte.
+
+The fMP4 admission gate is rolled out on already-installed workers through
+this command, because `deploy/runtime/worker.env.example` only seeds fresh
+hosts:
+
+```bash
+scripts/fleetctl worker-config set velox-worker-13197 \
+  --fmp4-stream-profile 1 "fMP4 final-mux rollout (canary)"
+```
+
+The flag is an admission gate, not a job selector: jobs must still arrive with
+`output.profile_id=velox-h264-fmp4-stream-v1`. Verify the live state with
+`scripts/ops/verify-fmp4-rollout.sh` before declaring the rollout complete.
+
 ### 3.7 `scripts/fleetctl operations [worker_id] [status]`
 
 ```bash

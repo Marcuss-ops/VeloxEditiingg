@@ -14,6 +14,14 @@ import (
 type WorkerConfigPayload struct {
 	AudioMixStrategy string `json:"audio_mix_strategy,omitempty"`
 	AudioMixProfile  *int   `json:"audio_mix_profile,omitempty"`
+	// FMP4StreamProfile opens (1) or closes (0) the fragmented-MP4 admission
+	// gate (VELOX_FMP4_STREAM_PROFILE) on an ALREADY-INSTALLED worker. It is
+	// the canonical rollout path: deploy/runtime/worker.env.example only
+	// seeds fresh hosts, and hand-editing worker.env is forbidden by
+	// docs/operations/worker-rollout-paths.md §5. It is an admission gate,
+	// never a job selector: jobs must still arrive with
+	// output.profile_id=velox-h264-fmp4-stream-v1.
+	FMP4StreamProfile *int `json:"fmp4_stream_profile,omitempty"`
 }
 
 // WorkerConfigExecutor updates the worker through the root-owned helper
@@ -43,7 +51,7 @@ func (e *WorkerConfigExecutor) Execute(ctx context.Context, op *store.Operation)
 	if err := json.Unmarshal(op.Payload, &payload); err != nil {
 		return fmt.Errorf("worker config: invalid payload: %w", err)
 	}
-	if payload.AudioMixStrategy == "" && payload.AudioMixProfile == nil {
+	if payload.AudioMixStrategy == "" && payload.AudioMixProfile == nil && payload.FMP4StreamProfile == nil {
 		return errors.New("worker config: no supported settings requested")
 	}
 	command := "sudo -n /usr/local/sbin/velox-worker-set-config"
@@ -58,6 +66,12 @@ func (e *WorkerConfigExecutor) Execute(ctx context.Context, op *store.Operation)
 			return fmt.Errorf("worker config: invalid audio_mix_profile %d", *payload.AudioMixProfile)
 		}
 		command += fmt.Sprintf(" --audio-mix-profile %d", *payload.AudioMixProfile)
+	}
+	if payload.FMP4StreamProfile != nil {
+		if *payload.FMP4StreamProfile != 0 && *payload.FMP4StreamProfile != 1 {
+			return fmt.Errorf("worker config: invalid fmp4_stream_profile %d", *payload.FMP4StreamProfile)
+		}
+		command += fmt.Sprintf(" --fmp4-stream-profile %d", *payload.FMP4StreamProfile)
 	}
 	if _, err := e.SSH.Run(ctx, op.WorkerID, command); err != nil {
 		return fmt.Errorf("worker config: apply helper: %w", err)

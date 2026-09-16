@@ -107,7 +107,9 @@ Sub-commands:
   worker-capacity <worker_id> [--json]
                           canonical capacity report from Master SQL (no Prometheus)
   worker-config set <worker_id> [--audio-mix-strategy legacy|optimized|auto] [--audio-mix-profile 0|1]
-                          atomically update allowlisted worker config and wait-ready
+                                [--fmp4-stream-profile 0|1]
+                          atomically update allowlisted worker config and wait-ready;
+                          --fmp4-stream-profile is the fMP4 admission-gate rollout knob
   doctor --production     fleet/readiness/digest production checks
 
 Auth (in precedence order):

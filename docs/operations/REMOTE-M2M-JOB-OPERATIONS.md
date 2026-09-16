@@ -257,6 +257,73 @@ Prima di usare `copy_only=true`, tutti i clip devono avere la stessa firma media
 
 Il client non deve decidere manualmente quali clip transcodificare: deve inviare il job e lasciare preflight e normalizzazione al Master.
 
+## Rollout del gate fMP4 sui worker già installati
+
+`deploy/runtime/worker.env.example` è un template di primo insediamento:
+valorizza gli host nuovi, ma modificarlo nel repository NON aggiorna i worker
+che stanno già girando. Su un worker già installato il gate si apre e si chiude
+soltanto attraverso l'operazione di configurazione tracciata (mai editando a
+mano `/etc/velox-worker/worker.env`, vietato da
+`docs/operations/worker-rollout-paths.md` §5):
+
+```bash
+scripts/fleetctl worker-config set <worker_id> \
+  --fmp4-stream-profile 1 "rollout fMP4 final-mux"
+```
+
+L'helper root-owned `velox-worker-set-config` riscrive solo i knob richiesti
+(gli altri restano invariati), riavvia il servizio canonico, attende
+`/health/ready` e ripristina il file se la readiness non torna. L'operazione
+finisce nel ledger `fleet_operations`.
+
+Dopo l'applicazione va verificato lo stato **effettivo** sul worker, perché il
+container vede il file env solo come era al momento della sua creazione:
+
+```bash
+scripts/ops/verify-fmp4-rollout.sh --fleet
+scripts/ops/verify-fmp4-rollout.sh --worker <worker_id> <host> <ssh_user> --json
+```
+
+Esiti per worker: `READY` (gate live nel file e nel container), `DISABLED`
+(gate chiuso, rollout non eseguito), `MISCONFIGURED` (drift file↔container, o
+valore non riconosciuto: il gate Go tratta i valori ignoti come disabilitati,
+quindi solo questo controllo lo segnala). Exit code: `0` tutti READY, `1`
+almeno un worker non READY, `2` errore d'uso o SSH.
+
+## Verifica end-to-end del job fMP4 (producer reale)
+
+L'accettazione finale della migrazione richiede un job proveniente dal normale
+percorso del producer, non dal canary, e tre prove:
+
+```bash
+set -a; . /path/to/computer-editor-77-01.env; set +a
+export VELOX_ADMIN_TOKEN='<token-operatore-per-la-verifica>'
+
+scripts/ops/verify-fmp4-producer-job.sh --plan /path/to/compiled-render-plan-v2.json
+```
+
+Controlli:
+
+| # | Controllo | Come viene provato |
+|---|-----------|--------------------|
+| A | `output.profile_id=velox-h264-fmp4-stream-v1` | pre-flight sul piano inviato: il gate del worker non seleziona mai il profilo |
+| B | `artifact.safe_offset_bytes > 0` prima della fine render | polling di `/api/v1/admin/jobs/<id>` mentre il job è `RUNNING`, con `artifact.finalized != 1` |
+| C | il file finale contiene `moof` | download dell'artifact pubblicato e ricerca della box `moof` |
+
+Exit code: `0` PASS, `1` FAIL, `2` precondizione, `3` INCONCLUSIVO (prova non
+osservabile: token admin assente o job già terminale all'avvio del polling).
+Un esito `3` non è un PASS: `--allow-artifact-only` rende esplicita la rinuncia
+al controllo B (`PASS-WAIVED`).
+
+## Lavoro noto rimandato
+
+- **Artifact scratch su file-backed storage**: lo staging dell'artifact finale
+  è ancora su file (RAM tmpfs solo entro il budget); la variante interamente
+  in memoria/`io_uring` resta lavoro successivo e non è coperto da questi test.
+- **Inventario worker**: `verify-fmp4-rollout.sh --fleet` usa la lista host
+  statica di `scripts/ops/runtime-cert.sh`; l'inventario autoritativo resta la
+  tabella `WorkerNodeRegistry` (consultabile via `scripts/fleetctl status`).
+
 ## Destinazione Drive
 
 La cartella di destinazione indicata per il progetto è:
@@ -317,6 +384,10 @@ Il primo comando deve rispondere con stato healthy. Il secondo deve rispondere `
 - [x] Secret non esposto nei log o nel repository.
 - [x] Submit M2M verificato con risposta `202`.
 - [x] Creator push dal `77` accettato dal render master `51`.
+- [ ] Gate fMP4 (`VELOX_FMP4_STREAM_PROFILE=1`) live su ogni worker —
+      verifica: `scripts/ops/verify-fmp4-rollout.sh --fleet` (exit 0).
+- [ ] Job fMP4 da producer reale con le tre prove (A/B/C) — verifica:
+      `scripts/ops/verify-fmp4-producer-job.sh --plan <plan.json>` (exit 0).
 - [x] Task assegnato a un subworker del `51`.
 - [x] Prefetch verificato sul subworker: 5 download, 10 cache hit.
 - [ ] Job assemblato finale verificato con `pipeline_id: clips.v1` sull'immagine aggiornata.

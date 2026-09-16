@@ -137,17 +137,31 @@ func runRestart(client *fleetClient, args []string) int {
 
 func runWorkerConfig(client *fleetClient, args []string) int {
 	if len(args) < 2 || args[0] != "set" {
-		fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "worker-config requires: set <worker_id> [--audio-mix-strategy ...] [--audio-mix-profile 0|1]"))
+		fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "worker-config requires: set <worker_id> [--audio-mix-strategy ...] [--audio-mix-profile 0|1] [--fmp4-stream-profile 0|1]"))
 		return ExitMisuse
 	}
 	workerID := args[1]
 	strategy := ""
 	profile := (*int)(nil)
+	fmp4 := (*int)(nil)
 	reason := "fleetctl worker-config set"
+	// parseToggle renders the shared 0|1 knob contract so the audio-mix and
+	// fMP4 gates fail closed with the same message shape.
+	parseToggle := func(flag, value string) (*int, bool) {
+		if value != "0" && value != "1" {
+			fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "%s must be 0 or 1", flag))
+			return nil, false
+		}
+		parsed := 0
+		if value == "1" {
+			parsed = 1
+		}
+		return &parsed, true
+	}
 	for i := 2; i < len(args); i++ {
 		arg := args[i]
 		switch {
-		case arg == "--audio-mix-strategy" || arg == "--audio-mix-profile" || arg == "--reason":
+		case arg == "--audio-mix-strategy" || arg == "--audio-mix-profile" || arg == "--fmp4-stream-profile" || arg == "--reason":
 			if i+1 >= len(args) {
 				fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "%s requires a value", arg))
 				return ExitMisuse
@@ -157,15 +171,17 @@ func runWorkerConfig(client *fleetClient, args []string) int {
 			case "--audio-mix-strategy":
 				strategy = value
 			case "--audio-mix-profile":
-				parsed := 0
-				if value != "0" && value != "1" {
-					fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "audio-mix-profile must be 0 or 1"))
+				parsed, ok := parseToggle("audio-mix-profile", value)
+				if !ok {
 					return ExitMisuse
 				}
-				if value == "1" {
-					parsed = 1
+				profile = parsed
+			case "--fmp4-stream-profile":
+				parsed, ok := parseToggle("fmp4-stream-profile", value)
+				if !ok {
+					return ExitMisuse
 				}
-				profile = &parsed
+				fmp4 = parsed
 			case "--reason":
 				reason = value
 			}
@@ -173,16 +189,17 @@ func runWorkerConfig(client *fleetClient, args []string) int {
 		case strings.HasPrefix(arg, "--audio-mix-strategy="):
 			strategy = strings.TrimPrefix(arg, "--audio-mix-strategy=")
 		case strings.HasPrefix(arg, "--audio-mix-profile="):
-			value := strings.TrimPrefix(arg, "--audio-mix-profile=")
-			parsed := 0
-			if value != "0" && value != "1" {
-				fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "audio-mix-profile must be 0 or 1"))
+			parsed, ok := parseToggle("audio-mix-profile", strings.TrimPrefix(arg, "--audio-mix-profile="))
+			if !ok {
 				return ExitMisuse
 			}
-			if value == "1" {
-				parsed = 1
+			profile = parsed
+		case strings.HasPrefix(arg, "--fmp4-stream-profile="):
+			parsed, ok := parseToggle("fmp4-stream-profile", strings.TrimPrefix(arg, "--fmp4-stream-profile="))
+			if !ok {
+				return ExitMisuse
 			}
-			profile = &parsed
+			fmp4 = parsed
 		case strings.HasPrefix(arg, "--reason="):
 			reason = strings.TrimPrefix(arg, "--reason=")
 		default:
@@ -194,7 +211,7 @@ func runWorkerConfig(client *fleetClient, args []string) int {
 		fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "audio-mix-strategy must be legacy, optimized, or auto"))
 		return ExitMisuse
 	}
-	if strategy == "" && profile == nil {
+	if strategy == "" && profile == nil && fmp4 == nil {
 		fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "worker-config requires at least one supported setting"))
 		return ExitMisuse
 	}
@@ -204,6 +221,9 @@ func runWorkerConfig(client *fleetClient, args []string) int {
 	}
 	if profile != nil {
 		body["audio_mix_profile"] = *profile
+	}
+	if fmp4 != nil {
+		body["fmp4_stream_profile"] = *fmp4
 	}
 	return runMutation(client, "restart", workerID, workerPath(workerID, "config"), body)
 }

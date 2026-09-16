@@ -24,6 +24,11 @@ on:
       - 'scripts/fleetctl'
       - 'scripts/ci/test-canary-worker-rollout.sh'
       - 'shared/contract/**'
+      - 'scripts/ops/verify-fmp4-rollout.sh'
+      - 'scripts/ops/verify-fmp4-producer-job.sh'
+      - 'scripts/ci/test-worker-set-config-offline.sh'
+      - 'scripts/ci/test-verify-fmp4-rollout-offline.sh'
+      - 'scripts/ci/test-verify-fmp4-producer-job-offline.sh'
       - '.github/workflows/guard-self-tests.yml'
   pull_request:
     branches: [main]
@@ -44,6 +49,11 @@ on:
       - 'scripts/fleetctl'
       - 'scripts/ci/test-canary-worker-rollout.sh'
       - 'shared/contract/**'
+      - 'scripts/ops/verify-fmp4-rollout.sh'
+      - 'scripts/ops/verify-fmp4-producer-job.sh'
+      - 'scripts/ci/test-worker-set-config-offline.sh'
+      - 'scripts/ci/test-verify-fmp4-rollout-offline.sh'
+      - 'scripts/ci/test-verify-fmp4-producer-job-offline.sh'
       - '.github/workflows/guard-self-tests.yml'
   workflow_dispatch:
 
@@ -75,6 +85,12 @@ jobs:
             command: ./scripts/cert/test-certify-remote-fleet.sh
           - name: worker-rollout-offline
             command: ./scripts/ci/test-worker-rollout-offline.sh
+          - name: worker-set-config-offline
+            command: ./scripts/ci/test-worker-set-config-offline.sh
+          - name: verify-fmp4-rollout-offline
+            command: ./scripts/ci/test-verify-fmp4-rollout-offline.sh
+          - name: verify-fmp4-producer-job-offline
+            command: ./scripts/ci/test-verify-fmp4-producer-job-offline.sh
           - name: canary-worker-rollout
             command: ./scripts/ci/test-canary-worker-rollout.sh
     steps:

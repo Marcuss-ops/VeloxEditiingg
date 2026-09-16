@@ -26,6 +26,10 @@ type MutationRequest struct {
 	TargetDigest     string `json:"target_digest"`
 	AudioMixStrategy string `json:"audio_mix_strategy"`
 	AudioMixProfile  *int   `json:"audio_mix_profile"`
+	// FMP4StreamProfile is the canonical rollout knob for the fMP4
+	// streaming-profile admission gate. It must move through this audited
+	// operation; direct edits to /etc/velox-worker/worker.env are forbidden.
+	FMP4StreamProfile *int `json:"fmp4_stream_profile"`
 }
 
 // validateAdminTargetDigest is the API boundary for worker updates. Reuse
@@ -74,8 +78,11 @@ func bindMutationRequest(c *gin.Context, kind string) (MutationRequest, error) {
 		if req.AudioMixProfile != nil && *req.AudioMixProfile != 0 && *req.AudioMixProfile != 1 {
 			return MutationRequest{}, errors.New("audio_mix_profile must be 0 or 1")
 		}
-		if req.AudioMixStrategy == "" && req.AudioMixProfile == nil {
-			return MutationRequest{}, errors.New("worker config requires audio_mix_strategy or audio_mix_profile")
+		if req.FMP4StreamProfile != nil && *req.FMP4StreamProfile != 0 && *req.FMP4StreamProfile != 1 {
+			return MutationRequest{}, errors.New("fmp4_stream_profile must be 0 or 1")
+		}
+		if req.AudioMixStrategy == "" && req.AudioMixProfile == nil && req.FMP4StreamProfile == nil {
+			return MutationRequest{}, errors.New("worker config requires audio_mix_strategy, audio_mix_profile, or fmp4_stream_profile")
 		}
 	}
 	return req, nil

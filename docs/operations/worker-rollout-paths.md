@@ -177,6 +177,33 @@ Level-D smoke and artifact verification.
 and may lease work, render, and upload an artifact. Run it only as an explicit
 promotion gate on a drained canary.
 
+## 4b. Runtime capability flags (worker.env knobs after install)
+
+`deploy/runtime/worker.env.example` is a first-install template: it seeds fresh
+hosts and does NOT update workers that are already running. Capability flags
+that live in `/etc/velox-worker/worker.env` therefore move through the audited
+configuration operation, never through a hand edit:
+
+```bash
+scripts/fleetctl worker-config set <worker_id> \
+  --fmp4-stream-profile 1 "fMP4 final-mux rollout"
+```
+
+The Master invokes the allowlisted root-owned `velox-worker-set-config` helper
+over SSH: it rewrites only the requested knobs (other keys are preserved),
+restarts the canonical service, waits for `/health/ready`, and rolls the file
+back if readiness does not recover. The operation is recorded on the
+`fleet_operations` ledger.
+
+After applying a flag, verify the effective state on the host — the container
+only sees the env file contents captured when it was created, so a file that
+is updated without a successful convergence is a real failure mode:
+
+```bash
+scripts/ops/verify-fmp4-rollout.sh --fleet
+# READY / DISABLED / MISCONFIGURED per worker; exit 1 = rollout not complete
+```
+
 ## 5. Commands and practices forbidden in production
 
 Do not use these as an independent production rollout path:

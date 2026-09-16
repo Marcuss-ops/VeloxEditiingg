@@ -5,15 +5,29 @@ set -euo pipefail
 # exposed to the Master. It accepts a deliberately small allowlist of runtime
 # knobs, updates worker.env atomically, restarts the canonical service, and
 # rolls the file back if readiness does not recover.
+#
+# Allowlisted knobs:
+#   VELOX_AUDIO_MIX_STRATEGY   --audio-mix-strategy legacy|optimized|auto
+#   VELOX_AUDIO_MIX_PROFILE    --audio-mix-profile 0|1
+#   VELOX_FMP4_STREAM_PROFILE  --fmp4-stream-profile 0|1
+#
+# VELOX_FMP4_STREAM_PROFILE is the fMP4 admission gate (see
+# shared/contract/canonical_video_profile.go). Setting it here is the ONLY
+# sanctioned way to open or close the gate on an ALREADY-INSTALLED worker:
+# deploy/runtime/worker.env.example only seeds fresh hosts, and
+# docs/operations/worker-rollout-paths.md §5 forbids hand-editing worker.env.
+# It is an admission gate, never a job selector: jobs must still arrive with
+# output.profile_id=velox-h264-fmp4-stream-v1.
 
 ENV_FILE="${ENV_FILE:-/etc/velox-worker/worker.env}"
 LOCK_FILE="${LOCK_FILE:-/run/lock/velox-worker-config.lock}"
 POLL_INTERVAL="${POLL_INTERVAL:-2}"
 strategy=""
 profile=""
+fmp4=""
 
 usage() {
-  echo "usage: velox-worker-set-config [--audio-mix-strategy legacy|optimized|auto] [--audio-mix-profile 0|1]" >&2
+  echo "usage: velox-worker-set-config [--audio-mix-strategy legacy|optimized|auto] [--audio-mix-profile 0|1] [--fmp4-stream-profile 0|1]" >&2
   exit 2
 }
 
@@ -25,12 +39,16 @@ while [[ $# -gt 0 ]]; do
     --audio-mix-profile)
       [[ $# -ge 2 ]] || usage
       profile="$2"; shift 2 ;;
+    --fmp4-stream-profile)
+      [[ $# -ge 2 ]] || usage
+      fmp4="$2"; shift 2 ;;
     *) usage ;;
   esac
 done
-[[ -n "$strategy" || -n "$profile" ]] || usage
+[[ -n "$strategy" || -n "$profile" || -n "$fmp4" ]] || usage
 [[ -z "$strategy" || "$strategy" =~ ^(legacy|optimized|auto)$ ]] || { echo "invalid audio mix strategy" >&2; exit 2; }
 [[ -z "$profile" || "$profile" =~ ^(0|1)$ ]] || { echo "invalid audio mix profile" >&2; exit 2; }
+[[ -z "$fmp4" || "$fmp4" =~ ^(0|1)$ ]] || { echo "invalid fmp4 stream profile" >&2; exit 2; }
 [[ -r "$ENV_FILE" ]] || { echo "worker env missing: $ENV_FILE" >&2; exit 1; }
 
 exec 9>"$LOCK_FILE"
@@ -41,20 +59,28 @@ cp -p "$ENV_FILE" "$BACKUP_FILE"
 tmp="$(mktemp "${ENV_FILE}.tmp.XXXXXX")"
 trap 'rm -f "$tmp"' EXIT
 
-awk -v strategy="$strategy" -v profile="$profile" '
-  BEGIN { strategy_done=0; profile_done=0 }
+# Only the knobs named on THIS invocation are rewritten. A managed key that
+# was not requested is preserved verbatim: an fMP4-only rollout must never
+# erase a previously applied audio-mix setting (and vice versa).
+awk -v strategy="$strategy" -v profile="$profile" -v fmp4="$fmp4" '
+  BEGIN { strategy_done=0; profile_done=0; fmp4_done=0 }
   /^VELOX_AUDIO_MIX_STRATEGY=/ {
-    if (strategy != "") { print "VELOX_AUDIO_MIX_STRATEGY=" strategy; strategy_done=1 }
+    if (strategy != "") { print "VELOX_AUDIO_MIX_STRATEGY=" strategy; strategy_done=1 } else { print }
     next
   }
   /^VELOX_AUDIO_MIX_PROFILE=/ {
-    if (profile != "") { print "VELOX_AUDIO_MIX_PROFILE=" profile; profile_done=1 }
+    if (profile != "") { print "VELOX_AUDIO_MIX_PROFILE=" profile; profile_done=1 } else { print }
+    next
+  }
+  /^VELOX_FMP4_STREAM_PROFILE=/ {
+    if (fmp4 != "") { print "VELOX_FMP4_STREAM_PROFILE=" fmp4; fmp4_done=1 } else { print }
     next
   }
   { print }
   END {
     if (strategy != "" && !strategy_done) print "VELOX_AUDIO_MIX_STRATEGY=" strategy
     if (profile != "" && !profile_done) print "VELOX_AUDIO_MIX_PROFILE=" profile
+    if (fmp4 != "" && !fmp4_done) print "VELOX_FMP4_STREAM_PROFILE=" fmp4
   }
 ' "$ENV_FILE" >"$tmp"
 chown --reference="$ENV_FILE" "$tmp"
