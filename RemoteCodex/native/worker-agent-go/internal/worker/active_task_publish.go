@@ -87,7 +87,7 @@ func (w *Worker) publishArtifactsV1(ctx context.Context, pte *PendingTaskExecuti
 	earlyResult := w.waitEarlyUpload(ctx, pte.TaskID)
 	earlyOutputIndex := -1
 	for i, ref := range report.Outputs {
-		if ref.Type == "render.output" {
+		if isFinalVideoOutput(ref.Type) {
 			earlyOutputIndex = i
 			break
 		}

@@ -20,6 +20,12 @@ import (
 
 const masterStreamTransportID = "master-stream.v1"
 
+// Early uploads use smaller parts than the post-render compatibility path so
+// the first immutable fMP4 fragments can reach the master while a fast
+// packet-copy render is still producing later fragments. The final upload
+// target remains on the normal 8 MiB chunk contract.
+const earlyUploadChunkSize = 1 * 1024 * 1024
+
 func (h *Handler) handleArtifactUploadIntent(workerID string, msg *pb.ArtifactUploadIntent, sess *workerSession) {
 	ctx := ctxForTaskSession(sess)
 	if msg == nil || msg.GetTaskId() == "" || msg.GetAttemptId() == "" || msg.GetLeaseId() == "" || msg.GetWorkerSpoolKey() == "" || msg.GetOutputKind() == "" {
@@ -49,7 +55,7 @@ func (h *Handler) handleArtifactUploadIntent(workerID string, msg *pb.ArtifactUp
 	env := &pb.MasterToWorkerEnvelope{
 		MessageId: fmt.Sprintf("artifact-early-plan-%s-%d", msg.GetTaskId(), time.Now().UnixNano()), WorkerId: workerID, SessionId: sess.sessionID, SequenceNumber: time.Now().UnixNano(), SentAt: timestamppb.Now(), ProtocolVersion: controltransport.ProtocolVersionCurrent,
 		Msg: &pb.MasterToWorkerEnvelope_ArtifactEarlyUploadPlan{ArtifactEarlyUploadPlan: &pb.ArtifactEarlyUploadPlan{
-			TaskId: msg.GetTaskId(), AttemptId: msg.GetAttemptId(), ArtifactId: session.ArtifactID, UploadId: session.UploadID, TransportId: masterStreamTransportID, UploadUrl: h.masterURL + "/api/v1/video/master-stream/" + url.PathEscape(session.UploadID), ChunkSize: 8 * 1024 * 1024, CommitToken: token,
+			TaskId: msg.GetTaskId(), AttemptId: msg.GetAttemptId(), ArtifactId: session.ArtifactID, UploadId: session.UploadID, TransportId: masterStreamTransportID, UploadUrl: h.masterURL + "/api/v1/video/master-stream/" + url.PathEscape(session.UploadID), ChunkSize: earlyUploadChunkSize, CommitToken: token,
 		}},
 	}
 	if !safeSend(sess.sendCh, &outboundMessage{Envelope: env}) {

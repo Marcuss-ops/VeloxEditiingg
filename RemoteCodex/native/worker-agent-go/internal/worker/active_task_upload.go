@@ -84,6 +84,9 @@ func (w *Worker) uploadDeclaredArtifacts(ctx context.Context, pte *PendingTaskEx
 			"retry_count":        result.Breakdown.RetryCount,
 			"remote_finalize_ms": result.Breakdown.RemoteFinalizeMS,
 		})
+		if i == 0 && report.RawMetrics != nil {
+			w.logger.Info("[METRICS] task=%s attempt=%s concat_mode=%s packet_copy_ratio=%.2f encode_passes=%d segments_total=%d segments_packet_copy=%d segments_reencoded=%d cpu_user_ms=%d cpu_system_ms=%d audio_packet_copy=%d progressive_first_part_ms=%d progressive_parts_before_render=%d progressive_bytes_before_render=%d progressive_overlap_ms=%d output_bytes=%d output_sha256=%s", pte.TaskID, pte.AttemptID, report.RawMetrics.ConcatMode, report.RawMetrics.PacketCopyRatio, report.RawMetrics.EncodePasses, report.RawMetrics.SegmentsTotal, report.RawMetrics.SegmentsPacketCopy, report.RawMetrics.SegmentsReencoded, report.RawMetrics.CpuUserMs, report.RawMetrics.CpuSystemMs, report.RawMetrics.AudioPacketCopy, result.Breakdown.FirstPartStartedMS, result.Breakdown.PartsUploadedBeforeRenderEnd, result.Breakdown.BytesUploadedBeforeRenderEnd, result.Breakdown.OverlapMS, ref.SizeBytes, ref.Hash)
+		}
 
 		uploadedBytes += result.UploadedBytes
 		w.updateUploadProgress(pte.TaskID, uploadedBytes, totalUploadBytes, i+1, len(report.Outputs), started)

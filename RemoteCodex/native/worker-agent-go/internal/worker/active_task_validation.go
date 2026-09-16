@@ -45,11 +45,21 @@ func outputKindAndMime(refType string) (kind, mime string) {
 	switch refType {
 	case "render.output":
 		return "final_video", "video/mp4"
+	case "video/mp4":
+		// video.assemble.copy.v1 emits the MIME type as its artifact kind.
+		// Keep it on the canonical final_video wire kind so early upload
+		// negotiation and the post-render declaration address the same output.
+		return "final_video", "video/mp4"
 	case "engine.progress.sidecar", "engine_progress_sidecar":
 		return "engine_progress_sidecar", "application/json"
 	default:
 		return refType, "application/octet-stream"
 	}
+}
+
+func isFinalVideoOutput(refType string) bool {
+	kind, mime := outputKindAndMime(refType)
+	return kind == "final_video" && mime == "video/mp4"
 }
 
 func mimeForOutputKind(kind string) string {
