@@ -179,6 +179,38 @@ func waitSignal(g *GrowingFile) <-chan struct{} {
 	return ch
 }
 
+// waitForReadableRange closes the small race between the native progress
+// watermark and the filesystem's visible size. The mux callback can publish
+// a safe offset immediately after a buffered write while the reader still
+// observes the old file length; waiting on the watermark alone then lets an
+// HTTP request advertise Content-Length and receive EOF mid-part.
+func waitForReadableRange(ctx context.Context, f *os.File, file *GrowingFile, start, length int64) error {
+	if err := file.WaitForRange(ctx, start, length); err != nil {
+		return err
+	}
+	end := start + length
+	for {
+		info, err := f.Stat()
+		if err != nil {
+			return err
+		}
+		if info.Size() >= end {
+			return nil
+		}
+		_, finalSize, finalized, _, _ := file.snapshot()
+		if finalized && finalSize < end {
+			return io.ErrUnexpectedEOF
+		}
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
 // RunProgressiveUpload preserves the original API and runs without a journal.
 func RunProgressiveUpload(ctx context.Context, path string, chunkSize int64, file *GrowingFile, session ProgressiveSession, onProgress func(int64)) (*UploadResult, error) {
 	return RunProgressiveUploadWithJournal(ctx, path, chunkSize, file, session, "", onProgress)
@@ -249,7 +281,7 @@ func runProgressiveUploadWithJournal(ctx context.Context, path string, chunkSize
 	worker := func() {
 		defer wg.Done()
 		for p := range parts {
-			if err := file.WaitForRange(ctx, p.start, p.size); err != nil {
+			if err := waitForReadableRange(ctx, f, file, p.start, p.size); err != nil {
 				select {
 				case errs <- err:
 					cancel()
