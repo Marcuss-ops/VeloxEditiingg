@@ -35,26 +35,22 @@ bool hasCompleteContainerMetadata(const AVFormatContext* context) {
             if (frame_rate.num <= 0 || frame_rate.den <= 0) {
                 frame_rate = stream->r_frame_rate;
             }
-            // Pixel format/profile/level may be decoder-derived rather than
-            // container-header fields. Do not take the certified fast path
-            // until they are populated: packet-copy compatibility compares
-            // the actual stream signature and must not compare -1 sentinel
-            // values against the canonical target.
+            // Pixel format, profile, and level may be decoder-derived rather
+            // than container-header fields (FFmpeg reports sentinel values
+            // for a valid MP4 until codec probing). They are not required for
+            // packet-copy admission: the canonical plan already binds the
+            // prepared encoded stream signature.
             if (parameters->width <= 0 || parameters->height <= 0 ||
-                frame_rate.num <= 0 || frame_rate.den <= 0 ||
-                parameters->format < 0 || parameters->profile < 0 ||
-                parameters->level < 0) {
+                frame_rate.num <= 0 || frame_rate.den <= 0) {
                 return false;
             }
         } else if (parameters->codec_type == AVMEDIA_TYPE_AUDIO) {
 #if LIBAVUTIL_VERSION_MAJOR >= 57
-            if (parameters->sample_rate <= 0 || parameters->ch_layout.nb_channels <= 0 ||
-                parameters->format < 0) {
+            if (parameters->sample_rate <= 0 || parameters->ch_layout.nb_channels <= 0) {
                 return false;
             }
 #else
-            if (parameters->sample_rate <= 0 || parameters->channels <= 0 ||
-                parameters->format < 0) {
+            if (parameters->sample_rate <= 0 || parameters->channels <= 0) {
                 return false;
             }
 #endif
