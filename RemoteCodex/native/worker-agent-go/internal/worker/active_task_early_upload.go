@@ -120,6 +120,7 @@ func (s *earlyUploadState) receivePlan(plan *pb.ArtifactEarlyUploadPlan) {
 		s.plan = plan
 	}
 	s.mu.Unlock()
+	s.worker.logger.Info("[ARTIFACT] early upload plan received task=%s attempt=%s upload=%s", s.pte.TaskID, s.pte.AttemptID, plan.GetUploadId())
 	s.tryStart()
 }
 
@@ -136,6 +137,7 @@ func (s *earlyUploadState) tryStart() {
 		return
 	}
 	s.startOnce.Do(func() {
+		s.worker.logger.Info("[ARTIFACT] early upload starting task=%s attempt=%s upload=%s safe_offset=%d", s.pte.TaskID, s.pte.AttemptID, plan.GetUploadId(), progress.SafeOffsetBytes)
 		go s.run(plan, progress)
 	})
 }
@@ -158,9 +160,11 @@ func (s *earlyUploadState) run(plan *pb.ArtifactEarlyUploadPlan, progress pipeli
 		}, progress, file)
 	}
 	if err != nil {
+		s.worker.logger.Warn("[ARTIFACT] early upload failed task=%s attempt=%s upload=%s: %v", s.pte.TaskID, s.pte.AttemptID, plan.GetUploadId(), err)
 		s.disable(err)
 		return
 	}
+	s.worker.logger.Info("[ARTIFACT] early upload completed task=%s attempt=%s upload=%s bytes=%d overlap_ms=%d parts_before_render=%d", s.pte.TaskID, s.pte.AttemptID, result.UploadID, result.UploadedBytes, result.Breakdown.OverlapMS, result.Breakdown.PartsUploadedBeforeRenderEnd)
 	s.complete(result)
 }
 
@@ -278,9 +282,22 @@ func (w *Worker) dispatchEarlyUploadPlan(plan *pb.ArtifactEarlyUploadPlan) bool 
 func (w *Worker) waitEarlyUpload(ctx context.Context, taskID string) *publisher.UploadResult {
 	value, ok := w.earlyUploads.Load(taskID)
 	if !ok {
+		w.logger.Info("[ARTIFACT] early upload unavailable at publish task=%s", taskID)
 		return nil
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	return value.(*earlyUploadState).wait(waitCtx)
+	state := value.(*earlyUploadState)
+	result := state.wait(waitCtx)
+	if result == nil {
+		state.mu.Lock()
+		err := state.err
+		intentSent := state.intentSent
+		planReceived := state.plan != nil
+		state.mu.Unlock()
+		w.logger.Warn("[ARTIFACT] early upload not reusable task=%s intent_sent=%t plan_received=%t err=%v", taskID, intentSent, planReceived, err)
+	} else {
+		w.logger.Info("[ARTIFACT] early upload reusable at publish task=%s upload=%s bytes=%d", taskID, result.UploadID, result.UploadedBytes)
+	}
+	return result
 }
