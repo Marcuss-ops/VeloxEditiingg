@@ -45,6 +45,10 @@ die() {
   exit 1
 }
 
+redact_remote_output() {
+  sed -E 's/((TOKEN|PASSWORD|SECRET|CREDENTIAL|PRIVATE_KEY)[A-Za-z0-9_:-]*)[[:space:]]*=[[:space:]]*[^[:space:]]+/\1=[REDACTED]/Ig'
+}
+
 usage() {
   local rc="${1:-2}"
   cat <<'EOF'
@@ -130,9 +134,12 @@ for entry in "${WORKERS[@]}"; do
   # prepare-host.sh owns all privileged mutations, OpenBao provisioning,
   # service convergence, and helper/sudoers installation. Keep its output out
   # of the operational log: it may contain environment-dependent diagnostics.
+  remote_output=""
   # shellcheck disable=SC2029
-  if ! ssh "${SSH_COMMON[@]}" "$target" \
-      "sudo -n env VELOX_SSH_USER='$user' bash '$CURRENT_REMOTE_DIR/prepare-host.sh'" >/dev/null 2>&1; then
+  if ! remote_output="$(ssh "${SSH_COMMON[@]}" "$target" \
+      "sudo -n env VELOX_SSH_USER='$user' bash '$CURRENT_REMOTE_DIR/prepare-host.sh'" 2>&1)"; then
+    log "prepare-host diagnostic for worker=$worker_id (redacted):"
+    printf '%s\n' "$remote_output" | redact_remote_output | tail -20 | tee -a "$LOG_FILE"
     die "prepare-host.sh failed for $worker_id"
   fi
 
