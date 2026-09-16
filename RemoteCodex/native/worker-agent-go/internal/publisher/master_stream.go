@@ -45,11 +45,19 @@ type masterStreamProgressiveSession struct {
 }
 
 func (s *masterStreamProgressiveSession) UploadPart(ctx context.Context, partNumber int, reader io.Reader, size int64) error {
+	if partNumber <= 0 {
+		return fmt.Errorf("master-stream: invalid progressive part number %d", partNumber)
+	}
 	client := s.transport.HTTPClient
 	if client == nil {
 		client = &http.Client{Timeout: 5 * time.Minute}
 	}
-	url := strings.TrimRight(s.request.Target.UploadURL, "/") + "/" + strconv.Itoa(partNumber)
+	// ProgressiveSession uses the multipart convention (parts start at 1),
+	// while the master-stream durable chunk table is zero-indexed. Keep the
+	// convention conversion at this transport boundary; the generic uploader
+	// and the object-store multipart transport remain 1-based.
+	chunkIndex := partNumber - 1
+	url := strings.TrimRight(s.request.Target.UploadURL, "/") + "/" + strconv.Itoa(chunkIndex)
 	limited := io.LimitReader(reader, size)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, limited)
 	if err != nil {
