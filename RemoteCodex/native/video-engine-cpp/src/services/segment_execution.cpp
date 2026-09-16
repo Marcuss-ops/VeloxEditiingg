@@ -55,7 +55,12 @@ bool mediaSignaturesCompatible(const MediaSignature& source,
             mismatch(reason, "height");
             return false;
         }
-        if (source.pixel_format != target.pixel_format) {
+        // FFmpeg commonly leaves AVCodecParameters::format at AV_PIX_FMT_NONE
+        // for compressed streams until a decoder is opened. An unknown source
+        // value is therefore a don't-care for packet-copy admission; when
+        // both sides carry a concrete format, keep the strict comparison.
+        if (source.pixel_format >= 0 && target.pixel_format >= 0 &&
+            source.pixel_format != target.pixel_format) {
             mismatch(reason, "pixel_format");
             return false;
         }
@@ -71,7 +76,11 @@ bool mediaSignaturesCompatible(const MediaSignature& source,
             return false;
         }
     } else {
-        if (source.pixel_format != target.pixel_format) {
+        // Same FFmpeg sentinel rule as video: packet-copy must not reject a
+        // valid compressed audio stream solely because sample format was not
+        // decoded during container probing.
+        if (source.pixel_format >= 0 && target.pixel_format >= 0 &&
+            source.pixel_format != target.pixel_format) {
             mismatch(reason, "sample_format");
             return false;
         }
