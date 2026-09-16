@@ -51,25 +51,6 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 add_test(NAME render_engine_helpers_tests COMMAND velox_render_engine_helpers_tests)
 
-add_executable(velox_frame_graph_tests
-    tests/test_frame_graph.cpp
-    src/render/frame_graph.cpp
-    src/render/kernel_registry.cpp)
-velox_configure_test(velox_frame_graph_tests)
-add_test(NAME frame_graph_tests COMMAND velox_frame_graph_tests)
-
-add_executable(velox_frame_overlay_tests
-    tests/test_frame_overlay.cpp
-    ${VELOX_FRAME_OVERLAY_TEST_SOURCES})
-velox_configure_test(velox_frame_overlay_tests)
-add_test(NAME frame_overlay_tests COMMAND velox_frame_overlay_tests)
-
-add_executable(velox_frame_overlay_simd_tests
-    tests/test_frame_overlay_simd.cpp
-    ${VELOX_FRAME_OVERLAY_TEST_SOURCES})
-velox_configure_test(velox_frame_overlay_simd_tests)
-add_test(NAME frame_overlay_simd_tests COMMAND velox_frame_overlay_simd_tests)
-
 add_executable(velox_audio_plan_tests
     tests/test_audio_plan.cpp
     src/audio/audio_plan.cpp)

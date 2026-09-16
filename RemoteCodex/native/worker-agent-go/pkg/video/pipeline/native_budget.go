@@ -1,6 +1,11 @@
 package pipeline
 
-import "context"
+import (
+	"context"
+	"os"
+	"strconv"
+	"strings"
+)
 
 // NativeRenderBudget is the per-render CPU allocation passed to the native
 // engine. It prevents concurrent renders from each claiming the whole host.
@@ -10,10 +15,38 @@ type NativeRenderBudget struct {
 	DecoderThreads    int
 	EncoderThreads    int
 	SegmentWorkers    int
-}
+} // Segment-worker policy constants.
+const (
+	// maxParallelSegmentWorkers is the native engine's own admission cap for
+	// VELOX_NATIVE_SEGMENT_WORKERS (std::min(parsed, 8) in
+	// render_engine_timeline.cpp). The budget must never advertise more.
+	maxParallelSegmentWorkers = 8
+	// defaultParallelSegmentWorkers is the conservative computed default: two
+	// in-flight clips once a render owns at least three cores. Raising it is a
+	// per-host, benchmark-certified decision (docs/performance-gates.md tier 2 +
+	// docs/100-percent-plan/parallelism-certification.md), which the operator
+	// makes with VELOX_NATIVE_SEGMENT_WORKERS. The budget does not widen it on
+	// its own: more in-flight segments also multiply frame-pool memory, and
+	// that trade is a measurement, not a guess.
+	defaultParallelSegmentWorkers = 2
+)
+
+// envSegmentWorkers is the operator knob for in-flight clips per render. It is
+// read here (not only in the engine) because the per-segment THREAD split must
+// follow the actual worker count: the engine clamps the worker count to 8 but
+// knows nothing about the CPU budget this function divides, so ignoring the
+// override here produced an oversubscribed host (e.g. 8 workers sharing a
+// 15-core split still budgeted for 2 workers → 8 × 6 encoder threads).
+const envSegmentWorkers = "VELOX_NATIVE_SEGMENT_WORKERS"
 
 // ComputeNativeRenderBudget divides usable CPU capacity across concurrent
 // renders and retains one core for worker/control-plane work.
+
+// An explicit VELOX_NATIVE_SEGMENT_WORKERS in the worker environment remains
+// authoritative (the engine reads it and the computed values only fill absent
+// knobs — engine_process.go setEnvIfAbsent); this function now also lets that
+// override drive the thread split, so raising concurrency cannot silently
+// oversubscribe the host.
 func ComputeNativeRenderBudget(effectiveCores, maxConcurrentRenders int) NativeRenderBudget {
 	if effectiveCores < 1 {
 		effectiveCores = 1
@@ -31,11 +64,24 @@ func ComputeNativeRenderBudget(effectiveCores, maxConcurrentRenders int) NativeR
 	}
 	// Keep at least two independent segment workers once a render has three
 	// usable cores. This avoids serialising dozens of short clips while still
-	// reserving one core for worker/control-plane work. Very large budgets may
-	// use two workers, but never more than one worker per two render cores.
+	// reserving one core for worker/control-plane work.
 	segmentWorkers := 1
 	if perRender >= 3 {
-		segmentWorkers = 2
+		segmentWorkers = defaultParallelSegmentWorkers
+	}
+	// Operator override, clamped by BOTH the engine cap and this render's own
+	// budget: a request wider than the budget would otherwise oversubscribe
+	// the host instead of failing closed.
+	if requested := strings.TrimSpace(os.Getenv(envSegmentWorkers)); requested != "" {
+		if parsed, err := strconv.Atoi(requested); err == nil && parsed > 0 {
+			segmentWorkers = parsed
+			if segmentWorkers > maxParallelSegmentWorkers {
+				segmentWorkers = maxParallelSegmentWorkers
+			}
+			if segmentWorkers > perRender {
+				segmentWorkers = perRender
+			}
+		}
 	}
 	threadsPerSegment := perRender / segmentWorkers
 	if threadsPerSegment < 1 {

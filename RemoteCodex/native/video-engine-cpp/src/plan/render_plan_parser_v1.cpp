@@ -18,13 +18,18 @@ std::optional<RenderPlan> parseRenderPlanV1(
     plan.watermark_requested = ju::extractJsonBoolValue(jsonStr, "watermark_requested", false);
     plan.mixed = ju::extractJsonBoolValue(jsonStr, "mixed", false);
 
-    // The V1 Go contract can represent editorial Layers, but this native
-    // renderer has no production compositor wired into its frame pipeline.
-    // Reject the field at the parser boundary instead of accepting a plan
-    // whose overlays would disappear from the output.
+    // Compositing is owned by Chronon (GPU, headless lambda), permanently.
+    // This native renderer deliberately ships NO frame compositor and no
+    // frame-overlay kernel: an earlier unwired compositor (frame_graph /
+    // kernel_registry / frame_overlay) was removed rather than kept as dead
+    // code. The V1 Go contract can still represent editorial Layers, so
+    // reject the field at the parser boundary (fail-closed) instead of
+    // accepting a plan whose overlays would silently disappear from output.
+    // Do NOT wire a native compositor here: route layered plans to Chronon.
     if (ju::hasJsonKey(jsonStr, "layers")) {
         std::cerr << "layers are not supported by the native video renderer: "
-                     "use the Chronon compositor backend; rejecting RenderPlan\n";
+                     "compositing is owned by the Chronon GPU backend; "
+                     "rejecting RenderPlan\n";
         return std::nullopt;
     }
 

@@ -185,9 +185,14 @@ std::optional<RenderPlan> parseRenderPlanV2(
             << "rejecting RenderPlan\n";
         return std::nullopt;
     }
+    // Compositing is owned by Chronon (GPU, headless lambda), permanently;
+    // the native renderer ships no frame compositor (see the V1 parser for
+    // the removal rationale). Reject layered plans fail-closed rather than
+    // rendering output with the overlays silently missing.
     if (ju::hasJsonKey(jsonStr, "layers")) {
         std::cerr << "layers are not supported by the native video renderer: "
-                     "use the Chronon compositor backend; rejecting RenderPlan\n";
+                     "compositing is owned by the Chronon GPU backend; "
+                     "rejecting RenderPlan\n";
         return std::nullopt;
     }
 

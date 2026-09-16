@@ -33,11 +33,6 @@ video-engine-cpp/
 │   │   └── canonical_video_profile.cpp
 │   ├── plan/
 │   │   └── render_plan_parser*.cpp # Parser RenderPlan da JSON (V1/V2)
-│   ├── render/
-│   │   ├── frame_graph.cpp       # Compositing ops (single render hook)
-│   │   ├── frame_backend.cpp     # Registry backend (CPU; GPU slot fail-closed)
-│   │   ├── frame_overlay.cpp     # Kernel overlay scalar + AVX2
-│   │   └── kernel_registry.cpp
 │   ├── services/
 │   │   ├── file_utils.cpp        # I/O, download, Drive
 │   │   ├── media_probe.cpp       # Probe in-process (LibAV) + cache LRU sharded

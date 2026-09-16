@@ -1,5 +1,120 @@
 ## [Unreleased] - 2026-09-05
 
+### Removal — unwired native frame compositor (~1,411 LOC)
+
+Full removal per ADR 0008 §(b) point 1 — **both conditions fail**, so this is
+not a soft-deprecation: **C1** (external callers) zero verified — `FrameGraph`
+and `PixelKernelRegistry` were constructed by no production code, only by their
+own translation units and their tests; **C2** (reachable from outside the repo)
+fails — engine-internal C++ symbols, not a public HTTP route, exported Go
+symbol, published module, or public CLI command.
+
+Deleted: `src/render/{frame_overlay,frame_graph,kernel_registry}.cpp`, their
+three headers under `include/velox/render/`, and the three tests
+(`tests/test_frame_{overlay,overlay_simd,graph}.cpp`) — 9 files, 773 production
++ 638 test LOC. Both now-empty directories removed; CMake unwired
+(`VELOX_FRAME_OVERLAY_TEST_SOURCES` in `cmake/Dependencies.cmake`, three test
+targets in `cmake/Tests.cmake`); the engine `README.md` source tree no longer
+lists a `src/render/` block (it had also drifted: `frame_backend.cpp` was
+listed but does not exist).
+
+**Why removal and not wiring.** An earlier audit proposed connecting this
+compositor to its first caller, since the AVX2 overlay kernel was real and
+bit-exact tested. That is obsolete: compositing and overlays are owned by
+**Chronon** (GPU, headless lambda) and this machine performs no overlay work.
+Keeping an unwired AVX2 kernel alongside a permanently unreachable
+`FrameGraph` is dead code with a maintenance and a false-capability cost — it
+reads as "the native engine can composite" when it cannot.
+
+**The fail-closed boundary stays, and is now the canonical statement of
+ownership.** The V1 and V2 parsers still reject editorial `layers` at the
+parser boundary instead of accepting a plan whose overlays would silently
+disappear from the output; both messages now name Chronon as the owner of
+compositing, and both carry a comment forbidding a native compositor from being
+wired there. The rejection tests are unchanged and still green
+(`test_render_plan_v2.cpp` asserts behaviour, not stderr text).
+
+Gate evidence: fresh out-of-tree `cmake` configure + full `ninja` build (567
+targets, exit 0) with **zero** references to the removed symbols in the
+generated build graph; `ctest` 21/22; `scripts/ci/pre-removal-verify.sh`
+(AGENTS.md §1) green — `go vet`, `go build`, `go test -count=1 ./...` all 0 over
+the full `DataServer` module. LOC and no-binaries gates green.
+
+#### Finding — pre-existing C++ test failure, NOT attributable to this removal
+
+`packet_components_tests` fails on
+`FAIL: complete certified container metadata skips stream-info discovery`.
+Attribution verified by construction: the **pre-removal** binary left in
+`build/` (compiled before this change, still carrying the old
+targets) fails with the **identical** message, and the target links only
+`tests/test_packet_components.cpp` + ffmpeg — no file touched here. Tracked as a
+followup for the packet/container metadata path, not a blocker.
+
+Unrelated pre-existing gate failure (`check-architecture.sh`, BUILD_INFO
+version drift) is unchanged and already tracked by the fMP4 rollout entry in
+this file; regenerating it now would stamp the drift commit from a dirty tree.
+
+### Video hot path: segment-worker override no longer oversubscribes the host
+
+`ComputeNativeRenderBudget` divides one render's CPU budget across concurrent
+renders and then decides how many clips run in flight (segment workers) and how
+many threads each gets. The native engine treats `VELOX_NATIVE_SEGMENT_WORKERS`
+as authoritative and clamps it to 8, but the worker-side budget ignored the
+knob: it always split the threads for its own computed two-worker default.
+
+An operator who raised the knob therefore got more clips in flight **each
+budgeted as if it were one of two** — e.g. eight workers on a 15-core budget
+still carrying the two-worker thread share, i.e. a deeply oversubscribed host.
+The budget now resolves the same knob itself and re-divides the SAME per-render
+budget across the requested worker count, clamped by both the engine cap (8)
+and the render's own usable cores, with garbage/zero/negative values falling
+back to the computed default.
+
+- `pkg/video/pipeline/native_budget.go` — operator override honoured and
+  re-split; the computed default is intentionally unchanged (see below).
+- Tests pin the contract, including the engine's real admission rule that one
+  segment claims `max(decoder_threads, encoder_threads)` and NOT their sum
+  (`render_engine_timeline.cpp`: `SegmentResourceClaim{max(...), 0}`) — the sum
+  would over-report the reservation.
+- `deploy/runtime/worker.env.example` documents the knob as the per-host,
+  certified lever.
+
+**The default is deliberately NOT widened.** More in-flight clips also multiply
+frame-pool memory, and the trade only exists as a measurement: the repo's perf
+doctrine puts distribution budgets behind tier 2
+(`docs/performance-gates.md`) on a dedicated host, and parallelism changes go
+through `docs/100-percent-plan/parallelism-certification.md`. The lever is now
+safe to raise per host; the default stays conservative until a benchmark run
+says otherwise.
+
+#### Correction to the earlier hot-path reading of this migration
+
+Two claims made while reviewing the fMP4 work were wrong and are corrected
+here, so nobody optimises the wrong code:
+
+1. **The sequential loop in `renderLegacyTimeline` is NOT the video path.**
+   `render_engine_orchestrator.cpp` rejects a video timeline without an explicit
+   renderer (`video_renderer_mode_required`) and routes real video work to
+   `renderCopyOnly` / `renderMixed`, both of which are packet-copy based with
+   overlapped source opens (`media_packet_sessions.cpp`, up to 8 concurrent).
+   The remaining sequential loop only covers timelines with NO video sources
+   (image/colour segments).
+2. **`VELOX_NATIVE_SEGMENT_WORKERS` was already authoritative** in the engine
+   (`setEnvIfAbsent` in `engine_process.go`: "explicit operator environment
+   remains authoritative"). The two-worker cap was the computed default, not a
+   hard ceiling — the real defect was that overriding it did not re-split the
+   threads (fixed above).
+
+Remaining, measured-not-guessed levers for video throughput, in order:
+
+| Lever | Where | Note |
+|---|---|---|
+| `VELOX_NATIVE_SEGMENT_WORKERS` 3-8 on wide hosts | this release | now safe; certify per host |
+| Artifact staging is always NVMe (`ARTIFACT_FINAL` in `pkg/storage/resolver.go`): a full write+read of the final file before upload | next | fMP4 is append-only, so the mux output can stream into the progressive upload instead |
+| GPU: filter backend is CPU-only (`frame_pipeline_filter.hpp`), codec pinned to `libx264` | feature | NVENC/NVDEC facts are collected but placement ignores them by design (ADR 0009); target already written down: `frames_downloaded_from_gpu == 0` (`jobperf/tracker.go`) |
+| `VELOX_PROGRESSIVE_PART_CONCURRENCY` (default 4) and the 8 MiB part size | tuning | env-only today |
+| Route more jobs through packet copy by normalising assets once at ingest | strategy | `copy_only` needs keyframe-safety + an identical media signature |
+
 ### fMP4 rollout control plane: canonical gate rollout + producer-job acceptance
 
 Closing the two rollout/control-plane gaps reported for the fMP4 final-mux

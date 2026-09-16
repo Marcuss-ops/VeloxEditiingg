@@ -7,9 +7,6 @@ set(VELOX_FRAME_PIPELINE_SOURCES
     src/services/frame_pipeline_filter.cpp
     src/services/frame_pipeline_encoder.cpp
     src/services/frame_pipeline_stages.cpp)
-set(VELOX_FRAME_OVERLAY_TEST_SOURCES
-    src/render/frame_overlay.cpp
-    src/render/frame_graph.cpp)
 set(VELOX_RENDER_ENGINE_SOURCES
     src/core/render_engine.cpp
     src/core/render_engine_lifecycle.cpp
