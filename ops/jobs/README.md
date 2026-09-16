@@ -51,3 +51,34 @@ Current reference assets bundled in the JSON:
 Important:
 - The direct worker path still needs one valid full voiceover URL for the whole script.
 - The two `reference_voiceovers` are saved as provenance, not as a guaranteed final mixed track.
+
+## fMP4 final assembly jobs
+
+fMP4 is selected per job by the producer-owned `CompiledRenderPlanV2`, not by
+the worker flag alone. The plan must contain:
+
+```text
+output.profile_id=velox-h264-fmp4-stream-v1
+final_audio.mode=FINAL_AUDIO_COPY
+```
+
+After the producer has emitted the complete plan for a job, verify and submit
+it through the canonical M2M intake:
+
+```bash
+scripts/ops/verify-fmp4-producer-job.sh --plan /path/to/plan.json
+```
+
+For the Tyson job recorded in
+`mike_tyson_intro_stock.creator-push.json`, use the dedicated wrapper once
+PipelineGen has produced the final V2 plan:
+
+```bash
+ops/jobs/verify_mike_tyson_fmp4.sh /path/to/mike-tyson-compiled-render-plan-v2.json
+```
+
+The existing Tyson Creator push remains the source/scene input and keeps its
+legacy `scene.composite.v1` identity; the wrapper submits the separate final
+fMP4 assembly job. It fails before submission if the plan does not explicitly
+select the fMP4 profile. Set `VELOX_TYSON_FMP4_DESTINATION` when the deployment
+uses a destination other than `drive-production`.
