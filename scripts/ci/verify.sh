@@ -137,6 +137,7 @@ if [[ "${VERIFY_SKIP_HARNESS_SELF_TESTS:-0}" != "1" ]]; then
   ./scripts/ci/test-worker-rollout-offline.sh
   log "test-worker-set-config-offline (worker.env mutator contract self-test)"
   ./scripts/ci/test-worker-set-config-offline.sh
+  ./scripts/ci/test-worker-runtime-provision-offline.sh
   log "test-verify-fmp4-rollout-offline (fMP4 gate state matrix self-test)"
   ./scripts/ci/test-verify-fmp4-rollout-offline.sh
   log "test-verify-fmp4-producer-job-offline (fMP4 producer-job acceptance self-test)"

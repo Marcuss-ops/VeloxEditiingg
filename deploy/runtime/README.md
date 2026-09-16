@@ -18,6 +18,20 @@ directory is for bootstrap and host convergence. It pairs with `.github/workflow
 | `openbao-fetch-worker-secrets.sh` | Explicit OpenBao resolver modes: `--provision`, `--renew`, `--check`, and read-only `--runtime-cache` for an attested bundle during a temporary outage. Manual files are never accepted as cache. |
 | `prepare-host.sh` | Idempotent setup + digest pull + systemd convergence. Runs the OpenBao resolver when `VELOX_OPENBAO_ADDR` is set. |
 
+For an already-registered host that has the canonical container but is missing
+one of the host-side helpers, use the repository-owned bootstrap bridge from
+the Master/operator host:
+
+```bash
+sudo scripts/operator/provision-worker-runtime.sh --worker <worker_id> <host> <ssh_user>
+```
+
+It stages the runtime inputs only in a temporary remote directory, invokes
+`prepare-host.sh`, and verifies the root-owned
+`/usr/local/sbin/velox-worker-set-config` helper before returning. It does not
+edit `worker.env`; apply runtime knobs afterwards with `scripts/fleetctl
+worker-config set`.
+
 ## First-time setup on a fresh worker host
 
 ```bash

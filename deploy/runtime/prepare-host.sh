@@ -67,6 +67,8 @@ readonly ACTIVATE_SUDOERS_DST="/etc/sudoers.d/velox-worker-activate-image"
 SET_CONFIG_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/velox-worker-set-config"
 readonly SET_CONFIG_DST="/usr/local/sbin/velox-worker-set-config"
 readonly SET_CONFIG_SUDOERS_DST="/etc/sudoers.d/velox-worker-set-config"
+PREPARE_HOST_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/prepare-host.sh"
+readonly PREPARE_HOST_DST="/opt/velox-worker/prepare-host.sh"
 SERVICE_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/velox-worker.service"
 readonly SERVICE_DST="/etc/systemd/system/velox-worker.service"
 readonly IMAGE_UID="10001"
@@ -273,6 +275,19 @@ install -o root -g root -m 0644 "$MTLS_RENEW_SERVICE_SRC" "$MTLS_RENEW_SERVICE_D
 install -o root -g root -m 0644 "$MTLS_RENEW_TIMER_SRC" "$MTLS_RENEW_TIMER_DST"
 install -o root -g root -m 0755 "$ACTIVATE_IMAGE_SRC" "$ACTIVATE_IMAGE_DST"
 install -o root -g root -m 0755 "$SET_CONFIG_SRC" "$SET_CONFIG_DST"
+# Keep the complete runtime input set on the worker. This makes the installed
+# prepare-host.sh a reusable, idempotent convergence entrypoint: a later run
+# from /opt/velox-worker can repair a missing privileged helper without
+# depending on a developer checkout or an operator-side ad-hoc copy.
+if [[ "$ACTIVATE_IMAGE_SRC" != "/opt/velox-worker/velox-worker-activate-image" ]]; then
+  install -o root -g root -m 0755 "$ACTIVATE_IMAGE_SRC" /opt/velox-worker/velox-worker-activate-image
+fi
+if [[ "$SET_CONFIG_SRC" != "/opt/velox-worker/velox-worker-set-config" ]]; then
+  install -o root -g root -m 0755 "$SET_CONFIG_SRC" /opt/velox-worker/velox-worker-set-config
+fi
+if [[ "$PREPARE_HOST_SRC" != "$PREPARE_HOST_DST" ]]; then
+  install -o root -g root -m 0755 "$PREPARE_HOST_SRC" "$PREPARE_HOST_DST"
+fi
 install -o root -g root -m 0755 "$MAINTENANCE_SRC" "$MAINTENANCE_DST"
 install -o root -g root -m 0644 "$MAINTENANCE_SERVICE_SRC" "$MAINTENANCE_SERVICE_DST"
 install -o root -g root -m 0644 "$MAINTENANCE_TIMER_SRC" "$MAINTENANCE_TIMER_DST"
