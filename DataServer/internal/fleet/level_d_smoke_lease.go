@@ -69,7 +69,13 @@ func (r *RegistryDrainLease) AcquireSmokeLease(ctx context.Context, runID, worke
 	}
 	r.previousDrains[runID] = info.Drain
 	r.mu.Unlock()
-	if info.Drain {
+	// A resume operation already owns the fail-closed RESUMING gate.
+	// Do not try to mutate Drain while that gate is active: the registry
+	// deliberately rejects concurrent scheduling-flag changes so an
+	// operator decision cannot be lost. The worker is already excluded
+	// from placement, so the smoke lease is acquired without another
+	// registry write.
+	if info.Drain || info.Resuming {
 		return nil
 	}
 	if err := r.Reg.SetWorkerDrain(ctx, workerID, true); err != nil {
@@ -104,6 +110,12 @@ func (r *RegistryDrainLease) ReleaseSmokeLease(ctx context.Context, runID string
 	delete(r.previousDrains, runID)
 	r.mu.Unlock()
 	if previousDrain {
+		return nil
+	}
+	// Resume owns the exclusion for the whole nested smoke. Its final
+	// CompleteResume transition clears both flags; releasing a transient
+	// drain here would race with that owner and be rejected by design.
+	if info := r.Reg.GetWorker(ctx, workerID); info != nil && info.Resuming {
 		return nil
 	}
 	if err := r.Reg.SetWorkerDrain(ctx, workerID, false); err != nil {

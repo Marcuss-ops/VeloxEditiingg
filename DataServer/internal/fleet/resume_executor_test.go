@@ -235,3 +235,26 @@ func TestResumeExecutor_PreservesPreexistingDrainDuringSmokeCleanup(t *testing.T
 		t.Fatalf("Drain=%v, want true after smoke cleanup when drain pre-existed", info != nil && info.Drain)
 	}
 }
+
+func TestRegistryDrainLease_AllowsResumeOwnedGate(t *testing.T) {
+	ctx := context.Background()
+	reg := resumeTestRegistry(t, "worker-resume")
+	if err := reg.SetWorkerQuarantine(ctx, "worker-resume", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.SetWorkerResumingIfClear(ctx, "worker-resume", "op-resume-lease"); err != nil {
+		t.Fatal(err)
+	}
+
+	lease := &RegistryDrainLease{Reg: reg, previousDrains: make(map[string]bool)}
+	if err := lease.AcquireSmokeLease(ctx, "smoke-worker-resume-1", "worker-resume"); err != nil {
+		t.Fatalf("AcquireSmokeLease() error=%v, want success under RESUMING gate", err)
+	}
+	if err := lease.ReleaseSmokeLease(ctx, "smoke-worker-resume-1"); err != nil {
+		t.Fatalf("ReleaseSmokeLease() error=%v, want success under RESUMING gate", err)
+	}
+	info := reg.GetWorker(ctx, "worker-resume")
+	if info == nil || !info.Quarantined || !info.Resuming {
+		t.Fatalf("lease changed resume exclusion: quarantine=%v resuming=%v", info != nil && info.Quarantined, info != nil && info.Resuming)
+	}
+}
