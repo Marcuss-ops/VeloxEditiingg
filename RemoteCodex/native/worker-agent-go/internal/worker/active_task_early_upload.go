@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"velox-shared/contract"
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
 	"velox-worker-agent/internal/publisher"
@@ -96,6 +95,7 @@ func (s *earlyUploadState) sendIntent() {
 			Revision:       int32(s.pte.Revision),
 		})
 	if err := s.worker.transport.Send(ctx, msg); err != nil {
+		s.worker.logger.Warn("[ARTIFACT] early upload intent failed task=%s attempt=%s: %v", s.pte.TaskID, s.pte.AttemptID, err)
 		s.disable(fmt.Errorf("early upload: send intent: %w", err))
 	}
 }
@@ -229,9 +229,10 @@ func (w *Worker) registerEarlyUpload(ctx context.Context, pte *PendingTaskExecut
 	// the round trip through the Master. Pre-negotiate only for the explicit
 	// fMP4 producer profile; the upload itself still waits for a positive
 	// safe offset from the native append-only sink.
-	if compiled, err := contract.DecodeCompiledRenderPlanV2Payload(pte.Spec.Payload); err == nil &&
-		compiled != nil && compiled.Output.ProfileID == contract.CanonicalVideoProfileFMP4StreamV1 {
-		s.intentOnce.Do(func() { go s.sendIntent() })
+	if pte.ExecutorID == "video.assemble.copy.v1" && pte.Spec.Payload != nil {
+		if _, ok := pte.Spec.Payload["compiled_render_plan_json"]; ok {
+			s.intentOnce.Do(func() { go s.sendIntent() })
+		}
 	}
 	return s
 }
