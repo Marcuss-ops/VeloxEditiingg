@@ -83,6 +83,10 @@ func (s *earlyUploadState) sendIntent() {
 	}
 	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
 	defer cancel()
+	revision := s.pte.JobRevision
+	if revision <= 0 {
+		revision = s.pte.Revision
+	}
 	msg := controltransport.NewTypedMessage(
 		controltransport.MsgArtifactUploadIntent,
 		s.worker.config.WorkerID,
@@ -97,7 +101,7 @@ func (s *earlyUploadState) sendIntent() {
 			LogicalName:    s.pte.JobID + ".mp4",
 			MimeType:       "video/mp4",
 			AttemptNumber:  int32(s.pte.AttemptNumber),
-			Revision:       int32(s.pte.Revision),
+			Revision:       int32(revision),
 		})
 	if err := s.worker.transportSend(ctx, msg); err != nil {
 		s.worker.logger.Warn("[ARTIFACT] early upload intent failed task=%s attempt=%s: %v", s.pte.TaskID, s.pte.AttemptID, err)
