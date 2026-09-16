@@ -84,7 +84,6 @@ func (w *Worker) publishArtifactsV1(ctx context.Context, pte *PendingTaskExecuti
 	}()
 
 	manifests := buildOutputManifests(pte, report)
-	earlyResult := w.waitEarlyUpload(ctx, pte.TaskID)
 	earlyOutputIndex := -1
 	for i, ref := range report.Outputs {
 		if isFinalVideoOutput(ref.Type) {
@@ -92,8 +91,18 @@ func (w *Worker) publishArtifactsV1(ctx context.Context, pte *PendingTaskExecuti
 			break
 		}
 	}
-	if earlyResult != nil && earlyOutputIndex >= 0 && earlyOutputIndex < len(manifests) {
-		manifests[earlyOutputIndex].EarlyUploadId = earlyResult.UploadID
+	// The early session must be bound before the declaration, but its upload
+	// must not be awaited here. Waiting for completion before TaskOutputDeclared
+	// turns progressive publication back into render -> queue -> upload. The
+	// plan's upload ID is enough for the master to bind the already-running
+	// session; completion is awaited after that protocol handoff below.
+	earlyUploadID := w.earlyUploadID(pte.TaskID)
+	if earlyUploadID != "" && earlyOutputIndex >= 0 && earlyOutputIndex < len(manifests) {
+		manifests[earlyOutputIndex].EarlyUploadId = earlyUploadID
+	} else {
+		// No early plan reached the worker in time to be declared. Stop the
+		// task-scoped state so a late plan cannot create an unbound upload.
+		w.disableEarlyUpload(pte.TaskID, fmt.Errorf("early upload plan unavailable before declaration"))
 	}
 	// The native mux may return an opportunistic digest, but it is trusted
 	// only when the sink proved append-only output. Otherwise the canonical
@@ -144,8 +153,12 @@ func (w *Worker) publishArtifactsV1(ctx context.Context, pte *PendingTaskExecuti
 		m.Mark(sharedtelemetry.MilestonePublishUploadStarted)
 	}
 	earlyResults := make(map[int]*publisher.UploadResult)
-	if earlyOutputIndex >= 0 {
-		earlyResults[earlyOutputIndex] = earlyResult
+	if earlyUploadID != "" && earlyOutputIndex >= 0 {
+		// The session is now bound to the durable declaration. Waiting here
+		// allows the upload to overlap rendering and declaration processing,
+		// while ensuring a failed early session has fully stopped before the
+		// normal retry path reuses its upload ID.
+		earlyResults[earlyOutputIndex] = w.waitEarlyUpload(ctx, pte.TaskID)
 	}
 	completed, err := w.uploadDeclaredArtifacts(ctx, pte, report, plan, spoolEntries, resumable, publicationStartedAt, earlyResults)
 	if m != nil {

@@ -279,16 +279,43 @@ func (w *Worker) dispatchEarlyUploadPlan(plan *pb.ArtifactEarlyUploadPlan) bool 
 	return true
 }
 
+// earlyUploadID returns the server-created session as soon as its plan is
+// available. It intentionally does not wait for upload completion: the ID is
+// needed to bind the session during TaskOutputDeclared while the upload keeps
+// running in parallel with the rest of publication.
+func (w *Worker) earlyUploadID(taskID string) string {
+	value, ok := w.earlyUploads.Load(taskID)
+	if !ok {
+		return ""
+	}
+	state := value.(*earlyUploadState)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.plan == nil {
+		return ""
+	}
+	return state.plan.GetUploadId()
+}
+
+func (w *Worker) disableEarlyUpload(taskID string, err error) {
+	if value, ok := w.earlyUploads.Load(taskID); ok {
+		value.(*earlyUploadState).disable(err)
+	}
+}
+
 func (w *Worker) waitEarlyUpload(ctx context.Context, taskID string) *publisher.UploadResult {
 	value, ok := w.earlyUploads.Load(taskID)
 	if !ok {
 		w.logger.Info("[ARTIFACT] early upload unavailable at publish task=%s", taskID)
 		return nil
 	}
-	waitCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
 	state := value.(*earlyUploadState)
-	result := state.wait(waitCtx)
+	// The early session is already bound to the declaration at this point.
+	// Wait for its terminal result rather than imposing the old two-second
+	// pre-declaration timeout, which caused the exact publish queue stall this
+	// path is meant to eliminate. The task/protocol context still bounds the
+	// wait and the state closes on upload failure or completion.
+	result := state.wait(ctx)
 	if result == nil {
 		state.mu.Lock()
 		err := state.err
