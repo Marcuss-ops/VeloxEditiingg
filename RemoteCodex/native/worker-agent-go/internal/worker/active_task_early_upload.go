@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"velox-shared/contract"
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
 	"velox-worker-agent/internal/publisher"
@@ -223,6 +224,15 @@ func (s *earlyUploadState) wait(ctx context.Context) *publisher.UploadResult {
 func (w *Worker) registerEarlyUpload(ctx context.Context, pte *PendingTaskExecution) *earlyUploadState {
 	s := newEarlyUploadState(w, ctx, pte)
 	w.earlyUploads.Store(pte.TaskID, s)
+	// A fast packet-copy render can emit its first safe fMP4 bytes and
+	// finalize before an intent sent from the first write callback can make
+	// the round trip through the Master. Pre-negotiate only for the explicit
+	// fMP4 producer profile; the upload itself still waits for a positive
+	// safe offset from the native append-only sink.
+	if compiled, err := contract.DecodeCompiledRenderPlanV2Payload(pte.Spec.Payload); err == nil &&
+		compiled != nil && compiled.Output.ProfileID == contract.CanonicalVideoProfileFMP4StreamV1 {
+		s.intentOnce.Do(func() { go s.sendIntent() })
+	}
 	return s
 }
 
