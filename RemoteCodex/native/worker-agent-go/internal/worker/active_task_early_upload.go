@@ -229,10 +229,8 @@ func (w *Worker) registerEarlyUpload(ctx context.Context, pte *PendingTaskExecut
 	// the round trip through the Master. Pre-negotiate only for the explicit
 	// fMP4 producer profile; the upload itself still waits for a positive
 	// safe offset from the native append-only sink.
-	if pte.ExecutorID == "video.assemble.copy.v1" && pte.Spec.Payload != nil {
-		if _, ok := pte.Spec.Payload["compiled_render_plan_json"]; ok {
-			s.intentOnce.Do(func() { go s.sendIntent() })
-		}
+	if pte.ExecutorID == "video.assemble.copy.v1" {
+		s.intentOnce.Do(func() { go s.sendIntent() })
 	}
 	return s
 }
