@@ -111,6 +111,9 @@ func (t *GRPCStreamTransport) messageToEnvelope(msg controltransport.ControlMess
 	case *pb.AssetDownloadProgress:
 		env.Msg = &pb.WorkerToMasterEnvelope_AssetDownloadProgress{AssetDownloadProgress: tp}
 
+	case *pb.ArtifactUploadIntent:
+		env.Msg = &pb.WorkerToMasterEnvelope_ArtifactUploadIntent{ArtifactUploadIntent: tp}
+
 	case *pb.PrefetchLifecycleEvent:
 		env.Msg = &pb.WorkerToMasterEnvelope_PrefetchLifecycleEvent{PrefetchLifecycleEvent: tp}
 	}
@@ -188,6 +191,10 @@ func (t *GRPCStreamTransport) envelopeToMessage(env *pb.MasterToWorkerEnvelope) 
 	case *pb.MasterToWorkerEnvelope_CancelPrefetch:
 		msg.Type = controltransport.MsgCancelPrefetch
 		msg.TypedPayload = m.CancelPrefetch
+
+	case *pb.MasterToWorkerEnvelope_ArtifactEarlyUploadPlan:
+		msg.Type = controltransport.MsgArtifactEarlyUploadPlan
+		msg.TypedPayload = m.ArtifactEarlyUploadPlan
 	}
 
 	return msg
