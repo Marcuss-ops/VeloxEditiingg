@@ -7,7 +7,6 @@ Frozen certification workloads (registry: `tests/benchmarks/video-generator/case
 | Benchmark | Payload | Submit |
 |---|---|---|
 | minimal | `benchmark-minimal.generate.json` | `submit_benchmark_minimal.sh` (M2M `/api/v1/jobs`, needs `VELOX_BENCHMARK_CLIP_URL` + `VELOX_BENCHMARK_VOICEOVER_URL`) |
-| five-boxers | `five_legendary_boxers_it.generate.json` | `submit_benchmark_five_boxers.sh` (`/api/v1/script/generate`, admin token) |
 | heavy | `benchmark-heavy.generate.json` | `submit_benchmark_heavy.sh` (M2M `/api/v1/jobs`, needs the 7 `VELOX_BENCHMARK_*_URL` asset vars) |
 | pathological | `benchmark-pathological.generate.json` | `submit_benchmark_pathological.sh` (M2M `/api/v1/jobs`, expects clean terminal FAILED) |
 
@@ -28,29 +27,22 @@ different id, override it with
 deliberately never strip the plan.
 
 
-`roman_aqueducts_city_engineering.fixed-job.json`
-- Direct `script/generate-with-images` payload.
-- Includes `skip_creator: true`, so the master enqueues it locally without calling the creator.
-- Requires a valid full-length `voiceover_path` before submission.
+## Tyson overlay-position test
 
-`submit_roman_aqueducts_city_engineering.sh`
-- Helper to submit the fixed job directly to the master.
-- Usage:
+`mike_tyson_intro_stock.creator-push.json` remains the untouched canonical
+Tyson source payload. To test five new Drive overlay assets at different
+positions over the existing intro clip and stock timeline, run:
 
 ```bash
-./ops/jobs/submit_roman_aqueducts_city_engineering.sh "https://drive.google.com/file/d/<FULL_VOICEOVER_ID>/view"
+./ops/jobs/submit_mike_tyson_overlay_positions.sh
 ```
 
-Current reference assets bundled in the JSON:
-- Scene image 1: `1QoPBq8z2DB9OUXyjIT3HwgKOYzihF8Mh`
-- Scene image 2: `1S6NiFUeLEAQwtGZISX96nRsv6sv_p7f_`
-- Reference per-scene voiceovers from creator output:
-  - `11F0I60YScJN7tuVkpNhDeHzavHR7An9y`
-  - `1z5_Tm7dSbu4tFKIEYpyVrdI7oWqy1dIR`
-
-Important:
-- The direct worker path still needs one valid full voiceover URL for the whole script.
-- The two `reference_voiceovers` are saved as provenance, not as a guaranteed final mixed track.
+The runner creates a temporary Creator Push payload, keeps
+`preserve_final_audio`, submits it through `/api/v1/creator/jobs`, and polls
+the admin-only `/api/v1/admin/jobs/<job_id>` status surface until the render
+reaches a terminal state. The public `/api/v1/jobs/<job_id>` route remains
+M2M-owned and is not valid for a Creator Push job. The five
+windows are 1–6s, 30–35s, 65–70s, 120–125s and 200–205s at 24 fps.
 
 ## fMP4 final assembly jobs
 

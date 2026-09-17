@@ -201,6 +201,15 @@ The `status` field is `jobs.Status` (the canonical render state) when the `jobs`
 
 `created` is a source discriminator: `true` when the forwarding was produced by `POST /api/v1/jobs` (`source_provider == "external_api"`); `false` for `POST /api/v1/creator/jobs`. A M2M dashboard can filter to its own intake path without a separate join.
 
+Creator Push jobs are submitted with the operator admin bearer and therefore
+cannot be polled through the M2M-owned route above. Operator tooling polls the
+dedicated admin read surface instead:
+
+```text
+GET /api/v1/admin/jobs/{job_id}
+Authorization: Bearer <VELOX_ADMIN_TOKEN>
+```
+
 Terminal states: `SUCCEEDED`, `FAILED`, `CANCELLED`. The canonical polling loop in `scripts/api/jobs_smoke.sh` does an exponential backoff (1s → 2s → 4s → 8s → 16s, total cap 60s) and exits 0 on terminal success, 6 on the `SUCCEEDED`-but-audit-row-only path (rare; smoke fires after the worker reports back), 7 on terminal failure, 8 on timeout.
 
 ### 404 envelope

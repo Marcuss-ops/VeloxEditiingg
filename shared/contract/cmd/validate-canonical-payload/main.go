@@ -18,7 +18,7 @@
 //     tolerate (and the corresponding NewJobPayloadV2 reader pattern
 //     folds them into canonical form). Forcing them to be strict-
 //     canonical would break the operator workflow that submits fixtures
-//     like ops/jobs/jackie_chan_doc_voiceover.generate-from-clips.json.
+//     like operator fixtures with skip_creator or fit helper fields.
 //   - When the caller passes --strict, the validator switches to
 //     StrictValidatePayload to surface drift keys for fixtures that
 //     ARE expected to be already-strict (e.g. CI fixtures, future

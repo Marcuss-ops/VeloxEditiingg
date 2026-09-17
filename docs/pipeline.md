@@ -476,8 +476,7 @@ RemoteCodex/native/worker-agent-go/
     └── executors/scene_composite.go       # scene.composite.v1 executor
 
 ops/jobs/
-├── submit_jackie_chan_doc_voiceover_clips.sh    # Script sottomissione job
-└── jackie_chan_doc_voiceover.generate-from-clips.json  # Payload job Jackie Chan
+└── submit_mike_tyson_overlay_positions.sh       # Test overlay su clip + stock
 ```
 
 ---
@@ -497,7 +496,7 @@ ops/jobs/
 
 ### Sottomissione Job
 ```bash
-./ops/jobs/submit_jackie_chan_doc_voiceover_clips.sh
+./ops/jobs/submit_mike_tyson_overlay_positions.sh
 ```
 
 ### Verifica Stato

@@ -22,7 +22,8 @@ Worker binary now advertises `artifact.commit.v1`.
 
 ### 6.3 — Submit Jackie Chan through the new path
 
-`scripts/cert/submit_jackie_chan_doc_voiceover_clips.sh` is rewritten
+`ops/jobs/submit_mike_tyson_overlay_positions.sh` is the active rendering
+certification runner
 to:
 
 - Submit through `creatorflow.CreateJobWithPlan` with the canonical
@@ -158,8 +159,8 @@ Each entry becomes one case in
 
 - `scripts/operator/deploy-production.sh` (deploy new master).
 - `scripts/cert/real-bootstrap.sh` (call recover-output helper).
-- `scripts/cert/submit_jackie_chan_doc_voiceover_clips.sh`
-  (rewired to use new path).
+- `ops/jobs/submit_mike_tyson_overlay_positions.sh`
+  (uses the canonical Creator Push path).
 
 ---
 

@@ -209,7 +209,9 @@ func buildSceneImagePayload(rawPayload map[string]interface{}, dataDir, videosDi
 	if len(items) > 0 {
 		v2Out["items"] = items
 	}
-	v2Out["pipeline_id"] = "hybrid.v1"
+	// Scene-image payloads are consumed by the images pipeline. The former
+	// hybrid.v1 worker route was retired and is no longer registered.
+	v2Out["pipeline_id"] = "images.v1"
 
 	// NOTE: voiceover/scene-image rewrite is intentionally NOT invoked here.
 	// The Enqueuer (constructed by the caller via NewEnqueuer) owns the

@@ -517,16 +517,11 @@ func assertNoJobDeliveryPlansSeeded(t *testing.T, db *store.SQLiteStore) {
 	}
 }
 
-// TestEnqueue_RealJackieChanPayloadShape_Succeeds mirrors the actual
-// production payload shape from
-// ops/jobs/jackie_chan_doc_voiceover.generate-from-clips.json. That
-// payload uses a SINGLE delivery_plan entry with destination_id=
-// "comedy_test" and retry_budget=3 (NOT the multi-delivery [3,7,5]
-// shape of the existing tests above). The end-to-end runnable
-// submit_jackie_chan_doc_voiceover_clips.sh script curls these bytes
-// to the master's /api/v1/script/generate-from-clips; this test
-// verifies the Enqueue path accepts the SAME shape without the
-// pre-P0.2 "ErrNoExplicitPlan / must-preinsert" failure. Asserts:
+// TestEnqueue_SingleDeliveryPlanPayloadShape_Succeeds covers a payload with a
+// single delivery_plan entry and retry_budget=3 (NOT the multi-delivery [3,7,5]
+// shape of the existing tests above). It verifies the Enqueue path accepts the
+// shape without the pre-P0.2 "ErrNoExplicitPlan / must-preinsert" failure.
+// Asserts:
 //
 //  1. Enqueue returns ok with the json's exact delivery_plan shape
 //     (single entry {destination_id, retry_budget=3, priority=0}).
@@ -541,12 +536,7 @@ func assertNoJobDeliveryPlansSeeded(t *testing.T, db *store.SQLiteStore) {
 //     that quietly re-introduces a "must-preinsert" requirement on
 //     the comedy_test path fails LOUDLY at the helper, not at a
 //     downstream ErrNoExplicitPlan.
-//
-// mirrorJackieChanDeliveryPlan returns the EXACT shape of the
-// production payload's delivery_plan entry — not interpolated, so
-// the test fails if the production payload's shape drifts and we
-// don't update the test.
-func TestEnqueue_RealJackieChanPayloadShape_Succeeds(t *testing.T) {
+func TestEnqueue_SingleDeliveryPlanPayloadShape_Succeeds(t *testing.T) {
 	t.Parallel()
 	tempDir := t.TempDir()
 	db, err := store.NewSQLiteStore(filepath.Join(tempDir, "test.db"))
@@ -600,12 +590,12 @@ func TestEnqueue_RealJackieChanPayloadShape_Succeeds(t *testing.T) {
 		t.Fatalf("payload max(retry_budget) = %d, want = 3", payloadMaxRetry)
 	}
 	if payloadMaxRetry != 3 {
-		t.Fatalf("payload max(retry_budget) = %d, want = 3 (matches ops/jobs/jackie_chan…json)", payloadMaxRetry)
+		t.Fatalf("payload max(retry_budget) = %d, want = 3", payloadMaxRetry)
 	}
 
 	response, err := enq.Enqueue(context.Background(), payload, costmodel.DefaultRequirements())
 	if err != nil {
-		t.Fatalf("Enqueue returned error on real-Shaped Jackie Chan payload: %v (P0.2 + post-create precondition must converge here without ErrNoExplicitPlan)", err)
+		t.Fatalf("Enqueue returned error on single-delivery payload: %v (P0.2 + post-create precondition must converge here without ErrNoExplicitPlan)", err)
 	}
 	if response["ok"] != true {
 		t.Fatalf("response.ok = %v, want true", response["ok"])

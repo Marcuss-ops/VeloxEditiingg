@@ -171,6 +171,31 @@ func (s *SQLiteForwardingStore) GetCreatorForwardingByTargetJobID(ctx context.Co
 	return scanCreatorForwardingWithExternalClient(s.db.QueryRowContext(ctx, query, args...))
 }
 
+// GetCreatorForwardingByTargetJobIDForAdmin is the unscoped read used only by
+// the operator-admin job status surface. M2M callers must use
+// GetCreatorForwardingByTargetJobID so cross-client reads remain indistinguishable
+// from missing jobs.
+func (s *SQLiteForwardingStore) GetCreatorForwardingByTargetJobIDForAdmin(ctx context.Context, targetJobID string) (*forwardingcontract.CreatorForwarding, error) {
+	if strings.TrimSpace(targetJobID) == "" {
+		return nil, storecore.ErrCreatorForwardingNoRow
+	}
+
+	query := `SELECT forwarding_id, COALESCE(external_client_id, ''),
+		        source_provider, source_job_id, source_status,
+		        target_executor_id, COALESCE(target_job_id, ''),
+		        COALESCE(payload_json, ''), COALESCE(payload_sha256, ''),
+		        status, attempt_count, COALESCE(next_attempt_at, ''),
+		        poll_attempts, COALESCE(next_poll_at, ''), COALESCE(last_polled_at, ''),
+		        COALESCE(last_remote_status, ''),
+		        COALESCE(locked_by, ''), COALESCE(lease_id, ''), COALESCE(lease_expires_at, ''),
+		        COALESCE(last_error_code, ''), COALESCE(last_error_message, ''), COALESCE(last_error_class, ''),
+		        created_at, updated_at, COALESCE(forwarded_at, '')
+		 FROM creator_forwardings
+		 WHERE target_job_id = ?
+		 ORDER BY created_at DESC LIMIT 1`
+	return scanCreatorForwardingWithExternalClient(s.db.QueryRowContext(ctx, query, strings.TrimSpace(targetJobID)))
+}
+
 // ExpiredCreatorForwardingLeases returns forwarding records whose lease has
 // expired (zombie reclaim candidates). SELECT-only — the caller is expected
 // to re-claim via ClaimCreatorForwardings or transition via Mark* methods.

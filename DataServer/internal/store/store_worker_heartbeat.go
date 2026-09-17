@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"velox-server/internal/sqliteerr"
 )
 
 // store_worker_heartbeat.go owns the worker-side heartbeat persistence
@@ -44,7 +46,41 @@ import (
 //     transitions.
 //
 // 10. Commit.
+// PersistWorkerHeartbeat retries the complete heartbeat transaction when a
+// concurrent upload/forwarding writer briefly owns SQLite's write lock. A
+// heartbeat is periodic state, so replaying the whole transaction is safe;
+// retrying individual statements would break the atomic projection contract.
 func (s *SQLiteStore) PersistWorkerHeartbeat(ctx context.Context, raw []byte, sessionID string) error {
+	const maxBusyRetries = 6
+	for attempt := 0; ; attempt++ {
+		err := s.persistWorkerHeartbeatOnce(ctx, raw, sessionID)
+		if !sqliteerr.IsBusy(err) || attempt >= maxBusyRetries {
+			return err
+		}
+		if err := waitWorkerHeartbeatRetry(ctx, attempt); err != nil {
+			return err
+		}
+	}
+}
+
+func waitWorkerHeartbeatRetry(ctx context.Context, attempt int) error {
+	// Keep the retry window below the worker heartbeat interval while giving
+	// an in-flight upload transaction enough time to release its lock.
+	d := 50 * time.Millisecond * time.Duration(1<<attempt)
+	if d > 2*time.Second {
+		d = 2 * time.Second
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
+func (s *SQLiteStore) persistWorkerHeartbeatOnce(ctx context.Context, raw []byte, sessionID string) error {
 	var m map[string]any
 	if err := json.Unmarshal(raw, &m); err != nil {
 		return err

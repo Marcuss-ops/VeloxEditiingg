@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"velox-server/internal/logging"
+	"velox-server/internal/sqliteerr"
 	"velox-server/internal/store"
 	"velox-server/internal/workers"
 	"velox-shared/controltransport"
@@ -131,6 +132,15 @@ func (h *Handler) handleHeartbeat(workerID, sessionID string, hb *pb.Heartbeat) 
 	if h.registry != nil {
 		if err := h.registry.HeartbeatWithSession(context.Background(), sessionID, workerID, hb.GetWorkerName(), hb.GetCurrentJob(), extra); err != nil {
 			logGRPCf(ctxForTaskSession(sess), logging.LevelError, logging.CodeGRPCHeartbeatFailed, "[GRPC] Heartbeat failed for worker %s: %v", workerID, err)
+			// Heartbeats are periodic state snapshots. A transient SQLite
+			// writer collision must not tear down the authenticated stream or
+			// interrupt a render/publication that is already in flight; the next
+			// heartbeat retries the projection. Non-transient errors still fail
+			// closed through the existing session teardown below.
+			if sqliteerr.IsBusy(err) {
+				logGRPCf(ctxForTaskSession(sess), logging.LevelWarn, logging.CodeGRPCHeartbeatFailed, "[GRPC] transient heartbeat persistence contention for worker %s; keeping session alive", workerID)
+				return
+			}
 			if activeSess := h.getSession(workerID); activeSess != nil && activeSess.sessionID == sessionID {
 				select {
 				case activeSess.writerErr <- fmt.Errorf("heartbeat persistence failed: %w", err):

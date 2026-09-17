@@ -78,6 +78,47 @@ func TestGetSubmittedJob_M2MOwnershipUsesIndistinguishable404(t *testing.T) {
 	assertIndistinguishableJobNotFound(t, otherStatus, otherBody, missingStatus, missingBody)
 }
 
+func TestGetAdminSubmittedJobReadsCreatorPushWithoutM2MClient(t *testing.T) {
+	db, err := store.NewSQLiteStore(filepath.Join(t.TempDir(), "velox.db"))
+	if err != nil {
+		t.Fatalf("sqlite store: %v", err)
+	}
+	const jobID = "job-admin-creator-push"
+	if _, err := db.DB().ExecContext(context.Background(), `
+		INSERT INTO creator_forwardings
+			(forwarding_id, external_client_id, source_provider, source_job_id,
+			 source_status, target_executor_id, target_job_id, status, created_at, updated_at)
+		VALUES (?, NULL, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
+		"cf-admin-creator-push", "creator_pc_1", "creator-admin-source",
+		"completed", "scene.composite.v1", jobID, "FORWARDED"); err != nil {
+		t.Fatalf("seed creator forwarding: %v", err)
+	}
+	if _, err := db.DB().ExecContext(context.Background(), `
+		INSERT INTO jobs (job_id, status, revision, max_retries, created_at, updated_at, migrated_at)
+		VALUES (?, 'SUCCEEDED', 0, 3, datetime('now'), datetime('now'), datetime('now'))`, jobID); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	h := &Handlers{store: db}
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/api/v1/admin/jobs/:id", h.GetAdminSubmittedJob())
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/jobs/"+jobID, nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("admin status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode admin status: %v", err)
+	}
+	if body["job_id"] != jobID || body["status"] != "SUCCEEDED" || body["created"] != false {
+		t.Fatalf("unexpected admin status response: %v", body)
+	}
+}
+
 func TestSubmitThenPoll_M2MClientIsolationWithRealMiddleware(t *testing.T) {
 	tempDir := t.TempDir()
 	db, err := store.NewSQLiteStore(filepath.Join(tempDir, "velox.db"))

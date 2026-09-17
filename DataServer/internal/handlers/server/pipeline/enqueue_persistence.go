@@ -20,8 +20,22 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"velox-server/internal/forwardingcontract"
 	"velox-server/internal/forwardingstore"
+	"velox-server/internal/store"
 )
+
+const adminJobStatusContextKey = "pipeline_admin_job_status"
+
+// GetAdminSubmittedJob handles operator-admin polling for jobs submitted via
+// Creator Push. It is separate from the M2M-owned status route: admin callers
+// may inspect any job, while M2M callers remain client-scoped.
+func (h *Handlers) GetAdminSubmittedJob() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Set(adminJobStatusContextKey, true)
+		h.GetSubmittedJob()(c)
+	}
+}
 
 // The endpoint is M2M-only and fails closed: a missing middleware client
 // identity is indistinguishable from an unknown job.
@@ -42,8 +56,10 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 			return
 		}
 		ctx := c.Request.Context()
+		adminRead, _ := c.Get(adminJobStatusContextKey)
+		isAdminRead, _ := adminRead.(bool)
 		clientID := strings.TrimSpace(ClientIDFromContext(c))
-		if clientID == "" {
+		if clientID == "" && !isAdminRead {
 			// /api/v1/jobs/:id is M2M-only. A missing middleware identity
 			// must fail closed rather than silently reverting to an unscoped
 			// lookup.
@@ -54,7 +70,13 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 			})
 			return
 		}
-		forwarding, err := h.store.Forwarding().GetCreatorForwardingByTargetJobID(ctx, jobID, clientID)
+		var forwarding *forwardingcontract.CreatorForwarding
+		var err error
+		if isAdminRead {
+			forwarding, err = h.store.Forwarding().GetCreatorForwardingByTargetJobIDForAdmin(ctx, jobID)
+		} else {
+			forwarding, err = h.store.Forwarding().GetCreatorForwardingByTargetJobID(ctx, jobID, clientID)
+		}
 		if err != nil {
 			if errors.Is(err, forwardingstore.ErrCreatorForwardingNoRow) {
 				c.JSON(http.StatusNotFound, gin.H{
@@ -86,7 +108,14 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 		status := string(forwarding.Status)
 		var startedAt, completedAt string
 		if h.store != nil {
-			if job, gErr := h.store.GetJobForClient(ctx, jobID, clientID); gErr == nil && job != nil {
+			var job map[string]any
+			var gErr error
+			if isAdminRead {
+				job, gErr = h.store.GetJob(ctx, jobID)
+			} else {
+				job, gErr = h.store.GetJobForClient(ctx, jobID, clientID)
+			}
+			if gErr == nil && job != nil {
 				if s, ok := job["status"].(string); ok {
 					status = s
 				}
@@ -103,7 +132,13 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 		var artifactURL string
 		var artifactSizeBytes int64
 		if h.store != nil {
-			artifacts, aErr := h.store.GetArtifactsByJobForClient(ctx, jobID, clientID, 50)
+			var artifacts []store.Artifact
+			var aErr error
+			if isAdminRead {
+				artifacts, aErr = h.store.GetArtifactsByJob(jobID, 50)
+			} else {
+				artifacts, aErr = h.store.GetArtifactsByJobForClient(ctx, jobID, clientID, 50)
+			}
 			if aErr == nil {
 				if a := selectPrimaryReadyArtifact(artifacts); a != nil {
 					if h.cfg != nil {
@@ -125,7 +160,13 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 		// not exist yet when the job is PENDING.
 		var workerID, taskID, attemptID, leaseID string
 		if h.store != nil {
-			snap, sErr := h.store.GetLatestTaskAttemptForJobForClient(ctx, jobID, clientID)
+			var snap *store.TaskAttemptSnapshot
+			var sErr error
+			if isAdminRead {
+				snap, sErr = h.store.GetLatestTaskAttemptForJob(ctx, jobID)
+			} else {
+				snap, sErr = h.store.GetLatestTaskAttemptForJobForClient(ctx, jobID, clientID)
+			}
 			if sErr == nil && snap != nil {
 				workerID = snap.WorkerID
 				taskID = snap.TaskID

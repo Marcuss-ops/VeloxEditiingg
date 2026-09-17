@@ -14,9 +14,9 @@
 # Workflow:
 #   1. Pre-flight tools + env + master reachability.
 #   2. Verify at least one remote worker advertises scene.composite.v1@1.
-#   3. POST the real generate payload
-#      (ops/jobs/jackie_chan_doc_voiceover.generate.json).
-#   4. Poll /api/v1/script/jobs/:job_id/full until terminal state.
+#   3. POST the canonical Creator Push payload
+#      (ops/jobs/mike_tyson_intro_stock.creator-push.json).
+#   4. Poll /api/v1/admin/jobs/:job_id until terminal state.
 #   5. Verify the job reached SUCCEEDED and surface key metadata.
 #   6. Emit ONE of: "PASS: ...", "FAIL: ...", "SKIP: ..." on stdout/stderr.
 #      Exit codes: 0 PASS, 1 FAIL, 255 SKIP.
@@ -27,7 +27,7 @@
 #
 # Optional env:
 #   VELOX_CANARY_PAYLOAD_FILE  path to the JSON payload to submit
-#                              (default: ops/jobs/jackie_chan_doc_voiceover.generate.json)
+#                              (default: ops/jobs/mike_tyson_intro_stock.creator-push.json)
 #   VELOX_CANARY_TIMEOUT       max seconds to wait for terminal status
 #                              (default: 600)
 #   VELOX_CANARY_INTERVAL      seconds between polls (default: 10)
@@ -59,7 +59,7 @@ done
 MASTER_URL="${VELOX_MASTER_URL%/}"
 ADMIN_HEADER="Authorization: Bearer ${VELOX_ADMIN_TOKEN}"
 
-PAYLOAD_FILE="${VELOX_CANARY_PAYLOAD_FILE:-ops/jobs/post-deploy-canary.generate.json}"
+PAYLOAD_FILE="${VELOX_CANARY_PAYLOAD_FILE:-ops/jobs/mike_tyson_intro_stock.creator-push.json}"
 POLL_TIMEOUT="${VELOX_CANARY_TIMEOUT:-600}"
 POLL_INTERVAL="${VELOX_CANARY_INTERVAL:-10}"
 SUBMIT_TIMEOUT="${VELOX_CANARY_SUBMIT_TIMEOUT:-30}"
@@ -118,7 +118,7 @@ fi
 
 # ── 5. Submit the real generate payload ─────────────────────────
 SUBMIT_RESP="$(curl -fsS --max-time "${SUBMIT_TIMEOUT}" \
-    -X POST "${MASTER_URL}/api/v1/script/generate" \
+    -X POST "${MASTER_URL}/api/v1/creator/jobs" \
     -H "$ADMIN_HEADER" \
     -H "Content-Type: application/json" \
     --data-binary "@${PAYLOAD_FILE}")"
@@ -131,11 +131,11 @@ JOB_ID="$(jq -r '.job_id // empty' <<<"$SUBMIT_RESP")"
 [[ "$JOB_ID" =~ ^[A-Za-z0-9._-]{8,128}$ ]] \
     || { emit_fail "JOB_ID has unexpected shape; refused to use in URL (got: ${JOB_ID:0:16}...)"; exit 1; }
 
-# ── 6. Poll /api/v1/script/jobs/:job_id/full for terminal status ───────────
+# ── 6. Poll admin job status for terminal state ───────────────────────────
 POLL_DEADLINE=$(( $(date +%s) + POLL_TIMEOUT ))
 LAST_STATUS=""
 while (( $(date +%s) < POLL_DEADLINE )); do
-    JOB_RESP="$(curl -fsS --max-time 10 -H "$ADMIN_HEADER" "${MASTER_URL}/api/v1/script/jobs/${JOB_ID}/full")"
+    JOB_RESP="$(curl -fsS --max-time 10 -H "$ADMIN_HEADER" "${MASTER_URL}/api/v1/admin/jobs/${JOB_ID}")"
     STATUS="$(jq -r '.status // empty' <<<"$JOB_RESP")"
     LAST_STATUS="$STATUS"
 

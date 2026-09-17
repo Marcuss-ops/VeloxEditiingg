@@ -143,7 +143,7 @@ scripts/operator/with-production-env.sh <command>
 
 Examples:
 
-- Submit a job: `scripts/operator/with-production-env.sh bash ops/jobs/submit_jackie_chan_doc_voiceover_clips.sh`
+- Run the Tyson overlay-position test: `scripts/operator/with-production-env.sh bash ops/jobs/submit_mike_tyson_overlay_positions.sh`
 - Run the local canary: `scripts/operator/with-production-env.sh bash deploy/runtime/submit-canary-local.sh`
 - Run the remote canary: `scripts/operator/with-production-env.sh bash deploy/runtime/submit-canary-remote.sh`
 - Probe readiness directly: `scripts/operator/with-production-env.sh curl -sS -H "Authorization: Bearer ${VELOX_ADMIN_TOKEN}" "${VELOX_MASTER_URL}/health/ready"`

@@ -189,8 +189,8 @@ func TestBuildSceneImagePayloadForMaster(t *testing.T) {
 	if got, _ := items[0]["url"].(string); got != srcImage {
 		t.Fatalf("want item url %q, got %q", srcImage, got)
 	}
-	if got, _ := result["pipeline_id"].(string); got != "hybrid.v1" {
-		t.Fatalf("want pipeline_id hybrid.v1, got %q", got)
+	if got, _ := result["pipeline_id"].(string); got != "images.v1" {
+		t.Fatalf("want pipeline_id images.v1, got %q", got)
 	}
 	scenes, _ := result["scenes"].([]map[string]interface{})
 	if len(scenes) != 1 {

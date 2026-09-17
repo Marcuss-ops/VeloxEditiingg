@@ -7,7 +7,6 @@ tests.
 | Case | Purpose | Canonical payload | Submit script |
 |---|---|---|---|
 | `minimal` | Fixed scheduling/download/FFmpeg overhead: one short scene. | `ops/jobs/benchmark-minimal.generate.json` | `ops/jobs/submit_benchmark_minimal.sh` |
-| `five-legendary-boxers` | Representative normal workload: intro, five portraits, clips, stock and voiceover. | `ops/jobs/five_legendary_boxers_it.generate.json` | `ops/jobs/submit_benchmark_five_boxers.sh` |
 | `heavy` | 24 scenes with repeated media layers, subtitles, music and overlays. | `ops/jobs/benchmark-heavy.generate.json` | `ops/jobs/submit_benchmark_heavy.sh` |
 | `pathological` | Intake-valid payload whose scenes fail at asset resolution/render (fails well). | `ops/jobs/benchmark-pathological.generate.json` | `ops/jobs/submit_benchmark_pathological.sh` |
 

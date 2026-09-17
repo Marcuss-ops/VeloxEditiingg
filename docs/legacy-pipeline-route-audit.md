@@ -33,19 +33,20 @@ The repository's identifiable operational producers already use canonical surfac
 - smoke and worker-cert scripts: `POST /api/v1/jobs`;
 - creator workstation smoke: `POST /api/v1/creator/jobs`;
 - frontend/API clients: `POST /api/v1/jobs` and `GET /api/v1/jobs/{id}`;
-- script-with-images server ingress: `POST /api/v1/script/generate-with-images` (and its `/api/v1/script` aliases).
+- script-with-images server ingress: retired; current producers use
+  `POST /api/v1/jobs` or `POST /api/v1/creator/jobs`.
 
 No tracked producer required a source edit for the five legacy route families. The migration is therefore a route-surface removal plus canonical negative/positive route tests, rather than a fabricated client rewrite.
 
 ## Removal decision
 
-The legacy inbound routes have now been removed from the Velox router. The audit decision and mapping above preceded the removal commit; the checked-out revision retains only the canonical routes below:
+The legacy inbound routes have now been removed from the Velox router. The audit decision and mapping above preceded the removal commit; the checked-out revision retains the canonical producer routes below plus the operator-only status read:
 
 ```text
 POST   /api/v1/jobs
 POST   /api/v1/jobs/batch
 POST   /api/v1/creator/jobs
-POST   /api/v1/script/generate-with-images
+GET    /api/v1/admin/jobs/:id
 ```
 
 The outbound `remoteengine.Client` paths are not changed by this removal because they target the separately configured remote engine, not this Velox router.
