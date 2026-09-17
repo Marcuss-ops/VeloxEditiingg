@@ -1,5 +1,73 @@
 ## [Unreleased] - 2026-09-05
 
+### Removal — unwired derived-assets resolver + unwired shared placement contract (~667 LOC)
+
+Full removal per ADR 0008 §(b) point 1 — **both conditions fail**, so this is
+not a soft-deprecation: **C1** (external callers) zero verified — the
+`derivedassets` resolver and the `shared/placement` contract were imported by no
+file outside their own directory; **C2** (reachable from outside the repo)
+fails — `derivedassets` is an `internal/` package, not importable from outside
+its module, and `velox-shared` resolves in-tree through `go.work` + `replace`,
+never as a published module; `shared/placement` is not a public HTTP route,
+exported module symbol, or public CLI command.
+
+Deleted: `RemoteCodex/native/worker-agent-go/internal/derivedassets/resolver.go`,
+`.../resolver_test.go`, and `shared/placement/placement.go` — 3 files, 298
+production + 369 test LOC.
+
+**Why removal and not wiring.** `derivedassets` was a complete MISS-side
+orchestrator (verify-then-promote over `workercache.DerivedAssetStore`, with a
+fail-closed size + SHA-256 re-check) but no production call site ever built a
+`Resolver`: the native path never routed through it. `shared/placement` was
+created by PR #7 to lift the placement type contracts out of the duplicated
+worker-side costmodel so both modules would import one source of truth; that
+migration never landed, so the duplication it was meant to delete still exists
+and the package only added a second, unused declaration of `ResourceClass` and
+`TemporalMode`.
+
+Gate evidence: `scripts/ci/pre-removal-verify.sh` (AGENTS.md §1) green —
+`go vet`, `go build`, `go test -count=1 ./...` all 0 over the full `DataServer`
+module (test wall clock 264s, no pre-existing failure surfaced). Because the
+removal touched the `shared` and `worker-agent-go` modules and not only
+`DataServer`, the gate was extended with full-module `go vet ./...` +
+`go build ./...` on both remaining modules plus a full-module
+`go test -count=1 ./...` on `worker-agent-go` — all green, with zero residual
+references (`derivedassets` / `velox-shared/placement` grep clean).
+
+#### Candidates rejected after verification (deliberately NOT removed)
+
+- `shared/contract/payloadfield/payloadfield_gen.go` has no Go importer but is
+the **guarded output of `contractgen -check`**: `scripts/ci/check-contract-schema.sh`
+regenerates it and fails on any drift. Removing it would break the contract gate.
+- `worker-agent-go/internal/jobperf` has no Go importer but is an explicit
+exclusion in `scripts/ci/check-telemetry-architecture.sh` and a CHANGELOG-cited
+fact source — live policy, not dead code.
+- `DataServer/internal/integration_test` is real integration coverage named only
+in a commented-out line of `.github/workflows/no-youtube-regression.yml`, i.e. a
+wiring gap rather than dead code; it stays until it is wired into a target or
+retired together with the five production comments that cite it as a
+golden-assertion anchor.
+- The five committed `*.pb.go` files (7,929 LOC) are regenerable via
+`scripts/gen-proto.sh`, but that script requires `protoc` + Go plugins on `PATH`
+and fails loudly when they are missing. Dropping them from the tree would make
+`go build ./...` — the AGENTS.md §1 gate itself — depend on an external
+toolchain, so they stay committed.
+
+### Cleanup — orphaned benchmark evidence dumps (~5,935 LOC)
+
+`docs/benchmarks/evidence/phase2-engine-delta-2026-08-17/run-current-engine.json`
+(2,480 LOC) and
+`docs/benchmarks/evidence/phase3-read-amplification-2026-08-17/run-read-amp-fix.json`
+(3,455 LOC) were referenced by no document, script, workflow or Go file — the
+only `grep` hits were the substring "read-amp" inside comments in
+`pkg/performance/{compare_runs.go,gate_tiers_test.go}`. Both removed, with their
+now-empty directories.
+
+The phase0 and phase1 dumps were **kept**: they are cited as supporting evidence
+by five committed reports (`phase0-perf-report`, `phase0-reference-profiling`,
+`phase0-priority1-decision`, `receipts/phase0-receipt`,
+`phase1-zero-spawn-vs-ffmpeg`).
+
 ### Removal — unwired native frame compositor (~1,411 LOC)
 
 Full removal per ADR 0008 §(b) point 1 — **both conditions fail**, so this is
