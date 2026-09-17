@@ -165,6 +165,28 @@ func TestCompileSceneTimelineKeepsClipOnlyAudioAtSceneBoundary(t *testing.T) {
 	}
 }
 
+func TestCompileSceneTimelineAppliesReplaceOverlays(t *testing.T) {
+	input := map[string]interface{}{
+		"scenes_json": `[{"scene_id":"intro","duration_seconds":19,"clip":{"url":"intro.mp4","duration_ms":19000}},{"scene_id":"stock","duration_seconds":41,"stock":[{"url":"stock.mp4","duration_ms":41000}],"voiceover":{"url":"voice.mp3","duration_ms":41000}}]`,
+		"overlays": []interface{}{map[string]interface{}{
+			"id": "overlay-1", "asset_id": "overlay-asset", "url": "overlay.mp4",
+			"start_frame": 24, "frame_count": 120, "mode": "replace",
+			"z_index": 10, "audio_mode": "preserve_final_audio",
+		}},
+	}
+
+	got, err := Compile(context.Background(), "job-scene-overlay", input, "/tmp/out.mp4", nil)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	if len(got.Timeline) != 4 {
+		t.Fatalf("timeline segments = %d, want intro prefix, overlay, intro suffix and stock", len(got.Timeline))
+	}
+	if got.Timeline[1].Source.URL != "overlay.mp4" || got.Timeline[1].DurationSeconds != 5 {
+		t.Fatalf("overlay segment = %+v", got.Timeline[1])
+	}
+}
+
 func TestShuffleStockPoolIsDeterministicButJobSeeded(t *testing.T) {
 	pool := []sceneTimelineAsset{
 		{URL: "stock-a.mp4", DurationMS: 1000},
