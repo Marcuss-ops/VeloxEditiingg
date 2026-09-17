@@ -77,6 +77,23 @@ func (s *AssetService) RewriteRemoteInputPayload(ctx context.Context, payload ma
 			}
 		}
 	}
+	if overlays, ok := payload["overlays"]; ok {
+		for _, overlay := range mapList(overlays) {
+			rawURL, _ := overlay["url"].(string)
+			if strings.TrimSpace(rawURL) == "" {
+				assetID, _ := overlay["asset_id"].(string)
+				if ref, err := assetref.NewDeferredDrive(assetID); err == nil {
+					overlay["url"] = ref.Wire()
+				}
+			}
+			if rawURL, _ = overlay["url"].(string); rawURL != "" {
+				if ref, err := assetref.Parse(rawURL); err == nil && ref.Kind() == assetref.RefKindDeferredDrive {
+					overlay["asset_id"] = ref.ID()
+					overlay["url"] = ref.Wire()
+				}
+			}
+		}
+	}
 	return nil
 }
 

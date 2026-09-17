@@ -27,6 +27,7 @@ const ManifestSHA256 = "manifest_sha256"
 const Orientation = "orientation"
 const OutputPath = "output_path"
 const OutputVideoID = "output_video_id"
+const Overlays = "overlays"
 const PayloadContractVersion = "payload_contract_version"
 const Priority = "priority"
 const RenderManifest = "render_manifest"
@@ -81,6 +82,7 @@ func JobPayloadV2Keys() []string {
 		Orientation,
 		OutputPath,
 		OutputVideoID,
+		Overlays,
 		PayloadContractVersion,
 		Priority,
 		RenderManifest,

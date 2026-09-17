@@ -72,6 +72,14 @@ func submitRequestToRawPayload(req *SubmitJobRequest) map[string]interface{} {
 			Preset: layer.Preset, Animation: layer.Animation,
 		})
 	}
+	input.Overlays = make([]projection.OverlayInput, 0, len(req.Overlays))
+	for _, overlay := range req.Overlays {
+		input.Overlays = append(input.Overlays, projection.OverlayInput{
+			ID: overlay.ID, AssetID: overlay.AssetID, URL: overlay.URL, SHA256: overlay.SHA256,
+			StartFrame: overlay.StartFrame, FrameCount: overlay.FrameCount, Mode: overlay.Mode,
+			ZIndex: overlay.ZIndex, AudioMode: overlay.AudioMode,
+		})
+	}
 	input.VisualReplacements = make([]projection.VisualReplacementInput, 0, len(req.VisualReplacements))
 	for _, replacement := range req.VisualReplacements {
 		vr := projection.VisualReplacementInput{

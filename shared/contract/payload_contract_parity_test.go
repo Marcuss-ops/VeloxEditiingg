@@ -60,6 +60,7 @@ func mustPayloadV2Map(t *testing.T) map[string]any {
 		Scenes:         []map[string]any{{"id": "scene-1"}},
 		Clips:          []map[string]any{{"url": "velox-asset://clip-1", "duration": 5}},
 		Layers:         []rendermanifest.Layer{{ID: "layer-1", Type: "text"}},
+		Overlays:       []Overlay{{ID: "overlay-1", AssetID: "overlay-asset", StartFrame: 120, FrameCount: 120, Mode: "replace", AudioMode: OverlayAudioPreserveFinal}},
 		Items:          []map[string]any{{"role": "scene"}},
 		VoiceoverPaths: []string{"voiceover.mp3"},
 		AudioLanguage:  "en", VideoMode: "scene_image", Effect: "slow_zoom", Orientation: "landscape", OutputPath: "/tmp/video.mp4",

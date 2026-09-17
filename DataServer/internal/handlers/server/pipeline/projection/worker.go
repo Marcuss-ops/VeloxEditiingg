@@ -40,7 +40,7 @@ func ProjectWorkerPayload(rawPayload map[string]interface{}, rendererMode string
 	case "scene_image", "slideshow":
 		setPipelineID(workerPayload, "images.v1")
 	}
-	preserveFields(workerPayload, rawPayload, "layers", "_placement_pin_worker_id")
+	preserveFields(workerPayload, rawPayload, "layers", "overlays", "_placement_pin_worker_id")
 	return workerPayload, nil
 }
 

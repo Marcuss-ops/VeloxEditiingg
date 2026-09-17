@@ -60,6 +60,7 @@ var CanonicalTopLevelKeys = []string{
 	"scenes_json", "scenes",
 	"voiceover_paths",
 	"layers",
+	"overlays",
 	"clips",
 	"copy_only",
 	"items", // Step 2/8: items[].role scene/clip contract (worker payload layer)
@@ -202,7 +203,7 @@ func ValidatePayload(payload map[string]interface{}) error {
 	}
 
 	// Rule 4 — array-shaped canonical fields.
-	arrayFields := []string{"scenes", "voiceover_paths", "scene_image_paths", "layers", "items"}
+	arrayFields := []string{"scenes", "voiceover_paths", "scene_image_paths", "layers", "overlays", "items"}
 
 	for _, field := range arrayFields {
 		v, ok := payload[field]

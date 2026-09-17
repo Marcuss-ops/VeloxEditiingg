@@ -39,6 +39,10 @@ std::optional<RenderPlan> parseRenderPlanV1(
             TimelineItem item;
             item.scene_id = ju::extractJsonStringValue(itemStr, "scene_id");
             item.duration_seconds = ju::extractJsonNumberValue(itemStr, "duration_seconds", 0.0);
+            item.source_in_us = static_cast<int64_t>(
+                ju::extractJsonNumberValue(itemStr, "source_in_us", 0.0));
+            item.source_duration_us = static_cast<int64_t>(
+                ju::extractJsonNumberValue(itemStr, "source_duration_us", 0.0));
             item.include_audio = ju::extractJsonBoolValue(itemStr, "include_audio", false);
             item.transform.scale_mode = ju::extractJsonStringValue(itemStr, "scale_mode");
             if (item.transform.scale_mode.empty()) item.transform.scale_mode = "cover";

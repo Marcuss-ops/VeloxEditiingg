@@ -30,6 +30,7 @@
     "scenes": { "type": "array" },
     "voiceover_paths": { "type": "array" },
     "layers": { "type": "array" },
+    "overlays": { "type": "array" },
     "clips": { "type": "array" },
     "copy_only": { "type": "boolean" },
     "items": { "type": "array" },

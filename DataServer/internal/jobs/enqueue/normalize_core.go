@@ -83,6 +83,9 @@ func validateSceneVideoInputs(payloadMap map[string]interface{}) (bool, bool, ma
 	if visualReplacementsPresent(payloadMap) && !(strictManifest && !compiledV2Present && renderManifestHasFinalAudio(strictManifestMap)) {
 		return false, false, nil, deliveryplan.NewValidationError("visual_replacements", "requires a render_manifest with a verified final_audio asset (scene-based and pre-compiled V2 jobs are not supported)")
 	}
+	if overlaysPresent(payloadMap) && strictManifest && !compiledV2Present && !renderManifestHasFinalAudio(strictManifestMap) {
+		return false, false, nil, deliveryplan.NewValidationError("overlays", "requires a render_manifest with a verified final_audio asset")
+	}
 	return compiledV2Present, strictManifest, strictManifestMap, nil
 }
 
@@ -226,6 +229,19 @@ func compileStrictScenePlan(
 	if !renderManifestHasFinalAudio(strictManifestMap) {
 		return nil
 	}
+	overlays, overlayErr := contract.ParseOverlays(payloadMap["overlays"])
+	if overlayErr != nil {
+		return deliveryplan.NewValidationErrorWrapped("overlays", "parse failed", overlayErr)
+	}
+	if len(overlays) > 0 {
+		compiledJSON, compiledSHA, v2Err := contract.CompileRenderPlanV2JSONWithOverlays(strictManifestMap, overlays)
+		if v2Err != nil {
+			return deliveryplan.NewValidationErrorWrapped("overlays", "CompiledRenderPlanV2 compile failed", v2Err)
+		}
+		out[contract.PayloadKeyCompiledRenderPlanJSON] = string(compiledJSON)
+		out[contract.PayloadKeyCompiledRenderPlanSHA] = compiledSHA
+		return nil
+	}
 	replacements, parseErr := contract.ParseVisualReplacements(payloadMap["visual_replacements"])
 	if parseErr != nil {
 		return deliveryplan.NewValidationErrorWrapped("visual_replacements", "parse failed", parseErr)
@@ -244,6 +260,24 @@ func compileStrictScenePlan(
 	out[contract.PayloadKeyCompiledRenderPlanSHA] = compiledSHA
 	return nil
 }
+
+func overlaysPresent(payloadMap map[string]interface{}) bool {
+	if payloadMap == nil {
+		return false
+	}
+	raw, ok := payloadMap["overlays"]
+	if !ok || raw == nil {
+		return false
+	}
+	switch value := raw.(type) {
+	case []interface{}:
+		return len(value) > 0
+	case []map[string]interface{}:
+		return len(value) > 0
+	default:
+		return true
+	}
+}
 func CopyTimelinePayloadFields(out, src map[string]interface{}) {
 	copyTimelinePayloadFields(out, src)
 }
@@ -256,6 +290,7 @@ func copyTimelinePayloadFields(out, src map[string]interface{}) {
 		// input. clips is no longer a legacy alias for clip pipelines: the
 		// worker validator requires it to survive into TaskSpec.Payload.
 		"layers",
+		"overlays",
 		"clips",
 		// Explicit opt-in for the worker's strict packet-copy path. The
 		// worker validates stream identity, keyframe boundaries and audio

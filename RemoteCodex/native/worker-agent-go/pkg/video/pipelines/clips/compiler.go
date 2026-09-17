@@ -5,8 +5,11 @@ package clips
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 
+	"velox-shared/assetref"
+	"velox-shared/contract"
 	"velox-worker-agent/pkg/video/plan"
 	"velox-worker-agent/pkg/video/services/audio"
 )
@@ -70,7 +73,11 @@ func Compile(ctx context.Context, jobID string, input map[string]interface{}, ou
 	}
 	if encoded := toString(input["scenes_json"]); encoded != "" {
 		if scenes, err := decodeSceneTimeline(encoded); err == nil && sceneTimelineRequired(scenes) {
-			return compileSceneTimeline(ctx, jobID, scenes, outputPath, probe)
+			compiled, err := compileSceneTimeline(ctx, jobID, scenes, outputPath, probe)
+			if err != nil {
+				return nil, err
+			}
+			return applyOverlayIntent(compiled, input)
 		}
 	}
 
@@ -95,7 +102,7 @@ func Compile(ctx context.Context, jobID string, input map[string]interface{}, ou
 		})
 	}
 
-	return &plan.RenderPlan{
+	compiled := &plan.RenderPlan{
 		Version:     1,
 		JobID:       jobID,
 		Canvas:      plan.DefaultCanvas(),
@@ -103,7 +110,84 @@ func Compile(ctx context.Context, jobID string, input map[string]interface{}, ou
 		Timeline:    timeline_items,
 		AudioTracks: audioTracks,
 		OutputPath:  outputPath,
-	}, nil
+	}
+	return applyOverlayIntent(compiled, input)
+}
+
+// applyOverlayIntent is the worker-side bridge for legacy clips.v1 jobs. A
+// replace overlay is converted to one contiguous packet timeline using the
+// shared frame resolver. Composite intent is never forwarded as native
+// layers: it must be prepared by Chronon and arrive as certified V2
+// prepared_video_fragment assets.
+func applyOverlayIntent(renderPlan *plan.RenderPlan, input map[string]interface{}) (*plan.RenderPlan, error) {
+	if renderPlan == nil {
+		return nil, fmt.Errorf("clips.v1: nil render plan")
+	}
+	overlays, err := contract.ParseOverlays(input["overlays"])
+	if err != nil {
+		return nil, err
+	}
+	if len(overlays) == 0 {
+		return renderPlan, nil
+	}
+	// Overlay timing is bound to the canonical Velox stream profile: 24 fps.
+	// Do not interpret start_frame using the legacy clips.v1 30 fps default.
+	const overlayFPS = 24
+	renderPlan.Canvas.Fps = overlayFPS
+	base := make([]contract.VideoSegmentV2, 0, len(renderPlan.Timeline))
+	baseURLs := make(map[string]string, len(renderPlan.Timeline))
+	var cursor int64
+	for index, item := range renderPlan.Timeline {
+		if item.Source.Type != "video" || strings.TrimSpace(item.Source.URL) == "" {
+			return nil, fmt.Errorf("clips.v1: overlays require a video-only base timeline")
+		}
+		frames := int64(math.Round(item.DurationSeconds * float64(overlayFPS)))
+		if frames <= 0 {
+			return nil, fmt.Errorf("clips.v1: timeline segment %d has zero frames", index)
+		}
+		assetID := fmt.Sprintf("base-segment-%06d", index)
+		baseURLs[assetID] = item.Source.URL
+		base = append(base, contract.VideoSegmentV2{AssetID: assetID, TimelineStartFrame: cursor, FrameCount: frames, SourceInUS: item.SourceInUS, SourceDurationUS: item.SourceDurationUS})
+		cursor += frames
+	}
+	if _, windows, err := contract.ResolveOverlayTimeline(base, overlays, overlayFPS, 1); err != nil {
+		return nil, fmt.Errorf("clips.v1: overlay timeline: %w", err)
+	} else if len(windows) > 0 {
+		return nil, fmt.Errorf("clips.v1: composite overlays require Chronon prepared fragments (%d windows); native Velox layers are unsupported", len(windows))
+	}
+	for _, overlay := range overlays {
+		if overlay.Mode != string(contract.OverlayModeReplace) {
+			continue
+		}
+		url := strings.TrimSpace(overlay.URL)
+		if url == "" {
+			if ref, refErr := assetref.NewDeferredDrive(overlay.AssetID); refErr == nil {
+				url = ref.Wire()
+			}
+		}
+		if url == "" {
+			return nil, fmt.Errorf("clips.v1: overlay %q has no resolvable URL", overlay.ID)
+		}
+		baseURLs[overlay.AssetID] = url
+	}
+	resolved, _, err := contract.ResolveOverlayTimeline(base, overlays, overlayFPS, 1)
+	if err != nil {
+		return nil, fmt.Errorf("clips.v1: overlay timeline: %w", err)
+	}
+	timeline := make([]plan.TimelineItem, 0, len(resolved))
+	for _, segment := range resolved {
+		url := baseURLs[segment.AssetID]
+		if url == "" {
+			return nil, fmt.Errorf("clips.v1: overlay asset %q was not resolved", segment.AssetID)
+		}
+		timeline = append(timeline, plan.TimelineItem{
+			Source:          plan.MediaSource{Type: "video", URL: url},
+			DurationSeconds: float64(segment.FrameCount) / float64(overlayFPS),
+			IncludeAudio:    false, SourceInUS: segment.SourceInUS, SourceDurationUS: segment.SourceDurationUS,
+		})
+	}
+	renderPlan.Timeline = timeline
+	return renderPlan, nil
 }
 
 func parseRequest(input map[string]interface{}) *Request {

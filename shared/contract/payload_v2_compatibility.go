@@ -103,6 +103,11 @@ func NewJobPayloadV2(raw map[string]any) *JobPayloadV2 {
 	if layersVal, ok := raw["layers"]; ok {
 		p.Layers = normalizeLayers(layersVal)
 	}
+	if overlaysVal, ok := raw["overlays"]; ok {
+		if overlays, err := ParseOverlays(overlaysVal); err == nil {
+			p.Overlays = overlays
+		}
+	}
 	if itemsVal, ok := raw["items"]; ok {
 		p.Items = normalizeObjectList(itemsVal)
 	}

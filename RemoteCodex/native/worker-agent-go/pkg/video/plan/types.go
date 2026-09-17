@@ -52,6 +52,11 @@ type TimelineItem struct {
 	DurationSeconds float64        `json:"duration_seconds"`
 	IncludeAudio    bool           `json:"include_audio,omitempty"`
 	Transform       *TransformSpec `json:"transform,omitempty"`
+	// Optional packet-copy source window. V1 jobs use these fields when an
+	// editorial replace overlay splits a base clip; V2 remains the preferred
+	// producer contract for fully certified plans.
+	SourceInUS       int64 `json:"source_in_us,omitempty"`
+	SourceDurationUS int64 `json:"source_duration_us,omitempty"`
 }
 
 // AudioTrack defines an audio source to mix into the final video.

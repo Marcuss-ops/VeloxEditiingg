@@ -74,6 +74,7 @@ func ValidateSubmitJobRequest(req SubmitJobRequest) (*SubmitJobValidationError, 
 	}
 
 	details = append(details, validateSubmitScenes(req)...)
+	details = append(details, validateSubmitOverlays(req.Overlays)...)
 
 	details = append(details, validateSubmitDelivery(req)...)
 

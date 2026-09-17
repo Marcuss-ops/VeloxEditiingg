@@ -54,22 +54,25 @@ import "velox-shared/contract/assembly"
 // format and the schemagen doesn't know how to express the
 // http(s) + velox-asset:// scheme choice cleanly.
 type SubmitJobRequest struct {
-	JobType            string                            `json:"job_type,omitempty"`
-	TemplateID         string                            `json:"template_id,omitempty"`
-	TemplateVersion    int                               `json:"template_version,omitempty"`
-	Spec               map[string]any                    `json:"spec,omitempty"`
-	Output             *SubmitOutput                     `json:"output,omitempty"`
-	IdempotencyKey     string                            `json:"idempotency_key" validate:"required,min=1,max=128"`
-	VideoName          string                            `json:"video_name,omitempty" validate:"omitempty,max=300"`
-	ScriptText         string                            `json:"script_text,omitempty"`
-	Scenes             []SubmitScene                     `json:"scenes,omitempty" validate:"omitempty,max=10000"`
-	Layers             []SubmitLayer                     `json:"layers,omitempty" validate:"omitempty,dive"`
-	VisualReplacements []SubmitVisualReplacement         `json:"visual_replacements,omitempty" validate:"omitempty,max=10000,dive"`
-	DeliveryPlan       []SubmitDeliveryPlanEntry         `json:"delivery_plan,omitempty" validate:"omitempty,dive"`
-	PublishingTarget   *SubmitPublishingTarget           `json:"publishing_target,omitempty" validate:"omitempty"`
-	Publications       []SubmitPublication               `json:"publications,omitempty" validate:"omitempty,dive"`
-	ManifestRef        *SubmitManifestRef                `json:"manifest_ref,omitempty" validate:"omitempty"`
-	Assembly           *assembly.ExternalAssemblyRequest `json:"assembly,omitempty" validate:"omitempty"`
+	JobType                  string                            `json:"job_type,omitempty"`
+	TemplateID               string                            `json:"template_id,omitempty"`
+	TemplateVersion          int                               `json:"template_version,omitempty"`
+	Spec                     map[string]any                    `json:"spec,omitempty"`
+	Output                   *SubmitOutput                     `json:"output,omitempty"`
+	IdempotencyKey           string                            `json:"idempotency_key" validate:"required,min=1,max=128"`
+	VideoName                string                            `json:"video_name,omitempty" validate:"omitempty,max=300"`
+	ScriptText               string                            `json:"script_text,omitempty"`
+	Scenes                   []SubmitScene                     `json:"scenes,omitempty" validate:"omitempty,max=10000"`
+	Layers                   []SubmitLayer                     `json:"layers,omitempty" validate:"omitempty,dive"`
+	Overlays                 []SubmitOverlay                   `json:"overlays,omitempty" validate:"omitempty,max=10000,dive"`
+	CompiledRenderPlanJSON   string                            `json:"compiled_render_plan_json,omitempty"`
+	CompiledRenderPlanSHA256 string                            `json:"compiled_render_plan_sha256,omitempty" validate:"omitempty,len=64"`
+	VisualReplacements       []SubmitVisualReplacement         `json:"visual_replacements,omitempty" validate:"omitempty,max=10000,dive"`
+	DeliveryPlan             []SubmitDeliveryPlanEntry         `json:"delivery_plan,omitempty" validate:"omitempty,dive"`
+	PublishingTarget         *SubmitPublishingTarget           `json:"publishing_target,omitempty" validate:"omitempty"`
+	Publications             []SubmitPublication               `json:"publications,omitempty" validate:"omitempty,dive"`
+	ManifestRef              *SubmitManifestRef                `json:"manifest_ref,omitempty" validate:"omitempty"`
+	Assembly                 *assembly.ExternalAssemblyRequest `json:"assembly,omitempty" validate:"omitempty"`
 
 	// PlacementPinWorkerID is an optional operator/admin field that
 	// forces the job to be placed on a specific worker, skipping the
@@ -379,6 +382,20 @@ type SubmitLayer struct {
 	DurationSeconds float64   `json:"duration_seconds,omitempty" validate:"omitempty,gte=0"`
 	Preset          string    `json:"preset,omitempty"`
 	Animation       string    `json:"animation,omitempty"`
+}
+
+// SubmitOverlay is editorial intent. It is resolved into one video track
+// before Velox packet-copy; it is never sent as a native renderer layer.
+type SubmitOverlay struct {
+	ID         string `json:"id" validate:"required,max=128"`
+	AssetID    string `json:"asset_id" validate:"required,max=512"`
+	URL        string `json:"url,omitempty"`
+	SHA256     string `json:"sha256,omitempty"`
+	StartFrame int64  `json:"start_frame" validate:"gte=0"`
+	FrameCount int64  `json:"frame_count" validate:"required,gte=1"`
+	Mode       string `json:"mode" validate:"required,oneof=replace composite"`
+	ZIndex     int    `json:"z_index"`
+	AudioMode  string `json:"audio_mode" validate:"required,oneof=preserve_final_audio"`
 }
 
 // SubmitVisualReplacement is one already-composited video segment that

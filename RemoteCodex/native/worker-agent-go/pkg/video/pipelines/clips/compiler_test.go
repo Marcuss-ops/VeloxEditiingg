@@ -3,6 +3,7 @@ package clips
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -27,6 +28,53 @@ func TestCompileCopyOnlyDoesNotAddWatermarkComposition(t *testing.T) {
 	}
 	if got.Timeline[0].Transform != nil {
 		t.Fatal("copy-only clip unexpectedly carries a transform")
+	}
+}
+
+func TestCompileReplaceOverlaySplitsSourceWindowWithoutResettingBase(t *testing.T) {
+	input := map[string]interface{}{
+		"copy_only": true,
+		"clips":     []interface{}{map[string]interface{}{"url": "base.mp4", "duration": 40.0}},
+		"overlays": []interface{}{map[string]interface{}{
+			"id": "overlay-1", "asset_id": "overlay-asset", "url": "overlay.mp4",
+			"start_frame": 120, "frame_count": 120, "mode": "replace",
+			"z_index": 10, "audio_mode": "preserve_final_audio",
+		}},
+	}
+	got, err := Compile(context.Background(), "job-overlay", input, "/tmp/out.mp4", nil)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	if len(got.Timeline) != 3 {
+		t.Fatalf("timeline = %#v", got.Timeline)
+	}
+	if got.Timeline[0].Source.URL != "base.mp4" || got.Timeline[0].SourceDurationUS != 5_000_000 || got.Timeline[0].SourceInUS != 0 {
+		t.Fatalf("prefix = %+v", got.Timeline[0])
+	}
+	if got.Timeline[1].Source.URL != "overlay.mp4" || got.Timeline[1].DurationSeconds != 5 || got.Timeline[1].SourceInUS != 0 {
+		t.Fatalf("overlay = %+v", got.Timeline[1])
+	}
+	if got.Timeline[2].Source.URL != "base.mp4" || got.Timeline[2].SourceInUS != 10_000_000 || got.Timeline[2].SourceDurationUS != 30_000_000 {
+		t.Fatalf("suffix = %+v", got.Timeline[2])
+	}
+}
+
+func TestCompileCompositeOverlayNeverFallsIntoNativeLayers(t *testing.T) {
+	input := map[string]interface{}{
+		"copy_only": true,
+		"clips":     []interface{}{map[string]interface{}{"url": "base.mp4", "duration": 40.0}},
+		"overlays": []interface{}{map[string]interface{}{
+			"id": "overlay-1", "asset_id": "overlay-asset", "url": "overlay.mp4",
+			"start_frame": 120, "frame_count": 120, "mode": "composite",
+			"z_index": 10, "audio_mode": "preserve_final_audio",
+		}},
+	}
+	_, err := Compile(context.Background(), "job-composite", input, "/tmp/out.mp4", nil)
+	if err == nil {
+		t.Fatal("composite overlay was accepted without Chronon preparation")
+	}
+	if !strings.Contains(err.Error(), "Chronon prepared fragments") {
+		t.Fatalf("error = %v", err)
 	}
 }
 

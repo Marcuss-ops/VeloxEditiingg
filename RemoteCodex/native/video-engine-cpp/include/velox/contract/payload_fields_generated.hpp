@@ -31,6 +31,7 @@ inline constexpr std::string_view MANIFEST_SHA256 = "manifest_sha256";
 inline constexpr std::string_view ORIENTATION = "orientation";
 inline constexpr std::string_view OUTPUT_PATH = "output_path";
 inline constexpr std::string_view OUTPUT_VIDEO_ID = "output_video_id";
+inline constexpr std::string_view OVERLAYS = "overlays";
 inline constexpr std::string_view PAYLOAD_CONTRACT_VERSION = "payload_contract_version";
 inline constexpr std::string_view PRIORITY = "priority";
 inline constexpr std::string_view RENDER_MANIFEST = "render_manifest";

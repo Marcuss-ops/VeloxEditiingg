@@ -82,3 +82,15 @@ legacy `scene.composite.v1` identity; the wrapper submits the separate final
 fMP4 assembly job. It fails before submission if the plan does not explicitly
 select the fMP4 profile. Set `VELOX_TYSON_FMP4_DESTINATION` when the deployment
 uses a destination other than `drive-production`.
+
+### Overlay timing acceptance
+
+`mike_tyson_intro_stock.creator-push.json` carries the five supplied Drive
+assets as frame-native `overlays`: 120–240, 240–321, 321–441, 441–561 and
+561–681 at 24 fps (5.000–10.000, 10.000–13.375, 13.375–18.375,
+18.375–23.375 and 23.375–28.375 seconds). It starts in `replace` mode for
+the packet-copy path. For a Chronon test, change the five `mode` values to
+`composite`; the resolver partitions the active windows and Velox still gets
+one prepared canonical video track. Overlay audio is excluded through
+`audio_mode=preserve_final_audio`, so TTS/music/SFX remain the single final
+audio copy.

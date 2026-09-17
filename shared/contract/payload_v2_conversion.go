@@ -73,6 +73,9 @@ func (p *JobPayloadV2) ToMap() (map[string]any, error) {
 		}
 		out["layers"] = layers
 	}
+	if len(p.Overlays) > 0 {
+		out["overlays"] = p.Overlays
+	}
 	if len(p.Items) > 0 {
 		out["items"] = p.Items
 	}

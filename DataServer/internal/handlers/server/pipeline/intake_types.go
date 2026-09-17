@@ -52,6 +52,12 @@ type SubmitJobRequest struct {
 	// submit a video, images and any combination of overlays together.
 	Layers []SubmitLayer `json:"layers,omitempty"`
 
+	// Overlays are editorial video intent. replace becomes packet-copy
+	// segments; composite is partitioned into Chronon prepared fragments.
+	// They never become native-renderer layers and always preserve the final
+	// mixed audio timeline.
+	Overlays []SubmitOverlay `json:"overlays,omitempty"`
+
 	// VisualReplacements are already-composited video segments that
 	// replace the base visual timeline over an absolute interval. Each
 	// entry is a FINISHED video-only MP4; the master swaps it into the
@@ -255,6 +261,20 @@ type SubmitLayer struct {
 	DurationSeconds float64   `json:"duration_seconds,omitempty"`
 	Preset          string    `json:"preset,omitempty"`
 	Animation       string    `json:"animation,omitempty"`
+}
+
+// SubmitOverlay binds a video asset to an exact frame window. URL is kept as
+// optional authoring metadata so Drive links can be resolved before probing.
+type SubmitOverlay struct {
+	ID         string `json:"id"`
+	AssetID    string `json:"asset_id"`
+	URL        string `json:"url,omitempty"`
+	SHA256     string `json:"sha256,omitempty"`
+	StartFrame int64  `json:"start_frame"`
+	FrameCount int64  `json:"frame_count"`
+	Mode       string `json:"mode"`
+	ZIndex     int    `json:"z_index"`
+	AudioMode  string `json:"audio_mode"`
 }
 
 // SubmitVisualReplacement is one already-composited video segment that

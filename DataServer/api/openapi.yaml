@@ -743,6 +743,46 @@ components:
                             minimum: 1
                             type: integer
                     type: object
+                overlays:
+                    items:
+                        properties:
+                            asset_id:
+                                maxLength: 512
+                                type: string
+                            audio_mode:
+                                enum:
+                                    - preserve_final_audio
+                                type: string
+                            frame_count:
+                                minimum: 1
+                                type: integer
+                            id:
+                                maxLength: 128
+                                type: string
+                            mode:
+                                enum:
+                                    - replace
+                                    - composite
+                                type: string
+                            sha256:
+                                type: string
+                            start_frame:
+                                minimum: 0
+                                type: integer
+                            url:
+                                type: string
+                            z_index:
+                                type: integer
+                        required:
+                            - asset_id
+                            - audio_mode
+                            - frame_count
+                            - id
+                            - mode
+                        type: object
+                    maxItems: 10000
+                    minItems: 0
+                    type: array
                 placement_pin_worker_id:
                     maxLength: 128
                     type: string

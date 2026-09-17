@@ -67,6 +67,7 @@ type JobPayloadV2 struct {
 	Clips                    []map[string]any       `json:"clips,omitempty"`
 	CopyOnly                 bool                   `json:"copy_only"`
 	Layers                   []rendermanifest.Layer `json:"layers,omitempty"`
+	Overlays                 []Overlay              `json:"overlays,omitempty"`
 	Items                    []map[string]any       `json:"items,omitempty"`
 	VoiceoverPaths           []string               `json:"voiceover_paths,omitempty"`
 	AudioLanguage            string                 `json:"audio_language_for_srt,omitempty"`

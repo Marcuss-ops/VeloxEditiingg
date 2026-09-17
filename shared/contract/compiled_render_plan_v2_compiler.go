@@ -23,6 +23,64 @@ func CompileRenderPlanV2FromManifest(raw map[string]any) (*CompiledRenderPlanV2,
 	return CompileRenderPlanV2FromManifestWithReplacements(raw, nil)
 }
 
+// CompileRenderPlanV2FromManifestWithOverlays consumes the editorial overlay
+// list without widening the native V2 schema. replace intent is compiled into
+// the single video track. composite intent returns a fail-closed handoff
+// error: the caller must ask Chronon for prepared fragments and then compile
+// those fragments as VisualReplacement values.
+func CompileRenderPlanV2FromManifestWithOverlays(raw map[string]any, overlays []Overlay) (*CompiledRenderPlanV2, error) {
+	if len(overlays) == 0 {
+		return CompileRenderPlanV2FromManifest(raw)
+	}
+	if raw == nil {
+		return nil, fmt.Errorf("compiled render plan v2: render_manifest is required")
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("compiled render plan v2: encode render_manifest: %w", err)
+	}
+	manifest, err := rendermanifest.Parse(data)
+	if err != nil {
+		return nil, fmt.Errorf("compiled render plan v2: strict render_manifest: %w", err)
+	}
+	if err := manifest.Validate(); err != nil {
+		return nil, fmt.Errorf("compiled render plan v2: render_manifest: %w", err)
+	}
+	baseFrames := int64(0)
+	for _, track := range manifest.Tracks {
+		if track.Kind != "video" {
+			continue
+		}
+		for _, event := range track.Events {
+			start, startErr := timeUSToNearestFrame(millisecondsToMicroseconds(event.TimelineStartMS), manifest.Canvas.FPSNum, manifest.Canvas.FPSDen)
+			duration, durationErr := timeUSToNearestFrame(millisecondsToMicroseconds(event.DurationMS), manifest.Canvas.FPSNum, manifest.Canvas.FPSDen)
+			if startErr != nil || durationErr != nil || duration <= 0 {
+				return nil, fmt.Errorf("compiled render plan v2: overlay base timeline cannot be quantized to frames")
+			}
+			if start+duration > baseFrames {
+				baseFrames = start + duration
+			}
+		}
+	}
+	if err := ValidateOverlays(overlays, baseFrames); err != nil {
+		return nil, err
+	}
+	for _, overlay := range overlays {
+		if overlay.Mode == string(OverlayModeComposite) {
+			return nil, fmt.Errorf("OVERLAY_COMPOSITE_REQUIRES_CHRONON: overlay %q must be prepared as a canonical video fragment before V2 compilation", overlay.ID)
+		}
+	}
+	replacements := make([]VisualReplacement, 0, len(overlays))
+	for _, overlay := range overlays {
+		replacements = append(replacements, VisualReplacement{
+			ReplacementID: overlay.ID, AssetID: overlay.AssetID, SHA256: overlay.SHA256,
+			TimelineStartUS: frameToUS(overlay.StartFrame, manifest.Canvas.FPSNum, manifest.Canvas.FPSDen),
+			TimelineEndUS:   frameToUS(overlay.StartFrame+overlay.FrameCount, manifest.Canvas.FPSNum, manifest.Canvas.FPSDen),
+		})
+	}
+	return compileRenderPlanV2Manifest(manifest, replacements)
+}
+
 // CompileRenderPlanV2FromManifestWithReplacements compiles the strict
 // render_manifest and then applies the visual_replacements[] list: each
 // replacement swaps a prepared, video-only asset into the base video
@@ -232,6 +290,21 @@ func compileRenderPlanV2Manifest(manifest *rendermanifest.Manifest, replacements
 // TaskOffer delivery.
 func CompileRenderPlanV2JSON(raw map[string]any) ([]byte, string, error) {
 	return CompileRenderPlanV2JSONWithReplacements(raw, nil)
+}
+
+// CompileRenderPlanV2JSONWithOverlays returns canonical V2 bytes after
+// resolving editorial replace overlays. Composite overlays intentionally stop
+// before this function and use Chronon prepared fragments instead.
+func CompileRenderPlanV2JSONWithOverlays(raw map[string]any, overlays []Overlay) ([]byte, string, error) {
+	plan, err := CompileRenderPlanV2FromManifestWithOverlays(raw, overlays)
+	if err != nil {
+		return nil, "", err
+	}
+	canonical, err := plan.CanonicalJSON()
+	if err != nil {
+		return nil, "", err
+	}
+	return canonical, HashCompiledPlanV2(canonical), nil
 }
 
 // CompileRenderPlanV2JSONWithReplacements returns canonical V2 bytes plus the
