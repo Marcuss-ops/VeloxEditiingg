@@ -5,7 +5,7 @@
 # canonical M2M intake (POST /api/v1/jobs) and poll to terminal state.
 #
 # 24 scenes with alternating clip/stock assets, long voiceover, subtitles,
-# background music and a title overlay. Targets RAM growth, temp
+# a title overlay. Targets RAM growth, temp
 # amplification, concat cost and worker limits.
 #
 # Required env:
@@ -17,7 +17,6 @@
 #   VELOX_BENCHMARK_STOCK_B_URL     stock used on odd scenes
 #   VELOX_BENCHMARK_VOICEOVER_URL   voiceover reused on every scene
 #   VELOX_BENCHMARK_SUBTITLES_URL   subtitle source
-#   VELOX_BENCHMARK_MUSIC_URL       background music source
 #
 # Optional env:
 #   VELOX_BENCHMARK_IDEM_KEY    idempotency override (cold/warm cache runs)
@@ -43,10 +42,9 @@ STOCK_A="${VELOX_BENCHMARK_STOCK_A_URL:-}"
 STOCK_B="${VELOX_BENCHMARK_STOCK_B_URL:-}"
 VOICEOVER_URL="${VELOX_BENCHMARK_VOICEOVER_URL:-}"
 SUBTITLES_URL="${VELOX_BENCHMARK_SUBTITLES_URL:-}"
-MUSIC_URL="${VELOX_BENCHMARK_MUSIC_URL:-}"
 if [[ -z "${CLIP_A}" || -z "${CLIP_B}" || -z "${STOCK_A}" || -z "${STOCK_B}" \
-      || -z "${VOICEOVER_URL}" || -z "${SUBTITLES_URL}" || -z "${MUSIC_URL}" ]]; then
-  benchmark_fail "set VELOX_BENCHMARK_CLIP_A_URL, CLIP_B_URL, STOCK_A_URL, STOCK_B_URL, VOICEOVER_URL, SUBTITLES_URL, MUSIC_URL (real asset URLs)"
+      || -z "${VOICEOVER_URL}" || -z "${SUBTITLES_URL}" ]]; then
+  benchmark_fail "set VELOX_BENCHMARK_CLIP_A_URL, CLIP_B_URL, STOCK_A_URL, STOCK_B_URL, VOICEOVER_URL, SUBTITLES_URL (real asset URLs)"
 fi
 
 benchmark_resolve_admin_token
@@ -57,7 +55,7 @@ benchmark_mint_m2m
 benchmark_substitute_payload() {
   jq --arg clipA "${CLIP_A}" --arg clipB "${CLIP_B}" \
      --arg stockA "${STOCK_A}" --arg stockB "${STOCK_B}" \
-     --arg vo "${VOICEOVER_URL}" --arg subs "${SUBTITLES_URL}" --arg music "${MUSIC_URL}" '
+     --arg vo "${VOICEOVER_URL}" --arg subs "${SUBTITLES_URL}" '
     .scenes |= map(
       if (.index % 2) == 0 then
         (.clip.url = $clipA) | (.stock.url = $stockA)
@@ -67,7 +65,6 @@ benchmark_substitute_payload() {
       | (.voiceover.url = $vo)
     )
     | (.scenes[0].subtitles.url = $subs)
-    | .audio_tracks[0].source_url = $music
   ' "${BENCHMARK_PAYLOAD_FILE}"
 }
 
