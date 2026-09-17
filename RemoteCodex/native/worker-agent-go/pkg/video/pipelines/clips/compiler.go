@@ -138,6 +138,7 @@ func applyOverlayIntent(renderPlan *plan.RenderPlan, input map[string]interface{
 	renderPlan.Canvas.Fps = overlayFPS
 	base := make([]contract.VideoSegmentV2, 0, len(renderPlan.Timeline))
 	baseURLs := make(map[string]string, len(renderPlan.Timeline))
+	overlayAssetIDs := make(map[string]struct{}, len(overlays))
 	var cursor int64
 	for index, item := range renderPlan.Timeline {
 		if item.Source.Type != "video" || strings.TrimSpace(item.Source.URL) == "" {
@@ -173,6 +174,7 @@ func applyOverlayIntent(renderPlan *plan.RenderPlan, input map[string]interface{
 			return nil, fmt.Errorf("clips.v1: overlay %q has no resolvable URL", overlay.ID)
 		}
 		baseURLs[overlay.AssetID] = url
+		overlayAssetIDs[overlay.AssetID] = struct{}{}
 	}
 	resolved, _, err := contract.ResolveOverlayTimeline(base, overlays, overlayFPS, 1)
 	if err != nil {
@@ -184,8 +186,12 @@ func applyOverlayIntent(renderPlan *plan.RenderPlan, input map[string]interface{
 		if url == "" {
 			return nil, fmt.Errorf("clips.v1: overlay asset %q was not resolved", segment.AssetID)
 		}
+		sourceType := "video"
+		if _, ok := overlayAssetIDs[segment.AssetID]; ok {
+			sourceType = "image"
+		}
 		timeline = append(timeline, plan.TimelineItem{
-			Source:          plan.MediaSource{Type: "image", URL: url},
+			Source:          plan.MediaSource{Type: sourceType, URL: url},
 			DurationSeconds: float64(segment.FrameCount) / float64(overlayFPS),
 			IncludeAudio:    false, SourceInUS: segment.SourceInUS, SourceDurationUS: segment.SourceDurationUS,
 		})

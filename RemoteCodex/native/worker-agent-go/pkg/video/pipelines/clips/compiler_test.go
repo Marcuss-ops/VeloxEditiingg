@@ -51,6 +51,9 @@ func TestCompileReplaceOverlaySplitsSourceWindowWithoutResettingBase(t *testing.
 	if got.Timeline[0].Source.URL != "base.mp4" || got.Timeline[0].SourceDurationUS != 5_000_000 || got.Timeline[0].SourceInUS != 0 {
 		t.Fatalf("prefix = %+v", got.Timeline[0])
 	}
+	if got.Timeline[0].Source.Type != "video" {
+		t.Fatalf("prefix source type = %q, want video", got.Timeline[0].Source.Type)
+	}
 	if got.Timeline[1].Source.URL != "overlay.png" || got.Timeline[1].Source.Type != "image" || got.Timeline[1].DurationSeconds != 5 || got.Timeline[1].SourceInUS != 0 {
 		t.Fatalf("overlay = %+v", got.Timeline[1])
 	}
@@ -59,6 +62,9 @@ func TestCompileReplaceOverlaySplitsSourceWindowWithoutResettingBase(t *testing.
 	}
 	if got.Timeline[2].Source.URL != "base.mp4" || got.Timeline[2].SourceInUS != 10_000_000 || got.Timeline[2].SourceDurationUS != 30_000_000 {
 		t.Fatalf("suffix = %+v", got.Timeline[2])
+	}
+	if got.Timeline[2].Source.Type != "video" {
+		t.Fatalf("suffix source type = %q, want video", got.Timeline[2].Source.Type)
 	}
 }
 
@@ -187,6 +193,9 @@ func TestCompileSceneTimelineAppliesReplaceOverlays(t *testing.T) {
 	}
 	if got.Timeline[1].Source.URL != "overlay.png" || got.Timeline[1].Source.Type != "image" || got.Timeline[1].DurationSeconds != 5 {
 		t.Fatalf("overlay segment = %+v", got.Timeline[1])
+	}
+	if got.Timeline[0].Source.Type != "video" || got.Timeline[2].Source.Type != "video" {
+		t.Fatalf("base segment types = %q, %q; want video/video", got.Timeline[0].Source.Type, got.Timeline[2].Source.Type)
 	}
 	if got.Mixed {
 		t.Fatal("image replacement must not use the packet-only mixed renderer")
