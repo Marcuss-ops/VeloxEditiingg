@@ -44,15 +44,6 @@ func (h *Handlers) RegisterRoutes(r *gin.Engine, adminAuth, m2mJobsAuth gin.Hand
 	jobs.GET("/:id", h.GetSubmittedJob())
 	jobs.GET("/:id/asset-progress", h.AssetDownloadProgress())
 
-	// Creator Push uses the operator admin bearer rather than an M2M client
-	// identity. Give that trusted caller a dedicated unscoped read surface;
-	// the public M2M route above remains strictly ownership-scoped.
-	if adminAuth != nil {
-		adminJobs := r.Group("/api/v1/admin/jobs")
-		adminJobs.Use(adminAuth)
-		adminJobs.GET("/:id", h.GetAdminSubmittedJob())
-	}
-
 	publications := r.Group("/api/v1/publications")
 	publications.Use(m2mJobsAuth)
 	publications.POST("/preview", h.PreviewPublication())
