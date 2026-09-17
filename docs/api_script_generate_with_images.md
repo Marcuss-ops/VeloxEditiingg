@@ -1,5 +1,11 @@
 # POST /api/script/generate-with-images
 
+> **Ritirato — non usare per nuove integrazioni.** Questa route non è
+> montata dal Master e restituisce errore. Per inviare un job usare
+> `POST /api/v1/jobs` con credenziale M2M oppure `POST /api/v1/creator/jobs`
+> con envelope Creator e token admin. Il documento seguente è conservato
+> solo come riferimento storico.
+
 > Endpoint operativo per il flusso "script with images" attualmente disponibile in questa repo.
 
 ## Regola operativa

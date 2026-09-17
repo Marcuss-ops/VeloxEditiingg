@@ -1,5 +1,9 @@
 # Worker Job Template — Auto-Generate Video from Topic
 
+> **Ritirato — riferimento storico.** L’endpoint `generate-with-images` non è
+> più montato dal worker/Master. Per nuove integrazioni usare le route
+> canoniche del Master: `POST /api/v1/jobs` oppure `POST /api/v1/creator/jobs`.
+
 > Endpoint sul **worker remoto** che genera automaticamente script, immagini AI, voiceover TTS, renderizza il video e lo uploada su YouTube + Drive.
 
 ## Endpoint

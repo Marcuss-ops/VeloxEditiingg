@@ -1,5 +1,10 @@
 # Script Generation API
 
+> **Retired endpoint — historical reference only.**
+> `POST /api/script/generate-with-images` and its `/api/v1/script/...` alias
+> are no longer mounted by the Master. New integrations must use
+> `POST /api/v1/jobs` (M2M) or `POST /api/v1/creator/jobs` (Creator Push).
+
 ## POST /api/script/generate-with-images
 
 Generate a video script from text and optional images. Creates a processing job.
