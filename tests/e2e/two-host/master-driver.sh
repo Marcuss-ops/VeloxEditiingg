@@ -64,15 +64,20 @@ for ((i=0;i<SCENES;i++)); do
   SCENES_JSON+="{\"text\":\"Scene $((i+1))\",\"image\":\"file://${STAGING}/scene$((i+1)).png\"}"
 done
 SCENES_JSON+=']'
-python3 - "$SCENES_JSON" "$TMPDIR/job.json" "$STAGING/voiceover.wav" "$PROFILE" "$DEST" <<'PY'
+SOURCE_JOB_ID="two-host-${PROFILE}-$(date +%s)-$$"
+python3 - "$SCENES_JSON" "$TMPDIR/job.json" "$STAGING/voiceover.wav" "$PROFILE" "$DEST" "$SOURCE_JOB_ID" <<'PY'
 import json,sys
 scenes=json.loads(sys.argv[1])
-json.dump({'video_name':'TwoHostGoldenE2E','script_text':f'Two-host {sys.argv[4]} scene contract.',
+source_job_id=sys.argv[6]
+json.dump({'source_provider':'two-host-e2e','source_job_id':source_job_id,
+ 'target_executor_id':'scene.composite.v1','payload':{
+ 'status':'completed','job_id':source_job_id,'pipeline_id':'images.v1',
+ 'video_name':'TwoHostGoldenE2E','script_text':f'Two-host {sys.argv[4]} scene contract.',
  'scenes_json':json.dumps(scenes),'voiceover_path':sys.argv[3],'render_video':True,'save_to_db':True,
  'channel_id':'two-host-e2e','audio_language_for_srt':'en',
- 'delivery_plan':[{'destination_id':sys.argv[5],'retry_budget':1,'priority':0}]},open(sys.argv[2],'w'))
+ 'delivery_plan':[{'destination_id':sys.argv[5],'retry_budget':1,'priority':0}]}},open(sys.argv[2],'w'))
 PY
-SUBMIT="$(curl -fsS -X POST -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' --data-binary @"$TMPDIR/job.json" "$MASTER_URL/api/v1/script/generate-with-images")"
+SUBMIT="$(curl -fsS -X POST -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' --data-binary @"$TMPDIR/job.json" "$MASTER_URL/api/v1/creator/jobs")"
 JOB_ID="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["job_id"])' <<<"$SUBMIT")"
 ok "submitted job $JOB_ID"
 assert_master_does_not_render

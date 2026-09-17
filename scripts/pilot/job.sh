@@ -29,7 +29,7 @@ cmd_submit() {
     -H "Authorization: Bearer ${ADMIN_TOKEN}" \
     -H "Content-Type: application/json" \
     --data-binary @"$JOB_FILE" \
-    "http://127.0.0.1:${MASTER_PORT}/api/v1/script/generate-with-images" 2>&1)" || true
+    "http://127.0.0.1:${MASTER_PORT}/api/v1/creator/jobs" 2>&1)" || true
 
   echo "$SUBMIT_OUT" | python3 -m json.tool 2>/dev/null || echo "$SUBMIT_OUT"
 

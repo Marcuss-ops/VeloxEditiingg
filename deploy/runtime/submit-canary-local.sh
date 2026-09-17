@@ -14,7 +14,7 @@
 #   2. Generate fixtures INSIDE the worker container via docker exec (the
 #      worker container has /tmp as a per-container tmpfs and CANNOT see
 #      host /tmp — generating on host would 404 inside the render pipeline).
-#   3. POST a minimal RenderPlan to the master orchestrator endpoint.
+#   3. POST a minimal completed Creator payload to the master.
 #   4. Poll velox.db for terminal status (SUCCEEDED/FAILED/CANCELLED).
 #   5. Fetch artifact metadata, compute local sha256, run ffprobe, assert
 #      all 4 invariants (width / height / codec / duration) match.
@@ -27,7 +27,7 @@
 #
 #   VELOX_MASTER_URL       e.g. http://127.0.0.1:8000
 #                          (master's HTTP base URL; the script appends
-#                          /api/v1/orchestrator/jobs to it).
+#                          /api/v1/creator/jobs to it).
 #   VELOX_ADMIN_TOKEN      bearer token for AdminAuthMiddleware on POST.
 #                          Must NOT match the GitHub-PAT regex (ghp_|ghs_|
 #                          gho_|ghu_|github_pat_) so it doesn't trip
@@ -142,14 +142,14 @@ EXPECTED_H="${VELOX_CANARY_HEIGHT:-64}"
 EXPECTED_DUR="${VELOX_CANARY_DURATION:-1.0}"
 
 # idempotency_key MUST be unique per run; orchestrator handler returns 409
-# conflict otherwise (creatorflow.CreateJobWithPlan CAS gates on this).
+# conflict otherwise (creatorflow's idempotency gate rejects duplicates).
 # 16 hex chars from openssl rand = 64 bits of entropy — collision-safe
 # even in chained CI runs where $$+RANDOM (15 bits) would collide.
 IDEM="canary-$(date +%s)-$$-$(openssl rand -hex 8)"
 
 # Reference INSIDE-container file:// paths so the worker's render can read
 # them. scenes_json is a JSON-encoded string (not an array) so multi-line
-# shapes survive the orchestrator handler's JSON round-trip.
+# shapes survive the Creator payload round-trip.
 SCENE_JSON=$(jq -nc \
     --arg img "file:///tmp/velox-canary/scene.png" \
     --argjson dur "$EXPECTED_DUR" \
@@ -161,23 +161,26 @@ PAYLOAD=$(jq -n \
     --arg audio "/tmp/velox-canary/silent.m4a" \
     --arg outpath "/tmp/velox-canary/canary.mp4" \
     '{
-        video_name:     "Velox Canary Render",
-        project_id:      "canary",
-        executor_id:     "scene.composite.v1",
-        run_id:          "canary-run",
-        idempotency_key: $idem,
-        max_retries:     0,
-        priority:        100,
+        source_provider:    "local-canary",
+        source_job_id:      $idem,
+        target_executor_id: "scene.composite.v1",
         payload: {
+            status:         "completed",
+            job_id:         $idem,
+            pipeline_id:    "images.v1",
+            video_name:     "Velox Canary Render",
+            script_text:    "Deterministic local canary render.",
             scenes_json:    $scenes,
-            voiceover_paths: [$audio],
-            output_path:    $outpath
+            voiceover_path: $audio,
+            output_path:    $outpath,
+            priority:       100,
+            max_retries:    0
         }
     }')
 
 # ── 6. Submit ──────────────────────────────────────────────────────────────
 SUBMIT_RESP="$(curl -sS --max-time 10 \
-    -X POST "${VELOX_MASTER_URL}/api/v1/orchestrator/jobs" \
+    -X POST "${VELOX_MASTER_URL}/api/v1/creator/jobs" \
     -H "Authorization: Bearer ${VELOX_ADMIN_TOKEN}" \
     -H "Content-Type: application/json" \
     --data "$PAYLOAD" 2>/dev/null)" \

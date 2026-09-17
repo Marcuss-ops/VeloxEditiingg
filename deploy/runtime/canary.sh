@@ -28,7 +28,7 @@
 # already verified the worker is registered. What it DOES need:
 #
 #   VELOX_ADMIN_TOKEN       cfg.Auth.AdminToken-equivalent bearer.
-#                           POST /api/v1/orchestrator/jobs is gated by
+#                           POST /api/v1/creator/jobs is gated by
 #                           AdminAuthMiddleware (DataServer/internal/
 #                           handlers/server/api/api_v1.go).
 #   VELOX_DB_PATH           direct READ access to velox.db so the script

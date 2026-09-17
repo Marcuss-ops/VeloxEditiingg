@@ -15,7 +15,7 @@ phase_submit() {
     -H "Authorization: Bearer ${ADMIN_TOKEN}" \
     -H "Content-Type: application/json" \
     --data-binary @"$WORKDIR/job.json" \
-    "http://127.0.0.1:${MASTER_PORT}/api/v1/script/generate-with-images" 2>&1)" || true
+    "http://127.0.0.1:${MASTER_PORT}/api/v1/creator/jobs" 2>&1)" || true
 
   JOB_ID="$(echo "$submit_out" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('job_id',''))" 2>/dev/null || true)"
 

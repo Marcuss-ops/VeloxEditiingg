@@ -406,17 +406,26 @@ SQL
 
   # The scenes_json references the staged files via velox-asset:// OR file://
   # The master's AssetService will rewrite file:// paths on submission.
+  local source_job_id="golden-e2e-${GOLDEN_PROFILE}-$(date +%s)-$$"
   cat > "$JOB_FILE" <<JSON
 {
-  "video_name": "GoldenE2E",
-  "script_text": "Golden E2E ${GOLDEN_PROFILE} scene contract.",
-  "scenes_json": ${scenes_json_json},
-  "voiceover_path": "${STAGING_DIR}/voiceover.wav",
-  "render_video": true,
-  "save_to_db": true,
-  "channel_id": "golden-e2e",
-  "audio_language_for_srt": "en",
-  "delivery_plan": [{"destination_id":"${destination_id}","retry_budget":1,"priority":0}]
+  "source_provider": "golden-e2e",
+  "source_job_id": "${source_job_id}",
+  "target_executor_id": "scene.composite.v1",
+  "payload": {
+    "status": "completed",
+    "job_id": "${source_job_id}",
+    "pipeline_id": "images.v1",
+    "video_name": "GoldenE2E",
+    "script_text": "Golden E2E ${GOLDEN_PROFILE} scene contract.",
+    "scenes_json": ${scenes_json_json},
+    "voiceover_path": "${STAGING_DIR}/voiceover.wav",
+    "render_video": true,
+    "save_to_db": true,
+    "channel_id": "golden-e2e",
+    "audio_language_for_srt": "en",
+    "delivery_plan": [{"destination_id":"${destination_id}","retry_budget":1,"priority":0}]
+  }
 }
 JSON
 
@@ -424,7 +433,7 @@ JSON
     -H "Authorization: Bearer ${ADMIN_TOKEN}" \
     -H "Content-Type: application/json" \
     --data-binary @"$JOB_FILE" \
-    "http://127.0.0.1:${MASTER_PORT}/api/v1/script/generate-with-images" 2>&1) || true
+    "http://127.0.0.1:${MASTER_PORT}/api/v1/creator/jobs" 2>&1) || true
 
   echo "$SUBMIT_OUT" | head -5
   JOB_ID=$(echo "$SUBMIT_OUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('job_id',''))" 2>/dev/null || true)

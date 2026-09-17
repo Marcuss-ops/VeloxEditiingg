@@ -275,16 +275,25 @@ phase_submit() {
   local audio_path="$STAGING_DIR/silent.aac"
   [[ -f "$audio_path" ]] || audio_path="$STAGING_DIR/silent.mp3"
 
+  local source_job_id="e2e-workload-mtls-$(date +%s)-$$"
   cat > "$WORKDIR/job.json" <<JSON
 {
-  "video_name": "VeloxE2EWorkloadMTLS",
-  "script_text": "PR 7 mTLS E2E workload smoke test.",
-  "scenes_json": "[{\"text\":\"E2E\",\"image\":\"file://${scene_path}\"}]",
-  "voiceover_path": "${audio_path}",
-  "render_video": true,
-  "save_to_db": true,
-  "channel_id": "e2e-workload-mtls",
-  "audio_language_for_srt": "en"
+  "source_provider": "e2e-workload-mtls",
+  "source_job_id": "${source_job_id}",
+  "target_executor_id": "scene.composite.v1",
+  "payload": {
+    "status": "completed",
+    "job_id": "${source_job_id}",
+    "pipeline_id": "images.v1",
+    "video_name": "VeloxE2EWorkloadMTLS",
+    "script_text": "PR 7 mTLS E2E workload smoke test.",
+    "scenes_json": "[{\"text\":\"E2E\",\"image\":\"file://${scene_path}\"}]",
+    "voiceover_path": "${audio_path}",
+    "render_video": true,
+    "save_to_db": true,
+    "channel_id": "e2e-workload-mtls",
+    "audio_language_for_srt": "en"
+  }
 }
 JSON
 
@@ -293,7 +302,7 @@ JSON
     -H "Authorization: Bearer ${ADMIN_TOKEN}" \
     -H "Content-Type: application/json" \
     --data-binary @"$WORKDIR/job.json" \
-    "http://127.0.0.1:${MASTER_PORT}/api/v1/script/generate-with-images" 2>&1)" || true
+    "http://127.0.0.1:${MASTER_PORT}/api/v1/creator/jobs" 2>&1)" || true
 
   JOB_ID="$(echo "$submit_out" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('job_id',''))" 2>/dev/null || true)"
 

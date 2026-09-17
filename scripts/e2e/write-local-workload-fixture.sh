@@ -12,25 +12,34 @@ OUT=$1
 STAGING=$2
 DESTINATION=$3
 AUDIO_FILE=${4:-silent.aac}
+SOURCE_JOB_ID=${VELOX_E2E_SOURCE_JOB_ID:-e2e-local-$(date +%s)-$$}
 
 mkdir -p "$(dirname "$OUT")"
 cat >"$OUT" <<JSON
 {
-  "video_name": "VeloxE2EWorkload",
-  "script_text": "Deterministic local real-workload smoke test.",
-  "scenes_json": "[{\"text\":\"E2E\",\"image\":\"file://${STAGING}/scene.png\"}]",
-  "voiceover_path": "${STAGING}/${AUDIO_FILE}",
-  "render_video": true,
-  "save_to_db": true,
-  "channel_id": "e2e-workload",
-  "audio_language_for_srt": "en",
-  "delivery_plan": [
-    {
-      "destination_id": "${DESTINATION}",
-      "retry_budget": 1,
-      "priority": 0
-    }
-  ]
+  "source_provider": "e2e-local",
+  "source_job_id": "${SOURCE_JOB_ID}",
+  "target_executor_id": "scene.composite.v1",
+  "payload": {
+    "status": "completed",
+    "job_id": "${SOURCE_JOB_ID}",
+    "pipeline_id": "images.v1",
+    "video_name": "VeloxE2EWorkload",
+    "script_text": "Deterministic local real-workload smoke test.",
+    "scenes_json": "[{\"text\":\"E2E\",\"image\":\"file://${STAGING}/scene.png\"}]",
+    "voiceover_path": "${STAGING}/${AUDIO_FILE}",
+    "render_video": true,
+    "save_to_db": true,
+    "channel_id": "e2e-workload",
+    "audio_language_for_srt": "en",
+    "delivery_plan": [
+      {
+        "destination_id": "${DESTINATION}",
+        "retry_budget": 1,
+        "priority": 0
+      }
+    ]
+  }
 }
 JSON
 

@@ -12,7 +12,7 @@
 #   4. Bootstrap master with TLS on port 8180
 #   5. Bootstrap worker with TLS, wait for registration in master log
 #   6. Generate fixtures (voiceover.mp3, scene1.png)
-#   7. Submit images.v1 job via /api/v1/script/generate-with-images
+#   7. Submit images.v1 job via /api/v1/creator/jobs
 #   8. Poll SQLite until status=SUCCEEDED (up to ~7 minutes)
 #   9. Assert ≥1 MP4 artifact exists in VELOX_STORAGE_DIR
 #
