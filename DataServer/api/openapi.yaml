@@ -40,6 +40,45 @@ components:
                 maxLength: 128
                 type: string
     schemas:
+        AdminJobInspectionResponse:
+            description: |
+                Operator-only read model returned by GET
+                /api/v1/admin/jobs/{job_id}. The nested projections are
+                bounded and read-only: job lifecycle, execution waterfall,
+                prefetch timeline, persisted events, artifacts, and delivery
+                state.
+            properties:
+                artifacts:
+                    items:
+                        additionalProperties: true
+                        type: object
+                    type: array
+                deliveries:
+                    items:
+                        additionalProperties: true
+                        type: object
+                    type: array
+                events:
+                    items:
+                        additionalProperties: true
+                        type: object
+                    type: array
+                execution:
+                    additionalProperties: true
+                    type: object
+                job:
+                    additionalProperties: true
+                    type: object
+                prefetch:
+                    items:
+                        additionalProperties: true
+                        type: object
+                    type: array
+            required:
+                - events
+                - artifacts
+                - deliveries
+            type: object
         CreatorAsset:
             properties:
                 local_path:
@@ -702,7 +741,7 @@ components:
                     type: string
                 compiled_render_plan_sha256:
                     description: SHA-256 of compiled_render_plan_json.
-                    pattern: '^[0-9a-fA-F]{64}$'
+                    pattern: ^[0-9a-fA-F]{64}$
                     type: string
                 delivery_plan:
                     items:
@@ -1252,6 +1291,49 @@ info:
     version: 0.6.0-creatorpush-v3
 openapi: 3.1.0
 paths:
+    /api/v1/admin/jobs/{job_id}:
+        get:
+            operationId: inspectAdminJob
+            parameters:
+                - $ref: '#/components/parameters/AuthorizationHeader'
+                - $ref: '#/components/parameters/XRequestIDHeader'
+                - $ref: '#/components/parameters/PathJobID'
+            responses:
+                "200":
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/AdminJobInspectionResponse'
+                    description: OK.
+                "400":
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorEnvelope'
+                    description: Bad Request.
+                "401":
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorEnvelope'
+                    description: Unauthorized.
+                "404":
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorEnvelope'
+                    description: Not Found.
+                "500":
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorEnvelope'
+                    description: Internal Server Error.
+            security:
+                - bearerAdminToken: []
+            summary: Inspect a job with execution, artifact, delivery, and event projections.
+            tags:
+                - admin
     /api/v1/creator/jobs:
         post:
             operationId: pushCreatorJob

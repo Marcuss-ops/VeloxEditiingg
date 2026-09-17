@@ -163,3 +163,25 @@ routes:
         $ref: "#/components/schemas/ErrorEnvelope"
       "500":
         $ref: "#/components/schemas/ErrorEnvelope"
+
+  - path: /api/v1/admin/jobs/{job_id}
+    method: get
+    operationId: inspectAdminJob
+    tag: admin
+    summary: "Inspect a job with execution, artifact, delivery, and event projections."
+    parameters:
+      - AuthorizationHeader
+      - XRequestIDHeader
+      - PathJobID
+    requestBody: null
+    responses:
+      "200":
+        $ref: "#/components/schemas/AdminJobInspectionResponse"
+      "400":
+        $ref: "#/components/schemas/ErrorEnvelope"
+      "401":
+        $ref: "#/components/schemas/ErrorEnvelope"
+      "404":
+        $ref: "#/components/schemas/ErrorEnvelope"
+      "500":
+        $ref: "#/components/schemas/ErrorEnvelope"
