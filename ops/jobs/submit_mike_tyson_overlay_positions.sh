@@ -15,6 +15,7 @@ STATUS_PATH="${VELOX_TYSON_OVERLAY_STATUS_PATH:-/api/v1/admin/jobs}"
 POLL_TIMEOUT="${VELOX_TYSON_OVERLAY_TIMEOUT:-900}"
 POLL_INTERVAL="${VELOX_TYSON_OVERLAY_INTERVAL:-10}"
 SOURCE_JOB_ID="${VELOX_TYSON_OVERLAY_SOURCE_JOB_ID:-mike-tyson-overlay-position-test-$(date +%s)}"
+PLACEMENT_PIN_WORKER_ID="${VELOX_TYSON_OVERLAY_WORKER_ID:-}"
 DRY_RUN="${VELOX_TYSON_OVERLAY_DRY_RUN:-0}"
 
 for bin in curl jq; do
@@ -55,8 +56,10 @@ jq \
   --arg overlay_03 "1-7-ERZHtGAaAiYMy-iUiqjB2W_duhJx_" \
   --arg overlay_04 "1yopMHbkpdfmtCY_uiCKoJMCVGrhLwFUZ" \
   --arg overlay_05 "1hQD9HOtzUZYtm_KGGSYeuxqMok4_zO36" \
+  --arg placement_pin_worker_id "$PLACEMENT_PIN_WORKER_ID" \
   '.source_job_id = $source_job_id
    | .payload.job_id = $source_job_id
+   | if $placement_pin_worker_id != "" then .payload._placement_pin_worker_id = $placement_pin_worker_id else . end
    | .payload.delivery_plan[0].destination_id = $destination
    | .payload.overlays = [
        {id:"position-overlay-01", asset_id:$overlay_01, drive_file_id:$overlay_01,
