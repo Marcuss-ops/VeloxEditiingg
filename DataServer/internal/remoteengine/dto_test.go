@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"velox-shared/contract"
 )
 
 // ── ValidateInitialResponse ──────────────────────────────────────────────────
@@ -328,6 +330,37 @@ func TestParseRemotePipelineResult_PreservesCanonicalStockPool(t *testing.T) {
 	encoded, ok := workerPayload["scenes_json"].(string)
 	if !ok || !strings.Contains(encoded, "stock-a") || !strings.Contains(encoded, "stock-b") {
 		t.Fatalf("worker scenes_json = %q, want canonical stock assets", encoded)
+	}
+}
+
+func TestRemotePipelineResultCanonicalizesTimedDriveOverlaysForWorker(t *testing.T) {
+	dto, err := ParseRemotePipelineResult(map[string]interface{}{
+		"job_id": "job_overlays",
+		"status": "completed",
+		"overlays": []interface{}{map[string]interface{}{
+			"id":            "overlay-01",
+			"asset_id":      "drive-overlay-01",
+			"drive_file_id": "drive-overlay-01",
+			"url":           "https://drive.google.com/file/d/drive-overlay-01/view?usp=drive_link",
+			"start_frame":   float64(120),
+			"frame_count":   float64(120),
+			"mode":          "replace",
+			"audio_mode":    "preserve_final_audio",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("ParseRemotePipelineResult: %v", err)
+	}
+	workerPayload, err := dto.ToWorkerPayloadChecked()
+	if err != nil {
+		t.Fatalf("ToWorkerPayloadChecked: %v", err)
+	}
+	overlays, ok := workerPayload["overlays"].([]contract.Overlay)
+	if !ok || len(overlays) != 1 {
+		t.Fatalf("worker overlays = %#v", workerPayload["overlays"])
+	}
+	if overlays[0].URL != "velox-drive://drive-overlay-01" || overlays[0].DriveFileID != "drive-overlay-01" || overlays[0].StartFrame != 120 {
+		t.Fatalf("worker overlay = %+v", overlays[0])
 	}
 }
 

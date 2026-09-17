@@ -108,15 +108,16 @@ type VisualReplacementInput struct {
 }
 
 type OverlayInput struct {
-	ID         string
-	AssetID    string
-	URL        string
-	SHA256     string
-	StartFrame int64
-	FrameCount int64
-	Mode       string
-	ZIndex     int
-	AudioMode  string
+	ID          string
+	AssetID     string
+	DriveFileID string
+	URL         string
+	SHA256      string
+	StartFrame  int64
+	FrameCount  int64
+	Mode        string
+	ZIndex      int
+	AudioMode   string
 }
 
 // BuildRawPayload constructs the complete raw canonical payload from the
@@ -251,11 +252,18 @@ func BuildRawPayload(input SubmissionInput) map[string]interface{} {
 	if len(input.Overlays) > 0 {
 		overlays := make([]interface{}, 0, len(input.Overlays))
 		for _, overlay := range input.Overlays {
+			assetID := strings.TrimSpace(overlay.AssetID)
+			if assetID == "" {
+				assetID = strings.TrimSpace(overlay.DriveFileID)
+			}
 			entry := map[string]interface{}{
-				"id": strings.TrimSpace(overlay.ID), "asset_id": strings.TrimSpace(overlay.AssetID),
+				"id": strings.TrimSpace(overlay.ID), "asset_id": assetID,
 				"start_frame": overlay.StartFrame, "frame_count": overlay.FrameCount,
 				"mode": strings.TrimSpace(overlay.Mode), "z_index": overlay.ZIndex,
 				"audio_mode": strings.TrimSpace(overlay.AudioMode),
+			}
+			if driveID := strings.TrimSpace(overlay.DriveFileID); driveID != "" {
+				entry["drive_file_id"] = driveID
 			}
 			if url := strings.TrimSpace(overlay.URL); url != "" {
 				entry["url"] = url

@@ -144,6 +144,21 @@ func (r *RemotePipelineResult) ToWorkerPayloadChecked() (map[string]interface{},
 			m[k] = v
 		}
 	}
+	// Normalize overlay authoring URLs at this boundary as well as in the
+	// enqueue asset service. Creator-push/in-runner paths can reach the typed
+	// DTO without an AssetService, but the worker must never receive a raw
+	// Google Drive URL: it only understands the credential-free
+	// velox-drive://<file-id> reference and fetches bytes through the
+	// authenticated Master asset bridge.
+	if rawOverlays, present := m["overlays"]; present {
+		overlays, overlayErr := contract.ParseOverlays(rawOverlays)
+		if overlayErr != nil {
+			return nil, fmt.Errorf("remoteengine: overlays: %w", overlayErr)
+		}
+		if len(overlays) > 0 {
+			m["overlays"] = overlays
+		}
+	}
 
 	// Overlay typed DTO fields — these take precedence over raw values.
 	if r.RemoteJobID != "" {

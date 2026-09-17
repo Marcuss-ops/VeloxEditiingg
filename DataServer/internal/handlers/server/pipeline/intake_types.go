@@ -266,15 +266,16 @@ type SubmitLayer struct {
 // SubmitOverlay binds a video asset to an exact frame window. URL is kept as
 // optional authoring metadata so Drive links can be resolved before probing.
 type SubmitOverlay struct {
-	ID         string `json:"id"`
-	AssetID    string `json:"asset_id"`
-	URL        string `json:"url,omitempty"`
-	SHA256     string `json:"sha256,omitempty"`
-	StartFrame int64  `json:"start_frame"`
-	FrameCount int64  `json:"frame_count"`
-	Mode       string `json:"mode"`
-	ZIndex     int    `json:"z_index"`
-	AudioMode  string `json:"audio_mode"`
+	ID          string `json:"id"`
+	AssetID     string `json:"asset_id,omitempty"`
+	DriveFileID string `json:"drive_file_id,omitempty"`
+	URL         string `json:"url,omitempty"`
+	SHA256      string `json:"sha256,omitempty"`
+	StartFrame  int64  `json:"start_frame"`
+	FrameCount  int64  `json:"frame_count"`
+	Mode        string `json:"mode"`
+	ZIndex      int    `json:"z_index"`
+	AudioMode   string `json:"audio_mode"`
 }
 
 // SubmitVisualReplacement is one already-composited video segment that

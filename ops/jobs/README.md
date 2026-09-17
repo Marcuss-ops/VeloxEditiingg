@@ -94,3 +94,9 @@ the packet-copy path. For a Chronon test, change the five `mode` values to
 one prepared canonical video track. Overlay audio is excluded through
 `audio_mode=preserve_final_audio`, so TTS/music/SFX remain the single final
 audio copy.
+
+Each overlay keeps both `asset_id` and `drive_file_id`, plus the supplied
+Drive file URL for authoring traceability. Enqueue canonicalizes that URL to
+`velox-drive://<drive_file_id>`; the worker downloads it through the existing
+authenticated Master asset bridge and never receives a Drive credential in the
+job payload.

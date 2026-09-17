@@ -753,6 +753,9 @@ components:
                                 enum:
                                     - preserve_final_audio
                                 type: string
+                            drive_file_id:
+                                maxLength: 128
+                                type: string
                             frame_count:
                                 minimum: 1
                                 type: integer
@@ -774,7 +777,6 @@ components:
                             z_index:
                                 type: integer
                         required:
-                            - asset_id
                             - audio_mode
                             - frame_count
                             - id

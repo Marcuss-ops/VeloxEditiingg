@@ -51,7 +51,7 @@ func TestBuildRawPayload_DefaultsDeliveryRetryBudget(t *testing.T) {
 
 func TestBuildRawPayload_PreservesFrameNativeOverlays(t *testing.T) {
 	raw := BuildRawPayload(SubmissionInput{
-		Overlays: []OverlayInput{{ID: "overlay_01", AssetID: "drive-file", URL: "https://drive.google.com/file/d/drive-file/view", StartFrame: 120, FrameCount: 120, Mode: "replace", ZIndex: 10, AudioMode: "preserve_final_audio"}},
+		Overlays: []OverlayInput{{ID: "overlay_01", AssetID: "drive-file", DriveFileID: "drive-file", URL: "https://drive.google.com/file/d/drive-file/view", StartFrame: 120, FrameCount: 120, Mode: "replace", ZIndex: 10, AudioMode: "preserve_final_audio"}},
 	})
 	overlays, ok := raw["overlays"].([]interface{})
 	if !ok || len(overlays) != 1 {
@@ -63,5 +63,8 @@ func TestBuildRawPayload_PreservesFrameNativeOverlays(t *testing.T) {
 	}
 	if overlay["audio_mode"] != "preserve_final_audio" {
 		t.Fatalf("audio mode = %#v", overlay["audio_mode"])
+	}
+	if overlay["asset_id"] != "drive-file" || overlay["drive_file_id"] != "drive-file" {
+		t.Fatalf("overlay asset identity = %#v", overlay)
 	}
 }

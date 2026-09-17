@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"velox-shared/assetref"
 )
 
 // OverlayMode describes the only two visual semantics accepted at the
@@ -20,18 +22,20 @@ const (
 
 // Overlay is producer/editorial intent. Timing is frame-native so the same
 // value is used by the resolver, the acceptance tests and CompiledRenderPlanV2.
-// URL is optional authoring metadata; asset_id remains the identity used by
-// the asset resolver and by the worker.
+// URL is optional authoring metadata; asset_id/drive_file_id are the asset
+// identity fields shared with clip and stock envelopes. Raw Drive URLs are
+// canonicalized to velox-drive:// before the worker boundary.
 type Overlay struct {
-	ID         string `json:"id"`
-	AssetID    string `json:"asset_id"`
-	URL        string `json:"url,omitempty"`
-	SHA256     string `json:"sha256,omitempty"`
-	StartFrame int64  `json:"start_frame"`
-	FrameCount int64  `json:"frame_count"`
-	Mode       string `json:"mode"`
-	ZIndex     int    `json:"z_index"`
-	AudioMode  string `json:"audio_mode"`
+	ID          string `json:"id"`
+	AssetID     string `json:"asset_id"`
+	DriveFileID string `json:"drive_file_id,omitempty"`
+	URL         string `json:"url,omitempty"`
+	SHA256      string `json:"sha256,omitempty"`
+	StartFrame  int64  `json:"start_frame"`
+	FrameCount  int64  `json:"frame_count"`
+	Mode        string `json:"mode"`
+	ZIndex      int    `json:"z_index"`
+	AudioMode   string `json:"audio_mode"`
 }
 
 // OverlayWindow is one deterministic interval that must be prepared by
@@ -258,7 +262,41 @@ func ParseOverlays(raw any) ([]Overlay, error) {
 		if !ok {
 			return nil, fmt.Errorf("overlays[%d]: must be an object", i)
 		}
-		out = append(out, Overlay{ID: overlayString(m["id"]), AssetID: overlayString(m["asset_id"]), URL: overlayString(m["url"]), SHA256: overlayString(m["sha256"]), StartFrame: overlayInt64(m["start_frame"]), FrameCount: overlayInt64(m["frame_count"]), Mode: overlayString(m["mode"]), ZIndex: int(overlayInt64(m["z_index"])), AudioMode: overlayString(m["audio_mode"])})
+		overlay := Overlay{
+			ID:          overlayString(m["id"]),
+			AssetID:     overlayString(m["asset_id"]),
+			DriveFileID: overlayString(m["drive_file_id"]),
+			URL:         overlayString(m["url"]),
+			SHA256:      overlayString(m["sha256"]),
+			StartFrame:  overlayInt64(m["start_frame"]),
+			FrameCount:  overlayInt64(m["frame_count"]),
+			Mode:        overlayString(m["mode"]),
+			ZIndex:      int(overlayInt64(m["z_index"])),
+			AudioMode:   overlayString(m["audio_mode"]),
+		}
+		// Authoring accepts the same Google Drive file URL used by clips and
+		// stock, but the worker contract is deliberately credential-free and
+		// only carries the opaque ID over the authenticated Master bridge.
+		if driveID, err := assetref.ParseDriveFileID(overlay.URL); err == nil {
+			overlay.DriveFileID = driveID.String()
+			if ref, refErr := assetref.NewDeferredDrive(driveID.String()); refErr == nil {
+				overlay.URL = ref.Wire()
+			}
+		}
+		if overlay.DriveFileID == "" && strings.HasPrefix(strings.ToLower(strings.TrimSpace(overlay.URL)), assetref.SchemeVeloxDrive+"://") {
+			if ref, err := assetref.Parse(overlay.URL); err == nil {
+				overlay.DriveFileID = ref.ID()
+			}
+		}
+		if overlay.AssetID == "" {
+			overlay.AssetID = overlay.DriveFileID
+		}
+		if overlay.URL == "" && overlay.DriveFileID != "" {
+			if ref, err := assetref.NewDeferredDrive(overlay.DriveFileID); err == nil {
+				overlay.URL = ref.Wire()
+			}
+		}
+		out = append(out, overlay)
 	}
 	return out, nil
 }

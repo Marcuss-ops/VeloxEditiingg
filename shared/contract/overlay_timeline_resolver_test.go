@@ -90,3 +90,23 @@ func TestApplyPreparedOverlayFragments_ProducesSingleTrack(t *testing.T) {
 		t.Fatalf("resolved fragments = %+v", got)
 	}
 }
+
+func TestParseOverlaysCanonicalizesDriveAuthoringReference(t *testing.T) {
+	overlays, err := ParseOverlays([]interface{}{map[string]interface{}{
+		"id":          "overlay-01",
+		"url":         "https://drive.google.com/file/d/drive-overlay-01/view?usp=drive_link",
+		"start_frame": float64(120),
+		"frame_count": float64(120),
+		"mode":        "replace",
+		"audio_mode":  OverlayAudioPreserveFinal,
+	}})
+	if err != nil {
+		t.Fatalf("ParseOverlays: %v", err)
+	}
+	if len(overlays) != 1 {
+		t.Fatalf("overlays = %#v", overlays)
+	}
+	if overlays[0].AssetID != "drive-overlay-01" || overlays[0].DriveFileID != "drive-overlay-01" || overlays[0].URL != "velox-drive://drive-overlay-01" {
+		t.Fatalf("canonical overlay asset = %+v", overlays[0])
+	}
+}

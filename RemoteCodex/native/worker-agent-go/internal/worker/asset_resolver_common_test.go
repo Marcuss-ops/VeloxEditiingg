@@ -248,6 +248,54 @@ func TestCommonAssetResolverMaterializesDeferredDriveAssetWithoutEagerMetadata(t
 	}
 }
 
+func TestCommonAssetResolverMaterializesTimedOverlayFromMasterBridge(t *testing.T) {
+	body := []byte("timed-overlay-bytes")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/agent/assets/drive-overlay-01" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "video/mp4")
+		_, _ = w.Write(body)
+	}))
+	defer server.Close()
+	w := &Worker{config: &config.WorkerConfig{MasterURL: server.URL, WorkDir: t.TempDir()}, apiClient: api.NewClient(server.URL)}
+	payload := map[string]interface{}{
+		"clips": []interface{}{map[string]interface{}{
+			"url": "velox-drive://base-clip",
+		}},
+		"overlays": []interface{}{map[string]interface{}{
+			"id":            "overlay-01",
+			"asset_id":      "drive-overlay-01",
+			"drive_file_id": "drive-overlay-01",
+			"url":           "velox-drive://drive-overlay-01",
+			"start_frame":   int64(120),
+			"frame_count":   int64(120),
+			"mode":          "replace",
+			"audio_mode":    "preserve_final_audio",
+		}},
+	}
+	// Resolve only the overlay here: the base clip is intentionally omitted
+	// from the test server because this assertion is about the overlay asset
+	// path and its frame metadata, not timeline compilation.
+	delete(payload, "clips")
+	resolved, err := w.resolveCommonAssetPayload(context.Background(), payload)
+	if err != nil {
+		t.Fatalf("resolve timed overlay: %v", err)
+	}
+	overlay := resolved["overlays"].([]interface{})[0].(map[string]interface{})
+	path, ok := overlay["url"].(string)
+	if !ok || strings.HasPrefix(path, "velox-drive://") || !strings.HasPrefix(path, w.config.WorkDir) {
+		t.Fatalf("overlay was not materialized locally: %q", path)
+	}
+	if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, body) {
+		t.Fatalf("materialized overlay bytes = %q/%v, want %q", got, err, body)
+	}
+	if overlay["start_frame"] != float64(120) || overlay["frame_count"] != float64(120) || overlay["mode"] != "replace" {
+		t.Fatalf("overlay editorial timing changed: %#v", overlay)
+	}
+}
+
 func TestCommonAssetResolverRewritesScenesJSONAndPreservesInput(t *testing.T) {
 	body := []byte("scene-video-bytes")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

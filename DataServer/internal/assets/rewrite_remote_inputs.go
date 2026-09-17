@@ -80,16 +80,28 @@ func (s *AssetService) RewriteRemoteInputPayload(ctx context.Context, payload ma
 	if overlays, ok := payload["overlays"]; ok {
 		for _, overlay := range mapList(overlays) {
 			rawURL, _ := overlay["url"].(string)
+			driveFileID, _ := overlay["drive_file_id"].(string)
 			if strings.TrimSpace(rawURL) == "" {
-				assetID, _ := overlay["asset_id"].(string)
-				if ref, err := assetref.NewDeferredDrive(assetID); err == nil {
+				if strings.TrimSpace(driveFileID) == "" {
+					driveFileID, _ = overlay["asset_id"].(string)
+				}
+				if ref, err := assetref.NewDeferredDrive(strings.TrimSpace(driveFileID)); err == nil {
 					overlay["url"] = ref.Wire()
+					overlay["asset_id"] = ref.ID()
+					overlay["drive_file_id"] = ref.ID()
 				}
 			}
 			if rawURL, _ = overlay["url"].(string); rawURL != "" {
 				if ref, err := assetref.Parse(rawURL); err == nil && ref.Kind() == assetref.RefKindDeferredDrive {
 					overlay["asset_id"] = ref.ID()
+					overlay["drive_file_id"] = ref.ID()
 					overlay["url"] = ref.Wire()
+				} else if driveID, err := assetref.ParseDriveFileID(rawURL); err == nil {
+					if deferred, deferredErr := assetref.NewDeferredDrive(driveID.String()); deferredErr == nil {
+						overlay["asset_id"] = driveID.String()
+						overlay["drive_file_id"] = driveID.String()
+						overlay["url"] = deferred.Wire()
+					}
 				}
 			}
 		}

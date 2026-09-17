@@ -25,8 +25,8 @@ func validateSubmitOverlays(overlays []SubmitOverlay) []gin.H {
 			details = append(details, gin.H{"path": path + ".id", "issue": "duplicate"})
 		}
 		seen[id] = struct{}{}
-		if strings.TrimSpace(overlay.AssetID) == "" {
-			details = append(details, gin.H{"path": path + ".asset_id", "issue": "empty"})
+		if strings.TrimSpace(overlay.AssetID) == "" && strings.TrimSpace(overlay.DriveFileID) == "" {
+			details = append(details, gin.H{"path": path + ".asset_id", "issue": "asset_id_or_drive_file_id_required"})
 		}
 		if overlay.StartFrame < 0 {
 			details = append(details, gin.H{"path": path + ".start_frame", "issue": "out_of_range"})

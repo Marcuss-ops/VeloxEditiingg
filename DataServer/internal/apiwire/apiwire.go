@@ -387,15 +387,16 @@ type SubmitLayer struct {
 // SubmitOverlay is editorial intent. It is resolved into one video track
 // before Velox packet-copy; it is never sent as a native renderer layer.
 type SubmitOverlay struct {
-	ID         string `json:"id" validate:"required,max=128"`
-	AssetID    string `json:"asset_id" validate:"required,max=512"`
-	URL        string `json:"url,omitempty"`
-	SHA256     string `json:"sha256,omitempty"`
-	StartFrame int64  `json:"start_frame" validate:"gte=0"`
-	FrameCount int64  `json:"frame_count" validate:"required,gte=1"`
-	Mode       string `json:"mode" validate:"required,oneof=replace composite"`
-	ZIndex     int    `json:"z_index"`
-	AudioMode  string `json:"audio_mode" validate:"required,oneof=preserve_final_audio"`
+	ID          string `json:"id" validate:"required,max=128"`
+	AssetID     string `json:"asset_id,omitempty" validate:"omitempty,max=512"`
+	DriveFileID string `json:"drive_file_id,omitempty" validate:"omitempty,max=128"`
+	URL         string `json:"url,omitempty"`
+	SHA256      string `json:"sha256,omitempty"`
+	StartFrame  int64  `json:"start_frame" validate:"gte=0"`
+	FrameCount  int64  `json:"frame_count" validate:"required,gte=1"`
+	Mode        string `json:"mode" validate:"required,oneof=replace composite"`
+	ZIndex      int    `json:"z_index"`
+	AudioMode   string `json:"audio_mode" validate:"required,oneof=preserve_final_audio"`
 }
 
 // SubmitVisualReplacement is one already-composited video segment that

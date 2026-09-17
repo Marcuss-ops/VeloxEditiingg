@@ -122,6 +122,35 @@ func TestRewriteRemoteInputPayloadPassesExplicitDeferredDriveScheme(t *testing.T
 	}
 }
 
+func TestRewriteRemoteInputPayloadCanonicalizesTimedDriveOverlays(t *testing.T) {
+	payload := map[string]interface{}{
+		"overlays": []interface{}{map[string]interface{}{
+			"id":            "overlay-01",
+			"asset_id":      "drive-overlay-01",
+			"drive_file_id": "drive-overlay-01",
+			"url":           "https://drive.google.com/file/d/drive-overlay-01/view?usp=drive_link",
+			"start_frame":   int64(120),
+			"frame_count":   int64(120),
+			"mode":          "replace",
+			"audio_mode":    "preserve_final_audio",
+		}},
+	}
+	service := &AssetService{repo: &rewriteAssetRepository{assets: map[string]*AssetRecord{}}}
+	if err := service.RewriteRemoteInputPayload(context.Background(), payload); err != nil {
+		t.Fatalf("RewriteRemoteInputPayload: %v", err)
+	}
+	overlay := payload["overlays"].([]interface{})[0].(map[string]interface{})
+	if got := overlay["url"]; got != "velox-drive://drive-overlay-01" {
+		t.Fatalf("overlay url = %v, want canonical deferred Drive reference", got)
+	}
+	if got := overlay["drive_file_id"]; got != "drive-overlay-01" {
+		t.Fatalf("overlay drive_file_id = %v", got)
+	}
+	if got := overlay["start_frame"]; got != int64(120) {
+		t.Fatalf("overlay timing changed: %#v", overlay)
+	}
+}
+
 func TestRewriteRemoteInputPayloadRejectsUnregisteredCanonicalAsset(t *testing.T) {
 	payload := map[string]interface{}{
 		"scenes": []interface{}{
