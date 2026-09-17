@@ -121,8 +121,8 @@ Esempio: audio 336s, 3 scene → 112s per scena
 
 Nota: questo endpoint non genera immagini o voiceover in locale. Si aspetta che arrivino gia prodotti da un servizio upstream, dal computer creator, o gia presenti nel payload.
 Non fa partire la logica `generate-from-clips`.
-Il codice che lo implementa oggi vive in:
-- [`DataServer/internal/handlers/server/script/handler.go`](../DataServer/internal/handlers/server/script/handler.go)
+L’implementazione storica dell’handler è stata rimossa. Restano come
+riferimenti tecnici il builder di payload e il motore nativo:
 - [`DataServer/internal/jobs/enqueue/enqueue.go`](../DataServer/internal/jobs/enqueue/enqueue.go)
 - [`RemoteCodex/native/worker-agent-go/pkg/video/native_engine.go`](../RemoteCodex/native/worker-agent-go/pkg/video/native_engine.go)
 
