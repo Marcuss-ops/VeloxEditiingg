@@ -110,3 +110,19 @@ func TestParseOverlaysCanonicalizesDriveAuthoringReference(t *testing.T) {
 		t.Fatalf("canonical overlay asset = %+v", overlays[0])
 	}
 }
+
+func TestParseOverlaysPreservesAlreadyTypedValues(t *testing.T) {
+	input := []Overlay{{
+		ID: "typed-overlay", AssetID: "drive-typed", DriveFileID: "drive-typed",
+		URL: "velox-drive://drive-typed", StartFrame: 120, FrameCount: 120,
+		Mode: string(OverlayModeReplace), ZIndex: 10, AudioMode: OverlayAudioPreserveFinal,
+	}}
+
+	got, err := ParseOverlays(input)
+	if err != nil {
+		t.Fatalf("ParseOverlays: %v", err)
+	}
+	if len(got) != 1 || got[0] != input[0] {
+		t.Fatalf("typed overlays = %#v, want %#v", got, input)
+	}
+}

@@ -238,8 +238,11 @@ func ResolveOverlayTimeline(base []VideoSegmentV2, overlays []Overlay, fpsNum, f
 	return resolved, windows, nil
 }
 
-// ParseOverlays converts a JSON-decoded payload array into typed editorial
-// intent. It accepts both []interface{} and []map[string]interface{}.
+// ParseOverlays converts a payload array into typed editorial intent. It
+// accepts JSON-decoded values as well as an already typed []Overlay. The
+// latter is important at the resolver boundary: the remoteengine adapter
+// canonicalizes authoring values before enqueue builds the V2 payload, so a
+// second parse must not silently discard those overlays.
 func ParseOverlays(raw any) ([]Overlay, error) {
 	if raw == nil {
 		return nil, nil
@@ -252,6 +255,22 @@ func ParseOverlays(raw any) ([]Overlay, error) {
 		items = make([]interface{}, len(v))
 		for i := range v {
 			items[i] = v[i]
+		}
+	case []Overlay:
+		items = make([]interface{}, len(v))
+		for i := range v {
+			items[i] = map[string]interface{}{
+				"id":            v[i].ID,
+				"asset_id":      v[i].AssetID,
+				"drive_file_id": v[i].DriveFileID,
+				"url":           v[i].URL,
+				"sha256":        v[i].SHA256,
+				"start_frame":   v[i].StartFrame,
+				"frame_count":   v[i].FrameCount,
+				"mode":          v[i].Mode,
+				"z_index":       v[i].ZIndex,
+				"audio_mode":    v[i].AudioMode,
+			}
 		}
 	default:
 		return nil, fmt.Errorf("overlays: must be an array, got %T", raw)
