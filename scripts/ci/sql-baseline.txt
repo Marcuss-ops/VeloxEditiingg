@@ -38,7 +38,6 @@
 1 DataServer/internal/handlers/server/pipeline/m2m_audit.go
 1 DataServer/internal/handlers/server/pipeline/pipeline_run_actions.go
 1 DataServer/internal/handlers/server/pipeline/pipeline_run_status.go
-1 DataServer/internal/handlers/server/script/handler.go
 18 DataServer/internal/invariants/audit.go
 15 DataServer/internal/m2mkeys/m2mkeys.go
 6 DataServer/internal/m2mkeys/m2mkeys_audit.go

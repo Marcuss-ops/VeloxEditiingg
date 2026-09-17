@@ -36,7 +36,7 @@ Entrambi gli endpoint sono protetti da **admin token** (header `Authorization: B
 Client → POST /api/script/generate-with-images
   │
   ▼
-Server (internal/handlers/server/script/handler.go)
+Master (legacy handler removed; canonical intake is documented above)
   │  • Normalizza scene/immagini gia presenti nel payload
   │  • Rileva durata audio (ffprobe) SE non specificata
   │  • Distribuisce durata equamente tra le scene
