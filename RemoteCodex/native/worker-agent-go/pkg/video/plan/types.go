@@ -14,7 +14,11 @@ type RenderPlan struct {
 	// timelines. Unlike CopyOnly, it resolves each source against the
 	// canonical profile at render time and rejects incompatible media rather
 	// than silently re-encoding it.
-	Mixed                   bool            `json:"mixed,omitempty"`
+	Mixed bool `json:"mixed,omitempty"`
+	// RequiresEditorialRender explicitly selects the re-encoding path for
+	// timelines containing replace overlays whose source media is not already
+	// packet-compatible with the base video profile.
+	RequiresEditorialRender bool            `json:"requires_editorial_render,omitempty"`
 	WatermarkAlreadyApplied bool            `json:"watermark_already_applied,omitempty"`
 	WatermarkRequested      bool            `json:"watermark_requested,omitempty"`
 	Timeline                []TimelineItem  `json:"timeline"`

@@ -99,6 +99,10 @@ struct RenderPlan {
     // packet-copy compatible up front; mixed resolves per-segment against
     // the canonical profile at render time.
     bool mixed{false};
+    // Explicit editorial path for replace overlays whose source media is not
+    // packet-compatible with the base timeline. This is intentionally
+    // separate from mixed so the renderer never silently falls back.
+    bool requires_editorial_render{false};
     // Output profile identity. The final mux derives its container layout
     // from this ID; source assets keep their stream profile identity.
     std::string output_profile_id;

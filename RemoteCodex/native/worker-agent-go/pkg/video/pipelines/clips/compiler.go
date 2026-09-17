@@ -116,11 +116,11 @@ func Compile(ctx context.Context, jobID string, input map[string]interface{}, ou
 
 // applyOverlayIntent is the worker-side bridge for legacy clips.v1 jobs. A
 // replace overlay is converted to one contiguous editorial timeline using
-// the shared frame resolver. The supplied overlay contract represents still
-// images; those segments are rendered by the image-capable editorial path,
-// while the surrounding stock/clip timeline remains intact. Composite intent
-// is never forwarded as native layers: it must be prepared by Chronon and
-// arrive as certified V2 prepared_video_fragment assets.
+// the shared frame resolver. Overlay media remains a video source in the
+// worker plan; the explicit editorial flag selects the re-encoding path when
+// it is not packet-compatible with the surrounding stock/clip timeline.
+// Composite intent is never forwarded as native layers: it must be prepared
+// by Chronon and arrive as certified V2 prepared_video_fragment assets.
 func applyOverlayIntent(renderPlan *plan.RenderPlan, input map[string]interface{}) (*plan.RenderPlan, error) {
 	if renderPlan == nil {
 		return nil, fmt.Errorf("clips.v1: nil render plan")
@@ -138,7 +138,6 @@ func applyOverlayIntent(renderPlan *plan.RenderPlan, input map[string]interface{
 	renderPlan.Canvas.Fps = overlayFPS
 	base := make([]contract.VideoSegmentV2, 0, len(renderPlan.Timeline))
 	baseURLs := make(map[string]string, len(renderPlan.Timeline))
-	overlayAssetIDs := make(map[string]struct{}, len(overlays))
 	var cursor int64
 	for index, item := range renderPlan.Timeline {
 		if item.Source.Type != "video" || strings.TrimSpace(item.Source.URL) == "" {
@@ -174,7 +173,6 @@ func applyOverlayIntent(renderPlan *plan.RenderPlan, input map[string]interface{
 			return nil, fmt.Errorf("clips.v1: overlay %q has no resolvable URL", overlay.ID)
 		}
 		baseURLs[overlay.AssetID] = url
-		overlayAssetIDs[overlay.AssetID] = struct{}{}
 	}
 	resolved, _, err := contract.ResolveOverlayTimeline(base, overlays, overlayFPS, 1)
 	if err != nil {
@@ -186,23 +184,20 @@ func applyOverlayIntent(renderPlan *plan.RenderPlan, input map[string]interface{
 		if url == "" {
 			return nil, fmt.Errorf("clips.v1: overlay asset %q was not resolved", segment.AssetID)
 		}
-		sourceType := "video"
-		if _, ok := overlayAssetIDs[segment.AssetID]; ok {
-			sourceType = "image"
-		}
 		timeline = append(timeline, plan.TimelineItem{
-			Source:          plan.MediaSource{Type: sourceType, URL: url},
+			Source:          plan.MediaSource{Type: "video", URL: url},
 			DurationSeconds: float64(segment.FrameCount) / float64(overlayFPS),
 			IncludeAudio:    false, SourceInUS: segment.SourceInUS, SourceDurationUS: segment.SourceDurationUS,
 		})
 	}
 	renderPlan.Timeline = timeline
 	if hasReplaceOverlay {
-		// Image replacements require the image-capable editorial renderer. Do
-		// not send them to copy_only or mixed packet muxing: PNG/JPEG source
-		// streams are not packet-compatible with the H.264 base timeline.
+		// Replace overlays are editorial media. Their source profile may differ
+		// from the H.264 base timeline, so select the explicit re-encoding path
+		// instead of sending them to copy_only or mixed packet muxing.
 		renderPlan.CopyOnly = false
 		renderPlan.Mixed = false
+		renderPlan.RequiresEditorialRender = true
 	}
 	return renderPlan, nil
 }

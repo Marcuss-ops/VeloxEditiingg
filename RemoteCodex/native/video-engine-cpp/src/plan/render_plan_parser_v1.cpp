@@ -17,6 +17,8 @@ std::optional<RenderPlan> parseRenderPlanV1(
     plan.watermark_already_applied = ju::extractJsonBoolValue(jsonStr, "watermark_already_applied", false);
     plan.watermark_requested = ju::extractJsonBoolValue(jsonStr, "watermark_requested", false);
     plan.mixed = ju::extractJsonBoolValue(jsonStr, "mixed", false);
+    plan.requires_editorial_render = ju::extractJsonBoolValue(
+        jsonStr, "requires_editorial_render", false);
 
     // Compositing is owned by Chronon (GPU, headless lambda), permanently.
     // This native renderer deliberately ships NO frame compositor and no

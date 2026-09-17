@@ -83,16 +83,16 @@ RenderResult RenderEngine::render(const plan::RenderPlan& plan) {
 
     // A video timeline without an explicit packet renderer used to fall
     // through to renderLegacyTimeline(), which silently re-encoded every
-    // segment. That remains forbidden for plain video plans. An editorial
-    // timeline containing still-image replacements is the explicit exception:
-    // image assets need the image-capable renderer to produce canonical video
-    // frames before the final timeline concat.
+    // segment. That remains forbidden for plain video plans. An explicit
+    // editorial overlay plan is the exception: replace media is rendered to
+    // canonical video frames before the final timeline concat.
     const bool hasImageTimeline = std::any_of(
         plan.timeline.begin(), plan.timeline.end(), [](const auto& item) {
             return std::holds_alternative<plan::ImageSource>(item.source);
         });
     for (const auto& item : plan.timeline) {
-        if (std::holds_alternative<plan::VideoSource>(item.source) && !hasImageTimeline) {
+        if (std::holds_alternative<plan::VideoSource>(item.source) &&
+            !hasImageTimeline && !plan.requires_editorial_render) {
             result.error = "video_renderer_mode_required: video timeline requires an explicit "
                            "copy_only or mixed renderer";
             return failRender("video_renderer_mode_required");
