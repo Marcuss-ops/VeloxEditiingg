@@ -115,10 +115,12 @@ func Compile(ctx context.Context, jobID string, input map[string]interface{}, ou
 }
 
 // applyOverlayIntent is the worker-side bridge for legacy clips.v1 jobs. A
-// replace overlay is converted to one contiguous packet timeline using the
-// shared frame resolver. Composite intent is never forwarded as native
-// layers: it must be prepared by Chronon and arrive as certified V2
-// prepared_video_fragment assets.
+// replace overlay is converted to one contiguous editorial timeline using
+// the shared frame resolver. The supplied overlay contract represents still
+// images; those segments are rendered by the image-capable editorial path,
+// while the surrounding stock/clip timeline remains intact. Composite intent
+// is never forwarded as native layers: it must be prepared by Chronon and
+// arrive as certified V2 prepared_video_fragment assets.
 func applyOverlayIntent(renderPlan *plan.RenderPlan, input map[string]interface{}) (*plan.RenderPlan, error) {
 	if renderPlan == nil {
 		return nil, fmt.Errorf("clips.v1: nil render plan")
@@ -155,10 +157,12 @@ func applyOverlayIntent(renderPlan *plan.RenderPlan, input map[string]interface{
 	} else if len(windows) > 0 {
 		return nil, fmt.Errorf("clips.v1: composite overlays require Chronon prepared fragments (%d windows); native Velox layers are unsupported", len(windows))
 	}
+	hasReplaceOverlay := false
 	for _, overlay := range overlays {
 		if overlay.Mode != string(contract.OverlayModeReplace) {
 			continue
 		}
+		hasReplaceOverlay = true
 		url := strings.TrimSpace(overlay.URL)
 		if url == "" {
 			if ref, refErr := assetref.NewDeferredDrive(overlay.AssetID); refErr == nil {
@@ -181,12 +185,19 @@ func applyOverlayIntent(renderPlan *plan.RenderPlan, input map[string]interface{
 			return nil, fmt.Errorf("clips.v1: overlay asset %q was not resolved", segment.AssetID)
 		}
 		timeline = append(timeline, plan.TimelineItem{
-			Source:          plan.MediaSource{Type: "video", URL: url},
+			Source:          plan.MediaSource{Type: "image", URL: url},
 			DurationSeconds: float64(segment.FrameCount) / float64(overlayFPS),
 			IncludeAudio:    false, SourceInUS: segment.SourceInUS, SourceDurationUS: segment.SourceDurationUS,
 		})
 	}
 	renderPlan.Timeline = timeline
+	if hasReplaceOverlay {
+		// Image replacements require the image-capable editorial renderer. Do
+		// not send them to copy_only or mixed packet muxing: PNG/JPEG source
+		// streams are not packet-compatible with the H.264 base timeline.
+		renderPlan.CopyOnly = false
+		renderPlan.Mixed = false
+	}
 	return renderPlan, nil
 }
 

@@ -36,7 +36,7 @@ func TestCompileReplaceOverlaySplitsSourceWindowWithoutResettingBase(t *testing.
 		"copy_only": true,
 		"clips":     []interface{}{map[string]interface{}{"url": "base.mp4", "duration": 40.0}},
 		"overlays": []interface{}{map[string]interface{}{
-			"id": "overlay-1", "asset_id": "overlay-asset", "url": "overlay.mp4",
+			"id": "overlay-1", "asset_id": "overlay-asset", "url": "overlay.png",
 			"start_frame": 120, "frame_count": 120, "mode": "replace",
 			"z_index": 10, "audio_mode": "preserve_final_audio",
 		}},
@@ -51,8 +51,11 @@ func TestCompileReplaceOverlaySplitsSourceWindowWithoutResettingBase(t *testing.
 	if got.Timeline[0].Source.URL != "base.mp4" || got.Timeline[0].SourceDurationUS != 5_000_000 || got.Timeline[0].SourceInUS != 0 {
 		t.Fatalf("prefix = %+v", got.Timeline[0])
 	}
-	if got.Timeline[1].Source.URL != "overlay.mp4" || got.Timeline[1].DurationSeconds != 5 || got.Timeline[1].SourceInUS != 0 {
+	if got.Timeline[1].Source.URL != "overlay.png" || got.Timeline[1].Source.Type != "image" || got.Timeline[1].DurationSeconds != 5 || got.Timeline[1].SourceInUS != 0 {
 		t.Fatalf("overlay = %+v", got.Timeline[1])
+	}
+	if got.CopyOnly || got.Mixed {
+		t.Fatalf("image overlay must use the editorial renderer: copy_only=%v mixed=%v", got.CopyOnly, got.Mixed)
 	}
 	if got.Timeline[2].Source.URL != "base.mp4" || got.Timeline[2].SourceInUS != 10_000_000 || got.Timeline[2].SourceDurationUS != 30_000_000 {
 		t.Fatalf("suffix = %+v", got.Timeline[2])
@@ -64,7 +67,7 @@ func TestCompileCompositeOverlayNeverFallsIntoNativeLayers(t *testing.T) {
 		"copy_only": true,
 		"clips":     []interface{}{map[string]interface{}{"url": "base.mp4", "duration": 40.0}},
 		"overlays": []interface{}{map[string]interface{}{
-			"id": "overlay-1", "asset_id": "overlay-asset", "url": "overlay.mp4",
+			"id": "overlay-1", "asset_id": "overlay-asset", "url": "overlay.png",
 			"start_frame": 120, "frame_count": 120, "mode": "composite",
 			"z_index": 10, "audio_mode": "preserve_final_audio",
 		}},
@@ -169,7 +172,7 @@ func TestCompileSceneTimelineAppliesReplaceOverlays(t *testing.T) {
 	input := map[string]interface{}{
 		"scenes_json": `[{"scene_id":"intro","duration_seconds":19,"clip":{"url":"intro.mp4","duration_ms":19000}},{"scene_id":"stock","duration_seconds":41,"stock":[{"url":"stock.mp4","duration_ms":41000}],"voiceover":{"url":"voice.mp3","duration_ms":41000}}]`,
 		"overlays": []interface{}{map[string]interface{}{
-			"id": "overlay-1", "asset_id": "overlay-asset", "url": "overlay.mp4",
+			"id": "overlay-1", "asset_id": "overlay-asset", "url": "overlay.png",
 			"start_frame": 24, "frame_count": 120, "mode": "replace",
 			"z_index": 10, "audio_mode": "preserve_final_audio",
 		}},
@@ -182,8 +185,11 @@ func TestCompileSceneTimelineAppliesReplaceOverlays(t *testing.T) {
 	if len(got.Timeline) != 4 {
 		t.Fatalf("timeline segments = %d, want intro prefix, overlay, intro suffix and stock", len(got.Timeline))
 	}
-	if got.Timeline[1].Source.URL != "overlay.mp4" || got.Timeline[1].DurationSeconds != 5 {
+	if got.Timeline[1].Source.URL != "overlay.png" || got.Timeline[1].Source.Type != "image" || got.Timeline[1].DurationSeconds != 5 {
 		t.Fatalf("overlay segment = %+v", got.Timeline[1])
+	}
+	if got.Mixed {
+		t.Fatal("image replacement must not use the packet-only mixed renderer")
 	}
 }
 
