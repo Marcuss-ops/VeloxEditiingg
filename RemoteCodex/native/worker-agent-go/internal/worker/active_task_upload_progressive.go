@@ -54,6 +54,21 @@ func uploadWithGrowingProgress(ctx context.Context, transport publisher.Transpor
 		_ = session.Abort(ctx)
 		return nil, err
 	}
+	var muxToOpenUS int64
+	if !progress.FirstProgressAt.IsZero() {
+		muxToOpenUS = time.Since(progress.FirstProgressAt).Microseconds()
+		if muxToOpenUS < 0 {
+			muxToOpenUS = 0
+		}
+	}
+	result.Breakdown.MuxToOpenUS = muxToOpenUS
+	telemetry.GetPrometheusMetrics().RecordProgressiveUploadTiming(
+		time.Duration(result.Breakdown.FirstPartStartedMS)*time.Millisecond,
+		result.Breakdown.PartsUploadedBeforeRenderEnd,
+		result.Breakdown.BytesUploadedBeforeRenderEnd,
+		time.Duration(result.Breakdown.OverlapMS)*time.Millisecond,
+	)
+	telemetry.GetPrometheusMetrics().RecordMuxToOpenUS(muxToOpenUS)
 	return result, nil
 }
 

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"velox-shared/contract"
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
 	"velox-worker-agent/internal/publisher"
@@ -247,12 +248,29 @@ func (w *Worker) registerEarlyUpload(ctx context.Context, pte *PendingTaskExecut
 	// finalize before an intent sent from the first write callback can make
 	// the round trip through the Master. Executor IDs are versioned on the
 	// wire (for example, video.assemble.copy.v1@1), so accept both the
-	// canonical ID and its versioned form. The upload itself still waits for
-	// a positive safe offset from the native append-only sink.
-	if pte.ExecutorID == "video.assemble.copy.v1" || strings.HasPrefix(pte.ExecutorID, "video.assemble.copy.v1@") {
+	// canonical ID and its versioned form. Do not negotiate an early session
+	// for the ordinary progressive MP4 profile: that output is seekable and
+	// has no safe prefix until the trailer is complete, so such a session
+	// would be an abandoned server-side upload rather than useful overlap.
+	if earlyUploadEligible(pte) {
 		s.intentOnce.Do(s.sendIntent)
 	}
 	return s
+}
+
+// earlyUploadEligible is the single admission check for pre-render artifact
+// publication. The native sink exposes a positive safe offset only for the
+// append-only fMP4 profile; the plan identity is therefore the authoritative
+// signal, not the executor name alone.
+func earlyUploadEligible(pte *PendingTaskExecution) bool {
+	if pte == nil || (pte.ExecutorID != "video.assemble.copy.v1" && !strings.HasPrefix(pte.ExecutorID, "video.assemble.copy.v1@")) {
+		return false
+	}
+	plan, err := contract.DecodeCompiledRenderPlanV2Payload(pte.Spec.Payload)
+	if err != nil || plan == nil {
+		return false
+	}
+	return plan.Output.ProfileID == contract.CanonicalVideoProfileFMP4StreamV1
 }
 
 func (w *Worker) unregisterEarlyUpload(taskID string) {
