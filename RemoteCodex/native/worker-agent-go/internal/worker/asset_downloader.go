@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"velox-shared/assetref"
@@ -37,6 +38,16 @@ func (w *Worker) downloadVeloxAssetWithMetadata(ctx context.Context, assetID, ex
 
 	jobID, role := telemetry.CacheAccessContextFromContext(ctx)
 	sourceURI := w.sourceLocator(assetID)
+	cacheKey := assetref.AssetKey(assetID)
+	if expectedSHA256 == "" {
+		if remembered, ok := w.rememberedAssetIntegrity(assetID); ok {
+			expectedSHA256 = remembered.SHA256
+			expectedSizeBytes = remembered.SizeBytes
+			cacheKey = assetref.AssetKey("sha256:" + strings.TrimPrefix(strings.ToLower(remembered.SHA256), "sha256:"))
+		}
+	} else {
+		cacheKey = assetref.AssetKey("sha256:" + strings.TrimPrefix(strings.ToLower(expectedSHA256), "sha256:"))
+	}
 	sourceKind := "master_asset_bridge"
 	if sourceURI != "" {
 		sourceKind = "worker_direct_source"
@@ -52,7 +63,7 @@ func (w *Worker) downloadVeloxAssetWithMetadata(ctx context.Context, assetID, ex
 		JobID:     jobID,
 		TaskID:    taskID,
 		WorkerID:  w.config.WorkerID,
-		AssetKey:  assetref.AssetKey(assetID),
+		AssetKey:  cacheKey,
 		AssetID:   assetID,
 		Role:      downloader.RoleFromString(role),
 		SHA256:    assetref.ContentHash(expectedSHA256),
@@ -69,7 +80,7 @@ func (w *Worker) downloadVeloxAssetWithMetadata(ctx context.Context, assetID, ex
 		w.UpdateOperationalPhase(taskID, PhasePrefetching)
 	}
 	if w.prefetchScheduler != nil {
-		w.prefetchScheduler.MarkForegroundUse(assetref.AssetKey(assetID))
+		w.prefetchScheduler.MarkForegroundUse(cacheKey)
 	}
 
 	completed := time.Now().UTC()

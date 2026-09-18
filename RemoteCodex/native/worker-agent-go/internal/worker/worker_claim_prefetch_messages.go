@@ -22,13 +22,28 @@ func (w *Worker) handleFutureAssetPlanMessage(ctx context.Context, msg controltr
 		w.logger.Warn("[PREFETCH] rejected invalid FutureAssetPlan: %v", err)
 		return
 	}
-	for _, job := range plan.PrefetchJobs {
+	for _, job := range append(append([]futureasset.Job(nil), plan.PrefetchJobs...), plan.DeferredJobs...) {
 		for _, asset := range job.Assets {
 			if asset.AssetID != "" && asset.SourceURI != "" {
 				w.rememberSourceLocator(asset.AssetID, asset.SourceURI)
 			}
 		}
 	}
+	if len(plan.DeferredJobs) > 0 {
+		go func(sourcePlan futureasset.Plan) {
+			hydrated, hydrateErr := w.hydrateDeferredFutureAssetPlan(context.WithoutCancel(ctx), sourcePlan)
+			if hydrateErr != nil {
+				w.logger.Warn("[PREFETCH] deferred source hydration failed plan=%s: %v", sourcePlan.PlanID, hydrateErr)
+				return
+			}
+			w.applyFutureAssetPlan(context.WithoutCancel(ctx), hydrated)
+		}(plan)
+		return
+	}
+	w.applyFutureAssetPlan(ctx, plan)
+}
+
+func (w *Worker) applyFutureAssetPlan(ctx context.Context, plan futureasset.Plan) {
 	w.futureAssetScheduler().RecordPlanEvent("future_plan_received", plan.Version, plan.PlanID)
 	for _, job := range plan.PrefetchJobs {
 		job := job

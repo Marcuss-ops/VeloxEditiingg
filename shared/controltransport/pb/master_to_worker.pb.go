@@ -963,19 +963,20 @@ func (*Ping) Descriptor() ([]byte, []int) {
 // retention protection (lookahead <= 10). No TaskState is changed by this
 // message.
 type FutureAssetPlan struct {
-	state               protoimpl.MessageState  `protogen:"open.v1"`
-	Version             uint64                  `protobuf:"varint,1,opt,name=version,proto3" json:"version,omitempty"`
-	PlanId              string                  `protobuf:"bytes,2,opt,name=plan_id,json=planId,proto3" json:"plan_id,omitempty"`
-	WorkerId            string                  `protobuf:"bytes,3,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
-	GeneratedAt         *timestamppb.Timestamp  `protobuf:"bytes,4,opt,name=generated_at,json=generatedAt,proto3" json:"generated_at,omitempty"`
-	ExpiresAt           *timestamppb.Timestamp  `protobuf:"bytes,5,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
-	CurrentJobId        string                  `protobuf:"bytes,6,opt,name=current_job_id,json=currentJobId,proto3" json:"current_job_id,omitempty"`
-	PrefetchJobs        []*PrefetchJob          `protobuf:"bytes,7,rep,name=prefetch_jobs,json=prefetchJobs,proto3" json:"prefetch_jobs,omitempty"`
-	ProtectAssets       []*ProtectedFutureAsset `protobuf:"bytes,8,rep,name=protect_assets,json=protectAssets,proto3" json:"protect_assets,omitempty"`
-	PrefetchHorizon     int32                   `protobuf:"varint,9,opt,name=prefetch_horizon,json=prefetchHorizon,proto3" json:"prefetch_horizon,omitempty"`
-	ProtectionLookahead int32                   `protobuf:"varint,10,opt,name=protection_lookahead,json=protectionLookahead,proto3" json:"protection_lookahead,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	state                protoimpl.MessageState  `protogen:"open.v1"`
+	Version              uint64                  `protobuf:"varint,1,opt,name=version,proto3" json:"version,omitempty"`
+	PlanId               string                  `protobuf:"bytes,2,opt,name=plan_id,json=planId,proto3" json:"plan_id,omitempty"`
+	WorkerId             string                  `protobuf:"bytes,3,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
+	GeneratedAt          *timestamppb.Timestamp  `protobuf:"bytes,4,opt,name=generated_at,json=generatedAt,proto3" json:"generated_at,omitempty"`
+	ExpiresAt            *timestamppb.Timestamp  `protobuf:"bytes,5,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	CurrentJobId         string                  `protobuf:"bytes,6,opt,name=current_job_id,json=currentJobId,proto3" json:"current_job_id,omitempty"`
+	PrefetchJobs         []*PrefetchJob          `protobuf:"bytes,7,rep,name=prefetch_jobs,json=prefetchJobs,proto3" json:"prefetch_jobs,omitempty"`
+	ProtectAssets        []*ProtectedFutureAsset `protobuf:"bytes,8,rep,name=protect_assets,json=protectAssets,proto3" json:"protect_assets,omitempty"`
+	PrefetchHorizon      int32                   `protobuf:"varint,9,opt,name=prefetch_horizon,json=prefetchHorizon,proto3" json:"prefetch_horizon,omitempty"`
+	ProtectionLookahead  int32                   `protobuf:"varint,10,opt,name=protection_lookahead,json=protectionLookahead,proto3" json:"protection_lookahead,omitempty"`
+	DeferredPrefetchJobs []*PrefetchJob          `protobuf:"bytes,11,rep,name=deferred_prefetch_jobs,json=deferredPrefetchJobs,proto3" json:"deferred_prefetch_jobs,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *FutureAssetPlan) Reset() {
@@ -1076,6 +1077,13 @@ func (x *FutureAssetPlan) GetProtectionLookahead() int32 {
 		return x.ProtectionLookahead
 	}
 	return 0
+}
+
+func (x *FutureAssetPlan) GetDeferredPrefetchJobs() []*PrefetchJob {
+	if x != nil {
+		return x.DeferredPrefetchJobs
+	}
+	return nil
 }
 
 type PrefetchJob struct {
@@ -1460,7 +1468,7 @@ const file_velox_control_master_to_worker_proto_rawDesc = "" +
 	"\fLeaseRevoked\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\"\x06\n" +
-	"\x04Ping\"\xec\x03\n" +
+	"\x04Ping\"\xbe\x04\n" +
 	"\x0fFutureAssetPlan\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\x04R\aversion\x12\x17\n" +
 	"\aplan_id\x18\x02 \x01(\tR\x06planId\x12\x1b\n" +
@@ -1473,7 +1481,8 @@ const file_velox_control_master_to_worker_proto_rawDesc = "" +
 	"\x0eprotect_assets\x18\b \x03(\v2#.velox.control.ProtectedFutureAssetR\rprotectAssets\x12)\n" +
 	"\x10prefetch_horizon\x18\t \x01(\x05R\x0fprefetchHorizon\x121\n" +
 	"\x14protection_lookahead\x18\n" +
-	" \x01(\x05R\x13protectionLookahead\"\xdb\x01\n" +
+	" \x01(\x05R\x13protectionLookahead\x12P\n" +
+	"\x16deferred_prefetch_jobs\x18\v \x03(\v2\x1a.velox.control.PrefetchJobR\x14deferredPrefetchJobs\"\xdb\x01\n" +
 	"\vPrefetchJob\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x17\n" +
 	"\atask_id\x18\x02 \x01(\tR\x06taskId\x12%\n" +
@@ -1565,12 +1574,13 @@ var file_velox_control_master_to_worker_proto_depIdxs = []int32{
 	15, // 24: velox.control.FutureAssetPlan.expires_at:type_name -> google.protobuf.Timestamp
 	11, // 25: velox.control.FutureAssetPlan.prefetch_jobs:type_name -> velox.control.PrefetchJob
 	13, // 26: velox.control.FutureAssetPlan.protect_assets:type_name -> velox.control.ProtectedFutureAsset
-	12, // 27: velox.control.PrefetchJob.assets:type_name -> velox.control.PrefetchAsset
-	28, // [28:28] is the sub-list for method output_type
-	28, // [28:28] is the sub-list for method input_type
-	28, // [28:28] is the sub-list for extension type_name
-	28, // [28:28] is the sub-list for extension extendee
-	0,  // [0:28] is the sub-list for field type_name
+	11, // 27: velox.control.FutureAssetPlan.deferred_prefetch_jobs:type_name -> velox.control.PrefetchJob
+	12, // 28: velox.control.PrefetchJob.assets:type_name -> velox.control.PrefetchAsset
+	29, // [29:29] is the sub-list for method output_type
+	29, // [29:29] is the sub-list for method input_type
+	29, // [29:29] is the sub-list for extension type_name
+	29, // [29:29] is the sub-list for extension extendee
+	0,  // [0:29] is the sub-list for field type_name
 }
 
 func init() { file_velox_control_master_to_worker_proto_init() }

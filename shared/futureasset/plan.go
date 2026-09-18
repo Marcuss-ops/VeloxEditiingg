@@ -87,6 +87,10 @@ type Plan struct {
 	ExpiresAt    time.Time
 	CurrentJob   string
 	PrefetchJobs []Job
+	// DeferredJobs are source-only jobs carried over the control plane for
+	// worker-side hydration. They never reach the scheduler until every
+	// asset has a verified SHA-256 and size.
+	DeferredJobs []Job
 	Protect      []ProtectedAsset
 	Limits       Limits
 }
@@ -128,6 +132,7 @@ func Build(in PlannerInput) (Plan, error) {
 		Version: in.Version, PlanID: strings.TrimSpace(in.PlanID), WorkerID: strings.TrimSpace(in.WorkerID),
 		GeneratedAt: in.GeneratedAt, ExpiresAt: in.ExpiresAt, CurrentJob: in.CurrentJob,
 		PrefetchJobs: make([]Job, 0, min(len(in.FutureJobs), DefaultPrefetchHorizon)),
+		DeferredJobs: make([]Job, 0, min(len(in.FutureJobs), DefaultPrefetchHorizon)),
 		Protect:      make([]ProtectedAsset, 0),
 		Limits:       limits,
 	}
@@ -170,15 +175,23 @@ func Build(in PlannerInput) (Plan, error) {
 			if job.ReservationID == "" {
 				return Plan{}, fmt.Errorf("futureasset: prefetch job %q requires reservation_id", job.JobID)
 			}
+			deferred := false
 			for _, asset := range job.Assets {
-				if (asset.SHA256 == "" && asset.SourceURI == "") || asset.SizeBytes <= 0 {
+				if asset.SizeBytes <= 0 {
 					return Plan{}, fmt.Errorf("futureasset: prefetch asset %q in job %q lacks sha256/size", asset.AssetKey, job.JobID)
 				}
-				if asset.SHA256 == "" && strings.TrimSpace(asset.SourceURI) == "" {
-					return Plan{}, fmt.Errorf("futureasset: deferred asset %q in job %q lacks source_uri", asset.AssetKey, job.JobID)
+				if asset.SHA256 == "" {
+					if strings.TrimSpace(asset.SourceURI) == "" {
+						return Plan{}, fmt.Errorf("futureasset: deferred asset %q in job %q lacks source_uri", asset.AssetKey, job.JobID)
+					}
+					deferred = true
 				}
 			}
-			plan.PrefetchJobs = append(plan.PrefetchJobs, job)
+			if deferred {
+				plan.DeferredJobs = append(plan.DeferredJobs, job)
+			} else {
+				plan.PrefetchJobs = append(plan.PrefetchJobs, job)
+			}
 		}
 	}
 
@@ -220,12 +233,12 @@ func (p Plan) Validate() error {
 		return fmt.Errorf("futureasset: invalid plan timestamps")
 	}
 	limits := p.Limits.withDefaults()
-	if len(p.PrefetchJobs) > limits.PrefetchHorizon {
+	if len(p.PrefetchJobs)+len(p.DeferredJobs) > limits.PrefetchHorizon {
 		return fmt.Errorf("futureasset: prefetch horizon exceeds %d", limits.PrefetchHorizon)
 	}
 	seenJobs := make(map[string]struct{}, len(p.PrefetchJobs))
-	for i, job := range p.PrefetchJobs {
-		if job.Distance != i+1 || job.Distance > limits.PrefetchHorizon || job.ReservationID == "" {
+	for _, job := range p.PrefetchJobs {
+		if job.Distance <= 0 || job.Distance > limits.PrefetchHorizon || job.ReservationID == "" {
 			return fmt.Errorf("futureasset: prefetch job %q has invalid distance/reservation", job.JobID)
 		}
 		if job.JobID == "" || job.TaskID == "" {
@@ -237,11 +250,30 @@ func (p Plan) Validate() error {
 		seenJobs[job.JobID] = struct{}{}
 		seenAssets := make(map[string]struct{}, len(job.Assets))
 		for _, asset := range job.Assets {
-			if asset.AssetKey == "" || asset.SizeBytes <= 0 || (asset.SHA256 == "" && strings.TrimSpace(asset.SourceURI) == "") {
+			if asset.AssetKey == "" || asset.SizeBytes <= 0 || asset.SHA256 == "" {
 				return fmt.Errorf("futureasset: prefetch job %q contains incomplete manifest", job.JobID)
 			}
 			if _, exists := seenAssets[asset.AssetKey]; exists {
 				return fmt.Errorf("futureasset: duplicate asset %q in job %q", asset.AssetKey, job.JobID)
+			}
+			seenAssets[asset.AssetKey] = struct{}{}
+		}
+	}
+	for _, job := range p.DeferredJobs {
+		if job.JobID == "" || job.TaskID == "" || job.ReservationID == "" || job.Distance <= 0 || job.Distance > limits.PrefetchHorizon {
+			return fmt.Errorf("futureasset: deferred job %q has invalid distance/reservation", job.JobID)
+		}
+		if _, exists := seenJobs[job.JobID]; exists {
+			return fmt.Errorf("futureasset: duplicate deferred job %q", job.JobID)
+		}
+		seenJobs[job.JobID] = struct{}{}
+		seenAssets := make(map[string]struct{}, len(job.Assets))
+		for _, asset := range job.Assets {
+			if asset.AssetKey == "" || asset.AssetID == "" || asset.SizeBytes <= 0 || strings.TrimSpace(asset.SourceURI) == "" {
+				return fmt.Errorf("futureasset: deferred job %q contains incomplete source manifest", job.JobID)
+			}
+			if _, exists := seenAssets[asset.AssetKey]; exists {
+				return fmt.Errorf("futureasset: duplicate deferred asset %q in job %q", asset.AssetKey, job.JobID)
 			}
 			seenAssets[asset.AssetKey] = struct{}{}
 		}
@@ -264,11 +296,12 @@ func (p Plan) ToProto() *pb.FutureAssetPlan {
 	out := &pb.FutureAssetPlan{
 		Version: p.Version, PlanId: p.PlanID, WorkerId: p.WorkerID,
 		GeneratedAt: timestamppb.New(p.GeneratedAt), ExpiresAt: timestamppb.New(p.ExpiresAt),
-		CurrentJobId:        p.CurrentJob,
-		PrefetchJobs:        make([]*pb.PrefetchJob, 0, len(p.PrefetchJobs)),
-		ProtectAssets:       make([]*pb.ProtectedFutureAsset, 0, len(p.Protect)),
-		PrefetchHorizon:     int32(p.Limits.withDefaults().PrefetchHorizon),
-		ProtectionLookahead: int32(p.Limits.withDefaults().ProtectionLookahead),
+		CurrentJobId:         p.CurrentJob,
+		PrefetchJobs:         make([]*pb.PrefetchJob, 0, len(p.PrefetchJobs)),
+		DeferredPrefetchJobs: make([]*pb.PrefetchJob, 0, len(p.DeferredJobs)),
+		ProtectAssets:        make([]*pb.ProtectedFutureAsset, 0, len(p.Protect)),
+		PrefetchHorizon:      int32(p.Limits.withDefaults().PrefetchHorizon),
+		ProtectionLookahead:  int32(p.Limits.withDefaults().ProtectionLookahead),
 	}
 	for _, job := range p.PrefetchJobs {
 		wireJob := &pb.PrefetchJob{JobId: job.JobID, TaskId: job.TaskID, ReservationId: job.ReservationID, TaskRevision: int32(job.TaskRevision), Distance: int32(job.Distance)}
@@ -276,6 +309,13 @@ func (p Plan) ToProto() *pb.FutureAssetPlan {
 			wireJob.Assets = append(wireJob.Assets, &pb.PrefetchAsset{AssetKey: asset.AssetKey, AssetId: asset.AssetID, Sha256: asset.SHA256, SizeBytes: asset.SizeBytes, MimeType: asset.MIMEType, Role: asset.Role, SourceUri: asset.SourceURI})
 		}
 		out.PrefetchJobs = append(out.PrefetchJobs, wireJob)
+	}
+	for _, job := range p.DeferredJobs {
+		wireJob := &pb.PrefetchJob{JobId: job.JobID, TaskId: job.TaskID, ReservationId: job.ReservationID, TaskRevision: int32(job.TaskRevision), Distance: int32(job.Distance)}
+		for _, asset := range job.Assets {
+			wireJob.Assets = append(wireJob.Assets, &pb.PrefetchAsset{AssetKey: asset.AssetKey, AssetId: asset.AssetID, Sha256: asset.SHA256, SizeBytes: asset.SizeBytes, MimeType: asset.MIMEType, Role: asset.Role, SourceUri: asset.SourceURI})
+		}
+		out.DeferredPrefetchJobs = append(out.DeferredPrefetchJobs, wireJob)
 	}
 	for _, asset := range p.Protect {
 		out.ProtectAssets = append(out.ProtectAssets, &pb.ProtectedFutureAsset{AssetKey: asset.AssetKey, FutureRefCount: int32(asset.FutureRefCount), NextUseDistance: int32(asset.NextUseDistance)})
@@ -305,6 +345,19 @@ func FromProto(in *pb.FutureAssetPlan) (Plan, error) {
 			job.Assets = append(job.Assets, AssetManifest{AssetKey: wireAsset.GetAssetKey(), AssetID: wireAsset.GetAssetId(), SHA256: wireAsset.GetSha256(), SizeBytes: wireAsset.GetSizeBytes(), MIMEType: wireAsset.GetMimeType(), Role: wireAsset.GetRole(), SourceURI: wireAsset.GetSourceUri()})
 		}
 		p.PrefetchJobs = append(p.PrefetchJobs, job)
+	}
+	for _, wireJob := range in.GetDeferredPrefetchJobs() {
+		if wireJob == nil {
+			return Plan{}, fmt.Errorf("futureasset: nil deferred prefetch job")
+		}
+		job := Job{JobID: wireJob.GetJobId(), TaskID: wireJob.GetTaskId(), ReservationID: wireJob.GetReservationId(), TaskRevision: int(wireJob.GetTaskRevision()), Distance: int(wireJob.GetDistance())}
+		for _, wireAsset := range wireJob.GetAssets() {
+			if wireAsset == nil {
+				return Plan{}, fmt.Errorf("futureasset: nil deferred prefetch asset")
+			}
+			job.Assets = append(job.Assets, AssetManifest{AssetKey: wireAsset.GetAssetKey(), AssetID: wireAsset.GetAssetId(), SHA256: wireAsset.GetSha256(), SizeBytes: wireAsset.GetSizeBytes(), MIMEType: wireAsset.GetMimeType(), Role: wireAsset.GetRole(), SourceURI: wireAsset.GetSourceUri()})
+		}
+		p.DeferredJobs = append(p.DeferredJobs, job)
 	}
 	for _, wireAsset := range in.GetProtectAssets() {
 		if wireAsset == nil {

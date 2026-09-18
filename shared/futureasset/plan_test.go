@@ -57,8 +57,11 @@ func TestBuildAllowsOnlySizedDeferredSourceForWorkerHydration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sized deferred source rejected: %v", err)
 	}
+	if len(plan.PrefetchJobs) != 0 || len(plan.DeferredJobs) != 1 {
+		t.Fatalf("deferred source entered executable prefetch set: prefetch=%d deferred=%d", len(plan.PrefetchJobs), len(plan.DeferredJobs))
+	}
 	got, err := FromProto(plan.ToProto())
-	if err != nil || got.PrefetchJobs[0].Assets[0].SourceURI == "" {
+	if err != nil || len(got.DeferredJobs) != 1 || got.DeferredJobs[0].Assets[0].SourceURI == "" {
 		t.Fatalf("deferred source did not round-trip: plan=%+v err=%v", got, err)
 	}
 	_, err = Build(PlannerInput{Version: 1, PlanID: "plan", WorkerID: "worker", GeneratedAt: now, ExpiresAt: now.Add(time.Minute), FutureJobs: []Job{{JobID: "job", TaskID: "task", ReservationID: "res", Assets: []AssetManifest{{AssetKey: "stock-1", AssetID: "stock-1", SourceURI: "https://drive.google.com/uc?export=download&id=stock-1"}}}}})

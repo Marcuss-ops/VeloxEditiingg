@@ -151,6 +151,7 @@ message FutureAssetPlan {
   repeated ProtectedFutureAsset protect_assets = 8;
   int32 prefetch_horizon = 9;
   int32 protection_lookahead = 10;
+  repeated PrefetchJob deferred_prefetch_jobs = 11;
 }
 
 message PrefetchJob {
