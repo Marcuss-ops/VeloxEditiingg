@@ -116,18 +116,35 @@ type SubmitJobBatchRequest struct {
 }
 
 // SubmitJobBatchItemResult reports the independent outcome of one batch item.
+// Status is one of "accepted", "dedup" (identical canonical recipe to an
+// earlier accepted item in the same batch — DedupedOf carries that item's
+// index and both resolve to the same job), "conflict" (idempotency
+// collision) or "failed" (internal error for this item only).
 type SubmitJobBatchItemResult struct {
 	Index          int      `json:"index" validate:"gte=0"`
 	IdempotencyKey string   `json:"idempotency_key,omitempty"`
 	JobID          string   `json:"job_id,omitempty"`
 	Status         string   `json:"status" validate:"required"`
+	DedupedOf      *int     `json:"deduped_of,omitempty"`
 	Errors         []string `json:"errors,omitempty"`
+}
+
+// SubmitJobBatchSummary is the aggregate outcome block of one batch
+// submission: Accepted + Deduped + Rejected + Conflict + Failed == Total.
+type SubmitJobBatchSummary struct {
+	Total    int `json:"total"`
+	Accepted int `json:"accepted"`
+	Deduped  int `json:"deduped"`
+	Rejected int `json:"rejected"`
+	Conflict int `json:"conflict"`
+	Failed   int `json:"failed"`
 }
 
 // SubmitJobBatchResponse contains one result for every submitted item.
 type SubmitJobBatchResponse struct {
 	BatchID string                     `json:"batch_id"`
 	Items   []SubmitJobBatchItemResult `json:"items"`
+	Summary SubmitJobBatchSummary      `json:"summary"`
 }
 
 // PublishingCatalogRequest is a retained legacy schema for the retired

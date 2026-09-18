@@ -160,9 +160,10 @@ func (h *Handlers) SubmitJobBatch() gin.HandlerFunc {
 			fingerprint, fpErr := BatchItemFingerprint(item)
 			if fpErr == nil {
 				if anchorIndex, anchorJob, hit := dedupe.lookup(fingerprint); hit {
+					anchor := anchorIndex
 					result.Status = "dedup"
 					result.JobID = anchorJob
-					result.DedupedOf = anchorIndex
+					result.DedupedOf = &anchor
 					results[index] = result
 					dedupe.recordDedup()
 					continue
@@ -199,7 +200,7 @@ func (h *Handlers) SubmitJobBatch() gin.HandlerFunc {
 			BatchID: batch.BatchID,
 			Items:   results,
 			Summary: SubmitJobBatchSummary{
-				Items:    len(results),
+				Total:    len(results),
 				Accepted: dedupe.accepted,
 				Deduped:  dedupe.deduped,
 				Rejected: dedupe.rejected,

@@ -374,12 +374,18 @@ components:
                                 type: string
                             kind:
                                 type: string
+                            mime_type:
+                                type: string
                             producer:
+                                type: string
+                            profile_id:
                                 type: string
                             required:
                                 type: boolean
                             sha256:
                                 type: string
+                            size_bytes:
+                                type: integer
                             state:
                                 type: string
                             url:
@@ -387,6 +393,105 @@ components:
                         type: object
                     minItems: 0
                     type: array
+                early_manifest:
+                    properties:
+                        assets:
+                            items:
+                                properties:
+                                    asset_id:
+                                        type: string
+                                    availability:
+                                        type: string
+                                    kind:
+                                        type: string
+                                    mime_type:
+                                        type: string
+                                    producer:
+                                        type: string
+                                    profile_id:
+                                        type: string
+                                    required:
+                                        type: boolean
+                                    sha256:
+                                        type: string
+                                    size_bytes:
+                                        type: integer
+                                    state:
+                                        type: string
+                                    url:
+                                        type: string
+                                type: object
+                            minItems: 0
+                            type: array
+                        contract_version:
+                            type: string
+                        dispatch:
+                            properties:
+                                mode:
+                                    type: string
+                                start_prepare:
+                                    type: boolean
+                                target:
+                                    type: string
+                            type: object
+                        expected_profile:
+                            type: string
+                        job_id:
+                            type: string
+                        preparation_hash:
+                            type: string
+                        profile:
+                            properties:
+                                b_frames:
+                                    type: integer
+                                closed_gop:
+                                    type: boolean
+                                codec:
+                                    type: string
+                                codec_level:
+                                    type: string
+                                codec_profile:
+                                    type: string
+                                container:
+                                    type: string
+                                container_layout:
+                                    type: string
+                                fps_den:
+                                    type: integer
+                                fps_num:
+                                    type: integer
+                                gop_size:
+                                    type: integer
+                                height:
+                                    type: integer
+                                pixel_format:
+                                    type: string
+                                profile_id:
+                                    type: string
+                                time_base_den:
+                                    type: integer
+                                time_base_num:
+                                    type: integer
+                                version:
+                                    type: integer
+                                width:
+                                    type: integer
+                            type: object
+                        revision:
+                            type: integer
+                        timeline:
+                            items:
+                                properties:
+                                    asset_id:
+                                        type: string
+                                    scene_id:
+                                        type: string
+                                type: object
+                            minItems: 0
+                            type: array
+                        timeline_revision:
+                            type: integer
+                    type: object
                 output_profile:
                     type: string
                 send_to_velox:
@@ -688,6 +793,8 @@ components:
             type: object
         SubmitJobBatchItemResult:
             properties:
+                deduped_of:
+                    type: integer
                 errors:
                     items:
                         type: string
@@ -731,17 +838,31 @@ components:
                         $ref: '#/components/schemas/SubmitJobBatchItemResult'
                     minItems: 0
                     type: array
+                summary:
+                    properties:
+                        accepted:
+                            type: integer
+                        conflict:
+                            type: integer
+                        deduped:
+                            type: integer
+                        failed:
+                            type: integer
+                        rejected:
+                            type: integer
+                        total:
+                            type: integer
+                    type: object
             type: object
         SubmitJobRequest:
             properties:
                 assembly:
                     $ref: '#/components/schemas/ExternalAssemblyRequest'
                 compiled_render_plan_json:
-                    description: Producer-owned canonical CompiledRenderPlanV2 JSON. When supplied, the Master passes these bytes through to the packet-copy executor without recompiling or inferring the output profile.
                     type: string
                 compiled_render_plan_sha256:
-                    description: SHA-256 of compiled_render_plan_json.
-                    pattern: ^[0-9a-fA-F]{64}$
+                    maxLength: 64
+                    minLength: 64
                     type: string
                 delivery_plan:
                     items:

@@ -108,8 +108,8 @@ func TestSubmitJobBatch_DedupesIdenticalPlansWithinBatch(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &decoded); err != nil {
 		t.Fatal(err)
 	}
-	if decoded.Summary.Items != 3 {
-		t.Fatalf("summary.items = %d, want 3", decoded.Summary.Items)
+	if decoded.Summary.Total != 3 {
+		t.Fatalf("summary.total = %d, want 3", decoded.Summary.Total)
 	}
 
 	// Without a wired store, all items fail at enqueue with a controlled

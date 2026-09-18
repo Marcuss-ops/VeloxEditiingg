@@ -437,15 +437,16 @@ type SubmitJobBatchItemResult struct {
 	JobID          string   `json:"job_id,omitempty"`
 	Status         string   `json:"status"`
 	// DedupedOf is set only when Status == "dedup": the index of the first
-	// accepted item with an identical render plan.
-	DedupedOf int      `json:"deduped_of,omitempty"`
+	// accepted item with an identical render plan. Pointer so the key is
+	// absent on every other status (index 0 must still serialize).
+	DedupedOf *int     `json:"deduped_of,omitempty"`
 	Errors    []string `json:"errors,omitempty"`
 }
 
 // SubmitJobBatchResponse contains an outcome for every submitted item.
 // A failed item never changes the status or idempotency semantics of another.
 // Summary reports the aggregate outcome: Accepted + Deduped + Rejected +
-// Conflict + Failed == Items.
+// Conflict + Failed == Total.
 type SubmitJobBatchResponse struct {
 	BatchID string                     `json:"batch_id"`
 	Items   []SubmitJobBatchItemResult `json:"items"`
@@ -454,7 +455,7 @@ type SubmitJobBatchResponse struct {
 
 // SubmitJobBatchSummary is the aggregate outcome of one batch submission.
 type SubmitJobBatchSummary struct {
-	Items    int `json:"items"`
+	Total    int `json:"total"`
 	Accepted int `json:"accepted"`
 	Deduped  int `json:"deduped"`
 	Rejected int `json:"rejected"`
