@@ -86,6 +86,7 @@ type Enqueuer struct {
 	Voiceover       *assetbridge.AssetService
 	PlanResolver    PlanResolver
 	SocialValidator DestinationValidator
+	postEnqueue     func(context.Context, string)
 }
 
 // NewEnqueuer constructs an Enqueuer with mandatory Creator + Jobs + PlanResolver.
@@ -111,6 +112,18 @@ func (e *Enqueuer) WithSocialValidator(v DestinationValidator) *Enqueuer {
 		return e
 	}
 	e.SocialValidator = v
+	return e
+}
+
+// WithPostEnqueueHook installs an asynchronous observer for newly persisted
+// jobs. The callback is deliberately narrow so enqueue does not import the
+// gRPC/prefetch implementation. The normal placement refresh remains the
+// reconciliation fallback when no worker is warm yet.
+func (e *Enqueuer) WithPostEnqueueHook(hook func(context.Context, string)) *Enqueuer {
+	if e == nil {
+		return e
+	}
+	e.postEnqueue = hook
 	return e
 }
 
@@ -189,6 +202,10 @@ func (e *Enqueuer) Enqueue(ctx context.Context, payloadMap map[string]interface{
 			}
 		}
 		return nil, wrapEnqueuePhase(EnqueuePhasePersistJobAndTask, fmt.Errorf("enqueue: atomic create: %w", err))
+	}
+	if e.postEnqueue != nil {
+		jobID := job.ID
+		go e.postEnqueue(context.WithoutCancel(ctx), jobID)
 	}
 
 	// The atomic creator has already validated and persisted the delivery

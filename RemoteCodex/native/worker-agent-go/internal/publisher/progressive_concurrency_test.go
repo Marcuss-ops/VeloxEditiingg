@@ -79,6 +79,46 @@ func TestRunProgressiveUploadUsesFourWorkersAndCompletesAfterAllParts(t *testing
 	}
 }
 
+func TestAdaptiveProgressivePartSize(t *testing.T) {
+	const mib = int64(1024 * 1024)
+	cases := []struct {
+		name       string
+		finalSize  int64
+		negotiated int64
+		want       int64
+	}{
+		{name: "tyson-sized output", finalSize: 178 * mib, negotiated: 8 * mib, want: 2 * mib},
+		{name: "small output", finalSize: 16 * mib, negotiated: 8 * mib, want: 256 * 1024},
+		{name: "bounded by negotiated size", finalSize: 256 * mib, negotiated: 1 * mib, want: 1 * mib},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := adaptiveProgressivePartSize(tc.finalSize, tc.negotiated); got != tc.want {
+				t.Fatalf("adaptiveProgressivePartSize(%d, %d) = %d, want %d", tc.finalSize, tc.negotiated, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestHashGrowingFileMatchesFinalSHA256(t *testing.T) {
+	payload := bytes.Repeat([]byte("progressive-hash"), 200_000)
+	path := t.TempDir() + "/out.bin"
+	if err := writeTestFile(path, payload); err != nil {
+		t.Fatal(err)
+	}
+	file := NewGrowingFile()
+	file.Update(int64(len(payload)), true, int64(len(payload)))
+	file.MarkDurable(int64(len(payload)))
+	got, err := hashGrowingFile(context.Background(), path, file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantSum := sha256.Sum256(payload)
+	if want := hex.EncodeToString(wantSum[:]); got != want {
+		t.Fatalf("incremental SHA256 = %s, want %s", got, want)
+	}
+}
+
 // overlapTestSession completes part 1 immediately, then holds parts 2+
 // until release — so the test can finalize the growing file while the
 // upload is mid-flight and pin the progressive overlap telemetry.

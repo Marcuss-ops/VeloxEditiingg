@@ -18,6 +18,48 @@ import (
 	"velox-shared/futureasset"
 )
 
+// PrefetchSubmittedJob is the low-latency submission hook. It resolves the
+// warm worker from the just-persisted task payload and starts the same
+// reservation/plan reconciliation used by placement. Persisting first is
+// deliberate: reservations fence a concrete task ID, while retries and
+// reconnects remain owned by the existing durable planner.
+func (h *Handler) PrefetchSubmittedJob(ctx context.Context, jobID string) {
+	if h == nil || h.taskRepo == nil || jobID == "" {
+		return
+	}
+	store, ok := h.taskRepo.(taskgraph.FutureReservationStore)
+	if !ok {
+		return
+	}
+	candidates, err := h.taskRepo.ListReadyCandidates(ctx, 256)
+	if err != nil {
+		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCPrefetchFailed, "[PREFETCH] submission hook list candidates job=%s: %v", jobID, err)
+		return
+	}
+	workers := h.warmPlacementSnapshots()
+	for _, candidate := range candidates {
+		if candidate.JobID != jobID {
+			continue
+		}
+		payload, payloadErr := store.FutureTaskPayload(ctx, candidate.TaskID)
+		if payloadErr != nil {
+			logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCPrefetchFailed, "[PREFETCH] submission hook payload task=%s: %v", candidate.TaskID, payloadErr)
+			return
+		}
+		decision, selectErr := selectWarmPlacement(workers, futureAssetManifests(payload))
+		if selectErr != nil || decision.WorkerID == "" {
+			if selectErr != nil {
+				logGRPCf(ctx, logging.LevelInfo, logging.CodeGRPCPrefetch, "[PREFETCH] submission hook deferred job=%s: %v", jobID, selectErr)
+			}
+			return
+		}
+		logGRPCf(ctx, logging.LevelInfo, logging.CodeGRPCPrefetch, "[PREFETCH] submission hook job=%s task=%s worker=%s", jobID, candidate.TaskID, decision.WorkerID)
+		h.refreshFutureAssetPlan(ctx, decision.WorkerID, jobID)
+		return
+	}
+	logGRPCf(ctx, logging.LevelInfo, logging.CodeGRPCPrefetch, "[PREFETCH] submission hook job=%s deferred: task not READY", jobID)
+}
+
 // refreshFutureAssetPlan claims the next hard-reservation window for a
 // worker, then sends a complete worker-scoped snapshot. Reservation ownership
 // is persisted before the plan is sent, so a reconnect cannot turn a plan

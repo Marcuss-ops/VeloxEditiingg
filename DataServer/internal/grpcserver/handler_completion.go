@@ -20,11 +20,11 @@ import (
 
 const masterStreamTransportID = "master-stream.v1"
 
-// Early uploads use smaller parts than the post-render compatibility path so
-// the first immutable fMP4 fragments can reach the master while a fast
-// packet-copy render is still producing later fragments. The final upload
-// target remains on the normal 8 MiB chunk contract.
-const earlyUploadChunkSize = 256 * 1024
+// Early uploads keep a small first part so the first immutable fMP4 fragment
+// reaches the master immediately, then let the worker use larger parts for
+// the bulk transfer. The final upload target remains on the normal 8 MiB
+// chunk contract.
+const earlyUploadChunkSize = 2 * 1024 * 1024
 
 func (h *Handler) handleArtifactUploadIntent(workerID string, msg *pb.ArtifactUploadIntent, sess *workerSession) {
 	ctx := ctxForTaskSession(sess)

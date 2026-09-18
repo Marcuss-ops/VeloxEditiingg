@@ -19,7 +19,7 @@ import (
 // the first renderer write-progress event, keeps the same GrowingFile updated
 // by the renderer callback, and uses the normal progressive transport contract
 // for hashing, completion and retries.
-func uploadWithGrowingProgress(ctx context.Context, transport publisher.Transport, req publisher.UploadRequest, progress pipeline.ArtifactWriteProgress, file *publisher.GrowingFile) (*publisher.UploadResult, error) {
+func uploadWithGrowingProgress(ctx context.Context, transport publisher.Transport, req publisher.UploadRequest, progress pipeline.ArtifactWriteProgress, file *publisher.GrowingFile, progressivePartConcurrency int) (*publisher.UploadResult, error) {
 	if !publisher.SupportsProgressive(transport) {
 		return nil, fmt.Errorf("worker artifact upload: early transport %q is not progressive", transport.ID())
 	}
@@ -49,7 +49,14 @@ func uploadWithGrowingProgress(ctx context.Context, transport publisher.Transpor
 	if err != nil {
 		return nil, fmt.Errorf("worker artifact upload: begin early progressive %q: %w", transport.ID(), err)
 	}
-	result, err := publisher.RunProgressiveUpload(ctx, openPath, req.Target.ChunkSize, file, session, nil)
+	if progressivePartConcurrency <= 0 {
+		progressivePartConcurrency = 4
+	}
+	result, err := publisher.RunProgressiveUploadWithJournalAndStoreOptions(ctx, openPath, req.Target.ChunkSize, file, session, "", nil, "", publisher.ProgressiveUploadOptions{
+		Workers:          progressivePartConcurrency,
+		FirstPartSize:    256 * 1024,
+		AdaptivePartSize: true,
+	}, nil)
 	if err != nil {
 		_ = session.Abort(ctx)
 		return nil, err

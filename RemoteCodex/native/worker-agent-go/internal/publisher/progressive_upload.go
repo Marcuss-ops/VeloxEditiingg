@@ -17,6 +17,15 @@ const progressiveUploadWorkers = 4
 // artifact. Artifact-level concurrency remains owned by worker.PublisherPool.
 type ProgressiveUploadOptions struct {
 	Workers int
+	// FirstPartSize optionally overrides the first immutable part. It is
+	// useful for progressive renderers: a small first request starts the
+	// overlap quickly while later requests use the negotiated chunk size.
+	FirstPartSize int64
+	// AdaptivePartSize selects a bounded final-size-derived part size for
+	// parts scheduled after finalization. The producer still uses the
+	// negotiated size while the output is growing, so it never waits for the
+	// trailer before starting the bulk transfer.
+	AdaptivePartSize bool
 }
 
 func (o ProgressiveUploadOptions) workers() int {
@@ -24,6 +33,32 @@ func (o ProgressiveUploadOptions) workers() int {
 		return progressiveUploadWorkers
 	}
 	return o.Workers
+}
+
+const (
+	progressiveMinimumPartSize = 256 * 1024
+	progressiveMaximumPartSize = 2 * 1024 * 1024
+	progressiveHashReadSize    = 1 * 1024 * 1024
+)
+
+func adaptiveProgressivePartSize(finalSize, negotiated int64) int64 {
+	if negotiated <= 0 {
+		negotiated = progressiveMaximumPartSize
+	}
+	if finalSize <= 0 {
+		return negotiated
+	}
+	size := finalSize / 64
+	if size < progressiveMinimumPartSize {
+		size = progressiveMinimumPartSize
+	}
+	if size > progressiveMaximumPartSize {
+		size = progressiveMaximumPartSize
+	}
+	if size > negotiated {
+		size = negotiated
+	}
+	return size
 }
 
 type ProgressivePublishState string
@@ -260,6 +295,8 @@ func runProgressiveUploadWithJournal(ctx context.Context, path string, chunkSize
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	hashCtx, cancelHash := context.WithCancel(ctx)
+	defer cancelHash()
 	type part struct {
 		number      int
 		start, size int64
@@ -278,6 +315,15 @@ func runProgressiveUploadWithJournal(ctx context.Context, path string, chunkSize
 	runStartedAt := time.Now()
 	var firstPartStartedAt time.Time
 	var partsBeforeRenderEnd, bytesBeforeRenderEnd int64
+	type hashOutcome struct {
+		sha string
+		err error
+	}
+	hashDone := make(chan hashOutcome, 1)
+	go func() {
+		sha, err := hashGrowingFile(hashCtx, path, file)
+		hashDone <- hashOutcome{sha: sha, err: err}
+	}()
 	worker := func() {
 		defer wg.Done()
 		for p := range parts {
@@ -348,7 +394,14 @@ func runProgressiveUploadWithJournal(ctx context.Context, path string, chunkSize
 		if finalized && start >= finalSize {
 			break
 		}
-		size := chunkSize
+		nextPartSize := chunkSize
+		if number == 0 && options.FirstPartSize > 0 && options.FirstPartSize < nextPartSize {
+			nextPartSize = options.FirstPartSize
+		}
+		if options.AdaptivePartSize && number > 0 && finalized {
+			nextPartSize = adaptiveProgressivePartSize(finalSize, chunkSize)
+		}
+		size := nextPartSize
 		if finalized {
 			if start+size > finalSize {
 				size = finalSize - start
@@ -407,12 +460,14 @@ func runProgressiveUploadWithJournal(ctx context.Context, path string, chunkSize
 	wg.Wait()
 	select {
 	case err := <-errs:
+		cancelHash()
 		_ = session.Abort(context.Background())
 		return nil, err
 	default:
 	}
 	_, finalSize, finalized, durable, _ := file.snapshot()
 	if !finalized || !durable {
+		cancelHash()
 		_ = session.Abort(context.Background())
 		return nil, fmt.Errorf("progressive upload: output is not finalized and durable")
 	}
@@ -420,11 +475,12 @@ func runProgressiveUploadWithJournal(ctx context.Context, path string, chunkSize
 	doneParts := uploadedParts
 	doneBytes := uploaded
 	mu.Unlock()
-	sha, err := hashOpenFile(f, finalSize)
-	if err != nil {
+	hashed := <-hashDone
+	if hashed.err != nil {
 		_ = session.Abort(context.Background())
-		return nil, err
+		return nil, hashed.err
 	}
+	sha := hashed.sha
 	journalMu.Lock()
 	journal.Finalized = true
 	journal.FinalSize = finalSize
@@ -476,6 +532,61 @@ func runProgressiveUploadWithJournal(ctx context.Context, path string, chunkSize
 		}
 	}
 	return result, nil
+}
+
+// hashGrowingFile computes the final digest while the progressive uploader is
+// consuming the growing output. The reader is independent from the upload
+// file descriptor and uses ReadAt-backed section readers, so hashing never
+// seeks the descriptor used by concurrent UploadPart calls. This removes the
+// old serial full-file read after the upload/finalize boundary.
+func hashGrowingFile(ctx context.Context, path string, file *GrowingFile) (string, error) {
+	if path == "" || file == nil {
+		return "", fmt.Errorf("progressive upload: invalid incremental hash input")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	h := sha256.New()
+	var offset int64
+	for {
+		_, finalSize, finalized, _, aborted := file.snapshot()
+		if aborted != nil {
+			return "", aborted
+		}
+		if finalized {
+			if finalSize <= offset {
+				break
+			}
+			length := int64(progressiveHashReadSize)
+			if remaining := finalSize - offset; remaining < length {
+				length = remaining
+			}
+			if _, err := io.CopyN(h, io.NewSectionReader(f, offset, length), length); err != nil {
+				return "", err
+			}
+			offset += length
+			continue
+		}
+
+		length := int64(progressiveHashReadSize)
+		if err := waitForReadableRange(ctx, f, file, offset, length); err != nil {
+			if ctx.Err() != nil {
+				return "", ctx.Err()
+			}
+			continue
+		}
+		if _, err := io.CopyN(h, io.NewSectionReader(f, offset, length), length); err != nil {
+			return "", err
+		}
+		offset += length
+	}
+	if offset <= 0 {
+		return "", fmt.Errorf("progressive upload: incremental hash saw no bytes")
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func hashFile(path string, size int64) (string, error) {

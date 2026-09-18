@@ -155,9 +155,13 @@ func (s *earlyUploadState) run(plan *pb.ArtifactEarlyUploadPlan, progress pipeli
 	transport, err := s.worker.publisherRegistry.Resolve(target.TransportID)
 	var result *publisher.UploadResult
 	if err == nil {
+		progressivePartConcurrency := 4
+		if s.worker.config != nil && s.worker.config.ProgressivePartConcurrency > 0 {
+			progressivePartConcurrency = s.worker.config.ProgressivePartConcurrency
+		}
 		result, err = uploadWithGrowingProgress(s.ctx, transport, publisher.UploadRequest{
 			LocalPath: progress.Path, Target: target, CommitToken: plan.GetCommitToken(),
-		}, progress, file)
+		}, progress, file, progressivePartConcurrency)
 	}
 	if err != nil {
 		s.worker.logger.Warn("[ARTIFACT] early upload failed task=%s attempt=%s upload=%s: %v", s.pte.TaskID, s.pte.AttemptID, plan.GetUploadId(), err)
