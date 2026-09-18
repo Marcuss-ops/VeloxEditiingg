@@ -348,12 +348,26 @@ func (t *masterAssetTransferer) assetTransferRequestForSource(assetID, sourceURI
 			return fmt.Errorf("too many redirects")
 		}
 		host := strings.ToLower(r.URL.Hostname())
-		if host != "drive.google.com" && host != "www.googleapis.com" {
+		if !isAllowedDirectDriveHost(host) {
 			return fmt.Errorf("direct Drive source redirected to unexpected host")
 		}
 		return nil
 	}}
 	return parsed.String(), func() string { return "" }, client, nil
+}
+
+// isAllowedDirectDriveHost is deliberately an exact allowlist. Public Drive
+// downloads normally start at drive.google.com and redirect the bytes to
+// drive.usercontent.google.com; neither hop needs a Drive credential. Keep
+// this list narrow so a worker-direct source can never turn into an arbitrary
+// redirect proxy.
+func isAllowedDirectDriveHost(host string) bool {
+	switch strings.ToLower(strings.TrimSpace(host)) {
+	case "drive.google.com", "www.googleapis.com", "drive.usercontent.google.com":
+		return true
+	default:
+		return false
+	}
 }
 
 // shouldChunk reports whether req should use the parallel chunked path: the

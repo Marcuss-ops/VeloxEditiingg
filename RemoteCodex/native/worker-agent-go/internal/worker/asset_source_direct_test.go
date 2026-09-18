@@ -18,3 +18,20 @@ func TestAssetTransferRequestForSourceRejectsNonDriveLocator(t *testing.T) {
 		t.Fatal("non-Drive source was accepted")
 	}
 }
+
+func TestAllowedDirectDriveHostIncludesPublicDownloadRedirect(t *testing.T) {
+	for _, host := range []string{
+		"drive.google.com",
+		"www.googleapis.com",
+		"drive.usercontent.google.com",
+	} {
+		if !isAllowedDirectDriveHost(host) {
+			t.Fatalf("host %q was rejected", host)
+		}
+	}
+	for _, host := range []string{"evil.example", "usercontent.google.com", "drive.usercontent.google.com.evil.example"} {
+		if isAllowedDirectDriveHost(host) {
+			t.Fatalf("host %q was accepted", host)
+		}
+	}
+}
