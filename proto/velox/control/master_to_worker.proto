@@ -169,6 +169,9 @@ message PrefetchAsset {
   int64 size_bytes = 4;
   string mime_type = 5;
   string role = 6;
+  // Worker-direct source locator for deferred provider assets. The Master
+  // sends metadata only; the worker owns the byte transfer and verification.
+  string source_uri = 7;
 }
 
 message ProtectedFutureAsset {

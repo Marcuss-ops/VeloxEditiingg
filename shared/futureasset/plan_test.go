@@ -51,6 +51,22 @@ func TestBuildRequiresIntegrityManifestForPrefetch(t *testing.T) {
 	}
 }
 
+func TestBuildAllowsOnlySizedDeferredSourceForWorkerHydration(t *testing.T) {
+	now := time.Unix(100, 0).UTC()
+	plan, err := Build(PlannerInput{Version: 1, PlanID: "plan", WorkerID: "worker", GeneratedAt: now, ExpiresAt: now.Add(time.Minute), FutureJobs: []Job{{JobID: "job", TaskID: "task", ReservationID: "res", Assets: []AssetManifest{{AssetKey: "stock-1", AssetID: "stock-1", SizeBytes: 42, SourceURI: "https://drive.google.com/uc?export=download&id=stock-1"}}}}})
+	if err != nil {
+		t.Fatalf("sized deferred source rejected: %v", err)
+	}
+	got, err := FromProto(plan.ToProto())
+	if err != nil || got.PrefetchJobs[0].Assets[0].SourceURI == "" {
+		t.Fatalf("deferred source did not round-trip: plan=%+v err=%v", got, err)
+	}
+	_, err = Build(PlannerInput{Version: 1, PlanID: "plan", WorkerID: "worker", GeneratedAt: now, ExpiresAt: now.Add(time.Minute), FutureJobs: []Job{{JobID: "job", TaskID: "task", ReservationID: "res", Assets: []AssetManifest{{AssetKey: "stock-1", AssetID: "stock-1", SourceURI: "https://drive.google.com/uc?export=download&id=stock-1"}}}}})
+	if err == nil {
+		t.Fatal("deferred source without size must be rejected")
+	}
+}
+
 func TestProtoRoundTrip(t *testing.T) {
 	now := time.Unix(100, 0).UTC()
 	want, err := Build(PlannerInput{Version: 7, PlanID: "plan", WorkerID: "worker", GeneratedAt: now, ExpiresAt: now.Add(time.Minute), CurrentJob: "current", FutureJobs: []Job{{JobID: "job", TaskID: "task", ReservationID: "res", Assets: []AssetManifest{{AssetKey: "asset", SHA256: "sha", SizeBytes: 4}}}}})

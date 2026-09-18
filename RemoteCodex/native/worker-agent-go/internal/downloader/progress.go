@@ -147,6 +147,9 @@ type DownloadRequest struct {
 	// Source is the semantic origin of the asset (e.g. "master_asset_bridge").
 	// Informational; the transferer decides how to fetch it.
 	Source string
+	// SourceURI is an optional worker-direct locator for deferred provider
+	// assets. Empty means use the legacy Master asset bridge.
+	SourceURI string
 	// SHA256 and SizeBytes are the integrity contract. A hit is valid only
 	// when both are present and match; with both absent the file is
 	// downloaded and verified for media-like content only.

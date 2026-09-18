@@ -36,6 +36,11 @@ func (w *Worker) downloadVeloxAssetWithMetadata(ctx context.Context, assetID, ex
 	}
 
 	jobID, role := telemetry.CacheAccessContextFromContext(ctx)
+	sourceURI := w.sourceLocator(assetID)
+	sourceKind := "master_asset_bridge"
+	if sourceURI != "" {
+		sourceKind = "worker_direct_source"
+	}
 	// Operational lifecycle: when the asset resolver blocks on a cache miss,
 	// surface the WaitingRuntimeAssets phase so operators see the worker
 	// is waiting for a download rather than stuck.
@@ -52,7 +57,8 @@ func (w *Worker) downloadVeloxAssetWithMetadata(ctx context.Context, assetID, ex
 		Role:      downloader.RoleFromString(role),
 		SHA256:    assetref.ContentHash(expectedSHA256),
 		SizeBytes: expectedSizeBytes,
-		Source:    "master_asset_bridge",
+		Source:    sourceKind,
+		SourceURI: sourceURI,
 		Priority:  downloader.PriorityForeground,
 	})
 	if err != nil {
@@ -86,7 +92,7 @@ func (w *Worker) downloadVeloxAssetWithMetadata(ctx context.Context, assetID, ex
 		IntegrityCheck:      integrityCheck(expectedSHA256, expectedSizeBytes),
 		IntegrityValid:      expectedSHA256 != "" && expectedSizeBytes > 0,
 		LocalPath:           resolution.LocalPath,
-		Source:              "master_asset_bridge",
+		Source:              sourceKind,
 	})
 	syncSize := resolution.DownloadBytes
 	if resolution.CacheHit {

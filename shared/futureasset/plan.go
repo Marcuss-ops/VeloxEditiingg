@@ -53,6 +53,10 @@ type AssetManifest struct {
 	SizeBytes int64
 	MIMEType  string
 	Role      string
+	// SourceURI is a worker-only byte locator. It is sent for deferred
+	// provider assets (currently Drive) so the worker can fetch the bytes
+	// directly; the Master never materializes the source during planning.
+	SourceURI string
 }
 
 // Job is a worker-pinned future job in canonical queue order.
@@ -167,8 +171,11 @@ func Build(in PlannerInput) (Plan, error) {
 				return Plan{}, fmt.Errorf("futureasset: prefetch job %q requires reservation_id", job.JobID)
 			}
 			for _, asset := range job.Assets {
-				if asset.SHA256 == "" || asset.SizeBytes <= 0 {
+				if (asset.SHA256 == "" && asset.SourceURI == "") || asset.SizeBytes <= 0 {
 					return Plan{}, fmt.Errorf("futureasset: prefetch asset %q in job %q lacks sha256/size", asset.AssetKey, job.JobID)
+				}
+				if asset.SHA256 == "" && strings.TrimSpace(asset.SourceURI) == "" {
+					return Plan{}, fmt.Errorf("futureasset: deferred asset %q in job %q lacks source_uri", asset.AssetKey, job.JobID)
 				}
 			}
 			plan.PrefetchJobs = append(plan.PrefetchJobs, job)
@@ -189,7 +196,7 @@ func canonicalAssets(in []AssetManifest) ([]AssetManifest, error) {
 		if asset.AssetKey == "" {
 			return nil, fmt.Errorf("empty asset_key")
 		}
-		if previous, exists := byKey[asset.AssetKey]; exists && (previous.SHA256 != asset.SHA256 || previous.SizeBytes != asset.SizeBytes) {
+		if previous, exists := byKey[asset.AssetKey]; exists && (previous.SHA256 != asset.SHA256 || previous.SizeBytes != asset.SizeBytes || previous.SourceURI != asset.SourceURI) {
 			return nil, fmt.Errorf("asset %q has conflicting integrity metadata", asset.AssetKey)
 		}
 		byKey[asset.AssetKey] = asset
@@ -230,7 +237,7 @@ func (p Plan) Validate() error {
 		seenJobs[job.JobID] = struct{}{}
 		seenAssets := make(map[string]struct{}, len(job.Assets))
 		for _, asset := range job.Assets {
-			if asset.AssetKey == "" || asset.SHA256 == "" || asset.SizeBytes <= 0 {
+			if asset.AssetKey == "" || asset.SizeBytes <= 0 || (asset.SHA256 == "" && strings.TrimSpace(asset.SourceURI) == "") {
 				return fmt.Errorf("futureasset: prefetch job %q contains incomplete manifest", job.JobID)
 			}
 			if _, exists := seenAssets[asset.AssetKey]; exists {
@@ -266,7 +273,7 @@ func (p Plan) ToProto() *pb.FutureAssetPlan {
 	for _, job := range p.PrefetchJobs {
 		wireJob := &pb.PrefetchJob{JobId: job.JobID, TaskId: job.TaskID, ReservationId: job.ReservationID, TaskRevision: int32(job.TaskRevision), Distance: int32(job.Distance)}
 		for _, asset := range job.Assets {
-			wireJob.Assets = append(wireJob.Assets, &pb.PrefetchAsset{AssetKey: asset.AssetKey, AssetId: asset.AssetID, Sha256: asset.SHA256, SizeBytes: asset.SizeBytes, MimeType: asset.MIMEType, Role: asset.Role})
+			wireJob.Assets = append(wireJob.Assets, &pb.PrefetchAsset{AssetKey: asset.AssetKey, AssetId: asset.AssetID, Sha256: asset.SHA256, SizeBytes: asset.SizeBytes, MimeType: asset.MIMEType, Role: asset.Role, SourceUri: asset.SourceURI})
 		}
 		out.PrefetchJobs = append(out.PrefetchJobs, wireJob)
 	}
@@ -295,7 +302,7 @@ func FromProto(in *pb.FutureAssetPlan) (Plan, error) {
 			if wireAsset == nil {
 				return Plan{}, fmt.Errorf("futureasset: nil prefetch asset")
 			}
-			job.Assets = append(job.Assets, AssetManifest{AssetKey: wireAsset.GetAssetKey(), AssetID: wireAsset.GetAssetId(), SHA256: wireAsset.GetSha256(), SizeBytes: wireAsset.GetSizeBytes(), MIMEType: wireAsset.GetMimeType(), Role: wireAsset.GetRole()})
+			job.Assets = append(job.Assets, AssetManifest{AssetKey: wireAsset.GetAssetKey(), AssetID: wireAsset.GetAssetId(), SHA256: wireAsset.GetSha256(), SizeBytes: wireAsset.GetSizeBytes(), MIMEType: wireAsset.GetMimeType(), Role: wireAsset.GetRole(), SourceURI: wireAsset.GetSourceUri()})
 		}
 		p.PrefetchJobs = append(p.PrefetchJobs, job)
 	}

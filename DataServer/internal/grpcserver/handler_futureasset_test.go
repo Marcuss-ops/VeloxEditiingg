@@ -2,6 +2,7 @@ package grpcserver
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -73,6 +74,34 @@ func TestFutureAssetManifestsIsDeterministicallyOrdered(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		if got := futureAssetManifests(payload); !reflect.DeepEqual(got, want) {
 			t.Fatalf("manifest changed between runs: got=%v want=%v", got, want)
+		}
+	}
+}
+
+func TestFutureAssetManifestsCarriesDeferredDriveStockWithoutMasterDownload(t *testing.T) {
+	items := make([]map[string]interface{}, 10)
+	for i := range items {
+		id := fmt.Sprintf("stock-%02d", i)
+		items[i] = map[string]interface{}{
+			"drive_file_id": id, "url": "velox-drive://" + id,
+			"source_uri": "https://drive.google.com/uc?export=download&id=" + id,
+			"size_bytes": int64(100 + i), "duration_ms": int64(1000),
+		}
+	}
+	payload, err := json.Marshal(map[string]interface{}{"scenes": []interface{}{map[string]interface{}{"stock": items}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assets := futureAssetManifests(payload)
+	if len(assets) != 10 {
+		t.Fatalf("deferred stock manifests=%d, want 10", len(assets))
+	}
+	for _, asset := range assets {
+		if asset.AssetID == "" || asset.AssetKey == "" || asset.SizeBytes <= 0 || asset.SourceURI == "" {
+			t.Fatalf("incomplete deferred stock manifest: %+v", asset)
+		}
+		if asset.SHA256 != "" {
+			t.Fatalf("Master must not invent/hash stock bytes: %+v", asset)
 		}
 	}
 }

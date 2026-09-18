@@ -95,7 +95,7 @@ func (s *Scheduler) runWorkItem(item *workItem, resolver *downloader.CacheResolv
 	}
 	request := downloader.DownloadRequest{
 		JobID: job.JobID, TaskID: job.TaskID, AssetKey: assetref.AssetKey(asset.AssetKey), AssetID: asset.AssetID,
-		Role: downloader.RoleFromString(asset.Role), Source: "master_asset_bridge",
+		Role: downloader.RoleFromString(asset.Role), Source: "worker_direct_source", SourceURI: asset.SourceURI,
 		SHA256: assetref.ContentHash(asset.SHA256), SizeBytes: asset.SizeBytes, MIMEType: asset.MIMEType,
 		Priority:                   assetPriorityScore(job, asset),
 		MaxBandwidthBytesPerSecond: bandwidth,

@@ -3,6 +3,7 @@ package grpcserver
 import (
 	"encoding/json"
 	"sort"
+	"strings"
 
 	"velox-shared/contract"
 	"velox-shared/futureasset"
@@ -33,6 +34,13 @@ func futureAssetManifests(payload []byte) []futureasset.AssetManifest {
 			if key == "" {
 				key, _ = node["asset_id"].(string)
 			}
+			assetID, _ := node["asset_id"].(string)
+			if assetID == "" {
+				assetID, _ = node["drive_file_id"].(string)
+			}
+			if key == "" {
+				key = assetID
+			}
 			sha, _ := node["sha256"].(string)
 			if sha == "" {
 				sha, _ = node["asset_sha256"].(string)
@@ -44,9 +52,24 @@ func futureAssetManifests(payload []byte) []futureasset.AssetManifest {
 			case int64:
 				size = n
 			}
-			if key != "" && sha != "" && size > 0 {
+			sourceURI, _ := node["source_uri"].(string)
+			if sourceURI == "" {
+				if rawURL, _ := node["url"].(string); strings.HasPrefix(strings.ToLower(strings.TrimSpace(rawURL)), "velox-drive://") {
+					sourceURI = "https://drive.google.com/uc?export=download&id=" + strings.TrimSpace(rawURL[len("velox-drive://"):])
+				}
+			}
+			if key != "" && assetID == "" {
+				assetID = key
+			}
+			// A deferred Drive manifest is intentionally not content-addressed
+			// yet: the worker owns the direct Drive transfer and computes the
+			// immutable SHA-256 before PREPARED. It is admitted only with a
+			// trusted source locator and a positive Drive-reported size.
+			complete := sha != "" && size > 0
+			deferred := sourceURI != "" && assetID != "" && size > 0
+			if key != "" && (complete || deferred) {
 				role, _ := node["role"].(string)
-				seen[key] = futureasset.AssetManifest{AssetKey: key, AssetID: key, SHA256: sha, SizeBytes: size, Role: role}
+				seen[key] = futureasset.AssetManifest{AssetKey: key, AssetID: assetID, SHA256: sha, SizeBytes: size, Role: role, SourceURI: sourceURI}
 			}
 			for _, child := range node {
 				walk(child)

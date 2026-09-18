@@ -239,6 +239,11 @@ type Worker struct {
 	// only: after a restart the next access simply re-downloads once.
 	assetIntegrity   map[string]assetIntegrityRecord
 	assetIntegrityMu sync.Mutex
+	// sourceLocators are trusted, worker-scoped source descriptors received in
+	// FutureAssetPlan. They let the later runtime resolver use the same direct
+	// Drive source as prefetch without routing bytes through the Master.
+	sourceLocators  map[string]string
+	sourceLocatorMu sync.RWMutex
 	// publisherPool bounds total publication concurrency. Artifact identity
 	// serialization is handled independently by artifactLocks so unrelated
 	// artifacts can publish concurrently.

@@ -22,6 +22,13 @@ func (w *Worker) handleFutureAssetPlanMessage(ctx context.Context, msg controltr
 		w.logger.Warn("[PREFETCH] rejected invalid FutureAssetPlan: %v", err)
 		return
 	}
+	for _, job := range plan.PrefetchJobs {
+		for _, asset := range job.Assets {
+			if asset.AssetID != "" && asset.SourceURI != "" {
+				w.rememberSourceLocator(asset.AssetID, asset.SourceURI)
+			}
+		}
+	}
 	w.futureAssetScheduler().RecordPlanEvent("future_plan_received", plan.Version, plan.PlanID)
 	for _, job := range plan.PrefetchJobs {
 		job := job

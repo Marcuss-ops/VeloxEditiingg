@@ -77,6 +77,7 @@ func expandStockValue(ctx context.Context, raw interface{}, lister StockFolderLi
 
 	var expanded []interface{}
 	durationCache := make(map[string]int64)
+	metadataCache := make(map[string]*driveapi.File)
 	changed := false
 	for _, entry := range entries {
 		folderURL := stockEntryFolderURL(entry)
@@ -103,23 +104,41 @@ func expandStockValue(ctx context.Context, raw interface{}, lister StockFolderLi
 			asset := map[string]interface{}{
 				"drive_file_id": file.ID,
 				"url":           "velox-drive://" + file.ID,
+				// The locator is metadata only. The Master never downloads the
+				// bytes while expanding a stock folder; the selected worker owns
+				// the later Drive transfer and SHA-256 verification.
+				"source_uri": "https://drive.google.com/uc?export=download&id=" + file.ID,
 			}
 			duration := file.VideoMediaMetadata.DurationMillis
-			if duration > 0 {
-				durationCache[file.ID] = duration
-			} else {
-				if cached, ok := durationCache[file.ID]; ok {
-					duration = cached
-				} else if getter, ok := lister.(StockFileMetadataGetter); ok {
+			size := file.Size
+			if cached, ok := durationCache[file.ID]; ok && duration <= 0 {
+				duration = cached
+			}
+			if cached, ok := metadataCache[file.ID]; ok {
+				if duration <= 0 {
+					duration = cached.VideoMediaMetadata.DurationMillis
+				}
+				if size <= 0 {
+					size = cached.Size
+				}
+			} else if duration <= 0 || size <= 0 {
+				if getter, ok := lister.(StockFileMetadataGetter); ok {
 					metadata, err := getter.GetFileMetadata(ctx, file.ID)
 					if err != nil {
 						return nil, false, fmt.Errorf("read metadata for stock file %q: %w", file.ID, err)
 					}
 					if metadata != nil {
+						metadataCache[file.ID] = metadata
 						duration = metadata.VideoMediaMetadata.DurationMillis
+						size = metadata.Size
 					}
-					durationCache[file.ID] = duration
 				}
+			}
+			if size > 0 {
+				asset["size_bytes"] = size
+			}
+			if duration > 0 {
+				durationCache[file.ID] = duration
 			}
 			if duration > 0 {
 				asset["duration_ms"] = duration

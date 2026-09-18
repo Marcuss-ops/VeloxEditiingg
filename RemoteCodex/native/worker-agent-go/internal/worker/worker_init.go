@@ -295,6 +295,7 @@ func New(cfg *config.WorkerConfig, version string, opts ...Option) (*Worker, err
 		taskIDsByJob: make(map[string][]string),
 		// Remembered self-verified digests for partial-metadata cache hits.
 		assetIntegrity:     make(map[string]assetIntegrityRecord),
+		sourceLocators:     make(map[string]string),
 		prefetchController: prefetch.NewController(cfg.WorkerID),
 		prefetchScheduler: prefetch.NewScheduler(prefetch.Config{WorkerID: cfg.WorkerID, MaxConcurrent: cfg.PrefetchMaxConcurrent, ByteBudget: cfg.PrefetchByteBudget, MaxBandwidthBytesPerSecond: cfg.PrefetchMaxBandwidthBytesPerSecond, DiskRestrictedPercent: cfg.PrefetchDiskRestrictedPercent, DiskCriticalPercent: cfg.PrefetchDiskCriticalPercent, DiskRecoveryPercent: cfg.PrefetchDiskRecoveryPercent, RAM: ramCache, RAMMinFutureRefs: cfg.PrefetchRAMMinFutureRefs, RAMMaxNextUseDistance: cfg.PrefetchRAMMaxNextUseDistance, OnState: func(state string, _ futureasset.Job, asset futureasset.AssetManifest, _ error) {
 			metrics := telemetry.GetPrometheusMetrics()

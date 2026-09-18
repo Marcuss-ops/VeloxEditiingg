@@ -151,7 +151,10 @@ func (t *masterAssetTransferer) transferSingleStream(ctx context.Context, report
 	// canonical CacheResolver boundary records the classified miss exactly
 	// once per resolution (attempt + worker views). This transfer only owns
 	// the byte pipeline.
-	source := t.assetSource(assetID)
+	source, sourceErr := t.assetSource(assetID, req.SourceURI)
+	if sourceErr != nil {
+		return downloader.TransferResult{}, sourceErr
+	}
 	// Reserve this asset's partial before cleanup so an active transfer in
 	// this process cannot be mistaken for an orphan. The cleanup is scoped
 	// to this worker's asset cache and never touches final cache entries.
@@ -322,9 +325,35 @@ func (t *masterAssetTransferer) assetTransferRequest(assetID string) (downloadUR
 // token and client are still produced by assetTransferRequest (single source
 // of truth for the integration boundary); the source is the pluggable
 // byte-open layer on top, shared by the resume pipeline.
-func (t *masterAssetTransferer) assetSource(assetID string) downloader.AssetSource {
-	downloadURL, authToken, client := t.assetTransferRequest(assetID)
-	return newHTTPAssetSource(downloadURL, authToken, client)
+
+func (t *masterAssetTransferer) assetSource(assetID, sourceURI string) (downloader.AssetSource, error) {
+	downloadURL, authToken, client, err := t.assetTransferRequestForSource(assetID, sourceURI)
+	if err != nil {
+		return nil, err
+	}
+	return newHTTPAssetSource(downloadURL, authToken, client), nil
+}
+
+func (t *masterAssetTransferer) assetTransferRequestForSource(assetID, sourceURI string) (string, func() string, *http.Client, error) {
+	if strings.TrimSpace(sourceURI) == "" {
+		downloadURL, authToken, client := t.assetTransferRequest(assetID)
+		return downloadURL, authToken, client, nil
+	}
+	parsed, err := neturl.Parse(strings.TrimSpace(sourceURI))
+	if err != nil || parsed.Scheme != "https" || (strings.ToLower(parsed.Hostname()) != "drive.google.com" && strings.ToLower(parsed.Hostname()) != "www.googleapis.com") {
+		return "", nil, nil, fmt.Errorf("worker direct asset source rejected for %s", assetID)
+	}
+	client := &http.Client{Timeout: 2 * time.Minute, CheckRedirect: func(r *http.Request, via []*http.Request) error {
+		if len(via) >= 5 {
+			return fmt.Errorf("too many redirects")
+		}
+		host := strings.ToLower(r.URL.Hostname())
+		if host != "drive.google.com" && host != "www.googleapis.com" {
+			return fmt.Errorf("direct Drive source redirected to unexpected host")
+		}
+		return nil
+	}}
+	return parsed.String(), func() string { return "" }, client, nil
 }
 
 // shouldChunk reports whether req should use the parallel chunked path: the

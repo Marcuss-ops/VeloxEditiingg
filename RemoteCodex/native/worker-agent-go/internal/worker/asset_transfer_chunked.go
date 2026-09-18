@@ -136,7 +136,10 @@ func (t *masterAssetTransferer) transferChunked(ctx context.Context, reportCtx c
 		return downloader.TransferResult{}, fmt.Errorf("chunked: cannot plan chunks for size %d", size)
 	}
 
-	downloadURL, authToken, client := t.assetTransferRequest(req.AssetID)
+	downloadURL, authToken, client, sourceErr := t.assetTransferRequestForSource(req.AssetID, req.SourceURI)
+	if sourceErr != nil {
+		return downloader.TransferResult{}, sourceErr
+	}
 
 	var downloaded atomic.Int64
 	var progressMu sync.Mutex

@@ -1163,13 +1163,16 @@ func (x *PrefetchJob) GetAssets() []*PrefetchAsset {
 }
 
 type PrefetchAsset struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	AssetKey      string                 `protobuf:"bytes,1,opt,name=asset_key,json=assetKey,proto3" json:"asset_key,omitempty"`
-	AssetId       string                 `protobuf:"bytes,2,opt,name=asset_id,json=assetId,proto3" json:"asset_id,omitempty"`
-	Sha256        string                 `protobuf:"bytes,3,opt,name=sha256,proto3" json:"sha256,omitempty"`
-	SizeBytes     int64                  `protobuf:"varint,4,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
-	MimeType      string                 `protobuf:"bytes,5,opt,name=mime_type,json=mimeType,proto3" json:"mime_type,omitempty"`
-	Role          string                 `protobuf:"bytes,6,opt,name=role,proto3" json:"role,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	AssetKey  string                 `protobuf:"bytes,1,opt,name=asset_key,json=assetKey,proto3" json:"asset_key,omitempty"`
+	AssetId   string                 `protobuf:"bytes,2,opt,name=asset_id,json=assetId,proto3" json:"asset_id,omitempty"`
+	Sha256    string                 `protobuf:"bytes,3,opt,name=sha256,proto3" json:"sha256,omitempty"`
+	SizeBytes int64                  `protobuf:"varint,4,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
+	MimeType  string                 `protobuf:"bytes,5,opt,name=mime_type,json=mimeType,proto3" json:"mime_type,omitempty"`
+	Role      string                 `protobuf:"bytes,6,opt,name=role,proto3" json:"role,omitempty"`
+	// Worker-direct source locator for deferred provider assets. The Master
+	// sends metadata only; the worker owns the byte transfer and verification.
+	SourceUri     string `protobuf:"bytes,7,opt,name=source_uri,json=sourceUri,proto3" json:"source_uri,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1242,6 +1245,13 @@ func (x *PrefetchAsset) GetMimeType() string {
 func (x *PrefetchAsset) GetRole() string {
 	if x != nil {
 		return x.Role
+	}
+	return ""
+}
+
+func (x *PrefetchAsset) GetSourceUri() string {
+	if x != nil {
+		return x.SourceUri
 	}
 	return ""
 }
@@ -1470,7 +1480,7 @@ const file_velox_control_master_to_worker_proto_rawDesc = "" +
 	"\x0ereservation_id\x18\x03 \x01(\tR\rreservationId\x12#\n" +
 	"\rtask_revision\x18\x04 \x01(\x05R\ftaskRevision\x12\x1a\n" +
 	"\bdistance\x18\x05 \x01(\x05R\bdistance\x124\n" +
-	"\x06assets\x18\x06 \x03(\v2\x1c.velox.control.PrefetchAssetR\x06assets\"\xaf\x01\n" +
+	"\x06assets\x18\x06 \x03(\v2\x1c.velox.control.PrefetchAssetR\x06assets\"\xce\x01\n" +
 	"\rPrefetchAsset\x12\x1b\n" +
 	"\tasset_key\x18\x01 \x01(\tR\bassetKey\x12\x19\n" +
 	"\basset_id\x18\x02 \x01(\tR\aassetId\x12\x16\n" +
@@ -1478,7 +1488,9 @@ const file_velox_control_master_to_worker_proto_rawDesc = "" +
 	"\n" +
 	"size_bytes\x18\x04 \x01(\x03R\tsizeBytes\x12\x1b\n" +
 	"\tmime_type\x18\x05 \x01(\tR\bmimeType\x12\x12\n" +
-	"\x04role\x18\x06 \x01(\tR\x04role\"\x89\x01\n" +
+	"\x04role\x18\x06 \x01(\tR\x04role\x12\x1d\n" +
+	"\n" +
+	"source_uri\x18\a \x01(\tR\tsourceUri\"\x89\x01\n" +
 	"\x14ProtectedFutureAsset\x12\x1b\n" +
 	"\tasset_key\x18\x01 \x01(\tR\bassetKey\x12(\n" +
 	"\x10future_ref_count\x18\x02 \x01(\x05R\x0efutureRefCount\x12*\n" +

@@ -59,7 +59,7 @@ func TestExpandCreatorStockFoldersExpandsVideoFilesRecursively(t *testing.T) {
 		t.Fatalf("expanded stock = %d entries, want 3", len(stock))
 	}
 	first := stock[0].(map[string]interface{})
-	if first["drive_file_id"] != "a" || first["url"] != "velox-drive://a" || first["duration_ms"] != int64(1700) {
+	if first["drive_file_id"] != "a" || first["url"] != "velox-drive://a" || first["source_uri"] != "https://drive.google.com/uc?export=download&id=a" || first["duration_ms"] != int64(1700) {
 		t.Fatalf("first expanded stock = %#v", first)
 	}
 	if got := stock[2].(map[string]interface{})["url"]; got != "velox-drive://c" {

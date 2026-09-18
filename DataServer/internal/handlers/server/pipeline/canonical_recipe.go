@@ -165,11 +165,15 @@ func recipeClip(raw map[string]interface{}) *SubmitClip {
 	clip := &SubmitClip{
 		AssetID:     firstRecipeString(raw, "asset_id", "clip_id"),
 		DriveFileID: firstRecipeString(raw, "drive_file_id"),
+		SourceURI:   firstRecipeString(raw, "source_uri", "source_url"),
 		StartMS:     int64(recipeFloat(raw["start_ms"])),
 		EndMS:       int64(recipeFloat(raw["end_ms"])),
 		DurationMS:  int64(recipeFloat(raw["duration_ms"])),
 	}
 	clip.URL = firstRecipeString(raw, "url", "link", "drive_link", "folder_link")
+	if clip.SourceURI == "" && strings.HasPrefix(strings.ToLower(clip.URL), "velox-drive://") {
+		clip.SourceURI = "https://drive.google.com/uc?export=download&id=" + strings.TrimSpace(clip.URL[len("velox-drive://"):])
+	}
 	if clip.URL == "" && clip.AssetID != "" {
 		if ref, err := assetref.NewLocal(clip.AssetID); err == nil {
 			clip.URL = ref.Wire()

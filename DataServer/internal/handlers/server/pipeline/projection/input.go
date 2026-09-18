@@ -52,6 +52,7 @@ type ClipInput struct {
 	AssetID     string
 	DriveFileID string
 	URL         string
+	SourceURI   string
 	SHA256      string
 	SizeBytes   int64
 	StartMS     int64
@@ -291,6 +292,9 @@ func clipToMap(input *ClipInput) map[string]interface{} {
 	}
 	if input.URL != "" {
 		out["url"] = strings.TrimSpace(input.URL)
+	}
+	if input.SourceURI != "" {
+		out["source_uri"] = strings.TrimSpace(input.SourceURI)
 	}
 	if input.SHA256 != "" {
 		out["sha256"] = input.SHA256
