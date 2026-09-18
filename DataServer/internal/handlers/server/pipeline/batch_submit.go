@@ -113,11 +113,13 @@ func (h *Handlers) SubmitJobBatch() gin.HandlerFunc {
 
 		results := make([]SubmitJobBatchItemResult, len(batch.Items))
 		seenKeys := make(map[string]int, len(batch.Items))
+		dedupe := newBatchDedupeWindow()
 		var totalScenes int
 		var totalDuration float64
 		for index, item := range batch.Items {
 			if err := NormalizeCanonicalRecipe(&item); err != nil {
 				results[index] = SubmitJobBatchItemResult{Index: index, IdempotencyKey: item.IdempotencyKey, Status: "rejected", Errors: []string{err.Error()}}
+				dedupe.recordRejected()
 				continue
 			}
 			batch.Items[index] = item
@@ -133,6 +135,7 @@ func (h *Handlers) SubmitJobBatch() gin.HandlerFunc {
 				result.Status = "rejected"
 				result.Errors = []string{keyError.Code + ": " + keyError.Reason}
 				results[index] = result
+				dedupe.recordRejected()
 				continue
 			}
 			key := strings.TrimSpace(item.IdempotencyKey)
@@ -142,12 +145,50 @@ func (h *Handlers) SubmitJobBatch() gin.HandlerFunc {
 				result.Status = "rejected"
 				result.Errors = []string{fmt.Sprintf("duplicate_idempotency_key: duplicates items.%d", previous)}
 				results[index] = result
+				dedupe.recordConflict()
 				continue
 			}
 			seenKeys[key] = index
 
+			// In-batch plan dedupe: an item whose render plan is fingerprint-
+			// identical to an already-ACCEPTED item of this batch reuses that
+			// item's job (re-publication of the same render) instead of
+			// enqueuing a byte-identical render. Publications/delivery plans
+			// are excluded from the fingerprint, so a variant that differs
+			// only by destination still dedupes. A FAILED enqueue never
+			// becomes an anchor (recordAccepted runs only on accepted items).
+			fingerprint, fpErr := BatchItemFingerprint(item)
+			if fpErr == nil {
+				if anchorIndex, anchorJob, hit := dedupe.lookup(fingerprint); hit {
+					result.Status = "dedup"
+					result.JobID = anchorJob
+					result.DedupedOf = anchorIndex
+					results[index] = result
+					dedupe.recordDedup()
+					continue
+				}
+			}
+			// A fingerprint computation failure is non-fatal: the item still
+			// goes through the canonical single-job path un-deduped.
+
 			result = h.submitBatchItem(c, index, item)
 			results[index] = result
+			switch result.Status {
+			case "accepted":
+				// Anchor registration only after a confirmed fresh enqueue: a
+				// failed or rejected enqueue must never become a dedupe anchor.
+				// Single-threaded loop: the lookup above missed this fingerprint,
+				// so this item is unconditionally the anchor for it.
+				if fpErr == nil && result.JobID != "" {
+					dedupe.recordAccepted(index, fingerprint, result.JobID)
+				}
+			case "rejected":
+				dedupe.recordRejected()
+			case "conflict":
+				dedupe.recordConflict()
+			case "failed":
+				dedupe.recordFailed()
+			}
 		}
 
 		// The single-job child contexts receive their own usage stats. Mirror
@@ -157,6 +198,14 @@ func (h *Handlers) SubmitJobBatch() gin.HandlerFunc {
 		c.JSON(http.StatusOK, SubmitJobBatchResponse{
 			BatchID: batch.BatchID,
 			Items:   results,
+			Summary: SubmitJobBatchSummary{
+				Items:    len(results),
+				Accepted: dedupe.accepted,
+				Deduped:  dedupe.deduped,
+				Rejected: dedupe.rejected,
+				Conflict: dedupe.conflict,
+				Failed:   dedupe.failed,
+			},
 		})
 	}
 }
