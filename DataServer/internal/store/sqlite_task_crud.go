@@ -106,12 +106,20 @@ func (r *SQLiteTaskRepository) Get(ctx context.Context, id string) (*taskgraph.T
 }
 
 // GetByJobID returns the task for a given job, or (nil, nil) on missing.
+// Multi-task fan-out jobs (migration 176 dropped the one-task-per-job
+// unique index) make this a deterministic PROJECTION rather than a
+// one-to-one lookup: the earliest-created task row wins, matching the
+// DAG head. Callers needing every task of a job (observability roll-ups,
+// per-task live views) must use List with Filter{JobIDs: ...} instead —
+// job live status and execution summaries already route per-task
+// through GetWorkerTaskRuntimeByTask.
 func (r *SQLiteTaskRepository) GetByJobID(ctx context.Context, jobID string) (*taskgraph.Task, error) {
 	if jobID == "" {
 		return nil, fmt.Errorf("task repository: empty jobID")
 	}
 	row := r.store.db.QueryRowContext(ctx,
-		`SELECT `+strings.Join(taskColumns, ",")+` FROM tasks WHERE job_id = ?`,
+		`SELECT `+strings.Join(taskColumns, ",")+` FROM tasks WHERE job_id = ?
+		  ORDER BY created_at ASC, task_id ASC LIMIT 1`,
 		jobID,
 	)
 	t, err := scanTask(row)
