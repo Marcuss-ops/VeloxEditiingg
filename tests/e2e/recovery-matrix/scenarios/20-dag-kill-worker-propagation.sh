@@ -30,8 +30,9 @@
 #
 # DB contract: the orchestrator (run.sh) provisions a fresh DB whose
 # tasks schema is migration-176-current (depends_on column present, the
-# one-task-per-job unique index dropped). Standalone runs must point DB
-# at an equivalent schema:
+# one-task-per-job unique index dropped) and whose task_attempts carries
+# the migration-041/046 shape (job_id + revision columns). Standalone runs
+# must point DB at an equivalent schema:
 #   DB=/path/chaos.db EVIDENCE_DIR=/tmp/ev \
 #     bash tests/e2e/recovery-matrix/scenarios/20-dag-kill-worker-propagation.sh
 # =============================================================================
@@ -155,7 +156,13 @@ dag_assert_eq "stage3-concat-cancelled" \
   "$(sqlite3 "$DB" "SELECT status FROM tasks WHERE task_id='$CONCAT_ID'")" "CANCELLED"
 
 # ── Invariants: zombie-free terminal state ──────────────────────────────────
-# DAG-P2: no non-terminal task remains behind a non-SUCCEEDED terminal dep.
+# DAG-P1 (formal): no PENDING task remains behind a non-SUCCEEDED terminal
+# dependency — after propagation the only allowed terminal states for this
+# job are SUCCEEDED (prep) / FAILED (mix) / CANCELLED (concat).
+rm_assert_invariant "$DB" "DAG-P1" 0 "$JOB_ID"
+# DAG-P2 (formal): every depends_on edge resolves inside the job.
+rm_assert_invariant "$DB" "DAG-P2" 0 "$JOB_ID"
+# No non-terminal task remains in the job at all.
 NON_TERMINAL="$(sqlite3 "$DB" "SELECT COUNT(*) FROM tasks WHERE job_id='$JOB_ID' AND status NOT IN ('SUCCEEDED','FAILED','CANCELLED','TIMED_OUT')")"
 dag_assert_eq "dag-no-orphan-nonterminal" "$NON_TERMINAL" "0"
 # NR-1 zombie probe: no active attempts left in the job.

@@ -114,7 +114,12 @@ CREATE TABLE IF NOT EXISTS tasks (
   completed_at      TEXT,
   created_at        TEXT,
   updated_at        TEXT,
-  ready_at          TEXT
+  ready_at          TEXT,
+  -- Migration-176 current shape (scenario 20's DB contract): the DAG edge
+  -- list must exist for the DAG-P1/P2 invariants and the kill-worker DAG
+  -- scenario. NO idx_tasks_job_id_unique equivalent here: scenario 20 seeds
+  -- a genuine multi-task job (prep → mix → concat).
+  depends_on        TEXT NOT NULL DEFAULT '[]'
 );
 CREATE TABLE IF NOT EXISTS task_attempts (
   id            TEXT PRIMARY KEY,
@@ -258,7 +263,11 @@ run_scenario() {
 }
 
 if [[ "$RUN_ALL" == "1" ]]; then
-  for n in 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17; do
+  # 18 is intentionally absent (unassigned); 19 is the pipeline.md stale-
+  # field grep gate and 20 is the DAG kill-worker propagation scenario —
+  # both are DB/doc-level scenarios that run under the same orchestrator
+  # contract (EVIDENCE_DIR + DB exported, verdict recorded by the script).
+  for n in 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 19 20; do
     # run_scenario returns 0 when the script completed (PASS or FAIL — both
     # are valid terminal states for the matrix). The per-scenario script
     # itself records its own verdict via rm_record_verdict; a return code
