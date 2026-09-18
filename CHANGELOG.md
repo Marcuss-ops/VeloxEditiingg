@@ -1,4 +1,83 @@
-## [Unreleased] - 2026-09-05
+## [Unreleased] - 2026-09-18
+
+### Added — 100x scale track: batch plan dedupe, persistent task DAG, chunk factory (W5 precursor), chaos scenario 20
+
+Four features from the 100x velocity plan (docs/SCALE-IMPROVEMENT-PLAN.md,
+docs/100-percent-plan/04) landed as atomic commits, each verified with the
+full-module gate:
+
+1. **Batch plan dedupe (#17)** — `POST /api/v1/jobs/batch` now collapses
+   fingerprint-identical items: after `NormalizeCanonicalRecipe`, each item's
+   render identity is SHA-256'd over every render-relevant field EXCEPT
+   idempotency_key, video_name, publications/delivery_plan (a differing
+   destination is a second PUBLICATION of the same render, not a second
+   render) and placement_pin_worker_id. A dedup item reuses the anchor item's
+   job_id (`status:"dedup"`, `deduped_of` = anchor index) instead of
+   enqueueing a byte-identical render. A failed enqueue never becomes an
+   anchor. Response gains `summary` {total, accepted, deduped, rejected,
+   conflict, failed}. Wire schema single-sourced in `internal/apiwire` and
+   regenerated via `cmd/api-schema-gen -apply`.
+   Evidence: `go test ./internal/handlers/server/pipeline/ -run 'Batch|Dedupe' -count=1`
+   green; dedupe ledger `batch_plan_dedupe_test.go` covers fingerprint
+   stability (delivery-plan-only variants dedupe), failed-anchor exclusion,
+   and handler wiring.
+
+2. **Persistent task DAG (#15)** — migration `176_task_dependencies.sql`
+   adds the `depends_on` edge list to the canonical `tasks` table
+   (previously `Task.DependsOn` lived only in the in-memory model, so
+   dependency gating did not survive a master restart and multi-task jobs
+   were impossible under `idx_tasks_job_id_unique`). SQLiteTaskRepository
+   persists/reads `depends_on`; `taskgraph.ValidateTaskGraph` adds fail-closed
+   cycle detection + unknown-dependency rejection at enqueue; `TickReadiness`
+   propagates terminal-FAILED dependencies (anti-zombie: a doomed PENDING
+   task is failed by the sweep instead of waiting forever).
+   `ExpandService` (taskgraph) is the fan-out enqueue primitive: one job →
+   N tasks with validated edges, persisted atomically.
+   Evidence: `go test ./internal/taskgraph/ ./internal/store/
+   -run 'TaskGraph|Depend|Expand' -count=1` green including the SQLite
+   round-trip integration test (expand → TickReadiness → root terminal →
+   dependent READY).
+
+3. **Chunk factory, W5 precursor (#14)** —
+   `RemoteCodex/native/worker-agent-go/internal/chunkfactory`: keyframe-
+   aligned, content-addressed chunk planner + store. Chunk identity = SHA-256
+   over {asset_key, source window, profile, chunk_index, identity_version};
+   chunks START only on keyframes (the packet-copy mux rule); writes are
+   atomic temp+rename and idempotent. Wired into the worker composition root
+   behind `chunk_store_enabled` / `VELOX_CHUNK_STORE_ENABLED` (default off):
+   capability is DISABLED by default, READY when enabled, MISCONFIGURED —
+   fail-closed exit 1 — when enabled but the root cannot be created
+   (AGENTS.md §6 state machine; no enabled-with-a-stub path).
+   Evidence: `go test ./internal/chunkfactory/` green (keyframe alignment,
+   identity stability, idempotent Put); worker bootstrap builds clean.
+
+4. **Chaos scenario 20, W8 (#16)** —
+   `tests/e2e/recovery-matrix/scenarios/20-dag-kill-worker-propagation.sh`:
+   kill a worker mid-DAG and verify (a) FAILED root propagates to dependent
+   PENDING tasks via the anti-zombie sweep (transitive closure over
+   `depends_on`), (b) no PENDING task sits behind a terminal-FAILED
+   dependency (DAG-P1), (c) no dangling edges (DAG-P2). DAG-P1/P2 are now
+   formal invariant functions in `invariants.sh` (invokable by every
+   scenario); `run.sh` enumerates scenarios 01-20.
+   Evidence: scenario 20 runs 12/12 PASS against a seeded fixture DB; also
+   executable against a live server when `API_URL` is provided.
+
+### Fixed — readiness for multi-task jobs and legacy-upgrade fixtures
+
+- `SQLiteTaskRepository.GetByJobID` is deterministic under multi-task jobs
+  (stable `ORDER BY created_at, task_id`) instead of relying on insert order.
+- Migration `176` `ALTER TABLE` is tolerant of a pre-existing column and of
+  fixtures that never created `tasks` (pattern 022; runner formalized in
+  `migrations/apply.go`), so legacy-upgrade fixtures that seed history
+  through earlier migrations keep passing.
+- Worker test fixtures that hand-build the `tasks` table now include
+  `depends_on` (AGENTS.md §4 fixture pattern).
+
+Gate evidence: `DataServer` `go vet ./...` 0, `go build ./...` 0,
+`go test ./internal/taskgraph/ ./internal/store/ ./internal/handlers/server/pipeline/
+./internal/apiwire/ -count=1` green; worker module `go build ./...` 0,
+`go vet` on touched packages 0, `go test ./internal/worker/
+./internal/chunkfactory/ ./pkg/config/` green.
 
 ### Removal — unwired derived-assets resolver + unwired shared placement contract (~667 LOC)
 

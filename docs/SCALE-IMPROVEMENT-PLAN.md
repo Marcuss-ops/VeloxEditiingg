@@ -124,6 +124,14 @@ Aggregate CPU at 100k/h: 27.8 × 8.8 s = ~245 core-seconds/s → ~336 cores acro
   (YouTube included) — the 10% you add back, per Musk's rule.
 - Requires chunk factory (keyframe-aligned 1s chunks, content-addressed,
   cached like W3) and a player/edge assembly path or per-destination remux.
+- **LANDED (precursor, 2026-09-18):** `worker-agent-go/internal/chunkfactory`
+  — keyframe-aligned chunk planner + content-addressed store. Chunk identity
+  = SHA-256 over {asset_key, source window, profile, chunk_index,
+  identity_version}; chunks start only on keyframes; atomic idempotent
+  install. Wired behind `chunk_store_enabled` (default off; DISABLED/READY/
+  MISCONFIGURED per AGENTS.md §6). Missing for W5 completion: the renderer
+  call site that plans+emits chunks during encode, the manifest format, and
+  the edge/player assembly path.
 - **Evidence:** two "different" videos sharing >90% byte-identical chunks;
   origin egress per video < 5 MB.
 
@@ -158,7 +166,14 @@ Aggregate CPU at 100k/h: 27.8 × 8.8 s = ~245 core-seconds/s → ~336 cores acro
 - Inject Drive/storage 429s and latency; fill a cache disk to the pressure
   watermark; verify admission hysteresis recovers.
 - TLA+/invariant pass on the lease scheduler before >8 slots per host.
-- **Evidence:** failure-injection report per the completion policy.
+- **LANDED (DAG slice, 2026-09-18):** scenario
+  `tests/e2e/recovery-matrix/scenarios/20-dag-kill-worker-propagation.sh` —
+  worker kill mid-DAG, FAILED-root propagation to dependent PENDING tasks,
+  formal invariants DAG-P1 (no PENDING behind terminal-FAILED dependency) and
+  DAG-P2 (no dangling edges) in `invariants.sh`, run.sh enumerates 01–20.
+  Remaining slices: N=10 concurrency kill, 429 injection, cache-disk fill.
+- **Evidence:** scenario 20 runs 12/12 PASS (fixture DB; live-server mode via
+  `API_URL`).
 
 ### W9 — Process fixes from the 2026-09-15 session *(Stroustrup: designated initializers; the 8-release day)*
 - C++ aggregate initializers → designated initializers (the v8
@@ -230,6 +245,24 @@ the durable answer, W1 is.
 | 2 | W1 (object-storage destination), W2 (bitrate ladder), W9 (CI/process) | 1k→5k/h sustainable |
 | 3–4 | W4 (zero-disk streaming), W8 (chaos), concurrency ladder | 10k/h with 34–56 slots |
 | Later | W5 (chunk factory + manifest delivery) | 30k/h monolithic ceiling broken; 100k/h becomes procurement |
+
+### Track A progress (2026-09-18)
+
+- **Batch plan dedupe — LANDED:** identical items inside one
+  `POST /api/v1/jobs/batch` collapse onto one render (fingerprint over
+  render-relevant fields after normalization; publications/delivery excluded
+  so differing destinations still dedupe). Response carries `summary`
+  {total, accepted, deduped, rejected, conflict, failed} and per-item
+  `status:"dedup"` + `deduped_of`. Makes the batch surface a
+  template+variants contract: pay one render, publish N times.
+- **Multi-Task DAG — LANDED (substrate):** `depends_on` persisted (migration
+  176), fail-closed `ValidateTaskGraph` (cycles, unknown deps), anti-zombie
+  failure propagation in `TickReadiness`, `ExpandService` fan-out enqueue,
+  deterministic multi-task `GetByJobID`. Late composition (asset-prep ∥
+  render) can now be expressed at enqueue; the enqueue-time decomposition of
+  the monolithic recipe into the DAG is the remaining step.
+- **Chunk factory (W5 precursor) — LANDED** (see W5 above).
+- **Chaos DAG slice (W8) — LANDED** (see W8 above).
 
 **Bottom line:** with W1–W4 the farm is compute-unbounded and I/O-limited at
 roughly **10k/h (this fleet ×4) to ~30k/h (monolithic ceiling)**. 100k/h is
