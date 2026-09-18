@@ -216,7 +216,7 @@ assert_invariant_7_new_attempt_id_after_reap() {
 # rm_assert_invariant <db> <label> <expected_negative:0|1> [<window_sec>] [<age_sec>]
 # Routes by label suffix. Default windows: NR-3=600s, NR-4=86400s.
 rm_assert_invariant() {
-  local db="$1" label="$2" neg_expected="${3:-0}" w="$4" a="$5"
+  local db="$1" label="$2" neg_expected="${3:-0}" w="${4:-}" a="${5:-}"
   case "$label" in
     NR-1) assert_invariant_1_one_attempt_active_per_task "$db" "$neg_expected" ;;
     NR-2) assert_invariant_2_old_lease_cannot_finalize "$db" "$neg_expected" ;;

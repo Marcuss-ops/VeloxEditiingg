@@ -216,6 +216,12 @@ ENV
 # Appends to RM_CASE_VERDICTS[] for the matrix summary.
 rm_record_verdict() {
   RM_CASE_VERDICTS+=("$1: $2 — $3")
+  # Counters default to 0 when unset: standalone scenario runs source lib.sh
+  # without run.sh's globals, and `set -u` makes an unset counter fatal here
+  # (the arithmetic would abort the scenario mid-verdict).
+  RM_PASS_COUNT="${RM_PASS_COUNT:-0}"
+  RM_FAIL_COUNT="${RM_FAIL_COUNT:-0}"
+  RM_DEG_COUNT="${RM_DEG_COUNT:-0}"
   case "$2" in
     PASS)     (( RM_PASS_COUNT++ )) ;;
     FAIL)     (( RM_FAIL_COUNT++ )) ;;
