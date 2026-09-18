@@ -135,6 +135,12 @@ const (
 	// EnvCacheScrubMaxBlobsPerPass caps the blobs touched per pass
 	// (default 8).
 	EnvCacheScrubMaxBlobsPerPass = "VELOX_CACHE_SCRUB_MAX_BLOBS_PER_PASS"
+	// EnvChunkStoreEnabled opts the worker into the W5-precursor
+	// content-addressed chunk factory (default off).
+	EnvChunkStoreEnabled = "VELOX_CHUNK_STORE_ENABLED"
+	// EnvChunkStoreDir overrides the chunk store root. Empty derives
+	// <StateDir>/chunks at the consumer site.
+	EnvChunkStoreDir = "VELOX_CHUNK_STORE_DIR"
 )
 
 // EnvBindings is the set of env-var names this package inspects.
@@ -176,6 +182,7 @@ var EnvBindings = []string{
 	EnvCacheEvictionBatchSize, EnvCacheEvictionIntervalSecs,
 	EnvCacheScrubEnabled, EnvCacheScrubIntervalSecs,
 	EnvCacheScrubBytesPerPass, EnvCacheScrubMaxBlobsPerPass,
+	EnvChunkStoreEnabled, EnvChunkStoreDir,
 }
 
 // envTruthy reports whether a string from os.Getenv should be interpreted
@@ -392,5 +399,12 @@ func applyEnvOverrides(cfg *WorkerConfig) error {
 	bindPositiveInt(EnvCacheScrubIntervalSecs, &cfg.CacheScrubIntervalSecs)
 	bindPositiveInt64(EnvCacheScrubBytesPerPass, &cfg.CacheScrubBytesPerPass)
 	bindPositiveInt(EnvCacheScrubMaxBlobsPerPass, &cfg.CacheScrubMaxBlobsPerPass)
+	// W5-precursor chunk factory: opt-in flag + optional root override.
+	if v := strings.TrimSpace(os.Getenv(EnvChunkStoreEnabled)); v != "" {
+		cfg.ChunkStoreEnabled = envTruthy(v)
+	}
+	if v := strings.TrimSpace(os.Getenv(EnvChunkStoreDir)); v != "" {
+		cfg.ChunkStoreDir = v
+	}
 	return nil
 }

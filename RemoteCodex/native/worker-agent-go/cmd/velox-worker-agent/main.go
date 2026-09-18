@@ -27,6 +27,7 @@ import (
 	"time"
 
 	boot "velox-worker-agent/internal/bootstrap"
+	"velox-worker-agent/internal/chunkfactory"
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/protectedassets"
 	"velox-worker-agent/internal/taskrunner/executors"
@@ -311,6 +312,30 @@ func main() {
 	logger.Info("[CACHE] PersistedLocalCache at %s (256 MiB default budget)", cacheDir)
 	logger.Info("[BLOB] BlobArtifacts at %s (local content-addressed storage)", blobDir)
 
+	// W5-precursor chunk factory (internal/chunkfactory): content-addressed,
+	// keyframe-aligned chunk store under <StateDir>/chunks. Capability state
+	// machine (AGENTS §6): DISABLED by default (no consumer on the default
+	// render path yet); READY when ChunkStoreEnabled and the store opens;
+	// MISCONFIGURED — fail-closed, exit 1 — when the operator requested it
+	// but the root cannot be created. Never enabled-with-a-stub. Constructed
+	// before worker.New and attached right after, mirroring AttachClipCache.
+	var chunkStore *chunkfactory.Store
+	if cfg.ChunkStoreEnabled {
+		chunkRoot := strings.TrimSpace(cfg.ChunkStoreDir)
+		if chunkRoot == "" {
+			chunkRoot = filepath.Join(cfg.StateDir, "chunks")
+		}
+		var chunkErr error
+		chunkStore, chunkErr = chunkfactory.NewStore(chunkRoot)
+		if chunkErr != nil {
+			fmt.Fprintf(os.Stderr, "Error: chunk store enabled but unavailable at %s: %v\n", chunkRoot, chunkErr)
+			os.Exit(1)
+		}
+		logger.Info("[CHUNK_STORE] content-addressed chunk store READY at %s", chunkRoot)
+	} else {
+		logger.Info("[CHUNK_STORE] chunk store DISABLED (set chunk_store_enabled / VELOX_CHUNK_STORE_ENABLED=1 to enable)")
+	}
+
 	w, workerErr := worker.New(cfg, resolvedVersion,
 		worker.WithRegistry(registry),
 		worker.WithCache(localCache),
@@ -336,6 +361,9 @@ func main() {
 	if workerErr != nil {
 		logger.LogRegisterFailed("(initial)", cfg.MasterURL, workerErr)
 		os.Exit(1)
+	}
+	if chunkStore != nil {
+		w.AttachChunkStore(chunkStore)
 	}
 
 	// Remote shared-asset cache: this SQLite index and its files live under

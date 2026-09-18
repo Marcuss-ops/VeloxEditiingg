@@ -166,6 +166,18 @@ type WorkerConfig struct {
 	// Default: "" (disabled — each job downloads its own assets)
 	AssetCacheDir string `json:"asset_cache_dir,omitempty"`
 
+	// ChunkStoreEnabled opts the worker into the W5-precursor content-addressed
+	// chunk factory (internal/chunkfactory). When enabled, keyframe-aligned
+	// chunks produced during renders are stored under
+	// <StateDir>/chunks and deduplicated across jobs by content identity.
+	// Off by default: the chunk pipeline is only consumed by the
+	// manifest-first delivery path, which is not yet the default.
+	ChunkStoreEnabled bool `json:"chunk_store_enabled,omitempty"`
+	// ChunkStoreDir overrides the chunk store root. Empty derives
+	// <StateDir>/chunks (never /tmp: chunk payloads are durable,
+	// content-addressed cache entries, not scratch).
+	ChunkStoreDir string `json:"chunk_store_dir,omitempty"`
+
 	// Circuit breaker configuration
 	CircuitBreakerFailureThreshold int `json:"circuit_breaker_failure_threshold,omitempty"` // Failures to open circuit (default: 5)
 	CircuitBreakerSuccessThreshold int `json:"circuit_breaker_success_threshold,omitempty"` // Successes to close circuit (default: 3)

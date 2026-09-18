@@ -10,6 +10,7 @@ import (
 
 	"velox-shared/controltransport"
 	"velox-worker-agent/internal/artifactgraph"
+	"velox-worker-agent/internal/chunkfactory"
 	"velox-worker-agent/internal/downloader"
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/prefetch"
@@ -423,6 +424,12 @@ type Worker struct {
 	// facade used by the download adapter. clipCache remains for legacy lease
 	// call sites while new paths depend on this single typed boundary.
 	canonicalAssetCache workercache.ContentAddressedCache
+
+	// chunkStore is the optional W5-precursor content-addressed chunk store
+	// (internal/chunkfactory). nil = capability DISABLED (no consumer on the
+	// default render path); non-nil = READY for the manifest-first delivery
+	// path. Wired only by the composition root via AttachChunkStore.
+	chunkStore *chunkfactory.Store
 
 	// PR-3.6 / F4: worker-side resource sampler. Powers Heartbeat.resources
 	// (cumulative typed counters → master F2 decodes + delta-converts) AND
