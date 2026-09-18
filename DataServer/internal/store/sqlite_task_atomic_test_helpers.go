@@ -71,7 +71,8 @@ CREATE TABLE tasks (
 	started_at         TEXT,
 	completed_at       TEXT,
 	created_at         TEXT,
-	updated_at         TEXT
+	updated_at         TEXT,
+	depends_on         TEXT NOT NULL DEFAULT '[]'  -- migration 176
 );
 CREATE TABLE task_attempts (
 	id                 TEXT PRIMARY KEY,

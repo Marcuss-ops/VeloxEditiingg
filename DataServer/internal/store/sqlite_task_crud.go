@@ -35,19 +35,53 @@ func (r *SQLiteTaskRepository) Create(ctx context.Context, task *taskgraph.Task)
 	createdAt := now.Format(time.RFC3339)
 	updatedAt := createdAt
 
-	_, err := r.store.db.ExecContext(ctx,
+	dependsOnJSON, err := taskgraph.MarshalDependsOn(task.DependsOn)
+	if err != nil {
+		return fmt.Errorf("task create: depends_on: %w", err)
+	}
+	_, err = r.store.db.ExecContext(ctx,
 		`INSERT INTO tasks (
 			task_id, job_id, project_id, render_plan_id,
 			executor_id, executor_version, status, priority,
 			revision, attempt_count, worker_id, lease_id,
-			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, '', '', ?, ?)`,
+			created_at, updated_at, depends_on
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, '', '', ?, ?, ?)`,
 		task.ID, task.JobID, task.ProjectID, task.RenderPlanID,
 		task.ExecutorID, task.ExecutorVersion, string(task.Status), task.Priority,
-		createdAt, updatedAt,
+		createdAt, updatedAt, dependsOnJSON,
 	)
 	if err != nil {
 		return wrapDBInfrastructure("task create", err)
+	}
+	return nil
+}
+
+// SetDependsOn replaces the dependency edge list of one task. The fan-out
+// enqueue path uses it to publish graph edges atomically with task creation;
+// callers MUST pass tasks still in PENDING (edges are immutable once the
+// task is dispatchable — a READY task may already have been claimed against
+// the old edge list).
+func (r *SQLiteTaskRepository) SetDependsOn(ctx context.Context, id string, dependsOn []string) error {
+	if r.store == nil || r.store.db == nil {
+		return fmt.Errorf("task repository: store not initialized")
+	}
+	if id == "" {
+		return fmt.Errorf("task repository: SetDependsOn: empty id")
+	}
+	dependsOnJSON, err := taskgraph.MarshalDependsOn(dependsOn)
+	if err != nil {
+		return fmt.Errorf("task repository: SetDependsOn %s: %w", id, err)
+	}
+	result, err := r.store.db.ExecContext(ctx,
+		`UPDATE tasks SET depends_on = ?, updated_at = ?
+		  WHERE task_id = ? AND status = 'PENDING'`,
+		dependsOnJSON, time.Now().UTC().Format(time.RFC3339), id,
+	)
+	if err != nil {
+		return wrapDBInfrastructure("task set depends_on", err)
+	}
+	if affected, err := result.RowsAffected(); err == nil && affected == 0 {
+		return fmt.Errorf("task repository: SetDependsOn %s: task not found or not PENDING", id)
 	}
 	return nil
 }

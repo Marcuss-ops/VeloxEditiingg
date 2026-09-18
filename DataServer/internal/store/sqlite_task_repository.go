@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"fmt"
 
 	"velox-server/internal/taskgraph"
 )
@@ -36,6 +37,7 @@ var taskColumns = []string{
 	"revision", "attempt_count", "attempt_id", "attempt_number",
 	"worker_id", "lease_id",
 	"ready_at", "started_at", "completed_at", "created_at", "updated_at",
+	"depends_on",
 }
 
 func scanTask(row interface{ Scan(...interface{}) error }) (*taskgraph.Task, error) {
@@ -43,18 +45,27 @@ func scanTask(row interface{ Scan(...interface{}) error }) (*taskgraph.Task, err
 	var attemptID sql.NullString
 	var readyAt, startedAt, completedAt sql.NullString
 	var createdAt, updatedAt string
+	var dependsOnJSON string
 	err := row.Scan(
 		&t.ID, &t.JobID, &t.ProjectID, &t.RenderPlanID,
 		&t.ExecutorID, &t.ExecutorVersion, &t.Status, &t.Priority,
 		&t.Revision, &t.AttemptCount, &attemptID, &t.AttemptNumber,
 		&t.WorkerID, &t.LeaseID,
 		&readyAt, &startedAt, &completedAt, &createdAt, &updatedAt,
+		&dependsOnJSON,
 	)
 	if attemptID.Valid {
 		t.AttemptID = attemptID.String
 	}
 	if err != nil {
 		return nil, err
+	}
+	// depends_on is a JSON array of task IDs (migration 176). Parse failure
+	// is a data-integrity error, not a soft default: an unparsable edge list
+	// must fail the read so corrupted rows surface in telemetry instead of
+	// silently changing readiness semantics.
+	if err := taskgraph.UnmarshalDependsOn(dependsOnJSON, &t.DependsOn); err != nil {
+		return nil, fmt.Errorf("task repository: scan %s: depends_on: %w", t.ID, err)
 	}
 	if readyAt.Valid && readyAt.String != "" {
 		pt, e := parsePersistedWorkerTimestamp(readyAt.String, "tasks.ready_at")

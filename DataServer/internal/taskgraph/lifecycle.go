@@ -234,7 +234,18 @@ func (l *LifecycleService) ExpireTaskLease(ctx context.Context, candidate Requeu
 // dependencies (DependsOn empty, the single-task model) transition
 // unconditionally. CAS failures from concurrent goroutines are non-fatal.
 //
-// Returns the number of tasks transitioned. limit caps how many tasks are
+// The same tick owns failure propagation (Track 4 §2): the full PENDING
+// snapshot is evaluated against the terminal-failed set, and every task
+// transitively downstream of a failed/cancelled/timed-out dependency is
+// CANCELLED instead of being left PENDING forever (its readiness
+// predicate can never become true). A dependency in a non-SUCCEEDED
+// terminal state is only visible when its row appears in the same
+// snapshot; terminal dependencies outside the PENDING window are read
+// individually so propagation does not wait for the next snapshot that
+// happens to include them.
+//
+// Returns the number of tasks transitioned to READY. Tasks cancelled by
+// failure propagation are NOT counted. limit caps how many tasks are
 // scanned per tick; 0 uses the safe default of 100.
 func (l *LifecycleService) TickReadiness(ctx context.Context, limit int) (int, error) {
 	if limit <= 0 {
@@ -247,6 +258,12 @@ func (l *LifecycleService) TickReadiness(ctx context.Context, limit int) (int, e
 	if err != nil {
 		return 0, fmt.Errorf("taskgraph.TickReadiness: list PENDING: %w", err)
 	}
+
+	// Failure propagation pass. A PENDING task whose DependsOn references a
+	// task in a non-SUCCEEDED terminal state is doomed: cancel it and
+	// propagate transitively through the PENDING snapshot.
+	l.propagateFailures(ctx, tasks)
+
 	var transitioned int
 	for _, t := range tasks {
 		// PR #4: verify real dependencies before transitioning.
@@ -265,4 +282,93 @@ func (l *LifecycleService) TickReadiness(ctx context.Context, limit int) (int, e
 		transitioned++
 	}
 	return transitioned, nil
+}
+
+// propagateFailures cancels every PENDING task transitively downstream of
+// a terminal-failed dependency. tasks is the PENDING snapshot this tick
+// already holds; terminal dependency states outside the snapshot are
+// resolved with individual Get calls (PENDING graphs are the common case,
+// so the extra reads only fire for tasks that actually declare edges).
+// CAS conflicts (a concurrent transition moved the task meanwhile) are
+// non-fatal: the next tick re-evaluates.
+func (l *LifecycleService) propagateFailures(ctx context.Context, tasks []Task) {
+	if len(tasks) == 0 {
+		return
+	}
+	byID := make(map[string]Task, len(tasks))
+	for _, t := range tasks {
+		byID[t.ID] = t
+	}
+
+	// Resolve the effective status of every referenced dependency.
+	depStatus := make(map[string]Status)
+	getDepStatus := func(depID string) (Status, bool) {
+		if s, ok := depStatus[depID]; ok {
+			return s, true
+		}
+		if t, ok := byID[depID]; ok {
+			depStatus[depID] = t.Status
+			return t.Status, true
+		}
+		row, err := l.repo.Get(ctx, depID)
+		if err != nil || row == nil {
+			// Unknown dependencies are not a failure signal: the task stays
+			// PENDING (AreDependenciesSatisfied already gates on it).
+			depStatus[depID] = ""
+			return "", false
+		}
+		depStatus[depID] = row.Status
+		return row.Status, true
+	}
+
+	// Seed: PENDING tasks with at least one terminal-failed dependency.
+	seeded := map[string]struct{}{}
+	queue := make([]string, 0, len(tasks))
+	for _, t := range tasks {
+		for _, dep := range t.DependsOn {
+			s, ok := getDepStatus(dep)
+			if !ok || s == "" {
+				continue
+			}
+			if s == StatusFailed || s == StatusCancelled || s == StatusTimedOut {
+				if _, seen := seeded[t.ID]; !seen {
+					seeded[t.ID] = struct{}{}
+					queue = append(queue, t.ID)
+				}
+				break
+			}
+		}
+	}
+	if len(queue) == 0 {
+		return
+	}
+
+	// BFS through the PENDING snapshot's reverse edges.
+	downstream := make(map[string][]string, len(tasks))
+	for _, t := range tasks {
+		for _, dep := range t.DependsOn {
+			downstream[dep] = append(downstream[dep], t.ID)
+		}
+	}
+	for len(queue) > 0 {
+		id := queue[0]
+		queue = queue[1:]
+		t, ok := byID[id]
+		if !ok || t.Status != StatusPending {
+			continue
+		}
+		if err := l.repo.SetStatus(ctx, t.ID, StatusPending, StatusCancelled, t.Revision); err != nil {
+			// CAS conflict: the task moved concurrently. Skip; its dependents
+			// will be re-evaluated on the next tick against the new state.
+			continue
+		}
+		t.Status = StatusCancelled
+		byID[t.ID] = t
+		for _, child := range downstream[id] {
+			if _, seen := seeded[child]; !seen {
+				seeded[child] = struct{}{}
+				queue = append(queue, child)
+			}
+		}
+	}
 }

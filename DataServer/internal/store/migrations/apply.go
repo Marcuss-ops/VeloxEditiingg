@@ -86,6 +86,20 @@ func applyMigration(db *sql.DB, m Migration) error {
 				sqliteerr.IsDuplicateColumn(err) {
 				continue
 			}
+			// Tolerate "no such table" for ADD COLUMN — a migration may add a
+			// column to a table that a sparse legacy-upgrade database never
+			// created (the table's owning CREATE TABLE IF NOT EXISTS migration
+			// is already recorded as applied, or the domain was extracted).
+			// Concretely this keeps 176_task_dependencies (ALTER TABLE tasks
+			// ADD COLUMN depends_on) executable on the validation legacy
+			// fixture, which seeds history through 136 without a tasks table.
+			// The missing column is the correct end state there: no tasks rows
+			// exist, so there is nothing to backfill and nothing can read it.
+			if strings.Contains(strings.ToLower(stmt), "alter table") &&
+				strings.Contains(strings.ToLower(stmt), "add column") &&
+				sqliteerr.IsNoSuchTable(err) {
+				continue
+			}
 			return fmt.Errorf("execute migration: %w", err)
 		}
 	}

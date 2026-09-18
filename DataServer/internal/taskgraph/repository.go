@@ -100,7 +100,10 @@ type Reader interface {
 	List(ctx context.Context, filter Filter) ([]Task, error)
 
 	// GetByJobID returns the task for a given job, or (nil, nil) on missing.
-	// Invariant: each job has exactly one task.
+	// Invariant (single-task model): each job has exactly one task.
+	// Multi-task fan-out jobs (Track 4 DAG) relax this to "at least one"
+	// until the fan-out enqueue path lands; the method returns the first
+	// task row for the job.
 	GetByJobID(ctx context.Context, jobID string) (*Task, error)
 }
 
@@ -109,6 +112,12 @@ type Writer interface {
 	// Create inserts a new task in PENDING state. If id is empty the
 	// repository assigns one.
 	Create(ctx context.Context, task *Task) error
+
+	// SetDependsOn replaces the dependency edge list of one task. Only
+	// legal while the task is still PENDING: edges are immutable once the
+	// task is dispatchable (a READY task may already have been claimed
+	// against the old edge list).
+	SetDependsOn(ctx context.Context, id string, dependsOn []string) error
 
 	// SetStatus performs a CAS status change from → to, verifying revision.
 	// Returns ErrTransitionConflict on mismatch.

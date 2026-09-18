@@ -175,6 +175,9 @@ func (s *spoofStubTaskRepo) ListReadyCandidates(_ context.Context, _ int) ([]pla
 func (s *spoofStubTaskRepo) ClaimTaskForWorkerAtomic(_ context.Context, _ taskgraph.ClaimTaskForWorkerCommand) (*taskgraph.TaskWithSpec, *taskattempts.TaskAttempt, error) {
 	panic("spoofStubTaskRepo.ClaimTaskForWorkerAtomic")
 }
+func (s *spoofStubTaskRepo) SetDependsOn(context.Context, string, []string) error {
+	panic("spoofStubTaskRepo.SetDependsOn")
+}
 func (s *spoofStubTaskRepo) IngestTaskResultAtomic(_ context.Context, cmd taskgraph.IngestResultCommand) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

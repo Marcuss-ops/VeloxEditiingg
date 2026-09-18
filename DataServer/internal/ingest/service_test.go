@@ -113,6 +113,9 @@ func (s *stubIngestTaskRepo) ListReadyCandidates(context.Context, int) ([]placem
 func (s *stubIngestTaskRepo) ClaimTaskForWorkerAtomic(context.Context, taskgraph.ClaimTaskForWorkerCommand) (*taskgraph.TaskWithSpec, *taskattempts.TaskAttempt, error) {
 	panic("ClaimTaskForWorkerAtomic")
 }
+func (s *stubIngestTaskRepo) SetDependsOn(context.Context, string, []string) error {
+	panic("SetDependsOn")
+}
 func (s *stubIngestTaskRepo) IngestTaskResultAtomic(_ context.Context, cmd taskgraph.IngestResultCommand) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

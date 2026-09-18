@@ -167,6 +167,9 @@ func (s *exhaustedExpireStubRepo) IncrementAttempt(context.Context, string) erro
 func (s *exhaustedExpireStubRepo) AreDependenciesSatisfied(context.Context, []string) (bool, error) {
 	panic("exhaustedExpireStubRepo.AreDependenciesSatisfied: not exercised by ExpireTaskLease tests")
 }
+func (s *exhaustedExpireStubRepo) SetDependsOn(context.Context, string, []string) error {
+	panic("exhaustedExpireStubRepo.SetDependsOn: not exercised by ExpireTaskLease tests")
+}
 func (s *exhaustedExpireStubRepo) AcceptTaskAtomic(context.Context, *taskattempts.TaskAttempt, int) error {
 	panic("exhaustedExpireStubRepo.AcceptTaskAtomic: not exercised by ExpireTaskLease tests")
 }
@@ -471,6 +474,9 @@ func (s *stubRepo) IncrementAttempt(_ context.Context, _ string) error {
 }
 func (s *stubRepo) AreDependenciesSatisfied(ctx context.Context, deps []string) (bool, error) {
 	panic("stubRepo.AreDependenciesSatisfied")
+}
+func (s *stubRepo) SetDependsOn(context.Context, string, []string) error {
+	panic("stubRepo.SetDependsOn")
 }
 func (s *stubRepo) AcceptTaskAtomic(_ context.Context, _ *taskattempts.TaskAttempt, _ int) error {
 	panic("stubRepo.AcceptTaskAtomic")

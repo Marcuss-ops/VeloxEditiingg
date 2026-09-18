@@ -64,6 +64,7 @@ func (c *countingRepo) AcceptTaskAtomic(_ context.Context, _ *taskattempts.TaskA
 func (c *countingRepo) AreDependenciesSatisfied(_ context.Context, _ []string) (bool, error) {
 	panic("not used")
 }
+func (c *countingRepo) SetDependsOn(context.Context, string, []string) error { panic("not used") }
 func (c *countingRepo) Fail(_ context.Context, _, _ string, _ int) error   { panic("not used") }
 func (c *countingRepo) IncrementAttempt(_ context.Context, _ string) error { panic("not used") }
 func (c *countingRepo) TransitionTaskToTerminalAtomic(
