@@ -21,11 +21,12 @@ type AssetOperationRecord = executor.AssetOperationRecord
 // it. The worker-lifetime totals live in the Prometheus exporter as a
 // SEPARATE view (WorkerCacheMetrics).
 type AttemptCacheMetrics struct {
-	CacheLookups       int64
-	CacheHits          int64
-	CacheMisses        int64
-	CacheDownloadCount int64
-	CacheDownloadBytes int64
+	CacheLookups           int64
+	CacheHits              int64
+	CacheMisses            int64
+	CacheDownloadCount     int64
+	CacheDownloadBytes     int64
+	DuplicateDownloadBytes int64
 	// Byte-level attribution: the single cacheResolutionSink is the ONLY
 	// authority for these counters. They are derived from CacheResolution
 	// fields at the single resolution point — never re-derived by report
@@ -128,8 +129,10 @@ func (t *assetOperationTracker) recordResolution(resolution downloader.CacheReso
 		t.cache.OriginWarmCacheCount++
 		t.cache.CacheHitBytes += resolution.SizeBytes
 	case downloader.OriginRuntimeDownload:
-		t.cache.OriginDownloadCount++
-		t.cache.CacheMissBytes += resolution.DownloadBytes
+		if resolution.Downloaded {
+			t.cache.OriginDownloadCount++
+			t.cache.CacheMissBytes += resolution.DownloadBytes
+		}
 	}
 	// Track required asset bytes (all resolutions contribute).
 	if resolution.SizeBytes > 0 {
@@ -169,6 +172,15 @@ func (t *assetOperationTracker) cacheSnapshot() AttemptCacheMetrics {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.cache
+}
+
+func (t *assetOperationTracker) recordDuplicateDownload(bytes int64) {
+	if t == nil || bytes <= 0 {
+		return
+	}
+	t.mu.Lock()
+	t.cache.DuplicateDownloadBytes += bytes
+	t.mu.Unlock()
 }
 
 type assetOperationTrackerKey struct{}

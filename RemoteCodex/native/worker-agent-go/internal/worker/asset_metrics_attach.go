@@ -88,6 +88,7 @@ func projectAttemptCacheFacts(report *taskrunner.TaskExecutionReport, cache Atte
 		raw.AssetCacheMissCount = cache.CacheMisses
 		raw.CacheDownloadCount = cache.CacheDownloadCount
 		raw.CacheDownloadBytes = cache.CacheDownloadBytes
+		raw.DuplicateDownloadBytes = cache.DuplicateDownloadBytes
 		raw.CacheHitBytes = cache.CacheHitBytes
 		raw.CacheMissBytes = cache.CacheMissBytes
 		// Single-chain projection: BytesFromLocalCache is the attempt-scoped

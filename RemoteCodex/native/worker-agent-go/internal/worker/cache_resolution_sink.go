@@ -36,7 +36,7 @@ func (s cacheResolutionSink) RecordResolution(ctx context.Context, resolution do
 	// Classify origin for cache hits.
 	if resolution.CacheHit && resolution.Origin == "" {
 		resolution.Origin = s.classifyOrigin(resolution)
-	} else if !resolution.CacheHit && resolution.Origin == "" {
+	} else if !resolution.CacheHit && !resolution.Coalesced && resolution.Origin == "" {
 		resolution.Origin = downloader.OriginRuntimeDownload
 	}
 	if resolution.Origin == downloader.OriginPrefetch && resolution.PreparedAt.IsZero() {
@@ -46,7 +46,7 @@ func (s cacheResolutionSink) RecordResolution(ctx context.Context, resolution do
 	// an explicit zero-network invariant violation. Keep this event on the
 	// canonical resolution path so it cannot be hidden by a lower-level
 	// transferer or duplicated by report builders.
-	if !resolution.CacheHit {
+	if !resolution.CacheHit && !resolution.Coalesced {
 		if job, asset, ok := s.preparedResolutionMatch(resolution); ok {
 			if rec := telemetry.RecorderFromContext(ctx); rec != nil {
 				h := rec.Begin(telemetry.EventSpec{Origin: telemetry.OriginWorker, Scope: telemetry.ScopeTask, Component: "worker.prejob", Action: "prejob_runtime_download_violation"})

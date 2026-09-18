@@ -40,6 +40,24 @@ func TestAttachAssetOperationsProjectsResolverCacheCounters(t *testing.T) {
 	}
 }
 
+func TestAttachAssetOperationsProjectsDuplicateDownloadBytes(t *testing.T) {
+	tracker := &assetOperationTracker{}
+	tracker.recordResolution(downloader.CacheResolution{
+		AssetID: "leader", CacheHit: false, Outcome: downloader.CacheOutcomeMissNotFound,
+		Downloaded: true, DownloadBytes: 4096,
+	})
+	tracker.recordDuplicateDownload(8192)
+
+	report := taskrunner.TaskExecutionReport{}
+	attachAssetOperations(&report, tracker)
+	if report.RawMetrics == nil || report.RawMetrics.DuplicateDownloadBytes != 8192 {
+		t.Fatalf("duplicate_download_bytes = %v, want 8192", report.RawMetrics)
+	}
+	if report.RawMetrics.CacheDownloadBytes != 4096 {
+		t.Fatalf("physical cache download bytes = %d, want 4096", report.RawMetrics.CacheDownloadBytes)
+	}
+}
+
 // TestAssetPreparationSummary_AggregatesPerAttemptDrillDown locks the STEP D
 // contract: the per-attempt asset-preparation summary aggregates the
 // per-transfer sub-phases from the canonical resolver sink and exposes ready-

@@ -108,6 +108,9 @@ type CacheResolution struct {
 	LocalPath string
 	// CacheHit mirrors Outcome.IsHit() for the legacy boolean consumers.
 	CacheHit bool
+	// Coalesced is true when the caller joined an in-flight transfer. The
+	// logical lookup is still a miss, but no second network bytes were moved.
+	Coalesced bool
 	// Downloaded reports whether bytes were transferred from the source.
 	Downloaded bool
 	// DownloadBytes is the number of bytes transferred on the miss path
@@ -314,6 +317,7 @@ func resolutionFromDownloadedAsset(asset DownloadedAsset, req DownloadRequest) C
 		Outcome:    asset.Outcome,
 		LocalPath:  asset.LocalPath,
 		CacheHit:   asset.CacheHit,
+		Coalesced:  asset.Coalesced,
 		Source:     CacheSourceMaster,
 		SHA256:     asset.SHA256,
 		Timing:     asset.Timing,
@@ -332,8 +336,10 @@ func resolutionFromDownloadedAsset(asset DownloadedAsset, req DownloadRequest) C
 	} else {
 		// The manager reports zero downloaded bytes on the hit path; a
 		// positive size therefore means bytes actually transferred.
-		resolution.Downloaded = asset.SizeBytes > 0
-		resolution.DownloadBytes = asset.SizeBytes
+		resolution.Downloaded = !asset.Coalesced && asset.SizeBytes > 0
+		if resolution.Downloaded {
+			resolution.DownloadBytes = asset.SizeBytes
+		}
 		resolution.SizeBytes = asset.SizeBytes
 	}
 	// Defensive fallback for legacy transferers (and byte fakes) that do not

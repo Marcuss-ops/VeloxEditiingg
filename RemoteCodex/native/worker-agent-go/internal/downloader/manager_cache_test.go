@@ -7,6 +7,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"velox-shared/assetref"
 )
 
 func TestManager_CacheHit(t *testing.T) {
@@ -136,7 +138,7 @@ func TestManager_CoalescedRequestHook(t *testing.T) {
 	}
 	m := NewManager(Config{
 		Concurrency: 1,
-		OnCoalescedRequest: func(bytes int64) {
+		OnCoalescedRequest: func(bytes int64, _ context.Context) {
 			calls.Add(1)
 			size.Store(bytes)
 		},
@@ -166,6 +168,68 @@ func TestManager_CoalescedRequestHook(t *testing.T) {
 	}
 	if size.Load() != request.SizeBytes {
 		t.Fatalf("coalesced hook size = %d, want %d", size.Load(), request.SizeBytes)
+	}
+}
+
+// TestManager_25Requests12AssetsSingleFlight pins the cold-wave contract used
+// by the performance baseline: 25 logical requests for 12 assets produce only
+// 12 physical transfers, while the 13 coalesced waiters are measurable as
+// avoided duplicate bytes.
+func TestManager_25Requests12AssetsSingleFlight(t *testing.T) {
+	release := make(chan struct{})
+	var upstream atomic.Int32
+	var duplicateBytes atomic.Int64
+	tf := &fakeTransferer{
+		transfer: func(ctx context.Context, _ context.Context, req DownloadRequest, _ func(int64)) (TransferResult, error) {
+			upstream.Add(1)
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return TransferResult{}, ctx.Err()
+			}
+			return TransferResult{LocalPath: "/shared/" + string(req.AssetKey), Bytes: req.SizeBytes, SHA256: "sha"}, nil
+		},
+	}
+	m := NewManager(Config{
+		Concurrency: 12,
+		OnCoalescedRequest: func(bytes int64, _ context.Context) {
+			duplicateBytes.Add(bytes)
+		},
+	}, tf)
+	t.Cleanup(m.Close)
+
+	const assetCount = 12
+	const requests = 25
+	const assetSize = int64(1024)
+	results := make(chan error, requests)
+	for i := 0; i < requests; i++ {
+		asset := i % assetCount
+		go func(index, asset int) {
+			_, err := m.Resolve(context.Background(), DownloadRequest{
+				JobID: fmt.Sprintf("dedupe-job-%02d", index), TaskID: fmt.Sprintf("dedupe-task-%02d", index),
+				AssetKey: assetref.AssetKey(fmt.Sprintf("asset-%02d", asset)), AssetID: fmt.Sprintf("asset-%02d", asset),
+				SizeBytes: assetSize, Priority: DefaultPriority,
+			})
+			results <- err
+		}(i, asset)
+	}
+	waitFor(t, "12 active single-flight transfers", func() bool {
+		return upstream.Load() == assetCount
+	})
+	waitFor(t, "13 coalesced waiters", func() bool {
+		return duplicateBytes.Load() == 13*assetSize
+	})
+	close(release)
+	for i := 0; i < requests; i++ {
+		if err := <-results; err != nil {
+			t.Fatalf("resolve[%d]: %v", i, err)
+		}
+	}
+	if got := upstream.Load(); got != assetCount {
+		t.Fatalf("physical transfers = %d, want %d", got, assetCount)
+	}
+	if got := duplicateBytes.Load(); got != 13*assetSize {
+		t.Fatalf("duplicate bytes = %d, want %d", got, 13*assetSize)
 	}
 }
 

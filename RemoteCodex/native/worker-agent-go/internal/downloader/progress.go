@@ -196,6 +196,10 @@ type DownloadedAsset struct {
 	SHA256    assetref.ContentHash
 	SizeBytes int64
 	CacheHit  bool
+	// Coalesced is true when this caller joined an already-running transfer.
+	// The shared transfer moved bytes once; this waiter must not project those
+	// bytes as a second physical download in attempt metrics.
+	Coalesced bool
 	ReadyAt   time.Time
 	// Timing holds the observable sub-phase durations when the underlying
 	// transferer produced them (zero for legacy/partial producers).

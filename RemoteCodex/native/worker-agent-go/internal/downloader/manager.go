@@ -68,9 +68,9 @@ type Config struct {
 
 	// OnCoalescedRequest observes a caller that joined an already-running
 	// transfer. It must be non-blocking; the manager invokes it once per
-	// coalesced Resolve call with the requested asset size for duplicate-
-	// download accounting.
-	OnCoalescedRequest func(sizeBytes int64)
+	// coalesced Resolve call with the requested asset size and caller context
+	// for duplicate-download accounting.
+	OnCoalescedRequest func(sizeBytes int64, callerCtx context.Context)
 
 	// MaxRetainedTransfers bounds terminal transfers kept for late Snapshot /
 	// JobSnapshot reads. Zero uses the bounded default.
@@ -191,7 +191,7 @@ func (m *Manager) Resolve(ctx context.Context, req DownloadRequest) (DownloadedA
 			}
 			m.coalesced.Add(1)
 			if m.cfg.OnCoalescedRequest != nil {
-				m.cfg.OnCoalescedRequest(req.SizeBytes)
+				m.cfg.OnCoalescedRequest(req.SizeBytes, ctx)
 			}
 		}
 
@@ -220,6 +220,7 @@ func (m *Manager) Resolve(ctx context.Context, req DownloadRequest) (DownloadedA
 				SHA256:    result.SHA256,
 				SizeBytes: result.Bytes,
 				CacheHit:  hit,
+				Coalesced: shared,
 				ReadyAt:   readyAt,
 				Timing:    t.timing(),
 				Outcome:   t.resolutionOutcome(),
