@@ -64,14 +64,17 @@ func TestProjectPhaseAggregates_MapsCopyOnlyPacketMuxToConcat(t *testing.T) {
 		t.Fatalf("PersistMetrics: %v", err)
 	}
 
-	// The two engine rows a copy-only 266s timeline emits: the aggregate render
-	// span and the packet mux that produced the artifact.
+	// A mixed packet attempt can emit multiple names for the same exclusive
+	// concat work. The projection must choose the largest representation, not
+	// sum them into a fabricated duration.
 	rows := []struct {
 		action     string
 		durationMS int64
 	}{
 		{"render", 12_784},
 		{"mixed_packet_mux", 12_700},
+		{"concat", 12_784},
+		{"packet_mux", 100},
 	}
 	for _, row := range rows {
 		execQuery(t, s, ctx,
@@ -103,8 +106,8 @@ func TestProjectPhaseAggregates_MapsCopyOnlyPacketMuxToConcat(t *testing.T) {
 	if got == nil {
 		t.Fatal("GetMetrics returned nil")
 	}
-	if got.EngineConcatMs != 12_700 {
-		t.Errorf("EngineConcatMs = %d; want 12700 (copy-only packet mux is the concat step)", got.EngineConcatMs)
+	if got.EngineConcatMs != 12_784 {
+		t.Errorf("EngineConcatMs = %d; want 12784 (mutually exclusive concat representations use MAX)", got.EngineConcatMs)
 	}
 	if got.NativeTotalMs != 12_784 {
 		t.Errorf("NativeTotalMs = %d; want 12784 (aggregate engine render span)", got.NativeTotalMs)

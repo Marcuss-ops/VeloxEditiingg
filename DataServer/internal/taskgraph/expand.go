@@ -53,10 +53,10 @@ type ExpandPlan struct {
 }
 
 // Expand validates the plan as a graph and persists every task in PENDING
-// with its edges in one pass. On any error nothing is left half-published:
-// because each Create is a single-row insert inside the caller-visible
-// window, a failure mid-plan is compensated by deleting the rows created
-// during THIS call (the parent job stays PENDING and a retry re-expands).
+// with its edges in one pass. SQLiteTaskRepository implements the optional
+// AtomicTaskWriter capability, so production persistence uses one database
+// transaction and readers never observe a partial graph. Lightweight test
+// repositories retain the compensating fallback below.
 //
 // Returns the persisted tasks (IDs filled in, input order preserved).
 func (s *ExpandService) Expand(ctx context.Context, plan ExpandPlan) ([]Task, error) {
@@ -100,6 +100,13 @@ func (s *ExpandService) Expand(ctx context.Context, plan ExpandPlan) ([]Task, er
 	// Fail-closed graph gate BEFORE any persistence.
 	if err := ValidateTaskGraph(tasks); err != nil {
 		return nil, err
+	}
+
+	if atomicRepo, ok := s.repo.(AtomicTaskWriter); ok {
+		if err := atomicRepo.CreateTasksAtomic(ctx, tasks); err != nil {
+			return nil, fmt.Errorf("taskgraph.Expand: atomic create: %w", err)
+		}
+		return tasks, nil
 	}
 
 	created := make([]Task, 0, len(tasks))

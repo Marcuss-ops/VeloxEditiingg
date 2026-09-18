@@ -327,6 +327,14 @@ type Writer interface {
 	ClaimTaskForWorkerAtomic(ctx context.Context, cmd ClaimTaskForWorkerCommand) (*TaskWithSpec, *taskattempts.TaskAttempt, error)
 }
 
+// AtomicTaskWriter is implemented by repositories that can persist a whole
+// validated fan-out in one database transaction. ExpandService uses this
+// optional capability; lightweight test repositories may retain the legacy
+// compensating path.
+type AtomicTaskWriter interface {
+	CreateTasksAtomic(context.Context, []Task) error
+}
+
 // Repository combines Reader and Writer into a single task persistence contract.
 type Repository interface {
 	Reader

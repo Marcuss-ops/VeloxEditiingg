@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"velox-shared/contract"
+	"velox-worker-agent/internal/chunkfactory"
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/runtimeassets"
 	"velox-worker-agent/internal/telemetry"
@@ -31,16 +32,33 @@ var (
 type videoAssembleCopyExecutor struct {
 	runner     *pipeline.Runner
 	outputRoot string
+	chunkStore *chunkfactory.Store
 }
 
 // NewVideoAssembleCopy creates the strict receiver-side assembler. The
 // pipeline runner is only used to reach the native RenderCompiledPlanV2
 // method; no FFmpeg runner or fallback is accepted by this executor.
 func NewVideoAssembleCopy(runner *pipeline.Runner, outputRoot string) executor.Executor {
+	return NewVideoAssembleCopyWithChunkStore(runner, outputRoot, nil)
+}
+
+// NewVideoAssembleCopyWithChunkStore enables the W5 first consumer. A nil
+// store preserves the legacy monolithic path and means the capability is
+// DISABLED, never a hidden noop.
+func NewVideoAssembleCopyWithChunkStore(runner *pipeline.Runner, outputRoot string, store *chunkfactory.Store) executor.Executor {
 	if strings.TrimSpace(outputRoot) == "" {
 		outputRoot = filepath.Join(os.TempDir(), "velox", "video-assemble-copy")
 	}
-	return &videoAssembleCopyExecutor{runner: runner, outputRoot: outputRoot}
+	return &videoAssembleCopyExecutor{runner: runner, outputRoot: outputRoot, chunkStore: store}
+}
+
+// AttachChunkStore is called only by the composition root after a READY store
+// has been constructed. It keeps the default registry wiring unchanged while
+// making the W5 consumer opt-in and fail-closed.
+func (e *videoAssembleCopyExecutor) AttachChunkStore(store *chunkfactory.Store) {
+	if e != nil {
+		e.chunkStore = store
+	}
 }
 
 func (e *videoAssembleCopyExecutor) Descriptor() executor.Descriptor {
@@ -138,6 +156,11 @@ func (e *videoAssembleCopyExecutor) Execute(ctx context.Context, execCtx executo
 	if err != nil {
 		return fail("FINAL_OUTPUT_INVALID", err)
 	}
+	if e.chunkStore != nil {
+		if err := e.emitChunkManifest(plan, profile, bindings, spec.JobID); err != nil {
+			return fail("CHUNK_MANIFEST_FAILED", err)
+		}
+	}
 	// The packet-copy path is the only executor that previously dropped the
 	// engine ledgers: its cost IS engine work (packet mux, input opens, seeks),
 	// so without these rows the Master read model had no engine phase to
@@ -152,6 +175,63 @@ func (e *videoAssembleCopyExecutor) Execute(ctx context.Context, execCtx executo
 		DetailedPhases: detailedPhases,
 		StartedAt:      started, CompletedAt: time.Now().UTC(),
 	}, nil
+}
+
+func (e *videoAssembleCopyExecutor) emitChunkManifest(plan *contract.CompiledRenderPlanV2, profile contract.CanonicalVideoProfileV1, bindings runtimeassets.Bindings, jobID string) error {
+	if e == nil || e.chunkStore == nil || plan == nil || len(plan.VideoTracks) != 1 {
+		return fmt.Errorf("chunk manifest: incomplete input")
+	}
+	manifest := chunkfactory.Manifest{
+		Version: chunkfactory.ManifestVersion, JobID: jobID, ProfileID: profile.StreamProfile(),
+		DurationUS: plan.DurationUS, TimelineSHA: plan.TimelineSHA256,
+		Chunks: make([]chunkfactory.ManifestChunk, 0, len(plan.VideoTracks[0].Segments)),
+	}
+	assets := make(map[string]contract.AssetRefV2, len(plan.Assets))
+	for _, asset := range plan.Assets {
+		assets[asset.AssetID] = asset
+	}
+	for index, segment := range plan.VideoTracks[0].Segments {
+		asset := assets[segment.AssetID]
+		binding := bindings[segment.AssetID]
+		actual, err := artifactFromFile("video/mp4", binding.Path)
+		if err != nil {
+			return fmt.Errorf("chunk manifest: inspect %s: %w", segment.AssetID, err)
+		}
+		if actual.Hash != asset.SHA256 || actual.SizeBytes != asset.SizeBytes {
+			return fmt.Errorf("chunk manifest: source identity changed for %s", segment.AssetID)
+		}
+		assetKey := asset.AssetKey
+		if strings.TrimSpace(assetKey) == "" {
+			assetKey = "sha256:" + actual.Hash
+		}
+		chunks, err := chunkfactory.PlanChunks(assetKey, profile.StreamProfile(), 0, segment.SourceDurationUS, segment.SourceDurationUS, chunkfactory.KeyframeIndex{0})
+		if err != nil || len(chunks) != 1 {
+			if err == nil {
+				err = fmt.Errorf("planned %d chunks, want 1", len(chunks))
+			}
+			return fmt.Errorf("chunk manifest: plan %s: %w", segment.SegmentID, err)
+		}
+		planned := chunks[0]
+		descriptor := chunkfactory.ChunkDescriptor{
+			ChunkID: planned.ChunkID, AssetKey: planned.AssetKey, ProfileID: planned.ProfileID,
+			ChunkIndex: planned.ChunkIndex, SourceInUS: planned.SourceInUS, SourceOutUS: planned.SourceOutUS,
+			ChunkDurationUS: planned.SourceOutUS - planned.SourceInUS,
+			PayloadSHA256:   actual.Hash, SizeBytes: actual.SizeBytes,
+		}
+		if err := e.chunkStore.PutChunk(descriptor, binding.Path); err != nil {
+			return fmt.Errorf("chunk manifest: store %s: %w", segment.SegmentID, err)
+		}
+		manifest.Chunks = append(manifest.Chunks, chunkfactory.ManifestChunk{
+			ChunkID: planned.ChunkID, AssetKey: planned.AssetKey, ProfileID: planned.ProfileID,
+			ChunkIndex: index, SourceInUS: planned.SourceInUS, SourceOutUS: planned.SourceOutUS,
+			PayloadSHA256: actual.Hash, SizeBytes: actual.SizeBytes,
+			PayloadPath: e.chunkStore.PayloadPath(planned.ChunkID),
+		})
+	}
+	if err := e.chunkStore.PutManifest(manifest); err != nil {
+		return err
+	}
+	return nil
 }
 
 // copyOnlyRawMetrics is the canonical worker projection for the native V2

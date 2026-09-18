@@ -8,7 +8,26 @@
 - Newly persisted jobs trigger the existing warm-worker `FutureAssetPlan`
   reconciliation immediately after atomic enqueue, while the durable planner
   remains the retry/reconnect fallback.
-- Worker image release target: `v1.4.36`.
+- The opt-in chunk-store capability now has its first packet-copy consumer:
+  it persists reusable chunk payloads and a worker-local manifest while
+  leaving manifest-first delivery disabled until the Master/edge contract is
+  landed.
+- Worker image release target: `v1.4.37`.
+
+### Correctness — early upload, task DAG, and batch intake hardening
+
+- A missing early-upload plan now falls back after a bounded three-second
+  wait; growing-file waiters use generation channels instead of parked
+  condition-variable goroutines, and progress propagation is event-driven.
+- Early uploads reserve the durable output-spool identity and journal path;
+  normal declaration still stamps the commit/target needed for resumable
+  retry. Master-stream abort now deletes the remote session and staging data.
+- Fan-out task creation is transactional on SQLite, dependency rewrites
+  revalidate the complete graph inside the same transaction, and concat
+  telemetry uses the mutually-exclusive maximum rather than a double-counting
+  sum. Batch usage stats count only accepted items.
+- Added the legacy task-schema repair migration and removed the duplicate
+  file stat from the master-stream upload path.
 
 ### Added — 100x scale track: batch plan dedupe, persistent task DAG, chunk factory (W5 precursor), chaos scenario 20
 

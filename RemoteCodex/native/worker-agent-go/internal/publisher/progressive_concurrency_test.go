@@ -13,6 +13,24 @@ import (
 	"time"
 )
 
+func TestGrowingFileWaitForRangeUnblocksWithoutParkingWaiter(t *testing.T) {
+	file := NewGrowingFile()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- file.WaitForRange(ctx, 0, 1)
+	}()
+	cancel()
+	select {
+	case err := <-done:
+		if err != context.Canceled {
+			t.Fatalf("WaitForRange error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WaitForRange remained blocked after context cancellation")
+	}
+}
+
 type concurrentProgressiveSession struct {
 	mu       sync.Mutex
 	parts    map[int]int64

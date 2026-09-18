@@ -57,6 +57,7 @@ POST api/v1/video/chunked/:job_id/:chunk_index
 POST api/v1/video/chunked/:job_id/complete
 POST api/v1/video/chunked/init
 POST api/v1/video/master-stream/:upload_id/:chunk_index
+POST api/v1/video/master-stream/:upload_id/abort
 POST api/v1/video/master-stream/:upload_id/complete
 POST api/v1/video/upload-completed
 POST keys

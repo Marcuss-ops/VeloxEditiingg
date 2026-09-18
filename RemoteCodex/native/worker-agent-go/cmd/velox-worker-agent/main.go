@@ -312,10 +312,10 @@ func main() {
 	logger.Info("[CACHE] PersistedLocalCache at %s (256 MiB default budget)", cacheDir)
 	logger.Info("[BLOB] BlobArtifacts at %s (local content-addressed storage)", blobDir)
 
-	// W5-precursor chunk factory (internal/chunkfactory): content-addressed,
+	// W5 chunk factory (internal/chunkfactory): content-addressed,
 	// keyframe-aligned chunk store under <StateDir>/chunks. Capability state
-	// machine (AGENTS §6): DISABLED by default (no consumer on the default
-	// render path yet); READY when ChunkStoreEnabled and the store opens;
+	// machine (AGENTS §6): DISABLED by default (the manifest consumer is
+	// opt-in); READY when ChunkStoreEnabled and the store opens;
 	// MISCONFIGURED — fail-closed, exit 1 — when the operator requested it
 	// but the root cannot be created. Never enabled-with-a-stub. Constructed
 	// before worker.New and attached right after, mirroring AttachClipCache.
@@ -364,6 +364,12 @@ func main() {
 	}
 	if chunkStore != nil {
 		w.AttachChunkStore(chunkStore)
+		for _, registered := range registry.All() {
+			if attacher, ok := registered.(interface{ AttachChunkStore(*chunkfactory.Store) }); ok {
+				attacher.AttachChunkStore(chunkStore)
+			}
+		}
+		logger.Info("[CHUNK_STORE] packet-copy executor consumer READY")
 	}
 
 	// Remote shared-asset cache: this SQLite index and its files live under

@@ -112,6 +112,24 @@ func (h *ChunkedUploadHandler) MasterStreamComplete() gin.HandlerFunc {
 	}
 }
 
+// MasterStreamAbort removes an unfinished master-stream session after the
+// worker cancels a progressive upload. The bearer is the same short-lived
+// commit token used for chunk and complete requests.
+func (h *ChunkedUploadHandler) MasterStreamAbort() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uploadID := c.Param("upload_id")
+		if !h.verifyCommitToken(c, uploadID) {
+			return
+		}
+		if err := h.svc.AbortChunked(c.Request.Context(), uploadID); err != nil {
+			log.Printf("[CHUNKED] master-stream abort failed upload=%s: %v", uploadID, err)
+			c.JSON(http.StatusBadRequest, gin.H{"error": "artifact abort rejected", "error_code": classifyChunkedArtifactError(err)})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true, "upload_id": uploadID, "aborted": true})
+	}
+}
+
 // classifyChunkedArtifactError returns a stable data-plane code without
 // exposing internal paths, SQL details, or topology to the bearer of the
 // upload token. The full wrapped error remains in the Master log.

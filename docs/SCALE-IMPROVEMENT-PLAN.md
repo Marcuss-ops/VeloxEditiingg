@@ -124,14 +124,15 @@ Aggregate CPU at 100k/h: 27.8 × 8.8 s = ~245 core-seconds/s → ~336 cores acro
   (YouTube included) — the 10% you add back, per Musk's rule.
 - Requires chunk factory (keyframe-aligned 1s chunks, content-addressed,
   cached like W3) and a player/edge assembly path or per-destination remux.
-- **LANDED (precursor, 2026-09-18):** `worker-agent-go/internal/chunkfactory`
-  — keyframe-aligned chunk planner + content-addressed store. Chunk identity
-  = SHA-256 over {asset_key, source window, profile, chunk_index,
-  identity_version}; chunks start only on keyframes; atomic idempotent
-  install. Wired behind `chunk_store_enabled` (default off; DISABLED/READY/
-  MISCONFIGURED per AGENTS.md §6). Missing for W5 completion: the renderer
-  call site that plans+emits chunks during encode, the manifest format, and
-  the edge/player assembly path.
+- **LANDED (first consumer, 2026-09-18):** `worker-agent-go/internal/chunkfactory`
+  now has the packet-copy call site: when `chunk_store_enabled` is explicitly
+  enabled, the executor plans each certified prepared fragment, installs the
+  content-addressed payload, and writes an atomic worker-local manifest.
+  Chunk identity = SHA-256 over {asset_key, source window, profile,
+  chunk_index, identity_version}; chunks start only on keyframes. The
+  capability remains default-off and follows DISABLED/READY/MISCONFIGURED per
+  AGENTS.md §6. Missing for W5 completion: Master manifest delivery and the
+  edge/player assembly path.
 - **Evidence:** two "different" videos sharing >90% byte-identical chunks;
   origin egress per video < 5 MB.
 

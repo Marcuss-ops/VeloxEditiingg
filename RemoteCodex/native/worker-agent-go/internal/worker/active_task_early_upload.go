@@ -10,8 +10,11 @@ import (
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
 	"velox-worker-agent/internal/publisher"
+	"velox-worker-agent/internal/spool"
 	"velox-worker-agent/pkg/video/pipeline"
 )
+
+var earlyUploadPlanWaitTimeout = 3 * time.Second
 
 // earlyUploadState bridges the renderer's first safe byte range to the
 // master's pre-render upload plan. It is deliberately task-scoped: an early
@@ -31,14 +34,17 @@ type earlyUploadState struct {
 	result     *publisher.UploadResult
 	err        error
 	done       chan struct{}
+	planReady  chan struct{}
+	progressCh chan struct{}
 	intentOnce sync.Once
+	planOnce   sync.Once
 	startOnce  sync.Once
 	finishOnce sync.Once
 }
 
 func newEarlyUploadState(w *Worker, ctx context.Context, pte *PendingTaskExecution) *earlyUploadState {
 	stateCtx, cancel := context.WithCancel(ctx)
-	return &earlyUploadState{worker: w, pte: pte, ctx: stateCtx, cancel: cancel, done: make(chan struct{})}
+	return &earlyUploadState{worker: w, pte: pte, ctx: stateCtx, cancel: cancel, done: make(chan struct{}), planReady: make(chan struct{}), progressCh: make(chan struct{}, 1)}
 }
 
 func (s *earlyUploadState) updateProgress(progress pipeline.ArtifactWriteProgress) {
@@ -62,6 +68,10 @@ func (s *earlyUploadState) updateProgress(progress pipeline.ArtifactWriteProgres
 		s.intentSent = true
 	}
 	s.mu.Unlock()
+	select {
+	case s.progressCh <- struct{}{}:
+	default:
+	}
 	if first {
 		s.intentOnce.Do(func() { go s.sendIntent() })
 	}
@@ -120,6 +130,7 @@ func (s *earlyUploadState) receivePlan(plan *pb.ArtifactEarlyUploadPlan) {
 		s.plan = plan
 	}
 	s.mu.Unlock()
+	s.planOnce.Do(func() { close(s.planReady) })
 	s.worker.logger.Info("[ARTIFACT] early upload plan received task=%s attempt=%s upload=%s", s.pte.TaskID, s.pte.AttemptID, plan.GetUploadId())
 	s.tryStart()
 }
@@ -137,9 +148,35 @@ func (s *earlyUploadState) tryStart() {
 		return
 	}
 	s.startOnce.Do(func() {
+		if err := s.ensureOutputSpool(progress); err != nil {
+			s.worker.logger.Warn("[ARTIFACT] early upload spool registration failed task=%s attempt=%s: %v", s.pte.TaskID, s.pte.AttemptID, err)
+			s.disable(fmt.Errorf("early upload: register output spool: %w", err))
+			return
+		}
 		s.worker.logger.Info("[ARTIFACT] early upload starting task=%s attempt=%s upload=%s safe_offset=%d", s.pte.TaskID, s.pte.AttemptID, plan.GetUploadId(), progress.SafeOffsetBytes)
 		go s.run(plan, progress)
 	})
+}
+
+// ensureOutputSpool reserves the same durable identity later used by the
+// normal declaration path. The early plan intentionally has no commit_id yet,
+// so the declaration path remains responsible for stashing the resumable
+// upload target; this row still prevents the early transfer from running
+// outside the worker spool lifecycle.
+func (s *earlyUploadState) ensureOutputSpool(progress pipeline.ArtifactWriteProgress) error {
+	if s == nil || s.worker == nil || s.worker.outputSpool == nil || s.pte == nil {
+		return nil
+	}
+	_, _, err := s.worker.outputSpool.Ensure(s.ctx, spool.SpoolEntry{
+		TaskID:         s.pte.TaskID,
+		AttemptID:      s.pte.AttemptID,
+		WorkerSpoolKey: fmt.Sprintf("%s:output:0", s.pte.TaskID),
+		OutputKind:     "final_video",
+		LocalPath:      progress.Path,
+		Status:         spool.StatusRendering,
+		StorageTier:    s.worker.outputStorageTier(progress.Path),
+	})
+	return err
 }
 
 func (s *earlyUploadState) run(plan *pb.ArtifactEarlyUploadPlan, progress pipeline.ArtifactWriteProgress) {
@@ -161,7 +198,7 @@ func (s *earlyUploadState) run(plan *pb.ArtifactEarlyUploadPlan, progress pipeli
 		}
 		result, err = uploadWithGrowingProgress(s.ctx, transport, publisher.UploadRequest{
 			LocalPath: progress.Path, Target: target, CommitToken: plan.GetCommitToken(),
-		}, progress, file, progressivePartConcurrency)
+		}, progress, file, progressivePartConcurrency, progressiveJournalPath(publisher.UploadRequest{LocalPath: progress.Path, Target: target}))
 	}
 	if err != nil {
 		s.worker.logger.Warn("[ARTIFACT] early upload failed task=%s attempt=%s upload=%s: %v", s.pte.TaskID, s.pte.AttemptID, plan.GetUploadId(), err)
@@ -179,7 +216,7 @@ func (s *earlyUploadState) followProgress(file *publisher.GrowingFile) {
 			return
 		case <-s.done:
 			return
-		case <-time.After(25 * time.Millisecond):
+		case <-s.progressCh:
 		}
 		s.mu.Lock()
 		p := s.progress
@@ -233,11 +270,26 @@ func (s *earlyUploadState) wait(ctx context.Context) *publisher.UploadResult {
 	if !intentSent {
 		return nil
 	}
-	select {
-	case <-s.done:
-	case <-ctx.Done():
-		s.disable(ctx.Err())
-		return nil
+	s.mu.Lock()
+	planReceived := s.plan != nil
+	s.mu.Unlock()
+	if !planReceived {
+		timer := time.NewTimer(earlyUploadPlanWaitTimeout)
+		defer timer.Stop()
+		select {
+		case <-s.planReady:
+		case <-s.done:
+		case <-timer.C:
+			s.disable(fmt.Errorf("early upload: master plan not received before fallback timeout"))
+		case <-ctx.Done():
+			s.disable(ctx.Err())
+		}
+	} else {
+		select {
+		case <-s.done:
+		case <-ctx.Done():
+			s.disable(ctx.Err())
+		}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -345,10 +397,10 @@ func (w *Worker) waitEarlyUpload(ctx context.Context, taskID string) *publisher.
 	}
 	state := value.(*earlyUploadState)
 	// The early session is already bound to the declaration at this point.
-	// Wait for its terminal result rather than imposing the old two-second
-	// pre-declaration timeout, which caused the exact publish queue stall this
-	// path is meant to eliminate. The task/protocol context still bounds the
-	// wait and the state closes on upload failure or completion.
+	// Wait for its terminal result, but bound the pre-plan gap so a lost Master
+	// message falls back to the normal upload path instead of consuming the
+	// task deadline. Once a plan exists, the task/protocol context bounds the
+	// upload wait and the state closes on failure or completion.
 	result := state.wait(ctx)
 	if result == nil {
 		state.mu.Lock()

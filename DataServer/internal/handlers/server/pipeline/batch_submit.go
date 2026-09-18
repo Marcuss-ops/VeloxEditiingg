@@ -1,12 +1,13 @@
 package pipeline
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"unicode/utf8"
 
@@ -123,10 +124,6 @@ func (h *Handlers) SubmitJobBatch() gin.HandlerFunc {
 				continue
 			}
 			batch.Items[index] = item
-			totalScenes += len(item.Scenes)
-			for _, scene := range item.Scenes {
-				totalDuration += scene.DurationSeconds
-			}
 			result := SubmitJobBatchItemResult{
 				Index:          index,
 				IdempotencyKey: item.IdempotencyKey,
@@ -176,6 +173,13 @@ func (h *Handlers) SubmitJobBatch() gin.HandlerFunc {
 			results[index] = result
 			switch result.Status {
 			case "accepted":
+				// Usage reflects work actually admitted. Rejected, conflicted,
+				// and in-batch deduplicated items must not inflate the audit
+				// aggregate.
+				totalScenes += len(item.Scenes)
+				for _, scene := range item.Scenes {
+					totalDuration += scene.DurationSeconds
+				}
 				// Anchor registration only after a confirmed fresh enqueue: a
 				// failed or rejected enqueue must never become a dedupe anchor.
 				// Single-threaded loop: the lookup above missed this fingerprint,
@@ -211,9 +215,10 @@ func (h *Handlers) SubmitJobBatch() gin.HandlerFunc {
 	}
 }
 
-// submitBatchItem invokes the canonical single-job handler with an isolated
-// request/recorder pair. Copying c.Keys preserves the authenticated M2M
-// context and quota settings without sharing response state between items.
+// submitBatchItem invokes the canonical single-job handler with a child of
+// the real request context. The response capture is an internal dispatch
+// adapter, not an httptest context: the child retains the authenticated keys,
+// request context, and route engine from the live batch request.
 func (h *Handlers) submitBatchItem(parent *gin.Context, index int, item SubmitJobRequest) SubmitJobBatchItemResult {
 	result := SubmitJobBatchItemResult{
 		Index:          index,
@@ -226,8 +231,9 @@ func (h *Handlers) submitBatchItem(parent *gin.Context, index int, item SubmitJo
 		return result
 	}
 
-	recorder := httptest.NewRecorder()
-	subContext, _ := gin.CreateTestContext(recorder)
+	response := &batchResponseCapture{header: make(http.Header)}
+	subContext := parent.Copy()
+	subContext.Writer = response
 	subContext.Request = parent.Request.Clone(parent.Request.Context())
 	subContext.Request.Method = http.MethodPost
 	subContext.Request.URL = parent.Request.URL
@@ -246,7 +252,52 @@ func (h *Handlers) submitBatchItem(parent *gin.Context, index int, item SubmitJo
 	SetIntakeSource(subContext, creatorflow.IntakeSourceBatch)
 
 	h.SubmitJob()(subContext)
-	return batchItemResultFromResponse(result, recorder.Code, recorder.Body.Bytes())
+	return batchItemResultFromResponse(result, response.status, response.body.Bytes())
+}
+
+// batchResponseCapture implements gin.ResponseWriter for the internal
+// fan-in dispatch above. It never reaches the network; the batch envelope is
+// the only response written to the real parent writer.
+type batchResponseCapture struct {
+	header      http.Header
+	body        bytes.Buffer
+	status      int
+	wroteHeader bool
+}
+
+func (w *batchResponseCapture) Header() http.Header { return w.header }
+
+func (w *batchResponseCapture) WriteHeader(code int) {
+	if !w.wroteHeader {
+		w.status = code
+		w.wroteHeader = true
+	}
+}
+
+func (w *batchResponseCapture) Write(data []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.body.Write(data)
+}
+
+func (w *batchResponseCapture) WriteString(data string) (int, error) {
+	return w.Write([]byte(data))
+}
+
+func (w *batchResponseCapture) Status() int   { return w.status }
+func (w *batchResponseCapture) Size() int     { return w.body.Len() }
+func (w *batchResponseCapture) Written() bool { return w.wroteHeader }
+func (w *batchResponseCapture) WriteHeaderNow() {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+}
+func (w *batchResponseCapture) Flush()                   { w.WriteHeaderNow() }
+func (w *batchResponseCapture) CloseNotify() <-chan bool { return make(chan bool) }
+func (w *batchResponseCapture) Pusher() http.Pusher      { return nil }
+func (w *batchResponseCapture) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return nil, nil, fmt.Errorf("batch response capture does not support hijacking")
 }
 
 func batchItemResultFromResponse(result SubmitJobBatchItemResult, statusCode int, body []byte) SubmitJobBatchItemResult {

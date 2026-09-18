@@ -121,7 +121,7 @@ func validateFinalArtifactIdentity(final FinalArtifactIdentity) error {
 // GrowingFile tracks the prefix safe to read and the separate durability fact.
 type GrowingFile struct {
 	mu        sync.Mutex
-	cond      *sync.Cond
+	signal    chan struct{}
 	safeBytes int64
 	finalSize int64
 	finalized bool
@@ -133,7 +133,18 @@ type GrowingFile struct {
 	aborted     error
 }
 
-func NewGrowingFile() *GrowingFile { g := &GrowingFile{}; g.cond = sync.NewCond(&g.mu); return g }
+func NewGrowingFile() *GrowingFile { return &GrowingFile{signal: make(chan struct{})} }
+
+// signalLocked closes the current generation and installs the next one.
+// Waiters capture a generation while holding mu, so an Update cannot be
+// missed and no waiter goroutine needs to park on a sync.Cond.
+func (g *GrowingFile) signalLocked() {
+	if g.signal == nil {
+		g.signal = make(chan struct{})
+	}
+	close(g.signal)
+	g.signal = make(chan struct{})
+}
 
 func (g *GrowingFile) Update(safeBytes int64, finalized bool, finalSize int64) {
 	g.mu.Lock()
@@ -149,7 +160,7 @@ func (g *GrowingFile) Update(safeBytes int64, finalized bool, finalSize int64) {
 			g.finalSize = finalSize
 		}
 	}
-	g.cond.Broadcast()
+	g.signalLocked()
 	g.mu.Unlock()
 }
 
@@ -168,14 +179,14 @@ func (g *GrowingFile) MarkDurable(finalSize int64) {
 	if finalSize > 0 {
 		g.finalSize = finalSize
 	}
-	g.cond.Broadcast()
+	g.signalLocked()
 	g.mu.Unlock()
 }
 
 func (g *GrowingFile) Abort(err error) {
 	g.mu.Lock()
 	g.aborted = err
-	g.cond.Broadcast()
+	g.signalLocked()
 	g.mu.Unlock()
 }
 
@@ -189,8 +200,13 @@ func (g *GrowingFile) WaitForRange(ctx context.Context, start, length int64) err
 	if start < 0 || length <= 0 {
 		return fmt.Errorf("progressive upload: invalid range")
 	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.signal == nil {
+		g.signal = make(chan struct{})
+	}
 	for {
-		safe, finalSize, finalized, _, aborted := g.snapshot()
+		safe, finalSize, finalized, _, aborted := g.safeBytes, g.finalSize, g.finalized, g.durable, g.aborted
 		if aborted != nil {
 			return aborted
 		}
@@ -200,18 +216,16 @@ func (g *GrowingFile) WaitForRange(ctx context.Context, start, length int64) err
 		if finalized && finalSize < start+length {
 			return io.ErrUnexpectedEOF
 		}
+		signal := g.signal
+		g.mu.Unlock()
 		select {
 		case <-ctx.Done():
+			g.mu.Lock()
 			return ctx.Err()
-		case <-waitSignal(g):
+		case <-signal:
+			g.mu.Lock()
 		}
 	}
-}
-
-func waitSignal(g *GrowingFile) <-chan struct{} {
-	ch := make(chan struct{})
-	go func() { g.mu.Lock(); g.cond.Wait(); g.mu.Unlock(); close(ch) }()
-	return ch
 }
 
 // waitForReadableRange closes the small race between the native progress

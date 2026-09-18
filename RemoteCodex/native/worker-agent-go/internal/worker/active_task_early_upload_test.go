@@ -1,13 +1,36 @@
 package worker
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"testing"
+	"time"
 
 	"velox-shared/contract"
 	"velox-worker-agent/internal/executor"
 )
+
+func TestEarlyUploadWaitFallsBackWhenMasterPlanIsLost(t *testing.T) {
+	previous := earlyUploadPlanWaitTimeout
+	earlyUploadPlanWaitTimeout = 10 * time.Millisecond
+	t.Cleanup(func() { earlyUploadPlanWaitTimeout = previous })
+
+	state := newEarlyUploadState(nil, context.Background(), &PendingTaskExecution{TaskID: "task-1", AttemptID: "attempt-1"})
+	state.mu.Lock()
+	state.intentSent = true
+	state.mu.Unlock()
+
+	if result := state.wait(context.Background()); result != nil {
+		t.Fatalf("missing plan returned upload result: %#v", result)
+	}
+	state.mu.Lock()
+	disabled, err := state.disabled, state.err
+	state.mu.Unlock()
+	if !disabled || err == nil {
+		t.Fatalf("missing plan did not enter fallback state: disabled=%t err=%v", disabled, err)
+	}
+}
 
 func TestEarlyUploadEligibleRequiresFMP4CompiledPlan(t *testing.T) {
 	// An append-only plan can only exist while the streaming profile is

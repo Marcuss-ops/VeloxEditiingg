@@ -114,7 +114,32 @@ func (s *masterStreamProgressiveSession) Complete(ctx context.Context, final Fin
 	return &UploadResult{UploadID: s.request.Target.UploadID, UploadedBytes: final.SizeBytes, ServerSHA256: serverSHA}, nil
 }
 
-func (s *masterStreamProgressiveSession) Abort(ctx context.Context) error { return nil }
+func (s *masterStreamProgressiveSession) Abort(ctx context.Context) error {
+	if s == nil || s.transport == nil || s.request.Target.UploadURL == "" {
+		return nil
+	}
+	client := s.transport.HTTPClient
+	if client == nil {
+		client = &http.Client{Timeout: 5 * time.Minute}
+	}
+	url := strings.TrimRight(s.request.Target.UploadURL, "/") + "/abort"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-Upload-Id", s.request.Target.UploadID)
+	req.Header.Set("X-Artifact-Commit-Token", s.request.CommitToken)
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("%w: progressive abort: %v", ErrUploadFailed, err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("%w: progressive abort: HTTP %d", ErrUploadFailed, resp.StatusCode)
+	}
+	return nil
+}
 
 // chunkSize is the fallback per-request chunk size for the master-stream
 // transport. Uploads are streamed directly from the file; only this many
@@ -145,10 +170,6 @@ func (t *MasterStreamTransport) Upload(ctx context.Context, req UploadRequest) (
 		return nil, fmt.Errorf("master-stream: open %s: %w", req.LocalPath, err)
 	}
 	defer f.Close()
-
-	if _, err := f.Stat(); err != nil {
-		return nil, fmt.Errorf("master-stream: stat: %w", err)
-	}
 
 	info, err := f.Stat()
 	if err != nil {

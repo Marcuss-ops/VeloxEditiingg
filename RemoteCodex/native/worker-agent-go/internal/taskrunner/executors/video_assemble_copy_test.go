@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"testing"
 
 	"velox-shared/contract"
+	"velox-worker-agent/internal/chunkfactory"
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/runtimeassets"
 	"velox-worker-agent/pkg/logger"
@@ -114,6 +116,57 @@ func TestVideoAssembleCopy_UsesNativeV2WithoutFFmpegFallback(t *testing.T) {
 	}
 	if result.RawMetrics == nil || result.RawMetrics.FramesEncoded != 0 {
 		t.Fatalf("raw frames_encoded = %#v, want 0", result.RawMetrics)
+	}
+}
+
+func TestVideoAssembleCopy_EmitsReusableChunkManifestWhenEnabled(t *testing.T) {
+	video := []byte("prepared-video")
+	audio := []byte("final-audio")
+	videoSHA, audioSHA := copyOnlySHA(video), copyOnlySHA(audio)
+	plan := copyOnlyPlan(videoSHA, audioSHA, int64(len(video)), int64(len(audio)))
+	canonical, err := plan.CanonicalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := chunkfactory.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &copyOnlyRenderClient{}
+	runner := pipeline.NewRunner(nil, client, logger.New(logger.WarnLevel, os.Stderr))
+	exec := NewVideoAssembleCopyWithChunkStore(runner, t.TempDir(), store)
+	videoPath, audioPath := t.TempDir()+"/video.mp4", t.TempDir()+"/audio.m4a"
+	if err := os.WriteFile(videoPath, video, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(audioPath, audio, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	const jobID = "job-chunk-manifest"
+	result, err := exec.Execute(runtimeassets.WithBindings(context.Background(), runtimeassets.Bindings{
+		"video": {AssetID: "video", Path: videoPath, SHA256: videoSHA, Size: int64(len(video))},
+		"audio": {AssetID: "audio", Path: audioPath, SHA256: audioSHA, Size: int64(len(audio))},
+	}), nil, executorTaskSpec(VideoAssembleCopyID, jobID, canonical, plan))
+	if err != nil || result.Status != "succeeded" {
+		t.Fatalf("Execute = %+v, %v", result, err)
+	}
+	data, err := os.ReadFile(store.ManifestPath(jobID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest chunkfactory.Manifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Version != chunkfactory.ManifestVersion || len(manifest.Chunks) != 1 {
+		t.Fatalf("manifest = %+v; want v%d with one chunk", manifest, chunkfactory.ManifestVersion)
+	}
+	chunk, err := store.GetChunk(manifest.Chunks[0].ChunkID)
+	if err != nil || chunk == nil {
+		t.Fatalf("stored chunk = %+v, %v", chunk, err)
+	}
+	if chunk.PayloadSHA256 != videoSHA || chunk.SizeBytes != int64(len(video)) {
+		t.Fatalf("stored chunk identity = %+v", chunk)
 	}
 }
 

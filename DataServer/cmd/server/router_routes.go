@@ -122,6 +122,7 @@ func registerUploadRoutes(r *gin.Engine, deps UploadRouteDeps) {
 		// HMAC commit token, not the master admin bearer.
 		r.POST("/api/v1/video/master-stream/:upload_id/:chunk_index", deps.ChunkedHandler.MasterStreamChunk())
 		r.POST("/api/v1/video/master-stream/:upload_id/complete", deps.ChunkedHandler.MasterStreamComplete())
+		r.POST("/api/v1/video/master-stream/:upload_id/abort", deps.ChunkedHandler.MasterStreamAbort())
 	}
 }
 

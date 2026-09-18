@@ -168,10 +168,10 @@ type WorkerConfig struct {
 
 	// ChunkStoreEnabled opts the worker into the W5-precursor content-addressed
 	// chunk factory (internal/chunkfactory). When enabled, keyframe-aligned
-	// chunks produced during renders are stored under
-	// <StateDir>/chunks and deduplicated across jobs by content identity.
-	// Off by default: the chunk pipeline is only consumed by the
-	// manifest-first delivery path, which is not yet the default.
+	// chunks and worker-local manifests produced during packet-copy renders are
+	// stored under <StateDir>/chunks and deduplicated across jobs by content
+	// identity. Off by default: manifest-first delivery and edge/player
+	// assembly are not yet the default delivery contract.
 	ChunkStoreEnabled bool `json:"chunk_store_enabled,omitempty"`
 	// ChunkStoreDir overrides the chunk store root. Empty derives
 	// <StateDir>/chunks (never /tmp: chunk payloads are durable,

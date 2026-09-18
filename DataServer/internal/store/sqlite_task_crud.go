@@ -1,9 +1,9 @@
 package store
 
 // sqlite_task_crud.go: single-row CRUD + non-leasing lifecycle CAS
-// transitions on the tasks table. No transaction wrappers, no lease-
-// related CAS tuples — those live in sqlite_task_lease.go. No atomic
-// multi-row gates — those live in sqlite_task_atomic.go.
+// transitions on the tasks table. No lease-related CAS tuples — those live
+// in sqlite_task_lease.go. Multi-row task creation lives in
+// sqlite_task_atomic_create.go.
 // Extracted from sqlite_task_repository.go (commit dc63c57 → next).
 
 import (
@@ -72,7 +72,50 @@ func (r *SQLiteTaskRepository) SetDependsOn(ctx context.Context, id string, depe
 	if err != nil {
 		return fmt.Errorf("task repository: SetDependsOn %s: %w", id, err)
 	}
-	result, err := r.store.db.ExecContext(ctx,
+	tx, err := r.store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return wrapDBInfrastructure("task set depends_on begin", err)
+	}
+	defer tx.Rollback()
+	row := tx.QueryRowContext(ctx, `SELECT `+strings.Join(taskColumns, ",")+` FROM tasks WHERE task_id = ?`, id)
+	target, err := scanTask(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("task repository: SetDependsOn %s: task not found or not PENDING", id)
+		}
+		return wrapDBInfrastructure("task set depends_on read", err)
+	}
+	if target.Status != taskgraph.StatusPending {
+		return fmt.Errorf("task repository: SetDependsOn %s: task not found or not PENDING", id)
+	}
+	target.DependsOn = dependsOn
+	rows, err := tx.QueryContext(ctx, `SELECT `+strings.Join(taskColumns, ",")+` FROM tasks ORDER BY task_id`)
+	if err != nil {
+		return wrapDBInfrastructure("task set depends_on graph read", err)
+	}
+	all := make([]taskgraph.Task, 0)
+	for rows.Next() {
+		task, scanErr := scanTask(rows)
+		if scanErr != nil {
+			_ = rows.Close()
+			return wrapDBInfrastructure("task set depends_on graph scan", scanErr)
+		}
+		if task.ID == id {
+			*task = *target
+		}
+		all = append(all, *task)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return wrapDBInfrastructure("task set depends_on graph rows", err)
+	}
+	if err := rows.Close(); err != nil {
+		return wrapDBInfrastructure("task set depends_on graph close", err)
+	}
+	if err := taskgraph.ValidateTaskGraph(all); err != nil {
+		return fmt.Errorf("task repository: SetDependsOn %s: %w", id, err)
+	}
+	result, err := tx.ExecContext(ctx,
 		`UPDATE tasks SET depends_on = ?, updated_at = ?
 		  WHERE task_id = ? AND status = 'PENDING'`,
 		dependsOnJSON, time.Now().UTC().Format(time.RFC3339), id,
@@ -82,6 +125,9 @@ func (r *SQLiteTaskRepository) SetDependsOn(ctx context.Context, id string, depe
 	}
 	if affected, err := result.RowsAffected(); err == nil && affected == 0 {
 		return fmt.Errorf("task repository: SetDependsOn %s: task not found or not PENDING", id)
+	}
+	if err := tx.Commit(); err != nil {
+		return wrapDBInfrastructure("task set depends_on commit", err)
 	}
 	return nil
 }

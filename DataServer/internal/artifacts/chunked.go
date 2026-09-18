@@ -121,5 +121,45 @@ func (s *ChunkedUploadService) GetUpload(ctx context.Context, uploadID string) (
 	return session, nil
 }
 
+// AbortChunked deletes an unfinished master-stream session and all of its
+// staged chunk records/files. It is idempotent for an already-gone session;
+// completed sessions are protected from a late worker abort.
+func (s *ChunkedUploadService) AbortChunked(ctx context.Context, uploadID string) error {
+	if uploadID == "" {
+		return fmt.Errorf("artifacts: AbortChunked: uploadID required")
+	}
+	release := s.receiveLocks.acquire(uploadID)
+	defer release()
+	session, err := s.repo.GetUploadSession(ctx, uploadID)
+	if err != nil {
+		return translateStoreErr(err)
+	}
+	if session == nil {
+		return nil
+	}
+	if session.Status == string(repository.UploadCompleted) || session.Status == string(repository.UploadFinalizing) {
+		return fmt.Errorf("%w: cannot abort upload=%s status=%s", ErrUploadStateInvalid, uploadID, session.Status)
+	}
+	chunks, err := s.repo.ListChunks(ctx, uploadID)
+	if err != nil {
+		return translateStoreErr(err)
+	}
+	for _, chunk := range chunks {
+		if chunk.StorageKey != "" {
+			_ = s.blobStore.RemoveStaging(chunk.StorageKey)
+		}
+	}
+	if session.TemporaryStorageKey != "" {
+		_ = s.blobStore.RemoveStaging(session.TemporaryStorageKey)
+	}
+	if err := s.repo.DeleteChunks(ctx, uploadID); err != nil {
+		return translateStoreErr(err)
+	}
+	if err := s.repo.DeleteUploadSession(ctx, uploadID); err != nil {
+		return translateStoreErr(err)
+	}
+	return nil
+}
+
 // Compile-time check: *ChunkedUploadService is intentionally package-owned.
 var _ = (*ChunkedUploadService)(nil)
