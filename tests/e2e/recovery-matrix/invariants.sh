@@ -5,6 +5,11 @@
 # Each helper returns 0 (PASS) or 1 (FAIL) and prints PASS/FAIL on stdout.
 # Helpers are sourced (not executed as a script) by run.sh and scenarios/*.sh.
 #
+# DAG-P1 / DAG-P2 (added with scenario 20, migration 176): the multi-task
+# DAG invariants. Both take the db path AND a job_id scope so they assert
+# per-job rather than over the whole matrix DB (other scenarios' seeded
+# rows must not pollute the verdict).
+#
 # Pure-function style: state to inspect is read from a single sqlite db path
 # passed as $1. The "PASS on negative" semantic from cap. 6 is preserved —
 # if the invariant fails AND the scenario was a NEGATIVE test (e.g.,
@@ -212,9 +217,57 @@ assert_invariant_7_new_attempt_id_after_reap() {
   return $?
 }
 
+# ─── DAG-P1: no PENDING behind a non-SUCCEEDED terminal dependency ──────────
+# After failure propagation, no task may remain PENDING while any of its
+# depends_on edges points at a task in a non-SUCCEEDED terminal state
+# (FAILED/CANCELLED/TIMED_OUT): such a task can never become READY and is
+# precisely the pre-DAG zombie wait the propagation sweep exists to close.
+assert_invariant_DAG_P1_no_pending_behind_failed() {
+  local db="$1" job_id="$2" neg_expected="${3:-0}"
+  local count
+  count=$(sqlite3 "$db" "
+    SELECT COUNT(*) FROM tasks child
+    WHERE child.job_id = '$job_id'
+      AND child.status = 'PENDING'
+      AND EXISTS (
+        SELECT 1
+          FROM tasks dep,
+               json_each(child.depends_on) je
+         WHERE dep.task_id = je.value
+           AND dep.job_id = child.job_id
+           AND dep.status IN ('FAILED','CANCELLED','TIMED_OUT')
+      )" 2>/dev/null || echo "0")
+  _check "DAG-P1 no PENDING behind terminal-failed dependency (job $job_id)" "$neg_expected" "$([[ "$count" == "0" ]] && echo 0 || echo 1)"
+  return $?
+}
+
+# ─── DAG-P2: no dangling depends_on edges inside a job ─────────────────────
+# Every task referenced by a depends_on edge must exist in the same job.
+# A dangling edge is the enqueue-time validation failure (taskgraph.
+# ValidateTaskGraph) leaking into persistence: the dependent task would
+# wait forever on a dependency that can never succeed.
+assert_invariant_DAG_P2_no_dangling_edges() {
+  local db="$1" job_id="$2" neg_expected="${3:-0}"
+  local count
+  count=$(sqlite3 "$db" "
+    SELECT COUNT(*)
+      FROM tasks child,
+           json_each(child.depends_on) je
+     WHERE child.job_id = '$job_id'
+       AND NOT EXISTS (
+         SELECT 1 FROM tasks dep
+          WHERE dep.task_id = je.value
+            AND dep.job_id = child.job_id
+       )" 2>/dev/null || echo "0")
+  _check "DAG-P2 no dangling depends_on edges (job $job_id)" "$neg_expected" "$([[ "$count" == "0" ]] && echo 0 || echo 1)"
+  return $?
+}
+
 # ─── Generic dispatcher ──────────────────────────────────────────────────────
 # rm_assert_invariant <db> <label> <expected_negative:0|1> [<window_sec>] [<age_sec>]
 # Routes by label suffix. Default windows: NR-3=600s, NR-4=86400s.
+# DAG-P1/DAG-P2 take <window_sec> as the JOB ID scope instead of a time
+# window (the parameter is positional, so the scenario passes job_id there).
 rm_assert_invariant() {
   local db="$1" label="$2" neg_expected="${3:-0}" w="${4:-}" a="${5:-}"
   case "$label" in
@@ -225,6 +278,8 @@ rm_assert_invariant() {
     NR-5) assert_invariant_5_no_ready_without_valid_bytes "$db" "$neg_expected" ;;
     NR-6) assert_invariant_6_no_succeeded_without_ready "$db" "$neg_expected" ;;
     NR-7) assert_invariant_7_new_attempt_id_after_reap "$db" "$neg_expected" ;;
+    DAG-P1) assert_invariant_DAG_P1_no_pending_behind_failed "$db" "$w" "$neg_expected" ;;
+    DAG-P2) assert_invariant_DAG_P2_no_dangling_edges "$db" "$w" "$neg_expected" ;;
     *) printf '%sFAIL%s  unknown invariant label: %s\n' "$I_RED" "$I_RST" "$label"; rm_mark_inv_fail; return 1 ;;
   esac
 }
