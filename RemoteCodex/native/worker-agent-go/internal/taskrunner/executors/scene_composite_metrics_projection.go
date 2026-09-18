@@ -1,6 +1,12 @@
 package executors
 
 import (
+	"math"
+	"sort"
+	"strings"
+
+	sharedtelemetry "velox-shared/telemetry"
+
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/video/pipeline"
@@ -79,6 +85,79 @@ func projectDetailedPhases(rm pipeline.RenderMetrics) []executor.DetailedPhaseTi
 			FramesIn: phase.FramesIn, FramesOut: phase.FramesOut,
 		})
 	}
+	appendEnginePhaseMS(&detailedPhases, rm)
 	appendObservabilitySummaryPhases(&detailedPhases, rm.Observability)
 	return detailedPhases
+}
+
+// appendEnginePhaseMS projects the engine's own phase_ms ledger (the
+// ScopedTimer timers written by RenderEngine::sidecarJson) into the detailed
+// phase stream. The ledger is the only record of where time goes INSIDE the
+// engine — for the copy-only path the packet mux is the dominant render cost
+// — and it previously reached no operator-visible surface: it was mapped onto
+// pipeline.RenderMetrics.PhaseMS and then dropped at the report boundary,
+// so the Master showed only an aggregate engine render span.
+//
+// Only catalog-declared (component, action) pairs are projected: ImportCXX
+// resolves every imported event through shared/telemetry and refuses unknown
+// pairs, so an unregistered timer key must not be synthesized into an event.
+// The engine writes one timer per key as "<action>_ms", and the catalog entry
+// for that action owns origin/scope/phase, so the projected row is an
+// ordinary catalog event rather than a new taxonomy.
+func appendEnginePhaseMS(phases *[]executor.DetailedPhaseTiming, rm pipeline.RenderMetrics) {
+	if len(rm.PhaseMS) == 0 {
+		return
+	}
+	keys := make([]string, 0, len(rm.PhaseMS))
+	for key := range rm.PhaseMS {
+		keys = append(keys, key)
+	}
+	// Sorting keeps the projected EventIndex assignment deterministic across
+	// runs (map iteration order is not).
+	sort.Strings(keys)
+	nextEventIndex := nextEngineEventIndex(*phases)
+	for _, key := range keys {
+		action := strings.TrimSuffix(key, "_ms")
+		if action == "" || action == key {
+			// The engine only declares "<action>_ms" timers; anything else is
+			// not a phase duration and has no catalog entry to project.
+			continue
+		}
+		spec, ok := sharedtelemetry.Catalog.Lookup("engine", action)
+		if !ok {
+			continue
+		}
+		durationMS := int64(math.Round(rm.PhaseMS[key]))
+		if durationMS < 0 {
+			durationMS = 0
+		}
+		*phases = append(*phases, executor.DetailedPhaseTiming{
+			Origin:      spec.Origin,
+			Scope:       spec.Scope,
+			Component:   spec.Component,
+			Action:      spec.Action,
+			Phase:       spec.Phase,
+			EventType:   spec.EventType,
+			EventName:   spec.Action,
+			EventIndex:  nextEventIndex,
+			DurationMS:  durationMS,
+			Status:      telemetry.StatusOK,
+			CPUMS:       0,
+			QueueWaitMS: 0,
+		})
+		nextEventIndex++
+	}
+}
+
+// nextEngineEventIndex returns the first free engine-origin event index so a
+// projected timer can never collide with a sidecar phase (ImportCXX treats a
+// duplicate origin/index as a conflicting duplicate).
+func nextEngineEventIndex(phases []executor.DetailedPhaseTiming) int64 {
+	next := int64(0)
+	for _, phase := range phases {
+		if phase.Origin == telemetry.OriginEngine && phase.EventIndex >= next {
+			next = phase.EventIndex + 1
+		}
+	}
+	return next
 }

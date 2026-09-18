@@ -138,10 +138,19 @@ func (e *videoAssembleCopyExecutor) Execute(ctx context.Context, execCtx executo
 	if err != nil {
 		return fail("FINAL_OUTPUT_INVALID", err)
 	}
+	// The packet-copy path is the only executor that previously dropped the
+	// engine ledgers: its cost IS engine work (packet mux, input opens, seeks),
+	// so without these rows the Master read model had no engine phase to
+	// project and every engine_* column stayed 0 for a job whose render was
+	// pure packet copy. Attach both streams exactly as scene.composite.v1 does.
+	segments := projectSegments(metrics)
+	detailedPhases := projectDetailedPhases(metrics)
 	return executor.ExecutionResult{
 		Status: "succeeded", Outputs: []executor.ArtifactRef{artifact},
-		RawMetrics: copyOnlyRawMetrics(plan, metrics, artifact),
-		StartedAt:  started, CompletedAt: time.Now().UTC(),
+		RawMetrics:     copyOnlyRawMetrics(plan, metrics, artifact),
+		Segments:       segments,
+		DetailedPhases: detailedPhases,
+		StartedAt:      started, CompletedAt: time.Now().UTC(),
 	}, nil
 }
 

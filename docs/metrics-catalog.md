@@ -110,9 +110,20 @@ by `1e3`. Cost gauges are micro-EUR and are divided by `1e6`.
 | `engine.asset_download`  | `engine_asset_download_ms`           |
 | `engine.segment_build`   | `engine_segment_build_ms`            |
 | `engine.concat`          | `engine_concat_ms`                   |
+| `engine.mixed_packet_mux` | `engine_concat_ms`                  |
+| `engine.packet_mux`      | `engine_concat_ms`                   |
 | `engine.audio_download`  | `engine_audio_download_ms`           |
 | `engine.mux_audio`       | `engine_mux_audio_ms`                |
 | `engine.copy_final`      | `engine_copy_final_ms`               |
+
+`engine_concat_ms` is the time the engine spent joining the timeline. The
+frame pipeline reports it as `engine.concat`; the copy-only path has no frame
+pipeline concat and reports the packet mux instead (`engine.mixed_packet_mux`
+for a mixed source timeline, `engine.packet_mux` for a pure copy timeline),
+which IS the concat step of that path — the projection accepts all three and
+sums whatever the engine emitted for the attempt. Before this mapping a
+copy-only job whose entire render was packet mux reported
+`engine_concat_ms = 0`, leaving only the opaque aggregate engine render span.
 
 ---
 

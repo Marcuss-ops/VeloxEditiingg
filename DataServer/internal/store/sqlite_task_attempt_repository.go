@@ -105,7 +105,8 @@ func (r *SQLiteTaskAttemptRepository) GetPhaseTimings(ctx context.Context, attem
 		return nil, nil
 	}
 	rows, err := r.store.db.QueryContext(ctx,
-		`SELECT attempt_id, phase, duration_ms, wall_start, wall_end
+		`SELECT attempt_id, phase, duration_ms, wall_start, wall_end,
+		        COALESCE(component, ''), COALESCE(action, ''), COALESCE(metadata_json, '')
 		 FROM task_phase_timings WHERE attempt_id = ? ORDER BY wall_start ASC`,
 		attemptID,
 	)
@@ -118,7 +119,8 @@ func (r *SQLiteTaskAttemptRepository) GetPhaseTimings(ctx context.Context, attem
 	for rows.Next() {
 		var pt taskattempts.PhaseTiming
 		var wallStart, wallEnd string
-		if err := rows.Scan(&pt.AttemptID, &pt.Phase, &pt.DurationMS, &wallStart, &wallEnd); err != nil {
+		if err := rows.Scan(&pt.AttemptID, &pt.Phase, &pt.DurationMS, &wallStart, &wallEnd,
+			&pt.Component, &pt.Action, &pt.MetadataJSON); err != nil {
 			return nil, fmt.Errorf("phase timings scan: %w", err)
 		}
 		// Compact/legacy phase summaries carry duration only. Preserve those

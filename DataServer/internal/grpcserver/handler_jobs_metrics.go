@@ -206,11 +206,22 @@ func executionMetricsToAttemptMetrics(attemptID string, em *pb.TaskExecutionMetr
 // packet_copy_ratio remains the fallback when a legacy report has no timing
 // rows; when rows are present, the Master-side counts and byte totals are the
 // authoritative inspect/read-model values.
+// The worker's aggregate counters are already populated from the report
+// protobuf when this runs (see attemptMetricsFromProto). The segment rows are
+// the authoritative population, so every counter the loop below accumulates
+// MUST be zeroed first: adding them onto the worker aggregate counted the same
+// population twice, which is what published packet_copy_bytes as exactly
+// 2 x input_bytes and packet_copy_ratio as 200 for an all-packet-copy timeline.
 func applySegmentMetrics(metrics *taskattempts.AttemptMetrics, segments []taskattempts.SegmentTiming) {
 	if metrics == nil || len(segments) == 0 {
 		return
 	}
 	metrics.SegmentsTotal = int64(len(segments))
+	metrics.SegmentsPacketCopy = 0
+	metrics.SegmentsReencoded = 0
+	metrics.PacketCopyBytes = 0
+	metrics.ReencodedBytes = 0
+	metrics.PacketCopyRatio = 0
 	for _, segment := range segments {
 		packetCopy := segment.FfmpegEncodeMS == 0 && segment.FramesComposited == 0
 		if packetCopy {
@@ -221,6 +232,8 @@ func applySegmentMetrics(metrics *taskattempts.AttemptMetrics, segments []taskat
 		metrics.SegmentsReencoded++
 		metrics.ReencodedBytes += segment.SourceBytes
 	}
+	// SegmentsTotal is len(segments) > 0 here, so the ratio denominator is
+	// non-zero by construction.
 	metrics.PacketCopyRatio = float64(metrics.SegmentsPacketCopy) / float64(metrics.SegmentsTotal) * 100
 }
 

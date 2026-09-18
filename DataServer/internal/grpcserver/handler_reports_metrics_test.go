@@ -188,6 +188,62 @@ func TestApplySegmentMetrics_DerivesPacketCopyBreakdown(t *testing.T) {
 	}
 }
 
+// TestApplySegmentMetrics_DoesNotAddToWorkerAggregate is the regression pin for
+// the packet-copy telemetry corruption observed on an all-copy 266s timeline
+// (51 segments, 182_993_785 input bytes): segments_packet_copy was published as
+// 102, packet_copy_bytes as 365_987_570 (= exactly 2x the input bytes) and
+// packet_copy_ratio as 200%.
+//
+// The aggregate is populated from the worker report before this function runs,
+// so the segment-derived counters must REPLACE it, never accumulate onto it.
+func TestApplySegmentMetrics_DoesNotAddToWorkerAggregate(t *testing.T) {
+	metrics := taskattempts.AttemptMetrics{
+		SegmentsTotal:      51,
+		SegmentsPacketCopy: 51,
+		PacketCopyBytes:    182_993_785,
+		PacketCopyRatio:    100,
+	}
+	segments := make([]taskattempts.SegmentTiming, 0, 51)
+	for i := 0; i < 51; i++ {
+		segments = append(segments, taskattempts.SegmentTiming{
+			FfmpegEncodeMS: 0, FramesComposited: 0, SourceBytes: 1_000_000,
+		})
+	}
+
+	applySegmentMetrics(&metrics, segments)
+
+	if metrics.SegmentsTotal != 51 || metrics.SegmentsPacketCopy != 51 {
+		t.Fatalf("segment counts = total=%d copy=%d; want 51/51 (no accumulation onto the worker aggregate)",
+			metrics.SegmentsTotal, metrics.SegmentsPacketCopy)
+	}
+	if metrics.PacketCopyBytes != 51_000_000 {
+		t.Fatalf("packet_copy_bytes = %d; want 51000000 (segment population only, not 2x)", metrics.PacketCopyBytes)
+	}
+	if metrics.SegmentsReencoded != 0 || metrics.ReencodedBytes != 0 {
+		t.Fatalf("reencoded = %d/%d; want 0/0", metrics.SegmentsReencoded, metrics.ReencodedBytes)
+	}
+	if metrics.PacketCopyRatio != 100 {
+		t.Fatalf("packet_copy_ratio = %v; want 100 (packet-copied segments are a subset of total)", metrics.PacketCopyRatio)
+	}
+}
+
+// TestApplySegmentMetrics_RatioNeverExceedsOneHundred covers the invariant
+// directly: whatever the report carried, packet_copy_ratio is derived from the
+// same population as segments_total, so it can never exceed 100%.
+func TestApplySegmentMetrics_RatioNeverExceedsOneHundred(t *testing.T) {
+	metrics := taskattempts.AttemptMetrics{SegmentsPacketCopy: 999, PacketCopyBytes: 1 << 40, PacketCopyRatio: 200}
+	segments := []taskattempts.SegmentTiming{{SourceBytes: 10}, {SourceBytes: 20}}
+
+	applySegmentMetrics(&metrics, segments)
+
+	if metrics.PacketCopyRatio > 100 {
+		t.Fatalf("packet_copy_ratio = %v; want <= 100", metrics.PacketCopyRatio)
+	}
+	if metrics.SegmentsPacketCopy > metrics.SegmentsTotal {
+		t.Fatalf("segments_packet_copy = %d > segments_total = %d", metrics.SegmentsPacketCopy, metrics.SegmentsTotal)
+	}
+}
+
 func TestHandleTaskResult_PersistTypedMetrics_NilExecutionMetrics(t *testing.T) {
 	handler, taskRepo, jobsRepo, _ := buildSpoofHandler(t)
 	fx := newSpoofFixture()

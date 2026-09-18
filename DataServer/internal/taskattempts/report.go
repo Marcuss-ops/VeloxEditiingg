@@ -24,6 +24,15 @@ type PhaseTiming struct {
 	DurationMS int64     `json:"duration_ms"`
 	WallStart  time.Time `json:"wall_start"`
 	WallEnd    time.Time `json:"wall_end"`
+	// Component/Action are the canonical taxonomy identity of the summary row
+	// (for example engine/packet_mux). They are optional: the legacy compact
+	// summary contract carried only phase+duration, and rows written by that
+	// path leave them empty.
+	Component string `json:"component,omitempty"`
+	Action    string `json:"action,omitempty"`
+	// MetadataJSON carries the row's category rollup (engine I/O counters,
+	// qualitative verdicts, retry/waste attribution). Empty on compact rows.
+	MetadataJSON string `json:"metadata_json,omitempty"`
 }
 
 // AttemptMetrics stores typed resource counters for one attempt.
