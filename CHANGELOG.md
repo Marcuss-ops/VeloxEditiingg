@@ -1,5 +1,15 @@
 ## [Unreleased] - 2026-09-18
 
+### Performance — progressive early upload and submit-time prefetch
+
+- Early progressive uploads now send a 256 KiB first part followed by
+  bounded parts up to 2 MiB, honor `ProgressivePartConcurrency`, and compute
+  the final SHA-256 while the growing output is being uploaded.
+- Newly persisted jobs trigger the existing warm-worker `FutureAssetPlan`
+  reconciliation immediately after atomic enqueue, while the durable planner
+  remains the retry/reconnect fallback.
+- Worker image release target: `v1.4.36`.
+
 ### Added — 100x scale track: batch plan dedupe, persistent task DAG, chunk factory (W5 precursor), chaos scenario 20
 
 Four features from the 100x velocity plan (docs/SCALE-IMPROVEMENT-PLAN.md,
