@@ -30,6 +30,16 @@ func futureAssetManifests(payload []byte) []futureasset.AssetManifest {
 			if rawPlan, ok := node[contract.PayloadKeyCompiledRenderPlanJSON].(string); ok {
 				appendCompiledPlanAssetManifests(rawPlan, seen)
 			}
+			// The canonical worker payload persists typed scenes in
+			// scenes_json.  Keep manifest discovery recursive across that
+			// boundary: otherwise stock assets survive in the task payload but
+			// disappear from the future plan and are downloaded at runtime.
+			if rawScenes, ok := node["scenes_json"].(string); ok && strings.TrimSpace(rawScenes) != "" {
+				var scenes interface{}
+				if err := json.Unmarshal([]byte(rawScenes), &scenes); err == nil {
+					walk(scenes)
+				}
+			}
 			key, _ := node["asset_key"].(string)
 			if key == "" {
 				key, _ = node["asset_id"].(string)

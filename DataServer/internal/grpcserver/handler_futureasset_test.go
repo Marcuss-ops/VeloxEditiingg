@@ -106,6 +106,45 @@ func TestFutureAssetManifestsCarriesDeferredDriveStockWithoutMasterDownload(t *t
 	}
 }
 
+func TestFutureAssetManifestsDiscoversDeferredStockInsideScenesJSON(t *testing.T) {
+	items := make([]map[string]interface{}, 10)
+	for i := range items {
+		id := fmt.Sprintf("stock-scenes-json-%02d", i)
+		items[i] = map[string]interface{}{
+			"drive_file_id": id,
+			"url":           "velox-drive://" + id,
+			"size_bytes":    int64(1000 + i),
+			"duration_ms":   int64(1000),
+		}
+	}
+	scenesJSON, err := json.Marshal([]map[string]interface{}{{
+		"scene_id": "stock-scene",
+		"stock":    items,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(map[string]interface{}{
+		"scenes_json": string(scenesJSON),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assets := futureAssetManifests(payload)
+	if len(assets) != 10 {
+		t.Fatalf("scenes_json deferred stock manifests=%d, want 10", len(assets))
+	}
+	for _, asset := range assets {
+		if asset.AssetID == "" || asset.AssetKey == "" || asset.SizeBytes <= 0 || asset.SourceURI == "" {
+			t.Fatalf("incomplete scenes_json deferred stock manifest: %+v", asset)
+		}
+		if asset.SHA256 != "" {
+			t.Fatalf("Master must not hash Drive bytes while planning: %+v", asset)
+		}
+	}
+}
+
 func TestSelectWarmPlacementUsesCacheAwareWorkerRanking(t *testing.T) {
 	workers := []assembly.WorkerPlacementSnapshot{
 		{WorkerID: "cold", Available: true, CapacityAuthoritative: true, DiskAuthoritative: true, MaxExecutionSlots: 2, FreeDiskBytes: 1 << 30},
