@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"velox-worker-agent/internal/publisher"
+	"velox-worker-agent/internal/spool"
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/video/pipeline"
 )
@@ -19,7 +20,7 @@ import (
 // the first renderer write-progress event, keeps the same GrowingFile updated
 // by the renderer callback, and uses the normal progressive transport contract
 // for hashing, completion and retries.
-func uploadWithGrowingProgress(ctx context.Context, transport publisher.Transport, req publisher.UploadRequest, progress pipeline.ArtifactWriteProgress, file *publisher.GrowingFile, progressivePartConcurrency int, journalPath string) (*publisher.UploadResult, error) {
+func uploadWithGrowingProgress(ctx context.Context, transport publisher.Transport, req publisher.UploadRequest, progress pipeline.ArtifactWriteProgress, file *publisher.GrowingFile, progressivePartConcurrency int, journalPath string, outputSpool *spool.Store, spoolID string) (*publisher.UploadResult, error) {
 	if !publisher.SupportsProgressive(transport) {
 		return nil, fmt.Errorf("worker artifact upload: early transport %q is not progressive", transport.ID())
 	}
@@ -52,7 +53,7 @@ func uploadWithGrowingProgress(ctx context.Context, transport publisher.Transpor
 	if progressivePartConcurrency <= 0 {
 		progressivePartConcurrency = 4
 	}
-	result, err := publisher.RunProgressiveUploadWithJournalAndStoreOptions(ctx, openPath, req.Target.ChunkSize, file, session, journalPath, nil, "", publisher.ProgressiveUploadOptions{
+	result, err := publisher.RunProgressiveUploadWithJournalAndStoreOptions(ctx, openPath, req.Target.ChunkSize, file, session, journalPath, outputSpool, spoolID, publisher.ProgressiveUploadOptions{
 		Workers:          progressivePartConcurrency,
 		FirstPartSize:    256 * 1024,
 		AdaptivePartSize: true,

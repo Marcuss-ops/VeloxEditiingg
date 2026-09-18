@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -36,6 +37,7 @@ type earlyUploadState struct {
 	done       chan struct{}
 	planReady  chan struct{}
 	progressCh chan struct{}
+	spoolID    string
 	intentOnce sync.Once
 	planOnce   sync.Once
 	startOnce  sync.Once
@@ -148,10 +150,33 @@ func (s *earlyUploadState) tryStart() {
 		return
 	}
 	s.startOnce.Do(func() {
-		if err := s.ensureOutputSpool(progress); err != nil {
+		entry, err := s.ensureOutputSpool(progress)
+		if err != nil {
 			s.worker.logger.Warn("[ARTIFACT] early upload spool registration failed task=%s attempt=%s: %v", s.pte.TaskID, s.pte.AttemptID, err)
 			s.disable(fmt.Errorf("early upload: register output spool: %w", err))
 			return
+		}
+		if entry != nil {
+			targetJSON, marshalErr := json.Marshal(publisher.UploadTarget{
+				ArtifactID:  plan.GetArtifactId(),
+				UploadID:    plan.GetUploadId(),
+				TransportID: plan.GetTransportId(),
+				UploadURL:   plan.GetUploadUrl(),
+				ChunkSize:   plan.GetChunkSize(),
+			})
+			if marshalErr != nil {
+				s.disable(fmt.Errorf("early upload: marshal spool target: %w", marshalErr))
+				return
+			}
+			if err := s.worker.outputSpool.StashEarlyUploadPlan(s.ctx, entry.SpoolID, plan.GetUploadId(), string(targetJSON), plan.GetCommitToken()); err != nil {
+				s.disable(fmt.Errorf("early upload: stash spool target: %w", err))
+				return
+			}
+			if err := s.worker.outputSpool.MarkUploading(s.ctx, entry.SpoolID, 0); err != nil {
+				s.disable(fmt.Errorf("early upload: mark spool uploading: %w", err))
+				return
+			}
+			s.spoolID = entry.SpoolID
 		}
 		s.worker.logger.Info("[ARTIFACT] early upload starting task=%s attempt=%s upload=%s safe_offset=%d", s.pte.TaskID, s.pte.AttemptID, plan.GetUploadId(), progress.SafeOffsetBytes)
 		go s.run(plan, progress)
@@ -159,15 +184,14 @@ func (s *earlyUploadState) tryStart() {
 }
 
 // ensureOutputSpool reserves the same durable identity later used by the
-// normal declaration path. The early plan intentionally has no commit_id yet,
-// so the declaration path remains responsible for stashing the resumable
-// upload target; this row still prevents the early transfer from running
-// outside the worker spool lifecycle.
-func (s *earlyUploadState) ensureOutputSpool(progress pipeline.ArtifactWriteProgress) error {
+// normal declaration path. The early plan has no commit_id yet, but the
+// target/token are persisted immediately so a worker restart can resume the
+// bytes and defer only the fenced completion message.
+func (s *earlyUploadState) ensureOutputSpool(progress pipeline.ArtifactWriteProgress) (*spool.SpoolEntry, error) {
 	if s == nil || s.worker == nil || s.worker.outputSpool == nil || s.pte == nil {
-		return nil
+		return nil, nil
 	}
-	_, _, err := s.worker.outputSpool.Ensure(s.ctx, spool.SpoolEntry{
+	entry, _, err := s.worker.outputSpool.Ensure(s.ctx, spool.SpoolEntry{
 		TaskID:         s.pte.TaskID,
 		AttemptID:      s.pte.AttemptID,
 		WorkerSpoolKey: fmt.Sprintf("%s:output:0", s.pte.TaskID),
@@ -176,7 +200,7 @@ func (s *earlyUploadState) ensureOutputSpool(progress pipeline.ArtifactWriteProg
 		Status:         spool.StatusRendering,
 		StorageTier:    s.worker.outputStorageTier(progress.Path),
 	})
-	return err
+	return entry, err
 }
 
 func (s *earlyUploadState) run(plan *pb.ArtifactEarlyUploadPlan, progress pipeline.ArtifactWriteProgress) {
@@ -198,7 +222,7 @@ func (s *earlyUploadState) run(plan *pb.ArtifactEarlyUploadPlan, progress pipeli
 		}
 		result, err = uploadWithGrowingProgress(s.ctx, transport, publisher.UploadRequest{
 			LocalPath: progress.Path, Target: target, CommitToken: plan.GetCommitToken(),
-		}, progress, file, progressivePartConcurrency, progressiveJournalPath(publisher.UploadRequest{LocalPath: progress.Path, Target: target}))
+		}, progress, file, progressivePartConcurrency, progressiveJournalPath(publisher.UploadRequest{LocalPath: progress.Path, Target: target}), s.worker.outputSpool, s.spoolID)
 	}
 	if err != nil {
 		s.worker.logger.Warn("[ARTIFACT] early upload failed task=%s attempt=%s upload=%s: %v", s.pte.TaskID, s.pte.AttemptID, plan.GetUploadId(), err)

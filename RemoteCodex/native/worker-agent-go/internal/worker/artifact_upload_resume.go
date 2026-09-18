@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -333,6 +334,12 @@ func (w *Worker) resumeArtifactUpload(ctx context.Context, entry spool.SpoolEntr
 		w.logger.Warn("[ARTIFACT_RESUME] incomplete target spool=%s upload_id=%q transport=%q", entry.SpoolID, target.UploadID, target.TransportID)
 		return
 	}
+	expectedSize := entry.SizeBytes
+	if expectedSize <= 0 {
+		if info, statErr := os.Stat(entry.LocalPath); statErr == nil {
+			expectedSize = info.Size()
+		}
+	}
 
 	// Bounded budget: after the last upload/commit-resume attempt is exhausted
 	// the row becomes a permanent failure (REJECTED) so the master re-schedules
@@ -382,19 +389,19 @@ func (w *Worker) resumeArtifactUpload(ctx context.Context, entry spool.SpoolEntr
 				return
 			}
 			journalPath := progressiveJournalPath(publisher.UploadRequest{LocalPath: entry.LocalPath, Target: target})
-			journal, journalErr := publisher.LoadProgressiveResume(journalPath, target.UploadID, target.ChunkSize, entry.SizeBytes)
+			journal, journalErr := publisher.LoadProgressiveResume(journalPath, target.UploadID, target.ChunkSize, expectedSize)
 			if journalErr != nil {
 				w.scheduleUploadRetry(ctx, entry, journalErr)
 				return
 			}
-			session, beginErr := progressive.ResumeProgressive(ctx, publisher.ProgressiveUploadRequest{Target: target, Artifact: target.ArtifactID, ExpectedSize: entry.SizeBytes, CommitToken: entry.CommitToken}, journal.CompletedParts)
+			session, beginErr := progressive.ResumeProgressive(ctx, publisher.ProgressiveUploadRequest{Target: target, Artifact: target.ArtifactID, ExpectedSize: expectedSize, CommitToken: entry.CommitToken}, journal.CompletedParts)
 			if beginErr != nil {
 				w.scheduleUploadRetry(ctx, entry, beginErr)
 				return
 			}
 			growing := publisher.NewGrowingFile()
-			growing.Update(entry.SizeBytes, true, entry.SizeBytes)
-			growing.MarkDurable(entry.SizeBytes)
+			growing.Update(expectedSize, true, expectedSize)
+			growing.MarkDurable(expectedSize)
 			result, uploadErr = publisher.RunProgressiveUploadWithJournalAndStoreOptions(ctx, entry.LocalPath, target.ChunkSize, growing, session, journalPath, w.outputSpool, entry.SpoolID, publisher.ProgressiveUploadOptions{Workers: w.config.ProgressivePartConcurrency}, nil)
 			markedUploadedByRunner = true
 		} else {
@@ -422,6 +429,13 @@ func (w *Worker) resumeArtifactUpload(ctx context.Context, entry spool.SpoolEntr
 			}
 		}
 		w.logger.Info("[ARTIFACT_RESUME] upload resumed spool=%s upload=%s bytes=%d", entry.SpoolID, result.UploadID, result.UploadedBytes)
+	}
+	if entry.CommitID == "" {
+		// An early-upload row can survive a worker restart before the normal
+		// declaration assigns the fenced commit_id. Its bytes are resumable,
+		// but completion must wait for TaskOutputDeclared/ArtifactUploadPlan.
+		w.logger.Info("[ARTIFACT_RESUME] early upload bytes resumed spool=%s; deferring commit until declaration", entry.SpoolID)
+		return
 	}
 
 	// Complete the attempt commit: ArtifactUploadCompleted → TaskCommitAck →

@@ -67,13 +67,55 @@ func (s *Store) MarkUploading(ctx context.Context, spoolID string, uploadedBytes
 	})
 }
 
+// StampContent records the final content identity without changing the
+// lifecycle state. Early progressive uploads need this when the normal
+// declaration arrives after bytes have already started moving.
+func (s *Store) StampContent(ctx context.Context, spoolID, sha256Hex string, sizeBytes int64) error {
+	if len(sha256Hex) != 64 || sizeBytes <= 0 {
+		return fmt.Errorf("spool.StampContent: invalid content identity")
+	}
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE worker_output_spool
+		   SET sha256 = ?, size_bytes = ?, updated_at = ?
+		 WHERE spool_id = ? AND status IN ('RENDERING','OUTPUT_READY','UPLOAD_PENDING','UPLOADING','UPLOADED')`,
+		sha256Hex, sizeBytes, time.Now().UTC().Format(time.RFC3339Nano), spoolID)
+	if err != nil {
+		return fmt.Errorf("spool.StampContent: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return fmt.Errorf("%w: spool=%s", ErrCASConflict, spoolID)
+	}
+	return nil
+}
+
+// StashEarlyUploadPlan persists the pre-declaration target and moves the row
+// into the normal upload-resume set. CommitID remains empty until the normal
+// TaskOutputDeclared plan arrives; resumeArtifactUpload deliberately uploads
+// bytes but defers the fenced completion message until then.
+func (s *Store) StashEarlyUploadPlan(ctx context.Context, spoolID, uploadID, targetJSON, commitToken string) error {
+	if spoolID == "" || uploadID == "" {
+		return fmt.Errorf("spool.StashEarlyUploadPlan: identity empty")
+	}
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE worker_output_spool
+		   SET upload_id = ?, upload_target_json = ?, commit_token = ?,
+		       status = 'UPLOAD_PENDING', updated_at = ?
+		 WHERE spool_id = ? AND status = 'RENDERING'`,
+		uploadID, targetJSON, commitToken, time.Now().UTC().Format(time.RFC3339Nano), spoolID)
+	if err != nil {
+		return fmt.Errorf("spool.StashEarlyUploadPlan: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return fmt.Errorf("%w: spool=%s (expected status=RENDERING)", ErrCASConflict, spoolID)
+	}
+	return nil
+}
+
 // StashUploadPlan persists the master's per-artifact upload target (and the
-// attempt's commit_id + short-lived commit token) without moving the row's
-// status. It is the durable resume key: without it the worker cannot re-drive
-// a mid-upload row after a restart because transport_id / upload_url /
-// chunk_size live only in the (lost) ArtifactUploadPlan message. CAS-gated on
-// OUTPUT_READY so it can only run between MarkReady and MarkUploading; a
-// late call after the row has moved on is a benign CAS conflict.
+// attempt's commit_id + short-lived commit token). It accepts both the normal
+// OUTPUT_READY declaration window and an early row already in
+// UPLOAD_PENDING/UPLOADING/UPLOADED, so the final declaration can enrich a
+// target persisted before rendering finished.
 func (s *Store) StashUploadPlan(ctx context.Context, spoolID, commitID, uploadID, targetJSON, commitToken string) error {
 	if spoolID == "" {
 		return fmt.Errorf("spool.StashUploadPlan: spool_id empty")
@@ -86,14 +128,14 @@ func (s *Store) StashUploadPlan(ctx context.Context, spoolID, commitID, uploadID
 		UPDATE worker_output_spool
 		   SET commit_id = ?, upload_id = ?, upload_target_json = ?,
 		       commit_token = ?, updated_at = ?
-		 WHERE spool_id = ? AND status = ?`,
-		commitID, uploadID, targetJSON, commitToken, now, spoolID, string(StatusOutputReady),
+		 WHERE spool_id = ? AND status IN ('OUTPUT_READY','UPLOAD_PENDING','UPLOADING','UPLOADED')`,
+		commitID, uploadID, targetJSON, commitToken, now, spoolID,
 	)
 	if err != nil {
 		return fmt.Errorf("spool.StashUploadPlan: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n != 1 {
-		return fmt.Errorf("%w: spool=%s (expected status=OUTPUT_READY)", ErrCASConflict, spoolID)
+		return fmt.Errorf("%w: spool=%s (expected resumable status)", ErrCASConflict, spoolID)
 	}
 	return nil
 }

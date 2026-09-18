@@ -12,7 +12,7 @@
   it persists reusable chunk payloads and a worker-local manifest while
   leaving manifest-first delivery disabled until the Master/edge contract is
   landed.
-- Worker image release target: `v1.4.37`.
+- Worker image release target: `v1.4.38`.
 
 ### Correctness — early upload, task DAG, and batch intake hardening
 

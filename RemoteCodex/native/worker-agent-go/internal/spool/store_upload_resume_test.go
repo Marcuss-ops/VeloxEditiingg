@@ -58,6 +58,38 @@ func TestStashUploadPlan_NotOutputReady_Conflicts(t *testing.T) {
 	}
 }
 
+func TestEarlyUploadPlanBecomesResumableBeforeCommit(t *testing.T) {
+	s := newInMemoryTestStore(t)
+	ctx := context.Background()
+	e := mustInsertBasic(t, s, "early")
+	if err := s.StashEarlyUploadPlan(ctx, e.SpoolID, "early-upload", `{"upload_id":"early-upload"}`, "early-token"); err != nil {
+		t.Fatalf("StashEarlyUploadPlan: %v", err)
+	}
+	if err := s.MarkUploading(ctx, e.SpoolID, 0); err != nil {
+		t.Fatalf("MarkUploading: %v", err)
+	}
+	if err := s.StampContent(ctx, e.SpoolID, strings.Repeat("d", 64), 400); err != nil {
+		t.Fatalf("StampContent: %v", err)
+	}
+	got, err := s.Get(ctx, e.SpoolID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Status != StatusUploading || got.CommitID != "" || got.UploadTargetJSON == "" {
+		t.Fatalf("early row = status=%s commit=%q target=%q; want UPLOADING without commit and with target", got.Status, got.CommitID, got.UploadTargetJSON)
+	}
+	if err := s.StashUploadPlan(ctx, e.SpoolID, "commit-final", "early-upload", `{"upload_id":"early-upload","declaration_id":"d1"}`, "final-token"); err != nil {
+		t.Fatalf("final StashUploadPlan: %v", err)
+	}
+	got, err = s.Get(ctx, e.SpoolID)
+	if err != nil {
+		t.Fatalf("Get after final plan: %v", err)
+	}
+	if got.CommitID != "commit-final" || got.CommitToken != "final-token" {
+		t.Fatalf("final plan not stamped: commit=%q token=%q", got.CommitID, got.CommitToken)
+	}
+}
+
 // TestRecordUploadFailure_BumpsAndSchedules pins the retry ledger: a failure
 // increments the bounded counter, schedules next_upload_attempt_at, and leaves
 // the row mid-upload (resumable), never terminal.

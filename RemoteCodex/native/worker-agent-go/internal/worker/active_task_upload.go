@@ -7,6 +7,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -71,7 +72,7 @@ func (w *Worker) uploadDeclaredArtifacts(ctx context.Context, pte *PendingTaskEx
 			return nil, fmt.Errorf("worker artifact upload: transfer %q returned invalid byte count or upload id", ref.Type)
 		}
 
-		if err := w.outputSpool.MarkUploaded(ctx, entries[i].SpoolID); err != nil {
+		if err := w.outputSpool.MarkUploaded(ctx, entries[i].SpoolID); err != nil && !errors.Is(err, spool.ErrCASConflict) {
 			return nil, fmt.Errorf("worker artifact upload: mark target %d uploaded: %w", i, err)
 		}
 

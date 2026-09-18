@@ -84,10 +84,16 @@ func (w *Worker) markOutputSpoolReady(ctx context.Context, entries []spool.Spool
 	}
 	for i := range entries {
 		ref := report.Outputs[i]
-		if err := w.outputSpool.MarkReady(ctx, entries[i].SpoolID, ref.Hash, ref.SizeBytes); err != nil {
-			return err
+		if entries[i].Status == spool.StatusRendering {
+			if err := w.outputSpool.MarkReady(ctx, entries[i].SpoolID, ref.Hash, ref.SizeBytes); err != nil {
+				return err
+			}
+			entries[i].Status = spool.StatusOutputReady
+		} else {
+			if err := w.outputSpool.StampContent(ctx, entries[i].SpoolID, ref.Hash, ref.SizeBytes); err != nil {
+				return err
+			}
 		}
-		entries[i].Status = spool.StatusOutputReady
 		entries[i].SHA256 = ref.Hash
 		entries[i].SizeBytes = ref.SizeBytes
 	}
@@ -106,8 +112,17 @@ func (w *Worker) stashUploadPlan(ctx context.Context, entry spool.SpoolEntry, pl
 	if err := w.outputSpool.StashUploadPlan(ctx, entry.SpoolID, plan.GetCommitId(), target.UploadID, string(targetJSON), plan.GetCommitToken()); err != nil {
 		return err
 	}
-	if err := w.outputSpool.MarkUploadPending(ctx, entry.SpoolID, target.UploadID); err != nil {
-		return err
+	if entry.Status == spool.StatusOutputReady {
+		if err := w.outputSpool.MarkUploadPending(ctx, entry.SpoolID, target.UploadID); err != nil {
+			return err
+		}
+		return w.outputSpool.MarkUploading(ctx, entry.SpoolID, 0)
 	}
-	return w.outputSpool.MarkUploading(ctx, entry.SpoolID, 0)
+	if entry.Status == spool.StatusUploadPending {
+		return w.outputSpool.MarkUploading(ctx, entry.SpoolID, 0)
+	}
+	if entry.Status == spool.StatusUploading || entry.Status == spool.StatusUploaded {
+		return nil
+	}
+	return fmt.Errorf("worker artifact upload: unexpected spool status %s", entry.Status)
 }
