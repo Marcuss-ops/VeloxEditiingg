@@ -49,3 +49,22 @@ docs
 ops
 deploy
 DataServer/data/ansible
+
+# Go test sources are compile-time-only inputs and are never shipped.
+#
+# Safety review (why this cannot break a build):
+#   * No Dockerfile or compose in this repo runs `go test` / `go vet`. The
+#     only test runner inside any image is `ctest` in the worker's
+#     cpp-builder stage, and its inputs are `*_test.cpp` (video-engine-cpp/
+#     tests/), which this pattern does NOT match — C++ test sources stay.
+#   * `go build` ignores `*_test.go` by definition, so the master
+#     (cmd/server), the worker (agent/evict/benchmark-tools) and
+#     Dockerfile.chronon (agent) are unaffected.
+#   * The only production `//go:embed` directive is
+#     shared/telemetry/catalog_source.go -> schema/catalog.json (not a _test
+#     file). Every other `//go:embed` lives inside a `_test.go` file, so it
+#     is already dropped together with its own file.
+#   * `*_test.go` does NOT match the C++ engine tests (`*_test.cpp`), nor the
+#     `tests/fixtures/engine_selftest_baseline.sha256` fixture that the worker
+#     runtime stage explicitly COPYs. Do NOT widen this to `**/tests/`.
+**/*_test.go
