@@ -359,7 +359,7 @@ func TestRemotePipelineResultCanonicalizesTimedDriveOverlaysForWorker(t *testing
 	if !ok || len(overlays) != 1 {
 		t.Fatalf("worker overlays = %#v", workerPayload["overlays"])
 	}
-	if overlays[0].URL != "velox-drive://drive-overlay-01" || overlays[0].DriveFileID != "drive-overlay-01" || overlays[0].StartFrame != 120 {
+	if overlays[0].URL != "velox-drive://drive-overlay-01" || overlays[0].DriveFileID != "drive-overlay-01" || overlays[0].StartFrame != 120 || overlays[0].EndFrame != 240 {
 		t.Fatalf("worker overlay = %+v", overlays[0])
 	}
 }

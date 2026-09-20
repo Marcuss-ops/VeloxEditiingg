@@ -51,14 +51,14 @@ func TestBuildRawPayload_DefaultsDeliveryRetryBudget(t *testing.T) {
 
 func TestBuildRawPayload_PreservesFrameNativeOverlays(t *testing.T) {
 	raw := BuildRawPayload(SubmissionInput{
-		Overlays: []OverlayInput{{ID: "overlay_01", AssetID: "drive-file", DriveFileID: "drive-file", URL: "https://drive.google.com/file/d/drive-file/view", StartFrame: 120, FrameCount: 120, Mode: "replace", ZIndex: 10, AudioMode: "preserve_final_audio"}},
+		Overlays: []OverlayInput{{ID: "overlay_01", AssetID: "drive-file", DriveFileID: "drive-file", URL: "https://drive.google.com/file/d/drive-file/view", StartFrame: 120, EndFrame: 240, FrameCount: 120, Mode: "replace", ZIndex: 10, AudioMode: "preserve_final_audio"}},
 	})
 	overlays, ok := raw["overlays"].([]interface{})
 	if !ok || len(overlays) != 1 {
 		t.Fatalf("overlays = %#v", raw["overlays"])
 	}
 	overlay := overlays[0].(map[string]interface{})
-	if overlay["start_frame"] != int64(120) || overlay["frame_count"] != int64(120) || overlay["mode"] != "replace" {
+	if overlay["start_frame"] != int64(120) || overlay["end_frame"] != int64(240) || overlay["frame_count"] != int64(120) || overlay["mode"] != "replace" {
 		t.Fatalf("overlay timing = %#v", overlay)
 	}
 	if overlay["audio_mode"] != "preserve_final_audio" {
@@ -66,5 +66,15 @@ func TestBuildRawPayload_PreservesFrameNativeOverlays(t *testing.T) {
 	}
 	if overlay["asset_id"] != "drive-file" || overlay["drive_file_id"] != "drive-file" {
 		t.Fatalf("overlay asset identity = %#v", overlay)
+	}
+}
+
+func TestBuildRawPayload_DerivesEndFrameForLegacyOverlay(t *testing.T) {
+	raw := BuildRawPayload(SubmissionInput{
+		Overlays: []OverlayInput{{ID: "legacy", AssetID: "asset", StartFrame: 24, FrameCount: 120, Mode: "replace", AudioMode: "preserve_final_audio"}},
+	})
+	overlay := raw["overlays"].([]interface{})[0].(map[string]interface{})
+	if overlay["start_frame"] != int64(24) || overlay["end_frame"] != int64(144) || overlay["frame_count"] != int64(120) {
+		t.Fatalf("legacy overlay timing = %#v, want [24,144) count=120", overlay)
 	}
 }

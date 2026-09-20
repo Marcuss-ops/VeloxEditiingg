@@ -410,7 +410,8 @@ type SubmitOverlay struct {
 	URL         string `json:"url,omitempty"`
 	SHA256      string `json:"sha256,omitempty"`
 	StartFrame  int64  `json:"start_frame" validate:"gte=0"`
-	FrameCount  int64  `json:"frame_count" validate:"required,gte=1"`
+	EndFrame    int64  `json:"end_frame,omitempty" validate:"omitempty,gte=1"`
+	FrameCount  int64  `json:"frame_count,omitempty" validate:"omitempty,gte=1"`
 	Mode        string `json:"mode" validate:"required,oneof=replace composite"`
 	ZIndex      int    `json:"z_index"`
 	AudioMode   string `json:"audio_mode" validate:"required,oneof=preserve_final_audio"`

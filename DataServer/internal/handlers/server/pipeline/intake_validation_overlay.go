@@ -31,8 +31,8 @@ func validateSubmitOverlays(overlays []SubmitOverlay) []gin.H {
 		if overlay.StartFrame < 0 {
 			details = append(details, gin.H{"path": path + ".start_frame", "issue": "out_of_range"})
 		}
-		if overlay.FrameCount <= 0 {
-			details = append(details, gin.H{"path": path + ".frame_count", "issue": "out_of_range"})
+		if err := normalizeSubmitOverlayWindow(&overlay); err != nil {
+			details = append(details, gin.H{"path": path + ".end_frame", "issue": "invalid_window", "message": err.Error()})
 		}
 		if overlay.Mode != "replace" && overlay.Mode != "composite" {
 			details = append(details, gin.H{"path": path + ".mode", "issue": "unsupported_value", "allowed": []string{"replace", "composite"}})
@@ -62,4 +62,31 @@ func validateSubmitOverlays(overlays []SubmitOverlay) []gin.H {
 		}
 	}
 	return details
+}
+
+func normalizeSubmitOverlayWindow(overlay *SubmitOverlay) error {
+	if overlay == nil {
+		return fmt.Errorf("overlay is nil")
+	}
+	if overlay.StartFrame < 0 {
+		return fmt.Errorf("start_frame must be >= 0")
+	}
+	if overlay.EndFrame > 0 {
+		if overlay.EndFrame <= overlay.StartFrame {
+			return fmt.Errorf("end_frame must be greater than start_frame")
+		}
+		if overlay.FrameCount > 0 && overlay.StartFrame+overlay.FrameCount != overlay.EndFrame {
+			return fmt.Errorf("end_frame must equal start_frame + frame_count")
+		}
+		overlay.FrameCount = overlay.EndFrame - overlay.StartFrame
+		return nil
+	}
+	if overlay.FrameCount <= 0 {
+		return fmt.Errorf("frame_count or end_frame must be positive")
+	}
+	overlay.EndFrame = overlay.StartFrame + overlay.FrameCount
+	if overlay.EndFrame <= overlay.StartFrame {
+		return fmt.Errorf("end_frame overflows the frame window")
+	}
+	return nil
 }

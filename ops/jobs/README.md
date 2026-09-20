@@ -78,9 +78,11 @@ uses a destination other than `drive-production`.
 ### Overlay timing acceptance
 
 `mike_tyson_intro_stock.creator-push.json` carries the five supplied Drive
-assets as frame-native `overlays`: 120–240, 240–321, 321–441, 441–561 and
+assets as frame-native `overlays`, each with an explicit half-open window
+`[start_frame,end_frame)`: 120–240, 240–321, 321–441, 441–561 and
 561–681 at 24 fps (5.000–10.000, 10.000–13.375, 13.375–18.375,
-18.375–23.375 and 23.375–28.375 seconds). It starts in `replace` mode for
+18.375–23.375 and 23.375–28.375 seconds). `frame_count` remains present as
+a compatibility projection and must equal `end_frame-start_frame`. It starts in `replace` mode for
 the packet-copy path. For a Chronon test, change the five `mode` values to
 `composite`; the resolver partitions the active windows and Velox still gets
 one prepared canonical video track. Overlay audio is excluded through

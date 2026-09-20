@@ -916,6 +916,9 @@ components:
                             drive_file_id:
                                 maxLength: 128
                                 type: string
+                            end_frame:
+                                minimum: 1
+                                type: integer
                             frame_count:
                                 minimum: 1
                                 type: integer
@@ -938,7 +941,6 @@ components:
                                 type: integer
                         required:
                             - audio_mode
-                            - frame_count
                             - id
                             - mode
                         type: object

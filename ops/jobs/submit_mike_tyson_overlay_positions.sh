@@ -64,29 +64,29 @@ jq \
    | .payload.overlays = [
        {id:"position-overlay-01", asset_id:$overlay_01, drive_file_id:$overlay_01,
         url:("https://drive.google.com/file/d/" + $overlay_01 + "/view?usp=drive_link"),
-        start_frame:24, frame_count:120, mode:"replace", z_index:10,
+        start_frame:24, end_frame:144, frame_count:120, mode:"replace", z_index:10,
         audio_mode:"preserve_final_audio"},
        {id:"position-overlay-02", asset_id:$overlay_02, drive_file_id:$overlay_02,
         url:("https://drive.google.com/file/d/" + $overlay_02 + "/view?usp=drive_link"),
-        start_frame:720, frame_count:120, mode:"replace", z_index:10,
+        start_frame:720, end_frame:840, frame_count:120, mode:"replace", z_index:10,
         audio_mode:"preserve_final_audio"},
        {id:"position-overlay-03", asset_id:$overlay_03, drive_file_id:$overlay_03,
         url:("https://drive.google.com/file/d/" + $overlay_03 + "/view?usp=drive_link"),
-        start_frame:1560, frame_count:120, mode:"replace", z_index:10,
+        start_frame:1560, end_frame:1680, frame_count:120, mode:"replace", z_index:10,
         audio_mode:"preserve_final_audio"},
        {id:"position-overlay-04", asset_id:$overlay_04, drive_file_id:$overlay_04,
         url:("https://drive.google.com/file/d/" + $overlay_04 + "/view?usp=drive_link"),
-        start_frame:2880, frame_count:120, mode:"replace", z_index:10,
+        start_frame:2880, end_frame:3000, frame_count:120, mode:"replace", z_index:10,
         audio_mode:"preserve_final_audio"},
        {id:"position-overlay-05", asset_id:$overlay_05, drive_file_id:$overlay_05,
         url:("https://drive.google.com/file/d/" + $overlay_05 + "/view?usp=drive_link"),
-        start_frame:4800, frame_count:120, mode:"replace", z_index:10,
+        start_frame:4800, end_frame:4920, frame_count:120, mode:"replace", z_index:10,
         audio_mode:"preserve_final_audio"}
      ]' "$BASE_PAYLOAD" > "$TMP_PAYLOAD"
 
 if [[ "$DRY_RUN" == "1" ]]; then
   jq '{source_job_id, target_executor_id,
-      overlays: [.payload.overlays[] | {id, asset_id, start_frame, frame_count, mode, audio_mode}],
+      overlays: [.payload.overlays[] | {id, asset_id, start_frame, end_frame, frame_count, mode, audio_mode}],
       delivery_plan: .payload.delivery_plan}' "$TMP_PAYLOAD"
   exit 0
 fi

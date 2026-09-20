@@ -115,6 +115,7 @@ type OverlayInput struct {
 	URL         string
 	SHA256      string
 	StartFrame  int64
+	EndFrame    int64
 	FrameCount  int64
 	Mode        string
 	ZIndex      int
@@ -253,14 +254,23 @@ func BuildRawPayload(input SubmissionInput) map[string]interface{} {
 	if len(input.Overlays) > 0 {
 		overlays := make([]interface{}, 0, len(input.Overlays))
 		for _, overlay := range input.Overlays {
+			endFrame := overlay.EndFrame
+			if endFrame == 0 && overlay.FrameCount > 0 {
+				endFrame = overlay.StartFrame + overlay.FrameCount
+			}
+			frameCount := overlay.FrameCount
+			if frameCount == 0 && endFrame > overlay.StartFrame {
+				frameCount = endFrame - overlay.StartFrame
+			}
 			assetID := strings.TrimSpace(overlay.AssetID)
 			if assetID == "" {
 				assetID = strings.TrimSpace(overlay.DriveFileID)
 			}
 			entry := map[string]interface{}{
 				"id": strings.TrimSpace(overlay.ID), "asset_id": assetID,
-				"start_frame": overlay.StartFrame, "frame_count": overlay.FrameCount,
-				"mode": strings.TrimSpace(overlay.Mode), "z_index": overlay.ZIndex,
+				"start_frame": overlay.StartFrame, "end_frame": endFrame,
+				"frame_count": frameCount,
+				"mode":        strings.TrimSpace(overlay.Mode), "z_index": overlay.ZIndex,
 				"audio_mode": strings.TrimSpace(overlay.AudioMode),
 			}
 			if driveID := strings.TrimSpace(overlay.DriveFileID); driveID != "" {

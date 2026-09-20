@@ -1,5 +1,16 @@
 ## [Unreleased] - 2026-09-18
 
+### Fixed — explicit overlay start/end timing
+
+- Overlay payloads now carry the canonical half-open frame window
+  `[start_frame,end_frame)` while retaining `frame_count` for compatibility.
+- The Master derives `end_frame` from legacy payloads, rejects inconsistent
+  `end_frame`/`frame_count` pairs, and preserves the explicit window through
+  API, Creator Push, worker projection, and the shared timeline resolver.
+- The Tyson overlay fixture and dry-run now print both boundaries, preventing
+  overlays from appearing at the wrong end position after a payload round-trip.
+- Full-module verification is green (`scripts/ci/pre-removal-verify.sh`).
+
 ### P0 — Single canonical video-profile authority (media profile unification)
 
 Removes the second owner of video compatibility. Before this change the

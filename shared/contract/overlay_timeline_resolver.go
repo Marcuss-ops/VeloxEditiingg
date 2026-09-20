@@ -32,10 +32,14 @@ type Overlay struct {
 	URL         string `json:"url,omitempty"`
 	SHA256      string `json:"sha256,omitempty"`
 	StartFrame  int64  `json:"start_frame"`
-	FrameCount  int64  `json:"frame_count"`
-	Mode        string `json:"mode"`
-	ZIndex      int    `json:"z_index"`
-	AudioMode   string `json:"audio_mode"`
+	// EndFrame is the exclusive end of the editorial window. FrameCount is
+	// retained as a compatibility field; the canonical invariant is
+	// end_frame == start_frame + frame_count.
+	EndFrame   int64  `json:"end_frame"`
+	FrameCount int64  `json:"frame_count"`
+	Mode       string `json:"mode"`
+	ZIndex     int    `json:"z_index"`
+	AudioMode  string `json:"audio_mode"`
 }
 
 // OverlayWindow is one deterministic interval that must be prepared by
@@ -44,6 +48,7 @@ type Overlay struct {
 type OverlayWindow struct {
 	WindowID   string    `json:"window_id"`
 	StartFrame int64     `json:"start_frame"`
+	EndFrame   int64     `json:"end_frame"`
 	FrameCount int64     `json:"frame_count"`
 	Overlays   []Overlay `json:"overlays"`
 }
@@ -112,11 +117,11 @@ func ValidateOverlays(overlays []Overlay, baseFrameCount int64) error {
 		if strings.TrimSpace(o.AssetID) == "" {
 			return fmt.Errorf("overlays[%s]: asset_id is required", id)
 		}
-		if o.StartFrame < 0 || o.FrameCount <= 0 {
-			return fmt.Errorf("overlays[%s]: start_frame must be >= 0 and frame_count must be positive", id)
+		if err := o.NormalizeWindow(); err != nil {
+			return fmt.Errorf("overlays[%s]: %w", id, err)
 		}
-		if o.StartFrame+o.FrameCount > baseFrameCount {
-			return fmt.Errorf("overlays[%s]: window [%d,%d) exceeds base frame count %d", id, o.StartFrame, o.StartFrame+o.FrameCount, baseFrameCount)
+		if o.EndFrame > baseFrameCount {
+			return fmt.Errorf("overlays[%s]: window [%d,%d) exceeds base frame count %d", id, o.StartFrame, o.EndFrame, baseFrameCount)
 		}
 		if o.Mode != string(OverlayModeReplace) && o.Mode != string(OverlayModeComposite) {
 			return fmt.Errorf("overlays[%s]: mode must be replace or composite", id)
@@ -135,7 +140,7 @@ func ValidateOverlays(overlays []Overlay, baseFrameCount int64) error {
 		return replacements[i].ID < replacements[j].ID
 	})
 	for i := 1; i < len(replacements); i++ {
-		prevEnd := replacements[i-1].StartFrame + replacements[i-1].FrameCount
+		prevEnd := replacements[i-1].EndFrame
 		if replacements[i].StartFrame < prevEnd {
 			return fmt.Errorf("overlays[%s]: replace window overlaps %s", replacements[i].ID, replacements[i-1].ID)
 		}
@@ -146,18 +151,22 @@ func ValidateOverlays(overlays []Overlay, baseFrameCount int64) error {
 // ResolveOverlayWindows partitions composite intent at every boundary. It
 // never emits multiple video tracks and never performs pixel work.
 func ResolveOverlayWindows(overlays []Overlay, baseFrameCount int64) ([]OverlayWindow, error) {
-	if err := ValidateOverlays(overlays, baseFrameCount); err != nil {
+	normalized, err := NormalizeOverlayWindows(overlays)
+	if err != nil {
+		return nil, err
+	}
+	if err := ValidateOverlays(normalized, baseFrameCount); err != nil {
 		return nil, err
 	}
 	composites := make([]Overlay, 0, len(overlays))
 	boundaries := map[int64]struct{}{0: {}}
-	for _, o := range overlays {
+	for _, o := range normalized {
 		if o.Mode != string(OverlayModeComposite) {
 			continue
 		}
 		composites = append(composites, o)
 		boundaries[o.StartFrame] = struct{}{}
-		boundaries[o.StartFrame+o.FrameCount] = struct{}{}
+		boundaries[o.EndFrame] = struct{}{}
 	}
 	if len(composites) == 0 {
 		return nil, nil
@@ -190,7 +199,7 @@ func ResolveOverlayWindows(overlays []Overlay, baseFrameCount int64) ([]OverlayW
 		})
 		windows = append(windows, OverlayWindow{
 			WindowID: fmt.Sprintf("overlay-window-%06d", len(windows)), StartFrame: start,
-			FrameCount: end - start, Overlays: active,
+			EndFrame: end, FrameCount: end - start, Overlays: active,
 		})
 	}
 	return windows, nil
@@ -213,11 +222,15 @@ func ResolveOverlayTimeline(base []VideoSegmentV2, overlays []Overlay, fpsNum, f
 			totalFrames = end
 		}
 	}
-	if err := ValidateOverlays(overlays, totalFrames); err != nil {
+	normalized, err := NormalizeOverlayWindows(overlays)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := ValidateOverlays(normalized, totalFrames); err != nil {
 		return nil, nil, err
 	}
 	replacements := make([]VisualReplacement, 0)
-	for _, o := range overlays {
+	for _, o := range normalized {
 		if o.Mode != string(OverlayModeReplace) {
 			continue
 		}
@@ -231,11 +244,25 @@ func ResolveOverlayTimeline(base []VideoSegmentV2, overlays []Overlay, fpsNum, f
 	if err != nil {
 		return nil, nil, err
 	}
-	windows, err := ResolveOverlayWindows(overlays, totalFrames)
+	windows, err := ResolveOverlayWindows(normalized, totalFrames)
 	if err != nil {
 		return nil, nil, err
 	}
 	return resolved, windows, nil
+}
+
+// NormalizeOverlayWindows returns a canonical copy with both explicit timing
+// fields populated. It is used by resolver callers that construct typed
+// overlays directly instead of crossing the JSON ParseOverlays boundary.
+func NormalizeOverlayWindows(overlays []Overlay) ([]Overlay, error) {
+	canonical := make([]Overlay, len(overlays))
+	for i := range overlays {
+		canonical[i] = overlays[i]
+		if err := canonical[i].NormalizeWindow(); err != nil {
+			return nil, fmt.Errorf("overlays[%d]: %w", i, err)
+		}
+	}
+	return canonical, nil
 }
 
 // ParseOverlays converts a payload array into typed editorial intent. It
@@ -266,6 +293,7 @@ func ParseOverlays(raw any) ([]Overlay, error) {
 				"url":           v[i].URL,
 				"sha256":        v[i].SHA256,
 				"start_frame":   v[i].StartFrame,
+				"end_frame":     v[i].EndFrame,
 				"frame_count":   v[i].FrameCount,
 				"mode":          v[i].Mode,
 				"z_index":       v[i].ZIndex,
@@ -288,10 +316,14 @@ func ParseOverlays(raw any) ([]Overlay, error) {
 			URL:         overlayString(m["url"]),
 			SHA256:      overlayString(m["sha256"]),
 			StartFrame:  overlayInt64(m["start_frame"]),
+			EndFrame:    overlayInt64(m["end_frame"]),
 			FrameCount:  overlayInt64(m["frame_count"]),
 			Mode:        overlayString(m["mode"]),
 			ZIndex:      int(overlayInt64(m["z_index"])),
 			AudioMode:   overlayString(m["audio_mode"]),
+		}
+		if err := overlay.NormalizeWindow(); err != nil {
+			return nil, fmt.Errorf("overlays[%d]: %w", i, err)
 		}
 		// Authoring accepts the same Google Drive file URL used by clips and
 		// stock, but the worker contract is deliberately credential-free and
@@ -318,6 +350,37 @@ func ParseOverlays(raw any) ([]Overlay, error) {
 		out = append(out, overlay)
 	}
 	return out, nil
+}
+
+// NormalizeWindow makes the explicit half-open interval authoritative while
+// preserving the legacy frame_count field for old worker consumers. A
+// frame_count-only payload is upgraded to start_frame/end_frame; a payload
+// carrying both fields must agree or is rejected at the contract boundary.
+func (o *Overlay) NormalizeWindow() error {
+	if o == nil {
+		return fmt.Errorf("overlay is nil")
+	}
+	if o.StartFrame < 0 {
+		return fmt.Errorf("start_frame must be >= 0")
+	}
+	if o.EndFrame > 0 {
+		if o.EndFrame <= o.StartFrame {
+			return fmt.Errorf("end_frame must be greater than start_frame")
+		}
+		if o.FrameCount > 0 && o.StartFrame+o.FrameCount != o.EndFrame {
+			return fmt.Errorf("end_frame must equal start_frame + frame_count")
+		}
+		o.FrameCount = o.EndFrame - o.StartFrame
+		return nil
+	}
+	if o.FrameCount <= 0 {
+		return fmt.Errorf("frame_count or end_frame must be positive")
+	}
+	o.EndFrame = o.StartFrame + o.FrameCount
+	if o.EndFrame <= o.StartFrame {
+		return fmt.Errorf("end_frame overflows the frame window")
+	}
+	return nil
 }
 
 func overlayString(value any) string { s, _ := value.(string); return s }

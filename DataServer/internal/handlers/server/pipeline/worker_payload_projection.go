@@ -76,7 +76,7 @@ func submitRequestToRawPayload(req *SubmitJobRequest) map[string]interface{} {
 	for _, overlay := range req.Overlays {
 		input.Overlays = append(input.Overlays, projection.OverlayInput{
 			ID: overlay.ID, AssetID: overlay.AssetID, DriveFileID: overlay.DriveFileID, URL: overlay.URL, SHA256: overlay.SHA256,
-			StartFrame: overlay.StartFrame, FrameCount: overlay.FrameCount, Mode: overlay.Mode,
+			StartFrame: overlay.StartFrame, EndFrame: overlay.EndFrame, FrameCount: overlay.FrameCount, Mode: overlay.Mode,
 			ZIndex: overlay.ZIndex, AudioMode: overlay.AudioMode,
 		})
 	}

@@ -32,6 +32,46 @@ func TestResolveOverlayTimeline_ReplaceUsesOneContiguousTrack(t *testing.T) {
 	}
 }
 
+func TestResolveOverlayTimeline_EmitsExplicitExclusiveEndFrame(t *testing.T) {
+	base := []VideoSegmentV2{{AssetID: "base", TimelineStartFrame: 0, FrameCount: 480}}
+	got, windows, err := ResolveOverlayTimeline(base, []Overlay{{
+		ID: "overlay-end", AssetID: "overlay-end", StartFrame: 120, EndFrame: 240,
+		Mode: string(OverlayModeReplace), AudioMode: OverlayAudioPreserveFinal,
+	}}, 24, 1)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if len(windows) != 0 || len(got) != 3 {
+		t.Fatalf("resolved overlay = segments=%d windows=%d: %+v", len(got), len(windows), got)
+	}
+	if got[1].TimelineStartFrame != 120 || got[1].FrameCount != 120 {
+		t.Fatalf("overlay segment = %+v, want [120,240)", got[1])
+	}
+}
+
+func TestParseOverlaysUpgradesFrameCountToExplicitEndFrame(t *testing.T) {
+	overlays, err := ParseOverlays([]interface{}{map[string]interface{}{
+		"id": "legacy", "asset_id": "asset", "start_frame": float64(24), "frame_count": float64(120),
+		"mode": "replace", "audio_mode": OverlayAudioPreserveFinal,
+	}})
+	if err != nil {
+		t.Fatalf("ParseOverlays: %v", err)
+	}
+	if overlays[0].EndFrame != 144 || overlays[0].FrameCount != 120 {
+		t.Fatalf("normalized overlay = %+v, want [24,144) count=120", overlays[0])
+	}
+}
+
+func TestParseOverlaysRejectsInconsistentStartEndAndCount(t *testing.T) {
+	_, err := ParseOverlays([]interface{}{map[string]interface{}{
+		"id": "bad", "asset_id": "asset", "start_frame": float64(24), "end_frame": float64(200), "frame_count": float64(120),
+		"mode": "replace", "audio_mode": OverlayAudioPreserveFinal,
+	}})
+	if err == nil {
+		t.Fatal("expected inconsistent overlay window to fail")
+	}
+}
+
 func TestResolveOverlayWindows_OverlapsBecomeDeterministicWindows(t *testing.T) {
 	windows, err := ResolveOverlayWindows([]Overlay{
 		{ID: "a", AssetID: "a", StartFrame: 240, FrameCount: 120, Mode: "composite", ZIndex: 10, AudioMode: OverlayAudioPreserveFinal},
@@ -122,7 +162,7 @@ func TestParseOverlaysPreservesAlreadyTypedValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseOverlays: %v", err)
 	}
-	if len(got) != 1 || got[0] != input[0] {
-		t.Fatalf("typed overlays = %#v, want %#v", got, input)
+	if len(got) != 1 || got[0].ID != input[0].ID || got[0].AssetID != input[0].AssetID || got[0].StartFrame != input[0].StartFrame || got[0].FrameCount != input[0].FrameCount || got[0].EndFrame != 240 {
+		t.Fatalf("typed overlays = %#v, want normalized timing [120,240)", got)
 	}
 }
