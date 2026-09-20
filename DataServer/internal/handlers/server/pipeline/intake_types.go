@@ -64,6 +64,10 @@ type SubmitJobRequest struct {
 	// explicitly supplied array clears the pending gate immediately.
 	RuntimeAssets  []map[string]interface{} `json:"runtime_assets,omitempty"`
 	RuntimePayload map[string]interface{}   `json:"runtime_payload,omitempty"`
+	// RuntimeAssetsComplete makes the PRE single-stage transition explicit.
+	// It is required when the producer intentionally submits an empty asset
+	// list; nil-vs-empty must not decide a business state accidentally.
+	RuntimeAssetsComplete *bool `json:"runtime_assets_complete,omitempty"`
 
 	// VisualReplacements are already-composited video segments that
 	// replace the base visual timeline over an absolute interval. Each

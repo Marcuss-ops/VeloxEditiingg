@@ -33,8 +33,7 @@ func (h *Handlers) PrepareJob() gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "invalid_json", "message": "request body must be valid JSON without unknown fields: " + err.Error()})
 			return
 		}
-		_, runtimePayloadHasAssets := req.RuntimePayload["runtime_assets"]
-		req.RuntimeAssetsPending = req.RuntimeAssets == nil && !runtimePayloadHasAssets
+		req.RuntimeAssetsPending = !runtimeAssetsCompleteForPrepare(req)
 		out := h.submitJobCore(c.Request.Context(), req, intakeIdentity{
 			ClientID:     ClientIDFromContext(c),
 			IntakeSource: creatorflow.IntakeSourceCanonical,
@@ -50,6 +49,17 @@ func (h *Handlers) PrepareJob() gin.HandlerFunc {
 		}
 		writeIntakeResponse(c, out)
 	}
+}
+
+func runtimeAssetsCompleteForPrepare(req SubmitJobRequest) bool {
+	complete := len(req.RuntimeAssets) > 0
+	if _, runtimePayloadHasAssets := req.RuntimePayload["runtime_assets"]; runtimePayloadHasAssets {
+		complete = true
+	}
+	if req.RuntimeAssetsComplete != nil {
+		complete = *req.RuntimeAssetsComplete
+	}
+	return complete
 }
 
 // FinalizeJob applies runtime assets to the already persisted task and then
