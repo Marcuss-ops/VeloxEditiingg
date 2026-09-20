@@ -81,6 +81,82 @@ func TestScheduler_CacheHitRunsMetadataAndReachesPreparedWithoutDownload(t *test
 	}
 }
 
+func TestScheduler_ExpandedSameJobReachesPreparedAfterFinalize(t *testing.T) {
+	contents := map[string][]byte{
+		"asset-a": []byte("initial-a"),
+		"asset-b": []byte("initial-b"),
+		"asset-c": []byte("runtime-c"),
+	}
+	paths := make(map[string]string, len(contents))
+	digests := make(map[string]string, len(contents))
+	for key, body := range contents {
+		path := t.TempDir() + "/" + key
+		if err := os.WriteFile(path, body, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(body)
+		paths[key] = path
+		digests[key] = hex.EncodeToString(sum[:])
+	}
+	var transfers atomic.Int32
+	transferer := downloader.TransfererFunc(func(_ context.Context, _ context.Context, req downloader.DownloadRequest, check bool, _ func(int64)) (downloader.CacheCheckResult, downloader.TransferResult, error) {
+		key := string(req.AssetKey)
+		if check {
+			if path, ok := paths[key]; ok {
+				return downloader.CacheCheckResult{CacheHit: true, LocalPath: path, SHA256: req.SHA256, Outcome: downloader.CacheOutcomeHitValid}, downloader.TransferResult{}, nil
+			}
+			return downloader.CacheCheckResult{Outcome: downloader.CacheOutcomeMissNotFound}, downloader.TransferResult{}, nil
+		}
+		transfers.Add(1)
+		return downloader.CacheCheckResult{}, downloader.TransferResult{LocalPath: paths[key], Bytes: int64(len(contents[key])), SHA256: req.SHA256}, nil
+	})
+	manager := downloader.NewManager(downloader.Config{Concurrency: 1}, transferer)
+	defer manager.Close()
+	prepared := make(chan PreparedJob, 2)
+	s := NewScheduler(Config{WorkerID: "worker-a", MaxConcurrent: 1, ByteBudget: 1024, OnPrepared: func(job PreparedJob) { prepared <- job }})
+	s.SetResolver(downloader.NewCacheResolver(manager, nil))
+	defer s.Close()
+
+	now := time.Now().UTC()
+	manifest := func(key string) futureasset.AssetManifest {
+		return futureasset.AssetManifest{AssetKey: key, AssetID: key, SHA256: digests[key], SizeBytes: int64(len(contents[key]))}
+	}
+	base := futureasset.Plan{
+		Version: 1, PlanID: "finalize-transition", WorkerID: "worker-a", GeneratedAt: now, ExpiresAt: now.Add(time.Minute),
+		Limits:       futureasset.Limits{PrefetchHorizon: 1, ProtectionLookahead: 1},
+		PrefetchJobs: []futureasset.Job{{JobID: "job-1", TaskID: "task-1", ReservationID: "reservation-1", Distance: 1, Assets: []futureasset.AssetManifest{manifest("asset-a"), manifest("asset-b")}}},
+	}
+	if err := s.Reconcile(base); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case job := <-prepared:
+		if len(job.Assets) != 2 {
+			t.Fatalf("initial prepared assets=%d, want 2", len(job.Assets))
+		}
+	case <-time.After(time.Second):
+		t.Fatal("initial plan did not reach PREPARED")
+	}
+
+	final := base
+	final.Version = 2
+	final.PrefetchJobs = []futureasset.Job{{JobID: "job-1", TaskID: "task-1", ReservationID: "reservation-1", Distance: 1, Assets: []futureasset.AssetManifest{manifest("asset-a"), manifest("asset-b"), manifest("asset-c")}}}
+	if err := s.Reconcile(final); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case job := <-prepared:
+		if len(job.Assets) != 3 {
+			t.Fatalf("finalize prepared assets=%d, want 3", len(job.Assets))
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expanded finalize plan did not reach PREPARED")
+	}
+	if got := transfers.Load(); got != 0 {
+		t.Fatalf("physical transfers=%d, want 0 for cache-backed transition", got)
+	}
+}
+
 func TestScheduler_MetadataFailureDoesNotReachPrepared(t *testing.T) {
 	manager := &schedulerManager{started: make(chan struct{}, 1)}
 	prepared := make(chan PreparedJob, 1)

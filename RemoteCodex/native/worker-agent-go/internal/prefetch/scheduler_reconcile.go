@@ -81,9 +81,17 @@ func (s *Scheduler) Reconcile(plan futureasset.Plan) error {
 			if sameScheduledJob(runtime.job, job) {
 				continue
 			}
+			// A same-job FINALIZE expands the manifest while retaining the
+			// task identity and reservation. Keep verified metadata for assets
+			// that remain in the expanded manifest; only the new/different
+			// assets need to re-enter the preparation barrier. Dropping the
+			// whole read model here makes a valid PREPARE→FINALIZE transition
+			// depend on every cache-hit work item being re-observed in the new
+			// generation, which can strand the Master gate after all assets are
+			// already READY.
+			s.retainPreparedAssetsLocked(job, plan.PlanID, plan.Version)
 			runtime.job = job
 			runtime.generation++
-			delete(s.prepared, job.JobID)
 			events = append(events, s.enqueueJobLocked(plan.Version, runtime)...)
 			continue
 		}
@@ -98,6 +106,48 @@ func (s *Scheduler) Reconcile(plan futureasset.Plan) error {
 	}
 	s.signalWork()
 	return nil
+}
+
+// retainPreparedAssetsLocked carries forward only verified preparation
+// metadata whose task/reservation lineage and manifest identity remain stable.
+// The caller holds s.mu. A changed reservation or task revision is a new
+// preparation lineage and must start with an empty read model.
+func (s *Scheduler) retainPreparedAssetsLocked(job futureasset.Job, planID string, planVersion uint64) {
+	previous, ok := s.prepared[job.JobID]
+	if !ok || previous.TaskID != job.TaskID || previous.TaskRevision != job.TaskRevision || previous.ReservationID != job.ReservationID {
+		delete(s.prepared, job.JobID)
+		return
+	}
+	allowed := make(map[string]futureasset.AssetManifest, len(job.Assets))
+	for _, asset := range job.Assets {
+		allowed[asset.AssetKey] = asset
+	}
+	retained := make(map[string]PreparedAssetMetadata, len(previous.Assets))
+	for key, metadata := range previous.Assets {
+		asset, exists := allowed[key]
+		if !exists {
+			continue
+		}
+		if asset.SHA256 != "" && normalizedSHA256(asset.SHA256) != normalizedSHA256(metadata.SHA256) {
+			continue
+		}
+		if asset.SizeBytes > 0 && asset.SizeBytes != metadata.SizeBytes {
+			continue
+		}
+		retained[key] = metadata
+	}
+	if len(retained) == 0 {
+		delete(s.prepared, job.JobID)
+		return
+	}
+	previous.ReservationID = job.ReservationID
+	previous.PlanID = planID
+	previous.PlanVersion = planVersion
+	previous.Distance = job.Distance
+	previous.State = "PREPARING"
+	previous.PreparedAt = time.Time{}
+	previous.Assets = retained
+	s.prepared[job.JobID] = previous
 }
 
 // resetForExpiredLocked cancels and detaches every active job and resets all
