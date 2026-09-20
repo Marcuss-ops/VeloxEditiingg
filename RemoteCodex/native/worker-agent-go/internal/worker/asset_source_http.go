@@ -1,13 +1,16 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	neturl "net/url"
 	"strings"
 
+	"golang.org/x/net/html"
 	"velox-worker-agent/internal/downloader"
 )
 
@@ -67,6 +70,12 @@ func (s *httpAssetSource) Open(ctx context.Context, offset int64) (io.ReadCloser
 
 	switch {
 	case resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusPartialContent:
+		if isHTMLMediaType(resp.Header.Get("Content-Type")) && isDirectDriveSource(s.baseURL) {
+			resp, err = s.followDriveConfirmation(ctx, resp, offset)
+			if err != nil {
+				return nil, downloader.SourceMetadata{}, err
+			}
+		}
 		if offset > 0 && resp.StatusCode != http.StatusPartialContent {
 			// A server that ignored the Range header for a resumed request:
 			// returning the full body would corrupt the partial, so signal
@@ -114,10 +123,136 @@ func (s *httpAssetSource) Open(ctx context.Context, offset int64) (io.ReadCloser
 	}
 }
 
+// followDriveConfirmation handles Google's large-file download interstitial.
+// Drive returns a small HTML form for files that require virus-scan
+// confirmation. The form contains a short-lived UUID; a fixed confirm=t query
+// is not sufficient by itself. Follow exactly that form, then let the normal
+// range/size/integrity pipeline consume the resulting binary response.
+func (s *httpAssetSource) followDriveConfirmation(ctx context.Context, resp *http.Response, offset int64) (*http.Response, error) {
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	resp.Body.Close()
+	if readErr != nil {
+		return nil, readErr
+	}
+	action, method, values, ok := parseDriveConfirmationForm(body)
+	if !ok {
+		return nil, errUnexpectedHTMLResponse
+	}
+
+	base, err := neturl.Parse(s.baseURL)
+	if err != nil {
+		return nil, errUnexpectedHTMLResponse
+	}
+	formURL, err := base.Parse(action)
+	if err != nil || formURL.Scheme != "https" || !isAllowedDirectDriveHost(formURL.Hostname()) {
+		return nil, fmt.Errorf("drive confirmation redirected to unexpected host")
+	}
+
+	var bodyReader io.Reader
+	if strings.EqualFold(method, http.MethodPost) {
+		bodyReader = strings.NewReader(values.Encode())
+	} else {
+		query := formURL.Query()
+		for key, items := range values {
+			for _, value := range items {
+				query.Add(key, value)
+			}
+		}
+		formURL.RawQuery = query.Encode()
+		method = http.MethodGet
+	}
+	request, err := http.NewRequestWithContext(ctx, method, formURL.String(), bodyReader)
+	if err != nil {
+		return nil, err
+	}
+	if method == http.MethodPost {
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	}
+	if offset > 0 {
+		request.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
+	}
+	confirmed, err := s.client.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	if confirmed.StatusCode != http.StatusOK && confirmed.StatusCode != http.StatusPartialContent {
+		confirmed.Body.Close()
+		return nil, fmt.Errorf("drive confirmation returned HTTP %d", confirmed.StatusCode)
+	}
+	if isHTMLMediaType(confirmed.Header.Get("Content-Type")) {
+		confirmed.Body.Close()
+		return nil, errUnexpectedHTMLResponse
+	}
+	return confirmed, nil
+}
+
+// parseDriveConfirmationForm extracts Google's hidden download form without
+// depending on a particular attribute order or HTML quoting style.
+func parseDriveConfirmationForm(body []byte) (action, method string, values neturl.Values, ok bool) {
+	tokenizer := html.NewTokenizer(bytes.NewReader(body))
+	values = make(neturl.Values)
+	inForm := false
+	for {
+		tokenType := tokenizer.Next()
+		switch tokenType {
+		case html.ErrorToken:
+			return action, method, values, inForm && action != "" && values.Get("id") != ""
+		case html.StartTagToken:
+			token := tokenizer.Token()
+			switch token.Data {
+			case "form":
+				if inForm {
+					continue
+				}
+				inForm = true
+				action = ""
+				method = http.MethodGet
+				for _, attr := range token.Attr {
+					switch attr.Key {
+					case "action":
+						action = strings.TrimSpace(attr.Val)
+					case "method":
+						if strings.TrimSpace(attr.Val) != "" {
+							method = strings.ToUpper(strings.TrimSpace(attr.Val))
+						}
+					}
+				}
+			case "input":
+				if !inForm {
+					continue
+				}
+				name, value := "", ""
+				for _, attr := range token.Attr {
+					switch attr.Key {
+					case "name":
+						name = strings.TrimSpace(attr.Val)
+					case "value":
+						value = attr.Val
+					}
+				}
+				if name != "" {
+					values.Add(name, value)
+				}
+			}
+		case html.EndTagToken:
+			token := tokenizer.Token()
+			if token.Data == "form" && inForm {
+				return action, method, values, action != "" && values.Get("id") != ""
+			}
+		}
+	}
+}
+
+func isDirectDriveSource(sourceURI string) bool {
+	parsed, err := neturl.Parse(strings.TrimSpace(sourceURI))
+	return err == nil && parsed.Scheme == "https" && isAllowedDirectDriveHost(parsed.Hostname())
+}
+
 // Sentinel/typed errors returned by httpAssetSource.Open so the transfer
 // retry loop can classify an open failure without inspecting the response.
 var (
-	errRangeIgnored        = errors.New("asset source: upstream ignored Range header")
-	errRangeNotSatisfiable = errors.New("asset source: range offset no longer valid")
-	errAssetNotFound       = errors.New("asset not found")
+	errRangeIgnored           = errors.New("asset source: upstream ignored Range header")
+	errRangeNotSatisfiable    = errors.New("asset source: range offset no longer valid")
+	errAssetNotFound          = errors.New("asset not found")
+	errUnexpectedHTMLResponse = errors.New("unexpected HTML response while downloading asset")
 )
