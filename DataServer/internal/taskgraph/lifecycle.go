@@ -14,6 +14,10 @@ import (
 // LifecycleService manages transactional task state transitions.
 type LifecycleService struct {
 	repo Repository
+	// onTaskReady is an optional post-commit observer. It is used by the
+	// control plane to start deferred preparation when a task created in
+	// PENDING becomes READY after the enqueue hook already ran.
+	onTaskReady func(context.Context, string)
 	// jobsRepo is the canonical jobs-side surface ExpireTaskLease uses
 	// to read retry budgets (jobs.max_retries) and post-commit-update
 	// the Job aggregate when retries are exhausted. Wires this
@@ -71,6 +75,16 @@ func (l *LifecycleService) SetClock(now func() time.Time) {
 	if now != nil {
 		l.now = now
 	}
+}
+
+// WithTaskReadyHook installs the post-commit observer for PENDING→READY
+// transitions. The hook is deliberately a narrow job-ID seam so taskgraph
+// remains independent from the gRPC/prefetch implementation.
+func (l *LifecycleService) WithTaskReadyHook(hook func(context.Context, string)) *LifecycleService {
+	if l != nil {
+		l.onTaskReady = hook
+	}
+	return l
 }
 
 // Repo exposes the canonical taskgraph.Repository.
@@ -280,6 +294,9 @@ func (l *LifecycleService) TickReadiness(ctx context.Context, limit int) (int, e
 			continue
 		}
 		transitioned++
+		if l.onTaskReady != nil && t.JobID != "" {
+			go l.onTaskReady(context.WithoutCancel(ctx), t.JobID)
+		}
 	}
 	return transitioned, nil
 }

@@ -280,6 +280,37 @@ func TestTickReadiness_CancelsDoomedTasksAndReadiesIndependent(t *testing.T) {
 	}
 }
 
+func TestTickReadinessInvokesReadyHookAfterCommit(t *testing.T) {
+	repo := newReadinessStubRepo(Task{
+		ID:     "task-ready-hook",
+		JobID:  "job-ready-hook",
+		Status: StatusPending,
+	})
+	svc, err := NewLifecycleService(repo)
+	if err != nil {
+		t.Fatalf("NewLifecycleService: %v", err)
+	}
+	readyJobs := make(chan string, 1)
+	svc.WithTaskReadyHook(func(_ context.Context, jobID string) {
+		readyJobs <- jobID
+	})
+
+	if transitioned, err := svc.TickReadiness(context.Background(), 100); err != nil || transitioned != 1 {
+		t.Fatalf("TickReadiness = transitioned %d, err %v; want 1, nil", transitioned, err)
+	}
+	select {
+	case jobID := <-readyJobs:
+		if jobID != "job-ready-hook" {
+			t.Fatalf("ready hook job_id = %q, want job-ready-hook", jobID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ready hook was not called after PENDING→READY commit")
+	}
+	if repo.tasks["task-ready-hook"].Status != StatusReady {
+		t.Fatalf("task status = %s, want READY", repo.tasks["task-ready-hook"].Status)
+	}
+}
+
 func TestTickReadiness_DoesNotCancelOnUnknownDependency(t *testing.T) {
 	repo := newReadinessStubRepo(
 		Task{ID: "waiting", DependsOn: []string{"ghost"}, Status: StatusPending, Revision: 1},

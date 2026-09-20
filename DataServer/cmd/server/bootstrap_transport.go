@@ -117,6 +117,10 @@ func startTransports(cfg *config.Config, c *appComponents) (*transportBundle, er
 				c.assets.ArtifactSvc, c.persistence.SQLite,
 				buildGRPCHandlerConfig(cfg, insecureDev),
 			)
+			if c.tasks != nil && c.tasks.TaskLifecycle != nil {
+				c.tasks.TaskLifecycle.WithTaskReadyHook(grpcHandler.PrefetchSubmittedJob)
+				logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] wired PENDING→READY FutureAssetPlan prefetch hook")
+			}
 			if c.modules != nil && c.modules.Enqueuer != nil {
 				c.modules.Enqueuer.WithPostEnqueueHook(grpcHandler.PrefetchSubmittedJob)
 				c.modules.Enqueuer.WithPostTaskUpdateHook(grpcHandler.RefreshPrefetchForJob)
