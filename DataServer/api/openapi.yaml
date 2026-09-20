@@ -511,6 +511,68 @@ components:
                 timeline_revision:
                     type: integer
             type: object
+        FinalizeJobRequest:
+            properties:
+                idempotency_key:
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                overlays:
+                    items:
+                        properties:
+                            asset_id:
+                                maxLength: 512
+                                type: string
+                            audio_mode:
+                                enum:
+                                    - preserve_final_audio
+                                type: string
+                            drive_file_id:
+                                maxLength: 128
+                                type: string
+                            end_frame:
+                                minimum: 1
+                                type: integer
+                            frame_count:
+                                minimum: 1
+                                type: integer
+                            id:
+                                maxLength: 128
+                                type: string
+                            mode:
+                                enum:
+                                    - replace
+                                    - composite
+                                type: string
+                            sha256:
+                                type: string
+                            start_frame:
+                                minimum: 0
+                                type: integer
+                            url:
+                                type: string
+                            z_index:
+                                type: integer
+                        required:
+                            - audio_mode
+                            - id
+                            - mode
+                        type: object
+                    maxItems: 10000
+                    minItems: 0
+                    type: array
+                runtime_assets:
+                    items:
+                        additionalProperties: {}
+                        type: object
+                    minItems: 0
+                    type: array
+                runtime_payload:
+                    additionalProperties: {}
+                    type: object
+            required:
+                - idempotency_key
+            type: object
         PublishingCatalogCapabilities:
             properties:
                 publish:
@@ -1596,6 +1658,61 @@ paths:
             summary: Poll the status of a previously submitted job.
             tags:
                 - jobs
+    /api/v1/jobs/{job_id}/finalize:
+        post:
+            operationId: finalizeJobRuntimeAssets
+            parameters:
+                - $ref: '#/components/parameters/AuthorizationHeader'
+                - $ref: '#/components/parameters/XRequestIDHeader'
+                - $ref: '#/components/parameters/PathJobID'
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/FinalizeJobRequest'
+                required: true
+            responses:
+                "202":
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/SubmitJobAcceptedResponse'
+                    description: Accepted.
+                "400":
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorEnvelope'
+                    description: Bad Request.
+                "401":
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorEnvelope'
+                    description: Unauthorized.
+                "409":
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorEnvelope'
+                    description: Conflict.
+                "422":
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorEnvelope'
+                    description: Unprocessable Entity.
+                "500":
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorEnvelope'
+                    description: Internal Server Error.
+            security:
+                - bearerM2MToken: []
+            summary: Add overlay/audio runtime assets to the same prepared job.
+            tags:
+                - jobs
     /api/v1/jobs/batch:
         post:
             operationId: submitJobBatch
@@ -1642,6 +1759,60 @@ paths:
             security:
                 - bearerM2MToken: []
             summary: Submit multiple independent video jobs in one request.
+            tags:
+                - jobs
+    /api/v1/jobs/pre:
+        post:
+            operationId: prepareJob
+            parameters:
+                - $ref: '#/components/parameters/AuthorizationHeader'
+                - $ref: '#/components/parameters/XRequestIDHeader'
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/SubmitJobRequest'
+                required: true
+            responses:
+                "202":
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/SubmitJobAcceptedResponse'
+                    description: Accepted.
+                "400":
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorEnvelope'
+                    description: Bad Request.
+                "401":
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorEnvelope'
+                    description: Unauthorized.
+                "409":
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorEnvelope'
+                    description: Conflict.
+                "422":
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorEnvelope'
+                    description: Unprocessable Entity.
+                "500":
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorEnvelope'
+                    description: Internal Server Error.
+            security:
+                - bearerM2MToken: []
+            summary: Create one job and prefetch its initial assets before runtime generation.
             tags:
                 - jobs
     /api/v1/publishing/catalog:

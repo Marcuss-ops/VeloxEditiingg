@@ -50,6 +50,7 @@ func main() {
 		Value any
 	}{
 		{"SubmitJobRequest", apiwire.SubmitJobRequest{}},
+		{"FinalizeJobRequest", apiwire.FinalizeJobRequest{}},
 		{"SubmitScene", apiwire.SubmitScene{}},
 		{"SubmitClip", apiwire.SubmitClip{}},
 		{"SubmitVoiceover", apiwire.SubmitVoiceover{}},

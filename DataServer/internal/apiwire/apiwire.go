@@ -87,6 +87,16 @@ type SubmitJobRequest struct {
 	PlacementPinWorkerID string `json:"placement_pin_worker_id,omitempty" validate:"omitempty,max=128"`
 }
 
+// FinalizeJobRequest is the runtime half of POST /api/v1/jobs/{job_id}/finalize.
+// The Master merges it into the existing TaskSpec; it never creates another
+// Job identity. runtime_payload remains extensible for TTS/BGM/SFX metadata.
+type FinalizeJobRequest struct {
+	IdempotencyKey string                   `json:"idempotency_key" validate:"required,min=1,max=128"`
+	Overlays       []SubmitOverlay          `json:"overlays,omitempty" validate:"omitempty,max=10000,dive"`
+	RuntimeAssets  []map[string]interface{} `json:"runtime_assets,omitempty"`
+	RuntimePayload map[string]interface{}   `json:"runtime_payload,omitempty"`
+}
+
 type SubmitOutput struct {
 	Width  int    `json:"width,omitempty" validate:"omitempty,gte=1,lte=16384"`
 	Height int    `json:"height,omitempty" validate:"omitempty,gte=1,lte=16384"`

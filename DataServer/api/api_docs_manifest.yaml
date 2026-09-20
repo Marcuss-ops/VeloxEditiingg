@@ -86,6 +86,57 @@ routes:
       "500":
         $ref: "#/components/schemas/ErrorEnvelope"
 
+  - path: /api/v1/jobs/pre
+    method: post
+    operationId: prepareJob
+    security: bearerM2MToken
+    tag: jobs
+    summary: "Create one job and prefetch its initial assets before runtime generation."
+    parameters:
+      - AuthorizationHeader
+      - XRequestIDHeader
+    requestBody:
+      $ref: "#/components/schemas/SubmitJobRequest"
+    responses:
+      "202":
+        $ref: "#/components/schemas/SubmitJobAcceptedResponse"
+      "400":
+        $ref: "#/components/schemas/ErrorEnvelope"
+      "401":
+        $ref: "#/components/schemas/ErrorEnvelope"
+      "409":
+        $ref: "#/components/schemas/ErrorEnvelope"
+      "422":
+        $ref: "#/components/schemas/ErrorEnvelope"
+      "500":
+        $ref: "#/components/schemas/ErrorEnvelope"
+
+  - path: /api/v1/jobs/{job_id}/finalize
+    method: post
+    operationId: finalizeJobRuntimeAssets
+    security: bearerM2MToken
+    tag: jobs
+    summary: "Add overlay/audio runtime assets to the same prepared job."
+    parameters:
+      - AuthorizationHeader
+      - XRequestIDHeader
+      - PathJobID
+    requestBody:
+      $ref: "#/components/schemas/FinalizeJobRequest"
+    responses:
+      "202":
+        $ref: "#/components/schemas/SubmitJobAcceptedResponse"
+      "400":
+        $ref: "#/components/schemas/ErrorEnvelope"
+      "401":
+        $ref: "#/components/schemas/ErrorEnvelope"
+      "409":
+        $ref: "#/components/schemas/ErrorEnvelope"
+      "422":
+        $ref: "#/components/schemas/ErrorEnvelope"
+      "500":
+        $ref: "#/components/schemas/ErrorEnvelope"
+
   - path: /api/v1/jobs/batch
     method: post
     operationId: submitJobBatch

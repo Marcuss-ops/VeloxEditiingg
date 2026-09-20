@@ -107,6 +107,14 @@ type Reader interface {
 	GetByJobID(ctx context.Context, jobID string) (*Task, error)
 }
 
+// TaskSpecStore is the narrow control-plane surface used by the two-stage
+// intake. It updates the payload of the existing task while the task is still
+// PENDING or READY; it never creates a second Job/Task identity.
+type TaskSpecStore interface {
+	GetTaskSpecPayload(ctx context.Context, taskID string) (map[string]interface{}, error)
+	MergeTaskSpecPayload(ctx context.Context, taskID string, patch map[string]interface{}) (map[string]interface{}, error)
+}
+
 // Writer is the canonical write-only task mutation surface.
 type Writer interface {
 	// Create inserts a new task in PENDING state. If id is empty the

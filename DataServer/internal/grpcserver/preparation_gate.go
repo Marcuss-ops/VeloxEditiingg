@@ -2,6 +2,7 @@ package grpcserver
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -365,6 +366,14 @@ func (pg *PreparationGate) EnsurePrepared(ctx context.Context, workerID string, 
 	if !found {
 		// Tasks with no declared assets do not need a preparation reservation.
 		if len(candidate.RequiredAssetKeys) == 0 {
+			if payload, payloadErr := pg.store.FutureTaskPayload(ctx, candidate.TaskID); payloadErr != nil {
+				return PreparationWaiting, payloadErr
+			} else if runtimeAssetsPending(payload) {
+				// A pre-job with no initial stock still has to wait for the
+				// runtime asset stage; do not let the ordinary no-assets fast
+				// path render it immediately.
+				return PreparationWaiting, nil
+			}
 			return PreparationNotRequired, nil
 		}
 		// First-job path: create the reservation while the task is still READY.
@@ -382,6 +391,14 @@ func (pg *PreparationGate) EnsurePrepared(ctx context.Context, workerID string, 
 			logGRPCf(ctx, logging.LevelDebug, logging.CodeGRPCPlacementFailed, "[PLACEMENT] preparation gate BLOCKED worker=%s task=%s reason=reservation_pending", workerID, candidate.TaskID)
 			return PreparationWaiting, nil
 		}
+	}
+	// PREPARE intentionally reserves and downloads the initial stock/clip
+	// assets, but must not render until FINALIZE clears this marker on the
+	// same TaskSpec. Keeping the decision here preserves the existing strict
+	// reservation/certificate path and the worker affinity.
+	if runtimeAssetsPending(reservation.Payload) {
+		logGRPCf(ctx, logging.LevelDebug, logging.CodeGRPCPlacementFailed, "[PLACEMENT] preparation gate BLOCKED runtime_assets_pending worker=%s task=%s reservation=%s", workerID, candidate.TaskID, reservation.ReservationID)
+		return PreparationWaiting, nil
 	}
 
 	// TTL expiry gate.
@@ -451,6 +468,15 @@ func (pg *PreparationGate) EnsurePrepared(ctx context.Context, workerID string, 
 	}
 
 	return PreparationReady, nil
+}
+
+func runtimeAssetsPending(payload []byte) bool {
+	var root map[string]interface{}
+	if len(payload) == 0 || json.Unmarshal(payload, &root) != nil {
+		return false
+	}
+	pending, _ := root["runtime_assets_pending"].(bool)
+	return pending
 }
 
 // ensurePreparedBeforeClaim delegates to PreparationGate.EnsurePrepared

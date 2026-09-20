@@ -292,6 +292,9 @@ func copyTimelinePayloadFields(out, src map[string]interface{}) {
 		"layers",
 		"overlays",
 		"clips",
+		// Two-stage intake marker. The preparation gate keeps a pre-job out
+		// of render until FINALIZE clears it on the same TaskSpec.
+		"runtime_assets_pending",
 		// Explicit opt-in for the worker's strict packet-copy path. The
 		// worker validates stream identity, keyframe boundaries and audio
 		// compatibility before using it; it must therefore survive the

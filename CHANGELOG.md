@@ -1,5 +1,16 @@
 ## [Unreleased] - 2026-09-18
 
+### Added — same-job PREPARE → FINALIZE runtime asset flow
+
+- Added `POST /api/v1/jobs/pre` and `POST /api/v1/jobs/{job_id}/finalize`.
+- PREPARE keeps the task out of render while the worker prefetches initial
+  stock/clip assets; FINALIZE atomically merges overlay/audio runtime fields
+  into the same `TaskSpec` and refreshes the FutureAssetPlan on the reserved
+  worker.
+- Finalize overlays use the canonical half-open
+  `[start_frame,end_frame)` contract, accepting legacy `frame_count` only as
+  a compatibility input and rejecting inconsistent bounds.
+
 ### Fixed — explicit overlay start/end timing
 
 - Overlay payloads now carry the canonical half-open frame window

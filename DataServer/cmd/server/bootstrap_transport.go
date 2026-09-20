@@ -119,7 +119,9 @@ func startTransports(cfg *config.Config, c *appComponents) (*transportBundle, er
 			)
 			if c.modules != nil && c.modules.Enqueuer != nil {
 				c.modules.Enqueuer.WithPostEnqueueHook(grpcHandler.PrefetchSubmittedJob)
+				c.modules.Enqueuer.WithPostTaskUpdateHook(grpcHandler.RefreshPrefetchForJob)
 				logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] wired post-enqueue FutureAssetPlan prefetch hook")
+				logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] wired same-job FINALIZE FutureAssetPlan refresh hook")
 			}
 			if c.assets != nil {
 				grpcHandler.SetCompletionProtocol(c.assets.Completion, c.assets.CompletionStore, c.assets.ChunkedUploadSvc, string(cfg.ControlPlane.RESTPublic))

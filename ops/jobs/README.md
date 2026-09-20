@@ -1,5 +1,23 @@
 # Fixed Direct Jobs
 
+## Two-stage job intake
+
+For jobs whose overlay/audio assets are generated after the initial stock and
+clip inputs, use the same job identity for both stages:
+
+```text
+POST /api/v1/jobs/pre
+  -> 202 {job_id, dispatch_status: "waiting_runtime_assets"}
+POST /api/v1/jobs/{job_id}/finalize
+  -> 202 {job_id, future_asset_plan: "refresh"}
+```
+
+The finalize payload accepts typed `overlays[]` with the canonical half-open
+window `[start_frame,end_frame)` (for example `start_frame: 120,
+end_frame: 240`) plus extensible `runtime_payload` / `runtime_assets` fields
+for TTS, BGM and SFX. The Master updates the existing task atomically and
+keeps its FutureAssetPlan reservation on the same worker.
+
 ## Official generator benchmarks
 
 Frozen certification workloads (registry: `tests/benchmarks/video-generator/cases/registry.json`):

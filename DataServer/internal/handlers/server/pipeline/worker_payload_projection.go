@@ -95,7 +95,11 @@ func submitRequestToRawPayload(req *SubmitJobRequest) map[string]interface{} {
 		}
 		input.VisualReplacements = append(input.VisualReplacements, vr)
 	}
-	return projection.BuildRawPayload(input)
+	raw := projection.BuildRawPayload(input)
+	if req.RuntimeAssetsPending {
+		raw["runtime_assets_pending"] = true
+	}
+	return raw
 }
 
 func projectionClip(input *SubmitClip) *projection.ClipInput {

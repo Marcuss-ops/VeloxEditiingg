@@ -87,6 +87,7 @@ type Enqueuer struct {
 	PlanResolver    PlanResolver
 	SocialValidator DestinationValidator
 	postEnqueue     func(context.Context, string)
+	postTaskUpdate  func(context.Context, string)
 }
 
 // NewEnqueuer constructs an Enqueuer with mandatory Creator + Jobs + PlanResolver.
@@ -125,6 +126,28 @@ func (e *Enqueuer) WithPostEnqueueHook(hook func(context.Context, string)) *Enqu
 	}
 	e.postEnqueue = hook
 	return e
+}
+
+// WithPostTaskUpdateHook installs the observer used after FINALIZE updates
+// the existing TaskSpec payload. The callback is intentionally the same
+// narrow job identity seam as postEnqueue so enqueue stays independent from
+// the gRPC/prefetch implementation.
+func (e *Enqueuer) WithPostTaskUpdateHook(hook func(context.Context, string)) *Enqueuer {
+	if e == nil {
+		return e
+	}
+	e.postTaskUpdate = hook
+	return e
+}
+
+// NotifyTaskUpdated re-drives the worker-scoped FutureAssetPlan after a
+// runtime payload patch. It is a no-op when the optional control-plane store
+// or hook is not wired (for example in lightweight unit tests).
+func (e *Enqueuer) NotifyTaskUpdated(ctx context.Context, jobID string) {
+	if e == nil || e.postTaskUpdate == nil || jobID == "" {
+		return
+	}
+	go e.postTaskUpdate(context.WithoutCancel(ctx), jobID)
 }
 
 // =============================================================================

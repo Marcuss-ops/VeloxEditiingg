@@ -98,6 +98,11 @@ type SubmitJobRequest struct {
 	// normalized and persisted on TaskSpec; it never enters renderer Payload.
 	Assembly *assembly.ExternalAssemblyRequest `json:"assembly,omitempty"`
 
+	// RuntimeAssetsPending is set only by POST /api/v1/jobs/pre. It is an
+	// internal two-stage marker and is intentionally not accepted from the
+	// ordinary submit wire shape.
+	RuntimeAssetsPending bool `json:"-"`
+
 	// PlacementPinWorkerID is an optional operator/admin field that
 	// forces the job to be placed on a specific worker, skipping
 	// the normal placement matcher. Used by benchmark harnesses

@@ -60,6 +60,29 @@ func (h *Handler) PrefetchSubmittedJob(ctx context.Context, jobID string) {
 	logGRPCf(ctx, logging.LevelInfo, logging.CodeGRPCPrefetch, "[PREFETCH] submission hook job=%s deferred: task not READY", jobID)
 }
 
+// RefreshPrefetchForJob is the second-stage hook used by FINALIZE. It keeps
+// the existing reservation owner when one exists, so a runtime payload patch
+// sends the updated plan to the same worker that already holds the stock/clip
+// cache. If the first stage has not established ownership yet, it falls back
+// to the normal submission planner.
+func (h *Handler) RefreshPrefetchForJob(ctx context.Context, jobID string) {
+	if h == nil || h.taskRepo == nil || jobID == "" {
+		return
+	}
+	if store, ok := h.taskRepo.(taskgraph.FutureReservationStore); ok {
+		reservations, err := store.ListFutureReservations(ctx, "")
+		if err == nil {
+			for _, reservation := range reservations {
+				if reservation.JobID == jobID && reservation.WorkerID != "" {
+					h.refreshFutureAssetPlan(ctx, reservation.WorkerID, jobID)
+					return
+				}
+			}
+		}
+	}
+	h.PrefetchSubmittedJob(ctx, jobID)
+}
+
 // refreshFutureAssetPlan claims the next hard-reservation window for a
 // worker, then sends a complete worker-scoped snapshot. Reservation ownership
 // is persisted before the plan is sent, so a reconnect cannot turn a plan
