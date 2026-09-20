@@ -188,8 +188,12 @@ func sortedInputs(values []string) []string {
 
 // NewAudioMix creates the deterministic audio mixer. It consumes the
 // shared FFmpegRunner (AudioRecorder surface).
-func NewAudioMix(runner ffmpegrunner.FFmpegRunner, outputRoot string) executor.Executor {
-	return &audioMixExecutor{renderPlanExecutor: newRenderPlanExecutor(AudioMixID, []string{"audio.mix"}, runner, outputRoot)}
+func NewAudioMix(runner ffmpegrunner.FFmpegRunner, outputRoot string, options ...RenderOptions) executor.Executor {
+	var renderOptions RenderOptions
+	if len(options) > 0 {
+		renderOptions = options[0]
+	}
+	return &audioMixExecutor{renderPlanExecutor: newRenderPlanExecutor(AudioMixID, []string{"audio.mix"}, runner, outputRoot, renderOptions)}
 }
 
 type audioMixExecutor struct{ *renderPlanExecutor }
@@ -323,8 +327,12 @@ func writeFloat6(b *strings.Builder, v float64) {
 
 // NewCompose creates the deterministic video compositor. It consumes
 // the shared FFmpegRunner (SegmentRecorder surface).
-func NewCompose(runner ffmpegrunner.FFmpegRunner, outputRoot string) executor.Executor {
-	return &composeExecutor{renderPlanExecutor: newRenderPlanExecutor(ComposeID, []string{"video.compose"}, runner, outputRoot)}
+func NewCompose(runner ffmpegrunner.FFmpegRunner, outputRoot string, options ...RenderOptions) executor.Executor {
+	var renderOptions RenderOptions
+	if len(options) > 0 {
+		renderOptions = options[0]
+	}
+	return &composeExecutor{renderPlanExecutor: newRenderPlanExecutor(ComposeID, []string{"video.compose"}, runner, outputRoot, renderOptions)}
 }
 
 type composeExecutor struct{ *renderPlanExecutor }
@@ -335,13 +343,17 @@ func (e *composeExecutor) Execute(ctx context.Context, execCtx executor.Executio
 	if err != nil {
 		return failedResult(started, "validation_failed", err), nil
 	}
-	cp, err := buildComposePlan(spec, p, e.outputPath(spec, ".compose.mp4"))
+	cp, err := buildComposePlanWithPreset(spec, p, e.outputPath(spec, ".compose.mp4"), e.x264Preset)
 	if err != nil {
 		return failedResult(started, "validation_failed", err), nil
 	}
 	return runCommandExecutor(ctx, e.renderPlanExecutor, spec, cp, "video.compose", execCtx)
 }
 func buildComposePlan(spec executor.TaskSpec, p *plan.RenderPlan, output string) (CommandPlan, error) {
+	return buildComposePlanWithPreset(spec, p, output, "medium")
+}
+
+func buildComposePlanWithPreset(spec executor.TaskSpec, p *plan.RenderPlan, output, x264Preset string) (CommandPlan, error) {
 	inputs := make([]string, 0, len(p.Timeline))
 	for _, item := range p.Timeline {
 		if item.Source.URL == "" && item.Source.CacheKey == "" {
@@ -395,14 +407,19 @@ func buildComposePlan(spec executor.TaskSpec, p *plan.RenderPlan, output string)
 	filter.WriteString(":v=1:a=0[vout]")
 
 	filterGraph := filter.String()
-	args := append(inputArgs(inputs), "-filter_complex", filterGraph, "-map", "[vout]", "-an", "-c:v", "libx264", "-preset", "medium", "-b:v", "4M", "-maxrate", "4M", "-bufsize", "8M", "-pix_fmt", "yuv420p", "-r", strconv.Itoa(canvas.Fps), "-y", output)
+	x264Preset = normalizeRenderOptions(RenderOptions{X264Preset: x264Preset}).X264Preset
+	args := append(inputArgs(inputs), "-filter_complex", filterGraph, "-map", "[vout]", "-an", "-c:v", "libx264", "-preset", x264Preset, "-b:v", "4M", "-maxrate", "4M", "-bufsize", "8M", "-pix_fmt", "yuv420p", "-r", strconv.Itoa(canvas.Fps), "-y", output)
 	return CommandPlan{ExecutorID: ComposeID, Inputs: sortedInputs(inputs), FilterComplex: filterGraph, Args: args, OutputPath: output, PlanSHA256: planDigest(p)}, nil
 }
 
 // NewEncode creates the deterministic final encoder. It consumes the
 // shared FFmpegRunner (MuxRecorder surface).
-func NewEncode(runner ffmpegrunner.FFmpegRunner, outputRoot string) executor.Executor {
-	return &encodeExecutor{renderPlanExecutor: newRenderPlanExecutor(EncodeID, []string{"video.output"}, runner, outputRoot)}
+func NewEncode(runner ffmpegrunner.FFmpegRunner, outputRoot string, options ...RenderOptions) executor.Executor {
+	var renderOptions RenderOptions
+	if len(options) > 0 {
+		renderOptions = options[0]
+	}
+	return &encodeExecutor{renderPlanExecutor: newRenderPlanExecutor(EncodeID, []string{"video.output"}, runner, outputRoot, renderOptions)}
 }
 
 type encodeExecutor struct{ *renderPlanExecutor }
@@ -446,7 +463,11 @@ func (e *encodeExecutor) Execute(ctx context.Context, execCtx executor.Execution
 	if subtitlePath, _ := spec.Payload["subtitle_path"].(string); strings.TrimSpace(subtitlePath) != "" {
 		args = append(args, "-vf", "ass="+subtitlePath)
 	}
-	args = append(args, "-c:v", "libx264", "-preset", "medium", "-b:v", "4M", "-maxrate", "4M", "-bufsize", "8M", "-pix_fmt", "yuv420p", "-c:a", "aac", "-ar", "48000", "-ac", "2", "-movflags", "+faststart", "-y", output)
+	args = append(args, "-c:v", "libx264", "-preset", e.x264Preset, "-b:v", "4M", "-maxrate", "4M", "-bufsize", "8M", "-pix_fmt", "yuv420p", "-c:a", "aac", "-ar", "48000", "-ac", "2")
+	if e.fastStart {
+		args = append(args, "-movflags", "+faststart")
+	}
+	args = append(args, "-y", output)
 	cp := CommandPlan{ExecutorID: EncodeID, Inputs: sortedInputs(inputs), Args: args, OutputPath: output, PlanSHA256: planDigest(p)}
 	return runCommandExecutor(ctx, e.renderPlanExecutor, spec, cp, "video.output", execCtx)
 }

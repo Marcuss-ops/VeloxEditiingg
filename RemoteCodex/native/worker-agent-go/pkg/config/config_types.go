@@ -81,6 +81,17 @@ type WorkerConfig struct {
 	// A non-positive value uses the safe default. Binds from
 	// VELOX_PUBLISHER_CONCURRENCY when configuration is loaded.
 	PublisherConcurrency int `json:"publisher_concurrency,omitempty"`
+
+	// RenderX264Preset selects the libx264 speed/quality trade-off used by the
+	// canonical render-plan compose and encode executors. The default remains
+	// "medium" for compatibility; production workers may use "veryfast" via
+	// VELOX_RENDER_X264_PRESET after certifying their quality budget.
+	RenderX264Preset string `json:"render_x264_preset,omitempty"`
+	// RenderFastStart controls the second-pass MP4 relocation performed by
+	// ffmpeg's +faststart mux flag. Keep enabled for broadly seekable uploads;
+	// latency-sensitive workers may disable it explicitly.
+	RenderFastStart    bool `json:"render_faststart"`
+	RenderFastStartSet bool `json:"-"`
 	// CapacityBenchmarkEnabled runs the opt-in bootstrap fio/network ceiling
 	// measurement. It is disabled by default because it deliberately performs
 	// controlled I/O and traffic on the configured worker host.

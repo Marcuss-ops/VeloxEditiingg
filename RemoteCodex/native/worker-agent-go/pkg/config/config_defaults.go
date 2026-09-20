@@ -194,6 +194,15 @@ func (c *WorkerConfig) applyDefaults() {
 	if c.PublisherConcurrency <= 0 {
 		c.PublisherConcurrency = DefaultPublisherConcurrency
 	}
+	if c.RenderX264Preset == "" {
+		c.RenderX264Preset = "medium"
+	}
+	// Keep the historical seek-friendly output by default. The env override
+	// is applied after defaults, so VELOX_RENDER_FASTSTART=false remains the
+	// explicit low-latency opt-out for production workers.
+	if !c.RenderFastStartSet {
+		c.RenderFastStart = true
+	}
 	if c.ProgressivePartConcurrency <= 0 {
 		c.ProgressivePartConcurrency = DefaultProgressivePartConcurrency
 	}

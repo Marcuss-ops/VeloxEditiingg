@@ -213,6 +213,47 @@ func TestEncodeExecutor_ConsumesCanonicalRunnerAndPublishesTypedMetrics(t *testi
 	}
 }
 
+func TestRenderOptionsSelectFastPresetAndSkipFastStart(t *testing.T) {
+	const jobID = "job-encode-fast-profile"
+	outputRoot := t.TempDir()
+	fake := &fakeFFmpegRunner{result: ffmpegrunner.FFmpegResult{ExitCode: 0}}
+	seedOutputFile(t, filepath.Join(outputRoot, jobID+".mp4"))
+
+	executorImpl := NewEncode(fake, outputRoot, RenderOptions{
+		X264Preset:   "veryfast",
+		FastStart:    false,
+		FastStartSet: true,
+	})
+	spec := executor.TaskSpec{
+		Version:    1,
+		JobID:      jobID,
+		ExecutorID: EncodeID,
+		Payload: map[string]interface{}{
+			"render_plan_json": validRenderPlanJSON(t, jobID),
+			"input_path":       "/cache/worker/video.mp4",
+		},
+	}
+	result, err := executorImpl.Execute(context.Background(), nil, spec)
+	if err != nil || result.Status != "succeeded" {
+		t.Fatalf("Execute = result=%+v err=%v, want succeeded", result, err)
+	}
+	if !hasArgPair(fake.gotArgs, "-preset", "veryfast") {
+		t.Fatalf("ffmpeg args=%v, want veryfast preset", fake.gotArgs)
+	}
+	if hasArgPair(fake.gotArgs, "-movflags", "+faststart") {
+		t.Fatalf("ffmpeg args=%v, faststart must be omitted", fake.gotArgs)
+	}
+}
+
+func hasArgPair(args []string, key, value string) bool {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == key && args[i+1] == value {
+			return true
+		}
+	}
+	return false
+}
+
 func TestAudioMixExecutor_RunnerReceivesAudioMixOperation(t *testing.T) {
 	const jobID = "job-mix-1"
 	outputRoot := t.TempDir()

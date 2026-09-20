@@ -123,6 +123,14 @@ func (c *WorkerConfig) Validate() error {
 		errs = append(errs, fmt.Sprintf(
 			"invalid worker_profile: %q (valid: %q or empty)", c.WorkerProfile, CreatorProfile))
 	}
+	validX264Presets := map[string]bool{
+		"ultrafast": true, "superfast": true, "veryfast": true,
+		"faster": true, "fast": true, "medium": true, "slow": true,
+		"slower": true, "veryslow": true, "placebo": true,
+	}
+	if c.RenderX264Preset != "" && !validX264Presets[strings.ToLower(strings.TrimSpace(c.RenderX264Preset))] {
+		errs = append(errs, fmt.Sprintf("invalid render_x264_preset: %q", c.RenderX264Preset))
+	}
 
 	// Keep one download-manager slot available to foreground resolution. A
 	// prefetch plan is an optimization and must never be able to occupy the

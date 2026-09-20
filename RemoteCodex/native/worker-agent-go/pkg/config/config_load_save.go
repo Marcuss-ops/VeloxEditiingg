@@ -35,6 +35,14 @@ func LoadConfig(path string) (*WorkerConfig, error) {
 	if err := json.Unmarshal(data, &config); err != nil {
 		return nil, fmt.Errorf("failed to parse config file %s: %w", path, err)
 	}
+	// Preserve an explicit JSON false for render_faststart; bool's zero value
+	// otherwise cannot distinguish it from an omitted legacy field.
+	var renderSettings struct {
+		RenderFastStart *bool `json:"render_faststart"`
+	}
+	if err := json.Unmarshal(data, &renderSettings); err == nil && renderSettings.RenderFastStart != nil {
+		config.RenderFastStartSet = true
+	}
 
 	config.applyDefaults()
 

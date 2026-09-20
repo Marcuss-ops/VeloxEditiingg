@@ -267,7 +267,11 @@ func main() {
 	}
 	// Register the render executor family in the single canonical registry.
 	// CompiledRenderPlanV2 is served only by the native packet-copy executor.
-	if err := registerCanonicalRenderExecutors(registry, cfg.OutputDir, pipelineRunner); err != nil {
+	if err := registerCanonicalRenderExecutors(registry, cfg.OutputDir, []*pipeline.Runner{pipelineRunner}, executors.RenderOptions{
+		X264Preset:   cfg.RenderX264Preset,
+		FastStart:    cfg.RenderFastStart,
+		FastStartSet: true,
+	}); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: failed to register render executors: %v\n", err)
 		os.Exit(1)
 	}

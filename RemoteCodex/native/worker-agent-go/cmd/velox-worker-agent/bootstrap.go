@@ -98,8 +98,8 @@ var Version = "dev"
 // boundary for the render executor family. The RenderPlan helpers remain
 // available for the legacy scene pipeline, while CompiledRenderPlanV2 has
 // exactly one registered worker entry point: video.assemble.copy.v1.
-func registerCanonicalRenderExecutors(reg *executor.Registry, outputRoot string, runners ...*pipeline.Runner) error {
-	if err := executors.RegisterRenderPlanExecutors(reg, outputRoot); err != nil {
+func registerCanonicalRenderExecutors(reg *executor.Registry, outputRoot string, runners []*pipeline.Runner, options ...executors.RenderOptions) error {
+	if err := executors.RegisterRenderPlanExecutors(reg, outputRoot, options...); err != nil {
 		return err
 	}
 	if len(runners) > 0 && runners[0] != nil {

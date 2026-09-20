@@ -50,15 +50,38 @@ type renderPlanExecutor struct {
 	descriptor executor.Descriptor
 	runner     ffmpegrunner.FFmpegRunner
 	outputRoot string
+	x264Preset string
+	fastStart  bool
 }
 
-func newRenderPlanExecutor(id string, outputTypes []string, runner ffmpegrunner.FFmpegRunner, outputRoot string) *renderPlanExecutor {
+type RenderOptions struct {
+	X264Preset   string
+	FastStart    bool
+	FastStartSet bool
+}
+
+func normalizeRenderOptions(options RenderOptions) RenderOptions {
+	options.X264Preset = strings.ToLower(strings.TrimSpace(options.X264Preset))
+	if options.X264Preset == "" {
+		options.X264Preset = "medium"
+	}
+	if !options.FastStartSet {
+		// Direct executor constructors and legacy registration callers retain
+		// the historical seek-friendly output. The worker composition root
+		// marks the config value as explicit, including false.
+		options.FastStart = true
+	}
+	return options
+}
+
+func newRenderPlanExecutor(id string, outputTypes []string, runner ffmpegrunner.FFmpegRunner, outputRoot string, options RenderOptions) *renderPlanExecutor {
 	if runner == nil {
 		runner = ffmpegrunner.NewProcessRunner()
 	}
 	if strings.TrimSpace(outputRoot) == "" {
 		outputRoot = filepath.Join(os.TempDir(), "velox", "render-plan")
 	}
+	options = normalizeRenderOptions(options)
 	return &renderPlanExecutor{
 		descriptor: executor.Descriptor{
 			ID:            id,
@@ -72,6 +95,8 @@ func newRenderPlanExecutor(id string, outputTypes []string, runner ffmpegrunner.
 		},
 		runner:     runner,
 		outputRoot: outputRoot,
+		x264Preset: options.X264Preset,
+		fastStart:  options.FastStart,
 	}
 }
 
@@ -140,13 +165,17 @@ func (e *renderPlanExecutor) outputPath(spec executor.TaskSpec, suffix string) s
 // RegisterRenderPlanExecutors installs the four canonical RenderPlan-only
 // executors. Registration is deliberately centralized so worker capabilities
 // and dispatch resolve the same implementations.
-func RegisterRenderPlanExecutors(reg *executor.Registry, outputRoot string) error {
+func RegisterRenderPlanExecutors(reg *executor.Registry, outputRoot string, options ...RenderOptions) error {
 	if reg == nil {
 		return errors.New("render-plan executors: registry is nil")
 	}
+	var renderOptions RenderOptions
+	if len(options) > 0 {
+		renderOptions = options[0]
+	}
 	for _, item := range []executor.Executor{
-		NewSubtitleAlign(nil, outputRoot), NewAudioMix(nil, outputRoot),
-		NewCompose(nil, outputRoot), NewEncode(nil, outputRoot),
+		newSubtitleAlign(nil, outputRoot, renderOptions), NewAudioMix(nil, outputRoot, renderOptions),
+		NewCompose(nil, outputRoot, renderOptions), NewEncode(nil, outputRoot, renderOptions),
 	} {
 		if err := reg.Register(item); err != nil {
 			return err
@@ -159,7 +188,11 @@ func RegisterRenderPlanExecutors(reg *executor.Registry, outputRoot string) erro
 // not invoke ffmpeg (it writes the .ass file directly), but accepts the
 // same runner type so the executor surface stays uniform.
 func NewSubtitleAlign(runner ffmpegrunner.FFmpegRunner, outputRoot string) executor.Executor {
-	return &subtitleAlignExecutor{renderPlanExecutor: newRenderPlanExecutor(SubtitleAlignID, []string{"subtitle.ass"}, runner, outputRoot)}
+	return newSubtitleAlign(runner, outputRoot, RenderOptions{})
+}
+
+func newSubtitleAlign(runner ffmpegrunner.FFmpegRunner, outputRoot string, options RenderOptions) executor.Executor {
+	return &subtitleAlignExecutor{renderPlanExecutor: newRenderPlanExecutor(SubtitleAlignID, []string{"subtitle.ass"}, runner, outputRoot, options)}
 }
 
 type subtitleAlignExecutor struct{ *renderPlanExecutor }

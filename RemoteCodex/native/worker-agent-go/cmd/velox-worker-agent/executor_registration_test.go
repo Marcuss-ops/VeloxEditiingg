@@ -10,7 +10,7 @@ import (
 
 func TestRegisterCanonicalRenderExecutorsRegistersSingleCompiledPlanExecutor(t *testing.T) {
 	reg := executor.NewRegistry()
-	if err := registerCanonicalRenderExecutors(reg, t.TempDir(), pipeline.NewRunner(nil, nil, nil)); err != nil {
+	if err := registerCanonicalRenderExecutors(reg, t.TempDir(), []*pipeline.Runner{pipeline.NewRunner(nil, nil, nil)}); err != nil {
 		t.Fatalf("register canonical render executors: %v", err)
 	}
 

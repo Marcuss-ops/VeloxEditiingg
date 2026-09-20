@@ -70,6 +70,8 @@ const (
 	// transfers the canonical download manager runs per worker. Default 4.
 	EnvAssetDownloadConcurrency           = "VELOX_ASSET_DOWNLOAD_CONCURRENCY"
 	EnvPublisherConcurrency               = "VELOX_PUBLISHER_CONCURRENCY"
+	EnvRenderX264Preset                   = "VELOX_RENDER_X264_PRESET"
+	EnvRenderFastStart                    = "VELOX_RENDER_FASTSTART"
 	EnvCapacityBenchmarkEnabled           = "VELOX_CAPACITY_BENCHMARK_ENABLED"
 	EnvCapacityBenchmarkURL               = "VELOX_CAPACITY_BENCHMARK_URL"
 	EnvProgressivePartConcurrency         = "VELOX_PROGRESSIVE_PART_CONCURRENCY"
@@ -163,7 +165,7 @@ var EnvBindings = []string{
 	EnvWorkerProfile,
 	EnvTelemetryJSONDir,
 	EnvPrometheusPort,
-	EnvAssetDownloadConcurrency,
+	EnvAssetDownloadConcurrency, EnvRenderX264Preset, EnvRenderFastStart,
 	EnvPublisherConcurrency, EnvProgressivePartConcurrency,
 	EnvCapacityBenchmarkEnabled, EnvCapacityBenchmarkURL,
 	EnvAssetChunkedDownloadEnabled, EnvAssetChunkedDownloadThresholdBytes, EnvAssetChunkedDownloadConcurrency,
@@ -309,6 +311,13 @@ func applyEnvOverrides(cfg *WorkerConfig) error {
 		if n, perr := strconv.Atoi(v); perr == nil && n > 0 {
 			cfg.PublisherConcurrency = n
 		}
+	}
+	if v := strings.TrimSpace(os.Getenv(EnvRenderX264Preset)); v != "" {
+		cfg.RenderX264Preset = v
+	}
+	if v := strings.TrimSpace(os.Getenv(EnvRenderFastStart)); v != "" {
+		cfg.RenderFastStart = envTruthy(v)
+		cfg.RenderFastStartSet = true
 	}
 	if v := strings.TrimSpace(os.Getenv(EnvCapacityBenchmarkEnabled)); v != "" {
 		cfg.CapacityBenchmarkEnabled = envTruthy(v)
