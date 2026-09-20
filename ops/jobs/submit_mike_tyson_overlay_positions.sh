@@ -84,6 +84,11 @@ jq \
         audio_mode:"preserve_final_audio"}
      ]' "$BASE_PAYLOAD" > "$TMP_PAYLOAD"
 
+if [[ "$(jq -r '.payload.copy_only // false' "$TMP_PAYLOAD")" != "true" ]]; then
+  printf 'FATAL: Tyson payload must carry payload.copy_only=true\n' >&2
+  exit 2
+fi
+
 if [[ "$DRY_RUN" == "1" ]]; then
   jq '{source_job_id, target_executor_id,
       overlays: [.payload.overlays[] | {id, asset_id, start_frame, end_frame, frame_count, mode, audio_mode}],
