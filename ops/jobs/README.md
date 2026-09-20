@@ -12,6 +12,12 @@ POST /api/v1/jobs/{job_id}/finalize
   -> 202 {job_id, future_asset_plan: "refresh"}
 ```
 
+The PRE payload must include `copy_only: true`. This is the explicit
+clips.v1 packet-copy admission contract; a later `replace` overlay may select
+the editorial re-encode path, but the renderer still requires this input gate
+to be present during validation. The PRE stage carries only the stock/clip
+timeline; FINALIZE adds the runtime assets to the same job.
+
 The finalize payload accepts typed `overlays[]` with the canonical half-open
 window `[start_frame,end_frame)` (for example `start_frame: 120,
 end_frame: 240`) plus extensible `runtime_payload` / `runtime_assets` fields
