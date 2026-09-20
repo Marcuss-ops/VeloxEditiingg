@@ -141,67 +141,81 @@ func (h *Handler) sendPushTaskOffer(ctx context.Context, workerID string) {
 		return
 	}
 
-	result := h.placementMatcher.Select(snapshot, candidates)
-
-	if result.Candidate == nil {
-		h.recordPlacementRejections(snapshot, result.Rejections)
-		return
-	}
-
 	// ── Fencing pre-claim ────────────────────────────────────────────
 	// After building the snapshot and selecting a candidate, verify
 	// the session hasn't been replaced by a reconnect. If it has,
-	// the chosen candidate belongs to a stale view of the worker.
+	// the candidate list belongs to a stale view of the worker.
 	current := h.getSession(workerID)
 	if current != sess || current.sessionID != snapshot.SessionID {
 		return
 	}
 
-	candidate := result.Candidate
-	canClaim, err := h.ensureFutureReservationOwnership(ctx, workerID, candidate)
-	if err != nil {
-		logGRPCf(ctx, logging.LevelError, logging.CodeGRPCPlacementFailed, "[PLACEMENT] future reservation fallback check failed worker=%s task=%s: %v", workerID, candidate.TaskID, err)
-		return
-	}
-	if !canClaim {
-		// Another eligible worker still owns the preparation lease, or this
-		// worker lost the fallback race. Leave the task READY and let the
-		// owner/next placement tick claim it.
-		return
-	}
-	if gate := h.getPrepGate(); h.config.StrictPrefetchClaim && gate != nil {
-		decision, err := gate.EnsurePrepared(ctx, workerID, candidate)
+	// A READY task whose preparation gate is temporarily blocked must not
+	// starve a later READY task that is already prepared.  This is especially
+	// important after a restart, when an expired/orphaned reservation can sit
+	// ahead of a fresh PREPARE job in created-at order.  Try the next matcher
+	// candidate in the same placement pass; the blocked task remains READY and
+	// will be retried by the next wake-up/tick.
+	remaining := candidates
+	var candidate *placement.TaskCandidate
+	for len(remaining) > 0 {
+		result := h.placementMatcher.Select(snapshot, remaining)
+		if result.Candidate == nil {
+			h.recordPlacementRejections(snapshot, result.Rejections)
+			return
+		}
+		selected := *result.Candidate
+		candidate = &selected
+
+		canClaim, err := h.ensureFutureReservationOwnership(ctx, workerID, candidate)
 		if err != nil {
-			logGRPCf(ctx, logging.LevelError, logging.CodeGRPCPlacementFailed, "[PLACEMENT] preparation gate check failed worker=%s task=%s: %v", workerID, candidate.TaskID, err)
+			logGRPCf(ctx, logging.LevelError, logging.CodeGRPCPlacementFailed, "[PLACEMENT] future reservation fallback check failed worker=%s task=%s: %v", workerID, candidate.TaskID, err)
 			return
 		}
-		switch decision {
-		case PreparationReady:
-			// All assets prepared — proceed to claim.
-		case PreparationNotRequired:
-			// No assets needed — proceed to claim.
-		case PreparationWaiting:
-			// Gate blocks. The EnsurePrepared call already sent the plan
-			// if needed (first-job path). The next placement tick retries.
-			return
-		case PreparationExpired:
-			// Stale reservation. Leave task READY for re-dispatch.
-			return
-		default:
-			logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCPlacementFailed, "[PLACEMENT] preparation gate UNKNOWN decision=%s worker=%s task=%s", decision, workerID, candidate.TaskID)
-			return
+		if !canClaim {
+			logGRPCf(ctx, logging.LevelDebug, logging.CodeGRPCPlacementFailed, "[PLACEMENT] candidate skipped while another worker owns preparation worker=%s task=%s", workerID, candidate.TaskID)
+			remaining = withoutTaskCandidate(remaining, candidate.TaskID)
+			candidate = nil
+			continue
 		}
-	} else if h.config.StrictPrefetchClaim {
-		// Fallback: gate not wired (test/legacy path).
-		prepared, err := h.ensurePreparedBeforeClaim(ctx, workerID, candidate)
-		if err != nil {
-			logGRPCf(ctx, logging.LevelError, logging.CodeGRPCPlacementFailed, "[PLACEMENT] preparation gate check failed worker=%s task=%s: %v", workerID, candidate.TaskID, err)
-			return
+
+		blocked := false
+		if gate := h.getPrepGate(); h.config.StrictPrefetchClaim && gate != nil {
+			decision, err := gate.EnsurePrepared(ctx, workerID, candidate)
+			if err != nil {
+				logGRPCf(ctx, logging.LevelError, logging.CodeGRPCPlacementFailed, "[PLACEMENT] preparation gate check failed worker=%s task=%s: %v", workerID, candidate.TaskID, err)
+				return
+			}
+			switch decision {
+			case PreparationReady, PreparationNotRequired:
+				// Proceed to claim this candidate.
+			case PreparationWaiting, PreparationExpired:
+				blocked = true
+			default:
+				logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCPlacementFailed, "[PLACEMENT] preparation gate UNKNOWN decision=%s worker=%s task=%s", decision, workerID, candidate.TaskID)
+				return
+			}
+		} else if h.config.StrictPrefetchClaim {
+			// Fallback: gate not wired (test/legacy path).
+			prepared, err := h.ensurePreparedBeforeClaim(ctx, workerID, candidate)
+			if err != nil {
+				logGRPCf(ctx, logging.LevelError, logging.CodeGRPCPlacementFailed, "[PLACEMENT] preparation gate check failed worker=%s task=%s: %v", workerID, candidate.TaskID, err)
+				return
+			}
+			if !prepared {
+				h.refreshFutureAssetPlan(ctx, workerID, "")
+				blocked = true
+			}
 		}
-		if !prepared {
-			h.refreshFutureAssetPlan(ctx, workerID, "")
-			return
+		if !blocked {
+			break
 		}
+		logGRPCf(ctx, logging.LevelDebug, logging.CodeGRPCPlacementFailed, "[PLACEMENT] candidate skipped while preparation is pending worker=%s task=%s", workerID, candidate.TaskID)
+		remaining = withoutTaskCandidate(remaining, candidate.TaskID)
+		candidate = nil
+	}
+	if candidate == nil {
+		return
 	}
 	leaseID := fmt.Sprintf("l-%s-%s", workerID, uuid.NewString()[:8])
 
@@ -252,6 +266,16 @@ func (h *Handler) sendPushTaskOffer(ctx context.Context, workerID string) {
 	// prefetch outage must never block correctness of the claimed task.
 	h.refreshFutureAssetPlan(ctx, workerID, tws.JobID)
 	h.sendClaimedTaskOffer(ctx, sess, tws, attempt, leaseID)
+}
+
+func withoutTaskCandidate(candidates []placement.TaskCandidate, taskID string) []placement.TaskCandidate {
+	remaining := make([]placement.TaskCandidate, 0, len(candidates)-1)
+	for _, candidate := range candidates {
+		if candidate.TaskID != taskID {
+			remaining = append(remaining, candidate)
+		}
+	}
+	return remaining
 }
 
 // sendClaimedTaskOffer builds the protobuf TaskOffer envelope from a
