@@ -37,6 +37,12 @@ func (h *Handler) buildDesiredReservations(
 	desired []taskgraph.FutureReservation,
 	jobs []futureasset.Job,
 ) {
+	// The job that triggered PREPARE/FINALIZE must win the first hard
+	// reservation slot.  Without this ordering, an already-populated
+	// prefetch horizon can include the new task only as a protection job
+	// (reservation_id=""), which sends a plan but leaves the preparation gate
+	// with no worker-affinity lease to advance or claim.
+	candidates = prioritizeCurrentJobCandidates(candidates, currentJobID)
 	desired = make([]taskgraph.FutureReservation, 0, prefetchLimit)
 	jobs = make([]futureasset.Job, 0, protectionLimit)
 
@@ -130,6 +136,25 @@ func (h *Handler) buildDesiredReservations(
 		})
 	}
 	return desired, jobs
+}
+
+func prioritizeCurrentJobCandidates(candidates []placement.TaskCandidate, currentJobID string) []placement.TaskCandidate {
+	if currentJobID == "" || len(candidates) < 2 {
+		return candidates
+	}
+	prioritized := make([]placement.TaskCandidate, 0, len(candidates))
+	rest := make([]placement.TaskCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.JobID == currentJobID {
+			prioritized = append(prioritized, candidate)
+			continue
+		}
+		rest = append(rest, candidate)
+	}
+	if len(prioritized) == 0 {
+		return candidates
+	}
+	return append(prioritized, rest...)
 }
 
 // reconcileReservations persists the desired reservation list and returns
