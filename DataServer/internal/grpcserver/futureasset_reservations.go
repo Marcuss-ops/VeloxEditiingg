@@ -69,7 +69,11 @@ func (h *Handler) buildDesiredReservations(
 			continue
 		}
 		assets := futureAssetManifests(payload)
-		decision, err := selectWarmPlacement(warmSnapshots, assets)
+		candidateWarmSnapshots := warmSnapshots
+		if candidate.Executor.Valid() {
+			candidateWarmSnapshots = h.warmPlacementSnapshotsForExecutor(candidate.Executor)
+		}
+		decision, err := selectWarmPlacement(candidateWarmSnapshots, assets)
 		// The task currently being dispatched is already owned by the normal
 		// placement decision.  It must be allowed to establish its own
 		// preparation reservation on that worker; applying warm-cache affinity

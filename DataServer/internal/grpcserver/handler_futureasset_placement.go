@@ -18,6 +18,14 @@ import (
 // ensureFutureReservationOwnership to decide which worker should prefetch
 // or own a given set of assets.
 func (h *Handler) warmPlacementSnapshots() []assembly.WorkerPlacementSnapshot {
+	return h.warmPlacementSnapshotsForExecutor(placement.ExecutorKey{})
+}
+
+// warmPlacementSnapshotsForExecutor returns only workers that can execute the
+// same task whose assets are being prepared. Cache locality is useful only if
+// the reserved worker can later accept the render; a prefetch-only worker must
+// never become the sticky owner of a render task.
+func (h *Handler) warmPlacementSnapshotsForExecutor(required placement.ExecutorKey) []assembly.WorkerPlacementSnapshot {
 	if h == nil {
 		return nil
 	}
@@ -29,6 +37,9 @@ func (h *Handler) warmPlacementSnapshots() []assembly.WorkerPlacementSnapshot {
 			continue
 		}
 		snapshot := sess.placementSnapshot(sess.workerID)
+		if required.Valid() && !snapshot.HasExecutor(required) {
+			continue
+		}
 		cached := make([]string, 0, len(snapshot.CachedAssetKeys))
 		for key := range snapshot.CachedAssetKeys {
 			cached = append(cached, key)

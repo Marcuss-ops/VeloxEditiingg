@@ -36,7 +36,6 @@ func (h *Handler) PrefetchSubmittedJob(ctx context.Context, jobID string) {
 		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCPrefetchFailed, "[PREFETCH] submission hook list candidates job=%s: %v", jobID, err)
 		return
 	}
-	workers := h.warmPlacementSnapshots()
 	for _, candidate := range candidates {
 		if candidate.JobID != jobID {
 			continue
@@ -46,6 +45,7 @@ func (h *Handler) PrefetchSubmittedJob(ctx context.Context, jobID string) {
 			logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCPrefetchFailed, "[PREFETCH] submission hook payload task=%s: %v", candidate.TaskID, payloadErr)
 			return
 		}
+		workers := h.warmPlacementSnapshotsForExecutor(candidate.Executor)
 		decision, selectErr := selectWarmPlacement(workers, futureAssetManifests(payload))
 		if selectErr != nil || decision.WorkerID == "" {
 			if selectErr != nil {
