@@ -229,6 +229,18 @@ func (s *Scheduler) preparedForJob(job futureasset.Job, metadata PreparedAssetMe
 	return prepared, true
 }
 
+func (s *Scheduler) preparationCounts(job futureasset.Job) (preparedCount, requiredCount int) {
+	if s == nil {
+		return 0, len(job.Assets)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if prepared, ok := s.prepared[job.JobID]; ok {
+		preparedCount = len(prepared.Assets)
+	}
+	return preparedCount, len(job.Assets)
+}
+
 // PreparedJobs returns a stable copy of the current local preparation read
 // model. Callers cannot mutate scheduler state through the returned maps.
 func (s *Scheduler) PreparedJobs() []PreparedJob {

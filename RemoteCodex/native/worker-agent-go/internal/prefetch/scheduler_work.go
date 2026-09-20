@@ -2,6 +2,7 @@ package prefetch
 
 import (
 	"container/heap"
+	"strconv"
 	"time"
 
 	"velox-shared/assetref"
@@ -166,6 +167,20 @@ func (s *Scheduler) runWorkItem(item *workItem, resolver *downloader.CacheResolv
 		preparedJob, prepared := PreparedJob{}, false
 		if err == nil && metadataErr == nil && protectionErr == nil {
 			preparedJob, prepared = s.preparedForJob(job, metadata)
+			if !prepared {
+				preparedCount, requiredCount := s.preparationCounts(job)
+				s.emit(Event{
+					Name:         "prefetch_preparation_waiting",
+					At:           readyAt,
+					PlanVersion:  item.planVersion,
+					JobID:        job.JobID,
+					TaskID:       job.TaskID,
+					AssetKey:     asset.AssetKey,
+					Distance:     job.Distance,
+					Generation:   item.generation,
+					ErrorMessage: "prepared_assets=" + strconv.Itoa(preparedCount) + " required_assets=" + strconv.Itoa(requiredCount),
+				})
+			}
 		}
 		if s.cfg.OnState != nil {
 			switch {
