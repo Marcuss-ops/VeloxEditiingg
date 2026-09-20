@@ -58,6 +58,13 @@ type SubmitJobRequest struct {
 	// mixed audio timeline.
 	Overlays []SubmitOverlay `json:"overlays,omitempty"`
 
+	// RuntimeAssets and RuntimePayload make PRE single-stage when the
+	// producer already knows the runtime assets at submit time. A nil
+	// RuntimeAssets keeps the legacy two-stage PRE→FINALIZE contract; an
+	// explicitly supplied array clears the pending gate immediately.
+	RuntimeAssets  []map[string]interface{} `json:"runtime_assets,omitempty"`
+	RuntimePayload map[string]interface{}   `json:"runtime_payload,omitempty"`
+
 	// VisualReplacements are already-composited video segments that
 	// replace the base visual timeline over an absolute interval. Each
 	// entry is a FINISHED video-only MP4; the master swaps it into the

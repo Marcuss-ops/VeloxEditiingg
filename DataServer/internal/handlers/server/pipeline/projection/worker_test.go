@@ -60,6 +60,26 @@ func TestProjectWorkerPayload_PreservesExplicitWorkerBoundaryFields(t *testing.T
 	}
 }
 
+func TestProjectWorkerPayload_PreservesSingleStageRuntimeFields(t *testing.T) {
+	raw := map[string]interface{}{
+		"status":         "completed",
+		"job_id":         "projection-runtime",
+		"runtime_assets": []interface{}{map[string]interface{}{"asset_id": "tts-1", "size_bytes": int64(12)}},
+		"runtime_audio":  map[string]interface{}{"asset_id": "tts-1"},
+	}
+
+	got, err := ProjectWorkerPayload(raw, "")
+	if err != nil {
+		t.Fatalf("ProjectWorkerPayload() error: %v", err)
+	}
+	if _, ok := got["runtime_assets"]; !ok {
+		t.Fatalf("runtime_assets missing from worker payload: %#v", got)
+	}
+	if _, ok := got["runtime_audio"]; !ok {
+		t.Fatalf("runtime_audio missing from worker payload: %#v", got)
+	}
+}
+
 func TestProjectWorkerPayload_MapsClipStockToRegisteredClipsPipeline(t *testing.T) {
 	raw := map[string]interface{}{
 		"status":      "completed",

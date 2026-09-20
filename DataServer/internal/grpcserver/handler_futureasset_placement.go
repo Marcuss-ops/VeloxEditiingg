@@ -85,6 +85,10 @@ func selectWarmPlacement(workers []assembly.WorkerPlacementSnapshot, assets []fu
 // eligible. This runs immediately before execution claim, so an unavailable
 // preferred worker cannot strand a READY task until the original TTL.
 func (h *Handler) ensureFutureReservationOwnership(ctx context.Context, workerID string, candidate *placement.TaskCandidate) (bool, error) {
+	return h.ensureFutureReservationOwnershipWithReservations(ctx, workerID, candidate, nil)
+}
+
+func (h *Handler) ensureFutureReservationOwnershipWithReservations(ctx context.Context, workerID string, candidate *placement.TaskCandidate, cached *[]taskgraph.FutureReservationWithPayload) (bool, error) {
 	if h == nil || candidate == nil {
 		return false, fmt.Errorf("future reservation fallback: missing handler or candidate")
 	}
@@ -94,9 +98,15 @@ func (h *Handler) ensureFutureReservationOwnership(ctx context.Context, workerID
 		// preparation reservations and retain the normal claim path.
 		return true, nil
 	}
-	reservations, err := store.ListFutureReservations(ctx, "")
-	if err != nil {
-		return false, err
+	var reservations []taskgraph.FutureReservationWithPayload
+	if cached != nil {
+		reservations = *cached
+	} else {
+		var err error
+		reservations, err = store.ListFutureReservations(ctx, "")
+		if err != nil {
+			return false, err
+		}
 	}
 	var current *taskgraph.FutureReservationWithPayload
 	for i := range reservations {
@@ -148,6 +158,14 @@ func (h *Handler) ensureFutureReservationOwnership(ctx context.Context, workerID
 		return false, err
 	}
 	if acquired {
+		if cached != nil {
+			for i := range *cached {
+				if (*cached)[i].TaskID == candidate.TaskID && (*cached)[i].WorkerID == current.WorkerID {
+					(*cached)[i].FutureReservation = transferred
+					break
+				}
+			}
+		}
 		logGRPCf(ctx, logging.LevelInfo, logging.CodeGRPCPrefetch, "[PREFETCH] preparation lease fallback task=%s from_worker=%s to_worker=%s", candidate.TaskID, current.WorkerID, workerID)
 	}
 	return acquired, nil

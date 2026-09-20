@@ -343,13 +343,32 @@ func (h *Handler) getPrepGate() *PreparationGate {
 // This is the sole entry point for the preparation gate in the placement
 // pipeline.
 func (pg *PreparationGate) EnsurePrepared(ctx context.Context, workerID string, candidate *placement.TaskCandidate) (PreparationDecision, error) {
+	return pg.ensurePrepared(ctx, workerID, candidate, nil)
+}
+
+// EnsurePreparedWithReservations evaluates a candidate using a reservation
+// snapshot owned by the current placement pass. Passing a non-nil pointer
+// avoids one ListFutureReservations query per skipped candidate while still
+// allowing the first-job path to refresh the snapshot after it creates a
+// reservation.
+func (pg *PreparationGate) EnsurePreparedWithReservations(ctx context.Context, workerID string, candidate *placement.TaskCandidate, cached *[]taskgraph.FutureReservationWithPayload) (PreparationDecision, error) {
+	return pg.ensurePrepared(ctx, workerID, candidate, cached)
+}
+
+func (pg *PreparationGate) ensurePrepared(ctx context.Context, workerID string, candidate *placement.TaskCandidate, cached *[]taskgraph.FutureReservationWithPayload) (PreparationDecision, error) {
 	if pg == nil || pg.handler == nil || candidate == nil {
 		return PreparationWaiting, fmt.Errorf("preparation gate: missing gate, handler, or candidate")
 	}
 	findReservation := func() (taskgraph.FutureReservationWithPayload, bool, error) {
-		reservations, err := pg.store.ListFutureReservations(ctx, workerID)
-		if err != nil {
-			return taskgraph.FutureReservationWithPayload{}, false, err
+		var reservations []taskgraph.FutureReservationWithPayload
+		if cached != nil {
+			reservations = *cached
+		} else {
+			var err error
+			reservations, err = pg.store.ListFutureReservations(ctx, workerID)
+			if err != nil {
+				return taskgraph.FutureReservationWithPayload{}, false, err
+			}
 		}
 		for _, reservation := range reservations {
 			if reservation.TaskID == candidate.TaskID && reservation.WorkerID == workerID {
@@ -382,6 +401,13 @@ func (pg *PreparationGate) EnsurePrepared(ctx context.Context, workerID string, 
 		// reservation store but no placement session) on the pure WAITING path.
 		if pg.handler != nil && pg.handler.getSession(workerID) != nil {
 			pg.handler.refreshFutureAssetPlan(ctx, workerID, candidate.JobID)
+		}
+		if cached != nil {
+			fresh, refreshErr := pg.store.ListFutureReservations(ctx, "")
+			if refreshErr != nil {
+				return PreparationWaiting, refreshErr
+			}
+			*cached = fresh
 		}
 		reservation, found, err = findReservation()
 		if err != nil {

@@ -150,6 +150,17 @@ func (h *Handler) sendPushTaskOffer(ctx context.Context, workerID string) {
 		return
 	}
 
+	var reservationSnapshot []taskgraph.FutureReservationWithPayload
+	var cachedReservations *[]taskgraph.FutureReservationWithPayload
+	if store, ok := h.taskRepo.(taskgraph.FutureReservationStore); ok {
+		reservationSnapshot, err = store.ListFutureReservations(ctx, "")
+		if err != nil {
+			logGRPCf(ctx, logging.LevelError, logging.CodeGRPCPlacementFailed, "[PLACEMENT] reservation snapshot failed worker=%s: %v", workerID, err)
+			return
+		}
+		cachedReservations = &reservationSnapshot
+	}
+
 	// A READY task whose preparation gate is temporarily blocked must not
 	// starve a later READY task that is already prepared.  This is especially
 	// important after a restart, when an expired/orphaned reservation can sit
@@ -167,7 +178,7 @@ func (h *Handler) sendPushTaskOffer(ctx context.Context, workerID string) {
 		selected := *result.Candidate
 		candidate = &selected
 
-		canClaim, err := h.ensureFutureReservationOwnership(ctx, workerID, candidate)
+		canClaim, err := h.ensureFutureReservationOwnershipWithReservations(ctx, workerID, candidate, cachedReservations)
 		if err != nil {
 			logGRPCf(ctx, logging.LevelError, logging.CodeGRPCPlacementFailed, "[PLACEMENT] future reservation fallback check failed worker=%s task=%s: %v", workerID, candidate.TaskID, err)
 			return
@@ -181,7 +192,7 @@ func (h *Handler) sendPushTaskOffer(ctx context.Context, workerID string) {
 
 		blocked := false
 		if gate := h.getPrepGate(); h.config.StrictPrefetchClaim && gate != nil {
-			decision, err := gate.EnsurePrepared(ctx, workerID, candidate)
+			decision, err := gate.EnsurePreparedWithReservations(ctx, workerID, candidate, cachedReservations)
 			if err != nil {
 				logGRPCf(ctx, logging.LevelError, logging.CodeGRPCPlacementFailed, "[PLACEMENT] preparation gate check failed worker=%s task=%s: %v", workerID, candidate.TaskID, err)
 				return

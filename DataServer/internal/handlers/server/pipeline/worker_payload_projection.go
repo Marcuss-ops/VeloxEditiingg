@@ -35,6 +35,8 @@ func submitRequestToRawPayload(req *SubmitJobRequest) map[string]interface{} {
 		PlacementPin:             req.PlacementPinWorkerID,
 		LegacyVoiceovers:         compatibility.ReadStringList(req.Spec, compatibility.VoiceoverPathsKey),
 		RetryBudgetDefault:       DefaultRetryBudget,
+		RuntimeAssets:            req.RuntimeAssets,
+		RuntimePayload:           req.RuntimePayload,
 	}
 	input.DeliveryPlan = make([]projection.RawDeliveryPlanEntry, 0, len(req.DeliveryPlan))
 	for _, entry := range req.DeliveryPlan {

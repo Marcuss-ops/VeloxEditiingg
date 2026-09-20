@@ -33,7 +33,8 @@ func (h *Handlers) PrepareJob() gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "invalid_json", "message": "request body must be valid JSON without unknown fields: " + err.Error()})
 			return
 		}
-		req.RuntimeAssetsPending = true
+		_, runtimePayloadHasAssets := req.RuntimePayload["runtime_assets"]
+		req.RuntimeAssetsPending = req.RuntimeAssets == nil && !runtimePayloadHasAssets
 		out := h.submitJobCore(c.Request.Context(), req, intakeIdentity{
 			ClientID:     ClientIDFromContext(c),
 			IntakeSource: creatorflow.IntakeSourceCanonical,
@@ -41,7 +42,11 @@ func (h *Handlers) PrepareJob() gin.HandlerFunc {
 		})
 		if out.Status < http.StatusMultipleChoices {
 			out.Body["phase"] = "PREPARE"
-			out.Body["dispatch_status"] = "waiting_runtime_assets"
+			if req.RuntimeAssetsPending {
+				out.Body["dispatch_status"] = "waiting_runtime_assets"
+			} else {
+				out.Body["dispatch_status"] = "prefetch_queued"
+			}
 		}
 		writeIntakeResponse(c, out)
 	}

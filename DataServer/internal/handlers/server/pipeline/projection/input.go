@@ -32,6 +32,8 @@ type SubmissionInput struct {
 	VisualReplacements       []VisualReplacementInput
 	DeliveryPlan             []RawDeliveryPlanEntry
 	RetryBudgetDefault       int
+	RuntimeAssets            []map[string]interface{}
+	RuntimePayload           map[string]interface{}
 }
 
 type SceneInput struct {
@@ -147,6 +149,15 @@ func BuildRawPayload(input SubmissionInput) map[string]interface{} {
 		DeliveryPlan:             input.DeliveryPlan,
 		RetryBudgetDefault:       input.RetryBudgetDefault,
 	})
+	for key, value := range input.RuntimePayload {
+		if key == "runtime_assets_pending" || key == "runtime_finalize_idempotency_key" {
+			continue
+		}
+		payload[key] = value
+	}
+	if input.RuntimeAssets != nil {
+		payload["runtime_assets"] = input.RuntimeAssets
+	}
 
 	if len(input.Scenes) > 0 {
 		scenes := make([]interface{}, 0, len(input.Scenes))

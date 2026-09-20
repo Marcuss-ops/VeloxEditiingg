@@ -5,6 +5,7 @@ package projection
 
 import (
 	"fmt"
+	"strings"
 
 	"velox-server/internal/remoteengine"
 	"velox-server/internal/routing"
@@ -40,7 +41,12 @@ func ProjectWorkerPayload(rawPayload map[string]interface{}, rendererMode string
 	case "scene_image", "slideshow":
 		setPipelineID(workerPayload, "images.v1")
 	}
-	preserveFields(workerPayload, rawPayload, "layers", "overlays", "runtime_assets_pending", "_placement_pin_worker_id")
+	preserveFields(workerPayload, rawPayload, "layers", "overlays", "runtime_assets", "runtime_assets_pending", "_placement_pin_worker_id")
+	for key := range rawPayload {
+		if strings.HasPrefix(key, "runtime_") && key != "runtime_assets_pending" && key != "runtime_finalize_idempotency_key" {
+			preserveFields(workerPayload, rawPayload, key)
+		}
+	}
 	return workerPayload, nil
 }
 

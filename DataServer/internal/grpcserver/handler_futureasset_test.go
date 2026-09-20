@@ -106,6 +106,26 @@ func TestFutureAssetManifestsCarriesDeferredDriveStockWithoutMasterDownload(t *t
 	}
 }
 
+func TestFutureAssetManifestsDiscoversOverlayDeclaredInPrePayload(t *testing.T) {
+	payload := []byte(`{
+		"overlays": [{
+			"asset_id": "intro-overlay",
+			"url": "velox-drive://intro-overlay",
+			"size_bytes": 4096,
+			"start_frame": 24,
+			"end_frame": 120,
+			"mode": "replace"
+		}]
+	}`)
+	assets := futureAssetManifests(payload)
+	if len(assets) != 1 {
+		t.Fatalf("overlay manifests=%d, want 1", len(assets))
+	}
+	if got := assets[0]; got.AssetKey != "intro-overlay" || got.AssetID != "intro-overlay" || got.SizeBytes != 4096 || got.SourceURI == "" {
+		t.Fatalf("overlay manifest=%+v, want deferred overlay asset", got)
+	}
+}
+
 func TestFutureAssetManifestsNormalizesDriveViewSourceURI(t *testing.T) {
 	payload := []byte(`{
 		"runtime_assets": [{

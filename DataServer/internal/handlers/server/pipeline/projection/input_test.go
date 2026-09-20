@@ -81,3 +81,23 @@ func TestBuildRawPayload_DerivesEndFrameForLegacyOverlay(t *testing.T) {
 		t.Fatalf("legacy overlay timing = %#v, want [24,144) count=120", overlay)
 	}
 }
+
+func TestBuildRawPayload_IncludesKnownRuntimeAssetsAndPayload(t *testing.T) {
+	raw := BuildRawPayload(SubmissionInput{
+		RuntimeAssets: []map[string]interface{}{{"asset_id": "tts-1", "size_bytes": int64(12)}},
+		RuntimePayload: map[string]interface{}{
+			"runtime_audio":          map[string]interface{}{"asset_id": "tts-1"},
+			"runtime_assets_pending": true,
+		},
+	})
+	assets, ok := raw["runtime_assets"].([]map[string]interface{})
+	if !ok || len(assets) != 1 || assets[0]["asset_id"] != "tts-1" {
+		t.Fatalf("runtime_assets=%#v", raw["runtime_assets"])
+	}
+	if _, ok := raw["runtime_audio"]; !ok {
+		t.Fatalf("runtime payload was not flattened: %#v", raw)
+	}
+	if _, ok := raw["runtime_assets_pending"]; ok {
+		t.Fatal("runtime_assets_pending must remain an internal PRE marker")
+	}
+}
