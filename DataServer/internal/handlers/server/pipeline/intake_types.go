@@ -432,10 +432,10 @@ type SubmitJobBatchRequest struct {
 // job and DedupedOf its index), "conflict" (in-batch duplicate idempotency
 // key), "rejected", "failed".
 type SubmitJobBatchItemResult struct {
-	Index          int      `json:"index"`
-	IdempotencyKey string   `json:"idempotency_key"`
-	JobID          string   `json:"job_id,omitempty"`
-	Status         string   `json:"status"`
+	Index          int    `json:"index"`
+	IdempotencyKey string `json:"idempotency_key"`
+	JobID          string `json:"job_id,omitempty"`
+	Status         string `json:"status"`
 	// DedupedOf is set only when Status == "dedup": the index of the first
 	// accepted item with an identical render plan. Pointer so the key is
 	// absent on every other status (index 0 must still serialize).

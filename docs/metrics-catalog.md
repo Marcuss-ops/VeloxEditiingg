@@ -259,7 +259,7 @@ These dimensions exist in SQLite / Postgres (`task_attempt_metrics`, `task_attem
 | -- | ---------------------------------------------- | ------------------------ | ---------------------------------------------------- | ---------- | --------- |
 | L1 | `input_bytes`, `output_bytes`                  | `task_attempt_metrics`   | I/O byte counters per attempt                         | bytes      | 043       |
 | L2 | `gpu_time_ms`, `peak_vram_bytes`               | `task_attempt_metrics`   | GPU counters (reserved)                               | ms / bytes | 054       |
-| L3 | `temp_bytes_written`, `duplicate_download_bytes` | `task_attempt_metrics` | Storage amplification + duplicate waste               | bytes      | 054       |
+| L3 | `temp_bytes_written`, `duplicate_download_bytes` | `task_attempt_metrics` | Storage amplification + **bytes AVOIDED by singleflight coalescing** (the bytes a coalesced waiter would have re-downloaded — NOT bytes physically transferred twice; the physical side is `cache_download_bytes` / the transfer count) | bytes      | 054       |
 | L4 | `media_duration_seconds`, `wall_clock_seconds`   | `task_attempt_metrics` | Per-attempt render speed base                         | seconds    | 054       |
 | L5 | `git_sha`, `worker_version`, `engine_version`, `ffmpeg_version`, `config_hash`, `docker_image_digest` | `task_attempts` | Versioning context per attempt | _(string)_  | 071 |
 | L6 | `ffprobe_valid`, `duration_diff_sec`, `has_video_stream`, `has_audio_stream`, `output_file_size`, `black_frame_ratio`, `audio_sync_offset_ms` | `task_attempt_metrics` | Output quality validation | mixed | 072 |

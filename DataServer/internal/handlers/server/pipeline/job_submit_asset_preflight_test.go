@@ -3,10 +3,8 @@ package pipeline
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -93,22 +91,18 @@ func newPreflightGateService(t *testing.T, asset *voiceoverassets.AssetRecord, m
 	return voiceoverassets.NewAssetService(repo, preflightTestBlobStore{root: root}, nil, nil)
 }
 
-// runAssetPreflight executes checkAssetPreflight against the service and
-// returns whether the handler wrote a response (true = rejected).
-func runAssetPreflight(t *testing.T, svc *voiceoverassets.AssetService, sourceURL string) (bool, *httptest.ResponseRecorder) {
+// runAssetPreflight executes assetPreflightEnvelope against the service and
+// returns whether the pre-flight rejected the request (true = rejected)
+// together with the canonical (status, envelope) it produced. The envelope is
+// asserted directly: it is the transport-neutral value the intake core returns,
+// so no HTTP response has to be synthesized to observe a rejection.
+func runAssetPreflight(t *testing.T, svc *voiceoverassets.AssetService, sourceURL string) (bool, int, gin.H) {
 	t.Helper()
-	recorder := httptest.NewRecorder()
-	gin.SetMode(gin.TestMode)
-	c, _ := gin.CreateTestContext(recorder)
-	// gin.CreateTestContext does not populate c.Request; checkAssetPreflight
-	// calls c.Request.Context(), so install one explicitly.
-	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/jobs", nil)
 	req := SubmitJobRequest{
 		Scenes: []SubmitScene{{Text: "scene text", DurationSeconds: 2, Clip: &SubmitClip{AssetID: "asset-1", URL: sourceURL}}},
 	}
-	h := &Handlers{assetService: svc}
-	handled := checkAssetPreflight(c, h, req)
-	return handled, recorder
+	status, body, handled := assetPreflightEnvelope(context.Background(), &Handlers{assetService: svc}, req)
+	return handled, status, body
 }
 
 // TestCheckAssetPreflight_RejectsUnverifiableMediaAsset pins the Fase C2
@@ -120,30 +114,25 @@ func TestCheckAssetPreflight_RejectsUnverifiableMediaAsset(t *testing.T) {
 		AssetID: "asset-1", Status: voiceoverassets.AssetStatusReady, MimeType: "video/mp4", StorageKey: "asset.mp4",
 	}, nil)
 
-	handled, recorder := runAssetPreflight(t, svc, "velox-asset://asset-1")
+	handled, status, body := runAssetPreflight(t, svc, "velox-asset://asset-1")
 	if !handled {
-		t.Fatal("checkAssetPreflight must reject an unverifiable media asset")
+		t.Fatal("assetPreflightEnvelope must reject an unverifiable media asset")
 	}
-	if recorder.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want 422", recorder.Code)
-	}
-	var body map[string]interface{}
-	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
-		t.Fatalf("decode body: %v", err)
+	if status != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422", status)
 	}
 	if body["error"] != "asset_preflight_failed" {
 		t.Fatalf("error = %v, want asset_preflight_failed", body["error"])
 	}
-	details, ok := body["details"].([]interface{})
+	details, ok := body["details"].([]gin.H)
 	if !ok || len(details) != 1 {
 		t.Fatalf("details = %#v, want one item", body["details"])
 	}
-	first, ok := details[0].(map[string]interface{})
-	if !ok || first["media_metadata"] != false {
+	if details[0]["media_metadata"] != false {
 		t.Fatalf("details[0] = %#v, want media_metadata=false", details[0])
 	}
-	if first["issue"] != "media_metadata_unavailable" {
-		t.Fatalf("details[0] issue = %v, want media_metadata_unavailable", first["issue"])
+	if details[0]["issue"] != "media_metadata_unavailable" {
+		t.Fatalf("details[0] issue = %v, want media_metadata_unavailable", details[0]["issue"])
 	}
 }
 
@@ -158,9 +147,9 @@ func TestCheckAssetPreflight_AcceptsVerifiedMediaAsset(t *testing.T) {
 		MetadataVerifiedAt: "2026-08-11T00:00:00Z", MetadataSchemaVersion: 1,
 	})
 
-	handled, _ := runAssetPreflight(t, svc, "velox-asset://asset-1")
+	handled, _, _ := runAssetPreflight(t, svc, "velox-asset://asset-1")
 	if handled {
-		t.Fatal("checkAssetPreflight must accept a media asset with verified registry metadata")
+		t.Fatal("assetPreflightEnvelope must accept a media asset with verified registry metadata")
 	}
 }
 
@@ -171,9 +160,9 @@ func TestCheckAssetPreflight_AcceptsNonMediaAsset(t *testing.T) {
 		AssetID: "asset-1", Status: voiceoverassets.AssetStatusReady, MimeType: "font/ttf", StorageKey: "font.ttf",
 	}, nil)
 
-	handled, _ := runAssetPreflight(t, svc, "velox-asset://asset-1")
+	handled, _, _ := runAssetPreflight(t, svc, "velox-asset://asset-1")
 	if handled {
-		t.Fatal("checkAssetPreflight must accept a non-media asset (N/A media gate)")
+		t.Fatal("assetPreflightEnvelope must accept a non-media asset (N/A media gate)")
 	}
 }
 

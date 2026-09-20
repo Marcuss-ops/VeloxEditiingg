@@ -140,14 +140,14 @@ func SetUsageStats(c *gin.Context, scenes int, totalDurationS float64) {
 // Per-request quota (called by the handler)
 // =====================================================================
 
-// EnforcePerRequestQuota returns nil when both scene count and
-// total duration are within the resolved per-client caps. Cap
-// resolution: per-key override > cfg.M2M default.
+// enforcePerRequestQuota returns nil when both scene count and total duration
+// are within the resolved per-client caps. Cap resolution: per-key override >
+// cfg.M2M default.
 //
-// The handler MUST call this AFTER byte-level idem validation but
-// BEFORE invoking the resolver, so a quota-failed request doesn't
-// touch creator_forwardings. Returns *QuotaError (HTTP 429 in the
-// handler) so the response carries a machine-readable shape.
+// The intake MUST call this AFTER byte-level idem validation but BEFORE
+// invoking the resolver, so a quota-failed request doesn't touch
+// creator_forwardings. Returns *QuotaError (HTTP 429 via quotaErrorEnvelope) so
+// the response carries a machine-readable shape.
 type QuotaError struct {
 	Reason   string
 	Observed float64
@@ -159,9 +159,12 @@ func (e *QuotaError) Error() string {
 		" cap=" + strconv.FormatFloat(e.Cap, 'f', 2, 64)
 }
 
-func EnforcePerRequestQuota(c *gin.Context, req SubmitJobRequest, cfg *config.Config) error {
+// enforcePerRequestQuota takes the resolved M2M key explicitly instead of a
+// gin.Context so the canonical intake core (job_submit_core.go) can enforce the
+// quota without owning a transport. Callers resolve the key once at the HTTP
+// boundary via KeyFromContext.
+func enforcePerRequestQuota(key *m2mkeys.M2MAPIKey, req SubmitJobRequest, cfg *config.Config) error {
 	_ = cfg // cfg is consumed only when key is non-nil
-	key := KeyFromContext(c)
 	if key == nil {
 		// No M2M context: M2M middleware did not run. This is the
 		// shape produced by the `m2mJobsAuthFake` test fixture

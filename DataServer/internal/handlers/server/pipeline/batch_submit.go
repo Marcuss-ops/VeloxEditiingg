@@ -1,12 +1,9 @@
 package pipeline
 
 import (
-	"bufio"
-	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net"
 	"net/http"
 	"strings"
 	"unicode/utf8"
@@ -112,6 +109,8 @@ func (h *Handlers) SubmitJobBatch() gin.HandlerFunc {
 			return
 		}
 
+		identity := batchIntakeIdentity(c)
+
 		results := make([]SubmitJobBatchItemResult, len(batch.Items))
 		seenKeys := make(map[string]int, len(batch.Items))
 		dedupe := newBatchDedupeWindow()
@@ -169,7 +168,7 @@ func (h *Handlers) SubmitJobBatch() gin.HandlerFunc {
 			// A fingerprint computation failure is non-fatal: the item still
 			// goes through the canonical single-job path un-deduped.
 
-			result = h.submitBatchItem(c, index, item)
+			result = h.submitBatchItem(c.Request.Context(), identity, index, item)
 			results[index] = result
 			switch result.Status {
 			case "accepted":
@@ -215,140 +214,129 @@ func (h *Handlers) SubmitJobBatch() gin.HandlerFunc {
 	}
 }
 
-// submitBatchItem invokes the canonical single-job handler with a child of
-// the real request context. The response capture is an internal dispatch
-// adapter, not an httptest context: the child retains the authenticated keys,
-// request context, and route engine from the live batch request.
-func (h *Handlers) submitBatchItem(parent *gin.Context, index int, item SubmitJobRequest) SubmitJobBatchItemResult {
+// batchIntakeIdentity derives the intake identity shared by every item of one
+// batch envelope: the quota key and client id the M2M middleware resolved for
+// the ENVELOPE request, and the `batch` intake source (the plain single-job
+// endpoint stamps `canonical`). Building it once per envelope — instead of
+// cloning a gin.Context per item — is what lets the items share the canonical
+// intake core directly.
+func batchIntakeIdentity(c *gin.Context) intakeIdentity {
+	return intakeIdentity{
+		ClientID:     ClientIDFromContext(c),
+		IntakeSource: creatorflow.IntakeSourceBatch,
+		Quota:        KeyFromContext(c),
+	}
+}
+
+// submitBatchItem runs ONE batch item through the canonical single-job intake
+// core (job_submit_core.go) and projects the transport-neutral outcome into the
+// batch item result.
+//
+// It deliberately does NOT invoke the single-job HTTP handler: before this
+// change each item was re-marshalled to JSON, dispatched through a cloned
+// gin.Context with a synthetic ResponseWriter, and its JSON response parsed
+// back into this result. The batch envelope now shares the intake
+// implementation directly, so there is no HTTP round-trip to keep in sync and
+// the item result is built from the core's typed envelope.
+func (h *Handlers) submitBatchItem(ctx context.Context, identity intakeIdentity, index int, item SubmitJobRequest) SubmitJobBatchItemResult {
 	result := SubmitJobBatchItemResult{
 		Index:          index,
 		IdempotencyKey: item.IdempotencyKey,
 	}
-	body, err := json.Marshal(item)
-	if err != nil {
-		result.Status = "failed"
-		result.Errors = []string{"item_serialization_failed: " + err.Error()}
-		return result
+	return batchItemResultFromOutcome(result, h.submitJobCore(ctx, item, identity))
+}
+
+// batchItemResultFromOutcome projects the canonical intake outcome into the
+// batch item result.
+//
+// Errors are read from the TYPED envelope the core produced, so the batch
+// classification is exactly the single-job classification. The previous
+// implementation parsed the serialized JSON body of a synthetic single-job
+// response (which is why it could not see a typed detail object without
+// re-unmarshalling it).
+func batchItemResultFromOutcome(result SubmitJobBatchItemResult, out intakeResponse) SubmitJobBatchItemResult {
+	if jobID, ok := out.Body["job_id"].(string); ok {
+		result.JobID = jobID
 	}
-
-	response := &batchResponseCapture{header: make(http.Header)}
-	subContext := parent.Copy()
-	subContext.Writer = response
-	subContext.Request = parent.Request.Clone(parent.Request.Context())
-	subContext.Request.Method = http.MethodPost
-	subContext.Request.URL = parent.Request.URL
-	subContext.Request.ContentLength = int64(len(body))
-	subContext.Request.Header = parent.Request.Header.Clone()
-	subContext.Request.Body = io.NopCloser(bytes.NewReader(body))
-	if parent.Keys != nil {
-		subContext.Keys = make(map[any]any, len(parent.Keys))
-		for key, value := range parent.Keys {
-			subContext.Keys[key] = value
-		}
-	}
-	// The batch surface is a distinct intake source from the plain
-	// single-job endpoint: stamp it so the canonical submitter records
-	// `intake_source=batch` for every item.
-	SetIntakeSource(subContext, creatorflow.IntakeSourceBatch)
-
-	h.SubmitJob()(subContext)
-	return batchItemResultFromResponse(result, response.status, response.body.Bytes())
-}
-
-// batchResponseCapture implements gin.ResponseWriter for the internal
-// fan-in dispatch above. It never reaches the network; the batch envelope is
-// the only response written to the real parent writer.
-type batchResponseCapture struct {
-	header      http.Header
-	body        bytes.Buffer
-	status      int
-	wroteHeader bool
-}
-
-func (w *batchResponseCapture) Header() http.Header { return w.header }
-
-func (w *batchResponseCapture) WriteHeader(code int) {
-	if !w.wroteHeader {
-		w.status = code
-		w.wroteHeader = true
-	}
-}
-
-func (w *batchResponseCapture) Write(data []byte) (int, error) {
-	if !w.wroteHeader {
-		w.WriteHeader(http.StatusOK)
-	}
-	return w.body.Write(data)
-}
-
-func (w *batchResponseCapture) WriteString(data string) (int, error) {
-	return w.Write([]byte(data))
-}
-
-func (w *batchResponseCapture) Status() int   { return w.status }
-func (w *batchResponseCapture) Size() int     { return w.body.Len() }
-func (w *batchResponseCapture) Written() bool { return w.wroteHeader }
-func (w *batchResponseCapture) WriteHeaderNow() {
-	if !w.wroteHeader {
-		w.WriteHeader(http.StatusOK)
-	}
-}
-func (w *batchResponseCapture) Flush()                   { w.WriteHeaderNow() }
-func (w *batchResponseCapture) CloseNotify() <-chan bool { return make(chan bool) }
-func (w *batchResponseCapture) Pusher() http.Pusher      { return nil }
-func (w *batchResponseCapture) Hijack() (net.Conn, *bufio.ReadWriter, error) {
-	return nil, nil, fmt.Errorf("batch response capture does not support hijacking")
-}
-
-func batchItemResultFromResponse(result SubmitJobBatchItemResult, statusCode int, body []byte) SubmitJobBatchItemResult {
-	var payload struct {
-		Error   string          `json:"error"`
-		Message string          `json:"message"`
-		JobID   string          `json:"job_id"`
-		Details json.RawMessage `json:"details"`
-	}
-	_ = json.Unmarshal(body, &payload)
-	result.JobID = payload.JobID
 	switch {
-	case statusCode >= 200 && statusCode < 300:
+	case out.Status >= 200 && out.Status < 300:
 		result.Status = "accepted"
-	case statusCode == http.StatusConflict:
+	case out.Status == http.StatusConflict:
 		result.Status = "conflict"
-	case statusCode >= 500:
+	case out.Status >= 500:
 		result.Status = "failed"
 	default:
 		result.Status = "rejected"
 	}
-	if payload.Error != "" {
-		message := payload.Error
-		if payload.Message != "" {
-			message += ": " + payload.Message
+	if code, ok := out.Body["error"].(string); ok && code != "" {
+		message := code
+		if detail, ok := out.Body["message"].(string); ok && detail != "" {
+			message += ": " + detail
 		}
 		result.Errors = append(result.Errors, message)
 	}
-	var details []json.RawMessage
-	if len(payload.Details) > 0 && string(payload.Details) != "null" {
-		if payload.Details[0] == '[' {
-			_ = json.Unmarshal(payload.Details, &details)
-		} else {
-			details = []json.RawMessage{payload.Details}
-		}
-	}
-	for _, detail := range details {
-		var field struct {
-			Path  string `json:"path"`
-			Issue string `json:"issue"`
-		}
-		if json.Unmarshal(detail, &field) == nil && (field.Path != "" || field.Issue != "") {
-			result.Errors = append(result.Errors, field.Path+": "+field.Issue)
-			continue
-		}
-		// Preserve object-shaped details such as quota/idempotency
-		// diagnostics instead of silently dropping reason/observed/cap.
-		result.Errors = append(result.Errors, string(detail))
-	}
+	result.Errors = append(result.Errors, batchDetailErrors(out.Body["details"])...)
 	if result.Status != "accepted" && len(result.Errors) == 0 {
-		result.Errors = []string{fmt.Sprintf("http_status_%d", statusCode)}
+		result.Errors = []string{fmt.Sprintf("http_status_%d", out.Status)}
 	}
 	return result
+}
+
+// batchDetailErrors flattens an envelope `details` value into the batch item's
+// human-readable error lines.
+//
+// `path: issue` covers the {path, issue} diagnostics carried by the validation,
+// enqueue and pre-flight envelopes. Any other shape (e.g. the quota
+// {reason, observed, cap} object) is rendered as its JSON form, which is what
+// the previous JSON-parsing projection produced — object-shaped diagnostics are
+// preserved, never silently dropped.
+func batchDetailErrors(details any) []string {
+	items := batchDetailList(details)
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if field, ok := item.(map[string]interface{}); ok {
+			path, _ := field["path"].(string)
+			issue, _ := field["issue"].(string)
+			if path != "" || issue != "" {
+				out = append(out, path+": "+issue)
+				continue
+			}
+		}
+		if encoded, err := json.Marshal(item); err == nil {
+			out = append(out, string(encoded))
+		}
+	}
+	return out
+}
+
+// batchDetailList normalizes the envelope's `details` value to a slice. It
+// mirrors the two wire shapes the historical parser accepted: an array of
+// diagnostics, or a single object treated as a one-element list. A nil/absent
+// value yields nothing, so the `"details":null` envelopes contribute no error
+// line.
+func batchDetailList(details any) []any {
+	switch typed := details.(type) {
+	case nil:
+		return nil
+	case []any:
+		return typed
+	case []gin.H:
+		out := make([]any, 0, len(typed))
+		for _, item := range typed {
+			out = append(out, map[string]interface{}(item))
+		}
+		return out
+	case []map[string]interface{}:
+		out := make([]any, 0, len(typed))
+		for _, item := range typed {
+			out = append(out, item)
+		}
+		return out
+	case gin.H:
+		return []any{map[string]interface{}(typed)}
+	case map[string]interface{}:
+		return []any{typed}
+	default:
+		return []any{typed}
+	}
 }

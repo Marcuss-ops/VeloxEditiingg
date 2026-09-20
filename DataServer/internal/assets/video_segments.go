@@ -385,14 +385,22 @@ func (s *AssetService) registerPreparedVideoFile(ctx context.Context, preparedPa
 		return nil, fmt.Errorf("promote prepared segment: %w", err)
 	}
 	now := s.clock.Now().UTC().Format(time.RFC3339)
+	// The manifest records the CANONICAL stream identity the segment was
+	// prepared against, so downstream consumers (preflight, plan compiler,
+	// future chunk factory) never re-derive compatibility from a second
+	// authority. The historical `normalization_version:
+	// "video-normalization.v1"` label is deliberately gone: it named the
+	// removed duplicate authority.
 	metadata, _ := json.Marshal(map[string]interface{}{
-		"source_name":           filepath.Base(sourcePath),
-		"start_seconds":         plan.Segment.StartSeconds,
-		"end_seconds":           plan.Segment.EndSeconds,
-		"duration_seconds":      plan.DurationSeconds,
-		"trim_mode":             plan.Mode,
-		"normalized":            plan.RequiresNormalization,
-		"normalization_version": "video-normalization.v1",
+		"source_name":                 filepath.Base(sourcePath),
+		"start_seconds":               plan.Segment.StartSeconds,
+		"end_seconds":                 plan.Segment.EndSeconds,
+		"duration_seconds":            plan.DurationSeconds,
+		"trim_mode":                   plan.Mode,
+		"normalized":                  plan.RequiresNormalization,
+		"canonical_profile_id":        plan.CanonicalProfile.ProfileID,
+		"canonical_stream_profile_id": plan.CanonicalProfile.StreamProfile(),
+		"canonical_profile_version":   plan.CanonicalProfile.Version,
 	})
 	record := AssetRecord{
 		AssetID:         sha256Hex,

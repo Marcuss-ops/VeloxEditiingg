@@ -1,13 +1,22 @@
-// Package pipeline / job_submit_preflight.go — the inline validation
-// helpers extracted from the SubmitJob handler in job_submit.go:
+// Package pipeline / job_submit_preflight.go — the intake pre-flight helpers
+// shared by the single-job surface (job_submit.go) and the batch envelope
+// (batch_submit.go) through the transport-neutral core
+// (job_submit_core.go):
 //
-//   - writeIdempotencyKeyError: canonical 400 envelope for a rejected
+//   - idempotencyKeyErrorEnvelope: canonical 400 envelope for a rejected
 //     idempotency_key (byte-shape violations from ValidateIdempotencyKey).
-//   - checkDeliveryPlanDestinations: the P0 #2 delivery-destination
+//   - assetPreflightEnvelope: the registry/blob + verified-media gate.
+//   - deliveryPlanDestinationEnvelope: the P0 #2 delivery-destination
 //     existence pre-flight (3-state batch status, fail-closed).
+//
+// Each helper RETURNS its (status, body) envelope instead of writing to a
+// gin.Context, so a caller that owns no HTTP response (one batch item) gets the
+// identical outcome without simulating HTTP. The third return value is the
+// "stop the intake" flag: false means the pre-flight passed.
 package pipeline
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -19,13 +28,13 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// writeIdempotencyKeyError writes the canonical 400 envelope for a
+// idempotencyKeyErrorEnvelope builds the canonical 400 envelope for a
 // rejected idempotency_key. A typed *IdempotencyKeyError carries
 // machine-readable reason + diagnostics so the API envelope is
 // actionable. 400 because idempotency_key is a request-level
 // byte-shape issue, distinct from the 422 semantic issues that
 // follow.
-func writeIdempotencyKeyError(c *gin.Context, vErr *IdempotencyKeyError) {
+func idempotencyKeyErrorEnvelope(vErr *IdempotencyKeyError) (int, gin.H) {
 	details := gin.H{"path": "idempotency_key"}
 	if vErr.Reason != "" {
 		details["reason"] = vErr.Reason
@@ -36,12 +45,12 @@ func writeIdempotencyKeyError(c *gin.Context, vErr *IdempotencyKeyError) {
 	if vErr.FieldByteOff != nil {
 		details["byte_offset"] = *vErr.FieldByteOff
 	}
-	c.JSON(http.StatusBadRequest, gin.H{
+	return http.StatusBadRequest, gin.H{
 		"ok":      false,
 		"error":   vErr.Code,
 		"message": vErr.Message,
 		"details": details,
-	})
+	}
 }
 
 // checkAssetPreflight validates canonical velox-asset references against the
@@ -51,32 +60,31 @@ func writeIdempotencyKeyError(c *gin.Context, vErr *IdempotencyKeyError) {
 // one-time probe, which may persist the metadata row) before the job is
 // admitted. External sources such as Drive are not downloaded here; the agent
 // asset route resolves the saved source reference at execution time.
-func checkAssetPreflight(c *gin.Context, h *Handlers, req SubmitJobRequest) bool {
+func assetPreflightEnvelope(ctx context.Context, h *Handlers, req SubmitJobRequest) (int, gin.H, bool) {
 	payload, err := projectWorkerPayload(&req)
 	if err != nil {
 		// The canonical projection is run again by the enqueue path. Do not
 		// turn a projection implementation detail into an asset error here.
-		return false
+		return 0, nil, false
 	}
 	requirements := collectAssetPreflightRequirements(payload)
 	if len(requirements) == 0 {
-		return false
+		return 0, nil, false
 	}
 	if h == nil || h.assetService == nil {
 		// The production composition always wires AssetService. Lightweight
 		// pipeline profiles and legacy test harnesses may intentionally omit
 		// the optional asset registry; their existing enqueue validation remains
 		// authoritative. Production readiness owns the fail-closed wiring gate.
-		return false
+		return 0, nil, false
 	}
-	report, err := h.assetService.Preflight(c.Request.Context(), requirements)
+	report, err := h.assetService.Preflight(ctx, requirements)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		return http.StatusInternalServerError, gin.H{
 			"ok":      false,
 			"error":   "asset_preflight_unavailable",
 			"message": err.Error(),
-		})
-		return true
+		}, true
 	}
 	var details []gin.H
 	for _, item := range report.Items {
@@ -94,16 +102,15 @@ func checkAssetPreflight(c *gin.Context, h *Handlers, req SubmitJobRequest) bool
 		})
 	}
 	if len(details) == 0 {
-		return false
+		return 0, nil, false
 	}
-	c.JSON(http.StatusUnprocessableEntity, gin.H{
+	return http.StatusUnprocessableEntity, gin.H{
 		"ok":      false,
 		"error":   "asset_preflight_failed",
 		"message": "one or more assets are unavailable or failed integrity validation",
 		"summary": report,
 		"details": details,
-	})
-	return true
+	}, true
 }
 
 func collectAssetPreflightRequirements(payload map[string]interface{}) []voiceoverassets.AssetPreflightRequirement {
@@ -210,22 +217,22 @@ func mergeAssetPreflightRequirement(dst map[string]voiceoverassets.AssetPrefligh
 // shape used by enqueue's *validationError). Fail-closed on store
 // failure (500 store_failure).
 //
-// Returns true when the handler must return early because a response
-// was already written (500 store_failure or 422 invalid_payload);
-// false when the plan is empty or all destinations resolved to ENABLED.
+// Returns (status, body, true) when the intake must stop because the
+// destination pre-flight failed (500 store_failure or 422 invalid_payload);
+// (0, nil, false) when the plan is empty or all destinations resolved to
+// ENABLED.
 const localFallbackDestinationID = "local-fallback"
 
-func checkDeliveryPlanDestinations(c *gin.Context, h *Handlers, req *SubmitJobRequest) bool {
+func deliveryPlanDestinationEnvelope(ctx context.Context, h *Handlers, req *SubmitJobRequest) (int, gin.H, bool) {
 	if req == nil || len(req.DeliveryPlan) == 0 {
-		return false
+		return 0, nil, false
 	}
 	if h.store == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		return http.StatusInternalServerError, gin.H{
 			"ok":      false,
 			"error":   "store_failure",
 			"message": "delivery_plan validation requires a configured store",
-		})
-		return true
+		}, true
 	}
 	ids := make([]string, 0, len(req.DeliveryPlan))
 	for _, d := range req.DeliveryPlan {
@@ -234,16 +241,15 @@ func checkDeliveryPlanDestinations(c *gin.Context, h *Handlers, req *SubmitJobRe
 		}
 	}
 	if len(ids) == 0 {
-		return false
+		return 0, nil, false
 	}
-	statuses, qerr := h.store.Delivery().BatchDeliveryDestinationsStatus(c.Request.Context(), ids)
+	statuses, qerr := h.store.Delivery().BatchDeliveryDestinationsStatus(ctx, ids)
 	if qerr != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		return http.StatusInternalServerError, gin.H{
 			"ok":      false,
 			"error":   "store_failure",
 			"message": "failed to resolve delivery destinations: " + qerr.Error(),
-		})
-		return true
+		}, true
 	}
 	var destDetails []gin.H
 	for i, d := range req.DeliveryPlan {
@@ -280,15 +286,14 @@ func checkDeliveryPlanDestinations(c *gin.Context, h *Handlers, req *SubmitJobRe
 		}
 	}
 	if len(destDetails) > 0 {
-		c.JSON(http.StatusUnprocessableEntity, gin.H{
+		return http.StatusUnprocessableEntity, gin.H{
 			"ok":      false,
 			"error":   "invalid_payload",
 			"message": fmt.Sprintf("request body has %d validation failure(s) (see details)", len(destDetails)),
 			"details": destDetails,
-		})
-		return true
+		}, true
 	}
-	return false
+	return 0, nil, false
 }
 
 // deliveryPlanRequestsLocalFallback is opt-in per delivery entry. This keeps

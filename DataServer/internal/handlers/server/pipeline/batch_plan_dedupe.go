@@ -56,19 +56,19 @@ import (
 // (same manifest = same plan).
 func BatchItemFingerprint(item SubmitJobRequest) (string, error) {
 	identity := struct {
-		JobType         string                 `json:"job_type"`
-		TemplateID      string                 `json:"template_id"`
-		TemplateVersion int                    `json:"template_version"`
-		Output          *SubmitOutput          `json:"output,omitempty"`
-		ScriptText      string                 `json:"script_text"`
-		AudioURL        string                 `json:"audio_url"`
-		CopyOnly        bool                   `json:"copy_only"`
-		CompiledPlan    string                 `json:"compiled_render_plan_sha256,omitempty"`
-		Manifest        *SubmitManifestRef     `json:"manifest_ref,omitempty"`
-		Spec            map[string]interface{} `json:"spec,omitempty"`
-		Scenes          []SubmitScene          `json:"scenes"`
-		Layers          []SubmitLayer          `json:"layers,omitempty"`
-		Overlays        []SubmitOverlay        `json:"overlays,omitempty"`
+		JobType         string                    `json:"job_type"`
+		TemplateID      string                    `json:"template_id"`
+		TemplateVersion int                       `json:"template_version"`
+		Output          *SubmitOutput             `json:"output,omitempty"`
+		ScriptText      string                    `json:"script_text"`
+		AudioURL        string                    `json:"audio_url"`
+		CopyOnly        bool                      `json:"copy_only"`
+		CompiledPlan    string                    `json:"compiled_render_plan_sha256,omitempty"`
+		Manifest        *SubmitManifestRef        `json:"manifest_ref,omitempty"`
+		Spec            map[string]interface{}    `json:"spec,omitempty"`
+		Scenes          []SubmitScene             `json:"scenes"`
+		Layers          []SubmitLayer             `json:"layers,omitempty"`
+		Overlays        []SubmitOverlay           `json:"overlays,omitempty"`
 		Replacements    []SubmitVisualReplacement `json:"visual_replacements,omitempty"`
 	}{
 		JobType:         item.JobType,

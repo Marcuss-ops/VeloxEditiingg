@@ -203,20 +203,24 @@ func (r *readinessStubRepo) AreDependenciesSatisfied(_ context.Context, deps []s
 func (r *readinessStubRepo) GetByJobID(context.Context, string) (*Task, error) {
 	panic("readinessStubRepo.GetByJobID: not used")
 }
-func (r *readinessStubRepo) Create(context.Context, *Task) error            { panic("not used") }
+func (r *readinessStubRepo) Create(context.Context, *Task) error                  { panic("not used") }
 func (r *readinessStubRepo) SetDependsOn(context.Context, string, []string) error { panic("not used") }
-func (r *readinessStubRepo) Lease(context.Context, string, string, string) error { panic("not used") }
+func (r *readinessStubRepo) Lease(context.Context, string, string, string) error  { panic("not used") }
 func (r *readinessStubRepo) ClaimNextReadyTask(context.Context, string, string) (*TaskWithSpec, error) {
 	panic("not used")
 }
 func (r *readinessStubRepo) ClaimNextWithAttemptAtomic(context.Context, string, string) (*TaskWithSpec, *taskattempts.TaskAttempt, error) {
 	panic("not used")
 }
-func (r *readinessStubRepo) ReleaseLease(context.Context, string, string, string) error { panic("not used") }
-func (r *readinessStubRepo) Start(context.Context, string, string, string, int, int) error { panic("not used") }
+func (r *readinessStubRepo) ReleaseLease(context.Context, string, string, string) error {
+	panic("not used")
+}
+func (r *readinessStubRepo) Start(context.Context, string, string, string, int, int) error {
+	panic("not used")
+}
 func (r *readinessStubRepo) Fail(context.Context, string, string, int) error { panic("not used") }
-func (r *readinessStubRepo) IncrementAttempt(context.Context, string) error { panic("not used") }
-func (r *readinessStubRepo) Delete(context.Context, string) error { panic("not used") }
+func (r *readinessStubRepo) IncrementAttempt(context.Context, string) error  { panic("not used") }
+func (r *readinessStubRepo) Delete(context.Context, string) error            { panic("not used") }
 func (r *readinessStubRepo) RequeueExpiredLeases(context.Context, string, int) ([]RequeueCandidate, error) {
 	panic("not used")
 }

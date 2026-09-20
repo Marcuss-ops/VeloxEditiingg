@@ -172,16 +172,26 @@ func TestManager_CoalescedRequestHook(t *testing.T) {
 }
 
 // TestManager_25Requests12AssetsSingleFlight pins the cold-wave contract used
-// by the performance baseline: 25 logical requests for 12 assets produce only
-// 12 physical transfers, while the 13 coalesced waiters are measurable as
-// avoided duplicate bytes.
+// by the performance baseline: 25 logical requests for 12 assets produce
+// exactly 12 physical upstream transfers and 12 assets' worth of physical
+// bytes, while the 13 coalesced waiters are measurable as AVOIDED bytes.
+//
+// Metric semantics (the reason this test asserts both sides):
+// `duplicate_download_bytes` / OnCoalescedRequest counts the bytes a coalesced
+// waiter WOULD have downloaded, i.e. bytes the singleflight SAVED. A non-zero
+// value therefore means "the dedupe avoided these bytes", never "these bytes
+// were physically transferred twice". The physical side is pinned separately
+// (upstreamBytes == one copy of each unique asset), so the two halves of the
+// acceptance can no longer be confused for each other.
 func TestManager_25Requests12AssetsSingleFlight(t *testing.T) {
 	release := make(chan struct{})
 	var upstream atomic.Int32
-	var duplicateBytes atomic.Int64
+	var upstreamBytes atomic.Int64
+	var coalescedAvoidedBytes atomic.Int64
 	tf := &fakeTransferer{
 		transfer: func(ctx context.Context, _ context.Context, req DownloadRequest, _ func(int64)) (TransferResult, error) {
 			upstream.Add(1)
+			upstreamBytes.Add(req.SizeBytes)
 			select {
 			case <-release:
 			case <-ctx.Done():
@@ -193,7 +203,7 @@ func TestManager_25Requests12AssetsSingleFlight(t *testing.T) {
 	m := NewManager(Config{
 		Concurrency: 12,
 		OnCoalescedRequest: func(bytes int64, _ context.Context) {
-			duplicateBytes.Add(bytes)
+			coalescedAvoidedBytes.Add(bytes)
 		},
 	}, tf)
 	t.Cleanup(m.Close)
@@ -217,7 +227,7 @@ func TestManager_25Requests12AssetsSingleFlight(t *testing.T) {
 		return upstream.Load() == assetCount
 	})
 	waitFor(t, "13 coalesced waiters", func() bool {
-		return duplicateBytes.Load() == 13*assetSize
+		return coalescedAvoidedBytes.Load() == 13*assetSize
 	})
 	close(release)
 	for i := 0; i < requests; i++ {
@@ -225,11 +235,26 @@ func TestManager_25Requests12AssetsSingleFlight(t *testing.T) {
 			t.Fatalf("resolve[%d]: %v", i, err)
 		}
 	}
+
+	// Physical side: exactly 12 upstream requests and exactly one copy of each
+	// unique asset's bytes. This is the assertion that must hold for the
+	// singleflight to be certified; `duplicate_download_bytes=0` alone is NOT
+	// the acceptance criterion (a value > 0 is expected and healthy when
+	// waiters are coalesced).
 	if got := upstream.Load(); got != assetCount {
-		t.Fatalf("physical transfers = %d, want %d", got, assetCount)
+		t.Fatalf("physical upstream transfers = %d, want %d", got, assetCount)
 	}
-	if got := duplicateBytes.Load(); got != 13*assetSize {
-		t.Fatalf("duplicate bytes = %d, want %d", got, 13*assetSize)
+	if got := upstreamBytes.Load(); got != assetCount*assetSize {
+		t.Fatalf("physical upstream bytes = %d, want %d (each unique asset once)", got, assetCount*assetSize)
+	}
+
+	// Avoided side: 13 waiters were coalesced, and each contributed the bytes
+	// the dedupe saved. Those bytes were never transferred upstream.
+	if got := coalescedAvoidedBytes.Load(); got != 13*assetSize {
+		t.Fatalf("coalesced avoided bytes = %d, want %d", got, 13*assetSize)
+	}
+	if got := m.LatestOperational().CoalescedRequestsTotal; got != 13 {
+		t.Fatalf("CoalescedRequestsTotal = %d, want 13", got)
 	}
 }
 

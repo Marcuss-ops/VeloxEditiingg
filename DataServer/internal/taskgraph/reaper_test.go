@@ -65,8 +65,8 @@ func (c *countingRepo) AreDependenciesSatisfied(_ context.Context, _ []string) (
 	panic("not used")
 }
 func (c *countingRepo) SetDependsOn(context.Context, string, []string) error { panic("not used") }
-func (c *countingRepo) Fail(_ context.Context, _, _ string, _ int) error   { panic("not used") }
-func (c *countingRepo) IncrementAttempt(_ context.Context, _ string) error { panic("not used") }
+func (c *countingRepo) Fail(_ context.Context, _, _ string, _ int) error     { panic("not used") }
+func (c *countingRepo) IncrementAttempt(_ context.Context, _ string) error   { panic("not used") }
 func (c *countingRepo) TransitionTaskToTerminalAtomic(
 	_ context.Context, _, _, _ string, _ Status,
 	_ taskattempts.AttemptStatus, _, _ string,

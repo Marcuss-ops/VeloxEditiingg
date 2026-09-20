@@ -378,5 +378,178 @@ done <<<"$foundation_pkgs"
 [[ "$foundation_violation" -eq 0 ]] \
   || fail "foundation-layer package imports API/application layer or net/http — breaks isolated testing"
 
+# 14. Single canonical video-profile authority (P0 media-profile unification).
+#
+# shared/contract.CanonicalVideoProfileV1 owns the encoded-stream IDENTITY:
+# dimensions, frame rate, pixel format, codec profile/level, GOP, B-frames,
+# closed GOP, time base. shared/contract.PreparationQualityPolicy owns ONLY
+# the quality knobs (bitrate / VBV / audio), because compatibility is an
+# identity while bitrate is a tuning choice.
+#
+# The drift this rule retires: DataServer/internal/assets carried a
+# trimmer-local `VideoNormalization` declaring 1920x1080 @ 30 fps while the
+# canonical profile promised 1920x1080 @ 24 fps — two owners of the same
+# identity. That makes content-addressed reuse (W5) unsound, because the same
+# input could produce two different "canonical" streams, and it silently broke
+# the packet-copy fast path that assumes a single stream identity.
+#
+# Scope: production Go only (_test.go is exempt because the anti-drift test in
+# internal/assets deliberately asserts the exact literal ffmpeg arguments, and
+# a literal there is the pin, not the drift). The literal-argument patterns are
+# scoped to DataServer/internal + shared (the master preparation surface);
+# RemoteCodex/.../cmd/velox-*-fixture-gen are synthetic TEST-fixture producers
+# with deliberately non-canonical shapes (e.g. timescale 15360) and are NOT
+# part of the canonical preparation path.
+vp_violations=0
+
+# 14a. The removed duplicate authority symbol must not reappear in production
+# Go. Documenting comments that name it historically are tolerated.
+vp_symbol_hits="$(
+  grep -RInE 'VideoNormalization' \
+    --include='*.go' --exclude='*_test.go' \
+    . 2>/dev/null \
+    | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(//|/\*|\*)' \
+    || true
+)"
+if [[ -n "$vp_symbol_hits" ]]; then
+  printf 'VideoNormalization must not reappear: compatibility belongs to shared/contract.CanonicalVideoProfileV1:\n%s\n\n' "$vp_symbol_hits" >&2
+  vp_violations=$((vp_violations + 1))
+fi
+
+# 14b. No literal compatibility values in video filter strings. A literal
+# `fps=30/1`, `scale=1920:1080` or `pad=1920:1080` is a second authority; the
+# filter must interpolate the profile (canonicalScaleFilter).
+vp_filter_hits="$(
+  grep -RInE 'fps=[0-9]+(/[0-9]+)?|scale=[0-9]+:[0-9]+|pad=[0-9]+:[0-9]+' \
+    DataServer/internal shared \
+    --include='*.go' --exclude='*_test.go' \
+    2>/dev/null \
+    | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(//|/\*|\*)' \
+    || true
+)"
+if [[ -n "$vp_filter_hits" ]]; then
+  printf 'literal ffmpeg filter compatibility values detected — derive fps/scale/pad from CanonicalVideoProfileV1:\n%s\n\n' "$vp_filter_hits" >&2
+  vp_violations=$((vp_violations + 1))
+fi
+
+# 14c. The pinned H.264 arguments (profile / level / GOP / B-frames / x264
+# params) must be built from the profile fields, never spelled out as literals.
+vp_arg_hits="$(
+  grep -RInE '\"-g\",[[:space:]]*\"[0-9]|\"-bf\",[[:space:]]*\"[0-9]|\"-profile:v\",[[:space:]]*\"|\"-level:v\",[[:space:]]*\"[0-9]|\"-x264-params\",[[:space:]]*\"' \
+    DataServer/internal shared \
+    --include='*.go' --exclude='*_test.go' \
+    2>/dev/null \
+    | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(//|/\*|\*)' \
+    || true
+)"
+if [[ -n "$vp_arg_hits" ]]; then
+  printf 'literal H.264 pinning arguments detected — read profile/level/GOP/B-frames from CanonicalVideoProfileV1:\n%s\n\n' "$vp_arg_hits" >&2
+  vp_violations=$((vp_violations + 1))
+fi
+
+# 14d. The removed manifest label must not come back: the asset manifest
+# records canonical_profile_id / canonical_stream_profile_id instead.
+vp_manifest_hits="$(
+  grep -RIn 'normalization_version' \
+    DataServer internal shared \
+    --include='*.go' --exclude='*_test.go' \
+    2>/dev/null \
+    | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(//|/\*|\*)' \
+    || true
+)"
+if [[ -n "$vp_manifest_hits" ]]; then
+  printf 'normalization_version manifest label detected — record the canonical profile identity instead:\n%s\n\n' "$vp_manifest_hits" >&2
+  vp_violations=$((vp_violations + 1))
+fi
+
+# 14e. The single-owner pair must stay declared: the canonical profile and the
+# quality policy are the ONLY two video-preparation authorities, and the
+# quality policy must not grow a compatibility field (pinned at runtime by
+# TestPreparationQualityPolicyCarriesNoCompatibilityFields).
+[[ -f shared/contract/canonical_video_profile.go ]] \
+  || fail "shared/contract/canonical_video_profile.go is missing (canonical video-profile authority)"
+[[ -f shared/contract/preparation_quality_policy.go ]] \
+  || fail "shared/contract/preparation_quality_policy.go is missing (documented quality/compatibility split)"
+grep -qE '^type[[:space:]]+PreparationQualityPolicy[[:space:]]+struct' shared/contract/preparation_quality_policy.go \
+  || fail "shared/contract.PreparationQualityPolicy is missing"
+grep -qE '^type[[:space:]]+CanonicalVideoProfileV1[[:space:]]+struct' shared/contract/canonical_video_profile.go \
+  || fail "shared/contract.CanonicalVideoProfileV1 is missing"
+
+[[ "$vp_violations" -eq 0 ]] \
+  || fail "single video-profile authority violated — see above"
+
+# 15. No test-harness HTTP types in the production runtime.
+#
+# The batch intake endpoint (POST /api/v1/jobs/batch) previously reused the
+# canonical single-job handler by building an httptest.NewRecorder() +
+# gin.CreateTestContext() per item — i.e. the production runtime simulated
+# HTTP in order to reach its own application logic. It now dispatches through
+# an internal adapter (batchResponseCapture over a copied gin.Context).
+#
+# This rule keeps the test harness out of production: importing
+# net/http/httptest, or calling gin.CreateTestContext, in a non-test Go file
+# means application logic is once again being reached by faking the HTTP
+# layer instead of through a canonical seam. Documenting comments are
+# tolerated (mirrors rule 7's comment filter).
+httptest_hits="$(
+  grep -RInE '^[[:space:]]*([a-zA-Z_][a-zA-Z0-9_]*[[:space:]]+)?"net/http/httptest"|gin[.]CreateTestContext[(]' \
+    DataServer --include='*.go' --exclude='*_test.go' \
+    2>/dev/null \
+    | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(//|/\*|\*)' \
+    || true
+)"
+if [[ -n "$httptest_hits" ]]; then
+  printf 'test-harness HTTP types in production code — reach application logic through its canonical seam, not by faking HTTP:\n%s\n\n' "$httptest_hits" >&2
+  fail "production runtime must not import net/http/httptest or call gin.CreateTestContext"
+fi
+
+# 16. The batch intake envelope must call the intake CORE, not replay the
+# single-job HTTP handler.
+#
+# POST /api/v1/jobs/batch reaches the canonical intake through
+# submitJobCore (internal/handlers/server/pipeline/job_submit_core.go), the same
+# transport-neutral function the single-job adapter (POST /api/v1/jobs) uses.
+# The retired shape — "clone the gin.Context, point a synthetic ResponseWriter
+# at it, invoke SubmitJob(), then parse the JSON response back" — made the batch
+# surface depend on the HTTP serialization round-trip of its own handler and put
+# the real application seam (creatorflow.CanonicalJobSubmitter) behind a fake
+# HTTP exchange. Re-introducing it is a regression even without httptest.
+#
+# The pattern is the invocation `SubmitJob()(` (the route registration and the
+# SubmitJobBatch declaration do not match it), scoped to the batch file so the
+# single-job adapter is unaffected.
+batch_replay_hits="$(
+  grep -RHInE 'SubmitJob\(\)\(' \
+    DataServer/internal/handlers/server/pipeline/batch_submit.go \
+    2>/dev/null \
+    | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(//|/\*|\*)' \
+    || true
+)"
+if [[ -n "$batch_replay_hits" ]]; then
+  printf 'batch intake replays the single-job HTTP handler — call submitJobCore instead:\n%s\n\n' "$batch_replay_hits" >&2
+  fail "POST /api/v1/jobs/batch must dispatch through the intake core, not by invoking the single-job handler"
+fi
+
+# 16b. The intake core must stay transport-neutral: it must not write to a
+# gin.Context (which would re-couple it to one surface's HTTP response) and it
+# must not be bypassed by a second submitter invocation from the HTTP layer.
+if grep -qE 'c[.]JSON|WriteHeader|c[.]Set[(]' DataServer/internal/handlers/server/pipeline/job_submit_core.go 2>/dev/null; then
+  printf 'intake core writes to a gin.Context — it must return a transport-neutral outcome:\n' >&2
+  grep -nE 'c[.]JSON|WriteHeader|c[.]Set[(]' DataServer/internal/handlers/server/pipeline/job_submit_core.go >&2 || true
+  fail "job_submit_core.go must not touch a gin.Context"
+fi
+# Comment-aware: the core's doc comment legitimately explains WHY it holds no
+# gin.Context dependency (that explanation is the point); only real code is a
+# violation.
+core_gin_hits="$(
+  grep -RHInE 'gin[.]Context' DataServer/internal/handlers/server/pipeline/job_submit_core.go 2>/dev/null \
+    | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(//|/\*|\*)' \
+    || true
+)"
+if [[ -n "$core_gin_hits" ]]; then
+  printf 'intake core references gin.Context — it must stay transport-neutral:\n%s\n\n' "$core_gin_hits" >&2
+  fail "job_submit_core.go must not depend on gin.Context (transport-neutral core)"
+fi
+
 
 echo "check-architecture: OK"

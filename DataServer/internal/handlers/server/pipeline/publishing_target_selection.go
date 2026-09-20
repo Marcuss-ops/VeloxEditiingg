@@ -103,7 +103,12 @@ func (h *Handlers) publishingPlatform(ctx context.Context, target *SubmitPublish
 	}
 }
 
-func writePublishingTargetError(c *gin.Context, err error) {
+// publishingTargetErrorEnvelope maps a publishing-target resolution failure to
+// its (status, envelope, headers). It returns headers instead of writing them
+// so a surface without an HTTP response (one batch item) can reuse the mapping;
+// the single-job adapter copies them onto the response.
+func publishingTargetErrorEnvelope(err error) (int, gin.H, http.Header) {
+	header := http.Header{}
 	status := http.StatusUnprocessableEntity
 	code := "invalid_payload"
 	switch {
@@ -131,7 +136,7 @@ func writePublishingTargetError(c *gin.Context, err error) {
 					if secs < 1 {
 						secs = 1
 					}
-					c.Header("Retry-After", strconv.FormatInt(secs, 10))
+					header.Set("Retry-After", strconv.FormatInt(secs, 10))
 				}
 			}
 		} else {
@@ -139,12 +144,12 @@ func writePublishingTargetError(c *gin.Context, err error) {
 		}
 	}
 	detailCode := publishingTargetErrorCode(err)
-	c.JSON(status, gin.H{
+	return status, gin.H{
 		"ok":      false,
 		"error":   code,
 		"message": err.Error(),
 		"details": []gin.H{{"path": "publishing_target", "issue": detailCode}},
-	})
+	}, header
 }
 
 func publishingTargetErrorCode(err error) string {

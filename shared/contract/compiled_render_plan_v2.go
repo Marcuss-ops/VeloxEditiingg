@@ -59,10 +59,10 @@ type OutputContractV2 struct {
 	// b_frames is required by the native canonical-profile parser even when
 	// the canonical value is zero; omitting it would make Go's canonical JSON
 	// differ from the C++ wire contract.
-	BFrames      int    `json:"b_frames"`
-	ClosedGOP    bool   `json:"closed_gop,omitempty"`
-	TimeBaseNum  int    `json:"time_base_num,omitempty"`
-	TimeBaseDen  int    `json:"time_base_den,omitempty"`
+	BFrames     int  `json:"b_frames"`
+	ClosedGOP   bool `json:"closed_gop,omitempty"`
+	TimeBaseNum int  `json:"time_base_num,omitempty"`
+	TimeBaseDen int  `json:"time_base_den,omitempty"`
 }
 
 // FinalAudioV2 identifies the one already-finalized audio source for the

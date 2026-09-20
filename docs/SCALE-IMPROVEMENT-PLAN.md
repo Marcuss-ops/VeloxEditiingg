@@ -94,12 +94,29 @@ Aggregate CPU at 100k/h: 27.8 × 8.8 s = ~245 core-seconds/s → ~336 cores acro
   20 GiB prefetch byte budget. The existing FutureAssetPlan + singleflight
   resolver makes the next job a cache hit when the plan completes in time.
 - Remaining evidence only: run the v17 canary with the hot set, then require
-  `cache_miss_bytes=0`, `downloaded_during_attempt=0`, and
-  `duplicate_download_bytes=0` in inspect JSON. The repository certification
-  tests already cover cold/warm/prefetch origin classification.
-- Dedupe the 25-requests-for-12-assets waste (singleflight per cache key;
-  `duplicate_download_bytes` column already exists to prove it).
-- **Evidence:** 0 miss on fresh worker after warm; duplicate_download_bytes → 0.
+  `cache_miss_bytes=0` and `downloaded_during_attempt=0` in inspect JSON. The
+  repository certification tests already cover cold/warm/prefetch origin
+  classification.
+- **LANDED** — singleflight dedupe per cache key. The 25-requests-for-12-assets
+  waste is coalesced: 25 logical `Resolve()` calls collapse to 12 physical
+  upstream transfers and 13 coalesced waiters, pinned by
+  `TestManager_25Requests12AssetsSingleFlight`.
+- **Metric semantics (important):** `duplicate_download_bytes` is NOT a
+  waste counter to drive to zero — it is the bytes the dedupe AVOIDED. The
+  acceptance criterion is the PHYSICAL side:
+
+  ```
+  physical upstream transfers == number of unique assets (12)
+  physical upstream bytes     == one copy of each unique asset
+  coalesced waiters            == duplicate requests (13)
+  coalesced_avoided_bytes      == waiters that did not hit upstream
+  ```
+
+  A non-zero `duplicate_download_bytes` is therefore expected and healthy
+  whenever concurrent waiters exist; only physical replication of the same
+  asset would be a regression.
+- **Evidence:** pinned test above (`-count=1` and under `-race`); canary
+  inspection of `cache_miss_bytes=0` after warm.
 
 ### W4 — Zero-disk streaming concat → multipart upload *(Carmack)*
 - LANDED (current tranche): the worker sends an authenticated upload intent on

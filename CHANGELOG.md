@@ -1,5 +1,142 @@
 ## [Unreleased] - 2026-09-18
 
+### P0 — Single canonical video-profile authority (media profile unification)
+
+Removes the second owner of video compatibility. Before this change the
+master had two authorities: `shared/contract.CanonicalVideoProfileV1`
+(1920x1080 @ **24 fps**, GOP 48, B-frames 0, closed GOP, timebase 1/90000)
+and a trimmer-local `VideoNormalization` (1920x1080 @ **30 fps**). With two
+owners, "the same input produces the same canonical stream" is not true, so
+content-addressed reuse (W5) and the packet-copy fast path rest on an
+identity nobody could certify.
+
+- `shared/contract.CanonicalVideoProfileV1` is now the ONLY owner of the
+  encoded-stream identity; `DataServer/internal/assets.VideoNormalization`
+  and its 30 fps default are deleted.
+- New `shared/contract.PreparationQualityPolicy` separates QUALITY (bitrate
+  / VBV / audio) from COMPATIBILITY: bitrate may move without registering a
+  new stream identity, while fps/GOP/profile/timebase may not. The type is
+  structurally pinned to quality knobs only by
+  `TestPreparationQualityPolicyCarriesNoCompatibilityFields`.
+- `VideoTrimmer` now holds `{profile, quality}` and derives every ffmpeg
+  argument from them. The encoder command pins the full H.264 identity:
+  `-profile:v high -level:v 4.0 -g 48 -bf 0 -sc_threshold 0
+  -x264-params scenecut=0:open-gop=0:keyint=48:min-keyint=48
+  -video_track_timescale 90000`, plus a profile-derived
+  `fps=<num>/<den>` filter (no literal frame rate anywhere).
+- Stream copy is now selected only against a CERTIFIED canonical probe:
+  `matchesCanonicalProfile` compares every compatibility field to the
+  profile and additionally certifies the keyframe cadence
+  (`canonicalGOPAligned`), so a source encoded with a foreign GOP (GOP 24 or
+  60 at 24 fps) is prepared once into the canonical identity instead of
+  being packet-copied into an uncertified stream.
+- The registered segment manifest records the identity it was prepared
+  against (`canonical_profile_id`, `canonical_stream_profile_id`,
+  `canonical_profile_version`) and the removed
+  `normalization_version:"video-normalization.v1"` label is gone.
+- Evidence: `TestVideoPreparationUsesCanonicalStreamProfile`
+  (`internal/assets`) asserts the trimmer's profile fields and the exact
+  pinning arguments; `TestCanonicalGOPAlignedRejectsForeignCadence` covers
+  the GOP certification. Full-module gate green
+  (`scripts/ci/pre-removal-verify.sh`: vet 0 / build 0 / test 0).
+- Enforcement: `scripts/ci/check-architecture.sh` rule 14 forbids the removed
+  `VideoNormalization` symbol, literal `fps=`/`scale=`/`pad=` values, literal
+  `-profile:v`/`-level:v`/`-g`/`-bf`/`-x264-params` arguments, and the removed
+  `normalization_version` label in production code (comment-aware).
+
+### Fixed — pre-existing red canonical gate (`make verify`)
+
+`make verify` could not pass on `main`, which made every later guard (including
+the new rule 14) unreachable in CI. Two pre-existing failures were repaired:
+
+- `RemoteCodex/BUILD_INFO.json` was stuck at `v1.4.21` while `VERSION.txt` was
+  `v1.4.38`, failing `check-architecture.sh` rule 9. Regenerated with the
+  repo-owned `./scripts/generate-build-info.sh`.
+- Five files carried committed `gofmt` drift, so `verify.sh`'s documented
+  `gofmt -w .` + `git diff --exit-code` step failed for `DataServer` and
+  `shared`. Reformatted (`internal/handlers/server/pipeline/batch_plan_dedupe.go`,
+  `intake_types.go`, `internal/taskgraph/dependencies_test.go`,
+  `reaper_test.go`, `shared/contract/compiled_render_plan_v2.go`) — formatting
+  only, no semantic change.
+
+### Verified — download singleflight acceptance and metric semantics
+
+- The cold-wave singleflight was already implemented; `duplicate_download_bytes`
+  is the bytes the dedupe AVOIDED, not bytes physically transferred twice.
+  `TestManager_25Requests12AssetsSingleFlight` now pins BOTH halves: exactly
+  12 physical upstream transfers for 25 requests, physical upstream bytes ==
+  one copy of each unique asset, 13 coalesced waiters,
+  `CoalescedRequestsTotal == 13`. A non-zero `duplicate_download_bytes` is
+  expected and healthy.
+- `docs/metrics-catalog.md` (L3) and `docs/SCALE-IMPROVEMENT-PLAN.md` (W3) now
+  state the physical-side acceptance instead of `duplicate_download_bytes → 0`.
+- Enforcement: `scripts/ci/check-architecture.sh` rule 15 forbids
+  `net/http/httptest` imports and `gin.CreateTestContext` in production Go, so
+  the batch intake path cannot go back to simulating HTTP in the runtime.
+
+### P1 — Batch intake dispatches through the canonical intake core (no HTTP replay)
+
+`POST /api/v1/jobs/batch` reached the intake logic by REBUILDING an HTTP
+exchange per item: it re-marshalled each `SubmitJobRequest` to JSON, cloned the
+`gin.Context`, pointed a synthetic `gin.ResponseWriter` at the clone, invoked
+the single-job handler, and parsed its JSON response body back into a batch item
+result. The real application seam (`creatorflow.CanonicalJobSubmitter`) was
+reachable only by simulating HTTP, so the batch surface depended on the
+serialization round-trip of its own handler.
+
+- New `internal/handlers/server/pipeline/job_submit_core.go` owns the whole
+  canonical intake (byte-level validation → recipe/assembly normalization →
+  request validation → manifest-ref / publishing-target resolution → delivery /
+  asset / SSRF / quota pre-flight → canonical projection →
+  `CanonicalJobSubmitter` → response envelope) and returns a transport-neutral
+  `intakeResponse{Status, Body, Location, Header, Usage}`.
+- `SubmitJob` (POST /api/v1/jobs) is now a thin adapter — strict decode →
+  `submitJobCore` → write status/envelope/Location/Retry-After — and performs no
+  validation or resolution of its own.
+- `submitBatchItem` calls the same core per item and projects the TYPED envelope
+  into the batch item result, so there is no marshal/unmarshal round-trip. The
+  `batchResponseCapture` gin.ResponseWriter adapter and the per-item context
+  clone are deleted.
+- Pre-flight helpers RETURN `(status, envelope[, headers])` instead of writing
+  to a `gin.Context`: `idempotencyKeyErrorEnvelope`, `assetPreflightEnvelope`,
+  `deliveryPlanDestinationEnvelope`, `publishingTargetErrorEnvelope`,
+  `ssrfValidationErrorEnvelope`, `quotaErrorEnvelope`.
+- `creatorflow.WriteResolverError` is now a thin gin adapter over the new pure
+  `creatorflow.ResolverErrorEnvelope(err) (int, gin.H)`, so the single and batch
+  surfaces classify every resolver error through ONE mapper.
+- Intake-source attribution is explicit instead of context-carried: the single
+  surface passes `canonical`, `batchIntakeIdentity` passes `batch`. This removes
+  the batch's need to stamp a CLONED context, which is why the now-unreferenced
+  `SetIntakeSource` / `IntakeSourceFromContext` and the gin key they used are
+  gone.
+- Removed symbols were INTERNAL-package symbols with zero callers (ADR 0008 §(b)
+  point 1 fails both conditions: no telemetry/callers, and `velox-server/internal/…`
+  is not externally reachable), so they were fully removed rather than
+  soft-deprecated; the full-module pre-removal gate is green
+  (`scripts/ci/pre-removal-verify.sh`: vet 0 / build 0 / test 0).
+- Semantics are unchanged: identical validation order and status codes, identical
+  error codes/messages/details (including the historical `"details":null` keys),
+  identical intake-source telemetry and accept-log attribution. Evidence: the
+  full single-job + batch e2e suites pass with `-count=1` and under `-race`.
+- **FIXED (latent surface divergence).** The JSON round-trip was lossy for
+  `SubmitScene.StockAssets` — the internal-only canonical stock POOL
+  (`json:"-"`) derived by `NormalizeCanonicalRecipe` from a recipe whose `stock`
+  is an ARRAY. The batch path re-serialized the already-normalized item, which
+  dropped the pool, and the re-normalization inside the replayed handler could
+  not restore it: scenes were already present, so the `spec`-derived scene
+  conversion is skipped. A batch item reached the worker with an EMPTY
+  `scene.stock[]` while the byte-identical single-job request kept both assets —
+  i.e. the batch surface lost the stock pool the W5 shuffle depends on.
+  Handing the normalized item to the core unchanged fixes it. Evidence: new
+  `TestSubmitJobE2E_BatchAndSingleProjectTheSameStockPool` compares the persisted
+  TaskSpec of the same recipe submitted to both surfaces; it fails
+  (`batch surface scene.stock[] = []`) when the round-trip is reintroduced and
+  passes on the core path.
+- Enforcement: `scripts/ci/check-architecture.sh` rule 16 fails if the batch file
+  invokes `SubmitJob()(`, or if `job_submit_core.go` writes to a `gin.Context`
+  (or mentions `gin.Context` outside a comment), pinning the core's
+  transport-neutrality.
+
 ### Performance — progressive early upload and submit-time prefetch
 
 - Early progressive uploads now send a 256 KiB first part followed by

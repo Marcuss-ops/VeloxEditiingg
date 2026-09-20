@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	videoContract "velox-shared/contract"
 )
 
 type recordingVideoRunner struct {
@@ -37,7 +39,7 @@ func (r *recordingVideoRunner) Run(_ context.Context, name string, args ...strin
 
 func TestVideoTrimmerPlanUsesStreamCopyForNormalizedKeyframeSegment(t *testing.T) {
 	runner := &recordingVideoRunner{}
-	trimmer := newVideoTrimmerForTest(runner, defaultVideoNormalization)
+	trimmer := newVideoTrimmerForTest(runner)
 	probe := normalizedVideoProbe(10, []float64{0, 2, 4, 6, 8, 10})
 
 	plan, err := trimmer.Plan(probe, VideoSegment{StartSeconds: 2, EndSeconds: 6}, "/source.mp4", "/segment.mp4")
@@ -54,7 +56,7 @@ func TestVideoTrimmerPlanUsesStreamCopyForNormalizedKeyframeSegment(t *testing.T
 }
 
 func TestVideoTrimmerPlanUsesFrameAccurateReencodeForMidGOPSegment(t *testing.T) {
-	trimmer := newVideoTrimmerForTest(&recordingVideoRunner{}, defaultVideoNormalization)
+	trimmer := newVideoTrimmerForTest(&recordingVideoRunner{})
 	probe := normalizedVideoProbe(10, []float64{0, 2, 4, 6, 8, 10})
 
 	plan, err := trimmer.Plan(probe, VideoSegment{StartSeconds: 2.25, EndSeconds: 5.75}, "/source.mp4", "/segment.mp4")
@@ -71,7 +73,7 @@ func TestVideoTrimmerPlanUsesFrameAccurateReencodeForMidGOPSegment(t *testing.T)
 }
 
 func TestVideoTrimmerReencodesCanonicalSourceAboveBitrateCap(t *testing.T) {
-	trimmer := newVideoTrimmerForTest(&recordingVideoRunner{}, defaultVideoNormalization)
+	trimmer := newVideoTrimmerForTest(&recordingVideoRunner{})
 	probe := normalizedVideoProbe(10, []float64{0, 2, 4, 6, 8, 10})
 	probe.VideoBitrateBPS = 4_000_000
 
@@ -97,7 +99,7 @@ func TestVideoTrimmerNormalizesBeforeTrimming(t *testing.T) {
 		AudioCodec:      "opus",
 		PixelFormat:     "yuv420p10le",
 	})}
-	trimmer := newVideoTrimmerForTest(runner, defaultVideoNormalization)
+	trimmer := newVideoTrimmerForTest(runner)
 	inputPath := filepath.Join(t.TempDir(), "source.webm")
 	outputPath := filepath.Join(t.TempDir(), "segments", "clip.mp4")
 	if err := os.WriteFile(inputPath, []byte("source"), 0o644); err != nil {
@@ -123,12 +125,12 @@ func TestVideoTrimmerNormalizesBeforeTrimming(t *testing.T) {
 	if runner.commands[0].name != "ffprobe" || runner.commands[1].name != "ffmpeg" || runner.commands[2].name != "ffmpeg" {
 		t.Fatalf("command sequence = %#v", runner.commands)
 	}
-	assertContainsSequence(t, runner.commands[1].args, "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,fps=30/1", "-c:v", "libx264", "-b:v", "2.25M", "-maxrate", "2.25M", "-bufsize", "4.5M", "-video_track_timescale", "90000", "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2")
-	assertContainsSequence(t, runner.commands[2].args, "-ss", "1.250000", "-t", "3.500000", "-c:v", "libx264", "-b:v", "2.25M", "-maxrate", "2.25M", "-bufsize", "4.5M", "-pix_fmt", "yuv420p", "-video_track_timescale", "90000", "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2")
+	assertContainsSequence(t, runner.commands[1].args, "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,fps=24/1", "-c:v", "libx264", "-b:v", "2.25M", "-maxrate", "2.25M", "-bufsize", "4.5M", "-pix_fmt", "yuv420p", "-profile:v", "high", "-level:v", "4.0", "-g", "48", "-bf", "0", "-sc_threshold", "0", "-x264-params", "scenecut=0:open-gop=0:keyint=48:min-keyint=48", "-video_track_timescale", "90000", "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2")
+	assertContainsSequence(t, runner.commands[2].args, "-ss", "1.250000", "-t", "3.500000", "-vf", "fps=24/1", "-c:v", "libx264", "-b:v", "2.25M", "-maxrate", "2.25M", "-bufsize", "4.5M", "-pix_fmt", "yuv420p", "-profile:v", "high", "-level:v", "4.0", "-g", "48", "-bf", "0", "-sc_threshold", "0", "-x264-params", "scenecut=0:open-gop=0:keyint=48:min-keyint=48", "-video_track_timescale", "90000", "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2")
 }
 
 func TestVideoTrimmerRejectsInvalidOrOutOfBoundsSegments(t *testing.T) {
-	trimmer := newVideoTrimmerForTest(&recordingVideoRunner{}, defaultVideoNormalization)
+	trimmer := newVideoTrimmerForTest(&recordingVideoRunner{})
 	probe := normalizedVideoProbe(10, []float64{0, 5, 10})
 	cases := []VideoSegment{
 		{StartSeconds: -1, EndSeconds: 2},
@@ -144,20 +146,104 @@ func TestVideoTrimmerRejectsInvalidOrOutOfBoundsSegments(t *testing.T) {
 }
 
 func normalizedVideoProbe(duration float64, keyframes []float64) VideoProbe {
+	profile := videoContract.CanonicalVideoProfileV1Default
+	quality := videoContract.CanonicalPreparationQualityPolicyDefault
 	return VideoProbe{
 		DurationSeconds: duration,
-		Width:           defaultVideoNormalization.Width,
-		Height:          defaultVideoNormalization.Height,
-		FPSNum:          defaultVideoNormalization.FPSNum,
-		FPSDen:          defaultVideoNormalization.FPSDen,
-		TimebaseNum:     1,
-		TimebaseDen:     defaultVideoNormalization.VideoTrackTimebase,
-		VideoCodec:      defaultVideoNormalization.VideoCodec,
-		AudioCodec:      defaultVideoNormalization.AudioCodec,
-		AudioSampleRate: defaultVideoNormalization.AudioSampleRate,
-		AudioChannels:   defaultVideoNormalization.AudioChannels,
-		PixelFormat:     defaultVideoNormalization.PixelFormat,
+		Width:           profile.Width,
+		Height:          profile.Height,
+		FPSNum:          profile.FPSNum,
+		FPSDen:          profile.FPSDen,
+		TimebaseNum:     profile.TimeBaseNum,
+		TimebaseDen:     profile.TimeBaseDen,
+		VideoCodec:      profile.Codec,
+		AudioCodec:      quality.AudioCodec,
+		AudioSampleRate: quality.AudioSampleRate,
+		AudioChannels:   quality.AudioChannels,
+		PixelFormat:     profile.PixelFormat,
 		Keyframes:       keyframes,
+	}
+}
+
+// TestVideoPreparationUsesCanonicalStreamProfile is the permanent anti-drift
+// guard for the video preparation path. Before this test, the master had TWO
+// authorities for video compatibility: shared/contract
+// CanonicalVideoProfileV1 (1920x1080 @ 24 fps, GOP 48) and the trimmer-local
+// VideoNormalization (1920x1080 @ 30 fps). A component that declares its own
+// compatibility values must break CI, because W5 content-addressed reuse
+// requires the same inputs to always produce exactly the same canonical
+// stream.
+func TestVideoPreparationUsesCanonicalStreamProfile(t *testing.T) {
+	profile := videoContract.CanonicalVideoProfileV1Default
+	trimmer := newVideoTrimmerForTest(&recordingVideoRunner{})
+
+	if got := trimmer.Profile(); got != profile {
+		t.Fatalf("trimmer profile = %+v, want the canonical profile %+v", got, profile)
+	}
+	if trimmer.profile.FPSNum != profile.FPSNum || trimmer.profile.FPSDen != profile.FPSDen {
+		t.Fatalf("trimmer frame rate = %d/%d, want canonical %d/%d",
+			trimmer.profile.FPSNum, trimmer.profile.FPSDen, profile.FPSNum, profile.FPSDen)
+	}
+	if trimmer.profile.GOPSize != profile.GOPSize {
+		t.Fatalf("trimmer GOP = %d, want canonical %d", trimmer.profile.GOPSize, profile.GOPSize)
+	}
+	if trimmer.profile.BFrames != profile.BFrames {
+		t.Fatalf("trimmer B-frames = %d, want canonical %d", trimmer.profile.BFrames, profile.BFrames)
+	}
+	if trimmer.profile.Width != profile.Width || trimmer.profile.Height != profile.Height {
+		t.Fatalf("trimmer dimensions = %dx%d, want canonical %dx%d",
+			trimmer.profile.Width, trimmer.profile.Height, profile.Width, profile.Height)
+	}
+	if trimmer.profile.TimeBaseNum != profile.TimeBaseNum || trimmer.profile.TimeBaseDen != profile.TimeBaseDen {
+		t.Fatalf("trimmer time base = %d/%d, want canonical %d/%d",
+			trimmer.profile.TimeBaseNum, trimmer.profile.TimeBaseDen, profile.TimeBaseNum, profile.TimeBaseDen)
+	}
+	if trimmer.profile.CodecProfile != profile.CodecProfile || trimmer.profile.CodecLevel != profile.CodecLevel {
+		t.Fatalf("trimmer codec profile/level = %s/%s, want canonical %s/%s",
+			trimmer.profile.CodecProfile, trimmer.profile.CodecLevel, profile.CodecProfile, profile.CodecLevel)
+	}
+
+	// The produced ffmpeg command must carry the pinning arguments, so the
+	// encoder cannot drift away from the identity the manifest advertises.
+	args := strings.Join(normalizationArgs(trimmer.profile, trimmer.quality, "in.mp4", "out.mp4"), " ")
+	for _, want := range []string{
+		"fps=24/1",
+		"-profile:v high",
+		"-level:v 4.0",
+		"-g 48",
+		"-bf 0",
+		"-x264-params scenecut=0:open-gop=0:keyint=48:min-keyint=48",
+		"-video_track_timescale 90000",
+	} {
+		if !strings.Contains(args, want) {
+			t.Errorf("normalization args %q do not pin %q", args, want)
+		}
+	}
+	// A literal 30 fps (the removed authority) must never come back.
+	if strings.Contains(args, "fps=30") {
+		t.Fatalf("normalization args still carry the removed 30 fps authority: %s", args)
+	}
+}
+
+func TestCanonicalGOPAlignedRejectsForeignCadence(t *testing.T) {
+	profile := videoContract.CanonicalVideoProfileV1Default // GOP 48 @ 24 fps = 2s
+	cases := []struct {
+		name      string
+		keyframes []float64
+		want      bool
+	}{
+		{"single keyframe cannot disprove alignment", []float64{0}, true},
+		{"canonical 2s cadence", []float64{0, 2, 4, 6}, true},
+		{"gop 24 (1s cadence)", []float64{0, 1, 2, 3}, false},
+		{"gop 60 (2.5s cadence)", []float64{0, 2.5, 5}, false},
+		{"scenecut noise", []float64{0, 2, 3.4, 5.9}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := canonicalGOPAligned(tc.keyframes, profile); got != tc.want {
+				t.Fatalf("canonicalGOPAligned(%v) = %v, want %v", tc.keyframes, got, tc.want)
+			}
+		})
 	}
 }
 

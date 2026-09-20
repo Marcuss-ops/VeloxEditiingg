@@ -1,11 +1,12 @@
-// Package pipeline — job_submit.go is the thin composer
-// for POST /api/v1/jobs. Orchestrates decode → validate
-// (IdempotencyKey byte-level + ValidateSubmitJobRequest) →
-// NormalizeExternalJobSubmission (canonical_request_projection.go) →
-// enqueue (jobs/enqueue) → 202 Accepted response
-// (response_shaping.go status + Location helpers).
+// Package pipeline — job_submit.go is the HTTP adapter for
+// POST /api/v1/jobs. It owns exactly two concerns: decode the strict JSON body,
+// and write the canonical intake outcome to this transport. The intake logic
+// itself lives in job_submit_core.go (submitJobCore), which POST
+// /api/v1/jobs/batch also calls per item — see that file for why the batch
+// surface no longer replays this handler.
 //
 // Domain logic lives in:
+//   - job_submit_core.go (submitJobCore: the transport-neutral intake)
 //   - intake_validation.go (DTO types, limit consts, regexes,
 //     SubmitJobValidationError, ValidateSubmitJobRequest)
 //   - canonical_request_projection.go (NormalizeExternalJobSubmission)
@@ -21,20 +22,26 @@
 package pipeline
 
 import (
-	"errors"
 	"net/http"
-	"strings"
-
-	"velox-server/internal/creatorflow"
-	"velox-shared/compatibility"
 
 	"github.com/gin-gonic/gin"
+
+	"velox-server/internal/creatorflow"
 )
 
-// invalid_json BEFORE we touch downstream code. Gin's binding tag
-// machinery is permissive for cross-field validation and silently
-// accepts unknown fields, which is the wrong default for an
-// external-API surface.
+// SubmitJob handles POST /api/v1/jobs.
+//
+// Strict decoding: json.NewDecoder(...).Decode with DisallowUnknownFields
+// rejects any field name not on the struct, so a typo'd json blob fails with
+// 400 invalid_json BEFORE we touch downstream code. Gin's binding tag
+// machinery is permissive for cross-field validation and silently accepts
+// unknown fields, which is the wrong default for an external-API surface.
+//
+// After decoding, the handler is a thin transport adapter: it extracts the
+// request-scoped identity the M2M middleware resolved, runs the canonical
+// intake core, and writes the outcome (status + envelope + Location /
+// Retry-After headers). It performs no validation and no resolution of its own,
+// so the batch envelope can share the identical logic without an HTTP replay.
 func (h *Handlers) SubmitJob() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req SubmitJobRequest
@@ -47,287 +54,34 @@ func (h *Handlers) SubmitJob() gin.HandlerFunc {
 			return
 		}
 
-		// Idempotency-key validation: 1..128 valid UTF-8 bytes with no
-		// control chars or forbidden separators (':' or '%'). The
-		// helper trims whitespace before validating, so the canonical
-		// (post-trim) form is what reaches the resolver as source_job_id.
-		// A typed *IdempotencyKeyError carries machine-readable reason
-		// + diagnostics so the API envelope is actionable. 400 because
-		// idempotency_key is a request-level byte-shape issue, distinct
-		// from the 422 semantic issues that follow.
-		if vErr, bad := ValidateIdempotencyKey(req.IdempotencyKey); bad {
-			writeIdempotencyKeyError(c, vErr)
-			return
-		}
-		// ValidateIdempotencyKey intentionally trims only for validation;
-		// carry the same canonical value into the resolver, response, and
-		// logs so retries with surrounding whitespace cannot diverge.
-		req.IdempotencyKey = strings.TrimSpace(req.IdempotencyKey)
-		if err := compatibility.ValidateNoLegacyAliases(req.Spec); err != nil {
-			c.JSON(http.StatusUnprocessableEntity, gin.H{
-				"ok":      false,
-				"error":   "legacy_alias_rejected",
-				"message": err.Error(),
-			})
-			return
-		}
-		if err := NormalizeCanonicalRecipe(&req); err != nil {
-			c.JSON(http.StatusUnprocessableEntity, gin.H{
-				"ok":      false,
-				"error":   "unsupported_recipe",
-				"message": err.Error(),
-				"details": []gin.H{{"path": "job_type/spec", "issue": "invalid_recipe"}},
-			})
-			return
-		}
-		if req.Assembly != nil {
-			if _, err := req.Assembly.Normalize(req.IdempotencyKey); err != nil {
-				c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "error": "invalid_assembly", "message": err.Error()})
-				return
+		out := h.submitJobCore(c.Request.Context(), req, intakeIdentity{
+			ClientID: ClientIDFromContext(c),
+			// This IS the canonical submit surface; the batch envelope stamps
+			// its own label (see batchIntakeIdentity).
+			IntakeSource: creatorflow.IntakeSourceCanonical,
+			Quota:        KeyFromContext(c),
+		})
+
+		// Headers first: a 429 from the publishing-target resolver carries
+		// Retry-After, and the accepted path carries Location. Header() must be
+		// called before c.JSON writes the status line.
+		for key, values := range out.Header {
+			for _, value := range values {
+				c.Header(key, value)
 			}
 		}
-
-		// SubmitJob-level validation: video_name byte-length, scenes
-		// count + each scene (text, duration bounds), each delivery
-		// entry destination_id. Aggregates ALL violations into the
-		// returned details so the client can fix them in one round
-		// trip. Maps to 422 invalid_payload per OpenAPI's ErrorEnvelope.
-		if vErr, bad := ValidateSubmitJobRequest(req); bad {
-			c.JSON(http.StatusUnprocessableEntity, gin.H{
-				"ok":      false,
-				"error":   vErr.Code,
-				"message": vErr.Message,
-				"details": vErr.Details,
-			})
-			return
+		if out.Location != "" {
+			c.Header("Location", out.Location)
 		}
-
-		if req.ManifestRef != nil {
-			resolvedReq, resolveErr := h.ResolveRenderManifestRef(c.Request.Context(), req)
-			if resolveErr != nil {
-				c.JSON(http.StatusUnprocessableEntity, gin.H{
-					"ok":      false,
-					"error":   resolveErr.Code,
-					"message": resolveErr.Message,
-					"details": resolveErr.Details,
-				})
-				return
-			}
-			req = resolvedReq
-			if vErr, bad := ValidateSubmitJobRequest(req); bad {
-				c.JSON(http.StatusUnprocessableEntity, gin.H{
-					"ok":      false,
-					"error":   vErr.Code,
-					"message": vErr.Message,
-					"details": vErr.Details,
-				})
-				return
-			}
+		// Stash scene count + total duration so the M2M audit middleware (or the
+		// response writer wrapper) records the ACTUAL request shape in
+		// m2m_audit_log. Only an admitted request carries usage: the core leaves
+		// Usage nil on every rejection.
+		if out.Usage != nil {
+			SetUsageStats(c, out.Usage.Scenes, out.Usage.TotalDurationSeconds)
 		}
-
-		// Resolve the optional channel/group selector before any destination
-		// pre-flight or quota check. Group expansion is server-side and
-		// all-or-nothing: once this returns, DeliveryPlan contains the
-		// deterministic concrete snapshot that every downstream validator and
-		// enqueue step must observe.
-		if req.PublishingTarget != nil {
-			resolvedReq, targetErr := h.resolvePublishingTarget(c.Request.Context(), req)
-			if targetErr != nil {
-				writePublishingTargetError(c, targetErr)
-				return
-			}
-			req = resolvedReq
-			// Re-run the canonical validator over the concrete plan so any
-			// delivery-plan constraints also apply to expanded group members.
-			if vErr, bad := ValidateSubmitJobRequest(req); bad {
-				c.JSON(http.StatusUnprocessableEntity, gin.H{
-					"ok":      false,
-					"error":   vErr.Code,
-					"message": vErr.Message,
-					"details": vErr.Details,
-				})
-				return
-			}
-		}
-
-		// Delivery-destination existence pre-flight (P0 #2 closure).
-		// Extracted into checkDeliveryPlanDestinations (job_submit_preflight.go);
-		// returns true when a 500 store_failure or 422 invalid_payload
-		// response was already written.
-		if checkDeliveryPlanDestinations(c, h, &req) {
-			return
-		}
-
-		// Asset registry/blob pre-flight: validate every local
-		// velox-asset reference before enqueue. This is a Master-local
-		// read-only integrity check; it does not fetch or prefetch anything
-		// onto workers. Deferred velox-drive references remain deferred to
-		// the authenticated worker bridge.
-		if checkAssetPreflight(c, h, req) {
-			return
-		}
-
-		// SSRF URL validator (P1 admin-audit trail step #2): every
-		// nested scene asset URL MUST satisfy the hybrid
-		// blocklist+allowlist policy. Runs AFTER
-		// byte-level + cross-field validators so attackers can't
-		// probe private IP classification on bodies that fail
-		// earlier checks (which would leak validation gaps).
-		if ssrfErrs := ValidateAllExternalURLs(req, h.cfg); len(ssrfErrs) > 0 {
-			writeSSRFValidationError(c, ssrfErrs)
-			return
-		}
-
-		// Per-request quota (rate limit / scenes / total duration).
-		// Runs AFTER validation+SSRF so the rejection paths are
-		// stable: a body that violates the cross-field rules gets
-		// 422 first, and only well-formed shapes hit the quota
-		// gate. The M2MContext must be populated by the route
-		// middleware; if it isn't this returns 500 with a hint
-		// (a misconfigured production deployment where /api/v1/jobs
-		// was wired without M2M auth).
-		if qerr := EnforcePerRequestQuota(c, req, h.cfg); qerr != nil {
-			var qe *QuotaError
-			if errors.As(qerr, &qe) {
-				c.JSON(http.StatusTooManyRequests, gin.H{
-					"ok":      false,
-					"error":   "m2m_quota_exceeded",
-					"message": qe.Error(),
-					"details": gin.H{
-						"reason":   qe.Reason,
-						"observed": qe.Observed,
-						"cap":      qe.Cap,
-					},
-				})
-				return
-			}
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"ok":      false,
-				"error":   "m2m_quota_failure",
-				"message": qerr.Error(),
-			})
-			return
-		}
-
-		// Derive Creator-compatible identity via the canonical
-		// pipeline path: SubmitJobRequest → ParseRemotePipelineResult
-		// (typed DTO) → ToWorkerPayload → CanonicalCompletedPayload.
-		// This is the SAME path creator_push's normalizeCreatorPushRequest
-		// takes, so the resolver sees one canonical shape regardless of
-		// the producer (creator workstation vs external /api/v1/jobs).
-		canonical := h.NormalizeExternalJobSubmission(req)
-		if canonical == nil {
-			c.JSON(http.StatusBadGateway, gin.H{
-				"ok":      false,
-				"error":   "canonical_projection_failed",
-				"message": "unable to build the renderer-only payload",
-			})
-			return
-		}
-
-		// Delegate to the same resolver used by CreatorPush.
-		forwarded, err := h.resolveCompletedPayload(
-			c.Request.Context(),
-			canonical.SourceProvider,
-			canonical.SourceJobID,
-			canonical.TargetExecutorID,
-			canonical.WorkerPayload,
-			canonical.DeliveryPlan,
-			canonical.PublicationSpecs,
-			canonical.Assembly,
-			ClientIDFromContext(c),
-			IntakeSourceFromContext(c),
-		)
-		if err != nil {
-			// P0 contract: every resolver-layer error is mapped
-			// to the canonical HTTP envelope by the shared helper
-			// in package creatorflow. Previously this branch was
-			// missing the enqueue.ValidationErrorField mapping
-			// entirely, so any enqueue-layer validation error
-			// (missing delivery_plan entry, malformed destination_id,
-			// …) silently downgraded to a 500. The helper owns the
-			// full mapping — the third arg dropped in [P0 #2]
-			// because the typed validationError carries the field
-			// path internally and the helper falls back to
-			// "idempotency_key" only when no typed path is available.
-			creatorflow.WriteResolverError(c, err)
-			return
-		}
-		if forwarded == nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"ok":      false,
-				"error":   "resolver_failure",
-				"message": "job resolved without an enqueue response",
-			})
-			return
-		}
-
-		response := gin.H{}
-		for key, value := range forwarded {
-			response[key] = value
-		}
-		response["ok"] = true
-		response["accepted_from"] = "api_v1_jobs"
-		response["idempotency_key"] = req.IdempotencyKey
-		if _, owned := response["dispatch_status"]; !owned {
-			response["dispatch_status"] = "queued_for_workers"
-		}
-		// Surface the resolved client_id in the response envelope so
-		// clients can correlate locally-logged requests (no DB join
-		// needed). Null-string when M2M middleware did not run
-		// (admin-auth fallback mount).
-		if cid := ClientIDFromContext(c); cid != "" {
-			response["client_id"] = cid
-		}
-
-		h.intakeSinkOrNoop().IncAccepted("api_v1_jobs")
-		jobID, _ := response["job_id"].(string)
-		pipelineLog(
-			"API_V1_JOBS_ACCEPTED idem_hash=%s job_id=%s client_id=%s",
-			logHashShort(req.IdempotencyKey),
-			jobID,
-			ClientIDFromContext(c),
-		)
-
-		// Status URL + Location header: canonical polling endpoint
-		// address for this job_id. The 202 response carries BOTH the
-		// JSON field (status_url) AND the Location header (per HTTP
-		// RFC 7231 location-of-resource) so automation clients can
-		// pick whichever fits their language — curl --include
-		// surfaces the header; jq .status_url surfaces the field.
-		// Env-relative (no host:port / scheme) so the helper works
-		// across dev / staging / production environments unchanged
-		// and matches the openapi.yaml documented shape.
-		if jobID != "" {
-			statusURL := "/api/v1/jobs/" + jobID
-			c.Header("Location", statusURL)
-			response["status_url"] = statusURL
-		}
-
-		// Stash scene count + total duration so the M2M audit
-		// middleware (or the response writer wrapper) records the
-		// ACTUAL request shape in m2m_audit_log. Best effort; if
-		// the keys are missing the audit row simply logs 0/0.
-		var totalDur float64
-		for _, s := range req.Scenes {
-			totalDur += s.DurationSeconds
-		}
-		SetUsageStats(c, len(req.Scenes), totalDur)
-
-		c.JSON(http.StatusAccepted, response)
+		c.JSON(out.Status, out.Body)
 	}
-}
-
-func writeSSRFValidationError(c *gin.Context, errs []SSRFValidationError) {
-	details := make([]gin.H, 0, len(errs))
-	for _, e := range errs {
-		details = append(details, gin.H{"path": e.Path, "url": e.URL, "reason": e.Reason})
-	}
-	c.JSON(http.StatusUnprocessableEntity, gin.H{
-		"ok": false, "error": "ssrf_rejected",
-		"message": "one or more external URLs failed the egress policy",
-		"details": details,
-	})
 }
 
 // GetSubmittedJob handles GET /api/v1/jobs/:id.

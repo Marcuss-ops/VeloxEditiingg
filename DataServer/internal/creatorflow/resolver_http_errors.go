@@ -140,22 +140,46 @@ const idempotencyKeyDefault = "idempotency_key"
 // anything in those states. Callers should still gate on `err !=
 // nil` at the top of their handler block for clarity; the noop
 // branch is defensive against accidental panics in test rigs.
+//
+// It is now a thin gin adapter over ResolverErrorEnvelope, so a surface that
+// never owns a synthetic HTTP response (the batch intake envelope) classifies
+// failures through the SAME mapper instead of parsing one of its own JSON
+// responses back.
 func WriteResolverError(c *gin.Context, err error) {
 	if c == nil || err == nil {
 		return
 	}
+	status, body := ResolverErrorEnvelope(err)
+	c.JSON(status, body)
+}
+
+// ResolverErrorEnvelope maps a resolver-layer error to its canonical HTTP
+// status and JSON envelope WITHOUT touching a transport.
+//
+// It exists because the mapping must be shared by surfaces that do not own a
+// per-item HTTP response. POST /api/v1/jobs/batch previously obtained this
+// mapping by re-serializing a synthetic single-job HTTP response and parsing
+// it back; it now calls this pure mapper, so the two surfaces cannot drift and
+// no JSON round-trip is involved.
+//
+// A nil error returns (0, nil): callers gate on `err != nil`, matching
+// WriteResolverError's noop-on-nil contract.
+func ResolverErrorEnvelope(err error) (int, gin.H) {
+	if err == nil {
+		return 0, nil
+	}
 
 	switch {
 	case errors.Is(err, ErrResolverNotComplete):
-		writeErrorEnvelope(c, http.StatusUnprocessableEntity,
-			"payload_incomplete",
-			"payload is not complete enough to dispatch",
-			nil)
+		return http.StatusUnprocessableEntity,
+			errorEnvelopeBody("payload_incomplete",
+				"payload is not complete enough to dispatch",
+				nil)
 	case errors.Is(err, storecore.ErrCreatorForwardingOwnershipConflict):
-		writeErrorEnvelope(c, http.StatusConflict,
-			"idempotency_key_reused",
-			"idempotency key belongs to another client",
-			gin.H{"path": idempotencyKeyDefault, "issue": "ownership_conflict"})
+		return http.StatusConflict,
+			errorEnvelopeBody("idempotency_key_reused",
+				"idempotency key belongs to another client",
+				gin.H{"path": idempotencyKeyDefault, "issue": "ownership_conflict"})
 	case errors.Is(err, ErrIdempotencyKeyReused):
 		// Derive the 409 detail path from any wrapped
 		// validationError so a hash-conflict raised over a
@@ -166,29 +190,29 @@ func WriteResolverError(c *gin.Context, err error) {
 		if path == "" {
 			path = idempotencyKeyDefault
 		}
-		writeErrorEnvelope(c, http.StatusConflict,
-			"idempotency_key_reused",
-			err.Error(),
-			gin.H{"path": path, "issue": "hash_mismatch"})
+		return http.StatusConflict,
+			errorEnvelopeBody("idempotency_key_reused",
+				err.Error(),
+				gin.H{"path": path, "issue": "hash_mismatch"})
 	case func() bool {
 		_, ok := domain.AsDomainError(err)
 		return ok
 	}():
-		derr, ok := domain.AsDomainError(err)
-		if !ok || derr == nil {
+		domainErr, ok := domain.AsDomainError(err)
+		if !ok || domainErr == nil {
 			break
 		}
 		detail := any(nil)
-		if derr.Field != "" {
-			detail = gin.H{"path": derr.Field, "issue": derr.Issue}
+		if domainErr.Field != "" {
+			detail = gin.H{"path": domainErr.Field, "issue": domainErr.Issue}
 		}
-		writeErrorEnvelope(c, derr.HTTPCode(), derr.Code, derr.PublicText, detail)
+		return domainErr.HTTPCode(), errorEnvelopeBody(domainErr.Code, domainErr.PublicText, detail)
 	case extractUnifiedFieldPath(err) != "":
 		// Compatibility for typed ValidationError instances whose
 		// caller supplied only the historical field extractor. This
 		// branch still uses a typed field, never Error() text parsing.
 		field := extractUnifiedFieldPath(err)
-		writeErrorEnvelope(c, http.StatusUnprocessableEntity, "invalid_payload", err.Error(), gin.H{"path": field, "issue": "invalid"})
+		return http.StatusUnprocessableEntity, errorEnvelopeBody("invalid_payload", err.Error(), gin.H{"path": field, "issue": "invalid"})
 	case errors.Is(err, deliveryplan.ErrDeliveryTargetRequired),
 		errors.Is(err, deliverycontract.ErrNoExplicitPlan):
 		// Converge the bare missing-target sentinels through the canonical
@@ -196,26 +220,30 @@ func WriteResolverError(c *gin.Context, err error) {
 		// come from the single mapper. Typed ValidationError rejections
 		// (e.g. deliveryplan.NewDeliveryTargetRequiredError) already project
 		// via errors.As above and land in the DomainError branch.
-		derr := domain.NewDeliveryTargetRequired("an explicit Drive destination is required", err)
-		writeErrorEnvelope(c, derr.HTTPCode(), derr.Code, derr.PublicText,
-			gin.H{"path": derr.Field, "issue": derr.Issue})
+		required := domain.NewDeliveryTargetRequired("an explicit Drive destination is required", err)
+		return required.HTTPCode(), errorEnvelopeBody(required.Code, required.PublicText,
+			gin.H{"path": required.Field, "issue": required.Issue})
 	default:
-		writeErrorEnvelope(c, http.StatusInternalServerError,
-			"resolver_failure",
-			"failed to enqueue job",
-			nil)
+		return http.StatusInternalServerError,
+			errorEnvelopeBody("resolver_failure",
+				"failed to enqueue job",
+				nil)
 	}
+	// Reached only if the DomainError assertion above succeeded and then failed,
+	// which cannot happen for an immutable error value. Kept explicit so the
+	// fallback is a classified 500 rather than a zero status.
+	return http.StatusInternalServerError, errorEnvelopeBody("resolver_failure", "failed to enqueue job", nil)
 }
 
-// writeErrorEnvelope is the package-private body formatter used by
-// WriteResolverError. The `details` key is omitted from the JSON
+// errorEnvelopeBody is the package-private body formatter used by
+// ResolverErrorEnvelope. The `details` key is omitted from the JSON
 // when detail is nil so the response stays minimal for 4xx-without-
 // details / 5xx paths (matches openapi.yaml's ErrorEnvelope where
 // `details` is OPTIONAL).
-func writeErrorEnvelope(c *gin.Context, status int, code domain.ErrorCode, message string, detail any) {
+func errorEnvelopeBody(code domain.ErrorCode, message string, detail any) gin.H {
 	body := gin.H{"ok": false, "error": code, "message": message}
 	if detail != nil {
 		body["details"] = []any{detail}
 	}
-	c.JSON(status, body)
+	return body
 }

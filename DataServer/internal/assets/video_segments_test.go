@@ -12,6 +12,8 @@ import (
 	"testing"
 
 	"velox-server/internal/platform/clock"
+
+	videoContract "velox-shared/contract"
 )
 
 type segmentTestRepository struct {
@@ -91,7 +93,7 @@ func TestRewriteVideoClipSegmentsRegistersCanonicalSegment(t *testing.T) {
 	}
 	body := []byte("trimmed segment")
 	runner := &recordingVideoRunner{probeOutput: probeJSON(t, normalizedVideoProbe(10, []float64{0, 2, 4, 6, 8, 10}))}
-	trimmer := newVideoTrimmerForTest(runner, defaultVideoNormalization)
+	trimmer := newVideoTrimmerForTest(runner)
 	repo := &segmentTestRepository{}
 	service := &AssetService{
 		repo:         repo,
@@ -139,6 +141,15 @@ func TestRewriteVideoClipSegmentsRegistersCanonicalSegment(t *testing.T) {
 	if metadata["trim_mode"] != string(TrimModeStreamCopy) || metadata["start_seconds"] != float64(2) {
 		t.Fatalf("metadata = %#v, want stream-copy and start 2", metadata)
 	}
+	// The manifest must record the CANONICAL stream identity (and never a
+	// trimmer-local compatibility value), so the segment can enter the
+	// packet-copy/asset path without a second authority re-deriving it.
+	if metadata["canonical_profile_id"] != videoContract.CanonicalVideoProfileIDV1 {
+		t.Fatalf("metadata canonical_profile_id = %#v, want %q", metadata["canonical_profile_id"], videoContract.CanonicalVideoProfileIDV1)
+	}
+	if _, legacy := metadata["normalization_version"]; legacy {
+		t.Fatalf("metadata still carries the removed normalization_version authority: %#v", metadata)
+	}
 	wantHash := sha256.Sum256([]byte("trimmed video"))
 	if sha != hex.EncodeToString(wantHash[:]) {
 		t.Fatalf("sha256 = %q, want hash of prepared segment", sha)
@@ -156,7 +167,7 @@ func TestTrimAndRegisterVideoSegment_ProbesSourceOnceAcrossSegments(t *testing.T
 		repo:         &segmentTestRepository{},
 		blobStore:    &segmentTestBlobStore{root: filepath.Join(root, "assets")},
 		clock:        clock.System{},
-		videoTrimmer: newVideoTrimmerForTest(runner, defaultVideoNormalization),
+		videoTrimmer: newVideoTrimmerForTest(runner),
 	}
 	memo := make(map[string]*VideoProbe)
 
@@ -185,7 +196,7 @@ func TestRewriteVideoClipSegments_RegisteredSourceWithVerifiedMetadataPassesGate
 		blobStore:     &segmentTestBlobStore{root: t.TempDir()},
 		clock:         clock.System{},
 		mediaMetadata: newMediaMetadataResolverForTest(&recordingVideoRunner{}),
-		videoTrimmer:  newVideoTrimmerForTest(&recordingVideoRunner{}, defaultVideoNormalization),
+		videoTrimmer:  newVideoTrimmerForTest(&recordingVideoRunner{}),
 		// registry intentionally nil: after the C2 metadata gate PASSES, the
 		// rewrite proceeds to materialization which fails on the missing
 		// resolver — proving the verified registered asset was NOT rejected
@@ -221,7 +232,7 @@ func TestRewriteVideoClipSegments_FailsClosedOnUnverifiedRegisteredSource(t *tes
 		blobStore:     &segmentTestBlobStore{root: t.TempDir()},
 		clock:         clock.System{},
 		mediaMetadata: newMediaMetadataResolverForTest(&failingMediaRunner{err: errors.New("ffprobe boom")}),
-		videoTrimmer:  newVideoTrimmerForTest(&recordingVideoRunner{}, defaultVideoNormalization),
+		videoTrimmer:  newVideoTrimmerForTest(&recordingVideoRunner{}),
 	}
 	payload := map[string]interface{}{
 		"clip_segments": []interface{}{
@@ -312,7 +323,7 @@ func TestRewriteVideoClipSegmentsSupportsJSONAndFailsClosedWithoutLocalSource(t 
 		repo:         &segmentTestRepository{},
 		blobStore:    &segmentTestBlobStore{root: filepath.Join(root, "assets")},
 		clock:        clock.System{},
-		videoTrimmer: newVideoTrimmerForTest(runner, defaultVideoNormalization),
+		videoTrimmer: newVideoTrimmerForTest(runner),
 	}
 	encoded, err := json.Marshal([]map[string]interface{}{{
 		"source_path": sourcePath, "start_ms": float64(2000), "end_ms": float64(4000),
