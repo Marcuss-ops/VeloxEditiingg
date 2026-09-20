@@ -512,6 +512,16 @@ func TestSceneComposite_Execute_UsesExplicitPipelineID(t *testing.T) {
 	}
 }
 
+func TestResolvePipelineIDFallsBackToCanonicalDetection(t *testing.T) {
+	if got := resolvePipelineID(map[string]interface{}{
+		"clips": []interface{}{
+			map[string]interface{}{"url": "velox-drive://clip-1"},
+		},
+	}); got != "clips.v1" {
+		t.Fatalf("resolvePipelineID fallback = %q, want %q", got, "clips.v1")
+	}
+}
+
 func TestNewSceneComposite_NilRunnerPanics(t *testing.T) {
 	defer func() {
 		if recover() == nil {

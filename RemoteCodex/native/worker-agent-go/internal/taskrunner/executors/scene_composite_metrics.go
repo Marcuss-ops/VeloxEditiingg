@@ -6,6 +6,7 @@ import (
 
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/telemetry"
+	"velox-worker-agent/pkg/video/pipeline"
 )
 
 // appendObservabilitySummaryPhases projects category rollups into the typed
@@ -41,10 +42,14 @@ func appendObservabilitySummaryPhases(phases *[]executor.DetailedPhaseTiming, va
 }
 
 func resolvePipelineID(payload map[string]interface{}) string {
-	if payload != nil {
-		if pipelineID, _ := payload["pipeline_id"].(string); strings.TrimSpace(pipelineID) != "" {
-			return strings.TrimSpace(pipelineID)
-		}
+	if payload == nil {
+		return ""
 	}
-	return ""
+	if pipelineID, _ := payload["pipeline_id"].(string); strings.TrimSpace(pipelineID) != "" {
+		return strings.TrimSpace(pipelineID)
+	}
+	// The Master canonicalizes scene submissions into fields such as clips
+	// and scenes_json. Preserve the explicit override above, but use the
+	// shared detector for older/producer payloads that omit pipeline_id.
+	return pipeline.DetectPipelineID(payload)
 }
