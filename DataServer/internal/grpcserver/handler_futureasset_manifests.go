@@ -7,6 +7,7 @@ import (
 
 	"velox-shared/contract"
 	"velox-shared/futureasset"
+	"velox-shared/paths"
 )
 
 // futureAssetManifests extracts all referenced asset manifests from a task
@@ -67,6 +68,12 @@ func futureAssetManifests(payload []byte) []futureasset.AssetManifest {
 				if rawURL, _ := node["url"].(string); strings.HasPrefix(strings.ToLower(strings.TrimSpace(rawURL)), "velox-drive://") {
 					sourceURI = "https://drive.google.com/uc?export=download&id=" + strings.TrimSpace(rawURL[len("velox-drive://"):])
 				}
+			}
+			// Producers may provide Drive's human-facing /file/d/.../view
+			// locator in source_uri. FutureAssetPlan must carry a byte endpoint;
+			// otherwise the worker receives HTML and can never certify the asset.
+			if sourceURI != "" {
+				sourceURI = paths.NormalizeDriveURL(sourceURI)
 			}
 			if key != "" && assetID == "" {
 				assetID = key

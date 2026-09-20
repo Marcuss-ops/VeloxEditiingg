@@ -106,6 +106,25 @@ func TestFutureAssetManifestsCarriesDeferredDriveStockWithoutMasterDownload(t *t
 	}
 }
 
+func TestFutureAssetManifestsNormalizesDriveViewSourceURI(t *testing.T) {
+	payload := []byte(`{
+		"runtime_assets": [{
+			"asset_id": "tts-1",
+			"source_uri": "https://drive.google.com/file/d/tts-1/view?usp=drivesdk",
+			"sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"size_bytes": 617062,
+			"role": "tts"
+		}]
+	}`)
+	assets := futureAssetManifests(payload)
+	if len(assets) != 1 {
+		t.Fatalf("runtime manifests=%d, want 1", len(assets))
+	}
+	if got, want := assets[0].SourceURI, "https://drive.google.com/uc?export=download&id=tts-1&confirm=t"; got != want {
+		t.Fatalf("source_uri=%q, want %q", got, want)
+	}
+}
+
 func TestFutureAssetManifestsDiscoversDeferredStockInsideScenesJSON(t *testing.T) {
 	items := make([]map[string]interface{}, 10)
 	for i := range items {
