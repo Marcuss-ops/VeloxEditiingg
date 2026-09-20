@@ -114,6 +114,7 @@ type OverlayInput struct {
 	DriveFileID string
 	URL         string
 	SHA256      string
+	SizeBytes   int64
 	StartFrame  int64
 	EndFrame    int64
 	FrameCount  int64
@@ -281,6 +282,9 @@ func BuildRawPayload(input SubmissionInput) map[string]interface{} {
 			}
 			if overlay.SHA256 != "" {
 				entry["sha256"] = overlay.SHA256
+			}
+			if overlay.SizeBytes > 0 {
+				entry["size_bytes"] = overlay.SizeBytes
 			}
 			overlays = append(overlays, entry)
 		}

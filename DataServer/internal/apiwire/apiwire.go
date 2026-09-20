@@ -419,6 +419,7 @@ type SubmitOverlay struct {
 	DriveFileID string `json:"drive_file_id,omitempty" validate:"omitempty,max=128"`
 	URL         string `json:"url,omitempty"`
 	SHA256      string `json:"sha256,omitempty"`
+	SizeBytes   int64  `json:"size_bytes,omitempty" validate:"omitempty,gte=1"`
 	StartFrame  int64  `json:"start_frame" validate:"gte=0"`
 	EndFrame    int64  `json:"end_frame,omitempty" validate:"omitempty,gte=1"`
 	FrameCount  int64  `json:"frame_count,omitempty" validate:"omitempty,gte=1"`
