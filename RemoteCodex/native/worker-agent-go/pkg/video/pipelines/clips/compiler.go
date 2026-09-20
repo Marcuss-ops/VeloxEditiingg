@@ -77,7 +77,11 @@ func Compile(ctx context.Context, jobID string, input map[string]interface{}, ou
 			if err != nil {
 				return nil, err
 			}
-			return applyOverlayIntent(compiled, input)
+			compiled, err = applyOverlayIntent(compiled, input)
+			if err != nil {
+				return nil, err
+			}
+			return appendRuntimeAudioTracks(compiled, input)
 		}
 	}
 
@@ -111,7 +115,11 @@ func Compile(ctx context.Context, jobID string, input map[string]interface{}, ou
 		AudioTracks: audioTracks,
 		OutputPath:  outputPath,
 	}
-	return applyOverlayIntent(compiled, input)
+	compiled, err := applyOverlayIntent(compiled, input)
+	if err != nil {
+		return nil, err
+	}
+	return appendRuntimeAudioTracks(compiled, input)
 }
 
 // applyOverlayIntent is the worker-side bridge for legacy clips.v1 jobs. A

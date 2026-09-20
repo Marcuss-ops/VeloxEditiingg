@@ -102,6 +102,56 @@ func TestCompileUsesNormalizedAudioPathWhenAudioURLIsAbsent(t *testing.T) {
 	}
 }
 
+func TestCompileProjectsRuntimeAudioIDsFromNestedPayload(t *testing.T) {
+	input := map[string]interface{}{
+		"copy_only": true,
+		"clips":     []interface{}{map[string]interface{}{"url": "clip.mp4", "duration": 10.0}},
+		"runtime_assets": []interface{}{
+			map[string]interface{}{"asset_id": "tts-1", "url": "/cache/tts.m4a", "duration_ms": 4000.0},
+			map[string]interface{}{"asset_id": "music-1", "url": "/cache/music.mp3", "duration_ms": 208306.0},
+			map[string]interface{}{"asset_id": "sfx-1", "url": "/cache/sfx.wav", "duration_ms": 1250.0},
+		},
+		"runtime_payload": map[string]interface{}{
+			"runtime_audio": map[string]interface{}{
+				"tts_asset_id":      "tts-1",
+				"music_asset_id":    "music-1",
+				"sfx_asset_id":      "sfx-1",
+				"sfx_start_seconds": 2.5,
+			},
+		},
+	}
+
+	got, err := Compile(context.Background(), "job-runtime-audio", input, "/tmp/out.mp4", nil)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	if len(got.AudioTracks) != 3 {
+		t.Fatalf("audio tracks = %#v, want TTS, music and SFX", got.AudioTracks)
+	}
+	if got.AudioTracks[0].Role != "tts" || got.AudioTracks[0].SourceURL != "/cache/tts.m4a" || got.AudioTracks[0].DurationSeconds != 4 {
+		t.Fatalf("tts track = %#v", got.AudioTracks[0])
+	}
+	if got.AudioTracks[1].Role != "background_music" || got.AudioTracks[1].SourceURL != "/cache/music.mp3" || !got.AudioTracks[1].Loop || got.AudioTracks[1].Volume != 0.25 {
+		t.Fatalf("music track = %#v", got.AudioTracks[1])
+	}
+	if got.AudioTracks[2].Role != "sfx" || got.AudioTracks[2].SourceURL != "/cache/sfx.wav" || got.AudioTracks[2].StartTimeOffset != 2.5 || got.AudioTracks[2].DurationSeconds != 1.25 {
+		t.Fatalf("sfx track = %#v", got.AudioTracks[2])
+	}
+}
+
+func TestCompileRejectsRuntimeAudioWithoutResolvedAsset(t *testing.T) {
+	input := map[string]interface{}{
+		"copy_only": true,
+		"clips":     []interface{}{map[string]interface{}{"url": "clip.mp4", "duration": 1.0}},
+		"runtime_payload": map[string]interface{}{
+			"runtime_audio": map[string]interface{}{"music_asset_id": "missing"},
+		},
+	}
+	if _, err := Compile(context.Background(), "job-runtime-audio-missing", input, "/tmp/out.mp4", nil); err == nil {
+		t.Fatal("Compile accepted runtime audio without a resolved asset")
+	}
+}
+
 func TestCompileSceneTimelineLoopsAndTrimsShortStock(t *testing.T) {
 	input := map[string]interface{}{
 		"scenes_json": `[{
