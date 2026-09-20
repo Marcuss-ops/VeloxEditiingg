@@ -82,6 +82,9 @@ func (h *Handler) handlePrefetchLifecycleEvent(workerID string, event *pb.Prefet
 	if event.GetOrigin() != "" {
 		extra["origin"] = event.GetOrigin()
 	}
+	if event.GetErrorReason() != "" {
+		extra["error_reason"] = event.GetErrorReason()
+	}
 	if event.GetCacheHit() {
 		extra["cache_hit"] = true
 	}
