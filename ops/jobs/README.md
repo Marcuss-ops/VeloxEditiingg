@@ -24,6 +24,43 @@ end_frame: 240`) plus extensible `runtime_payload` / `runtime_assets` fields
 for TTS, BGM and SFX. The Master updates the existing task atomically and
 keeps its FutureAssetPlan reservation on the same worker.
 
+The runtime audio IDs point to entries in the same `runtime_assets` list; the
+worker resolves their verified local cache paths and mixes them in one final
+audio contract:
+
+```json
+{
+  "overlays": [
+    {
+      "id": "overlay-1",
+      "asset_id": "drive-overlay-id",
+      "start_frame": 120,
+      "end_frame": 240,
+      "frame_count": 120,
+      "mode": "replace",
+      "audio_mode": "preserve_final_audio"
+    }
+  ],
+  "runtime_assets": [
+    {"asset_id": "tts-1", "kind": "audio", "role": "tts", "url": "velox-drive://..."},
+    {"asset_id": "music-1", "kind": "audio", "role": "music", "url": "velox-drive://..."},
+    {"asset_id": "sfx-1", "kind": "audio", "role": "sfx", "url": "velox-drive://..."}
+  ],
+  "runtime_payload": {
+    "runtime_audio": {
+      "tts_asset_id": "tts-1",
+      "music_asset_id": "music-1",
+      "sfx_asset_id": "sfx-1",
+      "sfx_start_seconds": 2.5
+    }
+  }
+}
+```
+
+`music_asset_id` is looped at the default background volume; SFX and TTS use
+their declared duration metadata unless an explicit runtime duration is sent.
+An ID without a resolved `runtime_assets[*].url` fails closed before render.
+
 ## Official generator benchmarks
 
 Frozen certification workloads (registry: `tests/benchmarks/video-generator/cases/registry.json`):
