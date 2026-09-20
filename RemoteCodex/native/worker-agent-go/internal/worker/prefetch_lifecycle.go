@@ -61,6 +61,9 @@ func (w *Worker) sendPrefetchSchedulerEvent(event prefetch.Event) {
 		e.AssetKey = event.AssetKey
 		e.CacheHit = event.CacheHit
 		e.Origin = "prefetch"
+		if event.ErrorMessage != "" {
+			e.ErrorReason = event.ErrorMessage
+		}
 		if !event.StartedAt.IsZero() {
 			e.DownloadStartedAt = timestamppb.New(event.StartedAt)
 		}

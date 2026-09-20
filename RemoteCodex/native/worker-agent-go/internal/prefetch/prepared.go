@@ -229,16 +229,26 @@ func (s *Scheduler) preparedForJob(job futureasset.Job, metadata PreparedAssetMe
 	return prepared, true
 }
 
-func (s *Scheduler) preparationCounts(job futureasset.Job) (preparedCount, requiredCount int) {
+func (s *Scheduler) preparationCounts(job futureasset.Job) (preparedCount, requiredCount int, missing string) {
 	if s == nil {
-		return 0, len(job.Assets)
+		return 0, len(job.Assets), ""
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	preparedAssets := map[string]struct{}{}
 	if prepared, ok := s.prepared[job.JobID]; ok {
 		preparedCount = len(prepared.Assets)
+		for assetKey := range prepared.Assets {
+			preparedAssets[assetKey] = struct{}{}
+		}
 	}
-	return preparedCount, len(job.Assets)
+	missingKeys := make([]string, 0)
+	for _, asset := range job.Assets {
+		if _, ok := preparedAssets[asset.AssetKey]; !ok {
+			missingKeys = append(missingKeys, asset.AssetKey)
+		}
+	}
+	return preparedCount, len(job.Assets), strings.Join(missingKeys, ",")
 }
 
 // PreparedJobs returns a stable copy of the current local preparation read

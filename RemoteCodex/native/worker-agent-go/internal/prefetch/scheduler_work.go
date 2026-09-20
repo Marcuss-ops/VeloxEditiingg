@@ -168,7 +168,7 @@ func (s *Scheduler) runWorkItem(item *workItem, resolver *downloader.CacheResolv
 		if err == nil && metadataErr == nil && protectionErr == nil {
 			preparedJob, prepared = s.preparedForJob(job, metadata)
 			if !prepared {
-				preparedCount, requiredCount := s.preparationCounts(job)
+				preparedCount, requiredCount, missing := s.preparationCounts(job)
 				s.emit(Event{
 					Name:         "prefetch_preparation_waiting",
 					At:           readyAt,
@@ -178,7 +178,7 @@ func (s *Scheduler) runWorkItem(item *workItem, resolver *downloader.CacheResolv
 					AssetKey:     asset.AssetKey,
 					Distance:     job.Distance,
 					Generation:   item.generation,
-					ErrorMessage: "prepared_assets=" + strconv.Itoa(preparedCount) + " required_assets=" + strconv.Itoa(requiredCount),
+					ErrorMessage: "prepared_assets=" + strconv.Itoa(preparedCount) + " required_assets=" + strconv.Itoa(requiredCount) + " missing_assets=" + missing,
 				})
 			}
 		}
