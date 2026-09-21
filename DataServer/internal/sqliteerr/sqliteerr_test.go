@@ -11,7 +11,7 @@ import (
 
 func openTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite3", ":memory:")
+	db, err := sql.Open("sqlite3", ":memory:?_busy_timeout=5000")
 	if err != nil {
 		t.Fatalf("open in-memory db: %v", err)
 	}

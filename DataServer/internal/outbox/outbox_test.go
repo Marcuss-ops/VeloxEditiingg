@@ -45,7 +45,7 @@ func newTestDB(t *testing.T) *sql.DB {
 	// not part of URI identity under RFC 3986 §3.5 — a future driver
 	// upgrade could drop it from the cache key).
 	n := dsnCounter.Add(1)
-	dsn := fmt.Sprintf("file:%s-inst%d?mode=memory&cache=shared", t.Name(), n)
+	dsn := fmt.Sprintf("file:%s-inst%d?mode=memory&cache=shared&_busy_timeout=5000", t.Name(), n)
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		t.Fatalf("open in-memory sqlite: %v", err)

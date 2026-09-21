@@ -31,7 +31,7 @@ var testOutboxDsnCounter int
 func newOutboxDB(t *testing.T) *sql.DB {
 	t.Helper()
 	testOutboxDsnCounter++
-	dsn := fmt.Sprintf("file:bundle_rebuild_outbox_test-%d?mode=memory&cache=shared", testOutboxDsnCounter)
+	dsn := fmt.Sprintf("file:bundle_rebuild_outbox_test-%d?mode=memory&cache=shared&_busy_timeout=5000", testOutboxDsnCounter)
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
