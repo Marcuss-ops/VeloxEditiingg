@@ -546,6 +546,9 @@ components:
                                 type: string
                             sha256:
                                 type: string
+                            size_bytes:
+                                minimum: 1
+                                type: integer
                             start_frame:
                                 minimum: 0
                                 type: integer
@@ -994,6 +997,9 @@ components:
                                 type: string
                             sha256:
                                 type: string
+                            size_bytes:
+                                minimum: 1
+                                type: integer
                             start_frame:
                                 minimum: 0
                                 type: integer
@@ -1115,6 +1121,17 @@ components:
                     type: array
                 publishing_target:
                     $ref: '#/components/schemas/SubmitPublishingTarget'
+                runtime_assets:
+                    items:
+                        additionalProperties: {}
+                        type: object
+                    minItems: 0
+                    type: array
+                runtime_assets_complete:
+                    type: boolean
+                runtime_payload:
+                    additionalProperties: {}
+                    type: object
                 scenes:
                     items:
                         $ref: '#/components/schemas/SubmitScene'

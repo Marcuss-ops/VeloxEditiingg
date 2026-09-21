@@ -37,6 +37,34 @@ func TestSubmitJobRequest_Roundtrip(t *testing.T) {
 	}
 }
 
+func TestSubmitJobRequest_RuntimeAssetsCompletionRoundtrip(t *testing.T) {
+	complete := false
+	want := SubmitJobRequest{
+		IdempotencyKey:        "runtime-assets-contract",
+		RuntimeAssets:         []map[string]interface{}{{"asset_id": "tts-1"}},
+		RuntimePayload:        map[string]interface{}{"runtime_assets": []interface{}{}},
+		RuntimeAssetsComplete: &complete,
+	}
+
+	data, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got SubmitJobRequest
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.RuntimeAssets) != 1 || got.RuntimeAssets[0]["asset_id"] != "tts-1" {
+		t.Fatalf("runtime_assets roundtrip = %#v", got.RuntimeAssets)
+	}
+	if got.RuntimePayload["runtime_assets"] == nil {
+		t.Fatalf("runtime_payload roundtrip = %#v", got.RuntimePayload)
+	}
+	if got.RuntimeAssetsComplete == nil || *got.RuntimeAssetsComplete {
+		t.Fatalf("runtime_assets_complete roundtrip = %#v, want explicit false", got.RuntimeAssetsComplete)
+	}
+}
+
 func TestCreatorPushPayload_StatusEnum(t *testing.T) {
 	good := []string{`"completed"`, `"completed_with_warnings"`}
 	for _, s := range good {

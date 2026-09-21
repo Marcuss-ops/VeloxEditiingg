@@ -13,6 +13,9 @@ func TestPrepareRuntimeAssetsCompletionRequiresExplicitEmptyListOptIn(t *testing
 		{name: "omitted", req: SubmitJobRequest{}, want: false},
 		{name: "non_empty_assets", req: SubmitJobRequest{RuntimeAssets: []map[string]interface{}{{"asset_id": "a"}}}, want: true},
 		{name: "empty_assets_still_pending", req: SubmitJobRequest{RuntimeAssets: []map[string]interface{}{}}, want: false},
+		{name: "runtime_payload_null_still_pending", req: SubmitJobRequest{RuntimePayload: map[string]interface{}{"runtime_assets": nil}}, want: false},
+		{name: "runtime_payload_empty_still_pending", req: SubmitJobRequest{RuntimePayload: map[string]interface{}{"runtime_assets": []interface{}{}}}, want: false},
+		{name: "runtime_payload_non_empty_assets", req: SubmitJobRequest{RuntimePayload: map[string]interface{}{"runtime_assets": []interface{}{map[string]interface{}{"asset_id": "a"}}}}, want: true},
 		{name: "explicit_empty_complete", req: SubmitJobRequest{RuntimeAssets: []map[string]interface{}{}, RuntimeAssetsComplete: &complete}, want: true},
 		{name: "explicit_incomplete_overrides_assets", req: SubmitJobRequest{RuntimeAssets: []map[string]interface{}{{"asset_id": "a"}}, RuntimeAssetsComplete: &incomplete}, want: false},
 	}

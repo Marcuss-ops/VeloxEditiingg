@@ -53,13 +53,28 @@ func (h *Handlers) PrepareJob() gin.HandlerFunc {
 
 func runtimeAssetsCompleteForPrepare(req SubmitJobRequest) bool {
 	complete := len(req.RuntimeAssets) > 0
-	if _, runtimePayloadHasAssets := req.RuntimePayload["runtime_assets"]; runtimePayloadHasAssets {
+	if runtimePayloadHasNonEmptyAssets(req.RuntimePayload) {
 		complete = true
 	}
 	if req.RuntimeAssetsComplete != nil {
 		complete = *req.RuntimeAssetsComplete
 	}
 	return complete
+}
+
+func runtimePayloadHasNonEmptyAssets(payload map[string]interface{}) bool {
+	value, ok := payload["runtime_assets"]
+	if !ok || value == nil {
+		return false
+	}
+	switch assets := value.(type) {
+	case []interface{}:
+		return len(assets) > 0
+	case []map[string]interface{}:
+		return len(assets) > 0
+	default:
+		return false
+	}
 }
 
 // FinalizeJob applies runtime assets to the already persisted task and then
