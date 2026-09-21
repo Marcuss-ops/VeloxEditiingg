@@ -1,5 +1,11 @@
 ## [Unreleased] - 2026-09-18
 
+### Fixed — worker output metric ownership
+
+- Prevented artifact upload bytes from being added a second time to the
+  renderer-owned `output_bytes` metric.
+- Kept progressive upload counters and output-file size independent.
+
 ### Fixed — canonical PRE runtime-asset contract
 
 - Published `runtime_assets`, `runtime_payload`, and
