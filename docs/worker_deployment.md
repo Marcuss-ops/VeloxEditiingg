@@ -178,6 +178,17 @@ The Master-side plan defaults are `VELOX_PREFETCH_HORIZON_JOBS=3`,
 `VELOX_PREFETCH_PLAN_TTL=2m`; they must be changed on the Master rather than
 in the worker environment.
 
+### Faststart and fMP4 note
+
+The Go render-plan encoder reads `VELOX_RENDER_FASTSTART`. The legacy native
+C++ audio-mux helper still reads `VELOX_FASTSTART`; these are separate
+compatibility knobs and should not be mixed in deployment automation. The
+packet-copy fMP4 final-mux path selected by
+`output.profile_id=velox-h264-fmp4-stream-v1` does not perform classic `moov`
+relocation, so faststart timings are meaningful only for the progressive MP4
+path. Keep both knobs explicit in an A/B run and report the selected output
+profile with the result.
+
 ### Failure modes (operator-visible)
 
 | Misconfiguration | Master's response |
