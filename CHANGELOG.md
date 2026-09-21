@@ -1,5 +1,17 @@
 ## [Unreleased] - 2026-09-18
 
+### Fixed — canonical PRE runtime-asset contract
+
+- Published `runtime_assets`, `runtime_payload`, and
+  `runtime_assets_complete` on the canonical `SubmitJobRequest` wire schema
+  and regenerated `DataServer/api/openapi.yaml`.
+- Nested `runtime_payload.runtime_assets: null` or `[]` remains pending;
+  only a non-empty declaration or explicit `runtime_assets_complete: true`
+  completes single-stage PRE. Explicit `false` always keeps it pending.
+- Documented the `prefetch_queued` single-stage response alongside the
+  `waiting_runtime_assets` two-stage response and recorded the worker prefetch
+  defaults and the validated 8/6 deployment profile.
+
 ### Added — same-job PREPARE → FINALIZE runtime asset flow
 
 - Added `POST /api/v1/jobs/pre` and `POST /api/v1/jobs/{job_id}/finalize`.

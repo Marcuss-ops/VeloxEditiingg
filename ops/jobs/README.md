@@ -1,6 +1,24 @@
 # Fixed Direct Jobs
 
-## Two-stage job intake
+## PRE job intake
+
+`POST /api/v1/jobs/pre` supports both the legacy two-stage flow and a
+single-stage flow. The Master decides whether the runtime-asset gate is
+already complete from the PRE request:
+
+| PRE request | Response | Next step |
+|---|---|---|
+| `runtime_assets` is non-empty, or `runtime_payload.runtime_assets` is non-empty | `202 {job_id, dispatch_status: "prefetch_queued"}` | No FINALIZE is required; the worker prefetches the declared runtime assets. |
+| `runtime_assets_complete: true` | `202 {job_id, dispatch_status: "prefetch_queued"}` | Explicitly certifies completion, including an intentionally empty asset list. |
+| Runtime assets omitted, or empty without the explicit flag | `202 {job_id, dispatch_status: "waiting_runtime_assets"}` | Send FINALIZE later with the runtime assets. |
+| `runtime_assets_complete: false` | `202 {job_id, dispatch_status: "waiting_runtime_assets"}` | Explicitly keeps the job pending, even when assets are present. |
+
+The explicit completion flag is available on the canonical `SubmitJobRequest`
+wire schema as well as the handler type. `null` and `[]` nested under
+`runtime_payload.runtime_assets` do not complete the gate; use
+`runtime_assets_complete: true` when an empty list is intentional.
+
+### Two-stage job intake
 
 For jobs whose overlay/audio assets are generated after the initial stock and
 clip inputs, use the same job identity for both stages:
@@ -17,6 +35,10 @@ clips.v1 packet-copy admission contract; a later `replace` overlay may select
 the editorial re-encode path, but the renderer still requires this input gate
 to be present during validation. The PRE stage carries only the stock/clip
 timeline; FINALIZE adds the runtime assets to the same job.
+
+For the single-stage branch, include the complete runtime asset declaration in
+the PRE payload. For the two-stage branch, omit it (or leave the gate pending)
+and use FINALIZE after the generated assets are available.
 
 The finalize payload accepts typed `overlays[]` with the canonical half-open
 window `[start_frame,end_frame)` (for example `start_frame: 120,

@@ -156,6 +156,27 @@ Range.
 | `VELOX_ASSET_CHUNKED_DOWNLOAD` | off | Enables per-asset parallel chunked download |
 | `VELOX_ASSET_CHUNKED_DOWNLOAD_THRESHOLD_BYTES` | `67108864` (64 MiB) | Minimum asset size that triggers chunking |
 | `VELOX_ASSET_CHUNKED_DOWNLOAD_CONCURRENCY` | `4` | Parallel chunk connections per chunked asset |
+| `VELOX_PREFETCH_HORIZON_JOBS` | `3` | Future jobs included in the worker prefetch plan |
+| `VELOX_PREFETCH_PROTECTION_LOOKAHEAD_JOBS` | `10` | Future jobs whose assets remain protected from eviction |
+| `VELOX_PREFETCH_MAX_CONCURRENT` | `2` | Concurrent prefetch asset downloads; must stay below asset-download concurrency |
+| `VELOX_PREFETCH_BYTE_BUDGET` | `21474836480` (20 GiB) | Maximum admitted prefetch bytes |
+| `VELOX_PREFETCH_MAX_BANDWIDTH_BPS` | `0` (unlimited) | Optional prefetch bandwidth ceiling |
+| `VELOX_PREFETCH_DISK_RESTRICTED_PERCENT` | `70` | Disk-use watermark that reduces prefetch admission |
+| `VELOX_PREFETCH_DISK_CRITICAL_PERCENT` | `85` | Disk-use watermark that pauses prefetch admission |
+| `VELOX_PREFETCH_DISK_RECOVERY_PERCENT` | `75` | Hysteresis watermark that resumes prefetch |
+| `VELOX_PREFETCH_RAM_ENABLED` | off | Optional RAM residency for frequently reused future assets |
+| `VELOX_PREFETCH_RAM_BUDGET_BYTES` | `536870912` (512 MiB) | RAM budget when RAM prefetch is enabled |
+| `VELOX_PREFETCH_RAM_MAX_ASSET_BYTES` | `134217728` (128 MiB) | Maximum individual asset eligible for RAM residency |
+
+The deployment example intentionally raises the two transfer pools to
+`VELOX_ASSET_DOWNLOAD_CONCURRENCY=8` and `VELOX_PREFETCH_MAX_CONCURRENT=6`.
+Validation rejects a prefetch pool greater than or equal to the general asset
+pool, preserving two foreground transfer slots.
+
+The Master-side plan defaults are `VELOX_PREFETCH_HORIZON_JOBS=3`,
+`VELOX_PREFETCH_PROTECTION_LOOKAHEAD_JOBS=10`, and
+`VELOX_PREFETCH_PLAN_TTL=2m`; they must be changed on the Master rather than
+in the worker environment.
 
 ### Failure modes (operator-visible)
 
