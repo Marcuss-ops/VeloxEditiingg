@@ -15,6 +15,7 @@ import (
 	"velox-worker-agent/internal/publisher"
 	"velox-worker-agent/internal/spool"
 	"velox-worker-agent/internal/taskrunner"
+	"velox-worker-agent/internal/telemetry"
 )
 
 // uploadDeclaredArtifacts uploads every declared output artifact, resolves
@@ -103,27 +104,36 @@ func (w *Worker) uploadDeclaredArtifacts(ctx context.Context, pte *PendingTaskEx
 		})
 
 		// ── Accumulate progressive upload metrics ────────────────────────
-		if pteReport := report.RawMetrics; pteReport != nil {
-			pteReport.UploadMbpsAvg = result.Breakdown.UploadMbps
-			pteReport.OutputBytes += result.Breakdown.UploadBytes
-			// Progressive upload overlap: use the main (first) artifact's values.
-			// For multi-artifact jobs, sum the parts/bytes and take the max overlap.
-			if i == 0 {
-				pteReport.ProgressiveOverlapFirstPartMs = result.Breakdown.FirstPartStartedMS
-				pteReport.ProgressiveOverlapPartsBeforeRender = result.Breakdown.PartsUploadedBeforeRenderEnd
-				pteReport.ProgressiveOverlapBytesBeforeRender = result.Breakdown.BytesUploadedBeforeRenderEnd
-				pteReport.ProgressiveOverlapMs = result.Breakdown.OverlapMS
-				pteReport.TrailerToOpenMs = result.Breakdown.TrailerToOpenMS
-				pteReport.MuxToOpenUS = result.Breakdown.MuxToOpenUS
-			} else {
-				pteReport.ProgressiveOverlapPartsBeforeRender += result.Breakdown.PartsUploadedBeforeRenderEnd
-				pteReport.ProgressiveOverlapBytesBeforeRender += result.Breakdown.BytesUploadedBeforeRenderEnd
-				if result.Breakdown.OverlapMS > pteReport.ProgressiveOverlapMs {
-					pteReport.ProgressiveOverlapMs = result.Breakdown.OverlapMS
-				}
-			}
-		}
+		recordUploadMetrics(report.RawMetrics, result.Breakdown, i)
 	}
 
 	return completed, nil
+}
+
+// recordUploadMetrics adds transport-owned upload observations to the
+// attempt report. OutputBytes deliberately is not updated here: the renderer
+// already owns that metric and records the primary output size during
+// manifest verification. Adding UploadedBytes at this point double-counts the
+// same artifact (the historical symptom was output_bytes == 2 * file_size).
+func recordUploadMetrics(raw *telemetry.RawExecutionMetrics, breakdown publisher.UploadBreakdown, artifactIndex int) {
+	if raw == nil {
+		return
+	}
+	raw.UploadMbpsAvg = breakdown.UploadMbps
+	// Progressive upload overlap: use the main (first) artifact's values.
+	// For multi-artifact jobs, sum the parts/bytes and take the max overlap.
+	if artifactIndex == 0 {
+		raw.ProgressiveOverlapFirstPartMs = breakdown.FirstPartStartedMS
+		raw.ProgressiveOverlapPartsBeforeRender = breakdown.PartsUploadedBeforeRenderEnd
+		raw.ProgressiveOverlapBytesBeforeRender = breakdown.BytesUploadedBeforeRenderEnd
+		raw.ProgressiveOverlapMs = breakdown.OverlapMS
+		raw.TrailerToOpenMs = breakdown.TrailerToOpenMS
+		raw.MuxToOpenUS = breakdown.MuxToOpenUS
+		return
+	}
+	raw.ProgressiveOverlapPartsBeforeRender += breakdown.PartsUploadedBeforeRenderEnd
+	raw.ProgressiveOverlapBytesBeforeRender += breakdown.BytesUploadedBeforeRenderEnd
+	if breakdown.OverlapMS > raw.ProgressiveOverlapMs {
+		raw.ProgressiveOverlapMs = breakdown.OverlapMS
+	}
 }
