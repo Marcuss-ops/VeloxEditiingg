@@ -160,6 +160,8 @@ func TestCommonAssetResolverFansOutOneHundredStockAssets(t *testing.T) {
 	var active atomic.Int32
 	var maxActive atomic.Int32
 	var requests atomic.Int32
+	var barrierOnce sync.Once
+	barrier := make(chan struct{})
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		current := active.Add(1)
@@ -172,9 +174,16 @@ func TestCommonAssetResolverFansOutOneHundredStockAssets(t *testing.T) {
 		}
 		requests.Add(1)
 		assetID := strings.TrimPrefix(r.URL.Path, "/api/v1/agent/assets/")
-		// Hold each response long enough for the resolver to expose the
-		// downloader pool size instead of winning by scheduler luck.
-		time.Sleep(25 * time.Millisecond)
+		// Do not make the assertion depend on scheduler timing. Hold the
+		// first wave until all 30 downloader slots have reached the server.
+		if current >= int32(downloadConcurrency) {
+			barrierOnce.Do(func() { close(barrier) })
+		}
+		select {
+		case <-barrier:
+		case <-time.After(5 * time.Second):
+			t.Errorf("download pool did not expose %d concurrent requests", downloadConcurrency)
+		}
 		w.Header().Set("Content-Type", "video/mp4")
 		_, _ = w.Write([]byte("stock-bytes-" + assetID))
 	}))
