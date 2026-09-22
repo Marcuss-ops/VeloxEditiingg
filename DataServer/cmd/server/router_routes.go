@@ -168,11 +168,19 @@ func artifactDownloadHandler(reader artifacts.ArtifactReader, blobs repository.B
 
 // registerMetricsRoutes mounts the Prometheus /metrics endpoint only
 // when the exporter is wired (scorecard v1 / PR-5: tests may disable).
-func registerMetricsRoutes(r *gin.Engine, deps MetricsRouteDeps) {
+// Production passes the admin auth middleware; the optional form keeps
+// minimal test routers source-compatible while making the real composition
+// root fail closed at the route boundary.
+func registerMetricsRoutes(r *gin.Engine, deps MetricsRouteDeps, auth ...gin.HandlerFunc) {
 	if deps.Registry == nil {
 		return
 	}
-	r.GET("/metrics", gin.WrapH(deps.Registry.Handler()))
+	handler := gin.WrapH(deps.Registry.Handler())
+	if len(auth) > 0 && auth[0] != nil {
+		r.GET("/metrics", auth[0], handler)
+		return
+	}
+	r.GET("/metrics", handler)
 }
 
 // registerM2MAdminRoutes mounts the admin CRUD endpoints for M2M

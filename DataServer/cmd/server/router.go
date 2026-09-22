@@ -313,7 +313,7 @@ func newRouter(cfg *config.Config, bundle RouterBundle, registry interface {
 	// their own directly via pipeline.NewM2MJwAuthMiddleware.
 	registerPipelineRoutes(r, auth, newM2MJwAuthFromBundle(cfg, bundle.Pipeline), bundle.Pipeline)
 	registerUploadRoutes(r, bundle.Upload)
-	registerMetricsRoutes(r, bundle.Metrics)
+	registerMetricsRoutes(r, bundle.Metrics, auth)
 	registerBenchmarkRoutes(r, bundle.Metrics, cfg)
 	if err := registerInstaEditRoutes(r, bundle.InstaEdit); err != nil {
 		return nil, err
