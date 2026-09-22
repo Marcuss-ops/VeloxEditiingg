@@ -156,6 +156,7 @@ func startTransports(cfg *config.Config, c *appComponents) (*transportBundle, er
 			if c.metricsCollector != nil {
 				grpcHandler.SetResourceSink(c.metricsCollector)
 				grpcHandler.SetPlacementRejectionSink(c.metricsCollector)
+				grpcHandler.SetPrefetchTelemetrySink(c.metricsCollector)
 				logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] wired metrics collector sinks on gRPC handler (placement + worker resources)")
 			}
 			// VELOX_PLACEMENT_PIN_WORKER_ID operator override: when set,

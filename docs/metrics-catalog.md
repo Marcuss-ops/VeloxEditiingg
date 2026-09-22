@@ -64,6 +64,11 @@ per-job labels. Per-job delivery timing and cache totals come from
 | `velox_assembly_assets_ready_at_execution` / `velox_assembly_assets_missing_at_execution` | G | `label=total` | verified assets available/missing when execution starts; missing target is zero |
 | `velox_assembly_execution_download_ms` | H | `label=total` | residual download duration on the execution critical path; fast-path target is zero |
 | `velox_unique_assets_requested` / `velox_cache_invariant_violations_total` | G/C | none | latest unique-asset snapshot and rejected accounting mismatches |
+| `velox_prefetch_jobs_total` | C | `worker_id`, `outcome` | worker prefetch lifecycle milestones (`received`, `applied`, `failed`) |
+| `velox_prefetch_bytes_total` | C | `worker_id`, `origin` | bytes observed for `prefetch`, `warm_cache` or `runtime_download` |
+| `velox_prefetch_failures_total` | C | `worker_id`, `reason` | bounded prefetch failure classification |
+| `velox_prefetch_duration_seconds` | H | `worker_id` | asset download-start to ready latency |
+| `velox_prefetch_cache_events_total` | C | `worker_id`, `origin`, `result` | per-asset prefetch hit/miss evidence |
 
 `db_write_wait_ms` measures time to acquire a `database/sql` transaction
 connection; SQLite lock wait inside a deferred transaction is reflected in

@@ -91,6 +91,13 @@ type Collector struct {
 	cacheEvictedBytes  *Family // velox_cache_evicted_bytes_total
 	cacheCorruptions   *Family // velox_cache_corruption_total
 
+	// Prefetch lifecycle telemetry emitted by worker lifecycle events.
+	prefetchJobs     *Family // velox_prefetch_jobs_total
+	prefetchBytes    *Family // velox_prefetch_bytes_total
+	prefetchFailures *Family // velox_prefetch_failures_total
+	prefetchDuration *Family // velox_prefetch_duration_seconds
+	prefetchCache    *Family // velox_prefetch_cache_events_total
+
 	// Worker resource counters (from heartbeat.resources).
 	workerCPUUtil         *Family // velox_worker_cpu_utilization_ratio
 	workerIOWait          *Family // velox_worker_cpu_iowait_ratio
@@ -255,6 +262,7 @@ func NewCollector(reg *Registry) *Collector {
 	c.initFFmpegFamilies()
 	c.initVideoFamilies()
 	c.initCacheFamilies()
+	c.initPrefetchFamilies()
 	c.initWorkerFamilies()
 	c.initMasterFamilies()
 	c.initComputeFamilies()
@@ -320,6 +328,7 @@ func (c *Collector) allFamilies() []*Family {
 	families = append(families, c.ffmpegFamilies()...)
 	families = append(families, c.videoFamilies()...)
 	families = append(families, c.cacheFamilies()...)
+	families = append(families, c.prefetchFamilies()...)
 	families = append(families, c.workerFamilies()...)
 	families = append(families, c.masterFamilies()...)
 	families = append(families, c.computeFamilies()...)

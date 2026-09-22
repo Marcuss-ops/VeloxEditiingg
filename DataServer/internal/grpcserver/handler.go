@@ -67,6 +67,7 @@ type Handler struct {
 	// can inject a stub. NIL-safe — handlers without a metrics
 	// surface silently skip the projection (log-only mode).
 	placementRejectionSink velmetrics.PlacementRejectionSink
+	prefetchTelemetry      velmetrics.PrefetchTelemetrySink
 
 	// Asset download progress is a latest-state read model. The store
 	// dependency is already owned by Handler; this sink is an optional

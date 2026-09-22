@@ -66,6 +66,13 @@ func (h *Handler) SetPlacementRejectionSink(sink velmetrics.PlacementRejectionSi
 	h.placementRejectionSink = sink
 }
 
+// SetPrefetchTelemetrySink installs the bounded Prometheus projection for
+// worker prefetch lifecycle events. The durable job event journal remains the
+// detailed source of truth; nil only disables the metrics projection.
+func (h *Handler) SetPrefetchTelemetrySink(sink velmetrics.PrefetchTelemetrySink) {
+	h.prefetchTelemetry = sink
+}
+
 // SetCapabilityRegistry installs the readiness registry that gates the
 // on-the-wire "artifact.commit.v1" dispatch path. Bootstrap wires the
 // canonical registry.NewCapabilityRegistry() (with coordinator + spool +

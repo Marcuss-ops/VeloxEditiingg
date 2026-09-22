@@ -115,6 +115,7 @@ func init() {
 		economicsMetricDefinitions(),
 		inputSecurityMetricDefinitions(),
 		parallelismMetricDefinitions(),
+		prefetchMetricDefinitions(),
 	)
 }
 

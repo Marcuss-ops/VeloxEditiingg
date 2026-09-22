@@ -2,6 +2,7 @@ package grpcserver
 
 import (
 	"context"
+	"strings"
 
 	"velox-server/internal/logging"
 	pb "velox-shared/controltransport/pb"
@@ -22,6 +23,7 @@ func (h *Handler) handlePrefetchLifecycleEvent(workerID string, event *pb.Prefet
 		logGRPCf(context.Background(), logging.LevelWarn, logging.CodeGRPCPrefetchFailed, "[GRPC] prefetch lifecycle event from worker %s rejected: worker_id=%s mismatch", workerID, declared)
 		return
 	}
+	h.recordPrefetchTelemetry(workerID, event)
 	if event.GetEventType() == "prefetch_prepared" && event.GetReservationId() != "" {
 		// Per-asset messages carry the gate evidence. The aggregate marker sent
 		// after all assets deliberately has no asset identity and therefore does
@@ -102,5 +104,51 @@ func (h *Handler) handlePrefetchLifecycleEvent(workerID string, event *pb.Prefet
 	}
 	if err := h.dbStore.LogJobEvent(jobID, "prefetch."+event.GetEventType(), extra); err != nil {
 		logGRPCf(context.Background(), logging.LevelWarn, logging.CodeGRPCPrefetchFailed, "[GRPC] failed to persist prefetch event %s for job=%s: %v", event.GetEventType(), jobID, err)
+	}
+}
+
+func (h *Handler) recordPrefetchTelemetry(workerID string, event *pb.PrefetchLifecycleEvent) {
+	if h == nil || h.prefetchTelemetry == nil || event == nil {
+		return
+	}
+	switch event.GetEventType() {
+	case "future_plan_received":
+		h.prefetchTelemetry.RecordPrefetchJob(workerID, "received")
+	case "future_plan_applied":
+		h.prefetchTelemetry.RecordPrefetchJob(workerID, "applied")
+	case "prejob_prepare_failed", "prefetch_failed", "prefetch_error":
+		h.prefetchTelemetry.RecordPrefetchFailure(workerID, classifyPrefetchFailure(event.GetErrorReason()))
+	}
+	if event.GetEventType() != "prefetch_prepared" || event.GetAssetId() == "" && event.GetAssetKey() == "" {
+		return
+	}
+	result := "miss"
+	if event.GetCacheHit() {
+		result = "hit"
+	}
+	h.prefetchTelemetry.RecordPrefetchAsset(workerID, event.GetOrigin(), result, event.GetAssetSizeBytes())
+	if start, ready := event.GetDownloadStartedAt(), event.GetAssetReadyAt(); start != nil && ready != nil {
+		duration := ready.AsTime().Sub(start.AsTime())
+		if duration > 0 {
+			h.prefetchTelemetry.RecordPrefetchDuration(workerID, duration)
+		}
+	}
+}
+
+func classifyPrefetchFailure(reason string) string {
+	s := strings.ToLower(strings.TrimSpace(reason))
+	switch {
+	case strings.Contains(s, "lease") || strings.Contains(s, "reservation"):
+		return "lease"
+	case strings.Contains(s, "cache") || strings.Contains(s, "hash"):
+		return "cache"
+	case strings.Contains(s, "download") || strings.Contains(s, "drive") || strings.Contains(s, "http"):
+		return "download"
+	case strings.Contains(s, "plan") || strings.Contains(s, "manifest"):
+		return "plan"
+	case strings.Contains(s, "protocol") || strings.Contains(s, "worker"):
+		return "protocol"
+	default:
+		return "unknown"
 	}
 }
