@@ -15,8 +15,7 @@
 // RemoteCodex/.../pkg/bootstrap/bootstrap_test.go so minimal CI
 // hosts without the media toolchain stay green.
 //
-// Mismatch path (3 deliveries + 1 audio stream → sentinel): needs
-// a hand-coded multi-stream mp4 fixture, deferred to a follow-up.
+// Mismatch path (published video with 0 audio streams → sentinel).
 
 package artifacts
 
@@ -76,6 +75,31 @@ func synthesizeSoloAudioMP4(t *testing.T, out string) {
 	require.Greater(t, st.Size(), int64(0), "synthesized mp4 empty")
 }
 
+// synthesizeVideoOnlyMP4 produces the failure shape seen in the remote
+// copy-only lane: a valid MP4 container with video but no audio stream.
+func synthesizeVideoOnlyMP4(t *testing.T, out string) {
+	t.Helper()
+	cmd := exec.Command("ffmpeg",
+		"-y",
+		"-f", "lavfi",
+		"-i", "color=c=black:s=16x16:r=1",
+		"-t", "1",
+		"-an",
+		"-c:v", "libx264",
+		"-pix_fmt", "yuv420p",
+		"-f", "mp4",
+		out,
+	)
+	var errBuf bytes.Buffer
+	cmd.Stderr = &errBuf
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("ffmpeg video-only synth failed for %s: %v\nstderr=%s", out, err, errBuf.String())
+	}
+	st, statErr := os.Stat(out)
+	require.NoError(t, statErr, "video-only synthesized mp4 missing")
+	require.Greater(t, st.Size(), int64(0), "video-only synthesized mp4 empty")
+}
+
 // TestFinalize_FFProbeInvariant_HappyPath verifies the gate runs
 // the ffprobe shell-out and accepts a 1-stream mp4 / 1-delivery pair
 // when VELOX_FFPROBE_VERIFY_ON_FINALIZE=true is set.
@@ -118,15 +142,11 @@ func TestFinalize_FFProbeInvariant_HappyPath(t *testing.T) {
 
 // TestFinalize_FFProbeInvariant_Mismatch verifies the pre-commit gate
 // surfaces ErrFFProbeAudioCountMismatch AND keeps artifacts.status out
-// of READY when the audio stream count ≠ the per-job plan's enabled
-// destinations count.
+// of READY when a published MP4 has no audio stream.
 //
-// Setup is the canonical Jackie-Chan-style regression reproduction:
-//   - 3 enabled rows in job_delivery_plans for the test job (the
-//     resolveDeliveryDestinationsTx branch 1 would stamp 3
-//     job_deliveries).
-//   - mp4 fixture with exactly 1 audio stream (the C++ engine's
-//     amix-collapse regression).
+// Setup uses three enabled delivery rows to prove fan-out does not change
+// the media contract: the expected count remains one audio stream, while
+// the fixture deliberately contains zero.
 //
 // Pre-commit semantics: the gate fires AFTER blob promote and BEFORE
 // the CAS RECEIVED→FINALIZING. On mismatch the orchestrator returns
@@ -182,11 +202,9 @@ func TestFinalize_FFProbeInvariant_Mismatch(t *testing.T) {
 		require.NoError(t, err, "seed job_delivery_plans %s", did)
 	}
 
-	// Synthesize a 1-audio-stream mp4 fixture via ffmpeg anullsrc
-	// (silent mono aac — the canonical Jackie-style regression
-	// produces a single track from a multi-voice amix collapse).
+	// Synthesize a video-only mp4 fixture: the remote failure mode under test.
 	mp4Path := filepath.Join(env.tmpDir, "fp_fixture_mismatch.mp4")
-	synthesizeSoloAudioMP4(t, mp4Path)
+	synthesizeVideoOnlyMP4(t, mp4Path)
 	payload, err := os.ReadFile(mp4Path)
 	require.NoError(t, err, "read synthesized mp4")
 
@@ -212,7 +230,7 @@ func TestFinalize_FFProbeInvariant_Mismatch(t *testing.T) {
 	require.NoError(t, err, "FinalStorageKey derivation")
 
 	// Finalize must surface ErrFFProbeAudioCountMismatch — the gate
-	// sees expected=3 (per-job plan rows) and actual=1 (audio
+	// sees expected=1 (published artifact) and actual=0 (audio
 	// streams in the mp4 container) and trips.
 	_, err = env.svc.Finalize(context.Background(), FinalizeArtifactCommand{
 		UploadID: sess.UploadID, JobID: jobID, WorkerID: testWorkerID,
@@ -221,7 +239,7 @@ func TestFinalize_FFProbeInvariant_Mismatch(t *testing.T) {
 		// DestinationID would route through the writer's branch 1
 		// (single destination) and bypass our 3-plan fixture.
 	})
-	require.Error(t, err, "ffprobe gate must fail on 3-plan / 1-stream mismatch")
+	require.Error(t, err, "ffprobe gate must fail on published / video-only mismatch")
 	require.True(t, errors.Is(err, ErrFFProbeAudioCountMismatch),
 		"want ErrFFProbeAudioCountMismatch, got %v", err)
 
@@ -362,12 +380,9 @@ func TestFinalize_FFProbeInvariant_ShadowMatch(t *testing.T) {
 }
 
 // TestFinalize_FFProbeInvariant_ShadowMismatch verifies the
-// shadow mode on the canonical Jackie-chan regression fixture:
-// 3 enabled delivery destinations but 1 audio stream in the mp4
-// (amix-collapse). The gate logs a mismatch event and returns
-// nil (no abort) — the writer commits, status=READY, the
-// regression is loud in logs (visible to operators) but does NOT
-// take down production traffic during Stage 1.
+// shadow mode on a published video-only fixture. The gate logs a
+// mismatch event and returns nil (no abort) — the writer commits,
+// status=READY, while the regression remains visible during Stage 1.
 func TestFinalize_FFProbeInvariant_ShadowMismatch(t *testing.T) {
 	requireFFMPEGTools(t)
 
@@ -380,8 +395,8 @@ func TestFinalize_FFProbeInvariant_ShadowMismatch(t *testing.T) {
 	_, err := env.db.Exec(`DELETE FROM job_delivery_plans WHERE job_id = ?`, jobID)
 	require.NoError(t, err)
 
-	// 3 enabled delivery destinations (the canonical regression
-	// fixture: a 6-voice payload collapsed by the C++ engine).
+	// 3 enabled delivery destinations prove fan-out still expects one
+	// audio stream, not one stream per destination.
 	now := env.clock.Now().UTC().Format(time.RFC3339)
 	dests := []string{"primary", "shadow-mismatch-drive", "shadow-mismatch-s3"}
 	for i, did := range dests {
@@ -399,7 +414,7 @@ func TestFinalize_FFProbeInvariant_ShadowMismatch(t *testing.T) {
 	}
 
 	mp4Path := filepath.Join(env.tmpDir, "shadow_mismatch.mp4")
-	synthesizeSoloAudioMP4(t, mp4Path)
+	synthesizeVideoOnlyMP4(t, mp4Path)
 	payload, err := os.ReadFile(mp4Path)
 	require.NoError(t, err)
 
@@ -428,8 +443,8 @@ func TestFinalize_FFProbeInvariant_ShadowMismatch(t *testing.T) {
 	require.Contains(t, logged, "event=ffprobe_invariant_mismatch", "shadow mode logs every mismatch for Stage 1 visibility")
 	require.Contains(t, logged, "mode=shadow", "log line must carry the mode so the runbook's Stage 2 grep excludes it")
 	require.Contains(t, logged, "job_id="+jobID)
-	require.Contains(t, logged, "expected_streams=3", "log line carries expected (per-job plan) count for triage")
-	require.Contains(t, logged, "actual_streams=1", "log line carries actual (ffprobe) count for triage")
+	require.Contains(t, logged, "expected_streams=1", "log line carries expected published-artifact count for triage")
+	require.Contains(t, logged, "actual_streams=0", "log line carries actual (ffprobe) count for triage")
 }
 
 // TestFinalize_FFProbeInvariant_ShadowMissingBinary verifies the
