@@ -76,6 +76,36 @@ func TestRunWorkerConfig_FMP4ToggleAcceptsEqualsFormAndSharedKnobs(t *testing.T)
 	}
 }
 
+func TestRunWorkerConfigAcceptsDownloadConcurrencyKnobs(t *testing.T) {
+	var postBody map[string]any
+	c, srv := newMockClient(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "POST /api/v1/admin/workers/worker-1/config":
+			if err := json.NewDecoder(r.Body).Decode(&postBody); err != nil {
+				t.Errorf("decode config body: %v", err)
+			}
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{"operation_id":"op-config-download","worker_id":"worker-1"}`))
+		case "GET /api/v1/admin/operations/op-config-download":
+			_ = json.NewEncoder(w).Encode(polledOperationRow{OperationID: "op-config-download", Status: "SUCCEEDED"})
+		default:
+			http.Error(w, "unexpected request", http.StatusNotFound)
+		}
+	})
+	defer srv.Close()
+
+	ec := runWorkerConfig(c, []string{"set", "worker-1", "--asset-download-concurrency=30", "--prefetch-max-concurrent", "29"})
+	if ec != ExitOK {
+		t.Fatalf("worker-config exit code = %d, want %d", ec, ExitOK)
+	}
+	if got, ok := postBody["asset_download_concurrency"].(float64); !ok || got != 30 {
+		t.Fatalf("body asset_download_concurrency = %v, want 30", postBody["asset_download_concurrency"])
+	}
+	if got, ok := postBody["prefetch_max_concurrent"].(float64); !ok || got != 29 {
+		t.Fatalf("body prefetch_max_concurrent = %v, want 29", postBody["prefetch_max_concurrent"])
+	}
+}
+
 // TestRunWorkerConfig_AcceptsDocumentedPositionalReason keeps the documented
 // operator form compatible with the explicit --reason form.
 func TestRunWorkerConfig_AcceptsDocumentedPositionalReason(t *testing.T) {

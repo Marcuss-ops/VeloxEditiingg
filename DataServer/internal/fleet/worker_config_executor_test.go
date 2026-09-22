@@ -55,6 +55,40 @@ func TestWorkerConfigExecutorFMP4StreamProfileArgument(t *testing.T) {
 	}
 }
 
+func TestWorkerConfigExecutorDownloadConcurrencyArguments(t *testing.T) {
+	assetConcurrency := 30
+	prefetchConcurrency := 29
+	payload, err := json.Marshal(WorkerConfigPayload{
+		AssetDownloadConcurrency: &assetConcurrency,
+		PrefetchMaxConcurrent:    &prefetchConcurrency,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ssh := &workerConfigSSHStub{}
+	if err := NewWorkerConfigExecutor(ssh).Execute(context.Background(), &store.Operation{WorkerID: "worker-51", Payload: payload}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(ssh.command, "--asset-download-concurrency 30") || !strings.Contains(ssh.command, "--prefetch-max-concurrent 29") {
+		t.Fatalf("helper command = %q", ssh.command)
+	}
+}
+
+func TestWorkerConfigExecutorRejectsUnsafeDownloadConcurrency(t *testing.T) {
+	tooLarge := 129
+	payload, err := json.Marshal(WorkerConfigPayload{AssetDownloadConcurrency: &tooLarge})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ssh := &workerConfigSSHStub{}
+	if err := NewWorkerConfigExecutor(ssh).Execute(context.Background(), &store.Operation{WorkerID: "worker-51", Payload: payload}); err == nil {
+		t.Fatal("Execute accepted asset_download_concurrency=129")
+	}
+	if ssh.command != "" {
+		t.Fatalf("SSH invoked for rejected payload: %q", ssh.command)
+	}
+}
+
 // TestWorkerConfigExecutorRejectsNonBooleanFMP4Toggle keeps the knob from
 // becoming an arbitrary environment write (the helper only accepts 0|1).
 func TestWorkerConfigExecutorRejectsNonBooleanFMP4Toggle(t *testing.T) {

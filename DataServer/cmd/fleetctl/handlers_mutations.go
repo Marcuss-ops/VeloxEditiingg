@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -137,13 +138,15 @@ func runRestart(client *fleetClient, args []string) int {
 
 func runWorkerConfig(client *fleetClient, args []string) int {
 	if len(args) < 2 || args[0] != "set" {
-		fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "worker-config requires: set <worker_id> [--audio-mix-strategy ...] [--audio-mix-profile 0|1] [--fmp4-stream-profile 0|1]"))
+		fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "worker-config requires: set <worker_id> [--audio-mix-strategy ...] [--audio-mix-profile 0|1] [--asset-download-concurrency 1..128] [--prefetch-max-concurrent 1..127] [--fmp4-stream-profile 0|1]"))
 		return ExitMisuse
 	}
 	workerID := args[1]
 	strategy := ""
 	profile := (*int)(nil)
 	fmp4 := (*int)(nil)
+	assetDownloadConcurrency := (*int)(nil)
+	prefetchMaxConcurrent := (*int)(nil)
 	reason := "fleetctl worker-config set"
 	reasonSet := false
 	var positional []string
@@ -160,10 +163,18 @@ func runWorkerConfig(client *fleetClient, args []string) int {
 		}
 		return &parsed, true
 	}
+	parseBoundedPositive := func(flag, value string, max int) (*int, bool) {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 1 || parsed > max {
+			fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "%s must be an integer in [1,%d]", flag, max))
+			return nil, false
+		}
+		return &parsed, true
+	}
 	for i := 2; i < len(args); i++ {
 		arg := args[i]
 		switch {
-		case arg == "--audio-mix-strategy" || arg == "--audio-mix-profile" || arg == "--fmp4-stream-profile" || arg == "--reason":
+		case arg == "--audio-mix-strategy" || arg == "--audio-mix-profile" || arg == "--asset-download-concurrency" || arg == "--prefetch-max-concurrent" || arg == "--fmp4-stream-profile" || arg == "--reason":
 			if i+1 >= len(args) {
 				fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "%s requires a value", arg))
 				return ExitMisuse
@@ -178,6 +189,18 @@ func runWorkerConfig(client *fleetClient, args []string) int {
 					return ExitMisuse
 				}
 				profile = parsed
+			case "--asset-download-concurrency":
+				parsed, ok := parseBoundedPositive("asset-download-concurrency", value, 128)
+				if !ok {
+					return ExitMisuse
+				}
+				assetDownloadConcurrency = parsed
+			case "--prefetch-max-concurrent":
+				parsed, ok := parseBoundedPositive("prefetch-max-concurrent", value, 127)
+				if !ok {
+					return ExitMisuse
+				}
+				prefetchMaxConcurrent = parsed
 			case "--fmp4-stream-profile":
 				parsed, ok := parseToggle("fmp4-stream-profile", value)
 				if !ok {
@@ -197,6 +220,18 @@ func runWorkerConfig(client *fleetClient, args []string) int {
 				return ExitMisuse
 			}
 			profile = parsed
+		case strings.HasPrefix(arg, "--asset-download-concurrency="):
+			parsed, ok := parseBoundedPositive("asset-download-concurrency", strings.TrimPrefix(arg, "--asset-download-concurrency="), 128)
+			if !ok {
+				return ExitMisuse
+			}
+			assetDownloadConcurrency = parsed
+		case strings.HasPrefix(arg, "--prefetch-max-concurrent="):
+			parsed, ok := parseBoundedPositive("prefetch-max-concurrent", strings.TrimPrefix(arg, "--prefetch-max-concurrent="), 127)
+			if !ok {
+				return ExitMisuse
+			}
+			prefetchMaxConcurrent = parsed
 		case strings.HasPrefix(arg, "--fmp4-stream-profile="):
 			parsed, ok := parseToggle("fmp4-stream-profile", strings.TrimPrefix(arg, "--fmp4-stream-profile="))
 			if !ok {
@@ -237,7 +272,7 @@ func runWorkerConfig(client *fleetClient, args []string) int {
 		fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "audio-mix-strategy must be legacy, optimized, or auto"))
 		return ExitMisuse
 	}
-	if strategy == "" && profile == nil && fmp4 == nil {
+	if strategy == "" && profile == nil && assetDownloadConcurrency == nil && prefetchMaxConcurrent == nil && fmp4 == nil {
 		fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "worker-config requires at least one supported setting"))
 		return ExitMisuse
 	}
@@ -247,6 +282,12 @@ func runWorkerConfig(client *fleetClient, args []string) int {
 	}
 	if profile != nil {
 		body["audio_mix_profile"] = *profile
+	}
+	if assetDownloadConcurrency != nil {
+		body["asset_download_concurrency"] = *assetDownloadConcurrency
+	}
+	if prefetchMaxConcurrent != nil {
+		body["prefetch_max_concurrent"] = *prefetchMaxConcurrent
 	}
 	if fmp4 != nil {
 		body["fmp4_stream_profile"] = *fmp4

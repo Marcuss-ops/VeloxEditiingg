@@ -14,6 +14,14 @@ import (
 type WorkerConfigPayload struct {
 	AudioMixStrategy string `json:"audio_mix_strategy,omitempty"`
 	AudioMixProfile  *int   `json:"audio_mix_profile,omitempty"`
+	// AssetDownloadConcurrency caps the worker's canonical byte-transfer pool.
+	// The bounded range prevents an operator typo from creating an unbounded
+	// connection/memory storm on a production worker.
+	AssetDownloadConcurrency *int `json:"asset_download_concurrency,omitempty"`
+	// PrefetchMaxConcurrent controls how many future assets may be admitted at
+	// once. It must remain below AssetDownloadConcurrency so foreground asset
+	// resolution always retains one transfer slot.
+	PrefetchMaxConcurrent *int `json:"prefetch_max_concurrent,omitempty"`
 	// FMP4StreamProfile opens (1) or closes (0) the fragmented-MP4 admission
 	// gate (VELOX_FMP4_STREAM_PROFILE) on an ALREADY-INSTALLED worker. It is
 	// the canonical rollout path: deploy/runtime/worker.env.example only
@@ -51,7 +59,7 @@ func (e *WorkerConfigExecutor) Execute(ctx context.Context, op *store.Operation)
 	if err := json.Unmarshal(op.Payload, &payload); err != nil {
 		return fmt.Errorf("worker config: invalid payload: %w", err)
 	}
-	if payload.AudioMixStrategy == "" && payload.AudioMixProfile == nil && payload.FMP4StreamProfile == nil {
+	if payload.AudioMixStrategy == "" && payload.AudioMixProfile == nil && payload.AssetDownloadConcurrency == nil && payload.PrefetchMaxConcurrent == nil && payload.FMP4StreamProfile == nil {
 		return errors.New("worker config: no supported settings requested")
 	}
 	command := "sudo -n /usr/local/sbin/velox-worker-set-config"
@@ -66,6 +74,18 @@ func (e *WorkerConfigExecutor) Execute(ctx context.Context, op *store.Operation)
 			return fmt.Errorf("worker config: invalid audio_mix_profile %d", *payload.AudioMixProfile)
 		}
 		command += fmt.Sprintf(" --audio-mix-profile %d", *payload.AudioMixProfile)
+	}
+	if payload.AssetDownloadConcurrency != nil {
+		if *payload.AssetDownloadConcurrency < 1 || *payload.AssetDownloadConcurrency > 128 {
+			return fmt.Errorf("worker config: asset_download_concurrency must be in [1,128], got %d", *payload.AssetDownloadConcurrency)
+		}
+		command += fmt.Sprintf(" --asset-download-concurrency %d", *payload.AssetDownloadConcurrency)
+	}
+	if payload.PrefetchMaxConcurrent != nil {
+		if *payload.PrefetchMaxConcurrent < 1 || *payload.PrefetchMaxConcurrent > 127 {
+			return fmt.Errorf("worker config: prefetch_max_concurrent must be in [1,127], got %d", *payload.PrefetchMaxConcurrent)
+		}
+		command += fmt.Sprintf(" --prefetch-max-concurrent %d", *payload.PrefetchMaxConcurrent)
 	}
 	if payload.FMP4StreamProfile != nil {
 		if *payload.FMP4StreamProfile != 0 && *payload.FMP4StreamProfile != 1 {

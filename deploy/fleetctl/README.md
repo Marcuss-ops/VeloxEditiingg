@@ -182,7 +182,15 @@ Allowlisted knobs:
 | `VELOX_FMP4_STREAM_PROFILE` | `--fmp4-stream-profile` | `0` / `1` |
 
 Only the knobs named on the invocation are rewritten; every other managed and
-unmanaged key is preserved byte-for-byte.
+unmanaged key is preserved byte-for-byte. Download tuning is bounded and keeps
+`prefetch_max_concurrent < asset_download_concurrency`, preserving one slot for
+foreground asset resolution:
+
+```bash
+scripts/fleetctl worker-config set velox-worker-523925eb \
+  --asset-download-concurrency 30 --prefetch-max-concurrent 29 \
+  "stock saturation canary"
+```
 
 The fMP4 admission gate is rolled out on already-installed workers through
 this command, because `deploy/runtime/worker.env.example` only seeds fresh

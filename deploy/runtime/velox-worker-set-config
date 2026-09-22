@@ -9,6 +9,8 @@ set -euo pipefail
 # Allowlisted knobs:
 #   VELOX_AUDIO_MIX_STRATEGY   --audio-mix-strategy legacy|optimized|auto
 #   VELOX_AUDIO_MIX_PROFILE    --audio-mix-profile 0|1
+#   VELOX_ASSET_DOWNLOAD_CONCURRENCY --asset-download-concurrency 1..128
+#   VELOX_PREFETCH_MAX_CONCURRENT    --prefetch-max-concurrent 1..127
 #   VELOX_FMP4_STREAM_PROFILE  --fmp4-stream-profile 0|1
 #
 # VELOX_FMP4_STREAM_PROFILE is the fMP4 admission gate (see
@@ -25,9 +27,11 @@ POLL_INTERVAL="${POLL_INTERVAL:-2}"
 strategy=""
 profile=""
 fmp4=""
+asset_download_concurrency=""
+prefetch_max_concurrent=""
 
 usage() {
-  echo "usage: velox-worker-set-config [--audio-mix-strategy legacy|optimized|auto] [--audio-mix-profile 0|1] [--fmp4-stream-profile 0|1]" >&2
+  echo "usage: velox-worker-set-config [--audio-mix-strategy legacy|optimized|auto] [--audio-mix-profile 0|1] [--asset-download-concurrency 1..128] [--prefetch-max-concurrent 1..127] [--fmp4-stream-profile 0|1]" >&2
   exit 2
 }
 
@@ -39,17 +43,36 @@ while [[ $# -gt 0 ]]; do
     --audio-mix-profile)
       [[ $# -ge 2 ]] || usage
       profile="$2"; shift 2 ;;
+    --asset-download-concurrency)
+      [[ $# -ge 2 ]] || usage
+      asset_download_concurrency="$2"; shift 2 ;;
+    --prefetch-max-concurrent)
+      [[ $# -ge 2 ]] || usage
+      prefetch_max_concurrent="$2"; shift 2 ;;
     --fmp4-stream-profile)
       [[ $# -ge 2 ]] || usage
       fmp4="$2"; shift 2 ;;
     *) usage ;;
   esac
 done
-[[ -n "$strategy" || -n "$profile" || -n "$fmp4" ]] || usage
+[[ -n "$strategy" || -n "$profile" || -n "$asset_download_concurrency" || -n "$prefetch_max_concurrent" || -n "$fmp4" ]] || usage
 [[ -z "$strategy" || "$strategy" =~ ^(legacy|optimized|auto)$ ]] || { echo "invalid audio mix strategy" >&2; exit 2; }
 [[ -z "$profile" || "$profile" =~ ^(0|1)$ ]] || { echo "invalid audio mix profile" >&2; exit 2; }
+[[ -z "$asset_download_concurrency" || "$asset_download_concurrency" =~ ^[1-9][0-9]*$ ]] || { echo "invalid asset download concurrency" >&2; exit 2; }
+[[ -z "$prefetch_max_concurrent" || "$prefetch_max_concurrent" =~ ^[1-9][0-9]*$ ]] || { echo "invalid prefetch max concurrency" >&2; exit 2; }
+if [[ -n "$asset_download_concurrency" && "$asset_download_concurrency" -gt 128 ]]; then echo "asset download concurrency must be <= 128" >&2; exit 2; fi
+if [[ -n "$prefetch_max_concurrent" && "$prefetch_max_concurrent" -gt 127 ]]; then echo "prefetch max concurrency must be <= 127" >&2; exit 2; fi
 [[ -z "$fmp4" || "$fmp4" =~ ^(0|1)$ ]] || { echo "invalid fmp4 stream profile" >&2; exit 2; }
 [[ -r "$ENV_FILE" ]] || { echo "worker env missing: $ENV_FILE" >&2; exit 1; }
+
+current_asset_download_concurrency="$(sed -n 's/^VELOX_ASSET_DOWNLOAD_CONCURRENCY=//p' "$ENV_FILE" | tail -n 1)"
+current_prefetch_max_concurrent="$(sed -n 's/^VELOX_PREFETCH_MAX_CONCURRENT=//p' "$ENV_FILE" | tail -n 1)"
+effective_asset_download_concurrency="${asset_download_concurrency:-${current_asset_download_concurrency:-4}}"
+effective_prefetch_max_concurrent="${prefetch_max_concurrent:-${current_prefetch_max_concurrent:-2}}"
+if [[ "$effective_prefetch_max_concurrent" -ge "$effective_asset_download_concurrency" ]]; then
+  echo "prefetch max concurrency must remain below asset download concurrency" >&2
+  exit 2
+fi
 
 exec 9>"$LOCK_FILE"
 flock 9
@@ -62,14 +85,22 @@ trap 'rm -f "$tmp"' EXIT
 # Only the knobs named on THIS invocation are rewritten. A managed key that
 # was not requested is preserved verbatim: an fMP4-only rollout must never
 # erase a previously applied audio-mix setting (and vice versa).
-awk -v strategy="$strategy" -v profile="$profile" -v fmp4="$fmp4" '
-  BEGIN { strategy_done=0; profile_done=0; fmp4_done=0 }
+awk -v strategy="$strategy" -v profile="$profile" -v asset_download_concurrency="$asset_download_concurrency" -v prefetch_max_concurrent="$prefetch_max_concurrent" -v fmp4="$fmp4" '
+  BEGIN { strategy_done=0; profile_done=0; asset_download_done=0; prefetch_done=0; fmp4_done=0 }
   /^VELOX_AUDIO_MIX_STRATEGY=/ {
     if (strategy != "") { print "VELOX_AUDIO_MIX_STRATEGY=" strategy; strategy_done=1 } else { print }
     next
   }
   /^VELOX_AUDIO_MIX_PROFILE=/ {
     if (profile != "") { print "VELOX_AUDIO_MIX_PROFILE=" profile; profile_done=1 } else { print }
+    next
+  }
+  /^VELOX_ASSET_DOWNLOAD_CONCURRENCY=/ {
+    if (asset_download_concurrency != "") { print "VELOX_ASSET_DOWNLOAD_CONCURRENCY=" asset_download_concurrency; asset_download_done=1 } else { print }
+    next
+  }
+  /^VELOX_PREFETCH_MAX_CONCURRENT=/ {
+    if (prefetch_max_concurrent != "") { print "VELOX_PREFETCH_MAX_CONCURRENT=" prefetch_max_concurrent; prefetch_done=1 } else { print }
     next
   }
   /^VELOX_FMP4_STREAM_PROFILE=/ {
@@ -80,6 +111,8 @@ awk -v strategy="$strategy" -v profile="$profile" -v fmp4="$fmp4" '
   END {
     if (strategy != "" && !strategy_done) print "VELOX_AUDIO_MIX_STRATEGY=" strategy
     if (profile != "" && !profile_done) print "VELOX_AUDIO_MIX_PROFILE=" profile
+    if (asset_download_concurrency != "" && !asset_download_done) print "VELOX_ASSET_DOWNLOAD_CONCURRENCY=" asset_download_concurrency
+    if (prefetch_max_concurrent != "" && !prefetch_done) print "VELOX_PREFETCH_MAX_CONCURRENT=" prefetch_max_concurrent
     if (fmp4 != "" && !fmp4_done) print "VELOX_FMP4_STREAM_PROFILE=" fmp4
   }
 ' "$ENV_FILE" >"$tmp"
