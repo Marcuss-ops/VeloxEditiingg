@@ -47,10 +47,9 @@ var _ interface {
 	CountExpectedDeliveries(ctx context.Context, jobID, overrideDestID string) (int, error)
 } = (*SQLiteJobDeliveryCounter)(nil)
 
-// CountExpectedDeliveries returns the destinations-count the
-// finalize tx would stamp for the given job and override. See the
-// artifacts.JobDeliveryCounter interface docstring for the
-// resolution-order mirror rationale.
+// CountExpectedDeliveries returns the expected final audio stream count
+// for the given job and override. Delivery fan-out does not multiply media
+// streams: every published MP4 must carry exactly one final audio stream.
 func (c *SQLiteJobDeliveryCounter) CountExpectedDeliveries(ctx context.Context, jobID, overrideDestID string) (int, error) {
 	if overrideDestID != "" {
 		// Single-destination explicit path — the writer hard-codes
@@ -62,10 +61,9 @@ func (c *SQLiteJobDeliveryCounter) CountExpectedDeliveries(ctx context.Context, 
 	if jobID == "" {
 		return 0, fmt.Errorf("store: JobDeliveryCounter.CountExpectedDeliveries: empty jobID (overrideDestID was also empty)")
 	}
-	// Branch 1: per-job plan (production path). Mirror the ORDER BY
-	// used by SQLiteDeliveryPlanResolver::ResolvePlan so the count
-	// is identical to what the resolver would have returned as a
-	// slice length.
+	// Branch 1: per-job plan (production path). The plan only answers
+	// whether this is a published artifact; it does not determine the
+	// number of media streams in that artifact.
 	var n int
 	if err := c.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM job_delivery_plans WHERE job_id = ? AND enabled = 1`,
@@ -80,7 +78,7 @@ func (c *SQLiteJobDeliveryCounter) CountExpectedDeliveries(ctx context.Context, 
 		}
 	}
 	if n > 0 {
-		return n, nil
+		return expectedAudioStreamsForDeliveries(n), nil
 	}
 	// A render-only job is the one intentional no-delivery contract. The
 	// finalizer accepts it explicitly and therefore the pre-commit probe must
@@ -102,4 +100,11 @@ func (c *SQLiteJobDeliveryCounter) CountExpectedDeliveries(ctx context.Context, 
 	// No explicit plan exists for a normal job. Never count unrelated global
 	// delivery_destinations: finalization must fail closed.
 	return 0, fmt.Errorf("%w: job_id=%s", deliverycontract.ErrNoExplicitPlan, jobID)
+}
+
+func expectedAudioStreamsForDeliveries(destinations int) int {
+	if destinations > 0 {
+		return 1
+	}
+	return 0
 }

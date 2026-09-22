@@ -35,23 +35,23 @@ import (
 // in the artifactsstore leaf (e.g. artifactsstore.SQLiteJobDeliveryCounter).
 // Future Postgres support can wire a parallel adapter without touching Service.
 type JobDeliveryCounter interface {
-	// CountExpectedDeliveries returns the number of delivery
-	// destinations the finalize tx WILL stamp at Step 5 for this
-	// job, accounting for both the per-job plan path and the
-	// override path:
+	// CountExpectedDeliveries returns the expected audio stream count for
+	// the finalized artifact, accounting for whether the finalization tx
+	// has a delivery target:
 	//
-	//   - overrideDestID != ""  → 1 (the single-destination
-	//     explicit path mirrored from
-	//     SQLiteFinalizeWriter::resolveDeliveryDestinationsTx
-	//     branch 1).
+	//   - overrideDestID != ""  → 1 (the explicit delivery path).
 	//   - job_delivery_plans WHERE job_id = ? AND enabled = 1 has
-	//     ≥1 row → that count (production plan path).
+	//     ≥1 row → 1. One rendered MP4 has one final audio stream even
+	//     when it is delivered to many destinations.
 	//   - Otherwise, no explicit plan exists and finalization must fail
 	//     closed; global delivery_destinations are never selected.
 	//
+	//   - render_only=true with no plan → 0.
+	//
 	// Mirror policy: this method intentionally mirrors the
-	// SQLiteFinalizeWriter's resolution order so the gate's
-	// expected count is exactly the count the writer would stamp.
+	// SQLiteFinalizeWriter's resolution order so the gate knows whether
+	// the artifact is a render-only output or a published output. It does
+	// not confuse destination fan-out with media stream multiplicity.
 	// If a future refactor changes writer resolution, update this
 	// method too — divergence will surface as a true
 	// ErrFFProbeAudioCountMismatch in CI.
