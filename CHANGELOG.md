@@ -1,5 +1,14 @@
 ## [Unreleased] - 2026-09-18
 
+### Added — bounded parallel stock resolution and remote download tuning
+
+- Resolves independent worker asset branches concurrently before render while
+  preserving the downloader's byte pool, cache single-flight, and cancellation
+  semantics.
+- Adds audited `fleetctl worker-config` knobs for bounded asset-download and
+  prefetch concurrency; prefetch must remain below the download pool so a
+  foreground job always retains one slot.
+
 ### Fixed — worker output metric ownership
 
 - Prevented artifact upload bytes from being added a second time to the
