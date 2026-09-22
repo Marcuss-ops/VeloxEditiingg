@@ -1,6 +1,6 @@
 {
   "annotations": { "list": [] },
-  "description": "Warm placement and fast assembly: verified cache reuse, prefetch latency, bytes removed from the execution critical path, and residual foreground download.",
+  "description": "Warm placement and fast assembly: verified cache reuse, explicit prefetch provenance, prefetch latency, bytes removed from the execution critical path, and residual foreground download.",
   "editable": true,
   "graphTooltip": 1,
   "id": null,
@@ -39,9 +39,31 @@
     },
     {
       "type": "timeseries",
+      "title": "Prefetch provenance by worker",
+      "description": "Asset hit/miss evidence separated by worker and origin. A healthy prefetch run increases origin=prefetch instead of runtime_download.",
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "sum by (worker_id, origin, result) (rate(velox_prefetch_cache_events_total[15m]))", "legendFormat": "{{worker_id}} {{origin}} {{result}}", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "sum by (worker_id, origin) (rate(velox_prefetch_bytes_total[15m]))", "legendFormat": "{{worker_id}} {{origin}} bytes/s", "refId": "B" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Prefetch latency p95",
+      "description": "Worker-reported download-start to asset-ready duration. This is the direct latency signal for the remote prefetch path.",
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "histogram_quantile(0.95, sum by (worker_id, le) (rate(velox_prefetch_duration_seconds_bucket[15m])))", "legendFormat": "{{worker_id}} p95", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "sum by (worker_id, reason) (rate(velox_prefetch_failures_total[15m]))", "legendFormat": "{{worker_id}} failures {{reason}}", "refId": "B" }
+      ]
+    },
+    {
+      "type": "timeseries",
       "title": "Prefetch latency",
       "description": "Per-asset warm preparation latency in milliseconds. Spikes indicate queue, network, verification or metadata pressure.",
-      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 8 },
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 18 },
       "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
       "targets": [
         { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "histogram_quantile(0.50, sum by (le) (rate(velox_assembly_prefetch_ms_bucket[15m])))", "legendFormat": "p50", "refId": "A" },
@@ -53,7 +75,7 @@
       "type": "timeseries",
       "title": "Warm preparation vs execution downloads",
       "description": "Compare bytes downloaded before execution with residual execution download duration.",
-      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 8 },
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 18 },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "targets": [
         { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "rate(velox_assembly_prefetch_download_bytes_total[15m])", "legendFormat": "prefetch bytes/s", "refId": "A" },
@@ -64,7 +86,7 @@
       "type": "timeseries",
       "title": "Execution readiness",
       "description": "Assets ready and missing at execution. A healthy warm placement keeps the missing series at zero.",
-      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 18 },
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 28 },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "targets": [
         { "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }, "expr": "velox_assembly_assets_ready_at_execution", "legendFormat": "ready", "refId": "A" },
@@ -75,7 +97,7 @@
       "type": "text",
       "title": "Interpretation",
       "options": { "mode": "markdown", "content": "**Target:** `assets_missing_at_execution = 0` and `execution_download_ms` ≈ 0. The prefetch counters are worker-lifetime totals and the readiness gauges describe the latest execution start. Asset IDs, job IDs, URLs and SHA256 values are intentionally absent from Prometheus; use the attempt explorer/SQL detail plane for drill-down." },
-      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 18 }
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 28 }
     }
   ],
   "refresh": "15s",
