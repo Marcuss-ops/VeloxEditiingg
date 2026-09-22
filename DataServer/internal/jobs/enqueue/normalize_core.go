@@ -295,6 +295,10 @@ func copyTimelinePayloadFields(out, src map[string]interface{}) {
 		// Two-stage intake marker. The preparation gate keeps a pre-job out
 		// of render until FINALIZE clears it on the same TaskSpec.
 		"runtime_assets_pending",
+		// Runtime asset manifests are also consumed by the future-asset
+		// planner. Preserve their sha256/size metadata in TaskSpec so the
+		// Master can build a non-empty prefetch plan before execution.
+		"runtime_assets",
 		// Explicit opt-in for the worker's strict packet-copy path. The
 		// worker validates stream identity, keyframe boundaries and audio
 		// compatibility before using it; it must therefore survive the

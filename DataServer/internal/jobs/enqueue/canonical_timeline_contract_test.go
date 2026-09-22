@@ -36,3 +36,36 @@ func TestNormalizeSceneVideoPayload_EmitsCanonicalTimelineOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeSceneVideoPayloadPreservesRuntimeAssetManifests(t *testing.T) {
+	normalized, err := normalizeSceneVideoPayload(map[string]interface{}{
+		"video_name":      "Prefetch manifest",
+		"script_text":     "Prefetch manifest body.",
+		"voiceover_paths": []interface{}{"velox-drive://voice-1"},
+		"scenes": []interface{}{
+			map[string]interface{}{
+				"clip_link":        "velox-drive://clip-1",
+				"duration_seconds": 5.0,
+			},
+		},
+		"runtime_assets": []interface{}{
+			map[string]interface{}{
+				"asset_id":   "clip-1",
+				"asset_key":  "clip-1",
+				"sha256":     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+				"size_bytes": 4096,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("normalizeSceneVideoPayload: %v", err)
+	}
+	assets, ok := normalized["runtime_assets"].([]interface{})
+	if !ok || len(assets) != 1 {
+		t.Fatalf("runtime_assets = %#v, want one preserved manifest", normalized["runtime_assets"])
+	}
+	asset, ok := assets[0].(map[string]interface{})
+	if !ok || asset["sha256"] == "" || asset["size_bytes"] != 4096 {
+		t.Fatalf("runtime asset manifest = %#v, want sha256 and size_bytes preserved", assets[0])
+	}
+}
