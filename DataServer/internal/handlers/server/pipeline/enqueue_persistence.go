@@ -200,43 +200,20 @@ func prefetchStateFromEvents(events []store.JobEvent) (dispatchStatus, futureAss
 	for _, event := range events {
 		switch event.Event {
 		case "prefetch.prefetch_prepared":
-			if dispatchStatus == "" {
-				dispatchStatus = "prefetch_ready"
-			}
-			if futureAssetPlan == "" {
-				futureAssetPlan = "prepared"
-			}
+			dispatchStatus = "prefetch_ready"
+			futureAssetPlan = "prepared"
 		case "prefetch.future_plan_applied":
-			if dispatchStatus == "" {
-				dispatchStatus = "prefetch_preparing"
-			}
-			if futureAssetPlan == "" {
-				futureAssetPlan = "applied"
-			}
+			dispatchStatus = "prefetch_preparing"
+			futureAssetPlan = "applied"
 		case "prefetch.future_plan_received":
-			if dispatchStatus == "" {
-				dispatchStatus = "prefetch_planning"
-			}
-			if futureAssetPlan == "" {
-				futureAssetPlan = "received"
-			}
+			dispatchStatus = "prefetch_planning"
+			futureAssetPlan = "received"
 		case "prefetch.future_plan_sent":
-			if dispatchStatus == "" {
-				dispatchStatus = "prefetch_queued"
-			}
-			if futureAssetPlan == "" {
-				futureAssetPlan = "sent"
-			}
+			dispatchStatus = "prefetch_queued"
+			futureAssetPlan = "sent"
 		case "prefetch.prejob_prepare_failed", "prefetch.prefetch_failed", "prefetch.prefetch_error":
-			if dispatchStatus == "" {
-				dispatchStatus = "prefetch_failed"
-			}
-			if futureAssetPlan == "" {
-				futureAssetPlan = "failed"
-			}
-		}
-		if dispatchStatus != "" && futureAssetPlan != "" {
-			return dispatchStatus, futureAssetPlan
+			dispatchStatus = "prefetch_failed"
+			futureAssetPlan = "failed"
 		}
 	}
 	return dispatchStatus, futureAssetPlan

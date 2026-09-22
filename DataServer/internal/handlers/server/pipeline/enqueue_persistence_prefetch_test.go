@@ -29,3 +29,16 @@ func TestPrefetchReadModelUsesNewestLifecycleEvent(t *testing.T) {
 		})
 	}
 }
+
+func TestPrefetchReadModelAdvancesAcrossLifecycle(t *testing.T) {
+	events := []store.JobEvent{
+		{Event: "prefetch.future_plan_sent"},
+		{Event: "prefetch.future_plan_received"},
+		{Event: "prefetch.future_plan_applied"},
+		{Event: "prefetch.prefetch_prepared"},
+	}
+	gotD, gotP := prefetchStateFromEvents(events)
+	if gotD != "prefetch_ready" || gotP != "prepared" {
+		t.Fatalf("state=(%q,%q), want final lifecycle state (prefetch_ready,prepared)", gotD, gotP)
+	}
+}
