@@ -105,17 +105,36 @@ func (w *Worker) downloadVeloxAssetWithMetadata(ctx context.Context, assetID, ex
 		LocalPath:           resolution.LocalPath,
 		Source:              sourceKind,
 	})
+	// DownloadBytes is deliberately zero for cache hits and coalesced
+	// waiters: it measures bytes transferred by this caller, not the verified
+	// size of the materialized asset. The durable asset→blob mapping used by
+	// clip leases still needs the real size, otherwise a coalesced reference
+	// is persisted with size_bytes=0 and AcquireReady rejects an otherwise
+	// valid downloaded file.
 	syncSize := resolution.DownloadBytes
+	if syncSize <= 0 {
+		syncSize = resolution.SizeBytes
+	}
 	if resolution.CacheHit {
 		// A cache hit reports zero downloaded bytes; the durable index should
 		// still record the expected file size.
-		syncSize = expectedSizeBytes
+		if expectedSizeBytes > 0 {
+			syncSize = expectedSizeBytes
+		}
 		if syncSize <= 0 {
 			// Legacy hit: the payload carried no size, use the remembered
 			// self-verified size so the durable index stays honest.
 			if remembered, ok := w.rememberedAssetIntegrity(assetID); ok {
 				syncSize = remembered.SizeBytes
 			}
+		}
+	}
+	if syncSize <= 0 && resolution.LocalPath != "" {
+		// Last-resort defense for legacy transferers that omit size metadata:
+		// the resolver only returns a verified local path, so its stat is the
+		// authoritative materialized size for the index.
+		if info, statErr := os.Stat(resolution.LocalPath); statErr == nil && info.Mode().IsRegular() {
+			syncSize = info.Size()
 		}
 	}
 	if err := w.syncClipCache(ctx, assetID, resolution.LocalPath, syncSize, assetref.ContentHash(resolution.SHA256)); err != nil {

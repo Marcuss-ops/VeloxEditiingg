@@ -13,11 +13,96 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"velox-worker-agent/internal/workercache"
 	"velox-worker-agent/pkg/api"
 	"velox-worker-agent/pkg/config"
 )
+
+func TestDownloadVeloxAssetWithMetadataCoalescedMappingRetainsVerifiedSize(t *testing.T) {
+	assetBytes := []byte("one verified blob shared by two asset references")
+	digest := sha256.Sum256(assetBytes)
+	expectedSHA := hex.EncodeToString(digest[:])
+	assetIDs := []string{"coalesced-asset-a", "coalesced-asset-b"}
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var startOnce sync.Once
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		startOnce.Do(func() { close(started) })
+		w.Header().Set("Content-Type", "audio/mpeg")
+		<-release
+		_, _ = w.Write(assetBytes)
+	}))
+	defer srv.Close()
+
+	cache, err := workercache.Open(filepath.Join(t.TempDir(), "cache.db"))
+	if err != nil {
+		t.Fatalf("open cache: %v", err)
+	}
+	defer cache.Close()
+
+	w := &Worker{
+		config: &config.WorkerConfig{
+			MasterURL:                srv.URL,
+			WorkDir:                  t.TempDir(),
+			AssetDownloadConcurrency: 2,
+		},
+		apiClient: api.NewClient(srv.URL),
+	}
+	w.AttachClipCache(cache)
+
+	start := make(chan struct{})
+	results := make(chan error, len(assetIDs))
+	var wg sync.WaitGroup
+	for _, assetID := range assetIDs {
+		assetID := assetID
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, resolveErr := w.downloadVeloxAssetWithMetadata(context.Background(), assetID, expectedSHA, int64(len(assetBytes)))
+			results <- resolveErr
+		}()
+	}
+	close(start)
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("shared transfer did not start")
+	}
+	// Keep the first transfer in flight long enough for the second caller to
+	// join it by content hash, exercising the coalesced sync path.
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	wg.Wait()
+	close(results)
+	for resolveErr := range results {
+		if resolveErr != nil {
+			t.Fatalf("coalesced resolve: %v", resolveErr)
+		}
+	}
+
+	for _, assetID := range assetIDs {
+		entry, found, findErr := cache.Find(context.Background(), assetID)
+		if findErr != nil || !found {
+			t.Fatalf("cache mapping %s: found=%v err=%v", assetID, found, findErr)
+		}
+		if entry.SizeBytes != int64(len(assetBytes)) {
+			t.Errorf("cache mapping %s size = %d, want %d", assetID, entry.SizeBytes, len(assetBytes))
+		}
+	}
+	lease, err := AcquireJobClips(context.Background(), cache, "coalesced-lease", assetIDs)
+	if err != nil {
+		t.Fatalf("coalesced mappings must be lease-ready: %v", err)
+	}
+	if err := lease.ReleaseAll(context.Background()); err != nil {
+		t.Fatalf("release coalesced lease: %v", err)
+	}
+}
 
 func TestDownloadVeloxAssetWithSHA_ReportsMissHitAndCorruptRedownload(t *testing.T) {
 	assetID := "asset-report-001"
