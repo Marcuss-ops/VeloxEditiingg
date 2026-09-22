@@ -30,6 +30,11 @@ type MutationRequest struct {
 	// streaming-profile admission gate. It must move through this audited
 	// operation; direct edits to /etc/velox-worker/worker.env are forbidden.
 	FMP4StreamProfile *int `json:"fmp4_stream_profile"`
+	// AssetDownloadConcurrency and PrefetchMaxConcurrent are bounded worker
+	// runtime knobs. They share the audited worker-config operation so an
+	// operator cannot bypass the root-owned helper over HTTP.
+	AssetDownloadConcurrency *int `json:"asset_download_concurrency"`
+	PrefetchMaxConcurrent    *int `json:"prefetch_max_concurrent"`
 }
 
 // validateAdminTargetDigest is the API boundary for worker updates. Reuse
@@ -81,8 +86,17 @@ func bindMutationRequest(c *gin.Context, kind string) (MutationRequest, error) {
 		if req.FMP4StreamProfile != nil && *req.FMP4StreamProfile != 0 && *req.FMP4StreamProfile != 1 {
 			return MutationRequest{}, errors.New("fmp4_stream_profile must be 0 or 1")
 		}
-		if req.AudioMixStrategy == "" && req.AudioMixProfile == nil && req.FMP4StreamProfile == nil {
-			return MutationRequest{}, errors.New("worker config requires audio_mix_strategy, audio_mix_profile, or fmp4_stream_profile")
+		if req.AssetDownloadConcurrency != nil && (*req.AssetDownloadConcurrency < 1 || *req.AssetDownloadConcurrency > 128) {
+			return MutationRequest{}, errors.New("asset_download_concurrency must be in [1,128]")
+		}
+		if req.PrefetchMaxConcurrent != nil && (*req.PrefetchMaxConcurrent < 1 || *req.PrefetchMaxConcurrent > 127) {
+			return MutationRequest{}, errors.New("prefetch_max_concurrent must be in [1,127]")
+		}
+		if req.AssetDownloadConcurrency != nil && req.PrefetchMaxConcurrent != nil && *req.PrefetchMaxConcurrent >= *req.AssetDownloadConcurrency {
+			return MutationRequest{}, errors.New("prefetch_max_concurrent must be less than asset_download_concurrency")
+		}
+		if req.AudioMixStrategy == "" && req.AudioMixProfile == nil && req.FMP4StreamProfile == nil && req.AssetDownloadConcurrency == nil && req.PrefetchMaxConcurrent == nil {
+			return MutationRequest{}, errors.New("worker config requires audio_mix_strategy, audio_mix_profile, fmp4_stream_profile, asset_download_concurrency, or prefetch_max_concurrent")
 		}
 	}
 	return req, nil
