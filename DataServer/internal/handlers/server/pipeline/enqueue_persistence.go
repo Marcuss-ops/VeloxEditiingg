@@ -14,6 +14,7 @@
 package pipeline
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -21,6 +22,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"velox-server/internal/forwardingstore"
+	"velox-server/internal/store"
 )
 
 // The endpoint is M2M-only and fails closed: a missing middleware client
@@ -135,6 +137,8 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 			}
 		}
 
+		prefetchDispatchStatus, futureAssetPlan := h.prefetchReadModel(ctx, jobID, clientID)
+
 		created := forwarding.SourceProvider == ExternalAPISourceProvider
 		statusURL := "/api/v1/jobs/" + jobID
 
@@ -167,6 +171,73 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 		if leaseID != "" {
 			resp["lease_id"] = leaseID
 		}
+		if prefetchDispatchStatus != "" {
+			resp["dispatch_status"] = prefetchDispatchStatus
+		}
+		if futureAssetPlan != "" {
+			resp["future_asset_plan"] = futureAssetPlan
+		}
 		c.JSON(http.StatusOK, resp)
 	}
+}
+
+// prefetchReadModel projects the latest durable prefetch lifecycle events into
+// the small polling response. The event journal remains the detailed source of
+// truth; this projection deliberately exposes only stable state labels and no
+// asset/job identifiers beyond the already-authorized job URL.
+func (h *Handlers) prefetchReadModel(ctx context.Context, jobID, clientID string) (dispatchStatus, futureAssetPlan string) {
+	if h == nil || h.store == nil || jobID == "" || clientID == "" {
+		return "", ""
+	}
+	events, err := h.store.ListJobEventsForClient(ctx, jobID, clientID, 100)
+	if err != nil {
+		return "", ""
+	}
+	return prefetchStateFromEvents(events)
+}
+
+func prefetchStateFromEvents(events []store.JobEvent) (dispatchStatus, futureAssetPlan string) {
+	for _, event := range events {
+		switch event.Event {
+		case "prefetch.prefetch_prepared":
+			if dispatchStatus == "" {
+				dispatchStatus = "prefetch_ready"
+			}
+			if futureAssetPlan == "" {
+				futureAssetPlan = "prepared"
+			}
+		case "prefetch.future_plan_applied":
+			if dispatchStatus == "" {
+				dispatchStatus = "prefetch_preparing"
+			}
+			if futureAssetPlan == "" {
+				futureAssetPlan = "applied"
+			}
+		case "prefetch.future_plan_received":
+			if dispatchStatus == "" {
+				dispatchStatus = "prefetch_planning"
+			}
+			if futureAssetPlan == "" {
+				futureAssetPlan = "received"
+			}
+		case "prefetch.future_plan_sent":
+			if dispatchStatus == "" {
+				dispatchStatus = "prefetch_queued"
+			}
+			if futureAssetPlan == "" {
+				futureAssetPlan = "sent"
+			}
+		case "prefetch.prejob_prepare_failed", "prefetch.prefetch_failed", "prefetch.prefetch_error":
+			if dispatchStatus == "" {
+				dispatchStatus = "prefetch_failed"
+			}
+			if futureAssetPlan == "" {
+				futureAssetPlan = "failed"
+			}
+		}
+		if dispatchStatus != "" && futureAssetPlan != "" {
+			return dispatchStatus, futureAssetPlan
+		}
+	}
+	return dispatchStatus, futureAssetPlan
 }
