@@ -12,7 +12,9 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"velox-worker-agent/pkg/api"
 	"velox-worker-agent/pkg/config"
@@ -148,6 +150,68 @@ func TestCommonAssetResolverColdWarmCacheAcrossMediaKinds(t *testing.T) {
 		if assetID != corruptID && count != 1 {
 			t.Errorf("unrelated asset %s request count = %d, want 1", assetID, count)
 		}
+	}
+}
+
+func TestCommonAssetResolverFansOutOneHundredStockAssets(t *testing.T) {
+	t.Parallel()
+	const assetCount = 100
+	const downloadConcurrency = 30
+	var active atomic.Int32
+	var maxActive atomic.Int32
+	var requests atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		current := active.Add(1)
+		defer active.Add(-1)
+		for {
+			previous := maxActive.Load()
+			if current <= previous || maxActive.CompareAndSwap(previous, current) {
+				break
+			}
+		}
+		requests.Add(1)
+		assetID := strings.TrimPrefix(r.URL.Path, "/api/v1/agent/assets/")
+		// Hold each response long enough for the resolver to expose the
+		// downloader pool size instead of winning by scheduler luck.
+		time.Sleep(25 * time.Millisecond)
+		w.Header().Set("Content-Type", "video/mp4")
+		_, _ = w.Write([]byte("stock-bytes-" + assetID))
+	}))
+	defer srv.Close()
+
+	workerDir := t.TempDir()
+	w := &Worker{
+		config: &config.WorkerConfig{
+			WorkerID:                 "stock-fanout-worker",
+			MasterURL:                srv.URL,
+			WorkDir:                  workerDir,
+			AssetDownloadConcurrency: downloadConcurrency,
+		},
+		apiClient: api.NewClient(srv.URL),
+	}
+
+	assets := make([]interface{}, 0, assetCount)
+	for i := 0; i < assetCount; i++ {
+		id := fmt.Sprintf("stock-%03d", i)
+		assets = append(assets, assetEnvelope(id, "video", []byte("stock-bytes-"+id)))
+	}
+	payload := map[string]interface{}{
+		"render_manifest": map[string]interface{}{"assets": assets},
+	}
+	resolved, err := w.resolveCommonAssetPayload(context.Background(), payload)
+	if err != nil {
+		t.Fatalf("resolve %d stock assets: %v", assetCount, err)
+	}
+	manifest := resolved["render_manifest"].(map[string]interface{})
+	if got := len(manifest["assets"].([]interface{})); got != assetCount {
+		t.Fatalf("resolved assets = %d, want %d", got, assetCount)
+	}
+	if got := requests.Load(); got != assetCount {
+		t.Fatalf("physical downloads = %d, want %d", got, assetCount)
+	}
+	if got := maxActive.Load(); got != downloadConcurrency {
+		t.Fatalf("peak simultaneous downloads = %d, want %d", got, downloadConcurrency)
 	}
 }
 
