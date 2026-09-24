@@ -399,6 +399,14 @@ func main() {
 		os.Exit(1)
 	}
 	defer clipCache.Close()
+	startupReleasedLeases, startupLeaseErr := clipCache.ReconcileStartupLeases(context.Background())
+	if startupLeaseErr != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed to reconcile persisted cache leases before worker startup: %v\n", startupLeaseErr)
+		os.Exit(1)
+	}
+	if startupReleasedLeases > 0 {
+		logger.Warn("[CACHE_LEASES] startup reconciled previous-process leases released=%d", startupReleasedLeases)
+	}
 	w.AttachClipCache(clipCache)
 	// w was constructed before this index so its authenticated API client is
 	// the one populated by the control-plane registration handshake.

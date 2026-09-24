@@ -559,6 +559,43 @@ func TestCache_ReleaseJobClearsAllOwnedLeases(t *testing.T) {
 	}
 }
 
+func TestCache_ReconcileStartupLeasesClearsPreviousProcessPinsOnly(t *testing.T) {
+	t.Parallel()
+	c := newTestCache(t)
+	ctx := context.Background()
+	for _, key := range []string{"STARTUP-A", "STARTUP-B"} {
+		if err := c.Store(ctx, Entry{AssetKey: assetref.AssetKey(key), LocalPath: "/tmp/" + key}); err != nil {
+			t.Fatalf("Store %s: %v", key, err)
+		}
+		if err := c.Acquire(ctx, key, "previous-process-job"); err != nil {
+			t.Fatalf("Acquire %s: %v", key, err)
+		}
+	}
+	if err := c.Reserve(ctx, "STARTUP-A", "future-job", time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("Reserve future asset: %v", err)
+	}
+
+	released, err := c.ReconcileStartupLeases(ctx)
+	if err != nil {
+		t.Fatalf("ReconcileStartupLeases: %v", err)
+	}
+	if released != 2 {
+		t.Fatalf("released=%d, want 2", released)
+	}
+	for _, key := range []string{"STARTUP-A", "STARTUP-B"} {
+		got, _, err := c.Find(ctx, key)
+		if err != nil {
+			t.Fatalf("Find %s: %v", key, err)
+		}
+		if got.ActiveLeaseCount != 0 || got.ActiveJobID != "" {
+			t.Fatalf("lease %s after startup reconcile = %d/%q, want no lease", key, got.ActiveLeaseCount, got.ActiveJobID)
+		}
+	}
+	if got, _, err := c.Find(ctx, "STARTUP-A"); err != nil || got.ActiveReservationCount != 1 {
+		t.Fatalf("future reservation after reconcile = %d, err=%v; want 1", got.ActiveReservationCount, err)
+	}
+}
+
 func TestCache_Release_OnMissingRowReturnsErrNotFound(t *testing.T) {
 	t.Parallel()
 	c := newTestCache(t)

@@ -1,4 +1,13 @@
-## [Unreleased] - 2026-09-18
+## [Unreleased] - 2026-09-24
+
+### Fixed — cache lease cleanup after worker restart
+
+- Reconcile durable input-cache lease rows from the previous worker process
+  before this process accepts jobs. A worker restart cannot resume the prior
+  in-memory render; stale lease rows therefore no longer pin clips forever.
+- Reconciliation removes lease metadata only. Cache eviction continues to
+  honor master protected-asset snapshots, future reservations, and the idle TTL.
+
 
 ### Added — bounded parallel stock resolution and remote download tuning
 

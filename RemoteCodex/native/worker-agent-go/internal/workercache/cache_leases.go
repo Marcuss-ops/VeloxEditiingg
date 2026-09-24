@@ -174,6 +174,38 @@ func (c *Cache) ReleaseJob(ctx context.Context, jobID string) error {
 	return nil
 }
 
+// ReconcileStartupLeases removes cache leases persisted by the previous
+// worker process. Call only during startup, before this process accepts work:
+// a process restart cannot resume the old in-memory render, so retaining its
+// lease would pin input blobs indefinitely. The operation removes lease rows
+// only; normal cleanup still honors fresh master snapshots, reservations and
+// the configured idle TTL before evicting any asset bytes.
+func (c *Cache) ReconcileStartupLeases(ctx context.Context) (int64, error) {
+	conn, err := c.db.Conn(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("workercache.ReconcileStartupLeases: connection: %w", err)
+	}
+	defer conn.Close()
+	rollback := func(cause error) (int64, error) {
+		_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
+		return 0, cause
+	}
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return 0, fmt.Errorf("workercache.ReconcileStartupLeases: begin: %w", err)
+	}
+	var released int64
+	if err := conn.QueryRowContext(ctx, `SELECT COUNT(1) FROM cached_asset_leases`).Scan(&released); err != nil {
+		return rollback(fmt.Errorf("workercache.ReconcileStartupLeases: count: %w", err))
+	}
+	if _, err := conn.ExecContext(ctx, `DELETE FROM cached_asset_leases`); err != nil {
+		return rollback(fmt.Errorf("workercache.ReconcileStartupLeases: delete: %w", err))
+	}
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return 0, fmt.Errorf("workercache.ReconcileStartupLeases: commit: %w", err)
+	}
+	return released, nil
+}
+
 // Reserve protects an asset for an imminent job until expiresAt. Reservations
 // are durable and participate in the same cleanup protection barrier as leases.
 func (c *Cache) Reserve(ctx context.Context, assetKey, reservationID string, expiresAt time.Time) error {

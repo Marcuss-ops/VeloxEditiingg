@@ -1,11 +1,11 @@
 {
-  "version": "v1.4.46",
-  "git_commit": "91796380",
-  "source_hash": "a877ae787ec879c2627a1916426ad9549f96a6ffeffdb3cfc6512bb1dd627749",
+  "version": "v1.4.48",
+  "git_commit": "8e627092",
+  "source_hash": "0c8e669ca68def41e01f33cd20a6c2a5ecb35a403e4c63f1cef7c906e84192b3",
   "protocol_version": "v3",
   "capability_schema": 1,
-  "engine_version": "v1.4.46",
+  "engine_version": "v1.4.48",
   "platform": "linux",
   "arch": "x86_64",
-  "built_at": "2026-09-22T06:13:22Z"
+  "built_at": "2026-09-24T09:26:35Z"
 }
