@@ -52,10 +52,9 @@ type SubmitJobRequest struct {
 	// submit a video, images and any combination of overlays together.
 	Layers []SubmitLayer `json:"layers,omitempty"`
 
-	// Overlays are editorial video intent. replace becomes packet-copy
-	// segments; composite is partitioned into Chronon prepared fragments.
-	// They never become native-renderer layers and always preserve the final
-	// mixed audio timeline.
+	// Overlays are editorial replacement intent. They become video timeline
+	// segments and preserve the independent final audio timeline. Composite
+	// work must be completed upstream and submitted through VisualReplacements.
 	Overlays []SubmitOverlay `json:"overlays,omitempty"`
 
 	// RuntimeAssets and RuntimePayload make PRE single-stage when the

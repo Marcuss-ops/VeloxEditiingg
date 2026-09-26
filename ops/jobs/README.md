@@ -40,11 +40,40 @@ For the single-stage branch, include the complete runtime asset declaration in
 the PRE payload. For the two-stage branch, omit it (or leave the gate pending)
 and use FINALIZE after the generated assets are available.
 
-The finalize payload accepts typed `overlays[]` with the canonical half-open
-window `[start_frame,end_frame)` (for example `start_frame: 120,
-end_frame: 240`) plus extensible `runtime_payload` / `runtime_assets` fields
-for TTS, BGM and SFX. The Master updates the existing task atomically and
-keeps its FutureAssetPlan reservation on the same worker.
+The finalize payload accepts typed `overlays[]` in `replace` mode with the
+canonical half-open window `[start_frame,end_frame)` (for example
+`start_frame: 120, end_frame: 240`), plus extensible `runtime_payload` /
+`runtime_assets` fields for TTS, BGM and SFX. The Master updates the existing
+task atomically and keeps its FutureAssetPlan reservation on the same worker.
+
+Raw `mode: "composite"` overlays are rejected at intake: the native worker
+cannot composite them, and downloading the source overlay before discovering
+that would waste a prefetch cycle. Generate each finished, video-only MP4
+before FINALIZE (the asset must contain the complete picture for its window,
+not a transparent layer), add it to the completed `render_manifest.assets`,
+and send `visual_replacements[]` with that asset ID and its absolute timeline
+window. FINALIZE recompiles the V2 plan against the original PRE timeline and
+the completed asset list, then refreshes prefetch for the same reserved task.
+The PRE video timeline, output contract, and final audio must remain identical;
+existing compiled asset identities and metadata must be preserved. The MP4 must match the declared canonical video
+profile and have a duration matching its replacement window.
+
+```json
+{
+  "idempotency_key": "job-123-finalize-v1",
+  "render_manifest": { "...": "completed manifest with the PRE assets plus finished MP4 assets" },
+  "visual_replacements": [
+    {
+      "replacement_id": "scene-3-composite",
+      "asset_id": "finished-scene-3-mp4",
+      "sha256": "<sha256 from the completed manifest>",
+      "timeline_start_us": 33833333,
+      "timeline_end_us": 38833333,
+      "profile_id": "<canonical profile declared by the manifest>"
+    }
+  ]
+}
+```
 
 The runtime audio IDs point to entries in the same `runtime_assets` list; the
 worker resolves their verified local cache paths and mixes them in one final

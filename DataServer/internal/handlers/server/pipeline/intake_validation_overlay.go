@@ -34,8 +34,10 @@ func validateSubmitOverlays(overlays []SubmitOverlay) []gin.H {
 		if err := normalizeSubmitOverlayWindow(&overlay); err != nil {
 			details = append(details, gin.H{"path": path + ".end_frame", "issue": "invalid_window", "message": err.Error()})
 		}
-		if overlay.Mode != "replace" && overlay.Mode != "composite" {
-			details = append(details, gin.H{"path": path + ".mode", "issue": "unsupported_value", "allowed": []string{"replace", "composite"}})
+		if overlay.Mode == "composite" {
+			details = append(details, gin.H{"path": path + ".mode", "issue": "requires_prepared_video_replacement", "message": "render the composite into a finished video asset and submit it during FINALIZE as visual_replacements"})
+		} else if overlay.Mode != "replace" {
+			details = append(details, gin.H{"path": path + ".mode", "issue": "unsupported_value", "allowed": []string{"replace"}})
 		}
 		if overlay.AudioMode != "" && overlay.AudioMode != "preserve_final_audio" {
 			details = append(details, gin.H{"path": path + ".audio_mode", "issue": "unsupported_value", "allowed": []string{"preserve_final_audio"}})

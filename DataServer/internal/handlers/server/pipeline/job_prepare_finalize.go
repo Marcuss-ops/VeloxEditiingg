@@ -2,25 +2,43 @@ package pipeline
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"reflect"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 
 	"velox-server/internal/creatorflow"
 	"velox-server/internal/taskgraph"
+	"velox-shared/contract"
 )
 
 // FinalizeJobRequest is the runtime half of the same job created by
 // POST /api/v1/jobs/pre. runtime_payload is intentionally extensible so 77
-// can add overlay, TTS, BGM and SFX fields without introducing parallel
-// resolver/cache infrastructure. overlays stays typed because its exact
-// [start_frame,end_frame) contract is part of the public API.
+// can add TTS, BGM and SFX fields without introducing parallel resolver/cache
+// infrastructure. Raw overlays stay typed; finished composite output uses
+// VisualReplacements.
 type FinalizeJobRequest struct {
-	IdempotencyKey string                   `json:"idempotency_key"`
-	Overlays       []SubmitOverlay          `json:"overlays,omitempty"`
-	RuntimeAssets  []map[string]interface{} `json:"runtime_assets,omitempty"`
-	RuntimePayload map[string]interface{}   `json:"runtime_payload,omitempty"`
+	IdempotencyKey string          `json:"idempotency_key"`
+	Overlays       []SubmitOverlay `json:"overlays,omitempty"`
+	// RenderManifest is the completed manifest after generated media is
+	// available. Its original PRE timeline must compile identically.
+	RenderManifest     map[string]interface{}      `json:"render_manifest,omitempty"`
+	VisualReplacements []FinalizeVisualReplacement `json:"visual_replacements,omitempty"`
+	RuntimeAssets      []map[string]interface{}    `json:"runtime_assets,omitempty"`
+	RuntimePayload     map[string]interface{}      `json:"runtime_payload,omitempty"`
+}
+
+// FinalizeVisualReplacement binds an already-composited MP4 asset declared
+// in RenderManifest to an absolute window on the original timeline.
+type FinalizeVisualReplacement struct {
+	ReplacementID   string `json:"replacement_id"`
+	AssetID         string `json:"asset_id"`
+	SHA256          string `json:"sha256,omitempty"`
+	TimelineStartUS int64  `json:"timeline_start_us"`
+	TimelineEndUS   int64  `json:"timeline_end_us"`
+	ProfileID       string `json:"profile_id"`
 }
 
 // PrepareJob handles the first stage of the two-stage intake. It uses the
@@ -97,9 +115,23 @@ func (h *Handlers) FinalizeJob() gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "job_id_required", "message": "URL path /api/v1/jobs/:id/finalize requires non-empty :id"})
 			return
 		}
+		if hasCompositeOverlay(req.Overlays) {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "error": "overlay_requires_prepared_video", "message": "composite overlays must be rendered into finished video assets before FINALIZE; submit them as visual_replacements with the completed render_manifest"})
+			return
+		}
 		if len(req.Overlays) > 0 {
 			if details := validateSubmitOverlays(req.Overlays); len(details) > 0 {
 				c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "error": "invalid_payload", "message": "overlay windows are invalid", "details": details})
+				return
+			}
+		}
+		if len(req.VisualReplacements) > 0 {
+			if len(req.RenderManifest) == 0 {
+				c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "error": "render_manifest_required", "message": "visual_replacements require the completed render_manifest"})
+				return
+			}
+			if details := validateFinalizeVisualReplacements(req.VisualReplacements); len(details) > 0 {
+				c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "error": "invalid_payload", "message": "prepared visual replacement windows are invalid", "details": details})
 				return
 			}
 		}
@@ -136,6 +168,12 @@ func (h *Handlers) FinalizeJob() gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "store_failure", "message": err.Error()})
 			return
 		}
+		if len(req.Overlays) > 0 {
+			if compiled, isCompiledPlan := current[contract.PayloadKeyCompiledRenderPlanJSON].(string); isCompiledPlan && strings.TrimSpace(compiled) != "" {
+				c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "error": "use_visual_replacements", "message": "PRE task uses a compiled V2 plan; finalize it with visual_replacements and the completed render_manifest so the plan is recompiled before dispatch"})
+				return
+			}
+		}
 		if previous, _ := current["runtime_finalize_idempotency_key"].(string); previous != "" && previous != req.IdempotencyKey {
 			c.JSON(http.StatusConflict, gin.H{"ok": false, "error": "finalize_idempotency_conflict", "message": "job was already finalized with a different idempotency_key"})
 			return
@@ -160,6 +198,36 @@ func (h *Handlers) FinalizeJob() gin.HandlerFunc {
 			}
 			patch["overlays"] = value
 		}
+		if len(req.VisualReplacements) > 0 {
+			currentPlanJSON, ok := current[contract.PayloadKeyCompiledRenderPlanJSON].(string)
+			if !ok || strings.TrimSpace(currentPlanJSON) == "" {
+				c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "error": "compiled_plan_required", "message": "PRE task must contain a compiled V2 plan before prepared replacements can be finalized"})
+				return
+			}
+			if err := validateCompletedManifestAgainstPlan(currentPlanJSON, req.RenderManifest); err != nil {
+				c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "error": "invalid_render_manifest_update", "message": err.Error()})
+				return
+			}
+			rawReplacements, err := jsonValue(req.VisualReplacements)
+			if err != nil {
+				c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "error": "invalid_payload", "message": err.Error()})
+				return
+			}
+			replacements, err := contract.ParseVisualReplacements(rawReplacements)
+			if err != nil {
+				c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "error": "invalid_payload", "message": err.Error()})
+				return
+			}
+			planJSON, planSHA, err := contract.CompileRenderPlanV2JSONWithReplacements(req.RenderManifest, replacements)
+			if err != nil {
+				c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "error": "invalid_visual_replacements", "message": err.Error()})
+				return
+			}
+			patch["render_manifest"] = req.RenderManifest
+			patch["visual_replacements"] = rawReplacements
+			patch[contract.PayloadKeyCompiledRenderPlanJSON] = string(planJSON)
+			patch[contract.PayloadKeyCompiledRenderPlanSHA] = planSHA
+		}
 		if len(req.RuntimeAssets) > 0 {
 			patch["runtime_assets"] = req.RuntimeAssets
 		}
@@ -183,6 +251,78 @@ func (h *Handlers) FinalizeJob() gin.HandlerFunc {
 			"idempotency_key":   req.IdempotencyKey,
 		})
 	}
+}
+
+func hasCompositeOverlay(overlays []SubmitOverlay) bool {
+	for _, overlay := range overlays {
+		if strings.EqualFold(strings.TrimSpace(overlay.Mode), "composite") {
+			return true
+		}
+	}
+	return false
+}
+
+func validateFinalizeVisualReplacements(items []FinalizeVisualReplacement) []gin.H {
+	seen := make(map[string]struct{}, len(items))
+	details := make([]gin.H, 0)
+	for i, item := range items {
+		path := fmt.Sprintf("visual_replacements.%d", i)
+		id := strings.TrimSpace(item.ReplacementID)
+		if id == "" {
+			details = append(details, gin.H{"path": path + ".replacement_id", "issue": "required"})
+		} else if _, exists := seen[id]; exists {
+			details = append(details, gin.H{"path": path + ".replacement_id", "issue": "duplicate"})
+		}
+		seen[id] = struct{}{}
+		if strings.TrimSpace(item.AssetID) == "" {
+			details = append(details, gin.H{"path": path + ".asset_id", "issue": "required"})
+		}
+		if item.TimelineStartUS < 0 || item.TimelineEndUS <= item.TimelineStartUS {
+			details = append(details, gin.H{"path": path, "issue": "invalid_timeline_window"})
+		}
+		if strings.TrimSpace(item.ProfileID) == "" {
+			details = append(details, gin.H{"path": path + ".profile_id", "issue": "required"})
+		}
+	}
+	return details
+}
+
+// validateCompletedManifestAgainstPlan pins the editorial timeline from PRE while
+// allowing FINALIZE to add the already-rendered media assets referenced by
+// visual_replacements. The strict manifest/compiler performs full validation.
+func validateCompletedManifestAgainstPlan(previousPlanJSON string, completed map[string]interface{}) error {
+	previous, err := contract.DecodeCompiledRenderPlanV2([]byte(previousPlanJSON))
+	if err != nil {
+		return fmt.Errorf("PRE compiled plan is invalid: %w", err)
+	}
+	baseJSON, _, err := contract.CompileRenderPlanV2JSONWithReplacements(completed, nil)
+	if err != nil {
+		return fmt.Errorf("completed render_manifest is invalid: %w", err)
+	}
+	base, err := contract.DecodeCompiledRenderPlanV2(baseJSON)
+	if err != nil {
+		return fmt.Errorf("completed render_manifest produced an invalid base plan: %w", err)
+	}
+	// Asset additions change the manifest identity hash. Compare the rendered
+	// timeline/output/audio contract separately, then require all PRE assets to
+	// remain byte-for-byte equivalent in the completed manifest.
+	previous.TimelineSHA256, base.TimelineSHA256 = "", ""
+	previous.FinalAudio.TimelineSHA256, base.FinalAudio.TimelineSHA256 = "", ""
+	previousAssets, baseAssets := previous.Assets, base.Assets
+	previous.Assets, base.Assets = nil, nil
+	if !reflect.DeepEqual(previous, base) {
+		return fmt.Errorf("completed render_manifest changes the PRE video timeline, output or final audio")
+	}
+	byID := make(map[string]contract.AssetRefV2, len(baseAssets))
+	for _, asset := range baseAssets {
+		byID[asset.AssetID] = asset
+	}
+	for _, asset := range previousAssets {
+		if completedAsset, ok := byID[asset.AssetID]; !ok || completedAsset != asset {
+			return fmt.Errorf("completed render_manifest changes or removes PRE asset %q", asset.AssetID)
+		}
+	}
+	return nil
 }
 
 func jsonValue(value interface{}) (interface{}, error) {

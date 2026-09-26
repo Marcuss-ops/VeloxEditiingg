@@ -542,7 +542,6 @@ components:
                             mode:
                                 enum:
                                     - replace
-                                    - composite
                                 type: string
                             sha256:
                                 type: string
@@ -564,6 +563,9 @@ components:
                     maxItems: 10000
                     minItems: 0
                     type: array
+                render_manifest:
+                    additionalProperties: {}
+                    type: object
                 runtime_assets:
                     items:
                         additionalProperties: {}
@@ -573,8 +575,62 @@ components:
                 runtime_payload:
                     additionalProperties: {}
                     type: object
+                visual_replacements:
+                    items:
+                        $ref: '#/components/schemas/FinalizeVisualReplacement'
+                    maxItems: 10000
+                    minItems: 0
+                    type: array
             required:
                 - idempotency_key
+            type: object
+        FinalizeVisualReplacement:
+            properties:
+                asset_id:
+                    maxLength: 512
+                    type: string
+                profile_id:
+                    maxLength: 128
+                    type: string
+                replacement_id:
+                    maxLength: 128
+                    type: string
+                sha256:
+                    maxLength: 64
+                    minLength: 64
+                    type: string
+                timeline_end_us:
+                    minimum: 1
+                    type: integer
+                timeline_start_us:
+                    minimum: 0
+                    type: integer
+            required:
+                - asset_id
+                - profile_id
+                - replacement_id
+            type: object
+        JobTypesResponse:
+            description: Job types registered for M2M submission.
+            properties:
+                types:
+                    items:
+                        properties:
+                            type:
+                                description: Canonical job type identifier.
+                                example: scene.composite.v1
+                                type: string
+                            version:
+                                description: Version suffix of the job type.
+                                example: v1
+                                type: string
+                        required:
+                            - type
+                            - version
+                        type: object
+                    type: array
+            required:
+                - types
             type: object
         PublishingCatalogCapabilities:
             properties:
@@ -856,28 +912,6 @@ components:
                 - dispatch_status
                 - status_url
             type: object
-        JobTypesResponse:
-            description: Job types registered for M2M submission.
-            properties:
-                types:
-                    items:
-                        properties:
-                            type:
-                                description: Canonical job type identifier.
-                                example: scene.composite.v1
-                                type: string
-                            version:
-                                description: Version suffix of the job type.
-                                example: v1
-                                type: string
-                        required:
-                            - type
-                            - version
-                        type: object
-                    type: array
-            required:
-                - types
-            type: object
         SubmitJobBatchItemResult:
             properties:
                 deduped_of:
@@ -1015,7 +1049,6 @@ components:
                             mode:
                                 enum:
                                     - replace
-                                    - composite
                                 type: string
                             sha256:
                                 type: string
@@ -1600,30 +1633,6 @@ paths:
             summary: Push a completed Creator payload directly to the Master.
             tags:
                 - creator
-    /api/v1/jobs/types:
-        get:
-            operationId: listJobTypes
-            parameters:
-                - $ref: '#/components/parameters/AuthorizationHeader'
-                - $ref: '#/components/parameters/XRequestIDHeader'
-            responses:
-                "200":
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/JobTypesResponse'
-                    description: OK.
-                "401":
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/ErrorEnvelope'
-                    description: Unauthorized.
-            security:
-                - bearerM2MToken: []
-            summary: List job types accepted by the M2M submission API.
-            tags:
-                - jobs
     /api/v1/jobs:
         post:
             operationId: submitJob
@@ -1773,7 +1782,7 @@ paths:
                     description: Internal Server Error.
             security:
                 - bearerM2MToken: []
-            summary: Add overlay/audio runtime assets to the same prepared job.
+            summary: Attach runtime audio assets and prepared video replacements to the same prepared job.
             tags:
                 - jobs
     /api/v1/jobs/batch:
@@ -1876,6 +1885,30 @@ paths:
             security:
                 - bearerM2MToken: []
             summary: Create one job and prefetch its initial assets before runtime generation.
+            tags:
+                - jobs
+    /api/v1/jobs/types:
+        get:
+            operationId: listJobTypes
+            parameters:
+                - $ref: '#/components/parameters/AuthorizationHeader'
+                - $ref: '#/components/parameters/XRequestIDHeader'
+            responses:
+                "200":
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/JobTypesResponse'
+                    description: OK.
+                "401":
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorEnvelope'
+                    description: Unauthorized.
+            security:
+                - bearerM2MToken: []
+            summary: List job types accepted by the M2M submission API.
             tags:
                 - jobs
     /api/v1/publishing/catalog:

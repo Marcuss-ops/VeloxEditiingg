@@ -97,12 +97,27 @@ type SubmitJobRequest struct {
 
 // FinalizeJobRequest is the runtime half of POST /api/v1/jobs/{job_id}/finalize.
 // The Master merges it into the existing TaskSpec; it never creates another
-// Job identity. runtime_payload remains extensible for TTS/BGM/SFX metadata.
+// Job identity. A completed render manifest plus visual_replacements can
+// attach finished video-only MP4 segments after PRE without changing its base
+// timeline. Raw composite overlays are not accepted at this boundary.
 type FinalizeJobRequest struct {
-	IdempotencyKey string                   `json:"idempotency_key" validate:"required,min=1,max=128"`
-	Overlays       []SubmitOverlay          `json:"overlays,omitempty" validate:"omitempty,max=10000,dive"`
-	RuntimeAssets  []map[string]interface{} `json:"runtime_assets,omitempty"`
-	RuntimePayload map[string]interface{}   `json:"runtime_payload,omitempty"`
+	IdempotencyKey     string                      `json:"idempotency_key" validate:"required,min=1,max=128"`
+	Overlays           []SubmitOverlay             `json:"overlays,omitempty" validate:"omitempty,max=10000,dive"`
+	RenderManifest     map[string]interface{}      `json:"render_manifest,omitempty"`
+	VisualReplacements []FinalizeVisualReplacement `json:"visual_replacements,omitempty" validate:"omitempty,max=10000,dive"`
+	RuntimeAssets      []map[string]interface{}    `json:"runtime_assets,omitempty"`
+	RuntimePayload     map[string]interface{}      `json:"runtime_payload,omitempty"`
+}
+
+// FinalizeVisualReplacement identifies a finished video asset already listed
+// in the completed render_manifest and places it on the PRE timeline.
+type FinalizeVisualReplacement struct {
+	ReplacementID   string `json:"replacement_id" validate:"required,max=128"`
+	AssetID         string `json:"asset_id" validate:"required,max=512"`
+	SHA256          string `json:"sha256,omitempty" validate:"omitempty,len=64"`
+	TimelineStartUS int64  `json:"timeline_start_us" validate:"gte=0"`
+	TimelineEndUS   int64  `json:"timeline_end_us" validate:"gte=1"`
+	ProfileID       string `json:"profile_id" validate:"required,max=128"`
 }
 
 type SubmitOutput struct {
@@ -431,7 +446,7 @@ type SubmitOverlay struct {
 	StartFrame  int64  `json:"start_frame" validate:"gte=0"`
 	EndFrame    int64  `json:"end_frame,omitempty" validate:"omitempty,gte=1"`
 	FrameCount  int64  `json:"frame_count,omitempty" validate:"omitempty,gte=1"`
-	Mode        string `json:"mode" validate:"required,oneof=replace composite"`
+	Mode        string `json:"mode" validate:"required,oneof=replace"`
 	ZIndex      int    `json:"z_index"`
 	AudioMode   string `json:"audio_mode" validate:"required,oneof=preserve_final_audio"`
 }

@@ -132,7 +132,7 @@ routes:
     operationId: finalizeJobRuntimeAssets
     security: bearerM2MToken
     tag: jobs
-    summary: "Add overlay/audio runtime assets to the same prepared job."
+    summary: "Attach runtime audio assets and prepared video replacements to the same prepared job."
     parameters:
       - AuthorizationHeader
       - XRequestIDHeader

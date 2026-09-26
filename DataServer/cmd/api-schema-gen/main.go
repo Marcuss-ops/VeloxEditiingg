@@ -51,6 +51,7 @@ func main() {
 	}{
 		{"SubmitJobRequest", apiwire.SubmitJobRequest{}},
 		{"FinalizeJobRequest", apiwire.FinalizeJobRequest{}},
+		{"FinalizeVisualReplacement", apiwire.FinalizeVisualReplacement{}},
 		{"SubmitScene", apiwire.SubmitScene{}},
 		{"SubmitClip", apiwire.SubmitClip{}},
 		{"SubmitVoiceover", apiwire.SubmitVoiceover{}},
