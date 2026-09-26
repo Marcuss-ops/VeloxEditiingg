@@ -97,8 +97,11 @@ jobs:
         id: version
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "push" ]; then
+          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref_type }}" = "tag" ]; then
             TAG="${GITHUB_REF_NAME#worker-v}"
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            TAG="${{ steps.read-version.outputs.version }}"
+            TAG="${TAG#v}"
           elif [ -n "${{ inputs.version }}" ]; then
             INPUT="${{ inputs.version }}"
             TAG="${INPUT#v}"
