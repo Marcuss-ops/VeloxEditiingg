@@ -28,6 +28,16 @@ func RunArtifactGC(ctx context.Context, db *artifactsstore.ArtifactGCStore, blob
 		return 0, 0, err
 	}
 	for _, candidate := range candidates {
+		// A durable candidate can outlive its artifact row (for example, a
+		// failed staging record removed by a repair). There is no object or
+		// filesystem path left to delete, so retire only the candidate row.
+		if candidate.ArtifactStatus == "" {
+			if err := db.CompleteArtifactGCNoObject(ctx, candidate.ArtifactID, owner); err != nil {
+				return deleted, failed, err
+			}
+			deleted++
+			continue
+		}
 		if candidate.StorageProvider == "" || candidate.StorageProvider == "local" {
 			if candidate.StorageKey == "" && candidate.LocalPath == "" {
 				if candidate.ArtifactStatus == "FAILED" || candidate.ArtifactStatus == "QUARANTINED" || candidate.ArtifactStatus == "DELETED" {

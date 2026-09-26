@@ -142,7 +142,7 @@ func (g *ArtifactGCStore) LeaseArtifactGCCandidates(ctx context.Context, owner s
 	       COALESCE(a.storage_provider,''), COALESCE(a.storage_key,''),
 	       COALESCE(a.local_path,'')
 		FROM artifact_gc_candidates c
-		JOIN artifacts a ON a.id=c.artifact_id
+		LEFT JOIN artifacts a ON a.id=c.artifact_id
 		WHERE c.eligible_at <= ?
 		  AND (c.status='ELIGIBLE' OR (c.status='DELETING' AND c.lease_expires_at < ?))
 		ORDER BY c.eligible_at ASC LIMIT ?`, nowText, nowText, limit)
