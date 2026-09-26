@@ -10,6 +10,9 @@
   while preserving events for jobs that are still active.
 - Page future-asset candidates in canonical priority/FIFO order so READY jobs
   beyond the first 256 are visible to prefetch planning.
+- Use an exponential, 30-second-capped worker idle backoff after failed task
+  attempts; align the default asset download pool with the production profile
+  of eight transfers.
 
 ### Added — per-phase worker progress in live job status
 

@@ -21,7 +21,7 @@ import (
 const DefaultTmpfsThresholdBytes int64 = 64 * 1024 * 1024
 
 const (
-	DefaultAssetDownloadConcurrency                 = 4
+	DefaultAssetDownloadConcurrency                 = 8
 	DefaultPublisherConcurrency                     = 4
 	DefaultProgressivePartConcurrency               = 4
 	DefaultAssetChunkedDownloadThresholdBytes int64 = 64 * 1024 * 1024

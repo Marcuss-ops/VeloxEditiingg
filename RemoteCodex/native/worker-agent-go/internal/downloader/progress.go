@@ -128,7 +128,7 @@ const DefaultPriority = 100
 
 // DefaultAssetConcurrency is the number of simultaneous byte transfers per
 // worker when VELOX_ASSET_DOWNLOAD_CONCURRENCY is unset.
-const DefaultAssetConcurrency = 4
+const DefaultAssetConcurrency = 8
 
 // DownloadRequest is the canonical, per-file download request. Every file
 // reaches the manager as an explicit asset; URL, Drive ID and filename are

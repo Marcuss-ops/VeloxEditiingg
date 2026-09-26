@@ -321,7 +321,7 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 	telemetry.GetPrometheusMetrics().RecordJobCompleteAck(pte.ExecutorID, float64(time.Since(ackStartTime).Milliseconds()))
 
 	if execErr != nil {
-		timer := time.NewTimer(2 * time.Second)
+		timer := time.NewTimer(taskFailureBackoff(pte.AttemptNumber))
 		select {
 		case <-jobCtx.Done():
 			if !timer.Stop() {
@@ -333,6 +333,21 @@ func (w *Worker) executeTask(ctx context.Context, pte *PendingTaskExecution, tas
 			w.setStatus(StatusIdle)
 		}
 	}
+}
+
+func taskFailureBackoff(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+	shift := attempt - 1
+	if shift > 4 {
+		shift = 4
+	}
+	delay := 2 * time.Second * time.Duration(1<<shift)
+	if delay > 30*time.Second {
+		return 30 * time.Second
+	}
+	return delay
 }
 
 func waterfallStatus(err error) string {

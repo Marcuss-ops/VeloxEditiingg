@@ -37,7 +37,7 @@ var ErrEmptyKey = errors.New("downloader: DownloadRequest has no asset key")
 // Config tunes the manager. Zero values are replaced by defaults.
 type Config struct {
 	// Concurrency is the number of simultaneous byte transfers per worker
-	// (VELOX_ASSET_DOWNLOAD_CONCURRENCY). Default 4.
+	// (VELOX_ASSET_DOWNLOAD_CONCURRENCY). Default 8.
 	Concurrency int
 	// Now is the clock used for all snapshots/timestamps; nil → time.Now.
 	// Tests inject a deterministic clock.
@@ -79,7 +79,7 @@ type Config struct {
 
 func (c *Config) withDefaults() {
 	if c.Concurrency <= 0 {
-		c.Concurrency = 4
+		c.Concurrency = DefaultAssetConcurrency
 	}
 	if c.Now == nil {
 		c.Now = time.Now

@@ -74,7 +74,7 @@ type WorkerConfig struct {
 
 	// AssetDownloadConcurrency caps the number of simultaneous asset byte
 	// transfers the canonical download manager runs per worker. Binds from
-	// VELOX_ASSET_DOWNLOAD_CONCURRENCY; default 4.
+	// VELOX_ASSET_DOWNLOAD_CONCURRENCY; default 8.
 	AssetDownloadConcurrency int `json:"asset_download_concurrency,omitempty"`
 
 	// PublisherConcurrency caps simultaneous artifact publications per worker.

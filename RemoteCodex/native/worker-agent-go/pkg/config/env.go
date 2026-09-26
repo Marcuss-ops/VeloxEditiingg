@@ -67,7 +67,7 @@ const (
 	// Set to 0 to disable the endpoint explicitly.
 	EnvPrometheusPort = "VELOX_PROMETHEUS_PORT"
 	// EnvAssetDownloadConcurrency caps the number of simultaneous asset byte
-	// transfers the canonical download manager runs per worker. Default 4.
+	// transfers the canonical download manager runs per worker. Default 8.
 	EnvAssetDownloadConcurrency           = "VELOX_ASSET_DOWNLOAD_CONCURRENCY"
 	EnvPublisherConcurrency               = "VELOX_PUBLISHER_CONCURRENCY"
 	EnvRenderX264Preset                   = "VELOX_RENDER_X264_PRESET"
@@ -301,7 +301,7 @@ func applyEnvOverrides(cfg *WorkerConfig) error {
 		}
 	}
 	// VELOX_ASSET_DOWNLOAD_CONCURRENCY caps the canonical download manager's
-	// simultaneous byte transfers (default 4 in downloader.Config).
+	// simultaneous byte transfers (default 8 in downloader.Config).
 	if v := strings.TrimSpace(os.Getenv(EnvAssetDownloadConcurrency)); v != "" {
 		if n, perr := strconv.Atoi(v); perr == nil && n > 0 {
 			cfg.AssetDownloadConcurrency = n
