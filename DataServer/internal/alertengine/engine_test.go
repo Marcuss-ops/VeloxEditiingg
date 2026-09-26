@@ -94,6 +94,10 @@ func (s *stubJobReader) Counts(_ context.Context) (jobs.Counts, error) {
 	return s.counts, nil
 }
 
+func (s *stubJobReader) CountsSince(_ context.Context, _ time.Time) (jobs.Counts, error) {
+	return s.counts, nil
+}
+
 type stubWorkerReader struct {
 	workers []map[string]any
 }

@@ -3,6 +3,7 @@ package observability
 import (
 	"context"
 	"testing"
+	"time"
 	"velox-server/internal/jobs"
 	"velox-server/internal/taskgraph"
 )
@@ -30,6 +31,9 @@ func (r *inspectionJobReader) List(context.Context, jobs.Filter) ([]jobs.Job, er
 	return []jobs.Job{*r.job}, nil
 }
 func (r *inspectionJobReader) Counts(context.Context) (jobs.Counts, error) { return nil, nil }
+func (r *inspectionJobReader) CountsSince(context.Context, time.Time) (jobs.Counts, error) {
+	return nil, nil
+}
 
 type inspectionExtras struct{}
 

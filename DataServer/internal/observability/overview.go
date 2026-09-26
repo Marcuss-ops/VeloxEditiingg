@@ -54,15 +54,17 @@ func (s *Service) overviewFresh(ctx context.Context) (*OverviewResult, error) {
 		if err != nil {
 			return nil, fmt.Errorf("observability: read job counts: %w", err)
 		}
-		if windowed, ok := s.jobs.(JobWindowReader); ok {
-			windowCounts, windowErr := windowed.CountsSince(ctx, time.Now().Add(-24*time.Hour))
-			if windowErr != nil {
-				return nil, fmt.Errorf("observability: read 24h job counts: %w", windowErr)
-			}
-			result.JobsCompleted24h = windowCounts[jobs.StatusAwaitingArtifact] + windowCounts[jobs.StatusSucceeded]
-			// CANCELLED is intentionally excluded from the failure-rate alert.
-			result.JobsFailed24h = windowCounts[jobs.StatusFailed]
+		windowed, ok := s.jobs.(JobWindowReader)
+		if !ok {
+			return nil, fmt.Errorf("observability: 24h job counts are not configured")
 		}
+		windowCounts, windowErr := windowed.CountsSince(ctx, time.Now().Add(-24*time.Hour))
+		if windowErr != nil {
+			return nil, fmt.Errorf("observability: read 24h job counts: %w", windowErr)
+		}
+		result.JobsCompleted24h = windowCounts[jobs.StatusAwaitingArtifact] + windowCounts[jobs.StatusSucceeded]
+		// CANCELLED is intentionally excluded from the failure-rate alert.
+		result.JobsFailed24h = windowCounts[jobs.StatusFailed]
 		total := result.JobsCompleted24h + result.JobsFailed24h
 		if total > 0 {
 			result.ErrorRate = float64(result.JobsFailed24h) / float64(total) * 100
