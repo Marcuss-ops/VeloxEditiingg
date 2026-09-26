@@ -56,7 +56,12 @@ func (w *Worker) uploadDeclaredArtifacts(ctx context.Context, pte *PendingTaskEx
 
 		result := earlyResults[i]
 		if result == nil {
-			result, err = uploadWithNegotiatedPath(ctx, transport, publisher.UploadRequest{LocalPath: ref.URI, Target: target, WorkerSHA256: ref.Hash, CommitToken: plan.GetCommitToken()}, w.config.ProgressivePartConcurrency)
+			artifactBase := uploadedBytes
+			request := publisher.UploadRequest{LocalPath: ref.URI, Target: target, WorkerSHA256: ref.Hash, CommitToken: plan.GetCommitToken()}
+			request.Progress = func(artifactBytes int64) {
+				w.updateUploadProgress(pte.TaskID, artifactBase+artifactBytes, totalUploadBytes, i+1, len(report.Outputs), started)
+			}
+			result, err = uploadWithNegotiatedPath(ctx, transport, request, w.config.ProgressivePartConcurrency)
 		}
 		if err != nil {
 			w.logArtifactProtocol("ARTIFACT_TRANSFER_FAILED", pte, started, plan.GetCommitId(), target.ArtifactID, target.UploadID, map[string]interface{}{"artifact_type": ref.Type, "error": err.Error()})

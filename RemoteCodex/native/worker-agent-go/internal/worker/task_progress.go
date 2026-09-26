@@ -28,10 +28,14 @@ func (w *Worker) detailedProgressCallback(taskID string) pipeline.DetailedProgre
 			segmentCompleted := snapshot.SegmentCompleted && (!previous.SegmentCompleted || previous.Segment != snapshot.Segment)
 			identical := previous.Percent == snapshot.Percent && previous.Scene == snapshot.Scene && previous.TotalScenes == snapshot.TotalScenes && previous.Segment == snapshot.Segment && previous.TotalSegments == snapshot.TotalSegments && previous.SegmentCompleted == snapshot.SegmentCompleted && previous.Phase == snapshot.Phase && !segmentCompleted && previous.FramesEncoded == snapshot.FramesEncoded && previous.FramesDecoded == snapshot.FramesDecoded && previous.FramesComposited == snapshot.FramesComposited && previous.FfmpegSpeedX == snapshot.FfmpegSpeedX && previous.ElapsedMS == snapshot.ElapsedMS && cumulativeMetricsEqual(previous.CumulativeMetrics, snapshot.CumulativeMetrics)
 			publishDue := !identical && (previous.LastPublishedAt.IsZero() || now.Sub(previous.LastPublishedAt) >= 2*time.Second || phaseChanged || segmentChanged || segmentCompleted)
-			metrics := make(map[string]float64, len(snapshot.CumulativeMetrics))
+			metrics := make(map[string]float64, len(previous.CumulativeMetrics)+len(snapshot.CumulativeMetrics)+1)
+			for key, value := range previous.CumulativeMetrics {
+				metrics[key] = value
+			}
 			for key, value := range snapshot.CumulativeMetrics {
 				metrics[key] = value
 			}
+			metrics[phaseProgressMetric(PhaseRendering)] = float64(snapshot.Percent)
 			if current.AttemptEvents != nil {
 				if phaseChanged {
 					current.AttemptEvents.PhaseChanged(snapshot.Phase)
@@ -117,11 +121,8 @@ func withProgressTaskID(ctx context.Context, taskID string) context.Context {
 }
 
 func cumulativeMetricsEqual(left, right map[string]float64) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for key, value := range left {
-		if other, ok := right[key]; !ok || other != value {
+	for key, value := range right {
+		if other, ok := left[key]; !ok || other != value {
 			return false
 		}
 	}

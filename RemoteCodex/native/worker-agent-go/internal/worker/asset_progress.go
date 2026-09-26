@@ -34,6 +34,11 @@ func emitAssetProgressCheckpoint(ctx context.Context, snap downloader.DownloadSn
 	if w, ok := workerFromProgressContext(ctx); ok && w != nil {
 		jobs := append([]string(nil), snap.JobIDs...)
 		sort.Strings(jobs)
+		if snap.TaskID != "" {
+			for _, jobID := range jobs {
+				w.updateDownloadPhaseProgress(snap.TaskID, jobID)
+			}
+		}
 		msg := &pb.AssetDownloadProgress{
 			WorkerId: w.config.WorkerID, TransferId: snap.TransferID,
 			AssetKey: string(snap.AssetKey), AssetId: snap.AssetID, Role: string(snap.Role),

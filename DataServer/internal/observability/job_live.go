@@ -94,18 +94,19 @@ type JobLiveWorker struct {
 
 // JobLiveExecution contains the current execution progress.
 type JobLiveExecution struct {
-	Phase            string  `json:"phase"`
-	OperationalPhase string  `json:"operational_phase,omitempty"`
-	Percent          int     `json:"percent"`
-	Scene            int     `json:"scene"`
-	ScenesTotal      int     `json:"scenes_total"`
-	Segment          int     `json:"segment"`
-	SegmentsTotal    int     `json:"segments_total"`
-	ElapsedMS        int64   `json:"elapsed_ms"`
-	FramesDecoded    int64   `json:"frames_decoded"`
-	FramesComposited int64   `json:"frames_composited"`
-	FramesEncoded    int64   `json:"frames_encoded"`
-	SpeedX           float64 `json:"speed_x"`
+	Phase            string             `json:"phase"`
+	OperationalPhase string             `json:"operational_phase,omitempty"`
+	Percent          int                `json:"percent"`
+	PhaseProgress    map[string]float64 `json:"phase_progress,omitempty"`
+	Scene            int                `json:"scene"`
+	ScenesTotal      int                `json:"scenes_total"`
+	Segment          int                `json:"segment"`
+	SegmentsTotal    int                `json:"segments_total"`
+	ElapsedMS        int64              `json:"elapsed_ms"`
+	FramesDecoded    int64              `json:"frames_decoded"`
+	FramesComposited int64              `json:"frames_composited"`
+	FramesEncoded    int64              `json:"frames_encoded"`
+	SpeedX           float64            `json:"speed_x"`
 	// AttemptMilestones is the worker's monotonic milestone timeline
 	// (elapsed_ms since attempt start) exposed live while the attempt is
 	// RUNNING. The durable attempt report carries the same timeline after
@@ -226,6 +227,18 @@ func (s *Service) JobLive(ctx context.Context, jobID string) (*JobLiveStatus, er
 
 	// Operational phase and upload progress from CumulativeMetrics.
 	if live.CumulativeMetrics != nil {
+		phaseProgress := make(map[string]float64)
+		for key := range live.CumulativeMetrics {
+			if strings.HasPrefix(key, "phase_progress.") {
+				phase := strings.TrimPrefix(key, "phase_progress.")
+				if phase != "" {
+					phaseProgress[phase] = cumulativeFloat(live.CumulativeMetrics, key)
+				}
+			}
+		}
+		if len(phaseProgress) > 0 {
+			result.Execution.PhaseProgress = phaseProgress
+		}
 		if opPhase, ok := live.CumulativeMetrics["operational_phase"].(string); ok && opPhase != "" {
 			result.Execution.OperationalPhase = opPhase
 		}

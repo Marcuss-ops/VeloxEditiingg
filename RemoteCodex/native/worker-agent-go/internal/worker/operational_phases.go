@@ -68,12 +68,69 @@ func (w *Worker) UpdateOperationalPhase(taskID, phase string) {
 	pipeline.UpdateTaskProgress(taskID, phase, func(p string, now time.Time) {
 		w.activeTasksMu.Lock()
 		if active := w.activeTasks[taskID]; active != nil {
-			active.OperationalPhase = p
+			if active.Progress.CumulativeMetrics == nil {
+				active.Progress.CumulativeMetrics = make(map[string]float64)
+			}
+			if previous := active.OperationalPhase; previous != "" && previous != p && !phaseTransitionWait(previous, p) {
+				active.Progress.CumulativeMetrics[phaseProgressMetric(previous)] = 100
+			}
+			key := phaseProgressMetric(p)
+			if _, exists := active.Progress.CumulativeMetrics[key]; !exists {
+				active.Progress.CumulativeMetrics[key] = 0
+			}
+			if p == PhaseDone {
+				active.Progress.CumulativeMetrics[key] = 100
+				active.Progress.Percent = 100
+			} else {
+				active.Progress.Percent = int32(active.Progress.CumulativeMetrics[key])
+			}
+			active.Progress.Phase = p
+			active.Progress.Stage = p
 			active.Progress.LastProgressAt = now
+			active.OperationalPhase = p
 		}
 		w.activeTasksMu.Unlock()
 		w.wakeHeartbeat()
 	})
+}
+
+func phaseProgressMetric(phase string) string { return "phase_progress." + phase }
+
+// Waiting for a runtime asset is a sub-phase of prefetching. Keep the
+// prefetch percentage live until the asset resolver has finished the wait.
+func phaseTransitionWait(previous, next string) bool {
+	return (previous == PhasePrefetching && next == PhaseWaitingRuntimeAssets) ||
+		(previous == PhaseWaitingRuntimeAssets && next == PhasePrefetching)
+}
+
+func (w *Worker) updateDownloadPhaseProgress(taskID, jobID string) {
+	if w == nil || taskID == "" || jobID == "" {
+		return
+	}
+	snapshot := w.assetDownloadManager().JobSnapshot(jobID)
+	if snapshot.AssetsTotal == 0 || snapshot.BytesTotal <= 0 {
+		return
+	}
+	percent := snapshot.ProgressPercent
+	if percent < 0 {
+		percent = 0
+	} else if percent > 100 {
+		percent = 100
+	}
+	now := time.Now().UTC()
+	w.activeTasksMu.Lock()
+	if active := w.activeTasks[taskID]; active != nil && (active.OperationalPhase == PhasePrefetching || active.OperationalPhase == PhaseWaitingRuntimeAssets) {
+		if active.Progress.CumulativeMetrics == nil {
+			active.Progress.CumulativeMetrics = make(map[string]float64)
+		}
+		active.Progress.CumulativeMetrics[phaseProgressMetric(active.OperationalPhase)] = percent
+		active.Progress.Percent = int32(percent)
+		active.Progress.Phase = active.OperationalPhase
+		active.Progress.Stage = active.OperationalPhase
+		active.Progress.LastProgressAt = now
+	}
+	w.activeTasksMu.Unlock()
+	w.wakeHeartbeat()
 }
 
 // updateUploadProgress records per-artifact upload progress in the
@@ -111,6 +168,10 @@ func (w *Worker) updateUploadProgress(taskID string, uploadedBytes, totalBytes i
 		}
 		active.Progress.CumulativeMetrics["upload_artifact_index"] = float64(artifactIndex)
 		active.Progress.CumulativeMetrics["upload_artifact_total"] = float64(artifactTotal)
+		active.Progress.CumulativeMetrics[phaseProgressMetric(PhasePublishing)] = active.Progress.CumulativeMetrics["upload_percent"]
+		if totalBytes > 0 {
+			active.Progress.Percent = int32(active.Progress.CumulativeMetrics["upload_percent"])
+		}
 		active.Progress.LastProgressAt = now
 	}
 	w.activeTasksMu.Unlock()

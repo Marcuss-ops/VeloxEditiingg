@@ -1,5 +1,12 @@
 ## [Unreleased] - 2026-09-24
 
+### Added — per-phase worker progress in live job status
+
+- Preserve cumulative phase percentages while renderer callbacks update frame
+  progress, and report byte-weighted prefetch and live artifact upload progress.
+- Expose the percentages by operational phase through the job live endpoint so
+  operators can distinguish prefetch, render, publish, and commit wait.
+
 ### Fixed — clips timing and FINALIZE prefetch replay
 
 - Reject clips with missing, non-positive, NaN, or infinite durations instead
