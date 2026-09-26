@@ -25,8 +25,6 @@ var ValidJobTypes = map[string]bool{
 	// job-level recipe selected by the single canonical HTTP endpoint.
 	"scene.composite.v1": true,
 	"clip.stock.v1":      true,
-	"scene.image.v1":     true,
-	"slideshow.v1":       true,
 }
 
 var ValidPriorities = map[int]bool{
@@ -153,7 +151,7 @@ func ValidateRenderPlan(plan *RenderPlan) error {
 
 func isVideoRenderJobType(jobType string) bool {
 	switch jobType {
-	case "render", "process_video", "scene.composite.v1", "clip.stock.v1", "scene.image.v1", "slideshow.v1":
+	case "render", "process_video", "scene.composite.v1", "clip.stock.v1":
 		return true
 	default:
 		return false

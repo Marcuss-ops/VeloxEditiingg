@@ -8,6 +8,19 @@ func TestRecipeRegistry_RejectsRemovedLegacyRenderType(t *testing.T) {
 	}
 }
 
+func TestRecipeRegistry_OnlySceneCompositeAndStockClip(t *testing.T) {
+	for _, jobType := range []string{"scene.composite.v1", "clip.stock.v1"} {
+		if _, ok := ResolveRecipe(jobType); !ok {
+			t.Errorf("%s must remain registered", jobType)
+		}
+	}
+	for _, jobType := range []string{"scene.image.v1", "slideshow.v1"} {
+		if _, ok := ResolveRecipe(jobType); ok {
+			t.Errorf("%s must not be registered", jobType)
+		}
+	}
+}
+
 func TestNormalizeCanonicalRecipe_SpecSceneBindings(t *testing.T) {
 	req := SubmitJobRequest{
 		IdempotencyKey: "recipe-1",

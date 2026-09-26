@@ -17,8 +17,6 @@ type RecipeDefinition struct {
 var recipeRegistry = map[string]RecipeDefinition{
 	"scene.composite.v1": {JobType: "scene.composite.v1"},
 	"clip.stock.v1":      {JobType: "clip.stock.v1", RendererMode: "clip_stock"},
-	"scene.image.v1":     {JobType: "scene.image.v1", RendererMode: "scene_image"},
-	"slideshow.v1":       {JobType: "slideshow.v1", RendererMode: "slideshow"},
 }
 
 func ResolveRecipe(jobType string) (RecipeDefinition, bool) {

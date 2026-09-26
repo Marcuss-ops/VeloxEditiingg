@@ -150,7 +150,7 @@ func TestValidateRenderPlan_Valid_StockClips(t *testing.T) {
 }
 
 func TestValidateRenderPlan_CanonicalRecipeAliases(t *testing.T) {
-	for _, jobType := range []string{"scene.composite.v1", "clip.stock.v1", "scene.image.v1", "slideshow.v1"} {
+	for _, jobType := range []string{"scene.composite.v1", "clip.stock.v1"} {
 		plan := &RenderPlan{
 			Version:   "v1",
 			JobID:     "job-canonical-" + strings.ReplaceAll(jobType, ".", "-"),
@@ -163,6 +163,24 @@ func TestValidateRenderPlan_CanonicalRecipeAliases(t *testing.T) {
 		}
 		if err := ValidateRenderPlan(plan); err != nil {
 			t.Fatalf("canonical recipe %s rejected: %v", jobType, err)
+		}
+	}
+}
+
+func TestValidateRenderPlan_RejectsRetiredRecipes(t *testing.T) {
+	for _, jobType := range []string{"scene.image.v1", "slideshow.v1"} {
+		plan := &RenderPlan{
+			Version:   "v1",
+			JobID:     "job-retired-" + strings.ReplaceAll(jobType, ".", "-"),
+			JobType:   jobType,
+			CreatedAt: time.Now().UTC().Format(time.RFC3339),
+			Parameters: map[string]interface{}{
+				"scenes_json":     []interface{}{map[string]interface{}{"scene_id": "scene-0"}},
+				"voiceover_paths": []string{"velox-asset://voiceover"},
+			},
+		}
+		if err := ValidateRenderPlan(plan); err == nil {
+			t.Errorf("retired recipe %s was accepted", jobType)
 		}
 	}
 }
