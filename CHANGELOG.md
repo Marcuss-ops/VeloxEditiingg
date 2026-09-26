@@ -1,5 +1,16 @@
 ## [Unreleased] - 2026-09-24
 
+### Fixed — artifact GC retries and retention windows
+
+- Lease artifact GC candidates without upgrading an open SQLite read cursor to
+  a write transaction; retry failed deletions with bounded exponential delay.
+- Enqueue local QUARANTINED artifacts after a configurable 30-day grace period.
+  Failed STAGING rows without a storage path no longer create empty GC work.
+- Prune `job_events` older than the configured 30-day window at most hourly,
+  while preserving events for jobs that are still active.
+- Page future-asset candidates in canonical priority/FIFO order so READY jobs
+  beyond the first 256 are visible to prefetch planning.
+
 ### Added — per-phase worker progress in live job status
 
 - Preserve cumulative phase percentages while renderer callbacks update frame

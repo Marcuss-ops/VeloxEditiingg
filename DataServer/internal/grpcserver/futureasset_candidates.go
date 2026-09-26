@@ -12,10 +12,32 @@ import (
 	"velox-server/internal/taskgraph"
 )
 
+const futureAssetCandidatePageSize = 256
+
+type paginatedReadyCandidateRepository interface {
+	ListReadyCandidatesPage(ctx context.Context, limit, offset int) ([]placement.TaskCandidate, error)
+}
+
 // loadCandidates fetches the next batch of READY candidates from the task
 // graph.  Returns nil on error (caller logs and aborts the refresh).
 func (h *Handler) loadCandidates(ctx context.Context, workerID string) ([]placement.TaskCandidate, bool) {
-	candidates, err := h.taskRepo.ListReadyCandidates(ctx, 256)
+	var candidates []placement.TaskCandidate
+	if paginated, ok := h.taskRepo.(paginatedReadyCandidateRepository); ok {
+		for offset := 0; ; offset += futureAssetCandidatePageSize {
+			page, err := paginated.ListReadyCandidatesPage(ctx, futureAssetCandidatePageSize, offset)
+			if err != nil {
+				logGRPCf(ctx, logging.LevelError, logging.CodeGRPCPrefetchFailed,
+					"[PREFETCH] future candidates worker=%s offset=%d: %v", workerID, offset, err)
+				return nil, false
+			}
+			candidates = append(candidates, page...)
+			if len(page) < futureAssetCandidatePageSize {
+				return candidates, true
+			}
+		}
+	}
+	var err error
+	candidates, err = h.taskRepo.ListReadyCandidates(ctx, futureAssetCandidatePageSize)
 	if err != nil {
 		logGRPCf(ctx, logging.LevelError, logging.CodeGRPCPrefetchFailed,
 			"[PREFETCH] future candidates worker=%s: %v", workerID, err)

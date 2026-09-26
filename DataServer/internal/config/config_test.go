@@ -93,6 +93,8 @@ func TestFromEnv_BootstrapTypedValues(t *testing.T) {
 	t.Setenv("VELOX_RETENTION_WORKER_EVENTS_DAYS", "22")
 	t.Setenv("VELOX_RETENTION_WORKER_RESOURCE_RAW_DAYS", "33")
 	t.Setenv("VELOX_RETENTION_WORKER_RESOURCE_ROLLUP_DAYS", "44")
+	t.Setenv("VELOX_RETENTION_JOB_EVENTS_DAYS", "55")
+	t.Setenv("VELOX_RETENTION_ARTIFACT_QUARANTINE_DAYS", "66")
 	t.Setenv("VELOX_CPU_CORE_SECOND_COST", "0.000007")
 	t.Setenv("VELOX_NETWORK_GB_COST", "0.02")
 	t.Setenv("VELOX_STORAGE_GB_COST", "0.0003")
@@ -108,7 +110,7 @@ func TestFromEnv_BootstrapTypedValues(t *testing.T) {
 	if cfg.Runtime.Alerts.ErrorRatePct != 8.5 || cfg.Runtime.Alerts.P95WallMS != 1234 || cfg.Runtime.Alerts.DiskFreeGB != 2.5 || cfg.Runtime.Alerts.FFmpegMin != 1.25 {
 		t.Fatalf("unexpected alert config: %+v", cfg.Runtime.Alerts)
 	}
-	if cfg.Retention.WorkerMetricsDays != 11 || cfg.Retention.WorkerEventsDays != 22 || cfg.Retention.WorkerResourceRawDays != 33 || cfg.Retention.WorkerResourceRollupDays != 44 {
+	if cfg.Retention.WorkerMetricsDays != 11 || cfg.Retention.WorkerEventsDays != 22 || cfg.Retention.WorkerResourceRawDays != 33 || cfg.Retention.WorkerResourceRollupDays != 44 || cfg.Retention.JobEventsDays != 55 || cfg.Retention.ArtifactQuarantineDays != 66 {
 		t.Fatalf("unexpected retention config: %+v", cfg.Retention)
 	}
 	if cfg.Runtime.Metrics.CPUCostEUR != 0.000007 || cfg.Runtime.Metrics.NetworkCostEUR != 0.02 || cfg.Runtime.Metrics.StorageCostEUR != 0.0003 {

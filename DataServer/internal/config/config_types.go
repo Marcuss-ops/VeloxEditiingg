@@ -268,8 +268,10 @@ type CompatibilityConfig struct {
 // opt out with VELOX_RETENTION_WORKER_EVENTS_DAYS=0 (or any non-positive
 // integer) without writing Go code.
 type RetentionConfig struct {
-	WorkerMetricsDays int
-	WorkerEventsDays  int
+	WorkerMetricsDays      int
+	WorkerEventsDays       int
+	JobEventsDays          int
+	ArtifactQuarantineDays int
 
 	// WorkerResourceRawDays controls raw worker_resource_samples retention.
 	// Default 90 days; <= 0 disables pruning.

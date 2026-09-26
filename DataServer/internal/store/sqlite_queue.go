@@ -1,7 +1,10 @@
 package store
 
 import (
+	"context"
+	"database/sql"
 	"fmt"
+	"time"
 )
 
 // JobEvent is the typed row from job_events.
@@ -46,4 +49,23 @@ func (s *SQLiteStore) ListJobEvents(jobID string, limit int) ([]JobEvent, error)
 		result = append(result, e)
 	}
 	return result, rows.Err()
+}
+
+func pruneJobEvents(ctx context.Context, tx *sql.Tx, days int, now time.Time) error {
+	if tx == nil || days <= 0 {
+		return nil
+	}
+	cutoff := now.UTC().AddDate(0, 0, -days).Format(time.RFC3339Nano)
+	_, err := tx.ExecContext(ctx, `
+		DELETE FROM job_events
+		WHERE timestamp < ?
+		  AND NOT EXISTS (
+			SELECT 1 FROM jobs j
+			WHERE j.job_id = job_events.job_id
+			  AND j.status NOT IN ('SUCCEEDED','FAILED','CANCELLED')
+		  )`, cutoff)
+	if err != nil {
+		return fmt.Errorf("prune job events: %w", err)
+	}
+	return nil
 }

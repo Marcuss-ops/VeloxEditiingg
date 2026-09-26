@@ -101,8 +101,28 @@ LEFT JOIN task_specs       ts  ON ts.task_id = t.task_id
 WHERE t.status = 'READY'
   AND (t.worker_id = '' OR t.worker_id IS NULL)
 GROUP BY t.task_id
-ORDER BY t.priority DESC, t.created_at ASC
+ORDER BY t.priority DESC, t.created_at ASC, t.task_id ASC
 LIMIT ?`
+
+const listQueryPage = `
+SELECT t.task_id,
+       t.job_id,
+       t.revision,
+       t.priority,
+       t.attempt_count,
+       t.created_at,
+       t.executor_id,
+       t.executor_version,
+       COALESCE(GROUP_CONCAT(tr.capability), '') AS required_capabilities,
+       COALESCE(ts.payload_json, '')            AS payload_json
+FROM tasks t
+LEFT JOIN task_requirements tr ON tr.task_id = t.task_id
+LEFT JOIN task_specs       ts  ON ts.task_id = t.task_id
+WHERE t.status = 'READY'
+  AND (t.worker_id = '' OR t.worker_id IS NULL)
+GROUP BY t.task_id
+ORDER BY t.priority DESC, t.created_at ASC, t.task_id ASC
+LIMIT ? OFFSET ?`
 
 // ListNextDispatchableJobs returns up to `limit` dispatch-ready
 // jobs ordered for the dispatcher (priority DESC, created_at ASC).
@@ -118,13 +138,33 @@ LIMIT ?`
 // for production use; the default is here to keep wiring ergonomic
 // in tests + wiring.
 func ListNextDispatchableJobs(ctx context.Context, db Querier, limit int) ([]Job, error) {
+	return listNextDispatchableJobs(ctx, db, listQuery, limit, 0)
+}
+
+// ListNextDispatchableJobsPage returns a stable slice of the dispatch order.
+// The task_id tiebreaker makes offset paging deterministic when jobs share
+// the same priority and creation timestamp.
+func ListNextDispatchableJobsPage(ctx context.Context, db Querier, limit, offset int) ([]Job, error) {
+	if offset < 0 {
+		return nil, fmt.Errorf("dispatchable.ListNextDispatchableJobsPage: offset must be non-negative")
+	}
+	return listNextDispatchableJobs(ctx, db, listQueryPage, limit, offset)
+}
+
+func listNextDispatchableJobs(ctx context.Context, db Querier, query string, limit, offset int) ([]Job, error) {
 	if db == nil {
 		return nil, fmt.Errorf("dispatchable.ListNextDispatchableJobs: db is nil")
 	}
 	if limit <= 0 {
 		limit = DefaultLimit
 	}
-	rows, err := db.QueryContext(ctx, listQuery, limit)
+	var rows *sql.Rows
+	var err error
+	if strings.Contains(query, "OFFSET ?") {
+		rows, err = db.QueryContext(ctx, query, limit, offset)
+	} else {
+		rows, err = db.QueryContext(ctx, query, limit)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("dispatchable.ListNextDispatchableJobs: query: %w", err)
 	}

@@ -155,6 +155,11 @@ func (s *SQLiteStore) persistWorkerHeartbeatOnce(ctx context.Context, raw []byte
 	if err := pruneWorkerEvents(ctx, tx, s.retentionDays.Events); err != nil {
 		return err
 	}
+	if s.shouldPruneJobEvents(now) {
+		if err := pruneJobEvents(ctx, tx, s.retentionDays.JobEvents, now); err != nil {
+			return err
+		}
+	}
 	staleSec, partitionSec := s.partitionThresholds()
 	newConnState, err := detectAndPersistPartitionTransition(ctx, tx, workerID, lastHBAt, now, staleSec, partitionSec)
 	if err != nil {
@@ -236,6 +241,32 @@ func (s *SQLiteStore) SetRetention(metricsDays, eventsDays int) {
 	s.retentionDays.Events = eventsDays
 }
 
+// SetJobEventsRetention configures terminal/orphan job_events retention.
+// Non-positive values disable the prune pass.
+func (s *SQLiteStore) SetJobEventsRetention(days int) {
+	if s != nil {
+		s.retentionDays.JobEvents = days
+	}
+}
+
+// shouldPruneJobEvents limits the indexed retention DELETE to at most once
+// per hour across all workers sharing this store.
+func (s *SQLiteStore) shouldPruneJobEvents(now time.Time) bool {
+	if s == nil || s.retentionDays.JobEvents <= 0 {
+		return false
+	}
+	nowUnix := now.Unix()
+	for {
+		last := s.lastJobEventsPrune.Load()
+		if nowUnix-last < int64(time.Hour/time.Second) {
+			return false
+		}
+		if s.lastJobEventsPrune.CompareAndSwap(last, nowUnix) {
+			return true
+		}
+	}
+}
+
 // SetResourceRetention configures the raw sample and hourly rollup windows.
 // Non-positive values disable the corresponding prune pass.
 func (s *SQLiteStore) SetResourceRetention(rawDays, rollupDays int) {
@@ -271,8 +302,9 @@ func (s *SQLiteStore) SetPartitionThresholds(staleSeconds, partitionSeconds int)
 // prune helpers. Lives as a value type (not a pointer) so the zero
 // value (0, 0) is a valid opt-out.
 type retentionDays struct {
-	Metrics int
-	Events  int
+	Metrics   int
+	Events    int
+	JobEvents int
 }
 
 type resourceRetention struct {

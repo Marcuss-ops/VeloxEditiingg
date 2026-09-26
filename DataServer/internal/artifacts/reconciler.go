@@ -20,14 +20,15 @@ type Reconciler struct {
 }
 
 type ReconcilerConfig struct {
-	OrphanBlobAge    time.Duration
-	StuckArtifactAge time.Duration
-	QuarantineMinAge time.Duration
-	BatchLimit       int
+	OrphanBlobAge       time.Duration
+	StuckArtifactAge    time.Duration
+	QuarantineMinAge    time.Duration
+	QuarantineRetention time.Duration
+	BatchLimit          int
 }
 
 func DefaultReconcilerConfig() ReconcilerConfig {
-	return ReconcilerConfig{OrphanBlobAge: 24 * time.Hour, StuckArtifactAge: 24 * time.Hour, QuarantineMinAge: 60 * time.Second, BatchLimit: 200}
+	return ReconcilerConfig{OrphanBlobAge: 24 * time.Hour, StuckArtifactAge: 24 * time.Hour, QuarantineMinAge: 60 * time.Second, QuarantineRetention: 30 * 24 * time.Hour, BatchLimit: 200}
 }
 
 type ReconcileStats struct {
@@ -38,6 +39,7 @@ type ReconcileStats struct {
 	StuckArtifacts        int
 	GCDeleted             int
 	GCFailed              int
+	GCQueuedQuarantined   int
 }
 
 func NewReconciler(artifactRepo *artifactsstore.ArtifactReconcilerRepository, blobStore repository.BlobStore, repo repository.UploadRepository, c clock.Clock, config ReconcilerConfig) (*Reconciler, error) {
@@ -61,6 +63,9 @@ func NewReconciler(artifactRepo *artifactsstore.ArtifactReconcilerRepository, bl
 	}
 	if config.QuarantineMinAge <= 0 {
 		config.QuarantineMinAge = 60 * time.Second
+	}
+	if config.QuarantineRetention <= 0 {
+		config.QuarantineRetention = 30 * 24 * time.Hour
 	}
 	if config.BatchLimit <= 0 {
 		config.BatchLimit = 200
@@ -92,8 +97,8 @@ func (r *Reconciler) runOnce(ctx context.Context, source string) {
 		log.Printf("[RECONCILER] %s pass failed: %v", source, err)
 		return
 	}
-	if stats.ExpiredUploads+stats.OrphanFinalBlobs+stats.QuarantinedWithEvent+stats.QuarantinedStatusOnly+stats.StuckArtifacts+stats.GCDeleted+stats.GCFailed > 0 {
-		log.Printf("[RECONCILER] %s pass expired=%d orphan_blobs=%d quarantined_event=%d quarantined_status_only=%d stuck_artifacts=%d gc_deleted=%d gc_failed=%d", source, stats.ExpiredUploads, stats.OrphanFinalBlobs, stats.QuarantinedWithEvent, stats.QuarantinedStatusOnly, stats.StuckArtifacts, stats.GCDeleted, stats.GCFailed)
+	if stats.ExpiredUploads+stats.OrphanFinalBlobs+stats.QuarantinedWithEvent+stats.QuarantinedStatusOnly+stats.StuckArtifacts+stats.GCQueuedQuarantined+stats.GCDeleted+stats.GCFailed > 0 {
+		log.Printf("[RECONCILER] %s pass expired=%d orphan_blobs=%d quarantined_event=%d quarantined_status_only=%d stuck_artifacts=%d gc_queued_quarantined=%d gc_deleted=%d gc_failed=%d", source, stats.ExpiredUploads, stats.OrphanFinalBlobs, stats.QuarantinedWithEvent, stats.QuarantinedStatusOnly, stats.StuckArtifacts, stats.GCQueuedQuarantined, stats.GCDeleted, stats.GCFailed)
 	}
 }
 
@@ -114,6 +119,12 @@ func (r *Reconciler) Reconcile(ctx context.Context) (ReconcileStats, error) {
 		log.Printf("[RECONCILER] rule4 error: %v", err)
 	} else {
 		stats.StuckArtifacts = n
+	}
+	cutoff := r.clock.Now().Add(-r.config.QuarantineRetention)
+	if n, err := r.artifactRepo.GCStore().EnqueueQuarantinedArtifactsForRetention(ctx, cutoff, r.clock.Now(), r.config.BatchLimit); err != nil {
+		log.Printf("[RECONCILER] quarantined artifact retention enqueue error: %v", err)
+	} else {
+		stats.GCQueuedQuarantined = n
 	}
 	if deleted, failed, err := RunArtifactGC(ctx, r.artifactRepo.GCStore(), r.blobStore, "reconciler", r.clock.Now(), 15*time.Minute, r.config.BatchLimit); err != nil {
 		log.Printf("[RECONCILER] artifact GC error: %v", err)

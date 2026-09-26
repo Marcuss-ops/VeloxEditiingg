@@ -204,6 +204,26 @@ func TestSQLiteTaskRepository_ListReadyCandidates_HappyPath(t *testing.T) {
 	}
 }
 
+func TestSQLiteTaskRepository_ListReadyCandidatesPageReachesBeyondInitialWindow(t *testing.T) {
+	r, db := openCandidatesTestDB(t)
+	ctx := context.Background()
+	t0 := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	for i := 0; i < 520; i++ {
+		seedCandidateTask(t, db, fmt.Sprintf("T-page-%04d", i), fmt.Sprintf("J-page-%04d", i), 1,
+			"READY", false, "", "scene.composite.v1", 1, t0.Add(time.Duration(i)*time.Second))
+	}
+	page, err := r.ListReadyCandidatesPage(ctx, 256, 256)
+	if err != nil {
+		t.Fatalf("ListReadyCandidatesPage: %v", err)
+	}
+	if len(page) != 256 {
+		t.Fatalf("page length=%d want 256", len(page))
+	}
+	if page[0].TaskID != "T-page-0256" || page[len(page)-1].TaskID != "T-page-0511" {
+		t.Fatalf("unexpected offset page bounds: first=%q last=%q", page[0].TaskID, page[len(page)-1].TaskID)
+	}
+}
+
 // TestSQLiteTaskRepository_ListReadyCandidates_LimitDefault pins the
 // safe-default for limit<=0 (placementCandidateBatch = 64). A
 // regression here would silently shift the split between placement

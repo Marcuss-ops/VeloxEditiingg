@@ -94,6 +94,17 @@ func (r *SQLiteTaskRepository) AreDependenciesSatisfied(ctx context.Context, dep
 // own default), deferring the canonical DefaultLimit constant in
 // shared to the snapshot service only.
 func (r *SQLiteTaskRepository) ListReadyCandidates(ctx context.Context, limit int) ([]placement.TaskCandidate, error) {
+	return r.listReadyCandidates(ctx, limit, 0, false)
+}
+
+// ListReadyCandidatesPage returns a page of READY task candidates in the
+// canonical priority/FIFO order. Future-asset planning uses this to avoid
+// permanently hiding jobs beyond its first candidate window.
+func (r *SQLiteTaskRepository) ListReadyCandidatesPage(ctx context.Context, limit, offset int) ([]placement.TaskCandidate, error) {
+	return r.listReadyCandidates(ctx, limit, offset, true)
+}
+
+func (r *SQLiteTaskRepository) listReadyCandidates(ctx context.Context, limit, offset int, paged bool) ([]placement.TaskCandidate, error) {
 	if r.store == nil || r.store.db == nil {
 		return nil, fmt.Errorf("task repository: store not initialized")
 	}
@@ -101,7 +112,13 @@ func (r *SQLiteTaskRepository) ListReadyCandidates(ctx context.Context, limit in
 		limit = placementCandidateBatch
 	}
 
-	jobs, err := dispatchable.ListNextDispatchableJobs(ctx, r.store.db, limit)
+	var jobs []dispatchable.Job
+	var err error
+	if paged {
+		jobs, err = dispatchable.ListNextDispatchableJobsPage(ctx, r.store.db, limit, offset)
+	} else {
+		jobs, err = dispatchable.ListNextDispatchableJobs(ctx, r.store.db, limit)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("task list ready candidates: %w", err)
 	}
@@ -111,6 +128,10 @@ func (r *SQLiteTaskRepository) ListReadyCandidates(ctx context.Context, limit in
 	// races against. A non-nil empty slice would still pass len==0 at
 	// most call sites but breaks the eager nil check. Use var + append
 	// rather than make([]T, 0, n) so the zero-row case stays nil.
+	return taskCandidatesFromDispatchableJobs(jobs), nil
+}
+
+func taskCandidatesFromDispatchableJobs(jobs []dispatchable.Job) []placement.TaskCandidate {
 	var candidates []placement.TaskCandidate
 	for _, j := range jobs {
 		candidates = append(candidates, placement.TaskCandidate{
@@ -126,7 +147,7 @@ func (r *SQLiteTaskRepository) ListReadyCandidates(ctx context.Context, limit in
 			RequiredAssetKeys:    sortedAssetKeys(j.Payload),
 		})
 	}
-	return candidates, nil
+	return candidates
 }
 
 func sortedAssetKeys(payload []byte) []string {

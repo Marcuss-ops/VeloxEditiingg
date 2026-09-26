@@ -49,7 +49,6 @@ type assetDeps struct {
 // constructor runs).  Those fields are populated by buildModules
 // calling wireAssetServiceAndEnqueuer below.
 func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDeps, error) {
-	_ = cfg
 
 	// ── Artifacts.Service (sole SUCCEEDED gate) ─────────────────────
 	//
@@ -123,7 +122,12 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 		p.BlobStore,
 		uploadRepo,
 		nil, // clock.System default (production)
-		artifacts.DefaultReconcilerConfig(),
+		artifacts.ReconcilerConfig{
+			OrphanBlobAge: 24 * time.Hour, StuckArtifactAge: 24 * time.Hour,
+			QuarantineMinAge:    60 * time.Second,
+			QuarantineRetention: time.Duration(cfg.Retention.ArtifactQuarantineDays) * 24 * time.Hour,
+			BatchLimit:          200,
+		},
 	)
 	if recErr != nil {
 		return nil, fmt.Errorf("bootstrap: Reconciler init failed: %w — Reconciler is mandatory when artifacts are enabled", recErr)

@@ -125,6 +125,46 @@ func TestReconciler_ReadyArtifactMissingBlob_Quarantines(t *testing.T) {
 	require.Contains(t, payload, "blob_missing_on_disk")
 }
 
+func TestReconciler_QuarantinedArtifactRetentionDeletesOnlyExpiredLocalBlobs(t *testing.T) {
+	env := setupTestEnv(t)
+	env.seedJob("JQR-retention", "FAILED", testWorkerID, testLeaseID, testRevision, env.clock.Now())
+	oldID := "art-quarantined-expired"
+	recentID := "art-quarantined-recent"
+	now := env.clock.Now().UTC()
+	oldTime := now.Add(-31 * 24 * time.Hour).Format(time.RFC3339)
+	nowText := now.Format(time.RFC3339)
+	for _, artifact := range []struct {
+		id, storageKey, quarantinedAt string
+	}{
+		{oldID, "artifacts/sha256/aa/expired.mp4", oldTime},
+		{recentID, "artifacts/sha256/bb/recent.mp4", nowText},
+	} {
+		_, err := env.db.Exec(`INSERT INTO artifacts (
+			id, job_id, type, storage_provider, storage_key, size_bytes,
+			status, created_at, verified_at
+		) VALUES (?, 'JQR-retention', 'video', 'local', ?, 100, 'QUARANTINED', ?, ?)`,
+			artifact.id, artifact.storageKey, artifact.quarantinedAt, artifact.quarantinedAt)
+		require.NoError(t, err)
+		_, err = env.db.Exec(`INSERT INTO outbox_events (
+			event_id, aggregate_type, aggregate_id, event_type, payload_json,
+			status, available_at, created_at
+		) VALUES (?, 'artifact', ?, 'ARTIFACT_QUARANTINED', '{}', 'PROCESSED', ?, ?)`,
+			"quarantine-"+artifact.id, artifact.id, artifact.quarantinedAt, artifact.quarantinedAt)
+		require.NoError(t, err)
+	}
+	rec := setupReconcilerEnv(t, env)
+	stats, err := rec.Reconcile(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 1, stats.GCQueuedQuarantined)
+	require.Equal(t, 1, stats.GCDeleted, "missing bytes are a successful idempotent deletion")
+
+	var oldStatus, recentStatus string
+	require.NoError(t, env.db.QueryRow(`SELECT status FROM artifacts WHERE id=?`, oldID).Scan(&oldStatus))
+	require.NoError(t, env.db.QueryRow(`SELECT status FROM artifacts WHERE id=?`, recentID).Scan(&recentStatus))
+	require.Equal(t, "DELETED", oldStatus)
+	require.Equal(t, "QUARANTINED", recentStatus)
+}
+
 // =====================================================================
 // #region 3 — artifact STAGING troppo vecchio: viene marcato FAILED
 // =====================================================================

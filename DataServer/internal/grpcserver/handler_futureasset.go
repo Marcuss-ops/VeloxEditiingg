@@ -31,9 +31,9 @@ func (h *Handler) PrefetchSubmittedJob(ctx context.Context, jobID string) {
 	if !ok {
 		return
 	}
-	candidates, err := h.taskRepo.ListReadyCandidates(ctx, 256)
-	if err != nil {
-		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCPrefetchFailed, "[PREFETCH] submission hook list candidates job=%s: %v", jobID, err)
+	candidates, ok := h.loadCandidates(ctx, "submission")
+	if !ok {
+		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCPrefetchFailed, "[PREFETCH] submission hook list candidates job=%s failed", jobID)
 		return
 	}
 	for _, candidate := range candidates {

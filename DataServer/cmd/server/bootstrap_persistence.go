@@ -81,6 +81,7 @@ func buildPersistence(cfg *config.Config) (*persistenceDeps, error) {
 	// hard and the caller MUST rollback.
 	sqliteStore.SetOutbox(outboxStore)
 	sqliteStore.SetRetention(cfg.Retention.WorkerMetricsDays, cfg.Retention.WorkerEventsDays)
+	sqliteStore.SetJobEventsRetention(cfg.Retention.JobEventsDays)
 	sqliteStore.SetResourceRetention(cfg.Retention.WorkerResourceRawDays, cfg.Retention.WorkerResourceRollupDays)
 
 	var blobStore repository.BlobStore

@@ -25,6 +25,13 @@ func RunArtifactGC(ctx context.Context, db *artifactsstore.ArtifactGCStore, blob
 		return 0, 0, err
 	}
 	for _, candidate := range candidates {
+		if candidate.Reason == "stuck_staging" && candidate.StorageKey == "" && candidate.LocalPath == "" {
+			if err := db.CompleteArtifactGCNoObject(ctx, candidate.ArtifactID, owner); err != nil {
+				return deleted, failed, err
+			}
+			deleted++
+			continue
+		}
 		path, pathErr := gcPath(candidate, blobStore)
 		if pathErr == nil {
 			removeErr := os.Remove(path)
@@ -38,11 +45,25 @@ func RunArtifactGC(ctx context.Context, db *artifactsstore.ArtifactGCStore, blob
 			pathErr = removeErr
 		}
 		failed++
-		if err := db.CompleteArtifactGC(ctx, candidate.ArtifactID, owner, false, pathErr.Error()); err != nil {
+		if err := db.CompleteArtifactGCAt(ctx, candidate.ArtifactID, owner, false, pathErr.Error(), now.Add(artifactGCRetryDelay(candidate.DeleteAttempts))); err != nil {
 			return deleted, failed, err
 		}
 	}
 	return deleted, failed, nil
+}
+
+func artifactGCRetryDelay(attempt int) time.Duration {
+	if attempt < 0 {
+		attempt = 0
+	}
+	if attempt > 10 {
+		attempt = 10
+	}
+	delay := time.Minute * time.Duration(1<<attempt)
+	if delay > 24*time.Hour {
+		return 24 * time.Hour
+	}
+	return delay
 }
 
 func gcPath(candidate artifactsstore.ArtifactGCCandidate, blobStore repository.BlobStore) (string, error) {

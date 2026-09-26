@@ -106,6 +106,14 @@ func (r *ArtifactReconcilerRepository) ListStuckArtifacts(ctx context.Context, o
 }
 
 func (r *ArtifactReconcilerRepository) EnqueueArtifactGC(ctx context.Context, artifactID, reason string, eligibleAt time.Time) error {
+	var storageKey, localPath string
+	if err := r.db.QueryRowContext(ctx, `SELECT COALESCE(storage_key,''), COALESCE(local_path,'') FROM artifacts WHERE id=?`, artifactID).Scan(&storageKey, &localPath); err != nil {
+		return fmt.Errorf("artifactsstore: inspect artifact for GC: %w", err)
+	}
+	if storageKey == "" && localPath == "" {
+		// A failed STAGING row without either path has no object to collect.
+		return nil
+	}
 	return r.gcStore.EnqueueArtifactGCCandidate(ctx, artifactID, reason, eligibleAt)
 }
 

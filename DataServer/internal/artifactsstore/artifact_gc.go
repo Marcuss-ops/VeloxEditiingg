@@ -59,13 +59,63 @@ func (g *ArtifactGCStore) EnqueueArtifactGCCandidate(ctx context.Context, artifa
 		ON CONFLICT(artifact_id) DO UPDATE SET
 			reason=excluded.reason,
 			eligible_at=MIN(artifact_gc_candidates.eligible_at, excluded.eligible_at),
-			status=CASE WHEN artifact_gc_candidates.status IN ('DELETED')
+			status=CASE WHEN artifact_gc_candidates.status IN ('DELETED','DELETING')
 				THEN artifact_gc_candidates.status ELSE 'ELIGIBLE' END`,
 		artifactID, reason, eligibleAt.UTC().Format(time.RFC3339))
 	if err != nil {
 		return fmt.Errorf("artifact gc enqueue: %w", err)
 	}
 	return nil
+}
+
+// EnqueueQuarantinedArtifactsForRetention makes old local quarantined blobs
+// eligible for deletion using the durable ARTIFACT_QUARANTINED event as the
+// quarantine timestamp. The quarantine age is evaluated before a candidate is
+// created, so the normal GC lease path remains the only byte deletion path.
+func (g *ArtifactGCStore) EnqueueQuarantinedArtifactsForRetention(ctx context.Context, before, eligibleAt time.Time, limit int) (int, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	rows, err := g.db.QueryContext(ctx, `
+		SELECT a.id
+		FROM artifacts a
+		JOIN (
+			SELECT aggregate_id, MIN(created_at) AS quarantined_at
+			FROM outbox_events
+			WHERE aggregate_type='artifact' AND event_type='ARTIFACT_QUARANTINED'
+			GROUP BY aggregate_id
+		) q ON q.aggregate_id=a.id
+		WHERE a.status='QUARANTINED' AND a.storage_provider='local'
+		  AND q.quarantined_at <= ?
+		ORDER BY q.quarantined_at ASC, a.id ASC LIMIT ?`,
+		before.UTC().Format(time.RFC3339Nano), limit)
+	if err != nil {
+		return 0, fmt.Errorf("artifact gc list quarantined retention: %w", err)
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("artifact gc scan quarantined retention: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, fmt.Errorf("artifact gc rows quarantined retention: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return 0, fmt.Errorf("artifact gc close quarantined retention: %w", err)
+	}
+	queued := 0
+	for _, id := range ids {
+		if err := g.EnqueueArtifactGCCandidate(ctx, id, "quarantined_retention", eligibleAt); err != nil {
+			return queued, err
+		}
+		queued++
+	}
+	return queued, nil
 }
 
 // LeaseArtifactGCCandidates claims rows so only one worker removes a file.
@@ -79,24 +129,20 @@ func (g *ArtifactGCStore) LeaseArtifactGCCandidates(ctx context.Context, owner s
 	if limit <= 0 {
 		limit = 100
 	}
-	tx, err := g.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("artifact gc lease begin: %w", err)
-	}
-	defer tx.Rollback()
-
 	now = now.UTC()
 	expires := now.Add(lease)
-	rows, err := tx.QueryContext(ctx, `
+	nowText := now.Format(time.RFC3339)
+	expiresText := expires.Format(time.RFC3339)
+	rows, err := g.db.QueryContext(ctx, `
 		SELECT c.artifact_id, c.reason, c.eligible_at, c.delete_attempts,
 		       c.last_error, c.status, c.lease_expires_at,
-		       COALESCE(a.storage_provider,''), COALESCE(a.storage_key,''),
-		       COALESCE(a.local_path,'')
+	       COALESCE(a.storage_provider,''), COALESCE(a.storage_key,''),
+	       COALESCE(a.local_path,'')
 		FROM artifact_gc_candidates c
-		JOIN artifacts a ON a.id = c.artifact_id
+		JOIN artifacts a ON a.id=c.artifact_id
 		WHERE c.eligible_at <= ?
-		  AND (c.status = 'ELIGIBLE' OR (c.status = 'DELETING' AND c.lease_expires_at < ?))
-		ORDER BY c.eligible_at ASC LIMIT ?`, now.Format(time.RFC3339), now.Format(time.RFC3339), limit)
+		  AND (c.status='ELIGIBLE' OR (c.status='DELETING' AND c.lease_expires_at < ?))
+		ORDER BY c.eligible_at ASC LIMIT ?`, nowText, nowText, limit)
 	if err != nil {
 		return nil, fmt.Errorf("artifact gc lease select: %w", err)
 	}
@@ -116,33 +162,68 @@ func (g *ArtifactGCStore) LeaseArtifactGCCandidates(ctx context.Context, owner s
 				c.LeaseExpiresAt = &parsed
 			}
 		}
-		res, err := tx.ExecContext(ctx, `UPDATE artifact_gc_candidates SET status='DELETING', lease_owner=?, lease_expires_at=? WHERE artifact_id=? AND (status='ELIGIBLE' OR (status='DELETING' AND lease_expires_at < ?))`, owner, expires.Format(time.RFC3339), c.ArtifactID, now.Format(time.RFC3339))
-		if err != nil {
-			rows.Close()
-			return nil, fmt.Errorf("artifact gc lease update: %w", err)
-		}
-		n, err := storecore.ReadRowsAffected(res, "artifact gc lease")
-		if err != nil {
-			rows.Close()
-			return nil, err
-		}
-		if n == 1 {
-			c.LeaseOwner, c.LeaseExpiresAt, c.Status = owner, &expires, ArtifactGCDeleting
-			candidates = append(candidates, c)
-		}
+		candidates = append(candidates, c)
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
 		return nil, fmt.Errorf("artifact gc lease rows: %w", err)
 	}
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("artifact gc lease commit: %w", err)
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("artifact gc lease close rows: %w", err)
 	}
-	return candidates, nil
+	leased := make([]ArtifactGCCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		result, err := g.db.ExecContext(ctx, `UPDATE artifact_gc_candidates
+			SET status='DELETING', lease_owner=?, lease_expires_at=?
+			WHERE artifact_id=?
+			  AND (status='ELIGIBLE' OR (status='DELETING' AND lease_expires_at < ?))`,
+			owner, expiresText, candidate.ArtifactID, nowText)
+		if err != nil {
+			return leased, fmt.Errorf("artifact gc lease update: %w", err)
+		}
+		n, err := storecore.ReadRowsAffected(result, "artifact gc lease")
+		if err != nil {
+			return leased, err
+		}
+		if n == 1 {
+			candidate.LeaseOwner, candidate.LeaseExpiresAt, candidate.Status = owner, &expires, ArtifactGCDeleting
+			leased = append(leased, candidate)
+		}
+	}
+	return leased, nil
+}
+
+// CompleteArtifactGCNoObject retires a GC candidate for a failed staging
+// artifact that never acquired a storage path. It deliberately preserves the
+// FAILED artifact state: there were no bytes to delete and no final artifact.
+func (g *ArtifactGCStore) CompleteArtifactGCNoObject(ctx context.Context, artifactID, owner string) error {
+	if artifactID == "" || owner == "" {
+		return fmt.Errorf("artifact gc: artifact_id and owner are required")
+	}
+	result, err := g.db.ExecContext(ctx, `UPDATE artifact_gc_candidates
+		SET status='DELETED', lease_owner='', lease_expires_at=NULL, last_error=''
+		WHERE artifact_id=? AND status='DELETING' AND lease_owner=?`, artifactID, owner)
+	if err != nil {
+		return fmt.Errorf("artifact gc no-object complete: %w", err)
+	}
+	if n, err := storecore.ReadRowsAffected(result, "artifact gc no-object complete"); err != nil {
+		return err
+	} else if n != 1 {
+		return fmt.Errorf("artifact gc no-object complete: lease not owned or already completed")
+	}
+	return nil
 }
 
 // CompleteArtifactGC records the result of an external file deletion. The
 // DB artifact is marked DELETED only after the bytes are gone or absent.
 func (g *ArtifactGCStore) CompleteArtifactGC(ctx context.Context, artifactID, owner string, deleted bool, deleteErr string) error {
+	return g.CompleteArtifactGCAt(ctx, artifactID, owner, deleted, deleteErr, time.Now().UTC())
+}
+
+// CompleteArtifactGCAt records a GC result and applies the caller-computed
+// retry time for failures, preventing deterministic path errors from being
+// retried on every reconciler tick.
+func (g *ArtifactGCStore) CompleteArtifactGCAt(ctx context.Context, artifactID, owner string, deleted bool, deleteErr string, retryAt time.Time) error {
 	if artifactID == "" || owner == "" {
 		return fmt.Errorf("artifact gc: artifact_id and owner are required")
 	}
@@ -161,7 +242,10 @@ func (g *ArtifactGCStore) CompleteArtifactGC(ctx context.Context, artifactID, ow
 		}
 		return nil
 	}
-	result, err := g.db.ExecContext(ctx, `UPDATE artifact_gc_candidates SET status='ELIGIBLE', lease_owner='', lease_expires_at=NULL, delete_attempts=delete_attempts+1, last_error=? WHERE artifact_id=? AND status='DELETING' AND lease_owner=?`, deleteErr, artifactID, owner)
+	if retryAt.IsZero() {
+		retryAt = time.Now().UTC()
+	}
+	result, err := g.db.ExecContext(ctx, `UPDATE artifact_gc_candidates SET status='ELIGIBLE', eligible_at=?, lease_owner='', lease_expires_at=NULL, delete_attempts=delete_attempts+1, last_error=? WHERE artifact_id=? AND status='DELETING' AND lease_owner=?`, retryAt.UTC().Format(time.RFC3339), deleteErr, artifactID, owner)
 	if err != nil {
 		return fmt.Errorf("artifact gc failure: %w", err)
 	}
