@@ -28,7 +28,7 @@ type ReconcilerConfig struct {
 }
 
 func DefaultReconcilerConfig() ReconcilerConfig {
-	return ReconcilerConfig{OrphanBlobAge: 24 * time.Hour, StuckArtifactAge: 24 * time.Hour, QuarantineMinAge: 60 * time.Second, QuarantineRetention: 30 * 24 * time.Hour, BatchLimit: 200}
+	return ReconcilerConfig{OrphanBlobAge: 24 * time.Hour, StuckArtifactAge: 24 * time.Hour, QuarantineMinAge: 60 * time.Second, QuarantineRetention: 7 * 24 * time.Hour, BatchLimit: 200}
 }
 
 type ReconcileStats struct {
@@ -65,7 +65,7 @@ func NewReconciler(artifactRepo *artifactsstore.ArtifactReconcilerRepository, bl
 		config.QuarantineMinAge = 60 * time.Second
 	}
 	if config.QuarantineRetention <= 0 {
-		config.QuarantineRetention = 30 * 24 * time.Hour
+		config.QuarantineRetention = 7 * 24 * time.Hour
 	}
 	if config.BatchLimit <= 0 {
 		config.BatchLimit = 200

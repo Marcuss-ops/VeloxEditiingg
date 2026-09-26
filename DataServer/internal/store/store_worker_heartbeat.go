@@ -155,11 +155,6 @@ func (s *SQLiteStore) persistWorkerHeartbeatOnce(ctx context.Context, raw []byte
 	if err := pruneWorkerEvents(ctx, tx, s.retentionDays.Events); err != nil {
 		return err
 	}
-	if s.shouldPruneJobEvents(now) {
-		if err := pruneJobEvents(ctx, tx, s.retentionDays.JobEvents, now); err != nil {
-			return err
-		}
-	}
 	staleSec, partitionSec := s.partitionThresholds()
 	newConnState, err := detectAndPersistPartitionTransition(ctx, tx, workerID, lastHBAt, now, staleSec, partitionSec)
 	if err != nil {
@@ -246,24 +241,6 @@ func (s *SQLiteStore) SetRetention(metricsDays, eventsDays int) {
 func (s *SQLiteStore) SetJobEventsRetention(days int) {
 	if s != nil {
 		s.retentionDays.JobEvents = days
-	}
-}
-
-// shouldPruneJobEvents limits the indexed retention DELETE to at most once
-// per hour across all workers sharing this store.
-func (s *SQLiteStore) shouldPruneJobEvents(now time.Time) bool {
-	if s == nil || s.retentionDays.JobEvents <= 0 {
-		return false
-	}
-	nowUnix := now.Unix()
-	for {
-		last := s.lastJobEventsPrune.Load()
-		if nowUnix-last < int64(time.Hour/time.Second) {
-			return false
-		}
-		if s.lastJobEventsPrune.CompareAndSwap(last, nowUnix) {
-			return true
-		}
 	}
 }
 

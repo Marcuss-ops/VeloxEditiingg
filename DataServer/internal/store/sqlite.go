@@ -17,7 +17,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"sync/atomic"
 	"time"
 
 	"velox-shared/payload"
@@ -38,7 +37,6 @@ type SQLiteStore struct {
 	outbox             OutboxEmitter // optional; nil disables ARTIFACT_READY/JOB_SUCCEEDED emission
 	retentionDays      retentionDays // configurable retention windows (see SetRetention)
 	resourceRetention  resourceRetention
-	lastJobEventsPrune atomic.Int64
 	dbTelemetry        DBTelemetry
 	// partitionKnobs is the (Stale, Partition) threshold pair used by
 	// detectAndPersistPartitionTransition + ReconcileWorkerPartitions.

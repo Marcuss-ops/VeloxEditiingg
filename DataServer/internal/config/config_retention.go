@@ -8,7 +8,7 @@ package config
 //   - VELOX_RETENTION_WORKER_RESOURCE_RAW_DAYS (default 90)
 //   - VELOX_RETENTION_WORKER_RESOURCE_ROLLUP_DAYS (default 365)
 //   - VELOX_RETENTION_JOB_EVENTS_DAYS (default 30)
-//   - VELOX_RETENTION_ARTIFACT_QUARANTINE_DAYS (default 30)
+//   - VELOX_QUARANTINE_GC_DAYS (default 7; legacy alias supported)
 //
 // The resource windows can be set to 0 to opt out of the corresponding
 // resource-table prune pass. Negative values and malformed values fall back
@@ -20,13 +20,17 @@ package config
 // retention uses minimum 0 so an explicit zero can disable only that prune
 // pass; malformed values still fall back to the defaults.
 func loadRetentionConfig(raw RawConfig) RetentionConfig {
+	quarantineDays := raw.Int("VELOX_RETENTION_ARTIFACT_QUARANTINE_DAYS", 7, 1)
+	if _, ok := raw.Lookup("VELOX_QUARANTINE_GC_DAYS"); ok {
+		quarantineDays = raw.Int("VELOX_QUARANTINE_GC_DAYS", 7, 1)
+	}
 	return RetentionConfig{
 		WorkerMetricsDays:        raw.Int("VELOX_RETENTION_WORKER_METRICS_DAYS", 7, 1),
 		WorkerEventsDays:         raw.Int("VELOX_RETENTION_WORKER_EVENTS_DAYS", 30, 1),
 		WorkerResourceRawDays:    raw.Int("VELOX_RETENTION_WORKER_RESOURCE_RAW_DAYS", 90, 0),
 		WorkerResourceRollupDays: raw.Int("VELOX_RETENTION_WORKER_RESOURCE_ROLLUP_DAYS", 365, 0),
-		JobEventsDays:            raw.Int("VELOX_RETENTION_JOB_EVENTS_DAYS", 30, 0),
-		ArtifactQuarantineDays:   raw.Int("VELOX_RETENTION_ARTIFACT_QUARANTINE_DAYS", 30, 1),
+		JobEventsDays:            raw.Int("VELOX_RETENTION_JOB_EVENTS_DAYS", 30, 1),
+		ArtifactQuarantineDays:   quarantineDays,
 		// 0 opts out for the resource tables. Defaults: 7 / 30 / 90 / 365.
 	}
 }

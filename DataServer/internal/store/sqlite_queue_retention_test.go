@@ -13,7 +13,7 @@ func TestPruneJobEventsRetention(t *testing.T) {
 	}
 	defer s.Close()
 
-	now := time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC)
+	now := time.Now().UTC()
 	old := now.Add(-31 * 24 * time.Hour).Format(time.RFC3339Nano)
 	recent := now.Add(-time.Hour).Format(time.RFC3339Nano)
 	for _, job := range []struct{ id, status string }{
@@ -36,15 +36,7 @@ func TestPruneJobEventsRetention(t *testing.T) {
 		}
 	}
 
-	tx, err := s.db.BeginTx(context.Background(), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := pruneJobEvents(context.Background(), tx, 30, now); err != nil {
-		_ = tx.Rollback()
-		t.Fatal(err)
-	}
-	if err := tx.Commit(); err != nil {
+	if err := s.PruneJobEvents(context.Background(), 30, 2); err != nil {
 		t.Fatal(err)
 	}
 	var remaining int

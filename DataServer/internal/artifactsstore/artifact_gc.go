@@ -28,6 +28,7 @@ type ArtifactGCCandidate struct {
 	DeleteAttempts  int
 	LastError       string
 	Status          string
+	ArtifactStatus  string
 	StorageProvider string
 	StorageKey      string
 	LocalPath       string
@@ -68,10 +69,10 @@ func (g *ArtifactGCStore) EnqueueArtifactGCCandidate(ctx context.Context, artifa
 	return nil
 }
 
-// EnqueueQuarantinedArtifactsForRetention makes old local quarantined blobs
-// eligible for deletion using the durable ARTIFACT_QUARANTINED event as the
-// quarantine timestamp. The quarantine age is evaluated before a candidate is
-// created, so the normal GC lease path remains the only byte deletion path.
+// EnqueueQuarantinedArtifactsForRetention makes old local quarantined
+// artifacts eligible for deletion. The durable quarantine event timestamp is
+// preferred; legacy status-only rows fall back to created_at. The normal GC
+// lease path remains the only byte deletion path.
 func (g *ArtifactGCStore) EnqueueQuarantinedArtifactsForRetention(ctx context.Context, before, eligibleAt time.Time, limit int) (int, error) {
 	if limit <= 0 {
 		limit = 200
@@ -79,7 +80,7 @@ func (g *ArtifactGCStore) EnqueueQuarantinedArtifactsForRetention(ctx context.Co
 	rows, err := g.db.QueryContext(ctx, `
 		SELECT a.id
 		FROM artifacts a
-		JOIN (
+		LEFT JOIN (
 			SELECT aggregate_id, MIN(created_at) AS quarantined_at
 			FROM outbox_events
 			WHERE aggregate_type='artifact' AND event_type='ARTIFACT_QUARANTINED'
@@ -87,9 +88,9 @@ func (g *ArtifactGCStore) EnqueueQuarantinedArtifactsForRetention(ctx context.Co
 		) q ON q.aggregate_id=a.id
 		LEFT JOIN artifact_gc_candidates c ON c.artifact_id=a.id
 		WHERE a.status='QUARANTINED' AND a.storage_provider='local'
-		  AND q.quarantined_at <= ?
+		  AND COALESCE(q.quarantined_at, a.created_at) <= ?
 		  AND c.artifact_id IS NULL
-		ORDER BY q.quarantined_at ASC, a.id ASC LIMIT ?`,
+		ORDER BY COALESCE(q.quarantined_at, a.created_at) ASC, a.id ASC LIMIT ?`,
 		before.UTC().Format(time.RFC3339Nano), limit)
 	if err != nil {
 		return 0, fmt.Errorf("artifact gc list quarantined retention: %w", err)
@@ -137,7 +138,7 @@ func (g *ArtifactGCStore) LeaseArtifactGCCandidates(ctx context.Context, owner s
 	expiresText := expires.Format(time.RFC3339)
 	rows, err := g.db.QueryContext(ctx, `
 		SELECT c.artifact_id, c.reason, c.eligible_at, c.delete_attempts,
-		       c.last_error, c.status, c.lease_expires_at,
+		       c.last_error, c.status, COALESCE(a.status,''), c.lease_expires_at,
 	       COALESCE(a.storage_provider,''), COALESCE(a.storage_key,''),
 	       COALESCE(a.local_path,'')
 		FROM artifact_gc_candidates c
@@ -154,7 +155,7 @@ func (g *ArtifactGCStore) LeaseArtifactGCCandidates(ctx context.Context, owner s
 		var eligible string
 		var leaseExpires sql.NullString
 		if err := rows.Scan(&c.ArtifactID, &c.Reason, &eligible, &c.DeleteAttempts,
-			&c.LastError, &c.Status, &leaseExpires, &c.StorageProvider, &c.StorageKey, &c.LocalPath); err != nil {
+			&c.LastError, &c.Status, &c.ArtifactStatus, &leaseExpires, &c.StorageProvider, &c.StorageKey, &c.LocalPath); err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("artifact gc lease scan: %w", err)
 		}

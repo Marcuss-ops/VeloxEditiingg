@@ -129,6 +129,7 @@ func TestReconciler_QuarantinedArtifactRetentionDeletesOnlyExpiredLocalBlobs(t *
 	env := setupTestEnv(t)
 	env.seedJob("JQR-retention", "FAILED", testWorkerID, testLeaseID, testRevision, env.clock.Now())
 	oldID := "art-quarantined-expired"
+	noPathID := "art-quarantined-no-path"
 	recentID := "art-quarantined-recent"
 	now := env.clock.Now().UTC()
 	oldTime := now.Add(-31 * 24 * time.Hour).Format(time.RFC3339)
@@ -137,6 +138,7 @@ func TestReconciler_QuarantinedArtifactRetentionDeletesOnlyExpiredLocalBlobs(t *
 		id, storageKey, quarantinedAt string
 	}{
 		{oldID, "artifacts/sha256/aa/expired.mp4", oldTime},
+		{noPathID, "", oldTime},
 		{recentID, "artifacts/sha256/bb/recent.mp4", nowText},
 	} {
 		_, err := env.db.Exec(`INSERT INTO artifacts (
@@ -155,13 +157,15 @@ func TestReconciler_QuarantinedArtifactRetentionDeletesOnlyExpiredLocalBlobs(t *
 	rec := setupReconcilerEnv(t, env)
 	stats, err := rec.Reconcile(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, 1, stats.GCQueuedQuarantined)
-	require.Equal(t, 1, stats.GCDeleted, "missing bytes are a successful idempotent deletion")
+	require.Equal(t, 2, stats.GCQueuedQuarantined)
+	require.Equal(t, 2, stats.GCDeleted, "missing bytes and missing paths are successful idempotent deletions")
 
-	var oldStatus, recentStatus string
+	var oldStatus, noPathStatus, recentStatus string
 	require.NoError(t, env.db.QueryRow(`SELECT status FROM artifacts WHERE id=?`, oldID).Scan(&oldStatus))
+	require.NoError(t, env.db.QueryRow(`SELECT status FROM artifacts WHERE id=?`, noPathID).Scan(&noPathStatus))
 	require.NoError(t, env.db.QueryRow(`SELECT status FROM artifacts WHERE id=?`, recentID).Scan(&recentStatus))
 	require.Equal(t, "DELETED", oldStatus)
+	require.Equal(t, "DELETED", noPathStatus, "QUARANTINED artifact with no local object must drain")
 	require.Equal(t, "QUARANTINED", recentStatus)
 }
 

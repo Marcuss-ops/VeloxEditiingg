@@ -2,6 +2,7 @@ package artifacts
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +12,8 @@ import (
 	"velox-server/internal/artifactsstore"
 	"velox-server/internal/repository"
 )
+
+var errArtifactNoDeletablePath = errors.New("artifact has no deletable storage path")
 
 // RunArtifactGC leases durable candidates, deletes only local paths within
 // the configured final/staging roots, and acknowledges the DB row afterwards.
@@ -25,12 +28,22 @@ func RunArtifactGC(ctx context.Context, db *artifactsstore.ArtifactGCStore, blob
 		return 0, 0, err
 	}
 	for _, candidate := range candidates {
-		if candidate.Reason == "stuck_staging" && candidate.StorageKey == "" && candidate.LocalPath == "" {
-			if err := db.CompleteArtifactGCNoObject(ctx, candidate.ArtifactID, owner); err != nil {
-				return deleted, failed, err
+		if candidate.StorageProvider == "" || candidate.StorageProvider == "local" {
+			if candidate.StorageKey == "" && candidate.LocalPath == "" {
+				if candidate.ArtifactStatus == "FAILED" || candidate.ArtifactStatus == "QUARANTINED" || candidate.ArtifactStatus == "DELETED" {
+					if err := db.CompleteArtifactGC(ctx, candidate.ArtifactID, owner, true, ""); err != nil {
+						return deleted, failed, err
+					}
+					deleted++
+					continue
+				}
+				pathErr := errArtifactNoDeletablePath
+				failed++
+				if err := db.CompleteArtifactGCAt(ctx, candidate.ArtifactID, owner, false, pathErr.Error(), now.Add(artifactGCRetryDelay(candidate.DeleteAttempts))); err != nil {
+					return deleted, failed, err
+				}
+				continue
 			}
-			deleted++
-			continue
 		}
 		path, pathErr := gcPath(candidate, blobStore)
 		if pathErr == nil {
@@ -72,7 +85,7 @@ func gcPath(candidate artifactsstore.ArtifactGCCandidate, blobStore repository.B
 	}
 	path := candidate.LocalPath
 	if path == "" && candidate.StorageKey == "" {
-		return "", fmt.Errorf("artifact has no deletable storage path")
+		return "", errArtifactNoDeletablePath
 	}
 	if path == "" {
 		path = filepath.Join(blobStore.FinalDir(), filepath.FromSlash(candidate.StorageKey))

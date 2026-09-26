@@ -395,6 +395,9 @@ func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDep
 					if err := p.SQLite.MaintainWorkerResourceSamples(ctx, time.Now().UTC()); err != nil {
 						return fmt.Errorf("worker resource maintenance failed: %w", err)
 					}
+					if err := p.SQLite.PruneJobEvents(ctx, cfg.Retention.JobEventsDays, 5000); err != nil {
+						return fmt.Errorf("job event retention failed: %w", err)
+					}
 					return nil
 				}
 				if err := maintain(); err != nil {
