@@ -179,6 +179,12 @@ func (h *Handlers) FinalizeJob() gin.HandlerFunc {
 			return
 		}
 		if previous, _ := current["runtime_finalize_idempotency_key"].(string); previous == req.IdempotencyKey && current["runtime_assets_pending"] == false {
+			// The payload merge may have committed just before a process crash
+			// prevented the original planner notification. Replays must re-drive
+			// the refresh so the durable prefetch plan cannot remain stale.
+			if h.enqueuer != nil {
+				h.enqueuer.NotifyTaskUpdated(c.Request.Context(), jobID)
+			}
 			c.JSON(http.StatusAccepted, gin.H{"ok": true, "job_id": jobID, "phase": "FINALIZE", "dispatch_status": "prefetch_refresh_queued", "idempotent": true})
 			return
 		}

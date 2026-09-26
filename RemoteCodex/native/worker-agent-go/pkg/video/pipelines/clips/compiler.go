@@ -59,6 +59,10 @@ func Validate(input map[string]interface{}) error {
 		if strings.TrimSpace(url) == "" {
 			return fmt.Errorf("clips.v1: clips[%d].url is required", i)
 		}
+		duration := toFloat64Default(cm["duration"], 0)
+		if duration <= 0 || math.IsNaN(duration) || math.IsInf(duration, 0) {
+			return fmt.Errorf("clips.v1: clips[%d].duration must be a finite number greater than zero", i)
+		}
 	}
 	// A clips-only submission may intentionally omit an external final mix.
 	// In that mode the renderer preserves each source clip's original audio;
@@ -229,10 +233,7 @@ func parseRequest(input map[string]interface{}) *Request {
 			}
 			clip := ClipInput{
 				URL:      toString(cm["url"]),
-				Duration: toFloat64Default(cm["duration"], 4.0),
-			}
-			if clip.Duration <= 0 {
-				clip.Duration = 4.0
+				Duration: toFloat64Default(cm["duration"], 0),
 			}
 			req.Clips = append(req.Clips, clip)
 		}

@@ -1,5 +1,13 @@
 ## [Unreleased] - 2026-09-24
 
+### Fixed — clips timing and FINALIZE prefetch replay
+
+- Reject clips with missing, non-positive, NaN, or infinite durations instead
+  of silently compiling them as four-second segments.
+- Re-drive the FutureAssetPlan notification when an idempotent FINALIZE replay
+  follows a committed payload update, covering a process crash before the
+  original notification.
+
 ### Fixed — cache lease cleanup after worker restart
 
 - Reconcile durable input-cache lease rows from the previous worker process
