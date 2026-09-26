@@ -3,6 +3,7 @@ package observability
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"velox-server/internal/audittrail"
@@ -72,6 +73,12 @@ type JobReader interface {
 	Counts(ctx context.Context) (jobs.Counts, error)
 }
 
+// JobWindowReader supplies terminal job counts for an explicit time window.
+// Counts() remains the all-time source for queue depth and older surfaces.
+type JobWindowReader interface {
+	CountsSince(ctx context.Context, since time.Time) (jobs.Counts, error)
+}
+
 // WorkerReader provides worker queries for observability.
 type WorkerReader interface {
 	ListWorkers() ([]map[string]any, error)
@@ -132,6 +139,9 @@ type Service struct {
 	jobInspection  JobInspectionReader
 	liveAttempts   LiveAttemptReader
 	assetProgress  AssetProgressReader
+	overviewMu     sync.Mutex
+	overviewAt     time.Time
+	overviewCache  *OverviewResult
 }
 
 // NewService constructs the observability aggregation service.

@@ -20,6 +20,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"velox-server/internal/jobs"
 )
@@ -64,6 +65,38 @@ func (b *baseJobRepository) List(ctx context.Context, filter jobs.Filter) ([]job
 
 func (b *baseJobRepository) Counts(ctx context.Context) (jobs.Counts, error) {
 	return b.dialect.GetCounts(ctx, b.db)
+}
+
+// CountsSince returns terminal job counts whose completion timestamp is in
+// the requested window. Cancelled jobs are intentionally omitted from the
+// operational success/failure rate; callers can still query them separately.
+func (b *baseJobRepository) CountsSince(ctx context.Context, since time.Time) (jobs.Counts, error) {
+	if since.IsZero() {
+		return nil, fmt.Errorf("job repository: counts-since requires a cutoff")
+	}
+	rows, err := b.db.QueryContext(ctx, `
+		SELECT UPPER(COALESCE(status,'')), COUNT(*)
+		FROM jobs
+		WHERE UPPER(COALESCE(status,'')) IN ('AWAITING_ARTIFACT','SUCCEEDED','FAILED')
+		  AND COALESCE(NULLIF(completed_at,''), NULLIF(updated_at,''), created_at) >= ?
+		GROUP BY UPPER(COALESCE(status,''))`, since.UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return nil, fmt.Errorf("job counts since: %w", err)
+	}
+	defer rows.Close()
+	out := make(jobs.Counts)
+	for rows.Next() {
+		var status string
+		var count int64
+		if err := rows.Scan(&status, &count); err != nil {
+			return nil, fmt.Errorf("job counts since scan: %w", err)
+		}
+		out[jobs.JobStatus(status)] = count
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("job counts since iterate: %w", err)
+	}
+	return out, nil
 }
 
 // getJob is the internal projection used by SetStatus and Fail (which

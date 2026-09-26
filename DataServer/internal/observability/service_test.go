@@ -15,6 +15,7 @@ type stubTaskReader struct {
 	tasks      map[string]*taskgraph.Task
 	listResult []taskgraph.Task
 	listErr    error
+	listCalls  int
 }
 
 func (s *stubTaskReader) Get(_ context.Context, id string) (*taskgraph.Task, error) {
@@ -35,6 +36,7 @@ func (s *stubTaskReader) GetByJobID(_ context.Context, jobID string) (*taskgraph
 }
 
 func (s *stubTaskReader) List(_ context.Context, _ taskgraph.Filter) ([]taskgraph.Task, error) {
+	s.listCalls++
 	if s.listErr != nil {
 		return nil, s.listErr
 	}
@@ -118,6 +120,13 @@ func (s *stubJobReader) Counts(_ context.Context) (jobs.Counts, error) {
 		return nil, s.err
 	}
 	return s.counts, nil
+}
+
+func (s *stubJobReader) CountsSince(_ context.Context, _ time.Time) (jobs.Counts, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return jobs.Counts{jobs.StatusSucceeded: s.counts[jobs.StatusSucceeded], jobs.StatusFailed: s.counts[jobs.StatusFailed]}, nil
 }
 
 type stubLiveAttemptReader struct {

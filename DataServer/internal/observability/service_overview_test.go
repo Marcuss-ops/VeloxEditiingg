@@ -19,8 +19,8 @@ func TestService_Overview(t *testing.T) {
 	if result.JobsCompleted24h != 10 {
 		t.Errorf("JobsCompleted24h = %d, want 10", result.JobsCompleted24h)
 	}
-	if result.JobsFailed24h != 3 {
-		t.Errorf("JobsFailed24h = %d, want 3", result.JobsFailed24h)
+	if result.JobsFailed24h != 2 {
+		t.Errorf("JobsFailed24h = %d, want 2 (cancelled jobs are excluded)", result.JobsFailed24h)
 	}
 	if result.ActiveWorkers != 3 {
 		t.Errorf("ActiveWorkers = %d, want 3", result.ActiveWorkers)
@@ -44,6 +44,25 @@ func TestService_Overview(t *testing.T) {
 	}
 	if !found {
 		t.Error("TopErrors should include ASSET_DOWNLOAD_FAILED")
+	}
+}
+
+func TestService_OverviewCachesAndReturnsIndependentSnapshots(t *testing.T) {
+	svc, tasks, _, _, _ := newTestService()
+	first, err := svc.Overview(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.TopErrors[0].ErrorCode = "caller-mutated"
+	second, err := svc.Overview(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tasks.listCalls != 1 {
+		t.Fatalf("overview traversed recent tasks %d times, want cached once", tasks.listCalls)
+	}
+	if second.TopErrors[0].ErrorCode == "caller-mutated" {
+		t.Fatal("cached result was mutated through a caller-owned slice")
 	}
 }
 func TestService_SummarizeTaskIncludesAttemptFailureDetails(t *testing.T) {

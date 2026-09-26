@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"time"
 
 	"velox-server/internal/jobs"
 	"velox-server/internal/taskattempts"
@@ -16,6 +17,35 @@ import (
 // Overview returns the aggregate system health snapshot.
 // Reads job counts, recent attempts for timing, and worker counts.
 func (s *Service) Overview(ctx context.Context) (*OverviewResult, error) {
+	if s == nil {
+		return nil, fmt.Errorf("observability: service is nil")
+	}
+	s.overviewMu.Lock()
+	defer s.overviewMu.Unlock()
+	if s.overviewCache != nil && time.Since(s.overviewAt) < 30*time.Second {
+		return cloneOverview(s.overviewCache), nil
+	}
+	result, err := s.overviewFresh(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s.overviewCache = cloneOverview(result)
+	s.overviewAt = time.Now()
+	return result, nil
+}
+
+func cloneOverview(in *OverviewResult) *OverviewResult {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	out.TopSlowPhases = append([]PhaseStat(nil), in.TopSlowPhases...)
+	out.TopSlowWorkers = append([]WorkerStat(nil), in.TopSlowWorkers...)
+	out.TopErrors = append([]ErrorStat(nil), in.TopErrors...)
+	return &out
+}
+
+func (s *Service) overviewFresh(ctx context.Context) (*OverviewResult, error) {
 	result := &OverviewResult{}
 
 	// Job counts.
@@ -24,8 +54,15 @@ func (s *Service) Overview(ctx context.Context) (*OverviewResult, error) {
 		if err != nil {
 			return nil, fmt.Errorf("observability: read job counts: %w", err)
 		}
-		result.JobsCompleted24h = counts[jobs.StatusAwaitingArtifact] + counts[jobs.StatusSucceeded]
-		result.JobsFailed24h = counts[jobs.StatusFailed] + counts[jobs.StatusCancelled]
+		if windowed, ok := s.jobs.(JobWindowReader); ok {
+			windowCounts, windowErr := windowed.CountsSince(ctx, time.Now().Add(-24*time.Hour))
+			if windowErr != nil {
+				return nil, fmt.Errorf("observability: read 24h job counts: %w", windowErr)
+			}
+			result.JobsCompleted24h = windowCounts[jobs.StatusAwaitingArtifact] + windowCounts[jobs.StatusSucceeded]
+			// CANCELLED is intentionally excluded from the failure-rate alert.
+			result.JobsFailed24h = windowCounts[jobs.StatusFailed]
+		}
 		total := result.JobsCompleted24h + result.JobsFailed24h
 		if total > 0 {
 			result.ErrorRate = float64(result.JobsFailed24h) / float64(total) * 100
