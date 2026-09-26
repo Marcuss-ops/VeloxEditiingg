@@ -13,6 +13,18 @@ on:
   push:
     tags:
       - 'worker-v*'
+    branches:
+      - main
+    paths:
+      - 'RemoteCodex/native/worker-agent-go/**'
+      - 'RemoteCodex/native/video-engine-cpp/**'
+      - 'RemoteCodex/scripts/build-video-engine.sh'
+      - 'shared/**'
+      - 'VERSION.txt'
+      - '.github/workflows/worker-image.yml'
+      - '.github/actions/worker-*/**'
+      - 'scripts/ci/test-worker-image-freshness.py'
+      - 'scripts/ci/check-mixed-render-gate.sh'
   workflow_dispatch:
     inputs:
       version:
@@ -24,6 +36,12 @@ on:
         required: false
         default: 'false'
         type: boolean
+
+# Serialize certification/publish and replace stale pending builds, but do not
+# cancel an active sign/certification run after it may have pushed an image.
+concurrency:
+  group: worker-image-release
+  cancel-in-progress: false
 
 permissions:
   contents: read

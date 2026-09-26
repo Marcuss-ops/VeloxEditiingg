@@ -47,6 +47,9 @@ on:
       - 'DataServer/**'
       - 'deploy/**'
       - 'shared/**'
+      - 'VERSION.txt'
+      - '.github/workflows/master-image.yml'
+      - 'scripts/ci/shard-go-packages.py'
   workflow_dispatch:
     inputs:
       version:
@@ -58,6 +61,13 @@ on:
         required: false
         default: 'false'
         type: boolean
+
+# Keep only the newest pending release while allowing an active publish/sign
+# sequence to finish atomically. Cancelling an in-flight publisher could leave
+# an uploaded but unsigned tag behind.
+concurrency:
+  group: master-image-release
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -76,10 +86,38 @@ env:
   BUILD_CONTEXT: .
 
 jobs:
+  race-tests:
+    name: Race tests (shard ${{ matrix.shard }}/4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.8'
+          cache-dependency-path: DataServer/go.sum
+      - name: Select balanced package shard
+        working-directory: DataServer
+        run: python3 ../scripts/ci/shard-go-packages.py --shard '${{ matrix.shard }}' --count 4 > "$RUNNER_TEMP/packages.txt"
+      - name: Run race tests
+        working-directory: DataServer
+        run: |
+          set -euo pipefail
+          mapfile -t packages < "$RUNNER_TEMP/packages.txt"
+          ((${#packages[@]} > 0))
+          go test -race -timeout 10m -p 1 "${packages[@]}"
+
   build-publish:
-    name: Build, test, push, sign
+    name: Build, push, sign
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    needs: race-tests
 
     steps:
       - name: Checkout
@@ -200,10 +238,6 @@ jobs:
         with:
           go-version: '1.25.8'
           cache-dependency-path: ${{ env.BUILD_DIR }}/go.sum
-
-      - name: Run tests with race detector (fail-fast gate)
-        working-directory: ${{ env.BUILD_DIR }}
-        run: go test -race -timeout 10m ./internal/... ./cmd/...
 
       - name: Build velox-server binary
         working-directory: ${{ env.BUILD_DIR }}
