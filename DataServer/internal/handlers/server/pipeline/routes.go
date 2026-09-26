@@ -4,12 +4,31 @@ package pipeline
 
 import (
 	"net/http"
+	"sort"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
 
 func retiredCatalogHandler(c *gin.Context) {
 	c.JSON(http.StatusGone, gin.H{"ok": false, "error": "editor_catalog_removed", "owner": "instaedit"})
+}
+
+func listJobTypes(c *gin.Context) {
+	types := make([]gin.H, 0, len(recipeRegistry))
+	jobTypes := make([]string, 0, len(recipeRegistry))
+	for jobType := range recipeRegistry {
+		jobTypes = append(jobTypes, jobType)
+	}
+	sort.Strings(jobTypes)
+	for _, jobType := range jobTypes {
+		version := ""
+		if dot := strings.LastIndex(jobType, "."); dot >= 0 {
+			version = jobType[dot+1:]
+		}
+		types = append(types, gin.H{"type": jobType, "version": version})
+	}
+	c.JSON(http.StatusOK, gin.H{"types": types})
 }
 
 // RegisterRoutes mounts all pipeline endpoints on the given engine.
@@ -37,6 +56,7 @@ func (h *Handlers) RegisterRoutes(r *gin.Engine, adminAuth, m2mJobsAuth gin.Hand
 	// Simplified job submission for external M2M automation.
 	jobs := r.Group("/api/v1/jobs")
 	jobs.Use(m2mJobsAuth)
+	jobs.GET("/types", listJobTypes)
 	jobs.POST("", h.SubmitJob())
 	jobs.POST("/pre", h.PrepareJob())
 	jobs.POST("/batch", h.SubmitJobBatch())

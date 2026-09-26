@@ -41,6 +41,22 @@
 version: 1
 
 routes:
+  - path: /api/v1/jobs/types
+    method: get
+    operationId: listJobTypes
+    security: bearerM2MToken
+    tag: jobs
+    summary: "List job types accepted by the M2M submission API."
+    parameters:
+      - AuthorizationHeader
+      - XRequestIDHeader
+    requestBody: null
+    responses:
+      "200":
+        $ref: "#/components/schemas/JobTypesResponse"
+      "401":
+        $ref: "#/components/schemas/ErrorEnvelope"
+
   - path: /api/v1/creator/jobs
     method: post
     operationId: pushCreatorJob
