@@ -50,13 +50,17 @@ Raw `mode: "composite"` overlays are rejected at intake: the native worker
 cannot composite them, and downloading the source overlay before discovering
 that would waste a prefetch cycle. Generate each finished, video-only MP4
 before FINALIZE (the asset must contain the complete picture for its window,
-not a transparent layer), add it to the completed `render_manifest.assets`,
-and send `visual_replacements[]` with that asset ID and its absolute timeline
-window. FINALIZE recompiles the V2 plan against the original PRE timeline and
-the completed asset list, then refreshes prefetch for the same reserved task.
+not a transparent layer). For a legacy `clips.v1` job, send one `replace`
+overlay covering the complete prepared window; this uses the editorial
+re-encode path. For a strict V2 job, add the MP4 to the completed
+`render_manifest.assets` and send `visual_replacements[]` with its asset ID
+and absolute timeline window. FINALIZE recompiles the V2 plan against the
+original PRE timeline and completed asset list, then refreshes prefetch for
+the same reserved task.
 The PRE video timeline, output contract, and final audio must remain identical;
-existing compiled asset identities and metadata must be preserved. The MP4 must match the declared canonical video
-profile and have a duration matching its replacement window.
+existing compiled asset identities and metadata must be preserved. The MP4
+must match the declared canonical video profile and have a duration matching
+its replacement window.
 
 ```json
 {

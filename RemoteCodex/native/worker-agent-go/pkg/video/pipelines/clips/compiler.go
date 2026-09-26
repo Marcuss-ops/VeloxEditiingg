@@ -146,23 +146,31 @@ func applyOverlayIntent(renderPlan *plan.RenderPlan, input map[string]interface{
 	renderPlan.Canvas.Fps = overlayFPS
 	base := make([]contract.VideoSegmentV2, 0, len(renderPlan.Timeline))
 	baseURLs := make(map[string]string, len(renderPlan.Timeline))
-	var cursor int64
+	var cursorFrame int64
+	var cumulativeSeconds float64
 	for index, item := range renderPlan.Timeline {
 		if item.Source.Type != "video" || strings.TrimSpace(item.Source.URL) == "" {
 			return nil, fmt.Errorf("clips.v1: overlays require a video-only base timeline")
 		}
-		frames := int64(math.Round(item.DurationSeconds * float64(overlayFPS)))
+		// Quantize cumulative timeline boundaries, not each segment length
+		// independently. Per-segment rounding can accumulate a frame of drift
+		// for every scene on long timelines.
+		cumulativeSeconds += item.DurationSeconds
+		endFrame := int64(math.Round(cumulativeSeconds * float64(overlayFPS)))
+		frames := endFrame - cursorFrame
 		if frames <= 0 {
 			return nil, fmt.Errorf("clips.v1: timeline segment %d has zero frames", index)
 		}
 		assetID := fmt.Sprintf("base-segment-%06d", index)
 		baseURLs[assetID] = item.Source.URL
-		base = append(base, contract.VideoSegmentV2{AssetID: assetID, TimelineStartFrame: cursor, FrameCount: frames, SourceInUS: item.SourceInUS, SourceDurationUS: item.SourceDurationUS})
-		cursor += frames
+		base = append(base, contract.VideoSegmentV2{AssetID: assetID, TimelineStartFrame: cursorFrame, FrameCount: frames, SourceInUS: item.SourceInUS, SourceDurationUS: item.SourceDurationUS})
+		cursorFrame = endFrame
 	}
-	if _, windows, err := contract.ResolveOverlayTimeline(base, overlays, overlayFPS, 1); err != nil {
+	resolved, windows, err := contract.ResolveOverlayTimeline(base, overlays, overlayFPS, 1)
+	if err != nil {
 		return nil, fmt.Errorf("clips.v1: overlay timeline: %w", err)
-	} else if len(windows) > 0 {
+	}
+	if len(windows) > 0 {
 		return nil, fmt.Errorf("clips.v1: composite overlays require Chronon prepared fragments (%d windows); native Velox layers are unsupported", len(windows))
 	}
 	hasReplaceOverlay := false
@@ -181,10 +189,6 @@ func applyOverlayIntent(renderPlan *plan.RenderPlan, input map[string]interface{
 			return nil, fmt.Errorf("clips.v1: overlay %q has no resolvable URL", overlay.ID)
 		}
 		baseURLs[overlay.AssetID] = url
-	}
-	resolved, _, err := contract.ResolveOverlayTimeline(base, overlays, overlayFPS, 1)
-	if err != nil {
-		return nil, fmt.Errorf("clips.v1: overlay timeline: %w", err)
 	}
 	timeline := make([]plan.TimelineItem, 0, len(resolved))
 	for _, segment := range resolved {
