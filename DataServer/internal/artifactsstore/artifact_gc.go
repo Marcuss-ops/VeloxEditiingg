@@ -85,8 +85,10 @@ func (g *ArtifactGCStore) EnqueueQuarantinedArtifactsForRetention(ctx context.Co
 			WHERE aggregate_type='artifact' AND event_type='ARTIFACT_QUARANTINED'
 			GROUP BY aggregate_id
 		) q ON q.aggregate_id=a.id
+		LEFT JOIN artifact_gc_candidates c ON c.artifact_id=a.id
 		WHERE a.status='QUARANTINED' AND a.storage_provider='local'
 		  AND q.quarantined_at <= ?
+		  AND c.artifact_id IS NULL
 		ORDER BY q.quarantined_at ASC, a.id ASC LIMIT ?`,
 		before.UTC().Format(time.RFC3339Nano), limit)
 	if err != nil {
