@@ -36,9 +36,10 @@ type PacketCopyContractResult struct {
 	PacketCopyRatio float64
 }
 
-// RecentPacketCopyContract returns the recent mixed-packet attempts and the
-// first contract violation. It reads the same canonical AttemptMetrics path
-// used by inspect JSON, so the runtime alert observes persisted truth.
+// RecentPacketCopyContract returns the mixed-packet attempts completed in the
+// last 24 hours and the first contract violation. It reads the same canonical
+// AttemptMetrics path used by inspect JSON, so the runtime alert observes
+// persisted truth without turning old failures into a permanent alert.
 func (s *Service) RecentPacketCopyContract(ctx context.Context) (*PacketCopyContractResult, error) {
 	s.statsMu.Lock()
 	defer s.statsMu.Unlock()
@@ -57,6 +58,7 @@ func (s *Service) RecentPacketCopyContract(ctx context.Context) (*PacketCopyCont
 }
 
 func (s *Service) recentPacketCopyContractFresh(ctx context.Context) (*PacketCopyContractResult, error) {
+	cutoff := time.Now().Add(-24 * time.Hour)
 	recentTasks, err := s.tasks.List(ctx, taskgraph.Filter{Limit: 500})
 	if err != nil {
 		return nil, fmt.Errorf("observability: list tasks: %w", err)
@@ -69,6 +71,16 @@ func (s *Service) recentPacketCopyContractFresh(ctx context.Context) (*PacketCop
 			return nil, fmt.Errorf("observability: list attempts for task %s: %w", task.ID, err)
 		}
 		for _, attempt := range attempts {
+			attemptTime := attempt.CreatedAt
+			if attempt.StartedAt != nil {
+				attemptTime = *attempt.StartedAt
+			}
+			if attempt.CompletedAt != nil {
+				attemptTime = *attempt.CompletedAt
+			}
+			if !attemptTime.IsZero() && attemptTime.Before(cutoff) {
+				continue
+			}
 			metrics, err := s.attempts.GetMetrics(ctx, attempt.ID)
 			if err != nil {
 				return nil, fmt.Errorf("observability: get metrics for attempt %s: %w", attempt.ID, err)

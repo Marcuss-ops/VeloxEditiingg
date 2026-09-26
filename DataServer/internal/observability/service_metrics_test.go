@@ -145,6 +145,25 @@ func TestService_RecentScalarMetric_CachesExpensiveAggregate(t *testing.T) {
 		t.Fatalf("repeated aggregate queried readers tasks=%d metrics=%d; want one each", tasks.listCalls, attempts.metricsCalls)
 	}
 }
+
+func TestService_RecentPacketCopyContract_Uses24HourWindow(t *testing.T) {
+	svc, tasks, attempts, _, _ := newTestService()
+	tasks.listResult = []taskgraph.Task{{ID: "T-old"}, {ID: "T-recent"}}
+	old := time.Now().Add(-25 * time.Hour)
+	recent := time.Now().Add(-time.Hour)
+	attempts.attempts["T-old"] = []taskattempts.TaskAttempt{{ID: "A-old", TaskID: "T-old", CreatedAt: old}}
+	attempts.attempts["T-recent"] = []taskattempts.TaskAttempt{{ID: "A-recent", TaskID: "T-recent", CreatedAt: recent}}
+	attempts.metrics["A-old"] = &taskattempts.AttemptMetrics{ConcatMode: "mixed_packet", PacketCopyRatio: 0}
+	attempts.metrics["A-recent"] = &taskattempts.AttemptMetrics{ConcatMode: "mixed_packet", PacketCopyRatio: 0}
+
+	result, err := svc.RecentPacketCopyContract(context.Background())
+	if err != nil {
+		t.Fatalf("RecentPacketCopyContract() error: %v", err)
+	}
+	if result.Samples != 1 || result.Violations != 1 || result.AttemptID != "A-recent" {
+		t.Fatalf("result = %+v, want only the recent violating attempt", result)
+	}
+}
 func TestRollupPhaseTimings(t *testing.T) {
 	mk := func(dur int64, phase string, start, end time.Time) taskattempts.PhaseTiming {
 		return taskattempts.PhaseTiming{AttemptID: "A", Phase: phase, DurationMS: dur, WallStart: start, WallEnd: end}
