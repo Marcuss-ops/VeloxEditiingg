@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"time"
 
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
@@ -39,6 +40,23 @@ type PacketCopyContractResult struct {
 // first contract violation. It reads the same canonical AttemptMetrics path
 // used by inspect JSON, so the runtime alert observes persisted truth.
 func (s *Service) RecentPacketCopyContract(ctx context.Context) (*PacketCopyContractResult, error) {
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
+	if s.packetCopyStat != nil && s.packetCopyAt.After(time.Now().Add(-30*time.Second)) {
+		copy := *s.packetCopyStat
+		return &copy, nil
+	}
+	result, err := s.recentPacketCopyContractFresh(ctx)
+	if err != nil {
+		return nil, err
+	}
+	copy := *result
+	s.packetCopyStat = &copy
+	s.packetCopyAt = time.Now()
+	return result, nil
+}
+
+func (s *Service) recentPacketCopyContractFresh(ctx context.Context) (*PacketCopyContractResult, error) {
 	recentTasks, err := s.tasks.List(ctx, taskgraph.Filter{Limit: 500})
 	if err != nil {
 		return nil, fmt.Errorf("observability: list tasks: %w", err)
@@ -80,6 +98,29 @@ func (s *Service) RecentPacketCopyContract(ctx context.Context) (*PacketCopyCont
 // encode_ms_per_output_minute, cpu_ms_per_output_minute,
 // download_throughput, cache_hit_ratio.
 func (s *Service) RecentScalarMetric(ctx context.Context, metricName string) (*ScalarMetricResult, error) {
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
+	if cached := s.scalarStats[metricName]; cached != nil && s.scalarStatsAt[metricName].After(time.Now().Add(-30*time.Second)) {
+		copy := *cached
+		return &copy, nil
+	}
+	result, err := s.recentScalarMetricFresh(ctx, metricName)
+	if err != nil {
+		return nil, err
+	}
+	if s.scalarStats == nil {
+		s.scalarStats = make(map[string]*ScalarMetricResult)
+		s.scalarStatsAt = make(map[string]time.Time)
+	}
+	if _, exists := s.scalarStats[metricName]; exists || len(s.scalarStats) < 32 {
+		copy := *result
+		s.scalarStats[metricName] = &copy
+		s.scalarStatsAt[metricName] = time.Now()
+	}
+	return result, nil
+}
+
+func (s *Service) recentScalarMetricFresh(ctx context.Context, metricName string) (*ScalarMetricResult, error) {
 	recentTasks, err := s.tasks.List(ctx, taskgraph.Filter{Limit: 500})
 	if err != nil {
 		return nil, fmt.Errorf("observability: list tasks: %w", err)

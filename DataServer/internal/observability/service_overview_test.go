@@ -196,7 +196,7 @@ func TestService_Overview_ReadErrorsFailClosed(t *testing.T) {
 	}
 }
 func TestService_ListWorkers(t *testing.T) {
-	svc, _, _, _, _ := newTestService()
+	svc, tasks, _, _, workerReader := newTestService()
 
 	workers, err := svc.ListWorkers(context.Background())
 	if err != nil {
@@ -226,6 +226,12 @@ func TestService_ListWorkers(t *testing.T) {
 	}
 	if w2.JobCount != 2 {
 		t.Errorf("worker-02 JobCount = %d, want 2 (two attempts)", w2.JobCount)
+	}
+	if _, err := svc.ListWorkers(context.Background()); err != nil {
+		t.Fatalf("second ListWorkers() error: %v", err)
+	}
+	if tasks.listCalls != 1 || workerReader.listCalls != 1 {
+		t.Fatalf("repeated worker aggregate queried readers tasks=%d workers=%d; want one each", tasks.listCalls, workerReader.listCalls)
 	}
 }
 func TestService_ListWorkers_NilWorkerReader(t *testing.T) {

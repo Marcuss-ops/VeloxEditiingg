@@ -129,6 +129,22 @@ func TestService_RecentScalarMetric_DerivedMetrics(t *testing.T) {
 		t.Errorf("Avg = %v, want 0.75", result.Avg)
 	}
 }
+
+func TestService_RecentScalarMetric_CachesExpensiveAggregate(t *testing.T) {
+	svc, tasks, attempts, _, _ := newTestService()
+	tasks.listResult = []taskgraph.Task{{ID: "T-cache"}}
+	attempts.attempts["T-cache"] = []taskattempts.TaskAttempt{{ID: "A-cache", TaskID: "T-cache"}}
+	attempts.metrics["A-cache"] = &taskattempts.AttemptMetrics{FFmpegSpeedRatio: 2.5}
+
+	for range 2 {
+		if _, err := svc.RecentScalarMetric(context.Background(), "ffmpeg_speed_ratio"); err != nil {
+			t.Fatalf("RecentScalarMetric() error: %v", err)
+		}
+	}
+	if tasks.listCalls != 1 || attempts.metricsCalls != 1 {
+		t.Fatalf("repeated aggregate queried readers tasks=%d metrics=%d; want one each", tasks.listCalls, attempts.metricsCalls)
+	}
+}
 func TestRollupPhaseTimings(t *testing.T) {
 	mk := func(dur int64, phase string, start, end time.Time) taskattempts.PhaseTiming {
 		return taskattempts.PhaseTiming{AttemptID: "A", Phase: phase, DurationMS: dur, WallStart: start, WallEnd: end}

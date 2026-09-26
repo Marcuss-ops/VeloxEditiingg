@@ -54,6 +54,7 @@ type stubAttemptReader struct {
 	phaseErr     error
 	cacheErr     error
 	metricsErr   error
+	metricsCalls int
 }
 
 func (s *stubAttemptReader) Get(_ context.Context, id string) (*taskattempts.TaskAttempt, error) {
@@ -75,6 +76,7 @@ func (s *stubAttemptReader) GetPhaseTimings(_ context.Context, attemptID string)
 }
 
 func (s *stubAttemptReader) GetMetrics(_ context.Context, attemptID string) (*taskattempts.AttemptMetrics, error) {
+	s.metricsCalls++
 	if s.metricsErr != nil {
 		return nil, s.metricsErr
 	}
@@ -142,11 +144,13 @@ func (r stubLiveAttemptReader) GetWorkerTaskRuntimeByTask(context.Context, strin
 }
 
 type stubWorkerReader struct {
-	workers []map[string]any
-	err     error
+	workers   []map[string]any
+	err       error
+	listCalls int
 }
 
 func (s *stubWorkerReader) ListWorkers() ([]map[string]any, error) {
+	s.listCalls++
 	if s.err != nil {
 		return nil, s.err
 	}

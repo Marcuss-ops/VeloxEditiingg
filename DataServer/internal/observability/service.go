@@ -142,6 +142,14 @@ type Service struct {
 	overviewMu     sync.Mutex
 	overviewAt     time.Time
 	overviewCache  *OverviewResult
+	statsMu        sync.Mutex
+	workerStatsAt  time.Time
+	workerStats    []WorkerPerformance
+	workerStatsSet bool
+	scalarStats    map[string]*ScalarMetricResult
+	scalarStatsAt  map[string]time.Time
+	packetCopyStat *PacketCopyContractResult
+	packetCopyAt   time.Time
 }
 
 // NewService constructs the observability aggregation service.

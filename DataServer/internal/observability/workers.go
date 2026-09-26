@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"time"
 
 	"velox-server/internal/taskattempts"
 	"velox-server/internal/taskgraph"
@@ -14,6 +15,22 @@ import (
 
 // ListWorkers returns per-worker performance summaries.
 func (s *Service) ListWorkers(ctx context.Context) ([]WorkerPerformance, error) {
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
+	if s.workerStatsSet && s.workerStatsAt.After(time.Now().Add(-30*time.Second)) {
+		return append([]WorkerPerformance(nil), s.workerStats...), nil
+	}
+	result, err := s.listWorkersFresh(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s.workerStats = append([]WorkerPerformance(nil), result...)
+	s.workerStatsAt = time.Now()
+	s.workerStatsSet = true
+	return result, nil
+}
+
+func (s *Service) listWorkersFresh(ctx context.Context) ([]WorkerPerformance, error) {
 	if s.workers == nil {
 		return nil, fmt.Errorf("observability: worker reader not configured")
 	}
