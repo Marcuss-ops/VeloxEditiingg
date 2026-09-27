@@ -50,15 +50,30 @@ func (r *SQLiteTaskRepository) MergeTaskSpecPayload(ctx context.Context, taskID 
 		return nil, fmt.Errorf("task spec store: patch is required")
 	}
 
-	tx, err := r.store.db.BeginTx(ctx, nil)
+	// Acquire SQLite's write reservation before reading the task/spec rows.
+	// A deferred transaction can read a WAL snapshot, lose a race to the
+	// future-asset planner (or another writer), then fail immediately with
+	// SQLITE_BUSY_SNAPSHOT when it upgrades to a write transaction. FINALIZE
+	// must be atomic with respect to leasing and planner writes, so begin an
+	// IMMEDIATE transaction on a pinned connection before the read.
+	conn, err := r.store.db.Conn(ctx)
 	if err != nil {
-		return nil, wrapDBInfrastructure("task spec merge begin", err)
+		return nil, wrapDBInfrastructure("task spec merge connection", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return nil, wrapDBInfrastructure("task spec merge begin immediate", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
+		}
+	}()
 
 	var jobID, executorID, status, payloadJSON string
 	var specVersion int
-	err = tx.QueryRowContext(ctx, `
+	err = conn.QueryRowContext(ctx, `
 		SELECT t.job_id, t.executor_id, t.status,
 		       s.spec_version, COALESCE(s.payload_json, '{}')
 		FROM tasks t JOIN task_specs s ON s.task_id = t.task_id
@@ -104,7 +119,7 @@ func (r *SQLiteTaskRepository) MergeTaskSpecPayload(ctx context.Context, taskID 
 	if err != nil {
 		return nil, fmt.Errorf("task spec store: hash task %q payload: %w", taskID, err)
 	}
-	result, err := tx.ExecContext(ctx,
+	result, err := conn.ExecContext(ctx,
 		`UPDATE task_specs SET payload_json = ?, spec_hash = ? WHERE task_id = ?`,
 		string(encoded), hash, taskID)
 	if err != nil {
@@ -116,11 +131,12 @@ func (r *SQLiteTaskRepository) MergeTaskSpecPayload(ctx context.Context, taskID 
 		}
 		return nil, fmt.Errorf("task spec store: task %q disappeared during update", taskID)
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE tasks SET updated_at = ? WHERE task_id = ? AND status IN ('PENDING','READY')`, time.Now().UTC().Format(time.RFC3339), taskID); err != nil {
+	if _, err := conn.ExecContext(ctx, `UPDATE tasks SET updated_at = ? WHERE task_id = ? AND status IN ('PENDING','READY')`, time.Now().UTC().Format(time.RFC3339), taskID); err != nil {
 		return nil, wrapDBInfrastructure("task spec merge touch task", err)
 	}
-	if err := tx.Commit(); err != nil {
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
 		return nil, wrapDBInfrastructure("task spec merge commit", err)
 	}
+	committed = true
 	return payload, nil
 }
