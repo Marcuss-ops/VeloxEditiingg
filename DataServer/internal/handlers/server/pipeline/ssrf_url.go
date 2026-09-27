@@ -384,21 +384,33 @@ func ValidateAllExternalURLs(req SubmitJobRequest, cfg *config.Config) []SSRFVal
 	// Flatten the scene asset URLs into an ordered work list so results can
 	// be re-collected in scene order regardless of which lookup finishes
 	// first (the returned error slice stays deterministic).
-	type candidate struct {
-		path string
-		url  string
-	}
-	var candidates []candidate
+	var candidates []ssrfURLCandidate
 	for i, s := range req.Scenes {
 		base := fmt.Sprintf("scenes.%d", i)
 		if s.Clip != nil {
-			candidates = append(candidates, candidate{path: base + ".clip.url", url: s.Clip.URL})
+			appendClipCandidates(&candidates, base+".clip", s.Clip)
+		}
+		if s.Stock != nil {
+			appendClipCandidates(&candidates, base+".stock", s.Stock)
+		}
+		for j := range s.StockAssets {
+			appendClipCandidates(&candidates, fmt.Sprintf("%s.stock.%d", base, j), &s.StockAssets[j])
 		}
 		if s.Voiceover != nil {
-			candidates = append(candidates, candidate{path: base + ".voiceover.url", url: s.Voiceover.URL})
+			candidates = append(candidates, ssrfURLCandidate{path: base + ".voiceover.url", url: s.Voiceover.URL})
 		}
 		if s.Subtitles != nil {
-			candidates = append(candidates, candidate{path: base + ".subtitles.url", url: s.Subtitles.URL})
+			candidates = append(candidates, ssrfURLCandidate{path: base + ".subtitles.url", url: s.Subtitles.URL})
+		}
+	}
+	for i, overlay := range req.Overlays {
+		url := overlay.URL
+		if strings.TrimSpace(url) == "" {
+			url = overlay.DriveLink
+		}
+		candidates = append(candidates, ssrfURLCandidate{path: fmt.Sprintf("overlays.%d.url", i), url: url})
+		if strings.TrimSpace(overlay.SourceURI) != "" && overlay.SourceURI != url {
+			candidates = append(candidates, ssrfURLCandidate{path: fmt.Sprintf("overlays.%d.source_uri", i), url: overlay.SourceURI})
 		}
 	}
 	if len(candidates) == 0 {
@@ -415,7 +427,7 @@ func ValidateAllExternalURLs(req SubmitJobRequest, cfg *config.Config) []SSRFVal
 	for i, c := range candidates {
 		wg.Add(1)
 		sem <- struct{}{} // blocks the collector loop when the pool is full
-		go func(i int, c candidate) {
+		go func(i int, c ssrfURLCandidate) {
 			defer wg.Done()
 			defer func() { <-sem }()
 			if err := ValidateExternalURL(c.url, domains, allowLoopbackHTTP); err != nil {
@@ -436,4 +448,23 @@ func ValidateAllExternalURLs(req SubmitJobRequest, cfg *config.Config) []SSRFVal
 		}
 	}
 	return errs
+}
+
+type ssrfURLCandidate struct {
+	path string
+	url  string
+}
+
+func appendClipCandidates(candidates *[]ssrfURLCandidate, path string, clip *SubmitClip) {
+	if candidates == nil || clip == nil {
+		return
+	}
+	url := clip.URL
+	if strings.TrimSpace(url) == "" {
+		url = clip.DriveLink
+	}
+	*candidates = append(*candidates, ssrfURLCandidate{path: path + ".url", url: url})
+	if strings.TrimSpace(clip.SourceURI) != "" && clip.SourceURI != url {
+		*candidates = append(*candidates, ssrfURLCandidate{path: path + ".source_uri", url: clip.SourceURI})
+	}
 }

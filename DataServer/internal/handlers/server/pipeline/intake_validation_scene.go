@@ -77,6 +77,31 @@ func validateSubmitScenes(req SubmitJobRequest) []gin.H {
 				})
 			}
 		}
+		stockAssets := make([]*SubmitClip, 0, len(s.StockAssets)+1)
+		if s.Stock != nil {
+			stockAssets = append(stockAssets, s.Stock)
+		}
+		for j := range s.StockAssets {
+			stockAssets = append(stockAssets, &s.StockAssets[j])
+		}
+		for j, stock := range stockAssets {
+			pathPrefix := fmt.Sprintf("scenes.%d.stock.%d", i, j)
+			if stock == nil {
+				continue
+			}
+			assetURL := strings.TrimSpace(stock.URL)
+			if assetURL == "" {
+				assetURL = strings.TrimSpace(stock.DriveLink)
+			}
+			if assetURL == "" {
+				details = append(details, gin.H{"path": pathPrefix + ".url", "issue": "empty"})
+			} else if !isAcceptedAssetURL(assetURL) {
+				details = append(details, gin.H{"path": pathPrefix + ".url", "issue": "unsupported_scheme"})
+			}
+			if stock.SHA256 != "" && !manifestRefSHA256Regexp.MatchString(stock.SHA256) {
+				details = append(details, gin.H{"path": pathPrefix + ".sha256", "issue": "malformed"})
+			}
+		}
 		if s.Voiceover != nil {
 			pathPrefix := fmt.Sprintf("scenes.%d.voiceover", i)
 			if trimmed := strings.TrimSpace(s.Voiceover.URL); trimmed == "" {

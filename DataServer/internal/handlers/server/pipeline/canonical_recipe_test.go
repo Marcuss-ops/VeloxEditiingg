@@ -111,6 +111,35 @@ func TestNormalizeCanonicalRecipe_ProjectsMultipleBindingStocks(t *testing.T) {
 	}
 }
 
+func TestNormalizeCanonicalRecipePreservesDeferredDriveStockMetadata(t *testing.T) {
+	const sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	req := SubmitJobRequest{
+		JobType: "scene.composite.v1",
+		Spec: map[string]interface{}{"scenes": []interface{}{map[string]interface{}{
+			"kind": "clip", "text": "Narration", "duration_seconds": 5.0,
+			"stock": []interface{}{map[string]interface{}{
+				"drive_file_id": "stock-drive-1",
+				"drive_link":    "https://drive.google.com/file/d/stock-drive-1/view",
+				"url":           "velox-drive://stock-drive-1",
+				"source_uri":    "https://drive.google.com/uc?export=download&id=stock-drive-1",
+				"sha256":        sha,
+				"size_bytes":    float64(4096),
+				"duration_ms":   float64(5000),
+			}},
+		}}},
+	}
+	if err := NormalizeCanonicalRecipe(&req); err != nil {
+		t.Fatalf("NormalizeCanonicalRecipe: %v", err)
+	}
+	if req.Scenes[0].Kind != "clip" || len(req.Scenes[0].StockAssets) != 1 {
+		t.Fatalf("normalized scene = %+v", req.Scenes[0])
+	}
+	stock := req.Scenes[0].StockAssets[0]
+	if stock.DriveFileID != "stock-drive-1" || stock.SourceURI == "" || stock.SHA256 != sha || stock.SizeBytes != 4096 || stock.DurationMS != 5000 {
+		t.Fatalf("Drive stock metadata was not preserved: %+v", stock)
+	}
+}
+
 func TestNormalizeCanonicalRecipe_AllowsCompiledPlanWithoutInlineScenes(t *testing.T) {
 	req := SubmitJobRequest{
 		JobType:                  "scene.composite.v1",

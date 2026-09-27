@@ -115,6 +115,7 @@ type OverlayInput struct {
 	AssetID     string
 	DriveFileID string
 	URL         string
+	SourceURI   string
 	SHA256      string
 	SizeBytes   int64
 	StartFrame  int64
@@ -290,6 +291,9 @@ func BuildRawPayload(input SubmissionInput) map[string]interface{} {
 			}
 			if url := strings.TrimSpace(overlay.URL); url != "" {
 				entry["url"] = url
+			}
+			if sourceURI := strings.TrimSpace(overlay.SourceURI); sourceURI != "" {
+				entry["source_uri"] = sourceURI
 			}
 			if overlay.SHA256 != "" {
 				entry["sha256"] = overlay.SHA256

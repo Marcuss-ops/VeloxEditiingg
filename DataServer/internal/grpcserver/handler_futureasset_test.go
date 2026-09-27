@@ -126,6 +126,28 @@ func TestFutureAssetManifestsDiscoversOverlayDeclaredInPrePayload(t *testing.T) 
 	}
 }
 
+func TestFutureAssetManifestsUsesDriveLinkForStockAndRuntimeAssets(t *testing.T) {
+	payload := []byte(`{
+		"scenes_json":"[{\"text\":\"scene\",\"stock\":[{\"asset_id\":\"stock-1\",\"drive_link\":\"https://drive.google.com/file/d/stock-1/view\",\"size_bytes\":1000}]}]",
+		"overlays":[{"asset_id":"overlay-1","drive_link":"https://drive.google.com/file/d/overlay-1/view","size_bytes":2000}],
+		"runtime_assets":[{"asset_id":"audio-1","drive_link":"https://drive.google.com/file/d/audio-1/view","size_bytes":3000}]
+	}`)
+	assets := futureAssetManifests(payload)
+	if len(assets) != 3 {
+		t.Fatalf("drive_link manifests=%d, want 3: %+v", len(assets), assets)
+	}
+	want := map[string]string{
+		"stock-1":   "https://drive.google.com/uc?export=download&id=stock-1&confirm=t",
+		"overlay-1": "https://drive.google.com/uc?export=download&id=overlay-1&confirm=t",
+		"audio-1":   "https://drive.google.com/uc?export=download&id=audio-1&confirm=t",
+	}
+	for _, asset := range assets {
+		if got := asset.SourceURI; got != want[asset.AssetID] {
+			t.Errorf("asset %s source_uri=%q, want %q", asset.AssetID, got, want[asset.AssetID])
+		}
+	}
+}
+
 func TestFutureAssetManifestsNormalizesDriveViewSourceURI(t *testing.T) {
 	payload := []byte(`{
 		"runtime_assets": [{

@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"velox-shared/assetref"
 	"velox-shared/contract"
 	"velox-shared/futureasset"
 	"velox-shared/paths"
@@ -49,6 +50,15 @@ func futureAssetManifests(payload []byte) []futureasset.AssetManifest {
 			if assetID == "" {
 				assetID, _ = node["drive_file_id"].(string)
 			}
+			rawURL, _ := node["url"].(string)
+			if strings.TrimSpace(rawURL) == "" {
+				rawURL, _ = node["drive_link"].(string)
+			}
+			if assetID == "" {
+				if driveID, err := assetref.ParseDriveFileID(rawURL); err == nil {
+					assetID = driveID.String()
+				}
+			}
 			if key == "" {
 				key = assetID
 			}
@@ -65,8 +75,10 @@ func futureAssetManifests(payload []byte) []futureasset.AssetManifest {
 			}
 			sourceURI, _ := node["source_uri"].(string)
 			if sourceURI == "" {
-				if rawURL, _ := node["url"].(string); strings.HasPrefix(strings.ToLower(strings.TrimSpace(rawURL)), "velox-drive://") {
+				if strings.HasPrefix(strings.ToLower(strings.TrimSpace(rawURL)), "velox-drive://") {
 					sourceURI = "https://drive.google.com/uc?export=download&id=" + strings.TrimSpace(rawURL[len("velox-drive://"):])
+				} else if driveID, err := assetref.ParseDriveFileID(rawURL); err == nil {
+					sourceURI = "https://drive.google.com/uc?export=download&id=" + driveID.String()
 				}
 			}
 			// Producers may provide Drive's human-facing /file/d/.../view

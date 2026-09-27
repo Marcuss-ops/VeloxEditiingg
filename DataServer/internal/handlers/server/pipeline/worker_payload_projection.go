@@ -3,6 +3,9 @@
 package pipeline
 
 import (
+	"strings"
+
+	"velox-shared/assetref"
 	"velox-shared/compatibility"
 
 	"velox-server/internal/handlers/server/pipeline/projection"
@@ -76,8 +79,22 @@ func submitRequestToRawPayload(req *SubmitJobRequest) map[string]interface{} {
 	}
 	input.Overlays = make([]projection.OverlayInput, 0, len(req.Overlays))
 	for _, overlay := range req.Overlays {
+		overlayURL := overlay.URL
+		if overlayURL == "" {
+			overlayURL = overlay.DriveLink
+		}
+		overlayDriveFileID := overlay.DriveFileID
+		if overlayDriveFileID == "" {
+			if id, err := assetref.ParseDriveFileID(overlayURL); err == nil {
+				overlayDriveFileID = id.String()
+			}
+		}
+		overlaySourceURI := overlay.SourceURI
+		if overlaySourceURI == "" {
+			overlaySourceURI = driveDownloadURI(overlayURL)
+		}
 		input.Overlays = append(input.Overlays, projection.OverlayInput{
-			ID: overlay.ID, AssetID: overlay.AssetID, DriveFileID: overlay.DriveFileID, URL: overlay.URL, SHA256: overlay.SHA256, SizeBytes: overlay.SizeBytes,
+			ID: overlay.ID, AssetID: overlay.AssetID, DriveFileID: overlayDriveFileID, URL: overlayURL, SourceURI: overlaySourceURI, SHA256: overlay.SHA256, SizeBytes: overlay.SizeBytes,
 			StartFrame: overlay.StartFrame, EndFrame: overlay.EndFrame, FrameCount: overlay.FrameCount, Mode: overlay.Mode,
 			ZIndex: overlay.ZIndex, AudioMode: overlay.AudioMode,
 		})
@@ -113,10 +130,34 @@ func projectionClip(input *SubmitClip) *projection.ClipInput {
 }
 
 func projectionClipValue(input *SubmitClip) projection.ClipInput {
+	url := input.URL
+	if url == "" {
+		url = input.DriveLink
+	}
+	driveFileID := input.DriveFileID
+	if driveFileID == "" {
+		if id, err := assetref.ParseDriveFileID(url); err == nil {
+			driveFileID = id.String()
+		}
+	}
+	sourceURI := input.SourceURI
+	if sourceURI == "" {
+		sourceURI = driveDownloadURI(url)
+	}
 	return projection.ClipInput{
-		AssetID: input.AssetID, DriveFileID: input.DriveFileID, URL: input.URL, SourceURI: input.SourceURI, SHA256: input.SHA256, SizeBytes: input.SizeBytes,
+		AssetID: input.AssetID, DriveFileID: driveFileID, URL: url, SourceURI: sourceURI, SHA256: input.SHA256, SizeBytes: input.SizeBytes,
 		StartMS: input.StartMS, EndMS: input.EndMS, DurationMS: input.DurationMS,
 	}
+}
+
+func driveDownloadURI(reference string) string {
+	if id, ok := assetref.WireAssetID(reference); ok && strings.HasPrefix(strings.ToLower(strings.TrimSpace(reference)), assetref.SchemeVeloxDrive+"://") {
+		return "https://drive.google.com/uc?export=download&id=" + id
+	}
+	if id, err := assetref.ParseDriveFileID(reference); err == nil {
+		return "https://drive.google.com/uc?export=download&id=" + id.String()
+	}
+	return ""
 }
 
 func projectionVoiceover(input *SubmitVoiceover) *projection.VoiceoverInput {

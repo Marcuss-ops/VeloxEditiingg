@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"velox-shared/assetref"
 )
 
 func validateSubmitOverlays(overlays []SubmitOverlay) []gin.H {
@@ -25,7 +26,16 @@ func validateSubmitOverlays(overlays []SubmitOverlay) []gin.H {
 			details = append(details, gin.H{"path": path + ".id", "issue": "duplicate"})
 		}
 		seen[id] = struct{}{}
-		if strings.TrimSpace(overlay.AssetID) == "" && strings.TrimSpace(overlay.DriveFileID) == "" {
+		assetIDPresent := strings.TrimSpace(overlay.AssetID) != "" || strings.TrimSpace(overlay.DriveFileID) != ""
+		if !assetIDPresent {
+			link := strings.TrimSpace(overlay.DriveLink)
+			if link == "" {
+				link = strings.TrimSpace(overlay.URL)
+			}
+			_, err := assetref.ParseDriveFileID(link)
+			assetIDPresent = err == nil
+		}
+		if !assetIDPresent {
 			details = append(details, gin.H{"path": path + ".asset_id", "issue": "asset_id_or_drive_file_id_required"})
 		}
 		if overlay.StartFrame < 0 {
@@ -42,7 +52,11 @@ func validateSubmitOverlays(overlays []SubmitOverlay) []gin.H {
 		if overlay.AudioMode != "" && overlay.AudioMode != "preserve_final_audio" {
 			details = append(details, gin.H{"path": path + ".audio_mode", "issue": "unsupported_value", "allowed": []string{"preserve_final_audio"}})
 		}
-		if overlay.URL != "" && !isAcceptedAssetURL(strings.TrimSpace(overlay.URL)) {
+		assetURL := strings.TrimSpace(overlay.URL)
+		if assetURL == "" {
+			assetURL = strings.TrimSpace(overlay.DriveLink)
+		}
+		if assetURL != "" && !isAcceptedAssetURL(assetURL) {
 			details = append(details, gin.H{"path": path + ".url", "issue": "unsupported_scheme"})
 		}
 		if overlay.SHA256 != "" && !manifestRefSHA256Regexp.MatchString(strings.TrimSpace(overlay.SHA256)) {

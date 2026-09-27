@@ -349,7 +349,7 @@ func countStockReferences(value interface{}) int {
 }
 
 func hasAssetReference(asset map[string]interface{}) bool {
-	return payload.FirstString(asset, "url", "asset_id", "drive_file_id", "source_uri", "source_url") != ""
+	return payload.FirstString(asset, "url", "drive_link", "asset_id", "drive_file_id", "source_uri", "source_url") != ""
 }
 
 func extractScenesJSONFromFile(path string) (string, error) {

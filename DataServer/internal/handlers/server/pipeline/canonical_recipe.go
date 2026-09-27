@@ -164,6 +164,8 @@ func recipeClip(raw map[string]interface{}) *SubmitClip {
 		AssetID:     firstRecipeString(raw, "asset_id", "clip_id"),
 		DriveFileID: firstRecipeString(raw, "drive_file_id"),
 		SourceURI:   firstRecipeString(raw, "source_uri", "source_url"),
+		SHA256:      firstRecipeString(raw, "sha256", "asset_sha256"),
+		SizeBytes:   int64(recipeFloat(raw["size_bytes"])),
 		StartMS:     int64(recipeFloat(raw["start_ms"])),
 		EndMS:       int64(recipeFloat(raw["end_ms"])),
 		DurationMS:  int64(recipeFloat(raw["duration_ms"])),

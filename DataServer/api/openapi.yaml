@@ -530,6 +530,10 @@ components:
                             drive_file_id:
                                 maxLength: 128
                                 type: string
+                            drive_link:
+                                format: uri
+                                maxLength: 2048
+                                type: string
                             end_frame:
                                 minimum: 1
                                 type: integer
@@ -548,6 +552,10 @@ components:
                             size_bytes:
                                 minimum: 1
                                 type: integer
+                            source_uri:
+                                format: uri
+                                maxLength: 2048
+                                type: string
                             start_frame:
                                 minimum: 0
                                 type: integer
@@ -822,6 +830,10 @@ components:
                 drive_file_id:
                     maxLength: 128
                     type: string
+                drive_link:
+                    format: uri
+                    maxLength: 2048
+                    type: string
                 duration_ms:
                     minimum: 0
                     type: integer
@@ -832,6 +844,13 @@ components:
                     maxLength: 64
                     minLength: 64
                     pattern: ^[0-9a-f]{64}$
+                    type: string
+                size_bytes:
+                    minimum: 1
+                    type: integer
+                source_uri:
+                    format: uri
+                    maxLength: 2048
                     type: string
                 start_ms:
                     minimum: 0
@@ -1037,6 +1056,10 @@ components:
                             drive_file_id:
                                 maxLength: 128
                                 type: string
+                            drive_link:
+                                format: uri
+                                maxLength: 2048
+                                type: string
                             end_frame:
                                 minimum: 1
                                 type: integer
@@ -1055,6 +1078,10 @@ components:
                             size_bytes:
                                 minimum: 1
                                 type: integer
+                            source_uri:
+                                format: uri
+                                maxLength: 2048
+                                type: string
                             start_frame:
                                 minimum: 0
                                 type: integer
@@ -1227,6 +1254,12 @@ components:
                 so M2M producers can diagnose without operator shell access.
                 These failure fields are additive and appear only on FAILED.
             properties:
+                attempt_status:
+                    description: |
+                        Terminal status of the latest task attempt (FAILED). Present
+                        only when `status == FAILED` and an attempt row exists.
+                    example: FAILED
+                    type: string
                 created:
                     description: |
                         Source discriminator. `true` iff the row was produced by
@@ -1237,6 +1270,20 @@ components:
                         external jobs and can drop creator-source rows).
                     example: true
                     type: boolean
+                failure_code:
+                    description: |
+                        Worker-reported error code of the failed attempt (or
+                        `JOB_FAILED` when only the job-level error_message is
+                        available). Present only when `status == FAILED`.
+                    example: RENDER_FAILED
+                    type: string
+                failure_message:
+                    description: |
+                        Human-readable failure reason reported by the worker (or the
+                        job-level error_message fallback). Present only when
+                        `status == FAILED`.
+                    example: 'velox_video_engine exited with code 1: plan segment 5 decode error'
+                    type: string
                 job_id:
                     description: Echoed from the URL path.
                     example: job_a1b2c3d4
@@ -1273,26 +1320,6 @@ components:
                         copy-paste the URL into their next request without
                         re-deriving from the path the response came in on.
                     example: /api/v1/jobs/job_a1b2c3d4
-                    type: string
-                attempt_status:
-                    description: |
-                        Terminal status of the latest task attempt (FAILED). Present
-                        only when `status == FAILED` and an attempt row exists.
-                    example: FAILED
-                    type: string
-                failure_code:
-                    description: |
-                        Worker-reported error code of the failed attempt (or
-                        `JOB_FAILED` when only the job-level error_message is
-                        available). Present only when `status == FAILED`.
-                    example: RENDER_FAILED
-                    type: string
-                failure_message:
-                    description: |
-                        Human-readable failure reason reported by the worker (or the
-                        job-level error_message fallback). Present only when
-                        `status == FAILED`.
-                    example: velox_video_engine exited with code 1: plan segment 5 decode error
                     type: string
             required:
                 - ok

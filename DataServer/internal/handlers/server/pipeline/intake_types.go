@@ -229,6 +229,7 @@ type SubmitScene struct {
 type SubmitClip struct {
 	AssetID     string `json:"asset_id,omitempty"`
 	DriveFileID string `json:"drive_file_id,omitempty"`
+	DriveLink   string `json:"drive_link,omitempty"`
 	URL         string `json:"url,omitempty"`
 	SourceURI   string `json:"source_uri,omitempty"`
 	SHA256      string `json:"sha256,omitempty"`
@@ -285,7 +286,9 @@ type SubmitOverlay struct {
 	ID          string `json:"id"`
 	AssetID     string `json:"asset_id,omitempty"`
 	DriveFileID string `json:"drive_file_id,omitempty"`
+	DriveLink   string `json:"drive_link,omitempty"`
 	URL         string `json:"url,omitempty"`
+	SourceURI   string `json:"source_uri,omitempty"`
 	SHA256      string `json:"sha256,omitempty"`
 	SizeBytes   int64  `json:"size_bytes,omitempty"`
 	StartFrame  int64  `json:"start_frame"`
