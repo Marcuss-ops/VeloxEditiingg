@@ -275,7 +275,8 @@ func (cl *CleanupLoop) TickOnce(ctx context.Context) (PressureEvictionStats, err
 	if pressureErr != nil {
 		return pressureStats, pressureErr
 	}
-	_, idleErr := CleanupWithPolicy(ctx, cl.Cache, generatedAt, protected, cl.Policy, cl.resolveNow())
+	idleStats, idleErr := CleanupWithPolicy(ctx, cl.Cache, generatedAt, protected, cl.Policy, cl.resolveNow())
+	pressureStats.Idle = idleStats
 	if idleErr != nil {
 		return pressureStats, fmt.Errorf("idle cache cleanup: %w", idleErr)
 	}

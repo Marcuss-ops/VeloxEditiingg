@@ -446,6 +446,7 @@ func main() {
 			metrics := telemetry.GetPrometheusMetrics()
 			metrics.RecordCacheCleanup(time.Duration(stats.DurationMS) * time.Millisecond)
 			metrics.RecordCacheEvictions("pressure", stats.Removed)
+			metrics.RecordCacheEvictions("idle", stats.Idle.Removed)
 			metrics.RecordCacheEvictedBytes(stats.RemovedBytes)
 			if stats.UsagePercent > 0 {
 				metrics.SetCacheDiskUsagePercent(stats.UsagePercent)
@@ -463,10 +464,10 @@ func main() {
 					reason = "stale_snapshot"
 				}
 				metrics.RecordCacheCleanupSkip(reason)
-				logger.Warn("[CACHE_PRESSURE] usage=%d%% removed=%d removed_bytes=%d protected=%d err=%v", stats.UsagePercent, stats.Removed, stats.RemovedBytes, stats.Protected, err)
+				logger.Warn("[CACHE_EVICTION] usage=%d%% pressure_removed=%d pressure_bytes=%d idle_inspected=%d idle_removed=%d idle_skipped_grace=%d idle_skipped_protected=%d idle_errors=%d err=%v", stats.UsagePercent, stats.Removed, stats.RemovedBytes, stats.Idle.Inspected, stats.Idle.Removed, stats.Idle.SkippedGrace, stats.Idle.SkippedProtected, stats.Idle.RemoveErrors, err)
 				return
 			}
-			logger.Info("[CACHE_PRESSURE] usage=%d%% attempted=%d removed=%d removed_bytes=%d protected=%d", stats.UsagePercent, stats.Attempted, stats.Removed, stats.RemovedBytes, stats.Protected)
+			logger.Info("[CACHE_EVICTION] usage=%d%% pressure_removed=%d pressure_bytes=%d idle_inspected=%d idle_removed=%d idle_skipped_grace=%d idle_skipped_protected=%d idle_errors=%d", stats.UsagePercent, stats.Removed, stats.RemovedBytes, stats.Idle.Inspected, stats.Idle.Removed, stats.Idle.SkippedGrace, stats.Idle.SkippedProtected, stats.Idle.RemoveErrors)
 		},
 	}
 	// RW-PROD-004 §3 A4: MarkBootstrapped(true) is set here because

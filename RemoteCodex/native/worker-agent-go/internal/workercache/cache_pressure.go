@@ -208,6 +208,8 @@ type PressureEvictionConfig struct {
 
 // PressureEvictionStats summarises one pressure pass.
 type PressureEvictionStats struct {
+	// Idle contains the independent job-flow cleanup pass results.
+	Idle CleanupStats
 	// UsagePercent is the disk-usage percentage observed at entry.
 	UsagePercent int
 	// Attempted is the number of candidate blobs the loop tried to evict.

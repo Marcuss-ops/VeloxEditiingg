@@ -19,7 +19,7 @@
 // can set to override defaults without a recompile:
 //
 //	VELOX_CACHE_CLEANUP_INTERVAL  (default 5m) — cleanup loop ticker
-//	VELOX_CACHE_IDLE_TTL          (default 10h) — remove unneeded assets after idle time
+//	VELOX_CACHE_IDLE_TTL          (default 3m) — remove unneeded assets after idle time
 //	VELOX_CACHE_RECENT_USE_GRACE  (default 3m) — legacy direct-call predicate
 //	VELOX_CACHE_SNAPSHOT_MAX_AGE  (default 2m) — staleness skip threshold
 //
@@ -93,7 +93,7 @@ type CleanupPolicy struct {
 const (
 	defaultCleanupInterval = 5 * time.Minute
 	defaultRecentUseGrace  = 3 * time.Minute
-	defaultIdleTTL         = 10 * time.Hour
+	defaultIdleTTL         = 3 * time.Minute
 	defaultSnapshotMaxAge  = 2 * time.Minute
 )
 
@@ -118,7 +118,7 @@ func LoadCleanupPolicy() CleanupPolicy {
 		}
 	}
 	if v := strings.TrimSpace(os.Getenv("VELOX_CACHE_RECENT_USE_GRACE")); v != "" {
-		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+		if d, err := time.ParseDuration(v); err == nil && d >= 0 {
 			p.RecentUseGrace = d
 		}
 	}
@@ -213,9 +213,13 @@ func CleanupWithPolicy(
 	stats.Inspected = len(entries)
 
 	for _, e := range entries {
-		grace := policy.IdleTTL
-		if grace <= 0 {
-			grace = policy.RecentUseGrace
+		// An asset must satisfy both the short race-protection grace and
+		// the configured maximum idle TTL before deletion. The earlier
+		// deadline wins; zero recent-use grace intentionally permits
+		// immediate cleanup after the job-flow protections are checked.
+		grace := policy.RecentUseGrace
+		if policy.IdleTTL > 0 && policy.IdleTTL < grace {
+			grace = policy.IdleTTL
 		}
 		decision := evaluateEviction(e, protected, grace, now)
 		switch decision {

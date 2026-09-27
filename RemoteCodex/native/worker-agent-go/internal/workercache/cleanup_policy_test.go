@@ -265,7 +265,7 @@ func TestCleanupPolicy_NoSnapshot_IsFailSafe(t *testing.T) {
 }
 
 // TestLoadCleanupPolicy_DefaultsMatchSpec covers the operator-facing
-// defaults requirement, including the ten-hour idle retention contract.
+// defaults requirement, including the short post-job idle retention.
 func TestLoadCleanupPolicy_DefaultsMatchSpec(t *testing.T) {
 	// Clear any residual env.
 	for _, k := range []string{
@@ -283,8 +283,8 @@ func TestLoadCleanupPolicy_DefaultsMatchSpec(t *testing.T) {
 	if p.RecentUseGrace != 3*time.Minute {
 		t.Errorf("RecentUseGrace=%v want 3m", p.RecentUseGrace)
 	}
-	if p.IdleTTL != 10*time.Hour {
-		t.Errorf("IdleTTL=%v want 10h", p.IdleTTL)
+	if p.IdleTTL != 3*time.Minute {
+		t.Errorf("IdleTTL=%v want 3m", p.IdleTTL)
 	}
 	if p.SnapshotMaxAge != 2*time.Minute {
 		t.Errorf("SnapshotMaxAge=%v want 2m", p.SnapshotMaxAge)
@@ -294,13 +294,13 @@ func TestLoadCleanupPolicy_DefaultsMatchSpec(t *testing.T) {
 func TestCleanupWithPolicy_IdleTTLRemovesOnlyUnneededAssets(t *testing.T) {
 	f := newPolicyFixture(t)
 	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
-	old := now.Add(-11 * time.Hour)
-	fresh := now.Add(-30 * time.Minute)
+	old := now.Add(-4 * time.Minute)
+	fresh := now.Add(-30 * time.Second)
 	seedRow(t, f.cache, f.dir, "OLD", old)
 	seedRow(t, f.cache, f.dir, "FUTURE", old)
 	seedRow(t, f.cache, f.dir, "FRESH", fresh)
 
-	policy := CleanupPolicy{IdleTTL: 10 * time.Hour, SnapshotMaxAge: 2 * time.Minute}
+	policy := CleanupPolicy{IdleTTL: 3 * time.Minute, RecentUseGrace: 3 * time.Minute, SnapshotMaxAge: 2 * time.Minute}
 	stats, err := CleanupWithPolicy(context.Background(), f.cache, now, []string{"FUTURE"}, policy, now)
 	if err != nil {
 		t.Fatalf("CleanupWithPolicy: %v", err)
