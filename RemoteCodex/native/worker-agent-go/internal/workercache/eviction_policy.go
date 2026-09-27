@@ -25,7 +25,11 @@ func evaluateEviction(entry Entry, protected map[string]struct{}, recentUseGrace
 	if entry.ActiveReservationCount > 0 {
 		return evictionKeepReservation
 	}
-	if !entry.DownloadComplete {
+	if !entry.DownloadComplete && (recentUseGrace <= 0 || now.Sub(entry.LastUsedAt) < recentUseGrace) {
+		// An incomplete blob is protected while its transfer is recent. Old
+		// incomplete rows are abandoned downloads: after the safety window,
+		// continue checking the future-job snapshot and idle grace so they do
+		// not pin cache metadata and partial files forever.
 		return evictionKeepInFlight
 	}
 	if _, keep := protected[string(entry.AssetKey)]; keep {

@@ -9,8 +9,9 @@
 //     This is the EXPLICIT protection requested by Pass 9 — even if a
 //     row is download_complete and is NOT in the master's protected
 //     snapshot, an in-flight job's lease must keep it on disk.
-//  2. Skip rows with download_complete = false (download-in-flight
-//     or half-written). Recovery happens via the resolver, not here.
+//  2. Skip recent rows with download_complete = false (download-in-flight
+//     or half-written). Old incomplete rows continue through the policy;
+//     active lease/reservation and snapshot protection still preserve them.
 //  3. Skip rows whose asset_key is in the protected set supplied
 //     by the master snapshot. The protected set is the "next N jobs'
 //     asset-key union" (see protectedasset.Service / Pass 5/6).

@@ -334,3 +334,30 @@ func TestCleanupWithPolicy_IdleTTLRemovesOnlyUnneededAssets(t *testing.T) {
 		}
 	}
 }
+
+func TestCleanupWithPolicy_AbandonedIncompleteDownloadExpires(t *testing.T) {
+	f := newPolicyFixture(t)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	stale := now.Add(-4 * time.Minute)
+	seedRow(t, f.cache, f.dir, "ABANDONED", stale)
+	seedRow(t, f.cache, f.dir, "ACTIVE", now.Add(-30*time.Second))
+	if _, err := f.cache.DB().ExecContext(ctx, `UPDATE cached_blobs SET download_complete = 0`); err != nil {
+		t.Fatalf("mark downloads incomplete: %v", err)
+	}
+
+	policy := CleanupPolicy{IdleTTL: 3 * time.Minute, RecentUseGrace: 3 * time.Minute, SnapshotMaxAge: 2 * time.Minute}
+	stats, err := CleanupWithPolicy(ctx, f.cache, now, []string{}, policy, now)
+	if err != nil {
+		t.Fatalf("CleanupWithPolicy: %v", err)
+	}
+	if stats.Removed != 1 || stats.SkippedInFlight != 1 {
+		t.Fatalf("stats=%+v, want one abandoned row removed and one recent transfer retained", stats)
+	}
+	if _, ok, err := f.cache.Find(ctx, "ABANDONED"); err != nil || ok {
+		t.Fatalf("abandoned entry present=%v err=%v, want removed", ok, err)
+	}
+	if _, ok, err := f.cache.Find(ctx, "ACTIVE"); err != nil || !ok {
+		t.Fatalf("recent in-flight entry present=%v err=%v, want retained", ok, err)
+	}
+}

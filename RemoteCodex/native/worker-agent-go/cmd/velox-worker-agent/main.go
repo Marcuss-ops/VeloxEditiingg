@@ -464,10 +464,10 @@ func main() {
 					reason = "stale_snapshot"
 				}
 				metrics.RecordCacheCleanupSkip(reason)
-				logger.Warn("[CACHE_EVICTION] usage=%d%% pressure_removed=%d pressure_bytes=%d idle_inspected=%d idle_removed=%d idle_skipped_grace=%d idle_skipped_protected=%d idle_errors=%d err=%v", stats.UsagePercent, stats.Removed, stats.RemovedBytes, stats.Idle.Inspected, stats.Idle.Removed, stats.Idle.SkippedGrace, stats.Idle.SkippedProtected, stats.Idle.RemoveErrors, err)
+				logger.Warn("[CACHE_EVICTION] usage=%d%% pressure_removed=%d pressure_bytes=%d idle_inspected=%d idle_removed=%d idle_skipped_in_flight=%d idle_skipped_grace=%d idle_skipped_protected=%d idle_errors=%d err=%v", stats.UsagePercent, stats.Removed, stats.RemovedBytes, stats.Idle.Inspected, stats.Idle.Removed, stats.Idle.SkippedInFlight, stats.Idle.SkippedGrace, stats.Idle.SkippedProtected, stats.Idle.RemoveErrors, err)
 				return
 			}
-			logger.Info("[CACHE_EVICTION] usage=%d%% pressure_removed=%d pressure_bytes=%d idle_inspected=%d idle_removed=%d idle_skipped_grace=%d idle_skipped_protected=%d idle_errors=%d", stats.UsagePercent, stats.Removed, stats.RemovedBytes, stats.Idle.Inspected, stats.Idle.Removed, stats.Idle.SkippedGrace, stats.Idle.SkippedProtected, stats.Idle.RemoveErrors)
+			logger.Info("[CACHE_EVICTION] usage=%d%% pressure_removed=%d pressure_bytes=%d idle_inspected=%d idle_removed=%d idle_skipped_in_flight=%d idle_skipped_grace=%d idle_skipped_protected=%d idle_errors=%d", stats.UsagePercent, stats.Removed, stats.RemovedBytes, stats.Idle.Inspected, stats.Idle.Removed, stats.Idle.SkippedInFlight, stats.Idle.SkippedGrace, stats.Idle.SkippedProtected, stats.Idle.RemoveErrors)
 		},
 	}
 	// RW-PROD-004 §3 A4: MarkBootstrapped(true) is set here because
