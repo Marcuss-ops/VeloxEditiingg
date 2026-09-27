@@ -46,6 +46,7 @@ std::optional<RenderPlan> parseRenderPlanV1(
             item.source_duration_us = static_cast<int64_t>(
                 ju::extractJsonNumberValue(itemStr, "source_duration_us", 0.0));
             item.include_audio = ju::extractJsonBoolValue(itemStr, "include_audio", false);
+            item.hold_last_frame = ju::extractJsonBoolValue(itemStr, "hold_last_frame", false);
             item.transform.scale_mode = ju::extractJsonStringValue(itemStr, "scale_mode");
             if (item.transform.scale_mode.empty()) item.transform.scale_mode = "cover";
             item.transform.explicit_request =

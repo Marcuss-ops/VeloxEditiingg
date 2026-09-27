@@ -51,11 +51,14 @@ type TransformSpec struct {
 
 // TimelineItem is a single segment in the rendering timeline.
 type TimelineItem struct {
-	Source          MediaSource    `json:"source"`
-	SceneID         string         `json:"scene_id,omitempty"`
-	DurationSeconds float64        `json:"duration_seconds"`
-	IncludeAudio    bool           `json:"include_audio,omitempty"`
-	Transform       *TransformSpec `json:"transform,omitempty"`
+	Source          MediaSource `json:"source"`
+	SceneID         string      `json:"scene_id,omitempty"`
+	DurationSeconds float64     `json:"duration_seconds"`
+	IncludeAudio    bool        `json:"include_audio,omitempty"`
+	// HoldLastFrame prevents short editorial replacements from looping to
+	// fill a longer window; the last decoded frame is extended instead.
+	HoldLastFrame bool           `json:"hold_last_frame,omitempty"`
+	Transform     *TransformSpec `json:"transform,omitempty"`
 	// Optional packet-copy source window. V1 jobs use these fields when an
 	// editorial replace overlay splits a base clip; V2 remains the preferred
 	// producer contract for fully certified plans.

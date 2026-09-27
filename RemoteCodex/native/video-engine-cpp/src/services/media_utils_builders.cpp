@@ -73,7 +73,8 @@ std::string buildVideoSegmentArgs(
     const fs::path& segment_path,
     double duration,
     const SceneSegmentParams& params,
-    bool include_audio) {
+    bool include_audio,
+    bool hold_last_frame) {
     int width, height, fps;
     detail::canvasDims(params, width, height, fps);
     if (params.copy_only && !detail::nativeVideoStreamCopyCompatible(
@@ -101,10 +102,13 @@ std::string buildVideoSegmentArgs(
     } else if (params.scale_mode == "stretch") {
         scale_filter = "scale=" + size + ",format=yuv420p";
     }
+    if (hold_last_frame) {
+        scale_filter += ",tpad=stop_mode=clone:stop_duration=" + std::to_string(duration);
+    }
     scale_filter = detail::withDecodeTelemetry(scale_filter);
     const std::string codec = detail::ffmpegVideoCodec();
     std::ostringstream command;
-    if (!include_audio) command << "-stream_loop -1 ";
+    if (!include_audio && !hold_last_frame) command << "-stream_loop -1 ";
     command << "-i " << file::shellQuote(clip_path.string())
             << " -t " << duration
             << " -vf " << file::shellQuote(scale_filter)

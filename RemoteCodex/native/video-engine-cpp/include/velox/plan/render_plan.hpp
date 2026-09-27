@@ -51,6 +51,9 @@ struct TimelineItem {
     // validates the opened container header and falls back to stream-info
     // discovery when anything needed by packet muxing is absent.
     bool metadata_certified{false};
+    // Editorial replacement clips can be held on their final frame instead
+    // of looping when their source is shorter than the requested window.
+    bool hold_last_frame{false};
 };
 
 struct AudioTrack {

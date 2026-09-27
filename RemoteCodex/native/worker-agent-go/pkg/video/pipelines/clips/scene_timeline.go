@@ -132,7 +132,7 @@ func sameSceneTimelineAsset(clip, stock *sceneTimelineAsset) bool {
 	return clipURL != "" && stockURL != "" && clipURL == stockURL
 }
 
-func compileSceneTimeline(ctx context.Context, jobID string, scenes []sceneTimelineScene, outputPath string, probe audio.Probe) (*plan.RenderPlan, error) {
+func compileSceneTimeline(ctx context.Context, jobID string, scenes []sceneTimelineScene, outputPath string, input map[string]interface{}, probe audio.Probe) (*plan.RenderPlan, error) {
 	if err := validateSceneTimeline(scenes); err != nil {
 		return nil, fmt.Errorf("clips.v1: %w", err)
 	}
@@ -140,6 +140,7 @@ func compileSceneTimeline(ctx context.Context, jobID string, scenes []sceneTimel
 	timeline := make([]plan.TimelineItem, 0, len(scenes)*2)
 	audioTracks := make([]plan.AudioTrack, 0, len(scenes)*2)
 	offset := 0.0
+	finalAudioConfigured := hasRuntimeFinalAudio(input)
 	for sceneIndex, scene := range scenes {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -195,7 +196,7 @@ func compileSceneTimeline(ctx context.Context, jobID string, scenes []sceneTimel
 				// leading intro clip.
 				IncludeAudio: false,
 			})
-			if scene.Voiceover != nil {
+			if scene.Voiceover != nil && !finalAudioConfigured {
 				audioTracks = append(audioTracks, plan.AudioTrack{
 					SourceURL:       scene.Voiceover.URL,
 					Volume:          1,
@@ -210,7 +211,7 @@ func compileSceneTimeline(ctx context.Context, jobID string, scenes []sceneTimel
 					DurationSeconds: clipDuration,
 					Role:            "scene_clip_audio",
 				})
-			} else {
+			} else if !finalAudioConfigured {
 				audioTracks = append(audioTracks, plan.AudioTrack{
 					SourceURL:       scene.Clip.URL,
 					Volume:          1,
@@ -219,7 +220,7 @@ func compileSceneTimeline(ctx context.Context, jobID string, scenes []sceneTimel
 					Role:            "scene_clip_audio",
 				})
 			}
-		} else if scene.Voiceover != nil {
+		} else if scene.Voiceover != nil && !finalAudioConfigured {
 			audioTracks = append(audioTracks, plan.AudioTrack{
 				SourceURL:       scene.Voiceover.URL,
 				Volume:          1,

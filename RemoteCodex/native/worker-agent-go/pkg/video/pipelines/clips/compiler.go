@@ -77,7 +77,7 @@ func Compile(ctx context.Context, jobID string, input map[string]interface{}, ou
 	}
 	if encoded := toString(input["scenes_json"]); encoded != "" {
 		if scenes, err := decodeSceneTimeline(encoded); err == nil && sceneTimelineRequired(scenes) {
-			compiled, err := compileSceneTimeline(ctx, jobID, scenes, outputPath, probe)
+			compiled, err := compileSceneTimeline(ctx, jobID, scenes, outputPath, input, probe)
 			if err != nil {
 				return nil, err
 			}
@@ -178,6 +178,7 @@ func applyOverlayIntent(renderPlan *plan.RenderPlan, input map[string]interface{
 		return nil, fmt.Errorf("clips.v1: composite overlays require Chronon prepared fragments (%d windows); native Velox layers are unsupported", len(windows))
 	}
 	hasReplaceOverlay := false
+	overlayAssetIDs := make(map[string]struct{}, len(overlays))
 	for _, overlay := range overlays {
 		if overlay.Mode != string(contract.OverlayModeReplace) {
 			continue
@@ -193,6 +194,7 @@ func applyOverlayIntent(renderPlan *plan.RenderPlan, input map[string]interface{
 			return nil, fmt.Errorf("clips.v1: overlay %q has no resolvable URL", overlay.ID)
 		}
 		baseURLs[overlay.AssetID] = url
+		overlayAssetIDs[overlay.AssetID] = struct{}{}
 	}
 	timeline := make([]plan.TimelineItem, 0, len(resolved))
 	for _, segment := range resolved {
@@ -200,10 +202,12 @@ func applyOverlayIntent(renderPlan *plan.RenderPlan, input map[string]interface{
 		if url == "" {
 			return nil, fmt.Errorf("clips.v1: overlay asset %q was not resolved", segment.AssetID)
 		}
+		_, isOverlay := overlayAssetIDs[segment.AssetID]
 		timeline = append(timeline, plan.TimelineItem{
 			Source:          plan.MediaSource{Type: "video", URL: url},
 			DurationSeconds: float64(segment.FrameCount) / float64(overlayFPS),
-			IncludeAudio:    false, SourceInUS: segment.SourceInUS, SourceDurationUS: segment.SourceDurationUS,
+			IncludeAudio:    false, HoldLastFrame: isOverlay,
+			SourceInUS: segment.SourceInUS, SourceDurationUS: segment.SourceDurationUS,
 		})
 	}
 	renderPlan.Timeline = timeline

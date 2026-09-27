@@ -64,6 +64,13 @@ func runtimeAudioPayload(input map[string]interface{}) map[string]interface{} {
 	return nil
 }
 
+// hasRuntimeFinalAudio reports whether the payload supplies a complete mix.
+// When present, that track owns the timeline and source-clip audio is omitted.
+func hasRuntimeFinalAudio(input map[string]interface{}) bool {
+	audio := runtimeAudioPayload(input)
+	return firstNonEmptyString(audio, "voiceover_asset_id", "tts_asset_id", "voice_asset_id") != ""
+}
+
 func runtimeAssetIndex(raw interface{}) map[string]map[string]interface{} {
 	index := make(map[string]map[string]interface{})
 	items, ok := raw.([]interface{})

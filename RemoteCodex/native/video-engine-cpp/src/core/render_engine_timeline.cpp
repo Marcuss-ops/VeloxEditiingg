@@ -398,11 +398,12 @@ bool RenderEngine::renderLegacyTimeline(
                 assetPhase.Complete();
                 seg.source_bytes = fileSize(localVid);
 #ifdef VELOX_ENABLE_LIBAV
-                const bool legacyNeedsFfmpeg = item.include_audio ||
+                const bool legacyNeedsFfmpeg = item.include_audio || item.hold_last_frame ||
                     item.transform.slow_zoom;
                 if (legacyNeedsFfmpeg) {
                     args_only = media::buildVideoSegmentArgs(
-                        localVid, segmentOut, item.duration_seconds, params, item.include_audio);
+                        localVid, segmentOut, item.duration_seconds, params, item.include_audio,
+                        item.hold_last_frame);
                 } else {
                     useNativeTranscode = true;
                     nativeTranscodeInput = localVid;
@@ -410,7 +411,8 @@ bool RenderEngine::renderLegacyTimeline(
                 }
 #else
                 args_only = media::buildVideoSegmentArgs(
-                    localVid, segmentOut, item.duration_seconds, params, item.include_audio);
+                    localVid, segmentOut, item.duration_seconds, params, item.include_audio,
+                    item.hold_last_frame);
 #endif
             } else if (std::holds_alternative<plan::ColorSource>(item.source)) {
                 seg.source_type = "color";

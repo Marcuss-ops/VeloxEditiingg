@@ -106,7 +106,8 @@ std::string buildVideoSegmentArgs(
     const std::filesystem::path& segmentPath,
     double duration,
     const SceneSegmentParams& params,
-    bool includeAudio = false);
+    bool includeAudio = false,
+    bool holdLastFrame = false);
 
 std::string buildColorSegmentArgs(
     const std::filesystem::path& segmentPath,
