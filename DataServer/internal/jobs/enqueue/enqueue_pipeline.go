@@ -208,11 +208,26 @@ func FlattenPipelineResult(result map[string]interface{}) map[string]interface{}
 	return flat
 }
 
-// ShouldForwardPipelineResult checks whether a pipeline result is complete
-// enough to be forwarded to a worker for video rendering.
-func ShouldForwardPipelineResult(result map[string]interface{}) bool {
+// PipelineResultReadiness is a payload-safe summary of the resolver's
+// forwardability check. It deliberately contains no URLs, scene text, or
+// asset identifiers so it can be written to operational logs.
+type PipelineResultReadiness struct {
+	Complete           bool
+	Reason             string
+	HasSceneManifest   bool
+	SceneCount         int
+	HasVoiceover       bool
+	HasRenderableMedia bool
+	StockAssetCount    int
+	HasCompiledPlan    bool
+}
+
+// InspectPipelineResultReadiness explains whether a pipeline result is
+// complete enough to be forwarded to a worker without exposing payload data.
+func InspectPipelineResultReadiness(result map[string]interface{}) PipelineResultReadiness {
+	readiness := PipelineResultReadiness{Reason: "payload_missing"}
 	if result == nil {
-		return false
+		return readiness
 	}
 	flat := FlattenPipelineResult(result)
 	status := strings.ToLower(strings.TrimSpace(payload.FirstString(flat, "status")))
@@ -222,7 +237,8 @@ func ShouldForwardPipelineResult(result map[string]interface{}) bool {
 	// gate strict prevents an already-terminal job status from being mistaken
 	// for a producer-side completed input handoff.
 	if status != "" && status != string(contract.InputAssemblyCompleted) {
-		return false
+		readiness.Reason = "input_assembly_not_completed"
+		return readiness
 	}
 	// A producer-owned CompiledRenderPlanV2 is already the complete renderer
 	// input. It intentionally has no legacy scenes_json or positional audio
@@ -230,46 +246,110 @@ func ShouldForwardPipelineResult(result map[string]interface{}) bool {
 	// by identity. Keep the envelope check here deliberately narrow; the
 	// strict V2 decoder and SHA verifier remain the authoritative semantic
 	// validation later in the normalization path.
-	if strings.TrimSpace(payload.FirstString(flat, contract.PayloadKeyCompiledRenderPlanJSON)) != "" &&
-		strings.TrimSpace(payload.FirstString(flat, contract.PayloadKeyCompiledRenderPlanSHA)) != "" {
-		return true
+	planJSON := strings.TrimSpace(payload.FirstString(flat, contract.PayloadKeyCompiledRenderPlanJSON))
+	planSHA := strings.TrimSpace(payload.FirstString(flat, contract.PayloadKeyCompiledRenderPlanSHA))
+	readiness.HasCompiledPlan = planJSON != "" && planSHA != ""
+	if readiness.HasCompiledPlan {
+		readiness.Complete = true
+		readiness.Reason = "ready"
+		return readiness
 	}
-	if payload.FirstString(flat, "scenes_json", "json_path") == "" && payload.FirstString(flat, "scenes") == "" {
-		return false
+	scenes := canonicalPipelineScenes(flat)
+	readiness.SceneCount = len(scenes)
+	readiness.HasSceneManifest = strings.TrimSpace(payload.FirstString(flat, "scenes_json", "json_path")) != "" || len(normalizeSceneArray(flat["scenes"])) > 0
+	if !readiness.HasSceneManifest {
+		if planJSON != "" || planSHA != "" {
+			readiness.Reason = "compiled_plan_incomplete_and_scene_manifest_missing"
+		} else {
+			readiness.Reason = "scene_manifest_missing"
+		}
+		return readiness
 	}
 	// Forwardable when ANY audio source is present: voiceover or renderable
 	// media (items/clips/images with URLs). Without at least one, the
 	// worker has nothing to mux into the output AAC stream.
-	if len(extractVoiceoverPaths(flat)) == 0 && !hasRenderableMedia(flat) {
-		return false
+	readiness.HasVoiceover = len(extractVoiceoverPaths(flat)) > 0
+	readiness.HasRenderableMedia, readiness.StockAssetCount = inspectRenderableMedia(flat, scenes)
+	if !readiness.HasVoiceover && !readiness.HasRenderableMedia {
+		readiness.Reason = "no_voiceover_or_renderable_media"
+		return readiness
 	}
-	return true
+	readiness.Complete = true
+	readiness.Reason = "ready"
+	return readiness
+}
+
+// ShouldForwardPipelineResult checks whether a pipeline result is complete
+// enough to be forwarded to a worker for video rendering.
+func ShouldForwardPipelineResult(result map[string]interface{}) bool {
+	return InspectPipelineResultReadiness(result).Complete
 }
 
 func hasRenderableMedia(flat map[string]interface{}) bool {
+	media, _ := inspectRenderableMedia(flat, canonicalPipelineScenes(flat))
+	return media
+}
+
+func inspectRenderableMedia(flat map[string]interface{}, scenes []map[string]interface{}) (bool, int) {
+	stockCount := 0
 	for _, key := range []string{"items", "clips", "images", "intro_clip_paths", "stock_clip_paths", "scene_image_paths"} {
 		if values, ok := flat[key].([]interface{}); ok && len(values) > 0 {
-			return true
+			return true, stockCount
 		}
 		if values, ok := flat[key].([]string); ok && len(values) > 0 {
-			return true
+			return true, stockCount
 		}
 	}
-	if encoded := payload.FirstString(flat, "scenes_json"); encoded != "" {
-		if scenes, err := contract.ParseSceneMapsJSON([]byte(encoded)); err == nil {
-			for _, scene := range scenes {
-				if payload.FirstString(scene, "clip_link", "image_link") != "" {
-					return true
-				}
-				for _, key := range []string{"clip", "image", "stock", "voiceover"} {
-					if asset, ok := scene[key].(map[string]interface{}); ok && payload.FirstString(asset, "url", "asset_id") != "" {
-						return true
-					}
-				}
+	for _, scene := range scenes {
+		if payload.FirstString(scene, "clip_link", "image_link") != "" {
+			return true, stockCount
+		}
+		for _, key := range []string{"clip", "image", "voiceover"} {
+			if asset, ok := scene[key].(map[string]interface{}); ok && hasAssetReference(asset) {
+				return true, stockCount
 			}
 		}
+		for _, key := range []string{"stock", "stock_assets", "stock_links"} {
+			count := countStockReferences(scene[key])
+			stockCount += count
+		}
 	}
-	return false
+	return stockCount > 0, stockCount
+}
+
+func countStockReferences(value interface{}) int {
+	if asset, ok := value.(map[string]interface{}); ok {
+		if hasAssetReference(asset) {
+			return 1
+		}
+		return 0
+	}
+	count := 0
+	switch values := value.(type) {
+	case []interface{}:
+		for _, item := range values {
+			count += countStockReferences(item)
+		}
+	case []map[string]interface{}:
+		for _, item := range values {
+			count += countStockReferences(item)
+		}
+	case []string:
+		for _, item := range values {
+			if strings.TrimSpace(item) != "" {
+				count++
+			}
+		}
+	case string:
+		if strings.TrimSpace(values) != "" {
+			count = 1
+		}
+	}
+	return count
+}
+
+func hasAssetReference(asset map[string]interface{}) bool {
+	return payload.FirstString(asset, "url", "asset_id", "drive_file_id", "source_uri", "source_url") != ""
 }
 
 func extractScenesJSONFromFile(path string) (string, error) {

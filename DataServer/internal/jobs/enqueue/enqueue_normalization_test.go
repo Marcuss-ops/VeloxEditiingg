@@ -388,6 +388,31 @@ func TestShouldForwardPipelineResult(t *testing.T) {
 	if !ShouldForwardPipelineResult(map[string]interface{}{"status": "completed", "result": map[string]interface{}{"scenes_json": sceneJSON}}) {
 		t.Error("want true for renderable scenes without voiceover")
 	}
+	stockOnly := map[string]interface{}{
+		"status": "completed",
+		"result": map[string]interface{}{
+			"scenes_json": `[{"text":"Scene","duration_seconds":5,"stock":[{"asset_id":"drive-1","sha256":"abc","size_bytes":100},{"drive_file_id":"drive-2","source_uri":"https://drive.google.com/file/d/drive-2","size_bytes":200}]}]`,
+		},
+	}
+	if !ShouldForwardPipelineResult(stockOnly) {
+		t.Fatal("want true for stock-only scenes with an array of Drive references")
+	}
+	readiness := InspectPipelineResultReadiness(stockOnly)
+	if !readiness.Complete || !readiness.HasSceneManifest || readiness.SceneCount != 1 || !readiness.HasRenderableMedia || readiness.StockAssetCount != 2 || readiness.Reason != "ready" {
+		t.Fatalf("unexpected stock-only readiness summary: %+v", readiness)
+	}
+	typedStock := map[string]interface{}{
+		"scenes": []map[string]interface{}{{"text": "Scene", "stock": []map[string]interface{}{{"asset_id": "drive-1"}}}},
+	}
+	if !ShouldForwardPipelineResult(typedStock) {
+		t.Fatal("want true for typed scene and stock arrays")
+	}
+	noStockRef := map[string]interface{}{
+		"scenes_json": `[{"text":"Scene","stock":[{"duration_seconds":5}]}]`,
+	}
+	if got := InspectPipelineResultReadiness(noStockRef); got.Complete || got.Reason != "no_voiceover_or_renderable_media" || got.StockAssetCount != 0 {
+		t.Fatalf("unreferenced stock must remain incomplete, got %+v", got)
+	}
 	// A complete producer-owned V2 plan is independently forwardable: its
 	// video segments and FINAL_AUDIO_COPY asset replace the legacy scenes and
 	// positional voiceover fields.

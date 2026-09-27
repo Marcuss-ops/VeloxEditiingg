@@ -55,6 +55,7 @@ package creatorflow
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 
 	"velox-server/internal/config"
@@ -257,7 +258,16 @@ func (r *Resolver) Resolve(ctx context.Context, req ResolveRequest) (*ResolveOut
 	if req.SourceProvider == "" || req.SourceJobID == "" {
 		return nil, domain.NewInvalidPayload("source_provider/source_job_id", "required", "source_provider and source_job_id are required")
 	}
-	if !enqueue.ShouldForwardPipelineResult(req.Payload) {
+	readiness := enqueue.InspectPipelineResultReadiness(req.Payload)
+	if !readiness.Complete {
+		targetExecutor := strings.TrimSpace(req.TargetExecutorID)
+		if targetExecutor == "" {
+			targetExecutor = "scene.composite.v1"
+		}
+		log.Printf("[CREATORFLOW_PAYLOAD_INCOMPLETE] source_provider=%q source_job_id=%q target_executor=%q reason=%s has_scene_manifest=%t scene_count=%d has_voiceover=%t has_renderable_media=%t stock_asset_count=%d has_compiled_plan=%t",
+			strings.TrimSpace(req.SourceProvider), strings.TrimSpace(req.SourceJobID), targetExecutor,
+			readiness.Reason, readiness.HasSceneManifest, readiness.SceneCount,
+			readiness.HasVoiceover, readiness.HasRenderableMedia, readiness.StockAssetCount, readiness.HasCompiledPlan)
 		return nil, ErrResolverNotComplete
 	}
 	if len(req.DeliveryPlan) == 0 {
