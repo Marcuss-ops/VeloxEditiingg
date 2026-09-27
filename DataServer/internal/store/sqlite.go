@@ -32,12 +32,12 @@ import (
 )
 
 type SQLiteStore struct {
-	db                 *sql.DB
-	path               string
-	outbox             OutboxEmitter // optional; nil disables ARTIFACT_READY/JOB_SUCCEEDED emission
-	retentionDays      retentionDays // configurable retention windows (see SetRetention)
-	resourceRetention  resourceRetention
-	dbTelemetry        DBTelemetry
+	db                *sql.DB
+	path              string
+	outbox            OutboxEmitter // optional; nil disables ARTIFACT_READY/JOB_SUCCEEDED emission
+	retentionDays     retentionDays // configurable retention windows (see SetRetention)
+	resourceRetention resourceRetention
+	dbTelemetry       DBTelemetry
 	// partitionKnobs is the (Stale, Partition) threshold pair used by
 	// detectAndPersistPartitionTransition + ReconcileWorkerPartitions.
 	// Renamed from `partitionThresholds` to avoid a name collision with

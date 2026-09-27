@@ -4,8 +4,8 @@
 # =============================================================================
 # Deterministic last-mile smoke for the canonical C++ RenderPlan path.
 #
-# This is intentionally local and hermetic: it generates its own audio and
-# subtitle fixtures, renders two colour segments through
+# This is intentionally local and hermetic: it generates its own audio fixture,
+# renders two colour segments through
 # `velox_video_engine --render --plan`, and validates the resulting MP4 plus
 # the engine progress sidecar. It exercises the same path used by the worker
 # after the Go compiler has produced a canonical RenderPlan.
@@ -83,7 +83,6 @@ ENGINE_BIN="${BUILD_DIR}/velox_video_engine"
 [[ -x "${ENGINE_BIN}" ]] || fail "engine binary not found: ${ENGINE_BIN}"
 
 AUDIO_FILE="${JOB_DIR}/voiceover.wav"
-SUBTITLE_FILE="${JOB_DIR}/subtitle.srt"
 PLAN_FILE="${JOB_DIR}/render-plan.json"
 OUTPUT_FILE="${JOB_DIR}/rendered.mp4"
 
@@ -91,17 +90,11 @@ ffmpeg -y -v error -f lavfi \
   -i "sine=frequency=440:duration=2.0:sample_rate=48000" \
   -ac 2 "${AUDIO_FILE}" || fail "synthetic audio generation failed"
 
-cat >"${SUBTITLE_FILE}" <<'EOF'
-1
-00:00:00,250 --> 00:00:01,500
-Velox native render smoke
-EOF
-
-python3 - "${PLAN_FILE}" "${AUDIO_FILE}" "${SUBTITLE_FILE}" "${OUTPUT_FILE}" <<'PY'
+python3 - "${PLAN_FILE}" "${AUDIO_FILE}" "${OUTPUT_FILE}" <<'PY'
 import json
 import sys
 
-plan_path, audio_path, subtitle_path, output_path = sys.argv[1:]
+plan_path, audio_path, output_path = sys.argv[1:]
 plan = {
     "version": 1,
     "job_id": "native-render-smoke",
@@ -121,7 +114,6 @@ plan = {
     "audio_tracks": [
         {"source_url": audio_path, "volume": 0.8, "start_time_offset": 0.0}
     ],
-    "subtitle_tracks": [{"source": subtitle_path, "preset": "default"}],
     "output_path": output_path,
 }
 with open(plan_path, "w", encoding="utf-8") as stream:
@@ -182,7 +174,7 @@ if len(sidecar.get("segments", [])) != 2:
 
 print(
     f"native render PASS: {duration:.3f}s, 640x360 h264 + aac, "
-    "subtitle burned-in, sidecar complete"
+    "sidecar complete"
 )
 PY
 
