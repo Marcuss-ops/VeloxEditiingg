@@ -1222,6 +1222,10 @@ components:
                 produced it, and (c) chain the next operation via status_url.
                 Reuses the canonical `creator_forwardings.target_job_id`
                 lookup backed by the migration-102 B-tree index.
+                On a FAILED job the response additionally carries the failure
+                identity (attempt_status / failure_code / failure_message)
+                so M2M producers can diagnose without operator shell access.
+                These failure fields are additive and appear only on FAILED.
             properties:
                 created:
                     description: |
@@ -1269,6 +1273,26 @@ components:
                         copy-paste the URL into their next request without
                         re-deriving from the path the response came in on.
                     example: /api/v1/jobs/job_a1b2c3d4
+                    type: string
+                attempt_status:
+                    description: |
+                        Terminal status of the latest task attempt (FAILED). Present
+                        only when `status == FAILED` and an attempt row exists.
+                    example: FAILED
+                    type: string
+                failure_code:
+                    description: |
+                        Worker-reported error code of the failed attempt (or
+                        `JOB_FAILED` when only the job-level error_message is
+                        available). Present only when `status == FAILED`.
+                    example: RENDER_FAILED
+                    type: string
+                failure_message:
+                    description: |
+                        Human-readable failure reason reported by the worker (or the
+                        job-level error_message fallback). Present only when
+                        `status == FAILED`.
+                    example: velox_video_engine exited with code 1: plan segment 5 decode error
                     type: string
             required:
                 - ok

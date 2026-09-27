@@ -323,7 +323,8 @@ func (s *SQLiteStore) GetLatestTaskAttemptForJobForClient(ctx context.Context, j
 		return nil, storecore.ErrCreatorForwardingNoRow
 	}
 	row := s.db.QueryRowContext(ctx,
-		`SELECT ta.task_id, ta.id, ta.job_id, ta.worker_id, ta.lease_id, ta.attempt_number
+		`SELECT ta.task_id, ta.id, ta.job_id, ta.worker_id, ta.lease_id, ta.attempt_number,
+		        ta.status, ta.error_code, ta.error_message
 		 FROM task_attempts ta
 		 WHERE ta.job_id = ?
 		   AND EXISTS (SELECT 1 FROM creator_forwardings cf
@@ -331,7 +332,8 @@ func (s *SQLiteStore) GetLatestTaskAttemptForJobForClient(ctx context.Context, j
 		                 AND cf.external_client_id = ?)
 		 ORDER BY ta.created_at DESC LIMIT 1`, jobID, strings.TrimSpace(clientID))
 	var snap TaskAttemptSnapshot
-	if err := row.Scan(&snap.TaskID, &snap.AttemptID, &snap.JobID, &snap.WorkerID, &snap.LeaseID, &snap.AttemptNumber); err != nil {
+	if err := row.Scan(&snap.TaskID, &snap.AttemptID, &snap.JobID, &snap.WorkerID, &snap.LeaseID, &snap.AttemptNumber,
+		&snap.Status, &snap.ErrorCode, &snap.ErrorMessage); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}

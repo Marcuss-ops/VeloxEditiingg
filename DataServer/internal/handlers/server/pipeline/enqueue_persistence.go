@@ -87,6 +87,7 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 		// deliberately no unscoped fallback path.
 		status := string(forwarding.Status)
 		var startedAt, completedAt string
+		var jobErrorMessage string
 		if h.store != nil {
 			job, gErr := h.store.GetJobForClient(ctx, jobID, clientID)
 			if gErr == nil && job != nil {
@@ -98,6 +99,9 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 				}
 				if s, ok := job["completed_at"].(string); ok {
 					completedAt = s
+				}
+				if s, ok := job["error_message"].(string); ok {
+					jobErrorMessage = s
 				}
 			}
 		}
@@ -124,9 +128,15 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 		}
 
 		// Enrich with task-attempt identity (worker_id, task_id,
-		// attempt_id, lease_id). Best-effort — the attempt row may
-		// not exist yet when the job is PENDING.
+		// attempt_id, lease_id) and, when terminal, the failure identity
+		// (attempt status + worker-reported error_code/error_message).
+		// Best-effort — the attempt row may not exist yet when the job is
+		// PENDING. Surfacing the failure reason here lets M2M producers
+		// diagnose a FAILED job without operator shell access to the
+		// master (the error is already persisted on task_attempts by
+		// CompleteFinal; this only exposes the same fact to the owner).
 		var workerID, taskID, attemptID, leaseID string
+		var attemptStatus, attemptErrorCode, attemptErrorMessage string
 		if h.store != nil {
 			snap, sErr := h.store.GetLatestTaskAttemptForJobForClient(ctx, jobID, clientID)
 			if sErr == nil && snap != nil {
@@ -134,6 +144,9 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 				taskID = snap.TaskID
 				attemptID = snap.AttemptID
 				leaseID = snap.LeaseID
+				attemptStatus = snap.Status
+				attemptErrorCode = snap.ErrorCode
+				attemptErrorMessage = snap.ErrorMessage
 			}
 		}
 
@@ -170,6 +183,24 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 		}
 		if leaseID != "" {
 			resp["lease_id"] = leaseID
+		}
+		// Failure surfacing (new, additive): only when the job is FAILED and
+		// the latest attempt carries a worker-reported error. Additive-only
+		// keeps the existing 4-field contract and every current consumer
+		// (run-flow.sh polling, verify smoke tests) byte-compatible on
+		// success paths.
+		if status == "FAILED" && attemptStatus != "" {
+			resp["attempt_status"] = attemptStatus
+			resp["failure_code"] = attemptErrorCode
+			resp["failure_message"] = attemptErrorMessage
+		} else if status == "FAILED" {
+			// No attempt row (or error not yet persisted): still tell the
+			// client the failure came from the job lifecycle, falling back to
+			// the jobs.error_message written by Fail.
+			if jobErrorMessage != "" {
+				resp["failure_code"] = "JOB_FAILED"
+				resp["failure_message"] = jobErrorMessage
+			}
 		}
 		if prefetchDispatchStatus != "" {
 			resp["dispatch_status"] = prefetchDispatchStatus

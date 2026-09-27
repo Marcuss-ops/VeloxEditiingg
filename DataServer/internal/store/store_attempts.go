@@ -155,18 +155,26 @@ type TaskAttemptSnapshot struct {
 	WorkerID      string `json:"worker_id"`
 	LeaseID       string `json:"lease_id"`
 	AttemptNumber int    `json:"attempt_number"`
+	// Status/Error fields expose the attempt's terminal state so M2M
+	// polling clients can see WHY an attempt failed without operator
+	// shell access. Empty status = attempt not yet materialized.
+	Status       string `json:"status,omitempty"`
+	ErrorCode    string `json:"error_code,omitempty"`
+	ErrorMessage string `json:"error_message,omitempty"`
 }
 
 // GetLatestTaskAttemptForJob returns the most recent task_attempts row
 // for jobID, or (nil, nil) if no attempt exists yet.
 func (s *SQLiteStore) GetLatestTaskAttemptForJob(ctx context.Context, jobID string) (*TaskAttemptSnapshot, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT task_id, id, job_id, worker_id, lease_id, attempt_number
+		`SELECT task_id, id, job_id, worker_id, lease_id, attempt_number,
+		        status, error_code, error_message
 		 FROM task_attempts WHERE job_id = ?
 		 ORDER BY created_at DESC LIMIT 1`, jobID)
 	var snap TaskAttemptSnapshot
 	err := row.Scan(&snap.TaskID, &snap.AttemptID, &snap.JobID,
-		&snap.WorkerID, &snap.LeaseID, &snap.AttemptNumber)
+		&snap.WorkerID, &snap.LeaseID, &snap.AttemptNumber,
+		&snap.Status, &snap.ErrorCode, &snap.ErrorMessage)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
