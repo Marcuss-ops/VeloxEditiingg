@@ -40,6 +40,14 @@ func ProjectWorkerPayload(rawPayload map[string]interface{}, rendererMode string
 		ensureClipPipelineInputs(workerPayload, rawPayload)
 	case "scene_image", "slideshow":
 		setPipelineID(workerPayload, "images.v1")
+	default:
+		// scene.composite.v1 is an executor, not a renderer pipeline. Final-job
+		// submissions can carry a stock timeline without selecting a renderer;
+		// route those explicitly to the registered clips.v1 compiler.
+		if hasSceneStockTimeline(rawPayload) && routing.FromPayload(workerPayload).PipelineID == "" {
+			setPipelineID(workerPayload, "clips.v1")
+			ensureClipPipelineInputs(workerPayload, rawPayload)
+		}
 	}
 	preserveFields(workerPayload, rawPayload, "layers", "overlays", "runtime_assets", "runtime_assets_pending", "_placement_pin_worker_id")
 	for key := range rawPayload {
@@ -81,25 +89,32 @@ func ensureClipPipelineInputs(dst, raw map[string]interface{}) {
 				if !ok {
 					continue
 				}
-				clip, ok := scene["clip"].(map[string]interface{})
-				if !ok {
-					continue
-				}
-				url, _ := clip["url"].(string)
-				if url == "" {
-					if assetID, assetOK := clip["asset_id"].(string); assetOK && assetID != "" {
-						if ref, err := assetref.NewDeferredDrive(assetID); err == nil {
-							url = ref.Wire()
+				assets := sceneClipAssets(scene)
+				for _, asset := range assets {
+					url := firstSceneAssetString(asset, "url", "source_uri", "source_url", "drive_link", "clip_link")
+					if url == "" {
+						if assetID := firstSceneAssetString(asset, "asset_id", "drive_file_id"); assetID != "" {
+							if ref, err := assetref.NewDeferredDrive(assetID); err == nil {
+								url = ref.Wire()
+							}
 						}
 					}
+					if url == "" {
+						continue
+					}
+					duration := scene["duration_seconds"]
+					if duration == nil {
+						if durationMS, ok := asset["duration_ms"].(float64); ok && durationMS > 0 {
+							duration = durationMS / 1000
+						} else if durationMS, ok := asset["duration_ms"].(int64); ok && durationMS > 0 {
+							duration = float64(durationMS) / 1000
+						}
+					}
+					if duration == nil {
+						duration = float64(1)
+					}
+					clips = append(clips, map[string]interface{}{"url": url, "duration": duration})
 				}
-				if url == "" {
-					continue
-				}
-				clips = append(clips, map[string]interface{}{
-					"url":      url,
-					"duration": scene["duration_seconds"],
-				})
 			}
 			if len(clips) > 0 {
 				dst["clips"] = clips
@@ -111,6 +126,66 @@ func ensureClipPipelineInputs(dst, raw map[string]interface{}) {
 			dst["audio_url"] = audio
 		}
 	}
+}
+
+func hasSceneStockTimeline(raw map[string]interface{}) bool {
+	if raw == nil {
+		return false
+	}
+	scenes, ok := sceneList(raw["scenes"])
+	if !ok {
+		if encoded, encodedOK := raw["scenes_json"].(string); encodedOK {
+			parsed, err := contract.ParseSceneMapsJSON([]byte(encoded))
+			if err == nil {
+				scenes = make([]interface{}, 0, len(parsed))
+				for _, scene := range parsed {
+					scenes = append(scenes, scene)
+				}
+				ok = true
+			}
+		}
+	}
+	if !ok {
+		return false
+	}
+	for _, value := range scenes {
+		if scene, ok := value.(map[string]interface{}); ok && len(sceneClipAssets(scene)) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func sceneClipAssets(scene map[string]interface{}) []map[string]interface{} {
+	if scene == nil {
+		return nil
+	}
+	if clip, ok := scene["clip"].(map[string]interface{}); ok {
+		return []map[string]interface{}{clip}
+	}
+	var assets []map[string]interface{}
+	switch stock := scene["stock"].(type) {
+	case map[string]interface{}:
+		assets = append(assets, stock)
+	case []interface{}:
+		for _, item := range stock {
+			if asset, ok := item.(map[string]interface{}); ok {
+				assets = append(assets, asset)
+			} else if url, ok := item.(string); ok && strings.TrimSpace(url) != "" {
+				assets = append(assets, map[string]interface{}{"url": strings.TrimSpace(url)})
+			}
+		}
+	}
+	return assets
+}
+
+func firstSceneAssetString(asset map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := asset[key].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 // sceneList accepts both JSON-decoded []interface{} and the []map form used

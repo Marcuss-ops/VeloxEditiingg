@@ -2,6 +2,7 @@ package projection
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -107,6 +108,50 @@ func TestProjectWorkerPayload_MapsClipStockToRegisteredClipsPipeline(t *testing.
 	clips, ok := got["clips"].([]interface{})
 	if !ok || len(clips) != 1 {
 		t.Fatalf("clips = %#v, want one normalized clip", got["clips"])
+	}
+}
+
+func TestProjectWorkerPayload_InfersClipsPipelineForFinalJobStockScenes(t *testing.T) {
+	const driveID = "1xNW9IfTtDxaMg_FcANrcxYBSX_dnJxUS"
+	raw := map[string]interface{}{
+		"status":      "completed",
+		"job_id":      "projection-final-job-stock",
+		"job_type":    "scene.composite.v1",
+		"video_name":  "Final job stock timeline",
+		"script_text": "Narration",
+		"copy_only":   true,
+		"scenes": []interface{}{
+			map[string]interface{}{
+				"scene_id":         "scene-1",
+				"kind":             "clip",
+				"duration_seconds": float64(5),
+				"stock": []interface{}{map[string]interface{}{
+					"asset_id": driveID, "drive_file_id": driveID,
+					"url": "velox-drive://" + driveID, "duration_ms": int64(5000),
+					"sha256": strings.Repeat("a", 64), "size_bytes": int64(1024),
+				}},
+			},
+		},
+	}
+
+	got, err := ProjectWorkerPayload(raw, "")
+	if err != nil {
+		t.Fatalf("ProjectWorkerPayload() error: %v", err)
+	}
+	if got["pipeline_id"] != "clips.v1" {
+		t.Fatalf("pipeline_id = %#v, want clips.v1", got["pipeline_id"])
+	}
+	clips, ok := got["clips"].([]interface{})
+	if !ok || len(clips) != 1 {
+		t.Fatalf("clips = %#v, want one validation clip", got["clips"])
+	}
+	clip, ok := clips[0].(map[string]interface{})
+	if !ok || clip["url"] != "velox-drive://"+driveID || clip["duration"] != float64(5) {
+		t.Fatalf("normalized validation clip = %#v", clips[0])
+	}
+	encoded, ok := got["scenes_json"].(string)
+	if !ok || !strings.Contains(encoded, "velox-drive://"+driveID) || !strings.Contains(encoded, strings.Repeat("a", 64)) {
+		t.Fatalf("canonical stock reference/integrity metadata missing from scenes_json: %s", encoded)
 	}
 }
 

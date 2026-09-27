@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"velox-server/internal/creatorflow"
+	"velox-server/internal/handlers/server/pipeline/projection"
 	"velox-server/internal/remoteengine"
 	"velox-server/internal/statusboundary"
 	"velox-shared/contract"
@@ -134,7 +135,7 @@ func normalizeCreatorPushRequest(req creatorPushRequest) (*normalizedCreatorPush
 	if err != nil {
 		return nil, fmt.Errorf("parse creator payload: %w", err)
 	}
-	workerPayload, projectionErr := dto.ToWorkerPayloadChecked()
+	workerPayload, projectionErr := projection.ProjectWorkerPayload(payload, rendererModeForJobType(firstStringResolver(payload, "job_type")))
 	if projectionErr != nil {
 		return nil, fmt.Errorf("project creator payload: %w", projectionErr)
 	}
