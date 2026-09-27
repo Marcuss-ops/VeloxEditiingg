@@ -97,6 +97,11 @@ func validateSceneTimeline(scenes []sceneTimelineScene) error {
 		if err != nil {
 			return fmt.Errorf("scenes[%d].stock: %w", index, err)
 		}
+		for stockIndex, stockAsset := range stock {
+			if sameSceneTimelineAsset(scene.Clip, &stockAsset) {
+				return fmt.Errorf("scenes[%d]: the same asset is present in both clip and stock[%d]", index, stockIndex)
+			}
+		}
 		if scene.Clip == nil && len(stock) == 0 {
 			return fmt.Errorf("scenes[%d]: clip or stock is required", index)
 		}
@@ -113,6 +118,18 @@ func validateSceneTimeline(scenes []sceneTimelineScene) error {
 		}
 	}
 	return nil
+}
+
+func sameSceneTimelineAsset(clip, stock *sceneTimelineAsset) bool {
+	if clip == nil || stock == nil {
+		return false
+	}
+	clipID, stockID := strings.TrimSpace(clip.AssetID), strings.TrimSpace(stock.AssetID)
+	if clipID != "" && stockID != "" && clipID == stockID {
+		return true
+	}
+	clipURL, stockURL := strings.TrimSpace(clip.URL), strings.TrimSpace(stock.URL)
+	return clipURL != "" && stockURL != "" && clipURL == stockURL
 }
 
 func compileSceneTimeline(ctx context.Context, jobID string, scenes []sceneTimelineScene, outputPath string, probe audio.Probe) (*plan.RenderPlan, error) {

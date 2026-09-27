@@ -57,6 +57,9 @@ func normalizeSceneVideoPayloadContext(ctx context.Context, payloadMap map[strin
 // later normalization branch from accidentally accepting an unsupported
 // visual-replacement combination.
 func validateSceneVideoInputs(payloadMap map[string]interface{}) (bool, bool, map[string]interface{}, error) {
+	if err := rejectDuplicateClipStockAssets(payloadMap); err != nil {
+		return false, false, nil, err
+	}
 	compiledV2Present := compiledRenderPlanV2Present(payloadMap)
 	if compiledV2Present {
 		// PipelineGen owns V2 compilation. At this boundary the master only
@@ -87,6 +90,74 @@ func validateSceneVideoInputs(payloadMap map[string]interface{}) (bool, bool, ma
 		return false, false, nil, deliveryplan.NewValidationError("overlays", "requires a render_manifest with a verified final_audio asset")
 	}
 	return compiledV2Present, strictManifest, strictManifestMap, nil
+}
+
+func rejectDuplicateClipStockAssets(payload map[string]interface{}) error {
+	if payload == nil {
+		return nil
+	}
+	var scenes []interface{}
+	if raw, ok := payload["scenes"].([]interface{}); ok {
+		scenes = raw
+	} else if encoded, ok := payload["scenes_json"].(string); ok && strings.TrimSpace(encoded) != "" {
+		if err := json.Unmarshal([]byte(encoded), &scenes); err != nil {
+			return nil // The canonical scene parser reports malformed JSON below.
+		}
+	}
+	for sceneIndex, rawScene := range scenes {
+		scene, ok := rawScene.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		clip := sceneAssetIdentity(scene["clip"])
+		if clip == nil {
+			clip = sceneAssetIdentity(scene["clip_link"])
+		}
+		stockValues, _ := scene["stock"].([]interface{})
+		if stockValues == nil {
+			if stock, ok := scene["stock"].(map[string]interface{}); ok {
+				stockValues = []interface{}{stock}
+			}
+		}
+		for stockIndex, rawStock := range stockValues {
+			if sameSceneAssetIdentity(clip, sceneAssetIdentity(rawStock)) {
+				return fmt.Errorf("scene %d: the same media asset is present in clip and stock[%d]", sceneIndex, stockIndex)
+			}
+		}
+	}
+	return nil
+}
+
+func sceneAssetIdentity(raw interface{}) map[string]string {
+	identity := make(map[string]string)
+	switch value := raw.(type) {
+	case string:
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			identity["url"] = trimmed
+		}
+	case map[string]interface{}:
+		for _, key := range []string{"asset_id", "drive_file_id", "url", "source_uri", "clip_link"} {
+			if value, ok := value[key].(string); ok && strings.TrimSpace(value) != "" {
+				identity[key] = strings.TrimSpace(value)
+			}
+		}
+	}
+	if len(identity) == 0 {
+		return nil
+	}
+	return identity
+}
+
+func sameSceneAssetIdentity(left, right map[string]string) bool {
+	if len(left) == 0 || len(right) == 0 {
+		return false
+	}
+	for key, value := range left {
+		if value != "" && right[key] == value {
+			return true
+		}
+	}
+	return false
 }
 
 // normalizeSceneVideoFields owns the ordered typed-field normalization. The
@@ -292,6 +363,10 @@ func copyTimelinePayloadFields(out, src map[string]interface{}) {
 		"layers",
 		"overlays",
 		"clips",
+		// Runtime audio references are resolved alongside runtime_assets by
+		// the worker. Preserve the declaration through canonical normalization
+		// so the render plan can bind the verified local asset paths.
+		"runtime_audio",
 		// Two-stage intake marker. The preparation gate keeps a pre-job out
 		// of render until FINALIZE clears it on the same TaskSpec.
 		"runtime_assets_pending",

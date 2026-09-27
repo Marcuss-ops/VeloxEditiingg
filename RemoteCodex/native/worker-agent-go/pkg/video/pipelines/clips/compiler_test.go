@@ -87,6 +87,19 @@ func TestCompileCompositeOverlayNeverFallsIntoNativeLayers(t *testing.T) {
 	}
 }
 
+func TestCompileRejectsSameAssetInClipAndStock(t *testing.T) {
+	input := map[string]interface{}{
+		"copy_only": true,
+		"scenes_json": `[{"scene_id":"scene-1","duration_seconds":5,
+			"clip":{"asset_id":"same-asset","url":"velox-drive://same-file","duration_ms":5000},
+			"stock":[{"asset_id":"same-asset","url":"velox-drive://same-file","duration_ms":5000}]}]`,
+	}
+	_, err := Compile(context.Background(), "job-duplicate-source", input, "/tmp/out.mp4", nil)
+	if err == nil || !strings.Contains(err.Error(), "same asset is present in both clip and stock") {
+		t.Fatalf("Compile error = %v, want duplicate clip/stock asset validation", err)
+	}
+}
+
 func TestCompileUsesNormalizedAudioPathWhenAudioURLIsAbsent(t *testing.T) {
 	input := map[string]interface{}{
 		"copy_only":  true,

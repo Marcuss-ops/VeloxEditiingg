@@ -1,6 +1,7 @@
 package enqueue
 
 import (
+	"strings"
 	"testing"
 
 	"velox-shared/contract"
@@ -56,6 +57,11 @@ func TestNormalizeSceneVideoPayloadPreservesRuntimeAssetManifests(t *testing.T) 
 				"size_bytes": 4096,
 			},
 		},
+		"runtime_audio": map[string]interface{}{
+			"voiceover_asset_id":         "final-mix-1",
+			"voiceover_volume":           1.0,
+			"voiceover_duration_seconds": 5.0,
+		},
 	})
 	if err != nil {
 		t.Fatalf("normalizeSceneVideoPayload: %v", err)
@@ -67,5 +73,26 @@ func TestNormalizeSceneVideoPayloadPreservesRuntimeAssetManifests(t *testing.T) 
 	asset, ok := assets[0].(map[string]interface{})
 	if !ok || asset["sha256"] == "" || asset["size_bytes"] != 4096 {
 		t.Fatalf("runtime asset manifest = %#v, want sha256 and size_bytes preserved", assets[0])
+	}
+	audio, ok := normalized["runtime_audio"].(map[string]interface{})
+	if !ok || audio["voiceover_asset_id"] != "final-mix-1" || audio["voiceover_duration_seconds"] != 5.0 {
+		t.Fatalf("runtime_audio = %#v, want final voiceover mix reference preserved", normalized["runtime_audio"])
+	}
+}
+
+func TestNormalizeSceneVideoPayloadRejectsDuplicateClipStockAsset(t *testing.T) {
+	_, err := normalizeSceneVideoPayload(map[string]interface{}{
+		"video_name":  "Duplicate source",
+		"script_text": "Duplicate source must fail before dispatch.",
+		"copy_only":   true,
+		"scenes": []interface{}{map[string]interface{}{
+			"scene_id":         "scene-1",
+			"duration_seconds": 5.0,
+			"clip":             map[string]interface{}{"asset_id": "same-media", "url": "velox-drive://same-media"},
+			"stock":            []interface{}{map[string]interface{}{"asset_id": "same-media", "url": "velox-drive://same-media"}},
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "same media asset is present in clip and stock") {
+		t.Fatalf("normalizeSceneVideoPayload error = %v, want duplicate clip/stock rejection", err)
 	}
 }
