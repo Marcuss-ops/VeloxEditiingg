@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"velox-server/internal/ingest"
@@ -78,6 +79,13 @@ func (h *Handler) handleTaskResult(workerID string, tr *pb.TaskResult, sess *wor
 			canonicalExecutorID = canonicalTask.ExecutorID
 			canonicalExecutorVersion = canonicalTask.ExecutorVersion
 		}
+	}
+	if strings.EqualFold(tr.GetStatus(), "failed") {
+		category, diagnosis, action, audioDuration := renderFailureDiagnosis(tr.GetErrorDetail())
+		logGRPCf(ctxForTaskSession(sess), logging.LevelError, logging.CodeGRPCTaskResultFailed,
+			"[RENDER_FAILURE_DIAGNOSTIC] job_id=%s task_id=%s attempt_id=%s worker_id=%s executor=%s error_code=%s category=%s audio_duration_seconds=%s diagnosis=%q action=%q",
+			jobID, taskID, attemptID, workerID, canonicalExecutorID, tr.GetErrorCode(),
+			category, audioDuration, diagnosis, action)
 	}
 
 	declared := declaredArtifactsFromProto(tr.GetOutputArtifacts())
