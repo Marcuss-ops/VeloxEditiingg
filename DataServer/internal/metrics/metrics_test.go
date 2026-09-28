@@ -241,7 +241,8 @@ func TestVideoCounters_ExecutorIDLabelOnly(t *testing.T) {
 //  1. exactly one child per (outcome) under velox_compute_seconds_total
 //     — no cross-population; useful/failed/cancelled/stale are distinct
 //     series under the SAME family;
-//  2. each child carries the cumulative CPUTimeMS value we passed;
+//  2. each child carries the cumulative CPU SECONDS derived from the
+//     CPUTimeMS input we passed (the family unit is seconds, never ms);
 //  3. the sibling family velox_compute_failure_reasons_total has
 //     exactly one child per FAILED attempt (keyed by errCode) and
 //     zero children for the other 3 outcomes.
@@ -263,10 +264,12 @@ func TestComputeSeconds_MultipleOutcomesDistinct(t *testing.T) {
 		outcome string
 		want    uint64
 	}{
-		{"useful", 120_000},
-		{"failed", 30_000 + 12_000},
-		{"cancelled", 5_000},
-		{"stale", 60_000},
+		// 120_000ms → 120s, 30_000+12_000ms → 42s, 5_000ms → 5s, 60_000ms → 60s.
+		// Reading these values as milliseconds would be a 1000× unit bug.
+		{"useful", 120},
+		{"failed", 30 + 12},
+		{"cancelled", 5},
+		{"stale", 60},
 	}
 	for _, tc := range cases {
 		got := loadOutcomeSeconds(t, reg, tc.outcome)
@@ -316,8 +319,33 @@ func TestComputeSeconds_FailedReasonEmptyMappedToUnknown(t *testing.T) {
 	if got := loadFailureReasonCount(t, reg, "unknown"); got != 1 {
 		t.Errorf("compute_failure_reasons{reason=unknown} = %d, want 1", got)
 	}
-	if got := loadOutcomeSeconds(t, reg, "failed"); got != 50_000 {
-		t.Errorf("compute_seconds{outcome=failed} = %d, want 50000", got)
+	if got := loadOutcomeSeconds(t, reg, "failed"); got != 50 {
+		t.Errorf("compute_seconds{outcome=failed} = %d, want 50 (50_000ms / 1000)", got)
+	}
+}
+
+// TestComputeSeconds_SubSecondRemainderCarriesForward locks the ms→s
+// conversion contract: the family counts SECONDS, so sub-second CPU
+// time must accumulate across records instead of being truncated to
+// zero on every attempt (three 400ms attempts = 1.2s → exactly 1s
+// emitted, remainder held back for the next record).
+func TestComputeSeconds_SubSecondRemainderCarriesForward(t *testing.T) {
+	reg := NewRegistry()
+	c := NewCollector(reg)
+
+	c.RecordAttemptOutcome(taskattempts.AttemptStatusSucceeded, "", 400)
+	c.RecordAttemptOutcome(taskattempts.AttemptStatusSucceeded, "", 400)
+	if got := loadOutcomeSecondsOrZero(t, reg, "useful"); got != 0 {
+		t.Fatalf("800ms of CPU must not yet pay out a whole second; got %d", got)
+	}
+	c.RecordAttemptOutcome(taskattempts.AttemptStatusSucceeded, "", 400)
+	if got := loadOutcomeSecondsOrZero(t, reg, "useful"); got != 1 {
+		t.Fatalf("1200ms of CPU must pay out 1 second; got %d", got)
+	}
+	// The 200ms remainder is still carried: 800ms more → 1.0s total again.
+	c.RecordAttemptOutcome(taskattempts.AttemptStatusSucceeded, "", 800)
+	if got := loadOutcomeSecondsOrZero(t, reg, "useful"); got != 2 {
+		t.Fatalf("2000ms of CPU must pay out exactly 2 seconds; got %d", got)
 	}
 }
 
@@ -364,14 +392,14 @@ func TestComputeSeconds_ZeroCPU_NoEmitOnUseful(t *testing.T) {
 func TestComputeSeconds_TextExposition_OneFamily(t *testing.T) {
 	reg := NewRegistry()
 	c := NewCollector(reg)
-	c.RecordAttemptOutcome(taskattempts.AttemptStatusSucceeded, "", 1000)
-	c.RecordAttemptOutcome(taskattempts.AttemptStatusFailed, "OOM", 2000)
+	c.RecordAttemptOutcome(taskattempts.AttemptStatusSucceeded, "", 1000) // 1s
+	c.RecordAttemptOutcome(taskattempts.AttemptStatusFailed, "OOM", 2000) // 2s
 
 	out := dumpFamily(t, reg, "velox_compute_seconds_total")
 	for _, want := range []string{
 		"# TYPE velox_compute_seconds_total counter",
-		`velox_compute_seconds_total{outcome="useful"} 1000`,
-		`velox_compute_seconds_total{outcome="failed"} 2000`,
+		`velox_compute_seconds_total{outcome="useful"} 1`,
+		`velox_compute_seconds_total{outcome="failed"} 2`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)

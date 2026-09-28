@@ -49,8 +49,10 @@ var dailyRollupMetrics = []struct {
 	{"output.bytes", "output_bytes"},
 	// FFmpeg.
 	{"ffmpeg.speed_ratio", "ffmpeg_speed_ratio"},
-	// Queue.
-	{"queue.ms", "queue_ms"},
+	// Queue (catalog key renamed to the unit-suffix convention; the
+	// persisted rollup metric_name stays "queue_ms" so historical
+	// daily_metric_rollups rows remain comparable).
+	{"queue.wait_ms", "queue_ms"},
 }
 
 // ComputeDailyRollups aggregates attempt metrics into daily_metric_rollups

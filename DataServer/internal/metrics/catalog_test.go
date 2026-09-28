@@ -116,7 +116,15 @@ func TestCatalog_RequiredMetricsExist(t *testing.T) {
 		// TaskRunner.
 		"taskrunner.execute_ms",
 		// Queue.
-		"queue.ms",
+		"queue.wait_ms",
+		"lease.wait_ms",
+		"queue.time_to_first_worker_ms",
+		// Job queue depth/age + end-to-end job latency.
+		"jobs.pending",
+		"jobs.running",
+		"jobs.oldest_pending_age_seconds",
+		"job.succeeded_total",
+		"job.e2e_duration_seconds",
 	}
 
 	for _, name := range required {
@@ -199,6 +207,8 @@ func TestCatalog_NoUnknownComponents(t *testing.T) {
 		CompConflict:   true,
 		CompReconcile:  true,
 		CompScorecard:  true,
+		CompJob:        true,
+		CompJobs:       true,
 	}
 
 	for name, def := range metricCatalog {

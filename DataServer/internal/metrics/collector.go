@@ -135,6 +135,24 @@ type Collector struct {
 	masterOutboxPending *Family
 	heartbeatAge        *Family // per worker; emitted on each refresh
 
+	// Master job queue + end-to-end job latency (collector_jobs.go).
+	// Queue gauges are stamped every supervisor tick from the jobs
+	// table; the completion counters/histogram are stamped once per
+	// newly-terminal job (dedup by job id in the supervisor).
+	jobsPending          *Family // velox_jobs_pending
+	jobsRunning          *Family // velox_jobs_running
+	jobsOldestPendingAge *Family // velox_jobs_oldest_pending_age_seconds
+	jobSucceededTotal    *Family // velox_job_succeeded_total
+	jobFailedTotal       *Family // velox_job_failed_total
+	jobE2EDuration       *Family // velox_job_e2e_duration_seconds{phase}
+
+	// Dispatch-side wait histograms (collector_scheduling.go): the
+	// queue/lease/first-worker columns from migration 074 finally get
+	// a Prometheus projection instead of living in DB/rollup only.
+	queueWaitMS         *Family // velox_queue_wait_ms
+	leaseWaitMS         *Family // velox_lease_wait_ms
+	timeToFirstWorkerMS *Family // velox_queue_time_to_first_worker_ms
+
 	// HTTP control-plane route usage (Phase 6 API-surface unification).
 	// Counter with {surface, route} labels; surface is one of
 	// agent|admin|fleet|legacy|other, route is the gin route TEMPLATE
@@ -162,6 +180,14 @@ type Collector struct {
 	// does NOT emit it directly.)
 	computeSeconds        *Family // velox_compute_seconds_total{outcome=...}
 	computeFailureReasons *Family // velox_compute_failure_reasons_total{reason=...}
+
+	// computeMillis carries the sub-second remainder of the ms→s
+	// conversion performed by RecordAttemptOutcome (see the unit note
+	// there). Keyed by outcome, guarded by computeMillisMu because the
+	// ingest path and the supervisor tick can record the same family
+	// concurrently. A process restart drops at most 999ms per outcome.
+	computeMillisMu sync.Mutex
+	computeMillis   map[string]int64
 
 	// Cost-per-output-minute gauges (spec §14 follow-up). Each gauge
 	// is single-label `worker_class` (UNSAFE `project_id` was rejected;
@@ -265,6 +291,8 @@ func NewCollector(reg *Registry) *Collector {
 	c.initPrefetchFamilies()
 	c.initWorkerFamilies()
 	c.initMasterFamilies()
+	c.initJobFamilies()
+	c.initSchedulingFamilies()
 	c.initComputeFamilies()
 	c.initDerivedFamilies()
 	c.initCostFamilies()
@@ -331,6 +359,8 @@ func (c *Collector) allFamilies() []*Family {
 	families = append(families, c.prefetchFamilies()...)
 	families = append(families, c.workerFamilies()...)
 	families = append(families, c.masterFamilies()...)
+	families = append(families, c.jobFamilies()...)
+	families = append(families, c.schedulingFamilies()...)
 	families = append(families, c.computeFamilies()...)
 	families = append(families, c.derivedFamilies()...)
 	families = append(families, c.costFamilies()...)

@@ -84,11 +84,19 @@ func (s *Supervisor) tryDailyRollup(ctx context.Context, now time.Time) error {
 // updated_at lands on the boundary. A size cap is the pragmatic
 // compromise — see supervisor.go header for the worst-case
 // double-count window analysis.
+//
+// seenJobs shares the cap and the sweep: terminal jobs are recorded
+// at most once per process anyway (their watermark moves past them),
+// so clearing the map can only widen the double-count window, never
+// break the counters' monotonicity.
 func (s *Supervisor) gcSeenIDs(now time.Time) {
 	s.seenMu.Lock()
 	defer s.seenMu.Unlock()
 	if len(s.seenIDs) > s.seenCap {
 		s.seenIDs = make(map[string]time.Time, len(s.seenIDs)/2)
+	}
+	if len(s.seenJobs) > s.seenCap {
+		s.seenJobs = make(map[string]time.Time, len(s.seenJobs)/2)
 	}
 }
 

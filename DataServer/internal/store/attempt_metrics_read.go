@@ -228,7 +228,7 @@ func (r *SQLiteTaskAttemptRepository) ListMetricsByGitSHA(ctx context.Context, g
 				"native.process_wait_ms":   nativeProcessWaitMs,
 				"output.bytes":             outputBytes,
 				"ffmpeg.speed_ratio":       ffmpegSpeedRatio,
-				"queue.ms":                 queueMs,
+				"queue.wait_ms":            queueMs,
 				"task.wall_clock_ms":       wallClockMs,
 				"task.cpu_time_ms":         cpuTimeMs,
 				"input.bytes":              inputBytes,

@@ -55,6 +55,16 @@ func (s *Supervisor) tickOnce(ctx context.Context, now time.Time) error {
 		// must still run on quiet ticks so an idle master can cross
 		// midnight and persist the previous day's aggregates.
 		rollupErr := s.tryDailyRollup(ctx, now)
+		// The job-queue projection is queue-driven, not attempt-driven:
+		// a quiet tick (no newly-terminal attempt) is exactly when a
+		// growing pending queue must still be stamped.
+		if jobErr := s.refreshJobQueue(ctx, since, now); jobErr != nil {
+			log.Printf("[METRICS-SUPERVISOR] job-queue refresh: %v", jobErr)
+			if rollupErr != nil {
+				return errors.Join(rollupErr, jobErr)
+			}
+			return jobErr
+		}
 		if mhErr := s.refreshMasterHealth(ctx, now); mhErr != nil {
 			log.Printf("[METRICS-SUPERVISOR] master-health refresh: %v", mhErr)
 			if rollupErr != nil {
@@ -222,10 +232,15 @@ func (s *Supervisor) tickOnce(ctx context.Context, now time.Time) error {
 		s.collector.RecordAggregateCost("all", total.cpuSecs, total.networkGB, total.storageGB, total.outputMin, s.costFactors)
 	}
 
-	// 4. Refresh master-side health gauges (best-effort).
+	// 4. Refresh master-side health gauges (best-effort) + the master
+	// job-queue projection (queue depth/age + terminal-job latency).
 	if mhErr := s.refreshMasterHealth(ctx, now); mhErr != nil {
 		log.Printf("[METRICS-SUPERVISOR] master-health refresh: %v", mhErr)
 		return mhErr
+	}
+	if jobErr := s.refreshJobQueue(ctx, since, now); jobErr != nil {
+		log.Printf("[METRICS-SUPERVISOR] job-queue refresh: %v", jobErr)
+		return jobErr
 	}
 
 	// 5. GC the seenIDs map so it doesn't grow unbounded.
@@ -240,6 +255,49 @@ func (s *Supervisor) forgetSeenID(id string) {
 	s.seenMu.Lock()
 	delete(s.seenIDs, id)
 	s.seenMu.Unlock()
+}
+
+// refreshJobQueue stamps the master job-queue gauges from one snapshot
+// and folds every newly-terminal job (since the tick watermark) into
+// the completion counters and the phase-attributed e2e histogram.
+//
+// Optional by construction: a nil JobQueueSource (tests, or a deploy
+// that has not wired the reader) is a silent no-op — the job families
+// then simply do not appear on /metrics instead of being stamped with
+// fabricated zeros. Infrastructure failures here ARE returned: a
+// queue projection that cannot read the jobs table is the same class
+// of blindness as an outbox gauge that cannot read its table.
+func (s *Supervisor) refreshJobQueue(ctx context.Context, since, now time.Time) error {
+	if s.jobSource == nil {
+		return nil
+	}
+	snapshot, err := s.jobSource.QueueSnapshot(ctx, now)
+	if err != nil {
+		return fmt.Errorf("job queue snapshot: %w", err)
+	}
+	s.collector.RecordJobQueue(snapshot)
+
+	records, err := s.jobSource.RecentTerminalJobs(ctx, since, s.limit)
+	if err != nil {
+		return fmt.Errorf("recent terminal jobs: %w", err)
+	}
+	for _, record := range records {
+		if record.ID == "" {
+			continue
+		}
+		s.seenMu.Lock()
+		_, seen := s.seenJobs[record.ID]
+		if !seen {
+			s.seenJobs[record.ID] = now
+		}
+		s.seenMu.Unlock()
+		if seen {
+			continue
+		}
+		s.collector.RecordJobCompletion(record)
+	}
+	s.gcSeenIDs(now)
+	return nil
 }
 
 // refreshMasterHealth refreshes the heartbeat-age + master-health

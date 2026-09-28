@@ -125,6 +125,10 @@ func (c *Collector) RecordAttempt(am taskattempts.AttemptMetrics, cache taskatte
 		c.operational.RecordCacheSnapshot(cache.UniqueAssetsRequested, lookups, cache.CacheHits, cache.CacheMisses)
 		c.operational.RecordCacheDownloads(cache.CacheDownloadCount, cache.CacheDownloadBytes)
 	}
+	// Dispatch-side wait histograms (collector_scheduling.go): the
+	// queue / lease / time-to-first-worker columns exist since
+	// migration 074 and were previously SQL-only.
+	c.recordSchedulingWaits(am)
 	// execVersion is intentionally unused here: the video counter
 	// families are documented (docs/metrics-catalog.md) with the
 	// single executor_id label only, so exec_version is not part of
@@ -220,6 +224,15 @@ func (c *Collector) RecordAttempt(am taskattempts.AttemptMetrics, cache taskatte
 // Counter cumulative values restart from zero on rollout (no
 // migration); old dashboards reading velox_compute_seconds_total_*
 // must migrate to velox_compute_seconds_total{outcome=...}.
+//
+// UNIT: the family is `velox_compute_seconds_total` and the catalog
+// documents its source as `task_attempt_metrics.cpu_time_ms / 1000`,
+// so the caller's CPUTimeMS input (MILLISECONDS) is converted to
+// SECONDS here. The conversion is exact: whole seconds are incremented
+// immediately and the sub-second remainder is carried per outcome in
+// c.computeMillis, so `rate(velox_compute_seconds_total)` reads in real
+// CPU-seconds/second instead of the 1000× inflated value the previous
+// ms-as-s counter produced.
 func (c *Collector) RecordAttemptOutcome(status taskattempts.AttemptStatus, errCode string, cpuTimeMS int64) {
 	var outcome string
 	switch status {
@@ -237,7 +250,11 @@ func (c *Collector) RecordAttemptOutcome(status taskattempts.AttemptStatus, errC
 		return
 	}
 	if cpuTimeMS > 0 {
-		c.computeSeconds.Inc([]string{outcome}, uint64(cpuTimeMS))
+		// Whole seconds only: sub-second remainders wait for the next
+		// record instead of creating a 0-valued series.
+		if seconds := c.consumeComputeMillis(outcome, cpuTimeMS); seconds > 0 {
+			c.computeSeconds.Inc([]string{outcome}, uint64(seconds))
+		}
 	}
 	if status == taskattempts.AttemptStatusFailed {
 		reason := errCode
@@ -284,10 +301,28 @@ func (c *Collector) ScanAttemptWithLabels(
 	return nil
 }
 
+// consumeComputeMillis folds one attempt's CPUTimeMS into the
+// outcome's running total and returns the whole seconds that became
+// payable (total including the carried remainder). The remainder
+// stays behind so a stream of sub-second attempts still accumulates
+// instead of being truncated to zero on every record.
+func (c *Collector) consumeComputeMillis(outcome string, cpuTimeMS int64) int64 {
+	c.computeMillisMu.Lock()
+	defer c.computeMillisMu.Unlock()
+	if c.computeMillis == nil {
+		c.computeMillis = make(map[string]int64, 4)
+	}
+	total := c.computeMillis[outcome] + cpuTimeMS
+	seconds := total / 1000
+	c.computeMillis[outcome] = total - seconds*1000
+	return seconds
+}
+
 // initComputeFamilies creates the spec §14 compute-outcome counter
 // families recorded by RecordAttemptOutcome. Called once from
 // NewCollector at boot.
 func (c *Collector) initComputeFamilies() {
+	c.computeMillis = make(map[string]int64, 4)
 	c.computeSeconds = NewCounterFamily(
 		"velox_compute_seconds_total",
 		"Compute seconds classified by outcome (useful|failed|cancelled|stale|speculative_lost)",

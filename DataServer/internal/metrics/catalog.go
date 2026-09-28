@@ -17,7 +17,8 @@
 //   - Lowercase, dot-separated: <component>.<metric>[_unit]
 //   - Unit suffix is part of the name (e.g. _ms, _bytes, _ratio)
 //   - Components: engine, pipeline, native, output, cache, blob, ffmpeg,
-//     video, queue, lease, resource, input, waste, error, worker, taskrunner
+//     video, queue, lease, resource, input, waste, error, worker, taskrunner,
+//     master, scorecard, job, jobs
 //
 // The catalog is split by logical family across several files
 // (catalog_engine.go, catalog_pipeline.go, catalog_media.go, etc.) but is
@@ -77,6 +78,8 @@ const (
 	CompConflict   = "conflict"
 	CompReconcile  = "reconcile"
 	CompScorecard  = "scorecard"
+	CompJob        = "job"
+	CompJobs       = "jobs"
 )
 
 // metricCatalog is the central registry of every canonical metric name. It is
@@ -116,6 +119,7 @@ func init() {
 		inputSecurityMetricDefinitions(),
 		parallelismMetricDefinitions(),
 		prefetchMetricDefinitions(),
+		jobsMetricDefinitions(),
 	)
 }
 

@@ -11,6 +11,13 @@
 //     worker via the existing AverageHeartbeatAge path;
 //  3. `velox_master_outbox_pending`, `velox_master_memory_rss_bytes`,
 //     `velox_master_goroutines` via RecordMasterHealth.
+//  4. the master job-queue projection when a JobQueueSource is wired
+//     (SetJobQueueSource): `velox_jobs_pending`,
+//     `velox_jobs_running`, `velox_jobs_oldest_pending_age_seconds`
+//     refreshed every tick, plus `velox_job_succeeded_total`,
+//     `velox_job_failed_total` and the phase-attributed
+//     `velox_job_e2e_duration_seconds` histogram folded in once per
+//     newly-terminal job (dedup via seenJobs).
 //
 // Newly-terminal detection is delta-based: the supervisor queries
 // `task_attempts WHERE status IN (terminal) AND updated_at >=
@@ -99,6 +106,7 @@ type Supervisor struct {
 	collector   *Collector
 	attempts    AttemptsDataSource
 	outbox      OutboxGauge
+	jobSource   JobQueueSource
 	costFactors CostFactors
 	tick        time.Duration
 	limit       int
@@ -106,9 +114,14 @@ type Supervisor struct {
 	// seenIDs is the dedup map for attempt-ids already scanned in
 	// past ticks. GC at seenIDs-cap; the supervisor's worst-case
 	// double-count window is bounded to one tick × (cap / limit).
-	seenMu  sync.Mutex
-	seenIDs map[string]time.Time
-	seenCap int
+	// seenJobs is the same contract for terminal job ids: the e2e
+	// counters/histogram must count each completed job exactly once
+	// even when its completion watermark keeps it in the query window
+	// across several ticks.
+	seenMu   sync.Mutex
+	seenIDs  map[string]time.Time
+	seenJobs map[string]time.Time
+	seenCap  int
 
 	// tickMu guards lastTick watermark updates.
 	tickMu sync.Mutex
@@ -144,9 +157,19 @@ func NewSupervisor(c *Collector, attempts AttemptsDataSource, outbox OutboxGauge
 		tick:        defaultSupervisorTick,
 		limit:       defaultSupervisorAttemptCap,
 		seenIDs:     make(map[string]time.Time),
+		seenJobs:    make(map[string]time.Time),
 		seenCap:     defaultSupervisorSeenIDsCap,
 		last:        now,
 	}
+}
+
+// SetJobQueueSource wires the optional master job-queue projection
+// (queue depth/age gauges + terminal-job completion counters). The
+// setter — not the constructor — keeps every existing call site and
+// test source-compatible: a supervisor without a job source behaves
+// exactly as before (job families simply stay un-stamped).
+func (s *Supervisor) SetJobQueueSource(src JobQueueSource) {
+	s.jobSource = src
 }
 
 // SetTick adjusts the tick duration (useful in tests).
