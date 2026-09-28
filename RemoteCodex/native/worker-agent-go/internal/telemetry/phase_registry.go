@@ -1,10 +1,10 @@
 // phase_registry.go — closed canonical observability taxonomy.
 //
 // This file is the worker-side VIEW of the single canonical event taxonomy.
-// The taxonomy itself lives in shared/telemetry/catalog.json (the language-
+// The taxonomy itself lives in shared/telemetry/schema/catalog.json (the language-
 // neutral source loaded by shared/telemetry and compiled to the C++ binding
 // by cataloggen). The worker does NOT maintain a second registry: adding an
-// event means editing shared/telemetry/catalog.json, and every worker lookup
+// event means editing shared/telemetry/schema/catalog.json, and every worker lookup
 // derives from that shared catalog. This removes the dual-registry drift that
 // forced fixes in both phase_registry.go and shared/telemetry/catalog.go.
 //

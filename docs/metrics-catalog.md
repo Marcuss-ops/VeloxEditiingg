@@ -1,7 +1,7 @@
 # Velox Enterprise Metric Catalog
 
 > **Owner:** video-engine  
-> **Last updated:** 2026-07-06  
+> **Last updated:** 2026-09-28  
 > **Version:** Scorecard v2 (Steps 1–18)  
 > **Cardinality discipline:** NEVER put `job_id`, `task_id`, `attempt_id`, `hash`, or `video_title` in a Prometheus label. Use SQL for those dimensions.
 
@@ -66,7 +66,7 @@ per-job labels. Per-job delivery timing and cache totals come from
 | `velox_unique_assets_requested` / `velox_cache_invariant_violations_total` | G/C | none | latest unique-asset snapshot and rejected accounting mismatches |
 | `velox_prefetch_jobs_total` | C | `worker_id`, `outcome` | worker prefetch lifecycle milestones (`received`, `applied`, `failed`) |
 | `velox_prefetch_bytes_total` | C | `worker_id`, `origin` | bytes observed for `prefetch`, `warm_cache` or `runtime_download` |
-| `velox_prefetch_failures_total` | C | `worker_id`, `reason` | bounded prefetch failure classification |
+| `velox_prefetch_failures_total` | C | `worker_id`, `reason` | bounded prefetch failure classification: `download` \| `cache` \| `lease` \| `plan` \| `protocol` \| `not_found` (ENOENT / missing cached asset) \| `unknown` |
 | `velox_prefetch_duration_seconds` | H | `worker_id` | asset download-start to ready latency |
 | `velox_prefetch_cache_events_total` | C | `worker_id`, `origin`, `result` | per-asset prefetch hit/miss evidence |
 
@@ -87,7 +87,7 @@ by `1e3`. Cost gauges are micro-EUR and are divided by `1e6`.
 | #  | Metric Name                                | Type | Description                                           | Unit      | Labels                          | DB Source                                 | Ret. | HC |
 | -- | ------------------------------------------ | ---- | ----------------------------------------------------- | --------- | ------------------------------- | ----------------------------------------- | ---- | -- |
 | 1  | `velox_project_render_speed_ratio`         | G    | Media duration / wall clock (>1 = faster than realtime) | ratio   | `executor_id`, `worker_class`  | `task_attempt_metrics.media_duration_seconds / wall_clock_seconds` | 90d  | N  |
-| 2  | `velox_compute_seconds_total`              | C    | CPU seconds classified by terminal outcome           | seconds   | `outcome`                       | `task_attempt_metrics.cpu_time_ms / 1000` | 90d  | N  |
+| 2  | `velox_compute_seconds_total`              | C    | CPU seconds classified by terminal outcome           | seconds   | `outcome`                       | `task_attempt_metrics.cpu_time_ms / 1000` (conversion fixed 2026-09-28 — it used to record raw ms, 1000× high) | 90d  | N  |
 | 3  | `velox_compute_failure_reasons_total`      | C    | Failed attempts by reason code                       | count     | `reason`                        | `task_attempts.error_code`                | 90d  | N  |
 | 4  | `velox_error_classification_total`         | C    | Errors by canonical code × component × phase         | count     | `error_code`, `component`, `phase` | `task_attempt_metrics.error_component, error_phase, error_retryable` (populated by supervisor tick) | 90d | N |
 
@@ -100,6 +100,23 @@ by `1e3`. Cost gauges are micro-EUR and are divided by `1e6`.
 | 5  | `velox_task_phase_duration_seconds`        | H    | Per-phase duration for canonical rendering phases     | seconds   | `executor_id`, `executor_version`, `worker_class`, `phase`, `status` | `task_phase_timings` (legacy) / `task_phase_timings.duration_ms/1000` (detailed) | 90d | N |
 | 6  | `velox_engine_phase_duration_seconds`      | H    | C++ engine + Go pipeline per-phase duration           | seconds   | `executor_id`, `worker_id`, `phase`, `status` | `task_phase_timings` detailed rows, fallback `task_attempt_metrics.pipeline_*_ms, engine_*_ms` | 90d | N |
 | 7  | `velox_engine_segment_duration_seconds`    | H    | Per-segment encode/download duration (sidecar)        | seconds   | `executor_id`, `worker_id`, `source_type`, `status` | `task_attempt_segment_timings`                     | 90d | N |
+| 7a | `velox_queue_wait_ms`                      | H    | READY-queue wait before claim (the "1 minuto di attesa") | ms | _(none)_ | `task_attempt_metrics.queue_ms` (074) | 90d | N |
+| 7b | `velox_lease_wait_ms`                      | H    | Claim → worker acceptance                            | ms        | _(none)_                                            | `task_attempt_metrics.lease_wait_ms` (074)          | 90d | N |
+| 7c | `velox_queue_time_to_first_worker_ms`      | H    | End-to-end scheduling latency (submit → first worker) | ms       | _(none)_                                            | `task_attempt_metrics.time_to_first_worker_ms` (074) | 90d | N |
+
+### Which timing surface to use when
+
+Three parallel timing surfaces exist and they are all legitimate — they
+answer different questions. Reading the wrong one is how a "4m45s
+render" turns into an unexplained 6-minute job.
+
+| Surface | Question it answers | Labels | Use it for |
+| --- | --- | --- | --- |
+| `velox_task_phase_duration_seconds{phase}` | How long did the DURABLE worker phase rows take? | `executor_id`, `executor_version`, `worker_class`, `phase`, `status` | Phase p95/dashboards over `task_phase_timings` (canonical phases: `queue`, `asset_wait`, `cache_lookup`, `download`, `decode`, `compile`, `simulate`, `render`, `composite`, `encode`, `upload`, `finalize`) |
+| `velox_engine_phase_duration_seconds{phase}` + `velox_engine_segment_duration_seconds` | How long did the ENGINE/pipeline internals take, including per-segment detail? | `executor_id`, `worker_id`, `phase`, `status` (segments: `source_type`) | Engine regression analysis; the detailed `component.action` rows (and the taskrunner phase concepts `taskrunner.execute_ms` / `cache_lookup_ms` / …) land here when detailed rows exist |
+| `velox_taskrunner_*` gauges (parallelism) | How CONCURRENT was the render? | `worker_id` | Efficiency/speedup/overlap — levels, not distributions (see §Derived gauge units for the 1e3 encoding) |
+| `velox_queue_wait_ms` / `velox_lease_wait_ms` / `velox_queue_time_to_first_worker_ms` | How long did scheduling take BEFORE any worker ran? | _(none)_ | Attributing the pre-worker wait that no attempt milestone can see (the milestone timeline starts at `attempt.accepted`) |
+| Per-attempt waterfall (`fleetctl job inspect --waterfall`) | Where did THIS job's wall time go, with honest unknowns? | SQL (job-scoped) | Single-incident forensics: `submit_to_accepted` → buckets → `unclassified`, plus `coverage_pct` / `missing_milestones` |
 
 ### Engine Phase Labels (as emitted by `RecordEngineAggregate`)
 
@@ -209,6 +226,12 @@ copy-only job whose entire render was packet mux reported
 | 47 | `velox_master_worker_heartbeat_age_seconds`   | G    | Seconds since last heartbeat per worker          | seconds   | `worker_id` | `collector.lastSeen` map diff    | 90d  | N  |
 | 48 | `velox_master_http_route_requests_total`      | C    | HTTP requests by API surface × route template (feeds the legacy-route removal decision) | count | `surface`, `route` | Router middleware (gin FullPath template) | 90d | N |
 | 48b | `pipeline_intake_source_accepted_total`    | C    | Accepted jobs by intake source (the producer surface that submitted the job) — feeds the legacy-endpoint deprecation/removal decision | count | `intake_source` | `CanonicalJobSubmitter` + direct-enqueue boundaries (script, pipeline-run) | 90d | N |
+| 48c | `velox_jobs_pending`                       | G    | Jobs submitted but not yet leased (PENDING) at the last tick — "is the queue growing?" | count | _(none)_ | `jobs.status` (supervisor tick) | 90d | N |
+| 48d | `velox_jobs_running`                       | G    | Jobs leased or executing (`LEASED` + `RUNNING`) at the last tick | count | _(none)_ | `jobs.status` (supervisor tick) | 90d | N |
+| 48e | `velox_jobs_oldest_pending_age_seconds`    | G    | Age of the oldest PENDING job; 0 = empty queue. **The stuck-job signal** — depth of 1 waiting 7 minutes is the incident, not the depth | seconds | _(none)_ | `MIN(jobs.created_at) WHERE status='PENDING'` | 90d | N |
+| 48f | `velox_job_succeeded_total`                | C    | Jobs reaching `SUCCEEDED` (asserted by `tests/e2e/workload-mtls` step 5) | count | _(none)_ | `jobs.status` on terminal transition | 90d | N |
+| 48g | `velox_job_failed_total`                   | C    | Jobs reaching `FAILED` (CANCELLED excluded, mirroring the error-rate policy) | count | _(none)_ | `jobs.status` on terminal transition | 90d | N |
+| 48h | `velox_job_e2e_duration_seconds`           | H    | Submit → terminal latency **by phase**: `queue` (submit→start), `execute` (start→terminal), `total` (submit→terminal). Never sum across phases — `total` contains the other two | seconds | `phase` | `jobs.created_at / started_at / completed_at` | 90d | N |
 
 ---
 
@@ -269,7 +292,7 @@ These dimensions exist in SQLite / Postgres (`task_attempt_metrics`, `task_attem
 | L5 | `git_sha`, `worker_version`, `engine_version`, `ffmpeg_version`, `config_hash`, `docker_image_digest` | `task_attempts` | Versioning context per attempt | _(string)_  | 071 |
 | L6 | `ffprobe_valid`, `duration_diff_sec`, `has_video_stream`, `has_audio_stream`, `output_file_size`, `black_frame_ratio`, `audio_sync_offset_ms` | `task_attempt_metrics` | Output quality validation | mixed | 072 |
 | L7 | `cpu_percent_peak`, `rss_peak_bytes`, `disk_read_bytes`, `disk_write_bytes`, `network_rx_bytes`, `network_tx_bytes`, `iowait_ms`, `open_fds_peak` | `task_attempt_metrics` | Per-attempt resource snapshot | mixed | 073 |
-| L8 | `queue_ms`, `lease_wait_ms`, `time_to_first_worker_ms`, `pending_tasks_at_start`, `active_workers_at_start` | `task_attempt_metrics` | Queue / wait-time metrics | ms / count | 074 |
+| L8 | `pending_tasks_at_start`, `active_workers_at_start` | `task_attempt_metrics` | Per-attempt queue/worker context recorded when the task was claimed. The three wait columns from this migration are now exposed as `velox_queue_wait_ms` / `velox_lease_wait_ms` / `velox_queue_time_to_first_worker_ms` (§B rows 7a–7c); fleet-level depth and age live in `velox_jobs_pending` / `velox_jobs_oldest_pending_age_seconds` (§G), so these two counters stay SQL-only (per-attempt detail for incident forensics) | count | 074 |
 | L9 | `scene_count`, `segment_count`, `total_input_duration_sec`, `resolution_width`, `resolution_height`, `fps`, `audio_track_count`, `subtitle_count`, `template_id` | `task_attempt_metrics` | Input context for normalization | mixed | 075 |
 | L10 | `error_component`, `error_phase`, `error_retryable`, `error_message_hash` | `task_attempt_metrics` | Structured error metadata | mixed | 076 |
 | L11 | `asset_cache_hit_count`, `asset_cache_miss_count`, `blob_cache_hit_count`, `blob_cache_miss_count`, `render_cache_hit_count` | `task_attempt_metrics` | Granular per-tier cache hit/miss counters | count | 077 |
@@ -343,11 +366,19 @@ These dimensions exist in SQLite / Postgres (`task_attempt_metrics`, `task_attem
 | `VeloxWorkerHeartbeatStale`    | `velox_master_worker_heartbeat_age_seconds > 120` | warning  |
 | `VeloxWorkerHeartbeatLost`     | `velox_master_worker_heartbeat_age_seconds > 300` | critical |
 | `VeloxHighFailureRate`         | `rate(velox_compute_failure_reasons_total[5m]) > 0.1` | warning |
-| `VeloxConflictBudgetExhausted` | `rate(velox_conflict_escalations_total[5m]) > 0`  | critical |
-| `VeloxQueueDepthGrowing`       | `avg(pending_tasks_at_start) increasing 30m`      | warning  |
+| `VeloxConflictBudgetExhausted` | `rate(velox_conflict_escalations_total[5m]) > 0`  | critical || `VeloxQueueDepthGrowing`       | `deriv(velox_jobs_pending[30m]) > 0` (queue keeps growing across every tick) | warning |
+| `VeloxJobPendingAgeHigh`       | `velox_jobs_oldest_pending_age_seconds > 300` for 5m (critical tier: `> 900`) | warning / critical |
+| `VeloxPrefetchFailureSpike`    | `sum(increase(velox_prefetch_failures_total[15m])) > 2` | warning |
+| `VeloxJobE2ELatencyHigh`       | `histogram_quantile(0.95, sum by (le) (rate(velox_job_e2e_duration_seconds_bucket{phase="total"}[10m]))) > 900` for 10m | warning |
 | `VeloxDiskNearFull`            | `velox_worker_disk_free_bytes < 10GB`             | critical |
 | `VeloxOOMDetected`             | `velox_error_classification_total{error_code="OUT_OF_MEMORY"} > 0` | critical |
-| `VeloxCostAnomaly`             | `velox_cost_total_per_output_minute > baseline × 3` | warning  |
+| `VeloxCostAnomaly`             | `velox_cost_total_per_output_minute > baseline × 3` | warning |
+
+The job-queue pair also has a **runtime twin** evaluated in-process
+every 30s by `DataServer/internal/alertengine/rules.go`
+(`JobPendingAgeHigh`, `PrefetchFailureSpike`, thresholds via
+`VELOX_ALERT_JOB_PENDING_AGE_SECS` / `VELOX_ALERT_PREFETCH_FAILURE_COUNT`)
+so the same conditions reach the operator dashboard without Prometheus.
 
 ---
 
@@ -402,6 +433,11 @@ Worker (otelgrpc client handler)                    Master (otelgrpc server hand
 
 | Date       | Change                                              | Migration |
 | ---------- | --------------------------------------------------- | --------- |
+| 2026-09-28 | Job-queue + e2e latency surface: `velox_jobs_pending`, `velox_jobs_running`, `velox_jobs_oldest_pending_age_seconds`, `velox_job_succeeded_total`, `velox_job_failed_total`, `velox_job_e2e_duration_seconds{phase}` (metrics supervisor, `jobs.QueueSnapshot` / `jobs.CompletionRecord`) | — |
+| 2026-09-28 | Dispatch wait histograms exposed for the first time: `velox_queue_wait_ms`, `velox_lease_wait_ms`, `velox_queue_time_to_first_worker_ms`; catalog keys renamed to the unit-suffix convention (`queue.wait_ms`, `lease.wait_ms`, `queue.time_to_first_worker_ms`), daily rollup `metric_name` unchanged (`queue_ms`) | — |
+| 2026-09-28 | `velox_compute_seconds_total` unit fix: the family counted **milliseconds** while its name, help and this catalog said seconds (every absolute reading was 1000× high; `rate()` ratios were unaffected). The recorder now converts `cpu_time_ms / 1000` with an exact sub-second carry | — |
+| 2026-09-28 | Parallelism catalog entries corrected to `Kind=gauge` (they are exposed as gauges); `taskrunner.*_ms` documented as riding the canonical phase histograms instead of claiming families the endpoint never served | — |
+| 2026-09-28 | Prefetch failure reason vocabulary gains `not_found` (ENOENT / missing cached asset no longer collapses into `unknown`) | — |
 | 2026-07-04 | Engine phase + segment histograms (Step 7)          | 070       |
 | 2026-07-05 | Versioning columns (Step 8)                         | 071       |
 | 2026-07-05 | Output quality validation (Step 9)                  | 072       |

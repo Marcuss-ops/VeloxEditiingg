@@ -1,5 +1,62 @@
 ## [Unreleased] - 2026-09-24
 
+### Added — master job-queue and end-to-end job latency telemetry
+
+- Expose `velox_jobs_pending`, `velox_jobs_running` and
+  `velox_jobs_oldest_pending_age_seconds` from the metrics supervisor so
+  "are jobs arriving / how deep is the queue / how long has the oldest one
+  been waiting?" no longer needs ad-hoc SQL against the `jobs` table. The
+  oldest-pending age is the stuck-job signal a depth gauge cannot express.
+- Add `velox_job_succeeded_total` / `velox_job_failed_total` and the
+  phase-attributed `velox_job_e2e_duration_seconds{queue|execute|total}`
+  histogram (fed once per terminal job via `jobs.CompletionRecord`), so
+  submit→delivered latency is measurable and alertable with per-phase
+  attribution. `velox_job_succeeded_total` also satisfies the workload e2e
+  harness assertion that previously had no family to read.
+- Alert on the stuck-job pair: Prometheus `VeloxJobPendingAgeHigh`,
+  `VeloxJobPendingAgeCritical`, `VeloxPrefetchFailureSpike` and
+  `VeloxJobE2ELatencyHigh` (`alerts/job-queue-and-prefetch.yml`), plus
+  runtime twins `JobPendingAgeHigh` / `PrefetchFailureSpike` in the compute
+  alert engine (thresholds `VELOX_ALERT_JOB_PENDING_AGE_SECS`,
+  `VELOX_ALERT_PREFETCH_FAILURE_COUNT`) — the "job PENDING 7 min with 4 idle
+  workers" incident tripped none of the six render-side rules.
+
+### Added — dispatch wait histograms and the submit→accepted waterfall stage
+
+- Expose the migration-074 scheduling columns as Prometheus histograms for
+  the first time: `velox_queue_wait_ms`, `velox_lease_wait_ms`,
+  `velox_queue_time_to_first_worker_ms`. Catalog keys renamed to the
+  declared unit-suffix convention (`queue.wait_ms`, `lease.wait_ms`,
+  `queue.time_to_first_worker_ms`); the persisted daily-rollup
+  `metric_name` stays `queue_ms` for history continuity.
+- Carry a job-level `submit_to_accepted` bucket on the execution waterfall
+  (`jobs.created_at` → first attempt `started_at`, Master clock), the
+  pre-worker wait `bucketDefs` cannot see because the milestone timeline
+  starts at `attempt.accepted`. It rides the execution-level projection
+  only: attempt `wall_ms` / `accounted_ms` / `coverage_pct` keep their
+  attempt-scoped contract, and `fleetctl job inspect --waterfall` prints it
+  ahead of the attempt buckets.
+- Add `scripts/operator/job-latency-report.sh`: the phase/queue/prefetch
+  decomposition the operator rewrote by hand three times in one day, printed
+  per job from the waterfall + `task_attempt_metrics` + prefetch events.
+
+### Fixed — telemetry unit and catalog/exposure drift
+
+- `velox_compute_seconds_total` recorded **milliseconds** under a seconds
+  name (help, catalog and dashboards all said seconds), so every absolute
+  reading was 1000× high; `rate()`-based ratios were accidentally correct.
+  `RecordAttemptOutcome` now converts `cpu_time_ms / 1000` with an exact
+  sub-second carry so sub-second attempts are not truncated away.
+- Correct the parallelism catalog entries to `Kind=gauge` (they are served
+  by `NewGaugeFamily`), and document `taskrunner.*_ms` as riding the
+  canonical phase histograms instead of declaring families the endpoint
+  never serves — the catalog and the wire no longer disagree.
+- Prefetch failure classification gains `not_found`: the most frequent real
+  failure (`open <cache path>: no such file or directory`) collapsed into
+  `unknown`, hiding the dominant cause behind the catch-all label.
+- Fix telemetry catalog path drift in `AGENTS.md` and the worker phase
+  registry: the single source is `shared/telemetry/schema/catalog.json`.
+
 ### Fixed — artifact GC retries and retention windows
 
 - Lease artifact GC candidates without upgrading an open SQLite read cursor to
