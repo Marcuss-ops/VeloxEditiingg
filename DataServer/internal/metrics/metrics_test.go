@@ -102,6 +102,18 @@ func TestGaugeSetFloat_ExportsNaturalRatio(t *testing.T) {
 	}
 }
 
+func TestRecordWorkerOmitsUnavailableCacheStateGauges(t *testing.T) {
+	reg := NewRegistry()
+	collector := NewCollector(reg)
+	collector.RecordWorker("worker-1", &ResourceSnapshot{ProcessRSSBytes: 1})
+	out := dumpRegistryAll(t, reg)
+	for _, name := range []string{"velox_cache_entries", "velox_cache_size_bytes"} {
+		if strings.Contains(out, name+`{worker_id="worker-1"}`) {
+			t.Errorf("%s reported an unavailable zero-valued cache gauge:\n%s", name, out)
+		}
+	}
+}
+
 func TestGaugeMaxRetainsMaximum(t *testing.T) {
 	r := NewRegistry()
 	gf := NewGaugeFamily("velox_test_gauge_max", "test", nil)

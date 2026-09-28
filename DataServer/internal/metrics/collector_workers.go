@@ -81,6 +81,7 @@ type ResourceSnapshot struct {
 	OpenFileDescriptors   int64
 	MaxFileDescriptors    int64
 	FDUtilizationRatio    float64
+	CacheStatsAvailable   bool
 	CacheEntries          int
 	CacheBytesUsed        int64
 	CacheEvictionsDelta   uint64
@@ -127,8 +128,12 @@ func (c *Collector) RecordWorker(workerID string, rs *ResourceSnapshot) {
 	c.workerNetTxBytes.Inc(wl, rs.NetworkTxBytesDelta)
 	c.workerDownloadMbps.GaugeSet(wl, int64(rs.DownloadMbps*1000))
 	c.workerUploadMbps.GaugeSet(wl, int64(rs.UploadMbps*1000))
-	c.cacheEntries.GaugeSet(wl, int64(rs.CacheEntries))
-	c.cacheSizeBytes.GaugeSet(wl, rs.CacheBytesUsed)
+	// Resource counters do not carry cache-state gauges yet. Do not publish
+	// their zero-value placeholders as real per-worker cache measurements.
+	if rs.CacheStatsAvailable {
+		c.cacheEntries.GaugeSet(wl, int64(rs.CacheEntries))
+		c.cacheSizeBytes.GaugeSet(wl, rs.CacheBytesUsed)
+	}
 	c.cacheEvictions.Inc(wl, rs.CacheEvictionsDelta)
 	c.cacheCorruptions.Inc(wl, rs.CacheCorruptionsDelta)
 
