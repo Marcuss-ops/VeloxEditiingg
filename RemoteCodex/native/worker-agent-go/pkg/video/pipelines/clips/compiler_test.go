@@ -260,11 +260,8 @@ func TestCompileSceneTimelineAppliesReplaceOverlays(t *testing.T) {
 	if got.Timeline[1].Source.URL != "overlay.mp4" || got.Timeline[1].Source.Type != "video" || got.Timeline[1].DurationSeconds != 5 {
 		t.Fatalf("overlay segment = %+v", got.Timeline[1])
 	}
-	if got.Timeline[0].Source.Type != "video" || got.Timeline[2].Source.Type != "video" || !got.RequiresEditorialRender {
-		t.Fatalf("base segment types/editorial = %q, %q, %v; want video/video/true", got.Timeline[0].Source.Type, got.Timeline[2].Source.Type, got.RequiresEditorialRender)
-	}
-	if got.Mixed {
-		t.Fatal("replace overlay must not use the packet-only mixed renderer")
+	if got.Timeline[0].Source.Type != "video" || got.Timeline[2].Source.Type != "video" || !got.CopyOnly || got.Mixed || got.RequiresEditorialRender {
+		t.Fatalf("base segment types/mode = %q, %q, copy_only=%v mixed=%v editorial=%v; want video/video and copy-only", got.Timeline[0].Source.Type, got.Timeline[2].Source.Type, got.CopyOnly, got.Mixed, got.RequiresEditorialRender)
 	}
 }
 

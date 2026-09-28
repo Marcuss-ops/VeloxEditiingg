@@ -176,10 +176,12 @@ func applyOverlayIntent(renderPlan *plan.RenderPlan, input map[string]interface{
 	if len(windows) > 0 {
 		return nil, fmt.Errorf("clips.v1: composite overlays require Chronon prepared fragments (%d windows); native Velox layers are unsupported", len(windows))
 	}
+	hasReplaceOverlay := false
 	for _, overlay := range overlays {
 		if overlay.Mode != string(contract.OverlayModeReplace) {
 			continue
 		}
+		hasReplaceOverlay = true
 		url := strings.TrimSpace(overlay.URL)
 		if url == "" {
 			if ref, refErr := assetref.NewDeferredDrive(overlay.AssetID); refErr == nil {
@@ -205,6 +207,14 @@ func applyOverlayIntent(renderPlan *plan.RenderPlan, input map[string]interface{
 		})
 	}
 	renderPlan.Timeline = timeline
+	if hasReplaceOverlay {
+		// Replace sources are finished MP4 timeline items. Force the packet
+		// muxer even when the scene compiler selected a legacy render mode;
+		// incompatible sources fail instead of falling back to re-encoding.
+		renderPlan.CopyOnly = true
+		renderPlan.Mixed = false
+		renderPlan.RequiresEditorialRender = false
+	}
 	return renderPlan, nil
 }
 
