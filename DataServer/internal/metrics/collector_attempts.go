@@ -187,7 +187,7 @@ func (c *Collector) RecordAttempt(am taskattempts.AttemptMetrics, cache taskatte
 		c.tempWriteAmplification.GaugeSet(workerClassLabel, int64(ta*1_000_000))
 	}
 	if chr := cache.CacheHitRatio(); chr > 0 {
-		c.cacheHitRatio.GaugeSet(workerClassLabel, int64(chr*1_000_000))
+		c.cacheHitRatio.GaugeSetFloat(workerClassLabel, chr)
 	}
 	if dt := am.DownloadThroughputBytesPerSec(); dt > 0 {
 		c.downloadThroughput.GaugeSet(workerClassLabel, int64(dt))

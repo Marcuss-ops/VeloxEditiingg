@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"sort"
 	"strings"
 )
@@ -70,17 +71,28 @@ func (f *Family) writeCounter(w io.Writer) error {
 
 func (f *Family) writeGauge(w io.Writer) error {
 	f.labelMu.Lock()
-	keys := make([]string, 0, len(f.gaugeVals))
+	keys := make([]string, 0, len(f.gaugeVals)+len(f.gaugeFloats))
 	mapping := make(map[string]int64, len(f.gaugeVals))
+	floatMapping := make(map[string]float64, len(f.gaugeFloats))
 	labelList := append([]string(nil), f.labels...)
 	for k, v := range f.gaugeVals {
 		keys = append(keys, k)
 		mapping[k] = v.Load()
 	}
+	for k, v := range f.gaugeFloats {
+		keys = append(keys, k)
+		floatMapping[k] = math.Float64frombits(v.Load())
+	}
 	f.labelMu.Unlock()
 	sort.Strings(keys)
 	for _, k := range keys {
 		lblVals := splitLabelKey(k)
+		if value, ok := floatMapping[k]; ok {
+			if _, err := fmt.Fprintf(w, "%s%s %s\n", f.Name, formatLabelInline(labelList, lblVals), strconvFormatFloat(value, 'g', -1, 64)); err != nil {
+				return err
+			}
+			continue
+		}
 		if _, err := fmt.Fprintf(w, "%s%s %d\n", f.Name, formatLabelInline(labelList, lblVals), mapping[k]); err != nil {
 			return err
 		}

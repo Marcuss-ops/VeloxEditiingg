@@ -92,6 +92,16 @@ func TestRegistry_TextExposition(t *testing.T) {
 	}
 }
 
+func TestGaugeSetFloat_ExportsNaturalRatio(t *testing.T) {
+	reg := NewRegistry()
+	collector := NewCollector(reg)
+	collector.cacheHitRatio.GaugeSetFloat([]string{"mixed"}, 0.777777)
+	out := dumpRegistryAll(t, reg)
+	if !strings.Contains(out, `velox_cache_hit_ratio{worker_class="mixed"} 0.777777`) {
+		t.Fatalf("cache hit ratio should be exported in the documented 0..1 range:\n%s", out)
+	}
+}
+
 func TestGaugeMaxRetainsMaximum(t *testing.T) {
 	r := NewRegistry()
 	gf := NewGaugeFamily("velox_test_gauge_max", "test", nil)

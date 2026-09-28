@@ -31,6 +31,7 @@ package metrics
 import (
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"sort"
 	"sync"
@@ -94,6 +95,7 @@ type Family struct {
 
 	counterVals map[string]*atomic.Uint64 // CounterFamily only
 	gaugeVals   map[string]*atomic.Int64  // GaugeFamily only
+	gaugeFloats map[string]*atomic.Uint64 // GaugeFamily float-valued children
 	histVals    map[string]*histogramData // HistogramFamily only
 }
 
@@ -122,11 +124,12 @@ func NewGaugeFamily(name, help string, labels []string) *Family {
 		}
 	}
 	return &Family{
-		Name:      name,
-		Help:      help,
-		Kind:      GaugeFamily,
-		labels:    labels,
-		gaugeVals: make(map[string]*atomic.Int64),
+		Name:        name,
+		Help:        help,
+		Kind:        GaugeFamily,
+		labels:      labels,
+		gaugeVals:   make(map[string]*atomic.Int64),
+		gaugeFloats: make(map[string]*atomic.Uint64),
 	}
 }
 
@@ -196,8 +199,30 @@ func (f *Family) GaugeSet(labelVals []string, value int64) {
 		g = &atomic.Int64{}
 		f.gaugeVals[key] = g
 	}
+	delete(f.gaugeFloats, key)
 	f.labelMu.Unlock()
 	g.Store(value)
+}
+
+// GaugeSetFloat overwrites a gauge child with a fractional value. It is used
+// for dimensionless ratios whose Prometheus contract is the natural 0..1 range.
+func (f *Family) GaugeSetFloat(labelVals []string, value float64) {
+	if f.Kind != GaugeFamily {
+		panic(fmt.Sprintf("metrics: GaugeSetFloat called on non-gauge family %q", f.Name))
+	}
+	if len(labelVals) != len(f.labels) {
+		panic(fmt.Sprintf("metrics: gauge %q label len mismatch: got %d want %d", f.Name, len(labelVals), len(f.labels)))
+	}
+	key := labelKey(labelVals)
+	f.labelMu.Lock()
+	g, ok := f.gaugeFloats[key]
+	if !ok {
+		g = &atomic.Uint64{}
+		f.gaugeFloats[key] = g
+	}
+	delete(f.gaugeVals, key)
+	f.labelMu.Unlock()
+	g.Store(math.Float64bits(value))
 }
 
 // GaugeMax raises a gauge-family child's value when value is greater than
@@ -218,6 +243,7 @@ func (f *Family) GaugeMax(labelVals []string, value int64) {
 		g = &atomic.Int64{}
 		f.gaugeVals[key] = g
 	}
+	delete(f.gaugeFloats, key)
 	f.labelMu.Unlock()
 	for {
 		current := g.Load()
