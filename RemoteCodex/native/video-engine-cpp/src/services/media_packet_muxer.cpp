@@ -311,7 +311,7 @@ bool preparePlan(const CopyOnlyMuxRequest& request, packet::InputSessionRegistry
         int videoIndex = first ? firstVideoIndex : -1;
         int audioIndex = first && segment.include_audio ? firstAudioIndex : -1;
         packet::InputSession* session = first ? firstSession : nullptr;
-        if (!first) {
+        if (!first && request.allow_unsafe_stock_skip) {
             std::string issue;
             session = sessions.resolve(segment.path, issue);
             if (session != nullptr) {
