@@ -57,8 +57,11 @@ func TestCompileReplaceOverlaySplitsSourceWindowWithoutResettingBase(t *testing.
 	if got.Timeline[1].Source.URL != "overlay.mp4" || got.Timeline[1].Source.Type != "video" || got.Timeline[1].DurationSeconds != 5 || got.Timeline[1].SourceInUS != 0 {
 		t.Fatalf("overlay = %+v", got.Timeline[1])
 	}
-	if got.CopyOnly || got.Mixed || !got.RequiresEditorialRender {
-		t.Fatalf("overlay must use the editorial renderer: copy_only=%v mixed=%v editorial=%v", got.CopyOnly, got.Mixed, got.RequiresEditorialRender)
+	if !got.CopyOnly || got.Mixed || got.RequiresEditorialRender {
+		t.Fatalf("replace overlay must stay on the packet-copy path: copy_only=%v mixed=%v editorial=%v", got.CopyOnly, got.Mixed, got.RequiresEditorialRender)
+	}
+	if got.Timeline[1].HoldLastFrame {
+		t.Fatal("finished replace overlay must not be extended or transcoded")
 	}
 	if got.Timeline[2].Source.URL != "base.mp4" || got.Timeline[2].SourceInUS != 10_000_000 || got.Timeline[2].SourceDurationUS != 30_000_000 {
 		t.Fatalf("suffix = %+v", got.Timeline[2])
