@@ -30,6 +30,7 @@ The operator surface is intentionally split into two planes:
 | Parallelism Efficiency | efficiency, speedup, overlap, idle gap and oversubscription | §6: `task_attempt_parallelism` and segment offsets |
 | Quality vs Speed | render speed, FFmpeg speed and useful/failed compute | §7: ffprobe, duration, black-frame and audio-sync SQL dimensions |
 | Waste | `waste_type`, outcome and class-level cost | §8: retry, wasted CPU/download/cost and exact attempt attribution |
+| Job Queue & E2E Latency | `velox_jobs_pending`/`running`, oldest pending age, e2e p95 by `phase`, dispatch-wait p95, prefetch failures by `reason` | — (Prometheus-only; per-job drill-down: `scripts/operator/job-latency-report.sh` + `fleetctl job inspect --waterfall`) |
 
 Prometheus labels used by these dashboards are limited to the closed set
 `executor_id`, `executor_version`, `worker_class`, `worker_id`, `phase`,
@@ -438,6 +439,7 @@ Worker (otelgrpc client handler)                    Master (otelgrpc server hand
 | 2026-09-28 | `velox_compute_seconds_total` unit fix: the family counted **milliseconds** while its name, help and this catalog said seconds (every absolute reading was 1000× high; `rate()` ratios were unaffected). The recorder now converts `cpu_time_ms / 1000` with an exact sub-second carry | — |
 | 2026-09-28 | Parallelism catalog entries corrected to `Kind=gauge` (they are exposed as gauges); `taskrunner.*_ms` documented as riding the canonical phase histograms instead of claiming families the endpoint never served | — |
 | 2026-09-28 | Prefetch failure reason vocabulary gains `not_found` (ENOENT / missing cached asset no longer collapses into `unknown`) | — |
+| 2026-09-28 | `dashboards/job-queue.json`: job-queue depth/age, terminal throughput, e2e p95 by phase, dispatch-wait p95 and prefetch-failure panels (Prometheus-only, no SQL section) | — |
 | 2026-07-04 | Engine phase + segment histograms (Step 7)          | 070       |
 | 2026-07-05 | Versioning columns (Step 8)                         | 071       |
 | 2026-07-05 | Output quality validation (Step 9)                  | 072       |

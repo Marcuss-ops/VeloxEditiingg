@@ -53,6 +53,14 @@ those substrings appearing in this directory.
   Cardinality discipline: NO labels on any of the four families
   (no host, no per-reason dim) — the streak length is captured as
   a histogram observation rather than as a label series.
+- `job-queue.json` — Master job-queue and end-to-end latency KPIs:
+  pending/running depth, oldest pending job age (the
+  `VeloxJobPendingAgeHigh` alert signal), terminal success/failure
+  rates, p95 `velox_job_e2e_duration_seconds` by `phase`
+  (queue/execute/total), p95 dispatch waits from the
+  `velox_queue_wait_ms` / `velox_lease_wait_ms` /
+  `velox_queue_time_to_first_worker_ms` histograms, and prefetch
+  failures by the closed `reason` enum (including `not_found`).
 
 ## Cardinality split
 
