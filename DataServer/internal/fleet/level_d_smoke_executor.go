@@ -56,10 +56,12 @@ import (
 // defaults that match the user's spec's "5-15s render" envelope
 // with 4x headroom.
 const (
-	timeoutAssetResolve  = 30 * time.Second
-	timeoutSmokeInsert   = 5 * time.Second
-	timeoutLeaseAcquire  = 5 * time.Second
-	timeoutAssetDownload = 30 * time.Second
+	timeoutAssetResolve = 30 * time.Second
+	timeoutSmokeInsert  = 5 * time.Second
+	timeoutLeaseAcquire = 5 * time.Second
+	// Smoke assets are content-addressed videos and can be 100+ MB. Allow
+	// remote workers enough time for ordinary production uplink variance.
+	timeoutAssetDownload = 2 * time.Minute
 	timeoutFFmpegRender  = 5 * time.Minute
 	timeoutDriveUpload   = 60 * time.Second
 	timeoutSmokeFinal    = 5 * time.Second
@@ -177,7 +179,9 @@ func (e *LevelDSmokeExecutor) Execute(ctx context.Context, op *store.Operation) 
 	if err != nil {
 		return fmt.Errorf("smoke: insert PENDING: %w", err)
 	}
-	log.Printf("[SMOKE] worker=%s run=%s asset_id=%s pickup=%s QUEUED", op.WorkerID, runID, payload.AssetID, pickupURL)
+	// pickupURL contains a short-lived worker session token in its query.
+	// Never write it to logs or the durable smoke_runs error surface.
+	log.Printf("[SMOKE] worker=%s run=%s asset_id=%s pickup=resolved QUEUED", op.WorkerID, runID, payload.AssetID)
 	// ── Phase 3: acquire smoke lease ─────────────────────────────
 	// Symmetric with Step 6/15's drain — Worker.Drain=true
 	// excludes the worker from real-job placement for the smoke

@@ -143,7 +143,8 @@ func (e *SSHWorkerExec) DownloadAsset(ctx context.Context, runID, workerID, pick
 		)
 		_, err := e.ssh.Run(ctx, workerID, cmd)
 		if err != nil {
-			return fmt.Errorf("%w: ssh download asset from %s: %w", ErrAssetDownloadFail, pickupURL, err)
+			safeErr := strings.ReplaceAll(err.Error(), pickupURL, "[redacted pickup URL]")
+			return fmt.Errorf("%w: ssh download asset: %s", ErrAssetDownloadFail, safeErr)
 		}
 		return nil
 	}

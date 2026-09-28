@@ -62,7 +62,9 @@ func (w *LocalShellWorker) DownloadAsset(_ context.Context, runID, _, pickupURL,
 		cmd := exec.Command("curl", "--fail-with-body", "-sSL", "-o", destPath, pickupURL)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
-			return fmt.Errorf("smoke: curl download asset from %s: %w (output: %s)", pickupURL, err, string(out))
+			safeErr := strings.ReplaceAll(err.Error(), pickupURL, "[redacted pickup URL]")
+			safeOut := strings.ReplaceAll(string(out), pickupURL, "[redacted pickup URL]")
+			return fmt.Errorf("smoke: curl download asset: %s (output: %s)", safeErr, safeOut)
 		}
 		return nil
 	}
