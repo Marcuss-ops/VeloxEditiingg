@@ -14,6 +14,7 @@ import (
 	"velox-server/internal/credentials"
 	"velox-server/internal/deliveries"
 	deliveryProviders "velox-server/internal/deliveries/providers"
+	"velox-server/internal/deliverystore"
 	"velox-server/internal/forwarding"
 	validationhandlers "velox-server/internal/handlers/remote/workers/validation"
 	"velox-server/internal/handlers/server/api"
@@ -483,9 +484,15 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 	// Drive is not provisioned. Keep the row in the runtime registry rather
 	// than a migration so test/legacy databases are not mutated merely by
 	// upgrading; this provider is a real filesystem export, never a noop.
-	if _, err := p.SQLite.DB().Exec(`INSERT OR IGNORE INTO delivery_destinations
-		(destination_id, provider, name, enabled, configuration_json, created_at, updated_at)
-		VALUES ('local-fallback', 'local_export', 'Local fallback export', 1, '{}', datetime('now'), datetime('now'))`); err != nil {
+	// Seed through the canonical deliverystore API (the same idempotent
+	// INSERT OR IGNORE used everywhere else) instead of raw SQL:
+	// check-db-access forbids .DB()-chain repository bypasses in this file.
+	if err := p.SQLite.Delivery().InsertDeliveryDestination(&deliverystore.DeliveryDestination{
+		DestinationID: "local-fallback",
+		Provider:      "local_export",
+		Name:          "Local fallback export",
+		Enabled:       true,
+	}); err != nil {
 		return nil, fmt.Errorf("bootstrap: ensure local fallback destination: %w", err)
 	}
 	localExportRoot := filepath.Join(cfg.Runtime.StorageDir, "local-deliveries")
