@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"velox-worker-agent/internal/executor"
@@ -155,6 +156,18 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 	if failResult != nil {
 		return *failResult, nil
 	}
+	if payloadRequiresAudio(spec.Payload) && !outputManifest.HasAudioStream {
+		_ = os.Remove(outputPath)
+		_ = os.Remove(outputPath + ".progress.json")
+		return executor.ExecutionResult{
+			Status:      "failed",
+			ErrorCode:   "required_audio_stream_missing",
+			ErrorDetail: "payload requires final audio, but the rendered artifact has no audio stream",
+			RawMetrics:  rawMetrics,
+			StartedAt:   startedAt,
+			CompletedAt: time.Now().UTC(),
+		}, nil
+	}
 
 	if rec != nil {
 		status := telemetry.StatusOK
@@ -172,4 +185,33 @@ func (s *SceneComposite) Execute(ctx context.Context, execCtx executor.Execution
 		StartedAt:      startedAt,
 		CompletedAt:    time.Now().UTC(),
 	}, nil
+}
+
+// payloadRequiresAudio identifies payloads whose contract promises an audio
+// stream. In particular, FINALIZE overlays preserve the already-mixed final
+// audio; publishing a silent artifact for that request is a failed render.
+func payloadRequiresAudio(payload map[string]interface{}) bool {
+	if payload == nil {
+		return false
+	}
+	var overlays []interface{}
+	switch raw := payload["overlays"].(type) {
+	case []interface{}:
+		overlays = raw
+	case []map[string]interface{}:
+		for _, overlay := range raw {
+			overlays = append(overlays, overlay)
+		}
+	}
+	for _, raw := range overlays {
+		overlay, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		mode, _ := overlay["audio_mode"].(string)
+		if strings.EqualFold(strings.TrimSpace(mode), "preserve_final_audio") {
+			return true
+		}
+	}
+	return false
 }
