@@ -75,6 +75,7 @@ struct PreparedCopyMuxPlan {
     std::optional<MediaSignature> audio_target_signature;
     OutputStreams streams;
     int64_t expected_duration_us{};
+    bool allow_unsafe_stock_skip{};
 };
 
 bool initializeOutputStream(AVFormatContext* output, const AVStream* input,
@@ -204,6 +205,7 @@ bool preparePlan(const CopyOnlyMuxRequest& request, packet::InputSessionRegistry
     // level or another stream parameter within one output.
     const std::optional<MediaSignature> requestedVideoTarget =
         request.target_video_signature;
+    plan.allow_unsafe_stock_skip = request.allow_unsafe_stock_skip;
     std::optional<MediaSignature> videoTarget;
     std::optional<MediaSignature> audioTarget;
     int64_t timeline = 0;
@@ -590,8 +592,10 @@ bool writeStreamingOutput(UniqueOutputContext& output, const PreparedCopyMuxPlan
     result->global_sort_ms = 0;
     output->pb = nullptr;
     output.reset();
-    if (!packet::validTimestamp(writer.video_end_us) ||
-        writer.video_end_us + 80000 < plan.expected_duration_us) {
+    const bool stockGapWasReported = plan.allow_unsafe_stock_skip && result != nullptr &&
+        !result->warnings.empty();
+    if ((!packet::validTimestamp(writer.video_end_us) ||
+         writer.video_end_us + 80000 < plan.expected_duration_us) && !stockGapWasReported) {
         return fail(result, "copy-only packet mux video stream ends before the requested timeline");
     }
     file::DurabilityEvidence evidence;
