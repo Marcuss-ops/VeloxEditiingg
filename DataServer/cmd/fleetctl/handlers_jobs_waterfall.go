@@ -35,6 +35,11 @@ type waterfallView struct {
 	MissingMilestones []string              `json:"missing_milestones,omitempty"`
 	InvertedBuckets   []string              `json:"inverted_buckets,omitempty"`
 	Publish           *publishWaterfallView `json:"publish,omitempty"`
+	// SubmitToAccepted is the job-level pre-atttempt wait (submit →
+	// first attempt accepted). It sits OUTSIDE wall_ms/coverage: the
+	// attempt timeline starts at attempt.accepted, so this is the only
+	// place the pre-worker queue wait is representable.
+	SubmitToAccepted *waterfallBucketView `json:"submit_to_accepted,omitempty"`
 }
 
 type publishWaterfallView struct {
@@ -126,6 +131,10 @@ func printWaterfall(label, status, workerID, stamps string, wf waterfallView) {
 		fmt.Printf("  %-24s %13s ms\n", "publish.remote_finalize", comma(wf.Publish.RemoteFinalizeMS))
 		fmt.Printf("  %-24s %13s ms\n", "publish.commit_wait", comma(wf.Publish.CommitWaitMS))
 		fmt.Printf("  %-24s %13s ms\n", "publish.spool_commit", comma(wf.Publish.SpoolCommitMS))
+	}
+	if wf.SubmitToAccepted != nil {
+		fmt.Printf("  %-24s %13s ms  %s\n", wf.SubmitToAccepted.Name, comma(wf.SubmitToAccepted.DurationMS),
+			"(job-level, before the attempt wall)")
 	}
 	buckets := append([]waterfallBucketView(nil), wf.Buckets...)
 	sort.SliceStable(buckets, func(i, j int) bool { return buckets[i].StartMS < buckets[j].StartMS })

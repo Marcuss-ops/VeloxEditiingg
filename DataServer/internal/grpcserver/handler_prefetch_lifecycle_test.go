@@ -148,3 +148,38 @@ func TestPrefetchEventMetadataFields(t *testing.T) {
 		event.GetReservationId(), event.GetDistance(), event.GetAssetId(),
 		event.GetAssetSha256(), event.GetAssetSizeBytes(), event.GetLocalPath())
 }
+
+// TestClassifyPrefetchFailure_NotFoundIsNotUnknown pins the reason
+// vocabulary fix: the most frequent blocking failure (a required asset
+// missing from the worker cache) arrives as an ENOENT open error and
+// MUST land on `not_found`, never on the catch-all `unknown` that used
+// to hide the dominant cause.
+func TestClassifyPrefetchFailure_NotFoundIsNotUnknown(t *testing.T) {
+	tests := []struct {
+		name   string
+		reason string
+		want   string
+	}{
+		{
+			name:   "ENOENT open of a missing cached asset",
+			reason: "open /var/lib/velox-worker/cache/110d6ac.f4v: no such file or directory",
+			want:   "not_found",
+		},
+		{name: "generic not found", reason: "asset not found in cache", want: "not_found"},
+		{name: "enoent token", reason: "ENOENT: stat failed", want: "not_found"},
+		{name: "missing asset key", reason: "missing asset for plan", want: "not_found"},
+		{name: "lease failure", reason: "lease reservation expired", want: "lease"},
+		{name: "cache hash mismatch", reason: "cache hash mismatch", want: "cache"},
+		{name: "drive download failure", reason: "drive download failed: 503", want: "download"},
+		{name: "manifest plan failure", reason: "manifest plan invalid", want: "plan"},
+		{name: "protocol violation", reason: "protocol error from worker", want: "protocol"},
+		{name: "unclassifiable stays unknown", reason: "exploded", want: "unknown"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := classifyPrefetchFailure(tt.reason); got != tt.want {
+				t.Errorf("classifyPrefetchFailure(%q) = %q, want %q", tt.reason, got, tt.want)
+			}
+		})
+	}
+}

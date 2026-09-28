@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"velox-server/internal/taskattempts"
+	"velox-server/internal/taskgraph"
 )
 
 // SummarizeTask returns the aggregated execution diagnostics for a task.
@@ -279,6 +280,19 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 			break
 		}
 	}
+	// Job-level pre-atttempt stage: submit → first attempt accepted.
+	// bucketDefs cannot see it (the milestone timeline starts at
+	// attempt.accepted) and it must not disturb the attempt-scoped
+	// wall_ms / accounted_ms / coverage_pct contract, so it rides the
+	// EXECUTION-level projection only — a shallow copy keeps the
+	// per-attempt waterfalls untouched.
+	if summary.Waterfall != nil {
+		if bucket := s.submitToAcceptedBucket(ctx, task, attempts); bucket != nil {
+			projected := *summary.Waterfall
+			projected.SubmitToAccepted = bucket
+			summary.Waterfall = &projected
+		}
+	}
 	if firstStart != nil && lastEnd != nil {
 		summary.TotalWallTimeMS = lastEnd.Sub(*firstStart).Milliseconds()
 	}
@@ -291,6 +305,31 @@ func (s *Service) SummarizeTask(ctx context.Context, taskID string) (*ExecutionS
 	}
 
 	return summary, nil
+}
+
+// submitToAcceptedBucket derives the job-level scheduling-wait bucket
+// (jobs.created_at → earliest attempt started_at, both Master clock).
+//
+// It is best-effort enrichment: the job reader is optional, a missing
+// job row or an unreadable timestamp simply leaves the bucket off the
+// projection (the omission is visible; a fabricated 0ms wait would
+// not be). Errors are never propagated — this bucket must not be able
+// to fail the whole execution summary.
+func (s *Service) submitToAcceptedBucket(ctx context.Context, task *taskgraph.Task, attempts []taskattempts.TaskAttempt) *WaterfallBucket {
+	if s == nil || s.jobs == nil || task == nil {
+		return nil
+	}
+	job, err := s.jobs.Get(ctx, task.JobID)
+	if err != nil || job == nil {
+		return nil
+	}
+	var firstStart time.Time
+	for _, a := range attempts {
+		if a.StartedAt != nil && (firstStart.IsZero() || a.StartedAt.Before(firstStart)) {
+			firstStart = *a.StartedAt
+		}
+	}
+	return SubmitToAcceptedBucket(job.CreatedAt, firstStart)
 }
 
 // attemptLifecycleDurationMS returns the authoritative elapsed wall time for

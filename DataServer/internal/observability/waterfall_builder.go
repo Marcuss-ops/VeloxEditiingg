@@ -2,6 +2,7 @@ package observability
 
 import (
 	"sort"
+	"time"
 
 	sharedtelemetry "velox-shared/telemetry"
 )
@@ -39,6 +40,22 @@ type AttemptWaterfall struct {
 	// sub-phase sums may overlap (parallel downloads), so they are NOT re-
 	// combined into a coverage number here.
 	AssetPreparation *sharedtelemetry.AssetPreparationBreakdown `json:"asset_preparation,omitempty"`
+	// SubmitToAccepted is the JOB-level pre-atttempt wait: job submitted
+	// (jobs.created_at, Master clock) → first attempt accepted
+	// (task_attempts.started_at, Master clock). It exists because
+	// bucketDefs starts at attempt.accepted — the milestone timeline is
+	// worker-monotonic from acceptance onward, so the scheduling wait
+	// that precedes it (the "1 minute of attesa" next to "4m45s of
+	// render") is structurally invisible to the bucket list and used to
+	// live only in task_attempt_metrics.queue_ms (migration 074).
+	//
+	// It is deliberately OUTSIDE wall_ms / accounted_ms / coverage_pct:
+	// those measure the attempt lifecycle (pinned by
+	// TestSummarizeTask_AccountsForEveryAttemptWall), while this bucket
+	// measures the wait that happened BEFORE the attempt existed. It is
+	// attached only to the execution-level projection, and only when
+	// both Master-clock boundaries are known — absence stays honest.
+	SubmitToAccepted *WaterfallBucket `json:"submit_to_accepted,omitempty"`
 }
 
 var bucketDefs = []struct {
@@ -168,6 +185,26 @@ func publishWaterfall(elapsed map[sharedtelemetry.AttemptMilestone]int64) *Publi
 		return nil
 	}
 	return &PublishWaterfall{SlotWaitMS: *values[0].out, DeclareMS: *values[1].out, UploadMS: *values[2].out, RemoteFinalizeMS: *values[3].out, CommitWaitMS: *values[4].out, SpoolCommitMS: *values[5].out}
+}
+
+// SubmitToAcceptedBucket builds the job-level scheduling-wait bucket
+// that precedes the attempt timeline. Both boundaries are Master-clock
+// timestamps: `submittedAt` is jobs.created_at and `firstAttemptStart`
+// is the earliest attempt started_at for the job (the moment the task
+// was claimed/accepted).
+//
+// Returns nil when a boundary is missing or the pair is inverted —
+// the bucket is then omitted instead of being reported as a fake 0ms
+// wait. The bucket is expressed in the same millisecond domain as the
+// attempt buckets (start 0, end = wait) so a renderer can print it
+// ahead of `dispatch_to_execution`; it is intentionally NOT folded
+// into accounted_ms / wall_ms (see AttemptWaterfall.SubmitToAccepted).
+func SubmitToAcceptedBucket(submittedAt, firstAttemptStart time.Time) *WaterfallBucket {
+	if submittedAt.IsZero() || firstAttemptStart.IsZero() || !firstAttemptStart.After(submittedAt) {
+		return nil
+	}
+	waitMS := firstAttemptStart.Sub(submittedAt).Milliseconds()
+	return &WaterfallBucket{Name: "submit_to_accepted", StartMS: 0, EndMS: waitMS, DurationMS: waitMS}
 }
 
 func dedupMissing(in []string) []string {

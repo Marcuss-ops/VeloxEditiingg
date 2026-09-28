@@ -118,9 +118,15 @@ func boundedPrefetchResult(value string) string {
 	}
 }
 
+// boundedPrefetchFailureReason is the closed vocabulary behind
+// velox_prefetch_failures_total{reason}. `not_found` is the explicit
+// filesystem/ENOENT class: before it existed, the most frequent real
+// failure ("open <cache path>: no such file or directory" — a required
+// asset missing from the worker cache) collapsed into `unknown` and
+// hid the actual cause behind the most common label value.
 func boundedPrefetchFailureReason(value string) string {
 	switch value {
-	case "download", "cache", "lease", "plan", "protocol":
+	case "download", "cache", "lease", "plan", "protocol", "not_found":
 		return value
 	default:
 		return "unknown"

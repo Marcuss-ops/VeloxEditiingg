@@ -14,6 +14,7 @@ func TestPrefetchTelemetryIsExposedWithBoundedLabels(t *testing.T) {
 	collector.RecordPrefetchAsset("velox-worker-51", "prefetch", "hit", 4096)
 	collector.RecordPrefetchAsset("velox-worker-51", "runtime_download", "miss", 2048)
 	collector.RecordPrefetchFailure("velox-worker-51", "download")
+	collector.RecordPrefetchFailure("velox-worker-51", "not_found")
 	collector.RecordPrefetchDuration("velox-worker-51", 2*time.Second)
 
 	out := dumpRegistryAll(t, reg)
@@ -24,6 +25,7 @@ func TestPrefetchTelemetryIsExposedWithBoundedLabels(t *testing.T) {
 		`velox_prefetch_cache_events_total{worker_id="velox-worker-51",origin="prefetch",result="hit"} 1`,
 		`velox_prefetch_cache_events_total{worker_id="velox-worker-51",origin="runtime_download",result="miss"} 1`,
 		`velox_prefetch_failures_total{worker_id="velox-worker-51",reason="download"} 1`,
+		`velox_prefetch_failures_total{worker_id="velox-worker-51",reason="not_found"} 1`,
 		`velox_prefetch_duration_seconds_count{worker_id="velox-worker-51"} 1`,
 	} {
 		if !strings.Contains(out, want) {

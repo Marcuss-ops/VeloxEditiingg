@@ -135,9 +135,20 @@ func (h *Handler) recordPrefetchTelemetry(workerID string, event *pb.PrefetchLif
 	}
 }
 
+// classifyPrefetchFailure maps a free-form worker error string onto the
+// closed reason vocabulary exposed by velox_prefetch_failures_total
+// (see metrics.boundedPrefetchFailureReason). The `not_found` class
+// comes FIRST: a missing cached asset surfaces as "open <path>: no such
+// file or directory" and must not fall through to `unknown` (or be
+// swallowed by an over-broad "cache" substring match) — that was
+// hiding the most frequent blocking failure.
 func classifyPrefetchFailure(reason string) string {
 	s := strings.ToLower(strings.TrimSpace(reason))
 	switch {
+	case strings.Contains(s, "no such file") || strings.Contains(s, "not found") ||
+		strings.Contains(s, "not_found") || strings.Contains(s, "enoent") ||
+		strings.Contains(s, "missing"):
+		return "not_found"
 	case strings.Contains(s, "lease") || strings.Contains(s, "reservation"):
 		return "lease"
 	case strings.Contains(s, "cache") || strings.Contains(s, "hash"):
