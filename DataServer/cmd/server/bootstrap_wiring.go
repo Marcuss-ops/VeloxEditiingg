@@ -118,6 +118,10 @@ func (a *taskgraphJobsRetryQuerier) Fail(ctx context.Context, id, reason string)
 	return a.jobs.Fail(ctx, id, reason)
 }
 
+func (a *taskgraphJobsRetryQuerier) Cancel(ctx context.Context, id, reason string, revision int) error {
+	return a.jobs.Cancel(ctx, id, reason, revision)
+}
+
 // wirePostBuild connects dependencies that cross build-layer
 // boundaries (jobs↔tasks). Called by both buildTestDeps (tests)
 // and buildAppComponents (production) so the wiring stays canonical

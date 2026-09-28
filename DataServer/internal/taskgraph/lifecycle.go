@@ -52,6 +52,15 @@ type JobsRetryQuerier interface {
 	Fail(ctx context.Context, id string, reason string) error
 }
 
+type stalePrepareCanceller interface {
+	Cancel(ctx context.Context, id, reason string, revision int) error
+}
+
+// DefaultRuntimeAssetsPrepareTTL bounds PREPARE jobs whose creator never
+// sends FINALIZE. The generous day-long window allows long asset-generation
+// runs while ensuring abandoned PENDING tasks are eventually reclaimed.
+const DefaultRuntimeAssetsPrepareTTL = 24 * time.Hour
+
 // NewLifecycleService constructs the transactional LifecycleService.
 func NewLifecycleService(repo Repository) (*LifecycleService, error) {
 	if repo == nil {
@@ -89,6 +98,53 @@ func (l *LifecycleService) WithTaskReadyHook(hook func(context.Context, string))
 
 // Repo exposes the canonical taskgraph.Repository.
 func (l *LifecycleService) Repo() Repository { return l.repo }
+
+// CancelStaleRuntimeAssetPrepares cancels tasks that are still waiting for
+// runtime assets after the prepare TTL. Job cancellation owns the atomic
+// parent/task/attempt transition; this sweep only selects eligible candidates.
+func (l *LifecycleService) CancelStaleRuntimeAssetPrepares(ctx context.Context, now time.Time, limit int) (int, error) {
+	if l == nil || l.repo == nil {
+		return 0, fmt.Errorf("taskgraph: lifecycle repository is required")
+	}
+	specs, ok := l.repo.(TaskSpecStore)
+	if !ok {
+		return 0, fmt.Errorf("taskgraph: runtime prepare expiry requires task spec storage")
+	}
+	canceller, ok := l.jobsRepo.(stalePrepareCanceller)
+	if !ok {
+		return 0, fmt.Errorf("taskgraph: runtime prepare expiry requires job cancellation")
+	}
+	if now.IsZero() {
+		now = l.now().UTC()
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	tasks, err := l.repo.List(ctx, Filter{Statuses: []Status{StatusPending, StatusReady}, Limit: limit})
+	if err != nil {
+		return 0, fmt.Errorf("taskgraph: list pending runtime prepares: %w", err)
+	}
+	cutoff := now.Add(-DefaultRuntimeAssetsPrepareTTL)
+	cancelled := 0
+	for _, task := range tasks {
+		if task.JobID == "" || task.CreatedAt.IsZero() || task.CreatedAt.After(cutoff) {
+			continue
+		}
+		payload, err := specs.GetTaskSpecPayload(ctx, task.ID)
+		if err != nil {
+			return cancelled, fmt.Errorf("taskgraph: read prepare payload %s: %w", task.ID, err)
+		}
+		pending, _ := payload["runtime_assets_pending"].(bool)
+		if !pending {
+			continue
+		}
+		if err := canceller.Cancel(ctx, task.JobID, "runtime assets were not finalized before the prepare TTL expired", -1); err != nil {
+			continue // A concurrent FINALIZE, cancellation or terminal result won.
+		}
+		cancelled++
+	}
+	return cancelled, nil
+}
 
 // Transition validates and executes a status transition.
 func (l *LifecycleService) Transition(ctx context.Context, id string, from, to Status, revision int) error {

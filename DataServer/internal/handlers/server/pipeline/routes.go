@@ -63,6 +63,8 @@ func (h *Handlers) RegisterRoutes(r *gin.Engine, adminAuth, m2mJobsAuth gin.Hand
 	jobs.POST("/validate", h.ValidateJob())
 	jobs.POST("/estimate", h.EstimateJob())
 	jobs.GET("/:id", h.GetSubmittedJob())
+	jobs.DELETE("/:id", h.CancelSubmittedJob())
+	jobs.POST("/:id/cancel", h.CancelSubmittedJob())
 	jobs.POST("/:id/finalize", h.FinalizeJob())
 	jobs.GET("/:id/asset-progress", h.AssetDownloadProgress())
 
