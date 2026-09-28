@@ -65,6 +65,7 @@ RenderResult RenderEngine::renderCopyOnly(
 
     media::CopyOnlyMuxRequest request;
     request.output_path = outPath;
+    request.allow_unsafe_stock_skip = !plan.fallback_video_sources.empty();
     std::optional<CanonicalVideoProfile> outputProfile;
     std::string outputProfileError;
     if (!resolvePlanOutputProfile(plan, outputProfile, outputProfileError)) {

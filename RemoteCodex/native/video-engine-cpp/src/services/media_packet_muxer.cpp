@@ -358,6 +358,11 @@ bool preparePlan(const CopyOnlyMuxRequest& request, packet::InputSessionRegistry
                     break;
                 }
                 if (!substituted) {
+                    if (!request.allow_unsafe_stock_skip) {
+                        return fail(result,
+                            "segment_execution_rejected: copy-only segment is not packet-safe: " +
+                            originalPath.string() + ": " + issue);
+                    }
                     if (result != nullptr) result->warnings.push_back(
                         "timeline segment " + std::to_string(index) + " stock source " +
                         originalPath.filename().string() + " was omitted because packet copy was unsafe (" +
