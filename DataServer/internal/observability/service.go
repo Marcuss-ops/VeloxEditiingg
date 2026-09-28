@@ -129,27 +129,28 @@ type JobInspectionReader interface {
 
 // Service is the read-only observability aggregation service.
 type Service struct {
-	tasks          TaskReader
-	attempts       AttemptReader
-	jobs           JobReader
-	jobWriter      jobs.Writer
-	workers        WorkerReader
-	versionMetrics VersionMetricsReader
-	audit          AuditReader
-	jobInspection  JobInspectionReader
-	liveAttempts   LiveAttemptReader
-	assetProgress  AssetProgressReader
-	overviewMu     sync.Mutex
-	overviewAt     time.Time
-	overviewCache  *OverviewResult
-	statsMu        sync.Mutex
-	workerStatsAt  time.Time
-	workerStats    []WorkerPerformance
-	workerStatsSet bool
-	scalarStats    map[string]*ScalarMetricResult
-	scalarStatsAt  map[string]time.Time
-	packetCopyStat *PacketCopyContractResult
-	packetCopyAt   time.Time
+	tasks            TaskReader
+	attempts         AttemptReader
+	jobs             JobReader
+	jobWriter        jobs.Writer
+	workers          WorkerReader
+	versionMetrics   VersionMetricsReader
+	prefetchFailures PrefetchFailureReader
+	audit            AuditReader
+	jobInspection    JobInspectionReader
+	liveAttempts     LiveAttemptReader
+	assetProgress    AssetProgressReader
+	overviewMu       sync.Mutex
+	overviewAt       time.Time
+	overviewCache    *OverviewResult
+	statsMu          sync.Mutex
+	workerStatsAt    time.Time
+	workerStats      []WorkerPerformance
+	workerStatsSet   bool
+	scalarStats      map[string]*ScalarMetricResult
+	scalarStatsAt    map[string]time.Time
+	packetCopyStat   *PacketCopyContractResult
+	packetCopyAt     time.Time
 }
 
 // NewService constructs the observability aggregation service.
@@ -192,6 +193,15 @@ func (s *Service) CancelJob(ctx context.Context, id, reason string) error {
 
 // WithWorkers sets the worker reader for worker queries.
 func (s *Service) WithWorkers(r WorkerReader) *Service { s.workers = r; return s }
+
+// WithPrefetchFailures wires the durable prefetch-failure counter
+// behind the PrefetchFailureSpike runtime rule. Missing wiring keeps
+// the rule quiet (see job_signals.go) rather than reporting zero
+// failures it never measured.
+func (s *Service) WithPrefetchFailures(r PrefetchFailureReader) *Service {
+	s.prefetchFailures = r
+	return s
+}
 
 // WithVersionMetrics sets the version metrics reader for regression comparison.
 func (s *Service) WithVersionMetrics(r VersionMetricsReader) *Service {

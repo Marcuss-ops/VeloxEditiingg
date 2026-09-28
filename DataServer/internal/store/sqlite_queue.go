@@ -52,6 +52,38 @@ func (s *SQLiteStore) ListJobEvents(jobID string, limit int) ([]JobEvent, error)
 	return result, rows.Err()
 }
 
+// prefetchFailureEvents is the closed set of journal event types that
+// mean "prefetch failed for this job". It mirrors the switch in
+// grpcserver.recordPrefetchTelemetry (the same three types increment
+// velox_prefetch_failures_total), so the SQL twin of the Prometheus
+// family counts exactly the same fact.
+var prefetchFailureEvents = []string{
+	"prefetch.prejob_prepare_failed",
+	"prefetch.prefetch_failed",
+	"prefetch.prefetch_error",
+}
+
+// CountRecentPrefetchFailures counts prefetch failure events journaled
+// at or after `since`. This is the durable read surface the runtime
+// PrefetchFailureSpike alert rule uses: the alert engine lives outside
+// the metrics registry, so it reads the same fact from job_events
+// instead of scraping its own /metrics.
+//
+// `timestamp` is the canonical RFC3339 UTC stamp written by
+// LogJobEvent, so the string comparison against an RFC3339 cutoff is
+// ordered correctly.
+func (s *SQLiteStore) CountRecentPrefetchFailures(ctx context.Context, since time.Time) (int64, error) {
+	const query = `SELECT COUNT(*) FROM job_events WHERE event IN (?, ?, ?) AND timestamp >= ?`
+	var count int64
+	if err := s.db.QueryRowContext(ctx, query,
+		prefetchFailureEvents[0], prefetchFailureEvents[1], prefetchFailureEvents[2],
+		since.UTC().Format(time.RFC3339),
+	).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count recent prefetch failures: %w", err)
+	}
+	return count, nil
+}
+
 func deleteJobEventsBatch(ctx context.Context, tx *sql.Tx, cutoff string, limit int) (sql.Result, error) {
 	return tx.ExecContext(ctx, `
 		DELETE FROM job_events

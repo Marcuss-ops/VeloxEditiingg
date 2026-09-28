@@ -324,10 +324,13 @@ func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDep
 	// /metrics but skips the supervisor projection — pre-PR-3
 	// deploys without the metrics surface fall through cleanly).
 	// ── Alert Engine (Step 6 / Velox Metrics Center) ────────────────
-	// Evaluates 6 rules every 30s: error_rate, p95_wall_ms, worker
-	// offline, disk_free, ffmpeg_speed_ratio, and the mixed-packet
-	// capability contract. Logs structured alerts and optionally calls
-	// Slack/Telegram webhook via env vars.
+	// Evaluates 8 rules every 30s: error_rate, p95_wall_ms, worker
+	// offline, disk_free, ffmpeg_speed_ratio, the mixed-packet
+	// capability contract, plus the stuck-job pair added for the
+	// "PENDING 7min with idle workers" incident (JobPendingAgeHigh on
+	// the oldest pending job age, PrefetchFailureSpike on the durable
+	// prefetch failure journal). Logs structured alerts and optionally
+	// calls Slack/Telegram webhook via env vars.
 	if t.Observability != nil {
 		alertDeps := alertengine.DefaultRuleDeps()
 		alertDeps.Obs = t.Observability
@@ -336,6 +339,8 @@ func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDep
 		alertDeps.P95WallMs = cfg.Runtime.Alerts.P95WallMS
 		alertDeps.DiskFreeGB = cfg.Runtime.Alerts.DiskFreeGB
 		alertDeps.FFmpegMin = cfg.Runtime.Alerts.FFmpegMin
+		alertDeps.JobPendingAgeSecs = cfg.Runtime.Alerts.JobPendingAgeSecs
+		alertDeps.PrefetchFailureCount = cfg.Runtime.Alerts.PrefetchFailureCount
 
 		engine := alertengine.New(cfg.Runtime.Alerts.EvaluationInterval, alertNotifier)
 		engine.SetErrorMetrics(metricsCollector)
@@ -364,6 +369,14 @@ func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDep
 				supv := velmetrics.NewSupervisor(metricsCollector, labelRes, p.Outbox, costFactors)
 				supv.SetTick(cfg.Runtime.Metrics.Tick)
 				supv.SetLimit(cfg.Runtime.Metrics.AttemptLimit)
+				// Master job-queue projection (velox_jobs_pending /
+				// velox_jobs_running / velox_jobs_oldest_pending_age_seconds
+				// + the per-job outcome counters and e2e latency histogram).
+				// Optional by design: without the reader the supervisor still
+				// runs and the job families simply stay off /metrics.
+				if j != nil && j.SQLiteRepo != nil {
+					supv.SetJobQueueSource(j.SQLiteRepo)
+				}
 				return supv.Run(ctx)
 			},
 		}); err != nil {

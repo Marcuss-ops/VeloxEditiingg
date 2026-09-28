@@ -26,6 +26,15 @@ The 4 retired split-family names are FORBIDDEN
   for the single-label family `velox_placement_rejections_total{reason=...}`
   (rate anomalies, capability drift on `unsupported_executor`,
   fleet saturation on `capacity_full`, single-reason dominance).
+- `job-queue-and-prefetch.yml` — master job-queue depth/age,
+  prefetch failure spikes and end-to-end job latency:
+  `VeloxJobPendingAgeHigh` / `VeloxJobPendingAgeCritical` on
+  `velox_jobs_oldest_pending_age_seconds`, `VeloxPrefetchFailureSpike`
+  on `velox_prefetch_failures_total`, and `VeloxJobE2ELatencyHigh` on
+  `velox_job_e2e_duration_seconds{phase="total"}`. The first two have
+  runtime twins in `DataServer/internal/alertengine/rules.go`
+  (`JobPendingAgeHigh`, `PrefetchFailureSpike`) so the same conditions
+  reach the operator dashboard even without Prometheus.
 
 ## ConflictBudget metrics reference (no alert file yet)
 

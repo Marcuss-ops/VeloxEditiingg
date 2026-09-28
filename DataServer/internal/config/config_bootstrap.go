@@ -15,14 +15,16 @@ func loadSupervisorConfig(raw RawConfig) SupervisorConfig {
 
 func loadAlertConfig(raw RawConfig) AlertConfig {
 	return AlertConfig{
-		ErrorRatePct:       raw.Float("VELOX_ALERT_ERROR_RATE_PCT", 5.0, 0),
-		P95WallMS:          int64(raw.Int("VELOX_ALERT_P95_WALL_MS", 300000, 0)),
-		DiskFreeGB:         raw.Float("VELOX_ALERT_DISK_FREE_GB", 10.0, 0),
-		FFmpegMin:          raw.Float("VELOX_ALERT_FFMPEG_MIN", 1.5, 0),
-		WebhookURL:         strings.TrimSpace(raw.Get("VELOX_ALERT_WEBHOOK_URL")),
-		WebhookType:        strings.ToLower(strings.TrimSpace(raw.Get("VELOX_ALERT_WEBHOOK_TYPE"))),
-		EvaluationInterval: raw.Duration("VELOX_ALERT_EVALUATION_INTERVAL", 30*time.Second),
-		Cooldown:           raw.Duration("VELOX_ALERT_COOLDOWN", 5*time.Minute),
+		ErrorRatePct:         raw.Float("VELOX_ALERT_ERROR_RATE_PCT", 5.0, 0),
+		P95WallMS:            int64(raw.Int("VELOX_ALERT_P95_WALL_MS", 300000, 0)),
+		DiskFreeGB:           raw.Float("VELOX_ALERT_DISK_FREE_GB", 10.0, 0),
+		FFmpegMin:            raw.Float("VELOX_ALERT_FFMPEG_MIN", 1.5, 0),
+		JobPendingAgeSecs:    int64(raw.Int("VELOX_ALERT_JOB_PENDING_AGE_SECS", 300, 0)),
+		PrefetchFailureCount: int64(raw.Int("VELOX_ALERT_PREFETCH_FAILURE_COUNT", 3, 0)),
+		WebhookURL:           strings.TrimSpace(raw.Get("VELOX_ALERT_WEBHOOK_URL")),
+		WebhookType:          strings.ToLower(strings.TrimSpace(raw.Get("VELOX_ALERT_WEBHOOK_TYPE"))),
+		EvaluationInterval:   raw.Duration("VELOX_ALERT_EVALUATION_INTERVAL", 30*time.Second),
+		Cooldown:             raw.Duration("VELOX_ALERT_COOLDOWN", 5*time.Minute),
 	}
 }
 

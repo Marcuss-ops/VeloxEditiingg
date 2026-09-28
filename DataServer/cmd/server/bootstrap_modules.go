@@ -463,7 +463,11 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 		obsSvc := t.Observability.WithJobs(j.Repository).WithJobWriter(j.Repository).WithWorkers(workerReader).
 			WithJobInspection(&sqliteJobInspectionAdapter{store: p.SQLite}).
 			WithLiveAttempts(&sqliteLiveAttemptAdapter{store: p.SQLite}).
-			WithAssetProgress(&sqliteAssetProgressAdapter{store: p.SQLite})
+			WithAssetProgress(&sqliteAssetProgressAdapter{store: p.SQLite}).
+			// Durable twin of velox_prefetch_failures_total: the runtime
+			// PrefetchFailureSpike rule reads the event journal, not the
+			// metrics registry.
+			WithPrefetchFailures(p.SQLite)
 		registry.Register(observability.NewModule(obsSvc, api.AdminAuthMiddleware(cfg)))
 		logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] Observability REST API registered")
 	}

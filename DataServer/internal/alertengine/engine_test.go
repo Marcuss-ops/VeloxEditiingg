@@ -607,15 +607,20 @@ func TestCooldown_DifferentRulesDontSuppressEachOther(t *testing.T) {
 
 // ── Tests: MakeRules Integration ──────────────────────────────────────────
 
-func TestMakeRules_ReturnsSixRules(t *testing.T) {
+// TestMakeRules_ReturnsEightRules pins the runtime rule set: the
+// original 6 (error rate, p95 wall, worker offline, disk, ffmpeg
+// speed, packet copy) plus the 2 stuck-job rules (JobPendingAgeHigh,
+// PrefetchFailureSpike) added for the "PENDING 7min with idle
+// workers" incident.
+func TestMakeRules_ReturnsEightRules(t *testing.T) {
 	deps := DefaultRuleDeps()
 	deps.Obs = defaultsObs()
 	deps.DataDir = os.TempDir()
 	deps.DiskFreeGB = 0.0 // avoid flaky failure if /tmp has < 10 GB free
 
 	rules := MakeRules(deps)
-	if len(rules) != 6 {
-		t.Fatalf("MakeRules returned %d rules, want 6", len(rules))
+	if len(rules) != 8 {
+		t.Fatalf("MakeRules returned %d rules, want 8", len(rules))
 	}
 
 	ctx := context.Background()

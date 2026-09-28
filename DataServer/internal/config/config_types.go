@@ -219,14 +219,23 @@ type TelemetryConfig struct {
 
 // AlertConfig contains typed thresholds for the master alert engine.
 type AlertConfig struct {
-	ErrorRatePct       float64
-	P95WallMS          int64
-	DiskFreeGB         float64
-	FFmpegMin          float64
-	WebhookURL         string
-	WebhookType        string
-	EvaluationInterval time.Duration
-	Cooldown           time.Duration
+	ErrorRatePct float64
+	P95WallMS    int64
+	DiskFreeGB   float64
+	FFmpegMin    float64
+	// JobPendingAgeSecs is the oldest-PENDING-job age (seconds) above
+	// which JobPendingAgeHigh / VeloxJobPendingAgeHigh fire. The
+	// default (300s = 5 min) targets the "job stuck in PENDING with
+	// free workers" incident (blocked prefetch, no lease ever taken).
+	JobPendingAgeSecs int64
+	// PrefetchFailureCount is the number of journaled prefetch failure
+	// events inside the rule's fixed 15-minute window that trips
+	// PrefetchFailureSpike / VeloxPrefetchFailureSpike.
+	PrefetchFailureCount int64
+	WebhookURL           string
+	WebhookType          string
+	EvaluationInterval   time.Duration
+	Cooldown             time.Duration
 }
 
 // FleetConfig contains typed fleet-operator development/runtime controls.

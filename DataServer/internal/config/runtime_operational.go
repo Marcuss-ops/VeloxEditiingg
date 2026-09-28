@@ -266,6 +266,8 @@ func (c *Config) Snapshot() RuntimeSnapshot {
 		"runtime.supervisor.critical_fail_after":        fmt.Sprint(c.Runtime.Supervisor.CriticalFailAfter),
 		"runtime.alerts.error_rate_pct":                 fmt.Sprint(c.Runtime.Alerts.ErrorRatePct),
 		"runtime.alerts.p95_wall_ms":                    fmt.Sprint(c.Runtime.Alerts.P95WallMS),
+		"runtime.alerts.job_pending_age_secs":           fmt.Sprint(c.Runtime.Alerts.JobPendingAgeSecs),
+		"runtime.alerts.prefetch_failure_count":         fmt.Sprint(c.Runtime.Alerts.PrefetchFailureCount),
 		"runtime.alerts.disk_free_gb":                   fmt.Sprint(c.Runtime.Alerts.DiskFreeGB),
 		"runtime.alerts.ffmpeg_min":                     fmt.Sprint(c.Runtime.Alerts.FFmpegMin),
 		"runtime.alerts.webhook_url":                    redactPresence(c.Runtime.Alerts.WebhookURL),

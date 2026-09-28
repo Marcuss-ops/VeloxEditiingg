@@ -1,0 +1,106 @@
+# Prometheus alerting rules — job queue depth/age, prefetch failure
+# spikes and end-to-end job latency.
+#
+# Why this file exists: the runtime rule set (DataServer/
+# internal/alertengine/rules.go) and the Grafana dashboards covered
+# render-side health but not the two operator questions that needed
+# ad-hoc SQL on the 51:
+#
+#   1. "ti stanno arrivando job? quante code?"   → velox_jobs_pending /
+#      velox_jobs_running / velox_jobs_oldest_pending_age_seconds
+#      (new families, stamped by the metrics supervisor every tick);
+#   2. "perché il job è fermo da 7 minuti?"      → the stuck-job pair
+#      below. The Milton incident (job PENDING 7+ min with 4 idle
+#      workers because its prefetch failed) tripped none of the six
+#      render-side rules: depth stayed at 1, error rate stayed 0 and
+#      every worker was CONNECTED.
+#
+# Runtime twins (same thresholds, evaluated in-process every 30s and
+# surfaced on the operator dashboard / alert_events):
+#
+#   VeloxJobPendingAgeHigh    ↔ alertengine JobPendingAgeHigh
+#                               (VELOX_ALERT_JOB_PENDING_AGE_SECS, default 300)
+#   VeloxPrefetchFailureSpike ↔ alertengine PrefetchFailureSpike
+#                               (VELOX_ALERT_PREFETCH_FAILURE_COUNT, default 3 / 15m)
+#
+# Validate with `promtool check rules alerts/job-queue-and-prefetch.yml`
+# before opening the PR.
+
+groups:
+  - name: velox.job_queue_latency
+    interval: 30s
+    rules:
+
+      # Oldest PENDING job older than 5 minutes with no lease taken.
+      # This is the stuck-job signal: a queue of ONE job that has
+      # waited 7 minutes is the incident, not the depth.
+      - alert: VeloxJobPendingAgeHigh
+        expr: velox_jobs_oldest_pending_age_seconds > 300
+        for: 5m
+        labels:
+          severity: warning
+          domain: jobs
+        annotations:
+          summary: "Oldest PENDING job waiting >5m"
+          description: |
+            The oldest job in PENDING has been waiting
+            {{ $value | humanizeDuration }} with no worker lease taken.
+            Check the job's prefetch events (dispatch_status=prefetch_failed),
+            worker capacity (velox_jobs_running vs worker slots) and
+            velox_placement_rejections_total{reason=...}. Runtime twin:
+            alertengine JobPendingAgeHigh.
+
+      # Escalation: the same age past 15 minutes means the queue is
+      # genuinely wedged (failing prefetch, no capacity, or a placement
+      # loop), not a slow dispatch.
+      - alert: VeloxJobPendingAgeCritical
+        expr: velox_jobs_oldest_pending_age_seconds > 900
+        for: 5m
+        labels:
+          severity: critical
+          domain: jobs
+        annotations:
+          summary: "Oldest PENDING job waiting >15m"
+          description: |
+            A job has been waiting {{ $value | humanizeDuration }} without
+            being claimed. Delivery of this job is already late; treat as
+            a paging incident.
+
+      # 3+ prefetch failures inside 15 minutes — the leading indicator
+      # for the stuck jobs above. reason carries the closed vocabulary
+      # (download | cache | lease | plan | protocol | not_found | unknown);
+      # a spike in reason="not_found" means assets missing from the
+      # worker cache, which is exactly what blocked the 51.
+      - alert: VeloxPrefetchFailureSpike
+        expr: sum(increase(velox_prefetch_failures_total[15m])) > 2
+        labels:
+          severity: warning
+          domain: jobs
+        annotations:
+          summary: "Prefetch failure spike (>=3 in 15m)"
+          description: |
+            {{ $value }} prefetch failures in the last 15 minutes across
+            the fleet. Failed prefetch parks jobs in PENDING (no lease is
+            taken until assets are ready). Break down with
+            `sum by (worker_id, reason) (increase(velox_prefetch_failures_total[15m]))`.
+            Runtime twin: alertengine PrefetchFailureSpike.
+
+      # End-to-end job latency (submit → terminal) p95 above 15 minutes.
+      # phase="total" is submit→completed; filter it out explicitly when
+      # summing across phases, since total already contains queue+execute.
+      # This is the alert the render-only P95WallMsHigh rule could not
+      # raise: it sees render time, not the minute spent waiting for a
+      # first worker plus delivery.
+      - alert: VeloxJobE2ELatencyHigh
+        expr: histogram_quantile(0.95, sum by (le) (rate(velox_job_e2e_duration_seconds_bucket{phase="total"}[10m]))) > 900
+        for: 10m
+        labels:
+          severity: warning
+          domain: jobs
+        annotations:
+          summary: "Job end-to-end p95 >15m"
+          description: |
+            p95 submit→terminal latency is {{ $value | humanizeDuration }}.
+            Attribute it before tuning: phase="queue" (submit→first worker)
+            versus phase="execute" (execution+delivery) tells you whether
+            the time went to scheduling or to work.
