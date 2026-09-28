@@ -76,6 +76,14 @@ std::optional<RenderPlan> parseRenderPlanV1(
     }
 
     const std::string audioBlock = ju::extractArrayBlock(jsonStr, "audio_tracks");
+    const std::string fallbackBlock = ju::extractArrayBlock(jsonStr, "fallback_video_sources");
+    for (const auto& sourceStr : ju::splitTopLevelObjects(fallbackBlock)) {
+        const auto url = ju::extractJsonStringValue(sourceStr, "url");
+        if (!url.empty()) {
+            plan.fallback_video_sources.push_back(VideoSource{
+                url, ju::extractJsonStringValue(sourceStr, "cache_key")});
+        }
+    }
     if (!audioBlock.empty()) {
         for (const auto& audioStr : ju::splitTopLevelObjects(audioBlock)) {
             AudioTrack track;

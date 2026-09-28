@@ -138,6 +138,8 @@ func compileSceneTimeline(ctx context.Context, jobID string, scenes []sceneTimel
 	}
 
 	timeline := make([]plan.TimelineItem, 0, len(scenes)*2)
+	fallbackVideoSources := make([]plan.MediaSource, 0)
+	seenFallbackSources := make(map[string]struct{})
 	audioTracks := make([]plan.AudioTrack, 0, len(scenes)*2)
 	offset := 0.0
 	finalAudioConfigured := hasRuntimeFinalAudio(input)
@@ -166,6 +168,17 @@ func compileSceneTimeline(ctx context.Context, jobID string, scenes []sceneTimel
 			stock = []sceneTimelineAsset{*scene.Clip}
 		}
 		if len(stock) > 0 {
+			for _, asset := range stock {
+				url := strings.TrimSpace(asset.URL)
+				if url == "" {
+					continue
+				}
+				if _, exists := seenFallbackSources[url]; exists {
+					continue
+				}
+				seenFallbackSources[url] = struct{}{}
+				fallbackVideoSources = append(fallbackVideoSources, plan.MediaSource{Type: "video", URL: url})
+			}
 			segments, loopErr := loopStockToDuration(stock, targetDuration, probe, jobID, sceneIndex)
 			if loopErr != nil {
 				return nil, fmt.Errorf("clips.v1: scene %d stock: %w", sceneIndex, loopErr)
@@ -242,14 +255,15 @@ func compileSceneTimeline(ctx context.Context, jobID string, scenes []sceneTimel
 	}
 
 	return &plan.RenderPlan{
-		Version:     1,
-		JobID:       jobID,
-		Canvas:      plan.DefaultCanvas(),
-		CopyOnly:    false,
-		Mixed:       sceneTimelineHasStock(scenes),
-		Timeline:    timeline,
-		AudioTracks: audioTracks,
-		OutputPath:  outputPath,
+		Version:              1,
+		JobID:                jobID,
+		Canvas:               plan.DefaultCanvas(),
+		CopyOnly:             false,
+		Mixed:                sceneTimelineHasStock(scenes),
+		Timeline:             timeline,
+		FallbackVideoSources: fallbackVideoSources,
+		AudioTracks:          audioTracks,
+		OutputPath:           outputPath,
 	}, nil
 }
 

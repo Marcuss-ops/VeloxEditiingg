@@ -190,6 +190,13 @@ RenderResult RenderEngine::renderCopyOnly(
                 std::chrono::steady_clock::now() - renderStart).count(), true);
     }
 
+    for (std::size_t i = 0; i < plan.fallback_video_sources.size(); ++i) {
+        const auto& source = plan.fallback_video_sources[i];
+        const auto bound = bindOrStage(
+            source.url, source.cache_key,
+            numberedWorkPath(workDir, "copy_fallback_", ".mp4", i));
+        if (!bound.first.empty()) request.fallback_video_sources.push_back(bound.first);
+    }
 
     if (plan.audio_tracks.size() > 1) {
         result.error = "copy_only supports at most one final audio track";
@@ -260,6 +267,9 @@ RenderResult RenderEngine::renderCopyOnly(
                     : "copy_only_audio_not_final_copy");
         }
         return failRender("packet_mux_failed");
+    }
+    for (const auto& warning : muxResult.warnings) {
+        std::cerr << "warning: " << warning << '\n';
     }
     if (!plan.audio_tracks.empty() && muxResult.final_audio_decision) {
         const auto& finalAudioDecision = *muxResult.final_audio_decision;
@@ -524,6 +534,7 @@ RenderResult RenderEngine::renderMixed(
         metrics_.addSegment(segment);
         total_duration_us += duration_us;
     }
+
     packet_copy_segments = static_cast<int64_t>(request.video_segments.size());
     copy_segments_.store(packet_copy_segments);
     transcode_segments_.store(0);

@@ -50,6 +50,7 @@ struct CopyOnlyAudioTrack {
 
 struct CopyOnlyMuxRequest {
     std::vector<CopyOnlyVideoSegment> video_segments;
+    std::vector<std::filesystem::path> fallback_video_sources;
     std::optional<CopyOnlyAudioTrack> audio;
     // Mixed renders pin this to the canonical profile. Plain V2 copy-only
     // plans leave it unset and use the first input's concrete profile.
@@ -76,6 +77,7 @@ struct CopyOnlyMuxResult {
     // is published but explicitly not durable.
     bool output_durable{false};
     std::string error;
+    std::vector<std::string> warnings;
     int64_t video_packets{0};
     int64_t audio_packets{0};
     int64_t duration_us{0};

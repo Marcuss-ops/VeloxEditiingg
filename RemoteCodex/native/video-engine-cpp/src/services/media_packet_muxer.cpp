@@ -294,7 +294,7 @@ bool preparePlan(const CopyOnlyMuxRequest& request, packet::InputSessionRegistry
     }
 
     for (std::size_t index = 0; index < request.video_segments.size(); ++index) {
-        const auto& segment = request.video_segments[index];
+        auto segment = request.video_segments[index];
         if (segment.source_duration_us <= 0 || segment.source_in_us < 0) {
             return fail(result, "copy-only packet mux rejects invalid source video window");
         }
@@ -309,6 +309,67 @@ bool preparePlan(const CopyOnlyMuxRequest& request, packet::InputSessionRegistry
         int videoIndex = first ? firstVideoIndex : -1;
         int audioIndex = first && segment.include_audio ? firstAudioIndex : -1;
         packet::InputSession* session = first ? firstSession : nullptr;
+        if (!first) {
+            std::string issue;
+            session = sessions.resolve(segment.path, issue);
+            if (session != nullptr) {
+                videoIndex = session->demuxer().firstStream(AVMEDIA_TYPE_VIDEO);
+                if (videoIndex < 0) issue = "video stream missing";
+                else {
+                    const auto signature = mediaSignatureFromStream(session->demuxer().stream(videoIndex));
+                    if (!mediaSignaturesCompatible(signature, *videoTarget, &issue)) {
+                        issue = "stream profile mismatch: " + issue;
+                    } else if (!segment.normalized && !session->sourceWindowStartsOnKeyframe(
+                                   videoIndex, segment.source_in_us, issue)) {
+                        issue = "source window is not keyframe-safe";
+                    } else {
+                        issue.clear();
+                    }
+                }
+            }
+            if (session == nullptr || !issue.empty()) {
+                const auto originalPath = segment.path;
+                bool substituted = false;
+                for (const auto& candidatePath : request.fallback_video_sources) {
+                    if (candidatePath == originalPath) continue;
+                    std::string candidateError;
+                    auto* candidate = sessions.resolve(candidatePath, candidateError);
+                    if (candidate == nullptr) continue;
+                    auto& demuxer = candidate->demuxer();
+                    const int candidateIndex = demuxer.firstStream(AVMEDIA_TYPE_VIDEO);
+                    if (candidateIndex < 0) continue;
+                    const auto* candidateStream = demuxer.stream(candidateIndex);
+                    const auto signature = mediaSignatureFromStream(candidateStream);
+                    if (!mediaSignaturesCompatible(signature, *videoTarget, nullptr)) continue;
+                    const auto candidateDuration = streamDurationUs(demuxer.raw(), candidateStream);
+                    if (candidateDuration > 0 && candidateDuration < segment.source_duration_us) continue;
+                    if (!candidate->sourceWindowStartsOnKeyframe(candidateIndex, 0, candidateError)) continue;
+                    segment.path = candidatePath;
+                    segment.source_in_us = 0;
+                    segment.normalized = false;
+                    segment.metadata_certified = false;
+                    session = candidate;
+                    videoIndex = candidateIndex;
+                    substituted = true;
+                    if (result != nullptr) result->warnings.push_back(
+                        "timeline segment " + std::to_string(index) + " stock source " +
+                        originalPath.filename().string() + " was not packet-copy safe (" +
+                        issue + "); replaced with compatible stock " + candidatePath.filename().string());
+                    break;
+                }
+                if (!substituted) {
+                    if (result != nullptr) result->warnings.push_back(
+                        "timeline segment " + std::to_string(index) + " stock source " +
+                        originalPath.filename().string() + " was omitted because packet copy was unsafe (" +
+                        issue + "); timeline duration and audio sync were preserved");
+                    if (timeline > std::numeric_limits<int64_t>::max() - segment.source_duration_us) {
+                        return fail(result, "copy-only packet mux timeline overflows int64");
+                    }
+                    timeline += segment.source_duration_us;
+                    continue;
+                }
+            }
+        }
         const int64_t sourceDuration = first
             ? streamDurationUs(firstDemuxer.raw(), firstVideo)
             : 0;

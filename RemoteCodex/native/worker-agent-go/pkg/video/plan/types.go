@@ -22,6 +22,7 @@ type RenderPlan struct {
 	WatermarkAlreadyApplied bool            `json:"watermark_already_applied,omitempty"`
 	WatermarkRequested      bool            `json:"watermark_requested,omitempty"`
 	Timeline                []TimelineItem  `json:"timeline"`
+	FallbackVideoSources    []MediaSource   `json:"fallback_video_sources,omitempty"`
 	AudioTracks             []AudioTrack    `json:"audio_tracks"`
 	Layers                  []Layer         `json:"layers,omitempty"`
 	Subtitles               []SubtitleTrack `json:"subtitle_tracks,omitempty"`

@@ -110,6 +110,7 @@ struct RenderPlan {
     // from this ID; source assets keep their stream profile identity.
     std::string output_profile_id;
     std::vector<TimelineItem> timeline;
+    std::vector<VideoSource> fallback_video_sources;
     std::vector<AudioTrack> audio_tracks;
     std::string output_path;
 };
