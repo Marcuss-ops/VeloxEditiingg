@@ -141,11 +141,11 @@ func (r *DeliveryRunner) hydrateArtifact(ctx context.Context, artID string) (*re
 		return nil, err
 	}
 	if a != nil {
-		job, jobErr := r.store.GetJob(ctx, a.JobID)
-		if jobErr != nil {
-			return nil, fmt.Errorf("deliveries: load job title for artifact %s: %w", artID, jobErr)
-		}
-		if job != nil {
+		// Title hydration is optional display metadata. Older artifacts and
+		// test fixtures may not have a corresponding jobs row, so a lookup
+		// failure must preserve the artifact-ID filename fallback instead of
+		// preventing delivery.
+		if job, jobErr := r.store.GetJob(ctx, a.JobID); jobErr == nil && job != nil {
 			for _, key := range []string{"video_name", "voiceover_title", "script_title", "title"} {
 				if title, ok := job[key].(string); ok && strings.TrimSpace(title) != "" {
 					a.VideoTitle = strings.TrimSpace(title)
