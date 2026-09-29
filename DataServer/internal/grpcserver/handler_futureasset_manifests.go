@@ -1,6 +1,7 @@
 package grpcserver
 
 import (
+	"context"
 	"encoding/json"
 	"sort"
 	"strings"
@@ -10,6 +11,28 @@ import (
 	"velox-shared/futureasset"
 	"velox-shared/paths"
 )
+
+// futureAssetManifestsWithCatalog upgrades source-only Drive references with
+// identities learned from an earlier verified prefetch. The payload remains
+// authoritative when it already contains SHA-256 metadata.
+func (h *Handler) futureAssetManifestsWithCatalog(ctx context.Context, payload []byte) []futureasset.AssetManifest {
+	assets := futureAssetManifests(payload)
+	if h == nil || h.dbStore == nil {
+		return assets
+	}
+	for i := range assets {
+		if assets[i].SHA256 != "" || assets[i].AssetID == "" {
+			continue
+		}
+		identity, found, err := h.dbStore.LookupAssetIdentity(ctx, assets[i].AssetID)
+		if err != nil || !found {
+			continue
+		}
+		assets[i].SHA256 = identity.SHA256
+		assets[i].SizeBytes = identity.SizeBytes
+	}
+	return assets
+}
 
 // futureAssetManifests extracts all referenced asset manifests from a task
 // payload, walking nested JSON to collect {asset_key, sha256, size_bytes}

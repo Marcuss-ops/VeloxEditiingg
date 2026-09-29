@@ -29,6 +29,11 @@ func (h *Handler) handlePrefetchLifecycleEvent(workerID string, event *pb.Prefet
 		// after all assets deliberately has no asset identity and therefore does
 		// not mutate the evidence map.
 		if event.GetAssetId() != "" || event.GetAssetSha256() != "" {
+			if event.GetAssetId() != "" && event.GetAssetSha256() != "" && event.GetAssetSizeBytes() > 0 && h.dbStore != nil {
+				if err := h.dbStore.RecordAssetIdentity(context.Background(), event.GetAssetId(), workerID, event.GetAssetSha256(), event.GetAssetSizeBytes()); err != nil {
+					logGRPCf(context.Background(), logging.LevelWarn, logging.CodeGRPCPrefetchFailed, "[PREFETCH] asset identity catalog write asset=%s worker=%s: %v", event.GetAssetId(), workerID, err)
+				}
+			}
 			h.markPreparedAsset(workerID, &preparedAssetEvidence{
 				TaskID:       event.GetTaskId(),
 				TaskRevision: int(event.GetTaskRevision()),

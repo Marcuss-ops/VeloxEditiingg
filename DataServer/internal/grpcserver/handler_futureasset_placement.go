@@ -119,7 +119,7 @@ func (h *Handler) ensureFutureReservationOwnershipWithReservations(ctx context.C
 		return true, nil
 	}
 
-	assets := futureAssetManifests(current.Payload)
+	assets := h.futureAssetManifestsWithCatalog(ctx, current.Payload)
 	request := assembly.PlacementRequest{AssetSizes: make(map[string]uint64)}
 	for _, asset := range assets {
 		if asset.SHA256 == "" {

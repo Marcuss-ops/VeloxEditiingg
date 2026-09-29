@@ -64,7 +64,7 @@ func (h *Handler) buildDesiredReservations(
 				TaskID:        existing.TaskID,
 				ReservationID: existing.ReservationID,
 				TaskRevision:  existing.TaskRevision,
-				Assets:        futureAssetManifests(existing.Payload),
+				Assets:        h.futureAssetManifestsWithCatalog(ctx, existing.Payload),
 			})
 			continue
 		}
@@ -74,7 +74,7 @@ func (h *Handler) buildDesiredReservations(
 			skipCounts.add(SkipPayloadUnavailable)
 			continue
 		}
-		assets := futureAssetManifests(payload)
+		assets := h.futureAssetManifestsWithCatalog(ctx, payload)
 		candidateWarmSnapshots := warmSnapshots
 		if candidate.Executor.Valid() {
 			candidateWarmSnapshots = h.warmPlacementSnapshotsForExecutor(candidate.Executor)
@@ -132,7 +132,7 @@ func (h *Handler) buildDesiredReservations(
 			TaskID:        candidate.TaskID,
 			ReservationID: reservation.ReservationID,
 			TaskRevision:  candidate.Revision,
-			Assets:        futureAssetManifests(payload),
+			Assets:        assets,
 		})
 	}
 	return desired, jobs

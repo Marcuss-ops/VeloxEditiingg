@@ -46,7 +46,8 @@ func (h *Handler) PrefetchSubmittedJob(ctx context.Context, jobID string) {
 			return
 		}
 		workers := h.warmPlacementSnapshotsForExecutor(candidate.Executor)
-		decision, selectErr := selectWarmPlacement(workers, futureAssetManifests(payload))
+		manifests := h.futureAssetManifestsWithCatalog(ctx, payload)
+		decision, selectErr := selectWarmPlacement(workers, manifests)
 		if selectErr != nil || decision.WorkerID == "" {
 			if selectErr != nil {
 				logGRPCf(ctx, logging.LevelInfo, logging.CodeGRPCPrefetch, "[PREFETCH] submission hook deferred job=%s: %v", jobID, selectErr)
@@ -57,7 +58,7 @@ func (h *Handler) PrefetchSubmittedJob(ctx context.Context, jobID string) {
 		// queries. Without this early reservation, a worker's placement tick
 		// can claim the READY task in the gap between worker selection and the
 		// planner's later reservation write, undoing the cache-affinity choice.
-		if assets := futureAssetManifests(payload); len(assets) > 0 {
+		if len(manifests) > 0 {
 			reservation := taskgraph.FutureReservation{
 				TaskID: candidate.TaskID, JobID: candidate.JobID,
 				WorkerID:      decision.WorkerID,

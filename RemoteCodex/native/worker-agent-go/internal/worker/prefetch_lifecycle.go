@@ -106,6 +106,7 @@ func (w *Worker) prefetchPreparedHook() func(prefetch.PreparedJob) {
 			w.sendPrefetchLifecycleEvent(context.Background(), "prefetch_prepared", job.JobID, job.TaskID, futureasset.Plan{PlanID: job.PlanID, Version: job.PlanVersion}, func(e *pb.PrefetchLifecycleEvent) {
 				e.TaskRevision = int32(job.TaskRevision)
 				e.AssetId = asset.AssetID
+				e.AssetKey = asset.AssetKey
 				e.AssetSha256 = asset.SHA256
 				e.AssetSizeBytes = asset.SizeBytes
 				e.LocalPath = asset.LocalPath

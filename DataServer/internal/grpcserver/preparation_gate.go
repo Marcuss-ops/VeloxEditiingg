@@ -259,7 +259,7 @@ func (pg *PreparationGate) reservationPrepared(ctx context.Context, workerID str
 	if pg == nil || pg.handler == nil {
 		return false, nil
 	}
-	assets := futureAssetManifests(reservation.Payload)
+	assets := pg.handler.futureAssetManifestsWithCatalog(ctx, reservation.Payload)
 	if len(assets) == 0 {
 		return true, nil
 	}
@@ -460,7 +460,7 @@ func (pg *PreparationGate) ensurePrepared(ctx context.Context, workerID string, 
 	// Drive state transitions when the reservation state is empty (legacy).
 	// Once evidence exists, the reservation should be at least PREPARING.
 	if reservation.State == "" {
-		assets := futureAssetManifests(reservation.Payload)
+		assets := pg.handler.futureAssetManifestsWithCatalog(ctx, reservation.Payload)
 		if len(assets) > 0 {
 			pg.handler.preparedMu.RLock()
 			preparedAssets := pg.handler.prepared[reservation.ReservationID]
@@ -481,7 +481,7 @@ func (pg *PreparationGate) ensurePrepared(ctx context.Context, workerID string, 
 	}
 
 	// Attempt identity verification.
-	assets := futureAssetManifests(reservation.Payload)
+	assets := pg.handler.futureAssetManifestsWithCatalog(ctx, reservation.Payload)
 	cert := pg.buildCertificate(reservation.ReservationID, assets)
 	if ok, reason := verifyAttempt(cert, workerID, candidate.Revision, reservation.ReservationID); !ok {
 		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCPlacementFailed, "[PLACEMENT] attempt verification FAILED worker=%s task=%s reservation=%s reason=%s", workerID, candidate.TaskID, reservation.ReservationID, reason)
