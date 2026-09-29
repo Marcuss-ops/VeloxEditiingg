@@ -7,9 +7,12 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"velox-server/internal/placement"
 
@@ -102,6 +105,41 @@ func (r *SQLiteTaskRepository) ListReadyCandidates(ctx context.Context, limit in
 // permanently hiding jobs beyond its first candidate window.
 func (r *SQLiteTaskRepository) ListReadyCandidatesPage(ctx context.Context, limit, offset int) ([]placement.TaskCandidate, error) {
 	return r.listReadyCandidates(ctx, limit, offset, true)
+}
+
+// FutureTaskCandidateByJobID returns one unassigned PENDING or READY task by
+// job identity. Future-asset planning uses this to prewarm source assets while
+// creator jobs are waiting for generated runtime media to be finalized.
+func (r *SQLiteTaskRepository) FutureTaskCandidateByJobID(ctx context.Context, jobID string) (placement.TaskCandidate, bool, error) {
+	if r == nil || r.store == nil || r.store.db == nil {
+		return placement.TaskCandidate{}, false, fmt.Errorf("task repository: store not initialized")
+	}
+	const query = `SELECT t.task_id,t.job_id,t.revision,t.priority,t.attempt_count,t.created_at,t.executor_id,t.executor_version,
+COALESCE(GROUP_CONCAT(tr.capability),''),COALESCE(ts.payload_json,'')
+FROM tasks t
+LEFT JOIN task_requirements tr ON tr.task_id=t.task_id
+LEFT JOIN task_specs ts ON ts.task_id=t.task_id
+WHERE t.job_id=? AND t.status IN ('PENDING','READY') AND (t.worker_id='' OR t.worker_id IS NULL)
+GROUP BY t.task_id ORDER BY t.created_at ASC,t.task_id ASC LIMIT 1`
+	var job dispatchable.Job
+	var createdAt, capabilities, payload string
+	err := r.store.db.QueryRowContext(ctx, query, jobID).Scan(&job.TaskID, &job.JobID, &job.Revision, &job.Priority, &job.AttemptCount, &createdAt, &job.ExecutorID, &job.ExecutorVersion, &capabilities, &payload)
+	if err == sql.ErrNoRows {
+		return placement.TaskCandidate{}, false, nil
+	}
+	if err != nil {
+		return placement.TaskCandidate{}, false, err
+	}
+	job.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
+	if strings.TrimSpace(capabilities) != "" {
+		job.RequiredCapabilities = strings.Split(capabilities, ",")
+	}
+	job.Payload = []byte(payload)
+	var payloadMap map[string]interface{}
+	if json.Unmarshal(job.Payload, &payloadMap) == nil {
+		job.PlacementPinWorkerID, _ = payloadMap["_placement_pin_worker_id"].(string)
+	}
+	return taskCandidatesFromDispatchableJobs([]dispatchable.Job{job})[0], true, nil
 }
 
 func (r *SQLiteTaskRepository) listReadyCandidates(ctx context.Context, limit, offset int, paged bool) ([]placement.TaskCandidate, error) {

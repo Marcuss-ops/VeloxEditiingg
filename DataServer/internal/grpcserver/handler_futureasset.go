@@ -11,12 +11,27 @@ package grpcserver
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"velox-server/internal/logging"
+	"velox-server/internal/placement"
 	"velox-server/internal/taskgraph"
 	"velox-shared/futureasset"
 )
+
+type futureTaskCandidateLoader interface {
+	FutureTaskCandidateByJobID(context.Context, string) (placement.TaskCandidate, bool, error)
+}
+
+func candidateHasJob(candidates []placement.TaskCandidate, jobID string) bool {
+	for _, candidate := range candidates {
+		if candidate.JobID == jobID {
+			return true
+		}
+	}
+	return false
+}
 
 // PrefetchSubmittedJob is the low-latency submission hook. It resolves the
 // warm worker from the just-persisted task payload and starts the same
@@ -36,16 +51,42 @@ func (h *Handler) PrefetchSubmittedJob(ctx context.Context, jobID string) {
 		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCPrefetchFailed, "[PREFETCH] submission hook list candidates job=%s failed", jobID)
 		return
 	}
-	for _, candidate := range candidates {
-		if candidate.JobID != jobID {
-			continue
+	var candidate *placement.TaskCandidate
+	for i := range candidates {
+		if candidates[i].JobID == jobID {
+			copyCandidate := candidates[i]
+			candidate = &copyCandidate
+			break
 		}
+	}
+	if candidate == nil {
+		if loader, supported := h.taskRepo.(futureTaskCandidateLoader); supported {
+			loaded, found, loadErr := loader.FutureTaskCandidateByJobID(ctx, jobID)
+			if loadErr != nil {
+				logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCPrefetchFailed, "[PREFETCH] submission hook candidate job=%s: %v", jobID, loadErr)
+				return
+			}
+			if found {
+				candidate = &loaded
+			}
+		}
+	}
+	if candidate != nil {
 		payload, payloadErr := store.FutureTaskPayload(ctx, candidate.TaskID)
 		if payloadErr != nil {
 			logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCPrefetchFailed, "[PREFETCH] submission hook payload task=%s: %v", candidate.TaskID, payloadErr)
 			return
 		}
 		workers := h.warmPlacementSnapshotsForExecutor(candidate.Executor)
+		if pin := strings.TrimSpace(candidate.PlacementPinWorkerID); pin != "" {
+			pinned := workers[:0]
+			for _, worker := range workers {
+				if worker.WorkerID == pin {
+					pinned = append(pinned, worker)
+				}
+			}
+			workers = pinned
+		}
 		manifests := h.futureAssetManifestsWithCatalog(ctx, payload)
 		decision, selectErr := selectWarmPlacement(workers, manifests)
 		if selectErr != nil || decision.WorkerID == "" {
@@ -142,6 +183,18 @@ func (h *Handler) refreshFutureAssetPlan(ctx context.Context, workerID, currentJ
 	candidates, ok := h.loadCandidates(ctx, workerID)
 	if !ok {
 		return
+	}
+	if currentJobID != "" && !candidateHasJob(candidates, currentJobID) {
+		if loader, supported := h.taskRepo.(futureTaskCandidateLoader); supported {
+			candidate, found, loadErr := loader.FutureTaskCandidateByJobID(ctx, currentJobID)
+			if loadErr != nil {
+				logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCPrefetchFailed, "[PREFETCH] current candidate job=%s: %v", currentJobID, loadErr)
+				return
+			}
+			if found {
+				candidates = append([]placement.TaskCandidate{candidate}, candidates...)
+			}
+		}
 	}
 	candidatesLoadedAt = time.Now().UTC()
 
