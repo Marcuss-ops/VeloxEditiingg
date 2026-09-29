@@ -148,8 +148,16 @@ func (r *DeliveryRunner) hydrateArtifact(ctx context.Context, artID string) (*re
 		// preventing delivery.
 		if job, jobErr := r.store.GetJob(ctx, a.JobID); jobErr == nil && job != nil {
 			videoName, _ := job["video_name"].(string)
-			requestJSON, _ := json.Marshal(job["request_json"])
-			a.VideoTitle = repository.ResolveArtifactTitle(videoName, string(requestJSON))
+			// GetJob returns request_json as the raw JSON string; only marshal
+			// when a driver handed us a non-string object so the resolver sees
+			// the actual request document either way.
+			requestJSON, _ := job["request_json"].(string)
+			if requestJSON == "" {
+				if raw, marshalErr := json.Marshal(job["request_json"]); marshalErr == nil && job["request_json"] != nil {
+					requestJSON = string(raw)
+				}
+			}
+			a.VideoTitle = repository.ResolveArtifactTitle(videoName, requestJSON)
 			if a.VideoTitle == "" {
 				for _, key := range []string{"voiceover_title", "script_title", "title"} {
 					if title, ok := job[key].(string); ok && strings.TrimSpace(title) != "" {

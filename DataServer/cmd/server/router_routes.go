@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"mime"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -137,6 +139,7 @@ func artifactDownloadHandler(reader artifacts.ArtifactReader, blobs repository.B
 			c.AbortWithStatus(http.StatusNotFound)
 			return
 		}
+		filename := downloadFileName(c.Request.Context(), a, ownership)
 		if len(ownership) > 0 && ownership[0] != nil {
 			if clientID := pipeline.ClientIDFromContext(c); clientID != "" {
 				if _, err := ownership[0].Forwarding().GetCreatorForwardingByTargetJobID(c.Request.Context(), a.JobID, clientID); err != nil {
@@ -156,14 +159,52 @@ func artifactDownloadHandler(reader artifacts.ArtifactReader, blobs repository.B
 			c.AbortWithStatus(http.StatusNotFound)
 			return
 		}
-		mime := "video/mp4"
+		contentType := "video/mp4"
 		if strings.HasPrefix(a.Type, "video/") {
-			mime = a.Type
+			contentType = a.Type
 		}
-		c.Header("Content-Type", mime)
-		c.Header("Content-Disposition", "attachment")
-		http.ServeContent(c.Writer, c.Request, a.ID, st.ModTime(), f)
+		c.Header("Content-Type", contentType)
+		// Serve a human-readable filename (the submitted video_name/script
+		// title) instead of an opaque artifact digest, so every consumer that
+		// saves the attachment (PipelineGen, curl -O, browsers) stores a file
+		// it can recognize. FormatMediaType quotes/escapes per RFC 6266.
+		c.Header("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": filename}))
+		http.ServeContent(c.Writer, c.Request, filename, st.ModTime(), f)
 	}
+}
+
+// downloadFileName resolves the human-readable download filename for an
+// artifact: the job's video_name/script title when one exists, otherwise the
+// artifact ID as before. Title hydration is best-effort display metadata: a
+// lookup failure must keep serving the artifact-ID fallback so the download
+// surface never becomes unavailable because of a missing jobs row.
+func downloadFileName(ctx context.Context, a *store.Artifact, ownership []*store.SQLiteStore) string {
+	for _, st := range ownership {
+		if st == nil {
+			continue
+		}
+		job, err := st.GetJob(ctx, a.JobID)
+		if err != nil || job == nil {
+			continue
+		}
+		videoName, _ := job["video_name"].(string)
+		requestJSON, _ := job["request_json"].(string)
+		if title := repository.ResolveArtifactTitle(videoName, requestJSON); title != "" {
+			// Match relayFileName semantics: video artifacts always save with
+			// an .mp4 extension so the downloaded file stays playable.
+			if strings.HasPrefix(a.Type, "video/") && filepath.Ext(title) == "" {
+				title += ".mp4"
+			}
+			return title
+		}
+		for _, key := range []string{"voiceover_title", "script_title", "title"} {
+			if title, ok := job[key].(string); ok && strings.TrimSpace(title) != "" {
+				return strings.TrimSpace(title)
+			}
+		}
+		break
+	}
+	return a.ID
 }
 
 // registerMetricsRoutes mounts the Prometheus /metrics endpoint only
