@@ -7,6 +7,7 @@ package deliveries
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -146,10 +147,15 @@ func (r *DeliveryRunner) hydrateArtifact(ctx context.Context, artID string) (*re
 		// failure must preserve the artifact-ID filename fallback instead of
 		// preventing delivery.
 		if job, jobErr := r.store.GetJob(ctx, a.JobID); jobErr == nil && job != nil {
-			for _, key := range []string{"video_name", "voiceover_title", "script_title", "title"} {
-				if title, ok := job[key].(string); ok && strings.TrimSpace(title) != "" {
-					a.VideoTitle = strings.TrimSpace(title)
-					break
+			videoName, _ := job["video_name"].(string)
+			requestJSON, _ := json.Marshal(job["request_json"])
+			a.VideoTitle = repository.ResolveArtifactTitle(videoName, string(requestJSON))
+			if a.VideoTitle == "" {
+				for _, key := range []string{"voiceover_title", "script_title", "title"} {
+					if title, ok := job[key].(string); ok && strings.TrimSpace(title) != "" {
+						a.VideoTitle = strings.TrimSpace(title)
+						break
+					}
 				}
 			}
 		}

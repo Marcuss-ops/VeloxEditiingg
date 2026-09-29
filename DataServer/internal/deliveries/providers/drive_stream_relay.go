@@ -83,10 +83,11 @@ func (r *DriveStreamRelay) prepareArtifactLocked(ctx context.Context, uploadID, 
 		parentFolder  string
 		metadata      string
 		videoTitle    string
+		requestJSON   string
 	}
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT jdp.destination_id, COALESCE(jdp.publication_id,''), COALESCE(dd.folder_id,''),
-		       COALESCE(jdp.metadata_json,'{}'), COALESCE(j.video_name,'')
+		       COALESCE(jdp.metadata_json,'{}'), COALESCE(j.video_name,''), COALESCE(j.request_json,'')
 		FROM job_delivery_plans jdp
 		JOIN delivery_destinations dd ON dd.destination_id=jdp.destination_id
 		JOIN jobs j ON j.job_id=jdp.job_id
@@ -99,7 +100,7 @@ func (r *DriveStreamRelay) prepareArtifactLocked(ctx context.Context, uploadID, 
 	var targets []target
 	for rows.Next() {
 		var t target
-		if err := rows.Scan(&t.destinationID, &t.publicationID, &t.parentFolder, &t.metadata, &t.videoTitle); err != nil {
+		if err := rows.Scan(&t.destinationID, &t.publicationID, &t.parentFolder, &t.metadata, &t.videoTitle, &t.requestJSON); err != nil {
 			_ = rows.Close()
 			return fmt.Errorf("scan Drive relay destination: %w", err)
 		}
@@ -133,7 +134,7 @@ func (r *DriveStreamRelay) prepareArtifactLocked(ctx context.Context, uploadID, 
 		if err != nil {
 			return fmt.Errorf("create Drive relay project folder: %w", err)
 		}
-		fileName := relayFileName(t.videoTitle, artifactID)
+		fileName := relayFileName(repository.ResolveArtifactTitle(t.videoTitle, t.requestJSON), artifactID)
 		sessionURI, err := r.drive.InitiateRelaySession(ctx, fileName, folder.ID, artifactID, t.destinationID, t.publicationID)
 		if err != nil {
 			return fmt.Errorf("initialize Drive relay session: %w", err)
