@@ -2,6 +2,7 @@ package drive
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -89,6 +90,68 @@ func TestInitiateResumableSessionCreatesSessionWithoutUploadingBytes(t *testing.
 	}
 	if got != sessionURI || initCount != 1 || putCount != 0 {
 		t.Fatalf("session=%q init=%d PUT=%d, want session URI, one init, zero PUTs", got, initCount, putCount)
+	}
+}
+
+func TestInitiateRelaySessionUsesUnknownLengthAndIdentityProperties(t *testing.T) {
+	const sessionURI = "https://upload.example/session/relay"
+	service := driveTestService(func(req *http.Request) (*http.Response, error) {
+		if req.Method != http.MethodPost {
+			t.Fatalf("request method = %s, want POST", req.Method)
+		}
+		if got := req.Header.Get("X-Upload-Content-Length"); got != "" {
+			t.Fatalf("unknown-size session sent X-Upload-Content-Length=%q", got)
+		}
+		var metadata map[string]interface{}
+		if err := json.NewDecoder(req.Body).Decode(&metadata); err != nil {
+			t.Fatalf("decode metadata: %v", err)
+		}
+		props, _ := metadata["properties"].(map[string]interface{})
+		if props["velox_artifact_id"] != "artifact-1" || props["velox_destination_id"] != "dest-1" {
+			t.Fatalf("relay properties = %#v", props)
+		}
+		h := make(http.Header)
+		h.Set("Location", sessionURI)
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("")), Header: h}, nil
+	})
+
+	got, err := service.InitiateRelaySession(context.Background(), "render.mp4", "folder-1", "artifact-1", "dest-1")
+	if err != nil || got != sessionURI {
+		t.Fatalf("InitiateRelaySession() = %q, %v", got, err)
+	}
+}
+
+func TestUploadResumablePartUsesUnknownThenFinalTotalSequentially(t *testing.T) {
+	var calls int
+	service := driveTestService(func(req *http.Request) (*http.Response, error) {
+		if req.Method != http.MethodPut {
+			t.Fatalf("request method = %s, want PUT", req.Method)
+		}
+		calls++
+		switch calls {
+		case 1:
+			if got := req.Header.Get("Content-Range"); got != "bytes 0-2/*" {
+				t.Fatalf("first Content-Range = %q", got)
+			}
+			return &http.Response{StatusCode: http.StatusPermanentRedirect, Body: io.NopCloser(strings.NewReader("")), Header: http.Header{"Range": []string{"bytes=0-2"}}}, nil
+		case 2:
+			if got := req.Header.Get("Content-Range"); got != "bytes 3-4/5" {
+				t.Fatalf("final Content-Range = %q", got)
+			}
+			return driveResponse(http.StatusCreated, `{"id":"relay-file","webViewLink":"https://drive.google.com/file/d/relay-file"}`), nil
+		default:
+			t.Fatalf("unexpected PUT %d", calls)
+			return nil, nil
+		}
+	})
+
+	next, completed, err := service.UploadResumablePart(context.Background(), "https://upload.example/session/relay", 0, 0, []byte("abc"))
+	if err != nil || next != 3 || completed != nil {
+		t.Fatalf("unknown-size part = next %d, completed %#v, err %v", next, completed, err)
+	}
+	next, completed, err = service.UploadResumablePart(context.Background(), "https://upload.example/session/relay", 3, 5, []byte("de"))
+	if err != nil || next != 5 || completed == nil || !completed.Success || completed.FileID != "relay-file" {
+		t.Fatalf("final part = next %d, completed %#v, err %v", next, completed, err)
 	}
 }
 

@@ -74,6 +74,18 @@ func buildUploadMetadata(fileName, folderID, deliveryID string) ([]byte, error) 
 	return json.Marshal(meta)
 }
 
+func buildRelayUploadMetadata(fileName, folderID, artifactID, destinationID string) ([]byte, error) {
+	meta := map[string]interface{}{
+		"name":    fileName,
+		"parents": []string{folderID},
+		"properties": map[string]string{
+			"velox_artifact_id":    artifactID,
+			"velox_destination_id": destinationID,
+		},
+	}
+	return json.Marshal(meta)
+}
+
 // uploadResumable drives the resumable protocol: initiate a session, then
 // stream the file in fixed chunks. Each chunk is PUT with a Content-Range;
 // a 308 means "accepted, send the next chunk" and a 200/201 means done. On a
@@ -112,8 +124,8 @@ func (s *Service) uploadResumable(
 // upload and must be kept private. It is useful when session creation can be
 // overlapped with other preparation work.
 func (s *Service) InitiateResumableSession(ctx context.Context, fileName, folderID, deliveryID string, size int64) (string, error) {
-	if size <= 0 {
-		return "", fmt.Errorf("resumable session requires a positive file size")
+	if size < 0 {
+		return "", fmt.Errorf("resumable session size cannot be negative")
 	}
 	if strings.TrimSpace(folderID) == "" {
 		return "", fmt.Errorf("DELIVERY_TARGET_REQUIRED: an explicit Drive destination is required")
@@ -128,6 +140,82 @@ func (s *Service) InitiateResumableSession(ctx context.Context, fileName, folder
 	}
 	sessionURI, _, err := s.initiateResumableUpload(ctx, metaJSON, size, token)
 	return sessionURI, err
+}
+
+// InitiateRelaySession creates a resumable session for an artifact whose
+// final size is not known yet. The Drive file is tagged with the artifact and
+// destination identities so delivery can reconcile it after master-side
+// artifact verification. The URI is a bearer capability and must stay on the
+// master.
+func (s *Service) InitiateRelaySession(ctx context.Context, fileName, folderID, artifactID, destinationID string) (string, error) {
+	if strings.TrimSpace(folderID) == "" || strings.TrimSpace(artifactID) == "" || strings.TrimSpace(destinationID) == "" {
+		return "", fmt.Errorf("relay session requires folder, artifact and destination identities")
+	}
+	token, err := s.getToken(ctx)
+	if err != nil {
+		return "", err
+	}
+	metaJSON, err := buildRelayUploadMetadata(fileName, folderID, artifactID, destinationID)
+	if err != nil {
+		return "", fmt.Errorf("marshal relay upload metadata: %w", err)
+	}
+	sessionURI, _, err := s.initiateResumableUpload(ctx, metaJSON, 0, token)
+	return sessionURI, err
+}
+
+// UploadResumablePart sends one ordered portion of a relay upload. A zero
+// total uses Drive's unknown-size range form; a positive total marks the
+// final part. nextOffset is derived from Drive's committed Range header.
+func (s *Service) UploadResumablePart(ctx context.Context, sessionURI string, start int64, total int64, data []byte) (nextOffset int64, completed *UploadResult, err error) {
+	if strings.TrimSpace(sessionURI) == "" || start < 0 || len(data) == 0 || total < 0 || (total > 0 && start+int64(len(data)) > total) {
+		return 0, nil, fmt.Errorf("invalid Drive relay part")
+	}
+	token, err := s.getToken(ctx)
+	if err != nil {
+		return 0, nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, sessionURI, bytes.NewReader(data))
+	if err != nil {
+		return 0, nil, fmt.Errorf("create Drive relay part request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token.AccessToken)
+	req.Header.Set("Content-Length", strconv.Itoa(len(data)))
+	end := start + int64(len(data)) - 1
+	rangeTotal := "*"
+	if total > 0 {
+		rangeTotal = strconv.FormatInt(total, 10)
+	}
+	req.Header.Set("Content-Range", fmt.Sprintf("bytes %d-%d/%s", start, end, rangeTotal))
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return 0, nil, fmt.Errorf("send Drive relay part: %w", err)
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusPermanentRedirect:
+		committed := resp.Header.Get("Range")
+		if committed == "" {
+			return start, nil, nil
+		}
+		parts := strings.SplitN(committed, "-", 2)
+		if len(parts) != 2 {
+			return 0, nil, fmt.Errorf("Drive relay returned invalid Range header %q", committed)
+		}
+		last, parseErr := strconv.ParseInt(strings.TrimSpace(parts[1]), 10, 64)
+		if parseErr != nil || last < start || last > end {
+			return 0, nil, fmt.Errorf("Drive relay returned out-of-range commit header %q", committed)
+		}
+		return last + 1, nil, nil
+	case http.StatusOK, http.StatusCreated:
+		var f File
+		if err := json.NewDecoder(resp.Body).Decode(&f); err != nil {
+			return 0, nil, fmt.Errorf("decode Drive relay completion: %w", err)
+		}
+		return end + 1, &UploadResult{Success: true, FileID: f.ID, WebViewLink: f.WebViewLink}, nil
+	default:
+		raw, _ := io.ReadAll(resp.Body)
+		return 0, nil, &chunkUploadError{status: resp.StatusCode, body: credentials.JSON(string(raw))}
+	}
 }
 
 // uploadResumableChunksFrom uploads a file through a previously created
@@ -212,7 +300,9 @@ func (s *Service) initiateResumableUpload(ctx context.Context, metaJSON []byte, 
 	req.Header.Set("Authorization", "Bearer "+token.AccessToken)
 	req.Header.Set("Content-Type", "application/json; charset=UTF-8")
 	req.Header.Set("X-Upload-Content-Type", "application/octet-stream")
-	req.Header.Set("X-Upload-Content-Length", strconv.FormatInt(size, 10))
+	if size > 0 {
+		req.Header.Set("X-Upload-Content-Length", strconv.FormatInt(size, 10))
+	}
 
 	networkStart := time.Now()
 	resp, err := s.httpClient.Do(req)
