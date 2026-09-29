@@ -137,8 +137,9 @@ func (r *DriveStreamRelay) prepareArtifactLocked(ctx context.Context, uploadID, 
 		}
 		title := relayTitle(t.videoTitle, t.requestJSON, t.metadata)
 		if strings.TrimSpace(title) == "" {
-			slog.Warn("Drive relay using opaque artifact ID as filename",
+			slog.Warn("Drive relay has no submitted title; using a job-based filename",
 				"job_id", jobID, "video_name", t.videoTitle, "artifact_id", artifactID)
+			title = "Video " + jobID
 		}
 		fileName := relayFileName(title, artifactID)
 		sessionURI, err := r.drive.InitiateRelaySession(ctx, fileName, folder.ID, artifactID, t.destinationID, t.publicationID)

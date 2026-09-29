@@ -76,7 +76,12 @@ func (d *DriveProvider) Deliver(ctx context.Context, artifact *repository.Artifa
 			}
 		}
 	}
-	uploadRes, err := d.service.UploadVideoNamed(ctx, filePath, artifact.ID, artifact.VideoTitle, driveFolderReference(destination), marker)
+	fileName := strings.TrimSpace(artifact.VideoTitle)
+	if fileName == "" {
+		log.Printf("[DELIVERY][DRIVE] missing submitted video title; using job-based filename job=%s artifact=%s", artifact.JobID, artifact.ID)
+		fileName = "Video " + artifact.JobID
+	}
+	uploadRes, err := d.service.UploadVideoNamed(ctx, filePath, artifact.ID, fileName, driveFolderReference(destination), marker)
 	if err != nil {
 		return nil, classifyDriveError(err)
 	}
