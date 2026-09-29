@@ -15,9 +15,10 @@
   retaining one resolver lease and PREPARED certificate per job. Reuse verified
   media metadata for content-identical assets; the wire plan still carries
   each job's asset manifest for lineage and claim verification.
-- Fast assembly already fails closed when any required asset is missing or
-  unverifiable at execution; the worker records that condition in
-  `velox_assembly_assets_missing_at_execution`.
+- Fast assembly fails closed when any required asset is missing or
+  unverifiable at execution. When the metric is nonzero, the worker resolves
+  manifest assets through the canonical cache resolver, refuses the current
+  attempt, and lets a fresh attempt pass the normal binding gate.
 - Build verification: `go build ./...` in `DataServer/` and
   `RemoteCodex/native/worker-agent-go/`. Tests were not run.
 
