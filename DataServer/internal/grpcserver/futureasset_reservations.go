@@ -58,12 +58,17 @@ func (h *Handler) buildDesiredReservations(
 			// Existing ownership is sticky until TTL/reconciliation.
 			reservation := existing.FutureReservation
 			reservation.Distance = len(jobs) + 1
+			// PREPARE may own a PENDING task while generated media is produced.
+			// FINALIZE advances the task revision; refresh the same reservation
+			// lineage so the worker can certify the expanded manifest against the
+			// revision that placement will actually claim.
+			reservation.TaskRevision = candidate.Revision
 			desired = append(desired, reservation)
 			jobs = append(jobs, futureasset.Job{
 				JobID:         existing.JobID,
 				TaskID:        existing.TaskID,
 				ReservationID: existing.ReservationID,
-				TaskRevision:  existing.TaskRevision,
+				TaskRevision:  candidate.Revision,
 				Assets:        h.futureAssetManifestsWithCatalog(ctx, existing.Payload),
 			})
 			continue
