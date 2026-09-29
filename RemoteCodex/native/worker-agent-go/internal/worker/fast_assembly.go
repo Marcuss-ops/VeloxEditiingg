@@ -6,8 +6,10 @@ import (
 	"strings"
 	"time"
 
+	"velox-shared/assetref"
 	videoContract "velox-shared/contract"
 	"velox-shared/contract/assembly"
+	"velox-worker-agent/internal/downloader"
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/prefetch"
 	"velox-worker-agent/internal/taskrunner"
@@ -96,7 +98,10 @@ func (w *Worker) RunReadyFastAssembly(ctx context.Context, spec executor.TaskSpe
 	assetsReady, assetsMissing := w.fastAssemblyAssetAvailability(plan, manifestResult)
 	telemetry.GetPrometheusMetrics().RecordAssemblyExecution(assetsReady, assetsMissing, 0)
 	if assetsMissing > 0 {
-		return FastAssemblyOutcome{}, fmt.Errorf("fast assembly asset gate: %d assets are missing or unverifiable at execution", assetsMissing)
+		if repairErr := w.rePrefetchFastAssemblyAssets(ctx, spec.JobID, plan); repairErr != nil {
+			return FastAssemblyOutcome{}, fmt.Errorf("fast assembly asset gate: %d assets are missing or unverifiable at execution; fail-closed re-prefetch failed: %w", assetsMissing, repairErr)
+		}
+		return FastAssemblyOutcome{}, fmt.Errorf("fast assembly asset gate: %d assets were missing or unverifiable at execution; assets were re-prefetched and this attempt was refused for a fresh preparation pass", assetsMissing)
 	}
 	bindings, err := w.fastAssemblyBindings(plan, manifestResult)
 	if err != nil {
@@ -119,6 +124,37 @@ func (w *Worker) RunReadyFastAssembly(ctx context.Context, spec executor.TaskSpe
 		return FastAssemblyOutcome{Report: &report}, err
 	}
 	return FastAssemblyOutcome{Report: &report, Certificate: certificate}, nil
+}
+
+// rePrefetchFastAssemblyAssets repairs cache availability after the metric
+// gate detects a missing asset. It resolves every manifest entry because the
+// cache resolver can cheaply certify existing hits and fetch only missing
+// bytes. The current attempt remains failed closed; a later attempt must pass
+// the normal prepared-asset and binding checks again.
+func (w *Worker) rePrefetchFastAssemblyAssets(ctx context.Context, jobID string, plan *videoContract.CompiledRenderPlanV2) error {
+	resolver := w.assetCacheResolver()
+	if resolver == nil {
+		return fmt.Errorf("cache resolver unavailable")
+	}
+	for _, asset := range fastAssemblyPlanAssets(plan) {
+		assetKey := strings.TrimSpace(asset.AssetKey)
+		if assetKey == "" {
+			assetKey = asset.AssetID
+		}
+		if assetKey == "" {
+			return fmt.Errorf("asset manifest has no asset key or id")
+		}
+		_, err := resolver.Resolve(ctx, downloader.DownloadRequest{
+			JobID: jobID, AssetKey: assetref.AssetKey(assetKey), AssetID: asset.AssetID,
+			Role: downloader.RoleFromString(asset.Kind), Source: "worker_direct_source",
+			SourceURI: w.sourceLocator(asset.AssetID), SHA256: assetref.ContentHash(asset.SHA256),
+			SizeBytes: asset.SizeBytes, MIMEType: asset.MIME, Priority: downloader.DefaultPriority,
+		})
+		if err != nil {
+			return fmt.Errorf("asset %s: %w", asset.AssetID, err)
+		}
+	}
+	return nil
 }
 
 func decodeFastAssemblyPlan(spec executor.TaskSpec) (*videoContract.CompiledRenderPlanV2, error) {
