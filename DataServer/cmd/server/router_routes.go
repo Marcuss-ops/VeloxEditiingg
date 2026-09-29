@@ -179,6 +179,12 @@ func artifactDownloadHandler(reader artifacts.ArtifactReader, blobs repository.B
 // lookup failure must keep serving the artifact-ID fallback so the download
 // surface never becomes unavailable because of a missing jobs row.
 func downloadFileName(ctx context.Context, a *store.Artifact, ownership []*store.SQLiteStore) string {
+	// The endpoint serves rendered video outputs; a.Type carries the logical
+	// artifact kind (e.g. "final_video"), not a MIME type, so the effective
+	// content type defaults to video/mp4. Video outputs get an .mp4 extension
+	// appended when the title lacks one (same semantics as relayFileName),
+	// so saved files stay playable; diagnostic sidecars keep the bare title.
+	isVideo := a.Type == "final_video" || strings.HasPrefix(a.Type, "video/")
 	for _, st := range ownership {
 		if st == nil {
 			continue
@@ -190,9 +196,7 @@ func downloadFileName(ctx context.Context, a *store.Artifact, ownership []*store
 		videoName, _ := job["video_name"].(string)
 		requestJSON, _ := job["request_json"].(string)
 		if title := repository.ResolveArtifactTitle(videoName, requestJSON); title != "" {
-			// Match relayFileName semantics: video artifacts always save with
-			// an .mp4 extension so the downloaded file stays playable.
-			if strings.HasPrefix(a.Type, "video/") && filepath.Ext(title) == "" {
+			if isVideo && filepath.Ext(title) == "" {
 				title += ".mp4"
 			}
 			return title
