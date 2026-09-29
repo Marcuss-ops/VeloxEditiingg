@@ -24,6 +24,12 @@ const defaultDownloadMaxBytes int64 = 256 * 1024 * 1024
 
 // UploadFile uploads a file to Drive
 func (s *Service) UploadFile(ctx context.Context, filePath string, folderID string, deliveryID string) (*UploadResult, error) {
+	return s.UploadFileNamed(ctx, filePath, "", folderID, deliveryID)
+}
+
+// UploadFileNamed uploads a file to Drive using the requested display name.
+// An empty name preserves the on-disk basename.
+func (s *Service) UploadFileNamed(ctx context.Context, filePath, requestedName, folderID, deliveryID string) (*UploadResult, error) {
 	folderID = strings.TrimSpace(folderID)
 	if folderID == "" {
 		return nil, fmt.Errorf("DELIVERY_TARGET_REQUIRED: an explicit Drive destination is required")
@@ -56,7 +62,7 @@ func (s *Service) UploadFile(ctx context.Context, filePath string, folderID stri
 		return nil, fmt.Errorf("failed to get file info: %w", err)
 	}
 
-	fileName := filepath.Base(filePath)
+	fileName := driveUploadFileName(requestedName, filepath.Base(filePath))
 
 	// Files larger than the Drive multipart limit use the resumable,
 	// chunked protocol: the body is streamed instead of buffered whole in
@@ -76,6 +82,22 @@ func (s *Service) UploadFile(ctx context.Context, filePath string, folderID stri
 		result.FolderLink = fmt.Sprintf("https://drive.google.com/drive/folders/%s", folderID)
 	}
 	return result, nil
+}
+
+func driveUploadFileName(requestedName, fallback string) string {
+	name := strings.TrimSpace(requestedName)
+	if name == "" {
+		return fallback
+	}
+	name = filepath.Base(strings.ReplaceAll(name, "\\", "/"))
+	name = strings.TrimSpace(name)
+	if name == "" || name == "." {
+		return fallback
+	}
+	if !strings.EqualFold(filepath.Ext(name), ".mp4") {
+		name += ".mp4"
+	}
+	return name
 }
 
 // uploadMultipart performs the simple multipart upload for small files
@@ -319,6 +341,12 @@ func (s *Service) DownloadFilesFromFolder(ctx context.Context, folderID string, 
 // a project folder or route output to an implicit root destination.
 // deliveryID is passed through from the runner as an idempotency key.
 func (s *Service) UploadVideo(ctx context.Context, filePath string, projectName string, parentFolderID string, deliveryID string) (*UploadResult, error) {
+	return s.UploadVideoNamed(ctx, filePath, projectName, "", parentFolderID, deliveryID)
+}
+
+// UploadVideoNamed uploads a video into the selected project folder using a
+// human-readable Drive filename when supplied.
+func (s *Service) UploadVideoNamed(ctx context.Context, filePath, projectName, fileName, parentFolderID, deliveryID string) (*UploadResult, error) {
 	parentFolderID = strings.TrimSpace(parentFolderID)
 	if parentFolderID == "" {
 		return nil, fmt.Errorf("DELIVERY_TARGET_REQUIRED: an explicit Drive destination is required")
@@ -332,5 +360,5 @@ func (s *Service) UploadVideo(ctx context.Context, filePath string, projectName 
 		}
 		folderID = folder.ID
 	}
-	return s.UploadFile(ctx, filePath, folderID, deliveryID)
+	return s.UploadFileNamed(ctx, filePath, fileName, folderID, deliveryID)
 }

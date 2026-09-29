@@ -140,5 +140,19 @@ func (r *DeliveryRunner) hydrateArtifact(ctx context.Context, artID string) (*re
 	if err != nil {
 		return nil, err
 	}
+	if a != nil {
+		job, jobErr := r.store.GetJob(ctx, a.JobID)
+		if jobErr != nil {
+			return nil, fmt.Errorf("deliveries: load job title for artifact %s: %w", artID, jobErr)
+		}
+		if job != nil {
+			for _, key := range []string{"video_name", "voiceover_title", "script_title", "title"} {
+				if title, ok := job[key].(string); ok && strings.TrimSpace(title) != "" {
+					a.VideoTitle = strings.TrimSpace(title)
+					break
+				}
+			}
+		}
+	}
 	return a, nil
 }

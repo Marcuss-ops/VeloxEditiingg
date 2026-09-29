@@ -55,7 +55,7 @@ func (d *DriveProvider) Deliver(ctx context.Context, artifact *repository.Artifa
 	if marker == "" {
 		marker = idempotencyKey
 	}
-	uploadRes, err := d.service.UploadVideo(ctx, filePath, artifact.ID, driveFolderReference(destination), marker)
+	uploadRes, err := d.service.UploadVideoNamed(ctx, filePath, artifact.ID, artifact.VideoTitle, driveFolderReference(destination), marker)
 	if err != nil {
 		return nil, classifyDriveError(err)
 	}

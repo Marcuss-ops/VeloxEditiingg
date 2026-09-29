@@ -6,6 +6,7 @@ import "context"
 type Artifact struct {
 	ID              string  `json:"id"`
 	JobID           string  `json:"job_id"`
+	VideoTitle      string  `json:"video_title,omitempty"`
 	AttemptID       int     `json:"attempt_id,omitempty"`
 	Type            string  `json:"type"`
 	StorageProvider string  `json:"storage_provider"`
