@@ -74,16 +74,25 @@ func buildUploadMetadata(fileName, folderID, deliveryID string) ([]byte, error) 
 	return json.Marshal(meta)
 }
 
-func buildRelayUploadMetadata(fileName, folderID, artifactID, destinationID string) ([]byte, error) {
+func buildRelayUploadMetadata(fileName, folderID, artifactID, destinationID, publicationID string) ([]byte, error) {
+	properties := map[string]string{
+		"velox_artifact_id":    artifactID,
+		"velox_destination_id": destinationID,
+		"velox_publication_id": relayPublicationProperty(publicationID),
+	}
 	meta := map[string]interface{}{
-		"name":    fileName,
-		"parents": []string{folderID},
-		"properties": map[string]string{
-			"velox_artifact_id":    artifactID,
-			"velox_destination_id": destinationID,
-		},
+		"name":       fileName,
+		"parents":    []string{folderID},
+		"properties": properties,
 	}
 	return json.Marshal(meta)
+}
+
+func relayPublicationProperty(publicationID string) string {
+	if strings.TrimSpace(publicationID) == "" {
+		return "__legacy__"
+	}
+	return publicationID
 }
 
 // uploadResumable drives the resumable protocol: initiate a session, then
@@ -147,7 +156,7 @@ func (s *Service) InitiateResumableSession(ctx context.Context, fileName, folder
 // destination identities so delivery can reconcile it after master-side
 // artifact verification. The URI is a bearer capability and must stay on the
 // master.
-func (s *Service) InitiateRelaySession(ctx context.Context, fileName, folderID, artifactID, destinationID string) (string, error) {
+func (s *Service) InitiateRelaySession(ctx context.Context, fileName, folderID, artifactID, destinationID, publicationID string) (string, error) {
 	if strings.TrimSpace(folderID) == "" || strings.TrimSpace(artifactID) == "" || strings.TrimSpace(destinationID) == "" {
 		return "", fmt.Errorf("relay session requires folder, artifact and destination identities")
 	}
@@ -155,7 +164,7 @@ func (s *Service) InitiateRelaySession(ctx context.Context, fileName, folderID, 
 	if err != nil {
 		return "", err
 	}
-	metaJSON, err := buildRelayUploadMetadata(fileName, folderID, artifactID, destinationID)
+	metaJSON, err := buildRelayUploadMetadata(fileName, folderID, artifactID, destinationID, publicationID)
 	if err != nil {
 		return "", fmt.Errorf("marshal relay upload metadata: %w", err)
 	}
@@ -212,6 +221,59 @@ func (s *Service) UploadResumablePart(ctx context.Context, sessionURI string, st
 			return 0, nil, fmt.Errorf("decode Drive relay completion: %w", err)
 		}
 		return end + 1, &UploadResult{Success: true, FileID: f.ID, WebViewLink: f.WebViewLink}, nil
+	default:
+		raw, _ := io.ReadAll(resp.Body)
+		return 0, nil, &chunkUploadError{status: resp.StatusCode, body: credentials.JSON(string(raw))}
+	}
+}
+
+// QueryResumableUploadOffset reconciles a relay session after interruption.
+// total=0 uses Drive's unknown-size status request (Content-Range: */*).
+func (s *Service) QueryResumableUploadOffset(ctx context.Context, sessionURI string, total int64) (nextOffset int64, completed *UploadResult, err error) {
+	if strings.TrimSpace(sessionURI) == "" || total < 0 {
+		return 0, nil, fmt.Errorf("invalid Drive relay status query")
+	}
+	token, err := s.getToken(ctx)
+	if err != nil {
+		return 0, nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, sessionURI, nil)
+	if err != nil {
+		return 0, nil, fmt.Errorf("create Drive relay status request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token.AccessToken)
+	req.Header.Set("Content-Length", "0")
+	totalHeader := "*"
+	if total > 0 {
+		totalHeader = strconv.FormatInt(total, 10)
+	}
+	req.Header.Set("Content-Range", "bytes */"+totalHeader)
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return 0, nil, fmt.Errorf("query Drive relay status: %w", err)
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusPermanentRedirect:
+		rangeHeader := resp.Header.Get("Range")
+		if rangeHeader == "" {
+			return 0, nil, nil
+		}
+		parts := strings.SplitN(rangeHeader, "-", 2)
+		if len(parts) != 2 {
+			return 0, nil, fmt.Errorf("Drive relay status returned invalid Range header %q", rangeHeader)
+		}
+		last, parseErr := strconv.ParseInt(strings.TrimSpace(parts[1]), 10, 64)
+		if parseErr != nil || last < 0 || (total > 0 && last >= total) {
+			return 0, nil, fmt.Errorf("Drive relay status returned invalid committed range %q", rangeHeader)
+		}
+		return last + 1, nil, nil
+	case http.StatusOK, http.StatusCreated:
+		var f File
+		if err := json.NewDecoder(resp.Body).Decode(&f); err != nil {
+			return 0, nil, fmt.Errorf("decode Drive relay status completion: %w", err)
+		}
+		return total, &UploadResult{Success: true, FileID: f.ID, WebViewLink: f.WebViewLink}, nil
 	default:
 		raw, _ := io.ReadAll(resp.Body)
 		return 0, nil, &chunkUploadError{status: resp.StatusCode, body: credentials.JSON(string(raw))}

@@ -248,6 +248,33 @@ func (s *Service) findExistingDelivery(ctx context.Context, folderID, deliveryID
 	return &result.Files[0], nil
 }
 
+// FindRelayFile reconciles a completed stream-relay upload using the
+// application properties stamped when its resumable session was created.
+func (s *Service) FindRelayFile(ctx context.Context, folderID, artifactID, destinationID, publicationID string) (*File, error) {
+	if strings.TrimSpace(folderID) == "" || strings.TrimSpace(artifactID) == "" || strings.TrimSpace(destinationID) == "" {
+		return nil, fmt.Errorf("relay lookup requires folder, artifact and destination identities")
+	}
+	escape := func(value string) string {
+		return strings.ReplaceAll(strings.ReplaceAll(value, `\`, `\\`), `'`, `\'`)
+	}
+	query := fmt.Sprintf("'%s' in parents and trashed=false and properties has { key='velox_artifact_id' and value='%s' } and properties has { key='velox_destination_id' and value='%s' } and properties has { key='velox_publication_id' and value='%s' }",
+		escape(folderID), escape(artifactID), escape(destinationID), escape(relayPublicationProperty(publicationID)))
+	endpoint := fmt.Sprintf("/files?q=%s&pageSize=2&fields=%s", url.QueryEscape(query), url.QueryEscape("files(id,name,size,webViewLink,parents,properties,trashed)"))
+	var result struct {
+		Files []File `json:"files"`
+	}
+	if err := s.doAPIRequest(ctx, http.MethodGet, endpoint, nil, &result); err != nil {
+		return nil, err
+	}
+	if len(result.Files) == 0 {
+		return nil, nil
+	}
+	if len(result.Files) != 1 {
+		return nil, fmt.Errorf("Drive relay identity matched %d files", len(result.Files))
+	}
+	return &result.Files[0], nil
+}
+
 // UploadVideoWithAccessToken performs one upload with the short-lived token
 // issued by the central credential vault.
 func (s *Service) UploadVideoWithAccessToken(ctx context.Context, filePath, projectName, parentFolderID, deliveryID, accessToken string) (*UploadResult, error) {

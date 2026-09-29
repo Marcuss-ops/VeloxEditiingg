@@ -17,6 +17,7 @@ import (
 // per-route dep, the only place to wire it is in this method.
 func (c *appComponents) routerBundle() RouterBundle {
 	chunkedHandler := workerhandlersuploads.NewChunkedUploadHandler(c.assets.ChunkedUploadSvc)
+	chunkedHandler.SetDriveStreamRelay(c.modules.DriveRelay)
 	var benchmarkRenderer performance.RenderRunner
 	if c.fleet != nil {
 		benchmarkRenderer = c.fleet.BenchmarkRenderer

@@ -15,6 +15,7 @@ import (
 
 	"velox-server/internal/artifacts"
 	"velox-server/internal/completion"
+	"velox-server/internal/deliveries"
 	futureassetmaster "velox-server/internal/futureasset"
 	"velox-server/internal/ingest"
 	"velox-server/internal/jobs"
@@ -98,6 +99,7 @@ type Handler struct {
 	completionCoord    completion.Coordinator
 	completionStore    completion.UploadProtocolStore
 	chunkedUploadSvc   *artifacts.ChunkedUploadService
+	driveStreamRelay   deliveries.DriveStreamRelay
 	masterURL          string
 	costFactors        velmetrics.CostFactors
 

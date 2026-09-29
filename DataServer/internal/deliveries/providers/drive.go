@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 
 	"velox-server/internal/deliveries"
@@ -21,6 +22,12 @@ import (
 type DriveProvider struct {
 	service   *integrationsDrive.Service
 	blobStore repository.BlobStore
+	relay     deliveries.DriveRelayEvidenceReader
+}
+
+func (d *DriveProvider) WithRelayEvidenceReader(reader deliveries.DriveRelayEvidenceReader) *DriveProvider {
+	d.relay = reader
+	return d
 }
 
 // NewDriveProvider constructs a DriveProvider. nil service is allowed for
@@ -54,6 +61,20 @@ func (d *DriveProvider) Deliver(ctx context.Context, artifact *repository.Artifa
 	marker := deliveryID
 	if marker == "" {
 		marker = idempotencyKey
+	}
+	if d.relay != nil && artifact != nil && artifact.SHA256 != "" && artifact.SizeBytes > 0 && destination.DestinationID != "" && destination.PublicationID != "" {
+		evidence, evidenceErr := d.relay.GetVerifiedDriveRelay(ctx, artifact.ID, destination.DestinationID, destination.PublicationID)
+		if evidenceErr != nil {
+			log.Printf("[DELIVERY][DRIVE] relay evidence unavailable; using verified-artifact upload artifact=%s destination=%s: %v", artifact.ID, destination.DestinationID, evidenceErr)
+		}
+		if evidence != nil && evidence.RemoteID != "" && strings.EqualFold(evidence.SHA256, artifact.SHA256) && evidence.SizeBytes == artifact.SizeBytes {
+			remote, lookupErr := d.service.FindRelayFile(ctx, evidence.FolderID, artifact.ID, destination.DestinationID, destination.PublicationID)
+			if lookupErr != nil {
+				log.Printf("[DELIVERY][DRIVE] relay remote reconciliation unavailable; using verified-artifact upload artifact=%s destination=%s: %v", artifact.ID, destination.DestinationID, lookupErr)
+			} else if remote != nil && !remote.Trashed && remote.ID == evidence.RemoteID && remote.Size == artifact.SizeBytes {
+				return &deliveries.Result{Success: true, RemoteID: remote.ID, RemoteURL: remote.WebViewLink, ProviderMeta: map[string]interface{}{"relay": true}}, nil
+			}
+		}
 	}
 	uploadRes, err := d.service.UploadVideoNamed(ctx, filePath, artifact.ID, artifact.VideoTitle, driveFolderReference(destination), marker)
 	if err != nil {

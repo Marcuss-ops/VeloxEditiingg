@@ -11,6 +11,7 @@ import (
 
 	"velox-server/internal/artifacts"
 	"velox-server/internal/completion"
+	"velox-server/internal/deliveries"
 	"velox-server/internal/ingest"
 	velmetrics "velox-server/internal/metrics"
 	"velox-server/internal/registry"
@@ -93,6 +94,10 @@ func (h *Handler) SetCompletionProtocol(coord completion.Coordinator, store comp
 	h.completionStore = store
 	h.chunkedUploadSvc = chunked
 	h.masterURL = strings.TrimRight(strings.TrimSpace(masterURL), "/")
+}
+
+func (h *Handler) SetDriveStreamRelay(relay deliveries.DriveStreamRelay) {
+	h.driveStreamRelay = relay
 }
 
 // SetPlacementPin installs the worker_id pin (VELOX_PLACEMENT_PIN_WORKER_ID)

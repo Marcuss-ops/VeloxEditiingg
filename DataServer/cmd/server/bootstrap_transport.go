@@ -130,6 +130,9 @@ func startTransports(cfg *config.Config, c *appComponents) (*transportBundle, er
 			if c.assets != nil {
 				grpcHandler.SetCompletionProtocol(c.assets.Completion, c.assets.CompletionStore, c.assets.ChunkedUploadSvc, string(cfg.ControlPlane.RESTPublic))
 			}
+			if c.modules != nil {
+				grpcHandler.SetDriveStreamRelay(c.modules.DriveRelay)
+			}
 			// Command wake fanout: a freshly persisted worker_commands row
 			// dispatches to a connected worker immediately via NotifyCommand;
 			// the in-stream 1s ticker remains only as a loss-recovery backstop.

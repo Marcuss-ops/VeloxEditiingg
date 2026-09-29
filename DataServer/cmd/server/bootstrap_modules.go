@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"velox-server/internal/app"
+	"velox-server/internal/artifactsstore"
 	voiceoverassets "velox-server/internal/assets"
 	"velox-server/internal/config"
 	"velox-server/internal/creatorflow"
@@ -353,6 +354,7 @@ type moduleDeps struct {
 	AssetService       *voiceoverassets.AssetService
 	Enqueuer           *enqueue.Enqueuer
 	DeliveryRunner     *deliveries.DeliveryRunner
+	DriveRelay         *deliveryProviders.DriveStreamRelay
 	ForwardingRunner   *forwarding.CreatorForwardingRunner
 	RemoteEngineClient *remoteengine.Client
 }
@@ -475,8 +477,9 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 
 	// ── Delivery runner ─────────────────────────────────────────────
 	deliveryReg := deliveries.NewRegistry()
+	var driveProvider *deliveryProviders.DriveProvider
 	if driveMod != nil {
-		driveProvider := deliveryProviders.NewDriveProvider(driveMod.Service(), p.BlobStore)
+		driveProvider = deliveryProviders.NewDriveProvider(driveMod.Service(), p.BlobStore)
 		deliveryReg.Register(driveProvider)
 		logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] Delivery provider registered: drive")
 	}
@@ -518,6 +521,17 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 	}
 
 	var deliveryRunner *deliveries.DeliveryRunner
+	var driveRelay *deliveryProviders.DriveStreamRelay
+	if driveMod != nil && driveMod.Service() != nil {
+		driveRelay, err = deliveryProviders.NewDriveStreamRelay(p.SQLite.DB(), artifactsstore.NewSQLiteUploadRepository(p.SQLite.DB()), p.BlobStore, driveMod.Service(), 8*1024*1024)
+		if err != nil {
+			logServerf(context.Background(), logging.LevelWarn, logging.CodeServerBootstrapWarn, "[BOOTSTRAP] Drive stream relay unavailable; delivery runner will use verified artifact uploads: %v", err)
+			driveRelay = nil
+		} else if driveProvider != nil {
+			driveProvider.WithRelayEvidenceReader(driveRelay)
+			logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] Drive stream relay enabled (master-side resumable upload)")
+		}
+	}
 	if cfg.Runtime.DeliveryDisabled {
 		logServerf(context.Background(), logging.LevelWarn, logging.CodeServerBootstrapWarn, "[BOOTSTRAP] DeliveryRunner disabled by VELOX_DELIVERY_DISABLED")
 	} else {
@@ -573,6 +587,7 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 		AssetService:       assetSvc,
 		Enqueuer:           enqueuer,
 		DeliveryRunner:     deliveryRunner,
+		DriveRelay:         driveRelay,
 		ForwardingRunner:   fwdRunner,
 		RemoteEngineClient: reClient,
 	}, nil

@@ -6,10 +6,13 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"velox-server/internal/artifacts"
+	"velox-server/internal/deliveries"
 )
 
 // ChunkedUploadHandler groups the three chunked upload HTTP handlers behind
@@ -22,7 +25,12 @@ type ChunkedUploadHandler struct {
 	svc                  *artifacts.ChunkedUploadService
 	verifier             CommitTokenVerifier
 	earlyUploadSecretHex string
+	driveRelay           deliveries.DriveStreamRelay
+	relayMu              sync.Mutex
+	relayRuns            map[string]*driveRelayRun
 }
+
+type driveRelayRun struct{ pending bool }
 
 // CommitTokenVerifier authenticates the short-lived token carried by a
 // typed artifact upload. It keeps upload URLs bearer-protected without
@@ -42,6 +50,50 @@ func (h *ChunkedUploadHandler) SetCommitTokenVerifier(v CommitTokenVerifier) {
 
 func (h *ChunkedUploadHandler) SetEarlyUploadSecret(secretHex string) {
 	h.earlyUploadSecretHex = secretHex
+}
+
+func (h *ChunkedUploadHandler) SetDriveStreamRelay(relay deliveries.DriveStreamRelay) {
+	h.driveRelay = relay
+}
+
+func (h *ChunkedUploadHandler) scheduleDriveRelay(uploadID string) {
+	if h.driveRelay == nil || uploadID == "" {
+		return
+	}
+	h.relayMu.Lock()
+	if h.relayRuns == nil {
+		h.relayRuns = make(map[string]*driveRelayRun)
+	}
+	if run := h.relayRuns[uploadID]; run != nil {
+		run.pending = true
+		h.relayMu.Unlock()
+		return
+	}
+	run := &driveRelayRun{pending: true}
+	h.relayRuns[uploadID] = run
+	relay := h.driveRelay
+	h.relayMu.Unlock()
+	go func() {
+		for {
+			h.relayMu.Lock()
+			run.pending = false
+			h.relayMu.Unlock()
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			err := relay.RelayAvailableChunks(ctx, uploadID)
+			cancel()
+			if err != nil {
+				log.Printf("[CHUNKED] Drive relay deferred to classic delivery upload=%s: %v", uploadID, err)
+			}
+			h.relayMu.Lock()
+			if run.pending {
+				h.relayMu.Unlock()
+				continue
+			}
+			delete(h.relayRuns, uploadID)
+			h.relayMu.Unlock()
+			return
+		}
+	}()
 }
 
 func (h *ChunkedUploadHandler) verifyCommitToken(c *gin.Context, uploadID string) bool {
@@ -89,6 +141,9 @@ func (h *ChunkedUploadHandler) MasterStreamChunk() gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "artifact chunk rejected", "error_code": classifyChunkedArtifactError(err)})
 			return
 		}
+		if h.driveRelay != nil {
+			h.scheduleDriveRelay(uploadID)
+		}
 		c.JSON(http.StatusOK, gin.H{"ok": true, "upload_id": uploadID, "chunk": idx})
 	}
 }
@@ -102,11 +157,28 @@ func (h *ChunkedUploadHandler) MasterStreamComplete() gin.HandlerFunc {
 		if !h.verifyCommitToken(c, uploadID) {
 			return
 		}
+		if h.driveRelay != nil {
+			if upload, lookupErr := h.svc.GetUpload(c.Request.Context(), uploadID); lookupErr == nil && upload != nil {
+				if prepareErr := h.driveRelay.PrepareArtifact(c.Request.Context(), uploadID, upload.ArtifactID, upload.JobID); prepareErr != nil {
+					log.Printf("[CHUNKED] Drive relay prepare deferred to classic delivery upload=%s: %v", uploadID, prepareErr)
+				}
+			} else if lookupErr != nil {
+				log.Printf("[CHUNKED] Drive relay upload lookup deferred upload=%s: %v", uploadID, lookupErr)
+			}
+			if err := h.driveRelay.CompleteRelay(c.Request.Context(), uploadID); err != nil {
+				log.Printf("[CHUNKED] Drive relay completion deferred to classic delivery upload=%s: %v", uploadID, err)
+			}
+		}
 		result, err := h.svc.ReceiveChunked(c.Request.Context(), uploadID)
 		if err != nil {
 			log.Printf("[CHUNKED] master-stream receive failed upload=%s: %v", uploadID, err)
 			c.JSON(http.StatusBadRequest, gin.H{"error": "artifact receive rejected", "error_code": classifyChunkedArtifactError(err)})
 			return
+		}
+		if h.driveRelay != nil {
+			if err := h.driveRelay.VerifyRelay(c.Request.Context(), uploadID, result.ReceivedSHA256, result.ReceivedSizeBytes); err != nil {
+				log.Printf("[CHUNKED] Drive relay verification deferred to classic delivery upload=%s: %v", uploadID, err)
+			}
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true, "upload_id": uploadID, "sha256": result.ReceivedSHA256, "size": result.ReceivedSizeBytes})
 	}
@@ -120,6 +192,11 @@ func (h *ChunkedUploadHandler) MasterStreamAbort() gin.HandlerFunc {
 		uploadID := c.Param("upload_id")
 		if !h.verifyCommitToken(c, uploadID) {
 			return
+		}
+		if h.driveRelay != nil {
+			if err := h.driveRelay.AbortRelay(c.Request.Context(), uploadID); err != nil {
+				log.Printf("[CHUNKED] Drive relay abort deferred upload=%s: %v", uploadID, err)
+			}
 		}
 		if err := h.svc.AbortChunked(c.Request.Context(), uploadID); err != nil {
 			log.Printf("[CHUNKED] master-stream abort failed upload=%s: %v", uploadID, err)

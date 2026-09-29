@@ -310,6 +310,7 @@ type Destination struct {
 	Configuration         []byte
 	ConfigurationJSON     string
 	DeliveryMetadataJSON  string
+	PublicationID         string
 	CredentialRef         string
 }
 

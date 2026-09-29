@@ -143,6 +143,7 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease deliverystore.D
 		}
 		publicationID = resolvedID
 	}
+	dest.PublicationID = publicationID
 	if publicationID != "" {
 		state, stateErr := r.store.GetPublicationState(ctx, publicationID)
 		if stateErr != nil && !errors.Is(stateErr, store.ErrPublicationStateNotFound) {

@@ -107,7 +107,7 @@ func TestInitiateRelaySessionUsesUnknownLengthAndIdentityProperties(t *testing.T
 			t.Fatalf("decode metadata: %v", err)
 		}
 		props, _ := metadata["properties"].(map[string]interface{})
-		if props["velox_artifact_id"] != "artifact-1" || props["velox_destination_id"] != "dest-1" {
+		if props["velox_artifact_id"] != "artifact-1" || props["velox_destination_id"] != "dest-1" || props["velox_publication_id"] != "pub-1" {
 			t.Fatalf("relay properties = %#v", props)
 		}
 		h := make(http.Header)
@@ -115,7 +115,7 @@ func TestInitiateRelaySessionUsesUnknownLengthAndIdentityProperties(t *testing.T
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("")), Header: h}, nil
 	})
 
-	got, err := service.InitiateRelaySession(context.Background(), "render.mp4", "folder-1", "artifact-1", "dest-1")
+	got, err := service.InitiateRelaySession(context.Background(), "render.mp4", "folder-1", "artifact-1", "dest-1", "pub-1")
 	if err != nil || got != sessionURI {
 		t.Fatalf("InitiateRelaySession() = %q, %v", got, err)
 	}

@@ -1,6 +1,7 @@
 package grpcserver
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"time"
@@ -60,6 +61,18 @@ func (h *Handler) handleArtifactUploadIntent(workerID string, msg *pb.ArtifactUp
 	}
 	if !safeSend(sess.sendCh, &outboundMessage{Envelope: env}) {
 		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCCompletionFailed, "[GRPC] ArtifactUploadIntent task=%s plan send failed", msg.GetTaskId())
+		return
+	}
+	if h.driveStreamRelay != nil {
+		relay := h.driveStreamRelay
+		uploadID, artifactID, jobID := session.UploadID, session.ArtifactID, msg.GetJobId()
+		go func() {
+			prepareCtx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+			defer cancel()
+			if err := relay.PrepareArtifact(prepareCtx, uploadID, artifactID, jobID); err != nil {
+				logGRPCf(prepareCtx, logging.LevelWarn, logging.CodeGRPCCompletionFailed, "[GRPC] Drive relay prewarm deferred to classic delivery upload=%s: %v", uploadID, err)
+			}
+		}()
 	}
 }
 

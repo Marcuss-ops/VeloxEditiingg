@@ -1,5 +1,24 @@
 ## [Unreleased] - 2026-09-28
 
+### Performance — overlap Drive delivery with artifact upload
+
+- Added a master-side Drive resumable relay for durable progressive-upload
+  chunks. The relay starts from the early artifact upload plan and sends
+  ordered chunks to Drive while the worker is still rendering and uploading
+  to the master; OAuth tokens and resumable session URLs stay on the master.
+- Persist relay offsets and in-flight state in SQLite so interrupted PUTs can
+  resume from Drive's committed byte range. Reconcile a completed Drive file
+  by artifact, destination, and publication identity, then require the
+  master's received SHA-256 and size to match before reusing it.
+- Relay setup, transfer, expiry, or reconciliation errors leave the verified
+  artifact delivery path available as fallback. Drive output retains the
+  configured video title as its filename.
+- Production baseline before relay: 34 successful deliveries in seven days,
+  averaging 37.6 seconds for delivery and 335 MB per artifact; actual future
+  savings depend on upload/render overlap and will be measured from reruns.
+- Verification: `go test -count=1 ./...`, `go vet ./...`, and `go build ./...`
+  passed in `DataServer/`.
+
 ### Performance follow-up — preparation and prefetch
 
 - Reserve the selected warm worker synchronously at submission, before the
