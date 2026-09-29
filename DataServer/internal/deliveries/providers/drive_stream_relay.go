@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/url"
 	"path/filepath"
 	"strings"
@@ -134,7 +135,12 @@ func (r *DriveStreamRelay) prepareArtifactLocked(ctx context.Context, uploadID, 
 		if err != nil {
 			return fmt.Errorf("create Drive relay project folder: %w", err)
 		}
-		fileName := relayFileName(repository.ResolveArtifactTitle(t.videoTitle, t.requestJSON), artifactID)
+		title := relayTitle(t.videoTitle, t.requestJSON, t.metadata)
+		if strings.TrimSpace(title) == "" {
+			slog.Warn("Drive relay using opaque artifact ID as filename",
+				"job_id", jobID, "video_name", t.videoTitle, "artifact_id", artifactID)
+		}
+		fileName := relayFileName(title, artifactID)
 		sessionURI, err := r.drive.InitiateRelaySession(ctx, fileName, folder.ID, artifactID, t.destinationID, t.publicationID)
 		if err != nil {
 			return fmt.Errorf("initialize Drive relay session: %w", err)
@@ -148,6 +154,20 @@ func (r *DriveStreamRelay) prepareArtifactLocked(ctx context.Context, uploadID, 
 		}
 	}
 	return nil
+}
+
+func relayTitle(videoTitle, requestJSON, metadataJSON string) string {
+	var metadata map[string]any
+	if json.Unmarshal([]byte(metadataJSON), &metadata) == nil {
+		for _, key := range []string{"file_name", "title"} {
+			if name, ok := metadata[key].(string); ok && strings.TrimSpace(name) != "" {
+				if resolved := repository.ResolveArtifactTitle(strings.TrimSpace(name), requestJSON); resolved != "" {
+					return resolved
+				}
+			}
+		}
+	}
+	return repository.ResolveArtifactTitle(videoTitle, requestJSON)
 }
 
 func (r *DriveStreamRelay) RelayAvailableChunks(ctx context.Context, uploadID string) error {
