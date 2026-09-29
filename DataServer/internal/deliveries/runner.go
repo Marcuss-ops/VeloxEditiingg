@@ -91,6 +91,10 @@ type DeliveryStore interface {
 	ApplyReconciledDelivery(ctx context.Context, deliveryID, status, remoteID, remoteURL, errorCode, errorMessage string) error
 }
 
+type deliveryTimingWriter interface {
+	MarkDeliverySucceededWithTiming(ctx context.Context, deliveryID, runnerID, leaseID, remoteID, remoteURL string, uploadNetworkMS, uploadLocalBufferMS int64) error
+}
+
 // DeliveryRunner drives delivery_attempts persistence + provider dispatch.
 type DeliveryRunner struct {
 	cfg           *RunnerConfig

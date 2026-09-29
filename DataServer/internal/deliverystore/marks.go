@@ -3,6 +3,7 @@ package deliverystore
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -20,6 +21,17 @@ import (
 // MarkDeliverySucceeded moves a RUNNING delivery to SUCCEEDED with CAS guard.
 // Stamps completed_at and optionally remote_id/remote_url.
 func (w *SQLiteDeliveryStore) MarkDeliverySucceeded(ctx context.Context, deliveryID, runnerID, leaseID, remoteID, remoteURL string) error {
+	return w.markDeliverySucceeded(ctx, deliveryID, runnerID, leaseID, remoteID, remoteURL, 0, 0)
+}
+
+// MarkDeliverySucceededWithTiming persists the bounded upload timing fields
+// alongside the successful attempt so operators can distinguish Drive
+// network time from local file buffering in historical delivery reports.
+func (w *SQLiteDeliveryStore) MarkDeliverySucceededWithTiming(ctx context.Context, deliveryID, runnerID, leaseID, remoteID, remoteURL string, uploadNetworkMS, uploadLocalBufferMS int64) error {
+	return w.markDeliverySucceeded(ctx, deliveryID, runnerID, leaseID, remoteID, remoteURL, uploadNetworkMS, uploadLocalBufferMS)
+}
+
+func (w *SQLiteDeliveryStore) markDeliverySucceeded(ctx context.Context, deliveryID, runnerID, leaseID, remoteID, remoteURL string, uploadNetworkMS, uploadLocalBufferMS int64) error {
 	if err := statemachine.DefaultRegistry().Validate(statemachine.DomainDelivery, "RUNNING", "SUCCEEDED", ""); err != nil {
 		return fmt.Errorf("store: MarkDeliverySucceeded: %w", err)
 	}
@@ -53,11 +65,50 @@ func (w *SQLiteDeliveryStore) MarkDeliverySucceeded(ctx context.Context, deliver
 			return storecore.ErrTransitionConflict
 		}
 
+		if uploadNetworkMS > 0 || uploadLocalBufferMS > 0 {
+			if err := persistLatestProviderTiming(ctx, tx, deliveryID, uploadNetworkMS, uploadLocalBufferMS); err != nil {
+				return err
+			}
+		}
 		if err := closeLatestDeliveryAttempt(ctx, tx, deliveryID, "SUCCESS", now, ""); err != nil {
 			return err
 		}
 		return w.finalizeParentJobIfDeliveriesDone(ctx, tx, deliveryID, now)
 	}))
+}
+
+func persistLatestProviderTiming(ctx context.Context, tx *sql.Tx, deliveryID string, networkMS, localMS int64) error {
+	var attemptID int64
+	var raw string
+	err := tx.QueryRowContext(ctx,
+		`SELECT id, COALESCE(result, '{}') FROM delivery_attempts WHERE delivery_id=? ORDER BY id DESC LIMIT 1`,
+		deliveryID).Scan(&attemptID, &raw)
+	if err != nil {
+		return fmt.Errorf("load latest delivery attempt timing result: %w", err)
+	}
+	result := make(map[string]json.RawMessage)
+	if json.Unmarshal([]byte(raw), &result) != nil {
+		result = make(map[string]json.RawMessage)
+	}
+	if result == nil {
+		result = make(map[string]json.RawMessage)
+	}
+	meta, err := json.Marshal(map[string]int64{
+		"upload_network_ms":      networkMS,
+		"upload_local_buffer_ms": localMS,
+	})
+	if err != nil {
+		return fmt.Errorf("marshal delivery provider timing: %w", err)
+	}
+	result["provider_meta"] = meta
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		return fmt.Errorf("marshal delivery attempt result: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE delivery_attempts SET result=? WHERE id=? AND delivery_id=?`, string(encoded), attemptID, deliveryID); err != nil {
+		return fmt.Errorf("persist delivery provider timing: %w", err)
+	}
+	return nil
 }
 
 // MarkDeliveryRetry moves a RUNNING delivery to RETRY_WAIT with the next

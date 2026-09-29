@@ -303,8 +303,14 @@ func (r *DeliveryRunner) processLease(ctx context.Context, lease deliverystore.D
 			}
 			return err
 		}
-		if err := r.deliveryStore.MarkDeliverySucceeded(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, res.RemoteID, res.RemoteURL); err != nil {
-			return deliveryStatePersistenceError("mark provider delivery succeeded", err)
+		var markErr error
+		if timingWriter, ok := r.deliveryStore.(deliveryTimingWriter); ok && (uploadNetworkMS > 0 || uploadLocalBufferMS > 0) {
+			markErr = timingWriter.MarkDeliverySucceededWithTiming(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, res.RemoteID, res.RemoteURL, int64(uploadNetworkMS), int64(uploadLocalBufferMS))
+		} else {
+			markErr = r.deliveryStore.MarkDeliverySucceeded(ctx, lease.DeliveryID, lease.RunnerID, lease.LeaseID, res.RemoteID, res.RemoteURL)
+		}
+		if markErr != nil {
+			return deliveryStatePersistenceError("mark provider delivery succeeded", markErr)
 		}
 		status = "succeeded"
 		return nil

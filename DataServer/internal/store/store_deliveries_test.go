@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -216,7 +217,7 @@ func TestMarkDeliverySucceeded(t *testing.T) {
 	}
 
 	l := leases[0]
-	err = db.Delivery().MarkDeliverySucceeded(ctx, l.DeliveryID, l.RunnerID, l.LeaseID, "social-video-123", "https://social.example/watch?v=123")
+	err = db.Delivery().MarkDeliverySucceededWithTiming(ctx, l.DeliveryID, l.RunnerID, l.LeaseID, "social-video-123", "https://social.example/watch?v=123", 58000, 120)
 	if err != nil {
 		t.Fatalf("MarkDeliverySucceeded: %v", err)
 	}
@@ -233,6 +234,19 @@ func TestMarkDeliverySucceeded(t *testing.T) {
 	}
 	if jd.CompletedAt == "" {
 		t.Error("completed_at should be set")
+	}
+	var raw string
+	if err := db.DB().QueryRowContext(ctx, `SELECT result FROM delivery_attempts WHERE delivery_id=? ORDER BY id DESC LIMIT 1`, l.DeliveryID).Scan(&raw); err != nil {
+		t.Fatalf("read delivery attempt result: %v", err)
+	}
+	var result struct {
+		ProviderMeta map[string]int64 `json:"provider_meta"`
+	}
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		t.Fatalf("decode delivery attempt result: %v", err)
+	}
+	if result.ProviderMeta["upload_network_ms"] != 58000 || result.ProviderMeta["upload_local_buffer_ms"] != 120 {
+		t.Fatalf("provider timing = %#v, want network=58000 local=120", result.ProviderMeta)
 	}
 }
 
