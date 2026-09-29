@@ -53,6 +53,41 @@ func (h *Handler) PrefetchSubmittedJob(ctx context.Context, jobID string) {
 			}
 			return
 		}
+		// Establish ownership of this task before doing the wider planner
+		// queries. Without this early reservation, a worker's placement tick
+		// can claim the READY task in the gap between worker selection and the
+		// planner's later reservation write, undoing the cache-affinity choice.
+		if assets := futureAssetManifests(payload); len(assets) > 0 {
+			reservation := taskgraph.FutureReservation{
+				TaskID: candidate.TaskID, JobID: candidate.JobID,
+				WorkerID:      decision.WorkerID,
+				ReservationID: "future:" + decision.WorkerID + ":" + candidate.TaskID,
+				TaskRevision:  candidate.Revision, Distance: 1,
+				State:     taskgraph.ReservationReserved,
+				ExpiresAt: time.Now().UTC().Add(h.futureAssetPlanTTL()),
+			}
+			acquired, reserveErr := store.TryReserveFutureTask(ctx, reservation)
+			if reserveErr != nil {
+				logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCPrefetchFailed, "[PREFETCH] submission reservation job=%s task=%s worker=%s: %v", jobID, candidate.TaskID, decision.WorkerID, reserveErr)
+				return
+			}
+			if !acquired {
+				// Another submission/placement pass won the reservation race.
+				// Its durable owner is authoritative; re-drive that owner's plan
+				// so duplicate lifecycle hooks also recover an interrupted refresh.
+				logGRPCf(ctx, logging.LevelInfo, logging.CodeGRPCPrefetch, "[PREFETCH] submission reservation already owned job=%s task=%s", jobID, candidate.TaskID)
+				if reservations, listErr := store.ListFutureReservations(ctx, ""); listErr == nil {
+					for _, existing := range reservations {
+						if existing.TaskID == candidate.TaskID && existing.WorkerID != "" {
+							h.refreshFutureAssetPlan(ctx, existing.WorkerID, jobID)
+							return
+						}
+					}
+				}
+				return
+			}
+			logGRPCf(ctx, logging.LevelInfo, logging.CodeGRPCPrefetch, "[PREFETCH_TIMING] event=submission_reservation_created worker=%s task=%s at=%s", decision.WorkerID, candidate.TaskID, time.Now().UTC().Format(time.RFC3339Nano))
+		}
 		logGRPCf(ctx, logging.LevelInfo, logging.CodeGRPCPrefetch, "[PREFETCH] submission hook job=%s task=%s worker=%s", jobID, candidate.TaskID, decision.WorkerID)
 		h.refreshFutureAssetPlan(ctx, decision.WorkerID, jobID)
 		return
