@@ -158,6 +158,8 @@ type workItem struct {
 	enqueuedAt  time.Time
 	sequence    uint64
 	index       int
+	followers   []*workItem
+	coalesced   bool
 }
 
 type readyRecord struct {

@@ -80,6 +80,15 @@ func (s *Scheduler) nextWorkItem() (*workItem, *downloader.CacheResolver) {
 }
 
 func (s *Scheduler) runWorkItem(item *workItem, resolver *downloader.CacheResolver) {
+	followers := item.followers
+	item.followers = nil
+	s.runOneWorkItem(item, resolver)
+	for _, follower := range followers {
+		s.runOneWorkItem(follower, resolver)
+	}
+}
+
+func (s *Scheduler) runOneWorkItem(item *workItem, resolver *downloader.CacheResolver) {
 	job, asset := item.job, item.asset
 	startedAt := s.cfg.Now()
 	// When the shared NetworkPacer is available, skip the local per-request
@@ -134,13 +143,17 @@ func (s *Scheduler) runWorkItem(item *workItem, resolver *downloader.CacheResolv
 		// the row did not exist when the plan arrived.
 		protectionErr = s.installPendingProtection(asset.AssetKey)
 	}
-	if err == nil && !resolved.CacheHit {
+	if err == nil && (!resolved.CacheHit || item.coalesced) {
 		s.mu.Lock()
-		s.prefetched[asset.AssetKey] = asset.SizeBytes
-		if s.assetJobs[asset.AssetKey] == nil {
-			s.assetJobs[asset.AssetKey] = make(map[string]struct{})
+		if !resolved.CacheHit {
+			s.prefetched[asset.AssetKey] = asset.SizeBytes
 		}
-		s.assetJobs[asset.AssetKey][job.JobID] = struct{}{}
+		if _, prefetched := s.prefetched[asset.AssetKey]; prefetched {
+			if s.assetJobs[asset.AssetKey] == nil {
+				s.assetJobs[asset.AssetKey] = make(map[string]struct{})
+			}
+			s.assetJobs[asset.AssetKey][job.JobID] = struct{}{}
+		}
 		s.mu.Unlock()
 		if s.cfg.OnState != nil {
 			s.cfg.OnState("downloaded", job, asset, nil)
@@ -156,10 +169,12 @@ func (s *Scheduler) runWorkItem(item *workItem, resolver *downloader.CacheResolv
 	}
 	// Record admission result so hysteresis state can recover when RSS
 	// drops below the recovery threshold (70% for prefetch).
-	if s.cfg.AdmissionController != nil {
+	if s.cfg.AdmissionController != nil && !item.coalesced {
 		s.cfg.AdmissionController.RecordAdmissionResult(AdmissionPrefetch, err == nil)
 	}
-	s.releaseWork(asset.SizeBytes)
+	if !item.coalesced {
+		s.releaseWork(asset.SizeBytes)
+	}
 	readyAt := s.cfg.Now()
 	if err == nil && metadataErr == nil && protectionErr == nil {
 		s.mu.Lock()

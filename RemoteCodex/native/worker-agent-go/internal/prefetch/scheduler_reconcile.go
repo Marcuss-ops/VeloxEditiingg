@@ -259,7 +259,7 @@ func (s *Scheduler) enqueueJobLocked(planVersion uint64, runtime *jobRuntime) []
 	for _, asset := range assets {
 		enqueuedAt := s.cfg.Now()
 		s.nextSequence++
-		heap.Push(&s.queue, &workItem{
+		item := &workItem{
 			planVersion: planVersion,
 			generation:  runtime.generation,
 			job:         runtime.job,
@@ -267,7 +267,19 @@ func (s *Scheduler) enqueueJobLocked(planVersion uint64, runtime *jobRuntime) []
 			ctx:         runtime.ctx,
 			enqueuedAt:  enqueuedAt,
 			sequence:    s.nextSequence,
-		})
+		}
+		coalesced := false
+		for _, queued := range s.queue {
+			if sameAssetWork(queued.asset, item.asset) {
+				item.coalesced = true
+				queued.followers = append(queued.followers, item)
+				coalesced = true
+				break
+			}
+		}
+		if !coalesced {
+			heap.Push(&s.queue, item)
+		}
 		events = append(events, Event{
 			Name:        "prefetch_queued",
 			At:          enqueuedAt,
@@ -283,6 +295,20 @@ func (s *Scheduler) enqueueJobLocked(planVersion uint64, runtime *jobRuntime) []
 		})
 	}
 	return events
+}
+
+// sameAssetWork identifies byte-equivalent preparation requests that can use
+// one queue slot. Each dependent job still gets its own resolver call so the
+// cache installs a job lease and the preparation certificate receives its own
+// task/reservation lineage.
+func sameAssetWork(a, b futureasset.AssetManifest) bool {
+	if a.AssetKey == "" || a.AssetKey != b.AssetKey || a.SizeBytes != b.SizeBytes {
+		return false
+	}
+	if a.SHA256 != "" || b.SHA256 != "" {
+		return normalizedSHA256(a.SHA256) != "" && normalizedSHA256(a.SHA256) == normalizedSHA256(b.SHA256)
+	}
+	return a.AssetID == b.AssetID && a.SourceURI == b.SourceURI
 }
 
 func sameScheduledJob(a, b futureasset.Job) bool {
