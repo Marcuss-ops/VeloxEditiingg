@@ -100,6 +100,48 @@ func (s *Service) uploadResumable(
 	if err != nil {
 		return nil, err
 	}
+	result, err := s.uploadResumableChunksFrom(ctx, file, size, sessionURI, token, networkMS, localMS)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// InitiateResumableSession creates a Drive resumable upload session without
+// sending file bytes. The returned URI is a bearer capability for this one
+// upload and must be kept private. It is useful when session creation can be
+// overlapped with other preparation work.
+func (s *Service) InitiateResumableSession(ctx context.Context, fileName, folderID, deliveryID string, size int64) (string, error) {
+	if size <= 0 {
+		return "", fmt.Errorf("resumable session requires a positive file size")
+	}
+	if strings.TrimSpace(folderID) == "" {
+		return "", fmt.Errorf("DELIVERY_TARGET_REQUIRED: an explicit Drive destination is required")
+	}
+	token, err := s.getToken(ctx)
+	if err != nil {
+		return "", err
+	}
+	metaJSON, err := buildUploadMetadata(fileName, folderID, deliveryID)
+	if err != nil {
+		return "", fmt.Errorf("marshal upload metadata: %w", err)
+	}
+	sessionURI, _, err := s.initiateResumableUpload(ctx, metaJSON, size, token)
+	return sessionURI, err
+}
+
+// uploadResumableChunksFrom uploads a file through a previously created
+// session. The init request remains part of the measured network duration
+// when the caller supplied it; session initialization can therefore be
+// performed and timed independently by prewarming callers.
+func (s *Service) uploadResumableChunksFrom(
+	ctx context.Context,
+	file *os.File,
+	size int64,
+	sessionURI string,
+	token *Token,
+	networkMS, localMS time.Duration,
+) (*UploadResult, error) {
 
 	var offset int64
 	// One buffer is reused across every chunk and every retry attempt of

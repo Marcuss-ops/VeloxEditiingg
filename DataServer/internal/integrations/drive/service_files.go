@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -82,6 +83,45 @@ func (s *Service) UploadFileNamed(ctx context.Context, filePath, requestedName, 
 		result.FolderLink = fmt.Sprintf("https://drive.google.com/drive/folders/%s", folderID)
 	}
 	return result, nil
+}
+
+// UploadFileNamedWithSession uploads through a pre-created resumable session.
+// If Drive says that the session expired (404/410), it creates a fresh one
+// and retries through the regular upload path. Other permanent errors remain
+// visible to the caller.
+func (s *Service) UploadFileNamedWithSession(ctx context.Context, filePath, requestedName, folderID, deliveryID, sessionURI string) (*UploadResult, error) {
+	if strings.TrimSpace(sessionURI) == "" {
+		return s.UploadFileNamed(ctx, filePath, requestedName, folderID, deliveryID)
+	}
+	f, err := os.Open(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open file: %w", err)
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get file info: %w", err)
+	}
+	if info.Size() <= resumableUploadThreshold {
+		return s.UploadFileNamed(ctx, filePath, requestedName, folderID, deliveryID)
+	}
+	token, err := s.getToken(ctx)
+	if err != nil {
+		return nil, err
+	}
+	name := driveUploadFileName(requestedName, filepath.Base(filePath))
+	result, err := s.uploadResumableChunksFrom(ctx, f, info.Size(), sessionURI, token, 0, 0)
+	if err == nil {
+		log.Printf("[CLOUD] Uploaded '%s' to Drive using a pre-created session (ID: %s)", name, result.FileID)
+		result.FolderLink = fmt.Sprintf("https://drive.google.com/drive/folders/%s", folderID)
+		return result, nil
+	}
+	var chunkErr *chunkUploadError
+	if errors.As(err, &chunkErr) && (chunkErr.status == http.StatusNotFound || chunkErr.status == http.StatusGone) {
+		log.Printf("[CLOUD] Drive resumable session expired; creating a replacement session")
+		return s.UploadFileNamed(ctx, filePath, requestedName, folderID, deliveryID)
+	}
+	return nil, err
 }
 
 func driveUploadFileName(requestedName, fallback string) string {
@@ -361,4 +401,23 @@ func (s *Service) UploadVideoNamed(ctx context.Context, filePath, projectName, f
 		folderID = folder.ID
 	}
 	return s.UploadFileNamed(ctx, filePath, fileName, folderID, deliveryID)
+}
+
+// UploadVideoNamedWithSession is the pre-initialized-session form of
+// UploadVideoNamed. Folder selection and Drive idempotency metadata remain
+// identical to the regular path.
+func (s *Service) UploadVideoNamedWithSession(ctx context.Context, filePath, projectName, fileName, parentFolderID, deliveryID, sessionURI string) (*UploadResult, error) {
+	parentFolderID = strings.TrimSpace(parentFolderID)
+	if parentFolderID == "" {
+		return nil, fmt.Errorf("DELIVERY_TARGET_REQUIRED: an explicit Drive destination is required")
+	}
+	folderID := parentFolderID
+	if strings.TrimSpace(projectName) != "" {
+		folder, err := s.GetOrCreateFolder(ctx, projectName, parentFolderID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get/create project folder: %w", err)
+		}
+		folderID = folder.ID
+	}
+	return s.UploadFileNamedWithSession(ctx, filePath, fileName, folderID, deliveryID, sessionURI)
 }

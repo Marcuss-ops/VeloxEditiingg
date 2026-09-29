@@ -54,6 +54,44 @@ func resumableTestFile(t *testing.T, size int64) string {
 	return filePath
 }
 
+func TestInitiateResumableSessionCreatesSessionWithoutUploadingBytes(t *testing.T) {
+	const sessionURI = "https://upload.example/session/prewarmed"
+	var initCount, putCount int
+	service := driveTestService(func(req *http.Request) (*http.Response, error) {
+		switch req.Method {
+		case http.MethodPost:
+			initCount++
+			if got := req.Header.Get("X-Upload-Content-Length"); got != "6291456" {
+				t.Errorf("X-Upload-Content-Length = %q, want 6291456", got)
+			}
+			body, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatalf("read metadata body: %v", err)
+			}
+			if !strings.Contains(string(body), `"velox_delivery_id":"delivery-prewarm"`) {
+				t.Errorf("metadata missing delivery marker: %s", body)
+			}
+			h := make(http.Header)
+			h.Set("Location", sessionURI)
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("")), Header: h}, nil
+		case http.MethodPut:
+			putCount++
+			return driveResponse(http.StatusOK, `{}`), nil
+		default:
+			t.Fatalf("unexpected request: %s", req.Method)
+			return nil, nil
+		}
+	})
+
+	got, err := service.InitiateResumableSession(context.Background(), "render.mp4", "folder", "delivery-prewarm", 6<<20)
+	if err != nil {
+		t.Fatalf("InitiateResumableSession: %v", err)
+	}
+	if got != sessionURI || initCount != 1 || putCount != 0 {
+		t.Fatalf("session=%q init=%d PUT=%d, want session URI, one init, zero PUTs", got, initCount, putCount)
+	}
+}
+
 func TestUploadFile_ResumableChunkedUpload(t *testing.T) {
 	oldChunk := resumableChunkSize
 	resumableChunkSize = 1 << 20 // 1 MiB, a multiple of 256 KiB
