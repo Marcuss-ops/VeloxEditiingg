@@ -1,5 +1,26 @@
 ## [Unreleased] - 2026-09-28
 
+### Performance follow-up — preparation and prefetch
+
+- Reserve the selected warm worker synchronously at submission, before the
+  wider plan refresh, so a claim tick cannot race ahead and assign the task to
+  a different worker.
+- Start a stock-asset plan for PENDING PREPARE tasks. FINALIZE refreshes the
+  same reservation with the new task revision and runtime assets, allowing
+  known stock downloads to overlap generated media.
+- Persist worker-verified Drive asset identities in the Master catalog and
+  reuse fresh SHA-256/size metadata for later plans. Catalog entries expire
+  from reuse after 24 hours because Drive locators may be overwritten.
+- Coalesce matching asset work items across jobs in the worker queue while
+  retaining one resolver lease and PREPARED certificate per job. Reuse verified
+  media metadata for content-identical assets; the wire plan still carries
+  each job's asset manifest for lineage and claim verification.
+- Fast assembly already fails closed when any required asset is missing or
+  unverifiable at execution; the worker records that condition in
+  `velox_assembly_assets_missing_at_execution`.
+- Build verification: `go build ./...` in `DataServer/` and
+  `RemoteCodex/native/worker-agent-go/`. Tests were not run.
+
 ### Fixed — stock clips stay packet-copy only
 
 - Recover unsafe stock cut points with packet-copy handling; never send the
