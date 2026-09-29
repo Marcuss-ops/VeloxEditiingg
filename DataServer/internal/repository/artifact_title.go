@@ -3,6 +3,7 @@ package repository
 import (
 	"encoding/hex"
 	"encoding/json"
+	"sort"
 	"strings"
 )
 
@@ -32,8 +33,13 @@ func findString(value any, key string) string {
 		if candidate, ok := current[key].(string); ok && strings.TrimSpace(candidate) != "" {
 			return strings.TrimSpace(candidate)
 		}
-		for _, nested := range current {
-			if found := findString(nested, key); found != "" {
+		keys := make([]string, 0, len(current))
+		for nestedKey := range current {
+			keys = append(keys, nestedKey)
+		}
+		sort.Strings(keys)
+		for _, nestedKey := range keys {
+			if found := findString(current[nestedKey], key); found != "" {
 				return found
 			}
 		}
