@@ -228,6 +228,7 @@ type Scheduler struct {
 	activePrefetch        int
 	readyAtByJob          map[string]map[string]readyRecord
 	prepared              map[string]PreparedJob
+	verifiedMetadata      map[string]PreparedAssetMetadata
 	// currentPlanID and currentPlanVersion track the most recently
 	// reconciled plan so PreparedJob entries can carry the plan identity
 	// for complete lifecycle event correlation.
@@ -272,7 +273,7 @@ func NewScheduler(cfg Config) *Scheduler {
 		cfg.MetadataResolver = defaultMetadataResolver
 	}
 	workerCtx, workerCancel := context.WithCancel(context.Background())
-	s := &Scheduler{cfg: cfg, ram: cfg.RAM, jobs: make(map[string]*jobRuntime), protects: make(map[string]string), pendingProtects: make(map[string]struct{}), protectExpiries: make(map[string]time.Time), executionReservations: make(map[string]map[string]string), hints: make(map[string]futureasset.ProtectedAsset), prefetched: make(map[string]int64), useful: make(map[string]bool), assetJobs: make(map[string]map[string]struct{}), wake: make(chan struct{}, 1), workerCtx: workerCtx, workerCancel: workerCancel, readyAtByJob: make(map[string]map[string]readyRecord), prepared: make(map[string]PreparedJob)}
+	s := &Scheduler{cfg: cfg, ram: cfg.RAM, jobs: make(map[string]*jobRuntime), protects: make(map[string]string), pendingProtects: make(map[string]struct{}), protectExpiries: make(map[string]time.Time), executionReservations: make(map[string]map[string]string), hints: make(map[string]futureasset.ProtectedAsset), prefetched: make(map[string]int64), useful: make(map[string]bool), assetJobs: make(map[string]map[string]struct{}), wake: make(chan struct{}, 1), workerCtx: workerCtx, workerCancel: workerCancel, readyAtByJob: make(map[string]map[string]readyRecord), prepared: make(map[string]PreparedJob), verifiedMetadata: make(map[string]PreparedAssetMetadata)}
 	heap.Init(&s.queue)
 	for i := 0; i < cfg.MaxConcurrent; i++ {
 		go s.runWorker()

@@ -2,10 +2,12 @@ package prefetch
 
 import (
 	"container/heap"
+	"fmt"
 	"strconv"
 	"time"
 
 	"velox-shared/assetref"
+	"velox-shared/futureasset"
 	"velox-worker-agent/internal/downloader"
 )
 
@@ -112,13 +114,17 @@ func (s *Scheduler) runWorkItem(item *workItem, resolver *downloader.CacheResolv
 	var metadata PreparedAssetMetadata
 	var metadataErr error
 	if err == nil {
-		metadata, metadataErr = s.cfg.MetadataResolver(item.ctx, asset, resolved)
+		metadata, metadataErr = s.reusableVerifiedMetadata(asset, resolved)
+		if metadataErr != nil {
+			metadata, metadataErr = s.cfg.MetadataResolver(item.ctx, asset, resolved)
+		}
 		// Tag the prepared asset with its resolution origin. All assets
 		// materialized by the FutureAssetPlan are OriginPrefetch; attempt-time
 		// re-resolution via cacheResolutionSink.classifyOrigin() may later
 		// override this for warm-cache hits that lack a PreparedJob entry.
 		if metadataErr == nil {
 			metadata.Origin = downloader.OriginPrefetch
+			s.rememberVerifiedMetadata(asset, resolved, metadata)
 		}
 	}
 	var protectionErr error
@@ -223,6 +229,55 @@ func (s *Scheduler) runWorkItem(item *workItem, resolver *downloader.CacheResolv
 		}
 		s.emit(event)
 	}
+}
+
+// reusableVerifiedMetadata shares the media probe result for content-identical
+// assets appearing in different future jobs. The cache resolver still runs
+// for every job to verify the local blob and install that job's lease; only
+// metadata probing is coalesced by immutable content identity.
+func (s *Scheduler) reusableVerifiedMetadata(asset futureasset.AssetManifest, resolved downloader.CacheResolution) (PreparedAssetMetadata, error) {
+	key := verifiedMetadataKey(string(resolved.SHA256), resolved.SizeBytes)
+	if key == "" {
+		return PreparedAssetMetadata{}, fmt.Errorf("prefetch metadata cache: incomplete content identity")
+	}
+	s.mu.Lock()
+	metadata, ok := s.verifiedMetadata[key]
+	s.mu.Unlock()
+	if !ok {
+		return PreparedAssetMetadata{}, fmt.Errorf("prefetch metadata cache: miss")
+	}
+	metadata.AssetKey = asset.AssetKey
+	metadata.AssetID = asset.AssetID
+	metadata.SHA256 = string(resolved.SHA256)
+	metadata.SizeBytes = resolved.SizeBytes
+	metadata.MIMEType = asset.MIMEType
+	metadata.LocalPath = resolved.LocalPath
+	metadata.PreparedAt = s.cfg.Now().UTC()
+	return metadata, nil
+}
+
+func (s *Scheduler) rememberVerifiedMetadata(asset futureasset.AssetManifest, resolved downloader.CacheResolution, metadata PreparedAssetMetadata) {
+	key := verifiedMetadataKey(string(resolved.SHA256), resolved.SizeBytes)
+	if key == "" {
+		return
+	}
+	metadata.AssetKey = asset.AssetKey
+	metadata.AssetID = asset.AssetID
+	metadata.SHA256 = string(resolved.SHA256)
+	metadata.SizeBytes = resolved.SizeBytes
+	metadata.MIMEType = asset.MIMEType
+	metadata.LocalPath = resolved.LocalPath
+	s.mu.Lock()
+	s.verifiedMetadata[key] = metadata
+	s.mu.Unlock()
+}
+
+func verifiedMetadataKey(sha256 string, sizeBytes int64) string {
+	sha256 = normalizedSHA256(sha256)
+	if sha256 == "" || sizeBytes <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s:%d", sha256, sizeBytes)
 }
 
 func (s *Scheduler) diskStateLocked() diskPressureState {
