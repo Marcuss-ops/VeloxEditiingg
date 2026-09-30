@@ -290,6 +290,13 @@ func stableIdentity(sourceProvider, sourceJobID, targetExecutorID string) string
 	return "submission_" + hex.EncodeToString(identityHash[:8])
 }
 
+// CorrelationID returns the retry-stable correlation ID stamped into a
+// canonical submission payload. It lets ingress adapters log the same ID
+// workers and downstream services receive without duplicating identity rules.
+func CorrelationID(sourceProvider, sourceJobID, targetExecutorID string) string {
+	return "corr_" + stableIdentity(sourceProvider, sourceJobID, targetExecutorID)
+}
+
 // normalizeIdentityPayload stamps the execution-metadata keys into the
 // payload before the resolver hash. A2-2 audit note: these keys are
 // generated at ingress by older adapters and are execution metadata, not

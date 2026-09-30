@@ -55,6 +55,7 @@ func (h *Handlers) PrepareJob() gin.HandlerFunc {
 		out := h.submitJobCore(c.Request.Context(), req, intakeIdentity{
 			ClientID:     ClientIDFromContext(c),
 			IntakeSource: creatorflow.IntakeSourceCanonical,
+			Phase:        "PREPARE",
 			Quota:        KeyFromContext(c),
 		})
 		if out.Status < http.StatusMultipleChoices {
@@ -185,6 +186,7 @@ func (h *Handlers) FinalizeJob() gin.HandlerFunc {
 			if h.enqueuer != nil {
 				h.enqueuer.NotifyTaskUpdated(c.Request.Context(), jobID)
 			}
+			logFinalizeAccepted(jobID, req, current, true)
 			c.JSON(http.StatusAccepted, gin.H{"ok": true, "job_id": jobID, "phase": "FINALIZE", "dispatch_status": "prefetch_refresh_queued", "idempotent": true})
 			return
 		}
@@ -250,6 +252,7 @@ func (h *Handlers) FinalizeJob() gin.HandlerFunc {
 		if h.enqueuer != nil {
 			h.enqueuer.NotifyTaskUpdated(c.Request.Context(), jobID)
 		}
+		logFinalizeAccepted(jobID, req, current, false)
 		c.JSON(http.StatusAccepted, gin.H{
 			"ok": true, "job_id": jobID, "phase": "FINALIZE",
 			"dispatch_status":   "prefetch_refresh_queued",
@@ -257,6 +260,19 @@ func (h *Handlers) FinalizeJob() gin.HandlerFunc {
 			"idempotency_key":   req.IdempotencyKey,
 		})
 	}
+}
+
+func logFinalizeAccepted(jobID string, req FinalizeJobRequest, payload map[string]interface{}, idempotent bool) {
+	correlationID, _ := payload["correlation_id"].(string)
+	project := intakeProjectLabel(SubmitJobRequest{RuntimePayload: req.RuntimePayload}, payload)
+	pipelineLog(
+		"API_V1_JOBS_ACCEPTED phase=FINALIZE job_id=%s correlation_id=%s project=%q idem_hash=%s idempotent=%t",
+		jobID,
+		correlationID,
+		project,
+		logHashShort(req.IdempotencyKey),
+		idempotent,
+	)
 }
 
 func hasCompositeOverlay(overlays []SubmitOverlay) bool {

@@ -62,6 +62,9 @@ type intakeIdentity struct {
 	// canonical submitter (`canonical` for POST /api/v1/jobs, `batch` for
 	// POST /api/v1/jobs/batch items).
 	IntakeSource string
+	// Phase identifies an intake stage such as PREPARE. Empty means the
+	// canonical one-stage submit route.
+	Phase string
 	// Quota is the typed M2M key the per-request quota is enforced against,
 	// or nil when M2M auth did not run.
 	Quota *m2mkeys.M2MAPIKey
@@ -262,10 +265,19 @@ func (h *Handlers) submitJobCore(ctx context.Context, req SubmitJobRequest, iden
 
 	h.intakeSinkOrNoop().IncAccepted(intakeSurfaceAPIv1Jobs)
 	jobID, _ := response["job_id"].(string)
+	project := intakeProjectLabel(req, canonical.WorkerPayload)
+	correlationID := creatorflow.CorrelationID(canonical.SourceProvider, canonical.SourceJobID, canonical.TargetExecutorID)
+	phase := identity.Phase
+	if phase == "" {
+		phase = "SUBMIT"
+	}
 	pipelineLog(
-		"API_V1_JOBS_ACCEPTED idem_hash=%s job_id=%s client_id=%s",
+		"API_V1_JOBS_ACCEPTED phase=%s idem_hash=%s job_id=%s correlation_id=%s project=%q client_id=%s",
+		phase,
 		logHashShort(req.IdempotencyKey),
 		jobID,
+		correlationID,
+		project,
 		identity.ClientID,
 	)
 
@@ -289,6 +301,26 @@ func (h *Handlers) submitJobCore(ctx context.Context, req SubmitJobRequest, iden
 	}
 	out.Usage = &intakeUsage{Scenes: len(req.Scenes), TotalDurationSeconds: totalDuration}
 	return out
+}
+
+// intakeProjectLabel picks a bounded operator-facing project label from the
+// request or its renderer projection. The quoted log field safely escapes
+// control characters; truncation keeps unusually large user input bounded.
+func intakeProjectLabel(req SubmitJobRequest, payload map[string]interface{}) string {
+	for _, fields := range []map[string]interface{}{req.Spec, req.RuntimePayload, payload} {
+		for _, key := range []string{"project", "project_name", "project_id"} {
+			if value, ok := fields[key].(string); ok {
+				value = strings.TrimSpace(value)
+				if value != "" {
+					if len(value) > 96 {
+						value = value[:96]
+					}
+					return value
+				}
+			}
+		}
+	}
+	return ""
 }
 
 // reject builds a rejection envelope WITHOUT a `details` key. Use it where the
