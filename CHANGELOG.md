@@ -1,5 +1,22 @@
 ## [Unreleased] - 2026-09-28
 
+### Fixed — Drive project folders take the video title
+
+- Drive relay project subfolders were created with the opaque artifact id
+  (sha) while the MP4 inside already carried the human-readable video
+  title. The relay now resolves the title (metadata `file_name`/`title`,
+  then `video_name`, then `request_json` script title) before creating the
+  folder, sanitized via `paths.SanitizeDriveFolderName`.
+- The verified-artifact upload path passes the same title as the project
+  folder name, so folder and MP4 share one online name. The artifact id
+  stays as deterministic fallback when no title resolves.
+- Relay reconciliation is unaffected: it matches files via Drive
+  `appProperties` (`velox_artifact_id`/`velox_destination_id`/
+  `velox_publication_id`), not folder names.
+- Verification: `go vet ./...`, `go build ./...` full-module in
+  `DataServer/`, plus `go test -count=1 ./internal/deliveries/...` and
+  `go test -count=1 ./internal/integrations/drive/...`.
+
 ### Performance — overlap Drive delivery with artifact upload
 
 - Added a master-side Drive resumable relay for durable progressive-upload
