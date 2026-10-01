@@ -70,7 +70,7 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 	// panics on nil so a bootstrap miss is loud at startup.
 	deliveryCounter := artifactsstore.NewSQLiteJobDeliveryCounter(p.SQLite.DB())
 	probeRepo := artifactsstore.NewSQLiteMediaProbeRepository(p.SQLite.DB())
-	probeWorker := artifacts.NewMediaProbeWorker(probeRepo, p.BlobStore.FinalDir(), 2, nil)
+	probeWorker := artifacts.NewMediaProbeWorker(probeRepo, p.BlobStore.FinalDir(), cfg.Runtime.MediaProbeConcurrency, nil)
 	artifactSvc := artifacts.NewService(
 		uploadRepo,
 		uploadWriter,

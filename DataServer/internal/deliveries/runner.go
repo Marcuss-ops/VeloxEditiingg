@@ -47,6 +47,7 @@ import (
 	"velox-server/internal/logging"
 	"velox-server/internal/store"
 	"velox-server/internal/supervisor"
+	"velox-server/internal/wake"
 )
 
 var errDeliveryStatePersistence = errors.New("delivery state persistence failed")
@@ -223,6 +224,9 @@ func (r *DeliveryRunner) Run(ctx context.Context) error {
 
 	ticker := time.NewTicker(r.cfg.PollInterval)
 	defer ticker.Stop()
+	wakeCh, unsubscribe := wake.Deliveries.Subscribe()
+	defer unsubscribe()
+	wake.Deliveries.Signal() // initial scan; periodic polling remains the repair path.
 
 	tracker := supervisor.NewFailureTrackerWithClock(supervisor.DefaultRetryPolicy(), supervisor.RealClock{})
 
@@ -233,6 +237,15 @@ func (r *DeliveryRunner) Run(ctx context.Context) error {
 		case <-r.stopCh:
 			return nil
 		case <-ticker.C:
+			if err := r.tick(ctx); err == nil {
+				tracker.Reset()
+			} else {
+				classified := supervisor.ClassifyError(err)
+				if escalated := tracker.Record(classified); escalated != nil {
+					return fmt.Errorf("delivery runner: %w", escalated)
+				}
+			}
+		case <-wakeCh:
 			err := r.tick(ctx)
 			if err == nil {
 				tracker.Reset()

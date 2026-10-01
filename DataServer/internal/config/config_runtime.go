@@ -71,6 +71,7 @@ func loadRuntimeConfig(dataDir string, raw RawConfig) RuntimeConfig {
 	c.CommitHMACKey = strings.TrimSpace(raw.Get("VELOX_COMMIT_HMAC_KEY"))
 	c.DeliveryDisabled = raw.Bool("VELOX_DELIVERY_DISABLED", false)
 	c.DeliveryConcurrency = raw.Int("VELOX_DELIVERY_CONCURRENCY", 4, 1)
+	c.MediaProbeConcurrency = raw.Int("VELOX_MEDIA_PROBE_CONCURRENCY", 2, 1)
 
 	return c
 }

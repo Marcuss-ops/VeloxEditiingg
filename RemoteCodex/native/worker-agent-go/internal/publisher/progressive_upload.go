@@ -37,7 +37,7 @@ func (o ProgressiveUploadOptions) workers() int {
 
 const (
 	progressiveMinimumPartSize = 256 * 1024
-	progressiveMaximumPartSize = 2 * 1024 * 1024
+	progressiveMaximumPartSize = 16 * 1024 * 1024
 	progressiveHashReadSize    = 1 * 1024 * 1024
 )
 
@@ -48,7 +48,9 @@ func adaptiveProgressivePartSize(finalSize, negotiated int64) int64 {
 	if finalSize <= 0 {
 		return negotiated
 	}
-	size := finalSize / 64
+	// Target roughly two dozen requests for finalized uploads (the early
+	// overlap path still uses the negotiated size until rendering completes).
+	size := (finalSize + 23) / 24
 	if size < progressiveMinimumPartSize {
 		size = progressiveMinimumPartSize
 	}

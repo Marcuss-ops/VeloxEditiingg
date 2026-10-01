@@ -49,6 +49,8 @@ type RuntimeConfig struct {
 	// DeliveryConcurrency controls the bounded provider delivery pool.
 	// Zero means the delivery runner's default (2).
 	DeliveryConcurrency int
+	// MediaProbeConcurrency bounds ffprobe workers; zero selects the default.
+	MediaProbeConcurrency int
 
 	// Process-level controls are resolved once at bootstrap and injected into
 	// runtime components. Consumers must not consult the process environment.

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"velox-server/internal/repository"
+	"velox-server/internal/wake"
 )
 
 // Finalize orchestrates verified artifact finalization. See the
@@ -90,6 +91,8 @@ func (s *Service) Finalize(ctx context.Context, cmd FinalizeArtifactCommand) (*r
 	if err != nil {
 		return nil, err
 	}
+	wake.Deliveries.Signal()
+	wake.MediaProbes.Signal()
 	return art, nil
 }
 

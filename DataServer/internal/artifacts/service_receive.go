@@ -172,6 +172,50 @@ func (s *Service) Receive(ctx context.Context, uploadID string, reader io.Reader
 	}, nil
 }
 
+// ReceiveVerifiedStaged records a staging file that was assembled and hashed
+// while written. It avoids rereading and rewriting chunked uploads.
+func (s *Service) ReceiveVerifiedStaged(ctx context.Context, uploadID, receivedSHA string, receivedSize int64) (*ReceiveResult, error) {
+	if uploadID == "" || receivedSHA == "" || receivedSize < 0 {
+		return nil, fmt.Errorf("artifacts: ReceiveVerifiedStaged: invalid receipt")
+	}
+	session, err := s.repo.GetUploadSession(ctx, uploadID)
+	if err != nil {
+		return nil, translateStoreErr(err)
+	}
+	if session == nil {
+		return nil, fmt.Errorf("%w: upload_id=%s", ErrUploadNotFound, uploadID)
+	}
+	if session.Status == string(repository.UploadReceived) {
+		return receiveResultFromSession(session)
+	}
+	if session.Status != string(repository.UploadCreated) && session.Status != string(repository.UploadUploading) {
+		return nil, fmt.Errorf("%w: upload_id=%s status=%s", ErrUploadStateInvalid, uploadID, session.Status)
+	}
+	info, err := os.Stat(session.TemporaryStorageKey)
+	if err != nil {
+		return nil, fmt.Errorf("%w: stat assembled staging: %w", ErrBlobWriteFailed, err)
+	}
+	if !info.Mode().IsRegular() || info.Size() != receivedSize {
+		return nil, fmt.Errorf("%w: staged blob size=%d assembled=%d", ErrBlobWriteFailed, info.Size(), receivedSize)
+	}
+	if session.ExpectedSHA256 != "" && session.ExpectedSHA256 != receivedSHA {
+		_ = os.Remove(session.TemporaryStorageKey)
+		_ = s.markFailed(ctx, uploadID, "hash mismatch")
+		return nil, fmt.Errorf("%w: %w: worker_declared=%s master_computed=%s", ErrArtifactTransferCorrupted, ErrHashMismatch, session.ExpectedSHA256, receivedSHA)
+	}
+	if session.ExpectedSizeBytes > 0 && session.ExpectedSizeBytes != receivedSize {
+		_ = os.Remove(session.TemporaryStorageKey)
+		_ = s.markFailed(ctx, uploadID, "size mismatch")
+		return nil, fmt.Errorf("%w: expected=%d got=%d", ErrSizeMismatch, session.ExpectedSizeBytes, receivedSize)
+	}
+	now := s.clock.Now()
+	received := string(repository.UploadReceived)
+	if err := s.repo.UpdateUploadStatus(ctx, uploadID, repository.UploadFields{Status: &received, ReceivedSizeBytes: &receivedSize, ReceivedSHA256: &receivedSHA, LastByteReceivedAt: &now, CompletedAt: &now}); err != nil {
+		return nil, translateStoreErr(err)
+	}
+	return &ReceiveResult{UploadID: uploadID, ReceivedSizeBytes: receivedSize, ReceivedSHA256: receivedSHA, Status: received}, nil
+}
+
 func receiveResultFromSession(session *repository.UploadSession) (*ReceiveResult, error) {
 	if session == nil || session.Status != string(repository.UploadReceived) || session.ReceivedSHA256 == "" || session.ReceivedSizeBytes < 0 {
 		return nil, fmt.Errorf("%w: received session is incomplete", ErrUploadStateInvalid)

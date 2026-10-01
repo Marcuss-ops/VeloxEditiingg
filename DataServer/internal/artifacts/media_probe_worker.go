@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"velox-server/internal/artifactsstore"
+	"velox-server/internal/wake"
 )
 
 const (
@@ -71,6 +72,8 @@ func (w *MediaProbeWorker) Run(ctx context.Context) error {
 }
 
 func (w *MediaProbeWorker) runSlot(ctx context.Context, owner string) {
+	wakeCh, unsubscribe := wake.MediaProbes.Subscribe()
+	defer unsubscribe()
 	for {
 		if ctx.Err() != nil {
 			return
@@ -87,8 +90,14 @@ func (w *MediaProbeWorker) runSlot(ctx context.Context, owner string) {
 			continue
 		}
 		if job == nil {
-			if !sleepProbe(ctx, w.poll) {
+			timer := time.NewTimer(w.poll)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
 				return
+			case <-wakeCh:
+				timer.Stop()
+			case <-timer.C:
 			}
 			continue
 		}

@@ -25,7 +25,7 @@ const masterStreamTransportID = "master-stream.v1"
 // reaches the master immediately, then let the worker use larger parts for
 // the bulk transfer. The final upload target remains on the normal 8 MiB
 // chunk contract.
-const earlyUploadChunkSize = 2 * 1024 * 1024
+const earlyUploadChunkSize = 8 * 1024 * 1024
 
 func (h *Handler) handleArtifactUploadIntent(workerID string, msg *pb.ArtifactUploadIntent, sess *workerSession) {
 	ctx := ctxForTaskSession(sess)

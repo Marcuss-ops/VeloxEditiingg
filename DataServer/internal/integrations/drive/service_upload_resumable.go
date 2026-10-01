@@ -179,17 +179,26 @@ func (s *Service) UploadResumablePart(ctx context.Context, sessionURI string, st
 	if strings.TrimSpace(sessionURI) == "" || start < 0 || len(data) == 0 || total < 0 || (total > 0 && start+int64(len(data)) > total) {
 		return 0, nil, fmt.Errorf("invalid Drive relay part")
 	}
+	return s.UploadResumablePartReader(ctx, sessionURI, start, total, bytes.NewReader(data), int64(len(data)))
+}
+
+// UploadResumablePartReader streams a known-length part without buffering it.
+func (s *Service) UploadResumablePartReader(ctx context.Context, sessionURI string, start int64, total int64, body io.Reader, size int64) (nextOffset int64, completed *UploadResult, err error) {
+	if strings.TrimSpace(sessionURI) == "" || start < 0 || size <= 0 || total < 0 || (total > 0 && start+size > total) || body == nil {
+		return 0, nil, fmt.Errorf("invalid Drive relay part")
+	}
 	token, err := s.getToken(ctx)
 	if err != nil {
 		return 0, nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, sessionURI, bytes.NewReader(data))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, sessionURI, body)
 	if err != nil {
 		return 0, nil, fmt.Errorf("create Drive relay part request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token.AccessToken)
-	req.Header.Set("Content-Length", strconv.Itoa(len(data)))
-	end := start + int64(len(data)) - 1
+	req.ContentLength = size
+	req.Header.Set("Content-Length", strconv.FormatInt(size, 10))
+	end := start + size - 1
 	rangeTotal := "*"
 	if total > 0 {
 		rangeTotal = strconv.FormatInt(total, 10)

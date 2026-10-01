@@ -312,36 +312,45 @@ func (r *DriveStreamRelay) sendChunk(ctx context.Context, session relaySession, 
 	if err != nil {
 		return fmt.Errorf("open durable Drive relay chunk %d: %w", chunk.ChunkIndex, err)
 	}
-	data, readErr := io.ReadAll(file)
-	_ = file.Close()
-	if readErr != nil {
-		return fmt.Errorf("read durable Drive relay chunk %d: %w", chunk.ChunkIndex, readErr)
+	info, statErr := file.Stat()
+	if statErr != nil {
+		_ = file.Close()
+		return fmt.Errorf("stat durable Drive relay chunk %d: %w", chunk.ChunkIndex, statErr)
 	}
-	if int64(len(data)) != chunk.SizeBytes {
-		return fmt.Errorf("Drive relay chunk %d size drift: have %d want %d", chunk.ChunkIndex, len(data), chunk.SizeBytes)
+	if info.Size() != chunk.SizeBytes {
+		_ = file.Close()
+		return fmt.Errorf("Drive relay chunk %d size drift: have %d want %d", chunk.ChunkIndex, info.Size(), chunk.SizeBytes)
 	}
-	h := sha256.Sum256(data)
-	if chunk.SHA256 != "" && !strings.EqualFold(hex.EncodeToString(h[:]), chunk.SHA256) {
+	h := sha256.New()
+	if _, err := io.Copy(h, file); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("hash durable Drive relay chunk %d: %w", chunk.ChunkIndex, err)
+	}
+	if chunk.SHA256 != "" && !strings.EqualFold(hex.EncodeToString(h.Sum(nil)), chunk.SHA256) {
+		_ = file.Close()
 		return fmt.Errorf("Drive relay chunk %d failed its durable SHA-256 check", chunk.ChunkIndex)
 	}
 	start := session.NextOffset
 	inside := start - chunkStart
-	if inside < 0 || inside >= int64(len(data)) {
+	if inside < 0 || inside >= chunk.SizeBytes {
+		_ = file.Close()
 		return fmt.Errorf("Drive relay offset %d is outside chunk %d", start, chunk.ChunkIndex)
 	}
-	data = data[inside:]
+	partSize := chunk.SizeBytes - inside
 	if err := r.setInFlight(ctx, session); err != nil {
+		_ = file.Close()
 		return err
 	}
 	partTotal := int64(0)
 	if final {
 		partTotal = total
 	}
-	next, completed, err := r.drive.UploadResumablePart(ctx, session.SessionURI, start, partTotal, data)
+	next, completed, err := r.drive.UploadResumablePartReader(ctx, session.SessionURI, start, partTotal, io.NewSectionReader(file, inside, partSize), partSize)
+	_ = file.Close()
 	if err != nil {
 		return err
 	}
-	if next <= start || next > start+int64(len(data)) {
+	if next <= start || next > start+partSize {
 		return fmt.Errorf("Drive relay made invalid offset progress %d -> %d", start, next)
 	}
 	state := "UPLOADING"
