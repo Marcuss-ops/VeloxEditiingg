@@ -197,12 +197,20 @@ func TestCompileSceneTimelineLoopsAndTrimsShortStock(t *testing.T) {
 		if got.Timeline[index].DurationSeconds != want {
 			t.Fatalf("timeline[%d].duration = %v, want %v", index, got.Timeline[index].DurationSeconds, want)
 		}
+		if got.Timeline[index].IncludeAudio {
+			t.Fatalf("stock timeline[%d] includes source audio", index)
+		}
 		if got.Timeline[index].SceneID != "intro" {
 			t.Fatalf("timeline[%d].scene_id = %q, want intro", index, got.Timeline[index].SceneID)
 		}
 	}
 	if len(got.AudioTracks) != 2 || got.AudioTracks[0].DurationSeconds != 5 || got.AudioTracks[1].StartTimeOffset != 5 {
 		t.Fatalf("audio tracks = %#v, want voiceover plus post-voiceover clip audio", got.AudioTracks)
+	}
+	for _, track := range got.AudioTracks {
+		if track.SourceURL == "stock-a.mp4" {
+			t.Fatalf("stock source leaked into audio tracks: %+v", track)
+		}
 	}
 }
 
@@ -237,6 +245,32 @@ func TestCompileSceneTimelineKeepsClipOnlyAudioAtSceneBoundary(t *testing.T) {
 		if item.IncludeAudio {
 			t.Fatalf("timeline[%d] unexpectedly carries embedded audio", index)
 		}
+	}
+}
+
+func TestCompileSceneTimelineNeverTreatsClipAsStock(t *testing.T) {
+	input := map[string]interface{}{
+		"scenes_json": `[{"scene_id":"opening","duration_seconds":5,"clip":{"asset_id":"opening-clip","url":"opening.mp4","duration_ms":5000},"voiceover":{"asset_id":"opening-voice","url":"opening.mp3","duration_ms":5000}}]`,
+	}
+
+	got, err := Compile(context.Background(), "job-clip-only", input, "/tmp/out.mp4", nil)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	if len(got.Timeline) != 1 {
+		t.Fatalf("timeline segments = %d, want one clip segment (no stock copy)", len(got.Timeline))
+	}
+	if got.Timeline[0].Source.URL != "opening.mp4" || got.Timeline[0].DurationSeconds != 5 {
+		t.Fatalf("timeline[0] = %+v, want opening clip at its original duration", got.Timeline[0])
+	}
+	if got.Mixed || len(got.FallbackVideoSources) != 0 {
+		t.Fatalf("clip-only scene was classified as stock: mixed=%v fallback=%+v", got.Mixed, got.FallbackVideoSources)
+	}
+	if len(got.AudioTracks) != 2 || got.AudioTracks[0].Role != "voiceover" || got.AudioTracks[1].Role != "scene_clip_audio" {
+		t.Fatalf("audio tracks = %+v, want voiceover and clip audio", got.AudioTracks)
+	}
+	if got.AudioTracks[0].StartTimeOffset != 0 || got.AudioTracks[1].StartTimeOffset != 0 {
+		t.Fatalf("clip and voiceover should stay aligned at scene start: %+v", got.AudioTracks)
 	}
 }
 

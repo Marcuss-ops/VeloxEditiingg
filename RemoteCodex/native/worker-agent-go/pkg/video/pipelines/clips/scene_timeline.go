@@ -164,9 +164,6 @@ func compileSceneTimeline(ctx context.Context, jobID string, scenes []sceneTimel
 			targetDuration = voiceoverDuration
 		}
 
-		if len(stock) == 0 && scene.Voiceover != nil && scene.Clip != nil {
-			stock = []sceneTimelineAsset{*scene.Clip}
-		}
 		if len(stock) > 0 {
 			for _, asset := range stock {
 				url := strings.TrimSpace(asset.URL)
@@ -217,10 +214,14 @@ func compileSceneTimeline(ctx context.Context, jobID string, scenes []sceneTimel
 					DurationSeconds: voiceoverDuration,
 					Role:            "voiceover",
 				})
+				clipAudioOffset := offset
+				if len(stock) > 0 {
+					clipAudioOffset += voiceoverDuration
+				}
 				audioTracks = append(audioTracks, plan.AudioTrack{
 					SourceURL:       scene.Clip.URL,
 					Volume:          1,
-					StartTimeOffset: offset + voiceoverDuration,
+					StartTimeOffset: clipAudioOffset,
 					DurationSeconds: clipDuration,
 					Role:            "scene_clip_audio",
 				})
@@ -249,6 +250,9 @@ func compileSceneTimeline(ctx context.Context, jobID string, scenes []sceneTimel
 			offset += targetDuration + clipDuration
 		} else if scene.Clip != nil {
 			offset += clipDuration
+			if scene.Voiceover != nil && voiceoverDuration > clipDuration {
+				offset += voiceoverDuration - clipDuration
+			}
 		} else {
 			offset += targetDuration
 		}
