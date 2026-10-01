@@ -172,11 +172,11 @@ func (s *Service) Receive(ctx context.Context, uploadID string, reader io.Reader
 	}, nil
 }
 
-// ReceiveVerifiedStaged records a staging file that was assembled and hashed
+// markReceivedVerified records a staging file that was assembled and hashed
 // while written. It avoids rereading and rewriting chunked uploads.
-func (s *Service) ReceiveVerifiedStaged(ctx context.Context, uploadID, receivedSHA string, receivedSize int64) (*ReceiveResult, error) {
+func (s *Service) markReceivedVerified(ctx context.Context, uploadID, receivedSHA string, receivedSize int64) (*ReceiveResult, error) {
 	if uploadID == "" || receivedSHA == "" || receivedSize < 0 {
-		return nil, fmt.Errorf("artifacts: ReceiveVerifiedStaged: invalid receipt")
+		return nil, fmt.Errorf("artifacts: markReceivedVerified: invalid receipt")
 	}
 	session, err := s.repo.GetUploadSession(ctx, uploadID)
 	if err != nil {
@@ -190,6 +190,9 @@ func (s *Service) ReceiveVerifiedStaged(ctx context.Context, uploadID, receivedS
 	}
 	if session.Status != string(repository.UploadCreated) && session.Status != string(repository.UploadUploading) {
 		return nil, fmt.Errorf("%w: upload_id=%s status=%s", ErrUploadStateInvalid, uploadID, session.Status)
+	}
+	if !session.ExpiresAt.IsZero() && s.clock.Now().After(session.ExpiresAt) {
+		return nil, fmt.Errorf("%w: upload_id=%s expired_at=%s", ErrUploadExpired, uploadID, session.ExpiresAt.Format(time.RFC3339))
 	}
 	info, err := os.Stat(session.TemporaryStorageKey)
 	if err != nil {
@@ -209,6 +212,9 @@ func (s *Service) ReceiveVerifiedStaged(ctx context.Context, uploadID, receivedS
 		return nil, fmt.Errorf("%w: expected=%d got=%d", ErrSizeMismatch, session.ExpectedSizeBytes, receivedSize)
 	}
 	now := s.clock.Now()
+	if err := s.repo.UpdateUploadStatus(ctx, uploadID, repository.UploadFields{FirstByteReceivedAt: &now, Status: func() *string { value := string(repository.UploadUploading); return &value }()}); err != nil {
+		return nil, translateStoreErr(err)
+	}
 	received := string(repository.UploadReceived)
 	if err := s.repo.UpdateUploadStatus(ctx, uploadID, repository.UploadFields{Status: &received, ReceivedSizeBytes: &receivedSize, ReceivedSHA256: &receivedSHA, LastByteReceivedAt: &now, CompletedAt: &now}); err != nil {
 		return nil, translateStoreErr(err)

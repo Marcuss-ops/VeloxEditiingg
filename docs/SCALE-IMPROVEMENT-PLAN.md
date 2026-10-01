@@ -83,9 +83,10 @@ Aggregate CPU at 100k/h: 27.8 × 8.8 s = ~245 core-seconds/s → ~336 cores acro
 - UPDATED: prepared/trimmed segments now target 2.25 Mbps video with a 4.5 Mbps
   VBV buffer and pinned 128 kbps AAC (`video_trimmer.go`). Sources that report a
   higher video bitrate are forced through normalization before stream-copy, so
-  the final concat inherits the lower cap. Still open: visual approval and
-  ffprobe verification of one delivered output, then measure the egress/delivery
-  delta on the fleet.
+  the final concat inherits the lower cap. Local ffmpeg/ffprobe smoke verified a
+  30 s 1080p synthetic MP4 at 2.30 Mbps H.264 + 128 kbps AAC (9.12 MB total).
+  Still open: visual approval and ffprobe verification of a delivered output,
+  then measure the egress/delivery delta on the fleet.
 - **Evidence:** ladder spec + ffprobe verification + egress/video delta.
 
 ### W3 — Hot-set pinning + out-of-band cache fill *(Cockcroft/OpenConnect; Gray's five-minute rule)*

@@ -51,6 +51,8 @@ type RuntimeConfig struct {
 	DeliveryConcurrency int
 	// MediaProbeConcurrency bounds ffprobe workers; zero selects the default.
 	MediaProbeConcurrency int
+	PromoteMode           string
+	DirectAssemblyMode    string
 
 	// Process-level controls are resolved once at bootstrap and injected into
 	// runtime components. Consumers must not consult the process environment.

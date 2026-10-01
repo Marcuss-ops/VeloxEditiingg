@@ -100,6 +100,11 @@ func buildPersistence(cfg *config.Config) (*persistenceDeps, error) {
 				bsErr, cfg.Runtime.StagingDir, cfg.Runtime.StorageDir)
 		}
 	}
+	if filesystemBlobStore, ok := blobStore.(*store.FilesystemBlobStore); ok {
+		if err := filesystemBlobStore.WithPromoteMode(cfg.Runtime.PromoteMode); err != nil {
+			return nil, fmt.Errorf("bootstrap: promote mode: %w", err)
+		}
+	}
 	logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] BlobStore ready: staging=%s storage=%s", blobStore.StagingDir(), blobStore.FinalDir())
 
 	// outbox.ProductionRegistry() is the canonical wiring point for

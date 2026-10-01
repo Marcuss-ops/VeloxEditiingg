@@ -2,6 +2,7 @@ package config
 
 import (
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 )
@@ -71,7 +72,22 @@ func loadRuntimeConfig(dataDir string, raw RawConfig) RuntimeConfig {
 	c.CommitHMACKey = strings.TrimSpace(raw.Get("VELOX_COMMIT_HMAC_KEY"))
 	c.DeliveryDisabled = raw.Bool("VELOX_DELIVERY_DISABLED", false)
 	c.DeliveryConcurrency = raw.Int("VELOX_DELIVERY_CONCURRENCY", 4, 1)
-	c.MediaProbeConcurrency = raw.Int("VELOX_MEDIA_PROBE_CONCURRENCY", 2, 1)
+	probeDefault := runtime.NumCPU() / 2
+	if probeDefault < 1 {
+		probeDefault = 1
+	}
+	if probeDefault > 4 {
+		probeDefault = 4
+	}
+	c.MediaProbeConcurrency = raw.Int("VELOX_MEDIA_PROBE_CONCURRENCY", probeDefault, 1)
+	c.PromoteMode = strings.ToLower(strings.TrimSpace(raw.Get("VELOX_PROMOTE_MODE")))
+	if c.PromoteMode == "" {
+		c.PromoteMode = "shadow"
+	}
+	c.DirectAssemblyMode = strings.ToLower(strings.TrimSpace(raw.Get("VELOX_CHUNKED_DIRECT_ASSEMBLY")))
+	if c.DirectAssemblyMode == "" {
+		c.DirectAssemblyMode = "shadow"
+	}
 
 	return c
 }

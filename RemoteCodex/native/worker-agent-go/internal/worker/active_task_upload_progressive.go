@@ -54,9 +54,12 @@ func uploadWithGrowingProgress(ctx context.Context, transport publisher.Transpor
 		progressivePartConcurrency = 4
 	}
 	result, err := publisher.RunProgressiveUploadWithJournalAndStoreOptions(ctx, openPath, req.Target.ChunkSize, file, session, journalPath, outputSpool, spoolID, publisher.ProgressiveUploadOptions{
-		Workers:          progressivePartConcurrency,
-		FirstPartSize:    256 * 1024,
-		AdaptivePartSize: true,
+		Workers:       progressivePartConcurrency,
+		FirstPartSize: 256 * 1024,
+		// Keep the negotiated range stable for the whole growing-file upload.
+		// Changing range sizes after the first durable part would reuse chunk
+		// indices with different contents and break resume/idempotency.
+		AdaptivePartSize: false,
 	}, nil)
 	if err != nil {
 		_ = session.Abort(ctx)
@@ -160,7 +163,7 @@ func uploadWithNegotiatedPath(ctx context.Context, transport publisher.Transport
 		file.Update(st.Size(), true, st.Size())
 		file.MarkDurable(st.Size())
 	}
-	result, err := publisher.RunProgressiveUploadWithJournalAndStoreOptions(ctx, openPath, req.Target.ChunkSize, file, session, progressiveJournalPath(req), nil, "", publisher.ProgressiveUploadOptions{Workers: progressivePartConcurrency}, req.Progress)
+	result, err := publisher.RunProgressiveUploadWithJournalAndStoreOptions(ctx, openPath, req.Target.ChunkSize, file, session, progressiveJournalPath(req), nil, "", publisher.ProgressiveUploadOptions{Workers: progressivePartConcurrency, AdaptivePartSize: true}, req.Progress)
 	if err != nil {
 		_ = session.Abort(ctx)
 		return nil, err

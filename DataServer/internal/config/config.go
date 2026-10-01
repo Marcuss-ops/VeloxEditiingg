@@ -103,6 +103,18 @@ func (c *Config) Validate() error {
 	if c.Compatibility.Mode != "compat" && c.Compatibility.Mode != "strict" {
 		return fmt.Errorf("config: VELOX_COMPATIBILITY_MODE must be compat or strict, got %q", c.Compatibility.Mode)
 	}
+	if c.Runtime.PromoteMode == "" {
+		c.Runtime.PromoteMode = "shadow"
+	}
+	if c.Runtime.DirectAssemblyMode == "" {
+		c.Runtime.DirectAssemblyMode = "shadow"
+	}
+	if c.Runtime.PromoteMode != "off" && c.Runtime.PromoteMode != "shadow" && c.Runtime.PromoteMode != "enforce" {
+		return fmt.Errorf("config: VELOX_PROMOTE_MODE must be off, shadow, or enforce, got %q", c.Runtime.PromoteMode)
+	}
+	if c.Runtime.DirectAssemblyMode != "off" && c.Runtime.DirectAssemblyMode != "shadow" && c.Runtime.DirectAssemblyMode != "enforce" {
+		return fmt.Errorf("config: VELOX_CHUNKED_DIRECT_ASSEMBLY must be off, shadow, or enforce, got %q", c.Runtime.DirectAssemblyMode)
+	}
 	if len(c.validationErrors) > 0 {
 		return fmt.Errorf("config: invalid environment values: %s", strings.Join(c.validationErrors, "; "))
 	}

@@ -6,6 +6,7 @@ import (
 	"log"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,9 +17,8 @@ import (
 )
 
 const (
-	defaultMediaProbeConcurrency = 2
-	defaultMediaProbePoll        = 250 * time.Millisecond
-	defaultMediaProbeLease       = 2 * time.Minute
+	defaultMediaProbePoll  = 100 * time.Millisecond
+	defaultMediaProbeLease = 2 * time.Minute
 )
 
 // MediaProbeFunc is injectable so tests can model a slow ffprobe without
@@ -41,7 +41,13 @@ type MediaProbeWorker struct {
 
 func NewMediaProbeWorker(repo *artifactsstore.MediaProbeRepository, finalDir string, concurrency int, probe MediaProbeFunc) *MediaProbeWorker {
 	if concurrency <= 0 {
-		concurrency = defaultMediaProbeConcurrency
+		concurrency = runtime.NumCPU() / 2
+		if concurrency < 1 {
+			concurrency = 1
+		}
+		if concurrency > 4 {
+			concurrency = 4
+		}
 	}
 	if probe == nil {
 		probe = probeMediaFile

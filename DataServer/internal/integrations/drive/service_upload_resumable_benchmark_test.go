@@ -14,7 +14,7 @@ func BenchmarkResumableChunking(b *testing.B) {
 	const fileSize int64 = 64 << 20
 	filePath := benchmarkUploadFile(b, fileSize)
 
-	for _, chunkSize := range []int64{256 << 10, 1 << 20, 2 << 20, 4 << 20} {
+	for _, chunkSize := range []int64{256 << 10, 1 << 20, 2 << 20, 4 << 20, 8 << 20, 16 << 20} {
 		b.Run(strconv.FormatInt(chunkSize>>10, 10)+"KiB", func(b *testing.B) {
 			file, err := os.Open(filePath)
 			if err != nil {
@@ -65,7 +65,7 @@ func BenchmarkResumableChunkHTTPRoundTrip(b *testing.B) {
 	}))
 	b.Cleanup(server.Close)
 
-	for _, chunkSize := range []int64{256 << 10, 1 << 20, 2 << 20, 4 << 20} {
+	for _, chunkSize := range []int64{256 << 10, 1 << 20, 2 << 20, 4 << 20, 8 << 20, 16 << 20} {
 		b.Run(strconv.FormatInt(chunkSize>>10, 10)+"KiB", func(b *testing.B) {
 			file, err := os.Open(filePath)
 			if err != nil {

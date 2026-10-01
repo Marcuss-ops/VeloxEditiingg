@@ -187,6 +187,22 @@ func TestChunkedAssembly_VerifiesAllChunkSHAs(t *testing.T) {
 	require.Equal(t, result, retry)
 }
 
+func TestChunkedAssembly_DirectModeRecordsMasterHash(t *testing.T) {
+	chunked, _, uploadID := setupChunkedEnv(t)
+	var err error
+	chunked, err = chunked.WithDirectAssemblyMode(DirectAssemblyEnforce)
+	require.NoError(t, err)
+	parts := [][]byte{bytes.Repeat([]byte("direct-a"), 8192), bytes.Repeat([]byte("direct-b"), 4096)}
+	for i, part := range parts {
+		require.NoError(t, uploadChunk(t, chunked, uploadID, i, part))
+	}
+	result, err := chunked.ReceiveChunked(context.Background(), uploadID)
+	require.NoError(t, err)
+	joined := append(append([]byte{}, parts[0]...), parts[1]...)
+	require.Equal(t, int64(len(joined)), result.ReceivedSizeBytes)
+	require.Equal(t, sha256Hex(joined), result.ReceivedSHA256)
+}
+
 // TestChunkedAssembly_CorruptedChunkFailsClosed: a staged chunk that was
 // corrupted on disk since upload must be caught at ASSEMBLY time (incremental
 // per-chunk SHA check) with ErrArtifactTransferCorrupted — before the final

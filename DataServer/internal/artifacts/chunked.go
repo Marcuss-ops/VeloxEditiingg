@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 
 	"velox-server/internal/repository"
@@ -39,11 +40,18 @@ type ChunkState struct {
 
 // ChunkedUploadService provides persistent chunked upload sessions.
 type ChunkedUploadService struct {
-	artifactSvc  *Service
-	repo         repository.UploadRepository
-	blobStore    repository.BlobStore
-	receiveLocks keyedUploadLocks
+	artifactSvc        *Service
+	repo               repository.UploadRepository
+	blobStore          repository.BlobStore
+	directAssemblyMode string
+	receiveLocks       keyedUploadLocks
 }
+
+const (
+	DirectAssemblyOff     = "off"
+	DirectAssemblyShadow  = "shadow"
+	DirectAssemblyEnforce = "enforce"
+)
 
 type keyedUploadLocks struct {
 	mu    sync.Mutex
@@ -94,10 +102,24 @@ func NewChunkedUploadService(artifactSvc *Service, repo repository.UploadReposit
 		panic("artifacts: NewChunkedUploadService requires a non-nil UploadRepository")
 	}
 	return &ChunkedUploadService{
-		artifactSvc: artifactSvc,
-		repo:        repo,
-		blobStore:   blobStore,
+		artifactSvc:        artifactSvc,
+		repo:               repo,
+		blobStore:          blobStore,
+		directAssemblyMode: DirectAssemblyOff,
 	}
+}
+
+// WithDirectAssemblyMode selects legacy, comparison-only, or direct assembly.
+func (s *ChunkedUploadService) WithDirectAssemblyMode(mode string) (*ChunkedUploadService, error) {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "" {
+		mode = DirectAssemblyOff
+	}
+	if mode != DirectAssemblyOff && mode != DirectAssemblyShadow && mode != DirectAssemblyEnforce {
+		return nil, fmt.Errorf("artifacts: invalid direct assembly mode %q", mode)
+	}
+	s.directAssemblyMode = mode
+	return s, nil
 }
 
 // InitChunkedSession creates a chunked upload session via BeginUpload.

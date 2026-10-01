@@ -84,11 +84,14 @@ func buildAssets(cfg *config.Config, p *persistenceDeps, j *jobsDeps) (*assetDep
 	logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] artifacts.Service ready (single-tx SUCCEEDED gate via FinalizationWriter + DeliveryPlanResolver)")
 
 	// ── Chunked upload service ───────────────────────────────────────
-	chunkedSvc := artifacts.NewChunkedUploadService(
+	chunkedSvc, chunkedModeErr := artifacts.NewChunkedUploadService(
 		artifactSvc,
 		uploadRepo,
 		p.BlobStore,
-	)
+	).WithDirectAssemblyMode(cfg.Runtime.DirectAssemblyMode)
+	if chunkedModeErr != nil {
+		return nil, fmt.Errorf("bootstrap: chunked direct assembly mode: %w", chunkedModeErr)
+	}
 	logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] ChunkedUploadService ready (persistent chunked upload via artifact pipeline)")
 
 	var completionCoord completion.Coordinator

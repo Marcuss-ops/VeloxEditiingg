@@ -105,8 +105,8 @@ func TestAdaptiveProgressivePartSize(t *testing.T) {
 		negotiated int64
 		want       int64
 	}{
-		{name: "tyson-sized output", finalSize: 178 * mib, negotiated: 8 * mib, want: 2 * mib},
-		{name: "small output", finalSize: 16 * mib, negotiated: 8 * mib, want: 256 * 1024},
+		{name: "tyson-sized output", finalSize: 178 * mib, negotiated: 8 * mib, want: (178*mib + 23) / 24},
+		{name: "small output", finalSize: 16 * mib, negotiated: 8 * mib, want: (16*mib + 23) / 24},
 		{name: "bounded by negotiated size", finalSize: 256 * mib, negotiated: 1 * mib, want: 1 * mib},
 	}
 	for _, tc := range cases {

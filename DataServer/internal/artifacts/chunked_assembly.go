@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"hash"
 	"io"
+	"log"
 	"path/filepath"
 	"strings"
 	"time"
@@ -37,34 +39,10 @@ func (s *ChunkedUploadService) ReceiveChunked(ctx context.Context, uploadID stri
 			return nil, fmt.Errorf("artifacts: ReceiveChunked: missing chunk %d for upload=%s", i, uploadID)
 		}
 	}
-	assemblyPath := session.TemporaryStorageKey
-	keepAssembly := false
-	defer func() {
-		if !keepAssembly {
-			_ = s.blobStore.RemoveStaging(assemblyPath)
-		}
-	}()
-	out, err := s.blobStore.OpenStagedWrite(assemblyPath)
-	if err != nil {
-		return nil, fmt.Errorf("%w: create assembly: %w", ErrBlobWriteFailed, err)
-	}
-	sha, size, asmErr := s.assembleChunksVerified(out, chunks)
-	if asmErr != nil {
-		_ = out.Close()
-		return nil, fmt.Errorf("artifacts: ReceiveChunked: %w", asmErr)
-	}
-	if err := out.Sync(); err != nil {
-		_ = out.Close()
-		return nil, fmt.Errorf("%w: sync assembly: %w", ErrBlobWriteFailed, err)
-	}
-	if err := out.Close(); err != nil {
-		return nil, fmt.Errorf("%w: close assembly: %w", ErrBlobWriteFailed, err)
-	}
-	result, err := s.artifactSvc.ReceiveVerifiedStaged(ctx, uploadID, sha, size)
+	result, err := s.receiveChunkAssembly(ctx, uploadID, session, chunks)
 	if err != nil {
 		return nil, fmt.Errorf("artifacts: ReceiveChunked Receive: %w", err)
 	}
-	keepAssembly = true
 	_ = s.cleanupChunks(ctx, uploadID)
 	return result, nil
 }
@@ -120,34 +98,9 @@ func (s *ChunkedUploadService) CompleteChunked(ctx context.Context, cmd ChunkedC
 		}
 	}
 
-	assemblyPath := session.TemporaryStorageKey
-	keepAssembly := false
-	defer func() {
-		if !keepAssembly {
-			_ = s.blobStore.RemoveStaging(assemblyPath)
-		}
-	}()
-	out, err := s.blobStore.OpenStagedWrite(assemblyPath)
-	if err != nil {
-		return nil, fmt.Errorf("%w: create assembly file: %w", ErrBlobWriteFailed, err)
-	}
-	sha, size, asmErr := s.assembleChunksVerified(out, chunks)
-	if asmErr != nil {
-		_ = out.Close()
-		_ = s.blobStore.RemoveStaging(assemblyPath)
-		return nil, fmt.Errorf("artifacts: CompleteChunked: %w", asmErr)
-	}
-	if err := out.Sync(); err != nil {
-		_ = out.Close()
-		_ = s.blobStore.RemoveStaging(assemblyPath)
-		return nil, fmt.Errorf("%w: sync assembly: %w", ErrBlobWriteFailed, err)
-	}
-	_ = out.Close()
-
-	if _, recvErr := s.artifactSvc.ReceiveVerifiedStaged(ctx, cmd.UploadID, sha, size); recvErr != nil {
+	if _, recvErr := s.receiveChunkAssembly(ctx, cmd.UploadID, session, chunks); recvErr != nil {
 		return nil, fmt.Errorf("artifacts: CompleteChunked Receive: %w", recvErr)
 	}
-	keepAssembly = true
 	art, finErr := s.artifactSvc.Finalize(ctx, FinalizeArtifactCommand{
 		UploadID: cmd.UploadID, JobID: cmd.JobID, WorkerID: cmd.WorkerID,
 		LeaseID: cmd.LeaseID, AttemptNumber: cmd.AttemptNumber,
@@ -160,10 +113,88 @@ func (s *ChunkedUploadService) CompleteChunked(ctx context.Context, cmd ChunkedC
 	return art, nil
 }
 
-func (s *ChunkedUploadService) assembleChunksVerified(dst io.Writer, chunks []repository.ChunkRecord) (string, int64, error) {
-	whole := sha256.New()
+func (s *ChunkedUploadService) receiveChunkAssembly(ctx context.Context, uploadID string, session *repository.UploadSession, chunks []repository.ChunkRecord) (*ReceiveResult, error) {
+	if s.directAssemblyMode == DirectAssemblyEnforce {
+		path := session.TemporaryStorageKey
+		sha, size, err := s.assembleDirect(path, chunks)
+		if err == nil {
+			return s.artifactSvc.markReceivedVerified(ctx, uploadID, sha, size)
+		} else {
+			// An assembly or durability failure falls back to the established
+			// .assembled -> Receive path. Validation failures after the direct
+			// bytes have been accepted are returned by assembleDirect directly.
+			_ = s.blobStore.RemoveStaging(path)
+			log.Printf("[CHUNKED] direct assembly fallback upload=%s err=%v", uploadID, err)
+			return s.assembleLegacy(ctx, uploadID, session, chunks, false)
+		}
+	}
+	return s.assembleLegacy(ctx, uploadID, session, chunks, s.directAssemblyMode == DirectAssemblyShadow)
+}
+
+func (s *ChunkedUploadService) assembleDirect(path string, chunks []repository.ChunkRecord) (string, int64, error) {
+	out, err := s.blobStore.OpenStagedWrite(path)
+	if err != nil {
+		return "", 0, fmt.Errorf("create direct assembly: %w", err)
+	}
+	sha, size, err := s.assembleChunksVerified(out, chunks, true)
+	if err == nil {
+		err = out.Sync()
+	}
+	closeErr := out.Close()
+	if err != nil {
+		return "", 0, fmt.Errorf("assemble direct chunks: %w", err)
+	}
+	if closeErr != nil {
+		return "", 0, fmt.Errorf("close direct assembly: %w", closeErr)
+	}
+	return sha, size, nil
+}
+
+func (s *ChunkedUploadService) assembleLegacy(ctx context.Context, uploadID string, session *repository.UploadSession, chunks []repository.ChunkRecord, compare bool) (*ReceiveResult, error) {
+	path := session.TemporaryStorageKey + ".assembled"
+	defer s.blobStore.RemoveStaging(path)
+	out, err := s.blobStore.OpenStagedWrite(path)
+	if err != nil {
+		return nil, fmt.Errorf("create assembly file: %w", err)
+	}
+	sha, size, err := s.assembleChunksVerified(out, chunks, compare)
+	if err == nil {
+		err = out.Sync()
+	}
+	closeErr := out.Close()
+	if err != nil {
+		return nil, fmt.Errorf("assemble chunks: %w", err)
+	}
+	if closeErr != nil {
+		return nil, fmt.Errorf("close assembly: %w", closeErr)
+	}
+	assembled, err := s.blobStore.OpenStagedRead(path)
+	if err != nil {
+		return nil, fmt.Errorf("open assembled chunks: %w", err)
+	}
+	result, receiveErr := s.artifactSvc.Receive(ctx, uploadID, assembled)
+	_ = assembled.Close()
+	if receiveErr != nil {
+		return nil, receiveErr
+	}
+	if compare && (result.ReceivedSHA256 != sha || result.ReceivedSizeBytes != size) {
+		log.Printf("[CHUNKED] direct assembly shadow mismatch upload=%s direct_sha=%s receive_sha=%s direct_size=%d receive_size=%d", uploadID, sha, result.ReceivedSHA256, size, result.ReceivedSizeBytes)
+	} else if compare {
+		log.Printf("[CHUNKED] direct assembly shadow match upload=%s sha=%s size=%d", uploadID, sha, size)
+	}
+	return result, nil
+}
+
+func (s *ChunkedUploadService) assembleChunksVerified(dst io.Writer, chunks []repository.ChunkRecord, computeWhole bool) (string, int64, error) {
+	var whole hash.Hash
+	if computeWhole {
+		whole = sha256.New()
+	}
 	var size int64
-	writer := io.MultiWriter(dst, whole)
+	var writer io.Writer = dst
+	if computeWhole {
+		writer = io.MultiWriter(dst, whole)
+	}
 	for _, c := range chunks {
 		in, openErr := s.blobStore.OpenStagedRead(c.StorageKey)
 		if openErr != nil {
@@ -171,7 +202,9 @@ func (s *ChunkedUploadService) assembleChunksVerified(dst io.Writer, chunks []re
 		}
 		hasher := sha256.New()
 		n, copyErr := io.Copy(io.MultiWriter(writer, hasher), in)
-		size += n
+		if computeWhole {
+			size += n
+		}
 		_ = in.Close()
 		if copyErr != nil {
 			return "", 0, fmt.Errorf("copy chunk %d: %w", c.ChunkIndex, copyErr)
@@ -182,6 +215,9 @@ func (s *ChunkedUploadService) assembleChunksVerified(dst io.Writer, chunks []re
 		if got := hex.EncodeToString(hasher.Sum(nil)); !strings.EqualFold(got, c.SHA256) {
 			return "", 0, fmt.Errorf("%w: %w: chunk %d: recorded=%s computed=%s (staged chunk corrupted since upload)", ErrArtifactTransferCorrupted, ErrHashMismatch, c.ChunkIndex, c.SHA256, got)
 		}
+	}
+	if !computeWhole {
+		return "", 0, nil
 	}
 	return hex.EncodeToString(whole.Sum(nil)), size, nil
 }

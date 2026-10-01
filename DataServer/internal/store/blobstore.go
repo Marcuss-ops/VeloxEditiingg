@@ -50,9 +50,25 @@ type BlobStore = repository.BlobStore
 
 // FilesystemBlobStore implements BlobStore on the local filesystem.
 type FilesystemBlobStore struct {
-	stagingDir string // e.g. /data/staging/
-	finalDir   string // e.g. /data/final/
+	stagingDir  string // e.g. /data/staging/
+	finalDir    string // e.g. /data/final/
+	promoteMode string
 }
+
+func sameFilesystem(a, b os.FileInfo) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	aStat, aOK := a.Sys().(*syscall.Stat_t)
+	bStat, bOK := b.Sys().(*syscall.Stat_t)
+	return aOK && bOK && aStat.Dev == bStat.Dev
+}
+
+const (
+	PromoteModeOff     = "off"
+	PromoteModeShadow  = "shadow"
+	PromoteModeEnforce = "enforce"
+)
 
 // NewFilesystemBlobStore creates a FilesystemBlobStore, ensuring both directories exist.
 func NewFilesystemBlobStore(stagingDir, finalDir string) (*FilesystemBlobStore, error) {
@@ -62,9 +78,24 @@ func NewFilesystemBlobStore(stagingDir, finalDir string) (*FilesystemBlobStore, 
 		}
 	}
 	return &FilesystemBlobStore{
-		stagingDir: stagingDir,
-		finalDir:   finalDir,
+		stagingDir:  stagingDir,
+		finalDir:    finalDir,
+		promoteMode: PromoteModeOff,
 	}, nil
+}
+
+// WithPromoteMode selects off (copy), shadow (measure rename eligibility,
+// then copy), or enforce (rename when same-device, otherwise copy).
+func (b *FilesystemBlobStore) WithPromoteMode(mode string) error {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "" {
+		mode = PromoteModeOff
+	}
+	if mode != PromoteModeOff && mode != PromoteModeShadow && mode != PromoteModeEnforce {
+		return fmt.Errorf("blobstore: invalid promote mode %q", mode)
+	}
+	b.promoteMode = mode
+	return nil
 }
 
 // StagingPath generates a unique staging path. The path includes a random
@@ -153,12 +184,35 @@ func (b *FilesystemBlobStore) PromoteDurable(stagingPath, finalPath string) (str
 	if err := staged.Close(); err != nil {
 		return "", fmt.Errorf("blobstore: promote close staging: %w", err)
 	}
-	if err := os.Rename(stagingPath, finalPath); err == nil {
+	if _, statErr := os.Stat(finalPath); statErr == nil {
+		if err := os.Remove(stagingPath); err != nil && !os.IsNotExist(err) {
+			return "", fmt.Errorf("%w: remove duplicate staging %s: %w", ErrPromoteDurableFailed, stagingPath, err)
+		}
 		syncDirBestEffort(filepath.Dir(stagingPath))
-		syncDirBestEffort(filepath.Dir(finalPath))
 		return finalPath, nil
-	} else if !errors.Is(err, syscall.EXDEV) {
-		return "", fmt.Errorf("%w: rename %s → %s: %w", ErrPromoteDurableFailed, stagingPath, finalPath, err)
+	} else if !os.IsNotExist(statErr) {
+		return "", fmt.Errorf("blobstore: stat final path: %w", statErr)
+	}
+	if b.promoteMode != PromoteModeOff {
+		stagedInfo, stagedStatErr := os.Stat(stagingPath)
+		dirInfo, dirStatErr := os.Stat(filepath.Dir(finalPath))
+		_, finalStatErr := os.Lstat(finalPath)
+		eligible := stagedStatErr == nil && dirStatErr == nil && finalStatErr != nil && os.IsNotExist(finalStatErr) && sameFilesystem(stagedInfo, dirInfo)
+		if b.promoteMode == PromoteModeShadow {
+			if eligible {
+				log.Printf("[BLOBSTORE] promote shadow rename_eligible=true copy_bytes=%d", stagedInfo.Size())
+			} else {
+				log.Printf("[BLOBSTORE] promote shadow rename_eligible=false")
+			}
+		} else if b.promoteMode == PromoteModeEnforce && eligible {
+			if err := os.Rename(stagingPath, finalPath); err == nil {
+				syncDirBestEffort(filepath.Dir(stagingPath))
+				syncDirBestEffort(filepath.Dir(finalPath))
+				return finalPath, nil
+			} else {
+				log.Printf("[BLOBSTORE] promote rename fallback: %v", err)
+			}
+		}
 	}
 
 	src, err := os.Open(stagingPath)

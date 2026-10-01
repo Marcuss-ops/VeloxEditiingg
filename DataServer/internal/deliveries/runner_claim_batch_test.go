@@ -10,6 +10,7 @@ import (
 	"velox-server/internal/deliverystore"
 
 	"velox-server/internal/store"
+	"velox-server/internal/wake"
 )
 
 // fastDriveTestProvider is a monolithic "drive" provider that succeeds
@@ -17,6 +18,38 @@ import (
 // Drive adapter or the credential vault.
 type fastDriveTestProvider struct {
 	delivered int32
+}
+
+func TestDeliveryRunner_WakeClaimsBeforePoll(t *testing.T) {
+	db := openDeliveryTestDB(t)
+	provider := &fastDriveTestProvider{}
+	registry := NewRegistry()
+	registry.Register(provider)
+	runner := NewDeliveryRunner(&RunnerConfig{PollInterval: 5 * time.Second, LeaseDuration: time.Minute, ClaimBatch: 1, Concurrency: 1, MaxAttempts: 2}, registry, db.Delivery(), db, "wake-test-runner")
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = runner.Run(ctx); close(done) }()
+	time.Sleep(100 * time.Millisecond) // let the initial repair scan finish
+	seedDriveDeliveryTriple(t, db, "wake-dest", "wake-art", "wake-delivery", "wake-job")
+	started := time.Now()
+	wake.Deliveries.Signal()
+	deadline := time.After(time.Second)
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for atomic.LoadInt32(&provider.delivered) == 0 {
+		select {
+		case <-deadline:
+			cancel()
+			<-done
+			t.Fatal("delivery was not claimed within one second after wake")
+		case <-ticker.C:
+		}
+	}
+	if elapsed := time.Since(started); elapsed >= time.Second {
+		t.Fatalf("wake delivery latency = %s, want <1s", elapsed)
+	}
+	cancel()
+	<-done
 }
 
 func (p *fastDriveTestProvider) Name() string { return "drive" }
