@@ -81,7 +81,14 @@ func (d *DriveProvider) Deliver(ctx context.Context, artifact *repository.Artifa
 		log.Printf("[DELIVERY][DRIVE] missing submitted video title; using job-based filename job=%s artifact=%s", artifact.JobID, artifact.ID)
 		fileName = "Video " + artifact.JobID
 	}
-	uploadRes, err := d.service.UploadVideoNamed(ctx, filePath, artifact.ID, fileName, driveFolderReference(destination), marker)
+	// Project folder mirrors the uploaded MP4 name: the Drive subfolder
+	// carries the same human-readable video title as the file inside it,
+	// instead of the opaque artifact id.
+	folderName := strings.TrimSpace(artifact.VideoTitle)
+	if folderName == "" {
+		folderName = artifact.ID
+	}
+	uploadRes, err := d.service.UploadVideoNamed(ctx, filePath, folderName, fileName, driveFolderReference(destination), marker)
 	if err != nil {
 		return nil, classifyDriveError(err)
 	}

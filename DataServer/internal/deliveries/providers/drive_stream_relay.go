@@ -18,6 +18,7 @@ import (
 	"velox-server/internal/deliveries"
 	driveapi "velox-server/internal/integrations/drive"
 	"velox-server/internal/repository"
+	"velox-shared/paths"
 )
 
 const driveRelaySessionLifetime = 7 * 24 * time.Hour
@@ -131,11 +132,15 @@ func (r *DriveStreamRelay) prepareArtifactLocked(ctx context.Context, uploadID, 
 				}
 			}
 		}
-		folder, err := r.drive.GetOrCreateFolder(ctx, artifactID, parent)
+		title := relayTitle(t.videoTitle, t.requestJSON, t.metadata)
+		// Folder naming mirrors the MP4 naming (relayFileName): the Drive
+		// subfolder takes the human-readable video title instead of the
+		// opaque artifact id, so both land under the same online name.
+		folderName := relayFolderName(title, artifactID)
+		folder, err := r.drive.GetOrCreateFolder(ctx, folderName, parent)
 		if err != nil {
 			return fmt.Errorf("create Drive relay project folder: %w", err)
 		}
-		title := relayTitle(t.videoTitle, t.requestJSON, t.metadata)
 		if strings.TrimSpace(title) == "" {
 			slog.Warn("Drive relay has no submitted title; using a job-based filename",
 				"job_id", jobID, "video_name", t.videoTitle, "artifact_id", artifactID)
@@ -522,6 +527,17 @@ func (p *relayLockPool) acquire(key string) func() {
 		}
 		p.mu.Unlock()
 	}
+}
+
+// relayFolderName derives the Drive subfolder name from the video title,
+// so the project folder on Drive carries the same name as the MP4 saved in
+// it. Titles are sanitized like every other Drive folder name; the opaque
+// artifact id stays as the deterministic fallback when no title exists.
+func relayFolderName(title, fallback string) string {
+	if sanitized := paths.SanitizeDriveFolderName(title); sanitized != "" {
+		return sanitized
+	}
+	return strings.TrimSpace(fallback)
 }
 
 func relayFileName(title, fallback string) string {
