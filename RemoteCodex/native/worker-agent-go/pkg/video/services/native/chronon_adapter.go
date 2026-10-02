@@ -49,6 +49,9 @@ func chrononPlanJSON(p *plan.RenderPlan) ([]byte, error) {
 			"start_time_offset": track.StartTimeOffset, "duration_seconds": track.DurationSeconds,
 			"role": track.Role,
 		}
+		if track.SourceInSeconds > 0 {
+			entry["source_in_seconds"] = track.SourceInSeconds
+		}
 		// Role-aware rendering hints for the C++ engine.
 		if track.Loop {
 			entry["loop"] = true

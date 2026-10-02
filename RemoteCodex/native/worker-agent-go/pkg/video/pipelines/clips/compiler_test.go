@@ -155,7 +155,7 @@ func TestCompileProjectsRuntimeAudioIDsFromNestedPayload(t *testing.T) {
 	}
 }
 
-func TestCompileCanRestoreSelectedClipAudioUnderFinalNarration(t *testing.T) {
+func TestCompilePausesFinalNarrationForSelectedClipAudio(t *testing.T) {
 	input := map[string]interface{}{
 		"scenes_json":    `[{"scene_id":"clip-a","duration_seconds":4,"clip":{"url":"/cache/clip.mp4","duration_ms":4000},"voiceover":{"url":"/cache/scene-voice.mp3","duration_ms":4000}},{"scene_id":"clip-b","duration_seconds":3,"clip":{"url":"/cache/clip-b.mp4","duration_ms":3000},"voiceover":{"url":"/cache/scene-voice-b.mp3","duration_ms":3000}}]`,
 		"runtime_assets": []interface{}{map[string]interface{}{"asset_id": "narration", "url": "/cache/narration.wav", "duration_ms": 7000}},
@@ -174,17 +174,59 @@ func TestCompileCanRestoreSelectedClipAudioUnderFinalNarration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
 	}
-	if len(got.AudioTracks) != 2 {
-		t.Fatalf("audio tracks = %#v, want narration and selected clip audio", got.AudioTracks)
+	if len(got.AudioTracks) != 3 {
+		t.Fatalf("audio tracks = %#v, want clip audio and two narration chunks", got.AudioTracks)
 	}
 	if got.AudioTracks[0].Role != "scene_clip_audio" || got.AudioTracks[0].StartTimeOffset != 4 {
 		t.Fatalf("selected clip track = %#v", got.AudioTracks[0])
 	}
-	if got.AudioTracks[1].Role != "tts" || len(got.AudioTracks[1].MuteRanges) != 0 {
-		t.Fatalf("narration track = %#v, want uninterrupted narration", got.AudioTracks[1])
+	if got.AudioTracks[1].Role != "voiceover" || got.AudioTracks[1].SourceInSeconds != 0 || got.AudioTracks[1].StartTimeOffset != 0 || got.AudioTracks[1].DurationSeconds != 4 {
+		t.Fatalf("first narration chunk = %#v, want source/output 0 for 4s", got.AudioTracks[1])
+	}
+	if got.AudioTracks[2].Role != "voiceover" || got.AudioTracks[2].SourceInSeconds != 4 || got.AudioTracks[2].StartTimeOffset != 7 || got.AudioTracks[2].DurationSeconds != 3 {
+		t.Fatalf("resumed narration chunk = %#v, want source 4s at output 7s for 3s", got.AudioTracks[2])
 	}
 	if got.CopyOnly || got.Mixed || !got.RequiresEditorialRender {
 		t.Fatalf("replace overlay with selected clip audio must use editorial rendering: copy_only=%v mixed=%v editorial=%v", got.CopyOnly, got.Mixed, got.RequiresEditorialRender)
+	}
+}
+
+func TestCompilePausesNarrationAcrossConsecutiveClipScenes(t *testing.T) {
+	input := map[string]interface{}{
+		"scenes_json": `[{
+			"scene_id":"before","duration_seconds":3,"stock":[{"url":"before.mp4","duration_ms":3000}]
+		},{
+			"scene_id":"clip-one","duration_seconds":2,"clip":{"url":"clip-one.mp4","duration_ms":2000}
+		},{
+			"scene_id":"clip-two","duration_seconds":2,"clip":{"url":"clip-two.mp4","duration_ms":2000}
+		},{
+			"scene_id":"after","duration_seconds":4,"stock":[{"url":"after.mp4","duration_ms":4000}]
+		}]`,
+		"runtime_assets": []interface{}{map[string]interface{}{"asset_id": "narration", "url": "/cache/narration.wav", "duration_ms": 7000}},
+		"runtime_audio": map[string]interface{}{
+			"voiceover_asset_id":   "narration",
+			"clip_audio_scene_ids": []interface{}{"clip-one", "clip-two"},
+		},
+	}
+
+	got, err := Compile(context.Background(), "job-consecutive-clip-audio", input, "/tmp/out.mp4", nil)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	if len(got.AudioTracks) != 4 {
+		t.Fatalf("audio tracks = %#v, want two clip tracks and two narration chunks", got.AudioTracks)
+	}
+	if got.AudioTracks[0].Role != "scene_clip_audio" || got.AudioTracks[0].StartTimeOffset != 3 || got.AudioTracks[0].DurationSeconds != 2 {
+		t.Fatalf("first clip track = %#v", got.AudioTracks[0])
+	}
+	if got.AudioTracks[1].Role != "scene_clip_audio" || got.AudioTracks[1].StartTimeOffset != 5 || got.AudioTracks[1].DurationSeconds != 2 {
+		t.Fatalf("second consecutive clip track = %#v", got.AudioTracks[1])
+	}
+	if got.AudioTracks[2].Role != "voiceover" || got.AudioTracks[2].SourceInSeconds != 0 || got.AudioTracks[2].StartTimeOffset != 0 || got.AudioTracks[2].DurationSeconds != 3 {
+		t.Fatalf("first narration chunk = %#v", got.AudioTracks[2])
+	}
+	if got.AudioTracks[3].Role != "voiceover" || got.AudioTracks[3].SourceInSeconds != 3 || got.AudioTracks[3].StartTimeOffset != 7 || got.AudioTracks[3].DurationSeconds != 4 {
+		t.Fatalf("resumed narration chunk = %#v, want source 3s at output 7s for 4s", got.AudioTracks[3])
 	}
 }
 

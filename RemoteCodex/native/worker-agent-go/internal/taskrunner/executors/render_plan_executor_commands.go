@@ -285,7 +285,17 @@ func buildAudioMixPlan(spec executor.TaskSpec, p *plan.RenderPlan, output string
 func writeAudioMixTrack(b *strings.Builder, i int, track plan.AudioTrack) string {
 	b.WriteByte('[')
 	writeInt(b, i)
-	b.WriteString(":a]volume=")
+	b.WriteString(":a]")
+	if track.SourceInSeconds > 0 {
+		b.WriteString("atrim=start=")
+		writeFloat6(b, track.SourceInSeconds)
+		if track.DurationSeconds > 0 {
+			b.WriteString(":duration=")
+			writeFloat6(b, track.DurationSeconds)
+		}
+		b.WriteString(",asetpts=PTS-STARTPTS,")
+	}
+	b.WriteString("volume=")
 	volume := track.Volume
 	if volume == 0 {
 		volume = 1
@@ -317,7 +327,7 @@ func writeAudioMixTrack(b *strings.Builder, i int, track plan.AudioTrack) string
 		b.WriteByte('|')
 		writeInt(b, ms)
 	}
-	if track.DurationSeconds > 0 {
+	if track.DurationSeconds > 0 && track.SourceInSeconds <= 0 {
 		b.WriteString(",atrim=duration=")
 		writeFloat6(b, track.DurationSeconds)
 	}

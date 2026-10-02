@@ -2,6 +2,8 @@ package clips
 
 import (
 	"fmt"
+	"math"
+	"sort"
 	"strings"
 
 	"velox-worker-agent/pkg/video/plan"
@@ -29,7 +31,8 @@ func appendRuntimeAudioTracks(renderPlan *plan.RenderPlan, input map[string]inte
 		if err != nil {
 			return nil, err
 		}
-		renderPlan.AudioTracks = append(renderPlan.AudioTracks, track)
+		voiceoverTracks := splitVoiceoverAroundSceneClips(track, renderPlan.AudioTracks)
+		renderPlan.AudioTracks = append(renderPlan.AudioTracks, voiceoverTracks...)
 	}
 	if id := firstNonEmptyString(runtimeAudio, "music_asset_id", "bgm_asset_id"); id != "" {
 		track, err := runtimeAudioTrack("background_music", id, runtimeAudio, assets,
@@ -48,6 +51,73 @@ func appendRuntimeAudioTracks(renderPlan *plan.RenderPlan, input map[string]inte
 		renderPlan.AudioTracks = append(renderPlan.AudioTracks, track)
 	}
 	return renderPlan, nil
+}
+
+// splitVoiceoverAroundSceneClips lays the full narration source over the
+// output timeline in chunks. Scene clip audio occupies output time but does
+// not consume narration source time; after each clip, narration resumes from
+// the exact source offset where it paused. Consecutive clip scenes naturally
+// form one longer pause.
+func splitVoiceoverAroundSceneClips(voiceover plan.AudioTrack, tracks []plan.AudioTrack) []plan.AudioTrack {
+	clips := make([]plan.AudioTrack, 0, len(tracks))
+	for _, track := range tracks {
+		if strings.EqualFold(strings.TrimSpace(track.Role), "scene_clip_audio") && track.DurationSeconds > 0 {
+			clips = append(clips, track)
+		}
+	}
+	if len(clips) == 0 || voiceover.DurationSeconds <= 0 {
+		return []plan.AudioTrack{voiceover}
+	}
+	sort.SliceStable(clips, func(i, j int) bool {
+		return clips[i].StartTimeOffset < clips[j].StartTimeOffset
+	})
+
+	segments := make([]plan.AudioTrack, 0, len(clips)+1)
+	sourceOffset := 0.0
+	outputOffset := 0.0
+	appendSegment := func(duration float64) {
+		if duration <= 1e-9 || sourceOffset >= voiceover.DurationSeconds {
+			return
+		}
+		remaining := voiceover.DurationSeconds - sourceOffset
+		if duration > remaining {
+			duration = remaining
+		}
+		segment := voiceover
+		segment.Role = "voiceover"
+		segment.SourceInSeconds = sourceOffset
+		segment.StartTimeOffset = outputOffset
+		segment.DurationSeconds = duration
+		segments = append(segments, segment)
+		sourceOffset += duration
+		outputOffset += duration
+	}
+
+	for _, clip := range clips {
+		clipStart := math.Max(0, clip.StartTimeOffset)
+		clipEnd := clip.StartTimeOffset + clip.DurationSeconds
+		if clipEnd <= outputOffset {
+			continue
+		}
+		if clipStart < outputOffset {
+			clipStart = outputOffset
+		}
+		appendSegment(clipStart - outputOffset)
+		if sourceOffset >= voiceover.DurationSeconds {
+			break
+		}
+		if clipEnd > outputOffset {
+			outputOffset = clipEnd
+		}
+	}
+	if sourceOffset < voiceover.DurationSeconds {
+		appendSegment(voiceover.DurationSeconds - sourceOffset)
+	}
+	if len(segments) == 0 {
+		voiceover.Role = "voiceover"
+		return []plan.AudioTrack{voiceover}
+	}
+	return segments
 }
 
 func runtimeClipAudioSceneIDs(input map[string]interface{}) map[string]bool {

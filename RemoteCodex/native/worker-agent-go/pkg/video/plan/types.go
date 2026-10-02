@@ -18,15 +18,15 @@ type RenderPlan struct {
 	// RequiresEditorialRender explicitly selects the re-encoding path for
 	// timelines containing replace overlays whose source media is not already
 	// packet-compatible with the base video profile.
-	RequiresEditorialRender bool             `json:"requires_editorial_render,omitempty"`
-	WatermarkAlreadyApplied bool             `json:"watermark_already_applied,omitempty"`
-	WatermarkRequested      bool             `json:"watermark_requested,omitempty"`
-	Timeline                []TimelineItem   `json:"timeline"`
-	FallbackVideoSources    []MediaSource    `json:"fallback_video_sources,omitempty"`
-	AudioTracks             []AudioTrack     `json:"audio_tracks"`
-	Layers                  []Layer          `json:"layers,omitempty"`
-	Subtitles               []SubtitleTrack  `json:"subtitle_tracks,omitempty"`
-	OutputPath              string           `json:"output_path"`
+	RequiresEditorialRender bool            `json:"requires_editorial_render,omitempty"`
+	WatermarkAlreadyApplied bool            `json:"watermark_already_applied,omitempty"`
+	WatermarkRequested      bool            `json:"watermark_requested,omitempty"`
+	Timeline                []TimelineItem  `json:"timeline"`
+	FallbackVideoSources    []MediaSource   `json:"fallback_video_sources,omitempty"`
+	AudioTracks             []AudioTrack    `json:"audio_tracks"`
+	Layers                  []Layer         `json:"layers,omitempty"`
+	Subtitles               []SubtitleTrack `json:"subtitle_tracks,omitempty"`
+	OutputPath              string          `json:"output_path"`
 }
 
 // CanvasSpec defines the output video dimensions and frame rate.
@@ -72,6 +72,11 @@ type AudioTrack struct {
 	SourceURL       string  `json:"source_url"`
 	Volume          float64 `json:"volume,omitempty"`
 	StartTimeOffset float64 `json:"start_time_offset,omitempty"`
+	// SourceInSeconds selects the point in the input audio from which this
+	// track segment begins. StartTimeOffset remains its position in the output
+	// timeline, so a voiceover can pause for a source clip and resume without
+	// skipping narration.
+	SourceInSeconds float64 `json:"source_in_seconds,omitempty"`
 	// DurationSeconds bounds this track to its scene. This is important for
 	// narrated clip timelines: a source clip can contain more audio than the
 	// visible scene and must not bleed into the next scene.
