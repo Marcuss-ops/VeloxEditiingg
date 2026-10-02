@@ -171,14 +171,43 @@ func validateWorkerPayloadOverlayClipCollisions(workerPayload map[string]interfa
 		return nil
 	}
 	req := SubmitJobRequest{}
+	var rawScenes []map[string]interface{}
 	if encoded, ok := workerPayload["scenes_json"].(string); ok && strings.TrimSpace(encoded) != "" {
-		if err := json.Unmarshal([]byte(encoded), &req.Scenes); err != nil {
+		if err := json.Unmarshal([]byte(encoded), &rawScenes); err != nil {
 			return []gin.H{{"path": "scenes_json", "issue": "invalid"}}
 		}
-	} else if rawScenes, ok := workerPayload["scenes"]; ok {
-		encoded, err := json.Marshal(rawScenes)
-		if err != nil || json.Unmarshal(encoded, &req.Scenes) != nil {
+	} else if raw, ok := workerPayload["scenes"]; ok {
+		encoded, err := json.Marshal(raw)
+		if err != nil || json.Unmarshal(encoded, &rawScenes) != nil {
 			return []gin.H{{"path": "scenes", "issue": "invalid"}}
+		}
+	}
+	if len(rawScenes) > 0 {
+		req.Scenes = make([]SubmitScene, 0, len(rawScenes))
+		for _, rawScene := range rawScenes {
+			if rawScene == nil {
+				continue
+			}
+			scene := SubmitScene{
+				SceneID:         strings.TrimSpace(stringField(rawScene, "scene_id")),
+				DurationSeconds: dryRunNumber(rawScene["duration_seconds"]),
+			}
+			if rawClip, ok := rawScene["clip"]; ok {
+				encoded, err := json.Marshal(rawClip)
+				if err != nil || json.Unmarshal(encoded, &scene.Clip) != nil {
+					return []gin.H{{"path": "scenes.clip", "issue": "invalid"}}
+				}
+			}
+			if dryRunHasAsset(rawScene["stock"]) {
+				scene.StockAssets = []SubmitClip{{}}
+			}
+			if rawVoiceover, ok := rawScene["voiceover"]; ok {
+				encoded, err := json.Marshal(rawVoiceover)
+				if err != nil || json.Unmarshal(encoded, &scene.Voiceover) != nil {
+					return []gin.H{{"path": "scenes.voiceover", "issue": "invalid"}}
+				}
+			}
+			req.Scenes = append(req.Scenes, scene)
 		}
 	}
 	if rawOverlays, ok := workerPayload["overlays"]; ok {
