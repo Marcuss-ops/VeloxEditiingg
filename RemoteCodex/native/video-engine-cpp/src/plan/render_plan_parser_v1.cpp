@@ -93,6 +93,18 @@ std::optional<RenderPlan> parseRenderPlanV1(
             track.duration_seconds = ju::extractJsonNumberValue(audioStr, "duration_seconds", 0.0);
             track.role = ju::extractJsonStringValue(audioStr, "role");
             track.loop = ju::extractJsonBoolValue(audioStr, "loop", false);
+            const auto muteBlock = ju::extractArrayBlock(audioStr, "mute_ranges");
+            for (const auto& muteStr : ju::splitTopLevelObjects(muteBlock)) {
+                AudioTrack::MuteRange range;
+                range.start_seconds = ju::extractJsonNumberValue(muteStr, "start_seconds", -1.0);
+                range.end_seconds = ju::extractJsonNumberValue(muteStr, "end_seconds", -1.0);
+                if (range.start_seconds < 0.0 || range.end_seconds <= range.start_seconds) {
+                    recordV1RejectedEntry();
+                    std::cerr << "audio_tracks mute_ranges entry is invalid; rejecting RenderPlan\\n";
+                    return std::nullopt;
+                }
+                track.mute_ranges.push_back(range);
+            }
             if (track.source_url.empty()) {
                 recordV1RejectedEntry();
                 std::cerr << "errore: audio_tracks entry has an empty source_url; "

@@ -377,12 +377,18 @@ bool RenderEngine::resolveMixedFinalAudio(
                 filter << "atrim=duration=" << track.duration_seconds
                        << ",asetpts=PTS-STARTPTS,";
             }
-            filter << "volume=" << track.volume;
             if (track.start_time_offset > 0.0) {
                 const auto delay_ms = static_cast<int>(std::llround(
                     track.start_time_offset * 1000.0));
                 filter << ",adelay=" << delay_ms << "|" << delay_ms;
             }
+            for (const auto& range : track.mute_ranges) {
+                // Escape expression commas for the filtergraph parser. The
+                // output timeline timestamp is used after any track delay.
+                filter << ",volume=0:enable='between(t\\," << range.start_seconds
+                       << "\\," << range.end_seconds << ")'";
+            }
+            filter << ",volume=" << track.volume;
             filter << "[a" << input_count << "]";
             ++input_count;
         }

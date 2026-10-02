@@ -124,6 +124,18 @@
             "type": "number",
             "minimum": 0,
             "default": 0.0
+          },
+          "mute_ranges": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "start_seconds": {"type": "number", "minimum": 0},
+                "end_seconds": {"type": "number", "exclusiveMinimum": 0}
+              },
+              "required": ["start_seconds", "end_seconds"]
+            }
           }
         },
         "required": ["source_url"]

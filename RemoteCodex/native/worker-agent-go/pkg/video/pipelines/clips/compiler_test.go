@@ -163,6 +163,11 @@ func TestCompileCanRestoreSelectedClipAudioUnderFinalNarration(t *testing.T) {
 			"voiceover_asset_id":   "narration",
 			"clip_audio_scene_ids": []interface{}{"clip-b"},
 		},
+		"overlays": []interface{}{map[string]interface{}{
+			"id": "replace", "asset_id": "replace-asset", "url": "/cache/replace.mp4",
+			"start_frame": 120, "frame_count": 24, "mode": "replace",
+			"z_index": 1, "audio_mode": "preserve_final_audio",
+		}},
 	}
 
 	got, err := Compile(context.Background(), "job-selected-clip-audio", input, "/tmp/out.mp4", nil)
@@ -181,6 +186,9 @@ func TestCompileCanRestoreSelectedClipAudioUnderFinalNarration(t *testing.T) {
 	interval := got.AudioTracks[1].MuteRanges[0]
 	if interval.StartSeconds != 4 || interval.EndSeconds != 7 {
 		t.Fatalf("narration mute interval = %+v, want [4,7]", interval)
+	}
+	if got.CopyOnly || !got.Mixed {
+		t.Fatalf("replace overlay with selected clip audio must use packet-copy video plus mixed audio: copy_only=%v mixed=%v", got.CopyOnly, got.Mixed)
 	}
 }
 

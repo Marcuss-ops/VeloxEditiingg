@@ -211,8 +211,16 @@ func applyOverlayIntent(renderPlan *plan.RenderPlan, input map[string]interface{
 		// Replace sources are finished MP4 timeline items. Force the packet
 		// muxer even when the scene compiler selected a legacy render mode;
 		// incompatible sources fail instead of falling back to re-encoding.
-		renderPlan.CopyOnly = true
-		renderPlan.Mixed = false
+		// Selected testimony audio must be combined with the final narration.
+		// Mixed mode packet-copies the video while encoding one final mixed
+		// audio track; copy-only supports only a single audio stream.
+		if len(renderPlan.NarrationMuteRanges) > 0 {
+			renderPlan.CopyOnly = false
+			renderPlan.Mixed = true
+		} else {
+			renderPlan.CopyOnly = true
+			renderPlan.Mixed = false
+		}
 		renderPlan.RequiresEditorialRender = false
 	}
 	return renderPlan, nil

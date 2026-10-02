@@ -70,6 +70,11 @@ struct AudioTrack {
     int64_t duration_us{0};
     // V2-only admission hint for already-certified final audio metadata.
     bool metadata_certified{false};
+    struct MuteRange {
+        double start_seconds{0.0};
+        double end_seconds{0.0};
+    };
+    std::vector<MuteRange> mute_ranges;
 };
 
 // Indicates the plan arrived as a CompiledRenderPlanV2 document

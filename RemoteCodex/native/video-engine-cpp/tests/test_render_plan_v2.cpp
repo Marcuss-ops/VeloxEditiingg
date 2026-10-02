@@ -285,7 +285,9 @@ void testParserUnit(const fs::path& clipA, const fs::path& clipB,
        << "\"canvas\":{\"width\":64,\"height\":64,\"fps\":5},\"copy_only\":true,"
        << "\"timeline\":[{\"source\":{\"type\":\"video\",\"url\":\""
        << clipA.string()
-       << "\"},\"duration_seconds\":0.8}],\"audio_tracks\":[]}";
+       << "\"},\"duration_seconds\":0.8}],\"audio_tracks\":[{\"source_url\":\""
+       << audio.string()
+       << "\",\"role\":\"tts\",\"mute_ranges\":[{\"start_seconds\":4,\"end_seconds\":7}]}]}";
     auto v1Plan = parseRenderPlan(v1.str());
     expect(v1Plan.has_value(), "V1 plan still parses");
     if (v1Plan) {
@@ -294,6 +296,11 @@ void testParserUnit(const fs::path& clipA, const fs::path& clipB,
         expect(v1Plan->timeline.size() == 1 &&
                    v1Plan->timeline[0].duration_seconds == 0.8,
                "V1 float duration preserved for the legacy path");
+        expect(v1Plan->audio_tracks.size() == 1 &&
+                   v1Plan->audio_tracks[0].mute_ranges.size() == 1 &&
+                   v1Plan->audio_tracks[0].mute_ranges[0].start_seconds == 4.0 &&
+                   v1Plan->audio_tracks[0].mute_ranges[0].end_seconds == 7.0,
+               "V1 narration mute ranges are parsed for mixed audio");
     }
 
     const std::string v1Pretty = R"JSON(
