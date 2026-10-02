@@ -60,6 +60,7 @@ public:
     // hidden-transcode regression).
     int64_t copySegments() const { return copy_segments_.load(); }
     int64_t transcodeSegments() const { return transcode_segments_.load(); }
+    int64_t normalizedSources() const { return normalized_sources_.load(); }
 
     // Last FFmpeg progress snapshot from the most recent encode pass.
     // Used by the sidecar writer to populate fps / speed / frame / time.
@@ -180,6 +181,7 @@ private:
     std::atomic<int64_t> temp_bytes_written_{0};
     std::atomic<int64_t> copy_segments_{0};
     std::atomic<int64_t> transcode_segments_{0};
+    std::atomic<int64_t> normalized_sources_{0};
     std::atomic<double> duration_seconds_{0.0};
     std::atomic<bool> output_durable_{false};
     std::atomic<int64_t> trailer_to_publish_us_{0};

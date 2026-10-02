@@ -1,39 +1,9 @@
 // test_render_mixed.cpp
 //
-// Render-level proof of the mixed renderer copy-only contract:
-//
-//   mixed render (VELOX_ENABLE_LIBAV=ON)
-//     PACKET_COPY segments   → stream-copied into the packet mux
-//     REJECT                 → the job FAILS deterministically
-//                              (segment_execution_rejected) with the exact
-//                              resolver reason — the mixed path never
-//                              re-encodes and never falls back to the
-//                              legacy loop.
-//
-// The assembly path is copy-only: a successful mixed render MUST satisfy
-//   frames_encoded == 0
-//   encode_passes == 0
-//   packet_copy_segments == total_segments
-// and a rejected segment MUST fail the job with frames_encoded == 0.
-//
-// Part 1 (positive): three FramePipeline-normalized canonical-profile
-// sources resolve to PACKET_COPY and assemble through the single packet mux;
-// the output is canonical-profile compatible and zero frames were encoded.
-//
-// Part 2 (negative): a mixed plan whose timeline contains a non-canonical
-// 720p source is REJECTED with reason "media signature mismatch: width"; the
-// job fails, no output is published, and no frame was encoded (the engine
-// never tries to repair the segment).
-//
-// Part 3 (negative, same contract): an HEVC (H.265) segment at canonical
-// resolution is REJECTED with "media signature mismatch: codec_id"; a
-// canonical segment trimmed at a non-keyframe source_in_us is REJECTED with
-// "source window is not keyframe-safe for packet copy". Both fail the job
-// with frames_encoded == 0 — the engine never re-encodes to repair them.
-//
-// The engine is exercised through RenderEngine::render() under a sentinel
-// PATH whose ffmpeg/ffprobe fail immediately — the mixed path (probe,
-// packet mux) must execute entirely in-process.
+// Render-level proof that mixed source videos are normalized before assembly.
+// Unique inputs are decoded/encoded once into the canonical H.264 profile,
+// then reused for every timeline occurrence. Canonical, non-canonical, HEVC,
+// and non-keyframe-trimmed inputs must produce decodable output.
 
 #include "velox/core/canonical_video_profile.hpp"
 #include "velox/core/render_engine.hpp"
@@ -282,157 +252,65 @@ int main() {
         unsetenv("PATH");
     }
 
-    // ── Positive assertions: copy-only success with zero encode. ────────
-    expect(result.success, "mixed render succeeds (all-canonical copy-only)");
-    if (!result.success) {
-        std::cerr << "render error: " << result.error << "\n";
-    }
-    expect(engine.concatMode() == "mixed_packet",
-           "mixed render assembles through the packet mux, actual=\"" +
-               engine.concatMode() + "\"");
-    expect(engine.framesEncoded() == 0,
-           "copy-only mixed render encodes zero frames");
-    expect(engine.framesDecoded() == 0,
-           "copy-only mixed render decodes zero frames");
-    expect(engine.encodePasses() == 0,
-           "copy-only mixed render runs zero encode passes");
+    // A repeated source is normalized once, then reused by all three cuts.
+    expect(result.success, "mixed render normalizes and assembles canonical sources");
+    if (!result.success) std::cerr << "render error: " << result.error << "\n";
+    expect(engine.concatMode() == "mixed_packet", "mixed render uses the packet mux");
+    expect(engine.framesEncoded() > 0, "mixed render encodes normalized source frames");
+    expect(engine.framesDecoded() > 0, "mixed render decodes source frames");
+    expect(engine.encodePasses() == 1, "repeated source is normalized once");
     expect(engine.copySegments() == static_cast<int64_t>(plan.timeline.size()),
-           "mixed release gate counts every compatible segment as packet copy");
-    expect(engine.transcodeSegments() == 0,
-           "mixed release gate reports zero transcoded segments");
-    expect(engine.tempBytesWritten() == 0,
-           "copy-only mixed render writes no intermediate files");
+           "normalized timeline cuts are packet copied");
+    expect(engine.transcodeSegments() == 0, "normalized timeline cuts remain packet copied");
+    expect(engine.normalizedSources() == 1, "one unique source was normalized");
+    expect(engine.tempBytesWritten() > 0, "normalized source intermediate is recorded");
     expect(engine.durationSeconds() > 1.49 && engine.durationSeconds() < 1.51,
            "mixed output covers the full 1.5 s timeline");
-    expect(!fs::exists(ffmpegTouched), "mixed render never executed ffmpeg");
-    expect(!fs::exists(ffprobeTouched), "mixed render never executed ffprobe");
+    expect(!fs::exists(ffmpegTouched), "mixed render keeps normalization in-process");
+    expect(!fs::exists(ffprobeTouched), "mixed render does not invoke ffprobe");
     expect(fs::exists(output), "mixed output is published");
     const std::string sidecar = velox::file::readFile(output.string() + ".progress.json");
     expect(contains(sidecar, "\"concat_mode\":\"mixed_packet\""),
-           "mixed sidecar records the extracted packet mode");
+           "mixed sidecar records packet assembly");
     expect(contains(sidecar, "\"copy_segments\":3"),
-           "mixed sidecar records all compatible packet-copy segments");
+           "mixed sidecar records all timeline cuts");
     expect(contains(sidecar, "\"transcode_segments\":0"),
-           "mixed sidecar records zero transcoded segments");
+           "mixed sidecar records no timeline segment re-encodes");
+    expect(contains(sidecar, "\"normalized_sources\":1"),
+           "mixed sidecar records one unique normalized source");
     expect(contains(sidecar, "\"segments_total\":3"),
            "mixed sidecar records total segment count");
     expect(contains(sidecar, "\"segments_packet_copy\":3"),
-           "mixed sidecar records packet-copy segment count");
-    expect(contains(sidecar, "\"segments_reencoded\":0"),
-           "mixed sidecar records zero re-encoded segments");
-    expect(contains(sidecar, "\"packet_copy_ratio\":100"),
-           "mixed sidecar pins packet-copy ratio at 100 percent");
+           "mixed sidecar records normalized packet-copy cuts");
     expect(contains(sidecar, "\"output_durable\":true"),
            "mixed sidecar confirms durable atomic publication");
-    expect(contains(sidecar, "\"packet_copy_segments\":3"),
-           "mixed phase metadata records the packet-copy count");
-    expect(contains(sidecar, "\"rejected_segments\":0"),
-           "mixed phase metadata records no rejected segments on success");
 
-    // The assembled output must be canonical-profile compatible: every
-    // stream-copied range resolves to the same canonical identity.
     const auto canonical = velox::core::mediaSignatureFromCanonicalProfile(
         velox::core::canonicalVideoProfileV1());
-    velox::media::SegmentProbe outProbe;
-    std::string outError;
-    expect(velox::media::probeSegmentForExecution(
-               output, 0, velox::media::MediaKind::Video, &outProbe, &outError),
-           "mixed output can be probed in-process");
-    std::string outputCompatibilityReason;
-    const bool outputCompatible = velox::media::mediaSignaturesCompatible(
-        outProbe.signature, canonical, &outputCompatibilityReason);
-    expect(outputCompatible,
-           "mixed output is canonical-profile compatible: " +
-               outputCompatibilityReason + " (actual=" +
-               std::to_string(outProbe.signature.frame_rate_num) + "/" +
-               std::to_string(outProbe.signature.frame_rate_den) +
-               ", expected=" + std::to_string(canonical.frame_rate_num) + "/" +
-               std::to_string(canonical.frame_rate_den) + ")");
-
-    // ── Negative assertions: the job fails, the worker process stays alive. ──
-    expect(!rejected.success,
-           "non-canonical segment fails the mixed job deterministically");
-    expect(contains(rejected.error, "segment_execution_rejected"),
-           "rejection carries the segment_execution_rejected code, actual=\"" +
-               rejected.error + "\"");
-    expect(contains(rejected.error, "media signature mismatch: width"),
-           "rejection identifies the exact mismatched field, actual=\"" +
-               rejected.error + "\"");
-    expect(rejectedEngine.framesEncoded() == 0,
-           "rejected segment is never repaired by re-encoding");
-    expect(rejectedEngine.encodePasses() == 0,
-           "rejected segment runs zero encode passes");
-    expect(!fs::exists(rejectedOutput),
-           "rejected mixed render does not publish output");
-    {
-        bool leftoverPartial = false;
-        for (const auto& entry : fs::directory_iterator(root)) {
-            const std::string name = entry.path().filename().string();
-            if (name.rfind("mixed-rejected.partial.", 0) == 0) {
-                leftoverPartial = true;
-                std::cerr << "leftover mixed partial: " << name << "\n";
-            }
-        }
-        expect(!leftoverPartial,
-               "width-mismatch mixed render cleans up its atomic partial");
+    for (const auto& path : {output, rejectedOutput, hevcRejectedOutput, keyframeRejectedOutput}) {
+        velox::media::SegmentProbe probe;
+        std::string error;
+        expect(velox::media::probeSegmentForExecution(
+                   path, 0, velox::media::MediaKind::Video, &probe, &error),
+               "normalized mixed output can be probed: " + path.filename().string());
+        std::string reason;
+        expect(velox::media::mediaSignaturesCompatible(probe.signature, canonical, &reason),
+               "normalized output matches canonical profile: " + reason);
+        expect(velox::file::runCommand("ffmpeg -hide_banner -loglevel error -i " +
+                   velox::file::shellQuote(path.string()) + " -f null -"),
+               "normalized output decodes without H.264 reference errors: " +
+                   path.filename().string());
     }
 
-    // ── HEVC negative assertions: codec_id mismatch, zero encode work. ──
-    expect(!hevcRejected.success,
-           "HEVC segment fails the mixed job deterministically");
-    expect(contains(hevcRejected.error, "segment_execution_rejected"),
-           "HEVC rejection carries the segment_execution_rejected code, actual=\"" +
-               hevcRejected.error + "\"");
-    expect(contains(hevcRejected.error, "media signature mismatch: codec_id"),
-           "HEVC rejection identifies the codec_id mismatch, actual=\"" +
-               hevcRejected.error + "\"");
-    expect(hevcEngine.framesEncoded() == 0,
-           "HEVC segment is never repaired by re-encoding");
-    expect(hevcEngine.encodePasses() == 0,
-           "HEVC segment runs zero encode passes");
-    expect(!fs::exists(hevcRejectedOutput),
-           "HEVC rejected render does not publish output");
-    {
-        bool leftoverPartial = false;
-        for (const auto& entry : fs::directory_iterator(root)) {
-            const std::string name = entry.path().filename().string();
-            if (name.rfind("mixed-hevc-rejected.partial.", 0) == 0) {
-                leftoverPartial = true;
-                std::cerr << "leftover HEVC partial: " << name << "\n";
-            }
-        }
-        expect(!leftoverPartial,
-               "codec-mismatch mixed render cleans up its atomic partial");
-    }
-
-    // ── Non-keyframe trim assertions: reject, never re-encode. ───────────
-    expect(!keyframeRejected.success,
-           "non-keyframe-safe trim fails the mixed job deterministically");
-    expect(contains(keyframeRejected.error, "segment_execution_rejected"),
-           "keyframe rejection carries the segment_execution_rejected code, actual=\"" +
-               keyframeRejected.error + "\"");
-    expect(contains(keyframeRejected.error,
-                    "source window is not keyframe-safe for packet copy"),
-           "keyframe rejection identifies the non-keyframe-safe trim, actual=\"" +
-               keyframeRejected.error + "\"");
-    expect(keyframeEngine.framesEncoded() == 0,
-           "non-keyframe trim is never repaired by re-encoding");
-    expect(keyframeEngine.encodePasses() == 0,
-           "non-keyframe trim runs zero encode passes");
-    expect(!fs::exists(keyframeRejectedOutput),
-           "keyframe rejected render does not publish output");
-    {
-        bool leftoverPartial = false;
-        for (const auto& entry : fs::directory_iterator(root)) {
-            const std::string name = entry.path().filename().string();
-            if (name.rfind("mixed-keyframe-rejected.partial.", 0) == 0) {
-                leftoverPartial = true;
-                std::cerr << "leftover keyframe partial: " << name << "\n";
-            }
-        }
-        expect(!leftoverPartial,
-               "keyframe-mismatch mixed render cleans up its atomic partial");
-    }
+    expect(rejected.success, "non-canonical source is normalized");
+    expect(rejectedEngine.framesEncoded() > 0, "non-canonical source is re-encoded");
+    expect(fs::exists(rejectedOutput), "normalized non-canonical output is published");
+    expect(hevcRejected.success, "HEVC source is normalized to H.264");
+    expect(hevcEngine.framesEncoded() > 0, "HEVC source is re-encoded");
+    expect(fs::exists(hevcRejectedOutput), "normalized HEVC output is published");
+    expect(keyframeRejected.success, "non-keyframe trim is decoded before normalization");
+    expect(keyframeEngine.framesEncoded() > 0, "trimmed source window is re-encoded");
+    expect(fs::exists(keyframeRejectedOutput), "normalized trimmed output is published");
 
     expect(!implicitLegacyRejected.success,
            "video plan without an explicit packet mode fails closed");

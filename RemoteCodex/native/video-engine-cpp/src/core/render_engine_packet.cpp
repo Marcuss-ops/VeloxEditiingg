@@ -6,6 +6,7 @@
 #include "velox/services/media_packet_pipeline.hpp"
 #include "velox/services/media_utils.hpp"
 #include "velox/services/segment_execution.hpp"
+#include "velox/services/frame_pipeline.hpp"
 
 #include <chrono>
 #include <cmath>
@@ -16,6 +17,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -483,9 +485,119 @@ RenderResult RenderEngine::renderMixed(
     if (outputProfile) request.layout = outputProfile->layout;
     request.video_segments.reserve(plan.timeline.size());
 
+    // Raw source files can all report the same H.264 dimensions/profile while
+    // carrying different SPS/PPS extradata. A packet mux has one MP4 stream
+    // description, so copying those independent bitstreams into one stream
+    // produces decoder errors and corrupt frames at source boundaries. Encode
+    // each distinct source window once to the canonical profile, then reuse
+    // those normalized files for every timeline occurrence.
+    struct MixedSourceWindow {
+        std::string url;
+        std::string cache_key;
+        int64_t source_in_us{0};
+        int64_t max_duration_us{0};
+        fs::path input_path;
+        fs::path normalized_path;
+        double download_ms{0.0};
+        media::FramePipelineResult pipeline;
+    };
+    std::vector<MixedSourceWindow> sources;
+    std::vector<std::size_t> sourceIndexes;
+    std::vector<int64_t> segmentDurations;
+    std::unordered_map<std::string, std::size_t> sourceIndexByKey;
+    sourceIndexes.reserve(plan.timeline.size());
+    segmentDurations.reserve(plan.timeline.size());
+    for (std::size_t i = 0; i < plan.timeline.size(); ++i) {
+        const auto& item = plan.timeline[i];
+        if (!std::holds_alternative<plan::VideoSource>(item.source)) {
+            result.error = "mixed render requires video sources only (segment " +
+                std::to_string(i) + ")";
+            return failRender("mixed_source_unsupported");
+        }
+        const auto& source = std::get<plan::VideoSource>(item.source);
+        const int64_t duration_us = item.source_duration_us > 0
+            ? item.source_duration_us
+            : item.duration_us > 0
+            ? item.duration_us
+            : static_cast<int64_t>(std::llround(item.duration_seconds * 1'000'000.0));
+        if (duration_us <= 0) {
+            result.error = "mixed render requires positive duration for segment " +
+                std::to_string(i);
+            return failRender("mixed_duration_invalid");
+        }
+        const bool transform_required = item.transform.explicit_request &&
+            (item.transform.slow_zoom || item.transform.scale_mode != "cover");
+        if (transform_required) {
+            result.error = "mixed render cannot normalize a transformed source window at segment " +
+                std::to_string(i);
+            return failRender("mixed_transform_unsupported");
+        }
+        const std::string key = source.url + "\n" + source.cache_key + "\n" +
+            std::to_string(item.source_in_us);
+        auto [it, inserted] = sourceIndexByKey.emplace(key, sources.size());
+        if (inserted) {
+            sources.push_back(MixedSourceWindow{
+                .url = source.url,
+                .cache_key = source.cache_key,
+                .source_in_us = item.source_in_us,
+                .max_duration_us = duration_us,
+            });
+        } else {
+            auto& existing = sources[it->second];
+            existing.max_duration_us = std::max(existing.max_duration_us, duration_us);
+        }
+        sourceIndexes.push_back(it->second);
+        segmentDurations.push_back(duration_us);
+    }
+
+    const auto& canonicalProfile = canonicalVideoProfileV1();
+    for (std::size_t i = 0; i < sources.size(); ++i) {
+        auto& source = sources[i];
+        source.input_path = numberedWorkPath(workDir, "mixed_source_", ".mp4", i);
+        source.normalized_path = numberedWorkPath(workDir, "mixed_normalized_", ".mp4", i);
+        const auto downloadStart = std::chrono::steady_clock::now();
+        if (!file::downloadAsset(source.url, source.input_path, source.cache_key)) {
+            result.error = "failed to download mixed video source " + std::to_string(i);
+            return failRender("asset_download_failed");
+        }
+        source.download_ms = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - downloadStart).count();
+        media::FramePipelineConfig config;
+        config.input_path = source.input_path;
+        config.output_path = source.normalized_path;
+        config.width = canonicalProfile.width;
+        config.height = canonicalProfile.height;
+        config.fps_num = canonicalProfile.fps_num;
+        config.fps_den = canonicalProfile.fps_den;
+        config.source_in_us = source.source_in_us;
+        config.source_duration_us = source.max_duration_us;
+        config.codec = canonicalProfile.codec;
+        config.preset = canonicalProfile.preset;
+        config.decoder_threads = 1;
+        config.encoder_threads = 2;
+        const auto encodeStart = std::chrono::steady_clock::now();
+        if (!media::renderFrames(config, &source.pipeline)) {
+            result.error = "failed to normalize mixed video source " + std::to_string(i) +
+                ": " + source.pipeline.error;
+            return failRender("mixed_source_normalization_failed");
+        }
+        metrics_.addMs("asset_download_ms", source.download_ms);
+        metrics_.addMs("native_encode_ms", std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - encodeStart).count());
+        frames_encoded_.fetch_add(source.pipeline.frames_encoded);
+        frames_decoded_.fetch_add(source.pipeline.frames_decoded);
+        frames_composited_.fetch_add(source.pipeline.frames_composited);
+        encode_passes_.fetch_add(1);
+        temp_bytes_written_.fetch_add(fileSize(source.normalized_path));
+        recordFramePipeline(source.pipeline);
+        reportProgress(static_cast<int>(10 + (70.0 * (i + 1) / sources.size())),
+                       "normalizing_mixed_sources");
+    }
+
     int64_t total_duration_us = 0;
     int64_t packet_copy_segments = 0;
     int64_t rejected_segments = 0;
+    std::vector<bool> sourceReported(sources.size(), false);
     request.target_video_signature = mixedAdmissionProfile;
     const bool appendOnlyOutput = request.layout == Mp4Layout::Fragmented;
     request.write_progress_callback = [this, appendOnlyOutput](
@@ -518,30 +630,22 @@ RenderResult RenderEngine::renderMixed(
                 std::to_string(i);
             return failRender("mixed_duration_invalid");
         }
-        const fs::path local_video = numberedWorkPath(workDir, "mixed_video_", ".mp4", i);
-        const auto downloadStart = std::chrono::steady_clock::now();
-        telemetry::ScopedPhase assetPhase(
-            recorder_, telemetry::kOriginWorker, telemetry::kScopeTask,
-            "worker.asset", "transfer", "download");
-        if (!file::downloadAsset(source.url, local_video, source.cache_key)) {
-            assetPhase.Abort("asset_download_failed", "failed to download mixed video source");
-            result.error = "failed to download video source for segment " + std::to_string(i);
-            return failRender("asset_download_failed");
+        const auto sourceIndex = sourceIndexes[i];
+        const auto& normalized = sources[sourceIndex];
+        if (!sourceReported[sourceIndex]) {
+            segment.asset_download_ms = normalized.download_ms;
+            sourceReported[sourceIndex] = true;
         }
-        assetPhase.Complete();
-        segment.asset_download_ms = std::chrono::duration<double, std::milli>(
-            std::chrono::steady_clock::now() - downloadStart).count();
-        segment.source_bytes = fileSize(local_video);
-
-        segment.codec = "packet_copy";
-        const bool transform_required = item.transform.explicit_request &&
-            (item.transform.slow_zoom || item.transform.scale_mode != "cover");
+        segment.source_bytes = fileSize(normalized.input_path);
+        segment.codec = "normalized_packet_copy";
         request.video_segments.push_back(media::CopyOnlyVideoSegment{
-            .path = local_video,
-            .source_in_us = item.source_in_us,
+            .path = normalized.normalized_path,
+            .source_in_us = 0,
             .source_duration_us = duration_us,
-            .transform_required = transform_required,
-            .metadata_certified = item.metadata_certified,
+            .normalized = true,
+            // The source certification describes the original download, not
+            // this FramePipeline-generated derivative.
+            .metadata_certified = false,
         });
         segment.total_ms = std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - segmentStart).count();
@@ -553,6 +657,7 @@ RenderResult RenderEngine::renderMixed(
     packet_copy_segments = static_cast<int64_t>(request.video_segments.size());
     copy_segments_.store(packet_copy_segments);
     transcode_segments_.store(0);
+    normalized_sources_.store(static_cast<int64_t>(sources.size()));
 
     const double total_duration = static_cast<double>(total_duration_us) / 1'000'000.0;
     std::string error_code;

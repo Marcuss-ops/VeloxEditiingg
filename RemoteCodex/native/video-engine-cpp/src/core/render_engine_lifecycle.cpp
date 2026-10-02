@@ -37,6 +37,7 @@ void RenderEngine::resetRenderState() {
     temp_bytes_written_.store(0);
     copy_segments_.store(0);
     transcode_segments_.store(0);
+    normalized_sources_.store(0);
     duration_seconds_.store(0.0);
     output_durable_.store(false);
     concat_mode_ = "reencode";
