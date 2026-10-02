@@ -6,6 +6,7 @@
 #include "json_utils.hpp"
 
 #include <chrono>
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <functional>
@@ -224,8 +225,13 @@ bool RenderEngine::finalizeAudioTracks(
     const auto compiled_audio_plan = audio::compileAudioPlan(
         audio_plan_inputs, duration_seconds_.load());
     const auto requested_strategy = audio::requestedAudioMixStrategy();
-    const auto selected_strategy = audio::resolveAudioMixStrategy(
+    auto selected_strategy = audio::resolveAudioMixStrategy(
         requested_strategy, compiled_audio_plan);
+    const bool has_mute_ranges = std::any_of(
+        downloaded_tracks.begin(), downloaded_tracks.end(), [](const auto& entry) {
+            return !entry.second->mute_ranges.empty();
+        });
+    if (has_mute_ranges) selected_strategy = audio::AudioMixStrategy::LegacyAmix;
 
     std::ostringstream audio_filter;
     std::ostringstream audio_inputs;
@@ -241,14 +247,20 @@ bool RenderEngine::finalizeAudioTracks(
             : (track->loop ? duration_seconds_.load() : 0.0);
         if (track_duration > 0.0) {
             audio_filter << "atrim=duration=" << track_duration
-                         << ",asetpts=PTS-STARTPTS,";
+                         << ",asetpts=PTS-STARTPTS";
+        } else {
+            audio_filter << "asetpts=PTS-STARTPTS";
         }
-        audio_filter << "volume=" << track->volume;
         if (track->start_time_offset > 0.0) {
             const int delay_ms = static_cast<int>(
                 std::llround(track->start_time_offset * 1000.0));
             audio_filter << ",adelay=" << delay_ms << "|" << delay_ms;
         }
+        for (const auto& range : track->mute_ranges) {
+            audio_filter << ",volume=0:enable='between(t\\," << range.start_seconds
+                         << "\\," << range.end_seconds << ")'";
+        }
+        audio_filter << ",volume=" << track->volume;
         audio_filter << "[a" << index << "]";
     }
 

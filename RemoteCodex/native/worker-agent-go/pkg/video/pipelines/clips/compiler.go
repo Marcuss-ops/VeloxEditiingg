@@ -194,6 +194,7 @@ func applyOverlayIntent(renderPlan *plan.RenderPlan, input map[string]interface{
 		baseURLs[overlay.AssetID] = url
 	}
 	timeline := make([]plan.TimelineItem, 0, len(resolved))
+	noSlowZoom := false
 	for _, segment := range resolved {
 		url := baseURLs[segment.AssetID]
 		if url == "" {
@@ -203,6 +204,9 @@ func applyOverlayIntent(renderPlan *plan.RenderPlan, input map[string]interface{
 			Source:          plan.MediaSource{Type: "video", URL: url},
 			DurationSeconds: float64(segment.FrameCount) / float64(overlayFPS),
 			IncludeAudio:    false,
+			// Overlay replacement clips are already rendered sources. Preserve
+			// their frames when the editorial fallback re-encodes arbitrary cuts.
+			Transform:       &plan.TransformSpec{ScaleMode: "cover", SlowZoom: &noSlowZoom},
 			SourceInUS:      segment.SourceInUS, SourceDurationUS: segment.SourceDurationUS,
 		})
 	}
@@ -211,17 +215,18 @@ func applyOverlayIntent(renderPlan *plan.RenderPlan, input map[string]interface{
 		// Replace sources are finished MP4 timeline items. Force the packet
 		// muxer even when the scene compiler selected a legacy render mode;
 		// incompatible sources fail instead of falling back to re-encoding.
-		// Selected testimony audio must be combined with the final narration.
-		// Mixed mode packet-copies the video while encoding one final mixed
-		// audio track; copy-only supports only a single audio stream.
+		// Selected testimony audio requires multiple timed audio tracks. Replace
+		// overlays can split source clips at non-keyframe boundaries, so use the
+		// explicit editorial renderer for this combined case.
 		if len(renderPlan.NarrationMuteRanges) > 0 {
 			renderPlan.CopyOnly = false
-			renderPlan.Mixed = true
+			renderPlan.Mixed = false
+			renderPlan.RequiresEditorialRender = true
 		} else {
 			renderPlan.CopyOnly = true
 			renderPlan.Mixed = false
+			renderPlan.RequiresEditorialRender = false
 		}
-		renderPlan.RequiresEditorialRender = false
 	}
 	return renderPlan, nil
 }

@@ -187,8 +187,8 @@ func TestCompileCanRestoreSelectedClipAudioUnderFinalNarration(t *testing.T) {
 	if interval.StartSeconds != 4 || interval.EndSeconds != 7 {
 		t.Fatalf("narration mute interval = %+v, want [4,7]", interval)
 	}
-	if got.CopyOnly || !got.Mixed {
-		t.Fatalf("replace overlay with selected clip audio must use packet-copy video plus mixed audio: copy_only=%v mixed=%v", got.CopyOnly, got.Mixed)
+	if got.CopyOnly || got.Mixed || !got.RequiresEditorialRender {
+		t.Fatalf("replace overlay with selected clip audio must use editorial rendering: copy_only=%v mixed=%v editorial=%v", got.CopyOnly, got.Mixed, got.RequiresEditorialRender)
 	}
 }
 
