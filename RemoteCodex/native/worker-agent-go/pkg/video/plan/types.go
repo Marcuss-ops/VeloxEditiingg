@@ -18,15 +18,16 @@ type RenderPlan struct {
 	// RequiresEditorialRender explicitly selects the re-encoding path for
 	// timelines containing replace overlays whose source media is not already
 	// packet-compatible with the base video profile.
-	RequiresEditorialRender bool            `json:"requires_editorial_render,omitempty"`
-	WatermarkAlreadyApplied bool            `json:"watermark_already_applied,omitempty"`
-	WatermarkRequested      bool            `json:"watermark_requested,omitempty"`
-	Timeline                []TimelineItem  `json:"timeline"`
-	FallbackVideoSources    []MediaSource   `json:"fallback_video_sources,omitempty"`
-	AudioTracks             []AudioTrack    `json:"audio_tracks"`
-	Layers                  []Layer         `json:"layers,omitempty"`
-	Subtitles               []SubtitleTrack `json:"subtitle_tracks,omitempty"`
-	OutputPath              string          `json:"output_path"`
+	RequiresEditorialRender bool             `json:"requires_editorial_render,omitempty"`
+	WatermarkAlreadyApplied bool             `json:"watermark_already_applied,omitempty"`
+	WatermarkRequested      bool             `json:"watermark_requested,omitempty"`
+	Timeline                []TimelineItem   `json:"timeline"`
+	FallbackVideoSources    []MediaSource    `json:"fallback_video_sources,omitempty"`
+	AudioTracks             []AudioTrack     `json:"audio_tracks"`
+	NarrationMuteRanges     []AudioMuteRange `json:"-"`
+	Layers                  []Layer          `json:"layers,omitempty"`
+	Subtitles               []SubtitleTrack  `json:"subtitle_tracks,omitempty"`
+	OutputPath              string           `json:"output_path"`
 }
 
 // CanvasSpec defines the output video dimensions and frame rate.
@@ -96,6 +97,15 @@ type AudioTrack struct {
 	// track's volume when voiceover is active. Typical for
 	// background_music role.
 	DuckingEnabled bool `json:"ducking_enabled,omitempty"`
+	// MuteRanges attenuates this track to silence over timeline intervals. The
+	// times are relative to the start of the source track (before its delay).
+	MuteRanges []AudioMuteRange `json:"mute_ranges,omitempty"`
+}
+
+// AudioMuteRange is a half-open interval in seconds on an audio track.
+type AudioMuteRange struct {
+	StartSeconds float64 `json:"start_seconds"`
+	EndSeconds   float64 `json:"end_seconds"`
 }
 
 // Layer is an independent compositing layer. Media remains in Timeline;

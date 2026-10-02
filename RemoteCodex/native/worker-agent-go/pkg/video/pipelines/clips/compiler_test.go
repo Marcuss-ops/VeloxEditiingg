@@ -155,6 +155,35 @@ func TestCompileProjectsRuntimeAudioIDsFromNestedPayload(t *testing.T) {
 	}
 }
 
+func TestCompileCanRestoreSelectedClipAudioUnderFinalNarration(t *testing.T) {
+	input := map[string]interface{}{
+		"scenes_json":    `[{"scene_id":"clip-a","duration_seconds":4,"clip":{"url":"/cache/clip.mp4","duration_ms":4000},"voiceover":{"url":"/cache/scene-voice.mp3","duration_ms":4000}},{"scene_id":"clip-b","duration_seconds":3,"clip":{"url":"/cache/clip-b.mp4","duration_ms":3000},"voiceover":{"url":"/cache/scene-voice-b.mp3","duration_ms":3000}}]`,
+		"runtime_assets": []interface{}{map[string]interface{}{"asset_id": "narration", "url": "/cache/narration.wav", "duration_ms": 7000}},
+		"runtime_audio": map[string]interface{}{
+			"voiceover_asset_id":   "narration",
+			"clip_audio_scene_ids": []interface{}{"clip-b"},
+		},
+	}
+
+	got, err := Compile(context.Background(), "job-selected-clip-audio", input, "/tmp/out.mp4", nil)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	if len(got.AudioTracks) != 2 {
+		t.Fatalf("audio tracks = %#v, want narration and selected clip audio", got.AudioTracks)
+	}
+	if got.AudioTracks[0].Role != "scene_clip_audio" || got.AudioTracks[0].StartTimeOffset != 4 {
+		t.Fatalf("selected clip track = %#v", got.AudioTracks[0])
+	}
+	if got.AudioTracks[1].Role != "tts" || len(got.AudioTracks[1].MuteRanges) != 1 {
+		t.Fatalf("narration track = %#v, want one mute interval", got.AudioTracks[1])
+	}
+	interval := got.AudioTracks[1].MuteRanges[0]
+	if interval.StartSeconds != 4 || interval.EndSeconds != 7 {
+		t.Fatalf("narration mute interval = %+v, want [4,7]", interval)
+	}
+}
+
 func TestCompileRejectsRuntimeAudioWithoutResolvedAsset(t *testing.T) {
 	input := map[string]interface{}{
 		"copy_only": true,

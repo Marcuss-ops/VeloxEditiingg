@@ -2,6 +2,7 @@ package clips
 
 import (
 	"fmt"
+	"strings"
 
 	"velox-worker-agent/pkg/video/plan"
 )
@@ -46,7 +47,40 @@ func appendRuntimeAudioTracks(renderPlan *plan.RenderPlan, input map[string]inte
 		}
 		renderPlan.AudioTracks = append(renderPlan.AudioTracks, track)
 	}
+	if len(renderPlan.NarrationMuteRanges) > 0 {
+		applied := false
+		for i := range renderPlan.AudioTracks {
+			if strings.EqualFold(renderPlan.AudioTracks[i].Role, "tts") || strings.EqualFold(renderPlan.AudioTracks[i].Role, "voiceover") {
+				renderPlan.AudioTracks[i].MuteRanges = append(renderPlan.AudioTracks[i].MuteRanges, renderPlan.NarrationMuteRanges...)
+				applied = true
+			}
+		}
+		if !applied {
+			return nil, fmt.Errorf("clips.v1: clip audio scene selection requires a runtime narration track")
+		}
+		renderPlan.NarrationMuteRanges = nil
+	}
 	return renderPlan, nil
+}
+
+func runtimeClipAudioSceneIDs(input map[string]interface{}) map[string]bool {
+	runtimeAudio := runtimeAudioPayload(input)
+	selected := make(map[string]bool)
+	switch values := runtimeAudio["clip_audio_scene_ids"].(type) {
+	case []interface{}:
+		for _, value := range values {
+			if id, ok := value.(string); ok && strings.TrimSpace(id) != "" {
+				selected[strings.TrimSpace(id)] = true
+			}
+		}
+	case []string:
+		for _, id := range values {
+			if strings.TrimSpace(id) != "" {
+				selected[strings.TrimSpace(id)] = true
+			}
+		}
+	}
+	return selected
 }
 
 func runtimeAudioPayload(input map[string]interface{}) map[string]interface{} {

@@ -290,7 +290,26 @@ func writeAudioMixTrack(b *strings.Builder, i int, track plan.AudioTrack) string
 	if volume == 0 {
 		volume = 1
 	}
-	writeFloat6(b, volume)
+	if len(track.MuteRanges) == 0 {
+		writeFloat6(b, volume)
+	} else {
+		// The voiceover source is a single continuous track. Evaluate its
+		// gain against source time so selected clip intervals become silent.
+		b.WriteByte('\'')
+		for index := len(track.MuteRanges) - 1; index >= 0; index-- {
+			rangeSeconds := track.MuteRanges[index]
+			b.WriteString("if(between(t\\,")
+			writeFloat6(b, rangeSeconds.StartSeconds)
+			b.WriteString("\\,")
+			writeFloat6(b, rangeSeconds.EndSeconds)
+			b.WriteString(")\\,0\\,")
+		}
+		writeFloat6(b, volume)
+		for rangeIndex := len(track.MuteRanges) - 1; rangeIndex >= 0; rangeIndex-- {
+			b.WriteByte(')')
+		}
+		b.WriteString("':eval=frame")
+	}
 	if track.StartTimeOffset > 0 {
 		ms := int(track.StartTimeOffset*1000 + 0.5)
 		b.WriteString(",adelay=")

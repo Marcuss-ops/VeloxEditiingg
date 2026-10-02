@@ -141,8 +141,10 @@ func compileSceneTimeline(ctx context.Context, jobID string, scenes []sceneTimel
 	fallbackVideoSources := make([]plan.MediaSource, 0)
 	seenFallbackSources := make(map[string]struct{})
 	audioTracks := make([]plan.AudioTrack, 0, len(scenes)*2)
+	narrationMuteRanges := make([]plan.AudioMuteRange, 0)
 	offset := 0.0
 	finalAudioConfigured := hasRuntimeFinalAudio(input)
+	clipAudioSceneIDs := runtimeClipAudioSceneIDs(input)
 	for sceneIndex, scene := range scenes {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -150,6 +152,9 @@ func compileSceneTimeline(ctx context.Context, jobID string, scenes []sceneTimel
 		stock, err := sceneStockPool(scene)
 		if err != nil {
 			return nil, fmt.Errorf("clips.v1: scene %d stock: %w", sceneIndex, err)
+		}
+		if clipAudioSceneIDs[scene.SceneID] && scene.Clip == nil {
+			return nil, fmt.Errorf("clips.v1: selected clip-audio scene %q has no clip asset", scene.SceneID)
 		}
 
 		voiceoverDuration := 0.0
@@ -234,6 +239,22 @@ func compileSceneTimeline(ctx context.Context, jobID string, scenes []sceneTimel
 					Role:            "scene_clip_audio",
 				})
 			}
+			if finalAudioConfigured && clipAudioSceneIDs[scene.SceneID] {
+				clipAudioOffset := offset
+				if len(stock) > 0 {
+					clipAudioOffset += targetDuration
+				}
+				audioTracks = append(audioTracks, plan.AudioTrack{
+					SourceURL: scene.Clip.URL, Volume: 1,
+					StartTimeOffset: clipAudioOffset, DurationSeconds: clipDuration,
+					Role: "scene_clip_audio",
+				})
+				narrationMuteRanges = append(narrationMuteRanges, plan.AudioMuteRange{
+					StartSeconds: clipAudioOffset,
+					EndSeconds:   clipAudioOffset + clipDuration,
+				})
+				delete(clipAudioSceneIDs, scene.SceneID)
+			}
 		} else if scene.Voiceover != nil && !finalAudioConfigured {
 			audioTracks = append(audioTracks, plan.AudioTrack{
 				SourceURL:       scene.Voiceover.URL,
@@ -257,6 +278,13 @@ func compileSceneTimeline(ctx context.Context, jobID string, scenes []sceneTimel
 			offset += targetDuration
 		}
 	}
+	if len(clipAudioSceneIDs) > 0 {
+		missing := make([]string, 0, len(clipAudioSceneIDs))
+		for sceneID := range clipAudioSceneIDs {
+			missing = append(missing, sceneID)
+		}
+		return nil, fmt.Errorf("clips.v1: selected clip-audio scenes were not found: %s", strings.Join(missing, ", "))
+	}
 
 	return &plan.RenderPlan{
 		Version:              1,
@@ -267,6 +295,7 @@ func compileSceneTimeline(ctx context.Context, jobID string, scenes []sceneTimel
 		Timeline:             timeline,
 		FallbackVideoSources: fallbackVideoSources,
 		AudioTracks:          audioTracks,
+		NarrationMuteRanges:  narrationMuteRanges,
 		OutputPath:           outputPath,
 	}, nil
 }
