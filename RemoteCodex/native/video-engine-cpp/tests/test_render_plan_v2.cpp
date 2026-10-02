@@ -287,7 +287,7 @@ void testParserUnit(const fs::path& clipA, const fs::path& clipB,
        << clipA.string()
        << "\"},\"duration_seconds\":0.8}],\"audio_tracks\":[{\"source_url\":\""
        << audio.string()
-       << "\",\"role\":\"tts\",\"mute_ranges\":[{\"start_seconds\":4,\"end_seconds\":7}]}]}";
+       << "\",\"role\":\"tts\",\"source_in_seconds\":12.5,\"duration_seconds\":3,\"mute_ranges\":[{\"start_seconds\":4,\"end_seconds\":7}]}]}";
     auto v1Plan = parseRenderPlan(v1.str());
     expect(v1Plan.has_value(), "V1 plan still parses");
     if (v1Plan) {
@@ -297,6 +297,8 @@ void testParserUnit(const fs::path& clipA, const fs::path& clipB,
                    v1Plan->timeline[0].duration_seconds == 0.8,
                "V1 float duration preserved for the legacy path");
         expect(v1Plan->audio_tracks.size() == 1 &&
+                   v1Plan->audio_tracks[0].source_in_seconds == 12.5 &&
+                   v1Plan->audio_tracks[0].duration_seconds == 3.0 &&
                    v1Plan->audio_tracks[0].mute_ranges.size() == 1 &&
                    v1Plan->audio_tracks[0].mute_ranges[0].start_seconds == 4.0 &&
                    v1Plan->audio_tracks[0].mute_ranges[0].end_seconds == 7.0,

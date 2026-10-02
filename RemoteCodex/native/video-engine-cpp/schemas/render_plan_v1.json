@@ -125,6 +125,11 @@
             "minimum": 0,
             "default": 0.0
           },
+          "source_in_seconds": {
+            "type": "number",
+            "minimum": 0,
+            "default": 0.0
+          },
           "mute_ranges": {
             "type": "array",
             "items": {

@@ -90,7 +90,13 @@ std::optional<RenderPlan> parseRenderPlanV1(
             track.source_url = ju::extractJsonStringValue(audioStr, "source_url");
             track.volume = ju::extractJsonNumberValue(audioStr, "volume", 1.0);
             track.start_time_offset = ju::extractJsonNumberValue(audioStr, "start_time_offset", 0.0);
+            track.source_in_seconds = ju::extractJsonNumberValue(audioStr, "source_in_seconds", 0.0);
             track.duration_seconds = ju::extractJsonNumberValue(audioStr, "duration_seconds", 0.0);
+            if (track.source_in_seconds < 0.0) {
+                recordV1RejectedEntry();
+                std::cerr << "audio_tracks source_in_seconds is invalid; rejecting RenderPlan\\n";
+                return std::nullopt;
+            }
             track.role = ju::extractJsonStringValue(audioStr, "role");
             track.loop = ju::extractJsonBoolValue(audioStr, "loop", false);
             const auto muteBlock = ju::extractArrayBlock(audioStr, "mute_ranges");

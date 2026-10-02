@@ -21,3 +21,17 @@ func TestWriteAudioMixTrackMutesSelectedTimelineRanges(t *testing.T) {
 		t.Fatalf("audio label = %q, want [a0]", label)
 	}
 }
+
+func TestWriteAudioMixTrackResumesFromSourceOffset(t *testing.T) {
+	var filter strings.Builder
+	writeAudioMixTrack(&filter, 0, plan.AudioTrack{
+		Volume:          1,
+		SourceInSeconds: 12.5,
+		DurationSeconds: 3,
+		StartTimeOffset: 8,
+	})
+	want := "[0:a]atrim=start=12.500000:duration=3.000000,asetpts=PTS-STARTPTS,volume=1.000000,adelay=8000|8000[a0]"
+	if got := filter.String(); got != want {
+		t.Fatalf("audio filter = %q, want %q", got, want)
+	}
+}

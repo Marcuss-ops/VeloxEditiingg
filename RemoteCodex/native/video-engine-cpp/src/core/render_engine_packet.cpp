@@ -373,7 +373,13 @@ bool RenderEngine::resolveMixedFinalAudio(
             inputs << " -i " << file::shellQuote(input_path.string());
             if (input_count > 0) filter << ";";
             filter << "[" << input_count << ":a:0]";
-            if (track.duration_seconds > 0.0) {
+            if (track.source_in_seconds > 0.0) {
+                filter << "atrim=start=" << track.source_in_seconds;
+                if (track.duration_seconds > 0.0) {
+                    filter << ":duration=" << track.duration_seconds;
+                }
+                filter << ",asetpts=PTS-STARTPTS";
+            } else if (track.duration_seconds > 0.0) {
                 filter << "atrim=duration=" << track.duration_seconds
                        << ",asetpts=PTS-STARTPTS";
             } else {

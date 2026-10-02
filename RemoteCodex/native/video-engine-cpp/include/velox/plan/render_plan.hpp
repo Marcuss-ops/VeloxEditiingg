@@ -61,6 +61,9 @@ struct AudioTrack {
     double volume{1.0};
     // V1 legacy timing in floating seconds.
     double start_time_offset{0.0};
+    // Offset within the source audio file for sliced tracks, such as a
+    // narration segment resuming after a scene clip.
+    double source_in_seconds{0.0};
     double duration_seconds{0.0};
     std::string role;
     bool loop{false};
