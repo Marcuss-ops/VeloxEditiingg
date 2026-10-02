@@ -136,6 +136,74 @@ The master returns `202 Accepted` after the payload has been converted and queue
 
 A syntactically valid but incomplete creator payload returns `422 Unprocessable Entity` and is not written as a Job.
 
+A syntactically valid payload carrying a soft-deprecated scene
+declaration returns `202 Accepted` **plus** a `warnings[]` entry
+(`code: "kind_clip_without_clip_asset"`, affected `scene_ids`,
+`sunset` date) — see "Scene declaration contract" below. The job is
+created normally; the warning tells the generator what to fix before
+the sunset hard-rejection.
+
+## Scene declaration contract: `kind`, `clip`, `stock`, and final audio
+
+> Authority: `shared/contract/scene_kind_clip.go` (soft-deprecation +
+> sunset), worker `RemoteCodex/native/worker-agent-go/pkg/video/pipelines/clips/scene_timeline.go`
+> (render behavior). This section is the narrative; the code is the
+> source of truth.
+
+The worker **ignores the informational `kind` field** and renders purely
+from the `clip` / `stock` fields:
+
+| Scene shape | Video | Audio |
+|---|---|---|
+| `clip: {url, ...}` | the clip, `duration_ms` window | `scene_clip_audio` track — **unless a final mix owns the timeline** (see below) |
+| `stock: [...]` | background pool, looped to `duration_seconds` | **always mute** (`IncludeAudio: false`, no audio track) |
+
+Two consequences that caused the 2026-10-02 Isabelle incident
+(`job_e2adca259c034c1e` — testimony scenes declared `kind: "clip"`
+with the asset in `stock`):
+
+1. **`kind: "clip"` without a `clip` object is a declaration bug.**
+   The scene compiles as a mute stock background and testimony audio
+   can never reach the montage, while the transfer itself stays
+   intact (the MP4 verifies fine — it faithfully contains the wrong
+   montage). Since 2026-10-02 this shape is **soft-deprecated**: the
+   intake still accepts the payload but records
+   `pipeline_intake_scene_warnings_total{path,reason="kind_clip_without_clip_asset"}`,
+   logs a WARN with the affected `scene_id`s, and echoes a `warnings[]`
+   entry (with `sunset: "2026-11-15"`) in the 202 envelope. After the
+   sunset date the same shape is rejected with 422. Background scenes
+   must use `kind: "stock"`; testimony scenes must carry
+   `clip: {url, ...}` with `duration_ms` equal to the scene window.
+   Validate before submitting with `POST .../creator/jobs?dry_run=true`
+   (or `POST .../jobs?dry_run=true`): the `kind_clip_without_clip`
+   list in the summary shows exactly what would warn.
+
+2. **With a final runtime mix present, scene clip audio is dropped by
+   design.** When `runtime_audio` carries the final narration mix, the
+   worker omits every `scene_clip_audio` track (the mix owns the
+   timeline) — so fixing `stock` → `clip` under a final mix yields a
+   byte-identical MP4. If testimony sources must be audible, either
+   mix them into the final narration before submitting, or submit
+   without a final mix (the worker then mixes scene tracks itself;
+   the mixed output must still cover the timeline or the packet-mux
+   gate fails closed with `audio_duration_mismatch`).
+
+Debug helper: `scripts/ops/diff-job-payloads.sh <job-a> <job-b>`
+compares two jobs' TaskSpec payloads (per-scene clip/stock
+declarations, overlays, runtime assets/audio, final artifacts) plus
+their `[RENDER_INPUT_DIAGNOSTIC]` placement lines, which now also
+report `kind_clip_without_clip=` and `clip_audio_omitted=`.
+
+## Which master, which endpoint
+
+Velox renders go to the **Velox master** (`POST /api/v1/creator/jobs`
+with `VELOX_ADMIN_TOKEN`, or `POST /api/v1/jobs` with a per-client M2M
+secret — see `docs/API-JOBS.md`). Other pipeline services expose
+their own job types on their own hosts; a Velox `scene.composite.v1`
+payload POSTed there is rejected (`job type is not external-safe`)
+before any job exists. When an intake is rejected, check the host +
+endpoint pair first.
+
 ## Removal: `/api/remote/pipeline` fully retired
 
 The legacy sync-forward endpoint `/api/remote/pipeline` (and the
