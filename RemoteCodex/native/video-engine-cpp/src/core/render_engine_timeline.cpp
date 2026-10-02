@@ -97,8 +97,12 @@ bool RenderEngine::renderLegacyTimeline(
     bool nativeBatchCompleted = false;
 
 #ifdef VELOX_ENABLE_LIBAV
+    // Editorial plans may split a long timeline into hundreds of short
+    // segments and then mix narration/clip audio over those cuts. Keep those
+    // plans on the per-segment FFmpeg path: the native batch frame pipeline
+    // can leave its stage threads waiting after many consecutive segments.
     bool nativeBatchEligible = plan.version == plan::kRenderPlanVersionV1 &&
-        !plan.timeline.empty();
+        !plan.timeline.empty() && !plan.requires_editorial_render;
     for (const auto& item : plan.timeline) {
         if (!std::holds_alternative<plan::VideoSource>(item.source) ||
             item.include_audio || item.transform.slow_zoom) {
@@ -398,8 +402,8 @@ bool RenderEngine::renderLegacyTimeline(
                 assetPhase.Complete();
                 seg.source_bytes = fileSize(localVid);
 #ifdef VELOX_ENABLE_LIBAV
-                const bool legacyNeedsFfmpeg = item.include_audio || item.hold_last_frame ||
-                    item.transform.slow_zoom;
+                const bool legacyNeedsFfmpeg = plan.requires_editorial_render ||
+                    item.include_audio || item.hold_last_frame || item.transform.slow_zoom;
                 if (legacyNeedsFfmpeg) {
                     args_only = media::buildVideoSegmentArgs(
                         localVid, segmentOut, item.duration_seconds, params, item.include_audio,
