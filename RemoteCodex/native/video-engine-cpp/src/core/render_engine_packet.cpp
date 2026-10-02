@@ -375,7 +375,9 @@ bool RenderEngine::resolveMixedFinalAudio(
             filter << "[" << input_count << ":a:0]";
             if (track.duration_seconds > 0.0) {
                 filter << "atrim=duration=" << track.duration_seconds
-                       << ",asetpts=PTS-STARTPTS,";
+                       << ",asetpts=PTS-STARTPTS";
+            } else {
+                filter << "asetpts=PTS-STARTPTS";
             }
             if (track.start_time_offset > 0.0) {
                 const auto delay_ms = static_cast<int>(std::llround(
