@@ -157,7 +157,7 @@ func TestCompileProjectsRuntimeAudioIDsFromNestedPayload(t *testing.T) {
 
 func TestCompilePausesFinalNarrationForSelectedClipAudio(t *testing.T) {
 	input := map[string]interface{}{
-		"scenes_json":    `[{"scene_id":"clip-a","duration_seconds":4,"clip":{"url":"/cache/clip.mp4","duration_ms":4000},"voiceover":{"url":"/cache/scene-voice.mp3","duration_ms":4000}},{"scene_id":"clip-b","duration_seconds":3,"clip":{"url":"/cache/clip-b.mp4","duration_ms":3000},"voiceover":{"url":"/cache/scene-voice-b.mp3","duration_ms":3000}}]`,
+		"scenes_json":    `[{"scene_id":"clip-a","duration_seconds":4,"clip":{"url":"/cache/clip.mp4","duration_ms":4000},"voiceover":{"url":"/cache/scene-voice.mp3","duration_ms":4000}},{"scene_id":"clip-b","duration_seconds":3,"clip":{"url":"/cache/clip-b.mp4","duration_ms":3000},"voiceover":{"url":"/cache/scene-voice-b.mp3","duration_ms":3000}},{"scene_id":"stock-c","duration_seconds":5,"stock":[{"url":"/cache/stock.mp4","duration_ms":5000}]}]`,
 		"runtime_assets": []interface{}{map[string]interface{}{"asset_id": "narration", "url": "/cache/narration.wav", "duration_ms": 7000}},
 		"runtime_audio": map[string]interface{}{
 			"voiceover_asset_id":   "narration",
@@ -165,7 +165,7 @@ func TestCompilePausesFinalNarrationForSelectedClipAudio(t *testing.T) {
 		},
 		"overlays": []interface{}{map[string]interface{}{
 			"id": "replace", "asset_id": "replace-asset", "url": "/cache/replace.mp4",
-			"start_frame": 120, "frame_count": 24, "mode": "replace",
+			"start_frame": 168, "frame_count": 24, "mode": "replace",
 			"z_index": 1, "audio_mode": "preserve_final_audio",
 		}},
 	}
@@ -354,7 +354,7 @@ func TestCompileSceneTimelineAppliesReplaceOverlays(t *testing.T) {
 		"scenes_json": `[{"scene_id":"intro","duration_seconds":19,"clip":{"url":"intro.mp4","duration_ms":19000}},{"scene_id":"stock","duration_seconds":41,"stock":[{"url":"stock.mp4","duration_ms":41000}],"voiceover":{"url":"voice.mp3","duration_ms":41000}}]`,
 		"overlays": []interface{}{map[string]interface{}{
 			"id": "overlay-1", "asset_id": "overlay-asset", "url": "overlay.mp4",
-			"start_frame": 24, "frame_count": 120, "mode": "replace",
+			"start_frame": 480, "frame_count": 120, "mode": "replace",
 			"z_index": 10, "audio_mode": "preserve_final_audio",
 		}},
 	}
@@ -366,8 +366,8 @@ func TestCompileSceneTimelineAppliesReplaceOverlays(t *testing.T) {
 	if len(got.Timeline) != 4 {
 		t.Fatalf("timeline segments = %d, want intro prefix, overlay, intro suffix and stock", len(got.Timeline))
 	}
-	if got.Timeline[1].Source.URL != "overlay.mp4" || got.Timeline[1].Source.Type != "video" || got.Timeline[1].DurationSeconds != 5 {
-		t.Fatalf("overlay segment = %+v", got.Timeline[1])
+	if got.Timeline[2].Source.URL != "overlay.mp4" || got.Timeline[2].Source.Type != "video" || got.Timeline[2].DurationSeconds != 5 {
+		t.Fatalf("overlay segment = %+v", got.Timeline[2])
 	}
 	if got.Timeline[0].Source.Type != "video" || got.Timeline[2].Source.Type != "video" || got.CopyOnly || got.Mixed || !got.RequiresEditorialRender {
 		t.Fatalf("base segment types/mode = %q, %q, copy_only=%v mixed=%v editorial=%v; want video/video and editorial rendering for clip audio", got.Timeline[0].Source.Type, got.Timeline[2].Source.Type, got.CopyOnly, got.Mixed, got.RequiresEditorialRender)
