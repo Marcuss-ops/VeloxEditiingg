@@ -187,6 +187,16 @@ with the asset in `stock`):
    `clip_audio_scene_ids` — verify with the dry-run
    `clip_audio_selected` / `clip_audio_dropped` counts.
 
+3. **Replace overlays cover testimony scenes frame-exactly.** A
+   `mode: "replace"` overlay splices its window into the timeline,
+   hiding whatever scene plays underneath — including testimony clips
+   (verified 2026-10-02: phrase/image cuts buried 4 of 7 seconds of
+   `scene-0175`). The generator must not place replace windows
+   intersecting `kind: "clip"` testimony scenes (or scenes listed in
+   `clip_audio_scene_ids`); use non-replace treatments there, or none.
+   Removing such windows needs no re-timing: replacement is
+   frame-exact, durations and narration stay put.
+
 Debug helper: `scripts/ops/diff-job-payloads.sh <job-a> <job-b>`
 compares two jobs' TaskSpec payloads (per-scene clip/stock
 declarations, overlays, runtime assets/audio, final artifacts) plus
