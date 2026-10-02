@@ -24,7 +24,6 @@ type RenderPlan struct {
 	Timeline                []TimelineItem   `json:"timeline"`
 	FallbackVideoSources    []MediaSource    `json:"fallback_video_sources,omitempty"`
 	AudioTracks             []AudioTrack     `json:"audio_tracks"`
-	NarrationMuteRanges     []AudioMuteRange `json:"-"`
 	Layers                  []Layer          `json:"layers,omitempty"`
 	Subtitles               []SubtitleTrack  `json:"subtitle_tracks,omitempty"`
 	OutputPath              string           `json:"output_path"`

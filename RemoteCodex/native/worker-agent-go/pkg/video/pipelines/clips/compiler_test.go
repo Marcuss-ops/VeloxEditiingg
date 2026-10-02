@@ -180,12 +180,8 @@ func TestCompileCanRestoreSelectedClipAudioUnderFinalNarration(t *testing.T) {
 	if got.AudioTracks[0].Role != "scene_clip_audio" || got.AudioTracks[0].StartTimeOffset != 4 {
 		t.Fatalf("selected clip track = %#v", got.AudioTracks[0])
 	}
-	if got.AudioTracks[1].Role != "tts" || len(got.AudioTracks[1].MuteRanges) != 1 {
-		t.Fatalf("narration track = %#v, want one mute interval", got.AudioTracks[1])
-	}
-	interval := got.AudioTracks[1].MuteRanges[0]
-	if interval.StartSeconds != 4 || interval.EndSeconds != 7 {
-		t.Fatalf("narration mute interval = %+v, want [4,7]", interval)
+	if got.AudioTracks[1].Role != "tts" || len(got.AudioTracks[1].MuteRanges) != 0 {
+		t.Fatalf("narration track = %#v, want uninterrupted narration", got.AudioTracks[1])
 	}
 	if got.CopyOnly || got.Mixed || !got.RequiresEditorialRender {
 		t.Fatalf("replace overlay with selected clip audio must use editorial rendering: copy_only=%v mixed=%v editorial=%v", got.CopyOnly, got.Mixed, got.RequiresEditorialRender)
@@ -331,8 +327,8 @@ func TestCompileSceneTimelineAppliesReplaceOverlays(t *testing.T) {
 	if got.Timeline[1].Source.URL != "overlay.mp4" || got.Timeline[1].Source.Type != "video" || got.Timeline[1].DurationSeconds != 5 {
 		t.Fatalf("overlay segment = %+v", got.Timeline[1])
 	}
-	if got.Timeline[0].Source.Type != "video" || got.Timeline[2].Source.Type != "video" || !got.CopyOnly || got.Mixed || got.RequiresEditorialRender {
-		t.Fatalf("base segment types/mode = %q, %q, copy_only=%v mixed=%v editorial=%v; want video/video and copy-only", got.Timeline[0].Source.Type, got.Timeline[2].Source.Type, got.CopyOnly, got.Mixed, got.RequiresEditorialRender)
+	if got.Timeline[0].Source.Type != "video" || got.Timeline[2].Source.Type != "video" || got.CopyOnly || got.Mixed || !got.RequiresEditorialRender {
+		t.Fatalf("base segment types/mode = %q, %q, copy_only=%v mixed=%v editorial=%v; want video/video and editorial rendering for clip audio", got.Timeline[0].Source.Type, got.Timeline[2].Source.Type, got.CopyOnly, got.Mixed, got.RequiresEditorialRender)
 	}
 }
 

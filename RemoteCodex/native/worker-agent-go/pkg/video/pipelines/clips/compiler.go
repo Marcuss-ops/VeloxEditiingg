@@ -215,10 +215,17 @@ func applyOverlayIntent(renderPlan *plan.RenderPlan, input map[string]interface{
 		// Replace sources are finished MP4 timeline items. Force the packet
 		// muxer even when the scene compiler selected a legacy render mode;
 		// incompatible sources fail instead of falling back to re-encoding.
-		// Selected testimony audio requires multiple timed audio tracks. Replace
+		// Selected clip audio requires multiple timed audio tracks. Replace
 		// overlays can split source clips at non-keyframe boundaries, so use the
 		// explicit editorial renderer for this combined case.
-		if len(renderPlan.NarrationMuteRanges) > 0 {
+		hasClipAudio := false
+		for _, track := range renderPlan.AudioTracks {
+			if strings.EqualFold(track.Role, "scene_clip_audio") {
+				hasClipAudio = true
+				break
+			}
+		}
+		if hasClipAudio {
 			renderPlan.CopyOnly = false
 			renderPlan.Mixed = false
 			renderPlan.RequiresEditorialRender = true

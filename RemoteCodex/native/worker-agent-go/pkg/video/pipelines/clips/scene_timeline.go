@@ -141,7 +141,6 @@ func compileSceneTimeline(ctx context.Context, jobID string, scenes []sceneTimel
 	fallbackVideoSources := make([]plan.MediaSource, 0)
 	seenFallbackSources := make(map[string]struct{})
 	audioTracks := make([]plan.AudioTrack, 0, len(scenes)*2)
-	narrationMuteRanges := make([]plan.AudioMuteRange, 0)
 	offset := 0.0
 	finalAudioConfigured := hasRuntimeFinalAudio(input)
 	clipAudioSceneIDs := runtimeClipAudioSceneIDs(input)
@@ -249,10 +248,6 @@ func compileSceneTimeline(ctx context.Context, jobID string, scenes []sceneTimel
 					StartTimeOffset: clipAudioOffset, DurationSeconds: clipDuration,
 					Role: "scene_clip_audio",
 				})
-				narrationMuteRanges = append(narrationMuteRanges, plan.AudioMuteRange{
-					StartSeconds: clipAudioOffset,
-					EndSeconds:   clipAudioOffset + clipDuration,
-				})
 				delete(clipAudioSceneIDs, scene.SceneID)
 			}
 		} else if scene.Voiceover != nil && !finalAudioConfigured {
@@ -295,7 +290,6 @@ func compileSceneTimeline(ctx context.Context, jobID string, scenes []sceneTimel
 		Timeline:             timeline,
 		FallbackVideoSources: fallbackVideoSources,
 		AudioTracks:          audioTracks,
-		NarrationMuteRanges:  narrationMuteRanges,
 		OutputPath:           outputPath,
 	}, nil
 }
