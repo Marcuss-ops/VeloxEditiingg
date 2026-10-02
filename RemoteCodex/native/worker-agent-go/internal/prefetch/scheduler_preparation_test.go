@@ -242,6 +242,7 @@ func TestScheduler_DualJobPrefetchCertification(t *testing.T) {
 
 	// --- Collect PREPARED events with timestamps ---
 	preparedCh := make(chan PreparedJob, 4)
+	assetReadyCh := make(chan struct{}, 1)
 	var events []Event
 	var eventsMu sync.Mutex
 
@@ -254,6 +255,12 @@ func TestScheduler_DualJobPrefetchCertification(t *testing.T) {
 			eventsMu.Lock()
 			events = append(events, event)
 			eventsMu.Unlock()
+			if event.Name == "asset_ready" && event.AssetKey == "asset-B" {
+				select {
+				case assetReadyCh <- struct{}{}:
+				default:
+				}
+			}
 		},
 	})
 	s.SetResolver(downloader.NewCacheResolver(manager, nil))
@@ -365,6 +372,11 @@ func TestScheduler_DualJobPrefetchCertification(t *testing.T) {
 	// The download must have completed before PREPARED was emitted
 	if downloadCompletedAt.After(assetB.PreparedAt) {
 		t.Fatalf("download completed at %s but prepared_at is %s: download finished after PREPARED", downloadCompletedAt, assetB.PreparedAt)
+	}
+	select {
+	case <-assetReadyCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("asset_ready event for asset-B was not emitted after PREPARED")
 	}
 
 	// Criterion 5: prepared_ratio = 1.0 (all assets in job B are prepared)
