@@ -292,7 +292,15 @@ bool RenderEngine::finalizeAudioTracks(
         for (int index = 0; index < input_count; ++index) {
             audio_filter << "[a" << index << "]";
         }
-        audio_filter << "amix=inputs=" << input_count << ":duration=longest[aout]";
+        // This is a timeline mix: inputs are separate voiceover slices, clip
+        // excerpts and optional looping music. amix's default normalization
+        // divides the sum by the total number of inputs, including tracks
+        // that are silent at the current time. Long videos with many scene
+        // clips therefore make every active track nearly inaudible. Preserve
+        // the per-track volume contract and cap only peaks after summing.
+        audio_filter << "amix=inputs=" << input_count
+                     << ":duration=longest:normalize=0,"
+                     << "alimiter=limit=0.98:level=false[aout]";
     }
 
     const fs::path mixed_audio = work_dir / "mixed_audio.m4a";

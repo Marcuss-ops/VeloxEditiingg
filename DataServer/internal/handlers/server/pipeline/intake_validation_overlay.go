@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 
@@ -75,6 +76,85 @@ func validateSubmitOverlays(overlays []SubmitOverlay) []gin.H {
 	for i := 1; i < len(replacements); i++ {
 		if replacements[i].StartFrame < replacements[i-1].StartFrame+replacements[i-1].FrameCount {
 			details = append(details, gin.H{"path": fmt.Sprintf("overlays.%s", replacements[i].ID), "issue": "replace_overlap", "overlaps": replacements[i-1].ID})
+		}
+	}
+	return details
+}
+
+// validateSubmitOverlayClipCollisions rejects replace overlays that would
+// hide a scene clip. The worker timeline inserts clip scenes before applying
+// overlays, so stale absolute overlay windows can otherwise silently cover
+// the clip after a producer inserts scenes.
+func validateSubmitOverlayClipCollisions(req SubmitJobRequest) []gin.H {
+	if len(req.Scenes) == 0 || len(req.Overlays) == 0 {
+		return nil
+	}
+	const fps = 24.0
+	type clipWindow struct {
+		id         string
+		startFrame int64
+		endFrame   int64
+	}
+	windows := make([]clipWindow, 0)
+	cursor := 0.0
+	for index, scene := range req.Scenes {
+		duration := scene.DurationSeconds
+		if scene.Voiceover != nil && scene.Voiceover.DurationMS > 0 {
+			duration = float64(scene.Voiceover.DurationMS) / 1000
+		}
+		if duration < 0 || math.IsNaN(duration) || math.IsInf(duration, 0) {
+			duration = 0
+		}
+		if scene.Clip != nil {
+			clipDuration := duration
+			if scene.Clip.DurationMS > 0 {
+				clipDuration = float64(scene.Clip.DurationMS) / 1000
+			}
+			clipStart := cursor
+			if scene.Stock != nil || len(scene.StockAssets) > 0 {
+				clipStart += duration
+			}
+			clipEnd := clipStart + clipDuration
+			startFrame := int64(math.Round(clipStart * fps))
+			endFrame := int64(math.Round(clipEnd * fps))
+			if endFrame > startFrame {
+				id := strings.TrimSpace(scene.SceneID)
+				if id == "" {
+					id = fmt.Sprintf("scenes.%d", index)
+				}
+				windows = append(windows, clipWindow{id: id, startFrame: startFrame, endFrame: endFrame})
+			}
+			if scene.Stock != nil || len(scene.StockAssets) > 0 {
+				cursor = clipEnd
+			} else {
+				cursor = clipStart + math.Max(clipDuration, duration)
+			}
+			continue
+		}
+		cursor += duration
+	}
+	if len(windows) == 0 {
+		return nil
+	}
+	var details []gin.H
+	for _, overlay := range req.Overlays {
+		if overlay.Mode != "replace" {
+			continue
+		}
+		endFrame := overlay.EndFrame
+		if endFrame == 0 && overlay.FrameCount > 0 {
+			endFrame = overlay.StartFrame + overlay.FrameCount
+		}
+		for _, clip := range windows {
+			if overlay.StartFrame < clip.endFrame && endFrame > clip.startFrame {
+				details = append(details, gin.H{
+					"path":           "overlays." + strings.TrimSpace(overlay.ID),
+					"issue":          "overlaps_clip_scene",
+					"clip_scene":     clip.id,
+					"overlay_frames": []int64{overlay.StartFrame, endFrame},
+					"clip_frames":    []int64{clip.startFrame, clip.endFrame},
+				})
+			}
 		}
 	}
 	return details

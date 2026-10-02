@@ -146,6 +146,9 @@ func applyOverlayIntent(renderPlan *plan.RenderPlan, input map[string]interface{
 	// Overlay timing is bound to the canonical Velox stream profile: 24 fps.
 	// Do not interpret start_frame using the legacy clips.v1 30 fps default.
 	const overlayFPS = 24
+	if err := rejectOverlayClipCollisions(renderPlan, input, overlays, overlayFPS); err != nil {
+		return nil, err
+	}
 	renderPlan.Canvas.Fps = overlayFPS
 	base := make([]contract.VideoSegmentV2, 0, len(renderPlan.Timeline))
 	baseURLs := make(map[string]string, len(renderPlan.Timeline))
@@ -206,8 +209,8 @@ func applyOverlayIntent(renderPlan *plan.RenderPlan, input map[string]interface{
 			IncludeAudio:    false,
 			// Overlay replacement clips are already rendered sources. Preserve
 			// their frames when the editorial fallback re-encodes arbitrary cuts.
-			Transform:       &plan.TransformSpec{ScaleMode: "cover", SlowZoom: &noSlowZoom},
-			SourceInUS:      segment.SourceInUS, SourceDurationUS: segment.SourceDurationUS,
+			Transform:  &plan.TransformSpec{ScaleMode: "cover", SlowZoom: &noSlowZoom},
+			SourceInUS: segment.SourceInUS, SourceDurationUS: segment.SourceDurationUS,
 		})
 	}
 	renderPlan.Timeline = timeline
@@ -236,6 +239,61 @@ func applyOverlayIntent(renderPlan *plan.RenderPlan, input map[string]interface{
 		}
 	}
 	return renderPlan, nil
+}
+
+func rejectOverlayClipCollisions(renderPlan *plan.RenderPlan, input map[string]interface{}, overlays []contract.Overlay, fps int) error {
+	encoded := toString(input["scenes_json"])
+	if renderPlan == nil || encoded == "" || fps <= 0 {
+		return nil
+	}
+	scenes, err := decodeSceneTimeline(encoded)
+	if err != nil {
+		return fmt.Errorf("clips.v1: cannot validate overlay/clip timing: %w", err)
+	}
+	clipIDs := make(map[string]bool)
+	clipURLs := make(map[string]bool)
+	for _, scene := range scenes {
+		if scene.Clip == nil {
+			continue
+		}
+		if id := strings.TrimSpace(scene.SceneID); id != "" {
+			clipIDs[id] = true
+		}
+		if url := strings.TrimSpace(scene.Clip.URL); url != "" {
+			clipURLs[url] = true
+		}
+	}
+	if len(clipIDs) == 0 && len(clipURLs) == 0 {
+		return nil
+	}
+	type frameWindow struct{ start, end int64 }
+	clipWindows := make([]frameWindow, 0)
+	var elapsed float64
+	var priorFrame int64
+	for _, item := range renderPlan.Timeline {
+		startFrame := priorFrame
+		elapsed += item.DurationSeconds
+		endFrame := int64(math.Round(elapsed * float64(fps)))
+		if clipIDs[item.SceneID] || clipURLs[strings.TrimSpace(item.Source.URL)] {
+			clipWindows = append(clipWindows, frameWindow{start: startFrame, end: endFrame})
+		}
+		priorFrame = endFrame
+	}
+	for _, overlay := range overlays {
+		if overlay.Mode != string(contract.OverlayModeReplace) {
+			continue
+		}
+		endFrame := overlay.EndFrame
+		if endFrame == 0 && overlay.FrameCount > 0 {
+			endFrame = overlay.StartFrame + overlay.FrameCount
+		}
+		for _, clip := range clipWindows {
+			if overlay.StartFrame < clip.end && endFrame > clip.start {
+				return fmt.Errorf("clips.v1: replace overlay %q frames [%d,%d) covers a clip scene at frames [%d,%d); move or remove the overlay so the clip remains visible", overlay.ID, overlay.StartFrame, endFrame, clip.start, clip.end)
+			}
+		}
+	}
+	return nil
 }
 
 func parseRequest(input map[string]interface{}) *Request {
