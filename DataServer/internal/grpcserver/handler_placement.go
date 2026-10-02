@@ -314,13 +314,13 @@ func (h *Handler) sendClaimedTaskOffer(
 		inputLevel = logging.LevelWarn
 	}
 	logGRPCf(ctx, inputLevel, logging.CodeGRPCPlacement,
-		"[RENDER_INPUT_DIAGNOSTIC] job_id=%s task_id=%s worker_id=%s executor=%s scenes=%d declared_scene_duration_s=%.3f duplicate_clip_stock_scenes=%d duplicate_scene_indexes=%v runtime_assets=%d runtime_audio_present=%t overlays=%d copy_only=%t runtime_assets_pending=%t kind_clip_without_clip=%d clip_audio_omitted=%d diagnosis=%q",
+		"[RENDER_INPUT_DIAGNOSTIC] job_id=%s task_id=%s worker_id=%s executor=%s scenes=%d declared_scene_duration_s=%.3f duplicate_clip_stock_scenes=%d duplicate_scene_indexes=%v runtime_assets=%d runtime_audio_present=%t overlays=%d copy_only=%t runtime_assets_pending=%t kind_clip_without_clip=%d clip_audio_selected=%d clip_audio_dropped=%d diagnosis=%q",
 		tws.JobID, tws.ID, sess.workerID, tws.ExecutorID, inputDiag.Scenes,
 		inputDiag.DeclaredSceneDurationS, inputDiag.DuplicateClipStockCount,
 		inputDiag.DuplicateSceneIndexes, inputDiag.RuntimeAssets,
 		inputDiag.RuntimeAudioPresent, inputDiag.Overlays, inputDiag.CopyOnly,
 		inputDiag.RuntimeAssetsPending, inputDiag.KindClipWithoutClip,
-		inputDiag.ClipAudioOmitted, inputDiag.Diagnosis)
+		inputDiag.ClipAudioSelected, inputDiag.ClipAudioDropped, inputDiag.Diagnosis)
 
 	// Fase D: validate/stamp the canonical compiled plan. Only a V2 plan that
 	// was already present in the TaskSpec may be delivered through the V2 wire

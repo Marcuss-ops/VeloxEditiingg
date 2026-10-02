@@ -72,7 +72,11 @@ func TestSummarizeWorkerPayloadForDryRun_Coverage(t *testing.T) {
 		]`,
 		"overlays":       []interface{}{map[string]interface{}{"id": "o1"}},
 		"runtime_assets": []interface{}{map[string]interface{}{"asset_id": "a1"}},
-		"runtime_audio":  map[string]interface{}{"voiceover_asset_id": "n", "voiceover_duration_seconds": 11.36},
+		"runtime_audio": map[string]interface{}{
+			"voiceover_asset_id":         "n",
+			"voiceover_duration_seconds": 11.36,
+			"clip_audio_scene_ids":       []interface{}{"s-clip"},
+		},
 	}
 	raw := map[string]interface{}{"scenes_json": workerPayload["scenes_json"]}
 	got := SummarizeWorkerPayloadForDryRun(workerPayload, raw)
@@ -82,8 +86,11 @@ func TestSummarizeWorkerPayloadForDryRun_Coverage(t *testing.T) {
 	if got.Overlays != 1 || got.RuntimeAssets != 1 || !got.RuntimeAudioPresent {
 		t.Fatalf("summary = %+v, want overlays/runtime audio present", got)
 	}
-	if got.FinalMixOmitsClipAudio != 1 {
-		t.Fatalf("final_mix_omits_clip_audio = %d, want 1", got.FinalMixOmitsClipAudio)
+	if got.ClipAudioSelected != 1 {
+		t.Fatalf("clip_audio_selected = %d, want 1 (s-clip)", got.ClipAudioSelected)
+	}
+	if got.ClipAudioDropped != 0 {
+		t.Fatalf("clip_audio_dropped = %d, want 0", got.ClipAudioDropped)
 	}
 	if got.AudioCoverage != DryRunAudioOK {
 		t.Fatalf("audio_coverage = %q, want ok (11.36s mix covers 11.36s timeline)", got.AudioCoverage)
@@ -121,8 +128,8 @@ func TestSummarizeWorkerPayloadForDryRun_Coverage(t *testing.T) {
 	if mixed.AudioCoverage != DryRunAudioMixedTracks {
 		t.Fatalf("audio_coverage = %q, want %q", mixed.AudioCoverage, DryRunAudioMixedTracks)
 	}
-	if mixed.FinalMixOmitsClipAudio != 0 {
-		t.Fatalf("final_mix_omits_clip_audio = %d, want 0 without final mix", mixed.FinalMixOmitsClipAudio)
+	if mixed.ClipAudioSelected != 0 || mixed.ClipAudioDropped != 0 {
+		t.Fatalf("selected=%d dropped=%d, want 0/0 without final mix", mixed.ClipAudioSelected, mixed.ClipAudioDropped)
 	}
 }
 

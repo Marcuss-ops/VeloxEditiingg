@@ -155,7 +155,7 @@ from the `clip` / `stock` fields:
 
 | Scene shape | Video | Audio |
 |---|---|---|
-| `clip: {url, ...}` | the clip, `duration_ms` window | `scene_clip_audio` track — **unless a final mix owns the timeline** (see below) |
+| `clip: {url, ...}` | the clip, `duration_ms` window | `scene_clip_audio` track — mixed with the final narration only if the scene is listed in `runtime_audio.clip_audio_scene_ids`, else video-only under a final mix (see below) |
 | `stock: [...]` | background pool, looped to `duration_seconds` | **always mute** (`IncludeAudio: false`, no audio track) |
 
 Two consequences that caused the 2026-10-02 Isabelle incident
@@ -178,21 +178,23 @@ with the asset in `stock`):
    (or `POST .../jobs?dry_run=true`): the `kind_clip_without_clip`
    list in the summary shows exactly what would warn.
 
-2. **With a final runtime mix present, scene clip audio is dropped by
-   design.** When `runtime_audio` carries the final narration mix, the
-   worker omits every `scene_clip_audio` track (the mix owns the
-   timeline) — so fixing `stock` → `clip` under a final mix yields a
-   byte-identical MP4. If testimony sources must be audible, either
-   mix them into the final narration before submitting, or submit
-   without a final mix (the worker then mixes scene tracks itself;
-   the mixed output must still cover the timeline or the packet-mux
-   gate fails closed with `audio_duration_mismatch`).
+2. **Testimony audio needs both the `clip` object and selection.**
+   When `runtime_audio` carries the final narration mix, only scenes
+   listed in `runtime_audio.clip_audio_scene_ids` get their original
+   audio mixed with the narration (editorial render); unselected clip
+   scenes stay video-only by design. So a `stock` → `clip` fix alone
+   changes nothing audible unless the scene IDs are also added to
+   `clip_audio_scene_ids` — verify with the dry-run
+   `clip_audio_selected` / `clip_audio_dropped` counts.
 
 Debug helper: `scripts/ops/diff-job-payloads.sh <job-a> <job-b>`
 compares two jobs' TaskSpec payloads (per-scene clip/stock
 declarations, overlays, runtime assets/audio, final artifacts) plus
 their `[RENDER_INPUT_DIAGNOSTIC]` placement lines, which now also
-report `kind_clip_without_clip=` and `clip_audio_omitted=`.
+report `kind_clip_without_clip=`, `clip_audio_selected=` (testimony
+sources mixed with the narration) and `clip_audio_dropped=` (clip
+sources coexisting with a final mix without being selected — these
+stay video-only by design).
 
 ## Which master, which endpoint
 

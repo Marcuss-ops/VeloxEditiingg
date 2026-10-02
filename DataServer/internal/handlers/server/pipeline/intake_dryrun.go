@@ -20,21 +20,28 @@ import (
 // instead of after a full render. Every number here is derived from the
 // same canonical scene parsing the resolver consumes.
 type IntakeDryRunSummary struct {
-	Scenes                 int      `json:"scenes"`
-	DeclaredDurationS      float64  `json:"declared_duration_s"`
-	ClipScenes             int      `json:"clip_scenes"`
-	StockScenes            int      `json:"stock_scenes"`
-	VoiceoverScenes        int      `json:"voiceover_scenes"`
-	KindClipWithoutClip    []string `json:"kind_clip_without_clip"`
-	ClipAudioTracks        int      `json:"clip_audio_tracks"`
-	FinalMixOmitsClipAudio int      `json:"final_mix_omits_clip_audio"`
-	Overlays               int      `json:"overlays"`
-	RuntimeAssets          int      `json:"runtime_assets"`
-	RuntimeAudioPresent    bool     `json:"runtime_audio_present"`
-	FinalAudioDurationS    float64  `json:"final_audio_duration_s,omitempty"`
-	AudioCoverage          string   `json:"audio_coverage"`
-	CopyOnly               bool     `json:"copy_only"`
-	Warnings               []gin.H  `json:"warnings,omitempty"`
+	Scenes              int      `json:"scenes"`
+	DeclaredDurationS   float64  `json:"declared_duration_s"`
+	ClipScenes          int      `json:"clip_scenes"`
+	StockScenes         int      `json:"stock_scenes"`
+	VoiceoverScenes     int      `json:"voiceover_scenes"`
+	KindClipWithoutClip []string `json:"kind_clip_without_clip"`
+	ClipAudioTracks     int      `json:"clip_audio_tracks"`
+	// ClipAudioSelected counts clip scenes listed in
+	// runtime_audio.clip_audio_scene_ids (worker mixes their original
+	// audio with the final narration).
+	ClipAudioSelected int `json:"clip_audio_selected"`
+	// ClipAudioDropped counts clip scenes coexisting with a final mix
+	// without being selected: the worker drops their original audio by
+	// design (video-only in the output).
+	ClipAudioDropped    int     `json:"clip_audio_dropped"`
+	Overlays            int     `json:"overlays"`
+	RuntimeAssets       int     `json:"runtime_assets"`
+	RuntimeAudioPresent bool    `json:"runtime_audio_present"`
+	FinalAudioDurationS float64 `json:"final_audio_duration_s,omitempty"`
+	AudioCoverage       string  `json:"audio_coverage"`
+	CopyOnly            bool    `json:"copy_only"`
+	Warnings            []gin.H `json:"warnings,omitempty"`
 }
 
 // Audio coverage states reported by the dry-run summary.
@@ -95,7 +102,17 @@ func SummarizeWorkerPayloadForDryRun(workerPayload, rawPayload map[string]interf
 	}
 	summary.FinalAudioDurationS = dryRunFinalAudioDuration(workerPayload)
 	if summary.RuntimeAudioPresent {
-		summary.FinalMixOmitsClipAudio = summary.ClipAudioTracks
+		selected := dryRunClipAudioSelectedIDs(workerPayload)
+		for _, scene := range scenes {
+			if !dryRunHasAsset(scene["clip"]) {
+				continue
+			}
+			if id, _ := scene["scene_id"].(string); selected[strings.TrimSpace(id)] {
+				summary.ClipAudioSelected++
+			} else {
+				summary.ClipAudioDropped++
+			}
+		}
 	}
 	switch {
 	case summary.RuntimeAudioPresent && summary.FinalAudioDurationS > 0:
@@ -206,6 +223,41 @@ func dryRunFinalAudioDuration(workerPayload map[string]interface{}) float64 {
 		}
 	}
 	return 0
+}
+
+// dryRunClipAudioSelectedIDs reads runtime_audio.clip_audio_scene_ids
+// from the worker payload: scenes whose original clip audio the worker
+// mixes with the final narration. Mirrors the worker-side selection
+// without importing it.
+func dryRunClipAudioSelectedIDs(workerPayload map[string]interface{}) map[string]bool {
+	selected := make(map[string]bool)
+	if workerPayload == nil {
+		return selected
+	}
+	audio, _ := workerPayload["runtime_audio"].(map[string]interface{})
+	if audio == nil {
+		if nested, ok := workerPayload["runtime_payload"].(map[string]interface{}); ok {
+			audio, _ = nested["runtime_audio"].(map[string]interface{})
+		}
+	}
+	if audio == nil {
+		return selected
+	}
+	switch values := audio["clip_audio_scene_ids"].(type) {
+	case []interface{}:
+		for _, value := range values {
+			if id, ok := value.(string); ok && strings.TrimSpace(id) != "" {
+				selected[strings.TrimSpace(id)] = true
+			}
+		}
+	case []string:
+		for _, id := range values {
+			if strings.TrimSpace(id) != "" {
+				selected[strings.TrimSpace(id)] = true
+			}
+		}
+	}
+	return selected
 }
 
 func dryRunNumber(raw interface{}) float64 {

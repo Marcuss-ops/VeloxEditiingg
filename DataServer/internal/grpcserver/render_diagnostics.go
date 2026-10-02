@@ -22,13 +22,16 @@ type renderInputDiagnostic struct {
 	// shared/contract/scene_kind_clip.go). Non-zero here on a legacy
 	// job means testimony audio never reached the montage.
 	KindClipWithoutClip int
-	// ClipAudioOmitted counts scenes carrying a clip asset while a
-	// final runtime mix is present. The worker drops scene clip audio
-	// by design when the final mix owns the timeline, so these
-	// sources are video-only in the output. Non-zero is expected on
-	// narrated testimony jobs; it explains byte-identical renders
-	// across clip-vs-stock declaration fixes.
-	ClipAudioOmitted int
+	// ClipAudioSelected counts scenes carrying a clip asset that are
+	// listed in runtime_audio.clip_audio_scene_ids: the worker mixes
+	// their original audio with the final narration (editorial render).
+	ClipAudioSelected int
+	// ClipAudioDropped counts scenes carrying a clip asset while a
+	// final runtime mix is present WITHOUT being selected in
+	// clip_audio_scene_ids: the worker drops their original audio by
+	// design (the mix owns the timeline), so these sources stay
+	// video-only in the output.
+	ClipAudioDropped int
 	Diagnosis        string
 }
 
@@ -45,7 +48,7 @@ func diagnoseRenderInput(payload map[string]interface{}) renderInputDiagnostic {
 	if raw, ok := payload["scenes_json"].(string); ok {
 		var scenes []map[string]interface{}
 		if json.Unmarshal([]byte(raw), &scenes) == nil {
-			d.inspectScenes(scenes)
+			d.inspectScenes(scenes, clipAudioSelectedIDs(runtimeAudioOf(payload)))
 		}
 	} else if raw, ok := payload["scenes"].([]interface{}); ok {
 		scenes := make([]map[string]interface{}, 0, len(raw))
@@ -54,7 +57,7 @@ func diagnoseRenderInput(payload map[string]interface{}) renderInputDiagnostic {
 				scenes = append(scenes, scene)
 			}
 		}
-		d.inspectScenes(scenes)
+		d.inspectScenes(scenes, clipAudioSelectedIDs(runtimeAudioOf(payload)))
 	}
 	if d.DuplicateClipStockCount > 0 {
 		d.Diagnosis = "clip_and_stock_are_additive; identical_asset_will_be_rendered_twice"
@@ -70,7 +73,7 @@ func runtimeAudioPresent(payload map[string]interface{}) bool {
 	return objectPresent(runtimePayload["runtime_audio"])
 }
 
-func (d *renderInputDiagnostic) inspectScenes(scenes []map[string]interface{}) {
+func (d *renderInputDiagnostic) inspectScenes(scenes []map[string]interface{}, selected map[string]bool) {
 	d.Scenes = len(scenes)
 	for index, scene := range scenes {
 		d.DeclaredSceneDurationS += numericField(scene, "duration_seconds")
@@ -81,8 +84,13 @@ func (d *renderInputDiagnostic) inspectScenes(scenes []map[string]interface{}) {
 			}
 			continue
 		}
-		if d.RuntimeAudioPresent {
-			d.ClipAudioOmitted++
+		if !d.RuntimeAudioPresent {
+			continue
+		}
+		if id, _ := scene["scene_id"].(string); selected[strings.TrimSpace(id)] {
+			d.ClipAudioSelected++
+		} else {
+			d.ClipAudioDropped++
 		}
 		clipIdentity := mediaIdentity(clip)
 		if clipIdentity == "" {
@@ -96,6 +104,44 @@ func (d *renderInputDiagnostic) inspectScenes(scenes []map[string]interface{}) {
 			}
 		}
 	}
+}
+
+func runtimeAudioOf(payload map[string]interface{}) map[string]interface{} {
+	if audio, ok := payload["runtime_audio"].(map[string]interface{}); ok {
+		return audio
+	}
+	if nested, ok := payload["runtime_payload"].(map[string]interface{}); ok {
+		if audio, ok := nested["runtime_audio"].(map[string]interface{}); ok {
+			return audio
+		}
+	}
+	return nil
+}
+
+// clipAudioSelectedIDs reads runtime_audio.clip_audio_scene_ids: the
+// scene IDs whose original clip audio the worker mixes with the final
+// narration. Unselected clip scenes coexisting with a final mix stay
+// video-only by design.
+func clipAudioSelectedIDs(runtimeAudio map[string]interface{}) map[string]bool {
+	selected := make(map[string]bool)
+	if runtimeAudio == nil {
+		return selected
+	}
+	switch values := runtimeAudio["clip_audio_scene_ids"].(type) {
+	case []interface{}:
+		for _, value := range values {
+			if id, ok := value.(string); ok && strings.TrimSpace(id) != "" {
+				selected[strings.TrimSpace(id)] = true
+			}
+		}
+	case []string:
+		for _, id := range values {
+			if strings.TrimSpace(id) != "" {
+				selected[strings.TrimSpace(id)] = true
+			}
+		}
+	}
+	return selected
 }
 
 func mediaList(raw interface{}) []interface{} {
