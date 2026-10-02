@@ -68,6 +68,12 @@ type intakeIdentity struct {
 	// Quota is the typed M2M key the per-request quota is enforced against,
 	// or nil when M2M auth did not run.
 	Quota *m2mkeys.M2MAPIKey
+	// DryRun reports instead of submitting: the core runs the full
+	// validation chain plus the canonical projection and returns the
+	// dry-run summary, without touching the resolver. Set from
+	// ?dry_run=true by the single-job HTTP adapter; batch items never
+	// set it.
+	DryRun bool
 }
 
 // intakeUsage is the request shape the M2M audit log records for an ADMITTED
@@ -221,6 +227,27 @@ func (h *Handlers) submitJobCore(ctx context.Context, req SubmitJobRequest, iden
 			"unable to build the renderer-only payload")
 	}
 
+	// Soft-deprecated scene declarations (kind="clip" without a clip
+	// asset) are accepted until SunsetSceneKindClipEnforcement. They are
+	// computed here — after manifest/group resolution, so the check sees
+	// the final scene list — and reported on the accept path below.
+	sceneWarnings := sceneKindWarningsForPayload(submitRequestToRawPayload(&req))
+
+	// Dry-run validation: report what the worker would compile from the
+	// projected payload without creating forwardings, jobs, or tasks.
+	// Side-effect free by construction: no resolver call, no accept
+	// telemetry, no usage stats (Usage stays nil).
+	if identity.DryRun {
+		summary := SummarizeWorkerPayloadForDryRun(canonical.WorkerPayload, submitRequestToRawPayload(&req))
+		return intakeResponse{Status: http.StatusOK, Body: gin.H{
+			"ok":              true,
+			"dry_run":         true,
+			"accepted_from":   "api_v1_jobs",
+			"idempotency_key": req.IdempotencyKey,
+			"summary":         summary,
+		}}
+	}
+
 	// Delegate to the same resolver used by CreatorPush (and, through it, to
 	// creatorflow.CanonicalJobSubmitter — the single production Job+Task path).
 	forwarded, err := h.resolveCompletedPayload(
@@ -254,6 +281,9 @@ func (h *Handlers) submitJobCore(ctx context.Context, req SubmitJobRequest, iden
 	response["ok"] = true
 	response["accepted_from"] = "api_v1_jobs"
 	response["idempotency_key"] = req.IdempotencyKey
+	if len(sceneWarnings) > 0 {
+		response["warnings"] = sceneWarnings
+	}
 	if _, owned := response["dispatch_status"]; !owned {
 		response["dispatch_status"] = "queued_for_workers"
 	}
@@ -264,6 +294,7 @@ func (h *Handlers) submitJobCore(ctx context.Context, req SubmitJobRequest, iden
 	}
 
 	h.intakeSinkOrNoop().IncAccepted(intakeSurfaceAPIv1Jobs)
+	reportSceneKindWarnings(warningPathForIntakeSource(source), req.IdempotencyKey, sceneWarnings)
 	jobID, _ := response["job_id"].(string)
 	project := intakeProjectLabel(req, canonical.WorkerPayload)
 	correlationID := creatorflow.CorrelationID(canonical.SourceProvider, canonical.SourceJobID, canonical.TargetExecutorID)

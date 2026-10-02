@@ -60,6 +60,9 @@ func (h *Handlers) SubmitJob() gin.HandlerFunc {
 			// its own label (see batchIntakeIdentity).
 			IntakeSource: creatorflow.IntakeSourceCanonical,
 			Quota:        KeyFromContext(c),
+			// ?dry_run=true reports the projected worker payload
+			// without creating anything (see submitJobCore).
+			DryRun: c.Query("dry_run") == "true",
 		})
 
 		// Headers first: a 429 from the publishing-target resolver carries

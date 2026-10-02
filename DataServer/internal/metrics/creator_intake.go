@@ -72,6 +72,30 @@ func RecordIntakeSource(source string) {
 	pipelineIntakeSourceAccepted.Inc([]string{source}, 1)
 }
 
+// pipelineIntakeSceneWarnings is the typed CounterFamily backing the
+// catalog entry `pipeline.intake_scene_warnings_total`. It counts accepted
+// payloads that carried a soft-deprecated scene declaration (currently
+// only reason="kind_clip_without_clip_asset": a scene declared kind="clip"
+// without a clip asset, compiled by the worker as a mute stock background —
+// see shared/contract/scene_kind_clip.go). Label set is bounded to
+// {"path","reason"}: path is the intake surface (creator_push,
+// api_v1_jobs, batch), reason is the anomaly code. Per-surface migration
+// readiness is read off this series: when it is provably zero over the
+// chosen window, the sunset hard-rejection can land.
+var pipelineIntakeSceneWarnings = NewCounterFamily(
+	"pipeline_intake_scene_warnings_total",
+	"Accepted payloads carrying a soft-deprecated scene declaration, split by intake path and anomaly reason.",
+	[]string{"path", "reason"},
+)
+
+// RecordIntakeSceneWarning increments the scene-warning counter for one
+// accepted payload. Callers pass the number of anomalous scenes only via
+// repeated calls (one per payload keeps the series bounded); the count of
+// affected scenes belongs in structured logs, not in metric labels.
+func RecordIntakeSceneWarning(path, reason string) {
+	pipelineIntakeSceneWarnings.Inc([]string{path, reason}, 1)
+}
+
 // packageIntakeFamilies returns the package-level intake families that
 // must be registered on every Collector so the /metrics endpoint exposes
 // them. Both families (creator-intake path + intake-source) are
@@ -81,6 +105,7 @@ func packageIntakeFamilies() []*Family {
 	return []*Family{
 		pipelineCreatorIntakeAccepted,
 		pipelineIntakeSourceAccepted,
+		pipelineIntakeSceneWarnings,
 	}
 }
 

@@ -16,6 +16,7 @@ func TestIntakeSourceFamily_RegisteredOnCollector(t *testing.T) {
 	for _, want := range []string{
 		"# TYPE pipeline_intake_source_accepted_total counter",
 		"# TYPE pipeline_creator_intake_accepted_total counter",
+		"# TYPE pipeline_intake_scene_warnings_total counter",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in collector exposition:\n%s", want, out)
@@ -68,4 +69,24 @@ func TestRecordIntakeSource_PackageLevel(t *testing.T) {
 // is satisfied by IntakeSourceSink via IncAccepted(string)).
 func TestIntakeSourceSink_SatisfiesRecorderContract(t *testing.T) {
 	var _ interface{ IncAccepted(string) } = NewIntakeSourceSink()
+}
+
+// TestRecordIntakeSceneWarning_BoundedLabels verifies the soft-deprecation
+// warning counter records per intake path with the anomaly reason, keeping
+// high-cardinality scene/job identifiers out of the label set.
+func TestRecordIntakeSceneWarning_BoundedLabels(t *testing.T) {
+	reg := NewRegistry()
+	_ = NewCollector(reg)
+	RecordIntakeSceneWarning("creator_push", "kind_clip_without_clip_asset")
+	RecordIntakeSceneWarning("api_v1_jobs", "kind_clip_without_clip_asset")
+
+	out := dumpRegistryAll(t, reg)
+	for _, want := range []string{
+		`pipeline_intake_scene_warnings_total{path="creator_push",reason="kind_clip_without_clip_asset"} 1`,
+		`pipeline_intake_scene_warnings_total{path="api_v1_jobs",reason="kind_clip_without_clip_asset"} 1`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
 }

@@ -385,6 +385,29 @@ func (h *Handlers) CreatorPush() gin.HandlerFunc {
 			return
 		}
 
+		// Soft-deprecated scene declarations (kind="clip" without a clip
+		// asset) are accepted until SunsetSceneKindClipEnforcement, but
+		// recorded loudly: metric + WARN log + accept-envelope warnings
+		// so the generator can migrate before the hard rejection lands.
+		sceneWarnings := sceneKindWarningsForPayload(req.Payload)
+		reportSceneKindWarnings("creator_push", normalized.SourceJobID, sceneWarnings)
+
+		// Dry-run validation: run the exact parse + worker projection
+		// the real intake would run and report what the worker would
+		// compile — without creating forwardings, jobs, or tasks.
+		if c.Query("dry_run") == "true" {
+			summary := SummarizeWorkerPayloadForDryRun(normalized.WorkerPayload, req.Payload)
+			c.JSON(http.StatusOK, gin.H{
+				"ok":                 true,
+				"dry_run":            true,
+				"source_provider":    normalized.SourceProvider,
+				"source_job_id":      normalized.SourceJobID,
+				"target_executor_id": normalized.TargetExecutorID,
+				"summary":            summary,
+			})
+			return
+		}
+
 		forwarded, err := h.resolveCompletedPayload(
 			c.Request.Context(),
 			normalized.SourceProvider,
@@ -424,6 +447,9 @@ func (h *Handlers) CreatorPush() gin.HandlerFunc {
 		response["source_provider"] = normalized.SourceProvider
 		response["source_job_id"] = normalized.SourceJobID
 		response["target_executor_id"] = normalized.TargetExecutorID
+		if len(sceneWarnings) > 0 {
+			response["warnings"] = sceneWarnings
+		}
 		if _, owned := response["dispatch_status"]; !owned {
 			response["dispatch_status"] = "queued_for_workers"
 		}

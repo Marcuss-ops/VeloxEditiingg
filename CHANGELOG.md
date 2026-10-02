@@ -1,5 +1,28 @@
 ## [Unreleased] - 2026-09-28
 
+### Added — intake scene-kind soft-deprecation + dry-run validation
+
+- Scenes declared `kind: "clip"` without a `clip` asset (compiled by the
+  worker as mute stock backgrounds — the Isabelle Caracristi
+  `job_e2adca259c034c1e` testimony regression) are now reported loudly
+  instead of rendering silently: `pipeline_intake_scene_warnings_total`
+  counter, WARN placement log, and a `warnings[]` entry
+  (`code: kind_clip_without_clip_asset`, `sunset: 2026-11-15`) in the
+  202 envelopes of `POST /api/v1/creator/jobs` and `POST /api/v1/jobs`.
+  Hard rejection lands after the sunset date.
+- `?dry_run=true` on both intake endpoints runs the exact parse +
+  worker projection and returns the render summary (scene counts,
+  clip/stock split, overlays, runtime assets/audio, final-mix vs
+  timeline coverage) without creating forwardings, jobs, or tasks.
+- `[RENDER_INPUT_DIAGNOSTIC]` placement lines now also report
+  `kind_clip_without_clip=` and `clip_audio_omitted=` (clip sources
+  dropped by design under a final narration mix).
+- New ops helper `scripts/ops/diff-job-payloads.sh <job-a> <job-b>` for
+  semantic TaskSpec diffs; scene contract documented in
+  `docs/CREATOR-PUSH.md` ("Scene declaration contract").
+- Verification: `go vet ./...` + `go build ./...` + `go test -count=1`
+  on `shared/contract`, `DataServer/internal/{metrics,handlers/server/pipeline,grpcserver}`.
+
 ### Fixed — Drive project folders take the video title
 
 - Drive relay project subfolders were created with the opaque artifact id
