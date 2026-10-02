@@ -16,7 +16,7 @@ import (
 // would compile — without creating forwardings, jobs, or tasks.
 //
 // It exists so a creator can catch declaration bugs (kind="clip" without
-// a clip asset, final-audio shorter than the timeline) in one second
+// a clip asset, or audio tracks that cannot cover the timeline) in one second
 // instead of after a full render. Every number here is derived from the
 // same canonical scene parsing the resolver consumes.
 type IntakeDryRunSummary struct {
@@ -46,12 +46,13 @@ type IntakeDryRunSummary struct {
 
 // Audio coverage states reported by the dry-run summary.
 const (
-	// DryRunAudioOK: a final mix is present and covers the timeline
+	// DryRunAudioOK: the assembled audio tracks cover the timeline
 	// (the packet-mux gate needs audio >= timeline - 0.05s).
 	DryRunAudioOK = "ok"
-	// DryRunAudioShort: a final mix is present but shorter than the
+	// DryRunAudioShort: an explicitly complete final mix is shorter than the
 	// timeline — the worker would fail closed at the mux gate
-	// (audio_duration_mismatch). Fix before submitting.
+	// (audio_duration_mismatch). A sliced narration source is assessed together
+	// with selected clip audio below; it is not itself a complete final mix.
 	DryRunAudioShort = "short_final_mix_mux_would_fail"
 	// DryRunAudioMixedTracks: no final mix, but scene clip/voiceover
 	// tracks exist — the worker mixes them to its longest track
@@ -114,16 +115,24 @@ func SummarizeWorkerPayloadForDryRun(workerPayload, rawPayload map[string]interf
 			}
 		}
 	}
+	completeFinalMix := dryRunHasCompleteFinalMix(workerPayload)
+	assembledCoverageS := summary.FinalAudioDurationS
+	if !completeFinalMix && summary.FinalAudioDurationS > 0 {
+		assembledCoverageS += dryRunSelectedClipAudioDuration(scenes, dryRunClipAudioSelectedIDs(workerPayload))
+		if dryRunLoopedMusicPresent(workerPayload) {
+			assembledCoverageS = summary.DeclaredDurationS
+		}
+	}
 	switch {
 	case summary.RuntimeAudioPresent && summary.FinalAudioDurationS > 0:
-		if summary.FinalAudioDurationS+0.05 >= summary.DeclaredDurationS {
+		if assembledCoverageS+0.05 >= summary.DeclaredDurationS {
 			summary.AudioCoverage = DryRunAudioOK
 		} else {
 			summary.AudioCoverage = DryRunAudioShort
 			summary.Warnings = append(summary.Warnings, gin.H{
 				"code": "final_audio_shorter_than_timeline",
-				"detail": fmt.Sprintf("final mix %.2fs is shorter than the %.2fs timeline; the worker mux gate would fail closed (audio_duration_mismatch).",
-					summary.FinalAudioDurationS, summary.DeclaredDurationS),
+				"detail": fmt.Sprintf("assembled audio covers %.2fs of the %.2fs timeline; the worker mux gate would fail closed (audio_duration_mismatch).",
+					assembledCoverageS, summary.DeclaredDurationS),
 			})
 		}
 	case summary.ClipAudioTracks+summary.VoiceoverScenes > 0:
@@ -139,6 +148,88 @@ func SummarizeWorkerPayloadForDryRun(workerPayload, rawPayload map[string]interf
 		summary.Warnings = append(summary.Warnings, kindWarnings...)
 	}
 	return summary
+}
+
+func dryRunHasCompleteFinalMix(workerPayload map[string]interface{}) bool {
+	audio, _ := workerPayload["runtime_audio"].(map[string]interface{})
+	if audio == nil {
+		if nested, ok := workerPayload["runtime_payload"].(map[string]interface{}); ok {
+			audio, _ = nested["runtime_audio"].(map[string]interface{})
+		}
+	}
+	// voiceover_asset_id names the narration source, which is deliberately
+	// shorter than the video timeline when clip scenes pause it. The runtime
+	// asset can still carry final_mix=true for legacy compatibility; that flag
+	// does not make this sliced narration a complete timeline mix.
+	if audio != nil && (strings.TrimSpace(stringField(audio, "voiceover_asset_id")) != "" ||
+		strings.TrimSpace(stringField(audio, "tts_asset_id")) != "" ||
+		strings.TrimSpace(stringField(audio, "voice_asset_id")) != "") {
+		return false
+	}
+	assets, ok := workerPayload["runtime_assets"].([]interface{})
+	if !ok {
+		return false
+	}
+	for _, item := range assets {
+		asset, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		finalMix, _ := asset["final_mix"].(bool)
+		if finalMix {
+			return true
+		}
+	}
+	return false
+}
+
+func dryRunSelectedClipAudioDuration(scenes []map[string]interface{}, selected map[string]bool) float64 {
+	var duration float64
+	for _, scene := range scenes {
+		id, _ := scene["scene_id"].(string)
+		if !selected[strings.TrimSpace(id)] {
+			continue
+		}
+		clip, _ := scene["clip"].(map[string]interface{})
+		clipDuration := dryRunNumber(clip["duration_ms"])
+		if clipDuration <= 0 {
+			clipDuration = dryRunNumber(scene["duration_seconds"]) * 1000
+		}
+		if clipDuration > 0 {
+			duration += clipDuration / 1000
+		}
+	}
+	return duration
+}
+
+func dryRunLoopedMusicPresent(workerPayload map[string]interface{}) bool {
+	audio, _ := workerPayload["runtime_audio"].(map[string]interface{})
+	if audio == nil {
+		if nested, ok := workerPayload["runtime_payload"].(map[string]interface{}); ok {
+			audio, _ = nested["runtime_audio"].(map[string]interface{})
+		}
+	}
+	if audio == nil || !boolField(audio, "music_loop") {
+		return false
+	}
+	musicID := strings.TrimSpace(stringField(audio, "music_asset_id"))
+	if musicID == "" {
+		musicID = strings.TrimSpace(stringField(audio, "bgm_asset_id"))
+	}
+	if musicID == "" {
+		return false
+	}
+	assets, ok := workerPayload["runtime_assets"].([]interface{})
+	if !ok {
+		return false
+	}
+	for _, item := range assets {
+		asset, ok := item.(map[string]interface{})
+		if ok && strings.TrimSpace(stringField(asset, "asset_id")) == musicID && dryRunHasAsset(asset) {
+			return true
+		}
+	}
+	return false
 }
 
 // dryRunScenes decodes the worker payload scene array in either stored
