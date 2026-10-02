@@ -30,7 +30,11 @@ std::string optimizedAudioFilter(
     if (compiled.primary_indices.size() == 1) {
         const auto index = compiled.primary_indices.front();
         const auto* track = tracks[index].second;
-        filter << "[" << index << ":a]atrim=duration=" << track->duration_seconds
+        filter << "[" << index << ":a]atrim=";
+        if (track->source_in_seconds > 0.0) {
+            filter << "start=" << track->source_in_seconds << ":";
+        }
+        filter << "duration=" << track->duration_seconds
                << ",asetpts=PTS-STARTPTS,volume=" << track->volume << "[aout]";
         return filter.str();
     }
@@ -38,7 +42,11 @@ std::string optimizedAudioFilter(
         const auto index = compiled.primary_indices[position];
         const auto* track = tracks[index].second;
         if (position > 0) filter << ";";
-        filter << "[" << index << ":a]atrim=duration=" << track->duration_seconds
+        filter << "[" << index << ":a]atrim=";
+        if (track->source_in_seconds > 0.0) {
+            filter << "start=" << track->source_in_seconds << ":";
+        }
+        filter << "duration=" << track->duration_seconds
                << ",asetpts=PTS-STARTPTS,volume=" << track->volume
                << "[p" << position << "]";
     }
@@ -175,7 +183,8 @@ bool RenderEngine::finalizeAudioTracks(
         return false;
     }
 
-    if (downloaded_tracks.size() == 1 && !downloaded_tracks[0].second->loop) {
+    if (downloaded_tracks.size() == 1 && !downloaded_tracks[0].second->loop &&
+        downloaded_tracks[0].second->source_in_seconds <= 0.0) {
         const fs::path final_muxed = file::makePartialPath(out_path);
         track_partial(final_muxed);
         const double volume = downloaded_tracks[0].second->volume;
@@ -245,8 +254,14 @@ bool RenderEngine::finalizeAudioTracks(
         const double track_duration = declared_duration > 0.0
             ? declared_duration
             : (track->loop ? duration_seconds_.load() : 0.0);
-        if (track_duration > 0.0) {
-            audio_filter << "atrim=duration=" << track_duration
+        if (track_duration > 0.0 || track->source_in_seconds > 0.0) {
+            audio_filter << "atrim=";
+            if (track->source_in_seconds > 0.0) {
+                audio_filter << "start=" << track->source_in_seconds;
+                if (track_duration > 0.0) audio_filter << ":";
+            }
+            if (track_duration > 0.0) audio_filter << "duration=" << track_duration;
+            audio_filter
                          << ",asetpts=PTS-STARTPTS";
         } else {
             audio_filter << "asetpts=PTS-STARTPTS";
