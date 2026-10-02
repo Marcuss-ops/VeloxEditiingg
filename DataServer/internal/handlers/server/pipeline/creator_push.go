@@ -384,6 +384,16 @@ func (h *Handlers) CreatorPush() gin.HandlerFunc {
 			creatorPushError(c, http.StatusUnprocessableEntity, "invalid_payload", err.Error(), nil)
 			return
 		}
+		if collisions := validateWorkerPayloadOverlayClipCollisions(normalized.WorkerPayload); len(collisions) > 0 {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{
+				"ok":         false,
+				"error":      "invalid_payload",
+				"error_code": "invalid_payload",
+				"message":    "replace overlays must not cover clip scenes",
+				"details":    collisions,
+			})
+			return
+		}
 
 		// Soft-deprecated scene declarations (kind="clip" without a clip
 		// asset) are accepted until SunsetSceneKindClipEnforcement, but

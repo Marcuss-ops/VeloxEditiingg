@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
@@ -158,6 +159,35 @@ func validateSubmitOverlayClipCollisions(req SubmitJobRequest) []gin.H {
 		}
 	}
 	return details
+}
+
+// validateWorkerPayloadOverlayClipCollisions applies the same fail-closed
+// visibility rule to Creator Push, whose request enters as an opaque payload
+// map rather than SubmitJobRequest. The check runs on the normalized worker
+// projection so it sees the exact scenes and replacement windows the worker
+// will compile.
+func validateWorkerPayloadOverlayClipCollisions(workerPayload map[string]interface{}) []gin.H {
+	if workerPayload == nil {
+		return nil
+	}
+	req := SubmitJobRequest{}
+	if encoded, ok := workerPayload["scenes_json"].(string); ok && strings.TrimSpace(encoded) != "" {
+		if err := json.Unmarshal([]byte(encoded), &req.Scenes); err != nil {
+			return []gin.H{{"path": "scenes_json", "issue": "invalid"}}
+		}
+	} else if rawScenes, ok := workerPayload["scenes"]; ok {
+		encoded, err := json.Marshal(rawScenes)
+		if err != nil || json.Unmarshal(encoded, &req.Scenes) != nil {
+			return []gin.H{{"path": "scenes", "issue": "invalid"}}
+		}
+	}
+	if rawOverlays, ok := workerPayload["overlays"]; ok {
+		encoded, err := json.Marshal(rawOverlays)
+		if err != nil || json.Unmarshal(encoded, &req.Overlays) != nil {
+			return []gin.H{{"path": "overlays", "issue": "invalid"}}
+		}
+	}
+	return validateSubmitOverlayClipCollisions(req)
 }
 
 func normalizeSubmitOverlayWindow(overlay *SubmitOverlay) error {
