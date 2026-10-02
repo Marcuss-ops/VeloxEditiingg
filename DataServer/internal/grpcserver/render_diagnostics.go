@@ -16,7 +16,20 @@ type renderInputDiagnostic struct {
 	Overlays                int
 	CopyOnly                bool
 	RuntimeAssetsPending    bool
-	Diagnosis               string
+	// KindClipWithoutClip counts scenes declared kind="clip" without a
+	// clip asset. The worker compiles them as mute stock backgrounds
+	// (soft-deprecated at intake since 2026-10-02; see
+	// shared/contract/scene_kind_clip.go). Non-zero here on a legacy
+	// job means testimony audio never reached the montage.
+	KindClipWithoutClip int
+	// ClipAudioOmitted counts scenes carrying a clip asset while a
+	// final runtime mix is present. The worker drops scene clip audio
+	// by design when the final mix owns the timeline, so these
+	// sources are video-only in the output. Non-zero is expected on
+	// narrated testimony jobs; it explains byte-identical renders
+	// across clip-vs-stock declaration fixes.
+	ClipAudioOmitted int
+	Diagnosis        string
 }
 
 // diagnoseRenderInput summarizes renderer-relevant fields without logging
@@ -63,7 +76,13 @@ func (d *renderInputDiagnostic) inspectScenes(scenes []map[string]interface{}) {
 		d.DeclaredSceneDurationS += numericField(scene, "duration_seconds")
 		clip := scene["clip"]
 		if !objectPresent(clip) {
+			if kind, _ := scene["kind"].(string); strings.EqualFold(strings.TrimSpace(kind), "clip") {
+				d.KindClipWithoutClip++
+			}
 			continue
+		}
+		if d.RuntimeAudioPresent {
+			d.ClipAudioOmitted++
 		}
 		clipIdentity := mediaIdentity(clip)
 		if clipIdentity == "" {
