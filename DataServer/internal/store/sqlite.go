@@ -183,7 +183,7 @@ func NewSQLiteStoreFromHandle(handle *database.Handle, path string, migrateOnSta
 
 	s := &SQLiteStore{db: db, path: path}
 	s.forwarding = forwardingstore.NewSQLiteForwardingStore(db).WithJobTaskCreator(NewAtomicJobTaskCreator(s))
-	s.delivery = deliverystore.NewSQLiteDeliveryStore(db).WithParentJobFinalizer(s)
+	s.delivery = deliverystore.NewSQLiteDeliveryStore(db).WithParentJobFinalizer(s).WithProviderTimingSeeder(s)
 
 	if !migrateOnStart {
 		// Forward-only tool mode: an external tool owns the schema.
@@ -344,7 +344,7 @@ func (s *SQLiteStore) Delivery() *deliverystore.SQLiteDeliveryStore {
 // methods never nil-panic.
 func (s *SQLiteStore) deliveryStore() *deliverystore.SQLiteDeliveryStore {
 	if s.delivery == nil && s.db != nil {
-		s.delivery = deliverystore.NewSQLiteDeliveryStore(s.db).WithParentJobFinalizer(s)
+		s.delivery = deliverystore.NewSQLiteDeliveryStore(s.db).WithParentJobFinalizer(s).WithProviderTimingSeeder(s)
 	}
 	return s.delivery
 }

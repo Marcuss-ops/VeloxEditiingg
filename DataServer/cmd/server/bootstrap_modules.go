@@ -523,7 +523,7 @@ func buildModules(cfg *config.Config, p *persistenceDeps, j *jobsDeps, w *worker
 	var deliveryRunner *deliveries.DeliveryRunner
 	var driveRelay *deliveryProviders.DriveStreamRelay
 	if driveMod != nil && driveMod.Service() != nil {
-		driveRelay, err = deliveryProviders.NewDriveStreamRelay(p.SQLite.DB(), artifactsstore.NewSQLiteUploadRepository(p.SQLite.DB()), p.BlobStore, driveMod.Service(), 8*1024*1024)
+		driveRelay, err = deliveryProviders.NewDriveStreamRelay(store.NewDeliveryRelaySessionStore(p.SQLite.DB()), artifactsstore.NewSQLiteUploadRepository(p.SQLite.DB()), p.BlobStore, driveMod.Service(), 8*1024*1024)
 		if err != nil {
 			logServerf(context.Background(), logging.LevelWarn, logging.CodeServerBootstrapWarn, "[BOOTSTRAP] Drive stream relay unavailable; delivery runner will use verified artifact uploads: %v", err)
 			driveRelay = nil

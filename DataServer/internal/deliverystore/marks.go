@@ -3,13 +3,25 @@ package deliverystore
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"time"
 
 	"velox-server/internal/statemachine"
 	"velox-server/internal/storecore"
 )
+
+// ProviderTimingSeeder is the cross-domain injection point for the
+// delivery-attempts timing ledger. The delivery_attempts read side lives in
+// the store package; the deliverystore leaf must not couple to it (see the
+// package comment and the store ↔ leaf cycle note in deliverystore.go). The
+// transaction is transported as the generic T (instantiated with any) so the
+// leaf keeps zero direct SQL-driver coupling beyond its baseline; the
+// store-side implementation asserts the concrete transaction type. The
+// seeder runs inside the SAME transaction as the job_deliveries CAS, so
+// timing evidence and the transition stay atomic.
+type ProviderTimingSeeder[T any] interface {
+	SeedDeliveryProviderTiming(ctx context.Context, tx T, deliveryID string, uploadNetworkMS, uploadLocalBufferMS int64) error
+}
 
 // ── Typed terminal/retry marks (PR4e) ───────────────────────────────────────
 //
@@ -31,6 +43,10 @@ func (w *SQLiteDeliveryStore) MarkDeliverySucceededWithTiming(ctx context.Contex
 	return w.markDeliverySucceeded(ctx, deliveryID, runnerID, leaseID, remoteID, remoteURL, uploadNetworkMS, uploadLocalBufferMS)
 }
 
+// markDeliverySucceeded performs the SUCCEEDED transition. Positive timing
+// values additionally seed the provider-timing evidence into the latest
+// delivery attempt inside the same transaction (fail closed when the seeder
+// is not wired).
 func (w *SQLiteDeliveryStore) markDeliverySucceeded(ctx context.Context, deliveryID, runnerID, leaseID, remoteID, remoteURL string, uploadNetworkMS, uploadLocalBufferMS int64) error {
 	if err := statemachine.DefaultRegistry().Validate(statemachine.DomainDelivery, "RUNNING", "SUCCEEDED", ""); err != nil {
 		return fmt.Errorf("store: MarkDeliverySucceeded: %w", err)
@@ -66,7 +82,7 @@ func (w *SQLiteDeliveryStore) markDeliverySucceeded(ctx context.Context, deliver
 		}
 
 		if uploadNetworkMS > 0 || uploadLocalBufferMS > 0 {
-			if err := persistLatestProviderTiming(ctx, tx, deliveryID, uploadNetworkMS, uploadLocalBufferMS); err != nil {
+			if err := w.seedProviderTiming(ctx, tx, deliveryID, uploadNetworkMS, uploadLocalBufferMS); err != nil {
 				return err
 			}
 		}
@@ -77,38 +93,16 @@ func (w *SQLiteDeliveryStore) markDeliverySucceeded(ctx context.Context, deliver
 	}))
 }
 
-func persistLatestProviderTiming(ctx context.Context, tx *sql.Tx, deliveryID string, networkMS, localMS int64) error {
-	var attemptID int64
-	var raw string
-	err := tx.QueryRowContext(ctx,
-		`SELECT id, COALESCE(result, '{}') FROM delivery_attempts WHERE delivery_id=? ORDER BY id DESC LIMIT 1`,
-		deliveryID).Scan(&attemptID, &raw)
-	if err != nil {
-		return fmt.Errorf("load latest delivery attempt timing result: %w", err)
+// seedProviderTiming delegates the provider-timing evidence write to the
+// injected store-side seeder, keeping it inside the caller's transaction. It
+// fails closed when the seeder is not configured, mirroring the parent-job
+// finalizer contract: silently dropping the evidence would produce success
+// reports without their timing ledger.
+func (w *SQLiteDeliveryStore) seedProviderTiming(ctx context.Context, tx any, deliveryID string, networkMS, bufferMS int64) error {
+	if w == nil || w.timingSeeder == nil {
+		return fmt.Errorf("deliverystore: provider timing seeder not configured (delivery=%s)", deliveryID)
 	}
-	result := make(map[string]json.RawMessage)
-	if json.Unmarshal([]byte(raw), &result) != nil {
-		result = make(map[string]json.RawMessage)
-	}
-	if result == nil {
-		result = make(map[string]json.RawMessage)
-	}
-	meta, err := json.Marshal(map[string]int64{
-		"upload_network_ms":      networkMS,
-		"upload_local_buffer_ms": localMS,
-	})
-	if err != nil {
-		return fmt.Errorf("marshal delivery provider timing: %w", err)
-	}
-	result["provider_meta"] = meta
-	encoded, err := json.Marshal(result)
-	if err != nil {
-		return fmt.Errorf("marshal delivery attempt result: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE delivery_attempts SET result=? WHERE id=? AND delivery_id=?`, string(encoded), attemptID, deliveryID); err != nil {
-		return fmt.Errorf("persist delivery provider timing: %w", err)
-	}
-	return nil
+	return w.timingSeeder.SeedDeliveryProviderTiming(ctx, tx, deliveryID, networkMS, bufferMS)
 }
 
 // MarkDeliveryRetry moves a RUNNING delivery to RETRY_WAIT with the next

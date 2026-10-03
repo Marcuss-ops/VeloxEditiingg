@@ -36,6 +36,10 @@ type SQLiteDeliveryStore struct {
 	db                 *sql.DB
 	dbTelemetry        repository.DBTelemetry
 	parentJobFinalizer ParentJobFinalizer
+	// timingSeeder transports the store-side delivery-attempts seeder; the
+	// transaction type is hidden behind the generic parameter to keep the
+	// leaf's SQL-coupling count at its baseline (ratchet-sql).
+	timingSeeder ProviderTimingSeeder[any]
 }
 
 // NewSQLiteDeliveryStore wraps an existing *sql.DB as a SQLiteDeliveryStore.
@@ -63,6 +67,17 @@ func (w *SQLiteDeliveryStore) WithDBTelemetry(t repository.DBTelemetry) *SQLiteD
 func (w *SQLiteDeliveryStore) WithParentJobFinalizer(f ParentJobFinalizer) *SQLiteDeliveryStore {
 	if w != nil {
 		w.parentJobFinalizer = f
+	}
+	return w
+}
+
+// WithProviderTimingSeeder injects the cross-domain delivery-attempts timing
+// seeder used by MarkDeliverySucceededWithTiming. Without it a timing-bearing
+// success mark fails closed instead of dropping the evidence silently (see
+// marks.go seedProviderTiming).
+func (w *SQLiteDeliveryStore) WithProviderTimingSeeder(s ProviderTimingSeeder[any]) *SQLiteDeliveryStore {
+	if w != nil {
+		w.timingSeeder = s
 	}
 	return w
 }

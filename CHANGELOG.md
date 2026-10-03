@@ -1,5 +1,32 @@
 ## [Unreleased] - 2026-09-28
 
+### Fixed — SQL ownership ratchet green again (Drive relay + delivery timing)
+
+- `main` was red on `scripts/ci/ratchet-sql.sh`: the Drive stream relay
+  (`drive_stream_relay.go`) carried 12 direct SQL statements outside the
+  canonical store gateway, and `deliverystore/marks.go` had grown to 15
+  violations against its baseline of 12.
+- New store leaf `internal/store/deliveryrelay` now owns the entire
+  `drive_relay_sessions` persistence (sessions CRUD, destination lookup,
+  CAS in-flight claim, verify/abort, verified-evidence read) plus fixture
+  tests on a real SQLite database; `drive_stream_relay.go` keeps only
+  chunking/resumable-upload policy and holds **zero** SQL coupling.
+- `MarkDeliverySucceededWithTiming` no longer writes `delivery_attempts`
+  inline: the write moved to `SQLiteStore.SeedDeliveryProviderTiming`
+  (store side) and is injected into the leaf through the new generic
+  `ProviderTimingSeeder[T]` seam (`deliverystore` cannot import `store`
+  because store package tests import the leaf). The seeder runs inside the
+  SAME transaction as the `job_deliveries` CAS — timing evidence and the
+  transition stay atomic — and fails closed when not wired. Byte-identical
+  JSON result mutation.
+- The SQL-ownership ratchet is green again: 60 → 59 files with violations
+  (the new relay file never entered the baseline); no baseline entry was
+  relaxed and no `--update` regeneration was used.
+- Verification: `ratchet-sql.sh` OK, `check-architecture.sh` OK,
+  `check-secrets.sh` OK, and the full AGENTS.md §1 gate
+  (`scripts/ci/pre-removal-verify.sh`: vet/build/test full-module)
+  green, including the new `deliveryrelay` tests.
+
 ### Added — intake scene-kind soft-deprecation + dry-run validation
 
 - Scenes declared `kind: "clip"` without a `clip` asset (compiled by the
