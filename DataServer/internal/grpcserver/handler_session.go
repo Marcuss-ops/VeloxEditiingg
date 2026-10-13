@@ -202,6 +202,22 @@ func (s *workerSession) placementSnapshot(workerID string) placement.WorkerSnaps
 	}
 }
 
+// placementSnapshot combines the live gRPC session view with operator-owned
+// registry gates. A reconnect creates a fresh session, so session-local drain
+// bits alone are insufficient to enforce an admin drain across reconnects.
+func (h *Handler) placementSnapshot(ctx context.Context, workerID string, sess *workerSession) placement.WorkerSnapshot {
+	if sess == nil {
+		return placement.WorkerSnapshot{WorkerID: workerID}
+	}
+	snapshot := sess.placementSnapshot(workerID)
+	if h != nil && h.registry != nil {
+		if registered := h.registry.GetWorker(ctx, workerID); registered != nil {
+			snapshot.Draining = snapshot.Draining || registered.Drain || registered.Resuming || registered.Quarantined
+		}
+	}
+	return snapshot
+}
+
 // signalPlacement wakes the session's push placer after a lifecycle change
 // may have made a READY task dispatchable. The wake-up is coalesced and does
 // not perform placement inline, preserving the single claimMu-serialized

@@ -36,7 +36,7 @@ func (h *Handler) warmPlacementSnapshotsForExecutor(required placement.ExecutorK
 		if sess == nil {
 			continue
 		}
-		snapshot := sess.placementSnapshot(sess.workerID)
+		snapshot := h.placementSnapshot(context.Background(), sess.workerID, sess)
 		if required.Valid() && !snapshot.HasExecutor(required) {
 			continue
 		}

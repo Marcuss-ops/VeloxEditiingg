@@ -112,7 +112,7 @@ func (h *Handler) sendPushTaskOffer(ctx context.Context, workerID string) {
 		sess.pendingTaskOfferAt = time.Time{}
 	}
 
-	snapshot := sess.placementSnapshot(workerID)
+	snapshot := h.placementSnapshot(ctx, workerID, sess)
 	if h.dbStore == nil {
 		logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCPlacementFailed, "[PLACEMENT] authoritative lease store unavailable worker=%s", workerID)
 		return

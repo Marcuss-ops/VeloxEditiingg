@@ -210,7 +210,7 @@ func (h *Handler) refreshFutureAssetPlan(ctx context.Context, workerID, currentJ
 	if sess == nil {
 		return
 	}
-	snapshot := sess.placementSnapshot(workerID)
+	snapshot := h.placementSnapshot(ctx, workerID, sess)
 	snapshot.ActiveJobs = 0 // future reservations do not consume current slots
 	warmSnapshots := h.warmPlacementSnapshots()
 	prefetchLimit := h.config.FutureAssetPrefetchHorizon
