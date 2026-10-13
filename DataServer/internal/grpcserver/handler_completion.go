@@ -2,6 +2,7 @@ package grpcserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"time"
@@ -136,25 +137,36 @@ func (h *Handler) handleTaskOutputDeclared(workerID string, msg *pb.TaskOutputDe
 		if !exists || b.UploadID == "" || b.ArtifactID == "" {
 			if earlyID := m.EarlyUploadID; earlyID != "" {
 				session, getErr := h.chunkedUploadSvc.GetUpload(ctx, earlyID)
-				if getErr != nil || session == nil || session.JobID != msg.GetJobId() || session.WorkerID != workerID || session.LeaseID != msg.GetLeaseId() || session.AttemptNumber != int(msg.GetAttemptNumber()) {
-					logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCCompletionRejected, "[GRPC] TaskOutputDeclared task=%s early upload=%s identity mismatch", msg.GetTaskId(), earlyID)
+				if errors.Is(getErr, artifacts.ErrUploadNotFound) || (getErr == nil && session == nil) {
+					// A progressive upload can fail and abort its own session just
+					// before TaskOutputDeclared arrives. In that case its ID is stale;
+					// fall through and create the normal upload session below so the
+					// worker receives a usable plan instead of waiting until timeout.
+					logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCCompletionRejected, "[GRPC] TaskOutputDeclared task=%s early upload=%s is no longer present; creating fallback upload", msg.GetTaskId(), earlyID)
+				} else if getErr != nil {
+					logGRPCf(ctx, logging.LevelError, logging.CodeGRPCCompletionFailed, "[GRPC] TaskOutputDeclared task=%s early upload=%s lookup failed: %v", msg.GetTaskId(), earlyID, getErr)
 					return
-				}
-				if i >= len(plan.Targets) || plan.Targets[i].DeclarationID == "" {
-					logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCCompletionRejected, "[GRPC] TaskOutputDeclared task=%s missing declaration for early output=%s", msg.GetTaskId(), m.LogicalName)
+				} else if session.JobID != msg.GetJobId() || session.WorkerID != workerID || session.LeaseID != msg.GetLeaseId() || session.AttemptNumber != int(msg.GetAttemptNumber()) {
+					logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCCompletionRejected, "[GRPC] TaskOutputDeclared task=%s early upload=%s identity mismatch job=%t worker=%t lease=%t attempt=%t", msg.GetTaskId(), earlyID,
+						session.JobID == msg.GetJobId(), session.WorkerID == workerID, session.LeaseID == msg.GetLeaseId(), session.AttemptNumber == int(msg.GetAttemptNumber()))
 					return
+				} else {
+					if i >= len(plan.Targets) || plan.Targets[i].DeclarationID == "" {
+						logGRPCf(ctx, logging.LevelWarn, logging.CodeGRPCCompletionRejected, "[GRPC] TaskOutputDeclared task=%s missing declaration for early output=%s", msg.GetTaskId(), m.LogicalName)
+						return
+					}
+					if bindErr := h.completionStore.BindUpload(ctx, plan.Targets[i].DeclarationID, earlyID, session.ArtifactID); bindErr != nil {
+						logGRPCf(ctx, logging.LevelError, logging.CodeGRPCCompletionFailed, "[GRPC] TaskOutputDeclared task=%s bind early upload=%s failed: %v", msg.GetTaskId(), earlyID, bindErr)
+						return
+					}
+					bound, bindGetErr := h.completionStore.GetUploadBinding(ctx, earlyID)
+					if bindGetErr != nil || bound == nil {
+						logGRPCf(ctx, logging.LevelError, logging.CodeGRPCCompletionFailed, "[GRPC] TaskOutputDeclared task=%s reload early binding failed: %v", msg.GetTaskId(), bindGetErr)
+						return
+					}
+					b = *bound
+					exists = true
 				}
-				if bindErr := h.completionStore.BindUpload(ctx, plan.Targets[i].DeclarationID, earlyID, session.ArtifactID); bindErr != nil {
-					logGRPCf(ctx, logging.LevelError, logging.CodeGRPCCompletionFailed, "[GRPC] TaskOutputDeclared task=%s bind early upload=%s failed: %v", msg.GetTaskId(), earlyID, bindErr)
-					return
-				}
-				bound, bindGetErr := h.completionStore.GetUploadBinding(ctx, earlyID)
-				if bindGetErr != nil || bound == nil {
-					logGRPCf(ctx, logging.LevelError, logging.CodeGRPCCompletionFailed, "[GRPC] TaskOutputDeclared task=%s reload early binding failed: %v", msg.GetTaskId(), bindGetErr)
-					return
-				}
-				b = *bound
-				exists = true
 			}
 		}
 		if !exists || b.UploadID == "" || b.ArtifactID == "" {

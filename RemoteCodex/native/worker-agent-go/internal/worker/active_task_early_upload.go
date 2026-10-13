@@ -401,7 +401,11 @@ func (w *Worker) earlyUploadID(taskID string) string {
 	state := value.(*earlyUploadState)
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	if state.plan == nil {
+	// A plan is not reusable after the progressive transfer has failed: the
+	// uploader aborts its server session on failure. Declaring that stale ID
+	// would make the master reject TaskOutputDeclared instead of issuing the
+	// normal upload plan.
+	if state.plan == nil || state.disabled || state.err != nil {
 		return ""
 	}
 	return state.plan.GetUploadId()
