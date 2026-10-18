@@ -173,12 +173,14 @@ func internalSecurityGuard(cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 
-		// Job intake is a service-to-service surface. Let a request carrying
-		// an Authorization header reach the route-level M2M/admin middleware
-		// even when it originates outside the private network. Invalid or
-		// missing credentials are rejected by that middleware; the network
-		// guard must not turn the worker master into an IP allowlist. Other
-		// HTTP surfaces remain private-network-only below.
+		// Job APIs are service-to-service surfaces. Let a request carrying an
+		// Authorization header reach the route-level M2M/admin middleware even
+		// when it originates outside the private network. This includes the
+		// two-stage PREPARE/FINALIZE flow; otherwise an external creator can
+		// submit POST /jobs but its authenticated POST /jobs/pre or
+		// /jobs/:id/finalize is rejected here before M2M auth runs. Invalid or
+		// missing credentials are rejected by the route middleware; other HTTP
+		// surfaces remain private-network-only below.
 		if isCredentialedJobRequest(c) {
 			c.Next()
 			return
@@ -224,8 +226,21 @@ func isCredentialedJobRequest(c *gin.Context) bool {
 		return false
 	}
 	path := strings.TrimRight(c.Request.URL.Path, "/")
-	if c.Request.Method == http.MethodPost && (path == "/api/v1/jobs" || path == "/api/v1/creator/jobs") {
-		return true
+	if c.Request.Method == http.MethodPost {
+		switch path {
+		case "/api/v1/jobs", "/api/v1/creator/jobs",
+			"/api/v1/jobs/pre", "/api/v1/jobs/batch",
+			"/api/v1/jobs/validate", "/api/v1/jobs/estimate":
+			return true
+		}
+		if strings.HasPrefix(path, "/api/v1/jobs/") &&
+			(strings.HasSuffix(path, "/finalize") || strings.HasSuffix(path, "/cancel")) {
+			return true
+		}
+	}
+	if c.Request.Method == http.MethodDelete && strings.HasPrefix(path, "/api/v1/jobs/") {
+		id := strings.TrimPrefix(path, "/api/v1/jobs/")
+		return id != "" && !strings.Contains(id, "/")
 	}
 	return c.Request.Method == http.MethodGet && strings.HasPrefix(path, "/api/v1/jobs/")
 }
