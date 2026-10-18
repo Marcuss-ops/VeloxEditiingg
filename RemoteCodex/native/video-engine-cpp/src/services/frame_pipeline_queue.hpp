@@ -16,8 +16,8 @@ namespace velox::media::pipeline_detail {
 // stages (decode→render, render→encode). The data path is lock-free: the
 // producer publishes a slot with a release store on its cursor, the consumer
 // reads it with an acquire load on the same cursor. A mutex/condition-variable
-// pair exists only for the blocking slow path (queue full/empty) and for
-// shutdown wakeup. Depth telemetry is sampled in batches so the healthy fast
+// pair exists for the blocking slow path, waiter notification, and shutdown
+// wakeup. Depth telemetry is sampled in batches so the healthy fast
 // path does not read the clock for every hand-off.
 //
 // Each side integrates its own depth/time samples so the averageDepth metric
@@ -83,9 +83,10 @@ private:
     alignas(64) std::atomic<std::size_t> head_{0};  // consumer cursor
 
     // Blocking slow path + shutdown wakeup only. Lock order: a waiter holds
-    // this mutex while evaluating predicates on the atomic cursors;
-    // shutdown() takes the mutex before storing done_ so a wakeup can never
-    // be lost between a waiter's predicate check and its sleep.
+    // this mutex while evaluating predicates on the atomic cursors, and
+    // producers/consumers take it before notifying after a state change so a
+    // wakeup cannot be lost between a predicate check and sleep. shutdown()
+    // also takes it before storing done_.
     std::mutex wait_mutex_;
     std::condition_variable wait_cv_;
     std::atomic<bool> done_{false};

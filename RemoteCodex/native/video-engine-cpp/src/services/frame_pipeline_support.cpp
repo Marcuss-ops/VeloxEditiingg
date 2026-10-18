@@ -106,6 +106,9 @@ void FramePool::release(int index) {
     free_slots_[tail % static_cast<std::size_t>(capacity_)] = index;
     free_tail_.store(tail + 1, std::memory_order_release);
     if (waiters_.load(std::memory_order_relaxed) > 0) {
+        // Pair free_tail_ publication with the waiter's mutex so acquire()
+        // cannot miss this notification between predicate check and wait().
+        std::lock_guard<std::mutex> lock(wait_mutex_);
         available_.notify_one();
     }
 }

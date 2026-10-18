@@ -12,8 +12,8 @@ BoundedQueue::BoundedQueue(int capacity)
 
 bool BoundedQueue::push(int value) {
     // Fast path is lock-free: one acquire load of the consumer cursor, one
-    // release store of the producer cursor. The mutex is touched only when
-    // the ring is full (blocking wait) or after shutdown.
+    // release store of the producer cursor. The mutex is touched only on a blocking wait, when notifying a waiter,
+    // or after shutdown.
     bool blocked = false;
     Clock::time_point wait_start{};
     while (true) {
@@ -62,6 +62,10 @@ bool BoundedQueue::push(int value) {
         sampleDepthProducer(depth, blocked ? now : Clock::now());
     }
     if (waiters_.load(std::memory_order_relaxed) > 0) {
+        // Pair the state change above with the waiter's mutex. Without this
+        // lock, notify_one can land after the predicate check but before the
+        // waiter enters wait(), losing the wakeup while the queue is ready.
+        std::lock_guard<std::mutex> lock(wait_mutex_);
         wait_cv_.notify_one();
     }
     return true;
@@ -116,6 +120,10 @@ bool BoundedQueue::pop(int& value) {
         sampleDepthConsumer(depth, blocked ? now : Clock::now());
     }
     if (waiters_.load(std::memory_order_relaxed) > 0) {
+        // Pair the state change above with the waiter's mutex. Without this
+        // lock, notify_one can land after the predicate check but before the
+        // waiter enters wait(), losing the wakeup while the queue is ready.
+        std::lock_guard<std::mutex> lock(wait_mutex_);
         wait_cv_.notify_one();
     }
     return true;
