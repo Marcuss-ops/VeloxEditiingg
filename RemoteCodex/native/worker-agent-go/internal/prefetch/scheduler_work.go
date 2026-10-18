@@ -37,6 +37,15 @@ func (s *Scheduler) nextWorkItem() (*workItem, *downloader.CacheResolver) {
 	for attempts := s.queue.Len(); attempts > 0; attempts-- {
 		item := heap.Pop(&s.queue).(*workItem)
 		if !s.currentItemLocked(item) {
+			// A plan generation can change after current work was coalesced
+			// behind this queue item. The base item is now stale, but its
+			// followers may belong to the current generation; dropping the
+			// base must not silently drop that work too.
+			for _, follower := range item.followers {
+				if s.currentItemLocked(follower) {
+					heap.Push(&s.queue, follower)
+				}
+			}
 			continue
 		}
 		state := s.diskStateLocked()
