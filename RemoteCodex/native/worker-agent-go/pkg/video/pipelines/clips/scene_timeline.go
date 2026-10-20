@@ -136,6 +136,10 @@ func compileSceneTimeline(ctx context.Context, jobID string, scenes []sceneTimel
 	if err := validateSceneTimeline(scenes); err != nil {
 		return nil, fmt.Errorf("clips.v1: %w", err)
 	}
+	scenes, err := shuffleStockSceneAssets(scenes, jobID)
+	if err != nil {
+		return nil, fmt.Errorf("clips.v1: shuffle stock scenes: %w", err)
+	}
 
 	timeline := make([]plan.TimelineItem, 0, len(scenes)*2)
 	fallbackVideoSources := make([]plan.MediaSource, 0)
@@ -292,6 +296,47 @@ func compileSceneTimeline(ctx context.Context, jobID string, scenes []sceneTimel
 		AudioTracks:          audioTracks,
 		OutputPath:           outputPath,
 	}, nil
+}
+
+// shuffleStockSceneAssets mixes stock assets across stock-only scenes while
+// preserving scene order, each scene's pool size, and explicit clip scenes.
+func shuffleStockSceneAssets(scenes []sceneTimelineScene, jobID string) ([]sceneTimelineScene, error) {
+	shuffled := append([]sceneTimelineScene(nil), scenes...)
+	assets := make([]sceneTimelineAsset, 0)
+	slots := make([]int, 0)
+	for sceneIndex, scene := range shuffled {
+		if scene.Clip != nil {
+			continue
+		}
+		pool, err := sceneStockPool(scene)
+		if err != nil {
+			return nil, fmt.Errorf("scene %d stock: %w", sceneIndex, err)
+		}
+		for range pool {
+			slots = append(slots, sceneIndex)
+		}
+		assets = append(assets, pool...)
+	}
+	if len(assets) < 2 {
+		return shuffled, nil
+	}
+	assets = shuffleStockPool(assets, jobID, -1)
+	pools := make([][]sceneTimelineAsset, len(shuffled))
+	for index, sceneIndex := range slots {
+		pools[sceneIndex] = append(pools[sceneIndex], assets[index])
+	}
+	for sceneIndex, pool := range pools {
+		if len(pool) == 0 {
+			continue
+		}
+		encoded, err := json.Marshal(pool)
+		if err != nil {
+			return nil, fmt.Errorf("scene %d stock: %w", sceneIndex, err)
+		}
+		shuffled[sceneIndex].Stock = encoded
+		shuffled[sceneIndex].StockLinks = nil
+	}
+	return shuffled, nil
 }
 
 type stockSegment struct {
