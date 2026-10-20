@@ -228,16 +228,19 @@ func (h *Handlers) prefetchReadModel(ctx context.Context, jobID, clientID string
 	if err != nil {
 		return "", "", nil
 	}
-	dispatchStatus, futureAssetPlan = prefetchStateFromEvents(events)
+	// The M2M read returns newest first; the state projection consumes the
+	// journal in chronological order so later events replace earlier state.
+	chronological := make([]store.JobEvent, len(events))
+	for i := range events {
+		chronological[len(events)-1-i] = events[i]
+	}
+	dispatchStatus, futureAssetPlan = prefetchStateFromEvents(chronological)
 	issue = prefetchIssueFromEvents(events)
 	return dispatchStatus, futureAssetPlan, issue
 }
 
 func prefetchStateFromEvents(events []store.JobEvent) (dispatchStatus, futureAssetPlan string) {
-	// ListJobEventsForClient returns newest first. Return the latest durable
-	// lifecycle state instead of letting an older event overwrite it.
-	for i := len(events) - 1; i >= 0; i-- {
-		event := events[i]
+	for _, event := range events {
 		switch event.Event {
 		case "prefetch.prefetch_prepared":
 			dispatchStatus = "prefetch_ready"
