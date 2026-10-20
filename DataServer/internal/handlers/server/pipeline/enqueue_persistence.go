@@ -15,6 +15,7 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -150,7 +151,7 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 			}
 		}
 
-		prefetchDispatchStatus, futureAssetPlan := h.prefetchReadModel(ctx, jobID, clientID)
+		prefetchDispatchStatus, futureAssetPlan, prefetchIssue := h.prefetchReadModel(ctx, jobID, clientID)
 
 		created := forwarding.SourceProvider == ExternalAPISourceProvider
 		statusURL := "/api/v1/jobs/" + jobID
@@ -208,6 +209,9 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 		if futureAssetPlan != "" {
 			resp["future_asset_plan"] = futureAssetPlan
 		}
+		if prefetchIssue != nil {
+			resp["prefetch_issue"] = prefetchIssue
+		}
 		c.JSON(http.StatusOK, resp)
 	}
 }
@@ -216,23 +220,31 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 // the small polling response. The event journal remains the detailed source of
 // truth; this projection deliberately exposes only stable state labels and no
 // asset/job identifiers beyond the already-authorized job URL.
-func (h *Handlers) prefetchReadModel(ctx context.Context, jobID, clientID string) (dispatchStatus, futureAssetPlan string) {
+func (h *Handlers) prefetchReadModel(ctx context.Context, jobID, clientID string) (dispatchStatus, futureAssetPlan string, issue map[string]interface{}) {
 	if h == nil || h.store == nil || jobID == "" || clientID == "" {
-		return "", ""
+		return "", "", nil
 	}
 	events, err := h.store.ListJobEventsForClient(ctx, jobID, clientID, 100)
 	if err != nil {
-		return "", ""
+		return "", "", nil
 	}
-	return prefetchStateFromEvents(events)
+	dispatchStatus, futureAssetPlan = prefetchStateFromEvents(events)
+	issue = prefetchIssueFromEvents(events)
+	return dispatchStatus, futureAssetPlan, issue
 }
 
 func prefetchStateFromEvents(events []store.JobEvent) (dispatchStatus, futureAssetPlan string) {
-	for _, event := range events {
+	// ListJobEventsForClient returns newest first. Return the latest durable
+	// lifecycle state instead of letting an older event overwrite it.
+	for i := len(events) - 1; i >= 0; i-- {
+		event := events[i]
 		switch event.Event {
 		case "prefetch.prefetch_prepared":
 			dispatchStatus = "prefetch_ready"
 			futureAssetPlan = "prepared"
+		case "prefetch.prefetch_preparation_waiting":
+			dispatchStatus = "prefetch_waiting_assets"
+			futureAssetPlan = "applied"
 		case "prefetch.future_plan_applied":
 			dispatchStatus = "prefetch_preparing"
 			futureAssetPlan = "applied"
@@ -248,4 +260,46 @@ func prefetchStateFromEvents(events []store.JobEvent) (dispatchStatus, futureAss
 		}
 	}
 	return dispatchStatus, futureAssetPlan
+}
+
+// prefetchIssueFromEvents exposes the latest worker-reported blocker to the
+// owning M2M client. The event list is already ownership-scoped and newest
+// first, so this returns the first actionable prefetch event without exposing
+// unrelated jobs or unbounded event history.
+func prefetchIssueFromEvents(events []store.JobEvent) map[string]interface{} {
+	var issue map[string]interface{}
+	for i := len(events) - 1; i >= 0; i-- {
+		event := events[i]
+		if !strings.HasPrefix(event.Event, "prefetch.") {
+			continue
+		}
+		var raw map[string]interface{}
+		if err := json.Unmarshal([]byte(event.RawJSON), &raw); err != nil {
+			continue
+		}
+		if event.Event == "prefetch.prefetch_prepared" {
+			issue = nil
+			continue
+		}
+		reason, _ := raw["error_reason"].(string)
+		if reason == "" {
+			// Successful asset resolution clears a prior per-asset failure;
+			// preparation_waiting remains useful progress until PREPARED.
+			if event.Event == "prefetch.asset_ready" && issue != nil && issue["event"] != "prefetch.prefetch_preparation_waiting" {
+				issue = nil
+			}
+			continue
+		}
+		issue = map[string]interface{}{
+			"event":       event.Event,
+			"message":     reason,
+			"occurred_at": event.Timestamp,
+		}
+		for _, key := range []string{"worker_id", "task_id", "asset_key"} {
+			if value, ok := raw[key].(string); ok && value != "" {
+				issue[key] = value
+			}
+		}
+	}
+	return issue
 }
