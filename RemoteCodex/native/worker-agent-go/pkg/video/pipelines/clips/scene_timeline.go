@@ -23,6 +23,7 @@ type sceneTimelineAsset struct {
 
 type sceneTimelineScene struct {
 	SceneID         string              `json:"scene_id,omitempty"`
+	Kind            string              `json:"kind,omitempty"`
 	DurationSeconds float64             `json:"duration_seconds"`
 	Clip            *sceneTimelineAsset `json:"clip,omitempty"`
 	Stock           json.RawMessage     `json:"stock,omitempty"`
@@ -298,14 +299,14 @@ func compileSceneTimeline(ctx context.Context, jobID string, scenes []sceneTimel
 	}, nil
 }
 
-// shuffleStockSceneAssets mixes stock assets across stock-only scenes while
-// preserving scene order, each scene's pool size, and explicit clip scenes.
+// shuffleStockSceneAssets mixes stock assets across stock scenes while
+// preserving scene order, each scene's pool size, and clip-kind scenes.
 func shuffleStockSceneAssets(scenes []sceneTimelineScene, jobID string) ([]sceneTimelineScene, error) {
 	shuffled := append([]sceneTimelineScene(nil), scenes...)
 	assets := make([]sceneTimelineAsset, 0)
 	slots := make([]int, 0)
 	for sceneIndex, scene := range shuffled {
-		if scene.Clip != nil {
+		if scene.Clip != nil || strings.EqualFold(strings.TrimSpace(scene.Kind), "clip") {
 			continue
 		}
 		pool, err := sceneStockPool(scene)
