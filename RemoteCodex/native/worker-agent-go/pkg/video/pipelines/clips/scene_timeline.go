@@ -306,11 +306,7 @@ func shuffleStockSceneAssets(scenes []sceneTimelineScene, jobID string) ([]scene
 	assets := make([]sceneTimelineAsset, 0)
 	slots := make([]int, 0)
 	for sceneIndex, scene := range shuffled {
-		// A scene kind describes the scene's subject/source label, not whether
-		// it contains a protected source clip. Stock scenes in creator payloads
-		// can also have kind="clip"; only an explicit Clip asset reserves the
-		// scene from stock shuffling.
-		if scene.Clip != nil {
+		if scene.Clip != nil || strings.EqualFold(strings.TrimSpace(scene.Kind), "clip") {
 			continue
 		}
 		pool, err := sceneStockPool(scene)
