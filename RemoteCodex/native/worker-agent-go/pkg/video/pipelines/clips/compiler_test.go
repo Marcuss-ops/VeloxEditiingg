@@ -258,11 +258,11 @@ func TestCompileSceneTimelineLoopsAndTrimsShortStock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
 	}
-	if got.CopyOnly {
-		t.Fatal("stock scene timeline must use the mixed renderer")
+	if !got.CopyOnly || got.Mixed {
+		t.Fatalf("stock scene timeline must use strict packet copy: copy_only=%v mixed=%v", got.CopyOnly, got.Mixed)
 	}
-	if !got.Mixed {
-		t.Fatal("stock scene timeline must emit mixed=true")
+	if len(got.FallbackVideoSources) != 0 {
+		t.Fatalf("stock timeline must fail closed instead of substituting fallback sources: %+v", got.FallbackVideoSources)
 	}
 	if len(got.Timeline) != 4 {
 		t.Fatalf("timeline segments = %d, want 3 stock segments plus final clip", len(got.Timeline))

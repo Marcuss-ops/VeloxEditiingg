@@ -143,8 +143,6 @@ func compileSceneTimeline(ctx context.Context, jobID string, scenes []sceneTimel
 	}
 
 	timeline := make([]plan.TimelineItem, 0, len(scenes)*2)
-	fallbackVideoSources := make([]plan.MediaSource, 0)
-	seenFallbackSources := make(map[string]struct{})
 	audioTracks := make([]plan.AudioTrack, 0, len(scenes)*2)
 	offset := 0.0
 	finalAudioConfigured := hasRuntimeFinalAudio(input)
@@ -174,17 +172,6 @@ func compileSceneTimeline(ctx context.Context, jobID string, scenes []sceneTimel
 		}
 
 		if len(stock) > 0 {
-			for _, asset := range stock {
-				url := strings.TrimSpace(asset.URL)
-				if url == "" {
-					continue
-				}
-				if _, exists := seenFallbackSources[url]; exists {
-					continue
-				}
-				seenFallbackSources[url] = struct{}{}
-				fallbackVideoSources = append(fallbackVideoSources, plan.MediaSource{Type: "video", URL: url})
-			}
 			segments, loopErr := loopStockToDuration(stock, targetDuration, probe, jobID, sceneIndex)
 			if loopErr != nil {
 				return nil, fmt.Errorf("clips.v1: scene %d stock: %w", sceneIndex, loopErr)
@@ -287,15 +274,19 @@ func compileSceneTimeline(ctx context.Context, jobID string, scenes []sceneTimel
 	}
 
 	return &plan.RenderPlan{
-		Version:              1,
-		JobID:                jobID,
-		Canvas:               plan.DefaultCanvas(),
-		CopyOnly:             false,
-		Mixed:                sceneTimelineHasStock(scenes),
-		Timeline:             timeline,
-		FallbackVideoSources: fallbackVideoSources,
-		AudioTracks:          audioTracks,
-		OutputPath:           outputPath,
+		Version: 1,
+		JobID:   jobID,
+		Canvas:  plan.DefaultCanvas(),
+		// Stock scene timelines are assembled without per-source transforms.
+		// Keep them on the packet-copy path; the native mux validates that all
+		// source windows are compatible and fails the job when they are not.
+		// Re-encoding heterogeneous stock sources here hid bad inputs and made
+		// long jobs unexpectedly expensive.
+		CopyOnly:    true,
+		Mixed:       false,
+		Timeline:    timeline,
+		AudioTracks: audioTracks,
+		OutputPath:  outputPath,
 	}, nil
 }
 
@@ -343,16 +334,6 @@ func shuffleStockSceneAssets(scenes []sceneTimelineScene, jobID string) ([]scene
 type stockSegment struct {
 	URL      string
 	Duration float64
-}
-
-func sceneTimelineHasStock(scenes []sceneTimelineScene) bool {
-	for _, scene := range scenes {
-		stock, _ := sceneStockPool(scene)
-		if len(stock) > 0 {
-			return true
-		}
-	}
-	return false
 }
 
 func loopStockToDuration(pool []sceneTimelineAsset, target float64, probe audio.Probe, jobID string, sceneIndex int) ([]stockSegment, error) {
