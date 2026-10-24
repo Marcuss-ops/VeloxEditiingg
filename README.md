@@ -175,6 +175,12 @@ Override the env-file location with `VELOX_PRODUCTION_ENV=/path/to/file` if you 
 
 The canonical ownership map is [`docs/architecture/OWNERSHIP.md`](docs/architecture/OWNERSHIP.md). Every important state must have one owner, one writer and one mutation path.
 
+For repository identity and the current distinction between `Layers`,
+`Overlays`, and `VisualReplacements`, see
+[`docs/architecture/REPO-IDENTITY-AND-OVERLAYS.md`](docs/architecture/REPO-IDENTITY-AND-OVERLAYS.md).
+For measured rendering bottlenecks and a prioritized speed/workflow proposal,
+see [`docs/architecture/RENDERING-SPEED-AND-WORKFLOW-PROPOSAL.md`](docs/architecture/RENDERING-SPEED-AND-WORKFLOW-PROPOSAL.md).
+
 ## Canonical-purity invariants (Steps 1–8)
 
 Every `process_video` payload that crosses the master enqueue boundary must conform to a single canonical flat shape. The Velox canonical-purity plan locks this contract across eight incremental steps. Each step is a non-regression bound on the source side, the runtime side, or the data side; the binding CI gate for each step is listed below. `make verify` invokes every gate in the order shown; a single red blocks the merge.
