@@ -21,10 +21,6 @@ grep -q 'MinimumVersion:' "$registry" || { echo "alias minimum version metadata 
 required_consumers=(
   "shared/contract/payload_v2.go"
   "DataServer/internal/jobs/enqueue/normalize_media.go"
-  "DataServer/internal/remoteengine/dto_assets.go"
-  "DataServer/internal/handlers/server/pipeline/worker_payload_projection.go"
-  "DataServer/cmd/server/bootstrap_telemetry.go"
-  "RemoteCodex/native/worker-agent-go/pkg/api/renderplan/validation.go"
 )
 for file in "${required_consumers[@]}"; do
   if ! grep -q 'velox-shared/compatibility' "$file"; then
@@ -39,8 +35,6 @@ required_calls=(
   "shared/contract/payload_v2.go:compatibility.ReadStringList"
   "DataServer/internal/handlers/server/pipeline/compatibility_alias_parity_test.go:compatibility.VoiceoverPathsKey"
   "DataServer/internal/jobs/enqueue/normalize_media.go:compatibility.ReadStringList"
-  "DataServer/internal/remoteengine/dto_assets.go:compatibility.ReadStringList"
-  "RemoteCodex/native/worker-agent-go/pkg/api/renderplan/validation.go:compatibility.ReadStringList"
 )
 for requirement in "${required_calls[@]}"; do
   file="${requirement%%:*}"

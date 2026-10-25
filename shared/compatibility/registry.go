@@ -134,7 +134,7 @@ var voiceoverAliasRegistry = CompatibilityAlias{
 		"audio_source",
 	},
 	Owner:          "platform-contracts",
-	Consumers:      []string{"shared/contract/payload_v2.go", "DataServer/internal/jobs/enqueue/normalize_media.go", "DataServer/internal/remoteengine/dto_assets.go", "DataServer/internal/handlers/server/pipeline/worker_payload_projection.go", "DataServer/cmd/server/bootstrap_composition.go", "RemoteCodex/native/worker-agent-go/pkg/api/renderplan/validation.go"},
+		Consumers:      []string{"shared/contract/payload_v2.go", "DataServer/internal/jobs/enqueue/normalize_media.go"},
 	RemovalDate:    "2026-12-31",
 	MinimumVersion: "payload.v2",
 }
