@@ -8,15 +8,13 @@ import "testing"
 // inputs and technical metadata.
 func TestNormalizeExternalJobSubmissionKeepsControlPlaneOutOfWorkerPayload(t *testing.T) {
 	retryBudget := 3
+	planJSON, planSHA := validProducerOwnedFMP4Plan(t)
 	req := SubmitJobRequest{
-		IdempotencyKey: "renderer-boundary-control-plane-001",
-		VideoName:      "Technical renderer name",
-		ScriptText:     "Render-only script.",
-		Scenes: []SubmitScene{{
-			Text:            "A scene",
-			DurationSeconds: 3,
-			Clip:            &SubmitClip{URL: "velox-asset://image/scene.png"},
-		}},
+		IdempotencyKey:           "renderer-boundary-control-plane-001",
+		VideoName:                "Technical renderer name",
+		ScriptText:               "Render-only script.",
+		CompiledRenderPlanJSON:   planJSON,
+		CompiledRenderPlanSHA256: planSHA,
 		DeliveryPlan: []SubmitDeliveryPlanEntry{{
 			DestinationID: "youtube-en",
 			Priority:      1,
@@ -87,7 +85,10 @@ func TestNormalizeExternalJobSubmissionKeepsControlPlaneOutOfWorkerPayload(t *te
 	if worker["video_name"] != "Technical renderer name" {
 		t.Fatalf("technical renderer name was lost: %#v", worker["video_name"])
 	}
-	if _, present := worker["scenes_json"]; !present {
-		t.Fatal("render scene was lost from worker payload")
+	if worker["compiled_render_plan_json"] != planJSON || worker["compiled_render_plan_sha256"] != planSHA {
+		t.Fatal("producer-compiled plan was not passed through to worker payload")
+	}
+	if _, present := worker["scenes_json"]; present {
+		t.Fatal("retired scene projection crossed the worker boundary")
 	}
 }

@@ -38,7 +38,7 @@ func TestEnqueue_ConcurrentForwardingRetriesConverge(t *testing.T) {
 
 	const callers = 12
 	forwardingKey := routing.FormatForwardingKey(
-		"remote_engine", "creator-concurrent-enqueue", "scene.composite.v1",
+		"remote_engine", "creator-concurrent-enqueue", "video.assemble.copy.v1",
 	).String()
 	expectedJobID := DeriveForwardingJobID(forwardingKey)
 
@@ -69,6 +69,7 @@ func TestEnqueue_ConcurrentForwardingRetriesConverge(t *testing.T) {
 					},
 				},
 			}
+			payload = testCompiledV2Payload(payload)
 			responses[index], errs[index] = enq.Enqueue(
 				context.Background(), payload, costmodel.DefaultRequirements(),
 			)

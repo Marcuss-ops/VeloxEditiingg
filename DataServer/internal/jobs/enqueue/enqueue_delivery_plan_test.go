@@ -38,6 +38,7 @@ func TestPrepareJobAndTask_AcceptsCanonicalDeliveryPlan(t *testing.T) {
 			},
 		},
 	}
+	payload = testCompiledV2Payload(payload)
 
 	job, spec, _, err := enq.PrepareJobAndTask(context.Background(), payload, costmodel.DefaultRequirements())
 	if err != nil {
@@ -46,8 +47,8 @@ func TestPrepareJobAndTask_AcceptsCanonicalDeliveryPlan(t *testing.T) {
 	if job == nil || spec == nil {
 		t.Fatal("want non-nil job and spec")
 	}
-	if spec.ExecutorID != "scene.composite.v1" {
-		t.Errorf("spec.ExecutorID = %q, want scene.composite.v1", spec.ExecutorID)
+	if spec.ExecutorID != "video.assemble.copy.v1@1" {
+		t.Errorf("spec.ExecutorID = %q, want video.assemble.copy.v1@1", spec.ExecutorID)
 	}
 }
 
@@ -66,6 +67,7 @@ func TestPrepareJobAndTask_AcceptsLegacyDeliveryDestinationIDs(t *testing.T) {
 		"scenes":                   []interface{}{map[string]interface{}{"text": "S1", "image_link": "https://example.com/i.png"}},
 		"delivery_destination_ids": []string{"drive-main", "video-main"},
 	}
+	payload = testCompiledV2Payload(payload)
 
 	if _, _, _, err := enq.PrepareJobAndTask(context.Background(), payload, costmodel.DefaultRequirements()); err != nil {
 		t.Fatalf("PrepareJobAndTask: want no error for legacy destination aliases, got %v", err)
@@ -86,6 +88,7 @@ func TestPrepareJobAndTask_AcceptsSingleObjectDeliveryPlan(t *testing.T) {
 			"retry_budget":   5,
 		},
 	}
+	payload = testCompiledV2Payload(payload)
 	if _, _, _, err := enq.PrepareJobAndTask(context.Background(), payload, costmodel.DefaultRequirements()); err != nil {
 		t.Fatalf("PrepareJobAndTask: want no error (single-object shape accepted), got %v", err)
 	}
@@ -96,12 +99,12 @@ func TestPrepareJobAndTask_RejectsMissingDeliveryPlan(t *testing.T) {
 	enq := newTestEnqueuer(t)
 
 	basePayload := func() map[string]interface{} {
-		return map[string]interface{}{
+		return testCompiledV2Payload(map[string]interface{}{
 			"video_name":     "No Plan",
 			"script_text":    "no plan at all",
 			"voiceover_path": "/tmp/v.mp3",
 			"scenes":         []interface{}{map[string]interface{}{"text": "S1", "image_link": "https://example.com/i.png"}},
-		}
+		})
 	}
 
 	cases := []struct {
@@ -224,6 +227,7 @@ func TestEnqueue_RejectsMissingDeliveryPlan(t *testing.T) {
 		"voiceover_path": "/tmp/v.mp3",
 		"scenes":         []interface{}{map[string]interface{}{"text": "S1", "image_link": "https://example.com/i.png"}},
 	}
+	payload = testCompiledV2Payload(payload)
 
 	resp, err := enq.Enqueue(context.Background(), payload, costmodel.DefaultRequirements())
 	if err == nil {
@@ -259,6 +263,7 @@ func TestPrepareJobAndTask_AcceptsZeroRetryBudget(t *testing.T) {
 			},
 		},
 	}
+	payload = testCompiledV2Payload(payload)
 	job, spec, _, err := enq.PrepareJobAndTask(context.Background(), payload, costmodel.DefaultRequirements())
 	if err != nil {
 		t.Fatalf("PrepareJobAndTask: want NO error (retry_budget=0 is allowed), got %v", err)
@@ -295,6 +300,7 @@ func TestEnqueue_PropagatesDeliveryPlanPreflightError(t *testing.T) {
 			map[string]interface{}{"destination_id": "drive-main", "retry_budget": -1},
 		},
 	}
+	payload = testCompiledV2Payload(payload)
 	_, err := enq.Enqueue(context.Background(), payload, costmodel.DefaultRequirements())
 	if err == nil {
 		t.Fatal("want error from Enqueue when retry_budget is negative")
@@ -391,6 +397,7 @@ func TestEnqueue_NoPreinsertDeliveryPlan_PropagatesMaxRetriesFromPayload(t *test
 			map[string]interface{}{"destination_id": "d3", "priority": 2, "retry_budget": 5},
 		},
 	}
+	payload = testCompiledV2Payload(payload)
 
 	// Step 3 of the spec: payloadMaxRetries > 0. The payload defines
 	// [3, 7, 5]; expected max = 7. extractPlanMaxRetry is the SAME
@@ -582,6 +589,7 @@ func TestEnqueue_SingleDeliveryPlanPayloadShape_Succeeds(t *testing.T) {
 			},
 		},
 	}
+	payload = testCompiledV2Payload(payload)
 
 	// Step 3: payload drives the column. extractPlanMaxRetry(payload)
 	// = 3 (only retry_budget in the plan array).

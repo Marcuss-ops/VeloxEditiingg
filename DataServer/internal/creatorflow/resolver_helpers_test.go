@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"testing"
 
 	"velox-server/internal/forwardingcontract"
@@ -141,15 +140,15 @@ func TestResolverMarshalPayload(t *testing.T) {
 
 func TestBuildAndRewritePayload_InjectsForwardingKey(t *testing.T) {
 	r := &Resolver{}
+	planJSON, planSHA := compiledV2TestPlan()
 	reqPayload := map[string]interface{}{
 		"status": "completed",
 		"result": map[string]interface{}{
-			"video_name":  "Test Video",
-			"script_text": "script content",
-			"scenes_json": `[{"text":"Scene 1","image":{"asset_id":"scene-image","url":"velox-asset://scene-image"},"voiceover":{"asset_id":"voice","url":"velox-asset://voice","duration_ms":5000}}]`,
+			"video_name": "Test Video", "script_text": "script content",
+			"compiled_render_plan_json": planJSON, "compiled_render_plan_sha256": planSHA,
 		},
 	}
-	fwdKey := routing.FormatForwardingKey("remote_engine", "job-123", "scene.composite.v1")
+	fwdKey := routing.FormatForwardingKey("remote_engine", "job-123", "video.assemble.copy.v1")
 
 	workerPayload, err := r.buildAndRewritePayload(reqPayload, fwdKey)
 	if err != nil {
@@ -163,21 +162,14 @@ func TestBuildAndRewritePayload_InjectsForwardingKey(t *testing.T) {
 	if workerPayload["video_name"] != "Test Video" {
 		t.Fatalf("want video_name from BuildPipelinePayload, got %v", workerPayload["video_name"])
 	}
-	if workerPayload["source"] != "pipeline_generate_with_images" {
-		t.Fatalf("want source from BuildPipelinePayload, got %v", workerPayload["source"])
-	}
-	if _, ok := workerPayload["voiceover_paths"]; ok {
-		t.Fatalf("voiceover_paths must not cross the renderer boundary")
-	}
-	scenesJSON, ok := workerPayload["scenes_json"].(string)
-	if !ok || !strings.Contains(scenesJSON, `"voiceover"`) {
-		t.Fatalf("want canonical nested voiceover in scenes_json, got %v", workerPayload["scenes_json"])
+	if workerPayload["compiled_render_plan_json"] != planJSON {
+		t.Fatalf("producer V2 plan changed during forwarding")
 	}
 }
 
 func TestBuildAndRewritePayload_BuildPipelinePayloadError(t *testing.T) {
 	r := &Resolver{}
-	// Missing voiceover_path triggers an error in BuildPipelinePayload.
+	// A legacy scene payload without a producer-compiled plan is rejected.
 	reqPayload := map[string]interface{}{
 		"status": "completed",
 		"result": map[string]interface{}{
@@ -186,7 +178,7 @@ func TestBuildAndRewritePayload_BuildPipelinePayloadError(t *testing.T) {
 			"scenes_json": `[{"text":"Scene 1"}]`,
 		},
 	}
-	fwdKey := routing.FormatForwardingKey("remote_engine", "job-123", "scene.composite.v1")
+	fwdKey := routing.FormatForwardingKey("remote_engine", "job-123", "video.assemble.copy.v1")
 	_, err := r.buildAndRewritePayload(reqPayload, fwdKey)
 	if err == nil {
 		t.Fatalf("expected error when pipeline payload cannot be built")
@@ -194,19 +186,16 @@ func TestBuildAndRewritePayload_BuildPipelinePayloadError(t *testing.T) {
 }
 
 func TestBuildAndRewritePayload_URLRewriteBranch(t *testing.T) {
-	dataDir := t.TempDir()
-	r := &Resolver{dataDir: dataDir, videosDir: dataDir, masterURL: "http://master.test"}
+	r := &Resolver{}
+	planJSON, planSHA := compiledV2TestPlan()
 	reqPayload := map[string]interface{}{
 		"status": "completed",
 		"result": map[string]interface{}{
-			"video_name":          "Test Video",
-			"script_text":         "script content",
-			"scenes_json":         `[{"text":"Scene 1","image_link":"https://example.com/scene.png"}]`,
-			"voiceover_paths":     []string{"https://example.com/voice.mp3"},
-			"total_duration_secs": 10.0,
+			"video_name": "Test Video", "script_text": "script content",
+			"compiled_render_plan_json": planJSON, "compiled_render_plan_sha256": planSHA,
 		},
 	}
-	fwdKey := routing.FormatForwardingKey("remote_engine", "job-123", "scene.composite.v1")
+	fwdKey := routing.FormatForwardingKey("remote_engine", "job-123", "video.assemble.copy.v1")
 	workerPayload, err := r.buildAndRewritePayload(reqPayload, fwdKey)
 	if err != nil {
 		t.Fatalf("buildAndRewritePayload: %v", err)
@@ -216,7 +205,10 @@ func TestBuildAndRewritePayload_URLRewriteBranch(t *testing.T) {
 		t.Fatalf("forwarding key not injected correctly: got %v", workerPayload[routing.KeyForwardingKey])
 	}
 	if workerPayload["video_name"] != "Test Video" {
-		t.Fatalf("want video_name from BuildPipelinePayload, got %v", workerPayload["video_name"])
+		t.Fatalf("want video_name from producer payload, got %v", workerPayload["video_name"])
+	}
+	if workerPayload["compiled_render_plan_json"] != planJSON {
+		t.Fatal("producer V2 plan changed")
 	}
 }
 
@@ -297,7 +289,7 @@ func TestCheckIdempotencyFastPath(t *testing.T) {
 
 	t.Run("job miss", func(t *testing.T) {
 		r := &Resolver{jobLookup: &fakeJobLookup{}}
-		out, err := r.checkIdempotencyFastPath(context.Background(), ResolveRequest{}, "job-1", "scene.composite.v1", emptyPayload)
+		out, err := r.checkIdempotencyFastPath(context.Background(), ResolveRequest{}, "job-1", "video.assemble.copy.v1", emptyPayload)
 		if err != nil || out != nil {
 			t.Fatalf("expected miss (nil, nil), got (%+v, %v)", out, err)
 		}
@@ -306,7 +298,7 @@ func TestCheckIdempotencyFastPath(t *testing.T) {
 	t.Run("job hit with explicit forwarding id", func(t *testing.T) {
 		repo := &fakeForwardingRepo{
 			bySource: map[string]*forwardingcontract.CreatorForwarding{
-				keyForSource("remote_engine", "src-1", "scene.composite.v1"): {ForwardingID: "cf-1"},
+				keyForSource("remote_engine", "src-1", "video.assemble.copy.v1"): {ForwardingID: "cf-1"},
 			},
 		}
 		r := &Resolver{
@@ -315,7 +307,7 @@ func TestCheckIdempotencyFastPath(t *testing.T) {
 		}
 		out, err := r.checkIdempotencyFastPath(context.Background(),
 			ResolveRequest{ForwardingID: "cf-1", SourceProvider: "remote_engine", SourceJobID: "src-1"},
-			"job-1", "scene.composite.v1", emptyPayload)
+			"job-1", "video.assemble.copy.v1", emptyPayload)
 		if err != nil || out == nil {
 			t.Fatalf("expected hit, got (%+v, %v)", out, err)
 		}
@@ -328,7 +320,7 @@ func TestCheckIdempotencyFastPath(t *testing.T) {
 		repo := &fakeForwardingRepo{
 			ensureForwardedErr: errors.New("transition conflict"),
 			bySource: map[string]*forwardingcontract.CreatorForwarding{
-				keyForSource("remote_engine", "src-1", "scene.composite.v1"): {ForwardingID: "cf-1"},
+				keyForSource("remote_engine", "src-1", "video.assemble.copy.v1"): {ForwardingID: "cf-1"},
 			},
 		}
 		r := &Resolver{
@@ -337,7 +329,7 @@ func TestCheckIdempotencyFastPath(t *testing.T) {
 		}
 		out, err := r.checkIdempotencyFastPath(context.Background(),
 			ResolveRequest{ForwardingID: "cf-1", SourceProvider: "remote_engine", SourceJobID: "src-1"},
-			"job-1", "scene.composite.v1", emptyPayload)
+			"job-1", "video.assemble.copy.v1", emptyPayload)
 		if err == nil || out != nil {
 			t.Fatalf("expected repair error, got (%+v, %v)", out, err)
 		}
@@ -346,7 +338,7 @@ func TestCheckIdempotencyFastPath(t *testing.T) {
 	t.Run("job hit looks up forwarding by source", func(t *testing.T) {
 		repo := &fakeForwardingRepo{
 			bySource: map[string]*forwardingcontract.CreatorForwarding{
-				keyForSource("remote_engine", "src-1", "scene.composite.v1"): {ForwardingID: "cf-2"},
+				keyForSource("remote_engine", "src-1", "video.assemble.copy.v1"): {ForwardingID: "cf-2"},
 			},
 		}
 		r := &Resolver{
@@ -354,7 +346,7 @@ func TestCheckIdempotencyFastPath(t *testing.T) {
 			forwardRepo: repo,
 		}
 		req := ResolveRequest{SourceProvider: "remote_engine", SourceJobID: "src-1"}
-		out, err := r.checkIdempotencyFastPath(context.Background(), req, "job-1", "scene.composite.v1", emptyPayload)
+		out, err := r.checkIdempotencyFastPath(context.Background(), req, "job-1", "video.assemble.copy.v1", emptyPayload)
 		if err != nil || out == nil {
 			t.Fatalf("expected hit, got (%+v, %v)", out, err)
 		}
@@ -373,7 +365,7 @@ func TestCheckIdempotencyFastPath(t *testing.T) {
 			forwardRepo: repo,
 		}
 		req := ResolveRequest{SourceProvider: "remote_engine", SourceJobID: "src-1"}
-		out, err := r.checkIdempotencyFastPath(context.Background(), req, "job-1", "scene.composite.v1", emptyPayload)
+		out, err := r.checkIdempotencyFastPath(context.Background(), req, "job-1", "video.assemble.copy.v1", emptyPayload)
 		if err == nil || out != nil {
 			t.Fatalf("expected lookup error, got (%+v, %v)", out, err)
 		}
@@ -388,7 +380,7 @@ func TestCheckIdempotencyFastPath(t *testing.T) {
 func TestPersistPendingRemoteForwarding(t *testing.T) {
 	t.Run("missing source provider", func(t *testing.T) {
 		r := &Resolver{forwardRepo: &fakeForwardingRepo{}}
-		_, err := r.PersistPendingRemoteForwarding(context.Background(), "", "job-1", "scene.composite.v1", "", "")
+		_, err := r.PersistPendingRemoteForwarding(context.Background(), "", "job-1", "video.assemble.copy.v1", "", "")
 		if err == nil {
 			t.Fatalf("expected error for empty source provider")
 		}
@@ -397,11 +389,11 @@ func TestPersistPendingRemoteForwarding(t *testing.T) {
 	t.Run("returns existing forwarding", func(t *testing.T) {
 		repo := &fakeForwardingRepo{
 			bySource: map[string]*forwardingcontract.CreatorForwarding{
-				keyForSource("remote_engine", "job-1", "scene.composite.v1"): {ForwardingID: "cf-existing"},
+				keyForSource("remote_engine", "job-1", "video.assemble.copy.v1"): {ForwardingID: "cf-existing"},
 			},
 		}
 		r := &Resolver{forwardRepo: repo}
-		cf, err := r.PersistPendingRemoteForwarding(context.Background(), "remote_engine", "job-1", "scene.composite.v1", "", "")
+		cf, err := r.PersistPendingRemoteForwarding(context.Background(), "remote_engine", "job-1", "video.assemble.copy.v1", "", "")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -411,7 +403,7 @@ func TestPersistPendingRemoteForwarding(t *testing.T) {
 		if len(repo.insertCalls) != 0 {
 			t.Fatalf("expected no insert, got %d", len(repo.insertCalls))
 		}
-		wantKey := keyForSource("remote_engine", "job-1", "scene.composite.v1")
+		wantKey := keyForSource("remote_engine", "job-1", "video.assemble.copy.v1")
 		if len(repo.getSourceCalls) != 1 || repo.getSourceCalls[0] != wantKey {
 			t.Fatalf("expected lookup by source %s, got %v", wantKey, repo.getSourceCalls)
 		}
@@ -420,7 +412,7 @@ func TestPersistPendingRemoteForwarding(t *testing.T) {
 	t.Run("lookup error other than no row", func(t *testing.T) {
 		repo := &fakeForwardingRepo{getSourceErr: errors.New("db down")}
 		r := &Resolver{forwardRepo: repo}
-		_, err := r.PersistPendingRemoteForwarding(context.Background(), "remote_engine", "job-1", "scene.composite.v1", "", "")
+		_, err := r.PersistPendingRemoteForwarding(context.Background(), "remote_engine", "job-1", "video.assemble.copy.v1", "", "")
 		if err == nil {
 			t.Fatalf("expected error from lookup failure")
 		}
@@ -436,8 +428,8 @@ func TestPersistPendingRemoteForwarding(t *testing.T) {
 		if cf.ForwardingID == "" {
 			t.Fatalf("want non-empty forwarding id")
 		}
-		if cf.TargetExecutorID != "scene.composite.v1" {
-			t.Fatalf("want default executor scene.composite.v1, got %s", cf.TargetExecutorID)
+		if cf.TargetExecutorID != "video.assemble.copy.v1" {
+			t.Fatalf("want default executor video.assemble.copy.v1, got %s", cf.TargetExecutorID)
 		}
 		if len(repo.insertCalls) != 1 {
 			t.Fatalf("expected one insert, got %d", len(repo.insertCalls))
@@ -465,7 +457,7 @@ func TestEnsureReadyForwarding(t *testing.T) {
 		repo := &fakeForwardingRepo{}
 		r := &Resolver{forwardRepo: repo}
 		req := ResolveRequest{ForwardingID: "cf-runner"}
-		forwardingID, err := r.ensureReadyForwarding(context.Background(), req, "scene.composite.v1", map[string]interface{}{"ok": true})
+		forwardingID, err := r.ensureReadyForwarding(context.Background(), req, "video.assemble.copy.v1", map[string]interface{}{"ok": true})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -487,7 +479,7 @@ func TestEnsureReadyForwarding(t *testing.T) {
 		repo := &fakeForwardingRepo{}
 		r := &Resolver{forwardRepo: repo}
 		req := ResolveRequest{SourceProvider: "remote_engine", SourceJobID: "job-1"}
-		forwardingID, err := r.ensureReadyForwarding(context.Background(), req, "scene.composite.v1", map[string]interface{}{"ok": true})
+		forwardingID, err := r.ensureReadyForwarding(context.Background(), req, "video.assemble.copy.v1", map[string]interface{}{"ok": true})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -511,17 +503,17 @@ func TestEnsureReadyForwarding(t *testing.T) {
 			ForwardingID:     "cf-existing",
 			SourceProvider:   "remote_engine",
 			SourceJobID:      "job-1",
-			TargetExecutorID: "scene.composite.v1",
+			TargetExecutorID: "video.assemble.copy.v1",
 			PayloadSHA256:    storedHash,
 			Status:           string(forwardingcontract.CFStatusReadyToForward),
 		}
 		repo := &fakeForwardingRepo{bySource: map[string]*forwardingcontract.CreatorForwarding{
-			keyForSource("remote_engine", "job-1", "scene.composite.v1"): existing,
+			keyForSource("remote_engine", "job-1", "video.assemble.copy.v1"): existing,
 		}}
 		r := &Resolver{forwardRepo: repo}
 		forwardingID, err := r.ensureReadyForwarding(context.Background(),
 			ResolveRequest{SourceProvider: "remote_engine", SourceJobID: "job-1"},
-			"scene.composite.v1", map[string]interface{}{"ok": true})
+			"video.assemble.copy.v1", map[string]interface{}{"ok": true})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -537,16 +529,16 @@ func TestEnsureReadyForwarding(t *testing.T) {
 		_, storedHash := resolverMarshalPayload(map[string]interface{}{"ok": true})
 		existing := &forwardingcontract.CreatorForwarding{
 			ForwardingID: "cf-existing", SourceProvider: "remote_engine", SourceJobID: "job-1",
-			TargetExecutorID: "scene.composite.v1", PayloadSHA256: storedHash,
+			TargetExecutorID: "video.assemble.copy.v1", PayloadSHA256: storedHash,
 			Status: string(forwardingcontract.CFStatusReadyToForward),
 		}
 		repo := &fakeForwardingRepo{bySource: map[string]*forwardingcontract.CreatorForwarding{
-			keyForSource("remote_engine", "job-1", "scene.composite.v1"): existing,
+			keyForSource("remote_engine", "job-1", "video.assemble.copy.v1"): existing,
 		}}
 		r := &Resolver{forwardRepo: repo}
 		_, err := r.ensureReadyForwarding(context.Background(),
 			ResolveRequest{SourceProvider: "remote_engine", SourceJobID: "job-1"},
-			"scene.composite.v1", map[string]interface{}{"ok": false})
+			"video.assemble.copy.v1", map[string]interface{}{"ok": false})
 		if !errors.Is(err, ErrIdempotencyKeyReused) {
 			t.Fatalf("expected idempotency conflict, got %v", err)
 		}
@@ -556,7 +548,7 @@ func TestEnsureReadyForwarding(t *testing.T) {
 		repo := &fakeForwardingRepo{}
 		r := &Resolver{forwardRepo: repo}
 		req := ResolveRequest{SourceProvider: "remote_engine", SourceJobID: "job-1"}
-		_, err := r.ensureReadyForwarding(context.Background(), req, "scene.composite.v1", map[string]interface{}{"bad": make(chan int)})
+		_, err := r.ensureReadyForwarding(context.Background(), req, "video.assemble.copy.v1", map[string]interface{}{"bad": make(chan int)})
 		if err == nil {
 			t.Fatalf("expected error for non-serializable payload")
 		}

@@ -129,28 +129,8 @@ func TestClient_CompletedWithoutScenes(t *testing.T) {
 	// so StartPipeline returns it. The caller is responsible for checking
 	// completeness via ShouldForwardPipelineResult / ParseRemotePipelineResult.
 
-	// Verify the DTO parsing correctly identifies the missing scenes.
-	dto, parseErr := ParseRemotePipelineResult(result)
-	if parseErr != nil {
-		t.Fatalf("ParseRemotePipelineResult: %v", parseErr)
-	}
-	if len(dto.Scenes) != 0 {
-		t.Fatalf("Scenes should be empty, got %d", len(dto.Scenes))
-	}
-	if len(dto.Assets) != 0 {
-		t.Fatalf("Assets should be empty when no scenes, got %d", len(dto.Assets))
-	}
-	// Voiceover should still be extracted.
-	if len(dto.Voiceover.Paths) != 1 || dto.Voiceover.Paths[0] != "/tmp/voice.mp3" {
-		t.Fatalf("Voiceover.Paths: got %v", dto.Voiceover.Paths)
-	}
-	// The worker payload should have scenes_json empty/missing.
-	wp, err := dto.ToWorkerPayloadChecked()
-	if err != nil {
-		t.Fatalf("ToWorkerPayloadChecked: %v", err)
-	}
-	if scenesJSON, ok := wp["scenes_json"].(string); ok && scenesJSON != "" {
-		t.Fatalf("scenes_json should be empty, got %q", scenesJSON)
+	if _, parseErr := ParseRemotePipelineResult(result); parseErr == nil {
+		t.Fatal("completed legacy payload without producer V2 plan must be rejected")
 	}
 }
 

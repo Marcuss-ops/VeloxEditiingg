@@ -2,15 +2,25 @@ package worker
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"velox-shared/assetref"
+	"velox-shared/contract"
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
 	"velox-worker-agent/internal/executor"
 	"velox-worker-agent/internal/taskrunner"
 	"velox-worker-agent/internal/worker/concurrency"
+	"velox-worker-agent/internal/workercache"
+	"velox-worker-agent/pkg/api"
 	"velox-worker-agent/pkg/config"
 	"velox-worker-agent/pkg/logger"
 )
@@ -25,7 +35,7 @@ type blockUntilCanceledExecutor struct {
 
 func (blockUntilCanceledExecutor) Descriptor() executor.Descriptor {
 	return executor.Descriptor{
-		ID:            "scene.composite.v1",
+		ID:            "video.assemble.copy.v1",
 		Version:       1,
 		ResourceClass: executor.ResourceCPU,
 		TemporalMode:  executor.TemporalGlobal,
@@ -33,6 +43,56 @@ func (blockUntilCanceledExecutor) Descriptor() executor.Descriptor {
 		Cacheable:     true,
 		OutputTypes:   []string{"video/mp4"},
 	}
+}
+
+func resumePlanPayload(t *testing.T) map[string]interface{} {
+	t.Helper()
+	const (
+		timelineSHA = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	)
+	videoData, audioData := resumeAssets()
+	videoSHA, audioSHA := resumeSHA(videoData), resumeSHA(audioData)
+	plan := &contract.CompiledRenderPlanV2{
+		PlanVersion: 2, TimelineRevision: 7, TimelineSHA256: timelineSHA, DurationUS: 1_000_000,
+		Output: contract.OutputContractV2{
+			Container: "mp4", VideoCodec: "h264", Width: 1920, Height: 1080,
+			FPSNum: 24, FPSDen: 1, PixelFormat: "yuv420p", ProfileID: contract.CanonicalVideoProfileIDV1,
+			CodecProfile: "high", CodecLevel: "4.0", GOPSize: 48, ClosedGOP: true,
+			TimeBaseNum: 1, TimeBaseDen: 90000,
+		},
+		FinalAudio: contract.FinalAudioV2{
+			Mode: contract.AudioModeFinalAudioCopy, AssetID: "audio", SHA256: audioSHA, SizeBytes: int64(len(audioData)),
+			Codec: "aac", SampleRateHz: 48000, Channels: 2, DurationUS: 1_000_000,
+			TimelineRevision: 7, TimelineSHA256: timelineSHA,
+		},
+		VideoTracks: []contract.VideoTrackV2{{TrackID: "main", Segments: []contract.VideoSegmentV2{{
+			SegmentID: "fragment", AssetID: "video", SHA256: videoSHA,
+			TimelineStartFrame: 0, FrameCount: 24, SourceDurationUS: 1_000_000,
+		}}}},
+		Assets: []contract.AssetRefV2{
+			{AssetID: "video", SHA256: videoSHA, SizeBytes: int64(len(videoData)), Kind: "prepared_video_fragment", MIME: "video/mp4", DurationUS: 1_000_000, Width: 1920, Height: 1080, ProfileID: contract.CanonicalVideoProfileIDV1, FrameCount: 24, TimelineRevision: 7, TimelineSHA256: timelineSHA, FirstFrameKeyframe: true, ClosedGOP: true},
+			{AssetID: "audio", SHA256: audioSHA, SizeBytes: int64(len(audioData)), Kind: "final_audio", MIME: "audio/mp4", DurationUS: 1_000_000},
+		},
+	}
+	raw, err := plan.CanonicalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return map[string]interface{}{
+		contract.PayloadKeyCompiledRenderPlanJSON: string(raw),
+		contract.PayloadKeyCompiledRenderPlanSHA:  contract.HashCompiledPlanV2(raw),
+		"video_name":                              "resume-test",
+		"job_type":                                "video.render.v2",
+		"job_id":                                  "job-resume-001",
+		"target_executor_id":                      "video.assemble.copy.v1@1",
+	}
+}
+
+func resumeAssets() ([]byte, []byte) { return []byte("resume-video"), []byte("resume-audio") }
+
+func resumeSHA(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }
 
 func (blockUntilCanceledExecutor) Validate(_ executor.TaskSpec) error { return nil }
@@ -52,6 +112,34 @@ func (e blockUntilCanceledExecutor) Execute(ctx context.Context, _ executor.Exec
 // job CANCELLED (context canceled)" gap.
 func TestTaskSurvivesSessionTeardownButNotWorkerStop(t *testing.T) {
 	log := logger.New(logger.InfoLevel, io.Discard)
+	videoData, audioData := resumeAssets()
+	assets := map[string][]byte{"video": videoData, "audio": audioData}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assetID := r.URL.Path[len("/api/v1/agent/assets/"):]
+		if data, ok := assets[assetID]; ok {
+			_, _ = w.Write(data)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	clipCache, err := workercache.Open(filepath.Join(t.TempDir(), "resume-cache.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = clipCache.Close() })
+	for assetID, body := range assets {
+		path := filepath.Join(t.TempDir(), assetID+".asset")
+		if err := os.WriteFile(path, body, 0o640); err != nil {
+			t.Fatal(err)
+		}
+		if err := clipCache.Store(context.Background(), workercache.Entry{
+			AssetKey: assetref.AssetKey(assetID), ContentHash: assetref.ContentHash(resumeSHA(body)),
+			LocalPath: path, SizeBytes: int64(len(body)), DownloadComplete: true,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	reg := executor.NewRegistry()
 	blocking := blockUntilCanceledExecutor{
 		started:  make(chan struct{}),
@@ -66,25 +154,30 @@ func TestTaskSurvivesSessionTeardownButNotWorkerStop(t *testing.T) {
 		config: &config.WorkerConfig{
 			WorkerID:        "test-worker-resume",
 			WorkerName:      "test-worker-resume",
+			MasterURL:       server.URL,
+			WorkDir:         t.TempDir(),
 			LogLevel:        "info",
 			MaxActiveJobs:   1,
 			ProtocolVersion: controltransport.ProtocolVersionCurrent,
 		},
-		logger:             log,
-		transport:          rt,
-		status:             StatusIdle,
-		stopChan:           make(chan struct{}),
-		heartbeatBackoff:   &backoffConfig{initialInterval: time.Second, maxInterval: time.Minute, multiplier: 2.0},
-		seenCommands:       make(map[string]time.Time),
-		recentLogs:         newRecentLogBuffer(50),
-		activeTasks:        make(map[string]*ActiveTaskExecution),
-		taskIDsByJob:       make(map[string][]string),
-		pendingTasks:       make(map[string]*PendingTaskExecution),
-		activeTaskLeases:   make(map[string]*ActiveTaskLease),
-		executorRegistry:   reg,
-		taskRunner:         taskrunner.NewTaskRunner(reg, log),
-		concurrencyLimiter: concurrency.NewConcurrencyLimiter(1),
-		version:            "test",
+		logger:              log,
+		apiClient:           api.NewClient(server.URL),
+		clipCache:           clipCache,
+		canonicalAssetCache: workercache.NewCanonicalAssetStore(clipCache),
+		transport:           rt,
+		status:              StatusIdle,
+		stopChan:            make(chan struct{}),
+		heartbeatBackoff:    &backoffConfig{initialInterval: time.Second, maxInterval: time.Minute, multiplier: 2.0},
+		seenCommands:        make(map[string]time.Time),
+		recentLogs:          newRecentLogBuffer(50),
+		activeTasks:         make(map[string]*ActiveTaskExecution),
+		taskIDsByJob:        make(map[string][]string),
+		pendingTasks:        make(map[string]*PendingTaskExecution),
+		activeTaskLeases:    make(map[string]*ActiveTaskLease),
+		executorRegistry:    reg,
+		taskRunner:          taskrunner.NewTaskRunner(reg, log),
+		concurrencyLimiter:  concurrency.NewConcurrencyLimiter(1),
+		version:             "test",
 	}
 	wireTestReporter(w, nil)
 
@@ -114,14 +207,9 @@ func TestTaskSurvivesSessionTeardownButNotWorkerStop(t *testing.T) {
 			LeaseId:         "lease-resume-001",
 			AttemptNumber:   1,
 			Revision:        1,
-			ExecutorId:      "scene.composite.v1",
+			ExecutorId:      "video.assemble.copy.v1",
 			ExecutorVersion: 1,
-			TaskSpec: mustStruct(t, map[string]interface{}{
-				"payload_contract_version": 1,
-				"job_id":                   "job-resume-001",
-				"job_type":                 "scene.composite.v1",
-				"created_at":               "2026-01-01T00:00:00Z",
-			}),
+			TaskSpec:        mustStruct(t, resumePlanPayload(t)),
 		},
 	)
 	recvCh <- controltransport.NewTypedMessage(

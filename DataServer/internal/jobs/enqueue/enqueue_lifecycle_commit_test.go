@@ -45,6 +45,7 @@ func TestEnqueueCreatesJobAndTaskAtomically(t *testing.T) {
 			map[string]interface{}{"destination_id": "drive-main", "retry_budget": 3, "priority": 0},
 		},
 	}
+	payload = testCompiledV2Payload(payload)
 
 	req := costmodel.JobRequirements{
 		ResourceClass: costmodel.ResourceGPU,
@@ -81,33 +82,21 @@ func TestEnqueueCreatesJobAndTaskAtomically(t *testing.T) {
 	}
 }
 
-// TestEnqueuePreservesDeferredDriveAssetWireAndKind verifies the
-// self-sufficient velox-drive:// wire survives enqueue: the scheme carries
-// the kind, and no legacy asset_ref_kind sibling is persisted.
-func TestEnqueuePreservesDeferredDriveAssetWireAndKind(t *testing.T) {
+// TestEnqueuePreservesProducerCompiledAssetReference verifies enqueue keeps
+// the producer-owned V2 asset references intact without reconstructing them
+// from retired scene URLs.
+func TestEnqueuePreservesProducerCompiledAssetReference(t *testing.T) {
 	t.Parallel()
 	enq := newTestEnqueuer(t)
 	payload := map[string]interface{}{
-		"video_name":      "Deferred Drive enqueue",
-		"script_text":     "typed asset boundary",
-		"voiceover_paths": []interface{}{"velox-asset://voice-1"},
-		"scenes": []interface{}{map[string]interface{}{
-			"scene_id": "scene-1",
-			"clip": map[string]interface{}{"asset_id": "drive-file-123456",
-				"url":         "velox-drive://drive-file-123456",
-				"duration_ms": 3000,
-			},
-			"voiceover": map[string]interface{}{
-				"asset_id":    "voice-1",
-				"url":         "velox-asset://voice-1",
-				"duration_ms": 3000,
-			},
-		}},
+		"video_name":  "Deferred Drive enqueue",
+		"script_text": "typed asset boundary",
 		"delivery_plan": []interface{}{map[string]interface{}{
 			"destination_id": "drive-main",
 			"retry_budget":   1,
 		}},
 	}
+	payload = testCompiledV2Payload(payload)
 	response, err := enq.Enqueue(context.Background(), payload, costmodel.DefaultRequirements())
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)
@@ -126,13 +115,13 @@ func TestEnqueuePreservesDeferredDriveAssetWireAndKind(t *testing.T) {
 		t.Fatal(err)
 	}
 	wire := string(encoded)
-	for _, want := range []string{"velox-drive://drive-file-123456", "drive-file-123456"} {
+	for _, want := range []string{"compiled_render_plan_json", "video-source", "final_audio"} {
 		if !strings.Contains(wire, want) {
 			t.Fatalf("persisted payload lost %q: %s", want, wire)
 		}
 	}
-	if strings.Contains(wire, "asset_ref_kind") || strings.Contains(wire, "deferred_drive") {
-		t.Fatalf("persisted payload must not carry legacy asset_ref_kind: %s", wire)
+	if strings.Contains(wire, "scenes") || strings.Contains(wire, "velox-drive://") {
+		t.Fatalf("persisted V2 payload unexpectedly contains retired scene asset data: %s", wire)
 	}
 }
 
@@ -150,6 +139,7 @@ func TestEnqueueDefaultsPreserved(t *testing.T) {
 			map[string]interface{}{"destination_id": "drive-main", "retry_budget": 3, "priority": 0},
 		},
 	}
+	payload = testCompiledV2Payload(payload)
 
 	req := costmodel.DefaultRequirements()
 
@@ -210,6 +200,7 @@ func TestEnqueue_Precondition_RejectsMissingPlan(t *testing.T) {
 		"scenes":          []interface{}{map[string]interface{}{"scene": "intro", "voiceover": "v1"}},
 		"voiceover_paths": []string{"/tmp/v.mp3"},
 	}
+	payload = testCompiledV2Payload(payload)
 	_, err = enq.Enqueue(context.Background(), payload, costmodel.DefaultRequirements())
 	if err == nil {
 		t.Fatal("want error when plan missing, got nil")
@@ -249,6 +240,7 @@ func TestEnqueue_ResolverFailureAfterAtomicCreateDoesNotReportFalseFailure(t *te
 			map[string]interface{}{"destination_id": "d1", "priority": 0, "retry_budget": 3},
 		},
 	}
+	payload = testCompiledV2Payload(payload)
 
 	response, err := enq.Enqueue(context.Background(), payload, costmodel.DefaultRequirements())
 	if err != nil {
@@ -295,6 +287,7 @@ func TestEnqueue_ResolverEmptyPlanDoesNotRejectValidPayload(t *testing.T) {
 			map[string]interface{}{"destination_id": "d1", "priority": 0, "retry_budget": 3},
 		},
 	}
+	payload = testCompiledV2Payload(payload)
 	response, err := enq.Enqueue(context.Background(), payload, costmodel.DefaultRequirements())
 	if err != nil {
 		t.Fatalf("valid payload must enqueue despite empty resolver result: %v", err)
@@ -342,6 +335,7 @@ func TestEnqueue_ResolverNegativeRetryBudgetDoesNotRejectValidPayload(t *testing
 			map[string]interface{}{"destination_id": "d1", "priority": 0, "retry_budget": 3},
 		},
 	}
+	payload = testCompiledV2Payload(payload)
 	response, err := enq.Enqueue(context.Background(), payload, costmodel.DefaultRequirements())
 	if err != nil {
 		t.Fatalf("valid payload must enqueue despite invalid resolver result: %v", err)
@@ -398,6 +392,7 @@ func TestEnqueue_Precondition_PropagatesMaxRetryBudget(t *testing.T) {
 			map[string]interface{}{"destination_id": "d3", "priority": 2, "retry_budget": 5},
 		},
 	}
+	payload = testCompiledV2Payload(payload)
 	response, err := enq.Enqueue(context.Background(), payload, costmodel.DefaultRequirements())
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)

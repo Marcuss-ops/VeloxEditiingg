@@ -64,41 +64,9 @@ const MaxSceneDurationSeconds = 86400.0
 // retry_budget get a different value than the spec advertises).
 const DefaultRetryBudget = 3
 
-// ManifestRefSchemaVersionV1 is the only manifest schema version the
-// Master accepts today. Future versions MUST be added to the `oneof`
-// list in apiwire.SubmitManifestRef.SchemaVersion AND to this
-// constant set BEFORE the new resolver is shipped, so the spec and
-// the implementation cannot drift.
-//
-// Closed enum today (one accepted value) but expressed as a list of
-// constants so a future v2 addition is a one-line bump instead of a
-// scattered refactor across the validator + the resolver.
-var manifestRefSchemaVersions = []string{
-	"velox.render-manifest.v1",
-}
-
-// MaxManifestRefURLBytes caps the wire-level byte length of
-// manifest_ref.url at 2048 — a generous ceiling that fits every
-// realistic https URL and velox-asset URI without truncating. The
-// cap mirrors the apiwire.SubmitManifestRef.validate tag so a
-// drift between the schema and the validator surfaces as a test
-// failure rather than a silent acceptance asymmetry.
-const MaxManifestRefURLBytes = 2048
-
-// manifestRefURLRegexp matches a manifest_ref.url whose scheme is one
-// of http, https, or velox-asset (manifests are local registry assets;
-// deferred velox-drive:// manifests are out of scope). The schemagen
-// cannot emit a JSON Schema that distinguishes velox-asset:// from
-// arbitrary URIs natively, so the regex is duplicated here (and in the
-// apiwire validate tag) to keep the wire schema and the runtime
-// validator in lockstep. Compile-once at package init so the
-// validator's hot path doesn't pay the regex-compile cost on every
-// request.
-var manifestRefURLRegexp = regexp.MustCompile(`^(https?://|velox-asset://).+`)
-
 // isAcceptedAssetURL accepts external HTTP(S) references and canonical
-// self-sufficient asset wires. Canonical wire classification belongs to
-// shared/assetref; this boundary must not grow another scheme parser.
+// self-sufficient asset wires. It remains only for validation of retired
+// legacy fields so callers receive a stable rejection detail.
 func isAcceptedAssetURL(raw string) bool {
 	if _, err := assetref.ParseCanonicalWire(raw); err == nil {
 		return true

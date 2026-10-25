@@ -50,6 +50,14 @@ func validateCreateJobCommand(cmd CreateJobCmd) (map[string]any, error) {
 	if err := contract.StrictValidatePayload(renderSpec); err != nil {
 		return nil, fmt.Errorf("%w: invalid render_spec: %w", ErrInvalidPayload, err)
 	}
+	for _, key := range []string{"scenes", "scenes_json", "render_manifest", "layers", "overlays", "visual_replacements", "clips", "items", "images", "voiceover_paths", "voiceover_path", "audio_path"} {
+		if _, exists := renderSpec[key]; exists {
+			return nil, fmt.Errorf("%w: render_spec.%s is retired; submit the producer-compiled CompiledRenderPlanV2", ErrInvalidPayload, key)
+		}
+	}
+	if err := contract.ValidateCompiledRenderPlanV2Payload(renderSpec); err != nil {
+		return nil, fmt.Errorf("%w: render_spec compiled_render_plan_v2: %v", ErrInvalidPayload, err)
+	}
 	return renderSpec, nil
 }
 

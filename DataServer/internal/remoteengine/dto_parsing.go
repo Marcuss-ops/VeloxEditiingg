@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"velox-shared/assetref"
 	"velox-shared/contract"
 	"velox-shared/payload"
 )
@@ -72,42 +71,16 @@ func ParseRemotePipelineResult(raw map[string]interface{}) (*RemotePipelineResul
 	if raw == nil {
 		return nil, fmt.Errorf("remoteengine: ParseRemotePipelineResult: raw map is nil")
 	}
-
-	// Flatten the nested "result" envelope (same logic as enqueue.FlattenPipelineResult).
 	flat := flattenResult(raw)
-
-	result := &RemotePipelineResult{
-		RemoteJobID: payload.FirstString(flat, "job_id", "trace_id", "id"),
-		Raw:         raw,
+	planJSON, jsonOK := flat[contract.PayloadKeyCompiledRenderPlanJSON].(string)
+	planSHA, shaOK := flat[contract.PayloadKeyCompiledRenderPlanSHA].(string)
+	if !jsonOK || !shaOK || strings.TrimSpace(planJSON) == "" || strings.TrimSpace(planSHA) == "" {
+		return nil, fmt.Errorf("remoteengine: producer-compiled CompiledRenderPlanV2 is required")
 	}
-
-	// ── Script ───────────────────────────────────────────────────────
-	result.Script = ScriptResult{
-		Text:         payload.FirstString(flat, "script_text", "script", "generated_script", "text"),
-		Title:        payload.FirstString(flat, "video_name", "title", "script_title", "name"),
-		MarkdownPath: payload.FirstString(flat, "markdown_path"),
-		JSONPath:     payload.FirstString(flat, "json_path"),
+	if err := contract.ValidateCompiledRenderPlanV2Payload(flat); err != nil {
+		return nil, fmt.Errorf("remoteengine: invalid CompiledRenderPlanV2: %w", err)
 	}
-
-	// If script text is empty but a markdown_path is present, the caller
-	// (enqueue.BuildPipelinePayload) will read it from disk. We don't
-	// read it here because the file is on the remote engine's filesystem.
-
-	// ── Scenes ───────────────────────────────────────────────────────
-	result.Scenes = extractScenesDTO(flat)
-
-	// ── Voiceover ────────────────────────────────────────────────────
-	result.Voiceover = VoiceoverResult{
-		Paths: extractVoiceoverPathsDTO(flat),
-	}
-
-	// ── Metadata ─────────────────────────────────────────────────────
-	result.Metadata = extractMetadataDTO(flat)
-
-	// ── Assets ───────────────────────────────────────────────────────
-	result.Assets = extractAssetsDTO(flat)
-
-	return result, nil
+	return &RemotePipelineResult{RemoteJobID: payload.FirstString(flat, "job_id", "trace_id", "id"), Raw: flat}, nil
 }
 
 // ToWorkerPayloadChecked converts the typed DTO into a map[string]interface{}
@@ -131,92 +104,18 @@ func ParseRemotePipelineResult(raw map[string]interface{}) (*RemotePipelineResul
 //   - json_path / markdown_path (from Script, for on-disk fallback)
 func (r *RemotePipelineResult) ToWorkerPayloadChecked() (map[string]interface{}, error) {
 	if r == nil {
-		return map[string]interface{}{}, nil
+		return nil, fmt.Errorf("remoteengine: pipeline result is required")
 	}
-
-	// Start with the flattened raw map as a base so render-only fields
-	// (such as output paths) are preserved. Control-plane data is removed
-	// before the map can reach enqueue/C++.
-	m := map[string]interface{}{}
-	if r.Raw != nil {
-		flat := flattenResult(r.Raw)
-		for k, v := range flat {
-			m[k] = v
-		}
+	flat := flattenResult(r.Raw)
+	planJSON, jsonOK := flat[contract.PayloadKeyCompiledRenderPlanJSON].(string)
+	planSHA, shaOK := flat[contract.PayloadKeyCompiledRenderPlanSHA].(string)
+	if !jsonOK || !shaOK || strings.TrimSpace(planJSON) == "" || strings.TrimSpace(planSHA) == "" {
+		return nil, fmt.Errorf("remoteengine: producer-compiled CompiledRenderPlanV2 is required")
 	}
-	// Normalize overlay authoring URLs at this boundary as well as in the
-	// enqueue asset service. Creator-push/in-runner paths can reach the typed
-	// DTO without an AssetService, but the worker must never receive a raw
-	// Google Drive URL: it only understands the credential-free
-	// velox-drive://<file-id> reference and fetches bytes through the
-	// authenticated Master asset bridge.
-	if rawOverlays, present := m["overlays"]; present {
-		overlays, overlayErr := contract.ParseOverlays(rawOverlays)
-		if overlayErr != nil {
-			return nil, fmt.Errorf("remoteengine: overlays: %w", overlayErr)
-		}
-		if len(overlays) > 0 {
-			m["overlays"] = overlays
-		}
+	if err := contract.ValidateCompiledRenderPlanV2Payload(flat); err != nil {
+		return nil, fmt.Errorf("remoteengine: invalid CompiledRenderPlanV2: %w", err)
 	}
-
-	// Overlay typed DTO fields — these take precedence over raw values.
-	if r.RemoteJobID != "" {
-		m["job_id"] = r.RemoteJobID
-		m["trace_id"] = r.RemoteJobID
-		m["job_run_id"] = r.RemoteJobID
-		m["correlation_id"] = r.RemoteJobID
-	}
-
-	if r.Script.Title != "" {
-		m["video_name"] = r.Script.Title
-	}
-	if r.Script.Text != "" {
-		m["script_text"] = r.Script.Text
-	}
-	if r.Script.MarkdownPath != "" {
-		m["markdown_path"] = r.Script.MarkdownPath
-	}
-	if r.Script.JSONPath != "" {
-		m["json_path"] = r.Script.JSONPath
-	}
-
-	if len(r.Scenes) > 0 {
-		if scenesJSON, err := json.Marshal(r.Scenes); err == nil {
-			m["scenes_json"] = string(scenesJSON)
-		}
-		// clips.v1 consumes an explicit renderer-facing clip list. Derive it
-		// from the same typed scene assets used for scenes_json so creator and
-		// external intake cannot diverge at the projection boundary. The
-		// scene stock pool remains inside scenes_json because its per-asset
-		// durations are needed by the worker timeline compiler.
-		clips := make([]interface{}, 0, len(r.Scenes))
-		for _, scene := range r.Scenes {
-			if scene.Clip == nil {
-				continue
-			}
-			url := strings.TrimSpace(scene.Clip.URL)
-			if url == "" && strings.TrimSpace(scene.Clip.AssetID) != "" {
-				if ref, err := assetref.NewDeferredDrive(strings.TrimSpace(scene.Clip.AssetID)); err == nil {
-					url = ref.Wire()
-				}
-			}
-			if url == "" {
-				continue
-			}
-			clips = append(clips, map[string]interface{}{
-				"url": url, "duration": scene.DurationSeconds,
-			})
-		}
-		if len(clips) > 0 {
-			m["clips"] = clips
-		}
-	}
-
-	// Enforce the renderer boundary after all typed overlays. This removes
-	// publication metadata even when it arrived under a legacy raw key or
-	// nested inside delivery_plan entries.
-	projected, err := contract.RenderOnlyPayload(m)
+	projected, err := contract.RenderOnlyPayload(flat)
 	if err != nil {
 		return nil, fmt.Errorf("project renderer payload: %w", err)
 	}

@@ -100,13 +100,13 @@ func TestEnqueueFailureInjection_PlanResolverErrorIsTypedAndNotSuccess(t *testin
 }
 
 func failureInjectionPayload(videoName string) map[string]interface{} {
-	return map[string]interface{}{
+	return testCompiledV2Payload(map[string]interface{}{
 		"video_name":     videoName,
 		"script_text":    "failure injection",
 		"voiceover_path": "/tmp/failure-injection.mp3",
 		"scenes":         []interface{}{map[string]interface{}{"text": "scene", "image_link": "https://example.com/scene.png"}},
 		"delivery_plan":  []interface{}{map[string]interface{}{"destination_id": "drive-main", "retry_budget": 3}},
-	}
+	})
 }
 
 func TestEnqueueFailureInjection_SocialValidatorHardErrorBlocksCreate(t *testing.T) {

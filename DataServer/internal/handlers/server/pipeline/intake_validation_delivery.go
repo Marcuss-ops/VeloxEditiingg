@@ -64,6 +64,14 @@ func validateSubmitDelivery(req SubmitJobRequest) []gin.H {
 				"issue": "empty",
 			})
 		}
+		if d.RetryBudget != nil && *d.RetryBudget < 0 {
+			details = append(details, gin.H{
+				"path":     pathPrefix + ".retry_budget",
+				"issue":    "out_of_range",
+				"minimum":  0,
+				"observed": *d.RetryBudget,
+			})
+		}
 	}
 
 	return details

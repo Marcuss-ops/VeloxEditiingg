@@ -68,6 +68,7 @@ func TestEnqueue_NoDestinationID_FailsClosed_NoAutoSelect_NoNameMatch_NoCrossWor
 			"scenes":         []interface{}{map[string]interface{}{"text": "S1", "image_link": "https://example.com/i.png"}},
 			"delivery_plan":  []interface{}{}, // empty array — system MUST NOT auto-pick a channel
 		}
+		payload = testCompiledV2Payload(payload)
 		_, _, _, err := enq.PrepareJobAndTask(context.Background(), payload, costmodel.DefaultRequirements())
 		if err == nil {
 			t.Fatal("invariant (a) violated: empty delivery_plan MUST be rejected (no auto-select); got nil error")
@@ -93,6 +94,7 @@ func TestEnqueue_NoDestinationID_FailsClosed_NoAutoSelect_NoNameMatch_NoCrossWor
 				},
 			},
 		}
+		payload = testCompiledV2Payload(payload)
 		_, _, _, err := enq.PrepareJobAndTask(context.Background(), payload, costmodel.DefaultRequirements())
 		if err == nil {
 			t.Fatal("invariant (a) violated: missing destination_id field MUST be rejected (no auto-select); got nil error")
@@ -118,6 +120,7 @@ func TestEnqueue_NoDestinationID_FailsClosed_NoAutoSelect_NoNameMatch_NoCrossWor
 				},
 			},
 		}
+		payload = testCompiledV2Payload(payload)
 		_, _, _, err := enq.PrepareJobAndTask(context.Background(), payload, costmodel.DefaultRequirements())
 		if err == nil {
 			t.Fatal("invariant (a) violated: empty-string destination_id MUST be rejected (no auto-select); got nil error")
@@ -180,6 +183,7 @@ func TestEnqueue_NoDestinationID_FailsClosed_NoAutoSelect_NoNameMatch_NoCrossWor
 				},
 			},
 		}
+		payload = testCompiledV2Payload(payload)
 		_, err = enq.Enqueue(context.Background(), payload, costmodel.DefaultRequirements())
 		if err == nil {
 			t.Fatal("invariant (b) violated: 'drive-ghost' (non-existent, similar NAME shape to seeded 'drive-main') MUST be rejected (no name-match fallback); got nil error")
@@ -244,6 +248,7 @@ func TestEnqueue_NoDestinationID_FailsClosed_NoAutoSelect_NoNameMatch_NoCrossWor
 				},
 			},
 		}
+		payload = testCompiledV2Payload(payload)
 		_, err = enq.Enqueue(context.Background(), payload, costmodel.DefaultRequirements())
 		if err == nil {
 			t.Fatal("invariant (c) violated: 'social-workspace-B' (not in this workspace's delivery_destinations) MUST be rejected (no cross-workspace substitution); got nil error")
@@ -303,6 +308,7 @@ func TestEnqueue_NoDestinationID_FailsClosed_NoAutoSelect_NoNameMatch_NoCrossWor
 				},
 			},
 		}
+		payload = testCompiledV2Payload(payload)
 		_, err = enq.Enqueue(context.Background(), payload, costmodel.DefaultRequirements())
 		if err == nil {
 			t.Fatal("invariant (c) violated: disabled destination_id MUST be rejected even when enabled alternatives exist; got nil error")
@@ -362,6 +368,7 @@ func TestEnqueue_NoDestinationID_FailsClosed_NoAutoSelect_NoNameMatch_NoCrossWor
 				},
 			},
 		}
+		payload = testCompiledV2Payload(payload)
 		response, err := enq.Enqueue(context.Background(), payload, costmodel.DefaultRequirements())
 		if err == nil {
 			t.Fatal("invariant (d) violated: Enqueue with unselectable destination_id MUST return an error; got nil + response")

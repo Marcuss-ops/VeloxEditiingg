@@ -30,7 +30,47 @@ import (
 	"velox-server/internal/creatorflow"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/store"
+	"velox-shared/contract"
 )
+
+func submitBodyWithPlan(t *testing.T, body SubmitJobRequest, durationUS int64, segmentCount int) SubmitJobRequest {
+	t.Helper()
+	plan, err := contract.DecodeCompiledRenderPlanV2([]byte(body.CompiledRenderPlanJSON))
+	if err != nil {
+		t.Fatalf("decode test plan: %v", err)
+	}
+	plan.DurationUS = durationUS
+	plan.FinalAudio.DurationUS = durationUS
+	for i := range plan.Assets {
+		if plan.Assets[i].Kind == "final_audio" {
+			plan.Assets[i].DurationUS = durationUS
+		}
+	}
+	if segmentCount > 1 {
+		first := plan.VideoTracks[0].Segments[0]
+		plan.VideoTracks[0].Segments = []contract.VideoSegmentV2{first}
+		for i := 1; i < segmentCount; i++ {
+			extra := first
+			extra.SegmentID = fmt.Sprintf("segment-%d", i)
+			extra.TimelineStartFrame = int64(i * 24)
+			plan.VideoTracks[0].Segments = append(plan.VideoTracks[0].Segments, extra)
+		}
+	}
+	canonical, err := plan.CanonicalJSON()
+	if err != nil {
+		t.Fatalf("canonicalize test plan: %v", err)
+	}
+	sha, err := plan.PlanSHA256()
+	if err != nil {
+		t.Fatalf("hash test plan: %v", err)
+	}
+	if err := contract.ValidateCompiledRenderPlanV2(plan); err != nil {
+		t.Fatalf("updated test plan invalid: %v", err)
+	}
+	body.CompiledRenderPlanJSON = string(canonical)
+	body.CompiledRenderPlanSHA256 = sha
+	return body
+}
 
 // m2mBundle is the typed M2M stack used by scenario 11 / 12 tests.
 // Sharing the same SQLite-on-tempfile + Enqueuer + Resolver + M2M
@@ -70,7 +110,7 @@ func newM2MBundle(t *testing.T, opts m2mBundleOpts) *m2mBundle {
 	jobRepo := store.NewSQLiteJobRepository(db)
 	atomic := store.NewAtomicJobTaskCreator(db)
 	testEnqueuer := enqueue.NewEnqueuer(atomic, jobRepo, nil, noopPlanResolver{})
-	resolver := creatorflow.NewResolverFromDeps(testEnqueuer, db.Forwarding(), db, tempDir, filepath.Join(tempDir, "videos"), "")
+	resolver := creatorflow.NewResolverMinimal(testEnqueuer, db.Forwarding())
 	cfg := &config.Config{
 		AllowedExternalDomains: opts.allowDomains,
 	}
@@ -152,7 +192,7 @@ func TestSubmitJobE2E_M2MAuthEnvelopes(t *testing.T) {
 	m2mMW := NewM2MJwAuthMiddleware(&config.Config{}, bundle.st, bundle.limiter)
 	bundle.h.RegisterRoutes(r, adminAuthFake, m2mMW)
 
-	body := validSubmitJobBody("e2e-m2m-001")
+	body := validSubmitJobBody(t, "e2e-m2m-001")
 
 	// Subtest 1: missing Authorization header → 401 m2m_token_required.
 	t.Run("missing_authorization_header", func(t *testing.T) {
@@ -232,14 +272,14 @@ func TestSubmitJobE2E_M2MRateLimitAndQuota(t *testing.T) {
 
 		// Two requests within burst capacity → both 202.
 		for i := 0; i < 2; i++ {
-			body := validSubmitJobBody(fmt.Sprintf("e2e-ratelimit-burst-%d", i))
+			body := validSubmitJobBody(t, fmt.Sprintf("e2e-ratelimit-burst-%d", i))
 			w := m2mPost(t, r, body, bundle.plaintext)
 			if w.Code != http.StatusAccepted {
 				t.Fatalf("burst req %d: want 202, got %d body=%s", i, w.Code, w.Body.String())
 			}
 		}
 		// Third request: bucket is empty → 429.
-		body3 := validSubmitJobBody("e2e-ratelimit-burst-3")
+		body3 := validSubmitJobBody(t, "e2e-ratelimit-burst-3")
 		w3 := m2mPost(t, r, body3, bundle.plaintext)
 		if w3.Code != http.StatusTooManyRequests {
 			t.Fatalf("3rd req: want 429, got %d body=%s", w3.Code, w3.Body.String())
@@ -261,12 +301,8 @@ func TestSubmitJobE2E_M2MRateLimitAndQuota(t *testing.T) {
 		m2mMW := NewM2MJwAuthMiddleware(&config.Config{}, bundle.st, bundle.limiter)
 		bundle.h.RegisterRoutes(r, adminAuthFake, m2mMW)
 
-		body := validSubmitJobBody("e2e-m2m-quota-001")
-		body.Scenes = append(body.Scenes, SubmitScene{
-			Text:            "Extra scene",
-			Clip:            &SubmitClip{URL: "velox-asset://clips/extra.mp4"},
-			DurationSeconds: 2.0,
-		})
+		body := validSubmitJobBody(t, "e2e-m2m-quota-001")
+		body = submitBodyWithPlan(t, body, 2_000_000, 2)
 		w := m2mPost(t, r, body, bundle.plaintext)
 		if w.Code != http.StatusTooManyRequests {
 			t.Fatalf("want 429 quota, got %d body=%s", w.Code, w.Body.String())
@@ -301,8 +337,8 @@ func TestSubmitJobE2E_M2MRateLimitAndQuota(t *testing.T) {
 		m2mMW := NewM2MJwAuthMiddleware(&config.Config{}, bundle.st, bundle.limiter)
 		bundle.h.RegisterRoutes(r, adminAuthFake, m2mMW)
 
-		body := validSubmitJobBody("e2e-m2m-quota-dur-001")
-		body.Scenes[0].DurationSeconds = 10.0
+		body := validSubmitJobBody(t, "e2e-m2m-quota-dur-001")
+		body = submitBodyWithPlan(t, body, 10_000_000, 1)
 		w := m2mPost(t, r, body, bundle.plaintext)
 		if w.Code != http.StatusTooManyRequests {
 			t.Fatalf("want 429 quota, got %d body=%s", w.Code, w.Body.String())

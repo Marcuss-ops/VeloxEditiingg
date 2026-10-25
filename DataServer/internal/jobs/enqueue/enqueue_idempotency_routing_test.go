@@ -25,7 +25,7 @@ import (
 // forwarding key always produces the same job ID.
 func TestDeriveForwardingJobID_Idempotency(t *testing.T) {
 	t.Parallel()
-	key := "remote_engine:creator-job-123:scene.composite.v1"
+	key := "remote_engine:creator-job-123:video.assemble.copy.v1"
 	id1 := DeriveForwardingJobID(key)
 	id2 := DeriveForwardingJobID(key)
 	if id1 != id2 {
@@ -41,8 +41,8 @@ func TestDeriveForwardingJobID_Idempotency(t *testing.T) {
 
 func TestDeriveForwardingJobID_DifferentKeys(t *testing.T) {
 	t.Parallel()
-	id1 := DeriveForwardingJobID("openai:job-1:scene.composite.v1")
-	id2 := DeriveForwardingJobID("openai:job-2:scene.composite.v1")
+	id1 := DeriveForwardingJobID("openai:job-1:video.assemble.copy.v1")
+	id2 := DeriveForwardingJobID("openai:job-2:video.assemble.copy.v1")
 	if id1 == id2 {
 		t.Errorf("different keys should produce different IDs: both are %q", id1)
 	}
@@ -53,7 +53,7 @@ func TestDeriveForwardingJobID_DifferentKeys(t *testing.T) {
 func TestValidateForwardingIdentity(t *testing.T) {
 	t.Parallel()
 
-	validKey := routing.FormatForwardingKey("remote_engine", "creator-forward-1", "scene.composite.v1").String()
+	validKey := routing.FormatForwardingKey("remote_engine", "creator-forward-1", "video.assemble.copy.v1").String()
 	cases := []struct {
 		name    string
 		value   interface{}
@@ -63,7 +63,7 @@ func TestValidateForwardingIdentity(t *testing.T) {
 		{name: "empty", value: "", wantErr: "required"},
 		{name: "wrong_type", value: 42, wantErr: "must be a string"},
 		{name: "incomplete", value: "remote_engine:creator-forward-1", wantErr: "must contain"},
-		{name: "non_canonical_escape", value: "remote%engine:creator-forward-1:scene.composite.v1", wantErr: "not canonical"},
+		{name: "non_canonical_escape", value: "remote%engine:creator-forward-1:video.assemble.copy.v1", wantErr: "not canonical"},
 	}
 
 	for _, tc := range cases {
@@ -101,7 +101,7 @@ func TestEnqueueWithForwardingKey(t *testing.T) {
 	payload := map[string]interface{}{
 		"video_name":             "Forwarded Video",
 		"script_text":            "forwarded script",
-		routing.KeyForwardingKey: "remote_engine:creator-forward-1:scene.composite.v1",
+		routing.KeyForwardingKey: "remote_engine:creator-forward-1:video.assemble.copy.v1",
 		"scenes": []interface{}{
 			map[string]interface{}{"scene": "intro", "voiceover": "v1"},
 		},
@@ -110,6 +110,7 @@ func TestEnqueueWithForwardingKey(t *testing.T) {
 			map[string]interface{}{"destination_id": "drive-main", "retry_budget": 3, "priority": 0},
 		},
 	}
+	payload = testCompiledV2Payload(payload)
 
 	response, err := enq.Enqueue(context.Background(), payload, costmodel.DefaultRequirements())
 	if err != nil {
@@ -117,7 +118,7 @@ func TestEnqueueWithForwardingKey(t *testing.T) {
 	}
 
 	jobID, _ := response["job_id"].(string)
-	expected := DeriveForwardingJobID("remote_engine:creator-forward-1:scene.composite.v1")
+	expected := DeriveForwardingJobID("remote_engine:creator-forward-1:video.assemble.copy.v1")
 	if jobID != expected {
 		t.Errorf("forwarding job_id = %q, want deterministic %q", jobID, expected)
 	}

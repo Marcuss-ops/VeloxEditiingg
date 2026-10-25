@@ -211,38 +211,8 @@ func TestSubmitJobRejectsUnknownField(t *testing.T) {
 // test path can't reach 202 because a Handlers{} has no resolver wired,
 // so this test asserts at the ValidateSubmitJobRequest layer instead —
 // the layer that owns the rejection detection.
-func TestSubmitJobValidateLowerBoundDuration(t *testing.T) {
-	t.Parallel()
-
-	req := SubmitJobRequest{
-		IdempotencyKey: "lb-001",
-		Scenes: []SubmitScene{
-			{Text: "sub-second", DurationSeconds: MinSceneDurationSeconds},
-		},
-	}
-	if verr, bad := ValidateSubmitJobRequest(req); bad || verr != nil {
-		t.Fatalf("%.4f s scene must be accepted at boundary, got error: %v",
-			MinSceneDurationSeconds, verr)
-	}
-}
-
 // TestSubmitJobValidateUpperBoundDuration mirrors the lower-bound test
 // for MaxSceneDurationSeconds (= 86400).
-func TestSubmitJobValidateUpperBoundDuration(t *testing.T) {
-	t.Parallel()
-
-	req := SubmitJobRequest{
-		IdempotencyKey: "ub-001",
-		Scenes: []SubmitScene{
-			{Text: "24h-timelapse", DurationSeconds: MaxSceneDurationSeconds},
-		},
-	}
-	if verr, bad := ValidateSubmitJobRequest(req); bad || verr != nil {
-		t.Fatalf("%.4f s scene must be accepted at boundary, got error: %v",
-			MaxSceneDurationSeconds, verr)
-	}
-}
-
 // TestSubmitJobValidateRejectsLongVideoName locks both the 422 path
 // AND the details[].issue == "max_length" diagnostic shape.
 func TestSubmitJobValidateRejectsLongVideoName(t *testing.T) {
@@ -275,62 +245,8 @@ func TestSubmitJobValidateRejectsLongVideoName(t *testing.T) {
 // TestSubmitJobValidateRejectsExcessiveScenes locks the 422 path
 // AND the details[].issue == "max_items" diagnostic shape for
 // MaxScenes = 10000.
-func TestSubmitJobValidateRejectsExcessiveScenes(t *testing.T) {
-	t.Parallel()
-
-	scenes := make([]SubmitScene, MaxScenes+1)
-	for i := range scenes {
-		scenes[i] = SubmitScene{Text: "s", DurationSeconds: 5}
-	}
-	req := SubmitJobRequest{
-		IdempotencyKey: "sc-001",
-		Scenes:         scenes,
-	}
-	verr, bad := ValidateSubmitJobRequest(req)
-	if !bad || verr == nil || len(verr.Details) == 0 {
-		t.Fatalf("scenes with %d entries should be rejected", len(scenes))
-	}
-	found := false
-	for _, d := range verr.Details {
-		if d["path"] == "scenes" && d["issue"] == "max_items" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("expected details entry {path:scenes, issue:max_items}, got: %+v", verr.Details)
-	}
-}
-
 // TestSubmitJobValidateRejectsEmptySceneText locks the cross-field rule
 // that SubmitScene.text must be non-empty after trim.
-func TestSubmitJobValidateRejectsEmptySceneText(t *testing.T) {
-	t.Parallel()
-
-	req := SubmitJobRequest{
-		IdempotencyKey: "st-001",
-		Scenes: []SubmitScene{
-			{Text: "", DurationSeconds: 5},
-			{Text: "   ", DurationSeconds: 5}, // whitespace-only also rejected (trim policy).
-		},
-	}
-	verr, bad := ValidateSubmitJobRequest(req)
-	if !bad || verr == nil || len(verr.Details) == 0 {
-		t.Fatalf("empty scene text must be rejected (bad=%v verr=%v)", bad, verr)
-	}
-	found := false
-	for _, d := range verr.Details {
-		p, _ := d["path"].(string)
-		if len(p) > len("scenes.") && p[:len("scenes.")] == "scenes." && d["issue"] == "empty" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("expected details entry {path:scenes.<i>.text, issue:empty}, got: %+v", verr.Details)
-	}
-}
-
 // TestSubmitJobValidateRejectsEmptyDestinationID locks the cross-field
 // rule that SubmitDeliveryPlanEntry.destination_id must be non-empty.
 func TestSubmitJobValidateRejectsEmptyDestinationID(t *testing.T) {
@@ -359,5 +275,14 @@ func TestSubmitJobValidateRejectsEmptyDestinationID(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected details entry {path:delivery_plan.<i>.destination_id, issue:empty}, got: %+v", verr.Details)
+	}
+}
+
+func TestSubmitJobValidateRejectsLegacyScenes(t *testing.T) {
+	req := validSubmitJobBody(t, "legacy-scenes-rejected")
+	req.Scenes = []SubmitScene{{Text: "old scene", DurationSeconds: 1}}
+	validation, bad := ValidateSubmitJobRequest(req)
+	if !bad || validation == nil {
+		t.Fatal("legacy scenes were accepted; the producer must submit CompiledRenderPlanV2")
 	}
 }

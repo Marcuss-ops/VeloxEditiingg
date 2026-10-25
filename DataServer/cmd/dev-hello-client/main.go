@@ -94,7 +94,7 @@ func main() {
 	workerName := flag.String("worker-name", "dev-hello-client", "human-friendly name surfaced in worker list")
 	hostnameOverride := flag.String("hostname", "", "override os.Hostname() in Hello (default: real hostname)")
 	protocolVersion := flag.String("protocol-version", "v3", "protocol_version string")
-	executorID := flag.String("executor-id", "dev.scene.composite.v1", "executors[0].id advertised in Hello.capabilities")
+	executorID := flag.String("executor-id", "video.assemble.copy.v1", "executors[0].id advertised in Hello.capabilities")
 	workerSecret := flag.String("worker-secret", "", "VELOX_WORKER_SECRET — combined with worker-id to produce credential_hash (sha256 hex)")
 	credentialOverride := flag.String("credential-hash", "", "override credential_hash directly (skips sha256 derivation; for non-secret dev fixtures only)")
 

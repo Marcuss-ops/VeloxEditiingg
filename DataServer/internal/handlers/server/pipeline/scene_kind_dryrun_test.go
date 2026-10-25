@@ -137,66 +137,27 @@ func TestSummarizeWorkerPayloadForDryRun_Coverage(t *testing.T) {
 // half of the Isabelle regression: a kind="clip" scene without a clip
 // asset is ACCEPTED (soft-deprecation) but the 202 envelope carries the
 // warning so the generator can migrate before the sunset hard-rejection.
-func TestCreatorPush_KindClipWithoutClip_AcceptedWithWarnings(t *testing.T) {
-	h, db, _ := newCreatorPushE2EStack(t)
+func TestCreatorPush_RejectsLegacyScenes(t *testing.T) {
+	h, _, _ := newCreatorPushE2EStack(t)
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	h.RegisterRoutes(r, adminAuthFake, m2mJobsAuthFake)
-
-	body := creatorPushE2EBody("creator-warn-01", "creator-warn-job-001", "scene.composite.v1")
+	body := creatorPushE2EBody(t, "creator-legacy-scene", "creator-legacy-scene-job", "video.assemble.copy.v1")
 	payload := body["payload"].(map[string]interface{})
-	payload["scenes"] = []interface{}{
-		map[string]interface{}{
-			"scene_id":         "scene-warn-62",
-			"index":            62,
-			"kind":             "clip",
-			"text":             "Testimony without clip field",
-			"duration_seconds": 6.36,
-			"stock": map[string]interface{}{
-				"asset_id": "cliprender_warn",
-				"url":      "velox-drive://warn-testimony-file",
-			},
-		},
-	}
-
+	payload["scenes"] = []interface{}{map[string]interface{}{"text": "retired scene"}}
 	w := postCreatorPush(t, r, body)
-	if w.Code != http.StatusAccepted {
-		t.Fatalf("want 202 (soft-deprecation accepts), got %d body=%s", w.Code, w.Body.String())
-	}
-	var decoded map[string]interface{}
-	if err := json.Unmarshal(w.Body.Bytes(), &decoded); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	warnings, _ := decoded["warnings"].([]interface{})
-	if len(warnings) != 1 {
-		t.Fatalf("warnings = %v, want one", decoded["warnings"])
-	}
-	first, _ := warnings[0].(map[string]interface{})
-	if first["code"] != sceneKindWarningCode {
-		t.Fatalf("warning code = %v, want %q", first["code"], sceneKindWarningCode)
-	}
-	// Accepted means rows exist: warnings must never silently drop the job.
-	jobID := enqueue.DeriveForwardingJobID(
-		routing.FormatForwardingKey("creator-warn-01", "creator-warn-job-001", "scene.composite.v1").String(),
-	)
-	var jobCount int
-	if err := db.DB().QueryRow(`SELECT COUNT(*) FROM jobs WHERE job_id = ?`, jobID).Scan(&jobCount); err != nil {
-		t.Fatalf("count jobs: %v", err)
-	}
-	if jobCount != 1 {
-		t.Fatalf("warned accept must still create the job row, got %d", jobCount)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("legacy scenes must be rejected, got %d body=%s", w.Code, w.Body.String())
 	}
 }
 
-// TestCreatorPush_DryRun_CreatesNothing pins the dry-run contract: 200
-// with the worker projection summary, zero forwarding/job/task rows.
 func TestCreatorPush_DryRun_CreatesNothing(t *testing.T) {
 	h, db, _ := newCreatorPushE2EStack(t)
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	h.RegisterRoutes(r, adminAuthFake, m2mJobsAuthFake)
 
-	body := creatorPushE2EBody("creator-dry-01", "creator-dry-job-001", "scene.composite.v1")
+	body := creatorPushE2EBody(t, "creator-dry-01", "creator-dry-job-001", "video.assemble.copy.v1")
 	raw, err := json.Marshal(body)
 	if err != nil {
 		t.Fatalf("marshal body: %v", err)
@@ -223,11 +184,11 @@ func TestCreatorPush_DryRun_CreatesNothing(t *testing.T) {
 	if !decoded.OK || !decoded.DryRun {
 		t.Fatalf("decoded = %+v, want ok+dry_run", decoded)
 	}
-	if decoded.Summary.Scenes != 1 {
-		t.Fatalf("summary.scenes = %d, want 1", decoded.Summary.Scenes)
+	if decoded.Summary.Scenes != 0 {
+		t.Fatalf("V2-only dry-run should not project legacy scenes, got %d", decoded.Summary.Scenes)
 	}
 	jobID := enqueue.DeriveForwardingJobID(
-		routing.FormatForwardingKey("creator-dry-01", "creator-dry-job-001", "scene.composite.v1").String(),
+		routing.FormatForwardingKey("creator-dry-01", "creator-dry-job-001", "video.assemble.copy.v1").String(),
 	)
 	for _, table := range []string{"jobs", "tasks"} {
 		var n int
@@ -259,17 +220,7 @@ func TestSubmitJob_DryRun_CreatesNothing(t *testing.T) {
 	r := gin.New()
 	h.RegisterRoutes(r, adminAuthFake, m2mJobsAuthFake)
 
-	reqBody := validSubmitJobBody("dry-run-jobs-001")
-	// Testimony-shaped scene: kind=clip, stock-only. Must pass every
-	// validator (valid scheme URLs) and surface as a warning, not a
-	// rejection — the dry-run reports what accept would do.
-	reqBody.Scenes = []SubmitScene{{
-		Text:            "Testimony without clip field",
-		Kind:            "clip",
-		DurationSeconds: 6.36,
-		Stock:           &SubmitClip{URL: "velox-drive://warn-testimony-file"},
-		Voiceover:       &SubmitVoiceover{URL: "velox-asset://voiceovers/opening.mp3"},
-	}}
+	reqBody := validSubmitJobBody(t, "dry-run-jobs-001")
 	raw, err := json.Marshal(reqBody)
 	if err != nil {
 		t.Fatalf("marshal body: %v", err)
@@ -294,11 +245,11 @@ func TestSubmitJob_DryRun_CreatesNothing(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &decoded); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if !decoded.OK || !decoded.DryRun || decoded.Summary.Scenes != 1 {
-		t.Fatalf("decoded = %+v, want ok+dry_run+1 scene", decoded)
+	if !decoded.OK || !decoded.DryRun || decoded.Summary.Scenes != 0 {
+		t.Fatalf("decoded = %+v, want successful V2 dry-run without legacy scene projection", decoded)
 	}
-	if len(decoded.Summary.KindClipWithoutClip) != 1 {
-		t.Fatalf("kind_clip_without_clip = %v, want the testimony scene flagged", decoded.Summary.KindClipWithoutClip)
+	if len(decoded.Summary.KindClipWithoutClip) != 0 {
+		t.Fatalf("legacy scene warnings must not be emitted for V2 input: %v", decoded.Summary.KindClipWithoutClip)
 	}
 	jobID := expectedSubmitJobID("dry-run-jobs-001")
 	if n := countRowsByJobID(t, db, "jobs", "job_id", jobID); n != 0 {

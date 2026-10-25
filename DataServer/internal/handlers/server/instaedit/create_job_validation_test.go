@@ -11,7 +11,6 @@ func TestValidateCreateJobCommand(t *testing.T) {
 		name          string
 		cmd           CreateJobCmd
 		wantErr       error
-		wantScenes    bool
 		wantVideoName string
 	}{
 		{
@@ -55,22 +54,21 @@ func TestValidateCreateJobCommand(t *testing.T) {
 			wantErr: ErrInvalidPayload,
 		},
 		{
-			name: "render only does not require destinations",
+			name: "legacy scenes rejected for render only",
 			cmd: CreateJobCmd{
 				ProjectID:  "project-1",
 				RenderOnly: true,
 				RenderSpec: json.RawMessage(`{"scenes":[]}`),
 			},
-			wantScenes: true,
+			wantErr: ErrInvalidPayload,
 		},
 		{
 			name: "valid command returns parsed spec",
 			cmd: CreateJobCmd{
 				ProjectID:    "project-1",
 				Destinations: []CreateDestinationCmd{{ExternalDestinationID: "ext-1"}},
-				RenderSpec:   json.RawMessage(`{"video_name":"Video","scenes":[]}`),
+				RenderSpec:   validRenderSpecV2JSON(t, "Video"),
 			},
-			wantScenes:    true,
 			wantVideoName: "Video",
 		},
 	}
@@ -92,15 +90,6 @@ func TestValidateCreateJobCommand(t *testing.T) {
 			}
 			if got == nil {
 				t.Fatal("expected parsed render spec")
-			}
-			if tt.wantScenes {
-				scenes, ok := got["scenes"].([]any)
-				if !ok {
-					t.Fatalf("expected parsed scenes array, got %#v", got["scenes"])
-				}
-				if len(scenes) != 0 {
-					t.Fatalf("expected empty scenes array, got %#v", scenes)
-				}
 			}
 			if tt.wantVideoName != "" {
 				if videoName, ok := got["video_name"].(string); !ok || videoName != tt.wantVideoName {

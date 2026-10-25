@@ -36,9 +36,9 @@ func TestCreatorPushJobsE2E_VoiceoverStockClipScene(t *testing.T) {
 	h.RegisterRoutes(r, adminAuthFake, m2mJobsAuthFake)
 
 	expectedJobID := enqueue.DeriveForwardingJobID(
-		routing.FormatForwardingKey("creator_pc_1", "creator-job-001", "scene.composite.v1").String(),
+		routing.FormatForwardingKey("creator_pc_1", "creator-job-001", "video.assemble.copy.v1").String(),
 	)
-	body := creatorPushE2EBody("creator_pc_1", "creator-job-001", "scene.composite.v1")
+	body := creatorPushE2EBody(t, "creator_pc_1", "creator-job-001", "video.assemble.copy.v1")
 
 	// First POST — full happy path.
 	w := postCreatorPush(t, r, body)
@@ -54,7 +54,7 @@ func TestCreatorPushJobsE2E_VoiceoverStockClipScene(t *testing.T) {
 		"accepted_from":      "creator_push",
 		"source_provider":    "creator_pc_1",
 		"source_job_id":      "creator-job-001",
-		"target_executor_id": "scene.composite.v1",
+		"target_executor_id": "video.assemble.copy.v1",
 		"job_id":             expectedJobID,
 		"status":             "PENDING",
 		"dispatch_status":    "queued_for_workers",
@@ -67,7 +67,7 @@ func TestCreatorPushJobsE2E_VoiceoverStockClipScene(t *testing.T) {
 
 	// creator_forwardings row written by Resolve's atomic CAS.
 	forwarding, err := db.Forwarding().GetCreatorForwardingBySource(context.Background(),
-		"creator_pc_1", "creator-job-001", "scene.composite.v1",
+		"creator_pc_1", "creator-job-001", "video.assemble.copy.v1",
 	)
 	if err != nil {
 		t.Fatalf("get forwarding: %v", err)
@@ -145,7 +145,7 @@ func TestCreatorPushJobsE2E_VoiceoverStockClipScene(t *testing.T) {
 	var fwdCount, jobCount int
 	if err := db.DB().QueryRow(
 		`SELECT COUNT(*) FROM creator_forwardings WHERE source_provider = ? AND source_job_id = ? AND target_executor_id = ?`,
-		"creator_pc_1", "creator-job-001", "scene.composite.v1",
+		"creator_pc_1", "creator-job-001", "video.assemble.copy.v1",
 	).Scan(&fwdCount); err != nil {
 		t.Fatalf("count forwardings: %v", err)
 	}

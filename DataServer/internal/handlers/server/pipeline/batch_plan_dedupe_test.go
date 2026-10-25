@@ -14,7 +14,7 @@ import (
 // TestBatchItemFingerprint_StableAndExcludesNonRenderFields pins the dedupe
 // identity: fingerprint-equal iff render-relevant identity is deep-equal.
 func TestBatchItemFingerprint_StableAndExcludesNonRenderFields(t *testing.T) {
-	base := validBatchItem("key-a")
+	base := validBatchItem(t, "key-a")
 
 	fp, err := BatchItemFingerprint(base)
 	if err != nil {
@@ -82,9 +82,9 @@ func TestSubmitJobBatch_DedupesIdenticalPlansWithinBatch(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	h := &Handlers{}
-	itemA := validBatchItem("variant-a")
-	itemB := validBatchItem("variant-b")
-	itemC := validBatchItem("variant-c")
+	itemA := validBatchItem(t, "variant-a")
+	itemB := validBatchItem(t, "variant-b")
+	itemC := validBatchItem(t, "variant-c")
 
 	batch := SubmitJobBatchRequest{BatchID: "batch-dedupe", Items: []SubmitJobRequest{itemA, itemB, itemC}}
 	payload, err := json.Marshal(batch)

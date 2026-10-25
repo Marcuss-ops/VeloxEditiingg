@@ -75,7 +75,7 @@ func compileSceneVideoJobContext(ctx context.Context, normalized map[string]inte
 		Requirements: req,
 	}
 
-	executorID := "scene.composite.v1"
+	executorID := "video.assemble.copy.v1@1"
 	if resolved := resolveInternalExecutorID(normalized); resolved != "" {
 		executorID = resolved
 	}

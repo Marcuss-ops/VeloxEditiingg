@@ -7,15 +7,10 @@ import (
 	"velox-worker-agent/pkg/config"
 )
 
-// RegistryValidator checks that the executor registry is non-empty and
-// that scene.composite.v1@1 is registered (unless the worker is running
-// in the "creator" profile, which intentionally omits video rendering).
+// RegistryValidator checks that the sole V2 packet-copy executor is present.
 // RW-PROD-002 §2 item 10.
 type RegistryValidator struct {
 	Registry ExecutorRegistryView
-	// Profile is the worker profile (e.g. "creator"). When set to
-	// "creator", the validator no longer requires scene.composite.v1@1.
-	Profile string
 }
 
 func (v *RegistryValidator) ID() string { return "executors.registry" }
@@ -31,29 +26,22 @@ func (v *RegistryValidator) Run(_ context.Context, _ *config.WorkerConfig) Resul
 	if len(descs) == 0 {
 		return fail("executors.registry",
 			"executor registry is empty (no executors registered)",
-			"at minimum, MustRegister(scene.composite.v1@1) before starting the worker")
+			"register video.assemble.copy.v1@1 before starting the worker")
 	}
-
-	isCreator := config.IsCreatorProfileValue(v.Profile)
-	if isCreator {
-		detail := fmt.Sprintf("%d executor(s) registered (creator profile, scene.composite.v1 not required)", len(descs))
-		return pass("executors.registry", detail)
-	}
-
-	// Check for scene.composite.v1@1 specifically.
-	hasSceneComposite := false
+	// Check the single supported worker operation.
+	hasPacketCopy := false
 	for _, d := range descs {
-		if d.ID == "scene.composite.v1" && d.Version == 1 {
-			hasSceneComposite = true
+		if d.ID == "video.assemble.copy.v1" && d.Version == 1 {
+			hasPacketCopy = true
 			break
 		}
 	}
-	if !hasSceneComposite {
+	if !hasPacketCopy {
 		return fail("executors.registry",
-			fmt.Sprintf("registry has %d executor(s) but scene.composite.v1@1 is missing", len(descs)),
-			"register scene.composite.v1@1 via executors.NewSceneComposite")
+			fmt.Sprintf("registry has %d executor(s) but video.assemble.copy.v1@1 is missing", len(descs)),
+			"register the packet-copy executor via executors.NewVideoAssembleCopy")
 	}
 
-	detail := fmt.Sprintf("%d executor(s) registered, scene.composite.v1@1 present", len(descs))
+	detail := fmt.Sprintf("%d executor(s) registered, video.assemble.copy.v1@1 present", len(descs))
 	return pass("executors.registry", detail)
 }

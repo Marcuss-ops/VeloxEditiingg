@@ -13,7 +13,7 @@
 //
 // File layout (per concern):
 //   - config.go          — package doc + shared helpers (GRPCTLS, NormalizeWorkerID,
-//     IsCreatorProfile*, String)
+//     NormalizeWorkerID, String)
 //   - config_types.go    — GRPCTLSConfig, WorkerConfig, ErrInvalidConfig, constants
 //   - config_load_save.go — LoadConfig / SaveConfig (JSON persistence)
 //   - config_defaults.go — DefaultConfig / applyDefaults / GenerateWorkerID
@@ -24,7 +24,6 @@ package config
 
 import (
 	"fmt"
-	"strings"
 
 	"velox-shared/identity"
 )
@@ -52,22 +51,6 @@ func (c *WorkerConfig) GRPCTLS() GRPCTLSConfig {
 // with the Velox master server. Test cases live in shared/identity_test.go.
 func NormalizeWorkerID(id string) string {
 	return identity.NormalizeWorkerID(id)
-}
-
-// IsCreatorProfile reports whether this worker is configured for the
-// creator profile, with case-insensitive matching and whitespace trimming.
-func (c *WorkerConfig) IsCreatorProfile() bool {
-	if c == nil {
-		return false
-	}
-	return IsCreatorProfileValue(c.WorkerProfile)
-}
-
-// IsCreatorProfileValue reports whether the supplied profile string
-// identifies the creator profile, with case-insensitive matching and
-// whitespace trimming.
-func IsCreatorProfileValue(profile string) bool {
-	return strings.ToLower(strings.TrimSpace(profile)) == CreatorProfile
 }
 
 // String returns a formatted string representation of the config (for logging).

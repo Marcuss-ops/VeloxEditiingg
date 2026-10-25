@@ -35,12 +35,12 @@ func TestCreatorPushJobsE2E_RetryBudgetZeroAcceptance(t *testing.T) {
 
 	// Build the canonical body, then override delivery_plan.0.retry_budget=0.
 	// The body helper is fresh per call so the mutation is hermetic.
-	body := creatorPushE2EBody("creator_pc_rz0", "creator-job-rz0-001", "scene.composite.v1")
+	body := creatorPushE2EBody(t, "creator_pc_rz0", "creator-job-rz0-001", "video.assemble.copy.v1")
 	dp := body["payload"].(map[string]interface{})["delivery_plan"].([]interface{})
 	dp[0].(map[string]interface{})["retry_budget"] = 0
 
 	expectedJobID := enqueue.DeriveForwardingJobID(
-		routing.FormatForwardingKey("creator_pc_rz0", "creator-job-rz0-001", "scene.composite.v1").String(),
+		routing.FormatForwardingKey("creator_pc_rz0", "creator-job-rz0-001", "video.assemble.copy.v1").String(),
 	)
 
 	// First POST — retry_budget=0 MUST be accepted (was previously
@@ -133,7 +133,7 @@ func TestCreatorPushJobsE2E_RetryBudgetZeroAcceptance(t *testing.T) {
 	var fwdCount, jobCount int
 	if err := db.DB().QueryRow(
 		`SELECT COUNT(*) FROM creator_forwardings WHERE source_provider = ? AND source_job_id = ? AND target_executor_id = ?`,
-		"creator_pc_rz0", "creator-job-rz0-001", "scene.composite.v1",
+		"creator_pc_rz0", "creator-job-rz0-001", "video.assemble.copy.v1",
 	).Scan(&fwdCount); err != nil {
 		t.Fatalf("count forwardings: %v", err)
 	}

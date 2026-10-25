@@ -4,9 +4,8 @@
 // containment, error-code mapping, and TaskExecutionReport emission.
 //
 // PR-3.2 owns the typed ExecutionContext and concrete sub-interface
-// implementations; PR-3.3 adds the lifecycle runner; PR-3.4 contributes
-// one concrete Executor adapter (scene.composite.v1) that wraps the
-// existing pkg/video pipeline path.
+// implementations; PR-3.3 adds the lifecycle runner and V2 packet-copy
+// executor adapter.
 package taskrunner
 
 import "errors"

@@ -251,15 +251,15 @@ func TestRegistry_Empty_ShouldFail(t *testing.T) {
 	assert.Contains(t, r.Detail, "empty")
 }
 
-func TestRegistry_OneExecutor_SceneCompositePresent(t *testing.T) {
+func TestRegistry_OneExecutor_PacketCopyPresent(t *testing.T) {
 	v := &RegistryValidator{Registry: &stubRegistry{
-		descs: []DescriptorView{{ID: "scene.composite.v1", Version: 1}},
+		descs: []DescriptorView{{ID: "video.assemble.copy.v1", Version: 1}},
 	}}
 	r := v.Run(context.Background(), testCfg())
 	assert.Equal(t, StatusPass, r.Status)
 }
 
-func TestRegistry_OneExecutor_SceneCompositeMissing(t *testing.T) {
+func TestRegistry_OneExecutor_PacketCopyMissing(t *testing.T) {
 	v := &RegistryValidator{Registry: &stubRegistry{
 		descs: []DescriptorView{{ID: "other.executor", Version: 2}},
 	}}
@@ -346,7 +346,7 @@ func TestDefaultValidators_Length(t *testing.T) {
 }
 
 func TestDefaultValidatorsWithRegistry(t *testing.T) {
-	r := &stubRegistry{descs: []DescriptorView{{ID: "scene.composite.v1", Version: 1}}}
+	r := &stubRegistry{descs: []DescriptorView{{ID: "video.assemble.copy.v1", Version: 1}}}
 	vals := DefaultValidatorsWithRegistry(r)
 	assert.Len(t, vals, 10, "should return 10 validators (including registry)")
 }
@@ -354,30 +354,4 @@ func TestDefaultValidatorsWithRegistry(t *testing.T) {
 func TestDefaultValidatorsWithRegistry_Nil(t *testing.T) {
 	vals := DefaultValidatorsWithRegistry(nil)
 	assert.Len(t, vals, 9, "nil registry → 9 validators")
-}
-
-func TestDefaultValidatorsForProfile_Creator(t *testing.T) {
-	vals := DefaultValidatorsForProfile("creator")
-	assert.Len(t, vals, 7, "creator profile should exclude engine/ffmpeg validators")
-	for _, v := range vals {
-		if v.ID() == "engine.binary" || v.ID() == "ffmpeg" {
-			t.Errorf("creator profile should not include %s validator", v.ID())
-		}
-	}
-}
-
-func TestDefaultValidatorsWithRegistryAndProfile_Creator(t *testing.T) {
-	r := &stubRegistry{descs: []DescriptorView{{ID: "script.generate", Version: 1}}}
-	vals := DefaultValidatorsWithRegistryAndProfile(r, "creator")
-	assert.Len(t, vals, 8, "creator profile with registry should have 8 validators")
-}
-
-func TestRegistryValidator_Creator_AllowsMissingSceneComposite(t *testing.T) {
-	v := &RegistryValidator{
-		Registry: &stubRegistry{descs: []DescriptorView{{ID: "script.generate", Version: 1}}},
-		Profile:  "creator",
-	}
-	r := v.Run(context.Background(), testCfg())
-	assert.Equal(t, StatusPass, r.Status)
-	assert.Contains(t, r.Detail, "creator profile")
 }

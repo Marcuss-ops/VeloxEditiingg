@@ -66,12 +66,7 @@ func TestNormalizeCreatorInputAssemblyPayloadAllowsMissingLegacyStatus(t *testin
 
 func TestNormalizeCreatorPushRequestUsesPayloadIdentityAndDefaults(t *testing.T) {
 	normalized, err := normalizeCreatorPushRequest(creatorPushRequest{
-		Payload: map[string]interface{}{
-			"job_id":      "creator-job-123",
-			"status":      "completed",
-			"video_name":  "Creator supplied video",
-			"script_text": "A complete script",
-		},
+		Payload: creatorPushV2Payload(t, "creator-job-123"),
 	})
 	if err != nil {
 		t.Fatalf("normalizeCreatorPushRequest() error = %v", err)
@@ -82,8 +77,8 @@ func TestNormalizeCreatorPushRequestUsesPayloadIdentityAndDefaults(t *testing.T)
 	if normalized.SourceJobID != "creator-job-123" {
 		t.Fatalf("SourceJobID = %q, want creator-job-123", normalized.SourceJobID)
 	}
-	if normalized.TargetExecutorID != "scene.composite.v1" {
-		t.Fatalf("TargetExecutorID = %q, want scene.composite.v1", normalized.TargetExecutorID)
+	if normalized.TargetExecutorID != "video.assemble.copy.v1" {
+		t.Fatalf("TargetExecutorID = %q, want video.assemble.copy.v1", normalized.TargetExecutorID)
 	}
 	if got := firstStringResolver(normalized.WorkerPayload, "job_id"); got != "creator-job-123" {
 		t.Fatalf("WorkerPayload job_id = %q, want creator-job-123", got)
@@ -119,9 +114,7 @@ func TestNormalizeCreatorPushRequestCarriesEarlyAssemblyManifest(t *testing.T) {
 	normalized, err := normalizeCreatorPushRequest(creatorPushRequest{
 		SourceJobID: jobID,
 		Assembly:    &assembly.ExternalAssemblyRequest{EarlyManifest: manifest},
-		Payload: map[string]interface{}{
-			"job_id": jobID, "status": "completed", "pipeline_id": "clips.v1", "copy_only": true,
-		},
+		Payload:     creatorPushV2Payload(t, jobID),
 	})
 	if err != nil {
 		t.Fatalf("normalizeCreatorPushRequest() error = %v", err)
@@ -131,27 +124,16 @@ func TestNormalizeCreatorPushRequestCarriesEarlyAssemblyManifest(t *testing.T) {
 	}
 }
 
-func TestNormalizeCreatorPushRequestPreservesRendererRouting(t *testing.T) {
+func TestNormalizeCreatorPushRequestRejectsLegacyRendererRouting(t *testing.T) {
 	normalized, err := normalizeCreatorPushRequest(creatorPushRequest{
-		Payload: map[string]interface{}{
-			"job_id":      "creator-routing-123",
-			"status":      "completed",
-			"script_text": "A complete script",
-			"pipeline_id": "clips.v1",
-			"copy_only":   true,
-		},
+		Payload: func() map[string]interface{} {
+			payload := creatorPushV2Payload(t, "creator-routing-123")
+			payload["pipeline_id"] = "clips.v1"
+			return payload
+		}(),
 	})
-	if err != nil {
-		t.Fatalf("normalizeCreatorPushRequest() error = %v", err)
-	}
-	if normalized.TargetExecutorID != "clips.v1" {
-		t.Fatalf("TargetExecutorID = %q, want clips.v1", normalized.TargetExecutorID)
-	}
-	if got := normalized.WorkerPayload["pipeline_id"]; got != "clips.v1" {
-		t.Fatalf("WorkerPayload pipeline_id = %v, want clips.v1", got)
-	}
-	if got := normalized.WorkerPayload["copy_only"]; got != true {
-		t.Fatalf("WorkerPayload copy_only = %v, want true", got)
+	if err == nil || normalized != nil {
+		t.Fatal("legacy renderer routing was accepted")
 	}
 }
 
@@ -159,11 +141,8 @@ func TestNormalizeCreatorPushRequestEnvelopeOverridesPayloadIdentity(t *testing.
 	normalized, err := normalizeCreatorPushRequest(creatorPushRequest{
 		SourceProvider:   "creator_pc_2",
 		SourceJobID:      "creator-source-456",
-		TargetExecutorID: "scene.composite.v1@1",
-		Payload: map[string]interface{}{
-			"job_id": "payload-job-ignored-for-forwarding-identity",
-			"status": "completed",
-		},
+		TargetExecutorID: "video.assemble.copy.v1",
+		Payload:          creatorPushV2Payload(t, "payload-job-ignored-for-forwarding-identity"),
 	})
 	if err != nil {
 		t.Fatalf("normalizeCreatorPushRequest() error = %v", err)
@@ -174,8 +153,8 @@ func TestNormalizeCreatorPushRequestEnvelopeOverridesPayloadIdentity(t *testing.
 	if normalized.SourceJobID != "creator-source-456" {
 		t.Fatalf("SourceJobID = %q, want creator-source-456", normalized.SourceJobID)
 	}
-	if normalized.TargetExecutorID != "scene.composite.v1@1" {
-		t.Fatalf("TargetExecutorID = %q, want scene.composite.v1@1", normalized.TargetExecutorID)
+	if normalized.TargetExecutorID != "video.assemble.copy.v1" {
+		t.Fatalf("TargetExecutorID = %q, want video.assemble.copy.v1@1", normalized.TargetExecutorID)
 	}
 }
 

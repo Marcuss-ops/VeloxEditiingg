@@ -15,7 +15,7 @@ import (
 	"velox-worker-agent/pkg/logger"
 )
 
-func TestReceiveLoop_TaskOfferRejectsInvalidRenderPlanBeforeAccept(t *testing.T) {
+func TestReceiveLoop_TaskOfferRejectsRetiredSceneExecutorBeforeAccept(t *testing.T) {
 	log := logger.New(logger.InfoLevel, io.Discard)
 	reg := executor.NewRegistry()
 	if err := reg.Register(fakeSceneComposite{}); err != nil {
@@ -88,8 +88,8 @@ func TestReceiveLoop_TaskOfferRejectsInvalidRenderPlanBeforeAccept(t *testing.T)
 	if !ok || reject == nil {
 		t.Fatalf("reply payload = %T, want *pb.TaskRejected", got.TypedPayload)
 	}
-	if reject.GetReason() != "invalid_render_plan" {
-		t.Fatalf("reject reason = %q, want invalid_render_plan", reject.GetReason())
+	if reject.GetReason() != "unsupported_executor" {
+		t.Fatalf("reject reason = %q, want unsupported_executor", reject.GetReason())
 	}
 
 	cancel()

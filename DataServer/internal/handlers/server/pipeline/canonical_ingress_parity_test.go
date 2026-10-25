@@ -24,33 +24,14 @@ import (
 // rather than a production regression discovered only after a worker claim.
 func TestCanonicalIngressParity(t *testing.T) {
 	retryBudget := 3
+	planJSON, planSHA := validProducerOwnedFMP4Plan(t)
 	req := SubmitJobRequest{
-		IdempotencyKey: "ingress-parity-001",
-		VideoName:      "Parity render name",
-		ScriptText:     "The same render script.",
-		Scenes: []SubmitScene{{
-			Text:            "Parity scene",
-			SceneID:         "scene-0",
-			Index:           0,
-			Kind:            "clip",
-			Clip:            &SubmitClip{URL: "velox-asset://clip/parity.mp4"},
-			Voiceover:       &SubmitVoiceover{URL: "velox-asset://voiceover/parity.mp3"},
-			Subtitles:       &SubmitSubtitles{URL: "velox-asset://subtitles/parity.srt", Format: "srt"},
-			DurationSeconds: 5,
-		}},
-		Layers: []SubmitLayer{{
-			ID:              "title-1",
-			Type:            "text",
-			Role:            "title",
-			Text:            "Parity",
-			Font:            "Inter",
-			FontSize:        48,
-			StartSeconds:    0,
-			DurationSeconds: 5,
-		}},
-		Spec: map[string]interface{}{
-			"voiceover_paths": []interface{}{"velox-asset://voiceover/parity.mp3"},
-		},
+		IdempotencyKey:           "ingress-parity-001",
+		VideoName:                "Parity render name",
+		ScriptText:               "The same render script.",
+		JobType:                  "video.render.v2",
+		CompiledRenderPlanJSON:   planJSON,
+		CompiledRenderPlanSHA256: planSHA,
 		DeliveryPlan: []SubmitDeliveryPlanEntry{{
 			DestinationID: "drive-parity",
 			Priority:      1,
@@ -68,8 +49,8 @@ func TestCanonicalIngressParity(t *testing.T) {
 		t.Fatalf("API control-plane delivery plan was lost: %#v", canonicalAPI.DeliveryPlan)
 	}
 	for _, key := range []string{
-		"video_name", "script_text", "scenes_json",
-		"layers",
+		"video_name", "script_text", contract.PayloadKeyCompiledRenderPlanJSON,
+		contract.PayloadKeyCompiledRenderPlanSHA,
 	} {
 		if _, ok := apiPayload[key]; !ok {
 			t.Fatalf("API baseline is missing required common worker field %q", key)
@@ -127,8 +108,8 @@ func canonicalWorkerProjection(payload map[string]interface{}) map[string]interf
 	const (
 		videoName       = "video_name"
 		scriptText      = "script_text"
-		scenesJSON      = "scenes_json"
-		layers          = "layers"
+		compiledPlan    = contract.PayloadKeyCompiledRenderPlanJSON
+		compiledPlanSHA = contract.PayloadKeyCompiledRenderPlanSHA
 		videoMetadata   = "video_metadata"
 		outputPath      = "output_path"
 		driveOutput     = "drive_output_folder"
@@ -142,7 +123,7 @@ func canonicalWorkerProjection(payload map[string]interface{}) map[string]interf
 	)
 	projection := make(map[string]interface{})
 	for _, key := range []string{
-		videoName, scriptText, scenesJSON, layers, videoMetadata, outputPath, driveOutput,
+		videoName, scriptText, compiledPlan, compiledPlanSHA, videoMetadata, outputPath, driveOutput,
 
 		audioLanguage, videoMode, sceneImagePaths, imageSourceMap,
 		clips, images,
@@ -150,15 +131,6 @@ func canonicalWorkerProjection(payload map[string]interface{}) map[string]interf
 		value, ok := payload[key]
 		if !ok {
 			continue
-		}
-		if key == scenesJSON {
-			if encoded, ok := value.(string); ok {
-				var decoded interface{}
-				if json.Unmarshal([]byte(encoded), &decoded) == nil {
-					projection[key] = decoded
-					continue
-				}
-			}
 		}
 		projection[key] = normalizeJSONValue(value)
 	}

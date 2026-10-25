@@ -5,7 +5,6 @@
 //
 //   - idempotencyKeyErrorEnvelope: canonical 400 envelope for a rejected
 //     idempotency_key (byte-shape violations from ValidateIdempotencyKey).
-//   - assetPreflightEnvelope: the registry/blob + verified-media gate.
 //   - deliveryPlanDestinationEnvelope: the P0 #2 delivery-destination
 //     existence pre-flight (3-state batch status, fail-closed).
 //
@@ -21,9 +20,7 @@ import (
 	"net/http"
 	"strings"
 
-	voiceoverassets "velox-server/internal/assets"
 	"velox-server/internal/deliverystore"
-	"velox-shared/assetref"
 
 	"github.com/gin-gonic/gin"
 )
@@ -51,132 +48,6 @@ func idempotencyKeyErrorEnvelope(vErr *IdempotencyKeyError) (int, gin.H) {
 		"message": vErr.Message,
 		"details": details,
 	}
-}
-
-// checkAssetPreflight validates canonical velox-asset references against the
-// Master registry and either a final blob or a registered external source
-// before enqueue. It enforces the Fase C2 fail-closed media gate: a media
-// asset MUST carry verified registry metadata (ensured through the canonical
-// one-time probe, which may persist the metadata row) before the job is
-// admitted. External sources such as Drive are not downloaded here; the agent
-// asset route resolves the saved source reference at execution time.
-func assetPreflightEnvelope(ctx context.Context, h *Handlers, req SubmitJobRequest) (int, gin.H, bool) {
-	payload, err := projectWorkerPayload(&req)
-	if err != nil {
-		// The canonical projection is run again by the enqueue path. Do not
-		// turn a projection implementation detail into an asset error here.
-		return 0, nil, false
-	}
-	requirements := collectAssetPreflightRequirements(payload)
-	if len(requirements) == 0 {
-		return 0, nil, false
-	}
-	if h == nil || h.assetService == nil {
-		// The production composition always wires AssetService. Lightweight
-		// pipeline profiles and legacy test harnesses may intentionally omit
-		// the optional asset registry; their existing enqueue validation remains
-		// authoritative. Production readiness owns the fail-closed wiring gate.
-		return 0, nil, false
-	}
-	report, err := h.assetService.Preflight(ctx, requirements)
-	if err != nil {
-		return http.StatusInternalServerError, gin.H{
-			"ok":      false,
-			"error":   "asset_preflight_unavailable",
-			"message": err.Error(),
-		}, true
-	}
-	var details []gin.H
-	for _, item := range report.Items {
-		if item.Metadata && item.MediaMetadata && item.BlobResolvable && item.SHA256Valid && item.SizeValid {
-			continue
-		}
-		details = append(details, gin.H{
-			"asset_id":        item.AssetID,
-			"issue":           item.Issue,
-			"metadata":        item.Metadata,
-			"media_metadata":  item.MediaMetadata,
-			"blob_resolvable": item.BlobResolvable,
-			"sha256_valid":    item.SHA256Valid,
-			"size_valid":      item.SizeValid,
-		})
-	}
-	if len(details) == 0 {
-		return 0, nil, false
-	}
-	return http.StatusUnprocessableEntity, gin.H{
-		"ok":      false,
-		"error":   "asset_preflight_failed",
-		"message": "one or more assets are unavailable or failed integrity validation",
-		"summary": report,
-		"details": details,
-	}, true
-}
-
-func collectAssetPreflightRequirements(payload map[string]interface{}) []voiceoverassets.AssetPreflightRequirement {
-	byID := make(map[string]voiceoverassets.AssetPreflightRequirement)
-	var walk func(any, string, int64)
-	walk = func(value any, inheritedSHA string, inheritedSize int64) {
-		switch typed := value.(type) {
-		case map[string]interface{}:
-			sha := inheritedSHA
-			if candidate, ok := typed["sha256"].(string); ok && strings.TrimSpace(candidate) != "" {
-				sha = candidate
-			}
-			size := inheritedSize
-			if candidate, ok := typed["size_bytes"].(float64); ok && candidate > 0 {
-				size = int64(candidate)
-			}
-			if candidate, ok := typed["size_bytes"].(int64); ok && candidate > 0 {
-				size = candidate
-			}
-			for key, child := range typed {
-				text, ok := child.(string)
-				if !ok {
-					continue
-				}
-				id, ok := assetref.WireAssetID(text)
-				if !ok || !assetref.IsLocalWire(text) {
-					continue
-				}
-				if key == "asset_id" || key == "id" || strings.EqualFold(key, "url") || strings.EqualFold(key, "source_url") || strings.EqualFold(key, "uri") {
-					mergeAssetPreflightRequirement(byID, voiceoverassets.AssetPreflightRequirement{AssetID: id, SHA256: sha, SizeBytes: size})
-				}
-			}
-			for _, child := range typed {
-				walk(child, sha, size)
-			}
-		case []interface{}:
-			for _, child := range typed {
-				walk(child, inheritedSHA, inheritedSize)
-			}
-		case []map[string]interface{}:
-			for _, child := range typed {
-				walk(child, inheritedSHA, inheritedSize)
-			}
-		}
-	}
-	walk(payload, "", 0)
-	result := make([]voiceoverassets.AssetPreflightRequirement, 0, len(byID))
-	for _, requirement := range byID {
-		result = append(result, requirement)
-	}
-	return result
-}
-
-func mergeAssetPreflightRequirement(dst map[string]voiceoverassets.AssetPreflightRequirement, incoming voiceoverassets.AssetPreflightRequirement) {
-	current, ok := dst[incoming.AssetID]
-	if !ok {
-		dst[incoming.AssetID] = incoming
-		return
-	}
-	if current.SHA256 == "" {
-		current.SHA256 = incoming.SHA256
-	}
-	if current.SizeBytes <= 0 {
-		current.SizeBytes = incoming.SizeBytes
-	}
-	dst[incoming.AssetID] = current
 }
 
 // checkDeliveryPlanDestinations runs the P0 #2 delivery-destination

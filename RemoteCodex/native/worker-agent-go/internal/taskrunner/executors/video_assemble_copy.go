@@ -165,7 +165,7 @@ func (e *videoAssembleCopyExecutor) Execute(ctx context.Context, execCtx executo
 	// engine ledgers: its cost IS engine work (packet mux, input opens, seeks),
 	// so without these rows the Master read model had no engine phase to
 	// project and every engine_* column stayed 0 for a job whose render was
-	// pure packet copy. Attach both streams exactly as scene.composite.v1 does.
+	// pure packet copy. Attach both streams according to the V2 output contract.
 	segments := projectSegments(metrics)
 	detailedPhases := projectDetailedPhases(metrics)
 	return executor.ExecutionResult{

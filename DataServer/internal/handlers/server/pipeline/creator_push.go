@@ -9,8 +9,6 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"velox-server/internal/creatorflow"
-	"velox-server/internal/handlers/server/pipeline/projection"
-	"velox-server/internal/remoteengine"
 	"velox-server/internal/statusboundary"
 	"velox-shared/contract"
 	"velox-shared/contract/assembly"
@@ -107,15 +105,9 @@ type CanonicalCompletedPayload = normalizedCreatorPush
 // ParseRemotePipelineResult, derives the worker payload via
 // ToWorkerPayload, and produces the resolver identity tuple
 // (source_provider + source_job_id + target_executor_id) with the
-// documented fallback chain.
-//
-// source_provider defaults to defaultCreatorSourceProvider when
-// empty. source_job_id falls back to dto.RemoteJobID and then to the
-// worker payload's (job_id|trace_id|id) keys. target_executor_id
-// falls back to the worker payload's (executor_id|pipeline_id) keys,
-// then to the hardcoded "scene.composite.v1" only when both the
-// request and the payload are silent — callers SHOULD pass an
-// explicit target to avoid silent fallback.
+// source_provider defaults to defaultCreatorSourceProvider when empty;
+// source_job_id must be supplied in the envelope or V2 payload. The target
+// executor is fixed to video.assemble.copy.v1.
 func normalizeCreatorPushRequest(req creatorPushRequest) (*normalizedCreatorPush, error) {
 	if req.Payload == nil {
 		return nil, domain.NewInvalidPayload("payload", "required", "payload is required")
@@ -129,26 +121,24 @@ func normalizeCreatorPushRequest(req creatorPushRequest) (*normalizedCreatorPush
 	if err != nil {
 		return nil, err
 	}
-
-	deliveryPlan := deliveryplan.ExtractEnvelope(payload)
-	dto, err := remoteengine.ParseRemotePipelineResult(payload)
-	if err != nil {
-		return nil, fmt.Errorf("parse creator payload: %w", err)
+	planJSON, jsonOK := payload[contract.PayloadKeyCompiledRenderPlanJSON].(string)
+	planSHA, shaOK := payload[contract.PayloadKeyCompiledRenderPlanSHA].(string)
+	if !jsonOK || !shaOK || strings.TrimSpace(planJSON) == "" || strings.TrimSpace(planSHA) == "" {
+		return nil, domain.NewInvalidPayload(contract.PayloadKeyCompiledRenderPlanJSON, "required_v2_plan", "producer-compiled CompiledRenderPlanV2 is required")
 	}
-	workerPayload, projectionErr := projection.ProjectWorkerPayload(payload, rendererModeForJobType(firstStringResolver(payload, "job_type")))
-	if projectionErr != nil {
-		return nil, fmt.Errorf("project creator payload: %w", projectionErr)
-	}
-	// The Creator handoff may explicitly select the renderer pipeline. The
-	// typed DTO projection intentionally keeps only renderer fields, so carry
-	// this routing decision across the boundary instead of using it only for
-	// target-executor fallback. Without this, scene.composite receives an
-	// empty pipeline_id and fails after assets have already been prefetched.
-	for _, key := range []string{"pipeline_id", "executor_id", "audio_url", "copy_only"} {
-		if value, ok := payload[key]; ok && value != nil {
-			workerPayload[key] = value
+	for _, key := range []string{"pipeline_id", "executor_id", "executor_version", "copy_only", "audio_mix_strategy", "audio_mix_profile", "render_plan", "scenes", "scenes_json", "render_manifest", "layers", "overlays", "visual_replacements", "clips", "items", "images", "voiceover_paths", "voiceover_path", "audio_path"} {
+		if _, exists := payload[key]; exists {
+			return nil, domain.NewInvalidPayload(key, "legacy_scene_input_removed", "include all render inputs in the producer-compiled V2 plan")
 		}
 	}
+	if err := contract.ValidateCompiledRenderPlanV2Payload(payload); err != nil {
+		return nil, domain.NewInvalidPayload(contract.PayloadKeyCompiledRenderPlanJSON, "invalid_v2_plan", err.Error())
+	}
+
+	deliveryPlan := deliveryplan.ExtractEnvelope(payload)
+	workerPayload := cloneJSONMap(payload)
+	// The V2 plan is the complete worker render contract. The Master adds only
+	// forwarding and delivery metadata at later control-plane boundaries.
 
 	sourceProvider := strings.TrimSpace(req.SourceProvider)
 	if sourceProvider == "" {
@@ -157,7 +147,7 @@ func normalizeCreatorPushRequest(req creatorPushRequest) (*normalizedCreatorPush
 
 	sourceJobID := strings.TrimSpace(req.SourceJobID)
 	if sourceJobID == "" {
-		sourceJobID = strings.TrimSpace(dto.RemoteJobID)
+		sourceJobID = strings.TrimSpace(firstStringResolver(workerPayload, "job_id", "trace_id", "id"))
 	}
 	if sourceJobID == "" {
 		sourceJobID = firstStringResolver(workerPayload, "job_id", "trace_id", "id")
@@ -175,12 +165,10 @@ func normalizeCreatorPushRequest(req creatorPushRequest) (*normalizedCreatorPush
 	}
 
 	targetExecutorID := strings.TrimSpace(req.TargetExecutorID)
-	if targetExecutorID == "" {
-		targetExecutorID = firstStringResolver(workerPayload, "executor_id", "pipeline_id")
+	if targetExecutorID != "" && targetExecutorID != JobSubmitTargetExecutorID {
+		return nil, domain.NewInvalidPayload("target_executor_id", "unsupported", "only video.assemble.copy.v1 is supported")
 	}
-	if targetExecutorID == "" {
-		targetExecutorID = "scene.composite.v1"
-	}
+	targetExecutorID = JobSubmitTargetExecutorID
 
 	return &normalizedCreatorPush{
 		SourceProvider:   sourceProvider,

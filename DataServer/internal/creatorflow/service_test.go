@@ -58,7 +58,7 @@ func validPlan() RenderPlan {
 	return RenderPlan{
 		VideoName:      "Phase 2 Test Video",
 		ProjectID:      "proj-001",
-		ExecutorID:     "scene.composite.v1@1",
+		ExecutorID:     "video.assemble.copy.v1@1",
 		RunID:          "run-001",
 		IdempotencyKey: "phase2-key-default",
 		MaxRetries:     3,
@@ -119,7 +119,7 @@ func TestForwardSchedulesAsyncPollAndWorkerHandoff(t *testing.T) {
 			"status":      "running",
 			"trace_id":    "creator-async-1",
 			"job_id":      "creator-async-1",
-			"pipeline_id": "scene.composite.v1",
+			"pipeline_id": "video.assemble.copy.v1",
 		})
 	}))
 	defer mockCreator.Close()
@@ -133,11 +133,7 @@ func TestForwardSchedulesAsyncPollAndWorkerHandoff(t *testing.T) {
 				Retries:   1,
 			})
 		}(),
-		forwardRepo:   db.Forwarding(),
-		driveResolver: db,
-		dataDir:       tempDir,
-		videosDir:     filepath.Join(tempDir, "videos"),
-		masterURL:     "http://master.test",
+		forwardRepo: db.Forwarding(),
 	}
 
 	response, used, err := svc.StartOrPersistForwarding(context.Background(), map[string]interface{}{
@@ -155,7 +151,7 @@ func TestForwardSchedulesAsyncPollAndWorkerHandoff(t *testing.T) {
 
 	// Verify the durable forwarding row was inserted.
 	cf, getErr := db.Forwarding().GetCreatorForwardingBySource(
-		context.Background(), "remote_engine", "creator-async-1", "scene.composite.v1",
+		context.Background(), "remote_engine", "creator-async-1", "video.assemble.copy.v1",
 	)
 	if getErr != nil {
 		t.Fatalf("GetCreatorForwardingBySource: %v", getErr)
@@ -203,7 +199,8 @@ func TestResolverEnqueuesWorkerJob(t *testing.T) {
 		"trace_id": "creator-complete-1",
 		"result": map[string]interface{}{
 			"video_name": "Creator Video", "script_text": "Creator script",
-			"scenes_json": `[{"text":"Scene 1","image":{"asset_id":"scene-image","url":"velox-asset://scene-image"},"voiceover":{"asset_id":"voice","url":"velox-asset://voice","duration_ms":5000}}]`,
+			"compiled_render_plan_json":   func() string { plan, _ := compiledV2TestPlan(); return plan }(),
+			"compiled_render_plan_sha256": func() string { _, sum := compiledV2TestPlan(); return sum }(),
 			"delivery_plan": []interface{}{
 				map[string]interface{}{"destination_id": "drive-main", "retry_budget": 3, "priority": 0},
 			},
@@ -215,10 +212,10 @@ func TestResolverEnqueuesWorkerJob(t *testing.T) {
 	// BuildSceneImagePayloadForMaster when either dataDir or
 	// masterURL is empty.
 	expectedJobID := jobenqueue.DeriveForwardingJobID(
-		routing.FormatForwardingKey("remote_engine", "creator-complete-1", "scene.composite.v1").String(),
+		routing.FormatForwardingKey("remote_engine", "creator-complete-1", "video.assemble.copy.v1").String(),
 	)
 
-	rs := NewResolverFromDeps(enqueuer, db.Forwarding(), db, tempDir, filepath.Join(tempDir, "videos"), "")
+	rs := NewResolverMinimal(enqueuer, db.Forwarding())
 	if rs == nil {
 		t.Fatalf("resolver construction failed")
 	}
@@ -227,7 +224,7 @@ func TestResolverEnqueuesWorkerJob(t *testing.T) {
 		ForwardingID:     "",
 		SourceProvider:   "remote_engine",
 		SourceJobID:      "creator-complete-1",
-		TargetExecutorID: "scene.composite.v1",
+		TargetExecutorID: "video.assemble.copy.v1",
 		Payload:          result,
 		DeliveryPlan: map[string]interface{}{
 			"delivery_plan": []interface{}{
@@ -267,22 +264,11 @@ func TestResolverEnqueuesWorkerJob(t *testing.T) {
 	if j.VideoName != "Creator Video" {
 		t.Fatalf("want video name Creator Video, got %s", j.VideoName)
 	}
-	// The worker payload keeps only canonical nested scene assets.
+	// The worker payload contains the original producer-compiled V2 plan.
 	payload := jobs.ToPayloadMap(j)
-	if _, present := payload["voiceover_paths"]; present {
-		t.Fatalf("voiceover_paths must not be present in canonical creator payload")
-	}
-	scenesJSON, ok := payload["scenes_json"].(string)
-	if !ok || !strings.Contains(scenesJSON, `"voiceover"`) {
-		t.Fatalf("want canonical nested voiceover in persisted payload, got %v", payload["scenes_json"])
-	}
-	// Pipeline results carry their own provenance. normalizeSceneVideoPayload
-	// preserves caller-provided values rather than overwriting them.
-	if payload["submitted_via"] != "pipeline_generate_with_images" {
-		t.Fatalf("want submitted_via pipeline_generate_with_images, got %v", payload["submitted_via"])
-	}
-	if payload["source"] != "pipeline_generate_with_images" {
-		t.Fatalf("want source pipeline_generate_with_images, got %v", payload["source"])
+	planJSON, planSHA := compiledV2TestPlan()
+	if payload["compiled_render_plan_json"] != planJSON || payload["compiled_render_plan_sha256"] != planSHA {
+		t.Fatal("persisted worker payload does not preserve the producer V2 plan")
 	}
 
 	// Delivery routing is persisted separately from the renderer payload.

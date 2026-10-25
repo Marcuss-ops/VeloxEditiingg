@@ -1,75 +1,12 @@
 {
-  "audio_tracks": [
-    {
-      "role": "background_music",
-      "source_url": "velox-asset://audio/music.mp3",
-      "volume": 0.2
-    }
-  ],
-  "clips": [
-    {
-      "duration": 4.5,
-      "url": "velox-asset://clips/opening.mp4"
-    }
-  ],
-  "correlation_id": "golden-worker-job-001",
+  "compiled_render_plan_json": "{\"plan_version\":2,\"timeline_revision\":1,\"timeline_sha256\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"duration_us\":1000000,\"output\":{\"container\":\"mp4\",\"video_codec\":\"h264\",\"width\":1920,\"height\":1080,\"fps_num\":24,\"fps_den\":1,\"pixel_format\":\"yuv420p\",\"profile_id\":\"velox-h264-fmp4-stream-v1\",\"codec_profile\":\"high\",\"codec_level\":\"4.0\",\"gop_size\":48,\"b_frames\":0,\"closed_gop\":true,\"time_base_num\":1,\"time_base_den\":90000},\"final_audio\":{\"mode\":\"FINAL_AUDIO_COPY\",\"asset_id\":\"audio-final\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"size_bytes\":200,\"codec\":\"aac\",\"sample_rate_hz\":48000,\"channels\":2,\"duration_us\":1000000,\"timeline_revision\":1,\"timeline_sha256\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\"},\"video_tracks\":[{\"track_id\":\"main\",\"segments\":[{\"segment_id\":\"segment-0\",\"asset_id\":\"video-source\",\"sha256\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"timeline_start_frame\":0,\"frame_count\":24,\"source_in_us\":0,\"source_duration_us\":1000000}]}],\"assets\":[{\"asset_id\":\"audio-final\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"size_bytes\":200,\"kind\":\"final_audio\",\"mime\":\"audio/mp4\",\"duration_us\":1000000},{\"asset_id\":\"video-source\",\"sha256\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"size_bytes\":100,\"kind\":\"video\",\"duration_us\":1000000,\"width\":1920,\"height\":1080}]}",
+  "compiled_render_plan_sha256": "1dfc2000b3977d2a39d660defed670b1efc1754a1e56f0fe6c6c88e05f8c6bef",
   "job_id": "golden-worker-job-001",
-  "job_run_id": "golden-worker-job-001",
-  "layers": [
-    {
-      "id": "title",
-      "role": "title",
-      "text": "Golden render",
-      "type": "text"
-    }
-  ],
   "output_path": "/var/lib/velox/output/golden.mp4",
-  "scenes": [
-    {
-      "clip": {
-        "asset_id": "clip-001",
-        "end_ms": 4600,
-        "start_ms": 100,
-        "url": "velox-asset://clips/opening.mp4"
-      },
-      "duration_seconds": 4.5,
-      "index": 0,
-      "kind": "clip",
-      "scene_id": "scene-0",
-      "subtitles": {
-        "format": "srt",
-        "language": "en",
-        "url": "velox-asset://subtitles/opening.srt"
-      },
-      "text": "Opening scene",
-      "voiceover": {
-        "language": "en",
-        "url": "velox-asset://audio/scene-0.mp3"
-      }
-    },
-    {
-      "duration_seconds": 2,
-      "image": {
-        "asset_id": "images/closing.jpg",
-        "url": "velox-asset://images/closing.jpg"
-      },
-      "index": 1,
-      "kind": "image",
-      "scene_id": "scene-1",
-      "text": "Closing scene",
-      "voiceover": {
-        "asset_id": "audio/closing.mp3",
-        "duration_ms": 2000,
-        "url": "velox-asset://audio/closing.mp3"
-      }
-    }
-  ],
-  "scenes_json": "[{\"clip\":{\"asset_id\":\"clip-001\",\"end_ms\":4600,\"start_ms\":100,\"url\":\"velox-asset://clips/opening.mp4\"},\"duration_seconds\":4.5,\"kind\":\"clip\",\"scene_id\":\"scene-0\",\"subtitles\":{\"format\":\"srt\",\"language\":\"en\",\"url\":\"velox-asset://subtitles/opening.srt\"},\"text\":\"Opening scene\",\"voiceover\":{\"language\":\"en\",\"url\":\"velox-asset://audio/scene-0.mp3\"}},{\"duration_seconds\":2,\"index\":1,\"kind\":\"image\",\"scene_id\":\"scene-1\",\"text\":\"Closing scene\",\"voiceover\":{\"asset_id\":\"audio/closing.mp3\",\"duration_ms\":2000,\"url\":\"velox-asset://audio/closing.mp3\"}}]",
   "script_text": "A deterministic worker payload.",
   "status": "completed",
-  "trace_id": "golden-worker-job-001",
   "video_metadata": {
-    "fps_num": 30,
+    "fps_num": 24,
     "height": 1080,
     "width": 1920
   },

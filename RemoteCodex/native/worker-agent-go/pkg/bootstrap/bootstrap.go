@@ -2,8 +2,7 @@
 //
 // Run() is the WORKER-AGENT COMPOSITION-ROOT entry point. It is called
 // synchronously between the C++ pipeline wiring (video.NewPipelineRunner
-// must succeed) and the executor wiring (executors.NewSceneComposite
-// must be constructed with a proven runner). Failure to boot here
+// must succeed) and the V2 packet-copy executor wiring. Failure to boot here
 // means the worker exits 1 BEFORE sending Hello — the master side
 // selector never sees `registered=true`, and costmodel.Score will
 // exclude the worker from scheduling despite any heartbeat probe that
@@ -123,37 +122,27 @@ func Run(ctx context.Context, cfg *config.WorkerConfig, runner RunnerView, opts 
 	// LookPath + version parse), then runtime directories (cheap
 	// mkdir+write+remove), then engine self-render (expensive; ≤5s bound).
 	//
-	// The "creator" profile skips ffmpeg and engine self-render: it
-	// performs script/voiceover/image work and does not require the C++
-	// video pipeline.
-	isCreator := cfg != nil && cfg.IsCreatorProfile()
 	appender(runBundleHashGate(cfg, resolved.WorkDir))
-	if !isCreator {
-		appender(runFFmpegSelfTest(ctx, resolved))
-	}
+	appender(runFFmpegSelfTest(ctx, resolved))
 	appender(runStateDirSmokeTest(ctx, resolved.StateDir))
 	appender(runOutputDirSmokeTest(ctx, resolved.OutputDir))
 	appender(runTempDirSmokeTest(ctx, resolved.TempDir))
 
-	if !isCreator {
-		if runner == nil {
-			// Without a runner we cannot exercise the engine at all. This
-			// is a different code from "the engine refused the plan" so
-			// operators can distinguish "composition root forgot to pass
-			// pipelineRunner" from "the engine is broken".
-			failAt := time.Now().UTC()
-			appender(StepResult{
-				Name:        "engine_self_render",
-				Status:      "FAIL",
-				Code:        "engine_missing",
-				Detail:      "RunnerView param is nil — composition root did not pass pipelineRunner into bootstrap.Run",
-				StartedAt:   failAt,
-				CompletedAt: failAt,
-				DurMs:       failAt.Sub(failAt).Milliseconds(),
-			})
-		} else {
-			appender(runEngineSelfRender(ctx, resolved, runner.RenderClient()))
-		}
+	if runner == nil {
+		// Without a runner we cannot exercise the engine at all. This
+		// distinguishes missing composition-root wiring from a broken engine.
+		failAt := time.Now().UTC()
+		appender(StepResult{
+			Name:        "engine_self_render",
+			Status:      "FAIL",
+			Code:        "engine_missing",
+			Detail:      "RunnerView param is nil — composition root did not pass pipelineRunner into bootstrap.Run",
+			StartedAt:   failAt,
+			CompletedAt: failAt,
+			DurMs:       failAt.Sub(failAt).Milliseconds(),
+		})
+	} else {
+		appender(runEngineSelfRender(ctx, resolved, runner.RenderClient()))
 	}
 
 	report.CompletedAt = time.Now().UTC()

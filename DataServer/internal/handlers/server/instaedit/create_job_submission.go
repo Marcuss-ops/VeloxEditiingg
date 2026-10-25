@@ -29,7 +29,7 @@ func (s *Service) submitCreateJob(ctx context.Context, cmd CreateJobCmd, payload
 			IntakeSource:     creatorflow.IntakeSourceInstaedit,
 			SourceProvider:   "instaedit_bff",
 			SourceJobID:      sourceID,
-			TargetExecutorID: "scene.composite.v1",
+			TargetExecutorID: "video.assemble.copy.v1",
 			Payload:          payload,
 		}).Prepare()
 		resolved, submitErr := s.submission.Submit(ctx, *submission)

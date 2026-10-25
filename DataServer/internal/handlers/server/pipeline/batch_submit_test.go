@@ -11,10 +11,13 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func validBatchItem(key string) SubmitJobRequest {
+func validBatchItem(t *testing.T, key string) SubmitJobRequest {
+	t.Helper()
+	planJSON, planSHA := validProducerOwnedFMP4Plan(t)
 	return SubmitJobRequest{
 		IdempotencyKey: key,
-		Scenes:         []SubmitScene{{Text: "scene", DurationSeconds: 1}},
+		JobType:        "video.render.v2", VideoName: "Batch producer plan", ScriptText: "Batch plan",
+		CompiledRenderPlanJSON: planJSON, CompiledRenderPlanSHA256: planSHA,
 		Publications: []SubmitPublication{{
 			PublicationID: "publication-" + key,
 			OutputRef:     SubmitPublicationOutputRef{ArtifactRole: "final_video"},
@@ -192,7 +195,7 @@ func TestSubmitJobBatch_ItemWithDeliveryPlanWithoutStoreReturnsControlledFailure
 	router := gin.New()
 	router.POST("/api/v1/jobs/batch", (&Handlers{}).SubmitJobBatch())
 
-	item := validBatchItem("delivery-plan-item")
+	item := validBatchItem(t, "delivery-plan-item")
 	item.Publications = nil
 	item.DeliveryPlan = []SubmitDeliveryPlanEntry{{DestinationID: "legacy-drive"}}
 	payload, err := json.Marshal(SubmitJobBatchRequest{BatchID: "batch-store", Items: []SubmitJobRequest{item}})
@@ -225,11 +228,11 @@ func TestSubmitJobBatch_IsolatesDuplicateAndInvalidItems(t *testing.T) {
 	router := gin.New()
 	router.POST("/api/v1/jobs/batch", (&Handlers{}).SubmitJobBatch())
 
-	first := validBatchItem("same-key")
-	first.Scenes = nil // single-item validation must reject only this item
-	second := validBatchItem("same-key")
-	third := validBatchItem("different-key")
-	third.Scenes = nil
+	first := validBatchItem(t, "same-key")
+	first.CompiledRenderPlanSHA256 = "" // single-item validation rejects only this item
+	second := validBatchItem(t, "same-key")
+	third := validBatchItem(t, "different-key")
+	third.CompiledRenderPlanSHA256 = ""
 	payload, err := json.Marshal(SubmitJobBatchRequest{
 		BatchID: "batch-isolation",
 		Items:   []SubmitJobRequest{first, second, third},

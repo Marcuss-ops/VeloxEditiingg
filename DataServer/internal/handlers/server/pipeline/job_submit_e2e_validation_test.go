@@ -78,7 +78,7 @@ func TestSubmitJobE2E_ValidationFailures(t *testing.T) {
 			// existence pre-check at job_submit.go::SubmitJob).
 			name: "missing_destination",
 			make: func() SubmitJobRequest {
-				b := validSubmitJobBody("e2e-missing-dest-001")
+				b := validSubmitJobBody(t, "e2e-missing-dest-001")
 				b.DeliveryPlan[0].DestinationID = "missing_drive"
 				return b
 			},
@@ -88,46 +88,18 @@ func TestSubmitJobE2E_ValidationFailures(t *testing.T) {
 			},
 		},
 		{
-			name: "sub_min_duration",
+			name: "legacy_scene_input_rejected",
 			make: func() SubmitJobRequest {
-				b := validSubmitJobBody("e2e-sub-min-001")
-				b.Scenes[0].DurationSeconds = 0.05
+				b := validSubmitJobBody(t, "e2e-legacy-scenes-001")
+				b.Scenes = []SubmitScene{{Text: "Legacy scene", DurationSeconds: 1}}
 				return b
 			},
-			want: wantShape{
-				detailsPath:  "scenes.0.duration_seconds",
-				detailsIssue: "out_of_range",
-			},
-		},
-		{
-			name: "empty_scene_text",
-			make: func() SubmitJobRequest {
-				b := validSubmitJobBody("e2e-empty-text-001")
-				b.Scenes[0].Text = ""
-				return b
-			},
-			want: wantShape{
-				detailsPath:  "scenes.0.text",
-				detailsIssue: "empty",
-			},
-		},
-		{
-			// Scenario 8 — SSRF URL rejection. Activated by P1 #2.
-			name: "ssrf_loopback_in_voiceover",
-			make: func() SubmitJobRequest {
-				b := validSubmitJobBody("e2e-ssrf-loopback-001")
-				b.Scenes[0].Voiceover = &SubmitVoiceover{URL: "http://127.0.0.1:8000/leak.mp3"}
-				return b
-			},
-			want: wantShape{detailsPath: "scenes.0.voiceover.url",
-
-				detailsIssue: "ssrf_rejected",
-			},
+			want: wantShape{detailsPath: "scenes", detailsIssue: "legacy_scene_input_removed"},
 		},
 		{
 			name: "byte_rejected_idem_key",
 			make: func() SubmitJobRequest {
-				b := validSubmitJobBody(strings.Repeat("k", MaxIdempotencyKeyLen+2))
+				b := validSubmitJobBody(t, strings.Repeat("k", MaxIdempotencyKeyLen+2))
 				return b
 			},
 			want: wantShape{
@@ -176,8 +148,8 @@ func TestSubmitJobE2E_ValidationFailures(t *testing.T) {
 				}
 			} else {
 				// 422-semantic envelope.
-				if resp["error"] != "invalid_payload" && resp["error"] != "ssrf_rejected" {
-					t.Fatalf("error = %v, want invalid_payload or ssrf_rejected (full body: %s)", resp["error"], w.Body.String())
+				if resp["error"] != "invalid_payload" && resp["error"] != "ssrf_rejected" && resp["error"] != "unsupported_recipe" {
+					t.Fatalf("error = %v, want invalid_payload, unsupported_recipe, or ssrf_rejected (full body: %s)", resp["error"], w.Body.String())
 				}
 				if resp["ok"] != false {
 					t.Fatalf("ok = %v, want false on rejection path", resp["ok"])
@@ -277,7 +249,7 @@ func TestSubmitJobE2E_NegativeRetryBudgetRejected(t *testing.T) {
 	baseline := snapshot()
 
 	rb := -1
-	body := validSubmitJobBody("e2e-retry-budget-negative-001")
+	body := validSubmitJobBody(t, "e2e-retry-budget-negative-001")
 	body.DeliveryPlan[0].RetryBudget = &rb
 
 	w := postSubmitJob(t, r, body)
@@ -314,8 +286,8 @@ func TestSubmitJobE2E_NegativeRetryBudgetRejected(t *testing.T) {
 	if gotPath, _ := first["path"].(string); gotPath != "delivery_plan.0.retry_budget" {
 		t.Errorf("details[0].path = %q, want \"delivery_plan.0.retry_budget\" (validator-emitted field path; dot-notation per the path-format alignment commit)", gotPath)
 	}
-	if gotIssue, _ := first["issue"].(string); gotIssue != "invalid" {
-		t.Errorf("details[0].issue = %q, want \"invalid\" (canonical issue token from WriteResolverError's validationFieldExtractor branch)", gotIssue)
+	if gotIssue, _ := first["issue"].(string); gotIssue != "out_of_range" {
+		t.Errorf("details[0].issue = %q, want \"out_of_range\" for retry_budget < 0", gotIssue)
 	}
 
 	// Resource-leak invariant (negative-rejection path must NOT write rows).

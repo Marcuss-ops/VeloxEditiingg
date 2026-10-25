@@ -94,14 +94,9 @@ func (w *diskWatcher) start(ctx context.Context, cfg *config.WorkerConfig, watch
 // Version is set at build time via -ldflags.
 var Version = "dev"
 
-// registerCanonicalRenderExecutors is the composition-root registration
-// boundary for the render executor family. The RenderPlan helpers remain
-// available for the legacy scene pipeline, while CompiledRenderPlanV2 has
-// exactly one registered worker entry point: video.assemble.copy.v1.
-func registerCanonicalRenderExecutors(reg *executor.Registry, outputRoot string, runners []*pipeline.Runner, options ...executors.RenderOptions) error {
-	if err := executors.RegisterRenderPlanExecutors(reg, outputRoot, options...); err != nil {
-		return err
-	}
+// registerCanonicalRenderExecutors installs the sole worker entry point for
+// compiled V2 video plans: packet-copy assembly.
+func registerCanonicalRenderExecutors(reg *executor.Registry, outputRoot string, runners []*pipeline.Runner) error {
 	if len(runners) > 0 && runners[0] != nil {
 		if err := reg.Register(executors.NewVideoAssembleCopy(runners[0], outputRoot)); err != nil {
 			return err

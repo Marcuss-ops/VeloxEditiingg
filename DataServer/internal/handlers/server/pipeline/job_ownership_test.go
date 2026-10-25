@@ -94,7 +94,7 @@ func TestSubmitThenPoll_M2MClientIsolationWithRealMiddleware(t *testing.T) {
 	jobRepo := store.NewSQLiteJobRepository(db)
 	atomic := store.NewAtomicJobTaskCreator(db)
 	enqueuer := enqueue.NewEnqueuer(atomic, jobRepo, nil, noopPlanResolver{})
-	resolver := creatorflow.NewResolverFromDeps(enqueuer, db.Forwarding(), db, tempDir, filepath.Join(tempDir, "videos"), "")
+	resolver := creatorflow.NewResolverMinimal(enqueuer, db.Forwarding())
 	h := NewHandlersWithResolver(&config.Config{}, enqueuer, nil, resolver, jobRepo, nil, nil).WithStore(db)
 
 	clientASecret := store.GenerateM2MSecret()
@@ -112,7 +112,7 @@ func TestSubmitThenPoll_M2MClientIsolationWithRealMiddleware(t *testing.T) {
 	r := gin.New()
 	h.RegisterRoutes(r, func(c *gin.Context) { c.Next() }, NewM2MJwAuthMiddleware(&config.Config{}, db, newM2MRateLimiter()))
 
-	body := validSubmitJobBody("ownership-e2e-client-a")
+	body := validSubmitJobBody(t, "ownership-e2e-client-a")
 	payload, err := json.Marshal(body)
 	if err != nil {
 		t.Fatalf("marshal submit body: %v", err)

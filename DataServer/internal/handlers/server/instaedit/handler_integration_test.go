@@ -14,7 +14,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"velox-server/internal/config"
 	"velox-server/internal/creatorflow"
 	"velox-server/internal/instaeditauth"
 	"velox-server/internal/jobs/enqueue"
@@ -68,7 +67,7 @@ func setupIntegrationRouter(t *testing.T) (*gin.Engine, *store.SQLiteStore) {
 	planResolver := &testPlanResolver{db: db.DB()}
 	enq := enqueue.NewEnqueuer(atomic, jobRepo, nil, planResolver)
 
-	resolver := creatorflow.NewResolver(&config.Config{}, enq, db.Forwarding(), db)
+	resolver := creatorflow.NewResolver(enq, enq.Jobs, db.Forwarding())
 	svc := NewServiceFromSQLite(db, jobRepo, store.NewSQLiteAssetRepository(db), enq, resolver)
 	handler := NewHandler(HandlerDeps{
 		Verifier: verifier,
@@ -135,14 +134,7 @@ func TestInstaEditBFF_EndToEnd(t *testing.T) {
 		"contract_version": "velox.job.v1",
 		"idempotency_key":  "instaedit:workspace_45:e2e-01",
 		"project_id":       "proj-e2e-01",
-		"render_spec": map[string]any{
-			"video_name":      "E2E Test Video",
-			"script_text":     "E2E render script",
-			"voiceover_paths": []string{"https://example.com/voice.mp3"},
-			"scenes": []map[string]any{
-				{"text": "scene one", "image_link": "https://example.com/img.png"},
-			},
-		},
+		"render_spec":      validRenderSpecV2(t, "E2E Test Video"),
 		"delivery_plan": map[string]any{
 			"destinations": []map[string]any{
 				{

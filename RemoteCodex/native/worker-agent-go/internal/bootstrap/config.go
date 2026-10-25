@@ -111,9 +111,6 @@ func ResolveConfig(opts ConfigOptions) (*config.WorkerConfig, string, error) {
 	if envWorkerID := os.Getenv("VELOX_WORKER_ID"); envWorkerID != "" {
 		cfg.WorkerID = envWorkerID
 	}
-	if envWorkerProfile := strings.TrimSpace(os.Getenv("VELOX_WORKER_PROFILE")); envWorkerProfile != "" {
-		cfg.WorkerProfile = envWorkerProfile
-	}
 	if bundleVersion := os.Getenv("VELOX_BUNDLE_VERSION"); bundleVersion != "" {
 		cfg.BundleVersion = bundleVersion
 	}

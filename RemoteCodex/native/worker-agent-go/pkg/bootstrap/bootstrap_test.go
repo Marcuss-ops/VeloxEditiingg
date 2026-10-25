@@ -212,21 +212,19 @@ func TestOk_HardGate_NotRun(t *testing.T) {
 	}
 }
 
-// TestRun_CreatorProfile_SkipsEngine verifies that the creator profile
-// skips ffmpeg and engine self-render while still checking bundle and
-// runtime directories.
-func TestRun_CreatorProfile_SkipsEngine(t *testing.T) {
+// TestRun_RequiresEngine verifies that every worker now requires the native
+// assembler during bootstrap.
+func TestRun_RequiresEngine(t *testing.T) {
 	dir := t.TempDir()
-	const hash = "creator-hash"
+	const hash = "packet-copy-hash"
 	_ = os.WriteFile(filepath.Join(dir, "BUNDLE_HASH.txt"), []byte(hash+"\n"), 0o644)
-	_ = writeBaseline(t, dir, []byte("creator-baseline"))
+	_ = writeBaseline(t, dir, []byte("packet-copy-baseline"))
 
 	Reset()
 	cfg := makeCfg(hash)
-	cfg.WorkerProfile = "creator"
 	report, err := Run(context.Background(),
 		cfg,
-		nil, // creator does not pass a runner
+		nil,
 		Options{
 			WorkDir:            dir,
 			OutputDir:          dir,
@@ -235,34 +233,34 @@ func TestRun_CreatorProfile_SkipsEngine(t *testing.T) {
 			BaselineSHA256Path: filepath.Join(dir, "baseline.sha256"),
 		},
 	)
-	if err != nil {
-		t.Fatalf("Run returned error for creator profile: %v", err)
+	if err == nil {
+		t.Fatal("Run should fail when the native assembler runner is missing")
 	}
 	if report == nil {
 		t.Fatalf("Run returned nil report")
 	}
-	if report.Verdict != "OK" {
-		t.Fatalf("verdict = %q want OK; steps=%+v", report.Verdict, report.Steps)
+	if report.Verdict != "FAIL" {
+		t.Fatalf("verdict = %q want FAIL; steps=%+v", report.Verdict, report.Steps)
 	}
 
 	seenSteps := map[string]bool{}
 	for _, s := range report.Steps {
 		seenSteps[s.Name] = true
 	}
-	if seenSteps["ffmpeg"] {
-		t.Errorf("creator profile should skip ffmpeg step")
+	if !seenSteps["ffmpeg"] {
+		t.Errorf("worker bootstrap should run ffmpeg check")
 	}
-	if seenSteps["engine_self_render"] {
-		t.Errorf("creator profile should skip engine_self_render step")
+	if !seenSteps["engine_self_render"] {
+		t.Errorf("worker bootstrap should require engine self-render")
 	}
 	if !seenSteps["bundle_hash"] {
-		t.Errorf("creator profile should still run bundle_hash step")
+		t.Errorf("worker bootstrap should run bundle_hash step")
 	}
 	if !seenSteps["state_dir"] {
-		t.Errorf("creator profile should still run state_dir step")
+		t.Errorf("worker bootstrap should run state_dir step")
 	}
 	if !seenSteps["temp_dir"] {
-		t.Errorf("creator profile should still run temp_dir step")
+		t.Errorf("worker bootstrap should run temp_dir step")
 	}
 }
 

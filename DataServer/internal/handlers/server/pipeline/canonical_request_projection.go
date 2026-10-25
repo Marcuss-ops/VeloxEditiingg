@@ -10,10 +10,9 @@ import (
 // ExternalAPISourceProvider is the stable source-provider identity for POST /api/v1/jobs.
 const ExternalAPISourceProvider = "external_api"
 
-// JobSubmitTargetExecutorID is the canonical executor for POST /api/v1/jobs.
-const JobSubmitTargetExecutorID = "scene.composite.v1"
-
-const compiledPlanTargetExecutorID = "video.assemble.copy.v1"
+// JobSubmitTargetExecutorID is the sole worker executor for compiled V2
+// video plans. The Master validates and routes the plan; it does not render.
+const JobSubmitTargetExecutorID = "video.assemble.copy.v1"
 
 func (h *Handlers) NormalizeExternalJobSubmission(req SubmitJobRequest) *CanonicalCompletedPayload {
 	rawPayload := submitRequestToRawPayload(&req)
@@ -27,9 +26,6 @@ func (h *Handlers) NormalizeExternalJobSubmission(req SubmitJobRequest) *Canonic
 		assemblyJob, _ = req.Assembly.Normalize(req.IdempotencyKey)
 	}
 	targetExecutorID := targetExecutorForJobType(req.JobType)
-	if hasCompiledRenderPlan(req) {
-		targetExecutorID = compiledPlanTargetExecutorID
-	}
 	return &CanonicalCompletedPayload{
 		SourceProvider:   ExternalAPISourceProvider,
 		SourceJobID:      req.IdempotencyKey,
@@ -43,9 +39,8 @@ func (h *Handlers) NormalizeExternalJobSubmission(req SubmitJobRequest) *Canonic
 }
 
 func targetExecutorForJobType(jobType string) string {
-	// Recipe names are intentionally decoupled from worker executor IDs.
-	// Until dedicated executors are registered, all supported recipes compile
-	// through the existing scene composite worker.
+	// Recipe names are decoupled from worker executor IDs. Every admitted
+	// video request is normalized to CompiledRenderPlanV2 before dispatch.
 	_ = jobType
 	return JobSubmitTargetExecutorID
 }

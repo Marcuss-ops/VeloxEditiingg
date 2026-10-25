@@ -63,7 +63,7 @@ func (w *Worker) Start(ctx context.Context) error {
 	// is the supported default; operators must see this on the wire
 	// before deciding the worker is broken or PR-3.6 hasn't shipped.
 	if w.executorRegistry != nil && len(w.executorRegistry.Descriptors()) == 0 {
-		w.logger.Warn("[STARTUP] executor registry is empty — ZERO executors will be advertised to master until scene.composite.v1 is registered (PR-3.6)")
+		w.logger.Warn("[STARTUP] executor registry is empty — ZERO executors will be advertised to master until video.assemble.copy.v1 is registered")
 	}
 
 	// Connection state machine with automatic backoff

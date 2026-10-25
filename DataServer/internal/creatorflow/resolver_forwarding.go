@@ -39,7 +39,10 @@ func (r *Resolver) PersistPendingRemoteForwarding(
 		return nil, domain.NewInvalidPayload("source_provider/source_job_id", "required", "source provider and source job id are required")
 	}
 	if targetExecutorID == "" {
-		targetExecutorID = "scene.composite.v1"
+		targetExecutorID = "video.assemble.copy.v1"
+	}
+	if targetExecutorID != "video.assemble.copy.v1" {
+		return nil, domain.NewInvalidPayload("target_executor_id", "unsupported", "only video.assemble.copy.v1 is supported")
 	}
 
 	if existing, err := r.forwardRepo.GetCreatorForwardingBySource(ctx, sourceProvider, sourceJobID, targetExecutorID); err != nil {

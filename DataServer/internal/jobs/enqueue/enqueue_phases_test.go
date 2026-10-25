@@ -39,47 +39,23 @@ func TestPrepareJobAndTaskClassifiesInputValidation(t *testing.T) {
 	}
 }
 
-func TestResolveEnqueueAssetsClassifiesMissingAssetService(t *testing.T) {
+func TestResolveEnqueueAssetsIsNoOpForProducerOwnedPlan(t *testing.T) {
 	enqueuer := &Enqueuer{}
-	err := wrapEnqueuePhase(EnqueuePhaseResolveAssets, enqueuer.resolveEnqueueAssets(context.Background(), map[string]interface{}{
-		"scenes": []interface{}{
-			map[string]interface{}{
-				"clip": map[string]interface{}{"start_seconds": 1, "end_seconds": 2},
-			},
-		},
-	}))
-	if phase, ok := EnqueuePhaseOf(err); !ok || phase != EnqueuePhaseResolveAssets {
-		t.Fatalf("phase = %q, %v; want %q, true", phase, ok, EnqueuePhaseResolveAssets)
-	}
-	if !strings.Contains(err.Error(), "require master asset service") {
-		t.Fatalf("asset error lost detail: %v", err)
+	err := enqueuer.resolveEnqueueAssets(context.Background(), testCompiledV2Payload(map[string]interface{}{"video_name": "V2 asset owner"}))
+	if err != nil {
+		t.Fatalf("Master must not resolve or stage V2 assets: %v", err)
 	}
 }
 
-func TestPrepareJobAndTaskClassifiesAssetResolution(t *testing.T) {
+func TestPrepareV2PlanDoesNotResolveAssetsOnMaster(t *testing.T) {
 	enqueuer := newTestEnqueuer(t)
-	payload := map[string]interface{}{
-		"video_name":     "Timed clip",
-		"script_text":    "asset phase",
-		"voiceover_path": "/tmp/v.mp3",
-		"scenes": []interface{}{
-			map[string]interface{}{"text": "S1", "image_link": "https://example.com/i.png"},
-		},
-		"clip_segments": []interface{}{
-			map[string]interface{}{"start_seconds": 1, "end_seconds": 2},
-		},
-		"delivery_plan": []interface{}{
-			map[string]interface{}{"destination_id": "drive-main", "retry_budget": 1},
-		},
-	}
-
-	_, _, _, err := enqueuer.PrepareJobAndTask(context.Background(), payload, costmodel.DefaultRequirements())
-	if err == nil {
-		t.Fatal("PrepareJobAndTask returned nil error for timed clips without asset service")
-	}
-	phase, ok := EnqueuePhaseOf(err)
-	if !ok || phase != EnqueuePhaseResolveAssets {
-		t.Fatalf("phase = %q, %v; want %q, true (err=%v)", phase, ok, EnqueuePhaseResolveAssets, err)
+	payload := testCompiledV2Payload(map[string]interface{}{
+		"video_name":    "Producer-owned assets",
+		"script_text":   "worker resolves references",
+		"delivery_plan": []interface{}{map[string]interface{}{"destination_id": "drive-main", "retry_budget": 1}},
+	})
+	if _, _, _, err := enqueuer.PrepareJobAndTask(context.Background(), payload, costmodel.DefaultRequirements()); err != nil {
+		t.Fatalf("V2 payload must pass without a Master asset resolver: %v", err)
 	}
 }
 
@@ -93,6 +69,7 @@ func TestPrepareJobAndTaskClassifiesPayloadNormalization(t *testing.T) {
 			map[string]interface{}{"destination_id": "drive-main", "retry_budget": 1},
 		},
 	}
+	payload = testCompiledV2Payload(payload)
 
 	_, _, _, err := enqueuer.PrepareJobAndTask(context.Background(), payload, costmodel.DefaultRequirements())
 	if err == nil {
@@ -108,11 +85,8 @@ func TestPrepareJobAndTaskClassifiesPayloadNormalization(t *testing.T) {
 }
 
 func TestNormalizeEnqueuePayloadClassifiesInvalidSceneVideoPayload(t *testing.T) {
-	_, err := normalizeEnqueuePayload(nil, map[string]interface{}{
-		"script_text":     "missing video name",
-		"voiceover_paths": []string{"voice.mp3"},
-		"scenes":          []interface{}{map[string]interface{}{"text": "scene"}},
-	}, "", false)
+	payload := testCompiledV2Payload(map[string]interface{}{"script_text": "missing video name"})
+	_, err := normalizeEnqueuePayload(nil, payload, "", false)
 	if err == nil {
 		t.Fatal("normalizeEnqueuePayload returned nil error for invalid payload")
 	}
@@ -157,6 +131,7 @@ func TestEnqueueRecordsPersistPhaseInRequestMetrics(t *testing.T) {
 			map[string]interface{}{"destination_id": "drive-main", "retry_budget": 1},
 		},
 	}
+	payload = testCompiledV2Payload(payload)
 	if _, err := enqueuer.Enqueue(ctx, payload, costmodel.DefaultRequirements()); err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}

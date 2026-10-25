@@ -49,31 +49,25 @@ func newCreatorPushE2EStack(t *testing.T) (*Handlers, *store.SQLiteStore, *store
 	jobRepo := store.NewSQLiteJobRepository(db)
 	atomic := store.NewAtomicJobTaskCreator(db)
 	testEnqueuer := enqueue.NewEnqueuer(atomic, jobRepo, nil, noopPlanResolver{})
-	resolver := creatorflow.NewResolverFromDeps(testEnqueuer, db.Forwarding(), db, tempDir, filepath.Join(tempDir, "videos"), "")
+	resolver := creatorflow.NewResolverMinimal(testEnqueuer, db.Forwarding())
 	h := NewHandlersWithResolver(&config.Config{}, testEnqueuer, nil, resolver, jobRepo, nil, nil).WithStore(db)
 	return h, db, jobRepo
 }
 
-func creatorPushE2EBody(sourceProvider, sourceJobID, targetExecutor string) map[string]interface{} {
+func creatorPushE2EBody(t *testing.T, sourceProvider, sourceJobID, targetExecutor string) map[string]interface{} {
+	t.Helper()
+	planJSON, planSHA := validProducerOwnedFMP4Plan(t)
 	return map[string]interface{}{
 		"source_provider":    sourceProvider,
 		"source_job_id":      sourceJobID,
 		"target_executor_id": targetExecutor,
 		"payload": map[string]interface{}{
-			"status":      "completed",
-			"job_id":      sourceJobID,
-			"video_name":  "E2E voiceover+stock+clip+scene",
-			"script_text": "Creator-supplied script body.",
-			"voiceover_paths": []interface{}{
-				"velox-asset://voiceovers/audio.mp3",
-			},
-			"scenes": []interface{}{
-				map[string]interface{}{
-					"text":             "Prima scena",
-					"clip_link":        "velox-asset://clips/clip-01.mp4",
-					"duration_seconds": 7,
-				},
-			},
+			"status":                      "completed",
+			"job_id":                      sourceJobID,
+			"video_name":                  "Producer V2 timeline",
+			"script_text":                 "Creator-supplied script body.",
+			"compiled_render_plan_json":   planJSON,
+			"compiled_render_plan_sha256": planSHA,
 			"delivery_plan": []interface{}{
 				map[string]interface{}{
 					"destination_id": "drive",
@@ -82,6 +76,16 @@ func creatorPushE2EBody(sourceProvider, sourceJobID, targetExecutor string) map[
 				},
 			},
 		},
+	}
+}
+
+func creatorPushV2Payload(t *testing.T, jobID string) map[string]interface{} {
+	t.Helper()
+	planJSON, planSHA := validProducerOwnedFMP4Plan(t)
+	return map[string]interface{}{
+		"job_id": jobID, "status": "completed", "video_name": "Producer V2 timeline",
+		"script_text": "Compiled by producer", "compiled_render_plan_json": planJSON,
+		"compiled_render_plan_sha256": planSHA,
 	}
 }
 

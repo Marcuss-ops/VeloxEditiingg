@@ -19,9 +19,9 @@ import (
 //   - SourceProvider: e.g. "remote_engine". Required.
 //   - SourceJobID: the remote engine's job id. Required.
 //   - TargetExecutorID: the executor that the Velox Job should route
-//     to. Optional; defaults to "scene.composite.v1".
+//     to. Optional; defaults to "video.assemble.copy.v1".
 //   - Payload: the raw remote-engine response map. Required; must pass
-//     enqueue.ShouldForwardPipelineResult or Resolve returns (nil, nil)
+//     a producer-compiled CompiledRenderPlanV2 or Resolve returns not-ready
 //     ("result not complete — caller should keep polling").
 type ResolveRequest struct {
 	ForwardingID     string

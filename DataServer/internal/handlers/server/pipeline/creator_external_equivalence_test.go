@@ -37,27 +37,13 @@ func TestCreatorPushAndExternalSubmitConvergeToTheSameCanonicalContract(t *testi
 
 	const (
 		jobID      = "equivalence-job-001"
-		executorID = "scene.composite.v1"
-		voiceover  = "velox-asset://voiceover/equivalence.mp3"
+		executorID = JobSubmitTargetExecutorID
 	)
+	planJSON, planSHA := validProducerOwnedFMP4Plan(t)
 
 	external := SubmitJobRequest{
-		IdempotencyKey: jobID,
-		VideoName:      "Equivalence video",
-		ScriptText:     "The same canonical script.",
-		Scenes: []SubmitScene{{
-			Text:            "Equivalence scene",
-			SceneID:         "scene-0",
-			Index:           0,
-			Kind:            "clip",
-			Clip:            &SubmitClip{URL: "velox-asset://clip/equivalence.mp4"},
-			DurationSeconds: 5,
-			Voiceover:       &SubmitVoiceover{URL: voiceover, Language: "en"},
-			Subtitles:       &SubmitSubtitles{URL: "velox-asset://subtitle/equivalence.srt", Format: "srt"},
-		}},
-		Layers: []SubmitLayer{{
-			ID: "title", Type: "text", Role: "title", Text: "Equivalence",
-		}},
+		IdempotencyKey: jobID, VideoName: "Equivalence video", ScriptText: "The same canonical script.",
+		CompiledRenderPlanJSON: planJSON, CompiledRenderPlanSHA256: planSHA,
 		DeliveryPlan: []SubmitDeliveryPlanEntry{{
 			DestinationID: "drive-equivalence", Priority: 1, RetryBudget: intPointer(3),
 		}},
@@ -104,22 +90,10 @@ func TestCreatorPushAndExternalSubmitConvergeToTheSameCanonicalContract(t *testi
 		"job_id":      jobID,
 		"video_name":  "Equivalence video",
 		"script_text": "The same canonical script.",
-		"scenes": []interface{}{
-			map[string]interface{}{
-				"text":             "Equivalence scene",
-				"scene_id":         "scene-0",
-				"kind":             "clip",
-				"clip":             map[string]interface{}{"url": "velox-asset://clip/equivalence.mp4"},
-				"duration_seconds": float64(5),
-				"voiceover":        map[string]interface{}{"url": voiceover, "language": "en"},
-				"subtitles":        map[string]interface{}{"url": "velox-asset://subtitle/equivalence.srt", "format": "srt"},
-			},
-		},
-		"layers": []interface{}{
-			map[string]interface{}{"id": "title", "type": "text", "role": "title", "text": "Equivalence"},
-		},
+		contract.PayloadKeyCompiledRenderPlanJSON: planJSON,
+		contract.PayloadKeyCompiledRenderPlanSHA:  planSHA,
 		"delivery_plan": []interface{}{
-			map[string]interface{}{"destination_id": "drive-equivalence", "priority": 1, "retry_budget": 3},
+			map[string]interface{}{"destination_id": "drive-equivalence", "priority": 1, "retry_budget": 3, "metadata": nil},
 		},
 	}
 	creatorCanonical, err := normalizeCreatorPushRequest(creatorPushRequest{
@@ -142,14 +116,15 @@ func TestCreatorPushAndExternalSubmitConvergeToTheSameCanonicalContract(t *testi
 		t.Fatalf("producer identity unexpectedly collapsed to %q", externalCanonical.SourceProvider)
 	}
 
-	// Creator Push retains its historical top-level compatibility aliases;
-	// compare only the shared canonical render contract here. The external
-	// /api/v1/jobs projection removes these aliases at its own strict boundary.
-	creatorWorker := cloneCanonicalWorkerPayload(creatorCanonical.WorkerPayload)
-	wantWorker := canonicalJSONValue(t, externalCanonical.WorkerPayload)
-	gotWorker := canonicalJSONValue(t, creatorWorker)
-	if !reflect.DeepEqual(wantWorker, gotWorker) {
-		t.Fatalf("worker payloads diverged:\nexternal=%s\ncreator=%s", mustCanonicalJSON(t, wantWorker), mustCanonicalJSON(t, gotWorker))
+	// Compare the render contract: control-plane aliases such as status and
+	// delivery_plan intentionally remain outside the external renderer payload.
+	for _, key := range []string{
+		"job_id", "video_name", "script_text",
+		contract.PayloadKeyCompiledRenderPlanJSON, contract.PayloadKeyCompiledRenderPlanSHA,
+	} {
+		if externalCanonical.WorkerPayload[key] != creatorCanonical.WorkerPayload[key] {
+			t.Errorf("render field %q differs between ingress paths", key)
+		}
 	}
 
 	wantDelivery := canonicalJSONValue(t, externalCanonical.DeliveryPlan)
@@ -178,7 +153,7 @@ func cloneCanonicalWorkerPayload(payload map[string]interface{}) map[string]inte
 	for key, value := range payload {
 		clone[key] = value
 	}
-	for _, alias := range []string{"voiceover_paths", "subtitle_tracks", "clip_link", "image_link"} {
+	for _, alias := range []string{"status", "delivery_plan", "voiceover_paths", "subtitle_tracks", "clip_link", "image_link"} {
 		delete(clone, alias)
 	}
 	return clone

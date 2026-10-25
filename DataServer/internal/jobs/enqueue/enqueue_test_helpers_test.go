@@ -2,12 +2,76 @@ package enqueue
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"velox-server/internal/deliverystore"
 
 	"velox-server/internal/deliveries"
 	"velox-server/internal/store"
+	"velox-shared/contract"
 )
+
+// testCompiledV2Payload removes retired scene-era inputs and binds a valid
+// producer-owned plan so enqueue lifecycle tests exercise their intended
+// persistence/failure path rather than the old Master compiler.
+func testCompiledV2Payload(payload map[string]interface{}) map[string]interface{} {
+	planJSON, planSHA := testCompiledV2Plan()
+	for _, key := range []string{
+		"scenes", "scenes_json", "render_manifest", "manifest_ref", "layers", "overlays",
+		"visual_replacements", "items", "clips", "images", "clip_segments", "intro_clip_paths", "stock_clip_paths",
+		"voiceover_paths", "voiceover_path", "audio_path",
+	} {
+		delete(payload, key)
+	}
+	payload[contract.PayloadKeyCompiledRenderPlanJSON] = planJSON
+	payload[contract.PayloadKeyCompiledRenderPlanSHA] = planSHA
+	return payload
+}
+
+func testCompiledV2Plan() (string, string) {
+	const durationUS int64 = 1_000_000
+	const revision int64 = 1
+	timelineSHA := strings.Repeat("c", 64)
+	videoSHA := strings.Repeat("b", 64)
+	audioSHA := strings.Repeat("a", 64)
+	profile := contract.CanonicalVideoProfileFMP4StreamV1Default
+	plan := &contract.CompiledRenderPlanV2{
+		PlanVersion: contract.CompiledPlanVersionV2, TimelineRevision: revision,
+		TimelineSHA256: timelineSHA, DurationUS: durationUS,
+		Output: contract.OutputContractV2{
+			Container: profile.Container, VideoCodec: profile.Codec, Width: profile.Width, Height: profile.Height,
+			FPSNum: profile.FPSNum, FPSDen: profile.FPSDen, PixelFormat: profile.PixelFormat,
+			ProfileID: profile.ProfileID, CodecProfile: profile.CodecProfile, CodecLevel: profile.CodecLevel,
+			GOPSize: profile.GOPSize, BFrames: profile.BFrames, ClosedGOP: profile.ClosedGOP,
+			TimeBaseNum: profile.TimeBaseNum, TimeBaseDen: profile.TimeBaseDen,
+		},
+		FinalAudio: contract.FinalAudioV2{
+			Mode: contract.AudioModeFinalAudioCopy, AssetID: "audio-final", SHA256: audioSHA, SizeBytes: 200,
+			Codec: "aac", SampleRateHz: 48_000, Channels: 2, DurationUS: durationUS,
+			TimelineRevision: revision, TimelineSHA256: timelineSHA,
+		},
+		VideoTracks: []contract.VideoTrackV2{{TrackID: "main", Segments: []contract.VideoSegmentV2{{
+			SegmentID: "segment-0", AssetID: "video-source", SHA256: videoSHA, TimelineStartFrame: 0,
+			FrameCount: 24, SourceInUS: 0, SourceDurationUS: durationUS,
+		}}}},
+		Assets: []contract.AssetRefV2{
+			{AssetID: "audio-final", SHA256: audioSHA, SizeBytes: 200, Kind: "final_audio", MIME: "audio/mp4", DurationUS: durationUS},
+			{AssetID: "video-source", SHA256: videoSHA, SizeBytes: 100, Kind: "video", DurationUS: durationUS, Width: profile.Width, Height: profile.Height},
+		},
+	}
+	if err := contract.ValidateCompiledRenderPlanV2(plan); err != nil {
+		panic(err)
+	}
+	canonical, err := plan.CanonicalJSON()
+	if err != nil {
+		panic(err)
+	}
+	sha, err := plan.PlanSHA256()
+	if err != nil {
+		panic(err)
+	}
+	return string(canonical), sha
+}
 
 // newTestEnqueuer creates an Enqueuer backed by an in-memory SQLite store
 // for integration-level testing of the atomic creation path. The

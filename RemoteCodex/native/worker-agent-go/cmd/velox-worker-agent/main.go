@@ -163,7 +163,7 @@ func main() {
 		fmt.Printf("velox-worker-agent version %s\n", Version)
 		// Run without the executor registry — the doctor runs before
 		// pipeline wiring, so the registry isn't built yet.
-		validators := doctor.DefaultValidatorsForProfile(cfg.WorkerProfile)
+		validators := doctor.DefaultValidators()
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		docErr := doctor.Run(ctx, cfg, validators, os.Stdout)
@@ -182,10 +182,8 @@ func main() {
 	// "which executors does this binary advertise" decision; ops
 	// dashboards read it via worker.buildHello.
 	//
-	// PR-3.9 wires scene.composite.v1 against the canonical
-	// pipeline.Runner that powers the worker-agent whenever the C++
-	// video engine is installed + reachable. The pipeline + native
-	// render-client wiring lives in video.NewPipelineRunner.
+	// The V2 packet-copy executor uses the canonical pipeline.Runner and native
+	// render client wired by video.NewPipelineRunner.
 	logger.Info("[BOOT] Building executor registry at composition root (cmd/velox-worker-agent)")
 	registry := executor.NewRegistry()
 
@@ -198,27 +196,14 @@ func main() {
 	bootLog := logger.New(logger.InfoLevel, os.Stderr)
 	bootLog.SetPrefix("[BOOT]")
 
-	// Worker profile gate: the "creator" profile does not perform video
-	// rendering, so we skip the C++ pipeline runner entirely. This keeps
-	// creator-only deployments from failing on a missing video engine.
-	isCreator := cfg.IsCreatorProfile()
 	var pipelineRunner *pipeline.Runner
-	if !isCreator {
-		var pipeErr error
-		pipelineRunner, pipeErr = video.NewPipelineRunner(bootLog)
-		if pipeErr != nil {
-			// Fail closed: a missing C++ engine is a deploy-time problem.
-			// Silently downgrading to an empty registry re-introduces the
-			// dead-letter class of bug — every scene.composite job would
-			// route to ErrExecutorNotFound. Ops must install the C++
-			// engine or set VELOX_VIDEO_ENGINE_CPP_BIN.
-			fmt.Fprintf(os.Stderr, "Error: failed to construct pipeline.runner for scene.composite.v1: %v\n", pipeErr)
-			os.Exit(1)
-		}
-		logger.Info("[BOOT] pipeline.runner constructed for scene.composite.v1")
-	} else {
-		logger.Info("[BOOT] Worker profile is 'creator'; skipping C++ pipeline runner")
+	var pipeErr error
+	pipelineRunner, pipeErr = video.NewPipelineRunner(bootLog)
+	if pipeErr != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed to construct native V2 pipeline runner: %v\n", pipeErr)
+		os.Exit(1)
 	}
+	logger.Info("[BOOT] native V2 pipeline runner constructed")
 	// RW-PROD-003 §3 A5: synchronous bootstrap-OK gate between the C++
 	// engine construction (above) and the executor wiring (below). The
 	// gate proves:
@@ -258,24 +243,11 @@ func main() {
 	// Render outputs must use the worker's configured, writable output root.
 	// A hardcoded /tmp path can belong to another service account on a
 	// multi-user host and would make remote execution fail at finalization.
-	if !isCreator {
-		sceneComposite := executors.NewSceneComposite(pipelineRunner, cfg.OutputDir)
-		registry.MustRegister(sceneComposite)
-		logger.Info("[BOOT] Registered executor: %s@%d", sceneComposite.Descriptor().ID, sceneComposite.Descriptor().Version)
-	} else {
-		logger.Info("[BOOT] Worker profile is 'creator'; scene.composite.v1 disabled")
-	}
-	// Register the render executor family in the single canonical registry.
-	// CompiledRenderPlanV2 is served only by the native packet-copy executor.
-	if err := registerCanonicalRenderExecutors(registry, cfg.OutputDir, []*pipeline.Runner{pipelineRunner}, executors.RenderOptions{
-		X264Preset:   cfg.RenderX264Preset,
-		FastStart:    cfg.RenderFastStart,
-		FastStartSet: true,
-	}); err != nil {
+	// Register the sole V2 packet-copy executor.
+	if err := registerCanonicalRenderExecutors(registry, cfg.OutputDir, []*pipeline.Runner{pipelineRunner}); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: failed to register render executors: %v\n", err)
 		os.Exit(1)
 	}
-	logger.Info("[BOOT] Registered RenderPlan executors: %s@1, %s@1, %s@1, %s@1", executors.SubtitleAlignID, executors.AudioMixID, executors.ComposeID, executors.EncodeID)
 	logger.Info("[BOOT] Registered packet-copy executor: %s@%d", executors.VideoAssembleCopyID, executors.VideoAssembleCopyVersion)
 	// RW-PROD-004 §3 A4: surface the live executor count on the read
 	// snapshot so /health/ready has a non-zero Executors reason.

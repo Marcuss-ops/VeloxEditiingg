@@ -53,7 +53,7 @@ func TestCreatorPushJobsE2E_RealAdminAuthWired(t *testing.T) {
 	r.SetTrustedProxies(nil)
 	h.RegisterRoutes(r, authMW, m2mJobsAuthFake)
 
-	body := creatorPushE2EBody("creator_pc_auth", "creator-job-auth-001", "scene.composite.v1")
+	body := creatorPushE2EBody(t, "creator_pc_auth", "creator-job-auth-001", "video.assemble.copy.v1")
 	rawBody, err := json.Marshal(body)
 	if err != nil {
 		t.Fatalf("marshal body: %v", err)

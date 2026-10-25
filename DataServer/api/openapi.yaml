@@ -175,8 +175,8 @@ components:
                     example: PENDING
                     type: string
                 target_executor_id:
-                    description: Echoed (or defaulted to `scene.composite.v1`).
-                    example: scene.composite.v1
+                    description: Echoed (or defaulted to `video.assemble.copy.v1`).
+                    example: video.assemble.copy.v1
                     type: string
             required:
                 - ok
@@ -626,7 +626,7 @@ components:
                         properties:
                             type:
                                 description: Canonical job type identifier.
-                                example: scene.composite.v1
+                                example: video.assemble.copy.v1
                                 type: string
                             version:
                                 description: Version suffix of the job type.

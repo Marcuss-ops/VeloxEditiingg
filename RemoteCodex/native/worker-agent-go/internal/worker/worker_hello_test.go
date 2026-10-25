@@ -202,21 +202,16 @@ func TestBuildHello_UsesLimiterNotDetectForMaxParallel(t *testing.T) {
 	require.False(t, hasTopMirror, "top-level max_parallel_jobs mirror must not be emitted")
 }
 
-func TestBuildHello_CreatorProfile_AdvertisesCreativeCapabilities(t *testing.T) {
-	// The creator profile must declare the creative job types the
-	// master uses for routing script/voiceover/image work.
+func TestBuildHello_DoesNotAdvertiseCreativeCapabilities(t *testing.T) {
 	cfg := newInsecureDevCfg(t)
-	cfg.WorkerProfile = "creator"
 	w, err := New(cfg, "test")
 	require.NoError(t, err)
 
 	hello := w.buildHello()
-	require.True(t, hello.Capabilities[CapabilityScriptGenerate].(bool), "missing script.generate")
-	require.True(t, hello.Capabilities[CapabilityVoiceoverGenerateItem].(bool), "missing voiceover.generate_item")
-	require.True(t, hello.Capabilities[CapabilityImageGenerateGoogle].(bool), "missing image.generate.google")
-
-	// Creator executors registry is empty; the hello must still be
-	// well-formed and not carry video executor entries.
-	execs, _ := hello.Capabilities["executors"].([]interface{})
-	require.Empty(t, execs, "creator profile should not advertise video executors")
+	_, hasScript := hello.Capabilities["script.generate"]
+	_, hasVoiceover := hello.Capabilities["voiceover.generate_item"]
+	_, hasImage := hello.Capabilities["image.generate.google"]
+	require.False(t, hasScript)
+	require.False(t, hasVoiceover)
+	require.False(t, hasImage)
 }

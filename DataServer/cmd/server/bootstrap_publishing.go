@@ -21,7 +21,7 @@ func wireResolver(cfg *config.Config, p *persistenceDeps, m *moduleDeps) *creato
 	if p == nil || p.SQLite == nil || m == nil || m.Enqueuer == nil {
 		return nil
 	}
-	resolver := creatorflow.NewResolver(cfg, m.Enqueuer, p.SQLite.Forwarding(), p.SQLite)
+	resolver := creatorflow.NewResolver(m.Enqueuer, m.Enqueuer.Jobs, p.SQLite.Forwarding())
 	if m.ForwardingRunner != nil {
 		m.ForwardingRunner.SetResolver(resolver)
 		logServerf(context.Background(), logging.LevelInfo, logging.CodeServerBootstrap, "[BOOTSTRAP] CreatorForwardingRunner wired to canonical Resolver (Blocco 5)")

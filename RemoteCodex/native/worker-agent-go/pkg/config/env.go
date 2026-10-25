@@ -56,9 +56,6 @@ const (
 	// assets_cache and the per-subsystem /opt defaults (cache, blobs).
 	// Default: "/var/lib/velox/worker" (applied by applyDefaults).
 	EnvStateDir = "VELOX_STATE_DIR"
-	// EnvWorkerProfile selects the runtime profile for this worker.
-	// "creator" disables the C++ video pipeline and scene.composite.v1.
-	EnvWorkerProfile = "VELOX_WORKER_PROFILE"
 	// EnvTelemetryJSONDir opts into per-attempt telemetry JSON artifacts
 	// (receipt, benchmark, diagnostic dump). Empty disables the JSON sinks.
 	EnvTelemetryJSONDir = "VELOX_TELEMETRY_JSON_DIR"
@@ -162,7 +159,6 @@ var EnvBindings = []string{
 	EnvWorkerClass,
 	EnvRolloutGroup,
 	EnvStateDir,
-	EnvWorkerProfile,
 	EnvTelemetryJSONDir,
 	EnvPrometheusPort,
 	EnvAssetDownloadConcurrency, EnvRenderX264Preset, EnvRenderFastStart,
@@ -288,9 +284,6 @@ func applyEnvOverrides(cfg *WorkerConfig) error {
 	// branching.
 	if v := strings.TrimSpace(os.Getenv(EnvStateDir)); v != "" {
 		cfg.StateDir = v
-	}
-	if v := strings.TrimSpace(os.Getenv(EnvWorkerProfile)); v != "" {
-		cfg.WorkerProfile = v
 	}
 	if v := strings.TrimSpace(os.Getenv(EnvTelemetryJSONDir)); v != "" {
 		cfg.TelemetryJSONDir = v

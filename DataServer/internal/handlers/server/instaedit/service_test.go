@@ -242,7 +242,7 @@ func TestService_CreateJob_Success(t *testing.T) {
 	resp, err := svc.CreateJob(context.Background(), CreateJobCmd{
 		WorkspaceID:  45,
 		ProjectID:    "proj-1",
-		RenderSpec:   json.RawMessage(`{"video_name":"Test","scenes":[]}`),
+		RenderSpec:   validRenderSpecV2JSON(t, "Test"),
 		Destinations: []CreateDestinationCmd{{ExternalDestinationID: "ext-1"}},
 	})
 	if err != nil {
@@ -263,8 +263,11 @@ func TestService_CreateJob_Success(t *testing.T) {
 	if enq.last["video_name"] != "Test" {
 		t.Fatalf("expected video_name Test, got %v", enq.last["video_name"])
 	}
-	if scenesJSON, ok := enq.last["scenes_json"].(string); !ok || scenesJSON != "[]" {
-		t.Fatalf("expected scenes_json [] string, got %#v", enq.last["scenes_json"])
+	if _, ok := enq.last[contract.PayloadKeyCompiledRenderPlanJSON].(string); !ok {
+		t.Fatalf("compiled V2 plan was not preserved: %#v", enq.last[contract.PayloadKeyCompiledRenderPlanJSON])
+	}
+	if _, ok := enq.last["scenes_json"]; ok {
+		t.Fatal("legacy scenes_json leaked into worker payload")
 	}
 	plan, ok := enq.last["delivery_plan"].([]map[string]any)
 	if !ok || len(plan) != 1 {
@@ -290,7 +293,7 @@ func TestService_CreateJob_PropagatesScheduleAndPublicationTarget(t *testing.T) 
 	_, err := svc.CreateJob(context.Background(), CreateJobCmd{
 		WorkspaceID: 45,
 		ProjectID:   "proj-1",
-		RenderSpec:  json.RawMessage(`{"video_name":"Test","scenes":[]}`),
+		RenderSpec:  validRenderSpecV2JSON(t, "Test"),
 		Destinations: []CreateDestinationCmd{{
 			ExternalDestinationID: "ext-1",
 		}},
@@ -330,7 +333,7 @@ func TestService_CreateJob_PropagatesPublicationBundle(t *testing.T) {
 	_, err := svc.CreateJob(context.Background(), CreateJobCmd{
 		WorkspaceID: 45,
 		ProjectID:   "proj-boxe",
-		RenderSpec:  json.RawMessage(`{"video_name":"Boxe","scenes":[]}`),
+		RenderSpec:  validRenderSpecV2JSON(t, "Boxe"),
 		// Compatibility clients may still send the legacy top-level plan;
 		// publications must remain authoritative for language fan-out.
 		Destinations: []CreateDestinationCmd{{ExternalDestinationID: "ext-it"}},
@@ -381,7 +384,7 @@ func TestService_CreateJob_RenderOnlyBuildsCanonicalPayloadWithoutDestinations(t
 		WorkspaceID: 45,
 		ProjectID:   "proj-render",
 		RenderOnly:  true,
-		RenderSpec:  json.RawMessage(`{"scenes":[]}`),
+		RenderSpec:  validRenderSpecV2JSON(t, "Render only"),
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

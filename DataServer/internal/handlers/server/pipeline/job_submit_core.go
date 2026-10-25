@@ -150,17 +150,6 @@ func (h *Handlers) submitJobCore(ctx context.Context, req SubmitJobRequest, iden
 		return validationRejection(vErr)
 	}
 
-	if req.ManifestRef != nil {
-		resolvedReq, resolveErr := h.ResolveRenderManifestRef(ctx, req)
-		if resolveErr != nil {
-			return rejectWithDetails(http.StatusUnprocessableEntity, resolveErr.Code, resolveErr.Message, resolveErr.Details)
-		}
-		req = resolvedReq
-		if vErr, bad := ValidateSubmitJobRequest(req); bad {
-			return validationRejection(vErr)
-		}
-	}
-
 	// Resolve the optional channel/group selector before any destination
 	// pre-flight or quota check. Group expansion is server-side and
 	// all-or-nothing: once this returns, DeliveryPlan contains the
@@ -184,15 +173,6 @@ func (h *Handlers) submitJobCore(ctx context.Context, req SubmitJobRequest, iden
 	// 500 store_failure or 422 invalid_payload envelope when a destination is
 	// missing/disabled.
 	if status, body, bad := deliveryPlanDestinationEnvelope(ctx, h, &req); bad {
-		return intakeResponse{Status: status, Body: body}
-	}
-
-	// Asset registry/blob pre-flight: validate every local velox-asset
-	// reference before enqueue. This is a Master-local read-only integrity
-	// check; it does not fetch or prefetch anything onto workers. Deferred
-	// velox-drive references remain deferred to the authenticated worker
-	// bridge.
-	if status, body, bad := assetPreflightEnvelope(ctx, h, req); bad {
 		return intakeResponse{Status: status, Body: body}
 	}
 

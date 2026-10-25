@@ -2,341 +2,71 @@ package enqueue
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"velox-shared/contract"
 )
 
-// =====================================================================
-// Normalization tests
-// =====================================================================
-//
-// Verifies the canonical-input contract:
-//   - NormalizeScenesPayload accepts the three on-wire shapes
-//     (scenes[] / flat images[] / scenes_json string) and dedups.
-//   - BuildPipelinePayload extracts the inner "result" envelope, walks
-//     nested/markdown/multi-voice/flat shapes, and rejects nil/empty
-//     results so the downstream enqueue receives a fully populated
-//     canonical payload.
-//   - FlattenPipelineResult is the canonical-input re-writer for
-//     pipeline result objects (it must NOT mutate the input map).
-//   - ShouldForwardPipelineResult gates whether a pipeline result is
-//     eligible to be re-enqueued (status==completed + scenes+voiceover).
-
-func TestNormalizeSceneVideoPayload_IsIdempotent(t *testing.T) {
+func TestNormalizeCompiledV2PayloadIsIdempotent(t *testing.T) {
+	planJSON, planSHA := testCompiledV2Plan()
 	input := map[string]interface{}{
-		"job_id":          "idempotent-job",
-		"job_run_id":      "idempotent-run",
-		"correlation_id":  "idempotent-correlation",
-		"video_name":      "Idempotent render",
-		"script_text":     "The canonical payload must remain stable.",
-		"voiceover_paths": []interface{}{"velox-asset://voiceover.mp3"},
-		"delivery_plan":   []interface{}{map[string]interface{}{"destination_id": "drive-main", "retry_budget": 3}},
-		"video_metadata":  map[string]interface{}{"width": 1920, "height": 1080, "fps_num": 30, "fps_den": 1, "video_codec": "h264"},
-		"scenes": []interface{}{
-			map[string]interface{}{
-				"scene_id":         "scene-0",
-				"text":             "Scene 0",
-				"image_url":        "velox-asset://scene-0.png",
-				"duration_seconds": 5.0,
-			},
-		},
+		"job_id": "idempotent-job", "job_run_id": "idempotent-run",
+		"correlation_id": "idempotent-correlation", "video_name": "V2 idempotent",
+		"script_text": "Producer-compiled plan.",
+		contract.PayloadKeyCompiledRenderPlanJSON: planJSON,
+		contract.PayloadKeyCompiledRenderPlanSHA:  planSHA,
 	}
-
 	first, err := normalizeSceneVideoPayload(input)
 	if err != nil {
 		t.Fatalf("first normalization: %v", err)
 	}
-	firstBeforeSecond, err := json.Marshal(first)
+	before, err := json.Marshal(first)
 	if err != nil {
-		t.Fatalf("marshal first normalized payload before second pass: %v", err)
+		t.Fatal(err)
 	}
 	second, err := normalizeSceneVideoPayload(first)
 	if err != nil {
 		t.Fatalf("second normalization: %v", err)
 	}
-
-	firstJSON, err := json.Marshal(first)
+	after, err := json.Marshal(first)
 	if err != nil {
-		t.Fatalf("marshal first normalized payload: %v", err)
-	}
-	if string(firstBeforeSecond) != string(firstJSON) {
-		t.Fatalf("second normalization mutated the first normalized payload:\nbefore: %s\nafter:  %s", firstBeforeSecond, firstJSON)
+		t.Fatal(err)
 	}
 	secondJSON, err := json.Marshal(second)
 	if err != nil {
-		t.Fatalf("marshal second normalized payload: %v", err)
+		t.Fatal(err)
 	}
-	if string(firstJSON) != string(secondJSON) {
-		t.Fatalf("normalization is not idempotent:\nfirst:  %s\nsecond: %s", firstJSON, secondJSON)
+	if string(before) != string(after) || string(before) != string(secondJSON) {
+		t.Fatalf("V2 normalization is not stable:\nfirst=%s\nsecond=%s", before, secondJSON)
 	}
-	if err := contract.ValidatePayload(second); err != nil {
-		t.Fatalf("second normalized payload failed canonical validation: %v", err)
-	}
-
-	for _, alias := range contract.LegacyAliasKeys {
-		if _, present := second[alias]; present {
-			t.Fatalf("normalized payload contains legacy alias %q", alias)
-		}
+	if err := contract.ValidateCompiledRenderPlanV2Payload(second); err != nil {
+		t.Fatalf("normalized V2 plan invalid: %v", err)
 	}
 }
 
-func TestNormalizeScenesPayload(t *testing.T) {
-	t.Parallel()
-
-	t.Run("scenes_array", func(t *testing.T) {
-		t.Parallel()
-		payload := map[string]interface{}{
-			"scenes": []interface{}{
-				map[string]interface{}{"text": "S1", "image_link": "https://example.com/i1.png"},
-				map[string]interface{}{"text": "S2", "image_link": "https://example.com/i2.png"},
-			},
-		}
-		entries, images, err := NormalizeScenesPayload(payload)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(entries) != 2 || len(images) != 2 {
-			t.Errorf("want 2 entries/2 images, got %d/%d", len(entries), len(images))
-		}
-		for i, e := range entries {
-			if d, _ := e["duration_seconds"].(float64); d <= 0 {
-				t.Errorf("scene %d: want positive duration, got %v", i, d)
-			}
-		}
-	})
-
-	t.Run("flat_images", func(t *testing.T) {
-		t.Parallel()
-		payload := map[string]interface{}{
-			"images": []string{"https://example.com/a.png", "https://example.com/b.png", "https://example.com/c.png"},
-		}
-		entries, images, err := NormalizeScenesPayload(payload)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(entries) != 3 || len(images) != 3 {
-			t.Errorf("want 3/3, got %d/%d", len(entries), len(images))
-		}
-		zoom, _ := entries[0]["zoom"].(map[string]interface{})
-		if zoom["type"] != "light_zoom_in" {
-			t.Errorf("want zoom.type light_zoom_in, got %v", zoom["type"])
-		}
-	})
-
-	t.Run("dedup", func(t *testing.T) {
-		t.Parallel()
-		payload := map[string]interface{}{"images": []string{"a.png", "a.png", "b.png"}}
-		_, images, _ := NormalizeScenesPayload(payload)
-		if len(images) != 2 {
-			t.Errorf("want 2 deduped, got %d", len(images))
-		}
-	})
-
-	t.Run("empty", func(t *testing.T) {
-		t.Parallel()
-		_, _, err := NormalizeScenesPayload(map[string]interface{}{})
-		if err == nil {
-			t.Error("want error for empty")
-		}
-	})
-
-	t.Run("invalid_json", func(t *testing.T) {
-		t.Parallel()
-		_, _, err := NormalizeScenesPayload(map[string]interface{}{"scenes_json": "not json"})
-		if err == nil {
-			t.Error("want error for invalid json")
-		}
-	})
-}
-
-func TestBuildPipelinePayload(t *testing.T) {
-	t.Parallel()
-	tempDir := t.TempDir()
-	jsonPath := filepath.Join(tempDir, "script.json")
-	os.WriteFile(jsonPath, []byte(`{"scenes":[{"text":"S1","image_link":"https://example.com/i.png"}]}`), 0o644)
-	voicePath := filepath.Join(tempDir, "voiceover.mp3")
-	os.WriteFile(voicePath, []byte("dummy"), 0o644)
-
-	t.Run("nested", func(t *testing.T) {
-		t.Parallel()
-		result := map[string]interface{}{
-			"status": "completed", "result": map[string]interface{}{
-				"video_name": "Pipeline Video", "script_text": "Test script.", "json_path": jsonPath,
-				"voiceover": map[string]interface{}{"local_path": voicePath},
-			},
-		}
-		payload, err := BuildPipelinePayload(result)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if payload["video_name"] != "Pipeline Video" || payload["job_type"] != "process_video" {
-			t.Errorf("unexpected: %v %v", payload["video_name"], payload["job_type"])
-		}
-
-		for _, alias := range []string{"title", "voiceover_path", "audio_path", "run_id", "id"} {
-			if _, present := payload[alias]; present {
-				t.Errorf("%q alias must NOT be present in canonical pipeline payload, got %v", alias, payload[alias])
-			}
-		}
-	})
-
-	t.Run("markdown", func(t *testing.T) {
-		t.Parallel()
-		mdPath := filepath.Join(tempDir, "script.md")
-		os.WriteFile(mdPath, []byte("# Title\n\nContent."), 0o644)
-		result := map[string]interface{}{
-			"status": "completed", "result": map[string]interface{}{
-				"video_name": "MD Video", "markdown_path": mdPath, "json_path": jsonPath,
-				"voiceover": map[string]interface{}{"local_path": voicePath},
-			},
-		}
-		payload, _ := BuildPipelinePayload(result)
-		if payload["script_text"] != "# Title\n\nContent." {
-			t.Errorf("want markdown text, got %q", payload["script_text"])
-		}
-	})
-
-	t.Run("multi_voice", func(t *testing.T) {
-		t.Parallel()
-		v1 := filepath.Join(tempDir, "v1.mp3")
-		v2 := filepath.Join(tempDir, "v2.mp3")
-		os.WriteFile(v1, []byte("d"), 0o644)
-		os.WriteFile(v2, []byte("d"), 0o644)
-		result := map[string]interface{}{
-			"status": "completed", "result": map[string]interface{}{
-				"video_name": "Multi", "script_text": "Text.", "json_path": jsonPath,
-				"voiceover_paths": []string{v1, v2},
-			},
-		}
-		payload, _ := BuildPipelinePayload(result)
-		if _, present := payload["voiceover_paths"]; present {
-			t.Errorf("renderer payload must not contain positional voiceover_paths: %#v", payload["voiceover_paths"])
-		}
-	})
-
-	t.Run("flat", func(t *testing.T) {
-		t.Parallel()
-		result := map[string]interface{}{
-			"video_name": "Flat", "script_text": "Flat script.", "json_path": jsonPath, "voiceover_path": voicePath,
-		}
-		payload, err := BuildPipelinePayload(result)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if payload["video_name"] != "Flat" {
-			t.Errorf("want Flat, got %v", payload["video_name"])
-		}
-	})
-
-	t.Run("errors", func(t *testing.T) {
-		t.Parallel()
-		for _, tc := range []struct {
-			name   string
-			result map[string]interface{}
-		}{
-			{"nil", nil},
-			{"no_voiceover", map[string]interface{}{"status": "completed", "result": map[string]interface{}{"video_name": "X", "json_path": jsonPath}}},
-			{"no_title", map[string]interface{}{"status": "completed", "result": map[string]interface{}{"json_path": jsonPath, "voiceover": map[string]interface{}{"local_path": voicePath}}}},
-			{"no_scenes", map[string]interface{}{"status": "completed", "result": map[string]interface{}{"video_name": "X", "json_path": jsonPath, "voiceover": map[string]interface{}{"local_path": voicePath}}}},
-		} {
-			t.Run(tc.name, func(t *testing.T) {
-				t.Parallel()
-				_, err := BuildPipelinePayload(tc.result)
-				if err == nil {
-					t.Error("want error")
-				}
-			})
-		}
-	})
-}
-
-func TestNormalizeSceneVideoPayload_PreservesVisualTimelineFields(t *testing.T) {
-	t.Parallel()
-
-	normalized, err := normalizeSceneVideoPayload(map[string]interface{}{
-		"video_name":  "Subtitle layer smoke",
-		"script_text": "Subtitle layer body.",
-		"voiceover_paths": []interface{}{
-			"velox-asset://voice-1",
+func TestBuildPipelinePayloadPassesProducerPlanThrough(t *testing.T) {
+	planJSON, planSHA := testCompiledV2Plan()
+	input := map[string]interface{}{
+		"status": contract.InputAssemblyCompleted,
+		"result": map[string]interface{}{
+			"video_name": "Pipeline V2", "script_text": "Plan bytes stay canonical.",
+			contract.PayloadKeyCompiledRenderPlanJSON: planJSON,
+			contract.PayloadKeyCompiledRenderPlanSHA:  planSHA,
 		},
-		"scenes": []interface{}{
-			map[string]interface{}{
-				"text":             "Scene 1",
-				"clip_link":        "velox-asset://clip-1",
-				"duration_seconds": float64(5),
-				"subtitles": map[string]interface{}{
-					"url":    "velox-asset://subtitles-1",
-					"format": "srt",
-				},
-			},
-		},
-		"layers": []interface{}{
-			map[string]interface{}{
-				"id":               "important-1",
-				"type":             "text",
-				"role":             "important_phrase",
-				"text":             "Important",
-				"start_seconds":    float64(1),
-				"duration_seconds": float64(2),
-				"preset":           "important_phrase_v1",
-			},
-		},
-	})
+	}
+	payload, err := BuildPipelinePayload(input)
 	if err != nil {
-		t.Fatalf("normalizeSceneVideoPayload: %v", err)
+		t.Fatalf("BuildPipelinePayload: %v", err)
 	}
-	scenes, ok := normalized["scenes"].([]map[string]interface{})
-	if !ok || len(scenes) != 1 {
-		t.Fatalf("scenes = %#v, want one canonical scene", normalized["scenes"])
+	if payload[contract.PayloadKeyCompiledRenderPlanJSON] != planJSON || payload[contract.PayloadKeyCompiledRenderPlanSHA] != planSHA {
+		t.Fatal("BuildPipelinePayload changed producer plan bytes or hash")
 	}
-	subtitles, ok := scenes[0]["subtitles"].(map[string]interface{})
-	if !ok || subtitles["url"] != "velox-asset://subtitles-1" {
-		t.Fatalf("scene subtitles = %#v, want canonical nested subtitles", scenes[0]["subtitles"])
+	if _, present := payload["scenes_json"]; present {
+		t.Fatal("legacy scenes_json crossed the worker boundary")
 	}
-	if got, ok := normalized["layers"].([]interface{}); !ok || len(got) != 1 {
-		t.Fatalf("layers = %#v, want one preserved layer", normalized["layers"])
-	}
-}
-
-func TestNormalizeSceneVideoPayload_DerivesSubtitleTrackFromSceneSubtitles(t *testing.T) {
-	t.Parallel()
-
-	normalized, err := normalizeSceneVideoPayload(map[string]interface{}{
-		"video_name":  "Nested subtitle smoke",
-		"script_text": "Nested subtitle body.",
-		"voiceover_paths": []interface{}{
-			"velox-asset://voice-1",
-		},
-		"scenes": []interface{}{
-			map[string]interface{}{
-				"text":             "Scene 1",
-				"clip_link":        "velox-asset://clip-1",
-				"duration_seconds": float64(5),
-				"subtitles": map[string]interface{}{
-					"url":    "velox-asset://subtitle-1",
-					"format": "srt",
-					"preset": "active_word_pop",
-					"font":   "Inter",
-				},
-			},
-		},
-	})
-	if err != nil {
-		t.Fatalf("normalizeSceneVideoPayload: %v", err)
-	}
-	scenes, ok := normalized["scenes"].([]map[string]interface{})
-	if !ok || len(scenes) != 1 {
-		t.Fatalf("scenes = %#v, want one canonical scene", normalized["scenes"])
-	}
-	if _, ok := scenes[0]["subtitles"].(map[string]interface{}); !ok {
-		t.Fatalf("scene subtitles = %#v, want canonical nested subtitles", scenes[0]["subtitles"])
-	}
-	if _, present := normalized["subtitle_tracks"]; present {
-		t.Fatalf("normalized payload contains retired top-level subtitle_tracks")
+	if _, err := BuildPipelinePayload(map[string]interface{}{"scenes": []interface{}{map[string]interface{}{"text": "legacy"}}}); err == nil {
+		t.Fatal("BuildPipelinePayload accepted a legacy scene payload without CompiledRenderPlanV2")
 	}
 }
 
@@ -355,104 +85,34 @@ func TestFlattenPipelineResult(t *testing.T) {
 
 func TestShouldForwardPipelineResult(t *testing.T) {
 	t.Parallel()
-	sceneJSON := `[{"text":"S1","image_link":"https://example.com/i.png"}]`
-	voicePath := filepath.Join(t.TempDir(), "v.mp3")
-	os.WriteFile(voicePath, []byte("d"), 0o644)
-
-	valid := map[string]interface{}{"status": "completed", "result": map[string]interface{}{"scenes_json": sceneJSON, "voiceover_path": voicePath}}
+	plan := map[string]interface{}{
+		contract.PayloadKeyCompiledRenderPlanJSON: `{"plan_version":2}`,
+		contract.PayloadKeyCompiledRenderPlanSHA:  strings.Repeat("a", 64),
+	}
+	valid := map[string]interface{}{"status": "completed", "result": plan}
 	if !ShouldForwardPipelineResult(valid) {
-		t.Error("want true for valid")
+		t.Error("want true for completed producer-owned V2 plan")
 	}
 	if ShouldForwardPipelineResult(nil) {
 		t.Error("want false for nil")
 	}
-	if !ShouldForwardPipelineResult(map[string]interface{}{
-		"scenes_json": sceneJSON,
-	}) {
-		t.Error("want true when status is absent for a legacy payload")
+	if ShouldForwardPipelineResult(map[string]interface{}{"scenes_json": `[]`}) {
+		t.Error("legacy scene payload without a producer V2 plan must not be forwarded")
 	}
 	if ShouldForwardPipelineResult(map[string]interface{}{"status": "failed"}) {
 		t.Error("want false for failed")
 	}
 	for _, status := range []string{"succeeded", "done", "published"} {
-		if ShouldForwardPipelineResult(map[string]interface{}{
-			"status":      status,
-			"scenes_json": sceneJSON,
-		}) {
+		result := map[string]interface{}{"status": status}
+		for key, value := range plan {
+			result[key] = value
+		}
+		if ShouldForwardPipelineResult(result) {
 			t.Errorf("status %q is a lifecycle/publication alias and must not be accepted as input-assembly completion", status)
 		}
 	}
-	if ShouldForwardPipelineResult(map[string]interface{}{"status": "completed", "result": map[string]interface{}{"voiceover_path": voicePath}}) {
-		t.Error("want false for no scenes")
-	}
-	if !ShouldForwardPipelineResult(map[string]interface{}{"status": "completed", "result": map[string]interface{}{"scenes_json": sceneJSON}}) {
-		t.Error("want true for renderable scenes without voiceover")
-	}
-	stockOnly := map[string]interface{}{
-		"status": "completed",
-		"result": map[string]interface{}{
-			"scenes_json": `[{"text":"Scene","duration_seconds":5,"stock":[{"asset_id":"drive-1","sha256":"abc","size_bytes":100},{"drive_file_id":"drive-2","source_uri":"https://drive.google.com/file/d/drive-2","size_bytes":200}]}]`,
-		},
-	}
-	if !ShouldForwardPipelineResult(stockOnly) {
-		t.Fatal("want true for stock-only scenes with an array of Drive references")
-	}
-	readiness := InspectPipelineResultReadiness(stockOnly)
-	if !readiness.Complete || !readiness.HasSceneManifest || readiness.SceneCount != 1 || !readiness.HasRenderableMedia || readiness.StockAssetCount != 2 || readiness.Reason != "ready" {
-		t.Fatalf("unexpected stock-only readiness summary: %+v", readiness)
-	}
-	typedStock := map[string]interface{}{
-		"scenes": []map[string]interface{}{{"text": "Scene", "stock": []map[string]interface{}{{"asset_id": "drive-1"}}}},
-	}
-	if !ShouldForwardPipelineResult(typedStock) {
-		t.Fatal("want true for typed scene and stock arrays")
-	}
-	noStockRef := map[string]interface{}{
-		"scenes_json": `[{"text":"Scene","stock":[{"duration_seconds":5}]}]`,
-	}
-	if got := InspectPipelineResultReadiness(noStockRef); got.Complete || got.Reason != "no_voiceover_or_renderable_media" || got.StockAssetCount != 0 {
-		t.Fatalf("unreferenced stock must remain incomplete, got %+v", got)
-	}
-	// A complete producer-owned V2 plan is independently forwardable: its
-	// video segments and FINAL_AUDIO_COPY asset replace the legacy scenes and
-	// positional voiceover fields.
-	compiledPlan := map[string]interface{}{
-		"status": "completed",
-		contract.PayloadKeyCompiledRenderPlanJSON: `{"plan_version":2}`,
-		contract.PayloadKeyCompiledRenderPlanSHA:  strings.Repeat("a", 64),
-	}
-	if !ShouldForwardPipelineResult(compiledPlan) {
-		t.Error("want true for a complete producer-owned compiled plan without legacy scenes/audio")
-	}
-	compiledPlan[contract.PayloadKeyCompiledRenderPlanSHA] = ""
-	if ShouldForwardPipelineResult(compiledPlan) {
-		t.Error("want false for a partial producer-owned compiled-plan envelope")
-	}
-	// audio_tracks-only payload is no longer forwardable: top-level
-	// audio_tracks was retired and does not count as a renderable audio
-	// source. Only voiceover or renderable media make a result forwardable.
-	bgmSceneJSON := `[{"text":"BGM-only scene","duration_seconds":12}]`
-	if ShouldForwardPipelineResult(map[string]interface{}{
-		"status":      "completed",
-		"scenes_json": bgmSceneJSON,
-		"audio_tracks": []interface{}{
-			map[string]interface{}{
-				"source_url": "velox-asset://music-1",
-				"role":       "background_music",
-				"volume":     float64(0.12),
-			},
-		},
-	}) {
-		t.Error("want false for audio_tracks-only payload (audio_tracks retired)")
-	}
-	// audio_tracks with no source_url must not count as forwardable.
-	if ShouldForwardPipelineResult(map[string]interface{}{
-		"status":      "completed",
-		"scenes_json": `[{"text":"Empty tracks","duration_seconds":5}]`,
-		"audio_tracks": []interface{}{
-			map[string]interface{}{"role": "background_music", "volume": float64(0.1)},
-		},
-	}) {
-		t.Error("want false for audio_tracks with no source_url")
+	partialPlan := map[string]interface{}{contract.PayloadKeyCompiledRenderPlanJSON: `{"plan_version":2}`}
+	if readiness := InspectPipelineResultReadiness(partialPlan); readiness.Complete || readiness.Reason != "compiled_plan_incomplete" {
+		t.Errorf("incomplete V2 plan readiness = %+v", readiness)
 	}
 }

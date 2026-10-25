@@ -5,141 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"strings"
 	"testing"
 
 	"velox-server/internal/costmodel"
 	"velox-shared/contract"
-	"velox-shared/contract/rendermanifest"
 )
-
-func TestNormalizeSceneVideoPayloadStripsPublicationMetadataAndPreservesTechnicalRenderMetadata(t *testing.T) {
-	payload := map[string]interface{}{
-		"video_name": "Renderer job name",
-		"scenes": []interface{}{
-			map[string]interface{}{"text": "Scene 1", "image_link": "https://example.com/1.png"},
-		},
-		"voiceover_paths": []interface{}{"https://example.com/voice.mp3"},
-		"delivery_plan": []interface{}{
-			map[string]interface{}{"destination_id": "social-main", "retry_budget": 3},
-		},
-		"video_metadata": map[string]interface{}{
-			"title":             "Published title",
-			"description":       "Published description",
-			"tags":              []interface{}{"velox", "test"},
-			"privacy_status":    "private",
-			"publish_at":        "2026-07-20T18:00:00+02:00",
-			"localizations":     map[string]interface{}{"it": map[string]interface{}{"title": "Titolo"}},
-			"metadata_override": map[string]interface{}{"title": "Override"},
-			"width":             1920,
-			"height":            1080,
-			"fps_num":           30,
-			"fps_den":           1,
-			"pixel_format":      "yuv420p",
-		},
-	}
-
-	out, err := normalizeSceneVideoPayload(payload)
-	if err != nil {
-		t.Fatalf("normalizeSceneVideoPayload: %v", err)
-	}
-	metadata, ok := out["video_metadata"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("video_metadata type = %T, want technical map[string]interface{}", out["video_metadata"])
-	}
-	if metadata["width"] != 1920 || metadata["height"] != 1080 || metadata["pixel_format"] != "yuv420p" {
-		t.Fatalf("technical render metadata was not preserved: %#v", metadata)
-	}
-	for _, key := range []string{"title", "description", "tags", "privacy_status", "publish_at", "localizations", "metadata_override"} {
-		if _, present := metadata[key]; present {
-			t.Fatalf("publication metadata %q leaked into normalized renderer metadata: %#v", key, metadata[key])
-		}
-	}
-
-	plan, ok := out["delivery_plan"].([]interface{})
-	if !ok || len(plan) != 1 {
-		t.Fatalf("delivery_plan = %#v", out["delivery_plan"])
-	}
-	planItem, ok := plan[0].(map[string]interface{})
-	if !ok {
-		t.Fatalf("delivery plan item = %#v", plan[0])
-	}
-	if planItem["destination_id"] != "social-main" || planItem["retry_budget"] != 3 {
-		t.Fatalf("legacy routing fields changed: %#v", planItem)
-	}
-	if _, present := planItem["metadata"]; present {
-		t.Fatalf("publication metadata was attached to delivery plan: %#v", planItem["metadata"])
-	}
-}
-
-func TestNormalizeSceneVideoPayloadRejectsNullRenderManifest(t *testing.T) {
-	_, err := normalizeSceneVideoPayload(map[string]interface{}{
-		"video_name":      "Null manifest",
-		"script_text":     "Null manifest script",
-		"render_manifest": nil,
-	})
-	if err == nil || !strings.Contains(err.Error(), "render_manifest") {
-		t.Fatalf("want render_manifest type error, got %v", err)
-	}
-}
-
-func TestNormalizeSceneVideoPayloadCompilesStrictRenderManifest(t *testing.T) {
-	payload := map[string]interface{}{
-		"video_name":      "Strict render",
-		"script_text":     "Strict render script",
-		"render_manifest": strictNormalizerManifest(),
-	}
-
-	out, err := normalizeSceneVideoPayloadContext(context.Background(), payload)
-	if err != nil {
-		t.Fatalf("normalizeSceneVideoPayloadContext: %v", err)
-	}
-	planJSON, ok := out["render_plan_json"].(string)
-	if !ok || planJSON == "" {
-		t.Fatalf("render_plan_json = %#v, want canonical JSON", out["render_plan_json"])
-	}
-	if err := rendermanifest.ValidateJSON([]byte(planJSON)); err != nil {
-		t.Fatalf("compiled render plan is invalid: %v", err)
-	}
-	sum := sha256.Sum256([]byte(planJSON))
-	wantHash := hex.EncodeToString(sum[:])
-	if got := out["render_plan_sha256"]; got != wantHash {
-		t.Fatalf("render_plan_sha256 = %v, want %s", got, wantHash)
-	}
-	if _, present := out["layers"]; present {
-		t.Fatalf("raw top-level layers leaked beside strict compiled plan: %#v", out["layers"])
-	}
-}
-
-func TestNormalizeSceneVideoPayloadCompilesStrictCompiledRenderPlanV2(t *testing.T) {
-	manifest := strictNormalizerManifest()
-	manifest["assets"] = append(manifest["assets"].([]interface{}), map[string]interface{}{
-		"id": "final-audio", "uri": "velox-asset://final-audio", "kind": "final_audio",
-		"format": "audio/mp4", "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-		"size_bytes": 200, "duration_ms": 1000,
-	})
-	out, err := normalizeSceneVideoPayloadContext(context.Background(), map[string]interface{}{
-		"video_name": "Strict V2 render", "script_text": "Strict V2 render script", "render_manifest": manifest,
-	})
-	if err != nil {
-		t.Fatalf("normalizeSceneVideoPayloadContext: %v", err)
-	}
-	rawJSON, ok := out[contract.PayloadKeyCompiledRenderPlanJSON].(string)
-	if !ok || rawJSON == "" {
-		t.Fatalf("compiled_render_plan_json = %#v", out[contract.PayloadKeyCompiledRenderPlanJSON])
-	}
-	rawSHA, ok := out[contract.PayloadKeyCompiledRenderPlanSHA].(string)
-	if !ok || rawSHA == "" {
-		t.Fatalf("compiled_render_plan_sha256 = %#v", out[contract.PayloadKeyCompiledRenderPlanSHA])
-	}
-	if err := contract.ValidateCompiledRenderPlanV2Payload(out); err != nil {
-		t.Fatalf("generated V2 envelope rejected: %v", err)
-	}
-	if got := resolveInternalExecutorID(out); got != "video.assemble.copy.v1@1" {
-		t.Fatalf("V2 executor = %q, want video.assemble.copy.v1@1", got)
-	}
-}
 
 func TestNormalizeSceneVideoPayloadPassesThroughCompiledV2WithoutRecompiling(t *testing.T) {
 	manifest := strictNormalizerManifest()
@@ -205,8 +76,8 @@ func TestNormalizeSceneVideoPayloadRejectsCompiledV2SHAOrSchemaDrift(t *testing.
 	}
 	badSHA := cloneRichPayload(base)
 	badSHA[contract.PayloadKeyCompiledRenderPlanSHA] = strings.Repeat("f", 64)
-	if _, err := normalizeSceneVideoPayloadContext(context.Background(), badSHA); err == nil || !strings.Contains(err.Error(), "pass-through validation") {
-		t.Fatalf("SHA mismatch error = %v, want pass-through validation failure", err)
+	if _, err := normalizeSceneVideoPayloadContext(context.Background(), badSHA); err == nil || !strings.Contains(err.Error(), "producer plan validation failed") {
+		t.Fatalf("SHA mismatch error = %v, want producer plan validation failure", err)
 	}
 
 	// Keep the transport hash correct for the mutated bytes; strict V2
@@ -225,8 +96,8 @@ func TestNormalizeSceneVideoPayloadRejectsCompiledV2SHAOrSchemaDrift(t *testing.
 	badSchema := cloneRichPayload(base)
 	badSchema[contract.PayloadKeyCompiledRenderPlanJSON] = string(mutated)
 	badSchema[contract.PayloadKeyCompiledRenderPlanSHA] = hex.EncodeToString(sum[:])
-	if _, err := normalizeSceneVideoPayloadContext(context.Background(), badSchema); err == nil || !strings.Contains(err.Error(), "pass-through validation") {
-		t.Fatalf("schema drift error = %v, want pass-through validation failure", err)
+	if _, err := normalizeSceneVideoPayloadContext(context.Background(), badSchema); err == nil || !strings.Contains(err.Error(), "producer plan validation failed") {
+		t.Fatalf("schema drift error = %v, want producer plan validation failure", err)
 	}
 }
 
@@ -265,19 +136,6 @@ func TestProjectEnqueueJobPreservesCompiledV2InTaskSpec(t *testing.T) {
 	}
 }
 
-func TestNormalizeSceneVideoPayloadRejectsCanceledStrictCompile(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	_, err := normalizeSceneVideoPayloadContext(ctx, map[string]interface{}{
-		"video_name":      "Canceled render",
-		"script_text":     "Canceled render script",
-		"render_manifest": strictNormalizerManifest(),
-	})
-	if err == nil || !errors.Is(err, context.Canceled) {
-		t.Fatalf("want canceled strict compile error, got %v", err)
-	}
-}
-
 func strictNormalizerManifest() map[string]interface{} {
 	const sha = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	return map[string]interface{}{
@@ -292,23 +150,5 @@ func strictNormalizerManifest() map[string]interface{} {
 			map[string]interface{}{"id": "voiceover", "kind": "voiceover", "events": []interface{}{map[string]interface{}{"asset_id": "voiceover", "timeline_start_ms": 0, "duration_ms": 1000}}},
 		},
 		"output": map[string]interface{}{"container": "mp4", "video_codec": "h264", "audio_codec": "aac", "audio_sample_rate": 48000, "audio_channels": 2},
-	}
-}
-
-func TestNormalizeSceneVideoPayloadRejectsInvalidVideoMetadata(t *testing.T) {
-	payload := map[string]interface{}{
-		"video_name": "Test video",
-		"scenes": []interface{}{
-			map[string]interface{}{"text": "Scene 1"},
-		},
-		"voiceover_paths": []interface{}{"voice.mp3"},
-		"video_metadata": map[string]interface{}{
-			"privacy_status": "visible-to-everyone",
-		},
-	}
-
-	_, err := normalizeSceneVideoPayload(payload)
-	if err == nil || !strings.Contains(err.Error(), "video_metadata.privacy_status") {
-		t.Fatalf("want privacy validation error, got %v", err)
 	}
 }

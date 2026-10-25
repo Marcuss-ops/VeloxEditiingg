@@ -3,10 +3,10 @@ package worker
 import (
 	"context"
 
+	"velox-shared/contract"
 	"velox-shared/controltransport"
 	pb "velox-shared/controltransport/pb"
 	"velox-worker-agent/internal/executor"
-	"velox-worker-agent/pkg/api/renderplan"
 )
 
 // handleTaskOfferMessage validates a task-native offer, admits it against the
@@ -83,8 +83,15 @@ func (w *Worker) handleTaskOfferMessage(ctx context.Context, msg controltranspor
 	if outputContract := taskOffer.GetOutputContract(); outputContract != nil {
 		admissionPayload["output_contract"] = outputContract.AsMap()
 	}
-	if err := renderplan.ValidateTaskPayload(admissionPayload); err != nil {
-		w.logger.Warn("[RECEIVE] TaskOffer refused — invalid versioned RenderPlan (task=%s): %v", taskID, err)
+	if executorID != "video.assemble.copy.v1" {
+		w.logger.Warn("[RECEIVE] TaskOffer refused — legacy executor removed (task=%s executor=%s)", taskID, executorID)
+		if rejectErr := w.sendTaskReject(ctx, taskID, jobID, attemptID, leaseID, "unsupported_executor", attemptNumber, revision); rejectErr != nil {
+			w.logger.Warn("[RECEIVE] Failed to send TaskRejected (legacy executor removed): %v", rejectErr)
+		}
+		return
+	}
+	if err := contract.ValidateCompiledRenderPlanV2Payload(admissionPayload); err != nil {
+		w.logger.Warn("[RECEIVE] TaskOffer refused — invalid CompiledRenderPlanV2 (task=%s): %v", taskID, err)
 		if rejectErr := w.sendTaskReject(ctx, taskID, jobID, attemptID, leaseID, "invalid_render_plan", attemptNumber, revision); rejectErr != nil {
 			w.logger.Warn("[RECEIVE] Failed to send TaskRejected (invalid render plan): %v", rejectErr)
 		}

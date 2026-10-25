@@ -55,7 +55,7 @@ func newTestSubmitterStack(t *testing.T) *Resolver {
 		t.Fatalf("seed delivery_destinations: %v", err)
 	}
 	enqueuer := newTestEnqueuer(t, db)
-	rs := NewResolverFromDeps(enqueuer, db.Forwarding(), db, tempDir, filepath.Join(tempDir, "videos"), "")
+	rs := NewResolverMinimal(enqueuer, db.Forwarding())
 	if rs == nil {
 		t.Fatalf("resolver construction failed")
 	}
@@ -66,13 +66,15 @@ func newTestSubmitterStack(t *testing.T) *Resolver {
 // ShouldForwardPipelineResult and the atomic write path (mirrors the
 // happy-path fixture in TestResolverEnqueuesWorkerJob).
 func canonicalSubmitPayload() map[string]interface{} {
+	planJSON, planSHA := compiledV2TestPlan()
 	return map[string]interface{}{
 		"ok":     true,
 		"status": "completed",
 		"result": map[string]interface{}{
-			"video_name":  "Intake Source Test",
-			"script_text": "Creator script",
-			"scenes_json": `[{"text":"Scene 1","image":{"asset_id":"scene-image","url":"velox-asset://scene-image"},"voiceover":{"asset_id":"voice","url":"velox-asset://voice","duration_ms":5000}}]`,
+			"video_name":                  "Intake Source Test",
+			"script_text":                 "Creator script",
+			"compiled_render_plan_json":   planJSON,
+			"compiled_render_plan_sha256": planSHA,
 		},
 	}
 }
@@ -102,7 +104,7 @@ func TestCanonicalJobSubmitter_RecordsIntakeSource(t *testing.T) {
 		IntakeSource:     IntakeSourceCreator,
 		SourceProvider:   "remote_engine",
 		SourceJobID:      "intake-source-1",
-		TargetExecutorID: "scene.composite.v1",
+		TargetExecutorID: "video.assemble.copy.v1",
 		Payload:          canonicalSubmitPayload(),
 		DeliveryPlan:     canonicalSubmitDeliveryPlan(),
 	})
@@ -128,7 +130,7 @@ func TestCanonicalJobSubmitter_DefaultIntakeSource(t *testing.T) {
 	_, err := submitter.Submit(context.Background(), CanonicalJobSubmission{
 		SourceProvider:   "remote_engine",
 		SourceJobID:      "intake-default-1",
-		TargetExecutorID: "scene.composite.v1",
+		TargetExecutorID: "video.assemble.copy.v1",
 		Payload:          canonicalSubmitPayload(),
 		DeliveryPlan:     canonicalSubmitDeliveryPlan(),
 	})
@@ -170,7 +172,7 @@ func TestCanonicalJobSubmitter_NilRecorderIsNoop(t *testing.T) {
 		IntakeSource:     IntakeSourceCanonical,
 		SourceProvider:   "remote_engine",
 		SourceJobID:      "intake-nil-1",
-		TargetExecutorID: "scene.composite.v1",
+		TargetExecutorID: "video.assemble.copy.v1",
 		Payload:          canonicalSubmitPayload(),
 		DeliveryPlan:     canonicalSubmitDeliveryPlan(),
 	})
@@ -191,22 +193,10 @@ func TestCanonicalJobSubmitter_SubmitScratchEnqueuesFromScratch(t *testing.T) {
 	submitter := NewCanonicalJobSubmitter(rs).WithIntakeSourceRecorder(recorder)
 
 	payload := map[string]interface{}{
-		"video_name":      "scratch.mp4",
-		"script_text":     "from scratch",
-		"voiceover_paths": []interface{}{"velox-asset://voice-1"},
-		"scenes": []interface{}{map[string]interface{}{
-			"scene_id": "scene-1",
-			"clip": map[string]interface{}{
-				"asset_id":    "drive-file-1",
-				"url":         "velox-drive://drive-file-1",
-				"duration_ms": 3000,
-			},
-			"voiceover": map[string]interface{}{
-				"asset_id":    "voice-1",
-				"url":         "velox-asset://voice-1",
-				"duration_ms": 3000,
-			},
-		}},
+		"video_name":                  "scratch.mp4",
+		"script_text":                 "from scratch",
+		"compiled_render_plan_json":   func() string { plan, _ := compiledV2TestPlan(); return plan }(),
+		"compiled_render_plan_sha256": func() string { _, sum := compiledV2TestPlan(); return sum }(),
 		"delivery_plan": []interface{}{map[string]interface{}{
 			"destination_id": "drive-main",
 			"retry_budget":   1,
@@ -250,7 +240,7 @@ func TestCanonicalJobSubmitter_SubmitRawCreatesJobAndRecordsIntake(t *testing.T)
 	spec := &taskgraph.TaskSpec{
 		Version:    taskgraph.SpecVersion,
 		JobID:      "cal_test_job",
-		ExecutorID: "scene.composite.v1",
+		ExecutorID: "video.assemble.copy.v1",
 		Payload:    payload,
 	}
 	if err := submitter.SubmitRaw(context.Background(), IntakeSourceCalendar, job, spec, 5); err != nil {

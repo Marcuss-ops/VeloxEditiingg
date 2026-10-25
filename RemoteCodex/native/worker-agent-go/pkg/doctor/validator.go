@@ -133,42 +133,20 @@ func RunReport(ctx context.Context, cfg *config.WorkerConfig, validators []Valid
 // --validate-config mode before executor wiring). The full doctor
 // (RW-PROD-016) will always supply a non-nil registry.
 func DefaultValidators() []Validator {
-	return DefaultValidatorsForProfile("")
+	return []Validator{
+		&EnvironmentValidator{}, &TransportTLSValidator{}, &CertExpiryValidator{},
+		&DNSReachabilityValidator{}, &DirsValidator{}, &DiskFreeValidator{},
+		&PortsValidator{}, &EngineBinaryValidator{}, &FFmpegValidator{},
+	}
 }
 
 // DefaultValidatorsWithRegistry returns the full canonical set including
 // the executor registry check. Use this when the registry has been wired
 // (e.g., during the full doctor command, or after executor construction).
 func DefaultValidatorsWithRegistry(registry ExecutorRegistryView) []Validator {
-	return DefaultValidatorsWithRegistryAndProfile(registry, "")
-}
-
-// DefaultValidatorsForProfile returns the canonical set of validators,
-// omitting engine/ffmpeg checks when profile is "creator" because a
-// creator worker does not use the C++ video pipeline.
-func DefaultValidatorsForProfile(profile string) []Validator {
-	isCreator := config.IsCreatorProfileValue(profile)
-	vals := []Validator{
-		&EnvironmentValidator{},
-		&TransportTLSValidator{},
-		&CertExpiryValidator{},
-		&DNSReachabilityValidator{},
-		&DirsValidator{},
-		&DiskFreeValidator{},
-		&PortsValidator{},
-	}
-	if !isCreator {
-		vals = append(vals, &EngineBinaryValidator{}, &FFmpegValidator{})
-	}
-	return vals
-}
-
-// DefaultValidatorsWithRegistryAndProfile returns the full canonical set
-// including the executor registry check, honouring the worker profile.
-func DefaultValidatorsWithRegistryAndProfile(registry ExecutorRegistryView, profile string) []Validator {
-	vals := DefaultValidatorsForProfile(profile)
+	vals := DefaultValidators()
 	if registry != nil {
-		vals = append(vals, &RegistryValidator{Registry: registry, Profile: profile})
+		vals = append(vals, &RegistryValidator{Registry: registry})
 	}
 	return vals
 }

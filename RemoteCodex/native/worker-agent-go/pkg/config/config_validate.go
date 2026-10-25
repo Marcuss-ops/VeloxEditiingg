@@ -117,12 +117,6 @@ func (c *WorkerConfig) Validate() error {
 			"invalid environment: %q (valid: dev, staging, production)", c.Environment))
 	}
 
-	// Validate worker profile when set. Only "creator" (case-insensitive)
-	// is recognized; an empty value keeps the historical video-worker path.
-	if c.WorkerProfile != "" && !c.IsCreatorProfile() {
-		errs = append(errs, fmt.Sprintf(
-			"invalid worker_profile: %q (valid: %q or empty)", c.WorkerProfile, CreatorProfile))
-	}
 	validX264Presets := map[string]bool{
 		"ultrafast": true, "superfast": true, "veryfast": true,
 		"faster": true, "fast": true, "medium": true, "slow": true,

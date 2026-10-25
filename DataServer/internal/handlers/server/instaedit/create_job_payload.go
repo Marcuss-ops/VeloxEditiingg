@@ -14,14 +14,13 @@ import (
 // buildCreateJobPayload applies destination resolution and builds the
 // canonical payload consumed by either creatorflow or enqueue.
 func (s *Service) buildCreateJobPayload(ctx context.Context, cmd CreateJobCmd, renderSpec map[string]any) (map[string]any, error) {
-	if _, present := renderSpec["scenes_json"]; !present {
-		if scenes, present := renderSpec["scenes"]; present {
-			encoded, err := json.Marshal(scenes)
-			if err != nil {
-				return nil, fmt.Errorf("%w: invalid scenes: %w", ErrInvalidPayload, err)
-			}
-			renderSpec["scenes_json"] = string(encoded)
+	for _, key := range []string{"scenes", "scenes_json", "render_manifest", "layers", "overlays", "visual_replacements", "clips", "items", "images", "voiceover_paths", "voiceover_path", "audio_path"} {
+		if _, exists := renderSpec[key]; exists {
+			return nil, fmt.Errorf("%w: render_spec.%s is retired; submit the producer-compiled CompiledRenderPlanV2", ErrInvalidPayload, key)
 		}
+	}
+	if err := contract.ValidateCompiledRenderPlanV2Payload(renderSpec); err != nil {
+		return nil, fmt.Errorf("%w: render_spec compiled_render_plan_v2: %v", ErrInvalidPayload, err)
 	}
 
 	destinations := cmd.Destinations

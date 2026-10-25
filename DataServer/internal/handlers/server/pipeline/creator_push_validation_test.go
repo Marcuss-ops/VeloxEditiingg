@@ -49,7 +49,7 @@ func TestCreatorPushJobsE2E_IncompletePayloadReturns422(t *testing.T) {
 		t.Fatalf("want 422, got %d body=%s", w.Code, w.Body.String())
 	}
 	expectedJobID := enqueue.DeriveForwardingJobID(
-		routing.FormatForwardingKey("creator_pc_1", "creator-incomplete-001", "scene.composite.v1").String(),
+		routing.FormatForwardingKey("creator_pc_1", "creator-incomplete-001", "video.assemble.copy.v1").String(),
 	)
 
 	// 422 path must NOT leave any Job or forwarding row behind.
@@ -123,12 +123,12 @@ func TestCreatorPushJobsE2E_NegativeRetryBudgetRejected(t *testing.T) {
 	h.RegisterRoutes(r, adminAuthFake, m2mJobsAuthFake)
 
 	// Build the canonical body, then override delivery_plan.0.retry_budget=-1.
-	body := creatorPushE2EBody("creator_pc_rzneg", "creator-job-rzneg-001", "scene.composite.v1")
+	body := creatorPushE2EBody(t, "creator_pc_rzneg", "creator-job-rzneg-001", "video.assemble.copy.v1")
 	dp := body["payload"].(map[string]interface{})["delivery_plan"].([]interface{})
 	dp[0].(map[string]interface{})["retry_budget"] = -1
 
 	expectedJobID := enqueue.DeriveForwardingJobID(
-		routing.FormatForwardingKey("creator_pc_rzneg", "creator-job-rzneg-001", "scene.composite.v1").String(),
+		routing.FormatForwardingKey("creator_pc_rzneg", "creator-job-rzneg-001", "video.assemble.copy.v1").String(),
 	)
 
 	// Negative retry_budget MUST be rejected with 422 + invalid_payload.
@@ -205,7 +205,7 @@ func TestCreatorPushJobsE2E_NegativeRetryBudgetRejected(t *testing.T) {
 	var fwdCount int
 	if err := db.DB().QueryRow(
 		`SELECT COUNT(*) FROM creator_forwardings WHERE source_provider = ? AND source_job_id = ? AND target_executor_id = ?`,
-		"creator_pc_rzneg", "creator-job-rzneg-001", "scene.composite.v1",
+		"creator_pc_rzneg", "creator-job-rzneg-001", "video.assemble.copy.v1",
 	).Scan(&fwdCount); err != nil {
 		t.Fatalf("count forwardings: %v", err)
 	}

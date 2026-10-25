@@ -1,24 +1,24 @@
 package remoteengine
 
-import "testing"
+import (
+	"testing"
+
+	"velox-shared/contract"
+)
 
 // TestToWorkerPayload_RejectsAllControlPlanePublicationAndDeliveryData is a
 // renderer-boundary regression. Publication specs, delivery metadata, and
 // destinations belong to the control plane; none may survive the DTO
 // projection that produces the payload consumed by the renderer.
 func TestToWorkerPayload_RejectsAllControlPlanePublicationAndDeliveryData(t *testing.T) {
+	planJSON, planSHA := remoteEngineV2Plan(t)
 	raw := map[string]interface{}{
 		"job_id":      "renderer-boundary-regression",
 		"status":      "completed",
 		"video_name":  "Technical renderer name",
 		"script_text": "Render-only script.",
-		"scenes": []interface{}{
-			map[string]interface{}{
-				"text":             "A scene",
-				"duration_seconds": float64(3),
-				"image_link":       "velox-asset://image/scene.png",
-			},
-		},
+		contract.PayloadKeyCompiledRenderPlanJSON: planJSON,
+		contract.PayloadKeyCompiledRenderPlanSHA:  planSHA,
 		"video_metadata": map[string]interface{}{
 			"width":          1920,
 			"height":         1080,
@@ -129,7 +129,7 @@ func TestToWorkerPayload_RejectsAllControlPlanePublicationAndDeliveryData(t *tes
 	if workerPayload["video_name"] != "Technical renderer name" {
 		t.Fatalf("technical video_name was lost: %#v", workerPayload["video_name"])
 	}
-	if _, present := workerPayload["scenes_json"]; !present {
-		t.Fatal("render scenes were lost while stripping control-plane data")
+	if _, present := workerPayload[contract.PayloadKeyCompiledRenderPlanJSON]; !present {
+		t.Fatal("producer-compiled V2 plan was lost while stripping control-plane data")
 	}
 }

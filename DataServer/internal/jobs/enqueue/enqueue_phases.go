@@ -71,27 +71,12 @@ func (e *Enqueuer) validateEnqueueInput(payloadMap map[string]interface{}) (stri
 	return validateForwardingIdentity(payloadMap)
 }
 
-// resolveEnqueueAssets owns all mutating asset preparation. It intentionally
-// receives the original map so legacy aliases are resolved exactly once before
-// canonical normalization, preserving the existing compatibility behavior.
+// resolveEnqueueAssets is intentionally a no-op. CompiledRenderPlanV2 asset
+// references are producer-owned and are resolved by the remote worker; the
+// Master must not stage, rewrite, or compile video inputs.
 func (e *Enqueuer) resolveEnqueueAssets(ctx context.Context, payloadMap map[string]interface{}) error {
-	if err := e.resolveVoiceoverPayload(ctx, payloadMap); err != nil {
-		return err
-	}
-	if err := e.resolveSceneImagePayload(ctx, payloadMap); err != nil {
-		return err
-	}
-	if hasTimedVideoClipSegmentsContext(ctx, payloadMap) && e.Voiceover == nil {
-		return fmt.Errorf("video clip segments require master asset service for trimming")
-	}
-	if e.Voiceover != nil {
-		if err := e.Voiceover.RewriteVideoClipSegments(ctx, payloadMap); err != nil {
-			return err
-		}
-		if err := e.Voiceover.RewriteRemoteInputPayload(ctx, payloadMap); err != nil {
-			return err
-		}
-	}
+	_ = ctx
+	_ = payloadMap
 	return nil
 }
 

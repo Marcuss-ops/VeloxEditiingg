@@ -1,6 +1,7 @@
 package executors
 
 import (
+	"encoding/json"
 	"math"
 	"sort"
 	"strings"
@@ -88,6 +89,35 @@ func projectDetailedPhases(rm pipeline.RenderMetrics) []executor.DetailedPhaseTi
 	appendEnginePhaseMS(&detailedPhases, rm)
 	appendObservabilitySummaryPhases(&detailedPhases, rm.Observability)
 	return detailedPhases
+}
+
+func appendObservabilitySummaryPhases(phases *[]executor.DetailedPhaseTiming, values map[string]interface{}) {
+	if len(values) == 0 {
+		return
+	}
+	nextEventIndex := int64(0)
+	for _, phase := range *phases {
+		if phase.Origin == telemetry.OriginValidation && phase.EventIndex >= nextEventIndex {
+			nextEventIndex = phase.EventIndex + 1
+		}
+	}
+	for _, category := range []string{"audio", "subtitle", "io", "quality", "retry", "waste"} {
+		value, ok := values[category]
+		if !ok {
+			continue
+		}
+		metadata, err := json.Marshal(value)
+		if err != nil {
+			continue
+		}
+		*phases = append(*phases, executor.DetailedPhaseTiming{
+			Origin: telemetry.OriginValidation, Scope: telemetry.ScopeAttempt,
+			Component: category, Action: "summary", Phase: category,
+			EventType: "summary", EventName: category, EventIndex: nextEventIndex,
+			Status: telemetry.StatusOK, MetadataJSON: string(metadata),
+		})
+		nextEventIndex++
+	}
 }
 
 // appendEnginePhaseMS projects the engine's own phase_ms ledger (the

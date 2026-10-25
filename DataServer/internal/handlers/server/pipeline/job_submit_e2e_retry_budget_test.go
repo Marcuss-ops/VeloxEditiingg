@@ -27,7 +27,7 @@ func TestSubmitJobE2E_RetryBudgetZeroAcceptance(t *testing.T) {
 
 	const idem = "e2e-retry-budget-zero-001"
 	rb := 0
-	body := validSubmitJobBody(idem)
+	body := validSubmitJobBody(t, idem)
 	body.DeliveryPlan[0].RetryBudget = &rb
 
 	wantJobID := expectedSubmitJobID(idem)

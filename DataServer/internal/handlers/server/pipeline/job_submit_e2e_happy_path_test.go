@@ -52,7 +52,7 @@ func newSubmitJobE2EStack(t *testing.T) (*Handlers, *store.SQLiteStore) {
 	jobRepo := store.NewSQLiteJobRepository(db)
 	atomic := store.NewAtomicJobTaskCreator(db)
 	testEnqueuer := enqueue.NewEnqueuer(atomic, jobRepo, nil, noopPlanResolver{})
-	resolver := creatorflow.NewResolverFromDeps(testEnqueuer, db.Forwarding(), db, tempDir, filepath.Join(tempDir, "videos"), "")
+	resolver := creatorflow.NewResolverMinimal(testEnqueuer, db.Forwarding())
 	h := NewHandlersWithResolver(&config.Config{}, testEnqueuer, nil, resolver, jobRepo, nil, nil).WithStore(db)
 	return h, db
 }
@@ -78,20 +78,16 @@ func newSubmitJobE2EStack(t *testing.T) (*Handlers, *store.SQLiteStore) {
 // P0 retry_budget contract. Scenario 5 (TestSubmitJobE2E_
 // RetryBudgetZeroAcceptance) below covers the explicit-zero
 // round-trip end-to-end.
-func validSubmitJobBody(idemKey string) SubmitJobRequest {
+func validSubmitJobBody(t *testing.T, idemKey string) SubmitJobRequest {
+	t.Helper()
 	rb := 3
+	planJSON, planSHA := validProducerOwnedFMP4Plan(t)
 	return SubmitJobRequest{
-		IdempotencyKey: idemKey,
-		VideoName:      "E2E Submit Test",
-		ScriptText:     "Submitted via POST /api/v1/jobs e2e harness.",
-		Scenes: []SubmitScene{
-			{
-				Text:            "Opening scene",
-				Clip:            &SubmitClip{URL: "velox-asset://clips/opening.mp4"},
-				Voiceover:       &SubmitVoiceover{URL: "velox-asset://voiceovers/opening.mp3"},
-				DurationSeconds: 3.5,
-			},
-		},
+		IdempotencyKey:           idemKey,
+		VideoName:                "E2E Submit Test",
+		ScriptText:               "Submitted via POST /api/v1/jobs e2e harness.",
+		CompiledRenderPlanJSON:   planJSON,
+		CompiledRenderPlanSHA256: planSHA,
 		DeliveryPlan: []SubmitDeliveryPlanEntry{
 			{DestinationID: "drive", Priority: 1, RetryBudget: &rb},
 		},
@@ -246,7 +242,7 @@ func TestSubmitJobE2E_SuccessAndReplay(t *testing.T) {
 	h.RegisterRoutes(r, adminAuthFake, m2mJobsAuthFake)
 
 	const idem = "e2e-success-001"
-	body := validSubmitJobBody(idem)
+	body := validSubmitJobBody(t, idem)
 
 	wantJobID := expectedSubmitJobID(idem)
 
@@ -272,7 +268,7 @@ func TestSubmitJobE2E_SuccessAndReplay(t *testing.T) {
 		}
 	}
 
-	// Forwarding: exactly one row matching (external_api, idem, scene.composite.v1).
+	// Forwarding: exactly one row matching (external_api, idem, video.render.v2).
 	var fwdCount int
 	if err := db.DB().QueryRow(
 		`SELECT COUNT(*) FROM creator_forwardings WHERE source_provider = ? AND source_job_id = ? AND target_executor_id = ?`,
@@ -373,7 +369,7 @@ func TestSubmitJobE2E_SuccessAndReplay(t *testing.T) {
 	}
 
 	// ── Scenario 3 — same key, different payload → 409 ──
-	drifted := validSubmitJobBody(idem)
+	drifted := validSubmitJobBody(t, idem)
 	drifted.VideoName = "Drifted Title"
 	w3 := postSubmitJob(t, r, drifted)
 	if w3.Code != http.StatusConflict {
@@ -446,8 +442,8 @@ func TestSubmitJobE2E_ProducerOwnedFMP4PlanRoutesAndPersistsCanonically(t *testi
 	).Scan(&target); err != nil {
 		t.Fatalf("read fMP4 forwarding: %v", err)
 	}
-	if target != compiledPlanTargetExecutorID {
-		t.Fatalf("forwarding target = %q, want %q", target, compiledPlanTargetExecutorID)
+	if target != JobSubmitTargetExecutorID {
+		t.Fatalf("forwarding target = %q, want %q", target, JobSubmitTargetExecutorID)
 	}
 
 	var taskSpecJSON string
@@ -487,8 +483,8 @@ func TestSubmitJobE2E_CanonicalRecipePassthrough(t *testing.T) {
 	h.RegisterRoutes(r, adminAuthFake, m2mJobsAuthFake)
 
 	const idem = "canonical-audit-passthrough-001"
-	body := validSubmitJobBody(idem)
-	body.JobType = "scene.composite.v1"
+	body := validSubmitJobBody(t, idem)
+	body.JobType = "video.render.v2"
 	body.TemplateID = "audit.canonical"
 	body.TemplateVersion = 17
 	body.VideoName = "CANONICAL AUDIT"
@@ -543,14 +539,14 @@ func TestSubmitJobE2E_CanonicalRecipePassthrough(t *testing.T) {
 
 func assertCanonicalRecipeFields(t *testing.T, surface string, payload map[string]interface{}) {
 	t.Helper()
-	if got := payload["job_type"]; got != "scene.composite.v1" {
-		t.Errorf("%s job_type = %v, want scene.composite.v1", surface, got)
+	if got := payload["job_type"]; got != "video.render.v2" {
+		t.Errorf("%s job_type = %v, want video.render.v2", surface, got)
 	}
-	if got := payload["template_id"]; got != "audit.canonical" {
-		t.Errorf("%s template_id = %v, want audit.canonical", surface, got)
+	if got, ok := payload[contract.PayloadKeyCompiledRenderPlanJSON].(string); !ok || got == "" {
+		t.Errorf("%s is missing the producer-compiled V2 plan", surface)
 	}
-	if got := payload["template_version"]; got != float64(17) && got != 17 {
-		t.Errorf("%s template_version = %v, want 17", surface, got)
+	if got, ok := payload[contract.PayloadKeyCompiledRenderPlanSHA].(string); !ok || got == "" {
+		t.Errorf("%s is missing the producer-compiled V2 plan hash", surface)
 	}
 	if got := payload["video_name"]; got != "CANONICAL AUDIT" {
 		t.Errorf("%s video_name = %v, want CANONICAL AUDIT", surface, got)

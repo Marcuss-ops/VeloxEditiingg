@@ -26,14 +26,6 @@ import (
 	"velox-worker-agent/internal/executor"
 )
 
-// Canonical capability keys advertised by the creator profile. These
-// must stay aligned with the master's routing keys.
-const (
-	CapabilityScriptGenerate        = "script.generate"
-	CapabilityVoiceoverGenerateItem = "voiceover.generate_item"
-	CapabilityImageGenerateGoogle   = "image.generate.google"
-)
-
 // buildHello constructs a WorkerHello from the worker configuration.
 // PR-3.5: the capability payload is derived EXCLUSIVELY from
 // w.capabilitiesMap(hostname), the protobuf-boundary projection of the
@@ -132,13 +124,6 @@ func (w *Worker) capabilityReport(hostname string) controltransport.CapabilityRe
 		controltransport.CapabilityCanonicalPayloadV2,
 		controltransport.CapabilityFutureAssetPrefetchV1,
 		controltransport.CapabilityArtifactProgressiveUploadV1,
-	}
-	if w.config.IsCreatorProfile() {
-		report.Features = append(report.Features,
-			CapabilityScriptGenerate,
-			CapabilityVoiceoverGenerateItem,
-			CapabilityImageGenerateGoogle,
-		)
 	}
 	if w.clipCache != nil {
 		if keys, err := w.clipCache.ReadyKeys(context.Background()); err == nil {

@@ -10,7 +10,7 @@ import (
 
 func TestPrepareJobAndTask_TaskSpecPayloadIsRenderingOnly(t *testing.T) {
 	enq := newTestEnqueuer(t)
-	job, spec, _, err := enq.PrepareJobAndTask(context.Background(), map[string]interface{}{
+	job, spec, _, err := enq.PrepareJobAndTask(context.Background(), testCompiledV2Payload(map[string]interface{}{
 		"job_id":          "render-only-contract",
 		"video_name":      "Render only",
 		"script_text":     "Technical render",
@@ -44,7 +44,7 @@ func TestPrepareJobAndTask_TaskSpecPayloadIsRenderingOnly(t *testing.T) {
 				"asset_id": "clip-1", "url": "velox-asset://clip-1", "duration_ms": 5000,
 			},
 		}},
-	}, costmodel.DefaultRequirements())
+	}), costmodel.DefaultRequirements())
 	if err != nil {
 		t.Fatalf("PrepareJobAndTask: %v", err)
 	}

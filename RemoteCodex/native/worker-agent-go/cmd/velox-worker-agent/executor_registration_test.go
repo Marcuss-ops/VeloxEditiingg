@@ -15,18 +15,14 @@ func TestRegisterCanonicalRenderExecutorsRegistersSingleCompiledPlanExecutor(t *
 	}
 
 	for _, id := range []string{
-		executors.SubtitleAlignID,
-		executors.AudioMixID,
-		executors.ComposeID,
-		executors.EncodeID,
 		executors.VideoAssembleCopyID,
 	} {
 		if !reg.Has(id, 1) {
 			t.Errorf("registry missing %s@1", id)
 		}
 	}
-	if got := reg.Len(); got != 5 {
-		t.Fatalf("registry length = %d, want 5", got)
+	if got := reg.Len(); got != 1 {
+		t.Fatalf("registry length = %d, want 1", got)
 	}
 	descs := reg.Descriptors()
 	for _, desc := range descs {

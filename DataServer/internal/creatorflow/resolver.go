@@ -58,7 +58,6 @@ import (
 	"log"
 	"strings"
 
-	"velox-server/internal/config"
 	"velox-server/internal/costmodel"
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/routing"
@@ -79,13 +78,9 @@ import (
 // interfaces rather than the concrete *store.SQLiteStore, which improves
 // testability and makes the dependency contract explicit.
 type Resolver struct {
-	enqueuer      *enqueue.Enqueuer
-	jobLookup     JobLookup
-	forwardRepo   ForwardingRepository
-	dataDir       string
-	videosDir     string
-	masterURL     string
-	driveResolver enqueue.DriveFolderResolver
+	enqueuer    *enqueue.Enqueuer
+	jobLookup   JobLookup
+	forwardRepo ForwardingRepository
 }
 
 // NewResolver is the canonical constructor for the handler-side Resolver.
@@ -100,82 +95,27 @@ type Resolver struct {
 // Returns nil if cfg, enqueuer, or forwardRepo is missing — callers must
 // nil-check before calling Resolve (Resolve itself also returns a
 // typed error for missing dependencies).
-func NewResolver(cfg *config.Config, enqueuer *enqueue.Enqueuer, forwardRepo ForwardingRepository, driveResolver enqueue.DriveFolderResolver) *Resolver {
-	if cfg == nil || enqueuer == nil || forwardRepo == nil {
+// NewResolver constructs the canonical Resolver from the dependencies needed
+// for V2 pass-through and atomic forwarding.
+func NewResolver(enqueuer *enqueue.Enqueuer, jobLookup JobLookup, forwardRepo ForwardingRepository) *Resolver {
+	if enqueuer == nil || forwardRepo == nil {
 		return nil
 	}
-	return NewResolverWithRepositories(
-		enqueuer,
-		enqueuer.Jobs,
-		forwardRepo,
-		driveResolver,
-		strings.TrimSpace(cfg.Runtime.DataDir),
-		strings.TrimSpace(cfg.Runtime.VideosDir),
-		string(cfg.ControlPlane.RESTPublic),
-	)
+	return &Resolver{enqueuer: enqueuer, jobLookup: jobLookup, forwardRepo: forwardRepo}
 }
 
-// NewResolverMinimal constructs a Resolver without a *config.Config. It
-// is the in-runner fallback — the runner captures the remote engine's
-// completed payload directly and doesn't need URL rewriting (the remote
-// engine already packaged scene-image URLs with their canonical refs).
-//
-// Any dataDir/videosDir/masterURL fields remain empty, which causes
-// Resolve to skip BuildSceneImagePayloadForMaster, so the Drive folder
-// resolver is intentionally nil here.
+// NewResolverMinimal uses the Enqueuer's job lookup for the runner path.
 func NewResolverMinimal(enqueuer *enqueue.Enqueuer, forwardRepo ForwardingRepository) *Resolver {
 	if enqueuer == nil || forwardRepo == nil {
 		return nil
 	}
-	return NewResolverWithRepositories(enqueuer, enqueuer.Jobs, forwardRepo, nil, "", "", "")
+	return NewResolver(enqueuer, enqueuer.Jobs, forwardRepo)
 }
 
-// NewResolverFromDeps is the explicit-fields constructor. Useful for
-// composition roots that have access to the data-dir/master-URL triple
-// but not the full *config.Config. Same as NewResolver but takes the
-// fields directly. The dataDir, videosDir, masterURL triple drives
-// BuildSceneImagePayloadForMaster, so callers that want URL rewriting
-// must supply non-empty dataDir + masterURL.
-func NewResolverFromDeps(enqueuer *enqueue.Enqueuer, forwardRepo ForwardingRepository, driveResolver enqueue.DriveFolderResolver, dataDir, videosDir, masterURL string) *Resolver {
-	if enqueuer == nil || forwardRepo == nil {
-		return nil
-	}
-	return NewResolverWithRepositories(
-		enqueuer,
-		enqueuer.Jobs,
-		forwardRepo,
-		driveResolver,
-		dataDir,
-		videosDir,
-		masterURL,
-	)
-}
-
-// NewResolverWithRepositories constructs a Resolver from its narrow ports.
-// The composition-root constructors above remain as compatibility adapters
-// for the production SQLite wiring, while tests and alternate persistence
-// adapters can inject the job/forwarding/Drive boundaries directly. The
-// Resolver still has exactly one AtomicForwardAndEnqueue writer; this
-// constructor only changes dependency ownership, not transaction ownership.
-func NewResolverWithRepositories(
-	enqueuer *enqueue.Enqueuer,
-	jobLookup JobLookup,
-	forwardRepo ForwardingRepository,
-	driveResolver enqueue.DriveFolderResolver,
-	dataDir, videosDir, masterURL string,
-) *Resolver {
-	if enqueuer == nil || forwardRepo == nil {
-		return nil
-	}
-	return &Resolver{
-		enqueuer:      enqueuer,
-		jobLookup:     jobLookup,
-		forwardRepo:   forwardRepo,
-		dataDir:       strings.TrimSpace(dataDir),
-		videosDir:     strings.TrimSpace(videosDir),
-		masterURL:     strings.TrimSpace(masterURL),
-		driveResolver: driveResolver,
-	}
+// NewResolverWithRepositories accepts the job lookup and forwarding store as
+// separate ports while preserving a single atomic forwarding writer.
+func NewResolverWithRepositories(enqueuer *enqueue.Enqueuer, jobLookup JobLookup, forwardRepo ForwardingRepository) *Resolver {
+	return NewResolver(enqueuer, jobLookup, forwardRepo)
 }
 
 // HasDBAccess returns true when the resolver can write to the
@@ -258,26 +198,24 @@ func (r *Resolver) Resolve(ctx context.Context, req ResolveRequest) (*ResolveOut
 	if req.SourceProvider == "" || req.SourceJobID == "" {
 		return nil, domain.NewInvalidPayload("source_provider/source_job_id", "required", "source_provider and source_job_id are required")
 	}
+	targetExecutor := strings.TrimSpace(req.TargetExecutorID)
+	if targetExecutor == "" {
+		targetExecutor = "video.assemble.copy.v1"
+	}
+	if targetExecutor != "video.assemble.copy.v1" {
+		return nil, domain.NewInvalidPayload("target_executor_id", "unsupported", "only video.assemble.copy.v1 is supported")
+	}
 	readiness := enqueue.InspectPipelineResultReadiness(req.Payload)
 	if !readiness.Complete {
-		targetExecutor := strings.TrimSpace(req.TargetExecutorID)
-		if targetExecutor == "" {
-			targetExecutor = "scene.composite.v1"
-		}
-		log.Printf("[CREATORFLOW_PAYLOAD_INCOMPLETE] source_provider=%q source_job_id=%q target_executor=%q reason=%s has_scene_manifest=%t scene_count=%d has_voiceover=%t has_renderable_media=%t stock_asset_count=%d has_compiled_plan=%t",
+		log.Printf("[CREATORFLOW_PAYLOAD_INCOMPLETE] source_provider=%q source_job_id=%q target_executor=%q reason=%s has_compiled_plan=%t",
 			strings.TrimSpace(req.SourceProvider), strings.TrimSpace(req.SourceJobID), targetExecutor,
-			readiness.Reason, readiness.HasSceneManifest, readiness.SceneCount,
-			readiness.HasVoiceover, readiness.HasRenderableMedia, readiness.StockAssetCount, readiness.HasCompiledPlan)
+			readiness.Reason, readiness.HasCompiledPlan)
 		return nil, ErrResolverNotComplete
 	}
 	if len(req.DeliveryPlan) == 0 {
 		req.DeliveryPlan = deliveryplan.ExtractEnvelope(req.Payload)
 	}
 
-	targetExecutor := req.TargetExecutorID
-	if targetExecutor == "" {
-		targetExecutor = "scene.composite.v1"
-	}
 	fwdKey := routing.FormatForwardingKey(req.SourceProvider, req.SourceJobID, targetExecutor)
 	jobID := enqueue.DeriveForwardingJobID(fwdKey.String())
 

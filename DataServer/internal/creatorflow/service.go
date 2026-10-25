@@ -23,7 +23,7 @@ import (
 //
 // Blocco 4 step #3 collapsed the public surface to its minimum:
 //
-//   - New(cfg, enqueuer, forwardRepo, driveResolver) constructs the
+//   - New(cfg, enqueuer, forwardRepo) constructs the
 //     optional creator stage.
 //   - StartOrPersistForwarding runs the remote creator exactly once and
 //     routes the result through Resolver.Resolve (sync forward) OR
@@ -36,31 +36,19 @@ import (
 // by the pipeline handler, the script handler, and the
 // CreatorForwardingRunner.
 //
-// The public REST control-plane endpoint is required by the production
-// bootstrap. Resolver URL rewriting uses the typed endpoint snapshot and
-// never discovers or derives a URL at runtime.
-//
 // The PR-operation 01 / Fase 2 Job+Task creation surface (RenderPlan,
 // CreateJobWithPlan, deriveJobID) lives in the sibling file service_job.go.
 type Service struct {
-	enqueuer      *enqueue.Enqueuer
-	client        *remoteengine.Client
-	forwardRepo   ForwardingRepository
-	driveResolver enqueue.DriveFolderResolver
-	dataDir       string
-	videosDir     string
-	masterURL     string
+	enqueuer    *enqueue.Enqueuer
+	client      *remoteengine.Client
+	forwardRepo ForwardingRepository
 }
 
 // New creates a creator-flow service from runtime config.
-// enqueuer is mandatory (PR15.7a): it owns the voiceover rewrite.
+// enqueuer is mandatory: it owns V2 payload validation and task creation.
 // forwardRepo is mandatory (PR-forwarding-runner): used to persist
-// PENDING creator_forwardings rows for durable polling. driveResolver is
-// the Drive master-folder resolver threaded into the one-shot Resolver;
-// the two ports are separate because the forwarding extraction moved the
-// creator_forwardings SQL/CAS into forwardingstore while Drive resolution
-// stayed on store.SQLiteStore.
-func New(cfg *config.Config, enqueuer *enqueue.Enqueuer, forwardRepo ForwardingRepository, driveResolver enqueue.DriveFolderResolver) *Service {
+// PENDING creator_forwardings rows for durable polling.
+func New(cfg *config.Config, enqueuer *enqueue.Enqueuer, forwardRepo ForwardingRepository) *Service {
 	if cfg == nil || enqueuer == nil || forwardRepo == nil {
 		return nil
 	}
@@ -76,11 +64,7 @@ func New(cfg *config.Config, enqueuer *enqueue.Enqueuer, forwardRepo ForwardingR
 			TimeoutMS: cfg.Render.RemoteEngineTimeoutMS,
 			Retries:   cfg.Render.RemoteEngineRetries,
 		}),
-		forwardRepo:   forwardRepo,
-		driveResolver: driveResolver,
-		dataDir:       strings.TrimSpace(cfg.Runtime.DataDir),
-		videosDir:     strings.TrimSpace(cfg.Runtime.VideosDir),
-		masterURL:     string(cfg.ControlPlane.RESTPublic),
+		forwardRepo: forwardRepo,
 	}
 }
 
@@ -135,19 +119,15 @@ func (s *Service) StartOrPersistForwarding(ctx context.Context, rawPayload map[s
 		// (and the UNIQUE constraint on creator_forwardings converges
 		// on one row across retries).
 		sourceJobID := firstString(workerPayload, "job_id", "trace_id", "id")
-		targetExecID := firstString(workerPayload, "executor_id", "pipeline_id")
-		if targetExecID == "" {
-			targetExecID = "scene.composite.v1"
-		}
+		targetExecID := "video.assemble.copy.v1"
 		fwdKey := routing.FormatForwardingKey("remote_engine", sourceJobID, targetExecID).String()
 		workerPayload[routing.KeyForwardingKey] = fwdKey
 
 		// Build a one-shot Resolver from this Service's wiring graph and
-		// delegate. Resolver.Resolve owns idempotency pre-check,
-		// (optionally) URL rewrite via BuildSceneImagePayloadForMaster,
+		// delegate. Resolver.Resolve owns V2 pass-through and idempotency,
 		// creator_forwardings row promotion, and the atomic
 		// AtomicForwardAndEnqueue that finalises the Job row.
-		rs := NewResolverFromDeps(s.enqueuer, s.forwardRepo, s.driveResolver, s.dataDir, s.videosDir, s.masterURL)
+		rs := NewResolverWithRepositories(s.enqueuer, s.enqueuer.Jobs, s.forwardRepo)
 		if rs == nil {
 			return nil, false, fmt.Errorf("creatorflow: StartOrPersistForwarding: resolver construction failed")
 		}
@@ -204,10 +184,7 @@ func (s *Service) StartOrPersistForwarding(ctx context.Context, rawPayload map[s
 	// PR-forwarding-runner: persist a durable forwarding record instead of
 	// spawning a volatile goroutine. The CreatorForwardingRunner picks up
 	// PENDING rows on its next tick and handles polling + forwarding.
-	targetExecutorID := firstString(creatorResult, "executor_id", "pipeline_id")
-	if targetExecutorID == "" {
-		targetExecutorID = "scene.composite.v1"
-	}
+	targetExecutorID := "video.assemble.copy.v1"
 	forwardingID := "cf_" + uuid.NewString()
 	now := time.Now().UTC().Format(time.RFC3339)
 	if _, err := s.forwardRepo.InsertCreatorForwarding(ctx, &forwardingcontract.CreatorForwarding{

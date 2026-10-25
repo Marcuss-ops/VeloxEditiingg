@@ -31,7 +31,7 @@ func TestPayloadHashIdempotency(t *testing.T) {
 		job1          = "job-from-hash"
 		provider      = "remote_engine"
 		sourceJobID   = "src-key-1"
-		targetExec    = "scene.composite.v1"
+		targetExec    = "video.assemble.copy.v1"
 		storedForward = "cf-stored"
 	)
 

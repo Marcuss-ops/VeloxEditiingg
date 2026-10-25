@@ -228,7 +228,7 @@ func TestSubmitJobHTTPResolvesPublishingTargetIntoConcreteDeliveryPlan(t *testin
 
 	r := gin.New()
 	h.RegisterRoutes(r, adminAuthFake, m2mJobsAuthFake)
-	body := validSubmitJobBody("http-target-001")
+	body := validSubmitJobBody(t, "http-target-001")
 	body.DeliveryPlan = nil
 	body.PublishingTarget = &SubmitPublishingTarget{WorkspaceID: 42, Type: "channel", DestinationID: destinationID}
 	w := postSubmitJob(t, r, body)
@@ -308,7 +308,7 @@ func TestSubmitJobHTTPResolvesGroupIntoDeterministicConcretePlans(t *testing.T) 
 
 	r := gin.New()
 	h.RegisterRoutes(r, adminAuthFake, m2mJobsAuthFake)
-	body := validSubmitJobBody("http-group-001")
+	body := validSubmitJobBody(t, "http-group-001")
 	body.DeliveryPlan = nil
 	body.PublishingTarget = &SubmitPublishingTarget{WorkspaceID: 42, Type: "group", GroupID: 77, Platform: "youtube"}
 	w := postSubmitJob(t, r, body)
@@ -393,7 +393,7 @@ func TestSubmitJobHTTPRejectsGroupAtomicallyWhenMemberDisabled(t *testing.T) {
 
 	r := gin.New()
 	h.RegisterRoutes(r, adminAuthFake, m2mJobsAuthFake)
-	body := validSubmitJobBody("http-group-disabled-001")
+	body := validSubmitJobBody(t, "http-group-disabled-001")
 	body.DeliveryPlan = nil
 	body.PublishingTarget = &SubmitPublishingTarget{WorkspaceID: 42, Type: "group", GroupID: 88, Platform: "youtube"}
 	w := postSubmitJob(t, r, body)

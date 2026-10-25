@@ -51,29 +51,24 @@ func ValidateSubmitJobRequest(req SubmitJobRequest) (*SubmitJobValidationError, 
 		})
 	}
 
-	// Scenes count: at least 1, at most MaxScenes for inline bodies.
-	// A manifest_ref-only submission is allowed to omit scenes because
-	// RenderManifestResolver substitutes the manifest-derived scene list
-	// before enqueue. If an inline scene list is supplied alongside
-	// manifest_ref it is still validated here; the resolver later replaces
-	// it with the manifest as the source of truth.
-	if len(req.Scenes) == 0 {
-		if req.ManifestRef == nil && !hasCompiledRenderPlan(req) {
-			details = append(details, gin.H{
-				"path":  "scenes",
-				"issue": "empty",
-			})
-		}
-	} else if len(req.Scenes) > MaxScenes {
+	// Every admitted video submission must be a producer-compiled V2 plan.
+	// Scene arrays and manifest_ref are legacy authoring inputs; the Master no
+	// longer rebuilds a timeline or downloads a manifest on the dispatch path.
+	if !hasCompiledRenderPlan(req) {
+		details = append(details, gin.H{"path": "compiled_render_plan_json", "issue": "required_v2_plan"})
+	}
+	if len(req.Scenes) > 0 {
 		details = append(details, gin.H{
-			"path":     "scenes",
-			"issue":    "max_items",
-			"max":      MaxScenes,
-			"observed": len(req.Scenes),
+			"path":  "scenes",
+			"issue": "legacy_scene_input_removed",
 		})
 	}
-
-	details = append(details, validateSubmitScenes(req)...)
+	if req.ManifestRef != nil {
+		details = append(details, gin.H{"path": "manifest_ref", "issue": "legacy_manifest_input_removed; submit compiled_render_plan_json and compiled_render_plan_sha256"})
+	}
+	if len(req.Layers) > 0 || len(req.Overlays) > 0 || len(req.VisualReplacements) > 0 {
+		details = append(details, gin.H{"path": "layers/overlays/visual_replacements", "issue": "include all visuals in the producer-compiled V2 plan"})
+	}
 	details = append(details, validateSubmitOverlays(req.Overlays)...)
 	details = append(details, validateSubmitOverlayClipCollisions(req)...)
 
@@ -85,7 +80,6 @@ func ValidateSubmitJobRequest(req SubmitJobRequest) (*SubmitJobValidationError, 
 	// package cannot know about.
 	details = append(details, validateSubmitPublications(req.Publications)...)
 
-	details = append(details, validateSubmitManifestRef(req)...)
 	details = append(details, validateSubmitCompiledPlan(req)...)
 
 	if len(details) == 0 {
@@ -144,7 +138,7 @@ func validateSubmitCompiledPlan(req SubmitJobRequest) []gin.H {
 // cardinality:
 //   - source_provider:    ExternalAPISourceProvider ("external_api")
 //   - source_job_id:      the (validated) idempotency_key
-//   - target_executor_id: JobSubmitTargetExecutorID ("scene.composite.v1")
+//   - target_executor_id: JobSubmitTargetExecutorID ("video.assemble.copy.v1")
 //
 // Stable provider cardinality is a deliberate invariant: it lets
 // dashboards aggregate "all external_api jobs" without scanning

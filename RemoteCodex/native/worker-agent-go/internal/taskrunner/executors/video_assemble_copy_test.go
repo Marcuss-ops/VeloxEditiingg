@@ -27,6 +27,15 @@ type copyOnlyRenderClient struct {
 	planJSON []byte
 }
 
+// storageExecutionContext exposes the storage seam needed by this executor's
+// tmpfs staging test. Other execution-context methods are intentionally unused.
+type storageExecutionContext struct {
+	executor.ExecutionContext
+	resolver *storage.Resolver
+}
+
+func (c *storageExecutionContext) StorageResolver() *storage.Resolver { return c.resolver }
+
 // keyframeUnsafeRenderClient always fails the native render with the exact
 // keyframe-safety rejection emitted by the C++ packet mux. It records whether
 // RenderCompiledPlanV2 was invoked so the test can prove the executor fails

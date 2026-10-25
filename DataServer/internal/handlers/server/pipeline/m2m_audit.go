@@ -6,6 +6,7 @@ package pipeline
 
 import (
 	"database/sql"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"velox-server/internal/config"
 	"velox-server/internal/m2mkeys"
 	"velox-server/internal/store"
+	"velox-shared/contract"
 )
 
 // sqlNullString is a tiny helper used by the audit helpers below
@@ -180,24 +182,29 @@ func enforcePerRequestQuota(key *m2mkeys.M2MAPIKey, req SubmitJobRequest, cfg *c
 	}
 	defaultMaxScenes := cfg.M2M.MaxScenesPerRequest
 	defaultMaxDur := cfg.M2M.MaxTotalDurationSecondsPerRequest
+	plan, err := contract.DecodeCompiledRenderPlanV2([]byte(req.CompiledRenderPlanJSON))
+	if err != nil {
+		return fmt.Errorf("quota requires a valid CompiledRenderPlanV2: %w", err)
+	}
+	segmentCount := 0
+	for _, track := range plan.VideoTracks {
+		segmentCount += len(track.Segments)
+	}
 	maxScenes := key.EffectiveMaxScenes(defaultMaxScenes)
-	if maxScenes > 0 && len(req.Scenes) > maxScenes {
+	if maxScenes > 0 && segmentCount > maxScenes {
 		return &QuotaError{
 			Reason:   "scenes_exceeded",
-			Observed: float64(len(req.Scenes)),
+			Observed: float64(segmentCount),
 			Cap:      float64(maxScenes),
 		}
 	}
 	maxDur := key.EffectiveMaxTotalDurationS(defaultMaxDur)
 	if maxDur > 0 {
-		var sum float64
-		for _, s := range req.Scenes {
-			sum += s.DurationSeconds
-		}
-		if sum > maxDur {
+		durationSeconds := float64(plan.DurationUS) / 1_000_000
+		if durationSeconds > maxDur {
 			return &QuotaError{
 				Reason:   "duration_exceeded",
-				Observed: sum,
+				Observed: durationSeconds,
 				Cap:      maxDur,
 			}
 		}

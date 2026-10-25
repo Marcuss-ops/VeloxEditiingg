@@ -2,7 +2,6 @@ package pipeline
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 	"testing"
 
@@ -44,85 +43,27 @@ import (
 //
 // carry delivery routing.
 func TestNormalizeExternalJobSubmission_ProducesCanonicalPayload(t *testing.T) {
-	t.Parallel()
-
+	planJSON, planSHA := validProducerOwnedFMP4Plan(t)
 	req := SubmitJobRequest{
-		IdempotencyKey: "test-job-123",
-		VideoName:      "Test Video",
-		ScriptText:     "Hello world",
-		Scenes: []SubmitScene{
-			{Text: "Scene 1", DurationSeconds: 5, Clip: &SubmitClip{URL: "velox-asset://clips/scene1.mp4"}, Voiceover: &SubmitVoiceover{URL: "velox-asset://voiceovers/intro.mp3"}},
-			{Text: "Scene 2", DurationSeconds: 3, Clip: &SubmitClip{URL: "velox-asset://images/scene2.jpg"}},
-		},
-		DeliveryPlan: []SubmitDeliveryPlanEntry{
-			{DestinationID: "drive", Priority: 1, RetryBudget: intPtr(3)},
-		},
+		IdempotencyKey: "test-job-123", VideoName: "Test Video", ScriptText: "Hello world",
+		CompiledRenderPlanJSON: planJSON, CompiledRenderPlanSHA256: planSHA,
+		DeliveryPlan: []SubmitDeliveryPlanEntry{{DestinationID: "drive", Priority: 1, RetryBudget: intPtr(3)}},
 	}
-
 	canonical := (&Handlers{}).NormalizeExternalJobSubmission(req)
 	if canonical == nil {
 		t.Fatal("NormalizeExternalJobSubmission returned nil canonical")
 	}
-
-	// (1)
-	if canonical.SourceProvider != ExternalAPISourceProvider {
-		t.Errorf("SourceProvider = %q, want %q", canonical.SourceProvider, ExternalAPISourceProvider)
+	if canonical.SourceProvider != ExternalAPISourceProvider || canonical.SourceJobID != "test-job-123" || canonical.TargetExecutorID != JobSubmitTargetExecutorID {
+		t.Fatalf("unexpected canonical identity: %#v", canonical)
 	}
-	// (2)
-	if canonical.SourceJobID != "test-job-123" {
-		t.Errorf("SourceJobID = %q, want test-job-123", canonical.SourceJobID)
+	if canonical.WorkerPayload[contract.PayloadKeyCompiledRenderPlanJSON] != planJSON || canonical.WorkerPayload[contract.PayloadKeyCompiledRenderPlanSHA] != planSHA {
+		t.Fatal("producer-owned plan was not preserved byte-for-byte")
 	}
-	// (3)
-	if canonical.TargetExecutorID != JobSubmitTargetExecutorID {
-		t.Errorf("TargetExecutorID = %q, want %q", canonical.TargetExecutorID, JobSubmitTargetExecutorID)
+	if _, present := canonical.WorkerPayload["scenes_json"]; present {
+		t.Fatal("legacy scene projection crossed the worker boundary")
 	}
-
-	wp := canonical.WorkerPayload
-
-	// (4)
-	if got := wp["status"]; got != "completed" {
-		t.Errorf("worker_payload[status] = %v, want historical wire value completed", got)
-	}
-	if got := wp["status"]; got != string(contract.InputAssemblyCompleted) {
-		t.Errorf("worker_payload[status] = %v, want input-assembly status %s", got, contract.InputAssemblyCompleted)
-	}
-	if canonical.StatusDomains.InputAssembly == nil || *canonical.StatusDomains.InputAssembly != contract.InputAssemblyCompleted {
-		t.Fatalf("canonical input-assembly domain = %#v, want %q", canonical.StatusDomains.InputAssembly, contract.InputAssemblyCompleted)
-	}
-	if canonical.StatusDomains.Job != nil || canonical.StatusDomains.Delivery != nil || canonical.StatusDomains.Publication != nil {
-		t.Fatalf("canonical payload inferred unrelated status domains: %#v", canonical.StatusDomains)
-	}
-	// (5)
-	if got := wp["job_id"]; got != "test-job-123" {
-		t.Errorf("worker_payload[job_id] = %v, want test-job-123", got)
-	}
-	// (6)
-	if got := wp["video_name"]; got != "Test Video" {
-		t.Errorf("worker_payload[video_name] = %v, want Test Video", got)
-	}
-	// (7)
-	if got := wp["script_text"]; got != "Hello world" {
-		t.Errorf("worker_payload[script_text] = %v, want Hello world", got)
-	}
-	// (8)
-	scenesJSON, ok := wp["scenes_json"].(string)
-	if !ok || !strings.Contains(scenesJSON, "velox-asset://voiceovers/intro.mp3") {
-		t.Errorf("scenes_json missing canonical voiceover: %v", wp["scenes_json"])
-	}
-	// (9) scenes_json: must be a non-empty JSON string. Decoding is
-	// covered by the parity test in TestNormalizeExternalJobSubmission_MatchesCreatorPushShape;
-	// here we lock just the surface key.
-	scenesJSON, ok = wp["scenes_json"].(string)
-	if !ok || scenesJSON == "" {
-		t.Errorf("worker_payload[scenes_json] missing or empty: %v", wp["scenes_json"])
-	}
-	// (10) renderer payload must not carry publication metadata. Legacy
-	// delivery routing, when present, is allowed only without metadata.
-	if _, present := wp["video_metadata"]; present {
-		t.Errorf("worker_payload contains video_metadata: %v", wp["video_metadata"])
-	}
-	if _, present := wp["publications"]; present {
-		t.Errorf("worker_payload contains publications: %v", wp["publications"])
+	if canonical.DeliveryPlan["delivery_plan"] == nil {
+		t.Fatal("delivery plan was lost from the control-plane envelope")
 	}
 }
 
@@ -275,154 +216,33 @@ func TestCanonicalPayloadParity_PipelinePreservesCanonicalKeys(t *testing.T) {
 // duration, same delivery destination. The idem-key for the SubmitJob
 // path sets job_id (matching CreatorPush's source_job_id == job_id).
 func TestNormalizeExternalJobSubmission_MatchesCreatorPushShape(t *testing.T) {
-	t.Parallel()
-
-	const jobID = "parity-job-001"
-	const videoName = "Parity Video"
-	const scriptText = "Same script body for parity."
-	const voiceover = "velox-asset://voiceovers/parity.mp3"
-	const executorID = "scene.composite.v1"
-
-	submitReq := SubmitJobRequest{
-		IdempotencyKey: jobID,
-		VideoName:      videoName,
-		ScriptText:     scriptText,
-		Scenes: []SubmitScene{
-			{Text: "Parity scene A", Clip: &SubmitClip{URL: "velox-asset://clips/parity-a.mp4"}, Voiceover: &SubmitVoiceover{URL: voiceover}, DurationSeconds: 5},
-		},
-		DeliveryPlan: []SubmitDeliveryPlanEntry{
-			{DestinationID: "drive", Priority: 1, RetryBudget: intPtr(3)},
-		},
-	}
-
-	creatorReq := creatorPushRequest{
-		SourceProvider:   "creator_parity",
-		SourceJobID:      jobID,
-		TargetExecutorID: executorID,
+	planJSON, planSHA := validProducerOwnedFMP4Plan(t)
+	jobID := "parity-job-001"
+	submitCanonical := (&Handlers{}).NormalizeExternalJobSubmission(SubmitJobRequest{
+		IdempotencyKey: jobID, VideoName: "Parity Video", ScriptText: "Same script body.",
+		CompiledRenderPlanJSON: planJSON, CompiledRenderPlanSHA256: planSHA,
+	})
+	creatorCanonical, err := normalizeCreatorPushRequest(creatorPushRequest{
+		SourceProvider: "creator_parity", SourceJobID: jobID, TargetExecutorID: JobSubmitTargetExecutorID,
 		Payload: map[string]interface{}{
-			"status":      "completed",
-			"job_id":      jobID,
-			"video_name":  videoName,
-			"script_text": scriptText,
-			"scenes": []interface{}{
-				map[string]interface{}{
-					"text":             "Parity scene A",
-					"duration_seconds": float64(5),
-					"voiceover":        map[string]interface{}{"url": voiceover},
-				},
-			},
-			"delivery_plan": []interface{}{
-				map[string]interface{}{
-					"destination_id": "drive",
-					"priority":       1,
-					"retry_budget":   3,
-				},
-			},
+			"job_id": jobID, "video_name": "Parity Video", "script_text": "Same script body.",
+			contract.PayloadKeyCompiledRenderPlanJSON: planJSON,
+			contract.PayloadKeyCompiledRenderPlanSHA:  planSHA,
 		},
-	}
-
-	submitCanonical := (&Handlers{}).NormalizeExternalJobSubmission(submitReq)
-	creatorCanonical, err := normalizeCreatorPushRequest(creatorReq)
+	})
 	if err != nil {
 		t.Fatalf("normalizeCreatorPushRequest: %v", err)
 	}
-
-	// Identity-tuple comparison — same shape, different values.
-	if fmt.Sprintf("%T", submitCanonical) != fmt.Sprintf("%T", creatorCanonical) {
-		t.Errorf("submitCanonical and creatorCanonical have different types: %T vs %T",
-			submitCanonical, creatorCanonical)
+	if submitCanonical == nil {
+		t.Fatal("external submission did not produce a canonical payload")
 	}
-
-	// Key fields MUST match in worker_payload (semantic equivalence):
-	checks := []struct {
-		field string
-		want  interface{}
-	}{
-		{"status", string(contract.InputAssemblyCompleted)},
-		{"job_id", jobID},
-		{"video_name", videoName},
-		{"script_text", scriptText},
-	}
-	for _, ch := range checks {
-		if submitCanonical.WorkerPayload[ch.field] != ch.want {
-			t.Errorf("submit %s = %v, want %v", ch.field, submitCanonical.WorkerPayload[ch.field], ch.want)
-		}
-		if creatorCanonical.WorkerPayload[ch.field] != ch.want {
-			t.Errorf("creator %s = %v, want %v", ch.field, creatorCanonical.WorkerPayload[ch.field], ch.want)
-		}
-	}
-
-	// The canonical nested scene voiceover must survive both paths.
-	for label, payload := range map[string]map[string]interface{}{
-		"submit":  submitCanonical.WorkerPayload,
-		"creator": creatorCanonical.WorkerPayload,
-	} {
-		scenesJSON, ok := payload["scenes_json"].(string)
-		if !ok || !strings.Contains(scenesJSON, voiceover) {
-			t.Errorf("%s scenes_json missing canonical voiceover %q: %v", label, voiceover, payload["scenes_json"])
-		}
-	}
-
-	// scenes_json: both must be a non-empty JSON string and (after
-	// re-decoding) carry the same scene text + duration. This locks
-	// the central promise of the canonical path: structurally identical
-	// scenes produce structurally identical scenes_json regardless of
-	// producer.
-	for label, payload := range map[string]map[string]interface{}{
-		"submit":  submitCanonical.WorkerPayload,
-		"creator": creatorCanonical.WorkerPayload,
-	} {
-		raw, ok := payload["scenes_json"].(string)
-		if !ok || raw == "" {
-			t.Errorf("%s scenes_json missing or empty: %v", label, payload["scenes_json"])
-			continue
-		}
-		// Use a structural probe: assert presence of the canonical text
-		// we supplied AND the duration_seconds we supplied. This avoids
-		// a brittle byte-exact comparison of the JSON encoding (whitespace,
-		// key order — stdlib Go json.Marshal sorts map keys but [] marshals
-		// in the supplied slice order).
-		if !strings.Contains(raw, "Parity scene A") {
-			t.Errorf("%s scenes_json does not contain scene text: %s", label, raw)
-		}
-		if !strings.Contains(raw, "duration_seconds") {
-			t.Errorf("%s scenes_json missing duration_seconds key: %s", label, raw)
-		}
-	}
-
-	// Delivery routing is control-plane data. Both canonical intake paths
-	// must preserve a 1-entry envelope with destination_id == "drive",
-	// while neither renderer WorkerPayload may contain delivery_plan.
-	for label, canonical := range map[string]*CanonicalCompletedPayload{
-		"submit":  submitCanonical,
-		"creator": creatorCanonical,
-	} {
-		dp, ok := canonical.DeliveryPlan["delivery_plan"].([]interface{})
-		if !ok || len(dp) != 1 {
-			t.Errorf("%s control-plane delivery_plan shape wrong: %v", label, canonical.DeliveryPlan["delivery_plan"])
-			continue
-		}
-		entry, ok := dp[0].(map[string]interface{})
-		if !ok || entry["destination_id"] != "drive" {
-			t.Errorf("%s control-plane delivery_plan[0] destination_id wrong: %v", label, entry["destination_id"])
-		}
-		if _, leaked := canonical.WorkerPayload["delivery_plan"]; leaked {
-			t.Errorf("%s delivery_plan leaked into renderer WorkerPayload: %#v", label, canonical.WorkerPayload["delivery_plan"])
+	for _, field := range []string{"video_name", "script_text", contract.PayloadKeyCompiledRenderPlanJSON, contract.PayloadKeyCompiledRenderPlanSHA} {
+		if submitCanonical.WorkerPayload[field] != creatorCanonical.WorkerPayload[field] {
+			t.Errorf("worker payload field %q differs between ingress paths", field)
 		}
 	}
 }
 
-// TestNormalizeExternalJobSubmission_OmittedRetryBudgetDefaultsToThree
-// locks the *int boundary contract for the omitted case: a client
-// that does not supply retry_budget on a delivery_plan entry MUST
-// end up with the OpenAPI default (3) stamped into the control-plane
-// envelope. This is the "client-friendly" branch — most callers will
-// not bother declaring retry_budget at all — and getting a 0
-// (silent int default) here would silently bypass retry enforcement
-// on every entry the client doesn't annotate.
-//
-// Asserted by reading back the generated control-plane delivery envelope's
-// delivery_plan entry map and confirming retry_budget == 3.
 func TestNormalizeExternalJobSubmission_OmittedRetryBudgetDefaultsToThree(t *testing.T) {
 	t.Parallel()
 

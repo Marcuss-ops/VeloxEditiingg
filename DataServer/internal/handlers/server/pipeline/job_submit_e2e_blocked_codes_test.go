@@ -48,7 +48,7 @@ func TestSubmitJobE2E_PreflightBlockedCodes_DistinctEnvelopes(t *testing.T) {
 	h.RegisterRoutes(r, adminAuthFake, m2mJobsAuthFake)
 
 	t.Run("b_velox_disabled_envelope", func(t *testing.T) {
-		body := validSubmitJobBody("e2e-blocked-disabled-001")
+		body := validSubmitJobBody(t, "e2e-blocked-disabled-001")
 		body.DeliveryPlan[0].DestinationID = "disabled-dest"
 		w := postSubmitJob(t, r, body)
 		if w.Code != http.StatusUnprocessableEntity {
@@ -82,7 +82,7 @@ func TestSubmitJobE2E_PreflightBlockedCodes_DistinctEnvelopes(t *testing.T) {
 	})
 
 	t.Run("c_destination_not_found_envelope", func(t *testing.T) {
-		body := validSubmitJobBody("e2e-blocked-notfound-002")
+		body := validSubmitJobBody(t, "e2e-blocked-notfound-002")
 		body.DeliveryPlan[0].DestinationID = "never-seeded-id"
 		w := postSubmitJob(t, r, body)
 		if w.Code != http.StatusUnprocessableEntity {

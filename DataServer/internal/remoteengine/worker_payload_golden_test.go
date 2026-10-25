@@ -3,10 +3,12 @@ package remoteengine
 import (
 	_ "embed"
 	"encoding/json"
+
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
+	"velox-shared/contract"
 )
 
 // goldenWorkerPayload is embedded so normal test runs do not depend on the
@@ -20,95 +22,19 @@ var goldenWorkerPayload []byte
 // timestamps, UUIDs, filesystem paths, and database state so changes to the
 // worker contract produce a reviewable golden diff.
 func TestToWorkerPayload_Golden(t *testing.T) {
+	planJSON, planSHA := remoteEngineV2Plan(t)
 	raw := map[string]interface{}{
 		"job_id":      "golden-worker-job-001",
 		"status":      "completed",
 		"video_name":  "Golden render",
 		"script_text": "A deterministic worker payload.",
-		"voiceover_paths": []interface{}{
-			"velox-asset://audio/scene-0.mp3",
-			"velox-asset://audio/legacy.mp3",
-		},
-		"scenes": []interface{}{
-			map[string]interface{}{
-				"scene_id":         "scene-0",
-				"index":            float64(0),
-				"kind":             "clip",
-				"text":             "Opening scene",
-				"clip_link":        "velox-asset://clips/opening.mp4",
-				"duration_seconds": float64(4.5),
-				"clip": map[string]interface{}{
-					"asset_id": "clip-001",
-					"url":      "velox-asset://clips/opening.mp4",
-					"start_ms": float64(100),
-					"end_ms":   float64(4600),
-				},
-				"voiceover": map[string]interface{}{
-					"url":      "velox-asset://audio/scene-0.mp3",
-					"language": "en",
-				},
-				"subtitles": map[string]interface{}{
-					"url":      "velox-asset://subtitles/opening.srt",
-					"format":   "srt",
-					"language": "en",
-				},
-			},
-			map[string]interface{}{
-				"scene_id": "scene-1",
-				"index":    float64(1),
-				"kind":     "image",
-				"text":     "Closing scene",
-				"image": map[string]interface{}{
-					"asset_id": "images/closing.jpg",
-					"url":      "velox-asset://images/closing.jpg",
-				},
-				"voiceover": map[string]interface{}{
-					"asset_id":    "audio/closing.mp3",
-					"url":         "velox-asset://audio/closing.mp3",
-					"duration_ms": float64(2000),
-				},
-				"duration_seconds": float64(2),
-			},
-		},
-		"layers": []interface{}{
-			map[string]interface{}{
-				"id":   "title",
-				"type": "text",
-				"role": "title",
-				"text": "Golden render",
-			},
-		},
-		"audio_tracks": []interface{}{
-			map[string]interface{}{
-				"source_url": "velox-asset://audio/music.mp3",
-				"role":       "background_music",
-				"volume":     0.2,
-			},
-		},
-		"delivery_plan": []interface{}{
-			map[string]interface{}{
-				"destination_id": "youtube-en",
-				"priority":       1,
-				"retry_budget":   3,
-				"metadata": map[string]interface{}{
-					"title":       "Publication title must not leak",
-					"description": "Publication description must not leak",
-				},
-			},
-		},
-		"video_metadata": map[string]interface{}{
-			"width":          1920,
-			"height":         1080,
-			"fps_num":        30,
-			"title":          "Editorial title must not leak",
-			"privacy_status": "private",
-		},
-		"publications": []interface{}{
-			map[string]interface{}{"metadata": map[string]interface{}{"title": "Publication must not leak"}},
-		},
-		"output_path": "/var/lib/velox/output/golden.mp4",
+		contract.PayloadKeyCompiledRenderPlanJSON: planJSON,
+		contract.PayloadKeyCompiledRenderPlanSHA:  planSHA,
+		"delivery_plan":                           []interface{}{map[string]interface{}{"destination_id": "youtube-en", "retry_budget": 3}},
+		"video_metadata":                          map[string]interface{}{"width": 1920, "height": 1080, "fps_num": 24, "title": "Must not leak"},
+		"publications":                            []interface{}{map[string]interface{}{"title": "Must not leak"}},
+		"output_path":                             "/var/lib/velox/output/golden.mp4",
 	}
-
 	dto, err := ParseRemotePipelineResult(raw)
 	if err != nil {
 		t.Fatalf("ParseRemotePipelineResult: %v", err)

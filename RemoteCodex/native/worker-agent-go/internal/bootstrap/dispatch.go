@@ -43,9 +43,6 @@ func Dispatch(
 	runner *pipeline.Runner,
 	log *logger.Logger,
 ) (*pbb.Report, error) {
-	// The creator profile does not use the C++ pipeline, so runner may be
-	// nil. Pass a nil interface (not a typed nil pointer) so bootstrap.Run
-	// can detect the absence of a runner cleanly.
 	var adapter pbb.RunnerView
 	if runner != nil {
 		adapter = &pipelineRunnerAdapter{runner: runner}

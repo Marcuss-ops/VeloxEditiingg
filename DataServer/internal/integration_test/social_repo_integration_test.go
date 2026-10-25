@@ -48,6 +48,7 @@ import (
 	"velox-server/internal/jobs/enqueue"
 	"velox-server/internal/socialclient"
 	"velox-server/internal/store"
+	"velox-shared/contract"
 )
 
 // ═══════════════════════════════════════════════════════════════════
@@ -189,13 +190,12 @@ func newEnqueuerWithValidator(t *testing.T, validator enqueue.DestinationValidat
 // helper uses the canonical key exclusively so the canonical-only
 // contract is exercised end-to-end on the integration path.
 func payloadWithExternalDestination(externalDestID string) map[string]any {
+	planJSON, planSHA := integrationV2Plan()
 	return map[string]any{
-		"video_name":     "integration-test",
-		"script_text":    "test script",
-		"voiceover_path": "/tmp/voiceover.mp3",
-		"scenes": []any{
-			map[string]any{"text": "scene 1", "image_link": "https://example.com/img.png"},
-		},
+		"video_name":  "integration-test",
+		"script_text": "test script",
+		contract.PayloadKeyCompiledRenderPlanJSON: planJSON,
+		contract.PayloadKeyCompiledRenderPlanSHA:  planSHA,
 		"delivery_plan": []any{
 			map[string]any{
 				"destination_id":          "velox-dest-1",
@@ -205,6 +205,45 @@ func payloadWithExternalDestination(externalDestID string) map[string]any {
 			},
 		},
 	}
+}
+
+func integrationV2Plan() (string, string) {
+	const durationUS int64 = 1_000_000
+	timelineSHA, videoSHA, audioSHA := strings.Repeat("c", 64), strings.Repeat("b", 64), strings.Repeat("a", 64)
+	profile := contract.CanonicalVideoProfileFMP4StreamV1Default
+	plan := &contract.CompiledRenderPlanV2{
+		PlanVersion: contract.CompiledPlanVersionV2, TimelineRevision: 1,
+		TimelineSHA256: timelineSHA, DurationUS: durationUS,
+		Output: contract.OutputContractV2{
+			Container: profile.Container, VideoCodec: profile.Codec, Width: profile.Width, Height: profile.Height,
+			FPSNum: profile.FPSNum, FPSDen: profile.FPSDen, PixelFormat: profile.PixelFormat,
+			ProfileID: profile.ProfileID, CodecProfile: profile.CodecProfile, CodecLevel: profile.CodecLevel,
+			GOPSize: profile.GOPSize, BFrames: profile.BFrames, ClosedGOP: profile.ClosedGOP,
+			TimeBaseNum: profile.TimeBaseNum, TimeBaseDen: profile.TimeBaseDen,
+		},
+		FinalAudio: contract.FinalAudioV2{
+			Mode: contract.AudioModeFinalAudioCopy, AssetID: "audio-final", SHA256: audioSHA, SizeBytes: 200,
+			Codec: "aac", SampleRateHz: 48_000, Channels: 2, DurationUS: durationUS,
+			TimelineRevision: 1, TimelineSHA256: timelineSHA,
+		},
+		VideoTracks: []contract.VideoTrackV2{{TrackID: "main", Segments: []contract.VideoSegmentV2{{
+			SegmentID: "segment-0", AssetID: "video-source", SHA256: videoSHA,
+			TimelineStartFrame: 0, FrameCount: 24, SourceInUS: 0, SourceDurationUS: durationUS,
+		}}}},
+		Assets: []contract.AssetRefV2{
+			{AssetID: "audio-final", SHA256: audioSHA, SizeBytes: 200, Kind: "final_audio", MIME: "audio/mp4", DurationUS: durationUS},
+			{AssetID: "video-source", SHA256: videoSHA, SizeBytes: 100, Kind: "video", DurationUS: durationUS, Width: profile.Width, Height: profile.Height},
+		},
+	}
+	canonical, err := plan.CanonicalJSON()
+	if err != nil {
+		panic(err)
+	}
+	sha, err := plan.PlanSHA256()
+	if err != nil {
+		panic(err)
+	}
+	return string(canonical), sha
 }
 
 // ═══════════════════════════════════════════════════════════════════

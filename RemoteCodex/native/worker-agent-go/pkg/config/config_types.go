@@ -311,12 +311,6 @@ type WorkerConfig struct {
 	// RW-PROD-005 §3 A9.
 	RolloutGroup string `json:"rollout_group,omitempty"`
 
-	// WorkerProfile selects the runtime profile for this worker.
-	// "creator" disables the C++ video pipeline and scene.composite.v1
-	// executor; any other value (or empty) keeps the historical video-worker
-	// behaviour. Binds from VELOX_WORKER_PROFILE env.
-	WorkerProfile string `json:"worker_profile,omitempty"`
-
 	// VideoEngineCppBin is the path to the native C++ video-render binary.
 	// Defaults to "velox-render-cpp" (resolved via exec.LookPath).
 	// Operators override via VELOX_VIDEO_ENGINE_CPP_BIN env in main.go.
@@ -342,11 +336,6 @@ type WorkerConfig struct {
 
 // ErrInvalidConfig is returned when configuration validation fails.
 var ErrInvalidConfig = errors.New("invalid configuration")
-
-// CreatorProfile is the canonical value for WorkerProfile that disables
-// the C++ video pipeline and enables creative capabilities. It is the
-// single source of truth for the creator profile name.
-const CreatorProfile = "creator"
 
 // minCertValidity is the floor for ResidualValidity on a TLS leaf cert
 // (RW-PROD-001 A1). Anything under this triggers a hard reject so a worker

@@ -41,10 +41,9 @@ type SubmitJobRequest struct {
 	CompiledRenderPlanJSON   string `json:"compiled_render_plan_json,omitempty"`
 	CompiledRenderPlanSHA256 string `json:"compiled_render_plan_sha256,omitempty"`
 
-	// Scenes is the inline scene list. Each scene drives one composited
-	// segment. At least one scene is required unless the producer supplies
-	// both compiled_render_plan_json and compiled_render_plan_sha256; max
-	// MaxScenes (10k).
+	// Scenes is accepted only as transitional intake metadata. V2 render
+	// submissions must provide a producer-compiled plan or a strict manifest
+	// with final audio; the Master never turns scenes into renderer work.
 	Scenes []SubmitScene `json:"scenes"`
 
 	// Layers are independent overlays: title, name, important phrase or
@@ -76,8 +75,7 @@ type SubmitJobRequest struct {
 	// VisualTimelineResolver; requires render_manifest + final_audio.
 	VisualReplacements []SubmitVisualReplacement `json:"visual_replacements,omitempty"`
 
-	// DeliveryPlan is the ordered list of delivery targets. Empty
-	// allowed (defaults to scene.composite.v1's default resolver).
+	// DeliveryPlan is the ordered list of delivery targets. Empty is allowed.
 	// It remains backward-compatible with legacy senders. When
 	// PublishingTarget is present, the handler resolves that selector into
 	// this concrete plan before enqueue and rejects a request that supplies
@@ -94,14 +92,9 @@ type SubmitJobRequest struct {
 	// payload and are consumed by the publication/delivery pipeline.
 	Publications []SubmitPublication `json:"publications,omitempty"`
 
-	// ManifestRef is OPTIONAL. When present, the Master downloads
-	// the manifest JSON at `url`, verifies `sha256`, validates
-	// `schema_version`, and uses the manifest-derived payload as
-	// the worker input (replacing / overlaying the inline scene
-	// list). Shape-level rules (URL scheme allow-list, sha256 hex
-	// format, schema_version enum) are enforced by
-	// ValidateSubmitJobRequest. Fetch + verification are handled by
-	// ResolveRenderManifestRef before enqueue.
+	// ManifestRef is retained as a typed wire field so legacy clients get an
+	// explicit rejection. The Master no longer downloads manifests or compiles
+	// renderer input; producers submit CompiledRenderPlanV2 directly.
 	ManifestRef *SubmitManifestRef `json:"manifest_ref,omitempty"`
 
 	// Assembly is control-plane metadata for eager Velox preparation. It is
@@ -122,17 +115,6 @@ type SubmitJobRequest struct {
 	// _placement_pin_worker_id and enforced by the placement
 	// matcher at dispatch time.
 	PlacementPinWorkerID string `json:"placement_pin_worker_id,omitempty"`
-
-	// ResolvedManifest fields are internal-only. They are populated by
-	// ResolveRenderManifestRef after the Master fetches and verifies
-	// manifest_ref. They are intentionally ignored by JSON decoding
-	// because DisallowUnknownFields would reject these names on the public
-	// wire contract; submitRequestToRawPayload copies them into the
-	// worker payload after resolution so TaskSpec carries the immutable
-	// manifest snapshot.
-	ResolvedManifest       map[string]interface{} `json:"-"`
-	ResolvedManifestRef    map[string]interface{} `json:"-"`
-	ResolvedManifestSHA256 string                 `json:"-"`
 }
 
 // SubmitOutput contains renderer output constraints shared by every recipe.
@@ -407,73 +389,28 @@ type SubmitPublicationDestination struct {
 	ProviderOptions  map[string]any             `json:"provider_options,omitempty"`
 }
 
-// SubmitManifestRef points to a `velox.render-manifest.v1` JSON the
-// client uploaded to a reachable store (Drive, GCS, S3, …). The
-// Master fetches the JSON, verifies SHA-256 against the SHA-256 the
-// client supplied here, validates the schema_version, and replaces
-// the inline scene list with the manifest-derived payload.
-//
-// Three fields, all required WHEN the parent `manifest_ref` is
-// present (the *SubmitManifestRef pointer distinguishes "no
-// manifest_ref at all" from "manifest_ref declared but empty" —
-// the latter is rejected):
-//
-//   - SchemaVersion is the closed enum of accepted manifest
-//     versions. Today only `velox.render-manifest.v1` is accepted;
-//     future versions (`v2`, …) MUST be added to the `oneof` list
-//     AND to manifestRefSchemaVersions BEFORE the new resolver is
-//     shipped, so the contract and the implementation cannot drift.
-//
-//   - URL is the canonical pointer to the manifest JSON. MUST be a
-//     parseable URL on the http(s) scheme OR on the velox-asset://
-//     scheme (the latter only when the asset is reachable through
-//     the Master asset-bridge; the resolver owns that policy).
-//     The regex is intentionally permissive — the schemagen
-//     has no native `format: uri` distinction for velox-asset://
-//     so the strict scheme allow-list is enforced by the
-//     shape-level helper in ValidateSubmitJobRequest.
-//
-//   - SHA256 is the lowercase hex SHA-256 of the manifest JSON
-//     body. The Master re-downloads the JSON and verifies the
-//     SHA-256 against this value BEFORE substituting it into the
-//     worker payload (fail-closed).
-//
 // SubmitJobBatchRequest is the wire shape for POST /api/v1/jobs/batch.
-// Items are intentionally full SubmitJobRequest values so delivery_plan and
-// publications remain backward-compatible with the single-job endpoint.
 type SubmitJobBatchRequest struct {
 	BatchID string             `json:"batch_id"`
 	Items   []SubmitJobRequest `json:"items"`
 }
 
 // SubmitJobBatchItemResult reports one independent batch item outcome.
-// Status values: "accepted" (fresh enqueue), "dedup" (plan identical to an
-// earlier accepted item of the same batch; job_id carries the anchor item's
-// job and DedupedOf its index), "conflict" (in-batch duplicate idempotency
-// key), "rejected", "failed".
 type SubmitJobBatchItemResult struct {
-	Index          int    `json:"index"`
-	IdempotencyKey string `json:"idempotency_key"`
-	JobID          string `json:"job_id,omitempty"`
-	Status         string `json:"status"`
-	// DedupedOf is set only when Status == "dedup": the index of the first
-	// accepted item with an identical render plan. Pointer so the key is
-	// absent on every other status (index 0 must still serialize).
-	DedupedOf *int     `json:"deduped_of,omitempty"`
-	Errors    []string `json:"errors,omitempty"`
+	Index          int      `json:"index"`
+	IdempotencyKey string   `json:"idempotency_key"`
+	JobID          string   `json:"job_id,omitempty"`
+	Status         string   `json:"status"`
+	DedupedOf      *int     `json:"deduped_of,omitempty"`
+	Errors         []string `json:"errors,omitempty"`
 }
 
-// SubmitJobBatchResponse contains an outcome for every submitted item.
-// A failed item never changes the status or idempotency semantics of another.
-// Summary reports the aggregate outcome: Accepted + Deduped + Rejected +
-// Conflict + Failed == Total.
 type SubmitJobBatchResponse struct {
 	BatchID string                     `json:"batch_id"`
 	Items   []SubmitJobBatchItemResult `json:"items"`
 	Summary SubmitJobBatchSummary      `json:"summary"`
 }
 
-// SubmitJobBatchSummary is the aggregate outcome of one batch submission.
 type SubmitJobBatchSummary struct {
 	Total    int `json:"total"`
 	Accepted int `json:"accepted"`
@@ -483,6 +420,8 @@ type SubmitJobBatchSummary struct {
 	Failed   int `json:"failed"`
 }
 
+// SubmitManifestRef is the retired manifest-fetching wire shape. Requests
+// containing it are rejected in favor of producer-compiled V2 plans.
 type SubmitManifestRef struct {
 	// SchemaVersion is the closed enum of accepted manifest versions.
 	// Today only `velox.render-manifest.v1` is accepted.

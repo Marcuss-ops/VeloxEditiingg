@@ -63,7 +63,7 @@ func TestSubmitJobE2E_PollingChain_HappyPath(t *testing.T) {
 	h.RegisterRoutes(r, adminAuthFake, m2mPollingAuthFake)
 
 	const idem = "e2e-polling-001"
-	body := validSubmitJobBody(idem)
+	body := validSubmitJobBody(t, idem)
 	wantJobID := expectedSubmitJobID(idem)
 	wantStatusURL := "/api/v1/jobs/" + wantJobID
 
