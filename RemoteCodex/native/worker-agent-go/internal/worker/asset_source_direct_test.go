@@ -27,12 +27,12 @@ func TestAllowedDirectDriveHostIncludesPublicDownloadRedirect(t *testing.T) {
 		"www.googleapis.com",
 		"drive.usercontent.google.com",
 	} {
-		if !isAllowedDirectDriveHost(host) {
+		if !isAllowedDirectSourceHost(host) {
 			t.Fatalf("host %q was rejected", host)
 		}
 	}
 	for _, host := range []string{"evil.example", "usercontent.google.com", "drive.usercontent.google.com.evil.example"} {
-		if isAllowedDirectDriveHost(host) {
+		if isAllowedDirectSourceHost(host) {
 			t.Fatalf("host %q was accepted", host)
 		}
 	}
