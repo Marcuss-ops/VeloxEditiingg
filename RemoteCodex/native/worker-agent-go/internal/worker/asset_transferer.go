@@ -340,7 +340,7 @@ func (t *masterAssetTransferer) assetTransferRequestForSource(assetID, sourceURI
 		return downloadURL, authToken, client, nil
 	}
 	parsed, err := neturl.Parse(strings.TrimSpace(sourceURI))
-	if err != nil || parsed.Scheme != "https" || (strings.ToLower(parsed.Hostname()) != "drive.google.com" && strings.ToLower(parsed.Hostname()) != "www.googleapis.com") {
+	if err != nil || parsed.Scheme != "https" || !isAllowedDirectSourceHost(parsed.Hostname()) || (parsed.Port() != "" && parsed.Port() != "443") {
 		return "", nil, nil, fmt.Errorf("worker direct asset source rejected for %s", assetID)
 	}
 	client := &http.Client{Timeout: 2 * time.Minute, CheckRedirect: func(r *http.Request, via []*http.Request) error {
@@ -348,22 +348,21 @@ func (t *masterAssetTransferer) assetTransferRequestForSource(assetID, sourceURI
 			return fmt.Errorf("too many redirects")
 		}
 		host := strings.ToLower(r.URL.Hostname())
-		if !isAllowedDirectDriveHost(host) {
-			return fmt.Errorf("direct Drive source redirected to unexpected host")
+		if !isAllowedDirectSourceHost(host) || (r.URL.Port() != "" && r.URL.Port() != "443") {
+			return fmt.Errorf("direct asset source redirected to unexpected host")
 		}
 		return nil
 	}}
 	return parsed.String(), func() string { return "" }, client, nil
 }
 
-// isAllowedDirectDriveHost is deliberately an exact allowlist. Public Drive
-// downloads normally start at drive.google.com and redirect the bytes to
-// drive.usercontent.google.com; neither hop needs a Drive credential. Keep
-// this list narrow so a worker-direct source can never turn into an arbitrary
-// redirect proxy.
-func isAllowedDirectDriveHost(host string) bool {
+// isAllowedDirectSourceHost is deliberately an exact allowlist. The
+// RenderingGen Objectstore's public HTTPS endpoint is the only non-Google
+// source permitted for Creator-published assets; do not accept arbitrary
+// URLs here because this path runs on remotely selected workers.
+func isAllowedDirectSourceHost(host string) bool {
 	switch strings.ToLower(strings.TrimSpace(host)) {
-	case "drive.google.com", "www.googleapis.com", "drive.usercontent.google.com":
+	case "drive.google.com", "www.googleapis.com", "drive.usercontent.google.com", "77.93.152.122":
 		return true
 	default:
 		return false

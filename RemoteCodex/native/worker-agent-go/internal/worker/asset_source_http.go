@@ -144,7 +144,7 @@ func (s *httpAssetSource) followDriveConfirmation(ctx context.Context, resp *htt
 		return nil, errUnexpectedHTMLResponse
 	}
 	formURL, err := base.Parse(action)
-	if err != nil || formURL.Scheme != "https" || !isAllowedDirectDriveHost(formURL.Hostname()) {
+	if err != nil || formURL.Scheme != "https" || !isAllowedDirectSourceHost(formURL.Hostname()) {
 		return nil, fmt.Errorf("drive confirmation redirected to unexpected host")
 	}
 
@@ -245,7 +245,7 @@ func parseDriveConfirmationForm(body []byte) (action, method string, values netu
 
 func isDirectDriveSource(sourceURI string) bool {
 	parsed, err := neturl.Parse(strings.TrimSpace(sourceURI))
-	return err == nil && parsed.Scheme == "https" && isAllowedDirectDriveHost(parsed.Hostname())
+	return err == nil && parsed.Scheme == "https" && isAllowedDirectSourceHost(parsed.Hostname())
 }
 
 // Sentinel/typed errors returned by httpAssetSource.Open so the transfer
