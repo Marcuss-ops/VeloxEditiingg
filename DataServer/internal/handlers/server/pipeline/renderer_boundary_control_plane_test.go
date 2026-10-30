@@ -92,3 +92,30 @@ func TestNormalizeExternalJobSubmissionKeepsControlPlaneOutOfWorkerPayload(t *te
 		t.Fatal("retired scene projection crossed the worker boundary")
 	}
 }
+
+func TestNormalizeExternalJobSubmissionRenderOnlyDropsDeliveryPlan(t *testing.T) {
+	planJSON, planSHA := validProducerOwnedFMP4Plan(t)
+	req := SubmitJobRequest{
+		IdempotencyKey:           "renderer-boundary-render-only-001",
+		VideoName:                "Render only",
+		ScriptText:               "No delivery route.",
+		RenderOnly:               true,
+		CompiledRenderPlanJSON:   planJSON,
+		CompiledRenderPlanSHA256: planSHA,
+		DeliveryPlan:             []SubmitDeliveryPlanEntry{{}},
+	}
+
+	canonical := (&Handlers{}).NormalizeExternalJobSubmission(req)
+	if canonical == nil {
+		t.Fatal("NormalizeExternalJobSubmission returned nil")
+	}
+	if got := canonical.DeliveryPlan; len(got) != 1 || got["render_only"] != true {
+		t.Fatalf("render-only control-plane envelope = %#v, want only render_only=true", got)
+	}
+	if _, present := canonical.DeliveryPlan["delivery_plan"]; present {
+		t.Fatalf("render-only control-plane envelope retained delivery_plan: %#v", canonical.DeliveryPlan)
+	}
+	if canonical.WorkerPayload["render_only"] != true {
+		t.Fatalf("render_only did not reach renderer payload: %#v", canonical.WorkerPayload)
+	}
+}

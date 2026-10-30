@@ -26,12 +26,19 @@ func (h *Handlers) NormalizeExternalJobSubmission(req SubmitJobRequest) *Canonic
 		assemblyJob, _ = req.Assembly.Normalize(req.IdempotencyKey)
 	}
 	targetExecutorID := targetExecutorForJobType(req.JobType)
+	deliveryEnvelope := deliveryplan.ExtractEnvelope(rawPayload)
+	if req.RenderOnly {
+		// Render-only jobs have no external delivery route. Keep only the
+		// opt-out marker in the control-plane envelope, even if a legacy or
+		// defaulted intake DTO carried an empty delivery-plan entry.
+		deliveryEnvelope = map[string]interface{}{"render_only": true}
+	}
 	return &CanonicalCompletedPayload{
 		SourceProvider:   ExternalAPISourceProvider,
 		SourceJobID:      req.IdempotencyKey,
 		TargetExecutorID: targetExecutorID,
 		WorkerPayload:    workerPayload,
-		DeliveryPlan:     deliveryplan.ExtractEnvelope(rawPayload),
+		DeliveryPlan:     deliveryEnvelope,
 		PublicationSpecs: projectPublicationSpecs(req.Publications),
 		Assembly:         assemblyJob,
 		StatusDomains:    inputAssemblyStatusDomain(workerPayload),
