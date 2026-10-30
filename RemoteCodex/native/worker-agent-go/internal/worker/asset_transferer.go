@@ -181,7 +181,7 @@ func (t *masterAssetTransferer) transferSingleStream(ctx context.Context, report
 		if openErr != nil {
 			switch {
 			case errors.Is(openErr, errAssetNotFound):
-				return downloader.AttemptResult{Err: fmt.Errorf("asset not found")}
+				return downloader.AttemptResult{Err: fmt.Errorf("asset not found (source=%s)", assetSourceDiagnosticLabel(req.SourceURI))}
 			case errors.Is(openErr, errRangeNotSatisfiable):
 				if resumeOffset <= 0 {
 					return downloader.AttemptResult{Err: openErr}
@@ -196,7 +196,7 @@ func (t *masterAssetTransferer) transferSingleStream(ctx context.Context, report
 				body, meta, openErr = source.Open(ctx, 0)
 				if openErr != nil {
 					if errors.Is(openErr, errAssetNotFound) {
-						return downloader.AttemptResult{Err: fmt.Errorf("asset not found")}
+						return downloader.AttemptResult{Err: fmt.Errorf("asset not found (source=%s)", assetSourceDiagnosticLabel(req.SourceURI))}
 					}
 					return assetAttemptResult(ctx, openErr)
 				}
@@ -354,6 +354,19 @@ func (t *masterAssetTransferer) assetTransferRequestForSource(assetID, sourceURI
 		return nil
 	}}
 	return parsed.String(), func() string { return "" }, client, nil
+}
+
+// assetSourceDiagnosticLabel identifies the selected byte path without logging
+// signed query parameters or object paths into lifecycle events.
+func assetSourceDiagnosticLabel(sourceURI string) string {
+	if strings.TrimSpace(sourceURI) == "" {
+		return "master_asset_bridge"
+	}
+	parsed, err := neturl.Parse(strings.TrimSpace(sourceURI))
+	if err != nil || parsed.Hostname() == "" {
+		return "worker_direct_source host=invalid"
+	}
+	return "worker_direct_source host=" + strings.ToLower(parsed.Hostname())
 }
 
 // isAllowedDirectSourceHost is deliberately an exact allowlist. The
