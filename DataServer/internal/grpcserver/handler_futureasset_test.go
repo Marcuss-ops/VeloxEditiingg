@@ -206,6 +206,54 @@ func TestFutureAssetManifestsDiscoversDeferredStockInsideScenesJSON(t *testing.T
 	}
 }
 
+func TestFutureAssetManifestsJoinsRuntimeHTTPSSourcesToCompiledPlan(t *testing.T) {
+	const timelineSHA = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	const videoSHA = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	const audioSHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	plan := &contract.CompiledRenderPlanV2{
+		PlanVersion: 2, TimelineRevision: 1, TimelineSHA256: timelineSHA, DurationUS: 1_000_000,
+		Output:      contract.OutputContractV2{Container: "mp4", VideoCodec: "h264", Width: 1920, Height: 1080, FPSNum: 24, FPSDen: 1},
+		FinalAudio:  contract.FinalAudioV2{Mode: contract.AudioModeFinalAudioCopy, AssetID: "audio", SHA256: audioSHA, SizeBytes: 20, Codec: "aac", SampleRateHz: 48000, Channels: 2, DurationUS: 1_000_000, TimelineRevision: 1, TimelineSHA256: timelineSHA},
+		VideoTracks: []contract.VideoTrackV2{{TrackID: "main", Segments: []contract.VideoSegmentV2{{SegmentID: "fragment", AssetID: "fragment", SHA256: videoSHA, TimelineStartFrame: 0, FrameCount: 24, SourceInUS: 0, SourceDurationUS: 1_000_000}}}},
+		Assets: []contract.AssetRefV2{
+			{AssetID: "fragment", AssetKey: "sha256:" + videoSHA, SHA256: videoSHA, SizeBytes: 10, Kind: "video", MIME: "video/mp4", DurationUS: 1_000_000},
+			{AssetID: "audio", AssetKey: "sha256:" + audioSHA, SHA256: audioSHA, SizeBytes: 20, Kind: "final_audio", MIME: "audio/mp4", DurationUS: 1_000_000},
+		},
+	}
+	rawPlan, err := plan.CanonicalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(map[string]interface{}{
+		contract.PayloadKeyCompiledRenderPlanJSON: string(rawPlan),
+		"runtime_assets": []interface{}{
+			map[string]interface{}{"asset_id": "fragment", "role": "stock", "sha256": videoSHA, "size_bytes": int64(10), "source_uri": "https://objects.example/video?sig=opaque"},
+			map[string]interface{}{"asset_id": "audio", "role": "final_audio", "sha256": audioSHA, "size_bytes": int64(20), "url": "https://objects.example/audio?sig=opaque"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assets := futureAssetManifests(payload)
+	if len(assets) != 2 {
+		t.Fatalf("manifests=%d, want two deduplicated plan assets: %+v", len(assets), assets)
+	}
+	byID := make(map[string]futureasset.AssetManifest, len(assets))
+	for _, asset := range assets {
+		byID[asset.AssetID] = asset
+	}
+	if got := byID["fragment"].SourceURI; got != "https://objects.example/video?sig=opaque" {
+		t.Errorf("fragment source_uri=%q, want signed HTTPS runtime locator", got)
+	}
+	if got := byID["audio"].SourceURI; got != "https://objects.example/audio?sig=opaque" {
+		t.Errorf("audio source_uri=%q, want HTTPS URL fallback", got)
+	}
+	if byID["fragment"].AssetKey != "sha256:"+videoSHA || byID["audio"].AssetKey != "sha256:"+audioSHA {
+		t.Errorf("asset keys did not preserve compiled-plan content identities: %+v", assets)
+	}
+}
+
 func TestSelectWarmPlacementUsesCacheAwareWorkerRanking(t *testing.T) {
 	workers := []assembly.WorkerPlacementSnapshot{
 		{WorkerID: "cold", Available: true, CapacityAuthoritative: true, DiskAuthoritative: true, MaxExecutionSlots: 2, FreeDiskBytes: 1 << 30},

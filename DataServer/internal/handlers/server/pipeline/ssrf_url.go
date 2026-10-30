@@ -358,6 +358,43 @@ func hostnameAllowed(host string, allowDomains []string) bool {
 	return false
 }
 
+// ValidateRuntimeAssetSourceURLs applies the same egress policy to the
+// worker-direct byte locators carried by FINALIZE. Runtime locators bypass
+// PREPARE's scene URL traversal, so they must be checked before they are
+// merged into a task spec or advertised in a future asset plan.
+func ValidateRuntimeAssetSourceURLs(assets []map[string]interface{}, cfg *config.Config) []SSRFValidationError {
+	if cfg == nil {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	var errs []SSRFValidationError
+	for i, asset := range assets {
+		if asset == nil {
+			continue
+		}
+		for _, field := range []string{"source_uri", "url"} {
+			raw, _ := asset[field].(string)
+			raw = strings.TrimSpace(raw)
+			lowerRaw := strings.ToLower(raw)
+			if raw == "" || (!strings.HasPrefix(lowerRaw, "http://") && !strings.HasPrefix(lowerRaw, "https://")) {
+				continue
+			}
+			if _, exists := seen[raw]; exists {
+				continue
+			}
+			seen[raw] = struct{}{}
+			if err := ValidateExternalURL(raw, cfg.AllowedExternalDomains, cfg.Runtime.AllowLoopbackAdminAuthDev); err != nil {
+				var validationErr *SSRFValidationError
+				if errors.As(err, &validationErr) {
+					validationErr.Path = fmt.Sprintf("runtime_assets.%d.%s", i, field)
+					errs = append(errs, *validationErr)
+				}
+			}
+		}
+	}
+	return errs
+}
+
 // ValidateAllExternalURLs walks the canonical nested scene asset
 // URLs and returns a non-nil error iff any URL fails the SSRF policy. On
 // failure the returned slice-cumulative error encodes every

@@ -88,6 +88,11 @@ func (h *Handlers) FinalizeJob() gin.HandlerFunc {
 			c.JSON(status, body)
 			return
 		}
+		if errs := ValidateRuntimeAssetSourceURLs(req.RuntimeAssets, h.cfg); len(errs) > 0 {
+			status, body := ssrfValidationErrorEnvelope(errs)
+			c.JSON(status, body)
+			return
+		}
 		jobID := strings.TrimSpace(c.Param("id"))
 		if jobID == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "job_id_required", "message": "URL path /api/v1/jobs/:id/finalize requires non-empty :id"})

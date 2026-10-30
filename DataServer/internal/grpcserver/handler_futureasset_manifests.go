@@ -44,6 +44,7 @@ func futureAssetManifests(payload []byte) []futureasset.AssetManifest {
 		return nil
 	}
 	seen := make(map[string]futureasset.AssetManifest)
+	sourceURIs, planAssetKeys := futureAssetRuntimeBindings(root)
 	var walk func(interface{})
 	walk = func(value interface{}) {
 		switch node := value.(type) {
@@ -53,7 +54,7 @@ func futureAssetManifests(payload []byte) []futureasset.AssetManifest {
 			}
 		case map[string]interface{}:
 			if rawPlan, ok := node[contract.PayloadKeyCompiledRenderPlanJSON].(string); ok {
-				appendCompiledPlanAssetManifests(rawPlan, seen)
+				appendCompiledPlanAssetManifests(rawPlan, seen, sourceURIs)
 			}
 			// The canonical worker payload persists typed scenes in
 			// scenes_json.  Keep manifest discovery recursive across that
@@ -66,9 +67,6 @@ func futureAssetManifests(payload []byte) []futureasset.AssetManifest {
 				}
 			}
 			key, _ := node["asset_key"].(string)
-			if key == "" {
-				key, _ = node["asset_id"].(string)
-			}
 			assetID, _ := node["asset_id"].(string)
 			if assetID == "" {
 				assetID, _ = node["drive_file_id"].(string)
@@ -82,9 +80,6 @@ func futureAssetManifests(payload []byte) []futureasset.AssetManifest {
 					assetID = driveID.String()
 				}
 			}
-			if key == "" {
-				key = assetID
-			}
 			sha, _ := node["sha256"].(string)
 			if sha == "" {
 				sha, _ = node["asset_sha256"].(string)
@@ -96,7 +91,16 @@ func futureAssetManifests(payload []byte) []futureasset.AssetManifest {
 			case int64:
 				size = n
 			}
+			if key == "" {
+				key = planAssetKeys[assetID]
+			}
+			if key == "" {
+				key = assetID
+			}
 			sourceURI, _ := node["source_uri"].(string)
+			if sourceURI == "" && (strings.HasPrefix(strings.ToLower(strings.TrimSpace(rawURL)), "https://") || strings.HasPrefix(strings.ToLower(strings.TrimSpace(rawURL)), "http://")) {
+				sourceURI = strings.TrimSpace(rawURL)
+			}
 			if sourceURI == "" {
 				if strings.HasPrefix(strings.ToLower(strings.TrimSpace(rawURL)), "velox-drive://") {
 					sourceURI = "https://drive.google.com/uc?export=download&id=" + strings.TrimSpace(rawURL[len("velox-drive://"):])
@@ -139,7 +143,63 @@ func futureAssetManifests(payload []byte) []futureasset.AssetManifest {
 	return out
 }
 
-func appendCompiledPlanAssetManifests(raw string, seen map[string]futureasset.AssetManifest) {
+// futureAssetRuntimeBindings joins FINALIZE's direct byte locators to the
+// producer-compiled plan by asset_id. The plan intentionally carries only
+// immutable identity; worker-only source URIs remain in runtime_assets.
+func futureAssetRuntimeBindings(root interface{}) (map[string]string, map[string]string) {
+	sourceURIs := make(map[string]string)
+	planAssetKeys := make(map[string]string)
+	var walk func(interface{})
+	walk = func(value interface{}) {
+		switch node := value.(type) {
+		case []interface{}:
+			for _, child := range node {
+				walk(child)
+			}
+		case map[string]interface{}:
+			if rawPlan, ok := node[contract.PayloadKeyCompiledRenderPlanJSON].(string); ok {
+				if plan, err := contract.DecodeCompiledRenderPlanV2([]byte(rawPlan)); err == nil && plan != nil {
+					for _, asset := range plan.Assets {
+						key := asset.AssetKey
+						if key == "" {
+							key = asset.AssetID
+						}
+						if asset.AssetID != "" && key != "" {
+							planAssetKeys[asset.AssetID] = key
+						}
+					}
+				}
+			}
+			if runtimeAssets, ok := node["runtime_assets"].([]interface{}); ok {
+				for _, raw := range runtimeAssets {
+					asset, ok := raw.(map[string]interface{})
+					if !ok {
+						continue
+					}
+					id, _ := asset["asset_id"].(string)
+					uri, _ := asset["source_uri"].(string)
+					if strings.TrimSpace(uri) == "" {
+						uri, _ = asset["url"].(string)
+						lowerURI := strings.ToLower(strings.TrimSpace(uri))
+						if !strings.HasPrefix(lowerURI, "https://") && !strings.HasPrefix(lowerURI, "http://") {
+							uri = ""
+						}
+					}
+					if strings.TrimSpace(id) != "" && strings.TrimSpace(uri) != "" {
+						sourceURIs[strings.TrimSpace(id)] = strings.TrimSpace(uri)
+					}
+				}
+			}
+			for _, child := range node {
+				walk(child)
+			}
+		}
+	}
+	walk(root)
+	return sourceURIs, planAssetKeys
+}
+
+func appendCompiledPlanAssetManifests(raw string, seen map[string]futureasset.AssetManifest, sourceURIs map[string]string) {
 	plan, err := contract.DecodeCompiledRenderPlanV2([]byte(raw))
 	if err != nil || plan == nil {
 		return
@@ -155,6 +215,7 @@ func appendCompiledPlanAssetManifests(raw string, seen map[string]futureasset.As
 		seen[key] = futureasset.AssetManifest{
 			AssetKey: key, AssetID: asset.AssetID, SHA256: asset.SHA256,
 			SizeBytes: asset.SizeBytes, MIMEType: asset.MIME, Role: asset.Kind,
+			SourceURI: sourceURIs[asset.AssetID],
 		}
 	}
 }
