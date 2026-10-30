@@ -7,6 +7,7 @@ package grpcserver
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"velox-server/internal/logging"
@@ -55,13 +56,16 @@ func (h *Handler) buildDesiredReservations(
 			continue
 		}
 		if existing, exists := owned[candidate.TaskID]; exists {
-			// Existing ownership is sticky until TTL/reconciliation.
+			// Existing ownership is sticky until TTL/reconciliation, but its
+			// payload is only the snapshot captured when PREPARE reserved it.
+			// FINALIZE patches runtime_assets (including direct HTTPS locators)
+			// on the task spec, so a refresh must read that current payload rather
+			// than replaying the stale PREPARE snapshot to the worker.
+			payload := latestFutureTaskPayload(ctx, store, candidate.TaskID, existing.Payload)
 			reservation := existing.FutureReservation
 			reservation.Distance = len(jobs) + 1
-			// PREPARE may own a PENDING task while generated media is produced.
-			// FINALIZE advances the task revision; refresh the same reservation
-			// lineage so the worker can certify the expanded manifest against the
-			// revision that placement will actually claim.
+			// Keep the same reservation lineage while certifying the expanded
+			// manifest against the revision placement will actually claim.
 			reservation.TaskRevision = candidate.Revision
 			desired = append(desired, reservation)
 			jobs = append(jobs, futureasset.Job{
@@ -69,7 +73,7 @@ func (h *Handler) buildDesiredReservations(
 				TaskID:        existing.TaskID,
 				ReservationID: existing.ReservationID,
 				TaskRevision:  candidate.Revision,
-				Assets:        h.futureAssetManifestsWithCatalog(ctx, existing.Payload),
+				Assets:        h.futureAssetManifestsWithCatalog(ctx, payload),
 			})
 			continue
 		}
@@ -196,4 +200,17 @@ func (h *Handler) updateReservationStates(
 		}
 		_ = store.UpdateReservationState(ctx, r.ReservationID, taskgraph.ReservationPlanning)
 	}
+}
+
+// latestFutureTaskPayload refreshes the snapshot held by a reservation after
+// PREPARE/FINALIZE payload patches. The fallback preserves legacy callers if
+// the task payload lookup is temporarily unavailable.
+func latestFutureTaskPayload(ctx context.Context, store taskgraph.FutureReservationStore, taskID string, fallback []byte) []byte {
+	if store == nil || strings.TrimSpace(taskID) == "" {
+		return fallback
+	}
+	if latest, err := store.FutureTaskPayload(ctx, taskID); err == nil && len(latest) > 0 {
+		return latest
+	}
+	return fallback
 }
