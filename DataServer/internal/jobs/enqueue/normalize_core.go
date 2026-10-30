@@ -63,7 +63,7 @@ func normalizeSceneVideoPayloadContext(ctx context.Context, payloadMap map[strin
 	for key, value := range payloadMap {
 		if strings.HasPrefix(key, "runtime_") || key == "publications" || key == "assembly" ||
 			key == "_internal_forwarding_key" || key == "_placement_pin_worker_id" ||
-			key == "source_provider" || key == "source_job_id" || key == "target_executor_id" || key == "delivery_plan" {
+			key == "source_provider" || key == "source_job_id" || key == "target_executor_id" || key == "delivery_plan" || key == "render_only" {
 			if key == "_placement_pin_worker_id" {
 				if pin, ok := value.(string); ok {
 					value = strings.TrimSpace(pin)

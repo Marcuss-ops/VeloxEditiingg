@@ -35,6 +35,8 @@ type SubmitJobRequest struct {
 	ScriptText string `json:"script_text,omitempty"`
 	AudioURL   string `json:"audio_url,omitempty"`
 	CopyOnly   bool   `json:"copy_only,omitempty"`
+	// RenderOnly marks a completed worker render with no external delivery target.
+	RenderOnly bool `json:"render_only,omitempty"`
 	// CompiledRenderPlanJSON/SHA256 are producer-owned V2 bytes. When present,
 	// the Master passes them through byte-for-byte and routes the task to the
 	// canonical packet-copy executor; it never recompiles or infers the plan.

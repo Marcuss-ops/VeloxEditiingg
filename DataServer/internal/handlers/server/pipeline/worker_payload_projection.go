@@ -26,6 +26,9 @@ func submitRequestToRawPayload(req *SubmitJobRequest) map[string]interface{} {
 	if req.JobType != "" {
 		raw["job_type"] = req.JobType
 	}
+	if req.RenderOnly {
+		raw["render_only"] = true
+	}
 	if req.RuntimeAssets != nil {
 		raw["runtime_assets"] = req.RuntimeAssets
 	}
