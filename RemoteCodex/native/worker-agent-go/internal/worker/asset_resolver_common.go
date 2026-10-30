@@ -182,6 +182,18 @@ func resolveAssetChildren(ctx context.Context, count int, resolve func(context.C
 	return values, nil
 }
 
+// rememberRuntimeAssetLocator connects FINALIZE HTTPS locators to velox-asset identities.
+func (w *Worker) rememberRuntimeAssetLocator(asset map[string]interface{}) {
+	if w == nil || asset == nil {
+		return
+	}
+	assetID, _ := asset["asset_id"].(string)
+	sourceURI, _ := asset["source_uri"].(string)
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(sourceURI)), "https://") {
+		w.rememberSourceLocator(assetID, sourceURI)
+	}
+}
+
 func (w *Worker) resolveCommonAssetValue(ctx context.Context, value interface{}, index assetMetadataIndex, path *assetPath, mediaContext bool) (interface{}, error) {
 	switch typed := value.(type) {
 	case string:
@@ -193,6 +205,9 @@ func (w *Worker) resolveCommonAssetValue(ctx context.Context, value interface{},
 		return w.resolveVerifiedAssetReference(withCacheAccessContext(ctx, "", cacheRole(field)), ref, index, field)
 	case map[string]interface{}:
 		assetContext := mediaContext || isAssetEnvelope(typed)
+		if assetContext {
+			w.rememberRuntimeAssetLocator(typed)
+		}
 		keys := make([]string, 0, len(typed))
 		for key := range typed {
 			keys = append(keys, key)

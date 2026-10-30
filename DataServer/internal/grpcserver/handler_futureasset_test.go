@@ -308,3 +308,10 @@ func TestFutureAssetManifestsIncludesCompiledPlanAssets(t *testing.T) {
 		t.Fatalf("prepared fragment manifest = %+v", assets[1])
 	}
 }
+
+func TestFutureAssetManifestsWaitForFinalizedRuntimeAssets(t *testing.T) {
+	payload := []byte(`{"runtime_assets_pending":true,"compiled_render_plan_json":"{}","runtime_assets":[{"asset_id":"fragment","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size_bytes":10,"source_uri":"https://objects.example/fragment"}]}`)
+	if assets := futureAssetManifests(payload); len(assets) != 0 {
+		t.Fatalf("manifests while runtime assets are pending = %+v, want none", assets)
+	}
+}

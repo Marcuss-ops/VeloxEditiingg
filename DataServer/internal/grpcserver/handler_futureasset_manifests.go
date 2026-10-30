@@ -43,6 +43,11 @@ func futureAssetManifests(payload []byte) []futureasset.AssetManifest {
 	if len(payload) == 0 || json.Unmarshal(payload, &root) != nil {
 		return nil
 	}
+	if object, ok := root.(map[string]interface{}); ok {
+		if pending, _ := object["runtime_assets_pending"].(bool); pending {
+			return nil
+		}
+	}
 	seen := make(map[string]futureasset.AssetManifest)
 	sourceURIs, planAssetKeys := futureAssetRuntimeBindings(root)
 	var walk func(interface{})
