@@ -319,7 +319,13 @@ func normalizeIdentityPayload(payload map[string]interface{}, deliveryPlan map[s
 	payload["correlation_id"] = "corr_" + identity
 	payload["created_at"] = "1970-01-01T00:00:00Z"
 	payload["updated_at"] = "1970-01-01T00:00:00Z"
-	if deliveryPlan != nil {
+	if renderOnly, ok := deliveryPlan["render_only"].(bool); ok && renderOnly {
+		// The envelope-level render-only marker opts out of delivery routing.
+		// Never mirror the whole envelope into delivery_plan: that produces a
+		// malformed plan whose first entry has no destination_id.
+		payload["render_only"] = true
+		delete(payload, "delivery_plan")
+	} else if deliveryPlan != nil {
 		payload["delivery_plan"] = deliveryPlan["delivery_plan"]
 		if deliveryPlan["delivery_plan"] == nil {
 			payload["delivery_plan"] = deliveryPlan

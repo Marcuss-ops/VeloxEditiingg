@@ -121,6 +121,17 @@ func TestNormalizeIdentityPayloadGolden(t *testing.T) {
 		}
 	})
 
+	t.Run("render-only envelope preserves marker without creating delivery_plan", func(t *testing.T) {
+		payload := map[string]interface{}{"delivery_plan": []interface{}{map[string]interface{}{}}}
+		normalizeIdentityPayload(payload, map[string]interface{}{"render_only": true}, identity)
+		if payload["render_only"] != true {
+			t.Fatalf("render_only marker was lost: %#v", payload)
+		}
+		if _, present := payload["delivery_plan"]; present {
+			t.Fatalf("render-only envelope must not create delivery_plan: %#v", payload["delivery_plan"])
+		}
+	})
+
 	t.Run("flat delivery_plan envelope falls back to the whole map", func(t *testing.T) {
 		flat := map[string]interface{}{
 			"destination_id": "d2",
