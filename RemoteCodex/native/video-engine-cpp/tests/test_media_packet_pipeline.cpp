@@ -484,6 +484,16 @@ int main() {
     expect(!fs::exists(shortAudioOutput),
            "short-audio failure does not publish a partial output");
 
+    const fs::path roundedAudioOutput = root / "rounded-audio-output.mp4";
+    auto roundedAudioRequest = request;
+    roundedAudioRequest.audio = velox::media::CopyOnlyAudioTrack{audio, 0, 1'599'990};
+    roundedAudioRequest.output_path = roundedAudioOutput;
+    velox::media::CopyOnlyMuxResult roundedAudioResult;
+    expect(velox::media::muxCopyOnly(roundedAudioRequest, &roundedAudioResult),
+           "copy-only tolerates sub-frame audio/timeline rounding drift");
+    expect(roundedAudioResult.success && fs::exists(roundedAudioOutput),
+           "rounding-tolerant mux publishes its output");
+
     // Exact timebase coverage: the generated fixture uses a non-default
     // stream timebase and the output must remain decodable with monotonic DTS.
     expect(packets.video_dts_monotonic && packets.audio_dts_monotonic,

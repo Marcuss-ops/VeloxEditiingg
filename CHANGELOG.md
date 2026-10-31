@@ -1,3 +1,14 @@
+## [1.4.52] - 2026-10-31
+
+### Fixed — copy-only audio alignment with frame-rounded fragments
+
+- Allow the copy-only packet mux's existing 50 ms duration tolerance in the
+  initial timeline check, matching the later stream-duration validation.
+  Independently rounded 24 fps fragment durations can otherwise exceed the
+  audio timeline by a few microseconds and reject a valid render.
+- Added coverage for a 10 μs audio/video duration difference while retaining
+  the failure case for materially short audio.
+
 ## [Unreleased] - 2026-09-28
 
 ### Fixed — SQL ownership ratchet green again (Drive relay + delivery timing)

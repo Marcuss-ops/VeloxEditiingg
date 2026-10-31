@@ -631,7 +631,17 @@ bool runCopyOnlyMux(const CopyOnlyMuxRequest& request, CopyOnlyMuxResult* result
         }
         const int64_t available = std::max<int64_t>(
             0, videoDuration - request.audio->start_offset_us);
-        if (request.audio->duration_us < available) {
+        // Segment durations are reconstructed from frame counts. At 24 fps,
+        // each fragment's microsecond duration is rounded independently, so
+        // summing many fragments can exceed the exact audio timeline by a few
+        // microseconds even when both describe the same frame interval. Use
+        // the same 50 ms allowance as prepareCopyOnlyPlan's stream-duration
+        // check; materially short audio still fails closed.
+        constexpr int64_t kPacketCopyDurationToleranceUS = 50'000;
+        const bool shortBeyondTolerance = request.audio->duration_us <= 0 ||
+            (request.audio->duration_us < available &&
+             available - request.audio->duration_us > kPacketCopyDurationToleranceUS);
+        if (shortBeyondTolerance) {
             return fail(result, "copy-only audio is shorter than the video timeline");
         }
     }
