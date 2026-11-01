@@ -44,6 +44,7 @@ package pipeline
 import (
 	"context"
 	"crypto/subtle"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -207,6 +208,7 @@ func NewM2MJwAuthMiddleware(cfg *config.Config, st *store.SQLiteStore, limiter *
 		key, err := m2mkeys.GetActiveM2MAPIKeyBySecretHash(ctx, st.DB(), hashed)
 		cancel()
 		if err != nil {
+			log.Printf("[M2M_AUTH] active key lookup failed: %v", err)
 			auditM2MReject(c, st, "", "db_error")
 			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
 				"ok":      false,
