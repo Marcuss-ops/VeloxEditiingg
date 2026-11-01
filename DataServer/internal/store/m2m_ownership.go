@@ -324,8 +324,21 @@ func (s *SQLiteStore) GetLatestTaskAttemptForJobForClient(ctx context.Context, j
 	}
 	row := s.db.QueryRowContext(ctx,
 		`SELECT ta.task_id, ta.id, ta.job_id, ta.worker_id, ta.lease_id, ta.attempt_number,
-		        ta.status, ta.error_code, ta.error_message
+		        ta.status, ta.error_code, ta.error_message,
+		        COALESCE(ta.created_at,''), COALESCE(ta.started_at,''), COALESCE(ta.completed_at,''),
+		        COALESCE(m.engine_asset_download_ms,0) + COALESCE(m.engine_audio_download_ms,0),
+		        COALESCE((SELECT SUM(p.duration_ms) FROM task_phase_timings p
+		                  WHERE p.attempt_id=ta.id AND p.component='engine.video' AND p.action='decode'),0),
+		        COALESCE((SELECT SUM(p.duration_ms) FROM task_phase_timings p
+		                  WHERE p.attempt_id=ta.id AND p.component IN ('engine.video','engine.subtitle','engine.watermark','engine.blur')
+		                    AND p.action IN ('composite','subtitle','watermark','blur','filter')),0),
+		        COALESCE((SELECT SUM(seg.ffmpeg_encode_ms) FROM task_attempt_segment_timings seg WHERE seg.attempt_id=ta.id),0),
+		        COALESCE(m.engine_mux_audio_ms,0),
+		        COALESCE((SELECT SUM(p.duration_ms) FROM task_phase_timings p
+		                  WHERE p.attempt_id=ta.id AND p.component='worker.upload' AND p.action='transfer'),0),
+		        COALESCE(m.frames_encoded,0)
 		 FROM task_attempts ta
+		 LEFT JOIN task_attempt_metrics m ON m.attempt_id=ta.id
 		 WHERE ta.job_id = ?
 		   AND EXISTS (SELECT 1 FROM creator_forwardings cf
 		               WHERE cf.target_job_id = ta.job_id
@@ -333,7 +346,10 @@ func (s *SQLiteStore) GetLatestTaskAttemptForJobForClient(ctx context.Context, j
 		 ORDER BY ta.created_at DESC LIMIT 1`, jobID, strings.TrimSpace(clientID))
 	var snap TaskAttemptSnapshot
 	if err := row.Scan(&snap.TaskID, &snap.AttemptID, &snap.JobID, &snap.WorkerID, &snap.LeaseID, &snap.AttemptNumber,
-		&snap.Status, &snap.ErrorCode, &snap.ErrorMessage); err != nil {
+		&snap.Status, &snap.ErrorCode, &snap.ErrorMessage,
+		&snap.LeasedAt, &snap.StartedAt, &snap.FinishedAt,
+		&snap.DownloadMS, &snap.DecodeMS, &snap.ComposeMS, &snap.EncodeMS,
+		&snap.MuxMS, &snap.UploadMS, &snap.Frames); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}

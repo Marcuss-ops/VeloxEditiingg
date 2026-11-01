@@ -19,6 +19,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -57,6 +58,11 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 			})
 			return
 		}
+		// M2M polling has a strict sub-second budget. Bound all DB projections
+		// under one shared deadline so a busy SQLite reader cannot consume the
+		// caller's entire 45-second polling timeout.
+		ctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		defer cancel()
 		forwarding, err := h.store.Forwarding().GetCreatorForwardingByTargetJobID(ctx, jobID, clientID)
 		if err != nil {
 			if errors.Is(err, forwardingstore.ErrCreatorForwardingNoRow) {
@@ -87,16 +93,15 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 		// goes through the ownership-scoped repository surface. There is
 		// deliberately no unscoped fallback path.
 		status := string(forwarding.Status)
-		var startedAt, completedAt string
-		var jobErrorMessage string
+		var createdAt, completedAt, jobErrorMessage string
 		if h.store != nil {
 			job, gErr := h.store.GetJobForClient(ctx, jobID, clientID)
 			if gErr == nil && job != nil {
 				if s, ok := job["status"].(string); ok {
 					status = s
 				}
-				if s, ok := job["started_at"].(string); ok {
-					startedAt = s
+				if s, ok := job["created_at"].(string); ok {
+					createdAt = s
 				}
 				if s, ok := job["completed_at"].(string); ok {
 					completedAt = s
@@ -108,12 +113,13 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 		}
 
 		// Enrich with artifact info (best-effort; nil store tolerated).
-		var artifactURL string
+		var artifactURL, artifactSHA256 string
 		var artifactSizeBytes int64
 		if h.store != nil {
 			artifacts, aErr := h.store.GetArtifactsByJobForClient(ctx, jobID, clientID, 50)
 			if aErr == nil {
 				if a := selectPrimaryReadyArtifact(artifacts); a != nil {
+					artifactSHA256 = a.SHA256
 					if h.cfg != nil {
 						base := strings.TrimRight(string(h.cfg.ControlPlane.RESTPublic), "/")
 						if base != "" {
@@ -137,7 +143,9 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 		// master (the error is already persisted on task_attempts by
 		// CompleteFinal; this only exposes the same fact to the owner).
 		var workerID, taskID, attemptID, leaseID string
+		var leaseAt string
 		var attemptStatus, attemptErrorCode, attemptErrorMessage string
+		var workerTiming gin.H
 		if h.store != nil {
 			snap, sErr := h.store.GetLatestTaskAttemptForJobForClient(ctx, jobID, clientID)
 			if sErr == nil && snap != nil {
@@ -148,6 +156,23 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 				attemptStatus = snap.Status
 				attemptErrorCode = snap.ErrorCode
 				attemptErrorMessage = snap.ErrorMessage
+				if jobErrorMessage == "" {
+					jobErrorMessage = snap.ErrorMessage
+				}
+				leaseAt = snap.LeasedAt
+				workerTiming = gin.H{
+					"leased_at":   nullableJobTimestamp(snap.LeasedAt),
+					"started_at":  nullableJobTimestamp(snap.StartedAt),
+					"finished_at": nullableJobTimestamp(snap.FinishedAt),
+					"download_ms": snap.DownloadMS,
+					"decode_ms":   snap.DecodeMS,
+					"compose_ms":  snap.ComposeMS,
+					"encode_ms":   snap.EncodeMS,
+					"mux_ms":      snap.MuxMS,
+					"upload_ms":   snap.UploadMS,
+					"frames":      snap.Frames,
+					"encode_fps":  encodeFPS(snap.Frames, snap.EncodeMS),
+				}
 			}
 		}
 
@@ -157,24 +182,26 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 		statusURL := "/api/v1/jobs/" + jobID
 
 		resp := gin.H{
-			"ok":         true,
-			"job_id":     jobID,
-			"status":     status,
-			"created":    created,
-			"status_url": statusURL,
+			"ok":           true,
+			"job_id":       jobID,
+			"status":       status,
+			"created":      created,
+			"status_url":   statusURL,
+			"worker_id":    workerID,
+			"artifact_url": artifactURL,
+			"sha256":       artifactSHA256,
+			"error":        jobErrorMessage,
+			"created_at":   nullableJobTimestamp(createdAt),
+			// Public job.started_at is the lease acquisition time. The worker's
+			// own execution start is separately reported in worker_timing.
+			"started_at":   nullableJobTimestamp(leaseAt),
+			"completed_at": nullableJobTimestamp(completedAt),
 		}
-		if startedAt != "" {
-			resp["started_at"] = startedAt
-		}
-		if completedAt != "" {
-			resp["completed_at"] = completedAt
+		if workerTiming != nil {
+			resp["worker_timing"] = workerTiming
 		}
 		if artifactURL != "" {
-			resp["artifact_url"] = artifactURL
 			resp["artifact_size_bytes"] = artifactSizeBytes
-		}
-		if workerID != "" {
-			resp["worker_id"] = workerID
 		}
 		if taskID != "" {
 			resp["task_id"] = taskID
@@ -214,6 +241,29 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 		}
 		c.JSON(http.StatusOK, resp)
 	}
+}
+
+func nullableJobTimestamp(raw string) any {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	if parsed, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+		return parsed.UTC().Format(time.RFC3339Nano)
+	}
+	for _, layout := range []string{"2006-01-02 15:04:05.999999999", "2006-01-02 15:04:05"} {
+		if parsed, err := time.ParseInLocation(layout, raw, time.UTC); err == nil {
+			return parsed.UTC().Format(time.RFC3339Nano)
+		}
+	}
+	return raw
+}
+
+func encodeFPS(frames int64, encodeMS float64) float64 {
+	if frames <= 0 || encodeMS <= 0 {
+		return 0
+	}
+	return float64(frames) * 1000 / encodeMS
 }
 
 // prefetchReadModel projects the latest durable prefetch lifecycle events into

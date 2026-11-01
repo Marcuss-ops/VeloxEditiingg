@@ -158,9 +158,19 @@ type TaskAttemptSnapshot struct {
 	// Status/Error fields expose the attempt's terminal state so M2M
 	// polling clients can see WHY an attempt failed without operator
 	// shell access. Empty status = attempt not yet materialized.
-	Status       string `json:"status,omitempty"`
-	ErrorCode    string `json:"error_code,omitempty"`
-	ErrorMessage string `json:"error_message,omitempty"`
+	Status       string  `json:"status,omitempty"`
+	ErrorCode    string  `json:"error_code,omitempty"`
+	ErrorMessage string  `json:"error_message,omitempty"`
+	LeasedAt     string  `json:"leased_at,omitempty"`
+	StartedAt    string  `json:"started_at,omitempty"`
+	FinishedAt   string  `json:"finished_at,omitempty"`
+	DownloadMS   float64 `json:"download_ms,omitempty"`
+	DecodeMS     float64 `json:"decode_ms,omitempty"`
+	ComposeMS    float64 `json:"compose_ms,omitempty"`
+	EncodeMS     float64 `json:"encode_ms,omitempty"`
+	MuxMS        float64 `json:"mux_ms,omitempty"`
+	UploadMS     float64 `json:"upload_ms,omitempty"`
+	Frames       int64   `json:"frames,omitempty"`
 }
 
 // GetLatestTaskAttemptForJob returns the most recent task_attempts row

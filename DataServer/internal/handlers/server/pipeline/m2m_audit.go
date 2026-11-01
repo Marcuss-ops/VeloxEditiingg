@@ -5,11 +5,13 @@
 package pipeline
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -18,6 +20,11 @@ import (
 	"velox-server/internal/store"
 	"velox-shared/contract"
 )
+
+// Reject audit is deliberately best-effort: a busy SQLite writer must not
+// hold an auth rejection response. The bounded semaphore caps background
+// writes under repeated invalid-token traffic.
+var m2mRejectAuditSlots = make(chan struct{}, 32)
 
 // sqlNullString is a tiny helper used by the audit helpers below
 // to lift a string into sql.NullString without repeating the
@@ -52,21 +59,16 @@ func (w *m2mAuditWriter) WriteHeader(code int) {
 // Audit append (helper; the middleware invokes these)
 // =====================================================================
 
-// auditM2MReject is called BEFORE AbortWithStatusJSON returns; it
-// stamps a row with status_code=the 4xx code we'll return. Best
-// effort — errors only log.
+// auditM2MReject queues a best-effort row with the 4xx status code.
+// Anonymous rejects have no key row to satisfy m2m_audit_log's foreign
+// key and are therefore not persisted. Queue saturation or DB contention
+// never delays the authentication response.
 func auditM2MReject(c *gin.Context, st *store.SQLiteStore, clientID, reason string) {
-	if st == nil {
+	if st == nil || strings.TrimSpace(clientID) == "" {
 		return
 	}
-	if clientID == "" {
-		// Anonymous reject — we don't have a key row. Use a single
-		// bucket "anonymous" so the audit table isn't littered with
-		// NULLs.
-		clientID = "anonymous_rejected"
-	}
 	status := statusFromReason(reason)
-	_ = m2mkeys.AppendM2MAuditLog(c.Request.Context(), st.DB(), m2mkeys.M2MAuditEntry{
+	entry := m2mkeys.M2MAuditEntry{
 		ClientID:             clientID,
 		IdemKeyHash:          idemHashForLog(c.GetHeader("Idempotency-Key")),
 		Method:               c.Request.Method,
@@ -77,7 +79,20 @@ func auditM2MReject(c *gin.Context, st *store.SQLiteStore, clientID, reason stri
 		TotalDurationSeconds: 0,
 		IPAddress:            c.ClientIP(),
 		RejectReason:         sqlNullString(reason),
-	})
+	}
+	select {
+	case m2mRejectAuditSlots <- struct{}{}:
+		go func() {
+			defer func() { <-m2mRejectAuditSlots }()
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			if err := m2mkeys.AppendM2MAuditLog(ctx, st.DB(), entry); err != nil {
+				pipelineLog("M2M_AUDIT reject audit unavailable reason=%s err=%v", reason, err)
+			}
+		}()
+	default:
+		pipelineLog("M2M_AUDIT reject audit queue full reason=%s", reason)
+	}
 }
 
 // auditM2MSuccess is called AFTER the handler, with the captured

@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"velox-server/internal/config"
 	"velox-server/internal/forwardingcontract"
@@ -128,16 +130,44 @@ func TestGetSubmittedJob_OwnerSeesScopedEnrichment(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed forwarding: %v", err)
 	}
+	createdAt := time.Date(2026, 11, 1, 8, 20, 3, 123456789, time.UTC).Format(time.RFC3339Nano)
+	leaseAt := time.Date(2026, 11, 1, 8, 20, 41, 0, time.UTC).Format(time.RFC3339Nano)
+	workerStarted := time.Date(2026, 11, 1, 8, 20, 43, 500000000, time.UTC).Format(time.RFC3339Nano)
+	finishedAt := time.Date(2026, 11, 1, 8, 25, 39, 900000000, time.UTC).Format(time.RFC3339Nano)
+	completedAt := time.Date(2026, 11, 1, 8, 25, 40, 987654321, time.UTC).Format(time.RFC3339Nano)
 	if _, err := db.DB().ExecContext(ctx,
-		`INSERT INTO jobs (job_id, status, revision, max_retries, created_at, updated_at, migrated_at)
-		 VALUES (?, 'SUCCEEDED', 0, 3, datetime('now'), datetime('now'), datetime('now'))`, jobID); err != nil {
+		`INSERT INTO jobs (job_id, status, revision, max_retries, created_at, started_at, completed_at, updated_at, migrated_at)
+		 VALUES (?, 'SUCCEEDED', 0, 3, ?, ?, ?, ?, ?)`, jobID, createdAt, leaseAt, completedAt, completedAt, completedAt); err != nil {
 		t.Fatalf("seed job: %v", err)
 	}
 	if err := db.InsertArtifact(&store.Artifact{
 		ID: "artifact-scoped", JobID: jobID, Type: "video/mp4",
-		StorageURL: "https://cdn.example/scoped.mp4", SizeBytes: 42, Status: "READY",
+		StorageURL: "https://cdn.example/scoped.mp4", SHA256: strings.Repeat("a", 64), SizeBytes: 42, Status: "READY",
 	}); err != nil {
 		t.Fatalf("seed artifact: %v", err)
+	}
+	if _, err := db.DB().ExecContext(ctx, `INSERT INTO task_attempts
+		(id,task_id,job_id,attempt_number,worker_id,lease_id,status,started_at,completed_at,created_at,updated_at)
+		VALUES ('attempt-enrichment','task-enrichment',? ,1,'velox-worker-523925eb','lease-enrichment','SUCCEEDED',?,?,?,?)`,
+		jobID, workerStarted, finishedAt, leaseAt, completedAt); err != nil {
+		t.Fatalf("seed task attempt: %v", err)
+	}
+	if _, err := db.DB().ExecContext(ctx, `INSERT INTO task_attempt_metrics
+		(attempt_id,engine_asset_download_ms,engine_audio_download_ms,engine_mux_audio_ms,frames_encoded)
+		VALUES ('attempt-enrichment',1200,0,900,6550)`); err != nil {
+		t.Fatalf("seed attempt metrics: %v", err)
+	}
+	if _, err := db.DB().ExecContext(ctx, `INSERT INTO task_phase_timings
+		(attempt_id,phase,duration_ms,component,action)
+		VALUES ('attempt-enrichment','decode',3400,'engine.video','decode'),
+		       ('attempt-enrichment','composite',182000,'engine.video','composite'),
+		       ('attempt-enrichment','upload',14800,'worker.upload','transfer')`); err != nil {
+		t.Fatalf("seed attempt phases: %v", err)
+	}
+	if _, err := db.DB().ExecContext(ctx, `INSERT INTO task_attempt_segment_timings
+		(attempt_id,job_id,ffmpeg_encode_ms,frames_encoded,status)
+		VALUES ('attempt-enrichment',?,96000,6550,'ok')`, jobID); err != nil {
+		t.Fatalf("seed segment timing: %v", err)
 	}
 
 	h := &Handlers{store: db, cfg: &config.Config{ControlPlane: config.ControlPlaneEndpoints{
@@ -174,6 +204,25 @@ func TestGetSubmittedJob_OwnerSeesScopedEnrichment(t *testing.T) {
 	}
 	if ownerBody["artifact_size_bytes"] != float64(42) {
 		t.Fatalf("owner artifact_size_bytes = %v, want 42", ownerBody["artifact_size_bytes"])
+	}
+	if ownerBody["worker_id"] != "velox-worker-523925eb" || ownerBody["sha256"] != strings.Repeat("a", 64) {
+		t.Fatalf("worker/artifact identity = %v/%v", ownerBody["worker_id"], ownerBody["sha256"])
+	}
+	if ownerBody["created_at"] != createdAt || ownerBody["started_at"] != leaseAt || ownerBody["completed_at"] != completedAt {
+		t.Fatalf("top-level timestamps = created:%v leased:%v completed:%v", ownerBody["created_at"], ownerBody["started_at"], ownerBody["completed_at"])
+	}
+	timing, ok := ownerBody["worker_timing"].(map[string]any)
+	if !ok {
+		t.Fatalf("worker_timing = %T, want object", ownerBody["worker_timing"])
+	}
+	for field, want := range map[string]any{
+		"leased_at": leaseAt, "started_at": workerStarted, "finished_at": finishedAt,
+		"download_ms": float64(1200), "decode_ms": float64(3400), "compose_ms": float64(182000),
+		"encode_ms": float64(96000), "mux_ms": float64(900), "upload_ms": float64(14800), "frames": float64(6550),
+	} {
+		if timing[field] != want {
+			t.Errorf("worker_timing.%s = %v, want %v", field, timing[field], want)
+		}
 	}
 
 	otherStatus, otherBody := request("client-other", jobID)

@@ -200,7 +200,10 @@ func NewM2MJwAuthMiddleware(cfg *config.Config, st *store.SQLiteStore, limiter *
 		}
 
 		hashed := m2mkeys.HashM2MSecret(token)
-		ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
+		// Credential verification is a read-only lookup on the Master DB.
+		// Keep a poll request bounded even if SQLite is contended; writes and
+		// subsequent handlers continue with the original request context.
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 400*time.Millisecond)
 		key, err := m2mkeys.GetActiveM2MAPIKeyBySecretHash(ctx, st.DB(), hashed)
 		cancel()
 		if err != nil {
