@@ -61,6 +61,8 @@ VELOX_WORKER_ID=offline-worker
 VELOX_WORKER_IMAGE=ghcr.io/marcuss-ops/velox-worker@sha256:$(printf 'a%.0s' {1..64})
 VELOX_AUDIO_MIX_STRATEGY=optimized
 VELOX_AUDIO_MIX_PROFILE=1
+VELOX_CACHE_IDLE_TTL=180s
+VELOX_CACHE_RECENT_USE_GRACE=180s
 OTHER_SETTING=preserve-me
 EOF
 }
@@ -99,6 +101,25 @@ grep -Fxq 'systemctl restart velox-worker.service' "$LOG" || fail "service resta
 grep -Fq 'curl -fsS --max-time 5 http://127.0.0.1:8081/health/ready' "$LOG" || fail "readiness was not probed"
 [[ ! -e "${ENV_FILE}.config-prev" ]] || fail "happy-path backup not cleaned up"
 pass 'fresh rollout: gate written, sibling settings and identity preserved'
+
+# ── 1b. Cache-retention tuning is bounded, atomically written and survives
+#        subsequent unrelated worker-config operations.
+run_helper --cache-idle-ttl-seconds 86400 || fail "cache idle TTL rollout failed"
+grep -Fxq 'VELOX_CACHE_IDLE_TTL=86400s' "$ENV_FILE" || fail "cache idle TTL was not written"
+grep -Fxq 'VELOX_CACHE_RECENT_USE_GRACE=86400s' "$ENV_FILE" || fail "recent-use grace was not written"
+grep -Fxq 'VELOX_FMP4_STREAM_PROFILE=1' "$ENV_FILE" || fail "cache TTL mutation lost fMP4 setting"
+pass 'cache idle TTL: bounded setting written without dropping sibling knobs'
+
+: >"$LOG"
+set +e
+run_helper --cache-idle-ttl-seconds 59 >/dev/null 2>&1
+rc=$?
+set -e
+[[ "$rc" == 2 ]] || fail "too-short cache TTL exit code = $rc, want 2"
+grep -Fxq 'VELOX_CACHE_IDLE_TTL=86400s' "$ENV_FILE" || fail "invalid cache TTL mutated worker.env"
+grep -Fxq 'VELOX_CACHE_RECENT_USE_GRACE=86400s' "$ENV_FILE" || fail "invalid cache TTL mutated recent-use grace"
+[[ ! -s "$LOG" ]] || fail "invalid cache TTL shelled out: $(cat "$LOG")"
+pass 'cache idle TTL bounds: invalid value rejected before write or restart'
 
 # ── 2. Closing the gate on an already-installed worker rewrites in place.
 run_helper --fmp4-stream-profile 0 || fail "gate close failed"

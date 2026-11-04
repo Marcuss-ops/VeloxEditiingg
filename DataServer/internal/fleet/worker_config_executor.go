@@ -22,6 +22,9 @@ type WorkerConfigPayload struct {
 	// once. It must remain below AssetDownloadConcurrency so foreground asset
 	// resolution always retains one transfer slot.
 	PrefetchMaxConcurrent *int `json:"prefetch_max_concurrent,omitempty"`
+	// CacheIdleTTLSeconds retains unleased, unprotected source assets for reuse.
+	// Disk pressure and explicit cache reservations still control eviction.
+	CacheIdleTTLSeconds *int `json:"cache_idle_ttl_seconds,omitempty"`
 	// FMP4StreamProfile opens (1) or closes (0) the fragmented-MP4 admission
 	// gate (VELOX_FMP4_STREAM_PROFILE) on an ALREADY-INSTALLED worker. It is
 	// the canonical rollout path: deploy/runtime/worker.env.example only
@@ -59,7 +62,7 @@ func (e *WorkerConfigExecutor) Execute(ctx context.Context, op *store.Operation)
 	if err := json.Unmarshal(op.Payload, &payload); err != nil {
 		return fmt.Errorf("worker config: invalid payload: %w", err)
 	}
-	if payload.AudioMixStrategy == "" && payload.AudioMixProfile == nil && payload.AssetDownloadConcurrency == nil && payload.PrefetchMaxConcurrent == nil && payload.FMP4StreamProfile == nil {
+	if payload.AudioMixStrategy == "" && payload.AudioMixProfile == nil && payload.AssetDownloadConcurrency == nil && payload.PrefetchMaxConcurrent == nil && payload.CacheIdleTTLSeconds == nil && payload.FMP4StreamProfile == nil {
 		return errors.New("worker config: no supported settings requested")
 	}
 	command := "sudo -n /usr/local/sbin/velox-worker-set-config"
@@ -86,6 +89,12 @@ func (e *WorkerConfigExecutor) Execute(ctx context.Context, op *store.Operation)
 			return fmt.Errorf("worker config: prefetch_max_concurrent must be in [1,127], got %d", *payload.PrefetchMaxConcurrent)
 		}
 		command += fmt.Sprintf(" --prefetch-max-concurrent %d", *payload.PrefetchMaxConcurrent)
+	}
+	if payload.CacheIdleTTLSeconds != nil {
+		if *payload.CacheIdleTTLSeconds < 60 || *payload.CacheIdleTTLSeconds > 604800 {
+			return fmt.Errorf("worker config: cache_idle_ttl_seconds must be in [60,604800], got %d", *payload.CacheIdleTTLSeconds)
+		}
+		command += fmt.Sprintf(" --cache-idle-ttl-seconds %d", *payload.CacheIdleTTLSeconds)
 	}
 	if payload.FMP4StreamProfile != nil {
 		if *payload.FMP4StreamProfile != 0 && *payload.FMP4StreamProfile != 1 {

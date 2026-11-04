@@ -138,7 +138,7 @@ func runRestart(client *fleetClient, args []string) int {
 
 func runWorkerConfig(client *fleetClient, args []string) int {
 	if len(args) < 2 || args[0] != "set" {
-		fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "worker-config requires: set <worker_id> [--audio-mix-strategy ...] [--audio-mix-profile 0|1] [--asset-download-concurrency 1..128] [--prefetch-max-concurrent 1..127] [--fmp4-stream-profile 0|1]"))
+		fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "worker-config requires: set <worker_id> [--audio-mix-strategy ...] [--audio-mix-profile 0|1] [--asset-download-concurrency 1..128] [--prefetch-max-concurrent 1..127] [--cache-idle-ttl-seconds 60..604800] [--fmp4-stream-profile 0|1]"))
 		return ExitMisuse
 	}
 	workerID := args[1]
@@ -147,6 +147,7 @@ func runWorkerConfig(client *fleetClient, args []string) int {
 	fmp4 := (*int)(nil)
 	assetDownloadConcurrency := (*int)(nil)
 	prefetchMaxConcurrent := (*int)(nil)
+	cacheIdleTTLSeconds := (*int)(nil)
 	reason := "fleetctl worker-config set"
 	reasonSet := false
 	var positional []string
@@ -174,7 +175,7 @@ func runWorkerConfig(client *fleetClient, args []string) int {
 	for i := 2; i < len(args); i++ {
 		arg := args[i]
 		switch {
-		case arg == "--audio-mix-strategy" || arg == "--audio-mix-profile" || arg == "--asset-download-concurrency" || arg == "--prefetch-max-concurrent" || arg == "--fmp4-stream-profile" || arg == "--reason":
+		case arg == "--audio-mix-strategy" || arg == "--audio-mix-profile" || arg == "--asset-download-concurrency" || arg == "--prefetch-max-concurrent" || arg == "--cache-idle-ttl-seconds" || arg == "--fmp4-stream-profile" || arg == "--reason":
 			if i+1 >= len(args) {
 				fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "%s requires a value", arg))
 				return ExitMisuse
@@ -201,6 +202,15 @@ func runWorkerConfig(client *fleetClient, args []string) int {
 					return ExitMisuse
 				}
 				prefetchMaxConcurrent = parsed
+			case "--cache-idle-ttl-seconds":
+				parsed, ok := parseBoundedPositive("cache-idle-ttl-seconds", value, 604800)
+				if !ok || *parsed < 60 {
+					if ok {
+						fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "cache-idle-ttl-seconds must be an integer in [60,604800]"))
+					}
+					return ExitMisuse
+				}
+				cacheIdleTTLSeconds = parsed
 			case "--fmp4-stream-profile":
 				parsed, ok := parseToggle("fmp4-stream-profile", value)
 				if !ok {
@@ -232,6 +242,15 @@ func runWorkerConfig(client *fleetClient, args []string) int {
 				return ExitMisuse
 			}
 			prefetchMaxConcurrent = parsed
+		case strings.HasPrefix(arg, "--cache-idle-ttl-seconds="):
+			parsed, ok := parseBoundedPositive("cache-idle-ttl-seconds", strings.TrimPrefix(arg, "--cache-idle-ttl-seconds="), 604800)
+			if !ok || *parsed < 60 {
+				if ok {
+					fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "cache-idle-ttl-seconds must be an integer in [60,604800]"))
+				}
+				return ExitMisuse
+			}
+			cacheIdleTTLSeconds = parsed
 		case strings.HasPrefix(arg, "--fmp4-stream-profile="):
 			parsed, ok := parseToggle("fmp4-stream-profile", strings.TrimPrefix(arg, "--fmp4-stream-profile="))
 			if !ok {
@@ -272,7 +291,7 @@ func runWorkerConfig(client *fleetClient, args []string) int {
 		fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "audio-mix-strategy must be legacy, optimized, or auto"))
 		return ExitMisuse
 	}
-	if strategy == "" && profile == nil && assetDownloadConcurrency == nil && prefetchMaxConcurrent == nil && fmp4 == nil {
+	if strategy == "" && profile == nil && assetDownloadConcurrency == nil && prefetchMaxConcurrent == nil && cacheIdleTTLSeconds == nil && fmp4 == nil {
 		fmt.Fprintln(os.Stderr, fmtExit(ExitMisuse, "worker-config requires at least one supported setting"))
 		return ExitMisuse
 	}
@@ -288,6 +307,9 @@ func runWorkerConfig(client *fleetClient, args []string) int {
 	}
 	if prefetchMaxConcurrent != nil {
 		body["prefetch_max_concurrent"] = *prefetchMaxConcurrent
+	}
+	if cacheIdleTTLSeconds != nil {
+		body["cache_idle_ttl_seconds"] = *cacheIdleTTLSeconds
 	}
 	if fmp4 != nil {
 		body["fmp4_stream_profile"] = *fmp4

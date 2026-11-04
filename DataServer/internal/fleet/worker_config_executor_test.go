@@ -74,6 +74,21 @@ func TestWorkerConfigExecutorDownloadConcurrencyArguments(t *testing.T) {
 	}
 }
 
+func TestWorkerConfigExecutorCacheIdleTTLArgument(t *testing.T) {
+	seconds := 86400
+	payload, err := json.Marshal(WorkerConfigPayload{CacheIdleTTLSeconds: &seconds})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ssh := &workerConfigSSHStub{}
+	if err := NewWorkerConfigExecutor(ssh).Execute(context.Background(), &store.Operation{WorkerID: "worker-51", Payload: payload}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(ssh.command, "--cache-idle-ttl-seconds 86400") {
+		t.Fatalf("helper command = %q", ssh.command)
+	}
+}
+
 func TestWorkerConfigExecutorRejectsUnsafeDownloadConcurrency(t *testing.T) {
 	tooLarge := 129
 	payload, err := json.Marshal(WorkerConfigPayload{AssetDownloadConcurrency: &tooLarge})
@@ -86,6 +101,22 @@ func TestWorkerConfigExecutorRejectsUnsafeDownloadConcurrency(t *testing.T) {
 	}
 	if ssh.command != "" {
 		t.Fatalf("SSH invoked for rejected payload: %q", ssh.command)
+	}
+}
+
+func TestWorkerConfigExecutorRejectsUnsafeCacheIdleTTL(t *testing.T) {
+	for _, seconds := range []int{59, 604801} {
+		payload, err := json.Marshal(WorkerConfigPayload{CacheIdleTTLSeconds: &seconds})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ssh := &workerConfigSSHStub{}
+		if err := NewWorkerConfigExecutor(ssh).Execute(context.Background(), &store.Operation{WorkerID: "worker-51", Payload: payload}); err == nil {
+			t.Fatalf("Execute accepted cache_idle_ttl_seconds=%d", seconds)
+		}
+		if ssh.command != "" {
+			t.Fatalf("SSH invoked for rejected TTL: %q", ssh.command)
+		}
 	}
 }
 

@@ -35,6 +35,7 @@ type MutationRequest struct {
 	// operator cannot bypass the root-owned helper over HTTP.
 	AssetDownloadConcurrency *int `json:"asset_download_concurrency"`
 	PrefetchMaxConcurrent    *int `json:"prefetch_max_concurrent"`
+	CacheIdleTTLSeconds      *int `json:"cache_idle_ttl_seconds"`
 }
 
 // validateAdminTargetDigest is the API boundary for worker updates. Reuse
@@ -92,11 +93,14 @@ func bindMutationRequest(c *gin.Context, kind string) (MutationRequest, error) {
 		if req.PrefetchMaxConcurrent != nil && (*req.PrefetchMaxConcurrent < 1 || *req.PrefetchMaxConcurrent > 127) {
 			return MutationRequest{}, errors.New("prefetch_max_concurrent must be in [1,127]")
 		}
+		if req.CacheIdleTTLSeconds != nil && (*req.CacheIdleTTLSeconds < 60 || *req.CacheIdleTTLSeconds > 604800) {
+			return MutationRequest{}, errors.New("cache_idle_ttl_seconds must be in [60,604800]")
+		}
 		if req.AssetDownloadConcurrency != nil && req.PrefetchMaxConcurrent != nil && *req.PrefetchMaxConcurrent >= *req.AssetDownloadConcurrency {
 			return MutationRequest{}, errors.New("prefetch_max_concurrent must be less than asset_download_concurrency")
 		}
-		if req.AudioMixStrategy == "" && req.AudioMixProfile == nil && req.FMP4StreamProfile == nil && req.AssetDownloadConcurrency == nil && req.PrefetchMaxConcurrent == nil {
-			return MutationRequest{}, errors.New("worker config requires audio_mix_strategy, audio_mix_profile, fmp4_stream_profile, asset_download_concurrency, or prefetch_max_concurrent")
+		if req.AudioMixStrategy == "" && req.AudioMixProfile == nil && req.FMP4StreamProfile == nil && req.AssetDownloadConcurrency == nil && req.PrefetchMaxConcurrent == nil && req.CacheIdleTTLSeconds == nil {
+			return MutationRequest{}, errors.New("worker config requires audio_mix_strategy, audio_mix_profile, fmp4_stream_profile, asset_download_concurrency, prefetch_max_concurrent, or cache_idle_ttl_seconds")
 		}
 	}
 	return req, nil

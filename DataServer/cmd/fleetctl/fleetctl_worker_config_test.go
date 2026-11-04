@@ -106,6 +106,33 @@ func TestRunWorkerConfigAcceptsDownloadConcurrencyKnobs(t *testing.T) {
 	}
 }
 
+func TestRunWorkerConfigAcceptsCacheIdleTTL(t *testing.T) {
+	var postBody map[string]any
+	c, srv := newMockClient(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "POST /api/v1/admin/workers/worker-1/config":
+			if err := json.NewDecoder(r.Body).Decode(&postBody); err != nil {
+				t.Errorf("decode config body: %v", err)
+			}
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{"operation_id":"op-config-cache-ttl","worker_id":"worker-1"}`))
+		case "GET /api/v1/admin/operations/op-config-cache-ttl":
+			_ = json.NewEncoder(w).Encode(polledOperationRow{OperationID: "op-config-cache-ttl", Status: "SUCCEEDED"})
+		default:
+			http.Error(w, "unexpected request", http.StatusNotFound)
+		}
+	})
+	defer srv.Close()
+
+	ec := runWorkerConfig(c, []string{"set", "worker-1", "--cache-idle-ttl-seconds=86400"})
+	if ec != ExitOK {
+		t.Fatalf("worker-config exit code = %d, want %d", ec, ExitOK)
+	}
+	if got, ok := postBody["cache_idle_ttl_seconds"].(float64); !ok || got != 86400 {
+		t.Fatalf("body cache_idle_ttl_seconds = %v, want 86400", postBody["cache_idle_ttl_seconds"])
+	}
+}
+
 // TestRunWorkerConfig_AcceptsDocumentedPositionalReason keeps the documented
 // operator form compatible with the explicit --reason form.
 func TestRunWorkerConfig_AcceptsDocumentedPositionalReason(t *testing.T) {

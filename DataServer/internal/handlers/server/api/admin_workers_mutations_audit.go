@@ -22,6 +22,7 @@ func newMutationOperation(workerID, kind string, req MutationRequest, now time.T
 			"fmp4_stream_profile":        req.FMP4StreamProfile,
 			"asset_download_concurrency": req.AssetDownloadConcurrency,
 			"prefetch_max_concurrent":    req.PrefetchMaxConcurrent,
+			"cache_idle_ttl_seconds":     req.CacheIdleTTLSeconds,
 		})
 	}
 	return &store.Operation{

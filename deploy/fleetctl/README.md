@@ -180,6 +180,7 @@ Allowlisted knobs:
 | `VELOX_AUDIO_MIX_STRATEGY` | `--audio-mix-strategy` | `legacy` / `optimized` / `auto` |
 | `VELOX_AUDIO_MIX_PROFILE` | `--audio-mix-profile` | `0` / `1` |
 | `VELOX_FMP4_STREAM_PROFILE` | `--fmp4-stream-profile` | `0` / `1` |
+| `VELOX_CACHE_IDLE_TTL` + `VELOX_CACHE_RECENT_USE_GRACE` | `--cache-idle-ttl-seconds` | `60..604800` seconds (sets both; cleanup uses the lower cutoff) |
 
 Only the knobs named on the invocation are rewritten; every other managed and
 unmanaged key is preserved byte-for-byte. Download tuning is bounded and keeps
@@ -190,6 +191,15 @@ foreground asset resolution:
 scripts/fleetctl worker-config set velox-worker-523925eb \
   --asset-download-concurrency 30 --prefetch-max-concurrent 29 \
   "stock saturation canary"
+```
+
+To retain verified, unprotected assets between jobs for a day, while keeping
+the worker's existing disk-pressure and reservation rules active:
+
+```bash
+scripts/fleetctl worker-config set host_57_129_132_133 \
+  --cache-idle-ttl-seconds 86400 \
+  "reuse verified stock assets across daily video jobs"
 ```
 
 The fMP4 admission gate is rolled out on already-installed workers through

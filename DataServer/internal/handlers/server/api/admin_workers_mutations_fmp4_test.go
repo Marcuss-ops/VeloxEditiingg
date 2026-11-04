@@ -99,3 +99,16 @@ func TestNewMutationOperation_CarriesFMP4StreamProfileInAuditPayload(t *testing.
 		t.Fatalf("operation identity = %+v", op)
 	}
 }
+
+func TestNewMutationOperation_CarriesCacheIdleTTLInAuditPayload(t *testing.T) {
+	seconds := 86400
+	req := MutationRequest{Reason: "retain verified stock cache", CacheIdleTTLSeconds: &seconds}
+	op := newMutationOperation("worker-1", fleet.OperationKindRestart, req, time.Now(), "op-cache-ttl-1")
+	var payload map[string]any
+	if err := json.Unmarshal(op.Payload, &payload); err != nil {
+		t.Fatalf("decode config payload: %v", err)
+	}
+	if got, ok := payload["cache_idle_ttl_seconds"].(float64); !ok || got != 86400 {
+		t.Fatalf("audit payload cache_idle_ttl_seconds = %v (%s), want 86400", payload["cache_idle_ttl_seconds"], op.Payload)
+	}
+}
