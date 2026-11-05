@@ -22,25 +22,28 @@ import (
 // Unlike the old video-only probe, it inspects every stream so the report can
 // prove that the delivered artifact really contains audio as well as video.
 type MediaProbe struct {
-	VideoCodec        string
-	VideoCodecTag     string
-	VideoProfile      string
-	VideoLevel        int
-	VideoPixelFormat  string
-	VideoFPSNum       int
-	VideoFPSDen       int
-	VideoTimeBaseNum  int
-	VideoTimeBaseDen  int
-	AudioCodec        string
-	DurationSec       float64
-	Width             int
-	Height            int
-	HasVideo          bool
-	HasAudio          bool
-	VideoTrackCount   int
-	AudioTrackCount   int
-	AudioSampleRateHz int
-	AudioChannels     int
+	VideoCodec         string
+	VideoCodecTag      string
+	VideoProfile       string
+	VideoLevel         int
+	VideoPixelFormat   string
+	VideoFPSNum        int
+	VideoFPSDen        int
+	VideoTimeBaseNum   int
+	VideoTimeBaseDen   int
+	VideoBFrames       int
+	VideoExtradataHash string
+	VideoFrameCount    int64
+	AudioCodec         string
+	DurationSec        float64
+	Width              int
+	Height             int
+	HasVideo           bool
+	HasAudio           bool
+	VideoTrackCount    int
+	AudioTrackCount    int
+	AudioSampleRateHz  int
+	AudioChannels      int
 }
 
 type ffprobeDocument struct {
@@ -49,19 +52,22 @@ type ffprobeDocument struct {
 }
 
 type ffprobeStream struct {
-	CodecType   string `json:"codec_type"`
-	CodecName   string `json:"codec_name"`
-	CodecTag    string `json:"codec_tag_string"`
-	Profile     string `json:"profile"`
-	Level       int    `json:"level"`
-	Width       int    `json:"width"`
-	Height      int    `json:"height"`
-	PixelFormat string `json:"pix_fmt"`
-	FrameRate   string `json:"r_frame_rate"`
-	TimeBase    string `json:"time_base"`
-	Duration    string `json:"duration"`
-	SampleRate  string `json:"sample_rate"`
-	Channels    int    `json:"channels"`
+	CodecType     string `json:"codec_type"`
+	CodecName     string `json:"codec_name"`
+	CodecTag      string `json:"codec_tag_string"`
+	Profile       string `json:"profile"`
+	Level         int    `json:"level"`
+	Width         int    `json:"width"`
+	Height        int    `json:"height"`
+	PixelFormat   string `json:"pix_fmt"`
+	FrameRate     string `json:"r_frame_rate"`
+	TimeBase      string `json:"time_base"`
+	Duration      string `json:"duration"`
+	SampleRate    string `json:"sample_rate"`
+	Channels      int    `json:"channels"`
+	HasBFrames    int    `json:"has_b_frames"`
+	ExtradataHash string `json:"extradata_hash"`
+	NBFrames      string `json:"nb_frames"`
 }
 
 type ffprobeFormat struct {
@@ -78,6 +84,7 @@ func ProbeMediaDetails(ctx context.Context, path string) (MediaProbe, error) {
 
 	args := []string{
 		"-v", "error",
+		"-show_data_hash", "sha256",
 		"-print_format", "json",
 		"-show_format",
 		"-show_streams",
@@ -128,6 +135,9 @@ func parseFfprobeDetails(b []byte) (MediaProbe, error) {
 				probe.VideoPixelFormat = stream.PixelFormat
 				probe.VideoFPSNum, probe.VideoFPSDen = parseRatio(stream.FrameRate)
 				probe.VideoTimeBaseNum, probe.VideoTimeBaseDen = parseRatio(stream.TimeBase)
+				probe.VideoBFrames = stream.HasBFrames
+				probe.VideoExtradataHash = stream.ExtradataHash
+				probe.VideoFrameCount, _ = strconv.ParseInt(stream.NBFrames, 10, 64)
 			}
 		case "audio":
 			probe.HasAudio = true
