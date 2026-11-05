@@ -146,7 +146,7 @@ func (e *videoAssembleSliceExecutor) Execute(ctx context.Context, execCtx execut
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0o750); err != nil {
 		return fail("OUTPUT_DIRECTORY", err)
 	}
-	args, err := sliceRenderArgs(plan, bindings, outputPath, profile)
+	args, err := sliceRenderArgs(plan, bindings, outputPath, profile, spec.Payload["runtime_assets"])
 	if err != nil {
 		return fail("DRIVE_SLICE_ASSETS_INVALID", err)
 	}
@@ -201,9 +201,9 @@ func (e *videoAssembleSliceExecutor) verifyDriveSources(ctx context.Context, pla
 			return fmt.Errorf("Drive source %q has no valid video stream/duration", asset.AssetID)
 		}
 		actualUS := int64(probe.DurationSec * 1_000_000)
-		if absoluteDurationDifference(actualUS, asset.DurationUS) > 1_000_000 {
-			return fmt.Errorf("Drive source %q duration mismatch: plan=%d us probed=%d us", asset.AssetID, asset.DurationUS, actualUS)
-		}
+		// For a source sliced by the Worker, AssetRefV2.DurationUS can be the
+		// requested materialized window, not the full provider file duration.
+		// The plan's source window is checked against the probed media below.
 		for _, requested := range plan.VideoTracks[0].Segments {
 			if requested.AssetID != asset.AssetID {
 				continue
@@ -234,15 +234,9 @@ func (e *videoAssembleSliceExecutor) verifyFinalMedia(ctx context.Context, outpu
 	return nil
 }
 
-func absoluteDurationDifference(left, right int64) int64 {
-	if left >= right {
-		return left - right
-	}
-	return right - left
-}
-
-func sliceRenderArgs(plan *contract.CompiledRenderPlanV2, bindings runtimeassets.Bindings, output string, profile contract.CanonicalVideoProfileV1) ([]string, error) {
+func sliceRenderArgs(plan *contract.CompiledRenderPlanV2, bindings runtimeassets.Bindings, output string, profile contract.CanonicalVideoProfileV1, runtimeAssets interface{}) ([]string, error) {
 	assets := make(map[string]contract.AssetRefV2, len(plan.Assets))
+	runtimeDriveIDs := sliceRuntimeDriveFileIDs(runtimeAssets)
 	for _, asset := range plan.Assets {
 		assets[asset.AssetID] = asset
 	}
@@ -287,7 +281,8 @@ func sliceRenderArgs(plan *contract.CompiledRenderPlanV2, bindings runtimeassets
 	labels := make([]string, 0, len(plan.VideoTracks[0].Segments))
 	for i, segment := range plan.VideoTracks[0].Segments {
 		asset := assets[segment.AssetID]
-		if segment.SourceInUS < 0 || segment.SourceDurationUS <= 0 || segment.SourceInUS+segment.SourceDurationUS > asset.DurationUS {
+		windowEnd := segment.SourceInUS + segment.SourceDurationUS
+		if segment.SourceInUS < 0 || segment.SourceDurationUS <= 0 || (!isSliceDriveSource(asset, runtimeDriveIDs) && windowEnd > asset.DurationUS) {
 			return nil, fmt.Errorf("segment %q source window exceeds declared duration", segment.SegmentID)
 		}
 		label := fmt.Sprintf("v%d", i)
