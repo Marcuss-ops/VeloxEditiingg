@@ -82,7 +82,7 @@ func TestVideoAssembleSlice_RendersDriveSourceWindowsWithoutIntermediateFragment
 		t.Fatalf("FFmpeg call count = %d, want one batch render plus final mux", len(runner.args))
 	}
 	batchArgs := strings.Join(runner.args[0], " ")
-	for _, want := range []string{"trim=start=14.000000:duration=1.000000", "concat=n=1:v=1:a=0", "libx264", "-an"} {
+	for _, want := range []string{"trim=start=14.000000:duration=1.000000", "tpad=stop_mode=clone:stop=24", "concat=n=1:v=1:a=0", "libx264", "-frames:v 24", "-an"} {
 		if !strings.Contains(batchArgs, want) {
 			t.Errorf("batch FFmpeg args missing %q: %s", want, batchArgs)
 		}

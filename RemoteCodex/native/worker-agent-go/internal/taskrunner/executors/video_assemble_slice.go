@@ -370,9 +370,9 @@ func sliceVideoRenderArgs(plan *contract.CompiledRenderPlanV2, bindings runtimea
 			return nil, fmt.Errorf("segment %q source window exceeds declared duration", segment.SegmentID)
 		}
 		label := fmt.Sprintf("v%d", i)
-		filters = append(filters, fmt.Sprintf("[%d:v:0]trim=start=%s:duration=%s,setpts=PTS-STARTPTS,fps=%s,scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,setsar=1,format=%s,trim=end_frame=%d,setpts=N/(%s*TB)[%s]",
+		filters = append(filters, fmt.Sprintf("[%d:v:0]trim=start=%s:duration=%s,setpts=PTS-STARTPTS,fps=%s,scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,setsar=1,format=%s,tpad=stop_mode=clone:stop=%d,trim=end_frame=%d,setpts=N/(%s*TB)[%s]",
 			inputIndex[segment.AssetID], seconds(segment.SourceInUS), seconds(segment.SourceDurationUS), fps,
-			plan.Output.Width, plan.Output.Height, plan.Output.Width, plan.Output.Height, profile.PixelFormat, segment.FrameCount, fps, label))
+			plan.Output.Width, plan.Output.Height, plan.Output.Width, plan.Output.Height, profile.PixelFormat, segment.FrameCount, segment.FrameCount, fps, label))
 		labels = append(labels, "["+label+"]")
 		batchFrames += segment.FrameCount
 	}
