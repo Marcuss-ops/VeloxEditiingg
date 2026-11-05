@@ -80,10 +80,11 @@ func (e *videoAssembleSliceExecutor) Validate(spec executor.TaskSpec) error {
 		return fmt.Errorf("video.assemble.slice.v1: canonical output profile required: %w", err)
 	}
 	assets := make(map[string]contract.AssetRefV2, len(plan.Assets))
+	runtimeDriveIDs := sliceRuntimeDriveFileIDs(spec.Payload["runtime_assets"])
 	hasDrive := false
 	for _, asset := range plan.Assets {
 		assets[asset.AssetID] = asset
-		driveSource := asset.Kind == "video" && (asset.SourceKind == "drive" || strings.HasPrefix(strings.ToLower(asset.AssetID), "drive:"))
+		driveSource := asset.Kind == "video" && isSliceDriveSource(asset, runtimeDriveIDs)
 		hasDrive = hasDrive || driveSource
 	}
 	if !hasDrive {
@@ -129,7 +130,7 @@ func (e *videoAssembleSliceExecutor) Execute(ctx context.Context, execCtx execut
 	if err != nil {
 		return fail("DRIVE_SLICE_PLAN_INVALID", err)
 	}
-	if err := e.verifyDriveSources(ctx, plan, bindings); err != nil {
+	if err := e.verifyDriveSources(ctx, plan, bindings, spec.Payload["runtime_assets"]); err != nil {
 		return fail("DRIVE_SOURCE_VALIDATION_FAILED", err)
 	}
 	jobID, err := safeOutputJobID(spec.JobID)
@@ -175,15 +176,16 @@ func (e *videoAssembleSliceExecutor) Execute(ctx context.Context, execCtx execut
 	}, nil
 }
 
-func (e *videoAssembleSliceExecutor) verifyDriveSources(ctx context.Context, plan *contract.CompiledRenderPlanV2, bindings runtimeassets.Bindings) error {
+func (e *videoAssembleSliceExecutor) verifyDriveSources(ctx context.Context, plan *contract.CompiledRenderPlanV2, bindings runtimeassets.Bindings, runtimeAssets interface{}) error {
 	assets := make(map[string]contract.AssetRefV2, len(plan.Assets))
+	runtimeDriveIDs := sliceRuntimeDriveFileIDs(runtimeAssets)
 	for _, asset := range plan.Assets {
 		assets[asset.AssetID] = asset
 	}
 	seen := make(map[string]struct{})
 	for _, segment := range plan.VideoTracks[0].Segments {
 		asset := assets[segment.AssetID]
-		if asset.SourceKind != "drive" && !strings.HasPrefix(strings.ToLower(asset.AssetID), "drive:") {
+		if asset.Kind != "video" || !isSliceDriveSource(asset, runtimeDriveIDs) {
 			continue
 		}
 		if _, done := seen[asset.AssetID]; done {
