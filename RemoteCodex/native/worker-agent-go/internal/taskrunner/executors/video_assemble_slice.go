@@ -385,9 +385,8 @@ func sliceVideoRenderArgs(plan *contract.CompiledRenderPlanV2, bindings runtimea
 	for _, input := range inputs {
 		args = append(args, "-threads", "1", "-i", input)
 	}
-	batchDurationUS := batchFrames * int64(plan.Output.FPSDen) * 1_000_000 / int64(plan.Output.FPSNum)
 	args = append(args, "-filter_complex", strings.Join(filters, ";"), "-map", "[vout]",
-		"-t", seconds(batchDurationUS), "-c:v", "libx264", "-threads:v", "2", "-preset", "veryfast", "-profile:v", profile.CodecProfile,
+		"-frames:v", strconv.FormatInt(batchFrames, 10), "-c:v", "libx264", "-threads:v", "2", "-preset", "veryfast", "-profile:v", profile.CodecProfile,
 		"-level:v", profile.CodecLevel, "-pix_fmt", profile.PixelFormat, "-r", fps, "-g", strconv.Itoa(profile.GOPSize),
 		"-keyint_min", strconv.Itoa(profile.GOPSize), "-sc_threshold", "0", "-flags", "+cgop",
 		"-bf", strconv.Itoa(profile.BFrames), "-an", "-movflags", "+faststart", output)
