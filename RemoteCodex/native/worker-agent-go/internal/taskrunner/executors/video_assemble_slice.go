@@ -292,12 +292,16 @@ func sliceRenderArgs(plan *contract.CompiledRenderPlanV2, bindings runtimeassets
 		labels = append(labels, "["+label+"]")
 	}
 	filters = append(filters, strings.Join(labels, "")+fmt.Sprintf("concat=n=%d:v=1:a=0[vout]", len(labels)))
-	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-y"}
+	// A Drive render can reference hundreds of separate source files. FFmpeg's
+	// automatic decoder/filter thread counts multiply across those inputs and
+	// can exhaust the worker container's PID limit before rendering starts.
+	// Bound decoder, filter-graph, and encoder concurrency for predictable use.
+	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-filter_complex_threads", "1", "-y"}
 	for _, input := range inputs {
-		args = append(args, "-i", input)
+		args = append(args, "-threads", "1", "-i", input)
 	}
 	args = append(args, "-filter_complex", strings.Join(filters, ";"), "-map", "[vout]", "-map", fmt.Sprintf("%d:a:0", audioIndex),
-		"-t", seconds(plan.DurationUS), "-c:v", "libx264", "-preset", "veryfast", "-profile:v", profile.CodecProfile,
+		"-t", seconds(plan.DurationUS), "-c:v", "libx264", "-threads:v", "2", "-preset", "veryfast", "-profile:v", profile.CodecProfile,
 		"-level:v", profile.CodecLevel, "-pix_fmt", profile.PixelFormat, "-r", fps, "-g", strconv.Itoa(profile.GOPSize),
 		"-keyint_min", strconv.Itoa(profile.GOPSize), "-sc_threshold", "0", "-flags", "+cgop",
 		"-bf", strconv.Itoa(profile.BFrames), "-c:a", "copy", "-movflags")
