@@ -92,24 +92,65 @@ func resolveInternalExecutorID(payloadMap map[string]interface{}) string {
 	if !compiledRenderPlanV2Present(payloadMap) {
 		return ""
 	}
+	// Final-job Producers may keep the immutable compiled plan free of
+	// transport locators and attach Drive file IDs in runtime_assets instead.
+	// Join those locators by the stable asset_id before selecting the executor;
+	// otherwise stock-sha256-* assets are misrouted to the copy-only executor.
+	runtimeDriveIDs := runtimeDriveFileIDs(payloadMap["runtime_assets"])
 	if raw, ok := payloadMap[contract.PayloadKeyCompiledRenderPlanJSON].(string); ok {
 		var plan struct {
 			Assets []struct {
 				SourceKind  string `json:"source_kind"`
 				DriveFileID string `json:"drive_file_id"`
 				AssetID     string `json:"asset_id"`
+				AssetKey    string `json:"asset_key"`
 				Kind        string `json:"kind"`
 			} `json:"assets"`
 		}
 		if json.Unmarshal([]byte(raw), &plan) == nil {
 			for _, asset := range plan.Assets {
-				if asset.Kind == "video" && (asset.SourceKind == "drive" || strings.TrimSpace(asset.DriveFileID) != "" || strings.HasPrefix(strings.ToLower(strings.TrimSpace(asset.AssetID)), "drive:")) {
+				driveFileID := strings.TrimSpace(asset.DriveFileID)
+				if driveFileID == "" {
+					driveFileID = runtimeDriveIDs[strings.TrimSpace(asset.AssetID)]
+				}
+				if driveFileID == "" {
+					driveFileID = runtimeDriveIDs[strings.TrimSpace(asset.AssetKey)]
+				}
+				if asset.Kind == "video" && (asset.SourceKind == "drive" || driveFileID != "" || strings.HasPrefix(strings.ToLower(strings.TrimSpace(asset.AssetID)), "drive:")) {
 					return canonicalDriveSliceExecutor
 				}
 			}
 		}
 	}
 	return canonicalCompiledPlanExecutor
+}
+
+func runtimeDriveFileIDs(raw interface{}) map[string]string {
+	encoded, err := json.Marshal(raw)
+	if err != nil || len(encoded) == 0 || string(encoded) == "null" {
+		return nil
+	}
+	var assets []struct {
+		AssetID     string `json:"asset_id"`
+		AssetKey    string `json:"asset_key"`
+		DriveFileID string `json:"drive_file_id"`
+	}
+	if err := json.Unmarshal(encoded, &assets); err != nil {
+		return nil
+	}
+	byIdentity := make(map[string]string, len(assets)*2)
+	for _, asset := range assets {
+		fileID := strings.TrimSpace(asset.DriveFileID)
+		if fileID == "" {
+			continue
+		}
+		for _, identity := range []string{asset.AssetID, asset.AssetKey} {
+			if identity = strings.TrimSpace(identity); identity != "" {
+				byIdentity[identity] = fileID
+			}
+		}
+	}
+	return byIdentity
 }
 
 func resolveRequiredCapabilities(executorID string) []string {

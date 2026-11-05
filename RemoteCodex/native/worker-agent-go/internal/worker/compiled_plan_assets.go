@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
@@ -39,6 +40,7 @@ func (w *Worker) resolveCompiledRenderPlanAssets(ctx context.Context, payload ma
 	// identity when supplied; AssetID remains the stable plan/binding identity.
 	assetEnvelopes := make([]interface{}, 0, len(plan.Assets))
 	seenIdentities := make(map[string]string, len(plan.Assets))
+	runtimeDriveIDs := compiledRuntimeDriveFileIDs(payload["runtime_assets"])
 	for _, asset := range plan.Assets {
 		identity := compiledAssetIdentity(asset)
 		if identity == "" {
@@ -49,8 +51,14 @@ func (w *Worker) resolveCompiledRenderPlanAssets(ctx context.Context, payload ma
 		}
 		seenIdentities[identity] = asset.AssetID
 		uri := compiledAssetReference(asset)
-		if asset.SourceKind == "drive" || strings.HasPrefix(strings.ToLower(strings.TrimSpace(asset.AssetID)), "drive:") {
-			driveID := strings.TrimSpace(asset.DriveFileID)
+		driveID := strings.TrimSpace(asset.DriveFileID)
+		if driveID == "" {
+			driveID = runtimeDriveIDs[strings.TrimSpace(asset.AssetID)]
+		}
+		if driveID == "" {
+			driveID = runtimeDriveIDs[strings.TrimSpace(asset.AssetKey)]
+		}
+		if asset.SourceKind == "drive" || driveID != "" || strings.HasPrefix(strings.ToLower(strings.TrimSpace(asset.AssetID)), "drive:") {
 			if driveID == "" && strings.HasPrefix(strings.ToLower(asset.AssetID), "drive:") {
 				driveID = strings.TrimSpace(asset.AssetID[len("drive:"):])
 			}
@@ -164,6 +172,54 @@ func (w *Worker) resolveCompiledRenderPlanAssets(ctx context.Context, payload ma
 		}
 	}
 	return bindings, nil
+}
+
+// compiledRuntimeDriveFileIDs joins the Producer's runtime transport manifest
+// to immutable V2 plan identities. The plan SHA remains untouched; the
+// runtime manifest supplies only the Drive file locator used to fetch it.
+func compiledRuntimeDriveFileIDs(raw interface{}) map[string]string {
+	encoded, err := json.Marshal(raw)
+	if err != nil || len(encoded) == 0 || string(encoded) == "null" {
+		return nil
+	}
+	var assets []struct {
+		AssetID     string `json:"asset_id"`
+		AssetKey    string `json:"asset_key"`
+		DriveFileID string `json:"drive_file_id"`
+		URL         string `json:"url"`
+		SourceURI   string `json:"source_uri"`
+	}
+	if err := json.Unmarshal(encoded, &assets); err != nil {
+		return nil
+	}
+	byIdentity := make(map[string]string, len(assets)*2)
+	for _, asset := range assets {
+		fileID := strings.TrimSpace(asset.DriveFileID)
+		if fileID == "" {
+			for _, locator := range []string{asset.URL, asset.SourceURI} {
+				u, parseErr := url.Parse(strings.TrimSpace(locator))
+				if parseErr != nil || !strings.EqualFold(u.Scheme, "velox-drive") {
+					continue
+				}
+				fileID = strings.TrimSpace(u.Host)
+				if fileID == "" {
+					fileID = strings.TrimPrefix(strings.TrimSpace(u.Path), "/")
+				}
+				if fileID != "" {
+					break
+				}
+			}
+		}
+		if fileID == "" {
+			continue
+		}
+		for _, identity := range []string{asset.AssetID, asset.AssetKey} {
+			if identity = strings.TrimSpace(identity); identity != "" {
+				byIdentity[identity] = fileID
+			}
+		}
+	}
+	return byIdentity
 }
 
 // compiledAssetIdentity is the one V2-to-cache identity rule. AssetKey is
