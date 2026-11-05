@@ -306,9 +306,23 @@ visudo -cf "$ACTIVATE_SUDOERS_DST" >/dev/null || fail "invalid activation sudoer
 visudo -cf "$SET_CONFIG_SUDOERS_DST" >/dev/null || fail "invalid worker config sudoers rule"
 [[ -n "${VELOX_OPENBAO_ADDR:-}" ]] ||
     fail "VELOX_OPENBAO_ADDR is required for deploy convergence — use --runtime-cache only for an explicitly declared temporary outage"
-"$FETCH_DST" --provision ||
-    fail "OpenBao credential/PKI provisioning failed — refusing manual-file fallback"
-ok "worker credential and mTLS material resolved by OpenBao (private key stayed local)"
+OPENBAO_MODE="${VELOX_OPENBAO_MODE:-provision}"
+case "$OPENBAO_MODE" in
+    provision)
+        "$FETCH_DST" --provision ||
+            fail "OpenBao credential/PKI provisioning failed — refusing manual-file fallback"
+        ok "worker credential and mTLS material resolved by OpenBao (private key stayed local)"
+        ;;
+    runtime-cache)
+        log "OpenBao outage mode explicitly selected; validating only previously attested runtime cache"
+        "$FETCH_DST" --runtime-cache ||
+            fail "attested OpenBao runtime cache validation failed — refusing manual-file fallback"
+        ok "previously attested OpenBao runtime cache validated (no credential or certificate renewal)"
+        ;;
+    *)
+        fail "VELOX_OPENBAO_MODE must be provision or runtime-cache"
+        ;;
+esac
 
 # ── 3. Install canonical runtime definitions ───────────────────────────────
 log "Copying compose.yml to $COMPOSE_YML_DST"

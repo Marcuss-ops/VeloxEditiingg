@@ -71,6 +71,12 @@ sudo install -m 0644 openbao-ca.crt /etc/velox-worker/certs/openbao-ca.crt
 # contacts OpenBao and verifies remote/local coherence. No PEM or private key
 # is stored in the OpenBao KV engine.
 
+For host-runtime convergence during a confirmed OpenBao outage, the canonical
+operator bridge accepts `scripts/operator/provision-worker-runtime.sh
+--runtime-cache --worker <id> <host> <ssh_user>`. It validates and reuses only
+the worker's previously attested runtime cache; normal provisioning remains
+the default and continues to require live OpenBao.
+
 # 4. Run the canonical systemd convergence:
 sudo deploy/runtime/prepare-host.sh
 ```

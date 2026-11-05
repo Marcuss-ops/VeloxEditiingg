@@ -33,6 +33,7 @@ RUNTIME_FILES=(
 )
 
 WORKERS=()
+OPENBAO_MODE="provision"
 
 log() {
   local line
@@ -53,11 +54,15 @@ usage() {
   local rc="${1:-2}"
   cat <<'EOF'
 Usage:
-  scripts/operator/provision-worker-runtime.sh --worker <id> <host> <ssh_user>
-  scripts/operator/provision-worker-runtime.sh --fleet
+  scripts/operator/provision-worker-runtime.sh [--runtime-cache] --worker <id> <host> <ssh_user>
+  scripts/operator/provision-worker-runtime.sh [--runtime-cache] --fleet
 
 This command bootstraps the canonical host runtime only. Configuration knobs
 are applied afterwards through scripts/fleetctl worker-config set.
+
+--runtime-cache is only for an explicitly confirmed OpenBao outage. It
+validates and reuses the worker's already-attested credential/certificate
+cache; it does not contact OpenBao, renew credentials, or accept manual files.
 EOF
   exit "$rc"
 }
@@ -66,6 +71,10 @@ valid_word() { [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]]; }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --runtime-cache)
+      OPENBAO_MODE="runtime-cache"
+      shift
+      ;;
     --fleet)
       WORKERS+=(
         "host_57_131_20_173:57.131.20.173:pierone"
@@ -137,7 +146,7 @@ for entry in "${WORKERS[@]}"; do
   remote_output=""
   # shellcheck disable=SC2029
   if ! remote_output="$(ssh "${SSH_COMMON[@]}" "$target" \
-      "sudo -n env VELOX_SSH_USER='$user' bash '$CURRENT_REMOTE_DIR/prepare-host.sh'" 2>&1)"; then
+      "sudo -n env VELOX_SSH_USER='$user' VELOX_OPENBAO_MODE='$OPENBAO_MODE' bash '$CURRENT_REMOTE_DIR/prepare-host.sh'" 2>&1)"; then
     log "prepare-host diagnostic for worker=$worker_id (redacted):"
     printf '%s\n' "$remote_output" | redact_remote_output | tail -20 | tee -a "$LOG_FILE"
     die "prepare-host.sh failed for $worker_id"
