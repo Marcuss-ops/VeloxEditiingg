@@ -115,12 +115,23 @@ Il contratto canonico attualmente attivo per `POST /api/v1/jobs` è
 `SubmitJobRequest`: il client invia i campi tipizzati direttamente nel body.
 Il producer deve inviare il `CompiledRenderPlanV2` completo nei due campi top-level
 `compiled_render_plan_json` e `compiled_render_plan_sha256`. Il Master conserva
-quei byte e li valida. Instrada i piani con frammenti certificati a
-`video.assemble.copy.v1`; quando il piano dichiara stock video Drive senza
-certificati di frammento, li instrada a `video.assemble.slice.v1`, che scarica
-e verifica la sorgente sul worker e taglia le finestre direttamente nel render
-finale. Il Master non compila un piano alternativo e non deduce il profilo dal
-flag del worker.
+quei byte e li valida. I piani con `stock_pool` (folder Drive, selezione
+`shuffle` e segmenti `stock_pool_slot`) vengono instradati automaticamente a
+`video.assemble.slice.v1`. Il Master enumera il folder e passa al worker i
+riferimenti e i metadati; non scarica, non prepara e non pre-riscalda i file del
+pool. Il worker li risolve nella propria cache, verifica che il materiale sia
+compatibile con il profilo H.264 dichiarato, riempie gli slot casualmente e
+concatena video e audio con stream copy. La preparazione anticipata resta per
+overlay, clip e audio fissi. Se i file del pool hanno profili o parametri H.264
+incompatibili, il job fallisce senza ricodifica.
+
+Per usare il pool con stream copy, il folder deve essere omogeneo rispetto al
+profilo del piano, inclusi livello H.264, timebase e codec extradata (SPS/PPS).
+Non basta che i file siano tutti MP4 o H.264: per esempio, un pool con livelli
+4.0 e 4.1 non è concatenabile secondo il profilo `VELOX_ASSEMBLY_READY_V1`.
+I piani senza `stock_pool` mantengono il percorso copy per asset già certificati.
+Il Master non compila un piano alternativo e non deduce il profilo dal flag del
+worker.
 
 Esempio:
 

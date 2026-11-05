@@ -2,6 +2,7 @@
 package pipeline
 
 import (
+	"velox-shared/contract"
 	"velox-shared/contract/assembly"
 	"velox-shared/contract/deliveryplan"
 	"velox-shared/publication"
@@ -10,9 +11,8 @@ import (
 // ExternalAPISourceProvider is the stable source-provider identity for POST /api/v1/jobs.
 const ExternalAPISourceProvider = "external_api"
 
-// JobSubmitTargetExecutorID is the sole worker executor for compiled V2
-// video plans. The Master validates and routes the plan; it does not render.
-const JobSubmitTargetExecutorID = "video.assemble.copy.v1"
+// JobSubmitTargetExecutorID is the default executor for pre-certified plans.
+const JobSubmitTargetExecutorID = contract.VideoAssemblyCopyExecutorID
 
 func (h *Handlers) NormalizeExternalJobSubmission(req SubmitJobRequest) *CanonicalCompletedPayload {
 	rawPayload := submitRequestToRawPayload(&req)
@@ -25,7 +25,7 @@ func (h *Handlers) NormalizeExternalJobSubmission(req SubmitJobRequest) *Canonic
 	if req.Assembly != nil {
 		assemblyJob, _ = req.Assembly.Normalize(req.IdempotencyKey)
 	}
-	targetExecutorID := targetExecutorForJobType(req.JobType)
+	targetExecutorID := contract.RequiredVideoAssemblyExecutor(workerPayload)
 	deliveryEnvelope := deliveryplan.ExtractEnvelope(rawPayload)
 	if req.RenderOnly {
 		// Render-only jobs have no external delivery route. Keep only the
@@ -43,13 +43,6 @@ func (h *Handlers) NormalizeExternalJobSubmission(req SubmitJobRequest) *Canonic
 		Assembly:         assemblyJob,
 		StatusDomains:    inputAssemblyStatusDomain(workerPayload),
 	}
-}
-
-func targetExecutorForJobType(jobType string) string {
-	// Recipe names are decoupled from worker executor IDs. Every admitted
-	// video request is normalized to CompiledRenderPlanV2 before dispatch.
-	_ = jobType
-	return JobSubmitTargetExecutorID
 }
 
 // projectPublicationSpecs converts intake DTOs into the canonical control-plane

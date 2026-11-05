@@ -166,10 +166,11 @@ func normalizeCreatorPushRequest(req creatorPushRequest) (*normalizedCreatorPush
 	}
 
 	targetExecutorID := strings.TrimSpace(req.TargetExecutorID)
-	if targetExecutorID != "" && targetExecutorID != JobSubmitTargetExecutorID {
-		return nil, domain.NewInvalidPayload("target_executor_id", "unsupported", "only video.assemble.copy.v1 is supported")
+	expectedExecutorID := contract.RequiredVideoAssemblyExecutor(workerPayload)
+	if targetExecutorID != "" && targetExecutorID != expectedExecutorID {
+		return nil, domain.NewInvalidPayload("target_executor_id", "unsupported", "executor must match the compiled plan")
 	}
-	targetExecutorID = JobSubmitTargetExecutorID
+	targetExecutorID = expectedExecutorID
 
 	return &normalizedCreatorPush{
 		SourceProvider:   sourceProvider,

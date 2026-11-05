@@ -7,6 +7,15 @@ import (
 	"velox-shared/publication"
 )
 
+func supportedTargetExecutorID(id string) bool {
+	switch id {
+	case "video.assemble.copy.v1", "video.assemble.slice.v1":
+		return true
+	default:
+		return false
+	}
+}
+
 // ResolveRequest is the typed input for Resolver.Resolve.
 //
 //   - ForwardingID: optional. When set (the runner path), the resolver

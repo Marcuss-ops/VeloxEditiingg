@@ -72,6 +72,24 @@ func TestValidateCompiledRenderPlanV2_AcceptsValidPlan(t *testing.T) {
 	}
 }
 
+func TestValidateCompiledRenderPlanV2_AcceptsFolderStockPoolWithoutProducerSegments(t *testing.T) {
+	plan := validPlanForValidation()
+	plan.VideoTracks[0].Segments = []VideoSegmentV2{{SegmentID: "stock-window-1", StockPoolSlot: true, TimelineStartFrame: 0, FrameCount: 1800}}
+	plan.StockPool = &StockPoolV2{SourceKind: "drive", DriveFolderID: "folder-123", Selection: "shuffle"}
+	if err := ValidateCompiledRenderPlanV2(plan); err != nil {
+		t.Fatalf("folder stock pool rejected: %v", err)
+	}
+	canonical, err := plan.CanonicalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeCompiledRenderPlanV2(canonical); err != nil {
+		t.Fatalf("decode folder stock pool: %v", err)
+	}
+	plan.VideoTracks[0].Segments = nil
+	requireValidationPath(t, ValidateCompiledRenderPlanV2(plan), "video_tracks")
+}
+
 func TestValidateCompiledRenderPlanV2_AcceptsDeferredDriveStockWithoutProducerHash(t *testing.T) {
 	plan := validPlanForValidation()
 	video := &plan.Assets[0]

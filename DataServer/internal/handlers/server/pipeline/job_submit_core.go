@@ -127,6 +127,9 @@ func (h *Handlers) submitJobCore(ctx context.Context, req SubmitJobRequest, iden
 	// same canonical value into the resolver, response, and logs so retries
 	// with surrounding whitespace cannot diverge.
 	req.IdempotencyKey = strings.TrimSpace(req.IdempotencyKey)
+	if err := h.resolveStockPoolRuntimeAssets(ctx, &req); err != nil {
+		return reject(http.StatusUnprocessableEntity, "invalid_stock_pool", err.Error())
+	}
 
 	if err := compatibility.ValidateNoLegacyAliases(req.Spec); err != nil {
 		return reject(http.StatusUnprocessableEntity, "legacy_alias_rejected", err.Error())

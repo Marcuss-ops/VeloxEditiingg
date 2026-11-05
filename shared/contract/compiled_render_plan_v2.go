@@ -37,7 +37,19 @@ type CompiledRenderPlanV2 struct {
 	Output           OutputContractV2 `json:"output"`
 	FinalAudio       FinalAudioV2     `json:"final_audio"`
 	VideoTracks      []VideoTrackV2   `json:"video_tracks"`
-	Assets           []AssetRefV2     `json:"assets"`
+	// StockPool declares that the worker selects source videos from one Drive
+	// folder at execution time. The folder is expanded by the Master into
+	// runtime_assets; the producer never assigns individual files to scenes.
+	StockPool *StockPoolV2 `json:"stock_pool,omitempty"`
+	Assets    []AssetRefV2 `json:"assets"`
+}
+
+// StockPoolV2 is the single canonical stock selection rule for a job.
+// Selection is deterministic per job so retries reproduce the same edit.
+type StockPoolV2 struct {
+	SourceKind    string `json:"source_kind"`
+	DriveFolderID string `json:"drive_folder_id"`
+	Selection     string `json:"selection"`
 }
 
 // OutputContractV2 describes the normalized output timeline and container.
@@ -98,6 +110,9 @@ type VideoTrackV2 struct {
 // media does not need to be assumed CFR.
 type VideoSegmentV2 struct {
 	SegmentID string `json:"segment_id"`
+	// StockPoolSlot marks an output interval whose visual source is selected
+	// by the worker from CompiledRenderPlanV2.StockPool at execution time.
+	StockPoolSlot bool `json:"stock_pool_slot,omitempty"`
 
 	AssetID string `json:"asset_id"`
 	SHA256  string `json:"sha256"`
@@ -206,7 +221,7 @@ func cloneVideoTracks(input []VideoTrackV2) []VideoTrackV2 {
 	output := make([]VideoTrackV2, len(input))
 	copy(output, input)
 	for i := range output {
-		if output[i].Segments == nil {
+		if len(output[i].Segments) == 0 {
 			output[i].Segments = []VideoSegmentV2{}
 		} else {
 			output[i].Segments = append([]VideoSegmentV2(nil), output[i].Segments...)

@@ -81,6 +81,18 @@ func ValidateCompiledRenderPlanV2(plan *CompiledRenderPlanV2) error {
 
 	validateOutputContract(&violations, plan.Output)
 	validateFinalAudio(&violations, plan)
+	stockPoolMode := plan.StockPool != nil
+	if stockPoolMode {
+		if plan.StockPool.SourceKind != "drive" {
+			violations.add("stock_pool.source_kind", "unsupported_value", "drive", plan.StockPool.SourceKind)
+		}
+		if strings.TrimSpace(plan.StockPool.DriveFolderID) == "" {
+			violations.add("stock_pool.drive_folder_id", "required", "non-empty Drive folder ID", "")
+		}
+		if plan.StockPool.Selection != "shuffle" {
+			violations.add("stock_pool.selection", "unsupported_value", "shuffle", plan.StockPool.Selection)
+		}
+	}
 
 	assetsByID := make(map[string]AssetRefV2, len(plan.Assets))
 	if len(plan.Assets) == 0 {
@@ -125,6 +137,7 @@ func ValidateCompiledRenderPlanV2(plan *CompiledRenderPlanV2) error {
 	totalFrames, totalFramesOK := outputFrameCount(plan.DurationUS, plan.Output.FPSNum, plan.Output.FPSDen)
 	trackIDs := make(map[string]struct{}, len(plan.VideoTracks))
 	segmentIDs := make(map[string]struct{})
+	stockPoolSlots := 0
 	for trackIndex, track := range plan.VideoTracks {
 		trackPath := fmt.Sprintf("video_tracks[%d]", trackIndex)
 		if strings.TrimSpace(track.TrackID) == "" {
@@ -139,8 +152,16 @@ func ValidateCompiledRenderPlanV2(plan *CompiledRenderPlanV2) error {
 		}
 		for segmentIndex, segment := range track.Segments {
 			segmentPath := fmt.Sprintf("%s.segments[%d]", trackPath, segmentIndex)
-			validateSegment(&violations, segmentPath, segment, assetsByID, totalFrames, totalFramesOK, segmentIDs)
+			if segment.StockPoolSlot {
+				stockPoolSlots++
+				validateStockPoolSlot(&violations, segmentPath, segment, totalFrames, totalFramesOK, segmentIDs)
+			} else {
+				validateSegment(&violations, segmentPath, segment, assetsByID, totalFrames, totalFramesOK, segmentIDs)
+			}
 		}
+	}
+	if stockPoolMode && stockPoolSlots == 0 {
+		violations.add("video_tracks", "missing_stock_pool_slot", "at least one stock_pool_slot segment", "0")
 	}
 
 	if len(violations) > 0 {
@@ -370,6 +391,33 @@ func validateSegment(violations *CompiledRenderPlanV2ValidationErrors, path stri
 	}
 	if segment.SourceDurationUS <= 0 {
 		violations.add(path+".source_duration_us", "out_of_range", "positive microseconds", fmt.Sprint(segment.SourceDurationUS))
+	}
+	if endFrame, ok := nonNegativeSum(segment.TimelineStartFrame, segment.FrameCount); !ok {
+		violations.add(path, "timeline_range_overflow", "timeline_start_frame + frame_count within int64", "overflow")
+	} else if totalFramesOK && endFrame > totalFrames {
+		violations.add(path, "timeline_out_of_bounds", fmt.Sprintf("timeline end <= %d frames", totalFrames), fmt.Sprint(endFrame))
+	}
+}
+
+func validateStockPoolSlot(violations *CompiledRenderPlanV2ValidationErrors, path string, segment VideoSegmentV2, totalFrames int64, totalFramesOK bool, segmentIDs map[string]struct{}) {
+	if strings.TrimSpace(segment.SegmentID) == "" {
+		violations.add(path+".segment_id", "required", "non-empty string", segment.SegmentID)
+	} else if _, exists := segmentIDs[segment.SegmentID]; exists {
+		violations.add(path+".segment_id", "duplicate", "unique segment_id", segment.SegmentID)
+	} else {
+		segmentIDs[segment.SegmentID] = struct{}{}
+	}
+	if segment.AssetID != "" || segment.SHA256 != "" {
+		violations.add(path, "stock_pool_slot_has_source", "no producer-selected asset or hash", segment.AssetID)
+	}
+	if segment.SourceInUS != 0 || segment.SourceDurationUS != 0 {
+		violations.add(path, "stock_pool_slot_has_source_range", "zero source range; worker chooses source", fmt.Sprintf("%d + %d", segment.SourceInUS, segment.SourceDurationUS))
+	}
+	if segment.TimelineStartFrame < 0 {
+		violations.add(path+".timeline_start_frame", "out_of_range", "non-negative frame", fmt.Sprint(segment.TimelineStartFrame))
+	}
+	if segment.FrameCount <= 0 {
+		violations.add(path+".frame_count", "out_of_range", "positive frame count", fmt.Sprint(segment.FrameCount))
 	}
 	if endFrame, ok := nonNegativeSum(segment.TimelineStartFrame, segment.FrameCount); !ok {
 		violations.add(path, "timeline_range_overflow", "timeline_start_frame + frame_count within int64", "overflow")

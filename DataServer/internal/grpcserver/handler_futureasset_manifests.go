@@ -58,6 +58,14 @@ func futureAssetManifests(payload []byte) []futureasset.AssetManifest {
 				walk(child)
 			}
 		case map[string]interface{}:
+			// Drive stock-pool members are an executor input set, not preparation
+			// dependencies. Prefetching the entire folder before the job can be
+			// claimed turns a pool into a long blocking gate. The slice executor
+			// resolves and verifies the selected pool files after it owns the task;
+			// fixed overlays, clips and final audio still use normal preparation.
+			if poolMember, _ := node["stock_pool_member"].(bool); poolMember {
+				return
+			}
 			if rawPlan, ok := node[contract.PayloadKeyCompiledRenderPlanJSON].(string); ok {
 				appendCompiledPlanAssetManifests(rawPlan, seen, sourceURIs)
 			}

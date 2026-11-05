@@ -2,8 +2,11 @@ package worker
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"strings"
@@ -38,10 +41,35 @@ func (w *Worker) resolveCompiledRenderPlanAssets(ctx context.Context, payload ma
 	// resolver understands the existing asset envelope and returns verified
 	// worker-local paths for each uri. AssetKey is the canonical cache/transfer
 	// identity when supplied; AssetID remains the stable plan/binding identity.
-	assetEnvelopes := make([]interface{}, 0, len(plan.Assets))
-	seenIdentities := make(map[string]string, len(plan.Assets))
+	planAssets := append([]contract.AssetRefV2(nil), plan.Assets...)
+	// Folder members are a Master-resolved runtime snapshot, not editorial
+	// per-file assignments in the immutable plan. Resolve them through the same
+	// verified cache path as every other V2 asset.
+	var runtimePool []struct {
+		AssetID         string `json:"asset_id"`
+		DriveFileID     string `json:"drive_file_id"`
+		SizeBytes       int64  `json:"size_bytes"`
+		StockPoolMember bool   `json:"stock_pool_member"`
+	}
+	if raw, marshalErr := json.Marshal(payload["runtime_assets"]); marshalErr == nil {
+		_ = json.Unmarshal(raw, &runtimePool)
+	}
+	if plan.StockPool != nil {
+		for _, item := range runtimePool {
+			if !item.StockPoolMember || strings.TrimSpace(item.DriveFileID) == "" {
+				continue
+			}
+			planAssets = append(planAssets, contract.AssetRefV2{
+				AssetID: "stockpool:" + item.DriveFileID, AssetKey: item.DriveFileID,
+				SourceKind: "drive", DriveFileID: item.DriveFileID,
+				Kind: "video", SizeBytes: item.SizeBytes,
+			})
+		}
+	}
+	assetEnvelopes := make([]interface{}, 0, len(planAssets))
+	seenIdentities := make(map[string]string, len(planAssets))
 	runtimeDriveIDs := compiledRuntimeDriveFileIDs(payload["runtime_assets"])
-	for _, asset := range plan.Assets {
+	for _, asset := range planAssets {
 		identity := compiledAssetIdentity(asset)
 		if identity == "" {
 			return nil, fmt.Errorf("compiled render plan v2: asset %q has no canonical identity", asset.AssetID)
@@ -122,8 +150,8 @@ func (w *Worker) resolveCompiledRenderPlanAssets(ctx context.Context, payload ma
 	if firstErr != nil {
 		return nil, fmt.Errorf("compiled render plan v2: resolve assets: %w", firstErr)
 	}
-	bindings := make(runtimeassets.Bindings, len(plan.Assets))
-	for index, asset := range plan.Assets {
+	bindings := make(runtimeassets.Bindings, len(planAssets))
+	for index, asset := range planAssets {
 		resolved, ok := resolvedAssets[index].(map[string]interface{})
 		if !ok {
 			return nil, fmt.Errorf("compiled render plan v2: resolved assets[%d] is %T, want object", index, resolvedAssets[index])
@@ -159,6 +187,13 @@ func (w *Worker) resolveCompiledRenderPlanAssets(ctx context.Context, payload ma
 				sha = remembered.SHA256
 				size = remembered.SizeBytes
 			}
+			if sha == "" || size <= 0 {
+				computedSHA, computedSize, hashErr := hashLocalAsset(path)
+				if hashErr != nil {
+					return nil, fmt.Errorf("compiled render plan v2: assets[%d] could not verify downloaded Drive bytes: %w", index, hashErr)
+				}
+				sha, size = computedSHA, computedSize
+			}
 		}
 		if sha == "" || size <= 0 {
 			return nil, fmt.Errorf("compiled render plan v2: assets[%d] did not produce worker-verified SHA-256/size", index)
@@ -172,6 +207,23 @@ func (w *Worker) resolveCompiledRenderPlanAssets(ctx context.Context, payload ma
 		}
 	}
 	return bindings, nil
+}
+
+func hashLocalAsset(path string) (string, int64, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", 0, err
+	}
+	defer f.Close()
+	h := sha256.New()
+	size, err := io.Copy(h, f)
+	if err != nil {
+		return "", 0, err
+	}
+	if size <= 0 {
+		return "", 0, fmt.Errorf("downloaded file is empty")
+	}
+	return hex.EncodeToString(h.Sum(nil)), size, nil
 }
 
 // compiledRuntimeDriveFileIDs joins the Producer's runtime transport manifest

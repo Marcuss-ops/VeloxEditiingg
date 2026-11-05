@@ -41,8 +41,8 @@ func (r *Resolver) PersistPendingRemoteForwarding(
 	if targetExecutorID == "" {
 		targetExecutorID = "video.assemble.copy.v1"
 	}
-	if targetExecutorID != "video.assemble.copy.v1" {
-		return nil, domain.NewInvalidPayload("target_executor_id", "unsupported", "only video.assemble.copy.v1 is supported")
+	if !supportedTargetExecutorID(targetExecutorID) {
+		return nil, domain.NewInvalidPayload("target_executor_id", "unsupported", "unsupported video assembly executor")
 	}
 
 	if existing, err := r.forwardRepo.GetCreatorForwardingBySource(ctx, sourceProvider, sourceJobID, targetExecutorID); err != nil {

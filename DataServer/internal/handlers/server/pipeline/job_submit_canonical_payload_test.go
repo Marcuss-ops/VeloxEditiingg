@@ -114,6 +114,24 @@ func TestNormalizeExternalJobSubmissionRoutesProducerOwnedCompiledPlan(t *testin
 	}
 }
 
+func TestNormalizeExternalJobSubmissionRoutesDriveStockPoolToSliceExecutor(t *testing.T) {
+	req := SubmitJobRequest{
+		IdempotencyKey:           "compiled-stock-pool-job-1",
+		VideoName:                "Drive stock pool",
+		ScriptText:               "Stock pool contract routing",
+		CompiledRenderPlanJSON:   `{"plan_version":2,"stock_pool":{"source_kind":"drive","drive_folder_id":"folder-123","selection":"shuffle"}}`,
+		CompiledRenderPlanSHA256: strings.Repeat("a", 64),
+	}
+
+	canonical := (&Handlers{}).NormalizeExternalJobSubmission(req)
+	if canonical == nil {
+		t.Fatal("NormalizeExternalJobSubmission returned nil canonical")
+	}
+	if canonical.TargetExecutorID != contract.VideoAssemblySliceExecutorID {
+		t.Fatalf("target executor = %q, want %q", canonical.TargetExecutorID, contract.VideoAssemblySliceExecutorID)
+	}
+}
+
 // TestCanonicalPayloadParity_PipelinePreservesCanonicalKeys verifies the
 // fourth contract surface: keys emitted by the external pipeline intake must
 // survive the DTO → worker-payload projection. The raw request projection

@@ -202,8 +202,8 @@ func (r *Resolver) Resolve(ctx context.Context, req ResolveRequest) (*ResolveOut
 	if targetExecutor == "" {
 		targetExecutor = "video.assemble.copy.v1"
 	}
-	if targetExecutor != "video.assemble.copy.v1" {
-		return nil, domain.NewInvalidPayload("target_executor_id", "unsupported", "only video.assemble.copy.v1 is supported")
+	if !supportedTargetExecutorID(targetExecutor) {
+		return nil, domain.NewInvalidPayload("target_executor_id", "unsupported", "unsupported video assembly executor")
 	}
 	readiness := enqueue.InspectPipelineResultReadiness(req.Payload)
 	if !readiness.Complete {
