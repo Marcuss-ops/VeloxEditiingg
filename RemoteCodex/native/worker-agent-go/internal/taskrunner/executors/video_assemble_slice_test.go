@@ -13,10 +13,10 @@ import (
 	"velox-worker-agent/pkg/video/ffmpegrunner"
 )
 
-type sliceFFmpegRunner struct{ args []string }
+type sliceFFmpegRunner struct{ args [][]string }
 
 func (r *sliceFFmpegRunner) Run(_ context.Context, req ffmpegrunner.FFmpegRequest) (ffmpegrunner.FFmpegResult, error) {
-	r.args = append([]string(nil), req.Args...)
+	r.args = append(r.args, append([]string(nil), req.Args...))
 	if err := os.WriteFile(req.Args[len(req.Args)-1], []byte("remote-render"), 0o640); err != nil {
 		return ffmpegrunner.FFmpegResult{}, err
 	}
@@ -75,13 +75,22 @@ func TestVideoAssembleSlice_RendersDriveSourceWindowsWithoutIntermediateFragment
 	if err != nil || result.Status != "succeeded" {
 		t.Fatalf("slice execution result=%+v err=%v", result, err)
 	}
-	if len(result.Outputs) != 1 || result.RawMetrics == nil || result.RawMetrics.ConcatMode != "reencode" {
+	if len(result.Outputs) != 1 || result.RawMetrics == nil || result.RawMetrics.ConcatMode != "batched_reencode" || !result.RawMetrics.FinalConcatStreamCopy {
 		t.Fatalf("slice result did not report remote final render: %+v", result)
 	}
-	joined := strings.Join(runner.args, " ")
-	for _, want := range []string{"trim=start=14.000000:duration=1.000000", "concat=n=1:v=1:a=0", "libx264", "-c:a copy"} {
-		if !strings.Contains(joined, want) {
-			t.Errorf("FFmpeg args missing %q: %s", want, joined)
+	if len(runner.args) != 2 {
+		t.Fatalf("FFmpeg call count = %d, want one batch render plus final mux", len(runner.args))
+	}
+	batchArgs := strings.Join(runner.args[0], " ")
+	for _, want := range []string{"trim=start=14.000000:duration=1.000000", "concat=n=1:v=1:a=0", "libx264", "-an"} {
+		if !strings.Contains(batchArgs, want) {
+			t.Errorf("batch FFmpeg args missing %q: %s", want, batchArgs)
+		}
+	}
+	finalArgs := strings.Join(runner.args[1], " ")
+	for _, want := range []string{"-f concat", "-c:v copy", "-c:a copy"} {
+		if !strings.Contains(finalArgs, want) {
+			t.Errorf("final concat args missing %q: %s", want, finalArgs)
 		}
 	}
 }
