@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -47,9 +48,22 @@ func (w *Worker) resolveCompiledRenderPlanAssets(ctx context.Context, payload ma
 			return nil, fmt.Errorf("compiled render plan v2: assets %q and %q share canonical identity %q", previous, asset.AssetID, identity)
 		}
 		seenIdentities[identity] = asset.AssetID
+		uri := compiledAssetReference(asset)
+		if asset.SourceKind == "drive" || strings.HasPrefix(strings.ToLower(strings.TrimSpace(asset.AssetID)), "drive:") {
+			driveID := strings.TrimSpace(asset.DriveFileID)
+			if driveID == "" && strings.HasPrefix(strings.ToLower(asset.AssetID), "drive:") {
+				driveID = strings.TrimSpace(asset.AssetID[len("drive:"):])
+			}
+			if driveID == "" {
+				return nil, fmt.Errorf("compiled render plan v2: Drive asset %q has no drive_file_id", asset.AssetID)
+			}
+			identity = driveID
+			uri = "velox-drive://" + driveID
+			w.rememberSourceLocator(driveID, "https://drive.google.com/uc?export=download&id="+url.QueryEscape(driveID))
+		}
 		assetEnvelopes = append(assetEnvelopes, map[string]interface{}{
 			"asset_id":   identity,
-			"uri":        compiledAssetReference(asset),
+			"uri":        uri,
 			"kind":       asset.Kind,
 			"sha256":     asset.SHA256,
 			"size_bytes": asset.SizeBytes,
@@ -117,11 +131,35 @@ func (w *Worker) resolveCompiledRenderPlanAssets(ctx context.Context, payload ma
 			}
 			return nil, fmt.Errorf("compiled render plan v2: assets[%d] local path invalid: %w", index, err)
 		}
+		sha := asset.SHA256
+		if resolvedSHA, ok := resolved["sha256"].(string); ok && strings.TrimSpace(resolvedSHA) != "" {
+			sha = strings.TrimPrefix(strings.TrimSpace(resolvedSHA), "sha256:")
+		}
+		size := asset.SizeBytes
+		if resolvedSize, ok := resolved["size_bytes"].(float64); ok && resolvedSize > 0 {
+			size = int64(resolvedSize)
+		}
+		if info.Size() > 0 {
+			size = info.Size()
+		}
+		if (asset.SourceKind == "drive" || strings.HasPrefix(strings.ToLower(strings.TrimSpace(asset.AssetID)), "drive:")) && (sha == "" || size <= 0) {
+			driveID := strings.TrimSpace(asset.DriveFileID)
+			if driveID == "" && strings.HasPrefix(strings.ToLower(asset.AssetID), "drive:") {
+				driveID = strings.TrimSpace(asset.AssetID[len("drive:"):])
+			}
+			if remembered, ok := w.rememberedAssetIntegrity(driveID); ok {
+				sha = remembered.SHA256
+				size = remembered.SizeBytes
+			}
+		}
+		if sha == "" || size <= 0 {
+			return nil, fmt.Errorf("compiled render plan v2: assets[%d] did not produce worker-verified SHA-256/size", index)
+		}
 		bindings[asset.AssetID] = runtimeassets.Binding{
 			AssetID:  asset.AssetID,
 			Path:     path,
-			SHA256:   asset.SHA256,
-			Size:     asset.SizeBytes,
+			SHA256:   sha,
+			Size:     size,
 			Verified: true,
 		}
 	}

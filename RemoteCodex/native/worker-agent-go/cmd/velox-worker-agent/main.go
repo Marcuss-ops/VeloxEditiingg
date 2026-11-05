@@ -249,6 +249,7 @@ func main() {
 		os.Exit(1)
 	}
 	logger.Info("[BOOT] Registered packet-copy executor: %s@%d", executors.VideoAssembleCopyID, executors.VideoAssembleCopyVersion)
+	logger.Info("[BOOT] Registered Drive source-slice executor: %s@%d", executors.VideoAssembleSliceID, executors.VideoAssembleSliceVersion)
 	// RW-PROD-004 §3 A4: surface the live executor count on the read
 	// snapshot so /health/ready has a non-zero Executors reason.
 	// SetExecutorsCount accepts the entire roster size rather than +

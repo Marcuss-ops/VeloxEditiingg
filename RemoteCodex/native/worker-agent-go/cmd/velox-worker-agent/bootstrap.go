@@ -23,6 +23,7 @@ import (
 	"velox-worker-agent/internal/telemetry"
 	"velox-worker-agent/pkg/config"
 	"velox-worker-agent/pkg/logger"
+	"velox-worker-agent/pkg/video/ffmpegrunner"
 	"velox-worker-agent/pkg/video/pipeline"
 )
 
@@ -101,6 +102,9 @@ func registerCanonicalRenderExecutors(reg *executor.Registry, outputRoot string,
 		if err := reg.Register(executors.NewVideoAssembleCopy(runners[0], outputRoot)); err != nil {
 			return err
 		}
+	}
+	if err := reg.Register(executors.NewVideoAssembleSlice(outputRoot, ffmpegrunner.NewProcessRunner())); err != nil {
+		return err
 	}
 	return nil
 }

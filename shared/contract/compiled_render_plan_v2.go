@@ -109,11 +109,18 @@ type VideoSegmentV2 struct {
 	SourceDurationUS int64 `json:"source_duration_us"`
 }
 
-// AssetRefV2 is a typed, path-free reference to one verified asset used by
-// the plan. The worker resolves AssetID to a local path at runtime.
+// AssetRefV2 is a typed, path-free reference to one plan asset. Ordinary and
+// prepared assets carry verified content identity. Drive stock sources may
+// instead carry source_kind/drive_file_id and duration metadata; the worker
+// downloads and certifies those bytes before rendering.
 type AssetRefV2 struct {
 	AssetID  string `json:"asset_id"`
 	AssetKey string `json:"asset_key,omitempty"`
+	// SourceKind and DriveFileID identify provider-backed stock inputs. These
+	// references are resolved and verified by the worker at execution time;
+	// unlike prepared fragments, they need not be downloaded by the Producer.
+	SourceKind  string `json:"source_kind,omitempty"`
+	DriveFileID string `json:"drive_file_id,omitempty"`
 
 	SHA256    string `json:"sha256"`
 	SizeBytes int64  `json:"size_bytes"`

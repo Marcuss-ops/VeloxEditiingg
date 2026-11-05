@@ -106,8 +106,9 @@ type CanonicalCompletedPayload = normalizedCreatorPush
 // ToWorkerPayload, and produces the resolver identity tuple
 // (source_provider + source_job_id + target_executor_id) with the
 // source_provider defaults to defaultCreatorSourceProvider when empty;
-// source_job_id must be supplied in the envelope or V2 payload. The target
-// executor is fixed to video.assemble.copy.v1.
+// source_job_id must be supplied in the envelope or V2 payload. The public
+// forwarding target stays stable; enqueue selects the internal copy or Drive
+// slice executor from the verified V2 plan's source references.
 func normalizeCreatorPushRequest(req creatorPushRequest) (*normalizedCreatorPush, error) {
 	if req.Payload == nil {
 		return nil, domain.NewInvalidPayload("payload", "required", "payload is required")

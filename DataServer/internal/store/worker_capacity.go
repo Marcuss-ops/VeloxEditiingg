@@ -149,7 +149,7 @@ func (s *SQLiteStore) GetWorkerPhaseCapacity(ctx context.Context, workerID strin
 		}
 		out.ActiveSlots += count
 		switch {
-		case executorID == "video.assemble.copy.v1" || strings.HasPrefix(executorID, "video.assemble.copy.v1@"):
+		case executorID == "video.assemble.copy.v1" || strings.HasPrefix(executorID, "video.assemble.copy.v1@") || executorID == "video.assemble.slice.v1" || strings.HasPrefix(executorID, "video.assemble.slice.v1@"):
 			out.ActiveRender += count
 		case executorID == "asset_prefetch" || len(executorID) > 14 && executorID[:14] == "asset_prefetch@":
 			out.ActivePrefetch += count
@@ -214,7 +214,7 @@ func (s *SQLiteStore) GetWorkerPhaseCapacities(ctx context.Context, workerIDs []
 		row.WorkerID = workerID
 		row.ActiveSlots += count
 		switch {
-		case executorID == "video.assemble.copy.v1" || strings.HasPrefix(executorID, "video.assemble.copy.v1@"):
+		case executorID == "video.assemble.copy.v1" || strings.HasPrefix(executorID, "video.assemble.copy.v1@") || executorID == "video.assemble.slice.v1" || strings.HasPrefix(executorID, "video.assemble.slice.v1@"):
 			row.ActiveRender += count
 		case executorID == "asset_prefetch" || len(executorID) > 14 && executorID[:14] == "asset_prefetch@":
 			row.ActivePrefetch += count

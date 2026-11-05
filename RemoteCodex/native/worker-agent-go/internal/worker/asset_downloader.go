@@ -75,6 +75,9 @@ func (w *Worker) downloadVeloxAssetWithMetadata(ctx context.Context, assetID, ex
 	if err != nil {
 		return "", fmt.Errorf("failed to download velox asset %s: %w", assetID, err)
 	}
+	if strings.TrimSpace(string(resolution.SHA256)) != "" && resolution.SizeBytes > 0 {
+		w.rememberAssetIntegrity(assetID, string(resolution.SHA256), resolution.SizeBytes)
+	}
 	// Restore prefetching phase after the asset is resolved.
 	if taskID != "" {
 		w.UpdateOperationalPhase(taskID, PhasePrefetching)

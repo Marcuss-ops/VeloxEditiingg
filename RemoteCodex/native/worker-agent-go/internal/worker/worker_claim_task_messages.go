@@ -83,7 +83,7 @@ func (w *Worker) handleTaskOfferMessage(ctx context.Context, msg controltranspor
 	if outputContract := taskOffer.GetOutputContract(); outputContract != nil {
 		admissionPayload["output_contract"] = outputContract.AsMap()
 	}
-	if executorID != "video.assemble.copy.v1" {
+	if executorID != "video.assemble.copy.v1" && executorID != "video.assemble.slice.v1" {
 		w.logger.Warn("[RECEIVE] TaskOffer refused — legacy executor removed (task=%s executor=%s)", taskID, executorID)
 		if rejectErr := w.sendTaskReject(ctx, taskID, jobID, attemptID, leaseID, "unsupported_executor", attemptNumber, revision); rejectErr != nil {
 			w.logger.Warn("[RECEIVE] Failed to send TaskRejected (legacy executor removed): %v", rejectErr)

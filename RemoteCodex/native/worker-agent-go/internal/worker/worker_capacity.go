@@ -95,7 +95,7 @@ const (
 // classifyExecutor returns the TaskPhase for an executor ID.
 func classifyExecutor(executorID string) TaskPhase {
 	switch {
-	case executorID == "video.assemble.copy.v1" || strings.HasPrefix(executorID, "video.assemble.copy.v1@"):
+	case executorID == "video.assemble.copy.v1" || strings.HasPrefix(executorID, "video.assemble.copy.v1@") || executorID == "video.assemble.slice.v1" || strings.HasPrefix(executorID, "video.assemble.slice.v1@"):
 		return PhaseRender
 	case executorID == "asset_prefetch" || len(executorID) > 14 && executorID[:14] == "asset_prefetch@":
 		return PhasePrefetch

@@ -15,6 +15,7 @@ import (
 )
 
 const canonicalCompiledPlanExecutor = "video.assemble.copy.v1@1"
+const canonicalDriveSliceExecutor = "video.assemble.slice.v1@1"
 
 func normalizeSceneVideoPayload(payloadMap map[string]interface{}) (map[string]interface{}, error) {
 	return normalizeSceneVideoPayloadContext(context.Background(), payloadMap)
@@ -91,11 +92,28 @@ func resolveInternalExecutorID(payloadMap map[string]interface{}) string {
 	if !compiledRenderPlanV2Present(payloadMap) {
 		return ""
 	}
+	if raw, ok := payloadMap[contract.PayloadKeyCompiledRenderPlanJSON].(string); ok {
+		var plan struct {
+			Assets []struct {
+				SourceKind  string `json:"source_kind"`
+				DriveFileID string `json:"drive_file_id"`
+				AssetID     string `json:"asset_id"`
+				Kind        string `json:"kind"`
+			} `json:"assets"`
+		}
+		if json.Unmarshal([]byte(raw), &plan) == nil {
+			for _, asset := range plan.Assets {
+				if asset.Kind == "video" && (asset.SourceKind == "drive" || strings.TrimSpace(asset.DriveFileID) != "" || strings.HasPrefix(strings.ToLower(strings.TrimSpace(asset.AssetID)), "drive:")) {
+					return canonicalDriveSliceExecutor
+				}
+			}
+		}
+	}
 	return canonicalCompiledPlanExecutor
 }
 
 func resolveRequiredCapabilities(executorID string) []string {
-	if strings.HasPrefix(executorID, "video.assemble.copy.v1") {
+	if strings.HasPrefix(executorID, "video.assemble.copy.v1") || strings.HasPrefix(executorID, "video.assemble.slice.v1") {
 		return []string{"artifact.commit.v1"}
 	}
 	return nil

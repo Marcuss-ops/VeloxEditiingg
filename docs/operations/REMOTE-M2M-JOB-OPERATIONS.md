@@ -113,11 +113,14 @@ jobs.submit
 
 Il contratto canonico attualmente attivo per `POST /api/v1/jobs` è
 `SubmitJobRequest`: il client invia i campi tipizzati direttamente nel body.
-Per l'assemblaggio packet-copy il producer deve inviare il
-`CompiledRenderPlanV2` completo nei due campi top-level
+Il producer deve inviare il `CompiledRenderPlanV2` completo nei due campi top-level
 `compiled_render_plan_json` e `compiled_render_plan_sha256`. Il Master conserva
-quei byte, li valida e instrada il task a `video.assemble.copy.v1`; non compila
-un piano alternativo e non deduce il profilo dal flag del worker.
+quei byte e li valida. Instrada i piani con frammenti certificati a
+`video.assemble.copy.v1`; quando il piano dichiara stock video Drive senza
+certificati di frammento, li instrada a `video.assemble.slice.v1`, che scarica
+e verifica la sorgente sul worker e taglia le finestre direttamente nel render
+finale. Il Master non compila un piano alternativo e non deduce il profilo dal
+flag del worker.
 
 Esempio:
 

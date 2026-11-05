@@ -301,11 +301,18 @@ func validateAsset(violations *CompiledRenderPlanV2ValidationErrors, path string
 	if strings.TrimSpace(asset.AssetID) == "" {
 		violations.add(path+".asset_id", "required", "non-empty asset_id", asset.AssetID)
 	}
-	if !isLowerSHA256(asset.SHA256) {
+	deferredDriveVideo := isDeferredDriveVideo(asset)
+	if !deferredDriveVideo && !isLowerSHA256(asset.SHA256) {
 		violations.add(path+".sha256", "invalid_sha256", "64 lowercase hexadecimal characters", asset.SHA256)
 	}
-	if asset.SizeBytes <= 0 {
+	if asset.SizeBytes <= 0 && !deferredDriveVideo {
 		violations.add(path+".size_bytes", "out_of_range", "positive bytes", fmt.Sprint(asset.SizeBytes))
+	}
+	if asset.SourceKind != "" && asset.SourceKind != "drive" {
+		violations.add(path+".source_kind", "unsupported_value", "drive", asset.SourceKind)
+	}
+	if asset.SourceKind == "drive" && !deferredDriveVideo {
+		violations.add(path+".drive_file_id", "invalid_drive_source", "Drive video asset with drive_file_id", asset.DriveFileID)
 	}
 	if strings.TrimSpace(asset.Kind) == "" {
 		violations.add(path+".kind", "required", "non-empty asset kind", asset.Kind)
@@ -334,17 +341,18 @@ func validateSegment(violations *CompiledRenderPlanV2ValidationErrors, path stri
 	if strings.TrimSpace(segment.AssetID) == "" {
 		violations.add(path+".asset_id", "required", "asset_id in assets[]", segment.AssetID)
 	}
-	if !isLowerSHA256(segment.SHA256) {
-		violations.add(path+".sha256", "invalid_sha256", "64 lowercase hexadecimal characters", segment.SHA256)
-	}
 	asset, assetFound := assets[segment.AssetID]
 	if !assetFound {
 		violations.add(path+".asset_id", "unknown_reference", "an asset_id in assets[]", segment.AssetID)
 	} else {
+		deferredDriveVideo := isDeferredDriveVideo(asset)
+		if !deferredDriveVideo && !isLowerSHA256(segment.SHA256) {
+			violations.add(path+".sha256", "invalid_sha256", "64 lowercase hexadecimal characters", segment.SHA256)
+		}
 		if asset.Kind != "video" && asset.Kind != "prepared_video_fragment" {
 			violations.add(path+".asset_id", "wrong_asset_kind", "video or prepared_video_fragment", asset.Kind)
 		}
-		if segment.SHA256 != asset.SHA256 {
+		if !deferredDriveVideo && segment.SHA256 != asset.SHA256 {
 			violations.add(path+".sha256", "asset_hash_mismatch", asset.SHA256, segment.SHA256)
 		}
 		if sourceEnd, ok := nonNegativeSum(segment.SourceInUS, segment.SourceDurationUS); !ok || sourceEnd > asset.DurationUS {
@@ -368,6 +376,16 @@ func validateSegment(violations *CompiledRenderPlanV2ValidationErrors, path stri
 	} else if totalFramesOK && endFrame > totalFrames {
 		violations.add(path, "timeline_out_of_bounds", fmt.Sprintf("timeline end <= %d frames", totalFrames), fmt.Sprint(endFrame))
 	}
+}
+
+func isDeferredDriveVideo(asset AssetRefV2) bool {
+	if asset.Kind != "video" {
+		return false
+	}
+	if asset.SourceKind == "drive" && strings.TrimSpace(asset.DriveFileID) != "" {
+		return true
+	}
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(asset.AssetID)), "drive:")
 }
 
 func (e *CompiledRenderPlanV2ValidationErrors) add(path, issue, expected, observed string) {

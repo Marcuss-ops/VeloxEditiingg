@@ -72,6 +72,30 @@ func TestValidateCompiledRenderPlanV2_AcceptsValidPlan(t *testing.T) {
 	}
 }
 
+func TestValidateCompiledRenderPlanV2_AcceptsDeferredDriveStockWithoutProducerHash(t *testing.T) {
+	plan := validPlanForValidation()
+	video := &plan.Assets[0]
+	video.AssetID = "drive:stock-file-01"
+	video.AssetKey = "drive:stock-file-01"
+	video.SourceKind = "drive"
+	video.DriveFileID = "stock-file-01"
+	video.SHA256 = ""
+	video.SizeBytes = 0
+	video.Kind = "video"
+	plan.VideoTracks[0].Segments[0].AssetID = video.AssetID
+	plan.VideoTracks[0].Segments[0].SHA256 = ""
+	if err := ValidateCompiledRenderPlanV2(plan); err != nil {
+		t.Fatalf("deferred Drive stock plan rejected: %v", err)
+	}
+	canonical, err := plan.CanonicalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeCompiledRenderPlanV2(canonical); err != nil {
+		t.Fatalf("canonical Drive stock plan failed strict decode: %v", err)
+	}
+}
+
 func TestValidateCompiledRenderPlanV2_RejectsCoreContractViolations(t *testing.T) {
 	tests := []struct {
 		name   string

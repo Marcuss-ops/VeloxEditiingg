@@ -8,7 +8,7 @@ import (
 	"velox-worker-agent/pkg/video/pipeline"
 )
 
-func TestRegisterCanonicalRenderExecutorsRegistersSingleCompiledPlanExecutor(t *testing.T) {
+func TestRegisterCanonicalRenderExecutorsRegistersCopyAndDriveSliceExecutors(t *testing.T) {
 	reg := executor.NewRegistry()
 	if err := registerCanonicalRenderExecutors(reg, t.TempDir(), []*pipeline.Runner{pipeline.NewRunner(nil, nil, nil)}); err != nil {
 		t.Fatalf("register canonical render executors: %v", err)
@@ -16,13 +16,14 @@ func TestRegisterCanonicalRenderExecutorsRegistersSingleCompiledPlanExecutor(t *
 
 	for _, id := range []string{
 		executors.VideoAssembleCopyID,
+		executors.VideoAssembleSliceID,
 	} {
 		if !reg.Has(id, 1) {
 			t.Errorf("registry missing %s@1", id)
 		}
 	}
-	if got := reg.Len(); got != 1 {
-		t.Fatalf("registry length = %d, want 1", got)
+	if got := reg.Len(); got != 2 {
+		t.Fatalf("registry length = %d, want 2", got)
 	}
 	descs := reg.Descriptors()
 	for _, desc := range descs {
