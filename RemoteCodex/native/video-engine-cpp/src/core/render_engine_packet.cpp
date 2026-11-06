@@ -177,6 +177,7 @@ RenderResult RenderEngine::renderCopyOnly(
             .source_in_us = item.source_in_us,
             .source_duration_us = duration_us,
             .include_audio = item.include_audio,
+            .normalized = item.packet_copy_certified,
             .metadata_certified = item.metadata_certified,
         });
         total_copy_duration += item.duration_us > 0

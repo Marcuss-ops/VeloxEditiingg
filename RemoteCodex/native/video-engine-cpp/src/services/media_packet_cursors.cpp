@@ -39,6 +39,7 @@ bool prepareSegment(CursorSegment& segment, std::string& error) {
         return false;
     }
     if (segment.media_type == AVMEDIA_TYPE_VIDEO && !segment.normalized &&
+        !segment.metadata_certified &&
         !segment.session->sourceWindowStartsOnKeyframe(
             segment.stream_index, segment.source_in_us, error)) {
         return false;

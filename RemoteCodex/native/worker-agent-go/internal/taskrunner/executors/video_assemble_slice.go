@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -20,7 +19,7 @@ import (
 	"velox-worker-agent/internal/publisher"
 	"velox-worker-agent/internal/runtimeassets"
 	"velox-worker-agent/pkg/storage"
-	"velox-worker-agent/pkg/video/ffmpegrunner"
+	"velox-worker-agent/pkg/video/pipeline"
 )
 
 const (
@@ -31,7 +30,7 @@ const (
 // videoAssembleSliceExecutor copies compatible source packets from verified
 // runtime assets in the worker cache into the final mux. It never encodes.
 type videoAssembleSliceExecutor struct {
-	runner     ffmpegrunner.FFmpegRunner
+	runner     *pipeline.Runner
 	prober     sliceMediaProber
 	outputRoot string
 }
@@ -46,12 +45,9 @@ func (ffprobeSliceMediaProber) ProbeMediaDetails(ctx context.Context, path strin
 	return publisher.ProbeMediaDetails(ctx, path)
 }
 
-func NewVideoAssembleSlice(outputRoot string, runner ffmpegrunner.FFmpegRunner) executor.Executor {
+func NewVideoAssembleSlice(outputRoot string, runner *pipeline.Runner) executor.Executor {
 	if strings.TrimSpace(outputRoot) == "" {
 		outputRoot = filepath.Join(os.TempDir(), "velox", "video-assemble-slice")
-	}
-	if runner == nil {
-		runner = ffmpegrunner.NewProcessRunner()
 	}
 	return &videoAssembleSliceExecutor{runner: runner, prober: ffprobeSliceMediaProber{}, outputRoot: outputRoot}
 }
@@ -69,8 +65,8 @@ func (e *videoAssembleSliceExecutor) Validate(spec executor.TaskSpec) error {
 	if spec.ExecutorID != VideoAssembleSliceID {
 		return fmt.Errorf("video.assemble.slice.v1: executor_id must be %q", VideoAssembleSliceID)
 	}
-	if e == nil || e.runner == nil {
-		return errors.New("video.assemble.slice.v1: FFmpeg runner is not configured")
+	if e == nil || e.runner == nil || e.runner.RenderClient() == nil {
+		return errors.New("video.assemble.slice.v1: native packet-copy renderer is not configured")
 	}
 	if e.prober == nil {
 		return errors.New("video.assemble.slice.v1: FFprobe media validation is not configured")
@@ -170,6 +166,9 @@ func (e *videoAssembleSliceExecutor) Execute(ctx context.Context, execCtx execut
 		}
 		plan = compiled
 	}
+	if err := validateCopyOnlyPlan(plan); err != nil {
+		return fail("DRIVE_SLICE_PLAN_INVALID", err)
+	}
 	audio, ok := bindings[plan.FinalAudio.AssetID]
 	if !ok || !audio.Verified || audio.Size <= 0 || audio.SHA256 == "" || audio.SHA256 != plan.FinalAudio.SHA256 || audio.Size != plan.FinalAudio.SizeBytes {
 		return fail("DRIVE_SLICE_ASSETS_INVALID", errors.New("final audio integrity binding does not match the plan"))
@@ -190,31 +189,13 @@ func (e *videoAssembleSliceExecutor) Execute(ctx context.Context, execCtx execut
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0o750); err != nil {
 		return fail("OUTPUT_DIRECTORY", err)
 	}
-	// The concat manifest is the only temporary file. Video packets are copied
-	// directly from the verified cache; this executor never invokes an encoder.
-	workRoot := filepath.Dir(outputPath)
-	if resolver := storageResolverFromExecutionContext(execCtx); resolver != nil {
-		workRoot = resolver.Config().TempDir
-	}
-	if strings.TrimSpace(workRoot) == "" {
-		return fail("DRIVE_SLICE_STORAGE_INVALID", errors.New("disk-backed slice work directory is not configured"))
-	}
-	tempDir, err := os.MkdirTemp(workRoot, "drive-slice-copy-"+jobID+"-")
+	wire, err := marshalCopyOnlyWire(plan, spec.JobID, outputPath, bindings)
 	if err != nil {
-		return fail("DRIVE_SLICE_STORAGE_INVALID", err)
+		return fail("DRIVE_SLICE_PLAN_INVALID", err)
 	}
-	defer os.RemoveAll(tempDir)
-	listPath := filepath.Join(tempDir, "segments.ffconcat")
-	if err := writeSliceConcatList(listPath, plan, bindings); err != nil {
-		return fail("DRIVE_SLICE_STORAGE_INVALID", err)
-	}
-	args, err := sliceConcatMuxArgs(listPath, audio.Path, outputPath, plan, "avc3")
-	if err != nil {
-		return fail("DRIVE_SLICE_ASSETS_INVALID", err)
-	}
-	metrics, renderErr := e.runner.Run(ctx, ffmpegrunner.FFmpegRequest{Operation: ffmpegrunner.OperationEncode, Args: args})
+	metrics, renderErr := e.runner.RenderCompiledPlanV2(ctx, wire, outputPath)
 	if renderErr != nil {
-		return fail("DRIVE_SLICE_COPY_FAILED", fmt.Errorf("stream-copy concat/mux: %w", renderErr))
+		return fail(copyOnlyRenderErrorCode(renderErr), renderErr)
 	}
 	if err := e.verifyFinalMedia(ctx, outputPath, plan); err != nil {
 		return fail("DRIVE_SLICE_OUTPUT_INVALID", err)
@@ -223,17 +204,10 @@ func (e *videoAssembleSliceExecutor) Execute(ctx context.Context, execCtx execut
 	if err != nil {
 		return fail("FINAL_OUTPUT_INVALID", err)
 	}
-	raw := rawMetricsFromFFmpegResult(metrics)
-	raw.OutputBytes = artifact.SizeBytes
-	raw.OutputFileSize = artifact.SizeBytes
-	raw.OutputSha256 = artifact.Hash
-	raw.EncodePasses = 0
-	raw.ConcatMode = "stream_copy"
-	raw.FinalConcatStreamCopy = true
-	raw.MediaDurationSeconds = float64(plan.DurationUS) / 1_000_000
-	raw.WallClockSeconds = float64(metrics.ProcessWallMS) / 1000
+	raw := copyOnlyRawMetrics(plan, metrics, artifact)
 	return executor.ExecutionResult{
 		Status: "succeeded", Outputs: []executor.ArtifactRef{artifact}, RawMetrics: raw,
+		Segments: projectSegments(metrics), DetailedPhases: projectDetailedPhases(metrics),
 		StartedAt: started, CompletedAt: time.Now().UTC(),
 	}, nil
 }
@@ -282,18 +256,11 @@ func (e *videoAssembleSliceExecutor) compileStockPoolPlan(_ context.Context, spe
 	for i := range compiled.VideoTracks {
 		compiled.VideoTracks[i].Segments = append([]contract.VideoSegmentV2(nil), plan.VideoTracks[i].Segments...)
 	}
-	assetByID := make(map[string]contract.AssetRefV2, len(ordered))
-	for _, member := range ordered {
-		assetID := "stockpool:" + member.DriveFileID
-		binding := bindings[assetID]
-		frames := member.DurationMS * int64(plan.Output.FPSNum) / (1000 * int64(plan.Output.FPSDen))
-		assetByID[assetID] = contract.AssetRefV2{AssetID: assetID, AssetKey: member.DriveFileID, SourceKind: "drive", DriveFileID: member.DriveFileID, SHA256: binding.SHA256, SizeBytes: binding.Size, Kind: "video", ProfileID: plan.Output.ProfileID, FrameCount: frames, FirstFrameKeyframe: true, ClosedGOP: true, DurationUS: member.DurationMS * 1000, Width: plan.Output.Width, Height: plan.Output.Height}
-		compiled.Assets = append(compiled.Assets, assetByID[assetID])
-	}
 	poolCursor := 0
 	framesLeft := make(map[string]int64, len(ordered))
-	for assetID, asset := range assetByID {
-		framesLeft[assetID] = asset.FrameCount
+	for _, member := range ordered {
+		assetID := "stockpool:" + member.DriveFileID
+		framesLeft[assetID] = member.DurationMS * int64(plan.Output.FPSNum) / (1000 * int64(plan.Output.FPSDen))
 	}
 	for trackIndex := range compiled.VideoTracks {
 		segments := make([]contract.VideoSegmentV2, 0, len(compiled.VideoTracks[trackIndex].Segments))
@@ -313,17 +280,22 @@ func (e *videoAssembleSliceExecutor) compileStockPoolPlan(_ context.Context, spe
 				}
 				member := ordered[poolCursor]
 				part++
-				assetID := "stockpool:" + member.DriveFileID
-				asset := assetByID[assetID]
-				count := framesLeft[assetID]
+				baseAssetID := "stockpool:" + member.DriveFileID
+				binding := bindings[baseAssetID]
+				count := framesLeft[baseAssetID]
 				if count > remaining {
 					count = remaining
 				}
-				segments = append(segments, contract.VideoSegmentV2{SegmentID: fmt.Sprintf("%s-source-%03d", segment.SegmentID, part), AssetID: assetID, SHA256: asset.SHA256, TimelineStartFrame: timelineFrame, FrameCount: count, SourceDurationUS: count * int64(plan.Output.FPSDen) * 1_000_000 / int64(plan.Output.FPSNum)})
-				framesLeft[assetID] -= count
+				assetID := fmt.Sprintf("%s:timeline:%d", baseAssetID, timelineFrame)
+				durationUS := count * int64(plan.Output.FPSDen) * 1_000_000 / int64(plan.Output.FPSNum)
+				asset := contract.AssetRefV2{AssetID: assetID, AssetKey: member.DriveFileID, SourceKind: "drive", DriveFileID: member.DriveFileID, SHA256: binding.SHA256, SizeBytes: binding.Size, Kind: "video", MIME: "video/mp4", ProfileID: plan.Output.ProfileID, FrameCount: count, TimelineRevision: plan.TimelineRevision, TimelineSHA256: plan.TimelineSHA256, TimelineStartFrame: timelineFrame, FirstFrameKeyframe: true, ClosedGOP: true, DurationUS: durationUS, Width: plan.Output.Width, Height: plan.Output.Height}
+				compiled.Assets = append(compiled.Assets, asset)
+				bindings[assetID] = binding
+				segments = append(segments, contract.VideoSegmentV2{SegmentID: fmt.Sprintf("%s-source-%03d", segment.SegmentID, part), AssetID: assetID, SHA256: asset.SHA256, TimelineStartFrame: timelineFrame, FrameCount: count, SourceDurationUS: durationUS})
+				framesLeft[baseAssetID] -= count
 				remaining -= count
 				timelineFrame += count
-				if framesLeft[assetID] == 0 {
+				if framesLeft[baseAssetID] == 0 {
 					poolCursor++
 				}
 			}
@@ -331,12 +303,6 @@ func (e *videoAssembleSliceExecutor) compileStockPoolPlan(_ context.Context, spe
 		compiled.VideoTracks[trackIndex].Segments = segments
 	}
 	return &compiled, nil
-}
-
-func slicePlanDurationFrameCount(plan *contract.CompiledRenderPlanV2) int64 {
-	n := plan.DurationUS * int64(plan.Output.FPSNum)
-	d := int64(plan.Output.FPSDen) * 1_000_000
-	return (n + d - 1) / d
 }
 
 func (e *videoAssembleSliceExecutor) verifyFinalMedia(ctx context.Context, outputPath string, plan *contract.CompiledRenderPlanV2) error {
@@ -358,50 +324,10 @@ func (e *videoAssembleSliceExecutor) verifyFinalMedia(ctx context.Context, outpu
 	return nil
 }
 
-func writeSliceConcatList(path string, plan *contract.CompiledRenderPlanV2, bindings runtimeassets.Bindings) error {
-	var b strings.Builder
-	b.WriteString("ffconcat version 1.0\n")
-	for _, segment := range plan.VideoTracks[0].Segments {
-		binding, ok := bindings[segment.AssetID]
-		if !ok || !binding.Verified || strings.TrimSpace(binding.Path) == "" {
-			return fmt.Errorf("source %q is not ready for stream-copy concat", segment.AssetID)
-		}
-		abs, err := filepath.Abs(binding.Path)
-		if err != nil {
-			return err
-		}
-		quoted := strings.ReplaceAll(abs, "'", "'\\''")
-		frameDurationUS := segment.FrameCount * int64(plan.Output.FPSDen) * 1_000_000 / int64(plan.Output.FPSNum)
-		frameDuration := seconds(frameDurationUS)
-		fmt.Fprintf(&b, "file '%s'\ninpoint 0\noutpoint %s\nduration %s\n", quoted, frameDuration, frameDuration)
-	}
-	return os.WriteFile(path, []byte(b.String()), 0o600)
-}
-
-func sliceConcatMuxArgs(listPath, audioPath, output string, plan *contract.CompiledRenderPlanV2, videoTag string) ([]string, error) {
-	if strings.TrimSpace(audioPath) == "" {
-		return nil, errors.New("final audio path is empty")
-	}
-	if videoTag != "avc1" && videoTag != "avc3" {
-		return nil, fmt.Errorf("unsupported H.264 MP4 sample entry %q", videoTag)
-	}
-	return []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-y",
-		"-f", "concat", "-safe", "0", "-i", listPath,
-		"-threads", "1", "-i", audioPath,
-		"-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-tag:v", videoTag, "-c:a", "copy",
-		"-frames:v", strconv.FormatInt(slicePlanFrameCount(plan), 10),
-		"-t", seconds(plan.DurationUS), "-video_track_timescale", strconv.Itoa(plan.Output.TimeBaseDen),
-		"-movflags", "+faststart", output}, nil
-}
-
 func slicePlanFrameCount(plan *contract.CompiledRenderPlanV2) int64 {
 	var frames int64
 	for _, segment := range plan.VideoTracks[0].Segments {
 		frames += segment.FrameCount
 	}
 	return frames
-}
-
-func seconds(microseconds int64) string {
-	return strconv.FormatFloat(float64(microseconds)/1_000_000, 'f', 6, 64)
 }

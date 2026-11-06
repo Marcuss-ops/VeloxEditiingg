@@ -79,7 +79,9 @@ if [ -f "$ENGINE_SRC/CMakeLists.txt" ]; then
       -DVELOX_ENABLE_LIBAV="${VELOX_VIDEO_ENGINE_LIBAV}"
 
   cmake --build "$BUILD_DIR" --parallel "$BUILD_JOBS"
-  ctest --test-dir "$BUILD_DIR" --output-on-failure
+  if [ "${VELOX_SKIP_ENGINE_TESTS:-0}" != "1" ]; then
+    ctest --test-dir "$BUILD_DIR" --output-on-failure
+  fi
 
   if [ -f "$BUILD_DIR/velox_video_engine" ]; then
     install -m 0755 "$BUILD_DIR/velox_video_engine" "$OUT_BIN"

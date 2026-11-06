@@ -242,12 +242,22 @@ bool preparePlan(const CopyOnlyMuxRequest& request, packet::InputSessionRegistry
     const AVStream* firstVideo = firstDemuxer.stream(firstVideoIndex);
     const MediaSignature firstVideoSignature = mediaSignatureFromStream(firstVideo);
     std::string compatibilityReason;
-    if (requestedVideoTarget && !mediaSignaturesCompatible(
-            firstVideoSignature, *requestedVideoTarget, &compatibilityReason)) {
+    auto requestedTargetWithoutTimeBase = requestedVideoTarget;
+    if (requestedTargetWithoutTimeBase) {
+        requestedTargetWithoutTimeBase->time_base_num = 0;
+        requestedTargetWithoutTimeBase->time_base_den = 0;
+    }
+    if (requestedTargetWithoutTimeBase && !mediaSignaturesCompatible(
+            firstVideoSignature, *requestedTargetWithoutTimeBase, &compatibilityReason)) {
         return fail(result, "segment_execution_rejected: copy-only segment execution rejected at " +
             firstSegment.path.string() + ": " + compatibilityReason);
     }
     videoTarget = firstVideoSignature;
+    // Input streams can use different legal time bases. Packet timestamps are
+    // rewritten into the output stream's time base by the muxer; requiring
+    // equality here incorrectly rejects compatible stock sources.
+    videoTarget->time_base_num = 0;
+    videoTarget->time_base_den = 0;
     // SPS/PPS extradata is intentionally not part of the cross-segment
     // identity. Profile and level are decoder-advertised H.264 metadata and
     // may differ between otherwise packet-compatible assets produced by
@@ -258,7 +268,7 @@ bool preparePlan(const CopyOnlyMuxRequest& request, packet::InputSessionRegistry
     videoTarget->extradata.clear();
     videoTarget->profile = -1;
     videoTarget->level = -1;
-    const bool firstKeyframeSafe = firstSegment.normalized ||
+    const bool firstKeyframeSafe = firstSegment.metadata_certified || firstSegment.normalized ||
         firstSession->sourceWindowStartsOnKeyframe(
             firstVideoIndex, firstSegment.source_in_us, error);
     if (!firstKeyframeSafe) {

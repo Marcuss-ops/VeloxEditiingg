@@ -295,6 +295,7 @@ std::optional<RenderPlan> parseRenderPlanV2(
             ju::extractJsonStringValue(segmentStr, "sha256"), timeline_sha256,
             timeline_revision, item.timeline_start_frame, item.frame_count,
             item.source_duration_us, item.source_in_us);
+        item.packet_copy_certified = item.metadata_certified;
         const std::string path = bindingPathFor(bindingsBlock, assetId);
         if (path.empty()) {
             std::cerr << "errore: CompiledRenderPlanV2 asset \"" << assetId

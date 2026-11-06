@@ -51,6 +51,10 @@ struct TimelineItem {
     // validates the opened container header and falls back to stream-info
     // discovery when anything needed by packet muxing is absent.
     bool metadata_certified{false};
+    // The asset manifest certifies frame-zero random access. This skips the
+    // redundant per-window keyframe scan while retaining opened-stream
+    // compatibility checks in the packet muxer.
+    bool packet_copy_certified{false};
     // Editorial replacement clips can be held on their final frame instead
     // of looping when their source is shorter than the requested window.
     bool hold_last_frame{false};
