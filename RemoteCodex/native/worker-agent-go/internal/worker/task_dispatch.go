@@ -13,6 +13,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"velox-shared/contract"
@@ -213,6 +215,13 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 		if err != nil {
 			return failBeforeRun("compiled_plan_asset_resolution_failed", err)
 		}
+		// Resolve the protection keys from the verified runtime bindings. The
+		// immutable plan may identify a Drive asset by a logical asset_key,
+		// while the resolver stores it by content hash; using the wire key here
+		// makes reservation look up a cache row that does not exist. Bindings
+		// also contain only the stock-pool members actually selected for this
+		// run, avoiding leases for every file in the Drive folder.
+		leaseAssetKeys = compiledPlanLeaseKeys(bindings)
 		ctx = runtimeassets.WithBindings(ctx, bindings)
 	}
 	// Re-materialize only after the protection handoff reports that the
@@ -228,6 +237,7 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 			if err != nil {
 				return err
 			}
+			leaseAssetKeys = compiledPlanLeaseKeys(bindings)
 			ctx = runtimeassets.WithBindings(ctx, bindings)
 			return nil
 		}
@@ -468,4 +478,24 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 		report.AttemptEvents.ArtifactVerified(telemetry.StatusOK, nil)
 	}
 	return &report, nil
+}
+
+// compiledPlanLeaseKeys returns the canonical content-cache keys created by
+// resolveCompiledRenderPlanAssets. V2 bindings are integrity-verified and
+// therefore carry the SHA-256 used by asset_downloader as the cache identity.
+func compiledPlanLeaseKeys(bindings runtimeassets.Bindings) []string {
+	keys := make(map[string]struct{}, len(bindings))
+	for _, binding := range bindings {
+		sha := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(binding.SHA256)), "sha256:")
+		if sha == "" {
+			continue
+		}
+		keys["sha256:"+sha] = struct{}{}
+	}
+	out := make([]string, 0, len(keys))
+	for key := range keys {
+		out = append(out, key)
+	}
+	sort.Strings(out)
+	return out
 }
