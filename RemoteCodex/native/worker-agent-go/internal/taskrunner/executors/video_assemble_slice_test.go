@@ -117,3 +117,30 @@ func TestVideoAssembleSlice_RejectsNonKeyframeOffsetBeforeFFmpeg(t *testing.T) {
 		t.Fatalf("invalid cut was not rejected before native mux: result=%+v native_calls=%d", result, renderer.calls)
 	}
 }
+
+func TestVideoAssembleSlice_RejectsLegacyStockWindowWithoutProbingOrCutting(t *testing.T) {
+	plan := driveSlicePlan()
+	plan.VideoTracks[0].Segments[0].FrameCount = 13
+	plan.VideoTracks[0].Segments[0].SourceInUS = 4_475_000
+	plan.VideoTracks[0].Segments[0].SourceDurationUS = 525_000
+	plan.Assets[0].DurationUS = 5_000_000
+	plan.Assets[0].FrameCount = 120
+	canonical, err := plan.CanonicalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	renderer := &sliceNativeRenderer{}
+	runner := pipeline.NewRunner(nil, renderer, nil)
+	exec := &videoAssembleSliceExecutor{runner: runner, prober: sliceMediaProbeStub{}, outputRoot: t.TempDir()}
+	spec := executorTaskSpec(VideoAssembleSliceID, "job-stock-window", canonical, plan)
+	spec.Payload["runtime_assets"] = []interface{}{map[string]interface{}{
+		"asset_id": "drive:stock-01", "drive_file_id": "stock-01", "role": "stock",
+	}}
+	result, err := exec.Execute(context.Background(), nil, spec)
+	if err != nil || result.Status != "failed" {
+		t.Fatalf("legacy stock window result=%+v err=%v, want immediate failure", result, err)
+	}
+	if !strings.Contains(result.ErrorDetail, "whole-clip stock_pool slots only") || renderer.calls != 0 {
+		t.Fatalf("unsafe stock window was not rejected before render: result=%+v native_calls=%d", result, renderer.calls)
+	}
+}

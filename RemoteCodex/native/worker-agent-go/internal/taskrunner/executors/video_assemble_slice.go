@@ -80,6 +80,7 @@ func (e *videoAssembleSliceExecutor) Validate(spec executor.TaskSpec) error {
 	}
 	assets := make(map[string]contract.AssetRefV2, len(plan.Assets))
 	runtimeDriveIDs := sliceRuntimeDriveFileIDs(spec.Payload["runtime_assets"])
+	runtimeStockIDs := sliceRuntimeStockAssetIDs(spec.Payload["runtime_assets"])
 	hasDrive := plan.StockPool != nil
 	for _, asset := range plan.Assets {
 		assets[asset.AssetID] = asset
@@ -123,6 +124,9 @@ func (e *videoAssembleSliceExecutor) Validate(spec executor.TaskSpec) error {
 				return fmt.Errorf("video.assemble.slice.v1: asset %q is not certified for packet-copy assembly", segment.AssetID)
 			}
 			if segment.SourceInUS != 0 {
+				if _, isStock := runtimeStockIDs[segment.AssetID]; isStock {
+					return fmt.Errorf("video.assemble.slice.v1: stock segment %q starts at %d us inside its Drive clip; worker accepts whole-clip stock_pool slots only and will not probe, cut, or re-encode stock", segment.SegmentID, segment.SourceInUS)
+				}
 				return fmt.Errorf("video.assemble.slice.v1: segment %q starts at a non-keyframe offset (%d us); packet-copy is unsafe", segment.SegmentID, segment.SourceInUS)
 			}
 			if segment.FrameCount <= 0 || segment.FrameCount > asset.FrameCount {
@@ -144,6 +148,34 @@ func (e *videoAssembleSliceExecutor) Validate(spec executor.TaskSpec) error {
 		return fmt.Errorf("video.assemble.slice.v1: timeline has %d frames, plan duration requires %d", nextFrame, wantFrames)
 	}
 	return nil
+}
+
+func sliceRuntimeStockAssetIDs(raw interface{}) map[string]struct{} {
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return nil
+	}
+	var assets []struct {
+		AssetID  string `json:"asset_id"`
+		AssetKey string `json:"asset_key"`
+		Role     string `json:"role"`
+	}
+	if json.Unmarshal(data, &assets) != nil {
+		return nil
+	}
+	ids := make(map[string]struct{})
+	for _, asset := range assets {
+		if !strings.EqualFold(strings.TrimSpace(asset.Role), "stock") {
+			continue
+		}
+		if id := strings.TrimSpace(asset.AssetID); id != "" {
+			ids[id] = struct{}{}
+		}
+		if id := strings.TrimSpace(asset.AssetKey); id != "" {
+			ids[id] = struct{}{}
+		}
+	}
+	return ids
 }
 
 func (e *videoAssembleSliceExecutor) Execute(ctx context.Context, execCtx executor.ExecutionContext, spec executor.TaskSpec) (executor.ExecutionResult, error) {

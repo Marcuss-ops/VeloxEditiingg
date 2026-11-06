@@ -22,6 +22,12 @@ func RequiredVideoAssemblyExecutor(payload map[string]interface{}) string {
 	if plan.StockPool != nil {
 		return VideoAssemblySliceExecutorID
 	}
+	// Two-stage submissions choose an executor before runtime asset bindings
+	// arrive. Keep them on the source-aware path so FINALIZE can provide Drive
+	// stock without leaving the task pinned to copy-only.
+	if pending, _ := payload["runtime_assets_pending"].(bool); pending || compiledRuntimeHasStockRole(payload["runtime_assets"]) {
+		return VideoAssemblySliceExecutorID
+	}
 	runtimeDriveIDs := compiledRuntimeDriveIDs(payload["runtime_assets"])
 	for _, asset := range plan.Assets {
 		if asset.Kind != "video" {
@@ -35,6 +41,25 @@ func RequiredVideoAssemblyExecutor(payload map[string]interface{}) string {
 		}
 	}
 	return VideoAssemblyCopyExecutorID
+}
+
+func compiledRuntimeHasStockRole(raw interface{}) bool {
+	encoded, err := json.Marshal(raw)
+	if err != nil || len(encoded) == 0 || string(encoded) == "null" {
+		return false
+	}
+	var assets []struct {
+		Role string `json:"role"`
+	}
+	if json.Unmarshal(encoded, &assets) != nil {
+		return false
+	}
+	for _, asset := range assets {
+		if strings.EqualFold(strings.TrimSpace(asset.Role), "stock") {
+			return true
+		}
+	}
+	return false
 }
 
 func compiledRuntimeDriveIDs(raw interface{}) map[string]string {
