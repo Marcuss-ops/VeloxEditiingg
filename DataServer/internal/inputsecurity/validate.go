@@ -31,7 +31,26 @@ func (f *Fetcher) ValidateFile(ctx context.Context, path string, kind Kind, decl
 	return validation, err
 }
 
+// ValidateFileForCanonicalProbe validates the path, size and media signature
+// while leaving stream inspection to the caller's canonical media probe. It
+// is only for pipelines that immediately run an authoritative ffprobe after
+// this security gate, avoiding a second independent probe of the same bytes.
+func (f *Fetcher) ValidateFileForCanonicalProbe(ctx context.Context, path string, kind Kind, declaredMIME string) (Validation, error) {
+	if f == nil {
+		return Validation{}, newError(kind, ErrPathViolation, "input validator is unavailable", nil)
+	}
+	validation, err := f.validateFileMode(ctx, path, kind, declaredMIME, false)
+	if err != nil {
+		f.reject(kind, err, 0)
+	}
+	return validation, err
+}
+
 func (f *Fetcher) validateFile(ctx context.Context, path string, kind Kind, declaredMIME string) (Validation, error) {
+	return f.validateFileMode(ctx, path, kind, declaredMIME, true)
+}
+
+func (f *Fetcher) validateFileMode(ctx context.Context, path string, kind Kind, declaredMIME string, probeMedia bool) (Validation, error) {
 	if !f.allowedPath(path) {
 		return Validation{}, newError(kind, ErrPathViolation, "file path is not a system-controlled input path", nil)
 	}
@@ -81,7 +100,7 @@ func (f *Fetcher) validateFile(ctx context.Context, path string, kind Kind, decl
 			probeKind = KindAudio
 		}
 	}
-	if probeKind == KindClip || probeKind == KindAudio || probeKind == KindVoiceover {
+	if probeMedia && (probeKind == KindClip || probeKind == KindAudio || probeKind == KindVoiceover) {
 		if err := f.ffprobe(ctx, path, probeKind); err != nil {
 			return Validation{}, err
 		}

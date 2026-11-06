@@ -243,7 +243,7 @@ func (s *AssetService) materializeVideoSource(ctx context.Context, sourceRef str
 			return "", func() {}, fmt.Errorf("video source is not a regular file")
 		}
 		if s.security != nil {
-			if _, err := s.security.ValidateFile(ctx, sourceRef, inputsecurity.KindUnknown, ""); err != nil {
+			if _, err := s.security.ValidateFileForCanonicalProbe(ctx, sourceRef, inputsecurity.KindUnknown, ""); err != nil {
 				return "", func() {}, fmt.Errorf("validate local video source: %w", err)
 			}
 		}
@@ -306,7 +306,7 @@ func (s *AssetService) materializeVideoSource(ctx context.Context, sourceRef str
 		_ = os.Remove(path)
 		return "", func() {}, fmt.Errorf("close materialized video source: %w", err)
 	}
-	if _, err := s.security.ValidateFile(ctx, path, inputsecurity.KindClip, source.MIMEType); err != nil {
+	if _, err := s.security.ValidateFileForCanonicalProbe(ctx, path, inputsecurity.KindClip, source.MIMEType); err != nil {
 		_ = s.security.Quarantine(path, inputsecurity.KindClip, inputsecurity.CodeOf(err), err.Error())
 		return "", func() {}, fmt.Errorf("validate materialized video source: %w", err)
 	}
@@ -363,7 +363,7 @@ func (s *AssetService) registerPreparedVideoFile(ctx context.Context, preparedPa
 		return nil, fmt.Errorf("prepared video segment is empty")
 	}
 	if s.security != nil {
-		if _, err := s.security.ValidateFile(ctx, stagingPath, inputsecurity.KindClip, "video/mp4"); err != nil {
+		if _, err := s.security.ValidateFileForCanonicalProbe(ctx, stagingPath, inputsecurity.KindClip, "video/mp4"); err != nil {
 			_ = s.security.Quarantine(stagingPath, inputsecurity.KindClip, inputsecurity.CodeOf(err), err.Error())
 			return nil, fmt.Errorf("validate prepared video segment: %w", err)
 		}
@@ -391,17 +391,40 @@ func (s *AssetService) registerPreparedVideoFile(ctx context.Context, preparedPa
 	// authority. The historical `normalization_version:
 	// "video-normalization.v1"` label is deliberately gone: it named the
 	// removed duplicate authority.
-	metadata, _ := json.Marshal(map[string]interface{}{
+	metadataFields := map[string]interface{}{
 		"source_name":                 filepath.Base(sourcePath),
 		"start_seconds":               plan.Segment.StartSeconds,
 		"end_seconds":                 plan.Segment.EndSeconds,
 		"duration_seconds":            plan.DurationSeconds,
+		"duration_us":                 int64(plan.DurationSeconds * 1_000_000),
 		"trim_mode":                   plan.Mode,
 		"normalized":                  plan.RequiresNormalization,
 		"canonical_profile_id":        plan.CanonicalProfile.ProfileID,
 		"canonical_stream_profile_id": plan.CanonicalProfile.StreamProfile(),
 		"canonical_profile_version":   plan.CanonicalProfile.Version,
-	})
+	}
+	if plan.OutputFrameCount > 0 {
+		metadataFields["frame_count"] = plan.OutputFrameCount
+		metadataFields["first_frame_keyframe"] = plan.FirstFrameKeyframe
+		metadataFields["closed_gop"] = plan.ClosedGOP
+		metadataFields["copy_eligible"] = plan.CopyEligible
+	}
+	if plan.SourceSHA256 != "" {
+		metadataFields["source_sha256"] = plan.SourceSHA256
+		metadataFields["source_size_bytes"] = plan.SourceSizeBytes
+		metadataFields["source_duration_us"] = plan.SourceDurationUS
+		metadataFields["source_frame_count"] = plan.SourceFrameCount
+		metadataFields["source_fps_num"] = plan.SourceFPSNum
+		metadataFields["source_fps_den"] = plan.SourceFPSDen
+		metadataFields["source_codec"] = plan.SourceCodec
+		metadataFields["source_profile"] = plan.SourceProfile
+		metadataFields["source_level"] = plan.SourceLevel
+		metadataFields["source_width"] = plan.SourceWidth
+		metadataFields["source_height"] = plan.SourceHeight
+		metadataFields["source_pixel_format"] = plan.SourcePixelFormat
+		metadataFields["source_keyframes_seconds"] = plan.SourceKeyframes
+	}
+	metadata, _ := json.Marshal(metadataFields)
 	record := AssetRecord{
 		AssetID:         sha256Hex,
 		Kind:            "video_segment",
@@ -422,7 +445,16 @@ func (s *AssetService) registerPreparedVideoFile(ctx context.Context, preparedPa
 	// later consumers (preflight, plan compiler, trimmer) read the registry
 	// instead of re-probing. Best-effort by contract — a failed probe leaves
 	// no metadata row and never fails the registration.
-	s.persistMediaMetadata(ctx, sha256Hex, finalPath, "video/mp4")
+	if plan.OutputFrameCount > 0 {
+		profile := plan.CanonicalProfile
+		_ = s.upsertMediaMetadataRecord(ctx, sha256Hex, &MediaMetadata{
+			Container: "mp4", DurationMs: int64(plan.DurationSeconds * 1000), VideoCodec: strings.ToLower(profile.Codec),
+			PixelFormat: strings.ToLower(profile.PixelFormat), Width: profile.Width, Height: profile.Height,
+			FPSNum: profile.FPSNum, FPSDen: profile.FPSDen, TimeBaseNum: profile.TimeBaseNum, TimeBaseDen: profile.TimeBaseDen,
+		})
+	} else {
+		s.persistMediaMetadata(ctx, sha256Hex, finalPath, "video/mp4")
+	}
 	sourceID, err := identity.NewHex128()
 	if err != nil {
 		return nil, fmt.Errorf("generate segment source ID: %w", err)

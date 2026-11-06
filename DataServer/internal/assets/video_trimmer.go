@@ -25,6 +25,7 @@ type VideoSegment struct {
 // decision. Keyframes are expressed in seconds in the source time base.
 type VideoProbe struct {
 	DurationSeconds float64
+	FrameCount      int64
 	Width           int
 	Height          int
 	FPSNum          int
@@ -32,6 +33,8 @@ type VideoProbe struct {
 	TimebaseNum     int
 	TimebaseDen     int
 	VideoCodec      string
+	VideoProfile    string
+	VideoLevel      int
 	VideoBitrateBPS int64
 	AudioCodec      string
 	AudioSampleRate int
@@ -61,7 +64,24 @@ type TrimPlan struct {
 	// produced against. It is the ONLY authority for compatibility fields and
 	// is persisted into the asset manifest so downstream consumers never have
 	// to re-derive (or re-invent) the identity.
-	CanonicalProfile contract.CanonicalVideoProfileV1
+	CanonicalProfile   contract.CanonicalVideoProfileV1
+	OutputFrameCount   int64
+	FirstFrameKeyframe bool
+	ClosedGOP          bool
+	CopyEligible       bool
+	SourceSHA256       string
+	SourceSizeBytes    int64
+	SourceDurationUS   int64
+	SourceFrameCount   int64
+	SourceFPSNum       int
+	SourceFPSDen       int
+	SourceCodec        string
+	SourceProfile      string
+	SourceLevel        int
+	SourceWidth        int
+	SourceHeight       int
+	SourcePixelFormat  string
+	SourceKeyframes    []float64
 }
 
 // TrimResult reports the selected path and resulting output path.
@@ -149,9 +169,8 @@ func (t *VideoTrimmer) Probe(ctx context.Context, inputPath string) (VideoProbe,
 	}
 	args := []string{
 		"-v", "error",
-		"-skip_frame", "nokey",
-		"-show_frames",
-		"-show_entries", "stream=codec_type,codec_name,width,height,r_frame_rate,time_base,pix_fmt,duration,sample_rate,channels:format=duration:frame=media_type,best_effort_timestamp_time",
+		"-skip_frame", "nokey", "-show_frames",
+		"-show_entries", "stream=codec_type,codec_name,profile,level,width,height,r_frame_rate,time_base,pix_fmt,duration,nb_frames,sample_rate,channels:format=duration:frame=media_type,key_frame,best_effort_timestamp_time",
 		"-of", "json",
 		inputPath,
 	}
@@ -190,13 +209,16 @@ func (t *VideoTrimmer) Probe(ctx context.Context, inputPath string) (VideoProbe,
 	probe.Width = videoStream.Width
 	probe.Height = videoStream.Height
 	probe.VideoCodec = strings.ToLower(strings.TrimSpace(videoStream.CodecName))
+	probe.VideoProfile = strings.ToLower(strings.TrimSpace(videoStream.Profile))
+	probe.VideoLevel = videoStream.Level
 	probe.VideoBitrateBPS = jsonInt64(videoStream.BitRate)
 	probe.PixelFormat = strings.ToLower(strings.TrimSpace(videoStream.PixelFormat))
+	probe.FrameCount = jsonInt64(videoStream.FramesCount)
 	probe.FPSNum, probe.FPSDen = parseRatio(videoStream.FrameRate)
 	probe.TimebaseNum, probe.TimebaseDen = parseRatio(videoStream.TimeBase)
 	for _, frame := range document.Frames {
 		rawTimestamp := bytes.TrimSpace(frame.Timestamp)
-		if strings.ToLower(strings.TrimSpace(frame.MediaType)) != "video" || len(rawTimestamp) == 0 || bytes.Equal(rawTimestamp, []byte("null")) {
+		if strings.ToLower(strings.TrimSpace(frame.MediaType)) != "video" || frame.KeyFrame != 1 || len(rawTimestamp) == 0 || bytes.Equal(rawTimestamp, []byte("null")) {
 			continue
 		}
 		timestamp := jsonFloat(rawTimestamp)
@@ -255,7 +277,7 @@ func (t *VideoTrimmer) Trim(ctx context.Context, inputPath, outputPath string, s
 	if err != nil {
 		return TrimResult{}, err
 	}
-	return t.trimWithProbe(ctx, probe, inputPath, outputPath, segment)
+	return t.trimWithProbe(ctx, probe, inputPath, outputPath, segment, 0)
 }
 
 // TrimWithProbe trims one segment using a caller-provided canonical probe
@@ -269,13 +291,55 @@ func (t *VideoTrimmer) TrimWithProbe(ctx context.Context, probe VideoProbe, inpu
 	if strings.TrimSpace(inputPath) == "" || strings.TrimSpace(outputPath) == "" {
 		return TrimResult{}, fmt.Errorf("video input and output paths are required")
 	}
-	return t.trimWithProbe(ctx, probe, inputPath, outputPath, segment)
+	return t.trimWithProbe(ctx, probe, inputPath, outputPath, segment, 0)
+}
+
+// TrimFramesWithProbe performs a frame-accurate trim with an explicit output
+// frame count. This is used for compiled timeline windows, where duration
+// rounding must never decide whether the worker receives 74, 75, or 76 frames.
+func (t *VideoTrimmer) TrimFramesWithProbe(ctx context.Context, probe VideoProbe, inputPath, outputPath string, segment VideoSegment, frameCount int64) (TrimResult, error) {
+	if t == nil || t.runner == nil || frameCount <= 0 {
+		return TrimResult{}, fmt.Errorf("video trimmer and positive frame count are required")
+	}
+	if strings.TrimSpace(inputPath) == "" || strings.TrimSpace(outputPath) == "" {
+		return TrimResult{}, fmt.Errorf("video input and output paths are required")
+	}
+	if err := validateSegmentWithinFrame(probe, segment); err != nil {
+		return TrimResult{}, err
+	}
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
+		return TrimResult{}, fmt.Errorf("create segment output directory: %w", err)
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(outputPath), ".velox-exact-window-*.mp4")
+	if err != nil {
+		return TrimResult{}, fmt.Errorf("create exact window temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return TrimResult{}, err
+	}
+	defer os.Remove(tmpPath)
+	plan := TrimPlan{
+		Mode: TrimModeFrameAccurateReencode, Segment: segment,
+		DurationSeconds:  float64(frameCount) * float64(t.profile.FPSDen) / float64(t.profile.FPSNum),
+		CanonicalProfile: t.profile,
+	}
+	plan.TrimArgs = exactWindowArgs(t.profile, t.quality, inputPath, tmpPath, segment, frameCount)
+	output, err := t.runner.Run(ctx, "ffmpeg", plan.TrimArgs...)
+	if err != nil {
+		return TrimResult{}, fmt.Errorf("materialize exact video window: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	if err := os.Rename(tmpPath, outputPath); err != nil {
+		return TrimResult{}, fmt.Errorf("promote exact video window: %w", err)
+	}
+	return TrimResult{Plan: plan, OutputPath: outputPath}, nil
 }
 
 // trimWithProbe is the shared execution body: plan, normalize if needed,
 // execute ffmpeg, atomically promote. The probe is already validated by the
 // caller (Plan fails on an invalid probe via validateSegment).
-func (t *VideoTrimmer) trimWithProbe(ctx context.Context, probe VideoProbe, inputPath, outputPath string, segment VideoSegment) (TrimResult, error) {
+func (t *VideoTrimmer) trimWithProbe(ctx context.Context, probe VideoProbe, inputPath, outputPath string, segment VideoSegment, exactFrameCount int64) (TrimResult, error) {
 	plan, err := t.Plan(probe, segment, inputPath, outputPath)
 	if err != nil {
 		return TrimResult{}, err
@@ -323,6 +387,10 @@ func (t *VideoTrimmer) trimWithProbe(ctx context.Context, probe VideoProbe, inpu
 	defer os.Remove(tmpOutputPath)
 
 	plan.TrimArgs = trimArgs(plan.Mode, segment, plan.DurationSeconds, workingInput, tmpOutputPath, t.profile, t.quality)
+	if exactFrameCount > 0 {
+		last := len(plan.TrimArgs) - 1
+		plan.TrimArgs = append(plan.TrimArgs[:last], append([]string{"-frames:v", strconv.FormatInt(exactFrameCount, 10)}, plan.TrimArgs[last:]...)...)
+	}
 	output, err := t.runner.Run(ctx, "ffmpeg", plan.TrimArgs...)
 	if err != nil {
 		return TrimResult{}, fmt.Errorf("trim video: %w: %s", err, strings.TrimSpace(string(output)))
@@ -342,6 +410,8 @@ type ffprobeDocument struct {
 type ffprobeStream struct {
 	CodecType   string          `json:"codec_type"`
 	CodecName   string          `json:"codec_name"`
+	Profile     string          `json:"profile"`
+	Level       int             `json:"level"`
 	Width       int             `json:"width"`
 	Height      int             `json:"height"`
 	FrameRate   string          `json:"r_frame_rate"`
@@ -351,10 +421,12 @@ type ffprobeStream struct {
 	Duration    json.RawMessage `json:"duration"`
 	SampleRate  json.RawMessage `json:"sample_rate"`
 	Channels    json.RawMessage `json:"channels"`
+	FramesCount json.RawMessage `json:"nb_frames"`
 }
 
 type ffprobeFrame struct {
 	MediaType string          `json:"media_type"`
+	KeyFrame  int             `json:"key_frame"`
 	Timestamp json.RawMessage `json:"best_effort_timestamp_time"`
 }
 
@@ -465,6 +537,16 @@ func trimArgs(mode TrimMode, segment VideoSegment, duration float64, inputPath, 
 	return append(args, "-avoid_negative_ts", "make_zero", "-reset_timestamps", "1", outputPath)
 }
 
+func exactWindowArgs(profile contract.CanonicalVideoProfileV1, quality contract.PreparationQualityPolicy, inputPath, outputPath string, segment VideoSegment, frameCount int64) []string {
+	args := []string{"-hide_banner", "-loglevel", "error", "-y", "-i", inputPath,
+		"-ss", formatSeconds(segment.StartSeconds), "-t", formatSeconds(segment.EndSeconds - segment.StartSeconds),
+		"-map", "0:v:0", "-map", "0:a?", "-vf", canonicalScaleFilter(profile)}
+	args = append(args, canonicalVideoEncodeArgs(profile, quality)...)
+	args = append(args, canonicalAudioEncodeArgs(quality)...)
+	args = append(args, "-frames:v", strconv.FormatInt(frameCount, 10), "-avoid_negative_ts", "make_zero", "-reset_timestamps", "1", "-movflags", "+faststart", outputPath)
+	return args
+}
+
 func validateSegment(total float64, segment VideoSegment) error {
 	if segment.StartSeconds < 0 || segment.EndSeconds <= segment.StartSeconds {
 		return fmt.Errorf("invalid video segment: start must be >= 0 and end must be greater than start")
@@ -474,6 +556,20 @@ func validateSegment(total float64, segment VideoSegment) error {
 	}
 	if segment.EndSeconds > total {
 		return fmt.Errorf("video segment ends outside source duration")
+	}
+	return nil
+}
+
+func validateSegmentWithinFrame(probe VideoProbe, segment VideoSegment) error {
+	if segment.StartSeconds < 0 || segment.EndSeconds <= segment.StartSeconds {
+		return fmt.Errorf("invalid video segment: start must be >= 0 and end must be greater than start")
+	}
+	if probe.DurationSeconds <= 0 || probe.FPSNum <= 0 || probe.FPSDen <= 0 || segment.StartSeconds >= probe.DurationSeconds {
+		return fmt.Errorf("video segment starts outside source duration")
+	}
+	frameDuration := float64(probe.FPSDen) / float64(probe.FPSNum)
+	if segment.EndSeconds > probe.DurationSeconds+frameDuration {
+		return fmt.Errorf("video segment ends beyond source duration by more than one source frame")
 	}
 	return nil
 }

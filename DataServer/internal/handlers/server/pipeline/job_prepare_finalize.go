@@ -195,15 +195,8 @@ func (h *Handlers) FinalizeJob() gin.HandlerFunc {
 			return
 		}
 		planJSON, _ := current[contract.PayloadKeyCompiledRenderPlanJSON].(string)
-		if err := validateStockPacketCopyWindows(planJSON, req.RuntimeAssets, req.RuntimePayload); err != nil {
-			c.JSON(http.StatusUnprocessableEntity, gin.H{
-				"ok":      false,
-				"error":   "invalid_compiled_render_plan",
-				"message": err.Error(),
-				"details": []gin.H{{"path": "compiled_render_plan_json.video_tracks", "issue": "stock_window_not_packet_copyable"}},
-			})
-			return
-		}
+		preparedStockPlan := false
+		finalRuntimeAssets := append([]map[string]interface{}(nil), req.RuntimeAssets...)
 		if previous, _ := current["runtime_finalize_idempotency_key"].(string); previous != "" && previous != req.IdempotencyKey {
 			c.JSON(http.StatusConflict, gin.H{"ok": false, "error": "finalize_idempotency_conflict", "message": "job was already finalized with a different idempotency_key"})
 			return
@@ -219,6 +212,40 @@ func (h *Handlers) FinalizeJob() gin.HandlerFunc {
 			c.JSON(http.StatusAccepted, gin.H{"ok": true, "job_id": jobID, "phase": "FINALIZE", "dispatch_status": "prefetch_refresh_queued", "idempotent": true})
 			return
 		}
+		if compiledPlanHasDriveStock(planJSON) {
+			if h.assetService == nil {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"ok": false, "error": "stock_preparation_unavailable", "message": "Master stock window preparation is not configured"})
+				return
+			}
+			bindings := append([]map[string]interface{}(nil), req.RuntimeAssets...)
+			var bindingErr error
+			bindings, bindingErr = appendRuntimeAssetBindings(bindings, req.RuntimePayload["runtime_assets"])
+			if bindingErr == nil {
+				bindings, bindingErr = appendRuntimeAssetBindings(bindings, current["runtime_assets"])
+			}
+			if storedPayload, ok := current["runtime_payload"].(map[string]interface{}); ok && bindingErr == nil {
+				bindings, bindingErr = appendRuntimeAssetBindings(bindings, storedPayload["runtime_assets"])
+			}
+			if bindingErr != nil {
+				c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "error": "invalid_runtime_assets", "message": bindingErr.Error()})
+				return
+			}
+			preparedPlan, preparedHash, prepareErr := h.assetService.PrepareDriveStockWindows(c.Request.Context(), planJSON, bindings)
+			if prepareErr != nil {
+				c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "error": "invalid_compiled_render_plan", "message": prepareErr.Error(), "details": []gin.H{{"path": "compiled_render_plan_json.video_tracks", "issue": "stock_window_materialization_failed"}}})
+				return
+			}
+			planJSON = preparedPlan
+			preparedStockPlan = true
+			finalRuntimeAssets = removePreparedStockBindings(bindings)
+			req.RuntimeAssets = finalRuntimeAssets
+			if req.RuntimePayload == nil {
+				req.RuntimePayload = make(map[string]interface{})
+			}
+			req.RuntimePayload["runtime_assets"] = finalRuntimeAssets
+			req.RuntimePayload[contract.PayloadKeyCompiledRenderPlanJSON] = preparedPlan
+			req.RuntimePayload[contract.PayloadKeyCompiledRenderPlanSHA] = preparedHash
+		}
 
 		patch := make(map[string]interface{}, len(req.RuntimePayload)+4)
 		for key, value := range req.RuntimePayload {
@@ -227,11 +254,19 @@ func (h *Handlers) FinalizeJob() gin.HandlerFunc {
 			}
 			patch[key] = value
 		}
-		if len(req.RuntimeAssets) > 0 {
+		if preparedStockPlan {
+			patch["runtime_assets"] = finalRuntimeAssets
+		} else if len(req.RuntimeAssets) > 0 {
 			patch["runtime_assets"] = req.RuntimeAssets
 		}
 		patch["runtime_assets_pending"] = false
 		patch["runtime_finalize_idempotency_key"] = req.IdempotencyKey
+		if preparedStockPlan {
+			if preparedPlan, ok := req.RuntimePayload[contract.PayloadKeyCompiledRenderPlanJSON].(string); ok && preparedPlan != "" {
+				patch[contract.PayloadKeyCompiledRenderPlanJSON] = preparedPlan
+				patch[contract.PayloadKeyCompiledRenderPlanSHA] = req.RuntimePayload[contract.PayloadKeyCompiledRenderPlanSHA]
+			}
+		}
 		if _, err := specStore.MergeTaskSpecPayload(c.Request.Context(), task.ID, patch); err != nil {
 			status := http.StatusConflict
 			if strings.Contains(err.Error(), "not initialized") || strings.Contains(err.Error(), "not found") {

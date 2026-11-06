@@ -27,6 +27,7 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -130,10 +131,6 @@ func (h *Handlers) submitJobCore(ctx context.Context, req SubmitJobRequest, iden
 	if err := h.resolveStockPoolRuntimeAssets(ctx, &req); err != nil {
 		return reject(http.StatusUnprocessableEntity, "invalid_stock_pool", err.Error())
 	}
-	if err := validateStockPacketCopyWindows(req.CompiledRenderPlanJSON, req.RuntimeAssets, req.RuntimePayload); err != nil {
-		return rejectWithDetails(http.StatusUnprocessableEntity, "invalid_compiled_render_plan", err.Error(),
-			[]gin.H{{"path": "compiled_render_plan_json.video_tracks", "issue": "stock_window_not_packet_copyable"}})
-	}
 
 	if err := compatibility.ValidateNoLegacyAliases(req.Spec); err != nil {
 		return reject(http.StatusUnprocessableEntity, "legacy_alias_rejected", err.Error())
@@ -200,6 +197,30 @@ func (h *Handlers) submitJobCore(ctx context.Context, req SubmitJobRequest, iden
 	if qerr := enforcePerRequestQuota(identity.Quota, req, h.cfg); qerr != nil {
 		status, body := quotaErrorEnvelope(qerr)
 		return intakeResponse{Status: status, Body: body}
+	}
+	if !identity.DryRun && !req.RuntimeAssetsPending && compiledPlanHasDriveStock(req.CompiledRenderPlanJSON) {
+		if h.assetService == nil {
+			return reject(http.StatusServiceUnavailable, "stock_preparation_unavailable", "Master stock window preparation is not configured")
+		}
+		bindings := append([]map[string]interface{}(nil), req.RuntimeAssets...)
+		var bindingErr error
+		bindings, bindingErr = appendRuntimeAssetBindings(bindings, req.RuntimePayload["runtime_assets"])
+		if bindingErr != nil {
+			return reject(http.StatusUnprocessableEntity, "invalid_runtime_assets", bindingErr.Error())
+		}
+		preparedPlan, preparedHash, prepareErr := h.assetService.PrepareDriveStockWindows(ctx, req.CompiledRenderPlanJSON, bindings)
+		if prepareErr != nil {
+			return rejectWithDetails(http.StatusUnprocessableEntity, "invalid_compiled_render_plan", prepareErr.Error(), []gin.H{{"path": "compiled_render_plan_json.video_tracks", "issue": "stock_window_materialization_failed"}})
+		}
+		req.CompiledRenderPlanJSON, req.CompiledRenderPlanSHA256 = preparedPlan, preparedHash
+		req.RuntimeAssets = removePreparedStockBindings(req.RuntimeAssets)
+		if raw, ok := req.RuntimePayload["runtime_assets"]; ok {
+			encoded, _ := json.Marshal(raw)
+			var nested []map[string]interface{}
+			if json.Unmarshal(encoded, &nested) == nil {
+				req.RuntimePayload["runtime_assets"] = removePreparedStockBindings(nested)
+			}
+		}
 	}
 
 	// Derive Creator-compatible identity via the canonical pipeline path:
