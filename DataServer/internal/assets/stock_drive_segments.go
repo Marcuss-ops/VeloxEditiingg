@@ -10,10 +10,21 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
 
 	"velox-shared/contract"
 )
+
+// Keep Drive reads wide enough to overlap network latency, but bounded so a
+// large stock plan cannot exhaust Drive quotas, file descriptors, or disk I/O.
+const stockSourceDownloadConcurrency = 8
+
+// Source preparation uses the same eight-way bound as Drive downloads. This
+// keeps independent window encodes overlapping without launching an unbounded
+// number of CPU encoders on one Master.
+const stockWindowMaterializationConcurrency = 4
 
 // PrepareDriveStockWindows downloads each Drive source once, verifies and
 // probes it once, then replaces every source window with a certified,
@@ -48,7 +59,131 @@ func (s *AssetService) PrepareDriveStockWindows(ctx context.Context, planJSON st
 			source.cleanup()
 		}
 	}()
-	preparedByKey := map[string]Asset{}
+	type sourceRequest struct {
+		driveID string
+		uri     string
+	}
+	sourceRequests := map[string]sourceRequest{}
+	// Collect only unique files actually referenced by the compiled timeline.
+	// Never enumerate or download the whole stock folder here.
+	for trackIndex := range plan.VideoTracks {
+		for segmentIndex := range plan.VideoTracks[trackIndex].Segments {
+			segment := plan.VideoTracks[trackIndex].Segments[segmentIndex]
+			if segment.StockPoolSlot {
+				continue
+			}
+			original, ok := assetsByID[segment.AssetID]
+			if !ok {
+				continue
+			}
+			binding := stockRuntimeBindingForAsset(original, bindings)
+			if !isDriveStock(original) && !isDriveRuntimeBinding(binding) {
+				continue
+			}
+			driveID := strings.TrimSpace(original.DriveFileID)
+			if driveID == "" {
+				driveID = strings.TrimPrefix(strings.TrimSpace(original.AssetID), "drive:")
+			}
+			if driveID == "" || driveID == original.AssetID {
+				driveID = strings.TrimSpace(bindingString(binding, "drive_file_id"))
+			}
+			if binding == nil {
+				return "", "", fmt.Errorf("stock segment %q has no runtime Drive binding for file %q", segment.SegmentID, driveID)
+			}
+			if driveID == "" {
+				return "", "", fmt.Errorf("stock segment %q Drive binding does not declare drive_file_id", segment.SegmentID)
+			}
+			uri := stockSourceURI(binding, driveID)
+			if uri == "" {
+				return "", "", fmt.Errorf("stock segment %q has no fetchable Drive source", segment.SegmentID)
+			}
+			if previous, exists := sourceRequests[driveID]; exists && previous.uri != uri {
+				return "", "", fmt.Errorf("Drive file %q has conflicting source references in one plan", driveID)
+			}
+			sourceRequests[driveID] = sourceRequest{driveID: driveID, uri: uri}
+		}
+	}
+	if len(sourceRequests) > 0 {
+		sourceCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		semaphore := make(chan struct{}, stockSourceDownloadConcurrency)
+		var group sync.WaitGroup
+		var sourcesMu sync.Mutex
+		var firstErr error
+		setErr := func(err error) {
+			sourcesMu.Lock()
+			if firstErr == nil {
+				firstErr = err
+				cancel()
+			}
+			sourcesMu.Unlock()
+		}
+		for _, request := range sourceRequests {
+			request := request
+			group.Add(1)
+			go func() {
+				defer group.Done()
+				select {
+				case semaphore <- struct{}{}:
+					defer func() { <-semaphore }()
+				case <-sourceCtx.Done():
+					return
+				}
+				path, cleanup, err := s.materializeVideoSource(sourceCtx, request.uri)
+				if err != nil {
+					setErr(fmt.Errorf("stock file %q download: %w", request.driveID, err))
+					return
+				}
+				state := &sourceState{path: path, cleanup: cleanup}
+				state.sha, state.size, err = hashFile(path)
+				if err != nil {
+					cleanup()
+					setErr(fmt.Errorf("stock file %q identity: %w", request.driveID, err))
+					return
+				}
+				state.probe, err = s.videoTrimmer.Probe(sourceCtx, path)
+				if err != nil {
+					cleanup()
+					setErr(fmt.Errorf("stock file %q certification: %w", request.driveID, err))
+					return
+				}
+				if state.probe.FrameCount <= 0 && state.probe.FPSNum > 0 && state.probe.FPSDen > 0 {
+					// Some MP4 muxers omit nb_frames. For the stock pool's certified
+					// constant-frame-rate sources, derive it from measured file duration.
+					state.probe.FrameCount = int64(math.Round(state.probe.DurationSeconds * float64(state.probe.FPSNum) / float64(state.probe.FPSDen)))
+				}
+				if state.probe.FrameCount <= 0 {
+					cleanup()
+					setErr(fmt.Errorf("stock file %q certification could not derive a positive frame_count", request.driveID))
+					return
+				}
+				sourcesMu.Lock()
+				sources[request.driveID] = state
+				sourcesMu.Unlock()
+			}()
+		}
+		group.Wait()
+		if firstErr != nil {
+			return "", "", firstErr
+		}
+	}
+	type windowJob struct {
+		ref            string
+		segmentID      string
+		state          *sourceState
+		startUS        int64
+		durationUS     int64
+		fileDurationUS int64
+		wantFrames     int64
+	}
+	type placement struct {
+		trackIndex   int
+		segmentIndex int
+		windowRef    string
+		wantFrames   int64
+	}
+	windowJobs := map[string]windowJob{}
+	placements := make([]placement, 0)
 	newAssets := map[string]contract.AssetRefV2{}
 	replacedStockIDs := map[string]struct{}{}
 	changed := false
@@ -88,48 +223,21 @@ func (s *AssetService) PrepareDriveStockWindows(ctx context.Context, planJSON st
 			}
 			state := sources[driveID]
 			if state == nil {
-				path, cleanup, err := s.materializeVideoSource(ctx, uri)
-				if err != nil {
-					return "", "", fmt.Errorf("stock file %q download: %w", driveID, err)
-				}
-				state = &sourceState{path: path, cleanup: cleanup}
-				state.sha, state.size, err = hashFile(path)
-				if err != nil {
-					cleanup()
-					return "", "", fmt.Errorf("stock file %q identity: %w", driveID, err)
-				}
-				expectedSHA := strings.TrimSpace(original.SHA256)
-				if expectedSHA == "" {
-					expectedSHA = strings.TrimSpace(bindingString(binding, "sha256", "asset_sha256"))
-				}
-				if expectedSHA != "" && !strings.EqualFold(expectedSHA, state.sha) {
-					cleanup()
-					return "", "", fmt.Errorf("stock file %q sha256 mismatch", driveID)
-				}
-				expectedSize := original.SizeBytes
-				if expectedSize <= 0 {
-					expectedSize = bindingInt64(binding, "size_bytes")
-				}
-				if expectedSize > 0 && expectedSize != state.size {
-					cleanup()
-					return "", "", fmt.Errorf("stock file %q size mismatch: got %d want %d", driveID, state.size, expectedSize)
-				}
-				state.probe, err = s.videoTrimmer.Probe(ctx, path)
-				if err != nil {
-					cleanup()
-					return "", "", fmt.Errorf("stock file %q certification: %w", driveID, err)
-				}
-				if state.probe.FrameCount <= 0 && state.probe.FPSNum > 0 && state.probe.FPSDen > 0 {
-					// Some MP4 muxers omit nb_frames. For the stock pool's certified
-					// constant-frame-rate sources, derive it from the file's measured
-					// duration and stream rate; never inherit the producer's estimate.
-					state.probe.FrameCount = int64(math.Round(state.probe.DurationSeconds * float64(state.probe.FPSNum) / float64(state.probe.FPSDen)))
-				}
-				if state.probe.FrameCount <= 0 {
-					cleanup()
-					return "", "", fmt.Errorf("stock file %q certification could not derive a positive frame_count", driveID)
-				}
-				sources[driveID] = state
+				return "", "", fmt.Errorf("stock file %q was not prefetched", driveID)
+			}
+			expectedSHA := strings.TrimSpace(original.SHA256)
+			if expectedSHA == "" {
+				expectedSHA = strings.TrimSpace(bindingString(binding, "sha256", "asset_sha256"))
+			}
+			if expectedSHA != "" && !strings.EqualFold(expectedSHA, state.sha) {
+				return "", "", fmt.Errorf("stock file %q sha256 mismatch", driveID)
+			}
+			expectedSize := original.SizeBytes
+			if expectedSize <= 0 {
+				expectedSize = bindingInt64(binding, "size_bytes")
+			}
+			if expectedSize > 0 && expectedSize != state.size {
+				return "", "", fmt.Errorf("stock file %q size mismatch: got %d want %d", driveID, state.size, expectedSize)
 			}
 			startUS, durationUS := segment.SourceInUS, segment.SourceDurationUS
 			if startUS < 0 || durationUS <= 0 || durationUS > math.MaxInt64-startUS {
@@ -144,92 +252,151 @@ func (s *AssetService) PrepareDriveStockWindows(ctx context.Context, planJSON st
 			if wantFrames <= 0 || segment.FrameCount != wantFrames {
 				return "", "", fmt.Errorf("stock segment %q frame count mismatch: plan=%d expected=%d from %d us at %d/%d fps", segment.SegmentID, segment.FrameCount, wantFrames, durationUS, plan.Output.FPSNum, plan.Output.FPSDen)
 			}
-			endUS := startUS + durationUS
 			windowRef := fmt.Sprintf("velox-stock-window://%s/%s/%d/%d/%s", driveID, state.sha, startUS, durationUS, plan.Output.ProfileID)
-			fragment := preparedByKey[windowRef]
-			if fragment.AssetID == "" {
-				cached, err := s.GetBySourceReference(ctx, windowRef)
-				if err != nil {
-					return "", "", fmt.Errorf("stock window cache lookup: %w", err)
-				}
-				if cached != nil {
-					fragment = *cached
+			if _, exists := windowJobs[windowRef]; !exists {
+				windowJobs[windowRef] = windowJob{
+					ref: windowRef, segmentID: segment.SegmentID,
+					state: state, startUS: startUS, durationUS: durationUS,
+					fileDurationUS: fileDurationUS, wantFrames: wantFrames,
 				}
 			}
-			if fragment.AssetID == "" {
-				out, err := os.CreateTemp(filepath.Dir(state.path), ".velox-stock-window-*.mp4")
+			placements = append(placements, placement{trackIndex: trackIndex, segmentIndex: segmentIndex, windowRef: windowRef, wantFrames: wantFrames})
+		}
+	}
+	if !changed {
+		return planJSON, contract.HashCompiledPlanV2([]byte(planJSON)), nil
+	}
+	type windowResult struct {
+		fragment   *Asset
+		outputPath string
+		trimPlan   TrimPlan
+	}
+	windowResults := make(map[string]*windowResult, len(windowJobs))
+	var resultsMu sync.Mutex
+	windowKeys := make([]string, 0, len(windowJobs))
+	for key := range windowJobs {
+		windowKeys = append(windowKeys, key)
+	}
+	sort.Strings(windowKeys)
+	windowTasks := make([]func(context.Context) error, 0, len(windowKeys))
+	for _, key := range windowKeys {
+		request := windowJobs[key]
+		windowTasks = append(windowTasks, func(taskCtx context.Context) error {
+			result := &windowResult{}
+			cached, err := s.GetBySourceReference(taskCtx, request.ref)
+			if err != nil {
+				return fmt.Errorf("stock window cache lookup: %w", err)
+			}
+			if cached != nil {
+				result.fragment = cached
+			} else {
+				out, err := os.CreateTemp(filepath.Dir(request.state.path), ".velox-stock-window-*.mp4")
 				if err != nil {
-					return "", "", fmt.Errorf("create stock window output: %w", err)
+					return fmt.Errorf("create stock window output: %w", err)
 				}
-				outputPath := out.Name()
+				result.outputPath = out.Name()
 				if err := out.Close(); err != nil {
-					_ = os.Remove(outputPath)
-					return "", "", err
+					_ = os.Remove(result.outputPath)
+					return err
 				}
-				defer os.Remove(outputPath)
-				start := float64(startUS) / 1_000_000
-				end := float64(endUS) / 1_000_000
-				trimmed, err := s.videoTrimmer.TrimFramesWithProbe(ctx, state.probe, state.path, outputPath, VideoSegment{StartSeconds: start, EndSeconds: end}, wantFrames)
+				start := float64(request.startUS) / 1_000_000
+				end := float64(request.startUS+request.durationUS) / 1_000_000
+				trimmed, err := s.videoTrimmer.TrimFramesWithProbe(taskCtx, request.state.probe, request.state.path, result.outputPath, VideoSegment{StartSeconds: start, EndSeconds: end}, request.wantFrames)
 				if err != nil {
-					return "", "", fmt.Errorf("stock segment %q materialization: %w", segment.SegmentID, err)
+					_ = os.Remove(result.outputPath)
+					return fmt.Errorf("stock segment %q materialization: %w", request.segmentID, err)
 				}
-				cert, err := s.videoTrimmer.Probe(ctx, outputPath)
+				cert, err := s.videoTrimmer.Probe(taskCtx, result.outputPath)
 				if err != nil {
-					return "", "", fmt.Errorf("stock segment %q output certification: %w", segment.SegmentID, err)
+					_ = os.Remove(result.outputPath)
+					return fmt.Errorf("stock segment %q output certification: %w", request.segmentID, err)
 				}
-				if cert.FrameCount != wantFrames {
-					return "", "", fmt.Errorf("stock segment %q output frame count mismatch: got %d want %d", segment.SegmentID, cert.FrameCount, wantFrames)
+				if cert.FrameCount != request.wantFrames {
+					_ = os.Remove(result.outputPath)
+					return fmt.Errorf("stock segment %q output frame count mismatch: got %d want %d", request.segmentID, cert.FrameCount, request.wantFrames)
 				}
-				expectedDuration := float64(wantFrames) * float64(plan.Output.FPSDen) / float64(plan.Output.FPSNum)
+				expectedDuration := float64(request.wantFrames) * float64(plan.Output.FPSDen) / float64(plan.Output.FPSNum)
 				frameDuration := float64(plan.Output.FPSDen) / float64(plan.Output.FPSNum)
 				if math.Abs(cert.DurationSeconds-expectedDuration) > frameDuration {
-					return "", "", fmt.Errorf("stock segment %q output duration mismatch: got %.6f s want %.6f s", segment.SegmentID, cert.DurationSeconds, expectedDuration)
+					_ = os.Remove(result.outputPath)
+					return fmt.Errorf("stock segment %q output duration mismatch: got %.6f s want %.6f s", request.segmentID, cert.DurationSeconds, expectedDuration)
 				}
 				if len(cert.Keyframes) == 0 || math.Abs(cert.Keyframes[0]) > 0.0005 {
-					return "", "", fmt.Errorf("stock segment %q output does not start with a keyframe", segment.SegmentID)
+					_ = os.Remove(result.outputPath)
+					return fmt.Errorf("stock segment %q output does not start with a keyframe", request.segmentID)
 				}
 				profile := s.videoTrimmer.Profile()
 				if !matchesCanonicalStockVideo(cert, profile) {
-					return "", "", fmt.Errorf("stock segment %q output does not match canonical assembly profile", segment.SegmentID)
+					_ = os.Remove(result.outputPath)
+					return fmt.Errorf("stock segment %q output does not match canonical assembly profile", request.segmentID)
 				}
 				trimmed.Plan.OutputFrameCount = cert.FrameCount
 				trimmed.Plan.DurationSeconds = float64(cert.FrameCount) * float64(profile.FPSDen) / float64(profile.FPSNum)
 				trimmed.Plan.FirstFrameKeyframe = true
 				trimmed.Plan.ClosedGOP = profile.ClosedGOP
 				trimmed.Plan.CopyEligible = true
-				trimmed.Plan.SourceSHA256 = state.sha
-				trimmed.Plan.SourceSizeBytes = state.size
-				trimmed.Plan.SourceDurationUS = fileDurationUS
-				trimmed.Plan.SourceFrameCount = state.probe.FrameCount
-				trimmed.Plan.SourceFPSNum, trimmed.Plan.SourceFPSDen = state.probe.FPSNum, state.probe.FPSDen
-				trimmed.Plan.SourceCodec = state.probe.VideoCodec
-				trimmed.Plan.SourceProfile = state.probe.VideoProfile
-				trimmed.Plan.SourceLevel = state.probe.VideoLevel
-				trimmed.Plan.SourceWidth, trimmed.Plan.SourceHeight = state.probe.Width, state.probe.Height
-				trimmed.Plan.SourcePixelFormat = state.probe.PixelFormat
-				trimmed.Plan.SourceKeyframes = append([]float64(nil), state.probe.Keyframes...)
-				fragmentPtr, err := s.registerPreparedVideoFile(ctx, outputPath, windowRef, trimmed.Plan)
-				if err != nil {
-					return "", "", fmt.Errorf("register stock segment %q: %w", segment.SegmentID, err)
-				}
-				fragment = *fragmentPtr
+				trimmed.Plan.SourceSHA256 = request.state.sha
+				trimmed.Plan.SourceSizeBytes = request.state.size
+				trimmed.Plan.SourceDurationUS = request.fileDurationUS
+				trimmed.Plan.SourceFrameCount = request.state.probe.FrameCount
+				trimmed.Plan.SourceFPSNum, trimmed.Plan.SourceFPSDen = request.state.probe.FPSNum, request.state.probe.FPSDen
+				trimmed.Plan.SourceCodec = request.state.probe.VideoCodec
+				trimmed.Plan.SourceProfile = request.state.probe.VideoProfile
+				trimmed.Plan.SourceLevel = request.state.probe.VideoLevel
+				trimmed.Plan.SourceWidth, trimmed.Plan.SourceHeight = request.state.probe.Width, request.state.probe.Height
+				trimmed.Plan.SourcePixelFormat = request.state.probe.PixelFormat
+				trimmed.Plan.SourceKeyframes = append([]float64(nil), request.state.probe.Keyframes...)
+				result.trimPlan = trimmed.Plan
 			}
-			preparedByKey[windowRef] = fragment
-			assetRef := contract.AssetRefV2{
-				AssetID: fragment.AssetID, AssetKey: fragment.AssetID, SHA256: fragment.SHA256,
-				SizeBytes: fragment.SizeBytes, Kind: "video", MIME: fragment.MimeType,
-				DurationUS: int64(math.Round(float64(wantFrames) * 1_000_000 * float64(plan.Output.FPSDen) / float64(plan.Output.FPSNum))),
-				Width:      plan.Output.Width, Height: plan.Output.Height, ProfileID: plan.Output.ProfileID,
-				FrameCount: wantFrames, FirstFrameKeyframe: true, ClosedGOP: true,
-			}
-			newAssets[assetRef.AssetID] = assetRef
-			segment.AssetID, segment.SHA256 = assetRef.AssetID, assetRef.SHA256
-			segment.SourceInUS = 0
-			segment.SourceDurationUS = assetRef.DurationUS
-		}
+			resultsMu.Lock()
+			windowResults[request.ref] = result
+			resultsMu.Unlock()
+			return nil
+		})
 	}
-	if !changed {
-		return planJSON, contract.HashCompiledPlanV2([]byte(planJSON)), nil
+	if err := runBoundedStockJobs(ctx, stockWindowMaterializationConcurrency, windowTasks); err != nil {
+		for _, result := range windowResults {
+			if result.outputPath != "" {
+				_ = os.Remove(result.outputPath)
+			}
+		}
+		return "", "", err
+	}
+	for _, key := range windowKeys {
+		result := windowResults[key]
+		if result.outputPath == "" {
+			continue
+		}
+		fragment, err := s.registerPreparedVideoFile(ctx, result.outputPath, key, result.trimPlan)
+		_ = os.Remove(result.outputPath)
+		if err != nil {
+			for _, pending := range windowResults {
+				if pending.outputPath != "" {
+					_ = os.Remove(pending.outputPath)
+				}
+			}
+			return "", "", fmt.Errorf("register prepared stock window: %w", err)
+		}
+		result.fragment = fragment
+	}
+	for _, placement := range placements {
+		result := windowResults[placement.windowRef]
+		if result == nil || result.fragment == nil {
+			return "", "", fmt.Errorf("stock window %q produced no certified fragment", placement.windowRef)
+		}
+		fragment := result.fragment
+		assetRef := contract.AssetRefV2{
+			AssetID: fragment.AssetID, AssetKey: fragment.AssetID, SHA256: fragment.SHA256,
+			SizeBytes: fragment.SizeBytes, Kind: "video", MIME: fragment.MimeType,
+			DurationUS: int64(math.Round(float64(placement.wantFrames) * 1_000_000 * float64(plan.Output.FPSDen) / float64(plan.Output.FPSNum))),
+			Width:      plan.Output.Width, Height: plan.Output.Height, ProfileID: plan.Output.ProfileID,
+			FrameCount: placement.wantFrames, FirstFrameKeyframe: true, ClosedGOP: true,
+		}
+		newAssets[assetRef.AssetID] = assetRef
+		segment := &plan.VideoTracks[placement.trackIndex].Segments[placement.segmentIndex]
+		segment.AssetID, segment.SHA256 = assetRef.AssetID, assetRef.SHA256
+		segment.SourceInUS = 0
+		segment.SourceDurationUS = assetRef.DurationUS
 	}
 	for _, asset := range plan.Assets {
 		_, replaced := replacedStockIDs[asset.AssetID]
@@ -264,6 +431,44 @@ func matchesCanonicalStockVideo(probe VideoProbe, profile contract.CanonicalVide
 		}
 	}
 	return canonicalGOPAligned(probe.Keyframes, profile)
+}
+
+func runBoundedStockJobs(ctx context.Context, limit int, jobs []func(context.Context) error) error {
+	if len(jobs) == 0 {
+		return nil
+	}
+	if limit < 1 {
+		limit = 1
+	}
+	jobCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	semaphore := make(chan struct{}, limit)
+	var group sync.WaitGroup
+	var errorMu sync.Mutex
+	var firstErr error
+	for _, job := range jobs {
+		job := job
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			select {
+			case semaphore <- struct{}{}:
+				defer func() { <-semaphore }()
+			case <-jobCtx.Done():
+				return
+			}
+			if err := job(jobCtx); err != nil {
+				errorMu.Lock()
+				if firstErr == nil {
+					firstErr = err
+					cancel()
+				}
+				errorMu.Unlock()
+			}
+		}()
+	}
+	group.Wait()
+	return firstErr
 }
 
 func isDriveStock(asset contract.AssetRefV2) bool {

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"velox-server/internal/inputsecurity"
 	"velox-server/internal/platform/clock"
@@ -234,6 +235,50 @@ func TestPrepareDriveStockWindowsCertifiesExact75FrameFragment(t *testing.T) {
 	}
 	if len(repo.inserted) != 1 {
 		t.Fatalf("cache miss re-registered the same window: inserted=%d", len(repo.inserted))
+	}
+}
+
+func TestRunBoundedStockJobsUsesConfiguredParallelism(t *testing.T) {
+	const limit = 3
+	started := make(chan struct{}, 6)
+	release := make(chan struct{})
+	jobs := make([]func(context.Context) error, 6)
+	for i := range jobs {
+		jobs[i] = func(context.Context) error {
+			started <- struct{}{}
+			<-release
+			return nil
+		}
+	}
+	done := make(chan error, 1)
+	go func() { done <- runBoundedStockJobs(context.Background(), limit, jobs) }()
+	for i := 0; i < limit; i++ {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatalf("only %d jobs started concurrently; want %d", i, limit)
+		}
+	}
+	select {
+	case <-started:
+		t.Fatalf("more than the configured %d stock jobs started before a slot was released", limit)
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("run bounded stock jobs: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("bounded stock jobs did not finish")
+	}
+	for i := limit; i < cap(started); i++ {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatalf("only %d stock jobs ran", i)
+		}
 	}
 }
 
