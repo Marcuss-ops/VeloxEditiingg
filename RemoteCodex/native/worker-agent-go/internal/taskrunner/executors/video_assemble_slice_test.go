@@ -54,7 +54,7 @@ func driveSlicePlan() *contract.CompiledRenderPlanV2 {
 			ClosedGOP: true, TimeBaseNum: 1, TimeBaseDen: 90000,
 		},
 		FinalAudio:  contract.FinalAudioV2{Mode: contract.AudioModeFinalAudioCopy, AssetID: "audio", SHA256: copyOnlySHA([]byte("audio")), SizeBytes: 5, Codec: "aac", SampleRateHz: 48000, Channels: 2, DurationUS: 1_000_000, TimelineRevision: 7, TimelineSHA256: timelineHash},
-		VideoTracks: []contract.VideoTrackV2{{TrackID: "main", Segments: []contract.VideoSegmentV2{{SegmentID: "segment-0003", AssetID: "drive:stock-01", TimelineStartFrame: 0, FrameCount: 24, SourceInUS: 0, SourceDurationUS: 1_000_000}}}},
+		VideoTracks: []contract.VideoTrackV2{{TrackID: "main", Segments: []contract.VideoSegmentV2{{SegmentID: "segment-0003", AssetID: "drive:stock-01", SHA256: strings.Repeat("b", 64), TimelineStartFrame: 0, FrameCount: 24, SourceInUS: 0, SourceDurationUS: 1_000_000}}}},
 		Assets: []contract.AssetRefV2{
 			{AssetID: "drive:stock-01", AssetKey: "drive:stock-01", SourceKind: "drive", DriveFileID: "stock-01", SHA256: strings.Repeat("b", 64), SizeBytes: 5, Kind: "video", DurationUS: 1_000_000, Width: 1920, Height: 1080, ProfileID: contract.CanonicalVideoProfileIDV1, FrameCount: 24, TimelineRevision: 7, TimelineSHA256: timelineHash, FirstFrameKeyframe: true, ClosedGOP: true},
 			{AssetID: "audio", SHA256: copyOnlySHA([]byte("audio")), SizeBytes: 5, Kind: "final_audio", DurationUS: 1_000_000},
