@@ -44,6 +44,25 @@ func (sliceMediaProbeStub) ProbeMediaDetails(_ context.Context, path string) (pu
 	return publisher.MediaProbe{HasVideo: true, HasAudio: true, VideoCodec: "h264", AudioCodec: "aac", VideoProfile: "High", VideoLevel: 40, VideoPixelFormat: "yuv420p", VideoFPSNum: 24, VideoFPSDen: 1, VideoFrameCount: 24, DurationSec: 1, Width: 1920, Height: 1080}, nil
 }
 
+type sliceAVC3RemuxProbeStub struct{}
+
+func (sliceAVC3RemuxProbeStub) ProbeMediaDetails(_ context.Context, path string) (publisher.MediaProbe, error) {
+	base := publisher.MediaProbe{HasVideo: true, VideoCodec: "h264", VideoProfile: "High", VideoLevel: 40,
+		VideoPixelFormat: "yuv420p", VideoFPSNum: 24, VideoFPSDen: 1, VideoFrameCount: 24,
+		DurationSec: 1, Width: 1920, Height: 1080, VideoBFrames: 0}
+	switch {
+	case strings.HasSuffix(path, "stock-avc1.mp4"):
+		base.VideoCodecTag, base.VideoTimeBaseNum, base.VideoTimeBaseDen, base.VideoExtradataHash = "avc1", 1, 12288, "stock-sps"
+	case strings.HasSuffix(path, "overlay-avc3.mp4"):
+		base.VideoCodecTag, base.VideoTimeBaseNum, base.VideoTimeBaseDen, base.VideoExtradataHash = "avc3", 1, 90000, "overlay-sps"
+	case strings.HasSuffix(path, "normalized-000.mp4"):
+		base.VideoCodecTag, base.VideoTimeBaseNum, base.VideoTimeBaseDen, base.VideoExtradataHash = "avc3", 1, 12288, "overlay-sps"
+	default:
+		return publisher.MediaProbe{}, os.ErrNotExist
+	}
+	return base, nil
+}
+
 func driveSlicePlan() *contract.CompiledRenderPlanV2 {
 	const timelineHash = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 	return &contract.CompiledRenderPlanV2{
@@ -94,7 +113,7 @@ func TestVideoAssembleSlice_CopiesDriveSourceWindowsWithoutReencoding(t *testing
 		t.Fatalf("FFmpeg call count = %d, want one stream-copy concat/mux", len(runner.args))
 	}
 	copyArgs := strings.Join(runner.args[0], " ")
-	for _, want := range []string{"-f concat", "-c:v copy", "-c:a copy", "-frames:v 24"} {
+	for _, want := range []string{"-f concat", "-c:v copy", "-tag:v avc1", "-c:a copy", "-frames:v 24"} {
 		if !strings.Contains(copyArgs, want) {
 			t.Errorf("FFmpeg stream-copy args missing %q: %s", want, copyArgs)
 		}
@@ -144,5 +163,84 @@ func TestSameSliceCopySignatureRejectsDivergentTimebaseAndCodecData(t *testing.T
 	other.VideoExtradataHash = "sps-2"
 	if sameSliceCopySignature(base, other) {
 		t.Fatal("different H.264 codec data were accepted for packet copy")
+	}
+}
+
+func TestCompatibleAVC1AVC3CopyPairAllowsContainerVariantWithoutTranscoding(t *testing.T) {
+	stock := publisher.MediaProbe{
+		VideoCodec: "h264", VideoCodecTag: "avc1", VideoProfile: "High", VideoLevel: 40,
+		VideoPixelFormat: "yuv420p", VideoFPSNum: 24, VideoFPSDen: 1,
+		VideoTimeBaseNum: 1, VideoTimeBaseDen: 12288, VideoExtradataHash: "stock-sps-pps",
+	}
+	overlay := stock
+	overlay.VideoCodecTag = "avc3"
+	overlay.VideoTimeBaseDen = 90000
+	overlay.VideoExtradataHash = "overlay-inband-sps-pps"
+	if !compatibleAVC1AVC3CopyPair(stock, overlay) {
+		t.Fatal("compatible avc1/avc3 H.264 streams with in-band parameter sets were rejected")
+	}
+	if sameSliceCopySignature(stock, overlay) {
+		t.Fatal("container variants should remain distinct signatures")
+	}
+	args, err := sliceConcatMuxArgs("segments.ffconcat", "audio.m4a", "out.mp4", driveSlicePlan(), "avc3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "-tag:v avc3") || strings.Contains(joined, "libx264") {
+		t.Fatalf("mixed container stream-copy must signal avc3 without encoding: %s", joined)
+	}
+
+	divergent := overlay
+	divergent.VideoLevel = 41
+	if compatibleAVC1AVC3CopyPair(stock, divergent) {
+		t.Fatal("divergent H.264 levels must still be rejected")
+	}
+	divergent = overlay
+	divergent.VideoCodecTag = "avc1"
+	if compatibleAVC1AVC3CopyPair(stock, divergent) {
+		t.Fatal("avc1-to-avc1 parameter-set drift must still be rejected")
+	}
+}
+
+func TestVideoAssembleSliceRemuxesOnlyAVC3TimebaseWithPacketCopy(t *testing.T) {
+	root := t.TempDir()
+	stockPath := filepath.Join(root, "stock-avc1.mp4")
+	overlayPath := filepath.Join(root, "overlay-avc3.mp4")
+	for _, path := range []string{stockPath, overlayPath} {
+		if err := os.WriteFile(path, []byte("source"), 0o640); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runner := &sliceFFmpegRunner{}
+	exec := &videoAssembleSliceExecutor{runner: runner, prober: sliceAVC3RemuxProbeStub{}, outputRoot: root}
+	assets := []contract.AssetRefV2{
+		{AssetID: "stock", Kind: "video", ProfileID: contract.CanonicalVideoProfileIDV1, FrameCount: 24},
+		{AssetID: "overlay", Kind: "video", ProfileID: contract.CanonicalVideoProfileIDV1, FrameCount: 24},
+	}
+	bindings := runtimeassets.Bindings{
+		"stock":   {AssetID: "stock", Path: stockPath, Verified: true},
+		"overlay": {AssetID: "overlay", Path: overlayPath, Verified: true},
+	}
+	paths, err := exec.remuxAVC3Timebases(context.Background(), &contract.CompiledRenderPlanV2{Assets: assets}, bindings, sliceCopyCompatibility{
+		OutputTag: "avc3", TimeBaseNum: 1, TimeBaseDen: 12288, RemuxAssetIDs: map[string]struct{}{"overlay": {}},
+	}, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if paths["overlay"] == "" || paths["stock"] != "" {
+		t.Fatalf("remux paths = %#v, want only the avc3 overlay remuxed", paths)
+	}
+	if len(runner.args) != 1 {
+		t.Fatalf("FFmpeg remux calls = %d, want one", len(runner.args))
+	}
+	args := strings.Join(runner.args[0], " ")
+	for _, want := range []string{"-c:v copy", "-tag:v avc3", "-video_track_timescale 12288"} {
+		if !strings.Contains(args, want) {
+			t.Errorf("packet-copy normalization args missing %q: %s", want, args)
+		}
+	}
+	if strings.Contains(args, "libx264") || strings.Contains(args, "libx265") {
+		t.Fatalf("time-base normalization unexpectedly encodes video: %s", args)
 	}
 }

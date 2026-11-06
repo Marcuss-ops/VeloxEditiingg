@@ -171,7 +171,8 @@ func (e *videoAssembleSliceExecutor) Execute(ctx context.Context, execCtx execut
 		}
 		plan = compiled
 	}
-	if err := e.verifyCopyInputs(ctx, plan, bindings); err != nil {
+	copyCompatibility, err := e.verifyCopyInputs(ctx, plan, bindings)
+	if err != nil {
 		return fail("DRIVE_SLICE_COPY_INCOMPATIBLE", err)
 	}
 	audio, ok := bindings[plan.FinalAudio.AssetID]
@@ -208,11 +209,15 @@ func (e *videoAssembleSliceExecutor) Execute(ctx context.Context, execCtx execut
 		return fail("DRIVE_SLICE_STORAGE_INVALID", err)
 	}
 	defer os.RemoveAll(tempDir)
+	normalizedPaths, err := e.remuxAVC3Timebases(ctx, plan, bindings, copyCompatibility, tempDir)
+	if err != nil {
+		return fail("DRIVE_SLICE_COPY_INCOMPATIBLE", err)
+	}
 	listPath := filepath.Join(tempDir, "segments.ffconcat")
-	if err := writeSliceConcatList(listPath, plan, bindings); err != nil {
+	if err := writeSliceConcatList(listPath, plan, bindings, normalizedPaths); err != nil {
 		return fail("DRIVE_SLICE_STORAGE_INVALID", err)
 	}
-	args, err := sliceConcatMuxArgs(listPath, audio.Path, outputPath, plan)
+	args, err := sliceConcatMuxArgs(listPath, audio.Path, outputPath, plan, copyCompatibility.OutputTag)
 	if err != nil {
 		return fail("DRIVE_SLICE_ASSETS_INVALID", err)
 	}
@@ -367,7 +372,14 @@ func slicePlanDurationFrameCount(plan *contract.CompiledRenderPlanV2) int64 {
 	return (n + d - 1) / d
 }
 
-func (e *videoAssembleSliceExecutor) verifyCopyInputs(ctx context.Context, plan *contract.CompiledRenderPlanV2, bindings runtimeassets.Bindings) error {
+type sliceCopyCompatibility struct {
+	OutputTag     string
+	TimeBaseNum   int
+	TimeBaseDen   int
+	RemuxAssetIDs map[string]struct{}
+}
+
+func (e *videoAssembleSliceExecutor) verifyCopyInputs(ctx context.Context, plan *contract.CompiledRenderPlanV2, bindings runtimeassets.Bindings) (sliceCopyCompatibility, error) {
 	assets := make(map[string]contract.AssetRefV2, len(plan.Assets))
 	for _, asset := range plan.Assets {
 		assets[asset.AssetID] = asset
@@ -375,6 +387,8 @@ func (e *videoAssembleSliceExecutor) verifyCopyInputs(ctx context.Context, plan 
 	seen := make(map[string]struct{})
 	probes := make(map[string]publisher.MediaProbe)
 	var baseline *publisher.MediaProbe
+	byTag := make(map[string]publisher.MediaProbe)
+	outputTag := ""
 	for _, segment := range plan.VideoTracks[0].Segments {
 		asset := assets[segment.AssetID]
 		if _, done := seen[asset.AssetID]; done {
@@ -383,31 +397,42 @@ func (e *videoAssembleSliceExecutor) verifyCopyInputs(ctx context.Context, plan 
 		seen[asset.AssetID] = struct{}{}
 		binding := bindings[asset.AssetID]
 		if !binding.Verified || binding.SHA256 != asset.SHA256 || binding.Size != asset.SizeBytes || strings.TrimSpace(binding.Path) == "" {
-			return fmt.Errorf("source %q is not integrity-verified against the plan", asset.AssetID)
+			return sliceCopyCompatibility{}, fmt.Errorf("source %q is not integrity-verified against the plan", asset.AssetID)
 		}
 		info, statErr := os.Stat(binding.Path)
 		if statErr != nil || !info.Mode().IsRegular() || info.Size() != binding.Size {
-			return fmt.Errorf("source %q local file identity is invalid", asset.AssetID)
+			return sliceCopyCompatibility{}, fmt.Errorf("source %q local file identity is invalid", asset.AssetID)
 		}
 		probe, err := e.prober.ProbeMediaDetails(ctx, binding.Path)
 		if err != nil {
-			return fmt.Errorf("probe source %q: %w", asset.AssetID, err)
+			return sliceCopyCompatibility{}, fmt.Errorf("probe source %q: %w", asset.AssetID, err)
 		}
 		if !probe.HasVideo || probe.DurationSec <= 0 || asset.ProfileID != plan.Output.ProfileID || !asset.FirstFrameKeyframe || !asset.ClosedGOP {
-			return fmt.Errorf("source %q lacks certified keyframe/closed-GOP assembly metadata", asset.AssetID)
+			return sliceCopyCompatibility{}, fmt.Errorf("source %q lacks certified keyframe/closed-GOP assembly metadata", asset.AssetID)
 		}
 		if probe.VideoFrameCount <= 0 || probe.VideoFrameCount != asset.FrameCount {
-			return fmt.Errorf("source %q has %d frames but its plan certifies %d; refusing to transcode", asset.AssetID, probe.VideoFrameCount, asset.FrameCount)
+			return sliceCopyCompatibility{}, fmt.Errorf("source %q has %d frames but its plan certifies %d; refusing to transcode", asset.AssetID, probe.VideoFrameCount, asset.FrameCount)
 		}
 		wantLevel, _ := strconv.Atoi(strings.ReplaceAll(plan.Output.CodecLevel, ".", ""))
-		if probe.VideoCodec != "h264" || !strings.EqualFold(probe.VideoProfile, plan.Output.CodecProfile) || probe.VideoLevel != wantLevel || probe.VideoBFrames != plan.Output.BFrames || probe.VideoExtradataHash == "" || probe.VideoTimeBaseNum <= 0 || probe.VideoTimeBaseDen <= 0 || probe.Width != plan.Output.Width || probe.Height != plan.Output.Height || probe.VideoFPSNum != plan.Output.FPSNum || probe.VideoFPSDen != plan.Output.FPSDen || probe.VideoPixelFormat != plan.Output.PixelFormat {
-			return fmt.Errorf("source %q media profile differs from the output; refusing to transcode", asset.AssetID)
+		if probe.VideoCodec != "h264" || !strings.EqualFold(probe.VideoProfile, plan.Output.CodecProfile) || probe.VideoLevel != wantLevel || probe.VideoBFrames != plan.Output.BFrames || probe.VideoExtradataHash == "" || probe.VideoTimeBaseNum <= 0 || probe.VideoTimeBaseDen <= 0 || probe.Width != plan.Output.Width || probe.Height != plan.Output.Height || probe.VideoFPSNum != plan.Output.FPSNum || probe.VideoFPSDen != plan.Output.FPSDen || probe.VideoPixelFormat != plan.Output.PixelFormat || (probe.VideoCodecTag != "avc1" && probe.VideoCodecTag != "avc3") {
+			return sliceCopyCompatibility{}, fmt.Errorf("source %q media profile differs from the output; refusing to transcode", asset.AssetID)
 		}
+		if sameTag, ok := byTag[probe.VideoCodecTag]; ok && !sameSliceCopySignature(sameTag, probe) {
+			return sliceCopyCompatibility{}, fmt.Errorf("source %q differs from other %s inputs; refusing to transcode", asset.AssetID, probe.VideoCodecTag)
+		}
+		byTag[probe.VideoCodecTag] = probe
 		if baseline == nil {
 			copy := probe
 			baseline = &copy
+			outputTag = probe.VideoCodecTag
 		} else if !sameSliceCopySignature(*baseline, probe) {
-			return fmt.Errorf("source %q codec parameters/time base differ from the other inputs; refusing to transcode", asset.AssetID)
+			if !compatibleAVC1AVC3CopyPair(*baseline, probe) {
+				return sliceCopyCompatibility{}, fmt.Errorf("source %q codec parameters differ from the other inputs; refusing to transcode", asset.AssetID)
+			}
+			// avc3 explicitly permits in-band SPS/PPS updates. Keep every H.264
+			// packet untouched and mark the final sample entry accordingly; FFmpeg
+			// rescales differing input time bases while stream-copying the concat.
+			outputTag = "avc3"
 		}
 		probes[asset.AssetID] = probe
 	}
@@ -417,10 +442,73 @@ func (e *videoAssembleSliceExecutor) verifyCopyInputs(ctx context.Context, plan 
 		windowEnd := segment.SourceInUS + segment.SourceDurationUS
 		frameUS := int64(1_000_000 * plan.Output.FPSDen / plan.Output.FPSNum)
 		if windowEnd > actualUS+frameUS {
-			return fmt.Errorf("source %q window ends at %d us beyond probed duration %d us", segment.AssetID, windowEnd, actualUS)
+			return sliceCopyCompatibility{}, fmt.Errorf("source %q window ends at %d us beyond probed duration %d us", segment.AssetID, windowEnd, actualUS)
 		}
 	}
-	return nil
+	if baseline == nil {
+		return sliceCopyCompatibility{}, errors.New("copy plan contains no video sources")
+	}
+	// Use avc1's verified time base as the concat-demuxer clock whenever the
+	// plan mixes avc1 and avc3. FFmpeg's concat demuxer misplaces packet PTS
+	// when those MP4 time bases differ, even though stream-copy remuxing can
+	// normalize them without touching encoded video packets.
+	clock := *baseline
+	if avc1, ok := byTag["avc1"]; ok {
+		clock = avc1
+	}
+	compatibility := sliceCopyCompatibility{OutputTag: outputTag, TimeBaseNum: clock.VideoTimeBaseNum, TimeBaseDen: clock.VideoTimeBaseDen, RemuxAssetIDs: make(map[string]struct{})}
+	if len(byTag) > 1 {
+		for assetID, probe := range probes {
+			if probe.VideoCodecTag == "avc3" && (probe.VideoTimeBaseNum != clock.VideoTimeBaseNum || probe.VideoTimeBaseDen != clock.VideoTimeBaseDen) {
+				compatibility.RemuxAssetIDs[assetID] = struct{}{}
+			}
+		}
+	}
+	return compatibility, nil
+}
+
+func (e *videoAssembleSliceExecutor) remuxAVC3Timebases(ctx context.Context, plan *contract.CompiledRenderPlanV2, bindings runtimeassets.Bindings, compatibility sliceCopyCompatibility, tempDir string) (map[string]string, error) {
+	if len(compatibility.RemuxAssetIDs) == 0 {
+		return nil, nil
+	}
+	if compatibility.TimeBaseNum != 1 || compatibility.TimeBaseDen <= 0 {
+		return nil, fmt.Errorf("unsupported packet-copy normalization time base %d/%d", compatibility.TimeBaseNum, compatibility.TimeBaseDen)
+	}
+	assets := make(map[string]contract.AssetRefV2, len(plan.Assets))
+	for _, asset := range plan.Assets {
+		assets[asset.AssetID] = asset
+	}
+	assetIDs := make([]string, 0, len(compatibility.RemuxAssetIDs))
+	for assetID := range compatibility.RemuxAssetIDs {
+		assetIDs = append(assetIDs, assetID)
+	}
+	sort.Strings(assetIDs)
+	paths := make(map[string]string, len(assetIDs))
+	for i, assetID := range assetIDs {
+		binding, ok := bindings[assetID]
+		if !ok || !binding.Verified || strings.TrimSpace(binding.Path) == "" {
+			return nil, fmt.Errorf("avc3 source %q is not available for packet-copy time-base normalization", assetID)
+		}
+		path := filepath.Join(tempDir, fmt.Sprintf("normalized-%03d.mp4", i))
+		args := []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", binding.Path,
+			"-map", "0:v:0", "-c:v", "copy", "-tag:v", "avc3", "-video_track_timescale", strconv.Itoa(compatibility.TimeBaseDen), path}
+		if _, err := e.runner.Run(ctx, ffmpegrunner.FFmpegRequest{Operation: ffmpegrunner.OperationEncode, Args: args}); err != nil {
+			return nil, fmt.Errorf("packet-copy remux source %q to time base %d/%d: %w", assetID, compatibility.TimeBaseNum, compatibility.TimeBaseDen, err)
+		}
+		probe, err := e.prober.ProbeMediaDetails(ctx, path)
+		if err != nil {
+			return nil, fmt.Errorf("probe packet-copy remux source %q: %w", assetID, err)
+		}
+		original, err := e.prober.ProbeMediaDetails(ctx, binding.Path)
+		if err != nil {
+			return nil, fmt.Errorf("recheck original avc3 source %q: %w", assetID, err)
+		}
+		if probe.VideoCodec != "h264" || probe.VideoCodecTag != "avc3" || probe.VideoFrameCount != assets[assetID].FrameCount || probe.VideoExtradataHash != original.VideoExtradataHash || probe.VideoTimeBaseNum != compatibility.TimeBaseNum || probe.VideoTimeBaseDen != compatibility.TimeBaseDen {
+			return nil, fmt.Errorf("packet-copy remux source %q did not preserve its H.264 packets and target time base", assetID)
+		}
+		paths[assetID] = path
+	}
+	return paths, nil
 }
 
 func (e *videoAssembleSliceExecutor) verifyFinalMedia(ctx context.Context, outputPath string, plan *contract.CompiledRenderPlanV2) error {
@@ -451,7 +539,23 @@ func sameSliceCopySignature(a, b publisher.MediaProbe) bool {
 		a.VideoExtradataHash == b.VideoExtradataHash
 }
 
-func writeSliceConcatList(path string, plan *contract.CompiledRenderPlanV2, bindings runtimeassets.Bindings) error {
+// compatibleAVC1AVC3CopyPair permits the one mixed H.264 packaging case that
+// can preserve packet identity: an avc1 baseline and an avc3 stream whose
+// parameter sets may change in-band. All decoding-relevant media properties
+// other than the sample-entry tag, avcC data, and container time base must
+// still match; each tag class is separately pinned by sameSliceCopySignature.
+func compatibleAVC1AVC3CopyPair(a, b publisher.MediaProbe) bool {
+	if !((a.VideoCodecTag == "avc1" && b.VideoCodecTag == "avc3") || (a.VideoCodecTag == "avc3" && b.VideoCodecTag == "avc1")) {
+		return false
+	}
+	return a.VideoCodec == b.VideoCodec && a.VideoProfile == b.VideoProfile &&
+		a.VideoLevel == b.VideoLevel && a.VideoPixelFormat == b.VideoPixelFormat &&
+		a.VideoFPSNum == b.VideoFPSNum && a.VideoFPSDen == b.VideoFPSDen &&
+		a.VideoBFrames == b.VideoBFrames && a.VideoExtradataHash != b.VideoExtradataHash &&
+		(a.VideoTimeBaseNum != b.VideoTimeBaseNum || a.VideoTimeBaseDen != b.VideoTimeBaseDen)
+}
+
+func writeSliceConcatList(path string, plan *contract.CompiledRenderPlanV2, bindings runtimeassets.Bindings, normalizedPaths map[string]string) error {
 	var b strings.Builder
 	b.WriteString("ffconcat version 1.0\n")
 	for _, segment := range plan.VideoTracks[0].Segments {
@@ -459,7 +563,11 @@ func writeSliceConcatList(path string, plan *contract.CompiledRenderPlanV2, bind
 		if !ok || !binding.Verified || strings.TrimSpace(binding.Path) == "" {
 			return fmt.Errorf("source %q is not ready for stream-copy concat", segment.AssetID)
 		}
-		abs, err := filepath.Abs(binding.Path)
+		sourcePath := binding.Path
+		if normalized := normalizedPaths[segment.AssetID]; normalized != "" {
+			sourcePath = normalized
+		}
+		abs, err := filepath.Abs(sourcePath)
 		if err != nil {
 			return err
 		}
@@ -472,14 +580,17 @@ func writeSliceConcatList(path string, plan *contract.CompiledRenderPlanV2, bind
 	return os.WriteFile(path, []byte(b.String()), 0o600)
 }
 
-func sliceConcatMuxArgs(listPath, audioPath, output string, plan *contract.CompiledRenderPlanV2) ([]string, error) {
+func sliceConcatMuxArgs(listPath, audioPath, output string, plan *contract.CompiledRenderPlanV2, videoTag string) ([]string, error) {
 	if strings.TrimSpace(audioPath) == "" {
 		return nil, errors.New("final audio path is empty")
+	}
+	if videoTag != "avc1" && videoTag != "avc3" {
+		return nil, fmt.Errorf("unsupported H.264 MP4 sample entry %q", videoTag)
 	}
 	return []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-y",
 		"-f", "concat", "-safe", "0", "-i", listPath,
 		"-threads", "1", "-i", audioPath,
-		"-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "copy",
+		"-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-tag:v", videoTag, "-c:a", "copy",
 		"-frames:v", strconv.FormatInt(slicePlanFrameCount(plan), 10),
 		"-t", seconds(plan.DurationUS), "-video_track_timescale", strconv.Itoa(plan.Output.TimeBaseDen),
 		"-movflags", "+faststart", output}, nil
