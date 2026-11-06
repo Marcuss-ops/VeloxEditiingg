@@ -113,6 +113,7 @@ func (w *Worker) resolveCompiledRenderPlanAssets(ctx context.Context, payload ma
 	assetCacheKeys := make([]string, 0, len(planAssets))
 	seenIdentities := make(map[string]string, len(planAssets))
 	runtimeDriveIDs := compiledRuntimeDriveFileIDs(payload["runtime_assets"])
+	runtimeDriveSources := compiledRuntimeDriveSourceURIs(payload["runtime_assets"])
 	for _, asset := range planAssets {
 		identity := compiledAssetIdentity(asset)
 		if identity == "" {
@@ -137,9 +138,20 @@ func (w *Worker) resolveCompiledRenderPlanAssets(ctx context.Context, payload ma
 			if driveID == "" {
 				return nil, fmt.Errorf("compiled render plan v2: Drive asset %q has no drive_file_id", asset.AssetID)
 			}
-			identity = driveID
-			uri = "velox-drive://" + driveID
-			w.rememberSourceLocator(driveID, "https://drive.google.com/uc?export=download&id="+url.QueryEscape(driveID))
+			// Keep the plan's canonical asset identity as the cache key. The
+			// Drive file ID is only a locator; replacing the identity with it
+			// makes the later lease reserve a different row than the Master
+			// certified under asset_id.
+			uri = "velox-drive://" + identity
+			sourceURI := firstNonBlank(
+				runtimeDriveSources[strings.TrimSpace(asset.AssetID)],
+				runtimeDriveSources[strings.TrimSpace(asset.AssetKey)],
+				runtimeDriveSources[driveID],
+			)
+			if sourceURI == "" {
+				sourceURI = "https://drive.google.com/uc?export=download&id=" + url.QueryEscape(driveID)
+			}
+			w.rememberSourceLocator(identity, sourceURI)
 		}
 		assetCacheKeys = append(assetCacheKeys, identity)
 		assetEnvelopes = append(assetEnvelopes, map[string]interface{}{
@@ -255,6 +267,15 @@ func (w *Worker) resolveCompiledRenderPlanAssets(ctx context.Context, payload ma
 	return bindings, nil
 }
 
+func firstNonBlank(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 func hashLocalAsset(path string) (string, int64, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -314,6 +335,39 @@ func compiledRuntimeDriveFileIDs(raw interface{}) map[string]string {
 		for _, identity := range []string{asset.AssetID, asset.AssetKey} {
 			if identity = strings.TrimSpace(identity); identity != "" {
 				byIdentity[identity] = fileID
+			}
+		}
+	}
+	return byIdentity
+}
+
+// compiledRuntimeDriveSourceURIs joins the runtime transport manifest to the
+// canonical plan identities without changing those identities. The
+// downloader applies its HTTPS host allowlist and redirect checks when the
+// locator is consumed.
+func compiledRuntimeDriveSourceURIs(raw interface{}) map[string]string {
+	encoded, err := json.Marshal(raw)
+	if err != nil || len(encoded) == 0 || string(encoded) == "null" {
+		return nil
+	}
+	var assets []struct {
+		AssetID     string `json:"asset_id"`
+		AssetKey    string `json:"asset_key"`
+		DriveFileID string `json:"drive_file_id"`
+		SourceURI   string `json:"source_uri"`
+	}
+	if err := json.Unmarshal(encoded, &assets); err != nil {
+		return nil
+	}
+	byIdentity := make(map[string]string, len(assets)*3)
+	for _, asset := range assets {
+		sourceURI := strings.TrimSpace(asset.SourceURI)
+		if sourceURI == "" {
+			continue
+		}
+		for _, identity := range []string{asset.AssetID, asset.AssetKey, asset.DriveFileID} {
+			if identity = strings.TrimSpace(identity); identity != "" {
+				byIdentity[identity] = sourceURI
 			}
 		}
 	}
