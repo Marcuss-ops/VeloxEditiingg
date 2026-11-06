@@ -480,17 +480,17 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 	return &report, nil
 }
 
-// compiledPlanLeaseKeys returns the canonical content-cache keys created by
-// resolveCompiledRenderPlanAssets. V2 bindings are integrity-verified and
-// therefore carry the SHA-256 used by asset_downloader as the cache identity.
+// compiledPlanLeaseKeys returns the exact asset-index keys registered by the
+// common resolver. The Drive locator can differ from the plan's logical ID;
+// binding CacheKey preserves the identity used by syncClipCache and Reserve.
 func compiledPlanLeaseKeys(bindings runtimeassets.Bindings) []string {
 	keys := make(map[string]struct{}, len(bindings))
 	for _, binding := range bindings {
-		sha := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(binding.SHA256)), "sha256:")
-		if sha == "" {
+		key := strings.TrimSpace(binding.CacheKey)
+		if key == "" {
 			continue
 		}
-		keys["sha256:"+sha] = struct{}{}
+		keys[key] = struct{}{}
 	}
 	out := make([]string, 0, len(keys))
 	for key := range keys {

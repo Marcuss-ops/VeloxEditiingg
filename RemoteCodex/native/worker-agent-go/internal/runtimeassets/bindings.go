@@ -10,9 +10,13 @@ import (
 // Paths never belong in CompiledRenderPlanV2; they exist only for execution.
 type Binding struct {
 	AssetID string
-	Path    string
-	SHA256  string
-	Size    int64
+	// CacheKey is the exact asset identity registered by the common resolver
+	// in the worker cache. It can differ from AssetID when a Drive locator is
+	// resolved from a plan identity.
+	CacheKey string
+	Path     string
+	SHA256   string
+	Size     int64
 	// Verified is true only when the canonical worker asset resolver has
 	// already completed the size/SHA-256 verification before projecting the
 	// binding. Executors still stat the file, but do not reread a warm cache

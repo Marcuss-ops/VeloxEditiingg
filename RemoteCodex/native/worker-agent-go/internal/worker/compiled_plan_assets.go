@@ -110,6 +110,7 @@ func (w *Worker) resolveCompiledRenderPlanAssets(ctx context.Context, payload ma
 		}
 	}
 	assetEnvelopes := make([]interface{}, 0, len(planAssets))
+	assetCacheKeys := make([]string, 0, len(planAssets))
 	seenIdentities := make(map[string]string, len(planAssets))
 	runtimeDriveIDs := compiledRuntimeDriveFileIDs(payload["runtime_assets"])
 	for _, asset := range planAssets {
@@ -140,6 +141,7 @@ func (w *Worker) resolveCompiledRenderPlanAssets(ctx context.Context, payload ma
 			uri = "velox-drive://" + driveID
 			w.rememberSourceLocator(driveID, "https://drive.google.com/uc?export=download&id="+url.QueryEscape(driveID))
 		}
+		assetCacheKeys = append(assetCacheKeys, identity)
 		assetEnvelopes = append(assetEnvelopes, map[string]interface{}{
 			"asset_id":   identity,
 			"uri":        uri,
@@ -243,6 +245,7 @@ func (w *Worker) resolveCompiledRenderPlanAssets(ctx context.Context, payload ma
 		}
 		bindings[asset.AssetID] = runtimeassets.Binding{
 			AssetID:  asset.AssetID,
+			CacheKey: assetCacheKeys[index],
 			Path:     path,
 			SHA256:   sha,
 			Size:     size,

@@ -87,7 +87,7 @@ func TestVideoAssembleSlice_CopiesDriveSourceWindowsWithoutReencoding(t *testing
 	if err != nil || result.Status != "succeeded" {
 		t.Fatalf("slice execution result=%+v err=%v", result, err)
 	}
-	if len(result.Outputs) != 1 || result.RawMetrics == nil || result.RawMetrics.ConcatMode != "stream_copy" || result.RawMetrics.EncodePasses != 0 || !result.RawMetrics.FinalConcatStreamCopy {
+	if len(result.Outputs) != 1 || result.RawMetrics == nil || result.RawMetrics.ConcatMode != "packet_copy" || result.RawMetrics.EncodePasses != 0 || !result.RawMetrics.FinalConcatStreamCopy {
 		t.Fatalf("slice result did not report copy-only remote assembly: %+v", result)
 	}
 	if renderer.calls != 1 {
