@@ -99,8 +99,18 @@ runs:
         set -euo pipefail
         IMAGE="${{ inputs.image-repo }}"
         EXPECTED="${{ steps.digest.outputs.digest }}"
-        ACTUAL="$(docker buildx imagetools inspect "${IMAGE}:${{ inputs.tag }}" \
-          | awk '/Digest:/ {print $2; exit}')"
+        ACTUAL=""
+        for attempt in 1 2 3 4 5; do
+          if output="$(docker buildx imagetools inspect "${IMAGE}:${{ inputs.tag }}" 2>/dev/null)"; then
+            ACTUAL="$(awk '/Digest:/ {print $2; exit}' <<<"$output")"
+            if [ -n "$ACTUAL" ]; then
+              break
+            fi
+          fi
+          if [ "$attempt" -lt 5 ]; then
+            sleep $((attempt * 2))
+          fi
+        done
         if [ "$ACTUAL" != "$EXPECTED" ]; then
           echo "::error::published digest mismatch: expected=${EXPECTED} actual=${ACTUAL}" >&2
           exit 1
