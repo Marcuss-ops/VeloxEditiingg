@@ -194,6 +194,16 @@ func (h *Handlers) FinalizeJob() gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "store_failure", "message": err.Error()})
 			return
 		}
+		planJSON, _ := current[contract.PayloadKeyCompiledRenderPlanJSON].(string)
+		if err := validateStockPacketCopyWindows(planJSON, req.RuntimeAssets, req.RuntimePayload); err != nil {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{
+				"ok":      false,
+				"error":   "invalid_compiled_render_plan",
+				"message": err.Error(),
+				"details": []gin.H{{"path": "compiled_render_plan_json.video_tracks", "issue": "stock_window_not_packet_copyable"}},
+			})
+			return
+		}
 		if previous, _ := current["runtime_finalize_idempotency_key"].(string); previous != "" && previous != req.IdempotencyKey {
 			c.JSON(http.StatusConflict, gin.H{"ok": false, "error": "finalize_idempotency_conflict", "message": "job was already finalized with a different idempotency_key"})
 			return

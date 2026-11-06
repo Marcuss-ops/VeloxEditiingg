@@ -130,6 +130,10 @@ func (h *Handlers) submitJobCore(ctx context.Context, req SubmitJobRequest, iden
 	if err := h.resolveStockPoolRuntimeAssets(ctx, &req); err != nil {
 		return reject(http.StatusUnprocessableEntity, "invalid_stock_pool", err.Error())
 	}
+	if err := validateStockPacketCopyWindows(req.CompiledRenderPlanJSON, req.RuntimeAssets, req.RuntimePayload); err != nil {
+		return rejectWithDetails(http.StatusUnprocessableEntity, "invalid_compiled_render_plan", err.Error(),
+			[]gin.H{{"path": "compiled_render_plan_json.video_tracks", "issue": "stock_window_not_packet_copyable"}})
+	}
 
 	if err := compatibility.ValidateNoLegacyAliases(req.Spec); err != nil {
 		return reject(http.StatusUnprocessableEntity, "legacy_alias_rejected", err.Error())
