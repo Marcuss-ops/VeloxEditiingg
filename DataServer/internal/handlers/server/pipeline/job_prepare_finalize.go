@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -8,6 +9,7 @@ import (
 
 	"velox-server/internal/creatorflow"
 	"velox-server/internal/taskgraph"
+	"velox-shared/contract"
 )
 
 // FinalizeJobRequest carries runtime asset bindings for a producer-compiled
@@ -55,7 +57,68 @@ func runtimeAssetsCompleteForPrepare(req SubmitJobRequest) bool {
 	if req.RuntimeAssetsComplete != nil {
 		complete = *req.RuntimeAssetsComplete
 	}
+	// For a compiled V2 plan, a non-empty asset list is not proof that the
+	// plan is ready to dispatch. Producers commonly know overlays/audio before
+	// stock bindings arrive; treating that partial list as complete pins the
+	// immutable task executor to copy before FINALIZE can reveal Drive stock.
+	// Require every plan asset and final audio binding (or at least one
+	// resolved member for a StockPool plan) before allowing single-stage PRE.
+	if strings.TrimSpace(req.CompiledRenderPlanJSON) != "" {
+		if req.RuntimeAssetsComplete != nil && !*req.RuntimeAssetsComplete {
+			return false
+		}
+		return compiledPlanRuntimeAssetsComplete(req)
+	}
 	return complete
+}
+
+func compiledPlanRuntimeAssetsComplete(req SubmitJobRequest) bool {
+	var plan contract.CompiledRenderPlanV2
+	if err := json.Unmarshal([]byte(req.CompiledRenderPlanJSON), &plan); err != nil {
+		return false
+	}
+	assets := append([]map[string]interface{}(nil), req.RuntimeAssets...)
+	if raw, ok := req.RuntimePayload["runtime_assets"]; ok {
+		encoded, marshalErr := json.Marshal(raw)
+		if marshalErr != nil {
+			return false
+		}
+		var payloadAssets []map[string]interface{}
+		if json.Unmarshal(encoded, &payloadAssets) != nil {
+			return false
+		}
+		assets = append(assets, payloadAssets...)
+	}
+	bound := make(map[string]struct{}, len(assets)*2)
+	stockPoolMembers := 0
+	for _, asset := range assets {
+		for _, key := range []string{"asset_id", "asset_key", "drive_file_id"} {
+			if value, ok := asset[key].(string); ok && strings.TrimSpace(value) != "" {
+				bound[strings.TrimSpace(value)] = struct{}{}
+			}
+		}
+		driveFileID, _ := asset["drive_file_id"].(string)
+		if member, _ := asset["stock_pool_member"].(bool); member && strings.TrimSpace(driveFileID) != "" {
+			stockPoolMembers++
+		}
+	}
+	if plan.StockPool != nil && stockPoolMembers == 0 {
+		return false
+	}
+	for _, asset := range plan.Assets {
+		_, assetIDBound := bound[asset.AssetID]
+		_, assetKeyBound := bound[asset.AssetKey]
+		_, driveIDBound := bound[asset.DriveFileID]
+		if !assetIDBound && !assetKeyBound && !driveIDBound {
+			return false
+		}
+	}
+	if plan.FinalAudio.AssetID != "" {
+		if _, ok := bound[plan.FinalAudio.AssetID]; !ok {
+			return false
+		}
+	}
+	return len(assets) > 0
 }
 
 func runtimePayloadHasNonEmptyAssets(payload map[string]interface{}) bool {

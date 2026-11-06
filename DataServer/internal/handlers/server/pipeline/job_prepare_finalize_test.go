@@ -28,3 +28,38 @@ func TestPrepareRuntimeAssetsCompletionRequiresExplicitEmptyListOptIn(t *testing
 		})
 	}
 }
+
+func TestPrepareCompiledPlanWaitsForEveryRuntimeBinding(t *testing.T) {
+	complete := true
+	req := SubmitJobRequest{
+		CompiledRenderPlanJSON: `{"plan_version":2,"final_audio":{"asset_id":"audio-1"},"assets":[{"asset_id":"stock-1"},{"asset_id":"overlay-1"}]}`,
+		RuntimeAssetsComplete:  &complete,
+		RuntimeAssets: []map[string]interface{}{
+			{"asset_id": "audio-1"},
+			{"asset_id": "overlay-1"},
+		},
+	}
+	if runtimeAssetsCompleteForPrepare(req) {
+		t.Fatal("partial runtime assets must remain pending even when the producer marks them complete")
+	}
+	req.RuntimeAssets = append(req.RuntimeAssets, map[string]interface{}{"asset_id": "stock-1", "role": "stock"})
+	if !runtimeAssetsCompleteForPrepare(req) {
+		t.Fatal("all plan assets and final audio are bound; PRE should be single-stage")
+	}
+}
+
+func TestPrepareStockPoolWaitsForResolvedPoolMember(t *testing.T) {
+	complete := true
+	req := SubmitJobRequest{
+		CompiledRenderPlanJSON: `{"plan_version":2,"stock_pool":{"source_kind":"drive","drive_folder_id":"folder-1","selection":"shuffle"},"final_audio":{"asset_id":"audio-1"},"assets":[]}`,
+		RuntimeAssetsComplete:  &complete,
+		RuntimeAssets:          []map[string]interface{}{{"asset_id": "audio-1"}},
+	}
+	if runtimeAssetsCompleteForPrepare(req) {
+		t.Fatal("stock_pool must remain pending until the Master resolves at least one folder member")
+	}
+	req.RuntimeAssets = append(req.RuntimeAssets, map[string]interface{}{"asset_id": "drive-file-1", "drive_file_id": "drive-file-1", "stock_pool_member": true})
+	if !runtimeAssetsCompleteForPrepare(req) {
+		t.Fatal("resolved stock_pool member and final audio should complete PRE")
+	}
+}
