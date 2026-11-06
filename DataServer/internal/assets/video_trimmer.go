@@ -542,6 +542,10 @@ func exactWindowArgs(profile contract.CanonicalVideoProfileV1, quality contract.
 		"-ss", formatSeconds(segment.StartSeconds), "-t", formatSeconds(segment.EndSeconds - segment.StartSeconds),
 		"-map", "0:v:0", "-map", "0:a?", "-vf", canonicalScaleFilter(profile)}
 	args = append(args, canonicalVideoEncodeArgs(profile, quality)...)
+	// The first output frame is a fragment boundary. Force it to an IDR even
+	// when input seeking and timestamp normalization leave a non-zero PTS; the
+	// downstream packet-copy assembler must be able to start decoding here.
+	args = append(args, "-force_key_frames", "expr:eq(n,0)")
 	args = append(args, canonicalAudioEncodeArgs(quality)...)
 	args = append(args, "-frames:v", strconv.FormatInt(frameCount, 10), "-avoid_negative_ts", "make_zero", "-reset_timestamps", "1", "-movflags", "+faststart", outputPath)
 	return args

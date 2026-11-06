@@ -188,7 +188,7 @@ func TestPrepareDriveStockWindowsCertifiesExact75FrameFragment(t *testing.T) {
 		PlanVersion: 2, TimelineRevision: 1, TimelineSHA256: strings.Repeat("a", 64), DurationUS: 3_125_000,
 		Output:      videoContract.OutputContractV2{Container: "mp4", VideoCodec: "h264", Width: 1920, Height: 1080, FPSNum: 24, FPSDen: 1, PixelFormat: "yuv420p", ProfileID: profile.ProfileID, CodecProfile: profile.CodecProfile, CodecLevel: profile.CodecLevel, GOPSize: profile.GOPSize, BFrames: 0, ClosedGOP: true, TimeBaseNum: profile.TimeBaseNum, TimeBaseDen: profile.TimeBaseDen},
 		FinalAudio:  videoContract.FinalAudioV2{Mode: videoContract.AudioModeFinalAudioCopyV2, AssetID: "audio-final", SHA256: strings.Repeat("b", 64), SizeBytes: 128, Codec: "aac", SampleRateHz: 48000, Channels: 2, DurationUS: 3_125_000, TimelineRevision: 1, TimelineSHA256: strings.Repeat("a", 64)},
-		VideoTracks: []videoContract.VideoTrackV2{{TrackID: "main", Segments: []videoContract.VideoSegmentV2{{SegmentID: "segment-stock-001", AssetID: sha, SHA256: sha, TimelineStartFrame: 0, FrameCount: 75, SourceInUS: 0, SourceDurationUS: 3_125_000}}}},
+		VideoTracks: []videoContract.VideoTrackV2{{TrackID: "main", Segments: []videoContract.VideoSegmentV2{{SegmentID: "segment-stock-001", AssetID: sha, SHA256: sha, TimelineStartFrame: 0, FrameCount: 75, SourceInUS: 1_250_000, SourceDurationUS: 3_125_000}}}},
 		Assets:      []videoContract.AssetRefV2{{AssetID: sha, SHA256: sha, SizeBytes: size, Kind: "video", MIME: "video/mp4", DurationUS: 5_000_000, FrameCount: 120}, {AssetID: "audio-final", SHA256: strings.Repeat("b", 64), SizeBytes: 128, Kind: "final_audio", MIME: "audio/mp4", DurationUS: 3_125_000}},
 	}
 	planJSON, err := json.Marshal(plan)
