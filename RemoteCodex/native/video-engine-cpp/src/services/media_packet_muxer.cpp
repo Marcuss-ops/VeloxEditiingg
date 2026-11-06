@@ -331,7 +331,8 @@ bool preparePlan(const CopyOnlyMuxRequest& request, packet::InputSessionRegistry
                     const auto signature = mediaSignatureFromStream(session->demuxer().stream(videoIndex));
                     if (!mediaSignaturesCompatible(signature, *videoTarget, &issue)) {
                         issue = "stream profile mismatch: " + issue;
-                    } else if (!segment.normalized && !session->sourceWindowStartsOnKeyframe(
+                    } else if (!segment.normalized && !segment.metadata_certified &&
+                               !session->sourceWindowStartsOnKeyframe(
                                    videoIndex, segment.source_in_us, issue)) {
                         issue = "source window is not keyframe-safe";
                     } else {
