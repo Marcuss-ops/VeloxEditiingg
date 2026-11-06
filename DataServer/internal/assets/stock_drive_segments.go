@@ -50,6 +50,7 @@ func (s *AssetService) PrepareDriveStockWindows(ctx context.Context, planJSON st
 	}()
 	preparedByKey := map[string]Asset{}
 	newAssets := map[string]contract.AssetRefV2{}
+	replacedStockIDs := map[string]struct{}{}
 	changed := false
 
 	for trackIndex := range plan.VideoTracks {
@@ -59,17 +60,27 @@ func (s *AssetService) PrepareDriveStockWindows(ctx context.Context, planJSON st
 				continue
 			}
 			original, ok := assetsByID[segment.AssetID]
-			if !ok || !isDriveStock(original) {
+			if !ok {
+				continue
+			}
+			binding := stockRuntimeBindingForAsset(original, bindings)
+			if !isDriveStock(original) && !isDriveRuntimeBinding(binding) {
 				continue
 			}
 			changed = true
+			replacedStockIDs[original.AssetID] = struct{}{}
 			driveID := strings.TrimSpace(original.DriveFileID)
 			if driveID == "" {
 				driveID = strings.TrimPrefix(strings.TrimSpace(original.AssetID), "drive:")
 			}
-			binding := bindings[driveID]
+			if driveID == "" || driveID == original.AssetID {
+				driveID = strings.TrimSpace(bindingString(binding, "drive_file_id"))
+			}
 			if binding == nil {
 				return "", "", fmt.Errorf("stock segment %q has no runtime Drive binding for file %q", segment.SegmentID, driveID)
+			}
+			if driveID == "" {
+				return "", "", fmt.Errorf("stock segment %q Drive binding does not declare drive_file_id", segment.SegmentID)
 			}
 			uri := stockSourceURI(binding, driveID)
 			if uri == "" {
@@ -88,13 +99,20 @@ func (s *AssetService) PrepareDriveStockWindows(ctx context.Context, planJSON st
 					return "", "", fmt.Errorf("stock file %q identity: %w", driveID, err)
 				}
 				expectedSHA := strings.TrimSpace(original.SHA256)
+				if expectedSHA == "" {
+					expectedSHA = strings.TrimSpace(bindingString(binding, "sha256", "asset_sha256"))
+				}
 				if expectedSHA != "" && !strings.EqualFold(expectedSHA, state.sha) {
 					cleanup()
 					return "", "", fmt.Errorf("stock file %q sha256 mismatch", driveID)
 				}
-				if original.SizeBytes > 0 && original.SizeBytes != state.size {
+				expectedSize := original.SizeBytes
+				if expectedSize <= 0 {
+					expectedSize = bindingInt64(binding, "size_bytes")
+				}
+				if expectedSize > 0 && expectedSize != state.size {
 					cleanup()
-					return "", "", fmt.Errorf("stock file %q size mismatch: got %d want %d", driveID, state.size, original.SizeBytes)
+					return "", "", fmt.Errorf("stock file %q size mismatch: got %d want %d", driveID, state.size, expectedSize)
 				}
 				state.probe, err = s.videoTrimmer.Probe(ctx, path)
 				if err != nil {
@@ -214,7 +232,8 @@ func (s *AssetService) PrepareDriveStockWindows(ctx context.Context, planJSON st
 		return planJSON, contract.HashCompiledPlanV2([]byte(planJSON)), nil
 	}
 	for _, asset := range plan.Assets {
-		if !isDriveStock(asset) {
+		_, replaced := replacedStockIDs[asset.AssetID]
+		if !isDriveStock(asset) && !replaced {
 			newAssets[asset.AssetID] = asset
 		}
 	}
@@ -258,7 +277,7 @@ func stockRuntimeBindings(assets []map[string]interface{}) map[string]map[string
 		if !strings.EqualFold(strings.TrimSpace(fmt.Sprint(asset["role"])), "stock") {
 			continue
 		}
-		for _, key := range []string{"drive_file_id", "asset_id", "asset_key"} {
+		for _, key := range []string{"drive_file_id", "asset_id", "asset_key", "sha256", "asset_sha256"} {
 			id := strings.TrimSpace(fmt.Sprint(asset[key]))
 			if id != "" && id != "<nil>" {
 				out[id] = asset
@@ -266,6 +285,66 @@ func stockRuntimeBindings(assets []map[string]interface{}) map[string]map[string
 		}
 	}
 	return out
+}
+
+func stockRuntimeBindingForAsset(asset contract.AssetRefV2, bindings map[string]map[string]interface{}) map[string]interface{} {
+	for _, key := range []string{asset.DriveFileID, asset.AssetID, asset.AssetKey, asset.SHA256} {
+		if binding := bindings[strings.TrimSpace(key)]; binding != nil {
+			return binding
+		}
+	}
+	return nil
+}
+
+func isDriveRuntimeBinding(binding map[string]interface{}) bool {
+	if binding == nil {
+		return false
+	}
+	if strings.TrimSpace(bindingString(binding, "drive_file_id")) != "" || strings.EqualFold(strings.TrimSpace(bindingString(binding, "source_kind")), "drive") {
+		return true
+	}
+	for _, key := range []string{"source_uri", "url", "drive_link"} {
+		value := strings.ToLower(strings.TrimSpace(bindingString(binding, key)))
+		if strings.Contains(value, "drive.google.com/") || strings.Contains(value, "drive.usercontent.google.com/") || strings.HasPrefix(value, "velox-drive://") {
+			return true
+		}
+	}
+	return false
+}
+
+func bindingString(binding map[string]interface{}, keys ...string) string {
+	if binding == nil {
+		return ""
+	}
+	for _, key := range keys {
+		if value, ok := binding[key].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func bindingInt64(binding map[string]interface{}, key string) int64 {
+	if binding == nil {
+		return 0
+	}
+	switch value := binding[key].(type) {
+	case int:
+		return int64(value)
+	case int64:
+		return value
+	case float64:
+		return int64(value)
+	case json.Number:
+		parsed, _ := value.Int64()
+		return parsed
+	case string:
+		var parsed int64
+		_, _ = fmt.Sscan(strings.TrimSpace(value), &parsed)
+		return parsed
+	default:
+		return 0
+	}
 }
 
 func stockSourceURI(binding map[string]interface{}, driveID string) string {

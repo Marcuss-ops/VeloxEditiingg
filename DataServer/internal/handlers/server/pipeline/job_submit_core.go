@@ -198,27 +198,29 @@ func (h *Handlers) submitJobCore(ctx context.Context, req SubmitJobRequest, iden
 		status, body := quotaErrorEnvelope(qerr)
 		return intakeResponse{Status: status, Body: body}
 	}
-	if !identity.DryRun && !req.RuntimeAssetsPending && compiledPlanHasDriveStock(req.CompiledRenderPlanJSON) {
-		if h.assetService == nil {
-			return reject(http.StatusServiceUnavailable, "stock_preparation_unavailable", "Master stock window preparation is not configured")
-		}
+	if !identity.DryRun && !req.RuntimeAssetsPending {
 		bindings := append([]map[string]interface{}(nil), req.RuntimeAssets...)
 		var bindingErr error
 		bindings, bindingErr = appendRuntimeAssetBindings(bindings, req.RuntimePayload["runtime_assets"])
 		if bindingErr != nil {
 			return reject(http.StatusUnprocessableEntity, "invalid_runtime_assets", bindingErr.Error())
 		}
-		preparedPlan, preparedHash, prepareErr := h.assetService.PrepareDriveStockWindows(ctx, req.CompiledRenderPlanJSON, bindings)
-		if prepareErr != nil {
-			return rejectWithDetails(http.StatusUnprocessableEntity, "invalid_compiled_render_plan", prepareErr.Error(), []gin.H{{"path": "compiled_render_plan_json.video_tracks", "issue": "stock_window_materialization_failed"}})
-		}
-		req.CompiledRenderPlanJSON, req.CompiledRenderPlanSHA256 = preparedPlan, preparedHash
-		req.RuntimeAssets = removePreparedStockBindings(req.RuntimeAssets)
-		if raw, ok := req.RuntimePayload["runtime_assets"]; ok {
-			encoded, _ := json.Marshal(raw)
-			var nested []map[string]interface{}
-			if json.Unmarshal(encoded, &nested) == nil {
-				req.RuntimePayload["runtime_assets"] = removePreparedStockBindings(nested)
+		if compiledPlanHasDriveStock(req.CompiledRenderPlanJSON, bindings) {
+			if h.assetService == nil {
+				return reject(http.StatusServiceUnavailable, "stock_preparation_unavailable", "Master stock window preparation is not configured")
+			}
+			preparedPlan, preparedHash, prepareErr := h.assetService.PrepareDriveStockWindows(ctx, req.CompiledRenderPlanJSON, bindings)
+			if prepareErr != nil {
+				return rejectWithDetails(http.StatusUnprocessableEntity, "invalid_compiled_render_plan", prepareErr.Error(), []gin.H{{"path": "compiled_render_plan_json.video_tracks", "issue": "stock_window_materialization_failed"}})
+			}
+			req.CompiledRenderPlanJSON, req.CompiledRenderPlanSHA256 = preparedPlan, preparedHash
+			req.RuntimeAssets = removePreparedStockBindings(req.RuntimeAssets)
+			if raw, ok := req.RuntimePayload["runtime_assets"]; ok {
+				encoded, _ := json.Marshal(raw)
+				var nested []map[string]interface{}
+				if json.Unmarshal(encoded, &nested) == nil {
+					req.RuntimePayload["runtime_assets"] = removePreparedStockBindings(nested)
+				}
 			}
 		}
 	}

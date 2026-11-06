@@ -212,22 +212,22 @@ func (h *Handlers) FinalizeJob() gin.HandlerFunc {
 			c.JSON(http.StatusAccepted, gin.H{"ok": true, "job_id": jobID, "phase": "FINALIZE", "dispatch_status": "prefetch_refresh_queued", "idempotent": true})
 			return
 		}
-		if compiledPlanHasDriveStock(planJSON) {
+		bindings := append([]map[string]interface{}(nil), req.RuntimeAssets...)
+		var bindingErr error
+		bindings, bindingErr = appendRuntimeAssetBindings(bindings, req.RuntimePayload["runtime_assets"])
+		if bindingErr == nil {
+			bindings, bindingErr = appendRuntimeAssetBindings(bindings, current["runtime_assets"])
+		}
+		if storedPayload, ok := current["runtime_payload"].(map[string]interface{}); ok && bindingErr == nil {
+			bindings, bindingErr = appendRuntimeAssetBindings(bindings, storedPayload["runtime_assets"])
+		}
+		if bindingErr != nil {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "error": "invalid_runtime_assets", "message": bindingErr.Error()})
+			return
+		}
+		if compiledPlanHasDriveStock(planJSON, bindings) {
 			if h.assetService == nil {
 				c.JSON(http.StatusServiceUnavailable, gin.H{"ok": false, "error": "stock_preparation_unavailable", "message": "Master stock window preparation is not configured"})
-				return
-			}
-			bindings := append([]map[string]interface{}(nil), req.RuntimeAssets...)
-			var bindingErr error
-			bindings, bindingErr = appendRuntimeAssetBindings(bindings, req.RuntimePayload["runtime_assets"])
-			if bindingErr == nil {
-				bindings, bindingErr = appendRuntimeAssetBindings(bindings, current["runtime_assets"])
-			}
-			if storedPayload, ok := current["runtime_payload"].(map[string]interface{}); ok && bindingErr == nil {
-				bindings, bindingErr = appendRuntimeAssetBindings(bindings, storedPayload["runtime_assets"])
-			}
-			if bindingErr != nil {
-				c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "error": "invalid_runtime_assets", "message": bindingErr.Error()})
 				return
 			}
 			preparedPlan, preparedHash, prepareErr := h.assetService.PrepareDriveStockWindows(c.Request.Context(), planJSON, bindings)
