@@ -250,15 +250,15 @@ int main() {
         request.video_segments = {{tbA, 0, 800'000}, {tbB, 0, 800'000}};
         request.output_path = output;
         velox::media::CopyOnlyMuxResult result;
-        expect(!velox::media::muxCopyOnly(request, &result),
-               "incompatible video timebases fail closed");
-        expect(!result.success && !result.error.empty(),
-               "incompatible timebase failure includes an error");
-        expect(result.error.find("media signature mismatch: time_base") != std::string::npos,
-               "incompatible timebase failure explains the exact mismatch (actual=" +
-                   result.error + ")");
-        expect(!fs::exists(output),
-               "incompatible timebase failure does not publish output");
+        expect(velox::media::muxCopyOnly(request, &result),
+               "different legal input timebases remain packet-copy compatible");
+        checkOutput(output, result, "timescale-mismatch");
+        const auto probe = velox::media::probeMediaInProcess(output);
+        expectTimeline(result, probe, 1'600'000, "timescale-mismatch");
+        const auto inspected = inspectStreams(output);
+        expect(inspected.video_packets > 0,
+               "mixed-timescale mux writes video packets without encoding");
+        checkStreams(inspected, result, "timescale-mismatch");
     }
 
     // --- keyframe cuts ------------------------------------------------------
