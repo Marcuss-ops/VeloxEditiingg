@@ -230,7 +230,10 @@ func buildRuntimeFinalizePatch(
 		if prepareErr != nil {
 			return nil, fmt.Errorf("stock window materialization: %w", prepareErr)
 		}
-		finalRuntimeAssets = removePreparedStockBindings(bindings)
+		finalRuntimeAssets, err = retainPlanSourceBindings(preparedPlan, bindings)
+		if err != nil {
+			return nil, fmt.Errorf("prune materialized video sources: %w", err)
+		}
 		if req.RuntimePayload == nil {
 			req.RuntimePayload = make(map[string]interface{})
 		}

@@ -214,12 +214,20 @@ func (h *Handlers) submitJobCore(ctx context.Context, req SubmitJobRequest, iden
 				return rejectWithDetails(http.StatusUnprocessableEntity, "invalid_compiled_render_plan", prepareErr.Error(), []gin.H{{"path": "compiled_render_plan_json.video_tracks", "issue": "stock_window_materialization_failed"}})
 			}
 			req.CompiledRenderPlanJSON, req.CompiledRenderPlanSHA256 = preparedPlan, preparedHash
-			req.RuntimeAssets = removePreparedStockBindings(req.RuntimeAssets)
+			pruned, pruneErr := retainPlanSourceBindings(preparedPlan, req.RuntimeAssets)
+			if pruneErr != nil {
+				return reject(http.StatusUnprocessableEntity, "invalid_compiled_render_plan", pruneErr.Error())
+			}
+			req.RuntimeAssets = pruned
 			if raw, ok := req.RuntimePayload["runtime_assets"]; ok {
 				encoded, _ := json.Marshal(raw)
 				var nested []map[string]interface{}
 				if json.Unmarshal(encoded, &nested) == nil {
-					req.RuntimePayload["runtime_assets"] = removePreparedStockBindings(nested)
+					prunedNested, nestedErr := retainPlanSourceBindings(preparedPlan, nested)
+					if nestedErr != nil {
+						return reject(http.StatusUnprocessableEntity, "invalid_compiled_render_plan", nestedErr.Error())
+					}
+					req.RuntimePayload["runtime_assets"] = prunedNested
 				}
 			}
 		}

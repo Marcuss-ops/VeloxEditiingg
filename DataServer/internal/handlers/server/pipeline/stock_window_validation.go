@@ -30,6 +30,6 @@ func appendRuntimeAssetBindings(assets []map[string]interface{}, raw interface{}
 	return append(assets, nested...), nil
 }
 
-func removePreparedStockBindings(assets []map[string]interface{}) []map[string]interface{} {
-	return voiceoverassets.RemovePreparedStockBindings(assets)
+func retainPlanSourceBindings(planJSON string, assets []map[string]interface{}) ([]map[string]interface{}, error) {
+	return voiceoverassets.RetainPlanSourceBindings(planJSON, assets)
 }

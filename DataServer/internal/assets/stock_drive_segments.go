@@ -148,9 +148,6 @@ func isDriveStock(asset contract.AssetRefV2) bool {
 func stockRuntimeBindings(assets []map[string]interface{}) map[string]map[string]interface{} {
 	out := make(map[string]map[string]interface{}, len(assets)*2)
 	for _, asset := range assets {
-		if !strings.EqualFold(strings.TrimSpace(fmt.Sprint(asset["role"])), "stock") {
-			continue
-		}
 		for _, key := range []string{"drive_file_id", "asset_id", "asset_key", "sha256", "asset_sha256"} {
 			id := strings.TrimSpace(fmt.Sprint(asset[key]))
 			if id != "" && id != "<nil>" {
@@ -186,9 +183,9 @@ func isDriveRuntimeBinding(binding map[string]interface{}) bool {
 	return false
 }
 
-// PlanHasDriveStock reports whether a compiled plan uses a Drive-backed stock
-// asset in its video timeline. It shares the same asset and binding rules as
-// PrepareDriveStockWindows so intake routing cannot drift from preparation.
+// PlanHasDriveStock reports whether a compiled plan has any source-backed video
+// segment that the Master must materialize. The historical name is retained at
+// the API boundary; the classifier now covers Drive stock, clips and overlays.
 func PlanHasDriveStock(planJSON string, runtimeAssets []map[string]interface{}) bool {
 	var plan contract.CompiledRenderPlanV2
 	if strings.TrimSpace(planJSON) == "" || json.Unmarshal([]byte(planJSON), &plan) != nil || plan.StockPool != nil {
@@ -209,7 +206,7 @@ func PlanHasDriveStock(planJSON string, runtimeAssets []map[string]interface{}) 
 				continue
 			}
 			binding := stockRuntimeBindingForAsset(asset, bindings)
-			if isDriveStock(asset) || isDriveRuntimeBinding(binding) {
+			if isDriveStock(asset) || isDriveRuntimeBinding(binding) || stockSourceURI(binding, "") != "" {
 				return true
 			}
 		}
@@ -217,20 +214,39 @@ func PlanHasDriveStock(planJSON string, runtimeAssets []map[string]interface{}) 
 	return false
 }
 
-// RemovePreparedStockBindings drops only runtime bindings for Drive-backed
-// stock that has been materialized into certified plan assets. Keeping the
-// classifier beside preparation makes the submit and finalize projections use
-// the same definition of a Drive binding.
-func RemovePreparedStockBindings(assets []map[string]interface{}) []map[string]interface{} {
+// RetainPlanSourceBindings keeps only runtime sources still named by the
+// rewritten plan. Materialized source windows now resolve from the Master asset
+// registry; unchanged, already-certified whole assets remain available to the
+// worker without a second fetch entry.
+func RetainPlanSourceBindings(planJSON string, assets []map[string]interface{}) ([]map[string]interface{}, error) {
+	var plan contract.CompiledRenderPlanV2
+	if err := json.Unmarshal([]byte(planJSON), &plan); err != nil {
+		return nil, fmt.Errorf("decode prepared plan while pruning source bindings: %w", err)
+	}
+	ids := make(map[string]struct{}, len(plan.Assets)*4)
+	for _, asset := range plan.Assets {
+		for _, id := range []string{asset.AssetID, asset.AssetKey, asset.SHA256, asset.DriveFileID} {
+			if id = strings.TrimSpace(id); id != "" {
+				ids[id] = struct{}{}
+			}
+		}
+	}
 	filtered := make([]map[string]interface{}, 0, len(assets))
 	for _, asset := range assets {
-		role, _ := asset["role"].(string)
-		if strings.EqualFold(strings.TrimSpace(role), "stock") && isDriveRuntimeBinding(asset) {
-			continue
+		keep := false
+		for _, key := range []string{"asset_id", "asset_key", "sha256", "asset_sha256", "drive_file_id"} {
+			if id := strings.TrimSpace(bindingString(asset, key)); id != "" {
+				if _, ok := ids[id]; ok {
+					keep = true
+					break
+				}
+			}
 		}
-		filtered = append(filtered, asset)
+		if keep {
+			filtered = append(filtered, asset)
+		}
 	}
-	return filtered
+	return filtered, nil
 }
 
 func bindingString(binding map[string]interface{}, keys ...string) string {

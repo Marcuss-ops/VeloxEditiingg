@@ -66,24 +66,28 @@ func collectDriveStockSourceRequests(
 				continue
 			}
 			binding := stockRuntimeBindingForAsset(original, bindings)
-			if !isDriveStock(original) && !isDriveRuntimeBinding(binding) {
+			if videoSegmentAlreadyPrepared(*plan, segment, original) {
 				continue
 			}
-			driveID := stockDriveID(original, binding)
-			if binding == nil {
-				return nil, fmt.Errorf("stock segment %q has no runtime Drive binding for file %q", segment.SegmentID, driveID)
+			if binding == nil && !isDriveStock(original) {
+				return nil, fmt.Errorf("video segment %q has no runtime source binding for asset %q", segment.SegmentID, original.AssetID)
 			}
-			if driveID == "" {
-				return nil, fmt.Errorf("stock segment %q Drive binding does not declare drive_file_id", segment.SegmentID)
+			driveID := stockDriveID(original, binding)
+			sourceID := driveID
+			if sourceID == "" {
+				sourceID = original.AssetID
+			}
+			if binding == nil {
+				return nil, fmt.Errorf("video segment %q has no runtime source binding for asset %q", segment.SegmentID, sourceID)
 			}
 			uri := stockSourceURI(binding, driveID)
 			if uri == "" {
-				return nil, fmt.Errorf("stock segment %q has no fetchable Drive source", segment.SegmentID)
+				return nil, fmt.Errorf("video segment %q has no fetchable source for asset %q", segment.SegmentID, sourceID)
 			}
-			if previous, exists := requests[driveID]; exists && previous.uri != uri {
-				return nil, fmt.Errorf("Drive file %q has conflicting source references in one plan", driveID)
+			if previous, exists := requests[sourceID]; exists && previous.uri != uri {
+				return nil, fmt.Errorf("video asset %q has conflicting source references in one plan", sourceID)
 			}
-			requests[driveID] = driveStockSourceRequest{driveID: driveID, uri: uri}
+			requests[sourceID] = driveStockSourceRequest{driveID: sourceID, uri: uri}
 		}
 	}
 	return requests, nil
@@ -179,23 +183,27 @@ func collectDriveStockWindows(
 				continue
 			}
 			binding := stockRuntimeBindingForAsset(original, bindings)
-			if !isDriveStock(original) && !isDriveRuntimeBinding(binding) {
+			if videoSegmentAlreadyPrepared(*plan, *segment, original) {
 				continue
+			}
+			if binding == nil && !isDriveStock(original) {
+				return nil, nil, nil, false, fmt.Errorf("video segment %q has no runtime source binding for asset %q", segment.SegmentID, original.AssetID)
 			}
 			changed = true
 			replacedStockIDs[original.AssetID] = struct{}{}
 			driveID := stockDriveID(original, binding)
+			sourceID := driveID
+			if sourceID == "" {
+				sourceID = original.AssetID
+			}
 			if binding == nil {
-				return nil, nil, nil, false, fmt.Errorf("stock segment %q has no runtime Drive binding for file %q", segment.SegmentID, driveID)
+				return nil, nil, nil, false, fmt.Errorf("video segment %q has no runtime source binding for asset %q", segment.SegmentID, sourceID)
 			}
-			if driveID == "" {
-				return nil, nil, nil, false, fmt.Errorf("stock segment %q Drive binding does not declare drive_file_id", segment.SegmentID)
-			}
-			state := sources[driveID]
+			state := sources[sourceID]
 			if state == nil {
-				return nil, nil, nil, false, fmt.Errorf("stock file %q was not prefetched", driveID)
+				return nil, nil, nil, false, fmt.Errorf("video source %q was not prefetched", sourceID)
 			}
-			if err := validateDriveStockIdentity(original, binding, state, driveID); err != nil {
+			if err := validateDriveStockIdentity(original, binding, state, sourceID); err != nil {
 				return nil, nil, nil, false, err
 			}
 			startUS, durationUS := segment.SourceInUS, segment.SourceDurationUS
@@ -205,13 +213,13 @@ func collectDriveStockWindows(
 			frameUS := int64(math.Round(1_000_000 * float64(state.probe.FPSDen) / float64(state.probe.FPSNum)))
 			fileDurationUS := int64(math.Round(state.probe.DurationSeconds * 1_000_000))
 			if frameUS <= 0 || startUS >= fileDurationUS || startUS+durationUS > fileDurationUS+frameUS {
-				return nil, nil, nil, false, fmt.Errorf("stock segment %q window exceeds certified source duration: end_us=%d file_duration_us=%d tolerance_us=%d", segment.SegmentID, startUS+durationUS, fileDurationUS, frameUS)
+				return nil, nil, nil, false, fmt.Errorf("video segment %q window exceeds certified source duration: end_us=%d file_duration_us=%d tolerance_us=%d", segment.SegmentID, startUS+durationUS, fileDurationUS, frameUS)
 			}
 			wantFrames := int64(math.Round(float64(durationUS) * float64(plan.Output.FPSNum) / (1_000_000 * float64(plan.Output.FPSDen))))
 			if wantFrames <= 0 || segment.FrameCount != wantFrames {
-				return nil, nil, nil, false, fmt.Errorf("stock segment %q frame count mismatch: plan=%d expected=%d from %d us at %d/%d fps", segment.SegmentID, segment.FrameCount, wantFrames, durationUS, plan.Output.FPSNum, plan.Output.FPSDen)
+				return nil, nil, nil, false, fmt.Errorf("video segment %q frame count mismatch: plan=%d expected=%d from %d us at %d/%d fps", segment.SegmentID, segment.FrameCount, wantFrames, durationUS, plan.Output.FPSNum, plan.Output.FPSDen)
 			}
-			windowRef := fmt.Sprintf("velox-stock-window://%s/%s/%d/%d/%s", driveID, state.sha, startUS, durationUS, plan.Output.ProfileID)
+			windowRef := fmt.Sprintf("velox-video-window://%s/%s/%d/%d/%s", sourceID, state.sha, startUS, durationUS, plan.Output.ProfileID)
 			if _, exists := windowJobs[windowRef]; !exists {
 				windowJobs[windowRef] = driveStockWindowJob{
 					ref: windowRef, segmentID: segment.SegmentID, state: state,
@@ -226,6 +234,12 @@ func collectDriveStockWindows(
 		}
 	}
 	return windowJobs, placements, replacedStockIDs, changed, nil
+}
+
+func videoSegmentAlreadyPrepared(plan contract.CompiledRenderPlanV2, segment contract.VideoSegmentV2, asset contract.AssetRefV2) bool {
+	return asset.ProfileID == plan.Output.ProfileID && segment.SourceInUS == 0 &&
+		segment.SourceDurationUS == asset.DurationUS && asset.FrameCount == segment.FrameCount &&
+		asset.FirstFrameKeyframe && asset.ClosedGOP
 }
 
 func validateDriveStockIdentity(asset contract.AssetRefV2, binding map[string]interface{}, state *driveStockSourceState, driveID string) error {
@@ -440,7 +454,7 @@ func rewritePreparedDriveStockPlan(
 	}
 	for _, asset := range plan.Assets {
 		_, replaced := replacedStockIDs[asset.AssetID]
-		if !isDriveStock(asset) && !replaced {
+		if !replaced {
 			newAssets[asset.AssetID] = asset
 		}
 	}
