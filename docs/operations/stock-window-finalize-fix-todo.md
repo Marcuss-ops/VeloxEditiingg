@@ -16,9 +16,10 @@
 
 ## Rollout and end-to-end acceptance
 
-- [ ] Build the Master image from the verified commit and inspect its embedded commit/version.
-- [ ] Deploy the new Master image and confirm service health/readiness.
+- [x] Build the Master image from verified commit `ab0b1939` (`local-ab0b1939`).
+- [x] Deploy the new Master image; `/api/health` reports healthy with embedded commit `ab0b1939d61563ed60fc535c10fc790d4869a57b`.
+- [x] Confirm worker `host_57_129_132_133` reconnected to the updated Master.
 - [ ] Re-submit FINALIZE for the prepared video job (or submit a fresh job if its request cannot be replayed).
-- [ ] Verify FINALIZE returns promptly and reports `stock_preparation_queued`.
+- [ ] Verify FINALIZE returns promptly and reports `stock_preparation_queued` on the next Producer request.
 - [ ] Verify background materialization completes, the task is leased by worker `host_57_129_132_133`, and the job reaches a terminal success state.
 - [ ] Verify the resulting video artifact and record its job ID and image digest.
