@@ -517,6 +517,53 @@ func isDriveRuntimeBinding(binding map[string]interface{}) bool {
 	return false
 }
 
+// PlanHasDriveStock reports whether a compiled plan uses a Drive-backed stock
+// asset in its video timeline. It shares the same asset and binding rules as
+// PrepareDriveStockWindows so intake routing cannot drift from preparation.
+func PlanHasDriveStock(planJSON string, runtimeAssets []map[string]interface{}) bool {
+	var plan contract.CompiledRenderPlanV2
+	if strings.TrimSpace(planJSON) == "" || json.Unmarshal([]byte(planJSON), &plan) != nil || plan.StockPool != nil {
+		return false
+	}
+	bindings := stockRuntimeBindings(runtimeAssets)
+	assetsByID := make(map[string]contract.AssetRefV2, len(plan.Assets))
+	for _, asset := range plan.Assets {
+		assetsByID[asset.AssetID] = asset
+	}
+	for _, track := range plan.VideoTracks {
+		for _, segment := range track.Segments {
+			if segment.StockPoolSlot {
+				continue
+			}
+			asset, ok := assetsByID[segment.AssetID]
+			if !ok {
+				continue
+			}
+			binding := stockRuntimeBindingForAsset(asset, bindings)
+			if isDriveStock(asset) || isDriveRuntimeBinding(binding) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// RemovePreparedStockBindings drops only runtime bindings for Drive-backed
+// stock that has been materialized into certified plan assets. Keeping the
+// classifier beside preparation makes the submit and finalize projections use
+// the same definition of a Drive binding.
+func RemovePreparedStockBindings(assets []map[string]interface{}) []map[string]interface{} {
+	filtered := make([]map[string]interface{}, 0, len(assets))
+	for _, asset := range assets {
+		role, _ := asset["role"].(string)
+		if strings.EqualFold(strings.TrimSpace(role), "stock") && isDriveRuntimeBinding(asset) {
+			continue
+		}
+		filtered = append(filtered, asset)
+	}
+	return filtered
+}
+
 func bindingString(binding map[string]interface{}, keys ...string) string {
 	if binding == nil {
 		return ""

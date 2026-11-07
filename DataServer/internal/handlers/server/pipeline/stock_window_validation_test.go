@@ -41,6 +41,23 @@ func TestCompiledPlanHasDriveStockWhenRuntimeBindingSuppliesDriveIdentity(t *tes
 	}
 }
 
+func TestCompiledPlanHasDriveStockRequiresTimelineReference(t *testing.T) {
+	plan := contract.CompiledRenderPlanV2{
+		VideoTracks: []contract.VideoTrackV2{{TrackID: "main", Segments: []contract.VideoSegmentV2{{SegmentID: "local", AssetID: "local-asset", FrameCount: 24}}}},
+		Assets: []contract.AssetRefV2{
+			{AssetID: "local-asset", Kind: "video"},
+			{AssetID: "unused-drive", Kind: "video", DriveFileID: "drive-unused"},
+		},
+	}
+	encoded, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compiledPlanHasDriveStock(string(encoded)) {
+		t.Fatal("unused Drive asset incorrectly triggered stock preparation")
+	}
+}
+
 func TestRemovePreparedStockBindingsKeepsNonStockAssets(t *testing.T) {
 	assets := []map[string]interface{}{
 		{"role": "stock", "drive_file_id": "stock-1"},
@@ -51,5 +68,18 @@ func TestRemovePreparedStockBindingsKeepsNonStockAssets(t *testing.T) {
 	got := removePreparedStockBindings(assets)
 	if len(got) != 3 || got[0]["source_uri"] != "https://cdn.example/stock.mp4" || got[1]["asset_id"] != "overlay-1" || got[2]["asset_id"] != "audio-1" {
 		t.Fatalf("remaining runtime assets = %#v", got)
+	}
+}
+
+func TestRemovePreparedStockBindingsUsesPreparationDriveURLRules(t *testing.T) {
+	assets := []map[string]interface{}{
+		{"role": "stock", "url": "https://drive.google.com/uc?id=one"},
+		{"role": "stock", "url": "https://drive.usercontent.google.com/download?id=two"},
+		{"role": "stock", "url": "velox-drive://three"},
+		{"role": "stock", "url": "https://cdn.example/stock.mp4"},
+	}
+	got := removePreparedStockBindings(assets)
+	if len(got) != 1 || got[0]["url"] != "https://cdn.example/stock.mp4" {
+		t.Fatalf("remaining runtime assets = %#v, want only non-Drive stock", got)
 	}
 }
