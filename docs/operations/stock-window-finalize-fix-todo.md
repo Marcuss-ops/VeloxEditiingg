@@ -22,7 +22,8 @@
 - [x] Build the Master image from verified commit `ab0b1939` (`local-ab0b1939`).
 - [x] Deploy the new Master image; `/api/health` reports healthy with embedded commit `ab0b1939d61563ed60fc535c10fc790d4869a57b`.
 - [x] Confirm worker `host_57_129_132_133` reconnected to the updated Master.
-- [ ] Build and deploy the Master image containing the post-FINALIZE executor-routing fix.
+- [x] Build and deploy the Master image containing the post-FINALIZE executor-routing fix (`local-0d8271a0`, image `sha256:416acafe331a5d0567799b59e8561e421396ad66c3002452cf848c4c437c647c`); `/api/health` reports commit `0d8271a0491a5a7c8d2fdf8e1750292669dd7ae8`.
+- [x] Confirm the durable FINALIZE processor starts and worker `host_57_129_132_133` authenticates/reconnects after rollout.
 - [ ] Confirm r59f (or a replay/new equivalent) is dispatched as `video.assemble.copy.v1` after stock preparation.
 - [ ] Re-submit FINALIZE for the prepared video job (or submit a fresh job if its request cannot be replayed).
 - [ ] Verify FINALIZE returns promptly and reports `stock_preparation_queued` on the next Producer request.
