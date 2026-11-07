@@ -16,6 +16,9 @@
 - [x] Recompute the renderer executor from the materialized plan and runtime assets; atomically update task, task spec, and spec hash before waking placement.
 - [x] Add regression coverage for slice-to-copy executor transition and atomic task/spec executor persistence.
 - [x] Re-pass targeted pipeline/store tests, `go vet ./...`, and `go build ./...` after the routing fix.
+- [x] Copy `timeline_revision` and `timeline_sha256` from the compiled plan, plus the segment's `timeline_start_frame`, into each certified prepared stock AssetRef manifest.
+- [x] Add regression assertions for the stock manifest timeline identity, including a non-zero timeline start frame.
+- [x] Pass `go vet ./...`, `go build ./...`, and `go test ./internal/assets -count=1` after the manifest fix.
 
 ## Rollout and end-to-end acceptance
 
@@ -24,6 +27,7 @@
 - [x] Confirm worker `host_57_129_132_133` reconnected to the updated Master.
 - [x] Build and deploy the Master image containing the post-FINALIZE executor-routing fix (`local-0d8271a0`, image `sha256:416acafe331a5d0567799b59e8561e421396ad66c3002452cf848c4c437c647c`); `/api/health` reports commit `0d8271a0491a5a7c8d2fdf8e1750292669dd7ae8`.
 - [x] Confirm the durable FINALIZE processor starts and worker `host_57_129_132_133` authenticates/reconnects after rollout.
+- [ ] Build and deploy the Master image containing the prepared-stock manifest timeline fix.
 - [ ] Confirm r59f (or a replay/new equivalent) is dispatched as `video.assemble.copy.v1` after stock preparation.
 - [ ] Re-submit FINALIZE for the prepared video job (or submit a fresh job if its request cannot be replayed).
 - [ ] Verify FINALIZE returns promptly and reports `stock_preparation_queued` on the next Producer request.

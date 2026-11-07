@@ -422,15 +422,18 @@ func rewritePreparedDriveStockPlan(
 			return "", "", fmt.Errorf("stock window %q produced no certified fragment", placement.windowRef)
 		}
 		fragment := result.fragment
+		segment := &plan.VideoTracks[placement.trackIndex].Segments[placement.segmentIndex]
 		assetRef := contract.AssetRefV2{
 			AssetID: fragment.AssetID, AssetKey: fragment.AssetID, SHA256: fragment.SHA256,
 			SizeBytes: fragment.SizeBytes, Kind: "video", MIME: fragment.MimeType,
 			DurationUS: int64(math.Round(float64(placement.wantFrames) * 1_000_000 * float64(plan.Output.FPSDen) / float64(plan.Output.FPSNum))),
 			Width:      plan.Output.Width, Height: plan.Output.Height, ProfileID: plan.Output.ProfileID,
-			FrameCount: placement.wantFrames, FirstFrameKeyframe: true, ClosedGOP: true,
+			FrameCount:       placement.wantFrames,
+			TimelineRevision: plan.TimelineRevision, TimelineSHA256: plan.TimelineSHA256,
+			TimelineStartFrame: segment.TimelineStartFrame,
+			FirstFrameKeyframe: true, ClosedGOP: true,
 		}
 		newAssets[assetRef.AssetID] = assetRef
-		segment := &plan.VideoTracks[placement.trackIndex].Segments[placement.segmentIndex]
 		segment.AssetID, segment.SHA256 = assetRef.AssetID, assetRef.SHA256
 		segment.SourceInUS = 0
 		segment.SourceDurationUS = assetRef.DurationUS
