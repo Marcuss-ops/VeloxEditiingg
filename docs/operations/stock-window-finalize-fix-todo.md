@@ -29,8 +29,8 @@
 - [x] Confirm the durable FINALIZE processor starts and worker `host_57_129_132_133` authenticates/reconnects after rollout.
 - [x] Build and deploy the Master image containing the prepared-stock manifest timeline fix (`local-37175ef0`, image `sha256:42b867be56cfea19cb2aa140f2d786c12cd730413a0604a04ad219289c1e6f34`); `/api/health` reports commit `37175ef011c49bb30b21afd4275a51f5949c6e4b`.
 - [x] Verify worker `host_57_129_132_133` levels A–D healthy, connected session active, heartbeat fresh, executor advertised, and smoke OK after rollout.
-- [ ] Re-submit the r59g source request (or a fresh equivalent) so stock fragments are rematerialized with timeline metadata; Master DB confirms the matching old job `job_3f7f2ed6896fe5cc` / task is terminal FAILED on `video.assemble.copy.v1`, FINALIZE is SUCCEEDED, and its request bytes were cleared.
-- [ ] Confirm the new task is dispatched as `video.assemble.copy.v1` after stock preparation.
-- [ ] Verify the new FINALIZE returns promptly and reports `stock_preparation_queued` to the Producer.
-- [ ] Verify background materialization completes, the task is leased by worker `host_57_129_132_133`, and the job reaches a terminal success state.
-- [ ] Verify the resulting video artifact and record its job ID and image digest.
+- [x] Re-submit the r59g source request under new identifier `r59h-20261107-final-remote-master-route-retry`; Producer job `job_1794049294999943994_89a83290` reports `SUCCEEDED`.
+- [x] Confirm the new task is dispatched as `video.assemble.copy.v1` after stock preparation. Master logs record the copy-executor TaskOffer and lease to `host_57_129_132_133` for remote job `job_a897b41b27d66b55`.
+- [x] Verify the new FINALIZE returns promptly and reports `stock_preparation_queued` to the Producer; its durable Master finalization reached `SUCCEEDED` with `runtime_assets_pending=false`.
+- [x] Verify background materialization completes, the task is leased by worker `host_57_129_132_133`, and the job reaches terminal success. Master DB and gRPC logs show SUCCEEDED / task result ingested / commit ACK.
+- [x] Verify the resulting video artifact: Master records `video/mp4`, size `354005529`, SHA-256 `3660c9a978f6396aab8030750fc52d6e9daa06a1d954679f4f9ba3a854feea2a`; Producer reports the same artifact response. Master job `job_a897b41b27d66b55`, worker image digest `sha256:1e2158666d3f876f30778a26bbe5e80e0ed5d754e942e58a752a16d90b8ae42d`, Master image digest `sha256:42b867be56cfea19cb2aa140f2d786c12cd730413a0604a04ad219289c1e6f34`.
