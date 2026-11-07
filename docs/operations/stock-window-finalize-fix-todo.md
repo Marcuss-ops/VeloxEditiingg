@@ -29,7 +29,7 @@
 - [x] Confirm the durable FINALIZE processor starts and worker `host_57_129_132_133` authenticates/reconnects after rollout.
 - [x] Build and deploy the Master image containing the prepared-stock manifest timeline fix (`local-37175ef0`, image `sha256:42b867be56cfea19cb2aa140f2d786c12cd730413a0604a04ad219289c1e6f34`); `/api/health` reports commit `37175ef011c49bb30b21afd4275a51f5949c6e4b`.
 - [x] Verify worker `host_57_129_132_133` levels A–D healthy, connected session active, heartbeat fresh, executor advertised, and smoke OK after rollout.
-- [ ] Re-submit the r59g source request (or a fresh equivalent) so stock fragments are rematerialized with timeline metadata; the old task is terminal FAILED and its persisted plan contains the pre-fix manifest.
+- [ ] Re-submit the r59g source request (or a fresh equivalent) so stock fragments are rematerialized with timeline metadata; Master DB confirms the matching old job `job_3f7f2ed6896fe5cc` / task is terminal FAILED on `video.assemble.copy.v1`, FINALIZE is SUCCEEDED, and its request bytes were cleared.
 - [ ] Confirm the new task is dispatched as `video.assemble.copy.v1` after stock preparation.
 - [ ] Verify the new FINALIZE returns promptly and reports `stock_preparation_queued` to the Producer.
 - [ ] Verify background materialization completes, the task is leased by worker `host_57_129_132_133`, and the job reaches a terminal success state.
