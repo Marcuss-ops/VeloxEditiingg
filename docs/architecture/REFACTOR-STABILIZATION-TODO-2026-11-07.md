@@ -108,7 +108,8 @@ pass.
 - [x] Added a focused packet-copy regression test for a canonical keyframe
   window. Focused race tests, `golangci-lint` on `internal/assets/...`,
   `check-architecture.sh`, and the full `pre-removal-verify.sh` all passed.
-- [ ] Commit and push this follow-up implementation and evidence to `main`.
+- [x] Follow-up implementation committed and pushed to `main` as
+  `f76317f5`.
 - Deployment remains external: the build path contains only remote job
   payloads/scripts, not a separate Master source checkout. No live Master
   rebuild or restart was attempted.
