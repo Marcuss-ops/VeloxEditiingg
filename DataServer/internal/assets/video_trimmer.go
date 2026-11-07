@@ -576,7 +576,6 @@ func trimArgs(mode TrimMode, segment VideoSegment, duration float64, inputPath, 
 
 func exactWindowArgs(profile contract.CanonicalVideoProfileV1, quality contract.PreparationQualityPolicy, inputPath, outputPath string, segment VideoSegment, frameCount int64) []string {
 	args := []string{"-hide_banner", "-loglevel", "error", "-y", "-ss", formatSeconds(segment.StartSeconds), "-i", inputPath,
-		"-t", formatSeconds(segment.EndSeconds - segment.StartSeconds),
 		"-map", "0:v:0", "-an", "-sn", "-dn", "-vf", "setpts=PTS-STARTPTS," + canonicalScaleFilter(profile)}
 	args = append(args, canonicalVideoEncodeArgs(profile, quality)...)
 	args = append(args, "-fps_mode", "cfr")
@@ -592,7 +591,6 @@ func exactWindowArgs(profile contract.CanonicalVideoProfileV1, quality contract.
 func exactWindowCopyArgs(inputPath, outputPath string, segment VideoSegment, frameCount int64, profile contract.CanonicalVideoProfileV1) []string {
 	return []string{"-hide_banner", "-loglevel", "error", "-y",
 		"-ss", formatSeconds(segment.StartSeconds), "-i", inputPath,
-		"-t", formatSeconds(segment.EndSeconds - segment.StartSeconds),
 		"-map", "0:v:0", "-an", "-sn", "-dn", "-c:v", "copy",
 		"-frames:v", strconv.FormatInt(frameCount, 10),
 		"-video_track_timescale", strconv.Itoa(profile.TimeBaseDen),

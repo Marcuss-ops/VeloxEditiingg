@@ -73,6 +73,31 @@ func TestTrimFramesWithProbeKeepsPacketCopyForKeyframeWindow(t *testing.T) {
 			t.Fatalf("copy args %q missing %q", args, required)
 		}
 	}
+	if strings.Contains(args, "-t ") {
+		t.Fatalf("frame-count-authoritative copy args include a duration cutoff: %q", args)
+	}
+}
+
+func TestTrimFramesWithProbeUsesFrameCountInsteadOfRoundedDuration(t *testing.T) {
+	runner := &recordingVideoRunner{}
+	trimmer := newVideoTrimmerForTest(runner)
+	output := filepath.Join(t.TempDir(), "window.mp4")
+	probe := normalizedVideoProbe(5.022, []float64{0})
+	segment := VideoSegment{StartSeconds: 1.0 / 24.0, EndSeconds: 5.0 + 1.0/24.0}
+	result, err := trimmer.TrimFramesWithProbe(context.Background(), probe, "/source.mp4", output, segment, 120)
+	if err != nil {
+		t.Fatalf("TrimFramesWithProbe() error: %v", err)
+	}
+	if result.Plan.Mode != TrimModeFrameAccurateReencode {
+		t.Fatalf("mode = %q, want frame-accurate re-encode", result.Plan.Mode)
+	}
+	args := strings.Join(result.Plan.TrimArgs, " ")
+	if !strings.Contains(args, "-frames:v 120") {
+		t.Fatalf("exact trim args do not cap at 120 frames: %q", args)
+	}
+	if strings.Contains(args, "-t ") {
+		t.Fatalf("frame-count-authoritative trim args include a duration cutoff: %q", args)
+	}
 }
 
 func TestVideoTrimmerPlanUsesFrameAccurateReencodeForMidGOPSegment(t *testing.T) {
