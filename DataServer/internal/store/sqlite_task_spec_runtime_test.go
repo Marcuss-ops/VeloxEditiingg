@@ -84,3 +84,32 @@ func TestMergeTaskSpecPayloadWaitsForConcurrentSQLiteWriter(t *testing.T) {
 		t.Fatalf("spec hash was not refreshed: %q", hash)
 	}
 }
+
+func TestFinalizeTaskSpecUpdatesExecutorAndPayloadAtomically(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "task-spec-finalize.db")
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	_, err = db.Exec(`
+		CREATE TABLE tasks (task_id TEXT PRIMARY KEY, job_id TEXT NOT NULL, executor_id TEXT NOT NULL, status TEXT NOT NULL, updated_at TEXT NOT NULL);
+		CREATE TABLE task_specs (task_id TEXT PRIMARY KEY, spec_version INTEGER NOT NULL, spec_hash TEXT NOT NULL, executor_id TEXT NOT NULL, payload_json TEXT NOT NULL);
+		INSERT INTO tasks VALUES ('task-1','job-1','video.assemble.slice.v1','READY','2026-09-27T00:00:00Z');
+		INSERT INTO task_specs VALUES ('task-1',1,'old-hash','video.assemble.slice.v1','{"runtime_assets_pending":true}');`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := NewSQLiteTaskRepository(&SQLiteStore{db: db})
+	if _, err := repo.FinalizeTaskSpec(context.Background(), "task-1", "video.assemble.copy.v1", map[string]interface{}{"runtime_assets_pending": false}); err != nil {
+		t.Fatalf("FinalizeTaskSpec: %v", err)
+	}
+	var taskExecutor, specExecutor string
+	var pending bool
+	if err := db.QueryRow(`SELECT t.executor_id,s.executor_id,json_extract(s.payload_json,'$.runtime_assets_pending') FROM tasks t JOIN task_specs s USING(task_id) WHERE t.task_id='task-1'`).Scan(&taskExecutor, &specExecutor, &pending); err != nil {
+		t.Fatal(err)
+	}
+	if taskExecutor != "video.assemble.copy.v1" || specExecutor != taskExecutor || pending {
+		t.Fatalf("final state executor task/spec=%q/%q pending=%v", taskExecutor, specExecutor, pending)
+	}
+}

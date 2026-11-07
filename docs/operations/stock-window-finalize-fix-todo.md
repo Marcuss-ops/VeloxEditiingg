@@ -13,12 +13,17 @@
 - [x] Pass targeted `pipeline`, `store`, and `cmd/server` tests.
 - [x] Pass the migration 180 legacy-upgrade regression test.
 - [x] Pass `go test -count=1 ./...` after the migration fixture update.
+- [x] Recompute the renderer executor from the materialized plan and runtime assets; atomically update task, task spec, and spec hash before waking placement.
+- [x] Add regression coverage for slice-to-copy executor transition and atomic task/spec executor persistence.
+- [x] Re-pass targeted pipeline/store tests, `go vet ./...`, and `go build ./...` after the routing fix.
 
 ## Rollout and end-to-end acceptance
 
 - [x] Build the Master image from verified commit `ab0b1939` (`local-ab0b1939`).
 - [x] Deploy the new Master image; `/api/health` reports healthy with embedded commit `ab0b1939d61563ed60fc535c10fc790d4869a57b`.
 - [x] Confirm worker `host_57_129_132_133` reconnected to the updated Master.
+- [ ] Build and deploy the Master image containing the post-FINALIZE executor-routing fix.
+- [ ] Confirm r59f (or a replay/new equivalent) is dispatched as `video.assemble.copy.v1` after stock preparation.
 - [ ] Re-submit FINALIZE for the prepared video job (or submit a fresh job if its request cannot be replayed).
 - [ ] Verify FINALIZE returns promptly and reports `stock_preparation_queued` on the next Producer request.
 - [ ] Verify background materialization completes, the task is leased by worker `host_57_129_132_133`, and the job reaches a terminal success state.

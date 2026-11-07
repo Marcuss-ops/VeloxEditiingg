@@ -12,6 +12,7 @@ import (
 )
 
 var _ taskgraph.TaskSpecStore = (*SQLiteTaskRepository)(nil)
+var _ taskgraph.RuntimeTaskFinalizer = (*SQLiteTaskRepository)(nil)
 
 func (r *SQLiteTaskRepository) GetTaskSpecPayload(ctx context.Context, taskID string) (map[string]interface{}, error) {
 	if r == nil || r.store == nil || r.store.db == nil {
@@ -40,6 +41,21 @@ func (r *SQLiteTaskRepository) GetTaskSpecPayload(ctx context.Context, taskID st
 // Only PENDING and READY tasks can be finalized. Once a worker has leased the
 // task, changing its immutable render input would make the attempt ambiguous.
 func (r *SQLiteTaskRepository) MergeTaskSpecPayload(ctx context.Context, taskID string, patch map[string]interface{}) (map[string]interface{}, error) {
+	return r.mergeTaskSpecPayload(ctx, taskID, "", patch)
+}
+
+// FinalizeTaskSpec atomically updates the renderer payload and the executor
+// selected from that finalized payload. FINALIZE runs before a worker can
+// claim the task, so routing can move from source-aware slice to certified
+// fragment copy without exposing a mixed task/spec identity.
+func (r *SQLiteTaskRepository) FinalizeTaskSpec(ctx context.Context, taskID, executorID string, patch map[string]interface{}) (map[string]interface{}, error) {
+	if executorID == "" {
+		return nil, fmt.Errorf("task spec store: finalized executor_id is required")
+	}
+	return r.mergeTaskSpecPayload(ctx, taskID, executorID, patch)
+}
+
+func (r *SQLiteTaskRepository) mergeTaskSpecPayload(ctx context.Context, taskID, executorID string, patch map[string]interface{}) (map[string]interface{}, error) {
 	if r == nil || r.store == nil || r.store.db == nil {
 		return nil, fmt.Errorf("task spec store: not initialized")
 	}
@@ -71,13 +87,13 @@ func (r *SQLiteTaskRepository) MergeTaskSpecPayload(ctx context.Context, taskID 
 		}
 	}()
 
-	var jobID, executorID, status, payloadJSON string
+	var jobID, currentExecutorID, status, payloadJSON string
 	var specVersion int
 	err = conn.QueryRowContext(ctx, `
 		SELECT t.job_id, t.executor_id, t.status,
 		       s.spec_version, COALESCE(s.payload_json, '{}')
 		FROM tasks t JOIN task_specs s ON s.task_id = t.task_id
-		WHERE t.task_id = ?`, taskID).Scan(&jobID, &executorID, &status, &specVersion, &payloadJSON)
+		WHERE t.task_id = ?`, taskID).Scan(&jobID, &currentExecutorID, &status, &specVersion, &payloadJSON)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("task spec store: task %q not found", taskID)
@@ -86,6 +102,10 @@ func (r *SQLiteTaskRepository) MergeTaskSpecPayload(ctx context.Context, taskID 
 	}
 	if status != string(taskgraph.StatusPending) && status != string(taskgraph.StatusReady) {
 		return nil, fmt.Errorf("task spec store: task %q is %s; runtime payload is already leased", taskID, status)
+	}
+	updateExecutor := executorID != ""
+	if !updateExecutor {
+		executorID = currentExecutorID
 	}
 
 	payload := make(map[string]interface{})
@@ -119,9 +139,16 @@ func (r *SQLiteTaskRepository) MergeTaskSpecPayload(ctx context.Context, taskID 
 	if err != nil {
 		return nil, fmt.Errorf("task spec store: hash task %q payload: %w", taskID, err)
 	}
-	result, err := conn.ExecContext(ctx,
-		`UPDATE task_specs SET payload_json = ?, spec_hash = ? WHERE task_id = ?`,
-		string(encoded), hash, taskID)
+	var result sql.Result
+	if updateExecutor {
+		result, err = conn.ExecContext(ctx,
+			`UPDATE task_specs SET payload_json = ?, spec_hash = ?, executor_id = ? WHERE task_id = ?`,
+			string(encoded), hash, executorID, taskID)
+	} else {
+		result, err = conn.ExecContext(ctx,
+			`UPDATE task_specs SET payload_json = ?, spec_hash = ? WHERE task_id = ?`,
+			string(encoded), hash, taskID)
+	}
 	if err != nil {
 		return nil, wrapDBInfrastructure("task spec merge write", err)
 	}
@@ -130,6 +157,11 @@ func (r *SQLiteTaskRepository) MergeTaskSpecPayload(ctx context.Context, taskID 
 			return nil, wrapDBInfrastructure("task spec merge rows", err)
 		}
 		return nil, fmt.Errorf("task spec store: task %q disappeared during update", taskID)
+	}
+	if updateExecutor {
+		if _, err := conn.ExecContext(ctx, `UPDATE tasks SET executor_id = ? WHERE task_id = ? AND status IN ('PENDING','READY')`, executorID, taskID); err != nil {
+			return nil, wrapDBInfrastructure("task spec merge executor", err)
+		}
 	}
 	if _, err := conn.ExecContext(ctx, `UPDATE tasks SET updated_at = ? WHERE task_id = ? AND status IN ('PENDING','READY')`, time.Now().UTC().Format(time.RFC3339), taskID); err != nil {
 		return nil, wrapDBInfrastructure("task spec merge touch task", err)

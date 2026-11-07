@@ -115,6 +115,12 @@ type TaskSpecStore interface {
 	MergeTaskSpecPayload(ctx context.Context, taskID string, patch map[string]interface{}) (map[string]interface{}, error)
 }
 
+// RuntimeTaskFinalizer commits the finalized renderer payload and its derived
+// executor as one mutation while the task is still unleased.
+type RuntimeTaskFinalizer interface {
+	FinalizeTaskSpec(ctx context.Context, taskID, executorID string, patch map[string]interface{}) (map[string]interface{}, error)
+}
+
 // RuntimeFinalizationCandidate is durable work saved in an existing task spec.
 // The task remains runtime_assets_pending until the finalizer commits a fully
 // prepared render plan, so placement cannot claim it while this work is queued.

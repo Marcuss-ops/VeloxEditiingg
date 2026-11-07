@@ -53,10 +53,11 @@ type RuntimeTaskUpdateNotifier interface {
 }
 
 type RuntimeFinalizationProcessor struct {
-	queue    taskgraph.RuntimeFinalizationQueue
-	specs    taskgraph.TaskSpecStore
-	assets   RuntimeStockWindowPreparer
-	notifier RuntimeTaskUpdateNotifier
+	queue     taskgraph.RuntimeFinalizationQueue
+	specs     taskgraph.TaskSpecStore
+	finalizer taskgraph.RuntimeTaskFinalizer
+	assets    RuntimeStockWindowPreparer
+	notifier  RuntimeTaskUpdateNotifier
 }
 
 // NewRuntimeFinalizationProcessor fails bootstrap when the persistent queue,
@@ -78,13 +79,17 @@ func NewRuntimeFinalizationProcessor(
 	if !ok || isNilInterface(specs) {
 		return nil, errors.New("runtime finalizer: task spec store is not configured")
 	}
+	finalizer, ok := repository.(taskgraph.RuntimeTaskFinalizer)
+	if !ok || isNilInterface(finalizer) {
+		return nil, errors.New("runtime finalizer: atomic task executor update is not configured")
+	}
 	if isNilInterface(assets) {
 		return nil, errors.New("runtime finalizer: stock window preparer is not configured")
 	}
 	if isNilInterface(notifier) {
 		return nil, errors.New("runtime finalizer: task update notifier is not configured")
 	}
-	return &RuntimeFinalizationProcessor{queue: queue, specs: specs, assets: assets, notifier: notifier}, nil
+	return &RuntimeFinalizationProcessor{queue: queue, specs: specs, finalizer: finalizer, assets: assets, notifier: notifier}, nil
 }
 
 // Run replays queued and interrupted FINALIZE work. Queue state and request
@@ -92,7 +97,7 @@ func NewRuntimeFinalizationProcessor(
 // work. Per-job materialization failures are persisted for GET polling and do
 // not stop unrelated finalizations.
 func (p *RuntimeFinalizationProcessor) Run(ctx context.Context) error {
-	if p == nil || p.queue == nil || p.specs == nil || p.assets == nil || p.notifier == nil {
+	if p == nil || p.queue == nil || p.specs == nil || p.finalizer == nil || p.assets == nil || p.notifier == nil {
 		return errors.New("runtime finalizer: processor is not configured")
 	}
 	if err := p.queue.RecoverInterruptedRuntimeFinalizations(ctx); err != nil {
@@ -157,7 +162,22 @@ func (p *RuntimeFinalizationProcessor) processOne(ctx context.Context, candidate
 	if err != nil {
 		return p.fail(candidate, err)
 	}
-	if _, err := p.specs.MergeTaskSpecPayload(ctx, candidate.TaskID, patch); err != nil {
+	finalPayload := make(map[string]interface{}, len(current)+len(patch))
+	for key, value := range current {
+		finalPayload[key] = value
+	}
+	for key, value := range patch {
+		if value == nil {
+			delete(finalPayload, key)
+		} else {
+			finalPayload[key] = value
+		}
+	}
+	executorID := contract.RequiredVideoAssemblyExecutor(finalPayload)
+	if executorID == "" {
+		return p.fail(candidate, errors.New("finalized render plan has no valid video assembly executor"))
+	}
+	if _, err := p.finalizer.FinalizeTaskSpec(ctx, candidate.TaskID, executorID, patch); err != nil {
 		return fmt.Errorf("runtime finalizer: commit task %s: %w", candidate.TaskID, err)
 	}
 	p.notifier.NotifyTaskUpdated(ctx, candidate.JobID)
