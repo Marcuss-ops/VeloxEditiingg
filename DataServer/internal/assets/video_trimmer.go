@@ -546,8 +546,12 @@ func canonicalAudioEncodeArgs(quality contract.PreparationQualityPolicy) []strin
 // profile. The frame rate is interpolated, so a literal `fps=NN` can never
 // reappear here (enforced by scripts/ci/check-architecture.sh rule 14).
 func canonicalScaleFilter(profile contract.CanonicalVideoProfileV1) string {
-	return fmt.Sprintf("scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,fps=%d/%d",
-		profile.Width, profile.Height, profile.Width, profile.Height, profile.FPSNum, profile.FPSDen)
+	return fmt.Sprintf("%s,fps=%d/%d", canonicalScaleGeometryFilter(profile), profile.FPSNum, profile.FPSDen)
+}
+
+func canonicalScaleGeometryFilter(profile contract.CanonicalVideoProfileV1) string {
+	return fmt.Sprintf("scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2",
+		profile.Width, profile.Height, profile.Width, profile.Height)
 }
 
 func normalizationArgs(profile contract.CanonicalVideoProfileV1, quality contract.PreparationQualityPolicy, inputPath, outputPath string) []string {
@@ -576,7 +580,7 @@ func trimArgs(mode TrimMode, segment VideoSegment, duration float64, inputPath, 
 
 func exactWindowArgs(profile contract.CanonicalVideoProfileV1, quality contract.PreparationQualityPolicy, inputPath, outputPath string, segment VideoSegment, frameCount int64) []string {
 	args := []string{"-hide_banner", "-loglevel", "error", "-y", "-ss", formatSeconds(segment.StartSeconds), "-i", inputPath,
-		"-map", "0:v:0", "-an", "-sn", "-dn", "-vf", "setpts=PTS-STARTPTS," + canonicalScaleFilter(profile)}
+		"-map", "0:v:0", "-an", "-sn", "-dn", "-vf", fmt.Sprintf("setpts=N*%d/(%d*TB),%s", profile.FPSDen, profile.FPSNum, canonicalScaleGeometryFilter(profile))}
 	args = append(args, canonicalVideoEncodeArgs(profile, quality)...)
 	args = append(args, "-fps_mode", "passthrough")
 	// The first output frame is a fragment boundary. Force it to an IDR even
