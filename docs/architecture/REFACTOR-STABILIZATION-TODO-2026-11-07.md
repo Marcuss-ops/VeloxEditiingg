@@ -29,7 +29,7 @@ pass.
   if that scope changes, `bash scripts/ci/pre-removal-verify.sh` is mandatory.
 - [x] This checklist records evidence, completed items, and any remaining
   criterion blocked by an external dependency or unavailable runtime access.
-- [ ] Each repository modification is committed and pushed to `main` per
+- [x] Each repository modification is committed and pushed to `main` per
   `AGENTS.md`; pre-existing untracked user data is left untouched.
 
 ## Work log
@@ -72,9 +72,9 @@ pass.
   package (error wrapping, import formatting, one ineffective assignment,
   and unused private helpers). They are not required by this bounded pass and
   were not removed speculatively; the changed asset package is lint-clean.
-- [ ] Commit and push the final architecture-doc reconciliation and completed
-  evidence checklist to `main`; preserve the pre-existing untracked session
-  file.
+- [x] Final architecture-doc reconciliation and completed evidence checklist
+  committed and pushed to `main` as `3c8a882b`; preserved the pre-existing
+  untracked session file.
 
 ## Evidence and follow-ups
 
