@@ -282,6 +282,24 @@ func TestRunBoundedStockJobsUsesConfiguredParallelism(t *testing.T) {
 	}
 }
 
+func TestRunBoundedStockJobsReturnsParentCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	called := false
+	err := runBoundedStockJobs(ctx, 2, []func(context.Context) error{
+		func(context.Context) error {
+			called = true
+			return nil
+		},
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("run bounded stock jobs error = %v, want context.Canceled", err)
+	}
+	if called {
+		t.Fatal("job ran after its parent context was canceled")
+	}
+}
+
 func TestTrimAndRegisterVideoSegment_ProbesSourceOnceAcrossSegments(t *testing.T) {
 	root := t.TempDir()
 	sourcePath := filepath.Join(root, "source.mp4")

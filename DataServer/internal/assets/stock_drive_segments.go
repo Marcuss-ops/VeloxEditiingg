@@ -104,48 +104,25 @@ func (s *AssetService) PrepareDriveStockWindows(ctx context.Context, planJSON st
 		}
 	}
 	if len(sourceRequests) > 0 {
-		sourceCtx, cancel := context.WithCancel(ctx)
-		defer cancel()
-		semaphore := make(chan struct{}, stockSourceDownloadConcurrency)
-		var group sync.WaitGroup
+		sourceJobs := make([]func(context.Context) error, 0, len(sourceRequests))
 		var sourcesMu sync.Mutex
-		var firstErr error
-		setErr := func(err error) {
-			sourcesMu.Lock()
-			if firstErr == nil {
-				firstErr = err
-				cancel()
-			}
-			sourcesMu.Unlock()
-		}
 		for _, request := range sourceRequests {
 			request := request
-			group.Add(1)
-			go func() {
-				defer group.Done()
-				select {
-				case semaphore <- struct{}{}:
-					defer func() { <-semaphore }()
-				case <-sourceCtx.Done():
-					return
-				}
+			sourceJobs = append(sourceJobs, func(sourceCtx context.Context) error {
 				path, cleanup, err := s.materializeVideoSource(sourceCtx, request.uri)
 				if err != nil {
-					setErr(fmt.Errorf("stock file %q download: %w", request.driveID, err))
-					return
+					return fmt.Errorf("stock file %q download: %w", request.driveID, err)
 				}
 				state := &sourceState{path: path, cleanup: cleanup}
 				state.sha, state.size, err = hashFile(path)
 				if err != nil {
 					cleanup()
-					setErr(fmt.Errorf("stock file %q identity: %w", request.driveID, err))
-					return
+					return fmt.Errorf("stock file %q identity: %w", request.driveID, err)
 				}
 				state.probe, err = s.videoTrimmer.Probe(sourceCtx, path)
 				if err != nil {
 					cleanup()
-					setErr(fmt.Errorf("stock file %q certification: %w", request.driveID, err))
-					return
+					return fmt.Errorf("stock file %q certification: %w", request.driveID, err)
 				}
 				if state.probe.FrameCount <= 0 && state.probe.FPSNum > 0 && state.probe.FPSDen > 0 {
 					// Some MP4 muxers omit nb_frames. For the stock pool's certified
@@ -154,17 +131,16 @@ func (s *AssetService) PrepareDriveStockWindows(ctx context.Context, planJSON st
 				}
 				if state.probe.FrameCount <= 0 {
 					cleanup()
-					setErr(fmt.Errorf("stock file %q certification could not derive a positive frame_count", request.driveID))
-					return
+					return fmt.Errorf("stock file %q certification could not derive a positive frame_count", request.driveID)
 				}
 				sourcesMu.Lock()
 				sources[request.driveID] = state
 				sourcesMu.Unlock()
-			}()
+				return nil
+			})
 		}
-		group.Wait()
-		if firstErr != nil {
-			return "", "", firstErr
+		if err := runBoundedStockJobs(ctx, stockSourceDownloadConcurrency, sourceJobs); err != nil {
+			return "", "", err
 		}
 	}
 	type windowJob struct {
@@ -442,33 +418,49 @@ func runBoundedStockJobs(ctx context.Context, limit int, jobs []func(context.Con
 	}
 	jobCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	semaphore := make(chan struct{}, limit)
+	jobQueue := make(chan func(context.Context) error)
 	var group sync.WaitGroup
 	var errorMu sync.Mutex
 	var firstErr error
-	for _, job := range jobs {
-		job := job
-		group.Add(1)
+	workerCount := limit
+	if workerCount > len(jobs) {
+		workerCount = len(jobs)
+	}
+	group.Add(workerCount)
+	for range workerCount {
 		go func() {
 			defer group.Done()
-			select {
-			case semaphore <- struct{}{}:
-				defer func() { <-semaphore }()
-			case <-jobCtx.Done():
-				return
-			}
-			if err := job(jobCtx); err != nil {
-				errorMu.Lock()
-				if firstErr == nil {
-					firstErr = err
-					cancel()
+			for job := range jobQueue {
+				if jobCtx.Err() != nil {
+					return
 				}
-				errorMu.Unlock()
+				if err := job(jobCtx); err != nil {
+					errorMu.Lock()
+					if firstErr == nil {
+						firstErr = err
+						cancel()
+					}
+					errorMu.Unlock()
+					return
+				}
 			}
 		}()
 	}
+
+dispatch:
+	for _, job := range jobs {
+		select {
+		case jobQueue <- job:
+		case <-jobCtx.Done():
+			break dispatch
+		}
+	}
+	close(jobQueue)
 	group.Wait()
-	return firstErr
+	if firstErr != nil {
+		return firstErr
+	}
+	return ctx.Err()
 }
 
 func isDriveStock(asset contract.AssetRefV2) bool {
