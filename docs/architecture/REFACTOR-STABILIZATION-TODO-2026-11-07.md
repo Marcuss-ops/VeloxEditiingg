@@ -93,3 +93,22 @@ pass.
 - No external runtime, deployed worker, production DB, or live Drive access was
   available/used; production behavior beyond repository-backed verification
   remains unasserted.
+
+## Follow-up: partial Drive stock windows
+
+- [x] Kept packet-copy for canonical stock windows that start on a keyframe;
+  the exact-window path uses frame-accurate H.264 re-encode otherwise.
+- [x] Made stock fragment encoding video-only and explicit about timestamp
+  reset, constant frame rate, and the requested frame limit.
+- [x] Certified output using `ffprobe -count_frames` and required the probed
+  stream start time and first keyframe to be zero before registration.
+- [x] Acceptance fixture for a 4.973-second source and 3.125-second partial
+  window passed: exactly 75 output frames, canonical profile, keyframe at zero,
+  prepared asset registration, and cache reuse on retry.
+- [x] Added a focused packet-copy regression test for a canonical keyframe
+  window. Focused race tests, `golangci-lint` on `internal/assets/...`,
+  `check-architecture.sh`, and the full `pre-removal-verify.sh` all passed.
+- [ ] Commit and push this follow-up implementation and evidence to `main`.
+- Deployment remains external: the build path contains only remote job
+  payloads/scripts, not a separate Master source checkout. No live Master
+  rebuild or restart was attempted.

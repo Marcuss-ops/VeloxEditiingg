@@ -315,6 +315,11 @@ func (s *AssetService) materializeDriveStockWindow(
 		_ = os.Remove(result.outputPath)
 		return nil, fmt.Errorf("stock segment %q output certification: %w", request.segmentID, err)
 	}
+	cert.FrameCount, err = s.videoTrimmer.countFrames(ctx, result.outputPath)
+	if err != nil {
+		_ = os.Remove(result.outputPath)
+		return nil, fmt.Errorf("stock segment %q output frame count: %w", request.segmentID, err)
+	}
 	if err := validateDriveStockWindowOutput(cert, request, plan, s.videoTrimmer.Profile()); err != nil {
 		_ = os.Remove(result.outputPath)
 		return nil, err
@@ -340,6 +345,9 @@ func validateDriveStockWindowOutput(
 	}
 	if len(probe.Keyframes) == 0 || math.Abs(probe.Keyframes[0]) > 0.0005 {
 		return fmt.Errorf("stock segment %q output does not start with a keyframe", request.segmentID)
+	}
+	if !probe.StartTimeKnown || math.Abs(probe.StartTimeSeconds) > 0.0005 {
+		return fmt.Errorf("stock segment %q output starts at %.6f s, want PTS 0", request.segmentID, probe.StartTimeSeconds)
 	}
 	if !matchesCanonicalStockVideo(probe, profile) {
 		return fmt.Errorf("stock segment %q output does not match canonical assembly profile", request.segmentID)

@@ -55,6 +55,26 @@ func TestVideoTrimmerPlanUsesStreamCopyForNormalizedKeyframeSegment(t *testing.T
 	assertContainsSequence(t, plan.TrimArgs, "-ss", "2.000000", "-i", "/source.mp4", "-t", "4.000000", "-c", "copy")
 }
 
+func TestTrimFramesWithProbeKeepsPacketCopyForKeyframeWindow(t *testing.T) {
+	runner := &recordingVideoRunner{}
+	trimmer := newVideoTrimmerForTest(runner)
+	output := filepath.Join(t.TempDir(), "window.mp4")
+	probe := normalizedVideoProbe(10, []float64{0, 2, 4, 6, 8, 10})
+	result, err := trimmer.TrimFramesWithProbe(context.Background(), probe, "/source.mp4", output, VideoSegment{StartSeconds: 2, EndSeconds: 6}, 96)
+	if err != nil {
+		t.Fatalf("TrimFramesWithProbe() error: %v", err)
+	}
+	if result.Plan.Mode != TrimModeStreamCopy {
+		t.Fatalf("mode = %q, want %q", result.Plan.Mode, TrimModeStreamCopy)
+	}
+	args := strings.Join(result.Plan.TrimArgs, " ")
+	for _, required := range []string{"-ss 2.000000 -i /source.mp4", "-c:v copy", "-frames:v 96", "-an -sn -dn"} {
+		if !strings.Contains(args, required) {
+			t.Fatalf("copy args %q missing %q", args, required)
+		}
+	}
+}
+
 func TestVideoTrimmerPlanUsesFrameAccurateReencodeForMidGOPSegment(t *testing.T) {
 	trimmer := newVideoTrimmerForTest(&recordingVideoRunner{})
 	probe := normalizedVideoProbe(10, []float64{0, 2, 4, 6, 8, 10})
@@ -157,6 +177,8 @@ func normalizedVideoProbe(duration float64, keyframes []float64) VideoProbe {
 		TimebaseNum:     profile.TimeBaseNum,
 		TimebaseDen:     profile.TimeBaseDen,
 		VideoCodec:      profile.Codec,
+		VideoProfile:    profile.CodecProfile,
+		VideoLevel:      40,
 		AudioCodec:      quality.AudioCodec,
 		AudioSampleRate: quality.AudioSampleRate,
 		AudioChannels:   quality.AudioChannels,
@@ -263,6 +285,7 @@ func probeJSON(t *testing.T, probe VideoProbe) []byte {
 				"pix_fmt":      probe.PixelFormat,
 				"duration":     probe.DurationSeconds,
 				"nb_frames":    probe.FrameCount,
+				"start_time":   probe.StartTimeSeconds,
 			},
 			map[string]interface{}{"codec_type": "audio", "codec_name": probe.AudioCodec, "sample_rate": probe.AudioSampleRate, "channels": probe.AudioChannels},
 		},
