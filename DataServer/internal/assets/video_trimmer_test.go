@@ -95,6 +95,9 @@ func TestTrimFramesWithProbeUsesFrameCountInsteadOfRoundedDuration(t *testing.T)
 	if !strings.Contains(args, "-frames:v 120") {
 		t.Fatalf("exact trim args do not cap at 120 frames: %q", args)
 	}
+	if !strings.Contains(args, "-fps_mode passthrough") {
+		t.Fatalf("exact trim args do not preserve filtered frame count: %q", args)
+	}
 	if strings.Contains(args, "-t ") {
 		t.Fatalf("frame-count-authoritative trim args include a duration cutoff: %q", args)
 	}

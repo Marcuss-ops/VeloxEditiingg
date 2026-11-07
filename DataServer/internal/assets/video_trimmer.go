@@ -578,7 +578,7 @@ func exactWindowArgs(profile contract.CanonicalVideoProfileV1, quality contract.
 	args := []string{"-hide_banner", "-loglevel", "error", "-y", "-ss", formatSeconds(segment.StartSeconds), "-i", inputPath,
 		"-map", "0:v:0", "-an", "-sn", "-dn", "-vf", "setpts=PTS-STARTPTS," + canonicalScaleFilter(profile)}
 	args = append(args, canonicalVideoEncodeArgs(profile, quality)...)
-	args = append(args, "-fps_mode", "cfr")
+	args = append(args, "-fps_mode", "passthrough")
 	// The first output frame is a fragment boundary. Force it to an IDR even
 	// when input seeking and timestamp normalization leave a non-zero PTS; the
 	// downstream packet-copy assembler must be able to start decoding here.
