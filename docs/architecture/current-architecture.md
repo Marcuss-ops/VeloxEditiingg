@@ -1,7 +1,7 @@
 # Current architecture — Come funziona oggi
 
 **Capitolo del perimetro architetturale Velox** — corrisponde alla **PARTE I** del documento indice [`CURRENT-TO-TARGET-ARCHITECTURE.md`](./CURRENT-TO-TARGET-ARCHITECTURE.md).  
-**Stato:** descrittivo dello stato corrente verificabile su `main`.  
+**Stato:** descrittivo dello stato corrente verificato su `main` il 7 novembre 2026.
 **Sezioni:** 6, 7, 8, 9, 10, 11, 12, 13, 15 (la sezione 14 — Supervisor e readiness — è trattata in [`failure-recovery.md`](./failure-recovery.md)).
 
 ---
@@ -162,13 +162,13 @@ Webhook duplicati, poller concorrenti e retry post-crash convergono sullo stesso
 
 ### Limite corrente
 
-Il percorso video principale è ancora sostanzialmente:
+Il percorso video canonico crea ancora un solo Task di assembly per Job:
 
 ```text
-1 Job → 1 Task scene.composite.v1@1
+1 Job → 1 Task video.assemble.copy.v1@1 oppure video.assemble.slice.v1@1
 ```
 
-Il Task contiene un payload completo che il worker tratta come composizione monolitica. TaskGraph esiste, ma il video standard non è ancora compilato in un vero DAG di Task granulari.
+Il Task riceve il `CompiledRenderPlanV2` producer-owned. Il routing verso copy o slice è deciso da `shared/contract.RequiredVideoAssemblyExecutor`. TaskGraph esiste, ma il video standard non è ancora compilato in un DAG di più Task granulari. La precedente descrizione come `scene.composite.v1@1` non rappresenta il percorso V2 corrente.
 
 ---
 
@@ -259,7 +259,7 @@ Il composition root worker oggi:
 - costruisce `executor.Registry`;
 - costruisce il pipeline runner;
 - esegue bootstrap fail-closed del motore C++ e di FFmpeg;
-- registra `scene.composite.v1@1`;
+- registra `video.assemble.copy.v1@1` e `video.assemble.slice.v1@1` per i piani V2;
 - costruisce cache persistente e blob store;
 - passa registry, cache e blob al runtime.
 
@@ -268,7 +268,7 @@ Questa è una base corretta.
 Gap:
 
 - catalogo executor reale ristretto;
-- la pipeline completa passa principalmente da scene composite;
+- ogni piano V2 è ancora un singolo Task di assembly, senza fan-out in Task DAG;
 - cost, locality e multi-executor DAG non sono ancora dimostrati E2E;
 - la certificazione per hardware class non è chiusa.
 
@@ -283,9 +283,9 @@ TaskRunner
     ↓
 ExecutorRegistry.Resolve(executor_id, version)
     ↓
-SceneComposite executor
+video.assemble.copy.v1 oppure video.assemble.slice.v1
     ↓
-pipeline.Runner
+native packet-copy pipeline
     ↓
 video engine C++ / FFmpeg
     ↓
@@ -305,6 +305,38 @@ Il worker deve:
 - produrre hash, size, metadati e metriche.
 
 Cache e blob locali sono ottimizzazioni ricostruibili, non autorità business.
+
+### 9.1 Drive stock: preparazione Master e assembly worker
+
+Il percorso Drive-backed per piani V2 attraversa questi owner:
+
+```text
+shared/contract.RequiredVideoAssemblyExecutor
+    → seleziona video.assemble.slice.v1 per stock/Drive o runtime asset pending
+DataServer/internal/assets.AssetService.PrepareDriveStockWindows
+    → scarica le sole sorgenti referenziate, verifica SHA-256/size e probe media
+    → materializza ogni finestra come frammento certificato e registrato
+    → sostituisce i riferimenti Drive nel piano e ne ricalcola il digest
+RemoteCodex/.../executors.videoAssembleSliceExecutor
+    → verifica piano, binding e certificazione prima dell'esecuzione
+C++ packet muxer
+    → assembla i pacchetti video/audio e produce l'artifact
+```
+
+La preparazione Master viene invocata sia nell'intake immediato sia nella fase
+FINALIZE quando sono presenti binding Drive; entrambi usano lo stesso metodo
+di `AssetService`. Il metodo deduplica file e finestre, limita i worker di
+materializzazione, interrompe le operazioni sorelle al primo errore, rimuove i
+temporanei e restituisce il piano solo dopo la validazione del piano riscritto.
+Il worker non decide come tagliare o certificare sorgenti Drive: riceve
+frammenti già preparati e applica i controlli d'esecuzione e di integrità.
+
+Il contratto condiviso possiede la scelta copy/slice; `internal/assets` possiede
+il riconoscimento dei binding Drive usato per preparazione e rimozione dei
+binding già materializzati; il worker executor possiede binding e ammissibilità
+di esecuzione; il motore C++ esegue il mux. I controlli di sicurezza
+dell'executor e del motore restano difese runtime, non una seconda fonte per
+compilare o riscrivere il piano.
 
 ---
 

@@ -3,7 +3,7 @@
 **Stato:** documento architetturale di raccordo (indice principale)  
 **Repository:** `Marcuss-ops/VeloxEditiingg`  
 **Branch di riferimento:** `main`  
-**Ultima riconciliazione statica:** 3 luglio 2026  
+**Ultima riconciliazione statica:** 7 novembre 2026 (con verifica del percorso V2 Drive stock)
 **Ambito:** master `DataServer`, worker `RemoteCodex`, contratti `shared`, persistenza, artifact, forwarding, supervisor, CI e percorso verso il rendering distribuito
 
 > Questo documento è l'**indice principale** del perimetro architetturale Velox. Le sezioni tematiche sono state separate in cinque capitoli dedicati per restare sotto la soglia LOC della documentazione (`docs/metrics/loc-baseline.md §11`):
@@ -60,7 +60,7 @@ I gap principali sono:
 4. chiudere failure window di forwarding, upload e completion;
 5. dimostrare il percorso reale master→worker→artifact→Job con E2E obbligatorio;
 6. completare recovery, mTLS, certificazione e soak;
-7. trasformare il percorso video da `1 Job → 1 Task monolitico` a `1 Job → RenderPlan → Task DAG`.
+7. trasformare il percorso video da `1 Job → 1 Task di assembly` a `1 Job → RenderPlan → Task DAG`; il piano V2 e gli executor copy/slice sono già presenti, ma il video non è ancora scomposto in più Task indipendenti.
 
 La priorità non è aggiungere nuovi layer. La priorità è rendere affidabili, osservabili e recuperabili quelli esistenti.
 
@@ -302,19 +302,24 @@ Fixture minima:
 
 ```text
 1 Job
-1 Task scene.composite.v1@1
+1 Task video.assemble.copy.v1@1
 1 worker CPU
-1 voiceover o clip
-1 scena
+1 producer-compiled CompiledRenderPlanV2
+1 certified H.264 video asset
 1 output H.264
 ```
+
+Questa fixture verifica l'assembly V2 copy-only e il protocollo di
+finalizzazione; non prova compositing, transcodifica o un Task DAG. Il percorso
+Drive-backed `video.assemble.slice.v1@1` richiede inoltre la preparazione e la
+certificazione Master descritte in `current-architecture.md §9.1`.
 
 Sequenza:
 
 1. master con DB/BlobStore temporanei;
 2. worker reale;
 3. handshake gRPC v3;
-4. registry con scene composite;
+4. registry con `video.assemble.copy.v1@1`;
 5. submit API;
 6. TaskOffer;
 7. TaskAccepted;

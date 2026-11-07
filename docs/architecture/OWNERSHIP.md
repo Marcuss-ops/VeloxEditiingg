@@ -1,8 +1,8 @@
 # Architecture ownership
 
-This table is the canonical map of "who owns what" — as of June 2026
-(post PR-01..PR-15 cutover, PR-07 protocol removal, PR-15 payload V2
-single shape, internal/workflow gone, worker-side costmodel gone).
+This table is the canonical map of "who owns what". The render-plan and
+Drive stock ownership rows were reconciled against `main` on 2026-11-07;
+the remaining historical cutover notes below retain their original dates.
 
 A change that adds a second writer or a parallel entrypoint for any row
 below is a regression: the new code will eventually drift and one of the
@@ -43,7 +43,7 @@ legitimately write or read this capability from outside that owner.
 | Resource sampler (worker-side limits snapshot) | `internal/resource` sampler wired through `taskrunner.WithResources` | Inline `runtime.NumCPU` / `os.Stat` reads in executor implementations; per-task resource lookups that bypass the sampler |
 | Persistent local artifact cache (worker-side) | `pkg/cache.PersistedLocalCache` (composition root constructs it in `cmd/velox-worker-agent/main.go`) | Hand-rolled `os.WriteFile` cache management inside executors; duplicated content-addressed lookups outside `PersistedLocalCache.Get` |
 | Content-addressed blob artifact store (worker-side) | `pkg/blob.BlobArtifacts` (composition root constructs it in `cmd/velox-worker-agent/main.go`) | Inline `os.Open` for blob reads from executors; parallel upload paths that bypass `BlobArtifacts.Put` |
-| Scene/composite render adapter (worker-side) | `internal/taskrunner/executors.SceneComposite` (constructed in `cmd/velox-worker-agent/main.go`, registered under `scene.composite.v1@1`) | Reimplementing the scene-composite logic inside `pkg/video` callers; calling `pipeline.Runner.Run` from worker orchestration |
+| Compiled V2 video assembly adapters (worker-side) | `internal/taskrunner/executors.VideoAssembleCopy` and `VideoAssembleSlice` (registered by `registerCanonicalRenderExecutors` in `cmd/velox-worker-agent/bootstrap.go`) | Reconstructing the producer plan in the worker; bypassing executor validation or invoking packet rendering from worker orchestration |
 | Cost-aware worker eligibility + score breakdown (PR-04.4/4.5) | `velox-server/internal/costmodel` — **master-only, single owner**. Worker-side mirror was deleted (CONFIRMED §3.6 in audit). | Hardcoded boolean-AND filters (`Schedulable && !Drain && Status != "offline"` etc.) inside `velox-server/internal/workers`; per-job-type placement switch arms inside that package; per-package string-list allowlists (`supported_job_types`) that bypass the four canonical Descriptor fields (`ResourceClass`, `TemporalMode`, `Deterministic`, `Cacheable`) |
 | Per-job `costmodel.JobRequirements` threading (PR-04.5 / closed) | `velox-server/internal/costmodel.JobRequirements` is the single source of truth. Read path: `jobs.Writer.Get → jobs.Job.Requirements → jobs.QueueItem.Requirements`. Write path: `Enqueuer.Enqueue → AtomicJobTaskCreator.CreateJobWithTask` → dedicated columns `job_required_resource_class`, `job_required_temporal_mode`, `job_required_deterministic`, `job_required_cacheable`, `job_required_min_bandwidth_mbps`. `_requirements` JSON sub-object mirror: **REMOVED** (PR-06 / §3.5 audit). `RequestResult` lease fields: **REMOVED** (PR-09 / migration 048). | Hand-decoded Requirements at dispatch sites (`grpcserver`, `workers`, `outbox`); second `JobRequirements` type aliases; bypass of the canonical `costmodel.JobRequirements` shape; re-introducing a `_requirements` JSON sub-object under `request_json` / `result_json`. The default `costmodel.DefaultRequirements()` is the only permissive fallback and MUST stay zero-value so empty rows remain claimable. |
 | **Payload V2 single shape** (`contract_version=2` typed envelope, canonical for any `process_video` writer) | `shared/contract.JobPayloadV2` + `NewJobPayloadV2(raw)` + `ToMap()` projection. Used by `internal/jobs/enqueue/{enqueue.go,enqueue_scene_image.go}`; structurally followed by `internal/handlers/server/{calendar/calendar_payload.go, smoke/smoke_clip_stock.go}` for canonical-only top-level keys. | `parameters` sub-map mirror writes (gone since PR-15); legacy alias writes `id`/`run_id`/`title`/`voiceover_path`/`audio_path` from canonical writers; raw-key-leak loops that copy from input without alias stripping (`for k, v := range rawPayload { normalized[k] = v }` must be paired with an explicit `delete(normalized, alias)` set before construction); `map[string]interface{}` for `parameters` in canonical writes — the typed envelope + `ToMap` is canonical |
@@ -98,6 +98,20 @@ owned by another boundary.
 | Legacy compiled wire adapter | `velox-worker-agent/pkg/api/renderplan` | Versioned admission for the historical master `CompiledRenderPlan` V1 envelope and its compatibility routing | Treating the legacy V1 mirror as the V2 contract or adding a second SHA/envelope parser in an executor |
 | Runtime plan | `velox-worker-agent/pkg/video/plan` | Strict decode and validation of the V1 `render_plan`/`render_plan_json` document passed to the C++ renderer; task identity binding is exposed through `ValidateForJob` | Command executors owning timeline/audio/subtitle schema validation |
 | Executor | `internal/taskrunner/executors` | Payload-key allowlisting, selection of the correct contract boundary, asset binding, command construction and execution-specific checks | Reconstructing timelines, parsing another copy of a render-plan schema, or replacing contract validation with permissive fallback |
+
+The V2 Drive stock path has these additional owners:
+
+| Responsibility | Canonical owner | Forbidden |
+| --- | --- | --- |
+| Copy-versus-slice routing for a compiled V2 plan | `shared/contract.RequiredVideoAssemblyExecutor` | Reimplementing executor choice independently in the enqueue or handler packages |
+| Drive source classification, window preparation, source verification, prepared-fragment registration, and removal of materialized Drive bindings | `DataServer/internal/assets.AssetService.PrepareDriveStockWindows` plus the helpers in `internal/assets/stock_drive_segments.go` | Pipeline handlers owning Drive classification, ffmpeg preparation, or a second binding cleanup policy |
+| Runtime binding and packet-copy eligibility | `RemoteCodex/native/worker-agent-go/internal/taskrunner/executors` (`video.assemble.copy.v1` / `video.assemble.slice.v1`) | Rewriting the producer plan or trusting unverified runtime asset paths |
+| Packet demux/mux execution | `RemoteCodex/native/video-engine-cpp` media packet pipeline | Choosing Drive sources, trimming source windows, or deciding the Master-side asset identity |
+
+The worker and C++ layers may reject a plan or media stream that violates
+their execution invariants. Those checks defend their own boundary; they do
+not make either layer a second owner of Drive source resolution or plan
+compilation.
 
 The names `renderplan.CompiledRenderPlan`, `contract.CompiledRenderPlanV2`,
 and `plan.RenderPlan` are not interchangeable: they represent the legacy
