@@ -14,6 +14,7 @@ import (
 	"velox-server/internal/fleet"
 	"velox-server/internal/fleet/opsalerts"
 	"velox-server/internal/handlers/server/api"
+	"velox-server/internal/handlers/server/pipeline"
 	"velox-server/internal/logging"
 	velmetrics "velox-server/internal/metrics"
 	"velox-server/internal/protectedasset"
@@ -132,6 +133,25 @@ func buildSupervisor(cfg *config.Config, a *assetDeps, m *moduleDeps, j *jobsDep
 	}
 
 	// ── ClassCritical ────────────────────────────────────────────────
+	if t != nil && t.TaskRepository != nil && m != nil && m.AssetService != nil && m.Enqueuer != nil {
+		processor, err := pipeline.NewRuntimeFinalizationProcessor(t.TaskRepository, m.AssetService, m.Enqueuer)
+		if err != nil {
+			return nil, fmt.Errorf("bootstrap runtime finalizer: %w", err)
+		}
+		if err := sup.Register(supervisor.Runner{
+			Name:   "runtime-finalizer",
+			Class:  supervisor.ClassCritical,
+			Policy: criticalPolicy,
+			Run: func(ctx context.Context) error {
+				logServerf(ctx, logging.LevelInfo, logging.CodeServerSupervisor, "[BOOTSTRAP] durable runtime FINALIZE processor started")
+				return processor.Run(ctx)
+			},
+		}); err != nil {
+			return nil, fmt.Errorf("supervisor register runtime-finalizer: %w", err)
+		}
+	} else {
+		return nil, errors.New("bootstrap runtime finalizer: task repository, asset service and enqueuer are required")
+	}
 	if a.OutboxDispatcher != nil {
 		if err := sup.Register(supervisor.Runner{
 			Name:   "outbox-dispatcher",

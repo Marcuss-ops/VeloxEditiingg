@@ -163,6 +163,13 @@ CREATE TABLE jobs (
   created_at TEXT,
   updated_at TEXT
 );
+-- Migration 180 indexes the durable runtime-finalization state in task_specs.
+-- This sparse legacy fixture records migrations through 136 without replaying
+-- migration 129, so provide the minimal pre-180 table shape here.
+CREATE TABLE task_specs (
+  task_id TEXT PRIMARY KEY,
+  payload_json TEXT NOT NULL DEFAULT '{}'
+);
 -- Migration 156 upgrades these delivery tables in place.  Keep the legacy
 -- shape in this sparse upgrade fixture so the full migration chain is
 -- exercised just like a production database created before publication IDs.

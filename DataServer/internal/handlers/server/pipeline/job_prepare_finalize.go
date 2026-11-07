@@ -194,9 +194,14 @@ func (h *Handlers) FinalizeJob() gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "store_failure", "message": err.Error()})
 			return
 		}
+		h.finalizeMu.Lock()
+		defer h.finalizeMu.Unlock()
+		current, err = specStore.GetTaskSpecPayload(c.Request.Context(), task.ID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "store_failure", "message": err.Error()})
+			return
+		}
 		planJSON, _ := current[contract.PayloadKeyCompiledRenderPlanJSON].(string)
-		preparedStockPlan := false
-		finalRuntimeAssets := append([]map[string]interface{}(nil), req.RuntimeAssets...)
 		if previous, _ := current["runtime_finalize_idempotency_key"].(string); previous != "" && previous != req.IdempotencyKey {
 			c.JSON(http.StatusConflict, gin.H{"ok": false, "error": "finalize_idempotency_conflict", "message": "job was already finalized with a different idempotency_key"})
 			return
@@ -212,6 +217,13 @@ func (h *Handlers) FinalizeJob() gin.HandlerFunc {
 			c.JSON(http.StatusAccepted, gin.H{"ok": true, "job_id": jobID, "phase": "FINALIZE", "dispatch_status": "prefetch_refresh_queued", "idempotent": true})
 			return
 		}
+		if previous, _ := current["runtime_finalize_idempotency_key"].(string); previous == req.IdempotencyKey {
+			state, _ := current[runtimeFinalizeStatusKey].(string)
+			if state == runtimeFinalizeQueued || state == runtimeFinalizeRunning {
+				c.JSON(http.StatusAccepted, gin.H{"ok": true, "job_id": jobID, "phase": "FINALIZE", "dispatch_status": "stock_preparation_queued", "finalization_status": state, "idempotent": true})
+				return
+			}
+		}
 		bindings := append([]map[string]interface{}(nil), req.RuntimeAssets...)
 		var bindingErr error
 		bindings, bindingErr = appendRuntimeAssetBindings(bindings, req.RuntimePayload["runtime_assets"])
@@ -226,46 +238,34 @@ func (h *Handlers) FinalizeJob() gin.HandlerFunc {
 			return
 		}
 		if compiledPlanHasDriveStock(planJSON, bindings) {
-			if h.assetService == nil {
+			if h.assetService == nil || h.enqueuer == nil {
 				c.JSON(http.StatusServiceUnavailable, gin.H{"ok": false, "error": "stock_preparation_unavailable", "message": "Master stock window preparation is not configured"})
 				return
 			}
-			preparedPlan, preparedHash, prepareErr := h.assetService.PrepareDriveStockWindows(c.Request.Context(), planJSON, bindings)
-			if prepareErr != nil {
-				c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "error": "invalid_compiled_render_plan", "message": prepareErr.Error(), "details": []gin.H{{"path": "compiled_render_plan_json.video_tracks", "issue": "stock_window_materialization_failed"}}})
+			request := map[string]interface{}{
+				"idempotency_key": req.IdempotencyKey,
+				"runtime_assets":  req.RuntimeAssets,
+				"runtime_payload": req.RuntimePayload,
+			}
+			patch := map[string]interface{}{
+				runtimeFinalizeRequestKey:          request,
+				runtimeFinalizeStatusKey:           runtimeFinalizeQueued,
+				runtimeFinalizeErrorKey:            nil,
+				"runtime_finalize_idempotency_key": req.IdempotencyKey,
+				"runtime_assets_pending":           true,
+			}
+			if _, err := specStore.MergeTaskSpecPayload(c.Request.Context(), task.ID, patch); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "runtime_payload_update_failed", "message": err.Error()})
 				return
 			}
-			planJSON = preparedPlan
-			preparedStockPlan = true
-			finalRuntimeAssets = removePreparedStockBindings(bindings)
-			req.RuntimeAssets = finalRuntimeAssets
-			if req.RuntimePayload == nil {
-				req.RuntimePayload = make(map[string]interface{})
-			}
-			req.RuntimePayload["runtime_assets"] = finalRuntimeAssets
-			req.RuntimePayload[contract.PayloadKeyCompiledRenderPlanJSON] = preparedPlan
-			req.RuntimePayload[contract.PayloadKeyCompiledRenderPlanSHA] = preparedHash
+			logFinalizeAccepted(jobID, req, current, false)
+			c.JSON(http.StatusAccepted, gin.H{"ok": true, "job_id": jobID, "phase": "FINALIZE", "dispatch_status": "stock_preparation_queued", "finalization_status": runtimeFinalizeQueued, "idempotency_key": req.IdempotencyKey})
+			return
 		}
-
-		patch := make(map[string]interface{}, len(req.RuntimePayload)+4)
-		for key, value := range req.RuntimePayload {
-			if key == "runtime_assets_pending" || key == "runtime_finalize_idempotency_key" {
-				continue
-			}
-			patch[key] = value
-		}
-		if preparedStockPlan {
-			patch["runtime_assets"] = finalRuntimeAssets
-		} else if len(req.RuntimeAssets) > 0 {
-			patch["runtime_assets"] = req.RuntimeAssets
-		}
-		patch["runtime_assets_pending"] = false
-		patch["runtime_finalize_idempotency_key"] = req.IdempotencyKey
-		if preparedStockPlan {
-			if preparedPlan, ok := req.RuntimePayload[contract.PayloadKeyCompiledRenderPlanJSON].(string); ok && preparedPlan != "" {
-				patch[contract.PayloadKeyCompiledRenderPlanJSON] = preparedPlan
-				patch[contract.PayloadKeyCompiledRenderPlanSHA] = req.RuntimePayload[contract.PayloadKeyCompiledRenderPlanSHA]
-			}
+		patch, err := buildRuntimeFinalizePatch(c.Request.Context(), planJSON, req, current, nil)
+		if err != nil {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "error": "invalid_runtime_assets", "message": err.Error()})
+			return
 		}
 		if _, err := specStore.MergeTaskSpecPayload(c.Request.Context(), task.ID, patch); err != nil {
 			status := http.StatusConflict

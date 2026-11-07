@@ -25,6 +25,7 @@ import (
 
 	"velox-server/internal/forwardingstore"
 	"velox-server/internal/store"
+	"velox-server/internal/taskgraph"
 )
 
 // The endpoint is M2M-only and fails closed: a missing middleware client
@@ -238,6 +239,34 @@ func (h *Handlers) GetSubmittedJob() gin.HandlerFunc {
 		}
 		if prefetchIssue != nil {
 			resp["prefetch_issue"] = prefetchIssue
+		}
+		if h.jobs.TaskReader != nil {
+			if task, taskErr := h.jobs.TaskReader.GetByJobID(ctx, jobID); taskErr == nil && task != nil {
+				if specs, ok := h.jobs.TaskReader.(taskgraph.TaskSpecStore); ok {
+					if payload, payloadErr := specs.GetTaskSpecPayload(ctx, task.ID); payloadErr == nil {
+						if pending, ok := payload["runtime_assets_pending"].(bool); ok && pending {
+							resp["runtime_assets_pending"] = true
+							resp["future_asset_plan"] = "awaiting_runtime_assets"
+							switch state, _ := payload[runtimeFinalizeStatusKey].(string); state {
+							case runtimeFinalizeQueued:
+								resp["dispatch_status"] = "stock_preparation_queued"
+							case runtimeFinalizeRunning:
+								resp["dispatch_status"] = "stock_preparation_running"
+							case runtimeFinalizeFailed:
+								resp["dispatch_status"] = "stock_preparation_failed"
+							default:
+								resp["dispatch_status"] = "waiting_runtime_assets"
+							}
+							if state, ok := payload[runtimeFinalizeStatusKey].(string); ok && state != "" {
+								resp["finalization_status"] = state
+							}
+							if message, ok := payload[runtimeFinalizeErrorKey].(string); ok && message != "" {
+								resp["finalization_error"] = message
+							}
+						}
+					}
+				}
+			}
 		}
 		c.JSON(http.StatusOK, resp)
 	}

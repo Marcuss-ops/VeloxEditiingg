@@ -115,6 +115,22 @@ type TaskSpecStore interface {
 	MergeTaskSpecPayload(ctx context.Context, taskID string, patch map[string]interface{}) (map[string]interface{}, error)
 }
 
+// RuntimeFinalizationCandidate is durable work saved in an existing task spec.
+// The task remains runtime_assets_pending until the finalizer commits a fully
+// prepared render plan, so placement cannot claim it while this work is queued.
+type RuntimeFinalizationCandidate struct {
+	TaskID string
+	JobID  string
+}
+
+// RuntimeFinalizationQueue is the indexed read side used by the Master-owned
+// finalization runner. The task spec remains the source of truth for payload
+// and lifecycle state; this query only finds work that needs processing.
+type RuntimeFinalizationQueue interface {
+	RecoverInterruptedRuntimeFinalizations(ctx context.Context) error
+	ListRuntimeFinalizationCandidates(ctx context.Context, limit int) ([]RuntimeFinalizationCandidate, error)
+}
+
 // Writer is the canonical write-only task mutation surface.
 type Writer interface {
 	// Create inserts a new task in PENDING state. If id is empty the

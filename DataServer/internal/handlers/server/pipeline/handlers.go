@@ -1,6 +1,8 @@
 package pipeline
 
 import (
+	"sync"
+
 	voiceoverassets "velox-server/internal/assets"
 	"velox-server/internal/config"
 	"velox-server/internal/creatorflow"
@@ -35,6 +37,7 @@ type Handlers struct {
 	inputPolicy       *inputsecurity.Policy
 	credentialVault   *credentials.Vault
 	pipelineRuns      PipelineRunService
+	finalizeMu        sync.Mutex
 }
 
 // JobsDeps bundles the optional jobs-layer dependencies used by
