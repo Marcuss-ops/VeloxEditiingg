@@ -61,14 +61,17 @@ worker image after implementation and verification are complete.
   invalidated on mutation; only an invalid attestation triggers the full hash.
   Tests cover hit, mutation and oversized-file cases
   (`asset_cache_attestation.go`, `asset_cache_attestation_test.go`).
-- [x] Dead-code cleanup after the audit. Removed the unused worker HTTP
+- [x] Dead-code cleanup after the audit: `staticcheck -checks U1000 ./...`
+  reports zero findings on `shared`, `DataServer` and
+  `RemoteCodex/native/worker-agent-go`. Removed the unused worker HTTP
   trace/metrics subsystem, the uncalled `CleanupAssetPartials` wrapper,
   `assetPath` mutators, `ClipLease.AssetKeys/Bindings`, `RecordNetworkBytes`,
   `Worker.acquireResumePublisher/canAcceptPhase`, `WaitForShutdown`, the
-  duplicate fMP4 gate test, and the obsolete `validateSubmitScenes` path that
-  `ValidateSubmitJobRequest` supersedes (it rejects `scenes` as legacy). The
-  GPU sampler test now compares against `detectGPU()` so it is valid on GPU
-  and GPU-less hosts.
+  duplicate fMP4 gate test, the obsolete `validateSubmitScenes` path that
+  `ValidateSubmitJobRequest` supersedes (it rejects `scenes` as legacy),
+  orphaned enqueue/remote-engine DTO/normalizer code, and the stray 17 MB
+  Codex session transcript. The GPU sampler test now compares against
+  `detectGPU()`, so it is valid on GPU and GPU-less hosts.
 
 ## P0 — recovery and cache behavior
 

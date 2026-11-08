@@ -61,6 +61,19 @@
   `ValidateSubmitJobRequest` supersedes it and rejects `scenes` outright as a
   legacy input, so the old validator could never run. The GPU sampler test now
   compares against `detectGPU()` instead of assuming a GPU-less host.
+- Also removed 36 unreferenced unexported symbols across `shared`, `DataServer`
+  and the worker agent: orphaned enqueue rewrite/normalization helpers,
+  remote-engine DTO converters, unused placement/store/test helpers, unused
+  jobperf phase-sorting code, publisher hash wrappers, and the GPU sampler
+  wrapper/field. Entirely dead files deleted:
+  `DataServer/internal/jobs/enqueue/normalize_metadata.go` and
+  `DataServer/internal/remoteengine/{dto_assets,dto_metadata,dto_scenes}.go`.
+- Removed the unreferenced 17 MB `codex-session-*.md` transcript from the
+  repository root.
+- Verification: `staticcheck -checks U1000 ./...` reports zero findings on all
+  three Go modules; shared and worker full test suites are green;
+  `scripts/ci/pre-removal-verify.sh` is green (vet, build and full DataServer
+  tests, 552 s).
 
 ### Tests — fMP4 gate remains fail-closed
 
