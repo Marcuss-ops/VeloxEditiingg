@@ -20,20 +20,26 @@ const (
 // frame coordinates are source-frame indices, while OutputFrameCount is the
 // exact number of canonical output frames to encode.
 type VideoPrepareWindowV1 struct {
-	Version               int        `json:"version"`
-	Source                AssetRefV2 `json:"source"`
-	SourceStartFrame      int64      `json:"source_start_frame"`
-	SourceFrameCount      int64      `json:"source_frame_count"`
-	SourceFPSNum          int        `json:"source_fps_num"`
-	SourceFPSDen          int        `json:"source_fps_den"`
-	SourceStartUS         int64      `json:"source_start_us,omitempty"`
-	SourceDurationUS      int64      `json:"source_duration_us,omitempty"`
-	OutputFrameCount      int64      `json:"output_frame_count"`
-	TimelineRevision      int64      `json:"timeline_revision"`
-	TimelineSHA256        string     `json:"timeline_sha256"`
-	TimelineStartFrame    int64      `json:"timeline_start_frame"`
-	OutputProfileID       string     `json:"output_profile_id"`
-	OutputProfileRevision string     `json:"output_profile_revision"`
+	Version int        `json:"version"`
+	Source  AssetRefV2 `json:"source"`
+	// SourceIdentityDiscovery asks the worker to establish the immutable
+	// source SHA-256 by downloading and verifying the declared source once.
+	// The Master uses it only when the source identity is not yet certified;
+	// the worker returns the discovered SHA in its certificate and registers
+	// the prepared fragment under the content identity built from it.
+	SourceIdentityDiscovery bool   `json:"source_identity_discovery,omitempty"`
+	SourceStartFrame        int64  `json:"source_start_frame"`
+	SourceFrameCount        int64  `json:"source_frame_count"`
+	SourceFPSNum            int    `json:"source_fps_num"`
+	SourceFPSDen            int    `json:"source_fps_den"`
+	SourceStartUS           int64  `json:"source_start_us,omitempty"`
+	SourceDurationUS        int64  `json:"source_duration_us,omitempty"`
+	OutputFrameCount        int64  `json:"output_frame_count"`
+	TimelineRevision        int64  `json:"timeline_revision"`
+	TimelineSHA256          string `json:"timeline_sha256"`
+	TimelineStartFrame      int64  `json:"timeline_start_frame"`
+	OutputProfileID         string `json:"output_profile_id"`
+	OutputProfileRevision   string `json:"output_profile_revision"`
 }
 
 // VideoPrepareWindowTaskV1 is a Master-side deterministic fan-out entry.
@@ -99,7 +105,7 @@ func (c VideoPrepareWindowCertificateV1) ValidateFor(r VideoPrepareWindowV1) err
 	if err := r.Validate(); err != nil {
 		return err
 	}
-	if c.Version != VideoPrepareWindowVersion || c.SourceSHA256 != r.Source.SHA256 ||
+	if c.Version != VideoPrepareWindowVersion ||
 		c.SourceAssetID != r.Source.AssetID || c.SourceSizeBytes != r.Source.SizeBytes ||
 		c.SourceStartFrame != r.SourceStartFrame || c.SourceFrameCount != r.SourceFrameCount ||
 		c.SourceFPSNum != r.SourceFPSNum || c.SourceFPSDen != r.SourceFPSDen ||
@@ -107,6 +113,13 @@ func (c VideoPrepareWindowCertificateV1) ValidateFor(r VideoPrepareWindowV1) err
 		c.OutputFrameCount != r.OutputFrameCount || c.OutputProfileID != r.OutputProfileID ||
 		c.OutputProfileRevision != r.OutputProfileRevision || c.TimelineRevision != r.TimelineRevision ||
 		c.TimelineSHA256 != r.TimelineSHA256 || c.TimelineStartFrame != r.TimelineStartFrame {
+		return fmt.Errorf("video.prepare.window.v1: certificate identity does not match request")
+	}
+	if r.SourceIdentityDiscovery {
+		if !isLowerSHA256(c.SourceSHA256) {
+			return fmt.Errorf("video.prepare.window.v1: discovered source SHA-256 is required in the certificate")
+		}
+	} else if c.SourceSHA256 != r.Source.SHA256 {
 		return fmt.Errorf("video.prepare.window.v1: certificate identity does not match request")
 	}
 	if strings.TrimSpace(c.EncoderVersion) == "" || !isLowerSHA256(c.EncoderBuildSHA256) ||
@@ -128,7 +141,11 @@ func (r VideoPrepareWindowV1) Validate() error {
 	if strings.TrimSpace(r.Source.AssetID) == "" || strings.TrimSpace(r.Source.Kind) != "video" {
 		return fmt.Errorf("video.prepare.window.v1: video source asset_id and kind are required")
 	}
-	if !isLowerSHA256(r.Source.SHA256) || len(r.Source.SHA256) != sha256.Size*2 {
+	if r.SourceIdentityDiscovery {
+		if strings.TrimSpace(r.Source.SHA256) != "" {
+			return fmt.Errorf("video.prepare.window.v1: source identity discovery forbids a pre-declared SHA-256")
+		}
+	} else if !isLowerSHA256(r.Source.SHA256) || len(r.Source.SHA256) != sha256.Size*2 {
 		return fmt.Errorf("video.prepare.window.v1: source SHA-256 is required")
 	}
 	if r.Source.SizeBytes <= 0 || r.OutputFrameCount <= 0 {
@@ -174,6 +191,9 @@ func VideoPrepareWindowCacheIdentity(r VideoPrepareWindowV1) (string, error) {
 	if err := r.Validate(); err != nil {
 		return "", err
 	}
+	if r.SourceIdentityDiscovery {
+		return "", fmt.Errorf("video.prepare.window.v1: content cache identity requires a discovered source SHA-256")
+	}
 	identity := struct {
 		SourceSHA        string `json:"source_sha256"`
 		Start            int64  `json:"source_start_frame"`
@@ -190,6 +210,42 @@ func VideoPrepareWindowCacheIdentity(r VideoPrepareWindowV1) (string, error) {
 	data, err := json.Marshal(identity)
 	if err != nil {
 		return "", fmt.Errorf("video.prepare.window.v1: encode cache identity: %w", err)
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+// VideoPrepareWindowDiscoveryIdentity is the deterministic identity used by
+// the Master while a source SHA-256 is still unknown. It binds the declared
+// source (asset, Drive id, size) and window so duplicate placements share one
+// discovery task; it is never used as a content-cache key.
+func VideoPrepareWindowDiscoveryIdentity(r VideoPrepareWindowV1) (string, error) {
+	if err := r.Validate(); err != nil {
+		return "", err
+	}
+	if !r.SourceIdentityDiscovery {
+		return "", fmt.Errorf("video.prepare.window.v1: discovery identity requires source identity discovery")
+	}
+	identity := struct {
+		Discovery        bool   `json:"source_identity_discovery"`
+		AssetID          string `json:"source_asset_id"`
+		DriveFileID      string `json:"source_drive_file_id,omitempty"`
+		SizeBytes        int64  `json:"source_size_bytes"`
+		Start            int64  `json:"source_start_frame"`
+		Count            int64  `json:"source_frame_count"`
+		SourceFPSNum     int    `json:"source_fps_num"`
+		SourceFPSDen     int    `json:"source_fps_den"`
+		SourceStartUS    int64  `json:"source_start_us,omitempty"`
+		SourceDurationUS int64  `json:"source_duration_us,omitempty"`
+		OutputFrames     int64  `json:"output_frame_count"`
+		ProfileID        string `json:"output_profile_id"`
+		ProfileRevision  string `json:"profile_revision"`
+	}{true, r.Source.AssetID, r.Source.DriveFileID, r.Source.SizeBytes,
+		r.SourceStartFrame, r.SourceFrameCount, r.SourceFPSNum, r.SourceFPSDen,
+		r.SourceStartUS, r.SourceDurationUS, r.OutputFrameCount, r.OutputProfileID, r.OutputProfileRevision}
+	data, err := json.Marshal(identity)
+	if err != nil {
+		return "", fmt.Errorf("video.prepare.window.v1: encode discovery identity: %w", err)
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:]), nil

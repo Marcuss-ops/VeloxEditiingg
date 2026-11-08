@@ -227,8 +227,27 @@ func (e *videoPrepareWindowExecutor) Execute(ctx context.Context, execCtx execut
 		return fail("WINDOW_SOURCE_MISSING", errors.New("verified source binding is required"))
 	}
 	source, ok := bindings[request.Source.AssetID]
-	if !ok || !source.Verified || source.SHA256 != request.Source.SHA256 || source.Size != request.Source.SizeBytes {
+	if !ok || !source.Verified || source.Size != request.Source.SizeBytes {
 		return fail("WINDOW_SOURCE_IDENTITY_MISMATCH", errors.New("resolved source binding does not match the immutable request identity"))
+	}
+	if request.SourceIdentityDiscovery {
+		if !isLowerSHA256(source.SHA256) {
+			return fail("WINDOW_SOURCE_IDENTITY_MISMATCH", errors.New("source identity discovery did not produce a SHA-256"))
+		}
+	} else if source.SHA256 != request.Source.SHA256 {
+		return fail("WINDOW_SOURCE_IDENTITY_MISMATCH", errors.New("resolved source binding does not match the immutable request identity"))
+	}
+	if source.Sparse && request.SourceIdentityDiscovery {
+		return fail("WINDOW_SOURCE_IDENTITY_MISMATCH", errors.New("a sparse source cannot attest a new source identity"))
+	}
+	// Identity discovery resolves the one missing field from the worker's
+	// verified download; every downstream cache key, attestation and
+	// certificate must use the resolved identity so independent jobs and
+	// other workers can reuse the fragment by content.
+	resolvedRequest := request
+	if request.SourceIdentityDiscovery {
+		resolvedRequest.Source.SHA256 = source.SHA256
+		resolvedRequest.SourceIdentityDiscovery = false
 	}
 	info, err := os.Stat(source.Path)
 	if err != nil || !info.Mode().IsRegular() || info.Size() != request.Source.SizeBytes {
@@ -240,7 +259,7 @@ func (e *videoPrepareWindowExecutor) Execute(ctx context.Context, execCtx execut
 	if strings.TrimSpace(spec.JobID) == "" {
 		return fail("WINDOW_JOB_ID_INVALID", errors.New("job_id is required"))
 	}
-	identity, err := contract.VideoPrepareWindowCacheIdentity(request)
+	identity, err := contract.VideoPrepareWindowCacheIdentity(resolvedRequest)
 	if err != nil {
 		return fail("WINDOW_CACHE_IDENTITY", err)
 	}
@@ -256,8 +275,8 @@ func (e *videoPrepareWindowExecutor) Execute(ctx context.Context, execCtx execut
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0o750); err != nil {
 		return fail("WINDOW_OUTPUT_DIRECTORY", err)
 	}
-	if attestation, cacheHit := readWindowArtifactAttestation(outputPath, request, e.profile, encoderVersion, encoderBuildSHA); cacheHit {
-		certificate := bindWindowCertificate(attestation, request)
+	if attestation, cacheHit := readWindowArtifactAttestation(outputPath, resolvedRequest, e.profile, encoderVersion, encoderBuildSHA); cacheHit {
+		certificate := bindWindowCertificate(attestation, resolvedRequest)
 		certificate.CacheHit = true
 		encodedCertificate, _ := json.Marshal(certificate)
 		completed := time.Now().UTC()
@@ -276,12 +295,12 @@ func (e *videoPrepareWindowExecutor) Execute(ctx context.Context, execCtx execut
 	_ = os.Remove(tmpPath)
 	defer os.Remove(tmpPath)
 	var args []string
-	if request.SourceDurationUS > 0 {
+	if resolvedRequest.SourceDurationUS > 0 {
 		args = contract.CanonicalVideoWindowTimestampArgs(e.profile, e.quality, source.Path, tmpPath,
-			request.SourceStartUS, request.SourceDurationUS, request.OutputFrameCount)
+			resolvedRequest.SourceStartUS, resolvedRequest.SourceDurationUS, resolvedRequest.OutputFrameCount)
 	} else {
 		args = contract.CanonicalVideoWindowArgs(e.profile, e.quality, source.Path, tmpPath,
-			request.SourceStartFrame, request.SourceFrameCount, request.SourceFPSNum, request.SourceFPSDen, request.OutputFrameCount)
+			resolvedRequest.SourceStartFrame, resolvedRequest.SourceFrameCount, resolvedRequest.SourceFPSNum, resolvedRequest.SourceFPSDen, resolvedRequest.OutputFrameCount)
 	}
 	encode, err := e.runner.Run(ctx, ffmpegrunner.FFmpegRequest{Operation: ffmpegrunner.OperationEncode, Args: args})
 	if err != nil {
@@ -323,7 +342,7 @@ func (e *videoPrepareWindowExecutor) Execute(ctx context.Context, execCtx execut
 	if err := writeWindowAttestation(outputPath+".cert.json", attestationJSON); err != nil {
 		return fail("WINDOW_ATTESTATION_COMMIT_FAILED", err)
 	}
-	certificate := bindWindowCertificate(attestation, request)
+	certificate := bindWindowCertificate(attestation, resolvedRequest)
 	certificate.CacheHit = false
 	certificateJSON, err := json.Marshal(certificate)
 	if err != nil {

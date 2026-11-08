@@ -580,8 +580,13 @@ func trimArgs(mode TrimMode, segment VideoSegment, duration float64, inputPath, 
 }
 
 func exactWindowArgs(profile contract.CanonicalVideoProfileV1, quality contract.PreparationQualityPolicy, inputPath, outputPath string, segment VideoSegment, frameCount int64) []string {
+	// The explicit fps filter is not cosmetic: without it the MP4 muxer
+	// derives the stream duration from the last PTS and reports one frame less
+	// than the exact window (75 frames -> 3.083333 s instead of 3.125 s).
+	// setpts already spaced the frames on the canonical clock, so fps only
+	// stamps their durations and cannot add or drop a frame here.
 	args := []string{"-hide_banner", "-loglevel", "error", "-y", "-ss", formatSeconds(segment.StartSeconds), "-i", inputPath,
-		"-map", "0:v:0", "-an", "-sn", "-dn", "-vf", fmt.Sprintf("setpts=N*%d/(%d*TB),%s", profile.FPSDen, profile.FPSNum, canonicalScaleGeometryFilter(profile))}
+		"-map", "0:v:0", "-an", "-sn", "-dn", "-vf", fmt.Sprintf("setpts=N*%d/(%d*TB),fps=%d/%d,%s", profile.FPSDen, profile.FPSNum, profile.FPSNum, profile.FPSDen, canonicalScaleGeometryFilter(profile))}
 	args = append(args, canonicalVideoEncodeArgs(profile, quality)...)
 	args = append(args, "-fps_mode", "passthrough")
 	// The first output frame is a fragment boundary. Force it to an IDR even

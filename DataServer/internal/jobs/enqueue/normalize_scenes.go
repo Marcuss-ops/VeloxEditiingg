@@ -2,44 +2,10 @@
 package enqueue
 
 import (
-	"context"
-	"encoding/json"
 	"strings"
 
-	"velox-server/internal/telemetry"
 	"velox-shared/contract"
 )
-
-func normalizeScenesContext(ctx context.Context, payloadMap map[string]interface{}) ([]map[string]interface{}, string, error) {
-	if value, ok := payloadMap["scenes"]; ok && value != nil {
-		result, err := contract.ParseSceneMaps(value)
-		if err != nil {
-			return nil, "", err
-		}
-		telemetry.RecordEnqueueJSONMarshal(ctx)
-		data, err := json.Marshal(result)
-		if err != nil {
-			return nil, "", err
-		}
-		return result, string(data), nil
-	}
-
-	if s, ok := payloadMap["scenes_json"].(string); ok && strings.TrimSpace(s) != "" {
-		telemetry.RecordEnqueueJSONUnmarshal(ctx)
-		scenes, err := contract.ParseSceneMapsJSON([]byte(s))
-		if err != nil {
-			return nil, "", err
-		}
-		telemetry.RecordEnqueueJSONMarshal(ctx)
-		data, err := json.Marshal(scenes)
-		if err != nil {
-			return nil, "", err
-		}
-		return scenes, string(data), nil
-	}
-
-	return nil, "", nil
-}
 
 func normalizeSceneArray(value interface{}) []map[string]interface{} {
 	scenes, err := contract.ParseSceneMaps(value)

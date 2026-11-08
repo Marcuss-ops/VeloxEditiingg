@@ -60,7 +60,6 @@ type GPUSampler struct {
 
 	mu        sync.Mutex
 	samples   []GPUSample
-	idleTime  time.Duration
 	lastAbove time.Time
 }
 
@@ -224,10 +223,6 @@ func (s *GPUSampler) computeStatsLocked() GPUStats {
 }
 
 // ── nvidia-smi query ────────────────────────────────────────────────────────
-
-func queryNVidiaSMI() (GPUSample, error) {
-	return queryNVidiaSMIForGPU("")
-}
 
 func queryNVidiaSMIForGPU(gpuUUID string) (GPUSample, error) {
 	args := []string{"--query-gpu=uuid,utilization.gpu,utilization.decoder,utilization.encoder,memory.used,memory.total", "--format=csv,noheader,nounits"}

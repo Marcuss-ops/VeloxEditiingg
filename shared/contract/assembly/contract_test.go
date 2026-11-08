@@ -167,6 +167,7 @@ func TestEarlyAssemblyManifest_FMP4StreamProfileGate(t *testing.T) {
 		t.Fatal("closed gate must not admit the fMP4 profile")
 	}
 
+	enableFMP4GateForTest(t)
 	t.Setenv("VELOX_FMP4_STREAM_PROFILE", "1")
 	if err := manifest.Validate(); err != nil {
 		t.Fatalf("open gate Validate() error = %v", err)

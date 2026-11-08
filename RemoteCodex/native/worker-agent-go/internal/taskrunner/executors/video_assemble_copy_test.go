@@ -278,6 +278,7 @@ func TestVideoAssembleCopy_RejectsNonKeyframeSafeCut(t *testing.T) {
 // completed hand-off: fMP4 changes only the final mux layout, so prepared
 // source assets retain the canonical stream profile identity.
 func TestVideoAssembleCopy_AcceptsFragmentedProfileWhenGateOpen(t *testing.T) {
+	enableFMP4GateForTest(t)
 	t.Setenv("VELOX_FMP4_STREAM_PROFILE", "1")
 	video := []byte("prepared-video")
 	audio := []byte("final-audio")

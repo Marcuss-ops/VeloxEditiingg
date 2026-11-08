@@ -373,7 +373,11 @@ func validateDriveStockWindowOutput(
 	}
 	expectedDuration := float64(request.wantFrames) * float64(plan.Output.FPSDen) / float64(plan.Output.FPSNum)
 	frameDuration := float64(plan.Output.FPSDen) / float64(plan.Output.FPSNum)
-	if math.Abs(probe.DurationSeconds-expectedDuration) > frameDuration {
+	// Containers may omit the final frame's duration, so exactly one frame is
+	// a legal difference. Add an epsilon: comparing two equal float64 values
+	// computed from different expressions can otherwise round just above the
+	// tolerance and reject a valid 75-frame fragment.
+	if math.Abs(probe.DurationSeconds-expectedDuration) > frameDuration+1e-6 {
 		return fmt.Errorf("stock segment %q output duration mismatch: got %.6f s want %.6f s", request.segmentID, probe.DurationSeconds, expectedDuration)
 	}
 	if len(probe.Keyframes) == 0 || math.Abs(probe.Keyframes[0]) > 0.0005 {

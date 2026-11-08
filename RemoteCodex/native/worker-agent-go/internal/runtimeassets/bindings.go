@@ -27,6 +27,13 @@ type Binding struct {
 	// fast-assembly binding path so certification tests can assert the
 	// resolution origin without re-deriving it.
 	Origin downloader.ResolutionOrigin
+	// Sparse marks a source materialized by media-aware HTTP Range reads. Such
+	// a file has the declared size and the container index plus the required
+	// sample ranges, but its holes are not real source bytes: SHA256 is the
+	// immutable identity declared by the plan, not a full-file digest
+	// recomputed on this host. Executors must never emit a full-file hash for
+	// a Sparse binding.
+	Sparse bool
 }
 
 // Bindings maps canonical asset IDs to verified local files.

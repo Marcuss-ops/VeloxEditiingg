@@ -12,9 +12,9 @@ import (
 )
 
 type PreparedWindowAssetBinding struct {
-	AssetID   string
-	SHA256    string
-	SizeBytes int64
+	AssetID   string `json:"asset_id"`
+	SHA256    string `json:"sha256"`
+	SizeBytes int64  `json:"size_bytes"`
 }
 
 // PlanDriveStockWindowTasks converts unresolved Drive/HTTPS stock windows
@@ -64,25 +64,41 @@ func (s *AssetService) PlanDriveStockWindowTasks(planJSON string, runtimeAssets 
 			if size <= 0 {
 				size = bindingInt64(binding, "size_bytes")
 			}
-			if !validStockSourceSHA256(sha) || size <= 0 {
-				return nil, fmt.Errorf("video segment %q source needs an immutable SHA-256 and positive size before worker preparation", segment.SegmentID)
+			if size <= 0 {
+				return nil, fmt.Errorf("video segment %q source needs a positive immutable size before worker preparation", segment.SegmentID)
 			}
 			if segment.SourceInUS < 0 || segment.SourceDurationUS <= 0 || segment.FrameCount <= 0 {
 				return nil, fmt.Errorf("video segment %q has an invalid source window", segment.SegmentID)
 			}
+			// An unknown SHA is not a reason to materialize bytes on the
+			// control plane: the worker establishes the identity from the same
+			// verified download it needs for the window and returns it in the
+			// certificate.
+			discovery := !validStockSourceSHA256(sha)
 			source := asset
-			source.Kind, source.SHA256, source.SizeBytes = "video", sha, size
+			if discovery {
+				source.Kind, source.SHA256, source.SizeBytes = "video", "", size
+			} else {
+				source.Kind, source.SHA256, source.SizeBytes = "video", sha, size
+			}
 			if source.AssetID == "" {
 				source.AssetID = segment.AssetID
 			}
 			request := contract.VideoPrepareWindowV1{
 				Version: contract.VideoPrepareWindowVersion, Source: source,
-				SourceStartUS: segment.SourceInUS, SourceDurationUS: segment.SourceDurationUS,
+				SourceIdentityDiscovery: discovery,
+				SourceStartUS:           segment.SourceInUS, SourceDurationUS: segment.SourceDurationUS,
 				OutputFrameCount: segment.FrameCount, TimelineRevision: plan.TimelineRevision,
 				TimelineSHA256: plan.TimelineSHA256, TimelineStartFrame: segment.TimelineStartFrame,
 				OutputProfileID: profile.ProfileID, OutputProfileRevision: revision,
 			}
-			identity, err := contract.VideoPrepareWindowCacheIdentity(request)
+			var identity string
+			var err error
+			if discovery {
+				identity, err = contract.VideoPrepareWindowDiscoveryIdentity(request)
+			} else {
+				identity, err = contract.VideoPrepareWindowCacheIdentity(request)
+			}
 			if err != nil {
 				return nil, fmt.Errorf("video segment %q preparation contract: %w", segment.SegmentID, err)
 			}

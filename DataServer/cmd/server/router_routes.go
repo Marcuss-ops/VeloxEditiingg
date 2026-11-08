@@ -69,8 +69,8 @@ func registerInstaEditRoutes(r *gin.Engine, deps InstaEditRouteDeps) error {
 // m2mAuth falls back to adminAuth so test mounts retain the expected
 // authorization shape.
 //
-// Blocco 4 step #3: the legacy fallback to NewHandlersFull (which
-// constructed a forwarder Service shim) is gone. Resolver is the
+// Blocco 4 step #3: the legacy full-handler constructor (which
+// built a forwarder Service shim) is gone. Resolver is the
 // SINGLE authoritative forward-completed entry point; the composition
 // root (buildAppComponents → appComponents.resolver) wires it
 // unconditionally. A nil Resolver at this layer is a wiring bug and

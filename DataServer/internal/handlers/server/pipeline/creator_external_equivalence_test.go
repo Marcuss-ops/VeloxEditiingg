@@ -148,17 +148,6 @@ func TestCreatorPushAndExternalSubmitConvergeToTheSameCanonicalContract(t *testi
 	}
 }
 
-func cloneCanonicalWorkerPayload(payload map[string]interface{}) map[string]interface{} {
-	clone := make(map[string]interface{}, len(payload))
-	for key, value := range payload {
-		clone[key] = value
-	}
-	for _, alias := range []string{"status", "delivery_plan", "voiceover_paths", "subtitle_tracks", "clip_link", "image_link"} {
-		delete(clone, alias)
-	}
-	return clone
-}
-
 func intPointer(value int) *int { return &value }
 
 func canonicalJSONValue(t *testing.T, value interface{}) interface{} {

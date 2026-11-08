@@ -106,13 +106,6 @@ func classifyExecutor(executorID string) TaskPhase {
 	}
 }
 
-// canAcceptPhase checks whether the worker can accept a new task in the
-// given phase. Uses per-phase slot limits when configured; falls back to
-// the flat maxActiveJobs limit when per-phase slots are zero.
-func (w *Worker) canAcceptPhase(phase TaskPhase) bool {
-	return w.capacitySnapshot(phase).PhaseAvailable
-}
-
 // capacitySnapshot captures all currently competing admission authorities.
 // It is diagnostic rather than a reservation: values can change immediately
 // after the snapshot is taken, as they can for any non-blocking admission

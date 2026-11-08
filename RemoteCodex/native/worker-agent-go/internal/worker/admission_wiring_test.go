@@ -11,8 +11,7 @@ import (
 
 // mockAdmissionController is a controllable admission controller for testing.
 type mockAdmissionController struct {
-	throttled  atomic.Bool
-	rejections atomic.Int64
+	throttled atomic.Bool
 }
 
 func (m *mockAdmissionController) IsThrottled(kind ResourceKind) bool {

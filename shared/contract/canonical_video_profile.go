@@ -1,9 +1,11 @@
 package contract
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 )
 
 // CanonicalVideoProfileVersionV1 is the version of the producer/Velox media
@@ -120,10 +122,71 @@ func (p CanonicalVideoProfileV1) StreamProfile() string {
 func FMP4StreamProfileEnabled() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("VELOX_FMP4_STREAM_PROFILE"))) {
 	case "1", "true", "enabled":
-		return true
+		return FMP4StreamProfileGateSatisfied()
 	default:
 		return false
 	}
+}
+
+const (
+	// FMP4GateEvidenceEnv names the JSON artifact produced by the 100-job
+	// benchmark gate. The env opt-in alone never enables the profile.
+	FMP4GateEvidenceEnv    = "VELOX_FMP4_GATE_EVIDENCE"
+	FMP4GateMinimumJobs    = 100
+	FMP4GateEvidenceSchema = 1
+)
+
+// FMP4StreamGateEvidence is the durable result of the progressive-upload
+// benchmark gate. CertifiedJobs counts jobs whose fragments were produced and
+// published with the fragmented profile and independently verified; a run with
+// retries or uncertified jobs cannot open the gate.
+type FMP4StreamGateEvidence struct {
+	Version                 int    `json:"version"`
+	Jobs                    int    `json:"jobs"`
+	CertifiedJobs           int    `json:"certified_jobs"`
+	RecordedAt              string `json:"recorded_at"`
+	P95ProgressiveOverlapMS int64  `json:"p95_progressive_overlap_ms,omitempty"`
+}
+
+var fmp4GateCache struct {
+	sync.Mutex
+	path    string
+	modTime int64
+	size    int64
+	ok      bool
+}
+
+// FMP4StreamProfileGateSatisfied reads and validates the recorded benchmark
+// evidence. Missing, unreadable, stale-schema or under-sampled evidence fails
+// closed. The file is revalidated whenever its size or modification time
+// changes, so an operator can refresh it without restarting the Master.
+func FMP4StreamProfileGateSatisfied() bool {
+	path := strings.TrimSpace(os.Getenv(FMP4GateEvidenceEnv))
+	if path == "" {
+		return false
+	}
+	fmp4GateCache.Lock()
+	defer fmp4GateCache.Unlock()
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 {
+		return false
+	}
+	if fmp4GateCache.path == path && fmp4GateCache.modTime == info.ModTime().UnixNano() && fmp4GateCache.size == info.Size() {
+		return fmp4GateCache.ok
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var evidence FMP4StreamGateEvidence
+	ok := json.Unmarshal(data, &evidence) == nil &&
+		evidence.Version == FMP4GateEvidenceSchema &&
+		evidence.Jobs >= FMP4GateMinimumJobs &&
+		evidence.CertifiedJobs >= FMP4GateMinimumJobs &&
+		evidence.CertifiedJobs <= evidence.Jobs &&
+		strings.TrimSpace(evidence.RecordedAt) != ""
+	fmp4GateCache.path, fmp4GateCache.modTime, fmp4GateCache.size, fmp4GateCache.ok = path, info.ModTime().UnixNano(), info.Size(), ok
+	return ok
 }
 
 func (p CanonicalVideoProfileV1) Validate() error {

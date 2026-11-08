@@ -58,9 +58,10 @@ func TestCanTransition(t *testing.T) {
 		{StatusRetryWait, StatusCancelled, true},
 		{StatusRetryWait, StatusSucceeded, false},
 
-		// Terminal states cannot transition to other states
+		// Terminal states cannot transition to other states, except the
+		// explicit operator manual-retry edge FAILED -> PENDING.
 		{StatusSucceeded, StatusPending, false},
-		{StatusFailed, StatusPending, false},
+		{StatusFailed, StatusPending, true},
 		{StatusCancelled, StatusPending, false},
 	}
 

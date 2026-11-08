@@ -1,106 +1,18 @@
 package enqueue
 
-// enqueue_assets.go: asset-rewrite + response-builder helpers of the
+// enqueue_assets.go: forwarding-ID + response-builder helpers of the
 // Enqueuer. Split out of enqueue.go; the core orchestration and the
 // shared plan types (PlanDestination / ResolvedPlan / PlanResolver)
 // live in enqueue.go.
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"strings"
 
-	assetbridge "velox-server/internal/assets"
 	"velox-server/internal/jobs"
-	"velox-server/internal/telemetry"
 	"velox-shared/payload"
 )
-
-// =============================================================================
-// Asset rewrite (shared with `internal/assets` package)
-// =============================================================================
-
-// rewriteVoiceoverPayloadFor is the single canonical implementation of
-// voiceover rewrite. Both the (e *Enqueuer) method and the package-level
-// fallback `resolveVoiceoverPayload` delegate here so the rewrite
-// invariants live in ONE place; only the service source differs.
-func rewriteVoiceoverPayloadFor(ctx context.Context, service *assetbridge.AssetService, payloadMap map[string]interface{}) error {
-	if service == nil || payloadMap == nil {
-		return nil
-	}
-	return service.RewriteVoiceoverPayload(ctx, payloadMap)
-}
-
-// rewriteSceneImagePayloadFor mirrors rewriteVoiceoverPayloadFor for
-// scene-image resolution. Shared invariant: nil service is a no-op.
-func rewriteSceneImagePayloadFor(ctx context.Context, service *assetbridge.AssetService, payloadMap map[string]interface{}) error {
-	if service == nil || payloadMap == nil {
-		return nil
-	}
-	return service.RewriteSceneImagePayload(ctx, payloadMap)
-}
-
-func (e *Enqueuer) resolveVoiceoverPayload(ctx context.Context, payloadMap map[string]interface{}) error {
-	if e == nil {
-		return nil
-	}
-	if err := rewriteVoiceoverPayloadFor(ctx, e.Voiceover, payloadMap); err != nil {
-		return err
-	}
-	syncAudioURLFromVoiceover(payloadMap)
-	return nil
-}
-
-func (e *Enqueuer) resolveSceneImagePayload(ctx context.Context, payloadMap map[string]interface{}) error {
-	if e == nil {
-		return nil
-	}
-	return rewriteSceneImagePayloadFor(ctx, e.Voiceover, payloadMap)
-}
-
-func hasTimedVideoClipSegmentsContext(ctx context.Context, value interface{}) bool {
-	switch typed := value.(type) {
-	case map[string]interface{}:
-		if _, hasStart := typed["start_seconds"]; hasStart {
-			if _, hasEnd := typed["end_seconds"]; hasEnd {
-				return true
-			}
-		}
-		if _, hasStart := typed["start_ms"]; hasStart {
-			if _, hasEnd := typed["end_ms"]; hasEnd {
-				return true
-			}
-		}
-		for _, child := range typed {
-			if hasTimedVideoClipSegmentsContext(ctx, child) {
-				return true
-			}
-		}
-	case []interface{}:
-		for _, child := range typed {
-			if hasTimedVideoClipSegmentsContext(ctx, child) {
-				return true
-			}
-		}
-	case []map[string]interface{}:
-		for _, child := range typed {
-			if hasTimedVideoClipSegmentsContext(ctx, child) {
-				return true
-			}
-		}
-	case string:
-		var decoded interface{}
-		if strings.HasPrefix(strings.TrimSpace(typed), "[") || strings.HasPrefix(strings.TrimSpace(typed), "{") {
-			telemetry.RecordEnqueueJSONUnmarshal(ctx)
-			if json.Unmarshal([]byte(typed), &decoded) == nil {
-				return hasTimedVideoClipSegmentsContext(ctx, decoded)
-			}
-		}
-	}
-	return false
-}
 
 // DeriveForwardingJobID produces a deterministic, UUID-shaped job ID from a
 // forwarding key. The key should be formatted as:

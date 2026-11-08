@@ -12,8 +12,6 @@
 // here are reporting labels, never emitted as catalog events.
 package jobperf
 
-import "sort"
-
 // Canonical job-timeline phase keys. snake_case, stable ordering via
 // CanonicalPhaseOrder. Producers must use these constants; unknown keys
 // passed to Tracker.Begin/End are recorded anyway (forward-compatible)
@@ -77,15 +75,6 @@ var CanonicalPhaseOrder = []string{
 	PhaseDriveVerify,
 }
 
-// canonicalRank maps each canonical key to its position for O(1) sort.
-var canonicalRank = func() map[string]int {
-	m := make(map[string]int, len(CanonicalPhaseOrder))
-	for i, k := range CanonicalPhaseOrder {
-		m[k] = i
-	}
-	return m
-}()
-
 // PhaseLabels are the human-readable headers rendered in the text
 // report, keyed by canonical phase key.
 var PhaseLabels = map[string]string{
@@ -115,30 +104,4 @@ var PhaseLabels = map[string]string{
 	PhaseDriveUpload:      "Drive upload",
 	PhaseDriveVerify:      "Drive verify",
 	PhaseJobTotal:         "JOB TOTAL",
-}
-
-func phaseLabel(key string) string {
-	if l, ok := PhaseLabels[key]; ok {
-		return l
-	}
-	return key
-}
-
-// sortPhases orders phase keys canonically; non-canonical keys follow,
-// alphabetically, so report output is deterministic.
-func sortPhases(keys []string) {
-	sort.Slice(keys, func(i, j int) bool {
-		ri, iok := canonicalRank[keys[i]]
-		rj, jok := canonicalRank[keys[j]]
-		switch {
-		case iok && jok:
-			return ri < rj
-		case iok:
-			return true
-		case jok:
-			return false
-		default:
-			return keys[i] < keys[j]
-		}
-	})
 }

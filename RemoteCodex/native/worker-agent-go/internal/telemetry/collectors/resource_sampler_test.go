@@ -383,10 +383,10 @@ func TestSampleHost_BasicSanity(t *testing.T) {
 	if host.DiskFreeBytes <= 0 {
 		t.Errorf("DiskFreeBytes should be > 0 for real tmpdir, got %d", host.DiskFreeBytes)
 	}
-	// HasGPU detection runs over real /dev and /sys; in a unit-test
-	// environment without nvidia devices or DRM cards we expect false.
-	if host.HasGPU {
-		t.Errorf("HasGPU = true; test env should not have a GPU (or the host has nvidia0 — adapt the test if so)")
+	// HasGPU detection runs over real /dev and /sys. Compare against the
+	// detector instead of assuming a GPU-less CI host: GPU runners are valid.
+	if want := detectGPU(); host.HasGPU != want {
+		t.Errorf("HasGPU = %v; detectGPU() = %v", host.HasGPU, want)
 	}
 }
 

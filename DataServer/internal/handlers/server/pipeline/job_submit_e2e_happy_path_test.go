@@ -402,6 +402,7 @@ func TestSubmitJobE2E_SuccessAndReplay(t *testing.T) {
 }
 
 func TestSubmitJobE2E_ProducerOwnedFMP4PlanRoutesAndPersistsCanonically(t *testing.T) {
+	enableFMP4GateForTest(t)
 	t.Setenv("VELOX_FMP4_STREAM_PROFILE", "1")
 	h, db := newSubmitJobE2EStack(t)
 	gin.SetMode(gin.TestMode)

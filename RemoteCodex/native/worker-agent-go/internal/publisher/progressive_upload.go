@@ -604,26 +604,3 @@ func hashGrowingFile(ctx context.Context, path string, file *GrowingFile) (strin
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
-
-func hashFile(path string, size int64) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	return hashOpenFile(f, size)
-}
-
-func hashOpenFile(f *os.File, size int64) (string, error) {
-	if f == nil || size <= 0 {
-		return "", fmt.Errorf("progressive upload: invalid hash input")
-	}
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return "", err
-	}
-	h := sha256.New()
-	if _, err := io.CopyN(h, f, size); err != nil && err != io.EOF {
-		return "", err
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
-}

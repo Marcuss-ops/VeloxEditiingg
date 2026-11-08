@@ -13,34 +13,6 @@ import (
 	"velox-worker-agent/pkg/video/pipeline"
 )
 
-// emitEngineProcessTelemetry records the canonical engine subprocess facts:
-// the PROCESS_STARTED spawn event and the engine-declared process counters.
-func emitEngineProcessTelemetry(rec *telemetry.EventRecorder, run pipeline.RunMetrics) {
-	if rec != nil && run.RenderMetrics.EngineSpawnCount > 0 {
-		rec.Emit(telemetry.EventSpec{Origin: telemetry.OriginWorker, Scope: telemetry.ScopeAttempt, Component: "worker.engine", Action: "spawn"}, telemetry.StatusOK, "", "")
-	}
-	usage := telemetry.EngineUsageFacts{
-		ExternalSpawnCount:         run.RenderMetrics.EngineExternalSpawnCount,
-		FfmpegSpawnCount:           run.RenderMetrics.EngineFfmpegSpawnCount,
-		FfprobeSpawnCount:          run.RenderMetrics.EngineFfprobeSpawnCount,
-		ShellSpawnCount:            run.RenderMetrics.EngineShellSpawnCount,
-		CurlSpawnCount:             run.RenderMetrics.EngineCurlSpawnCount,
-		CPUUserMs:                  run.RenderMetrics.EngineCPUUserMs,
-		CPUSystemMs:                run.RenderMetrics.EngineCPUSystemMs,
-		VoluntaryContextSwitches:   run.RenderMetrics.EngineVoluntaryContextSwitches,
-		InvoluntaryContextSwitches: run.RenderMetrics.EngineInvoluntaryContextSwitches,
-		MinorPageFaults:            run.RenderMetrics.EngineMinorPageFaults,
-		MajorPageFaults:            run.RenderMetrics.EngineMajorPageFaults,
-	}
-	if rec != nil && telemetry.EngineUsageMetadataJSON(usage) != "" {
-		rec.Emit(telemetry.EventSpec{
-			Origin: telemetry.OriginWorker, Scope: telemetry.ScopeAttempt,
-			Component: "worker.engine", Action: "usage",
-			MetadataJSON: telemetry.EngineUsageMetadataJSON(usage),
-		}, telemetry.StatusOK, "", "")
-	}
-}
-
 // projectSegments maps the engine's per-segment counters onto the executor
 // segment timing stream.
 func projectSegments(rm pipeline.RenderMetrics) []executor.SegmentTiming {

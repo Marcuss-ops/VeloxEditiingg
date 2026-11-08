@@ -13,9 +13,6 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// utcNow is the test clock for LifecycleService instances built inline.
-func utcNow() time.Time { return time.Now().UTC() }
-
 // openExpandTestDB builds a minimal migration-176-shape tasks table wired to
 // the REAL SQLiteTaskRepository, so the fan-out service is exercised against
 // actual persistence (not a stub).

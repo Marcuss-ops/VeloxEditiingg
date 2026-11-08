@@ -161,10 +161,3 @@ func clonePublicationSpecValue(value interface{}) interface{} {
 		return value
 	}
 }
-
-// cloneRendererPayload creates the final worker-facing map from the
-// normalized canonical map. Delivery routing and publication metadata are
-// consumed by the control plane and are deliberately absent here.
-func cloneRendererPayload(normalized map[string]interface{}) (map[string]interface{}, error) {
-	return contract.RenderOnlyPayload(normalized)
-}

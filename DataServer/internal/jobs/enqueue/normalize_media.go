@@ -4,7 +4,6 @@ package enqueue
 import (
 	"strings"
 
-	"velox-server/internal/routing"
 	"velox-shared/compatibility"
 	"velox-shared/contract"
 	"velox-shared/payload"
@@ -100,34 +99,4 @@ func voiceoverCountFromPayload(payloadMap map[string]interface{}) int {
 		return len(arr)
 	}
 	return len(normalizeVoiceoverList(payloadMap))
-}
-func hasClipTimelinePayload(payloadMap map[string]interface{}) bool {
-	if payloadMap == nil {
-		return false
-	}
-	for _, key := range []string{"clips", "items", "clip_segments", "intro_clip_paths", "stock_clip_paths"} {
-		switch v := payloadMap[key].(type) {
-		case []string:
-			if len(v) > 0 {
-				return true
-			}
-		case []interface{}:
-			if len(v) > 0 {
-				return true
-			}
-		}
-	}
-	return false
-}
-func syncAudioURLFromVoiceover(payloadMap map[string]interface{}) {
-	if payloadMap == nil {
-		return
-	}
-	voiceovers := normalizeVoiceoverList(payloadMap)
-	if len(voiceovers) == 0 {
-		return
-	}
-	if strings.TrimSpace(payload.FirstString(payloadMap, "audio_url")) == "" || hasClipTimelinePayload(payloadMap) || strings.TrimSpace(payload.FirstString(payloadMap, "pipeline_id", routing.KeyPipelineID)) != "" {
-		payloadMap["audio_url"] = voiceovers[0]
-	}
 }

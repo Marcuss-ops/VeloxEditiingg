@@ -196,6 +196,17 @@ func (w *Worker) uploadTaskOutputs(ctx context.Context, pte *PendingTaskExecutio
 		if segmentIndex < 0 {
 			return fmt.Errorf("prepared-window registry upload: executor certificate is missing")
 		}
+		// A discovery request omits the source SHA by design. The executor's
+		// verified download discovered it; publish the resolved request so the
+		// Master registers the fragment under its content identity and other
+		// workers can reuse it.
+		if request.SourceIdentityDiscovery {
+			if certificate.SourceSHA256 == "" {
+				return fmt.Errorf("prepared-window registry upload: discovery certificate has no source identity")
+			}
+			request.Source.SHA256 = certificate.SourceSHA256
+			request.SourceIdentityDiscovery = false
+		}
 		assetID, reused, err := w.apiClient.PublishPreparedWindow(ctx, request, certificate, report.Outputs[0].URI)
 		if err != nil {
 			return fmt.Errorf("prepared-window registry upload: %w", err)

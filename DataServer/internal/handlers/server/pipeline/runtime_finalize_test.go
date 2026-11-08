@@ -80,12 +80,12 @@ func TestRuntimeFinalizationPublishesDurablePreparationFanOut(t *testing.T) {
 	processor := &RuntimeFinalizationProcessor{expander: expander, notifier: notifier}
 	identity := strings.Repeat("a", 64)
 	preparation := contract.VideoPrepareWindowTaskV1{
-		Identity: identity,
-		Request: contract.VideoPrepareWindowV1{Version: contract.VideoPrepareWindowVersion},
+		Identity:   identity,
+		Request:    contract.VideoPrepareWindowV1{Version: contract.VideoPrepareWindowVersion},
 		SegmentIDs: []string{"segment-1", "segment-2"},
 	}
 	bindings := []map[string]interface{}{{"asset_id": "source-1", "source_uri": "https://media.example/source.mp4"}}
-	if err := processor.publishWorkerPreparations(context.Background(), taskgraph.RuntimeFinalizationCandidate{TaskID: "assembly-1", JobID: "job-1"}, bindings, []contract.VideoPrepareWindowTaskV1{preparation}); err != nil {
+	if err := processor.publishWorkerPreparations(context.Background(), taskgraph.RuntimeFinalizationCandidate{TaskID: "assembly-1", JobID: "job-1"}, bindings, []contract.VideoPrepareWindowTaskV1{preparation}, nil); err != nil {
 		t.Fatalf("publishWorkerPreparations: %v", err)
 	}
 	wantTaskID := "assembly-1-prep-" + identity[:24]

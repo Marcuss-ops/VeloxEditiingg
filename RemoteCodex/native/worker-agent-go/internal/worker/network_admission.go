@@ -516,11 +516,3 @@ func (l *networkPacingLimiter) pace(ctx context.Context, n int64) error {
 	}
 	return nil
 }
-
-// RecordNetworkBytes is a convenience function that records bytes for the
-// given priority and direction on the shared admission controller.
-func RecordNetworkBytes(ctrl *NetworkAdmissionController, priority int, dir int, n int64) {
-	if ctrl != nil {
-		ctrl.RecordBytes(priority, dir, n)
-	}
-}

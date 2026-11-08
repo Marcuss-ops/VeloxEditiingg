@@ -15,8 +15,8 @@ import (
 
 // warmPlacementSnapshots collects a placement-eligible snapshot from every
 // live worker session. The list is used by selectWarmPlacement and
-// ensureFutureReservationOwnership to decide which worker should prefetch
-// or own a given set of assets.
+// ensureFutureReservationOwnershipWithReservations to decide which worker
+// should prefetch or own a given set of assets.
 func (h *Handler) warmPlacementSnapshots() []assembly.WorkerPlacementSnapshot {
 	return h.warmPlacementSnapshotsForExecutor(placement.ExecutorKey{})
 }
@@ -84,9 +84,6 @@ func selectWarmPlacement(workers []assembly.WorkerPlacementSnapshot, assets []fu
 // its owner, but transfers it with a CAS when that owner is no longer
 // eligible. This runs immediately before execution claim, so an unavailable
 // preferred worker cannot strand a READY task until the original TTL.
-func (h *Handler) ensureFutureReservationOwnership(ctx context.Context, workerID string, candidate *placement.TaskCandidate) (bool, error) {
-	return h.ensureFutureReservationOwnershipWithReservations(ctx, workerID, candidate, nil)
-}
 
 func (h *Handler) ensureFutureReservationOwnershipWithReservations(ctx context.Context, workerID string, candidate *placement.TaskCandidate, cached *[]taskgraph.FutureReservationWithPayload) (bool, error) {
 	if h == nil || candidate == nil {

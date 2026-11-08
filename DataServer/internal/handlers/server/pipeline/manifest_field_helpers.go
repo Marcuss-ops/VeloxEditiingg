@@ -2,19 +2,8 @@ package pipeline
 
 import (
 	"encoding/json"
-	"sort"
 	"strings"
 )
-
-func objectField(m map[string]interface{}, key string) map[string]interface{} {
-	if m == nil {
-		return nil
-	}
-	if v, ok := m[key].(map[string]interface{}); ok {
-		return v
-	}
-	return nil
-}
 
 func stringField(m map[string]interface{}, key string) string {
 	if m == nil {
@@ -28,34 +17,6 @@ func stringField(m map[string]interface{}, key string) string {
 	default:
 		return ""
 	}
-}
-
-func int64Field(m map[string]interface{}, key string) int64 {
-	if m == nil {
-		return 0
-	}
-	switch v := m[key].(type) {
-	case int:
-		return int64(v)
-	case int64:
-		return v
-	case float64:
-		return int64(v)
-	case json.Number:
-		i, _ := v.Int64()
-		return i
-	default:
-		return 0
-	}
-}
-
-func sortedMapKeys(m map[string]interface{}) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
 }
 
 func cloneJSONMap(in map[string]interface{}) map[string]interface{} {

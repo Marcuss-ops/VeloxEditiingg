@@ -9,14 +9,22 @@ worker image after implementation and verification are complete.
 ## Current completion snapshot
 
 - Complete: assembly-only retry, cache-first lookup, deterministic persisted
-  stock selection, and the worker window-preparation executor.
-- In progress: FINALIZE-to-DAG integration, worker-to-Master fragment
-  exchange/cross-worker assembly integration, and production certification of
-  progressive fMP4 upload.
-- Not implemented: media-aware sparse MP4 range fetching and single-pass
-  visual-layer compositing.
-- Final gate not run: full repository verification, cold/warm/retry production
-  measurements, and one final worker-image build/certification/publication.
+  stock selection, the worker window-preparation executor, prepared-fragment
+  link/clone staging, and warm-cache attestation.
+- Complete: FINALIZE-to-TaskGraph publication, worker-to-Master fragment
+  exchange, Master-side cross-worker fragment reuse, and worker-side source
+  identity discovery. The control plane no longer materializes Drive stock
+  bytes when worker preparation is wired.
+- In progress: production certification of progressive fMP4 upload (the
+  fail-closed 100-job gate is implemented; running it needs production jobs).
+- Implemented (opt-in): media-aware sparse MP4 range fetching with a
+  full-download fallback.
+- Not implemented (blocked by an explicit architecture decision): single-pass
+  native visual-layer compositing; layered plans are routed to the Chronon GPU
+  backend.
+- Full-module verification is green (`scripts/ci/pre-removal-verify.sh`:
+  vet, build and `go test ./...`). Cold/warm/retry production measurements and
+  the final worker-image build/certification/publication remain open.
 
 ## Completed locally
 
@@ -31,13 +39,36 @@ worker image after implementation and verification are complete.
 - [x] Pin stock-pool stability with contract tests: candidate input ordering
   cannot change the selection, a persisted snapshot survives new Drive
   candidates, and a changed identity is rejected.
-- [~] Cache-first source preparation. FINALIZE looks up windows by certified
+- [x] Cache-first source preparation. FINALIZE looks up windows by certified
   source SHA before materializing source bytes, reuses READY fragments, and
   downloads only sources with an unknown identity or a cache miss. Unknown
-  sources still follow the verified download/probe path.
+  source identities are no longer downloaded by the Master: they are planned
+  as worker discovery tasks.
 - [x] Pin a full cache hit with a media integration test that removes the
   source file before retry; preparation still succeeds from the certified
   cached fragment without source materialization.
+
+## I/O and cache efficiency (audit §7B)
+
+- [x] Prepared fragments no longer perform a second staging copy. The staging
+  helper tries a filesystem clone (FICLONE), then a hard link, then a streaming
+  copy; it hashes the staged bytes once and rejects size drift. Tests cover the
+  clone/link path, the copy fallback and the byte limit
+  (`prepared_stage.go`, `prepared_stage_test.go`).
+- [x] Warm worker-cache hits no longer reread every blob for SHA-256. A cache
+  attestation combines `dev/ino/size/mtime/ctime` with a 256 KiB head+tail
+  sampled fingerprint (needed on filesystems with coarse timestamps) and is
+  invalidated on mutation; only an invalid attestation triggers the full hash.
+  Tests cover hit, mutation and oversized-file cases
+  (`asset_cache_attestation.go`, `asset_cache_attestation_test.go`).
+- [x] Dead-code cleanup after the audit. Removed the unused worker HTTP
+  trace/metrics subsystem, the uncalled `CleanupAssetPartials` wrapper,
+  `assetPath` mutators, `ClipLease.AssetKeys/Bindings`, `RecordNetworkBytes`,
+  `Worker.acquireResumePublisher/canAcceptPhase`, `WaitForShutdown`, the
+  duplicate fMP4 gate test, and the obsolete `validateSubmitScenes` path that
+  `ValidateSubmitJobRequest` supersedes (it rejects `scenes` as legacy). The
+  GPU sampler test now compares against `detectGPU()` so it is valid on GPU
+  and GPU-less hosts.
 
 ## P0 — recovery and cache behavior
 
@@ -74,28 +105,43 @@ worker image after implementation and verification are complete.
   regression tests cover both shared dispatch query variants, repository
   candidate listing, and exact-worker claims. This is the dispatch safety
   gate required before preparation DAG fan-out can land.
-- [ ] Change FINALIZE into durable TaskGraph publication for independent
-  preparation tasks. Keep final packet-copy assembly as one task when all
-  fragments are ready; bound download, encode, I/O and plan-commit capacity
-  separately.
-- [~] Add a no-download stock-window task planner. It emits validated,
+- [x] Change FINALIZE into durable TaskGraph publication for independent
+  preparation tasks. `publishWorkerPreparations` atomically extends the graph
+  with one `video.prepare.window.v1` task per content identity, marks the
+  parent `WAITING_PREPARATION`/`runtime_assets_pending`, and
+  `completeWorkerPreparations` rewrites the assembly plan only after every
+  certificate is verified. Final packet-copy assembly stays one task when all
+  fragments are ready; FINALIZE processes independent candidates with a
+  bounded parallel pool and separate download/probe/encode semaphores.
+- [x] Add a no-download stock-window task planner. It emits validated,
   content-identity-deduplicated `video.prepare.window.v1` requests from the
-  immutable plan and rejects windows whose source SHA/size are unknown. It is
-  not yet called from FINALIZE; unknown source identity still needs a worker
-  identity-discovery path before all Master materialization can be removed.
-- [~] FINALIZE queue execution is now bounded parallel across independent
+  immutable plan. It is called from FINALIZE. A positive declared source size
+  is required; an unknown SHA emits a deterministic discovery request instead
+  of failing or downloading on the Master.
+- [x] Worker-side source identity discovery. A discovery request carries the
+  source asset/Drive identity, declared size and window but no SHA. The worker
+  resolves only that source through the verified download path, binds the
+  discovered SHA into its certificate, and publishes the resolved request so
+  the Master registers the fragment under the content identity. The contract
+  refuses a discovery request that also declares a SHA, and the FINALIZE
+  coordinator validates the discovered SHA against the source size.
+- [x] FINALIZE queue execution is bounded parallel across independent
   candidates, with an SQLite atomic `QUEUED→RUNNING` claim and refreshed spec
-  hash so multiple Master instances cannot prepare the same candidate. This
-  removes head-of-line blocking between jobs. Shared download/probe and window
-  encode semaphores keep concurrent candidates within separate global resource
-  budgets. The required per-window worker TaskGraph fan-out remains open;
-  current FINALIZE still materializes missing windows through the Master.
-- [~] Reuse fragment certification evidence keyed by blob SHA-256, encoder
+  hash so multiple Master instances cannot prepare the same candidate. Shared
+  download/probe and window encode semaphores keep concurrent candidates
+  within separate global resource budgets. Per-window worker TaskGraph
+  fan-out now lands through `publishWorkerPreparations`; when worker planning
+  is wired, the Master fallback is disabled and a residual stock plan fails
+  closed instead of downloading on the control plane.
+- [x] Reuse fragment certification evidence keyed by blob SHA-256, encoder
   build revision and profile. Worker `video.prepare.window.v1` stores immutable
   content-addressed blobs and output evidence in persistent cache, rebinds the
   certificate to a new timeline, and warm reuse avoids encode, probe and SHA
-  rereads after stat/attestation checks. Master-side evidence persistence and
-  cross-worker artifact reuse through TaskGraph remain.
+  rereads after stat/attestation checks. Master-side fragments carry their
+  certificate in the source metadata; `LookupPreparedWindowAsset` lets
+  FINALIZE reuse a READY fragment from another job/worker before publishing a
+  preparation task, and the reused bindings are persisted in
+  `runtime_prepare_window_reuse` until the assembly plan is rewritten.
 - [x] Centralize the stable cache-key serialization for `video.prepare.window.v1`
   in the shared contract. Timeline revision/hash/placement are excluded from
   the content-preparation identity, while source bytes/window and output
@@ -130,43 +176,73 @@ worker image after implementation and verification are complete.
 
 ## P2 — transfer and publication overlap
 
-- [ ] Add media-aware HTTP Range fetching for supported MP4 sources. Read
-  container indexes and required sample ranges, including decoder pre-roll;
-  use a full-download fallback when the source format/server cannot safely
-  serve the requested ranges.
+- [x] Add media-aware HTTP Range fetching for supported MP4 sources
+  (`internal/mediarange`). It scans top-level boxes, parses the video track's
+  `moov/trak/stbl` (`stts`, `ctts`, `stsc`, `stsz`, `stco`/`co64`, `stss`),
+  resolves windows by composition time, applies a single-entry edit-list
+  offset, includes decoder pre-roll from the preceding sync sample and decodes
+  through the next sync sample. Only container metadata and those sample
+  ranges are written to an atomically renamed sparse file; ranges are merged
+  within 128 KiB. The opt-in `VELOX_SPARSE_SOURCE_FETCH` flag wires it into
+  `video.prepare.window.v1`; unsupported containers, fragmented MP4, servers
+  without Range support and any parse error fall back to the canonical full
+  download. Tests cover synthetic hole/requested-sample/fallback cases and a
+  real FFmpeg B-frame fixture whose sparse decode is compared to the full
+  source with `framemd5`.
 - [~] Progressive upload plumbing exists: the worker negotiates early upload
   only for a fragmented-container profile, streams immutable prefixes, and
   has resume/abort handling. The fMP4 profile is deliberately disabled until
   its 100-job benchmark gate passes; do not flip the flag before that evidence
-  exists. Remaining: run and record the gate against the final profile and
-  verify final MP4 publication semantics on production-like workers.
+  exists. The gate is now pinned fail-closed by
+  `shared/contract/canonical_video_profile_fmp4_gate_test.go`: missing, empty,
+  malformed, wrong-schema, under-sampled, uncertified or undated evidence all
+  return false, and even valid 100/100 evidence does not enable the profile
+  without the separate operator opt-in. Remaining: run and record the gate
+  against the final profile and verify final MP4 publication semantics on
+  production-like workers.
 
 ## P3 — overlay work
 
 - [ ] Composite visual layers in one pass when pixels must change. Remove
   avoidable intermediate MP4s and preserve the certified final video profile.
-  Current clips compilation refuses composite overlays without the Chronon
-  preparation path, and the native renderer does not support layers; implement
-  a certified single-pass compositor before routing these plans through it.
+  **Blocked by an explicit architecture decision, not by missing plumbing.**
+  `render_plan_parser_v1.cpp` and `v2.cpp` reject any plan carrying `layers`
+  with “layers are not supported by the native video renderer: compositing is
+  owned by the Chronon GPU backend”; v1 also states “Do NOT wire a native
+  compositor here: route layered plans to Chronon”. On the Go side,
+  `pkg/video/pipelines/clips/compiler.go` rejects composite overlays with
+  “composite overlays require Chronon prepared fragments … native Velox layers
+  are unsupported”. Implementing P3 in this repository would contradict those
+  fail-closed guards; it requires the separate Chronon backend and is therefore
+  not implemented here.
 
 ## Completion gate
 
 - [~] Add/adjust focused tests for retry reuse, cache hits/misses, snapshot
   stability, executor validation, TaskGraph recovery, certification evidence,
-  HTTP Range fallback, progressive upload and overlay equivalence.
+  HTTP Range fallback, progressive upload and overlay equivalence. Sparse
+  fetching now has synthetic range/hole/fallback tests plus a real FFmpeg
+  B-frame `framemd5` equivalence test; the fMP4 gate has fail-closed tests;
+  staging and warm-cache attestation have focused tests. Overlay equivalence
+  remains blocked with P3.
 - [~] Focused tests for assembly retry reuse/ineligibility, stock-pool
   snapshot and warm-cache paths pass
-  (`go test ./contract`, `go test ./internal/assets`); worker resolver/executor
+  (`go test ./contract`, `go test ./internal/mediarange`, focused
+  `./internal/assets` and `./internal/worker`); worker resolver/executor
   packages pass (`go test ./internal/worker ./internal/taskrunner/executors`).
   The new worker window executor is also exercised against real local FFmpeg/
   ffprobe output, including a cross-job warm-cache hit with timeline rebinding.
   SQLite FINALIZE claims pass 10 concurrent repetitions with exactly one
-  successful claimant, and FINALIZE handler tests pass. Full-module
-  verification and performance measurements remain open.
-- [ ] Run the required full-module verification and cold/warm/retry
-  performance measurements. Record task counts, bytes by host, disk reads,
-  encoded frames, cache-hit ratio, `created→ready`, `ready→first byte` and
-  `first byte→published` p50/p95.
+  successful claimant, and FINALIZE handler tests pass. The full DataServer
+  assets suite is green; the exact-window filter now forces CFR, so a 75-frame
+  window reports 3.125 s instead of the muxer's last-PTS duration of
+  3.083333 s. Full-module verification is green; performance measurements
+  remain open.
+- [~] Full-module verification is green (`go vet ./...`, `go build ./...`,
+  `go test -count=1 ./...`). Cold/warm/retry performance measurements remain:
+  record task counts, bytes by host, disk reads, encoded frames, cache-hit
+  ratio, `created→ready`, `ready→first byte` and `first byte→published`
+  p50/p95.
 - [ ] Review the complete diff and commit the cleanup and roadmap changes.
 - [ ] Push the finished source once the implementation is ready, wait for
   worker-image certification, and record its immutable digest.

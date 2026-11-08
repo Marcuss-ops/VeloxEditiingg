@@ -90,6 +90,7 @@ func TestCompileRenderPlanV2FromManifest_RequiresFinalAudio(t *testing.T) {
 }
 
 func TestCompileRenderPlanV2FromManifest_ExplicitProfilePopulatesOutputContract(t *testing.T) {
+	t.Setenv("VELOX_FMP4_GATE_EVIDENCE", writeFMP4GateEvidence(t, FMP4GateMinimumJobs, FMP4GateMinimumJobs))
 	t.Setenv("VELOX_FMP4_STREAM_PROFILE", "1")
 	const videoSHA = "1111111111111111111111111111111111111111111111111111111111111111"
 	const audioSHA = "2222222222222222222222222222222222222222222222222222222222222222"

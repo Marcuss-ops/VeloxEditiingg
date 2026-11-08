@@ -59,28 +59,6 @@ type ClipLease struct {
 	bindings  []workercache.LeaseBinding
 }
 
-// AssetKeys returns a copy of the asset-key slice in the order they
-// were acquired. Useful for log lines and metrics labels; callers
-// must NOT mutate the returned slice (defensive copy).
-func (l *ClipLease) AssetKeys() []string {
-	if l == nil {
-		return nil
-	}
-	out := make([]string, len(l.assetKeys))
-	copy(out, l.assetKeys)
-	return out
-}
-
-// Bindings returns the validated physical bindings captured at acquisition.
-func (l *ClipLease) Bindings() []workercache.LeaseBinding {
-	if l == nil {
-		return nil
-	}
-	out := make([]workercache.LeaseBinding, len(l.bindings))
-	copy(out, l.bindings)
-	return out
-}
-
 // ValidateReady is the last cache boundary before an executor starts. It
 // rechecks the lease-owned mapping and physical file, and rejects any change
 // from the binding captured during acquisition.

@@ -1,3 +1,105 @@
+## [Unreleased] - 2026-11-08
+
+### Added — media-aware sparse MP4 source fetch (opt-in)
+
+- New worker package `internal/mediarange` materializes only the MP4 byte
+  ranges needed to decode one source window. It scans top-level boxes, parses
+  the video track's `moov/trak/stbl` sample tables (`stts`, `ctts`, `stsc`,
+  `stsz`, `stco`/`co64`, `stss`), resolves the window by composition time,
+  applies a single-entry edit-list presentation offset, includes decoder
+  pre-roll from the preceding sync sample and decodes through the next sync
+  sample. The sparse file is written to a unique sibling and atomically renamed.
+- `video.prepare.window.v1` uses it only when `VELOX_SPARSE_SOURCE_FETCH` is
+  enabled. Unsupported containers (including fragmented MP4), servers that
+  ignore Range, and any parse/transfer error fall back to the canonical full
+  download, which still verifies the declared SHA-256 and size. Sparse
+  bindings are marked `Sparse` so executors never emit a full-file hash for a
+  file whose holes are not real source bytes.
+- Tests: synthetic range/hole/fallback cases and a real FFmpeg fixture with
+  B-frames whose sparse decode is compared against the full source with
+  `framemd5`; parser coverage includes the media timescale (`mdhd`), `ctts`
+  and an edit-list offset.
+
+### Changed — prepared-fragment staging and warm-cache verification
+
+- Prepared fragments are staged with a filesystem clone (FICLONE), then a hard
+  link, then a streaming-copy fallback. The previous unconditional second copy
+  into staging is gone; the staged bytes are hashed once and size drift is
+  rejected.
+- Warm worker-cache hits use a stat-based attestation (`dev/ino/size/mtime/`
+  `ctime`) plus a 256 KiB head+tail sampled fingerprint for filesystems with
+  coarse timestamps. A valid attestation skips the full-file SHA-256 scan and
+  is invalidated on mutation.
+
+### Fixed — exact window duration matches the declared frame count
+
+- `exactWindowArgs` now appends the canonical `fps` filter after `setpts`. The
+  MP4 muxer previously derived the stream duration from the last PTS, so a
+  75-frame window reported 3.083333 s (74 frames' worth) instead of 3.125 s.
+  `setpts` already spaces the frames on the canonical clock, so `fps` only
+  stamps their durations; the output frame count is unchanged. The focused
+  75-frame stock-window test and the full `internal/assets` suite are green.
+
+### Fixed — canonical job retry transition aligned with the state machine
+
+- `TestCanTransition` treated `FAILED → PENDING` as terminal, but the canonical
+  registry explicitly registers that edge as the operator `JOB_MANUAL_RETRY`
+  transition. The test and the `transitions.go` comment now match the intended
+  state machine; the full-module gate is green.
+
+### Removed — dead worker and intake code
+
+- Removed the worker HTTP-trace/metrics subsystem (`recordAssetHTTPTrace`,
+  `snapshotAssetHTTPMetrics`, `newAssetHTTPTrace`, `assetHTTPMetrics`) and the
+  uncalled `CleanupAssetPartials` wrapper; only the shared `assetTransport`
+  remains. `assetPath` mutators, `ClipLease.AssetKeys/Bindings`,
+  `RecordNetworkBytes`, `Worker.acquireResumePublisher`,
+  `Worker.canAcceptPhase`, `WaitForShutdown` and the
+  `engine_metrics_projection` spawn/usage emitter had no callers and are gone.
+- Removed the duplicate fMP4 gate test (the canonical fail-closed suite
+  remains) and the obsolete `validateSubmitScenes` path. The live
+  `ValidateSubmitJobRequest` supersedes it and rejects `scenes` outright as a
+  legacy input, so the old validator could never run. The GPU sampler test now
+  compares against `detectGPU()` instead of assuming a GPU-less host.
+
+### Tests — fMP4 gate remains fail-closed
+
+- Added `shared/contract/canonical_video_profile_fmp4_gate_test.go`: missing,
+  empty, malformed, wrong-schema, under-sampled (<100 jobs), uncertified and
+  undated evidence all keep the gate closed; 100/100 certified evidence still
+  requires the separate `VELOX_FMP4_STREAM_PROFILE` opt-in. The profile stays
+  disabled pending the production benchmark.
+- Verification: `bash scripts/ci/pre-removal-verify.sh` is green — full-module
+  `go vet ./...`, `go build ./...` and `go test -count=1 ./...` (552 s after
+  the dead-code cleanup),
+  including the real-FFmpeg asset suite and the sparse `framemd5` test.
+
+### Changed — worker source identity discovery and Master fragment reuse
+
+- FINALIZE no longer fails, and never downloads on the Master, when a Drive
+  stock window has no certified source SHA. `PlanDriveStockWindowTasks` emits
+  a deterministic `source_identity_discovery` request from the declared
+  asset/Drive identity, size and window. The worker resolves only that source
+  through the verified download path, binds the discovered SHA into its
+  certificate, and publishes the resolved request; the Master validates the
+  discovered identity and registers the fragment by content. A discovery
+  request that also declares a SHA is rejected, and the contract refuses a
+  discovery certificate without a discovered SHA.
+- When worker preparation is wired, the FINALIZE fallback
+  (`PrepareDriveStockWindows` on the Master) is disabled. A residual Drive
+  stock plan with an empty preparation plan now fails closed instead of
+  silently materializing bytes on the control plane.
+- FINALIZE consults `LookupPreparedWindowAsset` before publishing preparation
+  tasks. A READY fragment registered by another job or worker is reused
+  directly; reused bindings are persisted in `runtime_prepare_window_reuse`
+  and merged with worker certificates when the assembly plan is rewritten.
+  This closes cross-worker reuse without re-encoding, re-probing or
+  re-transferring the source.
+- Tests: discovery contract/certificate binding, planner discovery without a
+  download, FINALIZE reuse partitioning and persisted bindings, and a real
+  FFmpeg 7 run of the prepared-window executor. Full-module verification is
+  recorded in the roadmap.
+
 ## [1.4.52] - 2026-10-31
 
 ### Fixed — copy-only audio alignment with frame-rounded fragments

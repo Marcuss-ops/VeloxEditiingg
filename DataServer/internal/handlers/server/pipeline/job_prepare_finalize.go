@@ -262,7 +262,7 @@ func (h *Handlers) FinalizeJob() gin.HandlerFunc {
 			c.JSON(http.StatusAccepted, gin.H{"ok": true, "job_id": jobID, "phase": "FINALIZE", "dispatch_status": "stock_preparation_queued", "finalization_status": runtimeFinalizeQueued, "idempotency_key": req.IdempotencyKey})
 			return
 		}
-		patch, err := buildRuntimeFinalizePatch(c.Request.Context(), jobID, planJSON, req, current, nil)
+		patch, err := buildRuntimeFinalizePatch(c.Request.Context(), jobID, planJSON, req, current, nil, true)
 		if err != nil {
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"ok": false, "error": "invalid_runtime_assets", "message": err.Error()})
 			return

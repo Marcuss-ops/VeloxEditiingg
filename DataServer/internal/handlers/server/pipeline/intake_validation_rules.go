@@ -82,19 +82,6 @@ func isAcceptedAssetURL(raw string) bool {
 // when it recomputes the SHA-256 of the downloaded manifest JSON.
 var manifestRefSHA256Regexp = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
-// containsString is a tiny slice-membership helper. Used by the
-// manifest_ref.schema_version closed-enum check; inlined here so
-// the validator has no third-party dependency on top of stdlib +
-// gin (the project's existing dependency surface).
-func containsString(haystack []string, needle string) bool {
-	for _, s := range haystack {
-		if s == needle {
-			return true
-		}
-	}
-	return false
-}
-
 // SubmitJobValidationError is the structured 4xx envelope returned by
 // ValidateSubmitJobRequest when one (or more) of the cross-field
 // constraints on SubmitJobRequest / SubmitScene / SubmitDeliveryPlanEntry

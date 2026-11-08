@@ -2,8 +2,6 @@ package assets
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -320,17 +318,6 @@ func (s *AssetService) registerPreparedVideoFile(ctx context.Context, preparedPa
 	if err != nil {
 		return nil, fmt.Errorf("segment staging path: %w", err)
 	}
-	staging, err := os.OpenFile(stagingPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("create segment staging file: %w", err)
-	}
-	input, err := os.Open(preparedPath)
-	if err != nil {
-		_ = staging.Close()
-		_ = s.blobStore.RemoveStaging(stagingPath)
-		return nil, fmt.Errorf("open prepared segment: %w", err)
-	}
-	hasher := sha256.New()
 	maxBytes := int64(0)
 	if s.security != nil {
 		maxBytes = s.security.Policy().MaxBytes
@@ -338,27 +325,17 @@ func (s *AssetService) registerPreparedVideoFile(ctx context.Context, preparedPa
 	if maxBytes <= 0 {
 		maxBytes = 256 * 1024 * 1024
 	}
-	// A4-3: pooled 1 MiB copy buffer (velox-shared/iopool) — the staging
-	// copy runs per segment; a fresh buffer per segment churns GC under
-	// batch segmenting.
-	pooled := iopool.Get()
-	defer iopool.Put(pooled)
-	written, copyErr := io.CopyBuffer(io.MultiWriter(staging, hasher), io.LimitReader(input, maxBytes+1), pooled[:])
-	closeInputErr := input.Close()
-	closeStagingErr := staging.Close()
-	if copyErr != nil || closeInputErr != nil || closeStagingErr != nil {
-		_ = s.blobStore.RemoveStaging(stagingPath)
-		if copyErr != nil {
-			return nil, fmt.Errorf("stage prepared segment: %w", copyErr)
-		}
-		if closeInputErr != nil {
-			return nil, fmt.Errorf("close prepared segment: %w", closeInputErr)
-		}
-		return nil, fmt.Errorf("close segment staging file: %w", closeStagingErr)
+	sourceInfo, err := os.Stat(preparedPath)
+	if err != nil {
+		return nil, fmt.Errorf("open prepared segment: %w", err)
 	}
-	if written > maxBytes {
-		_ = s.security.Quarantine(stagingPath, inputsecurity.KindClip, inputsecurity.ErrDownloadTooLarge, "prepared video segment exceeded the input byte limit")
+	if sourceInfo.Size() > maxBytes {
 		return nil, inputsecurity.NewError(inputsecurity.KindClip, inputsecurity.ErrDownloadTooLarge, "prepared video segment exceeds the input byte limit", nil)
+	}
+	written, sha256Hex, _, err := stagePreparedFragment(preparedPath, stagingPath, maxBytes, true)
+	if err != nil {
+		_ = s.blobStore.RemoveStaging(stagingPath)
+		return nil, fmt.Errorf("stage prepared segment: %w", err)
 	}
 	if written <= 0 {
 		_ = s.blobStore.RemoveStaging(stagingPath)
@@ -374,7 +351,6 @@ func (s *AssetService) registerPreparedVideoFile(ctx context.Context, preparedPa
 		_ = s.blobStore.RemoveStaging(stagingPath)
 		return nil, fmt.Errorf("sync segment staging file: %w", err)
 	}
-	sha256Hex := hex.EncodeToString(hasher.Sum(nil))
 	if plan.ExpectedOutputSizeBytes > 0 && written != plan.ExpectedOutputSizeBytes {
 		_ = s.blobStore.RemoveStaging(stagingPath)
 		return nil, fmt.Errorf("prepared segment size differs from worker certificate")

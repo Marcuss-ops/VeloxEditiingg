@@ -36,6 +36,7 @@ func TestEarlyUploadEligibleRequiresFMP4CompiledPlan(t *testing.T) {
 	// An append-only plan can only exist while the streaming profile is
 	// registered and enabled: the compiler resolves output.profile_id through
 	// the same gate, so this is the state in which such a job is executable.
+	enableFMP4GateForTest(t)
 	t.Setenv("VELOX_FMP4_STREAM_PROFILE", "1")
 	if earlyUploadEligible(nil) {
 		t.Fatal("nil task must not be eligible")
@@ -58,6 +59,7 @@ func TestEarlyUploadEligibleRequiresFMP4CompiledPlan(t *testing.T) {
 // job that asked for the streaming profile under any other executor — or under
 // a versioned ID — could never overlap its upload.
 func TestEarlyUploadEligibleIsPlanDrivenNotExecutorDriven(t *testing.T) {
+	enableFMP4GateForTest(t)
 	t.Setenv("VELOX_FMP4_STREAM_PROFILE", "1")
 	fragmented := executorTaskSpecForEarlyUploadTest(t, true)
 	progressive := executorTaskSpecForEarlyUploadTest(t, false)

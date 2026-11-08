@@ -14,7 +14,7 @@ import "velox-server/internal/statemachine"
 //	                        CANCELLED (worker drained / admin)
 //	RETRY_WAIT           → PENDING, FAILED, CANCELLED
 //	SUCCEEDED            → (terminal)
-//	FAILED               → (terminal)
+//	FAILED               → PENDING (operator manual retry), otherwise terminal
 //	CANCELLED            → (terminal)
 //
 // PR-02: AWAITING_ARTIFACT was inserted between RUNNING and SUCCEEDED.

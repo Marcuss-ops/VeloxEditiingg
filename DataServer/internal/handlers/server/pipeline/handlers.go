@@ -7,7 +7,6 @@ import (
 	"velox-server/internal/config"
 	"velox-server/internal/creatorflow"
 	"velox-server/internal/credentials"
-	"velox-server/internal/inputsecurity"
 	"velox-server/internal/jobs"
 	"velox-server/internal/jobs/enqueue"
 	targetpublishing "velox-server/internal/publishing"
@@ -34,7 +33,6 @@ type Handlers struct {
 	intakeSink        CreatorIntakeSink
 	assetService      *voiceoverassets.AssetService
 	stockFolderLister StockFolderLister
-	inputPolicy       *inputsecurity.Policy
 	credentialVault   *credentials.Vault
 	pipelineRuns      PipelineRunService
 	finalizeMu        sync.Mutex
@@ -48,21 +46,6 @@ type JobsDeps struct {
 	Writer     jobs.Writer
 	CmdMgr     *workers.CommandManager
 	TaskReader taskgraph.Reader
-}
-
-func NewHandlers(cfg *config.Config, enqueuer *enqueue.Enqueuer, client *remoteengine.Client) *Handlers {
-	return HandlersFactory(cfg, enqueuer, client, nil, nil, nil, nil)
-}
-
-func NewHandlersFull(
-	cfg *config.Config,
-	enqueuer *enqueue.Enqueuer,
-	client *remoteengine.Client,
-	jobsReader jobs.Reader,
-	jobsWriter jobs.Writer,
-	cmdMgr *workers.CommandManager,
-) *Handlers {
-	return HandlersFactory(cfg, enqueuer, client, nil, jobsReader, jobsWriter, cmdMgr)
 }
 
 func NewHandlersWithResolver(
@@ -101,13 +84,6 @@ func HandlersFactory(
 		pipelineRuns: newPipelineRunService(nil, client, resolver),
 	}
 	h.targetResolver = targetpublishing.NewTargetResolver(h.socialClient, h.store.Delivery())
-	return h
-}
-
-func (h *Handlers) WithJobsDeps(reader jobs.Reader, writer jobs.Writer, cmdMgr *workers.CommandManager) *Handlers {
-	h.jobs.Reader = reader
-	h.jobs.Writer = writer
-	h.jobs.CmdMgr = cmdMgr
 	return h
 }
 
@@ -162,13 +138,6 @@ func (h *Handlers) WithAssetService(svc *voiceoverassets.AssetService) *Handlers
 // folder-backed stock reference into its video files at creator intake.
 func (h *Handlers) WithStockFolderLister(lister StockFolderLister) *Handlers {
 	h.stockFolderLister = lister
-	return h
-}
-
-// WithInputSecurityPolicy is intended for hermetic tests and controlled
-// composition roots. Production handlers use the fail-closed default policy.
-func (h *Handlers) WithInputSecurityPolicy(policy inputsecurity.Policy) *Handlers {
-	h.inputPolicy = &policy
 	return h
 }
 

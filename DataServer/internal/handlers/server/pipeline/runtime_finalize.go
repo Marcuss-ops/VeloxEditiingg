@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +24,7 @@ const (
 	runtimeFinalizeErrorKey           = "runtime_finalize_error"
 	runtimePrepareTaskIDsKey          = "runtime_prepare_task_ids"
 	runtimePrepareTasksKey            = "runtime_prepare_window_tasks"
+	runtimePrepareWindowReuseKey      = "runtime_prepare_window_reuse"
 	runtimeFinalizeQueued             = "QUEUED"
 	runtimeFinalizeRunning            = "RUNNING"
 	runtimeFinalizeSucceeded          = "SUCCEEDED"
@@ -55,6 +57,14 @@ type RuntimeStockWindowPreparer interface {
 
 type RuntimeStockWindowTaskPlanner interface {
 	PlanDriveStockWindowTasks(string, []map[string]interface{}) ([]contract.VideoPrepareWindowTaskV1, error)
+}
+
+// RuntimePreparedWindowCache exposes fragments already registered on this
+// Master. FINALIZE consults it before publishing new preparation tasks so a
+// window prepared for another job or another worker is reused instead of
+// re-encoded.
+type RuntimePreparedWindowCache interface {
+	LookupPreparedWindowAsset(context.Context, string) (*voiceoverassets.PreparedWindowAssetBinding, error)
 }
 
 type RuntimePreparedWindowPlanRewriter interface {
@@ -243,13 +253,32 @@ func (p *RuntimeFinalizationProcessor) processOne(ctx context.Context, candidate
 			return p.fail(candidate, fmt.Errorf("plan worker stock-window preparation: %w", planErr))
 		}
 		if len(preparations) > 0 {
-			if err := p.publishWorkerPreparations(ctx, candidate, bindings, preparations); err != nil {
+			reuse, misses, reuseErr := p.reusablePreparations(ctx, preparations)
+			if reuseErr != nil {
+				return p.fail(candidate, reuseErr)
+			}
+			if len(misses) == 0 {
+				patch, err := p.rewritePreparedWindowPlan(ctx, candidate, planJSON, req, current, bindings, reuse)
+				if err != nil {
+					return p.fail(candidate, err)
+				}
+				return p.commitFinalization(ctx, candidate, patch)
+			}
+			if err := p.publishWorkerPreparations(ctx, candidate, bindings, misses, reuse); err != nil {
 				return p.fail(candidate, err)
 			}
 			return nil
 		}
 	}
-	patch, err := buildRuntimeFinalizePatch(ctx, candidate.JobID, planJSON, req, current, p.assets)
+	// Once worker preparation is wired, the control plane must never
+	// materialize Drive stock bytes as a fallback: an empty preparation plan
+	// with remaining stock is a contract violation, not an invitation to
+	// download on the Master.
+	allowMasterStock := true
+	if _, ok := p.assets.(RuntimeStockWindowTaskPlanner); ok {
+		allowMasterStock = false
+	}
+	patch, err := buildRuntimeFinalizePatch(ctx, candidate.JobID, planJSON, req, current, p.assets, allowMasterStock)
 	if err != nil {
 		return p.fail(candidate, err)
 	}
@@ -297,7 +326,45 @@ func runtimeFinalizeBindings(req FinalizeJobRequest, current map[string]interfac
 	return bindings, err
 }
 
-func (p *RuntimeFinalizationProcessor) publishWorkerPreparations(ctx context.Context, candidate taskgraph.RuntimeFinalizationCandidate, bindings []map[string]interface{}, preparations []contract.VideoPrepareWindowTaskV1) error {
+func (p *RuntimeFinalizationProcessor) reusablePreparations(ctx context.Context, preparations []contract.VideoPrepareWindowTaskV1) (map[string]voiceoverassets.PreparedWindowAssetBinding, []contract.VideoPrepareWindowTaskV1, error) {
+	reuse := make(map[string]voiceoverassets.PreparedWindowAssetBinding, len(preparations))
+	cache, ok := p.assets.(RuntimePreparedWindowCache)
+	if !ok || isNilInterface(cache) {
+		return reuse, preparations, nil
+	}
+	misses := make([]contract.VideoPrepareWindowTaskV1, 0, len(preparations))
+	for _, preparation := range preparations {
+		// A source whose SHA is not yet certified cannot be looked up by
+		// content identity; it must go through worker identity discovery.
+		if preparation.Request.SourceIdentityDiscovery {
+			misses = append(misses, preparation)
+			continue
+		}
+		binding, err := cache.LookupPreparedWindowAsset(ctx, preparation.Identity)
+		if err != nil {
+			return nil, nil, fmt.Errorf("runtime finalizer: lookup certified fragment %s: %w", preparation.Identity, err)
+		}
+		if binding == nil {
+			misses = append(misses, preparation)
+			continue
+		}
+		if strings.TrimSpace(binding.AssetID) == "" || !validPreparedWindowBinding(*binding) {
+			return nil, nil, fmt.Errorf("runtime finalizer: cached fragment %s has an invalid binding", preparation.Identity)
+		}
+		reuse[preparation.Identity] = *binding
+	}
+	return reuse, misses, nil
+}
+
+func validPreparedWindowBinding(binding voiceoverassets.PreparedWindowAssetBinding) bool {
+	if binding.SizeBytes <= 0 || len(binding.SHA256) != 64 || strings.ToLower(binding.SHA256) != binding.SHA256 {
+		return false
+	}
+	_, err := hex.DecodeString(binding.SHA256)
+	return err == nil
+}
+
+func (p *RuntimeFinalizationProcessor) publishWorkerPreparations(ctx context.Context, candidate taskgraph.RuntimeFinalizationCandidate, bindings []map[string]interface{}, preparations []contract.VideoPrepareWindowTaskV1, reuse map[string]voiceoverassets.PreparedWindowAssetBinding) error {
 	if p.expander == nil {
 		return errors.New("runtime finalizer: atomic task graph extension is unavailable")
 	}
@@ -327,6 +394,9 @@ func (p *RuntimeFinalizationProcessor) publishWorkerPreparations(ctx context.Con
 		"runtime_assets":         bindings,
 		"runtime_assets_pending": true,
 	}
+	if len(reuse) > 0 {
+		patch[runtimePrepareWindowReuseKey] = reuse
+	}
 	if _, err := p.expander.Extend(ctx, candidate.TaskID, additions, dependencies, patch); err != nil {
 		return fmt.Errorf("runtime finalizer: publish worker preparation DAG: %w", err)
 	}
@@ -337,8 +407,8 @@ func (p *RuntimeFinalizationProcessor) publishWorkerPreparations(ctx context.Con
 
 func (p *RuntimeFinalizationProcessor) completeWorkerPreparations(ctx context.Context, candidate taskgraph.RuntimeFinalizationCandidate, planJSON string, req FinalizeJobRequest, current map[string]interface{}, bindings []map[string]interface{}, rawTasks interface{}) (map[string]interface{}, error) {
 	planner, planOK := p.assets.(RuntimeStockWindowTaskPlanner)
-	rewriter, rewriteOK := p.assets.(RuntimePreparedWindowPlanRewriter)
-	if !planOK || !rewriteOK || p.evidence == nil {
+	_, rewriteOK := p.assets.(RuntimePreparedWindowPlanRewriter)
+	if !planOK || !rewriteOK || isNilInterface(p.evidence) {
 		return nil, errors.New("runtime finalizer: worker preparation result recovery is not configured")
 	}
 	encoded, err := json.Marshal(rawTasks)
@@ -395,8 +465,52 @@ func (p *RuntimeFinalizationProcessor) completeWorkerPreparations(ctx context.Co
 			AssetID: response.RegisteredAssetID, SHA256: certificate.OutputSHA256, SizeBytes: certificate.OutputSizeBytes,
 		}
 	}
-	if len(results) != len(identityToTask) {
-		return nil, fmt.Errorf("runtime finalizer: recovered %d of %d successful prepared-window certificates", len(results), len(identityToTask))
+	reuse, err := decodePreparedWindowReuse(current[runtimePrepareWindowReuseKey])
+	if err != nil {
+		return nil, err
+	}
+	for identity, binding := range reuse {
+		if _, planned := byIdentity[identity]; !planned {
+			return nil, fmt.Errorf("runtime finalizer: reused preparation %q is no longer part of the immutable plan", identity)
+		}
+		if strings.TrimSpace(binding.AssetID) == "" || !validPreparedWindowBinding(binding) {
+			return nil, fmt.Errorf("runtime finalizer: reused preparation %q has an invalid binding", identity)
+		}
+		results[identity] = binding
+	}
+	if len(results) != len(byIdentity) {
+		return nil, fmt.Errorf("runtime finalizer: recovered %d of %d prepared windows", len(results), len(byIdentity))
+	}
+	return p.rewritePreparedWindowPlan(ctx, candidate, planJSON, req, current, bindings, results)
+}
+
+func decodePreparedWindowReuse(raw interface{}) (map[string]voiceoverassets.PreparedWindowAssetBinding, error) {
+	out := make(map[string]voiceoverassets.PreparedWindowAssetBinding)
+	if raw == nil {
+		return out, nil
+	}
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("runtime finalizer: encode reused preparation bindings: %w", err)
+	}
+	if err := json.Unmarshal(encoded, &out); err != nil {
+		return nil, fmt.Errorf("runtime finalizer: decode reused preparation bindings: %w", err)
+	}
+	return out, nil
+}
+
+func (p *RuntimeFinalizationProcessor) rewritePreparedWindowPlan(
+	ctx context.Context,
+	candidate taskgraph.RuntimeFinalizationCandidate,
+	planJSON string,
+	req FinalizeJobRequest,
+	current map[string]interface{},
+	bindings []map[string]interface{},
+	results map[string]voiceoverassets.PreparedWindowAssetBinding,
+) (map[string]interface{}, error) {
+	rewriter, ok := p.assets.(RuntimePreparedWindowPlanRewriter)
+	if !ok || isNilInterface(rewriter) {
+		return nil, errors.New("runtime finalizer: prepared-window plan rewriter is not configured")
 	}
 	plan, planHash, retainedBindings, err := rewriter.RewriteDriveStockPlanFromWorkerResults(planJSON, bindings, results)
 	if err != nil {
@@ -407,7 +521,7 @@ func (p *RuntimeFinalizationProcessor) completeWorkerPreparations(ctx context.Co
 	}
 	req.RuntimePayload[contract.PayloadKeyCompiledRenderPlanJSON] = plan
 	req.RuntimePayload[contract.PayloadKeyCompiledRenderPlanSHA] = planHash
-	patch, err := buildRuntimeFinalizePatch(ctx, candidate.JobID, plan, req, current, p.assets)
+	patch, err := buildRuntimeFinalizePatch(ctx, candidate.JobID, plan, req, current, p.assets, false)
 	if err != nil {
 		return nil, err
 	}
@@ -416,6 +530,7 @@ func (p *RuntimeFinalizationProcessor) completeWorkerPreparations(ctx context.Co
 	patch["runtime_assets"] = retainedBindings
 	patch[runtimePrepareTaskIDsKey] = nil
 	patch[runtimePrepareTasksKey] = nil
+	patch[runtimePrepareWindowReuseKey] = nil
 	return patch, nil
 }
 
@@ -442,6 +557,7 @@ func buildRuntimeFinalizePatch(
 	req FinalizeJobRequest,
 	current map[string]interface{},
 	assets RuntimeStockWindowPreparer,
+	allowStockPreparation bool,
 ) (map[string]interface{}, error) {
 	bindings := append([]map[string]interface{}(nil), req.RuntimeAssets...)
 	var err error
@@ -476,6 +592,9 @@ func buildRuntimeFinalizePatch(
 		req.RuntimePayload["runtime_stock_pool_snapshot"] = stockPoolSnapshot
 	}
 	if preparedStockPlan {
+		if !allowStockPreparation {
+			return nil, errors.New("master stock-window preparation is disabled; the worker preparation plan produced no tasks")
+		}
 		if isNilInterface(assets) {
 			return nil, errors.New("stock window preparation capability is unavailable")
 		}

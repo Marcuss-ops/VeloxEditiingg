@@ -64,10 +64,6 @@ func (s ExecutionLeaseState) valid() bool {
 	}
 }
 
-func (s ExecutionLeaseState) terminal() bool {
-	return s == ExecutionCompleted || s == ExecutionFailed || s == ExecutionExpired || s == ExecutionReleased
-}
-
 // PreparationLease is a soft reservation. It may guide placement and
 // prefetch, but it never consumes an execution slot.
 type PreparationLease struct {

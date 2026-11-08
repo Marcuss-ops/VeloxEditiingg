@@ -6,7 +6,6 @@ package publication
 
 import (
 	"errors"
-	"fmt"
 	"strings"
 )
 
@@ -296,8 +295,4 @@ func cloneValue(value any) any {
 	default:
 		return value
 	}
-}
-
-func (e ValidationErrors) formatCount() string {
-	return fmt.Sprintf("%d validation error(s)", len(e))
 }

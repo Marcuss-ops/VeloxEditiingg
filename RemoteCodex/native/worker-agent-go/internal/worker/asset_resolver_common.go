@@ -81,20 +81,6 @@ type assetPath struct {
 	parts []assetPathPart
 }
 
-func (p *assetPath) pushField(field string) {
-	p.parts = append(p.parts, assetPathPart{field: field})
-}
-
-func (p *assetPath) pushIndex(index int) {
-	p.parts = append(p.parts, assetPathPart{index: index, isIndex: true})
-}
-
-func (p *assetPath) pop() {
-	if len(p.parts) > 0 {
-		p.parts = p.parts[:len(p.parts)-1]
-	}
-}
-
 func (p *assetPath) empty() bool {
 	return p == nil || len(p.parts) == 0
 }

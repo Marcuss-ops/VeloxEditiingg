@@ -39,6 +39,7 @@ func TestKnownCanonicalVideoProfileV1_FMP4DisabledByDefault(t *testing.T) {
 }
 
 func TestKnownCanonicalVideoProfileV1_FMP4AdmittedWhenEnabled(t *testing.T) {
+	t.Setenv("VELOX_FMP4_GATE_EVIDENCE", writeFMP4GateEvidence(t, FMP4GateMinimumJobs, FMP4GateMinimumJobs))
 	for _, value := range []string{"1", "true", "enabled", "TRUE", "Enabled"} {
 		t.Run(value, func(t *testing.T) {
 			t.Setenv("VELOX_FMP4_STREAM_PROFILE", value)

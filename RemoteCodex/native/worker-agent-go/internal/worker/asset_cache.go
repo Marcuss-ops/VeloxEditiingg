@@ -111,15 +111,25 @@ func cachedAssetPathTimedWithContext(ctx context.Context, cacheDir, expectedSHA2
 		// untouched and the caller re-downloads the asset.
 		recordCacheProjectionEvent(ctx, "eviction", 0, telemetry.StatusOK, "invalid", 0)
 		_ = os.Remove(cachedPath)
+		removeCacheAttestation(cacheDir, expectedSHA256)
 		return "", 0, nil
 	}
 	if info.Size() != expectedSizeBytes {
 		recordCacheProjectionEvent(ctx, "eviction", 0, telemetry.StatusOK, "invalid", 0)
 		_ = os.Remove(cachedPath)
+		removeCacheAttestation(cacheDir, expectedSHA256)
 		return "", 0, nil // size mismatch → re-download
 	}
+	// A verified blob can be revalidated without re-reading every byte: the
+	// attestation binds the digest to the inode identity that was hashed when
+	// the blob was promoted or first verified. Any metadata change invalidates
+	// it and forces the canonical full-file hash below.
+	if attestCacheBlob(cacheDir, cachedPath, expectedSHA256, info) {
+		recordCacheProjectionEvent(ctx, "hash_verify", 0, telemetry.StatusOK, "attested", 0)
+		return cachedPath, 0, nil
+	}
 	verifyStarted := time.Now()
-	actual, err := sha256File(cachedPath)
+	actual, err := sha256FileForCache(cachedPath)
 	verifyDuration := time.Since(verifyStarted)
 	verifyStatus := telemetry.StatusOK
 	if err != nil || actual != expectedSHA256 {
@@ -132,7 +142,13 @@ func cachedAssetPathTimedWithContext(ctx context.Context, cacheDir, expectedSHA2
 		// reacquiring it; never clear the entire cache.
 		recordCacheProjectionEvent(ctx, "eviction", 0, telemetry.StatusOK, "invalid", 0)
 		_ = os.Remove(cachedPath)
+		removeCacheAttestation(cacheDir, expectedSHA256)
 		return "", verifyDuration, nil // hash mismatch → re-download
+	}
+	// Bind the attestation to a fresh stat so a concurrent replacement cannot
+	// be attested under the digest of the bytes that were just read.
+	if fresh, statErr := os.Stat(cachedPath); statErr == nil && sameCacheIdentity(info, fresh) {
+		_ = writeCacheAttestation(cacheDir, cachedPath, expectedSHA256, fresh)
 	}
 	return cachedPath, verifyDuration, nil
 }
@@ -186,12 +202,6 @@ func markAssetPartialActive(path string) func() {
 // cleanupOrphanedAssetPartials removes stale partials left by a worker that
 // stopped without completing a transfer. Recent partials are retained so a
 // restarted worker can resume them with HTTP Range.
-// CleanupAssetPartials removes stale partial files for a worker cache. It is
-// safe to call during worker initialization and before individual transfers.
-func CleanupAssetPartials(cacheDir string, maxAge time.Duration) (int, error) {
-	return cleanupOrphanedAssetPartials(cacheDir, maxAge)
-}
-
 func cleanupOrphanedAssetPartials(cacheDir string, maxAge time.Duration) (int, error) {
 	if maxAge <= 0 {
 		maxAge = 24 * time.Hour

@@ -9,10 +9,6 @@ import (
 	"velox-worker-agent/internal/telemetry"
 )
 
-func (w *Worker) acquireResumePublisher(ctx context.Context, key string) (func(), error) {
-	return w.acquireResumePublishers(ctx, []string{key})
-}
-
 // tryAcquireResumePublishers is deliberately non-blocking. Resume is
 // opportunistic: foreground publication owns the artifact until it releases
 // its publisher slot and artifact lock, after which the next tick retries.
