@@ -34,7 +34,7 @@ func TestReusablePreparationsSplitsCacheHitsAndDiscoveryMisses(t *testing.T) {
 	miss := strings.Repeat("b", 64)
 	discovery := strings.Repeat("c", 64)
 	binding := voiceoverassets.PreparedWindowAssetBinding{
-		AssetID: "asset-hit", SHA256: strings.Repeat("d", 64), SizeBytes: 1024,
+		AssetID: "asset-hit", SHA256: strings.Repeat("d", 64), SizeBytes: 1024, ExtradataSHA256: strings.Repeat("e", 64),
 	}
 	cache := &runtimeFinalizeTestFragmentCache{hits: map[string]voiceoverassets.PreparedWindowAssetBinding{
 		hit: binding, discovery: binding,
@@ -69,7 +69,7 @@ func TestPublishWorkerPreparationsPersistsReuseBindings(t *testing.T) {
 	miss := strings.Repeat("a", 64)
 	reused := strings.Repeat("b", 64)
 	reuse := map[string]voiceoverassets.PreparedWindowAssetBinding{
-		reused: {AssetID: "asset-b", SHA256: strings.Repeat("c", 64), SizeBytes: 42},
+		reused: {AssetID: "asset-b", SHA256: strings.Repeat("c", 64), SizeBytes: 42, ExtradataSHA256: strings.Repeat("d", 64)},
 	}
 	preparations := []contract.VideoPrepareWindowTaskV1{{
 		Identity: miss, Request: contract.VideoPrepareWindowV1{Version: contract.VideoPrepareWindowVersion},

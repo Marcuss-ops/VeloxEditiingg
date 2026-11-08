@@ -12,9 +12,10 @@ import (
 )
 
 type PreparedWindowAssetBinding struct {
-	AssetID   string `json:"asset_id"`
-	SHA256    string `json:"sha256"`
-	SizeBytes int64  `json:"size_bytes"`
+	AssetID         string `json:"asset_id"`
+	SHA256          string `json:"sha256"`
+	SizeBytes       int64  `json:"size_bytes"`
+	ExtradataSHA256 string `json:"extradata_sha256"`
 }
 
 // PlanDriveStockWindowTasks converts unresolved Drive/HTTPS stock windows
@@ -158,7 +159,7 @@ func (s *AssetService) RewriteDriveStockPlanFromWorkerResults(planJSON string, r
 			identityBySegment[segmentID] = task.Identity
 		}
 		result, ok := results[task.Identity]
-		if !ok || strings.TrimSpace(result.AssetID) == "" || !validStockSourceSHA256(result.SHA256) || result.SizeBytes <= 0 {
+		if !ok || strings.TrimSpace(result.AssetID) == "" || !validStockSourceSHA256(result.SHA256) || result.SizeBytes <= 0 || !validStockSourceSHA256(result.ExtradataSHA256) {
 			return "", "", nil, fmt.Errorf("prepared stock window %q has no registered asset binding", task.Identity)
 		}
 	}
@@ -187,6 +188,7 @@ func (s *AssetService) RewriteDriveStockPlanFromWorkerResults(planJSON string, r
 				FrameCount: task.Request.OutputFrameCount, TimelineRevision: plan.TimelineRevision,
 				TimelineSHA256: plan.TimelineSHA256, TimelineStartFrame: task.Request.TimelineStartFrame,
 				FirstFrameKeyframe: true, ClosedGOP: profile.ClosedGOP,
+				ExtradataSHA256: result.ExtradataSHA256,
 			}
 			if existing, ok := newAssets[fragment.AssetID]; ok && (existing.SHA256 != fragment.SHA256 || existing.SizeBytes != fragment.SizeBytes) {
 				return "", "", nil, fmt.Errorf("registered fragment asset %q has conflicting identity", fragment.AssetID)

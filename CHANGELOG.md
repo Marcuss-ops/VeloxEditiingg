@@ -1,5 +1,16 @@
 ## [Unreleased] - 2026-11-08
 
+### Fixed — reject video fragments without canonical H.264 identity
+
+- A video asset is no longer treated as packet-copy-ready from profile, frame
+  count, keyframe and GOP metadata alone. Compiled plans must also carry the
+  certified `avcC`/SPS/PPS SHA-256 produced by the canonical worker encoder.
+- Legacy Master-prepared fragments without that evidence become worker
+  preparation cache misses. The worker prepares them against its encoder
+  reference, and certified cache hits retain the same extradata identity.
+- This prevents a late `media signature mismatch: extradata` failure during
+  assembly after prefetch has already completed.
+
 ### Changed — progressive fMP4 admission evidence
 
 - The fMP4 benchmark evidence schema is now version 2. The fail-closed gate

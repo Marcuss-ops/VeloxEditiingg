@@ -357,10 +357,14 @@ func (p *RuntimeFinalizationProcessor) reusablePreparations(ctx context.Context,
 }
 
 func validPreparedWindowBinding(binding voiceoverassets.PreparedWindowAssetBinding) bool {
-	if binding.SizeBytes <= 0 || len(binding.SHA256) != 64 || strings.ToLower(binding.SHA256) != binding.SHA256 {
+	if binding.SizeBytes <= 0 || len(binding.SHA256) != 64 || strings.ToLower(binding.SHA256) != binding.SHA256 || len(binding.ExtradataSHA256) != 64 || strings.ToLower(binding.ExtradataSHA256) != binding.ExtradataSHA256 {
 		return false
 	}
 	_, err := hex.DecodeString(binding.SHA256)
+	if err != nil {
+		return false
+	}
+	_, err = hex.DecodeString(binding.ExtradataSHA256)
 	return err == nil
 }
 
@@ -462,7 +466,7 @@ func (p *RuntimeFinalizationProcessor) completeWorkerPreparations(ctx context.Co
 			return nil, fmt.Errorf("runtime finalizer: prepared window %s was not registered on Master", identity)
 		}
 		results[identity] = voiceoverassets.PreparedWindowAssetBinding{
-			AssetID: response.RegisteredAssetID, SHA256: certificate.OutputSHA256, SizeBytes: certificate.OutputSizeBytes,
+			AssetID: response.RegisteredAssetID, SHA256: certificate.OutputSHA256, SizeBytes: certificate.OutputSizeBytes, ExtradataSHA256: certificate.OutputEvidence.ExtradataSHA256,
 		}
 	}
 	reuse, err := decodePreparedWindowReuse(current[runtimePrepareWindowReuseKey])

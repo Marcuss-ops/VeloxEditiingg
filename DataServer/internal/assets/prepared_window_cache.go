@@ -2,6 +2,7 @@ package assets
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -33,5 +34,19 @@ func (s *AssetService) LookupPreparedWindowAsset(ctx context.Context, identity s
 	if asset.Status != AssetStatusReady || !validStockSourceSHA256(asset.SHA256) || asset.SizeBytes <= 0 {
 		return nil, fmt.Errorf("prepared-window cache asset %q is not a certified READY fragment", identity)
 	}
-	return &PreparedWindowAssetBinding{AssetID: asset.AssetID, SHA256: asset.SHA256, SizeBytes: asset.SizeBytes}, nil
+	var metadata struct {
+		WindowCertificate struct {
+			OutputEvidence struct {
+				ExtradataSHA256 string `json:"extradata_sha256"`
+			} `json:"output_evidence"`
+		} `json:"window_certificate"`
+	}
+	if err := json.Unmarshal([]byte(asset.MetadataJSON), &metadata); err != nil {
+		return nil, nil
+	}
+	extradata := strings.ToLower(strings.TrimSpace(metadata.WindowCertificate.OutputEvidence.ExtradataSHA256))
+	if !validStockSourceSHA256(extradata) {
+		return nil, nil
+	}
+	return &PreparedWindowAssetBinding{AssetID: asset.AssetID, SHA256: asset.SHA256, SizeBytes: asset.SizeBytes, ExtradataSHA256: extradata}, nil
 }

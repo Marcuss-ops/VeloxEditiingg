@@ -256,7 +256,7 @@ func collectDriveStockWindows(
 }
 
 func videoSegmentAlreadyPrepared(plan contract.CompiledRenderPlanV2, segment contract.VideoSegmentV2, asset contract.AssetRefV2) bool {
-	return asset.ProfileID == plan.Output.ProfileID && segment.SourceInUS == 0 &&
+	return validStockSourceSHA256(asset.ExtradataSHA256) && asset.ProfileID == plan.Output.ProfileID && segment.SourceInUS == 0 &&
 		segment.SourceDurationUS == asset.DurationUS && asset.FrameCount == segment.FrameCount &&
 		asset.FirstFrameKeyframe && asset.ClosedGOP
 }

@@ -156,6 +156,10 @@ type AssetRefV2 struct {
 	TimelineStartFrame int64  `json:"timeline_start_frame,omitempty"`
 	FirstFrameKeyframe bool   `json:"first_frame_keyframe,omitempty"`
 	ClosedGOP          bool   `json:"closed_gop,omitempty"`
+	// ExtradataSHA256 pins the H.264 decoder configuration (MP4 avcC/SPS/PPS).
+	// Profile and GOP metadata alone do not make independently encoded clips
+	// safe to packet-copy into one output track.
+	ExtradataSHA256 string `json:"extradata_sha256,omitempty"`
 }
 
 // CanonicalJSON returns the deterministic V2 document used for persistence
