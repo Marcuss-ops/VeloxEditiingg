@@ -117,7 +117,7 @@ func (pg *PreparationGate) buildCertificate(reservationID string, assets []futur
 	}
 	h := pg.handler
 	h.preparedMu.RLock()
-	prepared := h.prepared[reservationID]
+	prepared := clonePreparedEvidence(h.prepared[reservationID])
 	h.preparedMu.RUnlock()
 
 	cert := preparedJobCertificate{
@@ -155,6 +155,20 @@ func (pg *PreparationGate) buildCertificate(reservationID string, assets []futur
 		}
 	}
 	return cert
+}
+
+// clonePreparedEvidence takes a detached snapshot. The inner evidence map is
+// concurrently updated as workers report asset readiness, so retaining its
+// map header after releasing preparedMu would race with MarkPreparedAsset.
+func clonePreparedEvidence(src map[string]preparedAssetEvidence) map[string]preparedAssetEvidence {
+	if len(src) == 0 {
+		return nil
+	}
+	copy := make(map[string]preparedAssetEvidence, len(src))
+	for key, evidence := range src {
+		copy[key] = evidence
+	}
+	return copy
 }
 
 // verifyCertificate checks whether a certificate matches the expected worker
@@ -268,7 +282,7 @@ func (pg *PreparationGate) reservationPrepared(ctx context.Context, workerID str
 	// Per-asset verification: every declared asset must have matching
 	// evidence from the authenticated worker.
 	h.preparedMu.RLock()
-	prepared := h.prepared[reservation.ReservationID]
+	prepared := clonePreparedEvidence(h.prepared[reservation.ReservationID])
 	h.preparedMu.RUnlock()
 	if len(prepared) == 0 {
 		return false, nil
@@ -463,9 +477,10 @@ func (pg *PreparationGate) ensurePrepared(ctx context.Context, workerID string, 
 		assets := pg.handler.futureAssetManifestsWithCatalog(ctx, reservation.Payload)
 		if len(assets) > 0 {
 			pg.handler.preparedMu.RLock()
-			preparedAssets := pg.handler.prepared[reservation.ReservationID]
+			prepared := pg.handler.prepared[reservation.ReservationID]
+			hasPreparedAssets := len(prepared) > 0
 			pg.handler.preparedMu.RUnlock()
-			if len(preparedAssets) > 0 {
+			if hasPreparedAssets {
 				_ = pg.store.UpdateReservationState(ctx, reservation.ReservationID, taskgraph.ReservationPreparing)
 			}
 		}
