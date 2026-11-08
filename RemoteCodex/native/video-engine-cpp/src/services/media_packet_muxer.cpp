@@ -258,16 +258,16 @@ bool preparePlan(const CopyOnlyMuxRequest& request, packet::InputSessionRegistry
     // equality here incorrectly rejects compatible stock sources.
     videoTarget->time_base_num = 0;
     videoTarget->time_base_den = 0;
-    // SPS/PPS extradata is intentionally not part of the cross-segment
-    // identity. Profile and level are decoder-advertised H.264 metadata and
-    // may differ between otherwise packet-compatible assets produced by
-    // different encoders. Keep the hard packet-safety checks (codec,
-    // dimensions, pixel format and frame rate), but do not reject a later
-    // segment solely because its profile/level differs from the first one.
-    // The output stream remains initialized from the first concrete source.
-    videoTarget->extradata.clear();
+    // The output MP4 has one decoder configuration (avcC) taken from the
+    // first source. Every copied H.264 segment must therefore carry the same
+    // SPS/PPS; otherwise later packets decode against the wrong configuration.
     videoTarget->profile = -1;
     videoTarget->level = -1;
+    if (firstVideoSignature.codec_id == AV_CODEC_ID_H264 &&
+        firstVideoSignature.extradata.empty()) {
+        return fail(result,
+            "segment_execution_rejected: first H.264 segment has no decoder configuration (SPS/PPS)");
+    }
     const bool firstKeyframeSafe = firstSegment.metadata_certified || firstSegment.normalized ||
         firstSession->sourceWindowStartsOnKeyframe(
             firstVideoIndex, firstSegment.source_in_us, error);

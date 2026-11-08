@@ -36,14 +36,12 @@ bool mediaSignaturesCompatible(const MediaSignature& source,
         mismatch(reason, "level");
         return false;
     }
-    // extradata is a stream-level detail (H.264 SPS/PPS), not part of the
-    // canonical output identity. A canonical-profile target carries an empty
-    // extradata to mean "don't care"; only compare when BOTH sides actually
-    // pin it (the packet mux compares two concrete streams, so its stricter
-    // behavior is unchanged).
-    if (!source.extradata.empty() && !target.extradata.empty() &&
-        source.extradata != target.extradata) {
-        mismatch(reason, "extradata");
+    // An empty target is the canonical-profile wildcard. When the packet mux
+    // pins the first concrete source's decoder configuration, every later
+    // source must provide the same bytes; missing extradata cannot establish
+    // compatibility with a configured target.
+    if (!target.extradata.empty() && source.extradata != target.extradata) {
+        mismatch(reason, "extradata (decoder configuration)");
         return false;
     }
     if (source.kind == MediaKind::Video) {

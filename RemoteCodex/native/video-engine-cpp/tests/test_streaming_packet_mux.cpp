@@ -10,7 +10,7 @@
 
 #include "streaming_packet_mux_test_support.hpp"
 
-int main() {
+int main(int argc, char** argv) {
     const fs::path root = fs::temp_directory_path() / uniqueStem();
     std::error_code ec;
     fs::create_directories(root, ec);
@@ -26,12 +26,15 @@ int main() {
     } cleanup{root};
 
     const fs::path video = root / "video.mp4";
+    const fs::path variantVideo = root / "video-variant.mp4";
     const fs::path bframeVideo = root / "bframes.mp4";
     const fs::path audio = root / "audio.m4a";
     const fs::path videoWithAudio = root / "video-with-audio.mp4";
     const fs::path tbA = root / "timescale-90000.mp4";
     const fs::path tbB = root / "timescale-15360.mp4";
     expect(makeVideo(video, "64x64", 5), "video fixture can be created");
+    expect(makeVideo(variantVideo, "64x64", 5, "-x264-params cabac=1"),
+           "H.264 fixture with a distinct SPS/PPS can be created");
     expect(makeBFrameVideo(bframeVideo), "B-frame fixture can be created");
     expect(makeAudio(audio), "audio fixture can be created");
     expect(makeMuxedVideo(video, audio, videoWithAudio),
@@ -40,6 +43,27 @@ int main() {
            "90000-timescale video fixture can be created");
     expect(makeVideo(tbB, "64x64", 25, "-video_track_timescale 15360"),
            "15360-timescale video fixture can be created");
+
+    // A single MP4 track has one avcC decoder configuration. Packet-copying a
+    // different H.264 SPS/PPS into that track corrupts decoding at the join;
+    // reject it before writing any final artifact.
+    {
+        const fs::path output = root / "mismatched-h264-config.mp4";
+        velox::media::CopyOnlyMuxRequest request;
+        request.video_segments = {
+            {video, 0, 800'000}, {variantVideo, 0, 800'000}};
+        request.output_path = output;
+        velox::media::CopyOnlyMuxResult result;
+        expect(!velox::media::muxCopyOnly(request, &result),
+               "packet mux rejects H.264 segments with different SPS/PPS");
+        expect(result.error.find("decoder configuration") != std::string::npos,
+               "H.264 decoder-configuration rejection is explicit");
+        expect(!fs::exists(output),
+               "incompatible packet-copy input publishes no output");
+    }
+    if (argc == 2 && std::string(argv[1]) == "--h264-config-only") {
+        return failures == 0 ? 0 : 1;
+    }
 
     const AVRational tbATimeBase = streamTimeBase(tbA, AVMEDIA_TYPE_VIDEO);
     const AVRational tbBTimeBase = streamTimeBase(tbB, AVMEDIA_TYPE_VIDEO);

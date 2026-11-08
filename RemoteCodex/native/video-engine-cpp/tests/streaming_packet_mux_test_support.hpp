@@ -41,18 +41,18 @@ std::string uniqueStem() {
 }
 
 // 5 fps / GOP 2 -> a keyframe every 2 frames (400ms), sc_threshold 0 forces
-// exact keyframe placement. `extraMuxerArgs` lets a scenario pin a non-default
-// container track timescale on an otherwise identical stream.
+// exact keyframe placement. `extraArgs` lets a scenario vary encoder or
+// container settings while keeping the input fixture otherwise identical.
 bool makeVideo(const fs::path& output, const std::string& size, int fps,
-               const std::string& extraMuxerArgs = "") {
+               const std::string& extraArgs = "") {
     std::ostringstream command;
     command << "ffmpeg -y -hide_banner -loglevel error"
             << " -f lavfi -i " << velox::file::shellQuote(
                 "testsrc=size=" + size + ":rate=" + std::to_string(fps) + ":duration=1.2")
             << " -an -c:v libx264 -preset ultrafast -pix_fmt yuv420p -r " << fps
             << " -g 2 -keyint_min 2 -sc_threshold 0";
-    if (!extraMuxerArgs.empty()) {
-        command << " " << extraMuxerArgs;
+    if (!extraArgs.empty()) {
+        command << " " << extraArgs;
     }
     command << " " << velox::file::shellQuote(output.string());
     return velox::file::runCommand(command.str());

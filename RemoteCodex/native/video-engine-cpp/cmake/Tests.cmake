@@ -172,6 +172,8 @@ if(VELOX_ENABLE_LIBAV)
     velox_configure_test(velox_streaming_packet_mux_tests)
     velox_link_ffmpeg(velox_streaming_packet_mux_tests)
     add_test(NAME streaming_packet_mux_tests COMMAND velox_streaming_packet_mux_tests)
+    add_test(NAME streaming_packet_mux_h264_config_tests
+        COMMAND velox_streaming_packet_mux_tests --h264-config-only)
 
     add_executable(velox_segment_execution_libav_tests
         tests/test_segment_execution_libav.cpp
