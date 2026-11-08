@@ -211,7 +211,7 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 	if isCompiledPlan {
 		// Operational lifecycle: materializing runtime assets.
 		w.UpdateOperationalPhase(pte.TaskID, PhaseMaterializing)
-		bindings, err := w.resolveCompiledRenderPlanAssets(ctx, spec.Payload)
+		bindings, err := w.resolveCompiledRenderPlanAssets(ctx, pte.JobID, spec.Payload)
 		if err != nil {
 			return failBeforeRun("compiled_plan_asset_resolution_failed", err)
 		}
@@ -233,7 +233,7 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 			return err
 		}
 		if isCompiledPlan {
-			bindings, err := w.resolveCompiledRenderPlanAssets(ctx, originalPayload)
+			bindings, err := w.resolveCompiledRenderPlanAssets(ctx, pte.JobID, originalPayload)
 			if err != nil {
 				return err
 			}

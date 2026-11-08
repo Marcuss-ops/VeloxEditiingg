@@ -54,7 +54,7 @@ func TestResolveCompiledRenderPlanAssets_UsesCommonResolverForEveryAsset(t *test
 	payload := compiledPlanAssetPayload(t, assets)
 	canonicalBefore := payload[contract.PayloadKeyCompiledRenderPlanJSON].(string)
 
-	bindings, err := w.resolveCompiledRenderPlanAssets(context.Background(), payload)
+	bindings, err := w.resolveCompiledRenderPlanAssets(context.Background(), "job-assets", payload)
 	if err != nil {
 		t.Fatalf("resolve V2 assets: %v", err)
 	}
@@ -148,7 +148,7 @@ func TestResolveCompiledRenderPlanAssets_UsesBoundedConcurrency(t *testing.T) {
 		config:    &config.WorkerConfig{WorkerID: "worker-v2-concurrency", MasterURL: server.URL, WorkDir: t.TempDir()},
 		apiClient: api.NewClient(server.URL),
 	}
-	bindings, err := w.resolveCompiledRenderPlanAssets(context.Background(), compiledPlanAssetPayload(t, assets))
+	bindings, err := w.resolveCompiledRenderPlanAssets(context.Background(), "job-assets", compiledPlanAssetPayload(t, assets))
 	if err != nil {
 		t.Fatalf("resolve V2 assets: %v", err)
 	}
@@ -324,7 +324,7 @@ func TestCompiledPlanAssetKeyUsesCanonicalCacheIdentity(t *testing.T) {
 		config:    &config.WorkerConfig{WorkerID: "worker-v2-asset-key", MasterURL: server.URL, WorkDir: t.TempDir()},
 		apiClient: api.NewClient(server.URL),
 	}
-	if _, err := w.resolveCompiledRenderPlanAssets(context.Background(), payload); err != nil {
+	if _, err := w.resolveCompiledRenderPlanAssets(context.Background(), "job-keyed-assets", payload); err != nil {
 		t.Fatalf("resolve keyed V2 assets: %v", err)
 	}
 	requestedMu.Lock()
@@ -344,7 +344,7 @@ func TestResolveCompiledRenderPlanAssets_RejectsMalformedPlanBeforeResolver(t *t
 	payload := map[string]interface{}{
 		contract.PayloadKeyCompiledRenderPlanJSON: "{not-canonical-json",
 	}
-	if _, err := w.resolveCompiledRenderPlanAssets(context.Background(), payload); err == nil {
+	if _, err := w.resolveCompiledRenderPlanAssets(context.Background(), "job-malformed", payload); err == nil {
 		t.Fatal("malformed V2 plan was accepted")
 	}
 }

@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -10,9 +11,9 @@ import (
 	"math/rand"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"sync"
-	"time"
 
 	"velox-shared/assetref"
 	"velox-shared/contract"
@@ -27,7 +28,7 @@ import (
 // consume the typed V2 references. Local paths returned by that resolver are
 // projected into runtimeassets.Bindings and never written back into the
 // canonical CompiledRenderPlanV2 JSON.
-func (w *Worker) resolveCompiledRenderPlanAssets(ctx context.Context, payload map[string]interface{}) (runtimeassets.Bindings, error) {
+func (w *Worker) resolveCompiledRenderPlanAssets(ctx context.Context, jobID string, payload map[string]interface{}) (runtimeassets.Bindings, error) {
 	if payload == nil {
 		return nil, fmt.Errorf("compiled render plan v2: payload is required")
 	}
@@ -81,11 +82,12 @@ func (w *Worker) resolveCompiledRenderPlanAssets(ctx context.Context, payload ma
 				pool = append(pool, item)
 			}
 		}
-		seed := time.Now().UnixNano()
-		if plan.TimelineSHA256 != "" {
-			seed ^= int64(plan.DurationUS)
-		}
-		rand.New(rand.NewSource(seed)).Shuffle(len(pool), func(i, j int) { pool[i], pool[j] = pool[j], pool[i] })
+		// Drive listing order is not stable, so canonicalize it before applying
+		// the same per-job seed used by the slice executor. Retries then resolve
+		// the same subset of pool members before any bytes are downloaded.
+		sort.Slice(pool, func(i, j int) bool { return pool[i].DriveFileID < pool[j].DriveFileID })
+		seedBytes := sha256.Sum256([]byte(jobID + ":" + plan.TimelineSHA256 + ":" + plan.StockPool.DriveFolderID))
+		rand.New(rand.NewSource(int64(binary.LittleEndian.Uint64(seedBytes[:8])))).Shuffle(len(pool), func(i, j int) { pool[i], pool[j] = pool[j], pool[i] })
 		var framesAvailable int64
 		for _, item := range pool {
 			if framesAvailable >= framesNeeded {
