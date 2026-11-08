@@ -24,8 +24,11 @@ worker image after implementation and verification are complete.
   before resolving or downloading the source. A warm fragment executes
   without source bindings and reports `frames_encoded = 0`; the certified
   output frame count remains available in the certificate.
-- In progress: production certification of progressive fMP4 upload (the
-  fail-closed 100-job gate is implemented; running it needs production jobs).
+- In progress: production certification of progressive fMP4 upload. The
+  fail-closed schema-v2 gate now requires 100 independently certified jobs,
+  measured overlap in every certified job, positive uploaded bytes before
+  render completion, a positive p95 overlap and a valid RFC3339 timestamp.
+  Running it still needs production jobs and a retained evidence artifact.
 - Implemented (opt-in): media-aware sparse MP4 range fetching with a
   full-download fallback.
 - Not implemented (blocked by an explicit architecture decision): single-pass
@@ -184,7 +187,7 @@ worker image after implementation and verification are complete.
   profile revision remain bound. The worker executor now uses this shared
   helper; contract tests pin both reuse across placements and invalidation
   when the source window changes.
-- [~] Worker chunk-manifest emission now reuses the resolver's verified
+- [x] Worker chunk-manifest emission reuses the resolver's verified
   `runtimeassets.Binding` identity instead of hashing each prepared fragment
   again. Chunk installation uses a hard link for immutable cache blobs on the
   same filesystem, with atomic copy fallback across filesystems. Master-side
@@ -193,8 +196,9 @@ worker image after implementation and verification are complete.
   profile/version, frame-count and keyframe/GOP evidence. The new worker
   executor emits source/output SHA, encoder build, profile and timeline-bound
   certification. The worker-local cache reuses that evidence across jobs;
-  persistence and reuse through the distributed task DAG and Master fragment
-  cache remain.
+  successful prepared-window results persist through TaskGraph task attempts,
+  and FINALIZE reuses matching certified fragments from the Master cache. The
+  remaining check is production multi-worker measurement, tracked below.
 - [~] Build the internal prepared-window exchange outside final artifact
   publication. The Master now has worker-authenticated GET/PUT endpoints keyed
   by the shared content identity; PUT validates the request/certificate,
@@ -282,7 +286,9 @@ worker image after implementation and verification are complete.
   certify the immutable worker image/digest, run cold/warm/retry production
   measurements (task counts, bytes by host, disk reads, encoded frames,
   cache-hit ratio, `created→ready`, `ready→first byte`, `first
-  byte→published` p50/p95), and run the 100-job fMP4 gate. These require the
-  deployed fleet and cannot be closed from the source tree.
+  byte→published` p50/p95), verify prepared-window reuse across multiple live
+  workers, and run the 100-job fMP4 gate. Evidence must use schema v2 and
+  show certified artifacts plus real progressive-upload overlap. These
+  require the deployed fleet and cannot be closed from the source tree.
 - [~] Mark this roadmap and the associated work objective complete only after
   the production gates above are certified.

@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 )
 
 // CanonicalVideoProfileVersionV1 is the version of the producer/Velox media
@@ -133,7 +134,7 @@ const (
 	// benchmark gate. The env opt-in alone never enables the profile.
 	FMP4GateEvidenceEnv    = "VELOX_FMP4_GATE_EVIDENCE"
 	FMP4GateMinimumJobs    = 100
-	FMP4GateEvidenceSchema = 1
+	FMP4GateEvidenceSchema = 2
 )
 
 // FMP4StreamGateEvidence is the durable result of the progressive-upload
@@ -141,11 +142,13 @@ const (
 // published with the fragmented profile and independently verified; a run with
 // retries or uncertified jobs cannot open the gate.
 type FMP4StreamGateEvidence struct {
-	Version                 int    `json:"version"`
-	Jobs                    int    `json:"jobs"`
-	CertifiedJobs           int    `json:"certified_jobs"`
-	RecordedAt              string `json:"recorded_at"`
-	P95ProgressiveOverlapMS int64  `json:"p95_progressive_overlap_ms,omitempty"`
+	Version                          int    `json:"version"`
+	Jobs                             int    `json:"jobs"`
+	CertifiedJobs                    int    `json:"certified_jobs"`
+	JobsWithProgressiveOverlap       int    `json:"jobs_with_progressive_overlap"`
+	ProgressiveOverlapBytesBeforeEnd int64  `json:"progressive_overlap_bytes_before_render_end"`
+	RecordedAt                       string `json:"recorded_at"`
+	P95ProgressiveOverlapMS          int64  `json:"p95_progressive_overlap_ms"`
 }
 
 var fmp4GateCache struct {
@@ -184,9 +187,22 @@ func FMP4StreamProfileGateSatisfied() bool {
 		evidence.Jobs >= FMP4GateMinimumJobs &&
 		evidence.CertifiedJobs >= FMP4GateMinimumJobs &&
 		evidence.CertifiedJobs <= evidence.Jobs &&
-		strings.TrimSpace(evidence.RecordedAt) != ""
+		evidence.JobsWithProgressiveOverlap >= FMP4GateMinimumJobs &&
+		evidence.JobsWithProgressiveOverlap <= evidence.CertifiedJobs &&
+		evidence.ProgressiveOverlapBytesBeforeEnd > 0 &&
+		evidence.P95ProgressiveOverlapMS > 0 &&
+		validFMP4GateTimestamp(evidence.RecordedAt)
 	fmp4GateCache.path, fmp4GateCache.modTime, fmp4GateCache.size, fmp4GateCache.ok = path, info.ModTime().UnixNano(), info.Size(), ok
 	return ok
+}
+
+func validFMP4GateTimestamp(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	_, err := time.Parse(time.RFC3339, value)
+	return err == nil
 }
 
 func (p CanonicalVideoProfileV1) Validate() error {

@@ -18,7 +18,7 @@ func writeFMP4Evidence(t *testing.T, name, body string) string {
 }
 
 func validFMP4Evidence() string {
-	return `{"version":1,"jobs":100,"certified_jobs":100,"recorded_at":"2026-11-08T00:00:00Z"}`
+	return `{"version":2,"jobs":100,"certified_jobs":100,"jobs_with_progressive_overlap":100,"progressive_overlap_bytes_before_render_end":1024,"p95_progressive_overlap_ms":250,"recorded_at":"2026-11-08T00:00:00Z"}`
 }
 
 func TestFMP4GateFailsClosed(t *testing.T) {
@@ -51,37 +51,51 @@ func TestFMP4GateFailsClosed(t *testing.T) {
 	})
 
 	t.Run("wrong schema version", func(t *testing.T) {
-		writeFMP4Evidence(t, "v2.json", `{"version":2,"jobs":100,"certified_jobs":100,"recorded_at":"2026-11-08T00:00:00Z"}`)
+		writeFMP4Evidence(t, "v1.json", `{"version":1,"jobs":100,"certified_jobs":100,"jobs_with_progressive_overlap":100,"progressive_overlap_bytes_before_render_end":1024,"p95_progressive_overlap_ms":250,"recorded_at":"2026-11-08T00:00:00Z"}`)
 		if FMP4StreamProfileGateSatisfied() {
 			t.Fatal("gate opened with an unknown evidence schema")
 		}
 	})
 
 	t.Run("under-sampled run", func(t *testing.T) {
-		writeFMP4Evidence(t, "99.json", `{"version":1,"jobs":99,"certified_jobs":99,"recorded_at":"2026-11-08T00:00:00Z"}`)
+		writeFMP4Evidence(t, "99.json", `{"version":2,"jobs":99,"certified_jobs":99,"jobs_with_progressive_overlap":99,"progressive_overlap_bytes_before_render_end":1024,"p95_progressive_overlap_ms":250,"recorded_at":"2026-11-08T00:00:00Z"}`)
 		if FMP4StreamProfileGateSatisfied() {
 			t.Fatal("gate opened with fewer than the required jobs")
 		}
 	})
 
 	t.Run("uncertified jobs", func(t *testing.T) {
-		writeFMP4Evidence(t, "uncertified.json", `{"version":1,"jobs":100,"certified_jobs":99,"recorded_at":"2026-11-08T00:00:00Z"}`)
+		writeFMP4Evidence(t, "uncertified.json", `{"version":2,"jobs":100,"certified_jobs":99,"jobs_with_progressive_overlap":100,"progressive_overlap_bytes_before_render_end":1024,"p95_progressive_overlap_ms":250,"recorded_at":"2026-11-08T00:00:00Z"}`)
 		if FMP4StreamProfileGateSatisfied() {
 			t.Fatal("gate opened with uncertified jobs")
 		}
 	})
 
 	t.Run("certified exceeds jobs", func(t *testing.T) {
-		writeFMP4Evidence(t, "impossible.json", `{"version":1,"jobs":100,"certified_jobs":101,"recorded_at":"2026-11-08T00:00:00Z"}`)
+		writeFMP4Evidence(t, "impossible.json", `{"version":2,"jobs":100,"certified_jobs":101,"jobs_with_progressive_overlap":100,"progressive_overlap_bytes_before_render_end":1024,"p95_progressive_overlap_ms":250,"recorded_at":"2026-11-08T00:00:00Z"}`)
 		if FMP4StreamProfileGateSatisfied() {
 			t.Fatal("gate opened with certified_jobs > jobs")
 		}
 	})
 
 	t.Run("missing recorded_at", func(t *testing.T) {
-		writeFMP4Evidence(t, "undated.json", `{"version":1,"jobs":100,"certified_jobs":100}`)
+		writeFMP4Evidence(t, "undated.json", `{"version":2,"jobs":100,"certified_jobs":100,"jobs_with_progressive_overlap":100,"progressive_overlap_bytes_before_render_end":1024,"p95_progressive_overlap_ms":250}`)
 		if FMP4StreamProfileGateSatisfied() {
 			t.Fatal("gate opened without a recorded_at timestamp")
+		}
+	})
+
+	t.Run("no progressive overlap", func(t *testing.T) {
+		writeFMP4Evidence(t, "no-overlap.json", `{"version":2,"jobs":100,"certified_jobs":100,"jobs_with_progressive_overlap":99,"progressive_overlap_bytes_before_render_end":0,"p95_progressive_overlap_ms":0,"recorded_at":"2026-11-08T00:00:00Z"}`)
+		if FMP4StreamProfileGateSatisfied() {
+			t.Fatal("gate opened without measured progressive overlap")
+		}
+	})
+
+	t.Run("invalid timestamp", func(t *testing.T) {
+		writeFMP4Evidence(t, "bad-time.json", `{"version":2,"jobs":100,"certified_jobs":100,"jobs_with_progressive_overlap":100,"progressive_overlap_bytes_before_render_end":1024,"p95_progressive_overlap_ms":250,"recorded_at":"yesterday"}`)
+		if FMP4StreamProfileGateSatisfied() {
+			t.Fatal("gate opened with an invalid recorded_at timestamp")
 		}
 	})
 

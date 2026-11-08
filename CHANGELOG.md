@@ -1,5 +1,24 @@
 ## [Unreleased] - 2026-11-08
 
+### Changed — progressive fMP4 admission evidence
+
+- The fMP4 benchmark evidence schema is now version 2. The fail-closed gate
+  requires at least 100 certified jobs, measured progressive overlap in at
+  least 100 of them, positive bytes uploaded before render completion, a
+  positive p95 overlap and a valid RFC3339 recording timestamp. A job count
+  without evidence of actual render/upload overlap can no longer enable the
+  profile.
+- The chunk-manifest path reuses the resolver's verified SHA-256 and size and
+  installs immutable payloads by hard link where possible, with atomic copy
+  fallback. The roadmap now records this source implementation as complete;
+  live multi-worker measurements remain an operational gate.
+- Verification: `go test ./contract/...` in `shared`,
+  `go test ./internal/chunkfactory ./internal/taskrunner/executors ./internal/worker ./internal/taskrunner`
+  in `worker-agent-go`, and the focused DataServer pipeline/assets/store
+  packages pass. The offline rollout (9 checks) and producer-job acceptance
+  (5 checks) harnesses pass. A live 100-job benchmark remains unrun because it
+  needs the production fleet and operator evidence.
+
 ### Changed — canonical H.264 identity and cache-first worker
 
 - The shared canonical encoder projection now pins `-preset veryfast`,
