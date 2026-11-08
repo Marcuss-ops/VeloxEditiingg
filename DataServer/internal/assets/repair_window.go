@@ -59,8 +59,7 @@ func (s *AssetService) RepairMissingPreparedWindow(ctx context.Context, assetID 
 			!strings.EqualFold(evidence.SourceSHA256, ref.sourceSHA) ||
 			evidence.ProfileID != ref.profile || evidence.FrameCount <= 0 ||
 			(ref.revision != "" && ref.revision != s.videoTrimmer.PreparationRevision()) ||
-			(evidence.PreparationRevision != "" && evidence.PreparationRevision != s.videoTrimmer.PreparationRevision()) ||
-			(ref.revision == "" && evidence.PreparationRevision == "" && ref.scheme != "velox-stock-window") {
+			(evidence.PreparationRevision != "" && evidence.PreparationRevision != s.videoTrimmer.PreparationRevision()) {
 			continue
 		}
 		driveURL, err := DeferredDriveReference(ref.sourceID)
@@ -161,10 +160,11 @@ func parsePreparedWindowReference(raw string) (preparedWindowReference, error) {
 	}
 	revision := ""
 	if len(parts) > 4 && u.Scheme == "velox-video-window" {
-		revision, err := url.PathUnescape(parts[4])
-		if err != nil || revision == "" {
+		decodedRevision, decodeErr := url.PathUnescape(parts[4])
+		if decodeErr != nil || decodedRevision == "" {
 			return preparedWindowReference{}, fmt.Errorf("invalid preparation revision")
 		}
+		revision = decodedRevision
 	}
 	return preparedWindowReference{sourceID: u.Host, sourceSHA: strings.ToLower(parts[0]), startUS: start, durationUS: duration, profile: profile, revision: revision, scheme: u.Scheme}, nil
 }

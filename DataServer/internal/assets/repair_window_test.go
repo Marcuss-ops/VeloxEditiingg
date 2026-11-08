@@ -8,9 +8,11 @@ func TestParsePreparedWindowReference(t *testing.T) {
 	tests := []struct {
 		name, ref       string
 		start, duration int64
+		revision        string
 	}{
-		{"stock", "velox-stock-window://driveFileId/" + testSHA256 + "/0/5000000/VELOX_ASSEMBLY_READY_V1", 0, 5_000_000},
-		{"prepared", "velox-video-window://driveFileId/" + testSHA256 + "/4166667/833333/VELOX_ASSEMBLY_READY_V1/revision-1", 4_166_667, 833_333},
+		{"stock", "velox-stock-window://driveFileId/" + testSHA256 + "/0/5000000/VELOX_ASSEMBLY_READY_V1", 0, 5_000_000, ""},
+		{"legacy-prepared", "velox-video-window://driveFileId/" + testSHA256 + "/0/5000000/VELOX_ASSEMBLY_READY_V1", 0, 5_000_000, ""},
+		{"prepared", "velox-video-window://driveFileId/" + testSHA256 + "/4166667/833333/VELOX_ASSEMBLY_READY_V1/revision-1", 4_166_667, 833_333, "revision-1"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -18,7 +20,7 @@ func TestParsePreparedWindowReference(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got.sourceID != "driveFileId" || got.startUS != tt.start || got.durationUS != tt.duration || got.profile != "VELOX_ASSEMBLY_READY_V1" {
+			if got.sourceID != "driveFileId" || got.startUS != tt.start || got.durationUS != tt.duration || got.profile != "VELOX_ASSEMBLY_READY_V1" || got.revision != tt.revision {
 				t.Fatalf("unexpected parsed reference: %+v", got)
 			}
 		})
