@@ -13,25 +13,39 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Install pinned cosign release via GitHub asset API
+    - name: Install pinned cosign v2.4.1 via GitHub asset API
       if: inputs.digest != '' && inputs.push == 'true'
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
-        asset_id=660069428 # sigstore/cosign v3.1.4 linux-amd64 release asset
-        expected_sha256=424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa
         binary="$RUNNER_TEMP/cosign"
+        signature="$RUNNER_TEMP/cosign.sig"
+        public_key="$RUNNER_TEMP/cosign-release.pub"
+        curl_api_asset() {
+          curl --retry 6 --retry-delay 5 --retry-all-errors --retry-max-time 120 \
+            --fail --location --silent --show-error \
+            -H 'Accept: application/octet-stream' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/sigstore/cosign/releases/assets/$1" \
+            --output "$2"
+        }
+        curl_api_asset 196693045 "$binary" # cosign-linux-amd64
+        curl_api_asset 196693204 "$signature" # detached release signature
         curl --retry 6 --retry-delay 5 --retry-all-errors --retry-max-time 120 \
           --fail --location --silent --show-error \
-          -H 'Accept: application/octet-stream' \
           -H 'X-GitHub-Api-Version: 2022-11-28' \
           -H "Authorization: Bearer $GH_TOKEN" \
-          "https://api.github.com/repos/sigstore/cosign/releases/assets/$asset_id" \
-          --output "$binary"
-        echo "$expected_sha256  $binary" | sha256sum --check --status
+          'https://api.github.com/repos/sigstore/cosign/contents/release/release-cosign.pub?ref=v2.4.1' \
+          | jq -er '.content' | base64 --decode > "$public_key"
+        echo '8b24b946dd5809c6bd93de08033bcf6bc0ed7d336b7785787c080f574b89249b  '"$binary" \
+          | sha256sum --check --status
+        echo 'f4cea466e5e887a45da5031757fa1d32655d83420639dc1758749b744179f126  '"$public_key" \
+          | sha256sum --check --status
         chmod 0755 "$binary"
+        "$binary" verify-blob --key "$public_key" --signature "$signature" "$binary"
         printf '%s\n' "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
     - name: Cosign keyless sign (OIDC)
