@@ -2,6 +2,8 @@ package assets
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"os"
@@ -147,7 +149,7 @@ func (s *AssetService) materializeDriveStockSources(
 			return nil
 		})
 	}
-	if err := runBoundedStockJobs(ctx, stockSourceDownloadConcurrency, jobs); err != nil {
+	if err := runBoundedStockJobsWithSlots(ctx, stockSourceDownloadConcurrency, stockSourceSlots, jobs); err != nil {
 		cleanupDriveStockSources(sources)
 		return nil, err
 	}
@@ -167,6 +169,8 @@ func collectDriveStockWindows(
 	assetsByID map[string]contract.AssetRefV2,
 	bindings map[string]map[string]interface{},
 	sources map[string]*driveStockSourceState,
+	cachedWindows map[string]*driveStockWindowResult,
+	preparationRevision string,
 ) (map[string]driveStockWindowJob, []driveStockPlacement, map[string]struct{}, bool, error) {
 	windowJobs := make(map[string]driveStockWindowJob)
 	placements := make([]driveStockPlacement, 0)
@@ -199,6 +203,29 @@ func collectDriveStockWindows(
 			if binding == nil {
 				return nil, nil, nil, false, fmt.Errorf("video segment %q has no runtime source binding for asset %q", segment.SegmentID, sourceID)
 			}
+			startUS, durationUS := segment.SourceInUS, segment.SourceDurationUS
+			if startUS < 0 || durationUS <= 0 || durationUS > math.MaxInt64-startUS {
+				return nil, nil, nil, false, fmt.Errorf("stock segment %q has invalid source window: source_in_us=%d source_duration_us=%d", segment.SegmentID, startUS, durationUS)
+			}
+			wantFrames := int64(math.Round(float64(durationUS) * float64(plan.Output.FPSNum) / (1_000_000 * float64(plan.Output.FPSDen))))
+			if wantFrames <= 0 || segment.FrameCount != wantFrames {
+				return nil, nil, nil, false, fmt.Errorf("video segment %q frame count mismatch: plan=%d expected=%d from %d us at %d/%d fps", segment.SegmentID, segment.FrameCount, wantFrames, durationUS, plan.Output.FPSNum, plan.Output.FPSDen)
+			}
+			knownSHA := strings.TrimSpace(original.SHA256)
+			if knownSHA == "" {
+				knownSHA = strings.TrimSpace(bindingString(binding, "sha256", "asset_sha256"))
+			}
+			knownSHA = strings.ToLower(knownSHA)
+			if decoded, decodeErr := hex.DecodeString(knownSHA); decodeErr == nil && len(decoded) == sha256.Size {
+				windowRef := stockWindowSourceReference(sourceID, knownSHA, startUS, durationUS, plan.Output.ProfileID, preparationRevision)
+				if cached := cachedWindows[windowRef]; cached != nil && cached.fragment != nil {
+					placements = append(placements, driveStockPlacement{
+						trackIndex: trackIndex, segmentIndex: segmentIndex,
+						windowRef: windowRef, wantFrames: wantFrames,
+					})
+					continue
+				}
+			}
 			state := sources[sourceID]
 			if state == nil {
 				return nil, nil, nil, false, fmt.Errorf("video source %q was not prefetched", sourceID)
@@ -206,20 +233,12 @@ func collectDriveStockWindows(
 			if err := validateDriveStockIdentity(original, binding, state, sourceID); err != nil {
 				return nil, nil, nil, false, err
 			}
-			startUS, durationUS := segment.SourceInUS, segment.SourceDurationUS
-			if startUS < 0 || durationUS <= 0 || durationUS > math.MaxInt64-startUS {
-				return nil, nil, nil, false, fmt.Errorf("stock segment %q has invalid source window: source_in_us=%d source_duration_us=%d", segment.SegmentID, startUS, durationUS)
-			}
 			frameUS := int64(math.Round(1_000_000 * float64(state.probe.FPSDen) / float64(state.probe.FPSNum)))
 			fileDurationUS := int64(math.Round(state.probe.DurationSeconds * 1_000_000))
 			if frameUS <= 0 || startUS >= fileDurationUS || startUS+durationUS > fileDurationUS+frameUS {
 				return nil, nil, nil, false, fmt.Errorf("video segment %q window exceeds certified source duration: end_us=%d file_duration_us=%d tolerance_us=%d", segment.SegmentID, startUS+durationUS, fileDurationUS, frameUS)
 			}
-			wantFrames := int64(math.Round(float64(durationUS) * float64(plan.Output.FPSNum) / (1_000_000 * float64(plan.Output.FPSDen))))
-			if wantFrames <= 0 || segment.FrameCount != wantFrames {
-				return nil, nil, nil, false, fmt.Errorf("video segment %q frame count mismatch: plan=%d expected=%d from %d us at %d/%d fps", segment.SegmentID, segment.FrameCount, wantFrames, durationUS, plan.Output.FPSNum, plan.Output.FPSDen)
-			}
-			windowRef := fmt.Sprintf("velox-video-window://%s/%s/%d/%d/%s", sourceID, state.sha, startUS, durationUS, plan.Output.ProfileID)
+			windowRef := stockWindowSourceReference(sourceID, state.sha, startUS, durationUS, plan.Output.ProfileID, preparationRevision)
 			if _, exists := windowJobs[windowRef]; !exists {
 				windowJobs[windowRef] = driveStockWindowJob{
 					ref: windowRef, segmentID: segment.SegmentID, state: state,
@@ -287,7 +306,7 @@ func (s *AssetService) materializeDriveStockWindows(
 			return nil
 		})
 	}
-	if err := runBoundedStockJobs(ctx, stockWindowMaterializationConcurrency, jobs); err != nil {
+	if err := runBoundedStockJobsWithSlots(ctx, stockWindowMaterializationConcurrency, stockWindowSlots, jobs); err != nil {
 		cleanupDriveStockWindowResults(results)
 		return nil, nil, err
 	}

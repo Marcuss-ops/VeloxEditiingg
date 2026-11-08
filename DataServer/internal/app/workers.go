@@ -278,6 +278,8 @@ func (m *WorkersModule) RegisterRoutes(r *gin.Engine) {
 	}
 	if m.workerAssetHandler != nil {
 		r.GET("/api/v1/agent/assets/:asset_id", m.workerAssetHandler.ServeAsset())
+		r.GET("/api/v1/agent/prepared-windows/:identity", m.workerAssetHandler.PreparedWindowByIdentity())
+		r.PUT("/api/v1/agent/prepared-windows/:identity", m.workerAssetHandler.RegisterPreparedWindow())
 	}
 	if m.workersHandler != nil && m.protectedAssetsHandler != nil {
 		r.GET("/api/v1/agent/cache/protected-assets", m.protectedAssetsAuth, m.protectedAssetsHandler.Snapshot())

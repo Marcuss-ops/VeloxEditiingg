@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"velox-shared/payload"
 	"velox-worker-agent/pkg/video/plan"
 )
 
@@ -120,39 +121,8 @@ func splitVoiceoverAroundSceneClips(voiceover plan.AudioTrack, tracks []plan.Aud
 	return segments
 }
 
-func runtimeClipAudioSceneIDs(input map[string]interface{}) map[string]bool {
-	runtimeAudio := runtimeAudioPayload(input)
-	selected := make(map[string]bool)
-	switch values := runtimeAudio["clip_audio_scene_ids"].(type) {
-	case []interface{}:
-		for _, value := range values {
-			if id, ok := value.(string); ok && strings.TrimSpace(id) != "" {
-				selected[strings.TrimSpace(id)] = true
-			}
-		}
-	case []string:
-		for _, id := range values {
-			if strings.TrimSpace(id) != "" {
-				selected[strings.TrimSpace(id)] = true
-			}
-		}
-	}
-	return selected
-}
-
 func runtimeAudioPayload(input map[string]interface{}) map[string]interface{} {
-	if input == nil {
-		return nil
-	}
-	if payload, ok := input["runtime_audio"].(map[string]interface{}); ok {
-		return payload
-	}
-	if nested, ok := input["runtime_payload"].(map[string]interface{}); ok {
-		if payload, ok := nested["runtime_audio"].(map[string]interface{}); ok {
-			return payload
-		}
-	}
-	return nil
+	return payload.NestedMapFromPayload(input, "runtime_audio")
 }
 
 // hasRuntimeFinalAudio reports whether the payload supplies a complete mix.

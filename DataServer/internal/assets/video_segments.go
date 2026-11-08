@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"velox-server/internal/inputsecurity"
 
 	"velox-shared/assetref"
+	"velox-shared/contract"
 	"velox-shared/iopool"
 )
 
@@ -373,8 +375,29 @@ func (s *AssetService) registerPreparedVideoFile(ctx context.Context, preparedPa
 		return nil, fmt.Errorf("sync segment staging file: %w", err)
 	}
 	sha256Hex := hex.EncodeToString(hasher.Sum(nil))
+	if plan.ExpectedOutputSizeBytes > 0 && written != plan.ExpectedOutputSizeBytes {
+		_ = s.blobStore.RemoveStaging(stagingPath)
+		return nil, fmt.Errorf("prepared segment size differs from worker certificate")
+	}
+	if plan.ExpectedOutputSHA256 != "" && sha256Hex != plan.ExpectedOutputSHA256 {
+		_ = s.blobStore.RemoveStaging(stagingPath)
+		return nil, fmt.Errorf("prepared segment SHA-256 differs from worker certificate")
+	}
 	if existing, lookupErr := s.repo.GetBySHA256(ctx, sha256Hex); lookupErr == nil && existing != nil {
 		_ = s.blobStore.RemoveStaging(stagingPath)
+		if strings.HasPrefix(sourcePath, "prepared-window:") {
+			sourceID, sourceErr := identity.NewHex128()
+			if sourceErr != nil {
+				return nil, fmt.Errorf("generate prepared window source ID: %w", sourceErr)
+			}
+			if insertErr := s.repo.InsertSource(ctx, AssetSourceRecord{
+				SourceID: sourceID, AssetID: existing.AssetID, SourceType: "video.prepare.window.v1",
+				SourceReference: sourcePath, MetadataJSON: plan.PreparationCertificateJSON,
+				CreatedAt: s.clock.Now().UTC().Format(time.RFC3339),
+			}); insertErr != nil {
+				return nil, fmt.Errorf("register prepared window source identity: %w", insertErr)
+			}
+		}
 		return s.recordToAsset(existing), nil
 	}
 
@@ -402,6 +425,11 @@ func (s *AssetService) registerPreparedVideoFile(ctx context.Context, preparedPa
 		"canonical_profile_id":        plan.CanonicalProfile.ProfileID,
 		"canonical_stream_profile_id": plan.CanonicalProfile.StreamProfile(),
 		"canonical_profile_version":   plan.CanonicalProfile.Version,
+		"preparation_revision":        s.videoTrimmer.PreparationRevision(),
+	}
+	if plan.PreparationCertificateJSON != "" {
+		metadataFields["window_certificate"] = json.RawMessage(plan.PreparationCertificateJSON)
+		metadataFields["source_start_frame"] = plan.SourceStartFrame
 	}
 	if plan.OutputFrameCount > 0 {
 		metadataFields["frame_count"] = plan.OutputFrameCount
@@ -482,6 +510,104 @@ func (s *AssetService) registerPreparedVideoFile(ctx context.Context, preparedPa
 		CreatedAt:       now,
 		VerifiedAt:      now,
 	}, nil
+}
+
+// RegisterPreparedWindow verifies and stores a fragment produced by the
+// worker-side video.prepare.window.v1 executor. The source reference is the
+// shared content-preparation identity, so a later job can find the same
+// certified bytes without fetching or preparing the source again.
+func (s *AssetService) RegisterPreparedWindow(
+	ctx context.Context,
+	preparedPath string,
+	request contract.VideoPrepareWindowV1,
+	certificate contract.VideoPrepareWindowCertificateV1,
+) (*Asset, error) {
+	if s == nil || s.repo == nil || s.blobStore == nil || s.videoTrimmer == nil {
+		return nil, fmt.Errorf("prepared window registration is unavailable")
+	}
+	if err := certificate.ValidateFor(request); err != nil {
+		return nil, err
+	}
+	profile, err := contract.KnownCanonicalVideoProfileV1(request.OutputProfileID)
+	if err != nil {
+		return nil, err
+	}
+	revision, err := contract.VideoWindowPreparationRevision(profile, contract.CanonicalPreparationQualityPolicyDefault)
+	if err != nil || revision != request.OutputProfileRevision {
+		return nil, fmt.Errorf("prepared window profile revision is not enabled")
+	}
+	info, err := os.Stat(preparedPath)
+	if err != nil || !info.Mode().IsRegular() || info.Size() != certificate.OutputSizeBytes {
+		if err == nil {
+			err = fmt.Errorf("prepared window size differs from certificate")
+		}
+		return nil, fmt.Errorf("prepared window file: %w", err)
+	}
+	if s.security == nil {
+		return nil, fmt.Errorf("prepared window security validator is unavailable")
+	}
+	if _, err := s.security.ValidateFileForCanonicalProbe(ctx, preparedPath, inputsecurity.KindClip, "video/mp4"); err != nil {
+		return nil, fmt.Errorf("prepared window media validation: %w", err)
+	}
+	probe, err := s.videoTrimmer.Probe(ctx, preparedPath)
+	if err != nil {
+		return nil, err
+	}
+	frames, err := s.videoTrimmer.countFrames(ctx, preparedPath)
+	if err != nil {
+		return nil, err
+	}
+	evidence := certificate.OutputEvidence
+	level, levelErr := strconv.Atoi(strings.ReplaceAll(profile.CodecLevel, ".", ""))
+	if levelErr != nil || probe.VideoCodec != profile.Codec || probe.VideoProfile != strings.ToLower(profile.CodecProfile) ||
+		probe.VideoLevel != level || probe.Width != profile.Width || probe.Height != profile.Height ||
+		probe.PixelFormat != profile.PixelFormat || probe.FPSNum != profile.FPSNum || probe.FPSDen != profile.FPSDen ||
+		probe.TimebaseNum != profile.TimeBaseNum || probe.TimebaseDen != profile.TimeBaseDen || frames != request.OutputFrameCount ||
+		probe.AudioCodec != "" || evidence.Codec != probe.VideoCodec || evidence.Profile != probe.VideoProfile ||
+		evidence.Level != probe.VideoLevel || evidence.Width != probe.Width || evidence.Height != probe.Height ||
+		evidence.PixelFormat != probe.PixelFormat || evidence.FPSNum != probe.FPSNum || evidence.FPSDen != probe.FPSDen ||
+		evidence.TimeBaseNum != probe.TimebaseNum || evidence.TimeBaseDen != probe.TimebaseDen || evidence.FrameCount != frames {
+		return nil, fmt.Errorf("prepared window does not match the independently probed canonical profile")
+	}
+	if len(probe.Keyframes) == 0 || probe.Keyframes[0] > float64(profile.FPSDen)/float64(profile.FPSNum) {
+		return nil, fmt.Errorf("prepared window does not begin with a keyframe")
+	}
+	identity, err := contract.VideoPrepareWindowCacheIdentity(request)
+	if err != nil {
+		return nil, err
+	}
+	existing, lookupErr := s.GetBySourceReference(ctx, "prepared-window:"+identity)
+	if lookupErr != nil {
+		return nil, fmt.Errorf("lookup prepared window identity: %w", lookupErr)
+	}
+	if existing != nil {
+		if existing.SHA256 != certificate.OutputSHA256 || existing.SizeBytes != certificate.OutputSizeBytes {
+			return nil, fmt.Errorf("prepared window identity already maps to different bytes")
+		}
+		return existing, nil
+	}
+	startSeconds, durationSeconds := float64(request.SourceStartUS)/1_000_000, float64(request.SourceDurationUS)/1_000_000
+	if request.SourceDurationUS == 0 {
+		startSeconds = float64(request.SourceStartFrame) * float64(request.SourceFPSDen) / float64(request.SourceFPSNum)
+		durationSeconds = float64(request.SourceFrameCount) * float64(request.SourceFPSDen) / float64(request.SourceFPSNum)
+	}
+	plan := TrimPlan{
+		Mode: TrimModeFrameAccurateReencode, Segment: VideoSegment{StartSeconds: startSeconds, EndSeconds: startSeconds + durationSeconds},
+		DurationSeconds:       float64(request.OutputFrameCount) * float64(profile.FPSDen) / float64(profile.FPSNum),
+		RequiresNormalization: true, CanonicalProfile: profile, OutputFrameCount: request.OutputFrameCount,
+		FirstFrameKeyframe: true, ClosedGOP: certificate.ClosedGOPAttested,
+		SourceSHA256: request.Source.SHA256, SourceSizeBytes: request.Source.SizeBytes,
+		SourceStartFrame: request.SourceStartFrame, SourceFrameCount: request.SourceFrameCount,
+		SourceFPSNum: request.SourceFPSNum, SourceFPSDen: request.SourceFPSDen,
+		SourceDurationUS:     request.SourceDurationUS,
+		ExpectedOutputSHA256: certificate.OutputSHA256, ExpectedOutputSizeBytes: certificate.OutputSizeBytes,
+	}
+	certificateJSON, err := json.Marshal(certificate)
+	if err != nil {
+		return nil, fmt.Errorf("encode prepared window certificate: %w", err)
+	}
+	plan.PreparationCertificateJSON = string(certificateJSON)
+	return s.registerPreparedVideoFile(ctx, preparedPath, "prepared-window:"+identity, plan)
 }
 
 func syncPreparedSegment(path string) error {

@@ -128,28 +128,8 @@ func (h *Handlers) lookupPipelineRun(ctx context.Context, idParam, externalClien
 // current status instead of an error.
 func (h *Handlers) CancelPipelineRun() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if h.store == nil {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"ok": false, "error": "pipeline store not wired"})
-			return
-		}
-		idParam := strings.TrimSpace(c.Param("id"))
-		if idParam == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "id is required"})
-			return
-		}
-
-		ctx := c.Request.Context()
-		pr, forwarding, err := h.lookupPipelineRun(ctx, idParam, ClientIDFromContext(c))
-		if err != nil {
-			if errors.Is(err, errPipelineRunNotFound) {
-				if strings.TrimSpace(ClientIDFromContext(c)) != "" {
-					writeM2MJobNotFound(c)
-				} else {
-					c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "pipeline run not found"})
-				}
-				return
-			}
-			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
+		ctx, _, _, pr, forwarding, ok := h.lookupPipelineRunRequest(c, "pipeline store not wired")
+		if !ok {
 			return
 		}
 
@@ -180,10 +160,7 @@ func (h *Handlers) CancelPipelineRun() gin.HandlerFunc {
 		}
 
 		// 2. Cancel Velox job + notify workers.
-		veloxJobID := pr.VeloxJobID
-		if veloxJobID == "" && forwarding != nil {
-			veloxJobID = forwarding.TargetJobID
-		}
+		veloxJobID := pipelineRunJobID(pr, forwarding)
 		if veloxJobID != "" && h.jobs.Writer != nil {
 			if err := h.jobs.Writer.Delete(ctx, veloxJobID); err != nil {
 				pipelineLog("CANCEL: local delete FAILED run=%s job=%s: %v", pr.ID, veloxJobID, err)

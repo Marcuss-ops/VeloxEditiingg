@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"testing"
 	"time"
 
@@ -147,6 +148,95 @@ func TestGetReportMasterTimestamps(t *testing.T) {
 	missingCommitted, err := repo.GetReportCommittedAt(ctx, "attempt-missing")
 	if err != nil || !missingCommitted.IsZero() {
 		t.Fatalf("missing committed_at = %v, err=%v; want zero/nil", missingCommitted, err)
+	}
+}
+
+func TestListSegmentTimingsRetainsPreparedWindowEvidence(t *testing.T) {
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	_, err = db.Exec(`CREATE TABLE task_attempt_segment_timings (
+		attempt_id TEXT NOT NULL, segment_index INTEGER NOT NULL DEFAULT 0,
+		scene_id TEXT NOT NULL DEFAULT '', source_type TEXT NOT NULL DEFAULT '',
+		cache_key TEXT NOT NULL DEFAULT '', source_url_hash TEXT NOT NULL DEFAULT '',
+		codec TEXT NOT NULL DEFAULT '', preset TEXT NOT NULL DEFAULT '',
+		duration_ms REAL NOT NULL DEFAULT 0, asset_download_ms REAL NOT NULL DEFAULT 0,
+		ffmpeg_encode_ms REAL NOT NULL DEFAULT 0, source_bytes INTEGER NOT NULL DEFAULT 0,
+		output_bytes INTEGER NOT NULL DEFAULT 0, input_duration_ms INTEGER NOT NULL DEFAULT 0,
+		output_duration_ms INTEGER NOT NULL DEFAULT 0, frames_encoded INTEGER NOT NULL DEFAULT 0,
+		frames_decoded INTEGER NOT NULL DEFAULT 0, frames_composited INTEGER NOT NULL DEFAULT 0,
+		ffmpeg_speed_x REAL NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT '',
+		metadata_json TEXT NOT NULL DEFAULT '{}')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const evidence = `{"registered_asset_id":"asset-window-1","certificate":{"output_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}`
+	if _, err := db.Exec(`INSERT INTO task_attempt_segment_timings
+		(attempt_id, segment_index, metadata_json) VALUES ('attempt-1', 0, ?)`, evidence); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewSQLiteTaskAttemptRepository(&SQLiteStore{db: db})
+	segments, err := repo.ListSegmentTimings(context.Background(), "attempt-1")
+	if err != nil {
+		t.Fatalf("ListSegmentTimings: %v", err)
+	}
+	if len(segments) != 1 || segments[0].MetadataJSON != evidence {
+		t.Fatalf("segment evidence = %#v, want persisted metadata %s", segments, evidence)
+	}
+}
+
+func TestListSuccessfulSegmentTimingsUsesLatestWinningAttempt(t *testing.T) {
+	repo := openTaskAttemptTestDB(t)
+	db := repo.store.db
+	ctx := context.Background()
+	if _, err := db.Exec(`CREATE TABLE task_attempt_segment_timings (
+		attempt_id TEXT NOT NULL, segment_index INTEGER NOT NULL DEFAULT 0,
+		scene_id TEXT NOT NULL DEFAULT '', source_type TEXT NOT NULL DEFAULT '',
+		cache_key TEXT NOT NULL DEFAULT '', source_url_hash TEXT NOT NULL DEFAULT '',
+		codec TEXT NOT NULL DEFAULT '', preset TEXT NOT NULL DEFAULT '',
+		duration_ms REAL NOT NULL DEFAULT 0, asset_download_ms REAL NOT NULL DEFAULT 0,
+		ffmpeg_encode_ms REAL NOT NULL DEFAULT 0, source_bytes INTEGER NOT NULL DEFAULT 0,
+		output_bytes INTEGER NOT NULL DEFAULT 0, input_duration_ms INTEGER NOT NULL DEFAULT 0,
+		output_duration_ms INTEGER NOT NULL DEFAULT 0, frames_encoded INTEGER NOT NULL DEFAULT 0,
+		frames_decoded INTEGER NOT NULL DEFAULT 0, frames_composited INTEGER NOT NULL DEFAULT 0,
+		ffmpeg_speed_x REAL NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT '',
+		metadata_json TEXT NOT NULL DEFAULT '{}')`); err != nil {
+		t.Fatal(err)
+	}
+	for _, task := range []struct{ id, executor string }{
+		{"prep-window", "video.prepare.window.v1"}, {"ordinary-task", "video.assemble.copy.v1"},
+	} {
+		if _, err := db.Exec(`INSERT INTO tasks(task_id,job_id,executor_id) VALUES(?,?,?)`, task.id, "job-1", task.executor); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, attempt := range []struct {
+		id, task, status string
+		number           int
+	}{
+		{"attempt-old", "prep-window", "SUCCEEDED", 1},
+		{"attempt-new", "prep-window", "SUCCEEDED", 2},
+		{"attempt-wrong-executor", "ordinary-task", "SUCCEEDED", 1},
+	} {
+		if _, err := db.Exec(`INSERT INTO task_attempts
+			(id,task_id,job_id,attempt_number,worker_id,lease_id,status,created_at,updated_at)
+			VALUES(?,?,?,?,'worker','lease',?,'now','now')`, attempt.id, attempt.task, "job-1", attempt.number, attempt.status); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`INSERT INTO task_attempt_segment_timings
+			(attempt_id,segment_index,source_type,metadata_json) VALUES(?,0,'video.prepare.window.v1',?)`,
+			attempt.id, `{"registered_asset_id":"`+attempt.id+`"}`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	segments, err := repo.ListSuccessfulSegmentTimings(ctx, []string{"prep-window", "ordinary-task"})
+	if err != nil {
+		t.Fatalf("ListSuccessfulSegmentTimings: %v", err)
+	}
+	if len(segments) != 1 || segments[0].TaskID != "prep-window" || segments[0].AttemptID != "attempt-new" || !strings.Contains(segments[0].MetadataJSON, "attempt-new") {
+		t.Fatalf("successful evidence = %#v; want latest successful prepared-window attempt only", segments)
 	}
 }
 

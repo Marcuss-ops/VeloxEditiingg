@@ -40,6 +40,29 @@ func TestServeAssetRequiresWorkerAuthentication(t *testing.T) {
 	}
 }
 
+func TestPreparedWindowRoutesRequireWorkerAuthentication(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tempDir := t.TempDir()
+	db, err := store.NewSQLiteStore(filepath.Join(tempDir, "prepared-window-auth.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	tokenMgr := workersreg.NewTokenManager(db)
+	handler := NewHandler(&config.Config{Runtime: config.RuntimeConfig{DataDir: tempDir}}, tokenMgr, nil, nil)
+	r := gin.New()
+	r.GET("/api/v1/agent/prepared-windows/:identity", handler.PreparedWindowByIdentity())
+	r.PUT("/api/v1/agent/prepared-windows/:identity", handler.RegisterPreparedWindow())
+	for _, method := range []string{http.MethodGet, http.MethodPut} {
+		req := httptest.NewRequest(method, "/api/v1/agent/prepared-windows/"+strings.Repeat("a", 64), strings.NewReader("bytes"))
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("%s status=%d body=%s, want 401", method, w.Code, w.Body.String())
+		}
+	}
+}
+
 func TestServeAssetRejectsTraversalAndUnknownAssets(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	tempDir := t.TempDir()

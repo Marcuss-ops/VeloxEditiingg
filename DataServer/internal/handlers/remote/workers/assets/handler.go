@@ -2,9 +2,12 @@ package assets
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -17,6 +20,7 @@ import (
 	driveintegration "velox-server/internal/integrations/drive"
 	"velox-server/internal/repository"
 	workersreg "velox-server/internal/workers"
+	"velox-shared/contract"
 )
 
 // Handler serves registered assets to remote workers. A local final blob is an
@@ -32,6 +36,104 @@ type Handler struct {
 	driveSvc      *driveintegration.Service
 	materializeMu sync.Mutex
 	materializing map[string]*materializationCall
+}
+
+// PreparedWindowByIdentity returns a previously registered certified window.
+// The identity is derived from source bytes/window and encoder profile, not
+// from the timeline placement, so independent jobs can reuse the same blob.
+func (h *Handler) PreparedWindowByIdentity() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !h.authorizeWorker(c) {
+			return
+		}
+		if h.assetSvc == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "asset service unavailable"})
+			return
+		}
+		identity := strings.TrimSpace(c.Param("identity"))
+		if len(identity) != 64 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid prepared-window identity"})
+			return
+		}
+		asset, err := h.assetSvc.GetBySourceReference(c.Request.Context(), "prepared-window:"+identity)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "prepared-window lookup failed"})
+			return
+		}
+		if asset == nil {
+			c.Status(http.StatusNotFound)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"asset_id": asset.AssetID, "sha256": asset.SHA256, "size_bytes": asset.SizeBytes})
+	}
+}
+
+// RegisterPreparedWindow accepts worker-produced fragment bytes outside the
+// final artifact/delivery protocol. Request and certificate are base64url JSON
+// headers; the body is streamed as the MP4 blob and independently verified by
+// AssetService before it becomes visible in the canonical asset registry.
+func (h *Handler) RegisterPreparedWindow() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !h.authorizeWorker(c) {
+			return
+		}
+		if h.assetSvc == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "asset service unavailable"})
+			return
+		}
+		identity := strings.TrimSpace(c.Param("identity"))
+		if len(identity) != 64 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid prepared-window identity"})
+			return
+		}
+		decodeHeader := func(name string, target interface{}) error {
+			raw, err := base64.RawURLEncoding.DecodeString(c.GetHeader(name))
+			if err != nil {
+				return fmt.Errorf("decode %s: %w", name, err)
+			}
+			return json.Unmarshal(raw, target)
+		}
+		var request contract.VideoPrepareWindowV1
+		var certificate contract.VideoPrepareWindowCertificateV1
+		if err := decodeHeader("X-Velox-Window-Request", &request); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid window request"})
+			return
+		}
+		if err := decodeHeader("X-Velox-Window-Certificate", &certificate); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid window certificate"})
+			return
+		}
+		computedIdentity, err := contract.VideoPrepareWindowCacheIdentity(request)
+		if err != nil || computedIdentity != identity {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "window identity does not match request"})
+			return
+		}
+		maxBytes := h.assetSvc.SecurityPolicy().MaxBytes
+		if maxBytes <= 0 {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "prepared-window size policy unavailable"})
+			return
+		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBytes+1)
+		tmp, err := os.CreateTemp("", "velox-prepared-window-*.mp4")
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "cannot stage prepared window"})
+			return
+		}
+		path := tmp.Name()
+		defer os.Remove(path)
+		written, copyErr := io.Copy(tmp, c.Request.Body)
+		closeErr := tmp.Close()
+		if copyErr != nil || closeErr != nil || written <= 0 || written > maxBytes {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid prepared-window body"})
+			return
+		}
+		asset, err := h.assetSvc.RegisterPreparedWindow(c.Request.Context(), path, request, certificate)
+		if err != nil {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "prepared-window verification failed"})
+			return
+		}
+		c.JSON(http.StatusCreated, gin.H{"asset_id": asset.AssetID, "sha256": asset.SHA256, "size_bytes": asset.SizeBytes})
+	}
 }
 
 type materializationCall struct {

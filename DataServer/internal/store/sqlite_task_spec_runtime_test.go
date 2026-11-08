@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -111,5 +113,62 @@ func TestFinalizeTaskSpecUpdatesExecutorAndPayloadAtomically(t *testing.T) {
 	}
 	if taskExecutor != "video.assemble.copy.v1" || specExecutor != taskExecutor || pending {
 		t.Fatalf("final state executor task/spec=%q/%q pending=%v", taskExecutor, specExecutor, pending)
+	}
+}
+
+func TestClaimRuntimeFinalizationIsAtomicAndRefreshesSpecHash(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "task-spec-finalize-claim.db") + "?_busy_timeout=5000&_journal_mode=WAL"
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	_, err = db.Exec(`
+		CREATE TABLE tasks (task_id TEXT PRIMARY KEY, job_id TEXT NOT NULL, executor_id TEXT NOT NULL, status TEXT NOT NULL, worker_id TEXT, updated_at TEXT NOT NULL);
+		CREATE TABLE task_specs (task_id TEXT PRIMARY KEY, spec_version INTEGER NOT NULL, spec_hash TEXT NOT NULL, payload_json TEXT NOT NULL);
+		INSERT INTO tasks VALUES ('task-1','job-1','video.assemble.slice.v1','READY',NULL,'2026-09-27T00:00:00Z');
+		INSERT INTO task_specs VALUES ('task-1',1,'old-hash','{"runtime_finalize_status":"QUEUED","runtime_finalize_request":{"idempotency_key":"f-1"}}');`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := NewSQLiteTaskRepository(&SQLiteStore{db: db})
+	results := make(chan bool, 2)
+	errorsFound := make(chan error, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			claimed, claimErr := repo.ClaimRuntimeFinalization(context.Background(), "task-1")
+			results <- claimed
+			errorsFound <- claimErr
+		}()
+	}
+	wg.Wait()
+	close(results)
+	close(errorsFound)
+	claimCount := 0
+	for claimed := range results {
+		if claimed {
+			claimCount++
+		}
+	}
+	for claimErr := range errorsFound {
+		if claimErr != nil {
+			t.Fatalf("concurrent claim failed: %v", claimErr)
+		}
+	}
+	if claimCount != 1 {
+		t.Fatalf("successful concurrent claims=%d, want exactly 1", claimCount)
+	}
+	var state, payload, hash string
+	if err := db.QueryRow(`SELECT json_extract(payload_json,'$.runtime_finalize_status'),payload_json,spec_hash FROM task_specs WHERE task_id='task-1'`).Scan(&state, &payload, &hash); err != nil {
+		t.Fatal(err)
+	}
+	if state != "RUNNING" || hash == "" || hash == "old-hash" {
+		t.Fatalf("claimed state/hash = %q/%q", state, hash)
+	}
+	if !strings.Contains(payload, `"idempotency_key":"f-1"`) {
+		t.Fatalf("claim dropped the durable request: %s", payload)
 	}
 }

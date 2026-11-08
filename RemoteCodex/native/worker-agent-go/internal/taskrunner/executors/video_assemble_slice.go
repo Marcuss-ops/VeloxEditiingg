@@ -2,15 +2,11 @@ package executors
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/rand"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -250,6 +246,9 @@ type slicePoolMember struct {
 	SizeBytes       int64  `json:"size_bytes"`
 	DurationMS      int64  `json:"duration_ms"`
 	StockPoolMember bool   `json:"stock_pool_member"`
+	SourceSHA256    string `json:"source_sha256,omitempty"`
+	SHA256          string `json:"sha256,omitempty"`
+	AssetSHA256     string `json:"asset_sha256,omitempty"`
 }
 
 func sliceRuntimePoolMembers(raw interface{}) []slicePoolMember {
@@ -267,20 +266,27 @@ func (e *videoAssembleSliceExecutor) compileStockPoolPlan(_ context.Context, spe
 		return nil, errors.New("unsupported stock_pool selection")
 	}
 	members := sliceRuntimePoolMembers(spec.Payload["runtime_assets"])
-	ordered := make([]slicePoolMember, 0, len(members))
+	eligible := make([]contract.StockPoolCandidateV2, 0, len(members))
+	byDriveID := make(map[string]slicePoolMember, len(members))
 	for _, member := range members {
 		binding, selected := bindings["stockpool:"+member.DriveFileID]
 		if member.StockPoolMember && selected && binding.Verified && binding.Size > 0 && member.DurationMS > 0 {
-			ordered = append(ordered, member)
+			eligible = append(eligible, contract.StockPoolCandidateV2{
+				AssetID: member.AssetID, DriveFileID: member.DriveFileID, SizeBytes: member.SizeBytes,
+				DurationMS: member.DurationMS, StockPoolMember: true, SourceSHA256: member.SourceSHA256,
+				SHA256: member.SHA256, AssetSHA256: member.AssetSHA256,
+			})
+			byDriveID[member.DriveFileID] = member
 		}
 	}
-	if len(ordered) == 0 {
-		return nil, errors.New("stock_pool has no selected sources with Drive duration metadata")
+	selected, err := contract.ResolveCompiledStockPoolMembers(plan, spec.JobID, spec.Payload["runtime_stock_pool_snapshot"], eligible)
+	if err != nil {
+		return nil, fmt.Errorf("stock_pool selection: %w", err)
 	}
-	sort.Slice(ordered, func(i, j int) bool { return ordered[i].DriveFileID < ordered[j].DriveFileID })
-	seedBytes := sha256.Sum256([]byte(spec.JobID + ":" + plan.TimelineSHA256 + ":" + plan.StockPool.DriveFolderID))
-	rng := rand.New(rand.NewSource(int64(binary.LittleEndian.Uint64(seedBytes[:8]))))
-	rng.Shuffle(len(ordered), func(i, j int) { ordered[i], ordered[j] = ordered[j], ordered[i] })
+	ordered := make([]slicePoolMember, 0, len(selected))
+	for _, candidate := range selected {
+		ordered = append(ordered, byDriveID[candidate.DriveFileID])
+	}
 	compiled := *plan
 	compiled.StockPool = nil
 	compiled.Assets = append([]contract.AssetRefV2(nil), plan.Assets...)

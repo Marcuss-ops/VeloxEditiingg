@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	sharedpayload "velox-shared/payload"
 )
 
 type renderInputDiagnostic struct {
@@ -48,7 +50,7 @@ func diagnoseRenderInput(payload map[string]interface{}) renderInputDiagnostic {
 	if raw, ok := payload["scenes_json"].(string); ok {
 		var scenes []map[string]interface{}
 		if json.Unmarshal([]byte(raw), &scenes) == nil {
-			d.inspectScenes(scenes, clipAudioSelectedIDs(runtimeAudioOf(payload)))
+			d.inspectScenes(scenes, sharedpayload.StringSetFromNestedPayload(payload, "runtime_audio", "clip_audio_scene_ids"))
 		}
 	} else if raw, ok := payload["scenes"].([]interface{}); ok {
 		scenes := make([]map[string]interface{}, 0, len(raw))
@@ -57,7 +59,7 @@ func diagnoseRenderInput(payload map[string]interface{}) renderInputDiagnostic {
 				scenes = append(scenes, scene)
 			}
 		}
-		d.inspectScenes(scenes, clipAudioSelectedIDs(runtimeAudioOf(payload)))
+		d.inspectScenes(scenes, sharedpayload.StringSetFromNestedPayload(payload, "runtime_audio", "clip_audio_scene_ids"))
 	}
 	if d.DuplicateClipStockCount > 0 {
 		d.Diagnosis = "clip_and_stock_are_additive; identical_asset_will_be_rendered_twice"
@@ -104,44 +106,6 @@ func (d *renderInputDiagnostic) inspectScenes(scenes []map[string]interface{}, s
 			}
 		}
 	}
-}
-
-func runtimeAudioOf(payload map[string]interface{}) map[string]interface{} {
-	if audio, ok := payload["runtime_audio"].(map[string]interface{}); ok {
-		return audio
-	}
-	if nested, ok := payload["runtime_payload"].(map[string]interface{}); ok {
-		if audio, ok := nested["runtime_audio"].(map[string]interface{}); ok {
-			return audio
-		}
-	}
-	return nil
-}
-
-// clipAudioSelectedIDs reads runtime_audio.clip_audio_scene_ids: the
-// scene IDs whose original clip audio the worker mixes with the final
-// narration. Unselected clip scenes coexisting with a final mix stay
-// video-only by design.
-func clipAudioSelectedIDs(runtimeAudio map[string]interface{}) map[string]bool {
-	selected := make(map[string]bool)
-	if runtimeAudio == nil {
-		return selected
-	}
-	switch values := runtimeAudio["clip_audio_scene_ids"].(type) {
-	case []interface{}:
-		for _, value := range values {
-			if id, ok := value.(string); ok && strings.TrimSpace(id) != "" {
-				selected[strings.TrimSpace(id)] = true
-			}
-		}
-	case []string:
-		for _, id := range values {
-			if strings.TrimSpace(id) != "" {
-				selected[strings.TrimSpace(id)] = true
-			}
-		}
-	}
-	return selected
 }
 
 func mediaList(raw interface{}) []interface{} {

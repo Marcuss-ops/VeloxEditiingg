@@ -1,6 +1,7 @@
 // Package pipeline / pipeline_run_submit.go — pipeline run submit phase.
-// Extracted from pipeline_run_actions.go: the FAILED-run retry flow that
-// re-issues the remote engine call with the original payload.
+// Extracted from pipeline_run_actions.go: the FAILED-run retry flow. Linked
+// Velox render jobs reuse their saved assembly task; producer-only runs still
+// re-issue the remote engine call with the original payload.
 package pipeline
 
 import (
@@ -12,45 +13,24 @@ import (
 	"velox-server/internal/creatorflow"
 	"velox-server/internal/pipelineruns"
 	"velox-server/internal/remoteengine"
+	"velox-server/internal/store"
 
 	"github.com/gin-gonic/gin"
 )
 
 // RetryPipelineRun handles POST /api/v1/pipeline-runs/:id/retry.
 //
-// Retries a FAILED pipeline run by:
-//  1. Resetting the pipeline_run status to ACCEPTED.
-//  2. Clearing error fields.
-//  3. Re-issuing the remote call with the original requested payload.
+// Retries a FAILED pipeline run. Linked Velox jobs use an atomic assembly-only
+// retry that reuses the persisted task spec and successful dependencies.
+// Producer-only runs retain the original remote re-submit behavior.
 //
 // Only runs in a FAILED state can be retried. Non-failed runs return 409.
 //
 //nolint:funlen // Retry mirrors the durable state machine and must update each client-scoped branch.
 func (h *Handlers) RetryPipelineRun() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if h.store == nil {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"ok": false, "error": "pipeline store not wired"})
-			return
-		}
-		idParam := strings.TrimSpace(c.Param("id"))
-		if idParam == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "id is required"})
-			return
-		}
-
-		ctx := c.Request.Context()
-		clientID := strings.TrimSpace(ClientIDFromContext(c))
-		pr, _, err := h.lookupPipelineRun(ctx, idParam, clientID)
-		if err != nil {
-			if errors.Is(err, errPipelineRunNotFound) {
-				if clientID != "" {
-					writeM2MJobNotFound(c)
-				} else {
-					c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "pipeline run not found"})
-				}
-				return
-			}
-			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
+		ctx, _, clientID, pr, _, ok := h.lookupPipelineRunRequest(c, "pipeline store not wired")
+		if !ok {
 			return
 		}
 
@@ -67,6 +47,41 @@ func (h *Handlers) RetryPipelineRun() gin.HandlerFunc {
 				"ok":     false,
 				"error":  "only FAILED pipeline runs can be retried",
 				"status": string(pr.Status),
+			})
+			return
+		}
+
+		// Once a Velox job exists, a retry must reuse its immutable task spec and
+		// certified inputs. The store transaction resets only the failed video
+		// assembly task, its parent job and this projection row; it never calls
+		// the Producer again.
+		if strings.TrimSpace(pr.VeloxJobID) != "" {
+			if h.store == nil {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"ok": false, "error": "pipeline store not wired"})
+				return
+			}
+			retried, retryErr := h.store.RetryFailedAssembly(ctx, pr.ID, clientID)
+			if retryErr != nil {
+				if errors.Is(retryErr, store.ErrPipelineRunNoRow) {
+					c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "pipeline run not found"})
+					return
+				}
+				if errors.Is(retryErr, store.ErrAssemblyRetryNotEligible) {
+					c.JSON(http.StatusConflict, gin.H{
+						"ok": false, "error": "linked Velox job has no eligible failed assembly task",
+						"velox_job_id": pr.VeloxJobID,
+					})
+					return
+				}
+				c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": retryErr.Error()})
+				return
+			}
+			pipelineLog("RETRY: requeued failed assembly run=%s job=%s task=%s", retried.PipelineRunID, retried.JobID, retried.TaskID)
+			c.JSON(http.StatusAccepted, gin.H{
+				"ok": true, "pipeline_run_id": retried.PipelineRunID,
+				"status": string(pipelineruns.StatusWorkerQueued), "retry_mode": "ASSEMBLY_ONLY",
+				"velox_job_id": retried.JobID, "task_id": retried.TaskID,
+				"status_url": "/api/v1/pipeline-runs/" + retried.PipelineRunID,
 			})
 			return
 		}

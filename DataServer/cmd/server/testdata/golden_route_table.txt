@@ -25,11 +25,13 @@ GET api/internal/artifacts/:artifact_id/download
 GET api/ready
 GET api/v1/agent/assets/:asset_id
 GET api/v1/agent/cache/protected-assets
+GET api/v1/agent/prepared-windows/:identity
 GET audit
 GET health
 GET health/ready
 GET keys
 GET keys/:client_id
+GET metrics
 GET metrics
 GET metrics
 GET ready
@@ -61,3 +63,4 @@ POST api/v1/video/master-stream/:upload_id/abort
 POST api/v1/video/master-stream/:upload_id/complete
 POST api/v1/video/upload-completed
 POST keys
+PUT api/v1/agent/prepared-windows/:identity

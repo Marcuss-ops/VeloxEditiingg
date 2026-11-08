@@ -24,6 +24,14 @@ const stockSourceDownloadConcurrency = 8
 // number of CPU encoders on one Master.
 const stockWindowMaterializationConcurrency = 4
 
+// Shared resource-class gates keep parallel FINALIZE requests from
+// multiplying these per-request limits into unbounded fleet-control-plane
+// work. Download/probe and window encoding have separate budgets.
+var (
+	stockSourceSlots = make(chan struct{}, stockSourceDownloadConcurrency)
+	stockWindowSlots = make(chan struct{}, stockWindowMaterializationConcurrency)
+)
+
 // PrepareDriveStockWindows downloads each Drive source once, verifies and
 // probes it once, then replaces every source window with a certified,
 // assembly-ready fragment in the canonical plan. Prepared fragments are
@@ -48,27 +56,159 @@ func (s *AssetService) PrepareDriveStockWindows(ctx context.Context, planJSON st
 	if err != nil {
 		return "", "", err
 	}
-	sources, err := s.materializeDriveStockSources(ctx, sourceRequests)
+	cachedWindows, sourceIDsToFetch, err := s.lookupCachedDriveStockWindows(ctx, &plan, assetsByID, bindings)
+	if err != nil {
+		return "", "", err
+	}
+	requestsToFetch := make(map[string]driveStockSourceRequest, len(sourceIDsToFetch))
+	for sourceID := range sourceIDsToFetch {
+		if request, exists := sourceRequests[sourceID]; exists {
+			requestsToFetch[sourceID] = request
+		}
+	}
+	sources, err := s.materializeDriveStockSources(ctx, requestsToFetch)
 	if err != nil {
 		return "", "", err
 	}
 	defer cleanupDriveStockSources(sources)
 
-	windowJobs, placements, replacedStockIDs, changed, err := collectDriveStockWindows(&plan, assetsByID, bindings, sources)
+	windowJobs, placements, replacedStockIDs, changed, err := collectDriveStockWindows(&plan, assetsByID, bindings, sources, cachedWindows, s.videoTrimmer.PreparationRevision())
 	if err != nil {
 		return "", "", err
 	}
 	if !changed {
 		return planJSON, contract.HashCompiledPlanV2([]byte(planJSON)), nil
 	}
-	windowResults, windowKeys, err := s.materializeDriveStockWindows(ctx, &plan, windowJobs)
+	windowResults := cachedWindows
+	materializedResults, windowKeys, err := s.materializeDriveStockWindows(ctx, &plan, windowJobs)
 	if err != nil {
 		return "", "", err
+	}
+	for key, result := range materializedResults {
+		windowResults[key] = result
 	}
 	if err := s.registerPreparedDriveStockWindows(ctx, windowKeys, windowResults); err != nil {
 		return "", "", err
 	}
 	return rewritePreparedDriveStockPlan(&plan, placements, replacedStockIDs, windowResults)
+}
+
+// lookupCachedDriveStockWindows checks every window with a known immutable
+// source identity before downloading source bytes. It returns only the source
+// IDs that have an unknown identity or at least one cache miss.
+func (s *AssetService) lookupCachedDriveStockWindows(
+	ctx context.Context,
+	plan *contract.CompiledRenderPlanV2,
+	assetsByID map[string]contract.AssetRefV2,
+	bindings map[string]map[string]interface{},
+) (map[string]*driveStockWindowResult, map[string]struct{}, error) {
+	windowResults := make(map[string]*driveStockWindowResult)
+	sourceIDsToFetch := make(map[string]struct{})
+	seenWindows := make(map[string]struct{})
+	for trackIndex := range plan.VideoTracks {
+		for segmentIndex := range plan.VideoTracks[trackIndex].Segments {
+			segment := &plan.VideoTracks[trackIndex].Segments[segmentIndex]
+			if segment.StockPoolSlot {
+				continue
+			}
+			original, exists := assetsByID[segment.AssetID]
+			if !exists || videoSegmentAlreadyPrepared(*plan, *segment, original) {
+				continue
+			}
+			binding := stockRuntimeBindingForAsset(original, bindings)
+			if binding == nil && !isDriveStock(original) {
+				return nil, nil, fmt.Errorf("video segment %q has no runtime source binding for asset %q", segment.SegmentID, original.AssetID)
+			}
+			sourceID := stockDriveID(original, binding)
+			if sourceID == "" {
+				sourceID = original.AssetID
+			}
+			if binding == nil || stockSourceURI(binding, sourceID) == "" {
+				sourceIDsToFetch[sourceID] = struct{}{}
+				continue
+			}
+			sourceSHA := strings.TrimSpace(original.SHA256)
+			if sourceSHA == "" {
+				sourceSHA = strings.TrimSpace(bindingString(binding, "sha256", "asset_sha256"))
+			}
+			sourceSHA = strings.ToLower(sourceSHA)
+			decodedSHA, decodeErr := hex.DecodeString(sourceSHA)
+			if decodeErr != nil || len(decodedSHA) != sha256.Size {
+				sourceIDsToFetch[sourceID] = struct{}{}
+				continue
+			}
+			startUS, durationUS := segment.SourceInUS, segment.SourceDurationUS
+			if startUS < 0 || durationUS <= 0 || durationUS > math.MaxInt64-startUS {
+				return nil, nil, fmt.Errorf("stock segment %q has invalid source window: source_in_us=%d source_duration_us=%d", segment.SegmentID, startUS, durationUS)
+			}
+			wantFrames := int64(math.Round(float64(durationUS) * float64(plan.Output.FPSNum) / (1_000_000 * float64(plan.Output.FPSDen))))
+			if wantFrames <= 0 || segment.FrameCount != wantFrames {
+				return nil, nil, fmt.Errorf("video segment %q frame count mismatch: plan=%d expected=%d from %d us at %d/%d fps", segment.SegmentID, segment.FrameCount, wantFrames, durationUS, plan.Output.FPSNum, plan.Output.FPSDen)
+			}
+			windowRef := stockWindowSourceReference(sourceID, sourceSHA, startUS, durationUS, plan.Output.ProfileID, s.videoTrimmer.PreparationRevision())
+			if _, exists := seenWindows[windowRef]; exists {
+				continue
+			}
+			seenWindows[windowRef] = struct{}{}
+			cached, err := s.GetBySourceReference(ctx, windowRef)
+			if err != nil {
+				return nil, nil, fmt.Errorf("stock window cache lookup: %w", err)
+			}
+			if cached == nil {
+				sourceIDsToFetch[sourceID] = struct{}{}
+				continue
+			}
+			if cached.SHA256 == "" || cached.SizeBytes <= 0 || cached.Status != AssetStatusReady {
+				return nil, nil, fmt.Errorf("cached stock window %q is not a certified READY asset", windowRef)
+			}
+			if !cachedDriveStockWindowEvidence(cached, sourceSHA, startUS, durationUS, wantFrames, s.videoTrimmer.Profile(), s.videoTrimmer.PreparationRevision()) {
+				return nil, nil, fmt.Errorf("cached stock window %q has missing or mismatched preparation evidence", windowRef)
+			}
+			windowResults[windowRef] = &driveStockWindowResult{fragment: cached}
+		}
+	}
+	return windowResults, sourceIDsToFetch, nil
+}
+
+func stockWindowSourceReference(sourceID, sourceSHA string, startUS, durationUS int64, profileID, preparationRevision string) string {
+	return fmt.Sprintf("velox-video-window://%s/%s/%d/%d/%s/%s", sourceID, sourceSHA, startUS, durationUS, profileID, preparationRevision)
+}
+
+func cachedDriveStockWindowEvidence(
+	asset *Asset,
+	sourceSHA string,
+	startUS, durationUS, expectedFrames int64,
+	profile contract.CanonicalVideoProfileV1,
+	preparationRevision string,
+) bool {
+	if asset == nil || asset.MetadataJSON == "" || preparationRevision == "" {
+		return false
+	}
+	var evidence struct {
+		StartSeconds        float64 `json:"start_seconds"`
+		EndSeconds          float64 `json:"end_seconds"`
+		ProfileID           string  `json:"canonical_profile_id"`
+		StreamProfileID     string  `json:"canonical_stream_profile_id"`
+		ProfileVersion      int     `json:"canonical_profile_version"`
+		PreparationRevision string  `json:"preparation_revision"`
+		SourceSHA256        string  `json:"source_sha256"`
+		FrameCount          int64   `json:"frame_count"`
+		FirstFrameKeyframe  bool    `json:"first_frame_keyframe"`
+		ClosedGOP           bool    `json:"closed_gop"`
+		CopyEligible        bool    `json:"copy_eligible"`
+	}
+	if err := json.Unmarshal([]byte(asset.MetadataJSON), &evidence); err != nil {
+		return false
+	}
+	wantStart := float64(startUS) / 1_000_000
+	wantEnd := float64(startUS+durationUS) / 1_000_000
+	const tolerance = 0.000001
+	return strings.EqualFold(evidence.SourceSHA256, sourceSHA) &&
+		evidence.PreparationRevision == preparationRevision &&
+		evidence.ProfileID == profile.ProfileID && evidence.StreamProfileID == profile.StreamProfile() &&
+		evidence.ProfileVersion == profile.Version && evidence.FrameCount == expectedFrames &&
+		evidence.FirstFrameKeyframe && evidence.ClosedGOP == profile.ClosedGOP && evidence.CopyEligible &&
+		math.Abs(evidence.StartSeconds-wantStart) <= tolerance && math.Abs(evidence.EndSeconds-wantEnd) <= tolerance
 }
 
 func matchesCanonicalStockVideo(probe VideoProbe, profile contract.CanonicalVideoProfileV1) bool {
@@ -87,6 +227,10 @@ func matchesCanonicalStockVideo(probe VideoProbe, profile contract.CanonicalVide
 }
 
 func runBoundedStockJobs(ctx context.Context, limit int, jobs []func(context.Context) error) error {
+	return runBoundedStockJobsWithSlots(ctx, limit, nil, jobs)
+}
+
+func runBoundedStockJobsWithSlots(ctx context.Context, limit int, sharedSlots chan struct{}, jobs []func(context.Context) error) error {
 	if len(jobs) == 0 {
 		return nil
 	}
@@ -111,7 +255,17 @@ func runBoundedStockJobs(ctx context.Context, limit int, jobs []func(context.Con
 				if jobCtx.Err() != nil {
 					return
 				}
+				if sharedSlots != nil {
+					select {
+					case sharedSlots <- struct{}{}:
+					case <-jobCtx.Done():
+						return
+					}
+				}
 				if err := job(jobCtx); err != nil {
+					if sharedSlots != nil {
+						<-sharedSlots
+					}
 					errorMu.Lock()
 					if firstErr == nil {
 						firstErr = err
@@ -119,6 +273,9 @@ func runBoundedStockJobs(ctx context.Context, limit int, jobs []func(context.Con
 					}
 					errorMu.Unlock()
 					return
+				}
+				if sharedSlots != nil {
+					<-sharedSlots
 				}
 			}
 		}()

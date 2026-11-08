@@ -107,6 +107,14 @@ type MetricsReader interface {
 	GetParallelism(ctx context.Context, attemptID string) (*AttemptParallelism, error)
 }
 
+// SuccessfulSegmentTimingReader returns the latest successful attempt's
+// segment evidence for each requested task. It is used to recover immutable
+// prepared-window certificates after a Master restart; failed/retried attempts
+// must never override the winning successful attempt.
+type SuccessfulSegmentTimingReader interface {
+	ListSuccessfulSegmentTimings(ctx context.Context, taskIDs []string) ([]SegmentTiming, error)
+}
+
 // Repository combines Reader and Writer into a single attempt persistence contract.
 type Repository interface {
 	Reader

@@ -15,6 +15,7 @@ func TestRegisterCanonicalRenderExecutorsRegistersCopyAndDriveSliceExecutors(t *
 	}
 
 	for _, id := range []string{
+		executors.VideoPrepareWindowID,
 		executors.VideoAssembleCopyID,
 		executors.VideoAssembleSliceID,
 	} {
@@ -22,11 +23,14 @@ func TestRegisterCanonicalRenderExecutorsRegistersCopyAndDriveSliceExecutors(t *
 			t.Errorf("registry missing %s@1", id)
 		}
 	}
-	if got := reg.Len(); got != 2 {
-		t.Fatalf("registry length = %d, want 2", got)
+	if got := reg.Len(); got != 3 {
+		t.Fatalf("registry length = %d, want 3", got)
 	}
 	descs := reg.Descriptors()
 	for _, desc := range descs {
+		if desc.ID == executors.VideoPrepareWindowID && (len(desc.InputTypes) != 1 || desc.InputTypes[0] != "video.prepare.window.v1") {
+			t.Fatalf("video.prepare.window input types = %#v", desc.InputTypes)
+		}
 		if desc.ID != executors.VideoAssembleCopyID {
 			continue
 		}

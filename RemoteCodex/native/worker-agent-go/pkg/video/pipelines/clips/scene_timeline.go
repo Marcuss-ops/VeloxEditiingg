@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"strings"
 
+	"velox-shared/payload"
 	"velox-worker-agent/pkg/video/plan"
 	"velox-worker-agent/pkg/video/services/audio"
 )
@@ -146,7 +147,7 @@ func compileSceneTimeline(ctx context.Context, jobID string, scenes []sceneTimel
 	audioTracks := make([]plan.AudioTrack, 0, len(scenes)*2)
 	offset := 0.0
 	finalAudioConfigured := hasRuntimeFinalAudio(input)
-	clipAudioSceneIDs := runtimeClipAudioSceneIDs(input)
+	clipAudioSceneIDs := payload.StringSetFromNestedPayload(input, "runtime_audio", "clip_audio_scene_ids")
 	for sceneIndex, scene := range scenes {
 		if err := ctx.Err(); err != nil {
 			return nil, err

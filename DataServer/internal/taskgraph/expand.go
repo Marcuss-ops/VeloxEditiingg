@@ -16,10 +16,8 @@ import (
 // succeed, so a fan-out job starts executing at its DAG roots while the
 // dependent tasks stay inert.
 //
-// Deliberately NOT part of this type: spec payload construction and
-// executor selection. The caller (enqueue path) decides what each task
-// executes; this service only guarantees graph integrity + atomic
-// persistence of the task set.
+// Each expanded task carries its worker payload so the production atomic
+// writer persists task rows and executable specs together.
 type ExpandService struct {
 	repo Repository
 }
@@ -44,6 +42,7 @@ type ExpandedTask struct {
 	ProjectID    string
 	RenderPlanID string
 	DependsOn    []string
+	Payload      map[string]interface{}
 }
 
 // ExpandPlan is the input fan-out plan for one job.
@@ -94,6 +93,7 @@ func (s *ExpandService) Expand(ctx context.Context, plan ExpandPlan) ([]Task, er
 			Status:          StatusPending,
 			Priority:        t.Priority,
 			DependsOn:       t.DependsOn,
+			SpecPayload:     t.Payload,
 		})
 	}
 
@@ -102,26 +102,75 @@ func (s *ExpandService) Expand(ctx context.Context, plan ExpandPlan) ([]Task, er
 		return nil, err
 	}
 
-	if atomicRepo, ok := s.repo.(AtomicTaskWriter); ok {
-		if err := atomicRepo.CreateTasksAtomic(ctx, tasks); err != nil {
-			return nil, fmt.Errorf("taskgraph.Expand: atomic create: %w", err)
-		}
-		return tasks, nil
+	atomicRepo, ok := s.repo.(AtomicTaskWriter)
+	if !ok {
+		return nil, fmt.Errorf("taskgraph.Expand: repository must atomically persist task rows and executable specs")
 	}
+	if err := atomicRepo.CreateTasksAtomic(ctx, tasks); err != nil {
+		return nil, fmt.Errorf("taskgraph.Expand: atomic create: %w", err)
+	}
+	return tasks, nil
+}
 
-	created := make([]Task, 0, len(tasks))
-	for i := range tasks {
-		t := tasks[i]
-		if err := s.repo.Create(ctx, &t); err != nil {
-			// Compensate: remove the rows created in this pass so a failed
-			// expansion never leaves a partial DAG behind (the parent job
-			// remains PENDING and can be re-expanded or failed upstream).
-			for j := range created {
-				_ = s.repo.Delete(ctx, created[j].ID)
-			}
-			return nil, fmt.Errorf("taskgraph.Expand: create task %s: %w", t.ID, err)
+// Extend atomically adds preparation roots and connects them to an existing
+// unleased assembly task. The complete job graph is validated before any
+// persistence; the assembly TaskSpec patch is committed with rows and edges.
+func (s *ExpandService) Extend(ctx context.Context, parentTaskID string, additions []ExpandedTask, parentDependsOn []string, parentPayloadPatch map[string]interface{}) ([]Task, error) {
+	if parentTaskID == "" || len(additions) == 0 {
+		return nil, fmt.Errorf("taskgraph.Extend: parent task and preparation tasks are required")
+	}
+	parent, err := s.repo.Get(ctx, parentTaskID)
+	if err != nil {
+		return nil, fmt.Errorf("taskgraph.Extend: read parent: %w", err)
+	}
+	if parent == nil || (parent.Status != StatusPending && parent.Status != StatusReady) || parent.WorkerID != "" {
+		return nil, fmt.Errorf("taskgraph.Extend: parent must exist and remain unleased")
+	}
+	all, err := s.repo.List(ctx, Filter{JobIDs: []string{parent.JobID}})
+	if err != nil {
+		return nil, fmt.Errorf("taskgraph.Extend: list job graph: %w", err)
+	}
+	if len(parentDependsOn) == 0 {
+		return nil, fmt.Errorf("taskgraph.Extend: assembly parent requires preparation dependencies")
+	}
+	parent.DependsOn = append([]string(nil), parentDependsOn...)
+	allByID := make(map[string]struct{}, len(all)+len(additions))
+	for _, task := range all {
+		allByID[task.ID] = struct{}{}
+	}
+	created := make([]Task, 0, len(additions))
+	for i, addition := range additions {
+		if addition.TaskID == "" || addition.ExecutorID == "" || addition.ExecutorVer <= 0 {
+			return nil, fmt.Errorf("taskgraph.Extend: addition %d needs stable task and executor identities", i)
 		}
-		created = append(created, t)
+		if _, exists := allByID[addition.TaskID]; exists {
+			return nil, fmt.Errorf("taskgraph.Extend: task ID %q already exists in the job", addition.TaskID)
+		}
+		allByID[addition.TaskID] = struct{}{}
+		created = append(created, Task{
+			ID: addition.TaskID, JobID: parent.JobID, ProjectID: addition.ProjectID,
+			RenderPlanID: addition.RenderPlanID, ExecutorID: addition.ExecutorID,
+			ExecutorVersion: addition.ExecutorVer, Status: StatusPending,
+			Priority: addition.Priority, DependsOn: append([]string(nil), addition.DependsOn...),
+			SpecPayload: addition.Payload,
+		})
+	}
+	all = append(all, created...)
+	for i := range all {
+		if all[i].ID == parentTaskID {
+			all[i].DependsOn = parent.DependsOn
+			break
+		}
+	}
+	if err := ValidateTaskGraph(all); err != nil {
+		return nil, fmt.Errorf("taskgraph.Extend: graph validation: %w", err)
+	}
+	extender, ok := s.repo.(AtomicTaskGraphExtender)
+	if !ok {
+		return nil, fmt.Errorf("taskgraph.Extend: repository must atomically extend task rows, dependencies and parent spec")
+	}
+	if err := extender.ExtendTaskGraphAtomic(ctx, parentTaskID, created, parent.DependsOn, parentPayloadPatch); err != nil {
+		return nil, fmt.Errorf("taskgraph.Extend: atomic persistence: %w", err)
 	}
 	return created, nil
 }

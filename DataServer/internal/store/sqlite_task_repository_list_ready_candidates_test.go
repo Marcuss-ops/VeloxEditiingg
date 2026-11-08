@@ -204,6 +204,24 @@ func TestSQLiteTaskRepository_ListReadyCandidates_HappyPath(t *testing.T) {
 	}
 }
 
+func TestSQLiteTaskRepository_ListReadyCandidatesExcludesRuntimeAssetsPending(t *testing.T) {
+	r, db := openCandidatesTestDB(t)
+	ctx := context.Background()
+	t0 := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	seedCandidateTask(t, db, "T-ready", "J-ready", 1, "READY", false, "", "scene.composite.v1", 1, t0)
+	seedCandidateTask(t, db, "T-pending-assets", "J-pending-assets", 2, "READY", false, "", "scene.composite.v1", 1, t0.Add(time.Second))
+	if _, err := db.ExecContext(ctx, `INSERT INTO task_specs(task_id,payload_json) VALUES(?,?)`, "T-pending-assets", `{"runtime_assets_pending":true}`); err != nil {
+		t.Fatal(err)
+	}
+	candidates, err := r.ListReadyCandidates(ctx, 100)
+	if err != nil {
+		t.Fatalf("ListReadyCandidates: %v", err)
+	}
+	if len(candidates) != 1 || candidates[0].TaskID != "T-ready" {
+		t.Fatalf("candidates=%+v, want only T-ready; pending runtime assets must not be dispatched", candidates)
+	}
+}
+
 func TestSQLiteTaskRepository_ListReadyCandidatesPageReachesBeyondInitialWindow(t *testing.T) {
 	r, db := openCandidatesTestDB(t)
 	ctx := context.Background()

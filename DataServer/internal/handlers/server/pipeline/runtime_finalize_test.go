@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"velox-server/internal/taskgraph"
@@ -45,6 +46,9 @@ func (runtimeFinalizeTestQueue) RecoverInterruptedRuntimeFinalizations(context.C
 func (runtimeFinalizeTestQueue) ListRuntimeFinalizationCandidates(context.Context, int) ([]taskgraph.RuntimeFinalizationCandidate, error) {
 	return nil, nil
 }
+func (runtimeFinalizeTestQueue) ClaimRuntimeFinalization(context.Context, string) (bool, error) {
+	return true, nil
+}
 
 type runtimeFinalizeTestPreparer struct{}
 
@@ -56,6 +60,45 @@ type runtimeFinalizeTestNotifier struct{ jobs []string }
 
 func (n *runtimeFinalizeTestNotifier) NotifyTaskUpdated(_ context.Context, jobID string) {
 	n.jobs = append(n.jobs, jobID)
+}
+
+type runtimeFinalizeTestExpander struct {
+	parent       string
+	additions    []taskgraph.ExpandedTask
+	dependencies []string
+	patch        map[string]interface{}
+}
+
+func (e *runtimeFinalizeTestExpander) Extend(_ context.Context, parent string, additions []taskgraph.ExpandedTask, dependencies []string, patch map[string]interface{}) ([]taskgraph.Task, error) {
+	e.parent, e.additions, e.dependencies, e.patch = parent, additions, dependencies, patch
+	return nil, nil
+}
+
+func TestRuntimeFinalizationPublishesDurablePreparationFanOut(t *testing.T) {
+	expander := &runtimeFinalizeTestExpander{}
+	notifier := &runtimeFinalizeTestNotifier{}
+	processor := &RuntimeFinalizationProcessor{expander: expander, notifier: notifier}
+	identity := strings.Repeat("a", 64)
+	preparation := contract.VideoPrepareWindowTaskV1{
+		Identity: identity,
+		Request: contract.VideoPrepareWindowV1{Version: contract.VideoPrepareWindowVersion},
+		SegmentIDs: []string{"segment-1", "segment-2"},
+	}
+	bindings := []map[string]interface{}{{"asset_id": "source-1", "source_uri": "https://media.example/source.mp4"}}
+	if err := processor.publishWorkerPreparations(context.Background(), taskgraph.RuntimeFinalizationCandidate{TaskID: "assembly-1", JobID: "job-1"}, bindings, []contract.VideoPrepareWindowTaskV1{preparation}); err != nil {
+		t.Fatalf("publishWorkerPreparations: %v", err)
+	}
+	wantTaskID := "assembly-1-prep-" + identity[:24]
+	if expander.parent != "assembly-1" || len(expander.additions) != 1 || expander.additions[0].TaskID != wantTaskID ||
+		expander.additions[0].ExecutorID != contract.VideoPrepareWindowExecutorID || expander.dependencies[0] != wantTaskID {
+		t.Fatalf("published graph parent=%q additions=%+v dependencies=%v", expander.parent, expander.additions, expander.dependencies)
+	}
+	if expander.patch[runtimeFinalizeStatusKey] != runtimeFinalizeWaitingPreparation || expander.patch["runtime_assets_pending"] != true {
+		t.Fatalf("assembly patch must remain gated while fragments prepare: %#v", expander.patch)
+	}
+	if len(notifier.jobs) != 1 || notifier.jobs[0] != "job-1" {
+		t.Fatalf("notified jobs = %v, want [job-1]", notifier.jobs)
+	}
 }
 
 func TestRuntimeFinalizationProcessorCommitsBeforeNotifying(t *testing.T) {

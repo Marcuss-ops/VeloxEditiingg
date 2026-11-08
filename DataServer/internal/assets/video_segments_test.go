@@ -232,12 +232,135 @@ func TestPrepareDriveStockWindowsCertifiesExact75FrameFragment(t *testing.T) {
 	if len(repo.inserted) != 1 {
 		t.Fatalf("registered prepared fragment count=%d, want 1", len(repo.inserted))
 	}
-	// A second identical window reuses the certified registered fragment.
+	// A warm retry must hit the fragment cache before materializing the source.
+	// Removing the source makes any accidental source download/probe fail.
+	if err := os.Remove(sourcePath); err != nil {
+		t.Fatalf("remove source before warm retry: %v", err)
+	}
 	if _, _, err := service.PrepareDriveStockWindows(context.Background(), string(planJSON), bindings); err != nil {
 		t.Fatalf("cached retry: %v", err)
 	}
 	if len(repo.inserted) != 1 {
 		t.Fatalf("cache miss re-registered the same window: inserted=%d", len(repo.inserted))
+	}
+}
+
+func TestRegisterPreparedWindowVerifiesAndDeduplicates(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg is required for the prepared-window registry test")
+	}
+	if _, err := exec.LookPath("ffprobe"); err != nil {
+		t.Skip("ffprobe is required for the prepared-window registry test")
+	}
+	root := t.TempDir()
+	sourcePath := filepath.Join(root, "source.mp4")
+	generate := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=1920x1080:rate=24", "-frames:v", "48", "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-profile:v", "high", "-level:v", "4.0", "-g", "48", "-bf", "0", "-sc_threshold", "0", "-x264-params", "scenecut=0:open-gop=0:keyint=48:min-keyint=48", "-video_track_timescale", "90000", sourcePath)
+	if output, err := generate.CombinedOutput(); err != nil {
+		t.Fatalf("generate source fixture: %v: %s", err, output)
+	}
+	profile := videoContract.CanonicalVideoProfileV1Default
+	quality := videoContract.CanonicalPreparationQualityPolicyDefault
+	revision, err := videoContract.VideoWindowPreparationRevision(profile, quality)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preparedPath := filepath.Join(root, "prepared.mp4")
+	args := videoContract.CanonicalVideoWindowArgs(profile, quality, sourcePath, preparedPath, 0, 48, 24, 1, 48)
+	encode := exec.Command("ffmpeg", args...)
+	if output, err := encode.CombinedOutput(); err != nil {
+		t.Fatalf("generate canonical window: %v: %s", err, output)
+	}
+	outputFile, err := os.Open(preparedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outputSHA, err := ComputeSHA256(outputFile)
+	_ = outputFile.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	preparedInfo, err := os.Stat(preparedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := videoContract.VideoPrepareWindowV1{
+		Version:          videoContract.VideoPrepareWindowVersion,
+		Source:           videoContract.AssetRefV2{AssetID: "source-asset", SHA256: strings.Repeat("a", 64), SizeBytes: 12_000, Kind: "video"},
+		SourceStartFrame: 0, SourceFrameCount: 48, SourceFPSNum: 24, SourceFPSDen: 1,
+		OutputFrameCount: 48, TimelineRevision: 1, TimelineSHA256: strings.Repeat("b", 64),
+		OutputProfileID: profile.ProfileID, OutputProfileRevision: revision,
+	}
+	certificate := videoContract.VideoPrepareWindowCertificateV1{
+		Version: videoContract.VideoPrepareWindowVersion, SourceSHA256: request.Source.SHA256,
+		SourceStartFrame: request.SourceStartFrame, SourceFrameCount: request.SourceFrameCount,
+		SourceFPSNum: request.SourceFPSNum, SourceFPSDen: request.SourceFPSDen,
+		OutputFrameCount: request.OutputFrameCount, OutputProfileID: request.OutputProfileID,
+		OutputProfileRevision: request.OutputProfileRevision, EncoderVersion: "ffmpeg test",
+		EncoderBuildSHA256: strings.Repeat("c", 64), OutputSHA256: outputSHA, OutputSizeBytes: preparedInfo.Size(),
+		OutputEvidence: videoContract.VideoWindowOutputEvidenceV1{
+			Codec: profile.Codec, Profile: profile.CodecProfile, Level: 40, Width: profile.Width, Height: profile.Height,
+			PixelFormat: profile.PixelFormat, FPSNum: profile.FPSNum, FPSDen: profile.FPSDen,
+			TimeBaseNum: profile.TimeBaseNum, TimeBaseDen: profile.TimeBaseDen,
+			BFrames: profile.BFrames, FrameCount: 48, FirstFrameKeyframe: true, ExtradataSHA256: strings.Repeat("d", 64),
+		},
+		ClosedGOPAttested: true, SourceAssetID: request.Source.AssetID, SourceSizeBytes: request.Source.SizeBytes,
+		TimelineRevision: request.TimelineRevision, TimelineSHA256: request.TimelineSHA256,
+	}
+	repo := &segmentTestRepository{}
+	service := &AssetService{
+		repo: repo, blobStore: &segmentTestBlobStore{root: filepath.Join(root, "assets")},
+		clock: clock.System{}, videoTrimmer: NewVideoTrimmer(),
+		security: inputsecurity.NewFetcher(inputsecurity.DefaultPolicy()), mediaMetadata: NewMediaMetadataResolver(),
+	}
+	asset, err := service.RegisterPreparedWindow(context.Background(), preparedPath, request, certificate)
+	if err != nil {
+		t.Fatalf("register prepared window: %v", err)
+	}
+	if asset.AssetID != outputSHA || asset.SHA256 != outputSHA || len(repo.inserted) != 1 {
+		t.Fatalf("registered asset=%+v inserts=%d", asset, len(repo.inserted))
+	}
+	var metadata map[string]interface{}
+	if err := json.Unmarshal([]byte(repo.inserted[0].MetadataJSON), &metadata); err != nil {
+		t.Fatal(err)
+	}
+	if metadata["source_start_frame"] != float64(0) || metadata["window_certificate"] == nil {
+		t.Fatalf("prepared window certification missing from registry metadata: %#v", metadata)
+	}
+	second, err := service.RegisterPreparedWindow(context.Background(), preparedPath, request, certificate)
+	if err != nil {
+		t.Fatalf("reuse prepared window: %v", err)
+	}
+	if second.AssetID != asset.AssetID || len(repo.inserted) != 1 {
+		t.Fatalf("second registration=%+v inserts=%d, want content-addressed reuse", second, len(repo.inserted))
+	}
+}
+
+func TestCachedStockWindowEvidenceBindsPreparationRevisionAndWindow(t *testing.T) {
+	profile := videoContract.CanonicalVideoProfileV1Default
+	trimmer := NewVideoTrimmer()
+	revision := trimmer.PreparationRevision()
+	metadata, err := json.Marshal(map[string]interface{}{
+		"start_seconds": 1.25, "end_seconds": 4.375,
+		"canonical_profile_id":        profile.ProfileID,
+		"canonical_stream_profile_id": profile.StreamProfile(),
+		"canonical_profile_version":   profile.Version,
+		"preparation_revision":        revision,
+		"source_sha256":               strings.Repeat("a", 64),
+		"frame_count":                 75, "first_frame_keyframe": true,
+		"closed_gop": true, "copy_eligible": true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	asset := &Asset{MetadataJSON: string(metadata)}
+	if !cachedDriveStockWindowEvidence(asset, strings.Repeat("a", 64), 1_250_000, 3_125_000, 75, profile, revision) {
+		t.Fatal("matching certified evidence was rejected")
+	}
+	if cachedDriveStockWindowEvidence(asset, strings.Repeat("a", 64), 1_250_000, 3_125_000, 75, profile, revision+"-changed") {
+		t.Fatal("cache evidence from a different preparation revision was accepted")
+	}
+	if cachedDriveStockWindowEvidence(asset, strings.Repeat("a", 64), 1_250_000, 3_000_000, 75, profile, revision) {
+		t.Fatal("cache evidence for a different source interval was accepted")
 	}
 }
 

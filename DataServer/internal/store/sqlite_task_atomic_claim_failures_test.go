@@ -185,3 +185,27 @@ func TestClaimTaskForWorkerAtomic_NotReady(t *testing.T) {
 		t.Errorf("tasks worker/lease = %q/%q; want w-other/L-other", storedWorker, storedLease)
 	}
 }
+
+func TestClaimTaskForWorkerAtomic_RejectsRuntimeAssetsPending(t *testing.T) {
+	s, r := openTaskAtomicTestDB(t)
+	ctx := context.Background()
+	const taskID = "T-claim-runtime-pending"
+	seedReadyTaskWithExecutor(t, s.db, taskID, "video.assemble.copy.v1", 1, 0)
+	if _, err := s.db.ExecContext(ctx, `UPDATE task_specs SET payload_json='{"runtime_assets_pending":true}' WHERE task_id=?`, taskID); err != nil {
+		t.Fatalf("mark task runtime-pending: %v", err)
+	}
+	_, _, err := r.ClaimTaskForWorkerAtomic(ctx, taskgraph.ClaimTaskForWorkerCommand{
+		TaskID: taskID, ExpectedTaskRevision: 0, WorkerID: "worker", SessionID: "session", LeaseID: "lease",
+		ExecutorID: "video.assemble.copy.v1", ExecutorVersion: 1, CapabilityRevision: 1,
+	})
+	if !errors.Is(err, taskgraph.ErrTransitionConflict) {
+		t.Fatalf("claim err=%v, want ErrTransitionConflict while assets are pending", err)
+	}
+	var status string
+	if err := s.db.QueryRowContext(ctx, `SELECT status FROM tasks WHERE task_id=?`, taskID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != string(taskgraph.StatusReady) {
+		t.Fatalf("task status=%s, want READY and unclaimed", status)
+	}
+}

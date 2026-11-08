@@ -78,6 +78,8 @@ func TestWorkersModule_CanonicalNamespacesRegistered(t *testing.T) {
 		http.MethodPost + " /api/v1/agent/register",
 		http.MethodPost + " /api/v1/agent/validation",
 		http.MethodGet + " /api/v1/agent/assets/:asset_id",
+		http.MethodGet + " /api/v1/agent/prepared-windows/:identity",
+		http.MethodPut + " /api/v1/agent/prepared-windows/:identity",
 		http.MethodGet + " /api/v1/agent/cache/protected-assets",
 		// Canonical admin operator namespace (including the migrated
 		// /worker/* control actions and the revoked list).

@@ -4,9 +4,7 @@
 package pipeline
 
 import (
-	"errors"
 	"net/http"
-	"strings"
 
 	"velox-server/internal/deliverystore"
 	"velox-server/internal/repository"
@@ -20,36 +18,12 @@ import (
 // pipeline run. When no velox_job_id is set, returns an empty list.
 func (h *Handlers) PipelineRunArtifacts() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if h.store == nil {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"ok": false, "error": "pipeline store not wired"})
-			return
-		}
-		idParam := strings.TrimSpace(c.Param("id"))
-		if idParam == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "id is required"})
+		ctx, _, clientID, pr, forwarding, ok := h.lookupPipelineRunRequest(c, "pipeline store not wired")
+		if !ok {
 			return
 		}
 
-		ctx := c.Request.Context()
-		clientID := strings.TrimSpace(ClientIDFromContext(c))
-		pr, forwarding, err := h.lookupPipelineRun(ctx, idParam, clientID)
-		if err != nil {
-			if errors.Is(err, errPipelineRunNotFound) {
-				if clientID != "" {
-					writeM2MJobNotFound(c)
-				} else {
-					c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "pipeline run not found"})
-				}
-				return
-			}
-			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
-			return
-		}
-
-		veloxJobID := pr.VeloxJobID
-		if veloxJobID == "" && forwarding != nil {
-			veloxJobID = forwarding.TargetJobID
-		}
+		veloxJobID := pipelineRunJobID(pr, forwarding)
 		if veloxJobID == "" {
 			c.JSON(http.StatusOK, gin.H{
 				"ok":              true,
@@ -97,36 +71,12 @@ func (h *Handlers) PipelineRunArtifacts() gin.HandlerFunc {
 // When no velox_job_id is set, returns an empty list.
 func (h *Handlers) PipelineRunDeliveries() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if h.store == nil {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"ok": false, "error": "pipeline store not wired"})
-			return
-		}
-		idParam := strings.TrimSpace(c.Param("id"))
-		if idParam == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "id is required"})
+		ctx, _, clientID, pr, forwarding, ok := h.lookupPipelineRunRequest(c, "pipeline store not wired")
+		if !ok {
 			return
 		}
 
-		ctx := c.Request.Context()
-		clientID := strings.TrimSpace(ClientIDFromContext(c))
-		pr, forwarding, err := h.lookupPipelineRun(ctx, idParam, clientID)
-		if err != nil {
-			if errors.Is(err, errPipelineRunNotFound) {
-				if clientID != "" {
-					writeM2MJobNotFound(c)
-				} else {
-					c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "pipeline run not found"})
-				}
-				return
-			}
-			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
-			return
-		}
-
-		veloxJobID := pr.VeloxJobID
-		if veloxJobID == "" && forwarding != nil {
-			veloxJobID = forwarding.TargetJobID
-		}
+		veloxJobID := pipelineRunJobID(pr, forwarding)
 		if veloxJobID == "" {
 			c.JSON(http.StatusOK, gin.H{
 				"ok":              true,

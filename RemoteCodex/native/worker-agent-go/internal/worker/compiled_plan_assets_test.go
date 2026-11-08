@@ -91,6 +91,49 @@ func TestResolveCompiledRenderPlanAssets_UsesCommonResolverForEveryAsset(t *test
 	}
 }
 
+func TestResolveCompiledRenderPlanAssets_PreparationTaskResolvesOnlyItsSource(t *testing.T) {
+	body := []byte("canonical-window-source")
+	requested := make(map[string]int)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := strings.TrimPrefix(r.URL.Path, "/api/v1/agent/assets/")
+		requested[id]++
+		if id != "window-source" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write(body)
+	}))
+	defer server.Close()
+	w := &Worker{
+		config:    &config.WorkerConfig{WorkerID: "window-worker", MasterURL: server.URL, WorkDir: t.TempDir()},
+		apiClient: api.NewClient(server.URL),
+	}
+	profile := contract.CanonicalVideoProfileV1Default
+	revision, err := contract.VideoWindowPreparationRevision(profile, contract.CanonicalPreparationQualityPolicyDefault)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := contract.VideoPrepareWindowV1{
+		Version:          contract.VideoPrepareWindowVersion,
+		Source:           contract.AssetRefV2{AssetID: "window-source", AssetKey: "window-source", SHA256: assetSHA(body), SizeBytes: int64(len(body)), Kind: "video"},
+		SourceStartFrame: 10, SourceFrameCount: 24, SourceFPSNum: 24, SourceFPSDen: 1,
+		OutputFrameCount: 24, TimelineRevision: 2, TimelineSHA256: strings.Repeat("b", 64),
+		TimelineStartFrame: 0, OutputProfileID: profile.ProfileID, OutputProfileRevision: revision,
+	}
+	payload := map[string]interface{}{contract.VideoPrepareWindowPayloadKey: request}
+	bindings, err := w.resolveCompiledRenderPlanAssets(context.Background(), "job-window", payload)
+	if err != nil {
+		t.Fatalf("resolve window source: %v", err)
+	}
+	binding, ok := bindings["window-source"]
+	if !ok || !binding.Verified || binding.SHA256 != assetSHA(body) || binding.Size != int64(len(body)) {
+		t.Fatalf("unexpected source binding: %+v, present=%t", binding, ok)
+	}
+	if requested["window-source"] != 1 || len(requested) != 1 {
+		t.Fatalf("preparation resolved unrelated assets: requests=%v", requested)
+	}
+}
+
 func TestResolveCompiledRenderPlanAssets_UsesBoundedConcurrency(t *testing.T) {
 	assets := map[string][]byte{
 		"v2-video": []byte("asset-video"),

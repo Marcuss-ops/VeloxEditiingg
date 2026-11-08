@@ -208,7 +208,9 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 	// local runtime bindings in context.Context. The canonical JSON and its
 	// SHA remain byte-identical across workers and retries.
 	_, isCompiledPlan := spec.Payload[contract.PayloadKeyCompiledRenderPlanJSON]
-	if isCompiledPlan {
+	_, isWindowPreparation := spec.Payload[contract.VideoPrepareWindowPayloadKey]
+	usesVerifiedRuntimeBindings := isCompiledPlan || isWindowPreparation
+	if usesVerifiedRuntimeBindings {
 		// Operational lifecycle: materializing runtime assets.
 		w.UpdateOperationalPhase(pte.TaskID, PhaseMaterializing)
 		bindings, err := w.resolveCompiledRenderPlanAssets(ctx, pte.JobID, spec.Payload)
@@ -232,7 +234,7 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 		if err := loadOriginalPayload(); err != nil {
 			return err
 		}
-		if isCompiledPlan {
+		if usesVerifiedRuntimeBindings {
 			bindings, err := w.resolveCompiledRenderPlanAssets(ctx, pte.JobID, originalPayload)
 			if err != nil {
 				return err
@@ -262,14 +264,14 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 	// any clip the resolver just fetched) and BEFORE taskRunner.Run
 	// (so the executor reads leased rows).
 	//
-	// Legacy payloads may skip leases when no clip cache is wired. V2
-	// plans are fail-closed above because every resolved V2 asset,
-	// including final_audio, must be protected before execution. An
-	// empty asset-key slice remains a valid no-lease path for legacy
-	// jobs with no clip references.
+	// Legacy payloads may skip leases when no clip cache is wired. Compiled
+	// plans and window-preparation tasks are fail-closed above because every
+	// resolved runtime binding must be protected before execution. An empty
+	// asset-key slice remains a valid no-lease path for legacy jobs with no
+	// clip references.
 	var clipLease *ClipLease
-	if isCompiledPlan && w.clipCache == nil {
-		return failBeforeRun("clip_lease_failed", fmt.Errorf("compiled render plan v2 requires a configured clip cache for asset leases"))
+	if usesVerifiedRuntimeBindings && w.clipCache == nil {
+		return failBeforeRun("clip_lease_failed", fmt.Errorf("verified runtime asset tasks require a configured clip cache for asset leases"))
 	}
 	// Keep a job-scoped terminal sweep after the normal per-asset cleanup. The
 	// resolver can discover more asset keys than the legacy extractor projects;
@@ -294,51 +296,49 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 		if len(assetKeys) > 0 {
 			var v2Reservation *v2AssetReservation
 			var leaseReleaseErr error
-			if isCompiledPlan || len(assetKeys) > 0 {
-				var reservationErr error
-				workerID := ""
-				if w.config != nil {
-					workerID = w.config.WorkerID
-				}
-				for attempt := 0; attempt < 2; attempt++ {
-					v2Reservation, reservationErr = reserveJobAssetProtection(ctx, reservationStore, workerID, pte.JobID, pte.AttemptID, assetKeys, time.Now().UTC().Add(compiledPlanReservationTTL))
-					if reservationErr == nil {
-						break
-					}
-					if !errors.Is(reservationErr, workercache.ErrNotFound) || attempt == 1 {
-						break
-					}
-					if resolveErr := repairAssetResolution("reservation_missing"); resolveErr != nil {
-						if isCompiledPlan {
-							return failBeforeRun("compiled_plan_asset_resolution_failed", resolveErr)
-						}
-						return failBeforeRun("asset_resolution_failed", resolveErr)
-					}
-				}
-				if reservationErr != nil {
-					return failBeforeRun("clip_reservation_failed", fmt.Errorf("reserve job asset protection: %w", reservationErr))
-				}
-				// Register before the lease cleanup defer. Go's LIFO ordering
-				// then releases the active lease first and this reservation second.
-				defer func() {
-					// If active lease cleanup failed, keep this reservation until
-					// its bounded TTL so the durable lease reconciler can finish
-					// without an eviction gap.
-					if leaseReleaseErr != nil {
-						if w.logger != nil {
-							w.logger.Warn("[LEASE] retaining V2 reservation after lease release failure for job=%s: %v", pte.JobID, leaseReleaseErr)
-						}
-						return
-					}
-					if releaseErr := v2Reservation.ReleaseAll(leaseCleanupContext(ctx)); releaseErr != nil && w.logger != nil {
-						w.logger.Warn("[LEASE] V2 reservation release failed for job=%s: %v", pte.JobID, releaseErr)
-					}
-				}()
+			var reservationErr error
+			workerID := ""
+			if w.config != nil {
+				workerID = w.config.WorkerID
 			}
+			for attempt := 0; attempt < 2; attempt++ {
+				v2Reservation, reservationErr = reserveJobAssetProtection(ctx, reservationStore, workerID, pte.JobID, pte.AttemptID, assetKeys, time.Now().UTC().Add(compiledPlanReservationTTL))
+				if reservationErr == nil {
+					break
+				}
+				if !errors.Is(reservationErr, workercache.ErrNotFound) || attempt == 1 {
+					break
+				}
+				if resolveErr := repairAssetResolution("reservation_missing"); resolveErr != nil {
+					if usesVerifiedRuntimeBindings {
+						return failBeforeRun("compiled_plan_asset_resolution_failed", resolveErr)
+					}
+					return failBeforeRun("asset_resolution_failed", resolveErr)
+				}
+			}
+			if reservationErr != nil {
+				return failBeforeRun("clip_reservation_failed", fmt.Errorf("reserve job asset protection: %w", reservationErr))
+			}
+			// Register before the lease cleanup defer. Go's LIFO ordering
+			// then releases the active lease first and this reservation second.
+			defer func() {
+				// If active lease cleanup failed, keep this reservation until
+				// its bounded TTL so the durable lease reconciler can finish
+				// without an eviction gap.
+				if leaseReleaseErr != nil {
+					if w.logger != nil {
+						w.logger.Warn("[LEASE] retaining V2 reservation after lease release failure for job=%s: %v", pte.JobID, leaseReleaseErr)
+					}
+					return
+				}
+				if releaseErr := v2Reservation.ReleaseAll(leaseCleanupContext(ctx)); releaseErr != nil && w.logger != nil {
+					w.logger.Warn("[LEASE] V2 reservation release failed for job=%s: %v", pte.JobID, releaseErr)
+				}
+			}()
 			leased, leaseErr := AcquireJobClips(ctx, w.clipCache, pte.JobID, assetKeys)
 			if leaseErr != nil && (errors.Is(leaseErr, workercache.ErrAssetNotReady) || errors.Is(leaseErr, workercache.ErrNotFound)) {
 				if resolveErr := repairAssetResolution("asset_not_ready"); resolveErr != nil {
-					if isCompiledPlan {
+					if usesVerifiedRuntimeBindings {
 						return failBeforeRun("compiled_plan_asset_resolution_failed", resolveErr)
 					}
 					return failBeforeRun("asset_resolution_failed", resolveErr)
@@ -363,7 +363,7 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 			// Long V2 renders need a periodic cache-lease heartbeat. Stop and
 			// join the renewal goroutine before final cleanup so a tick cannot
 			// race ReleaseAll after the executor returns or times out.
-			if isCompiledPlan {
+			if usesVerifiedRuntimeBindings {
 				renewCtx, stopRenew := context.WithCancel(ctx)
 				renewDone := make(chan struct{})
 				go func() {
@@ -392,7 +392,7 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 			}
 			clipLease = nil
 			if resolveErr := repairAssetResolution("binding_changed"); resolveErr != nil {
-				if isCompiledPlan {
+				if usesVerifiedRuntimeBindings {
 					return failBeforeRun("compiled_plan_asset_resolution_failed", resolveErr)
 				}
 				return failBeforeRun("asset_resolution_failed", resolveErr)

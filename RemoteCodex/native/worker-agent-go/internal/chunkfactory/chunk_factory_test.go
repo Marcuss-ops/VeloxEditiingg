@@ -139,6 +139,17 @@ func TestStore_PutGetHasRoundTrip(t *testing.T) {
 	if err := store.PutChunk(chunk, payload); err != nil {
 		t.Fatalf("PutChunk: %v", err)
 	}
+	sourceInfo, err := os.Stat(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunkInfo, err := os.Stat(store.PayloadPath(chunkID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(sourceInfo, chunkInfo) {
+		t.Fatal("same-filesystem immutable payload should be linked into the chunk store without a byte copy")
+	}
 
 	if got, err := store.Has(chunkID); err != nil || !got {
 		t.Fatalf("Has after put = %v err %v, want true nil", got, err)

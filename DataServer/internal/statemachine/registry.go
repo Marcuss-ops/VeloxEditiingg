@@ -157,6 +157,7 @@ func DefaultRegistry() *Registry {
 	add(DomainJob, "RETRY_WAIT", "PENDING", ActorScheduler, nil, "JOB_REQUEUED", false)
 	add(DomainJob, "RETRY_WAIT", "FAILED", ActorScheduler, nil, "JOB_FAILED", false)
 	add(DomainJob, "RETRY_WAIT", "CANCELLED", ActorOperator, nil, "JOB_CANCELLED", false)
+	add(DomainJob, "FAILED", "PENDING", ActorOperator, nil, "JOB_MANUAL_RETRY", false)
 	idempotent(DomainJob, []string{"PENDING", "LEASED", "RUNNING", "AWAITING_ARTIFACT", "DELIVERING", "RETRY_WAIT", "SUCCEEDED", "FAILED", "CANCELLED"})
 
 	// Tasks: lease expiry is master-owned; terminal reports are worker-owned.
@@ -177,6 +178,8 @@ func DefaultRegistry() *Registry {
 	add(DomainTask, "RUNNING", "FAILED", ActorWorker, []string{InvariantTaskAttemptPair}, "TASK_FAILED", false)
 	add(DomainTask, "RUNNING", "CANCELLED", ActorOperator, nil, "TASK_CANCELLED", false)
 	add(DomainTask, "RUNNING", "TIMED_OUT", ActorReaper, []string{InvariantTaskAttemptPair}, "TASK_TIMED_OUT", false)
+	add(DomainTask, "FAILED", "READY", ActorOperator, nil, "TASK_MANUAL_RETRY", false)
+	add(DomainTask, "TIMED_OUT", "READY", ActorOperator, nil, "TASK_MANUAL_RETRY", false)
 	idempotent(DomainTask, []string{"PENDING", "READY", "LEASED", "RUNNING", "SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT"})
 
 	// Artifact and upload state machines.

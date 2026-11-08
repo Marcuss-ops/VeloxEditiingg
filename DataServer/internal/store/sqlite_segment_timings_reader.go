@@ -23,7 +23,7 @@ func (r *SQLiteTaskAttemptRepository) ListSegmentTimings(ctx context.Context, at
 		       COALESCE(input_duration_ms,0), COALESCE(output_duration_ms,0),
 		       frames_encoded, COALESCE(frames_decoded,0),
 		       COALESCE(frames_composited,0), COALESCE(ffmpeg_speed_x,0),
-		       status
+		       status, COALESCE(metadata_json, '{}')
 		FROM task_attempt_segment_timings
 		WHERE attempt_id = ?
 		ORDER BY segment_index ASC`, attemptID)
@@ -41,7 +41,7 @@ func (r *SQLiteTaskAttemptRepository) ListSegmentTimings(ctx context.Context, at
 			&segment.SourceBytes, &segment.OutputBytes,
 			&segment.InputDurationMS, &segment.OutputDurationMS,
 			&segment.FramesEncoded, &segment.FramesDecoded, &segment.FramesComposited,
-			&segment.FfmpegSpeedX, &segment.Status); err != nil {
+			&segment.FfmpegSpeedX, &segment.Status, &segment.MetadataJSON); err != nil {
 			return nil, fmt.Errorf("segment timings scan: %w", err)
 		}
 		out = append(out, segment)

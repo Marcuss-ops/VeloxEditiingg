@@ -135,6 +135,10 @@ type RuntimeFinalizationCandidate struct {
 type RuntimeFinalizationQueue interface {
 	RecoverInterruptedRuntimeFinalizations(ctx context.Context) error
 	ListRuntimeFinalizationCandidates(ctx context.Context, limit int) ([]RuntimeFinalizationCandidate, error)
+	// ClaimRuntimeFinalization atomically changes one durable request from
+	// QUEUED to RUNNING. Only the claimant may execute it; returns false when
+	// another Master already claimed it or the task is no longer eligible.
+	ClaimRuntimeFinalization(ctx context.Context, taskID string) (bool, error)
 }
 
 // Writer is the canonical write-only task mutation surface.
@@ -357,12 +361,19 @@ type Writer interface {
 	ClaimTaskForWorkerAtomic(ctx context.Context, cmd ClaimTaskForWorkerCommand) (*TaskWithSpec, *taskattempts.TaskAttempt, error)
 }
 
-// AtomicTaskWriter is implemented by repositories that can persist a whole
-// validated fan-out in one database transaction. ExpandService uses this
-// optional capability; lightweight test repositories may retain the legacy
-// compensating path.
+// AtomicTaskWriter is required by repositories used for task-graph expansion.
+// A fan-out is executable only when its task rows, dependency edges and
+// hashed TaskSpecs become durable together.
 type AtomicTaskWriter interface {
 	CreateTasksAtomic(context.Context, []Task) error
+}
+
+// AtomicTaskGraphExtender adds independent preparation tasks to an existing
+// unleased assembly task, writes its dependency edges and patches its durable
+// TaskSpec in one transaction. Implementations must make an identical replay
+// idempotent.
+type AtomicTaskGraphExtender interface {
+	ExtendTaskGraphAtomic(context.Context, string, []Task, []string, map[string]interface{}) error
 }
 
 // Repository combines Reader and Writer into a single task persistence contract.

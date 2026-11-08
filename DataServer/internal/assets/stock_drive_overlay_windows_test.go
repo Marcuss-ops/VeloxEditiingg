@@ -48,7 +48,7 @@ func TestMasterWindowPreparationRecognizesHTTPSOverlaySources(t *testing.T) {
 	}
 	probe := VideoProbe{DurationSeconds: 5, FPSNum: 24, FPSDen: 1, FrameCount: 120}
 	sources := map[string]*driveStockSourceState{"overlay-source": {sha: sha, size: 2048, probe: probe}}
-	jobs, placements, replaced, changed, err := collectDriveStockWindows(&plan, assetMap, bindingMap, sources)
+	jobs, placements, replaced, changed, err := collectDriveStockWindows(&plan, assetMap, bindingMap, sources, nil, NewVideoTrimmer().PreparationRevision())
 	if err != nil {
 		t.Fatalf("collect overlay window: %v", err)
 	}

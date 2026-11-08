@@ -100,6 +100,7 @@ LEFT JOIN task_requirements tr ON tr.task_id = t.task_id
 LEFT JOIN task_specs       ts  ON ts.task_id = t.task_id
 WHERE t.status = 'READY'
   AND (t.worker_id = '' OR t.worker_id IS NULL)
+  AND COALESCE(json_extract(ts.payload_json, '$.runtime_assets_pending'), 0) = 0
 GROUP BY t.task_id
 ORDER BY t.priority DESC, t.created_at ASC, t.task_id ASC
 LIMIT ?`
@@ -120,6 +121,7 @@ LEFT JOIN task_requirements tr ON tr.task_id = t.task_id
 LEFT JOIN task_specs       ts  ON ts.task_id = t.task_id
 WHERE t.status = 'READY'
   AND (t.worker_id = '' OR t.worker_id IS NULL)
+  AND COALESCE(json_extract(ts.payload_json, '$.runtime_assets_pending'), 0) = 0
 GROUP BY t.task_id
 ORDER BY t.priority DESC, t.created_at ASC, t.task_id ASC
 LIMIT ? OFFSET ?`

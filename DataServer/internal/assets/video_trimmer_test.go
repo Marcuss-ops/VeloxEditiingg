@@ -55,6 +55,25 @@ func TestVideoTrimmerPlanUsesStreamCopyForNormalizedKeyframeSegment(t *testing.T
 	assertContainsSequence(t, plan.TrimArgs, "-ss", "2.000000", "-i", "/source.mp4", "-t", "4.000000", "-c", "copy")
 }
 
+func TestVideoTrimmerPreparationRevisionTracksProfileAndQuality(t *testing.T) {
+	profile := videoContract.CanonicalVideoProfileV1Default
+	quality := videoContract.CanonicalPreparationQualityPolicyDefault
+	base := newVideoTrimmerForTest(&recordingVideoRunner{})
+	if got := base.PreparationRevision(); !strings.HasPrefix(got, "video-window-preparer.v1:") {
+		t.Fatalf("preparation revision = %q", got)
+	}
+	quality.VideoBitrate = "2.0M"
+	changedQuality := newVideoTrimmer(&recordingVideoRunner{}, profile, quality)
+	if changedQuality.PreparationRevision() == base.PreparationRevision() {
+		t.Fatal("quality policy change did not invalidate preparation revision")
+	}
+	profile.GOPSize++
+	changedProfile := newVideoTrimmer(&recordingVideoRunner{}, profile, videoContract.CanonicalPreparationQualityPolicyDefault)
+	if changedProfile.PreparationRevision() == base.PreparationRevision() {
+		t.Fatal("canonical profile change did not invalidate preparation revision")
+	}
+}
+
 func TestTrimFramesWithProbeKeepsPacketCopyForKeyframeWindow(t *testing.T) {
 	runner := &recordingVideoRunner{}
 	trimmer := newVideoTrimmerForTest(runner)

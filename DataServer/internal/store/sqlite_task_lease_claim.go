@@ -106,6 +106,7 @@ func (r *SQLiteTaskRepository) ClaimNextReadyTask(ctx context.Context, workerID,
 		 FROM tasks
 		 WHERE status = 'READY'
 		   AND (worker_id = '' OR worker_id IS NULL)
+		   AND COALESCE((SELECT json_extract(payload_json, '$.runtime_assets_pending') FROM task_specs WHERE task_id=tasks.task_id), 0) = 0
 		 ORDER BY priority DESC, created_at ASC
 		 LIMIT 1`,
 	)
@@ -122,7 +123,8 @@ func (r *SQLiteTaskRepository) ClaimNextReadyTask(ctx context.Context, workerID,
 		`UPDATE tasks
 		 SET status = 'LEASED', worker_id = ?, lease_id = ?, lease_expires_at = ?,
 		     revision = revision + 1, updated_at = ?
-		 WHERE task_id = ? AND status = 'READY' AND revision = ?`,
+		 WHERE task_id = ? AND status = 'READY' AND revision = ?
+		   AND COALESCE((SELECT json_extract(payload_json, '$.runtime_assets_pending') FROM task_specs WHERE task_id=tasks.task_id), 0) = 0`,
 		workerID, leaseID, leaseExpiresAt, nowStr, t.ID, t.Revision,
 	)
 	if err != nil {
@@ -313,6 +315,7 @@ func (r *SQLiteTaskRepository) ClaimTaskForWorkerAtomic(
 		 FROM tasks
 		 WHERE task_id = ?
 		   AND status = 'READY'
+		   AND COALESCE((SELECT json_extract(payload_json, '$.runtime_assets_pending') FROM task_specs WHERE task_id=tasks.task_id), 0) = 0
 		   AND revision = ?
 		   AND executor_id IN (?, ?)
 		   AND executor_version = ?
@@ -351,7 +354,8 @@ func (r *SQLiteTaskRepository) ClaimTaskForWorkerAtomic(
 		     attempt_count = ?, attempt_id = ?, attempt_number = ?,
 		     revision = revision + 1, updated_at = ?
 		 WHERE task_id = ? AND status = 'READY' AND revision = ?
-		   AND executor_id IN (?, ?) AND executor_version = ?`,
+		   AND executor_id IN (?, ?) AND executor_version = ?
+		   AND COALESCE((SELECT json_extract(payload_json, '$.runtime_assets_pending') FROM task_specs WHERE task_id=tasks.task_id), 0) = 0`,
 		cmd.WorkerID, cmd.LeaseID, leaseExpiresAt, attemptNumber, attemptID, attemptNumber,
 		nowStr, t.ID, cmd.ExpectedTaskRevision,
 		execKey.ID, legacyExecutorID, execKey.Version,

@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
-	"strings"
 
 	"velox-server/internal/deliverystore"
 	"velox-server/internal/repository"
@@ -17,29 +16,8 @@ import (
 // lookup when an M2M client ID is present in the request context.
 func (h *Handlers) PipelineRunStatus() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if h.store == nil {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"ok": false, "error": "pipeline status store not wired"})
-			return
-		}
-		idParam := strings.TrimSpace(c.Param("id"))
-		if idParam == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "id is required"})
-			return
-		}
-
-		ctx := c.Request.Context()
-		clientID := strings.TrimSpace(ClientIDFromContext(c))
-		pr, forwarding, err := h.lookupPipelineRun(ctx, idParam, clientID)
-		if err != nil {
-			if errors.Is(err, errPipelineRunNotFound) {
-				if clientID != "" {
-					writeM2MJobNotFound(c)
-				} else {
-					c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "pipeline run not found"})
-				}
-				return
-			}
-			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
+		ctx, idParam, clientID, pr, forwarding, ok := h.lookupPipelineRunRequest(c, "pipeline status store not wired")
+		if !ok {
 			return
 		}
 

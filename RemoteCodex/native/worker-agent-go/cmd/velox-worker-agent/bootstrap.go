@@ -15,6 +15,7 @@ package main
 
 import (
 	"context"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -97,6 +98,9 @@ var Version = "dev"
 // registerCanonicalRenderExecutors installs the sole worker entry point for
 // compiled V2 video plans: packet-copy assembly.
 func registerCanonicalRenderExecutors(reg *executor.Registry, outputRoot string, runners []*pipeline.Runner) error {
+	if err := reg.Register(executors.NewVideoPrepareWindow(filepath.Join(outputRoot, "prepared-windows"))); err != nil {
+		return err
+	}
 	if len(runners) > 0 && runners[0] != nil {
 		if err := reg.Register(executors.NewVideoAssembleCopy(runners[0], outputRoot)); err != nil {
 			return err

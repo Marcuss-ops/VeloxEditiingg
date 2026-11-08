@@ -66,24 +66,28 @@ type TrimPlan struct {
 	// produced against. It is the ONLY authority for compatibility fields and
 	// is persisted into the asset manifest so downstream consumers never have
 	// to re-derive (or re-invent) the identity.
-	CanonicalProfile   contract.CanonicalVideoProfileV1
-	OutputFrameCount   int64
-	FirstFrameKeyframe bool
-	ClosedGOP          bool
-	CopyEligible       bool
-	SourceSHA256       string
-	SourceSizeBytes    int64
-	SourceDurationUS   int64
-	SourceFrameCount   int64
-	SourceFPSNum       int
-	SourceFPSDen       int
-	SourceCodec        string
-	SourceProfile      string
-	SourceLevel        int
-	SourceWidth        int
-	SourceHeight       int
-	SourcePixelFormat  string
-	SourceKeyframes    []float64
+	CanonicalProfile           contract.CanonicalVideoProfileV1
+	OutputFrameCount           int64
+	FirstFrameKeyframe         bool
+	ClosedGOP                  bool
+	CopyEligible               bool
+	SourceSHA256               string
+	SourceSizeBytes            int64
+	SourceStartFrame           int64
+	SourceDurationUS           int64
+	SourceFrameCount           int64
+	SourceFPSNum               int
+	SourceFPSDen               int
+	SourceCodec                string
+	SourceProfile              string
+	SourceLevel                int
+	SourceWidth                int
+	SourceHeight               int
+	SourcePixelFormat          string
+	SourceKeyframes            []float64
+	PreparationCertificateJSON string
+	ExpectedOutputSHA256       string
+	ExpectedOutputSizeBytes    int64
 }
 
 // TrimResult reports the selected path and resulting output path.
@@ -158,6 +162,21 @@ func (t *VideoTrimmer) Quality() contract.PreparationQualityPolicy {
 		return contract.CanonicalPreparationQualityPolicyDefault
 	}
 	return t.quality
+}
+
+// PreparationRevision identifies the exact window-preparation implementation,
+// canonical stream profile and quality policy. It is persisted with fragment
+// evidence and participates in the cache key so encoder/policy changes cannot
+// reuse stale prepared bytes under the same stream profile.
+func (t *VideoTrimmer) PreparationRevision() string {
+	if t == nil {
+		return ""
+	}
+	revision, err := contract.VideoWindowPreparationRevision(t.profile, t.quality)
+	if err != nil {
+		return ""
+	}
+	return revision
 }
 
 // Probe invokes ffprobe and returns the metadata used by Plan. It is public so
@@ -511,24 +530,7 @@ func jsonInt64(raw json.RawMessage) int64 {
 // profile's ClosedGOP so a closed-GOP profile can never be produced with open
 // GOPs.
 func canonicalVideoEncodeArgs(profile contract.CanonicalVideoProfileV1, quality contract.PreparationQualityPolicy) []string {
-	openGOP := 0
-	if !profile.ClosedGOP {
-		openGOP = 1
-	}
-	return []string{
-		"-c:v", "libx264",
-		"-b:v", quality.VideoBitrate,
-		"-maxrate", quality.VideoMaxRate,
-		"-bufsize", quality.VideoBufferSize,
-		"-pix_fmt", profile.PixelFormat,
-		"-profile:v", profile.CodecProfile,
-		"-level:v", profile.CodecLevel,
-		"-g", strconv.Itoa(profile.GOPSize),
-		"-bf", strconv.Itoa(profile.BFrames),
-		"-sc_threshold", "0",
-		"-x264-params", fmt.Sprintf("scenecut=0:open-gop=%d:keyint=%d:min-keyint=%d", openGOP, profile.GOPSize, profile.GOPSize),
-		"-video_track_timescale", strconv.Itoa(profile.TimeBaseDen),
-	}
+	return contract.CanonicalVideoEncodeArgs(profile, quality)
 }
 
 // canonicalAudioEncodeArgs derives the audio encoder arguments from the
@@ -550,8 +552,7 @@ func canonicalScaleFilter(profile contract.CanonicalVideoProfileV1) string {
 }
 
 func canonicalScaleGeometryFilter(profile contract.CanonicalVideoProfileV1) string {
-	return fmt.Sprintf("scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2",
-		profile.Width, profile.Height, profile.Width, profile.Height)
+	return contract.CanonicalVideoScaleGeometryFilter(profile)
 }
 
 func normalizationArgs(profile contract.CanonicalVideoProfileV1, quality contract.PreparationQualityPolicy, inputPath, outputPath string) []string {

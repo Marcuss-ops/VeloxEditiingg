@@ -8,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"velox-shared/contract"
+	"velox-shared/payload"
 )
 
 // IntakeDryRunSummary is the read-only projection returned by dry-run
@@ -103,7 +104,7 @@ func SummarizeWorkerPayloadForDryRun(workerPayload, rawPayload map[string]interf
 	}
 	summary.FinalAudioDurationS = dryRunFinalAudioDuration(workerPayload)
 	if summary.RuntimeAudioPresent {
-		selected := dryRunClipAudioSelectedIDs(workerPayload)
+		selected := payload.StringSetFromNestedPayload(workerPayload, "runtime_audio", "clip_audio_scene_ids")
 		for _, scene := range scenes {
 			if !dryRunHasAsset(scene["clip"]) {
 				continue
@@ -118,7 +119,7 @@ func SummarizeWorkerPayloadForDryRun(workerPayload, rawPayload map[string]interf
 	completeFinalMix := dryRunHasCompleteFinalMix(workerPayload)
 	assembledCoverageS := summary.FinalAudioDurationS
 	if !completeFinalMix && summary.FinalAudioDurationS > 0 {
-		assembledCoverageS += dryRunSelectedClipAudioDuration(scenes, dryRunClipAudioSelectedIDs(workerPayload))
+		assembledCoverageS += dryRunSelectedClipAudioDuration(scenes, payload.StringSetFromNestedPayload(workerPayload, "runtime_audio", "clip_audio_scene_ids"))
 		if dryRunLoopedMusicPresent(workerPayload) {
 			assembledCoverageS = summary.DeclaredDurationS
 		}
@@ -151,12 +152,7 @@ func SummarizeWorkerPayloadForDryRun(workerPayload, rawPayload map[string]interf
 }
 
 func dryRunHasCompleteFinalMix(workerPayload map[string]interface{}) bool {
-	audio, _ := workerPayload["runtime_audio"].(map[string]interface{})
-	if audio == nil {
-		if nested, ok := workerPayload["runtime_payload"].(map[string]interface{}); ok {
-			audio, _ = nested["runtime_audio"].(map[string]interface{})
-		}
-	}
+	audio := payload.NestedMapFromPayload(workerPayload, "runtime_audio")
 	// voiceover_asset_id names the narration source, which is deliberately
 	// shorter than the video timeline when clip scenes pause it. The runtime
 	// asset can still carry final_mix=true for legacy compatibility; that flag
@@ -314,41 +310,6 @@ func dryRunFinalAudioDuration(workerPayload map[string]interface{}) float64 {
 		}
 	}
 	return 0
-}
-
-// dryRunClipAudioSelectedIDs reads runtime_audio.clip_audio_scene_ids
-// from the worker payload: scenes whose original clip audio the worker
-// mixes with the final narration. Mirrors the worker-side selection
-// without importing it.
-func dryRunClipAudioSelectedIDs(workerPayload map[string]interface{}) map[string]bool {
-	selected := make(map[string]bool)
-	if workerPayload == nil {
-		return selected
-	}
-	audio, _ := workerPayload["runtime_audio"].(map[string]interface{})
-	if audio == nil {
-		if nested, ok := workerPayload["runtime_payload"].(map[string]interface{}); ok {
-			audio, _ = nested["runtime_audio"].(map[string]interface{})
-		}
-	}
-	if audio == nil {
-		return selected
-	}
-	switch values := audio["clip_audio_scene_ids"].(type) {
-	case []interface{}:
-		for _, value := range values {
-			if id, ok := value.(string); ok && strings.TrimSpace(id) != "" {
-				selected[strings.TrimSpace(id)] = true
-			}
-		}
-	case []string:
-		for _, id := range values {
-			if strings.TrimSpace(id) != "" {
-				selected[strings.TrimSpace(id)] = true
-			}
-		}
-	}
-	return selected
 }
 
 func dryRunNumber(raw interface{}) float64 {

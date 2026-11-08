@@ -26,6 +26,55 @@ func DeepCopyMap(m map[string]interface{}) map[string]interface{} {
 	return result
 }
 
+// StringSetFromAny returns the non-empty, trimmed string values from a JSON
+// array or a native string slice. It gives payload projections one canonical
+// way to read identifier lists regardless of whether they came from JSON.
+func StringSetFromAny(value interface{}) map[string]bool {
+	selected := make(map[string]bool)
+	add := func(id string) {
+		if id = strings.TrimSpace(id); id != "" {
+			selected[id] = true
+		}
+	}
+	switch values := value.(type) {
+	case []interface{}:
+		for _, value := range values {
+			if id, ok := value.(string); ok {
+				add(id)
+			}
+		}
+	case []string:
+		for _, id := range values {
+			add(id)
+		}
+	}
+	return selected
+}
+
+// NestedMapFromPayload finds a map at the payload root or under runtime_payload.
+// It keeps Master diagnostics and worker projections aligned on the same wire
+// envelope rules.
+func NestedMapFromPayload(input map[string]interface{}, key string) map[string]interface{} {
+	if input == nil {
+		return nil
+	}
+	if value, ok := input[key].(map[string]interface{}); ok {
+		return value
+	}
+	if nested, ok := input["runtime_payload"].(map[string]interface{}); ok {
+		if value, ok := nested[key].(map[string]interface{}); ok {
+			return value
+		}
+	}
+	return nil
+}
+
+// StringSetFromNestedPayload reads a string identifier list from a named
+// payload map, accepting both root-level and runtime_payload envelopes.
+func StringSetFromNestedPayload(input map[string]interface{}, mapKey, listKey string) map[string]bool {
+	return StringSetFromAny(NestedMapFromPayload(input, mapKey)[listKey])
+}
+
 // IsLikelyMediaSource verifica se una stringa sembra essere una fonte multimediale
 // (URL con http/https/file, o estensione video/audio comune).
 func IsLikelyMediaSource(value string) bool {

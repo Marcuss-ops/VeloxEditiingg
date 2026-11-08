@@ -4,10 +4,8 @@
 package pipeline
 
 import (
-	"errors"
 	"net/http"
 	"sort"
-	"strings"
 	"time"
 
 	"velox-server/internal/pipelineruns"
@@ -28,29 +26,8 @@ import (
 // Events are sorted by timestamp ascending.
 func (h *Handlers) PipelineRunTimeline() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if h.store == nil {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"ok": false, "error": "pipeline store not wired"})
-			return
-		}
-		idParam := strings.TrimSpace(c.Param("id"))
-		if idParam == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "id is required"})
-			return
-		}
-
-		ctx := c.Request.Context()
-		clientID := strings.TrimSpace(ClientIDFromContext(c))
-		pr, forwarding, err := h.lookupPipelineRun(ctx, idParam, clientID)
-		if err != nil {
-			if errors.Is(err, errPipelineRunNotFound) {
-				if clientID != "" {
-					writeM2MJobNotFound(c)
-				} else {
-					c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "pipeline run not found"})
-				}
-				return
-			}
-			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
+		ctx, _, clientID, pr, forwarding, ok := h.lookupPipelineRunRequest(c, "pipeline store not wired")
+		if !ok {
 			return
 		}
 
@@ -90,10 +67,7 @@ func (h *Handlers) PipelineRunTimeline() gin.HandlerFunc {
 		}
 
 		// 2. Job events for the Velox job.
-		veloxJobID := pr.VeloxJobID
-		if veloxJobID == "" && forwarding != nil {
-			veloxJobID = forwarding.TargetJobID
-		}
+		veloxJobID := pipelineRunJobID(pr, forwarding)
 		if veloxJobID != "" {
 			var jobEvents []store.JobEvent
 			if clientID != "" {

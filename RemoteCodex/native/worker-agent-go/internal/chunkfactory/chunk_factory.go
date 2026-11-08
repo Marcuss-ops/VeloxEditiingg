@@ -298,8 +298,15 @@ func (s *Store) PutChunk(chunk ChunkDescriptor, payloadPath string) error {
 	}
 	// Atomic install: temp file in the same directory + rename.
 	tmp := target + ".tmp"
-	if err := copyFile(payloadPath, tmp); err != nil {
-		return err
+	_ = os.Remove(tmp)
+	// Runtime asset blobs are immutable after verified promotion. On a shared
+	// filesystem, link the already-verified bytes into the chunk namespace and
+	// avoid a second full read/write. Cross-device or unsupported filesystems
+	// retain the atomic copy fallback.
+	if err := os.Link(payloadPath, tmp); err != nil {
+		if copyErr := copyFile(payloadPath, tmp); copyErr != nil {
+			return copyErr
+		}
 	}
 	if err := os.Rename(tmp, target); err != nil {
 		os.Remove(tmp)

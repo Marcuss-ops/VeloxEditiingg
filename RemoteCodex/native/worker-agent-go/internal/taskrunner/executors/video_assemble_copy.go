@@ -193,16 +193,19 @@ func (e *videoAssembleCopyExecutor) emitChunkManifest(plan *contract.CompiledRen
 	for index, segment := range plan.VideoTracks[0].Segments {
 		asset := assets[segment.AssetID]
 		binding := bindings[segment.AssetID]
-		actual, err := artifactFromFile("video/mp4", binding.Path)
-		if err != nil {
-			return fmt.Errorf("chunk manifest: inspect %s: %w", segment.AssetID, err)
+		if strings.TrimSpace(binding.Path) == "" || binding.SHA256 == "" || binding.SHA256 != asset.SHA256 || binding.Size != asset.SizeBytes {
+			return fmt.Errorf("chunk manifest: verified binding identity mismatch for %s", segment.AssetID)
 		}
-		if actual.Hash != asset.SHA256 || actual.SizeBytes != asset.SizeBytes {
-			return fmt.Errorf("chunk manifest: source identity changed for %s", segment.AssetID)
+		info, err := os.Stat(binding.Path)
+		if err != nil || !info.Mode().IsRegular() || info.Size() != binding.Size {
+			if err == nil {
+				err = fmt.Errorf("local file size/type does not match verified binding")
+			}
+			return fmt.Errorf("chunk manifest: stat %s: %w", segment.AssetID, err)
 		}
 		assetKey := asset.AssetKey
 		if strings.TrimSpace(assetKey) == "" {
-			assetKey = "sha256:" + actual.Hash
+			assetKey = "sha256:" + binding.SHA256
 		}
 		chunks, err := chunkfactory.PlanChunks(assetKey, profile.StreamProfile(), 0, segment.SourceDurationUS, segment.SourceDurationUS, chunkfactory.KeyframeIndex{0})
 		if err != nil || len(chunks) != 1 {
@@ -216,7 +219,7 @@ func (e *videoAssembleCopyExecutor) emitChunkManifest(plan *contract.CompiledRen
 			ChunkID: planned.ChunkID, AssetKey: planned.AssetKey, ProfileID: planned.ProfileID,
 			ChunkIndex: planned.ChunkIndex, SourceInUS: planned.SourceInUS, SourceOutUS: planned.SourceOutUS,
 			ChunkDurationUS: planned.SourceOutUS - planned.SourceInUS,
-			PayloadSHA256:   actual.Hash, SizeBytes: actual.SizeBytes,
+			PayloadSHA256:   binding.SHA256, SizeBytes: binding.Size,
 		}
 		if err := e.chunkStore.PutChunk(descriptor, binding.Path); err != nil {
 			return fmt.Errorf("chunk manifest: store %s: %w", segment.SegmentID, err)
@@ -224,7 +227,7 @@ func (e *videoAssembleCopyExecutor) emitChunkManifest(plan *contract.CompiledRen
 		manifest.Chunks = append(manifest.Chunks, chunkfactory.ManifestChunk{
 			ChunkID: planned.ChunkID, AssetKey: planned.AssetKey, ProfileID: planned.ProfileID,
 			ChunkIndex: index, SourceInUS: planned.SourceInUS, SourceOutUS: planned.SourceOutUS,
-			PayloadSHA256: actual.Hash, SizeBytes: actual.SizeBytes,
+			PayloadSHA256: binding.SHA256, SizeBytes: binding.Size,
 			PayloadPath: e.chunkStore.PayloadPath(planned.ChunkID),
 		})
 	}
