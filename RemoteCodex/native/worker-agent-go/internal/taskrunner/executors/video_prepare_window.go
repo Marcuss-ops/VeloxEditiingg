@@ -60,6 +60,56 @@ type windowOutputCertifier interface {
 	Certify(context.Context, string, contract.CanonicalVideoProfileV1, int64) (windowOutputEvidence, error)
 }
 
+// windowExtradataReference produces the avcC (SPS/PPS) hash that the
+// canonical encoder contract must yield on this worker's encoder build. A
+// fragment whose extradata differs can pass a formal 64-hex check yet be
+// rejected later by the packet-copy muxer, so certification compares against
+// this reference instead of mere presence.
+type windowExtradataReference interface {
+	ExpectedExtradataSHA256(context.Context, contract.CanonicalVideoProfileV1, contract.PreparationQualityPolicy) (string, error)
+}
+
+type ffmpegWindowExtradataReference struct{}
+
+func (ffmpegWindowExtradataReference) ExpectedExtradataSHA256(ctx context.Context, profile contract.CanonicalVideoProfileV1, quality contract.PreparationQualityPolicy) (string, error) {
+	if err := profile.Validate(); err != nil {
+		return "", err
+	}
+	if err := quality.Validate(); err != nil {
+		return "", err
+	}
+	dir, err := os.MkdirTemp("", "velox-avcc-reference-*")
+	if err != nil {
+		return "", fmt.Errorf("canonical extradata reference: create temp dir: %w", err)
+	}
+	defer os.RemoveAll(dir)
+	outputPath := filepath.Join(dir, "reference.mp4")
+	source := fmt.Sprintf("color=c=black:s=%dx%d:r=%d/%d:d=1", profile.Width, profile.Height, profile.FPSNum, profile.FPSDen)
+	args := []string{
+		"-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", source,
+		"-frames:v", "1", "-an", "-sn", "-dn", "-vf", contract.CanonicalVideoScaleFilter(profile),
+	}
+	args = append(args, contract.CanonicalVideoEncodeArgs(profile, quality)...)
+	args = append(args, "-movflags", "+faststart", outputPath)
+	if output, err := exec.CommandContext(ctx, "ffmpeg", args...).CombinedOutput(); err != nil {
+		return "", fmt.Errorf("canonical extradata reference encode: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	return probeExtradataSHA256(ctx, outputPath)
+}
+
+func probeExtradataSHA256(ctx context.Context, path string) (string, error) {
+	args := []string{"-v", "error", "-select_streams", "v:0", "-show_data_hash", "sha256", "-show_entries", "stream=extradata_hash", "-of", "default=noprint_wrappers=1:nokey=1", path}
+	data, err := exec.CommandContext(ctx, "ffprobe", args...).Output()
+	if err != nil {
+		return "", fmt.Errorf("ffprobe canonical extradata: %w", err)
+	}
+	hash := strings.TrimPrefix(strings.TrimSpace(string(data)), "SHA256:")
+	if !isLowerSHA256(hash) {
+		return "", fmt.Errorf("canonical extradata reference: ffprobe returned %q, want a lowercase SHA-256", hash)
+	}
+	return hash, nil
+}
+
 type ffprobeWindowOutputCertifier struct{}
 
 type windowFFprobeDocument struct {
@@ -139,11 +189,15 @@ type videoPrepareWindowExecutor struct {
 	outputRoot   string
 	runner       windowFFmpegRunner
 	certifier    windowOutputCertifier
+	extradataRef windowExtradataReference
 	profile      contract.CanonicalVideoProfileV1
 	quality      contract.PreparationQualityPolicy
 	encoderMu    sync.Mutex
 	encoderVer   string
 	encoderSHA   string
+	extradataMu  sync.Mutex
+	extradataKey string
+	extradataSHA string
 	windowLockMu sync.Mutex
 	windowLocks  map[string]*keyedWindowLock
 }
@@ -159,7 +213,8 @@ func NewVideoPrepareWindow(outputRoot string) executor.Executor {
 	}
 	return &videoPrepareWindowExecutor{
 		outputRoot: outputRoot, runner: ffmpegrunner.NewProcessRunner(), certifier: ffprobeWindowOutputCertifier{},
-		profile: contract.CanonicalVideoProfileV1Default, quality: contract.CanonicalPreparationQualityPolicyDefault,
+		extradataRef: ffmpegWindowExtradataReference{},
+		profile:      contract.CanonicalVideoProfileV1Default, quality: contract.CanonicalPreparationQualityPolicyDefault,
 	}
 }
 
@@ -222,6 +277,52 @@ func (e *videoPrepareWindowExecutor) Execute(ctx context.Context, execCtx execut
 	if err != nil {
 		return fail("WINDOW_ENCODER_IDENTITY", err)
 	}
+	expectedExtradata, err := e.canonicalExtradata(ctx, encoderBuildSHA)
+	if err != nil {
+		return fail("WINDOW_EXTRADATA_REFERENCE", err)
+	}
+	if strings.TrimSpace(spec.JobID) == "" {
+		return fail("WINDOW_JOB_ID_INVALID", errors.New("job_id is required"))
+	}
+	resolver := storageResolverFromExecutionContext(execCtx)
+	cacheHitResult := func(identity, outputPath string, resolved contract.VideoPrepareWindowV1, attestation windowArtifactAttestation) (executor.ExecutionResult, error) {
+		certificate := bindWindowCertificate(attestation, resolved)
+		certificate.CacheHit = true
+		encodedCertificate, _ := json.Marshal(certificate)
+		completed := time.Now().UTC()
+		artifact := executor.ArtifactRef{Type: "video/mp4", Hash: attestation.OutputSHA256, URI: outputPath, SizeBytes: attestation.OutputSizeBytes}
+		return executor.ExecutionResult{
+			Status: "succeeded", Outputs: []executor.ArtifactRef{artifact},
+			Segments: []executor.SegmentTiming{{
+				SceneID: request.Source.AssetID, SourceType: "video.prepare.window.v1",
+				DurationMS: float64(completed.Sub(started).Milliseconds()), SourceBytes: request.Source.SizeBytes,
+				// A cache hit performs no encode. FramesEncoded is encoder work;
+				// the pre-existing output frame count is carried separately by
+				// the certificate's output_frame_count.
+				OutputBytes: artifact.SizeBytes, FramesEncoded: 0, Codec: attestation.OutputEvidence.Codec,
+				Status: "succeeded", CacheKey: "video-window:" + identity, MetadataJSON: string(encodedCertificate),
+			}}, StartedAt: started, CompletedAt: completed,
+		}, nil
+	}
+
+	// Cache-first: a known content identity can be served from the local
+	// fragment cache before the worker resolves, downloads or hashes the
+	// source. Only a miss proceeds to source materialization.
+	var identity, outputPath string
+	resolvedRequest := request
+	if !request.SourceIdentityDiscovery {
+		identity, err = contract.VideoPrepareWindowCacheIdentity(request)
+		if err != nil {
+			return fail("WINDOW_CACHE_IDENTITY", err)
+		}
+		outputPath = e.preparedWindowPath(identity, request, resolver)
+		unlock := e.lockWindow(identity)
+		defer unlock()
+		if attestation, cacheHit := readWindowArtifactAttestation(outputPath, request, e.profile, encoderVersion, encoderBuildSHA, expectedExtradata); cacheHit {
+			return cacheHitResult(identity, outputPath, request, attestation)
+		}
+	}
+
 	bindings, ok := runtimeassets.FromContext(ctx)
 	if !ok {
 		return fail("WINDOW_SOURCE_MISSING", errors.New("verified source binding is required"))
@@ -244,7 +345,6 @@ func (e *videoPrepareWindowExecutor) Execute(ctx context.Context, execCtx execut
 	// verified download; every downstream cache key, attestation and
 	// certificate must use the resolved identity so independent jobs and
 	// other workers can reuse the fragment by content.
-	resolvedRequest := request
 	if request.SourceIdentityDiscovery {
 		resolvedRequest.Source.SHA256 = source.SHA256
 		resolvedRequest.SourceIdentityDiscovery = false
@@ -256,40 +356,20 @@ func (e *videoPrepareWindowExecutor) Execute(ctx context.Context, execCtx execut
 		}
 		return fail("WINDOW_SOURCE_INVALID", err)
 	}
-	if strings.TrimSpace(spec.JobID) == "" {
-		return fail("WINDOW_JOB_ID_INVALID", errors.New("job_id is required"))
-	}
-	identity, err := contract.VideoPrepareWindowCacheIdentity(resolvedRequest)
-	if err != nil {
-		return fail("WINDOW_CACHE_IDENTITY", err)
-	}
-	outputName := identity + ".mp4"
-	outputPath := filepath.Join(e.outputRoot, outputName)
-	if resolver := storageResolverFromExecutionContext(execCtx); resolver != nil {
-		if placement, placeErr := resolver.Place(storage.CachePersistent, filepath.Join("prepared-windows", outputName), estimateOutputBytesFromDuration(int64(float64(request.OutputFrameCount)*1_000_000*float64(e.profile.FPSDen)/float64(e.profile.FPSNum)))); placeErr == nil {
-			outputPath = placement.Path
+	if identity == "" {
+		identity, err = contract.VideoPrepareWindowCacheIdentity(resolvedRequest)
+		if err != nil {
+			return fail("WINDOW_CACHE_IDENTITY", err)
+		}
+		outputPath = e.preparedWindowPath(identity, resolvedRequest, resolver)
+		unlock := e.lockWindow(identity)
+		defer unlock()
+		if attestation, cacheHit := readWindowArtifactAttestation(outputPath, resolvedRequest, e.profile, encoderVersion, encoderBuildSHA, expectedExtradata); cacheHit {
+			return cacheHitResult(identity, outputPath, resolvedRequest, attestation)
 		}
 	}
-	unlock := e.lockWindow(identity)
-	defer unlock()
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0o750); err != nil {
 		return fail("WINDOW_OUTPUT_DIRECTORY", err)
-	}
-	if attestation, cacheHit := readWindowArtifactAttestation(outputPath, resolvedRequest, e.profile, encoderVersion, encoderBuildSHA); cacheHit {
-		certificate := bindWindowCertificate(attestation, resolvedRequest)
-		certificate.CacheHit = true
-		encodedCertificate, _ := json.Marshal(certificate)
-		completed := time.Now().UTC()
-		artifact := executor.ArtifactRef{Type: "video/mp4", Hash: attestation.OutputSHA256, URI: outputPath, SizeBytes: attestation.OutputSizeBytes}
-		return executor.ExecutionResult{
-			Status: "succeeded", Outputs: []executor.ArtifactRef{artifact},
-			Segments: []executor.SegmentTiming{{
-				SceneID: request.Source.AssetID, SourceType: "video.prepare.window.v1",
-				DurationMS: float64(completed.Sub(started).Milliseconds()), SourceBytes: request.Source.SizeBytes,
-				OutputBytes: artifact.SizeBytes, FramesEncoded: request.OutputFrameCount, Codec: attestation.OutputEvidence.Codec,
-				Status: "succeeded", CacheKey: "video-window:" + identity, MetadataJSON: string(encodedCertificate),
-			}}, StartedAt: started, CompletedAt: completed,
-		}, nil
 	}
 	tmpPath := strings.TrimSuffix(outputPath, ".mp4") + ".partial.mp4"
 	_ = os.Remove(tmpPath)
@@ -309,6 +389,9 @@ func (e *videoPrepareWindowExecutor) Execute(ctx context.Context, execCtx execut
 	evidence, err := e.certifier.Certify(ctx, tmpPath, e.profile, request.OutputFrameCount)
 	if err != nil {
 		return fail("WINDOW_CERTIFICATION_FAILED", err)
+	}
+	if evidence.ExtradataSHA256 != expectedExtradata {
+		return fail("WINDOW_EXTRADATA_IDENTITY_MISMATCH", fmt.Errorf("prepared fragment avcC %s does not match the canonical encoder reference %s", evidence.ExtradataSHA256, expectedExtradata))
 	}
 	if err := os.Rename(tmpPath, outputPath); err != nil {
 		return fail("WINDOW_OUTPUT_COMMIT_FAILED", err)
@@ -360,6 +443,71 @@ func (e *videoPrepareWindowExecutor) Execute(ctx context.Context, execCtx execut
 			MetadataJSON: string(certificateJSON),
 		}}, StartedAt: started, CompletedAt: completed,
 	}, nil
+}
+
+func (e *videoPrepareWindowExecutor) preparedWindowPath(identity string, request contract.VideoPrepareWindowV1, resolver *storage.Resolver) string {
+	outputName := identity + ".mp4"
+	outputPath := filepath.Join(e.outputRoot, outputName)
+	if resolver != nil {
+		if placement, err := resolver.Place(storage.CachePersistent, filepath.Join("prepared-windows", outputName), estimateOutputBytesFromDuration(int64(float64(request.OutputFrameCount)*1_000_000*float64(e.profile.FPSDen)/float64(e.profile.FPSNum)))); err == nil {
+			outputPath = placement.Path
+		}
+	}
+	return outputPath
+}
+
+// ProbeLocalPreparation reports whether this task can be served entirely from
+// the worker-local prepared-fragment cache. Worker dispatch calls it before
+// resolving the source, so a warm fragment never triggers a download merely to
+// discover that the output already exists.
+func (e *videoPrepareWindowExecutor) ProbeLocalPreparation(ctx context.Context, spec executor.TaskSpec, resolver *storage.Resolver) (bool, error) {
+	request, err := e.request(spec)
+	if err != nil {
+		return false, err
+	}
+	if request.SourceIdentityDiscovery {
+		return false, nil
+	}
+	encoderVersion, encoderBuildSHA, err := e.encoderIdentity(ctx)
+	if err != nil {
+		return false, err
+	}
+	expectedExtradata, err := e.canonicalExtradata(ctx, encoderBuildSHA)
+	if err != nil {
+		return false, err
+	}
+	identity, err := contract.VideoPrepareWindowCacheIdentity(request)
+	if err != nil {
+		return false, err
+	}
+	outputPath := e.preparedWindowPath(identity, request, resolver)
+	_, cacheHit := readWindowArtifactAttestation(outputPath, request, e.profile, encoderVersion, encoderBuildSHA, expectedExtradata)
+	return cacheHit, nil
+}
+
+func (e *videoPrepareWindowExecutor) canonicalExtradata(ctx context.Context, encoderBuildSHA string) (string, error) {
+	e.extradataMu.Lock()
+	if e.extradataKey == encoderBuildSHA && e.extradataSHA != "" {
+		hash := e.extradataSHA
+		e.extradataMu.Unlock()
+		return hash, nil
+	}
+	e.extradataMu.Unlock()
+	ref := e.extradataRef
+	if ref == nil {
+		ref = ffmpegWindowExtradataReference{}
+	}
+	hash, err := ref.ExpectedExtradataSHA256(ctx, e.profile, e.quality)
+	if err != nil {
+		return "", err
+	}
+	e.extradataMu.Lock()
+	if e.extradataKey == "" {
+		e.extradataKey, e.extradataSHA = encoderBuildSHA, hash
+	}
+	cached := e.extradataSHA
+	e.extradataMu.Unlock()
+	return cached, nil
 }
 
 func (e *videoPrepareWindowExecutor) lockWindow(key string) func() {
@@ -417,7 +565,7 @@ func readWindowArtifactAttestation(
 	outputPath string,
 	request contract.VideoPrepareWindowV1,
 	profile contract.CanonicalVideoProfileV1,
-	encoderVersion, encoderBuildSHA string,
+	encoderVersion, encoderBuildSHA, expectedExtradata string,
 ) (windowArtifactAttestation, bool) {
 	var attestation windowArtifactAttestation
 	data, err := os.ReadFile(outputPath + ".cert.json")
@@ -436,7 +584,8 @@ func readWindowArtifactAttestation(
 		attestation.OutputFrameCount != request.OutputFrameCount || attestation.OutputProfileID != request.OutputProfileID ||
 		attestation.OutputProfileRevision != request.OutputProfileRevision || attestation.EncoderVersion != encoderVersion ||
 		attestation.EncoderBuildSHA256 != encoderBuildSHA || !attestation.ClosedGOPAttested ||
-		!isLowerSHA256(attestation.OutputSHA256) || !windowEvidenceMatchesProfile(attestation.OutputEvidence, profile, request.OutputFrameCount) {
+		!isLowerSHA256(attestation.OutputSHA256) || attestation.OutputEvidence.ExtradataSHA256 != expectedExtradata ||
+		!windowEvidenceMatchesProfile(attestation.OutputEvidence, profile, request.OutputFrameCount) {
 		return windowArtifactAttestation{}, false
 	}
 	return attestation, true

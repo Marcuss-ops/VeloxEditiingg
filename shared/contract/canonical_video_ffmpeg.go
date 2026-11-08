@@ -1,8 +1,29 @@
 package contract
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strconv"
+)
+
+// Canonical H.264 encoder settings. These values are part of the stream
+// identity because they change the SPS/PPS (avcC) a packet-copy muxer must
+// share across every fragment. They are constants, not quality knobs: a
+// change requires invalidating prepared fragments and re-certifying the
+// producer/worker image. The preset and reference count are pinned explicitly
+// instead of relying on libx264 defaults, and the colour metadata is pinned to
+// BT.709 so a source carrying different VUI metadata cannot silently produce
+// a different SPS.
+const (
+	CanonicalVideoEncoderPreset      = "veryfast"
+	CanonicalVideoEncoderRefFrames   = "1"
+	CanonicalVideoColorPrimaries     = "bt709"
+	CanonicalVideoColorTransfer      = "bt709"
+	CanonicalVideoColorspace         = "bt709"
+	CanonicalVideoColorRange         = "tv"
+	CanonicalVideoEncoderContractRev = "video-encoder-args.v1"
 )
 
 // CanonicalVideoEncodeArgs is the single FFmpeg argument projection for the
@@ -15,18 +36,47 @@ func CanonicalVideoEncodeArgs(profile CanonicalVideoProfileV1, quality Preparati
 	}
 	return []string{
 		"-c:v", "libx264",
+		"-preset", CanonicalVideoEncoderPreset,
+		"-refs", CanonicalVideoEncoderRefFrames,
 		"-b:v", quality.VideoBitrate,
 		"-maxrate", quality.VideoMaxRate,
 		"-bufsize", quality.VideoBufferSize,
 		"-pix_fmt", profile.PixelFormat,
 		"-profile:v", profile.CodecProfile,
 		"-level:v", profile.CodecLevel,
+		"-colorspace", CanonicalVideoColorspace,
+		"-color_primaries", CanonicalVideoColorPrimaries,
+		"-color_trc", CanonicalVideoColorTransfer,
+		"-color_range", CanonicalVideoColorRange,
 		"-g", strconv.Itoa(profile.GOPSize),
 		"-bf", strconv.Itoa(profile.BFrames),
 		"-sc_threshold", "0",
 		"-x264-params", fmt.Sprintf("scenecut=0:open-gop=%d:keyint=%d:min-keyint=%d", openGOP, profile.GOPSize, profile.GOPSize),
 		"-video_track_timescale", strconv.Itoa(profile.TimeBaseDen),
 	}
+}
+
+// CanonicalVideoEncoderArgsDigest is the stable identity of the exact encoder
+// argument projection. It is folded into VideoWindowPreparationRevision so a
+// preset/refs/colour change invalidates every cached prepared fragment even
+// when the profile struct itself is unchanged.
+func CanonicalVideoEncoderArgsDigest(profile CanonicalVideoProfileV1, quality PreparationQualityPolicy) (string, error) {
+	if err := profile.Validate(); err != nil {
+		return "", err
+	}
+	if err := quality.Validate(); err != nil {
+		return "", err
+	}
+	contract := struct {
+		Version string   `json:"version"`
+		Args    []string `json:"args"`
+	}{Version: CanonicalVideoEncoderContractRev, Args: CanonicalVideoEncodeArgs(profile, quality)}
+	data, err := json.Marshal(contract)
+	if err != nil {
+		return "", fmt.Errorf("canonical video encoder contract: encode digest: %w", err)
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 // CanonicalVideoScaleGeometryFilter returns the canonical letterbox/pad

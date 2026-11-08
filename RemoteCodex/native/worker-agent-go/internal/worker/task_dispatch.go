@@ -173,12 +173,33 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 		}
 	}
 
+	_, isCompiledPlan := spec.Payload[contract.PayloadKeyCompiledRenderPlanJSON]
+	_, isWindowPreparation := spec.Payload[contract.VideoPrepareWindowPayloadKey]
+	// Cache-first preparation: when the requested fragment is already in the
+	// worker-local cache, skip source resolution entirely. The probe validates
+	// the same identity, encoder build and canonical avcC as the executor, so
+	// this is a real hit, not a guess. Probe failures fall through to the
+	// normal download path; they never turn a recoverable miss into a failure.
+	preparedWindowCacheHit := false
+	if isWindowPreparation {
+		if hit, probeErr := w.taskRunner.ProbeLocalPreparation(ctx, spec, w.storageResolver); probeErr != nil {
+			if w.logger != nil {
+				w.logger.Warn("[CACHE] prepared-window probe failed for task=%s: %v", pte.TaskID, probeErr)
+			}
+		} else if hit {
+			preparedWindowCacheHit = true
+			if w.logger != nil {
+				w.logger.Info("[CACHE] prepared-window hit for task=%s; skipping source resolution", pte.TaskID)
+			}
+		}
+	}
+
 	// Operational lifecycle: prefetching assets.
 	w.UpdateOperationalPhase(pte.TaskID, PhasePrefetching)
 	if m := telemetry.MilestoneRecorderFromContext(ctx); m != nil {
 		m.Mark(sharedtelemetry.MilestoneFirstAssetStarted)
 	}
-	if spec.Payload != nil {
+	if spec.Payload != nil && !preparedWindowCacheHit {
 		telemetry.GetPrometheusMetrics().RecordAssetResolvePass()
 		assetCtx := ContextWithTaskID(ctx, pte.TaskID)
 		resolvedPayload, err := w.resolveTaskAssets(assetCtx, spec.Payload)
@@ -207,9 +228,7 @@ func (w *Worker) dispatchTaskRunner(ctx context.Context, pte *PendingTaskExecuti
 	// AssetRefV2 through the same verified resolver separately, then carry only
 	// local runtime bindings in context.Context. The canonical JSON and its
 	// SHA remain byte-identical across workers and retries.
-	_, isCompiledPlan := spec.Payload[contract.PayloadKeyCompiledRenderPlanJSON]
-	_, isWindowPreparation := spec.Payload[contract.VideoPrepareWindowPayloadKey]
-	usesVerifiedRuntimeBindings := isCompiledPlan || isWindowPreparation
+	usesVerifiedRuntimeBindings := (isCompiledPlan || isWindowPreparation) && !preparedWindowCacheHit
 	if usesVerifiedRuntimeBindings {
 		// Operational lifecycle: materializing runtime assets.
 		w.UpdateOperationalPhase(pte.TaskID, PhaseMaterializing)

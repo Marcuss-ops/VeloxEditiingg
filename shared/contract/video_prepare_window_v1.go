@@ -260,11 +260,16 @@ func VideoWindowPreparationRevision(profile CanonicalVideoProfileV1, quality Pre
 	if err := quality.Validate(); err != nil {
 		return "", err
 	}
+	encoderArgsDigest, err := CanonicalVideoEncoderArgsDigest(profile, quality)
+	if err != nil {
+		return "", err
+	}
 	identity := struct {
-		Algorithm string                   `json:"algorithm"`
-		Profile   CanonicalVideoProfileV1  `json:"profile"`
-		Quality   PreparationQualityPolicy `json:"quality"`
-	}{Algorithm: "video-window-preparer.v1", Profile: profile, Quality: quality}
+		Algorithm         string                   `json:"algorithm"`
+		Profile           CanonicalVideoProfileV1  `json:"profile"`
+		Quality           PreparationQualityPolicy `json:"quality"`
+		EncoderArgsSHA256 string                   `json:"encoder_args_sha256"`
+	}{Algorithm: "video-window-preparer.v1", Profile: profile, Quality: quality, EncoderArgsSHA256: encoderArgsDigest}
 	data, err := json.Marshal(identity)
 	if err != nil {
 		return "", err

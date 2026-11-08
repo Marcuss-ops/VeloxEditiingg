@@ -183,6 +183,31 @@ func (r *TaskRunner) RunWithBindings(parent context.Context, spec executor.TaskS
 	return r.run(runtimeassets.WithBindings(parent, bindings), spec)
 }
 
+// ProbeLocalPreparation asks the executor whether this task can be served
+// entirely from the worker-local preparation cache. Worker dispatch calls it
+// BEFORE resolving runtime assets, so a warm fragment does not require the
+// source to be resolved or downloaded. Executors that do not implement the
+// optional probe return false; the normal resolution path is unchanged.
+func (r *TaskRunner) ProbeLocalPreparation(ctx context.Context, spec executor.TaskSpec, resolver *storage.Resolver) (bool, error) {
+	if r == nil || r.registry == nil {
+		return false, nil
+	}
+	exec, err := r.registry.Resolve(spec.ExecutorID, r.specVersion(spec))
+	if err != nil {
+		return false, nil
+	}
+	probe, ok := exec.(interface {
+		ProbeLocalPreparation(context.Context, executor.TaskSpec, *storage.Resolver) (bool, error)
+	})
+	if !ok {
+		return false, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return probe.ProbeLocalPreparation(ctx, spec, resolver)
+}
+
 func (r *TaskRunner) run(parent context.Context, spec executor.TaskSpec) (TaskExecutionReport, error) {
 	overallStart := r.now()
 	phaseTimer := telemetry.NewJobPhaseTimer()

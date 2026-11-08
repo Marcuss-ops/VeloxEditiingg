@@ -1,5 +1,39 @@
 ## [Unreleased] - 2026-11-08
 
+### Changed — canonical H.264 identity and cache-first worker
+
+- The shared canonical encoder projection now pins `-preset veryfast`,
+  `-refs 1` and BT.709 `colorspace`/`color_primaries`/`color_trc`/
+  `color_range` in addition to profile, level, GOP, B-frames and time base.
+  These settings change the SPS/PPS a packet-copy muxer must share, so they
+  are part of the stream identity rather than quality knobs.
+- `CanonicalVideoEncoderArgsDigest` hashes the exact argument projection and
+  is folded into `VideoWindowPreparationRevision`. Any identity-bearing
+  encoder change now invalidates cached prepared fragments instead of
+  silently reusing an incompatible `avcC`.
+- Worker `video.prepare.window.v1` certification builds a one-frame reference
+  with the same canonical contract for its FFmpeg build, probes the reference
+  `avcC` SHA-256 and rejects a fragment whose extradata differs
+  (`WINDOW_EXTRADATA_IDENTITY_MISMATCH`). Warm-cache attestations apply the
+  same comparison; a formally valid 64-hex hash is no longer sufficient.
+- Worker dispatch is cache-first for prepared windows: before resolving or
+  downloading the source it probes the worker-local fragment identity,
+  encoder build and canonical `avcC`. A hit skips both asset resolvers and
+  executes without source bindings; a probe error falls back to normal
+  resolution.
+- Cache-hit segments now report `frames_encoded = 0` instead of attributing
+  the output frame count to a window that did not run FFmpeg. The exact
+  output frame count remains in the certificate's `output_frame_count`.
+- Tests: a real-FFmpeg contract test compares the `avcC` of the Master
+  normalization projection and `CanonicalVideoWindowArgs` on the same source;
+  focused coverage pins extradata mismatch, warm-cache execution without
+  source bindings, cache-first dispatch hit/miss and updated trimmer args.
+- Verification: full `shared` and worker suites pass (`go vet ./...`,
+  `go test ./...`); `staticcheck -checks U1000 ./...` reports zero findings on
+  all three modules; `scripts/ci/pre-removal-verify.sh` is green
+  (`OVERALL_RC=0`, vet 9 s, build 8 s, full DataServer tests 417 s);
+  `git diff --check` is clean.
+
 ### Added — media-aware sparse MP4 source fetch (opt-in)
 
 - New worker package `internal/mediarange` materializes only the MP4 byte

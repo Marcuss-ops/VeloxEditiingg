@@ -38,6 +38,12 @@ type fixedWindowCertifier struct {
 	frames int64
 }
 
+type fixedWindowExtradataReference string
+
+func (r fixedWindowExtradataReference) ExpectedExtradataSHA256(context.Context, contract.CanonicalVideoProfileV1, contract.PreparationQualityPolicy) (string, error) {
+	return string(r), nil
+}
+
 func (c fixedWindowCertifier) Certify(_ context.Context, _ string, profile contract.CanonicalVideoProfileV1, _ int64) (windowOutputEvidence, error) {
 	return windowOutputEvidence{
 		Codec: profile.Codec, Profile: strings.ToLower(profile.CodecProfile), Level: canonicalLevelNumber(profile.CodecLevel),
@@ -71,7 +77,8 @@ func TestVideoPrepareWindow_EncodesAndEmitsBoundCertification(t *testing.T) {
 	runner := &recordingWindowRunner{}
 	exec := &videoPrepareWindowExecutor{
 		outputRoot: t.TempDir(), runner: runner, certifier: fixedWindowCertifier{frames: request.OutputFrameCount},
-		profile: profile, quality: quality, encoderVer: "ffmpeg test runner", encoderSHA: strings.Repeat("e", 64),
+		extradataRef: fixedWindowExtradataReference(strings.Repeat("c", 64)),
+		profile:      profile, quality: quality, encoderVer: "ffmpeg test runner", encoderSHA: strings.Repeat("e", 64),
 	}
 	spec := executor.TaskSpec{JobID: "job-window", ExecutorID: VideoPrepareWindowID,
 		Payload: map[string]interface{}{contract.VideoPrepareWindowPayloadKey: request}}
@@ -87,6 +94,9 @@ func TestVideoPrepareWindow_EncodesAndEmitsBoundCertification(t *testing.T) {
 	}
 	if result.Status != "succeeded" || len(result.Outputs) != 1 || len(result.Segments) != 1 {
 		t.Fatalf("unexpected result shape: %+v", result)
+	}
+	if result.Segments[0].FramesEncoded != request.OutputFrameCount {
+		t.Fatalf("fresh encode frames_encoded = %d, want %d", result.Segments[0].FramesEncoded, request.OutputFrameCount)
 	}
 	if !strings.Contains(strings.Join(runner.args, " "), "between(n\\,48\\,107)") || !strings.Contains(strings.Join(runner.args, " "), "open-gop=0") {
 		t.Fatalf("encoder did not receive exact frame interval and closed-GOP settings: %v", runner.args)
@@ -121,12 +131,21 @@ func TestVideoPrepareWindow_EncodesAndEmitsBoundCertification(t *testing.T) {
 	request.TimelineStartFrame = 144
 	spec.JobID = "different-job-same-window"
 	spec.Payload[contract.VideoPrepareWindowPayloadKey] = request
-	warmResult, err := exec.Execute(ctx, nil, spec)
+	// No source bindings on the warm call: the fragment is already local, so
+	// dispatch/execution must not require the source to be resolved again.
+	warmResult, err := exec.Execute(context.Background(), nil, spec)
 	if err != nil {
 		t.Fatalf("warm Execute: %v", err)
 	}
 	if runner.calls != 1 {
 		t.Fatalf("warm cache miss reran FFmpeg: calls=%d", runner.calls)
+	}
+	if warmResult.Segments[0].FramesEncoded != 0 {
+		t.Fatalf("cache hit reported frames_encoded = %d, want 0", warmResult.Segments[0].FramesEncoded)
+	}
+	hit, err := exec.ProbeLocalPreparation(context.Background(), spec, nil)
+	if err != nil || !hit {
+		t.Fatalf("local preparation probe = hit:%v err:%v, want a warm hit", hit, err)
 	}
 	var warmCertificate map[string]interface{}
 	if err := json.Unmarshal([]byte(warmResult.Segments[0].MetadataJSON), &warmCertificate); err != nil {
@@ -175,7 +194,9 @@ func TestVideoPrepareWindow_UsesAccurateTimestampSeek(t *testing.T) {
 	}
 	runner := &recordingWindowRunner{}
 	e := &videoPrepareWindowExecutor{outputRoot: t.TempDir(), runner: runner,
-		certifier: fixedWindowCertifier{frames: request.OutputFrameCount}, profile: profile, quality: quality,
+		certifier:    fixedWindowCertifier{frames: request.OutputFrameCount},
+		extradataRef: fixedWindowExtradataReference(strings.Repeat("c", 64)),
+		profile:      profile, quality: quality,
 		encoderVer: "ffmpeg test runner", encoderSHA: strings.Repeat("e", 64)}
 	spec := executor.TaskSpec{JobID: "job-time-window", ExecutorID: VideoPrepareWindowID,
 		Payload: map[string]interface{}{contract.VideoPrepareWindowPayloadKey: request}}
@@ -272,6 +293,45 @@ func TestVideoPrepareWindow_RealFFmpegOutputPassesCertification(t *testing.T) {
 	}
 	if timeCertificate.SourceStartUS != 1_250_000 || timeCertificate.SourceDurationUS != 2_500_000 || timeCertificate.OutputEvidence.FrameCount != 60 {
 		t.Fatalf("timestamp window output was not precisely certified: %+v", timeCertificate)
+	}
+}
+
+func TestVideoPrepareWindow_RejectsNonCanonicalExtradata(t *testing.T) {
+	profile := contract.CanonicalVideoProfileV1Default
+	quality := contract.CanonicalPreparationQualityPolicyDefault
+	revision, err := contract.VideoWindowPreparationRevision(profile, quality)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourcePath := filepath.Join(t.TempDir(), "source.mp4")
+	sourceBytes := []byte("verified source")
+	if err := os.WriteFile(sourcePath, sourceBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sourceSHA := testSHA256(sourceBytes)
+	request := contract.VideoPrepareWindowV1{
+		Version:          contract.VideoPrepareWindowVersion,
+		Source:           contract.AssetRefV2{AssetID: "source-asset", SHA256: sourceSHA, SizeBytes: int64(len(sourceBytes)), Kind: "video"},
+		SourceStartFrame: 0, SourceFrameCount: 48, SourceFPSNum: 24, SourceFPSDen: 1,
+		OutputFrameCount: 48, TimelineRevision: 1, TimelineSHA256: strings.Repeat("b", 64),
+		OutputProfileID: profile.ProfileID, OutputProfileRevision: revision,
+	}
+	exec := &videoPrepareWindowExecutor{
+		outputRoot: t.TempDir(), runner: &recordingWindowRunner{}, certifier: fixedWindowCertifier{frames: 48},
+		extradataRef: fixedWindowExtradataReference(strings.Repeat("d", 64)), profile: profile, quality: quality,
+		encoderVer: "ffmpeg test runner", encoderSHA: strings.Repeat("e", 64),
+	}
+	spec := executor.TaskSpec{JobID: "job-extradata-mismatch", ExecutorID: VideoPrepareWindowID,
+		Payload: map[string]interface{}{contract.VideoPrepareWindowPayloadKey: request}}
+	ctx := runtimeassets.WithBindings(context.Background(), runtimeassets.Bindings{
+		"source-asset": {AssetID: "source-asset", Path: sourcePath, SHA256: sourceSHA, Size: int64(len(sourceBytes)), Verified: true},
+	})
+	result, err := exec.Execute(ctx, nil, spec)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result.Status != "failed" || result.ErrorCode != "WINDOW_EXTRADATA_IDENTITY_MISMATCH" {
+		t.Fatalf("non-canonical avcC was accepted: %+v", result)
 	}
 }
 

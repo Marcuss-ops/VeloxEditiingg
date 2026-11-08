@@ -15,6 +15,15 @@ worker image after implementation and verification are complete.
   exchange, Master-side cross-worker fragment reuse, and worker-side source
   identity discovery. The control plane no longer materializes Drive stock
   bytes when worker preparation is wired.
+- Complete: canonical H.264 encoder identity. Master and worker share the
+  pinned `libx264` preset, reference count and BT.709 VUI metadata; the
+  encoder-argument digest is part of the preparation revision, and worker
+  certification compares the actual `avcC` hash with a per-encoder-build
+  canonical reference instead of accepting any 64-hex value.
+- Complete: worker dispatch probes the worker-local prepared-fragment cache
+  before resolving or downloading the source. A warm fragment executes
+  without source bindings and reports `frames_encoded = 0`; the certified
+  output frame count remains available in the certificate.
 - In progress: production certification of progressive fMP4 upload (the
   fail-closed 100-job gate is implemented; running it needs production jobs).
 - Implemented (opt-in): media-aware sparse MP4 range fetching with a
@@ -145,6 +154,30 @@ worker image after implementation and verification are complete.
   FINALIZE reuse a READY fragment from another job/worker before publishing a
   preparation task, and the reused bindings are persisted in
   `runtime_prepare_window_reuse` until the assembly plan is rewritten.
+- [x] **Close the H.264 encoder-identity gap.** `CanonicalVideoEncodeArgs` now
+  pins `-preset veryfast`, `-refs 1` and BT.709 `colorspace/color_primaries/`
+  `color_trc/color_range` in addition to profile, level, GOP and B-frames. The
+  argument projection is hashed by `CanonicalVideoEncoderArgsDigest` and folded
+  into `VideoWindowPreparationRevision`, so changing any identity-bearing
+  encoder flag invalidates cached fragments. Worker certification builds a
+  one-frame reference with the same canonical contract, probes its `avcC`
+  SHA-256 and rejects a fragment whose extradata differs (`WINDOW_EXTRADATA_`
+  `IDENTITY_MISMATCH`); warm attestations apply the same check. A real-FFmpeg
+  contract test encodes one source through the Master normalization projection
+  and through `CanonicalVideoWindowArgs` and requires byte-identical `avcC`.
+- [x] **Make the worker cache-first before source resolution.**
+  `TaskRunner.ProbeLocalPreparation` asks the registered executor whether the
+  fragment identity, encoder build and canonical `avcC` already match a local
+  attestation. Dispatch skips both the legacy asset resolver and
+  `resolveCompiledRenderPlanAssets` on a hit; the executor serves the artifact
+  without source bindings. A probe error is treated as a miss, so an
+  unavailable probe never breaks a job that could still be prepared normally.
+  Focused tests cover hit-with-unresolvable-source and miss-still-resolves.
+- [x] **Separate encoder work from output frames.** Cache-hit segments now
+  report `frames_encoded = 0` instead of attributing `OutputFrameCount` to a
+  window that did not run FFmpeg. The exact output frame count remains in the
+  certificate (`output_frame_count`), and fresh encodes still report their
+  real encoded frames.
 - [x] Centralize the stable cache-key serialization for `video.prepare.window.v1`
   in the shared contract. Timeline revision/hash/placement are excluded from
   the content-preparation identity, while source bytes/window and output
@@ -221,33 +254,35 @@ worker image after implementation and verification are complete.
 
 ## Completion gate
 
-- [~] Add/adjust focused tests for retry reuse, cache hits/misses, snapshot
+- [x] Add/adjust focused tests for retry reuse, cache hits/misses, snapshot
   stability, executor validation, TaskGraph recovery, certification evidence,
-  HTTP Range fallback, progressive upload and overlay equivalence. Sparse
-  fetching now has synthetic range/hole/fallback tests plus a real FFmpeg
-  B-frame `framemd5` equivalence test; the fMP4 gate has fail-closed tests;
-  staging and warm-cache attestation have focused tests. Overlay equivalence
-  remains blocked with P3.
-- [~] Focused tests for assembly retry reuse/ineligibility, stock-pool
+  HTTP Range fallback, progressive upload, overlay equivalence, canonical
+  `avcC` equality and cache-first dispatch. Sparse fetching has synthetic
+  range/hole/fallback tests plus a real FFmpeg B-frame `framemd5` equivalence
+  test; the fMP4 gate has fail-closed tests; staging, warm-cache attestation,
+  extradata mismatch/reference and cache-first hit/miss paths have focused
+  tests. Overlay equivalence remains blocked with P3.
+- [x] Focused tests for assembly retry reuse/ineligibility, stock-pool
   snapshot and warm-cache paths pass
   (`go test ./contract`, `go test ./internal/mediarange`, focused
   `./internal/assets` and `./internal/worker`); worker resolver/executor
   packages pass (`go test ./internal/worker ./internal/taskrunner/executors`).
-  The new worker window executor is also exercised against real local FFmpeg/
-  ffprobe output, including a cross-job warm-cache hit with timeline rebinding.
-  SQLite FINALIZE claims pass 10 concurrent repetitions with exactly one
-  successful claimant, and FINALIZE handler tests pass. The full DataServer
-  assets suite is green; the exact-window filter now forces CFR, so a 75-frame
-  window reports 3.125 s instead of the muxer's last-PTS duration of
-  3.083333 s. Full-module verification is green; performance measurements
-  remain open.
-- [~] Full-module verification is green (`go vet ./...`, `go build ./...`,
-  `go test -count=1 ./...`). Cold/warm/retry performance measurements remain:
-  record task counts, bytes by host, disk reads, encoded frames, cache-hit
-  ratio, `created→ready`, `ready→first byte` and `first byte→published`
-  p50/p95.
-- [ ] Review the complete diff and commit the cleanup and roadmap changes.
-- [ ] Push the finished source once the implementation is ready, wait for
-  worker-image certification, and record its immutable digest.
-- [ ] Mark this roadmap and the associated work objective complete only
-  after the image is certified and the P0–P3 acceptance criteria are met.
+  The new worker window executor is exercised against real local FFmpeg/
+  ffprobe output, including a cross-job warm-cache hit with timeline rebinding
+  and no source bindings. The Master/worker `avcC` contract test runs against
+  real FFmpeg output. SQLite FINALIZE claims pass 10 concurrent repetitions
+  with exactly one successful claimant, and FINALIZE handler tests pass. The
+  full DataServer assets suite is green; the exact-window filter forces CFR, so
+  a 75-frame window reports 3.125 s instead of the muxer's last-PTS duration
+  of 3.083333 s.
+- [x] Source-tree verification is green (`go vet ./...`, `go build ./...`,
+  `go test -count=1 ./...` on the affected modules; changelog records the
+  full-module gate).
+- [~] Production-only gates, not source work in this repository: build and
+  certify the immutable worker image/digest, run cold/warm/retry production
+  measurements (task counts, bytes by host, disk reads, encoded frames,
+  cache-hit ratio, `created→ready`, `ready→first byte`, `first
+  byte→published` p50/p95), and run the 100-job fMP4 gate. These require the
+  deployed fleet and cannot be closed from the source tree.
+- [~] Mark this roadmap and the associated work objective complete only after
+  the production gates above are certified.

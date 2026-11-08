@@ -192,8 +192,13 @@ func TestVideoTrimmerNormalizesBeforeTrimming(t *testing.T) {
 	if runner.commands[0].name != "ffprobe" || runner.commands[1].name != "ffmpeg" || runner.commands[2].name != "ffmpeg" {
 		t.Fatalf("command sequence = %#v", runner.commands)
 	}
-	assertContainsSequence(t, runner.commands[1].args, "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,fps=24/1", "-c:v", "libx264", "-b:v", "2.25M", "-maxrate", "2.25M", "-bufsize", "4.5M", "-pix_fmt", "yuv420p", "-profile:v", "high", "-level:v", "4.0", "-g", "48", "-bf", "0", "-sc_threshold", "0", "-x264-params", "scenecut=0:open-gop=0:keyint=48:min-keyint=48", "-video_track_timescale", "90000", "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2")
-	assertContainsSequence(t, runner.commands[2].args, "-ss", "1.250000", "-t", "3.500000", "-vf", "fps=24/1", "-c:v", "libx264", "-b:v", "2.25M", "-maxrate", "2.25M", "-bufsize", "4.5M", "-pix_fmt", "yuv420p", "-profile:v", "high", "-level:v", "4.0", "-g", "48", "-bf", "0", "-sc_threshold", "0", "-x264-params", "scenecut=0:open-gop=0:keyint=48:min-keyint=48", "-video_track_timescale", "90000", "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2")
+	canonicalVideoBlock := []string{"-c:v", "libx264", "-preset", "veryfast", "-refs", "1", "-b:v", "2.25M", "-maxrate", "2.25M", "-bufsize", "4.5M", "-pix_fmt", "yuv420p", "-profile:v", "high", "-level:v", "4.0", "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv", "-g", "48", "-bf", "0", "-sc_threshold", "0", "-x264-params", "scenecut=0:open-gop=0:keyint=48:min-keyint=48", "-video_track_timescale", "90000"}
+	normalizationExpected := append([]string{"-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,fps=24/1"}, canonicalVideoBlock...)
+	normalizationExpected = append(normalizationExpected, "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2")
+	assertContainsSequence(t, runner.commands[1].args, normalizationExpected...)
+	trimExpected := append([]string{"-ss", "1.250000", "-t", "3.500000", "-vf", "fps=24/1"}, canonicalVideoBlock...)
+	trimExpected = append(trimExpected, "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2")
+	assertContainsSequence(t, runner.commands[2].args, trimExpected...)
 }
 
 func TestVideoTrimmerRejectsInvalidOrOutOfBoundsSegments(t *testing.T) {
@@ -277,8 +282,14 @@ func TestVideoPreparationUsesCanonicalStreamProfile(t *testing.T) {
 	args := strings.Join(normalizationArgs(trimmer.profile, trimmer.quality, "in.mp4", "out.mp4"), " ")
 	for _, want := range []string{
 		"fps=24/1",
+		"-preset veryfast",
+		"-refs 1",
 		"-profile:v high",
 		"-level:v 4.0",
+		"-colorspace bt709",
+		"-color_primaries bt709",
+		"-color_trc bt709",
+		"-color_range tv",
 		"-g 48",
 		"-bf 0",
 		"-x264-params scenecut=0:open-gop=0:keyint=48:min-keyint=48",
