@@ -199,6 +199,14 @@ func (h *Handler) ServeAsset() gin.HandlerFunc {
 				return
 			}
 		}
+		// A prepared stock window is content-addressed and carries an immutable
+		// Drive source reference. If retention removed its local blob, rebuild
+		// it only when both source and output hashes reproduce the certificates.
+		if asset != nil && asset.Kind == "video_segment" {
+			if repaired, repairErr := h.assetSvc.RepairMissingPreparedWindow(c.Request.Context(), asset.AssetID); repairErr == nil && repaired != nil && h.serveLocal(c, repaired) {
+				return
+			}
+		}
 
 		// Deferred provider IDs are materialized once into the verified local
 		// registry. This removes repeated Drive downloads and coalesces the

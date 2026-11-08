@@ -360,7 +360,29 @@ func (s *AssetService) registerPreparedVideoFile(ctx context.Context, preparedPa
 		return nil, fmt.Errorf("prepared segment SHA-256 differs from worker certificate")
 	}
 	if existing, lookupErr := s.repo.GetBySHA256(ctx, sha256Hex); lookupErr == nil && existing != nil {
-		_ = s.blobStore.RemoveStaging(stagingPath)
+		// Content-addressed rows can outlive their local blob (for example,
+		// after storage retention or a volume restore). The staged file has
+		// already passed SHA-256 and media validation, so restore the exact
+		// registered object before treating this as a deduplicated hit.
+		blobReader, supportsRead := s.blobStore.(interface {
+			ReadFinal(string) (*os.File, error)
+		})
+		blobMissing := existing.StorageKey == ""
+		if supportsRead && existing.StorageKey != "" {
+			blobMissing = !registeredBlobPresent(blobReader, existing.StorageKey, existing.SizeBytes)
+		}
+		if blobMissing {
+			target := existing.StorageKey
+			if target == "" {
+				target = s.blobStore.FinalPath("assets", sha256Hex, ".mp4")
+			}
+			if _, promoteErr := s.blobStore.PromoteToFinal(stagingPath, target); promoteErr != nil {
+				_ = s.blobStore.RemoveStaging(stagingPath)
+				return nil, fmt.Errorf("restore missing prepared segment blob: %w", promoteErr)
+			}
+		} else {
+			_ = s.blobStore.RemoveStaging(stagingPath)
+		}
 		if strings.HasPrefix(sourcePath, "prepared-window:") {
 			sourceID, sourceErr := identity.NewHex128()
 			if sourceErr != nil {

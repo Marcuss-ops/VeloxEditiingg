@@ -202,7 +202,35 @@ func (s *AssetService) GetBySourceReference(ctx context.Context, reference strin
 	if err != nil || rec == nil || rec.Status != AssetStatusReady {
 		return nil, err
 	}
+	// A READY registry row is not a cache hit when its local blob has been
+	// removed. Treat it as a miss so callers can regenerate the immutable
+	// artifact from its certified source instead of propagating a stale ID.
+	if reader, ok := s.blobStore.(interface {
+		ReadFinal(string) (*os.File, error)
+	}); ok && rec.StorageKey != "" {
+		if !registeredBlobPresent(reader, rec.StorageKey, rec.SizeBytes) {
+			return nil, nil
+		}
+	}
 	return s.recordToAsset(rec), nil
+}
+
+func registeredBlobPresent(reader interface {
+	ReadFinal(string) (*os.File, error)
+}, storageKey string, expectedSize int64) bool {
+	if reader == nil || storageKey == "" || expectedSize <= 0 {
+		return false
+	}
+	f, err := reader.ReadFinal(storageKey)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || info.Size() != expectedSize {
+		return false
+	}
+	return true
 }
 
 // DeferredDriveReference returns the canonical resolver reference for a
