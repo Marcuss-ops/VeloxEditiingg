@@ -36,7 +36,7 @@ func (r *sqliteCompletionTx) CommitPreparedWindow(ctx context.Context, p reposit
 	var priorStatus, priorWorker, priorLease string
 	var priorRevision int
 	if err := r.tx.QueryRowContext(ctx, `SELECT status,worker_id,lease_id,task_revision FROM attempt_commits WHERE commit_id=?`, commitID).Scan(&priorStatus, &priorWorker, &priorLease, &priorRevision); err == nil {
-		if priorStatus == "COMMITTED" && priorWorker == f.WorkerID && priorLease == f.LeaseID && priorRevision == f.Revision {
+		if priorStatus == "COMMITTED" && priorWorker == f.WorkerID && priorLease == f.LeaseID && (priorRevision == f.Revision || priorRevision+1 == f.Revision) {
 			return commitID, nil
 		}
 		return "", fmt.Errorf("%w: prior prepared-window commit fence/status mismatch", ErrCompletionTransitionConflict)

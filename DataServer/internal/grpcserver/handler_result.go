@@ -301,6 +301,14 @@ func (h *Handler) commitPreparedWindowResult(ctx context.Context, workerID, jobI
 	if !ok {
 		return fmt.Errorf("canonical task spec reader is not configured")
 	}
+	canonicalTask, err := h.taskRepo.Get(ctx, taskID)
+	if err != nil || canonicalTask == nil || canonicalTask.ID != taskID || canonicalTask.JobID != jobID || canonicalTask.AttemptID != attemptID || canonicalTask.WorkerID != workerID || canonicalTask.LeaseID != leaseID {
+		return fmt.Errorf("current task fence no longer matches this preparation attempt")
+	}
+	// Ingestion validates the worker's revision against the leased attempt.
+	// Use the Master row's current revision for the completion transaction:
+	// task claim may advance it before the persisted report is received.
+	revision = canonicalTask.Revision
 	payload, err := specStore.GetTaskSpecPayload(ctx, taskID)
 	if err != nil {
 		return fmt.Errorf("read canonical task spec: %w", err)
