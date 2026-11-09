@@ -363,6 +363,27 @@ func validateCopyOnlyPlan(plan *contract.CompiledRenderPlanV2) error {
 			return err
 		}
 	}
+	// A prepared fragment is content-addressed and may be reused at multiple
+	// timeline positions. Its manifest records the placement used when that
+	// fragment was first certified; each segment carries its own placement.
+	// Require the manifest placement to be one of the placements that actually
+	// references this asset, while allowing the other uses to share it.
+	for _, segment := range plan.VideoTracks[0].Segments {
+		asset := assets[segment.AssetID]
+		if asset.TimelineStartFrame == segment.TimelineStartFrame {
+			continue
+		}
+		matched := false
+		for _, use := range plan.VideoTracks[0].Segments {
+			if use.AssetID == segment.AssetID && use.TimelineStartFrame == asset.TimelineStartFrame {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return fmt.Errorf("%w: asset %q manifest placement is not used by the plan", ErrCopyOnlyCertification, segment.AssetID)
+		}
+	}
 	return nil
 }
 
@@ -394,7 +415,7 @@ func validateCopyOnlySegment(plan *contract.CompiledRenderPlanV2, profile contra
 	if !ok || (asset.Kind != "video" && asset.Kind != "prepared_video_fragment") {
 		return fmt.Errorf("%w: segment %q does not reference a prepared video asset", ErrCopyOnlyCertification, segment.SegmentID)
 	}
-	if asset.SHA256 != segment.SHA256 || asset.ProfileID != profile.StreamProfile() || asset.FrameCount != segment.FrameCount || asset.TimelineRevision != plan.TimelineRevision || asset.TimelineSHA256 != plan.TimelineSHA256 || asset.TimelineStartFrame != segment.TimelineStartFrame || asset.DurationUS != segment.SourceDurationUS || !asset.FirstFrameKeyframe || !asset.ClosedGOP || segment.SourceInUS != 0 {
+	if asset.SHA256 != segment.SHA256 || asset.ProfileID != profile.StreamProfile() || asset.FrameCount != segment.FrameCount || asset.TimelineRevision != plan.TimelineRevision || asset.TimelineSHA256 != plan.TimelineSHA256 || asset.DurationUS != segment.SourceDurationUS || !asset.FirstFrameKeyframe || !asset.ClosedGOP || segment.SourceInUS != 0 {
 		return fmt.Errorf("%w: segment %q manifest binding is not exact", ErrCopyOnlyCertification, segment.SegmentID)
 	}
 	return nil

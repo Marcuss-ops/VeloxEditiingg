@@ -128,6 +128,22 @@ func TestVideoAssembleCopy_UsesNativeV2WithoutFFmpegFallback(t *testing.T) {
 	}
 }
 
+func TestValidateCopyOnlyPlan_AllowsSamePreparedAssetAtMultiplePlacements(t *testing.T) {
+	videoSHA, audioSHA := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	plan := copyOnlyPlan(videoSHA, audioSHA, 100, 100)
+	plan.DurationUS = 2_000_000
+	plan.VideoTracks[0].Segments = append(plan.VideoTracks[0].Segments,
+		contract.VideoSegmentV2{SegmentID: "fragment-2", AssetID: "video", SHA256: videoSHA, TimelineStartFrame: 24, FrameCount: 24, SourceInUS: 0, SourceDurationUS: 1_000_000})
+	if err := validateCopyOnlyPlan(plan); err != nil {
+		t.Fatalf("validateCopyOnlyPlan rejected a shared prepared asset at a second placement: %v", err)
+	}
+
+	plan.Assets[0].TimelineStartFrame = 48 // not a placement that references this asset
+	if err := validateCopyOnlyPlan(plan); !errors.Is(err, ErrCopyOnlyCertification) {
+		t.Fatalf("validateCopyOnlyPlan error = %v, want certification failure for unreferenced manifest placement", err)
+	}
+}
+
 func TestVideoAssembleCopy_EmitsReusableChunkManifestWhenEnabled(t *testing.T) {
 	video := []byte("prepared-video")
 	audio := []byte("final-audio")
