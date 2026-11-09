@@ -6,7 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os"
-	"os/exec"
+	osexec "os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -208,7 +208,7 @@ func TestVideoPrepareWindow_UsesAccurateTimestampSeek(t *testing.T) {
 		t.Fatalf("timestamp-window execute: status=%s err=%v detail=%s", result.Status, err, result.ErrorDetail)
 	}
 	joined := strings.Join(runner.args, " ")
-	if !strings.Contains(joined, "-ss 1.250000 -i") || !strings.Contains(joined, "-t 2.541667") || !strings.Contains(joined, "-fps_mode cfr") {
+	if !strings.Contains(joined, "-ss 1.250000 -i") || !strings.Contains(joined, "-t 2.541667") || !strings.Contains(joined, "tpad=stop_mode=clone:stop=1") || !strings.Contains(joined, "-fps_mode cfr") {
 		t.Fatalf("timestamp seek was not emitted as accurate normalized FFmpeg input: %v", runner.args)
 	}
 	var cert windowPreparationCertificate
@@ -221,15 +221,15 @@ func TestVideoPrepareWindow_UsesAccurateTimestampSeek(t *testing.T) {
 }
 
 func TestVideoPrepareWindow_RealFFmpegOutputPassesCertification(t *testing.T) {
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
+	if _, err := osexec.LookPath("ffmpeg"); err != nil {
 		t.Skip("ffmpeg is not installed")
 	}
-	if _, err := exec.LookPath("ffprobe"); err != nil {
+	if _, err := osexec.LookPath("ffprobe"); err != nil {
 		t.Skip("ffprobe is not installed")
 	}
 	root := t.TempDir()
 	sourcePath := filepath.Join(root, "source.mp4")
-	command := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30:duration=4", "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-g", "30", "-y", sourcePath)
+	command := osexec.Command("ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30:duration=4", "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-g", "30", "-y", sourcePath)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Skipf("local ffmpeg lacks the fixture encoder: %v: %s", err, output)
 	}
@@ -293,6 +293,37 @@ func TestVideoPrepareWindow_RealFFmpegOutputPassesCertification(t *testing.T) {
 	}
 	if timeCertificate.SourceStartUS != 1_250_000 || timeCertificate.SourceDurationUS != 2_500_000 || timeCertificate.OutputEvidence.FrameCount != 60 {
 		t.Fatalf("timestamp window output was not precisely certified: %+v", timeCertificate)
+	}
+	shortSource := filepath.Join(root, "short-source.mp4")
+	shortSourceCmd := osexec.Command("ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=24", "-frames:v", "119", "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-g", "48", "-y", shortSource)
+	if output, err := shortSourceCmd.CombinedOutput(); err != nil {
+		t.Skipf("local ffmpeg lacks the 119-frame fixture encoder: %v: %s", err, output)
+	}
+	shortBytes, err := os.ReadFile(shortSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shortSum := sha256.Sum256(shortBytes)
+	request.Source = contract.AssetRefV2{AssetID: "short-timestamp-source", SHA256: hex.EncodeToString(shortSum[:]), SizeBytes: int64(len(shortBytes)), Kind: "video"}
+	request.SourceStartFrame, request.SourceFrameCount = 0, 0
+	request.SourceFPSNum, request.SourceFPSDen = 0, 0
+	request.SourceStartUS, request.SourceDurationUS = 0, 5_000_000
+	request.OutputFrameCount = 120
+	request.TimelineStartFrame = 144
+	spec.Payload[contract.VideoPrepareWindowPayloadKey] = request
+	shortCtx := runtimeassets.WithBindings(context.Background(), runtimeassets.Bindings{
+		"short-timestamp-source": {AssetID: "short-timestamp-source", Path: shortSource, SHA256: hex.EncodeToString(shortSum[:]), Size: int64(len(shortBytes)), Verified: true},
+	})
+	shortResult, err := exec.Execute(shortCtx, nil, spec)
+	if err != nil || shortResult.Status != "succeeded" {
+		t.Fatalf("119-frame source did not produce a certified 120-frame window: result=%+v err=%v", shortResult, err)
+	}
+	var shortCertificate windowPreparationCertificate
+	if err := json.Unmarshal([]byte(shortResult.Segments[0].MetadataJSON), &shortCertificate); err != nil {
+		t.Fatal(err)
+	}
+	if shortCertificate.OutputEvidence.FrameCount != 120 {
+		t.Fatalf("short timestamp window frame count = %d, want 120", shortCertificate.OutputEvidence.FrameCount)
 	}
 }
 

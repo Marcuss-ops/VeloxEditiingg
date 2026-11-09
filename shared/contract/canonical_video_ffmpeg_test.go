@@ -44,6 +44,9 @@ func TestCanonicalVideoEncoderContractPinsAVCC(t *testing.T) {
 	if !strings.Contains(timestampWindow, "-frames:v 48") {
 		t.Errorf("timestamp window must retain the exact output-frame cap: %q", timestampWindow)
 	}
+	if !strings.Contains(timestampWindow, "tpad=stop_mode=clone:stop=1") {
+		t.Errorf("timestamp window must clone one terminal frame when the source interval is short by one frame: %q", timestampWindow)
+	}
 }
 
 func TestCanonicalVideoEncoderArgsDigestTracksContract(t *testing.T) {

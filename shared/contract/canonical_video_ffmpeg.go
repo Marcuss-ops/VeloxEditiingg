@@ -143,7 +143,7 @@ func CanonicalVideoWindowTimestampArgs(
 	// canonical count.
 	decodeDurationSeconds := float64(sourceDurationUS)/1_000_000 + float64(profile.FPSDen)/float64(profile.FPSNum)
 	durationSeconds := strconv.FormatFloat(decodeDurationSeconds, 'f', 6, 64)
-	filter := fmt.Sprintf("setpts=PTS-STARTPTS,fps=%d/%d,%s", profile.FPSNum, profile.FPSDen, CanonicalVideoScaleGeometryFilter(profile))
+	filter := fmt.Sprintf("setpts=PTS-STARTPTS,fps=%d/%d,tpad=stop_mode=clone:stop=1,%s", profile.FPSNum, profile.FPSDen, CanonicalVideoScaleGeometryFilter(profile))
 	args := []string{
 		"-hide_banner", "-loglevel", "error", "-y", "-ss", startSeconds,
 		"-i", inputPath, "-t", durationSeconds, "-map", "0:v:0", "-an", "-sn", "-dn", "-vf", filter,
