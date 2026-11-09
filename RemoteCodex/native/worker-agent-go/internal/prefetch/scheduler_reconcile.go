@@ -383,7 +383,7 @@ func (s *Scheduler) MarkForegroundUse(key assetref.AssetKey) {
 func (s *Scheduler) detachJobLocked(job futureasset.Job) {
 	for _, asset := range job.Assets {
 		refs := s.assetJobs[asset.AssetKey]
-		delete(refs, job.JobID)
+		delete(refs, taskKey(job))
 		if len(refs) == 0 {
 			if bytes, ok := s.prefetched[asset.AssetKey]; ok && !s.useful[asset.AssetKey] && s.cfg.OnState != nil {
 				asset.SizeBytes = bytes
