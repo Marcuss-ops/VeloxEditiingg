@@ -38,6 +38,12 @@ func TestCanonicalVideoEncoderContractPinsAVCC(t *testing.T) {
 			t.Errorf("%s args do not contain the shared canonical encoder block: %q", name, args)
 		}
 	}
+	if !strings.Contains(timestampWindow, "-t 2.041667") {
+		t.Errorf("timestamp window decode duration must include one output-frame margin: %q", timestampWindow)
+	}
+	if !strings.Contains(timestampWindow, "-frames:v 48") {
+		t.Errorf("timestamp window must retain the exact output-frame cap: %q", timestampWindow)
+	}
 }
 
 func TestCanonicalVideoEncoderArgsDigestTracksContract(t *testing.T) {

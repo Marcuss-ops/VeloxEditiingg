@@ -136,7 +136,13 @@ func CanonicalVideoWindowTimestampArgs(
 	sourceStartUS, sourceDurationUS, outputFrameCount int64,
 ) []string {
 	startSeconds := strconv.FormatFloat(float64(sourceStartUS)/1_000_000, 'f', 6, 64)
-	durationSeconds := strconv.FormatFloat(float64(sourceDurationUS)/1_000_000, 'f', 6, 64)
+	// The timestamp interval's end is exclusive, and sources can begin a
+	// fraction of a frame after the seek point. Extend the decode window by
+	// one output frame so fps normalization has enough input to emit the
+	// declared final frame. -frames:v below still caps output at the exact
+	// canonical count.
+	decodeDurationSeconds := float64(sourceDurationUS)/1_000_000 + float64(profile.FPSDen)/float64(profile.FPSNum)
+	durationSeconds := strconv.FormatFloat(decodeDurationSeconds, 'f', 6, 64)
 	filter := fmt.Sprintf("setpts=PTS-STARTPTS,fps=%d/%d,%s", profile.FPSNum, profile.FPSDen, CanonicalVideoScaleGeometryFilter(profile))
 	args := []string{
 		"-hide_banner", "-loglevel", "error", "-y", "-ss", startSeconds,
