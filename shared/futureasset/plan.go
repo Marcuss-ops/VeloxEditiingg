@@ -236,7 +236,7 @@ func (p Plan) Validate() error {
 	if len(p.PrefetchJobs)+len(p.DeferredJobs) > limits.PrefetchHorizon {
 		return fmt.Errorf("futureasset: prefetch horizon exceeds %d", limits.PrefetchHorizon)
 	}
-	seenJobs := make(map[string]struct{}, len(p.PrefetchJobs))
+	seenTasks := make(map[string]struct{}, len(p.PrefetchJobs)+len(p.DeferredJobs))
 	for _, job := range p.PrefetchJobs {
 		if job.Distance <= 0 || job.Distance > limits.PrefetchHorizon || job.ReservationID == "" {
 			return fmt.Errorf("futureasset: prefetch job %q has invalid distance/reservation", job.JobID)
@@ -244,10 +244,10 @@ func (p Plan) Validate() error {
 		if job.JobID == "" || job.TaskID == "" {
 			return fmt.Errorf("futureasset: prefetch job requires job_id and task_id")
 		}
-		if _, exists := seenJobs[job.JobID]; exists {
-			return fmt.Errorf("futureasset: duplicate prefetch job %q", job.JobID)
+		if _, exists := seenTasks[job.TaskID]; exists {
+			return fmt.Errorf("futureasset: duplicate prefetch task %q", job.TaskID)
 		}
-		seenJobs[job.JobID] = struct{}{}
+		seenTasks[job.TaskID] = struct{}{}
 		seenAssets := make(map[string]struct{}, len(job.Assets))
 		for _, asset := range job.Assets {
 			if asset.AssetKey == "" || asset.SizeBytes <= 0 || asset.SHA256 == "" {
@@ -263,10 +263,10 @@ func (p Plan) Validate() error {
 		if job.JobID == "" || job.TaskID == "" || job.ReservationID == "" || job.Distance <= 0 || job.Distance > limits.PrefetchHorizon {
 			return fmt.Errorf("futureasset: deferred job %q has invalid distance/reservation", job.JobID)
 		}
-		if _, exists := seenJobs[job.JobID]; exists {
-			return fmt.Errorf("futureasset: duplicate deferred job %q", job.JobID)
+		if _, exists := seenTasks[job.TaskID]; exists {
+			return fmt.Errorf("futureasset: duplicate deferred task %q", job.TaskID)
 		}
-		seenJobs[job.JobID] = struct{}{}
+		seenTasks[job.TaskID] = struct{}{}
 		seenAssets := make(map[string]struct{}, len(job.Assets))
 		for _, asset := range job.Assets {
 			if asset.AssetKey == "" || asset.AssetID == "" || asset.SizeBytes <= 0 || strings.TrimSpace(asset.SourceURI) == "" {

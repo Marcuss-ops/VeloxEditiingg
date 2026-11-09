@@ -55,6 +55,9 @@ func TestBuildAllowsMultipleTasksFromSameJob(t *testing.T) {
 	if len(plan.PrefetchJobs) != 2 || plan.PrefetchJobs[0].TaskID != "prepare-1" || plan.PrefetchJobs[1].TaskID != "prepare-2" {
 		t.Fatalf("prefetch tasks = %+v, want both unique tasks for job-dag", plan.PrefetchJobs)
 	}
+	if err := plan.Validate(); err != nil {
+		t.Fatalf("plan with multiple tasks from one job must validate: %v", err)
+	}
 }
 
 func TestBuildRequiresIntegrityManifestForPrefetch(t *testing.T) {
