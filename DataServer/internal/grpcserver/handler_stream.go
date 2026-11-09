@@ -196,10 +196,6 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 	// Issue 5 fix: create the send channel (buffered to avoid blocking producers).
 	sendCh := make(chan *outboundMessage, 64)
 
-	// Register session — keyed by sessionID to prevent defer from deleting a newer session.
-	h.mu.Lock()
-	h.closeOldSessionLocked(workerID)
-
 	sess := &workerSession{
 		workerID:         workerID,
 		sessionID:        sessionID,
@@ -211,12 +207,6 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 		sendCh:           sendCh,
 		writerErr:        make(chan error, 1),
 	}
-	h.sessions[sessionID] = sess
-	h.workerSessions[workerID] = sessionID
-	h.mu.Unlock()
-
-	logGRPCf(stream.Context(), logging.LevelInfo, logging.CodeGRPCWorkerConnected, "[GRPC] Worker %s connected (session: %s, name: %s)", workerID, sessionID, hello.GetWorkerName())
-
 	// Placement uses only the validated typed executor registry and the
 	// canonical host capacity/cache projections. Legacy job-type flags
 	// are not admitted or retained.
@@ -242,6 +232,32 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 	h.registerHelloCapabilitiesInRegistry(context.Background(), workerID, hello.GetWorkerName(), h.extractPeerIP(stream), env.ProtocolVersion, caps, hello)
 	sess.draining.Store(false)
 	sess.lastHeartbeatUnix.Store(time.Now().UTC().Unix())
+
+	// Queue HelloAck before publishing this session to any producer. Future
+	// asset planning and placement can enqueue messages as soon as the session
+	// becomes visible; putting the ack first guarantees the worker's stream
+	// handshake is always the first message, even under concurrent planning.
+	ack := &pb.MasterToWorkerEnvelope{
+		MessageId:       fmt.Sprintf("ack-%s-%d", workerID, time.Now().UnixNano()),
+		WorkerId:        workerID,
+		SessionId:       sessionID,
+		SequenceNumber:  1,
+		SentAt:          timestamppb.Now(),
+		ProtocolVersion: controltransport.ProtocolVersionCurrent,
+		Msg:             &pb.MasterToWorkerEnvelope_HelloAck{HelloAck: &pb.HelloAck{}},
+	}
+	if !safeSend(sendCh, &outboundMessage{Envelope: ack}) {
+		return fmt.Errorf("stream: sendCh full for hello_ack")
+	}
+
+	// Publish only after HelloAck is first in the writer queue. Session
+	// producers may now enqueue freely without racing the handshake.
+	h.mu.Lock()
+	h.closeOldSessionLocked(workerID)
+	h.sessions[sessionID] = sess
+	h.workerSessions[workerID] = sessionID
+	h.mu.Unlock()
+	logGRPCf(stream.Context(), logging.LevelInfo, logging.CodeGRPCWorkerConnected, "[GRPC] Worker %s connected (session: %s, name: %s)", workerID, sessionID, hello.GetWorkerName())
 
 	// Issue 5 fix: start the dedicated session writer goroutine.
 	// All stream.Send() calls go through sendCh → sessionWriter from this point on.
@@ -288,20 +304,6 @@ func (h *Handler) Stream(stream grpc.BidiStreamingServer[pb.WorkerToMasterEnvelo
 		})
 		logGRPCf(stream.Context(), logging.LevelInfo, logging.CodeGRPCWorkerDisconnected, "[GRPC] Worker %s disconnected (session: %s)", workerID, sessionID)
 	}()
-
-	// Send typed HelloAck via sendCh (sessionWriter handles the actual Send).
-	ack := &pb.MasterToWorkerEnvelope{
-		MessageId:       fmt.Sprintf("ack-%s-%d", workerID, time.Now().UnixNano()),
-		WorkerId:        workerID,
-		SessionId:       sessionID,
-		SequenceNumber:  1,
-		SentAt:          timestamppb.Now(),
-		ProtocolVersion: controltransport.ProtocolVersionCurrent,
-		Msg:             &pb.MasterToWorkerEnvelope_HelloAck{HelloAck: &pb.HelloAck{}},
-	}
-	if !safeSend(sendCh, &outboundMessage{Envelope: ack}) {
-		return fmt.Errorf("stream: sendCh full for hello_ack")
-	}
 
 	// Dispatch any pending commands that arrived while worker was disconnected
 	h.dispatchCommands(workerID, sess)
