@@ -42,10 +42,29 @@ func (s *Scheduler) MarkJobStarted(jobID string) {
 	}
 	startedAt := s.cfg.Now()
 	s.mu.Lock()
-	ready := s.readyAtByJob[jobID]
-	delete(s.readyAtByJob, jobID)
-	job, hasJob := s.jobs[jobID]
-	prepared := s.prepared[jobID]
+	ready := make(map[string]readyRecord)
+	var preparedJobs []struct {
+		job      *jobRuntime
+		prepared PreparedJob
+	}
+	for key, records := range s.readyAtByJob {
+		if runtime := s.jobs[key]; runtime != nil && runtime.job.JobID == jobID {
+			for assetKey, record := range records {
+				ready[assetKey] = record
+			}
+			delete(s.readyAtByJob, key)
+		}
+	}
+	for key, runtime := range s.jobs {
+		if runtime.job.JobID == jobID {
+			if prepared := s.prepared[key]; prepared.State == PreparationStatePrepared {
+				preparedJobs = append(preparedJobs, struct {
+					job      *jobRuntime
+					prepared PreparedJob
+				}{runtime, prepared})
+			}
+		}
+	}
 	s.mu.Unlock()
 	for assetKey, record := range ready {
 		s.emit(Event{Name: "prefetch_ready_lead", At: startedAt, JobID: jobID, AssetKey: assetKey, Distance: record.distance, StartedAt: startedAt, ReadyAt: record.at})
@@ -54,8 +73,8 @@ func (s *Scheduler) MarkJobStarted(jobID string) {
 	// BEFORE releasing the future reservation. The rule is strict:
 	//   reserve execution pin → confirm → release future pin
 	//   never the reverse.
-	if hasJob && prepared.State == PreparationStatePrepared {
-		s.handoffToExecutionLocked(job, prepared)
+	for _, entry := range preparedJobs {
+		s.handoffToExecutionLocked(entry.job, entry.prepared)
 	}
 }
 
@@ -69,11 +88,23 @@ func (s *Scheduler) HandoffToExecution(jobID, attemptID string) {
 		return
 	}
 	s.mu.Lock()
-	job, hasJob := s.jobs[jobID]
-	prepared := s.prepared[jobID]
+	var preparedJobs []struct {
+		job      *jobRuntime
+		prepared PreparedJob
+	}
+	for key, runtime := range s.jobs {
+		if runtime.job.JobID == jobID {
+			if prepared := s.prepared[key]; prepared.State == PreparationStatePrepared {
+				preparedJobs = append(preparedJobs, struct {
+					job      *jobRuntime
+					prepared PreparedJob
+				}{runtime, prepared})
+			}
+		}
+	}
 	s.mu.Unlock()
-	if hasJob && prepared.State == PreparationStatePrepared {
-		s.handoffToExecutionLocked(job, prepared)
+	for _, entry := range preparedJobs {
+		s.handoffToExecutionLocked(entry.job, entry.prepared)
 	}
 }
 

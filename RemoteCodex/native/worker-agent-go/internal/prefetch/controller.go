@@ -56,7 +56,7 @@ func (c *Controller) Apply(plan futureasset.Plan) (ReconcileResult, error) {
 	// (the previous O(n²) findJob loop).
 	scheduled := make(map[string]struct{}, len(plan.PrefetchJobs))
 	for _, job := range plan.PrefetchJobs {
-		scheduled[job.JobID] = struct{}{}
+		scheduled[taskKey(job)] = struct{}{}
 	}
 	for jobID, old := range c.active {
 		if _, ok := scheduled[jobID]; !ok {
@@ -68,14 +68,15 @@ func (c *Controller) Apply(plan futureasset.Plan) (ReconcileResult, error) {
 		result.Expired = true
 	} else {
 		for _, job := range plan.PrefetchJobs {
-			old, exists := c.active[job.JobID]
+			key := taskKey(job)
+			old, exists := c.active[key]
 			if !exists {
-				c.active[job.JobID] = job
+				c.active[key] = job
 				result.Added = append(result.Added, job)
 				continue
 			}
 			if old.Distance != job.Distance || old.ReservationID != job.ReservationID || old.TaskRevision != job.TaskRevision {
-				c.active[job.JobID] = job
+				c.active[key] = job
 				result.Reprioritized = append(result.Reprioritized, job)
 			}
 		}
@@ -97,12 +98,20 @@ func (c *Controller) Cancel(jobID, reservationID string, planVersion uint64) boo
 	if planVersion != 0 && planVersion < c.version {
 		return false
 	}
-	job, ok := c.active[jobID]
-	if !ok || job.ReservationID != reservationID {
-		return false
+	for key, job := range c.active {
+		if job.JobID == jobID && job.ReservationID == reservationID {
+			delete(c.active, key)
+			return true
+		}
 	}
-	delete(c.active, jobID)
-	return true
+	return false
+}
+
+func taskKey(job futureasset.Job) string {
+	if job.TaskID != "" {
+		return job.TaskID
+	}
+	return job.JobID
 }
 
 func (c *Controller) Version() uint64 {

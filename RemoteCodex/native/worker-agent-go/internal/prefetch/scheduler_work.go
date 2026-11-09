@@ -161,7 +161,7 @@ func (s *Scheduler) runOneWorkItem(item *workItem, resolver *downloader.CacheRes
 			if s.assetJobs[asset.AssetKey] == nil {
 				s.assetJobs[asset.AssetKey] = make(map[string]struct{})
 			}
-			s.assetJobs[asset.AssetKey][job.JobID] = struct{}{}
+			s.assetJobs[asset.AssetKey][taskKey(job)] = struct{}{}
 		}
 		s.mu.Unlock()
 		if s.cfg.OnState != nil {
@@ -187,10 +187,10 @@ func (s *Scheduler) runOneWorkItem(item *workItem, resolver *downloader.CacheRes
 	readyAt := s.cfg.Now()
 	if err == nil && metadataErr == nil && protectionErr == nil {
 		s.mu.Lock()
-		if s.readyAtByJob[job.JobID] == nil {
-			s.readyAtByJob[job.JobID] = make(map[string]readyRecord)
+		if s.readyAtByJob[taskKey(job)] == nil {
+			s.readyAtByJob[taskKey(job)] = make(map[string]readyRecord)
 		}
-		s.readyAtByJob[job.JobID][asset.AssetKey] = readyRecord{at: readyAt, distance: job.Distance}
+		s.readyAtByJob[taskKey(job)][asset.AssetKey] = readyRecord{at: readyAt, distance: job.Distance}
 		s.mu.Unlock()
 	}
 	if s.currentItem(item) {

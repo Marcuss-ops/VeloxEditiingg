@@ -351,7 +351,7 @@ func (s *Scheduler) RecordPlanEvent(name string, planVersion uint64, planID stri
 }
 
 func (s *Scheduler) currentItemLocked(item *workItem) bool {
-	runtime, ok := s.jobs[item.job.JobID]
+	runtime, ok := s.jobs[taskKey(item.job)]
 	return ok && runtime.generation == item.generation && runtime.ctx.Err() == nil
 }
 

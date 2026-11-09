@@ -33,7 +33,7 @@ func (s *Scheduler) Reconcile(plan futureasset.Plan) error {
 	// rebuilding newProtects here is pure bookkeeping — no durable I/O yet.
 	scheduled := make(map[string]struct{}, len(plan.PrefetchJobs))
 	for _, job := range plan.PrefetchJobs {
-		scheduled[job.JobID] = struct{}{}
+		scheduled[taskKey(job)] = struct{}{}
 	}
 	for id, runtime := range s.jobs {
 		if _, ok := scheduled[id]; !ok {
@@ -77,7 +77,8 @@ func (s *Scheduler) Reconcile(plan futureasset.Plan) error {
 	s.currentPlanVersion = plan.Version
 	var events []Event
 	for _, job := range plan.PrefetchJobs {
-		if runtime, exists := s.jobs[job.JobID]; exists {
+		key := taskKey(job)
+		if runtime, exists := s.jobs[key]; exists {
 			if sameScheduledJob(runtime.job, job) {
 				continue
 			}
@@ -97,7 +98,7 @@ func (s *Scheduler) Reconcile(plan futureasset.Plan) error {
 		}
 		ctx, cancel := context.WithCancel(context.Background())
 		runtime := &jobRuntime{job: job, ctx: ctx, cancel: cancel, generation: 1}
-		s.jobs[job.JobID] = runtime
+		s.jobs[key] = runtime
 		events = append(events, s.enqueueJobLocked(plan.Version, runtime)...)
 	}
 	s.mu.Unlock()
@@ -113,9 +114,10 @@ func (s *Scheduler) Reconcile(plan futureasset.Plan) error {
 // The caller holds s.mu. A changed reservation or task revision is a new
 // preparation lineage and must start with an empty read model.
 func (s *Scheduler) retainPreparedAssetsLocked(job futureasset.Job, planID string, planVersion uint64) {
-	previous, ok := s.prepared[job.JobID]
+	key := taskKey(job)
+	previous, ok := s.prepared[key]
 	if !ok || previous.TaskID != job.TaskID || previous.TaskRevision != job.TaskRevision || previous.ReservationID != job.ReservationID {
-		delete(s.prepared, job.JobID)
+		delete(s.prepared, key)
 		return
 	}
 	allowed := make(map[string]futureasset.AssetManifest, len(job.Assets))
@@ -147,7 +149,7 @@ func (s *Scheduler) retainPreparedAssetsLocked(job futureasset.Job, planID strin
 	previous.State = "PREPARING"
 	previous.PreparedAt = time.Time{}
 	previous.Assets = retained
-	s.prepared[job.JobID] = previous
+	s.prepared[key] = previous
 }
 
 // resetForExpiredLocked cancels and detaches every active job and resets all
@@ -223,14 +225,21 @@ func releaseProtections(store workercache.LeaseReservationStore, oldProtects, ne
 // owner of shared transfers and cancels a transfer only after its last waiter.
 func (s *Scheduler) Cancel(jobID string) bool {
 	s.mu.Lock()
-	runtime, ok := s.jobs[jobID]
-	if !ok {
+	key := ""
+	var runtime *jobRuntime
+	for candidateKey, candidate := range s.jobs {
+		if candidate.job.JobID == jobID {
+			key, runtime = candidateKey, candidate
+			break
+		}
+	}
+	if runtime == nil {
 		s.mu.Unlock()
 		return false
 	}
 	runtime.cancel()
-	delete(s.jobs, jobID)
-	delete(s.prepared, jobID)
+	delete(s.jobs, key)
+	delete(s.prepared, key)
 	// Release execution reservations for this job's assets.
 	for _, asset := range runtime.job.Assets {
 		if reservations, exists := s.executionReservations[asset.AssetKey]; exists {

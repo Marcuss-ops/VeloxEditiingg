@@ -190,14 +190,15 @@ func normalizedSHA256(value string) string {
 func (s *Scheduler) preparedForJob(job futureasset.Job, metadata PreparedAssetMetadata) (PreparedJob, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	current, ok := s.jobs[job.JobID]
+	key := taskKey(job)
+	current, ok := s.jobs[key]
 	if !ok || current.job.TaskID != job.TaskID {
 		return PreparedJob{}, false
 	}
 	if metadata.PreparedAt.IsZero() {
 		metadata.PreparedAt = s.cfg.Now()
 	}
-	prepared := s.prepared[job.JobID]
+	prepared := s.prepared[key]
 	if prepared.Assets == nil {
 		prepared = PreparedJob{
 			JobID:         job.JobID,
@@ -214,18 +215,18 @@ func (s *Scheduler) preparedForJob(job futureasset.Job, metadata PreparedAssetMe
 	}
 	prepared.Assets[metadata.AssetKey] = metadata
 	if len(prepared.Assets) != len(job.Assets) {
-		s.prepared[job.JobID] = prepared
+		s.prepared[key] = prepared
 		return PreparedJob{}, false
 	}
 	for _, asset := range job.Assets {
 		if _, exists := prepared.Assets[asset.AssetKey]; !exists {
-			s.prepared[job.JobID] = prepared
+			s.prepared[key] = prepared
 			return PreparedJob{}, false
 		}
 	}
 	prepared.State = PreparationStatePrepared
 	prepared.PreparedAt = metadata.PreparedAt
-	s.prepared[job.JobID] = prepared
+	s.prepared[key] = prepared
 	return prepared, true
 }
 
@@ -236,7 +237,7 @@ func (s *Scheduler) preparationCounts(job futureasset.Job) (preparedCount, requi
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	preparedAssets := map[string]struct{}{}
-	if prepared, ok := s.prepared[job.JobID]; ok {
+	if prepared, ok := s.prepared[taskKey(job)]; ok {
 		preparedCount = len(prepared.Assets)
 		for assetKey := range prepared.Assets {
 			preparedAssets[assetKey] = struct{}{}
@@ -289,17 +290,18 @@ func (s *Scheduler) InvalidatePreparedAsset(jobID, assetKey string) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	job, ok := s.prepared[jobID]
-	if !ok || job.Assets == nil {
-		return
-	}
-	delete(job.Assets, assetKey)
-	if len(job.Assets) == 0 {
-		delete(s.prepared, jobID)
-	} else {
-		job.State = "PREPARING"
-		job.PreparedAt = time.Time{}
-		s.prepared[jobID] = job
+	for key, job := range s.prepared {
+		if job.JobID != jobID || job.Assets == nil {
+			continue
+		}
+		delete(job.Assets, assetKey)
+		if len(job.Assets) == 0 {
+			delete(s.prepared, key)
+		} else {
+			job.State = "PREPARING"
+			job.PreparedAt = time.Time{}
+			s.prepared[key] = job
+		}
 	}
 }
 
@@ -313,5 +315,9 @@ func (s *Scheduler) InvalidatePreparedJob(jobID string) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.prepared, jobID)
+	for key, job := range s.prepared {
+		if job.JobID == jobID {
+			delete(s.prepared, key)
+		}
+	}
 }
